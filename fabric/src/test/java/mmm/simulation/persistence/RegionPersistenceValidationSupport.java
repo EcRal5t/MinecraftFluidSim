@@ -45,6 +45,7 @@ abstract class RegionPersistenceValidationSupport {
 
 	static FluidRegion populatedRegion(UUID id) {
 		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG, 512);
+		domain.sealDomainBoundary();
 		domain.setSolid(0, 0, 0, true);
 		domain.setVolume(1, 1, 1, 0.25F);
 		domain.setVolume(2, 1, 2, 1.0F);
@@ -70,6 +71,7 @@ abstract class RegionPersistenceValidationSupport {
 	/** Fixed codec columns, independent of the runtime cell-fill quadrature. */
 	static FluidRegion canonicalCodecRegion(UUID id) {
 		var domain = new FluidDomain(6, 4, 6, CONFIG, 512);
+		domain.sealDomainBoundary();
 		domain.setSolid(0, 0, 0, true);
 		var template = domain.exportParticleState();
 		float[] positions = {
@@ -91,6 +93,7 @@ abstract class RegionPersistenceValidationSupport {
 	static FluidRegion emptyRegion(UUID id) {
 		BlockPos origin = new BlockPos(32, 16, 32);
 		FluidDomain domain = new FluidDomain(8, 8, 8, CONFIG, 4_096);
+		domain.sealDomainBoundary();
 		Set<Long> interior = new HashSet<>();
 		for (int z = 32; z <= 35; z++) for (int y = 16; y <= 19; y++) {
 			for (int x = 32; x <= 35; x++) interior.add(new BlockPos(x, y, z).asLong());
@@ -218,13 +221,8 @@ abstract class RegionPersistenceValidationSupport {
 		return result;
 	}
 
-	static RegionSectionState signedSection(RegionSectionState section) {
-		return new RegionSectionState(section.layout(), section.regionId(), section.dimensionId(), section.checkpointGeneration(), section.sectionX(),
-				section.sectionY(), section.sectionZ(), section.localStartX(), section.localStartY(), section.localStartZ(),
-				section.sizeX(), section.sizeY(), section.sizeZ(), section.markerOrdinals(), section.positionVolume(),
-				section.velocities(), section.markerMassUnits(), section.materialPaletteIndex(), section.solidMask(), section.extensions(),
-				section.chemicalMixtureIndex(), section.indicator(), section.chemicalSpeciesTotals(),
-				section.chemicalResidualLedgerUnits(), RegionStateIntegrity.sectionChecksum(section));
+	static RegionSectionState signedSection(RegionSectionState s) {
+		return new RegionSectionState(s.layout(),s.regionId(),s.dimensionId(),s.checkpointGeneration(),s.sectionX(),s.sectionY(),s.sectionZ(),s.localStartX(),s.localStartY(),s.localStartZ(),s.sizeX(),s.sizeY(),s.sizeZ(),s.liquidStocks(),s.faceMomentum(),s.solidMask(),s.extensions(),RegionStateIntegrity.sectionChecksum(s));
 	}
 
 	static RegionManifest signedManifest(RegionManifest manifest) {

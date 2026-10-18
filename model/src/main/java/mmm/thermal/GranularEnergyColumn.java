@@ -38,7 +38,7 @@ public final class GranularEnergyColumn {
 	private final int maximumActive, maximumDeposits;
 	private double[] activeEnergy;
 	private int activeCount;
-	private final TreeMap<DepositKey, Double> depositEnergy = new TreeMap<>();
+	private TreeMap<DepositKey, Double> depositEnergy = new TreeMap<>();
 
 	public GranularEnergyColumn(int maximumActive, int maximumDeposits) {
 		if (maximumActive <= 0 || maximumActive > mmm.granular.GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION
@@ -89,16 +89,16 @@ public final class GranularEnergyColumn {
 
 	/** Adds the second energy into the first, then mirrors the granular second-index swap removal. */
 	void mergeActive(int first, int second) {
-		double merged = requireMergeActive(first, second);
+		mergeActive(first, second, SignedDyadic.ZERO);
+	}
+	void mergeActive(int first, int second, SignedDyadic heat) {
+		requireActive(first); requireActive(second);
+		if (first == second) throw new IllegalArgumentException("Cannot merge one granular thermal ordinal with itself");
+		double merged = SignedDyadic.of(activeEnergy[first]).add(SignedDyadic.of(activeEnergy[second])).add(heat).toDouble(); requireEnergy(merged);
 		int last = activeCount - 1;
 		removeActiveSwap(second);
 		if (first == last && second != last) activeEnergy[second] = merged;
 		else activeEnergy[first] = merged;
-	}
-	double requireMergeActive(int first, int second) {
-		requireActive(first); requireActive(second);
-		if (first == second) throw new IllegalArgumentException("Cannot merge one granular thermal ordinal with itself");
-		return finiteAdd(activeEnergy[first], activeEnergy[second]);
 	}
 
 	/** Proportionally removes energy without changing the active ordinal cardinality. */
@@ -145,11 +145,12 @@ public final class GranularEnergyColumn {
 		final long[] energies;
 		final TreeMap<DepositKey, Double> before, after;
 		final SignedDyadic roundoff;
+		final SignedDyadic mechanicalHeat;
 		ActiveToDepositsPlan(GranularEnergyColumn owner, int[] active, long[] energies,
 		                     TreeMap<DepositKey, Double> before, TreeMap<DepositKey, Double> after,
-		                     SignedDyadic roundoff) {
+		                     SignedDyadic roundoff, SignedDyadic mechanicalHeat) {
 			this.owner = owner; this.activeCount = owner.activeCount; this.active = active; this.energies = energies;
-			this.before = before; this.after = after; this.roundoff = roundoff;
+			this.before = before; this.after = after; this.roundoff = roundoff; this.mechanicalHeat = mechanicalHeat;
 		}
 	}
 
@@ -159,13 +160,13 @@ public final class GranularEnergyColumn {
 		int[] active = new int[transfers.size()]; long[] energies = new long[active.length];
 		TreeMap<DepositKey, Double> before = new TreeMap<>(), after = new TreeMap<>();
 		TreeMap<DepositKey, SignedDyadic> sums = new TreeMap<>();
-		int previous = activeCount, newKeys = 0;
+		int previous = activeCount, newKeys = 0; SignedDyadic heat = SignedDyadic.ZERO;
 		for (int slot = 0; slot < active.length; slot++) {
 			DepositTransfer transfer = transfers.get(slot); requireActive(transfer.active());
 			if (transfer.active() >= previous) throw new IllegalArgumentException("Thermal settlement ordinals must be unique and descending");
 			previous = active[slot] = transfer.active();
 			double energy = activeEnergy[active[slot]]; energies[slot] = Double.doubleToRawLongBits(energy);
-			SignedDyadic incoming = SignedDyadic.of(energy);
+			SignedDyadic incoming = SignedDyadic.of(energy).add(transfer.heat()); heat = heat.add(transfer.heat());
 			DepositKey key = new DepositKey(transfer.cell(), transfer.material(), transfer.composition());
 			if (!sums.containsKey(key)) {
 				Double current = depositEnergy.get(key); before.put(key, current);
@@ -181,7 +182,7 @@ public final class GranularEnergyColumn {
 			after.put(entry.getKey(), energy);
 			roundoff = roundoff.add(SignedDyadic.of(energy).subtract(entry.getValue()));
 		}
-		return new ActiveToDepositsPlan(this, active, energies, before, after, roundoff);
+		return new ActiveToDepositsPlan(this, active, energies, before, after, roundoff, heat);
 	}
 
 	void requireCurrent(ActiveToDepositsPlan plan) {
@@ -253,17 +254,56 @@ public final class GranularEnergyColumn {
 	void moveDeposit(
 			DepositKey source, DepositKey target, long movedMassUnits, long sourceMassUnits
 	) {
+		commitDepositMove(planDepositMove(source, target, movedMassUnits, sourceMassUnits, SignedDyadic.ZERO));
+	}
+	static final class DepositMovePlan {
+		final GranularEnergyColumn owner;
+		final DepositKey source, target;
+		final double sourceBefore, remaining, targetAfter;
+		final Double targetBefore;
+		final boolean whole;
+		final SignedDyadic heat, roundoff;
+		DepositMovePlan(GranularEnergyColumn owner, DepositKey source, DepositKey target,
+		                double sourceBefore, Double targetBefore, ProportionalDoubleSplit split,
+		                boolean whole, double targetAfter, SignedDyadic heat) {
+			this.owner = owner; this.source = source; this.target = target;
+			this.sourceBefore = sourceBefore; this.targetBefore = targetBefore;
+			remaining = split.remaining(); this.whole = whole; this.targetAfter = targetAfter; this.heat = heat;
+			roundoff = SignedDyadic.of(remaining).add(SignedDyadic.of(targetAfter))
+					.subtract(SignedDyadic.of(sourceBefore)).subtract(SignedDyadic.of(targetBefore == null ? 0 : targetBefore)).subtract(heat);
+		}
+	}
+	DepositMovePlan planDepositMove(DepositKey source, DepositKey target, long movedMassUnits, long sourceMassUnits, SignedDyadic heat) {
 		if (source == null || target == null || source.equals(target)) {
 			throw new IllegalArgumentException("Granular thermal deposit move requires distinct groups");
 		}
-		double moved = previewDepositTake(source, movedMassUnits, sourceMassUnits);
+		if (heat == null || heat.signum() < 0) throw new IllegalArgumentException("Bed relaxation heat is invalid");
+		double sourceEnergy = depositEnergy(source);
+		var split = proportionalSplit(sourceEnergy, movedMassUnits, sourceMassUnits);
 		Double targetEnergy = depositEnergy.get(target);
 		if (targetEnergy == null && depositEnergy.size() == maximumDeposits && movedMassUnits != sourceMassUnits) {
 			throw new IllegalStateException("Granular thermal deposit budget exceeded");
 		}
-		double merged = targetEnergy == null ? moved : finiteAdd(targetEnergy, moved);
-		takeDeposit(source, movedMassUnits, sourceMassUnits);
-		depositEnergy.put(target, merged);
+		double merged = SignedDyadic.of(split.removed()).add(SignedDyadic.of(targetEnergy == null ? 0 : targetEnergy)).add(heat).toDouble();
+		requireEnergy(merged);
+		return new DepositMovePlan(this, source, target, sourceEnergy, targetEnergy, split,
+				movedMassUnits == sourceMassUnits, merged, heat);
+	}
+	void requireCurrent(DepositMovePlan plan) {
+		if (plan == null || plan.owner != this
+				|| Double.doubleToRawLongBits(depositEnergy(plan.source)) != Double.doubleToRawLongBits(plan.sourceBefore))
+			throw new IllegalStateException("Thermal bed source changed after relaxation planning");
+		Double current = depositEnergy.get(plan.target);
+		if (current == null ? plan.targetBefore != null : plan.targetBefore == null
+				|| Double.doubleToRawLongBits(current) != Double.doubleToRawLongBits(plan.targetBefore))
+			throw new IllegalStateException("Thermal bed target changed after relaxation planning");
+		if (current == null && !plan.whole && depositEnergy.size() == maximumDeposits)
+			throw new IllegalStateException("Thermal bed capacity changed after relaxation planning");
+	}
+	void commitDepositMove(DepositMovePlan plan) {
+		requireCurrent(plan);
+		if (plan.whole) depositEnergy.remove(plan.source); else depositEnergy.put(plan.source, plan.remaining);
+		depositEnergy.put(plan.target, plan.targetAfter);
 	}
 
 	public double[] copyActiveEnergy() { return Arrays.copyOf(activeEnergy, activeCount); }
@@ -290,6 +330,12 @@ public final class GranularEnergyColumn {
 			}
 			depositEnergy.put(deposit.key(), deposit.internalEnergy()); previous = deposit.key();
 		}
+	}
+	GranularEnergyColumn prepareReplacement(double[] active,List<DepositEnergy> deposits) {
+		var candidate=new GranularEnergyColumn(maximumActive,maximumDeposits);candidate.restore(active,deposits);return candidate;
+	}
+	void commitPreparedReplacement(GranularEnergyColumn candidate) {
+		activeEnergy=candidate.activeEnergy;activeCount=candidate.activeCount;depositEnergy=candidate.depositEnergy;
 	}
 	void replace(double[] active, List<DepositEnergy> deposits) {
 		Arrays.fill(activeEnergy, 0, activeCount, 0.0); activeCount = 0; depositEnergy.clear();

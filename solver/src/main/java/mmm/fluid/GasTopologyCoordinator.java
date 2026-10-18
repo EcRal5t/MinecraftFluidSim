@@ -1,9 +1,11 @@
 package mmm.fluid;
 
-import mmm.chemistry.ExactRational;
+import mmm.inventory.LiquidCellInventory;
+
+
 import mmm.fluid.air.AirEdge;
 import mmm.fluid.air.AirNetwork;
-import mmm.fluid.air.ExactGasPartitionWeights;
+import mmm.fluid.air.GasPartitionWeights;
 import mmm.fluid.air.GasAuditLedger;
 import mmm.fluid.air.GasInventory;
 import mmm.fluid.air.GasRegistry;
@@ -13,7 +15,7 @@ import mmm.thermal.GasEnergyStore;
 import mmm.thermal.GasThermalModel;
 import mmm.thermal.ThermalDomainState;
 import mmm.units.SignedDyadic;
-import java.math.BigInteger;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -26,8 +28,12 @@ final class GasTopologyCoordinator {
 	private GasRuntimeGeometry committedFrame;
 	private AirNetwork committedNetwork;
 	private long committedNetworkRevision;
-	private record PhaseEdit(int node, AirNetwork.PhaseMutationPlan gas, double energy,
-	                         ThermalDomainState.PhaseCellEnergyPlan thermal) { }
+	record PhaseBatch(List<GasInventory> inventories, double[] energies,
+	                  GasAuditLedger source, GasAuditLedger sink,
+	                  GasEnergyStore.InventoryEnergyPlan gasThermal,
+	                  ThermalDomainState.PhaseBatchEnergyPlan cellThermal) {
+		PhaseBatch { inventories = List.copyOf(inventories); energies = energies.clone(); }
+	}
 	GasTopologyCoordinator(FluidDomain domain) { this.domain = domain; }
 
 	GasStateSnapshot bootstrap(String fingerprint) { refresh(); return export(fingerprint); }
@@ -37,10 +43,17 @@ final class GasTopologyCoordinator {
 		return GasStateSnapshot.capture(domain.sizeX, domain.sizeY, domain.sizeZ,
 				domain.gasState.frame.pieceNodes(), domain.gasState.network, fingerprint == null ? "" : fingerprint);
 	}
-	void restore(GasStateSnapshot state, GasRegistry registry) { restore(state, registry, null); }
+	void restore(GasStateSnapshot state, GasRegistry registry) { restoreOwners(state, registry, List.of()); }
 
 	/** Reconstructs capacities before publishing restored gas stock or thermal node columns. */
 	void restore(GasStateSnapshot state, GasRegistry registry, FlipThermalParticleState thermal) {
+		if (thermal != null) thermal.requireCompatible(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.liquidCells.physicalSize());
+		restoreOwners(state, registry, thermal == null ? List.of() : thermal.coherentGroups());
+	}
+	void restore(GasStateSnapshot state, GasRegistry registry, mmm.thermal.ThermalOwnerSnapshot thermal) {
+		restoreOwners(state, registry, thermal == null ? List.of() : thermal.coherentGroups());
+	}
+	private void restoreOwners(GasStateSnapshot state, GasRegistry registry, List<mmm.thermal.CoherentPhaseStore.Group> groups) {
 		if (state == null || registry == null || state.sizeX() != domain.sizeX
 				|| state.sizeY() != domain.sizeY || state.sizeZ() != domain.sizeZ
 				|| !state.registryFingerprint().equals(registry.fingerprint()))
@@ -48,12 +61,11 @@ final class GasTopologyCoordinator {
 		if (domain.gasState.frame != null || domain.gasState.network.nodeCount() != 0)
 			throw new IllegalStateException("Gas restore requires an uninitialized topology");
 		domain.ensureInventoryGrid(); long[] occupied = currentOccupied();
-		if (thermal != null && !thermal.coherentGroups().isEmpty()) {
-			thermal.requireCompatible(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.particles.count());
-			domain.validateCoherentRestoreCapacity(thermal.coherentGroups());
+		if (!groups.isEmpty()) {
+			domain.validateCoherentRestoreCapacity(groups);
 			var occupancy = new GranularCouplingFields(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());
 			long[] fixed = new long[domain.cellCount];
-			for (var group : thermal.coherentGroups()) fixed[group.cell()] = Math.addExact(fixed[group.cell()], group.occupiedVolumeSvq());
+			for (var group : groups) fixed[group.cell()] = Math.addExact(fixed[group.cell()], group.occupiedVolumeSvq());
 			occupancy.setFixedCellSvq(fixed);
 			if (domain.granularState != null) occupancy.rebuild(domain.granularState.parcels, domain.granularState.deposits);
 			occupied = occupancy.copySolidSvq();
@@ -71,8 +83,15 @@ final class GasTopologyCoordinator {
 			restored.addOrMergeEdge(edge.firstNode(), edge.secondNode(), edge.area(), 0.65);
 		domain.gasState.network = restored; domain.gasState.frame = frame;
 		domain.gasState.pressureActive = frame.nodeCount() > 0;
-		domain.rebuildPressureBoundaryLineage();
 		rememberCommittedTopology();
+	}
+
+	/** A private candidate continues immutable geometry and an independently owned network. */
+	void restoreRuntime(GasRuntimeGeometry frame, AirNetwork.RuntimeSnapshot network) {
+		if (domain.gasState.frame != null || domain.gasState.network.nodeCount() != 0)
+			throw new IllegalStateException("Runtime gas continuation requires an empty target");
+		domain.gasState.network = AirNetwork.fromRuntimeSnapshot(network); domain.gasState.frame = frame;
+		domain.gasState.pressureActive = frame.nodeCount() > 0; rememberCommittedTopology();
 	}
 
 	void refresh() {
@@ -91,24 +110,15 @@ final class GasTopologyCoordinator {
 		committedNetwork = domain.gasState.network;
 		committedNetworkRevision = committedNetwork.revision();
 	}
-	GasTopologyPlan planAfterPhase(PhaseLiquidGeometryEdit geometryEdit, int node,
-			AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal,
-			GasRuntimeGeometry.PhaseSource source) {
-		domain.gasState.network.requirePhaseMutationCurrent(gas);
-		domain.thermalState.requirePhaseCellEnergyCurrent(thermal);
-		try {
-			domain.ensureInventoryGrid();
-			return plan(GasRuntimeGeometry.capturePhaseEdit(domain, geometryEdit, currentOccupied(),
-					domain.gasState.sealedDomainBoundary, source), true, new PhaseEdit(node, gas, energy, thermal));
-		}
-		catch (GasTopologyBlockedException | GasInventory.RepresentationException unavailable) {
-			throw new PhaseChangeStageSupport.PhaseCandidateUnavailableException(
-					"Phase-edited gas topology: " + unavailable.getMessage(), unavailable);
-		}
+	GasTopologyPlan planAfterPhaseBatch(LiquidCellInventory future, PhaseBatch phase) {
+		domain.thermalState.requireGasInventoryEnergyCurrent(phase.gasThermal(), domain.gasState.network);
+		domain.thermalState.requirePhaseBatchEnergyCurrent(phase.cellThermal());
+		return plan(GasRuntimeGeometry.captureCellFuture(domain, future, currentOccupied(),
+				domain.gasState.sealedDomainBoundary), true, phase);
 	}
 	GasTopologyPlan planStaticCellReplacement(PhaseLiquidGeometryEdit edit) {
 		if (edit == null) throw new IllegalArgumentException("Gas static cell replacement is missing");
-		return planAfterLiquidEdits(List.of(edit), currentOccupied(), false, edit.cell());
+		return planAfterLiquidEdits(List.of(edit), currentOccupied(), false);
 	}
 	GasTopologyPlan planAfterLiquidEdits(List<PhaseLiquidGeometryEdit> edits) {
 		return planAfterLiquidEdits(edits, currentOccupied(), false);
@@ -116,17 +126,24 @@ final class GasTopologyCoordinator {
 	/** A mechanical candidate supplies its actual successor solid occupancy before carrier publication. */
 	GasTopologyPlan planAfterLiquidEdits(List<PhaseLiquidGeometryEdit> edits, long[] occupied,
 	                                  boolean refineMissingSuccessor) {
-		return planAfterLiquidEdits(edits, occupied, refineMissingSuccessor, -1);
+		return planAfterLiquidEditsCaptured(edits, occupied, refineMissingSuccessor);
 	}
-	GasTopologyPlan planAfterAdvection(List<PhaseLiquidGeometryEdit> edits, long[] occupied) {
-		var old = domain.gasState.frame; if (old == null) return null;
-		domain.ensureInventoryGrid();
-		var next = GasRuntimeGeometry.captureLiquidEdits(domain, edits, occupied, domain.gasState.sealedDomainBoundary);
-        return plan(next, false, null, true, -1);
-    }
+	GasTopologyPlan planAfterLiquidCells(LiquidCellInventory future, long[] occupied, boolean refine) {
+		if (domain.gasState.frame == null) return null;
+		return plan(GasRuntimeGeometry.captureCellFuture(domain, future, occupied,
+				domain.gasState.sealedDomainBoundary), false, null, refine);
+	}
+	GasTopologyPlan planCellFuture(LiquidCellInventory future, long[] occupied, boolean advection) {
+		return planAfterLiquidCells(future, occupied, advection);
+	}
+	GasTopologyPlan planAfterCollisionCells(LiquidCellInventory future, long[] occupied, byte[] collisionMasks) {
+		if (domain.gasState.frame == null) return null;
+		return plan(GasRuntimeGeometry.captureCellFuture(domain, future, occupied,
+				domain.gasState.sealedDomainBoundary, collisionMasks), false, null);
+	}
 
-	private GasTopologyPlan planAfterLiquidEdits(List<PhaseLiquidGeometryEdit> edits, long[] occupied,
-	                                           boolean refineMissingSuccessor, int staticCell) {
+	private GasTopologyPlan planAfterLiquidEditsCaptured(List<PhaseLiquidGeometryEdit> edits, long[] occupied,
+	                                                   boolean refineMissingSuccessor) {
 		if (edits == null) throw new IllegalArgumentException("Gas liquid edit list is missing");
 		boolean[] selected = new boolean[domain.cellCount];
 		for (var edit : edits) {
@@ -138,30 +155,30 @@ final class GasTopologyCoordinator {
 		if (domain.gasState.frame == null) return null;
 		domain.ensureInventoryGrid();
 		return plan(GasRuntimeGeometry.captureLiquidEdits(domain, edits, occupied,
-				domain.gasState.sealedDomainBoundary), false, null, refineMissingSuccessor, staticCell);
+				domain.gasState.sealedDomainBoundary), false, null, refineMissingSuccessor);
 	}
 	private long[] currentOccupied() {
 		return domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
 	}
-	void requireAfterPhaseCurrent(GasTopologyPlan plan, AirNetwork.PhaseMutationPlan gas,
-			ThermalDomainState.PhaseCellEnergyPlan thermal) {
+	void requireAfterPhaseBatchCurrent(GasTopologyPlan plan, PhaseBatch phase) {
 		if (plan == null || plan.source() != domain.gasState.frame
 				|| plan.frame().sealedExterior() != domain.gasState.sealedDomainBoundary
 				|| !plan.frame().matchesSourceCarrierGeometry(domain, currentOccupied()))
 			throw new IllegalStateException("Phase gas geometry changed after planning");
-		domain.gasState.network.requireRemapAfterPhaseCurrent(plan.gasPlan(), gas);
-		domain.thermalState.requireGasRemapAfterPhaseCurrent(plan.thermalPlan(), thermal);
+		domain.gasState.network.requireCanCommitRemap(plan.gasPlan());
+		domain.thermalState.requireGasRemapAfterBatchCurrent(plan.thermalPlan(), phase.gasThermal(),
+				phase.cellThermal(), domain.gasState.network);
 	}
-	private GasInventory inventory(int node, PhaseEdit edit) {
-		return edit != null && edit.node() == node ? edit.gas().inventoryAfter() : domain.gasState.network.inventory(node);
+	private GasInventory inventory(int node, PhaseBatch edit) {
+		return edit != null ? edit.inventories().get(node - 1) : domain.gasState.network.inventory(node);
 	}
-	private double energy(int node, PhaseEdit edit) {
-		return edit != null && edit.node() == node ? edit.energy() : domain.thermalState.gasNodeEnergy(node, domain.gasState.network);
+	private double energy(int node, PhaseBatch edit) {
+		return edit != null ? edit.energies()[node - 1] : domain.thermalState.gasNodeEnergy(node, domain.gasState.network);
 	}
-	private double[] partitionEnergy(int node, List<GasInventory> parts, PhaseEdit edit) {
-		return edit != null && edit.node() == node
+	private double[] partitionEnergy(int node, List<GasInventory> parts, PhaseBatch edit) {
+		return edit != null
 				? new GasThermalModel(domain.thermalState.registry(), domain.gasState.network.registry())
-						.partitionEnergy(inventory(node, edit), edit.energy(), parts)
+						.partitionEnergy(inventory(node, edit), energy(node, edit), parts)
 				: domain.thermalState.partitionGasNodeEnergy(node, parts, domain.gasState.network);
 	}
 	GasTopologyPlan planFromFreshScan() {
@@ -179,8 +196,8 @@ final class GasTopologyCoordinator {
 	}
 
 	/** Single-successor finite stock needs positive support; splits and ambient capture retain exact physical weights. */
-	private TreeMap<Long, List<ExactRational>> overlaps(GasRuntimeGeometry old, GasRuntimeGeometry next, GasGeometryTransition transition) {
-		var result = new TreeMap<Long, List<ExactRational>>();
+	private TreeMap<Long, List<Double>> overlaps(GasRuntimeGeometry old, GasRuntimeGeometry next, GasGeometryTransition transition) {
+		var result = new TreeMap<Long, List<Double>>();
 		var capacities = old.capacity().pieces();
 		int[] potential = new int[old.nodeCount() + 1]; Arrays.fill(potential, -1);
 		boolean[] certified = new boolean[potential.length];
@@ -194,9 +211,9 @@ final class GasTopologyCoordinator {
 		// Potential targets include every positive intersection; one certified microbox proves support.
 		for (int source = 1; source < potential.length; source++) {
 			certified[source] &= potential[source] >= 0;
-			if (certified[source]) result.put((long) source << 32 | (potential[source] & 0xffffffffL), List.of(ExactRational.ONE));
+			if (certified[source]) result.put((long) source << 32 | (potential[source] & 0xffffffffL), List.of(1.0));
 		}
-		var intersections = new ExactRational[capacities.size()];
+		var intersections = new double[capacities.size()];
 		int[] successor = new int[old.nodeCount() + 1]; Arrays.fill(successor, -1);
 		for (int index = 0; index < capacities.size(); index++) {
 			var capacity = capacities.get(index);
@@ -204,8 +221,8 @@ final class GasTopologyCoordinator {
 			// Persistent ambient space carries no finite stock, control volume or external transfer.
 			if (destination < 0 || source == 0 && destination == 0) continue;
 			if (source > 0 && certified[source]) continue;
-			ExactRational overlap = transition.volume(piece);
-			if (overlap.isZero()) continue;
+			double overlap = transition.volume(piece);
+			if (overlap == 0) continue;
 			intersections[index] = overlap;
 			if (source > 0) {
 				if (successor[source] == -1) successor[source] = destination;
@@ -213,26 +230,26 @@ final class GasTopologyCoordinator {
 			}
 		}
 		for (int index = 0; index < capacities.size(); index++) {
-			var overlap = intersections[index]; if (overlap == null) continue;
+			var overlap = intersections[index]; if (overlap == 0) continue;
 			var capacity = capacities.get(index);
 			int piece = capacity.id(), source = old.nodeOfPiece(piece), destination = next.nodeOfPiece(piece);
 			long pair = (long) source << 32 | (destination & 0xffffffffL);
 			if (source > 0 && successor[source] >= 0) {
-				result.putIfAbsent(pair, List.of(ExactRational.ONE));
+				result.putIfAbsent(pair, List.of(1.0));
 				continue;
 			}
 			var before = old.geometry().piece(piece);
-			var weight = exact(SignedDyadic.of(capacity.cubicMeters())).multiply(divide(overlap, before.normalizedVolume()));
+			var weight = capacity.cubicMeters() * (overlap / before.normalizedVolume());
 			result.computeIfAbsent(pair, ignored -> new ArrayList<>()).add(weight);
 		}
 		return result;
 	}
 
-	private GasTopologyPlan plan(GasRuntimeGeometry next, boolean deferVolumeWork, PhaseEdit edit) {
-		return plan(next, deferVolumeWork, edit, false, -1);
+	private GasTopologyPlan plan(GasRuntimeGeometry next, boolean deferVolumeWork, PhaseBatch edit) {
+		return plan(next, deferVolumeWork, edit, false);
 	}
-	private GasTopologyPlan plan(GasRuntimeGeometry next, boolean deferVolumeWork, PhaseEdit edit,
-	                             boolean refineMissingSuccessor, int staticCell) {
+	private GasTopologyPlan plan(GasRuntimeGeometry next, boolean deferVolumeWork, PhaseBatch edit,
+	                             boolean refineMissingSuccessor) {
 		var old = domain.gasState.frame;
 		var transition = old == null ? null : next.transitionFrom(old);
 		boolean thermal = domain.thermalState != null && domain.thermalState.gasModelBound();
@@ -258,20 +275,12 @@ final class GasTopologyCoordinator {
 				}
 			}
 		} else {
-			var overlap = overlaps(old, next, transition);
-			if (staticCell >= 0 && old.matchesCarrierGeometry(domain, currentOccupied())) {
-				var sweep = StaticGasPistonSweep.certify(old, next, staticCell);
-				if (sweep != null && overlap.subMap((long) sweep.source() << 32, (long) (sweep.source() + 1) << 32).isEmpty())
-					// The external operation first relaxes this isolated pair at sum(U), sum(V),
-					// then compresses quasistatically. The receiver's old vacuum volume is retained
-					// by its ordinary overlap, so the existing thermal plan accounts for both stages.
-					overlap.put((long) sweep.source() << 32 | sweep.destination(), List.of(ExactRational.ONE));
-			}
-			if (edit == null) retainReachableSingleCavity(old, next, overlap);
-			var displaced = edit == null ? transferDisplacedGas(old, next, overlap) : java.util.Set.<Long>of();
+			var successors = successors(old, next, transition);
+			var overlap = successors.weights();
+			var displaced = successors.relocated();
 			var relocated = new SignedDyadic[count]; Arrays.fill(relocated, SignedDyadic.ZERO);
 			for (int previous = 1; previous <= old.nodeCount(); previous++) {
-				Map<Long, List<ExactRational>> destinations = overlap.subMap((long) previous << 32, (long) (previous + 1) << 32);
+				Map<Long, List<Double>> destinations = overlap.subMap((long) previous << 32, (long) (previous + 1) << 32);
 				GasInventory stock = inventory(previous, edit);
 				if (destinations.isEmpty()) {
 					if (stock.isEmpty()) continue;
@@ -284,12 +293,12 @@ final class GasTopologyCoordinator {
 					throw new GasTopologyBlockedException(reason);
 				}
 				boolean split = destinations.size() > 1;
-				var weights = split ? ExactGasPartitionWeights.ofTerms(List.copyOf(destinations.values())) : null;
+				var weights = split ? GasPartitionWeights.of(destinations.values().stream().mapToDouble(values -> values.stream().mapToDouble(Double::doubleValue).sum()).toArray()) : null;
 				var parts = split ? stock.partition(weights) : List.of(stock);
 				double[] energies = !thermal ? null : stock.isEmpty() ? new double[parts.size()]
 						: split ? partitionEnergy(previous, parts, edit) : new double[]{energy(previous, edit)};
 				double[] control = !retainControlVolumes ? null : split
-						? GasTopologyVolumePartition.partitionRational(domain.gasState.network.availableVolume(previous), weights)
+						? GasTopologyVolumePartition.partition(domain.gasState.network.availableVolume(previous), weights)
 						: new double[]{domain.gasState.network.availableVolume(previous)};
 				int part = 0;
 				for (var entry : destinations.entrySet()) {
@@ -314,7 +323,7 @@ final class GasTopologyCoordinator {
 			}
 			if (!next.sealedExterior()) for (var entry : overlap.subMap(0L, 1L << 32).entrySet()) {
 				int node = (int) (long) entry.getKey(); if (node == 0) continue;
-				double trappedVolume = GasTopologyVolumePartition.absoluteRational(entry.getValue());
+				double trappedVolume = GasTopologyVolumePartition.absoluteVolume(entry.getValue());
 				var trapped = ambientInventory(trappedVolume);
 				inventories.set(node - 1, inventories.get(node - 1).merge(trapped));
 				sourceDelta = sourceDelta.add(trapped);
@@ -349,133 +358,106 @@ final class GasTopologyCoordinator {
 		GasEnergyStore.GasRemapPlan thermalPlan = !thermal ? null : edit == null
 				? domain.thermalState.planGasRemap(domain.gasState.network, inventories, available,
 						mixedEnergy, inheritedVolume, sourceEnergy, sinkEnergy)
-				: domain.thermalState.planGasRemapAfterPhase(edit.thermal(), edit.node(), edit.energy(), domain.gasState.network,
+				: domain.thermalState.planGasRemapAfterBatch(domain.gasState.network, edit.gasThermal(), edit.cellThermal(),
 						inventories, available, mixedEnergy, inheritedVolume, sourceEnergy, sinkEnergy);
 		var edges = new ArrayList<AirEdge>(next.topology().connections().size());
 		for (var edge : next.topology().connections()) edges.add(new AirEdge(edge.firstNode(), edge.secondNode(), edge.area(), 0.65));
-		AirNetwork.RemapPlan gasPlan = edit == null
-				? domain.gasState.network.planRemapNodes(available, inventories, sourceDelta, sinkDelta, edges)
-				: domain.gasState.network.planRemapAfterPhase(edit.gas(), available, inventories, sourceDelta, sinkDelta, edges);
+		AirNetwork.RemapPlan gasPlan = domain.gasState.network.planRemapNodes(available, inventories,
+				edit == null ? sourceDelta : sourceDelta.add(edit.source()),
+				edit == null ? sinkDelta : sinkDelta.add(edit.sink()), edges);
 		return new GasTopologyPlan(next, old, gasPlan, thermalPlan, transition);
 	}
 
-	/** A delayed liquid edit can expose a connected path before displacing every original dry piece. */
-	private void retainReachableSingleCavity(GasRuntimeGeometry old, GasRuntimeGeometry next,
-	                                       TreeMap<Long, List<ExactRational>> overlap) {
-		long pair = 1L << 32 | 1;
-		if (!old.sealedExterior() || !next.sealedExterior() || old.nodeCount() != 1 || next.nodeCount() != 1
-				|| !overlap.subMap(1L << 32, 2L << 32).isEmpty()) return;
-		var current = GasRuntimeGeometry.capture(domain, null, currentOccupied(), domain.gasState.sealedDomainBoundary);
-		if (current.nodeCount() != 1 || !Arrays.equals(old.occupiedSvq(), current.occupiedSvq())) return;
-		for (int cell = 0; cell < domain.cellCount; cell++)
-			if (old.geometry().collisionMask(cell) != current.geometry().collisionMask(cell)) return;
-		var first = overlaps(old, current, new GasGeometryTransition(old, current)).get(pair);
-		var second = overlaps(current, next, new GasGeometryTransition(current, next)).get(pair);
-		if (first != null && !first.isEmpty() && second != null && !second.isEmpty())
-			// Each positive leg lies in the same fully connected finite gas chamber. Its homogeneous
-			// stock follows that actual path; a single unchanged inventory's isentropes compose by V0/V2.
-			overlap.put(pair, first);
-	}
-	/** A swept-away dry pocket follows the connected old/new dry support to its nearest surviving chamber. */
-	private java.util.Set<Long> transferDisplacedGas(GasRuntimeGeometry old, GasRuntimeGeometry next,
-	                                  TreeMap<Long, List<ExactRational>> overlap) {
-        boolean missing = false;
-        for (int node = 1; node <= old.nodeCount(); node++) {
-            if (overlap.subMap((long) node << 32, (long) (node + 1) << 32).isEmpty()) {
-                missing = true;
-                break;
-            }
-        }
-        if (!missing) return java.util.Set.of();
-		var displaced = new java.util.HashSet<Long>();
-		int count = domain.cellCount * 8;
-		var links = new int[count][6];
-		for (var row : links) Arrays.fill(row, -1);
-		for (var geometry : List.of(old.geometry(), next.geometry())) for (var port : geometry.ports()) {
-			links[port.first()][2 * port.axis() + 1] = port.second();
-			links[port.second()][2 * port.axis()] = port.first();
-		}
-		int[] strides = {1, domain.sizeX, domain.sizeX * domain.sizeY}, sizes = {domain.sizeX, domain.sizeY, domain.sizeZ};
-		for (var source : old.geometry().pieces()) if (next.geometry().piece(source.id()) == null) {
-			int cell = source.cell(), micro = source.micro();
-			int[] coordinates = {cell % domain.sizeX, cell / domain.sizeX % domain.sizeY, cell / (domain.sizeX * domain.sizeY)};
-			for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) {
-				boolean across = (micro >>> axis & 1) == (sign > 0 ? 1 : 0);
-				if (across && (coordinates[axis] + sign < 0 || coordinates[axis] + sign >= sizes[axis])) continue;
-				int receiverCell = cell + (across ? sign * strides[axis] : 0), receiverMicro = micro ^ 1 << axis;
-				var receiver = next.geometry().piece(8 * receiverCell + receiverMicro);
-				if (receiver == null) continue;
-				double firstCoordinate = across ? sign > 0 ? 1 : 0 : .5;
-				double secondCoordinate = across ? 1 - firstCoordinate : .5;
-				var planes = new ArrayList<GasFaceIntersection.Plane>(2);
-				addDryFacePlane(planes, source.dryPlane(), axis, firstCoordinate);
-				addDryFacePlane(planes, receiver.dryPlane(), axis, secondCoordinate);
-				if (GasFaceIntersection.area(.5 * (micro >>> ((axis + 1) % 3) & 1),
-						.5 * (micro >>> ((axis + 2) % 3) & 1), .5, planes) > 0) {
-					links[source.id()][2 * axis + (sign > 0 ? 1 : 0)] = receiver.id();
-					links[receiver.id()][2 * axis + (sign > 0 ? 0 : 1)] = source.id();
-				}
-			}
-		}
-		int[] queue = new int[count], seen = new int[count];
-		for (int node = 1; node <= old.nodeCount(); node++) {
-			long key = (long) node << 32;
-			if (!overlap.subMap(key, (long) (node + 1) << 32).isEmpty()) continue;
-			int head = 0, tail = 0;
-			for (var piece : old.capacity().pieces()) if (old.nodeOfPiece(piece.id()) == node) {
-				queue[tail++] = piece.id(); seen[piece.id()] = node;
-			}
-			var destinations = new TreeMap<Integer, Double>();
-			while (head < tail && destinations.isEmpty()) {
-				int end = tail;
-				while (head < end) {
-					int piece = queue[head++];
-					int destination = next.nodeOfPiece(piece);
-					if (destination >= 0) destinations.merge(destination, next.geometry().piece(piece).volume(), Double::sum);
-					for (int peer : links[piece]) if (peer >= 0 && seen[peer] != node) { seen[peer] = node; queue[tail++] = peer; }
-				}
-			}
-			// Pockets below one percent of a cell are transported as unresolved gas through
-			// the connected open collision component to the nearest resolved gas support.
-			// Their inventory and energy move together; an ambient receiver books a sink.
-			if (destinations.isEmpty() && old.capacity().chambers().get(node - 1).cubicMeters()
-					<= .01 * old.geometry().cellVolumeCubicMeters()) {
-				Arrays.fill(seen, 0); head = tail = 0;
-				for (var piece : old.capacity().pieces()) if (old.nodeOfPiece(piece.id()) == node) {
-					queue[tail++] = piece.id(); seen[piece.id()] = 1;
-				}
-				while (head < tail && destinations.isEmpty()) {
-					int end = tail;
-					while (head < end) {
-						int piece = queue[head++], cell = piece / 8, micro = piece & 7;
-						int[] coordinate = {cell % domain.sizeX, cell / domain.sizeX % domain.sizeY, cell / (domain.sizeX * domain.sizeY)};
-						for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) {
-							boolean across = (micro >>> axis & 1) == (sign > 0 ? 1 : 0);
-							if (across && (coordinate[axis] + sign < 0 || coordinate[axis] + sign >= sizes[axis])) continue;
-							int peerCell = cell + (across ? sign * strides[axis] : 0), peerMicro = micro ^ 1 << axis;
-							int peer = 8 * peerCell + peerMicro;
-							if (seen[peer] != 0 || (next.geometry().collisionMask(peerCell) & 1 << peerMicro) != 0) continue;
-							seen[peer] = 1; queue[tail++] = peer;
-							int destination = next.nodeOfPiece(peer);
-							if (destination >= 0) destinations.merge(destination, next.geometry().piece(peer).volume(), Double::sum);
-						}
+	private record Successors(TreeMap<Long, List<Double>> weights, java.util.Set<Long> relocated) { }
+
+	/**
+	 * PLIC overlap resolves ordinary splits. When a reconstructed bubble changes position inside a
+	 * fixed open component, its lumped inventory follows that component's space-time dry graph.
+	 * This first-order representation change spans at most one local component before following
+	 * resolved gas connections; full liquid cells and fixed walls continue to separate chambers.
+	 */
+	private Successors successors(GasRuntimeGeometry old, GasRuntimeGeometry next,
+	                              GasGeometryTransition transition) {
+		var weights = overlaps(old, next, transition);
+		boolean missing = false;
+		for (int node = 1; node <= old.nodeCount(); node++)
+			missing |= weights.subMap((long) node << 32, (long) (node + 1) << 32).isEmpty();
+		if (!missing) return new Successors(weights, java.util.Set.of());
+		int[] parent = new int[8 * domain.cellCount];
+		byte[] rank = new byte[parent.length];
+		for (int piece = 0; piece < parent.length; piece++) parent[piece] = piece;
+		for (var geometry : List.of(old.geometry(), next.geometry())) {
+			for (int cell = 0; cell < domain.cellCount; cell++)
+				for (int support : CellRemapMicroTopology.components(geometry.collisionMask(cell))) {
+					int first = -1;
+					for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) {
+						int piece = 8 * cell + micro;
+						if (old.nodeOfPiece(piece) < 0 && next.nodeOfPiece(piece) < 0) continue;
+						if (first < 0) first = piece; else join(parent, rank, first, piece);
 					}
 				}
-				Arrays.fill(seen, 0);
-			}
-			for (var destination : destinations.entrySet()) {
-				long pair = key | destination.getKey(); displaced.add(pair);
-				overlap.put(pair, List.of(MicroBoxPlaneVolume.rational(destination.getValue())));
+			// Finite apertures remain network edges and never become instantaneous stock transfers.
+			for (var port : geometry.ports()) if (port.fullCutConnection())
+				join(parent, rank, port.first(), port.second());
+		}
+		int[] strides = {1, domain.sizeX, domain.sizeX * domain.sizeY};
+		int[] sizes = {domain.sizeX, domain.sizeY, domain.sizeZ};
+		for (var source : old.geometry().pieces()) if (next.geometry().piece(source.id()) == null) {
+			int cell = source.cell(), micro = source.micro();
+			int[] coordinate = {cell % domain.sizeX, cell / domain.sizeX % domain.sizeY,
+					cell / (domain.sizeX * domain.sizeY)};
+			for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) {
+				boolean across = (micro >>> axis & 1) == (sign > 0 ? 1 : 0);
+				if (!across || coordinate[axis] + sign < 0 || coordinate[axis] + sign >= sizes[axis]) continue;
+				int receiverCell = cell + sign * strides[axis], receiverMicro = micro ^ 1 << axis;
+				var receiver = next.geometry().piece(8 * receiverCell + receiverMicro);
+				if (receiver == null) continue;
+				double firstCoordinate = sign > 0 ? 1 : 0;
+				var planes = new ArrayList<GasFaceIntersection.Plane>(2);
+				addDryFacePlane(planes, source.dryPlane(), axis, firstCoordinate);
+				addDryFacePlane(planes, receiver.dryPlane(), axis, 1 - firstCoordinate);
+				if (GasFaceIntersection.area(.5 * (micro >>> ((axis + 1) % 3) & 1),
+						.5 * (micro >>> ((axis + 2) % 3) & 1), .5, planes) > 0)
+					join(parent, rank, source.id(), receiver.id());
 			}
 		}
-		return displaced;
+		var capacities = new java.util.HashMap<Integer, TreeMap<Integer, Double>>();
+		for (var piece : next.capacity().pieces()) {
+			int node = next.nodeOfPiece(piece.id());
+			if (node >= 0) capacities.computeIfAbsent(root(parent, piece.id()), ignored -> new TreeMap<>())
+					.merge(node, piece.cubicMeters(), Double::sum);
+		}
+		var relocated = new java.util.HashSet<Long>();
+		for (int node = 1; node <= old.nodeCount(); node++) {
+			long key = (long) node << 32;
+			if (!weights.subMap(key, (long) (node + 1) << 32).isEmpty()) continue;
+			var destinations = capacities.get(root(parent, old.minimumPiece(node)));
+			if (destinations == null) continue;
+			for (var destination : destinations.entrySet()) {
+				long pair = key | destination.getKey();
+				weights.put(pair, List.of(destination.getValue())); relocated.add(pair);
+			}
+		}
+		return new Successors(weights, relocated);
 	}
-	private static void addDryFacePlane(List<GasFaceIntersection.Plane> planes, GasGeometryOverlap.HalfSpace plane,
-	                                   int axis, double coordinate) {
+	private static int root(int[] parent, int piece) {
+		int root = piece;
+		while (parent[root] != root) root = parent[root];
+		while (parent[piece] != piece) { int next = parent[piece]; parent[piece] = root; piece = next; }
+		return root;
+	}
+	private static void join(int[] parent, byte[] rank, int first, int second) {
+		int a = root(parent, first), b = root(parent, second);
+		if (a == b) return;
+		if (rank[a] < rank[b]) parent[a] = b;
+		else { parent[b] = a; if (rank[a] == rank[b]) rank[a]++; }
+	}
+	private static void addDryFacePlane(List<GasFaceIntersection.Plane> planes,
+	                                   GasGeometryOverlap.HalfSpace plane, int axis, double coordinate) {
 		if (plane == null) return;
-		SignedDyadic[] n = {plane.nx(), plane.ny(), plane.nz()};
+		double[] n = {plane.nx(), plane.ny(), plane.nz()};
 		planes.add(new GasFaceIntersection.Plane(n[(axis + 1) % 3], n[(axis + 2) % 3],
-				plane.threshold().subtract(n[axis].multiply(SignedDyadic.of(coordinate)))));
+				plane.threshold() - n[axis] * coordinate));
 	}
 	private GasInventory ambientInventory(double volume) {
 		if (!(volume > 0 && Double.isFinite(volume))) throw new GasTopologyBlockedException("Ambient capture has no positive finite volume");
@@ -484,13 +466,7 @@ final class GasTopologyCoordinator {
 		if (nanos == 0) return GasInventory.EMPTY;
 		return domain.gasState.network.ambientInventory(nanos);
 	}
-	private static ExactRational exact(SignedDyadic value) {
-		return value.exponent() >= 0 ? new ExactRational(value.significand().shiftLeft(value.exponent()), BigInteger.ONE)
-				: new ExactRational(value.significand(), BigInteger.ONE.shiftLeft(-value.exponent()));
-	}
-	private static ExactRational divide(ExactRational a, ExactRational b) {
-		return new ExactRational(a.numerator().multiply(b.denominator()), a.denominator().multiply(b.numerator()));
-	}
+
 	private static double[] doubles(SignedDyadic[] values) {
 		if (values == null) return null;
 		double[] result = new double[values.length];
@@ -526,7 +502,6 @@ final class GasTopologyCoordinator {
 		if (plan.thermalPlan() != null) domain.thermalState.commitGasRemap(plan.thermalPlan());
 		domain.gasState.network.commitRemapNodes(plan.gasPlan()); domain.gasState.frame = plan.frame();
 		domain.gasState.pressureActive = plan.frame().nodeCount() > 0;
-		domain.rebuildPressureBoundaryLineage();
 		rememberCommittedTopology();
 	}
 	private void requireOwnersCurrent(GasTopologyPlan plan) {
@@ -543,8 +518,9 @@ final class GasTopologyCoordinator {
 		refresh(); if (!domain.gasState.pressureActive) return;
 		if (domain.thermalState == null || !domain.thermalState.gasModelBound()) domain.gasState.network.stepEdges(dt);
 		else domain.gasState.network.stepEdges(dt, domain.thermalState.gasThermodynamics(domain.gasState.network),
-				(source, target, moved, sourceAfter, targetAfter) -> domain.thermalState.planGasTransfer(
-						source, target, moved, sourceAfter, targetAfter, domain.gasState.network));
+				batch -> domain.thermalState.planGasFlow(batch, domain.gasState.network));
+		// Orifice transfers change stock and U on the same nodes, capacities and faces.
+		rememberCommittedTopology();
 	}
 	void synchronizeForPersistence() { refresh(); }
 	record GasTopologyPlan(GasRuntimeGeometry frame, GasRuntimeGeometry source,

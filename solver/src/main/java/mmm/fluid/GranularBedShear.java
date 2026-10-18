@@ -1,47 +1,104 @@
 package mmm.fluid;
 
+import mmm.inventory.LiquidCellInventory;
+
 import mmm.granular.ParticulateMaterial;
 import mmm.granular.SolidVolume;
+import mmm.units.SignedDyadic;
 
 /** Equilibrium smooth-wall closure for unresolved near-bed shear; no synthetic turbulent velocity. */
 final class GranularBedShear {
 	private GranularBedShear() { }
 
-	/** Bed traction removes horizontal carrier energy to pay for the resolved parcel's lift. */
+	/** Local bed traction pays the exact lift work from persistent horizontal MAC momentum. */
 	static LiftWork planLift(FluidDomain domain, int cell, double joules) {
 		if (!Double.isFinite(joules)) throw new IllegalArgumentException("Non-finite bed lift work");
-		if (joules <= 0) return new LiftWork(new int[0], 1);
-		int y = cell / domain.sizeX % domain.sizeY;
-		var markers = new java.util.ArrayList<Integer>();
-		double kinetic = 0;
-		for (int c : new int[]{cell, y + 1 < domain.sizeY ? cell + domain.sizeX : -1}) {
-			if (c < 0) continue;
-			for (int p = domain.markerGrid.cellMarkerHead[c]; p >= 0; p = domain.markerGrid.particleCellNext[p]) {
-				double u = domain.particles.velocityX(p), w = domain.particles.velocityZ(p);
-				kinetic += .5 * domain.unitScale.kilograms(domain.particles.mass(p)) * (u * u + w * w);
-				markers.add(p);
+		return planLift(domain, cell, SignedDyadic.of(joules));
+	}
+	static LiftWork planLift(FluidDomain domain, int cell, SignedDyadic work) {
+		if (domain == null || cell < 0 || cell >= domain.cellCount || work == null || !Double.isFinite(work.toDouble()))
+			throw new IllegalArgumentException("Invalid bed lift work");
+		domain.ensureGrid();
+		var faces = new java.util.ArrayList<Face>(8);
+		int x=cell%domain.sizeX, y=cell/domain.sizeX%domain.sizeY, z=cell/(domain.sizeX*domain.sizeY);
+		// Whole dual faces of the bed cell and the free-flow cell above share the local traction.
+		for(int row=y;row<=Math.min(y+1,domain.sizeY-1);row++) {
+			addFace(domain,faces,0,domain.xFaceIndex(x,row,z));
+			addFace(domain,faces,0,domain.xFaceIndex(x+1,row,z));
+			addFace(domain,faces,2,domain.zFaceIndex(x,row,z));
+			addFace(domain,faces,2,domain.zFaceIndex(x,row,z+1));
+		}
+		double kinetic=0;
+		for(var face:faces) kinetic+=face.energy(face.before());
+		if(!Double.isFinite(kinetic)) throw new ArithmeticException("Bed traction energy overflow");
+		if(work.compareTo(SignedDyadic.of(kinetic))>0 || kinetic==0 && work.signum()<0) return null;
+		double scale=kinetic==0?1:Math.sqrt(Math.max(0,kinetic-work.toDouble()))/Math.sqrt(kinetic);
+		var prepared=new Face[faces.size()];
+		var loss=SignedDyadic.ZERO; double impulseX=0,impulseZ=0;
+		for(int i=0;i<prepared.length;i++) {
+			var face=faces.get(i); double next=face.before()*scale;
+			float observed=(float)(next/face.mass());
+			if(!Double.isFinite(next)||!Float.isFinite(observed)) throw new ArithmeticException("Bed traction momentum overflow");
+			prepared[i]=new Face(face.axis(),face.index(),face.mass(),face.before(),next,observed);
+			loss=loss.add(SignedDyadic.of(face.energy(face.before())))
+					.subtract(SignedDyadic.of(face.energy(next)));
+			if(face.axis()==0) impulseX+=face.before()-next; else impulseZ+=face.before()-next;
+		}
+		if(!Double.isFinite(impulseX)||!Double.isFinite(impulseZ)) throw new ArithmeticException("Bed traction impulse overflow");
+		return new LiftWork(domain,domain.liquidCells,domain.liquidCells.revision(),prepared,
+				work,loss.subtract(work),impulseX,impulseZ);
+	}
+	private static void addFace(FluidDomain domain,java.util.List<Face> faces,int axis,int index) {
+		double mass=(axis==0?domain.cellMacStage.massX:domain.cellMacStage.massZ)[index];
+		if(mass<=0||domain.geometry.cutCells.openFaceField(axis)[index]<=0) return;
+		double momentum=(axis==0?domain.mac.momentumX:domain.mac.momentumZ)[index];
+		if(!(Double.isFinite(mass)&&Double.isFinite(momentum))) throw new ArithmeticException("Invalid bed traction face");
+		faces.add(new Face(axis,index,mass,momentum,momentum,0));
+	}
+	private record Face(int axis,int index,double mass,double before,double after,float observed) {
+		double energy(double momentum){return .5*momentum*(momentum/mass);}
+	}
+	static final class LiftWork {
+		private final FluidDomain owner;
+		private final LiquidCellInventory inventory;
+		private final long revision;
+		private final Face[] faces;
+		private final SignedDyadic physicalWork,rounding;
+		private final double impulseX,impulseZ;
+		private boolean committed;
+		private LiftWork(FluidDomain owner,LiquidCellInventory inventory,long revision,Face[] faces,
+				SignedDyadic physicalWork,SignedDyadic rounding,double impulseX,double impulseZ){
+			this.owner=owner;this.inventory=inventory;this.revision=revision;this.faces=faces;
+			this.physicalWork=physicalWork;this.rounding=rounding;this.impulseX=impulseX;this.impulseZ=impulseZ;
+		}
+		SignedDyadic physicalWork(){return physicalWork;}
+		SignedDyadic mechanicalRounding(){return rounding;}
+		void requireCurrent(FluidDomain domain){
+			if(committed||domain!=owner||domain.liquidCells!=inventory||inventory.revision()!=revision)
+				throw new IllegalStateException("Bed traction source changed");
+			for(var face:faces){
+				double mass=(face.axis()==0?domain.cellMacStage.massX:domain.cellMacStage.massZ)[face.index()];
+				double momentum=(face.axis()==0?domain.mac.momentumX:domain.mac.momentumZ)[face.index()];
+				if(Double.doubleToRawLongBits(mass)!=Double.doubleToRawLongBits(face.mass())
+						||Double.doubleToRawLongBits(momentum)!=Double.doubleToRawLongBits(face.before())
+						||domain.geometry.cutCells.openFaceField(face.axis())[face.index()]<=0)
+					throw new IllegalStateException("Bed traction face changed");
 			}
 		}
-		if (joules > kinetic) return null;
-		return new LiftWork(markers.stream().mapToInt(Integer::intValue).toArray(), Math.sqrt(1 - joules / kinetic));
-	}
-
-	record LiftWork(int[] markers, double scale) {
-		double[] apply(FluidDomain domain) {
-			var impulse = new double[3];
-			for (int p : markers) {
-				double mass = domain.unitScale.kilograms(domain.particles.mass(p));
-				float x = domain.particles.velocityX(p), z = domain.particles.velocityZ(p);
-				float nextX = (float) (scale * x), nextZ = (float) (scale * z);
-				impulse[0] += mass * (x - nextX); impulse[2] += mass * (z - nextZ);
-				domain.particles.setVelocityX(p, nextX); domain.particles.setVelocityZ(p, nextZ);
+		double[] apply(FluidDomain domain){
+			requireCurrent(domain);
+			for(var face:faces){
+				(face.axis()==0?domain.mac.momentumX:domain.mac.momentumZ)[face.index()]=face.after();
+				(face.axis()==0?domain.mac.velocityX:domain.mac.velocityZ)[face.index()]=face.observed();
 			}
-			domain.gridDirty = true;
-			return impulse;
+			// Face mass and support are unchanged; the matching velocity view was updated above.
+			committed=true;
+			return new double[]{impulseX,0,impulseZ};
 		}
 	}
 
 	static double shields(FluidDomain domain, int cell, ParticulateMaterial material) {
+		domain.ensureGrid();
 		int x = cell % domain.sizeX, y = cell / domain.sizeX % domain.sizeY;
 		int z = cell / (domain.sizeX * domain.sizeY);
 		double h = domain.config.cellSize();
@@ -54,9 +111,9 @@ final class GranularBedShear {
 		if (!(py > bed)) return 0;
 		int sampleCell = domain.cellIndex(x, (int) (py / h), z);
 		// Extrapolated MAC velocities in dry cells cannot erode a bed. Check the actual carrier.
-		if (domain.markerGrid.markerCount[sampleCell] == 0) return 0;
+		if (domain.liquidCells.exactCellVolume(sampleCell).signum() == 0) return 0;
 		for (double cy = bed; cy < py; cy += h / 4) {
-			if (domain.markerGrid.markerCount[domain.cellIndex(x, (int) (cy / h), z)] == 0
+			if (domain.liquidCells.exactCellVolume(domain.cellIndex(x, (int) (cy / h), z)).signum() == 0
 					|| domain.geometry.cutCells.pointInsideSolid(px, (float) cy, pz, (float) h)) return 0;
 		}
 		if (domain.geometry.cutCells.pointInsideSolid(px, py, pz, (float) h)) return 0;

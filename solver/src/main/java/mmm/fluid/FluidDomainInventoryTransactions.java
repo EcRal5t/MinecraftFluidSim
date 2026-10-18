@@ -150,24 +150,14 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 
 	/** Commits a previously validated liquid clear; no new ledger candidate is constructed here. */
 	public void commitRemoveAllWaterExact(WaterClearPlan plan) {
-		if (plan == null || particles.count() != plan.markerCount()
+		if (plan == null || liquidCells.size() != plan.markerCount()
 				|| carrierMutationRevision() != plan.mutationRevision()
-				|| (chemicalParcels == null ? 0L : chemicalParcels.mutationRevision()) != plan.chemicalRevision()
+				|| (chemicalParcels == null ? 0 : chemicalParcels.mutationRevision()) != plan.chemicalRevision()
 				|| Double.doubleToRawLongBits(domain().totalVolumeExact()) != plan.totalVolumeBits()
 				|| domain().totalMassUnits() != plan.totalMassUnits()
-				|| !(thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particles.count()))
-				.equals(plan.internalEnergy())) {
+				|| !liquidCells.exactInternalEnergy().equals(plan.internalEnergy()))
 			throw new IllegalStateException("Liquid inventory changed after clear planning");
-		}
-		var gas = new LiquidExtractionGasPlan(domain());
-		gas.clearLiquid(); gas.prepare(null);
-		if (chemicalParcels != null) {
-			chemicalParcels.recordEscapedSink(plan.drained());
-		}
-		if (thermalState != null) thermalState.recordExternalSink(plan.internalEnergy());
-		coordinator.clearLiquidMarkers(
-				CarrierMutationPlan.wholesaleCount(carrierMutationRevision(), particles.count()));
-		gas.commit();
+		transferPlanner.clearLiquid();
 	}
 
 	/** Plans one operator clear across liquid markers and every coherent condensed phase. */
@@ -196,10 +186,10 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 			throw new IllegalStateException("Liquid inventory changed after condensed clear planning");
 		}
 		WaterClearPlan liquid = plan.liquid();
-		if (particles.count() != liquid.markerCount()
+		if (liquidCells.size() != liquid.markerCount()
 				|| Double.doubleToRawLongBits(domain().totalVolumeExact()) != liquid.totalVolumeBits()
 				|| domain().totalMassUnits() != liquid.totalMassUnits()
-				|| !(thermalState == null ? SignedDyadic.ZERO : thermalState.exactLiquidEnergy(particles.count()))
+				|| !(thermalState == null ? SignedDyadic.ZERO : liquidCells.exactInternalEnergy())
 				.equals(liquid.internalEnergy())) {
 			throw new IllegalStateException("Liquid inventory changed after condensed clear planning");
 		}
@@ -224,8 +214,10 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 			thermalState.recordExternalSink(plan.liquid().internalEnergy());
 			thermalState.clearCoherentExternal(plan.coherentGroups(), plan.coherentEnergy());
 		}
-		coordinator.clearLiquidMarkers(
-				CarrierMutationPlan.wholesaleCount(carrierMutationRevision(), particles.count()));
+		transferPlanner.planLiquidClear().commit();
+		mac.restoreMomentum(new MacMomentumState(sizeX, sizeY, sizeZ, new double[mac.velocityX.length],
+				new double[mac.velocityY.length], new double[mac.velocityZ.length]));
+		domain().markCellInventoryChanged();
 		domain().refreshCoherentOccupancy();
 		gridDirty = true;
 		return new CondensedClear(plan.coherentVolumeSvq(),
@@ -321,11 +313,12 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 		final long totalVolumeBits;
 		final long totalMassUnits;
 		final GranularCollisionPlan granular;
+		final LiquidCollisionEdit liquid;
 		boolean consumed;
 
 		CollisionEditPlan(
 				FluidDomain owner, List<CollisionEdit> edits, int[] previousMasks,
-				int planMarkerCount, long totalVolumeBits, long totalMassUnits, GranularCollisionPlan granular
+				int planMarkerCount, long totalVolumeBits, long totalMassUnits, GranularCollisionPlan granular, LiquidCollisionEdit liquid
 		) {
 			this.owner = owner;
 			this.edits = edits;
@@ -333,7 +326,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 			this.planMarkerCount = planMarkerCount;
 			this.totalVolumeBits = totalVolumeBits;
 			this.totalMassUnits = totalMassUnits;
-			this.granular = granular;
+			this.granular = granular; this.liquid = liquid;
 		}
 	}
 
@@ -536,8 +529,8 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		List<MaterialPortion> build() {
 			ArrayList<MaterialPortion> result = new ArrayList<>();
 			for (int material = 0; material < volume.length; material++) if (volume[material] > 0.0) {
-				if (mass[material] <= 0L) {
-					throw new IllegalStateException("Displaced material has no positive finite mass");
+				if (mass[material] < 0L) {
+					throw new IllegalStateException("Displaced material has negative mass");
 				}
 				result.add(new MaterialPortion(material, volume[material], mass[material]));
 			}

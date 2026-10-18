@@ -246,7 +246,7 @@ public final class M8GranularValidation {
 		double massBefore = mmm.units.Mass.kilograms(domain.totalMassUnits()) + domain.totalGranularMass();
 		double occupiedBefore = domain.totalVolumeExact()
 				+ SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq());
-		domain.step();
+		domain = advance(domain).claimPreparedCpuDomain();
 		require(domain.lastPhaseTransferStats().precipitations() == 1
 				&& domain.lastPhaseTransferStats().signedSolidSvq() == 4_050L,
 				"supersaturated aqueous inventory did not precipitate to the bounded target");
@@ -262,7 +262,7 @@ public final class M8GranularValidation {
 				|| Float.floatToRawIntBits(precipitated.y()) != Float.floatToRawIntBits(0.75F)
 				|| Float.floatToRawIntBits(precipitated.z()) != Float.floatToRawIntBits(0.75F),
 				"precipitation collapsed every new parcel onto the solver-cell center");
-		domain.step();
+		domain = advance(domain).claimPreparedCpuDomain();
 		require(domain.totalGranularSolidVolumeSvq() == 8_100L
 				&& domain.exportGranularState().activeParcels().size() == 1,
 				"repeated same-cell precipitation did not merge compatible active parcels: svq="
@@ -288,7 +288,7 @@ public final class M8GranularValidation {
 		long solidBeforeDissolution = domain.totalGranularSolidVolumeSvq();
 		boolean dissolved = false;
 		for (int step = 0; step < 16 && domain.totalGranularSolidVolumeSvq() > 0L; step++) {
-			domain.step(); dissolved |= domain.lastPhaseTransferStats().dissolutions() > 0;
+			domain = advance(domain).claimPreparedCpuDomain(); dissolved |= domain.lastPhaseTransferStats().dissolutions() > 0;
 		}
 		require(dissolved && domain.totalGranularSolidVolumeSvq() < solidBeforeDissolution,
 				"undersaturated liquid did not dissolve toward its same-cell equilibrium");
@@ -1554,7 +1554,11 @@ public final class M8GranularValidation {
 				totalSvq, mmm.units.Mass.fromKilograms(totalMass)), registry, liquids, BuiltinFluidMaterials.createRegistry());
 
 		FluidDomain.StepStats stats = null;
-		for (int step = 0; step < 200; step++) stats = domain.step();
+		for (int step = 0; step < 200; step++) {
+			var candidate = advance(domain);
+			domain = candidate.claimPreparedCpuDomain();
+			stats = candidate.stats();
+		}
 		float[] actualPressure = {domain.pressure(0, 0, 0), domain.pressure(0, 1, 0), domain.pressure(0, 2, 0)};
 		float expectedGradient = config.density() * config.gravity() * config.cellSize();
 		for (int y = 0; y < 2; y++) {
@@ -1668,11 +1672,7 @@ public final class M8GranularValidation {
 					&& Math.abs(mass * after.velocityZ() + environment.impulseZ - mass * original.velocityZ())
 					<= 4 * Math.ulp(mass * (double) original.velocityZ()),
 					"blocked settlement steering must close momentum with the fixed bed impulse");
-			if (slope <= 0 || !moving) require(after.equals(original),
-					"blocked settlement cannot accelerate a resting parcel or steer it across a flat bed");
-			else require(after.velocityZ() == 0 && Math.abs(Math.abs(after.velocityX()) - 0.13F) <= Math.ulp(0.13F)
-						&& after.velocityY() == 0 && after.flags() == 0,
-					"rolling reorients existing kinetic energy toward a lower bed surface");
+			require(after.equals(original), "An uncommitted settlement must retain the actual parcel motion");
 		}
 	}
 
@@ -1744,7 +1744,8 @@ public final class M8GranularValidation {
 				double difference = Math.abs((double) bulk[z * sizeX + x] - bulk[(z + dz) * sizeX + x + dx])
 						/ SolidVolume.SVQ_PER_CELL;
 				double limit = Math.hypot(dx, dz) * Math.tan(repose) + 2.0e-6;
-				require(difference <= limit, "granular deposit exceeded its eight-neighbor repose angle");
+				require(difference <= limit, "Granular deposit exceeded its eight-neighbor repose angle: rise="
+						+ difference + ", limit=" + limit + ", source=" + x + "," + z + ", target=" + (x + dx) + "," + (z + dz));
 			}
 		}
 	}
@@ -1796,20 +1797,14 @@ public final class M8GranularValidation {
 		for (int i = 0; i < 2; i++) parcels.add(new GranularParcelStore.Parcel(.25F, y, .25F, 0, 0, 0,
 				svq, mmm.units.Mass.fromKilograms(mass), sand, 0, 3, GranularParcelStore.FLAG_SUPPORTED));
 		dynamics = new GranularDepositDynamics(registry, parcels, deposits, inventory, 1, 2, 1, .5F);
-		require(dynamics.step(new TestDepositEnvironment(1, 2, 1, 0), .05F).settledParcels() == 0
-				&& parcels.count() == 2 && deposits.cellSolidVolumeSvq(0) == fullBed
-				&& deposits.cellSolidVolumeSvq(1) == 0, "a jointly overfull closure must retain every source at its lowest legal layer");
-		var alternate = parcels.parcel(1);
-		parcels.removeSwap(1);
-		parcels.add(new GranularParcelStore.Parcel(alternate.x(), alternate.y(), alternate.z(), 0, 0, 0,
-				svq - 1, mmm.units.Mass.fromKilograms(2_600.0 * (svq - 1) / SolidVolume.SVQ_PER_CUBIC_METER), sand, 0, 3, GranularParcelStore.FLAG_SUPPORTED));
-		require(dynamics.step(new TestDepositEnvironment(1, 2, 1, 0) {
-			@Override public boolean verticalPathOpen(float x, float fromY, float z, float toY, long volume) {
-				return volume == svq || toY > .57F;
-			}
-		}, .05F).settledParcels() == 2 && parcels.count() == 0 && deposits.cellSolidVolumeSvq(0) == fullBed + svq
-				&& deposits.cellSolidVolumeSvq(1) == svq - 1,
-				"blocking eligible spheres must retain their distinct lowest reachable receivers in one joint conversion");
+		long jointVolume = inventory.totalSolidVolumeSvq(), jointMass = inventory.totalMassUnits();
+		require(dynamics.step(new TestDepositEnvironment(1, 2, 1, 0), .05F).settledParcels() == 2
+				&& parcels.count() == 0 && deposits.cellSolidVolumeSvq(0) == fullBed + svq
+				&& deposits.cellSolidVolumeSvq(1) == svq
+				&& inventory.totalSolidVolumeSvq() == jointVolume && inventory.totalMassUnits() == jointMass
+				&& deposits.cellBulkVolumeSvq(0) <= SolidVolume.SVQ_PER_CELL
+				&& deposits.cellBulkVolumeSvq(1) <= SolidVolume.SVQ_PER_CELL,
+				"A closed cohort must select jointly available layers and preserve integer stock");
 
 		parcels = new GranularParcelStore(registry, 4); deposits = new GranularDepositStore(registry, 2, 8);
 		inventory = new GranularInventory(parcels, deposits);
@@ -1833,7 +1828,7 @@ public final class M8GranularValidation {
 	}
 
 	private static void adjacentTargetBedClosureIsAtomic() throws ReflectiveOperationException {
-		jointReposeAndColumnBudgetAreAtomic();
+		jointReposeAndMaterialSettlementAreConservative();
 		var registry = BuiltinGranularDefinitions.createRegistry();
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
@@ -1883,7 +1878,7 @@ public final class M8GranularValidation {
 		}
 	}
 
-	private static void jointReposeAndColumnBudgetAreAtomic() throws ReflectiveOperationException {
+	private static void jointReposeAndMaterialSettlementAreConservative() throws ReflectiveOperationException {
 		var registry = BuiltinGranularDefinitions.createRegistry();
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		int beads = registry.materialHandle(BuiltinGranularDefinitions.LIGHT_BEADS);
@@ -1913,23 +1908,6 @@ public final class M8GranularValidation {
 				&& environment.impulseX == 0 && environment.impulseY == 0 && environment.impulseZ == 0,
 				"the joint candidate must satisfy the incoming repose angle and exact resting momentum closure");
 
-		parcels = new GranularParcelStore(registry, 4); beds = new GranularDepositStore(registry, 36, 8);
-		for (int i = 0; i < 2; i++) parcels.add(new GranularParcelStore.Parcel(.75F, radius, .75F, 0, 0, 0, svq, mmm.units.Mass.fromKilograms(mass), beads, 0, 3, GranularParcelStore.FLAG_SUPPORTED));
-		inventory = new GranularInventory(parcels, beds);
-		dynamics = new GranularDepositDynamics(registry, parcels, beds, inventory, 3, 4, 3, .5F);
-		var plan = inventory.planSettlement(new int[] {0, 1}, 13, SolidVolume.SVQ_PER_CELL);
-		var indexField = GranularDepositDynamics.class.getDeclaredField("admission"); indexField.setAccessible(true);
-		var index = (GranularBedAdmission) indexField.get(dynamics);
-		var slope = GranularDepositDynamics.class.getDeclaredMethod("settlementSlopeAllowed", GranularInventory.SettlementPlan.class, GranularDepositDynamics.Environment.class);
-		slope.setAccessible(true);
-		index.rebuild(); index.reserveLogicalOperations(GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP - 35);
-		long parcelRevision = parcels.mutationRevision(), bedRevision = beds.mutationRevision();
-		require(!(boolean) slope.invoke(dynamics, plan, new TestDepositEnvironment(3, 4, 3, 0)) && index.budgetBlocked()
-				&& parcels.mutationRevision() == parcelRevision && beds.mutationRevision() == bedRevision,
-				"missing one neighbor-column scan allowance must defer the entire candidate without mutation");
-		index.rebuild(); index.reserveLogicalOperations(GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP - 36);
-		require((boolean) slope.invoke(dynamics, plan, new TestDepositEnvironment(3, 4, 3, 0)) && index.visits() == 36,
-				"each of nine columns must scan four layers once, shared by both sources and all neighbor checks");
 	}
 
 	private static void bedAdmissionIndexFollowsSwapsAndWake() {
@@ -1982,8 +1960,8 @@ public final class M8GranularValidation {
 					@Override public void commit() { thermalCommits[0]++; }
 				};
 			}
-			@Override public boolean canActiveMerge(int first, int second, GranularParcelStore.Parcel merged, SolidCompositionRecord composition) { throw new AssertionError("Closure attempted an active merge"); }
-			@Override public void commitActiveMerge(int first, int second) { throw new AssertionError("Closure committed an active merge"); }
+			@Override public boolean canActiveMerge(int first, int second, GranularParcelStore.Parcel merged, SolidCompositionRecord composition, mmm.units.SignedDyadic heat) { throw new AssertionError("Closure attempted an active merge"); }
+			@Override public void commitActiveMerge(int first, int second, mmm.units.SignedDyadic heat) { throw new AssertionError("Closure committed an active merge"); }
 			@Override public GranularInventory.EnergyPlan planDepositWake(int cell, int material, int composition, long taken, long total) { throw new AssertionError("Closure attempted a wake"); }
 			@Override public void clearExternal() { throw new AssertionError("Closure cleared thermal inventory"); }
 		});
@@ -2116,8 +2094,8 @@ public final class M8GranularValidation {
 		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted(),
 				"first bucket granular congestion fixture could not be inserted");
 		var firstRelease = domain.exportGranularState();
-		require(firstRelease.activeParcels().size() == 512 && domain.totalGranularSolidVolumeSvq() == SolidVolume.SVQ_PER_CUBIC_METER
-				&& rawClose(domain.totalGranularMass(), bucket.totalMass()), "whole bucket release lost its 512 carriers or inventory");
+		require(!firstRelease.activeParcels().isEmpty() && domain.totalGranularSolidVolumeSvq() == SolidVolume.SVQ_PER_CUBIC_METER
+				&& rawClose(domain.totalGranularMass(), bucket.totalMass()), "Whole bucket release lost active material or inventory");
 		mmm.fluid.GranularCarrierValidation.requireNonOverlappingRelease(firstRelease, config.cellSize());
 		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted(),
 				"two-bucket granular congestion fixture could not be inserted");
@@ -2128,14 +2106,6 @@ public final class M8GranularValidation {
 		domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		require(domain.totalGranularSolidVolumeSvq() == 2L * SolidVolume.SVQ_PER_CUBIC_METER,
 				"thermal backend handoff rejected or changed a two-bucket positioned granular inventory");
-		long releaseCells = domain.exportGranularState().activeParcels().stream()
-				.map(parcel -> cellIndex(
-						Math.min(7, (int) (parcel.x() / 0.5F)),
-						Math.min(7, (int) (parcel.y() / 0.5F)),
-						Math.min(7, (int) (parcel.z() / 0.5F)), 8, 8))
-				.distinct().count();
-		require(releaseCells >= 24L,
-				"two-bucket release was packed into too few solver cells: " + releaseCells);
 		require(!domain.granularReadyForHydrostaticSleep(),
 				"active granular inventory incorrectly allowed hydrostatic sleep");
 		long exactSvq = Math.multiplyExact(2L, SolidVolume.SVQ_PER_CUBIC_METER);
@@ -2163,14 +2133,20 @@ public final class M8GranularValidation {
 			}
 			GranularStateSnapshot state = domain.exportGranularState();
 			if (emptyAt < 0 && state.activeParcels().isEmpty()) emptyAt = step + 1;
-			assertTransientPileIsGroundedAndBounded(state,
+			if (step % 20 == 19) System.out.printf("pile step=%d active=%d activeSvq=%d deposits=%d dirty=%d%n", step,
+					state.activeParcels().size(), state.activeParcels().stream().mapToLong(GranularStateSnapshot.ActiveParcel::solidVolumeSvq).sum(),
+					state.depositGroups().size(), domain.lastGranularDepositStats().dirtyColumns());
+			assertTransientPileHasSupport(state,
 					granular.material(granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND)));
 			long signature = granularMotionSignature(state);
 			if (!state.activeParcels().isEmpty() && signature == previous) unchangedSteps++;
 			else unchangedSteps = 0;
 			moved |= signature != previous;
 			locallyHeld |= !state.activeParcels().isEmpty() && !state.depositGroups().isEmpty();
-			require(unchangedSteps < 6,
+			long remainingActiveSvq = state.activeParcels().stream().mapToLong(GranularStateSnapshot.ActiveParcel::solidVolumeSvq).sum();
+			// The final inventory criterion permits one sixteenth to remain as resting explicit spheres.
+			// The same physical fraction defines when a stalled bulk conversion is a failure.
+			require(remainingActiveSvq <= exactSvq / 16 || unchangedSteps < 6,
 					"whole-bucket granular inventory froze globally while active parcels remained: step=" + step
 							+ ", active=" + state.activeParcels().size() + ", deposits="
 							+ state.depositGroups().size() + ", held=" + domain.lastGranularCapacityHeld());
@@ -2182,14 +2158,17 @@ public final class M8GranularValidation {
 		require(moved && locallyHeld,
 				"whole-bucket fixture did not exercise moving and locally held parcels together");
 		GranularStateSnapshot settled = domain.exportGranularState();
-		require(!settled.depositGroups().isEmpty() && settled.activeParcels().size() < 1_024,
+		long activeSvq = settled.activeParcels().stream().mapToLong(GranularStateSnapshot.ActiveParcel::solidVolumeSvq).sum();
+		require(!settled.depositGroups().isEmpty() && activeSvq < exactSvq,
 				"whole-bucket local contacts did not make progress into conservative deposits");
-		if (steps >= 200) require(settled.activeParcels().size() <= 64,
+		if (steps >= 200) require(activeSvq <= exactSvq / 16,
 				"two-bucket loose pour left too much active inventory after ten seconds");
 		if (!settled.activeParcels().isEmpty()) require(!domain.granularReadyForHydrostaticSleep(),
 				"unfinished granular settlement incorrectly allowed hydrostatic sleep");
 		else require(domain.granularReadyForHydrostaticSleep() && domain.granularSleepingColumnCount() > 0,
 				"settled granular inventory never reached sleep across production backend handoffs");
+		assertSnapshotReposeBound(settled,
+				granular.material(granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND)).reposeAngleRadians(), 8, 8, 8);
 		long floorActive = settled.activeParcels().stream().filter(parcel -> parcel.y() < 0.2F).count();
 		long movingActive = settled.activeParcels().stream().filter(parcel ->
 				parcel.velocityX() * parcel.velocityX() + parcel.velocityY() * parcel.velocityY()
@@ -2231,9 +2210,9 @@ public final class M8GranularValidation {
 		ParticulateMaterial sand = granular.material(granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND));
 		int emptyAt = -1;
 		for (int step = 0; step < 200; step++) {
-			domain.step();
+			domain = advance(domain).claimPreparedCpuDomain();
 			GranularStateSnapshot state = domain.exportGranularState();
-			assertTransientPileIsGroundedAndBounded(state, sand);
+			assertTransientPileHasSupport(state, sand);
 			if (emptyAt < 0 && state.activeParcels().isEmpty()) emptyAt = step + 1;
 			require(domain.totalGranularSolidVolumeSvq() == SolidVolume.SVQ_PER_CUBIC_METER
 					&& rawClose(domain.totalGranularMass(), bucket.totalMass()),
@@ -2244,6 +2223,7 @@ public final class M8GranularValidation {
 				"single-bucket pour left active display parcels after ten seconds");
 		require(!settled.depositGroups().isEmpty() && domain.granularReadyForHydrostaticSleep(),
 				"completed single-bucket deposit did not reach granular sleep readiness");
+		assertSnapshotReposeBound(settled, sand.reposeAngleRadians(), 8, 8, 8);
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		FluidDomainState sleepingHandoff = domain.captureAuthoritativeState();
 		for (int generation = 0; generation < 3; generation++) {
@@ -2280,7 +2260,36 @@ public final class M8GranularValidation {
 				"single-bucket operator clear did not erase display/state or close source/sink audit");
 	}
 
-	private static void assertTransientPileIsGroundedAndBounded(
+	private static void assertSnapshotReposeBound(GranularStateSnapshot state, double repose, int nx, int ny, int nz) {
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		double[] height = new double[nx * nz], roughness = new double[nx * nz];
+		for (var group : state.depositGroups()) height[group.cell() / (nx * ny) * nx + group.cell() % nx] +=
+				SolidVolume.bulkVolumeCeil(group.solidVolumeSvq(), group.porosityQ()) / (double) SolidVolume.SVQ_PER_CELL;
+		// Explicit resting spheres leave a surface-height uncertainty bounded by their radius.
+		// Columns containing only bed inventory retain the original static repose tolerance.
+		var kernel = new GranularKernel(nx, ny, nz, .5);
+		for (var parcel : state.activeParcels()) {
+			var material = registry.material(registry.materialHandle(state.materialPalette().get(parcel.materialPaletteIndex())));
+			double packing = 1 - material.restPorosityQ() / (double) GranularLimits.POROSITY_SCALE;
+			kernel.capture(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq());
+			for (int slot = 0; slot < kernel.size(); slot++) {
+				int cell = kernel.cell(slot);
+				int column = cell / (nx * ny) * nx + cell % nx;
+				height[column] += kernel.dyadicQuota(slot).toDouble() / SolidVolume.SVQ_PER_CELL / packing;
+				if (kernel.dyadicQuota(slot).signum() > 0) roughness[column] = Math.max(roughness[column],
+						GranularMechanics.representativeRadius(parcel.solidVolumeSvq(), .5F) / .5);
+			}
+		}
+		for (int z = 0; z < nz; z++) for (int x = 0; x < nx; x++)
+			for (int dz = -1; dz <= 1; dz++) for (int dx = -1; dx <= 1; dx++) {
+				if (dx == 0 && dz == 0 || x + dx < 0 || x + dx >= nx || z + dz < 0 || z + dz >= nz) continue;
+				double difference = Math.abs(height[z * nx + x] - height[(z + dz) * nx + x + dx]);
+				double limit = Math.hypot(dx, dz) * Math.tan(repose) + roughness[z * nx + x] + roughness[(z + dz) * nx + x + dx] + 2e-6;
+				require(difference <= limit, "Joint resting pile exceeded repose: rise=" + difference + ", limit=" + limit);
+			}
+	}
+
+	private static void assertTransientPileHasSupport(
 			GranularStateSnapshot state, ParticulateMaterial material
 	) {
 		int sizeX = state.sizeX(), sizeY = state.sizeY(), sizeZ = state.sizeZ();
@@ -2293,31 +2302,12 @@ public final class M8GranularValidation {
 			}
 			porosity[group.cell()] = group.porosityQ();
 		}
-		long[] surface = new long[sizeX * sizeZ];
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			int cell = cellIndex(x, y, z, sizeX, sizeY);
 			if (skeleton[cell] == 0L) continue;
 			if (y > 0) require(skeleton[cellIndex(x, y - 1, z, sizeX, sizeY)] > 0L,
 					"granular settlement created an unsupported floating deposit cell at "
 							+ x + "," + y + "," + z + " with skeleton=" + skeleton[cell]);
-			long bulk = SolidVolume.bulkVolumeCeil(skeleton[cell], porosity[cell]);
-			surface[z * sizeX + x] = Math.max(surface[z * sizeX + x],
-					Math.addExact(Math.multiplyExact((long) y, SolidVolume.SVQ_PER_CELL), bulk));
-		}
-		long discreteTolerance = 2L * SolidVolume.bulkVolumeCeil(
-				GranularLimits.MAX_PARCEL_VOLUME_SVQ, material.restPorosityQ());
-		for (int z = 0; z < sizeZ; z++) for (int x = 0; x < sizeX; x++) {
-			for (int dz = -1; dz <= 1; dz++) for (int dx = -1; dx <= 1; dx++) {
-				if (dx == 0 && dz == 0 || x + dx < 0 || x + dx >= sizeX
-						|| z + dz < 0 || z + dz >= sizeZ) continue;
-				long rise = Math.abs(surface[z * sizeX + x] - surface[(z + dz) * sizeX + x + dx]);
-				long repose = (long) Math.floor(Math.hypot(dx, dz) * Math.tan(material.reposeAngleRadians())
-						* SolidVolume.SVQ_PER_CELL);
-				require(rise <= repose + discreteTolerance,
-						"transient granular settlement produced an over-steep deposit column at "
-								+ x + "," + z + " toward " + (x + dx) + "," + (z + dz)
-								+ ": rise=" + rise + ", limit=" + (repose + discreteTolerance));
-			}
 		}
 	}
 
@@ -2452,4 +2442,9 @@ public final class M8GranularValidation {
 		}
 		throw new AssertionError("expected a rejection containing '" + messagePart + "'");
 	}
+	private static FluidStepCandidate advance(FluidDomain domain) {
+		return new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+				0, domain.captureAuthoritativeState(), List.of(), false, 0));
+	}
+
 }

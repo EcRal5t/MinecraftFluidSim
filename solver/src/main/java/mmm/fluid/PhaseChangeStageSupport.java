@@ -1,213 +1,72 @@
 package mmm.fluid;
 
-import mmm.thermal.ThermalDomainState;
+import mmm.inventory.LiquidCellInventory;
 
-import mmm.chemistry.ChemicalLimits;
-import mmm.chemistry.ChemicalMixtureRecord;
-import mmm.chemistry.ChemicalParcelStore;
-import mmm.chemistry.ChemicalRegistry;
-import mmm.chemistry.ExactRational;
+import mmm.chemistry.*;
 import mmm.fluid.air.GasComponentAmount;
 import mmm.granular.GranularCouplingFields;
-import mmm.granular.SolidVolume;
-import mmm.thermal.CoherentPhaseStore;
-import mmm.thermal.ThermalCarrierContext;
-import mmm.units.SignedDyadic;
+import mmm.thermal.*;
 import mmm.units.SolverUnitScale;
+import java.util.*;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.TreeMap;
-
-/** Shared exact inventory and carrier operations used by both phase-change stages. */
+/** Shared cell inventory and single-publication operations for condensed and gas phase changes. */
 final class PhaseChangeStageSupport {
-	record Workspace(
-			int sizeX, int sizeY, int sizeZ, int cellCount, int maximumParticleCount,
-			float cellSize, SolverUnitScale unitScale, DomainGeometry geometry, MarkerGridIndex markerGrid,
-			PressureProjectionWorkspace projection, LiquidParticleStore particles,
-			GasDomainState gasState, PendingPhaseVolumeWork pendingPhaseVolume,
-			ThermalCarrierContext thermalMarkers
-	) { }
-
+	record Workspace(int sizeX,int sizeY,int sizeZ,int cellCount,float cellSize,SolverUnitScale unitScale,
+	                 DomainGeometry geometry,PressureProjectionWorkspace projection,GasDomainState gasState,
+	                 PendingPhaseVolumeWork pendingPhaseVolume,ThermalCarrierContext thermalMarkers) { }
 	interface Access {
 		ThermalDomainState thermalState();
 		ChemicalParcelStore chemistry();
 		FluidMaterialRegistry materialRegistry();
 		GranularDomainState granularState();
 		float pressureReference();
-		int particleCell(int marker);
-		int firstOpenSlot(int cell, int first);
-		float[] markerSlotPosition(int cell, int slot);
-		void removeParticle(int marker);
-		void spawnParticle(
-				int cellX, int cellY, int cellZ, int slot, float volume, int materialHandle,
-				long massUnits, ChemicalMixtureRecord mixture
-		);
-		void ensureInventoryGrid();
+		double liquidPressureAt(int cell,int support);
+		LiquidCellInventory liquidCells();
+		CellMacStage.ExternalMomentum preparePhaseMomentum(LiquidCellInventory.Plan plan);
+		void commitPhaseMomentum(MacMomentumState momentum);
 		void refreshGasTopology();
-		GasRuntimeGeometry.PhaseSource prepareGasGeometrySource(int editedCell);
-		GasTopologyCoordinator.GasTopologyPlan planGasGeometry(PhaseLiquidGeometryEdit edit, int node,
-				mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal,
-				GasRuntimeGeometry.PhaseSource source);
-		void requireGasGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan topology,
-				mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, ThermalDomainState.PhaseCellEnergyPlan thermal);
+		GasTopologyCoordinator.GasTopologyPlan planGasBatchGeometry(LiquidCellInventory future,GasTopologyCoordinator.PhaseBatch phase);
+		void requireGasBatchGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan topology,GasTopologyCoordinator.PhaseBatch phase);
 		void commitGasGeometry(GasTopologyCoordinator.GasTopologyPlan topology);
+		GasTopologyCoordinator.GasTopologyPlan planCondensedGeometry(LiquidCellInventory future,List<CoherentPhaseStore.Group> coherent);
+		void requireGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan plan);
 		void refreshCoherentOccupancy();
 		void markGridDirty();
-		boolean canAddCarrierVolume(double volume);
-		double effectiveOpenCellVolume(int cell);
 	}
-
 	private final Workspace state;
 	private final Access access;
 	private final GranularCouplingFields phaseGranularOccupancy;
-
-	PhaseChangeStageSupport(Workspace state, Access access) {
-		this.state = state;
-		this.access = access;
-		this.phaseGranularOccupancy = new GranularCouplingFields(
-				state.sizeX(), state.sizeY(), state.sizeZ(), state.cellSize());
+	PhaseChangeStageSupport(Workspace state,Access access) {
+		this.state=state;this.access=access;
+		phaseGranularOccupancy=new GranularCouplingFields(state.sizeX(),state.sizeY(),state.sizeZ(),state.cellSize());
 	}
-
-	Workspace state() { return state; }
-	ThermalDomainState thermal() { return access.thermalState(); }
-	ChemicalParcelStore chemistry() { return access.chemistry(); }
-	FluidMaterialRegistry materialRegistry() { return access.materialRegistry(); }
-	GasDomainState gasState() { return state.gasState(); }
-	float pressureReference() { return access.pressureReference(); }
-	int particleCell(int marker) { return access.particleCell(marker); }
-	int firstOpenSlot(int cell) { return access.firstOpenSlot(cell, 0); }
-	int firstOpenSlot(int cell, int first) { return access.firstOpenSlot(cell, first); }
-	float[] markerSlotPosition(int cell, int slot) { return access.markerSlotPosition(cell, slot); }
-	void ensureInventoryGrid() { access.ensureInventoryGrid(); }
-	void refreshGasTopology() { access.refreshGasTopology(); }
-	GasRuntimeGeometry.PhaseSource prepareGasGeometrySource(int editedCell) { return access.prepareGasGeometrySource(editedCell); }
-	GasTopologyCoordinator.GasTopologyPlan planGasGeometry(PhaseLiquidGeometryEdit edit, int node,
-			mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal,
-			GasRuntimeGeometry.PhaseSource source) {
-		var capacities = CellRemapMicroTopology.capacities(edit.collisionMask(),SignedDyadic.of(access.effectiveOpenCellVolume(edit.cell())));
-		for(int i=0;i<capacities.length;i++) if(edit.components().get(i).volume().compareTo(capacities[i])>0)
-			throw new PhaseCandidateUnavailableException("Phase liquid inventory exceeds its connected pore capacity");
-		return access.planGasGeometry(edit, node, gas, energy, thermal, source);
+	Workspace state(){return state;}
+	ThermalDomainState thermal(){return access.thermalState();}
+	ChemicalParcelStore chemistry(){return access.chemistry();}
+	FluidMaterialRegistry materialRegistry(){return access.materialRegistry();}
+	GasDomainState gasState(){return state.gasState();}
+	float pressureReference(){return access.pressureReference();}
+	double liquidPressureAt(int cell,int support){return access.liquidPressureAt(cell,support);}
+	LiquidCellInventory liquidCells(){return access.liquidCells();}
+	CellMacStage.ExternalMomentum preparePhaseMomentum(LiquidCellInventory.Plan plan){return access.preparePhaseMomentum(plan);}
+	void commitPhaseMomentum(MacMomentumState momentum){access.commitPhaseMomentum(momentum);}
+	void refreshGasTopology(){access.refreshGasTopology();}
+	GasTopologyCoordinator.GasTopologyPlan planGasBatchGeometry(LiquidCellInventory future,GasTopologyCoordinator.PhaseBatch phase){return access.planGasBatchGeometry(future,phase);}
+	void requireGasBatchGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan plan,GasTopologyCoordinator.PhaseBatch phase){access.requireGasBatchGeometryCurrent(plan,phase);}
+	void commitGasGeometry(GasTopologyCoordinator.GasTopologyPlan plan){access.commitGasGeometry(plan);}
+	GasTopologyCoordinator.GasTopologyPlan planCondensedGeometry(LiquidCellInventory future,List<CoherentPhaseStore.Group> coherent){return access.planCondensedGeometry(future,coherent);}
+	void requireGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan plan){access.requireGeometryCurrent(plan);}
+	void refreshCoherentOccupancy(){access.refreshCoherentOccupancy();}
+	void markGridDirty(){access.markGridDirty();}
+	int fluidMaterialHandle(String id){
+		for(int handle=0;handle<materialRegistry().size();handle++)if(materialRegistry().material(handle).id().equals(id))return handle;
+		throw new FluidDomain.ThermalPhaseBlockedException("Thermal transition liquid is not bound");
 	}
-	void requireGasGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan topology,
-			mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, ThermalDomainState.PhaseCellEnergyPlan thermal) {
-		access.requireGasGeometryCurrent(topology, gas, thermal);
+	long granularSvq(int cell){return phaseGranularOccupancy.solidSvq(cell);}
+	void prepareGranularOccupancy(){
+		var granular=access.granularState();
+		if(granular==null)phaseGranularOccupancy.clear();else phaseGranularOccupancy.rebuild(granular.parcels,granular.deposits);
 	}
-	void commitGasGeometry(GasTopologyCoordinator.GasTopologyPlan topology) { access.commitGasGeometry(topology); }
-	void refreshCoherentOccupancy() { access.refreshCoherentOccupancy(); }
-	void markGridDirty() { access.markGridDirty(); }
-	boolean canExpandCondensedVolume(long svq) {
-		return svq <= 0 || access.canAddCarrierVolume(svq / (double) SolidVolume.SVQ_PER_CELL);
-	}
-
-	int fluidMaterialHandle(String stableId) {
-		FluidMaterialRegistry registry = access.materialRegistry();
-		for (int handle = 0; handle < registry.size(); handle++) {
-			if (registry.material(handle).id().equals(stableId)) return handle;
-		}
-		throw new FluidDomain.ThermalPhaseBlockedException(
-				"Thermal transition liquid carrier is not bound");
-	}
-
-	long granularSvq(int cell) {
-		return phaseGranularOccupancy.solidSvq(cell);
-	}
-
-	/** Phase capacity uses the same positioned SVQ attribution as mechanics and restore. */
-	void prepareGranularOccupancy() {
-		GranularDomainState granular = access.granularState();
-		if (granular == null) phaseGranularOccupancy.clear();
-		else phaseGranularOccupancy.rebuild(granular.parcels, granular.deposits);
-	}
-
-	void commitLiquidRemoval(int cell, PhaseRemovalPlan plan) {
-		ChemicalParcelStore chemistry = access.chemistry();
-		for (PhaseMarkerAllocation allocation : plan.allocations()) {
-			if (allocation.fullRemoval()) {
-				access.removeParticle(allocation.marker());
-			} else {
-				if (chemistry != null) {
-					chemistry.markDirtyCell(cell);
-					chemistry.commitTruncate(allocation.marker(), allocation.chemicalPlan());
-				}
-				state.particles().setVolume(allocation.marker(), allocation.newVolume());
-				state.particles().setMassUnits(allocation.marker(), allocation.newMassUnits());
-			}
-		}
-	}
-
-	void spawnParticle(
-			int cell, int slot, float volume, int materialHandle, long massUnits,
-			ChemicalMixtureRecord mixture
-	) {
-		int x = cell % state.sizeX();
-		int yz = cell / state.sizeX();
-		int y = yz % state.sizeY();
-		int z = yz / state.sizeY();
-		access.spawnParticle(x, y, z, slot, volume, materialHandle, massUnits, mixture);
-	}
-
-	void commitPendingVolume(int cell, long signedSvq) {
-		if (access.thermalState() == null || signedSvq == 0L) return;
-		SignedDyadic delta = new SignedDyadic(java.math.BigInteger.valueOf(signedSvq), -24);
-		state.pendingPhaseVolume().add(cell, delta);
-	}
-
-	void representedMassTransfer(long beforeUnits, long afterUnits, long requestedUnits) {
-		representedPhysicalMassTransfer(beforeUnits, afterUnits, requestedUnits);
-	}
-	void representedGasMassTransfer(int node, mmm.fluid.air.GasInventory after,
-			String componentId, long requestedUnits) {
-		GasComponentAmount beforeComponent = gasState().network.inventory(node).component(componentId);
-		GasComponentAmount afterComponent = after.component(componentId);
-		representedPhysicalMassTransfer(beforeComponent == null ? 0L : beforeComponent.massUnits(),
-				afterComponent == null ? 0L : afterComponent.massUnits(), requestedUnits);
-	}
-	static void representedPhysicalMassTransfer(long beforeUnits, long afterUnits, long requestedUnits) {
-		if (beforeUnits < 0 || afterUnits < 0 || Math.subtractExact(afterUnits, beforeUnits) != requestedUnits)
-			throw new PhaseCandidateUnavailableException("Phase transfer mass counts do not close");
-	}
-
-
-	static float adjustedMarkerVolume(float volume, long signedSvq, String operation) {
-		if (!(Float.isFinite(volume) && volume > 0))
-			throw new IllegalArgumentException("Phase marker volume must be finite and positive");
-		try {
-			return SolidVolume.addCellVolumeSvqExact(volume, signedSvq);
-		} catch (IllegalArgumentException unrepresentableTail) {
-			throw new PhaseCandidateUnavailableException(
-					operation + " SVQ is not exactly representable in the marker volume", unrepresentableTail);
-		}
-	}
-
-	record PhaseCellInventory(
-			long lowerVolumeSvq, long upperVolumeSvq, long lowerMassUnits, long upperMassUnits,
-			long freezableUpperSvq, long freezableUpperMassUnits
-	) {
-		double lowerMass() { return mmm.units.Mass.kilograms(lowerMassUnits); }
-		double upperMass() { return mmm.units.Mass.kilograms(upperMassUnits); }
-		double freezableUpperMass() { return mmm.units.Mass.kilograms(freezableUpperMassUnits); }
-	}
-
-	record PhaseMarkerAllocation(
-			int marker, float newVolume, long newMassUnits, boolean fullRemoval,
-			ChemicalParcelStore.SplitPlan chemicalPlan
-	) { }
-
-	record PhaseRemovalPlan(
-			List<PhaseMarkerAllocation> allocations, PhaseComposition movedComposition
-	) {
-		boolean carrierTopologyChanged() {
-			for (PhaseMarkerAllocation allocation : allocations) {
-				if (allocation.fullRemoval()) return true;
-			}
-			return false;
-		}
-	}
-
-	/** Exact species quanta plus the independently carried mass residual across a phase boundary. */
 	record PhaseComposition(Map<String, Long> amounts, long massResidualUnits) {
 		static final PhaseComposition EMPTY = new PhaseComposition(Map.of(), 0L);
 
@@ -316,31 +175,6 @@ final class PhaseChangeStageSupport {
 						.multiply(entry.getValue()).divide(ChemicalLimits.QUANTA_PER_MOL));
 			}
 			return result;
-		}
-	}
-
-	static final class PhaseCompositionBuilder {
-		private final ChemicalParcelStore chemistry;
-		private final TreeMap<String, Long> amounts = new TreeMap<>();
-		private long massResidualUnits;
-
-		PhaseCompositionBuilder(ChemicalParcelStore chemistry) {
-			if (chemistry == null) throw new IllegalArgumentException("Chemical phase state is missing");
-			this.chemistry = chemistry;
-		}
-
-		void add(ChemicalMixtureRecord record) {
-			if (record == null) throw new IllegalArgumentException("Chemical condensed phase record is missing");
-			for (Map.Entry<String, Long> entry : record.stableAmounts(chemistry.registry()).entrySet()) {
-				amounts.merge(entry.getKey(), entry.getValue(), Math::addExact);
-			}
-			massResidualUnits = Math.addExact(massResidualUnits, record.massResidualUnits());
-
-		}
-
-		PhaseComposition build() {
-			return amounts.isEmpty() && massResidualUnits == 0
-					? PhaseComposition.EMPTY : new PhaseComposition(amounts, massResidualUnits);
 		}
 	}
 

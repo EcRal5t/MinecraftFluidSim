@@ -11,44 +11,28 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-/**
- * Bounded Boussinesq constitutive definition and built-in reference data.
- *
- * <p>Each world's material registry saves its coefficients and validity interval. The separate model
- * fingerprint binds the formula, carrier observation and pressure-face averaging used by thermal regions.</p>
- */
+/** Fixed-volume liquid buoyancy from a positive linear thermal-volume constitutive approximation. */
 public final class LiquidThermalExpansion {
-	public static final String MODEL_ID = "mmm:boussinesq";
+	public static final String MODEL_ID = "mmm:liquid_volume_expansion";
 
-	public record Definition(String carrierId, double referenceTemperatureK, double volumetricCoefficientPerK,
-			double maximumRelativeDensityChange) {
-		public Definition(String carrierId, double referenceTemperatureK, double volumetricCoefficientPerK) {
-			this(carrierId, referenceTemperatureK, volumetricCoefficientPerK, 0.05);
-		}
+	public record Definition(String carrierId, double referenceTemperatureK, double volumetricCoefficientPerK) {
 		public Definition {
 			ThermalIds.requireId(carrierId, "liquid expansion carrier id");
 			if (!(Double.isFinite(referenceTemperatureK) && referenceTemperatureK > 0.0
-					&& Double.isFinite(volumetricCoefficientPerK) && volumetricCoefficientPerK > 0.0
-					&& Double.isFinite(maximumRelativeDensityChange) && maximumRelativeDensityChange > 0.0
-					&& maximumRelativeDensityChange < 1.0)) {
+					&& Double.isFinite(volumetricCoefficientPerK) && volumetricCoefficientPerK > 0.0))
 				throw new IllegalArgumentException("Liquid thermal expansion definition is invalid");
-			}
 		}
 
+		/** Uses rho/rho_ref = 1/(1+alpha*dT); inventory density and caloric energy retain their own state. */
 		public double relativeBuoyancy(double temperatureK) {
-			if (!Double.isFinite(temperatureK) || temperatureK < Double.MIN_NORMAL)
+			if (!Double.isFinite(temperatureK) || temperatureK <= 0)
 				throw new IllegalArgumentException("Liquid temperature must be finite and positive");
-			double relative = volumetricCoefficientPerK * (temperatureK - referenceTemperatureK);
-			if (Math.abs(relative) > maximumRelativeDensityChange) throw new ValidityExceededException(
-					"Boussinesq " + carrierId + " at " + temperatureK + " K: |rho-rho_ref|/rho_ref="
-							+ Math.abs(relative) + " exceeds " + maximumRelativeDensityChange);
-			return relative;
+			double expansion = volumetricCoefficientPerK * (temperatureK - referenceTemperatureK);
+			double volumeRatio = 1 + expansion;
+			if (!(Double.isFinite(volumeRatio) && volumeRatio > 0))
+				throw new IllegalArgumentException("Liquid " + carrierId + " has nonpositive or unrepresentable thermal volume at " + temperatureK + " K");
+			return expansion / volumeRatio;
 		}
-	}
-
-	/** The complete private mechanical candidate is rejected when its thermal approximation expires. */
-	public static final class ValidityExceededException extends IllegalStateException {
-		public ValidityExceededException(String message) { super(message); }
 	}
 
 	private static final List<Definition> DEFINITIONS = List.of(
@@ -70,7 +54,7 @@ public final class LiquidThermalExpansion {
 	public static Definition require(String carrierId) {
 		Definition definition = BY_CARRIER.get(carrierId);
 		if (definition == null) throw new IllegalArgumentException(
-				"No frozen liquid thermal expansion definition for " + carrierId);
+				"No liquid thermal expansion definition for " + carrierId);
 		return definition;
 	}
 
@@ -79,7 +63,7 @@ public final class LiquidThermalExpansion {
 			ByteArrayOutputStream bytes = new ByteArrayOutputStream();
 			try (DataOutputStream output = new DataOutputStream(bytes)) {
 				output.writeUTF(MODEL_ID);
-				output.writeUTF("beta*(T_carrier-T_ref);connected_single_phase_trilinear_mass_volume;pressure_face_density_segments;positive_p2g_fringe_mass_average;closed_carrier_relative_density_domain");
+				output.writeUTF("alpha*dT/(1+alpha*dT);connected_single_phase_trilinear_mass_volume;pressure_face_density_segments;positive_p2g_fringe_mass_average;positive_thermal_volume");
 			}
 			return bytes.toByteArray();
 		} catch (IOException impossible) {

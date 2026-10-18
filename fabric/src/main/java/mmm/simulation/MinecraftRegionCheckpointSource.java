@@ -45,9 +45,7 @@ public final class MinecraftRegionCheckpointSource implements RegionCheckpointSo
 	}
 
 	@Override public RegionRuntimeIntent runtimeIntent() { return runtimeIntent(region.persistedRuntime()); }
-	@Override public FlipParticleState pureParticles() { return region.domain().exportParticleState(); }
-	@Override public FlipMaterialParticleState materialParticles() { return region.domain().exportMaterialParticleState(); }
-	@Override public FlipChemicalParticleState chemicalParticles() { return region.domain().exportChemicalParticleState(); }
+	@Override public mmm.fluid.FluidDomainState authoritativeState() { return region.domain().captureAuthoritativeState(); }
 	@Override public GranularStateSnapshot granularState() { return region.domain().exportGranularState(); }
 	@Override public GasStateSnapshot gasState(String fingerprint) { return region.domain().exportGasState(fingerprint); }
 	@Override public FlipThermalParticleState thermalState() { return region.domain().exportThermalParticleState(); }

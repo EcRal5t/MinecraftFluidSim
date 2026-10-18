@@ -30,6 +30,7 @@ final class FlipGranularCollision {
 	private GranularParcelStore previewSource;
 	private boolean previewReady;
 	private int lastCapacityHeld;
+	private double lastMaximumPositionCorrection, lastPositionCorrectionMassY;
 
 	FlipGranularCollision(int sizeX, int sizeY, int sizeZ, float cellSize,
 	                      FlipCutCellGeometry cutCells, GranularDepositStore deposits, int capacity) {
@@ -56,10 +57,13 @@ final class FlipGranularCollision {
 		previewRevision = parcels.mutationRevision();
 		previewSource = parcels;
 		lastCapacityHeld = 0;
+		lastMaximumPositionCorrection = lastPositionCorrectionMassY = 0;
 		if (previewCount > 1) {
 			boolean[] supported = new boolean[previewCount];
-			new GranularActiveContacts(parcels, registry, sphereCollision, sizeX, sizeY, sizeZ, cellSize, dt, courant)
-					.preview(nextX, nextY, nextZ, nextVelocityX, nextVelocityY, nextVelocityZ, supported);
+			var contacts = new GranularActiveContacts(parcels, registry, sphereCollision, sizeX, sizeY, sizeZ, cellSize, dt, courant);
+			contacts.preview(nextX, nextY, nextZ, nextVelocityX, nextVelocityY, nextVelocityZ, supported);
+			lastMaximumPositionCorrection = contacts.maximumPositionCorrection();
+			lastPositionCorrectionMassY = contacts.positionCorrectionMassY();
 			for (int index = 0; index < previewCount; index++) {
 				var parcel = parcels.parcel(index); float restingSpeed = cellSize * .05F;
 				boolean resting = supported[index] && nextVelocityX[index] * nextVelocityX[index]
@@ -279,6 +283,9 @@ final class FlipGranularCollision {
 	}
 
 	int lastCapacityHeld() { return lastCapacityHeld; }
+	/** Position projection observation in metres; its signed gravitational work is gravity times mass-height change. */
+	double lastMaximumPositionCorrection() { return lastMaximumPositionCorrection; }
+	double lastPositionCorrectionMassY() { return lastPositionCorrectionMassY; }
 
 	/** Momentum received by the fixed geometry and capacity constraints, in kg m/s. */
 	record BoundaryImpulse(double x, double y, double z) { }

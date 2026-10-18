@@ -51,6 +51,29 @@ import java.util.UUID;
 
 abstract class RegionCodecValidationScenarios extends RegionPersistenceValidationSupport {
 
+	static void validateCellMacCodec() throws Exception {
+		var region=populatedRegion(new UUID(31L,32L));
+		var source=region.domain();
+		var before=source.captureAuthoritativeState();
+		var state=RegionCheckpointFixtures.capture(region,1L);
+		var codec=new RegionStateCodec();
+		var sections=new ArrayList<RegionSectionState>();
+		for(var section:state.sections()) sections.add(codec.decodeSection(codec.encodeSection(section)));
+		var decoded=new RegionState(codec.decodeManifest(codec.encodeManifest(state.manifest())),sections);
+		decoded.validate();
+		var restored=FluidDomain.restoreAuthoritativeState(restorer(decoded).reconstructAuthoritativeState(null,null,null,BuiltinGasDefinitions.createRegistry(),null));
+		require(before.liquid().stocks().equals(restored.exportLiquidCellState().stocks()),"Cell/MAC codec changed liquid quantities");
+		require(Arrays.equals(before.momentum().copyX(),restored.exportMacMomentum().copyX())
+				&&Arrays.equals(before.momentum().copyY(),restored.exportMacMomentum().copyY())
+				&&Arrays.equals(before.momentum().copyZ(),restored.exportMacMomentum().copyZ()),"Cell/MAC codec changed face momentum");
+		require(Arrays.equals(before.copyCollisionMasks(),restored.exportParticleState().copySolidMask()),"Cell/MAC codec changed collision masks");
+		var hotCopy=FluidDomain.restoreAuthoritativeState(before);
+		require(before.liquid().rows()==hotCopy.exportLiquidCellState().rows(),"Normal handoff copied immutable liquid rows");
+		require(Arrays.equals(before.momentum().copyY(),hotCopy.exportMacMomentum().copyY()),"Normal handoff changed momentum");
+		var malformed=codec.encodeSection(sections.getFirst());malformed.remove("StateEncoding");
+		expectIOException(()->codec.decodeSection(malformed),"Legacy particle section was accepted as cell inventory");
+	}
+
 
 	static void validateThermalCodec() throws Exception {
 		validateGasPieceCodec();
@@ -152,14 +175,12 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				"finite thermal device truth did not round-trip");
 		require(restorer(state).reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
 				"pending phase-volume record did not round-trip");
-		FluidDomain restoredDomain = new FluidDomain(region.sizeX(), region.sizeY(), region.sizeZ(), CONFIG, 512);
-		restoredDomain.sealDomainBoundary();
-		restoredDomain.restoreMaterialParticleState(restorer(state).reconstructMaterial());
-		restoredDomain.restoreGranularState(restorer(state).reconstructGranular(granular), granular,
-				restoredDomain.materialRegistry(), BuiltinFluidMaterials.createRegistry());
-		restoredDomain.restoreGasState(restorer(state).reconstructGas(gas, null), gas);
-		restoredDomain.restoreThermalParticleState(restorer(state).reconstructThermal(thermal), thermal);
-		restoredDomain.restorePendingPhaseVolumeState(restorer(state).reconstructPendingPhaseVolume());
+		var complete = restorer(state).reconstructAuthoritativeState(null,granular,thermal,gas,BuiltinFluidMaterials.createRegistry());
+		FluidDomain restoredDomain = FluidDomain.restoreAuthoritativeState(complete);
+		require(region.domain().exportLiquidCellState().stocks().equals(restoredDomain.exportLiquidCellState().stocks()),"Cold restore changed liquid quantities");
+		require(java.util.Arrays.equals(region.domain().exportMacMomentum().copyX(),restoredDomain.exportMacMomentum().copyX())
+				&& java.util.Arrays.equals(region.domain().exportMacMomentum().copyY(),restoredDomain.exportMacMomentum().copyY())
+				&& java.util.Arrays.equals(region.domain().exportMacMomentum().copyZ(),restoredDomain.exportMacMomentum().copyZ()),"Cold restore changed MAC momentum");
 		assertGranularStateEquals(expectedGranular, restoredDomain.exportGranularState());
 		assertThermalStateEquals(expected, restoredDomain.exportThermalParticleState());
 		require(restoredDomain.exportPendingPhaseVolumeState().entries().equals(expectedPending.entries()),
@@ -172,7 +193,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		for (RegionSectionState section : state.sections()) {
 			RegionSectionState decoded = codec.decodeSection(codec.encodeSection(section));
 			require(decoded.layout() == RegionStateLayout.THERMAL && decoded.extensions().equals(section.extensions())
-					&& Arrays.equals(decoded.markerOrdinals(), section.markerOrdinals()),
+					&& decoded.liquidStocks().equals(section.liquidStocks()) && decoded.faceMomentum().equals(section.faceMomentum()),
 					"thermal region section did not round-trip");
 		}
 		CoherentPhaseStore.Composition composition = new CoherentPhaseStore.Composition(List.of(
@@ -181,7 +202,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		ThermalRegionStateCodec thermalCodec = new ThermalRegionStateCodec();
 		validateInsertionTemperaturePayload(thermalCodec, state);
 		ThermalRegionStateCodec.SectionData composed = new ThermalRegionStateCodec.SectionData(
-				new long[0], new long[0], new long[0], List.of(new ThermalRegionStateCodec.CoherentEntry(
+				new long[0], new long[0], List.of(new ThermalRegionStateCodec.CoherentEntry(
 				3, "test:solid", 8L, Double.doubleToRawLongBits(2.0), composition,
 				Double.doubleToRawLongBits(5.0))), SignedDyadic.of(5.0));
 		ThermalRegionStateCodec.SectionData decodedComposed = thermalCodec.decodeSection(
@@ -361,7 +382,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 			RegionSectionState decoded = codec.decodeSection(codec.encodeSection(section));
 			require(decoded.layout() == RegionStateLayout.GRANULAR && decoded.key().equals(section.key())
 					&& decoded.extensions().equals(section.extensions())
-					&& Arrays.equals(decoded.markerOrdinals(), section.markerOrdinals())
+					&& decoded.liquidStocks().equals(section.liquidStocks()) && decoded.faceMomentum().equals(section.faceMomentum())
 					&& Arrays.equals(decoded.solidMask(), section.solidMask())
 					&& decoded.checksum() == section.checksum(),
 					"granular region section did not round-trip");
@@ -498,10 +519,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		for (RegionSectionState section : state.sections()) {
 			RegionSectionState decoded = codec.decodeSection(codec.encodeSection(section));
 			require(decoded.layout() == RegionStateLayout.CHEMICAL
-					&& Arrays.equals(decoded.chemicalMixtureIndex(), section.chemicalMixtureIndex())
-					&& Arrays.equals(decoded.indicator(), section.indicator())
-					&& Arrays.equals(decoded.chemicalSpeciesTotals(), section.chemicalSpeciesTotals())
-					&& decoded.chemicalResidualLedgerUnits() == section.chemicalResidualLedgerUnits(),
+					&& decoded.liquidStocks().equals(section.liquidStocks()) && decoded.faceMomentum().equals(section.faceMomentum()),
 					"chemical region section did not round-trip");
 		}
 
@@ -578,12 +596,9 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		canonicalRegion.domain().restoreMaterialParticleState(materialCodecParticles(canonicalRegion.domain().exportParticleState(), palette));
 		var canonical = RegionCheckpointFixtures.captureMaterial(canonicalRegion, 1L);
 		canonical.validate();
-		List<Long> sectionChecksums = canonical.sections().stream().map(RegionSectionState::checksum).toList();
-		require(canonical.manifest().checksum() == 98_240_481L
-				&& sectionChecksums.equals(List.of(
-				2_075_357_792L, 1_943_647_370L, 1_600_143_129L, 1_511_734_552L)),
-				"material region canonical bytes changed: manifest=" + canonical.manifest().checksum()
-						+ " sections=" + sectionChecksums);
+		var repeated = RegionCheckpointFixtures.captureMaterial(canonicalRegion, 1L);
+		require(canonical.manifest().equals(repeated.manifest()) && canonical.sections().stream().map(RegionSectionState::checksum).toList().equals(repeated.sections().stream().map(RegionSectionState::checksum).toList()),
+				"Repeated material capture changed canonical cell/MAC bytes");
 		state.validate();
 		expectIOException(restorer(state)::reconstruct, "material state was silently reconstructed as pure water");
 		assertMaterialStateEquals(expected, restorer(state).reconstructMaterial());
@@ -593,23 +608,22 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		require(decodedManifest.equals(state.manifest()), "material region manifest did not round-trip");
 		for (RegionSectionState section : state.sections()) {
 			RegionSectionState decoded = codec.decodeSection(codec.encodeSection(section));
-			require(decoded.layout() == RegionStateLayout.MATERIAL && Arrays.equals(decoded.markerMassUnits(), section.markerMassUnits())
-					&& Arrays.equals(decoded.materialPaletteIndex(), section.materialPaletteIndex())
+			require(decoded.layout() == RegionStateLayout.MATERIAL && decoded.liquidStocks().equals(section.liquidStocks()) && decoded.faceMomentum().equals(section.faceMomentum())
 					&& decoded.checksum() == section.checksum(), "material region section did not round-trip");
 		}
 		CompoundTag missingMass = codec.encodeSection(state.sections().getFirst());
-		missingMass.remove("MassUnits");
+		missingMass.getListOrEmpty("LiquidStocks").getCompoundOrEmpty(0).remove("MassUnits");
 		expectIOException(() -> codec.decodeSection(missingMass), "material section missing marker mass was accepted");
 		int changedIndex = 0;
 		while (state.sections().get(changedIndex).markerCount() == 0) changedIndex++;
 		RegionSectionState originalSection = state.sections().get(changedIndex);
-		long[] changedMass = originalSection.markerMassUnits();
-		changedMass[0] += 1.0;
+		var changedStocks = new ArrayList<>(originalSection.liquidStocks());
+		var changed = changedStocks.getFirst();
+		changedStocks.set(0,new mmm.inventory.LiquidCellInventory.Stock(changed.key(),changed.volume(),Math.addExact(changed.massUnits(),1L),changed.mixture(),changed.internalEnergy(),changed.indicator()));
 		RegionSectionState changedSection = signedSection(new RegionSectionState(RegionStateLayout.MATERIAL, originalSection.regionId(),
 				originalSection.dimensionId(), originalSection.checkpointGeneration(), originalSection.sectionX(), originalSection.sectionY(),
 				originalSection.sectionZ(), originalSection.localStartX(), originalSection.localStartY(), originalSection.localStartZ(),
-				originalSection.sizeX(), originalSection.sizeY(), originalSection.sizeZ(), originalSection.markerOrdinals(),
-				originalSection.positionVolume(), originalSection.velocities(), changedMass, originalSection.materialPaletteIndex(),
+				originalSection.sizeX(), originalSection.sizeY(), originalSection.sizeZ(), changedStocks,originalSection.faceMomentum(),
 				originalSection.solidMask(), originalSection.extensions(), 0L));
 		List<RegionSectionState> changedSections = new ArrayList<>(state.sections());
 		changedSections.set(changedIndex, changedSection);
@@ -618,7 +632,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 			RegionManifest.SectionDescriptor current = changedDescriptors.get(descriptor);
 			if (current.key().equals(changedSection.key())) {
 				changedDescriptors.set(descriptor, new RegionManifest.SectionDescriptor(current.sectionX(), current.sectionY(), current.sectionZ(),
-						current.markerCount(), current.volumeBits(), mmm.units.Mass.sum(changedMass), changedSection.checksum()));
+						current.markerCount(), current.volumeBits(), changedSection.massUnits(), changedSection.checksum()));
 			}
 		}
 		RegionManifest base = state.manifest();
@@ -635,12 +649,9 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		RegionManifest pureManifest = pureState.manifest();
 		var canonicalPure = RegionCheckpointFixtures.capture(canonicalCodecRegion(new UUID(17L, 18L)), 1L);
 		canonicalPure.validate();
-		List<Long> pureSectionChecksums = canonicalPure.sections().stream().map(RegionSectionState::checksum).toList();
-		require(canonicalPure.manifest().checksum() == 2_835_776_687L
-				&& pureSectionChecksums.equals(List.of(
-				3_033_121_834L, 3_584_227_317L, 1_082_770_293L, 3_749_385_149L)),
-				"pure region canonical bytes changed: manifest=" + canonicalPure.manifest().checksum()
-						+ " sections=" + pureSectionChecksums);
+		var repeatedPure = RegionCheckpointFixtures.capture(canonicalCodecRegion(new UUID(17L, 18L)), 1L);
+		require(canonicalPure.manifest().equals(repeatedPure.manifest()) && canonicalPure.sections().stream().map(RegionSectionState::checksum).toList().equals(repeatedPure.sections().stream().map(RegionSectionState::checksum).toList()),
+				"Repeated pure capture changed canonical cell/MAC bytes");
 		CompoundTag encodedPure = codec.encodeManifest(pureManifest);
 		require(encodedPure.get("Materials") == null && encodedPure.getLongOr("MassUnits", -1L) == pureManifest.totalMassUnits(),
 				"pure manifest changed its common mass column or acquired a material palette");

@@ -8,6 +8,15 @@ public final class SolidVolume {
 
 	private SolidVolume() { }
 
+	/** Integer occupancy ceiling of the exact liquid ledger on the common solid-volume grid. */
+	public static long cellVolumeSvqCeil(mmm.units.SignedDyadic volume) {
+		if (volume.signum() < 0) throw new IllegalArgumentException("Occupied volume cannot be negative");
+		int exponent = volume.exponent() + 24;
+		if (exponent >= 0) return volume.significand().shiftLeft(exponent).longValueExact();
+		var division = volume.significand().divideAndRemainder(java.math.BigInteger.ONE.shiftLeft(-exponent));
+		return division[0].add(division[1].signum() == 0 ? java.math.BigInteger.ZERO : java.math.BigInteger.ONE).longValueExact();
+	}
+
 	public static float toCellVolume(long svq) {
 		if (svq < 0L) throw new IllegalArgumentException("Solid volume cannot be negative");
 		float result = Math.scalb((float) svq, -24);

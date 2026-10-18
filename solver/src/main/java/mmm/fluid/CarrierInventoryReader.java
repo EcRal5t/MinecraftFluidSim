@@ -20,71 +20,48 @@ final class CarrierInventoryReader {
 		this.domain = domain;
 	}
 
+	/** Disposable point view for diagnostics and existing GPU/render adapters. */
+	private record Points(float[] packed, float[] velocity, float[] x, float[] y, float[] z, float[] volume,
+	                      int[] material, long[] mass, double total) { }
+	private Points points() {
+		domain.ensureGrid();
+		int count = domain.liquidCells.physicalSize();
+		float[] packed = new float[4 * count], velocity = new float[3 * count];
+		float[] x = new float[count], y = new float[count], z = new float[count], volume = new float[count];
+		int[] material = new int[count]; long[] mass = new long[count];
+		for (int i = 0; i < count; i++) {
+			var stock = domain.liquidCells.physicalStockAt(i); int cell = stock.key().cell();
+			int micro = Integer.numberOfTrailingZeros(stock.key().supportMask());
+			float h = domain.config.cellSize();
+			x[i] = (cell % domain.sizeX + .25F + .5F * (micro & 1)) * h;
+			y[i] = (cell / domain.sizeX % domain.sizeY + .25F + .5F * (micro >> 1 & 1)) * h;
+			z[i] = (cell / (domain.sizeX * domain.sizeY) + .25F + .5F * (micro >> 2 & 1)) * h;
+			volume[i] = (float) stock.volumeFraction(); material[i] = stock.key().material(); mass[i] = stock.massUnits();
+			packed[4 * i] = x[i]; packed[4 * i + 1] = y[i]; packed[4 * i + 2] = z[i]; packed[4 * i + 3] = volume[i];
+			var flow = domain.sampleVelocity(x[i], y[i], z[i]);
+			velocity[3 * i] = flow.x(); velocity[3 * i + 1] = flow.y(); velocity[3 * i + 2] = flow.z();
+		}
+		return new Points(packed, velocity, x, y, z, volume, material, mass, mmm.units.SignedDyadic.sum(volume, count).toDouble());
+	}
 	FlipParticleState exportParticleState() {
-		if (domain.hasNonDefaultMaterialState()) {
-			throw new IllegalStateException("Multi-material markers cannot use the pure-water particle handoff");
-		}
-		int particleCount = domain.particles.count();
-		float[] positionVolume = new float[particleCount * 4];
-		float[] velocities = new float[particleCount * 3];
-		byte[] solidMask = domain.geometry.cutCells.copyMicroMasks();
-		for (int particle = 0; particle < particleCount; particle++) {
-			int positionBase = particle * 4;
-			int velocityBase = particle * 3;
-			positionVolume[positionBase] = domain.particles.positionX(particle);
-			positionVolume[positionBase + 1] = domain.particles.positionY(particle);
-			positionVolume[positionBase + 2] = domain.particles.positionZ(particle);
-			positionVolume[positionBase + 3] = domain.particles.volume(particle);
-			velocities[velocityBase] = domain.particles.velocityX(particle);
-			velocities[velocityBase + 1] = domain.particles.velocityY(particle);
-			velocities[velocityBase + 2] = domain.particles.velocityZ(particle);
-		}
-		return new FlipParticleState(
-				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), particleCount,
-				domain.totalVolume(), positionVolume, velocities, domain.particles.copyMassUnits(), solidMask
-		);
+		var view = points();
+		return new FlipParticleState(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), view.mass.length,
+				(float) view.total, view.packed, view.velocity, view.mass, domain.geometry.cutCells.copyMicroMasks());
 	}
-
-	/** Exports exact multi-material marker state; runtime handles are replaced by the stable ordered palette. */
 	FlipMaterialParticleState exportMaterialParticleState() {
-		if (domain.materialRegistry == null) {
-			throw new IllegalStateException("Material particle handoff requires a bound registry");
-		}
-		int particleCount = domain.particles.count();
-		float[] positionVolume = new float[particleCount * 4];
-		float[] velocities = new float[particleCount * 3];
-		for (int particle = 0; particle < particleCount; particle++) {
-			int positionBase = particle * 4, velocityBase = particle * 3;
-			positionVolume[positionBase] = domain.particles.positionX(particle);
-			positionVolume[positionBase + 1] = domain.particles.positionY(particle);
-			positionVolume[positionBase + 2] = domain.particles.positionZ(particle);
-			positionVolume[positionBase + 3] = domain.particles.volume(particle);
-			velocities[velocityBase] = domain.particles.velocityX(particle);
-			velocities[velocityBase + 1] = domain.particles.velocityY(particle);
-			velocities[velocityBase + 2] = domain.particles.velocityZ(particle);
-		}
-		return new FlipMaterialParticleState(
-				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), particleCount,
-				domain.totalVolumeExact(), domain.totalMassUnits(), domain.materialRegistry.materials(),
-				positionVolume, velocities, domain.geometry.cutCells.copyMicroMasks(),
-				domain.particles.copyMassUnits(),
-				domain.particles.copyMaterialHandles()
-		);
+		if (domain.materialRegistry == null) throw new IllegalStateException("Material view requires a palette");
+		var view = points();
+		return new FlipMaterialParticleState(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), view.mass.length,
+				view.total, domain.totalMassUnits(), domain.materialRegistry.materials(), view.packed, view.velocity,
+				domain.geometry.cutCells.copyMicroMasks(), view.mass, view.material);
 	}
-
-	/** Exports canonical stable-ID chemical state; runtime mixture handles never cross this boundary. */
 	FlipChemicalParticleState exportChemicalParticleState() {
-		if (domain.chemicalParcels == null) {
-			throw new IllegalStateException("Chemical particle handoff requires chemistry");
+		if (domain.chemicalParcels == null) throw new IllegalStateException("Chemical view requires chemistry");
+		var mixtures = new ArrayList<ChemicalMixtureRecord>(); byte[] indicator = new byte[domain.liquidCells.physicalSize()];
+		for (int i = 0; i < indicator.length; i++) {
+			var stock = domain.liquidCells.physicalStockAt(i); mixtures.add(stock.mixture()); indicator[i] = stock.indicator() ? (byte) 1 : 0;
 		}
-		ArrayList<ChemicalMixtureRecord> mixtures = new ArrayList<>(domain.particles.count());
-		byte[] indicator = new byte[domain.particles.count()];
-		for (int marker = 0; marker < domain.particles.count(); marker++) {
-			mixtures.add(domain.chemicalParcels.record(marker));
-			indicator[marker] = domain.chemicalParcels.indicator(marker) ? (byte) 1 : 0;
-		}
-		return FlipChemicalParticleState.capture(
-				exportMaterialParticleState(), domain.chemicalParcels.registry(), mixtures, indicator,
+		return FlipChemicalParticleState.capture(exportMaterialParticleState(), domain.chemicalParcels.registry(), mixtures, indicator,
 				domain.chemicalParcels.externalSource(), domain.chemicalParcels.escapedSink());
 	}
 
@@ -93,7 +70,7 @@ final class CarrierInventoryReader {
 			throw new IllegalStateException("Thermal particle handoff requires thermal state");
 		}
 		return FluidThermalBinding.capture(domain.thermalState, domain.sizeX, domain.sizeY, domain.sizeZ,
-				domain.config.cellSize(), domain.particles.count());
+				domain.config.cellSize(), domain.liquidCells.physicalSize());
 	}
 
 	GranularStateSnapshot exportGranularState() {
@@ -111,10 +88,19 @@ final class CarrierInventoryReader {
 
 	ChemicalDisplaySnapshot copyChemicalDisplaySnapshot() {
 		if (domain.chemicalParcels == null) throw new IllegalStateException("Chemistry is not bound");
-		LiquidParticleStore.DirectArrays arrays = domain.particles.directArrays();
-		return ChemicalDisplaySnapshot.build(domain.chemicalParcels.registry(), domain.chemicalParcels,
-				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),
-				arrays.positionX, arrays.positionY, arrays.positionZ, arrays.volume, domain.particles.count());
+		var registry = domain.chemicalParcels.registry();
+		long[][] totals = new long[domain.cellCount][registry.species().size()];
+		double[] volume = new double[domain.cellCount], indicated = new double[domain.cellCount];
+		for (var stock : domain.liquidCells.stocks()) {
+			int cell = stock.key().cell(); var mixture = stock.mixture();
+			for (int entry = 0; entry < mixture.entryCount(); entry++) {
+				int species = mixture.speciesHandle(entry);
+				totals[cell][species] = Math.addExact(totals[cell][species], mixture.amountAt(entry));
+			}
+			volume[cell] += stock.volumeFraction();
+			if (stock.indicator()) indicated[cell] += stock.volumeFraction();
+		}
+		return ChemicalDisplaySnapshot.fromTotals(registry, domain.config.cellSize(), totals, volume, indicated);
 	}
 
 	ThermalDisplaySnapshot copyThermalDisplaySnapshot() {
@@ -128,13 +114,10 @@ final class CarrierInventoryReader {
 		if (domain.materialRegistry == null) {
 			throw new IllegalStateException("Material render snapshot requires a bound registry");
 		}
-		LiquidParticleStore.DirectArrays arrays = domain.particles.directArrays();
-		return FluidMaterialRenderSnapshot.capture(
-				domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.materialRegistry,
-				copyQuantizedVolume(), copyMarkerMask(), copyBinarySolidMask(),
-				arrays.positionX, arrays.positionY, arrays.positionZ, arrays.volume,
-				arrays.materialHandle, domain.particles.count(), domain.markerGrid.exactCellMarkerVolume
-		);
+		var view = points();
+		return FluidMaterialRenderSnapshot.capture(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.materialRegistry,
+				copyQuantizedVolume(), copyMarkerMask(), copyBinarySolidMask(), view.x, view.y, view.z, view.volume,
+				view.material, view.mass.length, domain.markerGrid.exactCellMarkerVolume);
 	}
 
 	byte[] copyQuantizedVolume() {

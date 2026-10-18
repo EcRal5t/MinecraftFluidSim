@@ -18,6 +18,9 @@ public final class GasEnergyStore {
 	private final ThermalAuditState audit;
 	private double[] nodeEnergy;
 	private long revision;
+	private GasInventory[] stateInventory = new GasInventory[0];
+	private long[] stateEnergy = new long[0];
+	private ThermalStateFunction.State[] state = new ThermalStateFunction.State[0];
 
 	public GasEnergyStore(
 			GasThermalModel gasModel, double insertionTemperatureK, ThermalAuditState audit, AirNetwork airNetwork
@@ -68,8 +71,17 @@ public final class GasEnergyStore {
 
 	/** Prevalidates restored node energies against the restored inventory pressures. */
 	void validateRestoredNodeEnergies(AirNetwork network, double[] restored) {
+		prepareStateStorage();
 		for (int node = 0; node < restored.length; node++) {
-			gasModel.absolutePressure(network.inventory(node + 1), network.availableVolume(node + 1), restored[node]);
+			GasInventory inventory = network.inventory(node + 1);
+			if (inventory.isEmpty()) {
+				gasModel.absolutePressure(inventory, network.availableVolume(node + 1), restored[node]);
+				continue;
+			}
+			var thermal = gasModel.state(inventory, restored[node]);
+			gasModel.absolutePressure(inventory, network.availableVolume(node + 1), thermal);
+			state[node] = thermal; stateInventory[node] = inventory;
+			stateEnergy[node] = Double.doubleToRawLongBits(restored[node]);
 		}
 	}
 
@@ -81,13 +93,17 @@ public final class GasEnergyStore {
 	public double temperature(int nodeId, AirNetwork network) {
 		requireGasNode(nodeId, network);
 		if (network.inventory(nodeId).isEmpty()) return insertionTemperatureK;
-		return gasModel.state(network.inventory(nodeId), nodeEnergy[nodeId - 1]).temperatureK();
+		return nodeState(nodeId, network).temperatureK();
 	}
 
 	public double gaugePressure(int nodeId, AirNetwork network) {
 		requireGasNode(nodeId, network);
+		if (network.inventory(nodeId).isEmpty()) {
+			return gasModel.absolutePressure(network.inventory(nodeId), network.availableVolume(nodeId),
+					nodeEnergy[nodeId - 1]) - GasRegistry.STANDARD_PRESSURE_PA;
+		}
 		return gasModel.absolutePressure(network.inventory(nodeId), network.availableVolume(nodeId),
-				nodeEnergy[nodeId - 1]) - GasRegistry.STANDARD_PRESSURE_PA;
+				nodeState(nodeId, network)) - GasRegistry.STANDARD_PRESSURE_PA;
 	}
 
 	public double density(int nodeId, AirNetwork network) {
@@ -97,64 +113,65 @@ public final class GasEnergyStore {
 
 	public GasThermalModel.HydrodynamicState hydrodynamicState(int nodeId, AirNetwork network) {
 		requireGasNode(nodeId, network);
+		if (network.inventory(nodeId).isEmpty())
+			return gasModel.hydrodynamicState(network.inventory(nodeId), network.availableVolume(nodeId), nodeEnergy[nodeId - 1]);
 		return gasModel.hydrodynamicState(network.inventory(nodeId), network.availableVolume(nodeId),
-				nodeEnergy[nodeId - 1]);
+				nodeState(nodeId, network));
 	}
 
-	/** Reads the same inventory/U state for flow rate and its finite-energy equilibrium limit. */
-	public AirNetwork.NodeThermodynamics thermodynamics(AirNetwork network) {
-		return new AirNetwork.NodeThermodynamics() {
-			@Override public double gaugePressure(int node) {
-				return node == AirNetwork.AMBIENT_NODE ? 0.0 : GasEnergyStore.this.gaugePressure(node, network);
-			}
-			@Override public double density(int node) {
-				return node == AirNetwork.AMBIENT_NODE
-						? network.density(node) * GasRegistry.STANDARD_TEMPERATURE_K / insertionTemperatureK
-						: GasEnergyStore.this.density(node, network);
-			}
-			@Override public double standardVolumeRatio(int node) {
-				return node == AirNetwork.AMBIENT_NODE ? GasRegistry.STANDARD_TEMPERATURE_K / insertionTemperatureK
-						: network.standardVolume(node) / network.availableVolume(node);
-			}
-			@Override public long limitTransferNanos(int source, int target, long requested) {
-				return maximumTransfer(source, target, requested, network);
-			}
-			@Override public long activityTransferNanos(int source, int target, long available) {
-				return maximumTransfer(source, target, available, network);
-			}
-		};
-	}
-
-	/** Selects a pressure-directed exact portion using a bounded equilibrium search. */
-	private long maximumTransfer(int source, int target, long requested, AirNetwork network) {
-		if (requested <= 0L) return 0L;
-		if (source != AirNetwork.AMBIENT_NODE) requested = Math.min(requested, network.standardVolumeNanos(source));
-		if (target != AirNetwork.AMBIENT_NODE) requested = Math.min(requested, Long.MAX_VALUE - network.standardVolumeNanos(target));
-		double sourceTemperature = source == AirNetwork.AMBIENT_NODE
-				? insertionTemperatureK : temperature(source, network);
-		return GasTransferSearch.maximum(requested,
-                amount -> permitsTransfer(source, target, amount, sourceTemperature, network));
-	}
-
-	private boolean permitsTransfer(int source, int target, long amount, double sourceTemperature, AirNetwork network) {
-		try {
-			GasInventory moved, sourceAfter;
-			if (source == AirNetwork.AMBIENT_NODE) {
-				moved = network.ambientInventory(amount); sourceAfter = GasInventory.EMPTY;
-			} else {
-				GasInventory.Split split = network.inventory(source).splitTotal(amount);
-				moved = split.first(); sourceAfter = split.second();
-			}
-			GasInventory targetAfter = target == AirNetwork.AMBIENT_NODE ? GasInventory.EMPTY : network.inventory(target).merge(moved);
-			double carried = gasModel.enthalpy(moved, sourceTemperature);
-			double sourcePressure = source == AirNetwork.AMBIENT_NODE ? GasRegistry.STANDARD_PRESSURE_PA
-					: gasModel.absolutePressure(sourceAfter, network.availableVolume(source), nodeEnergy[source - 1] - carried);
-			double targetPressure = target == AirNetwork.AMBIENT_NODE ? GasRegistry.STANDARD_PRESSURE_PA
-					: gasModel.absolutePressure(targetAfter, network.availableVolume(target), nodeEnergy[target - 1] + carried);
-			return sourcePressure >= targetPressure;
-		} catch (IllegalArgumentException | ArithmeticException invalidCaloricState) {
-			return false;
+	/** Immutable inventory identity and the actual U bits determine the caloric state across all readers. */
+	private ThermalStateFunction.State nodeState(int nodeId, AirNetwork network) {
+		prepareStateStorage();
+		int index = nodeId - 1; GasInventory inventory = network.inventory(nodeId);
+		long energy = Double.doubleToRawLongBits(nodeEnergy[index]);
+		if (stateInventory[index] != inventory || stateEnergy[index] != energy || state[index] == null) {
+			state[index] = gasModel.state(inventory, nodeEnergy[index]);
+			stateInventory[index] = inventory; stateEnergy[index] = energy;
 		}
+		return state[index];
+	}
+
+	private void prepareStateStorage() {
+		if (state.length != nodeEnergy.length) {
+			stateInventory = new GasInventory[nodeEnergy.length]; stateEnergy = new long[nodeEnergy.length];
+			state = new ThermalStateFunction.State[nodeEnergy.length];
+		}
+	}
+
+	/** One thermal closure per node; flow and its positive donor bound share these values. */
+	public AirNetwork.NodeThermodynamics thermodynamics(AirNetwork network) {
+		double[] pressure = new double[nodeEnergy.length + 1], density = new double[pressure.length],
+				ratio = new double[pressure.length], storage = new double[pressure.length], fraction = new double[pressure.length];
+		density[0] = network.density(0) * GasRegistry.STANDARD_TEMPERATURE_K / insertionTemperatureK;
+		ratio[0] = GasRegistry.STANDARD_TEMPERATURE_K / insertionTemperatureK;
+		var ambient = network.ambientInventory(1_000_000_000L);
+		double ambientEnergy = gasModel.internalEnergyAtTemperature(ambient, insertionTemperatureK);
+		double ambientGamma = gasModel.hydrodynamicState(ambient, 1, ambientEnergy).isentropicExponent();
+		for (int id : network.nodeIds()) {
+			GasInventory inventory = network.inventory(id);
+			if (inventory.isEmpty()) {
+				pressure[id] = -GasRegistry.STANDARD_PRESSURE_PA;
+				storage[id] = network.availableVolume(id) * ratio[0] / (ambientGamma * GasRegistry.STANDARD_PRESSURE_PA);
+				continue;
+			}
+			var thermal = nodeState(id, network);
+			var hydro = gasModel.hydrodynamicState(inventory, network.availableVolume(id), thermal);
+			pressure[id] = hydro.absolutePressurePa() - GasRegistry.STANDARD_PRESSURE_PA;
+			density[id] = hydro.densityKgPerCubicMeter(); ratio[id] = network.standardVolume(id) / network.availableVolume(id);
+			storage[id] = network.standardVolume(id) / hydro.adiabaticBulkModulusPa();
+			double minimum = gasModel.internalEnergyAtTemperature(inventory, ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
+			double sensible = nodeEnergy[id - 1] - minimum;
+			double margin = 8 * (network.edgeCount() + 1.0) * (Math.ulp(nodeEnergy[id - 1]) + Math.ulp(minimum));
+			double pressureEnergy = hydro.gasConstantJPerK() * hydro.temperatureK();
+			fraction[id] = Math.max(0, Math.nextDown((sensible - margin) / (sensible + pressureEnergy)));
+		}
+		return new AirNetwork.NodeThermodynamics() {
+			public double gaugePressure(int id) { return pressure[id]; }
+			public double density(int id) { return density[id]; }
+			public double standardVolumeRatio(int id) { return ratio[id]; }
+			public double pressureStorage(int id) { return storage[id]; }
+			public double maximumOutflowFraction(int id) { return fraction[id]; }
+		};
 	}
 
 	public double requireNodeState(int nodeId, GasInventory inventory, double energy, AirNetwork network) {
@@ -196,6 +213,21 @@ public final class GasEnergyStore {
 		double[] baseline = nodeEnergy.clone(); baseline[node - 1] = energy;
 		return planRemap(network, inventories, volumes, mixed, inherited, source, sink,
 				baseline, afterPhase, Math.addExact(revision, 1));
+	}
+
+	/** The phase inventory and its topology successor publish together from the original gas revision. */
+	public GasRemapPlan planRemapAfterInventoryBatch(AirNetwork network, InventoryEnergyPlan phase,
+			ThermalAuditLedger afterPhase, List<GasInventory> inventories, double[] volumes,
+			double[] mixed, double[] inherited, SignedDyadic source, SignedDyadic sink) {
+		requireInventoryEnergyCurrent(phase, network);
+		return planRemap(network, inventories, volumes, mixed, inherited, source, sink,
+				phase.energies, afterPhase, revision);
+	}
+	public void requireRemapAfterInventoryBatchCurrent(GasRemapPlan remap, InventoryEnergyPlan phase,
+			AirNetwork network, ThermalAuditLedger afterPhase) {
+		requireInventoryEnergyCurrent(phase, network);
+		if (remap == null || remap.owner != this || remap.baseRevision != revision || remap.beforeAudit != afterPhase)
+			throw new IllegalStateException("Phase batch gas remap source changed");
 	}
 
 	private GasRemapPlan planRemap(AirNetwork oldNetwork, List<GasInventory> inventories,
@@ -289,41 +321,94 @@ public final class GasEnergyStore {
 
 	public record GasVentPlan(int nodeCount, SignedDyadic removedEnergy, ThermalAuditLedger auditAfter) { }
 
-	AirNetwork.TransferCommit planTransfer(
-			int sourceNode, int targetNode, GasInventory moved,
-			GasInventory sourceAfter, GasInventory targetAfter, AirNetwork network
-	) {
-		if (!hasGasEnergy(network.nodeCount()) || moved == null || moved.isEmpty()) {
-			throw new IllegalArgumentException("Gas thermal transfer plan is incompatible");
-		}
-		double[] result = nodeEnergy.clone();
-		double sourceTemperature = sourceNode == AirNetwork.AMBIENT_NODE
-				? insertionTemperatureK : temperature(sourceNode, network);
-		double carried = gasModel.enthalpy(moved, sourceTemperature);
-		SignedDyadic before = SignedDyadic.sum(nodeEnergy);
+	/** All ports use the same source temperatures and one paired enthalpy value per transfer. */
+	public AirNetwork.TransferCommit planFlow(AirNetwork.FlowBatch batch, AirNetwork network) {
+		double[] result = nodeEnergy.clone(), temperature = new double[nodeEnergy.length + 1];
+		temperature[0] = insertionTemperatureK;
+		for (int id : batch.nodeIds()) temperature[id] = temperature(id, network);
 		SignedDyadic imported = SignedDyadic.ZERO, exported = SignedDyadic.ZERO;
-		if (sourceNode == AirNetwork.AMBIENT_NODE) {
-			result[targetNode - 1] += carried;
-			gasModel.absolutePressure(targetAfter, network.availableVolume(targetNode), result[targetNode - 1]);
-			imported = SignedDyadic.of(carried);
-		} else {
-			result[sourceNode - 1] -= carried;
-			gasModel.absolutePressure(sourceAfter, network.availableVolume(sourceNode), result[sourceNode - 1]);
-			if (targetNode == AirNetwork.AMBIENT_NODE) exported = SignedDyadic.of(carried);
+		for (var transfer : batch.transfers()) {
+			double carried = gasModel.enthalpy(transfer.moved(), temperature[transfer.source()]);
+			if (transfer.source() == 0) imported = imported.add(SignedDyadic.of(carried));
+			else result[transfer.source() - 1] -= carried;
+			if (transfer.target() == 0) exported = exported.add(SignedDyadic.of(carried));
+			else result[transfer.target() - 1] += carried;
+		}
+		var prepared = planInventoryEnergy(network, batch.nodeIds(), batch.inventories(), result,
+				imported, exported, SignedDyadic.ZERO);
+		return () -> commitInventoryEnergy(prepared);
+	}
+
+	/** Final-state thermal preflight for fixed-node flow or a simultaneous gas/liquid phase transaction. */
+	public InventoryEnergyPlan planInventoryEnergy(AirNetwork network, List<Integer> ids,
+			List<GasInventory> inventories, double[] energies, SignedDyadic externalSource,
+			SignedDyadic externalSink, SignedDyadic internalEnergyTransfer) {
+		return planInventoryEnergy(network, ids, inventories, energies, externalSource, externalSink, internalEnergyTransfer, true);
+	}
+	public InventoryEnergyPlan planPhaseInventoryEnergy(AirNetwork network, List<Integer> ids,
+			List<GasInventory> inventories, double[] energies, SignedDyadic internalEnergyTransfer) {
+		return planInventoryEnergy(network, ids, inventories, energies, SignedDyadic.ZERO, SignedDyadic.ZERO, internalEnergyTransfer, false);
+	}
+	private InventoryEnergyPlan planInventoryEnergy(AirNetwork network, List<Integer> ids,
+			List<GasInventory> inventories, double[] energies, SignedDyadic externalSource,
+			SignedDyadic externalSink, SignedDyadic internalEnergyTransfer, boolean checkVolume) {
+		if (!ids.equals(network.nodeIds()) || inventories.size() != ids.size() || energies.length != nodeEnergy.length)
+			throw new IllegalArgumentException("Gas energy batch must cover the current nodes");
+		double[] result = energies.clone();
+		ThermalStateFunction.State[] finalStates = new ThermalStateFunction.State[result.length];
+		GasInventory[] finalInventories = new GasInventory[result.length];
+		for (int i = 0; i < ids.size(); i++) {
+			int id = ids.get(i); var inventory = inventories.get(i); finalInventories[id - 1] = inventory;
+			if (inventory.isEmpty()) {
+				if (result[id - 1] != 0) throw new IllegalArgumentException("Vacuum phase inventory carries energy");
+				if (checkVolume) gasModel.absolutePressure(inventory, network.availableVolume(id), result[id - 1]);
+			}
 			else {
-				result[targetNode - 1] += carried;
-				gasModel.absolutePressure(targetAfter, network.availableVolume(targetNode), result[targetNode - 1]);
+				var thermal = gasModel.state(inventory, result[id - 1]); finalStates[id - 1] = thermal;
+				if (checkVolume) gasModel.absolutePressure(inventory, network.availableVolume(id), thermal);
 			}
 		}
-		SignedDyadic after = SignedDyadic.sum(result);
-		SignedDyadic roundoff = after.subtract(before).subtract(imported).add(exported);
-		ThermalAuditLedger auditAfter = audit.ledger().withExternalSourceEnergy(imported)
-				.withExternalSinkEnergy(exported).withRoundoff(roundoff);
-		return () -> {
-			nodeEnergy = result;
-			audit.replace(auditAfter);
-			revision++;
-		};
+		SignedDyadic roundoff = SignedDyadic.sum(result).subtract(SignedDyadic.sum(nodeEnergy))
+				.subtract(internalEnergyTransfer).subtract(externalSource).add(externalSink);
+		var before = audit.ledger();
+		var after = before.withExternalSourceEnergy(externalSource).withExternalSinkEnergy(externalSink).withRoundoff(roundoff);
+		return new InventoryEnergyPlan(this, revision, network.revision(), result, roundoff, externalSource, externalSink, before, after, finalStates, finalInventories);
+	}
+	public void requireInventoryEnergyCurrent(InventoryEnergyPlan plan, AirNetwork network) {
+		if (plan == null || plan.owner != this || plan.revision != revision || plan.networkRevision != network.revision()
+				|| plan.beforeAudit != audit.ledger()) throw new IllegalStateException("Gas energy batch source changed");
+	}
+	/** Caller preflights the shared transaction and publishes its combined thermal ledger separately. */
+	public void commitInventoryEnergyValues(InventoryEnergyPlan plan) {
+		nodeEnergy = plan.energies; state = plan.states; stateInventory = plan.inventories;
+		stateEnergy = plan.energyBits;
+		revision++;
+	}
+	public void commitInventoryEnergy(InventoryEnergyPlan plan) {
+		if (plan.owner != this || plan.revision != revision || plan.beforeAudit != audit.ledger())
+			throw new IllegalStateException("Gas energy batch source changed");
+		commitInventoryEnergyValues(plan); audit.replace(plan.afterAudit);
+	}
+	public static final class InventoryEnergyPlan {
+		private final GasEnergyStore owner; private final long revision, networkRevision; private final double[] energies;
+		private final SignedDyadic roundoff, externalSource, externalSink;
+		private final ThermalAuditLedger beforeAudit, afterAudit;
+		private final ThermalStateFunction.State[] states; private final GasInventory[] inventories; private final long[] energyBits;
+		private InventoryEnergyPlan(GasEnergyStore owner, long revision, long networkRevision, double[] energies,
+				SignedDyadic roundoff, SignedDyadic externalSource, SignedDyadic externalSink,
+				ThermalAuditLedger beforeAudit, ThermalAuditLedger afterAudit, ThermalStateFunction.State[] states, GasInventory[] inventories) {
+			this.states = states; this.inventories = inventories;
+			this.energyBits = new long[energies.length];
+			for (int i = 0; i < energies.length; i++) energyBits[i] = Double.doubleToRawLongBits(energies[i]);
+			this.owner = owner; this.revision = revision; this.networkRevision = networkRevision; this.energies = energies;
+			this.roundoff = roundoff; this.externalSource = externalSource; this.externalSink = externalSink;
+			this.beforeAudit = beforeAudit; this.afterAudit = afterAudit;
+		}
+		public SignedDyadic roundoff() { return roundoff; }
+		public SignedDyadic externalSource() { return externalSource; }
+		public SignedDyadic externalSink() { return externalSink; }
+		public ThermalAuditLedger beforeAudit() { return beforeAudit; }
+		public ThermalAuditLedger afterAudit() { return afterAudit; }
 	}
 
 	private void requireGasNode(int nodeId, AirNetwork network) {

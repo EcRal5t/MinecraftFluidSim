@@ -1,38 +1,31 @@
 package mmm.fluid;
 
+import mmm.inventory.LiquidCellInventory;
+
 import mmm.chemistry.ChemicalRegistry;
+import mmm.chemistry.ChemicalTransferLedger;
 import mmm.fluid.air.GasRegistry;
 import mmm.fluid.air.GasStateSnapshot;
 import mmm.granular.GranularRegistry;
 import mmm.granular.GranularDepositDynamics;
 import mmm.granular.GranularStateSnapshot;
-import mmm.thermal.ThermalLimits;
+import mmm.thermal.ThermalOwnerSnapshot;
 import mmm.thermal.ThermalRegistry;
-
 import java.util.List;
 import java.util.Objects;
 
-/**
- * Complete immutable state for one loader-neutral solver handoff. Inventory columns remain
- * authoritative; explicitly named derived/runtime columns only continue a private candidate and
- * can never reconstruct inventory. Density and display meshes are deliberately absent.
- */
+/** Immutable cell inventories and SI face momentum shared with a private backend candidate. */
 public final class FluidDomainState {
 	public enum CarrierKind { PURE, MATERIAL, CHEMICAL }
-
+	private final int sizeX, sizeY, sizeZ, maximumParticleCount;
 	private final FluidSolverConfig config;
-	private final int maximumParticleCount;
 	private final boolean sealedDomainBoundary;
-	private final CarrierKind carrierKind;
-	private final FlipParticleState particles;
-	private final FlipMaterialParticleState materials;
-	private final FlipChemicalParticleState chemicals;
+	private final LiquidCellInventory.Snapshot liquid;
+	private final MacMomentumState momentum;
+	private final byte[] collisionMasks;
+	private final List<FluidMaterial> palette;
 	private final ChemicalRegistry chemicalRegistry;
-	/**
-	 * World material properties used by liquid stress and granular drag at the shared cell temperature.
-	 * The private candidate must evaluate against the same immutable definitions.
-	 */
-	private final MaterialRegistry materialDefinitions;
+	private final ChemicalTransferLedger chemicalSource, chemicalSink;
 	private final int[] chemicalDirtyCells;
 	private final int chemicalReactionCursor;
 	private final GranularRegistry granularRegistry;
@@ -42,185 +35,130 @@ public final class FluidDomainState {
 	private final GasRegistry gasRegistry;
 	private final GasStateSnapshot gas;
 	private final ThermalRegistry thermalRegistry;
-	private final FlipThermalParticleState thermal;
+	private final ThermalOwnerSnapshot thermalOwner;
 	private final int maximumThermalTransportSubsteps;
 	private final PendingPhaseVolumeState pendingPhaseVolume;
 	private final double[] thermalBoundaryTemperaturesK;
 	private final CondensedPhasePressureField condensedPhasePressure;
+	private final MaterialRegistry materialDefinitions;
+	private GasRuntimeGeometry gasRuntimeGeometry;
+	private mmm.fluid.air.AirNetwork.RuntimeSnapshot gasRuntimeNetwork;
+	void attachGasRuntime(GasRuntimeGeometry geometry, mmm.fluid.air.AirNetwork.RuntimeSnapshot network) {
+		if (gasRuntimeGeometry != null || gasRuntimeNetwork != null || geometry == null || network == null)
+			throw new IllegalStateException("Gas runtime continuation can be attached once before publication");
+		gasRuntimeGeometry = geometry; gasRuntimeNetwork = network;
+	}
+	GasRuntimeGeometry gasRuntimeGeometry() { return gasRuntimeGeometry; }
+	mmm.fluid.air.AirNetwork.RuntimeSnapshot gasRuntimeNetwork() { return gasRuntimeNetwork; }
+	private volatile FlipParticleState debugParticles;
+	private volatile FlipMaterialParticleState debugMaterials;
+	private volatile FlipChemicalParticleState debugChemicals;
+	private volatile FlipThermalParticleState debugThermal;
 
-	FluidDomainState(
-			FluidSolverConfig config, int maximumParticleCount, boolean sealedDomainBoundary,
-			FlipParticleState particles, FlipMaterialParticleState materials,
-			FlipChemicalParticleState chemicals, ChemicalRegistry chemicalRegistry, int[] chemicalDirtyCells, int chemicalReactionCursor,
-			GranularRegistry granularRegistry, GranularStateSnapshot granular,
-			GranularDepositDynamics.State granularDynamics,
+	public FluidDomainState(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config, int maximumParticleCount,
+			boolean sealedDomainBoundary, LiquidCellInventory.Snapshot liquid, MacMomentumState momentum,
+			byte[] collisionMasks, List<FluidMaterial> palette, ChemicalRegistry chemicalRegistry,
+			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells, int chemicalReactionCursor,
+			GranularRegistry granularRegistry, GranularStateSnapshot granular, GranularDepositDynamics.State granularDynamics,
 			boolean precipitationEnabled, GasRegistry gasRegistry, GasStateSnapshot gas,
-			ThermalRegistry thermalRegistry, FlipThermalParticleState thermal,
-			int maximumThermalTransportSubsteps, PendingPhaseVolumeState pendingPhaseVolume,
-			double[] thermalBoundaryTemperaturesK, CondensedPhasePressureField condensedPhasePressure,
-			MaterialRegistry materialDefinitions
-	) {
-		this.config = Objects.requireNonNull(config, "config");
-		if (maximumParticleCount <= 0) throw new IllegalArgumentException("Marker budget must be positive");
-		this.maximumParticleCount = maximumParticleCount;
-		this.sealedDomainBoundary = sealedDomainBoundary;
-		int carriers = (particles == null ? 0 : 1) + (materials == null ? 0 : 1) + (chemicals == null ? 0 : 1);
-		if (carriers != 1) throw new IllegalArgumentException("Exactly one carrier state is required");
-		this.carrierKind = chemicals != null ? CarrierKind.CHEMICAL
-				: materials != null ? CarrierKind.MATERIAL : CarrierKind.PURE;
-		this.particles = particles;
-		this.materials = materials;
-		this.chemicals = chemicals;
-		this.chemicalRegistry = chemicalRegistry;
+			ThermalRegistry thermalRegistry, ThermalOwnerSnapshot thermalOwner, int maximumThermalTransportSubsteps,
+			PendingPhaseVolumeState pendingPhaseVolume, double[] thermalBoundaryTemperaturesK,
+			CondensedPhasePressureField condensedPhasePressure, MaterialRegistry materialDefinitions) {
+		if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || maximumParticleCount <= 0) throw new IllegalArgumentException("Invalid cell domain shape");
+		int cells = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
+		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.config = Objects.requireNonNull(config);
+		this.maximumParticleCount = maximumParticleCount; this.sealedDomainBoundary = sealedDomainBoundary;
+		this.liquid = Objects.requireNonNull(liquid); this.momentum = Objects.requireNonNull(momentum);
+		if (liquid.cellCount() != cells || collisionMasks.length != cells || momentum.sizeX() != sizeX || momentum.sizeY() != sizeY || momentum.sizeZ() != sizeZ)
+			throw new IllegalArgumentException("Liquid inventory, collision and MAC shapes differ");
+		this.collisionMasks = collisionMasks.clone(); this.palette = List.copyOf(palette);
+		this.chemicalRegistry = chemicalRegistry; this.chemicalSource = Objects.requireNonNull(chemicalSource);
+		this.chemicalSink = Objects.requireNonNull(chemicalSink);
 		this.chemicalDirtyCells = chemicalDirtyCells == null ? null : chemicalDirtyCells.clone();
 		this.chemicalReactionCursor = chemicalReactionCursor;
-		if (chemicalReactionCursor < 0 || chemicalReactionCursor >= baseParticles().sizeX()
-				* baseParticles().sizeY() * baseParticles().sizeZ()) throw new IllegalArgumentException("Invalid chemical reaction cursor");
-		if ((chemicals == null) != (chemicalRegistry == null)
-				|| (chemicals == null) != (chemicalDirtyCells == null)
-				|| chemicals != null && !chemicals.registryFingerprint().equals(chemicalRegistry.fingerprint())) {
-			throw new IllegalArgumentException("Chemical carrier/registry identity mismatch");
-		}
-		if (this.chemicalDirtyCells != null) {
-			int previous = -1;
-			int cellCount = Math.multiplyExact(Math.multiplyExact(baseParticles().sizeX(), baseParticles().sizeY()),
-					baseParticles().sizeZ());
-			for (int cell : this.chemicalDirtyCells) {
-				if (cell <= previous || cell < 0 || cell >= cellCount) {
-					throw new IllegalArgumentException("Chemical dirty-cell handoff is not canonical");
-				}
-				previous = cell;
-			}
-		}
-		this.granularRegistry = granularRegistry;
-		this.granular = granular;
-		this.granularDynamics = granularDynamics;
-		if ((granular == null) != (granularRegistry == null)
-				|| (granular == null) != (granularDynamics == null)
-				|| granular != null && !granular.registryFingerprint().equals(granularRegistry.fingerprint())) {
+		if ((chemicalRegistry == null) != (chemicalDirtyCells == null) || chemicalRegistry != null && this.palette.isEmpty()
+				|| chemicalReactionCursor < 0 || chemicalReactionCursor >= cells)
+			throw new IllegalArgumentException("Invalid chemical registry or scheduling state");
+		if (chemicalDirtyCells != null) { int previous = -1; for (int cell : chemicalDirtyCells) {
+			if (cell <= previous || cell >= cells) throw new IllegalArgumentException("Invalid chemical dirty-cell order"); previous = cell;
+		} }
+		this.granularRegistry = granularRegistry; this.granular = granular; this.granularDynamics = granularDynamics;
+		if ((granular == null) != (granularRegistry == null) || (granular == null) != (granularDynamics == null)
+				|| granular != null && !granular.registryFingerprint().equals(granularRegistry.fingerprint()))
 			throw new IllegalArgumentException("Granular state/registry identity mismatch");
-		}
-		this.materialDefinitions = materialDefinitions;
-		if (granular != null && materialDefinitions == null) {
-			throw new IllegalArgumentException("Granular handoff/material definitions presence mismatch");
-		}
-		if (materialDefinitions != null) {
-			List<FluidMaterial> palette = chemicals != null ? chemicals.materials().materials()
-					: materials != null ? materials.materials() : List.of();
-			if (palette.isEmpty()) throw new IllegalArgumentException("Material definitions require a liquid palette");
-			for (FluidMaterial material : palette) {
-				MaterialRegistry.MaterialEntry definition = materialDefinitions.entry(material.id());
-				if (!definition.material().equals(material) || !definition.declaresViscosity()
-						|| granularRegistry != null && !granularRegistry.hasCarrier(material.id())) {
-					throw new IllegalArgumentException("Invalid liquid definition for " + material.id());
-				}
-			}
-		}
-		if (precipitationEnabled && (chemicals == null || granular == null)) {
-			throw new IllegalArgumentException("Precipitation requires chemical and granular state");
-		}
 		this.precipitationEnabled = precipitationEnabled;
-		this.gasRegistry = Objects.requireNonNull(gasRegistry, "gasRegistry");
-		this.gas = gas;
-		if (gas != null && !gas.registryFingerprint().equals(gasRegistry.fingerprint())) {
-			throw new IllegalArgumentException("Gas state/registry identity mismatch");
-		}
-		String expectedChemical = chemicalRegistry == null ? "" : chemicalRegistry.fingerprint();
-		if (gas != null && !gas.chemicalRegistryFingerprint().isEmpty()
-				&& !gas.chemicalRegistryFingerprint().equals(expectedChemical)) {
-			throw new IllegalArgumentException("Gas species chemical identity mismatch");
-		}
-		this.thermalRegistry = thermalRegistry;
-		this.thermal = thermal;
-		this.maximumThermalTransportSubsteps = maximumThermalTransportSubsteps;
-		this.pendingPhaseVolume = pendingPhaseVolume;
-		this.thermalBoundaryTemperaturesK = thermalBoundaryTemperaturesK == null
-				? null : thermalBoundaryTemperaturesK.clone();
+		if (precipitationEnabled && (chemicalRegistry == null || granular == null)) throw new IllegalArgumentException("Precipitation requires chemistry and solids");
+		this.materialDefinitions = materialDefinitions;
+		if (granular != null && materialDefinitions == null) throw new IllegalArgumentException("Granular properties are missing");
+		this.gasRegistry = Objects.requireNonNull(gasRegistry); this.gas = gas;
+		if (gas != null && !gas.registryFingerprint().equals(gasRegistry.fingerprint())) throw new IllegalArgumentException("Gas registry identity mismatch");
+		this.thermalRegistry = thermalRegistry; this.thermalOwner = thermalOwner;
+		this.maximumThermalTransportSubsteps = maximumThermalTransportSubsteps; this.pendingPhaseVolume = pendingPhaseVolume;
+		this.thermalBoundaryTemperaturesK = thermalBoundaryTemperaturesK == null ? null : thermalBoundaryTemperaturesK.clone();
 		this.condensedPhasePressure = condensedPhasePressure;
-		if ((thermal == null) != (thermalRegistry == null)
-				|| thermal != null && !thermal.thermalRegistryFingerprint().equals(thermalRegistry.fingerprint())) {
-			throw new IllegalArgumentException("Thermal state/registry identity mismatch");
-		}
-		if (thermal == null) {
-			if (maximumThermalTransportSubsteps != 0 || pendingPhaseVolume != null
-					|| thermalBoundaryTemperaturesK != null || condensedPhasePressure != null) {
-				throw new IllegalArgumentException("Inactive thermal state has thermal runtime data");
-			}
-		} else if (materials == null && chemicals == null || gas == null
-				|| maximumThermalTransportSubsteps <= 0 || pendingPhaseVolume == null
-				|| condensedPhasePressure == null) {
-			throw new IllegalArgumentException("Thermal state is missing carrier, gas or phase-work state");
-		}
-		if (this.condensedPhasePressure != null
-				&& this.condensedPhasePressure.cellCount() != Math.multiplyExact(
-						Math.multiplyExact(baseParticles().sizeX(), baseParticles().sizeY()), baseParticles().sizeZ())) {
-			throw new IllegalArgumentException("Condensed-phase pressure field dimensions changed");
-		}
-		if (this.thermalBoundaryTemperaturesK != null) {
-			int expectedBoundaryEntries = Math.multiplyExact(
-					Math.multiplyExact(Math.multiplyExact(baseParticles().sizeX(), baseParticles().sizeY()),
-							baseParticles().sizeZ()), 6);
-			if (this.thermalBoundaryTemperaturesK.length != expectedBoundaryEntries) {
-				throw new IllegalArgumentException("Frozen thermal boundary field dimensions changed");
-			}
-			for (double temperature : this.thermalBoundaryTemperaturesK) if (!Double.isNaN(temperature)
-					&& (!Double.isFinite(temperature) || temperature < ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)) {
-				throw new IllegalArgumentException("Frozen thermal boundary temperature is invalid");
-			}
-		}
-		baseParticles().requireCompatible(baseParticles().sizeX(), baseParticles().sizeY(),
-				baseParticles().sizeZ(), config.cellSize());
-		if (baseParticles().particleCount() > maximumParticleCount) {
-			throw new IllegalArgumentException("Carrier state exceeds marker budget");
-		}
+		if ((thermalOwner == null) != (thermalRegistry == null) || thermalOwner != null && (!thermalOwner.registryFingerprint().equals(thermalRegistry.fingerprint())
+				|| maximumThermalTransportSubsteps <= 0 || pendingPhaseVolume == null || condensedPhasePressure == null || gas == null || palette.isEmpty()))
+			throw new IllegalArgumentException("Thermal owner/registry or runtime state mismatch");
+		if (thermalOwner == null && (maximumThermalTransportSubsteps != 0 || pendingPhaseVolume != null || thermalBoundaryTemperaturesK != null || condensedPhasePressure != null))
+			throw new IllegalArgumentException("Inactive thermal capability contains runtime state");
+		if (condensedPhasePressure != null && condensedPhasePressure.cellCount() != cells) throw new IllegalArgumentException("Pressure field shape differs");
+		if (this.thermalBoundaryTemperaturesK != null && this.thermalBoundaryTemperaturesK.length != 6 * cells) throw new IllegalArgumentException("Thermal boundary shape differs");
 	}
-
+	public int sizeX() { return sizeX; } public int sizeY() { return sizeY; } public int sizeZ() { return sizeZ; }
 	public FluidSolverConfig config() { return config; }
-	public int sizeX() { return baseParticles().sizeX(); }
-	public int sizeY() { return baseParticles().sizeY(); }
-	public int sizeZ() { return baseParticles().sizeZ(); }
 	public int maximumParticleCount() { return maximumParticleCount; }
 	public boolean sealedDomainBoundary() { return sealedDomainBoundary; }
-	public CarrierKind carrierKind() { return carrierKind; }
-	public FlipParticleState particles() { return particles; }
-	public FlipMaterialParticleState materials() { return materials; }
-	public FlipChemicalParticleState chemicals() { return chemicals; }
+	public LiquidCellInventory.Snapshot liquid() { return liquid; }
+	public MacMomentumState momentum() { return momentum; }
+	public byte[] copyCollisionMasks() { return collisionMasks.clone(); }
+	public List<FluidMaterial> materialPalette() { return palette; }
+	public CarrierKind carrierKind() { return chemicalRegistry != null ? CarrierKind.CHEMICAL : palette.isEmpty() ? CarrierKind.PURE : CarrierKind.MATERIAL; }
 	public ChemicalRegistry chemicalRegistry() { return chemicalRegistry; }
-	public int[] copyChemicalDirtyCells() {
-		return chemicalDirtyCells == null ? null : chemicalDirtyCells.clone();
-	}
+	public ChemicalTransferLedger chemicalSource() { return chemicalSource; }
+	public ChemicalTransferLedger chemicalSink() { return chemicalSink; }
+	public int[] copyChemicalDirtyCells() { return chemicalDirtyCells == null ? null : chemicalDirtyCells.clone(); }
 	public int chemicalReactionCursor() { return chemicalReactionCursor; }
 	public GranularRegistry granularRegistry() { return granularRegistry; }
-
-	/** World material definitions this handoff was captured against; null for explicitly inviscid test domains. */
-	public MaterialRegistry materialDefinitions() { return materialDefinitions; }
 	public GranularStateSnapshot granular() { return granular; }
 	public GranularDepositDynamics.State granularDynamics() { return granularDynamics; }
 	public boolean precipitationEnabled() { return precipitationEnabled; }
-	public GasRegistry gasRegistry() { return gasRegistry; }
-	public GasStateSnapshot gas() { return gas; }
-	public ThermalRegistry thermalRegistry() { return thermalRegistry; }
-	public FlipThermalParticleState thermal() { return thermal; }
+	public GasRegistry gasRegistry() { return gasRegistry; } public GasStateSnapshot gas() { return gas; }
+	public ThermalRegistry thermalRegistry() { return thermalRegistry; } public ThermalOwnerSnapshot thermalOwner() { return thermalOwner; }
 	public int maximumThermalTransportSubsteps() { return maximumThermalTransportSubsteps; }
 	public PendingPhaseVolumeState pendingPhaseVolume() { return pendingPhaseVolume; }
-	public double[] copyThermalBoundaryTemperaturesK() {
-		return thermalBoundaryTemperaturesK == null ? null : thermalBoundaryTemperaturesK.clone();
-	}
+	public double[] copyThermalBoundaryTemperaturesK() { return thermalBoundaryTemperaturesK == null ? null : thermalBoundaryTemperaturesK.clone(); }
 	public CondensedPhasePressureField condensedPhasePressure() { return condensedPhasePressure; }
+	public MaterialRegistry materialDefinitions() { return materialDefinitions; }
 
-	/** Immutable feature/registry identity which a backend step is not allowed to replace. */
+	/** Disposable sampling exports for diagnostics; backend and persistence read liquid()/momentum(). */
+	public FlipParticleState particles() {
+		if (carrierKind() != CarrierKind.PURE) return null;
+		var cached = debugParticles; if (cached == null) debugParticles = cached = FluidDomainStateMapper.restore(this).exportParticleState(); return cached;
+	}
+	public FlipMaterialParticleState materials() {
+		if (carrierKind() != CarrierKind.MATERIAL) return null;
+		var cached = debugMaterials; if (cached == null) debugMaterials = cached = FluidDomainStateMapper.restore(this).exportMaterialParticleState(); return cached;
+	}
+	public FlipChemicalParticleState chemicals() {
+		if (carrierKind() != CarrierKind.CHEMICAL) return null;
+		var cached = debugChemicals; if (cached == null) debugChemicals = cached = FluidDomainStateMapper.restore(this).exportChemicalParticleState(); return cached;
+	}
+	public FlipThermalParticleState thermal() {
+		if (thermalOwner == null) return null;
+		var cached = debugThermal;
+		if (cached == null) {
+			double[] energies = liquid.physicalStocks().stream().mapToDouble(LiquidCellInventory.Stock::internalEnergy).toArray();
+			debugThermal = cached = new FlipThermalParticleState(sizeX,sizeY,sizeZ,config.cellSize(),energies.length,
+					thermalOwner.registryFingerprint(),thermalOwner.insertionTemperatureK(),energies,thermalOwner.copyActiveParcelEnergy(),
+					thermalOwner.copyDepositEnergy(),thermalOwner.coherentGroups(),thermalOwner.copyGasNodeEnergy(),thermalOwner.audit());
+		}
+		return cached;
+	}
 	public Layout layout() {
-		List<FluidMaterial> materials = switch (carrierKind) {
-			case PURE -> List.of();
-			case MATERIAL -> this.materials.materials();
-			case CHEMICAL -> chemicals.materials().materials();
-		};
-		return new Layout(config, sizeX(), sizeY(), sizeZ(), maximumParticleCount, sealedDomainBoundary,
-				carrierKind, materials,
-				chemicalRegistry == null ? "" : chemicalRegistry.fingerprint(),
-				granularRegistry == null ? "" : granularRegistry.fingerprint(), precipitationEnabled,
-				gasRegistry.fingerprint(), thermalRegistry == null ? "" : thermalRegistry.fingerprint(),
-				thermal == null ? 0 : thermal.insertionTemperatureK(), maximumThermalTransportSubsteps,
+		return new Layout(config,sizeX,sizeY,sizeZ,maximumParticleCount,sealedDomainBoundary,carrierKind(),palette,
+				chemicalRegistry == null ? "" : chemicalRegistry.fingerprint(), granularRegistry == null ? "" : granularRegistry.fingerprint(),
+				precipitationEnabled,gasRegistry.fingerprint(),thermalRegistry == null ? "" : thermalRegistry.fingerprint(),
+				thermalOwner == null ? 0 : thermalOwner.insertionTemperatureK(),maximumThermalTransportSubsteps,
 				materialDefinitions == null ? "" : materialDefinitions.fingerprint());
 	}
 
@@ -254,11 +192,4 @@ public final class FluidDomainState {
 		}
 	}
 
-	private FlipParticleState baseParticles() {
-		return switch (carrierKind) {
-			case PURE -> particles;
-			case MATERIAL -> materials.particles();
-			case CHEMICAL -> chemicals.materials().particles();
-		};
-	}
 }

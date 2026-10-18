@@ -25,11 +25,12 @@ final class CellInventoryReader {
 	}
 
 	int nextMarkerInCell(int cell, int after) {
-		if (!domain.gridDirty) return after < 0 ? domain.markerGrid.cellMarkerHead[cell] : domain.markerGrid.particleCellNext[after];
-		for (int marker = after + 1; marker < domain.particles.count(); marker++) {
-			if (domain.particleCellIndex(marker) == cell) return marker;
+		var stocks = domain.liquidCells.physicalStocks();
+		int low = after < 0 ? 0 : after + 1, high = stocks.size();
+		while (low < high) { int middle = (low + high) >>> 1;
+			if (stocks.get(middle).key().cell() < cell) low = middle + 1; else high = middle;
 		}
-		return -1;
+		return low < stocks.size() && stocks.get(low).key().cell() == cell ? low : -1;
 	}
 
 	CellCarrierInventoryView observeCellCarriers(int x, int y, int z) {
@@ -104,18 +105,15 @@ final class CellInventoryReader {
 				? new double[]{0.0} : new double[domain.materialRegistry.size()];
 		double[] materialMass = new double[materialVolume.length];
 		TreeMap<String, Long> species = new TreeMap<>();
-		for (int marker = nextMarkerInCell(requested, -1); marker >= 0; marker = nextMarkerInCell(requested, marker)) {
-			normalizedVolume += domain.particles.volume(marker);
-			solverMass += domain.particles.mass(marker);
-			int material = domain.materialRegistry == null ? 0 : domain.particles.materialHandle(marker);
-			materialVolume[material] += domain.particles.volume(marker);
-			materialMass[material] += domain.particles.mass(marker);
-			if (domain.chemicalParcels != null) {
-				ChemicalMixtureRecord mixture = domain.chemicalParcels.record(marker);
-				for (int entry = 0; entry < mixture.entryCount(); entry++) {
-					species.merge(domain.chemicalParcels.registry().species(mixture.speciesHandle(entry)).id(),
-							mixture.amountAt(entry), Math::addExact);
-				}
+		for (var stock : domain.liquidCells.stocksInCell(requested)) {
+			normalizedVolume += stock.volumeFraction();
+			double mass = domain.unitScale.normalizedMass(stock.massUnits()); solverMass += mass;
+			int material = stock.key().material();
+			materialVolume[material] += stock.volumeFraction(); materialMass[material] += mass;
+			if (stock.mixture() != null) {
+				var mixture = stock.mixture();
+				for (int entry = 0; entry < mixture.entryCount(); entry++) species.merge(
+						domain.liquidCells.chemicalRegistry().species(mixture.speciesHandle(entry)).id(), mixture.amountAt(entry), Math::addExact);
 			}
 		}
 		if (!(normalizedVolume > 0.0) || !(solverMass > 0.0)) return null;

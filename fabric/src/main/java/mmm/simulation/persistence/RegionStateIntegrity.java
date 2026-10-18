@@ -30,22 +30,16 @@ final class RegionStateIntegrity {
 			out.writeInt(section.sectionX()); out.writeInt(section.sectionY()); out.writeInt(section.sectionZ());
 			out.writeInt(section.localStartX()); out.writeInt(section.localStartY()); out.writeInt(section.localStartZ());
 			out.writeInt(section.sizeX()); out.writeInt(section.sizeY()); out.writeInt(section.sizeZ());
-			writeInts(out, section.markerOrdinals());
-			writeFloats(out, section.positionVolume());
-			writeFloats(out, section.velocities());
-			writeLongs(out, section.markerMassUnits());
-			if (section.layout().hasMaterials()) {
-				writeInts(out, section.materialPaletteIndex());
+			out.writeInt(section.liquidStocks().size());
+			for (var stock : section.liquidStocks()) {
+				out.writeInt(stock.key().cell()); out.writeInt(stock.key().material()); out.writeInt(stock.key().supportMask());
+				writeBytes(out,stock.volume().significand().toByteArray()); out.writeInt(stock.volume().exponent());
+				out.writeLong(stock.massUnits()); out.writeLong(Double.doubleToRawLongBits(stock.internalEnergy())); out.writeBoolean(stock.indicator());
+				out.writeBoolean(stock.mixture() != null);
+				if (stock.mixture() != null) { writeInts(out,stock.mixture().copySpeciesHandles()); writeLongs(out,stock.mixture().copyAmounts()); out.writeLong(stock.mixture().massResidualUnits()); }
 			}
-			if (section.layout().permitsOptionalChemistry()) {
-				out.writeBoolean(section.hasChemicalState());
-			}
-			if (section.hasChemicalState()) {
-				writeInts(out, section.chemicalMixtureIndex());
-				writeBytes(out, section.indicator());
-				writeLongs(out, section.chemicalSpeciesTotals());
-				out.writeLong(section.chemicalResidualLedgerUnits());
-			}
+			out.writeInt(section.faceMomentum().size());
+			for (var face : section.faceMomentum()) { out.writeInt(face.axis()); out.writeInt(face.face()); out.writeLong(Double.doubleToRawLongBits(face.kilogramMetersPerSecond())); }
 			writeBytes(out, section.solidMask());
 			writeExtensions(out, section.extensions());
 		});

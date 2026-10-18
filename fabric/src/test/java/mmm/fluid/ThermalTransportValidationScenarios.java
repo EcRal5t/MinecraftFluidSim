@@ -87,8 +87,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, .8F);
 		var domain = new FluidDomain(4, 4, 4, config, 512);
 		restorePhaseTestCarriers(domain, liquids, 2, 2, 2, new float[]{.0625F}, new int[1]);
-		int count = domain.particleCount(); double mass = domain.particles.mass(0);
-		double physicalMass = SolverUnitScale.forCellSize(config.cellSize()).kilograms(mass);
+		int count = domain.liquidCells.physicalSize(); long mass = domain.totalMassUnits();
+		double physicalMass = mmm.units.Mass.kilograms(mass);
 		double base = physicalMass * water.referenceSpecificEnergyJPerKg();
 		double modeled = base + physicalMass * (300 - water.referenceTemperatureK());
 		require(physicalMass == 7.8125 && water.referenceTemperatureK() + (modeled - base) / physicalMass < 0,
@@ -97,7 +97,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			domain.bindThermal(registry, domain.materialRegistry, 300);
 			throw new AssertionError("liquid initialization published an owner with nonpositive stored temperature");
 		} catch (ThermalStateFunction.EnergyOutsideValidityException expected) { }
-		require(domain.thermalState == null && domain.particleCount() == count && domain.particles.mass(0) == mass,
+		require(domain.thermalState == null && domain.liquidCells.physicalSize() == count && domain.totalMassUnits() == mass,
 				"rejected liquid initialization changed the carrier or published a thermal binding");
 		domain.bindThermal(registry, domain.materialRegistry, 1900);
 		require(domain.thermalState.temperature(0, domain.thermalMarkerContext()) == 1900
@@ -210,6 +210,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		}
 	}
 	static void granularEnergyColumnTransactions() {
+		granularRepresentationTransfersMechanicalHeat();
 		granularActiveMergePreservesPositiveTemperature();
 		granularExternalExtractionRounding();
 		granularInsertionPreflightsExternalSource();
@@ -225,6 +226,11 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				FluidMaterial.withSurfaceTension("test:liquid", 1.0, "test:miscible", 0.0, 90.0)));
 		GranularEnergyColumn.DepositKey deposit = new GranularEnergyColumn.DepositKey(0, 0, 0);
 		ThermalCarrierContext carriers = new ThermalCarrierContext() {
+			private final double[] liquidEnergy = new double[0];
+			private long liquidRevision;
+			@Override public double liquidInternalEnergy(int ordinal) { return liquidEnergy[ordinal]; }
+			@Override public void setLiquidInternalEnergy(int ordinal, double energy) { liquidEnergy[ordinal] = energy; liquidRevision++; }
+			@Override public long liquidInventoryRevision() { return liquidRevision; }
 			@Override public int markerCount() { return 0; }
 			@Override public int cell(int marker) { throw new IllegalArgumentException(); }
 			@Override public int fluidMaterialHandle(int marker) { throw new IllegalArgumentException(); }
@@ -305,6 +311,109 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				"granular clear did not move all active/deposit energy to the escaped sink");
 	}
 
+	private static void granularRepresentationTransfersMechanicalHeat() {
+		var granular = BuiltinGranularDefinitions.createRegistry();
+		var liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long svq = SolidVolume.SVQ_PER_CELL / 256;
+		long mass = mmm.units.Mass.fromKilograms(2600.0 / 8 / 256);
+		for (boolean thermal : new boolean[]{false, true}) {
+			var domain = new FluidDomain(4, 4, 4, new FluidSolverConfig(.5F, 1000, 9.81F, .05F,
+					100, 1e-5F, .45F, .002F, 0), 512);
+			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
+			var state = domain.granularState;
+			state.parcels.add(new mmm.granular.GranularParcelStore.Parcel(.75F, .70F, .75F,
+					0, 1, 0, svq, mass, sand, 0, 0, (byte) 0));
+			state.parcels.add(new mmm.granular.GranularParcelStore.Parcel(.75F, .80F, .75F,
+					0, -1, 0, 3 * svq, 3 * mass, sand, 0, 0, (byte) 0));
+			if (thermal) domain.bindThermal(granularThermalRegistry(liquids, granular), liquids, 300);
+			SignedDyadic before = thermal ? domain.exactInternalEnergy() : SignedDyadic.ZERO;
+			double mechanicalBefore = granularMechanicalEnergy(domain, 9.81F);
+			var merge = state.inventory.compactActive(index -> domain.cellIndex(1, 1, 1),
+					(first, second, left, right, replacement) -> true, 2, 4, 9.81F);
+			SignedDyadic expectedHeat = SignedDyadic.of(1.5 * mmm.units.Mass.kilograms(mass));
+			require(merge.merges() == 1 && merge.physicalHeat().equals(expectedHeat) && merge.mechanicalRounding().signum() != 0
+					&& Math.abs(mechanicalBefore - granularMechanicalEnergy(domain, 9.81F)
+							- merge.physicalHeat().toDouble() - merge.mechanicalRounding().toDouble()) < 1e-12,
+					"Active compaction lost relative-slip heat or float kinetic/potential rounding");
+			if (thermal) require(domain.thermalAudit().mechanicalWork().equals(expectedHeat)
+					&& domain.exactInternalEnergy().subtract(before).equals(expectedHeat.add(domain.thermalAudit().roundoffResidual()))
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+					"Active compaction did not transfer its explicit heat to U and its audit");
+			System.out.printf("  granular compaction thermal=%s heat=%.12g J mechanicalRounding=%.12g J%n",
+					thermal, merge.physicalHeat().toDouble(), merge.mechanicalRounding().toDouble());
+		}
+		for (boolean relaxation : new boolean[]{false, true}) {
+			var domain = new FluidDomain(2, 4, 2, new FluidSolverConfig(.5F, 1000, 9.81F, .05F,
+					100, 1e-5F, .45F, .002F, 0), 64);
+			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
+			var state = domain.granularState;
+			if (relaxation) require(state.deposits.tryAdd(domain.cellIndex(0, 2, 0),
+					new mmm.granular.GranularDepositStore.SolidPortion(sand, 0,
+							SolidVolume.SVQ_PER_CELL / 4, mmm.units.Mass.fromKilograms(2600.0 / 32)), SolidVolume.SVQ_PER_CELL),
+					"Mechanical bed-heat fixture did not fit its source");
+			else state.parcels.add(new mmm.granular.GranularParcelStore.Parcel(.25F, .1F, .25F,
+					.03F, .04F, .12F, svq, mass, sand, 0,
+					mmm.granular.GranularDepositDynamics.SETTLE_CONTACT_STEPS,
+					mmm.granular.GranularParcelStore.FLAG_SUPPORTED));
+			domain.bindThermal(granularThermalRegistry(liquids, granular), liquids, 300);
+			SignedDyadic initialU = domain.exactInternalEnergy();
+			double initialMechanical = granularMechanicalEnergy(domain, 9.81F);
+			var dynamics = new mmm.granular.GranularDepositDynamics(granular, state.parcels, state.deposits,
+					state.inventory, 2, 4, 2, .5F);
+			if (relaxation) dynamics.disturbCell(domain.cellIndex(0, 2, 0));
+			var environment = new mmm.granular.GranularDepositDynamics.Environment() {
+				private mmm.granular.GranularInventory.EnergyPlan energy;
+				@Override public long geometricOpenSvq(int cell) { return SolidVolume.SVQ_PER_CELL; }
+				@Override public double gravity() { return 9.81F; }
+				@Override public boolean horizontalPathOpen(int from, int dx, int dz) { return true; }
+				@Override public double shields(int cell, mmm.granular.ParticulateMaterial material) { return 0; }
+				@Override public void requireThermalRelaxation(int from, int to, int material, int composition,
+						long moved, long total, SignedDyadic heat) {
+					energy = domain.thermalState.planDepositMove(new GranularEnergyColumn.DepositKey(from, material, composition),
+							new GranularEnergyColumn.DepositKey(to, material, composition), moved, total, heat);
+					energy.requireCurrent();
+				}
+				@Override public void commitThermalRelaxation(int from, int to, int material, int composition,
+						long moved, long total, SignedDyadic heat) { energy.commit(); energy = null; }
+			};
+			var stats = dynamics.step(environment, .05F);
+			double lostMechanical = initialMechanical - granularMechanicalEnergy(domain, 9.81F);
+			require((relaxation ? stats.relaxedMoves() > 0 : stats.settledParcels() == 1)
+					&& stats.physicalHeat().signum() > 0
+					&& Math.abs(lostMechanical - stats.physicalHeat().toDouble()) < 1e-10 * Math.max(1, initialMechanical)
+					&& domain.thermalAudit().mechanicalWork().equals(stats.physicalHeat())
+					&& domain.exactInternalEnergy().subtract(initialU).equals(stats.physicalHeat().add(domain.thermalAudit().roundoffResidual()))
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+					&& state.inventory.totalMassUnits() == (relaxation ? mmm.units.Mass.fromKilograms(2600.0 / 32) : mass),
+					"Granular " + (relaxation ? "relaxation" : "settlement") + " failed its independent KE/GPE/U balance: heat="
+							+ stats.physicalHeat() + " mechanicalLoss=" + lostMechanical + " stats=" + stats);
+			System.out.printf("  granular %s heat=%.12g J independentMechanicalLoss=%.12g J Uroundoff=%.12g J%n",
+					relaxation ? "relaxation" : "settlement", stats.physicalHeat().toDouble(), lostMechanical,
+					domain.thermalAudit().roundoffResidual().toDouble());
+			var restored = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0,
+					domain.captureAuthoritativeState(), List.of(), false, 0)).claimPreparedCpuDomain();
+			require(restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),
+					"Granular mechanical heat did not survive restore and the next normal step");
+		}
+	}
+
+	private static double granularMechanicalEnergy(FluidDomain domain, double gravity) {
+		double result = 0;
+		for (int i = 0; i < domain.granularState.parcels.count(); i++) {
+			var parcel = domain.granularState.parcels.parcel(i);
+			result += parcel.mass() * (gravity * parcel.y() + .5 * ((double) parcel.velocityX() * parcel.velocityX()
+					+ (double) parcel.velocityY() * parcel.velocityY() + (double) parcel.velocityZ() * parcel.velocityZ()));
+		}
+		double[] bed = {0};
+		domain.granularState.deposits.forEachGroup((cell, porosity, material, composition, volume, mass) -> {
+			double center = (cell / domain.sizeX % domain.sizeY
+					+ .5 * domain.granularState.deposits.cellBulkVolumeSvq(cell) / SolidVolume.SVQ_PER_CELL) * domain.config().cellSize();
+			bed[0] += mmm.units.Mass.kilograms(mass) * gravity * center;
+		});
+		return result + bed[0];
+	}
+
 	private static void granularInsertionPreflightsExternalSource() {
 		try {
 			var production = mmm.simulation.FullCapabilityTestFixture.load();
@@ -362,7 +471,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 								granular.registry, granular.parcels, granular.deposits, granular.compositions))
 						&& Arrays.equals(energy, domain.thermalState.granularColumn().copyActiveEnergy())
 						&& domain.thermalState.matchesThermalRevision(revision) && domain.thermalAudit().equals(audit)
-						&& domain.particles.count() == initialLiquidCount && domain.carrierMutationRevision() == carrierRevision
+						&& domain.liquidCells.physicalSize() == initialLiquidCount && domain.carrierMutationRevision() == carrierRevision
 						&& domain.chemicalParcels.record(0).equals(liquid) && domain.chemicalParcels.externalSource().equals(liquidSource)
 						&& domain.chemicalParcels.escapedSink().equals(liquidSink)
 						&& domain.exactInternalEnergy().equals(actual),
@@ -458,7 +567,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		double invalid = function.internalEnergyAtTemperature(thermal, mass, species, 1);
 		var badActive = snapshot.copyActiveParcelEnergy(); var badDeposit = snapshot.copyDepositEnergy();
 		if (deposited) badDeposit[0] = invalid; else badActive[0] = invalid;
-		var bad = new FlipThermalParticleState(4, 4, 4, .5F, source.particles.count(), registry.fingerprint(), snapshot.insertionTemperatureK(),
+		var bad = new FlipThermalParticleState(4, 4, 4, .5F, source.liquidCells.physicalSize(), registry.fingerprint(), snapshot.insertionTemperatureK(),
 				snapshot.copyInternalEnergy(), badActive, badDeposit, snapshot.coherentGroups(), snapshot.copyGasNodeEnergy(),
 				ThermalAuditLedger.initialized(SignedDyadic.sum(snapshot.copyInternalEnergy()).add(SignedDyadic.sum(badActive))
 						.add(SignedDyadic.sum(badDeposit)).add(SignedDyadic.sum(snapshot.copyGasNodeEnergy()))));
@@ -492,8 +601,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				&& Arrays.equals(snapshot.copyDepositEnergy(), restored.copyDepositEnergy())
 				&& source.exactInternalEnergy().equals(target.exactInternalEnergy()) && source.thermalAudit().equals(target.thermalAudit())
 				&& sameTemperatures
-				&& function.stateForInternalEnergy(thermal, mass, species,
-						deposited ? restored.copyDepositEnergy()[0] : restored.copyActiveParcelEnergy()[0]).temperatureK() == 400
+				&& close(function.stateForInternalEnergy(thermal, mass, species,
+						deposited ? restored.copyDepositEnergy()[0] : restored.copyActiveParcelEnergy()[0]).temperatureK(), 400)
 				&& target.exactInternalEnergy().equals(target.thermalAudit().expectedInventory()),
 				"thermal restore modeled placeholder grain U instead of preserving the valid snapshot and its temperatures"
 						+ ": sourceFirstT=" + source.thermalState.temperature(0, sourceContext)
@@ -780,7 +889,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		}
 		domain.bindThermal(new ThermalRegistry(List.of(water)), liquids, 293.15);
 		domain.setThermalTemperatureInCell(2, 1, 2, 333.15);
-		for (int step = 0; step < 4; step++) domain.step();
+		for (int step = 0; step < 4; step++) domain = advance(domain);
 		FluidDomain.VelocitySample plume = domain.sampleVelocity(1.25F, 0.75F, 1.25F);
 		FluidDomain.VelocitySample far = domain.sampleVelocity(1.75F, 0.75F, 1.75F);
 		require(plume.y() > far.y() + 1.0E-5F && domain.maximumParticleSpeed() > 1.0E-4F,
@@ -940,6 +1049,11 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				ThermalMaterialDefinition.CarrierKind.LIQUID, liquid.id(), 300.0, 0.0, 0.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0)));
 		ThermalCarrierContext markers = new ThermalCarrierContext() {
+			private final double[] liquidEnergy = new double[3];
+			private long liquidRevision;
+			@Override public double liquidInternalEnergy(int ordinal) { return liquidEnergy[ordinal]; }
+			@Override public void setLiquidInternalEnergy(int ordinal, double energy) { liquidEnergy[ordinal] = energy; liquidRevision++; }
+			@Override public long liquidInventoryRevision() { return liquidRevision; }
 			@Override public int markerCount() { return 3; }
 			@Override public int cell(int marker) { return marker == 0 ? 0 : 1; }
 			@Override public int fluidMaterialHandle(int marker) { return 0; }
@@ -1010,6 +1124,11 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				ThermalMaterialDefinition.CarrierKind.LIQUID, liquid.id(), 300.0, 0.0, 0.125,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0)));
 		ThermalCarrierContext markers = new ThermalCarrierContext() {
+			private final double[] liquidEnergy = new double[1];
+			private long liquidRevision;
+			@Override public double liquidInternalEnergy(int ordinal) { return liquidEnergy[ordinal]; }
+			@Override public void setLiquidInternalEnergy(int ordinal, double energy) { liquidEnergy[ordinal] = energy; liquidRevision++; }
+			@Override public long liquidInventoryRevision() { return liquidRevision; }
 			@Override public int markerCount() { return 1; }
 			@Override public int cell(int marker) { return 0; }
 			@Override public int fluidMaterialHandle(int marker) { return 0; }
@@ -1132,60 +1251,10 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				"crowded hot cell failed exact energy assignment");
 	}
 
-	static void reseedingMovesEnergyWithMarkerTruth() {
-		int capacity = 64, count = 17;
-		boolean[] solid = new boolean[4 * 4 * 4];
-		float[] x = new float[capacity], y = new float[capacity], z = new float[capacity];
-		float[] vx = new float[capacity], vy = new float[capacity], vz = new float[capacity];
-		float[] volume = new float[capacity];
-		double[] mass = new double[capacity], energy = new double[capacity];
-		int[] material = new int[capacity], phase = new int[capacity];
-		for (int marker = 0; marker < 16; marker++) {
-			x[marker] = 1.1F + (marker & 3) * 0.02F;
-			y[marker] = 1.1F + (marker >> 2 & 3) * 0.02F;
-			z[marker] = 1.1F;
-			volume[marker] = 1.0F / 64.0F;
-			mass[marker] = volume[marker] * 1_000.0;
-			energy[marker] = mass[marker] * (7.0 + 0.5 * (y[marker] - 1.0));
-		}
-		x[16] = 2.25F; y[16] = 1.25F; z[16] = 1.25F;
-		volume[16] = 0.5F; mass[16] = 500.0; energy[16] = mass[16] * 7.125;
-		SignedDyadic before = SignedDyadic.sum(java.util.Arrays.copyOf(energy, count));
-		FlipParticleReseeder.ThermalAdapter adapter = new FlipParticleReseeder.ThermalAdapter() {
-			@Override public double totalEnergy(int particleCount) {
-				double total = 0.0;
-				for (int marker = 0; marker < particleCount; marker++) total += energy[marker];
-				return total;
-			}
-			@Override public void merge(int target, int source) { energy[target] += energy[source]; }
-			@Override public FlipParticleReseeder.ThermalSplit beforeSplit(int source) {
-				return new FlipParticleReseeder.ThermalSplit(energy[source], energy[source] / mass[source]);
-			}
-			@Override public void afterSplit(FlipParticleReseeder.ThermalSplit split, int source, int destination) {
-				energy[source] = mass[source] * split.temperatureK();
-				energy[destination] = split.parentEnergy() - energy[source];
-			}
-			@Override public void move(int source, int destination) { energy[destination] = energy[source]; }
-		};
-		FlipParticleReseeder.Result result = new FlipParticleReseeder(4, 4, 4, 1.0F, capacity).reseed(
-				solid, x, y, z, vx, vy, vz, volume, java.util.Arrays.stream(mass).mapToLong(m -> mmm.units.Mass.fromKilograms(m)).toArray(), material, phase, null, adapter, count, false,
-				(candidateX, candidateY, candidateZ) -> true);
-		SignedDyadic after = SignedDyadic.sum(java.util.Arrays.copyOf(energy, result.particleCount()));
-		require(result.merged() > 0 && result.split() > 0 && before.equals(after),
-				"thermal reseeding did not move energy with merged/split marker truth");
-		double squaredError = 0, totalMass = 0, maximum = 0;
-		for (int p = 0; p < result.particleCount(); p++) {
-			double temperature = energy[p] / mass[p], error = temperature - (7 + 0.5 * (y[p] - 1));
-			require(temperature >= 7.05 - 1e-7 && temperature <= 7.125 + 1e-7,
-					"homogeneous reseeding exceeded the parent temperature range");
-			if (x[p] < 2) require(Math.abs(error) < 1e-6, "mass-centred merge lost an affine thermal field");
-			maximum = Math.max(maximum, Math.abs(error));
-			squaredError += mass[p] * error * error; totalMass += mass[p];
-		}
-		// Splitting copies parent temperature to new quadrature positions within the same cell.
-		require(maximum <= 0.5, "thermal split error exceeded gradient times cell size");
-		System.out.printf("  thermal reseed affine field: mass-weighted RMS=%g K max=%g K, |grad T|*h=0.5 K%n",
-				Math.sqrt(squaredError / totalMass), maximum);
+
+	private static FluidDomain advance(FluidDomain domain) {
+		return new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+				0, domain.captureAuthoritativeState(), List.of(), false, 0)).claimPreparedCpuDomain();
 	}
 
 }

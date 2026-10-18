@@ -7,7 +7,7 @@ import mmm.thermal.ThermalContactValidation;
 public final class M9ThermalValidation {
 	private M9ThermalValidation() { }
 
-	public static void main(String[] args) {
+	public static void main(String[] args) throws Exception {
 		if (args.length == 1 && args[0].equals("--gas-topology")) {
 			ThermalGasValidationScenarios.persistenceBarrierSynchronizesGasTopology();
 			ThermalGasValidationScenarios.gasRuntimeTransfersEnergyAndWork();
@@ -72,7 +72,7 @@ public final class M9ThermalValidation {
 		ThermalTransportValidationScenarios.productionFixedBoundaryFieldAuditsExchange();
 		ThermalTransportValidationScenarios.fixedBoundaryAuditsCaloricContinuation();
 		ThermalTransportValidationScenarios.crowdedCellEnergyAssignmentPreservesEquilibrium();
-		ThermalTransportValidationScenarios.reseedingMovesEnergyWithMarkerTruth();
+		LiquidCellInventoryValidation.main(new String[0]);
 		System.out.println("M9 thermal validation passed");
 	}
 }

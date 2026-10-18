@@ -1,158 +1,40 @@
 package mmm.model.region;
 
+import mmm.inventory.LiquidCellInventory;
+import mmm.units.SignedDyadic;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
-/** One complete Minecraft-aligned solver slice plus the markers owned by that slice. */
-public record RegionSectionState(
-		RegionStateLayout layout,
-		UUID regionId,
-		String dimensionId,
-		long checkpointGeneration,
-		int sectionX,
-		int sectionY,
-		int sectionZ,
-		int localStartX,
-		int localStartY,
-		int localStartZ,
-		int sizeX,
-		int sizeY,
-		int sizeZ,
-		int[] markerOrdinals,
-		float[] positionVolume,
-		float[] velocities,
-		long[] markerMassUnits,
-		int[] materialPaletteIndex,
-		byte[] solidMask,
-		List<RegionExtension> extensions,
-		int[] chemicalMixtureIndex,
-		byte[] indicator,
-		long[] chemicalSpeciesTotals,
-		long chemicalResidualLedgerUnits,
-		long checksum
-) {
+/** One Minecraft-aligned collision slice, its liquid stocks and its uniquely owned MAC faces. */
+public record RegionSectionState(RegionStateLayout layout, UUID regionId, String dimensionId, long checkpointGeneration,
+		int sectionX,int sectionY,int sectionZ,int localStartX,int localStartY,int localStartZ,int sizeX,int sizeY,int sizeZ,
+		List<LiquidCellInventory.Stock> liquidStocks,List<FaceMomentum> faceMomentum,byte[] solidMask,List<RegionExtension> extensions,long checksum) {
+	public record FaceMomentum(int axis,int face,double kilogramMetersPerSecond) implements Comparable<FaceMomentum> {
+		public FaceMomentum {
+			if (axis < 0 || axis > 2 || face < 0 || !Double.isFinite(kilogramMetersPerSecond)) throw new IllegalArgumentException("Invalid persisted MAC face");
+		}
+		public int compareTo(FaceMomentum other) { int order = Integer.compare(axis,other.axis); return order == 0 ? Integer.compare(face,other.face) : order; }
+	}
 	public RegionSectionState {
-		Objects.requireNonNull(layout, "layout");
-		Objects.requireNonNull(regionId, "regionId");
-		Objects.requireNonNull(dimensionId, "dimensionId");
-		Objects.requireNonNull(markerOrdinals, "markerOrdinals");
-		Objects.requireNonNull(positionVolume, "positionVolume");
-		Objects.requireNonNull(velocities, "velocities");
-		Objects.requireNonNull(markerMassUnits, "markerMassUnits");
-		Objects.requireNonNull(materialPaletteIndex, "materialPaletteIndex");
-		Objects.requireNonNull(solidMask, "solidMask");
-		Objects.requireNonNull(chemicalMixtureIndex, "chemicalMixtureIndex");
-		Objects.requireNonNull(indicator, "indicator");
-		Objects.requireNonNull(chemicalSpeciesTotals, "chemicalSpeciesTotals");
-		extensions = List.copyOf(extensions);
-		if (checkpointGeneration <= 0L || sizeX <= 0 || sizeY <= 0 || sizeZ <= 0) {
-			throw new IllegalArgumentException("Invalid section identity or dimensions");
-		}
-		if (positionVolume.length != Math.multiplyExact(markerOrdinals.length, 4)
-				|| velocities.length != Math.multiplyExact(markerOrdinals.length, 3)) {
-			throw new IllegalArgumentException("Section marker arrays disagree");
-		}
-		if (solidMask.length != Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ)) {
-			throw new IllegalArgumentException("Section solid slice has the wrong size");
-		}
-		if (markerMassUnits.length != markerOrdinals.length) throw new IllegalArgumentException("Section mass column is incomplete");
-		for (long value : markerMassUnits) if (value <= 0) throw new IllegalArgumentException("Non-positive section mass");
-		if (!layout.hasMaterials()) {
-			if (materialPaletteIndex.length != 0
-					|| chemicalMixtureIndex.length != 0 || indicator.length != 0
-					|| chemicalSpeciesTotals.length != 0 || chemicalResidualLedgerUnits != 0L) {
-				throw new IllegalArgumentException("Pure region state cannot contain material state");
-			}
-		} else {
-			if (markerMassUnits.length != markerOrdinals.length || materialPaletteIndex.length != markerOrdinals.length) {
-				throw new IllegalArgumentException("Section material arrays disagree");
-			}
-			for (int marker = 0; marker < markerMassUnits.length; marker++) {
-				if (!(markerMassUnits[marker] > 0L)
-						|| materialPaletteIndex[marker] < 0) {
-					throw new IllegalArgumentException("Invalid section marker material state");
-				}
-			}
-			boolean chemicalState = layout.requiresChemistry()
-					|| layout.permitsOptionalChemistry() && chemicalSpeciesTotals.length > 0;
-			if (!chemicalState) {
-				if (chemicalMixtureIndex.length != 0 || indicator.length != 0
-						|| chemicalSpeciesTotals.length != 0 || chemicalResidualLedgerUnits != 0L) {
-					throw new IllegalArgumentException("Non-chemical region state cannot contain chemical state");
-				}
-			} else {
-				if (chemicalMixtureIndex.length != markerOrdinals.length || indicator.length != markerOrdinals.length
-						|| chemicalSpeciesTotals.length == 0) {
-					throw new IllegalArgumentException("Section chemical arrays disagree");
-				}
-				for (int marker = 0; marker < markerOrdinals.length; marker++) {
-					if (chemicalMixtureIndex[marker] < 0 || (indicator[marker] & ~1) != 0) {
-						throw new IllegalArgumentException("Invalid section chemical marker state");
-					}
-				}
-			}
-		}
-		markerOrdinals = markerOrdinals.clone();
-		positionVolume = positionVolume.clone();
-		velocities = velocities.clone();
-		markerMassUnits = markerMassUnits.clone();
-		materialPaletteIndex = materialPaletteIndex.clone();
-		chemicalMixtureIndex = chemicalMixtureIndex.clone();
-		indicator = indicator.clone();
-		chemicalSpeciesTotals = chemicalSpeciesTotals.clone();
-		solidMask = solidMask.clone();
+		Objects.requireNonNull(layout); Objects.requireNonNull(regionId); Objects.requireNonNull(dimensionId);
+		if (checkpointGeneration <= 0 || sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || localStartX < 0 || localStartY < 0 || localStartZ < 0
+				|| solidMask.length != Math.multiplyExact(Math.multiplyExact(sizeX,sizeY),sizeZ)) throw new IllegalArgumentException("Invalid section shape");
+		liquidStocks = List.copyOf(liquidStocks); faceMomentum = List.copyOf(faceMomentum); solidMask = solidMask.clone(); extensions = List.copyOf(extensions);
+		LiquidCellInventory.Key previous = null;
+		for (var stock : liquidStocks) { if (previous != null && previous.compareTo(stock.key()) >= 0) throw new IllegalArgumentException("Unsorted or repeated liquid key"); previous = stock.key(); }
+		FaceMomentum previousFace = null;
+		for (var face : faceMomentum) { if (previousFace != null && previousFace.compareTo(face) >= 0) throw new IllegalArgumentException("Unsorted or repeated MAC face"); previousFace = face; }
 	}
-
-	/** Convenience constructor for the pure-water feature layout. */
-	public RegionSectionState(
-			UUID regionId, String dimensionId, long checkpointGeneration, int sectionX, int sectionY, int sectionZ,
-			int localStartX, int localStartY, int localStartZ, int sizeX, int sizeY, int sizeZ,
-			int[] markerOrdinals, float[] positionVolume, float[] velocities, long[] markerMassUnits, byte[] solidMask,
-			List<RegionExtension> extensions, long checksum
-	) {
-		this(RegionStateLayout.PURE, regionId, dimensionId, checkpointGeneration, sectionX, sectionY, sectionZ,
-				localStartX, localStartY, localStartZ, sizeX, sizeY, sizeZ, markerOrdinals, positionVolume, velocities,
-				markerMassUnits, new int[0], solidMask, extensions, new int[0], new byte[0], new long[0], 0L, checksum);
-	}
-
-	/** Convenience constructor for non-chemical feature layouts. */
-	public RegionSectionState(
-			RegionStateLayout layout, UUID regionId, String dimensionId, long checkpointGeneration,
-			int sectionX, int sectionY, int sectionZ, int localStartX, int localStartY, int localStartZ,
-			int sizeX, int sizeY, int sizeZ, int[] markerOrdinals, float[] positionVolume, float[] velocities,
-			long[] markerMassUnits, int[] materialPaletteIndex, byte[] solidMask,
-			List<RegionExtension> extensions, long checksum
-	) {
-		this(layout, regionId, dimensionId, checkpointGeneration, sectionX, sectionY, sectionZ,
-				localStartX, localStartY, localStartZ, sizeX, sizeY, sizeZ, markerOrdinals, positionVolume, velocities,
-				markerMassUnits, materialPaletteIndex, solidMask, extensions, new int[0], new byte[0], new long[0], 0L, checksum);
-	}
-
-	@Override public int[] markerOrdinals() { return markerOrdinals.clone(); }
-	@Override public float[] positionVolume() { return positionVolume.clone(); }
-	@Override public float[] velocities() { return velocities.clone(); }
-	@Override public long[] markerMassUnits() { return markerMassUnits.clone(); }
-	@Override public int[] materialPaletteIndex() { return materialPaletteIndex.clone(); }
-	@Override public int[] chemicalMixtureIndex() { return chemicalMixtureIndex.clone(); }
-	@Override public byte[] indicator() { return indicator.clone(); }
-	@Override public long[] chemicalSpeciesTotals() { return chemicalSpeciesTotals.clone(); }
 	@Override public byte[] solidMask() { return solidMask.clone(); }
-
-	public int markerCount() { return markerOrdinals.length; }
-	public boolean hasChemicalState() {
-		return layout.requiresChemistry() || layout.permitsOptionalChemistry() && chemicalSpeciesTotals.length > 0;
-	}
-
-	public SectionKey key() { return new SectionKey(sectionX, sectionY, sectionZ); }
-
-	public record SectionKey(int x, int y, int z) implements Comparable<SectionKey> {
-		@Override public int compareTo(SectionKey other) {
-			int byX = Integer.compare(x, other.x);
-			if (byX != 0) return byX;
-			int byY = Integer.compare(y, other.y);
-			return byY != 0 ? byY : Integer.compare(z, other.z);
-		}
+	public int stockCount() { return liquidStocks.size(); }
+	/** Existing manifest capacity headers count physical inventory records. */
+	public int markerCount() { return stockCount(); }
+	public SignedDyadic exactVolume() { var total = SignedDyadic.ZERO; for (var stock : liquidStocks) total = total.add(stock.volume()); return total; }
+	public long massUnits() { long total = 0; for (var stock : liquidStocks) total = Math.addExact(total,stock.massUnits()); return total; }
+	public boolean hasChemicalState() { return layout.requiresChemistry() || liquidStocks.stream().anyMatch(stock -> stock.mixture() != null); }
+	public SectionKey key() { return new SectionKey(sectionX,sectionY,sectionZ); }
+	public record SectionKey(int x,int y,int z) implements Comparable<SectionKey> {
+		public int compareTo(SectionKey other) { int order = Integer.compare(x,other.x); if (order == 0) order = Integer.compare(y,other.y); return order == 0 ? Integer.compare(z,other.z) : order; }
 	}
 }
-

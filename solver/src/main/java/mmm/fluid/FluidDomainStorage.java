@@ -1,5 +1,7 @@
 package mmm.fluid;
 
+import mmm.inventory.LiquidCellInventory;
+
 import mmm.thermal.ThermalDomainState;
 import mmm.thermal.ThermalCarrierContext;
 
@@ -30,6 +32,7 @@ abstract class FluidDomainStorage {
 	final DomainGeometry geometry;
 	final MarkerGridIndex markerGrid;
 	final MacVelocityGrid mac;
+	final CellMacStage cellMacStage;
 	final PressureProjectionWorkspace projection;
 	final SurfaceTensionWorkspace tension;
 	final CondensedInventoryClearPlanner clearPlanner;
@@ -43,32 +46,20 @@ abstract class FluidDomainStorage {
 	final PressureProjectionStage pressureStage;
 	final GranularMechanicalStage granularMechanicalStage;
 	final BodyForceStage bodyForceStage;
-	final GridToParticleStage gridToParticleStage;
-	final ParticleAdvectionStage particleAdvectionStage;
 	CellLiquidVolumeTransport cellLiquidVolumeTransport;
-	final ParticleToGridStage particleToGridStage;
 	final MechanicalStepPipeline mechanicalPipeline;
 	final ThermalTransportStage thermalTransportStage;
 	final CondensedPhaseChangeStage condensedPhaseChangeStage;
 	final GasLiquidPhaseChangeStage gasLiquidPhaseChangeStage;
 	final ThermochemistryPipeline thermochemistryPipeline;
 	final GranularTransitionStage granularTransitionStage;
-	final ParticleReseedStage particleReseedStage;
-	final FlipPressurePhaseGeometry pressurePhaseGeometry;
-	final ClosedLiquidVolumeConstraint closedLiquidVolume;
-	final FlipFreeSurfaceGeometry freeSurfaceGeometry;
-	final FlipParticleReseeder particleReseeder;
-	final FlipParticleCollision particleCollision;
-	final FlipVelocityExtrapolator velocityExtrapolator;
+	FlipPressurePhaseGeometry pressurePhaseGeometry;
 	final float[] volume;
 	boolean surfaceTensionActive;
 	boolean liquidPairTensionActive;
 
-	/** Frozen P2G face mass/volume weights; extrapolation reuses the live weight arrays as scratch. */
-
-	final LiquidParticleStore particles;
+	LiquidCellInventory liquidCells;
 	long carrierMutationRevision;
-	final CarrierMutationCoordinator coordinator;
 	FluidMaterialRegistry materialRegistry;
 	/** World material properties (temperature-dependent viscosity and pair tensions); bound independently of granular state. */
 	MaterialRegistry materialDefinitions;
@@ -107,7 +98,6 @@ abstract class FluidDomainStorage {
 	float pressureReference;
 	int lastPressureIterations;
 	float lastPressureResidual;
-	boolean variableDensityActive;
 	ThermalDomainState thermalState;
 	final ThermalCarrierContext thermalMarkers;
 	/** Runtime world-derived fixed-reservoir temperatures; NaN is the canonical adiabatic face. */
@@ -129,19 +119,15 @@ abstract class FluidDomainStorage {
 		this.maximumParticleCount = maximumParticleCount;
 		FluidDomain domain = (FluidDomain) this;
 		this.gasBoundary = new GasPressureBoundary(domain);
-		this.particles = new LiquidParticleStore(maximumParticleCount, unitScale);
+		this.liquidCells = new LiquidCellInventory(cellCount, null);
 		int initialParticleCapacity = Math.min(16_384, maximumParticleCount);
 		this.geometry = new DomainGeometry(sizeX, sizeY, sizeZ, cellCount);
 		this.carrierPropertiesWorkspace = new LiquidCarrierProperties(cellCount);
 		this.markerGrid = new MarkerGridIndex(cellCount, initialParticleCapacity);
 		this.pressurePhaseGeometry = new FlipPressurePhaseGeometry(sizeX, sizeY, sizeZ);
-		this.closedLiquidVolume = new ClosedLiquidVolumeConstraint(sizeX, sizeY, sizeZ, geometry.cutCells);
-		this.freeSurfaceGeometry = new FlipFreeSurfaceGeometry(sizeX, sizeY, sizeZ);
-		this.particleReseeder = new FlipParticleReseeder(sizeX, sizeY, sizeZ, config.cellSize(), maximumParticleCount);
-		this.particleCollision = new FlipParticleCollision(sizeX, sizeY, sizeZ, config.cellSize(), geometry.cutCells);
-		this.velocityExtrapolator = new FlipVelocityExtrapolator(sizeX, sizeY, sizeZ, geometry.cutCells);
 		this.volume = new float[cellCount];
 		this.mac = new MacVelocityGrid(sizeX, sizeY, sizeZ);
+		this.cellMacStage = new CellMacStage(domain);
 		this.projection = new PressureProjectionWorkspace(cellCount);
 		this.tension = new SurfaceTensionWorkspace(cellCount);
 		this.pendingPhaseVolume = new PendingPhaseVolumeWork(cellCount);
@@ -149,7 +135,6 @@ abstract class FluidDomainStorage {
 		this.metrics = new DomainMetrics(domain);
 		this.cellInventory = new CellInventoryReader(domain);
 		this.carriers = new CarrierInventoryReader(domain);
-		this.coordinator = new CarrierMutationCoordinator(domain);
 		this.transferPlanner = new MaterialTransferPlanner(domain);
 		this.clearPlanner = new CondensedInventoryClearPlanner(domain);
 		this.granularTransferPlanner = new GranularTransferPlanner(domain);
@@ -163,9 +148,6 @@ abstract class FluidDomainStorage {
 		this.pressureStage = stages.pressure();
 		this.granularMechanicalStage = stages.granular();
 		this.bodyForceStage = stages.bodyForce();
-		this.gridToParticleStage = stages.gridToParticle();
-		this.particleAdvectionStage = stages.advection();
-		this.particleToGridStage = stages.particleToGrid();
 		this.mechanicalPipeline = stages.pipeline();
 		ThermochemistryStageAssembly.Stages thermalStages = ThermochemistryStageAssembly.create(domain);
 		this.thermalTransportStage = thermalStages.transport();
@@ -174,6 +156,5 @@ abstract class FluidDomainStorage {
 		this.thermochemistryPipeline = thermalStages.pipeline();
 		LogicalStepTailAssembly.Stages tailStages = LogicalStepTailAssembly.create(domain);
 		this.granularTransitionStage = tailStages.granularTransition();
-		this.particleReseedStage = tailStages.reseed();
 	}
 }

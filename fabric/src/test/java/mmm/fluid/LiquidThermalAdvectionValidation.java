@@ -1,405 +1,164 @@
 package mmm.fluid;
 
-import mmm.chemistry.BuiltinChemicalDefinitions;
-import mmm.chemistry.ChemicalLimits;
-import mmm.chemistry.ChemicalMixtureRecord;
-import mmm.chemistry.ChemicalRegistry;
-import mmm.chemistry.ExactRational;
-import mmm.thermal.ThermalCarrierContext;
+import mmm.inventory.LiquidCellInventory;
+
 import mmm.thermal.ThermalCellGrid;
-import mmm.thermal.ThermalDomainState;
 import mmm.thermal.ThermalMaterialDefinition;
 import mmm.thermal.ThermalRegistry;
-import mmm.thermal.ThermalSpeciesOffset;
 import mmm.thermal.ThermalTransport;
 import mmm.units.SignedDyadic;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 
-/** Continuous read-only heat observations and the zero-conductivity Lagrangian transport limit. */
+/** Cell temperature advection, finite conduction and exact owner-energy publication. */
 final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
-	public static void main(String[] args) {
-		crossCellTensorTemperatureFrame();
-		subcellAdvection();
-		boundedAdvection();
-		caloricAndSpeciesObservation();
-		insulatingCellsIgnoreUnrelatedFlux();
-		geometryRestrictsObservation();
-		conductingSpikeRemainsMonotone();
+	public static void main(String[] args) throws Exception {
+		integerSpeciesCarriesReferenceEnergy();
+		if(args.length==1&&args[0].equals("--reference")){System.out.println("Liquid integer reference-energy transport passed");return;}
+		bulkReplacementPublishesThermalInventory();
+		advectedTemperatureRemainsBounded();
+		zeroFluxRetainsCaloricReference();
 		finiteConductivityLimit();
-		particleDiffusionConverges();
+		disconnectedSupportsInsulate();
+		cellDiffusionConverges();
 		conductingLinearWallProfileIsStationary();
-	}
-
-	/** Uniform advection carries one global tensor temperature through unequal-mass source shares. */
-	static void crossCellTensorTemperatureFrame() {
-		unchangedNeighborKeepsThermalRange();
-		if (!CellLiquidVolumeTransport.enabled()) return;
-		for (boolean xyz : new boolean[] {false, true}) for (double densityRatio : new double[] {1, 3}) {
-			var domain = new FluidDomain(8, 8, 8,
-					new FluidSolverConfig(0.5F, 1000, 0, 0.05F, 100, 1e-7F, 0.4F, 0.002F, 0), 8192);
-			for (int z = 1; z <= 5; z++) for (int y = 1; y <= 5; y++) for (int x = 1; x <= 5; x++) domain.setVolume(x, y, z, 1);
-			var caloric = new ThermalMaterialDefinition("test:thermal/frame", ThermalMaterialDefinition.CarrierKind.LIQUID,
-					"mmm:water", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 600, 4000)));
-			domain.bindThermal(new ThermalRegistry(List.of(caloric)), new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)), 300);
-			double minimum = Double.POSITIVE_INFINITY, maximum = Double.NEGATIVE_INFINITY;
-			for (int p = 0; p < domain.particleCount(); p++) {
-				if (domain.particleCellIndex(p) % domain.sizeX == 2) domain.particles.setMassUnits(p, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(domain.particles.mass(p) * densityRatio));
-				domain.particles.setVelocityX(p, 0.125F); domain.particles.setVelocityY(p, 0.0625F); domain.particles.setVelocityZ(p, 0.09375F);
-				double temperature = tensorTemperature(xyz, domain.particles.positionX(p), domain.particles.positionY(p), domain.particles.positionZ(p));
-				minimum = Math.min(minimum, temperature); maximum = Math.max(maximum, temperature);
-				domain.thermalState.resetMarkerTemperature(p, temperature,
-						domain.thermalMarkerContext(), domain.exactInternalEnergy());
-			}
-			domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
-			Arrays.fill(domain.mac.velocityX, 0.125F); Arrays.fill(domain.mac.velocityY, 0.0625F); Arrays.fill(domain.mac.velocityZ, 0.09375F);
-			var flux = new ConservativeLiquidFlux(domain.sizeX, domain.sizeY, domain.sizeZ); flux.geometry(new LiquidFluxGeometry(domain));
-			for (int f = 0; f < flux.velocity.length; f++) flux.velocity[f] = flux.axis[f] == 0 ? 0.125 : flux.axis[f] == 1 ? 0.0625 : 0.09375;
-			float dt = 0.125F;
-			flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, dt / domain.config().cellSize(), domain.markerGrid.exactCellVolumeInventory);
-			var plan = new CellCarrierRemapPlan(domain, flux, dt, new BallisticLiquidRemap(domain.cellCount));
-			// Construction runs the common exact-volume, material-mass, momentum and marker-budget audits.
-			SignedDyadic energy = SignedDyadic.ZERO;
-			for (var marker : plan.markers) {
-				energy = energy.add(SignedDyadic.of(marker.energy()));
-				double temperature = domain.thermalState.liquid().caloricInventory(marker.material(), domain.unitScale.normalizedMass(marker.massUnits()), marker.mixture(), null).temperature(marker.energy());
-				require(temperature >= minimum - 8 * Math.ulp(minimum) && temperature <= maximum + 8 * Math.ulp(maximum),
-						"Tensor temperature remap introduced a new extremum");
-			}
-			require(energy.equals(domain.exactInternalEnergy()), "Tensor temperature remap changed its exact heat inventory");
-			// x=1 isolates retained liquid; x=3 mixes the x=2 donor with receiver liquid.
-			for (int x : new int[] {1, 3}) {
-				int cell = domain.cellIndex(x, 3, 3), count = 0;
-				for (var marker : plan.markers) if (marker.cell() == cell) count++;
-				require(count == 8, "Tensor temperature fixture lost its resolved integration rule");
-				double[][] positions = new double[3][count], values = new double[2][count]; double[] weights = new double[count]; int p = 0;
-				for (var marker : plan.markers) if (marker.cell() == cell) {
-					for (int a = 0; a < 3; a++) positions[a][p] = marker.offset(a);
-					values[0][p] = domain.thermalState.liquid().caloricInventory(marker.material(), domain.unitScale.normalizedMass(marker.massUnits()), marker.mixture(), null).temperature(marker.energy());
-					values[1][p] = tensorTemperature(xyz, (x + 0.5 + marker.offsetX()) * 0.5 - dt * 0.125,
-							(3.5 + marker.offsetY()) * 0.5 - dt * 0.0625, (3.5 + marker.offsetZ()) * 0.5 - dt * 0.09375);
-					weights[p++] = domain.unitScale.normalizedMass(marker.massUnits());
-				}
-				var field = CellPolynomialField.fit(positions, weights, values, count);
-				var scalar = CellPolynomialField.fit(positions, weights, new double[][]{values[0]}, count)[0];
-				for (int c = 0; c < 8; c++) require(Double.doubleToRawLongBits(scalar[c]) == Double.doubleToRawLongBits(field[0][c]),
-						"Scalar temperature fit differs from the joint field fit");
-				// The energy ledger supplies the mean; analytic translation determines every spatial coefficient.
-				for (int c = 1; c < 8; c++) require(close(field[0][c], field[1][c]),
-						"Thermal remap mixed incompatible reference frames: XYZ=" + xyz + " densityRatio=" + densityRatio + " cellX=" + x
-								+ " coefficient=" + c + " actual=" + field[0][c] + " expected=" + field[1][c]);
-			}
-		}
-	}
-
-	/** A retained same-material neighbor still supplies the temperature range for a nearby transfer. */
-	static void unchangedNeighborKeepsThermalRange() {
-		for (double neighborTemperature : new double[]{325, 400}) {
-			var domain = new FluidDomain(4, 3, 3,
-					new FluidSolverConfig(.5F, 1000, 0, .125F, 100, 1e-5F, .45F, .002F, 0), 128);
-			domain.setVolume(0, 1, 1, 1); domain.setVolume(1, 1, 1, 1);
-			var caloric = new ThermalMaterialDefinition("test:thermal/neighbor", ThermalMaterialDefinition.CarrierKind.LIQUID,
-					"mmm:water", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 600, 4000)));
-			domain.bindThermal(new ThermalRegistry(List.of(caloric)), new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)), 300);
-			int neighbor = domain.cellIndex(0, 1, 1), donor = domain.cellIndex(1, 1, 1), receiver = domain.cellIndex(2, 1, 1);
-			for (int p = 0; p < domain.particleCount(); p++) {
-				boolean retained = domain.particleCellIndex(p) == neighbor;
-				domain.particles.setVelocityX(p, retained ? 0 : .5F);
-				double temperature = retained ? neighborTemperature : 300 + 100 * (domain.particles.positionX(p) / .5 - 1.5);
-				domain.thermalState.resetMarkerTemperature(p, temperature, domain.thermalMarkerContext(), domain.exactInternalEnergy());
-			}
-			domain.rebuildGridFromParticles(); Arrays.fill(domain.gridToParticleStage.advectionCells(), true);
-			var flux = new ConservativeLiquidFlux(4, 3, 3); flux.geometry(new LiquidFluxGeometry(domain));
-			for (int face = 0; face < flux.physicalFaceCount; face++) if (flux.left[face] == donor && flux.right[face] == receiver) flux.velocity[face] = .5;
-			flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, .25, domain.markerGrid.exactCellVolumeInventory);
-			var remap = new CellCarrierRemapPlan(domain, flux, .125F, new BallisticLiquidRemap(domain.cellCount));
-			var energy = SignedDyadic.ZERO; double receivedEnergy = 0, receivedMass = 0;
-			for (var marker : remap.markers) {
-				energy = energy.add(SignedDyadic.of(marker.energy()));
-				if (marker.cell() == receiver) { receivedEnergy += marker.energy(); receivedMass += domain.unitScale.normalizedMass(marker.massUnits()); }
-				if (marker.cell() == neighbor) require(domain.thermalState.liquid().caloricInventory(marker.material(), domain.unitScale.normalizedMass(marker.massUnits()), null, null)
-						.temperature(marker.energy()) == neighborTemperature, "Unchanged neighbor lost its temperature");
-			}
-			require(energy.equals(domain.exactInternalEnergy()), "Neighbor-limited remap changed exact internal energy");
-			double receivedTemperature = domain.thermalState.liquid().caloricInventory(0, receivedMass, null, null).temperature(receivedEnergy);
-			require(Math.abs(receivedTemperature - Math.min(neighborTemperature, 343.75)) < 1e-9,
-					"Retained neighbor was omitted from the transfer temperature range: neighbor=" + neighborTemperature + " arrival=" + receivedTemperature);
-		}
-	}
-
-	private static double tensorTemperature(boolean xyz, double x, double y, double z) { return 300 + x * z * (xyz ? y : 1); }
-
-	private static void boundedAdvection() {
-		for (boolean segmented : new boolean[] {false, true}) boundedAdvection(segmented);
-	}
-
-	private static void boundedAdvection(boolean segmented) {
-		var domain = pool(8, 8, 2, 0, segmented);
-		if (!CellLiquidVolumeTransport.enabled()) return;
-		double minimum = segmented ? 295 : 1, maximum = segmented ? 305 : 599;
-		for (int p = 0; p < domain.particleCount(); p++)
-			domain.thermalState.resetMarkerTemperature(p, (segmented ? domain.particles.positionY(p) % 0.5 < 0.25 : domain.particles.positionY(p) < 2.125) ? minimum : maximum,
-					domain.thermalMarkerContext(), domain.exactInternalEnergy());
-		double volume = domain.totalVolumeExact(), mass = domain.totalMass();
-		var initialAudit = domain.thermalAudit();
-		for (int step = 0; step < 40; step++) {
-			for (int marker = 0; marker < domain.particleCount(); marker++) {
-				double x = Math.PI * domain.particles.positionX(marker) / (8 * domain.config().cellSize());
-				double y = Math.PI * domain.particles.positionY(marker) / (8 * domain.config().cellSize());
-				domain.particles.setVelocityX(marker, (float) (-0.5 * Math.sin(x) * Math.cos(y)));
-				domain.particles.setVelocityY(marker, (float) (0.5 * Math.cos(x) * Math.sin(y)));
-			}
-			domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
-			domain.particleAdvectionStage.advect(0.05F);
-			double rounding = (step + 1.0) * domain.particleCount() * Math.ulp(599.0);
-			for (int p = 0; p < domain.particleCount(); p++) {
-				double temperature = domain.thermalState.temperature(p, domain.thermalMarkerContext());
-				require(temperature >= minimum - rounding && temperature <= maximum + rounding,
-						"Conservative heat advection introduced a new temperature extremum (segmented=" + segmented + "): " + temperature);
-			}
-			require(domain.totalVolumeExact() == volume && domain.totalMass() == mass
-					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
-					&& initialAudit.externalSource().equals(domain.thermalAudit().externalSource())
-					&& initialAudit.externalSink().equals(domain.thermalAudit().externalSink()), "Bounded heat advection opened an inventory");
-		}
-	}
-
-	static void subcellAdvection() {
-		double coarseError = 0;
-		for (int n : new int[] {8, 16}) {
-			double error = 0, firstDerivative = 0;
-			for (float dt : new float[] {0.001F, 0.002F}) for (double conductivity : new double[] {0, 1e-6}) {
-				var domain = pool(n, n, 2, conductivity);
-				double speed = 0.1, gradient = 2;
-				for (int marker = 0; marker < domain.particleCount(); marker++)
-					domain.thermalState.resetMarkerTemperature(marker, 300 + gradient * domain.particles.positionY(marker),
-							domain.thermalMarkerContext(), domain.exactInternalEnergy());
-				for (int marker = 0; marker < domain.particleCount(); marker++) {
-					double x = Math.PI * domain.particles.positionX(marker) / (n * domain.config().cellSize());
-					double y = Math.PI * domain.particles.positionY(marker) / (n * domain.config().cellSize());
-					domain.particles.setVelocityX(marker, (float) (-speed * Math.sin(x) * Math.cos(y)));
-					domain.particles.setVelocityY(marker, (float) (speed * Math.cos(x) * Math.sin(y)));
-				}
-				domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
-				int cell = domain.cellIndex(n / 4, n / 2 - 1, 0);
-				domain.thermalState.prepareSpatialObservation(domain.thermalMarkerContext());
-				double before = domain.thermalState.spatialTemperatureInCell(cell);
-				var expansion = mmm.thermal.LiquidThermalExpansion.require("mmm:water");
-				double beforeBuoyancy = domain.thermalBuoyancyProperties().relativeBuoyancy(cell);
-				require(close(beforeBuoyancy, expansion.relativeBuoyancy(before)), "mechanical observation lost a linear thermal field");
-				require(close(before, 300 + gradient * (n / 2 - 0.5) * 0.5), "spatial observation lost a linear field");
-				double[] energies = domain.exportThermalParticleState().copyInternalEnergy();
-				var cellVolumes = domain.markerGrid.exactCellVolumeInventory.clone();
-				int[] cells = new int[domain.particleCount()];
-				for (int marker = 0; marker < cells.length; marker++) cells[marker] = domain.particleCellIndex(marker);
-				var audit = domain.thermalAudit(); double volume = domain.totalVolume(), mass = domain.totalMass();
-				domain.particleAdvectionStage.advect(dt);
-				domain.ensureGrid();
-				var transport = domain.stepThermalOnly(dt);
-				domain.thermalState.prepareSpatialObservation(domain.thermalMarkerContext());
-				double derivative = (domain.thermalState.spatialTemperatureInCell(cell) - before) / dt;
-				var properties = domain.thermalBuoyancyProperties();
-				double buoyancyDerivative = (properties.relativeBuoyancy(cell) - beforeBuoyancy)
-						/ expansion.volumetricCoefficientPerK() / dt;
-				require(Math.abs(buoyancyDerivative - derivative) < 1e-8 && Math.abs(properties.density(cell) - 1000) < 16 * Math.ulp(1000.0),
-						"mechanical buoyancy lost subcell advection: thermal=" + derivative + " buoyancy=" + buoyancyDerivative
-								+ " rho=" + properties.density(cell));
-				double expected = -gradient * speed * Math.cos(Math.PI * (n / 4 + 0.5) / n)
-						* Math.sin(Math.PI * (n / 2 - 0.5) / n);
-				error = Math.max(error, relativeError(derivative, expected));
-				double[] currentEnergies = domain.exportThermalParticleState().copyInternalEnergy();
-				require(error < 0.025 && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
-						&& domain.totalVolume() == volume && domain.totalMass() == mass,
-						"thermal advection missed its continuous response or conservation: " + derivative);
-				if (conductivity == 0) {
-					boolean cellTransport = CellLiquidVolumeTransport.enabled();
-					double roundingBound = 0;
-					for (double energy : currentEnergies) roundingBound += Math.ulp(energy);
-					require(transport.maximumAbsoluteTransferJ() == 0
-							&& audit.externalSource().equals(domain.thermalAudit().externalSource())
-							&& audit.externalSink().equals(domain.thermalAudit().externalSink())
-							&& (cellTransport ? Math.abs(SignedDyadic.sum(currentEnergies).subtract(SignedDyadic.sum(energies)).toDouble()) <= roundingBound
-									: Arrays.equals(energies, currentEnergies) && audit.equals(domain.thermalAudit())),
-							"zero-conductivity advection changed heat inventory beyond storage roundoff");
-				}
-				else require(transport.maximumTemperatureChangeK() < 1e-6 && LiquidThermalConduction.contacts(domain) != null,
-						"positive small conductivity lost continuous carrier transport");
-				if (CellLiquidVolumeTransport.enabled()) require(Arrays.equals(cellVolumes, domain.markerGrid.exactCellVolumeInventory),
-						"subcell advection changed full-cell volume inventory");
-				else for (int marker = 0; marker < cells.length; marker++) require(cells[marker] == domain.particleCellIndex(marker),
-						"subcell advection fixture crossed a cell");
-				if (firstDerivative != 0) require(relativeError(derivative, firstDerivative) < 0.002,
-						"subcell thermal response depends on the perturbation time");
-				firstDerivative = derivative;
-				var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
-				restored.ensureGrid(); restored.thermalState.prepareSpatialObservation(restored.thermalMarkerContext());
-				require(Arrays.equals(currentEnergies, restored.exportThermalParticleState().copyInternalEnergy())
-						&& domain.thermalAudit().equals(restored.thermalAudit()) && close(restored.thermalState.spatialTemperatureInCell(cell),
-						domain.thermalState.spatialTemperatureInCell(cell)), "thermal advection handoff lost U or spatial response");
-				System.out.printf("  thermal advection N=%d k=%g dt=%g derivative=%g expected=%g K/s error=%.4f%%%n",
-						n, conductivity, dt, derivative, expected, 100 * relativeError(derivative, expected));
-			}
-			if (n == 8) coarseError = error;
-			else require(error < 0.35 * coarseError, "subcell thermal observation failed spatial convergence");
-		}
-	}
-
-	static void caloricAndSpeciesObservation() {
-		referenceEnergyRemapPreservesSpatialField();
-		observationPreservesTemperatureUnderReferenceOffsets();
+		insulatingCellsIgnoreUnrelatedFlux();
 		referenceGridLifecycleIsAtomic();
-		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
-		var first = new ThermalMaterialDefinition("test:thermal/first", ThermalMaterialDefinition.CarrierKind.LIQUID,
-				"test:first", 300, -10000, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(200, 300, 10),
-				new ThermalMaterialDefinition.CaloricSegment(300, 400, 20)));
-		var second = new ThermalMaterialDefinition("test:thermal/second", ThermalMaterialDefinition.CarrierKind.LIQUID,
-				"test:second", 280, 20000, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(200, 320, 30),
-				new ThermalMaterialDefinition.CaloricSegment(320, 400, 50)));
-		var registry = new ThermalRegistry(List.of(first, second), List.of(
-				new ThermalSpeciesOffset("test:offset/first", BuiltinChemicalDefinitions.H2O, first.id(), ExactRational.of(100000)),
-				new ThermalSpeciesOffset("test:offset/second", BuiltinChemicalDefinitions.H2O, second.id(), ExactRational.of(-200000))),
-				List.of(), chemistry.fingerprint(), "");
-		var mixtures = new ChemicalMixtureRecord[] {
-				ChemicalMixtureRecord.fromStableAmounts(chemistry, Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_MOL), 0L),
-				ChemicalMixtureRecord.fromStableAmounts(chemistry, Map.of(BuiltinChemicalDefinitions.H2O, 2 * ChemicalLimits.QUANTA_PER_MOL), 0L)};
-		var markers = new ThermalCarrierContext() {
-			@Override public int markerCount() { return 2; }
-			@Override public int cell(int marker) { return marker; }
-			@Override public int fluidMaterialHandle(int marker) { return marker; }
-			@Override public double mass(int marker) { return mixtures[marker].massKilograms(chemistry); }
-			@Override public double volume(int marker) { return 1; }
-			@Override public ChemicalMixtureRecord mixture(int marker) { return mixtures[marker]; }
-			@Override public ChemicalRegistry chemicalRegistry() { return chemistry; }
-			@Override public void observationSupport(int marker, SupportConsumer consumer) {
-				consumer.accept(0, marker == 0 ? 0.75 : 0.25); consumer.accept(1, marker == 0 ? 0.25 : 0.75);
+		System.out.println("Cell thermal advection passed: bounded temperature, carried U, finite conduction and recovery");
+	}
+	private static void integerSpeciesCarriesReferenceEnergy() throws Exception {
+		var r=mmm.simulation.FullCapabilityTestFixture.load();
+		var d=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.4F,.002F,0),64);
+		d.sealDomainBoundary();mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(d,r.liquids());
+		mmm.simulation.FullCapabilityTestFixture.bindFull(d,r,293.15,ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		int water=r.liquids().handle("mmm:water");
+		require(d.tryInsertExactVolume(0,0,0,1,0,water,true).transferred(),"Reference-energy source insertion failed");
+		var before=d.liquidCells.snapshot();var volume=d.liquidCells.exactVolume();long mass=d.liquidCells.massUnits();
+		var plan=d.liquidCells.planTransport(List.of(new LiquidCellInventory.FaceFlux(0,0,1,255,255,water,SignedDyadic.of(1,-32))),
+				2,2,new int[8],FluidThermalBinding.liquidEnergyPartitioner(d));
+		require(before.rows().equals(d.liquidCells.snapshot().rows()),"Caloric transport changed committed rows during preparation");
+		for(var stock:plan.future().physicalStocks()){
+			double t=d.thermalState.stateFunction().stateForInternalEnergy(d.thermalState.thermalMaterialHandleForFluid(water),stock.massKilograms(),
+					stock.mixture().stableAmounts(r.chemical()),stock.internalEnergy()).temperatureK();
+			require(Math.abs(t-293.15)<1e-6,"Integer chemical reference energy changed transported temperature: "+t);
+		}
+		plan.commit();d.thermalState.recordRoundoff(plan.energyRoundoff());d.markCellInventoryChanged();
+		require(d.liquidCells.exactVolume().equals(volume)&&d.liquidCells.massUnits()==mass&&d.exactInternalEnergy().equals(d.thermalAudit().expectedInventory()),"Caloric transport changed exact stock or audit");
+		var restored=FluidDomain.restoreAuthoritativeState(d.captureAuthoritativeState());restored.thermalState.preparePhaseScan(restored.thermalMarkerContext());
+		require(restored.liquidCells.snapshot().rows().equals(d.liquidCells.snapshot().rows()),"Caloric transport changed during recovery");
+		var species=mmm.chemistry.ChemicalMixtureRecord.fromStableAmounts(r.chemical(),java.util.Map.of("mmm:h2o",3L),0);
+		var tailMixture=species.withMassResidualUnits(-species.speciesMassUnits(r.chemical()));
+		var tail=new LiquidCellInventory.Stock(new LiquidCellInventory.Key(4,water,255),SignedDyadic.of(1,-60),0,tailMixture,0,false);
+		var energies=LiquidCellInventory.partitionEnergy(tail,new long[]{0,0},new mmm.chemistry.ChemicalMixtureRecord[]{tailMixture,null},FluidThermalBinding.liquidEnergyPartitioner(d));
+		require(energies[0].signum()==0&&energies[1].signum()==0,"Zero-mass chemical tail entered caloric inversion or gained U");
+		var tails=new LiquidCellInventory(8,r.chemical());tails.planAdditions(List.of(tail)).commit();
+		var moved=tails.planTransport(List.of(new LiquidCellInventory.FaceFlux(0,4,5,255,255,water,tail.volume())),2,2,new int[8],FluidThermalBinding.liquidEnergyPartitioner(d));moved.commit();
+		var received=tails.stock(new LiquidCellInventory.Key(5,water,255));
+		require(tails.physicalSize()==0&&received.internalEnergy()==0&&received.mixture().equals(tailMixture)
+				&&tails.exactVolume().equals(tail.volume()),"Geometric chemical tail lost inventory or became an LTE carrier");
+		var physical=d.liquidCells.physicalStockAt(0);var prior=tails.exactInternalEnergy();
+		tails.planAdditions(List.of(new LiquidCellInventory.Stock(received.key(),physical.volume(),physical.massUnits(),physical.mixture(),physical.internalEnergy(),false))).commit();
+		require(tails.physicalSize()==1&&tails.exactInternalEnergy().equals(prior.add(SignedDyadic.of(physical.internalEnergy())))
+				&&tails.stock(received.key()).mixture().totalQuanta()==physical.mixture().totalQuanta()+3,"Tail merge manufactured U or lost integer species");
+	}
+	private static void bulkReplacementPublishesThermalInventory() {
+		var d=pool(3,3,3,0,false,0);
+		for(int z=0;z<3;z++)for(int y=0;y<3;y++)for(int x=0;x<3;x++)d.setThermalTemperatureInCell(x,y,z,305);
+		d.ensureGrid();Arrays.fill(d.mac.velocityX,.25F);d.cellMacStage.publishMomentum();
+		float[] targets=new float[d.cellCount];Arrays.fill(targets,.5F);
+		long revision=d.liquidCells.revision();d.setVolumes(targets);
+		require(d.liquidCells.revision()==revision+1 && d.exactInternalEnergy().equals(d.thermalAudit().expectedInventory()),"Bulk source/sink U did not publish once");
+		for(var stock:d.liquidCells.physicalStocks())require(Math.abs(temperature(d,stock)-300)<1e-9,"Bulk replacement retained old external U");
+		d.ensureGrid();double before=d.thermalAudit().mechanicalWork().toDouble();Arrays.fill(targets,.75F);d.setVolumes(targets);
+		require(d.thermalAudit().mechanicalWork().toDouble()>before && d.exactInternalEnergy().equals(d.thermalAudit().expectedInventory()),"Stationary bulk injection lost MAC mixing heat or gas energy");
+		var restored=FluidDomain.restoreAuthoritativeState(d.captureAuthoritativeState());
+		require(restored.liquidCells.snapshot().rows().equals(d.liquidCells.snapshot().rows()) && restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),"Bulk thermal initialization did not restore");
+	}
+
+	private static void advectedTemperatureRemainsBounded() {
+		for(boolean segmented:new boolean[]{false,true}) {
+			var d=pool(6,3,2,0,segmented,0);
+			for(int z=0;z<2;z++)for(int y=0;y<3;y++)for(int x=0;x<6;x++)d.setThermalTemperatureInCell(x,y,z,x<3?295:305);
+			for(int z=0;z<2;z++)for(int y=0;y<3;y++){d.setVolume(0,y,z,0);d.setVolume(5,y,z,0);}
+			var initialVolume=d.liquidCells.exactVolume();long initialMass=d.liquidCells.massUnits();
+			for(int step=0;step<3;step++) {
+				d.ensureGrid();Arrays.fill(d.mac.velocityX,.125F);d.cellMacStage.publishMomentum();
+				var prior=d.liquidCells.snapshot();var plan=new CellLiquidVolumeTransport(d).prepare(.05F);
+				require(!plan.faceFluxes().isEmpty(),"Prescribed thermal translation produced no shared face transport");
+				require(d.liquidCells.snapshot().rows().equals(prior.rows()),"Thermal transport modified source before publication");
+				for(var stock:plan.inventory().future().physicalStocks()) {
+					double t=temperature(d,stock);require(t>=295-1e-8&&t<=305+1e-8,"Temperature advection created a new extremum: "+t);
+				}
+				plan.inventory().commit();d.thermalState.recordRoundoff(plan.inventory().energyRoundoff());d.markCellInventoryChanged();
+				require(d.liquidCells.exactVolume().equals(initialVolume)&&d.liquidCells.massUnits()==initialMass,"Temperature advection changed material inventory");
+				require(d.exactInternalEnergy().equals(d.thermalAudit().expectedInventory()),"Carried energy or U rounding did not close");
+				d=FluidDomain.restoreAuthoritativeState(d.captureAuthoritativeState());
 			}
-		};
-		var thermal = new ThermalDomainState(registry, new int[] {0, 1}, new int[0], 300, 2, 2, 1, 1, 1, markers, null, 8);
-		thermal.resetMarkerTemperature(0, 270, markers, thermal.exactEnergy(2));
-		thermal.resetMarkerTemperature(1, 350, markers, thermal.exactEnergy(2));
-		var before = thermal.exactEnergy(2); var audit = thermal.auditLedger();
-		thermal.prepareSpatialObservation(markers);
-		for (int cell = 0; cell < 2; cell++) {
-			double w0 = cell == 0 ? 0.75 : 0.25, w1 = 1 - w0;
-			double target = w0 * markers.mass(0) * first.sensibleSpecificEnergyAt(270)
-					+ w1 * markers.mass(1) * second.sensibleSpecificEnergyAt(350);
-			double t = thermal.spatialTemperatureInCell(cell);
-			double modeled = w0 * markers.mass(0) * first.sensibleSpecificEnergyAt(t)
-					+ w1 * markers.mass(1) * second.sensibleSpecificEnergyAt(t);
-			require(t >= 270 && t <= 350 && relativeError(modeled, target) < 1e-12,
-					"spatial observation lost heterogeneous caloric or species reference energy");
-		}
-		thermal.step(markers, (x, y, z, axis) -> 1, 1000);
-		require(before.equals(thermal.exactEnergy(2)) && audit.equals(thermal.auditLedger()),
-				"insulating heterogeneous carriers changed energy or the external ledger");
-		// The contact processor reads the real integer-species reference energy, with no LTE handoff.
-		for (double conductance : new double[] {1e-8, 1e6}) {
-			thermal.stepCarrierConduction(markers, List.of(new mmm.thermal.ThermalCarrierTransport.Contact(
-					0, 1, conductance, Double.NaN)), conductance < 1 ? 0.001 : 1000);
-			for (int p = 0; p < 2; p++) require(thermal.temperature(p, markers) >= 270 && thermal.temperature(p, markers) <= 350,
-					"carrier contact lost heterogeneous caloric or species reference energy");
-			require(thermal.exactEnergy(2).equals(thermal.auditLedger().expectedInventory())
-					&& audit.externalSource().equals(thermal.auditLedger().externalSource())
-					&& audit.externalSink().equals(thermal.auditLedger().externalSink())
-					&& markers.mixture(0).equals(mixtures[0]) && markers.mixture(1).equals(mixtures[1]),
-					"carrier conduction changed species or external energy");
 		}
 	}
-
-	private static void observationPreservesTemperatureUnderReferenceOffsets() {
-		var markers = new ThermalCarrierContext() {
-			@Override public int markerCount() { return 1; }
-			@Override public int cell(int marker) { return 0; }
-			@Override public int fluidMaterialHandle(int marker) { return 0; }
-			@Override public double mass(int marker) { return 1; }
-			@Override public double volume(int marker) { return 1; }
-			@Override public ChemicalMixtureRecord mixture(int marker) { return null; }
-			@Override public ChemicalRegistry chemicalRegistry() { return null; }
-			@Override public void observationSupport(int marker, SupportConsumer consumer) {
-				consumer.accept(0, 0.1); consumer.accept(1, 0.9);
-			}
-		};
-		for (double reference : new double[] {0, 1e18, -1e18}) {
-			var material = new ThermalMaterialDefinition("test:thermal/reference", ThermalMaterialDefinition.CarrierKind.LIQUID,
-					"test:reference", 300, reference, 0,
-					List.of(new ThermalMaterialDefinition.CaloricSegment(10, 1000, 1)));
-			var thermal = new ThermalDomainState(new ThermalRegistry(List.of(material)), new int[] {0}, new int[0],
-					300, 2, 2, 1, 1, 1, markers, null, 8);
-			thermal.resetMarkerTemperature(0, 172, markers, thermal.exactEnergy(1));
-			double ownerTemperature = thermal.temperature(0, markers);
-			var before = thermal.exactEnergy(1); var audit = thermal.auditLedger();
-			var stateFunction = new mmm.thermal.ThermalStateFunction(new ThermalRegistry(List.of(material)));
-			require(close(stateFunction.stateForInventory(List.of(new mmm.thermal.ThermalStateFunction.InventoryPortion(
-					0, 1, Map.of())), before.toDouble()).temperatureK(), ownerTemperature),
-					"candidate LTE inversion rounded away sensible energy under a large reference");
-			thermal.preparePhaseScan(markers);
-			require(close(thermal.phaseScanTemperatureInCell(0), ownerTemperature),
-					"LTE inversion rounded away sensible energy under a large reference");
-			thermal.prepareSpatialObservation(markers);
-			for (int cell = 0; cell < 2; cell++) require(close(thermal.spatialTemperatureInCell(cell), ownerTemperature),
-					"observation weights changed a uniform source temperature under a large reference");
-			require(before.equals(thermal.exactEnergy(1)) && audit.equals(thermal.auditLedger()),
-					"reference-coordinate observation changed authoritative energy or its ledger");
-			var group = thermal.liquid().caloricInventory(0, 2, null, null);
-			var groupEnergy = SignedDyadic.of(reference + 128).add(SignedDyadic.of(reference + 256));
-			require(group.temperature(groupEnergy) == 492,
-					"liquid remap rounded aggregate energy before subtracting its reference");
-		}
-		var materials = new java.util.ArrayList<ThermalMaterialDefinition>();
-		for (int i = 0; i < 3; i++) materials.add(new ThermalMaterialDefinition("test:thermal/reference_" + i,
-				ThermalMaterialDefinition.CarrierKind.LIQUID, "test:reference_" + i, 300,
-				i == 0 ? 1e18 : i == 1 ? -1e18 : 0, 0,
-				List.of(new ThermalMaterialDefinition.CaloricSegment(10, 1000, 1))));
-		for (int[] order : new int[][] {{0, 1, 2}, {2, 0, 1}, {1, 2, 0}}) {
-			var mixed = new ThermalCarrierContext() {
-				@Override public int markerCount() { return 3; }
-				@Override public int cell(int marker) { return 0; }
-				@Override public int fluidMaterialHandle(int marker) { return order[marker]; }
-				@Override public double mass(int marker) { return 1; }
-				@Override public double volume(int marker) { return 0.25; }
-				@Override public ChemicalMixtureRecord mixture(int marker) { return null; }
-				@Override public ChemicalRegistry chemicalRegistry() { return null; }
-			};
-			var thermal = new ThermalDomainState(new ThermalRegistry(materials), new int[] {0, 1, 2}, new int[0],
-					300, 3, 1, 1, 1, 1, mixed, null, 8);
-			for (int p = 0; p < 3; p++) if (order[p] == 2)
-				thermal.resetMarkerTemperature(p, 500, mixed, thermal.exactEnergy(3));
-			var before = thermal.exactEnergy(3); var audit = thermal.auditLedger();
-			var portions = materials.stream().map(m -> new mmm.thermal.ThermalStateFunction.InventoryPortion(
-					materials.indexOf(m), 1, Map.<String, Long>of())).toList();
-			require(close(new mmm.thermal.ThermalStateFunction(new ThermalRegistry(materials))
-					.stateForInventory(portions, before.toDouble()).temperatureK(), (300 + 300 + 500) / 3.0),
-					"candidate LTE inversion lost energy under opposing references");
-			thermal.preparePhaseScan(mixed);
-			require(close(thermal.phaseScanTemperatureInCell(0), (300 + 300 + 500) / 3.0),
-					"opposing references erased another carrier's energy before LTE inversion");
-			require(before.equals(thermal.exactEnergy(3)) && audit.equals(thermal.auditLedger()),
-					"LTE reference cancellation changed the inventory or audit");
+	private static void zeroFluxRetainsCaloricReference() {
+		for(double reference:new double[]{0,1e12,-1e12}) {
+			var d=pool(3,2,2,0,false,reference);d.setThermalTemperatureInCell(1,0,0,428);
+			var before=d.liquidCells.snapshot();var plan=new CellLiquidVolumeTransport(d).prepare(.05F);
+			require(plan.inventory().future().snapshot().rows().equals(before.rows()),"Stationary cell transport reconstructed caloric owners");
+			plan.inventory().commit();require(Math.abs(d.thermalTemperatureInCell(1,0,0)-428)<1e-8,"Stationary reference energy changed temperature");
 		}
 	}
-
-	private static void referenceEnergyRemapPreservesSpatialField() {
-		for (double reference : new double[] {0, 1e18, -1e18}) {
-			var domain = new FluidDomain(2, 2, 2,
-					new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-7F, .4F, .002F, 0), 128);
-			domain.setVolume(0, 0, 0, 1);
-			for (int p = 0; p < domain.particleCount(); p++) domain.particles.setMassUnits(p, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(2));
-			var material = new ThermalMaterialDefinition("test:thermal/remap_reference", ThermalMaterialDefinition.CarrierKind.LIQUID,
-					"mmm:water", 300, reference, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 1)));
-			domain.bindThermal(new ThermalRegistry(List.of(material)), new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)), 300);
-			for (int p = 0; p < domain.particleCount(); p++) domain.thermalState.resetMarkerTemperature(p,
-					domain.particles.positionX(p) < .25 ? 428 : 556, domain.thermalMarkerContext(), domain.exactInternalEnergy());
-			domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
-			var flux = new ConservativeLiquidFlux(2, 2, 2); flux.geometry(new LiquidFluxGeometry(domain));
-			flux.plan(domain.markerGrid.exactCellMarkerVolume, domain.geometry.solid, 0, domain.markerGrid.exactCellVolumeInventory);
-			var plan = new CellCarrierRemapPlan(domain, flux, 0, new BallisticLiquidRemap(domain.cellCount), true);
-			for (var marker : plan.markers) require(domain.thermalState.liquid().caloricInventory(
-					marker.material(), domain.unitScale.normalizedMass(marker.massUnits()), null, null).temperature(marker.energy()) == (marker.offsetX() < 0 ? 428 : 556),
-					"stationary liquid remap changed the caloric spatial field under a reference offset");
+	private static void finiteConductivityLimit() {
+		double previous=0;
+		for(double conductivity:new double[]{0,.001,.01}) {
+			var d=pool(2,2,2,conductivity,false,0);d.setThermalTemperatureInCell(0,0,0,270);d.setThermalTemperatureInCell(1,0,0,350);
+			var before=d.liquidCells.snapshot();d.stepThermalOnly(1);double change=d.thermalTemperatureInCell(0,0,0)-270;
+			if(conductivity==0)require(d.liquidCells.snapshot().rows().equals(before.rows()),"Zero conductivity changed cell U");
+			else {require(change>0&&change<.001,"Finite conductivity caused instantaneous mixing: "+change);if(previous>0)require(Math.abs(change/previous-10)<.001,"Conduction lost linear small-k response");}
+			previous=change;require(d.exactInternalEnergy().equals(d.thermalAudit().expectedInventory()),"Finite conduction audit failed");
 		}
 	}
-
+	private static void disconnectedSupportsInsulate() {
+		var d=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.4F,.002F,0),64);
+		var masks=new byte[8];Arrays.fill(masks,(byte)126);d.geometry.cutCells.restoreMicroMasks(masks);
+		var edits=new java.util.ArrayList<LiquidCellInventory.Edit>();
+		for(int support:new int[]{1,128}){var key=new LiquidCellInventory.Key(0,0,support);edits.add(new LiquidCellInventory.Edit(key,new LiquidCellInventory.Stock(key,SignedDyadic.of(.125),d.unitScale.massUnitsForNormalized(125),null,0,false)));}
+		d.liquidCells.planEdits(edits).commit();d.markCellInventoryChanged();
+		var caloric=new ThermalMaterialDefinition("test:thermal/cut",ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water",300,0,1000,List.of(new ThermalMaterialDefinition.CaloricSegment(1,600,4000)));
+		d.bindThermal(new ThermalRegistry(thermalMaterials(List.of(caloric))),new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)),300);
+		for(int ordinal=0;ordinal<2;ordinal++)d.thermalState.resetMarkerTemperature(ordinal,ordinal==0?270:350,d.thermalMarkerContext(),d.exactInternalEnergy());
+		var before=d.liquidCells.snapshot();d.stepThermalOnly(1000);
+		require(d.liquidCells.snapshot().rows().equals(before.rows()),"Disjoint cut supports conducted through a cell-average shortcut");
+	}
+	private static void cellDiffusionConverges() {
+		double coarse=0;
+		for(int n:new int[]{8,16}) {
+			var d=pool(2,n,2,4e6,false,0);double h=d.config.cellSize(),height=n*h,before=0;
+			for(int z=0;z<2;z++)for(int y=0;y<n;y++)for(int x=0;x<2;x++)d.setThermalTemperatureInCell(x,y,z,300+2*Math.cos(Math.PI*(y+.5)*h/height));
+			for(var stock:d.liquidCells.physicalStocks())before+=Math.cos(Math.PI*(stock.key().cell()/2%n+.5)*h/height)*(temperature(d,stock)-300);
+			double dt=.0001;d.stepThermalOnly(dt);double after=0;
+			for(var stock:d.liquidCells.physicalStocks())after+=Math.cos(Math.PI*(stock.key().cell()/2%n+.5)*h/height)*(temperature(d,stock)-300);
+			double rate=(1-after/before)/dt*height*height,error=Math.abs(rate/(Math.PI*Math.PI)-1);
+			require(error<.02,"Cell conduction has a macroscopic diffusivity bias: "+rate);if(n==8)coarse=error;else require(error<.3*coarse,"Cell conduction failed spatial convergence");
+			require(d.exactInternalEnergy().equals(d.thermalAudit().expectedInventory()),"Diffusion owner-energy audit failed");
+			System.out.printf("cell thermal diffusion N=%d normalizedRate=%g error=%g%n",n,rate,error);
+		}
+	}
+	private static void conductingLinearWallProfileIsStationary() {
+		var d=pool(2,6,2,4e6,false,0);double h=d.config.cellSize(),height=6*h;
+		var boundary=new double[d.cellCount*6];Arrays.fill(boundary,Double.NaN);
+		for(int z=0;z<2;z++)for(int x=0;x<2;x++){boundary[6*d.cellIndex(x,0,z)+2]=310;boundary[6*d.cellIndex(x,5,z)+3]=290;}
+		for(int z=0;z<2;z++)for(int y=0;y<6;y++)for(int x=0;x<2;x++)d.setThermalTemperatureInCell(x,y,z,310-20*(y+.5)*h/height);
+		d.replaceThermalBoundaryTemperatures(boundary);var result=d.stepThermalOnly(.001);double maximum=0;
+		for(var stock:d.liquidCells.physicalStocks())maximum=Math.max(maximum,Math.abs(temperature(d,stock)-(310-20*(stock.key().cell()/2%6+.5)*h/height)));
+		require(maximum<1e-10&&result.maximumAbsoluteTransferJ()>0&&d.exactInternalEnergy().equals(d.thermalAudit().expectedInventory()),"Conduction lost its affine wall solution: "+maximum);
+	}
+	private static double temperature(FluidDomain d,LiquidCellInventory.Stock stock) {
+		return d.thermalState.stateFunction().stateForInternalEnergy(d.thermalState.thermalMaterialHandleForFluid(stock.key().material()),stock.massKilograms(),java.util.Map.of(),stock.internalEnergy()).temperatureK();
+	}
+	private static FluidDomain pool(int nx,int ny,int nz,double conductivity,boolean segmented,double reference) {
+		var d=new FluidDomain(nx,ny,nz,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.4F,.002F,0),8*nx*ny*nz);
+		for(int z=0;z<nz;z++)for(int y=0;y<ny;y++)for(int x=0;x<nx;x++)d.setVolume(x,y,z,1);
+		var caloric=new ThermalMaterialDefinition("test:thermal/advection",ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water",300,reference,conductivity,
+				segmented?List.of(new ThermalMaterialDefinition.CaloricSegment(1,300,1000),new ThermalMaterialDefinition.CaloricSegment(300,600,100000)):List.of(new ThermalMaterialDefinition.CaloricSegment(1,600,4000)));
+		d.bindThermal(new ThermalRegistry(thermalMaterials(List.of(caloric))),new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)),300);return d;
+	}
 	private static void referenceGridLifecycleIsAtomic() {
 		int[] writes = {0};
 		double[] remote = {1e16, 1, -1e16, 5};
@@ -434,33 +193,6 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		};
 	}
 
-	static void geometryRestrictsObservation() {
-		var domain = pool(2, 2, 2, 0);
-		for (int z = 0; z < 2; z++) {
-			domain.setVolume(1, 0, z, 0); domain.setVolume(0, 1, z, 0);
-			domain.setThermalTemperatureInCell(0, 0, z, 270); domain.setThermalTemperatureInCell(1, 1, z, 350);
-		}
-		domain.ensureGrid(); domain.thermalState.prepareSpatialObservation(domain.thermalMarkerContext());
-		require(close(domain.thermalState.spatialTemperatureInCell(0), 270)
-				&& close(domain.thermalState.spatialTemperatureInCell(3), 350), "thermal observation crossed an empty diagonal gap");
-		domain.setSolidMicroMask(0, 0, 0, 0x0f);
-		domain.ensureGrid();
-		for (int marker = 0; marker < domain.particleCount(); marker++) if (domain.particleCellIndex(marker) == 0)
-			domain.thermalMarkerContext().observationSupport(marker, (cell, weight) ->
-					require(cell == 0 && weight == 1, "partial cut-cell observation left its inventory cell"));
-		var separated = new FluidDomain(2, 2, 2, domain.config, 128);
-		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) separated.setVolume(x, y, z, 1);
-		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER, BuiltinFluidMaterials.OIL));
-		for (int marker = 0; marker < separated.particleCount(); marker++)
-			separated.setMarkerMaterial(marker, liquids, separated.particleCellIndex(marker) % 2);
-		separated.ensureGrid();
-		for (int marker = 0; marker < separated.particleCount(); marker++) {
-			int own = separated.particleCellIndex(marker);
-			separated.thermalMarkerContext().observationSupport(marker, (cell, weight) ->
-					require(cell % 2 == own % 2 && weight > 0 && weight <= 1, "spatial observation mixed immiscible pressure phases"));
-		}
-	}
-
 	static void insulatingCellsIgnoreUnrelatedFlux() {
 		for (double dt : new double[] {0.05, 1000}) {
 			var insulating = new ThermalMaterialDefinition("test:thermal/insulating", ThermalMaterialDefinition.CarrierKind.LIQUID,
@@ -487,126 +219,4 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		}
 	}
 
-	static void conductingSpikeRemainsMonotone() {
-		for (double dt : new double[] {0.05, 1000}) for (boolean hotSpike : new boolean[] {false, true}) {
-			var domain = pool(6, 6, 6, 1000);
-			for (int z = 0; z < 6; z++) for (int y = 0; y < 6; y++) for (int x = 0; x < 6; x++)
-				domain.setThermalTemperatureInCell(x, y, z, hotSpike ? 1 : 350);
-			domain.setThermalTemperatureInCell(3, 3, 3, hotSpike ? 350 : 1);
-			var before = domain.thermalAudit();
-			for (int step = 0; step < 3; step++) {
-				domain.stepThermalOnly(dt);
-				domain.thermalState.prepareSpatialObservation(domain.thermalMarkerContext());
-				for (int marker = 0; marker < domain.particleCount(); marker++) {
-					double t = domain.thermalState.temperature(marker, domain.thermalMarkerContext());
-					require(t >= 1 - 1e-10 && t <= 350 + 1e-10, "conducting spike violated the carrier maximum principle: " + t);
-				}
-				for (int cell = 0; cell < domain.cellCount; cell++) {
-					double t = domain.thermalState.spatialTemperatureInCell(cell);
-					require(t >= 1 - 1e-10 && t <= 350 + 1e-10, "spatial observation exceeded its carrier temperature range");
-				}
-				require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
-						&& before.externalSource().equals(domain.thermalAudit().externalSource())
-						&& before.externalSink().equals(domain.thermalAudit().externalSink()), "adiabatic spike energy did not close");
-			}
-		}
-	}
-
-	static void finiteConductivityLimit() {
-		for (int layout = 0; layout < 3; layout++) {
-		double first = 0;
-		for (double k : new double[] {0, 0.001, 0.01}) {
-			var domain = pool(4, 4, 4, k);
-			if (layout > 0) domain.setVolume(0, 0, 0, 0.5F);
-			if (layout == 2) { domain.setVolume(0, 0, 0, 0); domain.setSolidMicroMask(0, 0, 0, 0x0f); domain.setVolume(0, 0, 0, 0.5F); }
-			int cold = -1, hot = -1;
-			for (int p = 0; p < domain.particleCount(); p++) if (domain.particleCellIndex(p) == 0) {
-				if (cold < 0) cold = p; else { hot = p; break; }
-			}
-			require(cold >= 0 && hot >= 0, "finite-k fixture lost its subcell carriers");
-			var context = domain.thermalMarkerContext();
-			domain.thermalState.resetMarkerTemperature(cold, 270, context, domain.exactInternalEnergy());
-			domain.thermalState.resetMarkerTemperature(hot, 350, context, domain.exactInternalEnergy());
-			double before = domain.thermalState.temperature(cold, context);
-			double[] energy = domain.exportThermalParticleState().copyInternalEnergy();
-			var audit = domain.thermalAudit();
-			domain.stepThermalOnly(1);
-			double change = domain.thermalState.temperature(cold, context) - before;
-			if (k == 0) require(change == 0 && Arrays.equals(energy, domain.exportThermalParticleState().copyInternalEnergy()),
-					"zero-k geometry changed carrier energy");
-			else require(change > 0 && change < 0.001, "positive small k caused instantaneous intracell equilibration: " + change);
-			if (first > 0) require(Math.abs(change / first - 10) < 0.001, "carrier conduction lost its linear k limit");
-			first = change;
-			require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
-					&& audit.externalSource().equals(domain.thermalAudit().externalSource())
-					&& audit.externalSink().equals(domain.thermalAudit().externalSink()), "finite-k inventory failed closure");
-		}
-		}
-	}
-
-	static void particleDiffusionConverges() {
-		double coarse = 0;
-		for (int n : new int[] {8, 16}) {
-			var domain = pool(4, n, 2, 4e6); // alpha = 1 m^2/s from the actual rho, cv and k.
-			var context = domain.thermalMarkerContext();
-			double h = domain.config().cellSize(), height = h * n, before = 0, norm = 0;
-			for (int p = 0; p < domain.particleCount(); p++) {
-				double mode = Math.cos(Math.PI * domain.particles.positionY(p) / height);
-				domain.thermalState.resetMarkerTemperature(p, 300 + 2 * mode, context, domain.exactInternalEnergy());
-				before += mode * (domain.thermalState.temperature(p, context) - 300); norm += mode * mode;
-			}
-			double dt = 0.0001;
-			domain.stepThermalOnly(dt);
-			double after = 0;
-			for (int p = 0; p < domain.particleCount(); p++) after += Math.cos(Math.PI * domain.particles.positionY(p) / height)
-					* (domain.thermalState.temperature(p, context) - 300);
-			double normalizedRate = (1 - after / before) / dt * height * height;
-			double error = Math.abs(normalizedRate / (Math.PI * Math.PI) - 1);
-			require(error < 0.02 && Math.abs(before / norm - 2) < 1e-10, "particle diffusion has a mesh-independent diffusivity bias: rate=" + normalizedRate + " amplitude=" + before / norm);
-			if (n == 8) coarse = error;
-			else require(error < 0.3 * coarse, "particle conduction failed second-order diffusion convergence");
-			System.out.printf("  finite-k diffusion N=%d normalizedRate=%g expected=%g error=%.4f%%%n", n, normalizedRate, Math.PI * Math.PI, 100 * error);
-		}
-	}
-
-	static void conductingLinearWallProfileIsStationary() {
-		var domain = pool(4, 6, 2, 4e6);
-		double height = domain.sizeY * domain.config().cellSize();
-		var context = domain.thermalMarkerContext();
-		double[] boundary = new double[domain.cellCount * 6]; Arrays.fill(boundary, Double.NaN);
-		for (int p = 0; p < domain.particleCount(); p++) domain.thermalState.resetMarkerTemperature(p,
-				310 - 20 * domain.particles.positionY(p) / height, context, domain.exactInternalEnergy());
-		for (int z = 0; z < domain.sizeZ; z++) for (int x = 0; x < domain.sizeX; x++) {
-			boundary[6 * domain.cellIndex(x, 0, z) + 2] = 310;
-			boundary[6 * domain.cellIndex(x, domain.sizeY - 1, z) + 3] = 290;
-		}
-		domain.replaceThermalBoundaryTemperatures(boundary);
-		double[] energy = domain.exportThermalParticleState().copyInternalEnergy();
-		var result = domain.stepThermalOnly(0.001);
-		double maximum = 0;
-		for (int p = 0; p < domain.particleCount(); p++) maximum = Math.max(maximum,
-				Math.abs(domain.thermalState.temperature(p, context) - (310 - 20 * domain.particles.positionY(p) / height)));
-		require(maximum < 1e-10 && result.maximumAbsoluteTransferJ() > 0
-				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "thermal wall closure lost the affine stationary solution: " + maximum);
-		// A finite contact must have been evaluated while the net energy remained stationary.
-		require(Math.abs(SignedDyadic.sum(domain.exportThermalParticleState().copyInternalEnergy()).subtract(SignedDyadic.sum(energy)).toDouble()) < 1e-7,
-				"opposed fixed walls introduced net energy into a stationary profile");
-	}
-
-	private static FluidDomain pool(int nx, int ny, int nz, double conductivity) {
-		return pool(nx, ny, nz, conductivity, false);
-	}
-
-	private static FluidDomain pool(int nx, int ny, int nz, double conductivity, boolean segmented) {
-		var domain = new FluidDomain(nx, ny, nz,
-				new FluidSolverConfig(0.5F, 1000, 0, 0.05F, 100, 1e-7F, 0.4F, 0.002F, 0), nx * ny * nz * 16);
-		for (int z = 0; z < nz; z++) for (int y = 0; y < ny; y++) for (int x = 0; x < nx; x++) domain.setVolume(x, y, z, 1);
-		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
-		var caloric = new ThermalMaterialDefinition("test:thermal/advection", ThermalMaterialDefinition.CarrierKind.LIQUID,
-				"mmm:water", 300, 0, conductivity, segmented
-						? List.of(new ThermalMaterialDefinition.CaloricSegment(1, 300, 1000), new ThermalMaterialDefinition.CaloricSegment(300, 600, 100000))
-						: List.of(new ThermalMaterialDefinition.CaloricSegment(1, 600, 4000)));
-		domain.bindThermal(new ThermalRegistry(List.of(caloric)), liquids, 300);
-		return domain;
-	}
 }

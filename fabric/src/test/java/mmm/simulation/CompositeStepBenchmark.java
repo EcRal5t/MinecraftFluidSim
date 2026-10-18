@@ -171,8 +171,12 @@ public final class CompositeStepBenchmark {
         double density = r.granular().material(r.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND)).referenceDensity();
         var ledger = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(BuiltinGranularDefinitions.FINE_SAND,
                 svq, mmm.units.Mass.fromKilograms(density * (svq / (double) SolidVolume.SVQ_PER_CUBIC_METER)), null)));
-        for (int i = 0; i < 96; i++) require(domain.tryInsertExactGranular(2 + i % 6, 8 + i / 36 % 2,
-                3 + i / 6 % 6, ledger, 1, true).inserted(), "Large sand injection rejected");
+        for (int i = 0; i < 96; i++) {
+            int x = 2 + i % 6, y = 8 + i / 36 % 2, z = 3 + i / 6 % 6;
+            var insertion = domain.tryInsertExactGranular(x, y, z, ledger, 1, true);
+            require(insertion.inserted(), "Large sand injection rejected: index=" + i + " at=" + x + "," + y + "," + z
+                    + " active=" + domain.granularParcelCount() + " reason=" + insertion.failure());
+        }
         return domain;
     }
 

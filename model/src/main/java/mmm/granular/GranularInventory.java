@@ -78,17 +78,20 @@ public final class GranularInventory {
 		private final int[] released;
 		private final EnergyAdapter adapter;
 		private final EnergyPlan energy;
+		private final List<DepositTransfer> transfers;
+		private final SignedDyadic mechanicalHeat;
 		private SettlementPlan(GranularInventory owner, int[] indices, int[] targetCells, List<SettlementTarget> targets,
 		                       List<GranularParcelStore.Parcel> parcels, long totalSvq,
 		                       GranularDepositStore.AdditionsBatchPlan additions,
 		                       Map<Integer, SolidCompositionRecord> before, Map<Integer, SolidCompositionRecord> after,
-		                       int[] released, EnergyPlan energy) {
+		                       int[] released, List<DepositTransfer> transfers, SignedDyadic mechanicalHeat, EnergyPlan energy) {
 			this.owner = owner; this.parcelRevision = owner.parcels.mutationRevision();
 			this.indices = indices; this.targetCells = targetCells; this.targets = List.copyOf(targets);
 			this.parcels = List.copyOf(parcels); this.totalSvq = totalSvq;
 			this.additions = additions; this.pool = owner.compositions;
 			this.before = Map.copyOf(before); this.after = Map.copyOf(after); this.released = released;
 			this.adapter = owner.thermalEnergy; this.energy = energy;
+			this.transfers = List.copyOf(transfers); this.mechanicalHeat = mechanicalHeat;
 		}
 		private SettlementTarget onlyTarget() {
 			if (targets.size() != 1) throw new IllegalStateException("Settlement plan has multiple receiving cells");
@@ -104,6 +107,16 @@ public final class GranularInventory {
 		public long bulkVolumeSvq() { return onlyTarget().bulkVolumeSvq(); }
 		public SignedDyadic oldBedMass() { return onlyTarget().oldBedMass(); }
 		public long oldBedBulkVolumeSvq() { return onlyTarget().oldBedBulkVolumeSvq(); }
+		public SignedDyadic mechanicalHeat() { return mechanicalHeat; }
+		/** Rebuilds the complete thermal candidate after actual bed geometry supplies its work. */
+		public SettlementPlan withMechanicalHeat(SignedDyadic heat) {
+			owner.requireCurrent(this);
+			var heated = allocateSettlementHeat(transfers, parcels, heat);
+			var thermal = adapter == null ? null : adapter.planActiveToDeposits(heated);
+			if (adapter != null && thermal == null) return null;
+			return new SettlementPlan(owner, indices, targetCells, targets, parcels, totalSvq, additions,
+					before, after, released, heated, heat, thermal);
+		}
 	}
 
 	private static final class SettlementComposition {
@@ -240,13 +253,45 @@ public final class GranularInventory {
 			SolidCompositionRecord composition = after.get(group.solidCompositionHandle());
 			if (composition != null && composition.massUnits(compositions.registry()) != group.massUnits()) return null;
 		}
-		EnergyPlan energy = thermalEnergy == null ? null : thermalEnergy.planActiveToDeposits(List.copyOf(transfers));
+		SignedDyadic heat = SignedDyadic.ZERO;
+		for (var parcel : sources) heat = heat.add(kineticEnergy(parcel));
+		var heated = allocateSettlementHeat(transfers, sources, heat);
+		EnergyPlan energy = thermalEnergy == null ? null : thermalEnergy.planActiveToDeposits(heated);
 		if (thermalEnergy != null && energy == null) return null;
 		ArrayList<SettlementTarget> targets = new ArrayList<>(depositPlan.cells().size());
 		for (var cellPlan : depositPlan.cells()) targets.add(new SettlementTarget(cellPlan.cell(), addedSvq.get(cellPlan.cell()),
 				cellPlan.bulkVolumeSvq(), cellPlan.oldMass(), cellPlan.oldBulkVolumeSvq(), addedMass.get(cellPlan.cell())));
 		return new SettlementPlan(this, indices, cells, targets, sources, totalSvq, depositPlan, before, after,
-				released.stream().mapToInt(Integer::intValue).toArray(), energy);
+				released.stream().mapToInt(Integer::intValue).toArray(), heated, heat, energy);
+	}
+
+	private static List<DepositTransfer> allocateSettlementHeat(List<DepositTransfer> transfers,
+			List<GranularParcelStore.Parcel> sources, SignedDyadic heat) {
+		if (heat == null || heat.signum() < 0 || !Double.isFinite(heat.toDouble()))
+			throw new IllegalArgumentException("Settlement mechanical heat must be finite and nonnegative");
+		long total = 0; int largest = 0;
+		for (int slot = 0; slot < sources.size(); slot++) {
+			total = Math.addExact(total, sources.get(slot).massUnits());
+			if (sources.get(slot).massUnits() > sources.get(largest).massUnits()) largest = slot;
+		}
+		SignedDyadic[] shares = new SignedDyadic[sources.size()]; SignedDyadic assigned = SignedDyadic.ZERO;
+		for (int slot = 0; slot < shares.length; slot++) if (slot != largest) {
+			shares[slot] = SignedDyadic.of(heat.toDouble() * (sources.get(slot).massUnits() / (double) total));
+			assigned = assigned.add(shares[slot]);
+		}
+		shares[largest] = heat.subtract(assigned);
+		var result = new ArrayList<DepositTransfer>(shares.length);
+		for (int slot = 0; slot < shares.length; slot++) {
+			var source = transfers.get(slot);
+			result.add(new DepositTransfer(source.active(), source.cell(), source.material(), source.composition(), shares[slot]));
+		}
+		return List.copyOf(result);
+	}
+
+	private static SignedDyadic kineticEnergy(GranularParcelStore.Parcel parcel) {
+		double squared = parcel.velocityX() * (double) parcel.velocityX()
+				+ parcel.velocityY() * (double) parcel.velocityY() + parcel.velocityZ() * (double) parcel.velocityZ();
+		return SignedDyadic.of(.5 * parcel.mass() * squared);
 	}
 
 	private SolidCompositionRecord combineSettlementComposition(List<SolidCompositionRecord> records) {
@@ -312,8 +357,14 @@ public final class GranularInventory {
 			IntUnaryOperator cellOfParcel, ActiveMergeAcceptance mergeAcceptance,
 			float maximumVelocityDelta, int maximumEvaluations
 	) {
+		return compactActive(cellOfParcel, mergeAcceptance, maximumVelocityDelta, maximumEvaluations, 0);
+	}
+	public CompactionStats compactActive(
+			IntUnaryOperator cellOfParcel, ActiveMergeAcceptance mergeAcceptance,
+			float maximumVelocityDelta, int maximumEvaluations, double gravity
+	) {
 		if (cellOfParcel == null || mergeAcceptance == null || !(Float.isFinite(maximumVelocityDelta)
-				&& maximumVelocityDelta >= 0.0F) || maximumEvaluations < 0) {
+				&& maximumVelocityDelta >= 0.0F) || maximumEvaluations < 0 || !(Double.isFinite(gravity) && gravity >= 0)) {
 			throw new IllegalArgumentException("Active granular compaction input is invalid");
 		}
 		Arrays.fill(activeHeadByCell, -1); Arrays.fill(mergePaired, 0, parcels.count(), false);
@@ -329,9 +380,9 @@ public final class GranularInventory {
 					first = activeNext[first]) {
 				evaluations++;
 				if (mergePaired[first]) continue;
-				ActiveMerge merge = activeMerge(first, second, maximumVelocityDelta);
+				ActiveMerge merge = activeMerge(first, second, maximumVelocityDelta, gravity);
 				if (merge == null || thermalEnergy != null && !thermalEnergy.canActiveMerge(first, second,
-						merge.parcel(), merge.composition())
+						merge.parcel(), merge.composition(), merge.heat())
 						|| !mergeAcceptance.test(first, second, parcels.parcel(first), candidate, merge.parcel())) continue;
 				mergeFirst[pairs] = first; mergeSecond[pairs] = second; pairs++;
 				plannedMerge[pairs - 1] = merge;
@@ -341,15 +392,16 @@ public final class GranularInventory {
 			activeNext[second] = activeHeadByCell[cell]; activeHeadByCell[cell] = second;
 		}
 		for (int pair = pairs - 1; pair >= 0; pair--) {
-			ActiveMerge merge = activeMerge(mergeFirst[pair], mergeSecond[pair], maximumVelocityDelta);
+			ActiveMerge merge = activeMerge(mergeFirst[pair], mergeSecond[pair], maximumVelocityDelta, gravity);
 			if (merge == null || !merge.equals(plannedMerge[pair])) {
 				throw new IllegalStateException("Active granular merge plan changed before commit");
 			}
 			if (thermalEnergy != null && !thermalEnergy.canActiveMerge(mergeFirst[pair], mergeSecond[pair],
-					merge.parcel(), merge.composition())) {
+					merge.parcel(), merge.composition(), merge.heat())) {
 				throw new IllegalStateException("Active granular merge thermal state changed before commit");
 			}
 		}
+		SignedDyadic physicalHeat = SignedDyadic.ZERO, mechanicalRounding = SignedDyadic.ZERO;
 		for (int pair = pairs - 1; pair >= 0; pair--) {
 			ActiveMerge merge = plannedMerge[pair];
 			if (merge.composition() != null) {
@@ -358,13 +410,14 @@ public final class GranularInventory {
 			}
 			parcels.overwrite(mergeFirst[pair], merge.parcel());
 			parcels.removeSwap(mergeSecond[pair]);
-			if (thermalEnergy != null) thermalEnergy.commitActiveMerge(mergeFirst[pair], mergeSecond[pair]);
+			if (thermalEnergy != null) thermalEnergy.commitActiveMerge(mergeFirst[pair], mergeSecond[pair], merge.heat());
+			physicalHeat = physicalHeat.add(merge.heat()); mechanicalRounding = mechanicalRounding.add(merge.mechanicalRounding());
 			plannedMerge[pair] = null;
 		}
-		return new CompactionStats(pairs, evaluations);
+		return new CompactionStats(pairs, evaluations, physicalHeat, mechanicalRounding);
 	}
 
-	private ActiveMerge activeMerge(int firstIndex, int secondIndex, float maximumVelocityDelta) {
+	private ActiveMerge activeMerge(int firstIndex, int secondIndex, float maximumVelocityDelta, double gravity) {
 		GranularParcelStore.Parcel first = parcels.parcel(firstIndex), second = parcels.parcel(secondIndex);
 		if (first.materialHandle() != second.materialHandle()) return null;
 		long combinedSvq = Math.addExact(first.solidVolumeSvq(), second.solidVolumeSvq());
@@ -394,7 +447,18 @@ public final class GranularInventory {
 				weighted(first.velocityZ(), first.mass(), second.velocityZ(), second.mass(), combinedMass),
 				combinedSvq, combinedMassUnits, first.materialHandle(), first.solidCompositionHandle(),
 				0, (byte) ((first.flags() & second.flags()) & ~GranularParcelStore.FLAG_SUPPORTED));
-		return new ActiveMerge(parcels.prepareOverwrite(firstIndex, merged), combinedComposition);
+		var stored = parcels.prepareOverwrite(firstIndex, merged);
+		double dx = first.velocityX() - (double) second.velocityX(), dy = first.velocityY() - (double) second.velocityY();
+		double dz = first.velocityZ() - (double) second.velocityZ();
+		SignedDyadic heat = SignedDyadic.of(.5 * first.mass() * (second.massUnits() / (double) combinedMassUnits)
+				* (dx * dx + dy * dy + dz * dz));
+		SignedDyadic potential = SignedDyadic.of(stored.mass()).multiply(SignedDyadic.of(stored.y()))
+				.subtract(SignedDyadic.of(first.mass()).multiply(SignedDyadic.of(first.y())))
+				.subtract(SignedDyadic.of(second.mass()).multiply(SignedDyadic.of(second.y())))
+				.multiply(SignedDyadic.of(gravity));
+		SignedDyadic rounding = kineticEnergy(first).add(kineticEnergy(second)).subtract(kineticEnergy(stored))
+				.subtract(heat).subtract(potential);
+		return new ActiveMerge(stored, combinedComposition, heat, rounding);
 	}
 
 	private static float weighted(float left, double leftWeight, float right, double rightWeight, double total) {
@@ -526,7 +590,11 @@ public final class GranularInventory {
 		public double mass() { return mmm.units.Mass.kilograms(massUnits); }
 	}
 
-	public record CompactionStats(int merges, int evaluations) { }
+	/** Rounding is source stored mechanical energy minus final energy and physical heat. */
+	/** Mechanical rounding is stored KE+GPE loss minus analytic heat; it is observed without heating U. */
+	public record CompactionStats(int merges, int evaluations, SignedDyadic physicalHeat, SignedDyadic mechanicalRounding) {
+		public CompactionStats(int merges, int evaluations) { this(merges, evaluations, SignedDyadic.ZERO, SignedDyadic.ZERO); }
+	}
 	@FunctionalInterface
 	public interface ActiveMergeAcceptance {
 		boolean test(int firstIndex, int secondIndex, GranularParcelStore.Parcel first, GranularParcelStore.Parcel second,
@@ -535,15 +603,23 @@ public final class GranularInventory {
 	public interface EnergyAdapter {
 		EnergyPlan planActiveToDeposits(List<DepositTransfer> transfers);
 		boolean canActiveMerge(int first, int second, GranularParcelStore.Parcel merged,
-		                       SolidCompositionRecord composition);
-		void commitActiveMerge(int first, int second);
+		                       SolidCompositionRecord composition, SignedDyadic heat);
+		void commitActiveMerge(int first, int second, SignedDyadic heat);
 		EnergyPlan planDepositWake(int cell, int material, int composition, long takenMassUnits, long totalMassUnits);
 		void clearExternal();
 	}
-	public record DepositTransfer(int active, int cell, int material, int composition) { }
+	public record DepositTransfer(int active, int cell, int material, int composition, SignedDyadic heat) {
+		public DepositTransfer(int active, int cell, int material, int composition) {
+			this(active, cell, material, composition, SignedDyadic.ZERO);
+		}
+		public DepositTransfer {
+			if (heat == null || heat.signum() < 0) throw new IllegalArgumentException("Deposit heat is invalid");
+		}
+	}
 	public interface EnergyPlan {
 		void requireCurrent();
 		void commit();
 	}
-	private record ActiveMerge(GranularParcelStore.Parcel parcel, SolidCompositionRecord composition) { }
+	private record ActiveMerge(GranularParcelStore.Parcel parcel, SolidCompositionRecord composition,
+	                           SignedDyadic heat, SignedDyadic mechanicalRounding) { }
 }

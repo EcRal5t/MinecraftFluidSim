@@ -2,7 +2,6 @@ package mmm.simulation;
 
 import mmm.fluid.BuiltinFluidMaterials;
 import mmm.fluid.FluidDomain;
-import mmm.fluid.FlipMaterialParticleState;
 import mmm.fluid.FluidMaterialRegistry;
 import mmm.fluid.FluidSolverConfig;
 import mmm.fluid.air.GasRegistry;
@@ -55,9 +54,11 @@ abstract class ProductionReplayValidationSupport {
 		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
+		float[] volumes=new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
 		for (int y = 0; y < 4; y++) for (int z = 0; z < 8; z++) for (int x = 0; x < 8; x++) {
-			domain.setVolume(x, y, z, 1.0F);
+			volumes[(z*domain.sizeY()+y)*domain.sizeX()+x]=1;
 		}
+		domain.setVolumes(volumes);
 		FullCapabilityTestFixture.bindFull(domain, registries,
 				GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 		return domain;
@@ -69,9 +70,11 @@ abstract class ProductionReplayValidationSupport {
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 		FullCapabilityTestFixture.bindFull(domain, registries,
 				GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		float[] volumes=new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
 		for (int y = 0; y < 4; y++) for (int z = 0; z < 8; z++) for (int x = 0; x < 8; x++) {
-			domain.setVolume(x, y, z, 1.0F);
+			volumes[(z*domain.sizeY()+y)*domain.sizeX()+x]=1;
 		}
+		domain.setVolumes(volumes);
 		return domain;
 	}
 
@@ -79,12 +82,14 @@ abstract class ProductionReplayValidationSupport {
 	static FluidDomain createFullyBoundDamBreakDemo(FullCapabilityTestFixture.Registries registries) {
 		FluidDomain domain = new FluidDomain(24, 16, 24, productionConfig(), 73_728);
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
+		float[] volumes=new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
 		for (int y = 0; y < 12; y++) for (int z = 0; z < 24; z++) for (int x = 0; x < 9; x++) {
-			domain.setVolume(x, y, z, 1.0F);
+			volumes[(z*domain.sizeY()+y)*domain.sizeX()+x]=1;
 		}
+		domain.setVolumes(volumes);
 		FullCapabilityTestFixture.bindFull(domain, registries,
 				GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-		require(domain.particleCount() == 20_736 && domain.totalVolumeExact() == 2_592.0,
+		require(domain.totalVolumeExact() == 2_592.0,
 				"dam-break fixture does not match the production demo inventory");
 		return domain;
 	}
@@ -93,41 +98,33 @@ abstract class ProductionReplayValidationSupport {
 	static FluidDomain createFullyBoundFloorDamBreakDemo(FullCapabilityTestFixture.Registries registries) {
 		FluidDomain domain = new FluidDomain(24, 16, 24, productionConfig(), 73_728);
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
+		var floor=new java.util.ArrayList<FluidDomain.CollisionEdit>();
 		for (int y = 0; y < 4; y++) for (int z = 0; z < 24; z++) for (int x = 0; x < 24; x++) {
-			domain.setSolid(x, y, z, true);
+			floor.add(new FluidDomain.CollisionEdit(x,y,z,255));
 		}
+		domain.beginCollisionEdits(domain.planCollisionEdits(floor));
+		for(FluidDomain.CollisionEdit edit:floor) domain.setSolidMicroMask(edit.x(),edit.y(),edit.z(),edit.mask());
+		float[] volumes=new float[24*16*24];
 		for (int y = 0; y < 12; y++) for (int z = 0; z < 24; z++) for (int x = 0; x < 9; x++) {
-			if (!domain.isSolid(x, y, z)) domain.setVolume(x, y, z, 1.0F);
+			if (!domain.isSolid(x, y, z)) volumes[(z*domain.sizeY()+y)*domain.sizeX()+x]=1;
 		}
+		domain.setVolumes(volumes);
 		FullCapabilityTestFixture.bindFull(domain, registries,
 				GasRegistry.STANDARD_TEMPERATURE_K, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-		require(domain.particleCount() == 13_824 && domain.totalVolumeExact() == 1_728.0,
+		require(domain.totalVolumeExact() == 1_728.0,
 				"floor dam-break fixture does not match the production demo inventory");
 		return domain;
 	}
 
-	static double kineticEnergy(FlipMaterialParticleState state) {
-		long[] mass = state.copyParticleMassUnits();
-		float[] velocity = state.copyParticleVelocities();
-		double result = 0.0;
-		for (int marker = 0; marker < mass.length; marker++) {
-			int base = marker * 3;
-			result += 0.5 * mass[marker] * (velocity[base] * velocity[base]
-					+ velocity[base + 1] * velocity[base + 1]
-					+ velocity[base + 2] * velocity[base + 2]);
-		}
-		return result * Math.pow(state.cellSize(), 3.0);
-	}
+	static double kineticEnergy(FluidDomain domain) { return domain.liquidKineticEnergyJoules(); }
 
-	static double centerOfMassY(FlipMaterialParticleState state) {
-		long[] mass = state.copyParticleMassUnits();
-		float[] positionVolume = state.copyPositionVolume();
-		double weighted = 0.0, total = 0.0;
-		for (int marker = 0; marker < mass.length; marker++) {
-			weighted += mass[marker] * positionVolume[marker * 4 + 1];
-			total += mass[marker];
+	static double centerOfMassY(FluidDomain domain) {
+		double weighted=0; long mass=0;
+		for (var stock:domain.exportLiquidCellState().physicalStocks()) {
+			weighted+=stock.massUnits()*(stock.key().cell()/domain.sizeX()%domain.sizeY()+.5)*domain.config().cellSize();
+			mass=Math.addExact(mass,stock.massUnits());
 		}
-		return weighted / total;
+		return weighted/mass;
 	}
 
 	static FluidSolverConfig productionConfig() {

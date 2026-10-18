@@ -437,7 +437,7 @@ final class RegionRepositoryAdapter {
 		}
 
 		FluidRegion probe = unloadedRegion(manifest);
-		restoreThermalGeneration(probe, previous.state());
+		restoreFeatureGeneration(probe, previous.state());
 		if (!probe.solverLoaded()
 				|| !probe.domain().exactInternalEnergy().equals(probe.domain().thermalAudit().expectedInventory())) {
 			throw new IOException("Previous checkpoint probe did not restore a closed thermal inventory");
@@ -542,99 +542,15 @@ final class RegionRepositoryAdapter {
 				: RegionCheckpointAssembler.capture(source, generation));
 	}
 
-	private void restoreThermalGeneration(FluidRegion region, RegionState state) throws IOException {
-		if (thermalRegistry == null || gasRegistry == null) {
-			throw new IOException("Authoritative thermal/gas registry is unavailable");
-		}
-		RegionManifest manifest = state.manifest();
-		RegionCheckpointRestorer restorer = new RegionCheckpointRestorer(state.checkpoint());
-		if (manifest.layout() != RegionStateLayout.THERMAL) {
-			throw new IOException("Checkpoint does not use the current thermal region layout");
-		}
-		long generation = manifest.checkpointGeneration();
+	private void restoreFeatureGeneration(FluidRegion region,RegionState state)throws IOException {
+		var restorer=new RegionCheckpointRestorer(state.checkpoint());long generation=state.manifest().checkpointGeneration();
 		try {
-			if (manifest.hasChemicalState()) {
-				if (!profile.hasCapability(WorldCapability.CHEMISTRY) || chemicalRegistry == null) {
-					throw new IOException("Chemical thermal checkpoint requires the chemistry registry and gate");
-				}
-				region.restoreChemicalSolver(restorer.reconstructChemical(chemicalRegistry), chemicalRegistry, generation);
-			} else {
-				region.restoreMaterialSolver(restorer.reconstructMaterial(), generation);
-			}
-			boolean hasGranular = manifest.hasGranularState();
-			if (hasGranular) {
-				if (!profile.hasCapability(WorldCapability.GRANULAR) || granularRegistry == null) {
-					throw new IOException("Granular thermal checkpoint requires the granular registry and gate");
-				}
-				region.restoreGranularState(restorer.reconstructGranular(granularRegistry), granularRegistry, generation, materialDefinitions);
-			} else if (profile.hasCapability(WorldCapability.GRANULAR)) {
-				throw new IOException("Thermal checkpoint omits granular truth while the granular gate is enabled");
-			}
-			var thermal = restorer.reconstructThermal(thermalRegistry, gasRegistry, chemicalRegistry);
-			region.restoreGasState(restorer.reconstructGas(gasRegistry, chemicalRegistry), gasRegistry, generation, thermal);
-			region.restoreThermalState(thermal,
-					thermalRegistry, generation, maximumThermalSubsteps);
-			region.restoreFiniteThermalDevices(
-					restorer.reconstructFiniteThermalDevices(thermalRegistry), thermalRegistry, generation);
-			region.domain().restorePendingPhaseVolumeState(restorer.reconstructPendingPhaseVolume());
+			var authoritative=restorer.reconstructAuthoritativeState(chemicalRegistry,granularRegistry,thermalRegistry,gasRegistry,materialDefinitions);
+			region.restoreAuthoritativeSolver(authoritative,generation);
+			if(authoritative.thermalOwner()!=null)region.restoreFiniteThermalDevices(restorer.reconstructFiniteThermalDevices(thermalRegistry),thermalRegistry,generation);
 			enablePrecipitationIfConfigured(region);
-			// Pressure is deliberately not checkpoint truth. A running thermal region that was
-			// hydrostatically asleep must rebuild one real mechanical projection before the
-			// thermal-only axis consumes local pressure for condensed equilibrium.
-			if (!region.lifecycle().operatorPaused()
-					&& region.lifecycle().state() == FluidRegionLifecycle.State.HYDROSTATIC_SLEEP) {
-				region.wakeForActivity();
-			}
-		} catch (IOException | RuntimeException failure) {
-			if (region.solverLoaded() && region.checkpointGeneration() == generation) {
-				region.releaseSolverAfterCheckpoint(generation);
-			}
-			throw failure;
-		}
-	}
-
-	private void restoreGranularGeneration(FluidRegion region, RegionState state) throws IOException {
-		if (granularRegistry == null) throw new IOException("Authoritative granular registry is unavailable");
-		RegionManifest manifest = state.manifest();
-		RegionCheckpointRestorer restorer = new RegionCheckpointRestorer(state.checkpoint());
-		long generation = manifest.checkpointGeneration();
-		if (manifest.hasChemicalState()) {
-			if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
-			region.restoreChemicalSolver(restorer.reconstructChemical(chemicalRegistry), chemicalRegistry, generation);
-		} else {
-			region.restoreMaterialSolver(restorer.reconstructMaterial(), generation);
-		}
-		region.restoreGranularState(restorer.reconstructGranular(granularRegistry), granularRegistry, generation, materialDefinitions);
-		enablePrecipitationIfConfigured(region);
-	}
-
-	private void restoreFeatureGeneration(FluidRegion region, RegionState state) throws IOException {
-		restoreFeatureInventory(region, state);
-		if (region.domain().hasMaterialState()) region.domain().bindMaterialDefinitions(materialDefinitions);
-	}
-
-	private void restoreFeatureInventory(FluidRegion region, RegionState state) throws IOException {
-		RegionManifest manifest = state.manifest();
-		RegionCheckpointRestorer restorer = new RegionCheckpointRestorer(state.checkpoint());
-		if (profile.hasCapability(WorldCapability.THERMAL)) {
-			restoreThermalGeneration(region, state);
-			return;
-		}
-		if (profile.hasCapability(WorldCapability.GRANULAR)) {
-			restoreGranularGeneration(region, state);
-			return;
-		}
-		if (profile.hasCapability(WorldCapability.CHEMISTRY)) {
-			if (chemicalRegistry == null) throw new IOException("Authoritative chemical registry is unavailable");
-			region.restoreChemicalSolver(restorer.reconstructChemical(chemicalRegistry), chemicalRegistry,
-					manifest.checkpointGeneration());
-			return;
-		}
-		if (profile.hasCapability(WorldCapability.MATERIALS)) {
-			region.restoreMaterialSolver(restorer.reconstructMaterial(), manifest.checkpointGeneration());
-		} else {
-			region.restoreSolver(restorer.reconstruct(), manifest.checkpointGeneration());
-		}
+			if(authoritative.thermalOwner()!=null&&!region.lifecycle().operatorPaused()&&region.lifecycle().state()==FluidRegionLifecycle.State.HYDROSTATIC_SLEEP)region.wakeForActivity();
+		}catch(IOException|RuntimeException failure){if(region.solverLoaded()&&region.checkpointGeneration()==generation)region.releaseSolverAfterCheckpoint(generation);throw failure;}
 	}
 
 	private void enablePrecipitationIfConfigured(FluidRegion region) {
@@ -650,7 +566,7 @@ final class RegionRepositoryAdapter {
 				|| manifest.hasChemicalState() != profile.hasCapability(WorldCapability.CHEMISTRY)
 				|| manifest.hasGranularState() != profile.hasCapability(WorldCapability.GRANULAR)
 				|| manifest.hasThermalState() != profile.hasCapability(WorldCapability.THERMAL)
-				|| manifest.hasGasState() != profile.hasCapability(WorldCapability.THERMAL)) {
+				|| profile.hasCapability(WorldCapability.THERMAL) && !manifest.hasGasState()) {
 			throw new IOException("Persisted region layout does not match the committed world capability profile");
 		}
 	}

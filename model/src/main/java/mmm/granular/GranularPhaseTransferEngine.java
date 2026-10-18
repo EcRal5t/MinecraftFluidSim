@@ -1,298 +1,286 @@
 package mmm.granular;
 
-import mmm.chemistry.BinaryVolumeAllocator;
-import mmm.chemistry.ChemicalLimits;
-import mmm.chemistry.ChemicalMixtureRecord;
-import mmm.chemistry.ChemicalRegistry;
-import mmm.chemistry.ExactRational;
-import mmm.units.SolverUnitScale;
-import mmm.units.SignedDyadic;
-
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.PriorityQueue;
 import java.util.TreeMap;
+import mmm.chemistry.ChemicalMixtureRecord;
+import mmm.chemistry.ChemicalRegistry;
+import mmm.chemistry.ExactRational;
+import mmm.inventory.LiquidCellInventory;
+import mmm.units.Mass;
+import mmm.units.SignedDyadic;
+import mmm.units.SolverUnitScale;
 
-/** Pure same-cell saturation planner. Store ownership and commits remain in the domain adapter. */
+/** Pure saturation and integer composition transfer over connected cell liquid stocks. */
 public final class GranularPhaseTransferEngine {
-	private final ChemicalRegistry chemistry;
-	private final SolverUnitScale unitScale;
+  private final ChemicalRegistry chemistry;
+  private final SolverUnitScale units;
 
-	public GranularPhaseTransferEngine(ChemicalRegistry chemistry, SolverUnitScale unitScale) {
-		this.chemistry = java.util.Objects.requireNonNull(chemistry, "chemistry");
-		this.unitScale = java.util.Objects.requireNonNull(unitScale, "unitScale");
-	}
+  public GranularPhaseTransferEngine(ChemicalRegistry chemistry, SolverUnitScale units) {
+    this.chemistry = java.util.Objects.requireNonNull(chemistry);
+    this.units = java.util.Objects.requireNonNull(units);
+  }
 
-	public Plan plan(
-			SolidLiquidReaction rule, List<LiquidParcel> liquid, long existingAccessibleExtent,
-			long maximumTransferExtent
-	) {
-		if (rule == null || liquid == null || liquid.isEmpty() || existingAccessibleExtent < 0L
-				|| maximumTransferExtent <= 0L) throw new IllegalArgumentException("Invalid phase-transfer planning input");
-		long[] inventory = new long[chemistry.species().size()];
-		int[] ordinals = new int[liquid.size()]; double[] massWeights = new double[liquid.size()];
-		for (int index = 0; index < liquid.size(); index++) {
-			LiquidParcel parcel = liquid.get(index); ordinals[index] = parcel.marker();
-			if (index > 0 && ordinals[index - 1] >= ordinals[index]) {
-				throw new IllegalArgumentException("Phase-transfer liquid markers are not sorted and unique");
-			}
-			for (int entry = 0; entry < parcel.mixture().entryCount(); entry++) inventory[parcel.mixture().speciesHandle(entry)] =
-					Math.addExact(inventory[parcel.mixture().speciesHandle(entry)], parcel.mixture().amountAt(entry));
-			double exactMass = parcel.mixture().exactSpeciesMassKilograms(chemistry).toDouble(); massWeights[index] = exactMass;
-			if (!(Double.isFinite(massWeights[index]) && massWeights[index] > 0.0)) {
-				throw new BlockedException("Chemical marker exact mass is not a usable phase-transfer weight");
-			}
-		}
-		long available = Long.MAX_VALUE;
-		for (Map.Entry<String, Integer> term : rule.aqueousStoichiometry().entrySet()) {
-			available = Math.min(available, inventory[chemistry.speciesHandle(term.getKey())] / term.getValue());
-		}
-		if (available == Long.MAX_VALUE) available = 0L;
-		long totalExtent = Math.addExact(available, existingAccessibleExtent);
-		long capacity = floorCapacity(rule.saturationConcentrationMolPerCubicMeter(), liquid, totalExtent);
-		long target = Math.max(0L, totalExtent - capacity);
-		long signedExtent = target - existingAccessibleExtent;
-		if (signedExtent == 0L) return Plan.none();
-		if (signedExtent < 0L && !rule.reversible()) return Plan.none();
-		long magnitude = Math.min(Math.abs(signedExtent), maximumTransferExtent);
-		magnitude = magnitude / rule.solidExtentPerBatch() * rule.solidExtentPerBatch();
-		if (magnitude <= 0L) return Plan.deferred();
-		boolean precipitation = signedExtent > 0L;
-		for (; magnitude > 0L; magnitude -= rule.solidExtentPerBatch()) {
-			Plan candidate = planRepresentableMagnitude(rule, liquid, inventory, magnitude, precipitation, ordinals,
-					massWeights);
-			if (candidate != null) return candidate;
-		}
-		return Plan.deferred();
-	}
+  public record LiquidPortion(
+      LiquidCellInventory.Key key,
+      SignedDyadic volume,
+      long massUnits,
+      ChemicalMixtureRecord mixture) {
+    public LiquidPortion {
+      if (key == null
+          || volume == null
+          || volume.signum() <= 0
+          || massUnits <= 0
+          || mixture == null) throw new IllegalArgumentException("Invalid reactive liquid stock");
+    }
+  }
 
-	/** Returns null when this exact reaction batch cannot be represented by the current marker lattice. */
-	private Plan planRepresentableMagnitude(
-			SolidLiquidReaction rule, List<LiquidParcel> liquid, long[] inventory, long magnitude,
-			boolean precipitation, int[] ordinals, double[] massWeights
-	) {
-		long solidSvq = Math.multiplyExact(magnitude / rule.solidExtentPerBatch(), rule.solidVolumeSvqPerBatch());
+  public record StockUpdate(
+      LiquidCellInventory.Key key,
+      ChemicalMixtureRecord mixture,
+      SignedDyadic volume,
+      long massUnits) {}
 
-		TreeMap<Integer, Long> transferred = new TreeMap<>();
-		for (Map.Entry<String, Integer> term : rule.aqueousStoichiometry().entrySet()) transferred.put(
-				chemistry.speciesHandle(term.getKey()), Math.multiplyExact(magnitude, term.getValue()));
-		long[] resultInventory = inventory.clone();
-		for (Map.Entry<Integer, Long> term : transferred.entrySet()) resultInventory[term.getKey()] = precipitation
-				? Math.subtractExact(resultInventory[term.getKey()], term.getValue())
-				: Math.addExact(resultInventory[term.getKey()], term.getValue());
-		for (long amount : resultInventory) if (amount < 0L) throw new BlockedException("Phase transfer lacks aqueous species");
+  public record Plan(
+      long signedExtent,
+      long signedSolidSvq,
+      long signedSolidMassUnits,
+      SolidCompositionRecord transferredComposition,
+      List<StockUpdate> stockUpdates,
+      boolean retryRequired) {
+    public Plan {
+      stockUpdates = List.copyOf(stockUpdates);
+    }
 
-		@SuppressWarnings("unchecked") TreeMap<Integer, Long>[] distributed = new TreeMap[liquid.size()];
-		for (int index = 0; index < distributed.length; index++) distributed[index] = new TreeMap<>();
-		for (int species = 0; species < resultInventory.length; species++) if (resultInventory[species] > 0L) {
-			long[] allocation = BinaryVolumeAllocator.allocate(resultInventory[species], massWeights, ordinals);
-			for (int index = 0; index < allocation.length; index++) if (allocation[index] > 0L) {
-				distributed[index].put(species, allocation[index]);
-			}
-		}
-		if (!repairEmpty(distributed, ordinals)) return null;
-		for (TreeMap<Integer, Long> marker : distributed) {
-			if (marker.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL) return null;
-			long quanta = 0L;
-			for (long amount : marker.values()) quanta = Math.addExact(quanta, amount);
-			if (quanta > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) return null;
-		}
-		long[] volumeDeltas = representableVolumeAllocation(solidSvq, liquid, ordinals, precipitation);
-		if (volumeDeltas == null) return null;
-		MarkerUpdate[] updates = new MarkerUpdate[liquid.size()];
-		long liquidMassChange = 0;
-		for (int index = 0; index < liquid.size(); index++) {
-			LiquidParcel source = liquid.get(index);
-			ChemicalMixtureRecord replacement = record(
-					distributed[index], source.mixture().massResidualUnits());
-			if (replacement.massUnits(chemistry) <= 0L) {
-				return null;
-			}
-			long massUnits;
-			try {
-				massUnits = ChemicalMixtureRecord.massUnitsAfterSpeciesChange(source.massUnits(),
-						replacement.exactSpeciesMassKilograms(chemistry)
-								.subtract(source.mixture().exactSpeciesMassKilograms(chemistry)));
-			} catch (IllegalArgumentException | ArithmeticException unrepresentable) {
-				return null;
-			}
-			if (massUnits <= 0L) return null;
-			long signedVolumeDelta = precipitation ? -volumeDeltas[index] : volumeDeltas[index];
-			float cellVolume;
-			try { cellVolume = SolidVolume.addCellVolumeSvqExact(source.cellVolume(), signedVolumeDelta); }
-			catch (IllegalArgumentException unrepresentable) {
-				throw new BlockedException("Liquid marker cannot represent the exact SVQ phase-transfer delta");
-			}
-			updates[index] = new MarkerUpdate(source.marker(), replacement, cellVolume, massUnits);
-			liquidMassChange = Math.addExact(liquidMassChange, Math.subtractExact(massUnits, source.massUnits()));
-		}
-		SolidCompositionRecord solid = recordSolid(transferred);
-		long solidMass = solid.massUnits(chemistry);
-		long signedTransfer = precipitation ? -solidMass : solidMass;
-		if (liquidMassChange != signedTransfer) throw new IllegalStateException("Solid/liquid mass counts do not close");
-		return new Plan(precipitation ? magnitude : -magnitude, precipitation ? solidSvq : -solidSvq,
-				precipitation ? solidMass : -solidMass, solid, List.of(updates), false);
-	}
+    static Plan none() {
+      return new Plan(0, 0, 0, null, List.of(), false);
+    }
 
-	/**
-	 * Allocates the exact solid SVQ total on the binary32 lattice already owned by each liquid
-	 * marker. A proportional largest-remainder allocation is the preference, not a commit
-	 * invariant: any leftover is deterministically reassigned before the caller tries a smaller
-	 * whole reaction batch.
-	 */
-	private static long[] representableVolumeAllocation(
-			long total, List<LiquidParcel> liquid, int[] ordinals, boolean precipitation
-	) {
-		float[] weights = new float[liquid.size()];
-		for (int index = 0; index < weights.length; index++) weights[index] = liquid.get(index).cellVolume();
-		long[] preferred = BinaryVolumeAllocator.allocate(total, weights, ordinals);
-		long[] result = new long[liquid.size()];
-		long assigned = 0L;
-		for (int index = 0; index < result.length; index++) {
-			long limit = precipitation ? maximumRemovableSvq(liquid.get(index).cellVolume()) : total;
-			result[index] = representableDeltaAtMost(
-					liquid.get(index).cellVolume(), Math.min(preferred[index], limit), precipitation);
-			assigned = Math.addExact(assigned, result[index]);
-		}
-		long remaining = total - assigned;
-		for (int index = 0; index < result.length && remaining > 0L; index++) {
-			long limit = precipitation ? maximumRemovableSvq(liquid.get(index).cellVolume()) : total;
-			long candidate = representableDeltaAtMost(liquid.get(index).cellVolume(),
-					Math.min(limit, Math.addExact(result[index], remaining)), precipitation);
-			if (candidate <= result[index]) continue;
-			remaining -= candidate - result[index];
-			result[index] = candidate;
-		}
-		return remaining == 0L ? result : null;
-	}
+    static Plan deferred() {
+      return new Plan(0, 0, 0, null, List.of(), true);
+    }
 
-	private static long maximumRemovableSvq(float volume) {
-		long maximum = SolidVolume.cellVolumeSvqAtMost(volume);
-		double scaled = Math.scalb((double) volume, 24);
-		return scaled == Math.rint(scaled) ? Math.max(0L, maximum - 1L) : maximum;
-	}
+    public boolean changed() {
+      return signedExtent != 0;
+    }
 
-	/** Largest non-negative integer SVQ delta no greater than requested that lands on a float. */
-	private static long representableDeltaAtMost(float volume, long requested, boolean precipitation) {
-		if (requested <= 0L) return 0L;
-		double exact = (double) volume + Math.scalb(precipitation ? -requested : requested, -24);
-		if (!(Double.isFinite(exact) && exact > 0.0 && exact <= Float.MAX_VALUE)) return 0L;
-		float candidate = (float) exact;
-		if (precipitation && candidate < exact) candidate = Math.nextUp(candidate);
-		if (!precipitation && candidate > exact) candidate = Math.nextDown(candidate);
-		while (candidate != volume) {
-			double scaled = Math.scalb(precipitation
-					? (double) volume - candidate : (double) candidate - volume, 24);
-			if (scaled >= 0.0 && scaled <= requested && scaled == Math.rint(scaled)) return (long) scaled;
-			candidate = precipitation ? Math.nextUp(candidate) : Math.nextDown(candidate);
-		}
-		return 0L;
-	}
+    public boolean precipitation() {
+      return signedExtent > 0;
+    }
 
-	private ChemicalMixtureRecord record(Map<Integer, Long> values, long residualUnits) {
-		if (values.isEmpty() || values.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL) {
-			throw new BlockedException("Phase transfer exceeds the chemical marker entry budget");
-		}
-		int[] species = new int[values.size()]; long[] amounts = new long[values.size()]; int index = 0;
-		for (Map.Entry<Integer, Long> entry : values.entrySet()) {
-			species[index] = entry.getKey(); amounts[index++] = entry.getValue();
-		}
-		return new ChemicalMixtureRecord(species, amounts, residualUnits);
-	}
+    public double signedSolidMass() {
+      return Mass.kilograms(signedSolidMassUnits);
+    }
+  }
 
-	private SolidCompositionRecord recordSolid(Map<Integer, Long> values) {
-		int[] species = new int[values.size()]; long[] amounts = new long[values.size()]; int index = 0;
-		for (Map.Entry<Integer, Long> entry : values.entrySet()) {
-			species[index] = entry.getKey(); amounts[index++] = entry.getValue();
-		}
-		return new SolidCompositionRecord(species, amounts, 0L);
-	}
+  public Plan plan(
+      SolidLiquidReaction rule,
+      List<LiquidPortion> liquid,
+      long existingExtent,
+      long maximumExtent) {
+    if (rule == null
+        || liquid == null
+        || liquid.isEmpty()
+        || existingExtent < 0
+        || maximumExtent <= 0)
+      throw new IllegalArgumentException("Invalid solid/liquid saturation input");
+    long[] species = new long[chemistry.species().size()];
+    long totalMass = 0;
+    SignedDyadic totalVolume = SignedDyadic.ZERO;
+    LiquidCellInventory.Key previous = null;
+    for (var source : liquid) {
+      if (previous != null && previous.compareTo(source.key()) >= 0)
+        throw new IllegalArgumentException("Reactive stock identities must be sorted and unique");
+      previous = source.key();
+      totalVolume = totalVolume.add(source.volume());
+      totalMass = Math.addExact(totalMass, source.massUnits());
+      for (int entry = 0; entry < source.mixture().entryCount(); entry++)
+        species[source.mixture().speciesHandle(entry)] =
+            Math.addExact(
+                species[source.mixture().speciesHandle(entry)], source.mixture().amountAt(entry));
+    }
+    long aqueous = Long.MAX_VALUE;
+    for (var term : rule.aqueousStoichiometry().entrySet())
+      aqueous =
+          Math.min(aqueous, species[chemistry.speciesHandle(term.getKey())] / term.getValue());
+    if (aqueous == Long.MAX_VALUE) aqueous = 0;
+    long all = Math.addExact(aqueous, existingExtent),
+        desired =
+            Math.max(
+                    0,
+                    all
+                        - capacity(
+                            rule.saturationConcentrationMolPerCubicMeter(), totalVolume, all))
+                - existingExtent;
+    if (desired == 0 || desired < 0 && !rule.reversible()) return Plan.none();
+    boolean precipitation = desired > 0;
+    long batchExtent = rule.solidExtentPerBatch();
+    long batches = Math.min(Math.abs(desired), maximumExtent) / batchExtent;
+    var batchSolid = solid(rule, batchExtent);
+    long batchMass = batchSolid.massUnits(chemistry);
+    if (precipitation) {
+      batches = Math.min(batches, (totalMass - 1) / batchMass);
+      var scaled = totalVolume.multiply(SignedDyadic.of(SolidVolume.SVQ_PER_CELL, 0));
+      BigInteger floor =
+          scaled.exponent() >= 0
+              ? scaled.significand().shiftLeft(scaled.exponent())
+              : scaled.significand().shiftRight(-scaled.exponent());
+      if (scaled.fitsLongUnits(0)) floor = floor.subtract(BigInteger.ONE);
+      batches =
+          Math.min(
+              batches,
+              floor
+                  .max(BigInteger.ZERO)
+                  .divide(BigInteger.valueOf(rule.solidVolumeSvqPerBatch()))
+                  .min(BigInteger.valueOf(Long.MAX_VALUE))
+                  .longValueExact());
+    }
+    if (batches == 0) return Plan.deferred();
+    long extent = Math.multiplyExact(batches, batchExtent),
+        solidVolume = Math.multiplyExact(batches, rule.solidVolumeSvqPerBatch());
+    var solid = solid(rule, extent);
+    long solidMass = solid.massUnits(chemistry);
+    long[] massWeights = new long[liquid.size()];
+    double[] geometryWeights = new double[liquid.size()];
+    var volumeBounds = new SignedDyadic[liquid.size()];
+    for (int i = 0; i < liquid.size(); i++) {
+      var source = liquid.get(i);
+      massWeights[i] = source.massUnits();
+      geometryWeights[i] = source.volume().toDouble();
+      volumeBounds[i] =
+          precipitation
+              ? source.volume().subtract(SignedDyadic.of(Double.MIN_VALUE))
+              : SignedDyadic.of(solidVolume, -24);
+    }
+    var masses = allocate(solidMass, massWeights);
+    var volumes =
+        LiquidCellInventory.allocateVolumes(
+            SignedDyadic.of(solidVolume, -24), volumeBounds, geometryWeights);
+    var amounts = new ArrayList<TreeMap<Integer, Long>>();
+    for (var source : liquid) {
+      var map = new TreeMap<Integer, Long>();
+      for (int e = 0; e < source.mixture().entryCount(); e++)
+        map.put(source.mixture().speciesHandle(e), source.mixture().amountAt(e));
+      amounts.add(map);
+    }
+    for (var term : rule.aqueousStoichiometry().entrySet()) {
+      int speciesHandle = chemistry.speciesHandle(term.getKey());
+      long moved = Math.multiplyExact(extent, term.getValue());
+      long[] weights = massWeights;
+      if (precipitation) {
+        weights = new long[liquid.size()];
+        for (int i = 0; i < weights.length; i++)
+          weights[i] = liquid.get(i).mixture().amount(speciesHandle);
+      }
+      var shares = allocate(moved, weights);
+      for (int i = 0; i < shares.length; i++) {
+        long value =
+            Math.addExact(
+                amounts.get(i).getOrDefault(speciesHandle, 0L),
+                precipitation ? -shares[i] : shares[i]);
+        if (value == 0) amounts.get(i).remove(speciesHandle);
+        else amounts.get(i).put(speciesHandle, value);
+      }
+    }
+    var updates = new ArrayList<StockUpdate>();
+    long afterMass = 0, residualBefore = 0, residualAfter = 0;
+    for (int i = 0; i < liquid.size(); i++) {
+      var source = liquid.get(i);
+      long mass =
+          precipitation
+              ? source.massUnits() - masses[i]
+              : Math.addExact(source.massUnits(), masses[i]);
+      var composition = mixture(amounts.get(i));
+      composition =
+          composition.withMassResidualUnits(
+              Math.subtractExact(mass, composition.speciesMassUnits(chemistry)));
+      var volume =
+          precipitation ? source.volume().subtract(volumes[i]) : source.volume().add(volumes[i]);
+      updates.add(new StockUpdate(source.key(), composition, volume, mass));
+      afterMass = Math.addExact(afterMass, mass);
+      residualBefore = Math.addExact(residualBefore, source.mixture().massResidualUnits());
+      residualAfter = Math.addExact(residualAfter, composition.massResidualUnits());
+    }
+    long signedMass = precipitation ? solidMass : -solidMass;
+    if (Math.addExact(afterMass, signedMass) != totalMass || residualAfter != residualBefore)
+      throw new IllegalStateException("Reaction integer mass/residual failed to close");
+    return new Plan(
+        precipitation ? extent : -extent,
+        precipitation ? solidVolume : -solidVolume,
+        signedMass,
+        solid,
+        updates,
+        false);
+  }
 
-	private static long floorCapacity(ExactRational capacityMolPerCubicMeter, List<LiquidParcel> liquid, long totalExtent) {
-		int minimumExponent = Integer.MAX_VALUE;
-		Dyadic[] volumes = new Dyadic[liquid.size()];
-		for (int index = 0; index < volumes.length; index++) {
-			volumes[index] = dyadic(liquid.get(index).cellVolume());
-			minimumExponent = Math.min(minimumExponent, volumes[index].exponent());
-		}
-		BigInteger exactCellVolume = BigInteger.ZERO;
-		for (Dyadic volume : volumes) exactCellVolume = exactCellVolume.add(
-				BigInteger.valueOf(volume.significand()).shiftLeft(volume.exponent() - minimumExponent));
-		BigInteger numerator = capacityMolPerCubicMeter.numerator().multiply(exactCellVolume)
-				.multiply(BigInteger.valueOf(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL));
-		BigInteger denominator = capacityMolPerCubicMeter.denominator().multiply(BigInteger.valueOf(
-				SolidVolume.SVQ_PER_CUBIC_METER / SolidVolume.SVQ_PER_CELL));
-		if (minimumExponent >= 0) numerator = numerator.shiftLeft(minimumExponent);
-		else denominator = denominator.shiftLeft(-minimumExponent);
-		return numerator.divide(denominator).min(BigInteger.valueOf(totalExtent)).longValueExact();
-	}
+  private long capacity(ExactRational concentration, SignedDyadic volume, long maximum) {
+    var amount =
+        volume.exponent() >= 0
+            ? new ExactRational(volume.significand().shiftLeft(volume.exponent()), BigInteger.ONE)
+            : new ExactRational(volume.significand(), BigInteger.ONE.shiftLeft(-volume.exponent()));
+    amount =
+        amount
+            .multiply(ExactRational.ofDouble(units.cubicMetersPerNormalizedVolume()))
+            .multiply(concentration)
+            .multiply(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL);
+    return amount
+        .numerator()
+        .divide(amount.denominator())
+        .min(BigInteger.valueOf(maximum))
+        .longValueExact();
+  }
 
-	private static Dyadic dyadic(float value) {
-		int bits = Float.floatToRawIntBits(value);
-		int exponentBits = bits >>> 23 & 0xff;
-		int fraction = bits & 0x7f_ffff;
-		return exponentBits == 0
-				? new Dyadic(fraction, -149)
-				: new Dyadic((1 << 23) | fraction, exponentBits - 150);
-	}
+  private SolidCompositionRecord solid(SolidLiquidReaction rule, long extent) {
+    var species = new int[rule.solidComposition().size()];
+    var amounts = new long[species.length];
+    var map = new TreeMap<Integer, Long>();
+    for (var term : rule.solidComposition().entrySet())
+      map.put(chemistry.speciesHandle(term.getKey()), Math.multiplyExact(extent, term.getValue()));
+    int i = 0;
+    for (var term : map.entrySet()) {
+      species[i] = term.getKey();
+      amounts[i++] = term.getValue();
+    }
+    return new SolidCompositionRecord(species, amounts, 0);
+  }
 
-	private static boolean repairEmpty(TreeMap<Integer, Long>[] distributed, int[] ordinals) {
-		long[] totals = new long[distributed.length]; ArrayList<Integer> empty = new ArrayList<>();
-		PriorityQueue<Integer> donors = new PriorityQueue<>((left, right) -> {
-			int total = Long.compare(totals[right], totals[left]);
-			return total != 0 ? total : Integer.compare(ordinals[left], ordinals[right]);
-		});
-		for (int index = 0; index < distributed.length; index++) {
-			for (long amount : distributed[index].values()) totals[index] = Math.addExact(totals[index], amount);
-			if (totals[index] == 0L) empty.add(index); else if (totals[index] > 1L) donors.add(index);
-		}
-		for (int target : empty) {
-			Integer donor = donors.poll();
-			if (donor == null) return false;
-			Map.Entry<Integer, Long> largest = distributed[donor].entrySet().stream()
-					.max(ComparatorByAmount.INSTANCE).orElseThrow();
-			if (largest.getValue() == 1L) distributed[donor].remove(largest.getKey());
-			else distributed[donor].put(largest.getKey(), largest.getValue() - 1L);
-			distributed[target].put(largest.getKey(), 1L); totals[donor]--; totals[target] = 1L;
-			if (totals[donor] > 1L) donors.add(donor);
-		}
-		return true;
-	}
+  private ChemicalMixtureRecord mixture(TreeMap<Integer, Long> map) {
+    var species = new int[map.size()];
+    var amounts = new long[map.size()];
+    int i = 0;
+    for (var term : map.entrySet()) {
+      species[i] = term.getKey();
+      amounts[i++] = term.getValue();
+    }
+    return new ChemicalMixtureRecord(species, amounts, 0);
+  }
 
+  /** Bounded integer quotas; every leftover is one mass/species quantum. */
+  private static long[] allocate(long amount, long[] weights) {
+    long total = 0;
+    for (long value : weights) total = Math.addExact(total, value);
+    if (total <= 0 || amount < 0)
+      throw new IllegalArgumentException("Reactive allocation has no actual stock");
+    var result = new long[weights.length];
+    long remainder = amount;
+    for (int i = 0; i < weights.length; i++) {
+      result[i] = Mass.portion(amount, weights[i], total);
+      remainder -= result[i];
+    }
+    for (int i = 0; remainder > 0 && i < result.length; i++) {
+      if (amount > total || result[i] < weights[i]) {
+        result[i]++;
+        remainder--;
+      }
+    }
+    if (remainder != 0) throw new IllegalStateException("Reactive integer quotas failed to close");
+    return result;
+  }
 
-	public record LiquidParcel(int marker, float cellVolume, long massUnits, ChemicalMixtureRecord mixture) {
-		public double mass() { return unitMass(massUnits); }
-		public LiquidParcel {
-			if (marker < 0 || !(Float.isFinite(cellVolume) && cellVolume > 0.0F)
-					|| massUnits <= 0 || mixture == null) {
-				throw new IllegalArgumentException("Invalid phase-transfer liquid parcel");
-			}
-		}
-	}
-	public record MarkerUpdate(int marker, ChemicalMixtureRecord mixture, float cellVolume, long massUnits) { public double mass() { return unitMass(massUnits); } }
-	public record Plan(long signedExtent, long signedSolidSvq, long signedSolidMassUnits,
-	                   SolidCompositionRecord transferredComposition, List<MarkerUpdate> markerUpdates, boolean retryRequired) {
-		static Plan none() { return new Plan(0L, 0L, 0L, null, List.of(), false); }
-		static Plan deferred() { return new Plan(0L, 0L, 0L, null, List.of(), true); }
-		public double signedSolidMass() { return mmm.units.Mass.kilograms(signedSolidMassUnits); }
-		public boolean changed() { return signedExtent != 0L; }
-		public boolean precipitation() { return signedExtent > 0L; }
-	}
-
-	private enum ComparatorByAmount implements java.util.Comparator<Map.Entry<Integer, Long>> {
-		INSTANCE;
-		@Override public int compare(Map.Entry<Integer, Long> left, Map.Entry<Integer, Long> right) {
-			int amount = Long.compare(left.getValue(), right.getValue());
-			return amount != 0 ? amount : Integer.compare(right.getKey(), left.getKey());
-		}
-	}
-
-	private static double unitMass(long units) { return mmm.units.Mass.kilograms(units); }
-	private record Dyadic(int significand, int exponent) { }
-
-	public static final class BlockedException extends IllegalStateException {
-		public BlockedException(String message) { super(message); }
-	}
+  public static final class BlockedException extends IllegalStateException {
+    public BlockedException(String message) {
+      super(message);
+    }
+  }
 }

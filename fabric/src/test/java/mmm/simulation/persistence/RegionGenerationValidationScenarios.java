@@ -93,9 +93,9 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		RegionManifest decoded = codec.decodeManifest(codec.encodeManifest(signed));
 		require(decoded.extensions().equals(List.of(extension)), "unknown length-delimited manifest extension was not retained");
 		RegionSectionState section = original.sections().getFirst();
-		RegionSectionState unsignedSection = new RegionSectionState(section.regionId(), section.dimensionId(), section.checkpointGeneration(),
+		RegionSectionState unsignedSection = new RegionSectionState(section.layout(), section.regionId(), section.dimensionId(), section.checkpointGeneration(),
 				section.sectionX(), section.sectionY(), section.sectionZ(), section.localStartX(), section.localStartY(), section.localStartZ(),
-				section.sizeX(), section.sizeY(), section.sizeZ(), section.markerOrdinals(), section.positionVolume(), section.velocities(), section.markerMassUnits(),
+				section.sizeX(), section.sizeY(), section.sizeZ(), section.liquidStocks(),section.faceMomentum(),
 				section.solidMask(), List.of(extension), 0L);
 		RegionSectionState signedSection = signedSection(unsignedSection);
 		require(codec.decodeSection(codec.encodeSection(signedSection)).extensions().equals(List.of(extension)),
@@ -136,10 +136,9 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		RegionGenerationStore files = new RegionGenerationStore(root);
 		RegionState original = RegionCheckpointFixtures.capture(region, 1L);
 		RegionSectionState first = original.sections().getFirst();
-		RegionSectionState wrongOwner = signedSection(new RegionSectionState(UUID.randomUUID(), first.dimensionId(),
+		RegionSectionState wrongOwner = signedSection(new RegionSectionState(first.layout(), UUID.randomUUID(), first.dimensionId(),
 				first.checkpointGeneration(), first.sectionX(), first.sectionY(), first.sectionZ(), first.localStartX(), first.localStartY(),
-				first.localStartZ(), first.sizeX(), first.sizeY(), first.sizeZ(), first.markerOrdinals(), first.positionVolume(),
-				first.velocities(), first.markerMassUnits(), first.solidMask(), first.extensions(), 0L));
+				first.localStartZ(), first.sizeX(), first.sizeY(), first.sizeZ(), first.liquidStocks(),first.faceMomentum(), first.solidMask(), first.extensions(), 0L));
 		List<RegionSectionState> mixedSections = new ArrayList<>(original.sections());
 		mixedSections.set(0, wrongOwner);
 		expectIOException(() -> new RegionState(original.manifest(), mixedSections).validate(), "mixed section owner was accepted");

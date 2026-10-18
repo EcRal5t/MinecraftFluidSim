@@ -31,7 +31,7 @@ final class ThermalRegionStateCodec {
 	private static final int KNOWN_CAPABILITIES = CAP_MATERIALS | CAP_CHEMISTRY | CAP_GRANULAR | CAP_GAS | CAP_THERMAL;
 	private static final int MANIFEST_MAGIC = 0x5257544d; // RWTM
 	private static final int SECTION_MAGIC = 0x52575453; // RWTS
-	private static final int PAYLOAD_VERSION = 3;
+	private static final int PAYLOAD_VERSION = 4;
 	private static final int MAX_DYADIC_BYTES = SignedDyadic.MAX_SIGNIFICAND_BITS / 8 + 2;
 
 	byte[] encodeManifest(ManifestData data) throws IOException {
@@ -111,7 +111,7 @@ final class ThermalRegionStateCodec {
 		ByteArrayOutputStream bytes = new ByteArrayOutputStream();
 		try (DataOutputStream out = new DataOutputStream(bytes)) {
 			out.writeInt(SECTION_MAGIC); out.writeInt(PAYLOAD_VERSION);
-			writeDoubles(out, data.liquidMarkerEnergyBits()); writeDoubles(out, data.activeParcelEnergyBits());
+			writeDoubles(out, data.activeParcelEnergyBits());
 			writeDoubles(out, data.depositGroupEnergyBits());
 			out.writeInt(data.coherentGroups().size());
 			for (CoherentEntry group : data.coherentGroups()) {
@@ -130,7 +130,6 @@ final class ThermalRegionStateCodec {
 			if (input.readInt() != SECTION_MAGIC || input.readInt() != PAYLOAD_VERSION) {
 				throw new IOException("Unknown thermal section payload");
 			}
-			long[] liquid = readDoubles(input, maximumLiquid, "liquid marker energies");
 			long[] active = readDoubles(input, maximumActive, "active parcel energies");
 			long[] deposits = readDoubles(input, maximumDeposits, "deposit group energies");
 			int coherentCount = count(input.readInt(), ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION, "coherent groups");
@@ -139,7 +138,7 @@ final class ThermalRegionStateCodec {
 					input.readInt(), input.readUTF(), input.readLong(), input.readLong(),
 					readComposition(input), input.readLong()));
 			SignedDyadic energy = readDyadic(input); requireEnd(input);
-			SectionData result = new SectionData(liquid, active, deposits, coherent, energy);
+			SectionData result = new SectionData(active, deposits, coherent, energy);
 			validateSection(result);
 			return result;
 		} catch (EOFException truncated) {
@@ -194,12 +193,12 @@ final class ThermalRegionStateCodec {
 	}
 
 	private static void validateSection(SectionData data) {
-		if (data == null || data.liquidMarkerEnergyBits() == null || data.activeParcelEnergyBits() == null
+		if (data == null || data.activeParcelEnergyBits() == null
 				|| data.depositGroupEnergyBits() == null || data.coherentGroups() == null || data.energy() == null) {
 			throw new IllegalArgumentException("Thermal section data is missing");
 		}
 		SignedDyadic energy = SignedDyadic.ZERO;
-		for (long[] values : List.of(data.liquidMarkerEnergyBits(), data.activeParcelEnergyBits(), data.depositGroupEnergyBits())) {
+		for (long[] values : List.of(data.activeParcelEnergyBits(), data.depositGroupEnergyBits())) {
 			for (long bits : values) { requireFinite(bits, "thermal inventory energy"); energy = energy.add(SignedDyadic.of(Double.longBitsToDouble(bits))); }
 		}
 		CoherentEntry previous = null;
@@ -306,14 +305,13 @@ final class ThermalRegionStateCodec {
 	) { }
 
 	record SectionData(
-			long[] liquidMarkerEnergyBits, long[] activeParcelEnergyBits, long[] depositGroupEnergyBits,
+			long[] activeParcelEnergyBits, long[] depositGroupEnergyBits,
 			List<CoherentEntry> coherentGroups, SignedDyadic energy
 	) {
 		SectionData {
-			liquidMarkerEnergyBits = liquidMarkerEnergyBits.clone(); activeParcelEnergyBits = activeParcelEnergyBits.clone();
+			activeParcelEnergyBits = activeParcelEnergyBits.clone();
 			depositGroupEnergyBits = depositGroupEnergyBits.clone(); coherentGroups = List.copyOf(coherentGroups);
 		}
-		@Override public long[] liquidMarkerEnergyBits() { return liquidMarkerEnergyBits.clone(); }
 		@Override public long[] activeParcelEnergyBits() { return activeParcelEnergyBits.clone(); }
 		@Override public long[] depositGroupEnergyBits() { return depositGroupEnergyBits.clone(); }
 	}

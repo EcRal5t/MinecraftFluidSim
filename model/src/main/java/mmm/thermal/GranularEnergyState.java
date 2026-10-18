@@ -96,23 +96,11 @@ public final class GranularEnergyState {
 		return taken;
 	}
 
-	void requireActiveToDeposit(int active, GranularEnergyColumn.DepositKey target) {
-		granularEnergy.requireAddDeposit(target, granularEnergy.activeEnergy(active));
-	}
-
-	void commitActiveToDeposit(int active, GranularEnergyColumn.DepositKey target) {
-		SignedDyadic before = granularEnergy.exactEnergy();
-		double energy = granularEnergy.removeActiveSwap(active);
-		granularEnergy.addDeposit(target, energy);
-		audit.update(ledger -> ledger.withRoundoff(granularEnergy.exactEnergy().subtract(before)));
-		revision++;
-	}
-
 	GranularInventory.EnergyPlan planActiveToDeposits(List<GranularInventory.DepositTransfer> transfers) {
 		GranularEnergyColumn.ActiveToDepositsPlan columnPlan = granularEnergy.planActiveToDeposits(transfers);
 		if (columnPlan == null) return null;
 		long baseRevision = revision, auditRevision = audit.revision();
-		ThermalAuditLedger auditAfter = audit.ledger().withRoundoff(columnPlan.roundoff);
+		ThermalAuditLedger auditAfter = audit.ledger().withMechanicalWork(columnPlan.mechanicalHeat).withRoundoff(columnPlan.roundoff);
 		return new GranularInventory.EnergyPlan() {
 			@Override public void requireCurrent() {
 				if (revision != baseRevision || audit.revision() != auditRevision) {
@@ -128,9 +116,9 @@ public final class GranularEnergyState {
 		};
 	}
 
-	boolean canActiveMerge(int first, int second, int material, double mass, Map<String, Long> composition) {
+	boolean canActiveMerge(int first, int second, int material, double mass, Map<String, Long> composition, SignedDyadic heat) {
 		double left = granularEnergy.activeEnergy(first), right = granularEnergy.activeEnergy(second);
-		double merged = left + right;
+		double merged = SignedDyadic.of(left).add(SignedDyadic.of(right)).add(heat).toDouble();
 		if (!Double.isFinite(merged)) return false;
 		try {
 			stateFunction.stateForInventory(List.of(new ThermalStateFunction.InventoryPortion(
@@ -138,15 +126,18 @@ public final class GranularEnergyState {
 		} catch (ThermalStateFunction.EnergyOutsideValidityException outside) {
 			return false;
 		}
-		SignedDyadic roundoff = SignedDyadic.of(merged).subtract(SignedDyadic.of(left)).subtract(SignedDyadic.of(right));
-		audit.ledger().withRoundoff(roundoff);
+		SignedDyadic roundoff = SignedDyadic.of(merged).subtract(SignedDyadic.of(left)).subtract(SignedDyadic.of(right)).subtract(heat);
+		audit.ledger().withMechanicalWork(heat).withRoundoff(roundoff);
 		return true;
 	}
 
-	void commitActiveMerge(int first, int second) {
-		SignedDyadic before = granularEnergy.exactEnergy();
-		granularEnergy.mergeActive(first, second);
-		audit.update(ledger -> ledger.withRoundoff(granularEnergy.exactEnergy().subtract(before)));
+	void commitActiveMerge(int first, int second, SignedDyadic heat) {
+		SignedDyadic before = SignedDyadic.of(granularEnergy.activeEnergy(first)).add(SignedDyadic.of(granularEnergy.activeEnergy(second)));
+		int last = granularEnergy.activeCount() - 1;
+		int target = first == last && second != last ? second : first;
+		granularEnergy.mergeActive(first, second, heat);
+		SignedDyadic roundoff = SignedDyadic.of(granularEnergy.activeEnergy(target)).subtract(before).subtract(heat);
+		audit.update(ledger -> ledger.withMechanicalWork(heat).withRoundoff(roundoff));
 		revision++;
 	}
 
@@ -166,22 +157,21 @@ public final class GranularEnergyState {
 		};
 	}
 
-	void requireDepositMove(
-			GranularEnergyColumn.DepositKey source, GranularEnergyColumn.DepositKey target,
-			long movedMassUnits, long sourceMassUnits
-	) {
-		double moved = granularEnergy.previewDepositTake(source, movedMassUnits, sourceMassUnits);
-		granularEnergy.requireAddDeposit(target, moved);
-	}
-
-	void commitDepositMove(
-			GranularEnergyColumn.DepositKey source, GranularEnergyColumn.DepositKey target,
-			long movedMassUnits, long sourceMassUnits
-	) {
-		SignedDyadic before = granularEnergy.exactEnergy();
-		granularEnergy.moveDeposit(source, target, movedMassUnits, sourceMassUnits);
-		audit.update(ledger -> ledger.withRoundoff(granularEnergy.exactEnergy().subtract(before)));
-		revision++;
+	GranularInventory.EnergyPlan planDepositMove(GranularEnergyColumn.DepositKey source, GranularEnergyColumn.DepositKey target,
+			long movedMassUnits, long sourceMassUnits, SignedDyadic heat) {
+		var columnPlan = granularEnergy.planDepositMove(source, target, movedMassUnits, sourceMassUnits, heat);
+		long baseRevision = revision, auditRevision = audit.revision();
+		var auditAfter = audit.ledger().withMechanicalWork(heat).withRoundoff(columnPlan.roundoff);
+		return new GranularInventory.EnergyPlan() {
+			@Override public void requireCurrent() {
+				if (revision != baseRevision || audit.revision() != auditRevision)
+					throw new IllegalStateException("Thermal state changed after bed relaxation planning");
+				granularEnergy.requireCurrent(columnPlan);
+			}
+			@Override public void commit() {
+				requireCurrent(); granularEnergy.commitDepositMove(columnPlan); audit.replace(auditAfter); revision++;
+			}
+		};
 	}
 
 	void clearGranularExternal() {
@@ -324,6 +314,25 @@ public final class GranularEnergyState {
 		audit.replace(auditAfter);
 		revision++;
 	}
+
+	GranularInventory.EnergyPlan planEnergyReplacement(double[] active,List<GranularEnergyColumn.DepositEnergy> deposits,
+	                                                  List<CoherentPhaseStore.Group> coherent) {
+		var candidate=granularEnergy.prepareReplacement(active,deposits);
+		var coherentCandidate=coherent==null?null:coherentPhases.prepareReplacement(coherent);
+		long before=revision,auditBefore=audit.revision();
+		return new GranularInventory.EnergyPlan() {
+			@Override public void requireCurrent() {
+				if(before!=revision||auditBefore!=audit.revision()) throw new IllegalStateException("Solid thermal owners changed after batch planning");
+			}
+			@Override public void commit() {
+				requireCurrent();granularEnergy.commitPreparedReplacement(candidate);
+				if(coherentCandidate!=null) coherentPhases.commitPreparedReplacement(coherentCandidate);
+				revision++;
+			}
+		};
+	}
+
+	void commitCoherentReplacement(CoherentPhaseStore prepared) { coherentPhases.commitPreparedReplacement(prepared); revision++; }
 
 	void addCoherentInternal(CoherentPhaseStore.Group group) {
 		coherentPhases.add(group);

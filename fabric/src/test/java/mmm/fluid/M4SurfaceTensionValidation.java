@@ -1,5 +1,7 @@
 package mmm.fluid;
 
+import mmm.inventory.LiquidCellInventory;
+
 import java.util.List;
 
 /** M4 active-solver surface-tension gates: pressure-jump wiring, static droplet Laplace jump, no sustained parasitic flow and ledger conservation. */
@@ -243,16 +245,13 @@ private record DropletMetrics(double varianceX, float maximumSpeed) { }
 		check(domain.maximumPressure() == 0, "a liquid pair acted on an interface with its first phase absent");
 		check(domain.maximumParticleSpeed() == 0, "an unrelated liquid pair created liquid motion");
 		FluidDomain separated = liquidPairDroplet(12, config, .5, .0728, true);
-		for (int p = 0; p < 8; p++) separated.setMarkerMaterial(p, separated.materialRegistry, 1);
+		separated.setMaterialInCell(0,0,0,separated.materialRegistry,1);
 		separated.step();
 		check(separated.maximumPressure() == 0, "a remote phase changed an unrelated liquid interface");
 		check(separated.maximumParticleSpeed() == 0, "disjoint liquid-pair supports created motion");
 		FluidDomain full = liquidPairDroplet(8, config, 1, .0728, true);
 		FluidDomain diluted = liquidPairDroplet(8, config, 1, .0728, true);
-		for (int p = 0; p < full.particleCount(); p++) if (full.particles.materialHandle(p) == 0) {
-			full.setMarkerMaterial(p, full.materialRegistry, 1);
-			if (p % 8 == 0) diluted.setMarkerMaterial(p, diluted.materialRegistry, 1);
-		}
+		replaceAbsentFirstPhase(full,1);replaceAbsentFirstPhase(diluted,.125);
 		full.step(); diluted.step();
 		check(full.maximumPressure() > 0, "active pair failed to create a capillary pressure");
 		check(Math.abs(diluted.maximumPressure() / full.maximumPressure() - .125) < .002,
@@ -265,41 +264,30 @@ private record DropletMetrics(double varianceX, float maximumSpeed) { }
 
 	private static FluidDomain liquidPairDroplet(int size, FluidSolverConfig config, double radius, double sigma12,
 			boolean absentFirstPhase) {
-		FluidDomain domain = new FluidDomain(size, size, size, config, size * size * size * 8);
-		int particleCount = size * size * size * 8;
-		float[] positionVolume = new float[particleCount * 4];
-		float[] velocities = new float[particleCount * 3];
-		float totalVolume = 0.0F;
-		int particle = 0;
-		float h = config.cellSize();
-		for (int z = 0; z < size; z++) for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
-			for (int slot = 0; slot < 8; slot++) {
-				int base = particle * 4;
-				positionVolume[base] = (x + 0.5F) * h;
-				positionVolume[base + 1] = (y + 0.5F) * h;
-				positionVolume[base + 2] = (z + 0.5F) * h;
-				positionVolume[base + 3] = 0.125F;
-				totalVolume += 0.125F;
-				particle++;
-			}
-		}
-		domain.restoreParticleState(new FlipParticleState(size, size, size, h, particleCount,
-				totalVolume, positionVolume, velocities, mmm.units.Mass.createLiquid(h, 1000.0, positionVolume), domain.copyCollisionMicroMasks()));
-		FluidMaterial a = new FluidMaterial("mmm:a", config.density(), "mmm:a", 0.0, Math.PI / 2.0);
-		FluidMaterial b = new FluidMaterial("mmm:b", config.density(), "mmm:b", 0.0, Math.PI / 2.0);
-		FluidMaterial c = new FluidMaterial("mmm:c", config.density(), "mmm:c", 0, Math.PI / 2);
-		FluidMaterialRegistry registry = absentFirstPhase
-				? new FluidMaterialRegistry(List.of(a, b, c), List.of(new FluidMaterialRegistry.LiquidPairTension(1, 2, sigma12)))
-				: new FluidMaterialRegistry(List.of(a, b), List.of(new FluidMaterialRegistry.LiquidPairTension(0, 1, sigma12)));
-		double[] colour = SurfaceTensionCurvatureExperiment.sphereColour(size, radius, h);
-		for (int marker = 0; marker < domain.particleCount(); marker++) {
-			int x = Math.min(size - 1, (int) Math.floor(positionVolume[marker * 4] / h));
-			int y = Math.min(size - 1, (int) Math.floor(positionVolume[marker * 4 + 1] / h));
-			int z = Math.min(size - 1, (int) Math.floor(positionVolume[marker * 4 + 2] / h));
-			int materialHandle = colour[(z * size + y) * size + x] >= 0.5 ? (absentFirstPhase ? 2 : 1) : 0;
-			domain.setMarkerMaterial(marker, registry, materialHandle);
-		}
+		var domain=new FluidDomain(size,size,size,config,size*size*size*8);
+		FluidMaterial a=new FluidMaterial("mmm:a",config.density(),"mmm:a",0,Math.PI/2);
+		FluidMaterial b=new FluidMaterial("mmm:b",config.density(),"mmm:b",0,Math.PI/2);
+		FluidMaterial c=new FluidMaterial("mmm:c",config.density(),"mmm:c",0,Math.PI/2);
+		var registry=absentFirstPhase?new FluidMaterialRegistry(List.of(a,b,c),List.of(new FluidMaterialRegistry.LiquidPairTension(1,2,sigma12)))
+				:new FluidMaterialRegistry(List.of(a,b),List.of(new FluidMaterialRegistry.LiquidPairTension(0,1,sigma12)));
+		domain.bindMaterialRegistry(registry);
+		double[] colour=SurfaceTensionCurvatureExperiment.sphereColour(size,radius,config.cellSize());
+		float[] volume=new float[domain.cellCount];java.util.Arrays.fill(volume,1);int[] material=new int[domain.cellCount];
+		for(int cell=0;cell<material.length;cell++)material[cell]=colour[cell]>=.5?(absentFirstPhase?2:1):0;
+		domain.setVolumes(volume,material);
 		return domain;
+	}
+
+	private static void replaceAbsentFirstPhase(FluidDomain domain,double fraction) {
+		var edits=new java.util.ArrayList<LiquidCellInventory.Edit>();
+		for(var stock:domain.liquidCells.stocks())if(stock.key().material()==0) {
+			var first=new LiquidCellInventory.Key(stock.key().cell(),1,stock.key().supportMask());
+			var volume=mmm.units.SignedDyadic.of(stock.volumeFraction()*fraction);
+			long mass=Math.round(stock.massUnits()*fraction);
+			edits.add(new LiquidCellInventory.Edit(stock.key(),fraction==1?null:new LiquidCellInventory.Stock(stock.key(),stock.volume().subtract(volume),stock.massUnits()-mass,null,0,false)));
+			edits.add(new LiquidCellInventory.Edit(first,new LiquidCellInventory.Stock(first,volume,mass,null,0,false)));
+		}
+		domain.liquidCells.planEdits(edits).commit();domain.markCellInventoryChanged();
 	}
 
 	private static double[] binarySphereColour(int size, double radius, double cellSize) {

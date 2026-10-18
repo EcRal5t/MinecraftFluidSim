@@ -54,6 +54,11 @@ final class GranularSettlementGeometryPlan {
 			packing.clear();
 		}
 	}
+	long bulkVolumeAfterAdd(int cell, GranularDepositStore.SolidPortion portion) {
+		var target = packing.get(cell);
+		return target == null ? deposits.previewCellBulkVolumeAfterAdd(cell, portion)
+				: target.packing.bulkVolumeSvqAfterAdd(portion);
+	}
 	private boolean include(int index, int cell, IntToLongFunction geometricOpen) {
 		if (!admission.spend(1)) return false;
 		long capacity = geometricOpen.applyAsLong(cell);

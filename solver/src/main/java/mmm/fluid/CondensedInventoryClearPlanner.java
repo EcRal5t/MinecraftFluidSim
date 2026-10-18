@@ -27,19 +27,17 @@ final class CondensedInventoryClearPlanner {
 		ChemicalTransferLedger drained = ChemicalTransferLedger.EMPTY;
 		if (domain.chemicalParcels != null) {
 			ChemicalTransferLedger.Builder builder = ChemicalTransferLedger.builder(domain.chemicalParcels.registry());
-			for (int marker = 0; marker < domain.particles.count(); marker++) builder.add(
-					domain.materialRegistry.material(domain.particles.materialHandle(marker)).id(),
-					domain.chemicalParcels.indicator(marker),
-					domain.particles.volume(marker), domain.particles.massUnits(marker),
-					domain.chemicalParcels.record(marker));
+			for (var stock : domain.liquidCells.stocks()) builder.add(
+					domain.materialRegistry.material(stock.key().material()).id(), stock.indicator(),
+					stock.volumeFraction(), stock.massUnits(), stock.mixture());
 			drained = builder.build();
 			domain.chemicalParcels.requireCanRecordEscapedSink(drained);
 		}
-		return new FluidDomain.WaterClearPlan(domain.particles.count(),
+		return new FluidDomain.WaterClearPlan(domain.liquidCells.size(),
 				Double.doubleToRawLongBits(domain.totalVolumeExact()),
 				domain.totalMassUnits(), drained,
 				domain.thermalState == null ? SignedDyadic.ZERO
-						: domain.thermalState.exactLiquidEnergy(domain.particles.count()),
+						: domain.liquidCells.exactInternalEnergy(),
 				domain.carrierMutationRevision(),
 				domain.chemicalParcels == null ? 0L : domain.chemicalParcels.mutationRevision());
 	}

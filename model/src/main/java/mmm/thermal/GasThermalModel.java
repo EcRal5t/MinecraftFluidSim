@@ -39,7 +39,7 @@ public final class GasThermalModel {
 					&& Double.isFinite(densityKgPerCubicMeter) && densityKgPerCubicMeter > 0.0
 					&& Double.isFinite(heatCapacityJPerK) && heatCapacityJPerK > 0.0
 					&& Double.isFinite(gasConstantJPerK) && gasConstantJPerK > 0.0
-					&& Double.isFinite(isentropicExponent) && isentropicExponent > 1.0
+					&& Double.isFinite(isentropicExponent) && isentropicExponent >= 1.0
 					&& Double.isFinite(adiabaticBulkModulusPa) && adiabaticBulkModulusPa > 0.0
 					&& Double.isFinite(soundSpeedMetersPerSecond) && soundSpeedMetersPerSecond > 0.0
 					&& Double.isFinite(pressureCompliancePerPa) && pressureCompliancePerPa > 0.0)) {
@@ -94,6 +94,11 @@ public final class GasThermalModel {
 			throw new IllegalArgumentException("Vacuum has no continuum hydrodynamic state");
 		}
 		ThermalStateFunction.State thermal = state(inventory, internalEnergy);
+		return hydrodynamicState(inventory, availableVolume, thermal);
+	}
+
+	HydrodynamicState hydrodynamicState(GasInventory inventory, double availableVolume, ThermalStateFunction.State thermal) {
+		requireAvailableVolume(availableVolume, inventory);
 		double standardVolume = AirNetwork.cubicMeters(inventory.standardVolumeNanos());
 		double gasConstant = GasRegistry.STANDARD_PRESSURE_PA * standardVolume
 				/ GasRegistry.STANDARD_TEMPERATURE_K;
@@ -116,6 +121,11 @@ public final class GasThermalModel {
 			return 0.0;
 		}
 		ThermalStateFunction.State thermal = state(inventory, internalEnergy);
+		return absolutePressure(inventory, availableVolume, thermal);
+	}
+
+	double absolutePressure(GasInventory inventory, double availableVolume, ThermalStateFunction.State thermal) {
+		requireAvailableVolume(availableVolume, inventory);
 		double standardVolume = AirNetwork.cubicMeters(inventory.standardVolumeNanos());
 		double gasConstant = GasRegistry.STANDARD_PRESSURE_PA * standardVolume
 				/ GasRegistry.STANDARD_TEMPERATURE_K;
@@ -181,11 +191,47 @@ public final class GasThermalModel {
 		return new Compression(initial.temperatureK(), targetTemperature, finalEnergy, finalEnergy - internalEnergy);
 	}
 
+	/** Prepared finite-inventory isentrope; heat-capacity segments are shared with volume work. */
+	public final class PressureVolumeCurve {
+		private final List<ThermalStateFunction.InventoryPortion> portions;
+		private final HydrodynamicState initial;
+		private final double initialVolume;
+		private PressureVolumeCurve(GasInventory inventory, double volume, double energy) {
+			portions = GasThermalModel.this.portions(inventory);
+			initial = hydrodynamicState(inventory, volume, energy); initialVolume = volume;
+		}
+		public PressureVolume atPressure(double absolutePressure) {
+			if (!(absolutePressure > 0 && Double.isFinite(absolutePressure)))
+				throw new IllegalArgumentException("Gas pressure must be positive");
+			double r = initial.gasConstantJPerK();
+			double temperature = isentropicTemperature(portions, initial.temperatureK(),
+					r * logRatio(absolutePressure, initial.absolutePressurePa()), r);
+			double volume = initialVolume * (temperature / initial.temperatureK())
+					* (initial.absolutePressurePa() / absolutePressure);
+			double gamma = 1 + r / heatCapacityAt(portions, temperature);
+			return new PressureVolume(volume, volume / (gamma * absolutePressure));
+		}
+	}
+	public record PressureVolume(double volume, double compliance) {
+		public PressureVolume {
+			if (!(volume > 0 && compliance > 0 && Double.isFinite(volume) && Double.isFinite(compliance)))
+				throw new IllegalArgumentException("Gas isentrope has no finite positive volume");
+		}
+	}
+	public PressureVolumeCurve pressureVolumeCurve(GasInventory inventory, double volume, double energy) {
+		return new PressureVolumeCurve(inventory, volume, energy);
+	}
+
 	private double isentropicTemperature(
 			List<ThermalStateFunction.InventoryPortion> portions,
 			double initialTemperatureK,
 			double entropyChangeJPerK
 	) {
+		return isentropicTemperature(portions, initialTemperatureK, entropyChangeJPerK, 0);
+	}
+	private double isentropicTemperature(List<ThermalStateFunction.InventoryPortion> portions,
+	                                    double initialTemperatureK, double entropyChangeJPerK,
+	                                    double heatCapacityOffset) {
 		if (entropyChangeJPerK == 0.0) return initialTemperatureK;
 		boolean heating = entropyChangeJPerK > 0.0;
 		double remaining = Math.abs(entropyChangeJPerK);
@@ -195,7 +241,7 @@ public final class GasThermalModel {
 					? nextUpperCaloricBoundary(portions, temperature)
 					: nextLowerCaloricBoundary(portions, temperature);
 			if (heating && boundary == Double.POSITIVE_INFINITY) {
-				double heatCapacity = heatCapacityAt(portions, temperature);
+				double heatCapacity = heatCapacityAt(portions, temperature) + heatCapacityOffset;
 				double exponent = remaining / heatCapacity;
 				double result = temperature + temperature * Math.expm1(exponent);
 				if (!Double.isFinite(result)) result = scaledExponential(temperature, exponent);
@@ -208,7 +254,7 @@ public final class GasThermalModel {
 				throw new CaloricRangeException(remaining);
 			}
 			double sampleTemperature = Math.sqrt(temperature) * Math.sqrt(boundary);
-			double heatCapacity = heatCapacityAt(portions, sampleTemperature);
+			double heatCapacity = heatCapacityAt(portions, sampleTemperature) + heatCapacityOffset;
 			double intervalEntropy = heatCapacity
 					* Math.abs(logRatio(boundary, temperature));
 			if (remaining <= intervalEntropy) {

@@ -104,7 +104,7 @@ public final class ThermalCarrierTransport {
 		}
 		SignedDyadic after = SignedDyadic.sum(energy);
 		// All prospective caloric states pass before the first real owner is edited.
-		for (int p = 0; p < n; p++) if (energy[p] != owners.internalEnergy(p)) owners.setInternalEnergy(p, energy[p]);
+		owners.setInternalEnergies(energy);
 		return new ThermalTransport.Stats(substeps, contacts.size(), maximumChange, maximumTransfer,
 				after.subtract(before).subtract(reservoir), reservoir);
 	}

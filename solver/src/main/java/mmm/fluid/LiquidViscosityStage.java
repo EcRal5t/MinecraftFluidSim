@@ -15,12 +15,12 @@ final class LiquidViscosityStage {
 		return new ViscousMacDiscretization(domain.sizeX, domain.sizeY, domain.sizeZ,
 				domain.config.cellSize(), new ViscousMacDiscretization.Geometry() {
 			@Override public boolean liquid(int cell) {
-				return domain.isFluid(cell) && domain.carrierPropertiesWorkspace.hasLiquid(cell);
+				return domain.carrierPropertiesWorkspace.hasLiquid(cell);
 			}
 			@Override public double volume(int cell) {
 				return Math.min(domain.markerGrid.exactCellMarkerVolume[cell], domain.effectiveOpenCellVolume(cell));
 			}
-			@Override public double density(int cell) { return domain.carrierPropertiesWorkspace.density(cell); }
+			@Override public double density(int cell) { return domain.markerGrid.cellDensity[cell]; }
 			@Override public double viscosity(int cell) { return domain.carrierPropertiesWorkspace.viscosityPascalSeconds(cell); }
 			@Override public double aperture(int axis, int x, int y, int z) {
 				return switch (axis) {

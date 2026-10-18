@@ -79,6 +79,7 @@ public final class GranularCouplingFields {
 	}
 
 	public long solidSvq(int cell) { requireCell(cell); return solidSvq[cell]; }
+	public long fixedCellSvq(int cell) { requireCell(cell); return fixedCellSvq[cell]; }
 	public long[] copySolidSvq() { return solidSvq.clone(); }
 	public boolean matchesSolidSvq(long[] expected) {
 		return expected != null && expected.length == cellCount && Arrays.equals(solidSvq, expected);

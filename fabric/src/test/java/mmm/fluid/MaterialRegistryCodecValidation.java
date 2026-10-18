@@ -61,7 +61,7 @@ public final class MaterialRegistryCodecValidation {
 		require(water > 9.0e-4 && water < 1.1e-3, "water viscosity at ambient temperature must stay near 1 mPa·s");
 		require(stored.liquidPairTension("mmm:aqueous", "mmm:oil") == 0.0,
 				"default registry has no declared pair tensions");
-		require(definitions.fingerprint().equals("8c1756b590a3318629c7ba3a4edb0e3683dd432c546eb90bb69a0b5ac643c5a2"),
+		require(definitions.fingerprint().equals("7237a84338ce44b0e0f94729a73dd3d096a18ce3ea8144cf040ef2c8ff7001bc"),
 				"builtin material registry fingerprint drifted from the pinned canonical form");
 		System.out.println("builtin material registry fingerprint=" + definitions.fingerprint());
 	}
@@ -75,7 +75,7 @@ public final class MaterialRegistryCodecValidation {
 
 	private static void expansionSnapshotPreservesItsOwnDefinition() throws Exception {
 		var original = BuiltinFluidMaterials.createRegistry().entry("mmm:water");
-		var definition = new mmm.thermal.LiquidThermalExpansion.Definition("mmm:water", 300, 0.0003, 0.02);
+		var definition = new mmm.thermal.LiquidThermalExpansion.Definition("mmm:water", 300, 0.0003);
 		var registry = new MaterialRegistry(List.of(new MaterialRegistry.MaterialEntry(
 				original.material(), original.viscosity(), definition)), List.of());
 		Path snapshot = Files.createTempDirectory(Path.of("."), "material-expansion-").resolve("material.nbt");
@@ -84,9 +84,8 @@ public final class MaterialRegistryCodecValidation {
 		require(stored.entry("mmm:water").thermalExpansion().equals(definition)
 				&& stored.fingerprint().equals(registry.fingerprint()), "snapshot lost its committed expansion definition");
 		for (var changed : List.of(
-				new mmm.thermal.LiquidThermalExpansion.Definition("mmm:water", 301, 0.0003, 0.02),
-				new mmm.thermal.LiquidThermalExpansion.Definition("mmm:water", 300, 0.0004, 0.02),
-				new mmm.thermal.LiquidThermalExpansion.Definition("mmm:water", 300, 0.0003, 0.03))) {
+				new mmm.thermal.LiquidThermalExpansion.Definition("mmm:water", 301, 0.0003),
+				new mmm.thermal.LiquidThermalExpansion.Definition("mmm:water", 300, 0.0004))) {
 			var mutated = new MaterialRegistry(List.of(new MaterialRegistry.MaterialEntry(
 					original.material(), original.viscosity(), changed)), List.of());
 			require(!mutated.fingerprint().equals(registry.fingerprint()), "expansion parameter missing from world identity");

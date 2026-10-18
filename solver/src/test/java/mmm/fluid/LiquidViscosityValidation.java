@@ -146,10 +146,14 @@ final class LiquidViscosityValidation {
 			var domain = new FluidDomain(4, 4, 4, config);
 			domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 			domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
-			for (int z = 1; z < 3; z++) for (int y = 1; y < 3; y++) for (int x = 1; x < 3; x++) domain.setVolume(x, y, z, 1);
 			if (sealed) domain.sealDomainBoundary();
-			for (int marker = 0; marker < domain.particleCount(); marker++) domain.particles.setVelocityX(marker, 1);
-			domain.bootstrapGasState(""); domain.ensureGrid(); domain.derivedCarrierState();
+			float[] filled = new float[domain.cellCount];
+			for (int z = 1; z < 3; z++) for (int y = 1; y < 3; y++) for (int x = 1; x < 3; x++) filled[domain.cellIndex(x,y,z)] = 1;
+			domain.setVolumes(filled);domain.ensureGrid();
+			for (int face=0;face<domain.mac.velocityX.length;face++)
+				if(domain.cellMacStage.massX[face]>0)domain.mac.velocityX[face]=1;
+			domain.bodyForceStage.enforceSolidFaceVelocities();domain.cellMacStage.publishMomentum();
+			domain.derivedCarrierState();
 			if (sealed) require(domain.airNodeAt(2, 3, 2) > 0, "sealed gas fixture must own a finite cavity");
 			new LiquidViscosityStage(domain).apply(.001F);
 			close(domain.mac.velocityX[domain.xFaceIndex(2, 1, 2)], 1, 1e-6, "gas surface must not acquire wall drag");
@@ -164,11 +168,11 @@ final class LiquidViscosityValidation {
 		FluidDomain domain = new FluidDomain(4, 4, 4, config);
 		domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 		domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
-		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) domain.setVolume(x, y, z, 1);
+		float[] filled=new float[domain.cellCount];Arrays.fill(filled,1);domain.setVolumes(filled);
 		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		require(!restored.hasGranularState(), "liquid viscosity cannot require granular capability");
-		expectRejected(() -> restored.restoreParticleState(restored.exportParticleState()));
-		restored.restoreMaterialParticleState(restored.exportMaterialParticleState());
+		require(restored.exportLiquidCellState().stocks().equals(domain.exportLiquidCellState().stocks()),
+				"Material handoff must preserve authoritative cell inventory");
 		require(restored.carrierViscosityPascalSeconds(restored.cellIndex(1, 1, 1)) != null,
 				"material column restore must retain constitutive identity");
 		require(restored.authoritativeLayout().equals(domain.authoritativeLayout()), "liquid definitions must survive private handoff");
@@ -187,9 +191,10 @@ final class LiquidViscosityValidation {
             var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .1F, 200, 1e-5F, .45F, .002F, .8F));
             domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
             domain.bindMaterialDefinitions(definitions);
-            for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) domain.setVolume(x, y, z, 1);
-            for (int marker = 0; marker < domain.particleCount(); marker++)
-                domain.particles.setVelocityY(marker, .01F * (domain.particles.positionX(marker) - .5F));
+            float[] filled=new float[domain.cellCount];Arrays.fill(filled,1);domain.setVolumes(filled);domain.ensureGrid();
+            for(int z=0;z<2;z++)for(int y=0;y<=2;y++)for(int x=0;x<2;x++)
+                domain.mac.velocityY[domain.yFaceIndex(x,y,z)]=.01F*((x+.5F)*domain.config.cellSize()-.5F);
+            domain.bodyForceStage.enforceSolidFaceVelocities();domain.cellMacStage.publishMomentum();
             var state = domain.captureAuthoritativeState(); double volume=domain.totalVolume(),mass=domain.totalMass();
             var result = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, state, java.util.List.of(), false, 0, true));
             var committed=result.claimPreparedCpuDomain();
@@ -200,7 +205,9 @@ final class LiquidViscosityValidation {
             restored.stepWithMechanicalAudit(false,0);
             close(restored.totalVolume(),volume,0,"Restored high-viscosity liquid advances normally");
             close(restored.totalMass(),mass,1e-10,"Restored high-viscosity liquid preserves material mass");
-            require(domain.particleCount()==state.materials().particles().particleCount(),"Private viscosity leaves the source owner unchanged");
+            require(domain.exportLiquidCellState().stocks().equals(state.liquid().stocks())
+                    && Arrays.equals(domain.exportMacMomentum().copyY(),state.momentum().copyY()),
+                    "Private viscosity leaves the source inventory and momentum unchanged");
         }
     }
 

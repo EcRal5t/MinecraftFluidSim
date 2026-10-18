@@ -269,8 +269,7 @@ public final class MaterialRegistry {
 			LiquidThermalExpansion.Definition expansion = entry.thermalExpansion();
 			if (expansion != null) out.append("B|").append(material.id()).append('|')
 					.append(Long.toUnsignedString(Double.doubleToRawLongBits(expansion.referenceTemperatureK()))).append('|')
-					.append(Long.toUnsignedString(Double.doubleToRawLongBits(expansion.volumetricCoefficientPerK()))).append('|')
-					.append(Long.toUnsignedString(Double.doubleToRawLongBits(expansion.maximumRelativeDensityChange()))).append('\n');
+					.append(Long.toUnsignedString(Double.doubleToRawLongBits(expansion.volumetricCoefficientPerK()))).append('\n');
 			for (ViscositySegment segment : entry.viscosity()) {
 				out.append("V|").append(material.id()).append('|')
 						.append(Long.toUnsignedString(Double.doubleToRawLongBits(segment.minimumTemperatureK()))).append('|')

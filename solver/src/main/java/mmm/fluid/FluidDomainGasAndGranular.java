@@ -31,7 +31,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	public int sizeX() { return sizeX; }
 	public int sizeY() { return sizeY; }
 	public int sizeZ() { return sizeZ; }
-	public int particleCount() { return particles.count(); }
+	public int particleCount() { return liquidCells.physicalSize(); }
 
 	/**
 	 * Current spatial carrier properties. Grid rebuilds and carrier/thermal edits invalidate the batch.
@@ -105,6 +105,9 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, FlipThermalParticleState thermal) {
 		gasTopologyCoordinator.restore(state, registry, thermal);
 	}
+	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, mmm.thermal.ThermalOwnerSnapshot thermal) {
+		gasTopologyCoordinator.restore(state, registry, thermal);
+	}
 
 	/** True when the current grid contains at least one sealed gas cavity, including explicit vacuum. */
 	public boolean gasPressureActive() { return gasState.pressureActive; }
@@ -154,7 +157,9 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	/** Constant-time live chemical-parcel count; does not scan markers. */
 	public int chemicalParcelCount() { return chemicalParcels == null ? 0 : chemicalParcels.pool().liveCount(); }
 	/** Constant-time exact species inventory ledger. */
-	public long totalChemicalSpeciesQuanta() { return chemicalParcels == null ? 0L : chemicalParcels.totalQuanta(); }
+	public long totalChemicalSpeciesQuanta() {
+		long total=0;for(var stock:liquidCells.stocks()) if(stock.mixture()!=null) total=Math.addExact(total,stock.mixture().totalQuanta());return total;
+	}
 	/** Constant-time sparse deposit-group count. */
 	public int granularDepositGroupCount() { return granularState == null ? 0 : granularState.deposits.groupCount(); }
 	/** Constant-time coherent phase-group count. */
@@ -223,10 +228,10 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 		thermalState.settleExternalInsertion(insertedCarrierEnergy, coupledItemEnergy);
 	}
 	public double totalInternalEnergy() {
-		return thermalState == null ? 0.0 : thermalState.totalEnergy(particles.count());
+		return thermalState == null ? 0.0 : thermalState.totalEnergy(liquidCells.physicalSize());
 	}
 	public SignedDyadic exactInternalEnergy() {
-		return thermalState == null ? SignedDyadic.ZERO : thermalState.exactEnergy(particles.count());
+		return thermalState == null ? SignedDyadic.ZERO : thermalState.exactEnergy(liquidCells.physicalSize());
 	}
 	public SignedDyadic exactGasInternalEnergy() {
 		return thermalState == null ? SignedDyadic.ZERO : thermalState.exactGasEnergy();
@@ -481,7 +486,8 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 			admission.append(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq());
 		}
 		prepared.coupling().rebuild(state.parcels, state.deposits);
-		var liquid = JointPhaseCapacity.collectLiquid(cellCount, particles, domain()::particleCellIndex);
+		var liquid = new SignedDyadic[cellCount];
+		for (int cell = 0; cell < cellCount; cell++) liquid[cell] = liquidCells.exactCellVolume(cell);
 		for (int cell = 0; cell < cellCount; cell++) {
 			if (liquid[cell].add(SignedDyadic.of(prepared.coupling().solidSvq(cell), -24))
 					.compareTo(SignedDyadic.of(geometry.cutCells.openCellVolume(cell))) > 0) {

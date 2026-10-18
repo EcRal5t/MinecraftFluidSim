@@ -72,8 +72,8 @@ final class RegionCheckpointValidator {
 			if (RegionStateIntegrity.sectionChecksum(section) != section.checksum()) throw new IOException("Section checksum mismatch");
 			validateSectionOwnership(section);
 			RegionManifest.SectionDescriptor descriptor = expected.get(section.key());
-			long volumeBits = Double.doubleToRawLongBits(sumVolumes(section.positionVolume()));
-			long massUnits = mmm.units.Mass.sum(section.markerMassUnits());
+			long volumeBits = Double.doubleToRawLongBits(section.exactVolume().toDouble());
+			long massUnits = section.massUnits();
 			if (descriptor == null || descriptor.markerCount() != section.markerCount()
 					|| descriptor.volumeBits() != volumeBits || descriptor.massUnits() != massUnits
 					|| descriptor.checksum() != section.checksum()) {
@@ -84,6 +84,7 @@ final class RegionCheckpointValidator {
 		if (markerCount != manifest.totalMarkerCount() || markerCount > manifest.reservedMarkerCapacity()) {
 			throw new IOException("Manifest marker count/budget mismatch");
 		}
+		validateCellAndFaceOwnership();
 		if (manifest.layout().hasMaterials()) validateMaterialLedgers();
 		if (manifest.hasChemicalState()) validateChemicalLedgers();
 		boolean gasPayload = hasExtension(manifest.extensions(), GasRegionStateCodec.MANIFEST_EXTENSION);
@@ -112,9 +113,7 @@ final class RegionCheckpointValidator {
 		} else if (thermalBuoyancyPayload) {
 			throw new IOException("Thermal buoyancy identity is only valid in thermal region state");
 		}
-		if (gasPayload && manifest.layout() != RegionStateLayout.THERMAL) {
-			throw new IOException("Gas payload is only valid in a thermal region-state");
-		} else if (manifest.layout() == RegionStateLayout.THERMAL && (!gasPayload
+		if (manifest.layout() == RegionStateLayout.THERMAL && (!gasPayload
 				|| !hasExtension(manifest.extensions(), ThermalRegionStateCodec.MANIFEST_EXTENSION))) {
 			throw new IOException("Complete thermal region-state requires gas and thermal payloads");
 		}
@@ -129,18 +128,7 @@ final class RegionCheckpointValidator {
 		boolean[] carrier = new boolean[pending.cellCount()];
 		float cellSize = manifest.solverConfig().cellSize();
 		for (RegionSectionState section : sections) {
-			float[] positionVolume = section.positionVolume();
-			for (int marker = 0; marker < section.markerCount(); marker++) {
-				int base = marker * 4;
-				int x = (int) Math.floor(positionVolume[base] / cellSize);
-				int y = (int) Math.floor(positionVolume[base + 1] / cellSize);
-				int z = (int) Math.floor(positionVolume[base + 2] / cellSize);
-				if (x < 0 || x >= manifest.sizeX() || y < 0 || y >= manifest.sizeY()
-						|| z < 0 || z >= manifest.sizeZ()) {
-					throw new IOException("Pending phase-volume validation found an out-of-domain marker");
-				}
-				carrier[x + manifest.sizeX() * (y + manifest.sizeY() * z)] = true;
-			}
+			for(var stock:section.liquidStocks())carrier[stock.key().cell()]=true;
 			ThermalRegionStateCodec.SectionData thermal = new ThermalRegionStateCodec().decodeSection(
 					requiredExtension(section.extensions(), ThermalRegionStateCodec.SECTION_EXTENSION).payload(),
 					section.markerCount(), GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION,
@@ -213,11 +201,11 @@ final class RegionCheckpointValidator {
 				}
 			}
 			ThermalRegionStateCodec.SectionLedger ledger = ledgers.remove(section.key());
-			if (ledger == null || ledger.liquidMarkerCount() != data.liquidMarkerEnergyBits().length
+			if (ledger == null || ledger.liquidMarkerCount() != section.stockCount()
 					|| ledger.activeParcelCount() != data.activeParcelEnergyBits().length
 					|| ledger.depositGroupCount() != data.depositGroupEnergyBits().length
-					|| ledger.coherentGroupCount() != data.coherentGroups().size() || !ledger.energy().equals(data.energy())
-					|| data.liquidMarkerEnergyBits().length != section.markerCount()) {
+					|| ledger.coherentGroupCount() != data.coherentGroups().size() || !ledger.energy().equals(data.energy().add(liquidEnergy(section)))
+					) {
 				throw new IOException("Thermal section does not match its manifest ledger");
 			}
 			for (ThermalRegionStateCodec.CoherentEntry group : data.coherentGroups()) {
@@ -231,11 +219,11 @@ final class RegionCheckpointValidator {
 					}
 				}
 			}
-			liquidCount = Math.addExact(liquidCount, data.liquidMarkerEnergyBits().length);
+			liquidCount = Math.addExact(liquidCount, section.stockCount());
 			activeCount = Math.addExact(activeCount, data.activeParcelEnergyBits().length);
 			depositCount = Math.addExact(depositCount, data.depositGroupEnergyBits().length);
 			coherentCount = Math.addExact(coherentCount, data.coherentGroups().size());
-			liquidEnergy = liquidEnergy.add(SignedDyadic.sum(toDoubles(data.liquidMarkerEnergyBits())));
+			liquidEnergy = liquidEnergy.add(liquidEnergy(section));
 			activeEnergy = activeEnergy.add(SignedDyadic.sum(toDoubles(data.activeParcelEnergyBits())));
 			depositEnergy = depositEnergy.add(SignedDyadic.sum(toDoubles(data.depositGroupEnergyBits())));
 			for (ThermalRegionStateCodec.CoherentEntry group : data.coherentGroups()) {
@@ -252,55 +240,13 @@ final class RegionCheckpointValidator {
 	}
 
 	private void validateChemicalLedgers() throws IOException {
-		decodeChemicalAuditExtension();
-		int count = manifest.totalMarkerCount();
-		int[] mixtureByOrdinal = new int[count];
-		boolean[] seen = new boolean[count];
-		Map<String, Integer> speciesHandles = new HashMap<>();
-		for (int species = 0; species < manifest.speciesPalette().size(); species++) {
-			if (speciesHandles.put(manifest.speciesPalette().get(species), species) != null) {
-				throw new IOException("Duplicate stable species palette entry");
-			}
+		decodeChemicalAuditExtension();long[] totals=new long[manifest.speciesPalette().size()];long residual=0;
+		for(var section:sections)for(var stock:section.liquidStocks()) {
+			var mixture=stock.mixture();if(mixture==null)throw new IOException("Chemical cell has no species inventory");
+			residual=Math.addExact(residual,mixture.massResidualUnits());
+			for(int i=0;i<mixture.entryCount();i++){int species=mixture.speciesHandle(i);if(species>=totals.length)throw new IOException("Chemical handle is outside the pinned registry palette");totals[species]=Math.addExact(totals[species],mixture.amountAt(i));}
 		}
-		for (RegionSectionState section : sections) {
-			long[] sectionTotals = new long[manifest.speciesPalette().size()];
-			long sectionResidual = 0;
-			int[] ordinals = section.markerOrdinals(), mixtures = section.chemicalMixtureIndex();
-			for (int marker = 0; marker < ordinals.length; marker++) {
-				int ordinal = ordinals[marker], mixtureIndex = mixtures[marker];
-				if (ordinal < 0 || ordinal >= count || seen[ordinal]
-						|| mixtureIndex < 0 || mixtureIndex >= manifest.chemicalMixtures().size()) {
-					throw new IOException("Invalid chemical marker ordinal/mixture index");
-				}
-				seen[ordinal] = true; mixtureByOrdinal[ordinal] = mixtureIndex;
-				FlipChemicalParticleState.StableMixture mixture = manifest.chemicalMixtures().get(mixtureIndex);
-				sectionResidual = Math.addExact(sectionResidual, mixture.massResidualUnits());
-				for (FlipChemicalParticleState.Component component : mixture.components()) {
-					Integer species = speciesHandles.get(component.speciesId());
-					if (species == null) throw new IOException("Mixture references species outside stable palette");
-					sectionTotals[species] = Math.addExact(sectionTotals[species], component.amountQuanta());
-				}
-			}
-			if (!Arrays.equals(sectionTotals, section.chemicalSpeciesTotals())
-					|| sectionResidual != section.chemicalResidualLedgerUnits()) {
-				throw new IOException("Section chemical ledger mismatch");
-			}
-		}
-		long[] totals = new long[manifest.speciesPalette().size()];
-		long residual = 0;
-		for (int ordinal = 0; ordinal < count; ordinal++) {
-			if (!seen[ordinal]) throw new IOException("Missing chemical marker ordinal");
-			FlipChemicalParticleState.StableMixture mixture = manifest.chemicalMixtures().get(mixtureByOrdinal[ordinal]);
-			residual = Math.addExact(residual, mixture.massResidualUnits());
-			for (FlipChemicalParticleState.Component component : mixture.components()) {
-				int species = speciesHandles.get(component.speciesId());
-				totals[species] = Math.addExact(totals[species], component.amountQuanta());
-			}
-		}
-		if (!Arrays.equals(totals, manifest.chemicalSpeciesTotals())
-				|| residual != manifest.chemicalResidualLedgerUnits()) {
-			throw new IOException("Manifest chemical ledger mismatch");
-		}
+		if(!Arrays.equals(totals,manifest.chemicalSpeciesTotals())||residual!=manifest.chemicalResidualLedgerUnits())throw new IOException("Cell chemical inventory summary differs");
 	}
 
 	private void validateGranularLedgers() throws IOException {
@@ -422,51 +368,43 @@ final class RegionCheckpointValidator {
 		}
 	}
 
-	private void validateMaterialLedgers() throws IOException {
-		int count = manifest.totalMarkerCount(), paletteSize = manifest.materialPalette().size();
-		double[] volumesByOrdinal = new double[count]; long[] massByOrdinal = new long[count];
-		int[] materialByOrdinal = new int[count];
-		boolean[] seen = new boolean[count];
-		for (RegionSectionState section : sections) {
-			int[] ordinals = section.markerOrdinals(), materials = section.materialPaletteIndex();
-			float[] positionVolume = section.positionVolume();
-			long[] mass = section.markerMassUnits();
-			for (int marker = 0; marker < ordinals.length; marker++) {
-				int ordinal = ordinals[marker], material = materials[marker];
-				if (ordinal < 0 || ordinal >= count || seen[ordinal]) throw new IOException("Duplicate or invalid marker ordinal");
-				if (material < 0 || material >= paletteSize) throw new IOException("Material palette index out of range");
-				seen[ordinal] = true;
-				volumesByOrdinal[ordinal] = positionVolume[marker * 4 + 3];
-				massByOrdinal[ordinal] = mass[marker];
-				materialByOrdinal[ordinal] = material;
+	private static SignedDyadic liquidEnergy(RegionSectionState section) {var total=SignedDyadic.ZERO;for(var stock:section.liquidStocks())total=total.add(SignedDyadic.of(stock.internalEnergy()));return total;}
+	private void validateCellAndFaceOwnership() throws IOException {
+		int nx=manifest.sizeX(),ny=manifest.sizeY(),nz=manifest.sizeZ(),cells=nx*ny*nz;
+		boolean[] covered=new boolean[cells];
+		boolean[][] faces={new boolean[(nx+1)*ny*nz],new boolean[nx*(ny+1)*nz],new boolean[nx*ny*(nz+1)]};
+		SignedDyadic totalVolume=SignedDyadic.ZERO;long totalMass=0;
+		var keys=new java.util.HashSet<mmm.inventory.LiquidCellInventory.Key>();
+		for(var section:sections) {
+			byte[] masks=section.solidMask();int local=0;
+			for(int z=section.localStartZ();z<section.localStartZ()+section.sizeZ();z++)for(int y=section.localStartY();y<section.localStartY()+section.sizeY();y++)for(int x=section.localStartX();x<section.localStartX()+section.sizeX();x++) {
+				int cell=x+nx*(y+ny*z);if(covered[cell])throw new IOException("Overlapping collision slices");covered[cell]=true;local++;
+			}
+			var componentVolume=new HashMap<Long,SignedDyadic>();
+			for(var stock:section.liquidStocks()) {
+				int cell=stock.key().cell();if(cell>=cells||!keys.add(stock.key())||!RegionCheckpointAssembler.sectionOfCell(manifest.geometry(),cell).equals(section.key()))throw new IOException("Liquid key is repeated or stored in the wrong section");
+				int x=cell%nx-section.localStartX(),y=cell/nx%ny-section.localStartY(),z=cell/(nx*ny)-section.localStartZ();int mask=Byte.toUnsignedInt(masks[x+section.sizeX()*(y+section.sizeY()*z)]);
+				boolean found=false;for(int support:mmm.inventory.LiquidCellInventory.connectedSupports(mask))found|=support==stock.key().supportMask();if(!found)throw new IOException("Liquid stock crosses a fixed collision component");
+				long component=((long)cell<<8)|stock.key().supportMask();var amount=componentVolume.getOrDefault(component,SignedDyadic.ZERO).add(stock.volume());componentVolume.put(component,amount);
+				if(amount.compareTo(SignedDyadic.of(Integer.bitCount(stock.key().supportMask())*.125))>0)throw new IOException("Liquid stock exceeds its collision component capacity");
+				if(!manifest.hasChemicalState()&&stock.mixture()!=null)throw new IOException("Unbound chemical stock");
+				if(manifest.materialPalette().isEmpty()&&stock.key().material()!=0)throw new IOException("Unbound liquid material");
+				totalVolume=totalVolume.add(stock.volume());totalMass=Math.addExact(totalMass,stock.massUnits());
+			}
+			for(var face:section.faceMomentum()) {
+				int axis=face.axis(),index=face.face();if(index>=faces[axis].length||faces[axis][index])throw new IOException("Repeated or out-of-grid MAC face");faces[axis][index]=true;
+				int sx=nx+(axis==0?1:0),sy=ny+(axis==1?1:0);int x=Math.min(index%sx,nx-1),y=Math.min(index/sx%sy,ny-1),z=Math.min(index/(sx*sy),nz-1);
+				if(!RegionCheckpointAssembler.sectionOfCell(manifest.geometry(),x+nx*(y+ny*z)).equals(section.key()))throw new IOException("MAC face is stored in the wrong section");
 			}
 		}
-		int[] markerCounts = new int[paletteSize];
-		SignedDyadic[] volumes = new SignedDyadic[paletteSize]; long[] masses = new long[paletteSize];
-		java.util.Arrays.fill(volumes, SignedDyadic.ZERO);
+		for(boolean seen:covered)if(!seen)throw new IOException("Incomplete collision coverage");for(var axis:faces)for(boolean seen:axis)if(!seen)throw new IOException("Incomplete MAC momentum coverage");
+		if(totalMass!=manifest.totalMassUnits()||Double.doubleToRawLongBits(totalVolume.toDouble())!=manifest.totalVolumeBits())throw new IOException("Liquid inventory summary differs");
+	}
 
-		SignedDyadic totalVolume = SignedDyadic.ZERO; long totalMass = 0;
-		for (int ordinal = 0; ordinal < count; ordinal++) {
-			if (!seen[ordinal]) throw new IOException("Missing marker ordinal");
-			int material = materialByOrdinal[ordinal];
-			markerCounts[material]++;
-			volumes[material] = volumes[material].add(SignedDyadic.of(volumesByOrdinal[ordinal]));
-			masses[material] = Math.addExact(masses[material], massByOrdinal[ordinal]);
-			totalVolume = totalVolume.add(SignedDyadic.of(volumesByOrdinal[ordinal]));
-			totalMass = Math.addExact(totalMass, massByOrdinal[ordinal]);
-		}
-		if (Double.doubleToRawLongBits(totalVolume.toDouble()) != manifest.totalVolumeBits()
-				|| totalMass != manifest.totalMassUnits()) {
-			throw new IOException("Material manifest total ledger mismatch");
-		}
-		for (int material = 0; material < paletteSize; material++) {
-			RegionManifest.MaterialLedger expected = manifest.materialLedgers().get(material);
-			if (expected.markerCount() != markerCounts[material]
-					|| expected.volumeBits() != Double.doubleToRawLongBits(volumes[material].toDouble())
-					|| expected.massUnits() != masses[material]) {
-				throw new IOException("Material marker ledger mismatch at palette index " + material);
-			}
-		}
+	private void validateMaterialLedgers() throws IOException {
+		int n=manifest.materialPalette().size(); int[] counts=new int[n];long[] mass=new long[n];SignedDyadic[] volume=new SignedDyadic[n];Arrays.fill(volume,SignedDyadic.ZERO);
+		for(var section:sections)for(var stock:section.liquidStocks()) {int material=stock.key().material();if(material>=n)throw new IOException("Liquid material is outside its palette");counts[material]++;mass[material]=Math.addExact(mass[material],stock.massUnits());volume[material]=volume[material].add(stock.volume());}
+		for(int i=0;i<n;i++){var ledger=manifest.materialLedgers().get(i);if(ledger.markerCount()!=counts[i]||ledger.massUnits()!=mass[i]||ledger.volumeBits()!=Double.doubleToRawLongBits(volume[i].toDouble()))throw new IOException("Liquid material inventory summary differs");}
 	}
 
 	private void validateSectionOwnership(RegionSectionState section) throws IOException {
@@ -483,16 +421,6 @@ final class RegionCheckpointValidator {
 		if (section.localStartX() != expectedStartX || section.localStartY() != expectedStartY || section.localStartZ() != expectedStartZ
 				|| section.sizeX() != expectedEndX - expectedStartX || section.sizeY() != expectedEndY - expectedStartY
 				|| section.sizeZ() != expectedEndZ - expectedStartZ) throw new IOException("Section solid slice is not aligned to its Minecraft section");
-		float[] positions = section.positionVolume();
-		for (int marker = 0; marker < section.markerCount(); marker++) {
-			int base = marker * 4;
-			int sectionX = Math.floorDiv((int) Math.floor(manifest.origin().getX() + positions[base]), 16);
-			int sectionY = Math.floorDiv((int) Math.floor(manifest.origin().getY() + positions[base + 1]), 16);
-			int sectionZ = Math.floorDiv((int) Math.floor(manifest.origin().getZ() + positions[base + 2]), 16);
-			if (sectionX != section.sectionX() || sectionY != section.sectionY() || sectionZ != section.sectionZ()) {
-				throw new IOException("Marker is stored in the wrong section");
-			}
-		}
 	}
 
 	private void validateGranularSectionPosition(RegionSectionState section, float x, float y, float z) throws IOException {

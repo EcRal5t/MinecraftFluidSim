@@ -4,7 +4,7 @@ import mmm.fluid.air.AirNetwork;
 import mmm.units.SignedDyadic;
 
 /**
- * Read-only aggregate metrics over the committed marker and cell truth: totals, extrema,
+ * Read-only aggregate metrics over the committed cell inventory: totals, extrema,
  * distributions and nearby-volume queries. It reads package-private domain state but never
  * mutates it; every method is safe on a frozen candidate and allocates only its result.
  */
@@ -19,9 +19,9 @@ final class DomainMetrics {
 		return (float) totalVolumeExact();
 	}
 
-	/** Exact raw binary32 inventory, rounded once at the binary64 observation boundary. */
+	/** Exact committed cell inventory, rounded once at the binary64 observation boundary. */
 	double totalVolumeExact() {
-		return SignedDyadic.sum(domain.particles.directArrays().volume, domain.particles.count()).toDouble();
+		return domain.liquidCells.exactVolume().toDouble();
 	}
 
 	/** Total open cell volume across the domain; global capacity for exact bucket insertion. */
@@ -36,40 +36,40 @@ final class DomainMetrics {
 		return result;
 	}
 
-	/** Exact marker-mass inventory; reconstructed grid density is never used for this ledger. */
+	/** Exact integer mass inventory; reconstructed grid density is never used for this ledger. */
 	double totalMass() {
 		return domain.unitScale.normalizedMass(totalMassUnits());
 	}
 
-	long totalMassUnits() { return mmm.units.Mass.sum(domain.particles.directArrays().massUnits, domain.particles.count()); }
+	long totalMassUnits() { return domain.liquidCells.massUnits(); }
 
 	float maximumParticleSpeed() {
-		float maximumSquared = 0.0F;
-		for (int i = 0; i < domain.particles.count(); i++) {
-			float squared = domain.particles.velocityX(i) * domain.particles.velocityX(i)
-					+ domain.particles.velocityY(i) * domain.particles.velocityY(i)
-					+ domain.particles.velocityZ(i) * domain.particles.velocityZ(i);
-			maximumSquared = Math.max(maximumSquared, squared);
+		domain.ensureGrid();
+		double sum = 0;
+		for (float[] velocity : new float[][]{domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ}) {
+			double maximum = 0;
+			for (float value : velocity) maximum = Math.max(maximum, Math.abs(value));
+			sum += maximum * maximum;
 		}
-		return (float) Math.sqrt(maximumSquared);
+		return (float) Math.sqrt(sum);
 	}
 
 	float maximumPressure() {
 		domain.ensurePressureGeometry();
 		float maximum = 0.0F;
-		for (int cell = 0; cell < domain.cellCount; cell++) if (domain.pressureSystem.hasLiquidPressure(cell)) {
-			maximum = Math.max(maximum, domain.pressureReference + domain.projection.pressure[cell]);
+		for (int cell = 0; cell < domain.cellCount; cell++) if (domain.markerGrid.markerCount[cell] > 0) {
+			maximum = Math.max(maximum, (float) domain.pressureSystem.liquidPressureAt(cell, ~domain.geometry.cutCells.mask(cell) & 255));
 		}
 		return maximum;
 	}
 
 	float centerOfMassX() {
-		double weighted = 0.0, mass = 0.0;
-		for (int i = 0; i < domain.particles.count(); i++) {
-			weighted += domain.particles.positionX(i) / domain.config.cellSize() * domain.particles.volume(i);
-			mass += domain.particles.volume(i);
+		double weighted = 0; long mass = 0;
+		for (var stock : domain.liquidCells.physicalStocks()) {
+			weighted += (stock.key().cell() % domain.sizeX + .5) * stock.massUnits();
+			mass = Math.addExact(mass, stock.massUnits());
 		}
-		return mass == 0.0 ? Float.NaN : (float) (weighted / mass);
+		return mass == 0 ? Float.NaN : (float) (weighted / mass);
 	}
 
 	FluidDomain.VolumeDistribution volumeDistribution(float visibleThreshold) {
@@ -123,17 +123,10 @@ final class DomainMetrics {
 	/** Returns the material handle with the largest exact marker volume in the given cell. */
 	int dominantMaterialInCell(int x, int y, int z) {
 		int cell = domain.cellIndexChecked(x, y, z);
-		if (domain.materialRegistry == null) return 0;
-		float[] volumes = new float[domain.materialRegistry.size()];
-		float h = domain.config.cellSize();
-		for (int particle = 0; particle < domain.particles.count(); particle++) {
-			if (domain.particleCellIndex(particle) != cell) continue;
-			volumes[domain.particles.materialHandle(particle)] += domain.particles.volume(particle);
-		}
+		double[] amounts = new double[domain.materialRegistry == null ? 1 : domain.materialRegistry.size()];
+		for (var stock : domain.liquidCells.stocksInCell(cell)) amounts[stock.key().material()] += stock.volumeFraction();
 		int best = 0;
-		for (int handle = 1; handle < volumes.length; handle++) {
-			if (volumes[handle] > volumes[best]) best = handle;
-		}
+		for (int material = 1; material < amounts.length; material++) if (amounts[material] > amounts[best]) best = material;
 		return best;
 	}
 
@@ -145,9 +138,9 @@ final class DomainMetrics {
 			near[candidate.index()] = true;
 		}
 		double result = 0.0;
-		for (int particle = 0; particle < domain.particles.count(); particle++) {
-			if (materialHandle >= 0 && domain.particles.materialHandle(particle) != materialHandle) continue;
-			if (near[domain.particleCellIndex(particle)]) result += domain.particles.volume(particle);
+		for (var stock : domain.liquidCells.stocks()) {
+			if (materialHandle >= 0 && stock.key().material() != materialHandle) continue;
+			if (near[stock.key().cell()]) result += stock.volumeFraction();
 		}
 		return result;
 	}

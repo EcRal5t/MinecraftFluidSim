@@ -1,5 +1,7 @@
 package mmm.fluid;
 
+import mmm.inventory.LiquidCellInventory;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import mmm.units.SignedDyadic;
@@ -10,19 +12,9 @@ final class CellRemapMicroTopology {
 	private static final int[][] COMPONENTS = new int[256][];
 	static {
 		for (int mask = 0; mask < 256; mask++) {
-			var components = new ArrayList<Integer>(4);
-			int unseen = ~mask & 255;
-			while (unseen != 0) {
-				int component = Integer.lowestOneBit(unseen), frontier = component;
-				while (frontier != 0) {
-					int next = 0;
-					for (int bit = 0; bit < 8; bit++) if ((frontier & 1 << bit) != 0)
-						for (int axis = 0; axis < 3; axis++) next |= 1 << (bit ^ 1 << axis);
-					next &= unseen & ~component; component |= next; frontier = next;
-				}
+			var components = LiquidCellInventory.connectedSupports(mask);
+			for (int component : components) {
 				for (int bit = 0; bit < 8; bit++) if ((component & 1 << bit) != 0) SUPPORT[mask][bit] = component;
-				components.add(component);
-				unseen &= ~component;
 			}
 			COMPONENTS[mask] = components.stream().mapToInt(Integer::intValue).toArray();
 		}
@@ -54,6 +46,16 @@ final class CellRemapMicroTopology {
 				.subtract(SignedDyadic.of(solidShares[i], -24));
 		return result;
 	}
+	static boolean exceedsCapacity(LiquidCellInventory inventory,int cell,int mask,SignedDyadic totalPore) {
+		var capacities=capacities(mask,totalPore);int[] supports=components(mask);
+		for(int j=0;j<supports.length;j++) {
+			var volume=SignedDyadic.ZERO;
+			for(var stock:inventory.stocksInCell(cell))if(stock.key().supportMask()==supports[j])volume=volume.add(stock.volume());
+			if(volume.compareTo(capacities[j])>0)return true;
+		}
+		return false;
+	}
+
 	static boolean needed(FluidDomain domain) {
 		for (int cell = 0; cell < domain.cellCount; cell++) if (COMPONENTS[domain.geometry.cutCells.mask(cell)].length > 1) return true;
 		return false;
@@ -77,19 +79,6 @@ final class CellRemapMicroTopology {
 		}
 	}
 
-	static int markerSupport(FluidDomain domain, int particle) {
-		return positionSupport(domain, domain.particleCellIndex(particle), domain.particles.positionX(particle),
-				domain.particles.positionY(particle), domain.particles.positionZ(particle));
-	}
-	static int markerSupport(FluidDomain domain, CellCarrierRemapPlan.Marker marker) {
-		int cell = marker.cell(); float h = domain.config.cellSize();
-		return positionSupport(domain, cell, (float) ((cell % domain.sizeX + .5 + marker.offsetX()) * h),
-				(float) ((cell / domain.sizeX % domain.sizeY + .5 + marker.offsetY()) * h),
-				(float) ((cell / (domain.sizeX * domain.sizeY) + .5 + marker.offsetZ()) * h));
-	}
-	private static int positionSupport(FluidDomain domain, int cell, float x, float y, float z) {
-		return positionSupport(domain.geometry.cutCells.mask(cell), domain.config.cellSize(), x, y, z);
-	}
 	static int positionSupport(int mask, float cellSize, float x, float y, float z) {
 		int micro = positionMicro(cellSize, x, y, z);
 		int result = support(mask, micro);

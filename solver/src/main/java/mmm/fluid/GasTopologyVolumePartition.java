@@ -1,28 +1,21 @@
 package mmm.fluid;
 
-import mmm.chemistry.ExactRational;
-import mmm.fluid.air.ExactGasPartitionWeights;
+import mmm.fluid.air.GasPartitionWeights;
 import java.util.List;
 
-/** Observes physical gas control volumes from the same exact geometric measures as inventory. */
+/** Splits physical gas control volumes with the same bounded geometric shares as inventory. */
 final class GasTopologyVolumePartition {
 	private GasTopologyVolumePartition() { }
 
-	/** Uses actual polyhedron overlaps without quantizing their weights to dyadic observations. */
-	static double[] partitionRational(double total, List<ExactRational> weights) {
-		return partitionRational(total, ExactGasPartitionWeights.ofRationals(weights));
+	/** Uses floating-point overlap weights and a shared conservative remainder. */
+	static double[] partition(double total, List<Double> weights) {
+		return partition(total, GasPartitionWeights.of(weights.stream().mapToDouble(Double::doubleValue).toArray()));
 	}
-	static double[] partitionRational(double total, ExactGasPartitionWeights weights) {
+	static double[] partition(double total, GasPartitionWeights weights) {
 		try { return weights.partitionControlVolume(total); }
-		catch (ExactGasPartitionWeights.UnrepresentableVolumeException unavailable) {
+		catch (GasPartitionWeights.UnrepresentableVolumeException unavailable) {
 			throw new GasTopologyBlockedException("Gas topology volume partition unavailable: " + unavailable.getMessage(), unavailable);
 		}
 	}
-	static double absoluteRational(List<ExactRational> leaves) {
-		try { return ExactGasPartitionWeights.ofTerms(List.of(leaves)).weightVolume(0); }
-		catch (ExactGasPartitionWeights.UnrepresentableVolumeException unavailable) {
-			throw new GasTopologyBlockedException("Ambient capture volume unavailable: " + unavailable.getMessage(), unavailable);
-		}
-	}
-
+    static double absoluteVolume(List<Double> leaves) { return leaves.stream().mapToDouble(Double::doubleValue).sum(); }
 }

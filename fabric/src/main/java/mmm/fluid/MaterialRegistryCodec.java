@@ -98,7 +98,6 @@ public final class MaterialRegistryCodec {
 				CompoundTag value = new CompoundTag();
 				value.putLong("ReferenceBits", Double.doubleToRawLongBits(definition.referenceTemperatureK()));
 				value.putLong("CoefficientBits", Double.doubleToRawLongBits(definition.volumetricCoefficientPerK()));
-				value.putLong("MaximumRelativeBits", Double.doubleToRawLongBits(definition.maximumRelativeDensityChange()));
 				expansion.add(value);
 			}
 			tag.put("ThermalExpansion", expansion);
@@ -130,12 +129,10 @@ public final class MaterialRegistryCodec {
 			LiquidThermalExpansion.Definition expansion = null;
 			if (!encodedExpansion.isEmpty()) {
 				CompoundTag value = compound(encodedExpansion, 0, "thermal expansion");
-				requireAll(value, Map.of("ReferenceBits", Tag.TAG_LONG, "CoefficientBits", Tag.TAG_LONG,
-						"MaximumRelativeBits", Tag.TAG_LONG));
+				requireAll(value, Map.of("ReferenceBits", Tag.TAG_LONG, "CoefficientBits", Tag.TAG_LONG));
 				expansion = new LiquidThermalExpansion.Definition(tag.getStringOr("Id", ""),
 						Double.longBitsToDouble(value.getLongOr("ReferenceBits", 0L)),
-						Double.longBitsToDouble(value.getLongOr("CoefficientBits", 0L)),
-						Double.longBitsToDouble(value.getLongOr("MaximumRelativeBits", 0L)));
+						Double.longBitsToDouble(value.getLongOr("CoefficientBits", 0L)));
 			}
 			ListTag encodedSegments = tag.getListOrEmpty("Viscosity");
 			ArrayList<MaterialRegistry.ViscositySegment> segments = new ArrayList<>(encodedSegments.size());

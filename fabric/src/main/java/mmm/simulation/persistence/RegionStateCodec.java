@@ -139,79 +139,64 @@ final class RegionStateCodec {
 	}
 
 	CompoundTag encodeSection(RegionSectionState section) {
-		CompoundTag root = identity(section.regionId(), section.dimensionId(), section.checkpointGeneration(), section.layout());
-		root.putInt("SectionX", section.sectionX()); root.putInt("SectionY", section.sectionY()); root.putInt("SectionZ", section.sectionZ());
-		root.putInt("StartX", section.localStartX()); root.putInt("StartY", section.localStartY()); root.putInt("StartZ", section.localStartZ());
-		root.putInt("SizeX", section.sizeX()); root.putInt("SizeY", section.sizeY()); root.putInt("SizeZ", section.sizeZ());
-		root.putIntArray("Ordinals", section.markerOrdinals());
-		root.putIntArray("PositionVolumeBits", floatBits(section.positionVolume()));
-		root.putIntArray("VelocityBits", floatBits(section.velocities()));
-		root.putLongArray("MassUnits", section.markerMassUnits());
-		if (section.layout().hasMaterials()) {
-			root.putIntArray("MaterialPaletteIndices", section.materialPaletteIndex());
+		CompoundTag root = identity(section.regionId(),section.dimensionId(),section.checkpointGeneration(),section.layout());
+		root.putInt("SectionX",section.sectionX()); root.putInt("SectionY",section.sectionY()); root.putInt("SectionZ",section.sectionZ());
+		root.putInt("StartX",section.localStartX()); root.putInt("StartY",section.localStartY()); root.putInt("StartZ",section.localStartZ());
+		root.putInt("SizeX",section.sizeX()); root.putInt("SizeY",section.sizeY()); root.putInt("SizeZ",section.sizeZ());
+		ListTag stocks = new ListTag();
+		for (var stock : section.liquidStocks()) {
+			CompoundTag tag = new CompoundTag(); tag.putInt("Cell",stock.key().cell()); tag.putInt("Material",stock.key().material()); tag.putInt("Support",stock.key().supportMask());
+			tag.putByteArray("VolumeSignificand",stock.volume().significand().toByteArray()); tag.putInt("VolumeExponent",stock.volume().exponent());
+			tag.putLong("MassUnits",stock.massUnits()); tag.putLong("InternalEnergyBits",Double.doubleToRawLongBits(stock.internalEnergy())); tag.putBoolean("Indicator",stock.indicator());
+			if (stock.mixture() != null) {
+				CompoundTag mixture = new CompoundTag(); mixture.putIntArray("Species",stock.mixture().copySpeciesHandles());
+				mixture.putLongArray("Amounts",stock.mixture().copyAmounts()); mixture.putLong("ResidualUnits",stock.mixture().massResidualUnits()); tag.put("Mixture",mixture);
+			}
+			stocks.add(tag);
 		}
-		if (section.layout().permitsOptionalChemistry()) {
-			root.putBoolean("ChemistryPresent", section.hasChemicalState());
+		root.put("LiquidStocks",stocks); ListTag faces = new ListTag();
+		for (var face : section.faceMomentum()) {
+			CompoundTag tag = new CompoundTag(); tag.putInt("Axis",face.axis()); tag.putInt("Face",face.face());
+			tag.putLong("MomentumBits",Double.doubleToRawLongBits(face.kilogramMetersPerSecond())); faces.add(tag);
 		}
-		if (section.hasChemicalState()) {
-			root.putIntArray("ChemicalMixtureIndices", section.chemicalMixtureIndex());
-			root.putByteArray("Indicator", section.indicator());
-			root.putLongArray("ChemicalSpeciesTotals", section.chemicalSpeciesTotals());
-			root.putLong("ChemicalResidualUnits", section.chemicalResidualLedgerUnits());
-		}
-		root.putByteArray("Solids", section.solidMask());
-		root.put("Extensions", encodeExtensions(section.extensions()));
-		root.putLong("Checksum", section.checksum());
+		root.put("FaceMomentum",faces); root.putByteArray("Solids",section.solidMask()); root.put("Extensions",encodeExtensions(section.extensions())); root.putLong("Checksum",section.checksum());
 		return root;
 	}
-
 	RegionSectionState decodeSection(CompoundTag root) throws IOException {
-		Identity identity = decodeIdentity(root, "section");
-		for (String field : List.of("SectionX", "SectionY", "SectionZ", "StartX", "StartY", "StartZ", "SizeX", "SizeY", "SizeZ")) {
-			require(root, field, Tag.TAG_INT);
-		}
-		require(root, "Ordinals", Tag.TAG_INT_ARRAY); require(root, "PositionVolumeBits", Tag.TAG_INT_ARRAY);
-		require(root, "VelocityBits", Tag.TAG_INT_ARRAY); require(root, "Solids", Tag.TAG_BYTE_ARRAY);
-		require(root, "Extensions", Tag.TAG_LIST); require(root, "Checksum", Tag.TAG_LONG);
-		require(root, "MassUnits", Tag.TAG_LONG_ARRAY);
-		long[] markerMassUnits = root.getLongArray("MassUnits").orElseThrow();
-		int[] materialPaletteIndex = new int[0];
-		if (identity.layout().hasMaterials()) {
-			require(root, "MaterialPaletteIndices", Tag.TAG_INT_ARRAY);
-			materialPaletteIndex = root.getIntArray("MaterialPaletteIndices").orElseThrow();
-		}
-		int[] chemicalMixtureIndex = new int[0]; byte[] indicator = new byte[0];
-		long[] chemicalSpeciesTotals = new long[0]; long chemicalResidualUnits = 0L;
-		boolean chemicalState = identity.layout().requiresChemistry();
-		if (identity.layout().permitsOptionalChemistry()) {
-			require(root, "ChemistryPresent", Tag.TAG_BYTE);
-			chemicalState = root.getBooleanOr("ChemistryPresent", false);
-		}
-		if (chemicalState) {
-			require(root, "ChemicalMixtureIndices", Tag.TAG_INT_ARRAY); require(root, "Indicator", Tag.TAG_BYTE_ARRAY);
-			require(root, "ChemicalSpeciesTotals", Tag.TAG_LONG_ARRAY); require(root, "ChemicalResidualUnits", Tag.TAG_LONG);
-			chemicalMixtureIndex = root.getIntArray("ChemicalMixtureIndices").orElseThrow();
-			indicator = root.getByteArray("Indicator").orElseThrow();
-			chemicalSpeciesTotals = root.getLongArray("ChemicalSpeciesTotals").orElseThrow();
-			chemicalResidualUnits = root.getLongOr("ChemicalResidualUnits", 0L);
-		}
+		Identity identity = decodeIdentity(root,"section");
+		for (String field : List.of("SectionX","SectionY","SectionZ","StartX","StartY","StartZ","SizeX","SizeY","SizeZ")) require(root,field,Tag.TAG_INT);
+		require(root,"LiquidStocks",Tag.TAG_LIST); require(root,"FaceMomentum",Tag.TAG_LIST); require(root,"Solids",Tag.TAG_BYTE_ARRAY); require(root,"Extensions",Tag.TAG_LIST); require(root,"Checksum",Tag.TAG_LONG);
 		try {
-			return new RegionSectionState(identity.layout(), identity.id(), identity.dimension(), identity.generation(),
-					root.getIntOr("SectionX", 0), root.getIntOr("SectionY", 0), root.getIntOr("SectionZ", 0),
-					root.getIntOr("StartX", -1), root.getIntOr("StartY", -1), root.getIntOr("StartZ", -1),
-					root.getIntOr("SizeX", -1), root.getIntOr("SizeY", -1), root.getIntOr("SizeZ", -1),
-					root.getIntArray("Ordinals").orElseThrow(), floats(root.getIntArray("PositionVolumeBits").orElseThrow()),
-					floats(root.getIntArray("VelocityBits").orElseThrow()), markerMassUnits, materialPaletteIndex,
-					root.getByteArray("Solids").orElseThrow(),
-					decodeExtensions(root.getListOrEmpty("Extensions")), chemicalMixtureIndex, indicator,
-					chemicalSpeciesTotals, chemicalResidualUnits, root.getLongOr("Checksum", -1L));
-		} catch (IllegalArgumentException exception) {
-			throw new IOException("Invalid region section: " + exception.getMessage(), exception);
-		}
+			var stocks = new ArrayList<mmm.inventory.LiquidCellInventory.Stock>(); var encoded = root.getListOrEmpty("LiquidStocks");
+			for (int i = 0; i < encoded.size(); i++) {
+				var tag = compoundAt(encoded,i,"liquid stock");
+				for (String field : List.of("Cell","Material","Support","VolumeExponent")) require(tag,field,Tag.TAG_INT);
+				require(tag,"VolumeSignificand",Tag.TAG_BYTE_ARRAY); require(tag,"MassUnits",Tag.TAG_LONG); require(tag,"InternalEnergyBits",Tag.TAG_LONG); require(tag,"Indicator",Tag.TAG_BYTE);
+				byte[] numerator = tag.getByteArray("VolumeSignificand").orElseThrow();
+				if (numerator.length == 0 || numerator.length > mmm.units.SignedDyadic.MAX_SIGNIFICAND_BITS / 8 + 2) throw new IOException("Liquid volume significand exceeds its quantity budget");
+				var volume = new mmm.units.SignedDyadic(new java.math.BigInteger(numerator),tag.getIntOr("VolumeExponent",0));
+				if (!java.util.Arrays.equals(volume.significand().toByteArray(),numerator) || volume.exponent()!=tag.getIntOr("VolumeExponent",0)) throw new IOException("Noncanonical liquid volume encoding");
+				mmm.chemistry.ChemicalMixtureRecord mixture = null;
+				if (tag.contains("Mixture")) {
+					var entry = tag.getCompoundOrEmpty("Mixture"); require(entry,"Species",Tag.TAG_INT_ARRAY); require(entry,"Amounts",Tag.TAG_LONG_ARRAY); require(entry,"ResidualUnits",Tag.TAG_LONG);
+					mixture = new mmm.chemistry.ChemicalMixtureRecord(entry.getIntArray("Species").orElseThrow(),entry.getLongArray("Amounts").orElseThrow(),entry.getLongOr("ResidualUnits",0));
+				}
+				stocks.add(new mmm.inventory.LiquidCellInventory.Stock(new mmm.inventory.LiquidCellInventory.Key(tag.getIntOr("Cell",-1),tag.getIntOr("Material",-1),tag.getIntOr("Support",0)),
+						volume,tag.getLongOr("MassUnits",-1),mixture,
+						Double.longBitsToDouble(tag.getLongOr("InternalEnergyBits",0)),tag.getBooleanOr("Indicator",false)));
+			}
+			var faces = new ArrayList<RegionSectionState.FaceMomentum>(); var encodedFaces = root.getListOrEmpty("FaceMomentum");
+			for (int i = 0; i < encodedFaces.size(); i++) { var tag = compoundAt(encodedFaces,i,"MAC momentum"); require(tag,"Axis",Tag.TAG_INT); require(tag,"Face",Tag.TAG_INT); require(tag,"MomentumBits",Tag.TAG_LONG);
+				faces.add(new RegionSectionState.FaceMomentum(tag.getIntOr("Axis",-1),tag.getIntOr("Face",-1),Double.longBitsToDouble(tag.getLongOr("MomentumBits",0)))); }
+			return new RegionSectionState(identity.layout(),identity.id(),identity.dimension(),identity.generation(),root.getIntOr("SectionX",0),root.getIntOr("SectionY",0),root.getIntOr("SectionZ",0),
+					root.getIntOr("StartX",-1),root.getIntOr("StartY",-1),root.getIntOr("StartZ",-1),root.getIntOr("SizeX",0),root.getIntOr("SizeY",0),root.getIntOr("SizeZ",0),
+					stocks,faces,root.getByteArray("Solids").orElseThrow(),decodeExtensions(root.getListOrEmpty("Extensions")),root.getLongOr("Checksum",-1));
+		} catch (IllegalArgumentException invalid) { throw new IOException("Invalid cell/MAC section",invalid); }
 	}
 
 	private static CompoundTag identity(UUID id, String dimension, long generation, RegionStateLayout layout) {
 		CompoundTag tag = new CompoundTag();
+		tag.putString("StateEncoding", "cell-mac");
 		tag.putString("MassEncoding", mmm.units.Mass.ENCODING);
 		tag.putString("Layout", layout.persistedId());
 		tag.putLong("UuidMost", id.getMostSignificantBits()); tag.putLong("UuidLeast", id.getLeastSignificantBits());
@@ -220,6 +205,7 @@ final class RegionStateCodec {
 	}
 
 	private static Identity decodeIdentity(CompoundTag tag, String context) throws IOException {
+		if (!tag.getStringOr("StateEncoding", "").equals("cell-mac")) throw new IOException("Unsupported region state encoding");
 		require(tag, "MassEncoding", Tag.TAG_STRING);
 		if (!mmm.units.Mass.ENCODING.equals(tag.getStringOr("MassEncoding", ""))) throw new IOException("Unsupported mass encoding in " + context);
 		require(tag, "Layout", Tag.TAG_STRING);

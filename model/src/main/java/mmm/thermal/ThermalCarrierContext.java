@@ -14,6 +14,15 @@ import java.util.Map;
  */
 public interface ThermalCarrierContext {
 	int markerCount();
+	/** Internal energy belongs to the authoritative cell/material/support inventory row. */
+	double liquidInternalEnergy(int ordinal);
+	void setLiquidInternalEnergy(int ordinal, double energy);
+	long liquidInventoryRevision();
+	default void setLiquidInternalEnergies(double[] energies) {
+		if (energies == null || energies.length != markerCount())
+			throw new IllegalArgumentException("Liquid energy count differs from inventory");
+		for (int ordinal = 0; ordinal < energies.length; ordinal++) setLiquidInternalEnergy(ordinal, energies[ordinal]);
+	}
 	int cell(int marker);
 	@FunctionalInterface
 	interface SupportConsumer { void accept(int cell, double weight); }

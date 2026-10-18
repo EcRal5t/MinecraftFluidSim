@@ -1,8 +1,7 @@
 package mmm.simulation;
 
 import mmm.fluid.BuiltinFluidMaterials;
-import mmm.fluid.FlipMaterialParticleState;
-import mmm.fluid.FlipParticleState;
+import mmm.fluid.FluidMaterialRegistry;
 import mmm.fluid.FluidDomain;
 import mmm.fluid.FluidSolverConfig;
 import mmm.simulation.controller.FluidRegionFootprint;
@@ -15,7 +14,7 @@ import net.minecraft.world.level.material.FluidState;
 
 import java.util.UUID;
 
-/** Allocates CPU regions and performs read-only vanilla-water sampling into exact marker volume. */
+/** Allocates CPU regions and performs read-only vanilla-water sampling into persistent cell inventory. */
 final class FluidRegionFactory {
 	static final int CELLS_PER_BLOCK = 2;
 	static final int CELL_VOLUMES_PER_BLOCK = CELLS_PER_BLOCK * CELLS_PER_BLOCK * CELLS_PER_BLOCK;
@@ -75,14 +74,7 @@ final class FluidRegionFactory {
 	 */
 	static void bindDefaultMaterialState(FluidDomain domain) {
 		if (domain.hasMaterialState()) return;
-		FlipParticleState pure = domain.exportParticleState();
-		float[] positionVolume = pure.copyPositionVolume();
-		long[] markerMassUnits = pure.copyMassUnits();
-		int[] material = new int[pure.particleCount()];
-		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
-				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(), mmm.units.Mass.sum(markerMassUnits),
-				BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, pure.copyParticleVelocities(), pure.copySolidMask(), markerMassUnits, material
-		));
+		domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 	}
 
 	static int captureVanillaWater(ServerLevel level, FluidRegion region) {
@@ -90,6 +82,7 @@ final class FluidRegionFactory {
 		BlockPos origin = region.origin();
 		float cellSize = domain.config().cellSize();
 		int wetCells = 0;
+		float[] volumes = new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
 		for (int z = 0; z < domain.sizeZ(); z++) {
 			for (int y = 0; y < domain.sizeY(); y++) {
 				for (int x = 0; x < domain.sizeX(); x++) {
@@ -108,11 +101,12 @@ final class FluidRegionFactory {
 					double localBottom = cellBottom - Math.floor(cellBottom);
 					float fraction = Mth.clamp((float) ((waterHeight - localBottom) / cellSize), 0.0F, 1.0F);
 					if (fraction <= 0.0F) continue;
-					domain.setVolume(x, y, z, fraction);
+					volumes[(z*domain.sizeY()+y)*domain.sizeX()+x] = fraction;
 					wetCells++;
 				}
 			}
 		}
+		domain.setVolumes(volumes);
 		return wetCells;
 	}
 }

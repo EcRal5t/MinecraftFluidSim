@@ -14,6 +14,40 @@ public final class SolidCompositionPool {
 	private int[] freeHandles;
 	private int nextHandle = 1;
 	private int freeCount, liveCount;
+	private long mutationRevision;
+
+	private SolidCompositionPool(SolidCompositionPool source) {
+		this.registry=source.registry;
+		this.capacity=source.capacity;
+		this.entryCount=source.entryCount.clone();
+		this.species=source.species.clone();
+		this.amounts=source.amounts.clone();
+		this.residualUnits=source.residualUnits.clone();
+		this.freeHandles=source.freeHandles.clone();
+		this.nextHandle=source.nextHandle;
+		this.freeCount=source.freeCount;
+		this.liveCount=source.liveCount;
+		mutationRevision=source.mutationRevision;
+	}
+	/** One private candidate copy for a complete inventory transaction. */
+	public SolidCompositionPool copy() { return new SolidCompositionPool(this); }
+	public void requirePrepared(SolidCompositionPool prepared,long sourceRevision) {
+		if(prepared==null||prepared==this||mutationRevision!=sourceRevision||prepared.registry!=registry||prepared.capacity!=capacity)
+			throw new IllegalStateException("Prepared SolidCompositionPool differs from its source generation");
+	}
+	/** Exchanges validated columns; the candidate receives the detached old inventory. */
+	public void adoptPrepared(SolidCompositionPool prepared,long sourceRevision) {
+		requirePrepared(prepared,sourceRevision);
+		var oldentryCount=entryCount;entryCount=prepared.entryCount;prepared.entryCount=oldentryCount;
+		var oldspecies=species;species=prepared.species;prepared.species=oldspecies;
+		var oldamounts=amounts;amounts=prepared.amounts;prepared.amounts=oldamounts;
+		var oldresidualUnits=residualUnits;residualUnits=prepared.residualUnits;prepared.residualUnits=oldresidualUnits;
+		var oldfreeHandles=freeHandles;freeHandles=prepared.freeHandles;prepared.freeHandles=oldfreeHandles;
+		var oldnextHandle=nextHandle;nextHandle=prepared.nextHandle;prepared.nextHandle=oldnextHandle;
+		var oldfreeCount=freeCount;freeCount=prepared.freeCount;prepared.freeCount=oldfreeCount;
+		var oldliveCount=liveCount;liveCount=prepared.liveCount;prepared.liveCount=oldliveCount;
+		mutationRevision++;
+	}
 
 	public SolidCompositionPool(ChemicalRegistry registry, int capacity) {
 		if (registry == null) throw new IllegalArgumentException("Chemical registry is missing");
@@ -31,6 +65,7 @@ public final class SolidCompositionPool {
 
 	public ChemicalRegistry registry() { return registry; }
 	public int liveCount() { return liveCount; }
+	public long mutationRevision() { return mutationRevision; }
 	public boolean hasCapacity(int additional) { return additional >= 0 && additional <= capacity - liveCount; }
 	public boolean isLive(int handle) { return handle > 0 && handle < entryCount.length && entryCount[handle] != 0; }
 
@@ -39,7 +74,7 @@ public final class SolidCompositionPool {
 		if (!hasCapacity(1)) throw new BudgetExceededException("Solid composition handle budget exceeded");
 		int handle = freeCount > 0 ? freeHandles[--freeCount] : nextHandle++;
 		ensureAllocated(handle);
-		write(handle, record); liveCount++; return handle;
+		write(handle, record); liveCount++; mutationRevision++; return handle;
 	}
 
 	public SolidCompositionRecord record(int handle) {
@@ -60,7 +95,7 @@ public final class SolidCompositionPool {
 			Arrays.fill(species, base + record.entryCount(), base + previous, (short) 0);
 			Arrays.fill(amounts, base + record.entryCount(), base + previous, 0L);
 		}
-		write(handle, record);
+		write(handle, record); mutationRevision++;
 	}
 
 	/** Pure preflight for an ownership-preserving composition overwrite. */
@@ -72,7 +107,7 @@ public final class SolidCompositionPool {
 		requireLive(handle);
 		int count = Byte.toUnsignedInt(entryCount[handle]), base = handle * GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES;
 		Arrays.fill(species, base, base + count, (short) 0); Arrays.fill(amounts, base, base + count, 0L);
-		entryCount[handle] = 0; residualUnits[handle] = 0L; freeHandles[freeCount++] = handle; liveCount--;
+		entryCount[handle] = 0; residualUnits[handle] = 0L; freeHandles[freeCount++] = handle; liveCount--; mutationRevision++;
 	}
 
 	public long[] speciesTotals() {

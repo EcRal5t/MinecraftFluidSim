@@ -9,7 +9,7 @@ import mmm.units.SignedDyadic;
 
 /** Constructs the granular-transition and liquid-reseed stages that follow thermochemistry. */
 final class LogicalStepTailAssembly {
-	record Stages(GranularTransitionStage granularTransition, ParticleReseedStage reseed) { }
+	record Stages(GranularTransitionStage granularTransition) { }
 
 	private LogicalStepTailAssembly() { }
 
@@ -45,33 +45,6 @@ final class LogicalStepTailAssembly {
 						domain.pressureGranularCoupling = coupling;
 					}
 				});
-		ParticleReseedStage reseed = new ParticleReseedStage(
-				new ParticleReseedStage.Workspace(domain.geometry, domain.particles, domain.particleReseeder),
-				new ParticleReseedStage.Access() {
-					@Override public boolean hasConservativeCellQuadrature() {
-						return CellLiquidVolumeTransport.enabled()
-								&& domain.cellLiquidVolumeTransport != null && domain.cellLiquidVolumeTransport.publishedQuadrature;
-					}
-					@Override public void ensureParticleCapacity(int required) { domain.ensureParticleCapacity(required); }
-					@Override public mmm.chemistry.ChemicalParcelStore chemicalParcels() {
-						return domain.chemicalParcels;
-					}
-					@Override public ThermalDomainState thermalState() { return domain.thermalState; }
-					@Override public FlipParticleReseeder.ThermalAdapter thermalAdapter() {
-						return domain.thermalReseedAdapter();
-					}
-					@Override public boolean massWeightedDynamics() { return domain.usesMassWeightedP2G(); }
-					@Override public boolean markerPositionAllowed(float x, float y, float z) {
-						return domain.markerPositionAllowed(x, y, z);
-					}
-					@Override public long carrierMutationRevision() { return domain.carrierMutationRevision(); }
-					@Override public CarrierMutationCoordinator carrierMutations() { return domain.carrierMutations(); }
-					@Override public double particleKineticEnergyJoules() { return domain.mechanicalCarrierKineticEnergyJoules(); }
-					@Override public SignedDyadic exactInternalEnergy() { return domain.exactInternalEnergy(); }
-					@Override public void markGridDirty() { domain.gridDirty = true; }
-					@Override public void rebuildGrid() { domain.rebuildGridFromParticles(); }
-					@Override public void ensureInventoryGrid() { domain.ensureInventoryGrid(); }
-				});
-		return new Stages(transition, reseed);
+		return new Stages(transition);
 	}
 }

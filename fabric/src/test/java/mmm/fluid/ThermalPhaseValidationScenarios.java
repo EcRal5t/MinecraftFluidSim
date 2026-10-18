@@ -152,6 +152,10 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				"test:miscible", 0.0, 90.0);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(liquid));
 		ThermalCarrierContext carriers = new ThermalCarrierContext() {
+			private double internalEnergy;private long revision;
+			@Override public double liquidInternalEnergy(int ordinal){return internalEnergy;}
+			@Override public void setLiquidInternalEnergy(int ordinal,double energy){internalEnergy=energy;revision++;}
+			@Override public long liquidInventoryRevision(){return revision;}
 			@Override public int markerCount() { return 1; }
 			@Override public int cell(int marker) { return 0; }
 			@Override public int fluidMaterialHandle(int marker) { return 0; }
@@ -277,7 +281,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				"domain melt commit did not conserve exact mass, volume and energy inventories");
 
 		phaseDomain = FluidDomain.restoreAuthoritativeState(phaseDomain.captureAuthoritativeState());
-		phaseDomain.step(false, 0);
+		phaseDomain = advance(phaseDomain);
 		require(close(phaseDomain.totalVolumeExact(), 1.0) && phaseDomain.totalCoherentSolidVolumeSvq() == 0
 				&& phaseDomain.exactInternalEnergy().equals(phaseDomain.thermalAudit().expectedInventory()),
 				"Restored melt could not continue through a complete mechanical step");
@@ -763,15 +767,11 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 						Map.of("test:s0", 1), Map.of("test:s1", 1), ExactRational.ZERO)));
 		var thermal = compositionPhaseThermalRegistry(liquids, granular, chemistry);
 		for (int divisor = 1; divisor <= 2; divisor++) {
-			var domain = new FluidDomain(3, 3, 3, config, 256);
-			restorePhaseTestCarriers(domain, liquids, 0, 0, 0, new float[]{.125F, .125F}, new int[2]);
-			domain.bindChemistry(chemistry);
-			for (int marker = 0; marker < 2; marker++) {
-				domain.particles.setVolume(marker, 0.0625F); domain.particles.setMassUnits(marker, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(62.5));
-				var amounts = new java.util.TreeMap<String, Long>();
-				for (int i = marker * 8; i < (marker == 0 ? 8 : 17); i++) amounts.put(ids.get(i), 10L);
-				domain.setMarkerChemical(marker, amounts, false);
-			}
+			var domain=new FluidDomain(3,3,3,config,256);
+			restorePhaseTestCarriers(domain,liquids,0,0,0,new float[]{.125F},new int[1]);domain.bindChemistry(chemistry);
+			var amounts=new java.util.TreeMap<String,Long>();
+			for(int speciesIndex=0;speciesIndex<16;speciesIndex++)amounts.put(ids.get(speciesIndex),10L);
+			domain.setMarkerChemical(0,amounts,false);
 			var transition = thermal.transitions().getFirst();
 			var bounded = new ThermalRegistry(thermalMaterials(thermal.materials()), thermal.speciesOffsets(), List.of(
 					new ThermalPhaseTransition(transition.id(), transition.lowerEnergyMaterialId(), transition.upperEnergyMaterialId(),
@@ -780,9 +780,9 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 					chemistry.fingerprint(), granular.fingerprint());
 			domain.bindThermal(bounded, domain.materialRegistry, 280.0);
 			var energy = domain.exactInternalEnergy();
-			require(domain.stepInertPhaseChangeOnly(1).operations() == divisor - 1
+			require(domain.stepInertPhaseChangeOnly(1).operations() == 1
 					&& domain.exactInternalEnergy().equals(energy),
-					"cell aggregate and target carrier enforce their own composition capacities");
+					"Supported cell and target compositions did not advance within the one-operation budget");
 		}
 		var domain = new FluidDomain(3, 3, 3, config, 256);
 		restorePhaseTestCarriers(domain, liquids, 2, 2, 2, new float[]{.125F}, new int[1]);
@@ -948,62 +948,17 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				"cleared phase volume repeated its mechanical work on a later projection");
 	}
 
-	private static void phaseLiquidGeometryMatchesPublishedMarkers() {
-		for (int kind = 0; kind < 4; kind++) {
-			var d = new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.001F,100,1e-6F,.45F,.002F,0),128);
-			float[] positions = new float[96]; int marker = 0;
-			for (int group = 0; group < 3; group++) for (int slot = 0; slot < 8; slot++) {
-				int base = 4 * marker++, x = group == 0 ? 1 : 2, y = group == 2 ? 0 : 1;
-				positions[base] = x + .25F + .5F * (slot & 1);
-				positions[base+1] = y + .25F + .5F * (slot >> 1 & 1);
-				positions[base+2] = 1.25F + .5F * (slot >> 2 & 1);
-				positions[base+3] = group == 0 ? .0625F : .03125F;
-			}
-			d.restoreParticleState(new FlipParticleState(3,3,3,1,24,1,positions,new float[72], mmm.units.Mass.createLiquid(1, 1000.0, positions),new byte[27]));
-			d.ensurePressureGeometry(); int cell = d.cellIndex(1,1,1), neighbor = d.cellIndex(2,1,1);
-			var state = new PhaseChangeStageSupport.Workspace(d.sizeX,d.sizeY,d.sizeZ,d.cellCount,d.maximumParticleCount,
-					d.config.cellSize(),d.unitScale,d.geometry,d.markerGrid,d.projection,d.particles,d.gasState,d.pendingPhaseVolume,null);
-			var before = PhaseLiquidGeometryEdit.current(state,cell);
-			float neighborNormal = d.pressurePhaseGeometry.planeNormal(neighbor,0);
-			var future = new java.util.ArrayList<PhaseLiquidGeometryEdit.InsertedMarker>();
-			for (int raw = d.markerGrid.cellMarkerHead[cell]; raw >= 0; raw = d.markerGrid.particleCellNext[raw]) {
-				if (kind == 3 && raw == 7) continue;
-				float volume = kind == 0 && raw == 7 ? .03125F : kind == 1 && raw == 0 ? .09375F : d.particles.volume(raw);
-				future.add(new PhaseLiquidGeometryEdit.InsertedMarker(volume,d.particles.positionX(raw),d.particles.positionY(raw),d.particles.positionZ(raw)));
-			}
-			if (kind == 2) {
-				float[] position = d.markerSlotPosition(1,1,1,0);
-				future.add(new PhaseLiquidGeometryEdit.InsertedMarker(.03125F,position[0],position[1],position[2]));
-			}
-			var edit = PhaseLiquidGeometryEdit.fromMarkers(state,cell,future);
-			var planned = new FlipPressurePhaseGeometry(3,3,3); var active = new boolean[27];
-			planned.rebuild(d.geometry.solid,d.projection.pressureVolume,d.geometry.cutCells,d.pressureGranularCoupling,
-					active,d.markerGrid,d.particles,1,edit);
-			if (kind == 0) require(edit.volume().toDouble() == .46875 && edit.firstMomentX().toDouble() == .6953125,
-					"Partial phase donor lost its actual volume position moment");
-			require(!edit.firstMomentX().equals(before.firstMomentX().multiply(SignedDyadic.of(edit.volume().toDouble()/before.volume().toDouble()))),
-					"Phase geometry fixture failed to distinguish actual donor moments from whole-cell scaling");
-			require(planned.planeNormal(neighbor,0) != neighborNormal,"Future phase volume failed to rebuild neighboring gradient normals");
-			if (kind == 0 || kind == 1) {
-				int target = kind == 0 ? 7 : 0; d.particles.setVolume(target,kind == 0 ? .03125F : .09375F);
-				d.particles.setMassUnits(target, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(kind == 0 ? 31.25 : 93.75));
-			} else if (kind == 2) d.spawnParticle(1,1,1,0,.03125F,0,d.unitScale.massUnitsForNormalized(31.25),null,false,false);
-			else d.removeParticle(7);
-			d.rebuildGridFromParticles();
-			require(edit.equals(PhaseLiquidGeometryEdit.current(state,cell)),"Planned phase moments differ from published markers");
-			for (int c = 0; c < 27; c++) {
-				require(Double.doubleToRawLongBits(planned.liquidFractionExact(c)) == Double.doubleToRawLongBits(d.pressurePhaseGeometry.liquidFractionExact(c))
-						&& Double.doubleToRawLongBits(planned.planeOffset(c)) == Double.doubleToRawLongBits(d.pressurePhaseGeometry.planeOffset(c))
-						&& active[c] == d.projection.pressureFluid[c],"Future phase fraction, plane or pressure class differs after publication");
-				for (int axis = 0; axis < 3; axis++) require(Float.floatToRawIntBits(planned.planeNormal(c,axis))
-						== Float.floatToRawIntBits(d.pressurePhaseGeometry.planeNormal(c,axis)),"Future phase normal differs after publication");
-				for(int micro=0;micro<8;micro++) {
-					require(Double.doubleToRawLongBits(planned.liquidFractionExact(c,micro))==Double.doubleToRawLongBits(d.pressurePhaseGeometry.liquidFractionExact(c,micro))
-							&& Double.doubleToRawLongBits(planned.planeOffset(c,micro))==Double.doubleToRawLongBits(d.pressurePhaseGeometry.planeOffset(c,micro)),"Future component PLIC differs after publication");
-					for(int axis=0;axis<3;axis++) require(Float.floatToRawIntBits(planned.planeNormal(c,micro,axis))
-							==Float.floatToRawIntBits(d.pressurePhaseGeometry.planeNormal(c,micro,axis)),"Future component normal differs after publication");
-				}
-			}
+	private static void phaseLiquidGeometryMatchesPublishedMarkers(){
+		for(float amount:new float[]{.46875F,.53125F,.75F,0}){
+			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.001F,100,1e-6F,.45F,.002F,0),128);
+			domain.setVolume(1,1,1,.5F);domain.setVolume(2,1,1,.25F);domain.setVolume(2,0,1,.25F);
+			var neighbour=domain.liquidCells.stocksInCell(domain.cellIndex(2,1,1));
+			domain.setVolume(1,1,1,amount);domain.ensurePressureGeometry();
+			int cell=domain.cellIndex(1,1,1);
+			require(Math.abs(domain.pressurePhaseGeometry.liquidFractionExact(cell)-amount)<1e-7,"Published phase geometry missed committed cell volume");
+			require(neighbour.equals(domain.liquidCells.stocksInCell(domain.cellIndex(2,1,1))),"Local phase geometry preparation edited neighbouring inventory");
+			var restored=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());restored.ensurePressureGeometry();
+			require(domain.liquidCells.stocks().equals(restored.liquidCells.stocks())&&restored.gasBoundary().auditClosed(),"Phase geometry restore changed liquid or gas inventory");
 		}
 	}
 
@@ -1120,7 +1075,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				&& domain.totalCoherentSolidVolumeSvq() > 0L,
 				"operator-empty fixture did not create coherent condensed inventory");
 		// The operator command rejects this phase event until a real mechanical projection consumes it.
-		domain.step(false, 0);
+		domain = advance(domain);
 		require(!domain.hasPendingPhaseVolumeWork(),
 				"operator-empty fixture did not consume pending phase work");
 		long coherentSvq = domain.totalCoherentSolidVolumeSvq();
@@ -1151,6 +1106,11 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				&& d.gasState.network.sealedInventory().equals(stock), "Rejected geometry-stale clear changed gas inventory or capacity");
 		var current = d.planOperatorClear(); d.commitOperatorClear(current);
 		require(d.gasState.network.availableVolume(1) == 7.875, "Current operator clear did not use the actual geometric capacity");
+	}
+
+	private static FluidDomain advance(FluidDomain domain) {
+		return new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+				0, domain.captureAuthoritativeState(), List.of(), false, 0)).claimPreparedCpuDomain();
 	}
 
 }

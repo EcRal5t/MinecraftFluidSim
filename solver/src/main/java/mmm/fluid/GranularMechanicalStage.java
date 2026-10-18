@@ -22,7 +22,6 @@ final class GranularMechanicalStage {
 		boolean granularOccupancyFitsGeometry(GranularCouplingFields coupling);
 		/** Derived per-cell liquid carrier properties for the current revision. */
 		LiquidCarrierProperties liquidCarrierProperties();
-		boolean massWeightedP2G();
 		boolean granularCarrierFaceActive(int axis, int x, int y, int z);
 		float effectiveOpenCellVolume(int cell);
 		float trilinearWeight(int ox, int oy, int oz, float fx, float fy, float fz);
@@ -62,7 +61,7 @@ final class GranularMechanicalStage {
 		return new GranularMechanics.StepStats(granular.parcels.count(), submerged, maximum, 0, 0, 0, 0, roundingY, 0);
 	}
 
-	/** The implicit constitutive law is evaluated at the solved, collocated end-of-step slip. */
+	/** Checks the material carrier range at the committed candidate velocity. */
 	void validateVelocities() {
 		if (!access.hasGranularInventory()) return;
 		var granular = access.granularState();
@@ -108,7 +107,7 @@ final class GranularMechanicalStage {
 	private void planFixedLiquidCapacity(GranularDomainState granular) {
 		access.granularCollision().planFixedLiquidCapacity(granular.parcels, access.granularCoupling(),
 				cell -> SolidVolume.fromCellVolumeExact(state.geometry.cutCells.openCellVolume(cell))
-						- JointPhaseCapacity.liquidSvqCeil(state.markerGrid.exactCellVolumeInventory[cell]));
+						- mmm.granular.SolidVolume.cellVolumeSvqCeil(state.markerGrid.exactCellVolumeInventory[cell]));
 	}
 
 	/** Publishes the preview once, with the occupancy used by the joint liquid/gas candidate. */
@@ -199,9 +198,8 @@ final class GranularMechanicalStage {
 			squaredWeightMass += massWeight * weight;
 		}
 		return weightedMass > 0.0 ? new CarrierKernel(weightedVelocity / weightedMass,
-				state.unitScale.kilograms(weightedMass * weightedMass / squaredWeightMass * faceMassScale())) : new CarrierKernel(0.0, 0.0);
+				state.unitScale.kilograms(weightedMass * weightedMass / squaredWeightMass)) : new CarrierKernel(0.0, 0.0);
 	}
 
-	private double faceMassScale() { return access.massWeightedP2G() ? 1.0 : state.config.density(); }
 
 }

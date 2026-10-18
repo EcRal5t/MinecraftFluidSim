@@ -39,15 +39,61 @@ public final class GranularParcelStore {
 
 	private final GranularRegistry registry;
 	private final int capacity;
-	private final float[] x, y, z, velocityX, velocityY, velocityZ;
-	private final long[] solidVolumeSvq;
-	private final long[] massUnits;
-	private final int[] materialHandle, solidCompositionHandle, contactAge;
-	private final byte[] flags;
-	private final byte[] ceilMask;
+	private float[] x, y, z, velocityX, velocityY, velocityZ;
+	private long[] solidVolumeSvq;
+	private long[] massUnits;
+	private int[] materialHandle, solidCompositionHandle, contactAge;
+	private byte[] flags;
+	private byte[] ceilMask;
 	private final GranularKernel kernel;
 	private int count;
 	private long mutationRevision;
+
+	private GranularParcelStore(GranularParcelStore source) {
+		this.registry=source.registry;
+		this.capacity=source.capacity;
+		this.kernel=source.kernel;
+		this.x=source.x.clone();
+		this.y=source.y.clone();
+		this.z=source.z.clone();
+		this.velocityX=source.velocityX.clone();
+		this.velocityY=source.velocityY.clone();
+		this.velocityZ=source.velocityZ.clone();
+		this.solidVolumeSvq=source.solidVolumeSvq.clone();
+		this.massUnits=source.massUnits.clone();
+		this.materialHandle=source.materialHandle.clone();
+		this.solidCompositionHandle=source.solidCompositionHandle.clone();
+		this.contactAge=source.contactAge.clone();
+		this.flags=source.flags.clone();
+		this.ceilMask=source.ceilMask.clone();
+		this.count=source.count;
+		mutationRevision=source.mutationRevision;
+	}
+	/** One private candidate copy for a complete inventory transaction. */
+	public GranularParcelStore copy() { return new GranularParcelStore(this); }
+	public void requirePrepared(GranularParcelStore prepared,long sourceRevision) {
+		if(prepared==null||prepared==this||mutationRevision!=sourceRevision||prepared.registry!=registry||prepared.capacity!=capacity||prepared.kernel!=kernel)
+			throw new IllegalStateException("Prepared GranularParcelStore differs from its source generation");
+	}
+	/** Exchanges validated columns; the candidate receives the detached old inventory. */
+	public void adoptPrepared(GranularParcelStore prepared,long sourceRevision) {
+		requirePrepared(prepared,sourceRevision);
+		var oldx=x;x=prepared.x;prepared.x=oldx;
+		var oldy=y;y=prepared.y;prepared.y=oldy;
+		var oldz=z;z=prepared.z;prepared.z=oldz;
+		var oldvelocityX=velocityX;velocityX=prepared.velocityX;prepared.velocityX=oldvelocityX;
+		var oldvelocityY=velocityY;velocityY=prepared.velocityY;prepared.velocityY=oldvelocityY;
+		var oldvelocityZ=velocityZ;velocityZ=prepared.velocityZ;prepared.velocityZ=oldvelocityZ;
+		var oldsolidVolumeSvq=solidVolumeSvq;solidVolumeSvq=prepared.solidVolumeSvq;prepared.solidVolumeSvq=oldsolidVolumeSvq;
+		var oldmassUnits=massUnits;massUnits=prepared.massUnits;prepared.massUnits=oldmassUnits;
+		var oldmaterialHandle=materialHandle;materialHandle=prepared.materialHandle;prepared.materialHandle=oldmaterialHandle;
+		var oldsolidCompositionHandle=solidCompositionHandle;solidCompositionHandle=prepared.solidCompositionHandle;prepared.solidCompositionHandle=oldsolidCompositionHandle;
+		var oldcontactAge=contactAge;contactAge=prepared.contactAge;prepared.contactAge=oldcontactAge;
+		var oldflags=flags;flags=prepared.flags;prepared.flags=oldflags;
+		var oldceilMask=ceilMask;ceilMask=prepared.ceilMask;prepared.ceilMask=oldceilMask;
+		var oldcount=count;count=prepared.count;prepared.count=oldcount;
+		mutationRevision++;
+	}
 
 	public GranularParcelStore(GranularRegistry registry, int capacity) {
 		this(registry, capacity, null);

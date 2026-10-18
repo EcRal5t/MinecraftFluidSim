@@ -31,6 +31,10 @@ public final class ThermalCellGrid {
 		double internalEnergy(int carrier);
 		default SignedDyadic exactInternalEnergy(int carrier) { return SignedDyadic.of(internalEnergy(carrier)); }
 		void setInternalEnergy(int carrier, double energy);
+		default void setInternalEnergies(double[] energies) {
+			if(energies.length!=carrierCount()) throw new IllegalArgumentException("Thermal energy layout differs");
+			for(int carrier=0;carrier<energies.length;carrier++) setInternalEnergy(carrier,energies[carrier]);
+		}
 	}
 
 	private final int cellCount;
@@ -356,7 +360,7 @@ public final class ThermalCellGrid {
 		if (carriers == null || snapshot == null || snapshot.length != carriers.carrierCount()) {
 			throw new IllegalArgumentException("Thermal carrier rollback snapshot is incompatible");
 		}
-		for (int carrier = 0; carrier < snapshot.length; carrier++) carriers.setInternalEnergy(carrier, snapshot[carrier]);
+		carriers.setInternalEnergies(snapshot);
 		rebuild(carriers);
 	}
 

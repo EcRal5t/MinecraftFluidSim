@@ -76,8 +76,8 @@ public final class ChemicalTransferLedger {
 		public Group {
 			ChemicalIds.requireId(materialId, "chemical ledger material id");
 			if (!(Double.isFinite(normalizedVolume) && normalizedVolume > 0.0)
-					|| !(massUnits > 0)) {
-				throw new IllegalArgumentException("Chemical transfer normalized volume must be finite and positive, and mass counts positive");
+					|| massUnits < 0) {
+				throw new IllegalArgumentException("Chemical transfer volume must be positive and mass counts nonnegative");
 			}
 
 			TreeMap<String, Long> canonical = new TreeMap<>();

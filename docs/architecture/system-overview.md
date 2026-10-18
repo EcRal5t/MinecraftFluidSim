@@ -43,7 +43,7 @@
 
 | 领域 | 保存的权威数据 | 派生量 |
 |---|---|---|
-| 液体 | 载体位置、速度、体积、逐材料质量与相身份 | 单元体积、密度、PLIC、压力、曲率 |
+| 液体 | 单元／材料／开放分量的体积、整数质量、组成、内能与指示剂；MAC 格面 SI 动量 | 速度、密度、PLIC、压力、曲率与显示点样本 |
 | 化学 | 物种数量、组成、电荷、质量余量、指示剂与收支 | pH、颜色、主要组分 |
 | 颗粒 | active/deposit 的 SVQ、质量、材料、组成、孔隙率、位置及接触状态 | 占容、床高、混合有效孔隙率与样本 |
 | 连续固相 | coherent group 的 SVQ、质量、组成与内能 | 固相显示比例 |
@@ -52,7 +52,9 @@
 | 有限热设备 | region 中的设备身份、质量、内能与代次 | 温度、接触位置与展示配置 |
 | 世界与物品 | 区域 HEAD、WAL、已存盘物品状态 | 控制台和诊断 |
 
-同一操作涉及多种载体时，物质、组成、动量和携带内能按同一计划交接。所有 side column 使用相同 ordinal 与 append/swap-remove 顺序；拆并、移除、反应或相变同时修改这些列。MAC、PLIC、温度和展示网格从实际库存重建。
+同一操作涉及多种物相时，物质、组成、动量和携带内能按同一计划交接。
+液体由 `LiquidCellInventory.Stock` 保存完整记录，MAC 动量独立保存；颗粒、沉积、连续固相和气腔由各自库存模块持有。
+派生索引、PLIC、温度和展示网格读取同代库存，提交前统一核对来源与代次。
 
 <a id="units"></a>
 ### SI 物理量与整数编码
@@ -78,7 +80,7 @@ Minecraft 一个方块的边长标定为 1 m。物理定义统一使用 SI，化
 默认 h = 0.5 m，一格满水内部体积为 1、质量权重为 1000，对应 0.125 m³、125 kg。
 位置和速度采用 m 与 m/s。液体保存归一化体积与物理质量整数；质量权重供求解器计算使用，由 `SolverUnitScale.normalizedMass` 只读派生。
 化学转移账本的 `normalizedVolume` 保存归一化体积，质量与余量保存统一质量整数；容器库存的 nanos 保存物理体积。
-SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；binary32 的有效精度随数值大小变化，液体仍可具有小于一个 SVQ 的浮点尾项。
+SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `SignedDyadic` 保存，可保留小于一个 SVQ 的有效余量。
 整数占容、向上／向下换算及 float 可表示性沿现有算法执行。
 
 气体状态方程、Henry 关系和相平衡使用绝对压力。液体投影的机械压力采用相对于环境的表压；查询时按接口声明换算。
@@ -94,7 +96,8 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；binary32 的有效�
 每列和受检总量（含累计 source/sink 审计）的正值上限约为 9.223372×10⁸ kg；现有化学区域数量上限对应的 Hg 质量为 4×10⁸ kg，默认格长下 9216 格满汞约为 1.567×10⁷ kg。
 物性定义仍以 SI 保存。新建库存按最接近值、恰好中点取偶数量化一次，误差至多 50 ng；真实物种每个 μmol 的质量及相变批次须能精确换成整数。
 因此自定义摩尔质量采用 0.0001 kg/mol 的整数倍，沿用玩法所需的近似精度。
-拆分以整数比例分配，保留份额承接余数，合并和差额使用受检整数运算；不足一份质量的正体积片段在提交前拒绝，原库存保留。
+拆分以整数比例分配，保留份额承接余数，合并和差额使用受检整数运算。
+内部允许保留正体积、零机械质量的几何尾项，其内能为零；对外物质交接按同材料实际库存合并质量与体积，完整保留整数物种。
 机械、热学、密度及显示读取派生 kg；物质审计、容器、内存交接与存档直接比较整数。
 纯液体 handoff 和 checkpoint 也携带质量列，恢复完整保存的库存。
 
@@ -143,11 +146,15 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；binary32 的有效�
   - 验证入口 / 参考：`lifecycle,entity-fluid,shape`；[输入参考](runtime-and-lifecycle.md#world-inputs)
 
 - **容量与库存编辑**
+  - `setVolume` 与整批 `setVolumes` 共用单元目标替换，按真实开放容量裁剪，并在一份候选中结算整数质量、物种、内能、MAC 动量和气腔后继。
+    初始化一次收集全部目标格后提交；材料注册直接绑定现有库存与动量。
   - 主要文件：
-    - [CarrierMutationCoordinator](../../solver/src/main/java/mmm/fluid/CarrierMutationCoordinator.java)
+    - [FluidDomainCollisionState](../../solver/src/main/java/mmm/fluid/FluidDomainCollisionState.java)：`setVolumes`、`bindMaterialRegistry`
     - [FluidDomainInventoryTransactions](../../solver/src/main/java/mmm/fluid/FluidDomainInventoryTransactions.java)
-    - [MaterialTransferPlanner](../../solver/src/main/java/mmm/fluid/MaterialTransferPlanner.java)
-  - 验证入口 / 参考：`materials,containers,granular`；[材料参考](material-state.md)
+    - [MaterialTransferPlanner](../../solver/src/main/java/mmm/fluid/MaterialTransferPlanner.java)：`replaceCellVolumes`
+    - [FluidRegionFactory](../../fabric/src/main/java/mmm/simulation/FluidRegionFactory.java)：原版水采集与材料绑定
+    - [MinecraftDebugFixtures](../../fabric/src/main/java/mmm/simulation/MinecraftDebugFixtures.java)：整批演示初始化
+  - 验证入口 / 参考：`LiquidCellInventoryValidation`、`LiquidThermalAdvectionValidation`、`materials,containers,granular`；[材料参考](material-state.md)
 
 <a id="physics"></a>
 ## 一个完整计算步
@@ -155,39 +162,47 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；binary32 的有效�
 [FluidDomainStepCoordinator](../../solver/src/main/java/mmm/fluid/FluidDomainStepCoordinator.java) 组织下列职责链：
 
 1. 捕获库存、内能收支和待同步相变体积；从碰撞、固体占容与气腔建立同代输入。
-2. P2G 构造 MAC 速度与质量，执行多孔阻力、隐式黏性和重力、浮力、张力等作用。
+2. 从单元整数质量构造 MAC 双控制体积惯性，以格面动量派生速度，执行多孔阻力、隐式黏性和重力、浮力、张力等作用。
 3. 联合求解液体压力、有限气腔响应和活动颗粒的惯性／阻力，复检投影后的 Courant 数。
-4. G2P 写回速度，预览颗粒碰撞与整数占容，用共享通量搬运液体，准备并提交液体、颗粒和气腔后继。
+4. 预览颗粒碰撞与整数占容，以共享通量搬运液体库存，用实际整数质量通量推进 MAC 动量，联合提交液体、颗粒和气腔后继。
 5. 在新位置上完成导热、液相反应、颗粒反应、固液与气液相变。相变共用操作预算，体积变化留待后续真实力学同步。
-6. 执行颗粒沉积、起动、床层松弛及液体重采样，随物质搬运组成与内能。
+6. 执行颗粒沉积、起动和床层松弛，随物质搬运组成与内能。
 7. 核对全部收支，成功后交接完整候选、发布统计，并更新运动与热活动状态。
 
 力学阶段在 [MechanicalStepPipeline](../../solver/src/main/java/mmm/fluid/MechanicalStepPipeline.java)，热化学阶段在 [ThermochemistryPipeline](../../solver/src/main/java/mmm/fluid/ThermochemistryPipeline.java)，
-沉积与重采样分别由 `GranularTransitionStage`、`ParticleReseedStage` 组织。查询、几何、反应与恢复共用对应库存模块的数量和单位规则。
+颗粒形态转换由 `GranularTransitionStage` 组织。
+查询、几何、反应与恢复共用对应库存模块的数量和单位规则。
 
 <a id="mechanics"></a>
 ## 力学与占容
 
-纯液体与含固相区域共用 MAC 压力、隐式黏性和有限体积输运。液体逐材料质量和体积决定惯性与组成密度；不可互溶相共享宏观速度和机械压力，保留材料身份与界面张力。热浮力使用参考态附近的 Boussinesq 修正，黏度读取世界材料定义的 `mu(T)`。
+纯液体与含固相区域共用 MAC 压力、隐式黏性和有限体积输运。液体逐材料质量和体积决定惯性与组成密度；不可互溶相共享宏观速度和机械压力，保留材料身份与界面张力。热浮力按正的体膨胀关系推导密度修正，黏度读取世界材料定义的 `mu(T)`。
 
 固定碰撞由 Minecraft `VoxelShape` 保守采样成每格 `2×2×2` 微盒掩码，压力开口、液体通量和 CCD 读取同一几何。活动颗粒、沉积和 coherent 固相共享固体骨架占容；液体可用容量为开放体积减去全部固体占容，孔隙水由普通液体库存持有。
 
-压力系统使用同一面系数组装矩阵、预条件器和速度修正。已解析液气界面采用给定压力或有限气腔储存项；颗粒通过占容导数、有限质量及隐式阻力进入共同系统。
-作用与反作用、外部约束冲量和压力功按实际写回结算。当前液体孔隙面取相邻孔隙率的较小值，颗粒占容使用归一化三线性核导数；两者的空间差异会影响共同平移与近墙浮力，具体离散见[颗粒参考](granular-state.md#统一排水与压力)。
+压力系统使用同一面系数组装矩阵、预条件器和速度修正。
+`PressureLinearSolver` 与 `PressurePreconditioner` 统一 PCG 及不完全 Cholesky 预条件，有限颗粒惯性与阻力通过相应算子加入。
+已解析液气界面采用给定压力或有限气腔储存项；颗粒通过占容导数、有限质量及隐式阻力进入共同系统。
+活动颗粒体积分配到共同 MAC 面，液体读取剩余开口，颗粒压力响应读取同一面体积的散度及其转置。
+作用与反作用、外部约束冲量和压力功按实际写回结算；整数库存按最终位置独立核对真实容量，具体离散见[颗粒参考](granular-state.md#统一排水与压力)。
 
-P2G/G2P 使用实际质量与网格做功建立动能预算，限制 FLIP 增量。输运以浮点 3×3 局部梯度保留可解析的速度变化，低于空间分辨率的方向保留平均速度。压力不把采样聚集或超容量误差作为额外机械源项。液体碰撞截断入墙法向并保留切向；颗粒代表球通过共同接触响应处理法向、恢复和摩擦。
+液体持久动量位于 MAC 格面，格面速度从同一双控制体积的实际质量与动量派生。
+`CellMomentumTransport` 把实际整数质量通量提升到格面，`MacMomentumAdvection` 用隐式中点离散推进动量，保留均匀平移与可解析旋转。
+固定开口与联合容量约束液体运动；颗粒代表球通过共同接触响应处理法向、恢复和摩擦。
 
 - **库存、PLIC 与速度工作区失效**
   - 主要文件：
-    - [ParticleToGridStage](../../solver/src/main/java/mmm/fluid/ParticleToGridStage.java)
+    - [CellMacStage](../../solver/src/main/java/mmm/fluid/CellMacStage.java)
     - [FluidDomainMechanicalFields](../../solver/src/main/java/mmm/fluid/FluidDomainMechanicalFields.java)
-  - 验证选择器 / 参考：`free-surface,materials`；[流体离散](fluid-solver.md#网格与-marker)
+  - 验证选择器 / 参考：`free-surface,materials`；[流体离散](fluid-solver.md#单元库存与-mac-动量)
 
 - **压力与气腔耦合**
   - 主要文件：
     - [PressureProjectionStage](../../solver/src/main/java/mmm/fluid/PressureProjectionStage.java)
     - [PressureSystem](../../solver/src/main/java/mmm/fluid/PressureSystem.java)
-    - [PressureFaceCoupling](../../solver/src/main/java/mmm/fluid/PressureFaceCoupling.java)
+    - [PressureLinearSolver](../../solver/src/main/java/mmm/fluid/PressureLinearSolver.java)
+    - [PressurePreconditioner](../../solver/src/main/java/mmm/fluid/PressurePreconditioner.java)
+    - [PressureFaceGraph](../../solver/src/main/java/mmm/fluid/PressureFaceGraph.java)
     - [PressureBoundaryView](../../solver/src/main/java/mmm/fluid/PressureBoundaryView.java)
   - 验证选择器 / 参考：`marker-pressure,gas-liquid`；[压力离散](fluid-solver.md#自由面与压力)
 
@@ -198,28 +213,29 @@ P2G/G2P 使用实际质量与网格做功建立动能预算，限制 FLIP 增量
     - [LiquidCarrierProperties](../../solver/src/main/java/mmm/fluid/LiquidCarrierProperties.java)
   - 验证选择器 / 参考：`cut-cell,thermal`；[材料物性](material-state.md)
 
-- **P2G、G2P 与速度延拓**
+- **持久 MAC 动量与质量一致输运**
   - 主要文件：
-    - [MarkerGridBuilder](../../solver/src/main/java/mmm/fluid/MarkerGridBuilder.java)
-    - [GridToParticleStage](../../solver/src/main/java/mmm/fluid/GridToParticleStage.java)
-    - [MarkerTransferBudget](../../solver/src/main/java/mmm/fluid/MarkerTransferBudget.java)
-    - [DivergenceFreeVelocityExtension](../../solver/src/main/java/mmm/fluid/DivergenceFreeVelocityExtension.java)
-  - 验证选择器 / 参考：`free-surface,reseeding`；[速度传递](fluid-solver.md#网格与-marker)
+    - [MacVelocityGrid](../../solver/src/main/java/mmm/fluid/MacVelocityGrid.java)
+    - [MacMomentumState](../../model/src/main/java/mmm/fluid/MacMomentumState.java)
+    - [CellMomentumTransport](../../solver/src/main/java/mmm/fluid/CellMomentumTransport.java)
+    - [MacMomentumAdvection](../../solver/src/main/java/mmm/fluid/MacMomentumAdvection.java)
+  - 验证入口 / 参考：`MacMomentumAdvectionValidation`、`free-surface`；[库存与动量](fluid-solver.md#单元库存与-mac-动量)
 
 - **液固压力、阻力与整数占容**
   - 主要文件：
     - [GranularPressureCoupling](../../solver/src/main/java/mmm/fluid/GranularPressureCoupling.java)
     - [GranularImplicitDrag](../../solver/src/main/java/mmm/fluid/GranularImplicitDrag.java)
-    - [SweptGranularVolumeGradient](../../solver/src/main/java/mmm/fluid/SweptGranularVolumeGradient.java)
+    - [GranularFaceVolumes](../../solver/src/main/java/mmm/fluid/GranularFaceVolumes.java)
     - [GranularCouplingFields](../../model/src/main/java/mmm/granular/GranularCouplingFields.java)
   - 验证选择器 / 参考：`granular`；[压力与占容](granular-state.md#统一排水与压力)
 
 - **碰撞与颗粒接触**
   - 主要文件：
-    - [FlipParticleCollision](../../solver/src/main/java/mmm/fluid/FlipParticleCollision.java)
+    - [LiquidCollisionEdit](../../solver/src/main/java/mmm/fluid/LiquidCollisionEdit.java)
     - [GranularActiveContacts](../../solver/src/main/java/mmm/fluid/GranularActiveContacts.java)
     - [GranularComponentResponse](../../solver/src/main/java/mmm/fluid/GranularComponentResponse.java)
     - [GranularContactCompression](../../solver/src/main/java/mmm/fluid/GranularContactCompression.java)
+    - [GranularSpawnAdmission](../../solver/src/main/java/mmm/fluid/GranularSpawnAdmission.java)
   - 验证选择器 / 参考：`cut-cell,shape,granular`；[碰撞参考](fluid-solver.md#固体与碰撞)
 
 - **曲率、界面张力与润湿**
@@ -232,35 +248,47 @@ P2G/G2P 使用实际质量与网格做功建立动能预算，限制 FLIP 增量
 <a id="transport"></a>
 ## 守恒输运与气腔交接
 
-PLIC 从实际单元库存、邻格比例和碰撞连通分量重建湿区、干区与共享开口。单元有限体积输运根据单值共享面通量联合限制供体库存与接收容量；未解析、缺少压力支撑的载体采用独立运动。两者汇入同一载体重映射计划，按实际来源分配体积、材料质量、动量、物种和内能。数值采样与整数库存分别承担空间表示和物质结算。
+PLIC 从实际单元库存、邻格比例和碰撞连通分量重建湿区、干区与共享开口。
+`ConservativeLiquidFlux` 在单一开放分量图中分配原始液体库存与气腔体积，联合满足供体总量和接收孔隙容量。
+单值共享面通量由该图的分配结果汇总，`LiquidCellInventory` 按实际来源分配体积、材料质量、物种和内能。
+MAC 动量输运读取相同整数质量通量；未解析薄层与液滴采用同一单元尺度表示。
+固体挤排液体沿用同一残量面通量及供体、接收容量规则，已选流量可沿反向余量撤销并重新分配。
 
 气腔以干微盒连通和规范 minimum-piece key 标识。`GasRuntimeGeometry` 保存同代几何、拓扑与库存容量；
-未来编辑按最终 binary32 位置、实际体积和固体占容准备后继。气体分裂、合并和完整迁移搬运库存、内能与旧控制体积；环境交换记 source/sink，新开放真空空间保持明确归属。
+未来编辑按最终单元库存和固体占容准备后继。
+`GasComplementGeometry.capture` 顺序扫描微盒与面，复用未变化单元和相邻面的几何，生成不可变后继。
+气体分裂、合并和完整迁移搬运库存、内能与旧控制体积；环境交换记 source/sink，新开放真空空间保持明确归属。
 真实运动改变容量时按状态方程结算等熵功；表示交接和相变内部交换分别处理，避免重复做功。
 
-气体采用集总气腔与有限孔流模型，按库存、容量和内能派生压力、温度及顺应性。完整干面与受限孔口采用一致的拓扑规则。当前整格压力查询要求该格唯一气体归属，拓扑层可保存同格独立气腔；气腔内部声波和空间动量超出模型范围。
+气体采用集总气腔与有限孔流模型，按库存、容量和内能派生压力、温度及顺应性。
+完整干面与受限孔口采用一致的拓扑规则，压力按实际接触面解析气腔归属，支持同格不同面接触独立气腔。
+孔流每步冻结实际状态方程与热容导出的储容及正孔口导通率，整体后向 Euler 方程求共享通量。
+供体联合限制所有出边的库存与可携焓，再统一分配整数物种并成对搬运同一能量通量。
+这是时间一阶的集总近似，气腔内部声波和空间动量受该模型限制。
 
 - **共享通量、供体与接收容量**
   - 主要文件：
     - [CellLiquidVolumeTransport](../../solver/src/main/java/mmm/fluid/CellLiquidVolumeTransport.java)
-    - [ConservativeLiquidFlux](../../solver/src/main/java/mmm/fluid/ConservativeLiquidFlux.java)
-    - [CellRemapPorts](../../solver/src/main/java/mmm/fluid/CellRemapPorts.java)
-  - 验证选择器 / 参考：`free-surface`；`LiquidVolumeTransportValidation components` / `chemical-tails`；[有限体积输运](fluid-solver.md#单元有限体积输运)
+    - [ConservativeLiquidFlux](../../solver/src/main/java/mmm/fluid/ConservativeLiquidFlux.java)：`plan`、`planDisplacement` 共用开放分量分配图
+    - [GranularLiquidDisplacement](../../solver/src/main/java/mmm/fluid/GranularLiquidDisplacement.java)
+  - 验证选择器 / 参考：`free-surface`；`LiquidVolumeTransportValidation components` / `chemical-tails`；[有限体积输运](fluid-solver.md#几何与单元输运)
 
-- **材料、动量、物种与热量重分配**
+- **材料、物种、内能与动量交接**
   - 主要文件：
-    - [CellCarrierRemapPlan](../../solver/src/main/java/mmm/fluid/CellCarrierRemapPlan.java)
-    - [CellRemapVelocity](../../solver/src/main/java/mmm/fluid/CellRemapVelocity.java)
-    - [CellRemapSpeciesAllocation](../../solver/src/main/java/mmm/fluid/CellRemapSpeciesAllocation.java)
-    - [CellRemapHeatBalance](../../solver/src/main/java/mmm/fluid/CellRemapHeatBalance.java)
-  - 验证选择器 / 参考：`CellRemapMomentsValidation transport-moments`、`LiquidVolumeTransportValidation handoff`、`thermal`；[命令与场景](../maintenance/validation.md#按改动选择测试)
+    - [LiquidCellInventory](../../model/src/main/java/mmm/inventory/LiquidCellInventory.java)：实际整数份额与 `EnergyPartitioner` 内能交接
+    - [FluidThermalBinding](../../solver/src/main/java/mmm/fluid/FluidThermalBinding.java)：`liquidEnergyPartitioner` 按实际参考能与来源显热分份
+    - [CellMomentumTransport](../../solver/src/main/java/mmm/fluid/CellMomentumTransport.java)
+    - [CellCarrierInventoryView](../../solver/src/main/java/mmm/fluid/CellCarrierInventoryView.java)
+  - 验证入口 / 参考：`LiquidVolumeTransportValidation`、`free-surface,thermal`；[单元输运](fluid-solver.md#几何与单元输运)
 
 - **浮点几何与气腔容量**
   - 主要文件：
     - [FlipPressurePhaseGeometry](../../solver/src/main/java/mmm/fluid/FlipPressurePhaseGeometry.java)
     - [PlicPlaneOffset](../../solver/src/main/java/mmm/fluid/PlicPlaneOffset.java)
+    - [GasComplementGeometry](../../solver/src/main/java/mmm/fluid/GasComplementGeometry.java)：`capture` 线性捕获与未变几何复用
     - [GasGeometryTransition](../../solver/src/main/java/mmm/fluid/GasGeometryTransition.java)
     - [GasComponentCapacity](../../solver/src/main/java/mmm/fluid/GasComponentCapacity.java)
+    - [GasPartitionWeights](../../model/src/main/java/mmm/fluid/air/GasPartitionWeights.java)
   - 验证选择器 / 参考：`air-cavity`；[气体几何](gas-state.md#微盒气体几何)
 
 - **气体拓扑、库存与体积功**
@@ -268,22 +296,22 @@ PLIC 从实际单元库存、邻格比例和碰撞连通分量重建湿区、干
     - [GasRuntimeGeometry](../../solver/src/main/java/mmm/fluid/GasRuntimeGeometry.java)
     - [GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java)
     - [AirNetwork](../../model/src/main/java/mmm/fluid/air/AirNetwork.java)
+    - [GasOrificeFlow](../../model/src/main/java/mmm/fluid/air/GasOrificeFlow.java)
+    - [GasEnergyStore](../../model/src/main/java/mmm/thermal/GasEnergyStore.java)
     - [GasThermalModel](../../model/src/main/java/mmm/thermal/GasThermalModel.java)
   - 验证选择器 / 参考：`air-cavity,air-network,gas-liquid,thermal`；[气体参考](gas-state.md)
 
-- **拆并与所有侧列搬移**
+- **库存提交与来源校验**
   - 主要文件：
-    - [FlipParticleReseeder](../../solver/src/main/java/mmm/fluid/FlipParticleReseeder.java)
-    - [MomentPreservingMergePlan](../../solver/src/main/java/mmm/fluid/MomentPreservingMergePlan.java)
-    - [CarrierMutationCoordinator](../../solver/src/main/java/mmm/fluid/CarrierMutationCoordinator.java)
-  - 验证选择器 / 参考：`reseeding`；[重采样约束](fluid-solver.md#空间积分误差与分布诊断)
+    - [LiquidCellInventory](../../model/src/main/java/mmm/inventory/LiquidCellInventory.java)
+  - 验证入口 / 参考：`materials,containers`；[交接不变量](fluid-solver.md#物质交接不变量)
 
 <a id="thermochemistry"></a>
 ## 热化学与物相转换
 
 各实际载体保存总内能 `U`，温度与热容由现有分段状态函数反演。LTE 工作区用于接触、反应与相变候选；只读观察、属性计算与真实能量重分配有各自入口。导热成对搬运内能，恒温热浴的实际通量记外部 source/sink。反应按精确物种批次改变组成和参考能，相变按实际批次联合修改两相库存与内能。
 
-热化学顺序为导热 → 液相反应 → 颗粒反应 → 固液相变 → 气液相变，之后执行沉积与重采样。凝固、熔化、汽化和凝结在固定区域体积下联合守恒两相内能，`PendingPhaseVolumeWork` 保存几何同步任务；下一次真实投影完成后清除。物品转移遇到待同步几何时，先执行仅含力学的私有候选，再准备物品事务。
+热化学顺序为导热 → 液相反应 → 颗粒反应 → 固液相变 → 气液相变，之后执行颗粒形态转换。凝固、熔化、汽化和凝结在固定区域体积下联合守恒两相内能，`PendingPhaseVolumeWork` 保存几何同步任务；下一次真实投影完成后清除。物品转移遇到待同步几何时，先执行仅含力学的私有候选，再准备物品事务。
 
 颗粒运动、初始化、提取、沉积和起动读取共同整数占容。活动颗粒与床层转换同时规划来源、接收位置、材料组成、内能、势能变化和床体反力；起动提升功由实际液流提供。表示转换主动耗散与既有黏性、阻力等物理耗散分别结算；各项实现范围详见热学、颗粒参考，交付要求由实施计划维护。
 
@@ -325,17 +353,23 @@ PLIC 从实际单元库存、邻格比例和碰撞连通分量重建湿区、干
 <a id="persistence"></a>
 ## 存档和故障恢复
 
-完整状态由 `FluidDomainStateMapper` 捕获与恢复，包含实际载体和已绑定能力、调度进度、待同步相变几何、世界热交换面与最近真实压力投影等本次计算数据。`FluidDomainState.Layout` 绑定网格、配置、载体布局、预算和注册表身份；区域 checkpoint 的持久字段另由存档模型定义。
+完整状态由 `FluidDomainStateMapper` 捕获与恢复。
+正常候选共享已验证的液体不可变库存行与气相几何，独立复制 MAC 动量和气体网络；非液体内能由 `ThermalOwnerSnapshot` 携带。
+调度进度、待同步相变几何、世界热交换面与最近真实压力投影随同交接。`FluidDomainState.Layout` 绑定网格、配置、载体布局、预算和注册表身份；区域 checkpoint 的持久字段另由存档模型定义。
 
 `CpuFluidSolverBackend` 在私有域完成整个逻辑步；力学细化从原始请求重新恢复，保留总推进时间、外部输入和一次提交。`RegionApplicationService` 与仓库核对后端、区域身份、紧邻求解器代次和完整布局。CPU 可把已求解私有对象交接一次；其他后端提供完整不可变状态。候选失败保留原区域，成功后发布该候选的完整统计。
 
-存盘以双槽保存完整代次，先写入、回读并验证全部成员，再原子替换 `HEAD`。删除发布 `REMOVED` 终止代次后完成移除通知、注销与载荷隔离。捕获前同步液体、固体、气体拓扑、库存和内能，保持同一逻辑时刻。
+存盘以 `cell-mac` 格式保存单元液体记录、规范分区的三轴格面动量、碰撞掩码和非液体库存。
+液体记录直接携带组成和内能，热扩展保存非液体内能及总账。
+双槽写入、回读并验证全部成员，再原子替换 `HEAD`。删除发布 `REMOVED` 终止代次后完成移除通知、注销与载荷隔离。捕获读取已提交的同代库存和气腔状态；冷恢复完整验证支撑、容量、物性与账本。
 
 桶、发射器和世界方块操作使用 WAL 绑定区域与外部域的前后状态；恢复按 HEAD 与外部已存盘状态确定继续提交、清理或保留证据。`LOCKED` 对应无法解释的持久身份、格式或事务状态；数值暂停和性能暂停保留上一个完整物理状态。
 
 - **完整候选与接管**
   - 主要文件：
+    - [FluidDomainState](../../solver/src/main/java/mmm/fluid/FluidDomainState.java)
     - [FluidDomainStateMapper](../../solver/src/main/java/mmm/fluid/FluidDomainStateMapper.java)
+    - [ThermalOwnerSnapshot](../../model/src/main/java/mmm/thermal/ThermalOwnerSnapshot.java)
     - [CpuFluidSolverBackend](../../solver/src/main/java/mmm/fluid/CpuFluidSolverBackend.java)
     - [RegionApplicationService](../../app/src/main/java/mmm/application/RegionApplicationService.java)
     - [FluidRegionRepository](../../fabric/src/main/java/mmm/simulation/FluidRegionRepository.java)
@@ -444,11 +478,11 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
   - 运行方法：[预算与测量](../maintenance/validation.md#performance)
 
 - **库存、几何与速度重复重建**
-  - 入口：`ParticleToGridStage`、`MarkerGridBuilder`、`GasRuntimeGeometry`、`CellCarrierRemapPlan`
+  - 入口：`CellMacStage`、`LiquidCellInventory`、`GasRuntimeGeometry`、`FluidDomainStateMapper`
   - 运行方法：同一原输入的阶段计时及 [JFR 工具](../../pytool/jfr_hotspots.py)
 
 - **液固嵌套求解与接触成本**
-  - 入口：`GranularImplicitDrag.responseDelta`、`GranularCoupledPressureSolver`、`GranularContactCompression`、`GranularContactChainSeed`
+  - 入口：`GranularImplicitDrag.responseDelta`、`PressureLinearSolver`、`PressurePreconditioner`、`GranularActiveContacts`、`GranularContactCompression`
   - 运行方法：沙床启动短重放、原慢步及完整生命周期
 
 - **GPU 设备、资源、提交与回读**
@@ -465,8 +499,8 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 
 | 现象 | 首先核对 | 继续跟到哪里 |
 |---|---|---|
-| 液面降低、水量异常 | `CellInventoryReader` 的实际体积与材料质量 | `CarrierMutationCoordinator`、`MaterialTransferPlanner` 的 source/sink；再查快照量化 |
-| 穿墙、小液滴或薄层异常 | `CollisionField` 与 `FlipCutCellGeometry` | `FlipParticleCollision`、压力支撑、`FlipVelocityExtrapolator` |
+| 液面降低、水量异常 | `CellInventoryReader` 的实际体积与材料质量 | `LiquidCellInventory.Plan` 与 `MaterialTransferPlanner` 的 source/sink；再查快照量化 |
+| 穿墙、小液滴或薄层异常 | `CollisionField` 与 `FlipCutCellGeometry` | `LiquidCollisionEdit`、共同面通量与压力支撑 |
 | 气压或气腔归属异常 | `GasRuntimeGeometry` 的微盒、容量与节点归属 | `GasTopologyCoordinator` 的来源交接及 `GasThermalModel` 的库存／容量／U |
 | 温度、反应或相变无进展 | 实际组成、U、批次及候选不可执行原因 | `ThermalCaloricInversion`、`GasPhaseBatchSearch`、`GasLiquidPhaseChangeStage`、未来气腔与热账计划 |
 | 颗粒占容、压力或沉积异常 | `GranularCouplingFields`、碰撞预览及整数分配 | `GranularPressureCoupling`、`GranularSettlementGeometryPlan`、`GranularBedShear` |

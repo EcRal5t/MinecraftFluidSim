@@ -1,404 +1,121 @@
 package mmm.simulation.persistence;
 
+import mmm.inventory.LiquidCellInventory;
+
 import mmm.application.checkpoint.RegionCheckpointSource;
-import mmm.model.region.RegionCheckpoint;
-import mmm.model.region.RegionExtension;
-import mmm.model.region.RegionGeometry;
-import mmm.model.region.RegionIdentity;
-import mmm.model.region.RegionManifest;
-import mmm.model.region.RegionSectionState;
-import mmm.model.region.RegionStateLayout;
-import mmm.fluid.FlipParticleState;
-import mmm.fluid.FlipMaterialParticleState;
-import mmm.fluid.FlipChemicalParticleState;
-import mmm.fluid.FlipThermalParticleState;
-import mmm.fluid.PendingPhaseVolumeState;
-import mmm.fluid.FluidMaterial;
+import mmm.model.region.*;
+import mmm.fluid.*;
 import mmm.fluid.air.GasStateSnapshot;
-import mmm.chemistry.ChemicalAuditLedgerCodec;
-import mmm.chemistry.ChemicalTransferLedger;
-import mmm.granular.GranularLimits;
-import mmm.granular.GranularStateSnapshot;
-import mmm.granular.SolidVolume;
+import mmm.chemistry.*;
+import mmm.granular.*;
+import mmm.thermal.*;
 import mmm.units.SignedDyadic;
-import mmm.thermal.CoherentPhaseStore;
-import mmm.thermal.FiniteThermalDeviceInventory;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-/** Assembles one complete logical checkpoint from an immutable-export boundary. */
+import java.util.*;
+
+/** Captures cell inventories, unique MAC faces and orthogonal owners in one durable generation. */
 public final class RegionCheckpointAssembler {
-	private static final String CHEMICAL_AUDIT_EXTENSION = "mmm:chemical_audit";
 	private RegionCheckpointAssembler() { }
+	public static RegionCheckpoint capture(RegionCheckpointSource source,long generation) throws IOException { return captureCells(source,generation); }
+	public static RegionCheckpoint captureMaterial(RegionCheckpointSource source,long generation) throws IOException { return captureCells(source,generation); }
+	public static RegionCheckpoint captureChemical(RegionCheckpointSource source,long generation) throws IOException { return captureCells(source,generation); }
+	public static RegionCheckpoint captureGranular(RegionCheckpointSource source,long generation) throws IOException { return captureCells(source,generation); }
+	public static RegionCheckpoint captureThermal(RegionCheckpointSource source,long generation) throws IOException { return captureCells(source,generation); }
 
-	public static RegionCheckpoint capture(RegionCheckpointSource source, long checkpointGeneration) throws IOException {
-		requireCaptureable(source, checkpointGeneration);
-		FlipParticleState particles = source.pureParticles();
-		return capture(source, checkpointGeneration, new CapturedParticles(RegionStateLayout.PURE, List.of(), particles.copyPositionVolume(),
-				particles.copyParticleVelocities(), particles.copySolidMask(), particles.copyMassUnits(), new int[0],
-				"", List.of(), List.of(), new int[0], new byte[0], new long[0], 0L,
-				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY), null, null, null);
-	}
-
-	/** Captures an explicitly material-bound CPU domain without routing it through the pure-water handoff. */
-	public static RegionCheckpoint captureMaterial(RegionCheckpointSource source, long checkpointGeneration) throws IOException {
-		requireCaptureable(source, checkpointGeneration);
-		FlipMaterialParticleState particles = source.materialParticles();
-		return capture(source, checkpointGeneration, new CapturedParticles(RegionStateLayout.MATERIAL, particles.materials(), particles.copyPositionVolume(),
-				particles.copyParticleVelocities(), particles.copySolidMask(), particles.copyParticleMassUnits(),
-				particles.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0], new long[0], 0L,
-				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY), null, null, null);
-	}
-
-	public static RegionCheckpoint captureChemical(RegionCheckpointSource source, long checkpointGeneration) throws IOException {
-		requireCaptureable(source, checkpointGeneration);
-		FlipChemicalParticleState particles = source.chemicalParticles();
-		FlipMaterialParticleState materials = particles.materials();
-		return capture(source, checkpointGeneration, new CapturedParticles(RegionStateLayout.CHEMICAL, materials.materials(),
-				materials.copyPositionVolume(), materials.copyParticleVelocities(), materials.copySolidMask(),
-				materials.copyParticleMassUnits(), materials.copyMaterialPaletteIndex(), particles.registryFingerprint(),
-				particles.speciesPalette(), particles.mixtures(), particles.copyMarkerMixtureIndex(),
-				particles.copyIndicator(), particles.copySpeciesTotals(), particles.residualLedgerUnits(),
-				particles.externalSource(), particles.escapedSink()), null, null, null);
-	}
-
-	public static RegionCheckpoint captureGranular(RegionCheckpointSource source, long checkpointGeneration) throws IOException {
-		requireCaptureable(source, checkpointGeneration);
-		if (!source.hasGranularState() || !source.hasMaterialState()) {
-			throw new IOException("Granular region capture requires material and granular state");
-		}
-		GranularStateSnapshot granular = source.granularState();
-		CapturedParticles particles;
-		if (source.hasChemicalState()) {
-			FlipChemicalParticleState chemical = source.chemicalParticles();
-			FlipMaterialParticleState materials = chemical.materials();
-			particles = new CapturedParticles(RegionStateLayout.GRANULAR, materials.materials(), materials.copyPositionVolume(),
-					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMassUnits(),
-					materials.copyMaterialPaletteIndex(), chemical.registryFingerprint(), chemical.speciesPalette(),
-					chemical.mixtures(), chemical.copyMarkerMixtureIndex(), chemical.copyIndicator(),
-					chemical.copySpeciesTotals(), chemical.residualLedgerUnits(), chemical.externalSource(), chemical.escapedSink());
-		} else {
-			FlipMaterialParticleState materials = source.materialParticles();
-			particles = new CapturedParticles(RegionStateLayout.GRANULAR, materials.materials(), materials.copyPositionVolume(),
-					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMassUnits(),
-					materials.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0],
-					new long[0], 0L, ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY);
-		}
-		return capture(source, checkpointGeneration, particles, granular, null, null);
-	}
-
-	/** Captures one complete material/optional-chemistry/optional-granular thermal generation. */
-	public static RegionCheckpoint captureThermal(RegionCheckpointSource source, long checkpointGeneration) throws IOException {
-		requireCaptureable(source, checkpointGeneration);
-		if (!source.hasThermalState() || !source.hasMaterialState()) {
-			throw new IOException("Thermal region capture requires material and thermal state");
-		}
-		GranularStateSnapshot granular = source.hasGranularState()
-				? source.granularState() : null;
-		CapturedParticles particles;
-		String chemicalFingerprint;
-		if (source.hasChemicalState()) {
-			FlipChemicalParticleState chemical = source.chemicalParticles();
-			chemicalFingerprint = chemical.registryFingerprint();
-			FlipMaterialParticleState materials = chemical.materials();
-			particles = new CapturedParticles(RegionStateLayout.THERMAL, materials.materials(), materials.copyPositionVolume(),
-					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMassUnits(),
-					materials.copyMaterialPaletteIndex(), chemical.registryFingerprint(), chemical.speciesPalette(),
-					chemical.mixtures(), chemical.copyMarkerMixtureIndex(), chemical.copyIndicator(),
-					chemical.copySpeciesTotals(), chemical.residualLedgerUnits(), chemical.externalSource(), chemical.escapedSink());
-		} else {
-			chemicalFingerprint = "";
-			FlipMaterialParticleState materials = source.materialParticles();
-			particles = new CapturedParticles(RegionStateLayout.THERMAL, materials.materials(), materials.copyPositionVolume(),
-					materials.copyParticleVelocities(), materials.copySolidMask(), materials.copyParticleMassUnits(),
-					materials.copyMaterialPaletteIndex(), "", List.of(), List.of(), new int[0], new byte[0],
-					new long[0], 0L, ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY);
-		}
-		GasStateSnapshot gas;
-		try { gas = source.gasState(chemicalFingerprint); }
-		catch (IllegalStateException invalid) {
-			throw new IOException("Thermal region state requires complete gas topology/inventory", invalid);
-		}
-		FlipThermalParticleState thermal = source.thermalState();
-		if (thermal.copyGasNodeEnergy().length != gas.nodes().size()) {
-			throw new IOException("Thermal region gas inventory and energy ordinals disagree");
-		}
-		return capture(source, checkpointGeneration, particles, granular, thermal, gas);
-	}
-
-	private static RegionCheckpoint capture(
-			RegionCheckpointSource source, long checkpointGeneration, CapturedParticles particles,
-			GranularStateSnapshot granular, FlipThermalParticleState thermal, GasStateSnapshot gas
-	) throws IOException {
-		requireCaptureable(source, checkpointGeneration);
-		RegionIdentity identity = source.identity(checkpointGeneration);
-		RegionGeometry geometry = source.geometry();
-		int cellsPerBlock = Math.round(1.0F / geometry.solverConfig().cellSize());
-		if (cellsPerBlock <= 0 || Math.abs(cellsPerBlock * geometry.solverConfig().cellSize() - 1.0F) > 1.0E-6F
-				|| geometry.sizeX() % cellsPerBlock != 0 || geometry.sizeY() % cellsPerBlock != 0 || geometry.sizeZ() % cellsPerBlock != 0) {
-			throw new IOException("Region state requires an integer number of solver cells per Minecraft block");
-		}
-
-		float[] positionVolume = particles.positionVolume();
-		float[] velocities = particles.velocities();
-		byte[] solids = particles.solidMask();
-		int[] gasMembership = gas == null ? new int[0] : gas.pieceNodeOrdinal();
-		if (gas != null && (gas.sizeX() != geometry.sizeX() || gas.sizeY() != geometry.sizeY() || gas.sizeZ() != geometry.sizeZ())) {
-			throw new IOException("Gas topology dimensions do not match region-state");
-		}
-		Map<RegionSectionState.SectionKey, List<Integer>> markersBySection = new HashMap<>();
-		float h = geometry.solverConfig().cellSize();
-
-		for (int ordinal = 0; ordinal < particles.particleCount(); ordinal++) {
-			int base = ordinal * 4;
-			RegionSectionState.SectionKey key = new RegionSectionState.SectionKey(
-					Math.floorDiv((int) Math.floor(geometry.origin().x() + positionVolume[base]), 16),
-					Math.floorDiv((int) Math.floor(geometry.origin().y() + positionVolume[base + 1]), 16),
-					Math.floorDiv((int) Math.floor(geometry.origin().z() + positionVolume[base + 2]), 16));
-			markersBySection.computeIfAbsent(key, ignored -> new ArrayList<>()).add(ordinal);
-		}
-		Map<RegionSectionState.SectionKey, List<GranularRegionStateCodec.ActiveEntry>> granularActiveBySection = new HashMap<>();
-		Map<RegionSectionState.SectionKey, List<GranularStateSnapshot.DepositGroup>> granularDepositsBySection = new HashMap<>();
-		Map<RegionSectionState.SectionKey, List<Double>> granularDepositEnergyBySection = new HashMap<>();
-		Map<RegionSectionState.SectionKey, List<ThermalRegionStateCodec.CoherentEntry>> coherentBySection = new HashMap<>();
-		double[] allActiveEnergy = thermal == null ? new double[0] : thermal.copyActiveParcelEnergy();
-		double[] allDepositEnergy = thermal == null ? new double[0] : thermal.copyDepositEnergy();
-		if (thermal != null && (granular == null && (allActiveEnergy.length != 0 || allDepositEnergy.length != 0)
-				|| granular != null && (allActiveEnergy.length != granular.activeParcels().size()
-				|| allDepositEnergy.length != granular.depositGroups().size()))) {
-			throw new IOException("Thermal granular carrier ordinals do not match the complete granular inventory");
-		}
-		if (granular != null) {
-			for (int ordinal = 0; ordinal < granular.activeParcels().size(); ordinal++) {
-				GranularStateSnapshot.ActiveParcel parcel = granular.activeParcels().get(ordinal);
-				RegionSectionState.SectionKey key = sectionKey(geometry, parcel.x(), parcel.y(), parcel.z());
-				granularActiveBySection.computeIfAbsent(key, ignored -> new ArrayList<>())
-						.add(new GranularRegionStateCodec.ActiveEntry(ordinal, parcel));
-			}
-			for (int ordinal = 0; ordinal < granular.depositGroups().size(); ordinal++) {
-				GranularStateSnapshot.DepositGroup group = granular.depositGroups().get(ordinal);
-				int cellX = group.cell() % geometry.sizeX(), yz = group.cell() / geometry.sizeX();
-				int cellY = yz % geometry.sizeY(), cellZ = yz / geometry.sizeY();
-				RegionSectionState.SectionKey key = sectionKey(geometry,
-						(cellX + 0.5F) * geometry.solverConfig().cellSize(),
-						(cellY + 0.5F) * geometry.solverConfig().cellSize(),
-						(cellZ + 0.5F) * geometry.solverConfig().cellSize());
-				granularDepositsBySection.computeIfAbsent(key, ignored -> new ArrayList<>()).add(group);
-				if (thermal != null) granularDepositEnergyBySection.computeIfAbsent(key, ignored -> new ArrayList<>())
-						.add(allDepositEnergy[ordinal]);
+	private static RegionCheckpoint captureCells(RegionCheckpointSource source,long generation) throws IOException {
+		var identity = source.identity(generation); var geometry = source.geometry(); var state = source.authoritativeState();
+		int nx=geometry.sizeX(),ny=geometry.sizeY(),nz=geometry.sizeZ(); float h=geometry.solverConfig().cellSize();
+		int cellsPerBlock = Math.round(1/h);
+		if (cellsPerBlock <= 0 || Math.abs(cellsPerBlock*h-1)>1e-6 || nx%cellsPerBlock!=0 || ny%cellsPerBlock!=0 || nz%cellsPerBlock!=0)
+			throw new IOException("Region state requires integral solver cells per Minecraft block");
+		RegionStateLayout layout = state.thermalOwner()!=null ? RegionStateLayout.THERMAL : state.granular()!=null ? RegionStateLayout.GRANULAR
+				: state.chemicalRegistry()!=null ? RegionStateLayout.CHEMICAL : state.materialPalette().isEmpty() ? RegionStateLayout.PURE : RegionStateLayout.MATERIAL;
+		var granular = state.granular(); var thermal = state.thermalOwner(); var gas = state.gas();
+		byte[] collision=state.copyCollisionMasks(); int[] membership=gas==null?null:gas.pieceNodeOrdinal();
+		var facesBySection = new HashMap<RegionSectionState.SectionKey,List<RegionSectionState.FaceMomentum>>();
+		double[][] momenta={state.momentum().copyX(),state.momentum().copyY(),state.momentum().copyZ()};
+		for(int axis=0;axis<3;axis++) {
+			int sx=nx+(axis==0?1:0),sy=ny+(axis==1?1:0),sz=nz+(axis==2?1:0);
+			for(int z=0;z<sz;z++)for(int y=0;y<sy;y++)for(int x=0;x<sx;x++) {
+				var key=sectionKey(geometry,(Math.min(x,nx-1)+.5F)*h,(Math.min(y,ny-1)+.5F)*h,(Math.min(z,nz-1)+.5F)*h);
+				int face=x+sx*(y+sy*z); facesBySection.computeIfAbsent(key,k->new ArrayList<>()).add(new RegionSectionState.FaceMomentum(axis,face,momenta[axis][face]));
 			}
 		}
-		if (thermal != null) for (CoherentPhaseStore.Group group : thermal.coherentGroups()) {
-			int cellX = group.cell() % geometry.sizeX(), yz = group.cell() / geometry.sizeX();
-			int cellY = yz % geometry.sizeY(), cellZ = yz / geometry.sizeY();
-			RegionSectionState.SectionKey key = sectionKey(geometry,
-					(cellX + 0.5F) * geometry.solverConfig().cellSize(),
-					(cellY + 0.5F) * geometry.solverConfig().cellSize(),
-					(cellZ + 0.5F) * geometry.solverConfig().cellSize());
-			coherentBySection.computeIfAbsent(key, ignored -> new ArrayList<>()).add(
-					new ThermalRegionStateCodec.CoherentEntry(group.cell(), group.phaseId(),
-							group.occupiedVolumeSvq(), group.massUnits(),
-							group.composition(), Double.doubleToRawLongBits(group.internalEnergy())));
-		}
-
-		List<RegionSectionState> sectionStates = new ArrayList<>();
-		int minimumSectionX = Math.floorDiv(geometry.origin().x(), 16);
-		int minimumSectionY = Math.floorDiv(geometry.origin().y(), 16);
-		int minimumSectionZ = Math.floorDiv(geometry.origin().z(), 16);
-		int blockSizeX = geometry.sizeX() / cellsPerBlock, blockSizeY = geometry.sizeY() / cellsPerBlock;
-		int blockSizeZ = geometry.sizeZ() / cellsPerBlock;
-		int maximumSectionX = Math.floorDiv(geometry.origin().x() + blockSizeX - 1, 16);
-		int maximumSectionY = Math.floorDiv(geometry.origin().y() + blockSizeY - 1, 16);
-		int maximumSectionZ = Math.floorDiv(geometry.origin().z() + blockSizeZ - 1, 16);
-		for (int sectionX = minimumSectionX; sectionX <= maximumSectionX; sectionX++) {
-			for (int sectionY = minimumSectionY; sectionY <= maximumSectionY; sectionY++) {
-				for (int sectionZ = minimumSectionZ; sectionZ <= maximumSectionZ; sectionZ++) {
-					RegionSectionState.SectionKey key = new RegionSectionState.SectionKey(sectionX, sectionY, sectionZ);
-					int startX = Math.max(0, (sectionX * 16 - geometry.origin().x()) * cellsPerBlock);
-					int startY = Math.max(0, (sectionY * 16 - geometry.origin().y()) * cellsPerBlock);
-					int startZ = Math.max(0, (sectionZ * 16 - geometry.origin().z()) * cellsPerBlock);
-					int endX = Math.min(geometry.sizeX(), ((sectionX + 1) * 16 - geometry.origin().x()) * cellsPerBlock);
-					int endY = Math.min(geometry.sizeY(), ((sectionY + 1) * 16 - geometry.origin().y()) * cellsPerBlock);
-					int endZ = Math.min(geometry.sizeZ(), ((sectionZ + 1) * 16 - geometry.origin().z()) * cellsPerBlock);
-					int sliceX = endX - startX, sliceY = endY - startY, sliceZ = endZ - startZ;
-					byte[] solidSlice = new byte[Math.multiplyExact(Math.multiplyExact(sliceX, sliceY), sliceZ)];
-					int[] gasSlice = gas == null ? new int[0] : new int[Math.multiplyExact(8, solidSlice.length)];
-					int target = 0;
-					for (int z = startZ; z < endZ; z++) for (int y = startY; y < endY; y++) for (int x = startX; x < endX; x++) {
-						int cell = x + geometry.sizeX() * (y + geometry.sizeY() * z);
-						solidSlice[target] = solids[cell];
-						if (gas != null) System.arraycopy(gasMembership, cell * 8, gasSlice, target * 8, 8);
-						target++;
-					}
-					List<Integer> ordinals = markersBySection.getOrDefault(key, List.of());
-					int[] savedOrdinals = new int[ordinals.size()];
-					float[] savedPositions = new float[ordinals.size() * 4];
-					float[] savedVelocities = new float[ordinals.size() * 3];
-					long[] savedMass = new long[ordinals.size()];
-					int[] savedMaterials = particles.layout().hasMaterials() ? new int[ordinals.size()] : new int[0];
-					int[] savedMixtures = particles.hasChemicalState() ? new int[ordinals.size()] : new int[0];
-					byte[] savedIndicator = particles.hasChemicalState() ? new byte[ordinals.size()] : new byte[0];
-					for (int i = 0; i < ordinals.size(); i++) {
-						int ordinal = ordinals.get(i);
-						savedOrdinals[i] = ordinal;
-						System.arraycopy(positionVolume, ordinal * 4, savedPositions, i * 4, 4);
-						System.arraycopy(velocities, ordinal * 3, savedVelocities, i * 3, 3);
-						savedMass[i] = particles.markerMassUnits()[ordinal];
-						if (particles.layout().hasMaterials()) {
-							savedMaterials[i] = particles.materialPaletteIndex()[ordinal];
-						}
-						if (particles.hasChemicalState()) {
-							savedMixtures[i] = particles.chemicalMixtureIndex()[ordinal];
-							savedIndicator[i] = particles.indicator()[ordinal];
-						}
-					}
-					long[] sectionSpecies = particles.hasChemicalState()
-							? chemicalTotals(particles, savedMixtures) : new long[0];
-					long sectionResidual = 0;
-					if (particles.hasChemicalState()) for (int mixture : savedMixtures) {
-						sectionResidual = Math.addExact(sectionResidual, particles.chemicalMixtures().get(mixture).massResidualUnits());
-					}
-					ArrayList<RegionExtension> sectionExtensions = new ArrayList<>();
-
-					if (gas != null) sectionExtensions.add(new RegionExtension(GasRegionStateCodec.SECTION_EXTENSION,
-							new GasRegionStateCodec().encodeSection(new GasRegionStateCodec.SectionData(gasSlice))));
-					if (granular != null) {
-						GranularRegionStateCodec.SectionData data = new GranularRegionStateCodec.SectionData(
-								List.copyOf(granularActiveBySection.getOrDefault(key, List.of())),
-								List.copyOf(granularDepositsBySection.getOrDefault(key, List.of())));
-						sectionExtensions.add(new RegionExtension(GranularRegionStateCodec.SECTION_EXTENSION,
-								new GranularRegionStateCodec().encodeSection(data)));
-					}
-					if (thermal != null) {
-						double[] allEnergy = thermal.copyInternalEnergy();
-						long[] markerEnergyBits = new long[ordinals.size()];
-						for (int index = 0; index < ordinals.size(); index++) markerEnergyBits[index] =
-								Double.doubleToRawLongBits(allEnergy[ordinals.get(index)]);
-						List<ThermalRegionStateCodec.CoherentEntry> coherent = List.copyOf(
-								coherentBySection.getOrDefault(key, List.of()));
-						List<GranularRegionStateCodec.ActiveEntry> activeEntries =
-								granularActiveBySection.getOrDefault(key, List.of());
-						long[] activeEnergyBits = new long[activeEntries.size()];
-						for (int index = 0; index < activeEntries.size(); index++) activeEnergyBits[index] =
-								Double.doubleToRawLongBits(allActiveEnergy[activeEntries.get(index).ordinal()]);
-						List<Double> sectionDepositEnergy = granularDepositEnergyBySection.getOrDefault(key, List.of());
-						long[] depositEnergyBits = new long[sectionDepositEnergy.size()];
-						for (int index = 0; index < sectionDepositEnergy.size(); index++) depositEnergyBits[index] =
-								Double.doubleToRawLongBits(sectionDepositEnergy.get(index));
-						SignedDyadic sectionEnergy = SignedDyadic.sum(toDoubles(markerEnergyBits));
-						sectionEnergy = sectionEnergy.add(SignedDyadic.sum(toDoubles(activeEnergyBits)))
-								.add(SignedDyadic.sum(toDoubles(depositEnergyBits)));
-						for (ThermalRegionStateCodec.CoherentEntry group : coherent) {
-							sectionEnergy = sectionEnergy.add(SignedDyadic.of(group.internalEnergy()));
-						}
-						ThermalRegionStateCodec.SectionData data = new ThermalRegionStateCodec.SectionData(
-								markerEnergyBits, activeEnergyBits, depositEnergyBits, coherent, sectionEnergy);
-						sectionExtensions.add(new RegionExtension(ThermalRegionStateCodec.SECTION_EXTENSION,
-								new ThermalRegionStateCodec().encodeSection(data)));
-					}
-					RegionSectionState unsigned = new RegionSectionState(particles.layout(), identity.regionId(), identity.dimensionId(),
-							checkpointGeneration, sectionX, sectionY, sectionZ, startX, startY, startZ,
-							sliceX, sliceY, sliceZ, savedOrdinals, savedPositions, savedVelocities, savedMass, savedMaterials,
-							solidSlice, List.copyOf(sectionExtensions), savedMixtures, savedIndicator, sectionSpecies,
-							particles.hasChemicalState() ? sectionResidual : 0L, 0L);
-					sectionStates.add(withChecksum(unsigned));
-				}
+		var sections = new ArrayList<RegionSectionState>();
+		int minX=Math.floorDiv(geometry.origin().x(),16),minY=Math.floorDiv(geometry.origin().y(),16),minZ=Math.floorDiv(geometry.origin().z(),16);
+		int maxX=Math.floorDiv(geometry.origin().x()+nx/cellsPerBlock-1,16),maxY=Math.floorDiv(geometry.origin().y()+ny/cellsPerBlock-1,16),maxZ=Math.floorDiv(geometry.origin().z()+nz/cellsPerBlock-1,16);
+		double[] activeU=thermal==null?new double[0]:thermal.copyActiveParcelEnergy(),depositU=thermal==null?new double[0]:thermal.copyDepositEnergy();
+		var thermalLedgers=new ArrayList<ThermalRegionStateCodec.SectionLedger>();
+		for(int secX=minX;secX<=maxX;secX++)for(int secY=minY;secY<=maxY;secY++)for(int secZ=minZ;secZ<=maxZ;secZ++) {
+			var key=new RegionSectionState.SectionKey(secX,secY,secZ);
+			int x0=Math.max(0,(16*secX-geometry.origin().x())*cellsPerBlock),y0=Math.max(0,(16*secY-geometry.origin().y())*cellsPerBlock),z0=Math.max(0,(16*secZ-geometry.origin().z())*cellsPerBlock);
+			int sx=Math.min(nx,((secX+1)*16-geometry.origin().x())*cellsPerBlock)-x0,sy=Math.min(ny,((secY+1)*16-geometry.origin().y())*cellsPerBlock)-y0,sz=Math.min(nz,((secZ+1)*16-geometry.origin().z())*cellsPerBlock)-z0;
+			var stocks=new ArrayList<LiquidCellInventory.Stock>(); byte[] mask=new byte[sx*sy*sz]; int[] gasSlice=gas==null?null:new int[8*mask.length];
+			int local=0; for(int z=z0;z<z0+sz;z++)for(int y=y0;y<y0+sy;y++)for(int x=x0;x<x0+sx;x++) {
+				int cell=x+nx*(y+ny*z); stocks.addAll(state.liquid().rows().get(cell)); mask[local]=collision[cell];
+				if(gas!=null)System.arraycopy(membership,8*cell,gasSlice,8*local,8); local++;
 			}
-		}
-		sectionStates.sort(Comparator.comparing(RegionSectionState::key));
-
-		List<RegionManifest.SectionDescriptor> descriptors = new ArrayList<>(sectionStates.size());
-		for (RegionSectionState section : sectionStates) {
-			descriptors.add(new RegionManifest.SectionDescriptor(section.sectionX(), section.sectionY(), section.sectionZ(),
-					section.markerCount(), Double.doubleToRawLongBits(sumVolumes(section.positionVolume())),
-					mmm.units.Mass.sum(section.markerMassUnits()), section.checksum()));
-		}
-		List<RegionManifest.MaterialLedger> materialLedgers = materialLedgers(particles);
-		List<RegionExtension> manifestExtensions = new ArrayList<>();
-		if (particles.hasChemicalState()) manifestExtensions.add(new RegionExtension(CHEMICAL_AUDIT_EXTENSION,
-				ChemicalAuditLedgerCodec.encode(particles.externalSource(), particles.escapedSink())));
-		if (gas != null) manifestExtensions.add(new RegionExtension(GasRegionStateCodec.MANIFEST_EXTENSION,
-				new GasRegionStateCodec().encodeManifest(gasManifest(gas, sectionStates, particles.hasChemicalState()))));
-		if (granular != null) manifestExtensions.add(new RegionExtension(GranularRegionStateCodec.MANIFEST_EXTENSION,
-				new GranularRegionStateCodec().encodeManifest(granularManifest(granular, sectionStates,
-						particles.hasChemicalState()))));
-		if (thermal != null) {
-			ThermalRegionStateCodec codec = new ThermalRegionStateCodec();
-			ArrayList<ThermalRegionStateCodec.SectionLedger> ledgers = new ArrayList<>(sectionStates.size());
-			for (RegionSectionState section : sectionStates) {
-				ThermalRegionStateCodec.SectionData data = codec.decodeSection(
-						requiredExtension(section.extensions(), ThermalRegionStateCodec.SECTION_EXTENSION).payload(),
-						section.markerCount(), GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION,
-						GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION);
-				ledgers.add(new ThermalRegionStateCodec.SectionLedger(section.key(), data.liquidMarkerEnergyBits().length,
-						data.activeParcelEnergyBits().length, data.depositGroupEnergyBits().length,
-						data.coherentGroups().size(), data.energy()));
+			stocks.sort(Comparator.comparing(LiquidCellInventory.Stock::key));
+			var extensions=new ArrayList<RegionExtension>();
+			if(gas!=null)extensions.add(new RegionExtension(GasRegionStateCodec.SECTION_EXTENSION,new GasRegionStateCodec().encodeSection(new GasRegionStateCodec.SectionData(gasSlice))));
+			var active=new ArrayList<GranularRegionStateCodec.ActiveEntry>(); var deposits=new ArrayList<GranularStateSnapshot.DepositGroup>();
+			var activeBits=new ArrayList<Long>(); var depositBits=new ArrayList<Long>(); var coherent=new ArrayList<ThermalRegionStateCodec.CoherentEntry>();
+			if(granular!=null) {
+				for(int i=0;i<granular.activeParcels().size();i++) { var parcel=granular.activeParcels().get(i);
+					if(sectionKey(geometry,parcel.x(),parcel.y(),parcel.z()).equals(key)) { active.add(new GranularRegionStateCodec.ActiveEntry(i,parcel)); if(thermal!=null)activeBits.add(Double.doubleToRawLongBits(activeU[i])); } }
+				for(int i=0;i<granular.depositGroups().size();i++) { var group=granular.depositGroups().get(i);
+					if(sectionOfCell(geometry,group.cell()).equals(key)) { deposits.add(group); if(thermal!=null)depositBits.add(Double.doubleToRawLongBits(depositU[i])); } }
+				extensions.add(new RegionExtension(GranularRegionStateCodec.SECTION_EXTENSION,new GranularRegionStateCodec().encodeSection(new GranularRegionStateCodec.SectionData(active,deposits))));
 			}
-			SignedDyadic liquidEnergy = SignedDyadic.sum(thermal.copyInternalEnergy());
-			SignedDyadic activeEnergy = SignedDyadic.sum(allActiveEnergy);
-			SignedDyadic depositEnergy = SignedDyadic.sum(allDepositEnergy);
-			SignedDyadic coherentEnergy = SignedDyadic.ZERO;
-			for (CoherentPhaseStore.Group group : thermal.coherentGroups()) {
-				coherentEnergy = coherentEnergy.add(SignedDyadic.of(group.internalEnergy()));
+			if(thermal!=null) {
+				for(var group:thermal.coherentGroups()) if(sectionOfCell(geometry,group.cell()).equals(key)) coherent.add(new ThermalRegionStateCodec.CoherentEntry(group.cell(),group.phaseId(),group.occupiedVolumeSvq(),group.massUnits(),group.composition(),Double.doubleToRawLongBits(group.internalEnergy())));
+				long[] au=activeBits.stream().mapToLong(Long::longValue).toArray(),du=depositBits.stream().mapToLong(Long::longValue).toArray();
+				SignedDyadic nonLiquid=energyBits(au).add(energyBits(du)); for(var group:coherent)nonLiquid=nonLiquid.add(SignedDyadic.of(group.internalEnergy()));
+				var data=new ThermalRegionStateCodec.SectionData(au,du,coherent,nonLiquid);
+				extensions.add(new RegionExtension(ThermalRegionStateCodec.SECTION_EXTENSION,new ThermalRegionStateCodec().encodeSection(data)));
+				SignedDyadic total=nonLiquid; for(var stock:stocks)total=total.add(SignedDyadic.of(stock.internalEnergy()));
+				thermalLedgers.add(new ThermalRegionStateCodec.SectionLedger(key,stocks.size(),active.size(),deposits.size(),coherent.size(),total));
 			}
-			int capabilities = ThermalRegionStateCodec.CAP_MATERIALS | ThermalRegionStateCodec.CAP_THERMAL
-					| (particles.hasChemicalState() ? ThermalRegionStateCodec.CAP_CHEMISTRY : 0)
-					| (granular != null ? ThermalRegionStateCodec.CAP_GRANULAR : 0)
-					| ThermalRegionStateCodec.CAP_GAS;
-			double[] gasNodeEnergy = thermal.copyGasNodeEnergy();
-			long[] gasNodeEnergyBits = new long[gasNodeEnergy.length];
-			for (int node = 0; node < gasNodeEnergy.length; node++) {
-				gasNodeEnergyBits[node] = Double.doubleToRawLongBits(gasNodeEnergy[node]);
-			}
-			SignedDyadic gasEnergy = SignedDyadic.sum(gasNodeEnergy);
-			ThermalRegionStateCodec.ManifestData data = new ThermalRegionStateCodec.ManifestData(capabilities,
-					thermal.thermalRegistryFingerprint(), thermal.insertionTemperatureK(),
-					particles.particleCount(), allActiveEnergy.length, allDepositEnergy.length,
-					thermal.coherentGroups().size(), gasNodeEnergy.length,
-					liquidEnergy, activeEnergy, depositEnergy, coherentEnergy, gasEnergy,
-					liquidEnergy.add(activeEnergy).add(depositEnergy).add(coherentEnergy).add(gasEnergy),
-					thermal.audit(), List.copyOf(ledgers), gasNodeEnergyBits);
-			manifestExtensions.add(new RegionExtension(ThermalRegionStateCodec.MANIFEST_EXTENSION,
-					codec.encodeManifest(data)));
-			FiniteThermalDeviceInventory finiteDevices = source.finiteThermalDevices(
-					thermal.thermalRegistryFingerprint());
-			if (!finiteDevices.devices().isEmpty()) manifestExtensions.add(new RegionExtension(
-					FiniteThermalDeviceCodec.MANIFEST_EXTENSION,
-					new FiniteThermalDeviceCodec().encode(finiteDevices)));
-			if (particles.layout().requiresThermal()) manifestExtensions.add(new RegionExtension(
-					ThermalBuoyancyCodec.MANIFEST_EXTENSION, new ThermalBuoyancyCodec().encodeCurrent()));
-			PendingPhaseVolumeState pendingPhaseVolume = source.pendingPhaseVolume();
-			if (!pendingPhaseVolume.isEmpty()) manifestExtensions.add(new RegionExtension(
-					PendingPhaseVolumeCodec.MANIFEST_EXTENSION,
-					new PendingPhaseVolumeCodec().encode(pendingPhaseVolume)));
+			var unsigned=new RegionSectionState(layout,identity.regionId(),identity.dimensionId(),generation,secX,secY,secZ,x0,y0,z0,sx,sy,sz,stocks,facesBySection.getOrDefault(key,List.of()),mask,extensions,0);
+			sections.add(withChecksum(unsigned));
 		}
-		RegionManifest unsigned = new RegionManifest(particles.layout(), identity.regionId(), identity.dimensionId(), checkpointGeneration,
-				identity.networkGeneration(), geometry.origin(), geometry.sizeX(), geometry.sizeY(), geometry.sizeZ(), geometry.solverConfig(),
-				geometry.reservedMarkerCapacity(), source.runtimeIntent(), geometry.footprint(), particles.particleCount(),
-				Double.doubleToRawLongBits(sumVolumes(positionVolume)), particles.materialPalette(),
-				mmm.units.Mass.sum(particles.markerMassUnits()),
-				materialLedgers, descriptors, List.copyOf(manifestExtensions), particles.registryFingerprint(),
-				particles.hasChemicalState() ? mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL : 0L,
-				particles.speciesPalette(), particles.chemicalMixtures(), particles.chemicalSpeciesTotals(),
-				particles.chemicalResidualLedgerUnits(), 0L);
-		return new RegionCheckpoint(withChecksum(unsigned), sectionStates);
+		sections.sort(Comparator.comparing(RegionSectionState::key)); thermalLedgers.sort(Comparator.comparing(ThermalRegionStateCodec.SectionLedger::key));
+		var descriptors=sections.stream().map(s->new RegionManifest.SectionDescriptor(s.sectionX(),s.sectionY(),s.sectionZ(),s.stockCount(),Double.doubleToRawLongBits(s.exactVolume().toDouble()),s.massUnits(),s.checksum())).toList();
+		var extensions=new ArrayList<RegionExtension>();
+		extensions.add(new RegionExtension(SolverRuntimeCodec.MANIFEST_EXTENSION,new SolverRuntimeCodec().encode(state)));
+		if(state.chemicalRegistry()!=null)extensions.add(new RegionExtension("mmm:chemical_audit",ChemicalAuditLedgerCodec.encode(state.chemicalSource(),state.chemicalSink())));
+		if(gas!=null)extensions.add(new RegionExtension(GasRegionStateCodec.MANIFEST_EXTENSION,new GasRegionStateCodec().encodeManifest(gasManifest(gas,sections,state.chemicalRegistry()!=null))));
+		if(granular!=null)extensions.add(new RegionExtension(GranularRegionStateCodec.MANIFEST_EXTENSION,new GranularRegionStateCodec().encodeManifest(granularManifest(granular,sections,state.chemicalRegistry()!=null))));
+		if(thermal!=null) {
+			SignedDyadic liquidU=SignedDyadic.ZERO;for(var stock:state.liquid().stocks())liquidU=liquidU.add(SignedDyadic.of(stock.internalEnergy()));
+			SignedDyadic coherentU=SignedDyadic.ZERO;for(var group:thermal.coherentGroups())coherentU=coherentU.add(SignedDyadic.of(group.internalEnergy()));
+			var gasU=thermal.copyGasNodeEnergy();
+			int cap=ThermalRegionStateCodec.CAP_MATERIALS|ThermalRegionStateCodec.CAP_GAS|ThermalRegionStateCodec.CAP_THERMAL
+					|(state.chemicalRegistry()==null?0:ThermalRegionStateCodec.CAP_CHEMISTRY)|(granular==null?0:ThermalRegionStateCodec.CAP_GRANULAR);
+			var data=new ThermalRegionStateCodec.ManifestData(cap,thermal.registryFingerprint(),thermal.insertionTemperatureK(),state.liquid().size(),activeU.length,depositU.length,
+					thermal.coherentGroups().size(),gasU.length,liquidU,SignedDyadic.sum(activeU),SignedDyadic.sum(depositU),coherentU,SignedDyadic.sum(gasU),thermal.audit().expectedInventory(),thermal.audit(),thermalLedgers,bits(gasU));
+			extensions.add(new RegionExtension(ThermalRegionStateCodec.MANIFEST_EXTENSION,new ThermalRegionStateCodec().encodeManifest(data)));
+			extensions.add(new RegionExtension(ThermalBuoyancyCodec.MANIFEST_EXTENSION,new ThermalBuoyancyCodec().encodeCurrent()));
+			if(!state.pendingPhaseVolume().isEmpty())extensions.add(new RegionExtension(PendingPhaseVolumeCodec.MANIFEST_EXTENSION,new PendingPhaseVolumeCodec().encode(state.pendingPhaseVolume())));
+			var devices=source.finiteThermalDevices(thermal.registryFingerprint());
+			if(!devices.devices().isEmpty())extensions.add(new RegionExtension(FiniteThermalDeviceCodec.MANIFEST_EXTENSION,new FiniteThermalDeviceCodec().encode(devices)));
+		}
+		var palette=state.materialPalette(); var counts=new int[palette.size()]; var volume=new SignedDyadic[palette.size()];var mass=new long[palette.size()];Arrays.fill(volume,SignedDyadic.ZERO);
+		SignedDyadic totalVolume=SignedDyadic.ZERO;long totalMass=0,residual=0; var chemistry=state.chemicalRegistry();long[] species=chemistry==null?new long[0]:new long[chemistry.species().size()];
+		for(var stock:state.liquid().stocks()) { totalVolume=totalVolume.add(stock.volume());totalMass=Math.addExact(totalMass,stock.massUnits());
+			if(!palette.isEmpty()){int mat=stock.key().material();counts[mat]++;volume[mat]=volume[mat].add(stock.volume());mass[mat]=Math.addExact(mass[mat],stock.massUnits());}
+			if(stock.mixture()!=null){residual=Math.addExact(residual,stock.mixture().massResidualUnits());for(int i=0;i<stock.mixture().entryCount();i++)species[stock.mixture().speciesHandle(i)]=Math.addExact(species[stock.mixture().speciesHandle(i)],stock.mixture().amountAt(i));}
+		}
+		var materialLedgers=new ArrayList<RegionManifest.MaterialLedger>();for(int i=0;i<palette.size();i++)materialLedgers.add(new RegionManifest.MaterialLedger(counts[i],Double.doubleToRawLongBits(volume[i].toDouble()),mass[i]));
+		var unsigned=new RegionManifest(layout,identity,geometry,source.runtimeIntent(),state.liquid().size(),Double.doubleToRawLongBits(totalVolume.toDouble()),palette,totalMass,materialLedgers,descriptors,extensions,
+				chemistry==null?"":chemistry.fingerprint(),chemistry==null?0:ChemicalLimits.QUANTA_PER_MOL,chemistry==null?List.of():chemistry.species().stream().map(ChemicalSpecies::id).toList(),List.of(),species,residual,0);
+		return new RegionCheckpoint(withChecksum(unsigned),sections);
 	}
-
-	private static void requireCaptureable(RegionCheckpointSource source, long checkpointGeneration) throws IOException {
-		source.identity(checkpointGeneration);
-	}
-	private static RegionSectionState withChecksum(RegionSectionState section) {
-		long checksum = RegionStateIntegrity.sectionChecksum(section);
-		return new RegionSectionState(section.layout(), section.regionId(), section.dimensionId(), section.checkpointGeneration(),
-				section.sectionX(), section.sectionY(), section.sectionZ(), section.localStartX(), section.localStartY(), section.localStartZ(),
-				section.sizeX(), section.sizeY(), section.sizeZ(), section.markerOrdinals(), section.positionVolume(),
-				section.velocities(), section.markerMassUnits(), section.materialPaletteIndex(), section.solidMask(), section.extensions(),
-				section.chemicalMixtureIndex(), section.indicator(), section.chemicalSpeciesTotals(),
-				section.chemicalResidualLedgerUnits(), checksum);
-	}
+	static RegionSectionState withChecksum(RegionSectionState s) { return new RegionSectionState(s.layout(),s.regionId(),s.dimensionId(),s.checkpointGeneration(),s.sectionX(),s.sectionY(),s.sectionZ(),s.localStartX(),s.localStartY(),s.localStartZ(),s.sizeX(),s.sizeY(),s.sizeZ(),s.liquidStocks(),s.faceMomentum(),s.solidMask(),s.extensions(),RegionStateIntegrity.sectionChecksum(s)); }
+	private static long[] bits(double[] values) {long[] bits=new long[values.length];for(int i=0;i<bits.length;i++)bits[i]=Double.doubleToRawLongBits(values[i]);return bits;}
+	private static SignedDyadic energyBits(long[] bits) {var sum=SignedDyadic.ZERO;for(long value:bits)sum=sum.add(SignedDyadic.of(Double.longBitsToDouble(value)));return sum;}
+	static RegionSectionState.SectionKey sectionOfCell(RegionGeometry geometry,int cell) {return sectionKey(geometry,(cell%geometry.sizeX()+.5F)*geometry.solverConfig().cellSize(),(cell/geometry.sizeX()%geometry.sizeY()+.5F)*geometry.solverConfig().cellSize(),(cell/(geometry.sizeX()*geometry.sizeY())+.5F)*geometry.solverConfig().cellSize());}
+	private static RegionSectionState.SectionKey sectionKey(RegionGeometry g,float x,float y,float z) {return new RegionSectionState.SectionKey(Math.floorDiv((int)Math.floor(g.origin().x()+x),16),Math.floorDiv((int)Math.floor(g.origin().y()+y),16),Math.floorDiv((int)Math.floor(g.origin().z()+z),16));}
 
 	private static RegionManifest withChecksum(RegionManifest manifest) {
 		long checksum = RegionStateIntegrity.manifestChecksum(manifest);
@@ -409,66 +126,6 @@ public final class RegionCheckpointAssembler {
 				manifest.sections(), manifest.extensions(), manifest.registryFingerprint(), manifest.quantaPerMol(),
 				manifest.speciesPalette(), manifest.chemicalMixtures(), manifest.chemicalSpeciesTotals(),
 				manifest.chemicalResidualLedgerUnits(), checksum);
-	}
-
-	private static List<RegionManifest.MaterialLedger> materialLedgers(CapturedParticles particles) {
-		if (!particles.layout().hasMaterials()) return List.of();
-		int paletteSize = particles.materialPalette().size();
-		int[] markerCounts = new int[paletteSize];
-		SignedDyadic[] volumes = new SignedDyadic[paletteSize]; long[] masses = new long[paletteSize];
-		java.util.Arrays.fill(volumes, SignedDyadic.ZERO);
-
-		for (int ordinal = 0; ordinal < particles.particleCount(); ordinal++) {
-			int material = particles.materialPaletteIndex()[ordinal];
-			markerCounts[material]++;
-			volumes[material] = volumes[material].add(SignedDyadic.of(particles.positionVolume()[ordinal * 4 + 3]));
-			masses[material] = Math.addExact(masses[material], particles.markerMassUnits()[ordinal]);
-		}
-		List<RegionManifest.MaterialLedger> result = new ArrayList<>(paletteSize);
-		for (int material = 0; material < paletteSize; material++) {
-			result.add(new RegionManifest.MaterialLedger(markerCounts[material], Double.doubleToRawLongBits(volumes[material].toDouble()),
-					masses[material]));
-		}
-		return List.copyOf(result);
-	}
-
-	private static double sumVolumes(float[] positionVolume) {
-		SignedDyadic result = SignedDyadic.ZERO;
-		for (int index = 3; index < positionVolume.length; index += 4) result = result.add(SignedDyadic.of(positionVolume[index]));
-		return result.toDouble();
-	}
-
-
-	private static double[] toDoubles(long[] bits) {
-		double[] result = new double[bits.length];
-		for (int index = 0; index < bits.length; index++) {
-			result[index] = Double.longBitsToDouble(bits[index]);
-		}
-		return result;
-	}
-
-	private static long[] chemicalTotals(CapturedParticles particles, int[] mixtureIndices) {
-		long[] totals = new long[particles.speciesPalette().size()];
-		Map<String, Integer> handles = new HashMap<>();
-		for (int species = 0; species < particles.speciesPalette().size(); species++) {
-			handles.put(particles.speciesPalette().get(species), species);
-		}
-		for (int mixtureIndex : mixtureIndices) {
-			FlipChemicalParticleState.StableMixture mixture = particles.chemicalMixtures().get(mixtureIndex);
-			for (FlipChemicalParticleState.Component component : mixture.components()) {
-				Integer handle = handles.get(component.speciesId());
-				if (handle == null) throw new IllegalArgumentException("Chemical mixture references species outside palette");
-				totals[handle] = Math.addExact(totals[handle], component.amountQuanta());
-			}
-		}
-		return totals;
-	}
-
-	private static RegionSectionState.SectionKey sectionKey(RegionGeometry geometry, float x, float y, float z) {
-		return new RegionSectionState.SectionKey(
-				Math.floorDiv((int) Math.floor(geometry.origin().x() + x), 16),
-				Math.floorDiv((int) Math.floor(geometry.origin().y() + y), 16),
-				Math.floorDiv((int) Math.floor(geometry.origin().z() + z), 16));
 	}
 
 	private static GasRegionStateCodec.ManifestData gasManifest(
@@ -485,7 +142,7 @@ public final class RegionCheckpointAssembler {
 			for (int value : data.pieceNodeOrdinal()) if (value > 0) sealed++;
 			ledgers.add(new GasRegionStateCodec.SectionLedger(section.key(), sealed));
 		}
-		int capabilities = GasRegionStateCodec.CAP_MATERIALS | GasRegionStateCodec.CAP_GAS
+		int capabilities = GasRegionStateCodec.CAP_GAS | (sections.getFirst().layout().hasMaterials() ? GasRegionStateCodec.CAP_MATERIALS : 0)
 				| (chemicalState ? GasRegionStateCodec.CAP_CHEMISTRY : 0);
 		if (chemicalState != !snapshot.chemicalRegistryFingerprint().isEmpty()) {
 			throw new IOException("Gas snapshot chemical identity disagrees with liquid generation");
@@ -572,28 +229,6 @@ public final class RegionCheckpointAssembler {
 		}
 		if (found == null) throw new IOException("Missing required region extension " + type);
 		return found;
-	}
-
-	private record CapturedParticles(
-			RegionStateLayout layout,
-			List<FluidMaterial> materialPalette,
-			float[] positionVolume,
-			float[] velocities,
-			byte[] solidMask,
-			long[] markerMassUnits,
-			int[] materialPaletteIndex,
-			String registryFingerprint,
-			List<String> speciesPalette,
-			List<FlipChemicalParticleState.StableMixture> chemicalMixtures,
-			int[] chemicalMixtureIndex,
-			byte[] indicator,
-			long[] chemicalSpeciesTotals,
-			long chemicalResidualLedgerUnits,
-			ChemicalTransferLedger externalSource,
-			ChemicalTransferLedger escapedSink
-	) {
-		int particleCount() { return positionVolume.length / 4; }
-		boolean hasChemicalState() { return !registryFingerprint.isEmpty(); }
 	}
 
 }

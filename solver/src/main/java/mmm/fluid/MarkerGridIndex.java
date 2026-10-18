@@ -6,7 +6,7 @@ import java.util.Arrays;
  * Derived per-cell marker index rebuilt from the authoritative marker columns: cell membership
  * links and counts, exact cell volume/mass, reconstructed density and the pressure-phase
  * occupancy entries. Nothing here is checkpoint truth; the whole index is discardable and is
- * rebuilt by {@link MarkerGridBuilder}. Solver-internal package-private access only.
+ * rebuilt from liquid cell inventory. Solver-internal package-private access only.
  */
 final class MarkerGridIndex {
 	final int cellCount;

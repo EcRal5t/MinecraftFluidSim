@@ -56,6 +56,17 @@ public final class GasLiquidPhaseModel {
 		return saturation(pair, liquidTemperatureK, GasRegistry.STANDARD_PRESSURE_PA * fraction);
 	}
 
+	/** Inverse of the same saturation law used by the phase-pressure residual. */
+	public double saturationTemperatureK(ThermalPhaseTransition transition, double partialPressurePa) {
+		PhasePair pair = requirePair(transition);
+		if (!(Double.isFinite(partialPressurePa) && partialPressurePa >= 0))
+			throw new IllegalArgumentException("Invalid vapor partial pressure");
+		if (partialPressurePa == 0) return 0;
+		double inverse = 1 / pair.referenceTemperatureK() - pair.gasConstantPerMass() / pair.latentEnthalpyPerMass()
+				* Math.log(partialPressurePa / GasRegistry.STANDARD_PRESSURE_PA);
+		return inverse > 0 ? 1 / inverse : Double.POSITIVE_INFINITY;
+	}
+
 	private static Saturation saturation(PhasePair pair,
 	                                    double liquidTemperatureK, double partial) {
 		pair.liquid().specificHeatAt(liquidTemperatureK);

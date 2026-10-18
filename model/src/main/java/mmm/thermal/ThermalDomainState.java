@@ -79,7 +79,7 @@ public final class ThermalDomainState {
 			float cellSize, ThermalCarrierContext markers, AirNetwork airNetwork, int maximumTransportSubsteps
 	) {
 		this(registry, materialByFluidHandle, materialByGranularHandle, initialTemperatureK, initialCapacity,
-				sizeX, sizeY, sizeZ, cellSize, markers, airNetwork, maximumTransportSubsteps, null);
+				sizeX, sizeY, sizeZ, cellSize, markers, airNetwork, maximumTransportSubsteps, null, true);
 	}
 
 	/** Builds a private restore target with zero granular placeholders and the snapshot's liquid energies. */
@@ -92,14 +92,22 @@ public final class ThermalDomainState {
 		if (restoredLiquidEnergy == null) throw new IllegalArgumentException("Restored liquid energy is missing");
 		return new ThermalDomainState(registry, materialByFluidHandle, materialByGranularHandle,
 				initialTemperatureK, initialCapacity, sizeX, sizeY, sizeZ, cellSize, markers, airNetwork,
-				maximumTransportSubsteps, restoredLiquidEnergy);
+				maximumTransportSubsteps, restoredLiquidEnergy, false);
+	}
+
+	/** Rebinds caloric caches while retaining the already stored liquid-cell internal energies. */
+	public static ThermalDomainState restoreOwnerTarget(ThermalRegistry registry, int[] materialByFluidHandle, int[] materialByGranularHandle,
+			double initialTemperatureK, int initialCapacity, int sizeX, int sizeY, int sizeZ,
+			float cellSize, ThermalCarrierContext owners, AirNetwork network, int maximumTransportSubsteps) {
+		return new ThermalDomainState(registry,materialByFluidHandle,materialByGranularHandle,initialTemperatureK,initialCapacity,
+				sizeX,sizeY,sizeZ,cellSize,owners,network,maximumTransportSubsteps,null,false);
 	}
 
 	private ThermalDomainState(
 			ThermalRegistry registry, int[] materialByFluidHandle, int[] materialByGranularHandle,
 			double initialTemperatureK, int initialCapacity, int sizeX, int sizeY, int sizeZ,
 			float cellSize, ThermalCarrierContext markers, AirNetwork airNetwork, int maximumTransportSubsteps,
-			double[] restoredLiquidEnergy
+			double[] restoredLiquidEnergy, boolean initializeOwners
 	) {
 		if (registry == null || materialByFluidHandle == null || materialByGranularHandle == null || markers == null) {
 			throw new IllegalArgumentException("Thermal binding input is missing");
@@ -120,19 +128,19 @@ public final class ThermalDomainState {
 		this.insertionTemperatureK = initialTemperatureK;
 		this.auditState = new ThermalAuditState(ThermalAuditLedger.initialized(SignedDyadic.ZERO));
 		this.liquidEnergy = new LiquidEnergyColumn(registry, stateFunction, unitScale, materialByFluidHandle,
-				initialTemperatureK, auditState, initialCapacity, markers, restoredLiquidEnergy);
+				initialTemperatureK, auditState, initialCapacity, markers, restoredLiquidEnergy, initializeOwners);
 		GranularEnergyColumn granularColumn = new GranularEnergyColumn(
 				mmm.granular.GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION,
 				mmm.granular.GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION);
 		this.granularState = new GranularEnergyState(registry, granularColumn, coherentPhases, stateFunction,
 				materialByGranularHandle, initialTemperatureK, auditState);
 		for (int parcel = 0; parcel < markers.activeParcelCount(); parcel++) {
-			granularColumn.addActive(restoredLiquidEnergy != null ? 0 : granularState.modeledGranularEnergy(markers.activeParcelMaterial(parcel),
+			granularColumn.addActive(!initializeOwners ? 0 : granularState.modeledGranularEnergy(markers.activeParcelMaterial(parcel),
 					markers.activeParcelComposition(parcel), markers.activeParcelMass(parcel),
 					initialTemperatureK, markers));
 		}
 		for (GranularEnergyColumn.DepositKey key : markers.depositKeys()) {
-			granularColumn.addDeposit(key, restoredLiquidEnergy != null ? 0 : granularState.modeledGranularEnergy(key.materialHandle(), key.compositionHandle(),
+			granularColumn.addDeposit(key, !initializeOwners ? 0 : granularState.modeledGranularEnergy(key.materialHandle(), key.compositionHandle(),
 					markers.depositMass(key), initialTemperatureK, markers));
 		}
 		boolean supportsGas = airNetwork != null;
@@ -147,14 +155,14 @@ public final class ThermalDomainState {
 			throw new IllegalArgumentException("Sealed gas inventory requires complete gas thermal definitions");
 		}
 		GasThermalModel gasModel = supportsGas ? new GasThermalModel(registry, airNetwork.registry()) : null;
-		this.gasState = restoredLiquidEnergy == null
+		this.gasState = initializeOwners
 				? new GasEnergyStore(gasModel, initialTemperatureK, auditState, airNetwork)
 				: GasEnergyStore.restoreTarget(gasModel, initialTemperatureK, auditState, airNetwork);
 		this.cellOperations = new ThermalCellOperations(
 				registry, stateFunction, unitScale, materialByFluidHandle, materialByGranularHandle,
 				cellGrid, auditState, liquidEnergy, granularState, gasState);
 		this.devices = new FiniteDeviceExchangeCoordinator(this);
-		if (restoredLiquidEnergy == null) {
+		if (initializeOwners) {
 			auditState.replace(ThermalAuditLedger.initialized(exactEnergy(markers.markerCount())));
 		}
 	}
@@ -176,15 +184,7 @@ public final class ThermalDomainState {
 	public ThermalAuditState audit() { return auditState; }
 	public ThermalAuditLedger auditLedger() { return auditState.ledger(); }
 
-	// ---- fluid reseeder / restore / capture seams (all revision-bumping coordinated edits) ----
-
-	public void mergeReseedLiquidEnergy(int target, int source) { liquidEnergy.mergeReseedEnergy(target, source); }
-
-	public void assignReseededLiquidEnergies(int source, double sourceEnergy, int destination, double destinationEnergy) {
-		liquidEnergy.assignReseededEnergies(source, sourceEnergy, destination, destinationEnergy);
-	}
-
-	public void moveReseedLiquidEnergy(int source, int destination) { liquidEnergy.moveEnergy(source, destination); }
+	// ---- restore / capture ----
 
 	public void restoreLiquidEnergies(double[] restored) { liquidEnergy.adoptRestored(restored); }
 
@@ -234,7 +234,7 @@ public final class ThermalDomainState {
 	ThermalCellGrid grid() { return cellGrid; }
 	ThermalTransport transport() { return transport; }
 
-	ThermalCellGrid.CarrierAccess carrierAccess(ThermalCarrierContext markers) {
+	public ThermalCellGrid.CarrierAccess carrierAccess(ThermalCarrierContext markers) {
 		return cellOperations.carrierAccess(markers);
 	}
 
@@ -291,33 +291,6 @@ public final class ThermalDomainState {
 		liquidEnergy.commitExternalLiquidInsertions(firstOrdinal, plan);
 	}
 
-	/** Models a cell replacement and its complete signed audit before any carrier is removed. */
-	public LiquidReplacementPlan planLiquidReplacement(
-			int[] removedOrdinals, List<LiquidEnergyColumn.LiquidInsertion> insertions, ThermalCarrierContext markers
-	) {
-		double[] energies = liquidEnergy.planDefaultLiquidInsertions(insertions, markers);
-		SignedDyadic sink = SignedDyadic.ZERO;
-		for (int ordinal : removedOrdinals) sink = sink.add(SignedDyadic.of(liquidEnergy.energy(ordinal)));
-		ThermalAuditLedger after = auditState.ledger().withExternalSinkEnergy(sink)
-				.withExternalSourceEnergy(SignedDyadic.sum(energies));
-		after.expectedInventory();
-		return new LiquidReplacementPlan(this, thermalRevision(), energies, auditState.ledger(), after);
-	}
-
-	public void requireCurrentLiquidReplacement(LiquidReplacementPlan plan) {
-		if (plan == null || plan.owner != this || !matchesThermalRevision(plan.revision)
-				|| plan.auditBefore != auditState.ledger())
-			throw new IllegalStateException("Liquid replacement thermal inventory or audit changed after planning");
-	}
-
-	/** Validates the combined external liquid audit and gas volume work before either inventory changes. */
-	public void requireGasRemapAfterLiquidReplacement(LiquidReplacementPlan liquid, GasEnergyStore.GasRemapPlan gas) {
-		requireCurrentLiquidReplacement(liquid);
-		gasState.requireCanCommitRemap(gas);
-		liquid.auditAfter.withExternalSourceEnergy(gas.sourceEnergy()).withExternalSinkEnergy(gas.sinkEnergy())
-				.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff()).expectedInventory();
-	}
-
 	/** Validates explicit liquid source, energy rounding and gas work in their publication order. */
 	public void requireGasRemapAfterExternalLiquidInsertion(
 			LiquidEnergyColumn.ExternalLiquidInsertionPlan liquid, GasEnergyStore.GasRemapPlan gas) {
@@ -346,26 +319,6 @@ public final class ThermalDomainState {
 			gasState.requireCanCommitRemap(gas);
 			after.withExternalSourceEnergy(gas.sourceEnergy()).withExternalSinkEnergy(gas.sinkEnergy())
 					.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff()).expectedInventory();
-		}
-	}
-
-	/** The coordinator has removed old energies internally and reserved empty new ordinals. */
-	public void commitLiquidReplacement(int firstOrdinal, LiquidReplacementPlan plan) {
-		if (plan == null || plan.owner != this || plan.auditBefore != auditState.ledger())
-			throw new IllegalStateException("Liquid replacement thermal audit changed before publication");
-		liquidEnergy.commitInternalLiquidInsertions(firstOrdinal, plan.energies);
-		auditState.replace(plan.auditAfter);
-	}
-
-	public static final class LiquidReplacementPlan {
-		private final ThermalDomainState owner;
-		private final Revision revision;
-		private final double[] energies;
-		private final ThermalAuditLedger auditBefore, auditAfter;
-		private LiquidReplacementPlan(ThermalDomainState owner, Revision revision, double[] energies,
-				ThermalAuditLedger auditBefore, ThermalAuditLedger auditAfter) {
-			this.owner = owner; this.revision = revision; this.energies = energies;
-			this.auditBefore = auditBefore; this.auditAfter = auditAfter;
 		}
 	}
 
@@ -491,11 +444,32 @@ public final class ThermalDomainState {
 	/** Publishes an already validated all-node gas-energy removal using assignments only. */
 	public void commitGasVent(GasEnergyStore.GasVentPlan plan) { gasState.commitVent(plan); }
 
-	public AirNetwork.TransferCommit planGasTransfer(
-			int sourceNode, int targetNode, GasInventory moved,
-			GasInventory sourceAfter, GasInventory targetAfter, AirNetwork network
-	) {
-		return gasState.planTransfer(sourceNode, targetNode, moved, sourceAfter, targetAfter, network);
+	public AirNetwork.TransferCommit planGasFlow(AirNetwork.FlowBatch batch, AirNetwork network) {
+		return gasState.planFlow(batch, network);
+	}
+	public GasEnergyStore.InventoryEnergyPlan planGasInventoryEnergy(AirNetwork network, List<Integer> nodes,
+	                                                              List<GasInventory> inventories, double[] energies,
+	                                                              SignedDyadic internalTransfer) {
+		return gasState.planPhaseInventoryEnergy(network, nodes, inventories, energies, internalTransfer);
+	}
+	public void requireGasInventoryEnergyCurrent(GasEnergyStore.InventoryEnergyPlan plan, AirNetwork network) {
+		gasState.requireInventoryEnergyCurrent(plan, network);
+	}
+	public void commitGasInventoryEnergyValues(GasEnergyStore.InventoryEnergyPlan plan) {
+		gasState.commitInventoryEnergyValues(plan);
+	}
+	public GasEnergyStore.GasRemapPlan planGasRemapAfterBatch(AirNetwork network,
+			GasEnergyStore.InventoryEnergyPlan gasPhase, PhaseBatchEnergyPlan cells,
+			List<GasInventory> inventories, double[] volumes, double[] mixed, double[] inherited,
+			SignedDyadic source, SignedDyadic sink) {
+		requirePhaseBatchEnergyCurrent(cells);
+		return gasState.planRemapAfterInventoryBatch(network, gasPhase, cells.assignment.afterAudit(),
+				inventories, volumes, mixed, inherited, source, sink);
+	}
+	public void requireGasRemapAfterBatchCurrent(GasEnergyStore.GasRemapPlan remap,
+			GasEnergyStore.InventoryEnergyPlan gasPhase, PhaseBatchEnergyPlan cells, AirNetwork network) {
+		requirePhaseBatchEnergyCurrent(cells);
+		gasState.requireRemapAfterInventoryBatchCurrent(remap, gasPhase, network, cells.assignment.afterAudit());
 	}
 
 	// ---- granular/coherent pass-throughs ----
@@ -507,21 +481,15 @@ public final class ThermalDomainState {
 	public double takeGranularReactionDeposit(GranularEnergyColumn.DepositKey key, long takenMassUnits, long totalMassUnits) {
 		return granularState.takeGranularReactionDeposit(key, takenMassUnits, totalMassUnits);
 	}
-	public void requireActiveToDeposit(int active, GranularEnergyColumn.DepositKey target) {
-		granularState.requireActiveToDeposit(active, target);
-	}
-	public void commitActiveToDeposit(int active, GranularEnergyColumn.DepositKey target) {
-		granularState.commitActiveToDeposit(active, target);
-	}
 	public mmm.granular.GranularInventory.EnergyPlan planActiveToDeposits(
 			List<mmm.granular.GranularInventory.DepositTransfer> transfers
 	) {
 		return granularState.planActiveToDeposits(transfers);
 	}
-	public boolean canActiveMerge(int first, int second, int material, double mass, java.util.Map<String, Long> composition) {
-		return granularState.canActiveMerge(first, second, material, mass, composition);
+	public boolean canActiveMerge(int first, int second, int material, double mass, java.util.Map<String, Long> composition, SignedDyadic heat) {
+		return granularState.canActiveMerge(first, second, material, mass, composition, heat);
 	}
-	public void commitActiveMerge(int first, int second) { granularState.commitActiveMerge(first, second); }
+	public void commitActiveMerge(int first, int second, SignedDyadic heat) { granularState.commitActiveMerge(first, second, heat); }
 	public GranularInventory.EnergyPlan planDepositWake(GranularEnergyColumn.DepositKey source, long takenMassUnits, long totalMassUnits) {
 		Revision before = thermalRevision(); var plan = granularState.planDepositWake(source, takenMassUnits, totalMassUnits);
 		return new GranularInventory.EnergyPlan() {
@@ -532,17 +500,9 @@ public final class ThermalDomainState {
 			@Override public void commit() { requireCurrent(); plan.commit(); }
 		};
 	}
-	public void requireDepositMove(
-			GranularEnergyColumn.DepositKey source, GranularEnergyColumn.DepositKey target,
-			long movedMassUnits, long sourceMassUnits
-	) {
-		granularState.requireDepositMove(source, target, movedMassUnits, sourceMassUnits);
-	}
-	public void commitDepositMove(
-			GranularEnergyColumn.DepositKey source, GranularEnergyColumn.DepositKey target,
-			long movedMassUnits, long sourceMassUnits
-	) {
-		granularState.commitDepositMove(source, target, movedMassUnits, sourceMassUnits);
+	public GranularInventory.EnergyPlan planDepositMove(GranularEnergyColumn.DepositKey source, GranularEnergyColumn.DepositKey target,
+			long movedMassUnits, long sourceMassUnits, SignedDyadic heat) {
+		return granularState.planDepositMove(source, target, movedMassUnits, sourceMassUnits, heat);
 	}
 	public void clearGranularExternal() { granularState.clearGranularExternal(); }
 	public double[] planExternalActiveInsertions(int firstOrdinal, int count, ThermalCarrierContext markers) {
@@ -564,6 +524,15 @@ public final class ThermalDomainState {
 	public double commitExternalDepositTake(GranularEnergyColumn.DepositKey key, long takenMassUnits, long totalMassUnits) {
 		return granularState.commitExternalDepositTake(key, takenMassUnits, totalMassUnits);
 	}
+	public mmm.granular.GranularInventory.EnergyPlan planGranularEnergyReplacement(double[] active,
+			List<GranularEnergyColumn.DepositEnergy> deposits) {
+		return granularState.planEnergyReplacement(active,deposits,null);
+	}
+	public mmm.granular.GranularInventory.EnergyPlan planGranularEnergyReplacement(double[] active,
+			List<GranularEnergyColumn.DepositEnergy> deposits,List<CoherentPhaseStore.Group> coherent) {
+		return granularState.planEnergyReplacement(active,deposits,coherent);
+	}
+
 	public void addCoherentExternal(CoherentPhaseStore.Group group) { granularState.addCoherentExternal(group); }
 	public void addCoherentInternal(CoherentPhaseStore.Group group) { granularState.addCoherentInternal(group); }
 	public CoherentPhaseStore.Group takeCoherentInternal(int cell, String phaseId, long occupiedSvq,
@@ -685,6 +654,9 @@ public final class ThermalDomainState {
 	public PhaseCandidateCell preparePhaseCandidateCell(int cell, ThermalCarrierContext markers) {
 		return cellOperations.preparePhaseCandidateCell(cell, markers, this, thermalRevision());
 	}
+	public PhaseCandidateCell[] preparePhaseCandidateCells(int[] cells, ThermalCarrierContext owners) {
+		return cellOperations.preparePhaseCandidateCells(cells, owners, this, thermalRevision());
+	}
 
 	/** Prepares the equilibrium-energy line used to order actual solid/liquid integer extents. */
 	public ThermalPhaseExtentCurve preparePhaseExtentCurve(PhaseCandidateCell current,
@@ -736,6 +708,12 @@ public final class ThermalDomainState {
 		return new PhaseCellTrial(this, current.revision, current.cell(),
 				cellOperations.trialPhaseCellEnergy(current, liquidInventory, gasEnergyBefore, gasEnergyAfter, false), SignedDyadic.ZERO);
 	}
+	public PhaseCellTrial trialPhaseCellEnergyWithHeat(PhaseCandidateCell current,
+			List<ThermalStateFunction.InventoryPortion> liquidInventory, double gasEnergyChange, SignedDyadic mechanicalHeat) {
+		requirePhaseCandidateCurrent(current);
+		return new PhaseCellTrial(this, current.revision, current.cell(),
+				cellOperations.trialPhaseCellEnergy(current, liquidInventory, 0, gasEnergyChange, false, mechanicalHeat), SignedDyadic.ZERO);
+	}
 
 	/** Replaces liquid/coherent owners while keeping the prepared granular heat baths. */
 	public PhaseCellTrial trialPhaseCellEnergy(PhaseCandidateCell current,
@@ -743,6 +721,21 @@ public final class ThermalDomainState {
 		requirePhaseCandidateCurrent(current);
 		return new PhaseCellTrial(this, current.revision, current.cell(),
 				cellOperations.trialPhaseCellEnergy(current, liquidAndCoherentInventory, 0, 0, true), SignedDyadic.ZERO);
+	}
+
+	public PhaseCellTrial trialCondensedCellEnergyWithHeat(PhaseCandidateCell current,
+			List<ThermalStateFunction.InventoryPortion> inventory,SignedDyadic mechanicalHeat) {
+		requirePhaseCandidateCurrent(current);
+		return new PhaseCellTrial(this,current.revision,current.cell(),
+				cellOperations.trialPhaseCellEnergy(current,inventory,0,0,true,mechanicalHeat),SignedDyadic.ZERO);
+	}
+
+	/** Complete future-owner LTE projection; the enclosing transaction owns all metadata and publication. */
+	public PhaseCellTrial trialOwnedCellEnergy(PhaseCandidateCell current,
+			List<ThermalStateFunction.InventoryPortion> inventory,SignedDyadic mechanicalHeat) {
+		requirePhaseCandidateCurrent(current);
+		return new PhaseCellTrial(this,current.revision,current.cell(),
+				cellOperations.trialOwnedCellEnergy(current,inventory,mechanicalHeat),SignedDyadic.ZERO);
 	}
 
 	public record VaporizedCellEnergyTrial(double gasEnergyAfter, PhaseCellTrial thermalTrial) { }
@@ -781,6 +774,81 @@ public final class ThermalDomainState {
 	public void commitPhaseCellEnergy(PhaseCellEnergyPlan plan, ThermalCarrierContext markers) {
 		if (plan == null || plan.owner != this) throw new IllegalStateException("Thermal phase energy plan belongs to another domain");
 		cellOperations.commitPhaseCellEnergy(plan.assignment, markers);
+	}
+
+	/** All liquid/gas interfaces use one source generation and one final thermal audit. */
+	public static final class PhaseBatchEnergyPlan {
+		private final ThermalDomainState owner;
+		private final Revision revision;
+		private final ThermalCellOperations.PhaseBatchAssignment assignment;
+		private PhaseBatchEnergyPlan(ThermalDomainState owner, Revision revision, ThermalCellOperations.PhaseBatchAssignment assignment) {
+			this.owner = owner; this.revision = revision; this.assignment = assignment;
+		}
+		/** Energies follow the supplied future liquid inventory order in this cell. */
+		public double[] ownerEnergies(int cell) { return liquidEnergies(cell); }
+		public double[] liquidEnergies(int cell) {
+			for (int index = 0; index < assignment.cells().size(); index++) if (assignment.cells().get(index).cell() == cell) {
+				var entries = assignment.cells().get(index).raw().entries();
+				double[] result = new double[assignment.liquidCounts()[index]];
+				for (int owner = 0; owner < result.length; owner++) result[owner] = entries.get(owner).energy();
+				return result;
+			}
+			throw new IllegalArgumentException("Cell is absent from phase batch");
+		}
+	}
+
+	public PhaseBatchEnergyPlan planPhaseBatchEnergy(List<PhaseCellTrial> trials, int[] liquidCounts,
+	                                               SignedDyadic gasRoundoff, SignedDyadic mechanicalHeat, ThermalCarrierContext markers) {
+		return planPhaseBatchEnergy(trials,liquidCounts,gasRoundoff,mechanicalHeat,markers,null);
+	}
+	public PhaseBatchEnergyPlan planCondensedBatchEnergy(List<PhaseCellTrial> trials,int[] liquidCounts,
+	                                                   SignedDyadic mechanicalHeat,ThermalCarrierContext markers,
+	                                                   List<CoherentPhaseStore.Group> futureCoherent) {
+		return planPhaseBatchEnergy(trials,liquidCounts,SignedDyadic.ZERO,mechanicalHeat,markers,futureCoherent);
+	}
+	private PhaseBatchEnergyPlan planPhaseBatchEnergy(List<PhaseCellTrial> trials,int[] liquidCounts,
+	                                                SignedDyadic gasRoundoff,SignedDyadic mechanicalHeat,ThermalCarrierContext markers,
+	                                                List<CoherentPhaseStore.Group> futureCoherent) {
+		if (trials == null || liquidCounts == null || trials.size() != liquidCounts.length)
+			throw new IllegalArgumentException("Phase batch owners differ");
+		var revision = thermalRevision();
+		var assignments = new java.util.ArrayList<ThermalCellOperations.PhaseCellAssignment>(trials.size());
+		for (var trial : trials) {
+			if (trial == null || trial.owner != this || !revision.equals(trial.revision))
+				throw new IllegalStateException("Phase batch source changed during planning");
+			assignments.add(cellOperations.preparePhaseCellEnergy(trial.cell, trial.raw, trial.emptyEnergyRemainder));
+		}
+		return new PhaseBatchEnergyPlan(this, revision, cellOperations.preparePhaseBatch(assignments, liquidCounts, gasRoundoff, mechanicalHeat, markers,futureCoherent));
+	}
+
+	/** Every entry is published by the enclosing Stock/solid transaction; this plan publishes its audit. */
+	public PhaseBatchEnergyPlan planOwnedBatchEnergy(List<PhaseCellTrial> trials,ThermalCarrierContext markers,
+	                                               SignedDyadic mechanicalHeat) {
+		var revision=thermalRevision();
+		var assignments=new java.util.ArrayList<ThermalCellOperations.PhaseCellAssignment>();
+		int[] counts=new int[trials.size()];
+		for(int i=0;i<trials.size();i++) {
+			var trial=trials.get(i);
+			if(trial.owner!=this||!revision.equals(trial.revision)) throw new IllegalStateException("Owned cell source changed");
+			var assignment=cellOperations.preparePhaseCellEnergy(trial.cell,trial.raw,trial.emptyEnergyRemainder);
+			assignments.add(assignment);counts[i]=assignment.raw().entries().size();
+		}
+		return new PhaseBatchEnergyPlan(this,revision,cellOperations.prepareOwnedBatch(assignments,counts,mechanicalHeat));
+	}
+	public void commitOwnedBatchEnergy(PhaseBatchEnergyPlan plan) {
+		if(plan==null||plan.owner!=this||!plan.assignment.callerPublishesAll()) throw new IllegalStateException("Owned batch belongs to another thermal domain");
+		cellOperations.commitOwnedBatch(plan.assignment);
+	}
+
+	public void requirePhaseBatchEnergyCurrent(PhaseBatchEnergyPlan plan) {
+		if (plan == null || plan.owner != this || !matchesThermalRevision(plan.revision))
+			throw new IllegalStateException("Phase batch thermal source changed");
+	}
+
+	/** Liquid rows already carry liquidEnergies; publish unchanged solid baths and the shared audit once. */
+	public void commitPhaseBatchEnergy(PhaseBatchEnergyPlan plan, ThermalCarrierContext markers) {
+		if (plan == null || plan.owner != this) throw new IllegalStateException("Phase batch belongs to another thermal domain");
+		cellOperations.commitPhaseBatch(plan.assignment, markers);
 	}
 
 
@@ -846,19 +914,19 @@ public final class ThermalDomainState {
 	) {
 		SignedDyadic before = exactEnergy(markers.markerCount());
 		var owners = carrierAccess(markers);
-		cellGrid.rebuild(owners);
-		double[] snapshot = cellGrid.copyCarrierInternalEnergy();
+		double[] snapshot = new double[owners.carrierCount()];
+		for (int owner = 0; owner < snapshot.length; owner++) snapshot[owner] = owners.internalEnergy(owner);
 		try {
 			var result = ThermalCarrierTransport.step(owners, contacts, dtSeconds, transport.maximumSubsteps());
-			cellGrid.refreshCarrierEnergy();
 			SignedDyadic physicalDelta = exactEnergy(markers.markerCount()).subtract(before);
 			var ledger = auditState.ledger().withHeatExchange(result.reservoirExchange())
 					.withRoundoff(physicalDelta.subtract(result.reservoirExchange()));
 			auditState.replace(ledger);
+			spatialObservationPrepared = false;
 			lastTransport = result;
 			return result;
 		} catch (RuntimeException failure) {
-			cellGrid.restoreCarrierInternalEnergy(snapshot);
+			owners.setInternalEnergies(snapshot);
 			throw failure;
 		}
 	}
@@ -881,6 +949,39 @@ public final class ThermalDomainState {
 			FiniteDeviceExchangeCoordinator.FiniteDeviceCellPlan plan, ThermalCarrierContext markers
 	) {
 		devices.commitFiniteDeviceCellExchange(plan, markers);
+	}
+
+	public ThermalOwnerSnapshot exportOwnerState() {
+		return ThermalOwnerSnapshot.prepared(registry.fingerprint(),insertionTemperatureK,granularState.column().copyActiveEnergy(),
+				granularState.column().depositSnapshot().stream().mapToDouble(GranularEnergyColumn.DepositEnergy::internalEnergy).toArray(),
+				gasState.nodeEnergies(),granularState.coherentPhases().snapshot(),auditState.ledger());
+	}
+	public void restoreOwnerState(ThermalOwnerSnapshot snapshot, ThermalCarrierContext owners, AirNetwork network) {
+		if (!snapshot.registryFingerprint().equals(registry.fingerprint()) || snapshot.insertionTemperatureK() != insertionTemperatureK)
+			throw new IllegalArgumentException("Thermal owner registry or insertion state differs");
+		if (!snapshot.prepared()) for (var group : snapshot.coherentGroups()) {
+			group.requireCompositionMass(owners.chemicalRegistry());
+			int material = registry.materialHandle(group.phaseId());
+			if (registry.material(material).carrierKind() != ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID)
+				throw new IllegalArgumentException("Restored coherent owner material differs");
+			stateFunction.stateForInternalEnergy(material,group.mass(),
+					group.composition() == null ? java.util.Map.of() : group.composition().stableAmounts(),group.internalEnergy());
+		}
+		restoreThermalCoherent(snapshot.coherentGroups());
+		double[] deposit = snapshot.copyDepositEnergy(); var keys = owners.depositKeys();
+		if (deposit.length != keys.size()) throw new IllegalArgumentException("Thermal deposit identities differ");
+		var entries = new java.util.ArrayList<GranularEnergyColumn.DepositEnergy>();
+		for (int i = 0; i < deposit.length; i++) entries.add(new GranularEnergyColumn.DepositEnergy(keys.get(i),deposit[i]));
+		if (snapshot.prepared()) {
+			restoreThermalGranular(snapshot.copyActiveParcelEnergy(),entries);
+			gasState.replaceNodeEnergies(snapshot.copyGasNodeEnergy());
+		} else {
+			restoreThermalGranular(snapshot.copyActiveParcelEnergy(),entries,owners);
+			restoreGasEnergies(network,snapshot.copyGasNodeEnergy());
+		}
+		restoreAuditLedger(snapshot.audit());
+		if (!snapshot.prepared() && !exactEnergy(owners.markerCount()).equals(snapshot.audit().expectedInventory()))
+			throw new IllegalArgumentException("Thermal restored owners do not close the shared inventory");
 	}
 
 }

@@ -5,13 +5,11 @@ final class LiquidFluxGeometry {
 	private final FlipCutCellGeometry cut;
 	private final FluidDomain domain;
 	LiquidFluxGeometry(FlipCutCellGeometry cut) { this.cut = cut; domain = null; }
-	LiquidFluxGeometry(FluidDomain domain) { domain.ensurePressureGeometry(); this.domain = domain; cut = domain.geometry.cutCells; }
+	LiquidFluxGeometry(FluidDomain domain) { this.domain = domain; cut = domain.geometry.cutCells; }
 
 	FlipPressurePhaseGeometry transportPlane() { return domain == null ? null : domain.pressurePhaseGeometry; }
+	void prepareTransport() { if(domain!=null)domain.pressureSystem.faces.ensurePortCoefficients(); }
 
-	mmm.units.SignedDyadic[] quantizationBudget(double dtOverH) {
-		return domain == null ? null : GranularQuantizationError.budget(domain, (float) (dtOverH * domain.config.cellSize()));
-	}
 
 	boolean connected(int left, int right, int axis) {
 		if (domain == null) return aperture(left, right, axis) > 0;
@@ -23,18 +21,54 @@ final class LiquidFluxGeometry {
 		};
 	}
 
-	double capacity(int cell) { return domain == null ? cut.openCellVolume(cell) : domain.effectiveOpenCellVolume(cell); }
-	double finalCapacity(int cell) {
+	double capacity(int cell) {
+		return cut.openCellVolume(cell) - (domain == null || domain.granularCoupling == null ? 0
+				: Math.scalb((double)domain.granularCoupling.solidSvq(cell),-24));
+	}
+	double finalPoreCapacity(int cell) {
 		return domain != null && domain.granularState != null && domain.granularState.parcels.count() > 0
-				? domain.granularNextCoupling.effectiveOpenCellVolume(cell, cut.openCellVolume(cell)) : capacity(cell);
+				? cut.openCellVolume(cell) - Math.scalb((double)domain.granularNextCoupling.solidSvq(cell),-24) : capacity(cell);
+	}
+	FlipCutCellGeometry cutCells() { return cut; }
+	boolean hasCellInventory() { return domain!=null; }
+	mmm.units.SignedDyadic componentVolume(int cell,int support) {
+		var result=mmm.units.SignedDyadic.ZERO;
+		for(var stock:domain.liquidCells.stocksInCell(cell))if(stock.key().supportMask()==support)result=result.add(stock.volume());
+		return result;
+	}
+	GasVolumeProposal prepareGasReservations(int[] cells,int[] supports,mmm.units.SignedDyadic[] predicted,mmm.units.SignedDyadic[] pores) {
+		return domain==null?null:domain.pressureSystem.prepareGasReservations(cells,supports,predicted,pores);
+	}
+	void acceptGasReservations(int[] cells,int[] supports,mmm.units.SignedDyadic[] amounts) {
+		if(domain!=null)domain.pressureSystem.acceptGasReservations(cells,supports,amounts);
+	}
+	double totalPortCoefficient(int cell,int neighbor,int axis,int sourceSupport,int targetSupport) {
+		if(domain==null)throw new IllegalStateException("Liquid transport requires the shared pressure face coefficients");
+		return domain.pressureSystem.faces.totalPortCoefficient(cell,neighbor,axis,sourceSupport,targetSupport);
+	}
+	double componentPoreVolume(int cell,int support){
+		int open=Integer.bitCount(~cut.mask(cell)&255);
+		return open==0?0:capacity(cell)*Integer.bitCount(support)/open;
+	}
+
+	mmm.units.SignedDyadic gasReservedVolume(int cell,int supportMask) {
+		return domain==null ? mmm.units.SignedDyadic.ZERO : domain.pressureSystem.gasReservedVolume(cell,supportMask);
 	}
 	private double poreScale(int cell) { return cut.openCellVolume(cell) > 0 ? capacity(cell) / cut.openCellVolume(cell) : 0; }
+	private double facePoreScale(int left, int right, int axis) {
+		if (domain == null || domain.pressureGranularCoupling == null)
+			return Math.min(poreScale(left), poreScale(right));
+		int x = right % domain.sizeX, y = right / domain.sizeX % domain.sizeY, z = right / (domain.sizeX * domain.sizeY);
+		double geometric = axis == 0 ? cut.xFaceOpen(x,y,z) : axis == 1 ? cut.yFaceOpen(x,y,z) : cut.zFaceOpen(x,y,z);
+		double open = axis == 0 ? domain.pressureXFaceOpen(x,y,z) : axis == 1 ? domain.pressureYFaceOpen(x,y,z) : domain.pressureZFaceOpen(x,y,z);
+		return geometric > 0 ? open / geometric : 0;
+	}
 
 	double aperture(int left, int right, int axis) {
 		return aperture(left,right,axis,255,255);
 	}
 	double aperture(int left, int right, int axis, int leftSupport, int rightSupport) {
-		double pore = Math.min(poreScale(left), poreScale(right));
+		double pore = facePoreScale(left, right, axis);
 		if (cut.mask(left) == 0 && cut.mask(right) == 0 && leftSupport==255 && rightSupport==255) return pore;
 		int open = 0;
 		for (int micro=0;micro<8;micro++) if((micro>>axis&1)!=0) {
@@ -44,8 +78,6 @@ final class LiquidFluxGeometry {
 		}
 		return 0.25 * open * pore;
 	}
-
-	boolean partialFace(int left, int right) { return cut.mask(left) != 0 || cut.mask(right) != 0; }
 
 	double offset(int cell, float nx, float ny, float nz, double volume) {
 		if (capacity(cell) == 0) return Math.min(0.0, nx) + Math.min(0.0, ny) + Math.min(0.0, nz);
@@ -114,7 +146,7 @@ final class LiquidFluxGeometry {
 			volume += box * result[0]; mx += box * (ox * result[0] + ex * result[1]);
 			my += box * (oy * result[0] + ey * result[2]); mz += box * (oz * result[0] + ez * result[3]);
 		}
-		double pore = componentPores ? 1 : Math.min(poreScale(cell), poreScale(neighbor));
+		double pore = componentPores ? 1 : facePoreScale(positive ? cell : neighbor, positive ? neighbor : cell, axis);
 		result[0] = pore * volume; result[1] = pore * (mx - .5 * volume);
 		result[2] = pore * (my - .5 * volume); result[3] = pore * (mz - .5 * volume);
 	}

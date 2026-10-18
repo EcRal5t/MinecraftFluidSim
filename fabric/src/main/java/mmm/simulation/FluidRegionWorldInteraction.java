@@ -146,7 +146,7 @@ final class FluidRegionWorldInteraction {
 			List<FluidDomain.MaterialPortion> displacedMaterials = new ArrayList<>();
 			if (displacedMaterialVolume != null) for (int material = 0;
 					material < displacedMaterialVolume.length; material++) {
-				if (displacedMaterialVolume[material] > 0.0 && displacedMaterialMass[material] > 0.0) {
+				if (displacedMaterialVolume[material] > 0.0) {
 					displacedMaterials.add(new FluidDomain.MaterialPortion(material,
 							displacedMaterialVolume[material], displacedMaterialMass[material]));
 				}

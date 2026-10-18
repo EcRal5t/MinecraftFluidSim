@@ -1,8 +1,11 @@
 package mmm.fluid;
 
+import mmm.inventory.LiquidCellInventory;
+
 import mmm.thermal.FiniteDeviceExchangeCoordinator;
 import mmm.thermal.LiquidEnergyColumn;
 import mmm.thermal.ThermalCarrierContext;
+import mmm.thermal.ThermalOwnerSnapshot;
 
 import mmm.chemistry.ChemicalMixtureRecord;
 import mmm.chemistry.ChemicalParcelStore;
@@ -53,13 +56,13 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 	/** Auditable exact ledger for a stable ordinal range, used immediately after planned external insertion. */
 	public ChemicalTransferLedger chemicalLedgerForMarkerRange(int fromInclusive, int toExclusive) {
 		if (chemicalParcels == null) throw new IllegalStateException("Chemistry is not bound");
-		if (fromInclusive < 0 || toExclusive < fromInclusive || toExclusive > particles.count()) {
+		if (fromInclusive < 0 || toExclusive < fromInclusive || toExclusive > liquidCells.physicalSize()) {
 			throw new IndexOutOfBoundsException("Invalid chemical marker range");
 		}
 		ChemicalTransferLedger.Builder result = ChemicalTransferLedger.builder(chemicalParcels.registry());
 		for (int marker = fromInclusive; marker < toExclusive; marker++) {
-			result.add(materialRegistry.material(particles.materialHandle(marker)).id(), chemicalParcels.indicator(marker),
-					particles.volume(marker), particles.massUnits(marker), chemicalParcels.record(marker));
+			result.add(materialRegistry.material(liquidCells.physicalStockAt(marker).key().material()).id(), liquidCells.physicalStockAt(marker).indicator(),
+					(float) liquidCells.physicalStockAt(marker).volumeFraction(), liquidCells.physicalStockAt(marker).massUnits(), liquidCells.physicalStockAt(marker).mixture());
 		}
 		return result.build();
 	}
@@ -87,15 +90,15 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		Arrays.fill(dominantPhase, -1);
 		Arrays.fill(dominantVolume, -1.0F);
 		Arrays.fill(dominantMarker, Integer.MAX_VALUE);
-		for (int marker = 0; marker < particles.count(); marker++) {
-			int cell = particleCellIndex(marker);
-			float candidate = particles.volume(marker);
+		for (int marker = 0; marker < liquidCells.physicalSize(); marker++) {
+			int cell = liquidCells.physicalStockAt(marker).key().cell();
+			float candidate = (float) liquidCells.physicalStockAt(marker).volumeFraction();
 			if (candidate > dominantVolume[cell]
 					|| candidate == dominantVolume[cell] && marker < dominantMarker[cell]) {
 				dominantVolume[cell] = candidate;
 				dominantMarker[cell] = marker;
 				dominantPhase[cell] = chemicalParcels.registry().phaseHandleForMaterial(
-						materialRegistry.material(particles.materialHandle(marker)).id());
+						materialRegistry.material(liquidCells.physicalStockAt(marker).key().material()).id());
 			}
 		}
 		IndicatorAimSeed seed = resolveIndicatorAimSeed(requestedStart, dominantPhase, maxScannedCells);
@@ -107,13 +110,13 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		}
 
 		int[] cellHead = new int[cellCount];
-		int[] markerNext = new int[particles.count()];
+		int[] markerNext = new int[liquidCells.physicalSize()];
 		boolean[] compatible = new boolean[cellCount];
 		Arrays.fill(cellHead, -1);
-		for (int marker = particles.count() - 1; marker >= 0; marker--) {
-			String materialId = materialRegistry.material(particles.materialHandle(marker)).id();
+		for (int marker = liquidCells.physicalSize() - 1; marker >= 0; marker--) {
+			String materialId = materialRegistry.material(liquidCells.physicalStockAt(marker).key().material()).id();
 			if (chemicalParcels.registry().phaseHandleForMaterial(materialId) != targetPhase) continue;
-			int cell = particleCellIndex(marker);
+			int cell = liquidCells.physicalStockAt(marker).key().cell();
 			markerNext[marker] = cellHead[cell];
 			cellHead[cell] = marker;
 			compatible[cell] = true;
@@ -131,7 +134,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			if (++scanned > maxScannedCells) return IndicatorEditResult.rejected("Indicator scan budget exceeded");
 			for (int marker = cellHead[cell]; marker >= 0; marker = markerNext[marker]) {
 				affected.add(marker);
-				cellVolume += particles.volume(marker);
+				cellVolume += (float) liquidCells.physicalStockAt(marker).volumeFraction();
 			}
 			double cubicMeters = unitScale.cubicMeters(cellVolume);
 			if (indicated && cubicMeters > maximumAddedVolumeCubicMeters) {
@@ -149,7 +152,17 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			if (z + 1 < sizeZ) enqueueIndicatorNeighbor(cell, cellIndex(x, y, z + 1), 0, 0, 1, compatible, visited, queue);
 		}
 		int changed = 0;
-		for (int marker : affected) if (chemicalParcels.updateIndicator(marker, indicated)) changed++;
+		var edits = new ArrayList<LiquidCellInventory.Edit>();
+		for (int ordinal : affected) {
+			var stock = liquidCells.physicalStockAt(ordinal);
+			if (stock.indicator() != indicated) {
+				edits.add(new LiquidCellInventory.Edit(stock.key(), new LiquidCellInventory.Stock(stock.key(), stock.volume(), stock.massUnits(),
+						stock.mixture(), stock.internalEnergy(), indicated)));
+				changed++;
+			}
+		}
+		liquidCells.planEdits(edits).commit();
+
 		double cubicMeters = unitScale.cubicMeters(cellVolume);
 		return new IndicatorEditResult(true, scanned, changed, cubicMeters, null);
 	}
@@ -235,13 +248,18 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		ChemicalParcelStore candidate = new ChemicalParcelStore(
 				registry, unitScale, maximumParticleCount, cellCount);
 		for (FluidMaterial material : materialRegistry.materials()) registry.phaseHandleForMaterial(material.id());
-		for (int marker = 0; marker < particles.count(); marker++) {
-			candidate.assignDefault(marker, materialRegistry.material(particles.materialHandle(marker)).id(),
-					particles.volume(marker), config.cellSize(), particles.massUnits(marker), false);
+		var additions = new ArrayList<LiquidCellInventory.Stock>();
+		for (var stock : liquidCells.stocks()) {
+			var mixture = candidate.defaultRecord(materialRegistry.material(stock.key().material()).id(),
+					stock.volumeFraction(), config.cellSize(), stock.massUnits(), stock.indicator());
+			additions.add(new LiquidCellInventory.Stock(stock.key(), stock.volume(), stock.massUnits(), mixture, stock.internalEnergy(), stock.indicator()));
 		}
+		var inventory = new LiquidCellInventory(cellCount, registry);
+		inventory.planAdditions(additions).commit();
+		liquidCells = inventory;
 		chemicalParcels = candidate;
-		chemicalPreviousCells = new int[maximumParticleCount];
-		chemicalMovingMarkers = new int[maximumParticleCount];
+		for (var stock : liquidCells.stocks()) chemicalParcels.markDirtyCell(stock.key().cell());
+		domain().markCellInventoryChanged();
 		bindSolidCompositionPoolIfReady();
 	}
 
@@ -259,7 +277,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		if (!prepareThermalBinding(registry, liquidRegistry, initialTemperatureK)) return;
 		gasTopologyCoordinator.refresh();
 		thermalState = FluidThermalBinding.create(registry, materialRegistry, initialTemperatureK,
-				particles.capacity(), sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), gasState.network,
+				liquidCells.physicalSize(), sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), gasState.network,
 				maximumTransportSubsteps);
 		finishThermalBinding();
 	}
@@ -294,7 +312,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		}
 		refreshCoherentOccupancy();
 		if (thermalState.coherentPhases().groupCount() > 0) gridDirty = true;
-		else particleToGridStage.rebuildPressureGeometry();
+		else cellMacStage.rebuildGeometry();
 		if (granularState != null) granularState.inventory.bindThermalEnergy(thermalGranularAdapter());
 	}
 
@@ -308,12 +326,12 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 				return new GranularEnergyColumn.DepositKey(cell, material, composition);
 			}
 			@Override public boolean canActiveMerge(int first, int second, GranularParcelStore.Parcel merged,
-					mmm.granular.SolidCompositionRecord composition) {
+					mmm.granular.SolidCompositionRecord composition, SignedDyadic heat) {
 				return thermalState.canActiveMerge(first, second, merged.materialHandle(), merged.mass(),
-						composition == null ? Map.of() : composition.stableAmounts(granularState.compositions.registry()));
+						composition == null ? Map.of() : composition.stableAmounts(granularState.compositions.registry()), heat);
 			}
-			@Override public void commitActiveMerge(int first, int second) {
-				thermalState.commitActiveMerge(first, second);
+			@Override public void commitActiveMerge(int first, int second, SignedDyadic heat) {
+				thermalState.commitActiveMerge(first, second, heat);
 			}
 			@Override public GranularInventory.EnergyPlan planDepositWake(
 					int cell, int material, int composition, long takenMassUnits, long totalMassUnits
@@ -336,7 +354,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 	) {
 		if (state == null || registry == null) throw new IllegalArgumentException("Thermal restore state/registry is missing");
 		if (materialRegistry == null) throw new IllegalStateException("Thermal restore requires restored material state");
-		state.requireCompatible(sizeX, sizeY, sizeZ, config.cellSize(), particles.count());
+		state.requireCompatible(sizeX, sizeY, sizeZ, config.cellSize(), liquidCells.physicalSize());
 		if (!state.thermalRegistryFingerprint().equals(registry.fingerprint())) {
 			throw new IllegalArgumentException("Thermal handoff registry identity mismatch");
 		}
@@ -347,7 +365,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			throw new IllegalStateException("Thermal restore target is already bound");
 		}
 		ThermalDomainState candidate = FluidThermalBinding.createRestoreTarget(registry, materialRegistry, initialTemperature,
-				particles.capacity(), sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), gasState.network,
+				liquidCells.physicalSize(), sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), gasState.network,
 				maximumTransportSubsteps, state.copyInternalEnergy());
 		FluidThermalBinding.restore(candidate, state, thermalMarkerContext(), gasState.network);
 		thermalState = candidate;
@@ -359,6 +377,30 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			gridDirty = true;
 			throw failure;
 		}
+	}
+
+	/** Restores the independent thermal owners while retaining the liquid cell inventory's U. */
+	public void restoreThermalOwnerState(ThermalOwnerSnapshot state, ThermalRegistry registry, int maximumTransportSubsteps) {
+		if (state == null || registry == null || materialRegistry == null)
+			throw new IllegalArgumentException("Thermal owner restore requires liquid cells and registries");
+		if (!state.registryFingerprint().equals(registry.fingerprint()))
+			throw new IllegalArgumentException("Thermal owner registry identity differs");
+		validateCoherentRestoreCapacity(state.coherentGroups());
+		if (!prepareThermalBinding(registry, materialRegistry, state.insertionTemperatureK()))
+			throw new IllegalStateException("Thermal restore target is already bound");
+		var candidate = FluidThermalBinding.createOwnerRestoreTarget(registry, materialRegistry, state.insertionTemperatureK(),
+				liquidCells.physicalSize(), sizeX, sizeY, sizeZ, config.cellSize(), thermalMarkerContext(), gasState.network,
+				maximumTransportSubsteps);
+		candidate.restoreOwnerState(state, thermalMarkerContext(), gasState.network);
+		thermalState = candidate;
+		finishThermalBinding();
+	}
+	public void restoreThermalOwnerState(ThermalOwnerSnapshot state, ThermalRegistry registry) {
+		restoreThermalOwnerState(state, registry, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+	}
+	public ThermalOwnerSnapshot exportThermalOwnerState() {
+		if (thermalState == null) throw new IllegalStateException("Thermal owners are not bound");
+		return thermalState.exportOwnerState();
 	}
 
 	void validateCoherentRestoreCapacity(List<CoherentPhaseStore.Group> groups) {
@@ -549,22 +591,43 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 
 	ThermalCarrierContext createThermalMarkerContext() {
 		return new ThermalCarrierContext() {
-			@Override public int markerCount() { return particles.count(); }
-			@Override public int cell(int marker) { return particleCellIndex(marker); }
-			@Override public void prepareObservationSupport() { ensureInventoryGrid(); }
-			@Override public void observationSupport(int marker, SupportConsumer consumer) {
-				LiquidThermalSupport.observe(FluidDomainCapabilities.this, marker, consumer);
+			private LiquidCellInventory.Stock stock(int ordinal) { return liquidCells.physicalStocks().get(ordinal); }
+			@Override public int markerCount() { return liquidCells.physicalStocks().size(); }
+			@Override public double liquidInternalEnergy(int ordinal) { return stock(ordinal).internalEnergy(); }
+			@Override public long liquidInventoryRevision() { return liquidCells.revision(); }
+			@Override public void setLiquidInternalEnergy(int ordinal, double energy) {
+				var before = stock(ordinal);
+				var after = new LiquidCellInventory.Stock(before.key(), before.volume(), before.massUnits(),
+						before.mixture(), energy, before.indicator());
+				liquidCells.planEdits(List.of(new LiquidCellInventory.Edit(before.key(), after))).commit();
 			}
-			@Override public int nextMarkerInCell(int cell, int after) { return cellInventory.nextMarkerInCell(cell, after); }
-			@Override public int fluidMaterialHandle(int marker) { return particles.materialHandle(marker); }
-			@Override public double mass(int marker) { return particles.mass(marker); }
-			@Override public double volume(int marker) { return particles.volume(marker); }
-			@Override public ChemicalMixtureRecord mixture(int marker) {
-				return chemicalParcels == null ? null : chemicalParcels.record(marker);
+			@Override public void setLiquidInternalEnergies(double[] energies) {
+				var stocks = liquidCells.physicalStocks();
+				if (energies == null || energies.length != stocks.size()) throw new IllegalArgumentException("Liquid energy count differs from inventory");
+				var edits = new ArrayList<LiquidCellInventory.Edit>();
+				for (int ordinal = 0; ordinal < energies.length; ordinal++) {
+					var before = stocks.get(ordinal);
+					if (Double.doubleToLongBits(before.internalEnergy()) != Double.doubleToLongBits(energies[ordinal]))
+						edits.add(new LiquidCellInventory.Edit(before.key(), new LiquidCellInventory.Stock(before.key(), before.volume(),
+							before.massUnits(), before.mixture(), energies[ordinal], before.indicator())));
+				}
+				liquidCells.planEdits(edits).commit();
 			}
-			@Override public ChemicalRegistry chemicalRegistry() {
-				return chemicalParcels == null ? null : chemicalParcels.registry();
+			@Override public int cell(int ordinal) { return stock(ordinal).key().cell(); }
+			@Override public int nextMarkerInCell(int cell, int after) {
+				var stocks = liquidCells.physicalStocks();
+				int low = Math.max(0, after + 1), high = stocks.size();
+				if (after < 0) while (low < high) {
+					int middle = (low + high) >>> 1;
+					if (stocks.get(middle).key().cell() < cell) low = middle + 1; else high = middle;
+				}
+				return low < stocks.size() && stocks.get(low).key().cell() == cell ? low : -1;
 			}
+			@Override public int fluidMaterialHandle(int ordinal) { return stock(ordinal).key().material(); }
+			@Override public double mass(int ordinal) { return unitScale.normalizedMass(stock(ordinal).massUnits()); }
+			@Override public double volume(int ordinal) { return stock(ordinal).volumeFraction(); }
+			@Override public ChemicalMixtureRecord mixture(int ordinal) { return stock(ordinal).mixture(); }
+			@Override public ChemicalRegistry chemicalRegistry() { return liquidCells.chemicalRegistry(); }
 			@Override public int granularMaterialCount() {
 				return granularState == null ? 0 : granularState.registry.materials().size();
 			}
@@ -638,9 +701,6 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		return thermalState.temperature(marker, thermalMarkerContext());
 	}
 
-	FlipParticleReseeder.ThermalAdapter thermalReseedAdapter() {
-		return FluidThermalBinding.reseedAdapter(thermalState, thermalMarkerContext());
-	}
 
 	double thermalFaceArea(int x, int y, int z, int axis) {
 		float aperture = switch (axis) {
@@ -664,13 +724,28 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 	}
 
 	double thermalOccupiedFaceFraction(int cell, int direction) {
+		ensurePressureGeometry();
 		double geometricOpen = geometry.cutCells.openCellVolume(cell);
-		if (!(geometricOpen > 0.0)) return 0.0;
-		double solidVolume = granularCoupling == null ? 0.0
-				: SolidVolume.toCellVolume(granularCoupling.solidSvq(cell));
-		double solidFraction = Math.max(0.0, Math.min(1.0, solidVolume / geometricOpen));
-		double liquidCoverage = freeSurfaceGeometry.liquidFaceFraction(cell, direction);
-		return solidFraction + (1.0 - solidFraction) * liquidCoverage;
+		if (!(geometricOpen > 0)) return 0;
+		double solidVolume = granularCoupling == null ? 0 : SolidVolume.toCellVolume(granularCoupling.solidSvq(cell));
+		double fallback = Math.max(0, 1 - solidVolume / geometricOpen);
+		int axis = direction / 2, side = direction & 1, first = (axis + 1) % 3, second = (axis + 2) % 3;
+		int pieces = 0; double occupied = 0;
+		for (int micro = 0; micro < 8; micro++) if ((micro >> axis & 1) == side && (geometry.cutCells.mask(cell) & 1 << micro) == 0) {
+			pieces++;
+			double pore = pressurePhaseGeometry.componentPoreScale(cell, micro, fallback);
+			double fraction = pressurePhaseGeometry.liquidFractionExact(cell, micro), wet;
+			if (fraction <= 0) wet = 0;
+			else if (fraction >= 1) wet = 1;
+			else {
+				double a = pressurePhaseGeometry.planeNormal(cell, micro, first), b = pressurePhaseGeometry.planeNormal(cell, micro, second);
+				double offset = pressurePhaseGeometry.planeOffset(cell, micro) - side * pressurePhaseGeometry.planeNormal(cell, micro, axis)
+						- .5 * (micro >> first & 1) * a - .5 * (micro >> second & 1) * b;
+				wet = FlipFreeSurfaceGeometry.unitCubeLiquidFraction(0.0, .5 * a, .5 * b, offset);
+			}
+			occupied += 1 - pore + pore * wet;
+		}
+		return pieces == 0 ? 0 : occupied / pieces;
 	}
 
 	ThermalTransport.FixedBoundary thermalFixedBoundary(int x, int y, int z, int direction) {

@@ -90,7 +90,7 @@ public final class ArchitectureDependencyValidation {
 			throw new AssertionError("Architecture gate failed with " + violations.size() + " violation(s)");
 		}
 		System.out.println("Architecture gate passed: " + sources.size() + " production sources scanned.");
-		CarrierMutationPointInventoryValidation.main(new String[] {root.toString()});
+		LiquidInventoryAuthorityValidation.main(new String[] {root.toString()});
 	}
 
 	/** Optional probe code reaches host runtime/network implementations only through its one adapter. */

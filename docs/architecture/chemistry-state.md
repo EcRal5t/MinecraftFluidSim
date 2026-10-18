@@ -7,14 +7,12 @@
 - **组分状态和反应**
   - 代码入口：
     - [ChemicalParcelStore](../../model/src/main/java/mmm/chemistry/ChemicalParcelStore.java)
-    - [ChemicalReactionAllocation](../../model/src/main/java/mmm/chemistry/ChemicalReactionAllocation.java)
     - [ChemicalReactionStage](../../solver/src/main/java/mmm/fluid/ChemicalReactionStage.java)
   - 测试选择器：`chemistry`
 
-- **粒子上的化学数据**
+- **液体单元组成与提交**
   - 代码入口：
-    - [FlipChemicalParticleState](../../model/src/main/java/mmm/fluid/FlipChemicalParticleState.java)
-    - [CarrierMutationCoordinator](../../solver/src/main/java/mmm/fluid/CarrierMutationCoordinator.java)
+    - [LiquidCellInventory](../../model/src/main/java/mmm/inventory/LiquidCellInventory.java)
   - 测试选择器：`chemistry,reseeding`
 
 - **指示剂操作**
@@ -57,23 +55,23 @@
 exact rational 只接受整数、有限小数或 `numerator/denominator` 文本。解析前先限制 ID 长度、文本长度、小数 scale 和整数位宽，避免用短文本触发无界 `BigInteger` 工作。
 registry 校验未知 ID、重复 ID、非正质量、组成/电荷/质量不守恒、无界解离和预算，然后按 stable ID 排序并对 canonical UTF-8 bytes 计算 SHA-256。
 
-`ExactRational` 在原输入位数上限内规范化分子与分母；二进制幂分母按分子尾零位精确约分，一般分母沿用整数最大公约数。共同的 `ExactRational.add` 先按分母最大公约数预约分，再按规范化结果检查原有位数上限；精确相消直接得到零。气体几何权重求和复用该规则，最终结果的表示预算与定义输入限制各自保持原值。
+`ExactRational` 在原输入位数上限内规范化分子与分母；二进制幂分母按分子尾零位精确约分，一般分母沿用整数最大公约数。共同的 `ExactRational.add` 先按分母最大公约数预约分，再按规范化结果检查原有位数上限；精确相消直接得到零。几何采用浮点权重，物种与单位换算继续遵守精确数量规则。
 
 当前数量上限包括 256 species、64 phases、512 reactions、每 parcel 16 species、每步 131072 次 reaction evaluation 和每区域 `2e15` quanta。这些上限都在分配内存和修改状态前检查。
 
 ## 独立保存的数据
 
-- 液体载体保存机械材料、体积和质量，化学侧列保存整数物种、组成、质量余量和指示剂来源。
+- `LiquidCellInventory.Stock` 直接保存材料、体积、质量、不可变物种组成、质量余量、指示剂与内能。
 - 区域保存逐物种总量、电荷、组成及外部源汇审计。
 - `FluidMixture` 保存机械材料库存，`ChemicalContents` 保存完整化学容器库存，物品按其实际类型保存。
 
 `1 quantum = 1 μmol`，`10^6 quanta = 1 mol`，物种数量为非负整数，数量运算检查溢出。
-每份载体通过独立 handle 引用不可变组成记录；载体索引、材料物相、组成和内能保持同代一致。
+每份单元记录的键为 `(cell, material, supportMask)`，同格各固定开放分量分别保存组成。
+物种、整数质量、质量余量和内能随同一共享通量分配；供体承接可表示性余数，来源总量精确闭合。
 
-`planMarkerRemap` 在写入前验证完整后继记录、来源代次、容量及物种总量，再统一替换组成。
-拆并、删除和新增共同更新相关侧列，反应调度与源汇账保持连续。
-快照采用稳定物种身份与规范记录，恢复先在私有状态中校验完整库存及审计，再绑定活动域。
-组成池的共享记录、缓存和容量增长策略由实现维护。
+反应和指示剂操作通过单元库存计划准备完整后继，在首次写入前验证来源代次、质量、物种和容量。
+化学源汇账、待处理单元和轮转位置随 `FluidDomainState` 单独交接。
+checkpoint 在单元记录中保存组成，manifest 绑定物种 palette、注册表指纹与总账；冷恢复校验后绑定当前注册表。
 
 质量关系为：
 
@@ -89,21 +87,21 @@ massUnits = speciesMassUnits + massResidualUnits
 当前采用强电解质完整解离与同格、同化学物相的瞬时计量反应。
 弱酸、缓冲液、活度和有限速率平衡超出这一模型的支持范围。
 
-平流后按 `(cell, chemicalPhase)` 汇总整数物种，依规范反应顺序求完整化学计量 extent。
+平流后按 `(cell, supportMask, chemicalPhase)` 汇总整数物种，依规范反应顺序求完整化学计量 extent。
 候选联合核对物种、组成、电荷、质量和残差，保持实际材料身份及载体体积。
 反应调度保存待处理单元与轮转位置，预算耗尽后继续保留任务；冷恢复从实际库存重建调度。
 
-反应后的物种按质量份额分配到可表示载体，来源总量保持精确。
-实际搬移质量携带原速度，接收者按输入动量混合，组成、质量与速度在同一计划提交。
-候选质量由原始质量整数加上物种质量整数变化得到，整组总质量精确闭合。
-温度从候选质量、组成和原内能反演，完整计划通过后才写入。
+反应后的整数物种按实际单元记录质量份额分配，保留各记录的质量、体积和 MAC 动量。
+组成质量余量按实际质量减去新物种质量重新计算，物种、实际质量和余量分别精确闭合。
+`ChemicalReactionStage` 以同格、同开放分量、同化学物相为一组，准备一次库存计划与 LTE 内能分配。
+温度由候选质量、组成与原总内能推导，完整预检后联合提交。
 
-容量、物种槽位或有效热状态暂时受限时，保留原库存与待处理单元。
-同格异位置的质量重分配保存线动量，内部角动量和重心变化受空间表示限制。
-固液转移的对应近似见[固液相转移](granular-state.md#固液相转移)，混合耗散按热机械收支范围评价。
+容量、物种槽位或有效热状态暂时受限时，保留原库存和待处理单元。
+物质输运的空间误差随共同单元输运评价；固液转移见[颗粒参考](granular-state.md#固液相转移)。
+
 ### Indicator 与 pH
 
-indicator 添加只标记当时可接受 indicator 的互溶连通 parcel，受 100 m³ 硬上限；超过上限整次拒绝。标记随 advection、reseed 和容器传输，后续混入的未标记 parcel 不自动继承。
+indicator 添加只标记当时可接受 indicator 的互溶连通单元库存，受 100 m³ 硬上限；超过上限整次拒绝。标记随物质平流和容器传输，后续混入的未标记库存 不自动继承。
 
 pH 沿用既定强酸强碱的显示近似：以净 H⁺/OH⁻ 浓度 c（mol/m³）计算 `strength = min(7, log10(1 + c / 0.001))`，酸侧显示 `7-strength`，碱侧显示 `7+strength`。
 这个展示近似保留原显色响应。
@@ -141,16 +139,18 @@ collision escape、`empty`、创造放出和创造装取共用这份完整账本
 
 区域载荷中的 chemistry presence 必须与本次启动的 chemistry 配置完全一致。功能配置变化不会向既有 checkpoint 添加或删除化学原始数据。
 
-容器转移先规划完整的 marker 分配。低于一个默认化学量子的注入体积返回容量受限结果；拆分的尾部与前一份均分，避免生成无法携带物种的微小 marker。抽取若不能把某份 marker 分成两份非空化学载体，则继续查找其他 marker。只有全部体积、质量、物种和内能都可表示时才提交，失败保留原库存。
+容器转移先规划完整的单元库存分配，全部体积、整数质量、物种和内能均可表示时统一提交。
+默认组成的外部来源沿用化学量子的创建限制；已有物质拆分允许部分数值样本的物种列为空，以实际质量及组成质量余量承载对应份额。
+失败保留原库存。
 
-所有外部凝聚相注入同时检查局部开放空间和区域总容量。总容量从几何体积减去整数固体 SVQ 与实际液体库存计算；已有密闭气体的区域必须留下正气腔体积。液体 marker 在局部短暂聚集时，其他单元的空位仍受该全域约束。
+所有外部凝聚相注入同时检查局部开放空间和区域总容量。总容量从几何体积减去整数固体 SVQ 与实际液体库存计算；已有密闭气体的区域必须留下正气腔体积。同次计划中的材料共同抵扣容量，气腔空间按真实拓扑保留。
 
 
 ## 数量容量与最小转移
 
 整数库存每区域上限 2×10¹⁵ μmol，即 2×10⁹ mol；每桶上限 1.024×10¹² μmol，即 1.024×10⁶ mol。
 一桶水约 55555.56 mol，一桶汞为 68000 mol，均在上限内。
-水的一颗化学量子对应 1.8×10⁻⁸ kg，按参考密度折合 1.8×10⁻¹¹ m³；实际操作还受 nanos、液体浮点载体与完整反应批次限制。
+水的一颗化学量子对应 1.8×10⁻⁸ kg，按参考密度折合 1.8×10⁻¹¹ m³；实际操作还受 nanos、整数质量与完整反应批次限制。
 所有加法、乘法及 mol→整数 μmol 换算检查溢出；`ChemicalAmount.quanta` 要求完整 μmol。
 
 油的纯质量记录贯穿组成池、拆并、输运、容器与审计，空物种列随物质保留其质量余量。

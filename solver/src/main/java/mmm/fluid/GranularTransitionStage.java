@@ -42,6 +42,7 @@ final class GranularTransitionStage {
 		long[] previousSolid = access.beginGeometryTransition();
 		GranularDomainState granular = access.granularState();
 		GranularCouplingFields coupling = access.coupling();
+		var compaction = new mmm.granular.GranularInventory.CompactionStats(0, 0);
 		if (granular != null && granular.parcels.count() > 1) {
 			coupling.rebuild(granular.parcels, granular.deposits);
 			long[] compactedSolid = coupling.copySolidSvq();
@@ -50,21 +51,21 @@ final class GranularTransitionStage {
 			for (int i = 0; i < count; i++) future[i] = granular.parcels.parcel(i);
 			// Charge the source capture and bound every pair visit plus its full future-sphere scan.
 			int candidateBudget = (GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP - count) / (count + 1);
-			granular.inventory.compactActive(
+			compaction = granular.inventory.compactActive(
 					index -> access.parcelCell(granular.parcels.parcel(index)),
 					(firstIndex, secondIndex, first, second, merged) -> {
 						if (!mergeFitsActiveSpheres(future, firstIndex, secondIndex, merged)
 								|| !access.planMerge(compactedSolid, first, second, merged)) return false;
 						future[firstIndex] = merged; future[secondIndex] = null;
 						return true;
-					}, access.mergeVelocityDelta(), candidateBudget);
+					}, access.mergeVelocityDelta(), candidateBudget, state.config().gravity());
 			coupling.rebuild(granular.parcels, granular.deposits);
 			if (!coupling.matchesSolidSvq(compactedSolid)) {
 				throw new IllegalStateException("Granular active compaction differs from its exact occupancy plan");
 			}
 		}
 		GranularDepositDynamics dynamics = access.depositDynamics();
-		if (dynamics == null) return new Outcome(EMPTY_STATS, FluidDomain.LiquidTransportStats.INACTIVE);
+		if (dynamics == null) return new Outcome(EMPTY_STATS.withCompaction(compaction), FluidDomain.LiquidTransportStats.INACTIVE);
 		long[] dynamicsSolid = null;
 		GranularDepositDynamics.Stats stats;
 		if (access.hasInventory() || dynamics.dirtyColumnCount() != 0) {
@@ -87,7 +88,7 @@ final class GranularTransitionStage {
 			coupling.clear();
 			access.pressureCoupling(null);
 		}
-		return new Outcome(stats, access.commitGeometryTransition(previousSolid));
+		return new Outcome(stats.withCompaction(compaction), access.commitGeometryTransition(previousSolid));
 	}
 
 	private boolean mergeFitsActiveSpheres(GranularParcelStore.Parcel[] future, int first, int second,

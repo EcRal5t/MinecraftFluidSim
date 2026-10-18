@@ -202,68 +202,6 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 		};
 	}
 
-	/**
-	 * Divergence of the free-surface pressure-jump boundary velocity. This is the RHS source that makes
-	 * the ghost-fluid projection consistent with {@code p_interface = sigma * kappa + p_gas} at every
-	 * open air face; the gas term reads the sealed cavity that owns the air cell and stays exactly
-	 * zero for ambient air, so the liquid-only path is bit-identical whenever no sealed cavity exists.
-	 */
-	float surfaceTensionBoundaryDivergence(int index, float dt) {
-		if (!surfaceTensionActive && !gasState.pressureActive) return 0.0F;
-		int x = index % sizeX;
-		int yz = index / sizeX;
-		int y = yz % sizeY;
-		int z = yz / sizeY;
-		float inverseCell = 1.0F / config.cellSize();
-		float scale = dt / (config.density() * config.cellSize());
-		float result = 0.0F;
-		if (x > 0) result += surfaceTensionBoundaryFace(index, cellIndex(x - 1, y, z), -1, 0, 0, scale, inverseCell);
-		if (x + 1 < sizeX) result += surfaceTensionBoundaryFace(index, cellIndex(x + 1, y, z), 1, 0, 0, scale, inverseCell);
-		if (y > 0) result += surfaceTensionBoundaryFace(index, cellIndex(x, y - 1, z), 0, -1, 0, scale, inverseCell);
-		if (y + 1 < sizeY) result += surfaceTensionBoundaryFace(index, cellIndex(x, y + 1, z), 0, 1, 0, scale, inverseCell);
-		if (z > 0) result += surfaceTensionBoundaryFace(index, cellIndex(x, y, z - 1), 0, 0, -1, scale, inverseCell);
-		if (z + 1 < sizeZ) result += surfaceTensionBoundaryFace(index, cellIndex(x, y, z + 1), 0, 0, 1, scale, inverseCell);
-		return result;
-	}
-
-	float surfaceTensionBoundaryFace(int fluid, int neighbor, int directionX, int directionY, int directionZ,
-	                                         float scale, float inverseCell) {
-		if (!isAir(neighbor)) return 0.0F;
-		float openArea = pressureOpenFaceFromCell(fluid, neighbor, directionX, directionY, directionZ);
-		if (openArea <= 0.0F) return 0.0F;
-		PressureFaceCoupling coupling = pressureFaceCoupling(
-				fluid, neighbor, directionX, directionY, directionZ);
-		float gasPressure = domain().gasPressureOfAirCell(neighbor) - pressureReference;
-		return (float) (-scale * inverseCell * coupling.firstDirichletRhs(openArea, gasPressure));
-	}
-
-	/**
-	 * Unique oriented pressure-face algebra for matrix assembly, jump RHS and velocity projection.
-	 * Open gas is Dirichlet and a finite sealed node may own a lumped pressure unknown, but neither
-	 * has a spatial gas-inertia segment. A future spatial gas solve replaces only this one-sided
-	 * metric construction, not the interface convention or jump algebra.
-	 */
-	PressureFaceCoupling pressureFaceCoupling(
-			int first, int second, int directionX, int directionY, int directionZ
-	) {
-		boolean firstFluid = isFluid(first), secondFluid = isFluid(second);
-		if (!firstFluid && !secondFluid) {
-			throw new IllegalArgumentException("A pressure face must touch a pressure-fluid cell");
-		}
-		double densityScale = !variableDensityActive ? 1.0 : config.density() / (firstFluid && secondFluid
-				? materialFaceEffectiveDensity(first, second) : mechanicalDensity(firstFluid ? first : second));
-		if (firstFluid && secondFluid) return PressureFaceCoupling.centered(densityScale);
-		int fluid = firstFluid ? first : second;
-		int fluidDirectionX = firstFluid ? directionX : -directionX;
-		int fluidDirectionY = firstFluid ? directionY : -directionY;
-		int fluidDirectionZ = firstFluid ? directionZ : -directionZ;
-		PressureFaceCoupling liquidToGas = PressureFaceCoupling.oneSided(
-				densityScale,
-				pressurePhaseGeometry.interfaceTheta(fluid, fluidDirectionX, fluidDirectionY, fluidDirectionZ),
-				tension.surfaceTensionPressure[fluid]);
-		return firstFluid ? liquidToGas : liquidToGas.reversed();
-	}
-
 	float pressureDensityScale(int first, int second) {
 		if (isFluid(first) && isFluid(second)) {
 			return (float) (config.density() / materialFaceEffectiveDensity(first, second));
@@ -355,62 +293,27 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 		throw new IllegalArgumentException("Pressure face direction must be axial");
 	}
 
-	float pressureOpenFaceFromCell(
-			int cell, int neighbor, int directionX, int directionY, int directionZ
-	) {
-		float geometric = openFaceFromCell(cell, directionX, directionY, directionZ);
-		if (pressureGranularCoupling == null || geometric <= 0.0F) return geometric;
-		return geometric * pressureGranularCoupling.faceVoidScale(
-				cell, geometry.cutCells.openCellVolume(cell), neighbor, geometry.cutCells.openCellVolume(neighbor));
+	float pressureOpenFaceFromCell(int cell, int neighbor, int dx, int dy, int dz) {
+		int x = cell % sizeX, y = cell / sizeX % sizeY, z = cell / (sizeX * sizeY);
+		if (dx != 0) return pressureXFaceOpen(x + (dx > 0 ? 1 : 0), y, z);
+		if (dy != 0) return pressureYFaceOpen(x, y + (dy > 0 ? 1 : 0), z);
+		return pressureZFaceOpen(x, y, z + (dz > 0 ? 1 : 0));
 	}
 
 	float pressureXFaceOpen(int x, int y, int z) {
-		float geometric = geometry.cutCells.xFaceOpen(x, y, z);
-		if (pressureGranularCoupling == null || geometric <= 0.0F || x <= 0 || x >= sizeX) return geometric;
-		int left = cellIndex(x - 1, y, z), right = cellIndex(x, y, z);
-		return geometric * pressureGranularCoupling.faceVoidScale(
-				left, geometry.cutCells.openCellVolume(left), right, geometry.cutCells.openCellVolume(right));
+		return pressureGranularCoupling == null ? geometry.cutCells.xFaceOpen(x, y, z)
+				: pressureSystem.solidFaces.open(0, xFaceIndex(x, y, z));
 	}
-
 	float pressureYFaceOpen(int x, int y, int z) {
-		float geometric = geometry.cutCells.yFaceOpen(x, y, z);
-		if (pressureGranularCoupling == null || geometric <= 0.0F || y <= 0 || y >= sizeY) return geometric;
-		int below = cellIndex(x, y - 1, z), above = cellIndex(x, y, z);
-		return geometric * pressureGranularCoupling.faceVoidScale(
-				below, geometry.cutCells.openCellVolume(below), above, geometry.cutCells.openCellVolume(above));
+		return pressureGranularCoupling == null ? geometry.cutCells.yFaceOpen(x, y, z)
+				: pressureSystem.solidFaces.open(1, yFaceIndex(x, y, z));
 	}
-
 	float pressureZFaceOpen(int x, int y, int z) {
-		float geometric = geometry.cutCells.zFaceOpen(x, y, z);
-		if (pressureGranularCoupling == null || geometric <= 0.0F || z <= 0 || z >= sizeZ) return geometric;
-		int back = cellIndex(x, y, z - 1), front = cellIndex(x, y, z);
-		return geometric * pressureGranularCoupling.faceVoidScale(
-				back, geometry.cutCells.openCellVolume(back), front, geometry.cutCells.openCellVolume(front));
+		return pressureGranularCoupling == null ? geometry.cutCells.zFaceOpen(x, y, z)
+				: pressureSystem.solidFaces.open(2, zFaceIndex(x, y, z));
 	}
 
-	int firstOpenSlot(int cell, int first) {
-		int mask = geometry.cutCells.mask(cell);
-		for (int slot = first; slot < 8; slot++) if ((mask & 1 << slot) == 0) return slot;
-		return -1;
-	}
 
-	void spawnParticle(
-			int cellX, int cellY, int cellZ, int slot, float amount, int materialHandle, long massUnits,
-			ChemicalMixtureRecord chemicalMixture, boolean indicator, boolean thermalExternal
-	) {
-		if (particles.count() >= maximumParticleCount) throw new ParticleBudgetExceededException(1, 0);
-		if (!(Float.isFinite(amount) && amount > 0.0F)) throw new IllegalArgumentException("Marker volume must be finite and positive");
-		if (!(massUnits > 0)) throw new IllegalArgumentException("Marker mass must be finite and positive");
-		if (materialRegistry != null) materialRegistry.material(materialHandle);
-		else if (materialHandle != 0) throw new IllegalArgumentException("Material handle requires a bound material registry");
-		if (chemicalParcels != null && chemicalMixture != null)
-			chemicalParcels.requireCompatible(chemicalMixture, materialRegistry.material(materialHandle).id(), indicator);
-		float[] position = markerSlotPosition(cellX, cellY, cellZ, slot);
-		coordinator.appendMarker(
-				CarrierMutationPlan.append(carrierMutationRevision(), particles.count()),
-				cellIndex(cellX, cellY, cellZ), position[0], position[1], position[2],
-				amount, materialHandle, massUnits, chemicalMixture, indicator, thermalExternal);
-	}
 
 	float[] markerSlotPosition(int cellX, int cellY, int cellZ, int slot) {
 		float h = config.cellSize();
@@ -431,221 +334,18 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 		return new float[] {px, py, pz};
 	}
 
-	/** Planned per-marker truncation for one cell, applied later without re-deciding anything. */
-	record MarkerTruncation(
-			int marker, float take, float newVolume, long newMassUnits,
-			ChemicalParcelStore.SplitPlan chemicalPlan, LiquidEnergyColumn.Truncation thermalPlan
-	) { }
-
-	record CellRemovalPlan(float removedVolume, List<MarkerTruncation> markers) { }
-
-	CellRemovalPlan planRemoveParticlesInCell(
-			int cellX, int cellY, int cellZ, float maximum,
-			ChemicalTransferLedger.Builder removedChemistry,
-			FluidDomain.RemovedMaterialLedger removedMaterials, FluidDomain.RemovedThermalEnergy removedThermal
-	) {
-		float h = config.cellSize(), removed = 0.0F;
-		List<MarkerTruncation> plan = new ArrayList<>();
-		for (int i = particles.count() - 1; i >= 0 && removed < maximum; i--) {
-			if ((int) Math.floor(particles.positionX(i) / h) != cellX || (int) Math.floor(particles.positionY(i) / h) != cellY || (int) Math.floor(particles.positionZ(i) / h) != cellZ) continue;
-			float previousVolume = particles.volume(i);
-			float take = Math.min(previousVolume, maximum - removed);
-			long previousMass = particles.massUnits(i);
-			double previousTemperature = thermalState == null ? Double.NaN : domain().thermalMarkerTemperature(i);
-			float newVolume = previousVolume - take;
-			if (newVolume <= 1.0E-6F) {
-				take = previousVolume;
-				newVolume = 0.0F;
-			}
-			long newMass = mmm.units.Mass.portion(previousMass, newVolume, previousVolume);
-			ChemicalParcelStore.SplitPlan chemicalPlan = null;
-			if (chemicalParcels != null) {
-				chemicalPlan = chemicalParcels.planTruncate(
-						i, newVolume, take, newMass, previousMass - newMass);
-				if (removedChemistry != null) removedChemistry.add(
-						materialRegistry.material(particles.materialHandle(i)).id(), chemicalParcels.indicator(i),
-						take, Math.subtractExact(previousMass, newMass), chemicalPlan.removed());
-			}
-			LiquidEnergyColumn.Truncation thermalPlan = domain().planThermalTruncate(i, unitScale.normalizedMass(newMass),
-					chemicalPlan == null ? null : chemicalPlan.kept(), previousTemperature);
-			if (removedMaterials != null) removedMaterials.add(
-					particles.materialHandle(i), take, previousMass - newMass);
-			if (removedThermal != null && thermalPlan != null) removedThermal.add(thermalPlan.removedEnergy());
-			plan.add(new MarkerTruncation(i, take, newVolume, newMass, chemicalPlan, thermalPlan));
-			removed += take;
-		}
-		return new CellRemovalPlan(removed, List.copyOf(plan));
-	}
-
-	void commitRemoveParticlesInCell(int cellX, int cellY, int cellZ, CellRemovalPlan plan) {
-		for (MarkerTruncation entry : plan.markers()) {
-			int i = entry.marker();
-			if (chemicalParcels != null) {
-				chemicalParcels.markDirtyCell(cellIndex(cellX, cellY, cellZ));
-				if (entry.newVolume() > 0.0F) chemicalParcels.commitTruncate(i, entry.chemicalPlan());
-			}
-			particles.setVolume(i, entry.newVolume());
-			particles.setMassUnits(i, entry.newMassUnits());
-			domain().commitThermalTruncate(i, entry.thermalPlan());
-			if (particles.volume(i) <= 1.0E-6F) removeParticle(i);
-		}
-	}
-
-	/**
-	 * Removes up to {@code amount} across the candidate cells as one joint audited removal: every
-	 * cell is planned against the shared escaped-sink ledger first, the joint ledger is validated
-	 * once, and only then are truncations applied and drained markers swept. A rejection on any
-	 * cell therefore leaves every marker untouched.
-	 */
-	float removeVolumeAcrossCells(java.util.List<CellCandidate> candidates, float amount) {
-		ChemicalTransferLedger.Builder removedChemistry = chemicalParcels == null ? null
-				: ChemicalTransferLedger.builder(chemicalParcels.registry());
-		record PlannedCell(int x, int y, int z, CellRemovalPlan plan) { }
-		List<PlannedCell> planned = new ArrayList<>();
-		float remaining = amount;
-		for (CellCandidate candidate : candidates) {
-			int index = candidate.index();
-			int x = index % sizeX, yz = index / sizeX, y = yz % sizeY, z = yz / sizeY;
-			CellRemovalPlan plan = planRemoveParticlesInCell(x, y, z, remaining, removedChemistry, null, null);
-			if (!plan.markers().isEmpty()) planned.add(new PlannedCell(x, y, z, plan));
-			remaining -= plan.removedVolume();
-			if (remaining <= 1.0E-6F) break;
-		}
-		if (removedChemistry != null) chemicalParcels.requireCanRecordEscapedSink(removedChemistry.build());
-		var gas = new LiquidExtractionGasPlan(domain());
-		for (PlannedCell cell : planned) for (MarkerTruncation entry : cell.plan().markers())
-			gas.truncate(entry.marker(), entry.newVolume(), entry.thermalPlan());
-		gas.prepare(null);
-		for (PlannedCell cell : planned) {
-			int dirtyCell = cellIndex(cell.x(), cell.y(), cell.z());
-			for (MarkerTruncation entry : cell.plan().markers()) {
-				int i = entry.marker();
-				if (chemicalParcels != null) {
-					chemicalParcels.markDirtyCell(dirtyCell);
-					if (entry.newVolume() > 0.0F) chemicalParcels.commitTruncate(i, entry.chemicalPlan());
-				}
-				particles.setVolume(i, entry.newVolume());
-				particles.setMassUnits(i, entry.newMassUnits());
-				domain().commitThermalTruncate(i, entry.thermalPlan());
-			}
-		}
-		for (int marker = particles.count() - 1; marker >= 0; marker--) {
-			if (particles.volume(marker) == 0.0F) removeParticle(marker);
-		}
-		if (removedChemistry != null) chemicalParcels.recordEscapedSink(removedChemistry.build());
-		gas.commit();
-		return amount - remaining;
-	}
-
-	/**
-	 * Removes up to {@code maximum} from one cell. Every fallible chemical-sink check runs on the
-	 * planned ledger before the first marker changes; the commit loop itself has no rejections.
-	 */
-	float removeParticlesInCell(int cellX, int cellY, int cellZ, float maximum) {
-		ChemicalTransferLedger.Builder removedChemistry = chemicalParcels == null ? null
-				: ChemicalTransferLedger.builder(chemicalParcels.registry());
-		CellRemovalPlan plan = planRemoveParticlesInCell(cellX, cellY, cellZ, maximum, removedChemistry, null, null);
-		if (removedChemistry != null) chemicalParcels.requireCanRecordEscapedSink(removedChemistry.build());
-		commitRemoveParticlesInCell(cellX, cellY, cellZ, plan);
-		if (removedChemistry != null) chemicalParcels.recordEscapedSink(removedChemistry.build());
-		return plan.removedVolume();
-	}
-
-	float removeParticlesInCell(
-			int cellX, int cellY, int cellZ, float maximum,
-			ChemicalTransferLedger.Builder removedChemistry,
-			FluidDomain.RemovedMaterialLedger removedMaterials, FluidDomain.RemovedThermalEnergy removedThermal
-	) {
-		CellRemovalPlan plan = planRemoveParticlesInCell(cellX, cellY, cellZ, maximum,
-				removedChemistry, removedMaterials, removedThermal);
-		commitRemoveParticlesInCell(cellX, cellY, cellZ, plan);
-		return plan.removedVolume();
-	}
-
-	float removeParticlesInMicroMask(
-			int cellX, int cellY, int cellZ, int microMask,
-			ChemicalTransferLedger.Builder removedChemistry,
-			FluidDomain.RemovedMaterialLedger removedMaterials, FluidDomain.RemovedThermalEnergy removedThermal
-	) {
-		float h = config.cellSize(), removed = 0.0F;
-		for (int particle = particles.count() - 1; particle >= 0; particle--) {
-			if ((int) Math.floor(particles.positionX(particle) / h) != cellX
-					|| (int) Math.floor(particles.positionY(particle) / h) != cellY
-					|| (int) Math.floor(particles.positionZ(particle) / h) != cellZ) continue;
-			float localX = particles.positionX(particle) / h - cellX;
-			float localY = particles.positionY(particle) / h - cellY;
-			float localZ = particles.positionZ(particle) / h - cellZ;
-			int microX = Math.min(1, Math.max(0, (int) Math.floor(localX * 2.0F)));
-			int microY = Math.min(1, Math.max(0, (int) Math.floor(localY * 2.0F)));
-			int microZ = Math.min(1, Math.max(0, (int) Math.floor(localZ * 2.0F)));
-			int bit = 1 << (microX + 2 * (microY + 2 * microZ));
-			if ((microMask & bit) == 0) continue;
-			if (chemicalParcels != null && removedChemistry != null) removedChemistry.add(
-					materialRegistry.material(particles.materialHandle(particle)).id(), chemicalParcels.indicator(particle),
-					particles.volume(particle), particles.massUnits(particle),
-					chemicalParcels.record(particle));
-			if (removedMaterials != null) removedMaterials.add(particles.materialHandle(particle),
-					particles.volume(particle), particles.massUnits(particle));
-			if (removedThermal != null && thermalState != null) {
-				removedThermal.add(thermalState.liquidInternalEnergy(particle));
-			}
-			removed += particles.volume(particle);
-			removeParticle(particle);
-		}
-		return removed;
-	}
-
-
-	float exactVolumeInCell(int cellX, int cellY, int cellZ) {
-		float h = config.cellSize(), result = 0.0F;
-		for (int particle = 0; particle < particles.count(); particle++) {
-			if ((int) Math.floor(particles.positionX(particle) / h) == cellX
-					&& (int) Math.floor(particles.positionY(particle) / h) == cellY
-					&& (int) Math.floor(particles.positionZ(particle) / h) == cellZ) result += particles.volume(particle);
-		}
-		return result;
-	}
-
-	/** Exact raw carrier capacity for transfer planning. */
+	float exactVolumeInCell(int cellX, int cellY, int cellZ) { return (float) liquidCells.exactCellVolume(cellIndex(cellX, cellY, cellZ)).toDouble(); }
 	mmm.units.SignedDyadic[] availableCellVolumes() {
-		var exact = new mmm.units.SignedDyadic[cellCount];
-		Arrays.fill(exact, mmm.units.SignedDyadic.ZERO);
-		float h = config.cellSize();
-		for (int particle = 0; particle < particles.count(); particle++) {
-			int x = (int) Math.floor(particles.positionX(particle) / h);
-			int y = (int) Math.floor(particles.positionY(particle) / h);
-			int z = (int) Math.floor(particles.positionZ(particle) / h);
-			if (inside(x, y, z)) {
-				int cell = cellIndex(x, y, z);
-				exact[cell] = exact[cell].add(mmm.units.SignedDyadic.of(particles.volume(particle)));
-			}
-		}
+		var room = new mmm.units.SignedDyadic[cellCount];
 		for (int cell = 0; cell < cellCount; cell++) {
-			var room = mmm.units.SignedDyadic.of(domain().effectiveOpenCellVolume(cell)).subtract(exact[cell]);
-			exact[cell] = room.significand().signum() <= 0 ? mmm.units.SignedDyadic.ZERO : room;
+			room[cell] = mmm.units.SignedDyadic.of(domain().effectiveOpenCellVolume(cell)).subtract(liquidCells.exactCellVolume(cell));
+			if (room[cell].signum() < 0) throw new IllegalStateException("Liquid exceeds cell capacity");
 		}
-		return exact;
+		return room;
 	}
 
-	void removeParticle(int index) {
-		coordinator.swapRemoveMarker(
-				CarrierMutationPlan.swapRemove(carrierMutationRevision(), particles.count(), index), false);
-	}
 
-	double removeParticleInternalPhase(int index) {
-		return coordinator.swapRemoveMarker(
-				CarrierMutationPlan.swapRemove(carrierMutationRevision(), particles.count(), index), true);
-	}
 
-	void ensureParticleCapacity(int required) {
-		if (required > maximumParticleCount) {
-			throw new ParticleBudgetExceededException(required - particles.count(), maximumParticleCount - particles.count());
-		}
-		if (required <= particles.capacity()) return;
-		int capacity = particles.ensureCapacity(required);
-		markerGrid.ensureMarkerCapacity(capacity);
-		if (thermalState != null) thermalState.ensureCapacity(capacity);
-	}
 
 
 	List<CellCandidate> nearbyCells(int centerX, int centerY, int centerZ, int maxRadius) {
@@ -664,19 +364,14 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 
 	void ensureGrid() {
 		ensurePressureGeometry();
-		if (velocityGridDirty) particleToGridStage.rebuildVelocity();
+		if (velocityGridDirty) cellMacStage.rebuildVelocity();
 	}
-	void ensureInventoryGrid() { if (gridDirty) particleToGridStage.rebuildInventory(); }
+	void ensureInventoryGrid() { if (gridDirty) cellMacStage.rebuildInventory(); }
 	void ensurePressureGeometry() {
 		ensureInventoryGrid();
-		if (pressureGeometryDirty) particleToGridStage.rebuildPressureGeometry();
+		if (pressureGeometryDirty) cellMacStage.rebuildGeometry();
 	}
 	long carrierMutationRevision() { return carrierMutationRevision; }
-	void bumpCarrierMutationRevision() { carrierMutationRevision++; }
-	CarrierMutationCoordinator carrierMutations() { return coordinator; }
-	boolean markerPositionAllowed(float x, float y, float z) {
-		return !particleCollision.centerInSolid(x, y, z);
-	}
 	boolean isFluid(int index) { return projection.pressureFluid[index]; }
 	boolean isAir(int index) { return !geometry.solid[index] && !isFluid(index); }
 	boolean carrierFaceActive(int first, int second, float openArea) {
@@ -778,9 +473,9 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 	}
 	void validateMaterialPortion(FluidDomain.MaterialPortion portion) {
 		if (portion == null || !(Double.isFinite(portion.volume()) && portion.volume() > 0.0
-				&& portion.volume() <= Float.MAX_VALUE && (float) portion.volume() > 0.0F)
-				|| portion.massUnits() <= 0L) {
-			throw new IllegalArgumentException("Material portion ledgers must be finite, positive and float-representable");
+				&& portion.volume() <= Float.MAX_VALUE)
+				|| portion.massUnits() < 0L) {
+			throw new IllegalArgumentException("Material portion volume must be finite and positive, with nonnegative mass");
 		}
 		if (materialRegistry == null) {
 			if (portion.materialHandle() != 0) {

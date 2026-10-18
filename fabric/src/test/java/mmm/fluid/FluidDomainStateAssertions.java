@@ -6,8 +6,8 @@ import mmm.granular.GranularStateSnapshot;
 import java.util.Arrays;
 
 /**
- * Raw-bit structural equality for {@link FluidDomainState} handoffs. Record default equals is
- * not used for any array-bearing field; float/double carriers are compared by their exact bit
+ * Exact inventory and raw MAC/thermal-bit equality for {@link FluidDomainState} handoffs. Record default equals is
+ * not used for any array-bearing field; MAC and thermal columns are compared by their exact bit
  * patterns so capture/restore/candidate refactors cannot hide silent rounding.
  */
 public final class FluidDomainStateAssertions {
@@ -45,16 +45,23 @@ public final class FluidDomainStateAssertions {
 				context + ": precipitation flag changed");
 		require(expected.maximumThermalTransportSubsteps() == actual.maximumThermalTransportSubsteps(),
 				context + ": thermal substep budget changed");
-		switch (expected.carrierKind()) {
-			case PURE -> compareParticles(expected.particles(), actual.particles(), context + " pure carrier");
-			case MATERIAL -> compareMaterials(expected.materials(), actual.materials(),
-					context + " material carrier");
-			case CHEMICAL -> compareChemicals(expected.chemicals(), actual.chemicals(),
-					context + " chemical carrier");
-		}
+		require(expected.sizeX()==actual.sizeX()&&expected.sizeY()==actual.sizeY()&&expected.sizeZ()==actual.sizeZ(),context+": grid changed");
+		require(expected.liquid().stocks().equals(actual.liquid().stocks()),context+": cell inventories changed");
+		require(expected.materialPalette().equals(actual.materialPalette()),context+": material palette changed");
+		require(Arrays.equals(expected.copyCollisionMasks(),actual.copyCollisionMasks()),context+": collision mask changed");
+		requireRawDoubles(expected.momentum().copyX(),actual.momentum().copyX(),context+" MAC X momentum");
+		requireRawDoubles(expected.momentum().copyY(),actual.momentum().copyY(),context+" MAC Y momentum");
+		requireRawDoubles(expected.momentum().copyZ(),actual.momentum().copyZ(),context+" MAC Z momentum");
+		require(java.util.Objects.equals(expected.chemicalRegistry()==null?null:expected.chemicalRegistry().fingerprint(),
+				actual.chemicalRegistry()==null?null:actual.chemicalRegistry().fingerprint()),context+": chemistry definitions changed");
+		require(java.util.Objects.equals(expected.chemicalSource()==null?null:expected.chemicalSource().groups(),
+				actual.chemicalSource()==null?null:actual.chemicalSource().groups()),context+": chemical source changed");
+		require(java.util.Objects.equals(expected.chemicalSink()==null?null:expected.chemicalSink().groups(),
+				actual.chemicalSink()==null?null:actual.chemicalSink().groups()),context+": chemical sink changed");
 		if (includeTransient) {
 			require(Arrays.equals(expected.copyChemicalDirtyCells(), actual.copyChemicalDirtyCells()),
 					context + ": chemical dirty-cell schedule changed");
+			require(expected.chemicalReactionCursor()==actual.chemicalReactionCursor(),context+": reaction cursor changed");
 		}
 		compareGranular(expected.granular(), actual.granular(), context);
 		if (includeTransient) {
@@ -64,7 +71,7 @@ public final class FluidDomainStateAssertions {
 					context + ": granular scheduler presence changed");
 		}
 		compareGas(expected.gas(), actual.gas(), context);
-		compareThermal(expected.thermal(), actual.thermal(), context);
+		compareThermal(expected.thermalOwner(), actual.thermalOwner(), context);
 		comparePendingPhaseVolume(expected.pendingPhaseVolume(), actual.pendingPhaseVolume(), context);
 		if (includeTransient) {
 			requireRawDoublesNullable(expected.copyThermalBoundaryTemperaturesK(),
@@ -72,66 +79,6 @@ public final class FluidDomainStateAssertions {
 			compareCondensedPhasePressure(expected.condensedPhasePressure(),
 					actual.condensedPhasePressure(), context);
 		}
-	}
-
-	private static void compareParticles(FlipParticleState expected, FlipParticleState actual, String context) {
-		require((expected == null) == (actual == null), context + ": presence changed");
-		if (expected == null) return;
-		require(expected.sizeX() == actual.sizeX() && expected.sizeY() == actual.sizeY()
-						&& expected.sizeZ() == actual.sizeZ() && expected.cellSize() == actual.cellSize(),
-				context + ": grid changed");
-		require(expected.particleCount() == actual.particleCount(), context + ": marker count changed");
-		require(Float.compare(expected.totalVolume(), actual.totalVolume()) == 0, context + ": volume ledger changed");
-		require(Float.compare(expected.centerOfMassX(), actual.centerOfMassX()) == 0,
-				context + ": center of mass changed");
-		require(expected.solidCellCount() == actual.solidCellCount(), context + ": solid cell count changed");
-		requireRawFloats(expected.copyPositionVolume(), actual.copyPositionVolume(), context + " position/volume");
-		requireRawFloats(expected.copyParticleVelocities(), actual.copyParticleVelocities(), context + " velocity");
-		require(Arrays.equals(expected.copyCollisionMicroMasks(), actual.copyCollisionMicroMasks()),
-				context + ": collision micro mask changed");
-	}
-
-	private static void compareMaterials(FlipMaterialParticleState expected, FlipMaterialParticleState actual,
-	                                     String context) {
-		require((expected == null) == (actual == null), context + ": presence changed");
-		if (expected == null) return;
-		require(expected.sizeX() == actual.sizeX() && expected.sizeY() == actual.sizeY()
-						&& expected.sizeZ() == actual.sizeZ() && expected.cellSize() == actual.cellSize(),
-				context + ": grid changed");
-		require(expected.particleCount() == actual.particleCount(), context + ": marker count changed");
-		require(expected.totalVolume() == actual.totalVolume(), context + ": total volume changed");
-		require(expected.totalMassUnits() == actual.totalMassUnits(),
-				context + ": total mass changed");
-		require(expected.materials().equals(actual.materials()), context + ": material palette changed");
-		requireRawFloats(expected.copyPositionVolume(), actual.copyPositionVolume(), context + " position/volume");
-		requireRawFloats(expected.copyParticleVelocities(), actual.copyParticleVelocities(), context + " velocity");
-		require(Arrays.equals(expected.copySolidMask(), actual.copySolidMask()),
-				context + ": collision micro mask changed");
-		require(java.util.Arrays.equals(expected.copyParticleMassUnits(), actual.copyParticleMassUnits()), context + " marker mass");
-		require(Arrays.equals(expected.copyMaterialPaletteIndex(), actual.copyMaterialPaletteIndex()),
-				context + ": material palette index changed");
-	}
-
-	private static void compareChemicals(FlipChemicalParticleState expected, FlipChemicalParticleState actual,
-	                                     String context) {
-		require((expected == null) == (actual == null), context + ": presence changed");
-		if (expected == null) return;
-		compareMaterials(expected.materials(), actual.materials(), context + " chemical base");
-		require(expected.registryFingerprint().equals(actual.registryFingerprint()),
-				context + ": chemical registry fingerprint changed");
-		require(expected.speciesPalette().equals(actual.speciesPalette()), context + ": species palette changed");
-		require(expected.mixtures().equals(actual.mixtures()), context + ": mixture composition changed");
-		require(Arrays.equals(expected.copyMarkerMixtureIndex(), actual.copyMarkerMixtureIndex()),
-				context + ": marker mixture index changed");
-		require(Arrays.equals(expected.copyIndicator(), actual.copyIndicator()), context + ": indicator column changed");
-		require(Arrays.equals(expected.copySpeciesTotals(), actual.copySpeciesTotals()),
-				context + ": species totals changed");
-		require(expected.residualLedgerUnits() == actual.residualLedgerUnits(),
-				context + ": mass residual ledger changed");
-		require(expected.externalSource().groups().equals(actual.externalSource().groups()),
-				context + ": chemical source changed");
-		require(expected.escapedSink().groups().equals(actual.escapedSink().groups()),
-				context + ": chemical sink changed");
 	}
 
 	private static void compareGranular(GranularStateSnapshot expected, GranularStateSnapshot actual, String context) {
@@ -187,14 +134,13 @@ public final class FluidDomainStateAssertions {
 		require(expected.escapedSink().equals(actual.escapedSink()), context + ": gas sink changed");
 	}
 
-	private static void compareThermal(FlipThermalParticleState expected, FlipThermalParticleState actual,
+	private static void compareThermal(mmm.thermal.ThermalOwnerSnapshot expected, mmm.thermal.ThermalOwnerSnapshot actual,
 	                                   String context) {
 		require((expected == null) == (actual == null), context + ": thermal presence changed");
 		if (expected == null) return;
-		require(expected.particleCount() == actual.particleCount(), context + ": thermal carrier count changed");
-		require(expected.thermalRegistryFingerprint().equals(actual.thermalRegistryFingerprint()),
+		require(Double.doubleToRawLongBits(expected.insertionTemperatureK())==Double.doubleToRawLongBits(actual.insertionTemperatureK()),context+": insertion temperature changed");
+		require(expected.registryFingerprint().equals(actual.registryFingerprint()),
 				context + ": thermal registry fingerprint changed");
-		requireRawDoubles(expected.copyInternalEnergy(), actual.copyInternalEnergy(), context + " liquid U");
 		requireRawDoubles(expected.copyActiveParcelEnergy(), actual.copyActiveParcelEnergy(), context + " parcel U");
 		requireRawDoubles(expected.copyDepositEnergy(), actual.copyDepositEnergy(), context + " deposit U");
 		requireRawDoubles(expected.copyGasNodeEnergy(), actual.copyGasNodeEnergy(), context + " gas node U");

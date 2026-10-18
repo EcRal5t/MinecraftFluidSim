@@ -23,25 +23,24 @@ public final class CapillaryNeckValidation {
 
 	private static Result run(int resolution, float dt) {
 		long caseStart = System.nanoTime(); FluidDomain d = initialize(resolution, dt); Observer observer = new Observer(d.cellCount);
-		SignedDyadic v0 = SignedDyadic.sum(d.particles.directArrays().volume, d.particleCount());
-		SignedDyadic m0 = SignedDyadic.of(mmm.units.Mass.sum(d.particles.directArrays().massUnits, d.particleCount()), 0), previousM = m0;
-		System.out.printf("fixed wall neck initialPhysicalStateHash=%s excludesDt=true rawPositionsVolumesVelocitiesMassMaterialPhase=true%n", initialHash(d));
+		SignedDyadic v0 = d.liquidCells.exactVolume();
+		SignedDyadic m0 = SignedDyadic.of(d.liquidCells.massUnits(), 0);
+		System.out.printf("fixed wall neck initialPhysicalStateHash=%s excludesDt=true cellVolumesMassMaterialAndMacMomentum=true%n", initialHash(d));
 		int factor = dt == BASE_DT ? 1 : 2, search = (int) Math.floor(8 * TC / BASE_DT) * factor, confirmation = 32 * factor;
 		int limit = search + confirmation, candidateStart = -1, first = -1, episodes = 0, reconnections = 0, longest = 0;
-		int peakMarkers = d.particleCount(), peakCells = 0, peakCellMarkers = 0, completed = 0;
-		double bound = 0, stepBound = 0, massUpper = 2 * m0.toDouble(); boolean persistent = false;
+		int peakMarkers = d.liquidCells.physicalSize(), peakCells = 0, peakCellMarkers = 0, completed = 0;
+		boolean persistent = false;
 		double[] costs = new double[limit]; TreeMap<Integer, Integer> substeps = new TreeMap<>(); var backend = new CpuFluidSolverBackend();
 		System.out.printf("fixed wall neck fixture R/h=%d h=%g dt=%g R=%g lambda=%g epsilon=%g sigma=%g mu=.001002 rho=%g transverseWidth=%g tc=%g search=%d confirmation=%d confirmationSeconds=%g thermalBound=false backend=mmm:cpu-flip%n",
 				resolution, d.config.cellSize(), dt, R, LENGTH, EPS, SIGMA, RHO, 2.5 * R, TC, search, confirmation, confirmation * (double) dt);
 		for (int step = 0; step <= limit; step++) {
 			completed = step;
-			check(v0.equals(SignedDyadic.sum(d.particles.directArrays().volume, d.particleCount())), "Neck exact V changed at logical step " + step);
-			SignedDyadic mass = SignedDyadic.of(mmm.units.Mass.sum(d.particles.directArrays().massUnits, d.particleCount()), 0);
-			check(Math.abs(mass.subtract(previousM).toDouble()) <= stepBound && Math.abs(mass.subtract(m0).toDouble()) <= bound,
-					"Neck M exceeded its per-step or cumulative storage bound");
-			check(bound < m0.toDouble() && d.particleCount() <= d.maximumParticleCount(), "Neck exhausted mass premise or actual carrier budget");
+			check(v0.equals(d.liquidCells.exactVolume()), "Neck exact V changed at logical step " + step);
+			SignedDyadic mass = SignedDyadic.of(d.liquidCells.massUnits(), 0);
+
+			check(mass.equals(m0),"Neck changed exact integer mass");
 			d.ensureInventoryGrid(); Topology topology = observer.observe(d); Mechanics mechanics = mechanics(d);
-			peakMarkers = Math.max(peakMarkers, d.particleCount()); peakCells = Math.max(peakCells, topology.occupied);
+			peakMarkers = Math.max(peakMarkers, d.liquidCells.physicalSize()); peakCells = Math.max(peakCells, topology.occupied);
 			peakCellMarkers = Math.max(peakCellMarkers, topology.maxCellMarkers);
 			if (step == 0) { check(!topology.separated, "Neck started separated"); observer.report(d, topology, mechanics, "initial", step, dt); }
 			if (step == Math.round(1 / dt)) observer.report(d, topology, mechanics, "common1s", step, dt);
@@ -59,42 +58,36 @@ public final class CapillaryNeckValidation {
 			if (persistent || step == limit || step >= search && candidateStart < 0) {
 				observer.report(d, topology, mechanics, persistent ? "confirmation" : "final", step, dt); break;
 			}
-			previousM = mass; long begin = System.nanoTime();
+			long begin = System.nanoTime();
 			var evaluated = backend.evaluate(new FluidStepRequest(step, d.captureAuthoritativeState(), List.of(), false, 0, true));
 			var stats = evaluated.stats(); d = evaluated.claimPreparedCpuDomain(); costs[step] = (System.nanoTime() - begin) / 1e6;
 			check(d != null, "CPU backend omitted the prepared neck candidate"); substeps.merge(stats.substeps(), 1, Integer::sum);
-			stepBound = (stats.substeps() + 1.0) * 2 * d.maximumParticleCount() * Math.ulp(massUpper); bound += stepBound;
-			check(bound < m0.toDouble(), "Neck cumulative storage bound exhausted total-mass premise");
 		}
 		cost(resolution, dt, "all", costs, 0, completed); cost(resolution, dt, "first5LogicalSteps", costs, 0, Math.min(5, completed)); cost(resolution, dt, "afterFirst5LogicalSteps", costs, Math.min(5, completed), completed);
-		SignedDyadic deltaM = SignedDyadic.of(mmm.units.Mass.sum(d.particles.directArrays().massUnits, d.particleCount()), 0).subtract(m0);
-		System.out.printf("fixed wall neck result R/h=%d dt=%g persistent=%s firstStep=%d persistentStart=%d confirmationStep=%d episodes=%d reconnections=%d longestCompleteSteps=%d markers=%d peakMarkers=%d peakOccupied=%d peakCellMarkers=%d deltaM=%g kg cumulativeMbound=%g kg acceptedSubstepHistogram=%s caseWallMs=%g snapshotAndRetriesIncludedInStepCost=true observerExcludedFromStepCost=true discardedAttemptSubstepsUnavailable=true%n",
-				resolution, dt, persistent, first, candidateStart, completed, episodes, reconnections, longest, d.particleCount(), peakMarkers, peakCells, peakCellMarkers,
-				d.unitScale.signedKilograms(deltaM.toDouble()), d.unitScale.kilograms(bound), substeps, (System.nanoTime() - caseStart) / 1e6);
+		SignedDyadic deltaM = SignedDyadic.of(d.liquidCells.massUnits(), 0).subtract(m0);
+		System.out.printf("fixed wall neck result R/h=%d dt=%g persistent=%s firstStep=%d persistentStart=%d confirmationStep=%d episodes=%d reconnections=%d longestCompleteSteps=%d stocks=%d peakStocks=%d peakOccupied=%d peakCellStocks=%d deltaM=%g kg acceptedSubstepHistogram=%s caseWallMs=%g snapshotAndRetriesIncludedInStepCost=true observerExcludedFromStepCost=true discardedAttemptSubstepsUnavailable=true%n",
+				resolution, dt, persistent, first, candidateStart, completed, episodes, reconnections, longest, d.liquidCells.physicalSize(), peakMarkers, peakCells, peakCellMarkers,
+				deltaM.toDouble()*mmm.units.Mass.kilograms(1), substeps, (System.nanoTime() - caseStart) / 1e6);
 		return new Result(persistent, candidateStart < 0 ? Double.NaN : candidateStart * (double) dt, persistent ? completed * (double) dt : Double.NaN);
 	}
 
 	private static FluidDomain initialize(int resolution, float dt) {
 		float h = (float) (R / resolution); int nx = 9 * resolution, ny = 5 * resolution / 2;
 		FluidDomain d = new FluidDomain(nx, ny, ny, new FluidSolverConfig(h, 1000, 0, dt, 800, 1e-7F, .45F, .002F, .8F), nx * ny * ny * 8);
-		List<float[]> points = new ArrayList<>(); double integrated = 0, raw = 0;
-		for (int z = 0; z < ny; z++) for (int y = 0; y < ny; y++) for (int x = 0; x < nx; x++) for (int slot = 0; slot < 8; slot++) {
-			double width = h / 2.0, a = (x + .5 * (slot & 1)) * h, b = (y + .5 * (slot >> 1 & 1)) * h, c = (z + .5 * (slot >> 2 & 1)) * h;
-			double[] m = box(a, b, c, width); if (m[0] <= 0) continue;
-			float v = (float) (m[0] / (h * h * h)); if (v <= 0) continue;
-			points.add(new float[] {(float) (a + width * m[1] / m[0]), (float) (b + width * m[2] / m[0]), (float) (c + width * m[3] / m[0]), v});
-			integrated += m[0]; raw += v;
+		float[] fractions=new float[d.cellCount];double integrated=0;
+		for(int z=0;z<ny;z++)for(int y=0;y<ny;y++)for(int x=0;x<nx;x++) {
+			double volume=box(x*(double)h,y*(double)h,z*(double)h,h)[0];integrated+=volume;
+			fractions[d.cellIndex(x,y,z)]=(float)Math.clamp(volume/(h*(double)h*h),0,1);
 		}
-		float[] pv = new float[4 * points.size()]; for (int p = 0; p < points.size(); p++) System.arraycopy(points.get(p), 0, pv, 4 * p, 4);
-		d.restoreParticleState(new FlipParticleState(nx, ny, ny, h, points.size(), (float) raw, pv, new float[3 * points.size()], mmm.units.Mass.createLiquid(h, 1000.0, pv), new byte[d.cellCount]));
 		var water = new FluidMaterial("mmm:water", RHO, "mmm:aqueous", SIGMA, Math.PI / 2);
 		var entry = BuiltinFluidMaterials.createRegistry().entries().stream().filter(e -> e.material().id().equals(water.id())).findFirst().orElseThrow();
 		d.bindMaterialRegistry(new FluidMaterialRegistry(List.of(water)));
 		d.bindMaterialDefinitions(new MaterialRegistry(List.of(new MaterialRegistry.MaterialEntry(water, entry.viscosity(), entry.thermalExpansion())), List.of()));
+		d.setVolumes(fractions);
 		check(entry.dynamicViscosityAt(293.15) == .001002, "Neck water viscosity definition changed");
 		double analytic = Math.PI * R * R * LENGTH * (1 + EPS * EPS / 2) / 4;
-		System.out.printf("fixed wall neck initialization R/h=%d markers=%d integratedVerror=%g m3 publishedVerror=%g m3%n", resolution, d.particleCount(), integrated - analytic,
-				d.unitScale.cubicMeters(SignedDyadic.sum(d.particles.directArrays().volume, d.particleCount()).toDouble()) - analytic);
+		System.out.printf("fixed wall neck initialization R/h=%d stocks=%d integratedVerror=%g m3 publishedVerror=%g m3%n", resolution, d.liquidCells.physicalSize(), integrated - analytic,
+				d.unitScale.cubicMeters(d.liquidCells.exactVolume().toDouble()) - analytic);
 		return d;
 	}
 
@@ -130,7 +123,7 @@ public final class CapillaryNeckValidation {
 		}
 		int root(int c) { while (parent[c] != c) { parent[c] = parent[parent[c]]; c = parent[c]; } return c; }
 		void report(FluidDomain d, Topology t, Mechanics m, String event, int step, float dt) {
-			SignedDyadic tailV = SignedDyadic.ZERO, outerV = SignedDyadic.ZERO; double[] tailMass = new double[d.particleCount()], outerMass = new double[d.particleCount()];
+			SignedDyadic tailV = SignedDyadic.ZERO, outerV = SignedDyadic.ZERO; long tailMass=0,outerMass=0;
 			double totalArea = 0, mainArea = 0, h = d.config.cellSize(); int pressureCells = 0;
 			for (int c = 0; c < d.cellCount; c++) if (parent[c] >= 0) {
 				int r = root(c), y = c / d.sizeX % d.sizeY, z = c / (d.sizeX * d.sizeY);
@@ -139,30 +132,28 @@ public final class CapillaryNeckValidation {
 				double area = (y == d.sizeY - 1 ? wetFace(d, c, 1) : 0) + (z == d.sizeZ - 1 ? wetFace(d, c, 2) : 0);
 				totalArea += area * h * h; if (r == t.first) mainArea += area * h * h;
 			}
-			for (int p = 0; p < d.particleCount(); p++) {
-				int c = d.particleCellIndex(p), r = root(c), y = c / d.sizeX % d.sizeY, z = c / (d.sizeX * d.sizeY);
-				if (r != t.first && r != t.second) tailMass[p] = d.particles.mass(p); if (y == d.sizeY - 1 || z == d.sizeZ - 1) outerMass[p] = d.particles.mass(p);
+			for(var stock:d.liquidCells.stocks()) {
+				int c=stock.key().cell(),r=root(c),y=c/d.sizeX%d.sizeY,z=c/(d.sizeX*d.sizeY);
+				if(r!=t.first&&r!=t.second)tailMass=Math.addExact(tailMass,stock.massUnits());
+				if(y==d.sizeY-1||z==d.sizeZ-1)outerMass=Math.addExact(outerMass,stock.massUnits());
 			}
-			var tm = SignedDyadic.sum(tailMass); var om = SignedDyadic.sum(outerMass);
+			var tm=SignedDyadic.of(tailMass,0);var om=SignedDyadic.of(outerMass,0);
 			System.out.printf("fixed wall neck sample R/h=%d event=%s step=%d t=%g dt=%g majorEndsSeparated=%s largestV=%g m3 secondV=%g m3 components=%d tailScope=outsideLargestTwo tailV=%g m3 tailM=%g kg P=%s kg*m/s K=%g J CM=%s m outerPressureCellsUnique=%d outerWetAreaTotal=%g m2 outerWetAreaLargest=%g m2 outerExactVRaw=%s outerExactMRaw=%s outerV=%g m3 outerM=%g kg%n",
-					Math.round(R / h), event, step, step * (double) dt, dt, t.separated, t.largestV, t.secondV, t.components, d.unitScale.cubicMeters(tailV.toDouble()), d.unitScale.kilograms(tm.toDouble()),
-					Arrays.toString(m.momentum), m.kinetic, Arrays.toString(m.centroid), pressureCells, totalArea, mainArea, outerV, om, d.unitScale.cubicMeters(outerV.toDouble()), d.unitScale.kilograms(om.toDouble()));
+					Math.round(R / h), event, step, step * (double) dt, dt, t.separated, t.largestV, t.secondV, t.components, d.unitScale.cubicMeters(tailV.toDouble()), mmm.units.Mass.kilograms(tailMass),
+					Arrays.toString(m.momentum), m.kinetic, Arrays.toString(m.centroid), pressureCells, totalArea, mainArea, outerV, om, d.unitScale.cubicMeters(outerV.toDouble()), mmm.units.Mass.kilograms(outerMass));
 		}
 	}
 
 	private static Mechanics mechanics(FluidDomain d) {
-		double[] p = new double[3], cm = new double[3]; double mass = 0, kinetic = 0;
-		for (int i = 0; i < d.particleCount(); i++) {
-			double m = d.unitScale.kilograms(d.particles.mass(i)); float v = d.particles.volume(i);
-			double x = d.particles.positionX(i), y = d.particles.positionY(i), z = d.particles.positionZ(i);
-			double vx = d.particles.velocityX(i), vy = d.particles.velocityY(i), vz = d.particles.velocityZ(i);
-			check(Double.isFinite(m) && m > 0 && Float.isFinite(v) && v > 0, "Neck carrier V/M became invalid"); mass += m;
-			check(Double.isFinite(x + y + z + vx + vy + vz), "Neck carrier motion became nonfinite");
-			p[0] += m * vx; p[1] += m * vy; p[2] += m * vz; cm[0] += m * x; cm[1] += m * y; cm[2] += m * z;
-			kinetic += .5 * m * vx * vx; kinetic += .5 * m * vy * vy; kinetic += .5 * m * vz * vz;
+		d.ensureGrid();double[] cm=new double[3];double mass=0,h=d.config.cellSize();
+		for(var stock:d.liquidCells.physicalStocks()) {
+			int cell=stock.key().cell();double m=stock.massKilograms();mass+=m;
+			cm[0]+=m*(cell%d.sizeX+.5)*h;cm[1]+=m*(cell/d.sizeX%d.sizeY+.5)*h;cm[2]+=m*(cell/(d.sizeX*d.sizeY)+.5)*h;
 		}
-		for (int a = 0; a < 3; a++) { cm[a] /= mass; check(Double.isFinite(p[a]) && Double.isFinite(cm[a]), "Neck P/CM became nonfinite"); }
-		check(Double.isFinite(kinetic), "Neck kinetic energy became nonfinite"); return new Mechanics(p, cm, kinetic);
+		double[] momentum={Arrays.stream(d.mac.momentumX).sum(),Arrays.stream(d.mac.momentumY).sum(),Arrays.stream(d.mac.momentumZ).sum()};
+		for(int axis=0;axis<3;axis++){cm[axis]/=mass;check(Double.isFinite(cm[axis])&&Double.isFinite(momentum[axis]),"Neck momentum or center became nonfinite");}
+		double kinetic=d.liquidKineticEnergyJoules();check(Double.isFinite(kinetic),"Neck kinetic energy became nonfinite");
+		return new Mechanics(momentum,cm,kinetic);
 	}
 
 	/** Exterior high face clipped by the actual pressure PLIC, with no area tolerance. */
@@ -192,14 +183,12 @@ public final class CapillaryNeckValidation {
 	private static void check(boolean condition, String message) { if (!condition) throw new AssertionError(message); }
 	private static String initialHash(FluidDomain d) {
 		try {
-			var hash = java.security.MessageDigest.getInstance("SHA-256"); byte[] bytes = new byte[8];
-			for (int p = 0; p < d.particleCount(); p++) {
-				long[] raw = {Float.floatToRawIntBits(d.particles.positionX(p)), Float.floatToRawIntBits(d.particles.positionY(p)), Float.floatToRawIntBits(d.particles.positionZ(p)), Float.floatToRawIntBits(d.particles.volume(p)),
-						Float.floatToRawIntBits(d.particles.velocityX(p)), Float.floatToRawIntBits(d.particles.velocityY(p)), Float.floatToRawIntBits(d.particles.velocityZ(p)), Double.doubleToRawLongBits(d.particles.mass(p)), d.particles.materialHandle(p), d.particles.phaseLabel(p)};
-				for (long value : raw) { for (int i = 0; i < 8; i++) bytes[i] = (byte) (value >>> (8 * i)); hash.update(bytes); }
-			}
+			var hash=java.security.MessageDigest.getInstance("SHA-256");
+			for(var stock:d.liquidCells.stocks())hash.update(stock.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+			var p=d.exportMacMomentum();for(double[] axis:new double[][]{p.copyX(),p.copyY(),p.copyZ()})for(double value:axis)
+				hash.update(java.nio.ByteBuffer.allocate(8).putLong(Double.doubleToRawLongBits(value)).array());
 			return java.util.HexFormat.of().formatHex(hash.digest());
-		} catch (java.security.NoSuchAlgorithmException unavailable) { throw new AssertionError(unavailable); }
+		}catch(java.security.NoSuchAlgorithmException unavailable){throw new AssertionError(unavailable);}
 	}
 
 	// Current-session analytic quarter-circle/box integral of volume and all three first moments.

@@ -1,12 +1,11 @@
 package mmm.fluid;
 
 import mmm.granular.GranularCouplingFields;
-import mmm.chemistry.ExactRational;
 import mmm.units.SignedDyadic;
-import java.math.BigInteger;
 
 /** Saved positive shapes and inventory-reconstructed PLIC, shared by pressure and cell transport. */
 final class FlipPressurePhaseGeometry {
+	static final double CELL_VOLUME_RESOLUTION = 2e-7;
 
 	private final int sizeX;
 	private final int sizeY;
@@ -67,51 +66,22 @@ final class FlipPressurePhaseGeometry {
 		return fraction[cell] > 0 && fraction[cell] < 1;
 	}
 
-	void rebuild(
-			boolean[] solid, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
-			GranularCouplingFields granular, boolean[] pressureFluid
-	) {
-		rebuild(solid, reconstructedVolume, cutCells, granular, pressureFluid, null, null, 0);
-	}
-
-	void rebuild(
-			boolean[] solid, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
-			GranularCouplingFields granular, boolean[] pressureFluid,
-			MarkerGridIndex markers, LiquidParticleStore particles, float cellSize
-	) {
-		rebuild(solid, reconstructedVolume, cutCells, granular, pressureFluid, markers, particles, cellSize, null);
-	}
-
-	/** Reconstructs the same full grid from actual future volume and position moments in one edited cell. */
-	void rebuild(
-			boolean[] solid, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
-			GranularCouplingFields granular, boolean[] pressureFluid,
-			MarkerGridIndex markers, LiquidParticleStore particles, float cellSize, PhaseLiquidGeometryEdit edit
-	) {
-		rebuildLiquidEdits(solid, reconstructedVolume, cutCells, granular, pressureFluid, markers, particles, cellSize,
-				edit == null ? java.util.List.of() : java.util.List.of(edit));
-	}
-
-	/** Reconstructs all fraction gradients and component planes from a common future stock overlay. */
-	void rebuildLiquidEdits(
-			boolean[] solid, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
-			GranularCouplingFields granular, boolean[] pressureFluid,
-			MarkerGridIndex markers, LiquidParticleStore particles, float cellSize, java.util.List<PhaseLiquidGeometryEdit> edits
-	) {
-		rebuildLiquidEdits(solid, reconstructedVolume, cutCells, granular, pressureFluid,
-				markers, particles, cellSize, edits, null, null);
+	/** Scalar-volume geometry entry for isolated geometric validation. */
+	void rebuild(boolean[] solid, double[] volume, FlipCutCellGeometry cut,
+	             GranularCouplingFields granular, boolean[] pressureFluid) {
+		rebuildLiquidEdits(solid, volume, cut, granular, pressureFluid, 1,
+				java.util.List.of(), null, null);
 	}
 
 	/** A captured frame supplies its read-only planes and the matching complete local stock. */
 	void rebuildLiquidEdits(
 			boolean[] solid, double[] reconstructedVolume, FlipCutCellGeometry cutCells,
 			GranularCouplingFields granular, boolean[] pressureFluid,
-			MarkerGridIndex markers, LiquidParticleStore particles, float cellSize, java.util.List<PhaseLiquidGeometryEdit> edits,
+			float cellSize, java.util.List<PhaseLiquidGeometryEdit> edits,
 			FlipPressurePhaseGeometry captured, boolean[] sameLocalStock
 	) {
 		if (solid.length != fraction.length || reconstructedVolume.length != fraction.length
-				|| pressureFluid.length != fraction.length || edits == null || !edits.isEmpty() && markers == null
-				|| markers != null && (particles == null || !(cellSize > 0) || !Float.isFinite(cellSize))) {
+				|| pressureFluid.length != fraction.length || edits == null || !(cellSize > 0) || !Float.isFinite(cellSize)) {
 			throw new IllegalArgumentException("Pressure phase arrays disagree with the cell count");
 		}
 		if (captured != null && (captured == this || !captured.matchesShape(sizeX, sizeY, sizeZ)
@@ -129,12 +99,14 @@ final class FlipPressurePhaseGeometry {
 		java.util.Arrays.fill(components,null);
 		java.util.Arrays.fill(offsetBrackets,null);
 		for (int cell = 0; cell < fraction.length; cell++) {
-			float geometricOpen = cutCells.openCellVolume(cell);
-			float openVolume = granular == null ? geometricOpen
-					: granular.effectiveOpenCellVolume(cell, geometricOpen);
+			double geometricOpen = cutCells.openCellVolume(cell);
+			double openVolume = geometricOpen - (granular == null ? 0 : Math.scalb((double) granular.solidSvq(cell), -24));
 			poreVolumes[cell] = solid[cell] ? SignedDyadic.ZERO : SignedDyadic.of(openVolume);
 			double liquid = overlay != null && overlay[cell] != null ? overlay[cell].volume().toDouble() : reconstructedVolume[cell];
 			fraction[cell] = solid[cell] || openVolume <= 0.0F ? 0.0F : clamp(liquid / openVolume, 0.0, 1.0);
+			if (overlay != null && overlay[cell] != null && overlay[cell].volume().signum() > 0
+					&& overlay[cell].volume().compareTo(poreVolumes[cell]) < 0)
+				fraction[cell] = Math.clamp(fraction[cell],Double.MIN_VALUE,Math.nextDown(1.0));
 			pressureFluid[cell] = false;
 			normalX[cell] = normalY[cell] = normalZ[cell] = 0.0F; planeOffset[cell] = 0;
 		}
@@ -148,7 +120,7 @@ final class FlipPressurePhaseGeometry {
 				copyCell(captured, cell);
 				continue;
 			}
-			solveCell(cell, x, y, z, solid, cutCells, markers, particles, cellSize, edit, integration);
+			solveCell(cell, x, y, z, solid, cutCells, cellSize, edit, integration);
 		}
 		for (int cell = 0; cell < fraction.length; cell++) {
 			if (solid[cell] || !(fraction[cell] > 0.5F)) continue;
@@ -160,7 +132,7 @@ final class FlipPressurePhaseGeometry {
 
 
 	private void solveCell(int cell, int x, int y, int z, boolean[] solid, FlipCutCellGeometry cutCells,
-	                       MarkerGridIndex markers, LiquidParticleStore particles, float cellSize,
+	                       float cellSize,
 	                       PhaseLiquidGeometryEdit edit, LiquidFluxGeometry integration) {
 		double center = fraction[cell];
 		float nx = (float) -(sampleFraction(x + 1, y, z, center, solid) - sampleFraction(x - 1, y, z, center, solid));
@@ -180,16 +152,19 @@ final class FlipPressurePhaseGeometry {
 			nx = (float) (nx * inverseLength); ny = (float) (ny * inverseLength); nz = (float) (nz * inverseLength);
 		}
 		normalX[cell] = nx; normalY[cell] = ny; normalZ[cell] = nz;
-		var stock = edit != null ? edit : markers == null ? null
-				: PhaseLiquidGeometryEdit.current(cell, cutCells.mask(cell), cellSize, markers, particles);
+		var stock = edit;
 		SignedDyadic open = poreVolumes[cell];
-		offsetBrackets[cell] = stock == null ? null : PlicPlaneOffset.solve(~cutCells.mask(cell)&255, nx, ny, nz,
-				PlicComponentGeometry.ratio(stock.volume(), open).multiply(Integer.bitCount(~cutCells.mask(cell)&255)).divide(8));
-		planeOffset[cell] = offsetBrackets[cell] == null ? integration.offset(cell, nx, ny, nz, center * cutCells.openCellVolume(cell))
-				: offsetBrackets[cell].offset();
-		if (stock != null && CellRemapMicroTopology.components(cutCells.mask(cell)).length > 1)
+		if (stock == null) planeOffset[cell] = integration.offset(cell,nx,ny,nz,center * cutCells.openCellVolume(cell));
+		else {
 			components[cell] = PlicComponentGeometry.capture(stock, CellRemapMicroTopology.capacities(cutCells.mask(cell), open),
-					x, y, z, cellSize, gradientX, gradientY, gradientZ);
+					x, y, z, cellSize, nx, ny, nz);
+			if (stock.components().size() == 1) {
+				int micro = Integer.numberOfTrailingZeros(stock.components().getFirst().supportMask());
+				var plane = components[cell].plane(micro);
+				normalX[cell]=plane.nx();normalY[cell]=plane.ny();normalZ[cell]=plane.nz();
+				planeOffset[cell]=plane.offset();offsetBrackets[cell]=plane.bracket();
+			}
+		}
 	}
 
 	private void copyCell(FlipPressurePhaseGeometry captured, int cell) {
@@ -225,7 +200,7 @@ final class FlipPressurePhaseGeometry {
 			offsetBrackets[cell] = null; components[cell] = null;
 			if (solid[cell] || !(fraction[cell] > 0) || fraction[cell] >= 1) continue;
 			if (cell != edit.cell() && canReusePlane(captured, cell, x, y, z, solid, cut, stock.get(cell), cellSize)) copyCell(captured, cell);
-			else solveCell(cell, x, y, z, solid, cut, null, null, cellSize, cell == edit.cell() ? edit : stock.get(cell), integration);
+			else solveCell(cell, x, y, z, solid, cut, cellSize, cell == edit.cell() ? edit : stock.get(cell), integration);
 		}
 	}
 
@@ -245,18 +220,14 @@ final class FlipPressurePhaseGeometry {
 				|| Double.doubleToRawLongBits(fraction[cell]) == Double.doubleToRawLongBits(captured.fraction[cell]));
 	}
 
-	static double ownMomentDirection(SignedDyadic first, SignedDyadic metricVolume, int coordinate, int support, int axis) {
+	static double ownMomentDirection(double first, double metricVolume, int coordinate, int support, int axis) {
 		int low = 0;
 		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) low += 1 - (micro >>> axis & 1);
 		return momentDirection(centeredMoment(first, metricVolume, coordinate), low, Integer.bitCount(support));
 	}
 
-	static double centeredMoment(SignedDyadic first, SignedDyadic metricVolume, int coordinate) {
-		SignedDyadic centered = first.subtract(metricVolume.multiply(SignedDyadic.of(coordinate + .5)));
-		int shift = centered.exponent() - metricVolume.exponent();
-		BigInteger numerator = centered.significand(), denominator = metricVolume.significand();
-		return (shift >= 0 ? new ExactRational(numerator.shiftLeft(shift), denominator)
-				: new ExactRational(numerator, denominator.shiftLeft(-shift))).toDouble();
+	static double centeredMoment(double first, double metricVolume, int coordinate) {
+		return Math.fma(-(coordinate + .5), metricVolume, first) / metricVolume;
 	}
 
 	static double momentDirection(double centre, int lowCount, int openCount) {

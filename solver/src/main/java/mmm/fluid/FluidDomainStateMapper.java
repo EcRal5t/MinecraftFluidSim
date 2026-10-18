@@ -1,5 +1,7 @@
 package mmm.fluid;
 
+import mmm.inventory.LiquidCellInventory;
+
 import mmm.chemistry.ChemicalRegistry;
 import mmm.fluid.air.GasStateSnapshot;
 import mmm.granular.GranularStateSnapshot;
@@ -15,43 +17,26 @@ final class FluidDomainStateMapper {
 		if (domain.collisionTransactionActive()) {
 			throw new IllegalStateException("Cannot capture while a collision transaction is active");
 		}
-		if (domain.gasState.frame != null) domain.gasTopologyCoordinator.synchronizeForPersistence();
-
-		FlipParticleState pure = null;
-		FlipMaterialParticleState materials = null;
-		FlipChemicalParticleState chemicals = null;
-		ChemicalRegistry chemistry = null;
-		if (domain.chemicalParcels != null) {
-			chemicals = domain.exportChemicalParticleState();
-			chemistry = domain.chemicalParcels.registry();
-		} else if (domain.materialRegistry != null) {
-			materials = domain.exportMaterialParticleState();
-		} else {
-			pure = domain.exportParticleState();
-		}
-
+		var chemistry = domain.chemicalParcels == null ? null : domain.chemicalParcels.registry();
 		GranularStateSnapshot granular = domain.granularState == null ? null : domain.exportGranularState();
-		String chemicalFingerprint = chemistry == null ? "" : chemistry.fingerprint();
-		GasStateSnapshot gas = domain.gasState.frame == null
-				? null : domain.exportGasState(chemicalFingerprint);
-		FlipThermalParticleState thermal = domain.thermalState == null
-				? null : domain.exportThermalParticleState();
-		return new FluidDomainState(
-				domain.config, domain.maximumParticleCount, domain.gasState.sealedDomainBoundary,
-				pure, materials, chemicals, chemistry,
+		GasStateSnapshot gas = domain.gasState.frame == null ? null : domain.exportGasState(chemistry == null ? "" : chemistry.fingerprint());
+		var captured = new FluidDomainState(domain.sizeX,domain.sizeY,domain.sizeZ,domain.config,domain.maximumParticleCount,
+				domain.gasState.sealedDomainBoundary,domain.liquidCells.snapshot(),domain.mac.captureMomentum(),domain.geometry.cutCells.copyMicroMasks(),
+				domain.materialRegistry == null ? List.of() : domain.materialRegistry.materials(),chemistry,
+				domain.chemicalParcels == null ? mmm.chemistry.ChemicalTransferLedger.EMPTY : domain.chemicalParcels.externalSource(),
+				domain.chemicalParcels == null ? mmm.chemistry.ChemicalTransferLedger.EMPTY : domain.chemicalParcels.escapedSink(),
 				domain.chemicalParcels == null ? null : domain.chemicalParcels.dirtyCells(),
 				domain.chemicalParcels == null ? 0 : domain.chemicalParcels.reactionCursor(),
-				domain.granularState == null ? null : domain.granularState.registry,
-				granular, domain.granularDepositDynamics == null ? null
-						: domain.granularDepositDynamics.captureState(),
-				domain.precipitationEnabled(), domain.gasState.network.registry(), gas,
-				domain.thermalState == null ? null : domain.thermalState.registry(), thermal,
+				domain.granularState == null ? null : domain.granularState.registry,granular,
+				domain.granularDepositDynamics == null ? null : domain.granularDepositDynamics.captureState(),
+				domain.precipitationEnabled(),domain.gasState.network.registry(),gas,
+				domain.thermalState == null ? null : domain.thermalState.registry(),
+				domain.thermalState == null ? null : domain.thermalState.exportOwnerState(),
 				domain.thermalState == null ? 0 : domain.thermalState.maximumTransportSubsteps(),
-				domain.thermalState == null ? null : domain.exportPendingPhaseVolumeState(),
-				domain.thermalBoundaryTemperatureK,
-				domain.thermalState == null ? null : new CondensedPhasePressureField(
-						domain.pressureReference, domain.projection.pressure),
-				domain.materialDefinitions);
+				domain.thermalState == null ? null : domain.exportPendingPhaseVolumeState(),domain.thermalBoundaryTemperatureK,
+				domain.thermalState == null ? null : new CondensedPhasePressureField(domain.pressureReference,domain.projection.pressure),domain.materialDefinitions);
+		if (gas != null) captured.attachGasRuntime(domain.gasState.frame,domain.gasState.network.runtimeSnapshot());
+		return captured;
 	}
 
 	static FluidDomainState.Layout layout(FluidDomain domain) {
@@ -77,15 +62,19 @@ final class FluidDomainStateMapper {
 		FluidDomain domain = new FluidDomain(state.sizeX(), state.sizeY(), state.sizeZ(),
 				state.config(), state.maximumParticleCount());
 		if (state.sealedDomainBoundary()) domain.sealDomainBoundary();
-		switch (state.carrierKind()) {
-			case PURE -> domain.restoreParticleState(state.particles());
-			case MATERIAL -> domain.restoreMaterialParticleState(state.materials());
-			case CHEMICAL -> {
-				domain.restoreChemicalParticleState(state.chemicals(), state.chemicalRegistry());
-				domain.chemicalParcels.restoreDirtyCells(state.copyChemicalDirtyCells());
-				domain.chemicalParcels.restoreReactionCursor(state.chemicalReactionCursor());
-			}
+		domain.geometry.cutCells.restoreMicroMasks(state.copyCollisionMasks());
+		for (int cell = 0; cell < domain.cellCount; cell++) domain.geometry.solid[cell] = domain.geometry.cutCells.mask(cell) == 255;
+		if (!state.materialPalette().isEmpty()) domain.materialRegistry = new FluidMaterialRegistry(state.materialPalette());
+		if (state.chemicalRegistry() != null) {
+			domain.chemicalParcels = new mmm.chemistry.ChemicalParcelStore(state.chemicalRegistry(),domain.unitScale,state.maximumParticleCount(),domain.cellCount);
+			domain.chemicalParcels.restoreAuditLedgers(state.chemicalSource(),state.chemicalSink());
+			domain.chemicalParcels.restoreDirtyCells(state.copyChemicalDirtyCells());
+			domain.chemicalParcels.restoreReactionCursor(state.chemicalReactionCursor());
 		}
+		domain.liquidCells = LiquidCellInventory.fromValidatedSnapshot(state.liquid(),state.chemicalRegistry());
+		domain.markCellInventoryChanged();
+		domain.mac.restoreMomentum(state.momentum());
+
 		if (state.materialDefinitions() != null) domain.bindMaterialDefinitions(state.materialDefinitions());
 		if (state.granular() != null) {
 			domain.restoreGranularState(state.granular(), state.granularRegistry(), domain.materialRegistry(),
@@ -93,9 +82,10 @@ final class FluidDomainStateMapper {
 			domain.granularDepositDynamics.restoreState(state.granularDynamics());
 		}
 		if (state.gas() == null) domain.bindGasRegistry(state.gasRegistry());
-		else domain.restoreGasState(state.gas(), state.gasRegistry(), state.thermal());
-		if (state.thermal() != null) {
-			domain.restoreThermalParticleState(state.thermal(), state.thermalRegistry(),
+		else if (state.gasRuntimeGeometry() != null) domain.gasTopologyCoordinator.restoreRuntime(state.gasRuntimeGeometry(),state.gasRuntimeNetwork());
+		else domain.restoreGasState(state.gas(),state.gasRegistry(),state.thermalOwner());
+		if (state.thermalOwner() != null) {
+			domain.restoreThermalOwnerState(state.thermalOwner(), state.thermalRegistry(),
 					state.maximumThermalTransportSubsteps());
 			domain.restorePendingPhaseVolumeState(state.pendingPhaseVolume());
 			double[] thermalBoundary = state.copyThermalBoundaryTemperaturesK();
@@ -106,6 +96,7 @@ final class FluidDomainStateMapper {
 					domain.projection.pressure, 0, domain.cellCount);
 		}
 		if (state.precipitationEnabled()) domain.setPrecipitationEnabled(true);
+		domain.rebuildDerivedFromLiquidCells();
 		return domain;
 	}
 }

@@ -1,21 +1,19 @@
 package mmm.fluid;
 
-import mmm.chemistry.ExactRational;
+
 import mmm.units.SignedDyadic;
-import java.math.BigInteger;
+
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 
-/** Separate authoritative pore capacity and exact PLIC gas volume in each fixed open component. */
+/** Authoritative pore capacity and floating PLIC volume in each fixed open component. */
 final class GasComponentCapacity {
 	/** Volumes are fractions of a whole cell; difference is authoritative capacity minus geometry. */
 	record Component(int cell, int supportMask, SignedDyadic poreVolumeNormalized, SignedDyadic availableVolumeNormalized,
-	                 ExactRational geometricGasVolumeNormalized, ExactRational geometricDifferenceNormalized,
-	                 InverseErrorRange inverseErrorRange, List<GasPieceCapacity.Piece> pieces) {
+	                 double geometricGasVolumeNormalized, double geometricDifferenceNormalized,
+	                 List<GasPieceCapacity.Piece> pieces) {
 		Component { pieces = List.copyOf(pieces); }
 	}
-	record InverseErrorRange(ExactRational lower,ExactRational upper) { }
 
 	private GasComponentCapacity() { }
 
@@ -55,32 +53,17 @@ final class GasComponentCapacity {
 	                                           List<PhaseLiquidGeometryEdit> liquidStock, GasRuntimeGeometry source) {
 		validateInputs(domain, geometry, occupiedSvq);
 		occupiedSvq = occupiedSvq.clone();
-		for (int cell = 0; cell < domain.cellCount; cell++)
-			if (geometry.collisionMask(cell) != domain.geometry.cutCells.mask(cell))
-				throw new IllegalArgumentException("Gas component geometry collision mask differs at cell " + cell);
-		if (futureEdit != null && (futureEdit.cell() >= domain.cellCount
-				|| futureEdit.collisionMask() != domain.geometry.cutCells.mask(futureEdit.cell())))
-			throw new IllegalArgumentException("Future gas component stock differs from the collision geometry");
-
-		// Read authoritative columns directly; a captured geometry does not make an old marker index current.
-		var stock = new HashMap<Long, SignedDyadic>();
-		if (liquidStock != null) {
-			if (liquidStock.size()!=domain.cellCount) throw new IllegalArgumentException("Planned gas liquid stock is incomplete");
-			for (int cell=0;cell<domain.cellCount;cell++) {
-				var row=liquidStock.get(cell);
-				if (row.cell()!=cell || row.collisionMask()!=geometry.collisionMask(cell))
-					throw new IllegalArgumentException("Planned gas liquid stock differs from its geometry");
-			}
-		} else for (int marker = 0; marker < domain.particles.count(); marker++) {
-			int cell = domain.particleCellIndex(marker);
-			if (futureEdit != null && cell == futureEdit.cell()) continue;
-			int support = CellRemapMicroTopology.positionSupport(domain.geometry.cutCells.mask(cell), domain.config.cellSize(),
-					domain.particles.positionX(marker), domain.particles.positionY(marker), domain.particles.positionZ(marker));
-			long key = key(cell, support);
-			stock.merge(key, SignedDyadic.of(domain.particles.volume(marker)), SignedDyadic::add);
+		if (liquidStock == null) {
+			var current = new ArrayList<>(PhaseLiquidGeometryEdit.fromInventory(domain, domain.liquidCells));
+			if (futureEdit != null) current.set(futureEdit.cell(), futureEdit);
+			liquidStock = List.copyOf(current);
 		}
-		if (futureEdit != null) for (var component : futureEdit.components())
-			stock.put(key(component.cell(), component.supportMask()), component.volume());
+		if (liquidStock.size() != domain.cellCount) throw new IllegalArgumentException("Planned gas liquid stock is incomplete");
+		for (int cell = 0; cell < domain.cellCount; cell++) {
+			var row = liquidStock.get(cell);
+			if (row.cell() != cell || row.collisionMask() != geometry.collisionMask(cell))
+				throw new IllegalArgumentException("Planned gas liquid stock differs from its geometry");
+		}
 		var result = new ArrayList<Component>();
 		List<Component> previous = source == null ? List.of() : source.capacity().components();
 		long[] previousOccupied = source == null ? null : source.occupiedSvq();
@@ -88,29 +71,11 @@ final class GasComponentCapacity {
 		for (int cell = 0; cell < domain.cellCount; cell++) {
 			int previousStart = previousEnd;
 			while (previousEnd < previous.size() && previous.get(previousEnd).cell() == cell) previousEnd++;
-			if (sameCertifiedCell(cell, geometry, occupiedSvq, liquidStock, source, previousOccupied)) {
+			if (sameCapacityCell(cell, geometry, occupiedSvq, liquidStock, source, previousOccupied)) {
 				for (int component = previousStart; component < previousEnd; component++) result.add(previous.get(component));
 				continue;
 			}
-			appendCell(domain, geometry, cell, occupiedSvq[cell], liquidStock == null ? null : liquidStock.get(cell), stock, result);
-		}
-		return List.copyOf(result);
-	}
-
-	/** Recomputes only the cells admitted by the prepared geometry's variable region. */
-	static List<Component> captureCells(FluidDomain domain, GasComplementGeometry geometry, long[] occupied,
-	                                    List<PhaseLiquidGeometryEdit> liquidStock, int[] cells, GasRuntimeGeometry source,
-	                                    long[] sourceOccupied, int[] componentStarts) {
-		validateInputs(domain, geometry, occupied);
-		if (liquidStock == null || liquidStock.size() != domain.cellCount || cells == null)
-			throw new IllegalArgumentException("Local gas capacity requires complete planned stock and selected cells");
-		var result = new ArrayList<Component>(); int previous = -1;
-		for (int cell : cells) {
-			if (cell <= previous || cell >= domain.cellCount) throw new IllegalArgumentException("Local gas capacity cells must be ordered and unique");
-			previous = cell;
-			if (sameCertifiedCell(cell, geometry, occupied, liquidStock, source, sourceOccupied))
-				result.addAll(source.capacity().components().subList(componentStarts[cell], componentStarts[cell + 1]));
-			else appendCell(domain, geometry, cell, occupied[cell], liquidStock.get(cell), null, result);
+			appendCell(domain, geometry, cell, occupiedSvq[cell], liquidStock.get(cell), result);
 		}
 		return List.copyOf(result);
 	}
@@ -126,12 +91,11 @@ final class GasComponentCapacity {
 	}
 
 	private static void appendCell(FluidDomain domain, GasComplementGeometry geometry, int cell, long occupied,
-	                               PhaseLiquidGeometryEdit liquid, java.util.Map<Long, SignedDyadic> rawStock,
+	                               PhaseLiquidGeometryEdit liquid,
 	                               List<Component> result) {
-		if (geometry.collisionMask(cell) != domain.geometry.cutCells.mask(cell)
-				|| liquid != null && (liquid.cell() != cell || liquid.collisionMask() != geometry.collisionMask(cell)))
+		if (liquid.cell() != cell || liquid.collisionMask() != geometry.collisionMask(cell))
 			throw new IllegalArgumentException("Planned gas liquid stock differs from its geometry");
-		int mask = domain.geometry.cutCells.mask(cell);
+		int mask = geometry.collisionMask(cell);
 		int[] supports = CellRemapMicroTopology.components(mask);
 		SignedDyadic open = SignedDyadic.of(Integer.bitCount(~mask & 255), -3);
 		SignedDyadic solid = SignedDyadic.of(occupied, -24);
@@ -142,38 +106,28 @@ final class GasComponentCapacity {
 		SignedDyadic[] capacities = CellRemapMicroTopology.capacities(mask, open.subtract(solid));
 		for (int i = 0; i < supports.length; i++) {
 			int support = supports[i];
-			SignedDyadic volume = liquid == null ? rawStock.getOrDefault(key(cell, support), SignedDyadic.ZERO)
-				: liquid.components().get(i).volume();
+			SignedDyadic volume = liquid.components().get(i).volume();
 			SignedDyadic available = capacities[i].subtract(volume);
 			if (available.signum() < 0) throw blocked("Liquid inventory exceeds its open component capacity", cell);
-			ExactRational gas = ExactRational.ZERO;
-			GasComplementGeometry.Piece representative = null;
-			for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) {
-				var piece = geometry.piece(8 * cell + micro);
-				if (piece != null) {
-
-					representative = piece;gas = gas.add(piece.normalizedVolume());
-				}
-			}
-			if (available.signum() > 0 && gas.isZero())
-				throw blocked("Positive component capacity has no gas geometry", cell);
-			ExactRational porosity = exact(capacities[i]).multiply(8).divide(Integer.bitCount(support));
-			ExactRational wetTarget = representative != null && representative.dryPlane() != null
-					? PlicComponentGeometry.ratio(volume, capacities[i]).multiply(Integer.bitCount(support)).divide(8)
-					: ExactRational.ZERO;
-			gas = gas.multiply(porosity);
-			ExactRational difference = exact(available).subtract(gas);
-			var tolerance = MicroBoxPlaneVolume.rational(2e-7 * capacities[i].toDouble());
-			InverseErrorRange range = new InverseErrorRange(tolerance.multiply(-1), tolerance);
-			if (Math.abs(difference.toDouble()) > tolerance.toDouble())
-				throw blocked("Gas geometry differs from inventory beyond float cell precision", cell);
-			result.add(new Component(cell, support, capacities[i], available, gas, difference,range,
-					GasPieceCapacity.capture(cell,support,available,porosity,wetTarget,geometry)));
+            double gas = 0;
+            for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) {
+                var piece = geometry.piece(8 * cell + micro);
+                if (piece != null) gas += piece.normalizedVolume();
+            }
+            if (available.signum() > 0 && gas == 0)
+                throw blocked("Positive component capacity has no gas geometry; available="+available+", pore="+capacities[i]+", liquid="+volume, cell);
+            double porosity = capacities[i].toDouble() * 8 / Integer.bitCount(support);
+            gas *= porosity;
+            double difference = available.toDouble() - gas;
+            if (Math.abs(difference) > FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION * capacities[i].toDouble())
+                throw blocked("Gas geometry differs from inventory beyond float cell precision", cell);
+            result.add(new Component(cell, support, capacities[i], available, gas, difference,
+                    GasPieceCapacity.capture(cell, support, available, geometry)));
 		}
 	}
 
-	/** Capacity certificates depend on local raw stock and planes, independently of chamber ownership. */
-	private static boolean sameCertifiedCell(int cell, GasComplementGeometry geometry, long[] occupied,
+	/** Capacity reuse depends on local raw stock and planes, independently of chamber ownership. */
+	private static boolean sameCapacityCell(int cell, GasComplementGeometry geometry, long[] occupied,
 	                                        List<PhaseLiquidGeometryEdit> stock, GasRuntimeGeometry source,
 	                                        long[] previousOccupied) {
 		if (source == null || stock == null || previousOccupied.length != occupied.length
@@ -193,12 +147,6 @@ final class GasComponentCapacity {
 
 
 
-	private static long key(int cell, int support) { return ((long) cell << 8) | support; }
-	private static ExactRational exact(SignedDyadic value) {
-		return value.exponent() >= 0
-				? new ExactRational(value.significand().shiftLeft(value.exponent()), BigInteger.ONE)
-				: new ExactRational(value.significand(), BigInteger.ONE.shiftLeft(-value.exponent()));
-	}
 	private static GasTopologyBlockedException blocked(String message, int cell) {
 		return new GasTopologyBlockedException(message + " at cell " + cell);
 	}

@@ -1,146 +1,161 @@
 package mmm.thermal;
 
 import mmm.chemistry.ExactRational;
-import mmm.fluid.air.AirNetwork;
-import mmm.fluid.air.GasComponentAmount;
-import mmm.fluid.air.GasComponentDefinition;
-import mmm.fluid.air.GasInventory;
-import mmm.fluid.air.GasRegistry;
+import mmm.fluid.air.*;
 import mmm.units.SignedDyadic;
-
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Random;
 
-/** Exhaustive exact portions checked against an independent constant-Cv caloric/EOS oracle. */
+/** Frozen-state, first-order cavity flow: macroscopic pressure response and exact shared inventories. */
 public final class GasTransferValidation {
-	private static final double[] CV = {100.0, 1_000.0, 10_000.0};
-	private static final double R_PER_NANO = GasRegistry.STANDARD_PRESSURE_PA * 1.0E-9
-			/ GasRegistry.STANDARD_TEMPERATURE_K;
 	private GasTransferValidation() { }
-
+	public static void main(String[] args) {
+		if (args.length == 1 && args[0].equals("--eos")) {
+			pressureVolumeIsentropes(); System.out.println("Gas pressure-volume EOS validation passed"); return;
+		}
+		if (args.length != 0) throw new IllegalArgumentException("Expected no arguments or --eos");
+		validate(); System.out.println("Global gas flow validation passed");
+	}
 	public static void validate() {
-		ArrayList<GasComponentDefinition> definitions = new ArrayList<>();
-		ArrayList<ThermalMaterialDefinition> materials = new ArrayList<>();
-		for (int index = 0; index < CV.length; index++) {
-			String id = "test:gas" + index;
-			definitions.add(new GasComponentDefinition(id, 1.0, 1.0, List.of(), List.of()));
-			materials.add(new ThermalMaterialDefinition("test:thermal/gas" + index,
-					ThermalMaterialDefinition.CarrierKind.GAS, id, 300.0, 0.0, 0.0,
-					List.of(new ThermalMaterialDefinition.CaloricSegment(10.0, 2_000.0, CV[index]))));
-		}
-		GasRegistry gas = new GasRegistry(definitions,
-				List.of(new GasRegistry.AmbientFraction("test:gas0", ExactRational.ONE)));
-		GasThermalModel model = new GasThermalModel(new ThermalRegistry(materials), gas);
-		validateLargeTransferIsReadOnly(gas, model);
-		Random random = new Random(20_261_011L);
-		for (int sample = 0; sample < 256; sample++) {
-			int[] source = {1 + random.nextInt(25), 1 + random.nextInt(25), 1 + random.nextInt(25)};
-			int[] target = {1 + random.nextInt(25), 1 + random.nextInt(25), 1 + random.nextInt(25)};
-			double sourceTemperature = 50.0 + random.nextDouble() * 950.0;
-			double targetTemperature = 50.0 + random.nextDouble() * 950.0;
-			double targetVolume = 1.0E-7 * sum(target) * targetTemperature / (sum(source) * sourceTemperature)
-					* (1.0001 + random.nextDouble() * 4.0);
-			validateMaximum(gas, model, source, target, sourceTemperature, targetTemperature, 1.0E-7, targetVolume);
-		}
-		Fixture holes = validateMaximum(gas, model, new int[] {24, 23, 20}, new int[] {1, 24, 4},
-				53.39535978004694, 246.8989771402024, 1.0E-7, 2.102679657646761E-7);
-		holes.network.addOrMergeEdge(1, 2, 0.1, 0.65);
-		AirNetwork.NodeThermodynamics thermodynamics = holes.energy.thermodynamics(holes.network);
-		require(thermodynamics.limitTransferNanos(1, 2, 1L) == 0L
-				&& thermodynamics.limitTransferNanos(1, 2, 2L) == 0L
-				&& thermodynamics.limitTransferNanos(1, 2, 3L) == 3L
-				&& holes.network.hasPressureDrivenFlow(thermodynamics),
-				"one rejected nanos portion hid a larger valid mixture transfer from gas activity");
-		SignedDyadic before = holes.energy.exactGasEnergy();
-		holes.network.stepEdges(1.0, thermodynamics, (source, target, moved, sourceAfter, targetAfter) ->
-				holes.energy.planTransfer(source, target, moved, sourceAfter, targetAfter, holes.network));
-		require(holes.network.standardVolumeNanos(1) == 64L
-				&& holes.energy.exactGasEnergy().equals(before.add(holes.audit.ledger().roundoffResidual())),
-				"non-monotone mixture flow did not jointly conserve inventory and internal energy");
+		pressureVolumeIsentropes();
+		isothermalBackwardEulerResponse();
+		sharedDonorIsIndependentOfPortOrder();
+		pressurePropagatesAcrossAnInitiallyBalancedPort();
+		thermalEnthalpyAndPositiveTemperature();
+		ambientAndLiquidSeal();
 	}
 
-	private static void validateLargeTransferIsReadOnly(GasRegistry gas, GasThermalModel model) {
-		long scale = Long.MAX_VALUE / (96L * 32L);
-		GasInventory source = inventory(new long[] {24L * scale, 23L * scale, 20L * scale});
-		GasInventory target = inventory(new long[] {scale, 24L * scale, 4L * scale});
-		double sourceTemperature = 53.39535978004694, targetTemperature = 246.8989771402024;
-		double sourceEnergy = capacity(source) * (sourceTemperature - 300.0);
-		double targetEnergy = capacity(target) * (targetTemperature - 300.0);
-		AirNetwork network = new AirNetwork(gas);
-		network.addNode(1.0E-7 * scale, 0.0); network.addNode(2.102679657646761E-7 * scale, 0.0);
-		network.commitPhaseSource(1, source); network.commitPhaseSource(2, target);
-		long totalNanos = Math.addExact(source.standardVolumeNanos(), target.standardVolumeNanos());
-		require(network.sealedInventoryNanos() == totalNanos && network.drawnFromAmbientNanos() == totalNanos,
-				"large mixture fixture must fit both the region inventory and its cumulative source audit");
-		network.addOrMergeEdge(1, 2, 0.1, 0.65);
-		ThermalAuditState audit = new ThermalAuditState(ThermalAuditLedger.initialized(
-				SignedDyadic.of(sourceEnergy).add(SignedDyadic.of(targetEnergy))));
-		GasEnergyStore energy = new GasEnergyStore(model, 300.0, audit, network);
-		energy.commitNodeEnergy(1, sourceEnergy); energy.commitNodeEnergy(2, targetEnergy);
-		long revision = network.revision(), energyRevision = energy.revision();
-		SignedDyadic before = energy.exactGasEnergy();
-        long amount = energy.thermodynamics(network).limitTransferNanos(1, 2, Long.MAX_VALUE);
-        require(amount > 0L && amount <= Long.MAX_VALUE - target.standardVolumeNanos(),
-                "large mixture flow must progress within its exact capacity");
-		require(network.hasPressureDrivenFlow(energy.thermodynamics(network)),
-				"unresolved large mixture activity escaped the read-only query or authorized sleep");
-		require(network.revision() == revision && energy.revision() == energyRevision
-				&& network.inventory(1).equals(source) && network.inventory(2).equals(target)
-				&& energy.exactGasEnergy().equals(before) && audit.ledger().roundoffResidual().equals(SignedDyadic.ZERO),
-				"large mixture search or its budget rejection mutated inventory, U or audit");
+	/** Independent ideal-gas entropy integrals, including a heat-capacity transition. */
+	private static void pressureVolumeIsentropes() {
+		var gas = new GasRegistry(List.of(new GasComponentDefinition("test:gas", 1, 1, List.of(), List.of())),
+				List.of(new GasRegistry.AmbientFraction("test:gas", ExactRational.ONE)));
+		var inventory = gas.createAmbient(1_000_000_000L);
+		double volume0 = .75, temperature0 = 300;
+		double r = GasRegistry.STANDARD_PRESSURE_PA / GasRegistry.STANDARD_TEMPERATURE_K;
+		double pressure0 = r * temperature0 / volume0, mass = inventory.totalMass();
+		var constant = caloricModel(gas, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 2000, 718)));
+		double energy0 = constant.internalEnergyAtTemperature(inventory, temperature0);
+		double gamma = 1 + r / (mass * 718);
+		var curve = constant.pressureVolumeCurve(inventory, volume0, energy0);
+		for (double ratio : new double[]{.2, .5, 1, 2, 8}) {
+			double pressure = pressure0 * ratio;
+			double expectedVolume = volume0 * Math.pow(1 / ratio, 1 / gamma);
+			var result = curve.atPressure(pressure);
+			close(result.volume(), expectedVolume, "Constant-Cv curve differs from p V^gamma");
+			close(result.compliance(), expectedVolume / (gamma * pressure), "Constant-Cv pressure compliance differs from the isentrope");
+		}
+
+		var variable = caloricModel(gas, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 400, 718),
+				new ThermalMaterialDefinition.CaloricSegment(400, 2000, 900)));
+		energy0 = variable.internalEnergyAtTemperature(inventory, temperature0);
+		curve = variable.pressureVolumeCurve(inventory, volume0, energy0);
+		for (double temperature : new double[]{180, 350, 500, 900}) {
+			double entropy = mass * (temperature <= 400 ? 718 * Math.log(temperature / temperature0)
+					: 718 * Math.log(400 / temperature0) + 900 * Math.log(temperature / 400));
+			double expectedVolume = volume0 * Math.exp(-entropy / r);
+			double pressure = r * temperature / expectedVolume;
+			var result = curve.atPressure(pressure);
+			close(result.volume(), expectedVolume, "Variable-Cv curve differs from the integrated entropy relation");
+			double energy = variable.internalEnergyAtTemperature(inventory, temperature);
+			var state = variable.hydrodynamicState(inventory, result.volume(), energy);
+			close(state.temperatureK(), temperature, "Pressure-volume endpoint disagrees with caloric temperature");
+			close(state.absolutePressurePa(), pressure, "Pressure-volume endpoint disagrees with the inventory/U EOS");
+			close(result.compliance(), expectedVolume / ((1 + r / (mass * (temperature < 400 ? 718 : 900))) * pressure),
+					"Variable-Cv pressure compliance disagrees with endpoint heat capacity");
+			var compressed = variable.compressAdiabatically(inventory, energy0, volume0, result.volume());
+			close(compressed.finalTemperatureK(), temperature, "Pressure and volume isentropes disagree on temperature");
+			close(compressed.finalInternalEnergy(), energy, "Pressure and volume isentropes disagree on energy");
+			close(variable.pressureVolumeCurve(inventory, result.volume(), energy).atPressure(pressure0).volume(), volume0,
+					"Reversed pressure isentrope did not recover the original volume");
+			close(variable.compressAdiabatically(inventory, energy, result.volume(), volume0).finalInternalEnergy(), energy0,
+					"Reversed isentropic work did not recover the original energy");
+		}
+	}
+	private static GasThermalModel caloricModel(GasRegistry gas, List<ThermalMaterialDefinition.CaloricSegment> segments) {
+		return new GasThermalModel(new ThermalRegistry(List.of(new ThermalMaterialDefinition("test:thermal/gas",
+				ThermalMaterialDefinition.CarrierKind.GAS, "test:gas", 300, 10_000, 0, segments))), gas);
+	}
+	private static void close(double actual, double expected, String message) {
+		require(Double.isFinite(actual) && Math.abs(actual - expected) <= 1e-9 * Math.max(Math.abs(expected), 1e-12),
+				message + ": " + actual + " versus " + expected);
 	}
 
-	private static Fixture validateMaximum(GasRegistry gas, GasThermalModel model, int[] source, int[] target,
-	                                      double sourceTemperature, double targetTemperature,
-	                                      double sourceVolume, double targetVolume) {
-		GasInventory a = inventory(source), b = inventory(target);
-		double sourceEnergy = capacity(a) * (sourceTemperature - 300.0);
-		double targetEnergy = capacity(b) * (targetTemperature - 300.0);
-		AirNetwork network = new AirNetwork(gas);
-		network.addNode(sourceVolume, 0.0); network.addNode(targetVolume, 0.0);
-		network.commitPhaseSource(1, a); network.commitPhaseSource(2, b);
-		ThermalAuditState audit = new ThermalAuditState(ThermalAuditLedger.initialized(
-				SignedDyadic.of(sourceEnergy).add(SignedDyadic.of(targetEnergy))));
-		GasEnergyStore energy = new GasEnergyStore(model, 300.0, audit, network);
-		energy.commitNodeEnergy(1, sourceEnergy); energy.commitNodeEnergy(2, targetEnergy);
-		long expected = 0L;
-		for (long amount = 1L; amount <= a.standardVolumeNanos(); amount++) {
-			GasInventory.Split split = a.splitTotal(amount);
-			double carried = capacity(split.first()) * (sourceTemperature - 300.0) + R_PER_NANO * amount * sourceTemperature;
-			if (pressure(split.second(), sourceEnergy - carried, sourceVolume)
-					>= pressure(b.merge(split.first()), targetEnergy + carried, targetVolume)) expected = amount;
-		}
-		long actual = energy.thermodynamics(network).limitTransferNanos(1, 2, a.standardVolumeNanos());
-		require(actual == expected, "thermal mixture maximum disagrees with exhaustive caloric oracle: "
-				+ actual + " versus " + expected);
-		return new Fixture(network, energy, audit);
+	private static void isothermalBackwardEulerResponse() {
+		AirNetwork network = new AirNetwork();
+		int a = network.addNode(1, 1.1), b = network.addNode(1, .9);
+		network.addOrMergeEdge(a, b, .001, .65);
+		double difference = network.gaugePressure(a) - network.gaugePressure(b), dt = .01;
+		double g = .65 * .001 * Math.sqrt(2 / network.density(a)) / Math.sqrt(difference) * 1.1;
+		double expected = difference / (1 + 2 * dt * g * AirNetwork.REFERENCE_PRESSURE);
+		long stock = network.sealedInventoryNanos(); network.stepEdges(dt);
+		double actual = network.gaugePressure(a) - network.gaugePressure(b);
+		require(Math.abs(actual - expected) <= 4 * AirNetwork.REFERENCE_PRESSURE * 1e-9,
+				"Frozen orifice/storage step differs from its backward-Euler pressure response");
+		require(network.sealedInventoryNanos() == stock && network.auditClosed(), "Isothermal flow changed exact inventory");
 	}
 
-	private static GasInventory inventory(int[] amounts) {
-		return inventory(new long[] {amounts[0], amounts[1], amounts[2]});
+	private static void sharedDonorIsIndependentOfPortOrder() {
+		AirNetwork first = star(false), reverse = star(true);
+		first.stepEdges(.05); reverse.stepEdges(.05);
+		for (int id : first.nodeIds()) require(first.inventory(id).equals(reverse.inventory(id)), "Port order changed simultaneous donor allocation");
+		require(first.inventory(2).equals(first.inventory(3)) && first.standardVolumeNanos(1) > 0
+				&& first.auditClosed() && reverse.auditClosed(), "Shared donor lost symmetry, positivity or inventory");
 	}
-	private static GasInventory inventory(long[] amounts) {
-		ArrayList<GasComponentAmount> components = new ArrayList<>();
-		for (int index = 0; index < amounts.length; index++) {
-			components.add(new GasComponentAmount("test:gas" + index, amounts[index], mmm.units.Mass.fromKilograms(amounts[index] * 1.0E-9),
-					List.of(), mmm.units.Mass.fromKilograms(amounts[index] * 1.0E-9)));
+	private static AirNetwork star(boolean reverse) {
+		AirNetwork network = new AirNetwork(); network.addNode(1, 1.5); network.addNode(1, .5); network.addNode(1, .5);
+		network.addOrMergeEdge(1, reverse ? 3 : 2, .01, .65); network.addOrMergeEdge(1, reverse ? 2 : 3, .01, .65);
+		return network;
+	}
+
+	private static void pressurePropagatesAcrossAnInitiallyBalancedPort() {
+		AirNetwork network = new AirNetwork(); network.addNode(1, 1.5); network.addNode(1, 1); network.addNode(1, 1);
+		network.addOrMergeEdge(1, 2, .01, .65); network.addOrMergeEdge(2, 3, .01, .65);
+		network.stepEdges(.05);
+		require(network.standardVolumeNanos(3) > 1_000_000_000L && network.standardVolumeNanos(1) < 1_500_000_000L
+				&& network.auditClosed(), "Global pressure solve omitted a port with zero initial pressure gradient");
+	}
+
+	private static void thermalEnthalpyAndPositiveTemperature() {
+		var fixture = thermal(1.5, .5, .5);
+		fixture.network.addOrMergeEdge(1, 2, .01, .65); fixture.network.addOrMergeEdge(1, 3, .01, .65);
+		double beforeDifference = fixture.energy.gaugePressure(1, fixture.network) - fixture.energy.gaugePressure(2, fixture.network);
+		fixture.step(.05);
+		require(fixture.energy.temperature(1, fixture.network) < 300 && fixture.energy.temperature(2, fixture.network) > 300,
+				"Source enthalpy did not cool the donor and heat the receivers");
+		require(fixture.energy.gaugePressure(1, fixture.network) - fixture.energy.gaugePressure(2, fixture.network) < beforeDifference,
+				"Finite thermal flow did not relax the macroscopic pressure contrast");
+		for (int i = 0; i < 4; i++) fixture.step(.05);
+		fixture.checkAudit();
+	}
+
+	private static void ambientAndLiquidSeal() {
+		var vent = thermal(1.1); vent.network.addOrMergeEdge(1, 0, .001, .65); vent.step(.01);
+		require(vent.audit.ledger().externalSink().compareTo(SignedDyadic.ZERO) > 0, "Ambient outflow lost its enthalpy sink");
+		var draw = thermal(.5); draw.network.addOrMergeEdge(1, 0, .001, .65); draw.step(.01);
+		require(draw.audit.ledger().externalSource().compareTo(SignedDyadic.ZERO) > 0, "Ambient inflow lost its enthalpy source");
+		var sealed = thermal(1.1, .9); var before = sealed.network.sealedInventory();
+		long gasRevision = sealed.network.revision(), energyRevision = sealed.energy.revision();
+		sealed.step(.01);
+		require(before.equals(sealed.network.sealedInventory()) && gasRevision == sealed.network.revision()
+				&& energyRevision == sealed.energy.revision(), "Liquid-sealed cavities exchanged inventory or energy");
+		vent.checkAudit(); draw.checkAudit(); sealed.checkAudit();
+	}
+
+	private static Fixture thermal(double... volumes) {
+		var gas = new GasRegistry(List.of(new GasComponentDefinition("test:gas", 1, 1, List.of(), List.of())),
+				List.of(new GasRegistry.AmbientFraction("test:gas", ExactRational.ONE)));
+		var thermal = new ThermalRegistry(List.of(new ThermalMaterialDefinition("test:thermal/gas",
+				ThermalMaterialDefinition.CarrierKind.GAS, "test:gas", 300, 0, 0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(1, 2000, 718)))));
+		var network = new AirNetwork(gas); for (double volume : volumes) network.addNode(1, volume);
+		var audit = new ThermalAuditState(ThermalAuditLedger.initialized(SignedDyadic.ZERO));
+		return new Fixture(network, new GasEnergyStore(new GasThermalModel(thermal, gas), 300, audit, network), audit);
+	}
+	private record Fixture(AirNetwork network, GasEnergyStore energy, ThermalAuditState audit) {
+		void step(double dt) { network.stepEdges(dt, energy.thermodynamics(network), batch -> energy.planFlow(batch, network)); }
+		void checkAudit() {
+			require(network.auditClosed() && energy.exactGasEnergy().equals(audit.ledger().expectedInventory()), "Gas flow inventory/energy audit is open");
+			for (int id : network.nodeIds()) require(energy.temperature(id, network) > 0, "Gas flow produced nonpositive temperature");
 		}
-		return new GasInventory(components);
 	}
-	private static double capacity(GasInventory inventory) {
-		double result = 0.0;
-		for (GasComponentAmount component : inventory.components()) {
-			result += component.mass() * CV[component.componentId().charAt(8) - '0'];
-		}
-		return result;
-	}
-	private static double pressure(GasInventory inventory, double energy, double volume) {
-		if (inventory.isEmpty()) return energy == 0.0 ? 0.0 : Double.NaN;
-		double temperature = 300.0 + energy / capacity(inventory);
-		return temperature > 0.0 ? R_PER_NANO * inventory.standardVolumeNanos() * temperature / volume : Double.NaN;
-	}
-	private static int sum(int[] values) { return values[0] + values[1] + values[2]; }
 	private static void require(boolean condition, String message) { if (!condition) throw new AssertionError(message); }
-	private record Fixture(AirNetwork network, GasEnergyStore energy, ThermalAuditState audit) { }
 }

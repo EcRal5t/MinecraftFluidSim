@@ -443,21 +443,6 @@ final class ControllerInventoryDurabilityValidation {
 		private FluidDomain domain;
 		private long generation;
 		long substepsThisAction;
-		private long rejectedBoussinesqSteps;
-
-		private boolean rejectedOutsideBuoyancyDomain(RuntimeException failure, FluidDomainState before) {
-			if (!(failure instanceof mmm.fluid.FluidSolverBackend.CandidateEvaluationRejectedException))
-				return false;
-			for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
-				if (cause instanceof mmm.thermal.LiquidThermalExpansion.ValidityExceededException) {
-					assertUnchanged(before, "Boussinesq validity rejection");
-					rejectedBoussinesqSteps++;
-					return true;
-				}
-			}
-			return false;
-		}
-
 		private void recordSubsteps(FluidStepCandidate candidate) {
 			substepsThisAction = Math.addExact(substepsThisAction, candidate.stats().substeps());
 			FuzzMetrics.recordEvents(scene.name(), candidate.stats());
@@ -1315,7 +1300,6 @@ final class ControllerInventoryDurabilityValidation {
 				check(!domain.hasPendingPhaseVolumeWork(),
 						"pending phase-work settlement retained the prior lien");
 			} catch (RuntimeException failure) {
-				if (rejectedOutsideBuoyancyDomain(failure, before)) return false;
 				throw new IllegalStateException("normal-play pending phase-work settlement failed at generation "
 						+ generation, failure);
 			}
@@ -1333,7 +1317,6 @@ final class ControllerInventoryDurabilityValidation {
 				recordSubsteps(candidate);
 				adopt(candidate);
 			} catch (RuntimeException failure) {
-				if (rejectedOutsideBuoyancyDomain(failure, before)) return;
 				throw new IllegalStateException("normal-play logical step failed at generation " + generation
 						+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
 						+ ", solidSvq=" + domain.totalGranularSolidVolumeSvq(), failure);
@@ -1377,7 +1360,6 @@ final class ControllerInventoryDurabilityValidation {
 				recordSubsteps(candidate);
 				adopt(candidate);
 			} catch (RuntimeException failure) {
-				if (rejectedOutsideBuoyancyDomain(failure, before)) return;
 				throw new IllegalStateException("normal-play moving-body step failed at generation " + generation
 						+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
 						+ ", solidSvq=" + domain.totalGranularSolidVolumeSvq() + ", bodies=" + count, failure);
@@ -1467,37 +1449,23 @@ final class ControllerInventoryDurabilityValidation {
 			check(state.extractThenRestore().equals("extractThenRestore"),
 					"selfcheck: actual chemical/energy closed loop was not exercised");
 			state.temperature(1_500);
+			long generationBefore = state.generation;
 			state.step(false);
-			check(state.rejectedBoussinesqSteps == 1,
-					"selfcheck: out-of-domain buoyancy must reject without changing state");
+			check(state.generation == generationBefore + 1,
+					"selfcheck: hot liquid must complete its normal mechanical successor");
 			int[] target = state.maximumNearbyLiquidCell(0);
 			int cell = (target[2] * state.domain.sizeY() + target[1]) * state.domain.sizeX() + target[0];
 			state.domain.restorePendingPhaseVolumeState(new mmm.fluid.PendingPhaseVolumeState(
 					state.domain.sizeX() * state.domain.sizeY() * state.domain.sizeZ(), List.of(
-					new mmm.fluid.PendingPhaseVolumeState.Entry(cell,
-							mmm.units.SignedDyadic.of(1, -20)))));
-			FluidDomainState pendingBefore = state.snapshot();
-			long generationBefore = state.generation;
-			check(!state.settle(), "selfcheck: out-of-domain pending settlement must refuse");
-			check(state.extractOverCapacity().equals("skip(pendingSettlementRejected)"),
-					"selfcheck: extraction continued after pending settlement refused");
-			check(!state.clear() && !state.vent()
-					&& !state.tryInsertLiquidAt(state.injectX, state.injectY, state.injectZ, state.water),
-					"selfcheck: inventory edit continued after pending settlement refused");
-			state.assertUnchanged(pendingBefore, "selfcheck: rejected pending action");
-			check(state.generation == generationBefore && state.rejectedBoussinesqSteps == 6,
-					"selfcheck: refused pending actions changed generation or were not evaluated");
-			check(!state.rejectedOutsideBuoyancyDomain(
-					new mmm.fluid.FluidSolverBackend.MechanicalWorkBudgetExceededException("selfcheck"),
-					pendingBefore) && !state.rejectedOutsideBuoyancyDomain(
-					new mmm.fluid.FluidSolverBackend.CandidateEvaluationRejectedException(
-							"selfcheck", new IllegalArgumentException("other candidate failure")), pendingBefore),
-					"selfcheck: mechanical budget or unrelated candidate failure was hidden");
+					new mmm.fluid.PendingPhaseVolumeState.Entry(cell, mmm.units.SignedDyadic.of(1, -20)))));
+			check(state.settle() && !state.domain.hasPendingPhaseVolumeWork(),
+					"selfcheck: hot pending mechanical work did not finish");
+			state.roundTrip();
 
 			FuzzMetrics.note("selfcheck", "thermal");
 			check(FuzzMetrics.familyGapExists("selfcheck", "thermal"),
 					"selfcheck: coverage gap detection missed an exercised family with no events");
-			System.out.println("harness selfcheck PASS (rejection guard, pending-action refusal, closed-loop comparison, coverage gap)");
+			System.out.println("harness selfcheck PASS (rejection guard, hot successor, closed-loop comparison, coverage gap)");
 		} finally {
 			state.close();
 		}
@@ -1790,8 +1758,7 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return null;
 		} finally {
-			if (state.rejectedBoussinesqSteps > 0) System.out.println("FUZZ VALIDITY REJECTIONS scene="
-					+ scene.name() + " seed=" + seed + " count=" + state.rejectedBoussinesqSteps);
+
 			String job = scene.name() + "/" + seed;
 			JOB_MILLIS.put(job, (System.nanoTime() - jobStartNanos) / 1_000_000L);
 			JOB_SUBSTEPS.put(job, jobSubsteps);

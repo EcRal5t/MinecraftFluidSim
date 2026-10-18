@@ -22,26 +22,11 @@ public final class FlipCutCellValidation {
 		volumeAndSharedFaceFractionsAreConsistent();
 		wallAreasFollowMicroGeometry();
 		bodyOverlapExcludesOccupiedMicroCells();
-		cutCellSweepStopsOnlyTheContactNormal();
-		straightSweepResolvesDiagonalContacts();
-		simultaneousContactsRespectSpatialSymmetry();
-		contactPositionsFollowFloatMicroGeometry();
-		nearCornerRoundingKeepsMarkersInside();
-		exactMarkerDisplacementUsesMicroOccupancy();
-		cutCellCapacityDisplacesMergedMarkerVolume();
+		collisionDisplacementUsesOpenCapacity();
+		cutCellCapacityDisplacesImportedInventory();
 		checkpointPreservesCutCellGeometry();
 		if (!fast) partialObstacleFlowRemainsFiniteAndConservative();
 		System.out.println("FlipFluid cut-cell validation passed" + (fast ? " (short; 600-step obstacle flow skipped)" : ""));
-	}
-
-	private static void nearCornerRoundingKeepsMarkersInside() {
-		var geometry = new FlipCutCellGeometry(8, 8, 8);
-		float[] x = {3.9999F}, y = {2}, z = {3.9999F};
-		float[] vx = {.001F}, vy = {.1F}, vz = {.001001F};
-		new FlipParticleCollision(8, 8, 8, .5F, geometry).advect(x, y, z, vx, vy, vz, vx, vy, vz, 1, 1);
-		check(x[0] < 4 && z[0] < 4, "Near-corner rounding let a liquid marker escape the outer walls");
-		checkClose(y[0], 2.1F, 1e-6F, "Corner collision lost tangential motion");
-		check(vx[0] == 0 && vz[0] == 0, "Corner collision retained outward normal velocity");
 	}
 
 	private static void solverConfigRejectsNonfiniteCoefficients() {
@@ -101,145 +86,22 @@ public final class FlipCutCellValidation {
 				"open neighbor did not own the cut-cell lower wall");
 	}
 
-	private static void cutCellSweepStopsOnlyTheContactNormal() {
-		int size = 3;
-		FlipCutCellGeometry geometry = new FlipCutCellGeometry(size, size, size);
-		geometry.replaceMask(index(size, size, 1, 1, 1), NEGATIVE_X_HALF);
-		FlipParticleCollision collision = new FlipParticleCollision(size, size, size, 1.0F, geometry);
-		float[] x = {1.73F}, y = {1.50F}, z = {1.50F};
-		float[] velocityX = {-10.0F}, velocityY = {0.0F}, velocityZ = {2.0F};
-		collision.advect(x, y, z, velocityX, velocityY, velocityZ,
-				velocityX, velocityY, velocityZ, 1, 0.10F);
-		check(x[0] >= 1.5F, "swept marker crossed a cut-cell wall");
-		checkClose(x[0], 1.5F, Math.ulp(1.5F), "cut-cell contact left a step-sized wall gap");
-		checkClose(velocityX[0], 0.0F, 0.0F, "cut-cell contact normal velocity");
-		checkClose(z[0], 1.70F, 1.0E-6F, "cut-cell tangential displacement");
-		checkClose(velocityZ[0], 2.0F, 0.0F, "cut-cell tangential velocity");
-		x[0] = 1.75F; y[0] = 1.25F; z[0] = 1.25F;
-		velocityX[0] = -.5F; velocityY[0] = .5F; velocityZ[0] = 0;
-		collision.advect(x, y, z, velocityX, velocityY, velocityZ,
-				velocityX, velocityY, velocityZ, 1, 1);
-		checkClose(x[0], 1.5F, Math.ulp(1.5F), "simultaneous tangent grid crossing contact");
-		checkClose(y[0], 1.75F, 0, "tangent micro-grid crossing became a collision normal");
-		checkClose(velocityY[0], .5F, 0, "tangent micro-grid crossing removed tangent velocity");
-	}
 
-	private static void straightSweepResolvesDiagonalContacts() {
-		int size = 3;
-		FlipCutCellGeometry geometry = new FlipCutCellGeometry(size, size, size);
-		geometry.replaceMask(index(size, size, 1, 1, 1), 1);
-		FlipParticleCollision collision = new FlipParticleCollision(size, size, size, 1, geometry);
-		float[] x = {.75F}, y = {.95F}, z = {1.25F};
-		float[] vx = {1}, vy = {.4F}, vz = {0};
-		collision.advect(x, y, z, vx, vy, vz, vx, vy, vz, 1, 1);
-		checkClose(x[0], 1, Math.ulp(1F), "diagonal segment bypassed a solid micro box");
-		check(x[0] < 1, "positive contact rounded into the solid micro box");
-		checkClose(y[0], 1.35F, Math.ulp(1.35F), "diagonal contact lost remaining tangent motion");
-		checkClose(vx[0], 0, 0, "diagonal contact normal velocity");
-		checkClose(vy[0], .4F, 0, "diagonal contact tangent velocity");
 
-		// This straight path clears the obstacle before entering its X interval.
-		x[0] = .75F; y[0] = 1.4F; vx[0] = vy[0] = 1;
-		collision.advect(x, y, z, vx, vy, vz, vx, vy, vz, 1, 1);
-		checkClose(x[0], 1.75F, 0, "axis order introduced a false diagonal contact");
-		checkClose(y[0], 2.4F, 0, "clear diagonal segment changed tangent motion");
 
-		// A simultaneous corner entry constrains both normals and retains the third axis.
-		x[0] = y[0] = .75F; z[0] = 1.25F; vx[0] = vy[0] = .5F; vz[0] = .1F;
-		collision.advect(x, y, z, vx, vy, vz, vx, vy, vz, 1, 1);
-		check(x[0] < 1 && y[0] < 1, "corner contact entered solid geometry");
-		checkClose(x[0], 1, Math.ulp(1F), "corner X contact gap");
-		checkClose(y[0], 1, Math.ulp(1F), "corner Y contact gap");
-		checkClose(z[0], 1.35F, Math.ulp(1.35F), "corner contact lost tangent displacement");
-		checkClose(vx[0], 0, 0, "corner X normal velocity");
-		checkClose(vy[0], 0, 0, "corner Y normal velocity");
-		checkClose(vz[0], .1F, 0, "corner tangent velocity");
-	}
-
-	private static void contactPositionsFollowFloatMicroGeometry() {
-		int size = 4;
-		for (float h : new float[] {.3F, .1F, .07F, .5F}) {
-			FlipCutCellGeometry geometry = new FlipCutCellGeometry(size, size, size);
-			geometry.replaceMask(index(size, size, 1, 1, 1), NEGATIVE_X_HALF);
-			FlipParticleCollision collision = new FlipParticleCollision(size, size, size, h, geometry);
-			float[] x = {1.73F * h}, y = {1.25F * h}, z = {1.25F * h};
-			float[] vx = {-h}, vy = {0}, vz = {0};
-			collision.advect(x, y, z, vx, vy, vz, vx, vy, vz, 1, 1);
-			checkClose(x[0], 1.5F * h, 3 * Math.ulp(1.5F * h), "nonbinary grid negative contact");
-			check(!collision.centerInSolid(x[0], y[0], z[0]), "negative contact float entered solid");
-			x[0] = .73F * h; vx[0] = h;
-			collision.advect(x, y, z, vx, vy, vz, vx, vy, vz, 1, 1);
-			checkClose(x[0], h, 3 * Math.ulp(h), "nonbinary grid positive contact");
-			check(!collision.centerInSolid(x[0], y[0], z[0]), "positive contact float entered solid");
-			x[0] = 3.73F * h; vx[0] = h;
-			collision.advect(x, y, z, vx, vy, vz, vx, vy, vz, 1, 1);
-			check(x[0] < size * h, "domain contact rounded outside the grid");
-			checkClose(x[0], size * h, 3 * Math.ulp(size * h), "domain wall contact gap");
-			x[0] = .23F * h; vx[0] = -h;
-			collision.advect(x, y, z, vx, vy, vz, vx, vy, vz, 1, 1);
-			checkClose(x[0], 0, 0, "lower domain wall contact");
-		}
-	}
-
-	private static void simultaneousContactsRespectSpatialSymmetry() {
-		int[][] permutations = {{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}};
-		for (int mask = 0; mask < 256; mask += 2) {
-			float[][] original = cornerMotion(mask, permutations[0], 0);
-			if (mask == 168) {
-				checkClose(original[1][0], 0, 0, "union corner X normal");
-				checkClose(original[1][1], .5F, 0, "union corner Y tangent");
-				checkClose(original[1][2], .5F, 0, "union corner Z tangent");
-			}
-			for (int[] permutation : permutations) for (int reflection = 0; reflection < 8; reflection++) {
-				float[][] transformed = cornerMotion(mask, permutation, reflection);
-				for (int axis = 0; axis < 3; axis++) {
-					boolean reflected = (reflection & 1 << axis) != 0;
-					float position = reflected ? 3 - transformed[0][axis] : transformed[0][axis];
-					float velocity = reflected ? -transformed[1][axis] : transformed[1][axis];
-					checkClose(position, original[0][permutation[axis]], 8 * Math.ulp(position),
-							"corner position depends on axis order: mask=" + mask);
-					checkClose(velocity, original[1][permutation[axis]], 0,
-							"corner velocity depends on axis order: mask=" + mask);
-				}
-			}
-		}
-	}
-
-	private static float[][] cornerMotion(int mask, int[] permutation, int reflection) {
-		FlipCutCellGeometry geometry = new FlipCutCellGeometry(3, 3, 3);
-		for (int bit = 0; bit < 8; bit++) if ((mask & 1 << bit) != 0) {
-			int[] original = {1 + (bit & 1), 1 + (bit >> 1 & 1), 1 + (bit >> 2 & 1)};
-			int[] micro = new int[3];
-			for (int axis = 0; axis < 3; axis++) micro[axis] = (reflection & 1 << axis) == 0
-					? original[permutation[axis]] : 5 - original[permutation[axis]];
-			int cell = index(3, 3, micro[0] / 2, micro[1] / 2, micro[2] / 2);
-			geometry.replaceMask(cell, geometry.mask(cell) | 1 << ((micro[0] & 1) + 2 * ((micro[1] & 1) + 2 * (micro[2] & 1))));
-		}
-		float[][] position = new float[3][1], velocity = new float[3][1];
-		for (int axis = 0; axis < 3; axis++) {
-			position[axis][0] = (reflection & 1 << axis) == 0 ? .75F : 2.25F;
-			velocity[axis][0] = (reflection & 1 << axis) == 0 ? .5F : -.5F;
-		}
-		new FlipParticleCollision(3, 3, 3, 1, geometry).advect(
-				position[0], position[1], position[2], velocity[0], velocity[1], velocity[2],
-				velocity[0], velocity[1], velocity[2], 1, 1);
-		return new float[][] {{position[0][0], position[1][0], position[2][0]},
-				{velocity[0][0], velocity[1][0], velocity[2][0]}};
-	}
-
-	private static void exactMarkerDisplacementUsesMicroOccupancy() {
+	private static void collisionDisplacementUsesOpenCapacity() {
 		FluidDomain domain = new FluidDomain(5, 5, 5, config());
 		domain.setVolume(2, 2, 2, 1.0F);
 		float before = domain.totalVolume();
 		float displaced = domain.setSolidMicroMask(2, 2, 2, LOWER_HALF);
-		checkClose(displaced, 0.5F, 1.0E-7F, "exact displaced marker volume");
-		checkClose(domain.totalVolume(), before - displaced, 1.0E-7F, "remaining marker ledger");
+		checkClose(displaced, 0.5F, 1.0E-7F, "exact displaced liquid volume");
+		checkClose(domain.totalVolume(), before - displaced, 1.0E-7F, "remaining liquid volume");
 		float restored = domain.addVolumeNear(2, 2, 2, displaced, 3);
 		checkClose(restored, displaced, 1.0E-7F, "nearby exact restoration");
-		checkClose(domain.totalVolume(), before, 1.0E-7F, "restored marker ledger");
+		checkClose(domain.totalVolume(), before, 1.0E-7F, "restored liquid volume");
 	}
 
-	private static void cutCellCapacityDisplacesMergedMarkerVolume() {
+	private static void cutCellCapacityDisplacesImportedInventory() {
 		FluidDomain domain = new FluidDomain(5, 5, 5, config());
 		float coordinate = (2.0F + 0.75F) * domain.config().cellSize();
 		domain.restoreParticleState(new FlipParticleState(
@@ -249,7 +111,7 @@ public final class FlipCutCellValidation {
 		));
 		float displaced = domain.setSolidMicroMask(2, 2, 2, LOWER_HALF);
 		checkClose(displaced, 0.5F, 1.0E-7F,
-				"cut-cell capacity did not displace excess merged-marker volume");
+				"cut-cell capacity did not displace excess imported inventory");
 		checkClose(domain.totalVolume(), 0.5F, 1.0E-7F, "cut-cell capacity remaining ledger");
 		checkClose(domain.addVolumeNear(2, 2, 2, displaced, 3), displaced, 1.0E-7F,
 				"cut-cell capacity restoration");
@@ -262,21 +124,21 @@ public final class FlipCutCellValidation {
 		live.setSolid(3, 3, 3, true);
 		live.setVolume(1, 1, 1, 1.0F);
 		float exactVolume = live.totalVolume();
-		FlipParticleState checkpoint = live.exportParticleState();
+		var checkpoint = live.captureAuthoritativeState();
 		int partial = index(4, 4, 1, 1, 1);
 		int full = index(4, 4, 3, 3, 3);
-		check(Byte.toUnsignedInt(checkpoint.copyCollisionMicroMasks()[partial]) == LOWER_HALF,
+		check(Byte.toUnsignedInt(checkpoint.copyCollisionMasks()[partial]) == LOWER_HALF,
 				"checkpoint lost partial cut-cell geometry");
-		check(Byte.toUnsignedInt(checkpoint.copyCollisionMicroMasks()[full]) == 0xff,
+		check(Byte.toUnsignedInt(checkpoint.copyCollisionMasks()[full]) == 0xff,
 				"fully solid checkpoint cell was lost");
 
-		FluidDomain restored = new FluidDomain(4, 4, 4, config());
-		restored.restoreParticleState(checkpoint);
+		FluidDomain restored = FluidDomain.restoreAuthoritativeState(checkpoint);
+		check(restored.exportLiquidCellState().stocks().equals(checkpoint.liquid().stocks()), "Cut-cell restore changed cell inventories");
 		check(restored.solidMicroMask(1, 1, 1) == LOWER_HALF, "partial cut-cell geometry changed on restore");
 		float displacedOnRefresh = restored.setSolidMicroMask(1, 1, 1, LOWER_HALF);
 		checkClose(displacedOnRefresh, 0.0F, 0.0F,
-				"unchanged world geometry displaced markers after checkpoint restore");
-		checkClose(restored.totalVolume(), exactVolume, 0.0F, "restore/resample marker ledger");
+				"unchanged world geometry displaced liquid after checkpoint restore");
+		checkClose(restored.totalVolume(), exactVolume, 0.0F, "restored liquid volume");
 	}
 
 	private static void partialObstacleFlowRemainsFiniteAndConservative() {
@@ -289,41 +151,36 @@ public final class FlipCutCellValidation {
 			domain.setVolume(x, y, z, 1.0F);
 		}
 		float exactVolume = domain.totalVolume();
+		long exactMass = domain.totalMassUnits();
 		var backend = new CpuFluidSolverBackend();
 		long start = System.nanoTime();
 		for (int step = 0; step < 600; step++) {
-			if (step == 0) System.out.printf("Cut-cell obstacle flow: starting 600 steps, markers=%d%n", domain.particleCount());
+			if (step == 0) System.out.printf("Cut-cell obstacle flow: starting 600 steps, stocks=%d%n", domain.liquidCells.size());
 			var candidate = backend.evaluate(new FluidStepRequest(step, domain.captureAuthoritativeState(),
 					java.util.List.of(), false, 0, false));
 			FluidDomain.StepStats stats = candidate.stats();
 			domain = candidate.claimPreparedCpuDomain();
 			check(Float.isFinite(stats.pressureResidual()), "cut-cell PCG residual became non-finite");
 			check(Float.isFinite(domain.maximumPressure()), "cut-cell pressure became non-finite");
-			check(stats.relativeVolumeError() < 2.0E-6F, "cut-cell step changed exact marker volume");
-			assertNoMarkerCenterInsideSolid(domain);
+			check(stats.relativeVolumeError() < 2.0E-6F, "cut-cell step changed exact liquid volume");
+			assertInventoryFitsOpenGeometry(domain);
+			check(domain.totalMassUnits() == exactMass && domain.gasBoundary().auditClosed(), "Cut-cell flow lost mass or gas inventory");
+			if ((step + 1) % 100 == 0) domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 			if (step < 5 || (step + 1) % 25 == 0)
-				System.out.printf("Cut-cell obstacle flow: completed %d/600, markers=%d, substeps=%d, elapsed=%.3fs%n",
-						step + 1, domain.particleCount(), stats.substeps(), (System.nanoTime() - start) / 1e9);
+				System.out.printf("Cut-cell obstacle flow: completed %d/600, stocks=%d, substeps=%d, elapsed=%.3fs%n",
+						step + 1, domain.liquidCells.size(), stats.substeps(), (System.nanoTime() - start) / 1e9);
 		}
-		checkClose(domain.totalVolume(), exactVolume, 2.0E-4F, "long cut-cell marker ledger");
+		checkClose(domain.totalVolume(), exactVolume, 2.0E-4F, "long cut-cell liquid volume");
 		check(domain.centerOfMassX() > 3.0F, "fluid did not pass the partial obstacle aperture");
 	}
 
-	private static void assertNoMarkerCenterInsideSolid(FluidDomain domain) {
-		FlipParticleState state = domain.exportParticleState();
-		float[] particles = state.copyPositionVolume();
-		float h = domain.config().cellSize();
-		for (int particle = 0; particle < state.particleCount(); particle++) {
-			int base = particle * 4;
-			int cellX = Math.min(domain.sizeX() - 1, (int) Math.floor(particles[base] / h));
-			int cellY = Math.min(domain.sizeY() - 1, (int) Math.floor(particles[base + 1] / h));
-			int cellZ = Math.min(domain.sizeZ() - 1, (int) Math.floor(particles[base + 2] / h));
-			int microX = Math.min(1, (int) Math.floor((particles[base] / h - cellX) * 2.0F));
-			int microY = Math.min(1, (int) Math.floor((particles[base + 1] / h - cellY) * 2.0F));
-			int microZ = Math.min(1, (int) Math.floor((particles[base + 2] / h - cellZ) * 2.0F));
-			int bit = 1 << (microX + 2 * (microY + 2 * microZ));
-			check((domain.solidMicroMask(cellX, cellY, cellZ) & bit) == 0,
-					"marker center penetrated runtime cut-cell geometry at particle " + particle);
+	private static void assertInventoryFitsOpenGeometry(FluidDomain domain) {
+		for (var stock : domain.liquidCells.stocks()) {
+			int cell=stock.key().cell();
+			check((stock.key().supportMask() & domain.geometry.cutCells.mask(cell)) == 0,
+					"Liquid inventory support overlaps a solid micro-cell");
+			check(domain.liquidCells.exactCellVolume(cell).toDouble() <= domain.effectiveOpenCellVolume(cell) + 1e-12,
+					"Liquid inventory exceeds joint capacity");
 		}
 	}
 

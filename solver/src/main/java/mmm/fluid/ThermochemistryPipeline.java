@@ -45,9 +45,9 @@ final class ThermochemistryPipeline {
 		FluidDomain.ThermalPhaseStats condensedStats = new FluidDomain.ThermalPhaseStats(0, 0, 0, 0L);
 		FluidDomain.GasThermalPhaseStats gasStats = new FluidDomain.GasThermalPhaseStats(0, 0, 0);
 		if (phaseChangeEnabled) {
-			boolean phaseGridPrepared = chemicalStats.changedMarkers() == 0 && granularStats.transfers() == 0;
+			boolean phaseGridPrepared = false;
 			condensedStats = condensedPhase.step(maximumPhaseOperations, phaseGridPrepared);
-			gasStats = gasPhase.step(maximumPhaseOperations - condensedStats.operations(), true);
+			gasStats = gasPhase.step(maximumPhaseOperations - condensedStats.operations(), condensedStats.operations() == 0);
 		}
 		return new FluidDomain.ThermalAxisStats(
 				transportStats, chemicalStats, granularStats, condensedStats, gasStats);

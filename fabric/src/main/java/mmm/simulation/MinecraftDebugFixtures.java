@@ -3,8 +3,6 @@ package mmm.simulation;
 import mmm.application.RegionCatalog;
 import mmm.block.MmmBlocks;
 import mmm.fluid.BuiltinFluidMaterials;
-import mmm.fluid.FlipMaterialParticleState;
-import mmm.fluid.FlipParticleState;
 import mmm.fluid.FluidDomain;
 import mmm.fluid.FluidMaterial;
 import mmm.fluid.FluidMaterialRegistry;
@@ -292,6 +290,7 @@ public final class MinecraftDebugFixtures {
 
 	/** Fills both chambers to 3.5 blocks; the two-block doorway column stays inside the fill range and submerged. */
 	private static void fillAirDemoWater(FluidDomain domain) {
+		float[] volumes=new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
 		int cellsPerBlock = FluidRegionFactory.CELLS_PER_BLOCK;
 		for (int bz = 1; bz <= BLOCK_SIZE_Z - 2; bz++) {
 			for (int bx = 1; bx <= BLOCK_SIZE_X - 2; bx++) {
@@ -303,29 +302,20 @@ public final class MinecraftDebugFixtures {
 								int x = bx * cellsPerBlock + localX;
 								int y = by * cellsPerBlock + localY;
 								int z = bz * cellsPerBlock + localZ;
-								if (!domain.isSolid(x, y, z)) domain.setVolume(x, y, z, fraction);
+								if (!domain.isSolid(x, y, z)) volumes[(z*domain.sizeY()+y)*domain.sizeX()+x] = fraction;
 							}
 						}
 					}
 				}
 			}
 		}
+		domain.setVolumes(volumes);
 	}
 
 	private static void bindTensionDemoMaterial(FluidDomain domain, int angleDegrees) {
-		FlipParticleState pure = domain.exportParticleState();
-		float[] positionVolume = pure.copyPositionVolume();
-		float[] velocities = pure.copyParticleVelocities();
-		long[] markerMassUnits = pure.copyMassUnits();
-		int[] material = new int[pure.particleCount()];
 		FluidMaterial tensionWater = new FluidMaterial("mmm:tension_water", domain.config().density(),
 				"mmm:tension_water", 100.0, Math.toRadians(angleDegrees));
-		FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(tensionWater));
-		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
-				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(),
-				pure.totalVolume(), mmm.units.Mass.sum(markerMassUnits), registry.materials(), positionVolume, velocities,
-				pure.copySolidMask(), markerMassUnits, material
-		));
+		domain.bindMaterialRegistry(new FluidMaterialRegistry(List.of(tensionWater)));
 	}
 
 	private static BlockPos aimedOrigin(BlockPos center) {
@@ -404,34 +394,10 @@ public final class MinecraftDebugFixtures {
 		double centerX = 0.5 * (sx - 1) * cellSize;
 		double centerY = wallY - radius * cos;
 		double centerZ = 0.5 * (sz - 1) * cellSize;
-		int particleCount = 0;
-		for (int z = 0; z < sz; z++) for (int y = 1; y < sy; y++) for (int x = 0; x < sx; x++) {
-			if (sphericalCapFraction(x, y, z, cellSize, centerX, centerY, centerZ, radius, wallY) > 1.0E-6) {
-				particleCount += 8;
-			}
-		}
-		float[] positionVolume = new float[particleCount * 4];
-		float[] velocities = new float[particleCount * 3];
-		float totalVolume = 0.0F;
-		int particle = 0;
-		for (int z = 0; z < sz; z++) for (int y = 1; y < sy; y++) for (int x = 0; x < sx; x++) {
-			double fraction = sphericalCapFraction(x, y, z, cellSize, centerX, centerY, centerZ, radius, wallY);
-			if (fraction <= 1.0E-6) continue;
-			float perMarker = (float) (fraction / 8.0);
-			for (int slot = 0; slot < 8; slot++) {
-				int base = particle * 4;
-				positionVolume[base] = (x + 0.5F) * cellSize;
-				positionVolume[base + 1] = (y + 0.5F) * cellSize;
-				positionVolume[base + 2] = (z + 0.5F) * cellSize;
-				positionVolume[base + 3] = perMarker;
-				totalVolume += perMarker;
-				particle++;
-			}
-		}
-		domain.restoreParticleState(new FlipParticleState(
-				sx, sy, sz, cellSize, particleCount, totalVolume, positionVolume, velocities,
-				mmm.units.Mass.createLiquid(cellSize, domain.config().density(), positionVolume), domain.copyCollisionMicroMasks()
-		));
+		float[] volumes=new float[sx*sy*sz];
+		for(int z=0;z<sz;z++) for(int y=1;y<sy;y++) for(int x=0;x<sx;x++)
+			volumes[(z*sy+y)*sx+x]=(float)sphericalCapFraction(x,y,z,cellSize,centerX,centerY,centerZ,radius,wallY);
+		domain.setVolumes(volumes);
 	}
 
 	private static double sphericalCapFraction(int x, int y, int z, double cellSize,
@@ -460,17 +426,21 @@ public final class MinecraftDebugFixtures {
 		runtime.refreshCollisions(level);
 
 		FluidDomain domain = regions.selected().domain();
+		float[] volumes=new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
 		int fillX = domain.sizeX() * 2 / 5;
 		int fillY = domain.sizeY() * 3 / 4;
 		for (int z = 0; z < domain.sizeZ(); z++) {
 			for (int y = 0; y < fillY; y++) {
 				for (int x = 0; x < fillX; x++) {
-					if (!domain.isSolid(x, y, z)) domain.setVolume(x, y, z, 1.0F);
+					if (!domain.isSolid(x, y, z)) volumes[(z*domain.sizeY()+y)*domain.sizeX()+x] = 1.0F;
 				}
 			}
 		}
-		if (profile.hasCapability(WorldCapability.MATERIALS)) FluidRegionFactory.bindDefaultMaterialState(domain);
-		if (layeredMaterials) assignLayeredDemoMaterials(domain, fillY / 2.0F * domain.config().cellSize());
+		if (profile.hasCapability(WorldCapability.MATERIALS) || layeredMaterials) FluidRegionFactory.bindDefaultMaterialState(domain);
+		int[] materials=layeredMaterials?new int[volumes.length]:null;
+		if(materials!=null) for(int z=0;z<domain.sizeZ();z++) for(int y=0;y<domain.sizeY();y++) for(int x=0;x<domain.sizeX();x++)
+			materials[(z*domain.sizeY()+y)*domain.sizeX()+x]=y+.5F>=fillY/2.0F?1:0;
+		domain.setVolumes(volumes,materials);
 		runtime.bindCapabilityState(domain);
 		regions.selected().setPaused(true);
 		sendSnapshot(level);
@@ -512,24 +482,6 @@ public final class MinecraftDebugFixtures {
 		if (replaced != null) snapshots.sendRemoval(level.getServer(), replaced);
 	}
 
-	private static void assignLayeredDemoMaterials(FluidDomain domain, float interfaceY) {
-		FlipMaterialParticleState state = domain.exportMaterialParticleState();
-		float[] positionVolume = state.copyPositionVolume();
-		long[] markerMassUnits = state.copyParticleMassUnits();
-		int[] materials = state.copyMaterialPaletteIndex();
-		long totalMass = 0;
-		for (int marker = 0; marker < state.particleCount(); marker++) {
-			int material = positionVolume[marker * 4 + 1] >= interfaceY ? 1 : 0;
-			materials[marker] = material;
-			markerMassUnits[marker] = mmm.units.SolverUnitScale.forCellSize(state.cellSize()).massUnitsForNormalized(positionVolume[marker * 4 + 3]
-					* BuiltinFluidMaterials.DEFAULT_PALETTE.get(material).referenceDensity());
-			totalMass = Math.addExact(totalMass, markerMassUnits[marker]);
-		}
-		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
-				state.sizeX(), state.sizeY(), state.sizeZ(), state.cellSize(), state.particleCount(), state.totalVolume(), totalMass,
-				state.materials(), positionVolume, state.copyParticleVelocities(), state.copySolidMask(), markerMassUnits, materials
-		));
-	}
 
 	private void sendSnapshot(ServerLevel level) {
 		FluidRegion region = regions.selected();

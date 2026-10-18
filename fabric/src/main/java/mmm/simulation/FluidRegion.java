@@ -525,6 +525,14 @@ public final class FluidRegion {
 		return lifecycle.requestUnload(true, true);
 	}
 
+	/** Restores the complete cell/MAC generation while retaining the persisted lifecycle intent. */
+	public void restoreAuthoritativeSolver(mmm.fluid.FluidDomainState state,long generation) {
+		if(domain!=null||lifecycle.state()!=FluidRegionLifecycle.State.UNLOADED)throw new IllegalStateException("Only an unloaded region can restore its solver");
+		if(generation!=checkpointGeneration)throw new IllegalArgumentException("Checkpoint generation changed while restoring");
+		if(state.sizeX()!=sizeX()||state.sizeY()!=sizeY()||state.sizeZ()!=sizeZ()||!state.config().equals(solverConfig()))throw new IllegalArgumentException("Checkpoint solver geometry changed");
+		domain=FluidDomain.restoreAuthoritativeState(state);collisionRefreshRequired=true;lifecycle.restoreFromUnloaded(unloadedResumeState,stepIntervalTicks);
+	}
+
 	/** Restores exact marker truth into a fresh solver while preserving the persisted run intent. */
 	public void restoreSolver(FlipParticleState state, long loadedCheckpointGeneration) {
 		Objects.requireNonNull(state, "state");

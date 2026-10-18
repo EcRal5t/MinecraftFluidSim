@@ -99,19 +99,12 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		GranularTransitionStage.Outcome granularTransition = granularTransitionStage.step();
 		lastGranularDepositStats = granularTransition.depositStats();
 		liquidTransport = liquidTransport.plus(granularTransition.liquidTransport());
-		ParticleReseedStage.Outcome reseedOutcome = particleReseedStage.step(captureMechanicalAudit);
-		double reseedInitialKineticEnergy = reseedOutcome.initialKineticEnergy();
+		double finalParticleKineticEnergy = captureMechanicalAudit ? mechanicalCarrierKineticEnergyJoules() : 0;
 		if (captureMechanicalAudit) mechanicalAudit.carrierInventoryTransferJoules +=
-				reseedInitialKineticEnergy - carrierTransferInitialKineticEnergy;
-		FlipParticleReseeder.Result reseeding = reseedOutcome.result();
-		double finalParticleKineticEnergy = reseedOutcome.finalKineticEnergy();
-		if (captureMechanicalAudit) mechanicalAudit.reseedTransferJoules +=
-				finalParticleKineticEnergy - reseedInitialKineticEnergy;
+				finalParticleKineticEnergy - carrierTransferInitialKineticEnergy;
 		return new StepStats(
 				substeps, pressureIterations, lastPressureResidual, before, domain().totalVolume(), massBefore, domain().totalMass(),
-				reseeding.merged(), reseeding.split(), reseeding.budgetSkipped(), reseeding.geometrySkipped(),
-				reseeding.conservationSkipped(),
-				reseeding.ledgerError(), reseeding.massLedgerError(),
+				0, 0, 0, 0, 0, 0, 0,
 				chemistry.dirtyCells(), chemistry.evaluations(), chemistry.changedMarkers(),
 				thermalAxis.condensedPhase(), thermalAxis.gasPhase(),
 				captureMechanicalAudit ? mechanicalAudit.finish(
@@ -174,33 +167,19 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	}
 
 	/** Liquid-only energy used by liquid transfer observations. */
-	double particleKineticEnergyJoules() {
-		double energy = 0.0;
-		for (int marker = 0; marker < particles.count(); marker++) {
-			double speedSquared = particles.velocityX(marker) * (double) particles.velocityX(marker)
-					+ particles.velocityY(marker) * (double) particles.velocityY(marker)
-					+ particles.velocityZ(marker) * (double) particles.velocityZ(marker);
-			energy += 0.5 * unitScale.kilograms(particles.mass(marker)) * speedSquared;
-		}
-		if (!(Double.isFinite(energy) && energy >= 0.0)) {
-			throw new ArithmeticException("Particle kinetic-energy audit is invalid");
-		}
-		return energy;
-	}
+	double particleKineticEnergyJoules() { ensureGrid(); return gridKineticEnergyJoules(); }
 
 	double gravitationalPotentialEnergyJoules() {
-		double energy = 0.0;
-		for (int marker = 0; marker < particles.count(); marker++) {
-			energy += unitScale.kilograms(particles.mass(marker)) * config.gravity() * particles.positionY(marker);
+		double energy = 0;
+		for (var stock : liquidCells.physicalStocks()) {
+			double y = config.cellSize() * (stock.key().cell() / sizeX % sizeY + .5);
+			energy += mmm.units.Mass.kilograms(stock.massUnits()) * config.gravity() * y;
 		}
-		if (!(Double.isFinite(energy) && energy >= 0.0)) {
-			throw new ArithmeticException("Particle gravitational-potential audit is invalid");
-		}
-		return energy;
+		return checkedMechanicalEnergy(energy);
 	}
 
 	double gridKineticEnergyJoules() {
-		double densityScale = variableDensityActive ? 1.0 : config.density();
+		double densityScale = 1.0;
 		double energy = faceKineticEnergyJoules(mac.velocityX, mac.p2gWeightX, densityScale)
 				+ faceKineticEnergyJoules(mac.velocityY, mac.p2gWeightY, densityScale)
 				+ faceKineticEnergyJoules(mac.velocityZ, mac.p2gWeightZ, densityScale);
@@ -221,7 +200,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 
 	/** Explicit solver-unit diagnostic of the variational face metric; physical audits use joules. */
 	double gridKineticEnergySolverUnits() {
-		double densityScale = variableDensityActive ? 1.0 : config.density();
+		double densityScale = 1.0;
 		double energy = faceKineticEnergy(mac.velocityX, mac.p2gWeightX, densityScale)
 				+ faceKineticEnergy(mac.velocityY, mac.p2gWeightY, densityScale)
 				+ faceKineticEnergy(mac.velocityZ, mac.p2gWeightZ, densityScale);
@@ -236,7 +215,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		return energy;
 	}
 
-	void rebuildGridFromParticles() { particleToGridStage.rebuild(); }
+	void rebuildGridFromParticles() { domain().rebuildDerivedFromLiquidCells(); }
 
 
 
@@ -288,71 +267,15 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		return gasPressureOfNode(node);
 	}
 
-	int gasNodeOfAirCell(int airCell) {
-		if (gasState.frame != null) {
-			for (int micro = 0; micro < 8; micro++) if (gasState.frame.nodeOfPiece(8 * airCell + micro) >= 0)
-				return gasState.frame.commonCellNode(airCell);
-		}
-		int node = projection.pressureAirNodeId[airCell];
-		return node >= 0 ? node : rawGasNodeOfCell(airCell);
-	}
-
-	int rawGasNodeOfCell(int cell) {
-		return gasBoundary.rawCellNode(cell);
-	}
-
-	/** Extends gas lineage through pressure-air fringe without crossing pressure-fluid bulk. */
-	void rebuildPressureBoundaryLineage() {
-		Arrays.fill(projection.pressureAirNodeId, -1);
-		if (!gasBoundary.pressureActive() || !gasBoundary.topologyInitialized()) return;
-		for (int node = AirNetwork.AMBIENT_NODE; node <= gasBoundary.previousSealedNodeCount(); node++) {
-			int head = 0, tail = 0;
-			for (int cell = 0; cell < cellCount; cell++) if (isAir(cell)
-					&& rawGasNodeOfCell(cell) == node
-					&& (projection.pressureAirNodeId[cell] < 0 || node < projection.pressureAirNodeId[cell])) {
-				projection.pressureAirNodeId[cell] = node;
-				projection.pressureAirQueue[tail++] = cell;
-			}
-			while (head < tail) {
-				int cell = projection.pressureAirQueue[head++];
-				int x = cell % sizeX;
-				int yz = cell / sizeX;
-				int y = yz % sizeY;
-				int z = yz / sizeY;
-				tail = visitPressureAir(cell, x - 1, y, z, -1, 0, 0, node, tail);
-				tail = visitPressureAir(cell, x + 1, y, z, 1, 0, 0, node, tail);
-				tail = visitPressureAir(cell, x, y - 1, z, 0, -1, 0, node, tail);
-				tail = visitPressureAir(cell, x, y + 1, z, 0, 1, 0, node, tail);
-				tail = visitPressureAir(cell, x, y, z - 1, 0, 0, -1, node, tail);
-				tail = visitPressureAir(cell, x, y, z + 1, 0, 0, 1, node, tail);
-			}
-		}
-	}
-
-	int visitPressureAir(
-			int from, int x, int y, int z, int directionX, int directionY, int directionZ,
-			int node, int tail
-	) {
-		if (!inside(x, y, z)) return tail;
-		int cell = cellIndex(x, y, z);
-		// Actual gas geometry already owns its pressure source; extend only into missing pressure-air support.
-		if (gasState.frame != null) for (int micro = 0; micro < 8; micro++)
-			if (gasState.frame.nodeOfPiece(8 * cell + micro) >= 0) return tail;
-		if (!isAir(cell) || projection.pressureAirNodeId[cell] >= 0 && projection.pressureAirNodeId[cell] <= node
-				|| !(pressureOpenFaceFromCell(from, cell, directionX, directionY, directionZ) > 0.0F)) {
-			return tail;
-		}
-		projection.pressureAirNodeId[cell] = node;
-		projection.pressureAirQueue[tail] = cell;
-		return tail + 1;
-	}
+	int gasNodeOfAirCell(int cell) { return gasState.frame == null ? -1 : gasState.frame.commonCellNode(cell); }
+	int rawGasNodeOfCell(int cell) { return gasNodeOfAirCell(cell); }
 
 	float gasPressureOfNode(int node) {
 		return (float) gasBoundary.nodeGaugePressurePa(node);
 	}
 
 	int particleCellIndex(int particle) {
-		return particleCellIndex(particles.positionX(particle), particles.positionY(particle), particles.positionZ(particle));
+		return liquidCells.physicalStockAt(particle).key().cell();
 	}
 
 	int particleCellIndex(float positionX, float positionY, float positionZ) {
@@ -372,12 +295,17 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	GranularDepositDynamics.Environment granularDepositEnvironment(long[] plannedSolid) {
 		return new GranularDepositDynamics.Environment() {
 			private GranularBedShear.LiftWork liftWork;
-			@Override public boolean planWakeWork(int cell, double joules) {
+			private SignedDyadic wakeRounding=SignedDyadic.ZERO;
+			private GranularInventory.EnergyPlan relaxationEnergy;
+			@Override public boolean planWakeWork(int cell, SignedDyadic joules) {
 				liftWork = GranularBedShear.planLift(domain(), cell, joules);
 				return liftWork != null;
 			}
+			@Override public void requireWakeWorkCurrent(){liftWork.requireCurrent(domain());}
+			@Override public SignedDyadic wakeWorkRounding(){return wakeRounding;}
 			@Override public void commitWakeWork() {
 				var impulse = liftWork.apply(domain());
+				wakeRounding=liftWork.mechanicalRounding();
 				receiveContactImpulse(impulse[0], impulse[1], impulse[2]);
 				liftWork = null;
 			}
@@ -466,26 +394,28 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 			}
 
 			@Override public void cancelRelaxation(int fromCell, int toCell, long solidSvq) {
+				relaxationEnergy = null;
 				granularCoupling.removePlannedCell(plannedSolid, toCell, solidSvq);
 				restorePlannedCell(plannedSolid, fromCell, solidSvq, "relaxation rollback");
 			}
 
 			@Override public void requireThermalRelaxation(
-					int fromCell, int toCell, int material, int composition, long movedMassUnits, long sourceMassUnits
+					int fromCell, int toCell, int material, int composition, long movedMassUnits, long sourceMassUnits, SignedDyadic heat
 			) {
 				if (thermalState == null) return;
-				thermalState.requireDepositMove(
+				relaxationEnergy = thermalState.planDepositMove(
 						new GranularEnergyColumn.DepositKey(fromCell, material, composition),
-						new GranularEnergyColumn.DepositKey(toCell, material, composition), movedMassUnits, sourceMassUnits);
+						new GranularEnergyColumn.DepositKey(toCell, material, composition), movedMassUnits, sourceMassUnits, heat);
+				relaxationEnergy.requireCurrent();
 			}
 
 			@Override public void commitThermalRelaxation(
-					int fromCell, int toCell, int material, int composition, long movedMassUnits, long sourceMassUnits
+					int fromCell, int toCell, int material, int composition, long movedMassUnits, long sourceMassUnits, SignedDyadic heat
 			) {
 				if (thermalState == null) return;
-				thermalState.commitDepositMove(
-						new GranularEnergyColumn.DepositKey(fromCell, material, composition),
-						new GranularEnergyColumn.DepositKey(toCell, material, composition), movedMassUnits, sourceMassUnits);
+				if (relaxationEnergy == null) throw new IllegalStateException("Missing granular relaxation energy plan");
+				relaxationEnergy.commit();
+				relaxationEnergy = null;
 			}
 
 			@Override public int wakeGeometryWork() {
@@ -569,116 +499,8 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 				: new CarrierProperties(LiquidCarrierProperties.AIR_DENSITY, LiquidCarrierProperties.AIR_VISCOSITY);
 	}
 
-	void splatCenter(float px, float py, float pz, float particleAmount) {
-		float h = config.cellSize();
-		float gx = px / h - 0.5F, gy = py / h - 0.5F, gz = pz / h - 0.5F;
-		int x0 = (int) Math.floor(gx), y0 = (int) Math.floor(gy), z0 = (int) Math.floor(gz);
-		float fx = gx - x0, fy = gy - y0, fz = gz - z0;
-		float validWeight = 0.0F;
-		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
-			int x = x0 + ox, y = y0 + oy, z = z0 + oz;
-			if (!inside(x, y, z) || geometry.solid[cellIndex(x, y, z)]) continue;
-			validWeight += trilinearWeight(ox, oy, oz, fx, fy, fz);
-		}
-		if (validWeight <= 1.0E-8F) return;
-		float scale = particleAmount / validWeight;
-		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
-			int x = x0 + ox, y = y0 + oy, z = z0 + oz;
-			if (!inside(x, y, z)) continue;
-			int index = cellIndex(x, y, z);
-			if (!geometry.solid[index]) volume[index] += scale * trilinearWeight(ox, oy, oz, fx, fy, fz);
-		}
-	}
-
-	void splatPressureVolume(float px, float py, float pz, float particleAmount) {
-		double h = config.cellSize();
-		double gridX = px / h, gridY = py / h, gridZ = pz / h;
-		int centerX = (int) Math.floor(gridX), centerY = (int) Math.floor(gridY), centerZ = (int) Math.floor(gridZ);
-		int component = closedLiquidVolume.component(particleCellIndex(px, py, pz));
-		int neighborX = gridX - centerX < 0.5 ? centerX - 1 : centerX + 1;
-		int neighborY = gridY - centerY < 0.5 ? centerY - 1 : centerY + 1;
-		int neighborZ = gridZ - centerZ < 0.5 ? centerZ - 1 : centerZ + 1;
-		double centerWeightX = pressureKernelWeight(gridX, centerX);
-		double centerWeightY = pressureKernelWeight(gridY, centerY);
-		double centerWeightZ = pressureKernelWeight(gridZ, centerZ);
-		double neighborWeightX = pressureKernelWeight(gridX, neighborX);
-		double neighborWeightY = pressureKernelWeight(gridY, neighborY);
-		double neighborWeightZ = pressureKernelWeight(gridZ, neighborZ);
-		double available = 0.0;
-		for (int oz = 0; oz < 2; oz++) {
-			int z = oz == 0 ? centerZ : neighborZ;
-			double weightZ = oz == 0 ? centerWeightZ : neighborWeightZ;
-			if (z < 0 || z >= sizeZ || !(weightZ > 0.0)) continue;
-			for (int oy = 0; oy < 2; oy++) {
-				int y = oy == 0 ? centerY : neighborY;
-				double weightY = oy == 0 ? centerWeightY : neighborWeightY;
-				if (y < 0 || y >= sizeY || !(weightY > 0.0)) continue;
-				for (int ox = 0; ox < 2; ox++) {
-					int x = ox == 0 ? centerX : neighborX;
-					double weightX = ox == 0 ? centerWeightX : neighborWeightX;
-					if (x < 0 || x >= sizeX || !(weightX > 0.0)) continue;
-					int cell = cellIndex(x, y, z);
-					if (geometry.solid[cell] || closedLiquidVolume.component(cell) != component) continue;
-					available += weightX * weightY * weightZ;
-				}
-			}
-		}
-		if (!(available > 0.0)) {
-			throw new IllegalStateException("Marker pressure footprint has no open cell overlap");
-		}
-		double scale = particleAmount / available;
-		for (int oz = 0; oz < 2; oz++) {
-			int z = oz == 0 ? centerZ : neighborZ;
-			double weightZ = oz == 0 ? centerWeightZ : neighborWeightZ;
-			if (z < 0 || z >= sizeZ || !(weightZ > 0.0)) continue;
-			for (int oy = 0; oy < 2; oy++) {
-				int y = oy == 0 ? centerY : neighborY;
-				double weightY = oy == 0 ? centerWeightY : neighborWeightY;
-				if (y < 0 || y >= sizeY || !(weightY > 0.0)) continue;
-				for (int ox = 0; ox < 2; ox++) {
-					int x = ox == 0 ? centerX : neighborX;
-					double weightX = ox == 0 ? centerWeightX : neighborWeightX;
-					if (x < 0 || x >= sizeX || !(weightX > 0.0)) continue;
-					int cell = cellIndex(x, y, z);
-					if (geometry.solid[cell] || closedLiquidVolume.component(cell) != component) continue;
-					projection.pressureVolume[cell] += weightX * weightY * weightZ * scale;
-				}
-			}
-		}
-	}
-
-	/** C1 partition induced by the canonical quarter-cell spacing of the 2x2x2 marker lattice. */
-	static double pressureKernelWeight(double coordinate, int cell) {
-		double distance = Math.abs(coordinate - (cell + 0.5));
-		if (distance <= 0.25) return 1.0;
-		if (distance >= 0.75) return 0.0;
-		double transition = (distance - 0.25) * 2.0;
-		return 1.0 - transition * transition * (3.0 - 2.0 * transition);
-	}
-
 	static float trilinearWeight(int ox, int oy, int oz, float fx, float fy, float fz) {
 		return (ox == 0 ? 1.0F - fx : fx) * (oy == 0 ? 1.0F - fy : fy) * (oz == 0 ? 1.0F - fz : fz);
-	}
-
-	/** Scatters a marker already expressed in cell coordinates, preserving ordinal accumulation order. */
-	void splatFaceField(float[] sums, float[] weights, int axis, float cellX, float cellY, float cellZ, float value, float particleAmount) {
-		int nx = axis == 0 ? sizeX + 1 : sizeX;
-		int ny = axis == 1 ? sizeY + 1 : sizeY;
-		int nz = axis == 2 ? sizeZ + 1 : sizeZ;
-		float gx = Math.clamp(cellX - (axis == 0 ? 0.0F : 0.5F), 0, nx - 1);
-		float gy = Math.clamp(cellY - (axis == 1 ? 0.0F : 0.5F), 0, ny - 1);
-		float gz = Math.clamp(cellZ - (axis == 2 ? 0.0F : 0.5F), 0, nz - 1);
-		int x0 = (int) Math.floor(gx), y0 = (int) Math.floor(gy), z0 = (int) Math.floor(gz);
-		float fx = gx - x0, fy = gy - y0, fz = gz - z0;
-		int endX = Math.min(1, nx - 1 - x0), endY = Math.min(1, ny - 1 - y0), endZ = Math.min(1, nz - 1 - z0);
-		for (int oz = 0; oz <= endZ; oz++) for (int oy = 0; oy <= endY; oy++) for (int ox = 0; ox <= endX; ox++) {
-			int x = x0 + ox, y = y0 + oy, z = z0 + oz;
-			float weight = (ox == 0 ? 1.0F - fx : fx) * (oy == 0 ? 1.0F - fy : fy) * (oz == 0 ? 1.0F - fz : fz);
-			int index = (z * ny + y) * nx + x;
-			float weighted = weight * particleAmount;
-			sums[index] += value * weighted;
-			weights[index] += weighted;
-		}
 	}
 
 	static void normalize(float[] values, float[] weights) {
@@ -686,38 +508,16 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	}
 
 	int calculateSubsteps(float dt) {
-		if (CellLiquidVolumeTransport.enabled()) return calculateVolumeTransportSubsteps(dt);
-		float maximum = 0.0F;
-		for (int i = 0; i < particles.count(); i++) {
-			maximum = Math.max(maximum, Math.abs(particles.velocityX(i)) + Math.abs(particles.velocityY(i)) + Math.abs(particles.velocityZ(i)));
-		}
-		if (granularState != null) for (int index = 0; index < granularState.parcels.count(); index++) {
-			GranularParcelStore.Parcel parcel = granularState.parcels.parcel(index);
-			maximum = Math.max(maximum, Math.abs(parcel.velocityX())
-					+ Math.abs(parcel.velocityY()) + Math.abs(parcel.velocityZ()));
-		}
-		maximum += config.gravity() * dt;
-		return Math.max(minimumMechanicalSubsteps, (int) Math.ceil(maximum * dt / (config.cellSize() * config.maxCourantNumber())));
-	}
-
-	private int calculateVolumeTransportSubsteps(float dt) {
-		ensureGrid();
-		gridToParticleStage.prepareAdvectionCells();
+		ensureInventoryGrid();if(velocityGridDirty)cellMacStage.rebuildVelocity();
 		if (cellLiquidVolumeTransport == null) cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain());
 		double required = cellLiquidVolumeTransport.courantRate(-config.gravity() * dt) * dt;
 		double maximum = 0;
-		for (int i = 0; i < particles.count(); i++) {
-			if (gridToParticleStage.advectionCells()[particleCellIndex(i)]) continue;
-			double x = particles.velocityX(i), y = particles.velocityY(i), z = particles.velocityZ(i);
-			maximum = Math.max(maximum, Math.sqrt(x * x + y * y + z * z));
-		}
 		if (granularState != null) for (int index = 0; index < granularState.parcels.count(); index++) {
 			var parcel = granularState.parcels.parcel(index);
 			maximum = Math.max(maximum, Math.abs(parcel.velocityX()) + Math.abs(parcel.velocityY()) + Math.abs(parcel.velocityZ()));
 		}
-		maximum += config.gravity() * dt;
-		required = Math.max(required, maximum * dt / (config.cellSize() * config.maxCourantNumber()));
-		return Math.max(minimumMechanicalSubsteps, (int) Math.ceil(required));
+		if (maximum > 0) required = Math.max(required, (maximum + config.gravity() * dt) * dt / (config.cellSize() * config.maxCourantNumber()));
+		return Math.max(minimumMechanicalSubsteps, Math.max(1, (int) Math.ceil(required)));
 	}
 
 	/**
@@ -726,72 +526,49 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	 * the actual float velocity writes, including their representational roundoff.
 	 */
 	public MovingBodyFluidCoupling.Result applyMovingBodyCoupling(MovingBodyFluidCoupling.Request request) {
-		return applyMovingBodyCoupling(request, null);
-	}
-
-	MovingBodyFluidCoupling.Result applyMovingBodyCouplings(java.util.List<MovingBodyFluidCoupling.Request> requests) {
-		if (requests.isEmpty()) return MovingBodyFluidCoupling.Result.NONE;
-		if (requests.size() == 1) return applyMovingBodyCoupling(requests.getFirst());
-		var neighborhoods = new MarkerNeighborhoodIndex(sizeX, sizeY, sizeZ, particles.count(), marker -> particleCellIndex(
-				particles.positionX(marker), particles.positionY(marker), particles.positionZ(marker)));
-		MovingBodyFluidCoupling.Result result = MovingBodyFluidCoupling.Result.NONE;
-		for (var request : requests) {
-			result = result.plus(applyMovingBodyCoupling(request, neighborhoods.around(
-					request.localXMetres(), request.localYMetres(), request.localZMetres(), config.cellSize())));
-		}
-		return result;
-	}
-
-	private MovingBodyFluidCoupling.Result applyMovingBodyCoupling(MovingBodyFluidCoupling.Request request, int[] ordinals) {
-		if (request == null) throw new IllegalArgumentException("Moving-body coupling request is missing");
+		if (request == null) throw new IllegalArgumentException("Moving-body request is missing");
 		requireFiniteMarkerVelocity(request.velocityXMetresPerSecond());
 		requireFiniteMarkerVelocity(request.velocityYMetresPerSecond());
 		requireFiniteMarkerVelocity(request.velocityZMetresPerSecond());
-		double cellVolumeM3 = (double) config.cellSize() * config.cellSize() * config.cellSize();
-		double requestedCellVolume = request.displacedVolumeCubicMetres() / cellVolumeM3;
-		if (!(Double.isFinite(requestedCellVolume) && requestedCellVolume > 0.0)) {
-			throw new IllegalArgumentException("Moving-body displaced volume is outside the solver scale");
+		ensureGrid();
+		double h = config.cellSize(), cellVolume = unitScale.cubicMetersPerNormalizedVolume();
+		double requested = request.displacedVolumeCubicMetres() / cellVolume;
+		if (!(Double.isFinite(requested) && requested > 0)) throw new IllegalArgumentException("Body displacement exceeds solver scale");
+		double[] weighted = new double[cellCount]; double total = 0; int coupled = 0;
+		for (int cell = 0; cell < cellCount; cell++) {
+			double weight = MovingBodyFluidCoupling.kernelWeight((cell % sizeX + .5) * h - request.localXMetres(),
+					(cell / sizeX % sizeY + .5) * h - request.localYMetres(),
+					(cell / (sizeX * sizeY) + .5) * h - request.localZMetres(), h);
+			weighted[cell] = weight * liquidCells.exactCellVolume(cell).toDouble();
+			if (weighted[cell] > 0) { total += weighted[cell]; coupled++; }
 		}
-		double weightedVolume = 0.0;
-		int coupledMarkers = 0;
-		int count = ordinals == null ? particles.count() : ordinals.length;
-		for (int index = 0; index < count; index++) {
-			int marker = ordinals == null ? index : ordinals[index];
-			double weight = movingBodyWeight(request, marker);
-			if (weight <= 0.0) continue;
-			weightedVolume += weight * particles.volume(marker);
-			coupledMarkers++;
+		if (total == 0) return MovingBodyFluidCoupling.Result.NONE;
+		double scale = Math.min(1, requested / total); double[] impulse = new double[3];
+		double[] target = {request.velocityXMetresPerSecond(), request.velocityYMetresPerSecond(), request.velocityZMetresPerSecond()};
+		for (int axis = 0; axis < 3; axis++) {
+			float[] velocity = axis == 0 ? mac.velocityX : axis == 1 ? mac.velocityY : mac.velocityZ;
+			double[] masses = axis == 0 ? cellMacStage.massX : axis == 1 ? cellMacStage.massY : cellMacStage.massZ;
+			int nx = sizeX + (axis == 0 ? 1 : 0), ny = sizeY + (axis == 1 ? 1 : 0), nz = sizeZ + (axis == 2 ? 1 : 0);
+			for (int z = 0; z < nz; z++) for (int y = 0; y < ny; y++) for (int x = 0; x < nx; x++) {
+				int coordinate = axis == 0 ? x : axis == 1 ? y : z, length = axis == 0 ? sizeX : axis == 1 ? sizeY : sizeZ;
+				if (coordinate == 0 || coordinate == length) continue;
+				int right = cellIndex(x, y, z), left = cellIndex(x - (axis == 0 ? 1 : 0), y - (axis == 1 ? 1 : 0), z - (axis == 2 ? 1 : 0));
+				int face = (z * ny + y) * nx + x;
+				double volume = liquidCells.exactCellVolume(left).toDouble() + liquidCells.exactCellVolume(right).toDouble();
+				if (volume == 0) continue;
+				double blend = scale * (weighted[left] + weighted[right]) / volume;
+				float old = velocity[face], next = (float) (old + blend * (target[axis] - old));
+				velocity[face] = next; impulse[axis] += masses[face] * (next - old);
+			}
 		}
-		if (!(weightedVolume > 0.0)) return MovingBodyFluidCoupling.Result.NONE;
-		double volumeScale = Math.min(1.0, requestedCellVolume / weightedVolume);
-		double impulseX = 0.0, impulseY = 0.0, impulseZ = 0.0, coupledVolume = 0.0;
-		boolean changed = false;
-		for (int index = 0; index < count; index++) {
-			int marker = ordinals == null ? index : ordinals[index];
-			double weight = movingBodyWeight(request, marker);
-			double blend = volumeScale * weight;
-			if (blend <= 0.0) continue;
-			float oldX = particles.velocityX(marker), oldY = particles.velocityY(marker), oldZ = particles.velocityZ(marker);
-			float newX = (float) (oldX + blend * (request.velocityXMetresPerSecond() - oldX));
-			float newY = (float) (oldY + blend * (request.velocityYMetresPerSecond() - oldY));
-			float newZ = (float) (oldZ + blend * (request.velocityZMetresPerSecond() - oldZ));
-			particles.setVelocityX(marker, newX); particles.setVelocityY(marker, newY); particles.setVelocityZ(marker, newZ);
-			impulseX += particles.mass(marker) * (newX - oldX);
-			impulseY += particles.mass(marker) * (newY - oldY);
-			impulseZ += particles.mass(marker) * (newZ - oldZ);
-			coupledVolume += blend * particles.volume(marker);
-			changed |= newX != oldX || newY != oldY || newZ != oldZ;
-		}
-		if (changed) gridDirty = true;
-		return new MovingBodyFluidCoupling.Result(coupledMarkers, coupledVolume * cellVolumeM3,
-				impulseX * cellVolumeM3, impulseY * cellVolumeM3, impulseZ * cellVolumeM3);
+		cellMacStage.publishMomentum();
+		return new MovingBodyFluidCoupling.Result(coupled, scale * total * cellVolume, impulse[0], impulse[1], impulse[2]);
 	}
 
-	double movingBodyWeight(MovingBodyFluidCoupling.Request request, int marker) {
-		return MovingBodyFluidCoupling.kernelWeight(
-				particles.positionX(marker) - request.localXMetres(),
-				particles.positionY(marker) - request.localYMetres(),
-				particles.positionZ(marker) - request.localZMetres(), config.cellSize());
+	MovingBodyFluidCoupling.Result applyMovingBodyCouplings(java.util.List<MovingBodyFluidCoupling.Request> requests) {
+		MovingBodyFluidCoupling.Result result = MovingBodyFluidCoupling.Result.NONE;
+		for (var request : requests) result = result.plus(applyMovingBodyCoupling(request));
+		return result;
 	}
 
 	static void requireFiniteMarkerVelocity(double velocity) {

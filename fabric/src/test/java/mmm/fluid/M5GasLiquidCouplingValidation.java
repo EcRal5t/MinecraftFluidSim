@@ -13,8 +13,7 @@ public final class M5GasLiquidCouplingValidation {
 	private static final float GRAVITY = 9.81F;
 
 	public static void main(String[] args) {
-		validateSharedLiquidGasFaceAlgebra();
-		validatePressureSourceRefresh();
+		PressureCapacityValidation.main(new String[]{"--algebra"});
 		validateSealedGasAndCapillaryJumpShareFaces();
 		validateSplitRetainsSealedShareWhenPeerVents();
 		validateClosedCavityAfterBootstrapStartsAsVacuum();
@@ -34,92 +33,6 @@ public final class M5GasLiquidCouplingValidation {
 		validateOrificeEqualization();
 		System.out.println("M5 gas-liquid coupling gate passed: analytic positive/negative hydrostatics, "
 				+ "sealed compression, negative-gauge suction, finite-rate orifice equalization and exact ledgers");
-	}
-
-	/** Compare prepared neighbor sources with direct classification across successive projections. */
-	private static void validatePressureSourceRefresh() {
-		FluidDomain domain = new FluidDomain(4, 3, 2, FluidSolverConfig.prototypeDefaults());
-		for (int cell = 0; cell < domain.cellCount; cell++)
-			if (cell % 4 == 1 || cell / 4 % 3 == 1) domain.setSolid(cell % 4, cell / 4 % 3, cell / 12, true);
-		domain.sealDomainBoundary(); domain.gasTopologyCoordinator.refresh();
-		PressureSystem system = new PressureSystem(domain);
-		double[] liquid = new double[domain.cellCount], gas = new double[domain.cellCount + 1];
-		for (int i = 0; i < liquid.length; i++) liquid[i] = (i - 11) * 0.3125;
-		for (int i = 0; i < gas.length; i++) gas[i] = (i + 3) * -0.1875;
-		try {
-			var assemble = PressureSystem.class.getDeclaredMethod("assembleMatrix");
-			var neighbor = PressureSystem.class.getDeclaredMethod("neighborValue", int.class, double[].class, double[].class);
-			var accumulate = PressureSystem.class.getDeclaredMethod("accumulateGasFace", int.class, int.class,
-					double.class, double[].class, double[].class, double[].class, double.class);
-			assemble.setAccessible(true); neighbor.setAccessible(true); accumulate.setAccessible(true);
-			for (int pass = 0; pass < 6; pass++) {
-				domain.pressureAnchor = pass;
-				for (int node = 1; node <= domain.gasState.network.nodeCount(); node++)
-					domain.projection.gasPressureUnknown[node] = (node + pass) % 2 == 0;
-				for (int cell = 0; cell < domain.cellCount; cell++) {
-					domain.projection.pressureFluid[cell] = !domain.geometry.solid[cell] && (cell + pass) % 2 == 0;
-				}
-				assemble.invoke(system);
-				double[] expectedGas = new double[gas.length], actualGas = new double[gas.length];
-				for (int cell = 0; cell < domain.cellCount; cell++) {
-					int node = domain.isAir(cell) ? domain.gasState.frame.commonCellNode(cell) : -1;
-					boolean gasUnknown = node > 0 && domain.projection.gasPressureUnknown[node];
-					double expected = domain.isFluid(cell) ? (cell == domain.pressureAnchor ? 0 : liquid[cell])
-							: gasUnknown ? gas[node] : 0;
-					double actual = (double) neighbor.invoke(system, cell, liquid, gas);
-					check(Double.doubleToRawLongBits(actual) == Double.doubleToRawLongBits(expected),
-							"prepared pressure source differs from current classification");
-					float coefficient = 0.625F;
-					if (gasUnknown) expectedGas[node] += coefficient * (gas[node] - liquid[0]) * 4.0;
-					accumulate.invoke(system, 0, cell, coefficient, liquid, gas, actualGas, 4.0);
-				}
-				check(java.util.Arrays.equals(expectedGas, actualGas), "prepared gas face changed accumulation order");
-			}
-		} catch (ReflectiveOperationException failure) {
-			throw new AssertionError("pressure source validation failed", failure);
-		}
-	}
-
-	/**
-	 * Locks the one face law shared by a liquid unknown, a gas unknown and the current node-owned
-	 * gas boundary. The 1000:1 density ratio is resolved by series mass resistance, not by a
-	 * material branch, and reversing the face must only reverse its pressure jump.
-	 */
-	private static void validateSharedLiquidGasFaceAlgebra() {
-		float referenceDensity = 1_000.0F;
-		float liquidDensity = 1_000.0F;
-		float gasDensity = 1.0F;
-		float liquidDistance = 0.25F;
-		float gasDistance = 0.75F;
-		float pressureJump = 250.0F;
-		float openArea = 0.625F;
-
-		PressureFaceCoupling mixed = PressureFaceCoupling.twoSided(
-				referenceDensity, liquidDensity, liquidDistance,
-				gasDensity, gasDistance, pressureJump);
-		float expectedMobility = referenceDensity
-				/ (liquidDensity * liquidDistance + gasDensity * gasDistance);
-		check(Math.abs(mixed.mobilityScale() - expectedMobility) <= Math.ulp(expectedMobility),
-				"liquid/gas face did not use the two phase segments as series mass resistance");
-		check(mixed.orientedPressureDifference(101_575.0F, 101_325.0F) == 0.0F,
-				"Laplace-balanced liquid/gas contact produced a face impulse");
-		PressureFaceCoupling reversed = mixed.reversed();
-		check(reversed.mobilityScale() == mixed.mobilityScale()
-				&& reversed.pressureJumpFirstMinusSecond() == -pressureJump
-				&& reversed.orientedPressureDifference(101_325.0F, 101_575.0F) == 0.0F,
-				"reversing a liquid/gas face changed its metric or static balance");
-		check(mixed.firstJumpRhs(openArea) == -mixed.secondJumpRhs(openArea)
-				&& mixed.matrixCoefficient(openArea) == reversed.matrixCoefficient(openArea),
-				"two-sided interface assembly is not symmetric with antisymmetric jump sources");
-
-		PressureFaceCoupling currentBoundary = PressureFaceCoupling.oneSided(
-				referenceDensity / liquidDensity, liquidDistance, pressureJump);
-		PressureFaceCoupling collapsedGasSegment = PressureFaceCoupling.twoSided(
-				referenceDensity, liquidDensity, liquidDistance, gasDensity, 0.0, pressureJump);
-		check(currentBoundary.mobilityScale() == collapsedGasSegment.mobilityScale()
-				&& currentBoundary.firstDirichletRhs(openArea, 13_000.0F)
-				== collapsedGasSegment.firstDirichletRhs(openArea, 13_000.0F),
-				"node-owned gas boundary is not the exact eliminated-gas limit of the mixed face");
 	}
 
 	private static void validateSealedGasAndCapillaryJumpShareFaces() {
@@ -162,7 +75,7 @@ public final class M5GasLiquidCouplingValidation {
 		check(addition.addedVolume() == 128.0F && !addition.markerBudgetLimited(),
 				"empty controller boundary pour did not add 16 m³");
 		for (int step = 0; step < 200; step++) {
-			try { domain = advance(domain); }
+			try { domain = advance(domain).claimPreparedCpuDomain(); }
 			catch (RuntimeException failure) {
 				throw new IllegalStateException("empty controller negative-pressure boundary pour failed at step " + step,
 						failure);
@@ -261,7 +174,9 @@ public final class M5GasLiquidCouplingValidation {
 		FluidDomain.StepStats stats = null;
 		double maximumSpeed = 0.0;
 		for (int step = 0; step < 1_000; step++) {
-			stats = domain.step();
+			var candidate = advance(domain);
+			domain = candidate.claimPreparedCpuDomain();
+			stats = candidate.stats();
 			maximumSpeed = Math.max(maximumSpeed, domain.maximumParticleSpeed());
 			check(Float.isFinite(stats.pressureResidual()), "analytic hydrostatic residual became non-finite");
 			check(domain.totalVolumeExact() == liquidVolume, "analytic hydrostatic head changed liquid volume");
@@ -320,12 +235,14 @@ public final class M5GasLiquidCouplingValidation {
 	private static void validateShortCouplingSmoke() {
 		validateOpenTubesStayAmbient();
 		FluidDomain sealed = utubeDomain(true);
-		sealed.step();
+		sealed = advance(sealed).claimPreparedCpuDomain();
 		double available = sealed.gasBoundary().availableVolume(1);
 		sealed.setGasNodeStandardVolume(1, 0.75 * available);
 		double exactVolume = sealed.totalVolumeExact();
 		double exactMass = sealed.totalMass();
-		FluidDomain.StepStats stats = sealed.step();
+		var candidate = advance(sealed);
+		sealed = candidate.claimPreparedCpuDomain();
+		FluidDomain.StepStats stats = candidate.stats();
 		check(sealed.gasPressureActive() && sealed.gasBoundary().gaugePressure(1) < 0.0,
 				"sealed gas pressure was not consumed by the active solver");
 		check(Float.isFinite(stats.pressureResidual()), "short coupling residual became non-finite");
@@ -334,12 +251,13 @@ public final class M5GasLiquidCouplingValidation {
 		checkLedger(sealed.gasBoundary(), "short sealed-cavity smoke");
 
 		FluidDomain chambers = chamberPairDomain();
-		chambers.step();
+		chambers = advance(chambers).claimPreparedCpuDomain();
 		GasPressureBoundary network = chambers.gasBoundary();
 		chambers.setGasNodeStandardVolume(1, 2.0 * network.availableVolume(1));
 		chambers.setGasNodeStandardVolume(3, network.availableVolume(3));
 		double before = Math.abs(network.gaugePressure(1) - network.gaugePressure(3));
-		chambers.step();
+		chambers = advance(chambers).claimPreparedCpuDomain();
+		network = chambers.gasBoundary();
 		double after = Math.abs(network.gaugePressure(1) - network.gaugePressure(3));
 		check(after > 0.0 && after < before, "geometric orifice edge did not begin finite-rate equalization");
 		checkLedger(network, "short orifice smoke");
@@ -355,7 +273,7 @@ public final class M5GasLiquidCouplingValidation {
 
 	private static void validateSealedCompression() {
 		FluidDomain domain = utubeDomain(true);
-		domain.step();
+		domain = advance(domain).claimPreparedCpuDomain();
 		long initialGasNanos = domain.gasBoundary().standardVolumeNanos(1);
 		double initialLiquidVolume = domain.totalVolumeExact();
 		double initialLiquidMass = domain.totalMass();
@@ -365,7 +283,9 @@ public final class M5GasLiquidCouplingValidation {
 		for (int fill = 0; fill < 48; fill++) {
 			addedTotal += domain.addVolumeNear(9, 6, 1, 2.0F, 12);
 			for (int settle = 0; settle < 150; settle++) {
-				FluidDomain.StepStats stats = domain.step();
+				var candidate = advance(domain);
+				domain = candidate.claimPreparedCpuDomain();
+				FluidDomain.StepStats stats = candidate.stats();
 				check(stats.relativeVolumeError() <= 1.0E-7F, "staged fill changed exact marker volume");
 				check(Float.isFinite(stats.pressureResidual()), "staged fill residual became non-finite");
 				maximumSpeed = Math.max(maximumSpeed, domain.maximumParticleSpeed());
@@ -396,7 +316,7 @@ public final class M5GasLiquidCouplingValidation {
 
 	private static void validateNegativeGaugeSuction() {
 		FluidDomain domain = utubeDomain(true);
-		domain.step();
+		domain = advance(domain).claimPreparedCpuDomain();
 		double initialAvailable = domain.gasBoundary().availableVolume(1);
 		domain.setGasNodeStandardVolume(1, 0.75 * initialAvailable);
 		long presetNanos = domain.gasBoundary().standardVolumeNanos(1);
@@ -404,7 +324,9 @@ public final class M5GasLiquidCouplingValidation {
 		double exactMass = domain.totalMass();
 		double maximumSpeed = 0.0;
 		for (int steps = 0; steps < 1_000; steps++) {
-			FluidDomain.StepStats stats = domain.step();
+			var candidate = advance(domain);
+			domain = candidate.claimPreparedCpuDomain();
+			FluidDomain.StepStats stats = candidate.stats();
 			check(stats.relativeVolumeError() <= 1.0E-7F, "negative-gauge suction changed exact marker volume");
 			check(Float.isFinite(stats.pressureResidual()), "negative-gauge residual became non-finite");
 			maximumSpeed = Math.max(maximumSpeed, domain.maximumParticleSpeed());
@@ -422,7 +344,7 @@ public final class M5GasLiquidCouplingValidation {
 
 	private static void validateOrificeEqualization() {
 		FluidDomain domain = chamberPairDomain();
-		domain.step();
+		domain = advance(domain).claimPreparedCpuDomain();
 		GasPressureBoundary network = domain.gasBoundary();
 		check(network.nodeCount() == 3, "dry chamber pair must expose two chambers and the sliver pocket");
 		check(network.edgeCount() == 2, "the gap must chain both chambers through the sliver pocket, got "
@@ -437,7 +359,8 @@ public final class M5GasLiquidCouplingValidation {
 		int steps = 0;
 		double delta = initialDelta;
 		while (delta > 0.01 * initialDelta && steps < 20_000) {
-			domain.step();
+			domain = advance(domain).claimPreparedCpuDomain();
+			network = domain.gasBoundary();
 			steps++;
 			delta = Math.abs(network.gaugePressure(1) - network.gaugePressure(3));
 			check(Double.isFinite(delta) && delta <= previousDelta * 1.001,
@@ -513,8 +436,8 @@ public final class M5GasLiquidCouplingValidation {
 		if (!condition) throw new AssertionError(message);
 	}
 
-	private static FluidDomain advance(FluidDomain domain) {
+	private static FluidStepCandidate advance(FluidDomain domain) {
 		return new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
-				0, domain.captureAuthoritativeState(), java.util.List.of(), false, 0)).claimPreparedCpuDomain();
+				0, domain.captureAuthoritativeState(), java.util.List.of(), false, 0));
 	}
 }

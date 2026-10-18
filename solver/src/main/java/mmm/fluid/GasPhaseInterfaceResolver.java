@@ -1,9 +1,6 @@
 package mmm.fluid;
 
-import mmm.chemistry.ExactRational;
-import mmm.thermal.GasLiquidPhaseModel;
-import mmm.thermal.ThermalPhaseTransition;
-import mmm.units.SignedDyadic;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeMap;
@@ -11,31 +8,7 @@ import java.util.TreeSet;
 
 /** Resolves positive PLIC contacts within each fixed liquid component, retaining their actual gas pieces. */
 final class GasPhaseInterfaceResolver {
-	private static final ExactRational MICRO_VOLUME = ExactRational.ONE.divide(8);
-	private final PhaseChangeStageSupport support;
-
-	GasPhaseInterfaceResolver(PhaseChangeStageSupport support) { this.support = support; }
-
-	List<Candidate> resolve(int cell, ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
-	                        GasDomainState gasState, double liquidTemperature) {
-		if (gasState.frame == null) return List.of();
-		var result = new ArrayList<Candidate>();
-		for (Contact contact : contacts(gasState.frame, cell)) {
-			if (contact.node() == 0) continue;
-			double pressure = support.thermal().requireGasNodeState(contact.node(),
-					gasState.network.inventory(contact.node()), support.thermal().gasNodeEnergy(contact.node(), gasState.network), gasState.network);
-			result.add(new Candidate(contact.node(), contact.supportMask(), contact.pieces(),
-					phase.saturation(transition, liquidTemperature, gasState.network.inventory(contact.node()), pressure)));
-		}
-		result.sort((left, right) -> {
-			int imbalance = Double.compare(Math.abs(right.saturation().pressureImbalancePa()), Math.abs(left.saturation().pressureImbalancePa()));
-			if (imbalance != 0) return imbalance;
-			int node = Integer.compare(left.node(), right.node());
-			return node != 0 ? node : Integer.compare(left.supportMask(), right.supportMask());
-		});
-		return List.copyOf(result);
-	}
-
+	private GasPhaseInterfaceResolver() { }
 
 	record Contact(int node, int supportMask, List<Integer> pieces) { }
 
@@ -49,7 +22,7 @@ final class GasPhaseInterfaceResolver {
 			int supportMask = component.supportMask();
 			for (int micro = 0; micro < 8; micro++) if ((supportMask & 1 << micro) != 0) {
 				var same = geometry.piece(8 * cell + micro);
-				if (same != null && same.normalizedVolume().compareTo(MICRO_VOLUME) < 0)
+				if (same != null && same.normalizedVolume() < .125)
 					add(found, frame, supportMask, same.id());
 				if (!(frame.liquidFractionExact(cell, micro) > 0)) continue;
 				for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) {
@@ -76,11 +49,10 @@ final class GasPhaseInterfaceResolver {
 	}
 
 	private static GasFaceIntersection.Plane facePlane(GasRuntimeGeometry frame, int cell, int micro, int axis, double coordinate, boolean wet) {
-		SignedDyadic a = SignedDyadic.of(frame.planeNormal(cell, micro, (axis + 1) % 3));
-		SignedDyadic b = SignedDyadic.of(frame.planeNormal(cell, micro, (axis + 2) % 3));
-		SignedDyadic threshold = SignedDyadic.of(frame.planeOffset(cell, micro))
-				.subtract(SignedDyadic.of(frame.planeNormal(cell, micro, axis)).multiply(SignedDyadic.of(coordinate)));
-		return new GasFaceIntersection.Plane(wet ? a.negate() : a, wet ? b.negate() : b, wet ? threshold.negate() : threshold);
+		double a = frame.planeNormal(cell, micro, (axis + 1) % 3);
+		double b = frame.planeNormal(cell, micro, (axis + 2) % 3);
+		double threshold = frame.planeOffset(cell, micro) - frame.planeNormal(cell, micro, axis) * coordinate;
+		return new GasFaceIntersection.Plane(wet ? -a : a, wet ? -b : b, wet ? -threshold : threshold);
 	}
 
 	private static void add(TreeMap<Long, TreeSet<Integer>> found, GasRuntimeGeometry frame, int supportMask, int piece) {
@@ -88,7 +60,4 @@ final class GasPhaseInterfaceResolver {
 		if (node >= 0) found.computeIfAbsent((long) node << 8 | supportMask, ignored -> new TreeSet<>()).add(piece);
 	}
 
-	record Candidate(int node, int supportMask, List<Integer> contactPieces, GasLiquidPhaseModel.Saturation saturation) {
-		Candidate { contactPieces = List.copyOf(contactPieces); }
-	}
 }

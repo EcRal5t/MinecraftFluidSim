@@ -63,6 +63,20 @@ public record ExactRational(BigInteger numerator, BigInteger denominator) implem
 				: new ExactRational(BigInteger.valueOf(significand), BigInteger.ONE.shiftLeft(-power));
 	}
 
+	/** Exact quantity conversion from a finite IEEE-754 double. */
+	public static ExactRational ofDouble(double value) {
+		if (!Double.isFinite(value)) throw new IllegalArgumentException("Double rational must be finite");
+		long bits = Double.doubleToRawLongBits(value);
+		int exponent = (int) (bits >>> 52 & 0x7ff);
+		long significand = bits & 0x000f_ffff_ffff_ffffL;
+		if (exponent != 0) significand |= 1L << 52;
+		if (bits < 0) significand = -significand;
+		int power = exponent == 0 ? -1074 : exponent - 1075;
+		return power >= 0
+				? new ExactRational(BigInteger.valueOf(significand).shiftLeft(power), BigInteger.ONE)
+				: new ExactRational(BigInteger.valueOf(significand), BigInteger.ONE.shiftLeft(-power));
+	}
+
 	/** Accepts an integer, a finite decimal, or a numerator/denominator pair. */
 	public static ExactRational parse(String value) {
 		if (value == null || value.isBlank() || !value.equals(value.trim())) {

@@ -187,12 +187,17 @@ REMOVED HEAD 接受 old payload 尚在原 slot、payload 已移动但 quarantine
 一个 generation 至少包含：
 
 - region UUID、dimension、network/checkpoint generation、origin、网格和 solver config；
-- controller footprint、运行态和 marker 预算；
-- Minecraft 对齐的 section 描述、marker ordinal、位置/体积、速度和 solid mask；
+- controller footprint、运行态和区域容量预算；
+- Minecraft 对齐的 section 描述、单元液体记录、三轴 MAC 动量和 solid mask；
 - 已提交 profile 要求的材料、化学、颗粒、气体、热能和 pending phase-work 载荷；
 - manifest、section 与各独立库存的总账和 CRC。
 
-所有 required payload 必须属于同一 region、dimension 和 generation。runtime handle、平滑 density、pressure、mesh 和 UI 读数不持久化。
+所有 required payload 必须属于同一 region、dimension 和 generation。
+材料与物种索引绑定规范 palette 和注册表；平滑密度、PLIC、曲率、mesh 与 UI 读数由恢复后的库存派生。
+最近真实压力投影作为待同步相变所需的运行输入，随 solver runtime 扩展保存。
+正常后端交接共享已验证的不可变单元库存与气腔几何。
+液体几何身份随快照、候选和提交传递，仅体积或分量变化才更新；内能更新保留该身份。
+冷恢复从存盘库存重新构建几何。
 
 ### Manifest
 
@@ -204,8 +209,8 @@ manifest 是无需分配 solver 或 Minecraft runtime 对象即可审计和预�
 - `RegionGeometry` 中的 stable block origin、grid、完整 `FluidSolverConfig`、预留 marker capacity 与 controller footprint；
 - `RegionRuntimeIntent` 中的 resume state、operator intent、entity/debug 开关、step interval 与 tick；
 - controller position、内部/边界 block 集和 required chunk footprint；
-- marker/volume/mass 总账、material/species palette 与 registry identity；
-- 严格排序的 section descriptor：坐标、marker 数、体积、质量和 section checksum；
+- 液体记录数、体积与整数质量总账、material/species palette 与 registry identity；
+- 严格排序的 section descriptor：坐标、液体记录数、体积、质量和 section checksum；
 - granular、gas、thermal、pending phase-work 等 manifest extension 与各自总账；
 - 覆盖上述规范编码的 manifest checksum。
 
@@ -213,28 +218,40 @@ metadata discovery 只能相信已经通过 HEAD 绑定、manifest checksum 和�
 
 ### Section
 
-section 按 Minecraft section 对齐，是可独立校验的完整切片。基础数组采用 marker ordinal 作为 side-column 连接键：
+section 按 Minecraft section 对齐，manifest 和 section 均显式声明 `StateEncoding=cell-mac`。
+每份液体记录保存：
 
 ```text
-ordinal[]
-positionVolume[] = x,y,z,volume
-velocity[]       = vx,vy,vz
-material[] + mass[]
-solidMask[]
+key = globalCell, materialPaletteIndex, connectedSupportMask
+volume = canonicalSignedDyadic(significandBytes, exponent)
+massUnits, internalEnergyBits, indicator
+mixture = speciesHandles[], amountQuanta[], massResidualUnits   # chemistry 启用时
 ```
 
-启用的 chemistry/granular/thermal extension 继续绑定相同 ordinal，并保存 cell-local deposit/coherent 数据。
-ordinal 在全 region 唯一且 cardinality 必须与所有 required side column 相等；section identity、local bounds、体积/质量/species/energy 汇总必须重新合到 manifest。
-液体归一化体积按原始浮点数精确求和；质量以 `MassUnits` 整数列、section 总量及区域总量精确闭合。
-所有布局都保存质量列，根身份强制包含 `MassEncoding`；捕获、校验、恢复和 checksum 使用相同整数。
+体积使用规范二进制有理数编码；质量、物种和质量余量使用既定整数编码。
+同格同材料同开放分量的记录键唯一，记录按键排序。
+液体记录直接保存内能，热扩展保存活动颗粒、沉积、连续固相和气腔内能与审计。
 
-granular section 保存每份活动颗粒的 `ceilMask` 原始字节。完整重建按该颗粒的位置、SVQ 和域尺寸校验核支撑、floor/ceil 配额及份额精确总量，再恢复同一选择。
+每个 section 另存 `FaceMomentum(axis, globalFaceIndex, momentumBits)` 与对应单元的原始碰撞掩码。
+格面动量单位为 kg·m/s，三轴全部格面各保存一次。
+面归属其正侧单元所在 section；区域最外高侧面归属紧邻的内部单元。
+校验检查完整覆盖、唯一归属、有限动量以及网格形状。
 
-液体空间状态由载体的位置、体积、质量及相身份保存。恢复先安装液体与固体库存，再从同一库存和碰撞几何重建 PLIC、气腔归属与压力工作区。当前载荷由基础列及已启用的材料、化学、颗粒、气体和热学扩展组成。
+跨 section 检查液体键唯一性、开放连通分量、逐分量容量、体积、整数质量、物种和内能总账。
+`MassEncoding` 继续绑定统一整数质量尺度，section 和 manifest 的规范校验和覆盖原始记录。
+头部保留的 `markerCount` 方法名表示液体库存记录数，容量预留字段沿用区域配额；液体点样本由库存派生。
 
-运行时 handle 由 world registry snapshot 重新解析，数组位置不作持久化 stable ID。
+颗粒 section 保留 active/deposit 库存、组成和占容所需字段。
+气腔 section 保存完整微盒归属，气体库存与内能按规范节点编号绑定。
+`mmm:solver_runtime` 扩展保存封闭模式、化学轮转与待处理格、床层调度、热边界和最近真实压力场等运行输入。
+这些数据随正常 HEAD、容器 WAL 涉及的区域代次和上一代恢复采用同一解码链。
 
-section、palette、mixture、deposit group、gas node 和 ledger 都必须采用规范排序。这样 checksum、故障重放和相同状态的重复 capture 不依赖 hash-map 遍历顺序。
+冷恢复直接生成 `LiquidCellInventory.Snapshot`、`MacMomentumState` 和 `ThermalOwnerSnapshot`，
+再由 `RegionCheckpointRestorer.reconstructAuthoritativeState` 形成完整 `FluidDomainState`。
+材料与物种索引按该代 palette 和已提交 world registry 校验后绑定。
+派生点样本的导出接口按需要生成观察数据。
+
+section、palette、deposit group、gas node 和 ledger 均采用规范排序，使相同状态的重复捕获具有相同校验和。
 
 ## 功能布局
 
@@ -246,10 +263,10 @@ section、palette、mixture、deposit group、gas node 和 ledger 都必须采�
 
 布局选择严格依据已提交的世界能力包决定各扩展字段是否必须存在：
 
-- materials 决定 marker 是否必须有 material ordinal 和独立 mass；
-- chemistry 决定 mixture/indicator/species/residual 列及 registry fingerprint 是否 required；
+- materials 决定液体记录的材料 palette；所有液体记录均保存整数质量；
+- chemistry 决定液体记录中的 mixture、整数物种、质量余量及 registry fingerprint 是否 required；
 - granular 决定 active/deposit、solid composition、SVQ/mass/porosity 与 granular ledger 是否 required；
-- thermal 决定所有 solver carrier `U`、coherent store、gas topology/inventory/energy、外部注入与环境气体的配置温度、audit、buoyancy identity 和 pending phase-work 是否
+- thermal 决定非液体内能、coherent store、气腔热状态、外部注入与环境气体的配置温度、audit、buoyancy identity 和 pending phase-work 是否
   required；配置温度以 Kelvin 原始 double 保存在热学 manifest，恢复时与库存一起交接。非空有限热设备集合是 manifest-only extension，其 provider/object 只作 locator，
   kg 与 `U` 仍由同一 region HEAD 持有。
 
@@ -267,7 +284,7 @@ section、palette、mixture、deposit group、gas node 和 ledger 都必须采�
 2. 按 manifest descriptor 读取且只读取列出的 section；拒绝缺失、重复和额外未知 required 文件。
 3. 检查长度、硬预算、canonical order、CRC 和所有分层 ledger。
 4. 用 world registry stable ID 重建 runtime handle，验证 fingerprint/capability。
-5. 重建 marker、chemistry、granular、gas 和 thermal side columns，执行跨层 cardinality 与 audit。
+5. 直接重建单元液体库存、MAC 动量、颗粒、气体和非液体热状态，执行跨域库存与能量审计。
 6. 只有全部成功才分配/激活 solver；随后刷新 collision，再发布 client snapshot。
 
 restore 失败的区域保持 metadata-only UNLOADED/PAUSED 或 LOCKED。命令、world bridge 和容器转移不得绕过 admission 修改它。
@@ -309,10 +326,13 @@ wall-time hard-overrun/recovery streak 是进程内短期调度指标，重启�
 
 ## 发布前同步
 
-热区域 capture 前必须先把 current marker/occupancy 与 gas topology、gas inventory 和 gas energy ordinal 同步到同一个逻辑时刻。同步失败时 checkpoint 失败，活动 solver 保留，原 HEAD 不变。
+checkpoint 捕获读取已提交的同代单元库存、固体占容、气腔归属、气体库存和内能。
+物质或几何编辑在其联合计划中准备最终拓扑、库存与热状态，再发布完整后继。
+捕获期间拒绝尚未结束的碰撞事务。
 
-同步为 capture 的前置必要环节：先根据待发布 marker/solid/coherent geometry 派生 cavity topology，再以稳定 overlap 规则规划 gas merge/split/ambient exchange，
-联合验证 gas inventory、node `U` 和 topology key。只有同步候选闭合后，section marker 和 gas extension 才能一起编码。
+普通后端交接保存不可变液体行和几何引用，并使用独立网络快照与动量列建立私有候选。
+冷恢复验证保存的支撑与容量，从实际库存重建派生几何，再核对气腔归属、状态方程和全部审计。
+恢复失败保留原 HEAD 与活动状态，详细格式见[气体状态](gas-state.md)。
 
 ## 故障、清理与删除
 
@@ -325,7 +345,7 @@ wall-time hard-overrun/recovery streak 是进程内短期调度指标，重启�
 普通 checkpoint 不删除上一完整 slot，因为它既是原子覆盖的另一半，也是显式 recoverprevious 的唯一候选。清理逻辑绝不能触碰 HEAD 当前指向的 slot。
 
 气体区域载荷保存完整 `8N` 微盒归属主列 `pieceNodeOrdinal`，按全域 minimum-piece key 规范节点排序并随 section 拆分、组装。
-section 保留全域节点编号并校核 `sealedPieceCount`；恢复从完整载体几何重新生成微盒归属与容量，核对库存和热能的同序绑定。
+section 保留全域节点编号并校核 `sealedPieceCount`；恢复从单元液体库存与固体几何重新生成微盒归属与容量，核对库存和热能的同序绑定。
 具体格式见 [气体状态](gas-state.md)。
 
 化学 registry 与区域 manifest 的 `QuantaPerMol` 固定为 1000000，化学指纹覆盖 kg/mol 与 mol/m³ 定义。

@@ -118,14 +118,14 @@ final class ActiveGenerationStore {
 	void validateReconstruction(RegionState state) throws IOException {
 		RegionCheckpointRestorer restorer = new RegionCheckpointRestorer(state.checkpoint());
 		if (state.manifest().layout() == RegionStateLayout.PURE) {
-			restorer.reconstruct();
+			restorer.reconstructLiquid(null);
 		} else if (state.manifest().layout() == RegionStateLayout.MATERIAL) {
-			restorer.reconstructMaterial();
+			restorer.reconstructLiquid(null);
 		} else if (state.manifest().layout() == RegionStateLayout.CHEMICAL) {
 			if (chemicalRegistry == null) {
 				throw new IOException("Chemical region verification requires the authoritative registry");
 			}
-			restorer.reconstructChemical(chemicalRegistry);
+			restorer.reconstructLiquid(chemicalRegistry);
 		} else if (state.manifest().layout() == RegionStateLayout.GRANULAR) {
 			validateGranular(state, restorer, false);
 		} else if (state.manifest().layout() == RegionStateLayout.THERMAL) {
@@ -149,9 +149,9 @@ final class ActiveGenerationStore {
 				throw new IOException("Chemical " + (thermal ? "thermal" : "granular-region")
 						+ " verification requires the authoritative chemical registry");
 			}
-			restorer.reconstructChemical(chemicalRegistry);
+			restorer.reconstructLiquid(chemicalRegistry);
 		} else {
-			restorer.reconstructMaterial();
+			restorer.reconstructLiquid(null);
 		}
 		var granular = restorer.reconstructGranular(granularRegistry);
 		if (granular.requiresChemistry() && chemicalRegistry == null) {
@@ -181,11 +181,17 @@ final class ActiveGenerationStore {
 			if (chemicalRegistry == null) {
 				throw new IOException("Chemical thermal region verification requires the authoritative chemical registry");
 			}
-			restorer.reconstructChemical(chemicalRegistry);
+			restorer.reconstructLiquid(chemicalRegistry);
 		} else {
-			restorer.reconstructMaterial();
+			restorer.reconstructLiquid(null);
 		}
-		restorer.reconstructThermal(thermalRegistry, gasRegistry, chemicalRegistry);
+		var owners=restorer.reconstructThermalOwners(thermalRegistry);
+		var gas=restorer.reconstructGas(gasRegistry,chemicalRegistry);
+		var model=new mmm.thermal.GasThermalModel(thermalRegistry,gasRegistry);double[] energy=owners.copyGasNodeEnergy();
+		for(int i=0;i<energy.length;i++)model.requireInventoryEnergy(gas.nodes().get(i).inventory(),energy[i]);
+		var liquid=restorer.reconstructLiquid(chemicalRegistry);var liquidU=mmm.units.SignedDyadic.ZERO;
+		for(var stock:liquid.stocks())liquidU=liquidU.add(mmm.units.SignedDyadic.of(stock.internalEnergy()));
+		owners.requireClosed(liquidU,liquid.cellCount());
 		restorer.reconstructFiniteThermalDevices(thermalRegistry);
 	}
 

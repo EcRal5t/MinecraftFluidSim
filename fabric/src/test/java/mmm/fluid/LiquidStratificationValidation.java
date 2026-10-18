@@ -14,7 +14,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/** Actual marker/pressure/thermal pipeline with composition and thermal forcing audited separately. */
+/** Actual cell/MAC/thermal pipeline with composition and thermal forcing audited separately. */
 final class LiquidStratificationValidation {
 	private static final ChemicalRegistry CHEMISTRY = BuiltinChemicalDefinitions.REGISTRY;
 	private static final FluidMaterialRegistry LIQUIDS = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
@@ -29,15 +29,23 @@ final class LiquidStratificationValidation {
 
 	static void validityAndCommittedDefinitions() {
 		isolatedSupportReceivesUniformBuoyancy();
-		var bounded = new LiquidThermalExpansion.Definition("test:bounded", 300, 0.001, 0.05);
-		check(bounded.relativeBuoyancy(350) == 0.05 && bounded.relativeBuoyancy(250) == -0.05,
-				"Boussinesq closed validity interval rejected an endpoint");
-		for (double invalid : new double[] {Math.nextUp(350.0), Math.nextDown(250.0)}) {
-			try { bounded.relativeBuoyancy(invalid); throw new AssertionError("Boussinesq invalid temperature accepted"); }
-			catch (LiquidThermalExpansion.ValidityExceededException expected) { }
+		var expansionLaw = new LiquidThermalExpansion.Definition("test:volume_expansion", 300, .001);
+		for (double temperature : new double[]{1, 250, 300, 350, 1000, 1e6}) {
+			double densityRatio = 1 - expansionLaw.relativeBuoyancy(temperature);
+			check(densityRatio > 0 && Math.abs(densityRatio - 1 / (1 + .001 * (temperature - 300))) <= 2 * Math.ulp(1.0),
+					"Wide-temperature expansion lost its positive density relation");
 		}
+		check(Math.abs(expansionLaw.relativeBuoyancy(300.001) / 1e-6 - 1) < 2e-6,
+				"Small temperature changes lost the linear expansion response");
+		for (double invalid : new double[]{0, -1, Double.NaN, Double.POSITIVE_INFINITY}) {
+			try { expansionLaw.relativeBuoyancy(invalid); throw new AssertionError("Invalid liquid temperature accepted"); }
+			catch (IllegalArgumentException expected) { }
+		}
+		try { new LiquidThermalExpansion.Definition("test:invalid", 300, .01).relativeBuoyancy(100);
+			throw new AssertionError("Nonpositive constitutive volume accepted");
+		} catch (IllegalArgumentException expected) { }
 		var expansion = LiquidThermalExpansion.require("mmm:water");
-		var changed = new LiquidThermalExpansion.Definition("mmm:water", T_REF, 2 * expansion.volumetricCoefficientPerK(), 0.01);
+		var changed = new LiquidThermalExpansion.Definition("mmm:water", T_REF, 2 * expansion.volumetricCoefficientPerK());
 		var baseline = BuiltinFluidMaterials.createRegistry();
 		var definitions = new MaterialRegistry(List.of(new MaterialRegistry.MaterialEntry(BuiltinFluidMaterials.WATER,
 				baseline.entry("mmm:water").viscosity(), changed)), List.of());
@@ -47,7 +55,7 @@ final class LiquidStratificationValidation {
 		custom.setThermalTemperatureInCell(2, 1, 1, T_REF + 10);
 		double[] energies = custom.exportThermalParticleState().copyInternalEnergy();
 		// One interior axis and two wall-adjacent axes: (3/4)*(7/8)*(7/8) of this cell's support is heated.
-		double expected = (CellLiquidVolumeTransport.enabled() ? 1 : 147.0 / 256) * changed.relativeBuoyancy(T_REF + 10);
+		double expected = changed.relativeBuoyancy(T_REF + 10);
 		check(Math.abs(custom.thermalBuoyancyProperties().relativeBuoyancy(custom.cellIndex(2, 1, 1)) - expected) < 1e-12,
 				"thermal property batch did not use the bound expansion");
 		check(!baseline.fingerprint().equals(definitions.fingerprint()), "expansion missing from material identity");
@@ -55,26 +63,24 @@ final class LiquidStratificationValidation {
 		var snapshot = custom.captureAuthoritativeState();
 		FluidDomain outside = fixture(0, false, false, 0);
 		outside.thermalState.resetMarkerTemperature(0, T_REF + 300, outside.thermalMarkerContext(), outside.exactInternalEnergy());
-		check(Math.abs(expansion.relativeBuoyancy(outside.thermalState.observeTemperatureInCell(
-				outside.particleCellIndex(0), outside.thermalMarkerContext()))) < 0.05,
-				"invalid-carrier fixture needs a valid cell mean");
 		var before = outside.exportThermalParticleState();
-		try {
-			new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, outside.captureAuthoritativeState(), List.of(), false, 0));
-			throw new AssertionError("out-of-domain Boussinesq candidate was published");
-		} catch (FluidSolverBackend.CandidateEvaluationRejectedException rejected) {
-			check(rejected.getCause() instanceof LiquidThermalExpansion.ValidityExceededException,
-					"thermal approximation rejection lost its cause");
-		}
+		var energyBefore = outside.exactInternalEnergy();
+		var properties = outside.thermalBuoyancyProperties();
+		check(Double.isFinite(properties.relativeBuoyancy(outside.particleCellIndex(0))),
+				"Wide-temperature carrier did not produce a finite buoyancy");
 		check(Arrays.equals(before.copyInternalEnergy(), outside.exportThermalParticleState().copyInternalEnergy()),
-				"rejected thermal approximation changed the live owner");
+				"Wide-temperature observation changed the live thermal owner");
+		var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, outside.captureAuthoritativeState(), List.of(), false, 0));
+		var advanced = candidate.claimPreparedCpuDomain();
+		check(advanced.exactInternalEnergy().equals(advanced.thermalAudit().expectedInventory())
+				&& outside.exactInternalEnergy().equals(energyBefore), "Wide-temperature mechanical step lost thermal accounting or source isolation");
 		check(snapshot.materialDefinitions().fingerprint().equals(definitions.fingerprint()), "handoff lost committed expansion identity");
 		var missing = new MaterialRegistry(List.of(new MaterialRegistry.MaterialEntry(BuiltinFluidMaterials.WATER,
 				baseline.entry("mmm:water").viscosity(), null)), List.of());
 		try {
 			fixture(0, false, false, 0, missing).thermalBuoyancyProperties();
 			throw new AssertionError("missing committed expansion silently used built-in data");
-		} catch (LiquidThermalExpansion.ValidityExceededException expectedMissing) { }
+		} catch (IllegalStateException expectedMissing) { }
 	}
 
 	private static void isolatedSupportReceivesUniformBuoyancy() {
@@ -115,7 +121,9 @@ final class LiquidStratificationValidation {
 			double composition = densityContrast(domain);
 			double maximum = 0, viscous = 0;
 			for (int i = 0; i < 40; i++) {
-				var stats = domain.stepWithMechanicalAudit(false, 0);
+				var candidate = advance(domain);
+				domain = candidate.claimPreparedCpuDomain();
+				var stats = candidate.stats();
 				viscous += stats.viscosity().dissipatedJoules();
 				initial.check(domain);
 				maximum = Math.max(maximum, domain.maximumParticleSpeed());
@@ -130,50 +138,51 @@ final class LiquidStratificationValidation {
 	private static void compensatedThermalCompositionRemainsHydrostatic() {
 		FluidDomain domain = fixture(0.01, false, true, 0);
 		var expansion = domain.materialDefinitions.entry("mmm:water").thermalExpansion();
+		double minimumDensity = Double.POSITIVE_INFINITY, maximumDensity = 0;
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
-			double rho = domain.particles.mass(marker) / domain.particles.volume(marker);
-			double temperature = T_REF + (1 - domain.config.density() / rho) / expansion.volumetricCoefficientPerK();
+			var stock=domain.liquidCells.physicalStockAt(marker);
+			double rho=stock.massKilograms()/(stock.volumeFraction()*domain.unitScale.cubicMetersPerNormalizedVolume());
+			minimumDensity = Math.min(minimumDensity, rho); maximumDensity = Math.max(maximumDensity, rho);
+			double temperature = T_REF + (rho / domain.config.density() - 1) / expansion.volumetricCoefficientPerK();
 			domain.thermalState.resetMarkerTemperature(marker, temperature, domain.thermalMarkerContext(), domain.exactInternalEnergy());
 		}
+		// Mixing conserves mass-weighted heat; its nonlinear density relation has a second-order contrast error.
+		double mixingDensityBound = Math.pow(maximumDensity - minimumDensity, 2) / (4 * minimumDensity);
 		// Advect composition and temperature within cells, then require both sampled density terms to change together.
 		var advected = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		advected.ensureGrid();
 		var cellVolumes = advected.markerGrid.exactCellVolumeInventory.clone();
-		int[] cells = new int[advected.particleCount()];
-		for (int marker = 0; marker < cells.length; marker++) cells[marker] = advected.particleCellIndex(marker);
 		double[] densities = new double[advected.cellCount];
 		var beforeProperties = advected.thermalBuoyancyProperties();
 		for (int cell = 0; cell < densities.length; cell++) densities[cell] = beforeProperties.density(cell);
-		for (int marker = 0; marker < advected.particleCount(); marker++) {
-			double x = Math.PI * (advected.particles.positionX(marker) / advected.config.cellSize() - 1) / 4;
-			double y = Math.PI * (advected.particles.positionY(marker) / advected.config.cellSize() - 1) / 4;
-			advected.particles.setVelocityX(marker, (float) (-0.1 * Math.sin(x) * Math.cos(y)));
-			advected.particles.setVelocityY(marker, (float) (0.1 * Math.cos(x) * Math.sin(y)));
-		}
-		advected.rebuildGridFromParticles(); advected.gridToParticleStage.prepareAdvectionCells();
-		Inventory advectedInventory = Inventory.capture(advected);
-		double[] energies = advected.exportThermalParticleState().copyInternalEnergy();
-		advected.particleAdvectionStage.advect(0.001F);
+		// A discrete stream function transports heat and composition with the same cell face flux.
+		for(int z=1;z<3;z++)for(int y=1;y<5;y++)for(int x=1;x<=5;x++)
+			advected.mac.velocityX[advected.xFaceIndex(x,y,z)]=(float)((compensatedStream(x,y+1)-compensatedStream(x,y))/.5);
+		for(int z=1;z<3;z++)for(int y=1;y<=5;y++)for(int x=1;x<5;x++)
+			advected.mac.velocityY[advected.yFaceIndex(x,y,z)]=(float)((compensatedStream(x,y)-compensatedStream(x+1,y))/.5);
+		advected.cellMacStage.publishMomentum();
+		Inventory advectedInventory=Inventory.capture(advected);
+		advected.cellMacStage.transport(.001F);advected.ensureGrid();
 		var afterProperties = advected.thermalBuoyancyProperties();
 		double maximumDensityChange = 0;
-		for (int cell = 0; cell < densities.length; cell++) if (advected.markerGrid.markerCount[cell] > 0) {
+		// Integer cell inventories undergo donor and target allocation before buoyancy is observed.
+		double densityResolution = 2 * mmm.units.Mass.kilograms(1)
+				/ domain.unitScale.cubicMetersPerNormalizedVolume();
+		for (int cell = 0; cell < densities.length; cell++) if (advected.liquidCells.exactCellVolume(cell).signum() > 0) {
 			maximumDensityChange = Math.max(maximumDensityChange, Math.abs(afterProperties.density(cell) - densities[cell]));
-			check(Math.abs(afterProperties.density(cell) * (1 - afterProperties.relativeBuoyancy(cell)) - domain.config.density()) < 1e-9,
-					"subcell motion sampled heat and composition on different supports");
+			check(Math.abs(afterProperties.density(cell) * (1 - afterProperties.relativeBuoyancy(cell)) - domain.config.density()) < densityResolution + mixingDensityBound,
+					"subcell motion sampled heat and composition on different supports: densityResidual=" + (afterProperties.density(cell) * (1 - afterProperties.relativeBuoyancy(cell)) - domain.config.density()));
 		}
-		check(maximumDensityChange > 1e-5 && (CellLiquidVolumeTransport.enabled()
-				? advected.exactInternalEnergy().equals(advected.thermalAudit().expectedInventory())
-				: Arrays.equals(energies, advected.exportThermalParticleState().copyInternalEnergy())),
-				"subcell composition response was stationary or edited U");
-		if (CellLiquidVolumeTransport.enabled()) check(Arrays.equals(cellVolumes, advected.markerGrid.exactCellVolumeInventory),
-				"compensated advection changed full-cell volume inventory");
-		else for (int marker = 0; marker < cells.length; marker++) check(cells[marker] == advected.particleCellIndex(marker),
-				"compensated advection fixture crossed a cell");
+		check(maximumDensityChange>1e-5&&advected.exactInternalEnergy().equals(advected.thermalAudit().expectedInventory()),
+				"Compensated cell transport was stationary or lost its energy account");
+		check(Arrays.equals(cellVolumes,advected.markerGrid.exactCellVolumeInventory),"Compensated transport changed full-cell volume");
 		advectedInventory.check(advected);
 		Inventory initial = Inventory.capture(domain);
 		double maximum = 0;
 		for (int i = 0; i < 40; i++) {
-			var stats = domain.stepWithMechanicalAudit(false, 0);
+			var candidate = advance(domain);
+			domain = candidate.claimPreparedCpuDomain();
+			var stats = candidate.stats();
 			initial.check(domain);
 			maximum = Math.max(maximum, domain.maximumParticleSpeed());
 			check(Math.abs(stats.mechanicalAudit().closureResidualJoules()) < 1e-6,
@@ -241,10 +250,10 @@ final class LiquidStratificationValidation {
 			int x = (int) (positions[4 * marker] / 0.5), y = (int) (positions[4 * marker + 1] / 0.5);
 			boolean bottom = y <= 2;
 			if (perturb && (y == 2 || y == 3) && x <= 2) bottom = !bottom;
-			var initial = seed.chemicalParcels().record(marker);
+			var initial = seed.liquidCells.physicalStockAt(marker).mixture();
 			var amounts = new java.util.TreeMap<>(initial.stableAmounts(CHEMISTRY));
 			if (saltFraction > 0 && bottom != brineOnTop) {
-				long salt = Math.round(seed.unitScale.kilograms(mass[marker]) * saltFraction * ChemicalLimits.QUANTA_PER_MOL / .058);
+				long salt = Math.round(mmm.units.Mass.kilograms(mass[marker]) * saltFraction * ChemicalLimits.QUANTA_PER_MOL / .058);
 				amounts.merge(BuiltinChemicalDefinitions.NA_PLUS, salt, Math::addExact);
 				amounts.merge(BuiltinChemicalDefinitions.CL_MINUS, salt, Math::addExact);
 			}
@@ -278,13 +287,15 @@ final class LiquidStratificationValidation {
 		return domain;
 	}
 
+	private static double compensatedStream(int x,int y){return .1/Math.PI*Math.sin(Math.PI*(x-1)/4)*Math.sin(Math.PI*(y-1)/4);}
+
 	private static double saltCenter(FluidDomain domain) {
 		int salt = CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS);
 		double sum = 0, moment = 0;
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
-			long amount = domain.chemicalParcels().record(marker).amount(salt);
+			long amount = domain.liquidCells.physicalStockAt(marker).mixture().amount(salt);
 			sum += amount;
-			moment += amount * (double) domain.particles.positionY(marker);
+			moment += amount * (domain.liquidCells.physicalStockAt(marker).key().cell()/domain.sizeX%domain.sizeY+.5)*domain.config.cellSize();
 		}
 		return moment / sum;
 	}
@@ -304,7 +315,7 @@ final class LiquidStratificationValidation {
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
 			double energy = domain.thermalState.liquidInternalEnergy(marker);
 			sum += energy;
-			moment += energy * domain.particles.positionY(marker);
+			moment += energy * (domain.liquidCells.physicalStockAt(marker).key().cell()/domain.sizeX%domain.sizeY+.5)*domain.config.cellSize();
 		}
 		return moment / sum;
 	}
@@ -323,9 +334,11 @@ final class LiquidStratificationValidation {
 					"stratification thermal audit does not close");
 			var after = domain.thermalAudit();
 			LiquidStratificationValidation.check(after.externalSource().equals(audit.externalSource())
-					&& after.externalSink().equals(audit.externalSink()) && after.mechanicalWork().equals(audit.mechanicalWork())
+					&& after.externalSink().equals(audit.externalSink())
+					&& after.mechanicalWork().subtract(audit.mechanicalWork()).signum() >= 0
 					&& after.finiteDeviceExchange().equals(audit.finiteDeviceExchange())
 					&& domain.exactInternalEnergy().subtract(audit.expectedInventory())
+							.subtract(after.mechanicalWork().subtract(audit.mechanicalWork()))
 							.equals(after.roundoffResidual().subtract(audit.roundoffResidual())),
 					"isolated stratification changed the thermal source/sink/work ledger");
 		}
@@ -334,4 +347,9 @@ final class LiquidStratificationValidation {
 	private static void check(boolean condition, String message) {
 		if (!condition) throw new AssertionError(message);
 	}
+	private static FluidStepCandidate advance(FluidDomain domain) {
+		return new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+				0, domain.captureAuthoritativeState(), List.of(), false, 0, true));
+	}
+
 }

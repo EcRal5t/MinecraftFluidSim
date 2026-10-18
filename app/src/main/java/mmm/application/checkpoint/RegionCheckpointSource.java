@@ -19,9 +19,7 @@ public interface RegionCheckpointSource {
 	RegionIdentity identity(long checkpointGeneration) throws IOException;
 	RegionGeometry geometry();
 	RegionRuntimeIntent runtimeIntent();
-	FlipParticleState pureParticles();
-	FlipMaterialParticleState materialParticles();
-	FlipChemicalParticleState chemicalParticles();
+	mmm.fluid.FluidDomainState authoritativeState();
 	GranularStateSnapshot granularState();
 	GasStateSnapshot gasState(String chemicalRegistryFingerprint);
 	FlipThermalParticleState thermalState();

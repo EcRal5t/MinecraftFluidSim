@@ -71,6 +71,12 @@ public final class ChemicalDisplaySnapshot {
 			cellVolume[cell] += volume[marker];
 			if (parcels.indicator(marker)) indicatedVolume[cell] += volume[marker];
 		}
+		return fromTotals(registry, cellSize, totals, cellVolume, indicatedVolume);
+	}
+	/** Builds the bounded display field from cell-wise species and liquid-volume totals. */
+	public static ChemicalDisplaySnapshot fromTotals(ChemicalRegistry registry, float cellSize,
+	                                                  long[][] totals, double[] cellVolume, double[] indicatedVolume) {
+		int cells = totals.length;
 		List<SpeciesDisplay> palette = registry.species().stream()
 				.map(species -> new SpeciesDisplay(species.id(), species.baseArgb())).toList();
 		short[] topSpecies = new short[cells * TOP_SPECIES]; Arrays.fill(topSpecies, (short) -1);

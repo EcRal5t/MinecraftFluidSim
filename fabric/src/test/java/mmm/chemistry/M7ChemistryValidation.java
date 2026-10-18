@@ -11,6 +11,7 @@ public final class M7ChemistryValidation {
 	private M7ChemistryValidation() { }
 
 	public static void main(String[] args) throws Exception {
+		if (args.length == 1 && args[0].equals("defaults")) { validateDefaultParcels(); System.out.println("Chemical default quantity validation passed"); return; }
 		boolean fast = args.length > 0 && args[0].equals("--fast");
 		validateRationalsAndCodec();
 		validateCanonicalRegistry();
@@ -46,11 +47,12 @@ public final class M7ChemistryValidation {
 					.defaultRecord(materials[index], volume, size, mmm.units.SolverUnitScale.forCellSize(size).massUnitsForNormalized(mass), indicator);
 			check(actual.equals(fresh), "default reuse mixed an input field at index " + index);
 		}
-		check(store.tryDefaultRecord("mmm:water", Float.MIN_VALUE, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(Double.MIN_VALUE), false) == null
-				&& store.tryDefaultRecord("mmm:water", 0.125F, Float.MIN_VALUE, mmm.units.SolverUnitScale.forCellSize(Float.MIN_VALUE).massUnitsForNormalized(125.0), false) == null,
-				"subnormal default volume acquired a species quantum");
-		check(store.tryDefaultRecord("mmm:water", 0.125F, 1.0F, 0L, false) == null,
-				"Zero integer mass acquired a live default parcel");
+		var unresolved = store.defaultRecord("mmm:water", Math.scalb(1.0,-100), 1.0F, 1L, false);
+		check(unresolved.entryCount() == 0 && unresolved.massResidualUnits() == 1L,
+				"Unresolved default species did not retain actual integer mass");
+		var tail = store.defaultRecord("mmm:water", Float.MIN_VALUE, 1.0F, 0L, false);
+		check(tail.entryCount() == 0 && tail.massResidualUnits() == 0,
+				"Zero-mass geometric tail acquired physical composition");
 		expectFailure(() -> store.defaultRecord("mmm:oil", 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0), true), "default reuse accepted a rejected indicator");
 		expectFailure(() -> store.defaultRecord("mmm:missing", 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0), false), "default reuse accepted an unknown material");
 		expectFailure(() -> store.defaultRecord("mmm:water", Float.NaN, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0), false), "default reuse accepted non-finite volume");

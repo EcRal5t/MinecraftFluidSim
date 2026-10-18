@@ -12,7 +12,17 @@ public final class GranularDepositDynamics {
 	private static final int[] NEIGHBOR_Z = {0, 0, -1, 1, -1, 1, -1, 1};
 
 	public record Stats(int settledParcels, int relaxedMoves, int wokenParcels,
-	                    int processedColumns, int dirtyColumns) { }
+	                    int processedColumns, int dirtyColumns,
+	                    mmm.units.SignedDyadic physicalHeat, mmm.units.SignedDyadic mechanicalRounding) {
+		public Stats(int settledParcels, int relaxedMoves, int wokenParcels, int processedColumns, int dirtyColumns) {
+			this(settledParcels, relaxedMoves, wokenParcels, processedColumns, dirtyColumns,
+					mmm.units.SignedDyadic.ZERO, mmm.units.SignedDyadic.ZERO);
+		}
+		public Stats withCompaction(GranularInventory.CompactionStats compaction) {
+			return new Stats(settledParcels, relaxedMoves, wokenParcels, processedColumns, dirtyColumns,
+					physicalHeat.add(compaction.physicalHeat()), mechanicalRounding.add(compaction.mechanicalRounding()));
+		}
+	}
 
 	/** Ephemeral deterministic scheduler state carried between private backend candidates, never inventory. */
 	public record State(long logicalStep, int[] stableAge, int[] queuedColumns) {
@@ -55,16 +65,21 @@ public final class GranularDepositDynamics {
 		default boolean planRelaxation(int fromCell, int toCell, long solidSvq) { return true; }
 		default void cancelRelaxation(int fromCell, int toCell, long solidSvq) { }
 		default void requireThermalRelaxation(
-				int fromCell, int toCell, int material, int composition, long movedMassUnits, long sourceMassUnits
+				int fromCell, int toCell, int material, int composition, long movedMassUnits, long sourceMassUnits,
+				mmm.units.SignedDyadic heat
 		) { }
 		default void commitThermalRelaxation(
-				int fromCell, int toCell, int material, int composition, long movedMassUnits, long sourceMassUnits
+				int fromCell, int toCell, int material, int composition, long movedMassUnits, long sourceMassUnits,
+				mmm.units.SignedDyadic heat
 		) { }
 		/** Upper bound for building and querying the current active-sphere release index. */
 		default int wakeGeometryWork() { return 0; }
 		default boolean planWake(int cell, long solidSvq, float x, float y, float z) { return true; }
 		/** The carrier flow supplies the gravitational work required to lift the released material. */
 		default boolean planWakeWork(int cell, double joules) { return joules <= 0; }
+		default boolean planWakeWork(int cell, mmm.units.SignedDyadic joules) { return planWakeWork(cell,joules.toDouble()); }
+		default void requireWakeWorkCurrent() { }
+		default mmm.units.SignedDyadic wakeWorkRounding() { return mmm.units.SignedDyadic.ZERO; }
 		default void commitWakeWork() { }
 		default void cancelWake(int cell, long solidSvq, float x, float y, float z) { }
 		default void onSolidChanged(int cell) { }
@@ -82,6 +97,8 @@ public final class GranularDepositDynamics {
 	private final boolean[] queued, energyDeferred;
 	private int queueHead, queueSize;
 	private long logicalStep;
+	private mmm.units.SignedDyadic stepPhysicalHeat = mmm.units.SignedDyadic.ZERO;
+	private mmm.units.SignedDyadic stepMechanicalRounding = mmm.units.SignedDyadic.ZERO;
 
 	public GranularDepositDynamics(
 			GranularRegistry registry, GranularParcelStore parcels, GranularDepositStore deposits,
@@ -162,6 +179,8 @@ public final class GranularDepositDynamics {
 		if (environment == null) throw new IllegalArgumentException("Granular deposit environment is missing");
 		if (!(Float.isFinite(dt) && dt > 0.0F)) throw new IllegalArgumentException("Granular deposit dt is invalid");
 		int operations = 0, settled = 0, relaxed = 0, woken = 0;
+		stepPhysicalHeat = mmm.units.SignedDyadic.ZERO;
+		stepMechanicalRounding = mmm.units.SignedDyadic.ZERO;
 		admission.rebuild();
 		java.util.Arrays.fill(energyDeferred, false);
 
@@ -182,19 +201,23 @@ public final class GranularDepositDynamics {
 					int[] indices = plan.parcelIndices();
 					admission.reserveLogicalOperations(operations + indices.length);
 					if (admission.spend(2 * indices.length)) {
+						var potential = GranularBedPotential.settlementPotentialChange(plan, cellSize, sizeX, sizeY, environment.gravity());
 						if (!settlementBedsFit(plan, environment)) {
 							for (var target : plan.targets()) disturbCell(target.cell());
-						} else if (!GranularBedPotential.allowsSettlement(plan, cellSize, sizeX, sizeY, environment.gravity())) {
+						} else if (potential.signum() > 0) {
 							for (var target : plan.targets()) {
 								int destination = target.cell();
 								energyDeferred[(destination / (sizeX * sizeY)) * sizeX + destination % sizeX] = true;
 								disturbCell(destination);
 							}
-						} else if (settlementSlopeAllowed(plan, environment) && environment.planSettlement(plan)) {
-							commitSettlement(plan, indices, environment);
-							deposited = true; settled += indices.length; operations += indices.length;
-							parcelIndex = indices[indices.length - 1];
-						} else if (!admission.budgetBlocked() && rollParcelDownhill(parcelIndex, parcel, cell, environment)) operations++;
+						} else {
+							plan = plan.withMechanicalHeat(plan.mechanicalHeat().subtract(potential));
+							if (plan != null && environment.planSettlement(plan)) {
+								commitSettlement(plan, indices, environment);
+								deposited = true; settled += indices.length; operations += indices.length;
+								parcelIndex = indices[indices.length - 1];
+							}
+						}
 					}
 				}
 				if (admission.budgetBlocked()) disturbCell(cell);
@@ -254,12 +277,13 @@ public final class GranularDepositDynamics {
 			}
 		}
 		logicalStep++;
-		return new Stats(settled, relaxed, woken, processed, queueSize);
+		return new Stats(settled, relaxed, woken, processed, queueSize, stepPhysicalHeat, stepMechanicalRounding);
 	}
 
 	private void commitSettlement(GranularInventory.SettlementPlan plan, int[] indices, Environment environment) {
 		try { inventory.commitSettlement(plan); }
 		catch (RuntimeException failure) { environment.cancelSettlement(plan); throw failure; }
+		stepPhysicalHeat = stepPhysicalHeat.add(plan.mechanicalHeat());
 		double impulseX = 0, impulseY = 0, impulseZ = 0;
 		for (int index = 0; index < indices.length; index++) {
 			admission.removedSwap(indices[index]);
@@ -280,7 +304,7 @@ public final class GranularDepositDynamics {
 			if (!admission.spend(1)) return -1;
 			int target = cell(x, y, z); long open = environment.geometricOpenSvq(target);
 			if (open <= 0) continue;
-			long bulk = deposits.previewCellBulkVolumeAfterAdd(target, addition);
+			long bulk = settlement.bulkVolumeAfterAdd(target, addition);
 			if (bulk <= open && environment.bedGeometryFits(target, bulk)
 					&& verticalPathOpen(environment, parcel.x(), parcel.y(), parcel.z(),
 						settlementCenterY(target, parcel.solidVolumeSvq()), parcel.solidVolumeSvq())) return target;
@@ -305,40 +329,6 @@ public final class GranularDepositDynamics {
 		return settlementTarget(parcel, environment);
 	}
 
-	private boolean settlementSlopeAllowed(GranularInventory.SettlementPlan plan, Environment environment) {
-		var bulk = new java.util.HashMap<Integer, Long>();
-		var previous = new java.util.HashMap<Integer, Long>();
-		for (var target : plan.targets()) {
-			int cell = target.cell(), column = cell / (sizeX * sizeY) * sizeX + cell % sizeX;
-			if (!cacheColumnSurface(previous, column)) return false;
-			int x = cell % sizeX, z = cell / (sizeX * sizeY);
-			for (int neighbor = 0; neighbor < NEIGHBOR_X.length; neighbor++) {
-				int dx = NEIGHBOR_X[neighbor], dz = NEIGHBOR_Z[neighbor];
-				if (insideColumn(x + dx, z + dz) && environment.horizontalPathOpen(cell, dx, dz)
-						&& !cacheColumnSurface(previous, (z + dz) * sizeX + x + dx)) return false;
-			}
-			bulk.put(cell, target.bulkVolumeSvq());
-		}
-		var surfaces = new java.util.HashMap<>(previous);
-		for (var target : plan.targets()) {
-			int cell = target.cell(), column = cell / (sizeX * sizeY) * sizeX + cell % sizeX;
-			long top = (long) (cell / sizeX % sizeY) * SolidVolume.SVQ_PER_CELL + target.bulkVolumeSvq();
-			surfaces.put(column, Math.max(surfaces.get(column), top));
-		}
-		int[] destinations = plan.targetCells();
-		for (int index = 0; index < destinations.length; index++) if (!additionSlopeAllowed(destinations[index], bulk.get(destinations[index]),
-				registry.material(plan.parcels().get(index).materialHandle()), environment,
-				previous.get(destinations[index] / (sizeX * sizeY) * sizeX + destinations[index] % sizeX), surfaces::get)) return false;
-		return true;
-	}
-
-	private boolean cacheColumnSurface(java.util.Map<Integer, Long> cache, int column) {
-		if (cache.containsKey(column)) return true;
-		if (!admission.spend(sizeY)) return false;
-		cache.put(column, columnSurfaceSvq(column));
-		return true;
-	}
-
 	private boolean tryWake(int column, int surfaceCell, GranularDepositStore.Group exposed,
 	                        ParticulateMaterial material, Environment environment, float dt) {
 		double shields = environment.shields(surfaceCell, material);
@@ -356,8 +346,8 @@ public final class GranularDepositDynamics {
 		GranularDepositStore.SolidPortion moved;
 		try { moved = deposits.peekTake(surfaceCell, exposed.materialHandle(), exposed.solidCompositionHandle(), erosion); }
 		catch (IllegalArgumentException unavailableSplit) { return false; }
-		double liftWork = GranularBedPotential.wakePotentialChange(deposits, surfaceCell, moved, py,
-				cellSize, sizeX, sizeY, environment.gravity()).toDouble();
+		var liftWork = GranularBedPotential.wakePotentialChange(deposits, surfaceCell, moved, py,
+				cellSize, sizeX, sizeY, environment.gravity());
 		GranularInventory.WakePlan wake;
 		try { wake = inventory.planWake(surfaceCell, exposed.materialHandle(), exposed.solidCompositionHandle(), erosion, px, py, pz, 0, 0, 0); }
 		catch (IllegalArgumentException unavailableSplit) { return false; }
@@ -372,8 +362,10 @@ public final class GranularDepositDynamics {
 		try {
 			// Bed material starts at rest; the next coupled mechanical solve supplies acceleration
 			// and its equal liquid reaction. Copying carrier velocity here would create momentum.
+			environment.requireWakeWorkCurrent();
 			inventory.commitWake(wake);
 			environment.commitWakeWork();
+			stepMechanicalRounding = stepMechanicalRounding.add(environment.wakeWorkRounding());
 			admission.append(wake.appendOrdinal()); environment.onSolidChanged(surfaceCell);
 			return true;
 		} catch (RuntimeException failure) {
@@ -427,20 +419,26 @@ public final class GranularDepositDynamics {
 			if (!verticalPathOpen(environment, (receiverX + 0.5F) * cellSize,
 					pathY, (receiverZ + 0.5F) * cellSize,
 					settlementCenterY(receiver, requestedSkeleton), requestedSkeleton)) continue;
-			if (!GranularBedPotential.allowsRelaxation(deposits, surfaceCell, receiver, moved,
-					cellSize, sizeX, sizeY, environment.gravity())) {
+			var potential = GranularBedPotential.relaxationPotentialChange(deposits, surfaceCell, receiver, moved,
+					cellSize, sizeX, sizeY, environment.gravity());
+			if (potential.signum() > 0) {
 				energyDeferred[column] = true;
 				return false;
 			}
-			if (!additionSlopeAllowed(receiver, moved, material, environment)) return false;
 			if (!admission.allows(receiver, candidateBulk, -1)) return false;
 			if (!environment.planRelaxation(surfaceCell, receiver, requestedSkeleton)) return false;
-			environment.requireThermalRelaxation(surfaceCell, receiver, exposed.materialHandle(),
-					exposed.solidCompositionHandle(), moved.massUnits(), exposed.massUnits());
+			try {
+				environment.requireThermalRelaxation(surfaceCell, receiver, exposed.materialHandle(),
+						exposed.solidCompositionHandle(), moved.massUnits(), exposed.massUnits(), potential.negate());
+			} catch (RuntimeException failure) {
+				environment.cancelRelaxation(surfaceCell, receiver, requestedSkeleton);
+				throw failure;
+			}
 			if (deposits.tryMove(surfaceCell, receiver, exposed.materialHandle(),
 					exposed.solidCompositionHandle(), requestedSkeleton, open)) {
 				environment.commitThermalRelaxation(surfaceCell, receiver, exposed.materialHandle(),
-						exposed.solidCompositionHandle(), moved.massUnits(), exposed.massUnits());
+						exposed.solidCompositionHandle(), moved.massUnits(), exposed.massUnits(), potential.negate());
+				stepPhysicalHeat = stepPhysicalHeat.subtract(potential);
 				environment.onSolidChanged(surfaceCell);
 				environment.onSolidChanged(receiver);
 				disturbColumn(receiverX, receiverZ);
@@ -450,76 +448,6 @@ public final class GranularDepositDynamics {
 			return false;
 		}
 		return false;
-	}
-
-	private boolean additionSlopeAllowed(
-			int cell, GranularDepositStore.SolidPortion addition,
-			ParticulateMaterial material, Environment environment
-	) {
-		return additionSlopeAllowed(cell, deposits.previewCellBulkVolumeAfterAdd(cell, addition), material, environment);
-	}
-
-	private boolean additionSlopeAllowed(int cell, long nextCellBulk, ParticulateMaterial material, Environment environment) {
-		return additionSlopeAllowed(cell, nextCellBulk, material, environment,
-				columnSurfaceSvq(cell / (sizeX * sizeY) * sizeX + cell % sizeX), this::columnSurfaceSvq);
-	}
-
-	private boolean additionSlopeAllowed(int cell, long nextCellBulk, ParticulateMaterial material, Environment environment,
-	                                    long previousSurface, java.util.function.IntToLongFunction neighborSurface) {
-		int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
-		long previousCellBulk = deposits.cellBulkVolumeSvq(cell);
-		long addedCellSurface = Math.addExact(Math.multiplyExact((long) y, SolidVolume.SVQ_PER_CELL), nextCellBulk);
-		long candidateSurface = Math.max(previousSurface, addedCellSurface);
-		long discreteAllowance = nextCellBulk - previousCellBulk;
-		for (int neighbor = 0; neighbor < NEIGHBOR_X.length; neighbor++) {
-			int dx = NEIGHBOR_X[neighbor], dz = NEIGHBOR_Z[neighbor];
-			int neighborX = x + dx, neighborZ = z + dz;
-			if (!insideColumn(neighborX, neighborZ) || !environment.horizontalPathOpen(cell, dx, dz)) continue;
-			double distance = neighbor < 4 ? 1.0 : Math.sqrt(2.0);
-			long reposeRise = (long) Math.floor(distance * Math.tan(material.reposeAngleRadians())
-					* SolidVolume.SVQ_PER_CELL);
-			long adjacentSurface = neighborSurface.applyAsLong(neighborZ * sizeX + neighborX);
-			if (candidateSurface - adjacentSurface > Math.addExact(reposeRise, discreteAllowance)) return false;
-		}
-		return true;
-	}
-
-	/** Low-cost surface flow for a supported parcel whose addition would exceed the local repose envelope. */
-	private boolean rollParcelDownhill(
-			int parcelIndex, GranularParcelStore.Parcel parcel, int surfaceCell, Environment environment
-	) {
-		int x = surfaceCell % sizeX, yz = surfaceCell / sizeX, z = yz / sizeY;
-		int bestNeighbor = -1;
-		long bestSurface = columnSurfaceSvq(z * sizeX + x);
-		int directionStart = (int) ((parcelIndex * 0x9E3779B9L + logicalStep) & 7L);
-		for (int offset = 0; offset < NEIGHBOR_X.length; offset++) {
-			int neighbor = (directionStart + offset) & 7;
-			int dx = NEIGHBOR_X[neighbor], dz = NEIGHBOR_Z[neighbor];
-			int neighborX = x + dx, neighborZ = z + dz;
-			if (!insideColumn(neighborX, neighborZ)
-					|| !environment.horizontalPathOpen(surfaceCell, dx, dz)) continue;
-			long height = columnSurfaceSvq(neighborZ * sizeX + neighborX);
-			if (height < bestSurface) { bestSurface = height; bestNeighbor = neighbor; }
-		}
-		if (bestNeighbor < 0) return false;
-		double speed = Math.sqrt(parcel.velocityX() * (double) parcel.velocityX()
-				+ parcel.velocityY() * (double) parcel.velocityY()
-				+ parcel.velocityZ() * (double) parcel.velocityZ());
-		if (speed == 0) return false;
-		float dx = NEIGHBOR_X[bestNeighbor], dz = NEIGHBOR_Z[bestNeighbor];
-		double inverseLength = dx != 0.0F && dz != 0.0F ? 1.0 / Math.sqrt(2.0) : 1.0;
-		// Reorient existing motion along a descending bed. Gravity has already been integrated
-		// by mechanics; adding a prescribed rolling speed here would create kinetic energy.
-		parcels.overwrite(parcelIndex, new GranularParcelStore.Parcel(
-				parcel.x(), parcel.y(), parcel.z(), (float) (dx * inverseLength * speed), 0.0F,
-				(float) (dz * inverseLength * speed), parcel.solidVolumeSvq(), parcel.massUnits(), parcel.materialHandle(),
-				parcel.solidCompositionHandle(), 0,
-				(byte) (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED)));
-		GranularParcelStore.Parcel redirected = parcels.parcel(parcelIndex);
-		environment.receiveContactImpulse(parcel.mass() * (parcel.velocityX() - (double) redirected.velocityX()),
-				parcel.mass() * (parcel.velocityY() - (double) redirected.velocityY()),
-				parcel.mass() * (parcel.velocityZ() - (double) redirected.velocityZ()));
-		return true;
 	}
 
 	private float settlementCenterY(int cell, long solidSvq) {

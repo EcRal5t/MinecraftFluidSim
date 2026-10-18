@@ -84,8 +84,8 @@ final class LiquidCarrierProperties {
 		String id = materials.material(markers.fluidMaterialHandle(marker)).id();
 		LiquidThermalExpansion.Definition expansion = definitions == null
 				? LiquidThermalExpansion.require(id) : definitions.entry(id).thermalExpansion();
-		if (expansion == null) throw new LiquidThermalExpansion.ValidityExceededException(
-				"Liquid " + id + " has no committed Boussinesq definition at marker " + marker);
+		if (expansion == null) throw new IllegalStateException(
+				"Liquid " + id + " has no committed thermal expansion definition at marker " + marker);
 		return expansion.relativeBuoyancy(thermal.temperature(marker, markers));
 	}
 

@@ -9,11 +9,14 @@ import java.util.List;
 /** Local swept sphere contacts; position drift and material impulses use independent vectors. */
 final class GranularSphereCollision {
 	record Motion(float x, float y, float z, float vx, float vy, float vz, boolean supported, int operations) { }
+	record ContactPlane(double[] normal, double minimum) { }
 	private record Hit(double lower, double upper, double[] normal, double[] minimum, double[] maximum, double envelope, int axis) { }
 	private final int[] sizes;
 	private final double h;
 	private final GranularCollisionGeometry geometry;
 	private int remainingOperations;
+	private ContactPlane[] lastPathPlanes = new ContactPlane[0];
+	ContactPlane[] lastPathPlanes() { return lastPathPlanes; }
 	private static double gamma(int operations) {
 		double error = operations * Math.ulp(1.0) / 2;
 		return error / (1 - error);
@@ -26,6 +29,8 @@ final class GranularSphereCollision {
 		double[] p = {initial[0], initial[1], initial[2]}, v = {velocity[0], velocity[1], velocity[2]}, d = new double[3];
 		for (int a = 0; a < 3; a++) d[a] = (float) (initial[a] + velocity[a] * dt) - (double) initial[a];
 		List<Hit> history = touching(p, radius, new ArrayList<>());
+		var planes = new ArrayList<ContactPlane>();
+		for (Hit hit : history) planes.add(new ContactPlane(hit.normal, dot(hit.normal, p)));
 		if (!history.isEmpty()) {
 			double[][] normals = history.stream().map(Hit::normal).toArray(double[][]::new);
 			double[] drift = project(d, normals), response = impulse(v, normals, material);
@@ -39,6 +44,7 @@ final class GranularSphereCollision {
 			double time = hits.stream().mapToDouble(Hit::lower).min().orElseThrow();
 			for (int a = 0; a < 3; a++) { p[a] += time * d[a]; d[a] *= 1 - time; }
 			for (Hit hit : hits) {
+				planes.add(new ContactPlane(hit.normal, dot(hit.normal, p)));
 				double gap = hit.axis >= 0 ? Math.abs(p[hit.axis] - hit.minimum[0]) : Math.abs(norm2(boxNormal(p, hit.minimum, hit.maximum)) - radius * radius);
 				history.add(new Hit(0, 0, hit.normal, hit.minimum, hit.maximum, Math.max(hit.envelope, gap), hit.axis));
 			}
@@ -48,6 +54,7 @@ final class GranularSphereCollision {
 		}
 		history = touching(p, radius, history);
 		float[] endpoint = roundOutside(p, radius);
+		lastPathPlanes = planes.toArray(ContactPlane[]::new);
 		boolean supported = velocity[1] <= 0 && history.stream().anyMatch(hit -> hit.normal[1] > 0);
 		return new Motion(endpoint[0], endpoint[1], endpoint[2], (float) v[0], (float) v[1], (float) v[2], supported, budget - remainingOperations);
 	}
@@ -55,29 +62,8 @@ final class GranularSphereCollision {
 	boolean supportsAtRest(float x, float y, float z, float radius) {
 		return touching(new double[]{x, y, z}, radius, new ArrayList<>()).stream().anyMatch(hit -> hit.normal[1] > 0);
 	}
-	record Contact(double time, double[][] normals) { }
 	double[][] contactNormals(double[] position, float radius) {
 		return touching(position, radius, new ArrayList<>()).stream().map(Hit::normal).toArray(double[][]::new);
-	}
-	Contact nextContact(double[] position, double[] velocity, double[] responseVelocity, float radius, double duration,
-	                    double[] driftError, double[] responseError) {
-		double[] displacement = new double[3];
-		for (int axis = 0; axis < 3; axis++) displacement[axis] = velocity[axis] * duration;
-		var contacts = touching(position, radius, new ArrayList<>());
-		if (contacts.stream().anyMatch(hit -> closing(velocity, hit.normal, driftError) || closing(responseVelocity, hit.normal, responseError)))
-			return new Contact(0, contacts.stream().map(Hit::normal).toArray(double[][]::new));
-		var hits = first(position, displacement, radius, hit -> hit.lower() > 0
-				|| closing(velocity, hit.normal(), driftError) || closing(responseVelocity, hit.normal(), responseError));
-		if (hits.isEmpty()) return null;
-		double time = hits.stream().mapToDouble(Hit::lower).min().orElseThrow();
-		double[] atHit = new double[3];
-		for (int axis = 0; axis < 3; axis++) atHit[axis] = Math.fma(time, displacement[axis], position[axis]);
-		for (var hit : hits) {
-			double gap = hit.axis >= 0 ? Math.abs(atHit[hit.axis] - hit.minimum[0])
-					: Math.abs(norm2(boxNormal(atHit, hit.minimum, hit.maximum)) - radius * radius);
-			contacts.add(new Hit(0, 0, hit.normal, hit.minimum, hit.maximum, Math.max(hit.envelope, gap), hit.axis));
-		}
-		return new Contact(duration * time, touching(atHit, radius, contacts).stream().map(Hit::normal).toArray(double[][]::new));
 	}
 	static boolean closing(double[] velocity, double[] normal, double[] error) {
 		return !GranularContactCompression.admits(new GranularContactCompression.Row(0, -1, normal),
@@ -94,9 +80,6 @@ final class GranularSphereCollision {
 	float[] roundContactPoint(double[] position, float radius) { return roundOutside(position, radius); }
 	private void operation() { if (--remainingOperations < 0) throw new MechanicalTimeRefinement(2, "Granular sphere contact operations"); }
 	private List<Hit> first(double[] p, double[] d, double radius) {
-		return first(p, d, radius, ignored -> true);
-	}
-	private List<Hit> first(double[] p, double[] d, double radius, java.util.function.Predicate<Hit> admissible) {
 		List<Hit> candidates = new ArrayList<>();
 		for (int a = 0; a < 3; a++) if (d[a] != 0) {
 			double plane = d[a] > 0 ? sizes[a] * h - radius : radius;
@@ -110,7 +93,6 @@ final class GranularSphereCollision {
 		geometry.forEachBox(lo, hi, (minimum, maximum) -> {
 			Hit hit = box(p, d, minimum, maximum, radius); if (hit != null) candidates.add(hit);
 		});
-		candidates.removeIf(hit -> !admissible.test(hit));
 		if (candidates.isEmpty()) return candidates;
 		double earliestUpper = candidates.stream().mapToDouble(Hit::upper).min().orElseThrow();
 		List<Hit> group = new ArrayList<>();
@@ -281,7 +263,8 @@ final class GranularSphereCollision {
 			if (squared >= error || !validEndpoint(candidate, radius)) continue;
 			best = candidate; error = squared;
 		}
-		if (best == null) throw new MechanicalTimeRefinement(2, "No representable granular sphere endpoint");
+		if (best == null) throw new MechanicalTimeRefinement(2, "No representable granular sphere endpoint at "
+				+ Arrays.toString(point) + " radius=" + radius);
 		return best;
 	}
 	private boolean validEndpoint(float[] p, float radius) {

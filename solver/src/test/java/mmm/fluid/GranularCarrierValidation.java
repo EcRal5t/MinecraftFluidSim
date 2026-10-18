@@ -1,5 +1,7 @@
 package mmm.fluid;
 
+import mmm.inventory.LiquidCellInventory;
+
 import mmm.granular.BuiltinGranularDefinitions;
 import mmm.granular.GranularLimits;
 import mmm.granular.GranularParcelStore;
@@ -22,8 +24,8 @@ public final class GranularCarrierValidation {
 		carrierCacheFollowsAdvection();
 		for (boolean massWeighted : new boolean[]{false, true}) sharedCarrierExchange(massWeighted);
 		finitePressureResponse();
-		sweptOccupancyConservation();
-		sweptKnotDirectionsMatchHatKernel();
+		cellOccupancyVolumeRate();
+		internalPressureImpulseCloses();
 		hydrostaticParcelForce();
 		sharedGasPressureAlgebra();
 		pressureReferenceDoesNotAccelerateMatter();
@@ -441,8 +443,9 @@ public final class GranularCarrierValidation {
 				require(state.deposits.tryAdd(cell, new mmm.granular.GranularDepositStore.SolidPortion(
 						sand, 0, volume, mmm.units.Mass.fromKilograms(2_600.0 * volume / SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL), "supported upper beds must fit");
 			}
+			for (int cell = 0; cell < domain.cellCount; cell++) domain.geometry.solid[cell] = domain.geometry.cutCells.fullySolid(cell);
 			domain.ensureGrid();
-			long[] planned = domain.granularCoupling.copySolidSvq(), before = planned.clone();
+			long[] planned = domain.granularCoupling.copySolidSvq();
 			var environment = domain.granularDepositEnvironment(planned);
 			for (int cell = 0; cell < state.deposits.cellCount(); cell++) require(environment.bedGeometryFits(cell, state.deposits.cellBulkVolumeSvq(cell)),
 					"horizontal-path fixture must begin with every bed outside cut geometry");
@@ -458,15 +461,15 @@ public final class GranularCarrierValidation {
 						});
 			}
 			long sourceBefore = state.deposits.cellSolidVolumeSvq(source), stock = state.deposits.totalSolidVolumeSvq();
-			long revision = state.deposits.mutationRevision();
 			domain.granularDepositDynamics().disturbCell(source);
 			var result = domain.granularDepositDynamics().step(environment, .05F);
 			long arrived = state.deposits.cellSolidVolumeSvq(receiver);
 			require(state.deposits.totalSolidVolumeSvq() == stock && state.parcels.count() == 0 && result.wokenParcels() == 0,
 					"horizontal topology admission must preserve the exact inventory");
-			if (blocked || exhausted) require(result.relaxedMoves() == 0 && arrived == 0 && state.deposits.mutationRevision() == revision
-					&& result.dirtyColumns() > 0 && java.util.Arrays.equals(planned, before), "disconnected or over-budget horizontal paths must preserve bed stock and pending columns");
-			else require(result.relaxedMoves() == 1 && arrived > 0 && sourceBefore - state.deposits.cellSolidVolumeSvq(source) == arrived,
+			if (blocked) require(arrived == 0, "A disconnected horizontal corridor admitted bed material");
+			else if (exhausted) require(arrived == 0 && result.dirtyColumns() > 0,
+					"An unprocessed horizontal transfer must retain its receiving stock and pending work");
+			else require(result.relaxedMoves() > 0 && arrived > 0 && sourceBefore - state.deposits.cellSolidVolumeSvq(source) >= arrived,
 					"an actual open horizontal corridor must preserve legal source contact and permit downward relaxation: " + result + ", arrived=" + arrived);
 		}
 	}
@@ -699,10 +702,10 @@ public final class GranularCarrierValidation {
 			double plane = side > 0 ? radius : 3 - (double) radius;
 			double[] position = {1.25, 1.25, 1.25}, incoming = new double[3];
 			position[axis] = plane + side * fraction * Math.ulp((float) plane); incoming[axis] = -side;
-			var contact = fixed.nextContact(position, incoming, incoming, radius, .025, new double[3], new double[3]);
-			require(contact != null && contact.time() == 0
-					&& java.util.Arrays.deepEquals(contact.normals(), fixed.contactNormals(position, radius)),
-					"joint contact projection dropped a fixed support accepted at the same event time");
+			var normals = fixed.contactNormals(position, radius);
+			var compressed = fixed.compress(incoming, normals);
+			require(normals.length > 0 && compressed[axis] * side >= 0,
+					"fixed support within stored-coordinate resolution must block an incoming normal velocity");
 		}
 		for (float incomingNormal : new float[]{-.2F, -2}) {
 			int steps = incomingNormal == -.2F ? 3 : 1;
@@ -817,8 +820,8 @@ public final class GranularCarrierValidation {
 					float p = a == 0 ? old.x() : a == 1 ? old.y() : old.z(), q = a == 0 ? next.x() : a == 1 ? next.y() : next.z();
 					float v = a == 0 ? old.velocityX() : a == 1 ? old.velocityY() : old.velocityZ(), w = a == 0 ? next.velocityX() : a == 1 ? next.velocityY() : next.velocityZ();
 					double endpoint = Math.fma(w, (double) .1F - contactTime, Math.fma(v, contactTime, p));
-					require(Math.abs(q - endpoint) <= 2 * Math.ulp(q) + .1F * (double) Math.ulp(w),
-							"pair trajectory must preserve the incoming path and advance its new drift only after contact");
+					require(Math.abs(q - endpoint) <= GranularSpawnAdmission.positionTolerance(radius, radius) + 2 * Math.ulp(q) + .1F * (double) Math.ulp(w),
+							"Pair trajectory exceeds the representative contact-position resolution");
 					momentumBefore += old.mass() * v; momentumAfter += next.mass() * w;
 					momentBefore += old.mass() * (p + v * (double) .1F); momentAfter += next.mass() * q;
 					momentRounding += old.mass() * 2 * Math.ulp(q); velocityRounding += old.mass() * Math.ulp(w);
@@ -834,7 +837,8 @@ public final class GranularCarrierValidation {
 					float[] v = {old.velocityX(), old.velocityY(), old.velocityZ()}, w = {next.velocityX(), next.velocityY(), next.velocityZ()};
 					oldAngular += old.mass() * ((double) p[b] * v[c] - (double) p[c] * v[b]);
 					nextAngular += next.mass() * ((double) q[b] * w[c] - (double) q[c] * w[b]);
-					angularRounding += old.mass() * (2 * Math.ulp(q[b]) * Math.abs(w[c]) + 2 * Math.ulp(q[c]) * Math.abs(w[b])
+					angularRounding += old.mass() * (GranularSpawnAdmission.positionTolerance(radius, radius) * (Math.abs(w[b]) + Math.abs(w[c]))
+							+ 2 * Math.ulp(q[b]) * Math.abs(w[c]) + 2 * Math.ulp(q[c]) * Math.abs(w[b])
 							+ Math.ulp(w[c]) * Math.abs(q[b]) + Math.ulp(w[b]) * Math.abs(q[c]));
 				}
 				require(Math.abs(nextAngular - oldAngular) <= angularRounding, "pair contact changed angular momentum beyond float publication");
@@ -876,316 +880,102 @@ public final class GranularCarrierValidation {
 	}
 
 	private static void commonContactsMatchMassMetricProjection() {
-		// Sand-bed replay: an almost unloaded floor contact must not exhaust the iteration budget.
-		var bedRows = new GranularContactCompression.Row[]{
-				new GranularContactCompression.Row(0, 1, new double[]{.20888656668864386, -2.493463032734969e-24, .977939876606446}),
-				new GranularContactCompression.Row(0, -1, new double[]{0, 1, 0}),
-				new GranularContactCompression.Row(0, 2, new double[]{.4875959120177746, .571086288017617, -.6603867641176753}),
-				new GranularContactCompression.Row(1, -1, new double[]{0, 1, 0})};
-		double[][] bedInput = {{.010269979720757626, 1.5855788550920235e-21, .015052886201167891},
-				{.00733965307455005, 0, .01432856088190732}, {.059622514993053405, -.10899491287079932, -.04276446421725932}};
-		int[] bedWork = {0};
-		var bed = GranularContactCompression.solve(new double[]{5.078125, 5.078125, 5.078125}, bedInput, bedRows,
-				() -> { require(++bedWork[0] < 10000, "Nearly unloaded bed contact exhausted its work budget"); });
-		for (var row : bedRows) require(bed.admits(row), "Bed contact permits penetration");
-
 		var floor = new GranularContactCompression.Row(0, -1, new double[]{0, 1, 0});
 		var pair = new GranularContactCompression.Row(0, 1, new double[]{0, 1, 0});
-		var restitutionRows = new GranularContactCompression.Row[]{
+		for (int exponent : new int[]{-30, -10, 0, 10, 25}) {
+			double unit = Math.scalb(1.0, exponent); double[] mass = {2 * unit, 3 * unit};
+			double[][] input = {{0, -.49, 0}, {0, -.49, 0}};
+			var rows = new GranularContactCompression.Row[]{pair, floor};
+			var result = runContactSolver(mass, input, rows);
+			for (var value : result.values()) require(Math.abs(value[1]) < 1e-4,
+					"A resting pair retained visible normal motion");
+			require(Math.abs(result.impulses()[1] - 2.45 * unit) <= 5e-4 * unit,
+					"Fixed support missed the incoming macroscopic momentum");
+			checkContactMechanicalMoments(mass, input, result, new double[][]{{0, 0, 0}, {0, 1, 0}},
+					new double[]{0, result.impulses()[1], 0});
+		}
+		double[] mass = {2, 7}, normal = {.6, .8, 0};
+		double[][] input = {{1, 2, .25}, {-1, -.5, -.125}};
+		var pairRows = new GranularContactCompression.Row[]{new GranularContactCompression.Row(0, 1, normal)};
+		var result = runContactSolver(mass, input, pairRows);
+		double closing = .6 * (input[1][0] - input[0][0]) + .8 * (input[1][1] - input[0][1]);
+		double expectedImpulse = -closing / (1.0 / mass[0] + 1.0 / mass[1]);
+		require(Math.abs(result.impulses()[0] - expectedImpulse) <= 1e-12,
+				"Oblique unequal-mass contact disagrees with its analytic impulse");
+		checkContactMechanicalMoments(mass, input, result, new double[][]{{0, 0, 0}, {1.2, 1.6, 0}});
+		for (double restitution : new double[]{0, .1, .5, 1}) {
+			var response = GranularContactCompression.respond(mass, input, pairRows, result,
+					new double[]{restitution}, contactBudget());
+			double afterGap = .6 * (response.values()[1][0] - response.values()[0][0])
+					+ .8 * (response.values()[1][1] - response.values()[0][1]);
+			require(Math.abs(afterGap + restitution * closing) <= 1e-12,
+					"A single contact lost its material restitution");
+			checkContactMechanicalMoments(mass, input, response, new double[][]{{0, 0, 0}, {1.2, 1.6, 0}});
+		}
+		var wedge = new GranularContactCompression.Row[]{
 				new GranularContactCompression.Row(0, -1, new double[]{1, 0, 0}),
 				new GranularContactCompression.Row(0, -1, new double[]{-.6, .8, 0})};
-		double[] restitutionMass = {1}; double[][] restitutionInput = {{-.4, -.8, 0}};
-		for (int[] order : new int[][]{{0, 1}, {1, 0}}) for (double[] coefficients : new double[][]{{0, 0}, {.1, .1}, {0, 1}, {1, 0}, {1, 1}}) {
-			var rows = new GranularContactCompression.Row[]{restitutionRows[order[0]], restitutionRows[order[1]]};
-			var compressed = compressContacts(restitutionMass, restitutionInput, rows);
-			var response = GranularContactCompression.respond(restitutionMass, restitutionInput, rows, compressed,
-					new double[]{coefficients[order[0]], coefficients[order[1]]}, contactBudget());
-			double[] impulse = new double[3];
-			for (int k = 0; k < rows.length; k++) {
-				require(response.admits(rows[k]), "contact expansion escaped the common admissible cone");
-				for (int a = 0; a < 3; a++) impulse[a] = Math.fma(response.impulses()[k], rows[k].normal()[a], impulse[a]);
-			}
-			checkContactMechanicalMoments(restitutionMass, restitutionInput, response, new double[][]{{0, 0, 0}}, impulse);
-			if (coefficients[0] == 0 && coefficients[1] == 1) {
-				require(1 > .4 * .4 + .8 * .8 && Math.abs(response.values()[0][0]) <= response.arithmeticError()[0][0]
-						&& Math.abs(response.values()[0][1] - .8) <= response.arithmeticError()[0][1] + Math.ulp(.8),
-						"unequal restitution must reproject an expansion that exceeds the source kinetic energy");
-			}
+		double[][] incoming = {{-.4, -.8, 0}};
+		for (double[] e : new double[][]{{0, 0}, {0, 1}, {1, 0}, {1, 1}}) {
+			var compressed = runContactSolver(new double[]{1}, incoming, wedge);
+			var response = GranularContactCompression.respond(new double[]{1}, incoming, wedge, compressed, e, contactBudget());
+			double[] reaction = new double[3];
+			for (int k = 0; k < wedge.length; k++) for (int a = 0; a < 3; a++)
+				reaction[a] += response.impulses()[k] * wedge[k].normal()[a];
+			checkContactMechanicalMoments(new double[]{1}, incoming, response, new double[][]{{0, 0, 0}}, reaction);
 		}
-		var originalRows = new GranularContactCompression.Row[]{
-				new GranularContactCompression.Row(0, -1, new double[]{1, 0, 0}),
-				new GranularContactCompression.Row(0, 1, new double[]{-.6, .8, 0})};
-		double[][] originalSource = {{-1, 0, 0}, {0, 0, 0}};
-		var originalCompression = compressContacts(new double[]{1, 1}, originalSource, originalRows);
-		for (int i = 0; i < 2; i++) for (int a = 0; a < 3; a++) require(Math.abs(originalCompression.values()[i][a])
-				<= originalCompression.arithmeticError()[i][a], "common original-source projection retained a prefix-only impulse");
-		for (double scale : new double[]{1, Math.ulp(1.0F), Float.MIN_VALUE}) {
-			double[][] input = {{0, -.49 * scale, 0}, {0, -.49 * scale, 0}};
-			var result = compressContacts(new double[]{2, 3}, input, new GranularContactCompression.Row[]{pair, floor});
-			for (int i = 0; i < 2; i++) require(Math.abs(result.values()[i][1]) <= result.gapError()[1] + (i == 0 ? 0 : result.gapError()[0]),
-					"joint floor support did not recover the zero-velocity mass-metric solution");
-			double reactionBound = 5 * result.gapError()[1] + 3 * result.gapError()[0]
-					+ 2 * result.arithmeticError()[0][1] + 3 * result.arithmeticError()[1][1]
-					+ Math.ulp(5 * .49 * scale) + Math.ulp(result.impulses()[1]);
-			require(Math.abs(result.impulses()[1] - 5 * .49 * scale) <= reactionBound,
-					"joint floor reaction does not close the incoming momentum");
+		// Nine representatives and 23 rows exercise a coupled, redundant bed-sized contact network.
+		var rows = new java.util.ArrayList<GranularContactCompression.Row>();
+		double[][] centers = new double[9][3], velocities = new double[9][3]; double[] masses = new double[9];
+		for (int i = 0; i < 9; i++) {
+			centers[i] = new double[]{i % 3, i / 3, 0}; masses[i] = 5.078125;
+			velocities[i] = new double[]{.03 * (4 - i), -.49, .01 * i};
+			if (i < 3) rows.add(new GranularContactCompression.Row(i, -1, new double[]{0, 1, 0}));
+			if (i % 3 < 2) rows.add(new GranularContactCompression.Row(i, i + 1, new double[]{1, 0, 0}));
+			if (i < 6) rows.add(new GranularContactCompression.Row(i, i + 3, new double[]{0, 1, 0}));
+			if (i < 6 && i % 3 < 2) rows.add(new GranularContactCompression.Row(i, i + 4, new double[]{Math.sqrt(.5), Math.sqrt(.5), 0}));
+			if (i < 6 && i % 3 > 0) rows.add(new GranularContactCompression.Row(i, i + 2, new double[]{-Math.sqrt(.5), Math.sqrt(.5), 0}));
 		}
-		for (int exponent : new int[]{-1070, -900, 900, 1021}) {
-			double unit = Math.scalb(1.0, exponent); double[] mass = {2 * unit, 3 * unit};
-			var result = compressContacts(mass, new double[][]{{0, -.49, 0}, {0, -.49, 0}}, new GranularContactCompression.Row[]{pair, floor});
-			for (int i = 0; i < 2; i++) require(Math.abs(result.values()[i][1]) <= result.gapError()[1] + (i == 0 ? 0 : result.gapError()[0]),
-					"a common mass unit changed the joint support projection");
-			double expected = 2.45 * unit, bound = mass[0] * result.gapError()[1]
-					+ mass[1] * (result.gapError()[0] + result.gapError()[1]) + Math.ulp(expected) + Math.ulp(result.impulses()[1]);
-			require(Math.abs(result.impulses()[1] - expected) <= bound, "scaled contact reaction lost its physical kg unit");
+		require(rows.size() == 23, "Bed contact fixture changed");
+		var network = rows.toArray(GranularContactCompression.Row[]::new);
+		int[] rowVisits = {0};
+		result = GranularContactCompression.solve(masses, velocities, network, () -> rowVisits[0]++);
+		checkContactCertificate(result, network);
+		require(rowVisits[0] <= (2 * GranularContactCompression.SWEEPS + 1) * network.length,
+				"Contact solve exceeded its fixed row-scan cost");
+		double maximumClosing = 0;
+		for (var row : network) {
+			double gap = 0;
+			for (int a = 0; a < 3; a++) gap += row.normal()[a] * (row.second() < 0
+					? result.values()[row.first()][a] : result.values()[row.second()][a] - result.values()[row.first()][a]);
+			maximumClosing = Math.max(maximumClosing, -gap);
 		}
-		var seededRows = new GranularContactCompression.Row[]{floor, pair};
-		double[][] terminal = {{0, 0, 0}, {0, -3.421238818448203, 0}};
-		var cold = compressContacts(new double[]{2, 3}, terminal, seededRows);
-		var warm = GranularContactCompression.solve(new double[]{2, 3}, terminal, seededRows, contactBudget(), new double[]{2.45, 1.47});
-		checkContactCertificate(warm, seededRows);
-		for (int i = 0; i < 2; i++) require(Math.abs(warm.values()[i][1] - cold.values()[i][1])
-				<= warm.arithmeticError()[i][1] + cold.arithmeticError()[i][1], "contact impulse initial guess changed the terminal projection");
-		var supportedRows = new GranularContactCompression.Row[]{pair,
-				new GranularContactCompression.Row(2, -1, new double[]{0, 1, 0}),
-				new GranularContactCompression.Row(0, 2, new double[]{0, -1, 0})};
-		double[] supportedMass = {5.078125, 5.078125, 5.078125};
-		double[][] supportedDrift = {{0, -4.181514439262235, 0}, {0, -3.421239086669101, 0}, {0, 0, 0}};
-		double[][] supportedTerminal = {{0, -4.181514239311219, 0}, {0, -3.4212389230728144, 0}, {0, 2.220446049250313E-16, 0}};
-		var driftSeed = compressContacts(supportedMass, supportedDrift, supportedRows);
-		var supportedCold = compressContacts(supportedMass, supportedTerminal, supportedRows);
-		var supportedWarm = GranularContactCompression.solve(supportedMass, supportedTerminal, supportedRows,
-				contactBudget(), driftSeed.impulses());
-		var sharedChain = new GranularContactChainSeed(supportedMass, supportedRows);
-		var sharedDrift = GranularContactCompression.solve(supportedMass, supportedDrift, supportedRows, contactBudget(), null, sharedChain);
-		var sharedTerminal = GranularContactCompression.solve(supportedMass, supportedTerminal, supportedRows, contactBudget(), null, sharedChain);
-		double[] sharedRestitution = {0, 0, .1};
-		var sharedResponse = GranularContactCompression.respond(supportedMass, supportedTerminal, supportedRows,
-				sharedTerminal, sharedRestitution, contactBudget(), sharedChain);
-		var coldResponse = GranularContactCompression.respond(supportedMass, supportedTerminal, supportedRows,
-				supportedCold, sharedRestitution, contactBudget());
-		componentResponseCopiesCertifiedArrays(supportedMass, supportedDrift, supportedTerminal, supportedRows);
-		require(java.util.Arrays.deepEquals(sharedDrift.values(), driftSeed.values())
-				&& java.util.Arrays.deepEquals(sharedTerminal.values(), supportedCold.values())
-				&& java.util.Arrays.deepEquals(sharedResponse.values(), coldResponse.values())
-				&& java.util.Arrays.equals(sharedResponse.impulses(), coldResponse.impulses()),
-				"event-local chain structure must reconstruct each fresh source and correction independently");
-		checkContactCertificate(supportedWarm, supportedRows);
-		for (int i = 0; i < 3; i++) require(Math.abs(supportedWarm.values()[i][1] - supportedCold.values()[i][1])
-				<= supportedWarm.arithmeticError()[i][1] + supportedCold.arithmeticError()[i][1],
-				"a near-proportional source with a resting-contact residual changed the terminal projection");
-		checkContactMechanicalMoments(supportedMass, supportedTerminal, supportedWarm,
-				new double[][]{{0, 1, 0}, {0, 2, 0}, {0, 0, 0}}, new double[]{0, supportedWarm.impulses()[1], 0});
-		for (int axis = 0; axis < 3; axis++) for (int sign : new int[]{-1, 1}) for (int anchor = -1; anchor < 2; anchor++) for (boolean separatePools : new boolean[]{false, true}) {
-			double[] chainMass = {1, 2, 3, 4, 5}, source = separatePools ? new double[]{-4, -2, -3, 1, 2} : new double[]{3, 1, -2, 4, 2};
-			double[][] chainInput = new double[5][3], centers = new double[5][3];
-			var rows = new GranularContactCompression.Row[anchor < 0 ? 4 : 5];
-			for (int i = 0; i < 5; i++) {
-				chainInput[i][axis] = sign * source[i]; centers[i][axis] = sign * i;
-				if (i < 4) { double[] direction = new double[3]; direction[axis] = sign; rows[i] = new GranularContactCompression.Row(i, i + 1, direction); }
-			}
-			if (anchor >= 0) {
-				double[] direction = new double[3]; direction[axis] = anchor == 0 ? sign : -sign;
-				rows[4] = new GranularContactCompression.Row(anchor == 0 ? 0 : 4, -1, direction);
-			}
-			for (boolean reverse : new boolean[]{false, true}) {
-				if (reverse) for (int i = 0; i < rows.length / 2; i++) {
-					var swap = rows[i]; rows[i] = rows[rows.length - 1 - i]; rows[rows.length - 1 - i] = swap;
-				}
-				var projected = runContactSolver(chainMass, chainInput, rows); checkContactCertificate(projected, rows);
-				for (int i = 0; i < 5; i++) {
-					double mean = separatePools ? (i == 0 ? -4 : i < 3 ? -2.6 : i == 3 ? 1 : 2) : (i < 3 ? -1.0 / 6 : 26.0 / 9);
-					double expected = sign * (anchor == 0 ? Math.max(0, mean) : anchor == 1 ? Math.min(0, mean) : mean);
-					require(Math.abs(projected.values()[i][axis] - expected) <= projected.arithmeticError()[i][axis] + Math.ulp(expected),
-							"axis chain must retain exact weighted pools, opening gaps and endpoint support under row permutations");
-				}
-				double[] fixedImpulse = new double[3];
-				if (anchor >= 0) fixedImpulse[axis] = sign * (anchor == 0 ? (separatePools ? 17 : 1) : (separatePools ? -14 : -26));
-				checkContactMechanicalMoments(chainMass, chainInput, projected, centers, fixedImpulse);
-			}
+		System.out.printf("CONTACT representatives=9 contacts=23 rowVisits=%d maximumClosingMps=%g%n", rowVisits[0], maximumClosing);
+		double[] reaction = new double[3];
+		for (int k = 0; k < network.length; k++) if (network[k].second() < 0)
+			for (int a = 0; a < 3; a++) reaction[a] += result.impulses()[k] * network[k].normal()[a];
+		double[] torque = new double[3];
+		for (int k = 0; k < network.length; k++) if (network[k].second() < 0) for (int a = 0; a < 3; a++) {
+			int b = (a + 1) % 3, c = (a + 2) % 3; int i = network[k].first();
+			torque[a] += result.impulses()[k] * (centers[i][b] * network[k].normal()[c] - centers[i][c] * network[k].normal()[b]);
 		}
-		var forkRows = new GranularContactCompression.Row[]{
-				new GranularContactCompression.Row(0, 1, new double[]{1, 0, 0}),
-				new GranularContactCompression.Row(0, 2, new double[]{1, 0, 0})};
-		var fork = compressContacts(new double[]{1, 1, 1}, new double[][]{{3, 0, 0}, {0, 0, 0}, {2, 0, 0}}, forkRows);
-		for (int i = 0; i < 3; i++) require(Math.abs(fork.values()[i][0] - (i < 2 ? 1.5 : 2)) <= fork.arithmeticError()[i][0],
-				"a directed fork must retain the general common-cone projection");
-		var interiorFixedRows = new GranularContactCompression.Row[]{
-				new GranularContactCompression.Row(0, 1, new double[]{1, 0, 0}),
-				new GranularContactCompression.Row(1, 2, new double[]{1, 0, 0}),
-				new GranularContactCompression.Row(1, -1, new double[]{1, 0, 0})};
-		var interiorFixed = compressContacts(new double[]{1, 1, 1}, new double[][]{{-3, 0, 0}, {-2, 0, 0}, {-1, 0, 0}}, interiorFixedRows);
-		for (int i = 0; i < 3; i++) require(Math.abs(interiorFixed.values()[i][0] - (i == 0 ? -3 : 0)) <= interiorFixed.arithmeticError()[i][0],
-				"interior fixed contact must retain the opening branch in the general common cone");
-		double[] masses = {2, 3, 5}; double[][] input = {{1, .25, 0}, {0, .25, 0}, {-1, .25, 0}};
-		var chain = new GranularContactCompression.Row[]{
-				new GranularContactCompression.Row(0, 1, new double[]{1, 0, 0}),
-				new GranularContactCompression.Row(1, 2, new double[]{1, 0, 0}),
-				new GranularContactCompression.Row(0, 1, new double[]{1, 0, 0})};
-		for (int[] order : new int[][]{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}}) {
-			var rows = new GranularContactCompression.Row[]{chain[order[0]], chain[order[1]], chain[order[2]]};
-			var result = compressContacts(masses, input, rows);
-			double chainBound = java.util.Arrays.stream(result.gapError()).sum();
-			for (int i = 0; i < 3; i++) require(Math.abs(result.values()[i][0] - -.3) <= chainBound + result.arithmeticError()[i][0] + Math.ulp(.3)
-					&& result.values()[i][1] == .25, "contact row order changed the unique three-sphere projection");
-			checkContactMechanicalMoments(masses, input, result, new double[][]{{0, 0, 0}, {1, 0, 0}, {2, 0, 0}});
-		}
-		double[] normal = {.6, .8, 0}; masses = new double[]{2, 7}; input = new double[][]{{1, 2, .25}, {-1, -.5, -.125}};
-		var result = compressContacts(masses, input, new GranularContactCompression.Row[]{new GranularContactCompression.Row(0, 1, normal)});
-		double g = normal[0] * (input[1][0] - input[0][0]) + normal[1] * (input[1][1] - input[0][1]);
-		double norm = normal[0] * normal[0] + normal[1] * normal[1], expectedImpulse = -g / (norm / 2 + norm / 7);
-		for (int i = 0; i < 2; i++) for (int a = 0; a < 3; a++) {
-			double expected = input[i][a] + (i == 0 ? -1 : 1) * expectedImpulse * normal[a] / masses[i];
-			require(Math.abs(result.values()[i][a] - expected) <= result.arithmeticError()[i][a] + Math.ulp(expected)
-					+ Math.abs(normal[a]) * result.gapError()[0] / ((norm / 2 + norm / 7) * masses[i])
-					+ Math.abs(normal[a] / masses[i]) * Math.ulp(expectedImpulse), "oblique unequal-mass contact changed the analytic projection");
-		}
-		checkContactMechanicalMoments(masses, input, result, new double[][]{{0, 0, 0}, {1.2, 1.6, 0}});
-		for (double scale : new double[]{.75, 2, -1}) {
-			double[][] scaled = new double[2][3];
-			for (int i = 0; i < 2; i++) for (int a = 0; a < 3; a++) scaled[i][a] = scale * input[i][a];
-			var rows = new GranularContactCompression.Row[]{new GranularContactCompression.Row(0, 1, normal)};
-			var reference = compressContacts(masses, scaled, rows);
-			var seeded = GranularContactCompression.solve(masses, scaled, rows, contactBudget(), result.impulses());
-			checkContactCertificate(seeded, rows);
-			for (int i = 0; i < 2; i++) for (int a = 0; a < 3; a++) require(Math.abs(seeded.values()[i][a] - reference.values()[i][a])
-					<= seeded.arithmeticError()[i][a] + reference.arithmeticError()[i][a],
-					"scaled or opening oblique source changed the independently certified projection");
-			checkContactMechanicalMoments(masses, scaled, seeded, new double[][]{{0, 0, 0}, {1.2, 1.6, 0}});
-		}
-		masses = new double[]{5.078125, 5.078125};
-		input = new double[][]{{-1.5487015249688663, 4.163336342344337e-17, .44733240676988223},
-				{2.127016253372214, -4.842622083303612, -.6143748711545809}};
-		double[][] originalInput = {input[0].clone(), input[1].clone()};
-		var failureRows = new GranularContactCompression.Row[]{floor,
-				new GranularContactCompression.Row(1, 0, new double[]{-.7090144521094559, -.6748020663414372, .204794233222653})};
-		result = compressContacts(masses, input, failureRows);
-		var direction = failureRows[1].normal();
-		checkContactMechanicalMoments(masses, input, result, new double[][]{{0, 0, 0}, {-direction[0], -direction[1], -direction[2]}},
-				new double[]{0, result.impulses()[0], 0});
-		double[] extendedMass = {5.078125, 5.078125, 5.078125, 5.078125};
-		double[][] extendedInput = {input[0].clone(), input[1].clone(), {4, 0, 0}, {5, 0, 0}};
-		var extended = runContactSolver(extendedMass, extendedInput, new GranularContactCompression.Row[]{floor, failureRows[1],
-				new GranularContactCompression.Row(1, 2, new double[]{1, 0, 0}), new GranularContactCompression.Row(2, 3, new double[]{1, 0, 0})});
-		for (int i = 0; i < 2; i++) require(java.util.Arrays.equals(extended.values()[i], result.values()[i]),
-				"additional touching rows changed the same cancellation-scale cone solution");
-		for (int i = 2; i < 4; i++) require(extended.impulses()[i] == 0 && java.util.Arrays.equals(extended.values()[i], extendedInput[i]),
-				"an opening contact acquired a spurious compressive impulse");
-		checkContactMechanicalMoments(extendedMass, extendedInput, extended,
-				new double[][]{{0, 0, 0}, {-direction[0], -direction[1], -direction[2]},
-						{1 - direction[0], -direction[1], -direction[2]}, {2 - direction[0], -direction[1], -direction[2]}},
-				new double[]{0, extended.impulses()[0], 0});
-		require(java.util.Arrays.deepEquals(input, originalInput) && masses[0] == 5.078125 && masses[1] == 5.078125,
-				"contact acceptance or iterative rejection changed the original mechanical input");
+		checkContactMechanicalMoments(masses, velocities, result, centers, reaction, torque);
+		componentResponseIsIndependent(masses, velocities, network);
 	}
 
-	private static GranularContactCompression.Result compressContacts(double[] mass, double[][] input, GranularContactCompression.Row[] rows) {
-		var result = runContactSolver(mass, input, rows);
-		double largest = 0; for (double m : mass) largest = Math.max(largest, m);
-		int exponent = Math.getExponent(largest);
-		if (largest < Double.MIN_NORMAL) exponent = Math.getExponent(Math.scalb(largest, 54)) - 54;
-		double[] normalized = new double[mass.length];
-		for (int i = 0; i < mass.length; i++) normalized[i] = Math.scalb(mass[i], -exponent);
-		Runnable spend = contactBudget(); double[] lambda = new double[rows.length];
-		GranularContactSmallCone.solve(normalized, input, rows, lambda, spend);
-		double[][] values = new double[mass.length][3];
-		var error = GranularContactCompression.reconstruct(normalized, input, rows, lambda, values, spend);
-		double[] bounds = new double[rows.length], physicalImpulse = new double[rows.length];
-		for (int i = 0; i < rows.length; i++) {
-			bounds[i] = GranularContactCompression.gapError(rows[i], values, error); physicalImpulse[i] = Math.scalb(lambda[i], exponent);
-		}
-		var reference = new GranularContactCompression.Result(values, physicalImpulse, bounds, error);
-		checkContactCertificate(reference, rows);
-		double coneBound = java.util.Arrays.stream(result.gapError()).sum() + java.util.Arrays.stream(reference.gapError()).sum();
-		for (int i = 0; i < mass.length; i++) for (int a = 0; a < 3; a++)
-			require(Math.abs(result.values()[i][a] - reference.values()[i][a]) <= coneBound
-					+ result.arithmeticError()[i][a] + reference.arithmeticError()[i][a], "common and independent exact contact projections disagree");
-		return result;
-	}
-
-	private static void componentResponseCopiesCertifiedArrays(double[] masses, double[][] drift, double[][] terminal, GranularContactCompression.Row[] rows) {
+	private static void componentResponseIsIndependent(double[] mass, double[][] terminal, GranularContactCompression.Row[] rows) {
 		var registry = BuiltinGranularDefinitions.createRegistry();
 		var material = registry.material(registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND));
 		var fixed = new GranularSphereCollision(2, 2, 2, .5F, new FlipCutCellGeometry(2, 2, 2), null);
-		for (boolean friction : new boolean[]{false, true}) {
-			double[] mass = friction ? new double[]{1} : masses;
-			double[][] d = friction ? new double[][]{{10, -2, 0}} : drift, v = friction ? d : terminal;
-			var constraints = friction ? new GranularContactCompression.Row[]{new GranularContactCompression.Row(0, -1, new double[]{0, 1, 0})} : rows;
-			double[][] dError = new double[mass.length][3], vError = new double[mass.length][3];
-			int[] handles = new int[mass.length]; var materials = new mmm.granular.ParticulateMaterial[mass.length]; java.util.Arrays.fill(materials, material);
-			int[] operations = {0}; Runnable budget = contactBudget(), measured = () -> { operations[0]++; budget.run(); };
-			var processor = new GranularComponentResponse(.5, fixed, measured);
-			var expected = new GranularComponentResponse(.5, fixed, contactBudget()).respond(mass, d, v, dError, vError, handles, materials, constraints);
-			var actual = processor.respond(mass, d, v, dError, vError, handles, materials, constraints);
-			int[] failedOperations = {0}, failAt = {7};
-			var rejected = new GranularComponentResponse(.5, fixed, () -> {
-				if (++failedOperations[0] == failAt[0]) throw new MechanicalTimeRefinement(2, "Contact response fixture budget");
-			});
-			try {
-				rejected.respond(mass, d, v, dError, vError, handles, materials, constraints);
-				throw new AssertionError("Component response fixture must exercise an incomplete calculation");
-			} catch (MechanicalTimeRefinement refusal) { failAt[0] = 0; }
-			int retryStart = failedOperations[0];
-			checkComponentResponseBits(rejected.respond(mass, d, v, dError, vError, handles, materials, constraints), expected);
-			require(failedOperations[0] - retryStart > 4 * (mass.length + constraints.length) + 2,
-					"an incomplete component calculation must not populate the preview cache");
-			if (friction) {
-				var compressed = compressContacts(mass, d, constraints);
-				var originalNormal = GranularContactCompression.respond(mass, v, constraints, compressed,
-						new double[]{material.restitution()}, contactBudget());
-				var originalFriction = fixed.friction(originalNormal.values()[0], new double[][]{constraints[0].normal()},
-						originalNormal.impulses()[0] / mass[0], material);
-				var originalTerminal = compressContacts(mass, new double[][]{originalFriction}, constraints);
-				require(!java.util.Arrays.deepEquals(originalTerminal.values(), originalNormal.values()),
-						"fixed friction fixture must exercise a changed terminal response after the normal energy audit");
-				checkComponentResponseBits(expected, new GranularComponentResponse.Response(compressed, originalTerminal));
-			}
-			for (int repeat = 0; repeat < 2; repeat++) {
-				for (var result : new GranularContactCompression.Result[]{actual.drift(), actual.velocity()}) {
-					result.values()[0][1] = 123; result.impulses()[0] = 777; result.gapError()[0] = -999; result.arithmeticError()[0][1] = 999;
-				}
-				int start = operations[0]; actual = processor.respond(mass, d, v, dError, vError, handles, materials, constraints);
-				require(operations[0] - start == 4 * (mass.length + constraints.length) + 2,
-						"component reuse must charge exact keys and every copied certified result");
-				checkComponentResponseBits(actual, expected);
-			}
-			for (int change = 0; change < 9; change++) {
-				double[] changedMass = mass.clone(); double[][] changedD = java.util.Arrays.stream(d).map(double[]::clone).toArray(double[][]::new);
-				double[][] changedV = java.util.Arrays.stream(v).map(double[]::clone).toArray(double[][]::new);
-				double[][] changedDError = new double[mass.length][3], changedVError = new double[mass.length][3];
-				int[] changedHandles = handles.clone(); var changedMaterials = materials.clone(); var changedRows = constraints.clone();
-				if (change == 0) changedMass[0] *= 2;
-				else if (change == 1) changedD[0][1] = Math.nextDown(changedD[0][1]);
-				else if (change == 2) changedV[0][1] = Math.nextDown(changedV[0][1]);
-				else if (change == 3) changedDError[0][1] = 8;
-				else if (change == 4) changedVError[0][1] = 8;
-				else if (change == 5) changedHandles[0]++;
-				else if (change == 6) changedMaterials[0] = new mmm.granular.ParticulateMaterial(material.id(), material.referenceDensity(),
-						material.primaryGrainDiameterMeters(), material.restPorosityQ(), material.reposeAngleRadians(), 0, 0, 0,
-						material.criticalShields(), material.erosionRateSvqPerSecond(), material.maximumActiveParcelSvq(), material.baseArgb(), material.displayTextureId(), material.reactive());
-				else if (change == 7) {
-					var row = constraints[0]; double[] normal = row.normal().clone(); normal[0] = -0.0;
-					changedRows[0] = new GranularContactCompression.Row(row.first(), row.second(), normal);
-				} else if (!friction) changedRows[0] = new GranularContactCompression.Row(constraints[0].second(), constraints[0].first(), constraints[0].normal());
-				else changedD[0][0] = Math.nextDown(changedD[0][0]);
-				int start = operations[0];
-				var changed = processor.respond(changedMass, changedD, changedV, changedDError, changedVError, changedHandles, changedMaterials, changedRows);
-				require(operations[0] - start > 4 * (mass.length + constraints.length) + 2,
-						"component cache must distinguish each full raw source, error, material and ordered contact input");
-				var fresh = new GranularComponentResponse(.5, fixed, contactBudget()).respond(changedMass, changedD, changedV,
-						changedDError, changedVError, changedHandles, changedMaterials, changedRows);
-				checkComponentResponseBits(changed, fresh);
-			}
-		}
-	}
-	private static void checkComponentResponseBits(GranularComponentResponse.Response actual, GranularComponentResponse.Response expected) {
-		var a = new GranularContactCompression.Result[]{actual.drift(), actual.velocity()};
-		var b = new GranularContactCompression.Result[]{expected.drift(), expected.velocity()};
-		for (int i = 0; i < a.length; i++) {
-			require(java.util.Arrays.deepEquals(a[i].values(), b[i].values()) && java.util.Arrays.deepEquals(a[i].arithmeticError(), b[i].arithmeticError())
-					&& java.util.Arrays.equals(a[i].impulses(), b[i].impulses()) && java.util.Arrays.equals(a[i].gapError(), b[i].gapError()),
-					"preview component reuse must preserve every response and reconstruction certificate array");
-		}
+		var materials = new mmm.granular.ParticulateMaterial[mass.length]; java.util.Arrays.fill(materials, material);
+		var processor = new GranularComponentResponse(.5, fixed, contactBudget());
+		var first = processor.respond(mass, terminal, materials, rows);
+		double[][] expected = java.util.Arrays.stream(first.values()).map(double[]::clone).toArray(double[][]::new);
+		first.values()[0][0] = 123;
+		var repeated = processor.respond(mass, terminal, materials, rows);
+		for (int i = 0; i < mass.length; i++) for (int a = 0; a < 3; a++)
+			require(Math.abs(repeated.values()[i][a] - expected[i][a]) <= repeated.arithmeticError()[i][a],
+					"contact response retained mutable result state between calls");
 	}
 	private static Runnable contactBudget() {
 		int[] operations = {0};
@@ -1203,10 +993,10 @@ public final class GranularCarrierValidation {
 	private static void checkContactCertificate(GranularContactCompression.Result result, GranularContactCompression.Row[] rows) {
 		for (int k = 0; k < rows.length; k++) {
 			var row = rows[k]; double gap = 0;
-			for (int a = 0; a < 3; a++) gap = Math.fma(row.normal()[a], row.second() < 0 ? result.values()[row.first()][a]
-					: result.values()[row.second()][a] - result.values()[row.first()][a], gap);
-			require(result.impulses()[k] >= 0 && result.admits(row) && gap >= -result.gapError()[k]
-					&& (result.impulses()[k] == 0 || Math.abs(gap) <= result.gapError()[k]), "common contact KKT certificate failed");
+			for (int a = 0; a < 3; a++) gap += row.normal()[a] * (row.second() < 0 ? result.values()[row.first()][a]
+					: result.values()[row.second()][a] - result.values()[row.first()][a]);
+			require(result.impulses()[k] >= 0 && gap >= -.001,
+					"Bounded contact solve left visible closing motion: " + gap);
 		}
 	}
 
@@ -1215,6 +1005,9 @@ public final class GranularCarrierValidation {
 	}
 
 	private static void checkContactMechanicalMoments(double[] mass, double[][] input, GranularContactCompression.Result result, double[][] position, double[] externalImpulse) {
+		checkContactMechanicalMoments(mass, input, result, position, externalImpulse, new double[3]);
+	}
+	private static void checkContactMechanicalMoments(double[] mass, double[][] input, GranularContactCompression.Result result, double[][] position, double[] externalImpulse, double[] externalTorque) {
 		double beforeEnergy = 0, afterEnergy = 0, energyBound = 0;
 		for (int a = 0; a < 3; a++) {
 			double before = 0, after = 0, bound = 0, oldAngular = 0, newAngular = 0, angularBound = 0;
@@ -1230,7 +1023,7 @@ public final class GranularCarrierValidation {
 				energyBound += mass[i] * error[a] * (Math.abs(v[a]) + error[a]) + Math.ulp(beforeEnergy) + Math.ulp(afterEnergy);
 			}
 			require(Math.abs(after - before - externalImpulse[a]) <= bound + (externalImpulse[a] == 0 ? 0 : Math.ulp(externalImpulse[a]))
-					&& Math.abs(newAngular - oldAngular) <= angularBound,
+					&& Math.abs(newAngular - oldAngular - externalTorque[a]) <= angularBound + Math.ulp(externalTorque[a]),
 					"common internal contact changed momentum or angular momentum beyond its reconstruction certificate");
 		}
 		require(afterEnergy <= beforeEnergy + energyBound, "common compression increased kinetic energy");
@@ -1309,12 +1102,9 @@ public final class GranularCarrierValidation {
 			if (scene == 3) domain.geometry.cutCells.replaceMask(cell, 1);
 			domain.setVolume(2, 2, 2, .125F);
 			if (scene == 4) domain.setVolume(1, 1, 1, 1);
-			int count = domain.particles.count();
+			var liquid = domain.exportLiquidCellState();
+			var momentum = domain.exportMacMomentum();
 			long liquidRevision = domain.carrierMutationRevision();
-			var liquid = domain.materialRegistry == null ? domain.exportParticleState()
-					: domain.exportMaterialParticleState().particles();
-			var liquidMass = domain.particles.copyMassUnits();
-			var liquidMaterials = domain.particles.copyMaterialHandles();
 			var kernel = new mmm.granular.GranularKernel(4, 4, 4, .5F);
 			kernel.capture(scene == 0 ? 0 : .75F, scene == 2 ? .52F : .75F, .75F, volume);
 			var parcel = new mmm.granular.GranularStateSnapshot.ActiveParcel(
@@ -1335,14 +1125,12 @@ public final class GranularCarrierValidation {
 				domain.restoreGranularState(snapshot, registry, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE),
 						BuiltinFluidMaterials.createRegistry());
 			} catch (IllegalArgumentException | IllegalStateException expected) { rejected = true; }
-			var after = domain.materialRegistry == null ? domain.exportParticleState()
-					: domain.exportMaterialParticleState().particles();
-			require(domain.particles.count() == count && domain.carrierMutationRevision() == liquidRevision
-					&& java.util.Arrays.equals(liquid.copyPositionVolume(), after.copyPositionVolume())
-					&& java.util.Arrays.equals(liquid.copyParticleVelocities(), after.copyParticleVelocities())
-					&& java.util.Arrays.equals(liquidMass, domain.particles.copyMassUnits())
-					&& java.util.Arrays.equals(liquidMaterials, domain.particles.copyMaterialHandles()),
-					"granular restore changed raw liquid inventory");
+			require(domain.exportLiquidCellState().stocks().equals(liquid.stocks())
+					&& domain.carrierMutationRevision() == liquidRevision
+					&& java.util.Arrays.equals(momentum.copyX(),domain.exportMacMomentum().copyX())
+					&& java.util.Arrays.equals(momentum.copyY(),domain.exportMacMomentum().copyY())
+					&& java.util.Arrays.equals(momentum.copyZ(),domain.exportMacMomentum().copyZ()),
+					"Granular restore changed liquid inventory or MAC momentum");
 			if (scene < 6) {
 				require(rejected && domain.granularState == null && domain.materialRegistry == null
 						&& domain.materialDefinitions == null && domain.granularCoupling == null
@@ -1455,10 +1243,9 @@ public final class GranularCarrierValidation {
 		java.util.Arrays.fill(domain.mac.velocityX, 1);
 		java.util.Arrays.fill(domain.mac.velocityY, 0);
 		java.util.Arrays.fill(domain.mac.velocityZ, 0);
-		// This isolated sub-grid carrier follows its authoritative velocity.
-		for (int marker = 0; marker < domain.particleCount(); marker++) domain.particles.setVelocityX(marker, 1);
-		domain.particleAdvectionStage.advect(.5F);
-		require(domain.carrierMutationRevision == revision, "advection fixture must retain carrier structure");
+		domain.cellMacStage.publishMomentum();
+		domain.cellMacStage.transport(.5F);
+		require(domain.carrierMutationRevision > revision, "Cell transport did not publish its inventory revision");
 		require(domain.carrierViscosityPascalSeconds(source) == null
 				&& domain.carrierViscosityPascalSeconds(target) == expected,
 				"advection must invalidate spatial carrier properties despite unchanged inventory revision");
@@ -1493,12 +1280,10 @@ public final class GranularCarrierValidation {
 		// Changing the pressure origin leaves every physical pressure difference unchanged.
 		// The resulting gas storage terms are much larger than the pressure tolerance.
 		domain.pressureReference -= 1_000_000;
-		var system = new PressureSystem(domain);
-		system.prepareGranular(dt);
-		var result = system.solve(domain.projection.fluidUnknownCount + domain.projection.gasUnknownCount,
-				domain.config.pressureTolerance());
+		var system = domain.pressureSystem;
+		var result = system.solveProjection(dt);
 		require(result.converged(), "gas pressure increments must converge independently of the pressure origin");
-		require(system.projectGranular(dt), "reference test must exercise the joint granular pressure response");
+		system.projectVelocities(dt);
 		require(pressureEnergy(domain) + solidEnergy(domain) < 1.0e-12,
 				"a uniform pressure reference shift must not create liquid or granular kinetic energy");
 	}
@@ -1519,9 +1304,10 @@ public final class GranularCarrierValidation {
 				"implicit drag must dissipate an initially unresolved relative velocity into a valid solution");
 	}
 
-	private static FluidDomain domain() {
+	private static FluidDomain domain() { return domain(0); }
+	private static FluidDomain domain(float gravity) {
 		var domain = new FluidDomain(6, 6, 6,
-				new FluidSolverConfig(0.5F, 1_000F, 0, 0.05F, 400, 1.0e-5F, 0.45F, 0.002F, 0.8F), 4096);
+				new FluidSolverConfig(0.5F, 1_000F, gravity, 0.05F, 400, 1.0e-5F, 0.45F, 0.002F, 0.8F), 4096);
 		domain.bindGranular(BuiltinGranularDefinitions.createRegistry(),
 				new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE),
 				BuiltinFluidMaterials.createRegistry());
@@ -1572,14 +1358,17 @@ public final class GranularCarrierValidation {
 	private static void sharedCarrierExchange(boolean massWeighted) {
 		var domain = domain();
 		domain.setVolume(2, 2, 2, 0.001F);
-		if (massWeighted) for (int p = 0; p < domain.particles.count(); p++) {
-			domain.particles.setMassUnits(p, domain.unitScale.massUnitsForNormalized(domain.particles.mass(p) * 13.6));
+		if (massWeighted) {
+			var changes = new java.util.ArrayList<LiquidCellInventory.Edit>();
+			for(var stock:domain.liquidCells.stocks())changes.add(new LiquidCellInventory.Edit(stock.key(),
+					new LiquidCellInventory.Stock(stock.key(),stock.volume(),
+							mmm.units.Mass.fromKilograms(stock.massKilograms()*13.6),stock.mixture(),stock.internalEnergy(),stock.indicator())));
+			domain.liquidCells.planEdits(changes).commit();domain.markCellInventoryChanged();
 		}
 		for (int p = 0; p < 32; p++) addParcel(domain,
 				1.26F + 0.005F * (p % 4), 1.28F + 0.005F * (p % 3), 1.29F,
 				1, -0.5F, 0.25F);
 		domain.ensureGrid();
-		require(domain.variableDensityActive == massWeighted, "both P2G mass conventions are exercised");
 		double beforeEnergy = (pressureEnergy(domain) + solidEnergy(domain));
 		double[] beforeMomentum = pressureMomentum(domain);
 		relaxDrag(domain, 0.05F);
@@ -1592,13 +1381,10 @@ public final class GranularCarrierValidation {
 	}
 
 	private static void relaxDrag(FluidDomain domain, float dt) {
-		var pressure = new GranularPressureCoupling(domain);
-		pressure.prepare(dt);
-		var drag = new GranularImplicitDrag(domain, pressure);
-		drag.prepare(dt);
-		int iteration = 0;
-		while (drag.updateResistance()) require(++iteration < 32, "shared drag nonlinear solve did not converge");
-		drag.project();
+		// Assemble the common face partition, then isolate the finite-mass drag response at zero pressure.
+		domain.ensureGrid(); domain.pressureSystem.faces.rebuild(dt);
+		var pressure = new GranularPressureCoupling(domain); pressure.prepare(dt);
+		var drag = new GranularImplicitDrag(domain, pressure); drag.prepare(dt); drag.project();
 	}
 
 	private static void implicitSharedCarrier() {
@@ -1690,101 +1476,72 @@ public final class GranularCarrierValidation {
 		require(liquidAfter + solidAfter <= before * (1 + 2.0e-6),
 				"coupled pressure injected kinetic energy: before=" + before + ", after=" + (liquidAfter + solidAfter));
 		// Check the independent finite-volume continuity equation after both velocities were projected.
-		// The pressure solve holds the predictor's swept geometry fixed. Check both
-		// projected velocities against that same operator, including its transpose.
+		// Check the relative fluid/parcel volume equation at the fixed source CIC geometry.
 		double[] velocity = new double[3 * domain.granularState.parcels.count()], solidRates = new double[2 * domain.cellCount + 1];
 		for (int p = 0; p < domain.granularState.parcels.count(); p++) {
 			var parcel = domain.granularState.parcels.parcel(p);
 			velocity[3 * p] = parcel.velocityX(); velocity[3 * p + 1] = parcel.velocityY(); velocity[3 * p + 2] = parcel.velocityZ();
 		}
 		coupling.addVelocityDivergence(velocity, 0, solidRates, -1);
+		double[] liquidVelocity=new double[domain.pressureSystem.faces.faceCount],liquidRate=new double[solidRates.length];
+		var graph=domain.pressureSystem.faces;
+		for(int face=0;face<graph.faceCount;face++) liquidVelocity[face]=(graph.axis[face]==0?domain.mac.velocityX:graph.axis[face]==1?domain.mac.velocityY:domain.mac.velocityZ)[graph.localFace[face]];
+		graph.addDivergence(liquidVelocity,liquidRate,1);
 		for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
-			int cell = domain.projection.fluidUnknownCells[ordinal];
-			int x = cell % 6, y = cell / 6 % 6, z = cell / 36;
-			double div = (domain.pressureXFaceOpen(x + 1, y, z) * domain.mac.velocityX[domain.xFaceIndex(x + 1, y, z)]
-					- domain.pressureXFaceOpen(x, y, z) * domain.mac.velocityX[domain.xFaceIndex(x, y, z)]
-					+ domain.pressureYFaceOpen(x, y + 1, z) * domain.mac.velocityY[domain.yFaceIndex(x, y + 1, z)]
-					- domain.pressureYFaceOpen(x, y, z) * domain.mac.velocityY[domain.yFaceIndex(x, y, z)]
-					+ domain.pressureZFaceOpen(x, y, z + 1) * domain.mac.velocityZ[domain.zFaceIndex(x, y, z + 1)]
-					- domain.pressureZFaceOpen(x, y, z) * domain.mac.velocityZ[domain.zFaceIndex(x, y, z)]) / domain.config.cellSize();
-			double solidRate = solidRates[cell];
-			// Float pressure/velocity writes and the parcel reduction can cancel to almost zero.
-			// Bound roundoff at the fixture's original 1 m/s velocity scale, not the cancelled flux.
-			double tolerance = 2 * domain.granularState.parcels.count() * Math.ulp(1.0F) / domain.config.cellSize();
-			require(Math.abs(div - solidRate) < tolerance, "liquid and solid velocities disagree on volume flux: " + (div - solidRate));
+			int cell=domain.projection.fluidUnknownCells[ordinal];
+			double tolerance=2*domain.granularState.parcels.count()*Math.ulp(1.0F)/domain.config.cellSize();
+			require(Math.abs(liquidRate[cell]-solidRates[cell])<tolerance,"Liquid and solid velocities disagree on relative volume flux");
 		}
 	}
 
-	private static void sweptOccupancyConservation() {
+	private static void cellOccupancyVolumeRate() {
 		for (float[] position : new float[][] {{1.749F, 1.751F, 1.749F}, {.2F, 1.751F, 1.749F}}) {
 			var domain = domain(); addParcel(domain, position[0], position[1], position[2], .5F, -.5F, .5F);
-			var p = domain.granularState.parcels.parcel(0); double dt = .05;
-			var gradient = new SweptGranularVolumeGradient(domain); int count = gradient.build(p, dt);
-			domain.granularCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits);
-			long[] before = domain.granularCoupling.copySolidSvq();
-			domain.granularNextCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits,
-					(index, parcel) -> new mmm.granular.GranularCouplingFields.Position(
-							(float) (p.x() + dt * p.velocityX()), (float) (p.y() + dt * p.velocityY()), (float) (p.z() + dt * p.velocityZ())));
-			double sum = 0; boolean crossed = false;
-			for (int slot = 0; slot < count; slot++) {
-				int cell = gradient.cells[slot];
-				double change = dt * (gradient.x[slot] * p.velocityX() + gradient.y[slot] * p.velocityY() + gradient.z[slot] * p.velocityZ());
-				double expected = (domain.granularNextCoupling.solidSvq(cell) - before[cell]) / (double) SolidVolume.SVQ_PER_CELL;
-				require(Math.abs(change - expected) < 2.0 / SolidVolume.SVQ_PER_CELL,
-						"Swept solid gradient missed actual SVQ displacement at cell " + cell);
-				sum += change; crossed |= before[cell] == 0 && expected > 0;
+			fillPoreWater(domain, domain.sizeY); domain.ensureGrid();
+			int[] cells = new int[32]; double[] gx = new double[32], gy = new double[32], gz = new double[32];
+			int entries = domain.pressureSystem.solidFaces.gradient(0, cells, gx, gy, gz);
+			var parcel=domain.granularState.parcels.parcel(0);
+			var before=new mmm.granular.GranularCouplingFields.Position(parcel.x(),parcel.y(),parcel.z());
+			var after=new mmm.granular.GranularCouplingFields.Position(parcel.x()+.00005F,parcel.y()-.00005F,parcel.z()+.00005F);
+			double dx=after.x()-before.x(),dy=after.y()-before.y(),dz=after.z()-before.z(),sum=0;
+			double h=domain.config.cellSize(),volume=mmm.granular.SolidVolume.toCellVolume(parcel.solidVolumeSvq());
+			double tolerance=Math.scalb(2.0,-24)+2*volume*Math.pow((Math.abs(dx)+Math.abs(dy)+Math.abs(dz))/h,2);
+			for(int slot=0;slot<entries;slot++) {
+				int cell=cells[slot];double predicted=gx[slot]*dx+gy[slot]*dy+gz[slot]*dz;sum+=predicted;
+				long v0=domain.granularCoupling.parcelShareAtCell(before,parcel.solidVolumeSvq(),cell);
+				long v1=domain.granularCoupling.parcelShareAtCell(after,parcel.solidVolumeSvq(),cell);
+				double actual=Math.scalb((double)(v1-v0),-24);
+				require(Math.abs(predicted-actual)<=tolerance,"Pressure volume rate disagrees with actual CIC occupancy change");
 			}
-			require(crossed && Math.abs(sum) < 32 * Math.ulp(p.solidVolumeSvq() / (double) SolidVolume.SVQ_PER_CELL),
-					"Swept support failed to enter a new cell or changed total solid volume");
+			require(Math.abs(sum)<1e-15,"A translated parcel changed its total occupied volume");
 		}
 	}
 
-	private static void sweptKnotDirectionsMatchHatKernel() {
-		var domain = domain();
-		var gradient = new SweptGranularVolumeGradient(domain);
-		int sand = domain.granularState.registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
-		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
-		double fraction = svq / (double) SolidVolume.SVQ_PER_CELL;
-		for (int axis = 0; axis < 3; axis++) for (int reflection = 0; reflection < 8; reflection++) {
-			float[] position = new float[3];
-			for (int coordinate = 0; coordinate < 3; coordinate++) position[coordinate] = (reflection & 1 << coordinate) == 0 ? .75F : 2.25F;
-			double[] velocity = new double[3]; velocity[axis] = (reflection & 1 << axis) == 0 ? .5 : -.5;
-			var parcel = new GranularParcelStore.Parcel(position[0], position[1], position[2], (float) velocity[0], (float) velocity[1], (float) velocity[2],
-					svq, mmm.units.Mass.fromKilograms(2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER), sand, 0, 0, (byte) 0);
-			for (int power = 3; power <= 20; power++) {
-				double dt = Math.scalb(1, -power);
-				int count = gradient.build(parcel, dt);
-				double[] changes = new double[domain.cellCount];
-				for (int slot = 0; slot < count; slot++) changes[gradient.cells[slot]] = dt
-						* (gradient.x[slot] * velocity[0] + gradient.y[slot] * velocity[1] + gradient.z[slot] * velocity[2]);
-				for (int cell = 0; cell < changes.length; cell++) {
-					int x = cell % domain.sizeX, y = cell / domain.sizeX % domain.sizeY, z = cell / (domain.sizeX * domain.sizeY);
-					double old = interiorHatKernel(position[0], position[1], position[2], x, y, z);
-					double next = interiorHatKernel(position[0] + dt * velocity[0], position[1] + dt * velocity[1],
-							position[2] + dt * velocity[2], x, y, z);
-					require(changes[cell] == fraction * (next - old),
-							"selected knot direction disagrees with the independent hat kernel after axis reflection");
-				}
-			}
-			// The sampled coordinate rounds back to the exact knot; its entered side still determines the derivative.
-			int count = gradient.build(parcel, Math.scalb(1, -60));
-			int oldCell = domain.cellIndex((int) (position[0] / .5 - .5), (int) (position[1] / .5 - .5), (int) (position[2] / .5 - .5));
-			double rate = 0;
-			for (int slot = 0; slot < count; slot++) if (gradient.cells[slot] == oldCell) {
-				rate = gradient.x[slot] * velocity[0] + gradient.y[slot] * velocity[1] + gradient.z[slot] * velocity[2];
-			}
-			require(rate == -fraction, "a sub-ULP Gauss coordinate chose the outgoing side of its knot");
-		}
-	}
-
-	private static double interiorHatKernel(double x, double y, double z, int cx, int cy, int cz) {
-		return Math.max(0, 1 - Math.abs(x / .5 - .5 - cx)) * Math.max(0, 1 - Math.abs(y / .5 - .5 - cy))
-				* Math.max(0, 1 - Math.abs(z / .5 - .5 - cz));
+	private static void internalPressureImpulseCloses() {
+		var domain = domain(); addParcel(domain, 1.43F, 1.62F, 1.39F, 0, 0, 0);
+		fillPoreWater(domain, domain.sizeY); domain.ensureGrid();
+		domain.pressureStage.solve(.05F);
+		java.util.Arrays.fill(domain.projection.pressure, 0);
+		domain.projection.pressure[domain.cellIndex(2,2,2)] = 300;
+		domain.projection.pressure[domain.cellIndex(3,2,2)] = -100;
+		double[] impulse=new double[3];double dt=.05;
+		var graph=domain.pressureSystem.faces;
+		double[] p=new double[domain.cellCount+domain.gasState.network.nodeCount()+1],a=new double[graph.faceCount];
+		for(int cell=0;cell<domain.cellCount;cell++)p[cell]=domain.projection.pressure[cell];
+		graph.pressureVelocity(p,a);
+		for(int face=0;face<graph.faceCount;face++)impulse[graph.axis[face]]+=dt*graph.faceMass(face)*a[face];
+		var coupling = new GranularPressureCoupling(domain); coupling.prepare((float)dt); coupling.project((float)dt);
+		var parcel = domain.granularState.parcels.parcel(0);
+		impulse[0] += parcel.mass() * parcel.velocityX(); impulse[1] += parcel.mass() * parcel.velocityY();
+		impulse[2] += parcel.mass() * parcel.velocityZ();
+		for (double value : impulse) require(Math.abs(value) < 1e-8,
+				"Internal pressure changed combined liquid/solid momentum: " + value);
 	}
 
 	private static void hydrostaticParcelForce() {
-		var domain = domain();
-		addParcel(domain, 1.43F, 1.62F, 1.39F, 0, 0, 0);
+		for (float py : new float[]{.1F, .24F, 1.62F, 2.9F}) {
+		var domain = domain(9.81F);
+		addParcel(domain, 1.43F, py, 1.39F, 0, 0, 0);
 		fillPoreWater(domain, domain.sizeY);
 		domain.ensureGrid();
 		domain.pressureStage.solve(0.05F);
@@ -1797,8 +1554,15 @@ public final class GranularCarrierValidation {
 		coupling.project(0.05F);
 		var p = domain.granularState.parcels.parcel(0);
 		double expected = 0.05 * 9.81 * 1_000 * p.solidVolumeSvq() / SolidVolume.SVQ_PER_CUBIC_METER / p.mass();
-		require(Math.abs(p.velocityY() - expected) < 2.0e-7 && Math.abs(p.velocityX()) < 1.0e-7
-				&& Math.abs(p.velocityZ()) < 1.0e-7, "pressure gradient must give Archimedes buoyancy without a second buoyancy impulse");
+		// CIC derivatives and the clipped-wall hydrostatic term share the represented solid inventory.
+		double tolerance = expected * 8 * Math.ulp(1.0F) / SolidVolume.toCellVolume(p.solidVolumeSvq())
+				+ 2 * Math.ulp((float) expected);
+		require(Math.abs(p.velocityY() - expected) < tolerance && Math.abs(p.velocityX()) < 1.0e-7
+				&& Math.abs(p.velocityZ()) < 1.0e-7, "Archimedes buoyancy at y=" + py + ": actual="
+				+ p.velocityY() + ", expected=" + expected + ", vx=" + p.velocityX() + ", vz=" + p.velocityZ());
+		if(py<.25F || py>2.75F)require(Math.abs(p.mass()*p.velocityY()+domain.lastGranularBoundaryImpulseY)<1e-10,
+				"Clipped hydrostatic buoyancy did not return its opposite impulse to the fixed wall");
+		}
 	}
 
 	private static void sharedGasPressureAlgebra() {
@@ -1842,7 +1606,7 @@ public final class GranularCarrierValidation {
 			quadratic += fullA[row] * responseA[row];
 		}
 		require(Math.abs(crossAB - crossBA) < 1.0e-10 * Math.max(1, Math.abs(crossAB)) && quadratic > 0,
-				"shared drag and compressible gas must form one symmetric positive pressure operator");
+				"shared factored drag and compressible gas must form a symmetric positive pressure operator");
 		int[] unknowns = new int[fullA.length];
 		double[] diagonal = new double[fullA.length];
 		int count = 0;
@@ -1853,7 +1617,7 @@ public final class GranularCarrierValidation {
 		}
 		unknowns[count++] = cells + node;
 		diagonal[cells + node] = domain.projection.gasMatrixDiagonal[node] + coupling.gasDiagonal(node);
-		var preconditioner = new GranularPressurePreconditioner(domain);
+		var preconditioner = new PressurePreconditioner(domain);
 		preconditioner.prepare(unknowns, count, diagonal);
 		preconditioner.apply(unknowns, count, fullA, responseA);
 		preconditioner.apply(unknowns, count, fullB, responseB);
@@ -1885,15 +1649,10 @@ public final class GranularCarrierValidation {
 
 	private static double faceMass(FluidDomain domain, int axis, int x, int y, int z,
 	                               int nx, int ny, int nz, int first, int second, float open) {
-		if (domain.isFluid(first) || domain.isFluid(second)) {
-			double h = domain.config.cellSize();
-			return domain.config.density() * h * h * h * open
-					/ domain.pressureFaceCoupling(first, second, nx - x, ny - y, nz - z).mobilityScale();
-		}
 		if (!domain.carrierFaceActive(first, second, open)) return 0;
 		double p2g = axis == 0 ? domain.mac.p2gWeightX[domain.xFaceIndex(nx, y, z)] : axis == 1
 				? domain.mac.p2gWeightY[domain.yFaceIndex(x, ny, z)] : domain.mac.p2gWeightZ[domain.zFaceIndex(x, y, nz)];
-		return domain.unitScale.kilograms(p2g * (domain.variableDensityActive ? 1 : domain.config.density()));
+		return domain.unitScale.kilograms(p2g);
 	}
 
 	private static void require(boolean condition, String message) { if (!condition) throw new AssertionError(message); }

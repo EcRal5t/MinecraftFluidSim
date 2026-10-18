@@ -1,7 +1,5 @@
 package mmm.thermal;
 
-import mmm.chemistry.ExactRational;
-import mmm.chemistry.ChemicalLimits;
 import mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
@@ -73,7 +71,33 @@ final class ThermalCaloricInversion {
 	}
 
 	static ThermalStateFunction.State solve(Inventory inventory, SignedDyadic target) {
-		return new Curve(inventory).solve(target);
+		SignedDyadic capacity = SignedDyadic.ZERO, reference = SignedDyadic.ZERO;
+		for (int item = inventory.first(); item >= 0; item = inventory.next(item)) {
+			var material = inventory.material(item);
+			if (material == null) throw new IllegalArgumentException("Thermal material is missing");
+			if (material.caloricSegments().size() != 1) return new Curve(inventory).solve(target);
+			SignedDyadic mass = inventory.exactMass(item);
+			if (mass == null || mass.signum() <= 0 || !(Double.isFinite(inventory.mass(item)) && inventory.mass(item) > 0))
+				throw new IllegalArgumentException("Thermal caloric inventory is invalid");
+			SignedDyadic part = mass.multiply(SignedDyadic.of(material.caloricSegments().getFirst().specificHeatJPerKgK()));
+			capacity = capacity.add(part);
+			reference = reference.add(part.multiply(SignedDyadic.of(material.referenceTemperatureK())));
+		}
+		if (capacity.signum() <= 0) throw new IllegalArgumentException("Thermal caloric inventory is empty");
+		// Constant heat capacities form one affine curve, including heterogeneous materials.
+		// No knot map or per-material grouping is needed for this common case.
+		SignedDyadic numerator = target.add(reference);
+		double temperature = divide(numerator, capacity), heatCapacity = capacity.toDouble();
+		if (temperature < ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K) {
+			SignedDyadic minimumEnergy = SignedDyadic.of(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K).multiply(capacity).subtract(reference);
+			double minimum = minimumEnergy.toDouble();
+			if (!Double.isFinite(minimum) || target.compareTo(minimumEnergy.subtract(SignedDyadic.of(16 * Math.ulp(minimum)))) < 0)
+				throw new ThermalStateFunction.EnergyOutsideValidityException();
+			temperature = ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K;
+		}
+		if (!Double.isFinite(temperature) || !Double.isFinite(heatCapacity)) throw new ThermalStateFunction.EnergyRepresentationException();
+		if (!(heatCapacity > 0)) throw new IllegalArgumentException("Thermal heat capacity is invalid");
+		return new ThermalStateFunction.State(temperature, heatCapacity);
 	}
 
 	/** One common piecewise-affine caloric curve; equal materials share their exact mass. */
@@ -218,13 +242,16 @@ final class ThermalCaloricInversion {
 	}
 	private static double divide(SignedDyadic numerator, SignedDyadic denominator) {
 		double a = numerator.toDouble(), b = denominator.toDouble();
-		if (Double.isFinite(a) && Double.isFinite(b) && b > 0 && numerator.equals(SignedDyadic.of(a)) && denominator.equals(SignedDyadic.of(b)))
+		if (Double.isFinite(a) && Double.isFinite(b) && Math.abs(a) >= Double.MIN_NORMAL && b >= Double.MIN_NORMAL)
 			return a / b;
-		int shift = numerator.exponent() - denominator.exponent();
-		var rawNumerator = shift >= 0 ? numerator.significand().shiftLeft(shift) : numerator.significand();
-		var rawDenominator = shift >= 0 ? denominator.significand() : denominator.significand().shiftLeft(-shift);
-		if (rawNumerator.bitLength() > ChemicalLimits.MAX_RATIONAL_BITS || rawDenominator.bitLength() > ChemicalLimits.MAX_RATIONAL_BITS)
-			throw new IllegalArgumentException("Rational magnitude is over budget");
-		return ExactRational.roundQuotientToDouble(rawNumerator, rawDenominator);
+		if (numerator.signum() == 0) return 0;
+		// Normalize before floating division so a finite temperature survives overflow or
+		// underflow of either extensive quantity. Inventory arithmetic remains exact.
+		var n = numerator.significand(); var d = denominator.significand();
+		int nBits = n.abs().bitLength(), dBits = d.bitLength();
+		a = new SignedDyadic(n, 1 - nBits).toDouble();
+		b = new SignedDyadic(d, 1 - dBits).toDouble();
+		int shift = Math.addExact(Math.subtractExact(numerator.exponent(), denominator.exponent()), nBits - dBits);
+		return Math.scalb(a / b, shift);
 	}
 }

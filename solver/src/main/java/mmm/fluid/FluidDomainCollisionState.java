@@ -1,5 +1,7 @@
 package mmm.fluid;
 
+import mmm.inventory.LiquidCellInventory;
+
 import mmm.granular.SolidVolume;
 
 import mmm.chemistry.ChemicalMixtureRecord;
@@ -25,19 +27,17 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		super(sizeX, sizeY, sizeZ, config, maximumParticleCount);
 	}
 
-	public void setMarkerChemical(int marker, Map<String, Long> stableAmounts, boolean indicator) {
-		if (marker < 0 || marker >= particles.count()) throw new IllegalArgumentException("Unknown marker " + marker);
-		ChemicalMixtureRecord zeroResidual = ChemicalMixtureRecord.fromStableAmounts(
-				domain().chemicalParcels().registry(), stableAmounts, 0L);
-		ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(
-				chemicalParcels.registry(), stableAmounts,
-				Math.subtractExact(particles.massUnits(marker), zeroResidual.speciesMassUnits(chemicalParcels.registry())));
-		chemicalParcels.requireCompatible(record,
-				materialRegistry.material(particles.materialHandle(marker)).id(), indicator);
-		if (thermalState != null) thermalState.requireReactionState(
-				marker, record, particles.mass(marker), domain().thermalMarkerContext());
-		chemicalParcels.assign(marker, record, indicator);
-		chemicalParcels.markDirtyCell(particleCellIndex(marker));
+	public void setMarkerChemical(int ordinal, Map<String, Long> stableAmounts, boolean indicator) {
+		var stock = liquidCells.physicalStockAt(ordinal);
+		var registry = domain().chemicalParcels().registry();
+		var zero = ChemicalMixtureRecord.fromStableAmounts(registry, stableAmounts, 0);
+		var record = zero.withMassResidualUnits(Math.subtractExact(stock.massUnits(), zero.speciesMassUnits(registry)));
+		chemicalParcels.requireCompatible(record, materialRegistry.material(stock.key().material()).id(), indicator);
+		if (thermalState != null) thermalState.requireReactionState(ordinal, record,
+				unitScale.normalizedMass(stock.massUnits()), domain().thermalMarkerContext());
+		liquidCells.planEdits(List.of(new LiquidCellInventory.Edit(stock.key(), new LiquidCellInventory.Stock(stock.key(), stock.volume(),
+				stock.massUnits(), record, stock.internalEnergy(), indicator)))).commit();
+		chemicalParcels.markDirtyCell(stock.key().cell());
 	}
 
 	/** Resolves a stable material id to the runtime handle of the bound registry. */
@@ -46,116 +46,34 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		return materialRegistry.handle(materialId);
 	}
 
-	/** Replaces this domain from one validated, immutable in-memory marker state. */
+	/** Imports a point fixture once into the common cell/MAC representation. */
 	public void restoreParticleState(FlipParticleState state) {
-		if (materialDefinitions != null) throw new IllegalStateException("Pure restore cannot remove bound liquid material identity");
-		restoreParticleColumns(state);
-	}
-
-	private void restoreParticleColumns(FlipParticleState state) {
-		if (state == null) throw new IllegalArgumentException("Particle state must not be null");
-		state.requireCompatible(sizeX, sizeY, sizeZ, config.cellSize());
-		int restoredCount = state.particleCount();
-		if (restoredCount > maximumParticleCount) throw new IllegalArgumentException("Particle state exceeds domain marker budget");
-		CellRemapMicroTopology.requireRestoreCapacity(state);
-		ensureParticleCapacity(restoredCount);
-		float[] positionVolume = state.positionVolume();
-		float[] particleVelocities = state.particleVelocities();
-		long[] restoredMassUnits = state.massUnits();
-		byte[] collisionMasks = state.collisionMicroMasks();
-		geometry.cutCells.restoreMicroMasks(collisionMasks);
-		for (int i = 0; i < cellCount; i++) geometry.solid[i] = Byte.toUnsignedInt(collisionMasks[i]) == 0xff;
-		for (int particle = 0; particle < restoredCount; particle++) {
-			int positionBase = particle * 4, velocityBase = particle * 3;
-			particles.setPositionX(particle, positionVolume[positionBase]);
-			particles.setPositionY(particle, positionVolume[positionBase + 1]);
-			particles.setPositionZ(particle, positionVolume[positionBase + 2]);
-			particles.setVolume(particle, positionVolume[positionBase + 3]);
-			particles.setVelocityX(particle, particleVelocities[velocityBase]);
-			particles.setVelocityY(particle, particleVelocities[velocityBase + 1]);
-			particles.setVelocityZ(particle, particleVelocities[velocityBase + 2]);
-			particles.setMassUnits(particle, restoredMassUnits[particle]);
-			particles.setMaterialHandle(particle, 0);
-			particles.setPhaseLabel(particle, 0);
-		}
-		coordinator.adoptWholesaleCount(
-				CarrierMutationPlan.wholesaleCount(carrierMutationRevision(), particles.count()), restoredCount);
-		domain().clearThermalBinding();
-		materialRegistry = null;
+		if (materialDefinitions != null) throw new IllegalStateException("Pure input cannot remove bound material identity");
+		LiquidInitialInput.restore(domain(), state, null, null, null, null, null);
 		chemicalParcels = null;
-		chemicalPreviousCells = null;
-		chemicalMovingMarkers = null;
-		Arrays.fill(projection.pressure, 0.0F);
-		Arrays.fill(projection.divergence, 0.0F);
-		pressureAnchor = -1;
-		lastPressureIterations = 0;
-		lastPressureResidual = 0.0F;
-		gridDirty = true;
 	}
 
-	/** Replaces this domain from a validated multi-material CPU handoff without changing world state. */
 	public void restoreMaterialParticleState(FlipMaterialParticleState state) {
-		if (state == null) throw new IllegalArgumentException("Material particle state must not be null");
-		state.requireCompatible(sizeX, sizeY, sizeZ, config.cellSize());
-		if (state.particleCount() > maximumParticleCount) {
-			throw new IllegalArgumentException("Material particle state exceeds domain marker budget");
-		}
-		FluidMaterialRegistry registry = new FluidMaterialRegistry(state.materials());
+		if (state == null) throw new IllegalArgumentException("Material input is missing");
+		var registry = new FluidMaterialRegistry(state.materials());
 		if (materialDefinitions != null) LiquidMaterialBinding.validate(domain(), registry, materialDefinitions);
-		double defaultDensity = registry.material(0).referenceDensity();
-		double tolerance = Math.max(1.0E-9, Math.abs(config.density()) * 1.0E-12);
-		if (Math.abs(defaultDensity - config.density()) > tolerance) {
-			throw new IllegalArgumentException("Material handle 0 must match the domain default density");
-		}
-		restoreParticleColumns(state.particles());
-		long[] restoredMass = state.particleMassUnits();
-		int[] restoredMaterial = state.materialPaletteIndex();
-		for (int particle = 0; particle < particles.count(); particle++) {
-			particles.setMassUnits(particle, restoredMass[particle]);
-			particles.setMaterialHandle(particle, restoredMaterial[particle]);
-			particles.setPhaseLabel(particle, registry.phaseHandle(restoredMaterial[particle]));
-		}
-		materialRegistry = registry;
-		gridDirty = true;
+		LiquidInitialInput.restore(domain(), state.particles(), registry, state.copyMaterialPaletteIndex(), null, null, null);
+		chemicalParcels = null;
 	}
 
-	/** Restores a validated chemical handoff against the authoritative world registry. */
 	public void restoreChemicalParticleState(FlipChemicalParticleState state, ChemicalRegistry registry) {
-		if (state == null || registry == null) throw new IllegalArgumentException("Chemical restore state/registry is missing");
-		if (!state.registryFingerprint().equals(registry.fingerprint())
-				|| !state.speciesPalette().equals(registry.species().stream()
-				.map(mmm.chemistry.ChemicalSpecies::id).toList())) {
-			throw new IllegalArgumentException("Chemical handoff registry identity mismatch");
-		}
-		FlipMaterialParticleState incoming = state.materials();
-		incoming.requireCompatible(sizeX, sizeY, sizeZ, config.cellSize());
-		if (incoming.particleCount() > maximumParticleCount) throw new IllegalArgumentException("Chemical state exceeds domain marker budget");
-		for (FluidMaterial material : incoming.materials()) registry.phaseHandleForMaterial(material.id());
-		ChemicalParcelStore restored = new ChemicalParcelStore(
-				registry, unitScale, maximumParticleCount, cellCount);
-		int[] tableIndex = state.copyMarkerMixtureIndex();
-		byte[] indicator = state.copyIndicator();
-		List<ChemicalMixtureRecord> runtimeMixtures = state.runtimeMixtures(registry);
-		int[] incomingMaterials = incoming.copyMaterialPaletteIndex();
-		restored.pool().reserveRecords(incoming.particleCount());
-		for (int marker = 0; marker < incoming.particleCount(); marker++) {
-			ChemicalMixtureRecord mixture = runtimeMixtures.get(tableIndex[marker]);
-			restored.requireCompatible(mixture, incoming.materials().get(incomingMaterials[marker]).id(), indicator[marker] != 0);
-			restored.assign(marker, mixture, indicator[marker] != 0);
-		}
-		if (!Arrays.equals(restored.speciesTotals(incoming.particleCount()), state.copySpeciesTotals())) {
-			throw new IllegalArgumentException("Restored chemical species ledger mismatch");
-		}
-		restored.restoreAuditLedgers(state.externalSource(), state.escapedSink());
-		restoreMaterialParticleState(incoming);
-		chemicalParcels = restored;
-		// A cold checkpoint restore has no trusted scheduler cursor. Re-evaluate every occupied
-		// cell once; an in-memory backend handoff immediately replaces this with its exact dirty set.
-		for (int marker = 0; marker < particles.count(); marker++) {
-			chemicalParcels.markDirtyCell(particleCellIndex(marker));
-		}
-		chemicalPreviousCells = new int[maximumParticleCount];
-		chemicalMovingMarkers = new int[maximumParticleCount];
+		if (state == null || registry == null || !state.registryFingerprint().equals(registry.fingerprint()))
+			throw new IllegalArgumentException("Chemical input registry mismatch");
+		var incoming = state.materials();
+		var palette = new FluidMaterialRegistry(incoming.materials());
+		var table = state.runtimeMixtures(registry); int[] indices = state.copyMarkerMixtureIndex();
+		var mixtures = new ArrayList<ChemicalMixtureRecord>();
+		for (int index : indices) mixtures.add(table.get(index));
+		var metadata = new ChemicalParcelStore(registry, unitScale, maximumParticleCount, cellCount);
+		metadata.restoreAuditLedgers(state.externalSource(), state.escapedSink());
+		LiquidInitialInput.restore(domain(), incoming.particles(), palette, incoming.copyMaterialPaletteIndex(), mixtures, state.copyIndicator(), registry);
+		chemicalParcels = metadata;
+		for (var stock : liquidCells.stocks()) chemicalParcels.markDirtyCell(stock.key().cell());
 	}
 
 	/** Exports an immutable CPU marker/velocity/solid handoff without serializing reconstructed density. */
@@ -242,8 +160,9 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		} catch (RuntimeException failure) {
 			throw new CollisionEditBlockedException("Granular collision displacement could not be planned", failure);
 		}
-		return new CollisionEditPlan((FluidDomain) this, List.copyOf(canonical), previousMasks, particles.count(),
-				Double.doubleToRawLongBits(totalVolumeExact()), totalMassUnits(), granularPlan);
+		return new CollisionEditPlan((FluidDomain) this, List.copyOf(canonical), previousMasks, liquidCells.size(),
+				Double.doubleToRawLongBits(totalVolumeExact()), totalMassUnits(), granularPlan,
+				LiquidCollisionEdit.prepare(domain(), canonical, granularPlan));
 	}
 
 	/** Commits the already validated cross-owner prelude; the supplied masks may then be applied without refusal. */
@@ -251,7 +170,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		if (plan == null || plan.owner != this || plan.consumed || activeCollisionPlan != null) {
 			throw new IllegalArgumentException("Collision edit plan is missing, foreign or already consumed");
 		}
-		if (particles.count() != plan.planMarkerCount
+		if (liquidCells.size() != plan.planMarkerCount
 				|| Double.doubleToRawLongBits(totalVolumeExact()) != plan.totalVolumeBits
 				|| totalMassUnits() != plan.totalMassUnits) {
 			throw new IllegalStateException("Liquid inventory changed after collision planning");
@@ -262,10 +181,33 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 				throw new IllegalStateException("Collision geometry changed after planning");
 			}
 		}
+		plan.liquid.inventory.requireCurrent();
+		if (plan.liquid.gas != null) gasTopologyCoordinator.requireBeforeCarrierCommit(plan.liquid.gas);
+		if (thermalState != null) {
+			var audit = thermalState.auditLedger().withExternalSinkEnergy(plan.liquid.removedEnergy);
+			var gas = plan.liquid.gas == null ? null : plan.liquid.gas.thermalPlan();
+			if (gas != null) audit.withExternalSourceEnergy(gas.sourceEnergy()).withExternalSinkEnergy(gas.sinkEnergy())
+					.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff()).expectedInventory();
+		}
 		if (plan.granular != null) try {
 			commitGranularCollision(plan.granular);
 		} catch (RuntimeException failure) {
 			throw new CollisionEditBlockedException("Granular collision displacement could not be committed", failure);
+		}
+		plan.liquid.inventory.commit();
+		mac.restoreMomentum(plan.liquid.momentum);
+		geometry.cutCells.restoreMicroMasks(plan.liquid.masks);
+		for (var edit : plan.edits) {
+			int cell = cellIndex(edit.x(), edit.y(), edit.z());
+			geometry.solid[cell] = edit.mask() == 255; projection.pressure[cell] = 0;
+			if (chemicalParcels != null) chemicalParcels.markDirtyCell(cell);
+			if (granularDepositDynamics != null) granularDepositDynamics.disturbCell(cell);
+		}
+		domain().markCellInventoryChanged();
+		if (plan.liquid.gas != null) gasTopologyCoordinator.commit(plan.liquid.gas);
+		if (thermalState != null) {
+			thermalState.recordExternalSink(plan.liquid.removedEnergy);
+			thermalState.recordRoundoff(plan.liquid.energyRoundoff);
 		}
 		plan.consumed = true;
 		activeCollisionPlan = plan;
@@ -276,47 +218,16 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 			int x, int y, int z, int mask, ChemicalTransferLedger.Builder chemicalDisplacement,
 			RemovedMaterialLedger materialDisplacement, RemovedThermalEnergy thermalDisplacement
 	) {
-		int index = cellIndexChecked(x, y, z);
-		boolean plannedBatch = activeCollisionPlan != null;
-		if (plannedBatch) {
-			CollisionEdit expected = activeCollisionPlan.edits.get(activeCollisionEditIndex);
-			if (expected.x() != x || expected.y() != y || expected.z() != z || expected.mask() != mask) {
-				throw new IllegalStateException("Collision edits differ from their committed batch order");
-			}
+		cellIndexChecked(x, y, z);
+		if (activeCollisionPlan == null) {
+			if (geometry.cutCells.mask(cellIndex(x, y, z)) == mask) return 0;
+			beginCollisionEdits(planCollisionEdits(List.of(new CollisionEdit(x, y, z, mask))));
 		}
-		int previous = geometry.cutCells.mask(index);
-		if (previous == mask) return 0.0F;
-		int newlyOccupied = mask & ~previous;
-		if (newlyOccupied != 0 && granularCoupling != null && !plannedBatch) {
-			ensureGrid();
-			if (thermalState != null && thermalState.coherentPhases().cellOccupiedSvq(index) > 0L) {
-				throw new IllegalStateException("Collision edit intersects authoritative coherent phase inventory");
-			}
-			if (granularState != null
-					&& (granularCoupling.solidSvq(index) > 0L || granularState.deposits.cellSolidVolumeSvq(index) > 0L)) {
-				try { displaceGranularForCollisionCell(index); }
-				catch (RuntimeException failure) {
-					throw new CollisionEditBlockedException(
-							"Granular collision displacement could not be committed", failure);
-				}
-			}
-		}
-		geometry.cutCells.replaceMask(index, mask);
-		geometry.solid[index] = mask == FlipCutCellGeometry.FULL_MASK;
-		projection.pressure[index] = 0.0F;
-		float displaced = newlyOccupied == 0 ? 0.0F
-				: removeParticlesInMicroMask(x, y, z, newlyOccupied, chemicalDisplacement,
-						materialDisplacement, thermalDisplacement);
-		float excess = Math.max(0.0F, exactVolumeInCell(x, y, z) - effectiveOpenCellVolume(index));
-		if (excess > 1.0E-6F) displaced += removeParticlesInCell(x, y, z, excess, chemicalDisplacement,
-				materialDisplacement, thermalDisplacement);
-		volume[index] = 0.0F;
-		if (granularDepositDynamics != null) granularDepositDynamics.disturbCell(index);
-		gridDirty = true;
-		if (plannedBatch && ++activeCollisionEditIndex == activeCollisionPlan.edits.size()) {
-			activeCollisionPlan = null;
-			activeCollisionEditIndex = 0;
-		}
+		var expected = activeCollisionPlan.edits.get(activeCollisionEditIndex);
+		if (expected.x() != x || expected.y() != y || expected.z() != z || expected.mask() != mask)
+			throw new IllegalStateException("Collision edits differ from prepared batch order");
+		float displaced = activeCollisionPlan.liquid.report(activeCollisionEditIndex, domain(), chemicalDisplacement, materialDisplacement, thermalDisplacement);
+		if (++activeCollisionEditIndex == activeCollisionPlan.edits.size()) { activeCollisionPlan = null; activeCollisionEditIndex = 0; }
 		return displaced;
 	}
 
@@ -442,14 +353,18 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 	public float openFaceFractionZ(int x, int y, int z) { return geometry.cutCells.zFaceOpen(x, y, z); }
 
 	public void setVolume(int x, int y, int z, float value) {
-		if (!Float.isFinite(value)) throw new IllegalArgumentException("Cell volume must be finite");
-		if (granularCoupling != null) ensureGrid();
-		int index = cellIndexChecked(x, y, z);
-		float requested = clamp01(value);
-		if (geometry.solid[index] && requested > 0.0F) throw new IllegalStateException("Cannot place fluid in a solid cell");
-		float capacity = effectiveOpenCellVolume(index);
-		float clamped = Math.min(requested, capacity);
-		coordinator.replaceCellVolume(CellVolumeReplacementPlan.build(domain(), x, y, z, clamped, clamped == capacity));
+		transferPlanner.replaceCellVolumes(new int[]{cellIndexChecked(x,y,z)},new float[]{value},null);
+	}
+
+	/** Replaces all cell liquid targets in one inventory, momentum, thermal and gas transaction. */
+	public void setVolumes(float[] cellVolumes) { setVolumes(cellVolumes,null); }
+
+	/** Bulk material initialization uses the same quantity and energy transaction. */
+	public void setVolumes(float[] cellVolumes,int[] materialHandles) {
+		if (cellVolumes==null || cellVolumes.length!=cellCount || materialHandles!=null && materialHandles.length!=cellCount)
+			throw new IllegalArgumentException("Cell volumes and materials must cover the entire grid");
+		int[] cells=new int[cellCount];for(int cell=0;cell<cellCount;cell++) cells[cell]=cell;
+		transferPlanner.replaceCellVolumes(cells,cellVolumes,materialHandles);
 	}
 
 	public float volume(int x, int y, int z) {
@@ -460,7 +375,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 	public float pressure(int x, int y, int z) {
 		int cell = cellIndexChecked(x, y, z);
 		ensurePressureGeometry();
-		return pressureSystem.hasLiquidPressure(cell) ? pressureReference + projection.pressure[cell] : projection.pressure[cell];
+		return (float) pressureSystem.liquidPressureAt(cell, ~geometry.cutCells.mask(cell) & 255);
 	}
 
 	/** Package-private test accessor for the free-surface pressure jump {@code sigma * kappa} at a cell. */
@@ -514,14 +429,12 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 	public double exactVolumeNear(int centerX, int centerY, int centerZ, int maxRadius, int materialHandle) { return metrics.exactVolumeNear(centerX, centerY, centerZ, maxRadius, materialHandle); }
 
 	MaterialInventory materialInventory(int materialHandle) {
-		double volume = 0.0, mass = 0.0, weightedY = 0.0;
-		for (int particle = 0; particle < particles.count(); particle++) {
-			if (particles.materialHandle(particle) != materialHandle) continue;
-			volume += particles.volume(particle);
-			mass += particles.mass(particle);
-			weightedY += particles.positionY(particle) / config.cellSize() * particles.volume(particle);
+		double volume = 0, mass = 0, weightedY = 0;
+		for (var stock : liquidCells.stocks()) if (stock.key().material() == materialHandle) {
+			volume += stock.volumeFraction(); mass += unitScale.normalizedMass(stock.massUnits());
+			weightedY += (stock.key().cell() / sizeX % sizeY + .5) * stock.volumeFraction();
 		}
-		return new MaterialInventory(volume, mass, volume == 0.0 ? Double.NaN : weightedY / volume);
+		return new MaterialInventory(volume, mass, volume == 0 ? Double.NaN : weightedY / volume);
 	}
 
 	int phaseCountInCell(int x, int y, int z) {
@@ -533,40 +446,30 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 
 	/** In-memory material assignment only; callers outside the fluid package cannot create world material state. */
 	void setMaterialInCell(int x, int y, int z, FluidMaterialRegistry registry, int materialHandle) {
-		if (registry == null) throw new IllegalArgumentException("Material registry must not be null");
-		registry.material(materialHandle);
 		int cell = cellIndexChecked(x, y, z);
-		boolean found = false;
-		long finalMass = domain().totalMassUnits();
-		for (int particle = 0; particle < particles.count(); particle++) if (particleCellIndex(particle) == cell) {
-			found = true;
-			finalMass = Math.subtractExact(finalMass, particles.massUnits(particle));
-		}
-		for (int particle = 0; particle < particles.count(); particle++) if (particleCellIndex(particle) == cell) {
-			long replacement = unitScale.massUnitsForNormalized((double) particles.volume(particle)
-					* registry.material(materialHandle).referenceDensity());
-			if (replacement <= 0L) throw new IllegalArgumentException("Material mass is below the integer resolution");
-			finalMass = Math.addExact(finalMass, replacement);
-		}
-		if (!found) throw new IllegalArgumentException("Cannot assign material to an empty pressure cell");
 		bindMaterialRegistry(registry);
-		for (int particle = 0; particle < particles.count(); particle++) {
-			if (particleCellIndex(particle) == cell) assignMarkerMaterial(particle, registry, materialHandle);
-		}
-		gridDirty = true;
+		if (liquidCells.physicalStocksInCell(cell).isEmpty()) throw new IllegalArgumentException("Cannot assign material to empty cell");
+		var keys = liquidCells.physicalStocksInCell(cell).stream().map(LiquidCellInventory.Stock::key).toList();
+		for (var key : keys) assignStockMaterial(key, registry, materialHandle);
+	}
+	void setMarkerMaterial(int ordinal, FluidMaterialRegistry registry, int materialHandle) {
+		bindMaterialRegistry(registry); assignStockMaterial(liquidCells.physicalStockAt(ordinal).key(), registry, materialHandle);
+	}
+	private void assignStockMaterial(LiquidCellInventory.Key key, FluidMaterialRegistry registry, int materialHandle) {
+		if (chemicalParcels != null) throw new IllegalStateException("Material relabeling requires exact chemical transfer");
+		var stock = liquidCells.stock(key);
+		if (key.material() == materialHandle) return;
+		long mass = unitScale.massUnitsForNormalized(stock.volumeFraction() * registry.material(materialHandle).referenceDensity());
+		var nextKey = new LiquidCellInventory.Key(key.cell(), materialHandle, key.supportMask());
+		var candidate = liquidCells.copy(); candidate.planEdits(List.of(new LiquidCellInventory.Edit(key, null))).commit();
+		candidate.planAdditions(List.of(new LiquidCellInventory.Stock(nextKey, stock.volume(), mass, null, stock.internalEnergy(), stock.indicator()))).commit();
+		var edits = new ArrayList<LiquidCellInventory.Edit>();
+		edits.add(new LiquidCellInventory.Edit(key, null)); edits.add(new LiquidCellInventory.Edit(nextKey, candidate.stock(nextKey)));
+		var plan = liquidCells.planEdits(edits); var momentum = cellMacStage.prepareExternalInventoryChange(plan);
+		plan.commit(); mac.restoreMomentum(momentum); domain().markCellInventoryChanged();
 	}
 
-	/** Marker-granular package test injection; indices are intentionally not exposed as a public state contract. */
-	void setMarkerMaterial(int particle, FluidMaterialRegistry registry, int materialHandle) {
-		if (particle < 0 || particle >= particles.count()) throw new IllegalArgumentException("Unknown marker index " + particle);
-		if (registry == null) throw new IllegalArgumentException("Material registry must not be null");
-		registry.material(materialHandle);
-		bindMaterialRegistry(registry);
-		assignMarkerMaterial(particle, registry, materialHandle);
-		gridDirty = true;
-	}
-
-	void bindMaterialRegistry(FluidMaterialRegistry registry) {
+	public void bindMaterialRegistry(FluidMaterialRegistry registry) {
 		if (registry == null) throw new IllegalArgumentException("Material registry must not be null");
 		if (materialRegistry != null && materialRegistry != registry) {
 			throw new IllegalArgumentException("A domain cannot mix runtime handles from different material registries");
@@ -580,39 +483,8 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		materialRegistry = registry;
 	}
 
-	void assignMarkerMaterial(int particle, FluidMaterialRegistry registry, int materialHandle) {
-		if (chemicalParcels != null) {
-			throw new IllegalStateException("Material relabeling requires an exact chemical transfer");
-		}
-		double previousTemperature = thermalState == null ? Double.NaN : domain().thermalMarkerTemperature(particle);
-		SignedDyadic thermalBefore = thermalState == null ? SignedDyadic.ZERO : domain().exactInternalEnergy();
-		FluidMaterial material = registry.material(materialHandle);
-		long mass = unitScale.massUnitsForNormalized((double) particles.volume(particle) * material.referenceDensity());
-		if (mass <= 0L) throw new IllegalArgumentException("Material mass is below the integer resolution");
-		Math.addExact(Math.subtractExact(domain().totalMassUnits(), particles.massUnits(particle)), mass);
-		particles.setMassUnits(particle, mass);
-		particles.setMaterialHandle(particle, materialHandle);
-		particles.setPhaseLabel(particle, registry.phaseHandle(materialHandle));
-		if (thermalState != null) thermalState.resetMarkerTemperature(
-				particle, previousTemperature, domain().thermalMarkerContext(), thermalBefore);
-	}
-
-	boolean hasNonDefaultMaterialState() {
-		if (materialRegistry != null) return true;
-		for (int particle = 0; particle < particles.count(); particle++) {
-			if (particles.materialHandle(particle) != 0 || particles.phaseLabel(particle) != 0) return true;
-		}
-		return false;
-	}
-
-	boolean usesMassWeightedP2G() {
-		for (int particle = 0; particle < particles.count(); particle++) {
-			double referenceMass = (double) particles.volume(particle) * config.density();
-			double tolerance = Math.max(1.0E-9, Math.abs(referenceMass) * 1.0E-12);
-			if (Math.abs(particles.mass(particle) - referenceMass) > tolerance) return true;
-		}
-		return false;
-	}
+	void assignMarkerMaterial(int ordinal, FluidMaterialRegistry registry, int materialHandle) { setMarkerMaterial(ordinal, registry, materialHandle); }
+	boolean hasNonDefaultMaterialState() { return materialRegistry != null; }
 
 	/** Maximum marker speed used only as a scheduling observation; it is not a water-volume estimate. */
 	public float maximumParticleSpeed() { return metrics.maximumParticleSpeed(); }

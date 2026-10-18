@@ -17,6 +17,9 @@ public final class GranularKernel {
 	private final SignedDyadic[] binaryQuota = new SignedDyadic[8], binaryRemainder = new SignedDyadic[8];
 	private final ExactRational[] rationalQuota = new ExactRational[8], rationalRemainder = new ExactRational[8];
 	private final long[] floors = new long[8];
+	private final int[] gradientBase = new int[3];
+	private final double[] gradientPosition = new double[3];
+	private final double[][] gradientWeight = new double[3][2], gradientDerivative = new double[3][2];
 	private int count;
 	private long quantity;
 
@@ -81,6 +84,34 @@ public final class GranularKernel {
 		}
 		if (binary ? !binarySum.equals(quantity) : !rationalSum.equals(ExactRational.of(signedSvq)))
 			throw new IllegalStateException("Granular kernel does not re-sum to exact volume");
+	}
+
+	/** Binary64 derivative of the same clipped cell-centred hat weights used by integer quotas. */
+	public int volumeGradient(double x, double y, double z, double volume,
+	                          int[] targetCells, double[] gx, double[] gy, double[] gz) {
+		if (!(Double.isFinite(volume) && volume > 0) || targetCells.length < 8 || gx.length < 8 || gy.length < 8 || gz.length < 8)
+			throw new IllegalArgumentException("Granular volume gradient columns are invalid");
+		double length = h.toDouble(); gradientPosition[0] = x; gradientPosition[1] = y; gradientPosition[2] = z;
+		int[] start = gradientBase; double[][] weight = gradientWeight, derivative = gradientDerivative;
+		for (int axis = 0; axis < 3; axis++) {
+			weight[axis][0] = weight[axis][1] = derivative[axis][0] = derivative[axis][1] = 0;
+			double grid = gradientPosition[axis] / length - .5; start[axis] = (int) Math.floor(grid);
+			double fraction = grid - start[axis];
+			if (start[axis] < 0) weight[axis][1] = 1;
+			else if (start[axis] + 1 >= size[axis]) weight[axis][0] = 1;
+			else { weight[axis][0] = 1 - fraction; weight[axis][1] = fraction;
+				derivative[axis][0] = -1 / length; derivative[axis][1] = 1 / length; }
+		}
+		int count = 0;
+		for (int oz = 0; oz < 2; oz++) for (int oy = 0; oy < 2; oy++) for (int ox = 0; ox < 2; ox++) {
+			int cx = start[0] + ox, cy = start[1] + oy, cz = start[2] + oz;
+			if (cx < 0 || cy < 0 || cz < 0 || cx >= size[0] || cy >= size[1] || cz >= size[2]) continue;
+			targetCells[count] = (cz * size[1] + cy) * size[0] + cx;
+			gx[count] = volume * derivative[0][ox] * weight[1][oy] * weight[2][oz];
+			gy[count] = volume * weight[0][ox] * derivative[1][oy] * weight[2][oz];
+			gz[count] = volume * weight[0][ox] * weight[1][oy] * derivative[2][oz]; count++;
+		}
+		return count;
 	}
 
 	private void requireSupport(int axis, int fractionSign) {

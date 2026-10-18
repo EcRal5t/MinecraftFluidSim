@@ -1,12 +1,12 @@
 package mmm.fluid;
 
+import mmm.inventory.LiquidCellInventory;
+
 import java.util.Arrays;
 import java.util.List;
 
-/** M3 test-side P2G gate for simultaneous marker volume, mass and momentum transfer. */
+/** Actual material inventory, shared MAC inertia and variable-density hydrostatic contracts. */
 final class M3MaterialTransferValidation {
-	private static final int SIZE = 4;
-	private static final double CELL_SIZE = 1.0;
 
 	private M3MaterialTransferValidation() { }
 
@@ -14,104 +14,59 @@ final class M3MaterialTransferValidation {
 		FluidMaterialRegistry registry = registry();
 		validateRegistry(registry);
 		validatePartialExtractionMassResolution();
-		validateActiveDomainP2G(registry);
-		validateActivePhaseAggregation(registry);
-		validateActiveVariableDensityPressure(registry);
-
-		Markers equalDensity = markers(registry, false);
-		Transfer equalTransfer = transfer(equalDensity);
-		validateTransferLedger(equalDensity, equalTransfer);
-		check(Arrays.equals(equalTransfer.volumeWeightedVelocity(), equalTransfer.massWeightedVelocity()),
-				"equal-density material labels changed P2G face velocity");
-
-		Markers variableDensity = markers(registry, true);
-		Transfer variableTransfer = transfer(variableDensity);
-		validateTransferLedger(variableDensity, variableTransfer);
-		check(!Arrays.equals(variableTransfer.volumeWeightedVelocity(), variableTransfer.massWeightedVelocity()),
-				"variable-density P2G did not switch from volume weighting to momentum/mass weighting");
-		return new Summary(variableDensity.totalVolume(), variableDensity.totalMass(),
-				variableDensity.momentum(0), maximumDifference(
-						variableTransfer.volumeWeightedVelocity(), variableTransfer.massWeightedVelocity()));
+		Summary result=validateActiveMacMomentum(registry);
+		validateActivePhaseAggregation(registry);validateActiveVariableDensityPressure(registry);
+		return result;
 	}
 
 	private static void validatePartialExtractionMassResolution() {
-		FluidDomain domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(
-				1, 1_000, 0, 0.05F, 100, 1e-5F, 0.45F, 0.002F, 0.8F), 216);
-		domain.restoreParticleState(new FlipParticleState(3,3,3,1,1,.125F, new float[]{1.5F,1.5F,1.5F,.125F},new float[3],new long[]{mmm.units.Mass.fromKilograms(125)},new byte[27]));
-		domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
-		domain.particles.setMassUnits(0, 1L);
-		check(!domain.tryExtractExactMixture(1, 1, 1, 0.0625F, 0).transferred()
-				&& domain.particles.volume(0) == 0.125F && domain.particles.massUnits(0) == 1L,
-				"partial extraction cannot leave positive volume with zero mass");
-		domain.particles.setMassUnits(0, 4L);
-		var transfer = domain.tryExtractExactMixture(1, 1, 1, 0.0625F, 0);
-		check(transfer.transferred() && domain.particles.volume(0) == 0.0625F
-				&& domain.particles.massUnits(0) == 2L
-				&& transfer.portions().getFirst().massUnits() == 2L,
-				"representable subnormal partial extraction must preserve both masses");
-	}
-
-	private static void validateActiveDomainP2G(FluidMaterialRegistry registry) {
-		FluidDomain pure = activeDomainWithShear();
-		FluidDomain equal = activeDomainWithShear();
-		FluidDomain variable = activeDomainWithShear();
-		int a = registry.handle("mmm:material_a");
-		int b = registry.handle("mmm:material_b");
-		int c = registry.handle("mmm:material_c");
-		equal.setMaterialInCell(1, 1, 1, registry, a);
-		equal.setMaterialInCell(2, 1, 1, registry, b);
-		variable.setMaterialInCell(1, 1, 1, registry, a);
-		variable.setMaterialInCell(2, 1, 1, registry, c);
-		check(!pure.usesMassWeightedP2G() && !equal.usesMassWeightedP2G(),
-				"pure or equal-density active domain left the strict volume-weighted path");
-		check(variable.usesMassWeightedP2G(), "variable-density active domain did not enable mass-weighted P2G");
-		float pureVelocity = pure.sampleVelocity(2.0F, 1.5F, 1.5F).x();
-		float equalVelocity = equal.sampleVelocity(2.0F, 1.5F, 1.5F).x();
-		float variableVelocity = variable.sampleVelocity(2.0F, 1.5F, 1.5F).x();
-		check(Float.floatToRawIntBits(pureVelocity) == Float.floatToRawIntBits(equalVelocity),
-				"equal-density material labels changed active P2G velocity");
-		check(Math.abs(variableVelocity - pureVelocity) > 1.0E-4F,
-				"active variable-density P2G did not change the shared face velocity");
-		checkClose(variable.totalMass(), 1_800.0, "active marker mass ledger");
-		expectIllegalState(variable::exportParticleState);
-		FlipMaterialParticleState handoff = variable.exportMaterialParticleState();
-		check(handoff.materials().equals(registry.materials()) && handoff.totalMass() == variable.totalMass()
-				&& handoff.totalVolume() == variable.totalVolume(),
-				"material handoff changed the stable palette or exact ledgers");
-		FluidDomain restored = new FluidDomain(4, 4, 4, variable.config(), 64);
-		restored.restoreMaterialParticleState(handoff);
-		check(restored.usesMassWeightedP2G() && restored.totalMass() == variable.totalMass()
-				&& restored.totalVolume() == variable.totalVolume(),
-				"material handoff did not restore variable-density marker truth");
-		checkClose(restored.materialInventory(a).mass(), 1_000.0, "restored material A mass");
-		checkClose(restored.materialInventory(c).mass(), 800.0, "restored material C mass");
-		expectIllegalState(restored::exportParticleState);
-		expectIllegal(() -> new FlipMaterialParticleState(
-				handoff.sizeX(), handoff.sizeY(), handoff.sizeZ(), handoff.cellSize(), handoff.particleCount(),
-				handoff.totalVolume(), mmm.units.SolverUnitScale.forCellSize(handoff.cellSize()).massUnitsForNormalized(handoff.totalMass() + 1.0), handoff.materials(), handoff.copyPositionVolume(),
-				handoff.copyParticleVelocities(), handoff.copySolidMask(), handoff.copyParticleMassUnits(),
-				handoff.copyMaterialPaletteIndex()));
-	}
-
-	private static FluidDomain activeDomainWithShear() {
-		FluidSolverConfig config = new FluidSolverConfig(
-				1.0F, 1_000.0F, 0.0F, 1.0F / 20.0F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F
-		);
-		FluidDomain domain = new FluidDomain(4, 4, 4, config, 64);
-		domain.setVolume(1, 1, 1, 1.0F);
-		domain.setVolume(2, 1, 1, 1.0F);
-		FlipParticleState initial = domain.exportParticleState();
-		float[] positionVolume = initial.copyPositionVolume();
-		float[] velocity = initial.copyParticleVelocities();
-		for (int particle = 0; particle < initial.particleCount(); particle++) {
-			velocity[particle * 3] = positionVolume[particle * 4] >= 2.0F ? 1.0F : 0.0F;
+		for(long mass:new long[]{1,4}) {
+			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.45F,.002F,.8F),216);
+			domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
+			var key=new LiquidCellInventory.Key(domain.cellIndex(1,1,1),0,255);
+			domain.liquidCells.planAdditions(List.of(new LiquidCellInventory.Stock(key,mmm.units.SignedDyadic.of(.125),mass,null,0,false))).commit();
+			domain.markCellInventoryChanged();
+			var transfer=domain.tryExtractExactMixture(1,1,1,.0625F,0);
+			check(transfer.transferred()&&domain.liquidCells.exactVolume().equals(mmm.units.SignedDyadic.of(.0625))
+					&&domain.totalMassUnits()+transfer.portions().stream().mapToLong(FluidDomain.MaterialPortion::massUnits).sum()==mass,
+					"Partial extraction lost integer mass or its geometric tail");
+			if(mass==4)check(domain.totalMassUnits()==2&&transfer.portions().getFirst().massUnits()==2,
+					"Representable partial extraction must divide actual mass consistently");
 		}
-		domain.restoreParticleState(new FlipParticleState(
-				domain.sizeX(), domain.sizeY(), domain.sizeZ(), config.cellSize(), initial.particleCount(),
-				initial.totalVolume(), positionVolume, velocity, mmm.units.Mass.createLiquid(config.cellSize(), 1000.0, positionVolume), initial.copySolidMask()
-		));
-		return domain;
+	}
+
+	private static Summary validateActiveMacMomentum(FluidMaterialRegistry registry) {
+		int a=registry.handle("mmm:material_a"),b=registry.handle("mmm:material_b"),c=registry.handle("mmm:material_c");
+		var equal=materialShear(registry,a,b);var variable=materialShear(registry,a,c);
+		int face=equal.xFaceIndex(2,1,1);
+		checkClose(equal.mac.velocityX[face],.5,"Equal-density shared velocity");
+		check(Math.abs(variable.mac.velocityX[face]-800.0/1800)<=4*Math.ulp((float)(800.0/1800)),"Actual mass-weighted shared velocity exceeded float storage precision");
+		checkClose(variable.cellMacStage.massX[face],900,"Actual SI shared inertia");
+		checkClose(variable.totalMass(),1800,"Material mass ledger");
+		var state=variable.captureAuthoritativeState();var restored=FluidDomain.restoreAuthoritativeState(state);
+		check(restored.exportLiquidCellState().stocks().equals(state.liquid().stocks())
+				&&Arrays.equals(restored.exportMacMomentum().copyX(),state.momentum().copyX()),"Material handoff changed inventory or MAC momentum");
+		checkClose(restored.materialInventory(a).mass(),1000,"Restored material A mass");
+		checkClose(restored.materialInventory(c).mass(),800,"Restored material C mass");
+		return new Summary(variable.totalVolumeExact(),variable.totalMass(),Arrays.stream(variable.mac.momentumX).sum(),
+				Math.abs(variable.mac.velocityX[face]-equal.mac.velocityX[face]));
+	}
+	private static FluidDomain materialShear(FluidMaterialRegistry registry,int left,int right) {
+		var domain=new FluidDomain(4,4,4,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.45F,.002F,.8F),64);
+		domain.bindMaterialRegistry(registry);float[] volume=new float[domain.cellCount];int[] material=new int[domain.cellCount];
+		volume[domain.cellIndex(1,1,1)]=volume[domain.cellIndex(2,1,1)]=1;
+		material[domain.cellIndex(1,1,1)]=left;material[domain.cellIndex(2,1,1)]=right;
+		domain.setVolumes(volume,material);domain.ensureGrid();
+		double half=.5*domain.liquidCells.stocksInCell(domain.cellIndex(2,1,1)).getFirst().massKilograms();
+		domain.mac.momentumX[domain.xFaceIndex(2,1,1)]=half;domain.mac.momentumX[domain.xFaceIndex(3,1,1)]=half;
+		domain.velocityGridDirty=true;domain.ensureGrid();return domain;
+	}
+	private static FluidDomain materialCell(FluidMaterialRegistry registry,int[] materials,double[] volumes) {
+		var domain=new FluidDomain(4,4,4,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.45F,.002F,.8F),64);
+		domain.bindMaterialRegistry(registry);var stocks=new java.util.ArrayList<LiquidCellInventory.Stock>();
+		for(int i=0;i<materials.length;i++)stocks.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(domain.cellIndex(1,1,1),materials[i],255),
+				mmm.units.SignedDyadic.of(volumes[i]),mmm.units.Mass.fromKilograms(volumes[i]*registry.material(materials[i]).referenceDensity()),null,0,false));
+		domain.liquidCells.planAdditions(stocks).commit();domain.markCellInventoryChanged();return domain;
 	}
 
 	private static void validateActivePhaseAggregation(FluidMaterialRegistry registry) {
@@ -119,10 +74,7 @@ final class M3MaterialTransferValidation {
 		int b = registry.handle("mmm:material_b");
 		int c = registry.handle("mmm:material_c");
 		int d = registry.handle("mmm:material_d");
-		FluidDomain miscible = singleCellDomain();
-		for (int particle = 0; particle < miscible.particleCount(); particle++) {
-			miscible.setMarkerMaterial(particle, registry, (particle & 1) == 0 ? a : d);
-		}
+		FluidDomain miscible = materialCell(registry,new int[]{a,d},new double[]{.5,.5});
 		check(miscible.phaseCountInCell(1, 1, 1) == 1,
 				"miscible materials did not aggregate into one local liquid phase");
 		checkClose(miscible.materialInventory(a).mass(), 500.0, "miscible material A mass");
@@ -140,19 +92,14 @@ final class M3MaterialTransferValidation {
 		check(miscibleStats.relativeVolumeError() <= 1.0E-7F && miscibleStats.relativeMassError() <= 1.0E-12,
 				"miscible active step changed physical inventories");
 
-		FluidDomain junction = singleCellDomain();
-		int[] material = {a, b, c, a, b, c, a, b};
-		for (int particle = 0; particle < material.length; particle++) {
-			junction.setMarkerMaterial(particle, registry, material[particle]);
-		}
+		FluidDomain junction = materialCell(registry,new int[]{a,b,c},new double[]{.375,.375,.25});
 		check(junction.phaseCountInCell(1, 1, 1) == 3,
 				"three-phase junction was truncated to the old two-phase cache");
 		FluidMaterialRenderSnapshot junctionSnapshot = junction.copyMaterialRenderSnapshot();
 		int phaseA = registry.phaseHandle(a), phaseB = registry.phaseHandle(b), phaseC = registry.phaseHandle(c);
-		check(junctionSnapshot.phaseFraction(phaseA, mixedCell) == 96
-				&& junctionSnapshot.phaseFraction(phaseB, mixedCell) == 95
-				&& junctionSnapshot.phaseFraction(phaseC, mixedCell) == 64,
-				"three-phase render fractions lost deterministic partitioning");
+		check(Math.abs(junctionSnapshot.phaseFraction(phaseA,mixedCell)-255*.375)<=1
+				&&Math.abs(junctionSnapshot.phaseFraction(phaseB,mixedCell)-255*.375)<=1
+				&&Math.abs(junctionSnapshot.phaseFraction(phaseC,mixedCell)-255*.25)<=1,"Rendered phase fractions exceeded one display quantum");
 		FluidDomain.StepStats junctionStats = junction.step();
 		check(junction.phaseCountInCell(1, 1, 1) == 3,
 				"three-phase junction was lost during pressure/reseeding");
@@ -258,98 +205,6 @@ final class M3MaterialTransferValidation {
 				name, pressureError, stats.pressureIterations(), stats.pressureResidual(), domain.maximumParticleSpeed());
 	}
 
-	private static Markers markers(FluidMaterialRegistry registry, boolean variableDensity) {
-		double[] x = {1.25, 1.75, 2.25, 2.75};
-		double[] y = {1.25, 2.25, 1.75, 2.75};
-		double[] z = {1.75, 1.25, 2.75, 2.25};
-		double[] volume = {0.125, 0.250, 0.125, 0.250};
-		double[] velocityX = {0.5, -1.0, 1.5, -0.5};
-		double[] velocityY = {-0.5, 0.25, 1.0, -1.5};
-		double[] velocityZ = {1.0, -0.25, 0.5, -1.0};
-		int[] material = {
-				registry.handle("mmm:material_a"), registry.handle("mmm:material_b"),
-				registry.handle(variableDensity ? "mmm:material_c" : "mmm:material_a"),
-				registry.handle(variableDensity ? "mmm:material_c" : "mmm:material_b")
-		};
-		int[] phase = {
-				registry.phaseHandle(material[0]), registry.phaseHandle(material[1]),
-				registry.phaseHandle(material[2]), registry.phaseHandle(material[3])
-		};
-		double[] mass = new double[volume.length];
-		for (int marker = 0; marker < mass.length; marker++) {
-			mass[marker] = volume[marker] * registry.material(material[marker]).referenceDensity();
-		}
-		return new Markers(x, y, z, volume, mass, velocityX, velocityY, velocityZ, material, phase);
-	}
-
-	private static Transfer transfer(Markers markers) {
-		int totalFaces = (SIZE + 1) * SIZE * SIZE * 3;
-		double[] faceVolume = new double[totalFaces];
-		double[] faceMass = new double[totalFaces];
-		double[] volumeMomentum = new double[totalFaces];
-		double[] massMomentum = new double[totalFaces];
-		int offset = 0;
-		for (int axis = 0; axis < 3; axis++) {
-			int nx = axis == 0 ? SIZE + 1 : SIZE;
-			int ny = axis == 1 ? SIZE + 1 : SIZE;
-			int nz = axis == 2 ? SIZE + 1 : SIZE;
-			for (int marker = 0; marker < markers.size(); marker++) {
-				double gx = markers.x()[marker] / CELL_SIZE - (axis == 0 ? 0.0 : 0.5);
-				double gy = markers.y()[marker] / CELL_SIZE - (axis == 1 ? 0.0 : 0.5);
-				double gz = markers.z()[marker] / CELL_SIZE - (axis == 2 ? 0.0 : 0.5);
-				int x0 = (int) Math.floor(gx), y0 = (int) Math.floor(gy), z0 = (int) Math.floor(gz);
-				double fx = gx - x0, fy = gy - y0, fz = gz - z0;
-				double velocity = markers.velocity(axis)[marker];
-				for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
-					int x = x0 + ox, y = y0 + oy, z = z0 + oz;
-					if (x < 0 || x >= nx || y < 0 || y >= ny || z < 0 || z >= nz) {
-						throw new IllegalArgumentException("Transfer marker touched the grid boundary");
-					}
-					double weight = trilinearWeight(ox, oy, oz, fx, fy, fz);
-					int face = offset + x + nx * (y + ny * z);
-					faceVolume[face] += weight * markers.volume()[marker];
-					faceMass[face] += weight * markers.mass()[marker];
-					volumeMomentum[face] += weight * markers.volume()[marker] * velocity;
-					massMomentum[face] += weight * markers.mass()[marker] * velocity;
-				}
-			}
-			offset += nx * ny * nz;
-		}
-		double[] volumeVelocity = new double[totalFaces];
-		double[] massVelocity = new double[totalFaces];
-		for (int face = 0; face < totalFaces; face++) {
-			if (faceVolume[face] > 0.0) volumeVelocity[face] = volumeMomentum[face] / faceVolume[face];
-			if (faceMass[face] > 0.0) massVelocity[face] = massMomentum[face] / faceMass[face];
-		}
-		return new Transfer(faceVolume, faceMass, volumeMomentum, massMomentum, volumeVelocity, massVelocity);
-	}
-
-	private static void validateTransferLedger(Markers markers, Transfer transfer) {
-		int axisFaces = (SIZE + 1) * SIZE * SIZE;
-		for (int axis = 0; axis < 3; axis++) {
-			int from = axis * axisFaces, to = from + axisFaces;
-			checkClose(sum(transfer.faceVolume(), from, to), markers.totalVolume(), "P2G volume ledger");
-			checkClose(sum(transfer.faceMass(), from, to), markers.totalMass(), "P2G mass ledger");
-			checkClose(sum(transfer.massMomentum(), from, to), markers.momentum(axis), "P2G momentum ledger");
-		}
-	}
-
-	private static double trilinearWeight(int ox, int oy, int oz, double fx, double fy, double fz) {
-		return (ox == 0 ? 1.0 - fx : fx) * (oy == 0 ? 1.0 - fy : fy) * (oz == 0 ? 1.0 - fz : fz);
-	}
-
-	private static double sum(double[] values, int from, int to) {
-		double result = 0.0;
-		for (int i = from; i < to; i++) result += values[i];
-		return result;
-	}
-
-	private static double maximumDifference(double[] left, double[] right) {
-		double result = 0.0;
-		for (int i = 0; i < left.length; i++) result = Math.max(result, Math.abs(left[i] - right[i]));
-		return result;
-	}
-
 	private static void checkClose(double actual, double expected, String message) {
 		double tolerance = 1.0E-12 * Math.max(1.0, Math.abs(expected));
 		check(Math.abs(actual - expected) <= tolerance, message + ": expected=" + expected + ", actual=" + actual);
@@ -379,22 +234,4 @@ final class M3MaterialTransferValidation {
 
 	record Summary(double volume, double mass, double momentumX, double maximumWeightingDifference) { }
 
-	private record Transfer(double[] faceVolume, double[] faceMass,
-	                        double[] volumeMomentum, double[] massMomentum,
-	                        double[] volumeWeightedVelocity, double[] massWeightedVelocity) { }
-
-	private record Markers(double[] x, double[] y, double[] z, double[] volume, double[] mass,
-	                       double[] velocityX, double[] velocityY, double[] velocityZ,
-	                       int[] materialHandle, int[] phaseLabel) {
-		int size() { return x.length; }
-		double[] velocity(int axis) { return axis == 0 ? velocityX : axis == 1 ? velocityY : velocityZ; }
-		double totalVolume() { return sum(volume, 0, volume.length); }
-		double totalMass() { return sum(mass, 0, mass.length); }
-		double momentum(int axis) {
-			double result = 0.0;
-			double[] velocity = velocity(axis);
-			for (int marker = 0; marker < size(); marker++) result += mass[marker] * velocity[marker];
-			return result;
-		}
-	}
 }

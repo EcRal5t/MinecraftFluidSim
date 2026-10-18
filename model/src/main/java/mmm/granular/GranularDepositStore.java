@@ -25,13 +25,55 @@ public final class GranularDepositStore {
 	public record Group(int materialHandle, int solidCompositionHandle, long solidVolumeSvq, long massUnits) { public double mass() { return mmm.units.Mass.kilograms(massUnits); } }
 
 	private final GranularRegistry registry;
-	private final int[] headByCell, porosityQByCell;
-	private final long[] bulkVolumeSvqByCell;
-	private final int[] materialHandle, solidCompositionHandle, next, freeEntries;
-	private final long[] solidVolumeSvq;
-	private final long[] massUnits;
+	private int[] headByCell, porosityQByCell;
+	private long[] bulkVolumeSvqByCell;
+	private int[] materialHandle, solidCompositionHandle, next, freeEntries;
+	private long[] solidVolumeSvq;
+	private long[] massUnits;
 	private int nextUnused, freeCount, groupCount, occupiedCellCount;
 	private long mutationRevision;
+
+	private GranularDepositStore(GranularDepositStore source) {
+		this.registry=source.registry;
+		this.headByCell=source.headByCell.clone();
+		this.porosityQByCell=source.porosityQByCell.clone();
+		this.bulkVolumeSvqByCell=source.bulkVolumeSvqByCell.clone();
+		this.materialHandle=source.materialHandle.clone();
+		this.solidCompositionHandle=source.solidCompositionHandle.clone();
+		this.next=source.next.clone();
+		this.freeEntries=source.freeEntries.clone();
+		this.solidVolumeSvq=source.solidVolumeSvq.clone();
+		this.massUnits=source.massUnits.clone();
+		this.nextUnused=source.nextUnused;
+		this.freeCount=source.freeCount;
+		this.groupCount=source.groupCount;
+		this.occupiedCellCount=source.occupiedCellCount;
+		mutationRevision=source.mutationRevision;
+	}
+	/** One private candidate copy for a complete inventory transaction. */
+	public GranularDepositStore copy() { return new GranularDepositStore(this); }
+	public void requirePrepared(GranularDepositStore prepared,long sourceRevision) {
+		if(prepared==null||prepared==this||mutationRevision!=sourceRevision||prepared.registry!=registry||prepared.headByCell.length!=headByCell.length||prepared.materialHandle.length!=materialHandle.length)
+			throw new IllegalStateException("Prepared GranularDepositStore differs from its source generation");
+	}
+	/** Exchanges validated columns; the candidate receives the detached old inventory. */
+	public void adoptPrepared(GranularDepositStore prepared,long sourceRevision) {
+		requirePrepared(prepared,sourceRevision);
+		var oldheadByCell=headByCell;headByCell=prepared.headByCell;prepared.headByCell=oldheadByCell;
+		var oldporosityQByCell=porosityQByCell;porosityQByCell=prepared.porosityQByCell;prepared.porosityQByCell=oldporosityQByCell;
+		var oldbulkVolumeSvqByCell=bulkVolumeSvqByCell;bulkVolumeSvqByCell=prepared.bulkVolumeSvqByCell;prepared.bulkVolumeSvqByCell=oldbulkVolumeSvqByCell;
+		var oldmaterialHandle=materialHandle;materialHandle=prepared.materialHandle;prepared.materialHandle=oldmaterialHandle;
+		var oldsolidCompositionHandle=solidCompositionHandle;solidCompositionHandle=prepared.solidCompositionHandle;prepared.solidCompositionHandle=oldsolidCompositionHandle;
+		var oldnext=next;next=prepared.next;prepared.next=oldnext;
+		var oldfreeEntries=freeEntries;freeEntries=prepared.freeEntries;prepared.freeEntries=oldfreeEntries;
+		var oldsolidVolumeSvq=solidVolumeSvq;solidVolumeSvq=prepared.solidVolumeSvq;prepared.solidVolumeSvq=oldsolidVolumeSvq;
+		var oldmassUnits=massUnits;massUnits=prepared.massUnits;prepared.massUnits=oldmassUnits;
+		var oldnextUnused=nextUnused;nextUnused=prepared.nextUnused;prepared.nextUnused=oldnextUnused;
+		var oldfreeCount=freeCount;freeCount=prepared.freeCount;prepared.freeCount=oldfreeCount;
+		var oldgroupCount=groupCount;groupCount=prepared.groupCount;prepared.groupCount=oldgroupCount;
+		var oldoccupiedCellCount=occupiedCellCount;occupiedCellCount=prepared.occupiedCellCount;prepared.occupiedCellCount=oldoccupiedCellCount;
+		mutationRevision++;
+	}
 
 	public GranularDepositStore(GranularRegistry registry, int cellCount, int maximumGroups) {
 		if (registry == null) throw new IllegalArgumentException("Granular registry is missing");
@@ -82,6 +124,11 @@ public final class GranularDepositStore {
 			requireCurrent(); validate(portion); add(portion.solidVolumeSvq(), portion.materialHandle());
 		}
 		long bulkVolumeSvq() { requireCurrent(); return mixedPacking(skeleton, bulk).bulkVolumeSvq(); }
+		long bulkVolumeSvqAfterAdd(SolidPortion portion) {
+			requireCurrent(); validate(portion);
+			return mixedPacking(Math.addExact(skeleton, portion.solidVolumeSvq()),
+					bulk.add(restBulk(portion.solidVolumeSvq(), portion.materialHandle()))).bulkVolumeSvq();
+		}
 		private void requireCurrent() {
 			if (revision != mutationRevision) throw new IllegalStateException("Deposit inventory changed during settlement closure");
 		}
@@ -172,7 +219,7 @@ public final class GranularDepositStore {
 		private final long revision;
 		private final int cell;
 		private final List<Group> groups;
-		private final int[] entries;
+		private int[] entries;
 		private final CellPacking packing;
 		private final SignedDyadic oldMass;
 		private final long oldBulk;

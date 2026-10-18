@@ -1,7 +1,6 @@
 package mmm.fluid;
 
 import java.util.Arrays;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeSet;
 import java.util.function.DoubleUnaryOperator;
@@ -53,22 +52,10 @@ final class SurfaceTensionCurvatureExperiment {
 		check(Math.abs(integratedVolume - 4 * Math.PI / 3) < 1e-9, "sphere volume integration failed");
 		FluidSolverConfig cfg = new FluidSolverConfig(h, 1000, 0, .01F, 800, 1e-7F, .45F, .002F, .8F);
 		FluidDomain d = new FluidDomain(size, size, size, cfg, size * size * size * 8);
-		List<float[]> points = new ArrayList<>(); double total = 0;
-		for (int z = 0; z < size; z++) for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
-			float fraction = (float) colour[index(size, x, y, z)]; if (fraction <= 0) continue;
-			for (int slot = 0; slot < 8; slot++) {
-				float volume = fraction / 8;
-				points.add(new float[] {(x + .25F + .5F * (slot & 1)) * h, (y + .25F + .5F * (slot >> 1 & 1)) * h,
-						(z + .25F + .5F * (slot >> 2 & 1)) * h, volume}); total += volume;
-			}
-		}
-		float[] pv = new float[points.size() * 4];
-		for (int i = 0; i < points.size(); i++) System.arraycopy(points.get(i), 0, pv, 4 * i, 4);
-		d.restoreParticleState(new FlipParticleState(size, size, size, h, points.size(), (float) total,
-				pv, new float[points.size() * 3], mmm.units.Mass.createLiquid(h, 1000.0, pv), new byte[size * size * size]));
-		FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:test", 1000, "mmm:test", .0728, Math.PI / 2)));
-		for (int p = 0; p < d.particleCount(); p++) d.setMarkerMaterial(p, registry, 0);
-		d.particleToGridStage.rebuild();
+		float[] fractions=new float[d.cellCount];
+		for(int cell=0;cell<fractions.length;cell++)fractions[cell]=(float)colour[cell];
+		d.bindMaterialRegistry(new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:test",1000,"mmm:test",.0728,Math.PI/2))));
+		d.setVolumes(fractions);d.ensureGrid();
 		double error = 0; int valid = 0, fallback = 0;
 		for (int z = 0; z < size; z++) for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
 			double c = d.tension.surfaceTensionColor[d.cellIndex(x, y, z)]; if (!(c > 0 && c < 1)) continue;
@@ -77,24 +64,27 @@ final class SurfaceTensionCurvatureExperiment {
 		}
 		check(valid > 0, "sphere has no resolved height columns");
 		check(HeightFunctionCurvature.compute(d, size / 2, size / 2, size / 2) == 0, "deep liquid curvature must vanish");
-		double volume = d.totalVolumeExact(), mass = d.totalMass();
+		var volume = d.liquidCells.exactVolume(); long mass = d.totalMassUnits();
 		d.step();
-		check(d.totalVolumeExact() == volume && d.totalMass() == mass, "resolved sphere changed exact inventories");
-		check(d.particleCount() <= d.cellCount * 8, "resolved sphere carrier scale grew beyond cell quadrature");
+		check(d.liquidCells.exactVolume().equals(volume) && d.totalMassUnits() == mass, "resolved sphere changed exact inventories");
 		double pressure = 0; int cells = 0;
 		for (int c = 0; c < d.cellCount; c++) if (d.projection.pressureFluid[c]) { pressure += d.projection.pressure[c]; cells++; }
 		double[] linear = new double[3], angular = new double[3];
-		for (int p = 0; p < d.particleCount(); p++) {
-			double m = d.unitScale.kilograms(d.particles.mass(p));
-			double qx = m * d.particles.velocityX(p), qy = m * d.particles.velocityY(p), qz = m * d.particles.velocityZ(p);
-			double x = d.particles.positionX(p) - center[0], y = d.particles.positionY(p) - center[1], z = d.particles.positionZ(p) - center[2];
-			linear[0] += qx; linear[1] += qy; linear[2] += qz;
-			angular[0] += y * qz - z * qy; angular[1] += z * qx - x * qz; angular[2] += x * qy - y * qx;
+		for(int axis=0;axis<3;axis++) {
+			double[] momentum=axis==0?d.mac.momentumX:axis==1?d.mac.momentumY:d.mac.momentumZ;
+			int nx=size+(axis==0?1:0),ny=size+(axis==1?1:0),nz=size+(axis==2?1:0);
+			for(int z=0;z<nz;z++)for(int y=0;y<ny;y++)for(int x=0;x<nx;x++) {
+				double q=momentum[(z*ny+y)*nx+x];
+				double[] position={(x+(axis==0?0:.5))*h-center[0],(y+(axis==1?0:.5))*h-center[1],(z+(axis==2?0:.5))*h-center[2]};
+				linear[axis]+=q;
+				angular[(axis+2)%3]-=position[(axis+1)%3]*q;
+				angular[(axis+1)%3]+=position[(axis+2)%3]*q;
+			}
 		}
 		double pressureError = Math.abs(pressure / cells - .1456) / .1456;
 		double net = Math.sqrt(Arrays.stream(linear).map(v -> v * v).sum()), torque = Math.sqrt(Arrays.stream(angular).map(v -> v * v).sum());
-		System.out.printf("  resolved sphere h=%g HF=%d fallback=%d meanAbsKappaError=%g pressure=%g pressureError=%g netP=%g kg*m/s netL=%g kg*m^2/s markers=%d%n",
-				h, valid, fallback, error / valid, pressure / cells, pressureError, net, torque, d.particleCount());
+		System.out.printf("  resolved sphere h=%g HF=%d fallback=%d meanAbsKappaError=%g pressure=%g pressureError=%g netP=%g kg*m/s netL=%g kg*m^2/s stocks=%d%n",
+				h, valid, fallback, error / valid, pressure / cells, pressureError, net, torque, d.liquidCells.size());
 		return new SphereError(error / valid, pressureError, net, torque);
 	}
 
@@ -138,22 +128,15 @@ final class SurfaceTensionCurvatureExperiment {
 	private static FluidDomain partialHeightSlab(boolean reverse, boolean wall, boolean joint) {
 		FluidDomain d = new FluidDomain(12, 12, 12,
 				new FluidSolverConfig(1, 1000, 0, .01F, 800, 1e-7F, .45F, .002F, .8F), 4096);
-		List<float[]> points = new ArrayList<>(); float total = 0;
-		for (int z = 0; z < 12; z++) for (int y = 0; y < 12; y++) {
-			float q = .25F + .0625F * Math.min(4, (y - 5) * (y - 5));
-			float x = (wall ? 0 : 4) + q / 2;
-			points.add(new float[] {reverse ? 12 - x : x, y + .5F, z + .5F, q}); total += q;
-			if (!wall && joint) {
-				points.add(new float[] {reverse ? 8.375F : 3.625F, y + .5F, z + .5F, .75F}); total += .75F;
-			}
+		float[] fractions=new float[d.cellCount];
+		for(int z=0;z<12;z++)for(int y=0;y<12;y++) {
+			float q=.25F+.0625F*Math.min(4,(y-5)*(y-5));
+			int endpoint=wall?0:4;
+			fractions[d.cellIndex(reverse?11-endpoint:endpoint,y,z)]=q;
+			if(!wall&&joint)fractions[d.cellIndex(reverse?8:3,y,z)]=.75F;
 		}
-		float[] pv = new float[4 * points.size()];
-		for (int p = 0; p < points.size(); p++) System.arraycopy(points.get(p), 0, pv, 4 * p, 4);
-		d.restoreParticleState(new FlipParticleState(12, 12, 12, 1, points.size(), total,
-				pv, new float[3 * points.size()], mmm.units.Mass.createLiquid(1, 1000.0, pv), new byte[d.cellCount]));
-		var registry = new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:height", 1000, "mmm:height", .0728, Math.PI / 2)));
-		for (int p = 0; p < d.particleCount(); p++) d.setMarkerMaterial(p, registry, 0);
-		d.particleToGridStage.rebuildInventory();
+		d.bindMaterialRegistry(new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:height",1000,"mmm:height",.0728,Math.PI/2))));
+		d.setVolumes(fractions);d.ensureGrid();
 		return d;
 	}
 
@@ -189,26 +172,16 @@ final class SurfaceTensionCurvatureExperiment {
 		int size = Math.round(3 / h);
 		FluidDomain d = new FluidDomain(size, size, size,
 				new FluidSolverConfig(h, 1000, 0, .01F, 800, 1e-7F, .45F, .002F, .8F), size * size * size * 8);
-		double[] colour = new double[d.cellCount]; List<float[]> points = new ArrayList<>(); double total = 0;
-		for (int z = 0; z < size; z++) for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
-			double a = (upper ? size - 1 - y : y) * (double) h, b = (upper ? size - 1 - z : z) * (double) h;
-			double f = a * a + b * b >= 1 ? 0 : (a + h) * (a + h) + (b + h) * (b + h) <= 1 ? 1
-					: Math.clamp((circlePrimitive(a + h, b + h, 1) - circlePrimitive(a, b + h, 1)
-					- circlePrimitive(a + h, b, 1) + circlePrimitive(a, b, 1)) / (h * h), 0, 1);
-			colour[d.cellIndex(x, y, z)] = f;
-			if (f > 0) for (int slot = 0; slot < 8; slot++) {
-				float v = (float) f / 8; total += v;
-				points.add(new float[] {(x + .25F + .5F * (slot & 1)) * h,
-						(y + .25F + .5F * (slot >> 1 & 1)) * h, (z + .25F + .5F * (slot >> 2 & 1)) * h, v});
-			}
+		double[] colour = new double[d.cellCount]; float[] fractions=new float[d.cellCount];
+		for(int z=0;z<size;z++)for(int y=0;y<size;y++)for(int x=0;x<size;x++) {
+			double a=(upper?size-1-y:y)*(double)h,b=(upper?size-1-z:z)*(double)h;
+			double f=a*a+b*b>=1?0:(a+h)*(a+h)+(b+h)*(b+h)<=1?1
+					:Math.clamp((circlePrimitive(a+h,b+h,1)-circlePrimitive(a,b+h,1)
+					-circlePrimitive(a+h,b,1)+circlePrimitive(a,b,1))/(h*h),0,1);
+			int cell=d.cellIndex(x,y,z);colour[cell]=f;fractions[cell]=(float)f;
 		}
-		float[] pv = new float[4 * points.size()];
-		for (int p = 0; p < points.size(); p++) System.arraycopy(points.get(p), 0, pv, 4 * p, 4);
-		d.restoreParticleState(new FlipParticleState(size, size, size, h, points.size(), (float) total,
-				pv, new float[3 * points.size()], mmm.units.Mass.createLiquid(h, 1000.0, pv), new byte[d.cellCount]));
-		var registry = new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:wall", 1000, "mmm:wall", .0728, angle)));
-		for (int p = 0; p < d.particleCount(); p++) d.setMarkerMaterial(p, registry, 0);
-		d.particleToGridStage.rebuild();
+		d.bindMaterialRegistry(new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:wall",1000,"mmm:wall",.0728,angle))));
+		d.setVolumes(fractions);d.ensureGrid();
 		System.arraycopy(colour, 0, d.tension.surfaceTensionColor, 0, colour.length);
 		d.smoothSurfaceTensionColor(); d.rebuildSurfaceTensionNormals();
 		double[] errors = new double[3]; int[] counts = new int[3], heights = new int[3];

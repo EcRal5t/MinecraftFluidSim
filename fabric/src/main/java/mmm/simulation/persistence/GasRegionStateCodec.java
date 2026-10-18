@@ -142,7 +142,7 @@ final class GasRegionStateCodec {
 
 	private static void validateManifest(ManifestData data) {
 		if (data == null || (data.capabilities() & ~KNOWN_CAPABILITIES) != 0
-				|| (data.capabilities() & (CAP_MATERIALS | CAP_GAS)) != (CAP_MATERIALS | CAP_GAS)
+				|| (data.capabilities() & CAP_GAS) == 0
 				|| data.registryFingerprint() == null || !data.registryFingerprint().matches("[0-9a-f]{64}")
 				|| data.chemicalRegistryFingerprint() == null
 				|| !(data.chemicalRegistryFingerprint().isEmpty() || data.chemicalRegistryFingerprint().matches("[0-9a-f]{64}"))

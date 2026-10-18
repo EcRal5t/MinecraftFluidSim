@@ -113,6 +113,45 @@ public final class GasInventory {
 		return new Split(new GasInventory(first), new GasInventory(second));
 	}
 
+	/** One donor supplies all ports together; unresolved integer shares remain with that donor. */
+	public List<GasInventory> partitionTransport(long[] weights) {
+		if (weights == null || weights.length < 2 || weights[0] <= 0)
+			throw new IllegalArgumentException("Gas transport needs a positive retained donor share");
+		BigInteger denominator = BigInteger.ZERO;
+		for (long weight : weights) {
+			if (weight < 0) throw new IllegalArgumentException("Negative gas transport share");
+			denominator = denominator.add(BigInteger.valueOf(weight));
+		}
+		ArrayList<ArrayList<GasComponentAmount>> columns = new ArrayList<>();
+		for (int i = 0; i < weights.length; i++) columns.add(new ArrayList<>());
+		for (GasComponentAmount component : components) {
+			long nanosLeft = component.standardVolumeNanos(), massLeft = component.massUnits(), residualLeft = component.massResidualUnits();
+			long[] speciesLeft = component.species().stream().mapToLong(GasComponentAmount.SpeciesAmount::amountQuanta).toArray();
+			for (int child = 1; child < weights.length; child++) {
+				long nanos = BigInteger.valueOf(component.standardVolumeNanos()).multiply(BigInteger.valueOf(weights[child])).divide(denominator).longValueExact();
+				if (nanos == 0) continue;
+				long mass = mmm.units.Mass.portion(component.massUnits(), nanos, component.standardVolumeNanos());
+				if (mass == 0) continue;
+				long residual = mmm.units.Mass.portion(component.massResidualUnits(), nanos, component.standardVolumeNanos());
+				ArrayList<GasComponentAmount.SpeciesAmount> species = new ArrayList<>();
+				for (int i = 0; i < speciesLeft.length; i++) {
+					var entry = component.species().get(i);
+					long amount = BigInteger.valueOf(entry.amountQuanta()).multiply(BigInteger.valueOf(nanos))
+							.divide(BigInteger.valueOf(component.standardVolumeNanos())).longValueExact();
+					speciesLeft[i] -= amount;
+					if (amount > 0) species.add(new GasComponentAmount.SpeciesAmount(entry.speciesId(), amount));
+				}
+				columns.get(child).add(new GasComponentAmount(component.componentId(), nanos, mass, species, residual));
+				nanosLeft -= nanos; massLeft -= mass; residualLeft -= residual;
+			}
+			ArrayList<GasComponentAmount.SpeciesAmount> retained = new ArrayList<>();
+			for (int i = 0; i < speciesLeft.length; i++) if (speciesLeft[i] > 0)
+				retained.add(new GasComponentAmount.SpeciesAmount(component.species().get(i).speciesId(), speciesLeft[i]));
+			columns.getFirst().add(new GasComponentAmount(component.componentId(), nanosLeft, massLeft, retained, residualLeft));
+		}
+		return columns.stream().map(GasInventory::new).toList();
+	}
+
 	/** Selects an exact nanos portion of one stable component, leaving every other component untouched. */
 	public Split splitComponent(String componentId, long selectedNanos) {
 		GasComponentAmount selected = component(componentId);
@@ -180,13 +219,13 @@ public final class GasInventory {
 		return partition(weights.length, total -> largestRemainder(total, exactWeights));
 	}
 
-	/** Exact topology weights retain positive sub-nano proportions without inventing integer shares. */
+	/** Topology geometry supplies proportions; integer allocation preserves the complete inventory. */
 	public List<GasInventory> partition(List<ExactRational> weights) {
-		return partition(ExactGasPartitionWeights.ofRationals(weights));
+		return partition(GasPartitionWeights.ofRationals(weights));
 	}
 
 	/** The same immutable geometric measures serve integer stock and physical control volume. */
-	public List<GasInventory> partition(ExactGasPartitionWeights weights) {
+	public List<GasInventory> partition(GasPartitionWeights weights) {
 		if (weights == null) throw new IllegalArgumentException("Gas partition weights are missing");
 		return partition(weights.childCount(), weights::allocateNanos);
 	}

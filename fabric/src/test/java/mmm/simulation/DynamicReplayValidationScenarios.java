@@ -85,7 +85,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			generation++;
 		}
 		double tailRange = maximumTailY - minimumTailY;
-		double finalKinetic = kineticEnergy(domain.exportMaterialParticleState());
+		double finalKinetic = kineticEnergy(domain);
 		System.out.printf("  dynamic player float gate: displacement=%.9g m, tail range=%.9g m, "
 				+ "tail vy=%+.9g block/tick, liquid K max/tail/final=%.9g/%.9g/%.9g J%n",
 				maximumDisplacement, tailRange, bodyVelocity.y,
@@ -132,7 +132,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		MovingBodyFluidCoupling.Request body = new MovingBodyFluidCoupling.Request(
 				2.0F, 1.60F, 2.0F, 0.0, 0.0, 0.0, 0.6 * 1.8 * 0.6 * 0.72);
-		double initialCenterY = centerOfMassY(initial.exportMaterialParticleState());
+		double initialCenterY = centerOfMassY(initial);
 		double maximumKinetic = 0.0, accumulatedLiquidY = 0.0, accumulatedReactionY = 0.0;
 		FluidDomain restored = initial;
 		for (long generation = 0L; generation < 500L; generation++) {
@@ -148,8 +148,8 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			restored = FluidDomain.restoreAuthoritativeState(candidate.state());
 			state = candidate.state();
 		}
-		double finalKinetic = kineticEnergy(restored.exportMaterialParticleState());
-		double centerYDelta = centerOfMassY(restored.exportMaterialParticleState()) - initialCenterY;
+		double finalKinetic = kineticEnergy(restored);
+		double centerYDelta = centerOfMassY(restored) - initialCenterY;
 		require(Math.abs(accumulatedLiquidY + accumulatedReactionY) <= 1.0E-15,
 				"stationary moving-boundary liquid/reaction impulse ledger did not close");
 		require(maximumKinetic <= 0.025 && finalKinetic <= 0.002 && Math.abs(centerYDelta) <= 0.001,
@@ -216,7 +216,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			restored = FluidDomain.restoreAuthoritativeState(candidate.state());
 			double stepMillis = (System.nanoTime() - stepStart) / 1_000_000.0;
 			if (tick > WARMUP_STEPS) maximumStepMillis = Math.max(maximumStepMillis, stepMillis);
-			double kinetic = kineticEnergy(restored.exportMaterialParticleState());
+			double kinetic = kineticEnergy(restored);
 			maximumKinetic = Math.max(maximumKinetic, kinetic);
 			if (walking) {
 				peakImpulseX = Math.max(peakImpulseX,
@@ -228,7 +228,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			generation++;
 			if (walking) bodyMinimumX += perTick;
 		}
-		double finalKinetic = kineticEnergy(restored.exportMaterialParticleState());
+		double finalKinetic = kineticEnergy(restored);
 		System.out.printf("  walking body gate: peak impulse=%.9g kg*m/s, K max/tail/final="
 				+ "%.9g/%.9g/%.9g J, added-mass scale=%.9g J, step max=%.3f ms%n",
 				peakImpulseX, maximumKinetic, tailMaximumKinetic, finalKinetic, addedMassJoules,
@@ -238,9 +238,8 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		require(maximumKinetic >= addedMassJoules * 1.0E-3,
 				"a walking body produced no observable liquid disturbance: K=" + maximumKinetic
 						+ " J against an added-mass scale of " + addedMassJoules + " J");
-		// The current solver has no viscosity stage, so a coherent slosh is only damped through the
-		// PIC/FLIP blend and survives as a bounded standing mode. The gate therefore forbids growth and
-		// self-excitation rather than claiming the injected energy is fully dissipated.
+		// After external forcing stops, viscosity and unresolved motion losses must reduce
+		// the observable wave energy over the existing settling interval.
 		require(tailMaximumKinetic <= maximumKinetic * 0.25 && finalKinetic <= maximumKinetic * 0.25,
 				"walking-body disturbance did not stay bounded after the body stopped: max/tail/final="
 						+ maximumKinetic + "/" + tailMaximumKinetic + "/" + finalKinetic + " J");
@@ -256,12 +255,12 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		FluidDomain restored = FluidDomain.restoreAuthoritativeState(state);
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		long generation = 0L;
-		double initialCenterY = centerOfMassY(restored.exportMaterialParticleState());
+		double initialCenterY = centerOfMassY(restored);
 		double maximumKinetic = 0.0, tailMaximumKinetic = 0.0;
 		double maximumBodyPressureResidual = 0.0, maximumPressureResidual = 0.0;
 		long phaseOperations = 0L, boiledCells = 0L, condensedCells = 0L;
 		double previousAvailable = restored.gasBoundary().availableVolume(1);
-		require(kineticEnergy(restored.exportMaterialParticleState()) == 0.0,
+		require(kineticEnergy(restored) == 0.0,
 				"compressed planar fixture did not start at rest");
 		require(restored.gasNodeGaugePressurePa(1) > 100_000.0,
 				"compressed planar fixture did not retain its sealed external compression");
@@ -306,8 +305,8 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 						restored.gasNodeTemperatureK(1));
 			}
 		}
-		double finalKinetic = kineticEnergy(restored.exportMaterialParticleState());
-		double centerYDelta = centerOfMassY(restored.exportMaterialParticleState()) - initialCenterY;
+		double finalKinetic = kineticEnergy(restored);
+		double centerYDelta = centerOfMassY(restored) - initialCenterY;
 		require(maximumKinetic <= 0.025 && tailMaximumKinetic <= 0.015 && finalKinetic <= 0.015,
 				"compressed planar free surface self-excited: max=" + maximumKinetic
 						+ " tail=" + tailMaximumKinetic + " final=" + finalKinetic + " J");
@@ -362,19 +361,19 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			elapsed.add(milliseconds);
 			require(domain.totalVolumeExact() == volume && domain.totalMass() == mass,
 					"default production step changed liquid volume or mass at step " + step);
-			System.out.printf("  production live step %02d: %.3f ms, particles=%d, volume=%.9f, "
+			System.out.printf("  production live step %02d: %.3f ms, liquidStocks=%d, volume=%.9f, "
 					+ "maxSpeed=%.6f, substeps=%d, PCG=%d, residual=%.6g%n",
 					step + 1, milliseconds, domain.particleCount(), domain.totalVolumeExact(),
 					domain.maximumParticleSpeed(), stats.substeps(), stats.pressureIterations(),
 					stats.pressureResidual());
+			require(milliseconds <= STEP_BUDGET_MILLIS,
+					"production step " + step + " exceeded the server-tick budget: " + milliseconds + " ms");
 		}
 		double maximum = elapsed.stream().mapToDouble(Double::doubleValue).max().orElseThrow();
 		double[] ordered = elapsed.stream().mapToDouble(Double::doubleValue).sorted().toArray();
 		double median = (ordered[ordered.length / 2 - 1] + ordered[ordered.length / 2]) * 0.5;
 		System.out.printf("  production live timing: median=%.3f ms, max=%.3f ms, budget=%.1f ms%n",
 				median, maximum, STEP_BUDGET_MILLIS);
-		require(maximum <= STEP_BUDGET_MILLIS,
-				"a production step exceeded the server-tick budget: max=" + maximum + " ms");
 		System.out.println("  default live-domain replay remained valid and bounded for 20 steps");
 
 		damBreakProductionStepsRemainBelowPauseThreshold();
@@ -420,26 +419,23 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			require(Double.isFinite(domain.totalVolumeExact()) && domain.totalVolumeExact() > 0.0
 					&& Double.isFinite(domain.totalMass()) && domain.totalMass() > 0.0,
 					"dam-break production step produced invalid liquid inventory");
-			System.out.printf("  dam-break live step %d: %.3f ms, particles=%d, volume=%.9f, "
+			System.out.printf("  dam-break live step %d: %.3f ms, liquidStocks=%d, volume=%.9f, "
 					+ "substeps=%d, PCG=%d, residual=%.6g, phase=%d%n",
 					generation + 1, elapsedMillis, domain.particleCount(),
 					domain.totalVolumeExact(), candidate.stats().substeps(),
 					candidate.stats().pressureIterations(), candidate.stats().pressureResidual(), phaseOperations);
+			require(consecutiveOverruns < 3,
+					"dam-break production path would trigger the wall-time pause at step " + generation
+							+ ": max=" + maximumMillis + " ms, consecutive overruns=" + consecutiveOverruns);
 		}
-		require(maximumConsecutiveOverruns < 3,
-				"dam-break production path would trigger the wall-time pause: max="
-						+ maximumMillis + " ms, consecutive overruns=" + maximumConsecutiveOverruns);
 		System.out.printf("  dam-break live maximum %.3f ms; consecutive > %.1f ms=%d (< 3 pause limit)%n",
 				maximumMillis, performancePauseThresholdMillis, maximumConsecutiveOverruns);
 	}
 
 	/**
 	 * Production-scale replay of the four-floor {@code /mmm demo}: every step keeps the gas and
-	 * exact total-U audits closed with finite sealed nodes, and the run exercises real sealed-cavity
-	 * phase work. Since the binary64 pressure overhaul (b7a8d15f) the collapsing column no longer
-	 * folds ambient air into a pocket inside this replay - the entrapment is structurally absent
-	 * over 600 steps, not merely delayed - so the ambient pinch-off and air/vapor mixture
-	 * observables are owned by the deterministic thermal scenario
+	 * exact total-U audits closed with finite sealed nodes and real sealed-cavity phase work.
+	 * Ambient pinch-off and air/vapor mixing are also exercised by the deterministic thermal scenario
 	 * {@code ThermalGasValidationScenarios#ambientTrappedAirBoilsIntoMixedNode}.
 	 */
 	static void floorDamBreakGasThermalPathRemainsDefined() throws Exception {
@@ -472,7 +468,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 							generation + 1, domain.gasBoundary().inventory(1));
 				}
 				if ((generation + 1) % 20 == 0) {
-					System.out.printf("  floor dam-break step %d: particles=%d, volume=%.9f, "
+					System.out.printf("  floor dam-break step %d: liquidStocks=%d, volume=%.9f, "
 							+ "gasNodes=%d, phase=%d%n", generation + 1, domain.particleCount(),
 							domain.totalVolumeExact(), domain.gasBoundary().nodeCount(),
 							candidate.stats().gasPhase().operations());
@@ -516,7 +512,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 				"full-capability capture/restore changed total U or its audit");
 		require(restored.gasBoundary().auditClosed(), "restored full-capability gas ledger is open");
 		requireSameGasState(captured.gas(), roundTrip.gas());
-		System.out.printf("  full-capability half-fill round trip: particles=%d, volume=%.9f, gasNodes=%d%n",
+		System.out.printf("  full-capability half-fill round trip: liquidStocks=%d, volume=%.9f, gasNodes=%d%n",
 				restored.particleCount(), restored.totalVolumeExact(), roundTrip.gas().nodes().size());
 
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
@@ -578,9 +574,9 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		FluidDomainState state = initial.captureAuthoritativeState();
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		long generation = 0L;
-		double initialKinetic = kineticEnergy(initial.exportMaterialParticleState());
+		double initialKinetic = kineticEnergy(initial);
 		require(initialKinetic == 0.0, "planar no-entity fixture did not start at rest");
-		double initialCenterY = centerOfMassY(initial.exportMaterialParticleState());
+		double initialCenterY = centerOfMassY(initial);
 		double maximumKinetic = 0.0, tailMaximumKinetic = 0.0;
 		double maximumBodyPressureResidual = 0.0;
 		long phaseOperations = 0L, boiledCells = 0L, condensedCells = 0L;
@@ -622,13 +618,13 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 				System.out.printf("  planar no-entity backend step %03d: kinetic=%.9g J maxSpeed=%.6g "
 						+ "centerY=%.9f phase=%d/%d/%d p=%+.3f Pa T=%.6f K%n",
 						step + 1, kinetic, restored.maximumParticleSpeed(),
-						centerOfMassY(restored.exportMaterialParticleState()), stats.gasPhase().operations(),
+						centerOfMassY(restored), stats.gasPhase().operations(),
 						stats.gasPhase().boiledCells(), stats.gasPhase().condensedCells(),
 						restored.gasNodeGaugePressurePa(1), restored.gasNodeTemperatureK(1));
 			}
 		}
-		double finalKinetic = kineticEnergy(restored.exportMaterialParticleState());
-		double centerYDelta = centerOfMassY(restored.exportMaterialParticleState()) - initialCenterY;
+		double finalKinetic = kineticEnergy(restored);
+		double centerYDelta = centerOfMassY(restored) - initialCenterY;
 		require(Double.isFinite(finalKinetic), "planar no-entity final kinetic observation is not finite");
 		require(maximumKinetic <= 0.025 && tailMaximumKinetic <= 0.005 && finalKinetic <= 0.002,
 				"planar no-entity free surface self-excited: max=" + maximumKinetic

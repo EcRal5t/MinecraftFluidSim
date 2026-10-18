@@ -85,7 +85,7 @@ public final class CoherentPhaseStore {
 	private static final Comparator<Group> ORDER = Comparator.comparingInt(Group::cell).thenComparing(Group::phaseId);
 	private final int cellCount;
 	private final int maximumGroups;
-	private final ArrayList<Group> groups = new ArrayList<>();
+	private ArrayList<Group> groups = new ArrayList<>();
 
 	public CoherentPhaseStore(int cellCount, int maximumGroups) {
 		if (cellCount <= 0 || maximumGroups <= 0
@@ -244,6 +244,12 @@ public final class CoherentPhaseStore {
 			groups.add(group); previous = group;
 		}
 	}
+
+	CoherentPhaseStore prepareReplacement(List<Group> future) {
+		var candidate=new CoherentPhaseStore(cellCount,maximumGroups);candidate.restore(future);return candidate;
+	}
+	/** Both lists were validated before the enclosing inventory transaction publishes. */
+	void commitPreparedReplacement(CoherentPhaseStore candidate) { groups=candidate.groups; }
 
 	/** Validates a handoff snapshot without exposing a mutation seam on a live store. */
 	public static SignedDyadic exactEnergyOfCanonicalSnapshot(

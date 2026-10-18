@@ -9,11 +9,16 @@ public final class GranularBedPotential {
 	/** Compares exact mass first moments; stored mass rounding has its separate plan bound. */
 	public static boolean allowsSettlement(GranularInventory.SettlementPlan plan, float cellSize,
 	                             int sizeX, int sizeY, double gravity) {
+		return settlementPotentialChange(plan, cellSize, sizeX, sizeY, gravity).signum() <= 0;
+	}
+
+	public static SignedDyadic settlementPotentialChange(GranularInventory.SettlementPlan plan, float cellSize,
+	                                                     int sizeX, int sizeY, double gravity) {
 		if (plan == null || !(Float.isFinite(cellSize) && cellSize > 0)
 				|| sizeX <= 0 || sizeY <= 0 || !(Double.isFinite(gravity) && gravity >= 0)) {
 			throw new IllegalArgumentException("Settlement energy geometry or gravity is invalid");
 		}
-		if (gravity == 0) return true;
+		if (gravity == 0) return SignedDyadic.ZERO;
 		SignedDyadic h = SignedDyadic.of(cellSize);
 		SignedDyadic before = SignedDyadic.ZERO, after = SignedDyadic.ZERO;
 		for (var target : plan.targets()) {
@@ -27,18 +32,24 @@ public final class GranularBedPotential {
 			SignedDyadic mass = SignedDyadic.of(parcel.mass());
 			before = before.add(mass.multiply(SignedDyadic.of(parcel.y())));
 		}
-		return after.compareTo(before) <= 0;
+		return after.subtract(before).multiply(SignedDyadic.of(gravity));
 	}
 
 	/** Two uniform beds share the moved conceptual mass before either store mutation. */
 	public static boolean allowsRelaxation(GranularDepositStore store, int from, int to,
 	                                      GranularDepositStore.SolidPortion moved, float cellSize,
 	                                      int sizeX, int sizeY, double gravity) {
+		return relaxationPotentialChange(store, from, to, moved, cellSize, sizeX, sizeY, gravity).signum() <= 0;
+	}
+
+	public static SignedDyadic relaxationPotentialChange(GranularDepositStore store, int from, int to,
+	                                                     GranularDepositStore.SolidPortion moved, float cellSize,
+	                                                     int sizeX, int sizeY, double gravity) {
 		if (store == null || moved == null || from == to || !(Float.isFinite(cellSize) && cellSize > 0)
 				|| sizeX <= 0 || sizeY <= 0 || !(Double.isFinite(gravity) && gravity >= 0)) {
 			throw new IllegalArgumentException("Bed relaxation energy input is invalid");
 		}
-		if (gravity == 0) return true;
+		if (gravity == 0) return SignedDyadic.ZERO;
 		if (!moved.equals(store.peekTake(from, moved.materialHandle(), moved.solidCompositionHandle(), moved.solidVolumeSvq()))) {
 			throw new IllegalArgumentException("Bed relaxation portion does not match its source");
 		}
@@ -53,7 +64,7 @@ public final class GranularBedPotential {
 		SignedDyadic change = masses[0].multiply(h).multiply(SignedDyadic.of(sourceBulk - store.cellBulkVolumeSvq(from), -25))
 				.add(masses[1].multiply(h).multiply(SignedDyadic.of(targetBulk - store.cellBulkVolumeSvq(to), -25)))
 				.add(mass.multiply(targetCenter.subtract(sourceCenter)));
-		return change.signum() <= 0;
+		return change.multiply(SignedDyadic.of(gravity));
 	}
 
 	/** Release to an active carrier needs modeled work whenever its combined first moment rises. */

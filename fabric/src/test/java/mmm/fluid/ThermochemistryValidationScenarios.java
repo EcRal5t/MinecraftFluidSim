@@ -216,74 +216,8 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 	}
 
 	static void reactionCommitValidatesEnergyBeforeMutation() {
-		String a = "test:reactant", b = "test:product", phaseId = "test:phase", materialId = "test:liquid";
-		ChemicalSpecies reactant = new ChemicalSpecies(a, Map.of("X", 1), 0, ExactRational.ONE, 0xff000000);
-		ChemicalSpecies product = new ChemicalSpecies(b, Map.of("X", 1), 0, ExactRational.ONE, 0xff000000);
-		ChemicalPhaseDefinition phase = new ChemicalPhaseDefinition(
-				phaseId, materialId, List.of(a, b), Map.of(a, ExactRational.ONE), false);
-		ChemicalReaction reaction = new ChemicalReaction("test:reaction", ChemicalReaction.Kind.INSTANTANEOUS,
-				phaseId, Map.of(a, 1), Map.of(b, 1), ExactRational.ZERO);
-		ChemicalRegistry chemistry = new ChemicalRegistry(List.of(reactant, product), List.of(phase), List.of(reaction));
-		ChemicalParcelStore parcels = new ChemicalParcelStore(
-				chemistry, SolverUnitScale.forCellSize(1.0F), 1, 8);
-		ChemicalMixtureRecord initial = ChemicalMixtureRecord.fromStableAmounts(
-				chemistry, Map.of(a, ChemicalLimits.QUANTA_PER_MOL), 0L);
-		parcels.assign(0, initial, false);
-		parcels.markDirtyCell(0);
-		double[] mass = {1.0};
-		FluidMaterial liquid = FluidMaterial.withSurfaceTension(materialId, 1.0, "test:miscible", 0.0, 90.0);
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(liquid));
-		ThermalCarrierContext markers = new ThermalCarrierContext() {
-			@Override public int markerCount() { return 1; }
-			@Override public int cell(int marker) { return 0; }
-			@Override public int fluidMaterialHandle(int marker) { return 0; }
-			@Override public double mass(int marker) { return mass[marker]; }
-			@Override public double volume(int marker) { return 1.0; }
-			@Override public ChemicalMixtureRecord mixture(int marker) { return parcels.record(marker); }
-			@Override public ChemicalRegistry chemicalRegistry() { return chemistry; }
-		};
-		List<ThermalSpeciesOffset> offsets = List.of(
-				new ThermalSpeciesOffset("test:offset/a", a, "test:thermal/liquid", ExactRational.ZERO),
-				new ThermalSpeciesOffset("test:offset/b", b, "test:thermal/liquid", ExactRational.of(-100)));
-		List<ThermalSpeciesOffset> invalidOffsets = List.of(
-				new ThermalSpeciesOffset("test:invalid_offset/a", a, "test:thermal/liquid", ExactRational.ZERO),
-				new ThermalSpeciesOffset("test:invalid_offset/b", b, "test:thermal/liquid",
-						ExactRational.of(1_000_000)));
-		ThermalDomainState narrow = FluidThermalBinding.create(new ThermalRegistry(List.of(new ThermalMaterialDefinition(
-				"test:thermal/liquid", ThermalMaterialDefinition.CarrierKind.LIQUID, materialId, 300.0, 0.0, 1.0,
-				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 305.0, 10.0)))), invalidOffsets, List.of(),
-				chemistry.fingerprint(), ""), liquids, 300.0, 1, 2, 2, 2, 0.5F, markers);
-		ChemicalParcelStore.ReactionStats deferred = parcels.reactDirtyCells(2, 2, 2, 0.5F,
-				new float[]{0.1F}, new float[]{0.1F}, new float[]{0.1F}, java.util.Arrays.stream(mass).mapToLong(m -> SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(m)).toArray(), new int[]{0},
-				handle -> materialId, 1,
-				(marker, mixture, candidateMass) -> ChemicalReactionStage.requireThermalCandidate(narrow,
-						marker, mixture, SolverUnitScale.forCellSize(.5F).normalizedMass(candidateMass), markers));
-		require(deferred.changedMarkers() == 0 && parcels.hasDirtyCells()
-				&& parcels.record(0).amount(chemistry.speciesHandle(a)) == ChemicalLimits.QUANTA_PER_MOL,
-				"energy-limited reaction retains its source and retry state");
-		narrow.setTemperatureInCell(0, 1_000_300.0, markers);
-		SignedDyadic heated = narrow.exactEnergy(1);
-		require(parcels.reactDirtyCells(2, 2, 2, 0.5F,
-				new float[]{0.1F}, new float[]{0.1F}, new float[]{0.1F}, java.util.Arrays.stream(mass).mapToLong(m -> SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(m)).toArray(), new int[]{0},
-				handle -> materialId, 1, (marker, mixture, candidateMass) ->
-				ChemicalReactionStage.requireThermalCandidate(narrow, marker, mixture, SolverUnitScale.forCellSize(.5F).normalizedMass(candidateMass), markers))
-				.changedMarkers() == 1 && narrow.exactEnergy(1).equals(heated) && !parcels.hasDirtyCells(),
-				"heating makes the same deferred reaction commit with conserved energy");
-		parcels.assign(0, initial, false);
-		parcels.markDirtyCell(0);
-
-		ThermalDomainState thermal = FluidThermalBinding.create(new ThermalRegistry(List.of(new ThermalMaterialDefinition(
-				"test:thermal/liquid", ThermalMaterialDefinition.CarrierKind.LIQUID, materialId, 300.0, 0.0, 1.0,
-				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0)))), offsets, List.of(),
-				chemistry.fingerprint(), ""), liquids, 300.0, 1, 2, 2, 2, 0.5F, markers);
-		SignedDyadic before = thermal.exactEnergy(1);
-		parcels.reactDirtyCells(2, 2, 2, 0.5F,
-				new float[]{0.1F}, new float[]{0.1F}, new float[]{0.1F}, java.util.Arrays.stream(mass).mapToLong(m -> SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(m)).toArray(), new int[]{0},
-				handle -> materialId, 1,
-				(marker, mixture, candidateMass) -> thermal.requireReactionState(
-						marker, mixture, SolverUnitScale.forCellSize(.5F).normalizedMass(candidateMass), markers));
-		require(thermal.exactEnergy(1).equals(before) && close(thermal.temperature(0, markers), 380.0),
-				"reaction heat was not derived from conserved marker internal energy");
+		ChemicalReactionCandidateValidation.cellInventoryTransactions();
+		ChemicalReactionCandidateValidation.reactionHeatChangesTemperature();
 	}
 
 	static void granularReactionHeatUsesOneConservedCellEnergy() {

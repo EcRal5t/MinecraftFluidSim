@@ -11,10 +11,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Owns the per-liquid-marker internal energy column: ordinal storage, exact sums, modeled
- * energies from temperature, and every liquid-ordinal commit with its audit booking. Liquid
- * ordinals change only through these methods, so the column revision is the liquid thermal
- * truth token.
+ * Caloric functions and derived caches over authoritative liquid inventory rows.
  */
 public final class LiquidEnergyColumn {
 	private final ThermalRegistry registry;
@@ -23,13 +20,16 @@ public final class LiquidEnergyColumn {
 	private final int[] materialByFluidHandle;
 	private final double insertionTemperatureK;
 	private final ThermalAuditState audit;
-	private double[] internalEnergy;
+	private final ThermalCarrierContext owners;
 	private double[] cachedBaseEnergy;
 	private long[] cachedMassKilogramsBits;
 	private int[] cachedMaterial;
 	private ChemicalMixtureRecord[] cachedMixture;
+	private double[] cachedTemperature;
+	private long[] cachedEnergyBits;
+	private record CaloricState(int material, long mass, long base, long energy, double temperature) { }
+	private volatile CaloricState commonState;
 	private ChemicalRegistry cachedChemistry;
-	private long revision;
 
 	public LiquidEnergyColumn(
 			ThermalRegistry registry, ThermalStateFunction stateFunction, SolverUnitScale unitScale,
@@ -45,38 +45,49 @@ public final class LiquidEnergyColumn {
 			int[] materialByFluidHandle, double insertionTemperatureK, ThermalAuditState audit,
 			int initialCapacity, ThermalCarrierContext markers, double[] restoredEnergy
 	) {
+		this(registry,stateFunction,unitScale,materialByFluidHandle,insertionTemperatureK,audit,initialCapacity,markers,restoredEnergy,true);
+	}
+	LiquidEnergyColumn(ThermalRegistry registry, ThermalStateFunction stateFunction, SolverUnitScale unitScale,
+			int[] materialByFluidHandle, double insertionTemperatureK, ThermalAuditState audit,
+			int initialCapacity, ThermalCarrierContext markers, double[] restoredEnergy, boolean initializeOwners) {
 		this.registry = registry;
 		this.stateFunction = stateFunction;
 		this.unitScale = unitScale;
 		this.materialByFluidHandle = materialByFluidHandle;
 		this.insertionTemperatureK = insertionTemperatureK;
 		this.audit = audit;
-		this.internalEnergy = new double[initialCapacity];
+		this.owners = Objects.requireNonNull(markers, "Liquid thermal owners");
 		cachedBaseEnergy = new double[initialCapacity]; Arrays.fill(cachedBaseEnergy, Double.NaN);
 		cachedMassKilogramsBits = new long[initialCapacity]; cachedMaterial = new int[initialCapacity];
 		cachedMixture = new ChemicalMixtureRecord[initialCapacity];
+		cachedTemperature = new double[initialCapacity]; Arrays.fill(cachedTemperature, Double.NaN);
+		cachedEnergyBits = new long[initialCapacity];
+		if (!initializeOwners && restoredEnergy == null) return;
 		if (restoredEnergy != null) {
 			if (restoredEnergy.length != markers.markerCount()) {
 				throw new IllegalArgumentException("Restored liquid energy count differs from marker truth");
 			}
-			System.arraycopy(restoredEnergy, 0, internalEnergy, 0, restoredEnergy.length);
+			owners.setLiquidInternalEnergies(restoredEnergy);
 			return;
 		}
+		double[] initialEnergy = new double[markers.markerCount()];
 		for (int marker = 0; marker < markers.markerCount(); marker++) {
 			int thermalHandle = materialByFluidHandle[markers.fluidMaterialHandle(marker)];
 			double physicalMass = unitScale.kilograms(markers.mass(marker));
 			ChemicalMixtureRecord mixture = markers.mixture(marker);
 			double base = baseEnergy(thermalHandle, physicalMass, mixture, markers.chemicalRegistry());
-			internalEnergy[marker] = ThermalCaloricInversion.energyAt(registry.material(thermalHandle), physicalMass, base, insertionTemperatureK);
-			if (!Double.isFinite(internalEnergy[marker])) {
+			double energy = ThermalCaloricInversion.energyAt(registry.material(thermalHandle), physicalMass, base, insertionTemperatureK);
+			if (!Double.isFinite(energy)) {
 				throw new IllegalArgumentException("Thermal marker modeled energy is invalid");
 			}
 			ThermalCaloricInversion.owner(registry.material(thermalHandle), physicalMass,
-					internalEnergy[marker], base);
+					energy, base);
+			initialEnergy[marker] = energy;
 		}
+		owners.setLiquidInternalEnergies(initialEnergy);
 	}
 
-	public long revision() { return revision; }
+	public long revision() { return owners.liquidInventoryRevision(); }
 
 	public int thermalMaterialHandleForFluid(int fluidHandle) {
 		if (fluidHandle < 0 || fluidHandle >= materialByFluidHandle.length) {
@@ -85,68 +96,68 @@ public final class LiquidEnergyColumn {
 		return materialByFluidHandle[fluidHandle];
 	}
 
-	public double energy(int ordinal) { return internalEnergy[ordinal]; }
+	public double energy(int ordinal) { return owners.liquidInternalEnergy(ordinal); }
 
 	/** Carrier-access write path: validates finiteness exactly like the composed carrier view. */
 	void setEnergy(int ordinal, double energy) {
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal carrier energy is not finite");
-		internalEnergy[ordinal] = energy;
-		revision++;
+		owners.setLiquidInternalEnergy(ordinal, energy);
 	}
 
-	/** Raw paired write for reseed splits; values are produced by validated modeling upstream. */
-	void assignReseededEnergies(int source, double sourceEnergy, int destination, double destinationEnergy) {
-		internalEnergy[source] = sourceEnergy;
-		internalEnergy[destination] = destinationEnergy;
-		revision++;
+	public double[] copyEnergies(int count) {
+		if (count < 0 || count > owners.markerCount()) throw new IllegalArgumentException("Liquid inventory count differs");
+		double[] energies = new double[count];
+		for (int ordinal = 0; ordinal < count; ordinal++) energies[ordinal] = energy(ordinal);
+		return energies;
 	}
-
-	void moveEnergy(int source, int destination) {
-		internalEnergy[destination] = internalEnergy[source];
-		revision++;
-	}
-
-	void mergeReseedEnergy(int target, int source) {
-		internalEnergy[target] += internalEnergy[source];
-		if (!Double.isFinite(internalEnergy[target])) {
-			throw new IllegalArgumentException("Reseeded thermal merge energy is invalid");
-		}
-		revision++;
-	}
-
-	public double[] copyEnergies(int count) { return Arrays.copyOf(internalEnergy, count); }
 
 	void adoptRestored(double[] restored) {
 		ensureCapacity(restored.length);
-		System.arraycopy(restored, 0, internalEnergy, 0, restored.length);
-		revision++;
+		owners.setLiquidInternalEnergies(restored);
 	}
 
 	void ensureCapacity(int capacity) {
-		if (capacity <= internalEnergy.length) return;
-		int previous = internalEnergy.length;
-		internalEnergy = Arrays.copyOf(internalEnergy, capacity);
+		if (capacity <= cachedBaseEnergy.length) return;
+		int previous = cachedBaseEnergy.length;
 		cachedBaseEnergy = Arrays.copyOf(cachedBaseEnergy, capacity);
 		Arrays.fill(cachedBaseEnergy, previous, capacity, Double.NaN);
 		cachedMassKilogramsBits = Arrays.copyOf(cachedMassKilogramsBits, capacity);
 		cachedMaterial = Arrays.copyOf(cachedMaterial, capacity);
 		cachedMixture = Arrays.copyOf(cachedMixture, capacity);
+		cachedTemperature = Arrays.copyOf(cachedTemperature, capacity);
+		Arrays.fill(cachedTemperature, previous, capacity, Double.NaN);
+		cachedEnergyBits = Arrays.copyOf(cachedEnergyBits, capacity);
 	}
 
 	public double totalEnergy(int count) {
 		double total = 0.0;
-		for (int marker = 0; marker < count; marker++) total += internalEnergy[marker];
+		for (int marker = 0; marker < count; marker++) total += energy(marker);
 		return total;
 	}
 
 	public SignedDyadic exactLiquidEnergy(int count) {
-		return SignedDyadic.sum(internalEnergy, count);
+		SignedDyadic total = SignedDyadic.ZERO;
+		for (int ordinal = 0; ordinal < count; ordinal++) total = total.add(SignedDyadic.of(energy(ordinal)));
+		return total;
 	}
 
 	public double temperature(int marker, ThermalCarrierContext markers) {
+		double base = baseEnergy(marker, markers);
+		long energy = Double.doubleToRawLongBits(energy(marker));
+		if (!Double.isNaN(cachedTemperature[marker]) && cachedEnergyBits[marker] == energy)
+			return cachedTemperature[marker];
 		ThermalMaterialDefinition material = material(marker, markers);
-		return ThermalCaloricInversion.owner(material, unitScale.kilograms(markers.mass(marker)),
-				internalEnergy[marker], baseEnergy(marker, markers)).temperatureK();
+		long mass = cachedMassKilogramsBits[marker], baseBits = Double.doubleToRawLongBits(base);
+		CaloricState common = commonState;
+		double temperature;
+		if (common != null && common.material() == cachedMaterial[marker] && common.mass() == mass
+				&& common.base() == baseBits && common.energy() == energy) temperature = common.temperature();
+		else {
+			temperature = ThermalCaloricInversion.owner(material, Double.longBitsToDouble(mass), energy(marker), base).temperatureK();
+			commonState = new CaloricState(cachedMaterial[marker], mass, baseBits, energy, temperature);
+		}
+		cachedTemperature[marker] = temperature; cachedEnergyBits[marker] = energy;
+		return temperature;
 	}
 
 	/** Prepares immutable caloric data for a prospective conservative liquid inventory. */
@@ -220,15 +231,13 @@ public final class LiquidEnergyColumn {
 		double physicalMass = unitScale.kilograms(candidateMass);
 		double base = baseEnergy(
 				thermalHandle, physicalMass, candidateMixture, markers.chemicalRegistry());
-		ThermalCaloricInversion.owner(material, physicalMass, internalEnergy[marker], base);
+		ThermalCaloricInversion.owner(material, physicalMass, energy(marker), base);
 	}
 
 	void addExternalMarker(int marker, ThermalCarrierContext markers) {
 		ensureCapacity(marker + 1);
-		internalEnergy[marker] = modeledEnergy(marker, markers.mass(marker), markers.mixture(marker),
-				insertionTemperatureK, markers);
-		audit.update(ledger -> ledger.withExternalSourceEnergy(SignedDyadic.of(internalEnergy[marker])));
-		revision++;
+		setEnergy(marker, modeledEnergy(marker, markers.mass(marker), markers.mixture(marker), insertionTemperatureK, markers));
+		audit.update(ledger -> ledger.withExternalSourceEnergy(SignedDyadic.of(energy(marker))));
 	}
 
 	public ExternalLiquidInsertionPlan planExternalLiquidInsertions(
@@ -264,46 +273,19 @@ public final class LiquidEnergyColumn {
 		return new ExternalLiquidInsertionPlan(this, energies, before, after);
 	}
 
-	/** Preflights the configured insertion temperature separately for every stored carrier. */
-	public double[] planDefaultLiquidInsertions(List<LiquidInsertion> insertions, ThermalCarrierContext markers) {
-		if (insertions == null) throw new IllegalArgumentException("Liquid insertions are missing");
-		double[] energies = new double[insertions.size()];
-		for (int index = 0; index < energies.length; index++) {
-			LiquidInsertion insertion = insertions.get(index);
-			energies[index] = modeledEnergy(insertion.fluidMaterialHandle(), insertion.mass(),
-					insertion.mixture(), insertionTemperatureK, markers.chemicalRegistry());
-			temperatureForInventory(insertion.fluidMaterialHandle(), insertion.mass(), insertion.mixture(),
-					energies[index], markers.chemicalRegistry());
-		}
-		return energies;
-	}
-
-	/** Writes already modeled energies into the empty ordinals reserved by the carrier coordinator. */
-	void commitInternalLiquidInsertions(int firstOrdinal, double[] energies) {
-		if (energies == null || firstOrdinal < 0 || firstOrdinal + energies.length > internalEnergy.length)
-			throw new IllegalArgumentException("Thermal liquid insertion ordinals are incompatible");
-		for (int index = 0; index < energies.length; index++) {
-			if (!Double.isFinite(energies[index]) || internalEnergy[firstOrdinal + index] != 0.0)
-				throw new IllegalStateException("Thermal liquid insertion did not reserve an empty energy ordinal");
-		}
-		System.arraycopy(energies, 0, internalEnergy, firstOrdinal, energies.length);
-		if (energies.length > 0) revision++;
-	}
-
 	void commitExternalLiquidInsertions(int firstOrdinal, ExternalLiquidInsertionPlan plan) {
 		if (plan == null || plan.owner != this || firstOrdinal < 0
-				|| firstOrdinal > internalEnergy.length - plan.energies.length) {
+				|| firstOrdinal > owners.markerCount() - plan.energies.length) {
 			throw new IllegalArgumentException("Thermal liquid insertion ordinals are incompatible");
 		}
 		if (audit.ledger() != plan.before)
 			throw new IllegalStateException("Explicit thermal insertion audit changed after planning");
 		for (int index = 0; index < plan.energies.length; index++) {
-			if (Double.doubleToRawLongBits(internalEnergy[firstOrdinal + index]) != Double.doubleToRawLongBits(0.0))
+			if (Double.doubleToRawLongBits(energy(firstOrdinal + index)) != Double.doubleToRawLongBits(0.0))
 				throw new IllegalStateException("Explicit thermal insertion did not reserve an empty energy ordinal");
 		}
-		System.arraycopy(plan.energies, 0, internalEnergy, firstOrdinal, plan.energies.length);
+		for (int index = 0; index < plan.energies.length; index++) setEnergy(firstOrdinal + index, plan.energies[index]);
 		audit.replace(plan.after);
-		revision++;
 	}
 
 	ThermalAuditLedger requireExternalInsertionCurrent(ExternalLiquidInsertionPlan plan) {
@@ -313,37 +295,33 @@ public final class LiquidEnergyColumn {
 	}
 
 	void removeExternalAndSwap(int index, int last) {
-		audit.update(ledger -> ledger.withExternalSinkEnergy(SignedDyadic.of(internalEnergy[index])));
-		if (index != last) internalEnergy[index] = internalEnergy[last];
-		revision++;
+		audit.update(ledger -> ledger.withExternalSinkEnergy(SignedDyadic.of(energy(index))));
+		if (index != last) setEnergy(index, energy(last));
 	}
 
 	void addInternalMarker(int marker, double energy) {
 		ensureCapacity(marker + 1);
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Internal phase marker energy is not finite");
-		internalEnergy[marker] = energy;
-		revision++;
+		setEnergy(marker, energy);
 	}
 
 	double removeInternalAndSwap(int index, int last) {
-		double removed = internalEnergy[index];
-		if (index != last) internalEnergy[index] = internalEnergy[last];
-		revision++;
+		double removed = energy(index);
+		if (index != last) setEnergy(index, energy(last));
 		return removed;
 	}
 
 	void addLiquidEnergy(int marker, double energy) {
-		double result = internalEnergy[marker] + energy;
+		double result = energy(marker) + energy;
 		if (!Double.isFinite(result)) throw new IllegalArgumentException("Internal phase energy transfer overflow");
-		internalEnergy[marker] = result;
-		revision++;
+		setEnergy(marker, result);
 	}
 
 	public Truncation planTruncate(
 			int marker, double newMass, ChemicalMixtureRecord keptMixture,
 			double previousTemperatureK, ThermalCarrierContext markers
 	) {
-		double previousEnergy = internalEnergy[marker];
+		double previousEnergy = energy(marker);
 		double newEnergy = newMass == 0.0 ? 0.0
 				: modeledEnergy(marker, newMass, keptMixture, previousTemperatureK, markers);
 		return new Truncation(newEnergy, previousEnergy - newEnergy);
@@ -351,17 +329,15 @@ public final class LiquidEnergyColumn {
 
 	void commitTruncate(int marker, Truncation plan) {
 		if (plan == null) return;
-		SignedDyadic carrierEnergy = SignedDyadic.of(internalEnergy[marker])
+		SignedDyadic carrierEnergy = SignedDyadic.of(energy(marker))
 				.subtract(SignedDyadic.of(plan.newEnergy()));
-		internalEnergy[marker] = plan.newEnergy();
+		setEnergy(marker, plan.newEnergy());
 		audit.update(ledger -> ledger.withExternalSinkEnergy(carrierEnergy));
-		revision++;
 	}
 
 
 	void resetMarkerTemperature(int marker, double temperatureK, ThermalCarrierContext markers) {
-		internalEnergy[marker] = modeledEnergy(marker, markers.mass(marker), markers.mixture(marker), temperatureK, markers);
-		revision++;
+		setEnergy(marker, modeledEnergy(marker, markers.mass(marker), markers.mixture(marker), temperatureK, markers));
 	}
 
 	public double modeledEnergy(
@@ -385,18 +361,21 @@ public final class LiquidEnergyColumn {
 	}
 
 	double baseEnergy(int marker, ThermalCarrierContext markers) {
+		ensureCapacity(markers.markerCount());
 		int material = materialByFluidHandle[markers.fluidMaterialHandle(marker)];
 		double mass = unitScale.kilograms(markers.mass(marker));
 		ChemicalMixtureRecord mixture = markers.mixture(marker);
 		ChemicalRegistry chemistry = markers.chemicalRegistry();
 		if (cachedChemistry != chemistry) {
 			Arrays.fill(cachedBaseEnergy, Double.NaN); cachedChemistry = chemistry;
+			Arrays.fill(cachedTemperature, Double.NaN);
 		}
 		long massKilogramsBits = Double.doubleToRawLongBits(mass);
 		if (!Double.isNaN(cachedBaseEnergy[marker]) && cachedMassKilogramsBits[marker] == massKilogramsBits
 				&& cachedMaterial[marker] == material && Objects.equals(cachedMixture[marker], mixture))
 			return cachedBaseEnergy[marker];
 		double value = baseEnergy(material, mass, mixture, chemistry);
+		cachedTemperature[marker] = Double.NaN;
 		cachedBaseEnergy[marker] = value; cachedMassKilogramsBits[marker] = massKilogramsBits;
 		cachedMaterial[marker] = material; cachedMixture[marker] = mixture;
 		return value;

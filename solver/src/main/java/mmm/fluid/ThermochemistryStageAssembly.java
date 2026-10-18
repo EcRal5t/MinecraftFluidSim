@@ -1,5 +1,7 @@
 package mmm.fluid;
 
+import mmm.inventory.LiquidCellInventory;
+
 import mmm.thermal.ThermalDomainState;
 
 import mmm.chemistry.ChemicalParcelStore;
@@ -37,48 +39,22 @@ final class ThermochemistryStageAssembly {
 					}
 				});
 		ChemicalReactionStage chemistry = new ChemicalReactionStage(
-				new ChemicalReactionStage.Workspace(
-						domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),
-						domain.particles, domain.thermalMarkerContext()),
+				new ChemicalReactionStage.Workspace(domain.cellCount,domain.thermalMarkerContext()),
 				new ChemicalReactionStage.Access() {
 					@Override public void markGridDirty() { domain.gridDirty = true; }
 					@Override public mmm.chemistry.ChemicalParcelStore chemicalParcels() {
 						return domain.chemicalParcels;
 					}
+					@Override public LiquidCellInventory liquidCells() { return domain.liquidCells; }
 					@Override public FluidMaterialRegistry materialRegistry() { return domain.materialRegistry; }
 					@Override public ThermalDomainState thermalState() { return domain.thermalState; }
 				});
-		GranularReactionStage granular = new GranularReactionStage(
-				new GranularReactionStage.Workspace(
-						domain.sizeX, domain.sizeY, domain.cellCount, domain.config.cellSize(),
-						domain.particles, domain.pendingPhaseVolume, domain.thermalMarkerContext()),
-				new GranularReactionStage.Access() {
-					@Override public boolean enabled() { return domain.precipitationEnabled(); }
-					@Override public ChemicalParcelStore chemistry() { return domain.chemicalParcels; }
-					@Override public FluidMaterialRegistry materialRegistry() { return domain.materialRegistry; }
-					@Override public GranularDomainState granularState() { return domain.granularState; }
-					@Override public GranularPhaseTransferEngine transferEngine() {
-						return domain.granularPhaseTransfer();
-					}
-					@Override public FlipGranularCollision collision() { return domain.granularCollision; }
-					@Override public GranularCouplingFields coupling() { return domain.granularCoupling; }
-					@Override public GranularDepositDynamics depositDynamics() {
-						return domain.granularDepositDynamics();
-					}
-					@Override public ThermalDomainState thermalState() { return domain.thermalState; }
-					@Override public int particleCell(int marker) { return domain.particleCellIndex(marker); }
-					@Override public int parcelCell(GranularParcelStore.Parcel parcel) {
-						return domain.granularParcelCell(parcel);
-					}
-					@Override public long geometricOpenSvq(int cell) { return domain.granularGeometricOpenSvq(cell); }
-					@Override public float mergeVelocityDelta() { return domain.granularMergeVelocityDelta(); }
-					@Override public void markGridDirty() { domain.gridDirty = true; }
-				});
+		GranularReactionStage granular = new GranularReactionStage(domain);
 		PhaseChangeStageSupport phaseSupport = new PhaseChangeStageSupport(
 				new PhaseChangeStageSupport.Workspace(
 						domain.sizeX, domain.sizeY, domain.sizeZ, domain.cellCount,
-						domain.maximumParticleCount, domain.config.cellSize(), domain.unitScale, domain.geometry,
-						domain.markerGrid, domain.projection, domain.particles, domain.gasState,
+						domain.config.cellSize(), domain.unitScale, domain.geometry,
+						domain.projection, domain.gasState,
 						domain.pendingPhaseVolume, domain.thermalMarkerContext()),
 				new PhaseChangeStageSupport.Access() {
 					@Override public ThermalDomainState thermalState() { return domain.thermalState; }
@@ -86,44 +62,32 @@ final class ThermochemistryStageAssembly {
 					@Override public FluidMaterialRegistry materialRegistry() { return domain.materialRegistry; }
 					@Override public GranularDomainState granularState() { return domain.granularState; }
 					@Override public float pressureReference() { return domain.pressureReference; }
-					@Override public int particleCell(int marker) { return domain.particleCellIndex(marker); }
-					@Override public int firstOpenSlot(int cell, int first) {
-						return domain.firstOpenSlot(cell, first);
-					}
-					@Override public float[] markerSlotPosition(int cell, int slot) {
-						return domain.markerSlotPosition(cell % domain.sizeX, cell / domain.sizeX % domain.sizeY,
-								cell / (domain.sizeX * domain.sizeY), slot);
-					}
-					@Override public void removeParticle(int marker) { domain.removeParticleInternalPhase(marker); }
-					@Override public void spawnParticle(
-							int cellX, int cellY, int cellZ, int slot, float volume, int materialHandle,
-							long mass, ChemicalMixtureRecord mixture
-					) {
-						domain.spawnParticle(
-								cellX, cellY, cellZ, slot, volume, materialHandle, mass,
-								mixture, false, false);
-					}
-					@Override public void ensureInventoryGrid() { domain.ensureInventoryGrid(); }
+					@Override public double liquidPressureAt(int cell,int support) { return domain.pressureSystem.liquidPressureAt(cell,support); }
+					@Override public LiquidCellInventory liquidCells() { return domain.liquidCells; }
+					@Override public CellMacStage.ExternalMomentum preparePhaseMomentum(LiquidCellInventory.Plan plan) { return domain.cellMacStage.prepareExternalMomentum(plan); }
+					@Override public void commitPhaseMomentum(MacMomentumState momentum) { domain.mac.restoreMomentum(momentum); }
 					@Override public void refreshGasTopology() { domain.gasTopologyCoordinator.refresh(); }
-					@Override public GasRuntimeGeometry.PhaseSource prepareGasGeometrySource(int editedCell) {
-						return GasRuntimeGeometry.preparePhaseSource(domain, editedCell);
+					@Override public GasTopologyCoordinator.GasTopologyPlan planGasBatchGeometry(LiquidCellInventory future,
+							GasTopologyCoordinator.PhaseBatch phase) {
+						return domain.gasTopologyCoordinator.planAfterPhaseBatch(future, phase);
 					}
-					@Override public double effectiveOpenCellVolume(int cell) { return domain.effectiveOpenCellVolume(cell); }
-					@Override public GasTopologyCoordinator.GasTopologyPlan planGasGeometry(PhaseLiquidGeometryEdit edit, int node,
-							mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, double energy, ThermalDomainState.PhaseCellEnergyPlan thermal,
-							GasRuntimeGeometry.PhaseSource source) {
-						return domain.gasTopologyCoordinator.planAfterPhase(edit, node, gas, energy, thermal, source);
-					}
-					@Override public void requireGasGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan topology,
-							mmm.fluid.air.AirNetwork.PhaseMutationPlan gas, ThermalDomainState.PhaseCellEnergyPlan thermal) {
-						domain.gasTopologyCoordinator.requireAfterPhaseCurrent(topology, gas, thermal);
+					@Override public void requireGasBatchGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan topology,
+							GasTopologyCoordinator.PhaseBatch phase) {
+						domain.gasTopologyCoordinator.requireAfterPhaseBatchCurrent(topology, phase);
 					}
 					@Override public void commitGasGeometry(GasTopologyCoordinator.GasTopologyPlan topology) {
 						domain.gasTopologyCoordinator.commit(topology);
 					}
+					@Override public GasTopologyCoordinator.GasTopologyPlan planCondensedGeometry(LiquidCellInventory future,java.util.List<mmm.thermal.CoherentPhaseStore.Group> coherent) {
+						var occupancy=new GranularCouplingFields(domain.sizeX,domain.sizeY,domain.sizeZ,domain.config.cellSize());
+						long[] fixed=new long[domain.cellCount];for(var group:coherent) fixed[group.cell()]=Math.addExact(fixed[group.cell()],group.occupiedVolumeSvq());
+						occupancy.setFixedCellSvq(fixed);
+						if(domain.granularState!=null) occupancy.rebuild(domain.granularState.parcels,domain.granularState.deposits);
+						return domain.gasTopologyCoordinator.planAfterLiquidCells(future,occupancy.copySolidSvq(),false);
+					}
+					@Override public void requireGeometryCurrent(GasTopologyCoordinator.GasTopologyPlan plan) { domain.gasTopologyCoordinator.requireBeforeCarrierCommit(plan); }
 					@Override public void refreshCoherentOccupancy() { domain.refreshCoherentOccupancy(); }
-					@Override public boolean canAddCarrierVolume(double volume) { return domain.canAddCarrierVolume(volume); }
-					@Override public void markGridDirty() { domain.gridDirty = true; }
+					@Override public void markGridDirty() { domain.markCellInventoryChanged(); }
 				});
 		CondensedPhaseChangeStage condensed = new CondensedPhaseChangeStage(phaseSupport);
 		GasLiquidPhaseChangeStage gas = new GasLiquidPhaseChangeStage(phaseSupport);

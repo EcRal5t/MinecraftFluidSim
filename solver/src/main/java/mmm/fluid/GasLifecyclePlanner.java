@@ -43,7 +43,7 @@ final class GasLifecyclePlanner {
 		AirNetwork.RemapPlan gasPlan = domain.gasState.network.planRemapNodes(
 				availableVolumes, vacuum, GasAuditLedger.EMPTY, removed, domain.gasState.network.edges());
 		GasEnergyStore.GasVentPlan thermalPlan = domain.thermalState == null ? null
-				: domain.thermalState.planGasVent(domain.gasState.network, domain.particles.count());
+				: domain.thermalState.planGasVent(domain.gasState.network, domain.liquidCells.physicalSize());
 		return new FluidDomain.OperatorGasVentPlan(nodeCount, removed, gasPlan, thermalPlan,
 				domain.thermalState == null ? null : domain.thermalState.thermalRevision(),
 				sourceGeometry);

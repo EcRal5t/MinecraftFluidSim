@@ -1,6 +1,9 @@
 package mmm.fluid;
 
 import mmm.fluid.air.AirNetwork;
+import mmm.inventory.LiquidCellInventory;
+import mmm.units.Mass;
+import mmm.units.SignedDyadic;
 import mmm.thermal.CoherentPhaseStore;
 import mmm.thermal.GranularEnergyColumn;
 import mmm.thermal.ThermalCarrierContext;
@@ -10,12 +13,43 @@ import mmm.thermal.ThermalRegistry;
 import mmm.thermal.ThermalTransport;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
 /** Fluid-side construction and persistence mapping for the thermal aggregate. */
 final class FluidThermalBinding {
 	private FluidThermalBinding() { }
+
+	/** Reference energy follows the allocated integer species; only sensible U follows mass. */
+	static LiquidCellInventory.EnergyPartitioner liquidEnergyPartitioner(FluidDomain domain) {
+		if (domain.thermalState == null) return null;
+		var thermal = domain.thermalState;
+		var function = thermal.stateFunction();
+		var chemistry = domain.liquidCells.chemicalRegistry();
+		return (source, masses, mixtures) -> {
+			var energies = new SignedDyadic[masses.length];
+			Arrays.fill(energies, SignedDyadic.ZERO);
+			if (source.massUnits() == 0) return energies;
+			int material = thermal.thermalMaterialHandleForFluid(source.key().material());
+			int largest = 0;
+			for (int i = 1; i < masses.length; i++) if (masses[i] > masses[largest]) largest = i;
+			var sourceReference = SignedDyadic.of(function.baseEnergy(
+					material, source.massKilograms(), source.mixture(), chemistry));
+			var sourceEnergy = SignedDyadic.of(source.internalEnergy());
+			double sensibleEnergy = sourceEnergy.subtract(sourceReference).toDouble();
+			var remaining = sourceEnergy;
+			for (int i = 0; i < masses.length; i++) if (i != largest && masses[i] > 0) {
+				var reference = SignedDyadic.of(function.baseEnergy(
+						material, Mass.kilograms(masses[i]), mixtures[i], chemistry));
+				var carried = SignedDyadic.of(sensibleEnergy * (masses[i] / (double) source.massUnits()));
+				energies[i] = reference.add(carried);
+				remaining = remaining.subtract(energies[i]);
+			}
+			energies[largest] = remaining;
+			return energies;
+		};
+	}
 
 	static ThermalDomainState create(
 			ThermalRegistry registry, FluidMaterialRegistry liquids, double initialTemperatureK,
@@ -69,6 +103,14 @@ final class FluidThermalBinding {
 			materialByGranularHandle[handle] = thermalHandle;
 		}
 		return new MaterialMappings(materialByFluidHandle, materialByGranularHandle);
+	}
+
+	static ThermalDomainState createOwnerRestoreTarget(ThermalRegistry registry, FluidMaterialRegistry liquids,
+			double insertionTemperatureK,int initialCapacity,int sizeX,int sizeY,int sizeZ,float cellSize,
+			ThermalCarrierContext owners,AirNetwork network,int maximumTransportSubsteps) {
+		var mappings = mappings(registry,liquids,insertionTemperatureK,owners);
+		return ThermalDomainState.restoreOwnerTarget(registry,mappings.liquid(),mappings.granular(),insertionTemperatureK,
+				initialCapacity,sizeX,sizeY,sizeZ,cellSize,owners,network,maximumTransportSubsteps);
 	}
 
 	private record MaterialMappings(int[] liquid, int[] granular) { }
@@ -145,28 +187,6 @@ final class FluidThermalBinding {
 		}
 	}
 
-	static FlipParticleReseeder.ThermalAdapter reseedAdapter(
-			ThermalDomainState state, ThermalCarrierContext markers
-	) {
-		return new FlipParticleReseeder.ThermalAdapter() {
-			@Override public double totalEnergy(int count) { return state.totalEnergy(count); }
-			@Override public void merge(int target, int source) { state.mergeReseedLiquidEnergy(target, source); }
-			@Override public FlipParticleReseeder.ThermalSplit beforeSplit(int source) {
-				return new FlipParticleReseeder.ThermalSplit(
-						state.liquidInternalEnergy(source), state.temperature(source, markers));
-			}
-			@Override public void afterSplit(FlipParticleReseeder.ThermalSplit split, int source, int destination) {
-				double sourceModeled = state.liquid().modeledEnergy(source, markers.mass(source),
-						markers.mixture(source), split.temperatureK(), markers);
-				state.assignReseededLiquidEnergies(source, sourceModeled, destination,
-						split.parentEnergy() - sourceModeled);
-				validateTemperature(state, destination, split.temperatureK(), markers);
-			}
-			@Override public void move(int source, int destination) {
-				state.moveReseedLiquidEnergy(source, destination);
-			}
-		};
-	}
 
 	static double gasVolumeCompliance(ThermalDomainState state, int nodeId, AirNetwork network) {
 		return network.availableVolume(nodeId)
@@ -179,13 +199,4 @@ final class FluidThermalBinding {
 		}
 	}
 
-	private static void validateTemperature(
-			ThermalDomainState state, int marker, double expected, ThermalCarrierContext markers
-	) {
-		double restored = state.temperature(marker, markers);
-		double tolerance = Math.max(1.0E-9, Math.max(Math.ulp(restored), Math.ulp(expected)) * 16.0);
-		if (Math.abs(restored - expected) > tolerance) {
-			throw new IllegalArgumentException("Reseeded thermal split left local equilibrium");
-		}
-	}
 }

@@ -202,7 +202,7 @@
 
 `common-mesh` 运行三格 L 形连续 8 步并逐步恢复，检查库存、宏观位移和动能。`transport-moments` 追加多方向平移和多密度库存；`joint-moments` 与 `footprint-only` 保留为宏观旋转和材料输运的选择器。具体通过状态见[验证证据](#当前验证证据)。
 
-压力短回归使用 `:fabric:runMarkerPressureValidation`；`--args="--thin-layer"` 聚焦同速和薄层梯度，`--args="--kernel"` 运行共同压力与 L 形流程。
+压力短回归使用 `:fabric:runMarkerPressureValidation`；`--args="--thin-layer"` 聚焦薄层库存、动能和恢复，`--args="--kernel"` 运行共同压力与 L 形流程。
 
 注液使用 `:fabric:runBoundaryPourDiagnostic`，默认执行 4 个完整步及捕获恢复；`--args="--steps=200"` 指定步数，`--args="--l-shape"` 切换 L 形来源，`--flux` 追加输运统计。每步报告完整耗时、捕获与计算耗时、子步、压力迭代、残差和动能；失败保留异常并以非零状态退出。
 
@@ -265,7 +265,7 @@
 | 场景 | 规模 | 耗时要求 |
 |---|---|---|
 | 默认控制器注入 16 m³ | `8×8×8` 场景，20 个实际计算步 | 每步不超过 40 ms |
-| 空场景最大装量的 `demo` | `24×16×24` 网格，2,592 个液体单元、20,736 个初始粒子，完整物理功能，20 步 | 连续超过 200 ms 的步数小于三步 |
+| 空场景最大装量的 `demo` | `24×16×24` 网格，2,592 条初始 Stock、液体体积 324 m³，完整物理功能，20 步 | 连续超过 200 ms 的步数小于三步 |
 
 报告分别记录 JVM 预热和被测步的耗时，并保留粒子数、体积、相变操作、子步数、PCG 次数与残差。优化后用同一物理配置复测，保持原有预算和守恒检查。
 
@@ -317,7 +317,7 @@
 
 [ArchitectureDependencyValidation](../../fabric/src/test/java/mmm/validation/ArchitectureDependencyValidation.java) 检查模块 import 方向、
 纯 Java 模块包循环、持久化与运行时依赖隔离、唯一服务器运行时注册点，以及生产类 1000 行上限。超过 600 行会提示，超过 1000 行会失败。
-[CarrierMutationPointInventoryValidation](../../fabric/src/test/java/mmm/validation/CarrierMutationPointInventoryValidation.java) 同时检查粒子结构修改的调用位置。
+[LiquidInventoryAuthorityValidation](../../fabric/src/test/java/mmm/validation/LiquidInventoryAuthorityValidation.java) 同时检查生产代码中的旧粒子库存写入。
 
 需要单独运行 model、solver、app 的验证时，使用根任务 `runModuleValidation`。当前源码规模可用 [Python 工具](pytool.md)重新统计。
 
@@ -372,7 +372,7 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 `./gradlew.bat :fabric:runNormalPlayFuzz '-PfuzzArgs=16,80,false,8,0,13'` 扫描 13 种几何、每种 16 个种子，每个种子 80 步；每步检查库存、能量和 capture/restore。
 单个复现用 `-PfuzzArgs=replay,1,203,80`；严格子序列最小化用 `-PfuzzArgs=minimize,1,203`。`reported` 运行既有历史种子集。
 
-抽取往返传递完整化学账本及内能，核对凝聚态库存与能量；液体位置改变时的气腔压缩功按气体与热学审计核对。随机温度可能超过材料的 Boussinesq 适用温区：这类机械候选应整体拒绝，测试核对拒绝前后状态完全一致，并单独报告 `FUZZ VALIDITY REJECTIONS` 次数。其他机械求解失败继续作为失败反例。
+抽取往返传递完整化学账本及内能，核对凝聚态库存与能量；液体位置改变时的气腔压缩功按气体与热学审计核对。宽温浮力按正的体膨胀关系推进，正常热操作继续完成机械后继。非法物性、库存或能量保持原子拒绝；正常输入中的求解失败继续作为失败反例。
 
 分数抽取后的盘上气腔归属回归使用 `-PfuzzArgs=replay,partialdisk,1,200,49`；颗粒阻力外层收敛与完整候选时间细化回归使用 `-PfuzzArgs=replay,17,7810,37`。两条序列都保留逐动作守恒审计及恢复检查。
 
@@ -382,8 +382,95 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 ## 当前验证证据
 
+当前单元库存、混合物压力、CIC 液固相对速度耦合与参考能输运的统一主源码及测试编译通过 `build/m10-joint-core/compile-mixture-cic.log`。
+库存已迁入独立的 `mmm.inventory` 包；`architecture-inventory-move.log` 通过 514 个生产源码的依赖与库存归属检查。
+
+- `build/m10-caloric/reference-transport.log`：整数物种的实际参考能与源显热分别分配，库存、温度、内能、零质量尾项及恢复通过。
+- `build/m10-micro-final/micro-geometry.log`：正式构建下的气体微几何与气液微接触通过。
+- `mixture-pressure.log`：固定孔口压力算子的转置、正性和浅层静水通过。
+  `mixture-mechanics.log` 的实际 CIC 体积导数及液固内力总冲量通过；近墙静水夹具需补实际重力配置后复核。
+- `l-shape-mixture-cic.log`：L 形八个完整步及恢复通过，全部一个子步，末态动能为初态约 98.1%。
+- `pour-mixture-cic.log`：原注液四步及恢复完成，但后两步使用三／两个子步，完整功能短跑约 216／159 ms，生产资格尚未通过。
+- `bed-mixture-gas.log`：沙床首步产生十个总容量约 `3.6e-11 m³` 的新零库存气腔，第二步膨胀到约 `0.014 m³` 并出现异常加速。
+  当前正在统一容量图的气体来源、实际气腔库存与内能交接，并合并尚不能独立持有气体库存的子片表示。
+- `build/m10-eos-curve/eos.log`：常热容解析等熵曲线、变热容状态方程及可逆返回通过，含 JVM 启动耗时 364 ms。
+
+以上未注明目录的日志位于 `build/m10-joint-core/`。
+此前分量容量、固定阻力和几何短例保留为各自职责的证据；完整集成与 M10 长流程仍待当前构建复核。
+此前控制器四步计时属于已替换的冻结迎风压力模型，当前离散的正式预算尚未测量。
+新模型尚未启动长流程或正式生产预算测量，首次功能失败均停在有界短重放。
+后端预算入口保持原采样数及 40/200 ms 判定，在首次违反相应规则时停止。
+
 实施进度见[当前计划](../roadmap/solver-consolidation-plan.md)，历史结果见[阶段记录](../archive/progress/solver-validation-2026-10-18.md)。
-本轮复用既有测试，计算耗时只记录。
+本轮复用既有测试；M10 按[完整步预算](#performance)判定，以下单位迁移记录保留原测量口径。
+
+### 共同主干整合：2026-10-18
+
+当前工作区已进入单元库存与 MAC 动量的整体替换。
+正式构建通过 `model`、`solver`、`app` 与 `fabric` 主源码、测试源码和客户端依赖；最新结果见本节开头。
+新主干已取得下列连续短流程证据；统一后端预算及 M10 综合验收仍待完成。
+以下旧模型结果保存场景依据，新模型通过同样的宏观流程后再更新结论。
+日志路径均相对于 `build/`。
+
+| 结果 | 原流程与证据 |
+|---|---|
+| 颗粒共同面算子及压力通过 | `m10-profile/granular-integrated.log`；共同平移、近墙浮力、压力总冲量、接触与气腔代数 |
+| 压力及 L 形后继通过 | `m10-profile/marker-integrated.log`；L 形连续 8 步、逐步恢复，同格不同面独立气腔连续后继 |
+| 共同采样、输运及化学微量交接通过 | `m10-remap/reseeding-full.log`；完整剪切及 5000 步溃坝；`components`、`chemical-tails` 与 M7 短组合通过 |
+| 热平流完整入口通过 | `m10-remap/thermal-advection.log`；观察支撑上的响应保持原误差要求，连续解析响应核对二阶网格收敛；重采样动能转热单独入账 |
+| 气腔及连续相变通过 | `m10-profile/air-network-integrated4.log`、`m10-profile/air-cavity-integrated4c.log`；包含液封、多腔、微量气体、完整迁移及五类相变后继与恢复 |
+| 固液微量分配通过 | `m10-profile/reaction-phase-integrated.log`；空物种数值样本、实际质量份额、整数组成与质量、热候选及恢复 |
+| 满液插沙原负载初始化与一个后端步通过 | `m10-drag/large-validation.log`；96 笔投放、1536 颗粒及冷恢复，未提高载体预算；该并发诊断完整步约 13 s，性能未通过 |
+| 旧构建 M8 通过，后继构建出现正常流程失败 | `m10-profile/m8-full-integrated6.log`；沙床沉降、起动与再沉积、两桶 200 步、单桶沉积休眠、10,000 次转换及恢复；单桶第 27 步完成沉积，两桶最终约 1.9% 体积保留为静止代表球 |
+| 完整热学通过 | `m10-remap/thermal-integrated5-final.log`；含热平流、气腔功、连续相变、固液交接及恢复；正比容热膨胀模型的八组线性对流见 `m10-validation-integrated5/wide-convection-current-source.log` |
+| 原 600 步切格流动通过 | `m10-validation-integrated5/cut-cell-full.log`；保留原障碍、装量及步数 |
+| 未来浮点几何及正常后继通过 | `m10-gasgeometry/pour.log`、`m10-gasgeometry/l-shape.log`；原注液和 L 形各连续四步、逐步恢复、无细分；完整气腔及五组热气腔后继通过 |
+| 注油后四桶细沙与恢复通过 | `m10-validation-integrated5/sand-shared-budget.log`；沿原水、油、汞、酸液状态投放四桶细沙，复用共同残量面通量及原操作预算；加沙后的完整运行仍待复核 |
+
+新模型当前证据：
+
+- `m10-cells/validation.log`：单元库存六面联合分配、物种与整数质量、内能、容量、旧候选拒绝与不可变交接。
+- `m10-global-gas/short.log`、`network-short.log`、`network-contracts-short.log`：全网隐式孔流的宏观压差衰减、解析存储响应及严格库存、热账。
+- `m10-mac-short/classes` 中 `MacMomentumAdvectionValidation`：独立编译与运行约一秒，闭环通量和流入干单元的三轴质量一致输运、动量、动能及均匀平移通过。
+  该例验证交错网格中点算子的代数关系，尚未验证完整压力、气腔和颗粒耦合。
+
+- `m10-cells/transport-short.log`：单元有限体积连续输运、切格分量、外部数量交接和恢复。
+- `m10-cells/thermal-short.log`：分段热容平流、有限体积导热、切格绝热及 LTE 候选原子性；N=8/16 的热衰减率相对误差为 1.2785%/0.3209%，符合二阶空间收敛。
+- `m10-cell-state/codec-short.log`、`geometry-short.log`：单元库存与 MAC 的 typed section 存盘往返、冷恢复、正常不可变行交接及共享几何。
+- `m10-phase/interface-new-core.log`、`condensed-batch.log`、`chemical-production.log`：联合气液相变、冻结—恢复—融化后继，以及生产单元化学事务和热约束原子性。
+- `m10-bed-mac/energy-short.log`：床层起动读取权威格面动量，核对势能、实际反作用及代次变化后的原子拒绝。
+- `m10-pressure-cell/short.log`：共同压力散度与作用力互为转置、算子对称非负、薄层及完整液列静水。
+- `m10-common-core/cavities.log`：同格独立气腔在新主源码构建上连续三步、逐步恢复，液体与气体库存保持。
+- `m10-phase-gap/l-shape.log`：新 PLIC 小体积表示下，原 L 形连续八步并逐步恢复，末态动能为初态约 98.3%；属于功能短例，尚未独占核对生产预算。
+- `m10-phase-gap/pour-successors.log`、`l-shape-successors.log`：统一气体时序归属后，原注液四步与原 L 形八步完成并逐步恢复；全部一个子步。
+  原注液功能短跑完整耗时约 164/116/63/59 ms，性能验收仍待独占测量；旧拒绝反例保留在 `m10-common-core/pour.log`。
+- `m10-final-core/macro-rotation.log`：三轴旋转各四步及双密度输运四步，逐步恢复，动能、宏观角动量、各材料体积和整数质量通过。
+- `m10-cells/reaction-short.log`、`tail-short.log`：整批沉淀、合并、热溶解、满液排水、恢复与原子拒绝；零质量几何尾项及非空物种、负质量余量的碰撞往返。
+  短入口运行时间涵盖独立编译与验证，完整生产步预算另测。
+
+- `m10-contact/contacts-formal.log`：固定成本对称 PGS 的正式接触入口通过；9 个代表粒子、23 条接触约束实际访问 1495 行，最大法向闭合残量约 2.04×10⁻⁵ m/s。
+  步长 0.05 s 时对应约 1.02×10⁻⁶ m 位移；固定墙合法位置、成对冲量、固定反力、回弹与耗散检查保留。
+- `m10-contact/bed-capacity-source/` 保存新沙床第二步的 typed 库存与 MAC 失败输入；`m10-capacity/bed-successors.log` 在共同终点容量投影后完成三个后继及恢复。
+  其中第一、三步因微量气腔被填满而细分至 54、1024 子步，耗时约 4.1、18.4 s，性能仍失败；后继改用该失败输入开发。
+- `m10-final-core/cost-failure.log`：控制器在第五个后继遇到 2 nanos 有限气腔容量被填到零，直接单步可重现；正式后端反复细化最终耗尽 4096 累计子步。
+  本次预算采样停在预热阶段，没有控制器和最大 demo 的有效预算结论。压力正容量与共同通量联合结算完成后再测。
+
+旧模型的最新阻塞与预算证据：
+
+- `m10-heat/granular-fast.log`：沙床第 279 步出现 `Contact projection did not converge at carrier velocity precision: particles=9 contacts=23`，旧细分走到 4096 仍失败；后继 M8 未通过。
+- `m10-heat/thermal-full.log`：旧模型完整热学与显式局部机械耗散转热通过，数值存储误差单独记账。
+- `m10-validation-integrated9/sand-complete-successor.log`：原水、油、汞、酸液后的四桶细沙、完整后端步、清空、排气、再注液及恢复通过；并行功能运行中的完整步为 28,348.142 ms、35 子步，预算未通过。
+- `m10-gasgeometry/live-budget1.log`：独占控制器完整步均值 85.784 ms、最大 159.530 ms，超过 40 ms 要求。
+  开发场景前十步均超过 200 ms；后两步受第二 JVM 干扰，不计预算证据。
+- `m10-gasgeometry/live-integrated8.log`：共同 PCG 已完成开发场景连续 20 步，属于并行功能证据；完整步均值约 5,582 ms，性能未通过。
+- `m10-validation-integrated9/containers-full.log` 已中止，未取得完整容器测试结论。
+  旧自由面长溃坝进程在模型替换后已主动终止，日志保留；原 5,000 步完整验收等待最终构建。
+
+
+新气腔与相变准备在独立 JVM 测得沙床启动三步生产耗时 `977.622 / 628.543 / 525.300 ms`，
+额外恢复分别为 `54.890 / 60.743 / 37.050 ms`；`m10-profile/bed-startup-phase-lazy.log`。
+原注液四步完整耗时 `321.606 / 168.298 / 129.019 / 136.826 ms`；`m10-profile/pour-gas-simplified.log`。
+上述为热缓存与未来几何简化前的启动诊断，完整步成本超生产要求；后续独占预算测试按原 40/200 ms 判定。
 
 <a id="si-units"></a>
 ### SI 与定点质量：2026-10-18

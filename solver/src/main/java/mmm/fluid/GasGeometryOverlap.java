@@ -1,69 +1,100 @@
 package mmm.fluid;
 
-import mmm.chemistry.ExactRational;
-import mmm.units.SignedDyadic;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
-import java.util.Objects;
 
-/** Floating-point microbox clipping; returned weights feed exact inventory allocation. */
+
+/** Floating-point convex clipping and microbox overlap volume. */
 final class GasGeometryOverlap {
-	record HalfSpace(SignedDyadic nx,SignedDyadic ny,SignedDyadic nz,SignedDyadic threshold) {
-		HalfSpace { Objects.requireNonNull(nx); Objects.requireNonNull(ny); Objects.requireNonNull(nz); Objects.requireNonNull(threshold); }
-	}
-	private static final int[][] AFFINE_PRODUCTS={{1,2,3},{4,5,6},{5,7,8},{6,8,9},{10,11,12},{11,13,14},{12,14,15},{13,16,17},{14,17,18},{15,18,19}};
+	private static final int[][] FACES={{0,2,6,4},{1,5,7,3},{0,4,5,1},{2,3,7,6},{0,1,3,2},{4,6,7,5}};
 	private GasGeometryOverlap() { }
-	static ExactRational normalizedVolume(int micro,List<HalfSpace> planes) {
-		if(planes.size()==1) return MicroBoxPlaneVolume.dryVolume(micro,planes.getFirst());
-		return integrate(micro,planes,0)[0];
+    record HalfSpace(double nx, double ny, double nz, double threshold) {
+        HalfSpace(mmm.units.SignedDyadic nx, mmm.units.SignedDyadic ny,
+                  mmm.units.SignedDyadic nz, mmm.units.SignedDyadic threshold) {
+            this(nx.toDouble(), ny.toDouble(), nz.toDouble(), threshold.toDouble());
+        }
+    }
+    static double normalizedVolume(int micro, List<HalfSpace> planes) {
+        if (micro < 0 || micro > 7) throw new IllegalArgumentException("Invalid gas microbox");
+        var selected = new ArrayList<HalfSpace>(planes.size());
+        for (var plane : planes) {
+            if (plane == null) continue;
+            double scale = Math.max(Math.abs(plane.nx()), Math.max(Math.abs(plane.ny()), Math.abs(plane.nz())));
+            if (scale == 0) { if (plane.threshold() > 0) return 0; else continue; }
+            var normalized = new HalfSpace(plane.nx() / scale, plane.ny() / scale, plane.nz() / scale, plane.threshold() / scale);
+            if (!selected.contains(normalized)) selected.add(normalized);
+        }
+        if (selected.isEmpty()) return .125;
+        if (selected.size() == 1) return MicroBoxPlaneVolume.dryVolume(micro, selected.getFirst());
+        List<List<double[]>> faces = box(micro);
+        for (var plane : selected) {
+            faces = clip(faces, new double[]{plane.nx(), plane.ny(), plane.nz()}, plane.threshold());
+            if (faces.isEmpty()) return 0;
+        }
+        double[] centre = new double[3]; int vertices = 0;
+        for (var face : faces) for (var point : face) {
+            for (int a = 0; a < 3; a++) centre[a] += point[a];
+            vertices++;
+        }
+        if (vertices == 0) return 0;
+        for (int a = 0; a < 3; a++) centre[a] /= vertices;
+        double volume = 0;
+        for (var face : faces) for (int i = 1; i + 1 < face.size(); i++) {
+            double[] a = difference(face.getFirst(), centre), b = difference(face.get(i), centre), c = difference(face.get(i + 1), centre);
+            volume += Math.abs(dot(a, cross(b, c))) / 6;
+        }
+        return Math.clamp(volume, 0, .125);
+    }
+    static boolean hasPositiveOverlap(int micro, HalfSpace before, HalfSpace after) {
+        if (before == null) return after == null || MicroBoxPlaneVolume.dryVolume(micro, after) > 0;
+        if (after == null) return MicroBoxPlaneVolume.dryVolume(micro, before) > 0;
+        return normalizedVolume(micro, List.of(before, after)) > 0;
+    }
+    private static double[] difference(double[] a, double[] b) {
+        return new double[]{a[0] - b[0], a[1] - b[1], a[2] - b[2]};
+    }
+	private static List<List<double[]>> box(int micro) {
+		double[][] points=new double[8][3];
+		for(int p=0;p<8;p++) for(int a=0;a<3;a++) points[p][a]=((micro>>>a&1)+(p>>>a&1))*.5;
+		var faces=new ArrayList<List<double[]>>(6);
+		for(var indices:FACES) { var face=new ArrayList<double[]>(4); for(int i:indices) face.add(points[i]); faces.add(face); }
+		return faces;
 	}
-	static ExactRational[] normalizedMoments(int micro,List<HalfSpace> planes) { return integrate(micro,planes,1); }
-	static ExactRational[] normalizedSecondMoments(int micro,List<HalfSpace> planes) { return integrate(micro,planes,2); }
-	static ExactRational unionVolume(int micro,List<List<HalfSpace>> supports) {
-		double volume=0; for(var support:supports) volume+=normalizedVolume(micro,support).toDouble();
-		return MicroBoxPlaneVolume.rational(volume);
-	}
-	static ExactRational unionOverlapVolume(int micro,List<List<HalfSpace>> before,List<List<HalfSpace>> after) {
-		double volume=0;
-		for(var a:before) for(var b:after) { var planes=new ArrayList<>(a); planes.addAll(b); volume+=normalizedVolume(micro,planes).toDouble(); }
-		return MicroBoxPlaneVolume.rational(volume);
-	}
-	static boolean hasPositiveOverlap(int micro,HalfSpace before,HalfSpace after) {
-		var planes=new ArrayList<HalfSpace>(2); if(before!=null) planes.add(before); if(after!=null) planes.add(after);
-		return normalizedVolume(micro,planes).signum()>0;
-	}
-	static ExactRational maximumLinearValue(int micro,HalfSpace support,HalfSpace function) {
-		double[] distances=new double[8],values=new double[8]; double maximum=0; boolean positive=false;
-		for(int corner=0;corner<8;corner++) {
-			distances[corner]=cornerDistance(micro,corner,support); values[corner]=cornerDistance(micro,corner,function);
-			positive|=distances[corner]>0;
-			if(distances[corner]>=0) maximum=Math.max(maximum,values[corner]);
+	private static List<List<double[]>> clip(List<List<double[]>> faces,double[] n,double threshold) {
+		double scale=Math.max(Math.abs(n[0]),Math.max(Math.abs(n[1]),Math.abs(n[2])));
+		if(scale==0) return threshold<=0?faces:List.of();
+		for(int a=0;a<3;a++) n[a]/=scale; threshold/=scale;
+		var result=new ArrayList<List<double[]>>(faces.size()+1); var cap=new ArrayList<double[]>();
+		for(var face:faces) {
+			var output=new ArrayList<double[]>(); double[] previous=face.getLast(); double dp=distance(n,previous,threshold);
+			for(var current:face) {
+				double dc=distance(n,current,threshold);
+				if((dp<0)!=(dc<0)) {
+					double t=dp/(dp-dc); double[] point=new double[3];
+					for(int a=0;a<3;a++) point[a]=Math.fma(t,current[a]-previous[a],previous[a]);
+					output.add(point); cap.add(point);
+				}
+				if(dc>=0) output.add(current);
+				previous=current; dp=dc;
+			}
+			if(output.size()>=3) result.add(output);
 		}
-		if(!positive) return ExactRational.ZERO;
-		for(int corner=0;corner<8;corner++) for(int axis=0;axis<3;axis++) if((corner&1<<axis)==0) {
-			int peer=corner|1<<axis;
-			if((distances[corner]<0)==(distances[peer]<0)) continue;
-			double t=distances[corner]/(distances[corner]-distances[peer]);
-			maximum=Math.max(maximum,Math.fma(t,values[peer]-values[corner],values[corner]));
-		}
-		return MicroBoxPlaneVolume.rational(maximum);
-	}
-	private static double cornerDistance(int micro,int corner,HalfSpace p) {
-		return p.nx.toDouble()*((micro&1)+(corner&1))*.5+p.ny.toDouble()*((micro>>>1&1)+(corner>>>1&1))*.5
-				+p.nz.toDouble()*((micro>>>2&1)+(corner>>>2&1))*.5-p.threshold.toDouble();
-	}
-	static ExactRational[] normalizedAffineSecondMoments(int micro,List<HalfSpace> planes,ExactRational[] coefficients) {
-		if(coefficients==null || coefficients.length!=4) throw new IllegalArgumentException("Affine overlap requires four coefficients");
-		int order=coefficients[1].isZero()&&coefficients[2].isZero()&&coefficients[3].isZero()?2:3;
-		var moments=integrate(micro,planes,order); var result=new ExactRational[10];
-		for(int k=0;k<10;k++) {
-			double value=moments[k].toDouble()*coefficients[0].toDouble();
-			for(int a=0;a<3;a++) if(!coefficients[a+1].isZero()) value=Math.fma(moments[AFFINE_PRODUCTS[k][a]].toDouble(),coefficients[a+1].toDouble(),value);
-			result[k]=MicroBoxPlaneVolume.rational(value);
+		if(cap.size()>=3) {
+			double[] centre=new double[3]; for(var p:cap) for(int a=0;a<3;a++) centre[a]+=p[a]/cap.size();
+			int axis=Math.abs(n[0])<Math.abs(n[1])?0:1; if(Math.abs(n[2])<Math.abs(n[axis])) axis=2;
+			double[] seed=new double[3]; seed[axis]=1; double[] u=cross(n,seed),v=cross(n,u);
+			cap.sort(Comparator.comparingDouble(p->Math.atan2(dotDifference(v,p,centre),dotDifference(u,p,centre))));
+			result.add(cap);
 		}
 		return result;
 	}
-	private static ExactRational[] integrate(int micro,List<HalfSpace> planes,int order) {
-		return MicroBoxPlaneMoments.integrate(micro,planes,order);
-	}
+    private static double distance(double[] normal, double[] point, double threshold) {
+        double value = dot(normal, point) - threshold;
+        double scale = Math.abs(normal[0] * point[0]) + Math.abs(normal[1] * point[1]) + Math.abs(normal[2] * point[2]) + Math.abs(threshold);
+        return Math.abs(value) <= 8 * Math.ulp(scale) ? 0 : value;
+    }
+	private static double dot(double[] a,double[] b) { return Math.fma(a[0],b[0],Math.fma(a[1],b[1],a[2]*b[2])); }
+	private static double dotDifference(double[] a,double[] p,double[] c) { return a[0]*(p[0]-c[0])+a[1]*(p[1]-c[1])+a[2]*(p[2]-c[2]); }
+	private static double[] cross(double[] a,double[] b) { return new double[]{a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]}; }
 }

@@ -148,7 +148,7 @@ public record RegionManifest(
 				|| speciesPalette.isEmpty() || speciesPalette.size() > ChemicalLimits.MAX_SPECIES
 				|| chemicalSpeciesTotals.length != speciesPalette.size()
 				|| chemicalMixtures.size() > totalMarkerCount
-				|| totalMarkerCount > 0 && chemicalMixtures.isEmpty()) {
+				) {
 			throw new IllegalArgumentException("Invalid chemical region manifest");
 		}
 		long quanta = 0L;
@@ -202,7 +202,7 @@ public record RegionManifest(
 	public boolean hasChemicalState() {
 		return layout.requiresChemistry() || layout.permitsOptionalChemistry() && !registryFingerprint.isEmpty();
 	}
-	public boolean hasGasState() { return layout.requiresThermal() && hasExtension("mmm:gas_manifest"); }
+	public boolean hasGasState() { return hasExtension("mmm:gas_manifest"); }
 	public boolean hasGranularState() {
 		return layout.requiresGranular() || layout.requiresThermal() && hasExtension("mmm:granular_manifest");
 	}

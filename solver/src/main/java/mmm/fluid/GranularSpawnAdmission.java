@@ -67,13 +67,17 @@ final class GranularSpawnAdmission {
 		next[count] = head[cell]; head[cell] = count++;
 	}
 
-	/** Stored sphere centers have binary32 resolution, shared with contact detection. */
+	/** Unresolved representative contacts admit one thousandth of the smaller radius. */
+	static double positionTolerance(double radius, double otherRadius) { return .001 * Math.min(radius, otherRadius); }
+
+	/** Stored-coordinate rounding and the shared representative contact resolution. */
 	static boolean interiorsOverlap(double x, double y, double z, double r,
 	                                double ox, double oy, double oz, double otherRadius) {
 		double rounding = Math.hypot(Math.hypot((double) Math.ulp((float) x) + Math.ulp((float) ox),
 				(double) Math.ulp((float) y) + Math.ulp((float) oy)),
 				(double) Math.ulp((float) z) + Math.ulp((float) oz));
-		return Math.hypot(Math.hypot(x - ox, y - oy), z - oz) < r + otherRadius - rounding;
+		return Math.hypot(Math.hypot(x - ox, y - oy), z - oz)
+				< r + otherRadius - rounding - positionTolerance(r, otherRadius);
 	}
 
 	private int coordinate(double p, int size) {

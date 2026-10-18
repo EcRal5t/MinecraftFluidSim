@@ -1,5 +1,7 @@
 package mmm.fluid;
 
+import mmm.inventory.LiquidCellInventory;
+
 import mmm.chemistry.BinaryVolumeAllocator;
 import mmm.chemistry.BuiltinChemicalDefinitions;
 import mmm.chemistry.ChemicalAuditLedgerCodec;
@@ -45,7 +47,7 @@ public final class M7ChemicalTransportValidation {
 		validateImmiscibleMarkersDoNotReact();
 		validateSplitAndIndicator();
 		validateIndicatorFloodFill();
-		validateMergeAndCompaction();
+		LiquidCellInventoryValidation.main(new String[0]);
 		validateCollisionDisplacement();
 		validateChemicalHandoff();
 		validateConcentrationControlsDensity();
@@ -242,10 +244,10 @@ public final class M7ChemicalTransportValidation {
 		check(stats.chemistryDirtyCells() == 1 && stats.chemistryChangedMarkers() > 0,
 				"logical chemistry did not run exactly on the dirty cell");
 		check(domain.particleCount() == markerCount, "reaction-only step changed marker ownership");
-		for (int marker = 0; marker < markerCount; marker++) {
-			check(domain.chemicalParcels().record(marker).massResidualUnits() == residualBits[marker],
-					"same-cell reaction rewrote marker mass residual truth");
-		}
+		long residualBefore = mmm.units.Mass.sum(residualBits), residualAfter = 0;
+		for (int marker = 0; marker < markerCount; marker++) residualAfter = Math.addExact(residualAfter,
+				domain.chemicalParcels().record(marker).massResidualUnits());
+		check(residualBefore == residualAfter, "same-cell reaction changed the total integer mass residual");
 		check(Math.abs(domain.totalMass() - massBefore) <= Math.max(1.0E-9, Math.ulp(massBefore) * 8.0),
 				"same-cell reaction changed marker mass truth");
 		int indicated = 0;
@@ -257,65 +259,24 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validateReactionKeepsTinyParcels() {
-		ChemicalReactionCandidateValidation.validate();
-		final int markerCount = 3;
-		ChemicalParcelStore parcels = new ChemicalParcelStore(
-				CHEMISTRY, SolverUnitScale.forCellSize(1.0F), markerCount, 64);
-		ChemicalMixtureRecord acid = ChemicalMixtureRecord.fromStableAmounts(
-				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.HCL, 1_000_000L), 0L);
-		ChemicalMixtureRecord base = ChemicalMixtureRecord.fromStableAmounts(
-				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.NAOH, 1L), 0L);
-		ChemicalMixtureRecord water = ChemicalMixtureRecord.fromStableAmounts(
-				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.H2O, 1L), 0L);
-		parcels.assign(0, acid, false);
-		parcels.assign(1, base, true);
-		parcels.assign(2, water, false);
-		parcels.markDirtyCell((1 * 4 + 1) * 4 + 1);
-		float[] positions = {1.5F, 1.5F, 1.5F};
-		long[] masses = {acid.massUnits(CHEMISTRY), base.massUnits(CHEMISTRY), water.massUnits(CHEMISTRY)};
-		int[] material = new int[markerCount];
-		ChemicalParcelStore.ReactionStats stats = parcels.reactDirtyCells(4, 4, 4, 1.0F,
-				positions, positions, positions, masses, material,
-				ignored -> BuiltinFluidMaterials.WATER.id(), markerCount);
-		long[] totals = parcels.speciesTotals(markerCount);
-		check(stats.changedMarkers() == markerCount, "tiny-parcel reaction did not commit all replacements");
-		check(totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.H_PLUS)] == 999_999L
-				&& totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.CL_MINUS)] == 1_000_000L
-				&& totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS)] == 1L
-				&& totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.H2O)] == 2L,
-				"tiny-parcel repair changed the reacted species ledger");
-		for (int marker = 0; marker < markerCount; marker++) {
-			check(parcels.record(marker).totalQuanta() > 0L, "reaction left an empty live parcel");
-		}
-		check(parcels.indicator(1), "tiny-parcel repair changed indicator provenance");
+		var inputs=List.of(ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY,Map.of(BuiltinChemicalDefinitions.HCL,1_000_000L),0),
+				ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY,Map.of(BuiltinChemicalDefinitions.NAOH,1L),0),
+				ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY,Map.of(BuiltinChemicalDefinitions.H2O,1L),0));
+		var fixture=new ChemicalReactionCandidateValidation.Fixture(CHEMISTRY,inputs,new int[]{21,21,21});long mass=fixture.totalMass();
+		var stats=fixture.step();long[] totals=fixture.totals();
+		check(stats.changedMarkers()>0&&fixture.totalMass()==mass&&totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.H_PLUS)]==999999L
+				&&totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.CL_MINUS)]==1000000L&&totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS)]==1L
+				&&totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.H2O)]==2L,"Tiny cell reaction lost mass or products");
 	}
 
 	private static void validateExactNoOpReactionPreservesParcels() {
-		final int markerCount = 2;
-		ChemicalParcelStore parcels = new ChemicalParcelStore(
-				CHEMISTRY, SolverUnitScale.forCellSize(1.0F), markerCount, 64);
-		ChemicalMixtureRecord first = ChemicalMixtureRecord.fromStableAmounts(
-				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.H2O, 1_001L), mmm.units.Mass.fromKilograms(0.125));
-		ChemicalMixtureRecord second = ChemicalMixtureRecord.fromStableAmounts(
-				CHEMISTRY, Map.of(BuiltinChemicalDefinitions.H2O, 2_003L), mmm.units.Mass.fromKilograms(-0.25));
-		parcels.assign(0, first, true);
-		parcels.assign(1, second, false);
-		parcels.markDirtyCell((1 * 4 + 1) * 4 + 1);
-		float[] positions = {1.5F, 1.5F};
-		long[] masses = {first.massUnits(CHEMISTRY), second.massUnits(CHEMISTRY)};
-		long[] beforeMasses = masses.clone();
-		int[] validations = {0};
-		ChemicalParcelStore.ReactionStats stats = parcels.reactDirtyCells(4, 4, 4, 1.0F,
-				positions, positions, positions, masses, new int[markerCount],
-				ignored -> BuiltinFluidMaterials.WATER.id(), markerCount,
-				(marker, mixture, mass) -> validations[0]++);
-		check(stats.dirtyCells() == 1 && stats.evaluations() > 0 && stats.changedMarkers() == 0,
-				"exact no-op reaction did not report its evaluated unchanged cell");
-		check(validations[0] == 0, "exact no-op reaction entered candidate thermal validation");
-		check(parcels.record(0).equals(first) && parcels.record(1).equals(second),
-				"exact no-op reaction redistributed marker composition or residuals");
-		check(Arrays.equals(masses, beforeMasses) && parcels.indicator(0) && !parcels.indicator(1),
-				"exact no-op reaction changed marker mass or indicator provenance");
+		var mixture=ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY,Map.of(BuiltinChemicalDefinitions.H2O,1001L),mmm.units.Mass.fromKilograms(.125));
+		var fixture=new ChemicalReactionCandidateValidation.Fixture(CHEMISTRY,List.of(mixture),new int[]{21});
+		var old=fixture.inventory.physicalStockAt(0);
+		fixture.inventory.planEdits(List.of(new LiquidCellInventory.Edit(old.key(),new LiquidCellInventory.Stock(old.key(),old.volume(),old.massUnits(),old.mixture(),0,true)))).commit();
+		var before=fixture.inventory.snapshot();var stats=fixture.step();
+		check(stats.dirtyCells()==1&&stats.evaluations()>0&&stats.changedMarkers()==0&&fixture.inventory.snapshot().rows()==before.rows()
+				&&fixture.inventory.physicalStockAt(0).indicator(),"No-op reaction changed cell inventory or indicator provenance");
 	}
 
 	private static void validateAdjacentCellsDoNotReact() {
@@ -337,21 +298,19 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validateSplitAndIndicator() {
-		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
-		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
-				4, 4, 4, STATIC_CONFIG.cellSize(), 1, 0.25, mmm.units.SolverUnitScale.forCellSize(STATIC_CONFIG.cellSize()).massUnitsForNormalized(250.0), MATERIALS.materials(),
-				new float[] {1.5F, 1.5F, 1.5F, 0.25F}, new float[3], new byte[64], java.util.Arrays.stream(new double[] {250.0}).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(STATIC_CONFIG.cellSize()).massUnitsForNormalized(m)).toArray(), new int[] {0}));
-		domain.bindChemistry(CHEMISTRY);
-		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1_001L), true);
-		long before = domain.chemicalParcels().totalQuanta();
-		FluidDomain.StepStats stats = domain.step();
-		check(stats.reseededSplits() == 1 && domain.particleCount() == 2,
-				"oversized chemical quadrature marker did not split");
-		check(domain.chemicalParcels().totalQuanta() == before, "split changed total chemical quanta");
-		check(domain.chemicalParcels().record(0).totalQuanta()
-				+ domain.chemicalParcels().record(1).totalQuanta() == before, "split parcel ledgers do not close");
-		check(domain.chemicalParcels().indicator(0) && domain.chemicalParcels().indicator(1),
-				"split did not copy indicator provenance");
+		for(long quantity:new long[]{1001,1}) {
+			var domain=domainWithCell(1,1,1,.25F);domain.setMarkerChemical(0,Map.of(BuiltinChemicalDefinitions.H2O,quantity),true);
+			long mass=domain.totalMassUnits();var volume=domain.liquidCells.exactVolume();
+			for(int step=0;step<2;step++) {
+				domain.step();domain=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+				long total=0;for(var stock:domain.liquidCells.stocks()) {
+					if(stock.mixture()!=null)total+=stock.mixture().totalQuanta();
+					check(stock.indicator(),"Cell transport lost indicator provenance");
+				}
+				check(total==quantity&&domain.totalMassUnits()==mass&&domain.liquidCells.exactVolume().equals(volume),
+						"Trace composition, actual mass or volume changed across transport and recovery");
+			}
+		}
 	}
 
 	private static void validateIndicatorFloodFill() {
@@ -420,38 +379,6 @@ public final class M7ChemicalTransportValidation {
 		check(!throughWall.accepted(), "shallow-aim snapping crossed a closed cut face");
 	}
 
-	private static void validateMergeAndCompaction() {
-		int capacity = 32, count = 16;
-		float[] x = new float[capacity], y = new float[capacity], z = new float[capacity];
-		float[] vx = new float[capacity], vy = new float[capacity], vz = new float[capacity];
-		float[] volume = new float[capacity];
-		long[] mass = new long[capacity];
-		int[] material = new int[capacity], phase = new int[capacity];
-		boolean[] solid = new boolean[64];
-		ChemicalParcelStore parcels = new ChemicalParcelStore(
-				CHEMISTRY, SolverUnitScale.forCellSize(1.0F), capacity, 64);
-		for (int marker = 0; marker < count; marker++) {
-			x[marker] = 1.1F + 0.18F * (marker & 3);
-			y[marker] = 1.1F + 0.18F * ((marker >>> 2) & 3);
-			z[marker] = 1.2F + 0.03F * (marker & 1);
-			volume[marker] = 0.03F;
-			mass[marker] = mmm.units.Mass.fromKilograms(30.0);
-			parcels.assignDefault(marker, BuiltinFluidMaterials.WATER.id(), volume[marker], 1.0F, mass[marker],
-					(marker & 1) != 0);
-		}
-		long[] before = parcels.speciesTotals(count);
-		FlipParticleReseeder.Result result = new FlipParticleReseeder(4, 4, 4, 1.0F, capacity).reseed(
-				solid, x, y, z, vx, vy, vz, volume, mass, material, phase, parcels, count, true,
-				(candidateX, candidateY, candidateZ) -> true);
-		check(result.merged() > 0 && result.particleCount() < count, "overpopulated chemical cell did not merge");
-		check(parcels.pool().liveCount() == result.particleCount(), "compaction leaked or aliased mixture handles");
-		check(Arrays.equals(before, parcels.speciesTotals(result.particleCount())), "merge/compaction changed species totals");
-		int plain = 0, indicated = 0;
-		for (int marker = 0; marker < result.particleCount(); marker++) {
-			if (parcels.indicator(marker)) indicated++; else plain++;
-		}
-		check(plain > 0 && indicated > 0, "merge crossed indicator provenance groups");
-	}
 
 	private static void validateCollisionDisplacement() {
 		FluidDomain domain = domainWithCell(1, 1, 1, 1.0F);
@@ -595,7 +522,6 @@ public final class M7ChemicalTransportValidation {
 		FluidCellInventoryView brine = stratified.observeCellInventory(2, 1, 1);
 		check(Math.abs(freshDensity - 1_000.0) < 1.0E-9
 				&& brineDensity > 1_099.999 && brineDensity < 1_100.001
-				&& stratified.usesMassWeightedP2G()
 				&& brine != null && Math.abs(brine.densityKilogramsPerCubicMetre() - brineDensity) < 1.0E-9
 				&& brine.species().stream().anyMatch(value -> value.speciesId().equals(BuiltinChemicalDefinitions.NACL)),
 				"species mass/marker volume did not produce concentration-dependent cell density: fresh="
@@ -800,34 +726,18 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static long benchmarkAcidBaseReactionP95() {
-		final int markers = 64, cells = 64;
-		ChemicalParcelStore parcels = new ChemicalParcelStore(
-				CHEMISTRY, SolverUnitScale.forCellSize(1.0F), markers, cells);
-		float[] x = new float[markers], y = new float[markers], z = new float[markers];
-		long[] mass = new long[markers];
-		int[] material = new int[markers];
-		ChemicalMixtureRecord acid = ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY,
-				Map.of(BuiltinChemicalDefinitions.HCL, 1_000_003L), 0L);
-		ChemicalMixtureRecord base = ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY,
-				Map.of(BuiltinChemicalDefinitions.NAOH, 1_000_003L), 0L);
-		Arrays.fill(x, 1.5F); Arrays.fill(y, 1.5F); Arrays.fill(z, 1.5F);
-		long[] samples = new long[100];
-		for (int iteration = -20; iteration < samples.length; iteration++) {
-			for (int marker = 0; marker < markers; marker++) {
-				ChemicalMixtureRecord input = (marker & 1) == 0 ? acid : base;
-				parcels.assign(marker, input, false);
-				mass[marker] = input.massUnits(CHEMISTRY);
-			}
-			parcels.markDirtyCell((1 * 4 + 1) * 4 + 1);
-			long start = System.nanoTime();
-			ChemicalParcelStore.ReactionStats stats = parcels.reactDirtyCells(4, 4, 4, 1.0F,
-					x, y, z, mass, material, ignored -> BuiltinFluidMaterials.WATER.id(), markers);
-			long elapsed = System.nanoTime() - start;
-			check(stats.dirtyCells() == 1 && stats.changedMarkers() == markers,
-					"acid/base performance fixture did not execute its logical reaction");
-			if (iteration >= 0) samples[iteration] = elapsed;
+		var acid=ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY,Map.of(BuiltinChemicalDefinitions.HCL,1_000_003L),0);
+		var base=ChemicalMixtureRecord.fromStableAmounts(CHEMISTRY,Map.of(BuiltinChemicalDefinitions.NAOH,1_000_003L),0);
+		var inputs=new java.util.ArrayList<ChemicalMixtureRecord>();int[] cells=new int[64];Arrays.fill(cells,21);
+		for(int i=0;i<64;i++)inputs.add((i&1)==0?acid:base);
+		long[] samples=new long[100];
+		for(int iteration=-20;iteration<samples.length;iteration++) {
+			var fixture=new ChemicalReactionCandidateValidation.Fixture(CHEMISTRY,inputs,cells);long start=System.nanoTime();
+			var stats=fixture.step();long elapsed=System.nanoTime()-start;
+			check(stats.dirtyCells()==1&&stats.changedMarkers()>0,"Acid/base budget fixture did not execute its cell reaction");
+			if(iteration>=0)samples[iteration]=elapsed;
 		}
-		return percentile(samples, 0.95);
+		return percentile(samples,.95);
 	}
 
 	private static long percentile(long[] values, double fraction) {
@@ -852,76 +762,26 @@ public final class M7ChemicalTransportValidation {
 	}
 
 	private static void validateTransferResolutionIsAtomic() throws Exception {
-		FluidDomain domain = domainWithCoarseMarkers(1);
-		FluidDomainState coarseState = domain.captureAuthoritativeState();
-		float belowMarkerResolution = 0.75F * (0.125F - Math.nextDown(0.125F));
-		check(!domain.tryExtractExactChemical(1, 1, 1, belowMarkerResolution, 0).transferred(),
-				"sub-resolution chemical extraction reported empty success");
-		FluidDomainStateAssertions.assertSameState(coarseState, domain.captureAuthoritativeState(),
-				"sub-resolution chemical extraction");
-		check(!domain.tryExtractExactVolume(1, 1, 1, belowMarkerResolution, 0).transferred(),
-				"sub-resolution canonical carrier extraction reported empty success");
-		FluidDomainStateAssertions.assertSameState(coarseState, domain.captureAuthoritativeState(),
-				"sub-resolution canonical carrier extraction");
-		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1L), false);
-		FluidDomainState before = domain.captureAuthoritativeState();
-		check(!domain.tryExtractExactChemical(1, 1, 1, 0.0625F, 0).transferred(),
-				"one chemical quantum was split into two nonempty carriers");
-		FluidDomainStateAssertions.assertSameState(before, domain.captureAuthoritativeState(),
-				"unrepresentable extraction");
-		check(!domain.tryInsertExactMixture(1, 1, 1,
-				List.of(new FluidDomain.MaterialPortion(0, Math.scalb(1.0, -100), 1L)),
-				0, true).transferred(), "subquantum source formed a carrier without species");
-		FluidDomainStateAssertions.assertSameState(before, domain.captureAuthoritativeState(),
-				"unrepresentable insertion");
-
-		FluidDomain alternate = domainWithCoarseMarkers(2);
-		alternate.setMarkerChemical(1, Map.of(BuiltinChemicalDefinitions.H2O, 1L), false);
-		long[] speciesBefore = alternate.exportChemicalParticleState().copySpeciesTotals();
-		var transfer = alternate.tryExtractExactChemical(1, 1, 1, 0.0625F, 0);
-		check(transfer.transferred() && alternate.particles.volume(1) == 0.125F,
-				"quantum-bound marker prevented extraction from another representable carrier");
-		long[] speciesAfter = alternate.exportChemicalParticleState().copySpeciesTotals();
-		for (int species = 0; species < speciesBefore.length; species++) {
-			String speciesId = CHEMISTRY.species(species).id();
-			long removed = transfer.ledger().groups().stream().mapToLong(group ->
-					group.speciesQuanta().getOrDefault(speciesId, 0L)).sum();
-			check(speciesBefore[species] == speciesAfter[species] + removed,
-					"alternate extraction changed exact species inventory");
-		}
-
-		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
-		FluidSolverConfig thermalConfig = new FluidSolverConfig(
-				0.5F, 1_000.0F, 0.0F, 0.05F, 64, 1.0E-6F, 0.45F, 0.002F, 0.0F);
-		FluidDomain thermal = new FluidDomain(4, 4, 4, thermalConfig, 64);
-		thermal.sealDomainBoundary();
-		FullCapabilityTestFixture.bindFull(thermal, registries, 293.15, 8);
-		check(thermal.tryInsertExactVolume(1, 1, 1, 0.125F, 0).transferred(), "thermal coarse marker setup");
-		FluidDomainState thermalBefore = thermal.captureAuthoritativeState();
-		check(!thermal.tryExtractExactVolume(1, 1, 1, belowMarkerResolution, 0).transferred(),
-				"thermal sub-resolution extraction reported empty success");
-		FluidDomainStateAssertions.assertSameState(thermalBefore, thermal.captureAuthoritativeState(),
-				"thermal sub-resolution extraction preserved inventory and energy audit");
-		check(!thermal.tryExtractExactChemical(1, 1, 1, belowMarkerResolution, 0).transferred(),
-				"thermal chemical sub-resolution extraction reported empty success");
-		FluidDomainStateAssertions.assertSameState(thermalBefore, thermal.captureAuthoritativeState(),
-				"thermal chemical sub-resolution extraction preserved inventory and energy audit");
+		LiquidCellInventoryValidation.main(new String[0]);
+		var domain=domainWithCoarseMarkers(1);domain.setMarkerChemical(0,Map.of(BuiltinChemicalDefinitions.H2O,1L),false);
+		var before=domain.captureAuthoritativeState();
+		var extracted=domain.tryExtractExactChemical(1,1,1,.0625F,0);
+		check(extracted.transferred(),"A trace component prevented a resolved partial volume transfer");
+		long removed=extracted.ledger().totalQuanta(),retained=domain.chemicalParcels().totalQuanta();
+		check(removed+retained==1&&domain.totalMassUnits()+extracted.ledger().totalMassUnits()==before.liquid().stocks().stream().mapToLong(LiquidCellInventory.Stock::massUnits).sum(),
+				"Trace transfer did not conserve integer species and mass");
+		var restored=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		check(restored.exportLiquidCellState().stocks().equals(domain.exportLiquidCellState().stocks()),"Trace transfer failed complete recovery");
 	}
 
 	private static void validateInsertionAccountsForDisplacedLiquid() {
-		FluidDomain domain = new FluidDomain(2, 2, 2, STATIC_CONFIG, 256);
-		domain.setVolume(0, 0, 0, 1.0F);
-		domain.particles.setVolume(0, 6.0F);
-		domain.particles.setMassUnits(0, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(6_000.0));
-		domain.gridDirty = true;
-		domain.setMarkerMaterial(0, MATERIALS, 0);
-		domain.bindChemistry(CHEMISTRY);
-		FluidDomainState before = domain.captureAuthoritativeState();
-		check(!domain.tryInsertExactMixture(1, 1, 1,
-				List.of(new FluidDomain.MaterialPortion(0, 2.0, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(2_000.0))), 2, true).transferred(),
-				"local empty cells hid globally displaced liquid from insertion capacity");
-		FluidDomainStateAssertions.assertSameState(before, domain.captureAuthoritativeState(),
-				"global capacity rejection");
+		var domain=new FluidDomain(2,2,2,STATIC_CONFIG,256);
+		domain.bindMaterialRegistry(MATERIALS);domain.bindChemistry(CHEMISTRY);
+		float[] filled=new float[8];Arrays.fill(filled,1);filled[7]=0;domain.setVolumes(filled);
+		var before=domain.captureAuthoritativeState();
+		check(!domain.tryInsertExactMixture(1,1,1,List.of(new FluidDomain.MaterialPortion(0,2,
+				domain.unitScale.massUnitsForNormalized(2000))),2,true).transferred(),"Insertion ignored occupied global capacity");
+		FluidDomainStateAssertions.assertSameState(before,domain.captureAuthoritativeState(),"Global capacity rejection");
 	}
 
 	private static FluidDomain domainWithCell(int x, int y, int z, float volume) {

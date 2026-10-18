@@ -14,8 +14,8 @@ public final class BoundaryPourDiagnostic {
 			else if (argument.startsWith("--steps=")) { steps = Integer.parseInt(argument.substring(8)); if (steps < 1) throw new IllegalArgumentException("Positive step count required"); }
 			else throw new IllegalArgumentException("Boundary pour accepts --flux and --l-shape");
 		}
-		var domain = lShape ? CellRemapMomentsValidation.lShapedTranslationSource() : pouredSource();
-		var inventory = CellRemapMomentsValidation.Inventory.capture(domain);
+		var domain = lShape ? LiquidMacroscopicMotionValidation.lShapedTranslationSource() : pouredSource();
+		var inventory = LiquidMacroscopicMotionValidation.Inventory.capture(domain);
 		var backend = new CpuFluidSolverBackend(); String fixture = lShape ? "l-shape" : "sealed-pour";
 		for (int step = 0; step < steps; step++) {
 			long started = System.nanoTime(); var source = domain.captureAuthoritativeState();
@@ -35,7 +35,7 @@ public final class BoundaryPourDiagnostic {
 					fixture, step, fullMs, (captured - started) / 1e6, (computed - captured) / 1e6,
 					candidate.stats().substeps(), candidate.mechanicalResolution().reservedSubsteps(), candidate.stats().pressureIterations(),
 					(double) candidate.stats().pressureResidual(), (double) domain.maximumParticleSpeed(), domain.particleCount(),
-					domain.gasState.network.nodeCount(), CellRemapMomentsValidation.Motion.capture(domain).kinetic());
+					domain.gasState.network.nodeCount(), LiquidMacroscopicMotionValidation.Motion.capture(domain).kinetic());
 			if (flux) System.out.println("POUR transport " + candidate.stats().liquidTransport());
 		}
 		System.out.println("Boundary pour completed " + steps + " full steps including capture/restore: " + fixture);
