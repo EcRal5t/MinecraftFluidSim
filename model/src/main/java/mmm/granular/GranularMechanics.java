@@ -44,7 +44,7 @@ public final class GranularMechanics {
 			double oldX = parcel.velocityX(), oldY = parcel.velocityY(), oldZ = parcel.velocityZ();
 			double newX = oldX, newY = oldY, newZ = oldZ;
 			double fluidX = 0.0, fluidY = 0.0, fluidZ = 0.0;
-			double solidVolumeM3 = parcel.solidVolumeSvq() / (double) SolidVolume.SVQ_PER_BV;
+			double solidVolumeM3 = parcel.solidVolumeSvq() / (double) SolidVolume.SVQ_PER_CUBIC_METER;
 			double massKg = parcel.mass();
 			if (!(Double.isFinite(massKg) && massKg > 0.0)) throw new IllegalStateException("Invalid parcel mass scale");
 			double buoyancyAcceleration = fluid.hasLiquid() && !environment.buoyancyResolvedByPressure()

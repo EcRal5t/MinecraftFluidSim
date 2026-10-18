@@ -87,8 +87,8 @@ public final class MaterialRegistryCodec {
 				CompoundTag value = new CompoundTag();
 				value.putLong("MinimumBits", Double.doubleToRawLongBits(segment.minimumTemperatureK()));
 				value.putLong("MaximumBits", Double.doubleToRawLongBits(segment.maximumTemperatureK()));
-				value.putLong("MinimumViscosityBits", Double.doubleToRawLongBits(segment.dynamicViscosityPaPerSAtMinimum()));
-				value.putLong("MaximumViscosityBits", Double.doubleToRawLongBits(segment.dynamicViscosityPaPerSAtMaximum()));
+				value.putLong("MinimumViscosityBits", Double.doubleToRawLongBits(segment.dynamicViscosityPascalSecondsAtMinimum()));
+				value.putLong("MaximumViscosityBits", Double.doubleToRawLongBits(segment.dynamicViscosityPascalSecondsAtMaximum()));
 				viscosity.add(value);
 			}
 			tag.put("Viscosity", viscosity);

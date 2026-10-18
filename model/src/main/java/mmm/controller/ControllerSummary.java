@@ -121,7 +121,7 @@ public record ControllerSummary(
 			long gasStandardVolumeNanos,
 			double gasMassKilograms,
 			boolean internalEnergyAvailable,
-			double totalInternalEnergyEu,
+			double totalInternalEnergyJ,
 			TemperatureRange temperatureRange
 	) {
 		public Inventory {
@@ -130,7 +130,7 @@ public record ControllerSummary(
 					|| !finiteNonNegative(granularMassKilograms) || coherentSolidVolumeSvq < 0L
 					|| !finiteNonNegative(coherentMassKilograms) || gasStandardVolumeNanos < 0L
 					|| !finiteNonNegative(gasMassKilograms)
-					|| internalEnergyAvailable != Double.isFinite(totalInternalEnergyEu)
+					|| internalEnergyAvailable != Double.isFinite(totalInternalEnergyJ)
 					|| temperatureRange == null) {
 				throw new IllegalArgumentException("Controller summary inventory is invalid");
 			}

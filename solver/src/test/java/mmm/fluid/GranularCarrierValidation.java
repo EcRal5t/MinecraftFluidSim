@@ -137,7 +137,7 @@ public final class GranularCarrierValidation {
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		var parcels = new GranularParcelStore(registry, 1);
 		parcels.add(new GranularParcelStore.Parcel(.42F, .46F, .46F, .8F, 0, 0,
-				svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+				svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0));
 		collision.preview(parcels, registry, .05F);
 		collision.commit(parcels);
 		var next = parcels.parcel(0);
@@ -169,7 +169,7 @@ public final class GranularCarrierValidation {
 		for (float[] point : new float[][]{{.65F, .6F, .65F}, {.65F, .9F, .65F}, {.79F, .75F, .65F}}) {
 			long svq = parcels.count() < 2 ? maximum / 2 : maximum;
 			parcels.add(new GranularParcelStore.Parcel(point[0], point[1], point[2], 0, 0, 0, svq,
-					2_600 * svq / (double) SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+					2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0));
 		}
 		requireNonOverlappingRelease(domain.exportGranularState(), domain.config.cellSize());
 		var before = java.util.stream.IntStream.range(0, 3).mapToObj(parcels::parcel).toList();
@@ -195,12 +195,12 @@ public final class GranularCarrierValidation {
 		for (int cell : new int[]{9, 10}) {
 			long skeleton = (long) (SolidVolume.SVQ_PER_CELL * .62 * (cell == 9 ? .1 : .6));
 			require(beds.tryAdd(cell, new mmm.granular.GranularDepositStore.SolidPortion(
-					sand, 0, skeleton, 2_600.0 * skeleton / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "bed fixture must fit its cell capacity");
+					sand, 0, skeleton, 2_600.0 * skeleton / SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL), "bed fixture must fit its cell capacity");
 		}
 		for (float vy : new float[]{0, -.4905F}) {
 			var parcels = new GranularParcelStore(registry, 1);
 			parcels.add(new GranularParcelStore.Parcel(.4F, .25F, .75F, 3.2F, vy, 0,
-					svq, 2_600.0 * svq / SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+					svq, 2_600.0 * svq / SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0));
 			var collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, beds, 1);
 			require((3.2 + Math.abs(vy)) * .05 <= .5 * .4 && collision.positionValid(.4F, .25F, .75F, svq),
 					"rising-bed fixture must have a legal start and default Courant drift");
@@ -219,13 +219,13 @@ public final class GranularCarrierValidation {
 		for (int cell : new int[]{9, 15}) {
 			long skeleton = (long) (SolidVolume.SVQ_PER_CELL * .62 * .6);
 			require(beds.tryAdd(cell, new mmm.granular.GranularDepositStore.SolidPortion(
-					sand, 0, skeleton, 2_600.0 * skeleton / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "separated beds must fit their cells");
+					sand, 0, skeleton, 2_600.0 * skeleton / SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL), "separated beds must fit their cells");
 		}
 		geometry.replaceMask(12, 255); // [.0,.5] x [.5,1] x [.5,1], upper bed rests above it.
 		double top = beds.cellBulkVolumeSvq(9) * .5 / SolidVolume.SVQ_PER_CELL;
 		var parcels = new GranularParcelStore(registry, 1);
 		parcels.add(new GranularParcelStore.Parcel(.25F, (float) (top + radius + .01), .75F, 0, -.4F, 0,
-				svq, 2_600.0 * svq / SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+				svq, 2_600.0 * svq / SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0));
 		var collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, beds, 1);
 		var initial = parcels.parcel(0);
 		require(collision.positionValid(initial.x(), initial.y(), initial.z(), svq)
@@ -266,13 +266,13 @@ public final class GranularCarrierValidation {
 		long skeleton = (long) (SolidVolume.SVQ_PER_CELL * .62);
 		for (int z = 0; z < 3; z++) for (int x = 0; x < 3; x++) require(state.deposits.tryAdd(domain.cellIndex(x, 1, z),
 				new mmm.granular.GranularDepositStore.SolidPortion(sand, 0, skeleton,
-						2_600.0 * skeleton / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "suspended bed must fit each cell");
+						2_600.0 * skeleton / SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL), "suspended bed must fit each cell");
 		int barrier = domain.cellIndex(1, 1, 1);
 		double top = (1 + state.deposits.cellBulkVolumeSvq(barrier) / (double) SolidVolume.SVQ_PER_CELL) * .5;
 		float radius = mmm.granular.GranularMechanics.representativeRadius(volume, .5F);
 		float y = (float) (top + radius); if (y < top + radius) y = Math.nextUp(y);
 		state.parcels.add(new GranularParcelStore.Parcel(.75F, y, .75F, 0, 0, 0, volume,
-				2_600.0 * volume / SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+				2_600.0 * volume / SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0));
 		domain.ensureGrid();
 		require(domain.granularCollision.positionValid(.75F, y, .75F, volume), "bed support must start outside the actual bed");
 		for (int step = 0; step < 3; step++) {
@@ -322,7 +322,7 @@ public final class GranularCarrierValidation {
 		long tower = (long) (SolidVolume.SVQ_PER_CELL * .62 * .8);
 		require(state.deposits.tryAdd(domain.cellIndex(1, 2, 1),
 				new mmm.granular.GranularDepositStore.SolidPortion(sand, 0, tower,
-						2_600.0 * tower / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "upper source bed must fit its layer");
+						2_600.0 * tower / SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL), "upper source bed must fit its layer");
 		domain.granularCoupling.rebuild(state.parcels, state.deposits);
 		domain.granularDepositDynamics().disturbCell(domain.cellIndex(1, 2, 1));
 		var relaxed = domain.granularDepositDynamics().step(domain.granularDepositEnvironment(domain.granularCoupling.copySolidSvq()), .05F);
@@ -356,14 +356,14 @@ public final class GranularCarrierValidation {
 			if (scenario == 2) {
 				long oldSkeleton = (long) (SolidVolume.SVQ_PER_CELL * .62 * .46);
 				require(state.deposits.tryAdd(target, new mmm.granular.GranularDepositStore.SolidPortion(sand, 0,
-						oldSkeleton, 2_600.0 * oldSkeleton / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL * 7 / 8),
+						oldSkeleton, 2_600.0 * oldSkeleton / SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL * 7 / 8),
 						"initial mixed-space bed must fit below the upper cut micro box");
 			}
 			float radius = mmm.granular.GranularMechanics.representativeRadius(volume, .5F);
 			double top = state.deposits.cellBulkVolumeSvq(target) * .5 / SolidVolume.SVQ_PER_CELL;
 			float y = (float) (top + radius); if (y < top + radius) y = Math.nextUp(y);
 			for (int index = 0; index < (scenario == 2 ? 2 : 1); index++) state.parcels.add(new GranularParcelStore.Parcel(
-					index == 0 ? .9F : .72F, y, .9F, 0, 0, 0, volume, 2_600.0 * volume / SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+					index == 0 ? .9F : .72F, y, .9F, 0, 0, 0, volume, 2_600.0 * volume / SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0));
 			domain.ensureGrid();
 			for (int index = 0; index < state.parcels.count(); index++) {
 				var p = state.parcels.parcel(index);
@@ -424,7 +424,7 @@ public final class GranularCarrierValidation {
 			for (int z = 0; z < 3; z++) for (int x = 0; x < 3; x++) {
 				long floor = (long) (SolidVolume.SVQ_PER_CELL * .62);
 				require(state.deposits.tryAdd(domain.cellIndex(x, 0, z), new mmm.granular.GranularDepositStore.SolidPortion(
-						sand, 0, floor, 2_600.0 * floor / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "floor bed must fit its cell");
+						sand, 0, floor, 2_600.0 * floor / SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL), "floor bed must fit its cell");
 				domain.geometry.cutCells.replaceMask(domain.cellIndex(x, 2, z), 255);
 				int cell = domain.cellIndex(x, 1, z);
 				if (cell != source && cell != portal && cell != receiver) domain.geometry.cutCells.replaceMask(cell, 255);
@@ -434,12 +434,12 @@ public final class GranularCarrierValidation {
 				domain.geometry.cutCells.replaceMask(domain.cellIndex(1, 1, 2), 0);
 				long side = (long) (SolidVolume.SVQ_PER_CELL * .62 * .3);
 				require(state.deposits.tryAdd(domain.cellIndex(1, 1, 2), new mmm.granular.GranularDepositStore.SolidPortion(
-						sand, 0, side, 2_600.0 * side / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "open diagonal corridor must clear both adjacent corners");
+						sand, 0, side, 2_600.0 * side / SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL), "open diagonal corridor must clear both adjacent corners");
 			}
 			for (int cell : new int[]{source, domain.cellIndex(2, 3, 1)}) {
 				long volume = (long) (SolidVolume.SVQ_PER_CELL * .62 * (cell == source ? .885 : .1));
 				require(state.deposits.tryAdd(cell, new mmm.granular.GranularDepositStore.SolidPortion(
-						sand, 0, volume, 2_600.0 * volume / SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "supported upper beds must fit");
+						sand, 0, volume, 2_600.0 * volume / SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL), "supported upper beds must fit");
 			}
 			domain.ensureGrid();
 			long[] planned = domain.granularCoupling.copySolidSvq(), before = planned.clone();
@@ -546,7 +546,7 @@ public final class GranularCarrierValidation {
 		geometry.replaceMask(10, 0); geometry.replaceMask(12, 0); geometry.replaceMask(13, 1);
 		var parcels = new GranularParcelStore(registry, 1);
 		parcels.add(new GranularParcelStore.Parcel(.625F, .75F + radius + .01F, .625F, 0, -.2F, 0,
-				svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+				svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0));
 		var collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, null, 1);
 		collision.preview(parcels, registry, .1F); collision.commit(parcels);
 		for (int step = 1; step <= 8; step++) {
@@ -581,7 +581,7 @@ public final class GranularCarrierValidation {
 			}
 			var parcels = new GranularParcelStore(registry, 1);
 			parcels.add(new GranularParcelStore.Parcel(x, y, z, vx, vy, vz,
-					svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0));
+					svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0));
 			var collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, null, 1);
 			require(collision.positionValid(x, y, z, svq), "contact drift fixture starts inside solid geometry");
 			collision.preview(parcels, registry, dt);
@@ -619,7 +619,7 @@ public final class GranularCarrierValidation {
 						"first-contact fixture must start clear of the internal and outer geometry");
 				var parcels = new GranularParcelStore(registry, 1);
 				parcels.add(new GranularParcelStore.Parcel(position[0], position[1], position[2],
-						velocity[0], velocity[1], velocity[2], svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_BV,
+						velocity[0], velocity[1], velocity[2], svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER,
 						sand, 0, 0, (byte) 0));
 				collision.preview(parcels, registry, step);
 				var impulse = collision.commit(parcels);
@@ -1240,7 +1240,7 @@ public final class GranularCarrierValidation {
 		var registry = BuiltinGranularDefinitions.createRegistry();
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
-		double mass = 2_600.0 * svq / SolidVolume.SVQ_PER_BV;
+		double mass = 2_600.0 * svq / SolidVolume.SVQ_PER_CUBIC_METER;
 		float radius = mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
 		for (boolean bedContact : new boolean[]{false, true}) {
 			var parcels = new GranularParcelStore(registry, 1);
@@ -1302,7 +1302,7 @@ public final class GranularCarrierValidation {
 		var material = registry.material(sand);
 		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, 0F);
 		long volume = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
-		double mass = volume / (double) SolidVolume.SVQ_PER_BV * material.referenceDensity();
+		double mass = volume / (double) SolidVolume.SVQ_PER_CUBIC_METER * material.referenceDensity();
 		for (int scene = 0; scene < 7; scene++) {
 			var domain = new FluidDomain(4, 4, 4, config, 128);
 			int cell = domain.cellIndex(1, 1, 1);
@@ -1368,7 +1368,7 @@ public final class GranularCarrierValidation {
 		var material = registry.material(sand);
 		var config = new FluidSolverConfig(.5F, 1000F, 9.81F, .05F, 100, 1e-5F, .45F, .002F, 0F);
 		long volume = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
-		double mass = volume / (double) SolidVolume.SVQ_PER_BV * material.referenceDensity();
+		double mass = volume / (double) SolidVolume.SVQ_PER_CUBIC_METER * material.referenceDensity();
 		float radius = mmm.granular.GranularMechanics.representativeRadius(volume, .5F);
 		for (int scene = 0; scene < 3; scene++) {
 			float y = scene == 0 ? 1.25F : scene == 1 ? radius + .01F : radius;
@@ -1434,7 +1434,7 @@ public final class GranularCarrierValidation {
 		long svq = 1_024;
 		float radius = mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
 		parcels.add(new GranularParcelStore.Parcel(.5F, radius, .5F, 0, -.01F, 0,
-				svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_BV, sand, 0,
+				svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER, sand, 0,
 				Integer.MAX_VALUE, GranularParcelStore.FLAG_SUPPORTED));
 		var collision = new FlipGranularCollision(2, 2, 2, .5F, new FlipCutCellGeometry(2, 2, 2), deposits, 1);
 		collision.preview(parcels, registry, .05F);
@@ -1448,8 +1448,8 @@ public final class GranularCarrierValidation {
 		domain.setVolume(1, 1, 1, .125F);
 		int source = domain.cellIndex(1, 1, 1), target = domain.cellIndex(2, 1, 1);
 		double expected = BuiltinFluidMaterials.createRegistry().dynamicViscosityAt("mmm:water", 293.15);
-		require(domain.carrierViscosityPaPerS(source) == expected
-				&& domain.carrierViscosityPaPerS(target) == null,
+		require(domain.carrierViscosityPascalSeconds(source) == expected
+				&& domain.carrierViscosityPascalSeconds(target) == null,
 				"liquid properties must be available without any granular inventory");
 		long revision = domain.carrierMutationRevision;
 		java.util.Arrays.fill(domain.mac.velocityX, 1);
@@ -1459,8 +1459,8 @@ public final class GranularCarrierValidation {
 		for (int marker = 0; marker < domain.particleCount(); marker++) domain.particles.setVelocityX(marker, 1);
 		domain.particleAdvectionStage.advect(.5F);
 		require(domain.carrierMutationRevision == revision, "advection fixture must retain carrier structure");
-		require(domain.carrierViscosityPaPerS(source) == null
-				&& domain.carrierViscosityPaPerS(target) == expected,
+		require(domain.carrierViscosityPascalSeconds(source) == null
+				&& domain.carrierViscosityPascalSeconds(target) == expected,
 				"advection must invalidate spatial carrier properties despite unchanged inventory revision");
 	}
 
@@ -1472,7 +1472,7 @@ public final class GranularCarrierValidation {
 		long volume = SolidVolume.SVQ_PER_CELL / 4;
 		for (int x = 2; x <= 3; x++) require(domain.granularState.deposits.tryAdd(domain.cellIndex(x, 1, 2),
 				new mmm.granular.GranularDepositStore.SolidPortion(sand, 0, volume,
-						2600 * volume / (double) SolidVolume.SVQ_PER_BV), SolidVolume.SVQ_PER_CELL), "Thin bed rejected");
+						2600 * volume / (double) SolidVolume.SVQ_PER_CUBIC_METER), SolidVolume.SVQ_PER_CELL), "Thin bed rejected");
 		int face = domain.xFaceIndex(3, 1, 2), vertical = domain.yFaceIndex(2, 1, 2);
 		java.util.Arrays.fill(domain.mac.velocityX, 1);
 		java.util.Arrays.fill(domain.mac.velocityY, 1);
@@ -1555,7 +1555,7 @@ public final class GranularCarrierValidation {
 				&& domain.addVolumeNear(1, 4, 1, moved, 0) == moved,
 				"mixed gas-pressure fixture could not retain its exact displaced water");
 		require(domain.totalVolumeExact() == 108 && domain.unitScale.kilograms(domain.totalMass()) == 13_500,
-				"mixed gas-pressure fixture must preserve the original 13.5 BV and 13500 kg of water");
+				"mixed gas-pressure fixture must preserve the original 13.5 m³ and 13500 kg of water");
 		domain.sealDomainBoundary(); domain.bootstrapGasState(null); domain.ensureGrid();
 		return domain;
 	}
@@ -1563,7 +1563,7 @@ public final class GranularCarrierValidation {
 	private static void addParcel(FluidDomain domain, float x, float y, float z, float vx, float vy, float vz) {
 		int sand = domain.granularState.registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long volume = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
-		double mass = volume / (double) SolidVolume.SVQ_PER_BV
+		double mass = volume / (double) SolidVolume.SVQ_PER_CUBIC_METER
 				* domain.granularState.registry.material(sand).referenceDensity();
 		domain.granularState.parcels.add(new GranularParcelStore.Parcel(x, y, z, vx, vy, vz,
 				volume, mass, sand, 0, 0, (byte) 0));
@@ -1750,7 +1750,7 @@ public final class GranularCarrierValidation {
 			for (int coordinate = 0; coordinate < 3; coordinate++) position[coordinate] = (reflection & 1 << coordinate) == 0 ? .75F : 2.25F;
 			double[] velocity = new double[3]; velocity[axis] = (reflection & 1 << axis) == 0 ? .5 : -.5;
 			var parcel = new GranularParcelStore.Parcel(position[0], position[1], position[2], (float) velocity[0], (float) velocity[1], (float) velocity[2],
-					svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_BV, sand, 0, 0, (byte) 0);
+					svq, 2_600 * svq / (double) SolidVolume.SVQ_PER_CUBIC_METER, sand, 0, 0, (byte) 0);
 			for (int power = 3; power <= 20; power++) {
 				double dt = Math.scalb(1, -power);
 				int count = gradient.build(parcel, dt);
@@ -1796,7 +1796,7 @@ public final class GranularCarrierValidation {
 		coupling.prepare(0.05F);
 		coupling.project(0.05F);
 		var p = domain.granularState.parcels.parcel(0);
-		double expected = 0.05 * 9.81 * 1_000 * p.solidVolumeSvq() / SolidVolume.SVQ_PER_BV / p.mass();
+		double expected = 0.05 * 9.81 * 1_000 * p.solidVolumeSvq() / SolidVolume.SVQ_PER_CUBIC_METER / p.mass();
 		require(Math.abs(p.velocityY() - expected) < 2.0e-7 && Math.abs(p.velocityX()) < 1.0e-7
 				&& Math.abs(p.velocityZ()) < 1.0e-7, "pressure gradient must give Archimedes buoyancy without a second buoyancy impulse");
 	}

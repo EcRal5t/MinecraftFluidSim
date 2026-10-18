@@ -360,7 +360,7 @@ public final class ThermalOwnerStoreValidation {
 				var contacts = state.finiteDeviceContacts(List.of(new FiniteDeviceExchangeCoordinator.CellContactRequest(0, 0, 1)), context);
 				var body = new FiniteThermalBodyState(0, registry.fingerprint(), device.id(), 1, energy);
 				var exchange = FiniteThermalExchange.plan(registry, body, contacts, .01, 8);
-				require(!exchange.changed() && exchange.contacts().getFirst().internalEnergyDeltaEu() == 0,
+				require(!exchange.changed() && exchange.contacts().getFirst().internalEnergyDeltaJ() == 0,
 						"Caloric knot created a finite-device heat flow between equal actual temperatures");
 			}
 		for (double cv : new double[] {3 * Double.MIN_VALUE, 1e308}) {
@@ -451,7 +451,7 @@ public final class ThermalOwnerStoreValidation {
 
 	private static void requireCaloricHandoff(ThermalMaterialDefinition material, double mass, double raw, double expected) {
 		var device = new ThermalMaterialDefinition("test:handoff/b", ThermalMaterialDefinition.CarrierKind.DEVICE,
-				"test:handoff/b", material.referenceTemperatureK(), material.referenceSpecificEnergyEuPerMu(), 0, material.caloricSegments());
+				"test:handoff/b", material.referenceTemperatureK(), material.referenceSpecificEnergyJPerKg(), 0, material.caloricSegments());
 		var registry = new ThermalRegistry(List.of(material, device)); var function = new ThermalStateFunction(registry);
 		var context = new ThermalCarrierContext() {
 			public int markerCount() { return 1; } public int cell(int p) { return 0; } public int fluidMaterialHandle(int p) { return 0; }
@@ -477,7 +477,7 @@ public final class ThermalOwnerStoreValidation {
 		var contacts = state.finiteDeviceContacts(List.of(new FiniteDeviceExchangeCoordinator.CellContactRequest(0, 0, 1)), context);
 		var body = new FiniteThermalBodyState(0, registry.fingerprint(), device.id(), mass, raw);
 		var exchange = FiniteThermalExchange.plan(registry, body, contacts, .01, 8);
-		require(!exchange.changed() && exchange.contacts().getFirst().internalEnergyDeltaEu() == 0, "Equivalent caloric paths created equal-temperature device heat flow");
+		require(!exchange.changed() && exchange.contacts().getFirst().internalEnergyDeltaJ() == 0, "Equivalent caloric paths created equal-temperature device heat flow");
 	}
 
 	private static void coolingInversionRetainsEnergyScale() {
@@ -513,12 +513,12 @@ public final class ThermalOwnerStoreValidation {
 		var function = new ThermalStateFunction(new ThermalRegistry(List.of(material), offsets, List.of(),
 				chemistry.fingerprint(), ""));
 		var canonical = new java.util.TreeMap<String, Long>();
-		for (String id : ids) canonical.put(id, ChemicalLimits.QUANTA_PER_AU);
+		for (String id : ids) canonical.put(id, ChemicalLimits.QUANTA_PER_MOL);
 		var mixture = ChemicalMixtureRecord.fromStableAmounts(chemistry, canonical, 0);
 		long expected = Double.doubleToRawLongBits(function.baseEnergy(0, 1, mixture, chemistry));
 		for (int[] order : new int[][]{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}}) {
 			var map = new java.util.LinkedHashMap<String, Long>();
-			for (int i : order) map.put(ids[i], ChemicalLimits.QUANTA_PER_AU);
+			for (int i : order) map.put(ids[i], ChemicalLimits.QUANTA_PER_MOL);
 			require(Double.doubleToRawLongBits(function.baseEnergy(0, 1, map)) == expected,
 					"Reference energy changed with map iteration order or chemical representation");
 			require(Double.doubleToRawLongBits(function.internalEnergyAtTemperature(0, 1, map, 320))
@@ -535,7 +535,7 @@ public final class ThermalOwnerStoreValidation {
 			var rational = new ExactRational(java.math.BigInteger.valueOf(numerator), java.math.BigInteger.valueOf(denominator));
 			var offset = new ThermalSpeciesOffset("test:offset", "test:species", "test:material", rational);
 			for (long quanta : new long[] {0, 1, 6_944_444_444_444L, random.nextLong() & Long.MAX_VALUE}) {
-				double expected = rational.multiply(quanta).divide(ChemicalLimits.QUANTA_PER_AU).toDouble();
+				double expected = rational.multiply(quanta).divide(ChemicalLimits.QUANTA_PER_MOL).toDouble();
 				require(Double.doubleToRawLongBits(cache.energy(offset, quanta)) == Double.doubleToRawLongBits(expected),
 						"Reference term changed canonical exact-rational binary64 rounding");
 			}
@@ -609,8 +609,8 @@ public final class ThermalOwnerStoreValidation {
 
 	private static void coherentPhaseMergeSplitConservesInventories() {
 		ChemicalRegistry chemistry = new ChemicalRegistry(List.of(
-				new ChemicalSpecies("test:a", Map.of("A", 1), 0, ExactRational.of(1_000_000_000L), 0),
-				new ChemicalSpecies("test:b", Map.of("A", 2), 0, ExactRational.of(2_000_000_000L), 0)),
+				new ChemicalSpecies("test:a", Map.of("A", 1), 0, ExactRational.of(1_000_000L), 0),
+				new ChemicalSpecies("test:b", Map.of("A", 2), 0, ExactRational.of(2_000_000L), 0)),
 				List.of(new ChemicalPhaseDefinition("test:phase", "test:liquid", List.of("test:a", "test:b"),
 						Map.of("test:a", ExactRational.ONE), false)), List.of(new ChemicalReaction(
 				"test:combine", ChemicalReaction.Kind.INSTANTANEOUS, "test:phase",

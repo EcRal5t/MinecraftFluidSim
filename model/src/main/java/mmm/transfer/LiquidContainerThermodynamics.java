@@ -90,7 +90,7 @@ public final class LiquidContainerThermodynamics {
 	private static double inventoryHeatCapacity(ThermalRegistry registry,
 			List<ThermalStateFunction.InventoryPortion> inventory, double temperature) {
 		SignedDyadic total = SignedDyadic.ZERO;
-		for (var portion : inventory) total = total.add(SignedDyadic.of(portion.massMu()
+		for (var portion : inventory) total = total.add(SignedDyadic.of(portion.massKg()
 				* registry.material(portion.materialHandle()).specificHeatAt(temperature)));
 		double capacity = total.toDouble();
 		if (!(Double.isFinite(capacity) && capacity > 0))
@@ -104,7 +104,7 @@ public final class LiquidContainerThermodynamics {
 		SignedDyadic exact = SignedDyadic.ZERO;
 		for (ThermalStateFunction.InventoryPortion portion : inventory) {
 			exact = exact.add(SignedDyadic.of(state.internalEnergyAtTemperature(
-					portion.materialHandle(), portion.massMu(), portion.speciesQuanta(), temperature)));
+					portion.materialHandle(), portion.massKg(), portion.speciesQuanta(), temperature)));
 		}
 		double total = exact.toDouble();
 		if (!Double.isFinite(total)) throw new IllegalArgumentException("Container thermal inventory energy overflow");

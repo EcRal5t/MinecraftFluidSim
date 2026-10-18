@@ -25,7 +25,7 @@ abstract class ProductionReplayValidationSupport {
 				domain, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 		FluidDomain.VolumeAddition addition = domain.addVolumeNearBudgeted(3, 0, 0, 128.0F, 6);
 		require(addition.addedVolume() == 128.0F && !addition.markerBudgetLimited(),
-				"fixture did not inject the complete 16 BV source: " + addition);
+				"fixture did not inject the complete 16 m³ source: " + addition);
 		return domain;
 	}
 

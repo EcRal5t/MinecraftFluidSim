@@ -64,8 +64,9 @@ public record GasLiquidSpeciesPair(
 						!= Double.doubleToRawLongBits(gasKilogramsPerBatch - liquidKilogramsPerBatch)) {
 			throw new IllegalArgumentException("Gas/liquid pair residual must close the batch mass exactly");
 		}
-		if (molesPerBatch == null || molesPerBatch.signum() <= 0) {
-			throw new IllegalArgumentException("Gas/liquid pair moles per batch must be positive");
+		if (molesPerBatch == null || molesPerBatch.signum() <= 0
+				|| !molesPerBatch.multiply(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL).equals(ExactRational.of(liquidQuantaPerBatch))) {
+			throw new IllegalArgumentException("Gas/liquid pair mol amount must be positive and match its integer micromoles");
 		}
 		if (henrySegments == null || henrySegments.isEmpty()
 				|| henrySegments.size() > ThermalLimits.MAX_HENRY_SEGMENTS_PER_PAIR) {

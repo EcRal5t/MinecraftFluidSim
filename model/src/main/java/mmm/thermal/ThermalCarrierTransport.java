@@ -50,7 +50,7 @@ public final class ThermalCarrierTransport {
 			double minCv = Double.POSITIVE_INFINITY;
 			var segments = materials[p].caloricSegments();
 			for (int segment = 0; segment < segments.size(); segment++)
-				minCv = Math.min(minCv, segments.get(segment).specificHeatEuPerMuK());
+				minCv = Math.min(minCv, segments.get(segment).specificHeatJPerKgK());
 			stableDt = Math.min(stableDt, 0.5 * mass[p] * minCv / degree[p]);
 		}
 		if (!exchangeRequired) return new ThermalTransport.Stats(1, contacts.size(), 0, 0,

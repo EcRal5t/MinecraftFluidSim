@@ -1,10 +1,10 @@
 package mmm.granular;
 
-/** Exact solid-volume units. These constants are valid only for the frozen 0.5 m solver cell. */
+/** Solid inventory uses 2^-27 m³ per SVQ; normalized cell conversions use the default 0.5 m cell. */
 public final class SolidVolume {
-	public static final long SVQ_PER_BV = 1L << 27;
+	public static final long SVQ_PER_CUBIC_METER = 1L << 27;
 	public static final long SVQ_PER_CELL = 1L << 24;
-	public static final long NANOS_PER_BV = 1_000_000_000L;
+	public static final long NANOS_PER_CUBIC_METER = 1_000_000_000L;
 
 	private SolidVolume() { }
 
@@ -67,19 +67,19 @@ public final class SolidVolume {
 	/** Largest solid amount no greater than the supplied container nanovolume. */
 	public static long nanosToSvqAtMost(long nanos) {
 		if (nanos < 0L) throw new IllegalArgumentException("Nanovolume cannot be negative");
-		long whole = nanos / NANOS_PER_BV;
-		long remainder = nanos % NANOS_PER_BV;
-		return Math.addExact(Math.multiplyExact(whole, SVQ_PER_BV),
-				Math.multiplyExact(remainder, SVQ_PER_BV) / NANOS_PER_BV);
+		long whole = nanos / NANOS_PER_CUBIC_METER;
+		long remainder = nanos % NANOS_PER_CUBIC_METER;
+		return Math.addExact(Math.multiplyExact(whole, SVQ_PER_CUBIC_METER),
+				Math.multiplyExact(remainder, SVQ_PER_CUBIC_METER) / NANOS_PER_CUBIC_METER);
 	}
 
 	/** Largest container nanovolume no greater than the supplied exact solid amount. */
 	public static long svqToNanosAtMost(long svq) {
 		if (svq < 0L) throw new IllegalArgumentException("Solid volume cannot be negative");
-		long whole = svq / SVQ_PER_BV;
-		long remainder = svq % SVQ_PER_BV;
-		return Math.addExact(Math.multiplyExact(whole, NANOS_PER_BV),
-				Math.multiplyExact(remainder, NANOS_PER_BV) / SVQ_PER_BV);
+		long whole = svq / SVQ_PER_CUBIC_METER;
+		long remainder = svq % SVQ_PER_CUBIC_METER;
+		return Math.addExact(Math.multiplyExact(whole, NANOS_PER_CUBIC_METER),
+				Math.multiplyExact(remainder, NANOS_PER_CUBIC_METER) / SVQ_PER_CUBIC_METER);
 	}
 
 	public static long bulkVolumeCeil(long skeletonSvq, int porosityQ) {

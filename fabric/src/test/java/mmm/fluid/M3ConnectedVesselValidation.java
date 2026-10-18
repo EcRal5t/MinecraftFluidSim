@@ -26,8 +26,8 @@ public final class M3ConnectedVesselValidation {
 		M3MaterialDynamicsValidation.validate();
 		M3MaterialSurfaceValidation.validate();
 
-		System.out.printf("M3 connected-vessel gate passed: cells=%d markers=%d volume=%.3f BV mass=%.3f MU "
-				+ "PCG=%d residual=%.3g maxVelocity=%.3g transferMass=%.3f MU%n",
+		System.out.printf("M3 connected-vessel gate passed: cells=%d markers=%d volume=%.3f m³ mass=%.3f kg "
+				+ "PCG=%d residual=%.3g maxVelocity=%.3g transferMass=%.3f kg%n",
 				topology.cellCount(), labeled.size(), M3ConnectedVesselExperiment.ledger(labeled).totalVolume(),
 				M3ConnectedVesselExperiment.ledger(labeled).totalMass(), reference.pcgIterations(),
 				reference.pcgResidualRms(), reference.maximumVelocity(), transfer.mass());

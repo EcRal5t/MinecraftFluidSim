@@ -52,7 +52,7 @@ final class RegionStateCodec {
 		}
 		if (manifest.hasChemicalState()) {
 			root.putString("RegistryFingerprint", manifest.registryFingerprint());
-			root.putLong("AuScale", manifest.auScale());
+			root.putLong("QuantaPerMol", manifest.quantaPerMol());
 			root.put("SpeciesPalette", encodeStrings(manifest.speciesPalette()));
 			root.put("ChemicalMixtures", encodeChemicalMixtures(manifest.chemicalMixtures(), manifest.speciesPalette()));
 			root.putLongArray("ChemicalSpeciesTotals", manifest.chemicalSpeciesTotals());
@@ -107,7 +107,7 @@ final class RegionStateCodec {
 			materialLedgers = decodeMaterialLedgers(root.getListOrEmpty("MaterialLedgers"));
 		}
 		String registryFingerprint = "";
-		long auScale = 0L;
+		long quantaPerMol = 0L;
 		List<String> speciesPalette = List.of();
 		List<FlipChemicalParticleState.StableMixture> chemicalMixtures = List.of();
 		long[] chemicalSpeciesTotals = new long[0];
@@ -118,11 +118,11 @@ final class RegionStateCodec {
 			chemicalState = root.getBooleanOr("ChemistryPresent", false);
 		}
 		if (chemicalState) {
-			require(root, "RegistryFingerprint", Tag.TAG_STRING); require(root, "AuScale", Tag.TAG_LONG);
+			require(root, "RegistryFingerprint", Tag.TAG_STRING); require(root, "QuantaPerMol", Tag.TAG_LONG);
 			require(root, "SpeciesPalette", Tag.TAG_LIST); require(root, "ChemicalMixtures", Tag.TAG_LIST);
 			require(root, "ChemicalSpeciesTotals", Tag.TAG_LONG_ARRAY); require(root, "ChemicalResidualBits", Tag.TAG_LONG);
 			registryFingerprint = root.getStringOr("RegistryFingerprint", "");
-			auScale = root.getLongOr("AuScale", -1L);
+			quantaPerMol = root.getLongOr("QuantaPerMol", -1L);
 			speciesPalette = decodeStrings(root.getListOrEmpty("SpeciesPalette"), ChemicalLimits.MAX_SPECIES, "species palette");
 			chemicalMixtures = decodeChemicalMixtures(root.getListOrEmpty("ChemicalMixtures"), speciesPalette);
 			chemicalSpeciesTotals = root.getLongArray("ChemicalSpeciesTotals").orElseThrow();
@@ -134,7 +134,7 @@ final class RegionStateCodec {
 					decodeConfig(root.getCompoundOrEmpty("Solver")), root.getLongOr("MarkerBudget", -1L),
 					decodeRuntime(root.getCompoundOrEmpty("Runtime")), decodeFootprint(root.getCompoundOrEmpty("Footprint")),
 					root.getIntOr("MarkerCount", -1), root.getLongOr("VolumeBits", 0L), materials, totalMassBits, materialLedgers, sections,
-					decodeExtensions(root.getListOrEmpty("Extensions")), registryFingerprint, auScale, speciesPalette,
+					decodeExtensions(root.getListOrEmpty("Extensions")), registryFingerprint, quantaPerMol, speciesPalette,
 					chemicalMixtures, chemicalSpeciesTotals, chemicalResidualBits, root.getLongOr("Checksum", -1L));
 		} catch (IllegalArgumentException exception) {
 			throw new IOException("Invalid region manifest: " + exception.getMessage(), exception);
@@ -310,7 +310,7 @@ final class RegionStateCodec {
 			require(tag, "ResidualBits", Tag.TAG_LONG);
 			int[] species = tag.getIntArray("Species").orElseThrow();
 			long[] amounts = tag.getLongArray("Amounts").orElseThrow();
-			if (species.length == 0 || species.length != amounts.length
+			if (species.length != amounts.length
 					|| species.length > ChemicalLimits.MAX_SPECIES_PER_PARCEL) throw new IOException("Invalid chemical mixture entries");
 			List<FlipChemicalParticleState.Component> components = new ArrayList<>(species.length);
 			for (int entry = 0; entry < species.length; entry++) {

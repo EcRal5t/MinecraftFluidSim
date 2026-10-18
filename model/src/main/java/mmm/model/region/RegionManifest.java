@@ -25,7 +25,7 @@ public record RegionManifest(
 		List<SectionDescriptor> sections,
 		List<RegionExtension> extensions,
 		String registryFingerprint,
-		long auScale,
+		long quantaPerMol,
 		List<String> speciesPalette,
 		List<FlipChemicalParticleState.StableMixture> chemicalMixtures,
 		long[] chemicalSpeciesTotals,
@@ -51,7 +51,7 @@ public record RegionManifest(
 		double totalVolume = Double.longBitsToDouble(totalVolumeBits);
 		if (!Double.isFinite(totalVolume) || totalVolume < 0.0) throw new IllegalArgumentException("Invalid total marker volume");
 		validateFeatureLedger(layout, geometry, totalMarkerCount, totalMassBits, materialPalette,
-				materialLedgers, sections, registryFingerprint, auScale, speciesPalette,
+				materialLedgers, sections, registryFingerprint, quantaPerMol, speciesPalette,
 				chemicalMixtures, chemicalSpeciesTotals, chemicalResidualLedgerBits);
 	}
 
@@ -63,14 +63,14 @@ public record RegionManifest(
 			RegionGeometry.ControllerFootprint footprint, int totalMarkerCount, long totalVolumeBits,
 			List<FluidMaterial> materialPalette, long totalMassBits, List<MaterialLedger> materialLedgers,
 			List<SectionDescriptor> sections, List<RegionExtension> extensions, String registryFingerprint,
-			long auScale, List<String> speciesPalette,
+			long quantaPerMol, List<String> speciesPalette,
 			List<FlipChemicalParticleState.StableMixture> chemicalMixtures, long[] chemicalSpeciesTotals,
 			long chemicalResidualLedgerBits, long checksum
 	) {
 		this(layout, new RegionIdentity(regionId, dimensionId, checkpointGeneration, networkGeneration),
 				new RegionGeometry(origin, sizeX, sizeY, sizeZ, solverConfig, reservedMarkerCapacity, footprint),
 				runtime, totalMarkerCount, totalVolumeBits, materialPalette, totalMassBits, materialLedgers,
-				sections, extensions, registryFingerprint, auScale, speciesPalette, chemicalMixtures,
+				sections, extensions, registryFingerprint, quantaPerMol, speciesPalette, chemicalMixtures,
 				chemicalSpeciesTotals, chemicalResidualLedgerBits, checksum);
 	}
 
@@ -106,14 +106,14 @@ public record RegionManifest(
 	private static void validateFeatureLedger(
 			RegionStateLayout layout, RegionGeometry geometry, int totalMarkerCount, long totalMassBits,
 			List<FluidMaterial> materialPalette, List<MaterialLedger> materialLedgers,
-			List<SectionDescriptor> sections, String registryFingerprint, long auScale,
+			List<SectionDescriptor> sections, String registryFingerprint, long quantaPerMol,
 			List<String> speciesPalette, List<FlipChemicalParticleState.StableMixture> chemicalMixtures,
 			long[] chemicalSpeciesTotals, long chemicalResidualLedgerBits
 	) {
 		if (!layout.hasMaterials()) {
 			if (!materialPalette.isEmpty() || !materialLedgers.isEmpty() || totalMassBits != 0L
 					|| sections.stream().anyMatch(section -> section.massBits() != 0L)
-					|| !registryFingerprint.isEmpty() || auScale != 0L || !speciesPalette.isEmpty()
+					|| !registryFingerprint.isEmpty() || quantaPerMol != 0L || !speciesPalette.isEmpty()
 					|| !chemicalMixtures.isEmpty() || chemicalSpeciesTotals.length != 0
 					|| chemicalResidualLedgerBits != 0L) {
 				throw new IllegalArgumentException("Pure region state cannot contain material state");
@@ -137,14 +137,14 @@ public record RegionManifest(
 		boolean chemicalState = layout.requiresChemistry()
 				|| layout.permitsOptionalChemistry() && !registryFingerprint.isEmpty();
 		if (!chemicalState) {
-			if (!registryFingerprint.isEmpty() || auScale != 0L || !speciesPalette.isEmpty()
+			if (!registryFingerprint.isEmpty() || quantaPerMol != 0L || !speciesPalette.isEmpty()
 					|| !chemicalMixtures.isEmpty() || chemicalSpeciesTotals.length != 0
 					|| chemicalResidualLedgerBits != 0L) {
 				throw new IllegalArgumentException("Non-chemical region state cannot contain chemical state");
 			}
 			return;
 		}
-		if (!registryFingerprint.matches("[0-9a-f]{64}") || auScale != ChemicalLimits.QUANTA_PER_AU
+		if (!registryFingerprint.matches("[0-9a-f]{64}") || quantaPerMol != ChemicalLimits.QUANTA_PER_MOL
 				|| speciesPalette.isEmpty() || speciesPalette.size() > ChemicalLimits.MAX_SPECIES
 				|| chemicalSpeciesTotals.length != speciesPalette.size()
 				|| chemicalMixtures.size() > totalMarkerCount
@@ -180,7 +180,7 @@ public record RegionManifest(
 		if (this == other) return true;
 		if (!(other instanceof RegionManifest that)) return false;
 		return totalMarkerCount == that.totalMarkerCount && totalVolumeBits == that.totalVolumeBits
-				&& totalMassBits == that.totalMassBits && auScale == that.auScale
+				&& totalMassBits == that.totalMassBits && quantaPerMol == that.quantaPerMol
 				&& chemicalResidualLedgerBits == that.chemicalResidualLedgerBits && checksum == that.checksum
 				&& layout == that.layout && identity.equals(that.identity) && geometry.equals(that.geometry)
 				&& runtime.equals(that.runtime) && materialPalette.equals(that.materialPalette)
@@ -194,7 +194,7 @@ public record RegionManifest(
 	public int hashCode() {
 		int result = Objects.hash(layout, identity, geometry, runtime, totalMarkerCount, totalVolumeBits,
 				materialPalette, totalMassBits, materialLedgers, sections, extensions, registryFingerprint,
-				auScale, speciesPalette, chemicalMixtures, chemicalResidualLedgerBits, checksum);
+				quantaPerMol, speciesPalette, chemicalMixtures, chemicalResidualLedgerBits, checksum);
 		return 31 * result + Arrays.hashCode(chemicalSpeciesTotals);
 	}
 

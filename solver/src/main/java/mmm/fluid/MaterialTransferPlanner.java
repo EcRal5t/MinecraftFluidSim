@@ -186,7 +186,9 @@ final class MaterialTransferPlanner {
 
 	/** One large carrier owns each material's final mass rounding; return the actual rounded sum. */
 	private double[] settleMaterialPieceMasses(List<MaterialInsertPiece> pieces, List<FluidDomain.MaterialPortion> portions) {
-		int[] portionByMaterial = new int[domain.materialRegistry.size()];
+		int materialCount = 1;
+		for (var portion : portions) materialCount = Math.max(materialCount, portion.materialHandle() + 1);
+		int[] portionByMaterial = new int[materialCount];
 		java.util.Arrays.fill(portionByMaterial, -1);
 		for (int i = 0; i < portions.size(); i++) portionByMaterial[portions.get(i).materialHandle()] = i;
 		int[] pivot = new int[portions.size()];
@@ -637,7 +639,7 @@ final class MaterialTransferPlanner {
 			double[] masses = new double[groupPieces.size()];
 			int massPivot = 0;
 			for (int piece = 0; piece < groupPieces.size(); piece++) {
-				if (distributed[piece].isEmpty()) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
+				if (distributed[piece].isEmpty() && !group.speciesQuanta().isEmpty()) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 				ChemicalPieceDraft draft = groupPieces.get(piece);
 				boolean last = piece + 1 == groupPieces.size();
 				double mass = last ? massLeft : massLeft * draft.volume() / volumeLeft;

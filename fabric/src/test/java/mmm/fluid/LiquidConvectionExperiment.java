@@ -66,7 +66,7 @@ public final class LiquidConvectionExperiment {
 		domain.bindThermal(new ThermalRegistry(List.of(thermal), List.of(offset), List.of(), chemistry.fingerprint(), ""), liquids, T_REF);
 		double rho = domain.densityInCell(0, 0, 0);
 		double nu = definitions.dynamicViscosityAt(water.id(), T_REF) / rho;
-		double alpha = thermal.conductivityEuPerSecondMeterK() / (rho * thermal.specificHeatAt(T_REF));
+		double alpha = thermal.conductivityWPerMeterK() / (rho * thermal.specificHeatAt(T_REF));
 		double actualRa = config.gravity() * expansion.volumetricCoefficientPerK() * DELTA_T * height * height * height / (nu * alpha);
 		double[] boundary = new double[domain.cellCount * 6];
 		Arrays.fill(boundary, Double.NaN);

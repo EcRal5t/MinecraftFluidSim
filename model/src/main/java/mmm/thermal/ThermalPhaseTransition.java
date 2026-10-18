@@ -13,7 +13,7 @@ public record ThermalPhaseTransition(
 		String upperEnergyMaterialId,
 		long lowerVolumeSvqPerBatch,
 		long upperVolumeSvqPerBatch,
-		ExactRational massMuPerBatch,
+		ExactRational massKgPerBatch,
 		InterfaceRequirement interfaceRequirement,
 		List<EquilibriumPoint> equilibriumCurve
 ) {
@@ -31,11 +31,11 @@ public record ThermalPhaseTransition(
 	public ThermalPhaseTransition(
 			String id, String lowerEnergyMaterialId, String upperEnergyMaterialId,
 			double equilibriumTemperatureK, long lowerVolumeSvqPerBatch, long upperVolumeSvqPerBatch,
-			ExactRational massMuPerBatch, InterfaceRequirement interfaceRequirement,
+			ExactRational massKgPerBatch, InterfaceRequirement interfaceRequirement,
 			double minimumPressurePa, double maximumPressurePa
 	) {
 		this(id, lowerEnergyMaterialId, upperEnergyMaterialId,
-				lowerVolumeSvqPerBatch, upperVolumeSvqPerBatch, massMuPerBatch, interfaceRequirement, List.of(
+				lowerVolumeSvqPerBatch, upperVolumeSvqPerBatch, massKgPerBatch, interfaceRequirement, List.of(
 						new EquilibriumPoint(minimumPressurePa, equilibriumTemperatureK),
 						new EquilibriumPoint(maximumPressurePa, equilibriumTemperatureK)));
 	}
@@ -47,11 +47,11 @@ public record ThermalPhaseTransition(
 		if (lowerEnergyMaterialId.equals(upperEnergyMaterialId)) {
 			throw new IllegalArgumentException("Thermal transition requires two different materials");
 		}
-		if (lowerVolumeSvqPerBatch <= 0L || lowerVolumeSvqPerBatch > SolidVolume.SVQ_PER_BV
-				|| upperVolumeSvqPerBatch <= 0L || upperVolumeSvqPerBatch > SolidVolume.SVQ_PER_BV) {
+		if (lowerVolumeSvqPerBatch <= 0L || lowerVolumeSvqPerBatch > SolidVolume.SVQ_PER_CUBIC_METER
+				|| upperVolumeSvqPerBatch <= 0L || upperVolumeSvqPerBatch > SolidVolume.SVQ_PER_CUBIC_METER) {
 			throw new IllegalArgumentException("Thermal transition volume batch is invalid");
 		}
-		if (massMuPerBatch == null || massMuPerBatch.signum() <= 0) {
+		if (massKgPerBatch == null || massKgPerBatch.signum() <= 0) {
 			throw new IllegalArgumentException("Thermal transition mass batch must be positive");
 		}
 		if (interfaceRequirement == null) throw new IllegalArgumentException("Thermal transition interface is missing");

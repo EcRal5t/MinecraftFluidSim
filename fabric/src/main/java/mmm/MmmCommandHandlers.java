@@ -134,8 +134,8 @@ final class MmmCommandHandlers {
 			var registry = world.granularRegistry();
 			var material = registry.material(registry.materialHandle(materialId));
 			if (material.reactive()) return fail(source, "反应性固体只能由守恒相转移或已有容器产生");
-			long svq = SolidVolume.SVQ_PER_BV;
-			double mass = svq / (double) SolidVolume.SVQ_PER_BV * material.referenceDensity();
+			long svq = SolidVolume.SVQ_PER_CUBIC_METER;
+			double mass = svq / (double) SolidVolume.SVQ_PER_CUBIC_METER * material.referenceDensity();
 			GranularTransferLedger ledger = new GranularTransferLedger(List.of(
 					new GranularTransferLedger.Group(material.id(), svq, mass, null)));
 			stack = ContainerItemStacks.toStack(GranularContents.fromLedger(ledger, registry, null));
@@ -175,7 +175,7 @@ final class MmmCommandHandlers {
 				amounts.put(species, 55_555_555_556L);
 			} else {
 				amounts.put(BuiltinChemicalDefinitions.H2O, 50_000_000_000L);
-				amounts.put(species, ChemicalLimits.QUANTA_PER_AU);
+				amounts.put(species, mmm.chemistry.ChemicalAmount.quanta(mmm.chemistry.ExactRational.of(1000)));
 			}
 			double mass = 1_000.0;
 			ChemicalMixtureRecord exact = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0.0);

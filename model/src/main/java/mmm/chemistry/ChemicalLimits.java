@@ -2,7 +2,8 @@ package mmm.chemistry;
 
 /** Frozen chemistry definition, runtime and bounded-container budgets. */
 public final class ChemicalLimits {
-	public static final long QUANTA_PER_AU = 1_000_000_000L;
+	/** Each inventory quantum is one micromole (10^-6 mol). */
+	public static final long QUANTA_PER_MOL = 1_000_000L;
 	public static final int MAX_SPECIES = 256;
 	public static final int MAX_COMPOSITION_BASES = 64;
 	public static final int MAX_PHASES = 64;
@@ -25,7 +26,7 @@ public final class ChemicalLimits {
 	public static final int MAX_RATIONAL_TEXT_LENGTH = 4_096;
 	public static final int MAX_RATIONAL_SCALE = 4_096;
 	public static final int MAX_RATIONAL_BITS = 16_384;
-	public static final double MAX_INDICATOR_VOLUME_BV = 100.0;
+	public static final double MAX_INDICATOR_VOLUME_CUBIC_METERS = 100.0;
 	public static final int DISPLAY_SPECIES_PER_CELL = 4;
 
 	private ChemicalLimits() { }

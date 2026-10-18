@@ -158,7 +158,7 @@ final class GranularMechanicalStage {
 			double capacity = access.effectiveOpenCellVolume(cell);
 			if (weight <= 0 || capacity <= 0 || !properties.hasLiquid(cell)) continue;
 			double portion = weight * Math.min(1.0, state.markerGrid.exactCellMarkerVolume[cell] / capacity);
-			double cellViscosity = properties.viscosityPaPerS(cell);
+			double cellViscosity = properties.viscosityPascalSeconds(cell);
 			double cellDensity = properties.density(cell);
 			wet += portion;
 			density += portion * cellDensity;

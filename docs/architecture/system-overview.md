@@ -54,13 +54,50 @@
 
 同一操作涉及多种载体时，物质、组成、动量和携带内能按同一计划交接。所有 side column 使用相同 ordinal 与 append/swap-remove 顺序；拆并、移除、反应或相变同时修改这些列。MAC、PLIC、温度和展示网格从实际库存重建。
 
-| 数量 | 单位与换算 | 入口 |
+<a id="units"></a>
+### SI 物理量与整数编码
+
+Minecraft 一个方块的边长标定为 1 m。物理定义统一使用 SI，化学真实物种使用 mol。
+下表是单位约定的统一入口；专题维护各自字段和公式。
+
+| 数量 | 单位与编码 | 入口 |
 |---|---|---|
-| 体积 | `1 BV = 1 m³ = 10^9 nanos`；默认格长 `h=.5 m`，每格 `.125 BV` | `SolverUnitScale`、`CellInventoryReader` |
-| 固体 | `1 BV = 2^27 SVQ`，默认单元 `2^24 SVQ` | `SolidVolume`、`GranularCouplingFields` |
-| 化学 | `1 AU = 10^9 quanta` | 化学库存与 exact batch |
-| 质量 | 液体 solver weight 乘 `h³` 得 kg；固体、气体、物种、容器直接保存 kg | `SolverUnitScale` |
-| 热学 | K、Pa、J、W/(m·K)、J/(kg·K)；总内能可因参考态而为负 | `ThermalDomainState`、`GasThermalModel` |
+| 长度、时间、速度 | m、s、m/s | `FluidSolverConfig` |
+| 质量、温度、压力、能量 | kg、K、Pa、J | `SolverUnitScale`、`ThermalStateFunction` |
+| 密度、动力黏度、表面张力 | kg/m³、Pa·s、N/m | 材料定义 |
+| 比热、总热容 | J/(kg·K)、J/K | `ThermalMaterialDefinition` |
+| 导热率、热导 | W/(m·K)、W/K | 热材料与热接触 |
+| 化学物质量、摩尔质量、摩尔参考能、浓度 | mol、kg/mol、J/mol、mol/m³ | `ChemicalSpecies`、`ChemicalPhaseDefinition`、`ThermalSpeciesOffset` |
+| 化学整数库存 | 1 quantum = 1 μmol；10⁶ quanta = 1 mol | `ChemicalAmount`、组成池与反应批次 |
+| 液体体积编码 | 1 nanos = 10⁻⁹ m³ | `ContainerFluidLedger` |
+| 气体体积编码 | 1 nanos = 10⁻⁹ 标准 m³；标准态为 101325 Pa、293.15 K | `GasRegistry`、`AirNetwork` |
+| 固体体积编码 | 1 SVQ = 2⁻²⁷ m³；默认单元为 2²⁴ SVQ | `SolidVolume` |
+| 液体内部归一化库存 | 体积和质量权重都乘 h³，分别得到 m³ 和 kg | `SolverUnitScale` |
+| 颗粒、气体、化学质量余量与设备 | 独立保存 kg | 各载体库存 |
+
+默认 h = 0.5 m，一格满水内部体积为 1、质量权重为 1000，对应 0.125 m³、125 kg。
+位置和速度采用 m 与 m/s。内部质量权重保留归一化含义；跨载体转移时由 `SolverUnitScale` 转换。
+SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；binary32 的有效精度随数值大小变化，液体仍可具有小于一个 SVQ 的浮点尾项。
+整数占容、向上／向下换算及 float 可表示性沿现有算法执行。
+
+气体状态方程、Henry 关系和相平衡使用绝对压力。液体投影的机械压力采用相对于环境的表压；查询时按接口声明换算。
+气腔实际容量以 m³ 表示，标准体积由库存按标准态定义保存，两者分别参与状态方程。
+仿真步长和累计仿真时间用 s；Minecraft tick 是服务器调度次数，正常节拍为 20 tick/s。
+计算耗时用实际时钟 ns 或 ms 衡量，pacing 和重试保持请求推进的仿真时长。
+
+油采用材料质量与化学质量余量，物种列为空。汞采用真实 Hg，玩法摩尔质量为 0.200 kg/mol，密度为 13600 kg/m³。
+水、常见离子和 CO₂ 沿用整数原子量精度；水为 0.018 kg/mol，默认浓度为 500000/9 mol/m³。
+物种质量与余量共同核对机械 kg 库存。化学数量上限、默认批次及物性值分别由代码和数据定义维护。
+
+玩家展示由 `UnitFormat` 按数量选择 μmol/mmol/mol/kmol、mL/L/m³、J/kJ/MJ、Pa/kPa/MPa。
+当前温度输入和展示统一保留 K；绝对压力与标准态在文字中注明。
+显示舍入保持只读，原始整数编码留在开发诊断；一桶的游戏操作容量为一个方块体积，即 1 m³。
+
+- 单位与转换入口：
+  - [SolverUnitScale](../../model/src/main/java/mmm/units/SolverUnitScale.java)
+  - [ChemicalAmount](../../model/src/main/java/mmm/chemistry/ChemicalAmount.java)
+  - [UnitFormat](../../model/src/main/java/mmm/units/UnitFormat.java)
+- 验证入口：`M7ChemistryValidation`、`M7ChemicalTransportValidation`、`thermal`、`region-state`、`containers`、`protocol`。
 
 库存、物种、反应批次、单位换算和提交审计保留必要的整数与精确数量运算。几何和力学采用浮点标准离散；未解析薄层、液滴和细尺度运动按单元尺度近似。表示转换耗散明确进入对应能量结算，舍入与离散误差分别评价。精度取舍和验收要求见[实施计划](../roadmap/solver-consolidation-plan.md#精度与物理取舍)。
 

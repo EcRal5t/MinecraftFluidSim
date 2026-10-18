@@ -56,7 +56,6 @@ final class CellSpeciesInventory {
 		return true;
 	}
 	ChemicalMixtureRecord record() {
-		if (count == 0) throw new IllegalStateException("Carrier remap is below the chemical quantum resolution");
 		if (record == null) record = new ChemicalMixtureRecord(Arrays.copyOf(handles, count), Arrays.copyOf(amounts, count), 0);
 		return record;
 	}

@@ -426,10 +426,10 @@ public final class FluidRegion {
 				throw new IllegalArgumentException("Finite thermal cell binding ordinal changed");
 			}
 			deltas.add(new FluidDomain.ThermalCellEnergyDelta(binding.cellX(), binding.cellY(), binding.cellZ(),
-					contact.internalEnergyDeltaEu()));
+					contact.internalEnergyDeltaJ()));
 			contacts.add(new FluidDomain.ThermalContactRequest(binding.ordinal(),
 					binding.cellX(), binding.cellY(), binding.cellZ(),
-					exchange.initialContacts().get(index).conductanceEuPerSecondK()));
+					exchange.initialContacts().get(index).conductanceWPerK()));
 		}
 		if (!domain.finiteThermalContacts(contacts).equals(exchange.initialContacts())) {
 			throw new IllegalArgumentException("Finite thermal fluid contact plan is stale");

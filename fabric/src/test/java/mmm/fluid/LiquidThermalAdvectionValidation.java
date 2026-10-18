@@ -216,7 +216,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 					boolean cellTransport = CellLiquidVolumeTransport.enabled();
 					double roundingBound = 0;
 					for (double energy : currentEnergies) roundingBound += Math.ulp(energy);
-					require(transport.maximumAbsoluteTransferEu() == 0
+					require(transport.maximumAbsoluteTransferJ() == 0
 							&& audit.externalSource().equals(domain.thermalAudit().externalSource())
 							&& audit.externalSink().equals(domain.thermalAudit().externalSink())
 							&& (cellTransport ? Math.abs(SignedDyadic.sum(currentEnergies).subtract(SignedDyadic.sum(energies)).toDouble()) <= roundingBound
@@ -261,8 +261,8 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 				new ThermalSpeciesOffset("test:offset/second", BuiltinChemicalDefinitions.H2O, second.id(), ExactRational.of(-200000))),
 				List.of(), chemistry.fingerprint(), "");
 		var mixtures = new ChemicalMixtureRecord[] {
-				ChemicalMixtureRecord.fromStableAmounts(chemistry, Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU), 0),
-				ChemicalMixtureRecord.fromStableAmounts(chemistry, Map.of(BuiltinChemicalDefinitions.H2O, 2 * ChemicalLimits.QUANTA_PER_AU), 0)};
+				ChemicalMixtureRecord.fromStableAmounts(chemistry, Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_MOL), 0),
+				ChemicalMixtureRecord.fromStableAmounts(chemistry, Map.of(BuiltinChemicalDefinitions.H2O, 2 * ChemicalLimits.QUANTA_PER_MOL), 0)};
 		var markers = new ThermalCarrierContext() {
 			@Override public int markerCount() { return 2; }
 			@Override public int cell(int marker) { return marker; }
@@ -586,7 +586,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		double maximum = 0;
 		for (int p = 0; p < domain.particleCount(); p++) maximum = Math.max(maximum,
 				Math.abs(domain.thermalState.temperature(p, context) - (310 - 20 * domain.particles.positionY(p) / height)));
-		require(maximum < 1e-10 && result.maximumAbsoluteTransferEu() > 0
+		require(maximum < 1e-10 && result.maximumAbsoluteTransferJ() > 0
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "thermal wall closure lost the affine stationary solution: " + maximum);
 		// A finite contact must have been evaluated while the net energy remained stationary.
 		require(Math.abs(SignedDyadic.sum(domain.exportThermalParticleState().copyInternalEnergy()).subtract(SignedDyadic.sum(energy)).toDouble()) < 1e-7,

@@ -43,7 +43,7 @@ final class FiniteThermalDeviceCodec {
 				output.writeLong(body.generation());
 				output.writeUTF(body.thermalMaterialId());
 				output.writeLong(Double.doubleToRawLongBits(body.massKilograms()));
-				output.writeLong(Double.doubleToRawLongBits(body.internalEnergyEu()));
+				output.writeLong(Double.doubleToRawLongBits(body.internalEnergyJ()));
 			}
 		}
 		byte[] payload = bytes.toByteArray();

@@ -1,5 +1,7 @@
 package mmm.client;
 
+import mmm.units.UnitFormat;
+
 import mmm.controller.LifecycleOperationPreview;
 import mmm.network.LifecycleOperationPreviewPayload;
 import mmm.network.LifecycleOperationRequestPayload;
@@ -57,19 +59,19 @@ public final class LifecycleConfirmationScreen extends Screen {
 		rows.add(Component.translatable("screen.mmm.lifecycle.identity", localized("operation", preview.operation()),
 				preview.regionId().toString().substring(0, 8), preview.regionGeneration()));
 		LifecycleOperationPreview.Removal removal = preview.removal();
-		rows.add(Component.translatable("screen.mmm.lifecycle.liquid", removal.liquidVolumeNanos(),
-				decimal(removal.liquidMassKilograms()), removal.liquidSpeciesQuanta()));
-		rows.add(Component.translatable("screen.mmm.lifecycle.solids", removal.granularSolidVolumeSvq(),
-				decimal(removal.granularMassKilograms()), removal.coherentSolidVolumeSvq(),
+		rows.add(Component.translatable("screen.mmm.lifecycle.liquid", UnitFormat.volumeNanos(removal.liquidVolumeNanos()),
+				decimal(removal.liquidMassKilograms()), UnitFormat.amount(removal.liquidSpeciesQuanta())));
+		rows.add(Component.translatable("screen.mmm.lifecycle.solids", UnitFormat.solidVolume(removal.granularSolidVolumeSvq()),
+				decimal(removal.granularMassKilograms()), UnitFormat.solidVolume(removal.coherentSolidVolumeSvq()),
 				decimal(removal.coherentMassKilograms())));
-		rows.add(Component.translatable("screen.mmm.lifecycle.gas_removal", removal.sealedGasStandardVolumeNanos(),
-				decimal(removal.sealedGasMassKilograms()), removal.sealedGasSpeciesQuanta()));
+		rows.add(Component.translatable("screen.mmm.lifecycle.gas_removal", UnitFormat.volumeNanos(removal.sealedGasStandardVolumeNanos()),
+				decimal(removal.sealedGasMassKilograms()), UnitFormat.amount(removal.sealedGasSpeciesQuanta())));
 		LifecycleOperationPreview.GasState gas = preview.gasState();
-		rows.add(Component.translatable("screen.mmm.lifecycle.gas_state", gas.standardVolumeNanos(),
-				decimal(gas.massKilograms()), gas.speciesQuanta(), gas.sealedNodes(),
+		rows.add(Component.translatable("screen.mmm.lifecycle.gas_state", UnitFormat.volumeNanos(gas.standardVolumeNanos()),
+				decimal(gas.massKilograms()), UnitFormat.amount(gas.speciesQuanta()), gas.sealedNodes(),
 				common(gas.ambientBoundaryPresent() ? "present" : "absent")));
 		rows.add(Component.translatable("screen.mmm.lifecycle.energy_ownership",
-				removal.internalEnergyAvailable() ? decimal(removal.internalEnergyEu()) : "—", preview.ownershipBlocks()));
+				removal.internalEnergyAvailable() ? UnitFormat.energy(removal.internalEnergyJ()) : "—", preview.ownershipBlocks()));
 		rows.add(Component.translatable("screen.mmm.lifecycle.permission",
 				localized("permission", preview.permissionDecision())));
 		rows.add(Component.translatable(preview.ready() ? "screen.mmm.lifecycle.ready" : "screen.mmm.lifecycle.blocked",

@@ -2,6 +2,8 @@
 
 修改区域存档、世界能力包、启动恢复或删除标记时读本文。
 
+单位与整数编码统一见[设计书](system-overview.md#units)。
+
 ## 修改入口
 
 - **世界启动与定义加载**
@@ -323,3 +325,7 @@ wall-time hard-overrun/recovery streak 是进程内短期调度指标，重启�
 气体区域载荷保存完整 `8N` 微盒归属主列 `pieceNodeOrdinal`，按全域 minimum-piece key 规范节点排序并随 section 拆分、组装。
 section 保留全域节点编号并校核 `sealedPieceCount`；恢复从完整载体几何重新生成微盒归属与容量，核对库存和热能的同序绑定。
 具体格式见 [气体状态](gas-state.md)。
+
+化学 registry 与区域 manifest 的 `QuantaPerMol` 固定为 1000000，化学指纹覆盖 kg/mol 与 mol/m³ 定义。
+热注册表使用 `mmm:si_mol`，固体尺度字段为 `SvqPerCubicMeter`，气体默认组成保存 `ConcentrationMolPerCubicMeter`。
+能力包、区域 HEAD 与容器 WAL 继续绑定完整注册表指纹；存档直接使用当前格式。

@@ -479,7 +479,8 @@ final class GasTopologyCoordinator {
 	private GasInventory ambientInventory(double volume) {
 		if (!(volume > 0 && Double.isFinite(volume))) throw new GasTopologyBlockedException("Ambient capture has no positive finite volume");
 		long nanos = AirNetwork.nanos(volume);
-		if (nanos == 0) throw new GasTopologyBlockedException("Ambient capture volume is below the gas inventory resolution");
+		// Standard volume rounds to the nearest 10^-9 m³, including zero below half a quantum.
+		if (nanos == 0) return GasInventory.EMPTY;
 		return domain.gasState.network.ambientInventory(nanos);
 	}
 	private static ExactRational exact(SignedDyadic value) {

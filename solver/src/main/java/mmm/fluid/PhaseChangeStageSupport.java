@@ -326,8 +326,8 @@ final class PhaseChangeStageSupport {
 		ExactRational exactSpeciesMass(ChemicalRegistry registry) {
 			ExactRational result = ExactRational.ZERO;
 			for (Map.Entry<String, Long> entry : amounts.entrySet()) {
-				result = result.add(registry.species(registry.speciesHandle(entry.getKey())).massKilogramsPerAu()
-						.multiply(entry.getValue()).divide(ChemicalLimits.QUANTA_PER_AU));
+				result = result.add(registry.species(registry.speciesHandle(entry.getKey())).molarMassKgPerMol()
+						.multiply(entry.getValue()).divide(ChemicalLimits.QUANTA_PER_MOL));
 			}
 			return result;
 		}

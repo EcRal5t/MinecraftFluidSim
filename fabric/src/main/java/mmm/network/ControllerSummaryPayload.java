@@ -134,7 +134,7 @@ public record ControllerSummaryPayload(ControllerSummary summary) implements Cus
 		buffer.writeVarLong(inventory.gasStandardVolumeNanos());
 		buffer.writeDouble(inventory.gasMassKilograms());
 		buffer.writeBoolean(inventory.internalEnergyAvailable());
-		buffer.writeDouble(inventory.totalInternalEnergyEu());
+		buffer.writeDouble(inventory.totalInternalEnergyJ());
 		ControllerSummary.TemperatureRange range = inventory.temperatureRange();
 		buffer.writeBoolean(range.available());
 		buffer.writeDouble(range.minimumK());

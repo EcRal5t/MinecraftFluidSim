@@ -110,7 +110,7 @@ public final class M7RegionChemistryPersistenceValidation {
 				source.domain().captureAuthoritativeState(), restored.domain().captureAuthoritativeState(),
 				"custom viscosity disk restore");
 		int cell = (2 * 4 + 1) * 6 + 2;
-		double actual = restored.domain().carrierViscosityPaPerS(cell);
+		double actual = restored.domain().carrierViscosityPascalSeconds(cell);
 		double expected = custom.dynamicViscosityAt("mmm:water", 353.15);
 		check(Math.abs(actual - expected) <= expected * 1e-12
 				&& actual > 1.9 * production.materials().dynamicViscosityAt("mmm:water", 353.15),
@@ -136,7 +136,7 @@ public final class M7RegionChemistryPersistenceValidation {
 				source.domain().captureAuthoritativeState(), restored.domain().captureAuthoritativeState(),
 				"material-only viscosity disk restore");
 		check(!restored.domain().hasGranularState()
-				&& restored.domain().carrierViscosityPaPerS((2 * 4 + 1) * 6 + 2)
+				&& restored.domain().carrierViscosityPascalSeconds((2 * 4 + 1) * 6 + 2)
 				== custom.dynamicViscosityAt("mmm:water", 293.15),
 				"material-only restore lost custom constitutive data");
 	}

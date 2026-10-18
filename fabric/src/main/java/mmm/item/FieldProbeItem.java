@@ -1,5 +1,7 @@
 package mmm.item;
 
+import mmm.units.UnitFormat;
+
 import mmm.api.query.FluidCellObservation;
 import mmm.api.query.FluidQueryResult;
 import mmm.block.MmmBlocks;
@@ -104,14 +106,14 @@ public final class FieldProbeItem extends Item {
 			text.append("\n").append(Component.translatable("message.mmm.probe.controller_inventory_unloaded"));
 		} else {
 			text.append("\n").append(Component.translatable("message.mmm.probe.controller_liquid_inventory",
-					decimal(inventory.liquidVolumeCubicMetres() * 1_000.0),
-					decimal(inventory.liquidMassKilograms()), inventory.speciesQuanta()));
+					UnitFormat.volume(inventory.liquidVolumeCubicMetres()),
+					decimal(inventory.liquidMassKilograms()), UnitFormat.amount(inventory.speciesQuanta())));
 			text.append("\n").append(Component.translatable("message.mmm.probe.controller_solid_inventory",
-					inventory.granularSolidVolumeSvq(), decimal(inventory.granularMassKilograms()),
-					inventory.coherentSolidVolumeSvq(), decimal(inventory.coherentMassKilograms())));
+					UnitFormat.solidVolume(inventory.granularSolidVolumeSvq()), decimal(inventory.granularMassKilograms()),
+					UnitFormat.solidVolume(inventory.coherentSolidVolumeSvq()), decimal(inventory.coherentMassKilograms())));
 			text.append("\n").append(Component.translatable("message.mmm.probe.controller_gas_energy_inventory",
-					inventory.gasStandardVolumeNanos(), decimal(inventory.gasMassKilograms()),
-					inventory.internalEnergyAvailable() ? decimal(inventory.totalInternalEnergyEu()) : "—"));
+					UnitFormat.volumeNanos(inventory.gasStandardVolumeNanos()), decimal(inventory.gasMassKilograms()),
+					inventory.internalEnergyAvailable() ? UnitFormat.energy(inventory.totalInternalEnergyJ()) : "—"));
 			ControllerSummary.TemperatureRange range = inventory.temperatureRange();
 			text.append("\n").append(Component.translatable("message.mmm.probe.controller_temperature_range",
 					range.available() ? decimal(range.minimumK()) : "—",
@@ -163,7 +165,7 @@ public final class FieldProbeItem extends Item {
 				cellX(observation, carrierCell), cellY(observation, carrierCell), cellZ(observation, carrierCell));
 		if (observation != null) {
 			text.append("\n").append(Component.translatable("message.mmm.probe.liquid",
-					decimal(observation.liquidVolumeCubicMetres() * 1_000.0),
+					UnitFormat.volume(observation.liquidVolumeCubicMetres()),
 					decimal(observation.liquidMassKilograms()), decimal(observation.densityKilogramsPerCubicMetre())));
 			if (observation.temperatureKelvin().isPresent()) {
 				text.append("\n").append(Component.translatable("message.mmm.probe.temperature",
@@ -206,21 +208,21 @@ public final class FieldProbeItem extends Item {
 				.toList();
 		for (CellCarrierInventoryView.SolidAmount solid : solids.stream().limit(MAX_SOLIDS).toList()) {
 			text.append("\n").append(Component.translatable("message.mmm.probe.solid", solid.kind().name(),
-					solid.stableId(), solid.solidVolumeSvq(), decimal(solid.massKilograms())));
+					solid.stableId(), UnitFormat.solidVolume(solid.solidVolumeSvq()), decimal(solid.massKilograms())));
 		}
 		appendHidden(text, solids.size() - MAX_SOLIDS);
 		CellCarrierInventoryView.GasAmount gas = carriers.gas();
 		if (gas == null) return;
 		text.append("\n").append(Component.translatable(gas.ambient()
 					? "message.mmm.probe.gas_ambient" : "message.mmm.probe.gas_sealed",
-				gas.nodeId(), decimal(gas.absolutePressurePascal()), decimal(gas.temperatureKelvin())));
+				gas.nodeId(), UnitFormat.pressure(gas.absolutePressurePascal()), decimal(gas.temperatureKelvin())));
 		List<CellCarrierInventoryView.ComponentAmount> components = gas.components().stream()
 				.sorted(Comparator.comparingLong(CellCarrierInventoryView.ComponentAmount::standardVolumeNanos).reversed()
 						.thenComparing(CellCarrierInventoryView.ComponentAmount::componentId)).toList();
 		for (CellCarrierInventoryView.ComponentAmount component
 				: components.stream().limit(MAX_GAS_COMPONENTS).toList()) {
 			text.append("\n").append(Component.translatable("message.mmm.probe.gas_component",
-					component.componentId(), component.standardVolumeNanos(), decimal(component.massKilograms())));
+					component.componentId(), UnitFormat.volumeNanos(component.standardVolumeNanos()), decimal(component.massKilograms())));
 		}
 		appendHidden(text, components.size() - MAX_GAS_COMPONENTS);
 	}
@@ -231,7 +233,7 @@ public final class FieldProbeItem extends Item {
 						.thenComparing(FluidCellObservation.MaterialAmount::materialId)).toList();
 		for (FluidCellObservation.MaterialAmount material : sorted.stream().limit(MAX_MATERIALS).toList()) {
 			text.append("\n").append(Component.translatable("message.mmm.probe.material", material.materialId(),
-					decimal(material.volumeCubicMetres() * 1_000.0), decimal(material.massKilograms())));
+					UnitFormat.volume(material.volumeCubicMetres()), decimal(material.massKilograms())));
 		}
 		appendHidden(text, sorted.size() - MAX_MATERIALS);
 	}
@@ -242,7 +244,7 @@ public final class FieldProbeItem extends Item {
 						.thenComparing(FluidCellObservation.SpeciesAmount::speciesId)).toList();
 		for (FluidCellObservation.SpeciesAmount amount : sorted.stream().limit(MAX_SPECIES).toList()) {
 			text.append("\n").append(Component.translatable("message.mmm.probe.species",
-					amount.speciesId(), amount.amountQuanta()));
+					amount.speciesId(), UnitFormat.amount(amount.amountQuanta())));
 		}
 		appendHidden(text, sorted.size() - MAX_SPECIES);
 	}

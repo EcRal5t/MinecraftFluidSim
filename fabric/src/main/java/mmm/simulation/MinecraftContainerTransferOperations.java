@@ -296,7 +296,7 @@ final class MinecraftContainerTransferOperations {
 		region.wakeForActivity();
 		return new TransferOutcome(true, true, new ItemStack(MmmItems.GRANULAR_CONTAINER),
 				String.format("已注入 %.2f%% 干式容器（%d 种材料）",
-						100.0 * inserted.solidVolumeSvq() / SolidVolume.SVQ_PER_BV, contents.groups().size()),
+						100.0 * inserted.solidVolumeSvq() / SolidVolume.SVQ_PER_CUBIC_METER, contents.groups().size()),
 				inserted.solidVolumeSvq());
 	}
 
@@ -323,7 +323,7 @@ final class MinecraftContainerTransferOperations {
 		region.wakeForActivity();
 		return new TransferOutcome(true, false, ContainerItemStacks.toStack(planned[0]),
 				String.format("已舀取 %.2f%% 干式容器（%d 种材料）",
-						100.0 * taken / SolidVolume.SVQ_PER_BV, planned[0].groups().size()), taken);
+						100.0 * taken / SolidVolume.SVQ_PER_CUBIC_METER, planned[0].groups().size()), taken);
 	}
 
 	/** Deterministic largest-remainder-style apportionment; component masses remain exact doubles. */

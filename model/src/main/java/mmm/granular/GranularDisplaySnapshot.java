@@ -84,7 +84,7 @@ public record GranularDisplaySnapshot(
 					quantizePosition(parcel.z(), sizeZ * cellSize),
 					Math.min(MAX_PARCEL_GLYPH_DIAMETER_Q, Math.max(1,
 							quantizeUnit(Math.cbrt(parcel.solidVolumeSvq()
-									/ (double) SolidVolume.SVQ_PER_BV) / cellSize))),
+									/ (double) SolidVolume.SVQ_PER_CUBIC_METER) / cellSize))),
 					parcel.materialHandle())));
 		}
 		candidates.sort(Comparator.comparingLong(Candidate::key).thenComparingInt(Candidate::ordinal));

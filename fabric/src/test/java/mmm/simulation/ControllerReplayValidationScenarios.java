@@ -25,7 +25,7 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 		long generation = 0L;
 		FluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(5, 0, 4, 128.0F, 6);
 		require(first.addedVolume() == 128.0F && !first.markerBudgetLimited(),
-				"gas-free control did not inject the first 16 BV source: " + first);
+				"gas-free control did not inject the first 16 m³ source: " + first);
 		FluidDomainState state = domain.captureAuthoritativeState();
 		for (int step = 0; step < 40; step++) {
 			state = backend.evaluate(new FluidStepRequest(
@@ -34,7 +34,7 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 		domain = FluidDomain.restoreAuthoritativeState(state);
 		FluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(3, 3, 5, 112.0F, 6);
 		require(second.addedVolume() == 112.0F && !second.markerBudgetLimited(),
-				"gas-free control did not inject the second 14 BV source: " + second);
+				"gas-free control did not inject the second 14 m³ source: " + second);
 		double expectedVolume = domain.totalVolumeExact();
 		double expectedMass = domain.totalMass();
 		double maximumKinetic = 0.0, tailMaximumKinetic = 0.0, finalKinetic = 0.0;
@@ -112,7 +112,7 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 				"empty production controller did not bootstrap one closed gas owner");
 		FluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(5, 0, 4, 128.0F, 6);
 		require(first.addedVolume() == 128.0F && !first.markerBudgetLimited(),
-				"production controller did not inject the first 16 BV source: " + first);
+				"production controller did not inject the first 16 m³ source: " + first);
 
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		long generation = 0L;
@@ -144,7 +144,7 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 
 		FluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(3, 3, 5, 112.0F, 6);
 		require(second.addedVolume() == 112.0F && !second.markerBudgetLimited(),
-				"production controller did not inject the second 14 BV source: " + second);
+				"production controller did not inject the second 14 m³ source: " + second);
 		state = domain.captureAuthoritativeState();
 		require(domain.gasBoundary().externalSource().equals(initialSource)
 					&& domain.gasBoundary().escapedSink().equals(initialSink)
@@ -203,7 +203,7 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 		FluidDomain domain = createEmptyFullyBoundController(registries);
 		FluidDomain.VolumeAddition pour = domain.addVolumeNearBudgeted(7, 6, 7, 128.0F, 6);
 		require(pour.addedVolume() == 128.0F && !pour.markerBudgetLimited(),
-				"phase-enabled controller did not inject the complete 16 BV source: " + pour);
+				"phase-enabled controller did not inject the complete 16 m³ source: " + pour);
 
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		FluidDomainState state = domain.captureAuthoritativeState();
@@ -246,7 +246,7 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 								+ ", condensed=" + condensedCells + ", " + gasLedgerDetail(domain));
 				FluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(7, 6, 7, 128.0F, 6);
 				require(second.addedVolume() == 128.0F && !second.markerBudgetLimited(),
-						"settled phase-enabled controller rejected the second 16 BV source: " + second);
+						"settled phase-enabled controller rejected the second 16 m³ source: " + second);
 				state = domain.captureAuthoritativeState();
 			}
 		}
@@ -259,7 +259,7 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 		}
 		require(!domain.hasPendingPhaseVolumeWork()
 				&& domain.removeVolumeNear(4, 1, 4, 128.0F, 6) == 128.0F,
-				"settled phase-enabled controller rejected the reported 16 BV drain target");
+				"settled phase-enabled controller rejected the reported 16 m³ drain target");
 		System.out.printf("  phase-enabled controller pour: operations=%d, boiled=%d, condensed=%d, %s%n",
 				phaseOperations, boiledCells, condensedCells, gasLedgerDetail(domain));
 	}
@@ -279,7 +279,7 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 		FluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(5, 0, 4, 128.0F, 6);
 		FluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(3, 3, 5, 112.0F, 6);
 		require(first.addedVolume() == 128.0F && second.addedVolume() == 112.0F,
-				"thermal-off restore fixture did not establish 30 BV before gas bootstrap");
+				"thermal-off restore fixture did not establish 30 m³ before gas bootstrap");
 		domain.bindGasRegistry(registries.gas());
 		domain.bootstrapGasState("");
 		long retainedInventory = domain.gasBoundary().sealedInventoryNanos();
@@ -295,7 +295,7 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 
 		FluidDomain.VolumeAddition boundaryPour = domain.addVolumeNearBudgeted(6, 0, 0, 128.0F, 6);
 		require(boundaryPour.addedVolume() == 128.0F && !boundaryPour.markerBudgetLimited(),
-				"thermal-off boundary pour did not inject the complete 16 BV source");
+				"thermal-off boundary pour did not inject the complete 16 m³ source");
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		FluidDomainState state = domain.captureAuthoritativeState();
 		long generation = 0L;
@@ -352,7 +352,7 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 
 		FluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(2, 0, 0, 128.0F, 6);
 		require(first.addedVolume() == 128.0F && !first.markerBudgetLimited(),
-				"reported first pour did not inject the complete 16 BV source: " + first);
+				"reported first pour did not inject the complete 16 m³ source: " + first);
 		state = domain.captureAuthoritativeState();
 		for (int step = 0; step < 60; step++) {
 			state = backend.evaluate(new FluidStepRequest(generation++, state, List.of(), false, 0)).state();
@@ -363,7 +363,7 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 
 		FluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(5, 3, 5, 112.0F, 6);
 		require(second.addedVolume() == 112.0F && !second.markerBudgetLimited(),
-				"reported second pour did not inject the complete 14 BV source: " + second);
+				"reported second pour did not inject the complete 14 m³ source: " + second);
 		int maximumNodes = domain.gasBoundary().nodeCount();
 		state = domain.captureAuthoritativeState();
 		for (int step = 0; step < 200; step++) {

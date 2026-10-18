@@ -70,7 +70,7 @@ public final class GranularRegistry {
 
 	private byte[] encodeCanonical() {
 		StringBuilder out = new StringBuilder(2048).append("mmm-granular-registry\n")
-				.append("svq-per-bv=").append(SolidVolume.SVQ_PER_BV).append('\n')
+				.append("svq-per-m3=").append(SolidVolume.SVQ_PER_CUBIC_METER).append('\n')
 				.append("porosity-scale=").append(GranularLimits.POROSITY_SCALE).append('\n')
 				.append("chemical-registry=").append(chemicalRegistryFingerprint).append('\n');
 		for (ParticulateMaterial material : materials) {
@@ -95,7 +95,7 @@ public final class GranularRegistry {
 			out.append("R|").append(reaction.id()).append('|').append(reaction.liquidPhaseId()).append('|');
 			appendMap(out, reaction.aqueousStoichiometry()); out.append('|').append(reaction.solidMaterialId()).append('|');
 			appendMap(out, reaction.solidComposition());
-			out.append('|').append(reaction.saturationCapacityExtentPerBv().canonical()).append('|')
+			out.append('|').append(reaction.saturationConcentrationMolPerCubicMeter().canonical()).append('|')
 					.append(reaction.solidExtentPerBatch()).append('|')
 					.append(reaction.solidVolumeSvqPerBatch()).append('|')
 					.append(reaction.accessibleSurfaceSvqPerCellStep()).append('|')
@@ -133,11 +133,11 @@ public final class GranularRegistry {
 		ExactRational exactMassPerBatch = ExactRational.ZERO;
 		for (Map.Entry<String, Integer> term : reaction.solidComposition().entrySet()) {
 			exactMassPerBatch = exactMassPerBatch.add(
-					chemicalRegistry.species(chemicalRegistry.speciesHandle(term.getKey())).massKilogramsPerAu()
+					chemicalRegistry.species(chemicalRegistry.speciesHandle(term.getKey())).molarMassKgPerMol()
 					.multiply(term.getValue()).multiply(reaction.solidExtentPerBatch())
-					.divide(mmm.chemistry.ChemicalLimits.QUANTA_PER_AU));
+					.divide(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL));
 		}
-		double representedDensity = exactMassPerBatch.multiply(SolidVolume.SVQ_PER_BV)
+		double representedDensity = exactMassPerBatch.multiply(SolidVolume.SVQ_PER_CUBIC_METER)
 				.divide(reaction.solidVolumeSvqPerBatch()).toDouble();
 		double tolerance = Math.max(1.0E-9,
 				Math.max(Math.ulp(representedDensity), Math.ulp(solid.referenceDensity())) * 8.0);

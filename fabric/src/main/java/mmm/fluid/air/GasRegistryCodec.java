@@ -89,7 +89,7 @@ public final class GasRegistryCodec {
 			ListTag species = new ListTag();
 			for (GasComponentDefinition.DefaultSpecies entry : component.defaultSpeciesPerCubicMeter()) {
 				CompoundTag value = new CompoundTag(); value.putString("Species", entry.speciesId());
-				value.putString("QuantaPerCubicMeter", entry.quantaPerCubicMeter().canonical()); species.add(value);
+				value.putString("ConcentrationMolPerCubicMeter", entry.concentrationMolPerCubicMeter().canonical()); species.add(value);
 			}
 			tag.put("Species", species); components.add(tag);
 		}
@@ -125,9 +125,9 @@ public final class GasRegistryCodec {
 			ArrayList<GasComponentDefinition.DefaultSpecies> species = new ArrayList<>(encodedSpecies.size());
 			for (int entry = 0; entry < encodedSpecies.size(); entry++) {
 				CompoundTag value = compound(encodedSpecies, entry, "component species");
-				requireAll(value, Map.of("Species", Tag.TAG_STRING, "QuantaPerCubicMeter", Tag.TAG_STRING));
+				requireAll(value, Map.of("Species", Tag.TAG_STRING, "ConcentrationMolPerCubicMeter", Tag.TAG_STRING));
 				species.add(new GasComponentDefinition.DefaultSpecies(value.getStringOr("Species", ""),
-						ExactRational.parse(value.getStringOr("QuantaPerCubicMeter", ""))));
+						ExactRational.parse(value.getStringOr("ConcentrationMolPerCubicMeter", ""))));
 			}
 			result.add(new GasComponentDefinition(tag.getStringOr("Id", ""),
 					Double.longBitsToDouble(tag.getLongOr("MassDensityBits", 0L)),

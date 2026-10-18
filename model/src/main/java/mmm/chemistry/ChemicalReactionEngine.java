@@ -82,15 +82,15 @@ public final class ChemicalReactionEngine {
 		return ph(mixture, 1.0);
 	}
 
-	public double ph(ChemicalMixtureRecord mixture, double blockVolume) {
-		if (!(Double.isFinite(blockVolume) && blockVolume > 0.0)) {
-			throw new IllegalArgumentException("pH block volume must be positive and finite");
+	public double ph(ChemicalMixtureRecord mixture, double volumeCubicMeters) {
+		if (!(Double.isFinite(volumeCubicMeters) && volumeCubicMeters > 0.0)) {
+			throw new IllegalArgumentException("pH volume in m³ must be positive and finite");
 		}
 		long acid = mixture.amount(registry.speciesHandle(BuiltinChemicalDefinitions.H_PLUS));
 		long base = mixture.amount(registry.speciesHandle(BuiltinChemicalDefinitions.OH_MINUS));
 		long difference = acid >= base ? acid - base : base - acid;
 		if (difference == 0L) return 7.0;
-		double strength = Math.min(7.0, Math.log10(1.0 + difference / (1_000.0 * blockVolume)));
+		double strength = Math.min(7.0, Math.log10(1.0 + (difference / (double) ChemicalLimits.QUANTA_PER_MOL) / (1e-3 * volumeCubicMeters)));
 		return acid > base ? 7.0 - strength : 7.0 + strength;
 	}
 

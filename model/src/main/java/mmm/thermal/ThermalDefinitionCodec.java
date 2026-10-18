@@ -24,7 +24,7 @@ public final class ThermalDefinitionCodec {
 	public static ThermalMaterialDefinition decodeMaterial(String stableId, Reader input) {
 		JsonObject root = object(input);
 		requireOnly(root, "carrier_kind", "carrier_id", "reference_temperature_k",
-				"reference_specific_energy_eu_per_mu", "conductivity_eu_per_second_meter_k", "caloric_segments");
+				"reference_specific_energy_j_per_kg", "conductivity_w_per_m_k", "caloric_segments");
 		JsonElement segmentElement = required(root, "caloric_segments");
 		if (!segmentElement.isJsonArray()) throw new IllegalArgumentException("caloric_segments must be an array");
 		JsonArray array = segmentElement.getAsJsonArray();
@@ -35,31 +35,31 @@ public final class ThermalDefinitionCodec {
 		for (JsonElement element : array) {
 			if (!element.isJsonObject()) throw new IllegalArgumentException("caloric segment must be an object");
 			JsonObject segment = element.getAsJsonObject();
-			requireOnly(segment, "minimum_temperature_k", "maximum_temperature_k", "specific_heat_eu_per_mu_k");
+			requireOnly(segment, "minimum_temperature_k", "maximum_temperature_k", "specific_heat_j_per_kg_k");
 			segments.add(new ThermalMaterialDefinition.CaloricSegment(
 					finiteDouble(segment, "minimum_temperature_k"), finiteDouble(segment, "maximum_temperature_k"),
-					finiteDouble(segment, "specific_heat_eu_per_mu_k")));
+					finiteDouble(segment, "specific_heat_j_per_kg_k")));
 		}
 		ThermalMaterialDefinition.CarrierKind kind;
 		try { kind = ThermalMaterialDefinition.CarrierKind.valueOf(string(root, "carrier_kind")); }
 		catch (IllegalArgumentException invalid) { throw new IllegalArgumentException("Unknown thermal carrier_kind", invalid); }
 		return new ThermalMaterialDefinition(stableId, kind, string(root, "carrier_id"),
 				finiteDouble(root, "reference_temperature_k"),
-				finiteDouble(root, "reference_specific_energy_eu_per_mu"),
-				finiteDouble(root, "conductivity_eu_per_second_meter_k"), segments);
+				finiteDouble(root, "reference_specific_energy_j_per_kg"),
+				finiteDouble(root, "conductivity_w_per_m_k"), segments);
 	}
 
 	public static ThermalSpeciesOffset decodeSpecies(String speciesStableId, Reader input) {
 		JsonObject root = object(input);
-		requireOnly(root, "species_id", "host_thermal_material", "reference_internal_energy_eu_per_au");
+		requireOnly(root, "species_id", "host_thermal_material", "reference_internal_energy_j_per_mol");
 		return new ThermalSpeciesOffset(speciesStableId, string(root, "species_id"), string(root, "host_thermal_material"),
-				ExactRational.parse(string(root, "reference_internal_energy_eu_per_au")));
+				ExactRational.parse(string(root, "reference_internal_energy_j_per_mol")));
 	}
 
 	public static ThermalPhaseTransition decodeTransition(String stableId, Reader input) {
 		JsonObject root = object(input);
 		requireOnly(root, "lower_energy_material", "upper_energy_material",
-				"lower_volume_svq_per_batch", "upper_volume_svq_per_batch", "mass_mu_per_batch",
+				"lower_volume_svq_per_batch", "upper_volume_svq_per_batch", "mass_kg_per_batch",
 				"interface_requirement", "equilibrium_curve");
 		ThermalPhaseTransition.InterfaceRequirement requirement;
 		try { requirement = ThermalPhaseTransition.InterfaceRequirement.valueOf(string(root, "interface_requirement")); }
@@ -81,7 +81,7 @@ public final class ThermalDefinitionCodec {
 		return new ThermalPhaseTransition(stableId, string(root, "lower_energy_material"),
 				string(root, "upper_energy_material"),
 				exactLong(root, "lower_volume_svq_per_batch"), exactLong(root, "upper_volume_svq_per_batch"),
-				ExactRational.parse(string(root, "mass_mu_per_batch")), requirement, curve);
+				ExactRational.parse(string(root, "mass_kg_per_batch")), requirement, curve);
 	}
 
 	public static ThermalBoundaryDefinition decodeBoundary(String stableId, Reader input) {

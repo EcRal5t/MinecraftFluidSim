@@ -81,9 +81,9 @@ public final class ChemicalTransferLedger {
 				throw new IllegalArgumentException("Chemical transfer residual must be finite");
 			}
 			TreeMap<String, Long> canonical = new TreeMap<>();
-			if (speciesQuanta == null || speciesQuanta.isEmpty()
+			if (speciesQuanta == null
 					|| speciesQuanta.size() > ChemicalLimits.MAX_TRANSFER_SPECIES_PER_GROUP) {
-				throw new IllegalArgumentException("Chemical transfer species are empty or over budget");
+				throw new IllegalArgumentException("Chemical transfer species are over budget");
 			}
 			for (Map.Entry<String, Long> entry : speciesQuanta.entrySet()) {
 				ChemicalIds.requireId(entry.getKey(), "chemical ledger species id");

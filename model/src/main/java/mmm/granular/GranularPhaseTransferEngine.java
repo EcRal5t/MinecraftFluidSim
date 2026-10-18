@@ -51,7 +51,7 @@ public final class GranularPhaseTransferEngine {
 		}
 		if (available == Long.MAX_VALUE) available = 0L;
 		long totalExtent = Math.addExact(available, existingAccessibleExtent);
-		long capacity = floorCapacity(rule.saturationCapacityExtentPerBv(), liquid, totalExtent);
+		long capacity = floorCapacity(rule.saturationConcentrationMolPerCubicMeter(), liquid, totalExtent);
 		long target = Math.max(0L, totalExtent - capacity);
 		long signedExtent = target - existingAccessibleExtent;
 		if (signedExtent == 0L) return Plan.none();
@@ -214,7 +214,7 @@ public final class GranularPhaseTransferEngine {
 		return new SolidCompositionRecord(species, amounts, Double.doubleToRawLongBits(0.0));
 	}
 
-	private static long floorCapacity(ExactRational capacityPerBv, List<LiquidParcel> liquid, long totalExtent) {
+	private static long floorCapacity(ExactRational capacityMolPerCubicMeter, List<LiquidParcel> liquid, long totalExtent) {
 		int minimumExponent = Integer.MAX_VALUE;
 		Dyadic[] volumes = new Dyadic[liquid.size()];
 		for (int index = 0; index < volumes.length; index++) {
@@ -224,9 +224,10 @@ public final class GranularPhaseTransferEngine {
 		BigInteger exactCellVolume = BigInteger.ZERO;
 		for (Dyadic volume : volumes) exactCellVolume = exactCellVolume.add(
 				BigInteger.valueOf(volume.significand()).shiftLeft(volume.exponent() - minimumExponent));
-		BigInteger numerator = capacityPerBv.numerator().multiply(exactCellVolume);
-		BigInteger denominator = capacityPerBv.denominator().multiply(BigInteger.valueOf(
-				SolidVolume.SVQ_PER_BV / SolidVolume.SVQ_PER_CELL));
+		BigInteger numerator = capacityMolPerCubicMeter.numerator().multiply(exactCellVolume)
+				.multiply(BigInteger.valueOf(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL));
+		BigInteger denominator = capacityMolPerCubicMeter.denominator().multiply(BigInteger.valueOf(
+				SolidVolume.SVQ_PER_CUBIC_METER / SolidVolume.SVQ_PER_CELL));
 		if (minimumExponent >= 0) numerator = numerator.shiftLeft(minimumExponent);
 		else denominator = denominator.shiftLeft(-minimumExponent);
 		return numerator.divide(denominator).min(BigInteger.valueOf(totalExtent)).longValueExact();

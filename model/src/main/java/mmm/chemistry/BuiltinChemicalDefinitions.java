@@ -20,8 +20,7 @@ public final class BuiltinChemicalDefinitions {
 	public static final String NACL = "mmm:nacl";
 	public static final String KNO3 = "mmm:kno3";
 	public static final String CO2 = "mmm:co2";
-	public static final String OIL_CARRIER = "mmm:oil_carrier";
-	public static final String MERCURY_CARRIER = "mmm:mercury_carrier";
+	public static final String HG = "mmm:hg";
 
 	private static final List<ChemicalSpecies> SPECIES = List.of(
 			species(H2O, Map.of("H", 2, "O", 1), 0, 18, 0xff4e9cff),
@@ -38,19 +37,18 @@ public final class BuiltinChemicalDefinitions {
 			species(NACL, Map.of("Na", 1, "Cl", 1), 0, 58, 0xffe4edf0),
 			species(KNO3, Map.of("K", 1, "N", 1, "O", 3), 0, 101, 0xffe2ddff),
 			species(CO2, Map.of("C", 1, "O", 2), 0, 44, 0xffc8c8c8),
-			species(OIL_CARRIER, Map.of("Oil", 1), 0, 800, 0xffc89a32),
-			species(MERCURY_CARRIER, Map.of("Hg", 1), 0, 13_600, 0xffaeb6c2)
+			species(HG, Map.of("Hg", 1), 0, 200, 0xffaeb6c2)
 	);
 
 	private static final List<ChemicalPhaseDefinition> PHASES = List.of(
 			new ChemicalPhaseDefinition(AQUEOUS, "mmm:water",
 					List.of(H2O, H_PLUS, OH_MINUS, NA_PLUS, K_PLUS, CL_MINUS, NO3_MINUS,
 							HCL, NAOH, NANO3, KCL, NACL, KNO3, CO2),
-					Map.of(H2O, ExactRational.parse("500/9")), true),
+					Map.of(H2O, ExactRational.parse("500000/9")), true),
 			new ChemicalPhaseDefinition("mmm:oil_chemistry", "mmm:oil",
-					List.of(OIL_CARRIER), Map.of(OIL_CARRIER, ExactRational.ONE), false),
+					List.of(), Map.of(), false),
 			new ChemicalPhaseDefinition("mmm:mercury_chemistry", "mmm:mercury",
-					List.of(MERCURY_CARRIER), Map.of(MERCURY_CARRIER, ExactRational.ONE), false)
+					List.of(HG), Map.of(HG, ExactRational.of(68_000)), false)
 	);
 
 	private static final List<ChemicalReaction> REACTIONS = List.of(
@@ -72,8 +70,8 @@ public final class BuiltinChemicalDefinitions {
 	public static List<ChemicalPhaseDefinition> phases() { return PHASES; }
 	public static List<ChemicalReaction> reactions() { return REACTIONS; }
 
-	private static ChemicalSpecies species(String id, Map<String, Integer> composition, int charge, long mass, int color) {
-		return new ChemicalSpecies(id, composition, charge, ExactRational.of(mass), color);
+	private static ChemicalSpecies species(String id, Map<String, Integer> composition, int charge, long molarMassGramsPerMol, int color) {
+		return new ChemicalSpecies(id, composition, charge, ExactRational.of(molarMassGramsPerMol).divide(1000), color);
 	}
 
 	private static ChemicalReaction dissociation(String id, String reactant, Map<String, Integer> products) {

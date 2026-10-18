@@ -30,6 +30,27 @@ public final class M7ChemistryValidation {
 
 	private static void validateDefaultParcels() {
 		var registry = BuiltinChemicalDefinitions.REGISTRY;
+		check(ChemicalAmount.quanta(ExactRational.parse("0.000001")) == 1
+				&& ChemicalAmount.moles(1_234_567).equals(ExactRational.parse("1.234567"))
+				&& ChemicalAmount.quanta(ChemicalAmount.moles(Long.MAX_VALUE)) == Long.MAX_VALUE,
+				"integer micromoles did not round-trip exactly");
+		expectFailure(() -> ChemicalAmount.quanta(ExactRational.parse("0.0000001")), "fractional μmol was committed");
+		expectFailure(() -> ChemicalAmount.quanta(ExactRational.of(Long.MAX_VALUE)), "mol conversion overflow was accepted");
+		var halfMeterScale = mmm.units.SolverUnitScale.forCellSize(.5F);
+		check(halfMeterScale.cubicMeters(1) == .125 && halfMeterScale.kilograms(1000) == 125
+				&& halfMeterScale.solverMass(125) == 1000, "normalized inventory changed its SI scale");
+		var physicalStore = new ChemicalParcelStore(registry, halfMeterScale, 2, 1);
+		var water = physicalStore.defaultRecord("mmm:water", 1, .5F, 1000, false);
+		check(water.amount(registry.speciesHandle(BuiltinChemicalDefinitions.H2O)) == 6_944_444_444L
+				&& Math.abs(water.massKilograms(registry) - 125) < 1e-12,
+				"default water concentration or molar mass changed physical inventory");
+		var oil = physicalStore.defaultRecord("mmm:oil", 1, .5F, 800, false);
+		check(oil.entryCount() == 0 && oil.massResidualKilograms() == 100,
+				"oil material mass acquired fictitious molecular inventory");
+		var mercury = physicalStore.defaultRecord("mmm:mercury", 1, .5F, 13_600, false);
+		check(mercury.amount(registry.speciesHandle(BuiltinChemicalDefinitions.HG)) == 8_500_000_000L
+				&& mercury.exactSpeciesMassKilograms(registry).equals(ExactRational.of(1700)),
+				"mercury molar inventory did not close its material mass");
 		var scale = mmm.units.SolverUnitScale.forCellSize(1.0F);
 		var store = new ChemicalParcelStore(registry, scale, 2, 1);
 		var original = store.defaultRecord("mmm:water", 0.125F, 1.0F, 125.0, false);
@@ -96,10 +117,10 @@ public final class M7ChemistryValidation {
 				java.math.BigInteger.ONE.shiftLeft(ChemicalLimits.MAX_RATIONAL_BITS)),
 				"zero fast path bypassed rational magnitude budget");
 		String species = "{\"composition\":{\"H\":\"2\",\"O\":\"1\"},\"charge\":\"0\","
-				+ "\"mass_per_au\":\"18\",\"base_argb\":\"#ff4e9cff\"}";
+				+ "\"molar_mass_kg_per_mol\":\"0.018\",\"base_argb\":\"#ff4e9cff\"}";
 		ChemicalSpecies decoded = ChemicalDefinitionCodec.decodeSpecies("test:h2o", new StringReader(species));
-		check(decoded.massKilogramsPerAu().equals(ExactRational.of(18)), "species exact mass codec changed value");
-		expectFailure(() -> ChemicalDefinitionCodec.decodeSpecies("test:bad", new StringReader(species.replace("\"18\"", "18"))),
+		check(decoded.molarMassKgPerMol().equals(ExactRational.parse("0.018")), "species exact mass codec changed value");
+		expectFailure(() -> ChemicalDefinitionCodec.decodeSpecies("test:bad", new StringReader(species.replace("\"0.018\"", "0.018"))),
 				"JSON number bypassed exact rational string codec");
 		expectFailure(() -> ExactRational.parse("1/0"), "zero denominator accepted");
 		expectFailure(() -> ExactRational.parse("1e-500000"), "unbounded decimal scale was accepted");
@@ -173,12 +194,12 @@ public final class M7ChemistryValidation {
 		check(reference.fingerprint().matches("[0-9a-f]{64}"), "fingerprint is not SHA-256 hex");
 		ChemicalRegistry heavier = new ChemicalRegistry(reference.species().stream().map(value ->
 				new ChemicalSpecies(value.id(), value.composition(), value.charge(),
-						value.massKilogramsPerAu().multiply(2), value.baseArgb())).toList(),
+						value.molarMassKgPerMol().multiply(2), value.baseArgb())).toList(),
 				reference.phases(), reference.reactions());
 		ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(reference,
 				Map.of(BuiltinChemicalDefinitions.H2O, 123_457L), 0.125);
 		ExactRational expected = reference.species(reference.speciesHandle(BuiltinChemicalDefinitions.H2O))
-				.massKilogramsPerAu().multiply(123_457L).divide(ChemicalLimits.QUANTA_PER_AU);
+				.molarMassKgPerMol().multiply(123_457L).divide(ChemicalLimits.QUANTA_PER_MOL);
 		ChemicalMixtureRecord adjusted = record.withMassResidualKilograms(-0.25);
 		ChemicalMixtureRecord rebuilt = ChemicalMixtureRecord.fromStableAmounts(reference,
 				Map.of(BuiltinChemicalDefinitions.H2O, 123_457L), -0.25);
@@ -198,7 +219,7 @@ public final class M7ChemistryValidation {
 		var wideSpecies = new ChemicalSpecies("test:wide", Map.of("X", 1), 0, wideMass, 0xff000000);
 		var wideDefinitions = new ArrayList<>(reference.species()); wideDefinitions.add(wideSpecies);
 		var wideRegistry = new ChemicalRegistry(wideDefinitions, reference.phases(), reference.reactions());
-		check(ChemicalMixtureRecord.fromStableAmounts(wideRegistry, Map.of(wideSpecies.id(), ChemicalLimits.QUANTA_PER_AU), 0)
+		check(ChemicalMixtureRecord.fromStableAmounts(wideRegistry, Map.of(wideSpecies.id(), ChemicalLimits.QUANTA_PER_MOL), 0)
 				.exactSpeciesMassKilograms(wideRegistry).equals(wideMass), "mass-factor cache rejected a valid wide rational definition");
 	}
 
@@ -232,7 +253,7 @@ public final class M7ChemistryValidation {
 	private static void validateAuditLedgerCodec() throws Exception {
 		ChemicalRegistry registry = BuiltinChemicalDefinitions.REGISTRY;
 		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry,
-				Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU), 856.0);
+				Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_MOL), 856.0);
 		ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
 				"mmm:water", true, 1.0, 1_000.0,
 				mixture.massResidualKilogramsBits(), mixture.stableAmounts(registry))));
@@ -266,7 +287,7 @@ public final class M7ChemistryValidation {
 			List<ChemicalSpecies> changedSpecies = new ArrayList<>(BuiltinChemicalDefinitions.species());
 			ChemicalSpecies original = changedSpecies.getFirst();
 			changedSpecies.set(0, new ChemicalSpecies(original.id(), original.composition(), original.charge(),
-					original.massKilogramsPerAu(), original.baseArgb() ^ 0x00010101));
+					original.molarMassKgPerMol(), original.baseArgb() ^ 0x00010101));
 			ChemicalRegistry changed = new ChemicalRegistry(
 					changedSpecies, BuiltinChemicalDefinitions.phases(), BuiltinChemicalDefinitions.reactions());
 			check(!changed.fingerprint().equals(definitions.fingerprint()),

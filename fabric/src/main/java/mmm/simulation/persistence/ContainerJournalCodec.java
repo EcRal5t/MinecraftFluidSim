@@ -435,7 +435,7 @@ throw new IOException("Container transfer item energy delta does not match WAL c
 
 private static void validateGranularTransferShape(ContainerTransferJournal journal) throws IOException {
 long amount = journal.solidVolumeSvq();
-if (journal.volumeNanos() != -1L || amount <= 0L || amount > mmm.granular.SolidVolume.SVQ_PER_BV) {
+if (journal.volumeNanos() != -1L || amount <= 0L || amount > mmm.granular.SolidVolume.SVQ_PER_CUBIC_METER) {
 throw new IOException("Container transfer WAL solid volume is outside one dry container: " + amount);
 }
 long before = granularVolume(journal.beforeItem());

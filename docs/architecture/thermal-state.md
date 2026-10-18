@@ -73,12 +73,33 @@
 ## 计算边界与单位
 
 热学随液体、颗粒、沉积、连续固相和气腔保存总内能。
-内部能量单位 `EU` 按焦耳标定；质量用 kg、温度用 K，热容用 J/K，导热率用 W/(m·K)。
+内能使用 J；质量用 kg、温度用 K，热容用 J/K，导热率用 W/(m·K)。
 参考态允许总内能为负，实际温度须有限且为正。
 
 `ThermalDomainState` 统一管理各载体内能、审计和派生热网格。
 `ThermalCellOperations` 处理局部平衡与能量分配，`FluidThermalBinding` 连接流体候选和热状态。
 只有液体 marker 的 solver mass 需要乘 `cellSize³` 换算为 kg；其他载体与设备直接保存 kg。
+
+单位约定统一见[设计书](system-overview.md#units)。
+物种参考能字段为 `reference_internal_energy_j_per_mol`，材料参考能、比热、导热率分别使用 `reference_specific_energy_j_per_kg`、`specific_heat_j_per_kg_k`、`conductivity_w_per_m_k`。
+相变批次质量字段为 `mass_kg_per_batch`，热注册表单位身份为 `mmm:si_mol`。
+
+### 热化学尺度依据
+
+| 数据 | 当前取值与处理依据 |
+|---|---|
+| CO₂ 水中相对气相参考能 | −19400 J/mol；旧数据 −19400000 以每千 mol 表示，除以 1000 保持原有溶解热效应 |
+| 中和生成水的物种参考能 | −57300 J/mol；沿用玩法的强酸强碱近似，纠正原先把 J/mol 数值写入每千 mol 字段造成的千倍缩小 |
+| Na⁺、Cl⁻ 固相参考能 | 各 −1950 J/mol，盐析出参考能差为 −3900 J/mol；同样纠正原先千倍缩小，反向溶解吸热 |
+| 固液、气液潜热及比热 | 已按 J/kg 与 J/(kg·K) 定义，保留数值；同一物种跨相的参考能一致时严格相消 |
+
+盐溶解量级参照 [NIST-JANAF 的 NaCl 溶解焓资料](https://janaf.nist.gov/pdf/JANAF-FourthEd-1998-Chlorine.pdf)，采用玩法精度 3.9 kJ/mol。
+反应在当前集总状态函数中按参考内能差处理；溶液体积变化及其压力功沿现有近似忽略。
+纯换算与尺度纠错分别验证，纠错后的温升由实际 mol 数、参考能差和载体热容共同决定。
+
+气液传质批次必须满足 `molesPerBatch × 10^6 = liquidQuantaPerBatch`。
+Henry 常数为 mol/(m³·Pa)，气体分压采用绝对压力，液相浓度为 mol/m³；`D/filmThickness` 为 m/s，面积乘浓度差和仿真秒得到 mol。
+CO₂ 默认批次为 0.001 mol、1000 μmol、24055 标准 nanos；气液独立 kg 差由批次质量余量保存。
 
 ## 权威数据
 

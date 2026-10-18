@@ -10,14 +10,14 @@ public record ChemicalPhaseDefinition(
 		String id,
 		String materialId,
 		List<String> allowedSpecies,
-		Map<String, ExactRational> defaultInventoryPerBv,
+		Map<String, ExactRational> defaultConcentrationMolPerCubicMeter,
 		boolean acceptsIndicator
 ) {
 	public ChemicalPhaseDefinition {
 		ChemicalIds.requireId(id, "chemical phase id");
 		ChemicalIds.requireId(materialId, "mechanical material id");
-		if (allowedSpecies == null || allowedSpecies.isEmpty() || allowedSpecies.size() > ChemicalLimits.MAX_SPECIES) {
-			throw new IllegalArgumentException("Chemical phase species list is empty or over budget: " + id);
+		if (allowedSpecies == null || allowedSpecies.size() > ChemicalLimits.MAX_SPECIES) {
+			throw new IllegalArgumentException("Chemical phase species list is missing or over budget: " + id);
 		}
 		TreeSet<String> species = new TreeSet<>();
 		for (String speciesId : allowedSpecies) {
@@ -25,16 +25,16 @@ public record ChemicalPhaseDefinition(
 			if (!species.add(speciesId)) throw new IllegalArgumentException("Duplicate allowed species " + speciesId);
 		}
 		TreeMap<String, ExactRational> defaults = new TreeMap<>();
-		if (defaultInventoryPerBv == null || defaultInventoryPerBv.isEmpty()) {
-			throw new IllegalArgumentException("Chemical phase requires a default carrier inventory: " + id);
+		if (defaultConcentrationMolPerCubicMeter == null || (defaultConcentrationMolPerCubicMeter.isEmpty() != species.isEmpty())) {
+			throw new IllegalArgumentException("Chemical phase default concentration must match its species list: " + id);
 		}
-		for (Map.Entry<String, ExactRational> entry : defaultInventoryPerBv.entrySet()) {
+		for (Map.Entry<String, ExactRational> entry : defaultConcentrationMolPerCubicMeter.entrySet()) {
 			if (!species.contains(entry.getKey()) || entry.getValue() == null || entry.getValue().signum() <= 0) {
 				throw new IllegalArgumentException("Invalid default inventory for " + id + ": " + entry.getKey());
 			}
 			defaults.put(entry.getKey(), entry.getValue());
 		}
 		allowedSpecies = List.copyOf(species);
-		defaultInventoryPerBv = Map.copyOf(defaults);
+		defaultConcentrationMolPerCubicMeter = Map.copyOf(defaults);
 	}
 }

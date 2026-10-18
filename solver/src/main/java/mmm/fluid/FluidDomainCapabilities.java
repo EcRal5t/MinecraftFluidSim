@@ -135,7 +135,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			}
 			double blockVolume = cellVolume * config.cellSize() * config.cellSize() * config.cellSize();
 			if (indicated && blockVolume > maxAddedBlockVolume) {
-				return IndicatorEditResult.rejected("Indicator volume exceeds " + maxAddedBlockVolume + " BV");
+				return IndicatorEditResult.rejected("Indicator volume exceeds " + maxAddedBlockVolume + " m³");
 			}
 			int x = cell % sizeX;
 			int yz = cell / sizeX;
@@ -395,10 +395,10 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 	public double thermalTemperatureInCell(int x, int y, int z) { return cellInventory.thermalTemperatureInCell(x, y, z); }
 
 	public record ThermalContactRequest(
-			int ordinal, int cellX, int cellY, int cellZ, double conductanceEuPerSecondK
+			int ordinal, int cellX, int cellY, int cellZ, double conductanceWPerK
 	) {
 		public ThermalContactRequest {
-			if (ordinal < 0 || !(Double.isFinite(conductanceEuPerSecondK) && conductanceEuPerSecondK > 0.0)) {
+			if (ordinal < 0 || !(Double.isFinite(conductanceWPerK) && conductanceWPerK > 0.0)) {
 				throw new IllegalArgumentException("Finite thermal contact request is invalid");
 			}
 		}
@@ -412,14 +412,14 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			if (request == null) throw new IllegalArgumentException("Finite thermal contact requests contain null");
 			mapped.add(new FiniteDeviceExchangeCoordinator.CellContactRequest(
 					cellIndexChecked(request.cellX(), request.cellY(), request.cellZ()), request.ordinal(),
-					request.conductanceEuPerSecondK()));
+					request.conductanceWPerK()));
 		}
 		return thermalState.finiteDeviceContacts(mapped, thermalMarkerContext());
 	}
 
-	public record ThermalCellEnergyDelta(int cellX, int cellY, int cellZ, double internalEnergyDeltaEu) {
+	public record ThermalCellEnergyDelta(int cellX, int cellY, int cellZ, double internalEnergyDeltaJ) {
 		public ThermalCellEnergyDelta {
-			if (!Double.isFinite(internalEnergyDeltaEu)) {
+			if (!Double.isFinite(internalEnergyDeltaJ)) {
 				throw new IllegalArgumentException("Finite thermal cell energy delta is invalid");
 			}
 		}
@@ -440,7 +440,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		for (ThermalCellEnergyDelta delta : deltas) {
 			if (delta == null) throw new IllegalArgumentException("Finite thermal cell deltas contain null");
 			mapped.add(new FiniteDeviceExchangeCoordinator.CellEnergyDelta(
-					cellIndexChecked(delta.cellX(), delta.cellY(), delta.cellZ()), delta.internalEnergyDeltaEu()));
+					cellIndexChecked(delta.cellX(), delta.cellY(), delta.cellZ()), delta.internalEnergyDeltaJ()));
 		}
 		return new FiniteThermalCellPlan(thermalState.planFiniteDeviceCellExchange(mapped, thermalMarkerContext()));
 	}

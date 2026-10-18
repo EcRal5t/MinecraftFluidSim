@@ -25,7 +25,7 @@ final class CellRemapSpeciesAllocation {
 		for (int count : required) if (count < 0) throw new IllegalArgumentException("Negative chemical sampling requirement");
 		int sourceCount = sources.size(), edgeCount = 0;
 		for (var source : sources) {
-			if (source.inventory() == null || source.inventory().isEmpty() || source.volumes() == null
+			if (source.inventory() == null || source.volumes() == null
 					|| source.targets() == null || source.volumes().length != source.targets().length)
 				throw new IllegalArgumentException("Incomplete chemical source shares");
 			boolean positive = false;
@@ -112,7 +112,7 @@ final class CellRemapSpeciesAllocation {
 	private static ChemicalMixtureRecord[] records(CellSpeciesInventory inventory, long[][] quantities, long[] totals) {
 		var result = new ChemicalMixtureRecord[totals.length];
 		for (int share = 0; share < result.length; share++) {
-			if (totals[share] == 0) continue;
+			if (totals[share] == 0 && !inventory.isEmpty()) continue;
 			for (int earlier = 0; earlier < share; earlier++) if (result[earlier] != null) {
 				boolean same = true;
 				for (long[] species : quantities) if (species[earlier] != species[share]) { same = false; break; }

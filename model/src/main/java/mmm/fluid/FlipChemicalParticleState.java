@@ -186,7 +186,7 @@ public final class FlipChemicalParticleState {
 
 		public StableMixture {
 			components = List.copyOf(components);
-			if (components.isEmpty() || components.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL
+			if (components.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL
 					|| !Double.isFinite(Double.longBitsToDouble(massResidualBits))) {
 				throw new IllegalArgumentException("Invalid stable chemical mixture");
 			}

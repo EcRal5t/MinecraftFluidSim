@@ -39,7 +39,7 @@ final class ThermalCaloricInversion {
 			public SignedDyadic exactMass(int item) { return mass; }
 		}, sensible);
 	}
-	static double heatCapacity(Inventory inventory, double temperature) { return state(inventory, temperature).heatCapacityEuPerK(); }
+	static double heatCapacity(Inventory inventory, double temperature) { return state(inventory, temperature).heatCapacityJPerK(); }
 
 	static double energyAt(ThermalMaterialDefinition material, double mass, double base, double temperature) {
 		material.specificHeatAt(temperature);
@@ -59,13 +59,13 @@ final class ThermalCaloricInversion {
 		try {
 			double sensible = material.sensibleSpecificEnergyAt(temperature), term = mass * sensible;
 			double bound = material.caloricSegments().size() * mass * Math.ulp(sensible) + Math.ulp(term) + Math.ulp(base + term)
-					+ Math.ulp(mass) * Math.abs(material.referenceSpecificEnergyEuPerMu() + sensible)
+					+ Math.ulp(mass) * Math.abs(material.referenceSpecificEnergyJPerKg() + sensible)
 					+ mass * material.specificHeatAt(temperature) * Math.ulp(temperature);
 			if (Double.isFinite(bound)) return bound;
 		} catch (IllegalArgumentException overflow) { /* The exact forward path has no intermediate integral rounding. */ }
 		SignedDyadic exactMass = SignedDyadic.of(mass), sensible = ThermalContactExchange.exactEnergyChangeBetween(material, mass,
 				material.referenceTemperatureK(), temperature);
-		SignedDyadic materialEnergy = exactMass.multiply(SignedDyadic.of(material.referenceSpecificEnergyEuPerMu())).add(sensible);
+		SignedDyadic materialEnergy = exactMass.multiply(SignedDyadic.of(material.referenceSpecificEnergyJPerKg())).add(sensible);
 		if (materialEnergy.signum() < 0) materialEnergy = SignedDyadic.ZERO.subtract(materialEnergy);
 		return Math.ulp(energyAt(material, mass, base, temperature))
 				+ divide(materialEnergy.multiply(SignedDyadic.of(Math.ulp(mass))), exactMass)
@@ -107,10 +107,10 @@ final class ThermalCaloricInversion {
 			SignedDyadic capacity = SignedDyadic.ZERO;
 			for (int group = 0; group < materials.length; group++) {
 				var material = materials[group]; var segments = material.caloricSegments();
-				capacity = capacity.add(masses[group].multiply(SignedDyadic.of(segments.getFirst().specificHeatEuPerMuK())));
+				capacity = capacity.add(masses[group].multiply(SignedDyadic.of(segments.getFirst().specificHeatJPerKgK())));
 				for (int segment = 1; segment < segments.size(); segment++) {
-					SignedDyadic change = SignedDyadic.of(segments.get(segment).specificHeatEuPerMuK())
-							.subtract(SignedDyadic.of(segments.get(segment - 1).specificHeatEuPerMuK())).multiply(masses[group]);
+					SignedDyadic change = SignedDyadic.of(segments.get(segment).specificHeatJPerKgK())
+							.subtract(SignedDyadic.of(segments.get(segment - 1).specificHeatJPerKgK())).multiply(masses[group]);
 					changes.merge(segments.get(segment).minimumTemperatureK(), change, SignedDyadic::add);
 				}
 			}

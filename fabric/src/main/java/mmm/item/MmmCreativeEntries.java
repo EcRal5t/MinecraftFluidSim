@@ -42,7 +42,7 @@ public final class MmmCreativeEntries {
 		entries.accept(MmmItems.GRANULAR_CONTAINER);
 		for (String id : java.util.List.of(
 				"mmm:source/granular/fine_sand", "mmm:source/granular/light_beads")) {
-			entries.accept(CreativeSourceItem.stack(new CreativeSourceDescriptor(id, SolidVolume.SVQ_PER_BV, null)));
+			entries.accept(CreativeSourceItem.stack(new CreativeSourceDescriptor(id, SolidVolume.SVQ_PER_CUBIC_METER, null)));
 		}
 		entries.accept(MmmBlocks.THERMAL_RESERVOIR);
 	}

@@ -1,5 +1,7 @@
 package mmm.item;
 
+import mmm.units.UnitFormat;
+
 import mmm.chemistry.ChemicalRegistry;
 import mmm.transfer.ChemicalContents;
 import mmm.transfer.ContainerFluidLedger;
@@ -111,15 +113,14 @@ public final class MaterialBucketItem extends Item {
 		}
 		if (nanos > 0L && chemical != null) {
 			tooltip.accept(Component.translatable("item.mmm.material_bucket.chemical",
-					chemical.groups().size(), chemical.totalQuanta()).withStyle(ChatFormatting.GRAY));
+					chemical.groups().size(), UnitFormat.amount(chemical.totalQuanta())).withStyle(ChatFormatting.GRAY));
 			for (ChemicalContents.Group group : chemical.groups()) {
 				tooltip.accept(Component.literal((group.indicator() ? "[indicator] " : "") + group.materialId()
-						+ " · " + String.format("%.9f m³", ContainerFluidLedger.nanosToVolume(group.volumeNanos())))
+						+ " · " + UnitFormat.volumeNanos(group.volumeNanos()))
 						.withStyle(ChatFormatting.DARK_GRAY));
 				for (ChemicalContents.SpeciesAmount species : group.species()) {
 					tooltip.accept(Component.translatable("item.mmm.material_bucket.species",
-							species.speciesId(), formatAu(species.amountQuanta(), chemical.auScale()),
-							Long.toString(species.amountQuanta())).withStyle(ChatFormatting.DARK_GRAY));
+							species.speciesId(), UnitFormat.amount(species.amountQuanta())).withStyle(ChatFormatting.DARK_GRAY));
 				}
 			}
 			appendProfileTooltip(stack, tooltip);
@@ -160,9 +161,4 @@ public final class MaterialBucketItem extends Item {
 		}
 	}
 
-	/** Exact, locale-independent display of the canonical quanta/AU ratio. */
-	private static String formatAu(long quanta, long auScale) {
-		return java.math.BigDecimal.valueOf(quanta).divide(java.math.BigDecimal.valueOf(auScale))
-				.stripTrailingZeros().toPlainString();
-	}
 }

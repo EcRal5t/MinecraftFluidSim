@@ -84,7 +84,7 @@ public final class ChemicalAuditLedgerCodec {
 			double mass = Double.longBitsToDouble(input.readLong());
 			long residualBits = input.readLong();
 			int entries = input.readInt();
-			if (entries <= 0 || entries > ChemicalLimits.MAX_TRANSFER_SPECIES_PER_GROUP) {
+			if (entries < 0 || entries > ChemicalLimits.MAX_TRANSFER_SPECIES_PER_GROUP) {
 				throw new IOException("Invalid chemical audit species count");
 			}
 			TreeMap<String, Long> species = new TreeMap<>();

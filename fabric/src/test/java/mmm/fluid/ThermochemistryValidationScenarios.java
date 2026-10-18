@@ -52,11 +52,11 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 				  "carrier_kind":"LIQUID",
 				  "carrier_id":"mmm:test",
 				  "reference_temperature_k":"300.0",
-				  "reference_specific_energy_eu_per_mu":"100.0",
-				  "conductivity_eu_per_second_meter_k":"0.5",
+				  "reference_specific_energy_j_per_kg":"100.0",
+				  "conductivity_w_per_m_k":"0.5",
 				  "caloric_segments":[
-				    {"minimum_temperature_k":"200.0","maximum_temperature_k":"300.0","specific_heat_eu_per_mu_k":"2.0"},
-				    {"minimum_temperature_k":"300.0","maximum_temperature_k":"500.0","specific_heat_eu_per_mu_k":"4.0"}
+				    {"minimum_temperature_k":"200.0","maximum_temperature_k":"300.0","specific_heat_j_per_kg_k":"2.0"},
+				    {"minimum_temperature_k":"300.0","maximum_temperature_k":"500.0","specific_heat_j_per_kg_k":"4.0"}
 				  ]
 				}
 				""";
@@ -151,6 +151,25 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 	}
 
 	static void reactionHeatIsPathIndependentStateEnergy() {
+		try {
+			var production = mmm.simulation.FullCapabilityTestFixture.load();
+			var physical = new ThermalStateFunction(production.thermal());
+			int water = production.thermal().materialHandle("mmm:water");
+			var ions = Map.of("mmm:h_plus", 1_000_000L, "mmm:oh_minus", 1_000_000L);
+			var product = Map.of("mmm:h2o", 1_000_000L);
+			double initial = physical.internalEnergyAtTemperature(water, 1, ions, 300);
+			double after = physical.stateForInternalEnergy(water, 1, product, initial).temperatureK();
+			require(Math.abs(after - (300 + 57_300.0 / 4_184)) < 1e-10,
+					"one mol neutralization did not release 57.3 kJ into 1 kg of solution");
+			int solid = production.thermal().materialHandle("mmm:precipitate");
+			var salt = Map.of("mmm:na_plus", 1_000_000L, "mmm:cl_minus", 1_000_000L);
+			require(physical.baseEnergy(solid, .058, salt) - physical.baseEnergy(water, .058, salt) == -3_900,
+					"NaCl precipitation reference energy did not use J/mol");
+		} catch (java.io.IOException failure) {
+			throw new AssertionError("Cannot load physical thermochemistry definitions", failure);
+		} catch (Exception failure) {
+			throw new AssertionError("Physical thermochemistry validation failed", failure);
+		}
 		ThermalMaterialDefinition solution = material("mmm:thermal/solution", "mmm:water", 0.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 500.0, 1_000.0)));
 		List<ThermalSpeciesOffset> offsets = List.of(
@@ -160,9 +179,9 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 		ThermalRegistry registry = new ThermalRegistry(List.of(solution), offsets, List.of(), CHEMICAL_FINGERPRINT, "");
 		ThermalStateFunction state = new ThermalStateFunction(registry);
 		int handle = registry.materialHandle(solution.id());
-		Map<String, Long> reactants = Map.of("mmm:h_plus", ChemicalLimits.QUANTA_PER_AU,
-				"mmm:oh_minus", ChemicalLimits.QUANTA_PER_AU);
-		Map<String, Long> productsA = Map.of("mmm:h2o", ChemicalLimits.QUANTA_PER_AU);
+		Map<String, Long> reactants = Map.of("mmm:h_plus", ChemicalLimits.QUANTA_PER_MOL,
+				"mmm:oh_minus", ChemicalLimits.QUANTA_PER_MOL);
+		Map<String, Long> productsA = Map.of("mmm:h2o", ChemicalLimits.QUANTA_PER_MOL);
 		Map<String, Long> productsB = new java.util.TreeMap<>(productsA);
 		double reactantReference = state.internalEnergyAtTemperature(handle, 1.0, reactants, 300.0);
 		double productTemperatureA = state.stateForInternalEnergy(handle, 1.0, productsA, reactantReference).temperatureK();
@@ -199,10 +218,10 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 			amounts.put("mmm:h2o", 13L + index);
 			ChemicalRegistry currentChemistry = index % 3 == 0 ? shifted : chemistry;
 			var mixture = ChemicalMixtureRecord.fromStableAmounts(currentChemistry, amounts, index / 128.0);
-			double expected = mass * registry.material(host).referenceSpecificEnergyEuPerMu();
+			double expected = mass * registry.material(host).referenceSpecificEnergyJPerKg();
 			for (var entry : amounts.entrySet()) expected += registry.speciesOffset(host, entry.getKey())
-					.referenceInternalEnergyEuPerAu().multiply(entry.getValue())
-					.divide(ChemicalLimits.QUANTA_PER_AU).toDouble();
+					.referenceInternalEnergyJPerMol().multiply(entry.getValue())
+					.divide(ChemicalLimits.QUANTA_PER_MOL).toDouble();
 			for (int order = 0; order < 2; order++) {
 				for (int repeat = 0; repeat < 2; repeat++) {
 					require(Double.doubleToRawLongBits(function.baseEnergy(host, mass, amounts))
@@ -227,7 +246,7 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 		ChemicalParcelStore parcels = new ChemicalParcelStore(
 				chemistry, SolverUnitScale.forCellSize(1.0F), 1, 8);
 		ChemicalMixtureRecord initial = ChemicalMixtureRecord.fromStableAmounts(
-				chemistry, Map.of(a, ChemicalLimits.QUANTA_PER_AU), 0.0);
+				chemistry, Map.of(a, ChemicalLimits.QUANTA_PER_MOL), 0.0);
 		parcels.assign(0, initial, false);
 		parcels.markDirtyCell(0);
 		double[] mass = {1.0};
@@ -259,7 +278,7 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 				(marker, mixture, candidateMass) -> ChemicalReactionStage.requireThermalCandidate(narrow,
 						marker, mixture, candidateMass, markers));
 		require(deferred.changedMarkers() == 0 && parcels.hasDirtyCells()
-				&& parcels.record(0).amount(chemistry.speciesHandle(a)) == ChemicalLimits.QUANTA_PER_AU,
+				&& parcels.record(0).amount(chemistry.speciesHandle(a)) == ChemicalLimits.QUANTA_PER_MOL,
 				"energy-limited reaction retains its source and retry state");
 		narrow.setTemperatureInCell(0, 1_000_300.0, markers);
 		SignedDyadic heated = narrow.exactEnergy(1);

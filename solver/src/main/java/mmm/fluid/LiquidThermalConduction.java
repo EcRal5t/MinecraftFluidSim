@@ -35,7 +35,7 @@ final class LiquidThermalConduction {
 			position[p][1] = domain.particles.positionY(p) / h;
 			position[p][2] = domain.particles.positionZ(p) / h;
 			int handle = thermal.thermalMaterialHandleForFluid(markers.fluidMaterialHandle(p));
-			k[p] = thermal.registry().material(handle).conductivityEuPerSecondMeterK();
+			k[p] = thermal.registry().material(handle).conductivityWPerMeterK();
 			volume[p] = markers.volume(p);
 			int cell = markers.cell(p); next[p] = head[cell]; head[cell] = p;
 		}

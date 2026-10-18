@@ -244,7 +244,7 @@ final class LiquidStratificationValidation {
 			var initial = seed.chemicalParcels().record(marker);
 			var amounts = new java.util.TreeMap<>(initial.stableAmounts(CHEMISTRY));
 			if (saltFraction > 0 && bottom != brineOnTop) {
-				long salt = Math.round(seed.unitScale.kilograms(mass[marker]) * saltFraction * ChemicalLimits.QUANTA_PER_AU / 58);
+				long salt = Math.round(seed.unitScale.kilograms(mass[marker]) * saltFraction * ChemicalLimits.QUANTA_PER_MOL / .058);
 				amounts.merge(BuiltinChemicalDefinitions.NA_PLUS, salt, Math::addExact);
 				amounts.merge(BuiltinChemicalDefinitions.CL_MINUS, salt, Math::addExact);
 			}

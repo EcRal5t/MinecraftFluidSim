@@ -46,7 +46,7 @@ public final class FluidDomainStateParityValidation {
 		}
 		boolean observed = false;
 		for (int cell = 0; cell < domain.sizeX() * domain.sizeY() * domain.sizeZ(); cell++) {
-			Double before = domain.carrierViscosityPaPerS(cell), after = restored.carrierViscosityPaPerS(cell);
+			Double before = domain.carrierViscosityPascalSeconds(cell), after = restored.carrierViscosityPascalSeconds(cell);
 			if (!java.util.Objects.equals(before, after)) throw new AssertionError("restored carrier viscosity changed");
 			observed |= before != null;
 		}

@@ -307,7 +307,7 @@ final class GranularTransferPlanner {
 			return FluidDomain.GranularExtraction.rejected("Pending phase mechanical work must be projected before extraction");
 		}
 		if (itemAcceptance == null) throw new IllegalArgumentException("Granular item acceptance is missing");
-		if (maximumSolidVolumeSvq <= 0L || maximumSolidVolumeSvq > SolidVolume.SVQ_PER_BV) {
+		if (maximumSolidVolumeSvq <= 0L || maximumSolidVolumeSvq > SolidVolume.SVQ_PER_CUBIC_METER) {
 			throw new IllegalArgumentException("Granular extraction capacity is invalid");
 		}
 		if (maxRadius < 0) throw new IllegalArgumentException("Granular extraction radius is invalid");

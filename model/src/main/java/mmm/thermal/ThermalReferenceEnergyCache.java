@@ -11,7 +11,7 @@ final class ThermalReferenceEnergyCache {
 	private record Entry(ThermalSpeciesOffset offset, long quanta, double energy) { }
 
 	double energy(ThermalSpeciesOffset offset, long quanta) {
-		if (offset.referenceInternalEnergyEuPerAu().isZero()) return 0;
+		if (offset.referenceInternalEnergyJPerMol().isZero()) return 0;
 		long hash = quanta ^ ((long) System.identityHashCode(offset) << 32);
 		hash = (hash ^ (hash >>> 30)) * 0xbf58476d1ce4e5b9L;
 		hash = (hash ^ (hash >>> 27)) * 0x94d049bb133111ebL;
@@ -23,11 +23,11 @@ final class ThermalReferenceEnergyCache {
 		return energy;
 	}
 	private static double exactEnergy(ThermalSpeciesOffset offset, long quanta) {
-		var rational = offset.referenceInternalEnergyEuPerAu();
+		var rational = offset.referenceInternalEnergyJPerMol();
 		if (rational.numerator().bitLength() < 64 && rational.denominator().bitLength() < 64) {
 			try {
 				long numerator = Math.multiplyExact(rational.numerator().longValueExact(), quanta);
-				long denominator = Math.multiplyExact(rational.denominator().longValueExact(), ChemicalLimits.QUANTA_PER_AU);
+				long denominator = Math.multiplyExact(rational.denominator().longValueExact(), ChemicalLimits.QUANTA_PER_MOL);
 				if (numerator != Long.MIN_VALUE) {
 					long a = Math.abs(numerator), b = denominator;
 					while (b != 0) { long remainder = a % b; a = b; b = remainder; }
@@ -39,7 +39,7 @@ final class ThermalReferenceEnergyCache {
 				}
 			} catch (ArithmeticException wide) { /* Retain the bounded exact-rational calculation below. */ }
 		}
-		return rational.multiply(quanta).divide(ChemicalLimits.QUANTA_PER_AU).toDouble();
+		return rational.multiply(quanta).divide(ChemicalLimits.QUANTA_PER_MOL).toDouble();
 	}
 
 }

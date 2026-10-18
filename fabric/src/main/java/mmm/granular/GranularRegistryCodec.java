@@ -51,11 +51,11 @@ public final class GranularRegistryCodec {
 		CompoundTag root;
 		try { root = NbtIo.readCompressed(path, NbtAccounter.create(MAX_BYTES)); }
 		catch (RuntimeException invalid) { throw new IOException("Unreadable granular registry snapshot " + path, invalid); }
-		requireAll(root, Map.of("Schema", Tag.TAG_STRING, "SvqPerBv", Tag.TAG_LONG, "PorosityScale", Tag.TAG_INT,
+		requireAll(root, Map.of("Schema", Tag.TAG_STRING, "SvqPerCubicMeter", Tag.TAG_LONG, "PorosityScale", Tag.TAG_INT,
 				"Fingerprint", Tag.TAG_STRING, "Canonical", Tag.TAG_BYTE_ARRAY,
 				"ChemicalFingerprint", Tag.TAG_STRING, "Materials", Tag.TAG_LIST,
 				"Carriers", Tag.TAG_LIST, "Reactions", Tag.TAG_LIST));
-		if (!root.getStringOr("Schema", "").equals(SCHEMA) || root.getLongOr("SvqPerBv", -1L) != SolidVolume.SVQ_PER_BV
+		if (!root.getStringOr("Schema", "").equals(SCHEMA) || root.getLongOr("SvqPerCubicMeter", -1L) != SolidVolume.SVQ_PER_CUBIC_METER
 				|| root.getIntOr("PorosityScale", -1) != GranularLimits.POROSITY_SCALE) {
 			throw new IOException("Unsupported granular registry schema or unit scale");
 		}
@@ -82,7 +82,7 @@ public final class GranularRegistryCodec {
 
 	private static CompoundTag encode(GranularRegistry registry) {
 		CompoundTag root = new CompoundTag();
-		root.putString("Schema", SCHEMA); root.putLong("SvqPerBv", SolidVolume.SVQ_PER_BV);
+		root.putString("Schema", SCHEMA); root.putLong("SvqPerCubicMeter", SolidVolume.SVQ_PER_CUBIC_METER);
 		root.putInt("PorosityScale", GranularLimits.POROSITY_SCALE);
 		root.putString("Fingerprint", registry.fingerprint()); root.putByteArray("Canonical", registry.canonicalBytes());
 		root.putString("ChemicalFingerprint", registry.chemicalRegistryFingerprint());
@@ -110,7 +110,7 @@ public final class GranularRegistryCodec {
 			CompoundTag tag = new CompoundTag(); tag.putString("Id", reaction.id());
 			tag.putString("Phase", reaction.liquidPhaseId()); tag.put("Aqueous", encodeSide(reaction.aqueousStoichiometry()));
 			tag.putString("SolidMaterial", reaction.solidMaterialId()); tag.put("Solid", encodeSide(reaction.solidComposition()));
-			tag.putString("Capacity", reaction.saturationCapacityExtentPerBv().canonical());
+			tag.putString("Capacity", reaction.saturationConcentrationMolPerCubicMeter().canonical());
 			tag.putLong("ExtentBatch", reaction.solidExtentPerBatch());
 			tag.putLong("SolidSvqBatch", reaction.solidVolumeSvqPerBatch());
 			tag.putLong("SurfaceSvq", reaction.accessibleSurfaceSvqPerCellStep());

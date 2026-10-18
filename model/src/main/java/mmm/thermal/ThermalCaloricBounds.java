@@ -39,7 +39,7 @@ public final class ThermalCaloricBounds {
 
 	public SignedDyadic specificCurveEnergy(int handle, double temperature) {
 		var material = thermal.material(handle);
-		return SignedDyadic.of(material.referenceSpecificEnergyEuPerMu()).add(ThermalContactExchange.exactEnergyChangeBetween(
+		return SignedDyadic.of(material.referenceSpecificEnergyJPerKg()).add(ThermalContactExchange.exactEnergyChangeBetween(
 				material, 1.0, material.referenceTemperatureK(), temperature));
 	}
 
@@ -47,7 +47,7 @@ public final class ThermalCaloricBounds {
 	public double referenceRoundingBound(PortionRange portion) {
 		try {
 			var material = thermal.material(portion.materialHandle());
-			SignedDyadic magnitude = SignedDyadic.of(portion.massHigh()).multiply(SignedDyadic.of(Math.abs(material.referenceSpecificEnergyEuPerMu())));
+			SignedDyadic magnitude = SignedDyadic.of(portion.massHigh()).multiply(SignedDyadic.of(Math.abs(material.referenceSpecificEnergyJPerKg())));
 			SignedDyadic error = rounding(magnitude);
 			for (var entry : portion.species().entrySet()) {
 				double term = Math.nextUp(Math.abs(thermal.referenceEnergyCache().energy(
@@ -88,7 +88,7 @@ public final class ThermalCaloricBounds {
 			SignedDyadic capacity = SignedDyadic.ZERO;
 			for (var portion : portions) {
 				double cv = thermal.material(portion.materialHandle()).caloricSegments().stream()
-						.mapToDouble(ThermalMaterialDefinition.CaloricSegment::specificHeatEuPerMuK).min().orElseThrow();
+						.mapToDouble(ThermalMaterialDefinition.CaloricSegment::specificHeatJPerKgK).min().orElseThrow();
 				capacity = capacity.add(SignedDyadic.of(portion.massLow()).multiply(SignedDyadic.of(cv)));
 			}
 			if (capacity.signum() == 0) return unboundedTemperature(upper);
@@ -128,7 +128,7 @@ public final class ThermalCaloricBounds {
 		double result = 0.0;
 		for (PortionRange portion : portions) {
 			ThermalMaterialDefinition material = thermal.material(portion.materialHandle());
-			double reference = material.referenceSpecificEnergyEuPerMu();
+			double reference = material.referenceSpecificEnergyJPerKg();
 			double base = productRange(portion.massLow(), portion.massHigh(), reference, upper);
 			for (var entry : portion.species().entrySet()) {
 				ThermalSpeciesOffset offset = thermal.speciesOffset(portion.materialHandle(), entry.getKey());
@@ -167,7 +167,7 @@ public final class ThermalCaloricBounds {
 
 	/** Rounded multiplication and ordered addition are monotone, including signed reference offsets. */
 	public double referenceEnergyBound(PortionRange portion, boolean upper) {
-		double reference = thermal.material(portion.materialHandle()).referenceSpecificEnergyEuPerMu();
+		double reference = thermal.material(portion.materialHandle()).referenceSpecificEnergyJPerKg();
 		double result = ((reference >= 0) == upper ? portion.massHigh() : portion.massLow()) * reference;
 		for (var entry : portion.species().entrySet()) {
 			ThermalSpeciesOffset offset = thermal.speciesOffset(portion.materialHandle(), entry.getKey());

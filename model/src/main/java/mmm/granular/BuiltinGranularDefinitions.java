@@ -29,7 +29,7 @@ public final class BuiltinGranularDefinitions {
 						BuiltinChemicalDefinitions.NA_PLUS, 64,
 						BuiltinChemicalDefinitions.CL_MINUS, 64), PRECIPITATE, Map.of(
 						BuiltinChemicalDefinitions.NA_PLUS, 64,
-						BuiltinChemicalDefinitions.CL_MINUS, 64), ExactRational.of(1_000_000L),
+						BuiltinChemicalDefinitions.CL_MINUS, 64), ExactRational.ONE,
 				281L, 50L, 4_096L, true)), BuiltinChemicalDefinitions.REGISTRY);
 	}
 

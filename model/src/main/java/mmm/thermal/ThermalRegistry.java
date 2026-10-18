@@ -17,7 +17,7 @@ import java.util.Map;
 
 /** Immutable, canonically ordered world thermal definition candidate. Runtime handles never cross a save or wire boundary. */
 public final class ThermalRegistry {
-	public static final String UNIT_SYSTEM_ID = "mmm:si_block";
+	public static final String UNIT_SYSTEM_ID = "mmm:si_mol";
 
 	private final List<ThermalMaterialDefinition> materials;
 	private final List<ThermalSpeciesOffset> speciesOffsets;
@@ -223,7 +223,7 @@ public final class ThermalRegistry {
 				throw new IllegalArgumentException("Finite thermal device " + device.id()
 						+ " is not the carrier of its device material");
 			}
-			if (material.conductivityEuPerSecondMeterK() <= 0.0) {
+			if (material.conductivityWPerMeterK() <= 0.0) {
 				throw new IllegalArgumentException("Finite thermal device material must conduct heat " + material.id());
 			}
 			material.specificHeatAt(device.initialTemperatureK());
@@ -315,8 +315,8 @@ public final class ThermalRegistry {
 				double temperature = point.temperatureK();
 				// Material state functions continue the endpoint heat capacity outside tabulated segments.
 				// High-pressure melting data uses the same caloric continuation as runtime equilibrium.
-				double lowerEnergy = lower.referenceSpecificEnergyEuPerMu() + lower.sensibleSpecificEnergyAt(temperature);
-				double upperEnergy = upper.referenceSpecificEnergyEuPerMu() + upper.sensibleSpecificEnergyAt(temperature);
+				double lowerEnergy = lower.referenceSpecificEnergyJPerKg() + lower.sensibleSpecificEnergyAt(temperature);
+				double upperEnergy = upper.referenceSpecificEnergyJPerKg() + upper.sensibleSpecificEnergyAt(temperature);
 				if (!(Double.isFinite(lowerEnergy) && Double.isFinite(upperEnergy) && upperEnergy > lowerEnergy)) {
 					throw new IllegalArgumentException("Thermal transition must have a positive state-function energy gap: "
 							+ transition.id());
@@ -349,12 +349,12 @@ public final class ThermalRegistry {
 			out.append("M|").append(material.id()).append('|').append(material.carrierKind()).append('|')
 					.append(material.carrierId()).append('|');
 			appendDouble(out, material.referenceTemperatureK()); out.append('|');
-			appendDouble(out, material.referenceSpecificEnergyEuPerMu()); out.append('|');
-			appendDouble(out, material.conductivityEuPerSecondMeterK()); out.append('|');
+			appendDouble(out, material.referenceSpecificEnergyJPerKg()); out.append('|');
+			appendDouble(out, material.conductivityWPerMeterK()); out.append('|');
 			for (ThermalMaterialDefinition.CaloricSegment segment : material.caloricSegments()) {
 				appendDouble(out, segment.minimumTemperatureK()); out.append(',');
 				appendDouble(out, segment.maximumTemperatureK()); out.append(',');
-				appendDouble(out, segment.specificHeatEuPerMuK()); out.append(';');
+				appendDouble(out, segment.specificHeatJPerKgK()); out.append(';');
 			}
 			out.append('\n');
 		}
@@ -373,7 +373,7 @@ public final class ThermalRegistry {
 		for (ThermalSpeciesOffset offset : speciesOffsets) {
 			out.append("S|").append(offset.id()).append('|').append(offset.speciesId()).append('|')
 					.append(offset.hostThermalMaterialId()).append('|')
-					.append(offset.referenceInternalEnergyEuPerAu().canonical()).append('\n');
+					.append(offset.referenceInternalEnergyJPerMol().canonical()).append('\n');
 		}
 		for (GasLiquidSpeciesPair pair : gasLiquidPairs) {
 			out.append("X|").append(pair.id()).append('|').append(pair.gasComponentId()).append('|')
@@ -403,7 +403,7 @@ public final class ThermalRegistry {
 					.append(transition.upperEnergyMaterialId()).append('|')
 					.append(transition.lowerVolumeSvqPerBatch()).append('|')
 					.append(transition.upperVolumeSvqPerBatch()).append('|')
-					.append(transition.massMuPerBatch().canonical()).append('|')
+					.append(transition.massKgPerBatch().canonical()).append('|')
 					.append(transition.interfaceRequirement()).append('|');
 			for (ThermalPhaseTransition.EquilibriumPoint point : transition.equilibriumCurve()) {
 				appendDouble(out, point.pressurePa()); out.append(',');

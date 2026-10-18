@@ -6,7 +6,7 @@ public record FiniteThermalBodyState(
 		String thermalRegistryFingerprint,
 		String thermalMaterialId,
 		double massKilograms,
-		double internalEnergyEu
+		double internalEnergyJ
 ) {
 	public FiniteThermalBodyState {
 		if (generation < 0L) throw new IllegalArgumentException("Thermal body generation must not be negative");
@@ -15,7 +15,7 @@ public record FiniteThermalBodyState(
 		}
 		ThermalIds.requireId(thermalMaterialId, "finite thermal body material id");
 		if (!(Double.isFinite(massKilograms) && massKilograms > 0.0)
-				|| !Double.isFinite(internalEnergyEu)) {
+				|| !Double.isFinite(internalEnergyJ)) {
 			throw new IllegalArgumentException("Finite thermal body mass or energy is invalid");
 		}
 	}

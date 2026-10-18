@@ -124,7 +124,7 @@ final class ControllerInventoryDurabilityValidation {
 			double sandMass = registries.granular().material(sand).referenceDensity();
 			GranularTransferLedger sandBucket = new GranularTransferLedger(List.of(
 					new GranularTransferLedger.Group(BuiltinGranularDefinitions.FINE_SAND,
-							SolidVolume.SVQ_PER_BV, sandMass, null)));
+							SolidVolume.SVQ_PER_CUBIC_METER, sandMass, null)));
 			for (int bucket = 0; bucket < 4; bucket++) mutate(region, persistence, candidate -> check(
 					candidate.tryInsertExactGranular(7, 7, 7, sandBucket, 6, true).inserted(),
 					"fine-sand container was rejected"));
@@ -493,7 +493,7 @@ final class ControllerInventoryDurabilityValidation {
 			int sandHandle = registries.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 			double mass = registries.granular().material(sandHandle).referenceDensity();
 			sand = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
-					BuiltinGranularDefinitions.FINE_SAND, SolidVolume.SVQ_PER_BV, mass, null)));
+					BuiltinGranularDefinitions.FINE_SAND, SolidVolume.SVQ_PER_CUBIC_METER, mass, null)));
 			if (FUZZ_DISK) {
 				diskRoot = Files.createTempDirectory("mmm-fuzz-disk");
 				persistence = new RegionRepositoryAdapter(diskRoot, TestProfiles.full(), registries.chemical(),
@@ -1170,7 +1170,7 @@ final class ControllerInventoryDurabilityValidation {
 		private ThermalActivity.Observation restingThermalObservation() {
 			var transport = domain.lastThermalTransportStats();
 			if (transport == null) return null;
-			if (transport.maximumAbsoluteTransferEu() != 0.0
+			if (transport.maximumAbsoluteTransferJ() != 0.0
 					|| !transport.reservoirExchange().equals(mmm.units.SignedDyadic.ZERO)) return null;
 			if (domain.chemicalParcels() != null && domain.chemicalParcels().hasDirtyCells()) return null;
 			if (domain.hasPendingPhaseVolumeWork() || !domainIsAtRest()) return null;

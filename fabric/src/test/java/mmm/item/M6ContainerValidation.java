@@ -173,14 +173,14 @@ public final class M6ContainerValidation {
 				"test:thermal_offset/water", BuiltinChemicalDefinitions.H2O, solution.id(), ExactRational.of(12))),
 				List.of(), BuiltinChemicalDefinitions.REGISTRY.fingerprint(), "");
 		ChemicalContents source = new ChemicalContents(BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
-				ChemicalLimits.QUANTA_PER_AU, List.of(new ChemicalContents.Group("mmm:water", true, BUCKET,
+				ChemicalLimits.QUANTA_PER_MOL, List.of(new ChemicalContents.Group("mmm:water", true, BUCKET,
 				Double.doubleToRawLongBits(18.0), Double.doubleToRawLongBits(0.0), List.of(
-				new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU)))));
+				new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O, 1_000 * ChemicalLimits.QUANTA_PER_MOL)))));
 		ChemicalContents.Split inventory = source.split(333_333_333L, BuiltinChemicalDefinitions.REGISTRY);
 		ThermalStateFunction state = new ThermalStateFunction(registry);
 		double sourceEnergy = state.internalEnergyAtTemperature(registry.materialHandle(solution.id()),
 				source.totalMass(), java.util.Map.of(BuiltinChemicalDefinitions.H2O,
-				ChemicalLimits.QUANTA_PER_AU), 320.0);
+				1_000 * ChemicalLimits.QUANTA_PER_MOL), 320.0);
 		ThermalContents thermal = ThermalContents.forChemical(registry.fingerprint(), source, sourceEnergy);
 		ThermalContents.EnergySplit split = LiquidContainerThermodynamics.split(registry, thermal, source,
 				inventory.inserted(), inventory.remaining());
@@ -221,7 +221,7 @@ public final class M6ContainerValidation {
 				BuiltinChemicalDefinitions.NA_PLUS, 640L).entrySet().stream()
 				.sorted(java.util.Map.Entry.comparingByKey())
 				.map(entry -> new GranularContents.SpeciesAmount(entry.getKey(), entry.getValue())).toList();
-		GranularContents contents = new GranularContents(registry.fingerprint(), SolidVolume.SVQ_PER_BV, List.of(
+		GranularContents contents = new GranularContents(registry.fingerprint(), SolidVolume.SVQ_PER_CUBIC_METER, List.of(
 				new GranularContents.Group(BuiltinGranularDefinitions.FINE_SAND, 65_536L, 127.5),
 				new GranularContents.Group(BuiltinGranularDefinitions.PRECIPITATE, 10L,
 						Double.doubleToRawLongBits(solid.totalMass(BuiltinChemicalDefinitions.REGISTRY)),
@@ -231,7 +231,7 @@ public final class M6ContainerValidation {
 		check(contents.equals(decoded) && decoded.totalSolidVolumeSvq() == 65_546L,
 				"granular contents canonical round-trip changed exact inventory");
 		try {
-			new GranularContents("0".repeat(64), SolidVolume.SVQ_PER_BV, decoded.groups())
+			new GranularContents("0".repeat(64), SolidVolume.SVQ_PER_CUBIC_METER, decoded.groups())
 					.validateAgainst(registry, BuiltinChemicalDefinitions.REGISTRY);
 			throw new AssertionError("Expected foreign granular registry rejection");
 		} catch (IllegalArgumentException expected) {
@@ -495,7 +495,7 @@ public final class M6ContainerValidation {
 				new FluidMaterial("mmm:oil", 800.0, "mmm:oil", 0.0, Math.PI / 2.0));
 		double[] initialMass = new double[pure.particleCount()];
 		int[] initialMaterial = new int[pure.particleCount()];
-		for (int i = 0; i < pure.particleCount(); i++) initialMass[i] = 125.0;
+		for (int i = 0; i < pure.particleCount(); i++) initialMass[i] = pure.copyPositionVolume()[4 * i + 3] * CONFIG.density();
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(),
 				domain.totalVolumeExact(), 125.0, materials, pure.copyPositionVolume(),
@@ -548,7 +548,8 @@ public final class M6ContainerValidation {
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(),
 				domain.totalVolumeExact(), 125.0, materials, pure.copyPositionVolume(),
-				pure.copyParticleVelocities(), pure.copySolidMask(), new double[] {125.0}, new int[] {0}));
+				pure.copyParticleVelocities(), pure.copySolidMask(), java.util.stream.IntStream.range(0, pure.particleCount())
+						.mapToDouble(i -> pure.copyPositionVolume()[4 * i + 3] * CONFIG.density()).toArray(), new int[pure.particleCount()]));
 		domain.removeAllWaterExact();
 
 		List<FluidDomain.MaterialPortion> portions = List.of(

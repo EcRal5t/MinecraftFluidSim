@@ -76,8 +76,8 @@ public final class SolidCompositionRecord {
 	public ExactRational exactSpeciesMass(ChemicalRegistry registry) {
 		ExactRational result = ExactRational.ZERO;
 		for (int index = 0; index < speciesHandles.length; index++) {
-			result = result.add(registry.species(speciesHandles[index]).massKilogramsPerAu().multiply(amounts[index])
-					.divide(ChemicalLimits.QUANTA_PER_AU));
+			result = result.add(registry.species(speciesHandles[index]).molarMassKgPerMol().multiply(amounts[index])
+					.divide(ChemicalLimits.QUANTA_PER_MOL));
 		}
 		return result;
 	}

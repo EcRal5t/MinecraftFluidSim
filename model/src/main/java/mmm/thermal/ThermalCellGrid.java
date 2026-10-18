@@ -166,7 +166,7 @@ public final class ThermalCellGrid {
 			if (cell == targetCell) {
 				internalEnergy[cell] = actualEnergy.toDouble();
 				temperature[cell] = actualState.temperatureK();
-				heatCapacity[cell] = actualState.heatCapacityEuPerK();
+				heatCapacity[cell] = actualState.heatCapacityJPerK();
 				updateLinearTemperatureInterval(cell);
 			} else {
 				internalEnergy[cell] = exactCarrierEnergyInCell(cell).toDouble();
@@ -219,7 +219,7 @@ public final class ThermalCellGrid {
 			}
 			internalEnergy[cell] += energy;
 			totalVolume[cell] += volume;
-			conductivity[cell] += volume * carrierMaterial[carrier].conductivityEuPerSecondMeterK();
+			conductivity[cell] += volume * carrierMaterial[carrier].conductivityWPerMeterK();
 		}
 		// Bind derived reference caches before independent carrier validation.
 		if (topologyCarrierCount > 0) carrierAccess.baseEnergy(0);
@@ -260,7 +260,7 @@ public final class ThermalCellGrid {
 		for (ThermalCellEnergyAssignment.Entry entry : plan.entries()) carriers.setInternalEnergy(entry.item(), entry.energy());
 		internalEnergy[cell] = plan.actualEnergy().toDouble();
 		temperature[cell] = plan.actualState().temperatureK();
-		heatCapacity[cell] = plan.actualState().heatCapacityEuPerK();
+		heatCapacity[cell] = plan.actualState().heatCapacityJPerK();
 		updateLinearTemperatureInterval(cell);
 	}
 
@@ -374,7 +374,7 @@ public final class ThermalCellGrid {
 		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier])
 			reference = reference.add(carriers.exactBaseEnergy(carrier));
 		var state = ThermalCaloricInversion.solve(caloricInventory(cell), target.subtract(reference));
-		temperature[cell] = state.temperatureK(); heatCapacity[cell] = state.heatCapacityEuPerK();
+		temperature[cell] = state.temperatureK(); heatCapacity[cell] = state.heatCapacityJPerK();
 		updateLinearTemperatureInterval(cell);
 	}
 

@@ -10,7 +10,7 @@ public record ChemicalReaction(
 		String phaseId,
 		Map<String, Integer> reactants,
 		Map<String, Integer> products,
-		ExactRational volumeDeltaBvPerExtent
+		ExactRational volumeDeltaCubicMetersPerExtent
 ) {
 	public enum Kind { COMPLETE_DISSOCIATION, INSTANTANEOUS }
 
@@ -20,7 +20,7 @@ public record ChemicalReaction(
 		ChemicalIds.requireId(phaseId, "reaction phase id");
 		reactants = canonicalSide(reactants, id, "reactant");
 		products = canonicalSide(products, id, "product");
-		if (volumeDeltaBvPerExtent == null || !volumeDeltaBvPerExtent.isZero()) {
+		if (volumeDeltaCubicMetersPerExtent == null || !volumeDeltaCubicMetersPerExtent.isZero()) {
 			throw new IllegalArgumentException("Reaction volume delta must be exactly zero: " + id);
 		}
 		if (kind == Kind.COMPLETE_DISSOCIATION && reactants.size() != 1) {

@@ -130,8 +130,8 @@ public final class RegistryBundleLoader {
 						+ " gas nanos and kilograms do not close at the gas standard state");
 			}
 			double mappedLiquidKilograms = chemicalRegistry.species(
-					chemicalRegistry.speciesHandle(pair.speciesId())).massKilogramsPerAu()
-					.multiply(pair.liquidQuantaPerBatch()).divide(ChemicalLimits.QUANTA_PER_AU).toDouble();
+					chemicalRegistry.speciesHandle(pair.speciesId())).molarMassKgPerMol()
+					.multiply(pair.liquidQuantaPerBatch()).divide(ChemicalLimits.QUANTA_PER_MOL).toDouble();
 			if (Double.doubleToRawLongBits(mappedLiquidKilograms)
 					!= Double.doubleToRawLongBits(pair.liquidKilogramsPerBatch())) {
 				throw new IllegalArgumentException("Gas/liquid pair " + pair.id()

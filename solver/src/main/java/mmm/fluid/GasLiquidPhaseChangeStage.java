@@ -109,7 +109,7 @@ final class GasLiquidPhaseChangeStage {
 			boolean[] volatileSpecies, double liquidTemperature,
 			long maximumBatches, GasPhaseInterfaceResolver.Candidate contact
 	) {
-		double batchMass = transition.massMuPerBatch().toDouble();
+		double batchMass = transition.massKgPerBatch().toDouble();
 		long byVolume = inventory.freezableUpperSvq() / transition.lowerVolumeSvqPerBatch();
 		long byMass = (long) Math.floor((inventory.freezableUpperMass()
 				+ massTolerance(inventory.freezableUpperMass())) / batchMass);
@@ -152,7 +152,7 @@ final class GasLiquidPhaseChangeStage {
 			ChemicalParcelStore chemistry = support.chemistry();
 			GasDomainState gasState = support.gasState();
 			long removedSvq = Math.multiplyExact(batches, transition.lowerVolumeSvqPerBatch());
-			double removedMass = transition.massMuPerBatch().multiply(batches).toDouble();
+			double removedMass = transition.massKgPerBatch().multiply(batches).toDouble();
 			var removal = liquidSource.remove(liquidHandle, contact.supportMask(), removedSvq, removedMass, volatileSpecies, true);
 			GasInventory batch = chemistry == null ? phase.gasBatch(transition, batches)
 					: phase.gasBatch(transition, batches, removal.plan().movedComposition().amounts(),
@@ -267,7 +267,7 @@ final class GasLiquidPhaseChangeStage {
 		if (!boiling && gas.isEmpty()) return Double.POSITIVE_INFINITY;
 		double h = support.state().cellSize();
 		double volume = support.gasState().network.availableVolume(node)
-				+ (double) gasVolumeDeltaSvq / SolidVolume.SVQ_PER_BV * h * h * h;
+				+ (double) gasVolumeDeltaSvq / SolidVolume.SVQ_PER_CUBIC_METER * h * h * h;
 		if (volume <= 0) return Double.NEGATIVE_INFINITY;
 		var thermal = new GasThermalModel(support.thermal().registry(), support.gasState().network.registry());
 		double temperature = liquid.temperatureK();
@@ -288,7 +288,7 @@ final class GasLiquidPhaseChangeStage {
 			ChemicalParcelStore chemistry = support.chemistry();
 			GasDomainState gasState = support.gasState();
 			LiquidParticleStore particles = support.state().particles();
-			double requestedMass = transition.massMuPerBatch().multiply(batches).toDouble();
+			double requestedMass = transition.massKgPerBatch().multiply(batches).toDouble();
 			if (!(Double.isFinite(requestedMass) && requestedMass > 0.0)) throw new PhaseCandidateUnavailableException(
 					"Condensation batch mass exceeds its finite representation");
 			GasInventory requestedBatch = phase.gasBatch(transition, batches);

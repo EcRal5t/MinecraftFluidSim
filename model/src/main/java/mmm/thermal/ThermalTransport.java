@@ -30,7 +30,7 @@ public final class ThermalTransport {
 	}
 
 	public record Stats(int substeps, int evaluatedContacts, double maximumTemperatureChangeK,
-	                    double maximumAbsoluteTransferEu,
+	                    double maximumAbsoluteTransferJ,
 	                    SignedDyadic roundoffResidual, SignedDyadic reservoirExchange) {
 		public Stats(int substeps, int evaluatedContacts, double maximumTemperatureChangeK,
 		             SignedDyadic roundoffResidual, SignedDyadic reservoirExchange) {
@@ -76,7 +76,7 @@ public final class ThermalTransport {
 		double[] conductivity = new double[count], volume = new double[count];
 		int[] conductingCarriers = new int[cellCount];
 		for (int p = 0; p < count; p++) {
-			conductivity[p] = owners.material(p).conductivityEuPerSecondMeterK(); volume[p] = owners.volume(p);
+			conductivity[p] = owners.material(p).conductivityWPerMeterK(); volume[p] = owners.volume(p);
 			if (conductivity[p] > 0) conductingCarriers[owners.cell(p)]++;
 		}
 		int[] starts = contactOffsets(grid, conductingCarriers), ends = new int[cellCount];

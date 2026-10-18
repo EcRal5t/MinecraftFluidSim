@@ -10,13 +10,13 @@ import java.util.List;
 public final class FiniteThermalExchange {
 	/**
 	 * One caller-owned fluid energy port linearized inside a single caloric interval. Conductance
-	 * already includes fluid, wall and contact-area resistance and therefore has units EU/(s K).
+	 * already includes fluid, wall and contact-area resistance and therefore has units J/(s K).
 	 */
 	public record Contact(
 			int ordinal,
 			double temperatureK,
-			double heatCapacityEuPerK,
-			double conductanceEuPerSecondK,
+			double heatCapacityJPerK,
+			double conductanceWPerK,
 			double minimumTemperatureK,
 			double maximumTemperatureK
 	) {
@@ -27,16 +27,16 @@ public final class FiniteThermalExchange {
 					&& minimumTemperatureK >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K
 					&& maximumTemperatureK > minimumTemperatureK
 					&& temperatureK >= minimumTemperatureK && temperatureK <= maximumTemperatureK)
-					|| !(Double.isFinite(heatCapacityEuPerK) && heatCapacityEuPerK > 0.0)
-					|| !(Double.isFinite(conductanceEuPerSecondK) && conductanceEuPerSecondK > 0.0)) {
+					|| !(Double.isFinite(heatCapacityJPerK) && heatCapacityJPerK > 0.0)
+					|| !(Double.isFinite(conductanceWPerK) && conductanceWPerK > 0.0)) {
 				throw new IllegalArgumentException("Finite thermal contact is invalid");
 			}
 		}
 	}
 
-	public record ContactDelta(int ordinal, double internalEnergyDeltaEu, double finalTemperatureK) {
+	public record ContactDelta(int ordinal, double internalEnergyDeltaJ, double finalTemperatureK) {
 		public ContactDelta {
-			if (ordinal < 0 || !Double.isFinite(internalEnergyDeltaEu)
+			if (ordinal < 0 || !Double.isFinite(internalEnergyDeltaJ)
 					|| !Double.isFinite(finalTemperatureK)) {
 				throw new IllegalArgumentException("Finite thermal contact result is invalid");
 			}
@@ -50,15 +50,15 @@ public final class FiniteThermalExchange {
 			List<Contact> initialContacts,
 			List<ContactDelta> contacts,
 			int substeps,
-			double maximumAbsoluteTransferEu,
+			double maximumAbsoluteTransferJ,
 			SignedDyadic roundoffResidual
 	) {
 		public Plan {
 			if (before == null || after == null || initialContacts == null || contacts == null || contacts.isEmpty()
 					|| initialContacts.size() != contacts.size()
 					|| contacts.size() > ThermalLimits.MAX_FINITE_DEVICE_CONTACTS
-					|| substeps <= 0 || !Double.isFinite(maximumAbsoluteTransferEu)
-					|| maximumAbsoluteTransferEu < 0.0 || roundoffResidual == null) {
+					|| substeps <= 0 || !Double.isFinite(maximumAbsoluteTransferJ)
+					|| maximumAbsoluteTransferJ < 0.0 || roundoffResidual == null) {
 				throw new IllegalArgumentException("Finite thermal exchange plan is incomplete");
 			}
 			initialContacts = List.copyOf(initialContacts);
@@ -72,8 +72,8 @@ public final class FiniteThermalExchange {
 				throw new IllegalArgumentException("Finite thermal exchange changed body identity");
 			}
 			int previousOrdinal = -1;
-			SignedDyadic exactChange = SignedDyadic.of(after.internalEnergyEu())
-					.subtract(SignedDyadic.of(before.internalEnergyEu()));
+			SignedDyadic exactChange = SignedDyadic.of(after.internalEnergyJ())
+					.subtract(SignedDyadic.of(before.internalEnergyJ()));
 			for (int index = 0; index < contacts.size(); index++) {
 				ContactDelta contact = contacts.get(index);
 				if (contact == null || contact.ordinal() <= previousOrdinal) {
@@ -83,13 +83,13 @@ public final class FiniteThermalExchange {
 					throw new IllegalArgumentException("Finite thermal initial contact ordinal changed");
 				}
 				previousOrdinal = contact.ordinal();
-				exactChange = exactChange.add(SignedDyadic.of(contact.internalEnergyDeltaEu()));
+				exactChange = exactChange.add(SignedDyadic.of(contact.internalEnergyDeltaJ()));
 			}
 			if (!exactChange.equals(roundoffResidual)) {
 				throw new IllegalArgumentException("Finite thermal exchange roundoff does not close");
 			}
 			if (after.generation() == before.generation()
-					&& (!after.equals(before) || contacts.stream().anyMatch(contact -> contact.internalEnergyDeltaEu() != 0.0))) {
+					&& (!after.equals(before) || contacts.stream().anyMatch(contact -> contact.internalEnergyDeltaJ() != 0.0))) {
 				throw new IllegalArgumentException("Finite thermal no-op plan changed authoritative state");
 			}
 		}
@@ -134,11 +134,11 @@ public final class FiniteThermalExchange {
 		}
 		ThermalStateFunction stateFunction = new ThermalStateFunction(registry);
 		double initialBodyTemperature = stateFunction.stateForInternalEnergy(
-				materialHandle, body.massKilograms(), java.util.Map.of(), body.internalEnergyEu()).temperatureK();
+				materialHandle, body.massKilograms(), java.util.Map.of(), body.internalEnergyJ()).temperatureK();
 		double minimumBodyHeatCapacity = Double.POSITIVE_INFINITY;
 		for (ThermalMaterialDefinition.CaloricSegment segment : material.caloricSegments()) {
 			minimumBodyHeatCapacity = Math.min(minimumBodyHeatCapacity,
-					body.massKilograms() * segment.specificHeatEuPerMuK());
+					body.massKilograms() * segment.specificHeatJPerKgK());
 		}
 		if (!(Double.isFinite(minimumBodyHeatCapacity) && minimumBodyHeatCapacity > 0.0)) {
 			throw new IllegalArgumentException("Finite thermal body heat-capacity bound is invalid");
@@ -148,8 +148,8 @@ public final class FiniteThermalExchange {
 		boolean exchangeRequired = false;
 		for (Contact contact : canonical) {
 			exchangeRequired |= contact.temperatureK() != initialBodyTemperature;
-			conductanceSum += contact.conductanceEuPerSecondK();
-			stableDt = Math.min(stableDt, stableStep(contact.heatCapacityEuPerK(), contact.conductanceEuPerSecondK()));
+			conductanceSum += contact.conductanceWPerK();
+			stableDt = Math.min(stableDt, stableStep(contact.heatCapacityJPerK(), contact.conductanceWPerK()));
 		}
 		if (!(Double.isFinite(conductanceSum) && conductanceSum > 0.0)) {
 			throw new IllegalArgumentException("Finite thermal conductance sum is invalid");
@@ -163,7 +163,7 @@ public final class FiniteThermalExchange {
 			throw new IllegalArgumentException("Finite thermal stability substep budget exceeded: " + substeps);
 		}
 
-		double bodyEnergy = body.internalEnergyEu();
+		double bodyEnergy = body.internalEnergyJ();
 		double[] fluidTemperature = canonical.stream().mapToDouble(Contact::temperatureK).toArray();
 		double[] fluidDelta = new double[canonical.size()];
 		double maximumTransfer = 0.0;
@@ -174,10 +174,10 @@ public final class FiniteThermalExchange {
 			double bodyDelta = 0.0;
 			for (int index = 0; index < canonical.size(); index++) {
 				Contact contact = canonical.get(index);
-				double transfer = ThermalContactExchange.product(contact.conductanceEuPerSecondK(),
+				double transfer = ThermalContactExchange.product(contact.conductanceWPerK(),
 						bodyTemperature - fluidTemperature[index], dt);
 				if (!Double.isFinite(transfer)) throw new IllegalArgumentException("Finite thermal transfer is not finite");
-				double candidateTemperature = fluidTemperature[index] + transfer / contact.heatCapacityEuPerK();
+				double candidateTemperature = fluidTemperature[index] + transfer / contact.heatCapacityJPerK();
 				if (!(Double.isFinite(candidateTemperature) && candidateTemperature >= contact.minimumTemperatureK()
 						&& candidateTemperature <= contact.maximumTemperatureK())) {
 					throw new IllegalArgumentException("Finite thermal contact left its linearization interval");
@@ -192,17 +192,17 @@ public final class FiniteThermalExchange {
 		}
 
 		boolean changed = Double.doubleToRawLongBits(bodyEnergy)
-				!= Double.doubleToRawLongBits(body.internalEnergyEu());
+				!= Double.doubleToRawLongBits(body.internalEnergyJ());
 		for (double delta : fluidDelta) changed |= delta != 0.0;
 		long generation = changed ? Math.addExact(body.generation(), 1L) : body.generation();
 		FiniteThermalBodyState after = new FiniteThermalBodyState(generation,
 				body.thermalRegistryFingerprint(), body.thermalMaterialId(), body.massKilograms(), bodyEnergy);
 		ArrayList<ContactDelta> deltas = new ArrayList<>(canonical.size());
-		SignedDyadic exactChange = SignedDyadic.of(after.internalEnergyEu()).subtract(
-				SignedDyadic.of(body.internalEnergyEu()));
+		SignedDyadic exactChange = SignedDyadic.of(after.internalEnergyJ()).subtract(
+				SignedDyadic.of(body.internalEnergyJ()));
 		for (int index = 0; index < canonical.size(); index++) {
 			Contact contact = canonical.get(index);
-			double finalTemperature = contact.temperatureK() + fluidDelta[index] / contact.heatCapacityEuPerK();
+			double finalTemperature = contact.temperatureK() + fluidDelta[index] / contact.heatCapacityJPerK();
 			if (!(Double.isFinite(finalTemperature) && finalTemperature >= contact.minimumTemperatureK()
 					&& finalTemperature <= contact.maximumTemperatureK())) {
 				throw new IllegalArgumentException("Finite thermal contact result left its linearization interval");

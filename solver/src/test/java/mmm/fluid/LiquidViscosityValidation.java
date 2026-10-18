@@ -169,7 +169,7 @@ final class LiquidViscosityValidation {
 		require(!restored.hasGranularState(), "liquid viscosity cannot require granular capability");
 		expectRejected(() -> restored.restoreParticleState(restored.exportParticleState()));
 		restored.restoreMaterialParticleState(restored.exportMaterialParticleState());
-		require(restored.carrierViscosityPaPerS(restored.cellIndex(1, 1, 1)) != null,
+		require(restored.carrierViscosityPascalSeconds(restored.cellIndex(1, 1, 1)) != null,
 				"material column restore must retain constitutive identity");
 		require(restored.authoritativeLayout().equals(domain.authoritativeLayout()), "liquid definitions must survive private handoff");
 		var stats = restored.stepWithMechanicalAudit(false, 0);

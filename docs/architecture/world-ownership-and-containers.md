@@ -2,6 +2,8 @@
 
 修改世界方块接管与释放、桶、发射器、清理区域或事务恢复时读本文。
 
+单位与整数编码统一见[设计书](system-overview.md#units)。
+
 ## 修改入口
 
 - **世界方块归属**
@@ -140,7 +142,7 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 
 - 液体容量使用 `long` 纳体积，1 block volume = 1,000,000,000 nanos。
 - 材料桶保存每个稳定材料的纳体积与独立 kg 质量。
-- 化学桶另外保存 species quanta、indicator 和 kg mass residual。
+- 化学桶另外保存 species μmol 整数、quantaPerMol、indicator 和 kg mass residual。
 - 干颗粒容器使用整数 SVQ、逐材料 kg 质量与可选 solid composition。
 - 热液体另外保存 registry-bound 总内能。
 - 任何非空 MMM actual container 还保存创建它的 world capability profile fingerprint；空容器不伪造 profile 身份。
@@ -154,7 +156,7 @@ hash，以及 actual inventory 的 world profile fingerprint。
 
 actual container 缺失、损坏或不匹配当前世界 profile 时在准备 WAL 前以 `FOREIGN_PROFILE` 拒绝，恢复也必须以已提交世界 profile 复核 WAL；不能按当前数据包重新解释旧世界库存。
 
-液体抽取允许生成不足 1 BV 的 partial item；放入已有部分桶时仍按实际剩余容量规划。`FluidMixture`、`ChemicalContents`、`GranularContents` 和 `ThermalContents` 都有自己的规范编码与总账，item component 只是这些原始数据的载体。
+液体抽取允许生成不足 1 m³ 的 partial item；放入已有部分桶时仍按实际剩余容量规划。`FluidMixture`、`ChemicalContents`、`GranularContents` 和 `ThermalContents` 都有自己的规范编码与总账，item component 只是这些原始数据的载体。
 
 创造栏中的 `CreativeSourceDescriptor` 记录生成意图（材料 ID、数量、温度），具体库存由服务端的 `CreativeSourceCatalog` 依据世界材料定义实例化。
 

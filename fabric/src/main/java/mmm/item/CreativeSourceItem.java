@@ -43,6 +43,8 @@ public final class CreativeSourceItem extends Item {
 		}
 		tooltip.accept(Component.translatable("item.mmm.creative_source.template").withStyle(ChatFormatting.AQUA));
 		tooltip.accept(Component.translatable("item.mmm.creative_source.amount",
-				Long.toString(descriptor.requestedTypedAmount())).withStyle(ChatFormatting.GRAY));
+				descriptor.templateStableId().startsWith("mmm:source/granular/")
+						? mmm.units.UnitFormat.solidVolume(descriptor.requestedTypedAmount())
+						: mmm.units.UnitFormat.volumeNanos(descriptor.requestedTypedAmount())).withStyle(ChatFormatting.GRAY));
 	}
 }

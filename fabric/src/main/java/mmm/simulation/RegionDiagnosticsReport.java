@@ -262,7 +262,7 @@ public final class RegionDiagnosticsReport {
 						condensed.operations(), gas.operations(),
 						condensed.operations() + gas.operations() == phaseBudget ? "/" + phaseBudget + " budget-hit" : "",
 						gas.boiledCells(), gas.condensedCells());
-		return String.format("thermal %s T=%s U=%.6g EU source=%.6g sink=%.6g work=%.6g device=%.6g coherent=%d SVQ phase=%s pending-work=%s audit=%s",
+		return String.format("thermal %s T=%s U=%.6g J source=%.6g sink=%.6g work=%.6g device=%.6g coherent=%d SVQ phase=%s pending-work=%s audit=%s",
 				activity == null ? "unbound" : activity.state(), temperature, domain.totalInternalEnergy(),
 				audit.externalSource().toDouble(), audit.externalSink().toDouble(),
 				audit.mechanicalWork().toDouble(), audit.finiteDeviceExchange().toDouble(),

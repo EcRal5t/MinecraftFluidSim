@@ -21,10 +21,10 @@ public final class ChemicalMixtureRecord {
 	private record SpeciesMass(ChemicalRegistry registry, ExactRational kilograms) { }
 
 	public ChemicalMixtureRecord(int[] speciesHandles, long[] amounts, long massResidualKilogramsBits) {
-		if (speciesHandles == null || amounts == null || speciesHandles.length == 0
+		if (speciesHandles == null || amounts == null
 				|| speciesHandles.length != amounts.length
 				|| speciesHandles.length > ChemicalLimits.MAX_SPECIES_PER_PARCEL) {
-			throw new IllegalArgumentException("Chemical parcel entries are empty or over budget");
+			throw new IllegalArgumentException("Chemical parcel entries are over budget");
 		}
 		long total = 0L;
 		for (int i = 0; i < speciesHandles.length; i++) {

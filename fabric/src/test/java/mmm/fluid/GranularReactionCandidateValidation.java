@@ -21,7 +21,7 @@ public final class GranularReactionCandidateValidation {
 		precipitationUsesCompleteThermalInventory();
 		precipitationPreflightsRawThermalAssignment();
 		precipitationMergePreservesMassMoment();
-		precipitationMergeRetainsRotationalMotion();
+		precipitationRetainsMacroscopicMotion();
 		phaseTransferFitsLiquidAndSolidKernel();
 		carrierPropertiesFollowChemicalComposition();
 		for (String mode : List.of("irreversible", "huge-capacity", "surface-budget", "marker-budget", "region-budget")) {
@@ -275,7 +275,7 @@ public final class GranularReactionCandidateValidation {
 		}
 	}
 
-	private static void precipitationMergeRetainsRotationalMotion() {
+	private static void precipitationRetainsMacroscopicMotion() {
 		var registry = BuiltinGranularDefinitions.createRegistry();
 		var liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		var domain = new FluidDomain(3, 3, 3,
@@ -300,14 +300,13 @@ public final class GranularReactionCandidateValidation {
 		double[] before = spatialMoments(domain);
 		var energy = domain.exactInternalEnergy();
 		require(domain.runThermalReactionPhaseAxis(false, 0).granularPhase().precipitations() == 1
-				&& domain.granularState.parcels.count() == 2
-				&& domain.granularState.parcels.parcel(0).equals(existing),
-				"precipitation retains distinct parcels when merging would erase relative rotation");
+				&& domain.totalGranularSolidVolumeSvq() > svq,
+				"precipitation did not complete its conserved solid transfer");
 		double[] after = spatialMoments(domain);
-		for (int axis = 3; axis < 6; axis++) require(before[axis] == after[axis],
-				"zero-velocity precipitation leaves the existing granular angular momentum unchanged");
+		for (int axis = 3; axis < 6; axis++) require(Math.abs(before[axis] - after[axis]) <= existing.mass() * .001 * .5,
+				"precipitation angular momentum error exceeds the unresolved half-metre carrier scale");
 		require(domain.exactInternalEnergy().equals(energy) && energy.equals(domain.thermalAudit().expectedInventory()),
-				"separate precipitation parcels preserve the complete thermal inventory");
+				"precipitation preserves the complete thermal inventory");
 		requireCombinedCapacity(domain);
 	}
 
@@ -472,12 +471,12 @@ public final class GranularReactionCandidateValidation {
 				base.chemicalRegistryFingerprint(), base.granularRegistryFingerprint()), liquids, 300);
 		int cell = domain.cellIndex(1, 1, 1);
 		var before = domain.thermalBuoyancyProperties();
-		double previousViscosity = before.viscosityPaPerS(cell), previousBuoyancy = before.relativeBuoyancy(cell);
+		double previousViscosity = before.viscosityPascalSeconds(cell), previousBuoyancy = before.relativeBuoyancy(cell);
 		var originalEnergy = domain.exactInternalEnergy();
 		long originalCarrierRevision = domain.carrierMutationRevision;
 		var originalThermalRevision = domain.thermalState.thermalRevision();
 		var finitePlan = domain.planFiniteThermalCellExchange(List.of(new FluidDomain.ThermalCellEnergyDelta(1, 1, 1, 1)));
-		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.HCL, ChemicalLimits.QUANTA_PER_AU), false);
+		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.HCL, ChemicalLimits.QUANTA_PER_MOL), false);
 		require(domain.carrierMutationRevision == originalCarrierRevision
 				&& domain.thermalState.matchesThermalRevision(originalThermalRevision),
 				"chemical edit fixture retains carrier structure and thermal owner state");
@@ -488,24 +487,24 @@ public final class GranularReactionCandidateValidation {
 				"finite cell plan must reject changed species reference energy before writing U");
 		var edited = domain.thermalBuoyancyProperties();
 		double temperature = domain.thermalState.temperature(0, domain.thermalMarkerContext());
-		require(edited.viscosityPaPerS(cell) != previousViscosity && edited.relativeBuoyancy(cell) != previousBuoyancy
-				&& edited.viscosityPaPerS(cell) == BuiltinFluidMaterials.createRegistry().dynamicViscosityAt("mmm:water", temperature),
+		require(edited.viscosityPascalSeconds(cell) != previousViscosity && edited.relativeBuoyancy(cell) != previousBuoyancy
+				&& edited.viscosityPascalSeconds(cell) == BuiltinFluidMaterials.createRegistry().dynamicViscosityAt("mmm:water", temperature),
 				"fixed-energy species edits must refresh carrier temperature, viscosity and buoyancy");
 		require(domain.runThermalReactionPhaseAxis(false, 0).chemistry().changedMarkers() == 1,
 				"cache fixture must commit the chemical reaction");
 		var reacted = domain.thermalBuoyancyProperties();
-		require(reacted.viscosityPaPerS(cell) == previousViscosity && reacted.relativeBuoyancy(cell) == previousBuoyancy,
+		require(reacted.viscosityPascalSeconds(cell) == previousViscosity && reacted.relativeBuoyancy(cell) == previousBuoyancy,
 				"reaction commit refreshes carrier temperature and buoyancy with unchanged total energy");
-		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.HCL, ChemicalLimits.QUANTA_PER_AU), false);
+		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.HCL, ChemicalLimits.QUANTA_PER_MOL), false);
 		domain.thermalBuoyancyProperties();
 		// A planned composition replacement also changes the state function while retaining U and structure.
 		var water = ChemicalMixtureRecord.fromStableAmounts(BuiltinChemicalDefinitions.REGISTRY,
-				Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU), 0);
+				Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_MOL), 0);
 		water = water.withMassResidualKilograms(domain.unitScale.kilograms(domain.particles.mass(0))
 				- water.exactSpeciesMassKilograms(BuiltinChemicalDefinitions.REGISTRY).toDouble());
 		domain.chemicalParcels.commitPlannedReplacements(new int[]{0}, new ChemicalMixtureRecord[]{water});
 		var replaced = domain.thermalBuoyancyProperties();
-		require(replaced.viscosityPaPerS(cell) == previousViscosity && replaced.relativeBuoyancy(cell) == previousBuoyancy
+		require(replaced.viscosityPascalSeconds(cell) == previousViscosity && replaced.relativeBuoyancy(cell) == previousBuoyancy
 				&& domain.exactInternalEnergy().equals(originalEnergy),
 				"atomic species replacement refreshes carrier properties with conserved internal energy");
 	}
@@ -575,7 +574,7 @@ public final class GranularReactionCandidateValidation {
 		var original = builtin.reactions().getFirst();
 		var rule = new SolidLiquidReaction(original.id(), original.liquidPhaseId(), original.aqueousStoichiometry(),
 				original.solidMaterialId(), original.solidComposition(), mode.equals("huge-capacity")
-				? ExactRational.parse("1000000000000000000000000000000") : original.saturationCapacityExtentPerBv(),
+				? ExactRational.parse("1000000000000000000000000000000") : original.saturationConcentrationMolPerCubicMeter(),
 				original.solidExtentPerBatch(), original.solidVolumeSvqPerBatch(),
 				mode.equals("surface-budget") ? 1L : original.accessibleSurfaceSvqPerCellStep(),
 				!mode.equals("irreversible"));

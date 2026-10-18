@@ -65,7 +65,7 @@ final class ChemicalReactionCandidateValidation {
 			var domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(.5F, 64, 0, .05F, 100, 1e-5F, .45F, .002F, 0), 64);
 			domain.bindMaterialRegistry(liquids); domain.setVolume(1, 1, 1, .125F);
 			domain.setMarkerMaterial(0, liquids, 1); domain.bindChemistry(chemistry);
-			long amount = 16 * ChemicalLimits.QUANTA_PER_AU;
+			long amount = 16 * ChemicalLimits.QUANTA_PER_MOL;
 			domain.setMarkerChemical(0, Map.of(a, amount), false);
 			var thermal = new ThermalRegistry(List.of(
 					identityThermalMaterial("test:base_thermal", "test:base"), identityThermalMaterial(thermalId, liquidId)), List.of(

@@ -26,7 +26,7 @@ final class LiquidCarrierProperties {
 	private final int[] materialHandle;
 	private final double[] density;
 	private final double[] temperatureK;
-	private final double[] viscosityPaPerS;
+	private final double[] viscosityPascalSeconds;
 	private final double[] maximumReynolds;
 	private final double[] relativeBuoyancy;
 	private final double[] observationMass;
@@ -49,7 +49,7 @@ final class LiquidCarrierProperties {
 		this.materialHandle = new int[cellCount];
 		this.density = new double[cellCount];
 		this.temperatureK = new double[cellCount];
-		this.viscosityPaPerS = new double[cellCount];
+		this.viscosityPascalSeconds = new double[cellCount];
 		this.maximumReynolds = new double[cellCount];
 		this.relativeBuoyancy = new double[cellCount];
 		this.observationMass = new double[cellCount];
@@ -59,7 +59,7 @@ final class LiquidCarrierProperties {
 	boolean hasLiquid(int cell) { return liquid[cell]; }
 	int materialHandle(int cell) { return materialHandle[cell]; }
 	double density(int cell) { return density[cell]; }
-	double viscosityPaPerS(int cell) { return viscosityPaPerS[cell]; }
+	double viscosityPascalSeconds(int cell) { return viscosityPascalSeconds[cell]; }
 	double maximumReynolds(int cell) { return maximumReynolds[cell]; }
 	double relativeBuoyancy(int cell) { return relativeBuoyancy[cell]; }
 
@@ -158,7 +158,7 @@ final class LiquidCarrierProperties {
 				materialHandle[cell] = -1;
 				if (grid.markerCount[cell] == 0) density[cell] = AIR_DENSITY;
 				temperatureK[cell] = Double.NaN;
-				viscosityPaPerS[cell] = AIR_VISCOSITY;
+				viscosityPascalSeconds[cell] = AIR_VISCOSITY;
 				maximumReynolds[cell] = AIR_MAXIMUM_REYNOLDS;
 				continue;
 			}
@@ -174,7 +174,7 @@ final class LiquidCarrierProperties {
 			liquid[cell] = true;
 			materialHandle[cell] = handle;
 			temperatureK[cell] = cellTemperature;
-			viscosityPaPerS[cell] = mu;
+			viscosityPascalSeconds[cell] = mu;
 			GranularCarrier carrier = granular == null ? null
 					: granular.registry.carrier(granular.registry.carrierHandle(materialId));
 			maximumReynolds[cell] = carrier == null ? AIR_MAXIMUM_REYNOLDS : carrier.maximumReynolds();

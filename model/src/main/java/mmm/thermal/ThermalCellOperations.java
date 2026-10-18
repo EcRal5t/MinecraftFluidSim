@@ -312,8 +312,8 @@ final class ThermalCellOperations {
 	}
 
 	private PhaseOwner prepareOwner(ThermalStateFunction.InventoryPortion portion) {
-		return new PhaseOwner(registry.material(portion.materialHandle()), portion.massMu(),
-				stateFunction.baseEnergy(portion.materialHandle(), portion.massMu(), portion.speciesQuanta()));
+		return new PhaseOwner(registry.material(portion.materialHandle()), portion.massKg(),
+				stateFunction.baseEnergy(portion.materialHandle(), portion.massKg(), portion.speciesQuanta()));
 	}
 
 	private PhaseInventory prepareInventory(List<ThermalStateFunction.InventoryPortion> portions) {

@@ -68,7 +68,7 @@ public record LifecycleOperationPreview(
 			double sealedGasMassKilograms,
 			long sealedGasSpeciesQuanta,
 			boolean internalEnergyAvailable,
-			double internalEnergyEu
+			double internalEnergyJ
 	) {
 		public Removal {
 			if (liquidVolumeNanos < 0L || !finiteNonNegative(liquidMassKilograms) || liquidSpeciesQuanta < 0L
@@ -76,7 +76,7 @@ public record LifecycleOperationPreview(
 					|| coherentSolidVolumeSvq < 0L || !finiteNonNegative(coherentMassKilograms)
 					|| sealedGasStandardVolumeNanos < 0L || !finiteNonNegative(sealedGasMassKilograms)
 					|| sealedGasSpeciesQuanta < 0L
-					|| internalEnergyAvailable != Double.isFinite(internalEnergyEu)) {
+					|| internalEnergyAvailable != Double.isFinite(internalEnergyJ)) {
 				throw new IllegalArgumentException("Lifecycle operation removal summary is invalid");
 			}
 		}

@@ -160,7 +160,7 @@ public final class M5GasLiquidCouplingValidation {
 		long gas = domain.gasBoundary().sealedInventoryNanos();
 		FluidDomain.VolumeAddition addition = domain.addVolumeNearBudgeted(6, 0, 0, 128.0F, 6);
 		check(addition.addedVolume() == 128.0F && !addition.markerBudgetLimited(),
-				"empty controller boundary pour did not add 16 BV");
+				"empty controller boundary pour did not add 16 m³");
 		for (int step = 0; step < 200; step++) {
 			try { domain = advance(domain); }
 			catch (RuntimeException failure) {
@@ -390,7 +390,7 @@ public final class M5GasLiquidCouplingValidation {
 		check(Math.abs(massClosure) <= Math.ulp(domain.totalMass()),
 				"staged compression mass diverged from density times authoritative inserted volume: " + massClosure);
 		check(domain.gasBoundary().nodeCount() == 1, "sealed compression must keep exactly one cavity");
-		System.out.printf("  staged sealed compression: added=%.3f BV p=%+.3f Pa maxSpeed=%.6g m/s%n",
+		System.out.printf("  staged sealed compression: added=%.3f m³ p=%+.3f Pa maxSpeed=%.6g m/s%n",
 				addedTotal, domain.gasBoundary().gaugePressure(1), maximumSpeed);
 	}
 

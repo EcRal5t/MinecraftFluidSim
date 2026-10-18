@@ -76,7 +76,7 @@ public final class GasLiquidPhaseModel {
 
 	/** Creates a gas-side batch with exact phase mass and stable standard-volume nanos. */
 	public GasInventory gasBatch(ThermalPhaseTransition transition, long batches) {
-		double mass = transition.massMuPerBatch().multiply(batches).toDouble();
+		double mass = transition.massKgPerBatch().multiply(batches).toDouble();
 		return gasBatch(transition, batches, Map.of(), mass);
 	}
 
@@ -93,9 +93,9 @@ public final class GasLiquidPhaseModel {
 		}
 		PhasePair pair = requirePair(transition);
 		double referenceTemperature = pair.referenceTemperatureK();
-		double mass = transition.massMuPerBatch().multiply(batches).toDouble();
+		double mass = transition.massKgPerBatch().multiply(batches).toDouble();
 		GasComponentDefinition component = gasRegistry.component(pair.gas().carrierId());
-		double standardVolumePerBatch = (double) transition.upperVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV
+		double standardVolumePerBatch = (double) transition.upperVolumeSvqPerBatch() / SolidVolume.SVQ_PER_CUBIC_METER
 				* GasRegistry.STANDARD_TEMPERATURE_K / referenceTemperature;
 		long nanosPerBatch = AirNetwork.nanos(standardVolumePerBatch);
 		if (nanosPerBatch <= 0L
@@ -151,12 +151,12 @@ public final class GasLiquidPhaseModel {
 				|| !gasRegistry.hasComponent(gas.carrierId())) {
 			throw new IllegalArgumentException("Liquid/gas transition carrier kinds are invalid");
 		}
-		double mass = transition.massMuPerBatch().toDouble();
+		double mass = transition.massKgPerBatch().toDouble();
 		double referenceTemperature = referenceTemperature(transition);
 		gasRegistry.component(gas.carrierId());
-		double gasVolume = (double) transition.upperVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV;
+		double gasVolume = (double) transition.upperVolumeSvqPerBatch() / SolidVolume.SVQ_PER_CUBIC_METER;
 		double standardGasVolume = gasVolume * GasRegistry.STANDARD_TEMPERATURE_K / referenceTemperature;
-		double liquidVolume = (double) transition.lowerVolumeSvqPerBatch() / SolidVolume.SVQ_PER_BV;
+		double liquidVolume = (double) transition.lowerVolumeSvqPerBatch() / SolidVolume.SVQ_PER_CUBIC_METER;
 		int liquidHandle = thermalRegistry.materialHandle(transition.lowerEnergyMaterialId());
 		int gasHandle = thermalRegistry.materialHandle(transition.upperEnergyMaterialId());
 		double liquidU = stateFunction.internalEnergyAtTemperature(

@@ -13,17 +13,17 @@ import java.util.List;
  * audit stay with the region; this coordinator only plans and applies the joint edit.
  */
 public final class FiniteDeviceExchangeCoordinator {
-	public record CellEnergyDelta(int cell, double internalEnergyDeltaEu) {
+	public record CellEnergyDelta(int cell, double internalEnergyDeltaJ) {
 		public CellEnergyDelta {
-			if (cell < 0 || !Double.isFinite(internalEnergyDeltaEu)) {
+			if (cell < 0 || !Double.isFinite(internalEnergyDeltaJ)) {
 				throw new IllegalArgumentException("Finite thermal cell delta is invalid");
 			}
 		}
 	}
-	public record CellContactRequest(int cell, int ordinal, double conductanceEuPerSecondK) {
+	public record CellContactRequest(int cell, int ordinal, double conductanceWPerK) {
 		public CellContactRequest {
 			if (cell < 0 || ordinal < 0
-					|| !(Double.isFinite(conductanceEuPerSecondK) && conductanceEuPerSecondK > 0.0)) {
+					|| !(Double.isFinite(conductanceWPerK) && conductanceWPerK > 0.0)) {
 				throw new IllegalArgumentException("Finite thermal cell contact is invalid");
 			}
 		}
@@ -96,7 +96,7 @@ public final class FiniteDeviceExchangeCoordinator {
 			}
 			previousOrdinal = request.ordinal();
 			result.add(new FiniteThermalExchange.Contact(request.ordinal(), cellGrid.temperature(request.cell()),
-					cellGrid.heatCapacity(request.cell()), request.conductanceEuPerSecondK(),
+					cellGrid.heatCapacity(request.cell()), request.conductanceWPerK(),
 					cellGrid.minimumTemperature(request.cell()), cellGrid.maximumTemperature(request.cell())));
 		}
 		return List.copyOf(result);
@@ -126,13 +126,13 @@ public final class FiniteDeviceExchangeCoordinator {
 				throw new IllegalArgumentException("Finite thermal cell deltas repeat or name an empty cell");
 			}
 			previousCell = delta.cell();
-			target[delta.cell()] = target[delta.cell()].add(SignedDyadic.of(delta.internalEnergyDeltaEu()));
+			target[delta.cell()] = target[delta.cell()].add(SignedDyadic.of(delta.internalEnergyDeltaJ()));
 			if (!Double.isFinite(target[delta.cell()].toDouble())) {
 				throw new IllegalArgumentException("Finite thermal cell target energy is not finite");
 			}
-			requested = requested.add(SignedDyadic.of(delta.internalEnergyDeltaEu()));
+			requested = requested.add(SignedDyadic.of(delta.internalEnergyDeltaJ()));
 		}
-		int[] editedCells = canonical.stream().filter(delta -> delta.internalEnergyDeltaEu() != 0.0)
+		int[] editedCells = canonical.stream().filter(delta -> delta.internalEnergyDeltaJ() != 0.0)
 				.mapToInt(CellEnergyDelta::cell).toArray();
 		for (int cell : editedCells) cellGrid.validateCellInternalEnergy(cell, target[cell]);
 		return new FiniteDeviceCellPlan(target, editedCells, cellGrid.copyCarrierCells(),

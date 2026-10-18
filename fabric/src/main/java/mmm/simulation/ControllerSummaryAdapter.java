@@ -136,7 +136,7 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
 					var body = device.body();
 					double temperature = stateFunction.stateForInternalEnergy(
 							thermalRegistry.materialHandle(body.thermalMaterialId()), body.massKilograms(),
-							Map.of(), body.internalEnergyEu()).temperatureK();
+							Map.of(), body.internalEnergyJ()).temperatureK();
 					minimumTemperature = Math.min(minimumTemperature, temperature);
 					maximumTemperature = Math.max(maximumTemperature, temperature);
 				}

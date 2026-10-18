@@ -384,10 +384,10 @@ public final class AirNetworkValidation {
 		GasRegistry registry = new GasRegistry(List.of(
 				new GasComponentDefinition("test:alpha", 1.0, 0.25,
 						List.of("test:a"),
-						List.of(new GasComponentDefinition.DefaultSpecies("test:a", ExactRational.of(3_000_000_000L)))),
+						List.of(new GasComponentDefinition.DefaultSpecies("test:a", ExactRational.of(3_000L)))),
 				new GasComponentDefinition("test:beta", 2.0, 0.5,
 						List.of("test:b"),
-						List.of(new GasComponentDefinition.DefaultSpecies("test:b", ExactRational.of(6_000_000_000L))))),
+						List.of(new GasComponentDefinition.DefaultSpecies("test:b", ExactRational.of(6_000L))))),
 				List.of(new GasRegistry.AmbientFraction("test:alpha", ExactRational.parse("1/3")),
 						new GasRegistry.AmbientFraction("test:beta", ExactRational.parse("2/3"))));
 		AirNetwork network = new AirNetwork(registry);

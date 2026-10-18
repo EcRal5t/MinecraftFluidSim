@@ -216,14 +216,14 @@ public final class ContainerTransferStoreValidation {
 		store.delete(partialTx);
 
 		CreativeSourceDescriptor descriptor = new CreativeSourceDescriptor(
-				"mmm:source/granular/fine_sand", SolidVolume.SVQ_PER_BV, null);
+				"mmm:source/granular/fine_sand", SolidVolume.SVQ_PER_CUBIC_METER, null);
 		ContainerTransferJournal.ItemFingerprint source = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.CREATIVE_SOURCE, -1L, -1L,
 				descriptor.encode(), -1L, null, null);
 		UUID sourceTx = UUID.randomUUID();
 		ContainerTransferJournal sourceCommitted = ContainerTransferJournal.granular(
 				sourceTx, region, "minecraft:overworld", 5L, 6L,
-				ContainerTransferJournal.Operation.INSERT, SolidVolume.SVQ_PER_BV, actor,
+				ContainerTransferJournal.Operation.INSERT, SolidVolume.SVQ_PER_CUBIC_METER, actor,
 				source, source, 0x3456L, ContainerTransferJournal.Phase.REGION_COMMITTED);
 		store.write(sourceCommitted);
 		check(sourceCommitted.equals(store.read(sourceTx)),
@@ -317,11 +317,11 @@ public final class ContainerTransferStoreValidation {
 		check(emptyMaterial.equals(store.read(tx4)), "empty material bucket fingerprint did not round-trip");
 
 		ChemicalContents chemicalContents = new ChemicalContents(BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
-				ChemicalLimits.QUANTA_PER_AU, List.of(new ChemicalContents.Group(
+				ChemicalLimits.QUANTA_PER_MOL, List.of(new ChemicalContents.Group(
 						"mmm:water", true, ContainerFluidLedger.NANOS_PER_BLOCK,
 						Double.doubleToRawLongBits(18.0), Double.doubleToRawLongBits(0.0),
 						List.of(new ChemicalContents.SpeciesAmount(
-								BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU)))));
+								BuiltinChemicalDefinitions.H2O, 1_000 * ChemicalLimits.QUANTA_PER_MOL)))));
 		ContainerTransferJournal.ItemFingerprint chemicalBefore = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET, ContainerFluidLedger.NANOS_PER_BLOCK, -1L,
 				chemicalContents.encode(), Double.doubleToRawLongBits(chemicalContents.totalMass()), null, PROFILE);
@@ -335,7 +335,7 @@ public final class ContainerTransferStoreValidation {
 		check(chemical.equals(store.read(tx5)), "chemical bucket WAL fingerprint did not round-trip");
 		check(chemical.requiresChemicalRegistry(), "chemical WAL did not declare its registry dependency");
 		chemical.validateChemicalRegistry(BuiltinChemicalDefinitions.REGISTRY);
-		ChemicalContents foreignContents = new ChemicalContents("0".repeat(64), ChemicalLimits.QUANTA_PER_AU,
+		ChemicalContents foreignContents = new ChemicalContents("0".repeat(64), ChemicalLimits.QUANTA_PER_MOL,
 				chemicalContents.groups());
 		ContainerTransferJournal.ItemFingerprint foreignChemical = new ContainerTransferJournal.ItemFingerprint(
 				ContainerTransferJournal.ItemKind.CHEMICAL_BUCKET, ContainerFluidLedger.NANOS_PER_BLOCK, -1L,
@@ -379,7 +379,7 @@ public final class ContainerTransferStoreValidation {
 						BuiltinChemicalDefinitions.NA_PLUS, 64L,
 						BuiltinChemicalDefinitions.CL_MINUS, 64L), 0.0);
 		GranularContents granularContents = new GranularContents(granularRegistry.fingerprint(),
-				SolidVolume.SVQ_PER_BV, List.of(
+				SolidVolume.SVQ_PER_CUBIC_METER, List.of(
 				new GranularContents.Group(BuiltinGranularDefinitions.FINE_SAND, inertSvq, 650.0),
 				new GranularContents.Group(BuiltinGranularDefinitions.PRECIPITATE, reactiveSvq,
 						Double.doubleToRawLongBits(reactive.totalMass(BuiltinChemicalDefinitions.REGISTRY)),
@@ -662,7 +662,8 @@ public final class ContainerTransferStoreValidation {
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(),
 				domain.totalVolumeExact(), 125.0, materials, pure.copyPositionVolume(),
-				pure.copyParticleVelocities(), pure.copySolidMask(), new double[] {125.0}, new int[] {0}));
+				pure.copyParticleVelocities(), pure.copySolidMask(), java.util.stream.IntStream.range(0, pure.particleCount())
+						.mapToDouble(i -> pure.copyPositionVolume()[4 * i + 3] * config.density()).toArray(), new int[pure.particleCount()]));
 		domain.removeAllWaterExact();
 
 		FluidMixture source = new FluidMixture(List.of(
@@ -744,10 +745,10 @@ public final class ContainerTransferStoreValidation {
 					new mmm.fluid.FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
 			domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 			double sourceResidual = sourceMass - 18.0;
-			var contents = new ChemicalContents(BuiltinChemicalDefinitions.REGISTRY.fingerprint(), ChemicalLimits.QUANTA_PER_AU,
+			var contents = new ChemicalContents(BuiltinChemicalDefinitions.REGISTRY.fingerprint(), ChemicalLimits.QUANTA_PER_MOL,
 					List.of(new ChemicalContents.Group("mmm:water", true, 999_999_999L,
 							Double.doubleToRawLongBits(sourceMass), Double.doubleToRawLongBits(sourceResidual),
-							List.of(new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_AU)))));
+							List.of(new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O, 1_000 * ChemicalLimits.QUANTA_PER_MOL)))));
 			contents.validateAgainst(BuiltinChemicalDefinitions.REGISTRY);
 			var requested = contents.toLedger(BuiltinChemicalDefinitions.REGISTRY, FluidRegionFactory.CELL_VOLUMES_PER_BLOCK);
 			var result = domain.tryInsertExactChemical(1, 1, 1, requested, 3, false);
@@ -768,7 +769,7 @@ public final class ContainerTransferStoreValidation {
 				largestResidual = Math.max(largestResidual, Math.abs(record.massResidualKilograms()));
 				species = Math.addExact(species, record.totalQuanta());
 			}
-			check(species == ChemicalLimits.QUANTA_PER_AU
+			check(species == 1_000 * ChemicalLimits.QUANTA_PER_MOL
 					&& Math.abs(residual.subtract(SignedDyadic.of(sourceResidual)).toDouble()) <= 0.5 * Math.ulp(largestResidual),
 					"chemical species or complete residual exceeded its single rounding bound");
 		}
@@ -788,9 +789,11 @@ public final class ContainerTransferStoreValidation {
 			source.bindThermal(registry, liquids, 300.0);
 			var domain = new FluidDomain(3, 3, 3, config, 216);
 			domain.restoreMaterialParticleState(source.exportMaterialParticleState());
-			double[] energy = {sign * 16_384.0, sign * Math.scalb(1.0, -40)};
+			double[] energy = new double[domain.particleCount()];
+			energy[0] = sign * 16_384.0;
+			energy[energy.length - 1] = sign * Math.scalb(1.0, -40);
 			SignedDyadic exact = SignedDyadic.sum(energy);
-			domain.restoreThermalParticleState(new FlipThermalParticleState(3, 3, 3, 0.5F, 2,
+			domain.restoreThermalParticleState(new FlipThermalParticleState(3, 3, 3, 0.5F, domain.particleCount(),
 					registry.fingerprint(), 300.0, energy, ThermalAuditLedger.initialized(exact)), registry);
 			var auditBefore = domain.thermalAudit();
 			var snapshotBefore = domain.exportThermalParticleState();
@@ -895,6 +898,8 @@ public final class ContainerTransferStoreValidation {
 					BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, particles.copyParticleVelocities(),
 					particles.copySolidMask(), masses, materials));
 			FluidRegion region = new FluidRegion(regionId, DIMENSION, origin, base, 64L, footprint);
+			base.sealDomainBoundary();
+			base.bootstrapGasState("");
 			base.step(false, 0);
 			check(base.gasBoundary().nodeCount() == 1,
 					"private-target fixture did not initialize one sealed gas topology");

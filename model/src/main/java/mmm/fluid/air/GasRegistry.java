@@ -16,7 +16,7 @@ import java.util.Map;
 
 /** Immutable canonical gas-component and ambient definition registry. */
 public final class GasRegistry {
-	public static final String UNIT_SYSTEM_ID = "mmm:gas_standard";
+	public static final String UNIT_SYSTEM_ID = "mmm:gas_standard_si_mol";
 	public static final double STANDARD_PRESSURE_PA = 101_325.0;
 	public static final double STANDARD_TEMPERATURE_K = 293.15;
 
@@ -122,8 +122,9 @@ public final class GasRegistry {
 			double mass = definition.standardMassPerCubicMeter() * AirNetwork.cubicMeters(nanos);
 			ArrayList<GasComponentAmount.SpeciesAmount> species = new ArrayList<>();
 			for (GasComponentDefinition.DefaultSpecies entry : definition.defaultSpeciesPerCubicMeter()) {
-				BigInteger numerator = entry.quantaPerCubicMeter().numerator().multiply(BigInteger.valueOf(nanos));
-				BigInteger denominator = entry.quantaPerCubicMeter().denominator().multiply(BigInteger.valueOf(1_000_000_000L));
+				BigInteger numerator = entry.concentrationMolPerCubicMeter().numerator().multiply(BigInteger.valueOf(nanos))
+						.multiply(BigInteger.valueOf(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL));
+				BigInteger denominator = entry.concentrationMolPerCubicMeter().denominator().multiply(BigInteger.valueOf(1_000_000_000L));
 				long quanta = numerator.divide(denominator).longValueExact();
 				if (quanta > 0L) species.add(new GasComponentAmount.SpeciesAmount(entry.speciesId(), quanta));
 			}
@@ -145,7 +146,7 @@ public final class GasRegistry {
 			for (String species : component.allowedSpecies()) out.append(species).append(';');
 			out.append('|');
 			for (GasComponentDefinition.DefaultSpecies species : component.defaultSpeciesPerCubicMeter()) {
-				out.append(species.speciesId()).append('=').append(species.quantaPerCubicMeter().canonical()).append(';');
+				out.append(species.speciesId()).append('=').append(species.concentrationMolPerCubicMeter().canonical()).append(';');
 			}
 			out.append('\n');
 		}

@@ -40,9 +40,9 @@ public final class ChemicalRegistry {
 				ChemicalSpecies::id, "species");
 		this.speciesMassPerQuantum = new ExactRational[this.species.size()];
 		for (int handle = 0; handle < this.species.size(); handle++) {
-			ExactRational mass = this.species.get(handle).massKilogramsPerAu();
+			ExactRational mass = this.species.get(handle).molarMassKgPerMol();
 			if (mass.denominator().bitLength() + 30 <= ChemicalLimits.MAX_RATIONAL_BITS)
-				speciesMassPerQuantum[handle] = mass.divide(ChemicalLimits.QUANTA_PER_AU);
+				speciesMassPerQuantum[handle] = mass.divide(ChemicalLimits.QUANTA_PER_MOL);
 		}
 		this.phases = canonicalUnique(phaseDefinitions, ChemicalLimits.MAX_PHASES,
 				ChemicalPhaseDefinition::id, "chemical phase");
@@ -65,7 +65,7 @@ public final class ChemicalRegistry {
 	public ChemicalSpecies species(int handle) { return species.get(handle); }
 	ExactRational speciesMass(int handle, long quanta) {
 		ExactRational factor = speciesMassPerQuantum[handle];
-		return factor == null ? species.get(handle).massKilogramsPerAu().multiply(quanta).divide(ChemicalLimits.QUANTA_PER_AU)
+		return factor == null ? species.get(handle).molarMassKgPerMol().multiply(quanta).divide(ChemicalLimits.QUANTA_PER_MOL)
 				: factor.multiply(quanta);
 	}
 	public ChemicalPhaseDefinition phase(int handle) { return phases.get(handle); }
@@ -99,7 +99,7 @@ public final class ChemicalRegistry {
 				if (!speciesHandles.containsKey(id)) throw new IllegalArgumentException(
 						"Chemical phase " + phase.id() + " references unknown species " + id);
 			}
-			for (String id : phase.defaultInventoryPerBv().keySet()) {
+			for (String id : phase.defaultConcentrationMolPerCubicMeter().keySet()) {
 				if (!phase.allowedSpecies().contains(id)) throw new IllegalArgumentException(
 						"Chemical phase default is not allowed: " + id);
 			}
@@ -197,7 +197,7 @@ public final class ChemicalRegistry {
 	private ExactRational mass(Map<String, Integer> side) {
 		ExactRational result = ExactRational.ZERO;
 		for (Map.Entry<String, Integer> term : side.entrySet()) {
-			result = result.add(species.get(speciesHandle(term.getKey())).massKilogramsPerAu().multiply(term.getValue()));
+			result = result.add(species.get(speciesHandle(term.getKey())).molarMassKgPerMol().multiply(term.getValue()));
 		}
 		return result;
 	}
@@ -242,10 +242,10 @@ public final class ChemicalRegistry {
 	}
 
 	private byte[] encodeCanonical() {
-		StringBuilder out = new StringBuilder(4096).append("mmm-chemistry-registry\n");
+		StringBuilder out = new StringBuilder(4096).append("mmm-chemistry-registry|SI|kg/mol|mol/m3|quanta-per-mol=1000000\n");
 		for (ChemicalSpecies definition : species) {
 			out.append("S|").append(definition.id()).append('|').append(definition.charge()).append('|')
-					.append(definition.massKilogramsPerAu().canonical()).append('|')
+					.append(definition.molarMassKgPerMol().canonical()).append('|')
 					.append(Integer.toUnsignedString(definition.baseArgb())).append('|');
 			appendMap(out, definition.composition());
 		}
@@ -253,7 +253,7 @@ public final class ChemicalRegistry {
 			out.append("P|").append(definition.id()).append('|').append(definition.materialId()).append('|')
 					.append(definition.acceptsIndicator()).append('|')
 					.append(String.join(",", definition.allowedSpecies())).append('|');
-			appendRationalMap(out, definition.defaultInventoryPerBv());
+			appendRationalMap(out, definition.defaultConcentrationMolPerCubicMeter());
 		}
 		for (ChemicalReaction definition : reactions) {
 			out.append("R|").append(definition.id()).append('|').append(definition.kind()).append('|')
@@ -261,7 +261,7 @@ public final class ChemicalRegistry {
 			appendInlineMap(out, definition.reactants());
 			out.append('|');
 			appendInlineMap(out, definition.products());
-			out.append('|').append(definition.volumeDeltaBvPerExtent().canonical()).append('\n');
+			out.append('|').append(definition.volumeDeltaCubicMetersPerExtent().canonical()).append('\n');
 		}
 		return out.toString().getBytes(StandardCharsets.UTF_8);
 	}

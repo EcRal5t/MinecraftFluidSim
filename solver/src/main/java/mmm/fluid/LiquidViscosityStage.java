@@ -21,7 +21,7 @@ final class LiquidViscosityStage {
 				return Math.min(domain.markerGrid.exactCellMarkerVolume[cell], domain.effectiveOpenCellVolume(cell));
 			}
 			@Override public double density(int cell) { return domain.carrierPropertiesWorkspace.density(cell); }
-			@Override public double viscosity(int cell) { return domain.carrierPropertiesWorkspace.viscosityPaPerS(cell); }
+			@Override public double viscosity(int cell) { return domain.carrierPropertiesWorkspace.viscosityPascalSeconds(cell); }
 			@Override public double aperture(int axis, int x, int y, int z) {
 				return switch (axis) {
 					case 0 -> domain.pressureXFaceOpen(x, y, z);

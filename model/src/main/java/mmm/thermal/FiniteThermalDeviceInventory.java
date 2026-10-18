@@ -73,7 +73,7 @@ public record FiniteThermalDeviceInventory(
 				current.deviceTypeId(), plan.after()));
 		SignedDyadic fluidDelta = SignedDyadic.ZERO;
 		for (FiniteThermalExchange.ContactDelta contact : plan.contacts()) {
-			fluidDelta = fluidDelta.add(SignedDyadic.of(contact.internalEnergyDeltaEu()));
+			fluidDelta = fluidDelta.add(SignedDyadic.of(contact.internalEnergyDeltaJ()));
 		}
 		return new FiniteThermalDeviceInventory(thermalRegistryFingerprint, candidate,
 				audit.withFluidExchange(fluidDelta, plan.roundoffResidual()));
@@ -92,7 +92,7 @@ public record FiniteThermalDeviceInventory(
 				throw new IllegalArgumentException("Finite thermal device type/material binding changed");
 			}
 			stateFunction.stateForInternalEnergy(materialHandle,
-					device.body().massKilograms(), java.util.Map.of(), device.body().internalEnergyEu());
+					device.body().massKilograms(), java.util.Map.of(), device.body().internalEnergyJ());
 		}
 	}
 
@@ -101,7 +101,7 @@ public record FiniteThermalDeviceInventory(
 		SignedDyadic total = SignedDyadic.ZERO;
 		for (FiniteThermalDeviceState device : devices) {
 			if (device == null) throw new IllegalArgumentException("Finite thermal device inventory contains null");
-			total = total.add(SignedDyadic.of(device.body().internalEnergyEu()));
+			total = total.add(SignedDyadic.of(device.body().internalEnergyJ()));
 		}
 		return total;
 	}

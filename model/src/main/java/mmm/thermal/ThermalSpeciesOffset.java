@@ -7,13 +7,13 @@ public record ThermalSpeciesOffset(
 		String id,
 		String speciesId,
 		String hostThermalMaterialId,
-		ExactRational referenceInternalEnergyEuPerAu
+		ExactRational referenceInternalEnergyJPerMol
 ) {
 	public ThermalSpeciesOffset {
 		ThermalIds.requireId(id, "thermal species offset id");
 		ThermalIds.requireId(speciesId, "thermal species id");
 		ThermalIds.requireId(hostThermalMaterialId, "thermal species host id");
-		if (referenceInternalEnergyEuPerAu == null) {
+		if (referenceInternalEnergyJPerMol == null) {
 			throw new IllegalArgumentException("Thermal species reference energy is missing");
 		}
 	}

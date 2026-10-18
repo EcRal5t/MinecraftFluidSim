@@ -30,14 +30,14 @@ public final class MaterialRegistry {
 
 	/** Newtonian dynamic viscosity, linear in temperature on one closed interval of a contiguous domain. */
 	public record ViscositySegment(double minimumTemperatureK, double maximumTemperatureK,
-			double dynamicViscosityPaPerSAtMinimum, double dynamicViscosityPaPerSAtMaximum) {
+			double dynamicViscosityPascalSecondsAtMinimum, double dynamicViscosityPascalSecondsAtMaximum) {
 		public ViscositySegment {
 			if (!(Double.isFinite(minimumTemperatureK) && Double.isFinite(maximumTemperatureK)
 					&& minimumTemperatureK > 0.0 && minimumTemperatureK < maximumTemperatureK)) {
 				throw new IllegalArgumentException("Viscosity segment temperature bounds are invalid");
 			}
-			if (!(Double.isFinite(dynamicViscosityPaPerSAtMinimum) && dynamicViscosityPaPerSAtMinimum > 0.0
-					&& Double.isFinite(dynamicViscosityPaPerSAtMaximum) && dynamicViscosityPaPerSAtMaximum > 0.0)) {
+			if (!(Double.isFinite(dynamicViscosityPascalSecondsAtMinimum) && dynamicViscosityPascalSecondsAtMinimum > 0.0
+					&& Double.isFinite(dynamicViscosityPascalSecondsAtMaximum) && dynamicViscosityPascalSecondsAtMaximum > 0.0)) {
 				throw new IllegalArgumentException("Dynamic viscosity must be finite and positive");
 			}
 		}
@@ -66,7 +66,7 @@ public final class MaterialRegistry {
 				ViscositySegment previous = ordered.get(index - 1);
 				ViscositySegment current = ordered.get(index);
 				if (previous.maximumTemperatureK() != current.minimumTemperatureK()
-						|| previous.dynamicViscosityPaPerSAtMaximum() != current.dynamicViscosityPaPerSAtMinimum()) {
+						|| previous.dynamicViscosityPascalSecondsAtMaximum() != current.dynamicViscosityPascalSecondsAtMinimum()) {
 					throw new IllegalArgumentException("Viscosity segments must be contiguous for " + material.id());
 				}
 			}
@@ -135,12 +135,12 @@ public final class MaterialRegistry {
 				else high = middle;
 			}
 			ViscositySegment segment = viscosity.get(low);
-			if (temperatureK == segment.minimumTemperatureK()) return segment.dynamicViscosityPaPerSAtMinimum();
-			if (temperatureK == segment.maximumTemperatureK()) return segment.dynamicViscosityPaPerSAtMaximum();
+			if (temperatureK == segment.minimumTemperatureK()) return segment.dynamicViscosityPascalSecondsAtMinimum();
+			if (temperatureK == segment.maximumTemperatureK()) return segment.dynamicViscosityPascalSecondsAtMaximum();
 			double span = segment.maximumTemperatureK() - segment.minimumTemperatureK();
 			double alpha = span <= 0.0 ? 0.0 : (temperatureK - segment.minimumTemperatureK()) / span;
-			return segment.dynamicViscosityPaPerSAtMinimum() * (1.0 - alpha)
-					+ segment.dynamicViscosityPaPerSAtMaximum() * alpha;
+			return segment.dynamicViscosityPascalSecondsAtMinimum() * (1.0 - alpha)
+					+ segment.dynamicViscosityPascalSecondsAtMaximum() * alpha;
 		}
 
 		private static void requireTemperature(double temperatureK) {
@@ -275,8 +275,8 @@ public final class MaterialRegistry {
 				out.append("V|").append(material.id()).append('|')
 						.append(Long.toUnsignedString(Double.doubleToRawLongBits(segment.minimumTemperatureK()))).append('|')
 						.append(Long.toUnsignedString(Double.doubleToRawLongBits(segment.maximumTemperatureK()))).append('|')
-						.append(Long.toUnsignedString(Double.doubleToRawLongBits(segment.dynamicViscosityPaPerSAtMinimum()))).append('|')
-						.append(Long.toUnsignedString(Double.doubleToRawLongBits(segment.dynamicViscosityPaPerSAtMaximum()))).append('\n');
+						.append(Long.toUnsignedString(Double.doubleToRawLongBits(segment.dynamicViscosityPascalSecondsAtMinimum()))).append('|')
+						.append(Long.toUnsignedString(Double.doubleToRawLongBits(segment.dynamicViscosityPascalSecondsAtMaximum()))).append('\n');
 			}
 		}
 		for (LiquidPairTension pair : pairTensions) {

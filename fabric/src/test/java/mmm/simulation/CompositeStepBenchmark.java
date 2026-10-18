@@ -158,7 +158,7 @@ public final class CompositeStepBenchmark {
         long svq = SolidVolume.SVQ_PER_CELL / 4;
         double density = r.granular().material(r.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND)).referenceDensity();
         var ledger = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
-                BuiltinGranularDefinitions.FINE_SAND, svq, density * (svq / (double) SolidVolume.SVQ_PER_BV), null)));
+                BuiltinGranularDefinitions.FINE_SAND, svq, density * (svq / (double) SolidVolume.SVQ_PER_CUBIC_METER), null)));
         for (int z = 2; z < 6; z++) for (int x = 2; x < 6; x++) {
             require(d.tryInsertExactGranular(x, elevated ? 3 : 0, z, ledger, 0, true).inserted(), "Sand injection rejected");
         }
@@ -170,7 +170,7 @@ public final class CompositeStepBenchmark {
         long svq = SolidVolume.SVQ_PER_CELL / 4;
         double density = r.granular().material(r.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND)).referenceDensity();
         var ledger = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(BuiltinGranularDefinitions.FINE_SAND,
-                svq, density * (svq / (double) SolidVolume.SVQ_PER_BV), null)));
+                svq, density * (svq / (double) SolidVolume.SVQ_PER_CUBIC_METER), null)));
         for (int i = 0; i < 96; i++) require(domain.tryInsertExactGranular(2 + i % 6, 8 + i / 36 % 2,
                 3 + i / 6 % 6, ledger, 1, true).inserted(), "Large sand injection rejected");
         return domain;

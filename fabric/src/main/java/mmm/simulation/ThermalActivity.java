@@ -28,7 +28,7 @@ public final class ThermalActivity {
 		}
 
 		boolean quiet() {
-			return transport.maximumAbsoluteTransferEu() == 0.0
+			return transport.maximumAbsoluteTransferJ() == 0.0
 					&& transport.reservoirExchange().equals(SignedDyadic.ZERO)
 					&& !chemistryDirty && !granularDirty && !phaseDirty && !gasActivity && !carrierMotion
 					&& !pendingVolumeOrWork && auditClosed;
@@ -36,7 +36,7 @@ public final class ThermalActivity {
 
 		/** Internal conduction changes buoyancy and gas pressure even when external energy ledgers are unchanged. */
 		boolean requiresMotion() {
-			return transport.maximumAbsoluteTransferEu() != 0.0 || transport.maximumTemperatureChangeK() != 0.0
+			return transport.maximumAbsoluteTransferJ() != 0.0 || transport.maximumTemperatureChangeK() != 0.0
 					|| !transport.reservoirExchange().equals(SignedDyadic.ZERO)
 					|| chemistryDirty || granularDirty || phaseDirty || gasActivity || pendingVolumeOrWork;
 		}

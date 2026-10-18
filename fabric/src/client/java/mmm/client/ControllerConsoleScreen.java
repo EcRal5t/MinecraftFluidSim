@@ -1,5 +1,7 @@
 package mmm.client;
 
+import mmm.units.UnitFormat;
+
 import mmm.controller.ControllerConsoleAction;
 import mmm.controller.ControllerSummary;
 import mmm.controller.LifecycleOperation;
@@ -114,13 +116,13 @@ public final class ControllerConsoleScreen extends Screen {
 		ControllerSummary.Inventory inventory = value.inventory();
 		if (inventory.live()) {
 			result.add(Component.translatable("screen.mmm.controller.inventory_liquid",
-					decimal(inventory.liquidVolumeCubicMetres() * 1_000.0),
-					decimal(inventory.liquidMassKilograms()), inventory.speciesQuanta()));
+					UnitFormat.volume(inventory.liquidVolumeCubicMetres()),
+					decimal(inventory.liquidMassKilograms()), UnitFormat.amount(inventory.speciesQuanta())));
 			result.add(Component.translatable("screen.mmm.controller.inventory_solid",
-					inventory.granularSolidVolumeSvq(), inventory.coherentSolidVolumeSvq()));
+					UnitFormat.solidVolume(inventory.granularSolidVolumeSvq()), UnitFormat.solidVolume(inventory.coherentSolidVolumeSvq())));
 			result.add(Component.translatable("screen.mmm.controller.inventory_gas_energy",
-					inventory.gasStandardVolumeNanos(), decimal(inventory.gasMassKilograms()),
-					inventory.internalEnergyAvailable() ? decimal(inventory.totalInternalEnergyEu()) : "—"));
+					UnitFormat.volumeNanos(inventory.gasStandardVolumeNanos()), decimal(inventory.gasMassKilograms()),
+					inventory.internalEnergyAvailable() ? UnitFormat.energy(inventory.totalInternalEnergyJ()) : "—"));
 			ControllerSummary.TemperatureRange range = inventory.temperatureRange();
 			result.add(Component.translatable("screen.mmm.controller.temperature_range",
 					range.available() ? decimal(range.minimumK()) : "—",

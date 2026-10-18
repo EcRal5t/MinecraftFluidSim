@@ -122,7 +122,7 @@ final class CondensedPhaseChangeStage {
 	) {
 		PhaseCellInventory before = inventory.target();
 		if (temperature == equilibrium || maximumBatches == 0L) return null;
-		double batchMass = transition.massMuPerBatch().toDouble();
+		double batchMass = transition.massKgPerBatch().toDouble();
 		if (!(Double.isFinite(batchMass) && batchMass > 0.0)) {
 			throw new FluidDomain.ThermalPhaseBlockedException(
 					"Condensed phase batch mass is not representable");
@@ -150,7 +150,7 @@ final class CondensedPhaseChangeStage {
 		var thermalCell = support.thermal().preparePhaseCandidateCell(cell, support.state().thermalMarkers());
 		var liquid = new PhaseLiquidInventory(support, cell);
 		var initialLiquid = liquid.inventory();
-		double maximumMass = transition.massMuPerBatch().multiply(high).toDouble();
+		double maximumMass = transition.massKgPerBatch().multiply(high).toDouble();
 		double massError = Math.nextUp((initialLiquid.size() + 4.0) * massTolerance(maximumMass)
 				+ (initialLiquid.size() + 2.0) * Math.ulp(maximumMass));
 		var registry = support.thermal().registry();
@@ -160,14 +160,14 @@ final class CondensedPhaseChangeStage {
 				equilibrium, maximumMass, massError);
 		if (extent != null) {
 			long center = GasPhaseBatchSearch.upperBound(high, batches ->
-					extent.beforeRoot(transition.massMuPerBatch().multiply(batches).toDouble()));
+					extent.beforeRoot(transition.massKgPerBatch().multiply(batches).toDouble()));
 			long left = Math.max(minimumBatches - 1, center), right = Math.max(minimumBatches, center + 1);
 			JointPhasePlan best = null;
 			while (left >= minimumBatches || right <= high) {
 				double leftDistance = left < minimumBatches ? Double.POSITIVE_INFINITY
-						: extent.distanceLower(transition.massMuPerBatch().multiply(left).toDouble());
+						: extent.distanceLower(transition.massKgPerBatch().multiply(left).toDouble());
 				double rightDistance = right > high ? Double.POSITIVE_INFINITY
-						: extent.distanceLower(transition.massMuPerBatch().multiply(right).toDouble());
+						: extent.distanceLower(transition.massKgPerBatch().multiply(right).toDouble());
 				double acceptedDistance = best != null ? Math.abs(best.temperatureAfterK() - equilibrium)
 						: capacityForced ? Double.POSITIVE_INFINITY : Math.abs(temperature - equilibrium);
 				if (Math.min(leftDistance, rightDistance) >= acceptedDistance) break;
@@ -251,7 +251,7 @@ final class CondensedPhaseChangeStage {
 		if (!support.canExpandCondensedVolume(freezing ? lowerDelta - upperDelta : upperDelta - lowerDelta)) {
 			throw new PhaseCandidateUnavailableException("Condensed phase expansion exceeds region carrier capacity");
 		}
-		double requestedMass = transition.massMuPerBatch().multiply(batches).toDouble();
+		double requestedMass = transition.massKgPerBatch().multiply(batches).toDouble();
 		if (!(Double.isFinite(requestedMass) && requestedMass > 0.0)) {
 			throw new FluidDomain.ThermalPhaseBlockedException(
 					"Condensed phase extent mass is not representable");

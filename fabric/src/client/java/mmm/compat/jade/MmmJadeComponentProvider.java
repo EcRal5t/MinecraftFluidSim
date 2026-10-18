@@ -28,7 +28,7 @@ final class MmmJadeComponentProvider implements IBlockComponentProvider {
 		Optional<JadeFluidSummary> decoded = JadeFluidSummary.decode(tag);
 		if (decoded.isEmpty()) return;
 		JadeFluidSummary summary = decoded.orElseThrow();
-		tooltip.add(Component.translatable("jade.mmm.inventory", decimal(summary.volumeCubicMetres() * 1_000.0),
+		tooltip.add(Component.translatable("jade.mmm.inventory", mmm.units.UnitFormat.volume(summary.volumeCubicMetres()),
 				decimal(summary.massKilograms())));
 		tooltip.add(Component.translatable("jade.mmm.density", decimal(summary.densityKilogramsPerCubicMetre())));
 		if (summary.temperatureKelvin() != null) {
@@ -40,7 +40,7 @@ final class MmmJadeComponentProvider implements IBlockComponentProvider {
 		}
 		if (!summary.species().isEmpty()) {
 			String values = summarize(summary.species(), summary.speciesCount(),
-					entry -> entry.id() + " " + entry.quanta() + " q");
+					entry -> entry.id() + " " + mmm.units.UnitFormat.amount(entry.quanta()));
 			tooltip.add(Component.translatable("jade.mmm.species", values));
 		}
 	}

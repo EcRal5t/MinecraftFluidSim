@@ -100,13 +100,13 @@ public final class ThermalRegistryCodec {
 			CompoundTag tag = new CompoundTag(); tag.putString("Id", material.id());
 			tag.putString("CarrierKind", material.carrierKind().name()); tag.putString("CarrierId", material.carrierId());
 			tag.putLong("ReferenceTemperatureBits", bits(material.referenceTemperatureK()));
-			tag.putLong("ReferenceEnergyBits", bits(material.referenceSpecificEnergyEuPerMu()));
-			tag.putLong("ConductivityBits", bits(material.conductivityEuPerSecondMeterK()));
+			tag.putLong("ReferenceSpecificEnergyJPerKgBits", bits(material.referenceSpecificEnergyJPerKg()));
+			tag.putLong("ConductivityWPerMKBits", bits(material.conductivityWPerMeterK()));
 			ListTag segments = new ListTag();
 			for (ThermalMaterialDefinition.CaloricSegment segment : material.caloricSegments()) {
 				CompoundTag encoded = new CompoundTag(); encoded.putLong("MinimumBits", bits(segment.minimumTemperatureK()));
 				encoded.putLong("MaximumBits", bits(segment.maximumTemperatureK()));
-				encoded.putLong("SpecificHeatBits", bits(segment.specificHeatEuPerMuK())); segments.add(encoded);
+				encoded.putLong("SpecificHeatJPerKgKBits", bits(segment.specificHeatJPerKgK())); segments.add(encoded);
 			}
 			tag.put("Segments", segments); materials.add(tag);
 		}
@@ -115,7 +115,7 @@ public final class ThermalRegistryCodec {
 		for (ThermalSpeciesOffset offset : registry.speciesOffsets()) {
 			CompoundTag tag = new CompoundTag(); tag.putString("Id", offset.id()); tag.putString("Species", offset.speciesId());
 			tag.putString("Host", offset.hostThermalMaterialId());
-			tag.putString("ReferenceEnergy", offset.referenceInternalEnergyEuPerAu().canonical()); offsets.add(tag);
+			tag.putString("ReferenceEnergyJPerMol", offset.referenceInternalEnergyJPerMol().canonical()); offsets.add(tag);
 		}
 		root.put("SpeciesOffsets", offsets);
 		ListTag transitions = new ListTag();
@@ -123,7 +123,7 @@ public final class ThermalRegistryCodec {
 			CompoundTag tag = new CompoundTag(); tag.putString("Id", transition.id());
 			tag.putString("Lower", transition.lowerEnergyMaterialId()); tag.putString("Upper", transition.upperEnergyMaterialId());
 			tag.putLong("LowerSvq", transition.lowerVolumeSvqPerBatch()); tag.putLong("UpperSvq", transition.upperVolumeSvqPerBatch());
-			tag.putString("Mass", transition.massMuPerBatch().canonical());
+			tag.putString("MassKg", transition.massKgPerBatch().canonical());
 			tag.putString("Interface", transition.interfaceRequirement().name());
 			ListTag curve = new ListTag();
 			for (ThermalPhaseTransition.EquilibriumPoint point : transition.equilibriumCurve()) {
@@ -206,7 +206,7 @@ public final class ThermalRegistryCodec {
 			CompoundTag tag = compound(list, index, "material");
 			requireAll(tag, Map.ofEntries(Map.entry("Id", Tag.TAG_STRING), Map.entry("CarrierKind", Tag.TAG_STRING),
 					Map.entry("CarrierId", Tag.TAG_STRING), Map.entry("ReferenceTemperatureBits", Tag.TAG_LONG),
-					Map.entry("ReferenceEnergyBits", Tag.TAG_LONG), Map.entry("ConductivityBits", Tag.TAG_LONG),
+					Map.entry("ReferenceSpecificEnergyJPerKgBits", Tag.TAG_LONG), Map.entry("ConductivityWPerMKBits", Tag.TAG_LONG),
 					Map.entry("Segments", Tag.TAG_LIST)));
 			ListTag encodedSegments = tag.getListOrEmpty("Segments");
 			if (encodedSegments.isEmpty() || encodedSegments.size() > ThermalLimits.MAX_SEGMENTS_PER_MATERIAL) {
@@ -216,14 +216,14 @@ public final class ThermalRegistryCodec {
 			for (int segment = 0; segment < encodedSegments.size(); segment++) {
 				CompoundTag value = compound(encodedSegments, segment, "caloric segment");
 				requireAll(value, Map.of("MinimumBits", Tag.TAG_LONG, "MaximumBits", Tag.TAG_LONG,
-						"SpecificHeatBits", Tag.TAG_LONG));
+						"SpecificHeatJPerKgKBits", Tag.TAG_LONG));
 				segments.add(new ThermalMaterialDefinition.CaloricSegment(value(value, "MinimumBits"),
-						value(value, "MaximumBits"), value(value, "SpecificHeatBits")));
+						value(value, "MaximumBits"), value(value, "SpecificHeatJPerKgKBits")));
 			}
 			result.add(new ThermalMaterialDefinition(tag.getStringOr("Id", ""),
 					ThermalMaterialDefinition.CarrierKind.valueOf(tag.getStringOr("CarrierKind", "")),
 					tag.getStringOr("CarrierId", ""), value(tag, "ReferenceTemperatureBits"),
-					value(tag, "ReferenceEnergyBits"), value(tag, "ConductivityBits"), segments));
+					value(tag, "ReferenceSpecificEnergyJPerKgBits"), value(tag, "ConductivityWPerMKBits"), segments));
 		}
 		return List.copyOf(result);
 	}
@@ -234,9 +234,9 @@ public final class ThermalRegistryCodec {
 		for (int index = 0; index < list.size(); index++) {
 			CompoundTag tag = compound(list, index, "species offset");
 			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "Species", Tag.TAG_STRING,
-					"Host", Tag.TAG_STRING, "ReferenceEnergy", Tag.TAG_STRING));
+					"Host", Tag.TAG_STRING, "ReferenceEnergyJPerMol", Tag.TAG_STRING));
 			result.add(new ThermalSpeciesOffset(tag.getStringOr("Id", ""), tag.getStringOr("Species", ""),
-					tag.getStringOr("Host", ""), ExactRational.parse(tag.getStringOr("ReferenceEnergy", ""))));
+					tag.getStringOr("Host", ""), ExactRational.parse(tag.getStringOr("ReferenceEnergyJPerMol", ""))));
 		}
 		return List.copyOf(result);
 	}
@@ -249,7 +249,7 @@ public final class ThermalRegistryCodec {
 			requireAll(tag, Map.ofEntries(Map.entry("Id", Tag.TAG_STRING), Map.entry("Lower", Tag.TAG_STRING),
 					Map.entry("Upper", Tag.TAG_STRING),
 					Map.entry("LowerSvq", Tag.TAG_LONG), Map.entry("UpperSvq", Tag.TAG_LONG),
-					Map.entry("Mass", Tag.TAG_STRING), Map.entry("Interface", Tag.TAG_STRING),
+					Map.entry("MassKg", Tag.TAG_STRING), Map.entry("Interface", Tag.TAG_STRING),
 					Map.entry("EquilibriumCurve", Tag.TAG_LIST)));
 			ListTag encodedCurve = tag.getListOrEmpty("EquilibriumCurve");
 			if (encodedCurve.size() < 2 || encodedCurve.size() > ThermalLimits.MAX_EQUILIBRIUM_CURVE_POINTS) {
@@ -264,7 +264,7 @@ public final class ThermalRegistryCodec {
 			}
 			result.add(new ThermalPhaseTransition(tag.getStringOr("Id", ""), tag.getStringOr("Lower", ""),
 					tag.getStringOr("Upper", ""), tag.getLongOr("LowerSvq", -1L),
-					tag.getLongOr("UpperSvq", -1L), ExactRational.parse(tag.getStringOr("Mass", "")),
+					tag.getLongOr("UpperSvq", -1L), ExactRational.parse(tag.getStringOr("MassKg", "")),
 					ThermalPhaseTransition.InterfaceRequirement.valueOf(tag.getStringOr("Interface", "")),
 					curve));
 		}

@@ -28,8 +28,8 @@ public final class FullCapabilityTestFixture {
 				!entry.material().id().equals("mmm:water") ? entry : new MaterialRegistry.MaterialEntry(
 						entry.material(), entry.viscosity().stream().map(segment -> new MaterialRegistry.ViscositySegment(
 								segment.minimumTemperatureK(), segment.maximumTemperatureK(),
-								2 * segment.dynamicViscosityPaPerSAtMinimum(),
-								2 * segment.dynamicViscosityPaPerSAtMaximum())).toList())).toList(), baseline.pairTensions());
+								2 * segment.dynamicViscosityPascalSecondsAtMinimum(),
+								2 * segment.dynamicViscosityPascalSecondsAtMaximum())).toList())).toList(), baseline.pairTensions());
 	}
 
 	public static FluidMaterialRegistry bindEmptyMaterialState(FluidDomain domain, FluidMaterialRegistry liquids) {

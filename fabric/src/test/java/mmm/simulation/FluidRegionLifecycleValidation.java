@@ -519,7 +519,7 @@ public final class FluidRegionLifecycleValidation {
 	private static void validateMetadataOnlySummaryCannotInventInventory() {
 		ControllerSummary.Inventory unavailable = ControllerSummary.Inventory.unavailable();
 		require(!unavailable.live() && !unavailable.internalEnergyAvailable()
-				&& Double.isNaN(unavailable.totalInternalEnergyEu())
+				&& Double.isNaN(unavailable.totalInternalEnergyJ())
 				&& !unavailable.temperatureRange().available(),
 				"metadata-only controller inventory did not remain explicitly unavailable");
 		boolean rejected = false;

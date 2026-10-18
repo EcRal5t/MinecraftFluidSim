@@ -381,7 +381,7 @@ public final class RegionCheckpointAssembler {
 				Double.doubleToRawLongBits(sumVolumes(positionVolume)), particles.materialPalette(),
 				particles.layout().hasMaterials() ? Double.doubleToRawLongBits(sum(particles.markerMass())) : 0L,
 				materialLedgers, descriptors, List.copyOf(manifestExtensions), particles.registryFingerprint(),
-				particles.hasChemicalState() ? mmm.chemistry.ChemicalLimits.QUANTA_PER_AU : 0L,
+				particles.hasChemicalState() ? mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL : 0L,
 				particles.speciesPalette(), particles.chemicalMixtures(), particles.chemicalSpeciesTotals(),
 				particles.chemicalResidualLedgerBits(), 0L);
 		return new RegionCheckpoint(withChecksum(unsigned), sectionStates);
@@ -406,7 +406,7 @@ public final class RegionCheckpointAssembler {
 				manifest.origin(), manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
 				manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(), manifest.totalMarkerCount(),
 				manifest.totalVolumeBits(), manifest.materialPalette(), manifest.totalMassBits(), manifest.materialLedgers(),
-				manifest.sections(), manifest.extensions(), manifest.registryFingerprint(), manifest.auScale(),
+				manifest.sections(), manifest.extensions(), manifest.registryFingerprint(), manifest.quantaPerMol(),
 				manifest.speciesPalette(), manifest.chemicalMixtures(), manifest.chemicalSpeciesTotals(),
 				manifest.chemicalResidualLedgerBits(), checksum);
 	}
@@ -558,7 +558,7 @@ public final class RegionCheckpointAssembler {
 				| (chemicalState ? GranularRegionStateCodec.CAP_CHEMISTRY : 0)
 				| (snapshot.requiresChemistry() ? GranularRegionStateCodec.CAP_PRECIPITATION : 0);
 		return new GranularRegionStateCodec.ManifestData(capabilities, snapshot.registryFingerprint(),
-				SolidVolume.SVQ_PER_BV, GranularLimits.POROSITY_SCALE,
+				SolidVolume.SVQ_PER_CUBIC_METER, GranularLimits.POROSITY_SCALE,
 				GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
 				snapshot.materialPalette(), snapshot.chemicalRegistryFingerprint(), snapshot.solidCompositions(),
 				snapshot.solidSpeciesTotals(), snapshot.externalSource(), snapshot.escapedSink(),

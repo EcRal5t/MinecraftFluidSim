@@ -26,8 +26,8 @@ public final class GasThermalModel {
 			double temperatureK,
 			double absolutePressurePa,
 			double densityKgPerCubicMeter,
-			double heatCapacityEuPerK,
-			double gasConstantEuPerK,
+			double heatCapacityJPerK,
+			double gasConstantJPerK,
 			double isentropicExponent,
 			double adiabaticBulkModulusPa,
 			double soundSpeedMetersPerSecond,
@@ -37,8 +37,8 @@ public final class GasThermalModel {
 			if (!(Double.isFinite(temperatureK) && temperatureK > 0.0
 					&& Double.isFinite(absolutePressurePa) && absolutePressurePa > 0.0
 					&& Double.isFinite(densityKgPerCubicMeter) && densityKgPerCubicMeter > 0.0
-					&& Double.isFinite(heatCapacityEuPerK) && heatCapacityEuPerK > 0.0
-					&& Double.isFinite(gasConstantEuPerK) && gasConstantEuPerK > 0.0
+					&& Double.isFinite(heatCapacityJPerK) && heatCapacityJPerK > 0.0
+					&& Double.isFinite(gasConstantJPerK) && gasConstantJPerK > 0.0
 					&& Double.isFinite(isentropicExponent) && isentropicExponent > 1.0
 					&& Double.isFinite(adiabaticBulkModulusPa) && adiabaticBulkModulusPa > 0.0
 					&& Double.isFinite(soundSpeedMetersPerSecond) && soundSpeedMetersPerSecond > 0.0
@@ -99,12 +99,12 @@ public final class GasThermalModel {
 				/ GasRegistry.STANDARD_TEMPERATURE_K;
 		double pressure = gasConstant * thermal.temperatureK() / availableVolume;
 		double density = density(inventory, availableVolume);
-		double exponent = 1.0 + gasConstant / thermal.heatCapacityEuPerK();
+		double exponent = 1.0 + gasConstant / thermal.heatCapacityJPerK();
 		double bulkModulus = exponent * pressure;
 		double soundSpeed = Math.sqrt(bulkModulus / density);
 		double compliance = 1.0 / bulkModulus;
 		return new HydrodynamicState(thermal.temperatureK(), pressure, density,
-				thermal.heatCapacityEuPerK(), gasConstant, exponent, bulkModulus,
+				thermal.heatCapacityJPerK(), gasConstant, exponent, bulkModulus,
 				soundSpeed, compliance);
 	}
 
@@ -156,7 +156,7 @@ public final class GasThermalModel {
 			return new Compression(initial.temperatureK(), initial.temperatureK(), internalEnergy, 0.0);
 		}
 		List<ThermalStateFunction.InventoryPortion> portions = portions(inventory);
-		double entropyChange = initial.gasConstantEuPerK()
+		double entropyChange = initial.gasConstantJPerK()
 				* logRatio(initialAvailableVolume, finalAvailableVolume);
 		double targetTemperature;
 		try {
@@ -169,12 +169,12 @@ public final class GasThermalModel {
 					+ AirNetwork.cubicMeters(inventory.standardVolumeNanos()) + " m^3std, components="
 					+ inventory.components().stream().map(GasComponentAmount::componentId).toList()
 					+ ", remaining |dS|="
-					+ outside.remainingEntropyEuPerK + " EU/K", outside);
+					+ outside.remainingEntropyJPerK + " J/K", outside);
 		}
 		double energyChange = 0.0;
 		for (ThermalStateFunction.InventoryPortion portion : portions) {
 			energyChange += ThermalContactExchange.energyChangeBetween(thermalRegistry.material(portion.materialHandle()),
-					portion.massMu(), initial.temperatureK(), targetTemperature);
+					portion.massKg(), initial.temperatureK(), targetTemperature);
 		}
 		double finalEnergy = internalEnergy + energyChange;
 		hydrodynamicState(inventory, finalAvailableVolume, finalEnergy);
@@ -184,11 +184,11 @@ public final class GasThermalModel {
 	private double isentropicTemperature(
 			List<ThermalStateFunction.InventoryPortion> portions,
 			double initialTemperatureK,
-			double entropyChangeEuPerK
+			double entropyChangeJPerK
 	) {
-		if (entropyChangeEuPerK == 0.0) return initialTemperatureK;
-		boolean heating = entropyChangeEuPerK > 0.0;
-		double remaining = Math.abs(entropyChangeEuPerK);
+		if (entropyChangeJPerK == 0.0) return initialTemperatureK;
+		boolean heating = entropyChangeJPerK > 0.0;
+		double remaining = Math.abs(entropyChangeJPerK);
 		double temperature = initialTemperatureK;
 		while (remaining > 0.0) {
 			double boundary = heating
@@ -235,12 +235,12 @@ public final class GasThermalModel {
 	}
 
 	private static final class CaloricRangeException extends IllegalArgumentException {
-		private final double remainingEntropyEuPerK;
+		private final double remainingEntropyJPerK;
 
-		private CaloricRangeException(double remainingEntropyEuPerK) {
-			super("Isentrope leaves the positive-temperature domain with " + remainingEntropyEuPerK
-					+ " EU/K unconsumed");
-			this.remainingEntropyEuPerK = remainingEntropyEuPerK;
+		private CaloricRangeException(double remainingEntropyJPerK) {
+			super("Isentrope leaves the positive-temperature domain with " + remainingEntropyJPerK
+					+ " J/K unconsumed");
+			this.remainingEntropyJPerK = remainingEntropyJPerK;
 		}
 	}
 
@@ -288,7 +288,7 @@ public final class GasThermalModel {
 	) {
 		double heatCapacity = 0.0;
 		for (ThermalStateFunction.InventoryPortion portion : portions) {
-			heatCapacity += portion.massMu()
+			heatCapacity += portion.massKg()
 					* thermalRegistry.material(portion.materialHandle()).specificHeatAt(temperatureK);
 		}
 		if (!(Double.isFinite(heatCapacity) && heatCapacity > 0.0)) {

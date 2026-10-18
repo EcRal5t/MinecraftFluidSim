@@ -287,12 +287,12 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		var candidates = new ArrayList<ArrayList<Group>>();
 		for (int cell = 0; cell < domain.cellCount; cell++) if (remappedCells[cell] && input[cell] != null) {
 			boolean lowCell = false;
-			for (var group : input[cell]) lowCell |= group.species.totalQuanta() < CellRemapChemicalSupport.MAX_EXPANSION * CellRemapChemicalSupport.MAX_COMPONENT_SHARES;
+			for (var group : input[cell]) lowCell |= !group.species.isEmpty() && group.species.totalQuanta() < CellRemapChemicalSupport.MAX_EXPANSION * CellRemapChemicalSupport.MAX_COMPONENT_SHARES;
 			if (!lowCell) continue;
 			for (int support : CellRemapMicroTopology.components(domain.geometry.cutCells.mask(cell))) {
 				var component = new ArrayList<Group>(); boolean low = false;
 				for (var group : input[cell]) if (group.support == support) {
-					component.add(group); low |= group.species.totalQuanta() < CellRemapChemicalSupport.MAX_EXPANSION * CellRemapChemicalSupport.MAX_COMPONENT_SHARES;
+					component.add(group); low |= !group.species.isEmpty() && group.species.totalQuanta() < CellRemapChemicalSupport.MAX_EXPANSION * CellRemapChemicalSupport.MAX_COMPONENT_SHARES;
 				}
 				if (low) candidates.add(component);
 			}
@@ -303,7 +303,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 				var first = component.getFirst();
 				if (selected != null) selected.chemicalWork(1L + component.size() * 8L * CellRemapChemicalSupport.MAX_COMPONENT_SHARES);
 				var pieces = volumePieces(first.cell, flux, component, transfers(first.cell, first.support, flux, selected));
-				for (int g = 0; g < component.size(); g++) if (!CellRemapChemicalSupport.fits(component.get(g).species.totalQuanta(), pieces[g])) {
+				for (int g = 0; g < component.size(); g++) if (!component.get(g).species.isEmpty() && !CellRemapChemicalSupport.fits(component.get(g).species.totalQuanta(), pieces[g])) {
 					if (selected == null) selected = newPorts(flux, ballistic);
 					else selected.reduceChemical(first.cell, first.support, pieces[g][pieces[g].length - 1], component.size() == 1);
 					complete = false; break;
@@ -316,7 +316,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 	private CellRemapPorts newPorts(ConservativeLiquidFlux flux, BallisticLiquidRemap ballistic) {
 		return new CellRemapPorts(domain, flux, ballistic, geometryRemap, domain.chemicalParcels == null ? null : (cell, support) -> {
 			int shares = CellRemapChemicalSupport.MAX_COMPONENT_SHARES;
-			if (input[cell] != null) for (var group : input[cell]) if (group.support == support)
+			if (input[cell] != null) for (var group : input[cell]) if (group.support == support && !group.species.isEmpty())
 				shares = (int) Math.min(shares, group.species.totalQuanta());
 			return shares;
 		});
@@ -427,7 +427,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 			int[] required = new int[targets.size()];
 			for (int i = 0; i < required.length; i++) {
 				var group = targets.get(i);
-				required[i] = CellRemapChemicalSupport.minimumCarriers(group.volume, 1);
+				required[i] = group.species.isEmpty() ? 0 : CellRemapChemicalSupport.minimumCarriers(group.volume, 1);
 			}
 			var definitions = new ArrayList<CellRemapSpeciesAllocation.Source>();
 			for (var source : sources) {
@@ -625,7 +625,7 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		if (output[group.cell].size() > 1) count = Integer.highestOneBit(Math.min(8,
 				Math.max(1, (int) Math.floor(amount / ConservativeMarkerSampling.NOMINAL_MARKER_VOLUME))));
 		if (domain.geometry.cutCells.mask(group.cell) != 0) count = Math.max(Integer.bitCount(group.support), 1);
-		var volumes = domain.chemicalParcels==null ? LiquidCellQuadrature.volumes(group.volume,count)
+		var volumes = domain.chemicalParcels==null || group.species.isEmpty() ? LiquidCellQuadrature.volumes(group.volume,count)
 				: CellRemapChemicalSupport.quadrature(group.volume,count,1,group.species.totalQuanta());
 		group.quadratureCount = count;
 		return volumes;
@@ -846,13 +846,13 @@ final class CellCarrierRemapPlan implements CellRemapCandidate {
 		int[] shares = new int[domain.cellCount]; Arrays.fill(shares, 7);
 		for (int cell = 0; cell < groups.length; cell++) if (groups[cell] != null) for (Group group : groups[cell]) {
 			long total = group.species.totalQuanta();
-			shares[cell] = (int) Math.min(shares[cell], total);
+			if (total > 0) shares[cell] = (int) Math.min(shares[cell], total);
 		}
 		return shares;
 	}
 
 	private static ChemicalMixtureRecord[] allocateSpecies(CellSpeciesInventory species, SignedDyadic[] weights) {
-		if(species.isEmpty())return new ChemicalMixtureRecord[weights.length];
+		if(species.isEmpty()) { var empty = new ChemicalMixtureRecord[weights.length]; Arrays.fill(empty, species.record()); return empty; }
 		int[] targets=new int[weights.length]; for(int i=0;i<targets.length;i++)targets[i]=i;
 		return CellRemapSpeciesAllocation.allocate(List.of(new CellRemapSpeciesAllocation.Source(species,weights,targets)),CellRemapChemicalSupport.required(weights))[0];
 	}

@@ -24,7 +24,7 @@ import java.util.TreeMap;
 /** Resolves whitelisted creative intent against the committed world registries on the server thread. */
 final class CreativeSourceCatalog {
 	static final long LIQUID_AMOUNT = ContainerFluidLedger.NANOS_PER_BLOCK;
-	static final long GRANULAR_AMOUNT = SolidVolume.SVQ_PER_BV;
+	static final long GRANULAR_AMOUNT = SolidVolume.SVQ_PER_CUBIC_METER;
 	static final double STANDARD_TEMPERATURE_K = 293.15;
 
 	private CreativeSourceCatalog() { }
@@ -84,7 +84,7 @@ final class CreativeSourceCatalog {
 		if (species.equals(BuiltinChemicalDefinitions.H2O)) amounts.put(species, 55_555_555_556L);
 		else {
 			amounts.put(BuiltinChemicalDefinitions.H2O, 50_000_000_000L);
-			amounts.put(species, ChemicalLimits.QUANTA_PER_AU);
+			amounts.put(species, mmm.chemistry.ChemicalAmount.quanta(mmm.chemistry.ExactRational.of(1000)));
 		}
 		FluidMaterial carrier = world.resolveMaterial(BuiltinFluidMaterials.WATER.id());
 		double mass = carrier.referenceDensity();

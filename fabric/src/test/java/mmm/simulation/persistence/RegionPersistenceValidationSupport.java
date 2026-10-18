@@ -234,7 +234,7 @@ abstract class RegionPersistenceValidationSupport {
 				manifest.networkGeneration(), manifest.origin(), manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
 				manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(), manifest.totalMarkerCount(), manifest.totalVolumeBits(),
 				manifest.materialPalette(), manifest.totalMassBits(), manifest.materialLedgers(), manifest.sections(), manifest.extensions(),
-				manifest.registryFingerprint(), manifest.auScale(), manifest.speciesPalette(), manifest.chemicalMixtures(),
+				manifest.registryFingerprint(), manifest.quantaPerMol(), manifest.speciesPalette(), manifest.chemicalMixtures(),
 				manifest.chemicalSpeciesTotals(), manifest.chemicalResidualLedgerBits(), RegionStateIntegrity.manifestChecksum(manifest));
 	}
 
@@ -245,7 +245,7 @@ abstract class RegionPersistenceValidationSupport {
 				manifest.checkpointGeneration(), manifest.networkGeneration(), manifest.origin(), manifest.sizeX(), manifest.sizeY(),
 				manifest.sizeZ(), manifest.solverConfig(), manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(),
 				manifest.totalMarkerCount(), manifest.totalVolumeBits(), manifest.materialPalette(), manifest.totalMassBits(),
-				manifest.materialLedgers(), manifest.sections(), extensions, manifest.registryFingerprint(), manifest.auScale(),
+				manifest.materialLedgers(), manifest.sections(), extensions, manifest.registryFingerprint(), manifest.quantaPerMol(),
 				manifest.speciesPalette(), manifest.chemicalMixtures(), manifest.chemicalSpeciesTotals(),
 				manifest.chemicalResidualLedgerBits(), 0L);
 		return signedManifest(unsigned);

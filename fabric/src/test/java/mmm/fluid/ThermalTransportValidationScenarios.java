@@ -89,7 +89,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		restorePhaseTestCarriers(domain, liquids, 2, 2, 2, new float[]{.0625F}, new int[1]);
 		int count = domain.particleCount(); double mass = domain.particles.mass(0);
 		double physicalMass = SolverUnitScale.forCellSize(config.cellSize()).kilograms(mass);
-		double base = physicalMass * water.referenceSpecificEnergyEuPerMu();
+		double base = physicalMass * water.referenceSpecificEnergyJPerKg();
 		double modeled = base + physicalMass * (300 - water.referenceTemperatureK());
 		require(physicalMass == 7.8125 && water.referenceTemperatureK() + (modeled - base) / physicalMass < 0,
 				"liquid initialization regression no longer exercises an invalid stored temperature");
@@ -270,8 +270,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		FluidDomain domain = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
 		domain.bindGranular(granular, productionLiquids, BuiltinFluidMaterials.createRegistry());
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
-		long parcelSvq = SolidVolume.SVQ_PER_BV;
-		double parcelMass = parcelSvq / (double) SolidVolume.SVQ_PER_BV
+		long parcelSvq = SolidVolume.SVQ_PER_CUBIC_METER;
+		double parcelMass = parcelSvq / (double) SolidVolume.SVQ_PER_CUBIC_METER
 				* granular.material(sand).referenceDensity();
 		GranularTransferLedger bucket = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
 				BuiltinGranularDefinitions.FINE_SAND, parcelSvq, parcelMass, null)));
@@ -506,7 +506,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			FluidDomain domain = new FluidDomain(4, 4, 4, config, 512);
 			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 			for (int parcel = 0; parcel < 3; parcel++) require(domain.tryInsertExactGranular(
-					1, 1, 1, sand, 0, 3, 3.0 / SolidVolume.SVQ_PER_BV * granular.material(sand).referenceDensity()).inserted(),
+					1, 1, 1, sand, 0, 3, 3.0 / SolidVolume.SVQ_PER_CUBIC_METER * granular.material(sand).referenceDensity()).inserted(),
 					"granular extraction rounding fixture could not insert its parcel");
 			domain.bindThermal(granularThermalRegistry(liquids, granular), liquids, 300.0);
 			domain.thermalState.restoreThermalGranular(energies, List.of());
@@ -531,7 +531,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			FluidDomain domain = new FluidDomain(4, 4, 4, config, 512);
 			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 			require(domain.tryInsertExactGranular(1, 1, 1, sand, 0, 3,
-					3.0 / SolidVolume.SVQ_PER_BV * granular.material(sand).referenceDensity()).inserted(),
+					3.0 / SolidVolume.SVQ_PER_CUBIC_METER * granular.material(sand).referenceDensity()).inserted(),
 					"partial granular extraction fixture could not insert its parcel");
 			domain.bindThermal(granularThermalRegistry(liquids, granular), liquids, 300.0);
 			domain.thermalState.restoreThermalGranular(new double[]{1.0}, List.of());
@@ -716,7 +716,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		equilibrium.setThermalTemperatureInCell(2, 1, 1, 300);
 		double[] equilibratedCarrierEnergy = equilibrium.exportThermalParticleState().copyInternalEnergy();
 		ThermalTransport.Stats noFlux = equilibrium.stepThermalOnly(10_000.0);
-		require(noFlux.substeps() == 1 && noFlux.maximumAbsoluteTransferEu() == 0.0
+		require(noFlux.substeps() == 1 && noFlux.maximumAbsoluteTransferJ() == 0.0
 				&& Arrays.equals(equilibratedCarrierEnergy,
 						equilibrium.exportThermalParticleState().copyInternalEnergy()),
 				"zero-flux transport rewrote authoritative carrier energy");
@@ -801,7 +801,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		domain.setThermalTemperatureInCell(1, 1, 1, 350.0);
 		domain.setThermalTemperatureInCell(2, 1, 1, 250.0);
 		ThermalTransport.Stats transport = domain.stepThermalOnly(1_000.0);
-		require(transport.evaluatedContacts() > 0 && transport.maximumAbsoluteTransferEu() > 0.0
+		require(transport.evaluatedContacts() > 0 && transport.maximumAbsoluteTransferJ() > 0.0
 				&& domain.thermalTemperatureInCell(1, 1, 1) < 350.0
 				&& domain.thermalTemperatureInCell(2, 1, 1) > 250.0,
 				"partial cut/PLIC contact was dropped from production thermal transport");
@@ -828,18 +828,18 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		), 1.0, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 		FiniteThermalExchange.ContactDelta cold = plan.contacts().get(0);
 		FiniteThermalExchange.ContactDelta warm = plan.contacts().get(1);
-		SignedDyadic jointChange = SignedDyadic.of(plan.after().internalEnergyEu())
-				.subtract(SignedDyadic.of(plan.before().internalEnergyEu()))
-				.add(SignedDyadic.of(cold.internalEnergyDeltaEu()))
-				.add(SignedDyadic.of(warm.internalEnergyDeltaEu()));
+		SignedDyadic jointChange = SignedDyadic.of(plan.after().internalEnergyJ())
+				.subtract(SignedDyadic.of(plan.before().internalEnergyJ()))
+				.add(SignedDyadic.of(cold.internalEnergyDeltaJ()))
+				.add(SignedDyadic.of(warm.internalEnergyDeltaJ()));
 		require(plan.changed() && plan.before().generation() == 7L && plan.after().generation() == 8L
 				&& cold.ordinal() == 0 && warm.ordinal() == 1
-				&& close(cold.internalEnergyDeltaEu(), 10_000.0)
-				&& close(warm.internalEnergyDeltaEu(), 2_500.0)
+				&& close(cold.internalEnergyDeltaJ(), 10_000.0)
+				&& close(warm.internalEnergyDeltaJ(), 2_500.0)
 				&& close(cold.finalTemperatureK(), 305.0)
 				&& close(warm.finalTemperatureK(), 352.5)
 				&& close(stateFunction.stateForInternalEnergy(registry.materialHandle(wall.id()), 10.0,
-						Map.of(), plan.after().internalEnergyEu()).temperatureK(), 397.5)
+						Map.of(), plan.after().internalEnergyJ()).temperatureK(), 397.5)
 				&& jointChange.equals(plan.roundoffResidual()),
 				"finite thermal body did not produce a closed three-owner energy plan");
 
@@ -852,7 +852,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				new FiniteThermalExchange.Contact(1, 350.0, 1_000.0, 50.0, 250.0, 500.0)
 		), 1_000.0, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 		require(!noOp.changed() && noOp.substeps() == 1 && noOp.after().equals(equilibrium)
-				&& noOp.contacts().stream().allMatch(contact -> contact.internalEnergyDeltaEu() == 0.0),
+				&& noOp.contacts().stream().allMatch(contact -> contact.internalEnergyDeltaJ() == 0.0),
 				"equilibrated finite thermal body produced a false durable mutation");
 
 		ThermalMaterialDefinition segmented = new ThermalMaterialDefinition("test:thermal/segmented_device",
@@ -865,7 +865,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		FiniteThermalBodyState segmentedBody = new FiniteThermalBodyState(1L,
 				segmentedRegistry.fingerprint(), segmented.id(), 1.0,
 				segmentedState.internalEnergyAtTemperature(0, 1.0, Map.of(), 400.0));
-		double[] segmentedCellEnergy = {segmentedBody.internalEnergyEu()};
+		double[] segmentedCellEnergy = {segmentedBody.internalEnergyJ()};
 		ThermalCellGrid segmentedCell = new ThermalCellGrid(1);
 		segmentedCell.rebuild(new ThermalCellGrid.CarrierAccess() {
 			@Override public int carrierCount() { return 1; }
@@ -896,7 +896,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			var plan = FiniteThermalExchange.plan(registry, body, List.of(
 					new FiniteThermalExchange.Contact(0, 300, capacity, capacity, 1, 1000)), 1, 8);
 			require(plan.substeps() == 2 && plan.contacts().get(0).finalTemperatureK() == 350
-					&& state.stateForInternalEnergy(0, 1, Map.of(), plan.after().internalEnergyEu()).temperatureK() == 350
+					&& state.stateForInternalEnergy(0, 1, Map.of(), plan.after().internalEnergyJ()).temperatureK() == 350
 					&& plan.roundoffResidual().equals(SignedDyadic.ZERO),
 					"finite exchange lost its stable step or temperature under energy scaling");
 			if (capacity == 3 * Double.MIN_VALUE) {
@@ -916,9 +916,9 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 					0, cooling ? cold : hot, capacity, Math.scalb(1.0, 700), 1, hot)), Math.scalb(1.0, -1000), 8);
 			double finalTemperature = 3 * Math.scalb(1.0, 498);
 			require(plan.substeps() == 2
-					&& plan.contacts().get(0).internalEnergyDeltaEu() == (cooling ? 1 : -1) * Math.scalb(1.0, 198)
+					&& plan.contacts().get(0).internalEnergyDeltaJ() == (cooling ? 1 : -1) * Math.scalb(1.0, 198)
 					&& plan.contacts().get(0).finalTemperatureK() == finalTemperature
-					&& state.stateForInternalEnergy(0, 1, Map.of(), plan.after().internalEnergyEu()).temperatureK() == finalTemperature
+					&& state.stateForInternalEnergy(0, 1, Map.of(), plan.after().internalEnergyJ()).temperatureK() == finalTemperature
 					&& plan.roundoffResidual().equals(SignedDyadic.ZERO),
 					"intermediate heat-flux overflow rejected a finite closed exchange");
 		}

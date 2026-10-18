@@ -25,7 +25,7 @@ public record GranularContents(String registryFingerprint, long svqPerBlockVolum
 
 	public GranularContents {
 		if (registryFingerprint == null || !registryFingerprint.matches("[0-9a-f]{64}")
-				|| svqPerBlockVolume != SolidVolume.SVQ_PER_BV || groups == null || groups.isEmpty()
+				|| svqPerBlockVolume != SolidVolume.SVQ_PER_CUBIC_METER || groups == null || groups.isEmpty()
 				|| groups.size() > MAX_GROUPS) {
 			throw new IllegalArgumentException("Invalid granular contents identity/groups");
 		}
@@ -40,7 +40,7 @@ public record GranularContents(String registryFingerprint, long svqPerBlockVolum
 			totalMass += group.mass();
 			entries = Math.addExact(entries, group.composition().size());
 		}
-		if (totalSvq > SolidVolume.SVQ_PER_BV || entries > MAX_TOTAL_COMPOSITION_ENTRIES
+		if (totalSvq > SolidVolume.SVQ_PER_CUBIC_METER || entries > MAX_TOTAL_COMPOSITION_ENTRIES
 				|| !(Double.isFinite(totalMass) && totalMass > 0.0)) {
 			throw new IllegalArgumentException("Granular contents exceed the frozen container budget");
 		}
@@ -94,7 +94,7 @@ public record GranularContents(String registryFingerprint, long svqPerBlockVolum
 						source.composition().massResidualBits(), species));
 			}
 		}
-		GranularContents result = new GranularContents(registry.fingerprint(), SolidVolume.SVQ_PER_BV, groups);
+		GranularContents result = new GranularContents(registry.fingerprint(), SolidVolume.SVQ_PER_CUBIC_METER, groups);
 		result.validateAgainst(registry, chemistry); return result;
 	}
 
@@ -176,7 +176,7 @@ public record GranularContents(String registryFingerprint, long svqPerBlockVolum
 
 		public Group {
 			if (!StableId.isValid(materialId, 128) || solidVolumeSvq <= 0L
-					|| solidVolumeSvq > SolidVolume.SVQ_PER_BV
+					|| solidVolumeSvq > SolidVolume.SVQ_PER_CUBIC_METER
 					|| !(Double.isFinite(Double.longBitsToDouble(massBits)) && Double.longBitsToDouble(massBits) > 0.0)
 					|| composition == null || composition.size() > GranularLimits.MAX_SOLID_COMPOSITION_ENTRIES) {
 				throw new IllegalArgumentException("Invalid granular contents group");

@@ -72,7 +72,7 @@ public record LifecycleOperationPreviewPayload(
 		buffer.writeDouble(value.granularMassKilograms()); buffer.writeVarLong(value.coherentSolidVolumeSvq());
 		buffer.writeDouble(value.coherentMassKilograms()); buffer.writeVarLong(value.sealedGasStandardVolumeNanos());
 		buffer.writeDouble(value.sealedGasMassKilograms()); buffer.writeVarLong(value.sealedGasSpeciesQuanta());
-		buffer.writeBoolean(value.internalEnergyAvailable()); buffer.writeDouble(value.internalEnergyEu());
+		buffer.writeBoolean(value.internalEnergyAvailable()); buffer.writeDouble(value.internalEnergyJ());
 	}
 
 	private static LifecycleOperationPreview.Removal readRemoval(FriendlyByteBuf buffer) {

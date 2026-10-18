@@ -10,21 +10,21 @@ public record ThermalMaterialDefinition(
 		CarrierKind carrierKind,
 		String carrierId,
 		double referenceTemperatureK,
-		double referenceSpecificEnergyEuPerMu,
-		double conductivityEuPerSecondMeterK,
+		double referenceSpecificEnergyJPerKg,
+		double conductivityWPerMeterK,
 		List<CaloricSegment> caloricSegments
 ) {
 	public enum CarrierKind { LIQUID, GRANULAR, COHERENT_SOLID, GAS, DEVICE }
 
 	public record CaloricSegment(double minimumTemperatureK, double maximumTemperatureK,
-	                              double specificHeatEuPerMuK) {
+	                              double specificHeatJPerKgK) {
 		public CaloricSegment {
 			if (!(Double.isFinite(minimumTemperatureK) && Double.isFinite(maximumTemperatureK)
 					&& minimumTemperatureK >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K
 					&& maximumTemperatureK > minimumTemperatureK)) {
 				throw new IllegalArgumentException("Thermal caloric segment has an invalid temperature interval");
 			}
-			if (!(Double.isFinite(specificHeatEuPerMuK) && specificHeatEuPerMuK > 0.0)) {
+			if (!(Double.isFinite(specificHeatJPerKgK) && specificHeatJPerKgK > 0.0)) {
 				throw new IllegalArgumentException("Thermal specific heat must be finite and positive");
 			}
 		}
@@ -37,10 +37,10 @@ public record ThermalMaterialDefinition(
 		if (!Double.isFinite(referenceTemperatureK)) {
 			throw new IllegalArgumentException("Thermal reference temperature must be finite");
 		}
-		if (!Double.isFinite(referenceSpecificEnergyEuPerMu)) {
+		if (!Double.isFinite(referenceSpecificEnergyJPerKg)) {
 			throw new IllegalArgumentException("Thermal reference specific energy must be finite");
 		}
-		if (!(Double.isFinite(conductivityEuPerSecondMeterK) && conductivityEuPerSecondMeterK >= 0.0)) {
+		if (!(Double.isFinite(conductivityWPerMeterK) && conductivityWPerMeterK >= 0.0)) {
 			throw new IllegalArgumentException("Thermal conductivity must be finite and non-negative");
 		}
 		if (caloricSegments == null || caloricSegments.isEmpty()
@@ -71,12 +71,12 @@ public record ThermalMaterialDefinition(
 	public double specificHeatAt(double temperatureK) {
 		requireIntrinsicTemperature(temperatureK);
 		if (temperatureK < minimumTemperatureK()) {
-			return caloricSegments.getFirst().specificHeatEuPerMuK();
+			return caloricSegments.getFirst().specificHeatJPerKgK();
 		}
 		for (int index = 0; index < caloricSegments.size(); index++) {
 			CaloricSegment segment = caloricSegments.get(index);
 			if (temperatureK < segment.maximumTemperatureK() || index + 1 == caloricSegments.size()) {
-				return segment.specificHeatEuPerMuK();
+				return segment.specificHeatJPerKgK();
 			}
 		}
 		throw new IllegalStateException("Thermal segment lookup failed");
@@ -98,18 +98,18 @@ public record ThermalMaterialDefinition(
 		CaloricSegment first = caloricSegments.getFirst();
 		if (low < first.minimumTemperatureK()) {
 			total += (Math.min(high, first.minimumTemperatureK()) - low)
-					* first.specificHeatEuPerMuK();
+					* first.specificHeatJPerKgK();
 		}
 		for (int index = 0; index < caloricSegments.size(); index++) {
 			CaloricSegment segment = caloricSegments.get(index);
 			double overlap = Math.min(high, segment.maximumTemperatureK())
 					- Math.max(low, segment.minimumTemperatureK());
-			if (overlap > 0.0) total += overlap * segment.specificHeatEuPerMuK();
+			if (overlap > 0.0) total += overlap * segment.specificHeatJPerKgK();
 		}
 		CaloricSegment last = caloricSegments.getLast();
 		if (high > last.maximumTemperatureK()) {
 			total += (high - Math.max(low, last.maximumTemperatureK()))
-					* last.specificHeatEuPerMuK();
+					* last.specificHeatJPerKgK();
 		}
 		if (!Double.isFinite(total)) throw new IllegalArgumentException("Thermal sensible energy is not finite");
 		return temperatureK < fromTemperatureK ? -total : total;

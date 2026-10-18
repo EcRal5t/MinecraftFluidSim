@@ -6,7 +6,7 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 
-/** Bounded, display-only cell projection. Exact AU and residual ledgers never leave the server. */
+/** Bounded, display-only cell projection. Integer μmol and residual ledgers never leave the server. */
 public final class ChemicalDisplaySnapshot {
 	public static final int TOP_SPECIES = 4;
 	private final List<SpeciesDisplay> species;
@@ -105,7 +105,7 @@ public final class ChemicalDisplaySnapshot {
 			residual[cell] = (byte) quantized[bucketCount - 1];
 			long difference = Math.abs(cellTotals[acid] - cellTotals[base]);
 			double strength = difference == 0L ? 0.0 : Math.min(7.0,
-					Math.log10(1.0 + difference / (1_000.0 * cellVolume[cell] * blockScale)));
+					Math.log10(1.0 + (difference / (double) ChemicalLimits.QUANTA_PER_MOL) / (1e-3 * cellVolume[cell] * blockScale)));
 			double value = cellTotals[acid] > cellTotals[base] ? 7.0 - strength
 					: cellTotals[base] > cellTotals[acid] ? 7.0 + strength : 7.0;
 			ph[cell] = (byte) Math.round(value * 255.0 / 14.0);

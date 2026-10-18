@@ -2,35 +2,35 @@ package mmm.thermal;
 
 import mmm.units.SignedDyadic;
 
-/** Conservative backward-Euler heat transfer through one finite conductance, in EU/(s K). */
+/** Conservative backward-Euler heat transfer through one finite conductance, in J/(s K). */
 public final class ThermalContactExchange {
 	/** A caloric curve evaluated against the same initial inventory throughout one contact solve. */
 	public interface Body {
 		double temperatureK();
-		double heatCapacityEuPerK();
+		double heatCapacityJPerK();
 		double energyChangeToTemperature(double temperatureK);
-		ThermalStateFunction.State stateAfterEnergyChange(double energyChangeEu);
+		ThermalStateFunction.State stateAfterEnergyChange(double energyChangeJ);
 		default boolean finite() { return true; }
 	}
 
 	/** One real carrier, including its unchanged material and species reference energy. */
 	public record Carrier(ThermalMaterialDefinition material, double massKilograms,
-	                      double baseEnergyEu, double internalEnergyEu) implements Body {
+	                      double baseEnergyJ, double internalEnergyJ) implements Body {
 		public Carrier {
 			if (material == null || !(Double.isFinite(massKilograms) && massKilograms > 0.0)
-					|| !Double.isFinite(baseEnergyEu) || !Double.isFinite(internalEnergyEu))
+					|| !Double.isFinite(baseEnergyJ) || !Double.isFinite(internalEnergyJ))
 				throw new IllegalArgumentException("Thermal contact carrier inventory is invalid");
-			ThermalCaloricInversion.owner(material, massKilograms, internalEnergyEu, baseEnergyEu);
+			ThermalCaloricInversion.owner(material, massKilograms, internalEnergyJ, baseEnergyJ);
 		}
 		@Override public double temperatureK() {
-			return ThermalCaloricInversion.owner(material, massKilograms, internalEnergyEu, baseEnergyEu).temperatureK();
+			return ThermalCaloricInversion.owner(material, massKilograms, internalEnergyJ, baseEnergyJ).temperatureK();
 		}
-		@Override public double heatCapacityEuPerK() { return massKilograms * material.specificHeatAt(temperatureK()); }
+		@Override public double heatCapacityJPerK() { return massKilograms * material.specificHeatAt(temperatureK()); }
 		@Override public double energyChangeToTemperature(double target) {
 			return energyChangeBetween(material, massKilograms, temperatureK(), target);
 		}
 		@Override public ThermalStateFunction.State stateAfterEnergyChange(double change) {
-			return ThermalCaloricInversion.owner(material, massKilograms, internalEnergyEu + change, baseEnergyEu);
+			return ThermalCaloricInversion.owner(material, massKilograms, internalEnergyJ + change, baseEnergyJ);
 		}
 	}
 
@@ -40,7 +40,7 @@ public final class ThermalContactExchange {
 			if (!(Double.isFinite(temperatureK) && temperatureK >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K))
 				throw new IllegalArgumentException("Thermal contact reservoir temperature is invalid");
 		}
-		@Override public double heatCapacityEuPerK() { return Double.POSITIVE_INFINITY; }
+		@Override public double heatCapacityJPerK() { return Double.POSITIVE_INFINITY; }
 		@Override public double energyChangeToTemperature(double target) { throw new UnsupportedOperationException(); }
 		@Override public ThermalStateFunction.State stateAfterEnergyChange(double change) {
 			return new ThermalStateFunction.State(temperatureK, Double.POSITIVE_INFINITY);
@@ -61,9 +61,9 @@ public final class ThermalContactExchange {
 			double a = index == 0 ? low : Math.max(low, segment.minimumTemperatureK());
 			double b = index + 1 == segments.size() ? high : Math.min(high, segment.maximumTemperatureK());
 			if (b <= a) continue;
-			double term = (b - a) * segment.specificHeatEuPerMuK();
+			double term = (b - a) * segment.specificHeatJPerKgK();
 			rescale |= !Double.isFinite(term) || term < Double.MIN_NORMAL;
-			specific += term; scaled += product(b - a, segment.specificHeatEuPerMuK(), mass);
+			specific += term; scaled += product(b - a, segment.specificHeatJPerKgK(), mass);
 		}
 		double amount = !rescale && Double.isFinite(specific) ? mass * specific : scaled;
 		return target < from ? -amount : amount;
@@ -83,21 +83,21 @@ public final class ThermalContactExchange {
 			double a = index == 0 ? low : Math.max(low, segment.minimumTemperatureK());
 			double b = index + 1 == segments.size() ? high : Math.min(high, segment.maximumTemperatureK());
 			if (b > a) total = total.add(SignedDyadic.of(b).subtract(SignedDyadic.of(a))
-					.multiply(SignedDyadic.of(segment.specificHeatEuPerMuK())).multiply(mass));
+					.multiply(SignedDyadic.of(segment.specificHeatJPerKgK())).multiply(mass));
 		}
 		return target < from ? SignedDyadic.ZERO.subtract(total) : total;
 	}
 
 	/** Returns signed energy entering first; finite second receives the opposite amount. No inventory is edited. */
-	public static double transfer(Body first, Body second, double conductanceEuPerSecondK, double dtSeconds) {
+	public static double transfer(Body first, Body second, double conductanceWPerK, double dtSeconds) {
 		if (first == null || second == null || !first.finite()
-				|| !(Double.isFinite(conductanceEuPerSecondK) && conductanceEuPerSecondK >= 0.0)
+				|| !(Double.isFinite(conductanceWPerK) && conductanceWPerK >= 0.0)
 				|| !(Double.isFinite(dtSeconds) && dtSeconds > 0.0))
 			throw new IllegalArgumentException("Thermal contact input is invalid");
 		double firstT = first.temperatureK(), secondT = second.temperatureK();
-		requireCapacity(first.heatCapacityEuPerK());
-		if (second.finite()) requireCapacity(second.heatCapacityEuPerK());
-		if (conductanceEuPerSecondK == 0.0 || firstT == secondT) return 0.0;
+		requireCapacity(first.heatCapacityJPerK());
+		if (second.finite()) requireCapacity(second.heatCapacityJPerK());
+		if (conductanceWPerK == 0.0 || firstT == secondT) return 0.0;
 		double sign = secondT > firstT ? 1.0 : -1.0;
 		double high = Math.abs(first.energyChangeToTemperature(secondT));
 		if (second.finite()) high = Math.min(high, Math.abs(second.energyChangeToTemperature(firstT)));
@@ -105,21 +105,21 @@ public final class ThermalContactExchange {
 			throw new IllegalArgumentException("Thermal contact energy interval is invalid");
 		if (high == 0.0) return 0.0;
 		high = Math.min(high, Double.MAX_VALUE);
-		double inverseConductanceDt = (1.0 / conductanceEuPerSecondK) / dtSeconds;
+		double inverseConductanceDt = (1.0 / conductanceWPerK) / dtSeconds;
 		// Change division order when a reciprocal overflow hides a representable conductance-times-dt.
-		if (Double.isInfinite(inverseConductanceDt)) inverseConductanceDt = (1.0 / dtSeconds) / conductanceEuPerSecondK;
+		if (Double.isInfinite(inverseConductanceDt)) inverseConductanceDt = (1.0 / dtSeconds) / conductanceWPerK;
 		double low = 0.0;
 		double amount = Math.min(high, response(Math.abs(secondT - firstT),
-				first.heatCapacityEuPerK(), second.heatCapacityEuPerK(), conductanceEuPerSecondK, dtSeconds));
+				first.heatCapacityJPerK(), second.heatCapacityJPerK(), conductanceWPerK, dtSeconds));
 		if (amount == 0.0) return 0.0;
 		while (true) {
 			var firstState = first.stateAfterEnergyChange(sign * amount);
 			var secondState = second.stateAfterEnergyChange(-sign * amount);
 			double drop = amount * inverseConductanceDt;
 			if (!Double.isFinite(drop)) drop = Math.scalb(Math.scalb(amount, -exponent(amount))
-					/ (Math.scalb(conductanceEuPerSecondK, -exponent(conductanceEuPerSecondK))
+					/ (Math.scalb(conductanceWPerK, -exponent(conductanceWPerK))
 					* Math.scalb(dtSeconds, -exponent(dtSeconds))),
-					exponent(amount) - exponent(conductanceEuPerSecondK) - exponent(dtSeconds));
+					exponent(amount) - exponent(conductanceWPerK) - exponent(dtSeconds));
 			double residual = drop
 					- sign * (secondState.temperatureK() - firstState.temperatureK());
 			double precision = Math.max(Math.ulp(secondState.temperatureK()), Math.ulp(firstState.temperatureK()));
@@ -127,8 +127,8 @@ public final class ThermalContactExchange {
 			if (amount == Double.MAX_VALUE && residual < 0.0)
 				throw new IllegalArgumentException("Thermal contact transfer is not representable");
 			if (residual > 0.0) high = amount; else low = amount;
-			double next = amount - response(residual, firstState.heatCapacityEuPerK(),
-					secondState.heatCapacityEuPerK(), conductanceEuPerSecondK, dtSeconds);
+			double next = amount - response(residual, firstState.heatCapacityJPerK(),
+					secondState.heatCapacityJPerK(), conductanceWPerK, dtSeconds);
 			if (!(next > low && next < high)) next = low + (high - low) * 0.5;
 			if (next == amount) break;
 			amount = next;

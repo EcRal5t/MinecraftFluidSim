@@ -77,7 +77,7 @@ final class RegionStateIntegrity {
 			}
 			if (manifest.hasChemicalState()) {
 				out.writeUTF(manifest.registryFingerprint());
-				out.writeLong(manifest.auScale());
+				out.writeLong(manifest.quantaPerMol());
 				out.writeInt(manifest.speciesPalette().size());
 				for (String species : manifest.speciesPalette()) out.writeUTF(species);
 				out.writeInt(manifest.chemicalMixtures().size());

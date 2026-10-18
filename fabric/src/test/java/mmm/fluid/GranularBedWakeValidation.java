@@ -137,7 +137,7 @@ public final class GranularBedWakeValidation {
 			var before = domain.exactInternalEnergy();
 			double expected = registries.materials().dynamicViscosityExtendingAt("mmm:water", temperature);
 			for (int repeat = 0; repeat < 3; repeat++) {
-				require(Math.abs(domain.carrierViscosityPaPerS(cell) - expected) < expected * 1e-12,
+				require(Math.abs(domain.carrierViscosityPascalSeconds(cell) - expected) < expected * 1e-12,
 						"Carrier properties retained an obsolete thermal state");
 				require(Math.abs(domain.granularMechanicalStage.sample(.75F, .75F, .75F).dynamicViscosity() - expected)
 						< expected * 1e-12, "Drag and bed shear must use the refreshed viscosity");
@@ -153,16 +153,16 @@ public final class GranularBedWakeValidation {
 		for (int repeat = 0; repeat < 3; repeat++) require(domain.carrierViscosityStats().equals(stats),
 				"Reading diagnostics must retain the last completed step");
 		domain.carrierPropertiesWorkspace.beginStep();
-		domain.carrierViscosityPaPerS(cell);
+		domain.carrierViscosityPascalSeconds(cell);
 		require(domain.carrierViscosityStats().equals(stats), "An unfinished attempt published diagnostics");
 		domain.carrierPropertiesWorkspace.beginStep();
 		domain.setThermalTemperatureInCell(1, 1, 1, 293.15);
-		domain.carrierViscosityPaPerS(cell);
+		domain.carrierViscosityPascalSeconds(cell);
 		require(!domain.carrierPropertiesWorkspace.finishStep().extrapolated(),
 				"Retried step inherited a discarded attempt's excursions");
 		int sand = registries.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long svq = mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ;
-		double mass = registries.granular().material(sand).referenceDensity() * svq / SolidVolume.SVQ_PER_BV;
+		double mass = registries.granular().material(sand).referenceDensity() * svq / SolidVolume.SVQ_PER_CUBIC_METER;
 		require(domain.tryInsertExactGranular(1, 0, 1, sand, 0, svq, mass).inserted(), "Occupied wake fixture rejected its retained parcel");
 		domain.ensureGrid();
 		occupiedWakePointKeepsState(domain);
@@ -281,7 +281,7 @@ public final class GranularBedWakeValidation {
 		long svq = SolidVolume.SVQ_PER_CELL / 4;
 		double density = r.granular().material(r.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND)).referenceDensity();
 		var ledger = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
-				BuiltinGranularDefinitions.FINE_SAND, svq, density * svq / SolidVolume.SVQ_PER_BV, null)));
+				BuiltinGranularDefinitions.FINE_SAND, svq, density * svq / SolidVolume.SVQ_PER_CUBIC_METER, null)));
 		for (int z = 2; z < 6; z++) for (int x = 2; x < 6; x++) {
 			require(domain.tryInsertExactGranular(x, 0, z, ledger, 0, true).inserted(), "Sand rejected");
 		}

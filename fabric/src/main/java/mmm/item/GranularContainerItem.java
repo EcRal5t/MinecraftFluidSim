@@ -31,13 +31,13 @@ public final class GranularContainerItem extends Item {
 
 	@Override public boolean isBarVisible(ItemStack stack) {
 		GranularContents contents = unvalidatedContents(stack);
-		return contents != null && contents.totalSolidVolumeSvq() < SolidVolume.SVQ_PER_BV;
+		return contents != null && contents.totalSolidVolumeSvq() < SolidVolume.SVQ_PER_CUBIC_METER;
 	}
 
 	@Override public int getBarWidth(ItemStack stack) {
 		GranularContents contents = unvalidatedContents(stack);
 		if (contents == null) return 1;
-		return Math.max(1, Math.min(13, (int) Math.round(13.0 * contents.totalSolidVolumeSvq() / SolidVolume.SVQ_PER_BV)));
+		return Math.max(1, Math.min(13, (int) Math.round(13.0 * contents.totalSolidVolumeSvq() / SolidVolume.SVQ_PER_CUBIC_METER)));
 	}
 
 	@Override public int getBarColor(ItemStack stack) { return BAR_COLOR; }
@@ -52,11 +52,11 @@ public final class GranularContainerItem extends Item {
 			return;
 		}
 		tooltip.accept(Component.translatable("item.mmm.granular_container.contents",
-				contents.groups().size(), String.format("%.2f%%", 100.0 * contents.totalSolidVolumeSvq() / SolidVolume.SVQ_PER_BV))
+				contents.groups().size(), String.format("%.2f%%", 100.0 * contents.totalSolidVolumeSvq() / SolidVolume.SVQ_PER_CUBIC_METER))
 				.withStyle(ChatFormatting.GRAY));
 		for (GranularContents.Group group : contents.groups()) {
 			tooltip.accept(Component.translatable("item.mmm.granular_container.group", group.materialId(),
-					Long.toString(group.solidVolumeSvq()), String.format("%.12g", group.mass()))
+					mmm.units.UnitFormat.solidVolume(group.solidVolumeSvq()), String.format("%.12g", group.mass()))
 					.withStyle(ChatFormatting.DARK_GRAY));
 			if (group.reactive()) tooltip.accept(Component.translatable("item.mmm.granular_container.reactive",
 					group.composition().size()).withStyle(ChatFormatting.DARK_GRAY));

@@ -35,7 +35,7 @@ public final class ThermalPhaseChangeEngine {
 		}
 		int lowerHandle = registry.materialHandle(transition.lowerEnergyMaterialId());
 		int upperHandle = registry.materialHandle(transition.upperEnergyMaterialId());
-		double batchMass = transition.massMuPerBatch().toDouble();
+		double batchMass = transition.massKgPerBatch().toDouble();
 		if (!(Double.isFinite(batchMass) && batchMass > 0.0)) {
 			throw new IllegalArgumentException("Thermal transition batch mass is not representable");
 		}

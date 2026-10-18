@@ -48,6 +48,7 @@ public record FluidCellObservation(
 		}
 	}
 
+	/** Integer μmol inventory: one amount quantum equals 10^-6 mol. */
 	public record SpeciesAmount(String speciesId, long amountQuanta) {
 		public SpeciesAmount {
 			StableId.require(speciesId, 128, "species id");

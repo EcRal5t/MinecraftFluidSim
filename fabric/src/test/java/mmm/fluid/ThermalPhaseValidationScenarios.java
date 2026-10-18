@@ -38,7 +38,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				ThermalMaterialDefinition.CarrierKind.LIQUID, "mmm:water", 273.15, 334_000.0, 0.6,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(273.15, 500.0, 4_180.0)));
 		ThermalPhaseTransition melt = new ThermalPhaseTransition("mmm:phase/ice_water", ice.id(), water.id(),
-				273.15, SolidVolume.SVQ_PER_BV, SolidVolume.SVQ_PER_BV * 917L / 1_000L, ExactRational.of(917),
+				273.15, SolidVolume.SVQ_PER_CUBIC_METER, SolidVolume.SVQ_PER_CUBIC_METER * 917L / 1_000L, ExactRational.of(917),
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 80_000.0, 120_000.0);
 		ThermalRegistry registry = new ThermalRegistry(List.of(water, ice), List.of(), List.of(melt), "", "");
 		ThermalStateFunction state = new ThermalStateFunction(registry);
@@ -54,7 +54,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 
 		ThermalPhaseTransition highPressure = new ThermalPhaseTransition(
 				"mmm:phase/high_pressure_ice_water", ice.id(), water.id(),
-				SolidVolume.SVQ_PER_BV, SolidVolume.SVQ_PER_BV * 917L / 1_000L,
+				SolidVolume.SVQ_PER_CUBIC_METER, SolidVolume.SVQ_PER_CUBIC_METER * 917L / 1_000L,
 				ExactRational.of(917), ThermalPhaseTransition.InterfaceRequirement.NONE,
 				List.of(new ThermalPhaseTransition.EquilibriumPoint(3_000_000.0, 273.15),
 						new ThermalPhaseTransition.EquilibriumPoint(4_000_000.0, 273.15)));
@@ -497,8 +497,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 10_000, 3_000_000);
 		var thermal = new ThermalRegistry(List.of(water, oil, ice, air), List.of(
 				new ThermalSpeciesOffset("test:integer/wh", BuiltinChemicalDefinitions.H2O, water.id(), ExactRational.ZERO),
-				new ThermalSpeciesOffset("test:integer/ih", BuiltinChemicalDefinitions.H2O, ice.id(), ExactRational.ZERO),
-				new ThermalSpeciesOffset("test:integer/oc", BuiltinChemicalDefinitions.OIL_CARRIER, oil.id(), ExactRational.ZERO)),
+				new ThermalSpeciesOffset("test:integer/ih", BuiltinChemicalDefinitions.H2O, ice.id(), ExactRational.ZERO)),
 				List.of(transition), chemistry.fingerprint(), "");
 		var domain = new FluidDomain(3, 3, 3,
 				new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .45F, .002F, 0), 64);
@@ -519,9 +518,9 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		domain.bindThermal(thermal, domain.materialRegistry, freezing ? 200 : 500);
 		if (!freezing) {
 			long quanta = batches == 2 ? 1 : 4;
-			double mass = transition.massMuPerBatch().multiply(batches).toDouble();
+			double mass = transition.massKgPerBatch().multiply(batches).toDouble();
 			double speciesMass = chemistry.species(chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O))
-					.massKilogramsPerAu().multiply(quanta).divide(mmm.chemistry.ChemicalLimits.QUANTA_PER_AU).toDouble();
+					.molarMassKgPerMol().multiply(quanta).divide(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL).toDouble();
 			var composition = new CoherentPhaseStore.Composition(
 					List.of(new CoherentPhaseStore.Component(BuiltinChemicalDefinitions.H2O, quanta)),
 					Double.doubleToRawLongBits(mass - speciesMass));
@@ -707,7 +706,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1_000_000L), true);
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long sandSvq = granular.material(sand).maximumActiveParcelSvq();
-		double sandMass = sandSvq / (double) SolidVolume.SVQ_PER_BV
+		double sandMass = sandSvq / (double) SolidVolume.SVQ_PER_CUBIC_METER
 				* granular.material(sand).referenceDensity();
 		require(domain.tryInsertExactGranular(1, 1, 1, sand, 0, sandSvq, sandMass).inserted(),
 				"joint phase fixture could not insert its granular heat bath");
@@ -792,7 +791,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 			var bounded = new ThermalRegistry(thermal.materials(), thermal.speciesOffsets(), List.of(
 					new ThermalPhaseTransition(transition.id(), transition.lowerEnergyMaterialId(), transition.upperEnergyMaterialId(),
 							300.0, transition.lowerVolumeSvqPerBatch() / divisor, transition.upperVolumeSvqPerBatch() / divisor,
-							transition.massMuPerBatch().divide(divisor), transition.interfaceRequirement(), 0, 200_000)),
+							transition.massKgPerBatch().divide(divisor), transition.interfaceRequirement(), 0, 200_000)),
 					chemistry.fingerprint(), granular.fingerprint());
 			domain.bindThermal(bounded, domain.materialRegistry, 280.0);
 			var energy = domain.exactInternalEnergy();

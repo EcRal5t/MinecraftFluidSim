@@ -38,6 +38,8 @@
 - [跨层边界](#跨层边界)
 - [功能布局](#功能布局)
 
+单位与内部编码统一见[设计书](system-overview.md#units)。
+
 ## Registry
 
 化学功能默认关闭并依赖材料功能。首次启用时，数据包定义被规范化为 world-local registry snapshot；此后该 snapshot 的 stable ID、exact rational 定义、预算和 fingerprint 是世界权威。
@@ -46,10 +48,10 @@
 
 ### 定义层次与规范化
 
-数据包分别提供 species、chemical phase 和 reaction；species JSON 的 `mass_per_au` 值以 kg/AU 解释：
+数据包分别提供 species、chemical phase 和 reaction；species JSON 的 `molar_mass_kg_per_mol` 值以 kg/mol 解释：
 
-- species：stable ID、组成基元整数向量、电荷、每 AU exact kg；
-- phase：绑定一个机械 material，声明允许 species、默认组成和 indicator 接受性；
+- species：stable ID、组成基元整数向量、电荷、精确摩尔质量 kg/mol；
+- phase：绑定机械材料，声明允许物种、`default_concentration_mol_per_m3` 与 indicator 接受性；油的允许物种和默认浓度均为空，机械质量全部进入 kg 余量；
 - reaction：反应物/生成物整数计量和允许 chemical phase。
 
 exact rational 只接受整数、有限小数或 `numerator/denominator` 文本。解析前先限制 ID 长度、文本长度、小数 scale 和整数位宽，避免用短文本触发无界 `BigInteger` 工作。
@@ -65,7 +67,7 @@ registry 校验未知 ID、重复 ID、非正质量、组成/电荷/质量不守
 - 区域保存逐物种总量、电荷、组成及外部源汇审计。
 - `FluidMixture` 保存机械材料库存，`ChemicalContents` 保存完整化学容器库存，物品按其实际类型保存。
 
-`1 AU = 10^9 quanta`，物种数量为非负整数，数量运算检查溢出。
+`1 quantum = 1 μmol`，`10^6 quanta = 1 mol`，物种数量为非负整数，数量运算检查溢出。
 每份载体通过独立 handle 引用不可变组成记录；载体索引、材料物相、组成和内能保持同代一致。
 
 `planMarkerRemap` 在写入前验证完整后继记录、来源代次、容量及物种总量，再统一替换组成。
@@ -101,7 +103,10 @@ particleMass * cellSize³ = exact_species_mass_kg + massResidual_kg
 固液转移的对应近似见[固液相转移](granular-state.md#固液相转移)，混合耗散按热机械收支范围评价。
 ### Indicator 与 pH
 
-indicator 添加只标记当时可接受 indicator 的互溶连通 parcel，受 100 BV 硬上限；超过上限整次拒绝。标记随 advection、reseed 和容器传输，后续混入的未标记 parcel 不自动继承。
+indicator 添加只标记当时可接受 indicator 的互溶连通 parcel，受 100 m³ 硬上限；超过上限整次拒绝。标记随 advection、reseed 和容器传输，后续混入的未标记 parcel 不自动继承。
+
+pH 沿用既定强酸强碱的显示近似：以净 H⁺/OH⁻ 浓度 c（mol/m³）计算 `strength = min(7, log10(1 + c / 0.001))`，酸侧显示 `7-strength`，碱侧显示 `7+strength`。
+这个展示近似保留原显色响应。
 
 pH 是根据局部 `H+`/`OH-` 相对数量派生的 0–14 展示指标，供指示剂显色与界面显示。客户端接收每格至多四个展示 species、量化 pH 和可见 indicator fraction，专用于渲染展示。
 
@@ -137,3 +142,15 @@ pH 是根据局部 `H+`/`OH-` 相对数量派生的 0–14 展示指标，供指
 容器转移先规划完整的 marker 分配。低于一个默认化学量子的注入体积返回容量受限结果；拆分的尾部与前一份均分，避免生成无法携带物种的微小 marker。抽取若不能把某份 marker 分成两份非空化学载体，则继续查找其他 marker。只有全部体积、质量、物种和内能都可表示时才提交，失败保留原库存。
 
 所有外部凝聚相注入同时检查局部开放空间和区域总容量。总容量从几何体积减去整数固体 SVQ 与实际液体库存计算；已有密闭气体的区域必须留下正气腔体积。液体 marker 在局部短暂聚集时，其他单元的空位仍受该全域约束。
+
+
+## 数量容量与最小转移
+
+整数库存每区域上限 2×10¹⁵ μmol，即 2×10⁹ mol；每桶上限 1.024×10¹² μmol，即 1.024×10⁶ mol。
+一桶水约 55555.56 mol，一桶汞为 68000 mol，均在上限内。
+水的一颗化学量子对应 1.8×10⁻⁸ kg，按参考密度折合 1.8×10⁻¹¹ m³；实际操作还受 nanos、液体浮点载体与完整反应批次限制。
+所有加法、乘法及 mol→整数 μmol 换算检查溢出；`ChemicalAmount.quanta` 要求完整 μmol。
+
+油的纯质量记录贯穿组成池、拆并、输运、容器与审计，空物种列随物质保留其质量余量。
+具有真实物种的载体继续遵守现有最小可表示库存要求。
+数据包及注册表、区域与容器保存 `QuantaPerMol` / `quantaPerMol`；指纹包含 SI 定义和每 mol 的整数尺度。

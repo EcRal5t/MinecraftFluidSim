@@ -43,7 +43,7 @@ final class GranularRegionStateCodec {
 	) { }
 
 	record ManifestData(
-			int capabilities, String registryFingerprint, long svqPerBv, int porosityScale,
+			int capabilities, String registryFingerprint, long svqPerCubicMeter, int porosityScale,
 			int activeBudget, int depositGroupBudget, List<String> materialPalette,
 			String chemicalRegistryFingerprint, List<GranularStateSnapshot.StableComposition> solidCompositions,
 			Map<String, Long> solidSpeciesTotals, GranularAuditLedger externalSource, GranularAuditLedger escapedSink,
@@ -58,7 +58,7 @@ final class GranularRegionStateCodec {
 	byte[] encodeManifest(ManifestData data) {
 		return encode(out -> {
 			out.writeInt(MANIFEST_MAGIC); out.writeInt(PAYLOAD_VERSION); out.writeInt(data.capabilities());
-			out.writeUTF(data.registryFingerprint()); out.writeLong(data.svqPerBv()); out.writeInt(data.porosityScale());
+			out.writeUTF(data.registryFingerprint()); out.writeLong(data.svqPerCubicMeter()); out.writeInt(data.porosityScale());
 			out.writeInt(data.activeBudget()); out.writeInt(data.depositGroupBudget());
 			out.writeInt(data.materialPalette().size());
 			for (String id : data.materialPalette()) out.writeUTF(id);
@@ -105,7 +105,7 @@ final class GranularRegionStateCodec {
 			String fingerprint = input.readUTF();
 			if (!fingerprint.matches("[0-9a-f]{64}")) throw new IOException("Invalid granular registry fingerprint");
 			long svqScale = input.readLong(); int porosityScale = input.readInt();
-			if (svqScale != SolidVolume.SVQ_PER_BV || porosityScale != GranularLimits.POROSITY_SCALE) {
+			if (svqScale != SolidVolume.SVQ_PER_CUBIC_METER || porosityScale != GranularLimits.POROSITY_SCALE) {
 				throw new IOException("Unsupported granular unit scale");
 			}
 			int activeBudget = bounded(input.readInt(), 1, GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, "active budget");

@@ -35,11 +35,11 @@ public record ThermalPhaseExtentCurve(double energyOffset, double energyPerMass,
 		SignedDyadic newMass = SignedDyadic.of(maximumMovedMass).add(SignedDyadic.of(massError));
 		double minimumCv = minimumCv(newMaterial); int newOwners = 1;
 		for (var portion : portions) {
-			var material = registry.material(portion.materialHandle()); var mass = SignedDyadic.of(portion.massMu());
+			var material = registry.material(portion.materialHandle()); var mass = SignedDyadic.of(portion.massKg());
 			totalMass = totalMass.add(mass);
 			maximumCapacity = maximumCapacity.add(mass.multiply(SignedDyadic.of(maximumCv(material))));
 			minimumCv = Math.min(minimumCv, minimumCv(material));
-			double base = state.baseEnergy(portion.materialHandle(), portion.massMu(), portion.speciesQuanta());
+			double base = state.baseEnergy(portion.materialHandle(), portion.massKg(), portion.speciesQuanta());
 			modeled = modeled.add(SignedDyadic.of(base)).add(ThermalContactExchange.exactEnergyChangeBetween(
 					material, mass, material.referenceTemperatureK(), equilibrium));
 			coldMagnitude = coldMagnitude.add(abs(ThermalContactExchange.exactEnergyChangeBetween(material, mass,
@@ -47,7 +47,7 @@ public record ThermalPhaseExtentCurve(double energyOffset, double energyPerMass,
 			if (portion.materialHandle() != oldHandle && portion.materialHandle() != newHandle) {
 				absoluteReference = absoluteReference.add(abs(SignedDyadic.of(base))); continue;
 			}
-			var range = range(portion.materialHandle(), portion.massMu(), portion.speciesQuanta());
+			var range = range(portion.materialHandle(), portion.massKg(), portion.speciesQuanta());
 			double reference = referenceMagnitude(bounds, range);
 			if (!Double.isFinite(reference)) return null;
 			absoluteReference = absoluteReference.add(SignedDyadic.of(reference));
@@ -55,8 +55,8 @@ public record ThermalPhaseExtentCurve(double energyOffset, double energyPerMass,
 			if (portion.materialHandle() == newHandle) { newMass = newMass.add(mass); newOwners++; }
 			for (var entry : portion.speciesQuanta().entrySet()) {
 				if (portion.materialHandle() == oldHandle && (!registry.hasSpeciesOffset(newHandle, entry.getKey())
-						|| !registry.speciesOffset(oldHandle, entry.getKey()).referenceInternalEnergyEuPerAu()
-						.equals(registry.speciesOffset(newHandle, entry.getKey()).referenceInternalEnergyEuPerAu()))) return null;
+						|| !registry.speciesOffset(oldHandle, entry.getKey()).referenceInternalEnergyJPerMol()
+						.equals(registry.speciesOffset(newHandle, entry.getKey()).referenceInternalEnergyJPerMol()))) return null;
 				newSpecies.merge(entry.getKey(), entry.getValue(), Math::addExact);
 			}
 		}
@@ -87,7 +87,7 @@ public record ThermalPhaseExtentCurve(double energyOffset, double energyPerMass,
 		if (!Double.isFinite(temperature)) return null;
 		SignedDyadic sensibleMagnitude = SignedDyadic.ZERO;
 		for (var portion : portions) {
-			var material = registry.material(portion.materialHandle()); var mass = SignedDyadic.of(portion.massMu());
+			var material = registry.material(portion.materialHandle()); var mass = SignedDyadic.of(portion.massKg());
 			sensibleMagnitude = sensibleMagnitude.add(sensibleMagnitude(material, mass, temperature));
 		}
 		sensibleMagnitude = sensibleMagnitude.add(sensibleMagnitude(newMaterial, addedMass, temperature));
@@ -120,14 +120,14 @@ public record ThermalPhaseExtentCurve(double energyOffset, double energyPerMass,
 		return Math.max(Math.abs(bounds.referenceEnergyBound(range, false)), Math.abs(bounds.referenceEnergyBound(range, true)));
 	}
 	private static SignedDyadic specific(ThermalMaterialDefinition material, double temperature) {
-		return SignedDyadic.of(material.referenceSpecificEnergyEuPerMu()).add(ThermalContactExchange.exactEnergyChangeBetween(
+		return SignedDyadic.of(material.referenceSpecificEnergyJPerKg()).add(ThermalContactExchange.exactEnergyChangeBetween(
 				material, 1, material.referenceTemperatureK(), temperature));
 	}
 	private static double minimumCv(ThermalMaterialDefinition material) {
-		return material.caloricSegments().stream().mapToDouble(ThermalMaterialDefinition.CaloricSegment::specificHeatEuPerMuK).min().orElseThrow();
+		return material.caloricSegments().stream().mapToDouble(ThermalMaterialDefinition.CaloricSegment::specificHeatJPerKgK).min().orElseThrow();
 	}
 	private static double maximumCv(ThermalMaterialDefinition material) {
-		return material.caloricSegments().stream().mapToDouble(ThermalMaterialDefinition.CaloricSegment::specificHeatEuPerMuK).max().orElseThrow();
+		return material.caloricSegments().stream().mapToDouble(ThermalMaterialDefinition.CaloricSegment::specificHeatJPerKgK).max().orElseThrow();
 	}
 	private static SignedDyadic abs(SignedDyadic value) { return value.signum() < 0 ? SignedDyadic.ZERO.subtract(value) : value; }
 	private static double upper(SignedDyadic value) { return Math.nextUp(value.toDouble()); }

@@ -82,7 +82,7 @@ final class GranularImplicitDrag {
 			double sx = p.velocityX() - fluid.velocityX(), sy = p.velocityY() - fluid.velocityY();
 			double sz = p.velocityZ() - fluid.velocityZ(), slip = Math.sqrt(sx*sx + sy*sy + sz*sz);
 			reynoldsScale[index] = fluid.density() * diameter / fluid.dynamicViscosity();
-			double grains = p.solidVolumeSvq() / (double) SolidVolume.SVQ_PER_BV
+			double grains = p.solidVolumeSvq() / (double) SolidVolume.SVQ_PER_CUBIC_METER
 					/ (Math.PI * diameter * diameter * diameter / 6) * fluid.submergedFraction();
 			stokes[index] = 3 * Math.PI * fluid.dynamicViscosity() * diameter * grains;
 			dragValue[index] = resistance(index, slip);

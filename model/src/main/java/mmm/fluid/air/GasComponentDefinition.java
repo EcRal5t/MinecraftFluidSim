@@ -14,10 +14,10 @@ public record GasComponentDefinition(
 		List<String> allowedSpecies,
 		List<DefaultSpecies> defaultSpeciesPerCubicMeter
 ) {
-	public record DefaultSpecies(String speciesId, ExactRational quantaPerCubicMeter) {
+	public record DefaultSpecies(String speciesId, ExactRational concentrationMolPerCubicMeter) {
 		public DefaultSpecies {
 			GasIds.require(speciesId, "gas species id");
-			if (quantaPerCubicMeter == null || quantaPerCubicMeter.signum() <= 0) {
+			if (concentrationMolPerCubicMeter == null || concentrationMolPerCubicMeter.signum() <= 0) {
 				throw new IllegalArgumentException("Gas default species amount must be positive");
 			}
 		}

@@ -2,6 +2,8 @@
 
 接入其他 Mod，或修改查询、提交通知、探针和 Jade 时读本文。
 
+单位与整数编码统一见[设计书](system-overview.md#units)。
+
 ## 修改入口
 
 - **外部接口发现**
@@ -51,7 +53,7 @@ Fabric 调用方分别通过 `MmmFabricApi.query(MinecraftServer)` 和 `MmmFabri
 
 Fabric 提供可选 Jade 适配，通过 Query API 读取并展示摘要。受控转移、其他类型的提交通知、WAILA/HWYLA 和其他加载器接入见 [产品路线](../roadmap/product-roadmap.md)。
 
-`MmmQueryApi.UNIT_SYSTEM = "SI+mmm-quanta"`。接口只依赖 JDK 类型，不返回 Minecraft 对象、runtime handle、solver array 或 live region/domain 引用。产品功能和 Java 类型使用语义名称；格式变化直接替换当前契约，不保留按数字区分的公开入口。
+`MmmQueryApi.UNIT_SYSTEM = "SI;chemical-quantum=1umol;volume-nanos=1e-9m3;SVQ=2^-27m3"`。接口只依赖 JDK 类型，不返回 Minecraft 对象、runtime handle、solver array 或 live region/domain 引用。产品功能和 Java 类型使用语义名称；格式变化直接替换当前契约，不保留按数字区分的公开入口。
 
 ## 请求
 
@@ -89,7 +91,7 @@ overlap、预算、WAL、pending work、权限、数值暂停、可重试性能�
 ## Observation
 
 `FluidCellObservation` 返回 dimension ID、region UUID、region network generation、cell 坐标、cell edge、总液体体积 `m³`、质量 `kg`、密度 `kg/m³`、可选温度 `K`、
-按 stable ID 排序的材料体积/质量以及 species integer quanta。
+按 stable ID 排序的材料体积/质量以及 species integer quanta（1 quantum = 1 μmol）。
 
 数据只使用目标 cell 的权威 marker、chemical parcel 和 thermal carrier side column，并直接由该 cell 的总 `U` 与载体清单反演 LTE 温度：不依赖平滑 volume、pressure、客户端 mesh，也不重建 fluid/thermal grid。
 
@@ -141,7 +143,7 @@ Jade 是 Fabric 模块的可选 compile-only 依赖；未安装 Jade 时不会�
 
 `ContainerTransferCommittedEvent` 只在 region HEAD 已指向 target、player/dispenser after-item 已完成强制保存且 WAL 已删除后发布。
 它携带 transaction UUID、dimension、region UUID、checkpoint generation、相对区域的 insert/extract 方向，以及封闭的 `TransferQuantity`：液体记录 `10^-9 m³` nanovolume
-和可选 raw `U`，颗粒记录 `2^-27 BV` 的 SVQ，调用方不需要用枚举与无类型 long 自行配对。
+和可选 raw `U`，颗粒记录 `2^-27 m³` 的 SVQ，调用方不需要用枚举与无类型 long 自行配对。
 
 事件只通知提交动作完成；监听者需要具体材料或化学组分时按区域重新查询。
 

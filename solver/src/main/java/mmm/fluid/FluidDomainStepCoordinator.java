@@ -565,7 +565,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	CarrierProperties granularCarrierProperties(int cell) {
 		LiquidCarrierProperties properties = domain().derivedCarrierState();
 		return properties.hasLiquid(cell)
-				? new CarrierProperties(properties.density(cell), properties.viscosityPaPerS(cell))
+				? new CarrierProperties(properties.density(cell), properties.viscosityPascalSeconds(cell))
 				: new CarrierProperties(LiquidCarrierProperties.AIR_DENSITY, LiquidCarrierProperties.AIR_VISCOSITY);
 	}
 

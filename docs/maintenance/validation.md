@@ -264,7 +264,7 @@
 
 | 场景 | 规模 | 耗时要求 |
 |---|---|---|
-| 默认控制器注入 16 BV | `8×8×8` 场景，20 个实际计算步 | 每步不超过 40 ms |
+| 默认控制器注入 16 m³ | `8×8×8` 场景，20 个实际计算步 | 每步不超过 40 ms |
 | 空场景最大装量的 `demo` | `24×16×24` 网格，2,592 个液体单元、20,736 个初始粒子，完整物理功能，20 步 | 连续超过 200 ms 的步数小于三步 |
 
 报告分别记录 JVM 预热和被测步的耗时，并保留粒子数、体积、相变操作、子步数、PCG 次数与残差。优化后用同一物理配置复测，保持原有预算和守恒检查。
@@ -383,6 +383,43 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 ## 当前验证证据
 
 本节保存被测构建、输入、结果与计时口径。实施状态和下一步集中在[当前实施计划](../roadmap/solver-consolidation-plan.md#当前进度与剩余整合)，历史局部用例与旧构建成绩见[阶段记录](../archive/progress/solver-validation-2026-10-18.md)。
+
+<a id="si-units"></a>
+### SI 与整数微摩尔：2026-10-18 工作树
+
+本轮基于 `4de020e`，物性与库存约定见[设计书](../architecture/system-overview.md#units)。
+`build/unit-final-build.log` 记录服务端、客户端、测试及 GPU 模块编译和架构检查通过；`build/unit-complete-compile.log` 另记录 model、app 校验通过。
+单位迁移的聚焦检查复用现有测试类，类路径取自 `build/solver-consolidation-validation/classpath.txt`：
+
+```powershell
+$unitCp = Get-Content -Raw build/solver-consolidation-validation/classpath.txt
+java -ea -cp $unitCp mmm.chemistry.M7ChemistryValidation
+java -ea -cp $unitCp mmm.fluid.M7ChemicalTransportValidation --units
+java -ea -cp $unitCp mmm.fluid.M9ThermalValidation --units
+```
+
+- `M7ChemistryValidation`：通过 10000 次守恒反应循环、定义／codec／指纹、整数 μmol↔mol、溢出与默认水／油／汞库存检查。日志 `build/unit-chemistry-core.log`。
+- `M7ChemicalTransportValidation --units`：通过两种格长盐水密度、油的输运与捕获恢复、完整及部分容器往返、最小物种转移的原子性。日志 `build/unit-chemistry2.log`。
+- `M9ThermalValidation --units`：通过生产物性、CO₂ Henry 与标准态批次、气体压缩、中和反应温升、盐析出参考能、导热接触及有限设备换热。1 mol 中和在 1 kg、4184 J/(kg·K) 的溶液中产生 `57300/4184 K` 温升，NaCl 固液参考能差为 −3900 J/mol。日志 `build/unit-thermal2.log`。
+- `region-state,protocol,air-network`：完整选择器通过，覆盖能力包发布故障恢复、区域盘上往返、网络显示、查询与提交事件、组分孔流。日志 `build/unit-integration2.log`。
+
+完整选择器及生产流程仍有以下失败，均未计作通过：
+
+| 输入 | 当前结果与日志 |
+|---|---|
+| 完整 `chemistry` | 热化学提取场景中，1 标准 nanos 气体失去正容量后继，累计 4096 子步耗尽；`build/unit-validation2.log` |
+| 完整 `thermal` | 32 组件整格汽化粗批次夹具零操作，未满足完整相变提交断言；`build/unit-replay2.log` |
+| 完整 `granular` | 沙床生命周期在 phase=3 超出既有完成时间；97.292 s 后退出；`build/unit-validation2.log` |
+| 正常操作：场景 0、2 个种子、各 40 动作 | seed=100 完成并报告 20 次 Boussinesq 适用域拒绝；seed=101 在动作 26 缺少有限气体后继并耗尽子步，两个任务共 1 个失败；`build/unit-normal-play.log` |
+| `ProductionStepBenchmark` | controller 完成 20 步预热与 20 步采样；demo 在采样前因微量气体后继失败退出；`build/unit-step-benchmark.log` |
+
+controller 预热共 7737.8 ms；采样的完整步均值 186.417 ms、中位数 181.972 ms、p95 238.571 ms、最大 238.845 ms，未达到 40 ms 预算。
+完整步包含捕获、计算和接管；调用线程分配为 295.90 MiB/step，最终 2092 个 marker。
+该测量与 Gradle 编译同时启动，机器负载会影响耗时；已有结果不足以确认生产资格。demo 未完成预热，未生成有效采样成绩。
+
+本轮同时修正旧测试中固定粒子数组长度、每千 mol 的夹具装量和旧指纹断言。
+颗粒析出合并按未解析的半米载体尺度核对宏观角动量误差及完整热账，替换固定 parcel 数和对象相等断言。
+测试生成的盘上夹具保存在 `build/tmp/si-unit-fixtures`；后续直接启动 JVM 时可指定绝对 `java.io.tmpdir` 到 `build/tmp/si-units`。
 
 ### 沙床完整生命周期：2026-10-18 留存记录
 

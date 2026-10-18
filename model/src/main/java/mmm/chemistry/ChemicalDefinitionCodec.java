@@ -21,20 +21,20 @@ public final class ChemicalDefinitionCodec {
 
 	public static ChemicalSpecies decodeSpecies(String stableId, Reader input) {
 		JsonObject root = object(input);
-		requireOnly(root, "composition", "charge", "mass_per_au", "base_argb");
+		requireOnly(root, "composition", "charge", "molar_mass_kg_per_mol", "base_argb");
 		return new ChemicalSpecies(stableId, integerMap(root, "composition"),
-				exactInteger(root, "charge"), exact(root, "mass_per_au"), color(root, "base_argb"));
+				exactInteger(root, "charge"), exact(root, "molar_mass_kg_per_mol"), color(root, "base_argb"));
 	}
 
 	public static ChemicalPhaseDefinition decodePhase(String stableId, Reader input) {
 		JsonObject root = object(input);
-		requireOnly(root, "material", "allowed_species", "default_inventory_per_bv", "accepts_indicator");
+		requireOnly(root, "material", "allowed_species", "default_concentration_mol_per_m3", "accepts_indicator");
 		JsonArray source = array(root, "allowed_species");
 		List<String> allowed = new ArrayList<>(source.size());
 		for (JsonElement element : source) allowed.add(string(element, "allowed_species entry"));
 		TreeMap<String, ExactRational> defaults = new TreeMap<>();
-		for (Map.Entry<String, JsonElement> entry : object(root, "default_inventory_per_bv").entrySet()) {
-			defaults.put(entry.getKey(), exact(entry.getValue(), "default_inventory_per_bv." + entry.getKey()));
+		for (Map.Entry<String, JsonElement> entry : object(root, "default_concentration_mol_per_m3").entrySet()) {
+			defaults.put(entry.getKey(), exact(entry.getValue(), "default_concentration_mol_per_m3." + entry.getKey()));
 		}
 		JsonElement indicator = required(root, "accepts_indicator");
 		if (!indicator.isJsonPrimitive() || !indicator.getAsJsonPrimitive().isBoolean()) {
@@ -46,7 +46,7 @@ public final class ChemicalDefinitionCodec {
 
 	public static ChemicalReaction decodeReaction(String stableId, Reader input) {
 		JsonObject root = object(input);
-		requireOnly(root, "kind", "phase", "reactants", "products", "volume_delta_bv_per_extent");
+		requireOnly(root, "kind", "phase", "reactants", "products", "volume_delta_m3_per_extent");
 		ChemicalReaction.Kind kind;
 		try {
 			kind = ChemicalReaction.Kind.valueOf(string(required(root, "kind"), "kind").toUpperCase(java.util.Locale.ROOT));
@@ -54,7 +54,7 @@ public final class ChemicalDefinitionCodec {
 			throw new IllegalArgumentException("Unknown reaction kind", invalid);
 		}
 		return new ChemicalReaction(stableId, kind, string(required(root, "phase"), "phase"),
-				integerMap(root, "reactants"), integerMap(root, "products"), exact(root, "volume_delta_bv_per_extent"));
+				integerMap(root, "reactants"), integerMap(root, "products"), exact(root, "volume_delta_m3_per_extent"));
 	}
 
 	private static JsonObject object(Reader input) {

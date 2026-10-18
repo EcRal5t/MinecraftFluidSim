@@ -98,7 +98,7 @@ public final class ThermalContactValidation {
 					energy[p] = base[p] + material.sensibleSpecificEnergyAt(310);
 				}
 				var isothermal = new ThermalTransport(2, 1, 1, 0.5, 8).step(grid, (x, y, z, axis) -> 0.125, 1);
-				require(isothermal.maximumAbsoluteTransferEu() == 0 && grid.temperature(0) == 310
+				require(isothermal.maximumAbsoluteTransferJ() == 0 && grid.temperature(0) == 310
 						&& grid.temperature(1) == 310, "public contact solve retained stale caloric inventory");
 			}
 		}
@@ -130,8 +130,8 @@ public final class ThermalContactValidation {
 		for (double dt : new double[] {0.001, 0.5, 1000}) for (double g : new double[] {1e-8, 1, 1e8}) {
 			var cold = carrier(first, 2, 100000, 270); var hot = carrier(second, 3, -200000, 400);
 			double q = ThermalContactExchange.transfer(cold, hot, g, dt);
-			var coldAfter = new ThermalContactExchange.Carrier(first, 2, cold.baseEnergyEu(), cold.internalEnergyEu() + q);
-			var hotAfter = new ThermalContactExchange.Carrier(second, 3, hot.baseEnergyEu(), hot.internalEnergyEu() - q);
+			var coldAfter = new ThermalContactExchange.Carrier(first, 2, cold.baseEnergyJ(), cold.internalEnergyJ() + q);
+			var hotAfter = new ThermalContactExchange.Carrier(second, 3, hot.baseEnergyJ(), hot.internalEnergyJ() - q);
 			double coldT = coldAfter.temperatureK(), hotT = hotAfter.temperatureK();
 			require(coldT >= 270 - 1e-10 && hotT <= 400 + 1e-10 && coldT <= hotT + 1e-10,
 					"heterogeneous finite contact reversed temperature order");
@@ -139,7 +139,7 @@ public final class ThermalContactValidation {
 			require(Math.abs(residual) < 1e-9, "heterogeneous contact failed its heat-flux equation: " + residual);
 			double entropy = 2 * entropyChange(first, 270, coldT) + 3 * entropyChange(second, 400, hotT);
 			require(entropy >= -1e-10, "closed heat contact reduced entropy: " + entropy);
-			double[] before = {cold.internalEnergyEu(), hot.internalEnergyEu()}, after = {coldAfter.internalEnergyEu(), hotAfter.internalEnergyEu()};
+			double[] before = {cold.internalEnergyJ(), hot.internalEnergyJ()}, after = {coldAfter.internalEnergyJ(), hotAfter.internalEnergyJ()};
 			require(Math.abs(SignedDyadic.sum(after).subtract(SignedDyadic.sum(before)).toDouble())
 					<= 16 * Math.max(Math.ulp(before[0]), Math.ulp(before[1])), "finite contact changed inventory beyond rounding");
 		}
@@ -147,7 +147,7 @@ public final class ThermalContactValidation {
 		double[] temperatures = {1, 350, 1, 350, 1}, masses = {1, 2, 3, 4, 5}, bases = {10000, -20000, 30000, -40000, 50000};
 		ThermalMaterialDefinition[] materials = {first, second, first, second, first};
 		double[] energies = new double[temperatures.length];
-		for (int i = 0; i < energies.length; i++) energies[i] = carrier(materials[i], masses[i], bases[i], temperatures[i]).internalEnergyEu();
+		for (int i = 0; i < energies.length; i++) energies[i] = carrier(materials[i], masses[i], bases[i], temperatures[i]).internalEnergyJ();
 		double isolated = energies[4]; var before = SignedDyadic.sum(energies);
 		for (int step = 0; step < 3; step++) for (int sweep = 0; sweep < 2; sweep++) for (int j = 0; j < 4; j++) {
 			int i = sweep == 0 ? j : 3 - j;
@@ -208,7 +208,7 @@ public final class ThermalContactValidation {
 				new ThermalMaterialDefinition.CaloricSegment(300, 500, 2 * Double.MIN_VALUE)));
 		var registry = new ThermalRegistry(List.of(split));
 		var initial = new ThermalStateFunction(registry).stateForInternalEnergy(0, mass, java.util.Map.of(), 0);
-		require(initial.temperatureK() == 299.75 && initial.heatCapacityEuPerK() == Math.scalb(1.0, -74)
+		require(initial.temperatureK() == 299.75 && initial.heatCapacityJPerK() == Math.scalb(1.0, -74)
 				&& new ThermalContactExchange.Carrier(split, mass, 0, 0).energyChangeToTemperature(300.5) == Math.scalb(5.0, -76),
 				"one representable segment concealed another underflowing segment");
 	}
@@ -243,7 +243,7 @@ public final class ThermalContactValidation {
 		double[] mass = {2, 3, 1}, base = {100000, -200000, 50000}, initialT = {270, 400, 300};
 		for (double g : new double[] {0.001, 1e6}) {
 			double[] energy = new double[3];
-			for (int p = 0; p < 3; p++) energy[p] = carrier(materials[p], mass[p], base[p], initialT[p]).internalEnergyEu();
+			for (int p = 0; p < 3; p++) energy[p] = carrier(materials[p], mass[p], base[p], initialT[p]).internalEnergyJ();
 			var owners = new ThermalCellGrid.CarrierAccess() {
 				@Override public int carrierCount() { return 3; }
 				@Override public int cell(int p) { return 0; }
@@ -267,13 +267,13 @@ public final class ThermalContactValidation {
 			require(entropy >= -1e-10 && energy[2] == isolated
 					&& SignedDyadic.sum(energy).subtract(before).equals(stats.roundoffResidual())
 					&& stats.reservoirExchange().equals(SignedDyadic.ZERO), "carrier graph lost entropy, isolated energy or conservative closure");
-			for (int p = 0; p < 3; p++) energy[p] = carrier(materials[p], mass[p], base[p], 300).internalEnergyEu();
+			for (int p = 0; p < 3; p++) energy[p] = carrier(materials[p], mass[p], base[p], 300).internalEnergyJ();
 			double[] isothermal = energy.clone();
 			var zero = ThermalCarrierTransport.step(owners, List.of(
 					new ThermalCarrierTransport.Contact(0, 1, g, Double.NaN),
 					new ThermalCarrierTransport.Contact(2, -1, g, 300)), 1000, 8);
 			require(Arrays.equals(energy, isothermal) && zero.substeps() == 1
-					&& zero.maximumTemperatureChangeK() == 0 && zero.maximumAbsoluteTransferEu() == 0
+					&& zero.maximumTemperatureChangeK() == 0 && zero.maximumAbsoluteTransferJ() == 0
 					&& zero.reservoirExchange().equals(SignedDyadic.ZERO)
 					&& zero.roundoffResidual().equals(SignedDyadic.ZERO), "isothermal contacts changed caloric inventory");
 			var grid = new ThermalCellGrid(1); grid.rebuild(owners);
@@ -285,7 +285,7 @@ public final class ThermalContactValidation {
 					"strict zero-flux preflight changed contact count or caloric inventory");
 			var tinyExchange = spatial.step(grid, (x, y, z, axis) -> 1,
 					(x, y, z, direction) -> new ThermalTransport.FixedBoundary(1, Math.nextUp(300.0)), 0.01);
-			require(tinyExchange.maximumAbsoluteTransferEu() > 0, "zero-flux preflight discarded a one-ulp reservoir difference");
+			require(tinyExchange.maximumAbsoluteTransferJ() > 0, "zero-flux preflight discarded a one-ulp reservoir difference");
 			System.arraycopy(isothermal, 0, energy, 0, energy.length);
 			mass[1] = 0;
 			boolean invalidMass = false;
@@ -322,7 +322,7 @@ public final class ThermalContactValidation {
 		double low = Math.min(from, to), high = Math.max(from, to), value = 0;
 		for (var segment : material.caloricSegments()) {
 			double a = Math.max(low, segment.minimumTemperatureK()), b = Math.min(high, segment.maximumTemperatureK());
-			if (b > a) value += segment.specificHeatEuPerMuK() * Math.log(b / a);
+			if (b > a) value += segment.specificHeatJPerKgK() * Math.log(b / a);
 		}
 		return to < from ? -value : value;
 	}

@@ -165,7 +165,7 @@ final class MinecraftContainerTransferPlan {
 					if (!region.domain().hasGranularState() || !GranularContainerItem.isEmpty(sourceStack)) {
 						return new Resolution(null, "干式容器不为空或该区域不是颗粒区域");
 					}
-					requested = SolidVolume.SVQ_PER_BV;
+					requested = SolidVolume.SVQ_PER_CUBIC_METER;
 				}
 				case NONE -> throw new IllegalStateException("NONE handled above");
 			}

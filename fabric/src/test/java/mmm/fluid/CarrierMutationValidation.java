@@ -529,7 +529,7 @@ public final class CarrierMutationValidation {
 		granular.setGasNodeStandardVolume(vacuum, 0);
 		var source = granular.gasState.frame;
 		var sand = registries.granular().material(registries.granular().materialHandle(mmm.granular.BuiltinGranularDefinitions.FINE_SAND));
-		double mass = sand.referenceDensity() / mmm.granular.SolidVolume.SVQ_PER_BV;
+		double mass = sand.referenceDensity() / mmm.granular.SolidVolume.SVQ_PER_CUBIC_METER;
 		var packet = new mmm.granular.GranularTransferLedger(java.util.List.of(
 				new mmm.granular.GranularTransferLedger.Group(sand.id(), 1, mass, null)));
 		require(granular.tryInsertExactGranular(1, 1, 1, packet, 0, true).inserted(),
@@ -578,7 +578,7 @@ public final class CarrierMutationValidation {
 		var common = new mmm.thermal.ThermalStateFunction(registry).stateForInventory(java.util.List.of(
 				new mmm.thermal.ThermalStateFunction.InventoryPortion(registry.materialHandle("mmm:water"), 1, java.util.Map.of()),
 				new mmm.thermal.ThermalStateFunction.InventoryPortion(registry.materialHandle("mmm:oil"), 1, java.util.Map.of())), -398);
-		require(common.temperatureK() == 1 && common.heatCapacityEuPerK() == 2,
+		require(common.temperatureK() == 1 && common.heatCapacityJPerK() == 2,
 				"explicit fixture did not have an exact positive common-temperature request");
 		var builder = mmm.chemistry.ChemicalTransferLedger.builder(registries.chemical());
 		for (var piece : pieces) builder.add(domain.materialRegistry.material(piece.materialHandle()).id(), false,
