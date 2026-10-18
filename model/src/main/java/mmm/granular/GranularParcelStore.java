@@ -172,7 +172,6 @@ public final class GranularParcelStore {
 		long maximum = registry.material(left.materialHandle()).maximumActiveParcelSvq();
 		if (combinedVolume > maximum) throw new IllegalArgumentException("Merged granular parcel exceeds its material limit");
 		long combinedMass = Math.addExact(left.massUnits(), right.massUnits());
-		if (!Double.isFinite(combinedMass)) throw new ArithmeticException("Merged granular parcel massUnits overflow");
 		Parcel merged = new Parcel(
 				weighted(left.x(), left.massUnits(), right.x(), right.massUnits(), combinedMass),
 				weighted(left.y(), left.massUnits(), right.y(), right.massUnits(), combinedMass),

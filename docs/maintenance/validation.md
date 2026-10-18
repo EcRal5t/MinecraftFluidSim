@@ -383,24 +383,22 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 ## 当前验证证据
 
 实施进度见[当前计划](../roadmap/solver-consolidation-plan.md)，历史结果见[阶段记录](../archive/progress/solver-validation-2026-10-18.md)。
-本轮生产字段与换算清理复用既有测试；计算耗时按本轮要求只记录。
+本轮复用既有测试，计算耗时只记录。
 
 <a id="si-units"></a>
-### SI 迁移：2026-10-18
+### SI 与定点质量：2026-10-18
 
-| 结果 | 输入与日志（均位于 `build/`） |
+以下日志均位于 `build/`，对应 `50db878` 后的质量迁移工作区。
+
+| 结果 | 场景与日志 |
 |---|---|
-| 编译及架构检查通过 | 服务端、客户端、现有测试、GPU 模块；`unit-production-final.log` |
-| 化学、存档、协议及孔流通过 | `chemistry:short,region-state,protocol,air-network`；`unit-production-integration-complete.log` |
-| 容器结算与连续注液恢复通过 | WAL、部分转移、24 次完整配置注液及重启；`unit-production-containers-final.log` |
-| 资源检查通过 | 117 份 JSON 可解析，中英文 232 个翻译键一致 |
-| 此前相变与颗粒热库存通过 | `--gas-topology`、`--phase-volume`、`--granular-energy`；`unit-gas-topology-final.log`、`unit-phase-volume-delivery.log`、`unit-granular-energy-delivery.log` |
+| 编译、架构及 model/app 通过 | 服务端、客户端、测试及 GPU 编译；`mass-final-build13.log`、`mass-final-build12.log` |
+| 化学、存档、协议、空气网络及载体流程通过 | `mass-final-contracts29.log`（8 个领域全部通过） |
+| 液体质量分配与短交接通过 | `mass-final-transport-mass.log`、`mass-final-handoff29.log` |
+| 相变、气腔交接与颗粒热库存通过 | `mass-final-phase29--gas-topology.log`、`mass-final-phase29--phase-volume.log`、`mass-final-phase29--granular-energy.log` |
+| 容器 WAL、部分转移、24 次完整配置注液及重启通过 | `mass-final-containers28.log`；随后三材料矩阵仍在注油处拒绝 |
 
-完整流程仍有四项失败：
-
-- 热平流响应导数 −0.1038155，超出 2.5% 误差要求：`unit-thermal-delivery.log`。
-- 三材料操作矩阵注油时缺少有限气体后继，本轮仍复现：`unit-production-containers-final.log`。
-- 随机场景 0、seed=101，第 26 动作容量超额约 5.96×10⁻⁸，累计子步耗尽：`unit-normal-replay-delivery.log`。
-- 床层 phase=3 超出仿真完成时间判据：`unit-validation2.log`。
-
-此前沙床和 controller 耗时记录见阶段记录及 `tmp/bed-complete.log`、`unit-step-benchmark.log`。
+完整 thermal 仍在热平流导数 −0.1038155 处失败；granular 短流程仍在堆积坡度 `rise=12486758 > 11329194` 处失败：`mass-final-integration27.log`。
+后者与自由面速度重建失败均在迁移前 `f15bd92` 复现：`mass-baseline-granular.log`、`mass-baseline-free-surface.log`。
+输运 `components` 的多气腔归属、`chemical-tails` 的旧节点拒绝断言也在该基线复现：`mass-baseline-transport-*.log`。
+此前随机场景 0、seed=101、第 26 动作的容量超额及完整床层 phase=3 完成时间失败仍待处理，见 `unit-normal-replay-delivery.log`、`unit-validation2.log`。

@@ -107,6 +107,7 @@ final class FluidThermalBinding {
 	) {
 		if (state.coherentPhases().groupCount() != 0) throw new IllegalStateException("Thermal restore target is not empty");
 		for (CoherentPhaseStore.Group group : snapshot.coherentGroups()) {
+			group.requireCompositionMass(markers.chemicalRegistry());
 			int material = state.registry().materialHandle(group.phaseId());
 			if (state.registry().material(material).carrierKind()
 					!= ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID) {

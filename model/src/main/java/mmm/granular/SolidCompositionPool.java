@@ -88,8 +88,7 @@ public final class SolidCompositionPool {
 	private void validate(SolidCompositionRecord record) {
 		if (record == null) throw new IllegalArgumentException("Solid composition is missing");
 		for (int entry = 0; entry < record.entryCount(); entry++) registry.species(record.speciesHandle(entry));
-		double mass = record.totalMass(registry);
-		if (!(Double.isFinite(mass) && mass > 0.0)) {
+		if (record.massUnits(registry) <= 0L) {
 			throw new IllegalArgumentException("Solid composition mass is non-positive");
 		}
 	}

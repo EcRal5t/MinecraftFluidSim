@@ -438,6 +438,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 	private static void granularRestoreUsesSnapshotEnergy(mmm.simulation.FullCapabilityTestFixture.Registries production,
 			ThermalRegistry registry, String materialId, long svq, double mass,
 			mmm.granular.SolidCompositionRecord composition, boolean deposited) {
+		mass = mmm.units.Mass.kilograms(mmm.units.Mass.fromKilograms(mass));
 		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, .8F);
 		var source = new FluidDomain(4, 4, 4, config, 512);
 		var liquids = mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(source, production.liquids());
@@ -566,6 +567,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			long svq = variant == 0 ? 10_401_873 : active ? 262_143 : 10_401_812;
 			double mass = production.granular().material(sand).referenceDensity() * Math.scalb((double) svq, -27)
 					* (variant == 0 ? 1 : 1 + 1e-9);
+			mass = mmm.units.Mass.kilograms(mmm.units.Mass.fromKilograms(mass));
 			if (active) domain.granularState.parcels.add(new mmm.granular.GranularParcelStore.Parcel(
 					.75F, .75F, .75F, 0, 0, 0, svq, mmm.units.Mass.fromKilograms(mass), sand, 0, 0, (byte) 0));
 			else require(domain.granularState.deposits.tryAdd(cell, new mmm.granular.GranularDepositStore.SolidPortion(
@@ -591,9 +593,12 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			double temperatureBound = 32 * Math.ulp(actual) / (remainingMass * material.specificHeatAt(sourceK))
 					+ 64 * Math.ulp(material.referenceTemperatureK());
 			require(taken.transferred() && remainingVolume == 1
-					&& remainingMass == mass * (1.0 / svq) && Math.abs(actual - expected) <= 2 * Math.ulp(actual)
+					&& mmm.units.Mass.fromKilograms(remainingMass) == mmm.units.Mass.fromKilograms(mass) - taken.ledger().totalMassUnits() && Math.abs(actual - expected) <= 2 * Math.ulp(actual)
 					&& Math.abs(finalK - sourceK) <= temperatureBound && finalK > 1e-9
-					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "Cold granular remainder lost temperature or exact U audit");
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "Cold granular remainder lost temperature or exact U audit: variant=" + variant
+					+ " transferred=" + taken.transferred() + " mass=" + remainingMass + " volume=" + remainingVolume
+					+ " energyError=" + (actual - expected) + " energyUlp=" + Math.ulp(actual)
+					+ " temperature=" + finalK + " source=" + sourceK + " bound=" + temperatureBound);
 		} catch (Exception failure) { throw new AssertionError("Production cold granular extraction fixture failed", failure); }
 	}
 
@@ -604,13 +609,13 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		var definitions = granularThermalRegistry(liquids, granular).materials().stream().map(material ->
 				material.carrierKind() == ThermalMaterialDefinition.CarrierKind.GRANULAR
 						? new ThermalMaterialDefinition(material.id(), material.carrierKind(), material.carrierId(),
-								300, 1e18, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 1)))
+								300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 1)))
 						: material).toList();
 		var registry = new ThermalRegistry(definitions, List.of(), List.of(), "", granular.fingerprint());
 		int thermalSand = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR,
 				granular.material(sand).id());
-		double[] invalidMass = {.24999999999999914, 1.2999999999999952};
-		double[] invalidEnergy = {2.4999999999999907e17, 1.299999999999995e18};
+		double[] invalidMass = {1.0, 1.0};
+		double[] invalidEnergy = {1e308, 1e308};
 		for (int variant = 0; variant < 3; variant++) {
 			var domain = new FluidDomain(4, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F,
 					100, 1e-5F, .45F, .002F, 0), 216);
@@ -620,7 +625,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			for (int index = 0; index < count; index++) {
 				boolean invalid = index >= invalidStart && index < invalidStart + 2;
 				double mass = invalid ? invalidMass[index - invalidStart] : .25;
-				energies[index] = invalid ? invalidEnergy[index - invalidStart] : 2.5e17;
+				energies[index] = invalid ? invalidEnergy[index - invalidStart] : 100.0;
 				require(domain.tryInsertExactGranular(index / 2 + 1, 1, 1, sand, 0, 3, mmm.units.Mass.fromKilograms(mass)).inserted(),
 						"thermal merge fixture could not insert its legal mass inventory");
 			}

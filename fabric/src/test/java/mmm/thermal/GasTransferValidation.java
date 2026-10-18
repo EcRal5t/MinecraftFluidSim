@@ -61,7 +61,7 @@ public final class GasTransferValidation {
 	}
 
 	private static void validateLargeTransferIsReadOnly(GasRegistry gas, GasThermalModel model) {
-		long scale = Long.MAX_VALUE / 96L;
+		long scale = Long.MAX_VALUE / (96L * 32L);
 		GasInventory source = inventory(new long[] {24L * scale, 23L * scale, 20L * scale});
 		GasInventory target = inventory(new long[] {scale, 24L * scale, 4L * scale});
 		double sourceTemperature = 53.39535978004694, targetTemperature = 246.8989771402024;

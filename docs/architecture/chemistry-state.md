@@ -131,8 +131,8 @@ pH 是根据局部 `H+`/`OH-` 相对数量派生的 0–14 展示指标，供指
 容器无法表示完整结果时，在 solver 修改前拒绝。
 
 `ChemicalTransferLedger.Group.normalizedVolume` 与 `totalNormalizedVolume()` 使用液体归一化体积，经区域 `SolverUnitScale` 转换为 m³。
-区域 source/sink 的 group 聚合对归一化体积、mechanical kg mass 与 chemical kg residual 三列分别按输入 `double` 的精确二进制值求和，最后各自只舍入一次；
-不能用顺序相关的逐 marker 浮点累加制造 species/mass 审计差额，也不能由 species 质量反算 mechanical mass 或 residual。
+区域 source/sink 的 group 聚合对归一化体积按输入浮点数的精确二进制值求和，最后舍入一次。
+机械质量与化学质量余量使用统一的 100 ng 整数编码，合并、拆分和审计直接核对整数；余量保存机械质量减去组成质量的差额。
 
 每个 source/sink transfer group 同时保存 material/indicator identity、归一化体积、kg 质量与余量、整数 μmol 物种。
 collision escape、`empty`、创造放出和创造装取共用这份完整账本。

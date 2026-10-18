@@ -605,14 +605,11 @@ public final class GranularReactionCandidateValidation {
 							&& Arrays.equals(domain.chemicalParcels.dirtyCells(), new int[]{13}),
 					"deferred dissolution retains source inventory and scheduling");
 			setWater(domain, mode.equals("region-budget") ? 1 : 0, 100_000L);
-			if (mode.equals("region-budget")) {
-				require(domain.runThermalReactionPhaseAxis(false, 0).granularPhase().dissolutions() == 0
-						&& domain.chemicalParcels.record(0).equals(before),
-						"dissolution retains the source when free composition capacity still leaves an unrepresentable mass transfer");
-				setWater(domain, 0, 100_000L);
-			}
+			long massBeforeRetry = Math.addExact(domain.totalMassUnits(), domain.granularState.inventory.totalMassUnits());
 			require(domain.runThermalReactionPhaseAxis(false, 0).granularPhase().dissolutions() == 1,
-					"dissolution resumes when marker capacity, region capacity and actual mass representation are available");
+					"Dissolution resumes when chemical capacity becomes available");
+			require(Math.addExact(domain.totalMassUnits(), domain.granularState.inventory.totalMassUnits()) == massBeforeRetry,
+					"Dissolution retry changed combined integer mass");
 		}
 		domain.chemicalParcels.restoreReactionCursor(13);
 		require(FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState())

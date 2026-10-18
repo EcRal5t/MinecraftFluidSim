@@ -229,7 +229,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 		domain().refreshCoherentOccupancy();
 		gridDirty = true;
 		return new CondensedClear(plan.coherentVolumeSvq(),
-				mmm.units.Mass.kilograms(plan.coherentMassUnits()), plan.coherentGroups().size());
+				plan.coherentMassUnits(), plan.coherentGroups().size());
 	}
 
 	/** Prevalidates every truth removed by the operator-level condensed inventory reset. */
@@ -274,7 +274,9 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 			int markerCount, long totalVolumeBits, long totalMassUnits, ChemicalTransferLedger drained,
 			SignedDyadic internalEnergy, long mutationRevision, long chemicalRevision
 	) { }
-	public record CondensedClear(long coherentVolumeSvq, double coherentMass, int coherentGroups) { }
+	public record CondensedClear(long coherentVolumeSvq, long coherentMassUnits, int coherentGroups) {
+		public double coherentMass() { return mmm.units.Mass.kilograms(coherentMassUnits); }
+	}
 	public record CondensedClearPlan(
 			WaterClearPlan liquid, List<CoherentPhaseStore.Group> coherentGroups,
 			ChemicalTransferLedger drained, SignedDyadic coherentEnergy,
@@ -534,7 +536,7 @@ public ExactVolumeTransfer tryExtractExactVolume(int centerX, int centerY, int c
 		List<MaterialPortion> build() {
 			ArrayList<MaterialPortion> result = new ArrayList<>();
 			for (int material = 0; material < volume.length; material++) if (volume[material] > 0.0) {
-				if (!(Double.isFinite(mass[material]) && mass[material] > 0.0)) {
+				if (mass[material] <= 0L) {
 					throw new IllegalStateException("Displaced material has no positive finite mass");
 				}
 				result.add(new MaterialPortion(material, volume[material], mass[material]));

@@ -64,6 +64,14 @@ public final class CoherentPhaseStore {
 			Composition composition, double internalEnergy
 	) {
 		public double mass() { return mmm.units.Mass.kilograms(massUnits); }
+		public void requireCompositionMass(ChemicalRegistry chemistry) {
+			if (composition == null) return;
+			if (chemistry == null) throw new IllegalArgumentException("Chemical coherent inventory requires its registry");
+			long composed = ChemicalMixtureRecord.fromStableAmounts(chemistry, composition.stableAmounts(),
+					composition.massResidualUnits()).massUnits(chemistry);
+			if (composed != massUnits) throw new IllegalArgumentException("Coherent composition mass counts do not close");
+		}
+
 		public Group {
 			if (cell < 0) throw new IllegalArgumentException("Coherent phase cell is invalid");
 			ThermalIds.requireId(phaseId, "coherent phase id");
@@ -123,6 +131,8 @@ public final class CoherentPhaseStore {
 	/** Validates an addition and returns its canonical post-merge value without changing inventory. */
 	public Group previewAdd(Group addition) {
 		validateGroup(addition);
+		if (addition.massUnits() > Long.MAX_VALUE - totalMassUnits())
+			throw new InventoryUnavailableException("Coherent mass capacity exceeded");
 		int found = find(addition.cell(), addition.phaseId());
 		if (found < 0) {
 			if (groups.size() == maximumGroups) throw new InventoryUnavailableException("Coherent phase group budget exceeded");
@@ -153,6 +163,7 @@ public final class CoherentPhaseStore {
 		int index = find(cell, phaseId);
 		if (index < 0) throw new IllegalArgumentException("Unknown coherent phase group");
 		Group current = groups.get(index);
+		current.requireCompositionMass(chemistry);
 		if (requestedSvq <= 0L || requestedSvq > current.occupiedVolumeSvq()) {
 			throw new IllegalArgumentException("Coherent phase take volume is invalid");
 		}
@@ -163,9 +174,9 @@ public final class CoherentPhaseStore {
 		long remainingMass = Math.subtractExact(current.massUnits(), removedMass);
 		ProportionalDoubleSplit energies = ProportionalDoubleSplit.of(current.internalEnergy(), removedMass, current.massUnits());
 		double removedEnergy = energies.removed(), remainingEnergy = energies.remaining();
-		if (!(removedMass > 0.0 && remainingMass > 0.0)
+		if (!(removedMass > 0L && remainingMass > 0L)
 				|| !Double.isFinite(removedEnergy) || !Double.isFinite(remainingEnergy)) {
-			throw new InventoryUnavailableException("Coherent phase split has no finite positive mass shares");
+			throw new InventoryUnavailableException("Coherent phase split has no positive mass or finite energy shares");
 		}
 		Composition[] split = split(current.composition(), remainingSvq, requestedSvq, remainingMass, removedMass, chemistry);
 		return new TakeSplit(new Group(cell, phaseId, requestedSvq, removedMass, split[1], removedEnergy),
@@ -222,6 +233,8 @@ public final class CoherentPhaseStore {
 		if (snapshot == null || snapshot.size() > maximumGroups) {
 			throw new IllegalArgumentException("Coherent phase snapshot is missing or over budget");
 		}
+		long mass = 0L;
+		for (Group group : snapshot) mass = Math.addExact(mass, group.massUnits());
 		Group previous = null;
 		for (Group group : snapshot) {
 			validateGroup(group);

@@ -316,9 +316,9 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 				thermalState.commitActiveMerge(first, second);
 			}
 			@Override public GranularInventory.EnergyPlan planDepositWake(
-					int cell, int material, int composition, long takenSvq, long totalSvq
+					int cell, int material, int composition, long takenMassUnits, long totalMassUnits
 			) {
-				return thermalState.planDepositWake(key(cell, material, composition), takenSvq, totalSvq);
+				return thermalState.planDepositWake(key(cell, material, composition), takenMassUnits, totalMassUnits);
 			}
 			@Override public void clearExternal() { thermalState.clearGranularExternal(); }
 		};
@@ -473,8 +473,9 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		if (!canAddCarrierVolume(occupiedVolumeSvq / (double) SolidVolume.SVQ_PER_CELL)) {
 			throw new IllegalStateException("Sealed region has no combined liquid/solid capacity");
 		}
-		thermalState.addCoherentExternal(new CoherentPhaseStore.Group(
-				cell, phaseId, occupiedVolumeSvq, massUnits, composition, internalEnergy));
+		var addition = new CoherentPhaseStore.Group(cell, phaseId, occupiedVolumeSvq, massUnits, composition, internalEnergy);
+		addition.requireCompositionMass(chemicalParcels == null ? null : chemicalParcels.registry());
+		thermalState.addCoherentExternal(addition);
 		refreshCoherentOccupancy();
 		gridDirty = true;
 	}

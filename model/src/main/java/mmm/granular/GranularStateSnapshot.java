@@ -316,11 +316,11 @@ public final class GranularStateSnapshot {
 		SolidCompositionRecord[] runtime = new SolidCompositionRecord[solidCompositions.size()];
 		for (int index = 0; index < runtime.length; index++) runtime[index] = solidCompositions.get(index).toRuntime(registry);
 		for (ActiveParcel parcel : activeParcels) if (parcel.solidCompositionIndex() > 0
-				&& !massClose(runtime[parcel.solidCompositionIndex() - 1].massUnits(registry), parcel.massUnits())) {
+				&& !sameMass(runtime[parcel.solidCompositionIndex() - 1].massUnits(registry), parcel.massUnits())) {
 			throw new IllegalArgumentException("Active solid composition mass ledger mismatch");
 		}
 		for (DepositGroup group : depositGroups) if (group.solidCompositionIndex() > 0
-				&& !massClose(runtime[group.solidCompositionIndex() - 1].massUnits(registry), group.massUnits())) {
+				&& !sameMass(runtime[group.solidCompositionIndex() - 1].massUnits(registry), group.massUnits())) {
 			throw new IllegalArgumentException("Deposit solid composition mass ledger mismatch");
 		}
 	}
@@ -339,7 +339,7 @@ public final class GranularStateSnapshot {
 	private int restoreComposition(int index, long expectedMass, SolidCompositionPool pool) {
 		if (index == 0) return 0;
 		SolidCompositionRecord record = solidCompositions.get(index - 1).toRuntime(pool.registry());
-		if (!massClose(record.massUnits(pool.registry()), expectedMass)) {
+		if (!sameMass(record.massUnits(pool.registry()), expectedMass)) {
 			throw new IllegalArgumentException("Solid composition mass does not match granular inventory");
 		}
 		return pool.create(record);
@@ -352,7 +352,7 @@ public final class GranularStateSnapshot {
 					&& parcel.x() >= 0.0F && parcel.x() < sizeX * 0.5F && parcel.y() >= 0.0F && parcel.y() < sizeY * 0.5F
 					&& parcel.z() >= 0.0F && parcel.z() < sizeZ * 0.5F && Float.isFinite(parcel.velocityX())
 					&& Float.isFinite(parcel.velocityY()) && Float.isFinite(parcel.velocityZ())
-					&& parcel.solidVolumeSvq() > 0L && Double.isFinite(parcel.mass()) && parcel.mass() > 0.0
+					&& parcel.solidVolumeSvq() > 0L && parcel.massUnits() > 0L
 					&& validMaterial(parcel.materialPaletteIndex()) && validComposition(parcel.solidCompositionIndex())
 					&& parcel.contactAge() >= 0
 					&& (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED) == 0)) {
@@ -368,7 +368,7 @@ public final class GranularStateSnapshot {
 			SolidVolume.requirePorosity(group.porosityQ());
 			if (group.cell() < 0 || group.cell() >= sizeX * sizeY * sizeZ || !validMaterial(group.materialPaletteIndex())
 					|| !validComposition(group.solidCompositionIndex()) || group.solidVolumeSvq() <= 0L
-					|| !(Double.isFinite(group.mass()) && group.mass() > 0.0)) {
+					|| group.massUnits() <= 0L) {
 				throw new IllegalArgumentException("Invalid granular deposit snapshot group");
 			}
 			if (previous != null && DepositGroup.ORDER.compare(previous, group) >= 0) {
@@ -407,7 +407,7 @@ public final class GranularStateSnapshot {
 
 	private boolean validMaterial(int handle) { return handle >= 0 && handle < materialPalette.size(); }
 	private boolean validComposition(int index) { return index >= 0 && index <= solidCompositions.size(); }
-	private static boolean massClose(long left, long right) { return left == right; }
+	private static boolean sameMass(long left, long right) { return left == right; }
 
 	private record DepositDraft(
 			int cell, int porosityQ, int material, StableComposition composition, long volume, long massUnits

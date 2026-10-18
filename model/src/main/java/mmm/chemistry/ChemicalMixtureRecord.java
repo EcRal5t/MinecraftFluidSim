@@ -1,7 +1,5 @@
 package mmm.chemistry;
 
-import mmm.units.SignedDyadic;
-import mmm.units.SolverUnitScale;
 
 import java.math.BigInteger;
 import java.util.Arrays;
@@ -81,8 +79,7 @@ public final class ChemicalMixtureRecord {
 
 	/** Preserves the immutable species inventory and its registry-specific exact-mass memo. */
 	public ChemicalMixtureRecord withMassResidualUnits(long residual) {
-		long bits = residual;
-		return bits == massResidualUnits ? this : new ChemicalMixtureRecord(this, bits);
+		return residual == massResidualUnits ? this : new ChemicalMixtureRecord(this, residual);
 	}
 	public int[] copySpeciesHandles() { return speciesHandles.clone(); }
 	public long[] copyAmounts() { return amounts.clone(); }
@@ -109,7 +106,7 @@ public final class ChemicalMixtureRecord {
 
 	public long speciesMassUnits(ChemicalRegistry registry) { return mmm.units.Mass.exactUnits(exactSpeciesMassKilograms(registry).numerator(), exactSpeciesMassKilograms(registry).denominator()); }
 	public long massUnits(ChemicalRegistry registry) {
-		return Math.addExact(mmm.units.Mass.exactUnits(exactSpeciesMassKilograms(registry).numerator(), exactSpeciesMassKilograms(registry).denominator()), massResidualUnits);
+		return Math.addExact(speciesMassUnits(registry), massResidualUnits);
 	}
 	public double massKilograms(ChemicalRegistry registry) { return mmm.units.Mass.kilograms(massUnits(registry)); }
 

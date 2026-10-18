@@ -107,27 +107,26 @@ public final class GranularPhaseTransferEngine {
 			LiquidParcel source = liquid.get(index);
 			ChemicalMixtureRecord replacement = record(
 					distributed[index], source.mixture().massResidualUnits());
-			double massKilograms = replacement.massKilograms(chemistry);
-			if (!(Double.isFinite(massKilograms) && massKilograms > 0.0)) {
+			if (replacement.massUnits(chemistry) <= 0L) {
 				return null;
 			}
-			long solverMass;
+			long massUnits;
 			try {
-				solverMass = ChemicalMixtureRecord.massUnitsAfterSpeciesChange(source.massUnits(),
+				massUnits = ChemicalMixtureRecord.massUnitsAfterSpeciesChange(source.massUnits(),
 						replacement.exactSpeciesMassKilograms(chemistry)
 								.subtract(source.mixture().exactSpeciesMassKilograms(chemistry)));
 			} catch (IllegalArgumentException | ArithmeticException unrepresentable) {
 				return null;
 			}
-			if (!(Double.isFinite(solverMass) && solverMass > 0.0)) return null;
+			if (massUnits <= 0L) return null;
 			long signedVolumeDelta = precipitation ? -volumeDeltas[index] : volumeDeltas[index];
 			float cellVolume;
 			try { cellVolume = SolidVolume.addCellVolumeSvqExact(source.cellVolume(), signedVolumeDelta); }
 			catch (IllegalArgumentException unrepresentable) {
 				throw new BlockedException("Liquid marker cannot represent the exact SVQ phase-transfer delta");
 			}
-			updates[index] = new MarkerUpdate(source.marker(), replacement, cellVolume, solverMass);
-			liquidMassChange = Math.addExact(liquidMassChange, Math.subtractExact(solverMass, source.massUnits()));
+			updates[index] = new MarkerUpdate(source.marker(), replacement, cellVolume, massUnits);
+			liquidMassChange = Math.addExact(liquidMassChange, Math.subtractExact(massUnits, source.massUnits()));
 		}
 		SolidCompositionRecord solid = recordSolid(transferred);
 		long solidMass = solid.massUnits(chemistry);
@@ -208,7 +207,7 @@ public final class GranularPhaseTransferEngine {
 		for (Map.Entry<Integer, Long> entry : values.entrySet()) {
 			species[index] = entry.getKey(); amounts[index++] = entry.getValue();
 		}
-		return new SolidCompositionRecord(species, amounts, Double.doubleToRawLongBits(0.0));
+		return new SolidCompositionRecord(species, amounts, 0L);
 	}
 
 	private static long floorCapacity(ExactRational capacityMolPerCubicMeter, List<LiquidParcel> liquid, long totalExtent) {

@@ -276,18 +276,18 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 
 	/** Publishes an already preflighted granular clear; the mutation phase has no rejections. */
 	GranularClear applyGranularClear(GranularClearPlan plan) {
-		if (granularState == null) return new GranularClear(0L, 0.0, 0, 0);
+		if (granularState == null) return new GranularClear(0L, 0L, 0, 0);
 		if (!hasGranularInventory()) {
 			granularDepositDynamics.clear(); granularCoupling.clear(); granularNextCoupling.clear();
 			pressureGranularCoupling = null;
-			return new GranularClear(0L, 0.0, 0, 0);
+			return new GranularClear(0L, 0L, 0, 0);
 		}
 		GranularInventory.ClearStats cleared = granularState.inventory.clear();
 		granularState.escapedSink = plan.sinkAfter(); granularDepositDynamics.clear();
 		granularCoupling.clear(); granularNextCoupling.clear(); pressureGranularCoupling = null;
 		lastGranularDepositStats = new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
 		gridDirty = true;
-		return new GranularClear(cleared.solidVolumeSvq(), cleared.mass(),
+		return new GranularClear(cleared.solidVolumeSvq(), cleared.massUnits(),
 				cleared.activeParcels(), cleared.depositGroups());
 	}
 
@@ -332,7 +332,9 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 		}
 	}
 
-	public record GranularClear(long solidVolumeSvq, double mass, int activeParcels, int depositGroups) { }
+	public record GranularClear(long solidVolumeSvq, long massUnits, int activeParcels, int depositGroups) {
+		public double mass() { return mmm.units.Mass.kilograms(massUnits); }
+	}
 	public record GranularClearPlan(
 			GranularAuditLedger removed, GranularAuditLedger sinkAfter,
 			long solidVolumeSvq, long totalMassUnits, int activeParcels, int depositGroups,

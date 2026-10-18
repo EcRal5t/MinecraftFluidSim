@@ -16,7 +16,7 @@ import java.math.BigInteger;
 
 /** Canonical material/indicator/species bucket inventory, independent from {@link FluidMixture}. */
 public record ChemicalContents(String registryFingerprint, long quantaPerMol, List<Group> groups) {
-	private static final String ENCODING_TAG = "mmm:chemical-contents;" + mmm.units.Mass.ENCODING + "";
+	private static final String ENCODING_TAG = "mmm:chemical-contents;" + mmm.units.Mass.ENCODING;
 	public static final int MAX_GROUPS = 16;
 	public static final int MAX_TOTAL_ENTRIES = 64;
 	public static final int MAX_ENCODED_BYTES = 64 * 1024;
@@ -39,7 +39,7 @@ public record ChemicalContents(String registryFingerprint, long quantaPerMol, Li
 			for (SpeciesAmount species : group.species()) quanta = Math.addExact(quanta, species.amountQuanta());
 		}
 		if (entries > MAX_TOTAL_ENTRIES || volume > ContainerFluidLedger.NANOS_PER_BLOCK
-				|| quanta > ChemicalLimits.MAX_BUCKET_TOTAL_QUANTA || !(Double.isFinite(mass) && mass > 0.0)) {
+				|| quanta > ChemicalLimits.MAX_BUCKET_TOTAL_QUANTA || mass <= 0L) {
 			throw new IllegalArgumentException("Chemical contents exceed a frozen bucket budget");
 		}
 		groups = List.copyOf(canonical);
@@ -275,8 +275,7 @@ public record ChemicalContents(String registryFingerprint, long quantaPerMol, Li
 			if (!StableId.isValid(materialId, 128) || volumeNanos <= 0L
 					|| volumeNanos > ContainerFluidLedger.NANOS_PER_BLOCK || species == null
 					|| species.size() > ChemicalLimits.MAX_SPECIES_PER_PARCEL
-					|| !(massUnits > 0)
-					|| !Double.isFinite(mmm.units.Mass.kilograms(massResidualUnits))) {
+					|| !(massUnits > 0)) {
 				throw new IllegalArgumentException("Invalid chemical contents group");
 			}
 			ArrayList<SpeciesAmount> canonical = new ArrayList<>(species);

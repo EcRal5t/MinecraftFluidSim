@@ -1329,7 +1329,7 @@ public final class GranularCarrierValidation {
 			int carriers = active.size() + beds.size();
 			var snapshot = new mmm.granular.GranularStateSnapshot(4, 4, 4, registry.fingerprint(),
 					registry.materials().stream().map(mmm.granular.ParticulateMaterial::id).toList(),
-					active, beds, carriers * volume, Double.doubleToRawLongBits(carriers * mass));
+					active, beds, carriers * volume, Math.multiplyExact(carriers, mmm.units.Mass.fromKilograms(mass)));
 			boolean rejected = false;
 			try {
 				domain.restoreGranularState(snapshot, registry, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE),
@@ -1381,7 +1381,7 @@ public final class GranularCarrierValidation {
 					kernel.canonicalMask());
 			var snapshot = new mmm.granular.GranularStateSnapshot(4, 4, 4, registry.fingerprint(),
 					registry.materials().stream().map(mmm.granular.ParticulateMaterial::id).toList(),
-					java.util.List.of(parcel), java.util.List.of(), volume, Double.doubleToRawLongBits(mass));
+					java.util.List.of(parcel), java.util.List.of(), volume, mmm.units.Mass.fromKilograms(mass));
 			FluidDomain[] domains = {new FluidDomain(4, 4, 4, config, 128), new FluidDomain(4, 4, 4, config, 128)};
 			for (var domain : domains) {
 				domain.sealDomainBoundary();

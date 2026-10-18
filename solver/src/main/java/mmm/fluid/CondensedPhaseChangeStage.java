@@ -19,7 +19,6 @@ import static mmm.fluid.PhaseChangeStageSupport.PhaseCandidateUnavailableExcepti
 import static mmm.fluid.PhaseChangeStageSupport.PhaseCellInventory;
 import static mmm.fluid.PhaseChangeStageSupport.PhaseComposition;
 import static mmm.fluid.PhaseChangeStageSupport.PhaseRemovalPlan;
-import static mmm.fluid.PhaseChangeStageSupport.massTolerance;
 
 /** Owns exact-batch coherent-solid/liquid planning and commit in the thermal axis. */
 final class CondensedPhaseChangeStage {
@@ -152,7 +151,7 @@ final class CondensedPhaseChangeStage {
 		var liquid = new PhaseLiquidInventory(support, cell);
 		var initialLiquid = liquid.inventory();
 		double maximumMass = transition.massKgPerBatch().multiply(high).toDouble();
-		double massError = Math.nextUp((initialLiquid.size() + 4.0) * massTolerance(maximumMass)
+		double massError = Math.nextUp((initialLiquid.size() + 4.0) * mmm.units.Mass.kilograms(1L)
 				+ (initialLiquid.size() + 2.0) * Math.ulp(maximumMass));
 		var registry = support.thermal().registry();
 		var extent = support.thermal().preparePhaseExtentCurve(thermalCell, initialLiquid,

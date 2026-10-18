@@ -647,11 +647,6 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 		if (thermalState != null) thermalState.ensureCapacity(capacity);
 	}
 
-	void setDefaultMaterialState(int particle) {
-		particles.setMassUnits(particle, unitScale.massUnitsForNormalized((double) particles.volume(particle) * config.density()));
-		particles.setMaterialHandle(particle, 0);
-		particles.setPhaseLabel(particle, 0);
-	}
 
 	List<CellCandidate> nearbyCells(int centerX, int centerY, int centerZ, int maxRadius) {
 		ensureGrid();
@@ -784,7 +779,7 @@ abstract class FluidDomainMechanicalFields extends FluidDomainContracts {
 	void validateMaterialPortion(FluidDomain.MaterialPortion portion) {
 		if (portion == null || !(Double.isFinite(portion.volume()) && portion.volume() > 0.0
 				&& portion.volume() <= Float.MAX_VALUE && (float) portion.volume() > 0.0F)
-				|| !(Double.isFinite(portion.massUnits()) && portion.massUnits() > 0.0)) {
+				|| portion.massUnits() <= 0L) {
 			throw new IllegalArgumentException("Material portion ledgers must be finite, positive and float-representable");
 		}
 		if (materialRegistry == null) {

@@ -49,6 +49,12 @@ final class MaterialTransferPlanner {
 						+ portion.materialHandle());
 			}
 		}
+		try {
+			long total = domain.totalMassUnits();
+			for (FluidDomain.MaterialPortion portion : portions) total = Math.addExact(total, portion.massUnits());
+		} catch (ArithmeticException overflow) {
+			return new FluidDomain.ExactMixtureTransfer(false, List.of());
+		}
 		if (!domain.canAddCarrierVolume(portions.stream().mapToDouble(FluidDomain.MaterialPortion::volume).sum())) {
 			return new FluidDomain.ExactMixtureTransfer(false, List.of());
 		}
@@ -214,6 +220,7 @@ final class MaterialTransferPlanner {
 		boolean markerBudgetLimited = false;
 		List<MaterialInsertPiece> insertPieces = new ArrayList<>();
 		long plannedChemicalQuanta = 0L;
+		long plannedMass = domain.totalMassUnits();
 		try {
 			cellLoop:
 			for (FluidDomain.CellCandidate candidate : domain.nearbyCells(centerX, centerY, centerZ, maxRadius)) {
@@ -239,6 +246,8 @@ final class MaterialTransferPlanner {
 					float piece = (float) Math.min(domain.PARTICLE_VOLUME, left);
 					long pieceMass = domain.unitScale.massUnitsForNormalized((double) piece * (domain.materialRegistry == null
 							? domain.config.density() : domain.materialRegistry.material(0).referenceDensity()));
+					if (pieceMass <= 0L) break;
+					plannedMass = Math.addExact(plannedMass, pieceMass);
 					ChemicalMixtureRecord chemical = domain.chemicalParcels == null ? null
 							: domain.chemicalParcels.tryDefaultRecord(
 									domain.materialRegistry.material(0).id(), piece, domain.config.cellSize(), pieceMass, false);
@@ -545,6 +554,7 @@ final class MaterialTransferPlanner {
 			return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		}
 		try {
+			Math.addExact(domain.totalMassUnits(), ledger.totalMassUnits());
 			if (Math.addExact(domain.chemicalParcels.totalQuanta(), ledger.totalQuanta())
 					> mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
 				return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
@@ -601,30 +611,25 @@ final class MaterialTransferPlanner {
 			long sourceMass = group.massUnits();
 			double volumeLeft = group.normalizedVolume(); long massLeft = sourceMass;
 			long[] masses = new long[groupPieces.size()];
-			int massPivot = 0;
 			for (int piece = 0; piece < groupPieces.size(); piece++) {
 				if (distributed[piece].isEmpty() && !group.speciesQuanta().isEmpty()) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 				ChemicalPieceDraft draft = groupPieces.get(piece);
 				boolean last = piece + 1 == groupPieces.size();
 				long mass = last ? massLeft : mmm.units.Mass.portion(massLeft, draft.volume(), volumeLeft);
 				masses[piece] = mass;
-				if (mass > masses[massPivot]) massPivot = piece;
 				volumeLeft -= draft.volume();
 				massLeft -= mass;
 			}
 			if (mmm.units.Mass.sum(masses) != sourceMass) throw new IllegalStateException("Chemical insertion mass counts do not close");
 			ChemicalMixtureRecord[] records = new ChemicalMixtureRecord[groupPieces.size()];
 			long residualSum = 0;
-			int residualPivot = 0;
 			for (int piece = 0; piece < groupPieces.size(); piece++) {
-				if (!(Double.isFinite(masses[piece]) && masses[piece] > 0.0))
+				if (masses[piece] <= 0L)
 					return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 				ChemicalMixtureRecord withoutResidual = ChemicalMixtureRecord.fromStableAmounts(
 						domain.chemicalParcels.registry(), distributed[piece], 0L);
 				records[piece] = withoutResidual.withMassResidualUnits(Math.subtractExact(masses[piece], withoutResidual.speciesMassUnits(domain.chemicalParcels.registry())));
 				residualSum = Math.addExact(residualSum, records[piece].massResidualUnits());
-				if (Math.abs(records[piece].massResidualKilograms()) > Math.abs(records[residualPivot].massResidualKilograms()))
-					residualPivot = piece;
 			}
 			if (residualSum != group.massResidualUnits()) throw new IllegalStateException("Chemical insertion residual counts do not close");
 			for (int piece = 0; piece < groupPieces.size(); piece++) {

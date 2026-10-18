@@ -368,13 +368,13 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		if (thermalState != null) {
 			for (int parcel = 0; parcel < selectedParcels.length; parcel++) if (selectedParcels[parcel]) {
 				GranularParcelStore.Parcel state = granularState.parcels.parcel(parcel);
-				thermalState.previewActiveTake(parcel, state.solidVolumeSvq(), state.solidVolumeSvq());
+				thermalState.previewActiveTake(parcel, state.massUnits(), state.massUnits());
 			}
 			for (CollisionDeposit deposit : depositGroups) {
 				GranularDepositStore.Group group = deposit.group();
 				thermalState.previewDepositTake(new GranularEnergyColumn.DepositKey(
 						deposit.cell(), group.materialHandle(), group.solidCompositionHandle()),
-						group.solidVolumeSvq(), group.solidVolumeSvq());
+						group.massUnits(), group.massUnits());
 			}
 		}
 
@@ -412,7 +412,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		for (int parcel = plan.selectedParcels().length - 1; parcel >= 0; parcel--) if (plan.selectedParcels()[parcel]) {
 			GranularParcelStore.Parcel state = granularState.parcels.removeSwap(parcel);
 			if (thermalState != null) thermalState.commitExternalActiveTake(
-					parcel, state.solidVolumeSvq(), state.solidVolumeSvq());
+					parcel, state.massUnits(), state.massUnits());
 			if (state.solidCompositionHandle() != 0) granularState.compositions.release(state.solidCompositionHandle());
 		}
 		for (CollisionDeposit deposit : plan.depositGroups()) {
@@ -421,7 +421,7 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 					deposit.cell(), group.materialHandle(), group.solidCompositionHandle(), group.solidVolumeSvq());
 			if (thermalState != null) thermalState.commitExternalDepositTake(new GranularEnergyColumn.DepositKey(
 					deposit.cell(), group.materialHandle(), group.solidCompositionHandle()),
-					group.solidVolumeSvq(), group.solidVolumeSvq());
+					group.massUnits(), group.massUnits());
 			if (taken.solidCompositionHandle() != 0) granularState.compositions.release(taken.solidCompositionHandle());
 		}
 		granularState.escapedSink = plan.sinkAfter();
@@ -537,8 +537,16 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		registry.material(materialHandle);
 		int cell = cellIndexChecked(x, y, z);
 		boolean found = false;
-		for (int particle = 0; particle < particles.count(); particle++) {
-			if (particleCellIndex(particle) == cell) found = true;
+		long finalMass = domain().totalMassUnits();
+		for (int particle = 0; particle < particles.count(); particle++) if (particleCellIndex(particle) == cell) {
+			found = true;
+			finalMass = Math.subtractExact(finalMass, particles.massUnits(particle));
+		}
+		for (int particle = 0; particle < particles.count(); particle++) if (particleCellIndex(particle) == cell) {
+			long replacement = unitScale.massUnitsForNormalized((double) particles.volume(particle)
+					* registry.material(materialHandle).referenceDensity());
+			if (replacement <= 0L) throw new IllegalArgumentException("Material mass is below the integer resolution");
+			finalMass = Math.addExact(finalMass, replacement);
 		}
 		if (!found) throw new IllegalArgumentException("Cannot assign material to an empty pressure cell");
 		bindMaterialRegistry(registry);
@@ -580,7 +588,8 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		SignedDyadic thermalBefore = thermalState == null ? SignedDyadic.ZERO : domain().exactInternalEnergy();
 		FluidMaterial material = registry.material(materialHandle);
 		long mass = unitScale.massUnitsForNormalized((double) particles.volume(particle) * material.referenceDensity());
-		if (!(mass <= Float.MAX_VALUE)) throw new IllegalArgumentException("Material mass exceeds P2G range");
+		if (mass <= 0L) throw new IllegalArgumentException("Material mass is below the integer resolution");
+		Math.addExact(Math.subtractExact(domain().totalMassUnits(), particles.massUnits(particle)), mass);
 		particles.setMassUnits(particle, mass);
 		particles.setMaterialHandle(particle, materialHandle);
 		particles.setPhaseLabel(particle, registry.phaseHandle(materialHandle));
@@ -592,9 +601,6 @@ abstract class FluidDomainCollisionState extends FluidDomainInventoryTransaction
 		if (materialRegistry != null) return true;
 		for (int particle = 0; particle < particles.count(); particle++) {
 			if (particles.materialHandle(particle) != 0 || particles.phaseLabel(particle) != 0) return true;
-			float referenceMass = particles.volume(particle) * config.density();
-			float tolerance = Math.max(1.0E-5F, Math.ulp(referenceMass) * 8.0F);
-			if (Math.abs(particles.mass(particle) - referenceMass) > tolerance) return true;
 		}
 		return false;
 	}

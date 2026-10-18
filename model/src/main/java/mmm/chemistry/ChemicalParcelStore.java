@@ -492,8 +492,8 @@ public final class ChemicalParcelStore {
 		ChemicalMixtureRecord removedRecord = recordFromHandles(removed, removedResidual);
 		ChemicalMixtureRecord keptRecord = recordFromHandles(
 				kept, original.massResidualUnits() - removedResidual);
-		requireMassClose(removedRecord.massUnits(registry), removedMass, "removed");
-		requireMassClose(keptRecord.massUnits(registry), keptMass, "retained");
+		requireEqualMass(removedRecord.massUnits(registry), removedMass, "removed");
+		requireEqualMass(keptRecord.massUnits(registry), keptMass, "retained");
 		return new SplitPlan(keptRecord, removedRecord);
 	}
 
@@ -513,7 +513,7 @@ public final class ChemicalParcelStore {
 		mutationRevision++;
 	}
 
-	private static void requireMassClose(long actual, long expected, String label) {
+	private static void requireEqualMass(long actual, long expected, String label) {
 		if (actual != expected) {
 			throw new IllegalArgumentException("Selective phase " + label + " mass does not close");
 		}

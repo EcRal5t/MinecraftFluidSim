@@ -83,15 +83,15 @@ public final class GranularEnergyState {
 
 	void addGranularReactionActive() { granularEnergy.addActive(0.0); revision++; }
 
-	double takeGranularReactionActive(int active, long takenSvq, long totalSvq) {
-		double taken = takenSvq == totalSvq ? granularEnergy.removeActiveSwap(active)
-				: granularEnergy.takeActivePortion(active, takenSvq, totalSvq);
+	double takeGranularReactionActive(int active, long takenMassUnits, long totalMassUnits) {
+		double taken = takenMassUnits == totalMassUnits ? granularEnergy.removeActiveSwap(active)
+				: granularEnergy.takeActivePortion(active, takenMassUnits, totalMassUnits);
 		revision++;
 		return taken;
 	}
 
-	double takeGranularReactionDeposit(GranularEnergyColumn.DepositKey key, long takenSvq, long totalSvq) {
-		double taken = granularEnergy.takeDeposit(key, takenSvq, totalSvq);
+	double takeGranularReactionDeposit(GranularEnergyColumn.DepositKey key, long takenMassUnits, long totalMassUnits) {
+		double taken = granularEnergy.takeDeposit(key, takenMassUnits, totalMassUnits);
 		revision++;
 		return taken;
 	}
@@ -150,8 +150,8 @@ public final class GranularEnergyState {
 		revision++;
 	}
 
-	GranularInventory.EnergyPlan planDepositWake(GranularEnergyColumn.DepositKey source, long takenSvq, long totalSvq) {
-		var columnPlan = granularEnergy.planDepositWake(source, takenSvq, totalSvq);
+	GranularInventory.EnergyPlan planDepositWake(GranularEnergyColumn.DepositKey source, long takenMassUnits, long totalMassUnits) {
+		var columnPlan = granularEnergy.planDepositWake(source, takenMassUnits, totalMassUnits);
 		long baseRevision = revision, auditRevision = audit.revision();
 		var auditAfter = audit.ledger().withRoundoff(columnPlan.roundoff);
 		return new GranularInventory.EnergyPlan() {
@@ -168,18 +168,18 @@ public final class GranularEnergyState {
 
 	void requireDepositMove(
 			GranularEnergyColumn.DepositKey source, GranularEnergyColumn.DepositKey target,
-			long movedSvq, long sourceTotalSvq
+			long movedMassUnits, long sourceMassUnits
 	) {
-		double moved = granularEnergy.previewDepositTake(source, movedSvq, sourceTotalSvq);
+		double moved = granularEnergy.previewDepositTake(source, movedMassUnits, sourceMassUnits);
 		granularEnergy.requireAddDeposit(target, moved);
 	}
 
 	void commitDepositMove(
 			GranularEnergyColumn.DepositKey source, GranularEnergyColumn.DepositKey target,
-			long movedSvq, long sourceTotalSvq
+			long movedMassUnits, long sourceMassUnits
 	) {
 		SignedDyadic before = granularEnergy.exactEnergy();
-		granularEnergy.moveDeposit(source, target, movedSvq, sourceTotalSvq);
+		granularEnergy.moveDeposit(source, target, movedMassUnits, sourceMassUnits);
 		audit.update(ledger -> ledger.withRoundoff(granularEnergy.exactEnergy().subtract(before)));
 		revision++;
 	}
@@ -236,32 +236,32 @@ public final class GranularEnergyState {
 		return after;
 	}
 
-	double previewActiveTake(int active, long takenSvq, long totalSvq) {
-		return granularEnergy.previewActiveTake(active, takenSvq, totalSvq);
+	double previewActiveTake(int active, long takenMassUnits, long totalMassUnits) {
+		return granularEnergy.previewActiveTake(active, takenMassUnits, totalMassUnits);
 	}
 
-	double previewDepositTake(GranularEnergyColumn.DepositKey key, long takenSvq, long totalSvq) {
-		return granularEnergy.previewDepositTake(key, takenSvq, totalSvq);
+	double previewDepositTake(GranularEnergyColumn.DepositKey key, long takenMassUnits, long totalMassUnits) {
+		return granularEnergy.previewDepositTake(key, takenMassUnits, totalMassUnits);
 	}
 
-	double commitExternalActiveTake(int active, long takenSvq, long totalSvq) {
+	double commitExternalActiveTake(int active, long takenMassUnits, long totalMassUnits) {
 		double before = granularEnergy.activeEnergy(active);
-		double preview = granularEnergy.previewActiveTake(active, takenSvq, totalSvq);
-		double remaining = granularEnergy.previewActiveRemaining(active, takenSvq, totalSvq);
+		double preview = granularEnergy.previewActiveTake(active, takenMassUnits, totalMassUnits);
+		double remaining = granularEnergy.previewActiveRemaining(active, takenMassUnits, totalMassUnits);
 		ThermalAuditLedger auditAfter = externalTakeAudit(before, preview, remaining);
-		double removed = takenSvq == totalSvq ? granularEnergy.removeActiveSwap(active)
-				: granularEnergy.takeActivePortion(active, takenSvq, totalSvq);
+		double removed = takenMassUnits == totalMassUnits ? granularEnergy.removeActiveSwap(active)
+				: granularEnergy.takeActivePortion(active, takenMassUnits, totalMassUnits);
 		audit.replace(auditAfter);
 		revision++;
 		return removed;
 	}
 
-	double commitExternalDepositTake(GranularEnergyColumn.DepositKey key, long takenSvq, long totalSvq) {
+	double commitExternalDepositTake(GranularEnergyColumn.DepositKey key, long takenMassUnits, long totalMassUnits) {
 		double before = granularEnergy.depositEnergy(key);
-		double preview = granularEnergy.previewDepositTake(key, takenSvq, totalSvq);
-		double remaining = granularEnergy.previewDepositRemaining(key, takenSvq, totalSvq);
+		double preview = granularEnergy.previewDepositTake(key, takenMassUnits, totalMassUnits);
+		double remaining = granularEnergy.previewDepositRemaining(key, takenMassUnits, totalMassUnits);
 		ThermalAuditLedger auditAfter = externalTakeAudit(before, preview, remaining);
-		double removed = granularEnergy.takeDeposit(key, takenSvq, totalSvq);
+		double removed = granularEnergy.takeDeposit(key, takenMassUnits, totalMassUnits);
 		audit.replace(auditAfter);
 		revision++;
 		return removed;

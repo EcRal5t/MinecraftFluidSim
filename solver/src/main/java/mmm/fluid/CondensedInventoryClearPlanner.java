@@ -60,7 +60,7 @@ final class CondensedInventoryClearPlanner {
 				}
 				builder.add(new ChemicalTransferLedger.Group(
 						coherentLiquidMaterialId(group.phaseId()), false,
-						SolidVolume.toCellVolume(group.occupiedVolumeSvq()),
+						domain.unitScale.normalizedVolume((double) group.occupiedVolumeSvq() / SolidVolume.SVQ_PER_CUBIC_METER),
 						group.massUnits(),
 						group.composition().massResidualUnits(), group.composition().stableAmounts()));
 			}

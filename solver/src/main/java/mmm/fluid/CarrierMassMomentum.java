@@ -20,18 +20,17 @@ final class CarrierMassMomentum {
 	static Plan plan(LiquidParticleStore particles, int[] markers, long[] masses,
 	                 long externalDonorMass, float donorX, float donorY, float donorZ) {
 		if (particles == null || markers == null || masses == null || markers.length != masses.length
-				|| !Double.isFinite(externalDonorMass) || externalDonorMass < 0
+				|| externalDonorMass < 0
 				|| !Float.isFinite(donorX) || !Float.isFinite(donorY) || !Float.isFinite(donorZ))
 			throw new IllegalArgumentException("Mass momentum transfer input is invalid");
 		long donorMass = externalDonorMass; double vx = donorX, vy = donorY, vz = donorZ;
 		for (int index = 0; index < markers.length; index++) {
 			int marker = markers[index];
-			if (!Double.isFinite(masses[index]) || masses[index] < 0)
+			if (masses[index] < 0)
 				throw new IllegalArgumentException("Transferred carrier mass is invalid");
 			long removed = particles.massUnits(marker) - masses[index];
 			if (removed <= 0) continue;
 			long total = Math.addExact(donorMass, removed);
-			if (!Double.isFinite(total)) throw new RepresentationException("Transferred mass exceeds momentum representation");
 			double fraction = (double) removed / total;
 			vx += fraction * (particles.velocityX(marker) - vx);
 			vy += fraction * (particles.velocityY(marker) - vy);

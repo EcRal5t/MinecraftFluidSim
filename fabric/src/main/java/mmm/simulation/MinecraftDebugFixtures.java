@@ -316,21 +316,14 @@ public final class MinecraftDebugFixtures {
 		FlipParticleState pure = domain.exportParticleState();
 		float[] positionVolume = pure.copyPositionVolume();
 		float[] velocities = pure.copyParticleVelocities();
-		long[] markerMassUnits = new long[pure.particleCount()];
+		long[] markerMassUnits = pure.copyMassUnits();
 		int[] material = new int[pure.particleCount()];
 		FluidMaterial tensionWater = new FluidMaterial("mmm:tension_water", domain.config().density(),
 				"mmm:tension_water", 100.0, Math.toRadians(angleDegrees));
 		FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(tensionWater));
-		long totalMass = 0;
-		for (int marker = 0; marker < pure.particleCount(); marker++) {
-			double volume = positionVolume[marker * 4 + 3];
-			markerMassUnits[marker] = mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(volume * tensionWater.referenceDensity());
-			totalMass = Math.addExact(totalMass, markerMassUnits[marker]);
-			material[marker] = 0;
-		}
 		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
 				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(),
-				pure.totalVolume(), totalMass, registry.materials(), positionVolume, velocities,
+				pure.totalVolume(), mmm.units.Mass.sum(markerMassUnits), registry.materials(), positionVolume, velocities,
 				pure.copySolidMask(), markerMassUnits, material
 		));
 	}

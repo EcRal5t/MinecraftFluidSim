@@ -252,6 +252,7 @@ final class GranularReactionStage {
 	) {
 		ChemicalParcelStore chemistry = access.chemistry();
 		GranularDomainState granular = access.granularState();
+		if (plan.signedSolidMassUnits() > Long.MAX_VALUE - granular.inventory.totalMassUnits()) return false;
 		SignedDyadic pendingVolume = planGranularPhaseVolumeEvent(plan);
 		int[] markers = updateMarkers(plan);
 		ChemicalMixtureRecord[] mixtures = updateMixtures(plan);
@@ -428,6 +429,8 @@ final class GranularReactionStage {
 	) {
 		ChemicalParcelStore chemistry = access.chemistry();
 		GranularDomainState granular = access.granularState();
+		if (-plan.signedSolidMassUnits() > Long.MAX_VALUE
+				- mmm.units.Mass.sum(state.particles().directArrays().massUnits, state.particles().count())) return false;
 		SignedDyadic pendingVolume = planGranularPhaseVolumeEvent(plan);
 		if (!rule.reversible()) throw new GranularPhaseTransferEngine.BlockedException(
 				"Solid-liquid rule is not reversible");
@@ -489,8 +492,8 @@ final class GranularReactionStage {
 						full ? -1 : solid.materialHandle(), full ? 0.0 : remainingMass, finalComposition));
 		if (thermal != null && thermalPlan == null) return false;
 		if (thermal != null) {
-			if (solid.deposit()) thermal.previewDepositTake(thermalDepositKey, removedSvq, solid.solidSvq());
-			else thermal.previewActiveTake(solid.index(), removedSvq, solid.solidSvq());
+			if (solid.deposit()) thermal.previewDepositTake(thermalDepositKey, -plan.signedSolidMassUnits(), solid.massUnits());
+			else thermal.previewActiveTake(solid.index(), -plan.signedSolidMassUnits(), solid.massUnits());
 			thermal.requireGranularReactionCurrent(thermalPlan);
 		}
 		chemistry.commitPlannedReplacements(markers, mixtures);
@@ -507,8 +510,8 @@ final class GranularReactionStage {
 		}
 		if (thermalPlan != null) {
 			if (solid.deposit()) thermal.takeGranularReactionDeposit(
-					thermalDepositKey, removedSvq, solid.solidSvq());
-			else thermal.takeGranularReactionActive(solid.index(), removedSvq, solid.solidSvq());
+					thermalDepositKey, -plan.signedSolidMassUnits(), solid.massUnits());
+			else thermal.takeGranularReactionActive(solid.index(), -plan.signedSolidMassUnits(), solid.massUnits());
 		}
 		if (full) granular.compositions.release(solid.compositionHandle());
 		else granular.compositions.overwrite(solid.compositionHandle(), remaining);

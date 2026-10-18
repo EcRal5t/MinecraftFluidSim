@@ -42,8 +42,13 @@ final class GranularTransferPlanner {
 		GranularDomainState granular = domain.granularState;
 		if (granular == null) return FluidDomain.GranularInsertion.rejected("Granular state is not bound");
 		int cell = domain.cellIndexChecked(cellX, cellY, cellZ);
-		if (solidVolumeSvq <= 0L || !(Double.isFinite(massUnits) && massUnits > 0.0)) {
+		if (solidVolumeSvq <= 0L || massUnits <= 0L) {
 			throw new IllegalArgumentException("Granular insertion inventory is invalid");
+		}
+		try {
+			Math.addExact(granular.inventory.totalMassUnits(), massUnits);
+		} catch (ArithmeticException overflow) {
+			return FluidDomain.GranularInsertion.rejected("Granular mass capacity exceeded");
 		}
 		granular.registry.material(materialHandle);
 		if (compositionHandle != 0 && (granular.compositions == null || !granular.compositions.isLive(compositionHandle))) {
@@ -91,6 +96,11 @@ final class GranularTransferPlanner {
 		domain.cellIndexChecked(cellX, cellY, cellZ); domain.ensureGrid();
 		domain.granularCoupling.rebuild(granular.parcels, granular.deposits);
 		long insertedSvq = ledger.totalSolidVolumeSvq(); long insertedMass = ledger.totalMassUnits();
+		try {
+			Math.addExact(granular.inventory.totalMassUnits(), insertedMass);
+		} catch (ArithmeticException overflow) {
+			return FluidDomain.GranularInsertion.rejected("Granular mass capacity exceeded");
+		}
 		if (!domain.canAddCarrierVolume(insertedSvq / (double) SolidVolume.SVQ_PER_CELL)) {
 			return FluidDomain.GranularInsertion.rejected("Sealed region has no combined fluid/solid capacity");
 		}
@@ -111,7 +121,7 @@ final class GranularTransferPlanner {
 				long pieceSvq = Math.min(remainingSvq, material.maximumActiveParcelSvq());
 				long pieceMass = pieceSvq == remainingSvq ? remainingMass
 						: mmm.units.Mass.portion(group.massUnits(), pieceSvq, group.solidVolumeSvq());
-				if (!(Double.isFinite(pieceMass) && pieceMass > 0.0 && pieceMass <= remainingMass)) {
+				if (!(pieceMass > 0L && pieceMass <= remainingMass)) {
 					return FluidDomain.GranularInsertion.rejected("Granular transfer massUnits split is not representable");
 				}
 				SolidCompositionRecord pieceComposition = group.composition() == null ? null
@@ -331,7 +341,7 @@ final class GranularTransferPlanner {
 					: granular.compositions.record(parcel.solidCompositionHandle());
 			ledger.add(granular.registry.material(parcel.materialHandle()).id(), taken, massUnits, composition);
 			double energy = domain.thermalState == null ? 0.0
-					: domain.thermalState.previewActiveTake(parcelIndex, taken, parcel.solidVolumeSvq());
+					: domain.thermalState.previewActiveTake(parcelIndex, massUnits, parcel.massUnits());
 			removals.add(GranularRemoval.parcel(parcelIndex, parcelCell, parcel, taken, massUnits, energy)); remaining -= taken;
 		}
 		for (FluidDomain.CellCandidate candidate : extractionCells) if (remaining > 0L) {
@@ -346,7 +356,7 @@ final class GranularTransferPlanner {
 					ledger.add(granular.registry.material(exposed.materialHandle()).id(), taken, preview.massUnits(), composition);
 					double energy = domain.thermalState == null ? 0.0 : domain.thermalState.previewDepositTake(
 							new GranularEnergyColumn.DepositKey(cell, exposed.materialHandle(),
-									exposed.solidCompositionHandle()), taken, exposed.solidVolumeSvq());
+									exposed.solidCompositionHandle()), preview.massUnits(), exposed.massUnits());
 					removals.add(GranularRemoval.deposit(cell, exposed, taken, preview.massUnits(), energy));
 					remaining -= taken;
 				}
@@ -390,8 +400,8 @@ final class GranularTransferPlanner {
 						removal.cell(), removal.materialHandle(), removal.compositionHandle())) : energy.activeEnergy(removal.index());
 				double after = removal.deposit() ? energy.previewDepositRemaining(new GranularEnergyColumn.DepositKey(
 						removal.cell(), removal.materialHandle(), removal.compositionHandle()),
-						removal.solidVolumeSvq(), removal.originalSolidVolumeSvq())
-						: energy.previewActiveRemaining(removal.index(), removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
+						removal.massUnits(), removal.originalMassUnits())
+						: energy.previewActiveRemaining(removal.index(), removal.massUnits(), removal.originalMassUnits());
 				if (removal.solidVolumeSvq() != removal.originalSolidVolumeSvq()) {
 					var context = domain.thermalMarkerContext();
 					double remainingMass = removal.deposit() ? mmm.units.Mass.kilograms(Math.subtractExact(granular.deposits.matchingGroup(removal.cell(), removal.materialHandle(), group -> group.solidCompositionHandle() == removal.compositionHandle()).massUnits(), removal.massUnits()))
@@ -456,21 +466,21 @@ final class GranularTransferPlanner {
 			granular.deposits.take(removal.cell(), removal.materialHandle(), removal.compositionHandle(), removal.solidVolumeSvq());
 			if (domain.thermalState != null) domain.thermalState.commitExternalDepositTake(new GranularEnergyColumn.DepositKey(
 					removal.cell(), removal.materialHandle(), removal.compositionHandle()),
-					removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
+					removal.massUnits(), removal.originalMassUnits());
 			if (removal.compositionHandle() != 0) granular.compositions.release(removal.compositionHandle());
 		}
 		for (GranularRemoval removal : removals) if (!removal.deposit()
 				&& removal.solidVolumeSvq() != removal.originalSolidVolumeSvq()) {
 			granular.parcels.overwrite(removal.index(), remainingParcels.get(removal.index()));
 			if (domain.thermalState != null) domain.thermalState.commitExternalActiveTake(
-					removal.index(), removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
+					removal.index(), removal.massUnits(), removal.originalMassUnits());
 		}
 		removals.stream().filter(removal -> !removal.deposit()
 				&& removal.solidVolumeSvq() == removal.originalSolidVolumeSvq())
 				.sorted(Comparator.comparingInt(GranularRemoval::index).reversed()).forEach(removal -> {
 					GranularParcelStore.Parcel removed = granular.parcels.removeSwap(removal.index());
 					if (domain.thermalState != null) domain.thermalState.commitExternalActiveTake(
-							removal.index(), removal.solidVolumeSvq(), removal.originalSolidVolumeSvq());
+							removal.index(), removal.massUnits(), removal.originalMassUnits());
 					if (removed.solidCompositionHandle() != 0) granular.compositions.release(removed.solidCompositionHandle());
 				});
 		if (domain.thermalState != null) domain.thermalState.settleExternalExtraction(bookedEnergy, removedEnergy);
@@ -506,7 +516,7 @@ final class GranularTransferPlanner {
 			}
 			amounts[entry] = division[0].longValueExact();
 		}
-		SolidCompositionRecord exact = new SolidCompositionRecord(species, amounts, Double.doubleToRawLongBits(0.0));
+		SolidCompositionRecord exact = new SolidCompositionRecord(species, amounts, 0L);
 		long residual = Math.subtractExact(pieceMass, exact.speciesMassUnits(domain.granularState.compositions.registry()));
 		return new SolidCompositionRecord(species, amounts, residual);
 	}
@@ -626,19 +636,19 @@ final class GranularTransferPlanner {
 
 	private record GranularRemoval(
 			boolean deposit, int index, int cell, int materialHandle, int compositionHandle,
-			long solidVolumeSvq, long originalSolidVolumeSvq, long massUnits, double internalEnergy
+			long solidVolumeSvq, long originalSolidVolumeSvq, long massUnits, long originalMassUnits, double internalEnergy
 	) {
 		static GranularRemoval parcel(
 				int index, int cell, GranularParcelStore.Parcel parcel, long svq, long massUnits, double energy
 		) {
 			return new GranularRemoval(false, index, cell, parcel.materialHandle(), parcel.solidCompositionHandle(),
-					svq, parcel.solidVolumeSvq(), massUnits, energy);
+					svq, parcel.solidVolumeSvq(), massUnits, parcel.massUnits(), energy);
 		}
 		static GranularRemoval deposit(
 				int cell, GranularDepositStore.Group group, long svq, long massUnits, double energy
 		) {
 			return new GranularRemoval(true, -1, cell, group.materialHandle(), group.solidCompositionHandle(),
-					svq, group.solidVolumeSvq(), massUnits, energy);
+					svq, group.solidVolumeSvq(), massUnits, group.massUnits(), energy);
 		}
 	}
 }

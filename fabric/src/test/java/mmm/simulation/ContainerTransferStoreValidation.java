@@ -76,7 +76,7 @@ public final class ContainerTransferStoreValidation {
 			run("non-float-friendly transfers settle actual marker volume", ContainerTransferStoreValidation::testActualMarkerSettlement);
 			run("material service settlement preserves component residuals", ContainerTransferStoreValidation::testMaterialSettlement);
 			run("tiny thermal item remainder and actual insertion audit agree", ContainerTransferStoreValidation::testTinyThermalMaterialSettlement);
-			run("chemical insertion rounds complete mass and residual columns once", ContainerTransferStoreValidation::testChemicalInsertionStorageRounding);
+			run("chemical insertion preserves complete integer mass and residual columns", ContainerTransferStoreValidation::testChemicalInsertionMassConservation);
 			run("existing partial bucket rounds actual extracted energy only at final item", ContainerTransferStoreValidation::testExistingBucketThermalSettlement);
 			run("partial outlet requests only available marker volume", ContainerTransferStoreValidation::testPartialOutlet);
 			run("ownership sidecar lock blocks loaded checkpoints", ContainerTransferStoreValidation::testOwnershipCheckpointLock);
@@ -735,7 +735,7 @@ public final class ContainerTransferStoreValidation {
 				"container settlement changed carrier U or failed exact audit closure");
 	}
 
-	private static void testChemicalInsertionStorageRounding() {
+	private static void testChemicalInsertionMassConservation() {
 		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
 		for (double sourceMass : new double[] {1.0, 18.0, 999.0}) {
 			var domain = new FluidDomain(3, 3, 3, config, 216);

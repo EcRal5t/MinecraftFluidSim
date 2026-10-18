@@ -342,6 +342,7 @@ public final class ThermalRegistry {
 	private byte[] encodeCanonical() {
 		StringBuilder out = new StringBuilder(4096).append("mmm-thermal-registry\n")
 				.append("units=").append(UNIT_SYSTEM_ID).append('\n')
+				.append("mass-encoding=").append(mmm.units.Mass.ENCODING).append('\n')
 				.append("chemical-registry=").append(chemicalRegistryFingerprint).append('\n')
 				.append("granular-registry=").append(granularRegistryFingerprint).append('\n')
 				.append("gas-registry=").append(gasRegistryFingerprint).append('\n');
@@ -360,7 +361,7 @@ public final class ThermalRegistry {
 		}
 		for (FiniteThermalDeviceDefinition device : finiteDevices) {
 			out.append("D|").append(device.id()).append('|').append(device.thermalMaterialId()).append('|');
-			appendDouble(out, device.bodyMassKilograms()); out.append('|');
+			out.append(device.bodyMassUnits()); out.append('|');
 			appendDouble(out, device.initialTemperatureK()); out.append('|');
 			for (FiniteThermalDeviceDefinition.Port port : device.ports()) {
 				out.append(port.id()).append(',').append(port.contactGroupId()).append(',')
@@ -379,10 +380,10 @@ public final class ThermalRegistry {
 			out.append("X|").append(pair.id()).append('|').append(pair.gasComponentId()).append('|')
 					.append(pair.liquidPhaseId()).append('|').append(pair.speciesId()).append('|')
 					.append(pair.gasStandardVolumeNanosPerBatch()).append('|');
-			appendDouble(out, pair.gasKilogramsPerBatch()); out.append('|');
+			out.append(pair.gasMassUnitsPerBatch()); out.append('|');
 			out.append(pair.liquidQuantaPerBatch()).append('|');
-			appendDouble(out, pair.liquidKilogramsPerBatch()); out.append('|');
-			appendDouble(out, pair.liquidResidualKilogramsPerBatch()); out.append('|');
+			out.append(pair.liquidMassUnitsPerBatch()); out.append('|');
+			out.append(pair.liquidResidualMassUnitsPerBatch()); out.append('|');
 			out.append(pair.molesPerBatch().canonical()).append('|');
 			appendDouble(out, pair.minimumPressurePa()); out.append('|');
 			appendDouble(out, pair.maximumPressurePa()); out.append('|');

@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-/** Exact cumulative gas source/sink ledger; raw doubles are accumulated as exact dyadics. */
+/** Exact cumulative gas source/sink ledger with integer mass, residual and species columns. */
 public final class GasAuditLedger {
 	public static final GasAuditLedger EMPTY = new GasAuditLedger(List.of());
 
@@ -47,6 +47,8 @@ public final class GasAuditLedger {
 			throw new IllegalArgumentException("Gas audit contains null or duplicate components");
 		}
 		this.entries = List.copyOf(canonical.values());
+		long mass = 0L;
+		for (Entry entry : this.entries) mass = Math.addExact(mass, entry.massUnits());
 	}
 
 	public static GasAuditLedger of(GasInventory inventory) {

@@ -23,9 +23,10 @@ public final class ChemicalTransferLedger {
 			throw new IllegalArgumentException("Chemical transfer groups are over budget");
 		}
 		ArrayList<Group> result = new ArrayList<>(canonical.size());
-		int entries = 0;
+		int entries = 0; long mass = 0L;
 		for (MutableGroup group : canonical.values()) {
 			Group frozen = group.freeze();
+			mass = Math.addExact(mass, frozen.massUnits());
 			entries = Math.addExact(entries, frozen.speciesQuanta().size());
 			result.add(frozen);
 		}
@@ -76,7 +77,7 @@ public final class ChemicalTransferLedger {
 			ChemicalIds.requireId(materialId, "chemical ledger material id");
 			if (!(Double.isFinite(normalizedVolume) && normalizedVolume > 0.0)
 					|| !(massUnits > 0)) {
-				throw new IllegalArgumentException("Chemical transfer normalized volume and kg mass must be finite and positive");
+				throw new IllegalArgumentException("Chemical transfer normalized volume must be finite and positive, and mass counts positive");
 			}
 
 			TreeMap<String, Long> canonical = new TreeMap<>();

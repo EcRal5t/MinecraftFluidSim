@@ -36,8 +36,8 @@ public record FluidMixture(List<Component> components) {
 		if (totalVolume > ContainerFluidLedger.NANOS_PER_BLOCK) {
 			throw new IllegalArgumentException("Fluid mixture exceeds one bucket");
 		}
-		if (!(Double.isFinite(totalMass) && totalMass > 0.0)) {
-			throw new IllegalArgumentException("Fluid mixture total mass must be finite and positive");
+		if (totalMass <= 0L) {
+			throw new IllegalArgumentException("Fluid mixture total mass counts must be positive");
 		}
 		components = List.copyOf(canonical);
 	}
@@ -98,8 +98,7 @@ public record FluidMixture(List<Component> components) {
 			if (volumeNanos <= 0L || volumeNanos > ContainerFluidLedger.NANOS_PER_BLOCK) {
 				throw new IllegalArgumentException("Invalid fluid-mixture component volume: " + volumeNanos);
 			}
-			double mass = mmm.units.Mass.kilograms(massUnits);
-			if (!(Double.isFinite(mass) && mass > 0.0)) {
+			if (massUnits <= 0L) {
 				throw new IllegalArgumentException("Invalid fluid-mixture component mass");
 			}
 		}

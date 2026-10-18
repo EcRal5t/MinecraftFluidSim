@@ -45,7 +45,6 @@ final class RegionStateCodec {
 		root.putLong("MassUnits", manifest.totalMassUnits());
 		if (manifest.layout().hasMaterials()) {
 			root.put("Materials", encodeMaterials(manifest.materialPalette()));
-			root.putLong("MassUnits", manifest.totalMassUnits());
 			root.put("MaterialLedgers", encodeMaterialLedgers(manifest.materialLedgers()));
 		}
 		if (manifest.layout().permitsOptionalChemistry()) {
@@ -99,10 +98,9 @@ final class RegionStateCodec {
 		long totalMassUnits = root.getLongOr("MassUnits", 0L);
 		List<RegionManifest.MaterialLedger> materialLedgers = List.of();
 		if (identity.layout().hasMaterials()) {
-			require(root, "Materials", Tag.TAG_LIST); require(root, "MassUnits", Tag.TAG_LONG);
+			require(root, "Materials", Tag.TAG_LIST);
 			require(root, "MaterialLedgers", Tag.TAG_LIST);
 			materials = decodeMaterials(root.getListOrEmpty("Materials"));
-			totalMassUnits = root.getLongOr("MassUnits", 0L);
 			materialLedgers = decodeMaterialLedgers(root.getListOrEmpty("MaterialLedgers"));
 		}
 		String registryFingerprint = "";
@@ -179,7 +177,7 @@ final class RegionStateCodec {
 		long[] markerMassUnits = root.getLongArray("MassUnits").orElseThrow();
 		int[] materialPaletteIndex = new int[0];
 		if (identity.layout().hasMaterials()) {
-			require(root, "MassUnits", Tag.TAG_LONG_ARRAY); require(root, "MaterialPaletteIndices", Tag.TAG_INT_ARRAY);
+			require(root, "MaterialPaletteIndices", Tag.TAG_INT_ARRAY);
 			materialPaletteIndex = root.getIntArray("MaterialPaletteIndices").orElseThrow();
 		}
 		int[] chemicalMixtureIndex = new int[0]; byte[] indicator = new byte[0];

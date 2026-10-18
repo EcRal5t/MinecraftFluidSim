@@ -39,6 +39,7 @@ public final class Mass {
 	}
 
 	public static long portion(long total, SignedDyadic top, SignedDyadic bottom) {
+		if (top.signum() < 0 || bottom.signum() <= 0 || top.compareTo(bottom) > 0) throw new IllegalArgumentException("Invalid mass weight");
 		BigInteger n = BigInteger.valueOf(total).multiply(top.significand()), d = bottom.significand();
 		int shift = top.exponent() - bottom.exponent();
 		if (shift >= 0) n = n.shiftLeft(shift); else d = d.shiftLeft(-shift);

@@ -40,8 +40,7 @@ final class ChemicalReactionAllocation {
 			}
 			replacements[i] = new ChemicalMixtureRecord(distributed[i].keySet().stream().mapToInt(Integer::intValue).toArray(),
 					distributed[i].values().stream().mapToLong(Long::longValue).toArray(), store.record(marker).massResidualUnits());
-			double kilograms = replacements[i].massKilograms(registry);
-			if (!(Double.isFinite(kilograms) && kilograms > 0.0)) {
+			if (replacements[i].massUnits(registry) <= 0L) {
 				throw new ChemicalReactionEngine.BudgetExceededException("Reaction allocation requires positive carrier mass");
 			}
 			ExactRational speciesDelta = replacements[i].exactSpeciesMassKilograms(registry)
@@ -51,8 +50,8 @@ final class ChemicalReactionAllocation {
 			} catch (IllegalArgumentException | ArithmeticException unavailable) {
 				throw new ChemicalReactionEngine.BudgetExceededException("Reaction mass update exceeds representation precision");
 			}
-			if (!(Double.isFinite(masses[i]) && masses[i] > 0.0)) {
-				throw new ChemicalReactionEngine.BudgetExceededException("Reaction allocation requires positive solver mass");
+			if (masses[i] <= 0L) {
+				throw new ChemicalReactionEngine.BudgetExceededException("Reaction allocation requires positive carrier mass");
 			}
 			previousMass = Math.addExact(previousMass, markerMassUnits[marker]);
 			candidateMass = Math.addExact(candidateMass, masses[i]);

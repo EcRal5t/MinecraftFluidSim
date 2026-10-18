@@ -395,7 +395,7 @@ final class MinecraftContainerTransferOperations {
 					throw new IllegalStateException("完整材料组分注入未结算其全部质量：" + source.materialId());
 				}
 			} else {
-				if (!(Double.isFinite(remainingMass) && remainingMass > 0.0)) {
+				if (remainingMass <= 0L) {
 					throw new IllegalStateException("材料组分余量没有正有限质量：" + source.materialId());
 				}
 				remaining.add(new FluidMixture.Component(source.materialId(), remainingNanos, remainingMass));

@@ -350,44 +350,28 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 	}
 
 	static void condensedTransfersRequireActualMassChange() {
-		for (int batchMass : new int[] {1, 200, 256}) {
-			var liquid = FluidMaterial.withSurfaceTension("test:mass/water", 1.0E20F, "test:mass/miscible", 0, 90);
+		for (long batchUnits : new long[]{1L, 200L, 256L}) {
+			var liquid = FluidMaterial.withSurfaceTension("test:mass/water", 6.4E9F, "test:mass/miscible", 0, 90);
 			var liquids = new FluidMaterialRegistry(List.of(liquid));
 			var segments = List.of(new ThermalMaterialDefinition.CaloricSegment(150, 800, 1));
 			var water = new ThermalMaterialDefinition("test:mass/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
 					liquid.id(), 300, 0, 0, segments);
 			var ice = new ThermalMaterialDefinition("test:mass/ice", ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID,
-					"test:mass/ice", 300, -1.0E20 / batchMass, 0, segments);
+					"test:mass/ice", 300, -1.0E9 / mmm.units.Mass.kilograms(batchUnits), 0, segments);
 			var transition = new ThermalPhaseTransition("test:mass/freeze", ice.id(), water.id(), 300, 1, 1,
-					ExactRational.of(batchMass), ThermalPhaseTransition.InterfaceRequirement.NONE, 10000, 3000000);
+					ExactRational.of(batchUnits).divide(mmm.units.Mass.UNITS_PER_KILOGRAM),
+					ThermalPhaseTransition.InterfaceRequirement.NONE, 10000, 3000000);
 			var domain = new FluidDomain(3, 3, 3,
-					new FluidSolverConfig(.5F, 1.0E20F, 0, .05F, 100, 1.0E-5F, .45F, .002F, 0), 64);
+					new FluidSolverConfig(.5F, 6.4E9F, 0, .05F, 100, 1.0E-5F, .45F, .002F, 0), 64);
 			restorePhaseTestCarriers(domain, liquids, new float[]{.125F}, new int[1]);
 			domain.bindThermal(new ThermalRegistry(thermalMaterials(List.of(water, ice)), List.of(), List.of(transition), "", ""), domain.materialRegistry, 200);
-			var before = domain.captureAuthoritativeState();
-			var revision = domain.thermalState.thermalRevision();
-			var energy = domain.exactInternalEnergy();
-			double sourceMass = domain.unitScale.kilograms(domain.totalMass());
-			double sourceSolverMass = domain.totalMass();
-			require(Math.ulp(sourceMass) == 256, "mass-quantization fixture did not reach the intended actual kg spacing");
+			long sourceMass = domain.totalMassUnits();
 			var stats = domain.stepInertPhaseChangeOnly(1);
-			if (batchMass < 256) {
-				var after = domain.captureAuthoritativeState();
-				require(stats.operations() == 0 && domain.totalCoherentSolidVolumeSvq() == 0
-						&& domain.totalMass() == sourceSolverMass
-						&& domain.totalVolumeExact() == .125 && domain.exactInternalEnergy().equals(energy)
-						&& domain.thermalState.thermalRevision().equals(revision)
-						&& after.thermal().audit().equals(before.thermal().audit())
-						&& java.util.Arrays.equals(after.thermal().copyInternalEnergy(), before.thermal().copyInternalEnergy()),
-						"unrepresentable freeze transferred requested kg without debiting the actual source: " + batchMass);
-			} else {
-				require(stats.operations() == 1 && domain.totalCoherentMass() == 256
-						&& SignedDyadic.of(domain.unitScale.kilograms(domain.totalMass()))
-								.add(SignedDyadic.of(domain.totalCoherentMass())).equals(SignedDyadic.of(sourceMass))
-						&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
-						"representable transferred kg must retain the normal phase path");
-				FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
-			}
+			require(stats.operations() == 1 && domain.thermalState.coherentPhases().totalMassUnits() == batchUnits
+					&& domain.totalMassUnits() == sourceMass - batchUnits
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+					"fixed-point phase transfer must debit every complete mass count: " + batchUnits);
+			FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		}
 	}
 
@@ -555,7 +539,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		var heatBath = new ThermalMaterialDefinition("test:thermal/phase_carriers_other",
 				ThermalMaterialDefinition.CarrierKind.LIQUID, other.id(), 300.0, 100.0, 0.0, segments);
 		var transition = new ThermalPhaseTransition("test:phase/regional_carriers", solid.id(), liquid.id(),
-				300.0, 128L, 128L, ExactRational.parse("1/1048576"),
+				300.0, 128L, 128L, ExactRational.parse("0.0000009537"),
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 0.0, 200_000.0);
 		var registry = new ThermalRegistry(thermalMaterials(List.of(solid, liquid, heatBath)), List.of(),
 				List.of(transition), "", "");
@@ -570,14 +554,14 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		domain.bindThermal(registry, domain.materialRegistry, 295.0);
 		SignedDyadic before = domain.exactInternalEnergy();
 		ThermalAuditLedger audit = domain.thermalAudit();
-		double volume = domain.totalVolumeExact(), mass = domain.totalMass();
+		double volume = domain.totalVolumeExact();
+		long mass = domain.totalMassUnits();
 		FluidDomain.ThermalPhaseStats frozen = domain.stepInertPhaseChangeOnly(1);
 		require(frozen.operations() == 1 && frozen.signedBatches() == 1L && domain.particleCount() == 256
 				&& domain.thermalState.coherentPhases().groupCount() == 1
 				&& domain.totalCoherentSolidVolumeSvq() == 128L
 				&& domain.totalVolumeExact() + SolidVolume.toCellVolume(128L) == volume
-				&& domain.unitScale.kilograms(domain.totalMass()) + domain.totalCoherentMass()
-						== domain.unitScale.kilograms(mass)
+				&& Math.addExact(domain.totalMassUnits(), domain.thermalState.coherentPhases().totalMassUnits()) == mass
 				&& domain.exactInternalEnergy().subtract(before).equals(
 						domain.thermalAudit().roundoffResidual().subtract(audit.roundoffResidual()))
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
@@ -628,26 +612,26 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 					ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
 					300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1_000, 1)));
 			var solid = new ThermalMaterialDefinition(phase, ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID,
-					"test:solid", 300, 1e18, 0, water.caloricSegments());
+					"test:solid", 300, 0, 0, water.caloricSegments());
 			var offsets = List.of(new ThermalSpeciesOffset("test:offset/a", "test:a", phase, ExactRational.ZERO),
 					new ThermalSpeciesOffset("test:offset/b", "test:b", phase, ExactRational.ZERO));
 			var registry = new ThermalRegistry(thermalMaterials(List.of(water, solid)), offsets, List.of(), chemistry.fingerprint(), "");
 			var domain = new FluidDomain(3, 3, 3, config, 216);
 			domain.bindMaterialRegistry(liquids); domain.bindChemistry(chemistry);
 			domain.bindThermal(registry, liquids, 300);
-			double firstMass = 0.24999999999999914, secondMass = 1.2999999999999952;
+			double firstMass = 1.0, secondMass = 1.0;
 			CoherentPhaseStore.Composition first = compositionCase == 0 ? null : new CoherentPhaseStore.Composition(
 					List.of(new CoherentPhaseStore.Component("test:a", 1)), mmm.units.Mass.fromKilograms(firstMass - 1e-9));
 			CoherentPhaseStore.Composition second = compositionCase == 0 ? null : new CoherentPhaseStore.Composition(
 					List.of(new CoherentPhaseStore.Component(compositionCase == 1 ? "test:a" : "test:b", 1)),
 					mmm.units.Mass.fromKilograms(secondMass - 1e-9));
-			domain.addCoherentPhaseExternal(1, 1, 1, phase, 3, mmm.units.Mass.fromKilograms(firstMass), first, 2.4999999999999907e17);
+			domain.addCoherentPhaseExternal(1, 1, 1, phase, 3, mmm.units.Mass.fromKilograms(firstMass), first, 1e308);
 			var before = domain.thermalState.coherentPhases().snapshot();
 			var revision = domain.thermalState.thermalRevision();
 			var audit = domain.thermalAudit();
 			boolean rejected = false;
-			try { domain.addCoherentPhaseExternal(1, 1, 1, phase, 3, mmm.units.Mass.fromKilograms(secondMass), second, 1.299999999999995e18); }
-			catch (ThermalStateFunction.EnergyOutsideValidityException expected) { rejected = true; }
+			try { domain.addCoherentPhaseExternal(1, 1, 1, phase, 3, mmm.units.Mass.fromKilograms(secondMass), second, 1e308); }
+			catch (IllegalArgumentException expected) { rejected = true; }
 			require(rejected && domain.thermalState.coherentPhases().snapshot().equals(before)
 					&& domain.thermalState.thermalRevision().equals(revision) && domain.thermalAudit().equals(audit)
 					&& domain.exactInternalEnergy().equals(audit.expectedInventory()),
@@ -770,7 +754,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		var ids = new java.util.ArrayList<String>();
 		for (int i = 0; i < 17; i++) {
 			String id = "test:s" + i; ids.add(id);
-			species.add(new mmm.chemistry.ChemicalSpecies(id, Map.of("A", 1), 0, ExactRational.ONE, 0));
+			species.add(new mmm.chemistry.ChemicalSpecies(id, Map.of("A", 1), 0, ExactRational.parse("0.001"), 0));
 		}
 		var chemistry = new ChemicalRegistry(species, List.of(new mmm.chemistry.ChemicalPhaseDefinition(
 				"test:phase", "mmm:water", ids, Map.of(ids.getFirst(), ExactRational.ONE), false)),

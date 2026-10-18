@@ -8,8 +8,8 @@ import mmm.units.SignedDyadic;
  * Plans the domain-wide inventory lifecycle: the granular active/deposit clear (jointly
  * listing the removed SVQ, mass, species and the thermal U that will sink) and the joint
  * operator clear across condensed liquid, coherent phases, granular inventory and the
- * retained-gas topology. Plans bind the granular structural revision and raw-bit SVQ/mass/U
- * totals; the domain commits re-verify them before any inventory or audit mutation. The
+ * retained-gas topology. Plans bind the granular structural revision and integer SVQ/mass totals and exact energy
+ * sums; the domain commits re-verify them before any inventory or audit mutation. The
  * thermal side is bound by its owner generation and exact dyadic inventory.
  */
 final class DomainInventoryLifecyclePlanner {
@@ -31,7 +31,7 @@ final class DomainInventoryLifecyclePlanner {
 		if (domain.granularState == null || !domain.hasGranularInventory()) {
 			return new FluidDomain.GranularClearPlan(GranularAuditLedger.EMPTY,
 					domain.granularState == null ? GranularAuditLedger.EMPTY : domain.granularState.escapedSink,
-					0L, Double.doubleToRawLongBits(0.0), 0, 0,
+					0L, 0L, 0, 0,
 					SignedDyadic.ZERO, granularRevision);
 		}
 		// Export validates unique runtime composition ownership before either inventory or audit mutates.

@@ -40,8 +40,11 @@ public final class GasInventory {
 			}
 		}
 		this.components = List.copyOf(canonical.values());
-		long total = 0L;
-		for (GasComponentAmount component : this.components) total = Math.addExact(total, component.standardVolumeNanos());
+		long total = 0L, mass = 0L;
+		for (GasComponentAmount component : this.components) {
+			total = Math.addExact(total, component.standardVolumeNanos());
+			mass = Math.addExact(mass, component.massUnits());
+		}
 		this.standardVolumeNanos = total;
 	}
 
@@ -232,8 +235,6 @@ public final class GasInventory {
 		if (species.size() > GasLimits.MAX_SPECIES_PER_COMPONENT)
 			throw new RepresentationException("Gas component exceeds its species slots");
 		long mass = Math.addExact(first.massUnits(), second.massUnits()), residual = Math.addExact(first.massResidualUnits(), second.massResidualUnits());
-		if (!Double.isFinite(mass) || !Double.isFinite(residual))
-			throw new RepresentationException("Gas component mass/residual exceeds its finite representation");
 		return new GasComponentAmount(first.componentId(),
 				addColumn(first.standardVolumeNanos(), second.standardVolumeNanos(), "component standard volume"), mass,
 				species.entrySet().stream().map(entry -> new GasComponentAmount.SpeciesAmount(entry.getKey(), entry.getValue())).toList(),

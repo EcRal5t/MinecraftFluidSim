@@ -3,11 +3,9 @@ package mmm.fluid;
 import java.util.Arrays;
 
 /**
- * Unique owner of the authoritative liquid marker columns: position, velocity, volume, solver
- * mass, material handle and pressure-phase label, plus the live count and array capacity.
+ * Unique owner of the authoritative liquid marker columns: position, velocity, normalized volume, physical mass counts, material handle and pressure-phase label, plus the live count and array capacity.
  * Growth, wholesale count transitions and main-column swap-remove happen only here. Chemistry
- * and thermal side columns are not owned by this store; the domain coordinates them until the
- * carrier mutation coordinator exists. S12 moves this class to the solver domain package.
+ * and thermal side columns are coordinated by the carrier mutation coordinator.
  */
 final class LiquidParticleStore {
 	private final int maximumParticleCount;

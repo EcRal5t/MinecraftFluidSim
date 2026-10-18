@@ -170,9 +170,6 @@ final class PhaseChangeStageSupport {
 			throw new PhaseCandidateUnavailableException("Phase transfer mass counts do not close");
 	}
 
-	static double massTolerance(double mass) {
-		return Math.max(1.0E-12, Math.ulp(mass) * 32.0);
-	}
 
 	static float adjustedMarkerVolume(float volume, long signedSvq, String operation) {
 		if (!(Float.isFinite(volume) && volume > 0))
@@ -239,8 +236,7 @@ final class PhaseChangeStageSupport {
 				combined.merge(entry.getKey(), entry.getValue(), Math::addExact);
 			}
 			long residual = Math.addExact(massResidualUnits, other.massResidualUnits);
-			if (!Double.isFinite(residual)) throw new ArithmeticException("Condensed phase residual overflow");
-			return combined.isEmpty() && residual == 0.0 ? EMPTY : new PhaseComposition(combined, residual);
+			return combined.isEmpty() && residual == 0L ? EMPTY : new PhaseComposition(combined, residual);
 		}
 
 		PhaseComposition minus(PhaseComposition other) {
@@ -254,7 +250,6 @@ final class PhaseChangeStageSupport {
 				else remaining.put(entry.getKey(), result);
 			}
 			long residual = Math.subtractExact(massResidualUnits, other.massResidualUnits);
-			if (!Double.isFinite(residual)) throw new ArithmeticException("Condensed phase residual overflow");
 			if (remaining.isEmpty()) {
 				if (residual != 0) {
 					throw new FluidDomain.ThermalPhaseBlockedException(
@@ -311,7 +306,7 @@ final class PhaseChangeStageSupport {
 				amounts.put(amount.speciesId(), amount.amountQuanta());
 			}
 			long residual = component.massResidualUnits();
-			return amounts.isEmpty() && residual == 0.0 ? EMPTY : new PhaseComposition(amounts, residual);
+			return amounts.isEmpty() && residual == 0L ? EMPTY : new PhaseComposition(amounts, residual);
 		}
 
 		ExactRational exactSpeciesMass(ChemicalRegistry registry) {

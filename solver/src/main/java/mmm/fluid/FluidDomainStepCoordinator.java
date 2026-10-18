@@ -471,21 +471,21 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 			}
 
 			@Override public void requireThermalRelaxation(
-					int fromCell, int toCell, int material, int composition, long movedSvq, long sourceTotalSvq
+					int fromCell, int toCell, int material, int composition, long movedMassUnits, long sourceMassUnits
 			) {
 				if (thermalState == null) return;
 				thermalState.requireDepositMove(
 						new GranularEnergyColumn.DepositKey(fromCell, material, composition),
-						new GranularEnergyColumn.DepositKey(toCell, material, composition), movedSvq, sourceTotalSvq);
+						new GranularEnergyColumn.DepositKey(toCell, material, composition), movedMassUnits, sourceMassUnits);
 			}
 
 			@Override public void commitThermalRelaxation(
-					int fromCell, int toCell, int material, int composition, long movedSvq, long sourceTotalSvq
+					int fromCell, int toCell, int material, int composition, long movedMassUnits, long sourceMassUnits
 			) {
 				if (thermalState == null) return;
 				thermalState.commitDepositMove(
 						new GranularEnergyColumn.DepositKey(fromCell, material, composition),
-						new GranularEnergyColumn.DepositKey(toCell, material, composition), movedSvq, sourceTotalSvq);
+						new GranularEnergyColumn.DepositKey(toCell, material, composition), movedMassUnits, sourceMassUnits);
 			}
 
 			@Override public int wakeGeometryWork() {

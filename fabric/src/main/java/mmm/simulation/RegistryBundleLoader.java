@@ -2,6 +2,7 @@ package mmm.simulation;
 
 import mmm.chemistry.ChemicalDataPackLoader;
 import mmm.chemistry.ChemicalLimits;
+import mmm.chemistry.ExactRational;
 import mmm.chemistry.ChemicalRegistry;
 import mmm.fluid.BuiltinFluidMaterials;
 import mmm.fluid.MaterialRegistry;
@@ -125,15 +126,15 @@ public final class RegistryBundleLoader {
 			double mappedGasKilograms = component.standardDensityKgPerCubicMeter()
 					* AirNetwork.cubicMeters(pair.gasStandardVolumeNanosPerBatch());
 			if (mmm.units.Mass.fromKilograms(mappedGasKilograms)
-					!= mmm.units.Mass.fromKilograms(pair.gasKilogramsPerBatch())) {
+					!= pair.gasMassUnitsPerBatch()) {
 				throw new IllegalArgumentException("Gas/liquid pair " + pair.id()
 						+ " gas nanos and kilograms do not close at the gas standard state");
 			}
-			double mappedLiquidKilograms = chemicalRegistry.species(
+			ExactRational mappedLiquidKilograms = chemicalRegistry.species(
 					chemicalRegistry.speciesHandle(pair.speciesId())).molarMassKgPerMol()
-					.multiply(pair.liquidQuantaPerBatch()).divide(ChemicalLimits.QUANTA_PER_MOL).toDouble();
-			if (mmm.units.Mass.fromKilograms(mappedLiquidKilograms)
-					!= mmm.units.Mass.fromKilograms(pair.liquidKilogramsPerBatch())) {
+					.multiply(pair.liquidQuantaPerBatch()).divide(ChemicalLimits.QUANTA_PER_MOL);
+			if (mmm.units.Mass.exactUnits(mappedLiquidKilograms.numerator(), mappedLiquidKilograms.denominator())
+					!= pair.liquidMassUnitsPerBatch()) {
 				throw new IllegalArgumentException("Gas/liquid pair " + pair.id()
 						+ " liquid quanta and kilograms do not close against the chemical species mass");
 			}

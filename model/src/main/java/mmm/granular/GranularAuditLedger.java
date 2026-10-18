@@ -26,7 +26,7 @@ public record GranularAuditLedger(List<Entry> entries) {
 			if (!materials.add(entry.materialId())) throw new IllegalArgumentException("Duplicate granular audit material");
 			totalSvq = Math.addExact(totalSvq, entry.solidVolumeSvq()); totalMass = Math.addExact(totalMass, entry.massUnits());
 		}
-		if (!canonical.isEmpty() && !(Double.isFinite(totalMass) && totalMass > 0.0)) {
+		if (!canonical.isEmpty() && totalMass <= 0L) {
 			throw new IllegalArgumentException("Granular audit total mass overflow");
 		}
 		entries = List.copyOf(canonical);
@@ -48,7 +48,7 @@ public record GranularAuditLedger(List<Entry> entries) {
 			}
 			if (group.composition() != null && (chemistry == null
 					|| !registry.chemicalRegistryFingerprint().equals(chemistry.fingerprint())
-					|| !massClose(group.composition().massUnits(chemistry), group.massUnits()))) {
+					|| !sameMass(group.composition().massUnits(chemistry), group.massUnits()))) {
 				throw new IllegalArgumentException("Reactive granular audit identity/mass mismatch");
 			}
 			result.computeIfAbsent(group.materialId(), ignored -> new MutableEntry()).add(group, chemistry);
@@ -153,7 +153,7 @@ public record GranularAuditLedger(List<Entry> entries) {
 				throw new IllegalArgumentException("Reactive granular audit requires authoritative chemistry");
 			}
 			SolidCompositionRecord composition = entry.toComposition(chemistry);
-			if (!massClose(composition.massUnits(chemistry), entry.massUnits())) {
+			if (!sameMass(composition.massUnits(chemistry), entry.massUnits())) {
 				throw new IllegalArgumentException("Granular audit composition/mass mismatch");
 			}
 		}
@@ -176,8 +176,7 @@ public record GranularAuditLedger(List<Entry> entries) {
 			Set<String> species = new HashSet<>(); for (SpeciesAmount amount : canonical) if (!species.add(amount.speciesId())) {
 				throw new IllegalArgumentException("Duplicate granular audit species");
 			}
-			if (canonical.isEmpty() && massResidualUnits != 0L
-					|| !canonical.isEmpty() && !Double.isFinite(mmm.units.Mass.kilograms(massResidualUnits))) {
+			if (canonical.isEmpty() && massResidualUnits != 0L) {
 				throw new IllegalArgumentException("Invalid granular audit residual");
 			}
 			composition = List.copyOf(canonical);
@@ -220,7 +219,7 @@ public record GranularAuditLedger(List<Entry> entries) {
 			add(group.solidVolumeSvq(), group.massUnits(), group.composition(), chemistry);
 		}
 		void add(long addedSvq, long addedMass, SolidCompositionRecord composition, ChemicalRegistry chemistry) {
-			if (addedSvq <= 0L || !(Double.isFinite(addedMass) && addedMass > 0.0)) {
+			if (addedSvq <= 0L || addedMass <= 0L) {
 				throw new IllegalArgumentException("Granular audit inventory portion is invalid");
 			}
 			requireKind(composition != null);
@@ -229,7 +228,7 @@ public record GranularAuditLedger(List<Entry> entries) {
 				if (species != null) throw new IllegalArgumentException("Mixed inert/reactive granular audit material");
 				return;
 			}
-			if (chemistry == null || !massClose(composition.massUnits(chemistry), addedMass)) {
+			if (chemistry == null || !sameMass(composition.massUnits(chemistry), addedMass)) {
 				throw new IllegalArgumentException("Reactive granular audit inventory mass mismatch");
 			}
 			if (species == null) species = new TreeMap<>();
@@ -266,5 +265,5 @@ public record GranularAuditLedger(List<Entry> entries) {
 		}
 	}
 
-	private static boolean massClose(long left, long right) { return left == right; }
+	private static boolean sameMass(long left, long right) { return left == right; }
 }

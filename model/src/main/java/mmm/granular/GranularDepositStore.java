@@ -149,7 +149,6 @@ public final class GranularDepositStore {
 				|| groupCount == materialHandle.length)) return false;
 		if (existing >= 0) {
 			long newMass = Math.addExact(massUnits[existing], portion.massUnits());
-			if (!Double.isFinite(newMass)) throw new ArithmeticException("Deposit massUnits overflow");
 			solidVolumeSvq[existing] = Math.addExact(solidVolumeSvq[existing], portion.solidVolumeSvq());
 			massUnits[existing] = newMass;
 		} else {

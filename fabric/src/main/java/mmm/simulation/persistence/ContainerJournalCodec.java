@@ -202,12 +202,11 @@ if (!mmm.transfer.ContainerFluidLedger.isPartialBucket(nanos)
 throw new IOException(prefix + " partial bucket nanovolume is invalid: " + nanos);
 }
 } else if (kind == ContainerTransferJournal.ItemKind.MATERIAL_BUCKET) {
-double mass = mmm.units.Mass.kilograms(massUnits);
 if (materialId == null || nanos <= 0L
 || nanos > mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK
 || solidVolumeSvq != -1L
 || profileFingerprint == null || !profileFingerprint.matches("[0-9a-f]{64}")
-|| !(Double.isFinite(mass) && mass > 0.0)) {
+|| massUnits <= 0L) {
 throw new IOException(prefix + " material bucket fingerprint is invalid");
 }
 try {

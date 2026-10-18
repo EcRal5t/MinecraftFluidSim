@@ -390,7 +390,7 @@ final class FlipParticleReseeder {
 			float volume = particleVolume[particle], halfVolume = volume * .5F;
 			long mass = particleMass[particle], halfMass = mass / 2;
 			if (!(halfVolume > 0 && Float.isFinite(halfVolume) && halfVolume == volume - halfVolume
-					&& halfMass > 0 && Double.isFinite(halfMass) && halfMass == mass - halfMass)) continue;
+					&& halfMass > 0 && halfMass == mass - halfMass)) continue;
 			if (particleVolume[particle] > bestVolume) {
 				bestVolume = particleVolume[particle];
 				best = particle;

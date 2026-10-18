@@ -53,13 +53,15 @@ public final class ThermalRegistryCodec {
 		catch (RuntimeException invalid) { throw new IOException("Unreadable thermal registry snapshot " + path, invalid); }
 		requireAll(root, Map.ofEntries(
 				Map.entry("Schema", Tag.TAG_STRING), Map.entry("UnitSystem", Tag.TAG_STRING),
+				Map.entry("MassEncoding", Tag.TAG_STRING),
 				Map.entry("Fingerprint", Tag.TAG_STRING), Map.entry("Canonical", Tag.TAG_BYTE_ARRAY),
 				Map.entry("ChemicalFingerprint", Tag.TAG_STRING), Map.entry("GranularFingerprint", Tag.TAG_STRING),
 				Map.entry("GasFingerprint", Tag.TAG_STRING),
 				Map.entry("Materials", Tag.TAG_LIST), Map.entry("SpeciesOffsets", Tag.TAG_LIST),
 				Map.entry("Transitions", Tag.TAG_LIST), Map.entry("Boundaries", Tag.TAG_LIST),
 				Map.entry("GasLiquidPairs", Tag.TAG_LIST), Map.entry("FiniteDevices", Tag.TAG_LIST)));
-		if (!root.getStringOr("Schema", "").equals(SCHEMA)
+		if (!mmm.units.Mass.ENCODING.equals(root.getStringOr("MassEncoding", ""))
+				|| !root.getStringOr("Schema", "").equals(SCHEMA)
 				|| !ThermalRegistry.UNIT_SYSTEM_ID.equals(root.getStringOr("UnitSystem", ""))) {
 			throw new IOException("Unsupported thermal registry schema or unit system");
 		}
@@ -90,7 +92,8 @@ public final class ThermalRegistryCodec {
 
 	private static CompoundTag encode(ThermalRegistry registry) {
 		CompoundTag root = new CompoundTag();
-		root.putString("Schema", SCHEMA); root.putString("UnitSystem", ThermalRegistry.UNIT_SYSTEM_ID);
+		root.putString("Schema", SCHEMA);
+		root.putString("MassEncoding", mmm.units.Mass.ENCODING); root.putString("UnitSystem", ThermalRegistry.UNIT_SYSTEM_ID);
 		root.putString("Fingerprint", registry.fingerprint()); root.putByteArray("Canonical", registry.canonicalBytes());
 		root.putString("ChemicalFingerprint", registry.chemicalRegistryFingerprint());
 		root.putString("GranularFingerprint", registry.granularRegistryFingerprint());
@@ -151,10 +154,10 @@ public final class ThermalRegistryCodec {
 			tag.putString("LiquidPhase", pair.liquidPhaseId());
 			tag.putString("Species", pair.speciesId());
 			tag.putLong("GasNanos", pair.gasStandardVolumeNanosPerBatch());
-			tag.putLong("GasKilogramsBits", bits(pair.gasKilogramsPerBatch()));
+			tag.putLong("GasMassUnitsPerBatch", pair.gasMassUnitsPerBatch());
 			tag.putLong("LiquidQuanta", pair.liquidQuantaPerBatch());
-			tag.putLong("LiquidKilogramsBits", bits(pair.liquidKilogramsPerBatch()));
-			tag.putLong("LiquidResidualBits", bits(pair.liquidResidualKilogramsPerBatch()));
+			tag.putLong("LiquidMassUnitsPerBatch", pair.liquidMassUnitsPerBatch());
+			tag.putLong("LiquidResidualMassUnitsPerBatch", pair.liquidResidualMassUnitsPerBatch());
 			tag.putString("Moles", pair.molesPerBatch().canonical());
 			tag.putLong("MinimumPressureBits", bits(pair.minimumPressurePa()));
 			tag.putLong("MaximumPressureBits", bits(pair.maximumPressurePa()));
@@ -180,7 +183,7 @@ public final class ThermalRegistryCodec {
 			CompoundTag tag = new CompoundTag();
 			tag.putString("Id", device.id());
 			tag.putString("ThermalMaterial", device.thermalMaterialId());
-			tag.putLong("BodyMassUnits", bits(device.bodyMassKilograms()));
+			tag.putLong("BodyMassUnits", device.bodyMassUnits());
 			tag.putLong("InitialTemperatureBits", bits(device.initialTemperatureK()));
 			ListTag ports = new ListTag();
 			for (FiniteThermalDeviceDefinition.Port port : device.ports()) {
@@ -294,9 +297,9 @@ public final class ThermalRegistryCodec {
 			requireAll(tag, Map.ofEntries(
 					Map.entry("Id", Tag.TAG_STRING), Map.entry("GasComponent", Tag.TAG_STRING),
 					Map.entry("LiquidPhase", Tag.TAG_STRING), Map.entry("Species", Tag.TAG_STRING),
-					Map.entry("GasNanos", Tag.TAG_LONG), Map.entry("GasKilogramsBits", Tag.TAG_LONG),
-					Map.entry("LiquidQuanta", Tag.TAG_LONG), Map.entry("LiquidKilogramsBits", Tag.TAG_LONG),
-					Map.entry("LiquidResidualBits", Tag.TAG_LONG), Map.entry("Moles", Tag.TAG_STRING),
+					Map.entry("GasNanos", Tag.TAG_LONG), Map.entry("GasMassUnitsPerBatch", Tag.TAG_LONG),
+					Map.entry("LiquidQuanta", Tag.TAG_LONG), Map.entry("LiquidMassUnitsPerBatch", Tag.TAG_LONG),
+					Map.entry("LiquidResidualMassUnitsPerBatch", Tag.TAG_LONG), Map.entry("Moles", Tag.TAG_STRING),
 					Map.entry("MinimumPressureBits", Tag.TAG_LONG), Map.entry("MaximumPressureBits", Tag.TAG_LONG),
 					Map.entry("MaximumConcentrationBits", Tag.TAG_LONG),
 					Map.entry("LiquidDiffusionBits", Tag.TAG_LONG),
@@ -318,8 +321,8 @@ public final class ThermalRegistryCodec {
 			result.add(new GasLiquidSpeciesPair(tag.getStringOr("Id", ""),
 					tag.getStringOr("GasComponent", ""), tag.getStringOr("LiquidPhase", ""),
 					tag.getStringOr("Species", ""), tag.getLongOr("GasNanos", 0L),
-					value(tag, "GasKilogramsBits"), tag.getLongOr("LiquidQuanta", 0L),
-					value(tag, "LiquidKilogramsBits"), value(tag, "LiquidResidualBits"),
+					tag.getLongOr("GasMassUnitsPerBatch", 0L), tag.getLongOr("LiquidQuanta", 0L),
+					tag.getLongOr("LiquidMassUnitsPerBatch", 0L), tag.getLongOr("LiquidResidualMassUnitsPerBatch", 0L),
 					ExactRational.parse(tag.getStringOr("Moles", "")), segments,
 					value(tag, "MinimumPressureBits"), value(tag, "MaximumPressureBits"),
 					value(tag, "MaximumConcentrationBits"), value(tag, "LiquidDiffusionBits"),
@@ -354,7 +357,7 @@ public final class ThermalRegistryCodec {
 						value(value, "WallThicknessBits"), value(value, "FluidFilmThicknessBits")));
 			}
 			result.add(new FiniteThermalDeviceDefinition(tag.getStringOr("Id", ""),
-					tag.getStringOr("ThermalMaterial", ""), value(tag, "BodyMassUnits"),
+					tag.getStringOr("ThermalMaterial", ""), tag.getLongOr("BodyMassUnits", 0L),
 					value(tag, "InitialTemperatureBits"), ports));
 		}
 		return List.copyOf(result);

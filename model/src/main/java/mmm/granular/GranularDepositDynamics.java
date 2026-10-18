@@ -55,10 +55,10 @@ public final class GranularDepositDynamics {
 		default boolean planRelaxation(int fromCell, int toCell, long solidSvq) { return true; }
 		default void cancelRelaxation(int fromCell, int toCell, long solidSvq) { }
 		default void requireThermalRelaxation(
-				int fromCell, int toCell, int material, int composition, long movedSvq, long sourceTotalSvq
+				int fromCell, int toCell, int material, int composition, long movedMassUnits, long sourceMassUnits
 		) { }
 		default void commitThermalRelaxation(
-				int fromCell, int toCell, int material, int composition, long movedSvq, long sourceTotalSvq
+				int fromCell, int toCell, int material, int composition, long movedMassUnits, long sourceMassUnits
 		) { }
 		/** Upper bound for building and querying the current active-sphere release index. */
 		default int wakeGeometryWork() { return 0; }
@@ -436,11 +436,11 @@ public final class GranularDepositDynamics {
 			if (!admission.allows(receiver, candidateBulk, -1)) return false;
 			if (!environment.planRelaxation(surfaceCell, receiver, requestedSkeleton)) return false;
 			environment.requireThermalRelaxation(surfaceCell, receiver, exposed.materialHandle(),
-					exposed.solidCompositionHandle(), requestedSkeleton, exposed.solidVolumeSvq());
+					exposed.solidCompositionHandle(), moved.massUnits(), exposed.massUnits());
 			if (deposits.tryMove(surfaceCell, receiver, exposed.materialHandle(),
 					exposed.solidCompositionHandle(), requestedSkeleton, open)) {
 				environment.commitThermalRelaxation(surfaceCell, receiver, exposed.materialHandle(),
-						exposed.solidCompositionHandle(), requestedSkeleton, exposed.solidVolumeSvq());
+						exposed.solidCompositionHandle(), moved.massUnits(), exposed.massUnits());
 				environment.onSolidChanged(surfaceCell);
 				environment.onSolidChanged(receiver);
 				disturbColumn(receiverX, receiverZ);

@@ -262,8 +262,7 @@ public final class GranularInventory {
 
 		SolidCompositionRecord combined = new SolidCompositionRecord(records.getFirst().copySpeciesHandles(), amounts,
 				residual);
-		double mass = combined.totalMass(compositions.registry());
-		return Double.isFinite(mass) && mass > 0 ? combined : null;
+		return combined.massUnits(compositions.registry()) > 0L ? combined : null;
 	}
 
 	private void requireCompositionMass(SolidCompositionRecord record, long mass) {
@@ -455,7 +454,7 @@ public final class GranularInventory {
 				throw new IllegalStateException("Wake source composition does not match its mechanical mass");
 		}
 		EnergyPlan energy = thermalEnergy == null ? null : thermalEnergy.planDepositWake(cell, materialHandle, compositionHandle,
-				planned.solidVolumeSvq(), source.solidVolumeSvq());
+				planned.massUnits(), source.massUnits());
 		if (thermalEnergy != null && energy == null) return null;
 		return new WakePlan(this, take, source, parcel, composition, energy);
 	}
@@ -507,7 +506,7 @@ public final class GranularInventory {
 	/** Releases every active/deposit composition exactly once and clears both inventory stores. */
 	public ClearStats clear() {
 		requireCanClear();
-		long solidVolumeSvq = totalSolidVolumeSvq(); double mass = totalMass();
+		long solidVolumeSvq = totalSolidVolumeSvq(), massUnits = totalMassUnits();
 		int activeParcels = parcels.count(), depositGroups = deposits.groupCount();
 		while (parcels.count() > 0) {
 			GranularParcelStore.Parcel removed = parcels.removeSwap(parcels.count() - 1);
@@ -520,10 +519,12 @@ public final class GranularInventory {
 			throw new IllegalStateException("Granular composition pool did not clear");
 		}
 		if (thermalEnergy != null) thermalEnergy.clearExternal();
-		return new ClearStats(solidVolumeSvq, mass, activeParcels, depositGroups);
+		return new ClearStats(solidVolumeSvq, massUnits, activeParcels, depositGroups);
 	}
 
-	public record ClearStats(long solidVolumeSvq, double mass, int activeParcels, int depositGroups) { }
+	public record ClearStats(long solidVolumeSvq, long massUnits, int activeParcels, int depositGroups) {
+		public double mass() { return mmm.units.Mass.kilograms(massUnits); }
+	}
 
 	public record CompactionStats(int merges, int evaluations) { }
 	@FunctionalInterface
@@ -536,7 +537,7 @@ public final class GranularInventory {
 		boolean canActiveMerge(int first, int second, GranularParcelStore.Parcel merged,
 		                       SolidCompositionRecord composition);
 		void commitActiveMerge(int first, int second);
-		EnergyPlan planDepositWake(int cell, int material, int composition, long takenSvq, long totalSvq);
+		EnergyPlan planDepositWake(int cell, int material, int composition, long takenMassUnits, long totalMassUnits);
 		void clearExternal();
 	}
 	public record DepositTransfer(int active, int cell, int material, int composition) { }

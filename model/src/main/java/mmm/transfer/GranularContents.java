@@ -18,7 +18,7 @@ import java.util.TreeMap;
 
 /** Canonical dry-container truth. SVQ, raw kilogram mass and optional solid composition remain independent. */
 public record GranularContents(String registryFingerprint, long svqPerCubicMeter, List<Group> groups) {
-	private static final String ENCODING_TAG = "mmm:granular-contents;" + mmm.units.Mass.ENCODING + "";
+	private static final String ENCODING_TAG = "mmm:granular-contents;" + mmm.units.Mass.ENCODING;
 	public static final int MAX_GROUPS = 16;
 	public static final int MAX_TOTAL_COMPOSITION_ENTRIES = 64;
 	public static final int MAX_ENCODED_LENGTH = 64 * 1024;
@@ -41,7 +41,7 @@ public record GranularContents(String registryFingerprint, long svqPerCubicMeter
 			entries = Math.addExact(entries, group.composition().size());
 		}
 		if (totalSvq > SolidVolume.SVQ_PER_CUBIC_METER || entries > MAX_TOTAL_COMPOSITION_ENTRIES
-				|| !(Double.isFinite(totalMass) && totalMass > 0.0)) {
+				|| totalMass <= 0L) {
 			throw new IllegalArgumentException("Granular contents exceed the frozen container budget");
 		}
 		groups = List.copyOf(canonical);
@@ -185,8 +185,7 @@ public record GranularContents(String registryFingerprint, long svqPerCubicMeter
 			Set<String> ids = new HashSet<>(); for (SpeciesAmount amount : canonical) if (!ids.add(amount.speciesId())) {
 				throw new IllegalArgumentException("Duplicate granular composition species");
 			}
-			if (canonical.isEmpty() && massResidualUnits != 0L
-					|| !canonical.isEmpty() && !Double.isFinite(mmm.units.Mass.kilograms(massResidualUnits))) {
+			if (canonical.isEmpty() && massResidualUnits != 0L) {
 				throw new IllegalArgumentException("Invalid granular composition residual");
 			}
 			composition = List.copyOf(canonical);

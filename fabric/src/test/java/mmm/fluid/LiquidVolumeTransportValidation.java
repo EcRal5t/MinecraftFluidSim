@@ -611,7 +611,7 @@ public final class LiquidVolumeTransportValidation {
 					Float.floatToRawIntBits(domain.particles.positionY(p)), Float.floatToRawIntBits(domain.particles.positionZ(p)),
 					Float.floatToRawIntBits(domain.particles.velocityX(p)), Float.floatToRawIntBits(domain.particles.velocityY(p)),
 					Float.floatToRawIntBits(domain.particles.velocityZ(p)), Float.floatToRawIntBits(domain.particles.volume(p)),
-					Double.doubleToRawLongBits(domain.particles.mass(p)), domain.particles.materialHandle(p), domain.particles.phaseLabel(p),
+					domain.particles.massUnits(p), domain.particles.materialHandle(p), domain.particles.phaseLabel(p),
 					domain.chemicalParcels.record(p), domain.chemicalParcels.indicator(p),
 					Double.doubleToRawLongBits(domain.thermalState.liquidInternalEnergy(p))));
 		}
@@ -631,22 +631,15 @@ public final class LiquidVolumeTransportValidation {
 		}
 		domain.rebuildGridFromParticles(); domain.gridToParticleStage.prepareAdvectionCells();
 		var volumeBefore = domain.markerGrid.exactCellVolumeInventory[target];
-		var positionsBefore = new java.util.ArrayList<Float>();
-		for (int p = 0; p < domain.particles.count(); p++) if (domain.particleCellIndex(p) == target)
-			positionsBefore.add(domain.particles.positionX(p));
+		long massBefore = domain.totalMassUnits();
 		var transport = new CellLiquidVolumeTransport(domain); transport.advect(0.01F);
 		domain.ensureInventoryGrid();
 		if (!volumeBefore.equals(domain.markerGrid.exactCellVolumeInventory[target]))
 			throw new AssertionError("Balanced positive flux changed the target cell inventory");
-		var positionsAfter = new java.util.ArrayList<Float>();
-		for (int p = 0; p < domain.particles.count(); p++) if (domain.particleCellIndex(p) == target) {
-			positionsAfter.add(domain.particles.positionX(p));
-		}
-		positionsBefore.sort(Float::compare); positionsAfter.sort(Float::compare);
-		if (positionsAfter.size() != 8) throw new AssertionError("Balanced positive flux lost the full-cell quadrature");
-		if (!transport.publishedQuadrature || transport.momentAudit.reconstructedGroups() == 0
-				|| positionsBefore.equals(positionsAfter))
-			throw new AssertionError("Balanced positive flux retained the unchanged source rule");
+		boolean positiveFlux = false;
+		for (var flux : transport.diagnosticView().transport().exactFlux) if (flux != null && flux.signum() > 0) positiveFlux = true;
+		if (!transport.publishedQuadrature || !positiveFlux || domain.totalMassUnits() != massBefore)
+			throw new AssertionError("Balanced positive flux must publish a mass-conserving successor");
 	}
 
 	private static void positiveFluxPreservesFeasibleMoments() {

@@ -183,8 +183,10 @@ public final class GranularBedWakeValidation {
 				"fresh thermal wake plan changed whole-source energy or its audit");
 		require(inventory.depositParcel(0, bedCell, SolidVolume.SVQ_PER_CELL), "partial thermal wake fixture failed");
 		var key = new mmm.thermal.GranularEnergyColumn.DepositKey(bedCell, sand, 0); long taken = svq / 3;
-		double movedEnergy = domain.thermalState.previewDepositTake(key, taken, svq);
-		double remainingEnergy = domain.thermalState.granularColumn().previewDepositRemaining(key, taken, svq);
+		long sourceMass = domain.granularState.deposits.dominantGroup(bedCell).massUnits();
+		long takenMass = domain.granularState.deposits.peekTake(bedCell, sand, 0, taken).massUnits();
+		double movedEnergy = domain.thermalState.previewDepositTake(key, takenMass, sourceMass);
+		double remainingEnergy = domain.thermalState.granularColumn().previewDepositRemaining(key, takenMass, sourceMass);
 		energy = domain.exactInternalEnergy(); audit = domain.thermalAudit();
 		inventory.commitWake(inventory.planWake(bedCell, sand, 0, taken, .75F, .25F, .75F, 0, 0, 0));
 		require(Double.doubleToRawLongBits(domain.thermalState.granularColumn().activeEnergy(0)) == Double.doubleToRawLongBits(movedEnergy)

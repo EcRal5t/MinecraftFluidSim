@@ -16,6 +16,7 @@ public record SolverUnitScale(double cubicMetersPerNormalizedVolume) {
 		return new SolverUnitScale(h * h * h);
 	}
 
+	/** Creates mass stock from a new normalized-density source; existing stock stays integer. */
 	public long massUnitsForNormalized(double normalizedMass) { return Mass.fromKilograms(kilograms(normalizedMass)); }
 	public double normalizedMass(long massUnits) { return solverMass(Mass.kilograms(massUnits)); }
 
@@ -38,12 +39,6 @@ public record SolverUnitScale(double cubicMetersPerNormalizedVolume) {
 		if (!(Double.isFinite(result) && result >= 0.0)) {
 			throw new IllegalArgumentException("Solver mass is invalid");
 		}
-		return result;
-	}
-
-	public double signedSolverMass(double kilograms) {
-		double result = kilograms / cubicMetersPerNormalizedVolume;
-		if (!Double.isFinite(result)) throw new IllegalArgumentException("Signed solver mass is invalid");
 		return result;
 	}
 

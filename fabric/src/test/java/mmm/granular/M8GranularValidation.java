@@ -761,12 +761,14 @@ public final class M8GranularValidation {
 		require(packingDeposits.groupCount() == 1 && packingDeposits.cellBulkVolumeSvq(0) == 5,
 				"joint packing commit changed its capacity candidate");
 		GranularParcelStore overflowParcels = new GranularParcelStore(registry, 4);
-		overflowParcels.add(parcel(sand, 1, Double.MAX_VALUE)); overflowParcels.add(parcel(sand, 1, Double.MAX_VALUE));
+		overflowParcels.add(parcel(sand, 1, 5e8)); overflowParcels.add(parcel(sand, 1, 5e8));
 		GranularDepositStore overflowDeposits = new GranularDepositStore(registry, 1, 4);
 		GranularInventory overflowInventory = new GranularInventory(overflowParcels, overflowDeposits);
-		require(overflowInventory.planSettlement(new int[] {0, 1}, 0, SolidVolume.SVQ_PER_CELL) == null
-				&& overflowParcels.count() == 2 && overflowDeposits.groupCount() == 0,
-				"combined mechanical mass overflow must preserve every source");
+		boolean overflowRejected = false;
+		try { overflowInventory.planSettlement(new int[] {0, 1}, 0, SolidVolume.SVQ_PER_CELL); }
+		catch (ArithmeticException overflow) { overflowRejected = true; }
+		require(overflowRejected && overflowParcels.count() == 2 && overflowDeposits.groupCount() == 0,
+				"Integer mass overflow changed a settlement source");
 		int reactive = registry.materialHandle(BuiltinGranularDefinitions.PRECIPITATE);
 		SolidCompositionPool pool = new SolidCompositionPool(BuiltinChemicalDefinitions.REGISTRY, 4);
 		SolidCompositionRecord equal = SolidCompositionRecord.fromStableAmounts(BuiltinChemicalDefinitions.REGISTRY,
@@ -818,9 +820,14 @@ public final class M8GranularValidation {
 		cancellationInventory.bindSolidCompositions(cancellationPool);
 		GranularStateSnapshot.capture(1, 1, 1, registry, cancellationParcels, cancellationDeposits, cancellationPool)
 				.validateSolidCompositionMasses(BuiltinChemicalDefinitions.REGISTRY);
-		require(cancellationInventory.planSettlement(new int[] {0, 1, 2}, 0, SolidVolume.SVQ_PER_CELL) == null
-				&& cancellationParcels.count() == 3 && cancellationPool.liveCount() == 3 && cancellationDeposits.groupCount() == 0,
-				"joint residual rounding must defer a final composition/mass mismatch");
+		long cancellationMass = cancellationParcels.totalMassUnits();
+		var cancellationPlan = cancellationInventory.planSettlement(new int[] {0, 1, 2}, 0, SolidVolume.SVQ_PER_CELL);
+		require(cancellationPlan != null, "Integer mass cancellation prevented a representable settlement");
+		cancellationInventory.commitSettlement(cancellationPlan);
+		require(cancellationInventory.totalMassUnits() == cancellationMass && cancellationParcels.count() == 0,
+				"Settlement changed the cancellation cohort's integer mass");
+		GranularStateSnapshot.capture(1, 1, 1, registry, cancellationParcels, cancellationDeposits, cancellationPool)
+				.validateSolidCompositionMasses(BuiltinChemicalDefinitions.REGISTRY);
 		GranularParcelStore staleParcels = new GranularParcelStore(registry, 2); staleParcels.add(parcel(sand, 1, 1));
 		GranularDepositStore staleDeposits = new GranularDepositStore(registry, 1, 2);
 		GranularInventory staleInventory = new GranularInventory(staleParcels, staleDeposits);
@@ -904,7 +911,7 @@ public final class M8GranularValidation {
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
-		double mass = svq / (double) SolidVolume.SVQ_PER_CUBIC_METER * registry.material(sand).referenceDensity();
+		double mass = mmm.units.Mass.kilograms(mmm.units.Mass.fromKilograms(svq / (double) SolidVolume.SVQ_PER_CUBIC_METER * registry.material(sand).referenceDensity()));
 		float radius = GranularMechanics.representativeRadius(svq, .5F);
 		for (int count : new int[] {12, 13, 16}) {
 			GranularParcelStore parcels = new GranularParcelStore(registry, 32);
@@ -974,7 +981,7 @@ public final class M8GranularValidation {
 			var beds = new GranularDepositStore(registry, 2, 8); var parcels = new GranularParcelStore(registry, 4);
 			for (int cell = 0; cell < 2; cell++) {
 				int material = cell == 0 ? light : sand; long volume = (long) Math.floor((cell == 0 ? .6 : .372) * open);
-				double mass = volume / (double) SolidVolume.SVQ_PER_CUBIC_METER * registry.material(material).referenceDensity();
+				double mass = mmm.units.Mass.kilograms(mmm.units.Mass.fromKilograms(volume / (double) SolidVolume.SVQ_PER_CUBIC_METER * registry.material(material).referenceDensity()));
 				require(beds.tryAdd(cell, new GranularDepositStore.SolidPortion(material, 0, volume, mmm.units.Mass.fromKilograms(mass)), open), "mixed gravity fixture failed");
 			}
 			var moved = beds.peekTake(0, light, 0, 1_000);
@@ -990,7 +997,7 @@ public final class M8GranularValidation {
 					"mixed relaxation must defer unchanged in gravity and preserve the zero-gravity transfer");
 		}
 		var pure = new GranularDepositStore(registry, 2, 4);
-		long volume = (long) Math.floor(.62 * open); double mass = volume / (double) SolidVolume.SVQ_PER_CUBIC_METER * registry.material(sand).referenceDensity();
+		long volume = (long) Math.floor(.62 * open); double mass = mmm.units.Mass.kilograms(mmm.units.Mass.fromKilograms(volume / (double) SolidVolume.SVQ_PER_CUBIC_METER * registry.material(sand).referenceDensity()));
 		require(pure.tryAdd(0, new GranularDepositStore.SolidPortion(sand, 0, volume, mmm.units.Mass.fromKilograms(mass)), open), "pure sand fixture failed");
 		require(GranularBedPotential.allowsRelaxation(pure, 0, 1, pure.peekTake(0, sand, 0, 1_000), .5F, 2, 1, 9.81),
 				"same-material downhill relaxation must remain admissible");
@@ -1025,20 +1032,20 @@ public final class M8GranularValidation {
 					SolidVolume.SVQ_PER_CELL), "valid deposit group rejected");
 		}
 		long beforeVolume = deposits.totalSolidVolumeSvq();
-		double beforeMass = deposits.totalMass();
+		long beforeMass = deposits.totalMassUnits();
 		long beforeBulk = deposits.cellBulkVolumeSvq(0), beforeRevision = deposits.mutationRevision();
 		int beforePorosity = deposits.porosityQ(0);
 		require(!deposits.tryAdd(0, new GranularDepositStore.SolidPortion(reactive, 9, portion, mmm.units.Mass.fromKilograms(1.0)),
 				SolidVolume.SVQ_PER_CELL), "ninth deposit group accepted");
 		require(deposits.totalSolidVolumeSvq() == beforeVolume
-				&& deposits.totalMassUnits() == Double.doubleToRawLongBits(beforeMass)
+				&& deposits.totalMassUnits() == beforeMass
 				&& deposits.cellBulkVolumeSvq(0) == beforeBulk && deposits.porosityQ(0) == beforePorosity
 				&& deposits.mutationRevision() == beforeRevision,
 				"deposit group rejection left residue");
 
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		GranularDepositStore tiny = new GranularDepositStore(registry, 2, 2);
-		require(tiny.tryAdd(0, new GranularDepositStore.SolidPortion(sand, 0, 3, mmm.units.Mass.fromKilograms(Double.MIN_VALUE)),
+		require(tiny.tryAdd(0, new GranularDepositStore.SolidPortion(sand, 0, 3, 1L),
 				SolidVolume.SVQ_PER_CELL), "subnormal deposit fixture was rejected");
 		long tinyRevision = tiny.mutationRevision();
 		boolean partialRejected = false;
@@ -1046,7 +1053,7 @@ public final class M8GranularValidation {
 		catch (IllegalArgumentException unrepresentable) { partialRejected = true; }
 		require(partialRejected && !tiny.tryMove(0, 1, sand, 0, 2, SolidVolume.SVQ_PER_CELL)
 				&& tiny.mutationRevision() == tinyRevision && tiny.cellSolidVolumeSvq(0) == 3
-				&& tiny.cellSolidVolumeSvq(1) == 0 && tiny.totalMass() == Double.MIN_VALUE,
+				&& tiny.cellSolidVolumeSvq(1) == 0 && tiny.totalMassUnits() == 1L,
 				"unrepresentable partial deposit must retain both inventories and revision");
 		GranularDepositStore full = new GranularDepositStore(registry, 1, 8);
 		long tooMuchSkeleton = SolidVolume.SVQ_PER_CELL * 3L / 4L;
@@ -1055,7 +1062,7 @@ public final class M8GranularValidation {
 		require(full.groupCount() == 0 && full.totalSolidVolumeSvq() == 0L, "capacity rejection left residue");
 
 		GranularDepositStore reordered = new GranularDepositStore(registry, 3, 3);
-		require(reordered.tryAdd(2, new GranularDepositStore.SolidPortion(sand, 0, 1L, mmm.units.Mass.fromKilograms(1.0e16)),
+		require(reordered.tryAdd(2, new GranularDepositStore.SolidPortion(sand, 0, 1L, mmm.units.Mass.fromKilograms(1.0e8)),
 				SolidVolume.SVQ_PER_CELL), "high-cell order fixture was rejected");
 		require(reordered.tryAdd(0, new GranularDepositStore.SolidPortion(sand, 0, 1L, mmm.units.Mass.fromKilograms(1.0)),
 				SolidVolume.SVQ_PER_CELL), "first low-cell order fixture was rejected");
@@ -1063,8 +1070,7 @@ public final class M8GranularValidation {
 				SolidVolume.SVQ_PER_CELL), "second low-cell order fixture was rejected");
 		GranularStateSnapshot reorderedSnapshot = GranularStateSnapshot.capture(3, 1, 1, registry,
 				new GranularParcelStore(registry, 1), reordered);
-		require(reorderedSnapshot.totalMassUnits() == Double.doubleToRawLongBits(
-				SignedDyadic.sum(new double[] {1.0e16, 1.0, 1.0}).toDouble()),
+		require(reorderedSnapshot.totalMassUnits() == mmm.units.Mass.fromKilograms(100_000_002.0),
 				"granular snapshot mass depended on sparse deposit allocation order");
 	}
 
@@ -1226,7 +1232,7 @@ public final class M8GranularValidation {
 			ParticulateMaterial material = registry.material(handle);
 			GranularParcelStore store = new GranularParcelStore(registry, 1);
 			long svq = material.maximumActiveParcelSvq();
-			double mass = svq / (double) SolidVolume.SVQ_PER_CUBIC_METER * material.referenceDensity();
+			double mass = mmm.units.Mass.kilograms(mmm.units.Mass.fromKilograms(svq / (double) SolidVolume.SVQ_PER_CUBIC_METER * material.referenceDensity()));
 			store.add(new GranularParcelStore.Parcel(0.5F, 0.5F, 0.5F, 0.0F, 0.0F, 0.0F,
 					svq, mmm.units.Mass.fromKilograms(mass), handle, material.reactive() ? 1 : 0, 0, (byte) 0));
 			GranularMechanics.Environment water = constantWater(0.0, 0.0, 0.0, null);
@@ -1577,10 +1583,12 @@ public final class M8GranularValidation {
 		GranularDepositDynamics dynamics = new GranularDepositDynamics(
 				registry, parcels, deposits, inventory, sizeX, sizeY, sizeZ, 0.5F);
 		long initialSvq = SolidVolume.SVQ_PER_CELL * 3L / 5L;
-		double initialMass = initialSvq / (double) SolidVolume.SVQ_PER_CUBIC_METER
-				* registry.material(sand).referenceDensity();
+		long initialMassUnits = mmm.units.Mass.fromKilograms(initialSvq / (double) SolidVolume.SVQ_PER_CUBIC_METER
+				* registry.material(sand).referenceDensity());
+		double initialMass = mmm.units.Mass.kilograms(initialMassUnits);
 		long parcelSvq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
-		double parcelMass = initialMass * parcelSvq / initialSvq;
+		long parcelMassUnits = mmm.units.Mass.portion(initialMassUnits, parcelSvq, initialSvq);
+		double parcelMass = mmm.units.Mass.kilograms(parcelMassUnits);
 		parcels.add(new GranularParcelStore.Parcel(0.75F, 0.05F, 0.75F, 0.01F, 0.0F, 0.0F,
 				parcelSvq, mmm.units.Mass.fromKilograms(parcelMass), sand, 0, GranularDepositDynamics.SETTLE_CONTACT_STEPS,
 				GranularParcelStore.FLAG_SUPPORTED));
@@ -1591,10 +1599,10 @@ public final class M8GranularValidation {
 				"settling must transfer the removed parcel momentum to its fixed bed");
 		int centerCell = cellIndex(1, 0, 1, sizeX, sizeY);
 		require(deposits.tryAdd(centerCell, new GranularDepositStore.SolidPortion(
-				sand, 0, initialSvq - parcelSvq, mmm.units.Mass.fromKilograms(initialMass - parcelMass)), SolidVolume.SVQ_PER_CELL),
+				sand, 0, initialSvq - parcelSvq, Math.subtractExact(initialMassUnits, parcelMassUnits)), SolidVolume.SVQ_PER_CELL),
 				"repose fixture deposit was rejected");
 		dynamics.disturbCell(centerCell);
-		require(inventory.totalSolidVolumeSvq() == initialSvq && rawClose(inventory.totalMass(), initialMass),
+		require(inventory.totalSolidVolumeSvq() == initialSvq && inventory.totalMassUnits() == initialMassUnits,
 				"settling changed exact granular inventory");
 
 		for (int step = 0; step < 128 && dynamics.dirtyColumnCount() > 0; step++) dynamics.step(calm, 0.05F);
@@ -1633,7 +1641,7 @@ public final class M8GranularValidation {
 		var registry = BuiltinGranularDefinitions.createRegistry();
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long svq = 1_024L;
-		double mass = svq / (double) SolidVolume.SVQ_PER_CUBIC_METER * registry.material(sand).referenceDensity();
+		double mass = mmm.units.Mass.kilograms(mmm.units.Mass.fromKilograms(svq / (double) SolidVolume.SVQ_PER_CUBIC_METER * registry.material(sand).referenceDensity()));
 		for (int slope : new int[]{-1, 0, 1}) for (boolean moving : new boolean[]{false, true}) {
 			var parcels = new GranularParcelStore(registry, 2);
 			var deposits = new GranularDepositStore(registry, 3, 4);
@@ -1687,7 +1695,7 @@ public final class M8GranularValidation {
 				}
 			};
 			long svq = SolidVolume.SVQ_PER_CELL * 3 / 5;
-			double mass = svq / (double) SolidVolume.SVQ_PER_CUBIC_METER * registry.material(sand).referenceDensity();
+			double mass = mmm.units.Mass.kilograms(mmm.units.Mass.fromKilograms(svq / (double) SolidVolume.SVQ_PER_CUBIC_METER * registry.material(sand).referenceDensity()));
 			require(deposits.tryAdd(cellIndex(0, 2, 0, 2, 4),
 					new GranularDepositStore.SolidPortion(sand, 0, svq, mmm.units.Mass.fromKilograms(mass)), SolidVolume.SVQ_PER_CELL),
 					"vertical relaxation fixture must fit its source cell");
@@ -1703,7 +1711,7 @@ public final class M8GranularValidation {
 		GranularInventory inventory = new GranularInventory(parcels, deposits);
 		GranularDepositDynamics dynamics = new GranularDepositDynamics(registry, parcels, deposits, inventory, 1, 4, 1, 0.5F);
 		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
-		double mass = svq / (double) SolidVolume.SVQ_PER_CUBIC_METER * registry.material(sand).referenceDensity();
+		double mass = mmm.units.Mass.kilograms(mmm.units.Mass.fromKilograms(svq / (double) SolidVolume.SVQ_PER_CUBIC_METER * registry.material(sand).referenceDensity()));
 		float y = Math.nextUp(1 + GranularMechanics.representativeRadius(svq, 0.5F));
 		parcels.add(new GranularParcelStore.Parcel(0.25F, y, 0.25F, 0, 0, 0, svq, mmm.units.Mass.fromKilograms(mass), sand, 0, 3,
 				GranularParcelStore.FLAG_SUPPORTED));
@@ -2066,7 +2074,7 @@ public final class M8GranularValidation {
 		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
-		double mass = svq / (double) SolidVolume.SVQ_PER_CUBIC_METER * granular.material(sand).referenceDensity();
+		double mass = mmm.units.Mass.kilograms(mmm.units.Mass.fromKilograms(svq / (double) SolidVolume.SVQ_PER_CUBIC_METER * granular.material(sand).referenceDensity()));
 		FluidDomain.GranularInsertion inserted = domain.tryInsertExactGranular(2, 5, 2, sand, 0, svq, mmm.units.Mass.fromKilograms(mass));
 		require(inserted.inserted(), "solver granular insertion was rejected: " + inserted.failure());
 		double waterBefore = domain.totalVolumeExact();

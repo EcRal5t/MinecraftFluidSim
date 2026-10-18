@@ -22,12 +22,14 @@ final class PhaseLiquidInventory {
 	private record Future(int ordinal, ThermalStateFunction.InventoryPortion portion) { }
 	private final PhaseChangeStageSupport support;
 	private final int cell, count;
+	private final long totalMassUnits;
 	private final List<Marker> markers;
 
 	PhaseLiquidInventory(PhaseChangeStageSupport support, int cell) {
 		this.support = support; this.cell = cell;
 		var state = support.state(); var particles = state.particles(); var chemistry = support.chemistry();
 		count = particles.count();
+		totalMassUnits = mmm.units.Mass.sum(particles.directArrays().massUnits, count);
 		var captured = new ArrayList<Marker>();
 		for (int ordinal = 0; ordinal < count; ordinal++) if (support.particleCell(ordinal) == cell) {
 			int material = particles.materialHandle(ordinal), thermal = support.thermal().thermalMaterialHandleForFluid(material);
@@ -72,7 +74,7 @@ final class PhaseLiquidInventory {
 				}
 			}
 			long takeMass = takeSvq == remainingSvq ? remainingMass : mmm.units.Mass.portion(marker.massUnits(), takeSvq, marker.wholeSvq());
-			if (!(Double.isFinite(takeMass) && takeMass > 0 && takeMass <= remainingMass))
+			if (!(takeMass > 0L && takeMass <= remainingMass))
 				throw new PhaseCandidateUnavailableException("Phase batch mass cannot be allocated across its liquid donors");
 			long takeSolverMass = takeMass;
 			boolean full = takeSvq == marker.wholeSvq() && marker.wholeSvq() == marker.upperSvq();
@@ -147,6 +149,8 @@ final class PhaseLiquidInventory {
 
 	List<ThermalStateFunction.InventoryPortion> afterCondensation(int liquidHandle, int target, long targetMass,
 	                                                           ChemicalMixtureRecord mixture, long appendedPhysicalMass) {
+		if (appendedPhysicalMass > Long.MAX_VALUE - totalMassUnits)
+			throw new PhaseCandidateUnavailableException("Liquid phase mass capacity exceeded");
 		var result = new ArrayList<ThermalStateFunction.InventoryPortion>();
 		boolean found = target < 0;
 		for (var marker : markers) {

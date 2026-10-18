@@ -65,6 +65,8 @@ final class CellVolumeReplacementPlan {
 		if (finalCount > domain.maximumParticleCount)
 			throw new FluidDomain.ParticleBudgetExceededException(volumes.size(), domain.maximumParticleCount - domain.particles.count() + removed.length);
 
+		long finalMass = domain.totalMassUnits();
+		for (int p : removed) finalMass = Math.subtractExact(finalMass, domain.particles.massUnits(p));
 		var chemistry = domain.chemicalParcels;
 		var sourceBuilder = chemistry == null ? null : ChemicalTransferLedger.builder(chemistry.registry());
 		var sinkBuilder = chemistry == null ? null : ChemicalTransferLedger.builder(chemistry.registry());
@@ -87,8 +89,9 @@ final class CellVolumeReplacementPlan {
 		for (var entry : volumes) {
 			float volume = entry.volume();
 			long mass = domain.unitScale.massUnitsForNormalized(volume * density);
-			if (!(Float.isFinite(volume) && volume > 0 && Double.isFinite(mass) && mass > 0))
+			if (!(Float.isFinite(volume) && volume > 0 && mass > 0L))
 				throw new IllegalArgumentException("Cell marker volume and mass must be finite and positive");
+			finalMass = Math.addExact(finalMass, mass);
 			ChemicalMixtureRecord mixture = null;
 			if (chemistry != null) {
 				String material = domain.materialRegistry.material(0).id();

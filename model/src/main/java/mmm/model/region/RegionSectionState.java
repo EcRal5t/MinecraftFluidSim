@@ -69,7 +69,7 @@ public record RegionSectionState(
 				throw new IllegalArgumentException("Section material arrays disagree");
 			}
 			for (int marker = 0; marker < markerMassUnits.length; marker++) {
-				if (!(Double.isFinite(markerMassUnits[marker]) && markerMassUnits[marker] > 0.0)
+				if (!(markerMassUnits[marker] > 0L)
 						|| materialPaletteIndex[marker] < 0) {
 					throw new IllegalArgumentException("Invalid section marker material state");
 				}

@@ -10,7 +10,7 @@ import java.util.Set;
 public record FiniteThermalDeviceDefinition(
 		String id,
 		String thermalMaterialId,
-		double bodyMassKilograms,
+		long bodyMassUnits,
 		double initialTemperatureK,
 		List<Port> ports
 ) {
@@ -36,10 +36,12 @@ public record FiniteThermalDeviceDefinition(
 		}
 	}
 
+	public double bodyMassKilograms() { return mmm.units.Mass.kilograms(bodyMassUnits); }
+
 	public FiniteThermalDeviceDefinition {
 		ThermalIds.requireId(id, "finite thermal device type id");
 		ThermalIds.requireId(thermalMaterialId, "finite thermal device material id");
-		if (!(Double.isFinite(bodyMassKilograms) && bodyMassKilograms > 0.0)) {
+		if (bodyMassUnits <= 0L) {
 			throw new IllegalArgumentException("Finite thermal device body mass is invalid");
 		}
 		if (!(Double.isFinite(initialTemperatureK)

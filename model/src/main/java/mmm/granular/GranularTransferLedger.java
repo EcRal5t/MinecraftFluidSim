@@ -20,7 +20,7 @@ public record GranularTransferLedger(List<Group> groups) {
 			if (!materials.add(group.materialId())) throw new IllegalArgumentException("Duplicate granular transfer material");
 			totalSvq = Math.addExact(totalSvq, group.solidVolumeSvq()); totalMass = Math.addExact(totalMass, group.massUnits());
 		}
-		if (totalSvq > SolidVolume.SVQ_PER_CUBIC_METER || !(Double.isFinite(totalMass) && totalMass > 0.0)) {
+		if (totalSvq > SolidVolume.SVQ_PER_CUBIC_METER || totalMass <= 0L) {
 			throw new IllegalArgumentException("Granular transfer exceeds one dry container");
 		}
 		groups = List.copyOf(canonical);

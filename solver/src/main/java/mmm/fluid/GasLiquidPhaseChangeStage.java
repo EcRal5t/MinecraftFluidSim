@@ -301,7 +301,7 @@ final class GasLiquidPhaseChangeStage {
 			GasDomainState gasState = support.gasState();
 			LiquidParticleStore particles = support.state().particles();
 			long requestedMass = mmm.units.Mass.exactUnits(transition.massKgPerBatch().multiply(batches).numerator(), transition.massKgPerBatch().multiply(batches).denominator());
-			if (!(Double.isFinite(requestedMass) && requestedMass > 0.0)) throw new PhaseCandidateUnavailableException(
+			if (requestedMass <= 0L) throw new PhaseCandidateUnavailableException(
 					"Condensation batch mass exceeds its finite representation");
 			GasInventory requestedBatch = phase.gasBatch(transition, batches);
 			String componentId = requestedBatch.components().getFirst().componentId();

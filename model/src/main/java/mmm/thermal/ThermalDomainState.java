@@ -501,11 +501,11 @@ public final class ThermalDomainState {
 	// ---- granular/coherent pass-throughs ----
 
 	public void addGranularReactionActive() { granularState.addGranularReactionActive(); }
-	public double takeGranularReactionActive(int active, long takenSvq, long totalSvq) {
-		return granularState.takeGranularReactionActive(active, takenSvq, totalSvq);
+	public double takeGranularReactionActive(int active, long takenMassUnits, long totalMassUnits) {
+		return granularState.takeGranularReactionActive(active, takenMassUnits, totalMassUnits);
 	}
-	public double takeGranularReactionDeposit(GranularEnergyColumn.DepositKey key, long takenSvq, long totalSvq) {
-		return granularState.takeGranularReactionDeposit(key, takenSvq, totalSvq);
+	public double takeGranularReactionDeposit(GranularEnergyColumn.DepositKey key, long takenMassUnits, long totalMassUnits) {
+		return granularState.takeGranularReactionDeposit(key, takenMassUnits, totalMassUnits);
 	}
 	public void requireActiveToDeposit(int active, GranularEnergyColumn.DepositKey target) {
 		granularState.requireActiveToDeposit(active, target);
@@ -522,8 +522,8 @@ public final class ThermalDomainState {
 		return granularState.canActiveMerge(first, second, material, mass, composition);
 	}
 	public void commitActiveMerge(int first, int second) { granularState.commitActiveMerge(first, second); }
-	public GranularInventory.EnergyPlan planDepositWake(GranularEnergyColumn.DepositKey source, long takenSvq, long totalSvq) {
-		Revision before = thermalRevision(); var plan = granularState.planDepositWake(source, takenSvq, totalSvq);
+	public GranularInventory.EnergyPlan planDepositWake(GranularEnergyColumn.DepositKey source, long takenMassUnits, long totalMassUnits) {
+		Revision before = thermalRevision(); var plan = granularState.planDepositWake(source, takenMassUnits, totalMassUnits);
 		return new GranularInventory.EnergyPlan() {
 			@Override public void requireCurrent() {
 				if (!matchesThermalRevision(before)) throw new IllegalStateException("Thermal inventory changed after wake planning");
@@ -534,15 +534,15 @@ public final class ThermalDomainState {
 	}
 	public void requireDepositMove(
 			GranularEnergyColumn.DepositKey source, GranularEnergyColumn.DepositKey target,
-			long movedSvq, long sourceTotalSvq
+			long movedMassUnits, long sourceMassUnits
 	) {
-		granularState.requireDepositMove(source, target, movedSvq, sourceTotalSvq);
+		granularState.requireDepositMove(source, target, movedMassUnits, sourceMassUnits);
 	}
 	public void commitDepositMove(
 			GranularEnergyColumn.DepositKey source, GranularEnergyColumn.DepositKey target,
-			long movedSvq, long sourceTotalSvq
+			long movedMassUnits, long sourceMassUnits
 	) {
-		granularState.commitDepositMove(source, target, movedSvq, sourceTotalSvq);
+		granularState.commitDepositMove(source, target, movedMassUnits, sourceMassUnits);
 	}
 	public void clearGranularExternal() { granularState.clearGranularExternal(); }
 	public double[] planExternalActiveInsertions(int firstOrdinal, int count, ThermalCarrierContext markers) {
@@ -552,17 +552,17 @@ public final class ThermalDomainState {
 		return granularState.planExternalGranularEnergy(material, composition, mass, markers);
 	}
 	public void commitExternalActiveInsertions(double[] energies) { granularState.commitExternalActiveInsertions(energies); }
-	public double previewActiveTake(int active, long takenSvq, long totalSvq) {
-		return granularState.previewActiveTake(active, takenSvq, totalSvq);
+	public double previewActiveTake(int active, long takenMassUnits, long totalMassUnits) {
+		return granularState.previewActiveTake(active, takenMassUnits, totalMassUnits);
 	}
-	public double previewDepositTake(GranularEnergyColumn.DepositKey key, long takenSvq, long totalSvq) {
-		return granularState.previewDepositTake(key, takenSvq, totalSvq);
+	public double previewDepositTake(GranularEnergyColumn.DepositKey key, long takenMassUnits, long totalMassUnits) {
+		return granularState.previewDepositTake(key, takenMassUnits, totalMassUnits);
 	}
-	public double commitExternalActiveTake(int active, long takenSvq, long totalSvq) {
-		return granularState.commitExternalActiveTake(active, takenSvq, totalSvq);
+	public double commitExternalActiveTake(int active, long takenMassUnits, long totalMassUnits) {
+		return granularState.commitExternalActiveTake(active, takenMassUnits, totalMassUnits);
 	}
-	public double commitExternalDepositTake(GranularEnergyColumn.DepositKey key, long takenSvq, long totalSvq) {
-		return granularState.commitExternalDepositTake(key, takenSvq, totalSvq);
+	public double commitExternalDepositTake(GranularEnergyColumn.DepositKey key, long takenMassUnits, long totalMassUnits) {
+		return granularState.commitExternalDepositTake(key, takenMassUnits, totalMassUnits);
 	}
 	public void addCoherentExternal(CoherentPhaseStore.Group group) { granularState.addCoherentExternal(group); }
 	public void addCoherentInternal(CoherentPhaseStore.Group group) { granularState.addCoherentInternal(group); }

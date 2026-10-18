@@ -9,7 +9,7 @@ import java.util.TreeMap;
 /**
  * Frozen gas/liquid species exchange pair: one exact batch bridging gas component standard nanos and
  * liquid species quanta, an ideal-dilute Henry relation and physical film transport. The liquid
- * residual closes the batch mass bitwise: liquidKilograms + residual == gasKilograms.
+ * residual closes the integer batch mass: liquidMassUnits + residualMassUnits == gasMassUnits.
  */
 public record GasLiquidSpeciesPair(
 		String id,
@@ -17,10 +17,10 @@ public record GasLiquidSpeciesPair(
 		String liquidPhaseId,
 		String speciesId,
 		long gasStandardVolumeNanosPerBatch,
-		double gasKilogramsPerBatch,
+		long gasMassUnitsPerBatch,
 		long liquidQuantaPerBatch,
-		double liquidKilogramsPerBatch,
-		double liquidResidualKilogramsPerBatch,
+		long liquidMassUnitsPerBatch,
+		long liquidResidualMassUnitsPerBatch,
 		ExactRational molesPerBatch,
 		List<HenrySegment> henrySegments,
 		double minimumPressurePa,
@@ -55,14 +55,9 @@ public record GasLiquidSpeciesPair(
 		if (gasStandardVolumeNanosPerBatch <= 0L || liquidQuantaPerBatch <= 0L) {
 			throw new IllegalArgumentException("Gas/liquid pair batch amounts must be positive");
 		}
-		if (!(Double.isFinite(gasKilogramsPerBatch) && gasKilogramsPerBatch > 0.0
-				&& Double.isFinite(liquidKilogramsPerBatch) && liquidKilogramsPerBatch > 0.0)) {
-			throw new IllegalArgumentException("Gas/liquid pair batch kilograms must be finite and positive");
-		}
-		if (!Double.isFinite(liquidResidualKilogramsPerBatch)
-				|| mmm.units.Mass.fromKilograms(liquidResidualKilogramsPerBatch)
-						!= Math.subtractExact(mmm.units.Mass.fromKilograms(gasKilogramsPerBatch), mmm.units.Mass.fromKilograms(liquidKilogramsPerBatch))) {
-			throw new IllegalArgumentException("Gas/liquid pair residual must close the batch mass exactly");
+		if (gasMassUnitsPerBatch <= 0 || liquidMassUnitsPerBatch <= 0
+				|| liquidResidualMassUnitsPerBatch != Math.subtractExact(gasMassUnitsPerBatch, liquidMassUnitsPerBatch)) {
+			throw new IllegalArgumentException("Gas/liquid batch integer mass and residual do not close");
 		}
 		if (molesPerBatch == null || molesPerBatch.signum() <= 0
 				|| !molesPerBatch.multiply(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL).equals(ExactRational.of(liquidQuantaPerBatch))) {
@@ -108,6 +103,10 @@ public record GasLiquidSpeciesPair(
 			throw new IllegalArgumentException("Mapped gas resistance must be finite and non-negative");
 		}
 	}
+
+	public double gasKilogramsPerBatch() { return mmm.units.Mass.kilograms(gasMassUnitsPerBatch); }
+	public double liquidKilogramsPerBatch() { return mmm.units.Mass.kilograms(liquidMassUnitsPerBatch); }
+	public double liquidResidualKilogramsPerBatch() { return mmm.units.Mass.kilograms(liquidResidualMassUnitsPerBatch); }
 
 	/** Series film resistance per unit area in s/m; zero mapped gas resistance declares liquid-side control. */
 	public double totalResistanceSecondsPerMeter() {

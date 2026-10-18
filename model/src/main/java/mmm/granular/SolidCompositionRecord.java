@@ -9,8 +9,7 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.math.BigInteger;
 
-/** Immutable absolute solid species inventory; indicator and liquid phase never enter this record. */
-/** Immutable solid species inventory whose exact and residual masses are kilograms. */
+/** Immutable solid micromole inventory with an independent integer 100 ng mass residual. */
 public final class SolidCompositionRecord {
 	private final int[] speciesHandles;
 	private final long[] amounts;
@@ -82,7 +81,7 @@ public final class SolidCompositionRecord {
 	}
 
 	public long speciesMassUnits(ChemicalRegistry registry) { return mmm.units.Mass.exactUnits(exactSpeciesMass(registry).numerator(), exactSpeciesMass(registry).denominator()); }
-	public long massUnits(ChemicalRegistry registry) { return Math.addExact(mmm.units.Mass.exactUnits(exactSpeciesMass(registry).numerator(), exactSpeciesMass(registry).denominator()), massResidualUnits); }
+	public long massUnits(ChemicalRegistry registry) { return Math.addExact(speciesMassUnits(registry), massResidualUnits); }
 	public double totalMass(ChemicalRegistry registry) { return mmm.units.Mass.kilograms(massUnits(registry)); }
 	public long chargeQuanta(ChemicalRegistry registry) {
 		long result = 0L;

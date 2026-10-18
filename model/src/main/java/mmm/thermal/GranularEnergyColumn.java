@@ -102,20 +102,20 @@ public final class GranularEnergyColumn {
 	}
 
 	/** Proportionally removes energy without changing the active ordinal cardinality. */
-	double takeActivePortion(int index, long takenSvq, long totalSvq) {
+	double takeActivePortion(int index, long takenMassUnits, long totalMassUnits) {
 		requireActive(index);
-		if (takenSvq == totalSvq) throw new IllegalArgumentException("Full active take must use swap removal");
-		ProportionalDoubleSplit split = proportionalSplit(activeEnergy[index], takenSvq, totalSvq);
+		if (takenMassUnits == totalMassUnits) throw new IllegalArgumentException("Full active take must use swap removal");
+		ProportionalDoubleSplit split = proportionalSplit(activeEnergy[index], takenMassUnits, totalMassUnits);
 		activeEnergy[index] = split.remaining();
 		return split.removed();
 	}
-	double previewActiveTake(int index, long takenSvq, long totalSvq) {
+	double previewActiveTake(int index, long takenMassUnits, long totalMassUnits) {
 		requireActive(index);
-		return proportionalSplit(activeEnergy[index], takenSvq, totalSvq).removed();
+		return proportionalSplit(activeEnergy[index], takenMassUnits, totalMassUnits).removed();
 	}
-	public double previewActiveRemaining(int index, long takenSvq, long totalSvq) {
+	public double previewActiveRemaining(int index, long takenMassUnits, long totalMassUnits) {
 		requireActive(index);
-		return proportionalSplit(activeEnergy[index], takenSvq, totalSvq).remaining();
+		return proportionalSplit(activeEnergy[index], takenMassUnits, totalMassUnits).remaining();
 	}
 
 	void addDeposit(DepositKey key, double energy) {
@@ -208,15 +208,15 @@ public final class GranularEnergyColumn {
 		depositEnergy.putAll(plan.after);
 	}
 
-	/** Proportional exact-SVQ take; caller supplies the group's pre-commit SVQ truth. */
-	double takeDeposit(DepositKey key, long takenSvq, long totalSvq) {
-		ProportionalDoubleSplit split = proportionalSplit(depositEnergy(key), takenSvq, totalSvq);
-		if (takenSvq == totalSvq) depositEnergy.remove(key);
+	/** Proportional integer-mass take; caller supplies the group's pre-commit SVQ truth. */
+	double takeDeposit(DepositKey key, long takenMassUnits, long totalMassUnits) {
+		ProportionalDoubleSplit split = proportionalSplit(depositEnergy(key), takenMassUnits, totalMassUnits);
+		if (takenMassUnits == totalMassUnits) depositEnergy.remove(key);
 		else depositEnergy.put(key, split.remaining());
 		return split.removed();
 	}
-	double previewDepositTake(DepositKey key, long takenSvq, long totalSvq) {
-		return proportionalSplit(depositEnergy(key), takenSvq, totalSvq).removed();
+	double previewDepositTake(DepositKey key, long takenMassUnits, long totalMassUnits) {
+		return proportionalSplit(depositEnergy(key), takenMassUnits, totalMassUnits).removed();
 	}
 	static final class DepositWakePlan {
 		final GranularEnergyColumn owner;
@@ -231,10 +231,10 @@ public final class GranularEnergyColumn {
 			roundoff = SignedDyadic.of(moved).add(SignedDyadic.of(remaining)).subtract(SignedDyadic.of(before));
 		}
 	}
-	DepositWakePlan planDepositWake(DepositKey key, long takenSvq, long totalSvq) {
-		double energy = depositEnergy(key); var split = proportionalSplit(energy, takenSvq, totalSvq);
+	DepositWakePlan planDepositWake(DepositKey key, long takenMassUnits, long totalMassUnits) {
+		double energy = depositEnergy(key); var split = proportionalSplit(energy, takenMassUnits, totalMassUnits);
 		requireAddActive(split.removed()); ensureActiveCapacity(activeCount + 1);
-		return new DepositWakePlan(this, key, energy, split, takenSvq == totalSvq);
+		return new DepositWakePlan(this, key, energy, split, takenMassUnits == totalMassUnits);
 	}
 	void requireCurrent(DepositWakePlan plan) {
 		if (plan == null || plan.owner != this || plan.ordinal != activeCount
@@ -246,23 +246,23 @@ public final class GranularEnergyColumn {
 		if (plan.whole) depositEnergy.remove(plan.source); else depositEnergy.put(plan.source, plan.remaining);
 		activeEnergy[activeCount++] = plan.moved;
 	}
-	public double previewDepositRemaining(DepositKey key, long takenSvq, long totalSvq) {
-		return proportionalSplit(depositEnergy(key), takenSvq, totalSvq).remaining();
+	public double previewDepositRemaining(DepositKey key, long takenMassUnits, long totalMassUnits) {
+		return proportionalSplit(depositEnergy(key), takenMassUnits, totalMassUnits).remaining();
 	}
 
 	void moveDeposit(
-			DepositKey source, DepositKey target, long movedSvq, long sourceTotalSvq
+			DepositKey source, DepositKey target, long movedMassUnits, long sourceMassUnits
 	) {
 		if (source == null || target == null || source.equals(target)) {
 			throw new IllegalArgumentException("Granular thermal deposit move requires distinct groups");
 		}
-		double moved = previewDepositTake(source, movedSvq, sourceTotalSvq);
+		double moved = previewDepositTake(source, movedMassUnits, sourceMassUnits);
 		Double targetEnergy = depositEnergy.get(target);
-		if (targetEnergy == null && depositEnergy.size() == maximumDeposits && movedSvq != sourceTotalSvq) {
+		if (targetEnergy == null && depositEnergy.size() == maximumDeposits && movedMassUnits != sourceMassUnits) {
 			throw new IllegalStateException("Granular thermal deposit budget exceeded");
 		}
 		double merged = targetEnergy == null ? moved : finiteAdd(targetEnergy, moved);
-		takeDeposit(source, movedSvq, sourceTotalSvq);
+		takeDeposit(source, movedMassUnits, sourceMassUnits);
 		depositEnergy.put(target, merged);
 	}
 
@@ -319,11 +319,11 @@ public final class GranularEnergyColumn {
 	private static void requireEnergy(double energy) {
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Granular internal energy is not finite");
 	}
-	private static ProportionalDoubleSplit proportionalSplit(double energy, long takenSvq, long totalSvq) {
-		if (takenSvq <= 0L || totalSvq <= 0L || takenSvq > totalSvq) {
-			throw new IllegalArgumentException("Granular thermal split volume is invalid");
+	private static ProportionalDoubleSplit proportionalSplit(double energy, long takenMassUnits, long totalMassUnits) {
+		if (takenMassUnits <= 0L || totalMassUnits <= 0L || takenMassUnits > totalMassUnits) {
+			throw new IllegalArgumentException("Granular thermal split mass counts are invalid");
 		}
-		return ProportionalDoubleSplit.of(energy, takenSvq, totalSvq);
+		return ProportionalDoubleSplit.of(energy, takenMassUnits, totalMassUnits);
 	}
 	private static double finiteAdd(double first, double second) {
 		double result = first + second;

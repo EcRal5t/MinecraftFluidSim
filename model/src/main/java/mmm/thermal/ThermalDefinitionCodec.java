@@ -126,9 +126,9 @@ public final class ThermalDefinitionCodec {
 		}
 		return new GasLiquidSpeciesPair(stableId, string(root, "gas_component"), string(root, "liquid_phase"),
 				string(root, "species"), exactLong(root, "gas_standard_volume_nanos_per_batch"),
-				finiteDouble(root, "gas_kilograms_per_batch"), exactLong(root, "liquid_quanta_per_batch"),
-				finiteDouble(root, "liquid_kilograms_per_batch"),
-				finiteDouble(root, "liquid_residual_kilograms_per_batch"),
+				mmm.units.Mass.fromKilograms(finiteDouble(root, "gas_kilograms_per_batch")), exactLong(root, "liquid_quanta_per_batch"),
+				mmm.units.Mass.fromKilograms(finiteDouble(root, "liquid_kilograms_per_batch")),
+				mmm.units.Mass.fromKilograms(finiteDouble(root, "liquid_residual_kilograms_per_batch")),
 				ExactRational.parse(string(root, "moles_per_batch")), segments,
 				finiteDouble(root, "minimum_pressure_pa"), finiteDouble(root, "maximum_pressure_pa"),
 				finiteDouble(root, "maximum_liquid_concentration_mol_per_m3"),
@@ -159,7 +159,7 @@ public final class ThermalDefinitionCodec {
 					finiteDouble(port, "wall_thickness_m"), finiteDouble(port, "fluid_film_thickness_m")));
 		}
 		return new FiniteThermalDeviceDefinition(stableId, string(root, "thermal_material"),
-				finiteDouble(root, "body_mass_kg"), finiteDouble(root, "initial_temperature_k"), ports);
+				mmm.units.Mass.fromKilograms(finiteDouble(root, "body_mass_kg")), finiteDouble(root, "initial_temperature_k"), ports);
 	}
 
 	private static JsonObject object(Reader input) {
