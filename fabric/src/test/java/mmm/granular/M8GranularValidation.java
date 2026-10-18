@@ -445,7 +445,7 @@ public final class M8GranularValidation {
 	}
 
 	private static void registryDefinitionsAndWorldSnapshotAreStrict() throws Exception {
-		String materialJson = "{\"reference_density\":\"2600.0\",\"primary_grain_diameter_meters\":\"0.0005\","
+		String materialJson = "{\"reference_density_kg_per_m3\":\"2600.0\",\"primary_grain_diameter_meters\":\"0.0005\","
 				+ "\"rest_porosity_q\":\"380000\",\"repose_angle_degrees\":\"32.0\",\"static_friction\":\"0.6\","
 				+ "\"dynamic_friction\":\"0.45\",\"restitution\":\"0.1\",\"critical_shields\":\"0.05\","
 				+ "\"erosion_rate_svq_per_second\":\"4194304\",\"maximum_active_parcel_svq\":\"262144\","

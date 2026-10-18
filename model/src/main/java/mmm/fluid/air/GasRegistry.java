@@ -119,16 +119,16 @@ public final class GasRegistry {
 			long nanos = shares[index];
 			if (nanos == 0L) continue;
 			GasComponentDefinition definition = component(ambient.get(index).componentId());
-			double mass = definition.standardMassPerCubicMeter() * AirNetwork.cubicMeters(nanos);
+			double mass = definition.standardDensityKgPerCubicMeter() * AirNetwork.cubicMeters(nanos);
 			ArrayList<GasComponentAmount.SpeciesAmount> species = new ArrayList<>();
-			for (GasComponentDefinition.DefaultSpecies entry : definition.defaultSpeciesPerCubicMeter()) {
-				BigInteger numerator = entry.concentrationMolPerCubicMeter().numerator().multiply(BigInteger.valueOf(nanos))
+			for (GasComponentDefinition.DefaultSpecies entry : definition.defaultSpeciesConcentrations()) {
+				BigInteger numerator = entry.concentrationMolPerStandardCubicMeter().numerator().multiply(BigInteger.valueOf(nanos))
 						.multiply(BigInteger.valueOf(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL));
-				BigInteger denominator = entry.concentrationMolPerCubicMeter().denominator().multiply(BigInteger.valueOf(1_000_000_000L));
+				BigInteger denominator = entry.concentrationMolPerStandardCubicMeter().denominator().multiply(BigInteger.valueOf(1_000_000_000L));
 				long quanta = numerator.divide(denominator).longValueExact();
 				if (quanta > 0L) species.add(new GasComponentAmount.SpeciesAmount(entry.speciesId(), quanta));
 			}
-			double residual = definition.defaultMassResidualPerCubicMeter() * AirNetwork.cubicMeters(nanos);
+			double residual = definition.defaultResidualDensityKgPerCubicMeter() * AirNetwork.cubicMeters(nanos);
 			amounts.add(new GasComponentAmount(definition.id(), nanos, mass, species, residual));
 		}
 		return new GasInventory(amounts);
@@ -141,12 +141,12 @@ public final class GasRegistry {
 				.append("temperature=").append(Long.toUnsignedString(Double.doubleToRawLongBits(STANDARD_TEMPERATURE_K))).append('\n');
 		for (GasComponentDefinition component : components) {
 			out.append("C|").append(component.id()).append('|')
-					.append(Long.toUnsignedString(Double.doubleToRawLongBits(component.standardMassPerCubicMeter()))).append('|')
-					.append(Long.toUnsignedString(Double.doubleToRawLongBits(component.defaultMassResidualPerCubicMeter()))).append('|');
+					.append(Long.toUnsignedString(Double.doubleToRawLongBits(component.standardDensityKgPerCubicMeter()))).append('|')
+					.append(Long.toUnsignedString(Double.doubleToRawLongBits(component.defaultResidualDensityKgPerCubicMeter()))).append('|');
 			for (String species : component.allowedSpecies()) out.append(species).append(';');
 			out.append('|');
-			for (GasComponentDefinition.DefaultSpecies species : component.defaultSpeciesPerCubicMeter()) {
-				out.append(species.speciesId()).append('=').append(species.concentrationMolPerCubicMeter().canonical()).append(';');
+			for (GasComponentDefinition.DefaultSpecies species : component.defaultSpeciesConcentrations()) {
+				out.append(species.speciesId()).append('=').append(species.concentrationMolPerStandardCubicMeter().canonical()).append(';');
 			}
 			out.append('\n');
 		}

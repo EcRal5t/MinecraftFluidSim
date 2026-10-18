@@ -10,6 +10,8 @@ import mmm.simulation.controller.FluidRegionFootprint;
 import mmm.thermal.ThermalAuditLedger;
 import mmm.thermal.ThermalDisplaySnapshot;
 import mmm.worldprofile.WorldCapability;
+import mmm.units.SolverUnitScale;
+import mmm.units.UnitFormat;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -92,20 +94,21 @@ public final class RegionDiagnosticsReport {
 		RegionCatalog.BudgetUsage selectedUsage = regions.usage();
 		if (!region.solverLoaded()) {
 			return String.format(
-					"UNLOADED/PAUSED | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | controller %s | %s | origin %s | grid %dx%dx%d | checkpoint %d, liquid %.3f cells, markers %d | controller flag %s, bridge %s | takeover lock %s%s",
+					"UNLOADED/PAUSED | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | controller %s | %s | origin %s | grid %dx%dx%d | checkpoint %d, liquid %s, markers %d | controller flag %s, bridge %s | takeover lock %s%s",
 					region.id().toString().substring(0, 8), selectedUsage.regionCount(), regions.limits().maximumRegions(),
 					selectedUsage.reservedCells(), regions.limits().maximumTotalCells(), selectedUsage.reservedMarkers(),
 					regions.limits().maximumTotalMarkers(), region.footprint().controllerPosition().toShortString(),
 					region.availabilityFailure() == null ? "awaiting explicit run" : "blocked: " + region.availabilityFailure(),
 					region.origin().toShortString(), region.sizeX(), region.sizeY(), region.sizeZ(), region.checkpointGeneration(),
-					region.checkpointVolume(), region.checkpointMarkerCount(), controllerFeatureEnabled.getAsBoolean() ? "on" : "off",
+					UnitFormat.volume(SolverUnitScale.forCellSize(region.solverConfig().cellSize()).cubicMeters(region.checkpointVolume())),
+					region.checkpointMarkerCount(), controllerFeatureEnabled.getAsBoolean() ? "on" : "off",
 					worldBridgeFeatureEnabled.getAsBoolean() ? "on" : "off", takeoverLock,
 					operations.issues().isEmpty() ? "" : " | persistence issues " + operations.issues().size());
 		}
 		FluidDomain.StepStats lastStats = region.lastStats();
 		String stats = lastStats == null
 				? "尚未步进"
-				: String.format("%.2f ms, substeps %d, PCG %d, residual %.4g%s",
+				: String.format("compute %.2f ms, substeps %d, PCG %d, residual %.4g%s",
 						region.lastStepMilliseconds(), lastStats.substeps(), lastStats.pressureIterations(), lastStats.pressureResidual(),
 						lastStats.reseededMerges() == 0 && lastStats.reseededSplits() == 0
 								&& lastStats.reseedBudgetSkipped() == 0 && lastStats.reseedGeometrySkipped() == 0
@@ -118,7 +121,7 @@ public final class RegionDiagnosticsReport {
 										lastStats.reseedLedgerError()));
 		FluidDomain domain = region.domain();
 		BlockPos origin = region.origin();
-		float cellVolumes = domain.totalVolume();
+		double cellVolumes = domain.totalVolumeExact();
 		FluidDomain.VolumeDistribution distribution = domain.volumeDistribution(8.0F / 255.0F);
 		FluidDomain.SolidDistribution solids = domain.solidDistribution();
 		FluidRegion.CollisionStats collision = region.lastCollisionStats();
@@ -133,7 +136,7 @@ public final class RegionDiagnosticsReport {
 		String thermal = world.hasCapability(WorldCapability.THERMAL) ? thermalSummary(region, domain) : "";
 		String carrierViscosity = carrierViscositySummary(lastStats) + viscousStressSummary(lastStats);
 		return String.format(
-				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | sim %.1f Hz | liquid %.2f blocks (%.2f cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | bridge %s | entities %s/%d, liquid impulse [%.3g,%.3g,%.3g] kg·m/s | maxP %.1f | collision partial/full %d/%d, last Δ%d, escaped %.3f%s | %s%s%s",
+				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | Minecraft interval %d ticks, sim step %.6g s | liquid %s (%.2f normalized cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | bridge %s | entities %s/%d, liquid impulse [%.3g,%.3g,%.3g] kg·m/s | maxP(gauge) %s | collision partial/full %d/%d, last Δ%d, escaped %s%s | %s%s%s",
 				region.lifecycle().state(), region.paused() ? "/PAUSED" : "",
 				region.id().toString().substring(0, 8),
 				usage.regionCount(), regions.limits().maximumRegions(),
@@ -141,8 +144,8 @@ public final class RegionDiagnosticsReport {
 				usage.reservedMarkers(), regions.limits().maximumTotalMarkers(),
 				regionSource, availability,
 				origin.toShortString(), domain.sizeX(), domain.sizeY(), domain.sizeZ(),
-				20.0 / region.stepIntervalTicks(),
-				cellVolumes / FluidRegionFactory.CELL_VOLUMES_PER_BLOCK, cellVolumes,
+				region.stepIntervalTicks(), domain.config().timeStep(),
+				UnitFormat.volume(domain.unitScale().cubicMeters(cellVolumes)), cellVolumes,
 				domain.particleCount(), domain.maximumParticleCount(), domain.markerCellCount(),
 				distribution.visibleCells(), distribution.denseCells(), takeover.pendingBlockCount(), takeoverLock,
 				worldBridgeFeatureEnabled.getAsBoolean() ? "on" : "off",
@@ -150,9 +153,9 @@ public final class RegionDiagnosticsReport {
 				entityCoupling.impulseXKilogramMetresPerSecond(),
 				entityCoupling.impulseYKilogramMetresPerSecond(),
 				entityCoupling.impulseZKilogramMetresPerSecond(),
-				domain.maximumPressure(),
+				UnitFormat.pressure(domain.maximumPressure()),
 				solids.partialCells(), solids.fullCells(),
-				collision.changedCells(), collision.escapedCellVolume() / FluidRegionFactory.CELL_VOLUMES_PER_BLOCK,
+				collision.changedCells(), UnitFormat.volume(domain.unitScale().cubicMeters(collision.escapedCellVolume())),
 				collision.markerBudgetLimited() ? " (marker budget)" : "", stats,
 				(gas.isEmpty() ? "" : " | " + gas) + (thermal.isEmpty() ? "" : " | " + thermal),
 				carrierViscosity);

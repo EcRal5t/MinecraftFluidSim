@@ -1014,7 +1014,7 @@ final class ControllerInventoryDurabilityValidation {
 				assertUnchanged(beforeExtract, "closed-loop extraction");
 				return "skip(loopExtractRejected)";
 			}
-			check(extracted.ledger().totalVolume() > 0.0, "closed-loop extraction reported no volume");
+			check(extracted.ledger().totalNormalizedVolume() > 0.0, "closed-loop extraction reported no volume");
 			FluidDomainState beforeInsert = snapshot();
 			if (!domain.tryInsertExactChemical(target[0], target[1], target[2], extracted.ledger(), radius,
 					false, extracted.internalEnergy())

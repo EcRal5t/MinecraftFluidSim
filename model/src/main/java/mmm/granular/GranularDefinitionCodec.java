@@ -20,11 +20,11 @@ public final class GranularDefinitionCodec {
 
 	public static ParticulateMaterial decodeMaterial(String stableId, Reader input) {
 		JsonObject root = object(input);
-		requireOnly(root, "reference_density", "primary_grain_diameter_meters", "rest_porosity_q",
+		requireOnly(root, "reference_density_kg_per_m3", "primary_grain_diameter_meters", "rest_porosity_q",
 				"repose_angle_degrees", "static_friction", "dynamic_friction", "restitution",
 				"critical_shields", "erosion_rate_svq_per_second", "maximum_active_parcel_svq",
 				"base_argb", "display_texture", "reactive");
-		return new ParticulateMaterial(stableId, finiteDouble(root, "reference_density"),
+		return new ParticulateMaterial(stableId, finiteDouble(root, "reference_density_kg_per_m3"),
 				finiteDouble(root, "primary_grain_diameter_meters"), exactInt(root, "rest_porosity_q"),
 				Math.toRadians(finiteDouble(root, "repose_angle_degrees")), finiteDouble(root, "static_friction"),
 				finiteDouble(root, "dynamic_friction"), finiteDouble(root, "restitution"),

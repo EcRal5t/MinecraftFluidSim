@@ -1,5 +1,6 @@
 package mmm.transfer;
 
+import mmm.units.SolverUnitScale;
 import mmm.api.StableId;
 import mmm.chemistry.ChemicalLimits;
 import mmm.chemistry.ChemicalMixtureRecord;
@@ -51,11 +52,11 @@ public record ChemicalContents(String registryFingerprint, long quantaPerMol, Li
 				|| expectedVolumeNanos > ContainerFluidLedger.NANOS_PER_BLOCK) {
 			throw new IllegalArgumentException("Invalid chemical transfer ledger/bucket volume");
 		}
-		double totalVolume = ledger.totalVolume(); long assigned = 0L;
+		double totalVolume = ledger.totalNormalizedVolume(); long assigned = 0L;
 		long[] nanosByGroup = new long[ledger.groups().size()];
 		double[] remainders = new double[nanosByGroup.length];
 		for (int index = 0; index < nanosByGroup.length; index++) {
-			double exact = expectedVolumeNanos * ledger.groups().get(index).volume() / totalVolume;
+			double exact = expectedVolumeNanos * ledger.groups().get(index).normalizedVolume() / totalVolume;
 			nanosByGroup[index] = (long) Math.floor(exact); remainders[index] = exact - nanosByGroup[index];
 			assigned = Math.addExact(assigned, nanosByGroup[index]);
 		}
@@ -109,13 +110,9 @@ public record ChemicalContents(String registryFingerprint, long quantaPerMol, Li
 		}
 	}
 
-	public ChemicalTransferLedger toLedger(ChemicalRegistry registry) {
-		return toLedger(registry, 1.0);
-	}
-
-	public ChemicalTransferLedger toLedger(ChemicalRegistry registry, double cellVolumesPerBlock) {
+	public ChemicalTransferLedger toLedger(ChemicalRegistry registry, SolverUnitScale units) {
 		validateAgainst(registry);
-		if (!(Double.isFinite(cellVolumesPerBlock) && cellVolumesPerBlock > 0.0)) {
+		if (units == null) {
 			throw new IllegalArgumentException("Invalid container-to-cell volume scale");
 		}
 		List<ChemicalTransferLedger.Group> result = new ArrayList<>(groups.size());
@@ -123,7 +120,7 @@ public record ChemicalContents(String registryFingerprint, long quantaPerMol, Li
 			java.util.TreeMap<String, Long> species = new java.util.TreeMap<>();
 			for (SpeciesAmount amount : group.species()) species.put(amount.speciesId(), amount.amountQuanta());
 			result.add(new ChemicalTransferLedger.Group(group.materialId(), group.indicator(),
-					ContainerFluidLedger.nanosToCubicMeters(group.volumeNanos()) * cellVolumesPerBlock,
+					units.normalizedVolume(ContainerFluidLedger.nanosToCubicMeters(group.volumeNanos())),
 					group.massKilograms(), group.massResidualKilogramsBits(), species));
 		}
 		return new ChemicalTransferLedger(result);

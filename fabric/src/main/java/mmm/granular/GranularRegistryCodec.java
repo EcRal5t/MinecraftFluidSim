@@ -89,7 +89,7 @@ public final class GranularRegistryCodec {
 		ListTag materials = new ListTag();
 		for (ParticulateMaterial material : registry.materials()) {
 			CompoundTag tag = new CompoundTag();
-			tag.putString("Id", material.id()); tag.putLong("DensityBits", bits(material.referenceDensity()));
+			tag.putString("Id", material.id()); tag.putLong("ReferenceDensityKgPerM3Bits", bits(material.referenceDensity()));
 			tag.putLong("GrainBits", bits(material.primaryGrainDiameterMeters())); tag.putInt("PorosityQ", material.restPorosityQ());
 			tag.putLong("ReposeBits", bits(material.reposeAngleRadians())); tag.putLong("StaticFrictionBits", bits(material.staticFriction()));
 			tag.putLong("DynamicFrictionBits", bits(material.dynamicFriction())); tag.putLong("RestitutionBits", bits(material.restitution()));
@@ -135,13 +135,13 @@ public final class GranularRegistryCodec {
 		for (int index = 0; index < list.size(); index++) {
 			CompoundTag tag = compound(list, index, "particulate material");
 			requireAll(tag, Map.ofEntries(
-					Map.entry("Id", Tag.TAG_STRING), Map.entry("DensityBits", Tag.TAG_LONG), Map.entry("GrainBits", Tag.TAG_LONG),
+					Map.entry("Id", Tag.TAG_STRING), Map.entry("ReferenceDensityKgPerM3Bits", Tag.TAG_LONG), Map.entry("GrainBits", Tag.TAG_LONG),
 					Map.entry("PorosityQ", Tag.TAG_INT), Map.entry("ReposeBits", Tag.TAG_LONG),
 					Map.entry("StaticFrictionBits", Tag.TAG_LONG), Map.entry("DynamicFrictionBits", Tag.TAG_LONG),
 					Map.entry("RestitutionBits", Tag.TAG_LONG), Map.entry("CriticalShieldsBits", Tag.TAG_LONG),
 					Map.entry("ErosionRateSvq", Tag.TAG_LONG), Map.entry("MaximumParcelSvq", Tag.TAG_LONG),
 					Map.entry("Color", Tag.TAG_INT), Map.entry("Texture", Tag.TAG_STRING), Map.entry("Reactive", Tag.TAG_BYTE)));
-			result.add(new ParticulateMaterial(tag.getStringOr("Id", ""), value(tag, "DensityBits"), value(tag, "GrainBits"),
+			result.add(new ParticulateMaterial(tag.getStringOr("Id", ""), value(tag, "ReferenceDensityKgPerM3Bits"), value(tag, "GrainBits"),
 					tag.getIntOr("PorosityQ", -1), value(tag, "ReposeBits"), value(tag, "StaticFrictionBits"),
 					value(tag, "DynamicFrictionBits"), value(tag, "RestitutionBits"), value(tag, "CriticalShieldsBits"),
 					tag.getLongOr("ErosionRateSvq", -1L), tag.getLongOr("MaximumParcelSvq", -1L), tag.getIntOr("Color", 0),

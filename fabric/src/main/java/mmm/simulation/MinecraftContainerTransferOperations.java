@@ -1,5 +1,6 @@
 package mmm.simulation;
 
+import mmm.units.SolverUnitScale;
 import mmm.fluid.FluidDomain;
 import mmm.transfer.ContainerFluidLedger;
 import mmm.transfer.ChemicalContents;
@@ -33,15 +34,15 @@ final class MinecraftContainerTransferOperations {
 			int materialHandle, boolean externalSource, ThermalContents thermalContents
 	) {
 		if (volumeNanos <= 0L) return null;
-		float requestedCellVolume = nanosToCellVolumeAtMost(volumeNanos);
+		FluidDomain domain = region.domain();
+		float requestedCellVolume = nanosToCellVolumeAtMost(domain.unitScale(), volumeNanos);
 		if (requestedCellVolume <= 0.0F) {
 			return new TransferOutcome(false, true, withVolume(volumeNanos), "容器余量小于 solver 可表示体积，未能注入");
 		}
-		FluidDomain domain = region.domain();
 		if (domain.totalOpenVolume() - domain.totalVolume() + 1.0E-6F < requestedCellVolume) {
 			return new TransferOutcome(false, true, withVolume(volumeNanos), "空间或 marker 预算不足，未能注入");
 		}
-		long plannedNanos = cellVolumeToNanos(requestedCellVolume);
+		long plannedNanos = cellVolumeToNanos(domain.unitScale(), requestedCellVolume);
 		ThermalContents.EnergySplit thermalSplit = thermalContents == null ? null
 				: thermalContents.splitHomogeneousEnergy(plannedNanos, volumeNanos);
 		Double coupledEnergy = thermalSplit == null ? null
@@ -54,7 +55,7 @@ final class MinecraftContainerTransferOperations {
 		if (!inserted.transferred()) {
 			return new TransferOutcome(false, true, withVolume(volumeNanos), "空间或 marker 预算不足，未能注入");
 		}
-		long poured = settledNanos(inserted.volume(), volumeNanos);
+		long poured = settledNanos(domain.unitScale(), inserted.volume(), volumeNanos);
 		if (poured != plannedNanos) throw new IllegalStateException("Thermal insertion settlement changed after planning");
 		if (thermalSplit != null) domain.settleExternalContainerInsertion(thermalSplit.selectedEnergy(), coupledEnergy);
 		ItemStack after = withVolume(volumeNanos - poured);
@@ -72,25 +73,26 @@ final class MinecraftContainerTransferOperations {
 			int maxRadius, int materialHandle, ThermalContents baseThermal
 	) {
 		if (capacityNanos <= 0L) return null;
-		float requestedCellVolume = nanosToCellVolumeAtMost(capacityNanos);
+		FluidDomain domain = region.domain();
+		float requestedCellVolume = nanosToCellVolumeAtMost(domain.unitScale(), capacityNanos);
 		if (requestedCellVolume <= 0.0F) {
 			return new TransferOutcome(false, false, withVolume(baseVolumeNanos), "容器余量小于 solver 可表示体积");
 		}
-		SignedDyadic energyBefore = region.domain().hasThermalState() ? region.domain().exactInternalEnergy() : null;
-		FluidDomain.ExactVolumeTransfer extracted = region.domain().tryExtractExactVolume(
+		SignedDyadic energyBefore = domain.hasThermalState() ? domain.exactInternalEnergy() : null;
+		FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(
 				cell[0], cell[1], cell[2], requestedCellVolume, maxRadius, materialHandle);
 		if (!extracted.transferred() || extracted.volume() <= 0.0) {
 			return new TransferOutcome(false, false, withVolume(baseVolumeNanos), "准星处没有足够水体");
 		}
-		long taken = settledNanos(extracted.volume(), capacityNanos);
+		long taken = settledNanos(domain.unitScale(), extracted.volume(), capacityNanos);
 		ItemStack after = withVolume(baseVolumeNanos + taken);
 		Double thermalEnergy = null;
-		if (region.domain().hasThermalState()) {
+		if (domain.hasThermalState()) {
 			double baseEnergy = baseThermal == null ? 0.0 : baseThermal.internalEnergy();
-			double finalEnergy = mergedExtractionEnergy(baseEnergy, energyBefore.subtract(region.domain().exactInternalEnergy()));
+			double finalEnergy = mergedExtractionEnergy(baseEnergy, energyBefore.subtract(domain.exactInternalEnergy()));
 			ContainerItemStacks.attachThermal(after, world.thermalRegistryFingerprint(), finalEnergy);
 			thermalEnergy = SignedDyadic.of(finalEnergy).subtract(SignedDyadic.of(baseEnergy)).toDouble();
-			region.domain().settleExternalContainerExtraction(extracted.internalEnergy(), thermalEnergy);
+			domain.settleExternalContainerExtraction(extracted.internalEnergy(), thermalEnergy);
 		}
 		region.wakeForActivity();
 		if (thermalEnergy != null) region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
@@ -164,7 +166,7 @@ final class MinecraftContainerTransferOperations {
 		double spatialCellVolume = Math.max(0.0, domain.totalOpenVolumeExact() - domain.totalVolumeExact());
 		double markerCellVolume = Math.max(0, domain.maximumParticleCount() - domain.particleCount()) * 0.125;
 		long candidate = Math.min(contents.totalVolumeNanos(), Math.min(
-				cellVolumeToNanos(spatialCellVolume), cellVolumeToNanos(markerCellVolume)));
+				cellVolumeToNanos(domain.unitScale(), spatialCellVolume), cellVolumeToNanos(domain.unitScale(), markerCellVolume)));
 		while (candidate > 0L) {
 			ChemicalContents.Split split;
 			try {
@@ -174,7 +176,7 @@ final class MinecraftContainerTransferOperations {
 				continue;
 			}
 			mmm.chemistry.ChemicalTransferLedger requested = split.inserted().toLedger(
-					domain.chemicalParcels().registry(), FluidRegionFactory.CELL_VOLUMES_PER_BLOCK);
+					domain.chemicalParcels().registry(), domain.unitScale());
 			ThermalContents.EnergySplit thermalSplit = thermalContents == null ? null
 					: LiquidContainerThermodynamics.split(world.thermalRegistry(), thermalContents, contents,
 							split.inserted(), split.remaining());
@@ -208,15 +210,16 @@ final class MinecraftContainerTransferOperations {
 			mmm.chemistry.ChemicalRegistry registry
 	) {
 		if (capacityNanos <= 0L) return null;
-		float requested = nanosToCellVolumeAtMost(capacityNanos);
+		FluidDomain domain = region.domain();
+		float requested = nanosToCellVolumeAtMost(domain.unitScale(), capacityNanos);
 		if (requested <= 0.0F) return new TransferOutcome(false, false,
 				new ItemStack(MmmItems.MATERIAL_BUCKET), "容器余量小于 solver 可表示体积");
 		ChemicalContents[] plannedContents = new ChemicalContents[1];
 		long[] plannedNanos = new long[1];
-		FluidDomain.ExactChemicalTransfer extracted = region.domain().tryExtractExactChemical(
+		FluidDomain.ExactChemicalTransfer extracted = domain.tryExtractExactChemical(
 				cell[0], cell[1], cell[2], requested, maxRadius, ledger -> {
 					try {
-						plannedNanos[0] = settledNanos(ledger.totalVolume(), capacityNanos);
+						plannedNanos[0] = settledNanos(domain.unitScale(), ledger.totalNormalizedVolume(), capacityNanos);
 						plannedContents[0] = ChemicalContents.fromLedger(ledger, registry, plannedNanos[0]);
 						return true;
 					} catch (IllegalArgumentException | ArithmeticException invalidBucket) {
@@ -227,7 +230,7 @@ final class MinecraftContainerTransferOperations {
 				new ItemStack(MmmItems.MATERIAL_BUCKET), "准星处没有足够或可由当前容器表示的化学流体");
 		long taken = plannedNanos[0];
 		ChemicalContents contents = plannedContents[0];
-		Double thermalEnergy = region.domain().hasThermalState() ? extracted.internalEnergy() : null;
+		Double thermalEnergy = domain.hasThermalState() ? extracted.internalEnergy() : null;
 		ItemStack after = ContainerItemStacks.toStack(contents);
 		if (thermalEnergy != null) ContainerItemStacks.attachThermal(after, world.thermalRegistryFingerprint(), thermalEnergy);
 		region.wakeForActivity();
@@ -243,7 +246,7 @@ final class MinecraftContainerTransferOperations {
 	) {
 		if (capacityNanos <= 0L) return null;
 		FluidDomain domain = region.domain();
-		float requestedCellVolume = nanosToCellVolumeAtMost(capacityNanos);
+		float requestedCellVolume = nanosToCellVolumeAtMost(domain.unitScale(), capacityNanos);
 		if (requestedCellVolume <= 0.0F) {
 			return new TransferOutcome(false, false, new ItemStack(MmmItems.MATERIAL_BUCKET),
 					"容器余量小于 solver 可表示体积");
@@ -332,7 +335,7 @@ final class MinecraftContainerTransferOperations {
 	) {
 		double totalVolume = 0.0;
 		for (FluidDomain.MaterialPortion portion : portions) totalVolume += portion.volume();
-		long totalNanos = settledNanos(totalVolume, capacityNanos);
+		long totalNanos = settledNanos(domain.unitScale(), totalVolume, capacityNanos);
 		long remainingNanos = totalNanos;
 		double remainingVolume = totalVolume;
 		java.util.List<FluidMixture.Component> components = new java.util.ArrayList<>(portions.size());
@@ -357,8 +360,8 @@ final class MinecraftContainerTransferOperations {
 		java.util.List<FluidDomain.MaterialPortion> portions = new java.util.ArrayList<>(mixture.components().size());
 		for (FluidMixture.Component component : mixture.components()) {
 			int handle = domain.materialRegistry().handle(component.materialId());
-			float plannedVolume = nanosToCellVolumeAtMost(component.volumeNanos());
-			long plannedNanos = cellVolumeToNanos(plannedVolume);
+			float plannedVolume = nanosToCellVolumeAtMost(domain.unitScale(), component.volumeNanos());
+			long plannedNanos = cellVolumeToNanos(domain.unitScale(), plannedVolume);
 			if (plannedNanos <= 0L) throw new IllegalArgumentException(
 					"材料组分小于 solver 可表示体积：" + component.materialId());
 			double plannedMassKilograms = plannedNanos == component.volumeNanos()
@@ -383,7 +386,7 @@ final class MinecraftContainerTransferOperations {
 		for (int i = 0; i < sourceMixture.components().size(); i++) {
 			FluidMixture.Component source = sourceMixture.components().get(i);
 			FluidDomain.MaterialPortion actual = insertedPortions.get(i);
-			long componentNanos = settledNanos(actual.volume(), source.volumeNanos());
+			long componentNanos = settledNanos(domain.unitScale(), actual.volume(), source.volumeNanos());
 			insertedNanos = Math.addExact(insertedNanos, componentNanos);
 			long remainingNanos = source.volumeNanos() - componentNanos;
 			double actualMassKilograms = domain.physicalMassKilograms(actual.mass());
@@ -488,26 +491,26 @@ final class MinecraftContainerTransferOperations {
 		return PartialWaterBucketItem.withVolume(nanos);
 	}
 
-	static float nanosToCellVolume(long nanos) {
-		return (float) (ContainerFluidLedger.nanosToCubicMeters(nanos) * FluidRegionFactory.CELL_VOLUMES_PER_BLOCK);
+	static float nanosToCellVolume(SolverUnitScale units, long nanos) {
+		return (float) units.normalizedVolume(ContainerFluidLedger.nanosToCubicMeters(nanos));
 	}
 
 	/** Largest float cell volume whose nanovolume settlement does not exceed the source/capacity. */
-	static float nanosToCellVolumeAtMost(long nanos) {
+	static float nanosToCellVolumeAtMost(SolverUnitScale units, long nanos) {
 		if (nanos <= 0L) return 0.0F;
-		float volume = nanosToCellVolume(nanos);
-		while (volume > 0.0F && cellVolumeToNanos(volume) > nanos) volume = Math.nextDown(volume);
+		float volume = nanosToCellVolume(units, nanos);
+		while (volume > 0.0F && cellVolumeToNanos(units, volume) > nanos) volume = Math.nextDown(volume);
 		return volume;
 	}
 
-	static long cellVolumeToNanos(double cellVolume) {
-		return ContainerFluidLedger.cubicMetersToNanos(cellVolume / FluidRegionFactory.CELL_VOLUMES_PER_BLOCK);
+	static long cellVolumeToNanos(SolverUnitScale units, double cellVolume) {
+		return ContainerFluidLedger.cubicMetersToNanos(units.cubicMeters(cellVolume));
 	}
 
 	/** Converts the primitive's authoritative marker delta and rejects impossible item overshoot. */
-	static long settledNanos(double actualCellVolume, long maximumNanos) {
+	static long settledNanos(SolverUnitScale units, double actualCellVolume, long maximumNanos) {
 		if (maximumNanos <= 0L) throw new IllegalArgumentException("Settlement limit must be positive");
-		long actualNanos = cellVolumeToNanos(actualCellVolume);
+		long actualNanos = cellVolumeToNanos(units, actualCellVolume);
 		if (actualNanos <= 0L || actualNanos > maximumNanos) {
 			throw new IllegalStateException("Solver transfer settled " + actualNanos
 					+ " nanovolume quanta outside 1.." + maximumNanos);
@@ -522,11 +525,11 @@ final class MinecraftContainerTransferOperations {
 		double availableCellVolume = domain.exactVolumeNear(
 				cell[0], cell[1], cell[2], maxRadius, materialHandle);
 		if (!(availableCellVolume > 0.0)) return 0L;
-		long availableNanos = cellVolumeToNanos(availableCellVolume);
+		long availableNanos = cellVolumeToNanos(domain.unitScale(), availableCellVolume);
 		long request = Math.min(capacityNanos, availableNanos);
-		float requestCellVolume = nanosToCellVolumeAtMost(request);
+		float requestCellVolume = nanosToCellVolumeAtMost(domain.unitScale(), request);
 		while (requestCellVolume > availableCellVolume) requestCellVolume = Math.nextDown(requestCellVolume);
-		request = requestCellVolume <= 0.0F ? 0L : cellVolumeToNanos(requestCellVolume);
+		request = requestCellVolume <= 0.0F ? 0L : cellVolumeToNanos(domain.unitScale(), requestCellVolume);
 		// A material mixture must assign at least one nanovolume quantum to every possible
 		// component. Below that bound the independent per-material volume ledger cannot be encoded.
 		if (materialHandle < 0 && domain.hasMaterialState()

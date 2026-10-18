@@ -370,7 +370,7 @@ public final class M7ChemicalTransportValidation {
 		}
 		FluidDomain.IndicatorEditResult added = domain.editIndicatorFloodFill(1, 1, 1,
 				true, 64, 100.0);
-		check(added.accepted() && added.changedMarkers() == connectedMarkers && added.affectedBlockVolume() == 0.25,
+		check(added.accepted() && added.changedMarkers() == connectedMarkers && added.affectedVolumeCubicMeters() == 0.25,
 				"connected aqueous indicator fill did not cover its exact component");
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
 			check(domain.chemicalParcels().indicator(marker), "connected indicated marker was skipped");
@@ -378,14 +378,14 @@ public final class M7ChemicalTransportValidation {
 		FluidDomain.IndicatorEditResult shallowAim = domain.editIndicatorFloodFill(1, 3, 1,
 				false, 64, Double.POSITIVE_INFINITY);
 		check(shallowAim.accepted() && shallowAim.changedMarkers() == connectedMarkers
-				&& shallowAim.affectedBlockVolume() == 0.25,
+				&& shallowAim.affectedVolumeCubicMeters() == 0.25,
 				"shallow-surface aim did not snap to nearby chemical marker truth");
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
 			check(!domain.chemicalParcels().indicator(marker), "shallow-surface eraser skipped a marker");
 		}
 		added = domain.editIndicatorFloodFill(1, 1, 1, true, 64, 100.0);
 		check(added.accepted() && added.changedMarkers() == connectedMarkers
-				&& added.affectedBlockVolume() == 0.25,
+				&& added.affectedVolumeCubicMeters() == 0.25,
 				"indicator could not be restored after shallow-aim regression");
 
 		int preservedCell = domain.cellIndex(1, 1, 1);
@@ -405,7 +405,7 @@ public final class M7ChemicalTransportValidation {
 				"later mixed markers inherited indicator retroactively");
 		FluidDomain.IndicatorEditResult erased = domain.editIndicatorFloodFill(1, 1, 1,
 				false, 64, Double.POSITIVE_INFINITY);
-		check(erased.accepted() && erased.changedMarkers() == marked && erased.affectedBlockVolume() == 0.375,
+		check(erased.accepted() && erased.changedMarkers() == marked && erased.affectedVolumeCubicMeters() == 0.375,
 				"eraser did not clear only current marked provenance");
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
 			check(!domain.chemicalParcels().indicator(marker), "eraser left an indicated marker");
@@ -619,7 +619,7 @@ public final class M7ChemicalTransportValidation {
 		check(extracted.transferred() && source.particleCount() == 0,
 				"chemical bucket extraction was not all-or-nothing");
 		ChemicalContents contents = ChemicalContents.fromLedger(extracted.ledger(), CHEMISTRY,
-				ContainerFluidLedger.cubicMetersToNanos(extracted.ledger().totalVolume()));
+				ContainerFluidLedger.cubicMetersToNanos(extracted.ledger().totalNormalizedVolume()));
 		check(ChemicalContents.decode(contents.encode()).equals(contents),
 				"chemical bucket canonical codec did not round-trip");
 		ChemicalContents.Split partial = contents.split(123_456_789L, CHEMISTRY);
@@ -635,7 +635,7 @@ public final class M7ChemicalTransportValidation {
 		partial.remaining().validateAgainst(CHEMISTRY);
 		FluidDomain restored = source;
 		FluidDomain.ExactChemicalTransfer inserted = restored.tryInsertExactChemical(
-				1, 1, 1, contents.toLedger(CHEMISTRY), 0);
+				1, 1, 1, contents.toLedger(CHEMISTRY, restored.unitScale()), 0);
 		check(inserted.transferred(), "canonical chemical bucket could not be inserted");
 		check(Arrays.equals(expectedSpecies, restored.chemicalParcels().speciesTotals(restored.particleCount())),
 				"chemical bucket round-trip changed species inventory");

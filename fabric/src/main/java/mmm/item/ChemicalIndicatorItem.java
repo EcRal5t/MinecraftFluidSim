@@ -34,7 +34,7 @@ public final class ChemicalIndicatorItem extends Item {
 		}
 		net.minecraft.network.chat.MutableComponent message = Component.translatable(
 				eraser ? "message.mmm.indicator.erased" : "message.mmm.indicator.applied",
-				String.format(java.util.Locale.ROOT, "%.3f", result.affectedBlockVolume()),
+				mmm.units.UnitFormat.volume(result.affectedVolumeCubicMeters()),
 				result.changedMarkers(), result.scannedCells());
 		if (result.checkpointWarning() != null) message.append(Component.translatable(
 				"message.mmm.indicator.checkpoint_warning", result.checkpointWarning()));

@@ -383,25 +383,24 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 ## 当前验证证据
 
 实施进度见[当前计划](../roadmap/solver-consolidation-plan.md)，历史结果见[阶段记录](../archive/progress/solver-validation-2026-10-18.md)。
-以下记录对应 SI 迁移提交 `4f61a3f`、`cde3888`；计算耗时按本轮要求只记录。
+本轮生产字段与换算清理复用既有测试；计算耗时按本轮要求只记录。
 
 <a id="si-units"></a>
 ### SI 迁移：2026-10-18
 
 | 结果 | 输入与日志（均位于 `build/`） |
 |---|---|
-| 编译及架构检查通过 | 服务端、客户端、测试、GPU 模块；`unit-final-volume-build.log` |
-| 化学、存档、协议及孔流通过 | `chemistry:short,region-state,protocol,air-network`；`unit-integration-complete.log` |
-| 相变与颗粒热库存通过 | `--gas-topology`、`--phase-volume`、`--granular-energy`；`unit-gas-topology-final.log`、`unit-phase-volume-delivery.log`、`unit-granular-energy-delivery.log` |
-| 容器基础流程通过 | 13 项测试，1 m³ 桶往返 100 次体积漂移为 0；`unit-container-units-complete.log` |
-| 连续注液恢复通过 | 24 次完整配置注液、提交与重启；`unit-containers-delivery.log` |
+| 编译及架构检查通过 | 服务端、客户端、现有测试、GPU 模块；`unit-production-final.log` |
+| 化学、存档、协议及孔流通过 | `chemistry:short,region-state,protocol,air-network`；`unit-production-integration-complete.log` |
+| 容器结算与连续注液恢复通过 | WAL、部分转移、24 次完整配置注液及重启；`unit-production-containers-final.log` |
+| 资源检查通过 | 117 份 JSON 可解析，中英文 232 个翻译键一致 |
+| 此前相变与颗粒热库存通过 | `--gas-topology`、`--phase-volume`、`--granular-energy`；`unit-gas-topology-final.log`、`unit-phase-volume-delivery.log`、`unit-granular-energy-delivery.log` |
 
 完整流程仍有四项失败：
 
 - 热平流响应导数 −0.1038155，超出 2.5% 误差要求：`unit-thermal-delivery.log`。
-- 三材料操作矩阵注油时缺少有限气体后继：`unit-containers-delivery.log`。
+- 三材料操作矩阵注油时缺少有限气体后继，本轮仍复现：`unit-production-containers-final.log`。
 - 随机场景 0、seed=101，第 26 动作容量超额约 5.96×10⁻⁸，累计子步耗尽：`unit-normal-replay-delivery.log`。
 - 床层 phase=3 超出仿真完成时间判据：`unit-validation2.log`。
 
-留存沙床记录完成 615 步，平均／最大完整步耗时 138.935／2800.104 ms，日志 `tmp/bed-complete.log`。
-迁移早期 controller 20 步采样均值 186.417 ms，测量与编译并行；后续修复未重新采样，见 `build/unit-step-benchmark.log`。
+此前沙床和 controller 耗时记录见阶段记录及 `tmp/bed-complete.log`、`unit-step-benchmark.log`。

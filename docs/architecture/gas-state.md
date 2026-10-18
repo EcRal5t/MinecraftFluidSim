@@ -219,5 +219,6 @@ Q = Cd * A * sqrt(2 * abs(delta_p) / rho_source)
 操作保留几何归属、容量与连接，将有限节点变为显式真空，并可正常保存与恢复。
 后续库存来自真实孔流、相变或拓扑来源。
 
-气体默认物种组成使用 `concentrationMolPerCubicMeter`，以标准态 mol/m³ 表示，生成库存时转换为整数 μmol。
+气体默认物种组成使用 `concentrationMolPerStandardCubicMeter`，以标准态 mol/m³ 表示，生成库存时转换为整数 μmol。
+注册表快照分别以 `StandardDensityKgPerM3Bits`、`DefaultResidualDensityKgPerM3Bits`、`ConcentrationMolPerStandardM3` 保存标准态密度、质量余量密度与物种浓度；标准条件使用 `StandardPressurePaBits`、`StandardTemperatureKBits`。
 标准体积按 nanos 编码取最近整数，低于半个 nanos 的环境截留量产生零库存；误差为每次不足 0.5×10⁻⁹ 标准 m³。

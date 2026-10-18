@@ -231,13 +231,13 @@ public final class ChemicalParcelStore {
 			requireCompatible(previous.mixture, materialId, indicator);
 			return previous.mixture;
 		}
-		ExactRational blockVolume = ExactRational.ofFloat(cellVolume)
+		ExactRational cubicMeters = ExactRational.ofFloat(cellVolume)
 				.multiply(ExactRational.ofFloat(cellSize))
 				.multiply(ExactRational.ofFloat(cellSize))
 				.multiply(ExactRational.ofFloat(cellSize));
 		TreeMap<String, Long> amounts = new TreeMap<>();
 		for (Map.Entry<String, ExactRational> entry : phase.defaultConcentrationMolPerCubicMeter().entrySet()) {
-			ExactRational exactQuanta = entry.getValue().multiply(blockVolume).multiply(ChemicalLimits.QUANTA_PER_MOL);
+			ExactRational exactQuanta = entry.getValue().multiply(cubicMeters).multiply(ChemicalLimits.QUANTA_PER_MOL);
 			long quanta = roundNonNegative(exactQuanta);
 			if (quanta > 0L) amounts.put(entry.getKey(), quanta);
 		}

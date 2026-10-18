@@ -1,6 +1,6 @@
 package mmm.granular;
 
-/** Immutable particulate material definition; runtime handles are assigned by GranularRegistry. */
+/** Immutable SI particulate definition: reference density in kg/m³; runtime handles come from GranularRegistry. */
 public record ParticulateMaterial(
 		String id,
 		double referenceDensity,

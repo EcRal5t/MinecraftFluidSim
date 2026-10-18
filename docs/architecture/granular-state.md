@@ -56,6 +56,7 @@
 定义或身份不匹配时保留原存档并锁定。
 
 `ParticulateMaterial` 定义密度、代表粒径、孔隙率、安息角、摩擦、恢复、临界 Shields 数及侵蚀率。
+数据定义的 `reference_density_kg_per_m3` 使用 kg/m³，注册表快照以 `ReferenceDensityKgPerM3Bits` 保存原始位。
 `GranularCarrier` 保存液相材料对应的阻力标定范围；动态黏度由材料注册表提供。
 载体、组成、沉积组和单步工作量具有容量限制，具体常量由对应库存与配置代码维护。
 容量不足时保留待处理库存，材料和组成身份随物质交接。

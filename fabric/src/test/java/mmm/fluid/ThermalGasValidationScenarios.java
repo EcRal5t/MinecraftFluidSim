@@ -705,7 +705,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
 			var gasComponent = gas.component(pair.gasComponentId());
 			var liquidPhase = chemistry.phase(chemistry.phaseHandle(pair.liquidPhaseId()));
-			double gasKilograms = gasComponent.standardMassPerCubicMeter()
+			double gasKilograms = gasComponent.standardDensityKgPerCubicMeter()
 					* AirNetwork.cubicMeters(pair.gasStandardVolumeNanosPerBatch());
 			double liquidKilograms = chemistry.species(chemistry.speciesHandle(pair.speciesId()))
 					.molarMassKgPerMol().multiply(pair.liquidQuantaPerBatch())

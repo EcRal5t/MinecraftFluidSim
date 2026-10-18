@@ -122,7 +122,7 @@ public final class RegistryBundleLoader {
 			int liquidHost = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, phase.materialId());
 			registry.speciesOffset(gasHost, pair.speciesId());
 			registry.speciesOffset(liquidHost, pair.speciesId());
-			double mappedGasKilograms = component.standardMassPerCubicMeter()
+			double mappedGasKilograms = component.standardDensityKgPerCubicMeter()
 					* AirNetwork.cubicMeters(pair.gasStandardVolumeNanosPerBatch());
 			if (Double.doubleToRawLongBits(mappedGasKilograms)
 					!= Double.doubleToRawLongBits(pair.gasKilogramsPerBatch())) {

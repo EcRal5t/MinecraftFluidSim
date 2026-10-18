@@ -4,6 +4,7 @@
 
 单位与整数编码统一见[设计书](system-overview.md#units)。
 `ContainerFluidLedger.cubicMetersToNanos` 与 `nanosToCubicMeters` 接受和返回物理 m³；归一化液体体积先通过 `SolverUnitScale` 换算。
+容器注入、抽取与 `ChemicalContents.toLedger` 显式接收目标区域的尺度；命令和操作回执使用 m³。
 
 ## 修改入口
 

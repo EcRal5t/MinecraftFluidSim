@@ -69,7 +69,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 	 * isolated by chemical phase, while the indicator bit itself never isolates reactions.
 	 */
 	public IndicatorEditResult editIndicatorFloodFill(
-			int startX, int startY, int startZ, boolean indicated, int maxScannedCells, double maxAddedBlockVolume
+			int startX, int startY, int startZ, boolean indicated, int maxScannedCells, double maximumAddedVolumeCubicMeters
 	) {
 		if (chemicalParcels == null || materialRegistry == null) {
 			return IndicatorEditResult.rejected("Chemistry is not bound");
@@ -77,7 +77,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		if (maxScannedCells <= 0 || maxScannedCells > cellCount) {
 			throw new IllegalArgumentException("Indicator scan budget must be within the region cell budget");
 		}
-		if (indicated && !(Double.isFinite(maxAddedBlockVolume) && maxAddedBlockVolume > 0.0)) {
+		if (indicated && !(Double.isFinite(maximumAddedVolumeCubicMeters) && maximumAddedVolumeCubicMeters > 0.0)) {
 			throw new IllegalArgumentException("Indicator volume budget must be finite and positive");
 		}
 		int requestedStart = cellIndexChecked(startX, startY, startZ);
@@ -133,9 +133,9 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 				affected.add(marker);
 				cellVolume += particles.volume(marker);
 			}
-			double blockVolume = cellVolume * config.cellSize() * config.cellSize() * config.cellSize();
-			if (indicated && blockVolume > maxAddedBlockVolume) {
-				return IndicatorEditResult.rejected("Indicator volume exceeds " + maxAddedBlockVolume + " m³");
+			double cubicMeters = unitScale.cubicMeters(cellVolume);
+			if (indicated && cubicMeters > maximumAddedVolumeCubicMeters) {
+				return IndicatorEditResult.rejected("Indicator volume exceeds " + maximumAddedVolumeCubicMeters + " m³");
 			}
 			int x = cell % sizeX;
 			int yz = cell / sizeX;
@@ -150,8 +150,8 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 		}
 		int changed = 0;
 		for (int marker : affected) if (chemicalParcels.updateIndicator(marker, indicated)) changed++;
-		double blockVolume = cellVolume * config.cellSize() * config.cellSize() * config.cellSize();
-		return new IndicatorEditResult(true, scanned, changed, blockVolume, null);
+		double cubicMeters = unitScale.cubicMeters(cellVolume);
+		return new IndicatorEditResult(true, scanned, changed, cubicMeters, null);
 	}
 
 	/**
@@ -209,7 +209,7 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 	}
 
 	public record IndicatorEditResult(
-			boolean accepted, int scannedCells, int changedMarkers, double affectedBlockVolume, String failure
+			boolean accepted, int scannedCells, int changedMarkers, double affectedVolumeCubicMeters, String failure
 	) {
 		static IndicatorEditResult rejected(String failure) {
 			return new IndicatorEditResult(false, 0, 0, 0.0, failure);

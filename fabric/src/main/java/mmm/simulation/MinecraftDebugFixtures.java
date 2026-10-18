@@ -210,12 +210,13 @@ public final class MinecraftDebugFixtures {
 		FluidDomain domain = regions.selected().domain();
 		float[] positionVolume = domain.exportChemicalParticleState().materials().copyPositionVolume();
 		float divider = domain.sizeX() * domain.config().cellSize() / 5.0F;
+		long reagentMicromoles = mmm.chemistry.ChemicalAmount.quanta(mmm.chemistry.ExactRational.ONE);
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
-			if (positionVolume[marker * 4] < divider) {
-				domain.setMarkerChemical(marker, Map.of("mmm:hcl", 1_000_000L), true);
-			} else {
-				domain.setMarkerChemical(marker, Map.of("mmm:naoh", 1_000_000L), false);
-			}
+			boolean acid = positionVolume[marker * 4] < divider;
+			var amounts = new java.util.TreeMap<>(domain.chemicalParcels().record(marker)
+					.stableAmounts(domain.chemicalParcels().registry()));
+			amounts.put(acid ? "mmm:hcl" : "mmm:naoh", reagentMicromoles);
+			domain.setMarkerChemical(marker, amounts, acid);
 		}
 		regions.selected().setPaused(true);
 		sendSnapshot(player.level());

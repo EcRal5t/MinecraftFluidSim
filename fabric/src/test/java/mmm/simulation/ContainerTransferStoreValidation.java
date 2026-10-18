@@ -612,13 +612,14 @@ public final class ContainerTransferStoreValidation {
 	}
 
 	private static void testNanosCellConversion() {
-		check(MinecraftContainerTransferOperations.nanosToCellVolume(1_000_000_000L) == 8.0F,
+		var units = mmm.units.SolverUnitScale.forCellSize(0.5F);
+		check(MinecraftContainerTransferOperations.nanosToCellVolume(units, 1_000_000_000L) == 8.0F,
 				"one bucket must convert to eight solver cell volumes");
-		check(MinecraftContainerTransferOperations.cellVolumeToNanos(8.0) == 1_000_000_000L,
+		check(MinecraftContainerTransferOperations.cellVolumeToNanos(units, 8.0) == 1_000_000_000L,
 				"eight solver cell volumes must convert back to one bucket");
-		check(MinecraftContainerTransferOperations.nanosToCellVolume(500_000_000L) == 4.0F,
+		check(MinecraftContainerTransferOperations.nanosToCellVolume(units, 500_000_000L) == 4.0F,
 				"half a bucket must convert to four solver cell volumes");
-		check(MinecraftContainerTransferOperations.cellVolumeToNanos(1.0) == 125_000_000L,
+		check(MinecraftContainerTransferOperations.cellVolumeToNanos(units, 1.0) == 125_000_000L,
 				"one solver cell volume must be one eighth of a bucket");
 	}
 
@@ -626,24 +627,24 @@ public final class ContainerTransferStoreValidation {
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
 		for (long requested : new long[] {1L, 59L, 333_333_333L, 999_999_999L, 1_000_000_000L}) {
-			float plannedVolume = MinecraftContainerTransferOperations.nanosToCellVolumeAtMost(requested);
-			long plannedNanos = MinecraftContainerTransferOperations.cellVolumeToNanos(plannedVolume);
+			FluidDomain domain = new FluidDomain(6, 4, 6, config, 1_024);
+			float plannedVolume = MinecraftContainerTransferOperations.nanosToCellVolumeAtMost(domain.unitScale(), requested);
+			long plannedNanos = MinecraftContainerTransferOperations.cellVolumeToNanos(domain.unitScale(), plannedVolume);
 			check(plannedNanos > 0L && plannedNanos <= requested,
 					"downward request quantization exceeded its item balance for " + requested);
 
-			FluidDomain domain = new FluidDomain(6, 4, 6, config, 1_024);
 			FluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(3, 2, 3, plannedVolume, 3);
 			check(inserted.transferred(), "edge-volume insertion failed for " + requested);
-			long insertedNanos = MinecraftContainerTransferOperations.settledNanos(inserted.volume(), requested);
+			long insertedNanos = MinecraftContainerTransferOperations.settledNanos(domain.unitScale(), inserted.volume(), requested);
 			check(insertedNanos > 0L && insertedNanos <= requested,
 					"actual insertion exceeded the source item for " + requested);
 
 			long extractRequest = MinecraftContainerTransferOperations.extractableNanos(
 					domain, new int[] {3, 2, 3}, ContainerFluidLedger.NANOS_PER_BLOCK, 3, 0);
 			FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(
-					3, 2, 3, MinecraftContainerTransferOperations.nanosToCellVolumeAtMost(extractRequest), 3, 0);
+					3, 2, 3, MinecraftContainerTransferOperations.nanosToCellVolumeAtMost(domain.unitScale(), extractRequest), 3, 0);
 			check(extracted.transferred(), "edge-volume extraction failed for " + requested);
-			long extractedNanos = MinecraftContainerTransferOperations.settledNanos(extracted.volume(), extractRequest);
+			long extractedNanos = MinecraftContainerTransferOperations.settledNanos(domain.unitScale(), extracted.volume(), extractRequest);
 			check(extractedNanos == insertedNanos && domain.totalVolumeExact() == 0.0,
 					"actual marker settlement did not round-trip for " + requested + ": inserted="
 							+ insertedNanos + ", extracted=" + extractedNanos + ", residual=" + domain.totalVolumeExact());
@@ -683,7 +684,7 @@ public final class ContainerTransferStoreValidation {
 		long request = MinecraftContainerTransferOperations.extractableNanos(
 				domain, new int[] {3, 2, 3}, ContainerFluidLedger.NANOS_PER_BLOCK, 3, -1);
 		FluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(
-				3, 2, 3, MinecraftContainerTransferOperations.nanosToCellVolumeAtMost(request), 3);
+				3, 2, 3, MinecraftContainerTransferOperations.nanosToCellVolumeAtMost(domain.unitScale(), request), 3);
 		check(extracted.transferred(), "material extraction failed after service-planned insertion");
 		FluidMixture bucket = MinecraftContainerTransferOperations.mixtureFromExtraction(domain, extracted.portions(), request);
 		check(bucket.totalVolumeNanos() == settlement.insertedNanos() && domain.totalVolumeExact() == 0.0,
@@ -750,7 +751,7 @@ public final class ContainerTransferStoreValidation {
 							Double.doubleToRawLongBits(sourceMass), Double.doubleToRawLongBits(sourceResidual),
 							List.of(new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O, 1_000 * ChemicalLimits.QUANTA_PER_MOL)))));
 			contents.validateAgainst(BuiltinChemicalDefinitions.REGISTRY);
-			var requested = contents.toLedger(BuiltinChemicalDefinitions.REGISTRY, FluidRegionFactory.CELL_VOLUMES_PER_BLOCK);
+			var requested = contents.toLedger(BuiltinChemicalDefinitions.REGISTRY, domain.unitScale());
 			var result = domain.tryInsertExactChemical(1, 1, 1, requested, 3, false);
 			check(result.transferred(), "representable chemical insertion was refused");
 			double[] mass = domain.exportMaterialParticleState().copyParticleMass();
@@ -831,7 +832,7 @@ public final class ContainerTransferStoreValidation {
 				mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK, 1, 0);
 		check(requested == 62_500_000L, "partial outlet did not quantize the available half-cell volume");
 		FluidDomain.ExactVolumeTransfer transfer = domain.tryExtractExactVolume(
-				2, 2, 2, MinecraftContainerTransferOperations.nanosToCellVolume(requested), 1, 0);
+				2, 2, 2, MinecraftContainerTransferOperations.nanosToCellVolume(domain.unitScale(), requested), 1, 0);
 		check(transfer.transferred() && domain.totalVolumeExact() == 0.0,
 				"partial outlet request could not be settled by the exact primitive");
 	}

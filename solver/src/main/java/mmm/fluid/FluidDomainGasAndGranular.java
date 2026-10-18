@@ -1,5 +1,6 @@
 package mmm.fluid;
 
+import mmm.units.SolverUnitScale;
 import mmm.chemistry.ChemicalParcelStore;
 import mmm.fluid.air.AirNetwork;
 import mmm.fluid.air.GasRegistry;
@@ -139,6 +140,7 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 	public int maximumParticleCount() { return maximumParticleCount; }
 	public int markerCellCount() { return metrics.markerCellCount(); }
 	public FluidSolverConfig config() { return config; }
+	public SolverUnitScale unitScale() { return unitScale; }
 	public double physicalMassKilograms(double solverMass) { return unitScale.kilograms(solverMass); }
 	public double solverMassForKilograms(double kilograms) { return unitScale.solverMass(kilograms); }
 	public double physicalVolumeCubicMetres(double normalizedVolume) { return unitScale.cubicMeters(normalizedVolume); }

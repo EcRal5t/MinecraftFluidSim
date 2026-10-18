@@ -237,7 +237,7 @@ final class RegionStateCodec {
 		ListTag list = new ListTag();
 		for (FluidMaterial material : materials) {
 			CompoundTag tag = new CompoundTag();
-			tag.putString("Id", material.id()); tag.putLong("DensityBits", Double.doubleToRawLongBits(material.referenceDensity()));
+			tag.putString("Id", material.id()); tag.putLong("ReferenceDensityKgPerM3Bits", Double.doubleToRawLongBits(material.referenceDensity()));
 			tag.putString("MiscibilityGroup", material.miscibilityGroup()); list.add(tag);
 		}
 		return list;
@@ -248,9 +248,9 @@ final class RegionStateCodec {
 		List<FluidMaterial> result = new ArrayList<>(list.size());
 		for (int i = 0; i < list.size(); i++) {
 			CompoundTag tag = compoundAt(list, i, "material palette");
-			require(tag, "Id", Tag.TAG_STRING); require(tag, "DensityBits", Tag.TAG_LONG); require(tag, "MiscibilityGroup", Tag.TAG_STRING);
+			require(tag, "Id", Tag.TAG_STRING); require(tag, "ReferenceDensityKgPerM3Bits", Tag.TAG_LONG); require(tag, "MiscibilityGroup", Tag.TAG_STRING);
 			try {
-				result.add(new FluidMaterial(tag.getStringOr("Id", ""), Double.longBitsToDouble(tag.getLongOr("DensityBits", 0L)),
+				result.add(new FluidMaterial(tag.getStringOr("Id", ""), Double.longBitsToDouble(tag.getLongOr("ReferenceDensityKgPerM3Bits", 0L)),
 						tag.getStringOr("MiscibilityGroup", ""), 0.0, Math.PI / 2.0));
 			} catch (IllegalArgumentException exception) {
 				throw new IOException("Invalid material palette entry", exception);

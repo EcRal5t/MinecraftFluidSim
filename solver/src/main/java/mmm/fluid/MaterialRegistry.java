@@ -18,7 +18,7 @@ import mmm.thermal.LiquidThermalExpansion;
  * dynamic-viscosity segments, bounded thermal expansion and liquid-liquid pair tensions keyed by stable miscibility groups.
  */
 public final class MaterialRegistry {
-	public static final String UNIT_SYSTEM_ID = "mmm:material_standard";
+	public static final String UNIT_SYSTEM_ID = "mmm:material_si";
 	public static final int MAX_MATERIALS = 256;
 	public static final int MAX_PAIR_TENSIONS = 4096;
 

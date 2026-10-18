@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-/** Complete external/displacement chemical ledger grouped by stable material and indicator provenance. */
+/** Chemical transfer ledger: normalized liquid volume, physical kg mass/residual, integer μmol species. */
 public final class ChemicalTransferLedger {
 	public static final ChemicalTransferLedger EMPTY = new ChemicalTransferLedger(List.of());
 
@@ -37,9 +37,9 @@ public final class ChemicalTransferLedger {
 
 	public List<Group> groups() { return groups; }
 	public boolean isEmpty() { return groups.isEmpty(); }
-	public double totalVolume() {
+	public double totalNormalizedVolume() {
 		double result = 0.0;
-		for (Group group : groups) result += group.volume();
+		for (Group group : groups) result += group.normalizedVolume();
 		return result;
 	}
 	public double totalMass() {
@@ -66,16 +66,16 @@ public final class ChemicalTransferLedger {
 	public record Group(
 			String materialId,
 			boolean indicator,
-			double volume,
+			double normalizedVolume,
 			double massKilograms,
 			long massResidualKilogramsBits,
 			Map<String, Long> speciesQuanta
 	) {
 		public Group {
 			ChemicalIds.requireId(materialId, "chemical ledger material id");
-			if (!(Double.isFinite(volume) && volume > 0.0)
+			if (!(Double.isFinite(normalizedVolume) && normalizedVolume > 0.0)
 					|| !(Double.isFinite(massKilograms) && massKilograms > 0.0)) {
-				throw new IllegalArgumentException("Chemical transfer volume and mass must be finite and positive");
+				throw new IllegalArgumentException("Chemical transfer normalized volume and kg mass must be finite and positive");
 			}
 			if (!Double.isFinite(Double.longBitsToDouble(massResidualKilogramsBits))) {
 				throw new IllegalArgumentException("Chemical transfer residual must be finite");
@@ -106,11 +106,11 @@ public final class ChemicalTransferLedger {
 		private Builder(ChemicalRegistry registry) { this.registry = java.util.Objects.requireNonNull(registry, "registry"); }
 
 		public Builder add(
-				String materialId, boolean indicator, double volume, double massKilograms,
+				String materialId, boolean indicator, double normalizedVolume, double massKilograms,
 				ChemicalMixtureRecord mixture
 		) {
 			if (mixture == null) throw new IllegalArgumentException("Chemical transfer mixture is missing");
-			return add(new Group(materialId, indicator, volume, massKilograms,
+			return add(new Group(materialId, indicator, normalizedVolume, massKilograms,
 					mixture.massResidualKilogramsBits(), mixture.stableAmounts(registry)));
 		}
 
@@ -141,9 +141,9 @@ public final class ChemicalTransferLedger {
 	private static final class MutableGroup {
 		private final String materialId;
 		private final boolean indicator;
-		// These are independent truth columns. Aggregate their binary values exactly and round once;
+		// These are independent inventory columns. Aggregate their binary values exactly and round once;
 		// ordinary += accumulates enough drift in a full demo region to falsify a closed mass ledger.
-		private SignedDyadic volume = SignedDyadic.ZERO;
+		private SignedDyadic normalizedVolume = SignedDyadic.ZERO;
 		private SignedDyadic massKilograms = SignedDyadic.ZERO;
 		private SignedDyadic residual = SignedDyadic.ZERO;
 		private final TreeMap<String, Long> species = new TreeMap<>();
@@ -153,17 +153,17 @@ public final class ChemicalTransferLedger {
 			this.indicator = indicator;
 		}
 		private void add(Group group) {
-			volume = volume.add(SignedDyadic.of(group.volume()));
+			normalizedVolume = normalizedVolume.add(SignedDyadic.of(group.normalizedVolume()));
 			massKilograms = massKilograms.add(SignedDyadic.of(group.massKilograms()));
 			residual = residual.add(SignedDyadic.of(group.massResidualKilograms()));
-			if (!(Double.isFinite(volume.toDouble()) && Double.isFinite(massKilograms.toDouble())
+			if (!(Double.isFinite(normalizedVolume.toDouble()) && Double.isFinite(massKilograms.toDouble())
 					&& Double.isFinite(residual.toDouble()))) {
 				throw new IllegalArgumentException("Chemical transfer ledger overflow");
 			}
 			group.speciesQuanta().forEach((id, amount) -> species.merge(id, amount, Math::addExact));
 		}
 		private Group freeze() {
-			return new Group(materialId, indicator, volume.toDouble(), massKilograms.toDouble(),
+			return new Group(materialId, indicator, normalizedVolume.toDouble(), massKilograms.toDouble(),
 					Double.doubleToRawLongBits(residual.toDouble()), species);
 		}
 	}

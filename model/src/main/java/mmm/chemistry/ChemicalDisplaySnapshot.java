@@ -78,7 +78,7 @@ public final class ChemicalDisplaySnapshot {
 		byte[] residual = new byte[cells], ph = new byte[cells], indicator = new byte[cells];
 		int acid = registry.speciesHandle(BuiltinChemicalDefinitions.H_PLUS);
 		int base = registry.speciesHandle(BuiltinChemicalDefinitions.OH_MINUS);
-		double blockScale = (double) cellSize * cellSize * cellSize;
+		var units = mmm.units.SolverUnitScale.forCellSize(cellSize);
 		for (int cell = 0; cell < cells; cell++) {
 			long[] cellTotals = totals[cell];
 			long total = 0L;
@@ -105,7 +105,7 @@ public final class ChemicalDisplaySnapshot {
 			residual[cell] = (byte) quantized[bucketCount - 1];
 			long difference = Math.abs(cellTotals[acid] - cellTotals[base]);
 			double strength = difference == 0L ? 0.0 : Math.min(7.0,
-					Math.log10(1.0 + (difference / (double) ChemicalLimits.QUANTA_PER_MOL) / (1e-3 * cellVolume[cell] * blockScale)));
+					Math.log10(1.0 + (difference / (double) ChemicalLimits.QUANTA_PER_MOL) / (1e-3 * units.cubicMeters(cellVolume[cell]))));
 			double value = cellTotals[acid] > cellTotals[base] ? 7.0 - strength
 					: cellTotals[base] > cellTotals[acid] ? 7.0 + strength : 7.0;
 			ph[cell] = (byte) Math.round(value * 255.0 / 14.0);

@@ -577,7 +577,7 @@ final class MaterialTransferPlanner {
 		if (ledger == null || ledger.isEmpty()) return new FluidDomain.ExactChemicalTransfer(ledger != null, ChemicalTransferLedger.EMPTY);
 		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
 		if (domain.hasPendingPhaseVolumeWork()) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
-		if (!domain.canAddCarrierVolume(ledger.totalVolume())) {
+		if (!domain.canAddCarrierVolume(ledger.totalNormalizedVolume())) {
 			return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		}
 		try {
@@ -594,7 +594,7 @@ final class MaterialTransferPlanner {
 		try {
 		for (ChemicalTransferLedger.Group group : ledger.groups()) {
 			int material = domain.materialRegistry.handle(group.materialId());
-			double remaining = group.volume();
+			double remaining = group.normalizedVolume();
 			List<ChemicalPieceDraft> groupPieces = new ArrayList<>();
 			for (FluidDomain.CellCandidate candidate : nearby) {
 				if (remaining <= 0.0) break;
@@ -635,7 +635,7 @@ final class MaterialTransferPlanner {
 				}
 			}
 			double sourceMass = domain.unitScale.solverMass(group.massKilograms());
-			double volumeLeft = group.volume(), massLeft = sourceMass;
+			double volumeLeft = group.normalizedVolume(), massLeft = sourceMass;
 			double[] masses = new double[groupPieces.size()];
 			int massPivot = 0;
 			for (int piece = 0; piece < groupPieces.size(); piece++) {

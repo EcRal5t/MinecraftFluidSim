@@ -9,26 +9,26 @@ import java.util.List;
 /** Stable standard-state creation relation for one gas component; mass and residual densities use kg/m³. */
 public record GasComponentDefinition(
 		String id,
-		double standardMassPerCubicMeter,
-		double defaultMassResidualPerCubicMeter,
+		double standardDensityKgPerCubicMeter,
+		double defaultResidualDensityKgPerCubicMeter,
 		List<String> allowedSpecies,
-		List<DefaultSpecies> defaultSpeciesPerCubicMeter
+		List<DefaultSpecies> defaultSpeciesConcentrations
 ) {
-	public record DefaultSpecies(String speciesId, ExactRational concentrationMolPerCubicMeter) {
+	public record DefaultSpecies(String speciesId, ExactRational concentrationMolPerStandardCubicMeter) {
 		public DefaultSpecies {
 			GasIds.require(speciesId, "gas species id");
-			if (concentrationMolPerCubicMeter == null || concentrationMolPerCubicMeter.signum() <= 0) {
-				throw new IllegalArgumentException("Gas default species amount must be positive");
+			if (concentrationMolPerStandardCubicMeter == null || concentrationMolPerStandardCubicMeter.signum() <= 0) {
+				throw new IllegalArgumentException("Gas default concentration in mol per standard m³ must be positive");
 			}
 		}
 	}
 
 	public GasComponentDefinition {
 		GasIds.require(id, "gas component id");
-		if (!(Double.isFinite(standardMassPerCubicMeter) && standardMassPerCubicMeter > 0.0)) {
-			throw new IllegalArgumentException("Gas standard mass density must be finite and positive");
+		if (!(Double.isFinite(standardDensityKgPerCubicMeter) && standardDensityKgPerCubicMeter > 0.0)) {
+			throw new IllegalArgumentException("Gas standard density in kg/m³ must be finite and positive");
 		}
-		if (!Double.isFinite(defaultMassResidualPerCubicMeter)) {
+		if (!Double.isFinite(defaultResidualDensityKgPerCubicMeter)) {
 			throw new IllegalArgumentException("Gas default mass residual density must be finite");
 		}
 		if (allowedSpecies == null || allowedSpecies.size() > GasLimits.MAX_SPECIES_PER_COMPONENT) {
@@ -43,11 +43,11 @@ public record GasComponentDefinition(
 			}
 		}
 		allowedSpecies = List.copyOf(canonicalAllowed);
-		if (defaultSpeciesPerCubicMeter == null
-				|| defaultSpeciesPerCubicMeter.size() > GasLimits.MAX_SPECIES_PER_COMPONENT) {
+		if (defaultSpeciesConcentrations == null
+				|| defaultSpeciesConcentrations.size() > GasLimits.MAX_SPECIES_PER_COMPONENT) {
 			throw new IllegalArgumentException("Gas default species list is missing or over budget");
 		}
-		ArrayList<DefaultSpecies> canonical = new ArrayList<>(defaultSpeciesPerCubicMeter);
+		ArrayList<DefaultSpecies> canonical = new ArrayList<>(defaultSpeciesConcentrations);
 		if (canonical.stream().anyMatch(java.util.Objects::isNull)) {
 			throw new IllegalArgumentException("Gas default species list contains null");
 		}
@@ -60,7 +60,7 @@ public record GasComponentDefinition(
 		for (DefaultSpecies species : canonical) if (!allowedSpecies.contains(species.speciesId())) {
 			throw new IllegalArgumentException("Default gas species is not allowed by component " + species.speciesId());
 		}
-		defaultSpeciesPerCubicMeter = List.copyOf(canonical);
+		defaultSpeciesConcentrations = List.copyOf(canonical);
 	}
 
 	public boolean allowsSpecies(String speciesId) {

@@ -263,11 +263,11 @@ final class MmmCommandHandlers {
 			return fail(source, pour ? "请把准星对准黄色模拟域内的水面、地面或障碍物" : "准星方向没有模拟水体");
 		}
 		String action = pour ? "注入" : "抽走";
-		int commandResult = result.changedCellVolume() > 0.0F ? 1 : 0;
+		int commandResult = result.changedVolumeCubicMeters() > 0.0F ? 1 : 0;
 		return succeed(source, String.format(
-				"已在子格 %d,%d,%d %s %.3f 方块水%s",
-				result.target().x(), result.target().y(), result.target().z(), action, result.changedBlocks(),
-				result.changedCellVolume() + 1.0E-4F < result.requestedCellVolume()
+				"已在子格 %d,%d,%d %s %s 水%s",
+				result.target().x(), result.target().y(), result.target().z(), action, mmm.units.UnitFormat.volume(result.changedVolumeCubicMeters()),
+				result.changedVolumeCubicMeters() + 1.25E-5 < result.requestedVolumeCubicMeters()
 						? (result.markerBudgetLimited() ? "（marker 预算已满）" : "（附近空间不足）")
 						: ""
 		), commandResult);
@@ -283,10 +283,11 @@ final class MmmCommandHandlers {
 	static int refreshCollisions(CommandSourceStack source) {
 		MinecraftRegionOperatorActions actions = MmmRuntimeRegistry.require(source.getServer()).operatorActions();
 		if (!actions.exists()) return fail(source, "请先使用 /mmm demo 或 /mmm capture");
-		FluidRegion.CollisionStats stats = actions.refreshCollisions(source.getLevel());
+		var stats = actions.refreshCollisions(source.getLevel());
 		return succeed(source, String.format(
-				"碰撞已刷新：变化 %d 个子格，挤出 %.3f 方块水，未能重放 %.3f 方块水%s",
-				stats.changedCells(), stats.displacedCellVolume() / 8.0F, stats.escapedCellVolume() / 8.0F,
+				"碰撞已刷新：变化 %d 个子格，挤出 %s 水，未能重放 %s 水%s",
+				stats.changedCells(), mmm.units.UnitFormat.volume(stats.displacedVolumeCubicMeters()),
+				mmm.units.UnitFormat.volume(stats.escapedVolumeCubicMeters()),
 				stats.markerBudgetLimited() ? "（marker 预算受限）" : ""
 		), 1);
 	}

@@ -328,5 +328,6 @@ section 保留全域节点编号并校核 `sealedPieceCount`；恢复从完整�
 具体格式见 [气体状态](gas-state.md)。
 
 化学 registry 与区域 manifest 的 `QuantaPerMol` 固定为 1000000，化学指纹覆盖 kg/mol 与 mol/m³ 定义。
-热注册表使用 `mmm:si_mol`，固体尺度字段为 `SvqPerCubicMeter`，气体默认组成保存 `ConcentrationMolPerCubicMeter`。
+热注册表使用 `mmm:si_mol`，固体尺度字段为 `SvqPerCubicMeter`，气体默认组成保存 `ConcentrationMolPerStandardM3`。
+材料单位身份为 `mmm:material_si`；材料与颗粒注册表、区域 palette 的参考密度使用 `ReferenceDensityKgPerM3Bits`。
 能力包、区域 HEAD 与容器 WAL 继续绑定完整注册表指纹；存档直接使用当前格式。

@@ -50,13 +50,13 @@ public final class GasRegistryCodec {
 		try { root = NbtIo.readCompressed(path, NbtAccounter.create(MAX_BYTES)); }
 		catch (RuntimeException invalid) { throw new IOException("Unreadable gas registry snapshot " + path, invalid); }
 		requireAll(root, Map.of("Schema", Tag.TAG_STRING, "UnitSystem", Tag.TAG_STRING,
-				"StandardPressureBits", Tag.TAG_LONG, "StandardTemperatureBits", Tag.TAG_LONG,
+				"StandardPressurePaBits", Tag.TAG_LONG, "StandardTemperatureKBits", Tag.TAG_LONG,
 				"Fingerprint", Tag.TAG_STRING, "Canonical", Tag.TAG_BYTE_ARRAY,
 				"Components", Tag.TAG_LIST, "Ambient", Tag.TAG_LIST));
 		if (!root.getStringOr("Schema", "").equals(SCHEMA)
 				|| !GasRegistry.UNIT_SYSTEM_ID.equals(root.getStringOr("UnitSystem", ""))
-				|| root.getLongOr("StandardPressureBits", 0L) != Double.doubleToRawLongBits(GasRegistry.STANDARD_PRESSURE_PA)
-				|| root.getLongOr("StandardTemperatureBits", 0L) != Double.doubleToRawLongBits(GasRegistry.STANDARD_TEMPERATURE_K)) {
+				|| root.getLongOr("StandardPressurePaBits", 0L) != Double.doubleToRawLongBits(GasRegistry.STANDARD_PRESSURE_PA)
+				|| root.getLongOr("StandardTemperatureKBits", 0L) != Double.doubleToRawLongBits(GasRegistry.STANDARD_TEMPERATURE_K)) {
 			throw new IOException("Unsupported gas registry schema or standard state");
 		}
 		try {
@@ -75,21 +75,21 @@ public final class GasRegistryCodec {
 	private static CompoundTag encode(GasRegistry registry) {
 		CompoundTag root = new CompoundTag(); root.putString("Schema", SCHEMA);
 		root.putString("UnitSystem", GasRegistry.UNIT_SYSTEM_ID);
-		root.putLong("StandardPressureBits", Double.doubleToRawLongBits(GasRegistry.STANDARD_PRESSURE_PA));
-		root.putLong("StandardTemperatureBits", Double.doubleToRawLongBits(GasRegistry.STANDARD_TEMPERATURE_K));
+		root.putLong("StandardPressurePaBits", Double.doubleToRawLongBits(GasRegistry.STANDARD_PRESSURE_PA));
+		root.putLong("StandardTemperatureKBits", Double.doubleToRawLongBits(GasRegistry.STANDARD_TEMPERATURE_K));
 		root.putString("Fingerprint", registry.fingerprint()); root.putByteArray("Canonical", registry.canonicalBytes());
 		ListTag components = new ListTag();
 		for (GasComponentDefinition component : registry.components()) {
 			CompoundTag tag = new CompoundTag(); tag.putString("Id", component.id());
-			tag.putLong("MassDensityBits", Double.doubleToRawLongBits(component.standardMassPerCubicMeter()));
-			tag.putLong("ResidualDensityBits", Double.doubleToRawLongBits(component.defaultMassResidualPerCubicMeter()));
+			tag.putLong("StandardDensityKgPerM3Bits", Double.doubleToRawLongBits(component.standardDensityKgPerCubicMeter()));
+			tag.putLong("DefaultResidualDensityKgPerM3Bits", Double.doubleToRawLongBits(component.defaultResidualDensityKgPerCubicMeter()));
 			ListTag allowed = new ListTag();
 			for (String speciesId : component.allowedSpecies()) allowed.add(StringTag.valueOf(speciesId));
 			tag.put("AllowedSpecies", allowed);
 			ListTag species = new ListTag();
-			for (GasComponentDefinition.DefaultSpecies entry : component.defaultSpeciesPerCubicMeter()) {
+			for (GasComponentDefinition.DefaultSpecies entry : component.defaultSpeciesConcentrations()) {
 				CompoundTag value = new CompoundTag(); value.putString("Species", entry.speciesId());
-				value.putString("ConcentrationMolPerCubicMeter", entry.concentrationMolPerCubicMeter().canonical()); species.add(value);
+				value.putString("ConcentrationMolPerStandardM3", entry.concentrationMolPerStandardCubicMeter().canonical()); species.add(value);
 			}
 			tag.put("Species", species); components.add(tag);
 		}
@@ -107,8 +107,8 @@ public final class GasRegistryCodec {
 		ArrayList<GasComponentDefinition> result = new ArrayList<>(list.size());
 		for (int index = 0; index < list.size(); index++) {
 			CompoundTag tag = compound(list, index, "component");
-			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "MassDensityBits", Tag.TAG_LONG,
-					"ResidualDensityBits", Tag.TAG_LONG, "AllowedSpecies", Tag.TAG_LIST,
+			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "StandardDensityKgPerM3Bits", Tag.TAG_LONG,
+					"DefaultResidualDensityKgPerM3Bits", Tag.TAG_LONG, "AllowedSpecies", Tag.TAG_LIST,
 					"Species", Tag.TAG_LIST));
 			ListTag encodedAllowed = tag.getListOrEmpty("AllowedSpecies");
 			if (encodedAllowed.size() > GasLimits.MAX_SPECIES_PER_COMPONENT) {
@@ -125,13 +125,13 @@ public final class GasRegistryCodec {
 			ArrayList<GasComponentDefinition.DefaultSpecies> species = new ArrayList<>(encodedSpecies.size());
 			for (int entry = 0; entry < encodedSpecies.size(); entry++) {
 				CompoundTag value = compound(encodedSpecies, entry, "component species");
-				requireAll(value, Map.of("Species", Tag.TAG_STRING, "ConcentrationMolPerCubicMeter", Tag.TAG_STRING));
+				requireAll(value, Map.of("Species", Tag.TAG_STRING, "ConcentrationMolPerStandardM3", Tag.TAG_STRING));
 				species.add(new GasComponentDefinition.DefaultSpecies(value.getStringOr("Species", ""),
-						ExactRational.parse(value.getStringOr("ConcentrationMolPerCubicMeter", ""))));
+						ExactRational.parse(value.getStringOr("ConcentrationMolPerStandardM3", ""))));
 			}
 			result.add(new GasComponentDefinition(tag.getStringOr("Id", ""),
-					Double.longBitsToDouble(tag.getLongOr("MassDensityBits", 0L)),
-					Double.longBitsToDouble(tag.getLongOr("ResidualDensityBits", 0L)), allowed, species));
+					Double.longBitsToDouble(tag.getLongOr("StandardDensityKgPerM3Bits", 0L)),
+					Double.longBitsToDouble(tag.getLongOr("DefaultResidualDensityKgPerM3Bits", 0L)), allowed, species));
 		}
 		return List.copyOf(result);
 	}

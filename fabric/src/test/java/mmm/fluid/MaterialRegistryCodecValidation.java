@@ -61,7 +61,7 @@ public final class MaterialRegistryCodecValidation {
 		require(water > 9.0e-4 && water < 1.1e-3, "water viscosity at ambient temperature must stay near 1 mPa·s");
 		require(stored.liquidPairTension("mmm:aqueous", "mmm:oil") == 0.0,
 				"default registry has no declared pair tensions");
-		require(definitions.fingerprint().equals("ff3770b933ac81c7af8f5cfa8391b23c238937d72c069c620bacae0ec9f3057d"),
+		require(definitions.fingerprint().equals("8c1756b590a3318629c7ba3a4edb0e3683dd432c546eb90bb69a0b5ac643c5a2"),
 				"builtin material registry fingerprint drifted from the pinned canonical form");
 		System.out.println("builtin material registry fingerprint=" + definitions.fingerprint());
 	}

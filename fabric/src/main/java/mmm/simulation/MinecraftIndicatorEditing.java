@@ -62,11 +62,11 @@ public final class MinecraftIndicatorEditing {
 		}
 		snapshots.sendToLevel(player.level(), region);
 		return new Result(true, edit.scannedCells(), edit.changedMarkers(),
-				edit.affectedBlockVolume(), checkpointWarning, null);
+				edit.affectedVolumeCubicMeters(), checkpointWarning, null);
 	}
 
 	public record Result(
-			boolean accepted, int scannedCells, int changedMarkers, double affectedBlockVolume,
+			boolean accepted, int scannedCells, int changedMarkers, double affectedVolumeCubicMeters,
 			String checkpointWarning, String failure
 	) {
 		private static Result rejected(String failure) {

@@ -127,12 +127,12 @@ public final class MinecraftRegionOperatorActions {
 		FluidWorldTargetResolver.CellTarget resolved = targets.aimedCellForEdit(player, region, false);
 		if (resolved == null) return WaterEditResult.NO_TARGET;
 		CellTarget target = new CellTarget(resolved.x(), resolved.y(), resolved.z());
-		float requested = buckets * FluidRegionFactory.CELL_VOLUMES_PER_BLOCK;
+		float requested = (float) region.domain().unitScale().normalizedVolume(buckets);
 		FluidDomain.VolumeAddition addition = region.domain().addVolumeNearBudgeted(
 				target.x(), target.y(), target.z(), requested, 6);
 		if (addition.addedVolume() > 0.0F) region.wakeForActivity();
 		sendSnapshot(player.level());
-		return new WaterEditResult(true, target, requested, addition.addedVolume(),
+		return new WaterEditResult(true, target, buckets, region.domain().unitScale().cubicMeters(addition.addedVolume()),
 				addition.markerBudgetLimited(), null);
 	}
 
@@ -146,23 +146,28 @@ public final class MinecraftRegionOperatorActions {
 		FluidWorldTargetResolver.CellTarget resolved = targets.aimedCellForEdit(player, region, true);
 		if (resolved == null) return WaterEditResult.NO_TARGET;
 		CellTarget target = new CellTarget(resolved.x(), resolved.y(), resolved.z());
-		float requested = buckets * FluidRegionFactory.CELL_VOLUMES_PER_BLOCK;
+		float requested = (float) region.domain().unitScale().normalizedVolume(buckets);
 		float changed = region.domain().removeVolumeNear(target.x(), target.y(), target.z(), requested, 6);
 		if (changed > 0.0F) region.wakeForActivity();
 		sendSnapshot(player.level());
-		return new WaterEditResult(true, target, requested, changed, false, null);
+		return new WaterEditResult(true, target, buckets, region.domain().unitScale().cubicMeters(changed), false, null);
 	}
 
-	public FluidRegion.CollisionStats refreshCollisions(ServerLevel level) {
+	public CollisionRefreshResult refreshCollisions(ServerLevel level) {
 		FluidRegion region = activeRegion();
-		if (region == null || !level.dimension().equals(region.dimension())) return FluidRegion.CollisionStats.EMPTY;
-		if (!availability.ensure(level, region)) return region.lastCollisionStats();
-		try {
-			return regionTick.refreshRegionInputs(level, region);
-		} catch (FluidDomain.CollisionEditBlockedException blocked) {
-			regionTick.blockCollisionEdit(level, region, blocked);
-			throw blocked;
+		if (region == null || !level.dimension().equals(region.dimension())) return CollisionRefreshResult.EMPTY;
+		FluidRegion.CollisionStats stats = region.lastCollisionStats();
+		if (availability.ensure(level, region)) {
+			try {
+				stats = regionTick.refreshRegionInputs(level, region);
+			} catch (FluidDomain.CollisionEditBlockedException blocked) {
+				regionTick.blockCollisionEdit(level, region, blocked);
+				throw blocked;
+			}
 		}
+		var units = mmm.units.SolverUnitScale.forCellSize(region.solverConfig().cellSize());
+		return new CollisionRefreshResult(stats.changedCells(), units.cubicMeters(stats.displacedCellVolume()),
+				units.cubicMeters(stats.escapedCellVolume()), stats.markerBudgetLimited());
 	}
 
 	public RestorationStats remove(MinecraftServer server) {
@@ -196,7 +201,7 @@ public final class MinecraftRegionOperatorActions {
 		if (containerRecovery.hasPending(region.id())) return "清空失败：区域存在未完成或不可识别的容器转移 WAL；拒绝清空";
 		FluidDomain domain = region.domain();
 		if (domain.hasPendingPhaseVolumeWork()) return "清空失败：区域存在尚未由下一次 pressure projection 消费的相变体积/功记录";
-		float beforeBlocks = domain.totalVolume() / FluidRegionFactory.CELL_VOLUMES_PER_BLOCK;
+		double beforeCubicMeters = domain.unitScale().cubicMeters(domain.totalVolumeExact());
 		int beforeParticles = domain.particleCount();
 		FluidDomain.OperatorClearPlan clearPlan;
 		try {
@@ -216,8 +221,8 @@ public final class MinecraftRegionOperatorActions {
 		FluidDomain.CondensedClear condensed = cleared.condensed();
 		FluidDomain.GranularClear granular = cleared.granular();
 		sendSnapshot(level, region);
-		return String.format("已清空区域：%.3f 方块液体（%d 个 marker），%d SVQ coherent（%d groups），%d SVQ 颗粒（active %d，deposit groups %d）",
-				beforeBlocks, beforeParticles, condensed.coherentVolumeSvq(), condensed.coherentGroups(),
+		return String.format("已清空区域：%s 液体（%d 个 marker），%d SVQ coherent（%d groups），%d SVQ 颗粒（active %d，deposit groups %d）",
+				mmm.units.UnitFormat.volume(beforeCubicMeters), beforeParticles, condensed.coherentVolumeSvq(), condensed.coherentGroups(),
 				granular.solidVolumeSvq(), granular.activeParcels(), granular.depositGroups());
 	}
 
@@ -250,11 +255,18 @@ public final class MinecraftRegionOperatorActions {
 
 	public record CellTarget(int x, int y, int z) { }
 
+	public record CollisionRefreshResult(
+			int changedCells, double displacedVolumeCubicMeters, double escapedVolumeCubicMeters,
+			boolean markerBudgetLimited
+	) {
+		private static final CollisionRefreshResult EMPTY = new CollisionRefreshResult(0, 0.0, 0.0, false);
+	}
+
 	public record WaterEditResult(
 			boolean domainExists,
 			CellTarget target,
-			float requestedCellVolume,
-			float changedCellVolume,
+			double requestedVolumeCubicMeters,
+			double changedVolumeCubicMeters,
 			boolean markerBudgetLimited,
 			String failure
 	) {
@@ -263,6 +275,5 @@ public final class MinecraftRegionOperatorActions {
 		private static WaterEditResult blocked(String failure) {
 			return new WaterEditResult(true, null, 0.0F, 0.0F, false, failure);
 		}
-		public float changedBlocks() { return changedCellVolume / FluidRegionFactory.CELL_VOLUMES_PER_BLOCK; }
 	}
 }

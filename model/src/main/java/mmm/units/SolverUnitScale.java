@@ -51,4 +51,12 @@ public record SolverUnitScale(double cubicMetersPerNormalizedVolume) {
 		}
 		return result;
 	}
+
+	public double normalizedVolume(double cubicMeters) {
+		double result = cubicMeters / cubicMetersPerNormalizedVolume;
+		if (!(Double.isFinite(result) && result >= 0.0)) {
+			throw new IllegalArgumentException("Normalized volume is invalid");
+		}
+		return result;
+	}
 }

@@ -78,7 +78,7 @@ public final class MaterialRegistryCodec {
 			CompoundTag tag = new CompoundTag();
 			FluidMaterial material = entry.material();
 			tag.putString("Id", material.id());
-			tag.putLong("DensityBits", Double.doubleToRawLongBits(material.referenceDensity()));
+			tag.putLong("ReferenceDensityKgPerM3Bits", Double.doubleToRawLongBits(material.referenceDensity()));
 			tag.putString("MiscibilityGroup", material.miscibilityGroup());
 			tag.putLong("SurfaceTensionBits", Double.doubleToRawLongBits(material.surfaceTension()));
 			tag.putLong("ContactAngleBits", Double.doubleToRawLongBits(material.contactAngleRadians()));
@@ -122,7 +122,7 @@ public final class MaterialRegistryCodec {
 		ArrayList<MaterialRegistry.MaterialEntry> result = new ArrayList<>(list.size());
 		for (int index = 0; index < list.size(); index++) {
 			CompoundTag tag = compound(list, index, "material");
-			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "DensityBits", Tag.TAG_LONG,
+			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "ReferenceDensityKgPerM3Bits", Tag.TAG_LONG,
 					"MiscibilityGroup", Tag.TAG_STRING, "SurfaceTensionBits", Tag.TAG_LONG,
 					"ContactAngleBits", Tag.TAG_LONG, "Viscosity", Tag.TAG_LIST, "ThermalExpansion", Tag.TAG_LIST));
 			ListTag encodedExpansion = tag.getListOrEmpty("ThermalExpansion");
@@ -151,7 +151,7 @@ public final class MaterialRegistryCodec {
 			}
 			result.add(new MaterialRegistry.MaterialEntry(new FluidMaterial(
 					tag.getStringOr("Id", ""),
-					Double.longBitsToDouble(tag.getLongOr("DensityBits", 0L)),
+					Double.longBitsToDouble(tag.getLongOr("ReferenceDensityKgPerM3Bits", 0L)),
 					tag.getStringOr("MiscibilityGroup", ""),
 					Double.longBitsToDouble(tag.getLongOr("SurfaceTensionBits", 0L)),
 					Double.longBitsToDouble(tag.getLongOr("ContactAngleBits", 0L))), segments, expansion));

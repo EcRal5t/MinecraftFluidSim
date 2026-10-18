@@ -56,6 +56,7 @@
 ## Registry 与运行时 handle
 
 定义按声明顺序建立稠密 material handle；stable ID 必须是合法 Minecraft identifier 且唯一。miscibility group 再映射为 phase handle：同组材料不生成内部液液界面，不同组材料保持 phase 分区。
+材料单位身份为 `mmm:material_si`；能力包和区域 palette 的参考密度字段为 `ReferenceDensityKgPerM3Bits`，按 kg/m³ 保存 binary64 原始位。
 
 handle 用于数组索引。checkpoint 保存 canonical material palette，容器保存 stable ID；恢复时先验证完整 palette/registry identity，再建立当前进程 handle。长期状态仅保存 stable ID，不持久化瞬态整数 handle。
 
