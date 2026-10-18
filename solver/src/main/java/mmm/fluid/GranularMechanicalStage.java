@@ -5,7 +5,7 @@ import mmm.granular.SolidVolume;
 import mmm.granular.GranularCouplingFields;
 import mmm.units.SolverUnitScale;
 
-/** Predicts gravity, validates the joint pressure/drag solution, and previews collision. */
+/** Prepares the collision-resolved solid position endpoint before the pressure velocity kick. */
 final class GranularMechanicalStage {
 	record Workspace(
 			FluidSolverConfig config, DomainGeometry geometry, MarkerGridIndex markerGrid,
@@ -76,7 +76,7 @@ final class GranularMechanicalStage {
 		collisionPending = false;
 		if (!access.hasGranularInventory()) return;
 		GranularDomainState state = access.granularState();
-		// Pressure can accelerate a resting parcel beyond the initial velocity-based time step.
+		// Displacement uses the predicted velocity; the later pressure kick belongs to the next drift.
 		double maximum = 0;
 		for (int index = 0; index < state.parcels.count(); index++) {
 			var parcel = state.parcels.parcel(index);
@@ -88,14 +88,12 @@ final class GranularMechanicalStage {
 			throw new MechanicalTimeRefinement((int) Math.ceil(maximum * this.state.config.timeStep() / distance));
 		}
 		access.granularCollision().preview(state.parcels, state.registry, dt, this.state.config.maxCourantNumber());
-		planFixedLiquidCapacity(state);
 		access.granularNextCoupling().rebuild(state.parcels, state.deposits,
 				access.granularCollision()::previewPosition);
 		if (!access.granularOccupancyFitsGeometry(access.granularNextCoupling())) {
 			access.granularCollision().resolveCapacity(state.parcels, access.granularCoupling(),
 					cell -> SolidVolume.fromCellVolumeExact(this.state.geometry.cutCells.openCellVolume(cell)));
-			planFixedLiquidCapacity(state);
-			access.granularNextCoupling().rebuild(state.parcels, state.deposits,
+				access.granularNextCoupling().rebuild(state.parcels, state.deposits,
 					access.granularCollision()::previewPosition);
 			if (!access.granularOccupancyFitsGeometry(access.granularNextCoupling())) {
 				throw new IllegalStateException("Locally resolved granular occupancy exceeds geometry");
@@ -104,10 +102,9 @@ final class GranularMechanicalStage {
 		collisionPending = true;
 	}
 
-	private void planFixedLiquidCapacity(GranularDomainState granular) {
-		access.granularCollision().planFixedLiquidCapacity(granular.parcels, access.granularCoupling(),
-				cell -> SolidVolume.fromCellVolumeExact(state.geometry.cutCells.openCellVolume(cell))
-						- mmm.granular.SolidVolume.cellVolumeSvqCeil(state.markerGrid.exactCellVolumeInventory[cell]));
+	boolean collisionPending(){return collisionPending;}
+	void publishCollisionVelocities(){
+		if(collisionPending)access.addBoundaryImpulse(access.granularCollision().publishVelocities(access.granularState().parcels));
 	}
 
 	/** Publishes the preview once, with the occupancy used by the joint liquid/gas candidate. */

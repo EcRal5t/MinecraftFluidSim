@@ -613,7 +613,7 @@ public final class ThermalDomainState {
 
 	/** Rebuilds the derived LTE grid once before a phase scan over many cells. */
 	public void preparePhaseScan(ThermalCarrierContext markers) {
-		cellOperations.preparePhaseScan(markers);
+		cellOperations.preparePhaseScan(markers, thermalRevision());
 	}
 
 	/** Rebuilds a read-only spatial caloric observation without changing the phase/transport LTE grid. */
@@ -652,7 +652,7 @@ public final class ThermalDomainState {
 
 	/** Freezes exact same-cell energy and unchanged solid heat baths for a gas/liquid candidate search. */
 	public PhaseCandidateCell preparePhaseCandidateCell(int cell, ThermalCarrierContext markers) {
-		return cellOperations.preparePhaseCandidateCell(cell, markers, this, thermalRevision());
+		return preparePhaseCandidateCells(new int[]{cell}, markers)[cell];
 	}
 	public PhaseCandidateCell[] preparePhaseCandidateCells(int[] cells, ThermalCarrierContext owners) {
 		return cellOperations.preparePhaseCandidateCells(cells, owners, this, thermalRevision());

@@ -45,6 +45,7 @@ final class LiquidInitialInput {
 		domain.geometry.cutCells.restoreMicroMasks(masks);
 		for (int cell = 0; cell < masks.length; cell++) domain.geometry.solid[cell] = Byte.toUnsignedInt(masks[cell]) == 255;
 		domain.liquidCells = inventory; domain.materialRegistry = palette;
+        domain.phaseOccupancy = null;
 		domain.mac.restoreMomentum(new MacMomentumState(domain.sizeX, domain.sizeY, domain.sizeZ, momentum[0], momentum[1], momentum[2]));
 		domain.markCellInventoryChanged();
 	}

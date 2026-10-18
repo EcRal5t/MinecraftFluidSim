@@ -32,6 +32,7 @@ public final class RegionCheckpointAssembler {
 				: state.chemicalRegistry()!=null ? RegionStateLayout.CHEMICAL : state.materialPalette().isEmpty() ? RegionStateLayout.PURE : RegionStateLayout.MATERIAL;
 		var granular = state.granular(); var thermal = state.thermalOwner(); var gas = state.gas();
 		byte[] collision=state.copyCollisionMasks(); int[] membership=gas==null?null:gas.pieceNodeOrdinal();
+		double[] phaseVolumes=state.phaseOccupancy().copyLiquidMicroVolumes();
 		var facesBySection = new HashMap<RegionSectionState.SectionKey,List<RegionSectionState.FaceMomentum>>();
 		double[][] momenta={state.momentum().copyX(),state.momentum().copyY(),state.momentum().copyZ()};
 		for(int axis=0;axis<3;axis++) {
@@ -51,12 +52,15 @@ public final class RegionCheckpointAssembler {
 			int x0=Math.max(0,(16*secX-geometry.origin().x())*cellsPerBlock),y0=Math.max(0,(16*secY-geometry.origin().y())*cellsPerBlock),z0=Math.max(0,(16*secZ-geometry.origin().z())*cellsPerBlock);
 			int sx=Math.min(nx,((secX+1)*16-geometry.origin().x())*cellsPerBlock)-x0,sy=Math.min(ny,((secY+1)*16-geometry.origin().y())*cellsPerBlock)-y0,sz=Math.min(nz,((secZ+1)*16-geometry.origin().z())*cellsPerBlock)-z0;
 			var stocks=new ArrayList<LiquidCellInventory.Stock>(); byte[] mask=new byte[sx*sy*sz]; int[] gasSlice=gas==null?null:new int[8*mask.length];
+			double[] phaseSlice=new double[8*mask.length];
 			int local=0; for(int z=z0;z<z0+sz;z++)for(int y=y0;y<y0+sy;y++)for(int x=x0;x<x0+sx;x++) {
 				int cell=x+nx*(y+ny*z); stocks.addAll(state.liquid().rows().get(cell)); mask[local]=collision[cell];
+				System.arraycopy(phaseVolumes,8*cell,phaseSlice,8*local,8);
 				if(gas!=null)System.arraycopy(membership,8*cell,gasSlice,8*local,8); local++;
 			}
 			stocks.sort(Comparator.comparing(LiquidCellInventory.Stock::key));
 			var extensions=new ArrayList<RegionExtension>();
+			extensions.add(new RegionExtension(PhaseOccupancyCodec.SECTION_EXTENSION,new PhaseOccupancyCodec().encode(phaseSlice)));
 			if(gas!=null)extensions.add(new RegionExtension(GasRegionStateCodec.SECTION_EXTENSION,new GasRegionStateCodec().encodeSection(new GasRegionStateCodec.SectionData(gasSlice))));
 			var active=new ArrayList<GranularRegionStateCodec.ActiveEntry>(); var deposits=new ArrayList<GranularStateSnapshot.DepositGroup>();
 			var activeBits=new ArrayList<Long>(); var depositBits=new ArrayList<Long>(); var coherent=new ArrayList<ThermalRegionStateCodec.CoherentEntry>();

@@ -43,7 +43,7 @@
 
 | 领域 | 保存的权威数据 | 派生量 |
 |---|---|---|
-| 液体 | 单元／材料／开放分量的体积、整数质量、组成、内能与指示剂；MAC 格面 SI 动量 | 速度、密度、PLIC、压力、曲率与显示点样本 |
+| 液体 | 单元／材料／开放分量的体积、整数质量、组成、内能与指示剂；微盒相占据；MAC 格面 SI 动量 | 速度、密度、PLIC、压力、曲率与显示点样本 |
 | 化学 | 物种数量、组成、电荷、质量余量、指示剂与收支 | pH、颜色、主要组分 |
 | 颗粒 | active/deposit 的 SVQ、质量、材料、组成、孔隙率、位置及接触状态 | 占容、床高、混合有效孔隙率与样本 |
 | 连续固相 | coherent group 的 SVQ、质量、组成与内能 | 固相显示比例 |
@@ -53,7 +53,7 @@
 | 世界与物品 | 区域 HEAD、WAL、已存盘物品状态 | 控制台和诊断 |
 
 同一操作涉及多种物相时，物质、组成、动量和携带内能按同一计划交接。
-液体由 `LiquidCellInventory.Stock` 保存完整记录，MAC 动量独立保存；颗粒、沉积、连续固相和气腔由各自库存模块持有。
+液体由 `LiquidCellInventory.Stock` 保存物质记录，`PhaseOccupancyState` 保存空间占据，MAC 动量独立保存；颗粒、沉积、连续固相和气腔由各自库存模块持有。
 派生索引、PLIC、温度和展示网格读取同代库存，提交前统一核对来源与代次。
 
 <a id="units"></a>
@@ -162,9 +162,9 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 [FluidDomainStepCoordinator](../../solver/src/main/java/mmm/fluid/FluidDomainStepCoordinator.java) 组织下列职责链：
 
 1. 捕获库存、内能收支和待同步相变体积；从碰撞、固体占容与气腔建立同代输入。
-2. 从单元整数质量构造 MAC 双控制体积惯性，以格面动量派生速度，执行多孔阻力、隐式黏性和重力、浮力、张力等作用。
-3. 联合求解液体压力、有限气腔响应和活动颗粒的惯性／阻力，复检投影后的 Courant 数。
-4. 预览颗粒碰撞与整数占容，以共享通量搬运液体库存，用实际整数质量通量推进 MAC 动量，联合提交液体、颗粒和气腔后继。
+2. 从单元整数质量构造 MAC 双控制体积惯性，以格面动量派生速度，执行多孔阻力、局部应变耗散和重力、浮力、张力等作用。
+3. 预览颗粒移动、碰撞与实际整数占容，以实际排水量求解液体压力和有限气腔响应；颗粒接收压力反作用，复检投影后的 Courant 数。
+4. 以共享通量在私有库存中执行一次完整时长的粗单元输运，用同一次实际整数质量通量推进 MAC 动量，联合提交液体、颗粒和气腔后继。
 5. 在新位置上完成导热、液相反应、颗粒反应、固液与气液相变。相变共用操作预算，体积变化留待后续真实力学同步。
 6. 执行颗粒沉积、起动和床层松弛，随物质搬运组成与内能。
 7. 核对全部收支，成功后交接完整候选、发布统计，并更新运动与热活动状态。
@@ -176,18 +176,19 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 <a id="mechanics"></a>
 ## 力学与占容
 
-纯液体与含固相区域共用 MAC 压力、隐式黏性和有限体积输运。液体逐材料质量和体积决定惯性与组成密度；不可互溶相共享宏观速度和机械压力，保留材料身份与界面张力。热浮力按正的体膨胀关系推导密度修正，黏度读取世界材料定义的 `mu(T)`。
+纯液体与含固相区域共用 MAC 压力、局部应变耗散和有限体积输运。液体逐材料质量和体积决定惯性与组成密度；不可互溶相共享宏观速度和机械压力，保留材料身份与界面张力。热浮力按正的体膨胀关系推导密度修正，黏度读取世界材料定义的 `mu(T)`。
 
 固定碰撞由 Minecraft `VoxelShape` 保守采样成每格 `2×2×2` 微盒掩码，压力开口、液体通量和 CCD 读取同一几何。活动颗粒、沉积和 coherent 固相共享固体骨架占容；液体可用容量为开放体积减去全部固体占容，孔隙水由普通液体库存持有。
 
 压力系统使用同一面系数组装矩阵、预条件器和速度修正。
-`PressureLinearSolver` 与 `PressurePreconditioner` 统一 PCG 及不完全 Cholesky 预条件，有限颗粒惯性与阻力通过相应算子加入。
-已解析液气界面采用给定压力或有限气腔储存项；颗粒通过占容导数、有限质量及隐式阻力进入共同系统。
+`PressureLinearSolver` 与 `PressurePreconditioner` 统一 PCG 及不完全 Cholesky 预条件，颗粒阻力按有限质量成对处理。
+已解析液气界面采用给定压力或有限气腔储存项；颗粒以本步实际占容变化参与排水，压力反作用更新下一步速度。
 活动颗粒体积分配到共同 MAC 面，液体读取剩余开口，颗粒压力响应读取同一面体积的散度及其转置。
 作用与反作用、外部约束冲量和压力功按实际写回结算；整数库存按最终位置独立核对真实容量，具体离散见[颗粒参考](granular-state.md#统一排水与压力)。
 
 液体持久动量位于 MAC 格面，格面速度从同一双控制体积的实际质量与动量派生。
-`CellMomentumTransport` 把实际整数质量通量提升到格面，`MacMomentumAdvection` 用隐式中点离散推进动量，保留均匀平移与可解析旋转。
+`CellMomentumTransport` 把本次完整输运的实际整数质量通量提升到格面，`MacMomentumAdvection` 采用正权迎风混合。
+新湿面继承供体速度，局部混合损失转入内能，随质量搬运后与最终库存一次提交。
 固定开口与联合容量约束液体运动；颗粒代表球通过共同接触响应处理法向、恢复和摩擦。
 
 - **库存、PLIC 与速度工作区失效**
@@ -248,20 +249,31 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 <a id="transport"></a>
 ## 守恒输运与气腔交接
 
-PLIC 从实际单元库存、邻格比例和碰撞连通分量重建湿区、干区与共享开口。
-`ConservativeLiquidFlux` 在单一开放分量图中分配原始液体库存与气腔体积，联合满足供体总量和接收孔隙容量。
-单值共享面通量由该图的分配结果汇总，`LiquidCellInventory` 按实际来源分配体积、材料质量、物种和内能。
-MAC 动量输运读取相同整数质量通量；未解析薄层与液滴采用同一单元尺度表示。
-固体挤排液体沿用同一残量面通量及供体、接收容量规则，已选流量可沿反向余量撤销并重新分配。
+液体输运以粗单元的固定开放连通分量为库存和容量单位。
+`PhasePoreFlux` 提供共同 MAC 速度与实际面开口决定的总通量 `Qt`，颗粒本步实际整数占容决定终点孔容。
+`ConservativeLiquidFlux` 从八微盒 PLIC 几何取得液相扫掠偏好，汇总为分量之间的有向面通量。
+`PhaseQuantitySettlement` 使用机器整数体积份额，联合满足原供体库存、实际 `Qt` 上限和接收分量容量。
+有限气腔的状态方程预测空间转为可达分量组的总液量上限，同组空间自由重排，气体来源按相同分组交接。
+每个机械子步执行一次完整时长的有限体积推进，按实际份额分配材料整数质量、物种与内能，活动域发布一次。
+MAC 动量输运读取同次结算的实际整数质量通量。
+
+每个粗单元固定开放分量使用一套粗梯度 PLIC 平面，按最终库存液量确定偏移，八微盒保存该平面积分得到的几何形状。
+未解析液片与气隙可合并，允许格内形状调整和细尺度耗散；实际物质与携带能量继续守恒。
+气体来源按固定开放分量汇总，随实际宏观互补通量和本地保留空间推进，最终通过分量中的规范干片交接。
+新开放空腔使用显式真空来源。
+同一粗单元固定开放分量内的干片合并气腔归属，跨完整固定开口的可解析粗分量气体共压，面内未解析液膜允许合并。
+完整液塞和固定墙阻断气体，有限固定孔口保留孔流。
 
 气腔以干微盒连通和规范 minimum-piece key 标识。`GasRuntimeGeometry` 保存同代几何、拓扑与库存容量；
-未来编辑按最终单元库存和固体占容准备后继。
+未来编辑按最终相占据、单元库存和固体占容准备后继。
 `GasComplementGeometry.capture` 顺序扫描微盒与面，复用未变化单元和相邻面的几何，生成不可变后继。
-气体分裂、合并和完整迁移搬运库存、内能与旧控制体积；环境交换记 source/sink，新开放真空空间保持明确归属。
+气体库存、内能和旧控制体积沿同一份最终来源一次分配。
+持久化保留相占据与微盒归属；环境交换记 source/sink，新开放真空空间保持明确归属。
 真实运动改变容量时按状态方程结算等熵功；表示交接和相变内部交换分别处理，避免重复做功。
 
 气体采用集总气腔与有限孔流模型，按库存、容量和内能派生压力、温度及顺应性。
-完整干面与受限孔口采用一致的拓扑规则，压力按实际接触面解析气腔归属，支持同格不同面接触独立气腔。
+完整固定开口两侧的实际粗分量干容量超过共同解析量时采用低 Mach 共压近似，微量气体空间沿真实干口连接。
+受限固定孔口保留有限流量，完整满液单元和固定墙保持阻断。
 孔流每步冻结实际状态方程与热容导出的储容及正孔口导通率，整体后向 Euler 方程求共享通量。
 供体联合限制所有出边的库存与可携焓，再统一分配整数物种并成对搬运同一能量通量。
 这是时间一阶的集总近似，气腔内部声波和空间动量受该模型限制。
@@ -269,13 +281,18 @@ MAC 动量输运读取相同整数质量通量；未解析薄层与液滴采用�
 - **共享通量、供体与接收容量**
   - 主要文件：
     - [CellLiquidVolumeTransport](../../solver/src/main/java/mmm/fluid/CellLiquidVolumeTransport.java)
-    - [ConservativeLiquidFlux](../../solver/src/main/java/mmm/fluid/ConservativeLiquidFlux.java)：`plan`、`planDisplacement` 共用开放分量分配图
+    - [ConservativeLiquidFlux](../../solver/src/main/java/mmm/fluid/ConservativeLiquidFlux.java)：几何液相偏好、粗分量通量与单次完整库存推进
+    - [PhaseOccupancyState](../../model/src/main/java/mmm/inventory/PhaseOccupancyState.java)：不可变微盒液相体积
+    - [PhaseOccupancyTransport](../../solver/src/main/java/mmm/fluid/PhaseOccupancyTransport.java)：局部八微盒形状归一与外部编辑的气体来源准备
+    - [PhasePoreFlux](../../solver/src/main/java/mmm/fluid/PhasePoreFlux.java)：共享粗格面总通量与 RT0 微面偏好
+    - [PhaseSourceColumns](../../solver/src/main/java/mmm/fluid/PhaseSourceColumns.java)：复用粗分量气体来源与面份额的连续稀疏列
     - [GranularLiquidDisplacement](../../solver/src/main/java/mmm/fluid/GranularLiquidDisplacement.java)
   - 验证选择器 / 参考：`free-surface`；`LiquidVolumeTransportValidation components` / `chemical-tails`；[有限体积输运](fluid-solver.md#几何与单元输运)
 
 - **材料、物种、内能与动量交接**
   - 主要文件：
-    - [LiquidCellInventory](../../model/src/main/java/mmm/inventory/LiquidCellInventory.java)：实际整数份额与 `EnergyPartitioner` 内能交接
+    - [LiquidCellInventory](../../model/src/main/java/mmm/inventory/LiquidCellInventory.java)：`planRoutes` 物质分配、私有后继与内能交接
+    - [PhaseQuantitySettlement](../../solver/src/main/java/mmm/fluid/PhaseQuantitySettlement.java)：机器整数体积份额、实际面通量上限与粗分量容量结算
     - [FluidThermalBinding](../../solver/src/main/java/mmm/fluid/FluidThermalBinding.java)：`liquidEnergyPartitioner` 按实际参考能与来源显热分份
     - [CellMomentumTransport](../../solver/src/main/java/mmm/fluid/CellMomentumTransport.java)
     - [CellCarrierInventoryView](../../solver/src/main/java/mmm/fluid/CellCarrierInventoryView.java)
@@ -286,7 +303,8 @@ MAC 动量输运读取相同整数质量通量；未解析薄层与液滴采用�
     - [FlipPressurePhaseGeometry](../../solver/src/main/java/mmm/fluid/FlipPressurePhaseGeometry.java)
     - [PlicPlaneOffset](../../solver/src/main/java/mmm/fluid/PlicPlaneOffset.java)
     - [GasComplementGeometry](../../solver/src/main/java/mmm/fluid/GasComplementGeometry.java)：`capture` 线性捕获与未变几何复用
-    - [GasGeometryTransition](../../solver/src/main/java/mmm/fluid/GasGeometryTransition.java)
+    - [GasChamberCapacity](../../solver/src/main/java/mmm/fluid/GasChamberCapacity.java)：按固定开放分量直接汇总库存派生的气容量
+    - [GasPieceCapacity](../../solver/src/main/java/mmm/fluid/GasPieceCapacity.java)：拆墙等操作按需分配局部微盒容量
     - [GasComponentCapacity](../../solver/src/main/java/mmm/fluid/GasComponentCapacity.java)
     - [GasPartitionWeights](../../model/src/main/java/mmm/fluid/air/GasPartitionWeights.java)
   - 验证选择器 / 参考：`air-cavity`；[气体几何](gas-state.md#微盒气体几何)
@@ -294,7 +312,9 @@ MAC 动量输运读取相同整数质量通量；未解析薄层与液滴采用�
 - **气体拓扑、库存与体积功**
   - 主要文件：
     - [GasRuntimeGeometry](../../solver/src/main/java/mmm/fluid/GasRuntimeGeometry.java)
-    - [GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java)
+    - [GasChamberTopology](../../solver/src/main/java/mmm/fluid/GasChamberTopology.java)：真实干区连通与冷恢复归属校验
+    - [GasVolumeAllocation](../../solver/src/main/java/mmm/fluid/GasVolumeAllocation.java)：随相通量推进的空间来源及环境／真空来源
+    - [GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java)：按最终来源一次准备库存、内能和控制体积
     - [AirNetwork](../../model/src/main/java/mmm/fluid/air/AirNetwork.java)
     - [GasOrificeFlow](../../model/src/main/java/mmm/fluid/air/GasOrificeFlow.java)
     - [GasEnergyStore](../../model/src/main/java/mmm/thermal/GasEnergyStore.java)
@@ -310,6 +330,7 @@ MAC 动量输运读取相同整数质量通量；未解析薄层与液滴采用�
 ## 热化学与物相转换
 
 各实际载体保存总内能 `U`，温度与热容由现有分段状态函数反演。LTE 工作区用于接触、反应与相变候选；只读观察、属性计算与真实能量重分配有各自入口。导热成对搬运内能，恒温热浴的实际通量记外部 source/sink。反应按精确物种批次改变组成和参考能，相变按实际批次联合修改两相库存与内能。
+温度、接触与载体能量准备按稳定的单元顺序遍历，同代热视图复用已准备的载体列表；库存增量索引提前筛去缺少反应物的区域。
 
 热化学顺序为导热 → 液相反应 → 颗粒反应 → 固液相变 → 气液相变，之后执行颗粒形态转换。凝固、熔化、汽化和凝结在固定区域体积下联合守恒两相内能，`PendingPhaseVolumeWork` 保存几何同步任务；下一次真实投影完成后清除。物品转移遇到待同步几何时，先执行仅含力学的私有候选，再准备物品事务。
 
@@ -336,7 +357,7 @@ MAC 动量输运读取相同整数质量通量；未解析薄层与液滴采用�
   - 主要文件：
     - [CondensedPhaseChangeStage](../../solver/src/main/java/mmm/fluid/CondensedPhaseChangeStage.java)
     - [GasLiquidPhaseChangeStage](../../solver/src/main/java/mmm/fluid/GasLiquidPhaseChangeStage.java)
-    - [GasPhaseBatchSearch](../../solver/src/main/java/mmm/fluid/GasPhaseBatchSearch.java)
+    - [GasLiquidPhaseModel](../../model/src/main/java/mmm/thermal/GasLiquidPhaseModel.java)：饱和压力、解析斜率及潜热
     - [GasPhaseInterfaceResolver](../../solver/src/main/java/mmm/fluid/GasPhaseInterfaceResolver.java)
   - 验证选择器 / 参考：`thermal,gas-liquid`；[相变参考](thermal-state.md#相变)
 
@@ -359,7 +380,7 @@ MAC 动量输运读取相同整数质量通量；未解析薄层与液滴采用�
 
 `CpuFluidSolverBackend` 在私有域完成整个逻辑步；力学细化从原始请求重新恢复，保留总推进时间、外部输入和一次提交。`RegionApplicationService` 与仓库核对后端、区域身份、紧邻求解器代次和完整布局。CPU 可把已求解私有对象交接一次；其他后端提供完整不可变状态。候选失败保留原区域，成功后发布该候选的完整统计。
 
-存盘以 `cell-mac` 格式保存单元液体记录、规范分区的三轴格面动量、碰撞掩码和非液体库存。
+存盘以 `cell-mac` 格式保存单元液体记录、微盒相占据、规范分区的三轴格面动量、碰撞掩码和非液体库存。
 液体记录直接携带组成和内能，热扩展保存非液体内能及总账。
 双槽写入、回读并验证全部成员，再原子替换 `HEAD`。删除发布 `REMOVED` 终止代次后完成移除通知、注销与载荷隔离。捕获读取已提交的同代库存和气腔状态；冷恢复完整验证支撑、容量、物性与账本。
 
@@ -502,6 +523,6 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 | 液面降低、水量异常 | `CellInventoryReader` 的实际体积与材料质量 | `LiquidCellInventory.Plan` 与 `MaterialTransferPlanner` 的 source/sink；再查快照量化 |
 | 穿墙、小液滴或薄层异常 | `CollisionField` 与 `FlipCutCellGeometry` | `LiquidCollisionEdit`、共同面通量与压力支撑 |
 | 气压或气腔归属异常 | `GasRuntimeGeometry` 的微盒、容量与节点归属 | `GasTopologyCoordinator` 的来源交接及 `GasThermalModel` 的库存／容量／U |
-| 温度、反应或相变无进展 | 实际组成、U、批次及候选不可执行原因 | `ThermalCaloricInversion`、`GasPhaseBatchSearch`、`GasLiquidPhaseChangeStage`、未来气腔与热账计划 |
+| 温度、反应或相变无进展 | 实际组成、U、批次及候选不可执行原因 | `ThermalCaloricInversion`、`GasLiquidPhaseModel`、`GasLiquidPhaseChangeStage`、未来气腔与热账计划 |
 | 颗粒占容、压力或沉积异常 | `GranularCouplingFields`、碰撞预览及整数分配 | `GranularPressureCoupling`、`GranularSettlementGeometryPlan`、`GranularBedShear` |
 | 容器／区域锁定 | HEAD、WAL 与外部已存盘状态的分类 | `ContainerRecoveryCoordinator`、`OwnershipCoordinator`；[恢复决策](world-ownership-and-containers.md#恢复决策表) |

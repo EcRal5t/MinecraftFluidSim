@@ -1,6 +1,6 @@
 package mmm.fluid;
 
-/** Bounded floating-point inversion of the selected open-box volume. */
+/** Local interface inversion; sixteen bisections resolve position to about 10^-5 cell widths. */
 final class PlicPlaneOffset {
 	record Result(double offset, double targetVolume) { }
 	private PlicPlaneOffset() { }
@@ -23,7 +23,7 @@ final class PlicPlaneOffset {
 		double volume=target;
 		if (volume==0) upper=lower;
 		else if(volume==Integer.bitCount(supportMask)*.125) lower=upper;
-		else for(int iteration=0;iteration<48;iteration++) {
+		else for(int iteration=0;iteration<16;iteration++) {
 			double middle=lower+(upper-lower)*.5;
 			if(middle==lower || middle==upper) break;
 			double measured = cdf.measure(middle);

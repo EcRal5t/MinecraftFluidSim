@@ -40,13 +40,28 @@ final class GasFaceIntersection {
     /** Production path: at most one PLIC half-plane on each side of the shared face. */
     static double area(FlipPressurePhaseGeometry phase,int firstCell,int secondCell,int axis,
             double firstCoordinate,double secondCoordinate,double tangentStart,double otherStart,double width) {
+        return area(phase,firstCell,phase,secondCell,axis,firstCoordinate,secondCoordinate,tangentStart,otherStart,width);
+    }
+    /** The same clipped face also connects old and future dry supports during one transport step. */
+    static double area(FlipPressurePhaseGeometry firstPhase,int firstCell,FlipPressurePhaseGeometry secondPhase,int secondCell,int axis,
+            double firstCoordinate,double secondCoordinate,double tangentStart,double otherStart,double width) {
+        var phase=firstPhase;
         if(phase==null||firstCell<0||secondCell< -1||axis<0||axis>2||!Double.isFinite(firstCoordinate)
                 ||!Double.isFinite(secondCoordinate)||!Double.isFinite(tangentStart)||!Double.isFinite(otherStart)
                 ||!(width>=0&&Double.isFinite(width)))throw new IllegalArgumentException("Invalid gas face rectangle");
         int firstMicro=phase.microAtFace(firstCell,axis,firstCoordinate,tangentStart,otherStart);
-        int secondMicro=secondCell<0?0:phase.microAtFace(secondCell,axis,secondCoordinate,tangentStart,otherStart);
+        int secondMicro=secondCell<0?0:secondPhase.microAtFace(secondCell,axis,secondCoordinate,tangentStart,otherStart);
+        return area(firstPhase,firstCell,firstMicro,secondPhase,secondCell,secondMicro,axis,
+                firstCoordinate,secondCoordinate,tangentStart,otherStart,width);
+    }
+    static double area(FlipPressurePhaseGeometry phase,int firstCell,int firstMicro,int secondCell,int secondMicro,int axis,
+            double firstCoordinate,double secondCoordinate,double tangentStart,double otherStart,double width) {
+        return area(phase,firstCell,firstMicro,phase,secondCell,secondMicro,axis,firstCoordinate,secondCoordinate,tangentStart,otherStart,width);
+    }
+    private static double area(FlipPressurePhaseGeometry phase,int firstCell,int firstMicro,FlipPressurePhaseGeometry secondPhase,int secondCell,int secondMicro,int axis,
+            double firstCoordinate,double secondCoordinate,double tangentStart,double otherStart,double width) {
         double firstFraction=phase.liquidFractionExact(firstCell,firstMicro);
-        double secondFraction=secondCell<0?0:phase.liquidFractionExact(secondCell,secondMicro);
+        double secondFraction=secondCell<0?0:secondPhase.liquidFractionExact(secondCell,secondMicro);
         if(!(firstFraction>=0&&firstFraction<=1&&secondFraction>=0&&secondFraction<=1))
             throw new IllegalArgumentException("Invalid gas face phase fraction");
         if(width==0||firstFraction>=1||secondFraction>=1)return 0;
@@ -54,7 +69,7 @@ final class GasFaceIntersection {
         if(firstFraction==0&&secondFraction==0)return width*width;
         var polygon=POLYGON.get();polygon.reset(width);
         if(firstFraction>0)cut(polygon,phase,firstCell,firstMicro,axis,firstCoordinate,tangentStart,otherStart);
-        if(secondFraction>0)cut(polygon,phase,secondCell,secondMicro,axis,secondCoordinate,tangentStart,otherStart);
+        if(secondFraction>0)cut(polygon,secondPhase,secondCell,secondMicro,axis,secondCoordinate,tangentStart,otherStart);
         return polygon.area(width);
     }
     private static void cut(Polygon polygon,FlipPressurePhaseGeometry phase,int cell,int micro,int axis,

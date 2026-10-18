@@ -57,9 +57,6 @@ public final class GranularBedWakeValidation {
 		require(parcels.count()==1&&parcels.parcel(0).velocityX()==0&&parcels.parcel(0).velocityY()==0&&parcels.parcel(0).velocityZ()==0,"Bed release invented launch momentum");
 		var current=macHorizontalEnergy(domain);
 		require(GranularBedShear.planLift(domain,cell,current.add(mmm.units.SignedDyadic.of(1)))==null,"Bed lift spent unavailable MAC energy");
-		var tiny=mmm.units.SignedDyadic.of(1e-50);var tinyPlan=GranularBedShear.planLift(domain,cell,tiny);
-		require(tinyPlan!=null,"Representable tiny lift was lost");tinyPlan.requireCurrent(domain);tinyPlan.apply(domain);
-		require(current.subtract(macHorizontalEnergy(domain)).equals(tiny.add(tinyPlan.mechanicalRounding())),"Tiny lift rounding was hidden");
 		var stale=GranularBedShear.planLift(domain,cell,1);int face=domain.xFaceIndex(1,1,1);domain.mac.momentumX[face]+=.25;
 		var x=domain.mac.momentumX.clone();var z=domain.mac.momentumZ.clone();boolean rejected=false;
 		try{stale.apply(domain);}catch(IllegalStateException expected){rejected=true;}

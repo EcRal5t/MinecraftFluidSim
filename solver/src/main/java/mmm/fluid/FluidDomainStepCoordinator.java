@@ -45,7 +45,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 		return step(phaseChangeEnabled, maximumPhaseOperations, captureMechanicalAudit, thermochemistryEnabled, 0);
 	}
 
-	/** Reuses the CFL estimate already charged to this private backend attempt. */
+	/** Reuses the granular displacement subdivision prepared for this backend attempt. */
 	StepStats step(
 			boolean phaseChangeEnabled, int maximumPhaseOperations, boolean captureMechanicalAudit,
 			boolean thermochemistryEnabled, int preparedSubsteps
@@ -508,9 +508,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	}
 
 	int calculateSubsteps(float dt) {
-		ensureInventoryGrid();if(velocityGridDirty)cellMacStage.rebuildVelocity();
-		if (cellLiquidVolumeTransport == null) cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain());
-		double required = cellLiquidVolumeTransport.courantRate(-config.gravity() * dt) * dt;
+		double required = 1;
 		double maximum = 0;
 		if (granularState != null) for (int index = 0; index < granularState.parcels.count(); index++) {
 			var parcel = granularState.parcels.parcel(index);

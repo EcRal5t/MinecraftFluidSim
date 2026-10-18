@@ -57,7 +57,7 @@ abstract class RegionPersistenceValidationSupport {
 				state.particleCount(), state.totalVolume(), state.copyPositionVolume(), velocities, mmm.units.Mass.createLiquid(state.cellSize(), 1000.0, state.copyPositionVolume()), state.copySolidMask()));
 		return fixtureRegion(id, domain);
 	}
-	private static FluidRegion fixtureRegion(UUID id, FluidDomain domain) {
+	static FluidRegion fixtureRegion(UUID id, FluidDomain domain) {
 		BlockPos origin = new BlockPos(15, 16, 15);
 		Set<Long> interior = new HashSet<>();
 		for (int z = 15; z <= 17; z++) for (int y = 16; y <= 17; y++) for (int x = 15; x <= 17; x++) interior.add(new BlockPos(x, y, z).asLong());

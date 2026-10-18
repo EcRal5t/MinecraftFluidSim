@@ -1,6 +1,6 @@
 package mmm.fluid;
 
-/** Shared implicit MAC stress for pure liquid and locally coupled solid phases. */
+/** Shared MAC stress with two local dissipative sweeps for liquid and coupled solid phases. */
 final class LiquidViscosityStage {
 	private final FluidDomain domain;
 	private ViscousMacDiscretization discretization;

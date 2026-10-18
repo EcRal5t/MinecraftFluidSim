@@ -5,7 +5,7 @@ public final class PressureCapacityValidation {
 	public static void main(String[] args) {
 		if (args.length>1 || args.length==1&&!args[0].equals("--algebra")) throw new IllegalArgumentException("Expected --algebra or no selector");
 		checkGraph(fixture(true)); checkGraph(fixture(false));
-		fixedPorePressurePort();
+		fixedPorePressurePort(); vacuumCapacityClosure();
 		if (args.length==1) { System.out.println("Common pressure incidence and transpose PASS"); return; }
 		shallowHydrostatics(false); shallowHydrostatics(true);
 		System.out.println("Capacity/gas pressure adjoint, positive operator and shallow equilibrium PASS");
@@ -20,6 +20,61 @@ public final class PressureCapacityValidation {
 		domain.mac.velocityX[1]=.25F; graph.rebuild(.05F);
 		close(graph.totalPortCoefficient(0,1,0,255,255),port,"Mixture pressure aperture changed after flow reversal");
 		close(port,1,"A partial liquid cell lost its actual fixed pore port");
+	}
+
+	private static void vacuumCapacityClosure() {
+		float dt=.05F;
+		var d=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,dt,120,1e-5F,.4F,.002F,0));
+		double cellCubicMeters=d.unitScale.cubicMetersPerNormalizedVolume();
+		d.sealDomainBoundary();d.setVolumes(new float[]{.5F,1,1,1,1,1,1,.5F});d.ensureGrid();
+		if(d.gasBoundary().nodeCount()!=2)throw new AssertionError("Capacity fixture requires two separated vacuum chambers");
+		for(int node=1;node<=2;node++)d.setGasNodeStandardVolume(node,0);
+		var liquids=new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER));
+		d.materialRegistry=liquids;
+		var thermal=new mmm.thermal.ThermalRegistry(java.util.List.of(
+				new mmm.thermal.ThermalMaterialDefinition("test:capacity_water",mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID,
+						BuiltinFluidMaterials.WATER.id(),300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,4184))),
+				new mmm.thermal.ThermalMaterialDefinition("test:capacity_air",mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
+						mmm.fluid.air.BuiltinGasDefinitions.AIR,300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,718)))));
+		d.bindThermal(thermal,liquids,300);d.ensureGrid();
+		d.mac.velocityX[d.xFaceIndex(1,0,0)]=-100;d.cellMacStage.publishMomentum();
+		var graph=d.pressureSystem.faces;graph.rebuild(dt);
+		var predicted=new double[d.cellCount+3];graph.addDivergence(faceVelocities(d,graph),predicted,1);
+		double[] initialVolume={0,d.gasBoundary().availableVolume(1),d.gasBoundary().availableVolume(2)};
+		boolean overrun=false;
+		for(int node=1;node<=2;node++)overrun|=initialVolume[node]+dt*cellCubicMeters*predicted[d.cellCount+node]<0;
+		if(!overrun)throw new AssertionError("Vacuum predictor did not exercise finite capacity overrun");
+		double initialK=d.liquidKineticEnergyJoules();var initialU=d.exactInternalEnergy();var audit=d.thermalAudit();
+		var stock=d.liquidCells.snapshot();var gas=d.gasBoundary().sealedInventory();
+		var result=d.pressureSystem.solveProjection(dt);
+		if(!result.converged())throw new AssertionError("Finite vacuum capacity projection did not converge: "+result);
+		d.pressureSystem.projectVelocities(dt);d.cellMacStage.publishMomentum();
+		var corrected=new double[d.cellCount+3];graph.addDivergence(faceVelocities(d,graph),corrected,1);
+		double volumeError=FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION*cellCubicMeters;
+		double pressureError=2*Math.ulp((float)mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE);boolean closed=false;
+		for(int node=1;node<=2;node++) {
+			double finalVolume=initialVolume[node]+dt*cellCubicMeters*corrected[d.cellCount+node];
+			double absolute=d.projection.gasPressure[node]+mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE;
+			if(finalVolume < -volumeError||absolute < -pressureError)
+				throw new AssertionError("Vacuum projection left negative capacity or absolute pressure");
+			if(finalVolume>volumeError&&Math.abs(absolute)>pressureError)
+				throw new AssertionError("Positive vacuum volume acquired a nonzero contact pressure");
+			closed|=finalVolume<=volumeError&&absolute>pressureError;
+		}
+		if(!closed)throw new AssertionError("Finite vacuum closure did not oppose the overshooting liquid predictor");
+		if(d.liquidKineticEnergyJoules()>initialK*(1+8*Math.ulp(1F)))
+			throw new AssertionError("Closed vacuum pressure projection generated kinetic energy without external work");
+		if(!stock.stocks().equals(d.liquidCells.snapshot().stocks())||!d.exactInternalEnergy().equals(initialU)
+				||!d.exactGasInternalEnergy().equals(mmm.units.SignedDyadic.ZERO)||!d.thermalAudit().equals(audit)
+				||!d.gasBoundary().sealedInventory().equals(gas)||!d.gasBoundary().auditClosed())
+			throw new AssertionError("Vacuum projection altered inventory or inserted heat to balance its mechanical response");
+	}
+	private static double[] faceVelocities(FluidDomain d,PressureFaceGraph graph) {
+		double[] velocity=new double[graph.faceCount];
+		for(int face=0;face<velocity.length;face++)velocity[face]=switch(graph.axis[face]) {
+			case 0->d.mac.velocityX[graph.localFace[face]];case 1->d.mac.velocityY[graph.localFace[face]];default->d.mac.velocityZ[graph.localFace[face]];
+		};
+		return velocity;
 	}
 
 	private static FluidDomain fixture(boolean full) {

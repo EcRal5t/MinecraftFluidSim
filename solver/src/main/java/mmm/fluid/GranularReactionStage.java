@@ -57,14 +57,44 @@ final class GranularReactionStage {
     mechanicalRoundingJoules = 0;
     if (!domain.precipitationEnabled() || dirtyCells.length == 0)
       return new FluidDomain.PhaseTransferStats(0, 0, 0, 0);
-    domain.ensureGrid();
-    int transfers = 0, precipitated = 0, dissolved = 0, evaluations = 0;
-    long signedVolume = 0;
+    if (domain.granularState.parcels.count() == 0 && domain.granularState.deposits.groupCount() == 0) {
+      boolean possible = false;
+      for (var rule : domain.granularState.registry.reactions()) {
+        boolean complete = true;
+        for (String species : rule.aqueousStoichiometry().keySet())
+          if (!domain.liquidCells.hasSpecies(domain.chemicalParcels.registry().speciesHandle(species))) {
+            complete = false; break;
+          }
+        if (complete) { possible = true; break; }
+      }
+      if (!possible) return new FluidDomain.PhaseTransferStats(0, 0, 0, 0);
+    }
+    // A solid can dissolve without aqueous reactants; precipitation needs every term.
+    // Filter before allocating any private solid, momentum or caloric candidate.
+    var solidCells = new TreeSet<Integer>();
+    for (int index = 0; index < domain.granularState.parcels.count(); index++)
+      solidCells.add(domain.granularParcelCell(domain.granularState.parcels.parcel(index)));
+    domain.granularState.deposits.forEachGroup((cell, porosity, material, composition, volume, mass) -> solidCells.add(cell));
+    var participating = new TreeSet<Integer>();
     for (int cell : dirtyCells) {
       if (cell < 0 || cell >= domain.cellCount)
         throw new IllegalArgumentException("Reactive cell is outside the domain");
+      if (solidCells.contains(cell)) { participating.add(cell); continue; }
+      for (int support : LiquidCellInventory.connectedSupports(domain.geometry.cutCells.mask(cell))) {
+        for (var rule : domain.granularState.registry.reactions())
+          if (canPrecipitate(cell, support, rule)) { participating.add(cell); break; }
+        if (participating.contains(cell)) break;
+      }
+    }
+    if (participating.isEmpty()) return new FluidDomain.PhaseTransferStats(0, 0, 0, 0);
+    domain.ensureGrid();
+    int transfers = 0, precipitated = 0, dissolved = 0, evaluations = 0;
+    long signedVolume = 0;
+    for (int cell : participating) {
       for (int support : LiquidCellInventory.connectedSupports(domain.geometry.cutCells.mask(cell)))
         for (var rule : domain.granularState.registry.reactions()) {
+          var accessible = solidCells.contains(cell) || candidate != null ? accessible(cell, support, rule) : null;
+          if ((accessible == null || !rule.reversible()) && !canPrecipitate(cell, support, rule)) continue;
           if (evaluations++ == GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP) {
             for (int deferred : dirtyCells) domain.chemicalParcels.markDirtyCell(deferred);
             publish();
@@ -86,7 +116,6 @@ final class GranularReactionStage {
                   new GranularPhaseTransferEngine.LiquidPortion(
                       stock.key(), stock.volume(), stock.massUnits(), stock.mixture()));
           if (portions.isEmpty()) continue;
-          var accessible = accessible(cell, support, rule);
           long existing = accessible == null ? 0 : accessible.total();
           long cap =
               Math.min(
@@ -125,6 +154,23 @@ final class GranularReactionStage {
     }
     publish();
     return new FluidDomain.PhaseTransferStats(transfers, precipitated, dissolved, signedVolume);
+  }
+
+  private boolean canPrecipitate(int cell, int support, SolidLiquidReaction rule) {
+    var registry = domain.chemicalParcels.registry();
+    int phase = registry.phaseHandle(rule.liquidPhaseId());
+    var stocks = physicalStocks(cell);
+    for (var term : rule.aqueousStoichiometry().entrySet()) {
+      int species = registry.speciesHandle(term.getKey());
+      long required = Math.multiplyExact(rule.solidExtentPerBatch(), term.getValue()), amount = 0;
+      for (var stock : stocks) {
+        if (stock.key().supportMask() != support || stock.mixture() == null
+            || registry.phaseHandleForMaterial(domain.materialRegistry.material(stock.key().material()).id()) != phase) continue;
+        amount = Math.addExact(amount, stock.mixture().amount(species));
+      }
+      if (amount < required) return false;
+    }
+    return true;
   }
 
   private List<LiquidCellInventory.Stock> physicalStocks(int cell) {
@@ -696,24 +742,24 @@ final class GranularReactionStage {
         displace |= displacement[cell].signum() > 0 || CellRemapMicroTopology.exceedsCapacity(liquid,cell,domain.geometry.cutCells.mask(cell),capacity[cell]);
       }
       SignedDyadic advectionRoundoff = SignedDyadic.ZERO;
+      SignedDyadic advectionHeat = SignedDyadic.ZERO;
       MacMomentumState preparedMomentum;
+      GasVolumeAllocation transportedGas=null;
       if (displace) {
-        var flux = new ConservativeLiquidFlux(domain.sizeX, domain.sizeY, domain.sizeZ, true);
-        flux.planDisplacement(
-            volume,
-            capacity,
-            displacement,
-            domain.geometry.solid,
-            domain.geometry.cutCells,
-            GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP, liquid);
+        var flux = new ConservativeLiquidFlux(domain);
+        flux.prepareDisplacement(occupied,liquid);
         if (domain.cellLiquidVolumeTransport == null)
           domain.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain);
         var transport = domain.cellLiquidVolumeTransport.prepareFlux(flux, 0, liquid);
-        preparedMomentum =
+        var momentumTransfer =
             new CellMomentumTransport(domain)
-                .prepare(transport, liquid, velocities(0), velocities(1), velocities(2));
-        advectionRoundoff = transport.inventory().energyRoundoff();
-        transport.inventory().commit();
+                .prepare(transport, new float[][]{velocities(0), velocities(1), velocities(2)});
+        preparedMomentum = momentumTransfer.momentum();
+        var transportedLiquid = transport.inventory().withMechanicalHeat(momentumTransfer.heatByCell());
+        advectionRoundoff = transportedLiquid.energyRoundoff();
+        advectionHeat = transportedLiquid.mechanicalHeat();
+        transportedGas=transport.gasAllocation();
+        transportedLiquid.commit();
       } else
         preparedMomentum =
             new MacMomentumState(
@@ -730,7 +776,9 @@ final class GranularReactionStage {
         }
       var stockPlan = domain.liquidCells.planEdits(edits);
       var gas =
-          domain.gasTopologyCoordinator.planAfterLiquidCells(stockPlan.future(), occupied, false);
+          domain.gasTopologyCoordinator.planAfterLiquidCells(stockPlan.future(), occupied,
+              transportedGas==null?GasVolumeAllocation.prepare(domain,stockPlan.future(),occupied,null):new GasVolumeAllocation(domain,stockPlan.future(),transportedGas.futureOccupancy(),transportedGas.shares(),transportedGas.preparedPhase(),transportedGas.preparedGeometry()));
+      if(domain.thermalState!=null)domain.thermalState.auditLedger().withMechanicalWork(advectionHeat).withRoundoff(advectionRoundoff).expectedInventory();
       stockPlan.requireCurrent();
       domain.granularState.parcels.requirePrepared(parcels, parcelRevision);
       domain.granularState.deposits.requirePrepared(deposits, depositRevision);
@@ -749,7 +797,6 @@ final class GranularReactionStage {
       if (energyPlan != null) {
         solidEnergy.commit();
         domain.thermalState.commitOwnedBatchEnergy(energyPlan);
-        domain.thermalState.recordRoundoff(advectionRoundoff);
       }
       domain.markCellInventoryChanged();
       for (int cell : changed) {
@@ -757,6 +804,8 @@ final class GranularReactionStage {
         domain.granularDepositDynamics().disturbCell(cell);
       }
       if (gas != null) domain.gasTopologyCoordinator.commit(gas);
+      if(domain.thermalState!=null)domain.thermalState.restoreAuditLedger(domain.thermalState.auditLedger()
+          .withMechanicalWork(advectionHeat).withRoundoff(advectionRoundoff));
     }
 
     float[] velocities(int axis) {

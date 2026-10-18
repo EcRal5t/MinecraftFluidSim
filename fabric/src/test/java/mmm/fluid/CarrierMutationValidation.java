@@ -18,7 +18,7 @@ public final class CarrierMutationValidation {
 		readOnlyCellQueriesFollowCarrierEdits();
 		volumeObservationRoundsTheExactInventoryOnce();
 		insertionNeverRoundsCapacityUp();insertionNeverRoundsTheRequestUp();
-		externalInsertionsRouteAroundLiquidSealedGas();independentWorkFinishesBeforeRejection();
+		externalInsertionsRouteAroundLiquidSealedGas();
 		System.out.println("Cell inventory mutation validation passed");
 	}
 	private static void insertExtractAndRestoreKeepQuantities() throws Exception {
@@ -353,31 +353,6 @@ public final class CarrierMutationValidation {
 				&& java.util.Arrays.equals(speciesTotals(restored),valid.copySpeciesTotals())
 				&& java.util.Arrays.equals(restored.exportChemicalParticleState().materials().copyPositionVolume(),valid.materials().copyPositionVolume()),
 				"Prepared chemical restore changed valid carrier inventory or positions");
-	}
-
-	private static void independentWorkFinishesBeforeRejection() {
-		int[] visits = new int[8_192];
-		var first = new IllegalStateException("first batch rejection");
-		var last = new AssertionError("last batch rejection");
-		try {
-			mmm.compute.CpuWorkBatch.run(visits.length, (from, until) -> {
-				for (int index = from; index < until; index++) {
-					if (index == 0) throw first;
-					if (index == visits.length - 1) throw last;
-					visits[index]++;
-				}
-			});
-			throw new AssertionError("worker rejection was lost");
-		} catch (IllegalStateException rejected) {
-			require(rejected == first, "worker rejection changed identity or canonical batch order");
-			if (Runtime.getRuntime().availableProcessors() > 3)
-				require(visits[visits.length - 2] == 1, "rejection returned while another batch was unfinished");
-			if (Runtime.getRuntime().availableProcessors() > 5)
-				require(visits[visits.length / 2 - 1] == 1, "rejection returned before an independent batch finished");
-		}
-		java.util.Arrays.fill(visits, 0);
-		mmm.compute.CpuWorkBatch.run(visits.length, (from, until) -> { for (int index = from; index < until; index++) { visits[index]++; } });
-		for (int visit : visits) require(visit == 1, "independent work missed or repeated an index after rejection");
 	}
 
 	private static void insertionNeverRoundsTheRequestUp() {

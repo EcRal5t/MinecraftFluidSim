@@ -136,7 +136,7 @@ public final class M5GasLiquidCouplingValidation {
 	private static void validateClosedCavityAfterBootstrapStartsAsVacuum() {
 		int n = 4;
 		FluidSolverConfig config = new FluidSolverConfig(
-				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F);
+				0.5F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F);
 		FluidDomain domain = new FluidDomain(n, n, n, config, n * n * n * 8);
 		domain.sealDomainBoundary();
 		for (int z = 0; z < n; z++) for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
@@ -156,6 +156,39 @@ public final class M5GasLiquidCouplingValidation {
 				&& domain.gasBoundary().gaugePressure(1) == -AirNetwork.REFERENCE_PRESSURE
 				&& domain.gasBoundary().auditClosed(),
 				"post-bootstrap closed cavity was filled from ambient instead of remaining vacuum");
+		var liquids=new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER));
+		domain.materialRegistry=liquids;
+		var thermal=new mmm.thermal.ThermalRegistry(java.util.List.of(
+				new mmm.thermal.ThermalMaterialDefinition("test:vacuum_water",mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID,
+						BuiltinFluidMaterials.WATER.id(),300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,4184))),
+				new mmm.thermal.ThermalMaterialDefinition("test:vacuum_air",mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
+						mmm.fluid.air.BuiltinGasDefinitions.AIR,300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,718)))));
+		domain.bindThermal(thermal,liquids,300);
+		var volume=domain.liquidCells.exactVolume();long mass=domain.liquidCells.massUnits();var energy=domain.exactInternalEnergy();
+		for(int step=0;step<2;step++) {
+			domain=new CpuFluidSolverBackend().evaluate(new FluidStepRequest(step,domain.captureAuthoritativeState(),
+					java.util.List.of(),false,0,true)).claimPreparedCpuDomain();
+			check(domain.liquidCells.exactVolume().equals(volume)&&domain.liquidCells.massUnits()==mass
+					&&domain.gasBoundary().sealedInventory().isEmpty()&&domain.gasBoundary().externalSource().isEmpty()
+					&&domain.gasBoundary().escapedSink().isEmpty()&&domain.gasBoundary().auditClosed(),
+					"Explicit vacuum normal successor changed liquid or gas inventory");
+			check(domain.exactGasInternalEnergy().equals(mmm.units.SignedDyadic.ZERO)
+					&&domain.exactInternalEnergy().equals(energy)&&domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+					&&domain.liquidKineticEnergyJoules()<=1e-12,"An unforced closed vacuum created heat or liquid motion");
+			if(step==0) {
+				var saved=domain.captureAuthoritativeState();
+				domain=FluidDomain.restoreAuthoritativeState(coldVacuumState(saved));
+				FluidDomainStateAssertions.assertSameState(saved,domain.captureAuthoritativeState(),"Explicit vacuum cold restore");
+			}
+		}
+	}
+	private static FluidDomainState coldVacuumState(FluidDomainState s) {
+		return new FluidDomainState(s.sizeX(),s.sizeY(),s.sizeZ(),s.config(),s.maximumParticleCount(),s.sealedDomainBoundary(),
+				new mmm.inventory.LiquidCellInventory.Snapshot(s.liquid().rows()),new mmm.inventory.PhaseOccupancyState(s.phaseOccupancy().copyLiquidMicroVolumes()),
+				s.momentum(),s.copyCollisionMasks(),s.materialPalette(),s.chemicalRegistry(),s.chemicalSource(),s.chemicalSink(),
+				s.copyChemicalDirtyCells(),s.chemicalReactionCursor(),s.granularRegistry(),s.granular(),s.granularDynamics(),s.precipitationEnabled(),
+				s.gasRegistry(),s.gas(),s.thermalRegistry(),s.thermalOwner(),s.maximumThermalTransportSubsteps(),s.pendingPhaseVolume(),
+				s.copyThermalBoundaryTemperaturesK(),s.condensedPhasePressure(),s.materialDefinitions());
 	}
 
 	private static void validateAnalyticStaticHead(int sign) {

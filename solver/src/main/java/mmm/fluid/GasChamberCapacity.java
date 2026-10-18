@@ -1,23 +1,23 @@
 package mmm.fluid;
 
+import mmm.inventory.LiquidCellInventory;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/** Raw-stock control volumes on the existing immutable piece graph, with separate SI rounding bounds. */
+/** Actual coarse pore remainders summed directly on their gas nodes, with SI rounding bounds. */
 final class GasChamberCapacity {
 	record Chamber(int node, int minimumPiece, double cubicMeters, double roundingErrorBound) { }
 	private final GasComplementGeometry geometry;
-	private final List<GasPieceCapacity.Piece> pieces;
 	private final List<GasComponentCapacity.Component> components;
 	private final List<Chamber> chambers;
 	private final double ambientCubicMeters, ambientRoundingErrorBound;
 
 	private GasChamberCapacity(GasComplementGeometry geometry, List<GasComponentCapacity.Component> components,
-	                          List<GasPieceCapacity.Piece> pieces, List<Chamber> chambers,
+	                          List<Chamber> chambers,
 	                          double ambientCubicMeters, double ambientRoundingErrorBound) {
 		this.geometry = geometry;
-		this.pieces = List.copyOf(pieces); this.chambers = List.copyOf(chambers);
+		this.chambers = List.copyOf(chambers);
 		this.components = List.copyOf(components);
 		this.ambientCubicMeters = ambientCubicMeters; this.ambientRoundingErrorBound = ambientRoundingErrorBound;
 	}
@@ -38,15 +38,15 @@ final class GasChamberCapacity {
 
 	static GasChamberCapacity capture(FluidDomain domain, GasComplementGeometry geometry,
 	                                 GasChamberTopology topology, long[] occupiedSvq,
-	                                 List<PhaseLiquidGeometryEdit> liquidStock) {
-		return capture(domain, geometry, topology, occupiedSvq, liquidStock, null);
+	                                 LiquidCellInventory.Snapshot cells) {
+		return capture(domain, geometry, topology, occupiedSvq, cells, null);
 	}
 
 	static GasChamberCapacity capture(FluidDomain domain, GasComplementGeometry geometry,
 	                                 GasChamberTopology topology, long[] occupiedSvq,
-	                                 List<PhaseLiquidGeometryEdit> liquidStock, GasRuntimeGeometry source) {
+	                                 LiquidCellInventory.Snapshot cells, GasRuntimeGeometry source) {
 		requireTopology(domain, geometry, topology);
-		return assemble(GasComponentCapacity.capture(domain,geometry,occupiedSvq,liquidStock,source),geometry,topology);
+		return assemble(GasComponentCapacity.capture(domain,geometry,occupiedSvq,cells,source),geometry,topology);
 	}
 
 	private static void requireTopology(FluidDomain domain, GasComplementGeometry geometry, GasChamberTopology topology) {
@@ -54,30 +54,26 @@ final class GasChamberCapacity {
 			throw new IllegalArgumentException("Gas chamber capacity requires its matching captured geometry");
 	}
 	private static double[] totals(int count) { return new double[count + 1]; }
-	private static void add(GasPieceCapacity.Piece piece, GasChamberTopology topology,
-	                        double[] capacities, double[] errors) {
-		int node = topology.nodeOfPiece(piece.id());
-		if (node < 0 || node >= capacities.length) throw new IllegalArgumentException("Gas capacity topology names a missing piece");
-		capacities[node] += piece.cubicMeters();
-		errors[node] += piece.roundingErrorBound() + Math.ulp(capacities[node]);
-	}
 	private static GasChamberCapacity assemble(List<GasComponentCapacity.Component> components,
 	                                           GasComplementGeometry geometry, GasChamberTopology topology) {
 		int count = topology.chambers().size();
 		var capacities = totals(count); var errors = totals(count);
-		var byId = new GasPieceCapacity.Piece[Math.multiplyExact(8, Math.multiplyExact(geometry.sizeX(), Math.multiplyExact(geometry.sizeY(), geometry.sizeZ())))];
-		int size = 0;
-		for (var component : components) for (var piece : component.pieces()) {
-			if (geometry.piece(piece.id()) == null || byId[piece.id()] != null)
-				throw new IllegalArgumentException("Gas capacity topology names a missing or repeated piece");
-			byId[piece.id()] = piece; size++; add(piece, topology, capacities, errors);
+		// Every dry micro piece in one fixed pore support has the same coarse gas owner.
+		// Sum the actual component remainder once; distributing it over eight pieces
+		// before summing the same node only adds allocation and rounding work.
+		for (var component : components) if(component.availableVolumeNormalized().signum()>0) {
+			int node=-1;
+			for(int bits=component.supportMask();bits!=0;bits&=bits-1) {
+				node=topology.nodeOfPiece(8*component.cell()+Integer.numberOfTrailingZeros(bits));
+				if(node>=0)break;
+			}
+			if(node<0)throw new GasTopologyBlockedException("Positive component capacity has no gas owner");
+			double value=component.availableVolumeNormalized().toDouble()*geometry.cellVolumeCubicMeters();
+			capacities[node]+=value;errors[node]+=16*Math.ulp(value)+Math.ulp(capacities[node]);
 		}
-		if (size != geometry.pieces().size()) throw new IllegalArgumentException("Gas capacity omits selected gas geometry");
-		var pieces = new ArrayList<GasPieceCapacity.Piece>(size);
-		for (var piece : byId) if (piece != null) pieces.add(piece);
-		return finish(components, pieces, geometry, topology, capacities, errors);
+		return finish(components, geometry, topology, capacities, errors);
 	}
-	private static GasChamberCapacity finish(List<GasComponentCapacity.Component> components, List<GasPieceCapacity.Piece> pieces,
+	private static GasChamberCapacity finish(List<GasComponentCapacity.Component> components,
 	                                         GasComplementGeometry geometry, GasChamberTopology topology,
 	                                         double[] capacities, double[] errors) {
 		var chambers = new ArrayList<Chamber>(topology.chambers().size());
@@ -86,7 +82,7 @@ final class GasChamberCapacity {
 			chambers.add(new Chamber(node, chamber.minimumPiece(), capacity, bound(errors[node], capacity)));
 		}
 		double ambient = capacities[0] == 0 ? 0 : positive(capacities[0]);
-		return new GasChamberCapacity(geometry, components, pieces, chambers, ambient, bound(errors[0], ambient));
+		return new GasChamberCapacity(geometry, components, chambers, ambient, bound(errors[0], ambient));
 	}
 
     private static double positive(double value) {
@@ -96,7 +92,13 @@ final class GasChamberCapacity {
     private static double bound(double leaves, double capacity) {
         return capacity == 0 ? 0 : Math.nextUp(leaves + Math.ulp(capacity));
     }
-	List<GasPieceCapacity.Piece> pieces() { return pieces; }
+	/** Fine geometric capacity is prepared only by callers that actually need a micro view. */
+	List<GasPieceCapacity.Piece> pieces() {
+		var result=new ArrayList<GasPieceCapacity.Piece>();
+		for(var component:components)result.addAll(GasPieceCapacity.capture(component.cell(),component.supportMask(),component.availableVolumeNormalized(),geometry));
+		result.sort(java.util.Comparator.comparingInt(GasPieceCapacity.Piece::id));
+		return List.copyOf(result);
+	}
 	List<GasComponentCapacity.Component> components() { return components; }
 	List<Chamber> chambers() { return chambers; }
 	double ambientCubicMeters() { return ambientCubicMeters; }

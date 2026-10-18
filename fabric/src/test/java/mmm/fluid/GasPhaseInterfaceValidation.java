@@ -16,35 +16,41 @@ public final class GasPhaseInterfaceValidation {
 					? new float[]{.25F,.25F,.25F,.0625F, .75F,.75F,.75F,.03125F}
 					: new float[]{.25F,.25F,.25F,.0625F});
 			var before = domain.exportParticleState();
-			var frame = GasRuntimeGeometry.capture(domain, null, new long[8], true);
+			var frame = GasRuntimeGeometry.capture(domain, new long[8], true);
 			var contacts = GasPhaseInterfaceResolver.contacts(frame, 0);
 			check(contacts.size() == (bothWet ? 2 : 1), "Disconnected dry microbox became a liquid contact");
 			for (var contact : contacts) {
 				check(contact.supportMask() == 1 || bothWet && contact.supportMask() == 128,
 						"Contact crossed a fixed solid partition");
-				int micro = contact.supportMask() == 1 ? 0 : 7;
-				check(contact.node() == frame.nodeOfPiece(micro) && contact.pieces().equals(java.util.List.of(micro)),
-						"Independent wet components shared a gas owner or contact piece");
+				check(contact.node()>0&&!contact.pieces().isEmpty(),"Wet fixed component lost its finite gas interface");
+				for(int piece:contact.pieces()) check(piece/8==0&&(contact.supportMask()&1<<(piece&7))!=0
+						&&frame.nodeOfPiece(piece)==contact.node()&&frame.geometry().piece(piece).volume()>0,
+						"Gas interface crossed a fixed partition or lost positive capacity");
 			}
+			if(bothWet) check(contacts.get(0).node()!=contacts.get(1).node(),"Fixed solid partition joined independent gas chambers");
 			check(Arrays.equals(before.copyPositionVolume(), domain.exportParticleState().copyPositionVolume())
 					&& frame.matchesSourceCarrierGeometry(domain, new long[8]), "Contact observation changed its source stock");
 		}
 		// The reconstructed half-cell interface must contact positive dry capacity.
 		var half = domain(0, false, new float[]{.5F,.25F,.5F,.5F});
-		var halfFrame = GasRuntimeGeometry.capture(half, null, new long[8], true);
+		var halfFrame = GasRuntimeGeometry.capture(half, new long[8], true);
 		var halfContacts = GasPhaseInterfaceResolver.contacts(halfFrame, 0);
-		check(halfContacts.size() == 1 && halfContacts.getFirst().supportMask() == 255
-				&& halfContacts.getFirst().pieces().size() == 4, "A microface-aligned PLIC interface lost its gas contact");
-		for (int piece : halfContacts.getFirst().pieces()) check(halfFrame.geometry().piece(piece).volume() > 0,
-				"Liquid interface selected a piece without gas capacity");
+		check(!halfContacts.isEmpty(),"Half-filled liquid lost its positive gas interface");
+		for(var contact:halfContacts) {
+			check(contact.supportMask()==255&&contact.node()>0&&!contact.pieces().isEmpty(),"Half-filled interface left its open fixed support");
+			for(int piece:contact.pieces()) check(halfFrame.geometry().piece(piece).volume()>0
+					&&halfFrame.nodeOfPiece(piece)==contact.node(),"Liquid interface selected gas without positive owned capacity");
+		}
 
 		var full = domain(0, true, new float[]{.5F,.5F,.5F,1});
-		var fullFrame = GasRuntimeGeometry.capture(full, null, new long[8], true);
+		var fullFrame = GasRuntimeGeometry.capture(full, new long[8], true);
 		var sharedContacts = GasPhaseInterfaceResolver.contacts(fullFrame, 0);
-		check(sharedContacts.size() == 1 && sharedContacts.getFirst().pieces().size() == 4,
-				"Full liquid lost its shared wet/dry face contact");
-		for (int piece : sharedContacts.getFirst().pieces()) check(piece / 8 == 1 && (piece & 1) == 0,
-				"Shared-face contact selected an unrelated gas microbox");
+		check(!sharedContacts.isEmpty(),"Full liquid lost its shared wet/dry face contact");
+		for(var contact:sharedContacts) {
+			check(contact.supportMask()==255&&contact.node()>0&&!contact.pieces().isEmpty(),"Shared interface left its connected support");
+			for(int piece:contact.pieces()) check(piece/8==1&&fullFrame.geometry().piece(piece).volume()>0
+					&&fullFrame.nodeOfPiece(piece)==contact.node(),"Shared-face interface selected nonadjacent or empty gas capacity");
+		}
 		validateFiniteGasBatches();
 		validateCondensedCellBatches();
 		System.out.println("Gas phase microcontact validation passed");

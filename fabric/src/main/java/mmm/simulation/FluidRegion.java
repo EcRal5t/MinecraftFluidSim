@@ -3,22 +3,12 @@ package mmm.simulation;
 import mmm.api.RegionAvailabilityReason;
 import mmm.fluid.FluidDomain;
 import mmm.fluid.FluidDomainState;
-import mmm.fluid.FlipChemicalParticleState;
-import mmm.granular.GranularRegistry;
-import mmm.granular.GranularStateSnapshot;
-import mmm.fluid.FlipThermalParticleState;
-import mmm.fluid.air.GasRegistry;
-import mmm.fluid.air.GasStateSnapshot;
 import mmm.thermal.ThermalRegistry;
 import mmm.thermal.FiniteThermalDeviceInventory;
 import mmm.thermal.FiniteThermalExchange;
-import mmm.fluid.FlipParticleState;
-import mmm.fluid.FlipMaterialParticleState;
 import mmm.fluid.FluidSolverConfig;
 import mmm.fluid.FluidStepCandidate;
 import mmm.fluid.FluidThermalStepCandidate;
-import mmm.fluid.MaterialRegistry;
-import mmm.chemistry.ChemicalRegistry;
 import mmm.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
@@ -531,109 +521,6 @@ public final class FluidRegion {
 		if(generation!=checkpointGeneration)throw new IllegalArgumentException("Checkpoint generation changed while restoring");
 		if(state.sizeX()!=sizeX()||state.sizeY()!=sizeY()||state.sizeZ()!=sizeZ()||!state.config().equals(solverConfig()))throw new IllegalArgumentException("Checkpoint solver geometry changed");
 		domain=FluidDomain.restoreAuthoritativeState(state);collisionRefreshRequired=true;lifecycle.restoreFromUnloaded(unloadedResumeState,stepIntervalTicks);
-	}
-
-	/** Restores exact marker truth into a fresh solver while preserving the persisted run intent. */
-	public void restoreSolver(FlipParticleState state, long loadedCheckpointGeneration) {
-		Objects.requireNonNull(state, "state");
-		if (domain != null || lifecycle.state() != FluidRegionLifecycle.State.UNLOADED) {
-			throw new IllegalStateException("Only an unloaded region can restore a solver");
-		}
-		if (loadedCheckpointGeneration != checkpointGeneration) {
-			throw new IllegalArgumentException("Checkpoint generation changed while restoring");
-		}
-		FluidDomain restored = freshDomain();
-		restored.restoreParticleState(state);
-		domain = restored;
-		collisionRefreshRequired = true;
-		lifecycle.restoreFromUnloaded(unloadedResumeState, stepIntervalTicks);
-	}
-
-	/** Restores exact multi-material marker truth while preserving the persisted run intent. */
-	public void restoreMaterialSolver(FlipMaterialParticleState state, long loadedCheckpointGeneration) {
-		Objects.requireNonNull(state, "state");
-		if (domain != null || lifecycle.state() != FluidRegionLifecycle.State.UNLOADED) {
-			throw new IllegalStateException("Only an unloaded region can restore a solver");
-		}
-		if (loadedCheckpointGeneration != checkpointGeneration) {
-			throw new IllegalArgumentException("Checkpoint generation changed while restoring");
-		}
-		FluidDomain restored = freshDomain();
-		restored.restoreMaterialParticleState(state);
-		domain = restored;
-		collisionRefreshRequired = true;
-		lifecycle.restoreFromUnloaded(unloadedResumeState, stepIntervalTicks);
-	}
-
-	/** Restores exact material/species/indicator truth into a fresh CPU solver. */
-	public void restoreChemicalSolver(
-			FlipChemicalParticleState state, ChemicalRegistry registry, long loadedCheckpointGeneration
-	) {
-		Objects.requireNonNull(state, "state");
-		Objects.requireNonNull(registry, "registry");
-		if (domain != null || lifecycle.state() != FluidRegionLifecycle.State.UNLOADED) {
-			throw new IllegalStateException("Only an unloaded region can restore a solver");
-		}
-		if (loadedCheckpointGeneration != checkpointGeneration) {
-			throw new IllegalArgumentException("Checkpoint generation changed while restoring");
-		}
-		FluidDomain restored = freshDomain();
-		restored.restoreChemicalParticleState(state, registry);
-		domain = restored;
-		collisionRefreshRequired = true;
-		lifecycle.restoreFromUnloaded(unloadedResumeState, stepIntervalTicks);
-	}
-
-	/** Completes a granular restore after the matching liquid/material generation has been reconstructed. */
-	public void restoreGranularState(
-			GranularStateSnapshot state, GranularRegistry registry, long loadedCheckpointGeneration,
-			MaterialRegistry materialDefinitions
-	) {
-		Objects.requireNonNull(state, "state"); Objects.requireNonNull(registry, "registry");
-		if (domain == null || loadedCheckpointGeneration != checkpointGeneration || !domain.hasMaterialState()) {
-			throw new IllegalStateException("Granular restore requires the matching loaded material generation");
-		}
-		domain.restoreGranularState(state, registry, domain.materialRegistry(), materialDefinitions);
-	}
-
-	/** Completes a gas restore after the matching liquid/material generation. */
-	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, long loadedCheckpointGeneration) {
-		restoreGasState(state, registry, loadedCheckpointGeneration, null);
-	}
-
-	public void restoreGasState(GasStateSnapshot state, GasRegistry registry, long loadedCheckpointGeneration,
-	                            FlipThermalParticleState thermal) {
-		Objects.requireNonNull(state, "state"); Objects.requireNonNull(registry, "registry");
-		if (domain == null || loadedCheckpointGeneration != checkpointGeneration || !domain.hasMaterialState()) {
-			throw new IllegalStateException("Gas restore requires the matching loaded material generation");
-		}
-		domain.restoreGasState(state, registry, thermal);
-	}
-
-	/** Completes a current thermal restore after the matching liquid/material generation has been reconstructed. */
-	public void restoreThermalState(
-			FlipThermalParticleState state, ThermalRegistry registry, long loadedCheckpointGeneration
-	) {
-		restoreThermalState(state, registry, loadedCheckpointGeneration,
-				mmm.thermal.ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-	}
-
-	public void restoreThermalState(
-			FlipThermalParticleState state, ThermalRegistry registry, long loadedCheckpointGeneration,
-			int maximumTransportSubsteps
-	) {
-		Objects.requireNonNull(state, "state"); Objects.requireNonNull(registry, "registry");
-		if (domain == null || loadedCheckpointGeneration != checkpointGeneration || !domain.hasMaterialState()) {
-			throw new IllegalStateException("Thermal restore requires the matching loaded material generation");
-		}
-		domain.restoreThermalParticleState(state, registry, maximumTransportSubsteps);
-	}
-
-	private FluidDomain freshDomain() {
-		FluidDomain restored = new FluidDomain(
-				sizeX, sizeY, sizeZ, solverConfig, (int) reservedMarkerCapacity);
-		if (footprint != null) restored.sealDomainBoundary();
-		return restored;
 	}
 
 	public record PersistedRuntime(

@@ -1,7 +1,6 @@
 package mmm.thermal;
 
 import mmm.units.SignedDyadic;
-import mmm.compute.CpuWorkBatch;
 
 import java.util.Arrays;
 import java.util.List;
@@ -71,14 +70,12 @@ public final class ThermalCellGrid {
 
 	public void rebuild(CarrierAccess carrierAccess) {
 		rebuildTopology(carrierAccess, -1);
-		CpuWorkBatch.run(cellCount, (from, until) -> {
-			for (int cell = from; cell < until; cell++) {
+			for (int cell = 0; cell < cellCount; cell++) {
 				if (carrierCount[cell] > 0) {
 					conductivity[cell] /= totalVolume[cell];
 					solveCarrierCell(cell);
 				}
 			}
-		});
 		updateObservedTemperatureRange();
 	}
 
@@ -92,14 +89,10 @@ public final class ThermalCellGrid {
 			if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal carrier energy is not finite");
 			internalEnergy[carriers.cell(carrier)] += energy;
 		}
-		CpuWorkBatch.run(topologyCarrierCount, (from, until) -> {
-			for (int carrier = from; carrier < until; carrier++)
+			for (int carrier = 0; carrier < topologyCarrierCount; carrier++)
 				validateCarrierEnergy(carrier, carriers.exactInternalEnergy(carrier));
-		});
-		CpuWorkBatch.run(cellCount, (from, until) -> {
-			for (int cell = from; cell < until; cell++) if (carrierCount[cell] > 0)
+			for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0)
 				solveCarrierCell(cell);
-		});
 		updateObservedTemperatureRange();
 	}
 
@@ -227,10 +220,9 @@ public final class ThermalCellGrid {
 		}
 		// Bind derived reference caches before independent carrier validation.
 		if (topologyCarrierCount > 0) carrierAccess.baseEnergy(0);
-		if (validateUntouched) CpuWorkBatch.run(topologyCarrierCount, (from, until) -> {
-			for (int carrier = from; carrier < until; carrier++) if (carrierAccess.cell(carrier) != prospectiveCell)
+		if (validateUntouched)
+			for (int carrier = 0; carrier < topologyCarrierCount; carrier++) if (carrierAccess.cell(carrier) != prospectiveCell)
 				validateCarrierEnergy(carrier, carrierAccess.exactInternalEnergy(carrier));
-		});
 	}
 
 	public void setCellInternalEnergies(double[] targetEnergy) {

@@ -139,19 +139,15 @@ public final class LiquidCellInventoryValidation {
 		var cells = new LiquidCellInventory(12, null); var key = new LiquidCellInventory.Key(0, 0, 255);
 		cells.planEdits(List.of(new LiquidCellInventory.Edit(key,
 				new LiquidCellInventory.Stock(key, SignedDyadic.of(1), 100, null, 10, false)))).commit();
-		var flux = new ConservativeLiquidFlux(3, 2, 2);
 		var domain = new FluidDomain(3,2,2,new FluidSolverConfig(1,1000,0,.05F,120,1e-5F,.4F,.002F,.8F)); domain.liquidCells = cells;
-		domain.markCellInventoryChanged(); domain.ensurePressureGeometry();
-		flux.geometry(new LiquidFluxGeometry(domain));
-		var volume = new double[12]; var exact = new SignedDyadic[12];
-		for (int cell = 0; cell < 12; cell++) volume[cell] = (exact[cell] = cells.exactCellVolume(cell)).toDouble();
-		for (int face = 0; face < flux.flux.length; face++) if (flux.axis[face] == 0) flux.velocity[face] = .2;
-		flux.plan(volume, new boolean[12], .1, exact);
-		var transfers = new ArrayList<LiquidCellInventory.FaceFlux>();
-		for (int face = 0; face < flux.flux.length; face++) if (flux.exactFlux[face].signum() > 0)
-			transfers.add(new LiquidCellInventory.FaceFlux(face, flux.donor(face), flux.receiver(face), 255, 255, 0, flux.exactFlux[face]));
-		var plan = cells.planTransport(transfers, 3, 2, new int[12]);
-		require(!transfers.isEmpty() && cells.size() == 1, "Shared face preparation bypassed transport or modified its source");
+		domain.markCellInventoryChanged();domain.ensureGrid();
+		for(int face=0;face<domain.mac.velocityX.length;face++)if(domain.cellMacStage.massX[face]>0)domain.mac.velocityX[face]=.2F;
+		domain.cellMacStage.publishMomentum();
+		var before=cells.snapshot();
+		var prepared=new CellLiquidVolumeTransport(domain).prepare(.1F);
+		var flux=prepared.volumeFlux();var plan=prepared.inventory();
+		require(!prepared.faceFluxes().isEmpty()&&cells.snapshot().rows().equals(before.rows()),
+				"Shared face preparation bypassed transport or modified its source");
 		plan.commit();
 		for (int cell = 0; cell < 12; cell++) require(cells.exactCellVolume(cell).equals(flux.resultingVolumes()[cell])
 				&& cells.exactCellVolume(cell).compareTo(SignedDyadic.of(1)) <= 0, "Shared face and material inventory disagree on future volume");

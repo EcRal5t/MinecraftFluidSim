@@ -521,7 +521,7 @@ final class GranularTransferPlanner {
 
 	private GasTopologyCoordinator.GasTopologyPlan prepareExtractionGas(long[] futureSolid, ThermalAuditLedger afterTake) {
 		if (domain.gasState.frame == null) return null;
-		var gas = domain.gasTopologyCoordinator.planAfterLiquidEdits(List.of(), futureSolid, false);
+		var gas = domain.gasTopologyCoordinator.planAfterLiquidCells(domain.liquidCells, futureSolid, false);
 		if (gas.thermalPlan() != null) {
 			var remap = gas.thermalPlan();
 			afterTake.withExternalSourceEnergy(remap.sourceEnergy()).withExternalSinkEnergy(remap.sinkEnergy())

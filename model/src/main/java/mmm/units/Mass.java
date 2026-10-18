@@ -28,6 +28,8 @@ public final class Mass {
 	/** The selected share rounds toward zero; the caller retains total minus this share. */
 	public static long portion(long total, long numerator, long denominator) {
 		if (numerator < 0 || denominator <= 0 || numerator > denominator) throw new IllegalArgumentException("Invalid mass fraction");
+		if(total>=0&&denominator<=0x1_0000_0000L)
+			return (total/denominator)*numerator+Long.divideUnsigned((total%denominator)*numerator,denominator);
 		return BigInteger.valueOf(total).multiply(BigInteger.valueOf(numerator))
 				.divide(BigInteger.valueOf(denominator)).longValueExact();
 	}
@@ -40,6 +42,7 @@ public final class Mass {
 
 	public static long portion(long total, SignedDyadic top, SignedDyadic bottom) {
 		if (top.signum() < 0 || bottom.signum() <= 0 || top.compareTo(bottom) > 0) throw new IllegalArgumentException("Invalid mass weight");
+		if(top.fitsLongUnits(-32)&&bottom.fitsLongUnits(-32))return portion(total,top.longUnitsExact(-32),bottom.longUnitsExact(-32));
 		BigInteger n = BigInteger.valueOf(total).multiply(top.significand()), d = bottom.significand();
 		int shift = top.exponent() - bottom.exponent();
 		if (shift >= 0) n = n.shiftLeft(shift); else d = d.shiftLeft(-shift);

@@ -8,6 +8,7 @@ import mmm.model.region.RegionSectionState;
 import mmm.model.region.RegionStateLayout;
 
 import mmm.fluid.FluidDomain;
+import mmm.fluid.FluidDomainStateAssertions;
 import mmm.fluid.FlipChemicalParticleState;
 import mmm.fluid.FlipMaterialParticleState;
 import mmm.fluid.FlipParticleState;
@@ -52,8 +53,18 @@ import java.util.UUID;
 abstract class RegionCodecValidationScenarios extends RegionPersistenceValidationSupport {
 
 	static void validateCellMacCodec() throws Exception {
-		var region=populatedRegion(new UUID(31L,32L));
-		var source=region.domain();
+		var template=populatedRegion(new UUID(31L,32L)).domain().exportParticleState();
+		var source=new FluidDomain(template.sizeX(),template.sizeY(),template.sizeZ(),CONFIG,512);
+		source.sealDomainBoundary();
+		source.restoreParticleState(template);
+		// Keep the cell inventory unchanged while giving its liquid a spatially distinct saved layout.
+		var occupancy=source.exportPhaseOccupancyState().copyLiquidMicroVolumes();
+		int cell=1+source.sizeX()*(1+source.sizeY());
+		Arrays.fill(occupancy,8*cell,8*cell+8,0);
+		occupancy[8*cell]=occupancy[8*cell+7]=.125;
+		source.restorePhaseOccupancyState(new mmm.inventory.PhaseOccupancyState(occupancy));
+		source.bootstrapGasState("");
+		var region=fixtureRegion(new UUID(31L,32L),source);
 		var before=source.captureAuthoritativeState();
 		var state=RegionCheckpointFixtures.capture(region,1L);
 		var codec=new RegionStateCodec();
@@ -63,6 +74,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		decoded.validate();
 		var restored=FluidDomain.restoreAuthoritativeState(restorer(decoded).reconstructAuthoritativeState(null,null,null,BuiltinGasDefinitions.createRegistry(),null));
 		require(before.liquid().stocks().equals(restored.exportLiquidCellState().stocks()),"Cell/MAC codec changed liquid quantities");
+		require(Arrays.equals(before.phaseOccupancy().copyLiquidMicroVolumes(),restored.exportPhaseOccupancyState().copyLiquidMicroVolumes()),
+				"Cell/MAC codec changed saved micro phase occupancy");
 		require(Arrays.equals(before.momentum().copyX(),restored.exportMacMomentum().copyX())
 				&&Arrays.equals(before.momentum().copyY(),restored.exportMacMomentum().copyY())
 				&&Arrays.equals(before.momentum().copyZ(),restored.exportMacMomentum().copyZ()),"Cell/MAC codec changed face momentum");
@@ -70,10 +83,30 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		var hotCopy=FluidDomain.restoreAuthoritativeState(before);
 		require(before.liquid().rows()==hotCopy.exportLiquidCellState().rows(),"Normal handoff copied immutable liquid rows");
 		require(Arrays.equals(before.momentum().copyY(),hotCopy.exportMacMomentum().copyY()),"Normal handoff changed momentum");
+		require(Arrays.equals(before.phaseOccupancy().copyLiquidMicroVolumes(),hotCopy.exportPhaseOccupancyState().copyLiquidMicroVolumes()),
+				"Normal handoff changed micro phase occupancy");
+		validatePhaseOccupancyPayload();
 		var malformed=codec.encodeSection(sections.getFirst());malformed.remove("StateEncoding");
 		expectIOException(()->codec.decodeSection(malformed),"Legacy particle section was accepted as cell inventory");
 	}
 
+
+	private static void validatePhaseOccupancyPayload() throws Exception {
+		var codec=new PhaseOccupancyCodec();
+		double[] occupancy={.125,0,.03125,.0625,0,.125,.015625,0,
+				0,.0625,.125,0,.015625,.03125,0,.125};
+		byte[] encoded=codec.encode(occupancy);
+		require(Arrays.equals(occupancy,codec.decode(encoded,2)),
+				"Phase occupancy codec changed cell or micro ordering");
+		expectIOException(()->codec.decode(encoded,1),"Phase occupancy accepted foreign section dimensions");
+		expectIOException(()->codec.decode(Arrays.copyOf(encoded,encoded.length-1),2),"Truncated phase occupancy was accepted");
+		expectIOException(()->codec.decode(Arrays.copyOf(encoded,encoded.length+1),2),"Trailing phase occupancy bytes were accepted");
+		for(double invalid:new double[]{-.001,Math.nextUp(.125),Double.NaN,Double.POSITIVE_INFINITY}) {
+			byte[] changed=encoded.clone();
+			java.nio.ByteBuffer.wrap(changed).putDouble(8,invalid);
+			expectIOException(()->codec.decode(changed,2),"Invalid persisted micro liquid volume was accepted");
+		}
+	}
 
 	static void validateThermalCodec() throws Exception {
 		validateGasPieceCodec();
@@ -164,6 +197,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
 		GasStateSnapshot expectedGas = region.domain().exportGasState("");
 		GranularStateSnapshot expectedGranular = region.domain().exportGranularState();
+		double[] expectedOccupancy = region.domain().exportPhaseOccupancyState().copyLiquidMicroVolumes();
 
 		RegionState state = RegionCheckpointFixtures.captureThermal(region, 1L);
 		state.validate();
@@ -176,7 +210,11 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		require(restorer(state).reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
 				"pending phase-volume record did not round-trip");
 		var complete = restorer(state).reconstructAuthoritativeState(null,granular,thermal,gas,BuiltinFluidMaterials.createRegistry());
+		require(Arrays.equals(expectedOccupancy,complete.phaseOccupancy().copyLiquidMicroVolumes()),
+				"Cold checkpoint reconstruction changed micro phase occupancy");
 		FluidDomain restoredDomain = FluidDomain.restoreAuthoritativeState(complete);
+		require(Arrays.equals(expectedOccupancy,restoredDomain.exportPhaseOccupancyState().copyLiquidMicroVolumes()),
+				"Cold domain restore changed micro phase occupancy");
 		require(region.domain().exportLiquidCellState().stocks().equals(restoredDomain.exportLiquidCellState().stocks()),"Cold restore changed liquid quantities");
 		require(java.util.Arrays.equals(region.domain().exportMacMomentum().copyX(),restoredDomain.exportMacMomentum().copyX())
 				&& java.util.Arrays.equals(region.domain().exportMacMomentum().copyY(),restoredDomain.exportMacMomentum().copyY())
@@ -214,7 +252,10 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		Path root = Files.createTempDirectory(Path.of("."), "thermal-region-");
 		RegionGenerationStore files = new RegionGenerationStore(root, null, granular, thermal, gas);
 		files.publish(state);
-		assertThermalStateEquals(expected, restorer(files.read(region.id())).reconstructThermal(thermal));
+		var committed=files.read(region.id());
+		require(Arrays.equals(expectedOccupancy,restorer(committed).reconstructPhaseOccupancy().copyLiquidMicroVolumes()),
+				"Committed HEAD readback changed micro phase occupancy");
+		assertThermalStateEquals(expected, restorer(committed).reconstructThermal(thermal));
 		require(restorer(files.read(region.id())).reconstructFiniteThermalDevices(thermal).equals(expectedDevices),
 				"published finite thermal device truth did not survive committed readback");
 		require(restorer(files.read(region.id())).reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
@@ -591,6 +632,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		);
 		FlipMaterialParticleState expected = materialCodecParticles(region.domain().exportParticleState(), palette);
 		region.domain().restoreMaterialParticleState(expected);
+		region.domain().bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
+		var authoritativeBefore=region.domain().captureAuthoritativeState();
 		RegionState state = RegionCheckpointFixtures.captureMaterial(region, 1L);
 		var canonicalRegion = canonicalCodecRegion(new UUID(15L, 16L));
 		canonicalRegion.domain().restoreMaterialParticleState(materialCodecParticles(canonicalRegion.domain().exportParticleState(), palette));
@@ -659,11 +702,14 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		Path root = Files.createTempDirectory(Path.of("."), "material-region-");
 		RegionGenerationStore files = new RegionGenerationStore(root);
 		files.publish(state);
-		FlipMaterialParticleState restored = restorer(files.read(region.id())).reconstructMaterial();
+		var committed=files.read(region.id());
+		FlipMaterialParticleState restored = restorer(committed).reconstructMaterial();
 		assertMaterialStateEquals(expected, restored);
+		var authoritative=restorer(committed).reconstructAuthoritativeState(null,null,null,BuiltinGasDefinitions.createRegistry(),BuiltinFluidMaterials.createRegistry());
 		require(region.recordPublishedCheckpoint(1L) && region.releaseSolverAfterCheckpoint(1L),
 				"material controller fixture did not release its published solver");
-		region.restoreMaterialSolver(restored, 1L);
+		region.restoreAuthoritativeSolver(authoritative, 1L);
+		FluidDomainStateAssertions.assertSameDurableState(authoritativeBefore,region.domain().captureAuthoritativeState(),"Material region cold restore");
 		require(region.domain().hasMaterialState(), "material controller restore lost its bound registry");
 		assertMaterialStateEquals(expected, region.domain().exportMaterialParticleState());
 	}

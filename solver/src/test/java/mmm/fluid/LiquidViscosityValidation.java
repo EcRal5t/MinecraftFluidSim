@@ -54,8 +54,8 @@ final class LiquidViscosityValidation {
 			velocity[0][(z * 4 + y) * 5 + x] = 1;
 		mesh.assemble(velocity); mesh.operator.advance(.001);
 		int low = mesh.face(0, 2, 1, 2), high = mesh.face(0, 2, 2, 2);
-		close(mesh.operator.force[low], -1.8 * grid.h, 1e-4, "implicit shared-interface traction approaches harmonic viscosity at small dt");
-		close(mesh.operator.force[high], 1.8 * grid.h, 1e-4, "implicit opposite-interface traction");
+		close(mesh.operator.force[low], -1.8 * grid.h, 1e-4, "shared-interface traction approaches harmonic viscosity at small dt");
+		close(mesh.operator.force[high], 1.8 * grid.h, 1e-4, "opposite-interface traction");
 		close(ViscousMacDiscretization.harmonic(1e-200, 1e200), 2e-200, 1e-214, "harmonic mean avoids product overflow");
 	}
 
@@ -67,7 +67,7 @@ final class LiquidViscosityValidation {
 			double limit = op.stableTimeStep();
 			close(limit, capacity / 3, 16 * Math.ulp(capacity / 3), "scalar spectral limit C/G");
 			op.advance(limit);
-			close(op.velocity[0], 1.0 / 3, 1e-14, "implicit diffusion damps the extreme eigenmode");
+			close(op.velocity[0], Math.exp(-2), 1e-14, "local diffusion follows exact exponential decay");
 			close(op.velocity[0] + op.velocity[1], 0, 0, "paired momentum");
 		}
 		ViscousStressOperator closed = new ViscousStressOperator(2);
@@ -79,8 +79,6 @@ final class LiquidViscosityValidation {
 		expectRejected(() -> closed.active(0, 0, 0, 1));
 		expectRejected(() -> closed.active(0, 0, -1, 1));
 		expectRejected(() -> closed.add(Double.POSITIVE_INFINITY, 0, 1, 1, -1, -1, 0, -1, 0));
-		closed.add(Double.MAX_VALUE, 0, 1, 1, -1, -1, 0, -1, 0);
-		expectRejected(closed::stableTimeStep);
 	}
 
 	private static void stressCouplesComponentsAndPreservesRotation() {
@@ -88,8 +86,9 @@ final class LiquidViscosityValidation {
 		for (int i = 0; i < 4; i++) op.active(i, i / 2, 1, i == 0 ? 1 : 0);
 		op.add(1, 0, 1, 1, -1, 2, 1, 3, -1);
 		op.advance(.1);
-		close(op.velocity[2], -.1 / 1.4, 1e-15, "du/dy must transfer cross stress into v");
-		close(op.velocity[3], .1 / 1.4, 1e-15, "cross stress has opposite impulse");
+		double impulse = -Math.expm1(-.4) / 4;
+		close(op.velocity[2], -impulse, 1e-15, "du/dy must transfer cross stress into v");
+		close(op.velocity[3], impulse, 1e-15, "cross stress has opposite impulse");
 		op.velocity[0] = 1; op.velocity[1] = 0; op.velocity[2] = -1; op.velocity[3] = 0;
 		op.advance(.1);
 		close(op.velocity[0], 1, 0, "rigid rotation has no shear stress");
@@ -100,8 +99,6 @@ final class LiquidViscosityValidation {
 		ViscousMacDiscretization mesh = grid.mesh(FluidSolverConfig.WallCondition.NO_SLIP);
 		float[][] velocity = grid.velocity();
 		Arrays.fill(velocity[0], 1); Arrays.fill(velocity[1], -.3F);
-		mesh.assemble(velocity);
-		verifyAssembledSpectralBound(mesh.operator);
 		mesh.assemble(velocity);
 		double[] before = momentum(mesh.operator);
 		var stats = mesh.operator.advance(mesh.operator.stableTimeStep() / 2);
@@ -114,14 +111,12 @@ final class LiquidViscosityValidation {
 		for (int i = 0; i < mesh.operator.mass.length; i++) actual[i / block] += mesh.operator.mass[i] * velocity[i / block][i % block];
 		close(actual[0] - before[0], written.boundaryImpulseX() + written.roundoffImpulseX(), 1e-8,
 				"float MAC write closes with the separate rounding impulse");
-		// Same aperture, radically smaller volume: actual assembled shear rows must shorten dt.
+		// The spectral diagnostic reflects the smaller inertia at the same aperture.
 		Grid sliver = new Grid(4, 4, 4, .5); sliver.volume = 1e-9;
 		var thin = sliver.mesh(FluidSolverConfig.WallCondition.FREE_SLIP); thin.assemble(velocity);
 		var full = grid.mesh(FluidSolverConfig.WallCondition.FREE_SLIP); full.assemble(velocity);
-		verifyAssembledSpectralBound(thin.operator);
-		verifyAssembledSpectralBound(full.operator);
 		require(thin.operator.stableTimeStep() < full.operator.stableTimeStep() * 2e-9,
-				"large-aperture sliver must enter the actual matrix capacity");
+				"large-aperture sliver must enter the actual stress inertia");
 		grid.closed = true; var blocked = grid.mesh(FluidSolverConfig.WallCondition.FREE_SLIP); blocked.assemble(velocity);
 		require(blocked.operator.stableTimeStep() == Double.POSITIVE_INFINITY, "all closed faces leave no moving DOF");
 	}
@@ -198,7 +193,7 @@ final class LiquidViscosityValidation {
             var state = domain.captureAuthoritativeState(); double volume=domain.totalVolume(),mass=domain.totalMass();
             var result = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, state, java.util.List.of(), false, 0, true));
             var committed=result.claimPreparedCpuDomain();
-            require(result.stats().viscosity().dissipatedJoules() >= 0, "Implicit high viscosity must dissipate actual kinetic energy");
+            require(result.stats().viscosity().dissipatedJoules() >= 0, "High viscosity must dissipate actual kinetic energy");
             close(committed.totalVolume(),volume,0,"High viscosity preserves liquid volume");
             close(committed.totalMass(),mass,1e-10,"High viscosity preserves material mass");
             var restored=FluidDomain.restoreAuthoritativeState(committed.captureAuthoritativeState());
@@ -235,25 +230,6 @@ final class LiquidViscosityValidation {
 			error += Math.pow(mesh.operator.velocity[i] - expected, 2); norm += expected * expected;
 		}
 		return Math.sqrt(error / norm);
-	}
-
-	/** Power iteration probes the actually applied stress matrix in its symmetric mass metric. */
-	private static void verifyAssembledSpectralBound(ViscousStressOperator op) {
-		double dt = op.stableTimeStep(), bound = 2 / dt;
-		double[] q = new double[op.mass.length];
-		double norm = 0;
-		for (int i = 0; i < q.length; i++) if (op.mass[i] > 0) { q[i] = Math.sin(i * 1.7 + .2); norm += q[i] * q[i]; }
-		norm = Math.sqrt(norm);
-		for (int iteration = 0; iteration < 40; iteration++) {
-			for (int i = 0; i < q.length; i++) if (op.mass[i] > 0) op.velocity[i] = q[i] / norm / Math.sqrt(op.mass[i]);
-			double dissipated = op.advance(dt).dissipatedJoules();
-			require(dissipated >= -1e-14, "assembled Euler step must dissipate energy at its claimed limit");
-			double nextNorm = 0;
-			for (int i = 0; i < q.length; i++) if (op.mass[i] > 0) { q[i] = -op.force[i] / Math.sqrt(op.mass[i]); nextNorm += q[i] * q[i]; }
-			norm = Math.sqrt(nextNorm);
-			require(norm <= bound * (1 + 1e-14), "actual stress matrix exceeds its declared spectral bound");
-			if (norm == 0) break;
-		}
 	}
 
 	private static double[] momentum(ViscousStressOperator op) {

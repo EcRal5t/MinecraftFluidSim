@@ -6,29 +6,12 @@ import mmm.model.region.RegionManifest;
 import mmm.model.region.RegionSectionState;
 import mmm.model.region.RegionStateLayout;
 
-import mmm.fluid.FlipParticleState;
-import mmm.fluid.FlipMaterialParticleState;
-import mmm.fluid.FlipChemicalParticleState;
-import mmm.fluid.FlipThermalParticleState;
 import mmm.fluid.PendingPhaseVolumeState;
-import mmm.fluid.FluidMaterial;
-import mmm.fluid.air.AirNetwork;
-import mmm.fluid.air.GasComponentAmount;
-import mmm.fluid.air.GasInventory;
-import mmm.fluid.air.GasRegistry;
-import mmm.fluid.air.GasStateSnapshot;
-import mmm.chemistry.ChemicalRegistry;
 import mmm.chemistry.ChemicalAuditLedgerCodec;
-import mmm.chemistry.ChemicalTransferLedger;
 import mmm.granular.GranularLimits;
-import mmm.granular.GranularRegistry;
 import mmm.granular.GranularStateSnapshot;
-import mmm.granular.SolidVolume;
 import mmm.units.SignedDyadic;
 import mmm.thermal.CoherentPhaseStore;
-import mmm.thermal.GasThermalModel;
-import mmm.thermal.FiniteThermalDeviceInventory;
-import mmm.thermal.ThermalRegistry;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -408,6 +391,29 @@ final class RegionCheckpointValidator {
 	}
 
 	private void validateSectionOwnership(RegionSectionState section) throws IOException {
+		int localCells=Math.multiplyExact(Math.multiplyExact(section.sizeX(),section.sizeY()),section.sizeZ());
+		double[] phase=new PhaseOccupancyCodec().decode(requiredExtension(section.extensions(),PhaseOccupancyCodec.SECTION_EXTENSION).payload(),localCells);
+		byte[] masks=section.solidMask();
+		for(int cell=0;cell<localCells;cell++)for(int micro=0;micro<8;micro++)
+			if((Byte.toUnsignedInt(masks[cell])&1<<micro)!=0&&phase[8*cell+micro]!=0)
+				throw new IOException("Phase occupancy intersects a fixed solid microbox");
+		var stockVolumes=new HashMap<Long,SignedDyadic>();
+		for(var stock:section.liquidStocks()){
+			long key=((long)stock.key().cell()<<8)|stock.key().supportMask();
+			stockVolumes.merge(key,stock.volume(),SignedDyadic::add);
+		}
+		int local=0;
+		for(int z=section.localStartZ();z<section.localStartZ()+section.sizeZ();z++)
+			for(int y=section.localStartY();y<section.localStartY()+section.sizeY();y++)
+				for(int x=section.localStartX();x<section.localStartX()+section.sizeX();x++,local++){
+					int cell=x+manifest.sizeX()*(y+manifest.sizeY()*z);
+					for(int support:mmm.inventory.LiquidCellInventory.connectedSupports(Byte.toUnsignedInt(masks[local]))){
+						double sum=0;for(int micro=0;micro<8;micro++)if((support&1<<micro)!=0)sum+=phase[8*local+micro];
+						double expected=stockVolumes.getOrDefault(((long)cell<<8)|support,SignedDyadic.ZERO).toDouble();
+						if(Math.abs(sum-expected)>mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION)
+							throw new IOException("Phase occupancy volume differs from cell inventory");
+					}
+				}
 		int cellsPerBlock = Math.round(1.0F / manifest.solverConfig().cellSize());
 		if (cellsPerBlock <= 0 || Math.abs(cellsPerBlock * manifest.solverConfig().cellSize() - 1.0F) > 1.0E-6F) {
 			throw new IOException("Unsupported persisted cell-to-block ratio");

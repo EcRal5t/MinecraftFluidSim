@@ -1,9 +1,6 @@
 package mmm.fluid;
 
-import mmm.inventory.LiquidCellInventory;
-
 import mmm.units.SignedDyadic;
-import java.util.ArrayList;
 import java.util.List;
 
 /** Future actual liquid stock in every open collision component of one phase-edited cell. */
@@ -45,44 +42,6 @@ record PhaseLiquidGeometryEdit(int cell, int collisionMask, List<LiquidComponent
 		double moment = 0;
 		for (var component : components) moment += component.firstMoment(axis);
 		return moment;
-	}
-
-	/** The shared first-order cell geometry is derived once from persistent component inventories. */
-	static List<PhaseLiquidGeometryEdit> fromInventory(FluidDomain domain, LiquidCellInventory inventory) {
-		return fromInventory(domain, inventory, null);
-	}
-	static List<PhaseLiquidGeometryEdit> fromInventory(FluidDomain domain, LiquidCellInventory inventory, byte[] collisionMasks) {
-		if (inventory == null || inventory.cellCount() != domain.cellCount)
-			throw new IllegalArgumentException("Liquid geometry inventory shape differs");
-		if (collisionMasks != null && collisionMasks.length != domain.cellCount)
-			throw new IllegalArgumentException("Future collision shape differs");
-		var result = new ArrayList<PhaseLiquidGeometryEdit>(domain.cellCount);
-		for (int cell = 0; cell < domain.cellCount; cell++) {
-			int mask = collisionMasks == null ? domain.geometry.cutCells.mask(cell) : Byte.toUnsignedInt(collisionMasks[cell]);
-			var components = new ArrayList<LiquidComponentMoments>();
-			for (int support : CellRemapMicroTopology.components(mask)) {
-				SignedDyadic volume = SignedDyadic.ZERO; int count = 0;
-				for (var stock : inventory.stocksInCell(cell)) if (stock.key().supportMask() == support) {
-					volume = volume.add(stock.volume()); count++;
-				}
-				double[] center = new double[3];
-				for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0)
-					for (int axis = 0; axis < 3; axis++) center[axis] += .25 + .5 * (micro >>> axis & 1);
-				int pieces = Integer.bitCount(support);
-				double h = domain.config.cellSize(), amount = volume.toDouble();
-				components.add(new LiquidComponentMoments(cell, support, count, volume,
-						amount * h * (cell % domain.sizeX + center[0] / pieces),
-						amount * h * (cell / domain.sizeX % domain.sizeY + center[1] / pieces),
-						amount * h * (cell / (domain.sizeX * domain.sizeY) + center[2] / pieces)));
-			}
-			for (var stock : inventory.stocksInCell(cell)) {
-				boolean found = false;
-				for (var component : components) found |= component.supportMask() == stock.key().supportMask();
-				if (!found) throw new IllegalArgumentException("Liquid stock support differs from fixed collision geometry");
-			}
-			result.add(new PhaseLiquidGeometryEdit(cell, mask, components));
-		}
-		return List.copyOf(result);
 	}
 
 }

@@ -104,7 +104,11 @@ public final class ChemicalMixtureRecord {
 		return result;
 	}
 
-	public long speciesMassUnits(ChemicalRegistry registry) { return mmm.units.Mass.exactUnits(exactSpeciesMassKilograms(registry).numerator(), exactSpeciesMassKilograms(registry).denominator()); }
+	public long speciesMassUnits(ChemicalRegistry registry) {
+		long result=0;
+		for(int i=0;i<speciesHandles.length;i++)result=Math.addExact(result,registry.speciesMassUnits(speciesHandles[i],amounts[i]));
+		return result;
+	}
 	public long massUnits(ChemicalRegistry registry) {
 		return Math.addExact(speciesMassUnits(registry), massResidualUnits);
 	}

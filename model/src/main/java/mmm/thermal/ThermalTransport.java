@@ -1,6 +1,5 @@
 package mmm.thermal;
 
-import mmm.compute.CpuWorkBatch;
 
 import mmm.units.SignedDyadic;
 /** Finite carrier contacts using cell mixing lengths and PLIC/cut-face thermal resistance. */
@@ -104,8 +103,7 @@ public final class ThermalTransport {
 			if (boundary != null && boundary.surfaceTemperatureK() != commonTemperature) commonTemperature = Double.NaN;
 		double[] noFluxDegree = Double.isNaN(commonTemperature) ? null : new double[count];
 		var contacts = new ThermalCarrierContacts(starts[cellCount], noFluxDegree);
-		CpuWorkBatch.RangeWork buildContacts = (from, until) -> {
-			for (int cell = from; cell < until; cell++) {
+			for (int cell = 0; cell < cellCount; cell++) {
 				int cursor = starts[cell];
 				if (!grid.occupied(cell)) { ends[cell] = cursor; continue; }
 				int x = cell % sizeX, y = cell / sizeX % sizeY, z = cell / (sizeX * sizeY);
@@ -142,9 +140,6 @@ public final class ThermalTransport {
 				if (cursor > starts[cell + 1]) throw new IllegalStateException("Thermal contact range exceeded its capacity");
 				ends[cell] = cursor;
 			}
-		};
-		if (noFluxDegree == null) CpuWorkBatch.run(cellCount, buildContacts);
-		else buildContacts.run(0, cellCount); // Matches the original compact contact order for degree accumulation.
 		contacts.compact(starts, ends);
 		if (noFluxDegree != null) {
 			if (!(Double.isFinite(dt) && dt > 0)) throw new IllegalArgumentException("Invalid carrier conduction input");

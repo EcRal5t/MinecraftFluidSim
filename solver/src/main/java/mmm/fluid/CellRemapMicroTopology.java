@@ -38,6 +38,10 @@ final class CellRemapMicroTopology {
 			throw new IllegalStateException("Open component capacity requires the existing integer solid-volume lattice");
 		SignedDyadic[] result = new SignedDyadic[components.length];
 		if (components.length == 0) return result;
+		if (components.length == 1) {
+			result[0] = totalEffectiveOpen;
+			return result;
+		}
 		SignedDyadic[] weights = new SignedDyadic[components.length];
 		// Keep the solid-capacity lattice even when the whole-cell capacity has a compact exponent.
 		for (int i = 0; i < weights.length; i++) weights[i] = SignedDyadic.of(Integer.bitCount(components[i]), -24);

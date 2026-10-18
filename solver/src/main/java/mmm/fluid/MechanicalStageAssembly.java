@@ -31,8 +31,7 @@ final class MechanicalStageAssembly {
 				bodyForceAccess(domain));
 		MechanicalStepPipeline pipeline = new MechanicalStepPipeline(
 				new MechanicalStepPipeline.Workspace(
-						domain.gasTopologyCoordinator, domain.mac, domain.pendingPhaseVolume,
-						domain.config),
+						domain.gasTopologyCoordinator, domain.pendingPhaseVolume),
 				pipelineAccess(domain), granular, bodyForce, pressure, new LiquidViscosityStage(domain), domain.cellMacStage);
 		return new Stages(pressure, granular, bodyForce, pipeline);
 	}
@@ -102,10 +101,6 @@ final class MechanicalStageAssembly {
 
 	private static MechanicalStepPipeline.Access pipelineAccess(FluidDomain domain) {
 		return new MechanicalStepPipeline.Access() {
-			@Override public double projectedCourant(float dt) {
-				if (domain.cellLiquidVolumeTransport == null) domain.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain);
-				return domain.cellLiquidVolumeTransport.projectedCourantRate() * dt;
-			}
 			@Override public void ensureGrid() { domain.ensureGrid(); }
 			@Override public void prepareCarrierProperties() {
 				if (domain.materialDefinitions == null) return;

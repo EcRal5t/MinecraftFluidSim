@@ -21,8 +21,8 @@ final class GranularLiquidDisplacement {
 		final GasTopologyCoordinator.GasTopologyPlan gasTopology;
 		final SignedDyadic energyRoundoff;
 		final MacMomentumState momentum;
-		Prepared(CellLiquidVolumeTransport.Prepared transport, GasTopologyCoordinator.GasTopologyPlan gasTopology, MacMomentumState momentum) {
-			this.transport = transport; inventory = transport.inventory(); this.gasTopology = gasTopology;
+		Prepared(CellLiquidVolumeTransport.Prepared transport, LiquidCellInventory.Plan inventory, GasTopologyCoordinator.GasTopologyPlan gasTopology, MacMomentumState momentum) {
+			this.transport = transport; this.inventory = inventory; this.gasTopology = gasTopology;
 			energyRoundoff = inventory.energyRoundoff();
 			this.momentum = momentum;
 		}
@@ -42,8 +42,9 @@ final class GranularLiquidDisplacement {
 	static void publish(FluidDomain domain, Prepared candidate, Runnable solidPublication) {
 		candidate.inventory.requireCurrent();
 		if (candidate.gasTopology != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(candidate.gasTopology);
-		if (domain.thermalState != null) {
-			var audit = domain.thermalState.auditLedger().withRoundoff(candidate.energyRoundoff);
+		var audit = domain.thermalState == null ? null : domain.thermalState.auditLedger()
+				.withMechanicalWork(candidate.inventory.mechanicalHeat()).withRoundoff(candidate.energyRoundoff);
+		if (audit != null) {
 			var gas = candidate.gasTopology == null ? null : candidate.gasTopology.thermalPlan();
 			if (gas != null) audit = audit.withExternalSourceEnergy(gas.sourceEnergy()).withExternalSinkEnergy(gas.sinkEnergy())
 					.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff());
@@ -52,9 +53,9 @@ final class GranularLiquidDisplacement {
 		candidate.inventory.commit();
 		domain.mac.restoreMomentum(candidate.momentum);
 		solidPublication.run();
-		if (domain.thermalState != null) domain.thermalState.recordRoundoff(candidate.energyRoundoff);
 		domain.markCellInventoryChanged();
 		if (candidate.gasTopology != null) domain.gasTopologyCoordinator.commit(candidate.gasTopology);
+		if (audit != null) domain.thermalState.restoreAuditLedger(audit);
 	}
 	static Prepared prepare(FluidDomain domain, long[] previous, long[] next) { return prepare(domain, previous, next, false); }
 	static Prepared prepareInsertion(FluidDomain domain, long[] previous, long[] next) { return prepare(domain, previous, next, true); }
@@ -62,7 +63,7 @@ final class GranularLiquidDisplacement {
 		if (previous == null || next == null || previous.length != domain.cellCount || next.length != domain.cellCount)
 			throw new IllegalArgumentException("Solid transition requires complete source and future occupancy");
 		if (Arrays.equals(previous, next)) return null;
-		var flux = new ConservativeLiquidFlux(domain.sizeX, domain.sizeY, domain.sizeZ, true);
+		var flux = new ConservativeLiquidFlux(domain);
 		var volume = new SignedDyadic[domain.cellCount];
 		var capacity = new SignedDyadic[domain.cellCount]; var displaced = new SignedDyadic[domain.cellCount];
 		long totalBefore = 0, totalAfter = 0; boolean componentOverfull=false;
@@ -85,13 +86,14 @@ final class GranularLiquidDisplacement {
 			throw new IllegalStateException("Solid displacement changed skeleton quantity outside its operation");
 		boolean changed = componentOverfull; for (var amount : displaced) changed |= amount.signum() > 0;
 		if (!changed) return null;
-		try { flux.planDisplacement(volume, capacity, displaced, domain.geometry.solid, domain.geometry.cutCells,
-				GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP, domain.liquidCells); }
+		try { flux.prepareDisplacement(next,domain.liquidCells); }
 		catch (MechanicalTimeRefinement | ConservativeLiquidFlux.CapacityUnavailable unavailable) { throw new CapacityUnavailable(unavailable); }
 		if (domain.cellLiquidVolumeTransport == null) domain.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain);
 		var transport = domain.cellLiquidVolumeTransport.prepareFlux(flux, 0);
-		var gas = domain.gasState.frame == null ? null : domain.gasTopologyCoordinator.planAfterLiquidCells(transport.inventory().future(), next, false);
-		return new Prepared(transport, gas, domain.cellMacStage.prepareMomentum(transport));
+		var momentum=domain.cellMacStage.prepareMomentumTransport(transport);
+		var inventory=transport.inventory().withMechanicalHeat(momentum.heatByCell());
+		var gas = domain.gasTopologyCoordinator.planAfterLiquidCells(inventory.future(), next, transport.gasAllocation());
+		return new Prepared(transport, inventory, gas, momentum.momentum());
 	}
 	private static SignedDyadic solidVolume(long svq) { return SignedDyadic.of(svq, -24); }
 }

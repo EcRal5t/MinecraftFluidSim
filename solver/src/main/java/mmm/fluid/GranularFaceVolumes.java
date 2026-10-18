@@ -3,12 +3,13 @@ package mmm.fluid;
 import mmm.granular.SolidVolume;
 import java.util.Arrays;
 
-/** Bounded material aperture plus the actual cell-CIC gradient used by relative solid pressure coupling. */
+/** One bounded fluid aperture and complementary parcel pressure shares on the MAC faces. */
 final class GranularFaceVolumes {
 		private final FluidDomain domain;
 	private final int[] offsets = new int[3];
 	private final float[] liquid, fixedPore;
-	private final mmm.granular.GranularKernel kernel;
+	private int[] parcelFaces=new int[0],parcelCounts=new int[0];
+	private double[] parcelVolumes=new double[0];
 	private final double[] activeVolume, fixedVolume;
 	private final int[] faces = new int[8];
 	private final double[] volumes = new double[8];
@@ -19,7 +20,6 @@ final class GranularFaceVolumes {
 		offsets[1] = domain.mac.velocityX.length;
 		offsets[2] = offsets[1] + domain.mac.velocityY.length;
 		liquid = new float[offsets[2] + domain.mac.velocityZ.length]; fixedPore = new float[liquid.length];
-		kernel = new mmm.granular.GranularKernel(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());
 		activeVolume = new double[liquid.length]; fixedVolume = new double[domain.cellCount];
 	}
 
@@ -30,6 +30,7 @@ final class GranularFaceVolumes {
 	void rebuild() {
 		Arrays.fill(activeVolume, 0); Arrays.fill(fixedVolume, 0);
 		int count = domain.granularState == null ? 0 : domain.granularState.parcels.count();
+		if(parcelCounts.length<3*count){parcelCounts=new int[3*count];parcelFaces=new int[24*count];parcelVolumes=new double[24*count];}
 
 		if (domain.pressureGranularCoupling != null) {
 			for (int cell = 0; cell < domain.cellCount; cell++)
@@ -64,30 +65,38 @@ final class GranularFaceVolumes {
 					volumes[base + entries++] = weight; sum += weight;
 				}
 				// A blocked axis transfers its pressure load to the fixed geometry through contact.
+				parcelCounts[3*p+axis]=entries;
 				if (sum == 0) continue;
 				double fraction = SolidVolume.toCellVolume(parcel.solidVolumeSvq());
 				for (int i = base; i < base + entries; i++) {
 					volumes[i] *= fraction / sum;
 					activeVolume[faces[i]] += volumes[i];
+					int slot=24*p+8*axis+i;parcelFaces[slot]=faces[i];parcelVolumes[slot]=volumes[i];
 				}
 			}
 		}
-		for (int axis = 0; axis < 3; axis++) for (int local = 0; local < length(axis); local++) {
-			int face = offsets[axis] + local;
-			double geometric = geometric(axis, local), fixed = fixedFraction(axis, local);
-			double available = geometric * (1 - fixed); fixedPore[face] = (float) available;
-			liquid[face] = (float) Math.max(0, available - activeVolume[face]);
-			if (liquid[face] > available) liquid[face] = Math.nextDown(liquid[face]);
-
+		boolean hasFixed=false;
+		for(double volume:fixedVolume)if(volume>0){hasFixed=true;break;}
+		for (int axis = 0; axis < 3; axis++) {
+			float[] geometric=domain.geometry.cutCells.openFaceField(axis);
+			for (int local = 0; local < geometric.length; local++) {
+				int face = offsets[axis] + local;
+				double available = geometric[local] * (hasFixed ? 1-fixedFraction(axis,local) : 1);
+				fixedPore[face] = (float) available;
+				liquid[face] = (float) Math.max(0, available - activeVolume[face]);
+				if (liquid[face] > available) liquid[face] = Math.nextDown(liquid[face]);
+			}
 		}
 		revision++;
 	}
 
-	/** Actual cell-CIC occupancy derivative; MAC face fractions are a separate bounded aperture approximation. */
-	int gradient(int parcel, int[] cells, double[] gx, double[] gy, double[] gz) {
-		var p = domain.granularState.parcels.parcel(parcel);
-		return kernel.volumeGradient(p.x(), p.y(), p.z(), Math.scalb((double)p.solidVolumeSvq(),-24), cells, gx, gy, gz);
+	int parcelFaceCount(int parcel,int axis){return parcelCounts[3*parcel+axis];}
+	int parcelFace(int parcel,int axis,int slot){return parcelFaces[24*parcel+8*axis+slot];}
+	double parcelPressureShare(int parcel,int axis,int slot){
+		int index=24*parcel+8*axis+slot,face=parcelFaces[index];
+		return activeVolume[face]>0?parcelVolumes[index]/activeVolume[face]:0;
 	}
+	double solidArea(int face){return Math.max(0,fixedPore[face]-liquid[face]);}
 
 	private int length(int axis) { return axis == 0 ? domain.mac.velocityX.length : axis == 1 ? domain.mac.velocityY.length : domain.mac.velocityZ.length; }
 	private int local(int axis, int x, int y, int z) { return axis == 0 ? domain.xFaceIndex(x, y, z) : axis == 1 ? domain.yFaceIndex(x, y, z) : domain.zFaceIndex(x, y, z); }

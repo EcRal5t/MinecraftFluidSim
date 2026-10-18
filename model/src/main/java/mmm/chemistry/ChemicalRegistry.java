@@ -22,6 +22,7 @@ import java.util.TreeSet;
 public final class ChemicalRegistry {
 	private final List<ChemicalSpecies> species;
 	private final ExactRational[] speciesMassPerQuantum;
+	private final long[] speciesMassUnitsPerQuantum;
 	private final List<ChemicalPhaseDefinition> phases;
 	private final List<ChemicalReaction> reactions;
 	private final List<ChemicalReaction> reactionOrder;
@@ -39,8 +40,11 @@ public final class ChemicalRegistry {
 		this.species = canonicalUnique(speciesDefinitions, ChemicalLimits.MAX_SPECIES,
 				ChemicalSpecies::id, "species");
 		this.speciesMassPerQuantum = new ExactRational[this.species.size()];
+		this.speciesMassUnitsPerQuantum = new long[this.species.size()];
 		for (int handle = 0; handle < this.species.size(); handle++) {
 			ExactRational mass = this.species.get(handle).molarMassKgPerMol();
+			var quantum=mass.divide(ChemicalLimits.QUANTA_PER_MOL);
+			speciesMassUnitsPerQuantum[handle]=mmm.units.Mass.exactUnits(quantum.numerator(),quantum.denominator());
 			if (mass.denominator().bitLength() + 30 <= ChemicalLimits.MAX_RATIONAL_BITS)
 				speciesMassPerQuantum[handle] = mass.divide(ChemicalLimits.QUANTA_PER_MOL);
 		}
@@ -63,6 +67,7 @@ public final class ChemicalRegistry {
 	public List<ChemicalReaction> reactions() { return reactions; }
 	public List<ChemicalReaction> reactionOrder() { return reactionOrder; }
 	public ChemicalSpecies species(int handle) { return species.get(handle); }
+	long speciesMassUnits(int handle,long quanta){return Math.multiplyExact(speciesMassUnitsPerQuantum[handle],quanta);}
 	ExactRational speciesMass(int handle, long quanta) {
 		ExactRational factor = speciesMassPerQuantum[handle];
 		return factor == null ? species.get(handle).molarMassKgPerMol().multiply(quanta).divide(ChemicalLimits.QUANTA_PER_MOL)

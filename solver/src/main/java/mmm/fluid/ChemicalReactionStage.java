@@ -21,6 +21,56 @@ final class ChemicalReactionStage {
 	}
 	private final Workspace state;
 	private final Access access;
+	private ChemicalRegistry candidateRegistry;
+	private boolean[] reactantSpecies;
+	private List<ReactionInput> reactionInputs;
+	private record ReactionInput(int phase, int[] species, int[] amounts) { }
+
+	private void prepareReactionInputs(ChemicalRegistry registry) {
+		if (candidateRegistry == registry) return;
+		var inputs = new ArrayList<ReactionInput>();
+		reactantSpecies = new boolean[registry.species().size()];
+		for (var rule : registry.reactionOrder()) {
+			int[] species = new int[rule.reactants().size()], amounts = new int[species.length];
+			int index = 0;
+			for (var term : rule.reactants().entrySet()) {
+				species[index] = registry.speciesHandle(term.getKey());
+				amounts[index] = term.getValue();
+				reactantSpecies[species[index++]] = true;
+			}
+			inputs.add(new ReactionInput(registry.phaseHandle(rule.phaseId()), species, amounts));
+		}
+		reactionInputs = List.copyOf(inputs);
+		candidateRegistry = registry;
+	}
+
+	private boolean hasReactant(ChemicalMixtureRecord mixture) {
+		if (mixture != null) for (int entry = 0; entry < mixture.entryCount(); entry++)
+			if (reactantSpecies[mixture.speciesHandle(entry)]) return true;
+		return false;
+	}
+	private boolean hasReactionInputs(LiquidCellInventory store) {
+		for (var rule : reactionInputs) {
+			boolean complete = true;
+			for (int species : rule.species) if (!store.hasSpecies(species)) { complete = false; break; }
+			if (complete) return true;
+		}
+		return false;
+	}
+
+	private boolean canReact(Group group, List<LiquidCellInventory.Stock> stocks) {
+		for (var rule : reactionInputs) if (rule.phase == group.phase) {
+			boolean complete = true;
+			for (int term = 0; term < rule.species.length; term++) {
+				long amount = 0;
+				for (var stock : stocks) if (stock.mixture() != null)
+					amount = Math.addExact(amount, stock.mixture().amount(rule.species[term]));
+				if (amount < rule.amounts[term]) { complete = false; break; }
+			}
+			if (complete) return true;
+		}
+		return false;
+	}
 	ChemicalReactionStage(Workspace state, Access access) { this.state=state; this.access=access; }
 	int[] captureDirtyCells() {
 		var chemistry=access.chemicalParcels();
@@ -34,24 +84,44 @@ final class ChemicalReactionStage {
 		var scheduler=access.chemicalParcels();
 		if(scheduler==null||!scheduler.hasDirtyCells()) return new ChemicalParcelStore.ReactionStats(0,0,0);
 		var store=access.liquidCells(); var registry=store.chemicalRegistry(); var thermal=access.thermalState();
+		prepareReactionInputs(registry);
+		if (!hasReactionInputs(store)) {
+			scheduler.restoreDirtyCells(new int[0]);
+			return new ChemicalParcelStore.ReactionStats(0,0,0);
+		}
 		var engine=new ChemicalReactionEngine(registry);
 		int[] costs=new int[registry.phases().size()];
 		for(var rule:registry.reactionOrder()) costs[registry.phaseHandle(rule.phaseId())]++;
 		var dirty=new TreeSet<Integer>(); for(int cell:scheduler.dirtyCells()) dirty.add(cell);
-		var originalThermal=thermal==null?null:thermal.preparePhaseCandidateCells(dirty.stream().mapToInt(Integer::intValue).toArray(),state.thermalMarkers());
-		var futureCells=new TreeMap<Integer,List<LiquidCellInventory.Stock>>();
-		var trials=new TreeMap<Integer,ThermalDomainState.PhaseCellTrial>();
-		long regionQuanta=0;
-		for(var stock:store.stocks()) if(stock.mixture()!=null) regionQuanta=Math.addExact(regionQuanta,stock.mixture().totalQuanta());
-		int visited=0,evaluations=0,changed=0,cursor=scheduler.reactionCursor();
-		for(int offset=0;offset<state.cellCount();offset++) {
-			int cell=(scheduler.reactionCursor()+offset)%state.cellCount();
-			if(!dirty.contains(cell)) continue;
+		var eligible=new TreeMap<Integer,TreeMap<Group,List<LiquidCellInventory.Stock>>>();
+		var consumed=new ArrayList<Integer>();
+		for(int cell:dirty) {
+			boolean possible=false;
+			for(var stock:store.physicalStocksInCell(cell)) if(hasReactant(stock.mixture())) { possible=true;break; }
+			if(!possible) { consumed.add(cell);continue; }
 			var groups=new TreeMap<Group,List<LiquidCellInventory.Stock>>();
 			for(var stock:store.physicalStocksInCell(cell)) {
 				int phase=registry.phaseHandleForMaterial(access.materialRegistry().material(stock.key().material()).id());
 				groups.computeIfAbsent(new Group(stock.key().supportMask(),phase),ignored->new ArrayList<>()).add(stock);
 			}
+			groups.entrySet().removeIf(entry->!canReact(entry.getKey(),entry.getValue()));
+			if(groups.isEmpty()) consumed.add(cell);else eligible.put(cell,groups);
+		}
+		for (int cell : consumed) dirty.remove(cell);
+		if(eligible.isEmpty()) {
+			scheduler.restoreDirtyCells(dirty.stream().mapToInt(Integer::intValue).toArray());
+			return new ChemicalParcelStore.ReactionStats(consumed.size(),0,0);
+		}
+		var originalThermal=thermal==null?null:thermal.preparePhaseCandidateCells(eligible.keySet().stream().mapToInt(Integer::intValue).toArray(),state.thermalMarkers());
+		var futureCells=new TreeMap<Integer,List<LiquidCellInventory.Stock>>();
+		var trials=new TreeMap<Integer,ThermalDomainState.PhaseCellTrial>();
+		long regionQuanta=0;
+		for(var stock:store.stocks()) if(stock.mixture()!=null) regionQuanta=Math.addExact(regionQuanta,stock.mixture().totalQuanta());
+		int visited=consumed.size(),evaluations=0,changed=0,cursor=scheduler.reactionCursor();
+		for(int offset=0;offset<state.cellCount();offset++) {
+			int cell=(scheduler.reactionCursor()+offset)%state.cellCount();
+			if(!dirty.contains(cell)) continue;
+			var groups=eligible.get(cell);
 			int cost=0; for(var group:groups.keySet()) cost=Math.addExact(cost,costs[group.phase]);
 			if(cost>ChemicalLimits.MAX_REACTION_EVALUATIONS_PER_STEP-evaluations) { cursor=cell;break; }
 			cursor=(cell+1)%state.cellCount();visited++;evaluations+=cost;

@@ -1,6 +1,7 @@
 package mmm.fluid;
 
 import mmm.inventory.LiquidCellInventory;
+import mmm.inventory.PhaseOccupancyState;
 
 import mmm.chemistry.ChemicalRegistry;
 import mmm.chemistry.ChemicalTransferLedger;
@@ -21,6 +22,7 @@ public final class FluidDomainState {
 	private final FluidSolverConfig config;
 	private final boolean sealedDomainBoundary;
 	private final LiquidCellInventory.Snapshot liquid;
+	private final PhaseOccupancyState phaseOccupancy;
 	private final MacMomentumState momentum;
 	private final byte[] collisionMasks;
 	private final List<FluidMaterial> palette;
@@ -56,7 +58,7 @@ public final class FluidDomainState {
 	private volatile FlipThermalParticleState debugThermal;
 
 	public FluidDomainState(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config, int maximumParticleCount,
-			boolean sealedDomainBoundary, LiquidCellInventory.Snapshot liquid, MacMomentumState momentum,
+			boolean sealedDomainBoundary, LiquidCellInventory.Snapshot liquid, PhaseOccupancyState phaseOccupancy, MacMomentumState momentum,
 			byte[] collisionMasks, List<FluidMaterial> palette, ChemicalRegistry chemicalRegistry,
 			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells, int chemicalReactionCursor,
 			GranularRegistry granularRegistry, GranularStateSnapshot granular, GranularDepositDynamics.State granularDynamics,
@@ -69,6 +71,8 @@ public final class FluidDomainState {
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.config = Objects.requireNonNull(config);
 		this.maximumParticleCount = maximumParticleCount; this.sealedDomainBoundary = sealedDomainBoundary;
 		this.liquid = Objects.requireNonNull(liquid); this.momentum = Objects.requireNonNull(momentum);
+		this.phaseOccupancy = Objects.requireNonNull(phaseOccupancy);
+		if (phaseOccupancy.cellCount() != cells) throw new IllegalArgumentException("Phase occupancy shape differs from domain");
 		if (liquid.cellCount() != cells || collisionMasks.length != cells || momentum.sizeX() != sizeX || momentum.sizeY() != sizeY || momentum.sizeZ() != sizeZ)
 			throw new IllegalArgumentException("Liquid inventory, collision and MAC shapes differ");
 		this.collisionMasks = collisionMasks.clone(); this.palette = List.copyOf(palette);
@@ -109,6 +113,7 @@ public final class FluidDomainState {
 	public int maximumParticleCount() { return maximumParticleCount; }
 	public boolean sealedDomainBoundary() { return sealedDomainBoundary; }
 	public LiquidCellInventory.Snapshot liquid() { return liquid; }
+	public PhaseOccupancyState phaseOccupancy() { return phaseOccupancy; }
 	public MacMomentumState momentum() { return momentum; }
 	public byte[] copyCollisionMasks() { return collisionMasks.clone(); }
 	public List<FluidMaterial> materialPalette() { return palette; }

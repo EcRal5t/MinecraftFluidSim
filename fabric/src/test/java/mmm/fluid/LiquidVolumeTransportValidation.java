@@ -10,29 +10,29 @@ public final class LiquidVolumeTransportValidation {
 	private final int n;
 	private final double h;
 	private final double[] volume;
-	private final boolean[] solid;
 	private final SignedDyadic[] exactVolume;
-	private final ConservativeLiquidFlux transport;
+	private final FluidDomain experiment;
 
 	private LiquidVolumeTransportValidation(int n) {
-		this.n = n; h = 6.0 / n;
-		volume = new double[n * n]; solid = new boolean[n * n]; exactVolume = new SignedDyadic[n * n];
-		transport = new ConservativeLiquidFlux(n, n, 1);
-		int f = 0;
-		for (int y = 0; y < n; y++) for (int x = 1; x < n; x++) {
-			transport.velocity[f++] = (stream(x * h, (y + 1) * h) - stream(x * h, y * h)) / h;
-		}
-		for (int y = 1; y < n; y++) for (int x = 0; x < n; x++) {
-			transport.velocity[f++] = (stream(x * h, y * h) - stream((x + 1) * h, y * h)) / h;
-		}
-		for (int y = 0; y < n; y++) for (int x = 0; x < n / 2; x++) volume[y * n + x] = 1;
-		for (int c = 0; c < volume.length; c++) exactVolume[c] = SignedDyadic.of(volume[c]);
+		this.n=n;h=6.0/n;volume=new double[n*n];exactVolume=new SignedDyadic[n*n];
+		experiment=new FluidDomain(n,n,2,new FluidSolverConfig((float)h,1000,0,.01F,100,1e-5F,.4F,.002F,0),2*n*n);
+		float[] initial=new float[2*n*n];
+		for(int z=0;z<2;z++)for(int y=0;y<n;y++)for(int x=0;x<n/2;x++)initial[(z*n+y)*n+x]=1;
+		experiment.setVolumes(initial);
+		for(int cell=0;cell<n*n;cell++)volume[cell]=(exactVolume[cell]=experiment.liquidCells.exactCellVolume(cell)).toDouble();
 	}
 
 	private void step(double dt) {
-		transport.plan(volume, solid, dt / h, exactVolume);
-		System.arraycopy(transport.resultingVolumes(), 0, exactVolume, 0, volume.length);
-		for (int c = 0; c < volume.length; c++) volume[c] = exactVolume[c].toDouble();
+		experiment.ensureGrid();
+		java.util.Arrays.fill(experiment.mac.velocityX,0);java.util.Arrays.fill(experiment.mac.velocityY,0);java.util.Arrays.fill(experiment.mac.velocityZ,0);
+		for(int z=0;z<2;z++) {
+			for(int y=0;y<n;y++)for(int x=1;x<n;x++)experiment.mac.velocityX[experiment.xFaceIndex(x,y,z)]=
+					(float)((stream(x*h,(y+1)*h)-stream(x*h,y*h))/h);
+			for(int y=1;y<n;y++)for(int x=0;x<n;x++)experiment.mac.velocityY[experiment.yFaceIndex(x,y,z)]=
+					(float)((stream(x*h,y*h)-stream((x+1)*h,y*h))/h);
+		}
+		experiment.cellMacStage.publishMomentum();experiment.cellMacStage.transport((float)dt);
+		for(int cell=0;cell<n*n;cell++)volume[cell]=(exactVolume[cell]=experiment.liquidCells.exactCellVolume(cell)).toDouble();
 	}
 	private static double stream(double x, double y) {
 		double r2 = (x - 3) * (x - 3) + (y - 3) * (y - 3);
@@ -48,13 +48,53 @@ public final class LiquidVolumeTransportValidation {
 			case "external" -> externalQuantityTransactions();
 			case "moving" -> movingMaterialContinuesAfterRecovery();
 			case "courant" -> {connectedDonorCourantMatchesFaceFlux();saturatedInteriorCannotCreateVacuum();}
+			case "circulation" -> elasticGasSpaceFillsActualPore();
 			case "--fast", "mass", "quantization", "representation", "geometry-remap", "handoff", "handoff-short", "continuity" -> {
-				zeroFluxSharesInventory(); disconnectedComponentsAndTraceChemistry(); externalQuantityTransactions();
+				elasticGasSpaceFillsActualPore(); zeroFluxSharesInventory(); disconnectedComponentsAndTraceChemistry(); externalQuantityTransactions();
 				sharedCapacityDisplacement(); componentCapacityMovesItsOwnStock(); connectedDonorCourantMatchesFaceFlux(); saturatedInteriorCannotCreateVacuum(); finiteMovingPoreCapacity(); finiteFaceFluxNeedsNoSamplingFloor(); movingMaterialContinuesAfterRecovery();
 			}
 			default -> throw new IllegalArgumentException("Unknown liquid transport selector " + entry);
 		}
 		System.out.println("Cell liquid transport passed: " + entry);
+	}
+	private static void elasticGasSpaceFillsActualPore() {
+		var d=domain(2,2,2);d.sealDomainBoundary();
+		d.setVolumes(new float[]{.75F,.25F,.25F,.75F,.5F,.5F,.5F,.5F});
+		d.ensureGrid();d.bootstrapGasState("");
+		// A closed resolved circulation carries both complementary phases across the same faces.
+		d.mac.velocityX[d.xFaceIndex(1,0,0)]=.125F;
+		d.mac.velocityY[d.yFaceIndex(1,1,0)]=.125F;
+		d.mac.velocityX[d.xFaceIndex(1,1,0)]=-.125F;
+		d.mac.velocityY[d.yFaceIndex(0,1,0)]=-.125F;
+		d.cellMacStage.publishMomentum();
+		var gasBefore=d.gasBoundary().sealedInventory();
+		var volumeBefore=d.liquidCells.exactVolume();var massBefore=d.liquidCells.massUnits();
+		var before=d.captureAuthoritativeState();
+		var prepared=new CellLiquidVolumeTransport(d).prepare(.125F);
+		var future=prepared.gasAllocation().futureOccupancy();
+		require(!prepared.faceFluxes().isEmpty(),"Resolved phase circulation transported no liquid");
+		require(prepared.inventory().future().exactVolume().equals(volumeBefore)
+				&&prepared.inventory().future().massUnits()==massBefore,
+				"Shared phase-face transport changed total liquid volume or integer mass");
+		for(int cell=0;cell<d.cellCount;cell++) {
+			double liquid=0;
+			for(int micro=0;micro<8;micro++) {
+				double amount=future.liquidVolume(8*cell+micro);
+				require(amount>=0&&amount<=.125,"Phase transport exceeded actual micro capacity");
+				liquid+=amount;
+			}
+			require(Math.abs(liquid-prepared.inventory().future().exactCellVolume(cell).toDouble())<=1e-12,
+					"Geometric liquid occupation differs from its transported cell inventory");
+		}
+		FluidDomainStateAssertions.assertSameState(before,d.captureAuthoritativeState(),
+				"Preparing shared phase transport changed its source");
+		d.cellMacStage.transport(.125F);
+		require(d.liquidCells.exactVolume().equals(volumeBefore)
+				&&d.liquidCells.massUnits()==massBefore
+				&&d.gasBoundary().sealedInventory().equals(gasBefore)
+				&&d.gasBoundary().auditClosed(),"Shared phase publication changed liquid or finite gas inventory");
+		require(java.util.Arrays.equals(future.copyLiquidMicroVolumes(),d.exportPhaseOccupancyState().copyLiquidMicroVolumes()),
+				"Joint transport published a different phase occupation than its prepared candidate");
 	}
 	private static void connectedDonorCourantMatchesFaceFlux(){
 		var d=domain(2,2,2);var masks=new byte[8];masks[0]=(byte)126;d.geometry.cutCells.restoreMicroMasks(masks);
@@ -65,17 +105,22 @@ public final class LiquidVolumeTransportValidation {
 		var flow=new CellLiquidVolumeTransport(d);
 		require(Math.abs(flow.courantRate(0)-6)<1e-12&&Math.abs(flow.projectedCourantRate()-6)<1e-12,
 				"Connected donor time scale did not use all actual outlet fluxes and its own pore volume");
-		var flux=flow.prepareVolumeFlux(.1F);double outgoing=0;
+		var flux=flow.prepare(.1F).volumeFlux();double outgoing=0;
 		for(var port:flux.ports())if(port.donorCell()==0&&port.donorSupport()==128)outgoing+=port.volume().toDouble();
-		require(Math.abs(outgoing/.0625-flow.projectedCourantRate()*.1F)<1e-12&&outgoing<.0625,
-				"Courant estimate differs from actual shared coefficient face transport");
+		require(outgoing>0&&outgoing<.0625
+				&&Math.abs(flux.resultingVolumes()[0].toDouble()+outgoing-.0625)<1e-12,
+				"Geometric phase outflow exceeded its actual connected donor or disagreed with the cell endpoint");
 		d.mac.velocityX[d.xFaceIndex(1,0,0)]=-.5F;d.mac.velocityY[d.yFaceIndex(0,1,0)]=-.5F;d.mac.velocityZ[d.zFaceIndex(0,0,1)]=-.5F;d.cellMacStage.publishMomentum();
-		var reversed=flow.prepareVolumeFlux(.1F);
+		var reversed=flow.prepare(.1F).volumeFlux();
 		require(reversed.ports().isEmpty()&&reversed.resultingVolumes()[0].equals(SignedDyadic.of(.0625)),
 				"A velocity reversal drained liquid from the actual dry donor");
 	}
 	private static void saturatedInteriorCannotCreateVacuum(){
-		var d=domain(4,1,1);d.sealDomainBoundary();d.setVolumes(new float[]{1,1,1,1});d.ensureGrid();
+		var d=domain(4,2,2);d.sealDomainBoundary();
+		var masks=new byte[d.cellCount];java.util.Arrays.fill(masks,(byte)255);java.util.Arrays.fill(masks,0,4,(byte)0);
+		d.geometry.cutCells.restoreMicroMasks(masks);
+		for(int cell=0;cell<d.cellCount;cell++)d.geometry.solid[cell]=Byte.toUnsignedInt(masks[cell])==255;
+		var initial=new float[d.cellCount];java.util.Arrays.fill(initial,0,4,1);d.setVolumes(initial);d.ensureGrid();
 		d.mac.velocityX[d.xFaceIndex(1,0,0)]=.1F;d.cellMacStage.publishMomentum();
 		var before=d.liquidCells.snapshot();var plan=new CellLiquidVolumeTransport(d).prepare(.1F);
 		for(int cell=0;cell<4;cell++)require(plan.inventory().future().exactCellVolume(cell).equals(SignedDyadic.of(1)),
@@ -83,8 +128,7 @@ public final class LiquidVolumeTransportValidation {
 		require(plan.inventory().future().massUnits()==d.liquidCells.massUnits()&&plan.inventory().future().exactVolume().equals(d.liquidCells.exactVolume())
 				&&before.rows().equals(d.liquidCells.snapshot().rows()),"Saturated-cell lower capacity repair created stock or modified source");
 	}
-	/** The projected pressure flux linearizes pore motion; accepted integer endpoints
-	 * can require a finite correction even with a stationary predicted liquid face. */
+	/** Transport uses the actual accepted integer solid endpoint and preserves joint pore capacity. */
 	private static void finiteMovingPoreCapacity() {
 		var d=domain(3,3,3);var granular=mmm.granular.BuiltinGranularDefinitions.createRegistry();
 		d.bindGranular(granular,new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER)),BuiltinFluidMaterials.createRegistry());
@@ -102,14 +146,17 @@ public final class LiquidVolumeTransportValidation {
 		d.liquidCells.planAdditions(stocks).commit();d.markCellInventoryChanged();d.ensureGrid();
 		d.granularNextCoupling.rebuild(d.granularState.parcels,d.granularState.deposits,
 				(index,parcel)->new mmm.granular.GranularCouplingFields.Position(parcel.x()+.0005F,parcel.y(),parcel.z(),parcel.ceilMask()));
+		long changed=0;
+		for(int cell=0;cell<d.cellCount;cell++)changed+=Math.abs(d.granularNextCoupling.solidSvq(cell)-d.granularCoupling.solidSvq(cell));
+		require(changed>0&&d.granularNextCoupling.totalSolidSvq()==d.granularCoupling.totalSolidSvq(),
+				"Moving solid fixture did not change actual cell occupancy while preserving total integer volume");
 		var before=d.liquidCells.snapshot();var prepared=new CellLiquidVolumeTransport(d).prepare(.05F);
-		require(prepared.volumeFlux().capacityCorrectionVolume()>0,"Finite pore motion did not exercise shared capacity projection");
 		require(prepared.inventory().future().massUnits()==d.liquidCells.massUnits()
 				&&prepared.inventory().future().exactVolume().equals(d.liquidCells.exactVolume())
-				&&before.rows().equals(d.liquidCells.snapshot().rows()),"Finite capacity projection changed source or exact inventory");
+				&&before.rows().equals(d.liquidCells.snapshot().rows()),"Actual solid endpoint transport changed source or exact inventory");
 		for(int cell=0;cell<d.cellCount;cell++) {
 			var capacity=SignedDyadic.of(1).subtract(SignedDyadic.of(d.granularNextCoupling.solidSvq(cell),-24));
-			require(prepared.inventory().future().exactCellVolume(cell).compareTo(capacity)<=0,"Finite capacity projection left an overfull endpoint");
+			require(prepared.inventory().future().exactCellVolume(cell).compareTo(capacity)<=0,"Actual solid endpoint transport left an overfull cell");
 		}
 	}
 
@@ -175,13 +222,18 @@ public final class LiquidVolumeTransportValidation {
 		double total=0,moment=0;for(var stock:d.liquidCells.stocks()){double amount=stock.volumeFraction();total+=amount;moment+=amount*(stock.key().cell()%d.sizeX+.5);}return moment/total;
 	}
 	private static void sharedCapacityDisplacement() {
-		var flux = new ConservativeLiquidFlux(3,1,1); var geometry = new LiquidFluxGeometry(new FlipCutCellGeometry(3,1,1)); flux.geometry(geometry);
-		var volumes = new SignedDyadic[]{SignedDyadic.of(1),SignedDyadic.of(1),SignedDyadic.ZERO};
-		var capacities = new SignedDyadic[]{SignedDyadic.of(.5),SignedDyadic.of(1),SignedDyadic.of(1)};
-		flux.planDisplacement(volumes, capacities, new SignedDyadic[]{SignedDyadic.of(.5),SignedDyadic.ZERO,SignedDyadic.ZERO},
-				new boolean[3], new FlipCutCellGeometry(3,1,1), 131072);
-		var total = SignedDyadic.ZERO; for (int i=0;i<3;i++) { var amount=flux.resultingVolumes()[i]; require(amount.signum()>=0 && amount.compareTo(capacities[i])<=0,"Shared displacement exceeded capacity"); total=total.add(amount); }
-		require(total.equals(SignedDyadic.of(2)), "Residual displacement routing changed volume");
+		var d=domain(3,2,2);byte[] masks=new byte[d.cellCount];java.util.Arrays.fill(masks,(byte)255);
+		masks[0]=masks[1]=masks[2]=0;d.geometry.cutCells.restoreMicroMasks(masks);
+		for(int cell=0;cell<d.cellCount;cell++)d.geometry.solid[cell]=Byte.toUnsignedInt(masks[cell])==255;
+		var initial=new float[d.cellCount];initial[0]=initial[1]=1;d.setVolumes(initial);d.ensureGrid();
+		var previous=new long[d.cellCount];var next=previous.clone();next[0]=mmm.granular.SolidVolume.SVQ_PER_CELL/2;
+		var before=d.liquidCells.snapshot();var prepared=GranularLiquidDisplacement.prepareInsertion(d,previous,next);
+		require(prepared!=null,"Solid insertion did not displace its overfilled liquid");
+		var future=prepared.inventory.future();
+		for(int cell=0;cell<3;cell++)require(future.exactCellVolume(cell).signum()>=0
+				&&future.exactCellVolume(cell).compareTo(SignedDyadic.of(cell==0?.5:1))<=0,"Shared displacement exceeded actual pore capacity");
+		require(future.exactVolume().equals(SignedDyadic.of(2))&&future.massUnits()==d.liquidCells.massUnits()
+				&&before.rows().equals(d.liquidCells.snapshot().rows()),"Shared displacement changed exact inventory or modified its source");
 	}
 	private static void componentCapacityMovesItsOwnStock() {
 		var d=domain(3,3,3);byte[] masks=new byte[d.cellCount];java.util.Arrays.fill(masks,(byte)255);
@@ -200,12 +252,12 @@ public final class LiquidVolumeTransportValidation {
 				&&source.rows().equals(d.liquidCells.snapshot().rows()),"Component displacement changed source or exact inventory");
 	}
 	private static void finiteFaceFluxNeedsNoSamplingFloor() {
-		var d=domain(2,2,2);d.setVolume(0,0,0,1);d.ensurePressureGeometry();
-		var flux=new ConservativeLiquidFlux(2,2,2);flux.geometry(new LiquidFluxGeometry(d));
-		var exact=new SignedDyadic[d.cellCount];var volumes=new double[d.cellCount];
-		for(int cell=0;cell<d.cellCount;cell++)volumes[cell]=(exact[cell]=d.liquidCells.exactCellVolume(cell)).toDouble();
-		flux.velocity[0]=Math.scalb(1.0,-40);flux.plan(volumes,d.geometry.solid,1,exact);
-		require(flux.resultingVolumes()[1].signum()>0&&flux.resultingVolumes()[0].add(flux.resultingVolumes()[1]).equals(SignedDyadic.of(1)),"Resolvable face sweep was rejected at an obsolete sample floor");
+		var d=domain(2,2,2);d.setVolume(0,0,0,1);d.ensureGrid();
+		d.mac.velocityX[d.xFaceIndex(1,0,0)]=Math.scalb(1F,-40);d.cellMacStage.publishMomentum();
+		var prepared=new CellLiquidVolumeTransport(d).prepare(.5F);
+		var future=prepared.inventory().future();
+		require(future.exactCellVolume(1).signum()>0&&future.exactVolume().equals(SignedDyadic.of(1))
+				&&future.massUnits()==d.liquidCells.massUnits(),"Resolvable phase-face transport was rejected at an obsolete sample floor");
 	}
 
 	private static void require(boolean value,String message) { if(!value)throw new AssertionError(message); }

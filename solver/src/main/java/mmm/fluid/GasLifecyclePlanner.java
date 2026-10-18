@@ -28,7 +28,7 @@ final class GasLifecyclePlanner {
 			throw new IllegalStateException("Pending phase volume/work must be projected before operator vent");
 		}
 		domain.ensureInventoryGrid();
-		GasRuntimeGeometry sourceGeometry = domain.gasState.frame == null ? null : GasRuntimeGeometry.capture(domain, null,
+		GasRuntimeGeometry sourceGeometry = domain.gasState.frame == null ? null : GasRuntimeGeometry.capture(domain,
 				domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq(),
 				domain.gasState.sealedDomainBoundary);
 		if (!domain.gasState.network.auditClosed()) throw new IllegalStateException("Gas inventory audit is open");

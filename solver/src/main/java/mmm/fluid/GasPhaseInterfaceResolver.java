@@ -17,9 +17,10 @@ final class GasPhaseInterfaceResolver {
 		GasComplementGeometry geometry = frame.geometry();
 		int[] size = {geometry.sizeX(), geometry.sizeY(), geometry.sizeZ()}, stride = {1, size[0], size[0] * size[1]};
 		int[] coordinate = {cell % size[0], cell / size[0] % size[1], cell / (size[0] * size[1])};
-		for (var component : frame.liquidStock().get(cell).components()) {
-			if (component.volume().signum() == 0) continue;
-			int supportMask = component.supportMask();
+		int seen=0;
+		for (var stock : frame.liquidCells().rows().get(cell)) {
+			int supportMask = stock.key().supportMask();
+			if((seen&supportMask)!=0)continue;seen|=supportMask;
 			for (int micro = 0; micro < 8; micro++) if ((supportMask & 1 << micro) != 0) {
 				var same = geometry.piece(8 * cell + micro);
 				if (same != null && same.normalizedVolume() < .125)

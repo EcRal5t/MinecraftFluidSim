@@ -2,7 +2,6 @@ package mmm.fluid;
 
 import mmm.inventory.LiquidCellInventory;
 
-import mmm.chemistry.ChemicalRegistry;
 import mmm.fluid.air.GasStateSnapshot;
 import mmm.granular.GranularStateSnapshot;
 
@@ -19,9 +18,10 @@ final class FluidDomainStateMapper {
 		}
 		var chemistry = domain.chemicalParcels == null ? null : domain.chemicalParcels.registry();
 		GranularStateSnapshot granular = domain.granularState == null ? null : domain.exportGranularState();
+		domain.ensurePhaseOccupancy();
 		GasStateSnapshot gas = domain.gasState.frame == null ? null : domain.exportGasState(chemistry == null ? "" : chemistry.fingerprint());
 		var captured = new FluidDomainState(domain.sizeX,domain.sizeY,domain.sizeZ,domain.config,domain.maximumParticleCount,
-				domain.gasState.sealedDomainBoundary,domain.liquidCells.snapshot(),domain.mac.captureMomentum(),domain.geometry.cutCells.copyMicroMasks(),
+				domain.gasState.sealedDomainBoundary,domain.liquidCells.snapshot(),domain.phaseOccupancy,domain.mac.captureMomentum(),domain.geometry.cutCells.copyMicroMasks(),
 				domain.materialRegistry == null ? List.of() : domain.materialRegistry.materials(),chemistry,
 				domain.chemicalParcels == null ? mmm.chemistry.ChemicalTransferLedger.EMPTY : domain.chemicalParcels.externalSource(),
 				domain.chemicalParcels == null ? mmm.chemistry.ChemicalTransferLedger.EMPTY : domain.chemicalParcels.escapedSink(),
@@ -81,6 +81,8 @@ final class FluidDomainStateMapper {
 					state.materialDefinitions());
 			domain.granularDepositDynamics.restoreState(state.granularDynamics());
 		}
+		if (state.gasRuntimeGeometry() != null) domain.phaseOccupancy = state.phaseOccupancy();
+		else domain.restorePhaseOccupancyState(state.phaseOccupancy());
 		if (state.gas() == null) domain.bindGasRegistry(state.gasRegistry());
 		else if (state.gasRuntimeGeometry() != null) domain.gasTopologyCoordinator.restoreRuntime(state.gasRuntimeGeometry(),state.gasRuntimeNetwork());
 		else domain.restoreGasState(state.gas(),state.gasRegistry(),state.thermalOwner());
@@ -96,7 +98,7 @@ final class FluidDomainStateMapper {
 					domain.projection.pressure, 0, domain.cellCount);
 		}
 		if (state.precipitationEnabled()) domain.setPrecipitationEnabled(true);
-		domain.rebuildDerivedFromLiquidCells();
+		domain.ensureGrid();
 		return domain;
 	}
 }

@@ -6,8 +6,8 @@ import mmm.granular.GranularStateSnapshot;
 import java.util.Arrays;
 
 /**
- * Exact inventory and raw MAC/thermal-bit equality for {@link FluidDomainState} handoffs. Record default equals is
- * not used for any array-bearing field; MAC and thermal columns are compared by their exact bit
+ * Exact inventory and raw phase-occupancy/MAC/thermal-bit equality for {@link FluidDomainState} handoffs. Record default equals is
+ * not used for any array-bearing field; saved occupancy, MAC and thermal columns are compared by their exact bit
  * patterns so capture/restore/candidate refactors cannot hide silent rounding.
  */
 public final class FluidDomainStateAssertions {
@@ -47,6 +47,8 @@ public final class FluidDomainStateAssertions {
 				context + ": thermal substep budget changed");
 		require(expected.sizeX()==actual.sizeX()&&expected.sizeY()==actual.sizeY()&&expected.sizeZ()==actual.sizeZ(),context+": grid changed");
 		require(expected.liquid().stocks().equals(actual.liquid().stocks()),context+": cell inventories changed");
+		requireRawDoubles(expected.phaseOccupancy().copyLiquidMicroVolumes(),
+				actual.phaseOccupancy().copyLiquidMicroVolumes(),context+" phase occupancy");
 		require(expected.materialPalette().equals(actual.materialPalette()),context+": material palette changed");
 		require(Arrays.equals(expected.copyCollisionMasks(),actual.copyCollisionMasks()),context+": collision mask changed");
 		requireRawDoubles(expected.momentum().copyX(),actual.momentum().copyX(),context+" MAC X momentum");

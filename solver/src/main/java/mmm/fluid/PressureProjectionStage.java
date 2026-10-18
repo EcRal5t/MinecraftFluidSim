@@ -9,8 +9,9 @@ final class PressureProjectionStage {
 		var result = system.solveProjection(dt);
 		domain.lastPressureIterations = result.iterations(); domain.lastPressureResidual = (float) result.residualRms();
 		if (!result.converged()) throw new FluidDomain.PressureSolveBlockedException("Pressure projection did not converge: residual="
-				+ result.residualRms() + ", tolerance=" + domain.config.pressureTolerance() + ", iterations=" + result.iterations());
+				+ result.residualRms() + ", iterations=" + result.iterations());
 	}
+	void predictDrag(float dt){system.predictDrag(dt);}
 	double wallBoundaryWork() { return system.wallBoundaryWork(); }
 	void projectVelocities(float dt) { system.projectVelocities(dt); }
 }

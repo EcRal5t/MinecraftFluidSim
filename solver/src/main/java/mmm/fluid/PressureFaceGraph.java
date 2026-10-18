@@ -12,7 +12,7 @@ final class PressureFaceGraph {
 	final int[] offsets = new int[3];
 	final int faceCount;
 	final int[] firstCell, secondCell, axis, localFace, start, fullSupports;
-	final double[] inverseMass, affine, capacityRoom;
+	final double[] inverseMass, affine;
 	private int[] rows;
 	private double[] coefficients;
 	private int entries;
@@ -20,10 +20,6 @@ final class PressureFaceGraph {
 	private int[] liquidLeftSupport, liquidRightSupport;
 	private double[] liquidCoefficient;
 	private int liquidEntries;
-	private final int[] relativeFirst;
-	private int[] relativeNext = new int[0], relativeRow = new int[0];
-	private double[] relativeValue = new double[0];
-	private int relativeEntries;
 	private LiquidCellInventory.Snapshot coefficientInventory;
 	private Object coefficientFrame;
 	private final int[] parent;
@@ -38,7 +34,6 @@ final class PressureFaceGraph {
 		liquidLeftSupport = new int[4 * faceCount]; liquidRightSupport = new int[liquidLeftSupport.length];
 		liquidCoefficient = new double[liquidLeftSupport.length]; inverseMass = new double[faceCount]; affine = new double[faceCount];
 		fullSupports = new int[domain.cellCount]; parent = new int[domain.cellCount];
-		capacityRoom = new double[domain.cellCount]; relativeFirst = new int[faceCount];
 		constrained = new boolean[domain.cellCount]; anchored = constrained.clone();
 		rows = new int[4 * faceCount]; coefficients = new double[rows.length];
 		Arrays.fill(firstCell, -1); Arrays.fill(secondCell, -1);
@@ -57,7 +52,6 @@ final class PressureFaceGraph {
 
 	void classify() {
 		Arrays.fill(fullSupports, 0);
-		Arrays.fill(capacityRoom, 0);
 		for (int cell = 0; cell < domain.cellCount; cell++) {
 			int mask = domain.geometry.cutCells.mask(cell); int[] components = CellRemapMicroTopology.components(mask);
 			var capacities = CellRemapMicroTopology.capacities(mask, SignedDyadic.of(poreVolume(cell)));
@@ -66,21 +60,9 @@ final class PressureFaceGraph {
 				for (var stock : domain.liquidCells.stocksInCell(cell)) if (stock.key().supportMask() == components[j]) {
 					volume = volume.add(stock.volume()); mass = Math.addExact(mass, stock.massUnits());
 				}
-				boolean saturated = volume.compareTo(capacities[j]) >= 0;
-				// The numerical geometry is binary32. An unresolved empty gap keeps the full-cell
-				// capacity equation; its exact room is filled by conservative face transport below.
-				if (!saturated && (float) volume.toDouble() == (float) capacities[j].toDouble()) {
-					boolean finiteGas = false;
-					for (int bit = 0; bit < 8; bit++) if ((components[j] & 1 << bit) != 0 && domain.gasState.frame != null) {
-						int node = domain.gasState.frame.nodeOfPiece(8 * cell + bit);
-						if (node > 0 && !domain.gasState.network.inventory(node).isEmpty()) finiteGas = true;
-					}
-					saturated = !finiteGas;
-				}
-				if (mass > 0 && capacities[j].signum() > 0 && saturated) {
+				if (mass > 0 && capacities[j].signum() > 0
+						&& capacities[j].subtract(volume).toDouble() <= mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION)
 					fullSupports[cell] |= components[j];
-					capacityRoom[cell] += capacities[j].subtract(volume).toDouble();
-				}
 			}
 			domain.projection.pressureFluid[cell] = fullSupports[cell] != 0;
 		}
@@ -91,10 +73,11 @@ final class PressureFaceGraph {
 		var p = domain.projection; int count = domain.gasState.network.nodeCount(); p.ensureGasCapacity(count);
 		Arrays.fill(p.gasPressureUnknown, false); p.gasUnknownCount = p.fluidUnknownCount = 0;
 		Arrays.fill(p.gasStorageCoefficient, 0); Arrays.fill(p.gasMatrixDiagonal, 0);
-		for (int node = 1; node <= count; node++) if (domain.pressureBoundaryView.gasNodeHasContinuumState(node)) {
+		for (int node = 1; node <= count; node++) {
 			p.gasPressureUnknown[node] = true; p.gasUnknownNodes[p.gasUnknownCount++] = node;
-			p.gasStorageCoefficient[node] = domain.config.density() * domain.pressureBoundaryView.gasNodeVolumeCompliance(node)
-					/ (dt * (double) dt * domain.unitScale.cubicMetersPerNormalizedVolume());
+			if(domain.pressureBoundaryView.gasNodeHasContinuumState(node))
+				p.gasStorageCoefficient[node] = domain.config.density() * domain.pressureBoundaryView.gasNodeVolumeCompliance(node)
+						/ (dt * (double) dt * domain.unitScale.cubicMetersPerNormalizedVolume());
 		}
 		entries = liquidEntries = 0; Arrays.fill(inverseMass, 0); Arrays.fill(affine, 0);
 		Arrays.fill(constrained, false); Arrays.fill(anchored, false);
@@ -102,7 +85,7 @@ final class PressureFaceGraph {
 		for (int f = 0; f < faceCount; f++) {
 			start[f] = entries; liquidStart[f] = liquidEntries; int a = firstCell[f], b = secondCell[f]; if (a < 0) continue;
 			double mass = faceMass(f); if (!(mass > 0)) continue;
-			int d = axis[f]; double open = domain.pressureSystem.solidFaces.fixedPoreOpen(d, localFace[f]);
+			int d = axis[f]; double open = domain.pressureSystem.solidFaces.open(d, localFace[f]);
 			if (!(open > 0)) continue;
 			inverseMass[f] = domain.unitScale.cubicMetersPerNormalizedVolume() / mass;
 			final int face = f; double coefficient = open / domain.config.cellSize();
@@ -115,7 +98,7 @@ final class PressureFaceGraph {
 				int peer = micro ^ 1 << d;
 				int supportA = CellRemapMicroTopology.support(maskA, micro), supportB = CellRemapMicroTopology.support(maskB, peer);
 				double portArea = open / ports;
-				addLiquidPort(f, supportA, supportB, domain.pressureOpenFaceFromCell(a,b,d==0?1:0,d==1?1:0,d==2?1:0) / ports);
+				addLiquidPort(f, supportA, supportB, open / ports);
 				pressureAtMicro(a, micro, 1, (row, weight, fixed) -> add(face, row, portArea / domain.config.cellSize() * weight, fixed));
 				pressureAtMicro(b, peer, 1, (row, weight, fixed) -> add(face, row, -portArea / domain.config.cellSize() * weight, fixed));
 			}
@@ -142,22 +125,6 @@ final class PressureFaceGraph {
 		coefficientInventory = domain.liquidCells.snapshot(); coefficientFrame = domain.gasState.frame;
 	}
 
-	void addRelativeSolidCoupling(GranularPressureCoupling coupling) {
-		Arrays.fill(relativeFirst,-1); relativeEntries=0;
-		coupling.forEachFluidContribution((face,row,value)->{
-			if(row<0){affine[face]+=value;return;}
-			if(relativeEntries==relativeRow.length){int length=Math.max(256,2*relativeEntries);
-				relativeNext=Arrays.copyOf(relativeNext,length);relativeRow=Arrays.copyOf(relativeRow,length);relativeValue=Arrays.copyOf(relativeValue,length);}
-			relativeRow[relativeEntries]=row;relativeValue[relativeEntries]=value;relativeNext[relativeEntries]=relativeFirst[face];relativeFirst[face]=relativeEntries++;
-		});
-		int[] oldStart=start.clone(),oldRows=Arrays.copyOf(rows,entries);double[] oldCoefficients=Arrays.copyOf(coefficients,entries);entries=0;
-		for(int face=0;face<faceCount;face++) {
-			start[face]=entries;
-			for(int i=oldStart[face];i<oldStart[face+1];i++)add(face,oldRows[i],oldCoefficients[i],0);
-			for(int i=relativeFirst[face];i>=0;i=relativeNext[i])add(face,relativeRow[i],relativeValue[i],0);
-		}
-		start[faceCount]=entries;
-	}
 	void forEachCell(int cell,SideConsumer consumer) {
 		int mask=domain.geometry.cutCells.mask(cell),open=Integer.bitCount((~mask)&255);
 		if(open==0)return;
@@ -247,6 +214,15 @@ final class PressureFaceGraph {
 		if (entries == rows.length) { rows = Arrays.copyOf(rows, entries * 2); coefficients = Arrays.copyOf(coefficients, rows.length); }
 		rows[entries] = row; coefficients[entries++] = coefficient;
 	}
+	double pressureDifference(int face,double[] pressure) {
+		int a=firstCell[face],b=secondCell[face];if(a<0)return 0;
+		double area=fluidArea(face);if(area>0){double sum=affine[face];for(int i=start[face];i<start[face+1];i++)sum+=coefficients[i]*pressure[rows[i]];return sum*domain.config.cellSize()/area;}
+		double[] value={0};
+		forEachSide(a,b,(row,weight,fixed)->value[0]+=weight*(fixed+(row<0?0:pressure[row])));
+		forEachSide(b,a,(row,weight,fixed)->value[0]-=weight*(fixed+(row<0?0:pressure[row])));
+		return value[0];
+	}
+	double fluidArea(int face){return domain.pressureSystem.solidFaces.open(axis[face],localFace[face]);}
 	void pressureVelocity(double[] pressure, double[] velocity) {
 		for (int f = 0; f < faceCount; f++) {
 			double value = 0; for (int i = start[f]; i < start[f + 1]; i++) if (rows[i] >= 0) value += coefficients[i] * pressure[rows[i]];

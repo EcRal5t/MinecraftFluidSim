@@ -16,12 +16,10 @@ import org.ejml.sparse.csc.factory.LinearSolverFactory_DSCC;
 
 /**
  * First-order semi-implicit drag: source slip fixes the constitutive resistance, while finite-mass
- * velocities and pressure share three sparse positive inertia factors for the whole substep.
+ * velocities share three sparse positive inertia factors before the position predictor.
  */
-final class GranularImplicitDrag implements PressureLinearSolver.Operator {
+final class GranularImplicitDrag {
 	private final FluidDomain domain;
-	private final GranularPressureCoupling pressure;
-	private PressureLinearSolver solver;
 	private final int[] offsets = new int[3];
 	private final int faceCount;
 	private AxisFactor[] factors;
@@ -37,9 +35,8 @@ final class GranularImplicitDrag implements PressureLinearSolver.Operator {
 	private int[] indices = new int[0], particle = new int[0], counts = new int[0];
 	private double[] weights = new double[0], strength = new double[0], particleResponse = new double[0];
 
-	GranularImplicitDrag(FluidDomain domain, GranularPressureCoupling pressure) {
+	GranularImplicitDrag(FluidDomain domain) {
 		this.domain = domain;
-		this.pressure = pressure;
 		offsets[1] = domain.mac.velocityX.length;
 		offsets[2] = offsets[1] + domain.mac.velocityY.length;
 		faceCount = offsets[2] + domain.mac.velocityZ.length;
@@ -82,8 +79,6 @@ final class GranularImplicitDrag implements PressureLinearSolver.Operator {
 		}
 		if (contacts == 0) return;
 		if (factors == null) factors = new AxisFactor[] {new AxisFactor(), new AxisFactor(), new AxisFactor()};
-		if (solver == null) solver = new PressureLinearSolver(domain, this);
-		solver.reset();
 		Arrays.fill(touchedFaces, false);
 		for (int contact = 0; contact < contacts; contact++) {
 			for (int slot = contact * 8; slot < contact * 8 + counts[contact]; slot++) touchedFaces[indices[slot]] = true;
@@ -98,7 +93,6 @@ final class GranularImplicitDrag implements PressureLinearSolver.Operator {
 		}
 		readVelocities(initial);
 		System.arraycopy(initial, 0, forced, 0, size);
-		pressure.addBoundaryVelocity(forced, faceCount, dt);
 		rebuildDiagonal();
 	}
 
@@ -210,54 +204,11 @@ final class GranularImplicitDrag implements PressureLinearSolver.Operator {
 
 	boolean active() { return contacts > 0; }
 
-	double parcelInertiaRatio(int parcel) {
-		if (contacts == 0 || !active[parcel]) return 1;
-		double parcelMass = mass[faceCount + 3 * parcel];
-		return parcelMass / (parcelMass + dt * dragValue[parcel]);
-	}
-	PressureProjectionResult solvePressure(double target) { return solver.solve(pressure, target); }
-	double[] pressure() { return solver.pressure(); }
-
-	@Override public void buildRhs(double[] result) {
-		Arrays.fill(result, 0);
-		// Assemble storage and advected momentum in one uniform pressure gauge.
-		System.arraycopy(forced, 0, input, 0, size);
-		responseDelta();
-		for (int index = 0; index < size; index++) delta[index] += input[index];
-		addDivergence(delta, result, -domain.config.density() / dt);
-		domain.pressureSystem.addStorageRhs(result, dt);
-	}
-
-	@Override public void applyMatrix(double[] source, double[] result) {
-		Arrays.fill(result, 0);
-		pressureVelocity(source);
-		responseDelta();
-		for (int index = 0; index < size; index++) delta[index] += input[index];
-		addDivergence(delta, result, domain.config.density());
-		for (int ordinal = 0; ordinal < domain.projection.gasUnknownCount; ordinal++) {
-			int node = domain.projection.gasUnknownNodes[ordinal], row = domain.cellCount + node;
-			result[row] += domain.projection.gasStorageCoefficient[node] * source[row];
-		}
-	}
-
-	/** Writes the final joint velocity once, without a large intermediate pressure kick. */
-	void project() {
-		pressureVelocity(solver.pressure());
-		for (int index = 0; index < size; index++) input[index] = forced[index] + dt * input[index];
-		responseDelta();
-		for (int index = 0; index < size; index++) delta[index] += input[index];
-		writeVelocities(delta, true);
-		pressure.recordBoundary((float)dt,solver.pressure());
-	}
-
-	private void pressureVelocity(double[] source) {
-		Arrays.fill(input, 0);
-		domain.pressureSystem.faces.pressureVelocity(source, input);
-		pressure.addPressureVelocity(input, faceCount, source);
-	}
-	private void addDivergence(double[] vector, double[] result, double scale) {
-		domain.pressureSystem.faces.addDivergence(vector, result, scale);
-		pressure.addVelocityDivergence(vector, faceCount, result, scale);
+	/** Finite-mass pair drag is resolved before the collision/position predictor. */
+	void project(){
+		if(!active())return;
+		System.arraycopy(forced,0,input,0,size);responseDelta();
+		for(int i=0;i<size;i++)delta[i]+=input[i];writeVelocities(delta,true);
 	}
 
 	private void readVelocities(double[] vector) {

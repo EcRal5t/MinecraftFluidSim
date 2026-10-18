@@ -24,6 +24,7 @@
     - [RegionCheckpointAssembler](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointAssembler.java)
     - [RegionCheckpointValidator](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointValidator.java)
     - [RegionCheckpointRestorer](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointRestorer.java)
+    - [PhaseOccupancyCodec](../../fabric/src/main/java/mmm/simulation/persistence/PhaseOccupancyCodec.java)：按 section 保存微盒液相占据
   - 测试选择器：`region-state`
 
 - **文件编码与双槽提交**
@@ -188,7 +189,7 @@ REMOVED HEAD 接受 old payload 尚在原 slot、payload 已移动但 quarantine
 
 - region UUID、dimension、network/checkpoint generation、origin、网格和 solver config；
 - controller footprint、运行态和区域容量预算；
-- Minecraft 对齐的 section 描述、单元液体记录、三轴 MAC 动量和 solid mask；
+- Minecraft 对齐的 section 描述、单元液体记录、微盒液相占据、三轴 MAC 动量和 solid mask；
 - 已提交 profile 要求的材料、化学、颗粒、气体、热能和 pending phase-work 载荷；
 - manifest、section 与各独立库存的总账和 CRC。
 
@@ -197,7 +198,7 @@ REMOVED HEAD 接受 old payload 尚在原 slot、payload 已移动但 quarantine
 最近真实压力投影作为待同步相变所需的运行输入，随 solver runtime 扩展保存。
 正常后端交接共享已验证的不可变单元库存与气腔几何。
 液体几何身份随快照、候选和提交传递，仅体积或分量变化才更新；内能更新保留该身份。
-冷恢复从存盘库存重新构建几何。
+冷恢复同时读取保存的相占据与单元库存，核对容量和各固定连通分量的体积后重建派生几何。
 
 ### Manifest
 
@@ -237,6 +238,11 @@ mixture = speciesHandles[], amountQuanta[], massResidualUnits   # chemistry 启�
 面归属其正侧单元所在 section；区域最外高侧面归属紧邻的内部单元。
 校验检查完整覆盖、唯一归属、有限动量以及网格形状。
 
+所有布局均保存必需的 `mmm:phase_occupancy` section 扩展。
+它按 section 单元顺序保存每格八个 binary64 液相几何体积，单位为整单元体积；每项位于 `[0, 1/8]`，固定固体微盒为零。
+每个固定开放连通分量的浮点占据之和与同分量精确库存体积一致，允许 binary64 求和与转换舍入。
+实际固体孔容在完整域恢复时共同核对；相占据随 HEAD 和 WAL 涉及的完整代次一起提交。
+
 跨 section 检查液体键唯一性、开放连通分量、逐分量容量、体积、整数质量、物种和内能总账。
 `MassEncoding` 继续绑定统一整数质量尺度，section 和 manifest 的规范校验和覆盖原始记录。
 头部保留的 `markerCount` 方法名表示液体库存记录数，容量预留字段沿用区域配额；液体点样本由库存派生。
@@ -246,7 +252,7 @@ mixture = speciesHandles[], amountQuanta[], massResidualUnits   # chemistry 启�
 `mmm:solver_runtime` 扩展保存封闭模式、化学轮转与待处理格、床层调度、热边界和最近真实压力场等运行输入。
 这些数据随正常 HEAD、容器 WAL 涉及的区域代次和上一代恢复采用同一解码链。
 
-冷恢复直接生成 `LiquidCellInventory.Snapshot`、`MacMomentumState` 和 `ThermalOwnerSnapshot`，
+冷恢复直接生成 `LiquidCellInventory.Snapshot`、`PhaseOccupancyState`、`MacMomentumState` 和 `ThermalOwnerSnapshot`，
 再由 `RegionCheckpointRestorer.reconstructAuthoritativeState` 形成完整 `FluidDomainState`。
 材料与物种索引按该代 palette 和已提交 world registry 校验后绑定。
 派生点样本的导出接口按需要生成观察数据。
@@ -331,7 +337,7 @@ checkpoint 捕获读取已提交的同代单元库存、固体占容、气腔归
 捕获期间拒绝尚未结束的碰撞事务。
 
 普通后端交接保存不可变液体行和几何引用，并使用独立网络快照与动量列建立私有候选。
-冷恢复验证保存的支撑与容量，从实际库存重建派生几何，再核对气腔归属、状态方程和全部审计。
+冷恢复验证保存的支撑、相占据与容量，从同代相占据重建派生几何，再核对气腔归属、状态方程和全部审计。
 恢复失败保留原 HEAD 与活动状态，详细格式见[气体状态](gas-state.md)。
 
 ## 故障、清理与删除
@@ -345,7 +351,7 @@ checkpoint 捕获读取已提交的同代单元库存、固体占容、气腔归
 普通 checkpoint 不删除上一完整 slot，因为它既是原子覆盖的另一半，也是显式 recoverprevious 的唯一候选。清理逻辑绝不能触碰 HEAD 当前指向的 slot。
 
 气体区域载荷保存完整 `8N` 微盒归属主列 `pieceNodeOrdinal`，按全域 minimum-piece key 规范节点排序并随 section 拆分、组装。
-section 保留全域节点编号并校核 `sealedPieceCount`；恢复从单元液体库存与固体几何重新生成微盒归属与容量，核对库存和热能的同序绑定。
+section 保留全域节点编号并校核 `sealedPieceCount`；恢复从保存的相占据与固体几何生成微盒容量，核对气腔归属、库存和热能的同序绑定。
 具体格式见 [气体状态](gas-state.md)。
 
 化学 registry 与区域 manifest 的 `QuantaPerMol` 固定为 1000000，化学指纹覆盖 kg/mol 与 mol/m³ 定义。

@@ -1,6 +1,7 @@
 package mmm.fluid;
 
 import mmm.inventory.LiquidCellInventory;
+import mmm.inventory.PhaseOccupancyState;
 
 /**
  * Public bounded-domain aggregate. Implementation ownership is partitioned by the superclass chain.
@@ -19,8 +20,24 @@ public final class FluidDomain extends FluidDomainGasAndGranular {
 
 	public LiquidCellInventory.Snapshot exportLiquidCellState() { return liquidCells.snapshot(); }
 
+	void ensurePhaseOccupancy() { PhaseOccupancyTransport.ensure(this); }
+
+	public PhaseOccupancyState exportPhaseOccupancyState() {
+		ensurePhaseOccupancy();
+		return phaseOccupancy;
+	}
+
+	/** Restores saved spatial occupancy against the already restored inventory and solid pore. */
+	public void restorePhaseOccupancyState(PhaseOccupancyState state) {
+		if(gasState.frame!=null)throw new IllegalStateException("Phase occupancy restore requires an uninitialized gas topology");
+		PhaseOccupancyTransport.requireCurrentGeometry(this,state);
+		phaseOccupancy=state;
+		gridDirty=pressureGeometryDirty=velocityGridDirty=true;
+	}
+
 	/** Cold inventory restore validates actual collision support and joint capacity before adoption. */
 	public void restoreLiquidCellState(LiquidCellInventory.Snapshot state, mmm.chemistry.ChemicalRegistry chemistry) {
+		if(gasState.frame!=null)throw new IllegalStateException("Liquid inventory restore requires an uninitialized gas topology");
 		if (state == null || state.cellCount() != cellCount) throw new IllegalArgumentException("Liquid inventory shape differs from domain");
 		var candidate = new LiquidCellInventory(state, chemistry);
 		for (int cell = 0; cell < cellCount; cell++) {
@@ -36,6 +53,7 @@ public final class FluidDomain extends FluidDomainGasAndGranular {
 				throw new IllegalArgumentException("Liquid inventory exceeds joint cell capacity at " + cell);
 		}
 		liquidCells = candidate;
+		phaseOccupancy=null;
 		markCellInventoryChanged();
 	}
 

@@ -32,23 +32,28 @@ public final class FlipFluidFreeSurfaceValidation {
 	}
 
 	private static void liquidGeometryRetainsInventoryAndOpenSupport() {
-		for (int mask : new int[]{0, 0xAA, 0xFE}) {
-			var domain = new FluidDomain(3,3,3,strictConfig());
-			int cell = domain.cellIndex(1,1,1);
+		for(int mask:new int[]{0,0xAA,0xFE})for(double fill:new double[]{Math.scalb(1.0,-25),.0625,.125}) {
+			var domain=new FluidDomain(3,3,3,strictConfig());int cell=domain.cellIndex(1,1,1);
 			domain.geometry.cutCells.replaceMask(cell,mask);
-			for (double fill : new double[]{Math.scalb(1.0,-25),.0625,.125}) {
-				double[] volume = new double[27]; volume[cell]=fill;
-				var phase = new FlipPressurePhaseGeometry(3,3,3);
-				phase.rebuild(new boolean[27],volume,domain.geometry.cutCells,null,new boolean[27]);
-				double[] integral=new double[4];
-				new LiquidFluxGeometry(domain.geometry.cutCells).sweptMoments(cell,14,0,1,true,
-						phase.planeNormal(cell,0),phase.planeNormal(cell,1),phase.planeNormal(cell,2),phase.planeOffset(cell),integral);
-				check(Math.abs(integral[0]-fill)<2e-14,"Cell geometry changed retained liquid volume");
-				for(int axis=0;axis<3;axis++) {
-					double centre=integral[axis+1]/integral[0]+.5;
-					check(centre>=0&&centre<=1,"Liquid centroid escaped its cell support");
-				}
+			int support=(~mask)&255;
+			var stock=new mmm.inventory.LiquidCellInventory.Stock(new mmm.inventory.LiquidCellInventory.Key(cell,0,support),
+					SignedDyadic.of(fill),domain.unitScale.massUnitsForNormalized(1000*fill),null,0,false);
+			domain.liquidCells.planAdditions(List.of(stock)).commit();domain.markCellInventoryChanged();domain.ensurePressureGeometry();
+			var occupancy=domain.exportPhaseOccupancyState();double liquid=0;
+			for(int micro=0;micro<8;micro++) {
+				double amount=occupancy.liquidVolume(8*cell+micro);
+				check(amount>=0&&amount<=.125&&((mask&1<<micro)==0||amount==0),
+						"Liquid occupation left its actual open micro support");
+				check(Math.abs(.125*domain.pressurePhaseGeometry.liquidFractionExact(cell,micro)-amount)<2e-14,
+						"Prepared phase geometry changed saved liquid occupation");
+				liquid+=amount;
 			}
+			check(Math.abs(liquid-fill)<2e-14&&domain.liquidCells.exactCellVolume(cell).equals(SignedDyadic.of(fill)),
+					"Phase geometry changed retained liquid volume");
+			double dry=domain.gasState.frame.geometry().pieces().stream().filter(piece->piece.id()/8==cell)
+					.mapToDouble(GasComplementGeometry.Piece::normalizedVolume).sum();
+			check(Math.abs(liquid+dry-Integer.bitCount(support)*.125)<2e-14,
+					"Liquid and gas occupation failed to fill actual fixed pore capacity");
 		}
 	}
 

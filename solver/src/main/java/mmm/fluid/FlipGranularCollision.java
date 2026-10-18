@@ -14,7 +14,7 @@ import java.util.Arrays;
 import java.util.function.IntToLongFunction;
 import java.util.function.Predicate;
 
-/** Collision-resolved granular motion preview from pressure-corrected velocities, committed after liquid advection. */
+/** Collision-resolved position endpoint, with velocity publication before pressure and joint position commit. */
 final class FlipGranularCollision {
 	private final int sizeX, sizeY, sizeZ;
 	private final float cellSize;
@@ -28,7 +28,7 @@ final class FlipGranularCollision {
 	private int previewCount;
 	private long previewRevision;
 	private GranularParcelStore previewSource;
-	private boolean previewReady;
+	private boolean previewReady,velocitiesPublished;
 	private int lastCapacityHeld;
 	private double lastMaximumPositionCorrection, lastPositionCorrectionMassY;
 
@@ -51,7 +51,7 @@ final class FlipGranularCollision {
 	}
 
 	void preview(GranularParcelStore parcels, GranularRegistry registry, float dt, float courant) {
-		previewReady = false;
+		previewReady = false;velocitiesPublished=false;
 		if (!(Float.isFinite(dt) && dt > 0.0F)) throw new IllegalArgumentException("Granular preview dt is invalid");
 		previewCount = parcels.count();
 		previewRevision = parcels.mutationRevision();
@@ -208,23 +208,6 @@ final class FlipGranularCollision {
 		return new GranularCouplingFields.Position(nextX[index], nextY[index], nextZ[index], nextCeilMask[index]);
 	}
 
-	/** Selects the whole endpoint allocation; failed fixed-liquid plans leave every preview mask unchanged. */
-	GranularIntegerAllocation.Result planFixedLiquidCapacity(GranularParcelStore parcels,
-			GranularCouplingFields current, IntToLongFunction capacity) {
-		if (parcels.count() != previewCount) throw new IllegalStateException("Granular parcel count changed during preview");
-		requireSourceRevision(parcels);
-		long[] fixed = current.copySolidSvq();
-		for (int index = 0; index < previewCount; index++) {
-			var p = parcels.parcel(index);
-			current.removePlannedParcel(fixed, new GranularCouplingFields.Position(p.x(), p.y(), p.z(), p.ceilMask()), p.solidVolumeSvq());
-		}
-		var result = GranularIntegerAllocation.plan(kernel, parcels, this::previewPosition, fixed,
-				capacity, GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP);
-		if (result.status() == GranularIntegerAllocation.Status.FEASIBLE)
-			System.arraycopy(result.masks(), 0, nextCeilMask, 0, previewCount);
-		return result;
-	}
-
 	/**
 	 * Resolves exact cell capacity per representative parcel. A failed candidate remains at its current
 	 * position without cancelling unrelated motion; bounded retry passes allow vacated cells to propagate
@@ -290,24 +273,25 @@ final class FlipGranularCollision {
 	/** Momentum received by the fixed geometry and capacity constraints, in kg m/s. */
 	record BoundaryImpulse(double x, double y, double z) { }
 
-	BoundaryImpulse commit(GranularParcelStore parcels) {
-		if (parcels.count() != previewCount) throw new IllegalStateException("Granular parcel count changed during preview");
-		requireSourceRevision(parcels);
-		requirePairEndpoints(parcels);
-		double impulseX = 0, impulseY = 0, impulseZ = 0;
-		for (int index = 0; index < previewCount; index++) {
-			GranularParcelStore.Parcel parcel = parcels.parcel(index);
-			impulseX += parcel.mass() * ((double) parcel.velocityX() - nextVelocityX[index]);
-			impulseY += parcel.mass() * ((double) parcel.velocityY() - nextVelocityY[index]);
-			impulseZ += parcel.mass() * ((double) parcel.velocityZ() - nextVelocityZ[index]);
-			parcels.overwrite(index, new GranularParcelStore.Parcel(nextX[index], nextY[index], nextZ[index],
-					nextVelocityX[index], nextVelocityY[index], nextVelocityZ[index], parcel.solidVolumeSvq(),
-					parcel.massUnits(), parcel.materialHandle(), parcel.solidCompositionHandle(),
-					nextContactAge[index], nextFlags[index], nextCeilMask[index]));
+	BoundaryImpulse publishVelocities(GranularParcelStore parcels){
+		requireSourceRevision(parcels);double x=0,y=0,z=0;
+		for(int i=0;i<previewCount;i++){
+			var p=parcels.parcel(i);x+=p.mass()*(p.velocityX()-(double)nextVelocityX[i]);
+			y+=p.mass()*(p.velocityY()-(double)nextVelocityY[i]);z+=p.mass()*(p.velocityZ()-(double)nextVelocityZ[i]);
+			parcels.overwrite(i,new GranularParcelStore.Parcel(p.x(),p.y(),p.z(),nextVelocityX[i],nextVelocityY[i],nextVelocityZ[i],p.solidVolumeSvq(),p.massUnits(),p.materialHandle(),p.solidCompositionHandle(),p.contactAge(),p.flags(),p.ceilMask()));
 		}
-		previewCount = 0;
-		previewReady = false;
-		return new BoundaryImpulse(impulseX, impulseY, impulseZ);
+		velocitiesPublished=true;return new BoundaryImpulse(x,y,z);
+	}
+	BoundaryImpulse commit(GranularParcelStore parcels) {
+		if(parcels!=previewSource||parcels.count()!=previewCount||!previewReady)throw new IllegalStateException("Granular position preview changed");
+		if(!velocitiesPublished){requireSourceRevision(parcels);requirePairEndpoints(parcels);}
+		double x=0,y=0,z=0;
+		for(int i=0;i<previewCount;i++){
+			var p=parcels.parcel(i);float vx=velocitiesPublished?p.velocityX():nextVelocityX[i],vy=velocitiesPublished?p.velocityY():nextVelocityY[i],vz=velocitiesPublished?p.velocityZ():nextVelocityZ[i];
+			x+=p.mass()*(p.velocityX()-(double)vx);y+=p.mass()*(p.velocityY()-(double)vy);z+=p.mass()*(p.velocityZ()-(double)vz);
+			parcels.overwrite(i,new GranularParcelStore.Parcel(nextX[i],nextY[i],nextZ[i],vx,vy,vz,p.solidVolumeSvq(),p.massUnits(),p.materialHandle(),p.solidCompositionHandle(),nextContactAge[i],nextFlags[i],nextCeilMask[i]));
+		}
+		previewCount=0;previewReady=false;velocitiesPublished=false;return new BoundaryImpulse(x,y,z);
 	}
 
 	private void requireSourceRevision(GranularParcelStore parcels) {

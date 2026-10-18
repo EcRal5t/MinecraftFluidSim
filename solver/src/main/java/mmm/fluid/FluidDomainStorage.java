@@ -1,6 +1,7 @@
 package mmm.fluid;
 
 import mmm.inventory.LiquidCellInventory;
+import mmm.inventory.PhaseOccupancyState;
 
 import mmm.thermal.ThermalDomainState;
 import mmm.thermal.ThermalCarrierContext;
@@ -59,6 +60,7 @@ abstract class FluidDomainStorage {
 	boolean liquidPairTensionActive;
 
 	LiquidCellInventory liquidCells;
+	PhaseOccupancyState phaseOccupancy;
 	long carrierMutationRevision;
 	FluidMaterialRegistry materialRegistry;
 	/** World material properties (temperature-dependent viscosity and pair tensions); bound independently of granular state. */

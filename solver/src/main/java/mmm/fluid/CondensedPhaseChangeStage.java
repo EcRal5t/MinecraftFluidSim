@@ -36,25 +36,53 @@ final class CondensedPhaseChangeStage {
 		if(thermal==null) throw new IllegalStateException("Condensed phase requires thermal inventory");
 		if(maximumOperations<0||maximumOperations>ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) throw new IllegalArgumentException("Invalid phase operation budget");
 		if(maximumOperations==0) return new FluidDomain.ThermalPhaseStats(0,0,0,0);
-		support.prepareGranularOccupancy();
 		if(!phaseGridPrepared) thermal.preparePhaseScan(support.state().thermalMarkers());
 		var store=support.liquidCells();var function=new ThermalStateFunction(thermal.registry());
 		var selectedCells=new TreeSet<Integer>();
-		for(var stock:store.physicalStocks()) selectedCells.add(stock.key().cell());
 		var originalGroups=thermal.coherentPhases().snapshot();
-		for(var group:originalGroups) selectedCells.add(group.cell());
-		var captured=thermal.preparePhaseCandidateCells(selectedCells.stream().mapToInt(Integer::intValue).toArray(),support.state().thermalMarkers());
-		var selected=new TreeMap<Integer,Proposal>();
+		var temperatureRange=thermal.observedCarrierTemperatureRange();
+		record Candidate(int cell,int liquid,ThermalPhaseTransition transition) { }
+		var candidates=new ArrayList<Candidate>();
 		for(var transition:thermal.registry().transitions()) {
 			if(transition.interfaceRequirement()!=ThermalPhaseTransition.InterfaceRequirement.NONE) continue;
 			int lower=thermal.registry().materialHandle(transition.lowerEnergyMaterialId()),upper=thermal.registry().materialHandle(transition.upperEnergyMaterialId());
 			if(thermal.registry().material(lower).carrierKind()!=ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID
 					||thermal.registry().material(upper).carrierKind()!=ThermalMaterialDefinition.CarrierKind.LIQUID) continue;
 			int liquid=support.fluidMaterialHandle(thermal.registry().material(upper).carrierId());
-			for(int cell:selectedCells) {
-				var proposal=propose(cell,liquid,transition,captured[cell],function,maximumOperations);
-				if(proposal!=null&&(selected.get(cell)==null||proposal.score>selected.get(cell).score)) selected.put(cell,proposal);
+			boolean hasLiquid=store.hasMaterial(liquid),hasCoherent=false;
+			for(var group:originalGroups) if(group.phaseId().equals(transition.lowerEnergyMaterialId())) { hasCoherent=true;break; }
+			if(!hasLiquid&&!hasCoherent) continue;
+			double equilibrium=transition.equilibriumCurve().getFirst().temperatureK();
+			boolean constant=true;
+			for(var point:transition.equilibriumCurve()) if(point.temperatureK()!=equilibrium) { constant=false;break; }
+			if(constant&&temperatureRange!=null
+					&&(!hasLiquid||temperatureRange.minimumK()>=equilibrium)
+					&&(!hasCoherent||temperatureRange.maximumK()<=equilibrium)) continue;
+			var possible=new TreeSet<Integer>();
+			var liquidSupports=new TreeMap<Integer,Integer>();
+			for(var stock:store.physicalStocks()) if(stock.key().material()==liquid&&!stock.indicator())
+				liquidSupports.merge(stock.key().cell(),stock.key().supportMask(),(a,b)->a|b);
+			for(var entry:liquidSupports.entrySet()) {
+				int cell=entry.getKey();
+				double pressure=Math.max(0,AirNetwork.REFERENCE_PRESSURE+support.liquidPressureAt(cell,entry.getValue()));
+				if(thermal.phaseScanTemperatureInCell(cell)<transition.equilibriumTemperatureK(pressure)) possible.add(cell);
 			}
+			for(var group:originalGroups) if(group.phaseId().equals(transition.lowerEnergyMaterialId())) {
+				int cell=group.cell(),liquidSupport=0;
+				for(var stock:store.physicalStocksInCell(cell)) if(stock.key().material()==liquid&&!stock.indicator()) liquidSupport|=stock.key().supportMask();
+				if(liquidSupport==0) liquidSupport=~support.state().geometry().cutCells.mask(cell)&255;
+				double pressure=Math.max(0,AirNetwork.REFERENCE_PRESSURE+support.liquidPressureAt(cell,liquidSupport));
+				if(thermal.phaseScanTemperatureInCell(cell)>transition.equilibriumTemperatureK(pressure)) possible.add(cell);
+			}
+			for(int cell:possible) { selectedCells.add(cell);candidates.add(new Candidate(cell,liquid,transition)); }
+		}
+		if(candidates.isEmpty()) return new FluidDomain.ThermalPhaseStats(0,0,0,0);
+		support.prepareGranularOccupancy();
+		var captured=thermal.preparePhaseCandidateCells(selectedCells.stream().mapToInt(Integer::intValue).toArray(),support.state().thermalMarkers());
+		var selected=new TreeMap<Integer,Proposal>();
+		for(var candidate:candidates) {
+			var proposal=propose(candidate.cell(),candidate.liquid(),candidate.transition(),captured[candidate.cell()],function,maximumOperations);
+			if(proposal!=null&&(selected.get(candidate.cell())==null||proposal.score>selected.get(candidate.cell()).score)) selected.put(candidate.cell(),proposal);
 		}
 		long desired=0;for(var proposal:selected.values()) desired+=proposal.batches;
 		if(desired==0) return new FluidDomain.ThermalPhaseStats(0,0,0,0);
@@ -84,6 +112,7 @@ final class CondensedPhaseChangeStage {
 		}
 		if(remaining.signum()!=0) throw new IllegalStateException("Frozen liquid kinetic energy lacks a coherent receiver");
 		for(int cell:heat.keySet()) futureCells.putIfAbsent(cell,store.stocksInCell(cell));
+		captured=thermal.preparePhaseCandidateCells(futureCells.keySet().stream().mapToInt(Integer::intValue).toArray(),support.state().thermalMarkers());
 		SignedDyadic mechanicalHeat=SignedDyadic.ZERO;for(var value:heat.values()) mechanicalHeat=mechanicalHeat.add(value);
 		var trials=new ArrayList<ThermalDomainState.PhaseCellTrial>();int[] counts=new int[futureCells.size()];int index=0;
 		for(var entry:futureCells.entrySet()) {

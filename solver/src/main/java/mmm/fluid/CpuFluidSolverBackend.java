@@ -11,7 +11,7 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 	private static final int MAXIMUM_TIME_REFINEMENTS = 16;
 	/**
 	 * Mechanical substeps one complete candidate may spend in total. Every time refinement doubles
-	 * the substep count and the CFL count itself is unbounded, so counting attempts alone leaves a
+	 * the substep count and granular displacement may require many substeps, so counting attempts alone leaves a
 	 * synchronous request able to occupy the server thread for far longer than one step budget.
 	 */
 	public static final long MAXIMUM_CUMULATIVE_SUBSTEPS = 4096L;
@@ -59,7 +59,7 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 		}
 	}
 
-	/** Refinement halves the attempted step, including a larger initial CFL count. */
+	/** Refinement halves the attempted granular-motion interval. */
 	static int refinedSubsteps(int attempted, MechanicalTimeRefinement finer) {
 		return Math.max(Math.multiplyExact(attempted, 2), finer.minimumSubsteps);
 	}

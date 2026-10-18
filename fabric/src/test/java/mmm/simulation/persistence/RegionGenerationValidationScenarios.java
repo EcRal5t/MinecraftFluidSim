@@ -10,6 +10,8 @@ import mmm.model.region.RegionStateLayout;
 
 import mmm.application.RegionCatalog;
 import mmm.fluid.FlipParticleState;
+import mmm.fluid.FluidDomainStateAssertions;
+import mmm.fluid.air.BuiltinGasDefinitions;
 import mmm.simulation.FluidRegion;
 import mmm.simulation.FluidRegionLifecycle;
 import mmm.simulation.FluidRegionManager;
@@ -34,6 +36,7 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		Path root = Files.createTempDirectory(Path.of("."), "roundtrip-");
 		FluidRegion region = populatedRegion(new UUID(11L, 12L));
 		FlipParticleState before = region.domain().exportParticleState();
+		var authoritativeBefore=region.domain().captureAuthoritativeState();
 		RegionState state = RegionCheckpointFixtures.capture(region, 1L);
 		require(state.sections().size() == 4, "cross-chunk controller was not split into four complete sections");
 		RegionGenerationStore files = new RegionGenerationStore(root);
@@ -42,8 +45,10 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		require(manifest.totalMarkerCount() == before.particleCount()
 				&& Float.floatToRawIntBits((float) manifest.totalVolume()) == Float.floatToRawIntBits(before.totalVolume()),
 				"manifest did not retain the exact marker ledger");
-		FlipParticleState after = restorer(files.read(region.id())).reconstruct();
+		var committed=files.read(region.id());
+		FlipParticleState after = restorer(committed).reconstruct();
 		assertParticleStateEquals(before, after);
+		var authoritativeAfter=restorer(committed).reconstructAuthoritativeState(null,null,null,BuiltinGasDefinitions.createRegistry(),null);
 		FluidRegion startupMetadata = FluidRegion.unloaded(manifest.regionId(), DIMENSION,
 				MinecraftRegionCheckpointSource.blockPosition(manifest.origin()), manifest.sizeX(),
 				manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(), manifest.reservedMarkerCapacity(),
@@ -61,18 +66,20 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		require(!region.solverLoaded() && region.lifecycle().state() == FluidRegionLifecycle.State.UNLOADED,
 				"released region did not become metadata-only UNLOADED");
 		require(manager.usage().equals(reserved), "UNLOADED region escaped its hard reservation budget");
-		region.restoreSolver(after, 1L);
+		region.restoreAuthoritativeSolver(authoritativeAfter, 1L);
 		require(region.solverLoaded() && region.lifecycle().operatorPaused() && region.collisionRefreshRequired(),
 				"restore bypassed operator pause or current-world collision refresh");
 		assertParticleStateEquals(before, region.domain().exportParticleState());
+		FluidDomainStateAssertions.assertSameDurableState(authoritativeBefore,region.domain().captureAuthoritativeState(),"Region cold restore");
 		for (long generation = 2L; generation <= 4L; generation++) {
 			RegionState repeated = RegionCheckpointFixtures.capture(region, generation);
 			files.publish(repeated);
 			require(region.recordPublishedCheckpoint(generation), "repeated checkpoint was not recorded");
 			require(region.releaseSolverAfterCheckpoint(generation), "repeated unload was rejected");
-			FlipParticleState restored = restorer(files.read(region.id())).reconstruct();
-			region.restoreSolver(restored, generation);
+			var restored=restorer(files.read(region.id())).reconstructAuthoritativeState(null,null,null,BuiltinGasDefinitions.createRegistry(),null);
+			region.restoreAuthoritativeSolver(restored, generation);
 			assertParticleStateEquals(before, region.domain().exportParticleState());
+			FluidDomainStateAssertions.assertSameDurableState(authoritativeBefore,region.domain().captureAuthoritativeState(),"Repeated region cold restore");
 		}
 	}
 

@@ -29,6 +29,9 @@ final class ThermalCellOperations {
 	private final LiquidEnergyColumn liquid;
 	private final GranularEnergyState granular;
 	private final GasEnergyStore gas;
+	private ThermalDomainState.Revision preparedPhaseRevision, preparedCandidatesRevision;
+	private ThermalCarrierContext preparedPhaseOwners, preparedCandidatesOwners;
+	private ThermalDomainState.PhaseCandidateCell[] preparedCandidates;
 
 	ThermalCellOperations(
 			ThermalRegistry registry, ThermalStateFunction stateFunction, SolverUnitScale unitScale,
@@ -212,7 +215,12 @@ final class ThermalCellOperations {
 		return cellGrid.occupied(cell) ? cellGrid.temperature(cell) : Double.NaN;
 	}
 
-	void preparePhaseScan(ThermalCarrierContext markers) { cellGrid.rebuild(carrierAccess(markers)); }
+	void preparePhaseScan(ThermalCarrierContext markers, ThermalDomainState.Revision revision) {
+		if (preparedPhaseOwners == markers && revision.equals(preparedPhaseRevision)) return;
+		cellGrid.rebuild(carrierAccess(markers));
+		preparedPhaseOwners = markers;
+		preparedPhaseRevision = revision;
+	}
 
 	double phaseScanTemperatureInCell(int cell) {
 		if (cell < 0 || cell >= cellGrid.cellCount()) {
@@ -266,42 +274,24 @@ final class ThermalCellOperations {
 	}
 
 
-	ThermalDomainState.PhaseCandidateCell preparePhaseCandidateCell(int cell, ThermalCarrierContext markers,
-			ThermalDomainState owner, ThermalDomainState.Revision revision) {
-		if (cell < 0 || cell >= cellGrid.cellCount() || markers == null) {
-			throw new IllegalArgumentException("Thermal phase candidate cell is invalid");
-		}
-		SignedDyadic cellEnergy = cellGrid.exactCarrierEnergyInCell(cell);
-		ArrayList<ThermalStateFunction.InventoryPortion> unchangedSolids = new ArrayList<>();
-		for (CoherentPhaseStore.Group group : granular.coherentPhases().snapshot()) if (group.cell() == cell) {
-			unchangedSolids.add(new ThermalStateFunction.InventoryPortion(
-					registry.materialHandle(group.phaseId()), group.mass(),
-					group.composition() == null ? Map.of() : group.composition().stableAmounts()));
-		}
-		for (int active = 0; active < markers.activeParcelCount(); active++) {
-			if (markers.activeParcelCell(active) == cell) granular.addGranularPortion(unchangedSolids,
-					markers.activeParcelMaterial(active), markers.activeParcelMass(active),
-					markers.solidComposition(markers.activeParcelComposition(active)));
-		}
-		for (GranularEnergyColumn.DepositKey key : markers.depositKeys(cell)) {
-			granular.addGranularPortion(unchangedSolids, key.materialHandle(), markers.depositMass(key),
-					markers.solidComposition(key.compositionHandle()));
-		}
-		return new ThermalDomainState.PhaseCandidateCell(owner, revision, cell, cellEnergy, unchangedSolids, prepareInventory(unchangedSolids).owners());
-	}
 	ThermalDomainState.PhaseCandidateCell[] preparePhaseCandidateCells(int[] cells, ThermalCarrierContext markers,
 			ThermalDomainState owner, ThermalDomainState.Revision revision) {
-		int count=cellGrid.cellCount(); boolean[] selected=new boolean[count];
+		preparePhaseScan(markers, revision);
+		int count=cellGrid.cellCount();
+		if (preparedCandidatesOwners != markers || !revision.equals(preparedCandidatesRevision)) {
+			preparedCandidates = new ThermalDomainState.PhaseCandidateCell[count];
+			preparedCandidatesOwners = markers;
+			preparedCandidatesRevision = revision;
+		}
+		cells = Arrays.stream(cells).filter(cell -> preparedCandidates[cell] == null).distinct().toArray();
+		if (cells.length == 0) return preparedCandidates;
+		boolean[] selected=new boolean[count];
 		@SuppressWarnings("unchecked") var solids=(ArrayList<ThermalStateFunction.InventoryPortion>[])new ArrayList<?>[count];
 		SignedDyadic[] energies=new SignedDyadic[count];
 		for(int cell:cells) {
 			if(cell<0||cell>=count||selected[cell]) throw new IllegalArgumentException("Invalid repeated phase batch cell");
-			selected[cell]=true; solids[cell]=new ArrayList<>(); energies[cell]=SignedDyadic.ZERO;
-		}
-		var current=carrierAccess(markers);
-		for(int carrier=0;carrier<current.carrierCount();carrier++) {
-			int cell=current.cell(carrier);
-			if(selected[cell]) energies[cell]=energies[cell].add(current.exactInternalEnergy(carrier));
+			selected[cell]=true; solids[cell]=new ArrayList<>();
+			energies[cell]=cellGrid.exactCarrierEnergyInCell(cell);
 		}
 		for(var group:granular.coherentPhases().snapshot()) if(selected[group.cell()])
 			solids[group.cell()].add(new ThermalStateFunction.InventoryPortion(registry.materialHandle(group.phaseId()),group.mass(),
@@ -313,9 +303,8 @@ final class ThermalCellOperations {
 		}
 		for(var key:markers.depositKeys()) if(selected[key.cell()]) granular.addGranularPortion(solids[key.cell()],key.materialHandle(),
 				markers.depositMass(key),markers.solidComposition(key.compositionHandle()));
-		var result=new ThermalDomainState.PhaseCandidateCell[count];
-		for(int cell:cells) result[cell]=new ThermalDomainState.PhaseCandidateCell(owner,revision,cell,energies[cell],solids[cell],prepareInventory(solids[cell]).owners());
-		return result;
+		for(int cell:cells) preparedCandidates[cell]=new ThermalDomainState.PhaseCandidateCell(owner,revision,cell,energies[cell],solids[cell],prepareInventory(solids[cell]).owners());
+		return preparedCandidates;
 	}
 
 	record PhaseCellAssignment(int cell, ThermalCellEnergyAssignment.Plan raw,

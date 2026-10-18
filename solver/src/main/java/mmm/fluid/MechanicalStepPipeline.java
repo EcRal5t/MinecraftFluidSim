@@ -16,20 +16,18 @@ final class MechanicalStepPipeline {
 	enum Stage {
 		IDLE, GRID_REBUILD, GAS_TOPOLOGY, CARRIER_PROPERTIES, GRANULAR_PREDICTION,
 		POROUS_DAMPING, SOLID_FACE_CONSTRAINT, VISCOSITY, GRAVITY, THERMAL_BUOYANCY,
-		SURFACE_TENSION, PRESSURE_SOLVE, PRESSURE_PUBLICATION, PROJECTED_COURANT,
+		SURFACE_TENSION, PRESSURE_SOLVE, PRESSURE_PUBLICATION,
 		GRANULAR_COLLISION_PREVIEW, ADVECTION, GRANULAR_COLLISION_COMMIT, COMPLETE
 	}
 	private Stage diagnosticStage = Stage.IDLE;
 	Stage diagnosticStage() { return diagnosticStage; }
 	record Workspace(
-			GasTopologyCoordinator gasTopology, MacVelocityGrid mac,
-			PendingPhaseVolumeWork pendingPhaseVolume, FluidSolverConfig config
+			GasTopologyCoordinator gasTopology, PendingPhaseVolumeWork pendingPhaseVolume
 	) { }
 
 	interface Access {
 		void ensureGrid();
 		void prepareCarrierProperties();
-		double projectedCourant(float dt);
 		double gridAndGranularKineticEnergyJoules();
 		double carrierKineticEnergyJoules();
 		double granularKineticEnergyJoules();
@@ -78,7 +76,6 @@ final class MechanicalStepPipeline {
 		}
 		diagnosticStage = Stage.CARRIER_PROPERTIES;
 		access.prepareCarrierProperties();
-		MacVelocityGrid mac = state.mac;
 		diagnosticStage = Stage.GRANULAR_PREDICTION;
 		GranularMechanics.StepStats granularMechanics = granularMechanicalStage.predictVelocities(dt);
 		double nextKineticEnergy = captureAudit ? access.gridAndGranularKineticEnergyJoules() : 0.0;
@@ -138,16 +135,17 @@ final class MechanicalStepPipeline {
 			audit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
+		pressureStage.predictDrag(dt);
+		diagnosticStage = Stage.GRANULAR_COLLISION_PREVIEW;
+		granularMechanicalStage.previewCollision(dt);
+		granularMechanicalStage.publishCollisionVelocities();
 		diagnosticStage = Stage.PRESSURE_SOLVE;
 		pressureStage.solve(dt);
 		int pressureIterations = access.lastPressureIterations();
 		boolean phaseGeometryPending = substep == 0 && state.pendingPhaseVolume.hasWork();
 		diagnosticStage = Stage.PRESSURE_PUBLICATION;
 		pressureStage.projectVelocities(dt);
-		diagnosticStage = Stage.GRANULAR_COLLISION_PREVIEW;
-		granularMechanicalStage.previewCollision(dt);
 		cellMac.prepareTransport(dt);
-		validateProjectedCourant(dt);
 		granularMechanicalStage.validateVelocities();
 		pressureIterations = access.lastPressureIterations();
 		if (captureAudit) {
@@ -176,15 +174,6 @@ final class MechanicalStepPipeline {
 		if (captureAudit) audit.volumeTransportTransferJoules += access.carrierKineticEnergyJoules() - beforeTransport;
 		diagnosticStage = Stage.COMPLETE;
 		return new SubstepOutcome(pressureIterations, granularMechanics, phaseGeometryPending, viscosity, transport);
-	}
-
-	/** Pressure can accelerate a resting liquid beyond the initial flow estimate. */
-	private void validateProjectedCourant(float dt) {
-		diagnosticStage = Stage.PROJECTED_COURANT;
-		double courant = access.projectedCourant(dt);
-		if (courant > 1 + 8 * Math.ulp(1.0)) {
-			throw new MechanicalTimeRefinement((int) Math.ceil(courant * state.config.timeStep() / dt),"Connected liquid donor Courant "+courant);
-		}
 	}
 
 }

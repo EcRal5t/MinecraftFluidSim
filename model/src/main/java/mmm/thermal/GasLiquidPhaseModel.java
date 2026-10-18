@@ -67,6 +67,14 @@ public final class GasLiquidPhaseModel {
 		return inverse > 0 ? 1 / inverse : Double.POSITIVE_INFINITY;
 	}
 
+	/** Local Clausius slope for a finite-heat-capacity phase exchange at the current temperature. */
+	public double saturationSlopePaPerKelvin(ThermalPhaseTransition transition, double temperatureK,
+	                                       double saturationPressurePa) {
+		PhasePair pair = requirePair(transition);
+		return saturationPressurePa * (pair.latentEnthalpyPerMass() / pair.gasConstantPerMass())
+				/ temperatureK / temperatureK;
+	}
+
 	private static Saturation saturation(PhasePair pair,
 	                                    double liquidTemperatureK, double partial) {
 		pair.liquid().specificHeatAt(liquidTemperatureK);

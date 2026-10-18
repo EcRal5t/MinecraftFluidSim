@@ -13,8 +13,11 @@ final class PressureLinearSolver {
 	private final PressurePreconditioner preconditioner;
 	private double[] pressure = new double[0], rhs = new double[0], residual = new double[0], direction = new double[0];
 	private double[] product = new double[0], diagonal = new double[0], preconditioned = new double[0];
-	private int[] unknowns = new int[0];
-	private int count;
+	private int[] unknowns = new int[0], freeUnknowns = new int[0];
+	private boolean[] bounded = new boolean[0], free = new boolean[0];
+	private int count, freeCount;
+	private boolean freshlyReset;
+	private static final double VACUUM_LOWER = -mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE;
 
 	PressureLinearSolver(FluidDomain domain, Operator operator) {
 		this.domain = domain;
@@ -28,111 +31,122 @@ final class PressureLinearSolver {
 		pressure = Arrays.copyOf(pressure, size); rhs = Arrays.copyOf(rhs, size); residual = Arrays.copyOf(residual, size);
 		direction = Arrays.copyOf(direction, size); product = Arrays.copyOf(product, size); diagonal = Arrays.copyOf(diagonal, size);
 		preconditioned = Arrays.copyOf(preconditioned, size); unknowns = Arrays.copyOf(unknowns, size);
+		freeUnknowns=Arrays.copyOf(freeUnknowns,size);bounded=Arrays.copyOf(bounded,size);free=Arrays.copyOf(free,size);
 	}
 
 	double[] pressure() { return pressure; }
 	void reset() {
 		ensureCapacity();
-		Arrays.fill(pressure, 0); Arrays.fill(direction, 0);
+		Arrays.fill(pressure, 0); Arrays.fill(direction, 0);freshlyReset=true;
 	}
 
-	PressureProjectionResult solve(GranularPressureCoupling granular, double target) {
-		ensureCapacity();
-		count = 0;
-		double h = domain.config.cellSize();
-		for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
-			int cell = domain.projection.fluidUnknownCells[ordinal];
-			unknowns[count++] = cell;
-			diagonal[cell] = domain.projection.matrixDiagonal[cell] / (h * h) + granular.liquidDiagonal(cell);
+	PressureProjectionResult solve(double target) {
+		ensureCapacity();count=0;Arrays.fill(bounded,false);double h=domain.config.cellSize();
+		for(int ordinal=0;ordinal<domain.projection.fluidUnknownCount;ordinal++) {
+			int cell=domain.projection.fluidUnknownCells[ordinal];unknowns[count++]=cell;
+			diagonal[cell]=domain.projection.matrixDiagonal[cell]/(h*h);
 		}
-		for (int ordinal = 0; ordinal < domain.projection.gasUnknownCount; ordinal++) {
-			int node = domain.projection.gasUnknownNodes[ordinal], row = domain.cellCount + node;
-			unknowns[count++] = row;
-			diagonal[row] = domain.projection.gasMatrixDiagonal[node] + granular.gasDiagonal(node);
+		for(int ordinal=0;ordinal<domain.projection.gasUnknownCount;ordinal++) {
+			int node=domain.projection.gasUnknownNodes[ordinal],row=domain.cellCount+node;unknowns[count++]=row;
+			diagonal[row]=domain.projection.gasMatrixDiagonal[node];
+			bounded[row]=domain.gasState.network.inventory(node).isEmpty();
+			if(bounded[row])pressure[row]=freshlyReset?VACUUM_LOWER:Math.max(VACUUM_LOWER,pressure[row]);
 		}
-		preconditioner.prepare(unknowns, count, diagonal);
-		operator.buildRhs(rhs);
-		// Geometry is fixed during the nonlinear solve. Reuse its previous pressure,
-		// but recompute the residual against the updated resistance and right-hand side.
-		operator.applyMatrix(pressure, product);
-		for (int ordinal = 0; ordinal < count; ordinal++) {
-			int row = unknowns[ordinal];
-			residual[row] = rhs[row] - product[row];
-		}
-		preconditioner.apply(unknowns, count, residual, direction);
-		double rz = dot(residual, direction);
-		double rms = norm(residual);
-		int iterations = 0;
-		for (; rms > target && iterations < domain.config.maxPressureIterations(); iterations++) {
-			operator.applyMatrix(direction, product);
-			double denominator = dot(direction, product);
-			if (!(denominator > 0 && Double.isFinite(denominator) && rz > 0 && Double.isFinite(rz))) break;
-			double alpha = rz / denominator;
-			for (int ordinal = 0; ordinal < count; ordinal++) {
-				int row = unknowns[ordinal];
-				pressure[row] += alpha * direction[row];
-				residual[row] -= alpha * product[row];
-			}
-			rms = norm(residual);
-			if (rms <= target) {
-				// Check the actual equations, including the factored inertia response, before accepting PCG.
-				operator.applyMatrix(pressure, product);
-				for (int ordinal = 0; ordinal < count; ordinal++) {
-					int row = unknowns[ordinal];
-					residual[row] = rhs[row] - product[row];
+		freshlyReset=false;operator.buildRhs(rhs);refreshResidual();
+		Arrays.fill(free,false);updateFreeSet(target);restartDirection();
+		double rz=dotFree(residual,direction),rms=projectedNorm();int iterations=0;
+		for(;rms>target&&iterations<domain.config.maxPressureIterations();iterations++) {
+			operator.applyMatrix(direction,product);double denominator=dotFree(direction,product);
+			if(!(denominator>0&&Double.isFinite(denominator)&&rz>0&&Double.isFinite(rz)))break;
+			double alpha=rz/denominator;boolean blocked=false;
+			for(int ordinal=0;ordinal<freeCount;ordinal++) {
+				int row=freeUnknowns[ordinal];if(bounded[row]&&direction[row]<0) {
+					double distance=(pressure[row]-VACUUM_LOWER)/-direction[row];
+					if(distance<=alpha){alpha=distance;blocked=true;}
 				}
-				rms = norm(residual);
-				if (rms <= attainableTolerance(target)) { iterations++; break; }
-				for (int ordinal = 0; ordinal < count; ordinal++) direction[unknowns[ordinal]] = 0;
-				rz = Double.POSITIVE_INFINITY;
 			}
-			preconditioner.apply(unknowns, count, residual, preconditioned);
-			double nextRz = dot(residual, preconditioned);
-			double beta = nextRz / rz;
-			for (int ordinal = 0; ordinal < count; ordinal++) {
-				int row = unknowns[ordinal];
-				direction[row] = preconditioned[row] + beta * direction[row];
+			for(int ordinal=0;ordinal<count;ordinal++) {
+				int row=unknowns[ordinal];boolean hits=bounded[row]&&direction[row]<0
+						&&(pressure[row]-VACUUM_LOWER)/-direction[row]<=alpha;
+				pressure[row]=hits?VACUUM_LOWER:pressure[row]+alpha*direction[row];residual[row]-=alpha*product[row];
+				if(bounded[row]&&pressure[row]<VACUUM_LOWER)pressure[row]=VACUUM_LOWER;
 			}
-			rz = nextRz;
+			rms=projectedNorm();
+			boolean restart=blocked||updateFreeSet(target);
+			if(rms<=target) {
+				refreshResidual();rms=projectedNorm();
+				if(rms<=attainableTolerance(target)){iterations++;break;}
+				restart=true;
+			}
+			if(restart){refreshResidual();updateFreeSet(target);restartDirection();rz=dotFree(residual,direction);continue;}
+			Arrays.fill(preconditioned,0);preconditioner.apply(freeUnknowns,freeCount,residual,preconditioned);
+			double nextRz=dotFree(residual,preconditioned),beta=nextRz/rz;
+			for(int ordinal=0;ordinal<freeCount;ordinal++){int row=freeUnknowns[ordinal];direction[row]=preconditioned[row]+beta*direction[row];}
+			rz=nextRz;
 		}
-		operator.applyMatrix(pressure, product);
-		for (int ordinal = 0; ordinal < count; ordinal++) {
-			int row = unknowns[ordinal];
-			residual[row] = rhs[row] - product[row];
+		refreshResidual();rms=projectedNorm();
+		for(int ordinal=0;ordinal<domain.projection.fluidUnknownCount;ordinal++) {
+			int cell=domain.projection.fluidUnknownCells[ordinal];domain.projection.pressure[cell]=(float)pressure[cell];
 		}
-		rms = norm(residual);
-		for (int ordinal = 0; ordinal < domain.projection.fluidUnknownCount; ordinal++) {
-			int cell = domain.projection.fluidUnknownCells[ordinal];
-			domain.projection.pressure[cell] = (float) pressure[cell];
+		for(int ordinal=0;ordinal<domain.projection.gasUnknownCount;ordinal++) {
+			int node=domain.projection.gasUnknownNodes[ordinal];domain.projection.gasPressure[node]=(float)pressure[domain.cellCount+node];
 		}
-		for (int ordinal = 0; ordinal < domain.projection.gasUnknownCount; ordinal++) {
-			int node = domain.projection.gasUnknownNodes[ordinal];
-			domain.projection.gasPressure[node] = (float) pressure[domain.cellCount + node];
+		return new PressureProjectionResult(iterations,rms,Double.isFinite(rms)&&rms<=attainableTolerance(target));
+	}
+	private void refreshResidual(){
+		operator.applyMatrix(pressure,product);
+		for(int ordinal=0;ordinal<count;ordinal++){int row=unknowns[ordinal];residual[row]=rhs[row]-product[row];}
+	}
+	/** Bound nodes satisfy r<=0; negative r is their remaining nonnegative physical volume. */
+	private boolean updateFreeSet(double tolerance){
+		boolean changed=false;freeCount=0;
+		for(int ordinal=0;ordinal<count;ordinal++) {
+			int row=unknowns[ordinal];boolean active=!bounded[row]||pressure[row]>VACUUM_LOWER||residual[row]>tolerance;
+			changed|=active!=free[row];free[row]=active;if(active)freeUnknowns[freeCount++]=row;
 		}
-		return new PressureProjectionResult(iterations, rms, Double.isFinite(rms) && rms <= attainableTolerance(target));
+		return changed;
+	}
+	private void restartDirection(){
+		Arrays.fill(direction,0);if(freeCount==0)return;
+		preconditioner.prepare(freeUnknowns,freeCount,diagonal);preconditioner.apply(freeUnknowns,freeCount,residual,direction);
+		// A coupled preconditioner can point out of a released lower bound. The
+		// diagonal projected-gradient restart is feasible and strictly descending.
+		for(int ordinal=0;ordinal<freeCount;ordinal++) {
+			int row=freeUnknowns[ordinal];
+			if(bounded[row]&&pressure[row]<=VACUUM_LOWER&&direction[row]<0) {
+				for(int j=0;j<freeCount;j++){int freeRow=freeUnknowns[j];direction[freeRow]=residual[freeRow]/diagonal[freeRow];}
+				break;
+			}
+		}
+	}
+	private double projectedNorm(){
+		double sum=0;int equations=0;
+		for(int ordinal=0;ordinal<count;ordinal++) {
+			int row=unknowns[ordinal];double value=residual[row];
+			if(bounded[row]&&pressure[row]<=VACUUM_LOWER&&value<=0)continue;
+			equations++;
+			sum+=value*value;
+		}
+		return Math.sqrt(sum/Math.max(1,equations));
+	}
+	private double dotFree(double[] a,double[] b){
+		double sum=0;for(int ordinal=0;ordinal<freeCount;ordinal++){int row=freeUnknowns[ordinal];sum+=a[row]*b[row];}return sum;
 	}
 
 	/** Backward-error floor for the rounded Schur matrix-vector evaluation. */
 	private double attainableTolerance(double target) {
-		double maximumPressure = 0, scale = 0;
+		double maximumPressure = 0, scale = 0;int equations=0;
 		for (int ordinal = 0; ordinal < count; ordinal++) maximumPressure = Math.max(
 				maximumPressure, Math.abs(pressure[unknowns[ordinal]]));
 		for (int ordinal = 0; ordinal < count; ordinal++) {
 			int row = unknowns[ordinal];
+			if(bounded[row]&&pressure[row]<=VACUUM_LOWER&&residual[row]<=0)continue;
+			equations++;
 			double bound = Math.abs(rhs[row]) + 2 * diagonal[row] * maximumPressure;
 			scale = Math.hypot(scale, bound);
 		}
-		double floor = (count + 8.0) * Math.ulp(1.0) * 0.5 * scale / Math.sqrt(Math.max(1, count));
+		double floor = (equations + 8.0) * Math.ulp(1.0) * 0.5 * scale / Math.sqrt(Math.max(1, equations));
 		return Double.isFinite(floor) ? Math.max(target, floor) : target;
 	}
 
-	private double norm(double[] vector) { return count == 0 ? 0 : Math.sqrt(dot(vector, vector) / count); }
-	private double dot(double[] a, double[] b) {
-		double sum = 0;
-		for (int ordinal = 0; ordinal < count; ordinal++) {
-			int row = unknowns[ordinal];
-			sum += a[row] * b[row];
-		}
-		return sum;
-	}
 }
