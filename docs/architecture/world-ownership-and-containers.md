@@ -3,6 +3,7 @@
 修改世界方块接管与释放、桶、发射器、清理区域或事务恢复时读本文。
 
 单位与整数编码统一见[设计书](system-overview.md#units)。
+`ContainerFluidLedger.cubicMetersToNanos` 与 `nanosToCubicMeters` 接受和返回物理 m³；归一化液体体积先通过 `SolverUnitScale` 换算。
 
 ## 修改入口
 

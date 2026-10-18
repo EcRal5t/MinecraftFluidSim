@@ -431,19 +431,20 @@ final class GasTopologyCoordinator {
 				while (head < end) {
 					int piece = queue[head++];
 					int destination = next.nodeOfPiece(piece);
-					if (destination > 0) destinations.merge(destination, next.geometry().piece(piece).volume(), Double::sum);
+					if (destination >= 0) destinations.merge(destination, next.geometry().piece(piece).volume(), Double::sum);
 					for (int peer : links[piece]) if (peer >= 0 && seen[peer] != node) { seen[peer] = node; queue[tail++] = peer; }
 				}
 			}
 			// Pockets below one percent of a cell are transported as unresolved gas through
-			// the local open collision component. Their inventory and energy move together.
+			// the connected open collision component to the nearest resolved gas support.
+			// Their inventory and energy move together; an ambient receiver books a sink.
 			if (destinations.isEmpty() && old.capacity().chambers().get(node - 1).cubicMeters()
 					<= .01 * old.geometry().cellVolumeCubicMeters()) {
 				Arrays.fill(seen, 0); head = tail = 0;
 				for (var piece : old.capacity().pieces()) if (old.nodeOfPiece(piece.id()) == node) {
 					queue[tail++] = piece.id(); seen[piece.id()] = 1;
 				}
-				for (int distance = 0; distance < 2 && destinations.isEmpty(); distance++) {
+				while (head < tail && destinations.isEmpty()) {
 					int end = tail;
 					while (head < end) {
 						int piece = queue[head++], cell = piece / 8, micro = piece & 7;
@@ -456,7 +457,7 @@ final class GasTopologyCoordinator {
 							if (seen[peer] != 0 || (next.geometry().collisionMask(peerCell) & 1 << peerMicro) != 0) continue;
 							seen[peer] = 1; queue[tail++] = peer;
 							int destination = next.nodeOfPiece(peer);
-							if (destination > 0) destinations.merge(destination, next.geometry().piece(peer).volume(), Double::sum);
+							if (destination >= 0) destinations.merge(destination, next.geometry().piece(peer).volume(), Double::sum);
 						}
 					}
 				}

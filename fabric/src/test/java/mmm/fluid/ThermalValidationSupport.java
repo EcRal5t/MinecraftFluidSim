@@ -9,6 +9,18 @@ import java.util.List;
 
 abstract class ThermalValidationSupport {
 	static final String CHEMICAL_FINGERPRINT = "1".repeat(64);
+	static final ThermalMaterialDefinition AIR = new ThermalMaterialDefinition("zztest:thermal/air",
+			ThermalMaterialDefinition.CarrierKind.GAS, mmm.fluid.air.BuiltinGasDefinitions.AIR,
+			mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K, 0, .026,
+			List.of(new ThermalMaterialDefinition.CaloricSegment(150, 1500, 718)));
+
+	static List<ThermalMaterialDefinition> thermalMaterials(List<ThermalMaterialDefinition> materials) {
+		if (materials.stream().anyMatch(material -> material.carrierKind() == ThermalMaterialDefinition.CarrierKind.GAS
+				&& material.carrierId().equals(mmm.fluid.air.BuiltinGasDefinitions.AIR))) return materials;
+		var complete = new java.util.ArrayList<>(materials);
+		complete.add(AIR);
+		return List.copyOf(complete);
+	}
 
 	/** Explicit raw owners for phase storage, integer partitions and carrier-count budgets. */
 	static void restorePhaseTestCarriers(FluidDomain domain, FluidMaterialRegistry materials,

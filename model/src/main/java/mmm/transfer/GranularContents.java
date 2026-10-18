@@ -17,7 +17,7 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /** Canonical dry-container truth. SVQ, raw kilogram mass and optional solid composition remain independent. */
-public record GranularContents(String registryFingerprint, long svqPerBlockVolume, List<Group> groups) {
+public record GranularContents(String registryFingerprint, long svqPerCubicMeter, List<Group> groups) {
 	private static final String ENCODING_TAG = "mmm:granular-contents";
 	public static final int MAX_GROUPS = 16;
 	public static final int MAX_TOTAL_COMPOSITION_ENTRIES = 64;
@@ -25,7 +25,7 @@ public record GranularContents(String registryFingerprint, long svqPerBlockVolum
 
 	public GranularContents {
 		if (registryFingerprint == null || !registryFingerprint.matches("[0-9a-f]{64}")
-				|| svqPerBlockVolume != SolidVolume.SVQ_PER_CUBIC_METER || groups == null || groups.isEmpty()
+				|| svqPerCubicMeter != SolidVolume.SVQ_PER_CUBIC_METER || groups == null || groups.isEmpty()
 				|| groups.size() > MAX_GROUPS) {
 			throw new IllegalArgumentException("Invalid granular contents identity/groups");
 		}
@@ -107,7 +107,7 @@ public record GranularContents(String registryFingerprint, long svqPerBlockVolum
 	}
 
 	public String encode() {
-		StringBuilder encoded = new StringBuilder(ENCODING_TAG).append('|').append(registryFingerprint).append('|').append(svqPerBlockVolume);
+		StringBuilder encoded = new StringBuilder(ENCODING_TAG).append('|').append(registryFingerprint).append('|').append(svqPerCubicMeter);
 		for (Group group : groups) {
 			encoded.append('|').append(group.materialId()).append(',').append(group.solidVolumeSvq()).append(',')
 					.append(Long.toUnsignedString(group.massBits(), 16)).append(',');

@@ -442,26 +442,28 @@ final class RegionCheckpointValidator {
 			}
 		}
 		int[] markerCounts = new int[paletteSize];
-		double[] volumes = new double[paletteSize], masses = new double[paletteSize];
-		double totalVolume = 0.0, totalMass = 0.0;
+		SignedDyadic[] volumes = new SignedDyadic[paletteSize], masses = new SignedDyadic[paletteSize];
+		java.util.Arrays.fill(volumes, SignedDyadic.ZERO);
+		java.util.Arrays.fill(masses, SignedDyadic.ZERO);
+		SignedDyadic totalVolume = SignedDyadic.ZERO, totalMass = SignedDyadic.ZERO;
 		for (int ordinal = 0; ordinal < count; ordinal++) {
 			if (!seen[ordinal]) throw new IOException("Missing marker ordinal");
 			int material = materialByOrdinal[ordinal];
 			markerCounts[material]++;
-			volumes[material] += volumesByOrdinal[ordinal];
-			masses[material] += massByOrdinal[ordinal];
-			totalVolume += volumesByOrdinal[ordinal];
-			totalMass += massByOrdinal[ordinal];
+			volumes[material] = volumes[material].add(SignedDyadic.of(volumesByOrdinal[ordinal]));
+			masses[material] = masses[material].add(SignedDyadic.of(massByOrdinal[ordinal]));
+			totalVolume = totalVolume.add(SignedDyadic.of(volumesByOrdinal[ordinal]));
+			totalMass = totalMass.add(SignedDyadic.of(massByOrdinal[ordinal]));
 		}
-		if (Double.doubleToRawLongBits(totalVolume) != manifest.totalVolumeBits()
-				|| Double.doubleToRawLongBits(totalMass) != manifest.totalMassBits()) {
+		if (Double.doubleToRawLongBits(totalVolume.toDouble()) != manifest.totalVolumeBits()
+				|| Double.doubleToRawLongBits(totalMass.toDouble()) != manifest.totalMassBits()) {
 			throw new IOException("Material manifest total ledger mismatch");
 		}
 		for (int material = 0; material < paletteSize; material++) {
 			RegionManifest.MaterialLedger expected = manifest.materialLedgers().get(material);
 			if (expected.markerCount() != markerCounts[material]
-					|| expected.volumeBits() != Double.doubleToRawLongBits(volumes[material])
-					|| expected.massBits() != Double.doubleToRawLongBits(masses[material])) {
+					|| expected.volumeBits() != Double.doubleToRawLongBits(volumes[material].toDouble())
+					|| expected.massBits() != Double.doubleToRawLongBits(masses[material].toDouble())) {
 				throw new IOException("Material marker ledger mismatch at palette index " + material);
 			}
 		}
@@ -538,15 +540,13 @@ final class RegionCheckpointValidator {
 	}
 
 	private static double sumVolumes(float[] positionVolume) {
-		double result = 0.0;
-		for (int index = 3; index < positionVolume.length; index += 4) result += positionVolume[index];
-		return result;
+		SignedDyadic result = SignedDyadic.ZERO;
+		for (int index = 3; index < positionVolume.length; index += 4) result = result.add(SignedDyadic.of(positionVolume[index]));
+		return result.toDouble();
 	}
 
 	private static double sum(double[] values) {
-		double result = 0.0;
-		for (double value : values) result += value;
-		return result;
+		return SignedDyadic.sum(values).toDouble();
 	}
 
 	private static double[] toDoubles(long[] bits) {

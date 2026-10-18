@@ -123,7 +123,7 @@ public record ChemicalContents(String registryFingerprint, long quantaPerMol, Li
 			java.util.TreeMap<String, Long> species = new java.util.TreeMap<>();
 			for (SpeciesAmount amount : group.species()) species.put(amount.speciesId(), amount.amountQuanta());
 			result.add(new ChemicalTransferLedger.Group(group.materialId(), group.indicator(),
-					ContainerFluidLedger.nanosToVolume(group.volumeNanos()) * cellVolumesPerBlock,
+					ContainerFluidLedger.nanosToCubicMeters(group.volumeNanos()) * cellVolumesPerBlock,
 					group.massKilograms(), group.massResidualKilogramsBits(), species));
 		}
 		return new ChemicalTransferLedger(result);

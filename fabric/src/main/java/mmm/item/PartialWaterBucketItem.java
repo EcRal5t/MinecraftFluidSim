@@ -58,8 +58,8 @@ public final class PartialWaterBucketItem extends Item {
 		long nanos = volume(stack);
 		if (nanos > 0L) {
 			tooltip.accept(Component.translatable("item.mmm.partial_water_bucket.volume",
-					String.format("%.2f%% (%.9f m³)", 100.0 * nanos / ContainerFluidLedger.NANOS_PER_BLOCK,
-							ContainerFluidLedger.nanosToVolume(nanos)))
+					String.format("%.2f%% (%s)", 100.0 * nanos / ContainerFluidLedger.NANOS_PER_BLOCK,
+							mmm.units.UnitFormat.volumeNanos(nanos)))
 					.withStyle(ChatFormatting.GRAY));
 		}
 	}

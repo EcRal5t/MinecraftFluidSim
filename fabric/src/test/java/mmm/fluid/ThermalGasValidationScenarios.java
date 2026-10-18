@@ -938,7 +938,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			double energyReference = scenario == 2 ? 1e308 : scenario == 3 ? 1e307 : 0;
 			FluidDomain domain = phaseTopologyDomain(components, energyReference,
 					scenario == 4 ? 2 : scenario == 5 ? 1 : 0,
-					scenario == 4 ? 1_000_000_000L : scenario == 5 ? 100_000_000L : 0L);
+					scenario == 4 ? 2_000_000_000L : scenario == 5 ? 100_000_000L : 0L);
 			var before = domain.captureAuthoritativeState();
 			var beforeMarkers = domain.exportMaterialParticleState();
 			int bridgeCell = domain.cellIndex(phaseTopologyScene(false).bridges()[0], 1, 1);
@@ -985,7 +985,10 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						&& Arrays.equals(beforeThermal.copyInternalEnergy(), afterThermal.copyInternalEnergy())
 						&& Arrays.equals(beforeThermal.copyActiveParcelEnergy(), afterThermal.copyActiveParcelEnergy())
 						&& Arrays.equals(beforeThermal.copyGasNodeEnergy(), afterThermal.copyGasNodeEnergy()),
-						"unrepresentable or supersaturated future cavity was rejected after publishing its liquid removal: " + scenario);
+						"unrepresentable or supersaturated future cavity was rejected after publishing its liquid removal: " + scenario
+							+ ", operations=" + stats.operations() + ", markers=" + domain.particleCount()
+							+ ", nodes=" + domain.gasState.network.nodeCount() + ", gasSame=" + domain.gasState.network.sealedInventory().equals(beforeGas)
+							+ ", auditSame=" + domain.thermalAudit().equals(beforeAudit));
 			} else {
 				require(stats.operations() == 1 && stats.boiledCells() == 1 && domain.particleCount() == 0
 						&& domain.gasState.network.nodeCount() == 1
@@ -1087,7 +1090,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				BuiltinFluidMaterials.WATER.id(), 0, 2);
 		materials.add(water);
 		for (int k = 0; k < 33; k++) {
-			gasDefinitions.add(new mmm.fluid.air.GasComponentDefinition("test:g" + k, 1, 1, List.of(), List.of()));
+			gasDefinitions.add(new mmm.fluid.air.GasComponentDefinition("test:g" + k, 1000, 1000, List.of(), List.of()));
 			materials.add(topologyMaterial("test:tg" + k, ThermalMaterialDefinition.CarrierKind.GAS,
 					"test:g" + k, k == 0 ? 100 : energyReference != 0 && (k == 1 || k == 17) ? energyReference : 0, 1));
 		}
@@ -1096,7 +1099,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var gasRegistry = new GasRegistry(gasDefinitions,
 				List.of(new GasRegistry.AmbientFraction("test:g0", ExactRational.ONE)));
 		var transition = new ThermalPhaseTransition("test:topology_phase", water.id(), "test:tg0", 300,
-				SolidVolume.SVQ_PER_CELL, SolidVolume.SVQ_PER_CUBIC_METER, ExactRational.of(125),
+				SolidVolume.SVQ_PER_CELL, SolidVolume.SVQ_PER_CELL, ExactRational.of(125),
 				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 0, 1e8);
 		var registry = new ThermalRegistry(materials, List.of(), List.of(transition), "", grains.fingerprint());
 		var scene = phaseTopologyScene(independentInterface);
@@ -2273,7 +2276,9 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		require(limitedCondensation.operations() == 1 && limitedCondensation.condensedCells() == 1
 				&& finiteVapor.gasBoundary().standardVolumeNanos(1) == phaseModel.gasBatch(boiling, 1).standardVolumeNanos()
 				&& finiteVapor.exactInternalEnergy().equals(pairEnergy) && finiteVapor.gasBoundary().auditClosed(),
-				"integer condensation crossed saturation instead of retaining the final vapor quantum");
+				"integer condensation crossed saturation instead of retaining the final vapor quantum: " + limitedCondensation
+						+ ", nanos=" + finiteVapor.gasBoundary().standardVolumeNanos(1)
+						+ ", expected=" + phaseModel.gasBatch(boiling, 1).standardVolumeNanos());
 		require(finiteVapor.particleCount() == 1, "condensation replaced its existing liquid receiver");
 		double condensationMassAfter = finiteVapor.unitScale.kilograms(finiteVapor.particles.mass(0));
 		float[] receiverVelocity = {finiteVapor.particles.velocityX(0), finiteVapor.particles.velocityY(0),
@@ -2476,7 +2481,8 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		long liquidSvq = SolidVolume.SVQ_PER_CELL / 200L;
 		ThermalPhaseTransition boiling = new ThermalPhaseTransition("test:phase/species_boiling",
 				water.id(), vapor.id(), 373.15, liquidSvq, liquidSvq * 500L,
-				ExactRational.parse("0.01"), ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS,
+				ExactRational.of(liquidSvq).multiply(1000).divide(SolidVolume.SVQ_PER_CUBIC_METER),
+				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS,
 				10_000.0, 3_000_000.0);
 		java.util.ArrayList<ThermalMaterialDefinition> materials = new java.util.ArrayList<>(List.of(water, air, vapor));
 		for (int handle = 0; handle < granular.materials().size(); handle++) materials.add(
@@ -2519,7 +2525,8 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		double indicatorMass = initial.materials().copyParticleMass()[0];
 
 		domain.step(true, 2);
-		GasComponentAmount gas = domain.gasBoundary().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR);
+		var gas = domain.gasBoundary().sealedInventory().component(BuiltinGasDefinitions.WATER_VAPOR);
+		require(gas != null, "species-bearing liquid produced no vapor batch: " + domain.lastGasThermalPhaseStats());
 		FlipChemicalParticleState boiled = domain.exportChemicalParticleState();
 		SolverUnitScale massScale = SolverUnitScale.forCellSize(config.cellSize());
 		long gasH2o = gas.species().stream().filter(amount -> amount.speciesId().equals(
@@ -2529,9 +2536,9 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		require(domain.lastGasThermalPhaseStats().boiledCells() == 1 && gasH2o > 0L && gasSodium == 0L
 				&& boiled.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O)] + gasH2o == initialH2o
 				&& boiled.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS)] == initialSodium
-				&& close(boiled.residualLedger() + gas.massResidual(),
+				&& close(boiled.residualLedger() + gas.massResidual().toDouble(),
 						initial.residualLedger())
-				&& close(gasSpeciesMassKilograms(chemistry, gas) + gas.massResidual(), gas.mass())
+				&& close(gasSpeciesMassKilograms(chemistry, gas) + gas.massResidual().toDouble(), gas.mass().toDouble())
 				&& Float.floatToRawIntBits(boiled.materials().copyPositionVolume()[3])
 				== Float.floatToRawIntBits(indicatorVolume)
 				&& Double.doubleToRawLongBits(boiled.materials().copyParticleMass()[0])
@@ -2548,7 +2555,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		setAllCondensedCellTemperatures(domain, 200.0);
 		condensationCapacityRetry(domain);
 		FluidDomain.GasThermalPhaseStats firstCondensed = domain.stepGasPhaseChangeOnly(1);
-		GasComponentAmount vaporRemainder = domain.gasBoundary().inventory(1)
+		var vaporRemainder = domain.gasBoundary().sealedInventory()
 				.component(BuiltinGasDefinitions.WATER_VAPOR);
 		require(firstCondensed.operations() == 1 && firstCondensed.condensedCells() == 1
 				&& firstCondensed.boiledCells() == 0 && vaporRemainder != null
@@ -2562,14 +2569,14 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		FlipChemicalParticleState partiallyRestored = domain.exportChemicalParticleState();
 		long remainingGasH2o = vaporRemainder.species().stream().filter(amount -> amount.speciesId().equals(
 				BuiltinChemicalDefinitions.H2O)).mapToLong(GasComponentAmount.SpeciesAmount::amountQuanta).sum();
-		double remainingSolverMass = massScale.solverMass(vaporRemainder.mass());
+		double remainingSolverMass = massScale.solverMass(vaporRemainder.mass().toDouble());
 		require(partiallyRestored.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O)]
 						+ remainingGasH2o == initialH2o
 				&& partiallyRestored.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS)] == initialSodium
 				&& close(partiallyRestored.residualLedger()
-						+ vaporRemainder.massResidual(), initial.residualLedger())
+						+ vaporRemainder.massResidual().toDouble(), initial.residualLedger())
 				&& close(gasSpeciesMassKilograms(chemistry, vaporRemainder)
-						+ vaporRemainder.massResidual(), vaporRemainder.mass())
+						+ vaporRemainder.massResidual().toDouble(), vaporRemainder.mass().toDouble())
 				&& close(partiallyRestored.materials().totalMass() + remainingSolverMass,
 						initial.materials().totalMass())
 				&& Float.floatToRawIntBits(partiallyRestored.materials().copyPositionVolume()[3])
@@ -2583,7 +2590,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						+ firstCondensed + " boiledGas=" + gas + " remainder=" + vaporRemainder
 						+ " h2o=" + partiallyRestored.copySpeciesTotals()[chemistry.speciesHandle(BuiltinChemicalDefinitions.H2O)]
 						+ "+" + remainingGasH2o + "/" + initialH2o + " residual="
-						+ partiallyRestored.residualLedger() + "+" + vaporRemainder.massResidual()
+						+ partiallyRestored.residualLedger() + "+" + vaporRemainder.massResidual().toDouble()
 						+ "/" + initial.residualLedger() + " audit="
 						+ domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
 	}
@@ -3144,7 +3151,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		domain.setMarkerChemical(1, original, false);
 	}
 
-	static double gasSpeciesMassKilograms(ChemicalRegistry registry, GasComponentAmount component) {
+	static double gasSpeciesMassKilograms(ChemicalRegistry registry, mmm.fluid.air.GasAuditLedger.Entry component) {
 		ExactRational massKilograms = ExactRational.ZERO;
 		for (GasComponentAmount.SpeciesAmount amount : component.species()) {
 			massKilograms = massKilograms.add(registry.species(registry.speciesHandle(amount.speciesId())).molarMassKgPerMol()

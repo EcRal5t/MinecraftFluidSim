@@ -1,11 +1,10 @@
 package mmm.transfer;
 
 /**
- * Pure-Java container volume arithmetic on nanovolume quanta (1e-9 m³). The container-side truth
- * is always an exact {@code long}; the region-side truth stays the float marker
- * {@code particleVolume} sum. Conversions between the two stores round to the nearest quantum and
- * the bound is documented per transfer instead of being hidden: a double-exact marker sum maps to
- * within half a quantum, and re-created marker volumes round to the nearest float.
+ * Exact container volume arithmetic: one nano is 10⁻⁹ m³.
+ * Callers convert normalized liquid volumes through SolverUnitScale before encoding.
+ * Encoding rounds physical m³ to the nearest nano, within half a nano.
+ * Decoding returns physical m³; callers apply the destination cell scale before creating liquid markers.
  */
 public final class ContainerFluidLedger {
 	/** One block volume = one bucket capacity = 1 m³ = 1e9 nanovolume quanta. */
@@ -14,27 +13,22 @@ public final class ContainerFluidLedger {
 
 	private ContainerFluidLedger() { }
 
-	/** Rounds a non-negative double volume (e.g. a double-summed marker total) to quanta. */
-	public static long volumeToNanos(double volume) {
-		if (Double.isNaN(volume) || Double.isInfinite(volume) || volume < 0.0) {
-			throw new IllegalArgumentException("Volume is not a finite non-negative number: " + volume);
+	/** Rounds a physical volume in m³ to integer nanos, with at most half a nano of rounding. */
+	public static long cubicMetersToNanos(double cubicMeters) {
+		if (!Double.isFinite(cubicMeters) || cubicMeters < 0.0) {
+			throw new IllegalArgumentException("Volume is not a finite non-negative number: " + cubicMeters);
 		}
-		double scaled = volume * 1_000_000_000.0;
+		double scaled = cubicMeters * 1_000_000_000.0;
 		if (scaled >= MAX_SCALABLE) {
-			throw new IllegalArgumentException("Volume overflows the container ledger: " + volume);
+			throw new IllegalArgumentException("Volume overflows the container ledger: " + cubicMeters);
 		}
 		return Math.round(scaled);
 	}
 
 	/** Exact-quanta volume as the nearest double cubic metres. */
-	public static double nanosToVolume(long nanos) {
+	public static double nanosToCubicMeters(long nanos) {
 		requireNonNegative(nanos);
 		return nanos / 1_000_000_000.0;
-	}
-
-	/** Exact-quanta volume as the nearest float, the form new markers are created with. */
-	public static float nanosToFloatVolume(long nanos) {
-		return (float) nanosToVolume(nanos);
 	}
 
 	/** Atomic fill of {@code destination} up to {@code capacity} from {@code source}. */

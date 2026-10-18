@@ -489,7 +489,7 @@ final class MinecraftContainerTransferOperations {
 	}
 
 	static float nanosToCellVolume(long nanos) {
-		return (float) (ContainerFluidLedger.nanosToVolume(nanos) * FluidRegionFactory.CELL_VOLUMES_PER_BLOCK);
+		return (float) (ContainerFluidLedger.nanosToCubicMeters(nanos) * FluidRegionFactory.CELL_VOLUMES_PER_BLOCK);
 	}
 
 	/** Largest float cell volume whose nanovolume settlement does not exceed the source/capacity. */
@@ -501,7 +501,7 @@ final class MinecraftContainerTransferOperations {
 	}
 
 	static long cellVolumeToNanos(double cellVolume) {
-		return ContainerFluidLedger.volumeToNanos(cellVolume / FluidRegionFactory.CELL_VOLUMES_PER_BLOCK);
+		return ContainerFluidLedger.cubicMetersToNanos(cellVolume / FluidRegionFactory.CELL_VOLUMES_PER_BLOCK);
 	}
 
 	/** Converts the primitive's authoritative marker delta and rejects impossible item overshoot. */

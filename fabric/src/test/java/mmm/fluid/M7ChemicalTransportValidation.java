@@ -654,7 +654,7 @@ public final class M7ChemicalTransportValidation {
 		check(extracted.transferred() && source.particleCount() == 0,
 				"chemical bucket extraction was not all-or-nothing");
 		ChemicalContents contents = ChemicalContents.fromLedger(extracted.ledger(), CHEMISTRY,
-				ContainerFluidLedger.volumeToNanos(extracted.ledger().totalVolume()));
+				ContainerFluidLedger.cubicMetersToNanos(extracted.ledger().totalVolume()));
 		check(ChemicalContents.decode(contents.encode()).equals(contents),
 				"chemical bucket canonical codec did not round-trip");
 		ChemicalContents.Split partial = contents.split(123_456_789L, CHEMISTRY);
@@ -761,23 +761,18 @@ public final class M7ChemicalTransportValidation {
 					&& source.gasBoundary().auditClosed(), "chemical transport step audit diverged");
 		}
 		check(refined, "moving-body impulse must require finer chemical transport subdivision");
-		SignedDyadic sinkBefore = source.thermalAudit().externalSink();
-		SignedDyadic roundoffBefore = source.thermalAudit().roundoffResidual();
-		SignedDyadic inventoryBefore = source.exactInternalEnergy();
+		SignedDyadic liquidBefore = SignedDyadic.sum(source.exportThermalParticleState().copyInternalEnergy());
 		FluidDomain.ExactChemicalTransfer extracted = source.tryExtractExactChemical(3, 4, 5, 8.0F, 12);
 		check(extracted.transferred(), "thermal chemical bucket fixture could not be extracted");
-		// Capture is the next production action after the server-thread container transaction.
-		// It must accept the remaining inventory and the exported item energy as one closed audit.
-		source.exportThermalParticleState();
-		check(source.thermalAudit().externalSink().subtract(sinkBefore)
-				.equals(SignedDyadic.of(extracted.internalEnergy())),
-				"chemical bucket energy and region external-sink ledger diverged");
-		SignedDyadic carrierEnergy = inventoryBefore.subtract(source.exactInternalEnergy());
-		SignedDyadic representationResidual = SignedDyadic.of(extracted.internalEnergy()).subtract(carrierEnergy);
-		check(!representationResidual.equals(SignedDyadic.ZERO)
-				&& source.thermalAudit().roundoffResidual().subtract(roundoffBefore)
-				.equals(representationResidual),
-				"chemical bucket carrier/item representation residual was not audited exactly");
+		// Gas geometry may exchange heat or book volume work during the same extraction.
+		// Compare the item with liquid columns, then check the complete liquid/gas audit.
+		var after = source.exportThermalParticleState();
+		SignedDyadic liquidRemoved = liquidBefore.subtract(SignedDyadic.sum(after.copyInternalEnergy()));
+		check(Math.abs(liquidRemoved.toDouble() - extracted.internalEnergy())
+				<= 8 * Math.ulp(extracted.internalEnergy()),
+				"chemical bucket energy differs from actual liquid carrier removal");
+		check(source.exactInternalEnergy().equals(source.thermalAudit().expectedInventory())
+				&& source.gasBoundary().auditClosed(), "chemical extraction did not close liquid/gas energy and material ledgers");
 	}
 
 	/** Frozen M7.0 wall-time budgets, measured only by the explicit full chemistry selector. */

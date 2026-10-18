@@ -240,11 +240,11 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testArithmetic() {
-		check(ContainerFluidLedger.volumeToNanos(0.0) == 0L, "empty volume converted");
-		check(ContainerFluidLedger.volumeToNanos(1.0) == BUCKET, "one block volume is one bucket");
-		check(ContainerFluidLedger.volumeToNanos(0.5) == BUCKET / 2L, "half bucket converted");
-		check(ContainerFluidLedger.nanosToVolume(BUCKET) == 1.0, "bucket converted back");
-		check(ContainerFluidLedger.nanosToFloatVolume(BUCKET / 4L) == 0.25F, "quarter converts to an exact float");
+		check(ContainerFluidLedger.cubicMetersToNanos(0.0) == 0L, "empty volume converted");
+		check(ContainerFluidLedger.cubicMetersToNanos(1.0) == BUCKET, "one block volume is one bucket");
+		check(ContainerFluidLedger.cubicMetersToNanos(0.5) == BUCKET / 2L, "half bucket converted");
+		check(ContainerFluidLedger.nanosToCubicMeters(BUCKET) == 1.0, "bucket converted back");
+		check((float) ContainerFluidLedger.nanosToCubicMeters(BUCKET / 4L) == 0.25F, "quarter converts to an exact float");
 
 		check(ContainerFluidLedger.transferable(0L, BUCKET, BUCKET) == BUCKET, "empty bucket accepts a full bucket");
 		check(ContainerFluidLedger.transferable(BUCKET / 2L, BUCKET, BUCKET) == BUCKET / 2L, "atomic fill leaves the remainder");
@@ -267,11 +267,11 @@ public final class M6ContainerValidation {
 			// expected
 		}
 		for (Runnable invalid : new Runnable[] {
-				() -> ContainerFluidLedger.volumeToNanos(-0.1),
-				() -> ContainerFluidLedger.volumeToNanos(Double.NaN),
-				() -> ContainerFluidLedger.volumeToNanos(Double.POSITIVE_INFINITY),
-				() -> ContainerFluidLedger.volumeToNanos(1.0E19),
-				() -> ContainerFluidLedger.nanosToVolume(-1L),
+				() -> ContainerFluidLedger.cubicMetersToNanos(-0.1),
+				() -> ContainerFluidLedger.cubicMetersToNanos(Double.NaN),
+				() -> ContainerFluidLedger.cubicMetersToNanos(Double.POSITIVE_INFINITY),
+				() -> ContainerFluidLedger.cubicMetersToNanos(1.0E19),
+				() -> ContainerFluidLedger.nanosToCubicMeters(-1L),
 				() -> ContainerFluidLedger.transferable(-1L, 0L, BUCKET),
 				() -> ContainerFluidLedger.transferable(0L, -1L, BUCKET),
 				() -> ContainerFluidLedger.transferable(0L, 0L, 0L),
@@ -296,20 +296,22 @@ public final class M6ContainerValidation {
 		FlipParticleState state = domain.exportParticleState();
 		check(state.particleCount() > 0, "the solver produced no markers to convert");
 		float[] markers = state.copyPositionVolume();
+		var units = mmm.units.SolverUnitScale.forCellSize(CONFIG.cellSize());
 		double exactSum = 0.0;
 		long summedQuanta = 0L;
 		for (int i = 0; i < state.particleCount(); i++) {
 			float volume = markers[i * 4 + 3];
 			check(volume > 0.0F && Float.isFinite(volume), "marker volume is not positive and finite");
-			long quanta = ContainerFluidLedger.volumeToNanos(volume);
-			check(Math.abs(quanta - volume * 1_000_000_000.0) <= 0.5, "conversion exceeded half a quantum");
-			float roundTrip = ContainerFluidLedger.nanosToFloatVolume(quanta);
+			double cubicMeters = units.cubicMeters(volume);
+			long quanta = ContainerFluidLedger.cubicMetersToNanos(cubicMeters);
+			check(Math.abs(quanta - cubicMeters * 1_000_000_000.0) <= 0.5, "conversion exceeded half a quantum");
+			float roundTrip = (float) (ContainerFluidLedger.nanosToCubicMeters(quanta) / units.cubicMetersPerNormalizedVolume());
 			check(Math.abs(roundTrip - volume) <= Math.ulp(volume) * 2.0F, "float round-trip exceeded float precision");
-			exactSum += volume;
+			exactSum += cubicMeters;
 			summedQuanta += quanta;
 		}
 		// Converting the exact sum vs summing conversions may differ by at most half a quantum per marker.
-		long sumQuanta = ContainerFluidLedger.volumeToNanos(exactSum);
+		long sumQuanta = ContainerFluidLedger.cubicMetersToNanos(exactSum);
 		check(Math.abs(sumQuanta - summedQuanta) <= state.particleCount() / 2L + 1L,
 				"quanta aggregation drifted beyond the documented bound");
 	}
@@ -378,10 +380,10 @@ public final class M6ContainerValidation {
 						taken += marker;
 					}
 				}
-				containerNanos = ContainerFluidLedger.checkedAdd(containerNanos, ContainerFluidLedger.volumeToNanos(taken));
+				containerNanos = ContainerFluidLedger.checkedAdd(containerNanos, ContainerFluidLedger.cubicMetersToNanos(taken));
 			} else {
 				long give = Math.min(containerNanos, BUCKET);
-				region.add(ContainerFluidLedger.nanosToFloatVolume(give));
+				region.add((float) ContainerFluidLedger.nanosToCubicMeters(give));
 				containerNanos = ContainerFluidLedger.checkedSubtract(containerNanos, give);
 			}
 			double regionVolume = region.stream().mapToDouble(Float::doubleValue).sum();
@@ -616,29 +618,30 @@ public final class M6ContainerValidation {
 	private static void testBucketRoundTrip() {
 		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG, 512);
 		// Initial pour: a full bucket empties into the region.
+		var units = mmm.units.SolverUnitScale.forCellSize(CONFIG.cellSize());
 		long containerNanos = BUCKET;
 		FluidDomain.ExactVolumeTransfer filled = domain.tryInsertExactVolume(3, 2, 3,
-				ContainerFluidLedger.nanosToFloatVolume(containerNanos), 3);
+				(float) (ContainerFluidLedger.nanosToCubicMeters(containerNanos) / units.cubicMetersPerNormalizedVolume()), 3);
 		check(filled.transferred(), "could not insert one bucket volume");
 		containerNanos = ContainerFluidLedger.checkedSubtract(containerNanos,
-				Math.min(ContainerFluidLedger.volumeToNanos(filled.volume()), containerNanos));
-		long initialNanos = ContainerFluidLedger.volumeToNanos(sumMarkerVolumes(domain));
+				Math.min(ContainerFluidLedger.cubicMetersToNanos(units.cubicMeters(filled.volume())), containerNanos));
+		long initialNanos = ContainerFluidLedger.cubicMetersToNanos(units.cubicMeters(sumMarkerVolumes(domain)));
 		long worstDrift = 0L;
 		for (int cycle = 0; cycle < 100; cycle++) {
 			FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(3, 2, 3,
-					ContainerFluidLedger.nanosToFloatVolume(BUCKET - containerNanos), 3);
+					(float) (ContainerFluidLedger.nanosToCubicMeters(BUCKET - containerNanos) / units.cubicMetersPerNormalizedVolume()), 3);
 			check(extracted.transferred(), "full-bucket extraction failed");
-			long taken = ContainerFluidLedger.volumeToNanos(extracted.volume());
+			long taken = ContainerFluidLedger.cubicMetersToNanos(units.cubicMeters(extracted.volume()));
 			containerNanos = ContainerFluidLedger.checkedAdd(containerNanos,
 					Math.min(taken, BUCKET - containerNanos));
 
 			FluidDomain.ExactVolumeTransfer reinserted = domain.tryInsertExactVolume(3, 2, 3,
-					ContainerFluidLedger.nanosToFloatVolume(containerNanos), 3);
+					(float) (ContainerFluidLedger.nanosToCubicMeters(containerNanos) / units.cubicMetersPerNormalizedVolume()), 3);
 			check(reinserted.transferred(), "re-insertion failed");
-			long given = ContainerFluidLedger.volumeToNanos(reinserted.volume());
+			long given = ContainerFluidLedger.cubicMetersToNanos(units.cubicMeters(reinserted.volume()));
 			containerNanos = ContainerFluidLedger.checkedSubtract(containerNanos, Math.min(given, containerNanos));
 
-			long regionNanos = ContainerFluidLedger.volumeToNanos(sumMarkerVolumes(domain));
+			long regionNanos = ContainerFluidLedger.cubicMetersToNanos(units.cubicMeters(sumMarkerVolumes(domain)));
 			worstDrift = Math.max(worstDrift, Math.abs(regionNanos + containerNanos - initialNanos));
 			check(containerNanos >= 0L && containerNanos <= BUCKET, "container balance left its valid range");
 		}

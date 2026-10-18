@@ -901,8 +901,9 @@ public final class ContainerTransferStoreValidation {
 			base.sealDomainBoundary();
 			base.bootstrapGasState("");
 			base.step(false, 0);
-			check(base.gasBoundary().nodeCount() == 1,
-					"private-target fixture did not initialize one sealed gas topology");
+			check(base.gasBoundary().topologyInitialized() && base.gasBoundary().auditClosed()
+					&& base.gasBoundary().sealedInventoryNanos() > 0,
+					"private-target fixture did not initialize conserved sealed gas inventory: nodes=" + base.gasBoundary().nodeCount());
 			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(
 					root, TestProfiles.materials(), null, null, null, null, TestProfiles.materialRegistry());
 			long baseGeneration = persistence.checkpoint(region);

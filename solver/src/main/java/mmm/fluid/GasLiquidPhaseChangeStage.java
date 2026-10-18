@@ -138,7 +138,7 @@ final class GasLiquidPhaseChangeStage {
 					network.inventory(node).merge(trial.batch()), trial.candidateGasEnergy(), trial.removedSvq(), true);
 			return new GasPhaseBatchSearch.Sample<>(residual, residual >= 0 ? trial : null);
 		});
-		return completeBoil(node, contact, geometrySource, selected);
+		return completeBoil(node, contact, geometrySource, selected, transition, phase);
 	}
 
 	private GasBoilTrial prepareBoilTrial(
@@ -186,7 +186,7 @@ final class GasLiquidPhaseChangeStage {
 
 	private GasBoilPlan completeBoil(int node,
 	                                GasPhaseInterfaceResolver.Candidate contact, GasRuntimeGeometry.PhaseSource source,
-	                                GasBoilTrial candidate) {
+	                                GasBoilTrial candidate, ThermalPhaseTransition transition, GasLiquidPhaseModel phase) {
 		if (candidate == null) return null;
 		try {
 			if (source != null && !source.transition(candidate.liquidGeometry()).hasContact(contact.contactPieces())) return null;
@@ -194,6 +194,21 @@ final class GasLiquidPhaseChangeStage {
 			var thermalPlan = support.thermal().planPhaseCellEnergy(candidate.thermalTrial());
 			var topology = support.planGasGeometry(candidate.liquidGeometry(), node, gasPlan,
 					candidate.candidateGasEnergy(), thermalPlan, source);
+			if (topology != null) {
+				var thermal = new GasThermalModel(support.thermal().registry(), support.gasState().network.registry());
+				var checked = new java.util.HashSet<Integer>();
+				for (int piece : contact.contactPieces()) {
+					int receiver = topology.frame().nodeOfPiece(piece);
+					if (receiver <= 0 || !checked.add(receiver)) continue;
+					var inventory = topology.gasPlan().inventory(receiver);
+					double energy = topology.thermalPlan().nodeEnergy(receiver);
+					double temperature = candidate.thermalTrial().temperatureK();
+					if (Double.isNaN(temperature)) temperature = thermal.state(inventory, energy).temperatureK();
+					double pressure = thermal.absolutePressure(inventory, topology.gasPlan().availableVolume(receiver), energy);
+					if (phase.saturation(transition, temperature, inventory, pressure).direction()
+							== GasLiquidPhaseModel.Direction.CONDENSE) return null;
+				}
+			}
 			return new GasBoilPlan(candidate.batches(), candidate.removedSvq(), candidate.removal(), gasPlan,
 					thermalPlan, candidate.candidateGasEnergy(), topology);
 		} catch (ThermalStateFunction.EnergyOutsideValidityException
@@ -264,10 +279,9 @@ final class GasLiquidPhaseChangeStage {
 	private double saturationResidual(int node, ThermalPhaseTransition transition, GasLiquidPhaseModel phase,
 	                                  ThermalDomainState.PhaseCellTrial liquid, GasInventory gas, double energy,
 	                                  long gasVolumeDeltaSvq, boolean boiling) {
-		if (!boiling && gas.isEmpty()) return Double.POSITIVE_INFINITY;
-		double h = support.state().cellSize();
 		double volume = support.gasState().network.availableVolume(node)
-				+ (double) gasVolumeDeltaSvq / SolidVolume.SVQ_PER_CUBIC_METER * h * h * h;
+				+ (double) gasVolumeDeltaSvq / SolidVolume.SVQ_PER_CUBIC_METER;
+		if (!boiling && gas.isEmpty() && volume == 0) return Double.POSITIVE_INFINITY;
 		if (volume <= 0) return Double.NEGATIVE_INFINITY;
 		var thermal = new GasThermalModel(support.thermal().registry(), support.gasState().network.registry());
 		double temperature = liquid.temperatureK();

@@ -289,7 +289,11 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted()
 				&& domain.exactInternalEnergy().equals(insertedEnergy),
 				"granular insertion did not restore its explicit-temperature source energy");
-		for (int step = 0; step < 180 && domain.granularDepositCellCount() == 0; step++) domain.step();
+		for (int step = 0; step < 180 && domain.granularDepositCellCount() == 0; step++) {
+			var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+					step, domain.captureAuthoritativeState(), List.of(), false, 0));
+			domain = candidate.claimPreparedCpuDomain();
+		}
 		require(domain.granularDepositCellCount() > 0
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"active-to-deposit settlement failed: deposits=" + domain.granularDepositCellCount()

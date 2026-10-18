@@ -225,6 +225,7 @@ solidMask[]
 
 启用的 chemistry/granular/thermal extension 继续绑定相同 ordinal，并保存 cell-local deposit/coherent 数据。
 ordinal 在全 region 唯一且 cardinality 必须与所有 required side column 相等；section identity、local bounds、体积/质量/species/energy 汇总必须重新合到 manifest。
+液体归一化体积与质量权重按原始浮点数精确求和，在 section、材料及区域账本输出时各舍入一次；捕获、校验和恢复采用相同规则。
 
 granular section 保存每份活动颗粒的 `ceilMask` 原始字节。完整重建按该颗粒的位置、SVQ 和域尺寸校验核支撑、floor/ceil 配额及份额精确总量，再恢复同一选择。
 

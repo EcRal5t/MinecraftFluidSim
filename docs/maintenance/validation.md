@@ -387,39 +387,54 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 <a id="si-units"></a>
 ### SI 与整数微摩尔：2026-10-18 工作树
 
-本轮基于 `4de020e`，物性与库存约定见[设计书](../architecture/system-overview.md#units)。
-`build/unit-final-build.log` 记录服务端、客户端、测试及 GPU 模块编译和架构检查通过；`build/unit-complete-compile.log` 另记录 model、app 校验通过。
-单位迁移的聚焦检查复用现有测试类，类路径取自 `build/solver-consolidation-validation/classpath.txt`：
+本轮在 `4f61a3f` 的 SI 迁移基础上补齐容器物理体积接口、盘上求和与相变体积尺度，单位约定见[设计书](../architecture/system-overview.md#units)。
+`build/unit-final-volume-build.log` 记录服务端、客户端、测试及 GPU 模块编译和架构检查通过；546 个生产源文件通过职责与依赖检查。
+`build/unit-complete-compile.log` 保留 model、app 校验结果。
+
+专项入口复用已编译产物，类路径由 `:fabric:runCpuValidation` 写入 `build/solver-consolidation-validation/classpath.txt`。
+直接启动 JVM 时使用 `fabric/build/cpu-validation-work` 作为工作目录，并将 `java.io.tmpdir` 指向绝对路径 `build/tmp/si-units`。
 
 ```powershell
-$unitCp = Get-Content -Raw build/solver-consolidation-validation/classpath.txt
-java -ea -cp $unitCp mmm.chemistry.M7ChemistryValidation
+$unitCp = (Get-Content -Raw build/solver-consolidation-validation/classpath.txt).Trim()
 java -ea -cp $unitCp mmm.fluid.M7ChemicalTransportValidation --units
 java -ea -cp $unitCp mmm.fluid.M9ThermalValidation --units
+java -ea -cp $unitCp mmm.fluid.M9ThermalValidation --gas-topology
+java -ea -cp $unitCp mmm.fluid.M9ThermalValidation --phase-volume
+java -ea -cp $unitCp mmm.fluid.M9ThermalValidation --granular-energy
+java -ea -cp $unitCp mmm.item.M6ContainerValidation
+java -ea -cp $unitCp mmm.simulation.ControllerInventoryDurabilityValidation matrix
 ```
 
-- `M7ChemistryValidation`：通过 10000 次守恒反应循环、定义／codec／指纹、整数 μmol↔mol、溢出与默认水／油／汞库存检查。日志 `build/unit-chemistry-core.log`。
-- `M7ChemicalTransportValidation --units`：通过两种格长盐水密度、油的输运与捕获恢复、完整及部分容器往返、最小物种转移的原子性。日志 `build/unit-chemistry2.log`。
-- `M9ThermalValidation --units`：通过生产物性、CO₂ Henry 与标准态批次、气体压缩、中和反应温升、盐析出参考能、导热接触及有限设备换热。1 mol 中和在 1 kg、4184 J/(kg·K) 的溶液中产生 `57300/4184 K` 温升，NaCl 固液参考能差为 −3900 J/mol。日志 `build/unit-thermal2.log`。
-- `region-state,protocol,air-network`：完整选择器通过，覆盖能力包发布故障恢复、区域盘上往返、网络显示、查询与提交事件、组分孔流。日志 `build/unit-integration2.log`。
+| 已通过的输入 | 证据与覆盖 |
+|---|---|
+| `M7ChemistryValidation` | `build/unit-chemistry-core.log`：10000 次守恒反应、定义／codec／指纹、整数 μmol↔mol、溢出及默认水／油／汞库存；物种指纹为 `36ae0f1e2b448d9ddd21f7ca729ef8d6117a6b91bd130360c88b31e74191dcfc` |
+| `chemistry:short,region-state,protocol,air-network` | `build/unit-integration-complete.log`：1000 次核心反应、完整化学输运短流程、40 步热化学提取、油纯质量 checkpoint 往返、世界能力包发布故障恢复、协议、查询及孔流 |
+| `M7ChemicalTransportValidation --units` | `build/unit-chemistry2.log`：两种格长浓度／密度、油部分转移及捕获恢复、完整／部分容器往返、最小物种转移原子性 |
+| `M9ThermalValidation --units` | `build/unit-thermal-units-complete.log`：生产物性、CO₂ Henry 与标准态批次、压缩、反应温升、导热及有限设备换热；1 mol 中和产生 `57300/4184 K` 温升，NaCl 固液参考能差为 −3900 J/mol |
+| `M9ThermalValidation --gas-topology` | `build/unit-gas-topology-final.log`：完整汽化、压缩蒸气完全凝结、保留末份蒸气、含溶质汽化与部分凝结、气腔拆并、库存和内能联合提交及恢复 |
+| `M9ThermalValidation --phase-volume` | `build/unit-phase-volume-delivery.log`：固液和气液相变几何、恢复后的机械同步及操作清空 |
+| `M9ThermalValidation --granular-energy` | `build/unit-granular-energy-delivery.log`：颗粒注入、抽取、完整候选沉积和清空，热账闭合 |
+| `M6ContainerValidation` | `build/unit-container-units-complete.log`：13 项容器测试，默认格长下真实 1 m³ 桶往返、10⁴ 次编码循环及最小余量；量化先转换物理 m³ |
+| 容器 WAL 与连续注液恢复 | `build/unit-containers-delivery.log`：model/app 容器流程、WAL 故障重试、微量能量及余量、私有目标接管、连续 24 次完整配置注液与重启均通过；随后整体选择器在三材料操作矩阵失败 |
 
-完整选择器及生产流程仍有以下失败，均未计作通过：
+计算耗时与性能预算本轮按用户要求只记录。
+完整整合尚有以下物理／业务失败，保留原断言：
 
 | 输入 | 当前结果与日志 |
 |---|---|
-| 完整 `chemistry` | 热化学提取场景中，1 标准 nanos 气体失去正容量后继，累计 4096 子步耗尽；`build/unit-validation2.log` |
-| 完整 `thermal` | 32 组件整格汽化粗批次夹具零操作，未满足完整相变提交断言；`build/unit-replay2.log` |
-| 完整 `granular` | 沙床生命周期在 phase=3 超出既有完成时间；97.292 s 后退出；`build/unit-validation2.log` |
-| 正常操作：场景 0、2 个种子、各 40 动作 | seed=100 完成并报告 20 次 Boussinesq 适用域拒绝；seed=101 在动作 26 缺少有限气体后继并耗尽子步，两个任务共 1 个失败；`build/unit-normal-play.log` |
-| `ProductionStepBenchmark` | controller 完成 20 步预热与 20 步采样；demo 在采样前因微量气体后继失败退出；`build/unit-step-benchmark.log` |
+| 完整 `thermal` | 已经过气液、固液、组成、颗粒内能及恢复流程；随后热平流连续响应导数为 −0.1038154768624195，超出 2.5% 误差断言。`build/unit-thermal-delivery.log` |
+| 完整 `containers` | 三材料操作矩阵在注入油时拒绝完整桶；短定位记录有限气体失去正容量后继（节点 13，约 0.0175 m³）。`build/unit-containers-delivery.log`、`build/unit-final-matrix3.log` |
+| 正常操作：场景 0、seed=101、40 动作 | 动作 26 的共享液体通量在格 510 留下 `5.960464477539063e-8` 归一化容量超额，累计 4096 子步耗尽；微量气体后继已推进过去。`build/unit-normal-replay-delivery.log` |
+| 完整 `granular` | 床层生命周期在 phase=3 超出既有仿真完成时间判据；未修改 SVQ 粒度和占容算法。`build/unit-validation2.log` |
 
-controller 预热共 7737.8 ms；采样的完整步均值 186.417 ms、中位数 181.972 ms、p95 238.571 ms、最大 238.845 ms，未达到 40 ms 预算。
-完整步包含捕获、计算和接管；调用线程分配为 295.90 MiB/step，最终 2092 个 marker。
-该测量与 Gradle 编译同时启动，机器负载会影响耗时；已有结果不足以确认生产资格。demo 未完成预热，未生成有效采样成绩。
+本轮修正旧测试中的固定载体数组、每千 mol 夹具装量、热参考能尺度及运行时气腔编号假设。
+气液粗批次夹具采用一致的 kg 与 m³；固相合并的物种质量与 J/mol 偏移同步换算；热学夹具补齐环境空气热定义。
+颗粒热库存的沉积流程经过正式私有候选入口，由后端处理时间细化。
+全库旧单位名称检查覆盖生产代码、资源、测试、工具和当前文档，归档保留历史原文。
 
-本轮同时修正旧测试中固定粒子数组长度、每千 mol 的夹具装量和旧指纹断言。
-颗粒析出合并按未解析的半米载体尺度核对宏观角动量误差及完整热账，替换固定 parcel 数和对象相等断言。
-测试生成的盘上夹具保存在 `build/tmp/si-unit-fixtures`；后续直接启动 JVM 时可指定绝对 `java.io.tmpdir` 到 `build/tmp/si-units`。
+迁移早期的耗时记录在 `build/unit-step-benchmark.log`：controller 20 步预热和 20 步采样，均值 186.417 ms、p50 181.972 ms、p95 238.571 ms、最大 238.845 ms，调用线程分配 295.90 MiB/step，最终 2092 个 marker。
+测量与编译并行，demo 在当时的气体后继失败处退出；后续气腔修复后未重新采样。
+测试生成的早期盘上夹具保存在 `build/tmp/si-unit-fixtures`。
 
 ### 沙床完整生命周期：2026-10-18 留存记录
 

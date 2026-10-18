@@ -486,15 +486,13 @@ public final class RegionCheckpointRestorer {
 	}
 
 	private static double sumVolumes(float[] positionVolume) {
-		double result = 0.0;
-		for (int index = 3; index < positionVolume.length; index += 4) result += positionVolume[index];
-		return result;
+		SignedDyadic result = SignedDyadic.ZERO;
+		for (int index = 3; index < positionVolume.length; index += 4) result = result.add(SignedDyadic.of(positionVolume[index]));
+		return result.toDouble();
 	}
 
 	private static double sum(double[] values) {
-		double result = 0.0;
-		for (double value : values) result += value;
-		return result;
+		return SignedDyadic.sum(values).toDouble();
 	}
 
 	private static double[] toDoubles(long[] bits) {

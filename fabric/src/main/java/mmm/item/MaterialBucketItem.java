@@ -132,17 +132,17 @@ public final class MaterialBucketItem extends Item {
 					: Component.translatable("item.mmm.material_bucket.mixture", mixture.components().size());
 			double mass = mass(stack);
 			tooltip.accept(Component.translatable("item.mmm.material_bucket.volume",
-					material, String.format("%.2f%% (%.9f m³)", 100.0 * nanos / ContainerFluidLedger.NANOS_PER_BLOCK,
-							ContainerFluidLedger.nanosToVolume(nanos)))
+					material, String.format("%.2f%% (%s)", 100.0 * nanos / ContainerFluidLedger.NANOS_PER_BLOCK,
+							mmm.units.UnitFormat.volumeNanos(nanos)))
 					.withStyle(ChatFormatting.GRAY));
 			if (mass > 0.0) tooltip.accept(Component.translatable("item.mmm.material_bucket.mass",
 					String.format("%.12g", mass))
 					.withStyle(ChatFormatting.DARK_GRAY));
 			if (mixture.components().size() > 1) {
 				for (FluidMixture.Component fluid : mixture.components()) {
-					String componentVolume = String.format("%.2f%% (%.9f m³)",
+					String componentVolume = String.format("%.2f%% (%s)",
 							100.0 * fluid.volumeNanos() / ContainerFluidLedger.NANOS_PER_BLOCK,
-							ContainerFluidLedger.nanosToVolume(fluid.volumeNanos()));
+							UnitFormat.volumeNanos(fluid.volumeNanos()));
 					tooltip.accept(Component.translatable("item.mmm.material_bucket.component",
 							fluid.materialId(), componentVolume, String.format("%.12g", fluid.mass()))
 							.withStyle(ChatFormatting.DARK_GRAY));

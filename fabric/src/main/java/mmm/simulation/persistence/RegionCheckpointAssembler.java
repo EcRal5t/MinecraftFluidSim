@@ -415,31 +415,31 @@ public final class RegionCheckpointAssembler {
 		if (!particles.layout().hasMaterials()) return List.of();
 		int paletteSize = particles.materialPalette().size();
 		int[] markerCounts = new int[paletteSize];
-		double[] volumes = new double[paletteSize], masses = new double[paletteSize];
+		SignedDyadic[] volumes = new SignedDyadic[paletteSize], masses = new SignedDyadic[paletteSize];
+		java.util.Arrays.fill(volumes, SignedDyadic.ZERO);
+		java.util.Arrays.fill(masses, SignedDyadic.ZERO);
 		for (int ordinal = 0; ordinal < particles.particleCount(); ordinal++) {
 			int material = particles.materialPaletteIndex()[ordinal];
 			markerCounts[material]++;
-			volumes[material] += particles.positionVolume()[ordinal * 4 + 3];
-			masses[material] += particles.markerMass()[ordinal];
+			volumes[material] = volumes[material].add(SignedDyadic.of(particles.positionVolume()[ordinal * 4 + 3]));
+			masses[material] = masses[material].add(SignedDyadic.of(particles.markerMass()[ordinal]));
 		}
 		List<RegionManifest.MaterialLedger> result = new ArrayList<>(paletteSize);
 		for (int material = 0; material < paletteSize; material++) {
-			result.add(new RegionManifest.MaterialLedger(markerCounts[material], Double.doubleToRawLongBits(volumes[material]),
-					Double.doubleToRawLongBits(masses[material])));
+			result.add(new RegionManifest.MaterialLedger(markerCounts[material], Double.doubleToRawLongBits(volumes[material].toDouble()),
+					Double.doubleToRawLongBits(masses[material].toDouble())));
 		}
 		return List.copyOf(result);
 	}
 
 	private static double sumVolumes(float[] positionVolume) {
-		double result = 0.0;
-		for (int index = 3; index < positionVolume.length; index += 4) result += positionVolume[index];
-		return result;
+		SignedDyadic result = SignedDyadic.ZERO;
+		for (int index = 3; index < positionVolume.length; index += 4) result = result.add(SignedDyadic.of(positionVolume[index]));
+		return result.toDouble();
 	}
 
 	private static double sum(double[] values) {
-		double result = 0.0;
-		for (double value : values) result += value;
-		return result;
+		return SignedDyadic.sum(values).toDouble();
 	}
 
 	private static double[] toDoubles(long[] bits) {
