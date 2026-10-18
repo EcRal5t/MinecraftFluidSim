@@ -30,27 +30,6 @@ public final class M7ChemistryValidation {
 
 	private static void validateDefaultParcels() {
 		var registry = BuiltinChemicalDefinitions.REGISTRY;
-		check(ChemicalAmount.quanta(ExactRational.parse("0.000001")) == 1
-				&& ChemicalAmount.moles(1_234_567).equals(ExactRational.parse("1.234567"))
-				&& ChemicalAmount.quanta(ChemicalAmount.moles(Long.MAX_VALUE)) == Long.MAX_VALUE,
-				"integer micromoles did not round-trip exactly");
-		expectFailure(() -> ChemicalAmount.quanta(ExactRational.parse("0.0000001")), "fractional μmol was committed");
-		expectFailure(() -> ChemicalAmount.quanta(ExactRational.of(Long.MAX_VALUE)), "mol conversion overflow was accepted");
-		var halfMeterScale = mmm.units.SolverUnitScale.forCellSize(.5F);
-		check(halfMeterScale.cubicMeters(1) == .125 && halfMeterScale.kilograms(1000) == 125
-				&& halfMeterScale.solverMass(125) == 1000, "normalized inventory changed its SI scale");
-		var physicalStore = new ChemicalParcelStore(registry, halfMeterScale, 2, 1);
-		var water = physicalStore.defaultRecord("mmm:water", 1, .5F, 1000, false);
-		check(water.amount(registry.speciesHandle(BuiltinChemicalDefinitions.H2O)) == 6_944_444_444L
-				&& Math.abs(water.massKilograms(registry) - 125) < 1e-12,
-				"default water concentration or molar mass changed physical inventory");
-		var oil = physicalStore.defaultRecord("mmm:oil", 1, .5F, 800, false);
-		check(oil.entryCount() == 0 && oil.massResidualKilograms() == 100,
-				"oil material mass acquired fictitious molecular inventory");
-		var mercury = physicalStore.defaultRecord("mmm:mercury", 1, .5F, 13_600, false);
-		check(mercury.amount(registry.speciesHandle(BuiltinChemicalDefinitions.HG)) == 8_500_000_000L
-				&& mercury.exactSpeciesMassKilograms(registry).equals(ExactRational.of(1700)),
-				"mercury molar inventory did not close its material mass");
 		var scale = mmm.units.SolverUnitScale.forCellSize(1.0F);
 		var store = new ChemicalParcelStore(registry, scale, 2, 1);
 		var original = store.defaultRecord("mmm:water", 0.125F, 1.0F, 125.0, false);

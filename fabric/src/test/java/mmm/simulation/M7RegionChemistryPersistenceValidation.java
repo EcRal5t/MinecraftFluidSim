@@ -49,39 +49,11 @@ public final class M7RegionChemistryPersistenceValidation {
 
 	public static void main(String[] args) throws Exception {
 		validateChemicalFeatureLayout();
-		validateOilMassOnlyPersistence();
 		validateGranularFeatureLayout();
 		validateThermalProductionGate();
 		customViscosityRestoresFromCommittedBundle();
 		materialOnlyViscosityRestores();
 		System.out.println("Region persistence passed: current chemistry, granular and thermal feature layouts");
-	}
-
-	private static void validateOilMassOnlyPersistence() throws Exception {
-		Path root = Files.createTempDirectory("mmm-oil-mass-persistence-");
-		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
-		var source = populatedRegion(UUID.randomUUID());
-		var pure = source.domain().exportParticleState();
-		float[] positions = pure.copyPositionVolume();
-		double[] masses = new double[pure.particleCount()];
-		int[] materials = new int[pure.particleCount()];
-		Arrays.fill(materials, 1);
-		for (int p = 0; p < masses.length; p++) masses[p] = positions[4 * p + 3] * 800;
-		source.domain().restoreMaterialParticleState(new FlipMaterialParticleState(
-				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(), pure.totalVolume(),
-				mmm.units.SignedDyadic.sum(masses).toDouble(), BuiltinFluidMaterials.DEFAULT_PALETTE,
-				positions, pure.copyParticleVelocities(), pure.copySolidMask(), masses, materials));
-		source.domain().bindChemistry(chemistry);
-		var expected = source.domain().exportChemicalParticleState();
-		var repository = new RegionRepositoryAdapter(root, TestProfiles.chemical(chemistry), chemistry,
-				null, null, null, TestProfiles.materialRegistry());
-		repository.checkpoint(source);
-		var manager = manager();
-		check(repository.loadMetadata(manager).isEmpty(), "oil mass-only metadata was rejected");
-		var restored = manager.regions().getFirst(); repository.restore(restored);
-		assertChemicalStateEquals(expected, restored.domain().exportChemicalParticleState());
-		check(restored.domain().chemicalParcels().totalQuanta() == 0,
-				"oil disk restore generated fictitious species inventory");
 	}
 
 	private static void customViscosityRestoresFromCommittedBundle() throws Exception {

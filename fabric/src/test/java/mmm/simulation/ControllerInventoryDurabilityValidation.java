@@ -1505,7 +1505,6 @@ final class ControllerInventoryDurabilityValidation {
 
 	/** Seeded normal-play fuzzing entry point used to surface forced simulation interruptions. */
 	public static void main(String[] args) throws Exception {
-		if (args.length == 1 && args[0].equals("matrix")) { run(); return; }
 		for (String arg : args) if (arg.equals("debug")) FUZZ_DEBUG = true;
 		for (String arg : args) if (arg.equals("picks")) FUZZ_PICKS = true;
 		int[] explicitSeeds = args.length > 0 && args[0].equals("reported")

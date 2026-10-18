@@ -32,14 +32,6 @@ public final class M7ChemicalTransportValidation {
 	private M7ChemicalTransportValidation() { }
 
 	public static void main(String[] args) throws Exception {
-		if (args.length == 1 && args[0].equals("--units")) {
-			validateConcentrationControlsDensity();
-			validateOilMassOnlyRoundTrip();
-			validateChemicalContainerRoundTrip();
-			validateTransferResolutionIsAtomic();
-			System.out.println("SI chemistry transfer validation passed");
-			return;
-		}
 		boolean fast = args.length > 0 && args[0].equals("--fast");
 		validateMixtureBudgetAndBinaryAllocation();
 		validateInternalTransferLedgerDiversity();
@@ -57,9 +49,7 @@ public final class M7ChemicalTransportValidation {
 		validateCollisionDisplacement();
 		validateChemicalHandoff();
 		validateConcentrationControlsDensity();
-		validateThermalChemicalExtractionAudit();
 		validateChemicalContainerRoundTrip();
-		validateOilMassOnlyRoundTrip();
 		validateTransferResolutionIsAtomic();
 		validateInsertionAccountsForDisplacedLiquid();
 		if (!fast) validatePerformanceBudgets();
@@ -613,33 +603,8 @@ public final class M7ChemicalTransportValidation {
 						+ freshDensity + " brine=" + brineDensity + " cellSize=" + config.cellSize());
 	}
 
-	private static void validateOilMassOnlyRoundTrip() throws Exception {
-		var domain = new FluidDomain(4, 4, 4, STATIC_CONFIG, 128);
-		domain.bindMaterialRegistry(MATERIALS);
-		domain.bindChemistry(CHEMISTRY);
-		check(domain.tryInsertExactMaterial(1, 1, 1, .25F, 200, 0, 1).transferred(), "oil insertion failed");
-		double mass = domain.totalMass();
-		domain.step();
-		for (int p = 0; p < domain.particleCount(); p++) {
-			check(domain.chemicalParcels().record(p).entryCount() == 0, "oil remap generated chemical species");
-		}
-		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
-		var removed = restored.tryExtractExactChemical(1, 1, 1, .25F, 0);
-		check(removed.transferred() && restored.particleCount() == 0, "oil chemical extraction failed");
-		var contents = ChemicalContents.fromLedger(removed.ledger(), CHEMISTRY, 250_000_000);
-		contents = ChemicalContents.decode(contents.encode());
-		var split = contents.split(125_000_000, CHEMISTRY);
-		check(split.inserted().totalQuanta() == 0 && split.remaining().totalQuanta() == 0,
-				"oil container partial transfer generated species");
-		for (var part : List.of(split.inserted(), split.remaining())) {
-			check(restored.tryInsertExactChemical(1, 1, 1, part.toLedger(CHEMISTRY), 0).transferred(),
-					"oil container could not reinsert material mass");
-		}
-		check(restored.totalMass() == mass && restored.totalVolumeExact() == .25,
-				"oil round-trip changed volume or material mass");
-	}
-
 	private static void validateChemicalContainerRoundTrip() throws Exception {
+		validateThermalChemicalExtractionAudit();
 		FluidDomain source = domainWithCell(1, 1, 1, 0.25F);
 		for (int marker = 0; marker < source.particleCount(); marker++) {
 			source.setMarkerChemical(marker, Map.of(

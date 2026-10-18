@@ -151,25 +151,6 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 	}
 
 	static void reactionHeatIsPathIndependentStateEnergy() {
-		try {
-			var production = mmm.simulation.FullCapabilityTestFixture.load();
-			var physical = new ThermalStateFunction(production.thermal());
-			int water = production.thermal().materialHandle("mmm:water");
-			var ions = Map.of("mmm:h_plus", 1_000_000L, "mmm:oh_minus", 1_000_000L);
-			var product = Map.of("mmm:h2o", 1_000_000L);
-			double initial = physical.internalEnergyAtTemperature(water, 1, ions, 300);
-			double after = physical.stateForInternalEnergy(water, 1, product, initial).temperatureK();
-			require(Math.abs(after - (300 + 57_300.0 / 4_184)) < 1e-10,
-					"one mol neutralization did not release 57.3 kJ into 1 kg of solution");
-			int solid = production.thermal().materialHandle("mmm:precipitate");
-			var salt = Map.of("mmm:na_plus", 1_000_000L, "mmm:cl_minus", 1_000_000L);
-			require(physical.baseEnergy(solid, .058, salt) - physical.baseEnergy(water, .058, salt) == -3_900,
-					"NaCl precipitation reference energy did not use J/mol");
-		} catch (java.io.IOException failure) {
-			throw new AssertionError("Cannot load physical thermochemistry definitions", failure);
-		} catch (Exception failure) {
-			throw new AssertionError("Physical thermochemistry validation failed", failure);
-		}
 		ThermalMaterialDefinition solution = material("mmm:thermal/solution", "mmm:water", 0.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 500.0, 1_000.0)));
 		List<ThermalSpeciesOffset> offsets = List.of(

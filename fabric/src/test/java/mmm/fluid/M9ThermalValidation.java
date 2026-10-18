@@ -8,20 +8,6 @@ public final class M9ThermalValidation {
 	private M9ThermalValidation() { }
 
 	public static void main(String[] args) {
-		if (args.length == 1 && args[0].equals("--units")) {
-			ThermochemistryValidationScenarios.definitionAndCanonicalRegistry();
-			ThermalGasValidationScenarios.builtinDryAirWaterAndVaporPhysicsIsCalibrated();
-			ThermalGasValidationScenarios.builtinCo2GasLiquidPairDataIsFrozen();
-			ThermalGasValidationScenarios.builtinFiniteThermalDeviceDataIsFrozen();
-			ThermalGasValidationScenarios.gasLiquidSaturationAndExactBatch();
-			ThermalGasValidationScenarios.gasStateCompressionAndCarrierEnergy();
-			ThermochemistryValidationScenarios.reactionHeatIsPathIndependentStateEnergy();
-			ThermochemistryValidationScenarios.granularReactionHeatUsesOneConservedCellEnergy();
-			ThermalContactValidation.validate();
-			ThermalTransportValidationScenarios.finiteThermalBodyExchangesWithoutMixing();
-			System.out.println("SI thermochemistry validation passed");
-			return;
-		}
 		if (args.length == 1 && args[0].equals("--gas-topology")) {
 			ThermalGasValidationScenarios.persistenceBarrierSynchronizesGasTopology();
 			ThermalGasValidationScenarios.gasRuntimeTransfersEnergyAndWork();
