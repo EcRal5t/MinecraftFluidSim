@@ -1,24 +1,10 @@
 # Matter, Motion & Mechanics 产品路线
 
-本文记录尚未完成的功能、实现顺序和完成条件。当前实现见 [系统总览](../architecture/system-overview.md)，具体需求的代码入口从 [项目 README](../../README.md)选择。
+本文保存长期产品目标、后续阶段和各阶段验收要求。当前实现与代码入口见[当前设计书](../architecture/system-overview.md)，近期进度和施工安排统一见[当前实施计划](solver-consolidation-plan.md)。
 
-路线基线：`0dffd5a`（2026-09-24）。`playable-lifecycle`、`world-interaction-and-integration`、`physics-completion`、`rendering-performance-and-gpu` 四份专题计划和 `remaining-work-implementation-plan` 总计划都已移入 [归档提案](../archive/proposals/)。归档只作为验收标准、反例、故障注入矩阵和已知失败模式的来源，实现一律按当前架构全新设计；下文登记其中仍然成立的工作包和当前状态。
+产品目标是符合直觉物理、具备工业仿真特色、可玩且架构精简的流体 Mod。精度围绕正常玩法中的分层、惯性、液封、气腔压缩与热化学响应确定，允许肉眼难以察觉的离散瑕疵；库存守恒、恢复及生产预算继续作为交付要求。具体取舍见[求解器整合计划](solver-consolidation-plan.md#精度与物理取舍)。
 
-## 按计划找实现
-
-| 要推进的工作 | 先看当前实现 |
-|---|---|
-| 统一黏度、动量扩散、分层与对流 | [材料状态](../architecture/material-state.md)、[流体求解器](../architecture/fluid-solver.md) |
-| 实体双向作用与排水 | [实体输入](../architecture/runtime-and-lifecycle.md#world-inputs)、[流体求解器](../architecture/fluid-solver.md) |
-| gas 创造端口与气液 species 交换 | [气体状态](../architecture/gas-state.md)、[化学状态](../architecture/chemistry-state.md) |
-| 可放置的有限换热器 | [热学状态](../architecture/thermal-state.md#有限热容量设备) |
-| 界面与视觉 | [客户端代码](../maintenance/routing.md#client)、[客户端与协议](../architecture/system-overview.md#查询和展示) |
-| 外部 Mod 查询、转移与事件 | [外部 API](../architecture/external-api.md)、[容器事务](../architecture/world-ownership-and-containers.md) |
-| 原版行为（灭火、湿润、岩浆、红石） | [世界归属与容器事务](../architecture/world-ownership-and-containers.md) |
-| 性能与生产 GPU | [性能与后端规划](performance-and-backends.md)、[性能代码](../maintenance/routing.md#performance) |
-| 分区、端口和世界范围扩张 | [区域存档](../architecture/region-state.md)、[世界归属](../architecture/world-ownership-and-containers.md) |
-
-先在下文确认本次功能的完成条件，再沿对应专题进入代码。验收方法见 [验证指南](../maintenance/validation.md)和 [验收与发布](acceptance-and-release.md)。
+旧专题计划保存在[归档提案](../archive/proposals/)，用于查询历史验收输入、反例与故障模式。后续实现遵循当前设计书与实施计划。
 
 ## 长期产品目标
 
@@ -32,223 +18,159 @@
 
 近期模拟范围说明：保持有界气腔与局部孔流模型，暂不求解开放大气网格；微观分子/离子粒子、弱酸动力学平衡、通用弹塑性体及海洋尺度模拟超出当前规划。生产 GPU 后端作为独立阶段推进，不与首个 API 或原版交互增量绑定。
 
-## 长期不变量
+库存、派生量、展示、调度与事务的数据归属，以及跨模块提交契约，由[当前设计书](../architecture/system-overview.md#哪些数据决定物质库存)统一维护。新入口应声明单位、线程、转移语义、source/sink、预算和失败状态。
 
-未来工作仍必须维持六层分离：
+## 产品验收场景
 
-| 层 | 允许持有 | 禁止行为 |
-|---|---|---|
-| 物理原始数据 | 体积、逐材料质量、species/电荷、solid SVQ/组成、gas inventory、各载体 `U` | 从温度、颜色、density 或 mesh 反算库存 |
-| 数值离散 | MAC 速度、压力、PLIC/cut fraction、曲率、LTE grid | 把平滑场变成持久 source/sink |
-| 渲染重建 | palette、外表面、液液界面、法线、颜色 | 客户端修改服务端状态或掩盖输运错误 |
-| 调度/后端 | ACTIVE/REDUCED/SLEEP/UNLOADED、CPU/GPU 选择 | 因降频、休眠或后端切换改变守恒结果 |
-| 世界事务 | ownership、container/port transfer、原版交互 | 在可恢复 WAL/HEAD 之前修改多个持久域 |
-| 协议/存档 | stable ID、generation、capability、checksum | 写 runtime handle/GPU buffer，或猜测未知布局 |
+创造模式完整可玩是近期产品目标：新世界通过玩家入口建立、使用并恢复完整能力区域。外壳与控制器具备生存配方，其余组件可从创造栏取得。入口实现状态集中在[当前实施计划](solver-consolidation-plan.md#产品入口状态)。
 
-所有新入口还必须显式声明 BV/nanos/SVQ/AU/kg/K/EU 等单位、server-thread 所有权、all-or-nothing/partial 语义、source/sink 分类、预算和失败状态。
+| 场景 | 玩家流程与验收目标 |
+|---|---|
+| CX-01 首次世界与重进 | 默认配置建立能力区域，退出重进后继续使用 |
+| CX-02 建壳与生命周期 | 创造栏取外壳和控制器，空手激活、选择及暂停 |
+| CX-03 水与容器 | 材料桶、部分水桶和发射器完成转移 |
+| CX-04 多材料分层 | water/oil/mercury 与混合桶呈现正常分层 |
+| CX-05 化学与指示剂 | 试剂桶、指示剂及抹除操作完成正常流程 |
+| CX-06 颗粒与沉淀 | 细沙、轻珠、颗粒容器及沉淀完成生命周期 |
+| CX-07 密闭气体 | 创造来源与排气操作建立、改变并观察有限气腔 |
+| CX-08 导热与相变 | 可调恒温源驱动冰／水／蒸气相变 |
+| CX-09 有限换热器 | 玩家放置和移除设备，两侧流体通过设备换热 |
+| CX-10 实体作用 | 浮沉、划水、排水和双向冲量具有一致响应 |
+| CX-11 故障与恢复 | 拆壳、区块卸载及条件恢复保持玩家运行意图 |
+| CX-12 清空与拆除 | 探针控制台完成逐项预览、确认和持久移除 |
 
-## 当前产品基座
-
-当前支持范围是最多 4 个显式闭壳 controller region，CPU `FluidDomain` 为权威求解器聚合根。
-
-边界和控制器已有生存配方；自定义创造栏把快速入门、闭壳方块、探针、actual 空容器、server-resolved source templates、指示剂与固定温度源按产品顺序列出。
-
-激活后自动运行并持久保存玩家暂停意图，常规创建、选择和暂停通过控制器原生方块与交互完成。
-
-已经具备：连续体积 PIC/FLIP、可变密度材料、液气/液液界面与润湿、密闭气腔、world ownership、profile-bound 玩家/发射器容器事务、守恒化学、active/deposit 颗粒、总内能、导热、反应热以及固液/气液相变。
-
-当前基座的物理模型与边界特征：
-
-- 不可互溶相共享局部速度场，求解静水压力、密度分层与界面张力；不包含切向滑移、乳化和液滴破碎。
-- 实体运动通过 loader-neutral moving-body request 扰动粒子动量；浸没深度基于连续积分 AABB、派生液层与 cut-micro geometry，采用运动学位姿差近似。
-- 固液支持数据化压力平衡曲线，气液采用绝对压力与组分分压。
-- 气体基于精确库存、体积与内能闭合状态方程，接触液体的有限腔体节点以集总自由度进入压力求解，环境与真空保持 Dirichlet 边界。当前未引入逐单元空间气体动量方程。
-- Query API 提供同步只读单格观察与相邻液体的 Jade 适配；容器事务具备持久提交事件。
-- 提供基于物质场探针的服务端权威观察、控制台管理界面与破坏性动作的双重确认机制。
-- 客户端液面当前由快照体积阈值重建。
-- section 是单个区域原子代次内的存储分片，不具备独立提交生命周期。
-- 控制器外部的天然水体与世界生成水不在当前接管范围。
-
-## 当前主线：一个能完整游玩的创造模式 Mod
-
-目标范围锁定为**创造模式完整可玩**：新世界无需改配置或执行管理员命令即可建立并运行完整能力区域，所有已实现能力都有正常玩家入口，退出重进后行为确定。生存配方只要求外壳与控制器（`fluid_boundary`、`fluid_controller`），其余组件从创造栏取得；不需要扩张生存取得路径。
-
-判断进度只用一个标准：下表每个场景能否**从全新默认世界、不使用 `/mmm`** 做到。命令场景继续用于开发与 fixture，但不能作为产品入口或单独作为通过证据。
-
-| 场景 | 现在能不能做到 | 阻塞点 |
-|---|---|---|
-| CX-01 首次世界与重进 | 可以 | — |
-| CX-02 建壳与生命周期 | 可以（创造栏取得外壳与控制器，空手激活自动运行） | — |
-| CX-03 水与容器 | 可以（材料桶、部分水桶、发射器） | — |
-| CX-04 多材料分层 | 可以（water/oil/mercury 与混合桶） | — |
-| CX-05 化学与指示剂 | 可以（试剂桶、指示剂、抹除器） | — |
-| CX-06 颗粒与沉淀 | 可以（细沙、轻珠与颗粒容器） | — |
-| CX-07 密闭气体 | **取不到**：创造栏没有 gas source/vent，也没有排气入口 | B08（阶段 4a） |
-| CX-08 导热与相变 | 可以（可调温的 thermal reservoir、冰/水/蒸气相变） | — |
-| CX-09 有限换热器 | **没有这个方块**，只有无限热浴 | C04（阶段 6） |
-| CX-10 实体边界 | 能玩（划水、浮沉有响应），但排水与双向冲量不闭合 | C02（阶段 5） |
-| CX-11 边界故障与恢复 | 可以（拆壳、卸 chunk、availability pause 保持玩家意图） | — |
-| CX-12 清空与拆除 | 可以（探针打开控制台，逐项预览确认） | — |
-
-当前缺口按性质分为三类：
-
-1. **功能性死路**：CX-07 与 CX-09，玩家没有入口，对应 B08 与 C04。
-2. **品质缺口**：液面仍由经验阈值与增厚重建（CX-01~CX-12 都受影响），对应 D01–D03。
-3. **物理闭合**：实体排水与双向冲量（CX-10）、气液组分交换（CX-07 之后），对应 C02 与 C05。
-
-上面的阶段编号就是这些缺口的依赖顺序。每关闭一项，本表至少有一个场景从"取不到"或"不闭合"变为"可以"，这就是本路线唯一的进度证据。
-
-## 演进历程与架构转换
-
-本项目经历了物理基座搭建、分层架构重整与数值事务加固三个主要演进阶段。详细变更与各阶段发布内容参见 [版本历史](../progress/version-history.md)，重整技术细节见 [架构重整实施记录](../archive/progress/code-architecture-restructuring-implement.md)。
-
-| 阶段 | 提交范围 | 结果 |
-|---|---|---|
-| M1–M9 物理与事务基座 | 建库至 `M9Close`（2026-08-25） | 多区域、多材料、表面张力、气腔、ownership/容器 WAL、化学、颗粒、温度与相变逐项落地 |
-| 冻结产品计划 | `65b3791`–`a56513d`（2026-08-26） | 梳理创造模式体验，拆分为可验收的 A/B/C/D 工作包，确立 `api`/`core`/`fabric` 分包 |
-| 架构重整（S00–S21） | `1cf9e20` 至 `19fb7cd`（2026-09-08） | 生产代码按 `api ← model ← solver ← application` 严格分层；`FluidDomain` 成为唯一运行时聚合根 |
-| 数值与事务加固 | `d747f8e`–`PseudoAstra`（2026-09-11） | 修复重整暴露的压力、气腔拓扑、非等温相变收支及容器事务边界，形成常驻测试场景 |
-| 验证与覆盖加固 | `c88e34e`–`2b44a62`（2026-09-22） | 正常操作 Fuzzer 具备确定性状态断言、过程覆盖与最小化回放 |
-| CPU 热点优化 | `e3f3dd5`–`Handoff2Api`（2026-09-23） | 化学交接复用、热参考能缓存与同次压力投影矩阵装配去重，消除大域超时 |
-| 床面输运补正 | `0dffd5a`（2026-09-24） | 引入基于 Shields 数的水流起动模型、薄床阻力与水下局部休眠唤醒 |
-| 物性统一与动量扩散 | `2026-09-30`–`2026-10-01` | 统一材料黏度来源 `mu(T)`，引入有限体积对称应变动量扩散与壁面滑移边界 |
-
-本路线文档专注于**当前基线之上的剩余工作与推进次序**，已完工项移入架构文档与版本历史维护。
-
-### 历史分支与归档参考
-
-旧开发分支（如 `codex/*`）及历史提案已移入 `docs/archive/`，仅作为已知测试场景、反例与验收标准的参考依据。后续工作包（如实体严格双向、气液组分交换等）均在现行 `model`/`solver`/`app` 架构下全新设计与实现。查找代码以当前检出分支为准。
+产品流程使用全新默认世界与正常玩家入口；开发命令和 fixture 用于复现及自动化验证。演进历史见[版本历史](../progress/version-history.md)，旧方案与反例见[归档目录](../archive/README.md)。
 
 ## 推进次序
 
-C01（1a–1c）在声明的小振幅线性对流有效域内已完成，现行契约见[材料状态](../architecture/material-state.md)、[流体求解器](../architecture/fluid-solver.md)和[热浮力](../architecture/thermal-state.md#热浮力)。自由面双路径交接与解析精度的前置验收已完成：连续输运、库存加权空间误差和载体规模、实际连接与持续颈部分离、独立数值支撑及默认完整步预算均有自动化验证。共享面有限体积与独立粒子继续承担现有支持范围，亚格压力与黏性缺失、有限围墙断裂场景及精细网格离线成本见[空间解析限制](../architecture/fluid-solver.md#当前自由面的空间解析限制)。恢复阶段 3 的 D01 展示输入契约前，先按[求解器整合与维护改进计划](solver-consolidation-plan.md)建立当前 WIP 基线，完成下表前置物理缺口与相应集成验收。探索成果与离线对照见[归档索引](../archive/free-surface-unification-research.md)。
+共同主干整合、当前状态和近期交付由[当前实施计划](solver-consolidation-plan.md)维护。
+以下阶段安排长期能力的依赖与完成条件，每轮完成一条可运行、可恢复的职责链。
 
-| 顺序 | 产品阶段 | 前置依赖 | 完成时必须证明 |
-|---|---|---|---|
-| 3 | 展示几何契约与重建 | snapshot identity/sequence、材料 palette、已解析几何与未解析载体输入 | 服务端已提交状态确定规范展示几何；客户端不再用体积阈值和增厚修补 |
-| 4 | gas 创造端口与气液 species 交换 | 顺序 3 的观察入口、现有 exact gas inventory | 玩家可从创造入口建立 sealed CO2 场景；两侧 inventory/组成/`U` 联合提交 |
-| 5 | 实体双向边界 | 顺序 1 的黏性面应力 | 排水、压力面积分与液体/实体冲量在同一事务内闭合 |
-| 6 | 跨域恢复判定器与可放置的有限换热器 | 现有 container/ownership 恢复状态；有限换热器另依赖热机械收支工作包 | 判定器只有一份；设备 kg/`U` 只存于 region HEAD，两流体零物质交换 |
-| 7 | 公共转移 API 与原版行为 | 顺序 4 的 typed payload、顺序 6 的恢复判定器 | 外部 actor 可 crash-safe 收敛；原版行为逐项有库存/能量账本 |
-| 8 | section 生命周期与显式端口 | profile、事务与网络 API | 跨 section/region 仍只有完整代次，不依赖永久 chunk ticket |
-| 9 | 有界范围扩张 | 高休眠率、恢复/性能基准 | 天然小水体在硬预算内可接管、释放和异常恢复 |
-| 10 | 生产 GPU 后端 | immutable step input、完整 candidate、CPU 对照与 profile | GPU 超时/设备丢失保留上一完整状态；库存和误差检查与后端无关 |
-| 11 | 大尺度世界评审 | 前述全部量化 | 河流/海洋方案有成本模型、持久模型和明确适用条件后才可开工 |
+1. **展示几何契约与重建**：从已提交服务端状态生成完整、有界的展示输入。
+2. **气体创造端口与气液物种交换**：依赖观察入口和现有气体库存，完成玩家流程与联合事务。
+3. **实体双向边界**：依赖共同黏性与压力主干，完成排水及镜像冲量。
+4. **跨域恢复与有限换热器**：复用现有事务判定，设备集成依赖所需的热机械收支。
+5. **公共转移 API 与原版行为**：依赖明确数量类型、持久 actor 和统一恢复规则。
+6. **范围与后端扩展**：依次评审 section 生命周期、显式端口、有界水体和完整 GPU 后端。
 
-阶段编号表达依赖；每轮按完整职责链组织交付，入口与验证命令由 routing 索引。
-
-### 物理缺口的依赖安排
-
-现有自由面前置验收覆盖其被测双路径构建的运行范围。本轮按[精度与物理取舍](solver-consolidation-plan.md#精度与物理取舍)和[工作包依赖](solver-consolidation-plan.md#工作包与依赖)替换共同主干，允许重选内部空间与速度表示，放宽单格高阶矩和不可解析亚格运动的精确恢复要求。库存、真实容量、热学结算、宏观物理表现与完整步预算继续验收。空间解析限制随实现更新到[求解器契约](../architecture/fluid-solver.md#当前自由面的空间解析限制)。
-
-| 缺口或待补证明 | 执行时点 | 完成条件 |
-|---|---|---|
-| 液体几何、动量、压力与黏性共同主干 | 继续当前主线前，与最小液固及气腔耦合共同完成 | 纯液体与含固相采用共同液体离散，质量与动量通量一致；内部冲量与外部反力闭合，压力功和速度写回相容。静水、自由面、注液及一般场后继连续运行，宏观旋转、惯性和冲击具有合理耗散；亚格矩精确保持退出完成条件 |
-| 气体空间连通、节点归属与压力共同几何 | 继续当前主线前，与液体主干共同完成 | 湿干区域、共享开口和液气界面采用同源浮点几何；支持尺度内液封、有限孔流与同格独立气腔保持。库存、内能及旧控制体积按实际可达来源交接，节点容量按权威库存及占容结算；压力、相变、捕获和恢复共用归属规则，状态方程与热容模型按库存、容量、内能结算压力响应及做功 |
-| 活动颗粒占容、压力反作用与阻力耦合 | 基本耦合随共同主干交付，完整负载随后关闭 | 体积变化、孔隙通量和压力反作用采用一致离散，液固总冲量与外部反力闭合；共同平移、中性浮力静水、近墙和高密颗粒场景连续运行，删除按区域有无固相切换液体算法的路径 |
-| 颗粒零预测速度及压力后反向运动 | 随共同液固离散完成 | 原反例连续推进，实际占容变化、液体位移、动量与做功相容；核函数和求解形式可随新主干调整，从同一预测状态计算且只提交一次 |
-| 接近满容量时颗粒运动与有限化学份额分配 | 共同主干先接入必要占容，随后完成固相生命周期 | 两格满液、3 SVQ、相邻 binary32 位置余数变化、提取和高密台阶在真实容量内正常运行；几何采样与精确库存解耦，预览、重建、恢复和增删共用分配规则。沉积—起动—再沉积保持库存、容量及对应势能和局部耗散结算，亚格分布允许声明误差内近似 |
-| 反应与固液转移 | 共同输运、占容和气腔交接接通后 | 按实际来源结算化学批次、物种、质量、内能与宏观动量；位置变化涉及的反力和做功有明确来源，细尺度运动按整合计划允许耗散并结算。析出、溶解、合并及连续相变复用共同转移与一次提交规则 |
-| 展示输入遗漏格内位置与闭合液滴 | D01 首个增量，先于完整 mesher | 同格、同库存而位置不同的液体可区分；已解析几何与未解析载体均有有界输入、表示规则和量化误差 |
-| 液气交换面积与气腔归属的近似 | C05 首个增量，先于传质集成 | 对已解析界面、薄层和格内闭合滴分别校验服务端面积、唯一气腔归属及空间误差；声明实际可用的传质范围 |
-| 实体湿表面与压力支撑不一致 | C02 首个增量，先于压力面积分 | 湿表面采样与服务端液体几何一致；无压力自由度区域的贡献单独量化，浮力误差符合该切片验收 |
-| 物理耗散尚未转为载体内能 | 默认阶段 5 后、阶段 6 前；C05 温度误差超限时提前 | 已解析黏性与阻力耗散按局部作用提交内能；封闭衰减与外部驱动分别闭合能量及外部功 |
-| 亚格压力、黏性与薄膜动力学 | 扩展小尺度物理支持前独立评审 | 新空间表示同时通过守恒、连续交接、机械解析对照、规模和完整步预算；当前主线继续使用已声明解析范围 |
-| 断裂时间全面收敛、无墙增长率、长时尾部及更大区域成本 | 对应物理或范围扩展之前 | 复用现有连接、液颈和长输运场景，按新增支持范围补空间/时间对照及成本；默认 20 Hz 与扩大区域单独验收 |
-
-表示冲突、面积归属含混或规模成本失控时，直接调整相应模型并完成整条职责链。精细对照超出实时预算时保留离线用途，实时支持范围按实测成本确定。
+涉及界面面积、实体湿表面和未解析液体时，先量化对应支持范围，再集成传质或双向压力。
+物理耗散的温度误差影响传质验收时，提前完成相应热机械收支。
+新增解析能力与范围扩张分别验证守恒、连续交接、可观察误差及完整步成本。
 
 ## 阶段 3：展示几何契约与重建
 
-工作包 D01–D03。当前客户端 `FluidSurfaceGeometry` 用 `SURFACE_THRESHOLD = 8` 的体积阈值决定是否出液面，并用固定厚度盒体补足薄体；`MaterialSurfaceGeometry` 负责液液界面。这些是展示启发式，不是服务端几何。
+工作包 D01–D03，依次交付输入、网格生成和校验。
 
-- D01：首个增量先证明输入完整性。已解析单元提供 cell 坐标、cut-cell aperture 摘要、总 liquid fraction、服务端 PLIC plane 的规范化 normal/offset 及其固定点量化、每个不可互溶 phase pair 的 plane/fraction/label side 与唯一 owner、shared face 的 canonical identity。未解析液体另提供有界的载体位置、正体积、材料/相身份及表示种类，声明规范展示形状的近似规则。输入按已提交代次生成，使用 interface cell、shared face 与载体的稀疏编码；服务端维护空间表示有效性，客户端量化数据用于展示。量化误差只影响展示位置，服务端 nanos 不变。
-- D02：mesher 拆成纯数据阶段（decode/validate → labeled clipped polyhedra → 每 shared face 一次 canonical planar arrangement → 抵消同 label 覆盖 → 三角化 → normal/attribute）。共享界面只生成一次并有稳定属主与法向；三相接触线由同一 face arrangement 交点生成 canonical junction key。不得用 `INTERFACE_INSET` 类偏移错开外表面与内部界面。
-- D03：validator 对每类 surface 计算 label partition 覆盖/重叠、index bounds、finite、面积、重复三角形、有向边关联、boundary loop、winding 与 bounds；frame key 固定为 `(dimension, region UUID, network generation, sequence)`，迟到包装不进当前 frame。
-- 完成条件：同一已提交状态重复构建得到相同 canonical digest；格内闭合液滴、薄层、斜 cut-cell 和多材料界面均有展示输入，位置、体积与形状近似误差分开报告，客户端不再依赖体积阈值与增厚。复用既有交接轨迹验证两种表示之间的显示连续性，记录微小尾部造成的记录数、字节数和重建成本。`protocol` 承载 snapshot identity、量化及 tombstone 覆盖，`materials` 承载 mesher fixture；快照生成/编码和客户端重建分别计时，服务端完整步预算继续使用原条件。
+- **输入**：按已提交代次提供服务端 PLIC、开放几何、材料界面和共享面身份。
+  未解析液体提供有界的位置、体积及材料信息，按明确近似生成展示形状。
+  量化影响展示误差，物质库存继续保留原始数量。
+- **网格**：共享界面只生成一次，材料归属、法向和三相交线一致。
+  同一状态重复构建得到相同结果，区域身份与快照顺序阻止迟到包覆盖新状态。
+- **验证**：覆盖薄层、格内液滴、斜切单元与多材料，检查覆盖、重叠、朝向、有限坐标及几何连续性。
+  服务端快照与客户端重建分别测量字节数和成本。
+
+完成后，展示从服务端定义的几何与载体输入重建，替换体积阈值和固定增厚启发式。
+具体网格数据结构在实施时依据当时的服务端表示确定。验证使用 `protocol,materials`。
 
 ## 阶段 4：gas 创造端口与气液 species 交换
 
-工作包 B08 与 C05。创造目录当前只有 `mmm:source/material/*`、`mmm:source/reagent/*`、`mmm:source/granular/*`，`CreativeSourceCatalog.resolve` 对其它前缀直接拒绝，因此玩家无法在不使用命令的前提下建立 sealed CO2 场景。registry 侧已冻结 `gas_liquid_pairs/co2_water.json`（含 stable mapping、Henry 分段与膜传质定义）、`species/co2.json` 与 `thermal_species/water_co2.json`；`GasLiquidSpeciesPair` 目前只有 codec 与校验的消费者，solver 里没有任何溶解/脱气 stage，缺的是入口和联合 candidate。
+工作包 B08 与 C05，先完成玩家建立有限气腔，再完成有限速率跨相交换。
 
 ### 4a gas 创造端口
 
-- 只允许提交时仍为创造模式的真实 `ServerPlayer`：`gas source/vent` 解析壳面与内侧 gas cell，目标必须属于一个 sealed node；ambient target 需要玩家显式确认 source/sink 语义。dispenser、fake player、automation 与 public provider 全部拒绝。
-- source descriptor 只含 gas component stable ID、请求标准体积 nanos 和可选 K，服务端从 world gas/thermal/chemical registry 构造实际 kg/species/residual/`U`。
-- insert/extract 在私有 region candidate 中联合更新 component standard nanos、kg、species/residual、node `U` 与 gas ledger，HEAD 仍是唯一提交点；descriptor item before = after，但 creative-source actor sequence/receipt 必须 durable。
-- 不修改 pressure：pressure 由提交后的 inventory/available volume/`U` 派生。超出 P/T/容量域整次拒绝。
-- 最近门 `air-network,thermal,containers`。
+创造模式玩家可在真实壳面选择内侧密闭气腔，注入或排出指定气体。
+来源描述组分、标准体积和可选温度，服务端依世界定义派生质量、物种和内能。
+环境目标需明确外部源汇；首个入口限定真实创造模式玩家。
+
+区域候选联合提交全部气体库存、内能与账本，操作身份可跨重启判定。
+压力由提交后的库存、容量和内能派生。
+验收使用 `air-network,thermal,containers`，覆盖建立、排气、失败重试和恢复。
 
 ### 4b 气液 species 交换
 
-- 首个增量验证服务端界面面积与 gas node 归属。使用当前服务端数值几何及其表示有效性，对平面、薄层、闭合格内滴和表示交接分别作解析面积或离线积分对照，报告空间细化误差；每份面积只归属于一个实际接触节点。按结果声明传质近似的适用范围，客户端展示网格与量化平面保持观察用途。
-- 温度依赖速率的对照同时量化未结算机械耗散造成的温度误差；超过该场景声明的温度或速率误差限时，先执行热机械收支工作包，再验收对应传质范围。
-- 从 PLIC/cut face 得到有限界面面积与所属 gas node；从 gas inventory 派生 component 分压，从 liquid exact species/volume 派生浓度；在 registry 声明的 P/T/concentration 有效域内求平衡驱动力。
-- 用串联膜阻力求有限速率通量（`delta/D` 与映射后的 gas 阻力同为 `s/m`），连续 `n_extent` 只用于决定向零量化多少完整 exact batch，提交仍只搬运 exact truth；不足一个 batch 时留在原库存等待后续驱动力。
-- 一次 batch 联合更新 gas standard nanos/kg/species/residual、liquid species/marker mass residual、两侧总 `U` 与 node/chemical ledger；任一侧容量、温度反演、lineage、预算或审计失败时整个 interface 不修改。多个 interface 按 canonical cell/pair 顺序处理，预算耗尽的剩余 interface 保持 dirty。
-- logical step 顺序冻结为：mechanics/projection → marker advection → gas topology remap → conduction → reaction → ordinary phase change → gas-liquid species transfer → granular/reseed → audit。本步新溶解的 species 首次参加反应在下一 logical step，该一步延迟进入 fixture。
-- 完成条件：sealed CO2 headspace 加不饱和水使压力下降且液相 species 增加、升温降压脱气方向反转并受界面速率限制、ambient 交换差额进入明确 source/sink、cavity split/merge 同 step 时 species 只随 lineage 搬运一次、未声明 pair 的 gas 与 liquid 永不跨相交换；`gas-liquid,chemistry,thermal` 为最近门。
+首个增量确认服务端界面面积和实际接触气腔归属，声明薄层及未解析液体的适用范围。
+温度依赖速率同时评价未结算机械耗散带来的温度误差。
+
+传质使用注册表中的平衡关系与串联膜阻力，得到有限速率后量化为完整守恒批次。
+联合交接气液两侧物种、质量、标准体积、内能与账本，目标容量和状态函数在提交前预检。
+预算耗尽的接口保留待处理状态。
+
+传质安排在本步普通反应与相变之后，新溶解物种在下一逻辑步参与反应。
+完成条件包括密闭 CO2 溶解降压、升温或降压脱气、环境源汇，以及气腔拆并时的一次交接。
+验证使用 `gas-liquid,chemistry,thermal`。
 
 ## 阶段 5：实体双向边界
 
-工作包 C02。当前 `MinecraftRegionInputs` 以 AABB 湿体积比例和固定参数（`FULL_SUBMERGENCE_DRAG = 0.20`、`NEUTRAL_SUBMERGENCE = 0.72`）修改实体速度，同时向 core 提交 moving-body marker 动量；实体力和液体冲量不是同一离散边界的镜像，实体占位也未进入容量。
+工作包 C02，按下列依赖推进，每个切片完成正常流程和相应守恒验证。
 
-首个增量先核对湿表面和压力支撑：读取服务端液体几何及其表示有效性，分别量化已解析液池、薄层和格内液滴的湿面积、排水体积与压力贡献。压力面积分的有效范围与误差限由这些对照确定，展示几何继续专职呈现快照。
+1. 从服务端液体几何取得湿表面和压力支撑，静水面积分浮力与排水量对照。
+2. 实体表面速度进入共同压力条件，实体占容参与液固容量与液体排开。
+3. 接入黏性剪切，液体、实体、固定支撑和外部运动约束的冲量与功共同记账。
+4. 独立评审动态平移速度与压力联立求解，旋转继续按明确的外部运动约束处理。
 
-按依赖拆成可独立关闭的切片，前一步都应能单独退化回当前行为：
-
-1. **表面积分浮力**：在静水 pressure 场对实体表面做 `-p n dA` 积分，与 `rho g V_displaced` 对照，姿态与采样分辨率的误差必须有上限。
-2. **移动 pressure boundary**：实体表面法向速度进入 cut-face 与 target divergence，由 projection 本身排开液体；不得直接缩放 marker volume。
-3. **统一占位容量**：moving solid occupancy 与 world cut-cell、deposit、coherent solid 共用容量；无容量时返回明确 overflow/rejection，不能让实体永久重叠或静默删液体。
-4. **黏性剪切**：复用阶段 1 的 Newtonian surface stress，与 pressure impulse 分列；首个盒体实现不叠加经验形状阻力。
-5. **镜像冲量**：`Delta p_fluid + impulse_entity + impulse_fixed + impulse_kinematic_external = roundoff`，并记录 displacement work；实体在提交前消失或传送时，未生效冲量显式结算为未决差额。
-6. **严格双向（独立评审）**：把受支持 body 的三维平移速度作为 pressure system 的附加未知量，用实际质量矩阵与同一 face coupling operator 组成对称 Schur 系统，使附加质量进入离散方程本身；旋转表面速度按明确的 `KINEMATIC_EXTERNAL` 计算。
-
-受支持实体的质量来自数据定义（entity type/tag → kg、coupling mode、几何 provider、物性有效域）；无定义的实体按 `KINEMATIC_EXTERNAL` 处理，施加排水与外部边界作用。
-
-最近门随切片选择 `entity-fluid`、`free-surface`、`shape`、`lifecycle`。
+受支持实体从数据定义质量、耦合方式和几何；缺少动态定义的实体按外部运动物体处理。
+实体消失或传送须处理尚未生效的冲量，几何容量不足须保留完整状态并报告原因。
+验证随切片选择 `entity-fluid,free-surface,shape,lifecycle`。
 
 ### 热机械收支工作包
 
-默认在阶段 5 后、阶段 6 的有限换热器集成前执行；C05 温度或速率误差超限时提前完成所需的已解析黏性/阻力热结算，实体做功结算随 C02 完成。复用现有 Newtonian 应力、阻力、机械诊断与内能事务。首个增量在已解析剪切和封闭衰减场景中将未结算耗散换算成等效温升，按已有温度与相变精度要求评估影响；持续外部驱动的功单独计入。
+默认在阶段 5 后、有限换热器集成前交付；传质温度误差超限时提前完成所需部分。
+先用代表性剪切、封闭衰减和持续驱动场景，把未结算耗散换算成温度影响。
 
-随后由局部应力与相对运动的功确定物理耗散及受热载体，与外部运动约束做功分别结算，在同一私有候选中预检并提交 `U`。本轮 solver 整合主动引入的细尺度运动耗散随表示转换结算，并与后续物理耗散避免重复计账。P2G/G2P、压力投影、空间重建与 reseed 的数值误差继续单列诊断；重力势能和界面能的离散误差单独评价。
+由局部应力和相对运动确定耗散及受热载体，与外部约束做功分别提交内能。
+表示转换主动耗散沿其转换计划结算，速度传递、压力及空间重建误差独立诊断。
+重力势能和界面能按对应离散评价，避免同一能量变化重复记账。
 
-完成条件：无外部做功的已解析黏性/阻力衰减将机械损失转成对应载体内能，固定和运动约束的外部功有明确归属；逐材料质量、species、体积、正温与能量收支联合通过，失败候选和重试保持一次提交。当前亚格流动限制沿用原契约，测试选择 `thermal` 与所涉及的 `granular`、`entity-fluid`。
+完成条件为封闭衰减的机械损失转为载体内能，外部驱动具有明确功账，失败与重试保持一次提交。
+验证使用 `thermal` 及受影响的 `granular,entity-fluid`。
 
 ## 阶段 6：跨域恢复判定器与有限换热器
 
-工作包 B00 与 C04。`ContainerTransferJournal`、`WorldActionJournal` 与 `FiniteDeviceJournal` 可以有各自的严格载荷形状，但必须委托同一个 JDK-only 恢复判定器，而不是各自解释“before/after/third”。每个外部域提供 canonical identity、revision、exact before/after truth、durable readback 结果和 `BEFORE`/`AFTER`/`THIRD`/`UNAVAILABLE` 分类，现有 container recovery 先改为委托它，并按完整笛卡尔矩阵做故障注入。
+工作包 B00 与 C04。容器、世界操作和设备采用共同恢复判定，具体载荷由各事务保存。
+外部域提供稳定身份、代次、前后状态和耐久回读证据，区分前态、后态、第三态及暂不可读。
+以现有容器恢复迁移和故障注入验证共同规则，再集成设备。
 
-core 已有有限设备状态、多端口交换 planner 与单 region 联合提交，`finite_thermal_devices/finite_heat_exchanger.json` 与 `thermal_materials/copper_heat_exchanger.json` 也已冻结；缺的是世界对象、接触几何和生产调度。
+- 换热器具有独立方块、模型和提示，有限质量与内能由 region HEAD 保存。
+  世界对象保存定位及展示配置，界面温度从实际设备内能推导。
+- 放置、移除和掉落联合结算世界、物品及区域状态，携带质量和内能完整交接。
+- 实际端口几何提供接触面积，壁面与流体膜热阻决定热导，同格多面先合并。
+- 设备与流体在同一候选中预检和提交。跨区域设备依赖完整的多区域协调提交。
 
-- 新增独立 ID、模型和提示文本的换热器方块；`thermal_reservoir` 专职表示无限恒温热浴。
-- BlockEntity 只保存 provider/object locator 与展示配置；region HEAD 中的 `FiniteThermalDeviceState` 才是 kg、`U`、material fingerprint 与 generation 的权威。UI 温度由 body `U` 反演，不从 BlockEntity 恢复。
-- 放置与拆除使用包含 world before/after 与可选 item actor 的 `FiniteDeviceJournal`，委托跨域恢复判定器，不串行执行两个 journal；破坏设备时若携带能量，掉落物必须完整保存 body truth，或把实际 `U`/质量明确结算到 sink。
-- contact resolver 只接受实际壳体 face 与 region interior 相邻、属于该 device type 声明的 port；总 conductance 由壁面与流体膜串联热阻推导，膜厚来自 SI 几何，不使用每 tick 倍率。同一 cell 多 face 先合并。
-- 每个 thermal logical step 只构造一次 LTE grid，按 canonical locator 排序批量 plan，联合预检所有 cell/body delta 后一次 apply；一个 body 或 cell 失败时本次 device exchange 整体不修改。
-- 跨 region 设备在 multi-HEAD coordinator 完成前明确返回 `UNSUPPORTED_MULTI_REGION`，不给两个单 region body 各复制一份 `U`。
-- 完成条件：热流体 A、冷流体 B、实体墙与换热器的最小 fixture 中 A/B 材料与 species 零交换，`delta U_A + delta U_B + delta U_device + roundoff = 0`，移除并重新放置不制造也不删除 `U`；最近门 `thermal,region-state,ownership`。
+完成条件：冷热流体经设备传热且零物质交换，双方与设备的内能联合闭合，移除和重放保持库存。
+验证使用 `thermal,region-state,ownership`。
 
 ## 阶段 7：公共转移 API 与原版行为
 
-这是 [外部 API](../architecture/external-api.md) 已冻结语义之后的写入侧。当前只有同步只读 Query 与 container committed event。
+写入 API 延续[外部 API](../architecture/external-api.md)的单位、线程及提交规则。
 
-- 受控转移：在 `api` 定义 JDK-only 的 request/plan/commit，覆盖 liquid nanos 与 granular SVQ，携带 stable resource identity、typed amount、可选质量/组成/能量与 actor transaction identity；plan token 只在 server 内存存活到过期 tick，重启后失效，调用方用同一 operation identity 重试，由 actor durable sequence 判定已提交或 stale。gas 与 coherent solid 只在各自有真实消费者和完整事务后才加入 union。
-- 外部 actor 必须能跨重启解析：稳定 `providerId`/codec ID/objectId/epoch、有界 canonical before/after truth、durable save 证据与 receipt。只有能持久保存 epoch/sequence/last receipt 的 actor 才可注册公开写入。
-- 事件：只在对应 commit point 之后发布，逐类型使用封闭 record，不预建通用 `type + Map` 事件；监听器异常隔离、不可回滚、允许漏失，并声明能否由 Query 恢复。
-- 原版行为逐项定义并验收，不绑成一次发布：灭火（每类火焰的接触、最低液量、温度/相态和蒸气去向）、湿润/冲刷（方块的有限吸收库存或明确的 external sink）、岩浆/高温（材料、热通量和 reaction/phase 事务表达产物）、红石/生物/寻路（只用稳定查询快照和阈值，不暴露 live solver 数组）。每项归属一个世界能力、有独立数据资源、本地化失败反馈和相关测试。
-- 阶段关闭条件：至少一个观察适配能在不唤醒区域的情况下显示局部派生温度；至少一个只读外部适配和一个具有故障安全保障的外部转移适配通过重启恢复；原版行为逐项具备库存/能量账本和实际场景验证。
+- 首先提供液体 nanos 和颗粒 SVQ 的明确数量类型、计划与提交，携带资源身份、组成、能量和操作身份。
+  临时计划随过期或重启失效，重复请求由持久 actor 的代次与回执判定。
+  气体和连续固相在具备实际消费者及完整事务后加入。
+- 外部 actor 提供跨重启稳定身份、前后状态、耐久保存证据和回执，恢复沿共同判定器推进。
+- 事件在对应提交时点之后发布，使用明确类型并声明查询补偿方式；监听异常隔离于已完成提交。
+- 灭火、湿润、冲刷、高温反应、红石与生物行为逐项交付，各自定义接触、库存和能量来源。
+  有物质吸收时保存有限库存或明确记汇，观察行为使用稳定快照。
+
+阶段完成需有实际只读适配和可恢复的外部转移适配，并完成所选原版行为的真实场景验证。
 
 ## 阶段 8–11：范围与后端
 
-- section 生命周期：当前 section 只是 region checkpoint 内的切片。若要独立休眠/加载，必须先冻结 manifest/commit 模型，回答 marker/gas edge/deposit/thermal flux 属于哪个完整 generation、缺失一片时整 region 停止还是能证明边界通量为零、多个 section HEAD 如何共同提交、网络快照如何拒绝迟到包复活旧状态。区域之间默认不直接连通，交换只经显式端口或另行评审的相邻合并协议。
-- 范围扩张次序：controller 内显式端口与 section 休眠 → 有硬边界/预算的小型原版池体接管与释放 → 邻近河段的有限 ownership 与 chunk 生命周期 → 只有上述事务、休眠率和性能门稳定后才单独评审海洋与世界生成水。不申请永久 chunk ticket。
-- 性能：保持 40 ms pacing 与连续 3 步 200 ms 暂停阈值；代表性静态域至少 80% 体积可守恒休眠后才扩大范围。CPU 已消除三类重复开销（精确数量重复求和、候选状态序列化往返、同次压力投影内重复矩阵装配）。后续整合允许替换算法和内部表示，使用原输入及完整运行步数，按整合计划核对宏观物理误差和完整步成本。
-- 生产 GPU：当前 probe 只覆盖单一常密度 carrier，其中心平流尚可能造成逐格超容量。完整后端要求承载 `FluidDomainState` 的全部材料、变密度、表面张力、气体、热学、化学、颗粒与相变；常规步 data 常驻设备，按需回读；设备丢失时暂停区域并从最近通过库存、逐格容量和完整步校验的 CPU 可读 checkpoint 恢复。既有障碍物溃坝场景的计算后 checkpoint 必须能按原有 CPU 容量契约继续计算；库存与误差检查与后端无关。GPU 数值能力缺口（含共享面库存输运及 reseed 路径与 CPU 的差异）必须显式关闭，不能用阈值、钳制或渲染补偿掩盖。
+- **Section 生命周期**：定义完整代次、跨片通量和共同提交，再支持独立加载与休眠。
+  缺片处理、网络顺序和恢复规则共同验收。
+- **显式端口与有界水体**：先完成 controller 端口和 section 休眠，再接管、释放小型原版池体。
+  河段和更大范围依赖 ownership、区块生命周期及实测休眠率，保持有限加载预算。
+- **生产 GPU**：支持完整材料、气体、颗粒与热化学候选，库存和误差验收与 CPU 一致。
+  常规状态驻留设备，设备丢失时从已验证的 CPU 可读 checkpoint 恢复。
+- **大尺度评审**：河流、海洋和世界生成水需先有成本与持久化模型，再确定支持范围。
+
+统一预算与测量口径见[验证指南](../maintenance/validation.md#performance)，
+范围扩张及 GPU 的专门条件见[后端扩展参考](performance-and-backends.md)。
 
 ## 阶段关闭与文档规则
 
-日常小增量只跑 [routing](../maintenance/routing.md) 指定的相关测试；产品阶段关闭或发布才按 [验收与发布](acceptance-and-release.md) 汇总受影响层。自动门不能观察的视觉或真实 world 行为，才请求一次单场景实机验证，并给出单一场景、操作步骤、预期效果和日志依据。
+按完整职责链选择必要自动化验证，阶段关闭或发布时按[验收与发布](acceptance-and-release.md)汇总受影响层。
+视觉、复杂方块碰撞和跨重启等需要人工介入时，提供单一场景、步骤、预期效果及日志依据。
 
-阶段实现后，把仍有约束力的数据结构、公式、提交顺序、预算和失败语义移入对应 architecture；本页只保留尚未完成的目标、依赖与适用条件，已完成项从本页删除。历史发布事实进入 [版本历史](../progress/version-history.md)，不让历史叙述重新成为当前规范。
+实现后，稳定模型、数据归属和提交契约进入 architecture；当前状态更新实施计划。
+本页保留后续目标、依赖和完成条件，具体字段、缓存、搜索过程与阈值由代码及测试维护。
+历史事实留在 Git、会话与[版本历史](../progress/version-history.md)。

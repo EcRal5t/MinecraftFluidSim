@@ -1,106 +1,425 @@
-# 系统总览
+# 当前设计书
 
-本文用于理解模块关系、物理数据和一次计算的顺序。已有明确修改目标时，可以从 [README 需求表](../../README.md)直接进入专题。
+本文按一次完整职责链组织当前模型、跨模块契约和代码索引。开发时完整阅读本文与[当前实施计划](../roadmap/solver-consolidation-plan.md)，按本轮改动查阅[验证指南](../maintenance/validation.md)中的场景与预算。
+具体公式、字段和操作细节从各节的参考链接继续查阅。实施状态集中在计划，运行结果集中在验证指南。
+
+当前运行范围为最多四个闭壳控制器区域，CPU `FluidDomain` 为物理聚合根。默认格长为 0.5 m，气体采用有限气腔与局部孔流，颗粒采用活动代表粒子与床层。玩法范围和后续能力的目标由[产品路线](../roadmap/product-roadmap.md)维护。
+
+## 导航
+
+- [模块职责](#模块职责)
+- [权威数据与单位](#哪些数据决定物质库存)
+- [输入与候选准备](#runtime)
+- [完整计算步](#physics)
+- [力学与占容](#mechanics)
+- [守恒输运与气腔交接](#transport)
+- [热化学与物相转换](#thermochemistry)
+- [提交与恢复](#persistence)
+- [查询与展示](#client)
+- [游戏入口](#gameplay)
+- [性能与故障定位](#performance)
 
 ## 模块职责
 
-| 模块 | 保存或执行什么 | 主要依赖 |
+| 模块 | 数据或职责 | 主要依赖 |
 |---|---|---|
-| [api](../../api/src/main/java/mmm/api/) | 外部查询、提交通知和带单位的数量类型 | JDK |
-| [model](../../model/src/main/java/mmm/) | 材料定义、物质收支、载体状态、容器数据和存档模型 | api、必要的纯 Java 编解码库 |
-| [solver](../../solver/src/main/java/mmm/fluid/) | CPU 物理计算、完整计算输入和候选结果 | model |
-| [app](../../app/src/main/java/mmm/application/) | 调度、授权、事务协调，以及读取和提交区域的接口 | solver、model |
-| [fabric](../../fabric/src/main/java/mmm/) | 世界与物品操作、持久化、数据包、命令和网络 | api、model、solver、app |
-| [fabric client](../../fabric/src/client/java/mmm/) | 快照插值、几何生成和界面显示 | 客户端协议与展示数据 |
-| [gpu-kernel](../../gpu-kernel/src/main/java/mmm/gpuprobe/) | Vulkan 计算实验、回读与独立验证 | solver |
-| [gpu-probe](../../gpu-probe/src/main/java/mmm/gpuprobe/) | 可选 GPU probe 的 Minecraft 适配 | kernel，编译时引用 fabric |
+| [api](../../api/src/main/java/mmm/api/) | 外部查询、提交通知、带单位的数量类型 | JDK |
+| [model](../../model/src/main/java/mmm/) | 材料定义、库存、物种、内能、载体与存档模型 | api |
+| [solver](../../solver/src/main/java/mmm/fluid/) | 几何、力学、输运、热化学及完整私有候选 | model |
+| [app](../../app/src/main/java/mmm/application/) | 调度、授权、用例、区域身份与提交协调 | solver、model |
+| [fabric](../../fabric/src/main/java/mmm/) | Minecraft 世界与物品操作、持久化、命令和网络 | api、model、solver、app |
+| [fabric client](../../fabric/src/client/java/mmm/) | 快照、几何和界面 | 客户端协议与展示数据 |
+| [gpu-kernel](../../gpu-kernel/src/main/java/mmm/gpuprobe/) / [gpu-probe](../../gpu-probe/src/main/java/mmm/gpuprobe/) | Vulkan 实验与 Minecraft 适配 | solver / kernel、fabric |
 | [core](../../core/build.gradle) | 聚合发布 api/model/solver/app | 无生产源码 |
 
-Java 根包为 `mmm`。用例模块目录为 `app`，对应 Java 包为 `mmm.application`。
+依赖方向为 `api ← model ← solver ← app ← fabric`，Java 根包为 `mmm`，app 对应包为 `mmm.application`。
+世界读取、方块修改、物品变化与磁盘提交由服务器主线程执行；数值模块计算私有后继。[ArchitectureDependencyValidation](../../fabric/src/test/java/mmm/validation/ArchitectureDependencyValidation.java)
+检查依赖方向、包循环、注册点与生产类行数。
 
-世界读取、方块修改、物品变化和磁盘提交由 Fabric 在服务器主线程执行。数值模块接收纯 Java 输入，计算私有的下一步状态。客户端和外部查询读取服务端提供的数据。
-
-依赖方向、包循环、运行时注册点和生产类 1000 行上限由 [ArchitectureDependencyValidation](../../fabric/src/test/java/mmm/validation/ArchitectureDependencyValidation.java) 检查。执行方式见 [验证指南](../maintenance/validation.md#architecture)。
-
-## 从游戏操作到计算结果
-
-```text
-方块 / 物品 / 命令 / 网络请求
-  → MmmRuntime 中对应的业务处理器
-  → app 用例检查请求与当前状态
-  → solver 在私有状态上计算完整结果
-  → app 与区域仓库核对身份、代次和布局
-  → Fabric 提交区域、世界或物品的变化
-  → 发布客户端快照与适用的提交通知
-```
-
-服务器 tick 从 [MinecraftSimulationLoop](../../fabric/src/main/java/mmm/simulation/MinecraftSimulationLoop.java) 开始，经过 [MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)、[MinecraftRegionTick](../../fabric/src/main/java/mmm/simulation/MinecraftRegionTick.java) 和 [RegionTickUseCase](../../app/src/main/java/mmm/application/RegionTickUseCase.java) 进入 [RegionApplicationService](../../app/src/main/java/mmm/application/RegionApplicationService.java)。启动顺序、状态提交、暂停、区域预算和控制器授权详见 [运行时与区域操作](runtime-and-lifecycle.md)。
+`FluidDomain` 是运行中的物理聚合根。其包内实现类分别承担存储、契约、力学工作区、计算顺序、库存事务、碰撞和能力绑定，共用同一对象与数组。
+新增规则放到对应数据或阶段的处理器；装配由 `MechanicalStageAssembly`、`ThermochemistryStageAssembly` 和 Fabric 的 `MmmRuntimeFactory` 完成。
 
 ## 哪些数据决定物质库存
 
-| 领域 | 保存的原始数据 | 根据原始数据计算的量 |
+| 领域 | 保存的权威数据 | 派生量 |
 |---|---|---|
-| 液体 | 粒子位置、速度、体积、逐材料质量和相身份 | 单元体积、密度、压力、界面与曲率 |
-| 化学 | 组分数量、组成、电荷、质量余量、指示剂来源和收支 | pH、主要组分列表、颜色 |
-| 颗粒 | 活动与沉积固体的 SVQ、质量、材料、组成、孔隙率和收支 | 填充率、显示高度和样本 |
-| 连续固相 | 固相组的 SVQ、质量、组成和总内能 | 显示体积分数 |
-| 气体 | 各组分标准体积数量、质量、化学组分、节点内能和收支 | 温度、绝对压力、密度、声速与孔流速度 |
-| 热学 | 各物质载体总内能、外部热量收支、机械功、设备换热和舍入差额 | 温度、热容、单元热平衡与浮力修正 |
-| 有限热设备 | 区域存档中的设备质量、内能和代次 | 温度、接触位置与换热显示 |
-| 世界与物品 | 区域 HEAD、世界归属日志和已存盘物品状态 | 控制台、诊断与调试显示 |
+| 液体 | 载体位置、速度、体积、逐材料质量与相身份 | 单元体积、密度、PLIC、压力、曲率 |
+| 化学 | 物种数量、组成、电荷、质量余量、指示剂与收支 | pH、颜色、主要组分 |
+| 颗粒 | active/deposit 的 SVQ、质量、材料、组成、孔隙率、位置及接触状态 | 占容、床高、混合有效孔隙率与样本 |
+| 连续固相 | coherent group 的 SVQ、质量、组成与内能 | 固相显示比例 |
+| 气体 | 各组分标准体积 nanos、质量、物种、节点内能与收支 | 温度、压力、密度、孔流和临时压力自由度 |
+| 热学 | 各实际载体总内能及 source/sink/work/roundoff | 温度、热容、LTE 与热浮力 |
+| 有限热设备 | region 中的设备身份、质量、内能与代次 | 温度、接触位置与展示配置 |
+| 世界与物品 | 区域 HEAD、WAL、已存盘物品状态 | 控制台和诊断 |
 
-库存结算使用左侧的原始数据。一个操作改变多种载体时，它们的物质、组成和能量一起校验、一起提交。温度、颜色和渲染网格可以重新生成。
+同一操作涉及多种载体时，物质、组成、动量和携带内能按同一计划交接。所有 side column 使用相同 ordinal 与 append/swap-remove 顺序；拆并、移除、反应或相变同时修改这些列。MAC、PLIC、温度和展示网格从实际库存重建。
 
-液体组成密度由实际质量除以实际体积得到，热浮力使用参考态附近的 Boussinesq 温差修正；气体温度与压力由库存、可用体积和总内能通过状态方程派生。具体规则见 [材料状态](material-state.md#求解器边界)和 [热学状态](thermal-state.md#热浮力)。
+| 数量 | 单位与换算 | 入口 |
+|---|---|---|
+| 体积 | `1 BV = 1 m³ = 10^9 nanos`；默认格长 `h=.5 m`，每格 `.125 BV` | `SolverUnitScale`、`CellInventoryReader` |
+| 固体 | `1 BV = 2^27 SVQ`，默认单元 `2^24 SVQ` | `SolidVolume`、`GranularCouplingFields` |
+| 化学 | `1 AU = 10^9 quanta` | 化学库存与 exact batch |
+| 质量 | 液体 solver weight 乘 `h³` 得 kg；固体、气体、物种、容器直接保存 kg | `SolverUnitScale` |
+| 热学 | K、Pa、J、W/(m·K)、J/(kg·K)；总内能可因参考态而为负 | `ThermalDomainState`、`GasThermalModel` |
 
-### 单位
+库存、物种、反应批次、单位换算和提交审计保留必要的整数与精确数量运算。几何和力学采用浮点标准离散；未解析薄层、液滴和细尺度运动按单元尺度近似。表示转换耗散明确进入对应能量结算，舍入与离散误差分别评价。精度取舍和验收要求见[实施计划](../roadmap/solver-consolidation-plan.md#精度与物理取舍)。
 
-- `BV` 是一个方块的体积，按 `1 m³` 计算。默认求解单元边长为 `0.5 m`，一个方块包含八个单元。
-- 液体容器用整数纳体积：`1 BV = 1,000,000,000 nanos`。
-- 固体用整数 `SVQ`：`1 BV = 2^27 SVQ`，默认单元为 `2^24 SVQ`。
-- 化学用整数 quanta：`1 AU = 1,000,000,000 quanta`。AU 是本求解器使用的化学数量单位。
-- 液体粒子质量权重通过 [SolverUnitScale](../../model/src/main/java/mmm/units/SolverUnitScale.java) 乘以 `cellSize³` 换成 kg。固体、气体、化学组分及容器质量直接保存 kg。
-- 热学使用 K、Pa、J、W/(m·K) 和 J/(kg·K)。内能审计使用原始 double 或 `SignedDyadic` 精确表示。
+<a id="runtime"></a>
+## 从游戏操作到计算结果
 
-浮点粒子数量与整数容器数量之间的转换需要明确舍入方向，并保留不能表示的差额。详细数据布局在 [材料](material-state.md)、[化学](chemistry-state.md)、[颗粒](granular-state.md)、[气体](gas-state.md)和[热学](thermal-state.md)专题中。
+```text
+世界 / 物品 / 网络请求
+  → Fabric 读取输入与解析身份
+  → app 检查请求并捕获完整计算状态
+  → solver 计算私有候选
+  → app 与区域仓库核对身份、代次、布局
+  → Fabric 接管后继或提交世界 / 物品事务
+  → 发布查询、快照与适用的提交通知
+```
 
+启动时先发布或恢复世界能力包，绑定该世界的材料定义和功能布局，再恢复区域与未完成事务。已提交包解释已有库存，数据包漂移通过诊断报告。定义、格式或身份错误保留原文件并锁定相应持久域。
+
+服务器 tick 依次刷新碰撞、热交换与实体输入，调度器选择 `NONE`、`MOTION` 或 `THERMAL`。力学优先于独立热轴；暂停、pacing 跳过和热轴均保留运动输入的一次使用规则。静水可继续导热、反应或相变；热量变化又可唤醒力学。玩家运行意图与外壳破损、区块卸载等可用性原因分别保存。
+
+- **启动与依赖组装**
+  - 主要文件：
+    - [MmmRuntimeFactory](../../fabric/src/main/java/mmm/simulation/MmmRuntimeFactory.java)
+    - [WorldStartupCoordinator](../../fabric/src/main/java/mmm/simulation/WorldStartupCoordinator.java)
+  - 验证入口 / 参考：`region-state,lifecycle`；[运行时参考](runtime-and-lifecycle.md#startup)
+
+- **tick、调度、实体和碰撞输入**
+  - 主要文件：
+    - [MinecraftSimulationLoop](../../fabric/src/main/java/mmm/simulation/MinecraftSimulationLoop.java)
+    - [MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)
+    - [RegionTickUseCase](../../app/src/main/java/mmm/application/RegionTickUseCase.java)
+  - 验证入口 / 参考：`lifecycle,entity-fluid,shape`；[输入参考](runtime-and-lifecycle.md#world-inputs)
+
+- **容量与库存编辑**
+  - 主要文件：
+    - [CarrierMutationCoordinator](../../solver/src/main/java/mmm/fluid/CarrierMutationCoordinator.java)
+    - [FluidDomainInventoryTransactions](../../solver/src/main/java/mmm/fluid/FluidDomainInventoryTransactions.java)
+    - [MaterialTransferPlanner](../../solver/src/main/java/mmm/fluid/MaterialTransferPlanner.java)
+  - 验证入口 / 参考：`materials,containers,granular`；[材料参考](material-state.md)
+
+<a id="physics"></a>
 ## 一个完整计算步
 
-[FluidDomainStepCoordinator](../../solver/src/main/java/mmm/fluid/FluidDomainStepCoordinator.java) 组织下列步骤：
+[FluidDomainStepCoordinator](../../solver/src/main/java/mmm/fluid/FluidDomainStepCoordinator.java) 组织下列职责链：
 
-1. 记录物质和能量收支，以及待同步的相变体积。
-2. 根据碰撞形状、固体占据体积和气体拓扑建立力学输入。
-3. 把粒子速度传到网格（P2G），施加重力、浮力、表面张力，以及气体、颗粒和实体作用。
-4. 求解液体压力、接触液体的有限密闭气体响应与活动颗粒的有限质量响应。纯液体与含固相区域共用 MAC 联合压力求解，颗粒通过惯性、阻力与占容项耦合。环境与真空使用给定压力条件。
-5. 把速度传回粒子（G2P），推进粒子位置并处理碰撞，完成颗粒运动。
-6. 在新位置上重建热学网格，计算导热与恒温源热通量。
-7. 执行化学反应和颗粒反应，计入反应热。
-8. 执行固液、气液相变，把体积变化记为待同步几何。
-9. 处理沉积、唤醒和粒子拆分/合并，同步搬移材料、化学和内能数据。
-10. 核对全部收支，成功后发布本步统计并判断后续活动状态。
+1. 捕获库存、内能收支和待同步相变体积；从碰撞、固体占容与气腔建立同代输入。
+2. P2G 构造 MAC 速度与质量，执行多孔阻力、隐式黏性和重力、浮力、张力等作用。
+3. 联合求解液体压力、有限气腔响应和活动颗粒的惯性／阻力，复检投影后的 Courant 数。
+4. G2P 写回速度，预览颗粒碰撞与整数占容，用共享通量搬运液体，准备并提交液体、颗粒和气腔后继。
+5. 在新位置上完成导热、液相反应、颗粒反应、固液与气液相变。相变共用操作预算，体积变化留待后续真实力学同步。
+6. 执行颗粒沉积、起动、床层松弛及液体重采样，随物质搬运组成与内能。
+7. 核对全部收支，成功后交接完整候选、发布统计，并更新运动与热活动状态。
 
-力学顺序在 [MechanicalStepPipeline](../../solver/src/main/java/mmm/fluid/MechanicalStepPipeline.java)，传热、反应和相变顺序在 [ThermochemistryPipeline](../../solver/src/main/java/mmm/fluid/ThermochemistryPipeline.java)。具体离散方法见 [流体求解器](fluid-solver.md)，相变几何的后续处理见 [转移前同步相变几何](runtime-and-lifecycle.md#phase-work)。
+力学阶段在 [MechanicalStepPipeline](../../solver/src/main/java/mmm/fluid/MechanicalStepPipeline.java)，热化学阶段在 [ThermochemistryPipeline](../../solver/src/main/java/mmm/fluid/ThermochemistryPipeline.java)，
+沉积与重采样分别由 `GranularTransitionStage`、`ParticleReseedStage` 组织。查询、几何、反应与恢复共用对应库存模块的数量和单位规则。
 
-相变按固定区域体积联合守恒两相内能。体积变化记录留给下一次真实压力投影同步几何；液体与颗粒运动造成的气腔容量变化按气体等熵模型结算机械功。详见 [相变](thermal-state.md#相变)。
+<a id="mechanics"></a>
+## 力学与占容
 
+纯液体与含固相区域共用 MAC 压力、隐式黏性和有限体积输运。液体逐材料质量和体积决定惯性与组成密度；不可互溶相共享宏观速度和机械压力，保留材料身份与界面张力。热浮力使用参考态附近的 Boussinesq 修正，黏度读取世界材料定义的 `mu(T)`。
+
+固定碰撞由 Minecraft `VoxelShape` 保守采样成每格 `2×2×2` 微盒掩码，压力开口、液体通量和 CCD 读取同一几何。活动颗粒、沉积和 coherent 固相共享固体骨架占容；液体可用容量为开放体积减去全部固体占容，孔隙水由普通液体库存持有。
+
+压力系统使用同一面系数组装矩阵、预条件器和速度修正。已解析液气界面采用给定压力或有限气腔储存项；颗粒通过占容导数、有限质量及隐式阻力进入共同系统。
+作用与反作用、外部约束冲量和压力功按实际写回结算。当前液体孔隙面取相邻孔隙率的较小值，颗粒占容使用归一化三线性核导数；两者的空间差异会影响共同平移与近墙浮力，具体离散见[颗粒参考](granular-state.md#统一排水与压力)。
+
+P2G/G2P 使用实际质量与网格做功建立动能预算，限制 FLIP 增量。输运以浮点 3×3 局部梯度保留可解析的速度变化，低于空间分辨率的方向保留平均速度。压力不把采样聚集或超容量误差作为额外机械源项。液体碰撞截断入墙法向并保留切向；颗粒代表球通过共同接触响应处理法向、恢复和摩擦。
+
+- **库存、PLIC 与速度工作区失效**
+  - 主要文件：
+    - [ParticleToGridStage](../../solver/src/main/java/mmm/fluid/ParticleToGridStage.java)
+    - [FluidDomainMechanicalFields](../../solver/src/main/java/mmm/fluid/FluidDomainMechanicalFields.java)
+  - 验证选择器 / 参考：`free-surface,materials`；[流体离散](fluid-solver.md#网格与-marker)
+
+- **压力与气腔耦合**
+  - 主要文件：
+    - [PressureProjectionStage](../../solver/src/main/java/mmm/fluid/PressureProjectionStage.java)
+    - [PressureSystem](../../solver/src/main/java/mmm/fluid/PressureSystem.java)
+    - [PressureFaceCoupling](../../solver/src/main/java/mmm/fluid/PressureFaceCoupling.java)
+    - [PressureBoundaryView](../../solver/src/main/java/mmm/fluid/PressureBoundaryView.java)
+  - 验证选择器 / 参考：`marker-pressure,gas-liquid`；[压力离散](fluid-solver.md#自由面与压力)
+
+- **黏性与材料物性**
+  - 主要文件：
+    - [LiquidViscosityStage](../../solver/src/main/java/mmm/fluid/LiquidViscosityStage.java)
+    - [ViscousMacDiscretization](../../solver/src/main/java/mmm/fluid/ViscousMacDiscretization.java)
+    - [LiquidCarrierProperties](../../solver/src/main/java/mmm/fluid/LiquidCarrierProperties.java)
+  - 验证选择器 / 参考：`cut-cell,thermal`；[材料物性](material-state.md)
+
+- **P2G、G2P 与速度延拓**
+  - 主要文件：
+    - [MarkerGridBuilder](../../solver/src/main/java/mmm/fluid/MarkerGridBuilder.java)
+    - [GridToParticleStage](../../solver/src/main/java/mmm/fluid/GridToParticleStage.java)
+    - [MarkerTransferBudget](../../solver/src/main/java/mmm/fluid/MarkerTransferBudget.java)
+    - [DivergenceFreeVelocityExtension](../../solver/src/main/java/mmm/fluid/DivergenceFreeVelocityExtension.java)
+  - 验证选择器 / 参考：`free-surface,reseeding`；[速度传递](fluid-solver.md#网格与-marker)
+
+- **液固压力、阻力与整数占容**
+  - 主要文件：
+    - [GranularPressureCoupling](../../solver/src/main/java/mmm/fluid/GranularPressureCoupling.java)
+    - [GranularImplicitDrag](../../solver/src/main/java/mmm/fluid/GranularImplicitDrag.java)
+    - [SweptGranularVolumeGradient](../../solver/src/main/java/mmm/fluid/SweptGranularVolumeGradient.java)
+    - [GranularCouplingFields](../../model/src/main/java/mmm/granular/GranularCouplingFields.java)
+  - 验证选择器 / 参考：`granular`；[压力与占容](granular-state.md#统一排水与压力)
+
+- **碰撞与颗粒接触**
+  - 主要文件：
+    - [FlipParticleCollision](../../solver/src/main/java/mmm/fluid/FlipParticleCollision.java)
+    - [GranularActiveContacts](../../solver/src/main/java/mmm/fluid/GranularActiveContacts.java)
+    - [GranularComponentResponse](../../solver/src/main/java/mmm/fluid/GranularComponentResponse.java)
+    - [GranularContactCompression](../../solver/src/main/java/mmm/fluid/GranularContactCompression.java)
+  - 验证选择器 / 参考：`cut-cell,shape,granular`；[碰撞参考](fluid-solver.md#固体与碰撞)
+
+- **曲率、界面张力与润湿**
+  - 主要文件：
+    - [SurfaceTensionWorkspace](../../solver/src/main/java/mmm/fluid/SurfaceTensionWorkspace.java)
+    - [HeightFunctionCurvature](../../solver/src/main/java/mmm/fluid/HeightFunctionCurvature.java)
+    - [BodyForceStage](../../solver/src/main/java/mmm/fluid/BodyForceStage.java)
+  - 验证选择器 / 参考：`surface-tension`；[界面离散](fluid-solver.md#plic表面张力与润湿)
+
+<a id="transport"></a>
+## 守恒输运与气腔交接
+
+PLIC 从实际单元库存、邻格比例和碰撞连通分量重建湿区、干区与共享开口。单元有限体积输运根据单值共享面通量联合限制供体库存与接收容量；未解析、缺少压力支撑的载体采用独立运动。两者汇入同一载体重映射计划，按实际来源分配体积、材料质量、动量、物种和内能。数值采样与整数库存分别承担空间表示和物质结算。
+
+气腔以干微盒连通和规范 minimum-piece key 标识。`GasRuntimeGeometry` 保存同代几何、拓扑与库存容量；
+未来编辑按最终 binary32 位置、实际体积和固体占容准备后继。气体分裂、合并和完整迁移搬运库存、内能与旧控制体积；环境交换记 source/sink，新开放真空空间保持明确归属。
+真实运动改变容量时按状态方程结算等熵功；表示交接和相变内部交换分别处理，避免重复做功。
+
+气体采用集总气腔与有限孔流模型，按库存、容量和内能派生压力、温度及顺应性。完整干面与受限孔口采用一致的拓扑规则。当前整格压力查询要求该格唯一气体归属，拓扑层可保存同格独立气腔；气腔内部声波和空间动量超出模型范围。
+
+- **共享通量、供体与接收容量**
+  - 主要文件：
+    - [CellLiquidVolumeTransport](../../solver/src/main/java/mmm/fluid/CellLiquidVolumeTransport.java)
+    - [ConservativeLiquidFlux](../../solver/src/main/java/mmm/fluid/ConservativeLiquidFlux.java)
+    - [CellRemapPorts](../../solver/src/main/java/mmm/fluid/CellRemapPorts.java)
+  - 验证选择器 / 参考：`free-surface`；`LiquidVolumeTransportValidation components` / `chemical-tails`；[有限体积输运](fluid-solver.md#单元有限体积输运)
+
+- **材料、动量、物种与热量重分配**
+  - 主要文件：
+    - [CellCarrierRemapPlan](../../solver/src/main/java/mmm/fluid/CellCarrierRemapPlan.java)
+    - [CellRemapVelocity](../../solver/src/main/java/mmm/fluid/CellRemapVelocity.java)
+    - [CellRemapSpeciesAllocation](../../solver/src/main/java/mmm/fluid/CellRemapSpeciesAllocation.java)
+    - [CellRemapHeatBalance](../../solver/src/main/java/mmm/fluid/CellRemapHeatBalance.java)
+  - 验证选择器 / 参考：`CellRemapMomentsValidation transport-moments`、`LiquidVolumeTransportValidation handoff`、`thermal`；[命令与场景](../maintenance/validation.md#按改动选择测试)
+
+- **浮点几何与气腔容量**
+  - 主要文件：
+    - [FlipPressurePhaseGeometry](../../solver/src/main/java/mmm/fluid/FlipPressurePhaseGeometry.java)
+    - [PlicPlaneOffset](../../solver/src/main/java/mmm/fluid/PlicPlaneOffset.java)
+    - [GasGeometryTransition](../../solver/src/main/java/mmm/fluid/GasGeometryTransition.java)
+    - [GasComponentCapacity](../../solver/src/main/java/mmm/fluid/GasComponentCapacity.java)
+  - 验证选择器 / 参考：`air-cavity`；[气体几何](gas-state.md#微盒气体几何)
+
+- **气体拓扑、库存与体积功**
+  - 主要文件：
+    - [GasRuntimeGeometry](../../solver/src/main/java/mmm/fluid/GasRuntimeGeometry.java)
+    - [GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java)
+    - [AirNetwork](../../model/src/main/java/mmm/fluid/air/AirNetwork.java)
+    - [GasThermalModel](../../model/src/main/java/mmm/thermal/GasThermalModel.java)
+  - 验证选择器 / 参考：`air-cavity,air-network,gas-liquid,thermal`；[气体参考](gas-state.md)
+
+- **拆并与所有侧列搬移**
+  - 主要文件：
+    - [FlipParticleReseeder](../../solver/src/main/java/mmm/fluid/FlipParticleReseeder.java)
+    - [MomentPreservingMergePlan](../../solver/src/main/java/mmm/fluid/MomentPreservingMergePlan.java)
+    - [CarrierMutationCoordinator](../../solver/src/main/java/mmm/fluid/CarrierMutationCoordinator.java)
+  - 验证选择器 / 参考：`reseeding`；[重采样约束](fluid-solver.md#空间积分误差与分布诊断)
+
+<a id="thermochemistry"></a>
+## 热化学与物相转换
+
+各实际载体保存总内能 `U`，温度与热容由现有分段状态函数反演。LTE 工作区用于接触、反应与相变候选；只读观察、属性计算与真实能量重分配有各自入口。导热成对搬运内能，恒温热浴的实际通量记外部 source/sink。反应按精确物种批次改变组成和参考能，相变按实际批次联合修改两相库存与内能。
+
+热化学顺序为导热 → 液相反应 → 颗粒反应 → 固液相变 → 气液相变，之后执行沉积与重采样。凝固、熔化、汽化和凝结在固定区域体积下联合守恒两相内能，`PendingPhaseVolumeWork` 保存几何同步任务；下一次真实投影完成后清除。物品转移遇到待同步几何时，先执行仅含力学的私有候选，再准备物品事务。
+
+颗粒运动、初始化、提取、沉积和起动读取共同整数占容。活动颗粒与床层转换同时规划来源、接收位置、材料组成、内能、势能变化和床体反力；起动提升功由实际液流提供。表示转换主动耗散与既有黏性、阻力等物理耗散分别结算；各项实现范围详见热学、颗粒参考，交付要求由实施计划维护。
+
+- **内能、状态函数与导热**
+  - 主要文件：
+    - [ThermalDomainState](../../model/src/main/java/mmm/thermal/ThermalDomainState.java)
+    - [ThermalCaloricInversion](../../model/src/main/java/mmm/thermal/ThermalCaloricInversion.java)
+    - [ThermalTransport](../../model/src/main/java/mmm/thermal/ThermalTransport.java)
+    - [LiquidThermalConduction](../../solver/src/main/java/mmm/fluid/LiquidThermalConduction.java)
+  - 验证选择器 / 参考：`thermal`；[热学参考](thermal-state.md)
+
+- **反应、析出与溶解**
+  - 主要文件：
+    - [ChemicalReactionStage](../../solver/src/main/java/mmm/fluid/ChemicalReactionStage.java)
+    - [GranularReactionStage](../../solver/src/main/java/mmm/fluid/GranularReactionStage.java)
+    - [PhaseChangeStageSupport](../../solver/src/main/java/mmm/fluid/PhaseChangeStageSupport.java)
+  - 验证选择器 / 参考：
+    - `chemistry,granular,thermal`；[化学参考](chemistry-state.md)
+    - [固液转移](granular-state.md#固液相转移)
+
+- **相变批次、接触与未来气腔**
+  - 主要文件：
+    - [CondensedPhaseChangeStage](../../solver/src/main/java/mmm/fluid/CondensedPhaseChangeStage.java)
+    - [GasLiquidPhaseChangeStage](../../solver/src/main/java/mmm/fluid/GasLiquidPhaseChangeStage.java)
+    - [GasPhaseBatchSearch](../../solver/src/main/java/mmm/fluid/GasPhaseBatchSearch.java)
+    - [GasPhaseInterfaceResolver](../../solver/src/main/java/mmm/fluid/GasPhaseInterfaceResolver.java)
+  - 验证选择器 / 参考：`thermal,gas-liquid`；[相变参考](thermal-state.md#相变)
+
+- **沉积、起动、床层与液体位移**
+  - 主要文件：
+    - [GranularTransitionStage](../../solver/src/main/java/mmm/fluid/GranularTransitionStage.java)
+    - [GranularInventory](../../model/src/main/java/mmm/granular/GranularInventory.java)
+    - [GranularDepositDynamics](../../model/src/main/java/mmm/granular/GranularDepositDynamics.java)
+    - [GranularLiquidDisplacement](../../solver/src/main/java/mmm/fluid/GranularLiquidDisplacement.java)
+    - [GranularBedShear](../../solver/src/main/java/mmm/fluid/GranularBedShear.java)
+  - 验证选择器 / 参考：`granular`；[床层参考](granular-state.md#deposit-松弛与局部唤醒)
+
+<a id="candidate"></a>
+<a id="persistence"></a>
 ## 存档和故障恢复
 
-运行时每步计算经身份、求解器代次与布局校验后接管完整候选。存盘时由 `HEAD` 指向完整 checkpoint 代次；求解器代次与持久化代次分别维护。两种提交的步骤见 [后端计算与提交](runtime-and-lifecycle.md#candidate)和 [存档提交模型](region-state.md#提交模型)。
+完整状态由 `FluidDomainStateMapper` 捕获与恢复，包含实际载体和已绑定能力、调度进度、待同步相变几何、世界热交换面与最近真实压力投影等本次计算数据。`FluidDomainState.Layout` 绑定网格、配置、载体布局、预算和注册表身份；区域 checkpoint 的持久字段另由存档模型定义。
 
-服务器首次启动时，把数据包中的材料定义与功能布局保存为世界能力包。已有世界使用已提交的包解释库存。启动后数据包与它不同会报告差异，原存档继续使用原定义。格式、身份或布局无法验证时保留文件并锁定，处理方式见 [区域存档](region-state.md)。
+`CpuFluidSolverBackend` 在私有域完成整个逻辑步；力学细化从原始请求重新恢复，保留总推进时间、外部输入和一次提交。`RegionApplicationService` 与仓库核对后端、区域身份、紧邻求解器代次和完整布局。CPU 可把已求解私有对象交接一次；其他后端提供完整不可变状态。候选失败保留原区域，成功后发布该候选的完整统计。
 
-区域保存使用双槽完整代次。先写完整内容并回读验证，最后替换 `HEAD`，由它指向正式生效的一代。删除区域写入 `REMOVED` 删除标记，然后发送客户端移除消息、注销运行时并隔离旧载荷。
+存盘以双槽保存完整代次，先写入、回读并验证全部成员，再原子替换 `HEAD`。删除发布 `REMOVED` 终止代次后完成移除通知、注销与载荷隔离。捕获前同步液体、固体、气体拓扑、库存和内能，保持同一逻辑时刻。
 
-桶和发射器的操作还涉及物品存盘，世界接管涉及原版方块。它们使用 WAL（预写事务日志）记录操作前后状态，再按区域 HEAD 的提交结果完成恢复。具体决策表见 [世界归属与容器事务](world-ownership-and-containers.md)。
+桶、发射器和世界方块操作使用 WAL 绑定区域与外部域的前后状态；恢复按 HEAD 与外部已存盘状态确定继续提交、清理或保留证据。`LOCKED` 对应无法解释的持久身份、格式或事务状态；数值暂停和性能暂停保留上一个完整物理状态。
 
-| 失败类型 | 处理方式 |
-|---|---|
-| `LOCKED` | 格式、身份、校验和或日志无法确定解释，保留磁盘文件并阻止覆盖 |
-| 数值暂停 | 本步容量、温度、压力或收支校验失败，保留上一完整物理状态 |
-| `PERFORMANCE_PAUSE` | 连续计算超时，保留状态并允许显式重试 |
+- **完整候选与接管**
+  - 主要文件：
+    - [FluidDomainStateMapper](../../solver/src/main/java/mmm/fluid/FluidDomainStateMapper.java)
+    - [CpuFluidSolverBackend](../../solver/src/main/java/mmm/fluid/CpuFluidSolverBackend.java)
+    - [RegionApplicationService](../../app/src/main/java/mmm/application/RegionApplicationService.java)
+    - [FluidRegionRepository](../../fabric/src/main/java/mmm/simulation/FluidRegionRepository.java)
+  - 验证选择器 / 参考：`lifecycle`；[后端字段](fluid-solver.md#后端候选接口)
 
+- **区域 checkpoint、HEAD 与冷恢复**
+  - 主要文件：
+    - [RegionCheckpointAssembler](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointAssembler.java)
+    - [RegionCheckpointRestorer](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointRestorer.java)
+    - [RegionGenerationStore](../../fabric/src/main/java/mmm/simulation/persistence/RegionGenerationStore.java)
+  - 验证选择器 / 参考：`region-state`；[存档参考](region-state.md)
+
+- **玩家、发射器及世界事务**
+  - 主要文件：
+    - [MinecraftContainerTransferPlan](../../fabric/src/main/java/mmm/simulation/MinecraftContainerTransferPlan.java)
+    - [ContainerTransferCoordinator](../../app/src/main/java/mmm/application/ContainerTransferCoordinator.java)
+    - [ContainerRecoveryCoordinator](../../app/src/main/java/mmm/application/ContainerRecoveryCoordinator.java)
+    - [OwnershipTransactionCoordinator](../../fabric/src/main/java/mmm/simulation/OwnershipTransactionCoordinator.java)
+  - 验证选择器 / 参考：`containers,ownership`；[事务参考](world-ownership-and-containers.md)
+
+- **相变同步与碰撞编辑**
+  - 主要文件：
+    - [MinecraftPendingPhaseWorkBarrier](../../fabric/src/main/java/mmm/simulation/MinecraftPendingPhaseWorkBarrier.java)
+    - [FluidRegionWorldInteraction](../../fabric/src/main/java/mmm/simulation/FluidRegionWorldInteraction.java)
+  - 验证选择器 / 参考：`thermal,region-manager`；[同步顺序](runtime-and-lifecycle.md#phase-work)
+
+<a id="client"></a>
 ## 查询和展示
 
-[FluidSnapshotPublisher](../../fabric/src/main/java/mmm/simulation/FluidSnapshotPublisher.java) 生成展示消息，[ClientRegionSnapshotStore](../../fabric/src/client/java/mmm/client/ClientRegionSnapshotStore.java) 按区域代次和序号接收，再交给客户端几何与绘制代码。旧包在区域移除后失效。
+服务端按已提交状态生成有界快照，客户端按区域身份、网络代次和 sequence 接收并插值。移除消息使旧包失效。显示温度、压力、颜色与网格采用各自量化，库存、状态方程和物理计算读取原始数据。
 
-[MmmFabricApi](../../fabric/src/main/java/mmm/api/fabric/MmmFabricApi.java) 提供同步单格查询和容器提交完成事件。查询读取已加载区域；事件在物品强制保存且事务日志删除后发布。参数、单位、线程和失败状态见 [外部 API](external-api.md)，界面与绘制入口见 [客户端路由](../maintenance/routing.md#client)。
+Query API 在服务器线程读取已加载区域，单格观察保持只读；容器提交事件在区域与物品均已持久完成、WAL 清理后发布。未加载区域提供已知元数据及不可用原因。
+
+- **快照、网络和接收顺序**
+  - 主要文件：
+    - [FluidSnapshotPublisher](../../fabric/src/main/java/mmm/simulation/FluidSnapshotPublisher.java)
+    - [FluidProtocol](../../fabric/src/main/java/mmm/network/FluidProtocol.java)
+    - [ClientRegionSnapshotStore](../../fabric/src/client/java/mmm/client/ClientRegionSnapshotStore.java)
+  - 验证选择器 / 参考：`protocol`
+
+- **液面、材料界面与颗粒渲染**
+  - 主要文件：
+    - [FluidSurfaceGeometry](../../fabric/src/client/java/mmm/client/FluidSurfaceGeometry.java)
+    - [MaterialSurfaceGeometry](../../fabric/src/client/java/mmm/client/MaterialSurfaceGeometry.java)
+    - [GranularSurfaceGeometry](../../fabric/src/client/java/mmm/client/GranularSurfaceGeometry.java)
+  - 验证选择器 / 参考：`protocol,materials`；展示目标见[产品路线](../roadmap/product-roadmap.md#阶段-3展示几何契约与重建)
+
+- **外部查询、Jade 与事件**
+  - 主要文件：
+    - [MmmFabricApi](../../fabric/src/main/java/mmm/api/fabric/MmmFabricApi.java)
+    - [FabricFluidQueryApi](../../fabric/src/main/java/mmm/simulation/FabricFluidQueryApi.java)
+    - [CommittedEventHub](../../fabric/src/main/java/mmm/simulation/CommittedEventHub.java)
+    - [Jade 适配](../../fabric/src/main/java/mmm/compat/jade/)
+  - 验证选择器 / 参考：`protocol,containers`；[外部 API 参考](external-api.md)
+
+<a id="gameplay"></a>
+## 游戏入口
+
+- **方块、物品、创造栏、配方与文字**
+  - 主要文件：
+    - [MmmBlocks](../../fabric/src/main/java/mmm/block/MmmBlocks.java)
+    - [MmmItems](../../fabric/src/main/java/mmm/item/MmmItems.java)
+    - [MmmCreativeEntries](../../fabric/src/main/java/mmm/item/MmmCreativeEntries.java)
+    - [资源](../../fabric/src/main/resources/)
+  - 验证选择器 / 参考：资源编译；涉及操作再选择对应领域
+
+- **控制器激活、暂停、清空与拆除**
+  - 主要文件：
+    - [FluidControllerBlock](../../fabric/src/main/java/mmm/block/FluidControllerBlock.java)
+    - [MinecraftRegionActivation](../../fabric/src/main/java/mmm/simulation/MinecraftRegionActivation.java)
+    - [MinecraftControllerConsole](../../fabric/src/main/java/mmm/simulation/MinecraftControllerConsole.java)
+    - [MinecraftRegionLifecycle](../../fabric/src/main/java/mmm/simulation/MinecraftRegionLifecycle.java)
+  - 验证选择器 / 参考：`boundary,lifecycle,region-manager`；[授权与操作](runtime-and-lifecycle.md#console)
+
+- **创造来源与指示剂**
+  - 主要文件：
+    - [CreativeSourceCatalog](../../fabric/src/main/java/mmm/simulation/CreativeSourceCatalog.java)
+    - [MinecraftIndicatorEditing](../../fabric/src/main/java/mmm/simulation/MinecraftIndicatorEditing.java)
+  - 验证选择器 / 参考：`containers,chemistry`
+
+- **恒温热源与快速入门界面**
+  - 主要文件：
+    - [ThermalReservoirUseCase](../../app/src/main/java/mmm/application/ThermalReservoirUseCase.java)
+    - [ThermalReservoirScreen](../../fabric/src/client/java/mmm/client/ThermalReservoirScreen.java)
+    - [QuickStartScreen](../../fabric/src/client/java/mmm/client/QuickStartScreen.java)
+  - 验证选择器 / 参考：`thermal,protocol`
+
+- **命令、开发场景与诊断报告**
+  - 主要文件：
+    - [MmmCommands](../../fabric/src/main/java/mmm/MmmCommands.java)
+    - [MmmCommandHandlers](../../fabric/src/main/java/mmm/MmmCommandHandlers.java)
+    - [MinecraftDebugFixtures](../../fabric/src/main/java/mmm/simulation/MinecraftDebugFixtures.java)
+    - [RegionDiagnosticsReport](../../fabric/src/main/java/mmm/simulation/RegionDiagnosticsReport.java)
+  - 验证选择器 / 参考：`audit` 及对应业务领域；[命令速查](../maintenance/commands.md)
+
+<a id="performance"></a>
+## 性能与诊断
+
+完整步成本涵盖输入捕获、私有域恢复、全部力学子步、热化学、重试和接管。独立冷恢复、世界输入、展示、网络与磁盘 I/O 分列测量。`RegionTickUseCase` 根据完整执行时间进行 pacing 和连续过载暂停，调度保持库存与逻辑步时长。
+
+- **生产完整步与阶段成本**
+  - 入口：
+    - [ProductionStepBenchmark](../../fabric/src/test/java/mmm/simulation/ProductionStepBenchmark.java)
+    - [CompositeStepBenchmark](../../fabric/src/test/java/mmm/simulation/CompositeStepBenchmark.java)
+    - [ProductionFluidReplayValidation](../../fabric/src/test/java/mmm/simulation/ProductionFluidReplayValidation.java)
+  - 运行方法：[预算与测量](../maintenance/validation.md#performance)
+
+- **库存、几何与速度重复重建**
+  - 入口：`ParticleToGridStage`、`MarkerGridBuilder`、`GasRuntimeGeometry`、`CellCarrierRemapPlan`
+  - 运行方法：同一原输入的阶段计时及 [JFR 工具](../../pytool/jfr_hotspots.py)
+
+- **液固嵌套求解与接触成本**
+  - 入口：`GranularImplicitDrag.responseDelta`、`GranularCoupledPressureSolver`、`GranularContactCompression`、`GranularContactChainSeed`
+  - 运行方法：沙床启动短重放、原慢步及完整生命周期
+
+- **GPU 设备、资源、提交与回读**
+  - 入口：
+    - [VulkanDeviceContext](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanDeviceContext.java)
+    - [FlipGpuResources](../../gpu-kernel/src/main/java/mmm/gpuprobe/FlipGpuResources.java)
+    - [GpuStepScheduler](../../gpu-kernel/src/main/java/mmm/gpuprobe/GpuStepScheduler.java)
+    - [flip.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/flip.comp)
+    - [MmmGpuProbeHostIntegration](../../gpu-probe/src/main/java/mmm/gpuprobe/MmmGpuProbeHostIntegration.java)
+  - 运行方法：[GPU 验证](../maintenance/validation.md#gpu)；[后端扩展要求](../roadmap/performance-and-backends.md)
+
+<a id="diagnosis"></a>
+### 按现象定位
+
+| 现象 | 首先核对 | 继续跟到哪里 |
+|---|---|---|
+| 液面降低、水量异常 | `CellInventoryReader` 的实际体积与材料质量 | `CarrierMutationCoordinator`、`MaterialTransferPlanner` 的 source/sink；再查快照量化 |
+| 穿墙、小液滴或薄层异常 | `CollisionField` 与 `FlipCutCellGeometry` | `FlipParticleCollision`、压力支撑、`FlipVelocityExtrapolator` |
+| 气压或气腔归属异常 | `GasRuntimeGeometry` 的微盒、容量与节点归属 | `GasTopologyCoordinator` 的来源交接及 `GasThermalModel` 的库存／容量／U |
+| 温度、反应或相变无进展 | 实际组成、U、批次及候选不可执行原因 | `ThermalCaloricInversion`、`GasPhaseBatchSearch`、`GasLiquidPhaseChangeStage`、未来气腔与热账计划 |
+| 颗粒占容、压力或沉积异常 | `GranularCouplingFields`、碰撞预览及整数分配 | `GranularPressureCoupling`、`GranularSettlementGeometryPlan`、`GranularBedShear` |
+| 容器／区域锁定 | HEAD、WAL 与外部已存盘状态的分类 | `ContainerRecoveryCoordinator`、`OwnershipCoordinator`；[恢复决策](world-ownership-and-containers.md#恢复决策表) |

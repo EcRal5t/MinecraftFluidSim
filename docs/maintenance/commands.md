@@ -1,6 +1,7 @@
 # 游戏内命令速查
 
-`/mmm` 用于开发场景、管理员操作和故障诊断。正常创建区域的步骤见 [项目 README](../../README.md#在游戏里使用)。命令树定义在 [MmmCommands](../../fabric/src/main/java/mmm/MmmCommands.java)，处理器入口见 [命令路由](routing.md#gameplay)。
+`/mmm` 用于开发场景、管理员操作和故障诊断。正常创建区域的步骤见 [项目 README](../../README.md#在游戏里使用)。
+命令树定义在 [MmmCommands](../../fabric/src/main/java/mmm/MmmCommands.java)，处理器入口见 [命令索引](../architecture/system-overview.md#gameplay)。
 
 下表省略每项前面的 `/mmm`。
 
@@ -23,7 +24,7 @@
 | 调试显示、实体与日志 | `debug`、`entities`、`logpath` |
 | 容器事务故障注入 | `transferwal [fault <point>]`；在事务恢复测试场景中使用 |
 
-`run` 与手动 `step` 可以重试性能暂停。其他不可用状态先按 `status` 的具体原因排查，入口见 [故障定位](routing.md#diagnosis)。
+`run` 与手动 `step` 可以重试性能暂停。其他不可用状态先按 `status` 的具体原因排查，入口见 [故障定位](../architecture/system-overview.md#diagnosis)。
 
 ## 清理控制器区域
 

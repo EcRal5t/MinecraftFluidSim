@@ -2,29 +2,17 @@
 
 Minecraft Java 26.2 / Fabric 流体模组。玩家用外壳方块和控制器围出封闭空间，模拟其中的液体、气体、颗粒、化学反应、传热与相变。当前最多支持四个独立区域，物理计算使用 CPU 有限体积液体输运与 PIC/FLIP 速度传递。
 
-## 接到需求后从这里开始
+## 开发入口
 
-开发前按 [AGENTS.md](AGENTS.md) 完整读取项目入口、系统总览、维护路由、产品路线与本轮涉及的架构专题，再按下表定位代码。专题开头给出代码入口和相关测试，正文解释修改时需要了解的数据与算法。
+跨模块开发围绕以下三份主文档展开：
 
-| 要做什么 | 从哪里开始 |
+| 文档 | 负责什么 |
 |---|---|
-| 改物品、配方、创造栏、提示文字或命令 | [游戏交互代码](docs/maintenance/routing.md#gameplay) |
-| 改启动、tick、暂停、控制器操作或区域预算 | [运行时与区域操作](docs/architecture/runtime-and-lifecycle.md) |
-| 改水流、液面、压力、碰撞或粒子运动 | [流体求解器](docs/architecture/fluid-solver.md) |
-| 改材料、密度、混合物或液液界面 | [材料状态](docs/architecture/material-state.md) |
-| 改气腔、气压或孔隙间的气体流动 | [气体状态](docs/architecture/gas-state.md) |
-| 改化学反应、指示剂或 pH | [化学状态](docs/architecture/chemistry-state.md) |
-| 改颗粒、沉积、溶解或析出 | [颗粒状态](docs/architecture/granular-state.md) |
-| 改导热、温度、相变或热设备 | [热学状态](docs/architecture/thermal-state.md) |
-| 改存档、数据包配置、启动恢复或区域删除 | [区域存档](docs/architecture/region-state.md) |
-| 改桶、发射器、世界方块接管或事务恢复 | [世界归属与容器事务](docs/architecture/world-ownership-and-containers.md) |
-| 改网络快照、渲染或客户端界面 | [客户端与协议代码](docs/maintenance/routing.md#client) |
-| 接入其他 Mod、查询接口、事件或 Jade | [外部 API](docs/architecture/external-api.md) |
-| 排查已有故障，但还不知道涉及哪个模块 | [按现象定位](docs/maintenance/routing.md#diagnosis) |
-| 优化性能或开发 GPU probe | [性能与 GPU 代码](docs/maintenance/routing.md#performance) |
-| 了解模块关系和一次计算的完整过程 | [系统总览](docs/architecture/system-overview.md) |
+| [当前设计书](docs/architecture/system-overview.md) | 完整职责链、权威数据、跨模块契约，以及每阶段的代码和测试入口 |
+| [当前实施计划](docs/roadmap/solver-consolidation-plan.md) | 当前进度、下一轮交付范围和完成条件 |
+| [验证指南](docs/maintenance/validation.md) | 测试选择、命令、预算、误差判定和最新验证证据 |
 
-修改后的测试命令见 [验证指南](docs/maintenance/validation.md)。规划新功能时看 [产品路线](docs/roadmap/product-roadmap.md)，准备发布时看 [验收与发布](docs/roadmap/acceptance-and-release.md)。[文档目录](docs/README.md)另列出了工具和历史资料。
+固定开发要求见 [AGENTS.md](AGENTS.md)。[文档目录](docs/README.md)列出按需查阅的公式、存档、事务与接口参考，以及长期产品路线和归档。修改代码前先沿设计书找完整职责链，再进入具体文件。
 
 ## 在游戏里使用
 

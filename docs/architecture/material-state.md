@@ -4,12 +4,28 @@
 
 ## 修改入口
 
-| 要改什么 | 代码入口 | 测试选择器 |
-|---|---|---|
-| 材料定义与单位 | [FluidMaterialRegistry](../../model/src/main/java/mmm/fluid/FluidMaterialRegistry.java)、[BuiltinFluidMaterials](../../solver/src/main/java/mmm/fluid/BuiltinFluidMaterials.java)、[SolverUnitScale](../../model/src/main/java/mmm/units/SolverUnitScale.java) | `materials` |
-| 插入、提取和容器表示 | [MaterialTransferPlanner](../../solver/src/main/java/mmm/fluid/MaterialTransferPlanner.java)、[FluidMixture](../../model/src/main/java/mmm/transfer/FluidMixture.java) | `materials,containers` |
-| 材料界面和表面张力 | [MaterialSurfaceGeometry](../../fabric/src/client/java/mmm/client/MaterialSurfaceGeometry.java)、[SurfaceTensionWorkspace](../../solver/src/main/java/mmm/fluid/SurfaceTensionWorkspace.java) | `materials,surface-tension` |
-| 定义的持久化 | [MaterialRegistryCodec](../../fabric/src/main/java/mmm/fluid/MaterialRegistryCodec.java) | `region-state` |
+- **材料定义与单位**
+  - 代码入口：
+    - [FluidMaterialRegistry](../../model/src/main/java/mmm/fluid/FluidMaterialRegistry.java)
+    - [BuiltinFluidMaterials](../../solver/src/main/java/mmm/fluid/BuiltinFluidMaterials.java)
+    - [SolverUnitScale](../../model/src/main/java/mmm/units/SolverUnitScale.java)
+  - 测试选择器：`materials`
+
+- **插入、提取和容器表示**
+  - 代码入口：
+    - [MaterialTransferPlanner](../../solver/src/main/java/mmm/fluid/MaterialTransferPlanner.java)
+    - [FluidMixture](../../model/src/main/java/mmm/transfer/FluidMixture.java)
+  - 测试选择器：`materials,containers`
+
+- **材料界面和表面张力**
+  - 代码入口：
+    - [MaterialSurfaceGeometry](../../fabric/src/client/java/mmm/client/MaterialSurfaceGeometry.java)
+    - [SurfaceTensionWorkspace](../../solver/src/main/java/mmm/fluid/SurfaceTensionWorkspace.java)
+  - 测试选择器：`materials,surface-tension`
+
+- **定义的持久化**
+  - 代码入口：[MaterialRegistryCodec](../../fabric/src/main/java/mmm/fluid/MaterialRegistryCodec.java)
+  - 测试选择器：`region-state`
 
 执行方式见 [验证指南](../maintenance/validation.md#cpu)。
 
@@ -72,9 +88,12 @@ mass_kg   = marker_solver_mass * cellSize^3
 volume_m3 = marker_normalized_volume * cellSize^3
 ```
 
-热区域的压力与颗粒载体物性使用连续组成密度 `rho_i = sum(w_pi*m_p)/sum(w_pi*V_p)`。权重与热浮力共用 cell-center 三线性支撑，限制在完全开放、连通且属于同一 pressure phase 的有液体单元；外壳附近归一化，partial cut-cell 和含多相单元保留所属单元采样。该字段按载体位置与热状态代次重建，保持所有质量和体积库存原样。无热状态的压力密度沿用所属单元的组成密度。
+热区域的压力与颗粒载体物性使用连续组成密度 `rho_i = sum(w_pi*m_p)/sum(w_pi*V_p)`。权重与热浮力共用 cell-center 三线性支撑，限制在完全开放、连通且属于同一 pressure phase 的有液体单元；
+外壳附近归一化，partial cut-cell 和含多相单元保留所属单元采样。该字段按载体位置与热状态代次重建，保持所有质量和体积库存原样。
+无热状态的压力密度沿用所属单元的组成密度。
 
-质量和体积跨 SI 边界时都乘同一个 `cellSize³`，所以密度比值中的尺度严格约去。chemical marker 的闭合式为 `particleMass * cellSize³ = exact_species_mass_kg + massResidual_kg`；溶质增加实际质量而体积不变时，机械密度自然上升，因此盐水下沉来自同一权威质量账本，不需要盐材料特判。
+质量和体积跨 SI 边界时都乘同一个 `cellSize³`，所以密度比值中的尺度严格约去。chemical marker 的闭合式为 `particleMass * cellSize³ = exact_species_mass_kg + massResidual_kg`；
+溶质增加实际质量而体积不变时，机械密度自然上升，因此盐水下沉来自同一权威质量账本，不需要盐材料特判。
 
 pressure face 的 `1/rho` 系数按界面距离加权。面密度比、迁移率及压力矩阵系数使用 binary64，投影结果最终写入 binary32 MAC 速度。热学 Boussinesq 项从相同支撑上的逐载体温度和实际质量推导热密度变化，并沿相同的两段界面距离积分；库存密度、压力惯性和热密度修正各自保存明确的派生含义。
 
@@ -96,15 +115,23 @@ pressure face 的 `1/rho` 系数按界面距离加权。面密度比、迁移率
 - 玩家和发射器只向实际目标区域转移，单次物品计数必须为 1。
 - 容器与区域之间的物质变化通过同一 WAL 事务提交；任何不能被物品表示的结果在修改 solver 前拒绝。
 
-`FluidMixture` 最多保存 64 个按 stable ID 排序的 component；每项包含 `volumeNanos` 和 raw kg mass bits。构造时拒绝重复 ID、非正体积/质量和超过一桶的总量。物品中单材料可以使用紧凑 component 表示，多材料使用 canonical mixture 文本；进入 WAL 时两者都规范化为完整 mixture truth，reader 不现场合成缺失 component。
+`FluidMixture` 最多保存 64 个按 stable ID 排序的 component；每项包含 `volumeNanos` 和 raw kg mass bits。
+构造时拒绝重复 ID、非正体积/质量和超过一桶的总量。物品中单材料可以使用紧凑 component 表示，多材料使用 canonical mixture 文本；
+进入 WAL 时两者都规范化为完整 mixture truth，reader 不现场合成缺失 component。
 
 抽取先以 double 精确量预检，再按整 marker 与必要尾拆分生成实际 settlement；物品必须能表示实际 volume、每材料 mass 和所有附加化学/热侧列。请求量与实际可表示量不一致时，WAL 记录实际量，不用请求量伪造闭合。
 
-材料混合物注入先规划完整 marker 列，每材料的最大质量片段接收原始请求质量减去其余片段精确和后的一次舍入余量；默认化学记录按最终片段质量重新预检。返回质量由最终片段的精确和舍入一次，必须与请求质量位模式相同。原始 marker 质量和与请求的差额最多为该最大片段质量的半个 ULP，保留在实际质量列中供精确汇总观察；体积片段保持原始 binary32 注入计划。
+材料混合物注入先规划完整 marker 列，每材料的最大质量片段接收原始请求质量减去其余片段精确和后的一次舍入余量；默认化学记录按最终片段质量重新预检。
+返回质量由最终片段的精确和舍入一次，必须与请求质量位模式相同。原始 marker 质量和与请求的差额最多为该最大片段质量的半个 ULP，保留在实际质量列中供精确汇总观察；
+体积片段保持原始 binary32 注入计划。
 
-显式化学注入按每个完整 material/indicator 组执行同一质量余量分配。整数 species 仍由实际体积权重分配；各片段残差先由实际 kg 质量减去精确 species 质量得到，再由绝对值最大残差片段接收原始组残差减去其余残差精确和后的一次舍入余量。完整候选逐片段检查质量与组成闭合，无法同时表示时在写入前拒绝。原始组残差与最终残差和的表示差受该最大残差片段半个 ULP 限制。
+显式化学注入按每个完整 material/indicator 组执行同一质量余量分配。整数 species 仍由实际体积权重分配；
+各片段残差先由实际 kg 质量减去精确 species 质量得到，再由绝对值最大残差片段接收原始组残差减去其余残差精确和后的一次舍入余量。
+完整候选逐片段检查质量与组成闭合，无法同时表示时在写入前拒绝。原始组残差与最终残差和的表示差受该最大残差片段半个 ULP 限制。
 
-正请求必须规划出非空、具有正体积和质量增量的转移；小于现有 marker 可拆分分辨率时，在修改库存前拒绝，并继续允许从其他可表示的 marker 抽取。尾差容差只由已接受的拆分决定。逐材料返回量在提交前对计划中的原始体积、质量差精确求和，最后转为 double；不能用已舍入的全域总量相减计算微量转移。无材料参数的体积抽取选择默认载体（handle 0），混合抽取使用独立的 `tryExtractExactMixture`。
+正请求必须规划出非空、具有正体积和质量增量的转移；小于现有 marker 可拆分分辨率时，在修改库存前拒绝，并继续允许从其他可表示的 marker 抽取。
+尾差容差只由已接受的拆分决定。逐材料返回量在提交前对计划中的原始体积、质量差精确求和，最后转为 double；不能用已舍入的全域总量相减计算微量转移。
+无材料参数的体积抽取选择默认载体（handle 0），混合抽取使用独立的 `tryExtractExactMixture`。
 
 ## 功能配置
 

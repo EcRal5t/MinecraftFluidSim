@@ -1,48 +1,54 @@
 # 文档目录
 
-开发阅读顺序与固定要求见 [AGENTS.md](../AGENTS.md)。接到具体需求时，用 [项目 README 的需求表](../README.md#接到需求后从这里开始)定位专题；当前推进顺序与完成条件查 [产品路线](roadmap/product-roadmap.md)。下表供按主题查阅；每份专题都在开头列出代码入口和测试。
+日常跨模块开发使用三份主文档：
 
-## 当前实现
-
-| 文档 | 什么时候读 |
+| 主文档 | 唯一维护的内容 |
 |---|---|
-| [系统总览](architecture/system-overview.md) | 需要了解模块依赖、数据归属和完整计算流程 |
-| [运行时与区域操作](architecture/runtime-and-lifecycle.md) | 修改启动、调度、暂停、区域预算、控制器查询或确认操作 |
-| [流体求解器](architecture/fluid-solver.md) | 修改压力、自由面、粒子传递、碰撞或计算后端 |
-| [材料状态](architecture/material-state.md) | 修改材料注册、质量、混合与液液界面 |
-| [气体状态](architecture/gas-state.md) | 修改气腔扫描、气体库存、状态方程或孔流 |
-| [化学状态](architecture/chemistry-state.md) | 修改组分、反应、指示剂或化学输运 |
-| [颗粒状态](architecture/granular-state.md) | 修改颗粒运动、沉积、孔隙水或固液转移 |
-| [热学状态](architecture/thermal-state.md) | 修改内能、导热、相变或有限热设备 |
-| [区域存档](architecture/region-state.md) | 修改世界能力包、存档格式、提交顺序或恢复 |
-| [世界归属与容器事务](architecture/world-ownership-and-containers.md) | 修改接管/释放世界方块、桶、发射器或事务日志 |
-| [外部 API](architecture/external-api.md) | 修改查询、提交通知、探针或 Jade 适配 |
+| [当前设计书](architecture/system-overview.md) | 当前模型、完整职责链、跨模块契约和代码索引 |
+| [当前实施计划](roadmap/solver-consolidation-plan.md) | 当前进度、下一轮交付、依赖及完成条件 |
+| [验证指南](maintenance/validation.md) | 命令、场景、误差与预算判定、最新验证证据 |
 
-## 开发与发布
+首次阅读规则见 [AGENTS.md](../AGENTS.md)。先完整理解设计书与实施计划，再按改动进入下列参考。
+专题开头的修改入口用于继续定位具体文件。
 
-- [按需求和故障找代码](maintenance/routing.md)：游戏入口、客户端、物理模块和诊断路径。
-- [验证指南](maintenance/validation.md)：按改动选择测试、静态检查与 GPU 验证。
-- [构建输出管理](maintenance/build-outputs.md)：构建缓存、实验输出、本地归档与清理方式。
-- [正常操作 fuzzer](maintenance/fuzz-harness.md)：随机操作与极端状态下的强制中断排查工具、模式与覆盖边界。
-- [命令速查](maintenance/commands.md)：游戏内开发、诊断和恢复命令。
-- [Python 工具](maintenance/pytool.md)：源码规模、import 和 JFR 分析。
-- [产品路线](roadmap/product-roadmap.md)：后续功能的顺序和完成条件。
-- [求解器整合与维护改进](roadmap/solver-consolidation-plan.md)：恢复展示主线前的求解器工作包、依赖与验收条件。
-- [性能与后端规划](roadmap/performance-and-backends.md)：性能指标、范围扩张和生产 GPU 要求。
-- [验收与发布](roadmap/acceptance-and-release.md)：发布前检查与部署。
+## 按需参考
+
+| 需要查什么 | 文档 |
+|---|---|
+| 后端字段、MAC、PLIC、压力、速度传递与碰撞离散 | [流体离散参考](architecture/fluid-solver.md) |
+| 材料定义、质量、黏度与混合物换算 | [材料参考](architecture/material-state.md) |
+| 气腔几何、库存分配、状态方程与有限孔流 | [气体参考](architecture/gas-state.md) |
+| 物种、反应与指示剂数据 | [化学参考](architecture/chemistry-state.md) |
+| 颗粒接触、整数占容、床层与固液转移 | [颗粒参考](architecture/granular-state.md) |
+| 状态函数、热接触、相变及内能分配 | [热学参考](architecture/thermal-state.md) |
+| 启动、输入刷新、调度、授权与区域操作 | [运行时参考](architecture/runtime-and-lifecycle.md) |
+| 能力包、checkpoint 字段、HEAD 与冷恢复 | [存档参考](architecture/region-state.md) |
+| 世界归属、容器载荷、WAL 与恢复分类 | [事务参考](architecture/world-ownership-and-containers.md) |
+| 外部查询、提交事件、线程和单位 | [接口参考](architecture/external-api.md) |
+| 后续玩家能力、产品阶段与范围 | [长期产品路线](roadmap/product-roadmap.md) |
+| 范围扩张与完整 GPU 后端要求 | [后端扩展参考](roadmap/performance-and-backends.md) |
+| 发布检查与部署 | [验收与发布](roadmap/acceptance-and-release.md) |
+| 随机操作与短重放 | [Fuzzer](maintenance/fuzz-harness.md) |
+| 游戏命令、Python 工具及输出清理 | [命令](maintenance/commands.md)、[pytool](maintenance/pytool.md)、[构建输出](maintenance/build-outputs.md) |
 
 ## 历史资料
 
-[自由面探索索引](archive/free-surface-unification-research.md)整理可复用成果、数值反例和离线对照入口。[版本历史](progress/version-history.md)记录各次发布的变化。[归档目录](archive/README.md)保存旧提案、审查记录和已完成的实施报告。查找当前代码时使用上面的专题。
+[归档目录](archive/README.md)保存历史方案、反例与阶段记录，[版本历史](progress/version-history.md)保存发布变化。[自由面探索索引](archive/free-surface-unification-research.md)提供旧实验和离线对照入口。
 
-## 维护这些文档
+## 更新规则
 
-新增或调整功能时，更新它对应的专题。代码改名、移动或测试入口变化时，同时修正该专题开头的链接；需求分类变化时再调整项目 README 和维护路由。
+- 模型或职责链改变：更新设计书；稳定公式、数据归属或提交契约改变时更新对应参考。
+- 代码移动或调用迁移：更新设计书的阶段索引及涉及的专题入口。
+- 进度改变：只在实施计划登记完成项、剩余项和下一步，链接对应验证证据。
+- 运行验证：在验证指南记录被测构建、原输入、完成步数、结果及计时口径；旧结果移入归档。
+- 长期目标改变：更新产品路线；当前施工进度继续由实施计划维护。
 
-当前算法、数据格式和提交步骤写在 `architecture/`。未来工作写在 `roadmap/`，完成后把仍需维护的设计说明移入对应专题，再删去已完成的计划。发布变化记在版本历史中。
+同一条规则在其负责的文档完整说明，其他页面链接过去。入口目录保持简短，历史探索留在 Git、会话和归档中。
 
-路由页负责告诉读者去哪里，专题负责解释那里如何工作。一个规则在最贴近实现的专题中完整说明，其他入口链接到它。链接应指向真实文件或具体章节，代码路径写全。
+## 内容与排版
 
-写作时先说谁负责什么，再分段说明执行顺序、数据和失败处理。一次操作有多个步骤时用列表；比较入口时用表格。保留便于搜索的类名、状态名和公式，并在首次出现时解释意思。
-
-过时文档原样移入 `archive/`，更新当前入口中的引用。会话交接时提供下一步目标；固定要求、现行契约与任务完成条件分别由 AGENTS.md、架构专题和产品路线维护。
+- 设计文档保留模型、数据归属、单位、提交顺序、守恒与恢复契约，以及影响使用的近似条件。
+  缓存布局、搜索分支、求解器内部阈值和测试夹具参数由代码与测试维护，文档链接到职责入口。
+- 每段说明一个主题，长段按完整句子换行；较长句子在自然停顿处换行，代码和链接保持完整。
+- 文件索引和多条件流程使用分组列表，每个文件链接独占一行；简短对照继续使用表格。
+- 新内容先查现有归属，优先修改对应章节。详细算法说明仅在理解模型或安全修改确有需要时保留。

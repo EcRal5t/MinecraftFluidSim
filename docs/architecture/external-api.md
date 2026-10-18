@@ -4,13 +4,32 @@
 
 ## 修改入口
 
-| 要改什么 | 代码入口 | 测试选择器 |
-|---|---|---|
-| 外部接口发现 | [MmmFabricApi](../../fabric/src/main/java/mmm/api/fabric/MmmFabricApi.java) | `protocol` |
-| 只读查询实现 | [FabricFluidQueryApi](../../fabric/src/main/java/mmm/simulation/FabricFluidQueryApi.java)、[FluidCellInventoryView](../../solver/src/main/java/mmm/fluid/FluidCellInventoryView.java) | `protocol` |
-| 容器提交完成事件 | [CommittedEventHub](../../fabric/src/main/java/mmm/simulation/CommittedEventHub.java)、[ContainerRecoveryCoordinator](../../app/src/main/java/mmm/application/ContainerRecoveryCoordinator.java) | `protocol,containers` |
-| 探针与控制台 | [ShellFluidQuery](../../fabric/src/main/java/mmm/simulation/ShellFluidQuery.java)、[MinecraftControllerConsole](../../fabric/src/main/java/mmm/simulation/MinecraftControllerConsole.java)、[ControllerQueryUseCase](../../app/src/main/java/mmm/application/ControllerQueryUseCase.java) | `protocol,lifecycle` |
-| 恒温源界面授权 | [ThermalReservoirUseCase](../../app/src/main/java/mmm/application/ThermalReservoirUseCase.java) | `protocol,thermal` |
+- **外部接口发现**
+  - 代码入口：[MmmFabricApi](../../fabric/src/main/java/mmm/api/fabric/MmmFabricApi.java)
+  - 测试选择器：`protocol`
+
+- **只读查询实现**
+  - 代码入口：
+    - [FabricFluidQueryApi](../../fabric/src/main/java/mmm/simulation/FabricFluidQueryApi.java)
+    - [FluidCellInventoryView](../../solver/src/main/java/mmm/fluid/FluidCellInventoryView.java)
+  - 测试选择器：`protocol`
+
+- **容器提交完成事件**
+  - 代码入口：
+    - [CommittedEventHub](../../fabric/src/main/java/mmm/simulation/CommittedEventHub.java)
+    - [ContainerRecoveryCoordinator](../../app/src/main/java/mmm/application/ContainerRecoveryCoordinator.java)
+  - 测试选择器：`protocol,containers`
+
+- **探针与控制台**
+  - 代码入口：
+    - [ShellFluidQuery](../../fabric/src/main/java/mmm/simulation/ShellFluidQuery.java)
+    - [MinecraftControllerConsole](../../fabric/src/main/java/mmm/simulation/MinecraftControllerConsole.java)
+    - [ControllerQueryUseCase](../../app/src/main/java/mmm/application/ControllerQueryUseCase.java)
+  - 测试选择器：`protocol,lifecycle`
+
+- **恒温源界面授权**
+  - 代码入口：[ThermalReservoirUseCase](../../app/src/main/java/mmm/application/ThermalReservoirUseCase.java)
+  - 测试选择器：`protocol,thermal`
 
 执行方式见 [验证指南](../maintenance/validation.md#cpu)。 Jade 入口分为[服务端](../../fabric/src/main/java/mmm/compat/jade/)和[客户端](../../fabric/src/client/java/mmm/compat/jade/)。
 
@@ -26,7 +45,9 @@
 
 ## 当前稳定范围
 
-当前冻结同步只读 Query API，以及只发布 durable container completion 的 committed-event API。loader-neutral 契约位于 `api` 模块的 `mmm.api.query`、`mmm.api.event` 与共享 typed quantity 所在的 `mmm.api.transfer`；Fabric 调用方分别通过 `MmmFabricApi.query(MinecraftServer)` 和 `MmmFabricApi.events(MinecraftServer)` 发现实现。
+当前冻结同步只读 Query API，以及只发布 durable container completion 的 committed-event API。
+loader-neutral 契约位于 `api` 模块的 `mmm.api.query`、`mmm.api.event` 与共享 typed quantity 所在的 `mmm.api.transfer`；
+Fabric 调用方分别通过 `MmmFabricApi.query(MinecraftServer)` 和 `MmmFabricApi.events(MinecraftServer)` 发现实现。
 
 Fabric 提供可选 Jade 适配，通过 Query API 读取并展示摘要。受控转移、其他类型的提交通知、WAILA/HWYLA 和其他加载器接入见 [产品路线](../roadmap/product-roadmap.md)。
 
@@ -58,7 +79,8 @@ Fabric 提供可选 Jade 适配，通过 Query API 读取并展示摘要。受�
 | `OUTSIDE_INTERIOR` | 点位于 controller footprint 但不在可求解 interior |
 | `STATE_NOT_READY` | 已提交库存存在，但派生 observation 无法完整、安全构造 |
 
-只有 `OK` 携带 observation；其他状态不返回部分库存。`REGION_UNAVAILABLE` 还必须携带一个封闭的 `RegionAvailabilityReason`，用于稳定地区分 profile、registry/HEAD、边界/chunk、overlap、预算、WAL、pending work、权限、数值暂停、可重试性能暂停与政策停用；其他状态不得携带该字段。
+只有 `OK` 携带 observation；其他状态不返回部分库存。`REGION_UNAVAILABLE` 还必须携带一个封闭的 `RegionAvailabilityReason`，用于稳定地区分 profile、registry/HEAD、边界/chunk、
+overlap、预算、WAL、pending work、权限、数值暂停、可重试性能暂停与政策停用；其他状态不得携带该字段。
 
 `PERFORMANCE_PAUSE` 只表示已提交状态上的 wall-time 调度保护，operator 可显式重试；`NUMERICAL_PAUSE` 仍表示候选物理或账本无法闭合，两者不能靠 `detail` 文本互换。
 
@@ -66,7 +88,8 @@ Fabric 提供可选 Jade 适配，通过 Query API 读取并展示摘要。受�
 
 ## Observation
 
-`FluidCellObservation` 返回 dimension ID、region UUID、region network generation、cell 坐标、cell edge、总液体体积 `m³`、质量 `kg`、密度 `kg/m³`、可选温度 `K`、按 stable ID 排序的材料体积/质量以及 species integer quanta。
+`FluidCellObservation` 返回 dimension ID、region UUID、region network generation、cell 坐标、cell edge、总液体体积 `m³`、质量 `kg`、密度 `kg/m³`、可选温度 `K`、
+按 stable ID 排序的材料体积/质量以及 species integer quanta。
 
 数据只使用目标 cell 的权威 marker、chemical parcel 和 thermal carrier side column，并直接由该 cell 的总 `U` 与载体清单反演 LTE 温度：不依赖平滑 volume、pressure、客户端 mesh，也不重建 fluid/thermal grid。
 
@@ -84,13 +107,17 @@ Query API 提供宏观状态查询（体积、质量、密度、温度、材料�
 
 该 carrier view 属于内部诊断结构，不构成公开 Query 的稳定契约承诺。
 
-对 controller 使用探针会打开 server-authored bounded summary：identity、完整 footprint、当前/保留预算、operator intent、motion/thermal state、封闭 availability reason、live inventory（若 solver 已加载）、已观测载体温度范围、事务执行条件和数值诊断。
+对 controller 使用探针会打开 server-authored bounded summary：identity、完整 footprint、当前/保留预算、operator intent、motion/thermal state、封闭 availability reason、
+live inventory（若 solver 已加载）、已观测载体温度范围、事务执行条件和数值诊断。
 
-控制器方块的空手激活与持物交互分离，探针必须进入物品入口，不能退化为 select/run-intent 消息。Minecraft adapter 先核对线程、距离、方块和 owner，再把 viewer/region identity 交给 `ControllerQueryUseCase`；`ControllerSummaryPort` 只返回 use-case-specific bounded read model，不返回 region/domain。
+控制器方块的空手激活与持物交互分离，探针必须进入物品入口，不能退化为 select/run-intent 消息。Minecraft adapter 先核对线程、距离、方块和 owner，再把 viewer/region identity 交给 `ControllerQueryUseCase`；
+`ControllerSummaryPort` 只返回 use-case-specific bounded read model，不返回 region/domain。
 
-用例先验证 view identity 与完整 summary 形状，成功后才签发按 player+region 隔离的一次性 opaque generation；失败读不产生未披露 token。availability pause 不阻止只读 summary；metadata-only UNLOADED 只报告 inventory unavailable，不为展示恢复派生状态。
+用例先验证 view identity 与完整 summary 形状，成功后才签发按 player+region 隔离的一次性 opaque generation；
+失败读不产生未披露 token。availability pause 不阻止只读 summary；metadata-only UNLOADED 只报告 inventory unavailable，不为展示恢复派生状态。
 
-界面只提供 select、pause、resume 和显式 availability refresh；每个动作都携带该 generation，服务端再次核对距离、方块和 区域归属，并使 token 失效。pause/resume 的 permission、write-ready 与 idempotence 决策进入 `RegionLifecycleUseCase`，adapter 只在 accepted 后改 operator intent、按需唤醒并发布 snapshot。
+界面只提供 select、pause、resume 和显式 availability refresh；每个动作都携带该 generation，服务端再次核对距离、方块和 区域归属，并使 token 失效。
+pause/resume 的 permission、write-ready 与 idempotence 决策进入 `RegionLifecycleUseCase`，adapter 只在 accepted 后改 operator intent、按需唤醒并发布 snapshot。
 
 客户端 summary 没有提交权；打开或读取 summary 本身不加载、不唤醒、不 checkpoint。
 
@@ -102,7 +129,9 @@ Fabric 最后持久化 BlockEntity、刷新相邻已加载区域的 boundary flu
 
 ## Jade 观察适配
 
-Jade 是 Fabric 模块的可选 compile-only 依赖；未安装 Jade 时不会解析任何 Jade 类，也不影响主 Mod 启动。服务端 provider 只对 `fluid_boundary`、`fluid_controller` 和 `thermal_reservoir` 请求数据，并通过上述 Query API 观察命中面近侧或跨过一格壳体的反侧位置。非 `OK` 结果不产生 tooltip，不从方块外观猜测流体。
+Jade 是 Fabric 模块的可选 compile-only 依赖；未安装 Jade 时不会解析任何 Jade 类，也不影响主 Mod 启动。
+服务端 provider 只对 `fluid_boundary`、`fluid_controller` 和 `thermal_reservoir` 请求数据，并通过上述 Query API 观察命中面近侧或跨过一格壳体的反侧位置。
+非 `OK` 结果不产生 tooltip，不从方块外观猜测流体。
 
 发送给客户端的是有界展示摘要：体积、质量、密度、可选温度，以及按量排序的至多四项材料和 species；若项目更多会明确显示隐藏项数。该摘要专用于客户端渲染与界面展示，不参与库存转移与持久化回写。当前适配由玩家交互命中外壳方块触发；查询过程保持无加载、不唤醒与服务端权威数据。
 
@@ -110,11 +139,14 @@ Jade 是 Fabric 模块的可选 compile-only 依赖；未安装 Jade 时不会�
 
 `MmmEventApi` 可在不初始化 world service 的情况下注册监听器。回调只在服务器主线程执行；单个监听器异常会被隔离，不能改变提交结果或阻断其他监听器。服务器关闭会清空该服务器的订阅。
 
-`ContainerTransferCommittedEvent` 只在 region HEAD 已指向 target、player/dispenser after-item 已完成强制保存且 WAL 已删除后发布。它携带 transaction UUID、dimension、region UUID、checkpoint generation、相对区域的 insert/extract 方向，以及封闭的 `TransferQuantity`：液体记录 `10^-9 m³` nanovolume 和可选 raw `U`，颗粒记录 `2^-27 BV` 的 SVQ，调用方不需要用枚举与无类型 long 自行配对。
+`ContainerTransferCommittedEvent` 只在 region HEAD 已指向 target、player/dispenser after-item 已完成强制保存且 WAL 已删除后发布。
+它携带 transaction UUID、dimension、region UUID、checkpoint generation、相对区域的 insert/extract 方向，以及封闭的 `TransferQuantity`：液体记录 `10^-9 m³` nanovolume
+和可选 raw `U`，颗粒记录 `2^-27 BV` 的 SVQ，调用方不需要用枚举与无类型 long 自行配对。
 
 事件只通知提交动作完成；监听者需要具体材料或化学组分时按区域重新查询。
 
-`core/.../transfer/` 已保存与 loader 无关的容器体积、逐材料质量、species/residual、颗粒组成、raw `U`、actor identity 和 journal 数据；Fabric 只负责 NBT 持久编码、Minecraft actor 收敛，以及由 `ContainerItemStacks` 映射 `ItemStack` component。
+`core/.../transfer/` 已保存与 loader 无关的容器体积、逐材料质量、species/residual、颗粒组成、raw `U`、actor identity 和 journal 数据；
+Fabric 只负责 NBT 持久编码、Minecraft actor 收敛，以及由 `ContainerItemStacks` 映射 `ItemStack` component。
 
 它们是内部事务与未来 transfer adapter 的共享模型，不等同于已经开放写权限；公开 request/plan/commit 仍须先完成可跨重启解析并强制保存的外部 actor 协议。
 

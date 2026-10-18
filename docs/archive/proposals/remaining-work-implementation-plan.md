@@ -6,7 +6,7 @@
 
 - [`../../architecture/system-overview.md`](../../architecture/system-overview.md)
 - 对应领域的 [`../../architecture/`](../../architecture/) 文档
-- [`../../maintenance/routing.md`](../../maintenance/routing.md)
+- [`../../maintenance/routing.md`](../../architecture/system-overview.md)
 - [`../../roadmap/product-roadmap.md`](../../roadmap/product-roadmap.md)
 
 计划只描述尚未闭合的工作。实现完成后，把最终数据结构、公式、提交顺序和失败语义写入 architecture，更新 routing，然后从产品路线中删除已完成项。不要把实现过程中的临时类型、过渡格式或探索失败写入稳定文档。

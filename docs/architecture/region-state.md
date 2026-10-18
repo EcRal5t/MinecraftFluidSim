@@ -4,14 +4,43 @@
 
 ## 修改入口
 
-| 要改什么 | 代码入口 | 测试选择器 |
-|---|---|---|
-| 世界启动与定义加载 | [WorldStartupCoordinator](../../fabric/src/main/java/mmm/simulation/WorldStartupCoordinator.java)、[RegistryBundleLoader](../../fabric/src/main/java/mmm/simulation/RegistryBundleLoader.java) | `region-state` |
-| 世界能力包 | [WorldCapabilityBundleStore](../../fabric/src/main/java/mmm/simulation/persistence/WorldCapabilityBundleStore.java)、[WorldCapabilityStartup](../../fabric/src/main/java/mmm/simulation/persistence/WorldCapabilityStartup.java) | `region-state` |
-| 捕获和恢复完整状态 | [MinecraftRegionCheckpointSource](../../fabric/src/main/java/mmm/simulation/MinecraftRegionCheckpointSource.java)、[RegionCheckpointAssembler](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointAssembler.java)、[RegionCheckpointValidator](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointValidator.java)、[RegionCheckpointRestorer](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointRestorer.java) | `region-state` |
-| 文件编码与双槽提交 | [RegionStateCodec](../../fabric/src/main/java/mmm/simulation/persistence/RegionStateCodec.java)、[RegionGenerationStore](../../fabric/src/main/java/mmm/simulation/persistence/RegionGenerationStore.java) | `region-state` |
-| 删除区域与隔离旧文件 | [RemovedGenerationStore](../../fabric/src/main/java/mmm/simulation/persistence/RemovedGenerationStore.java)、[RemovedQuarantineStore](../../fabric/src/main/java/mmm/simulation/persistence/RemovedQuarantineStore.java) | `region-state` |
-| 登记和加载区域 | [RegionRepositoryAdapter](../../fabric/src/main/java/mmm/simulation/RegionRepositoryAdapter.java)、[FluidRegionOperations](../../fabric/src/main/java/mmm/simulation/FluidRegionOperations.java) | `region-state,region-manager` |
+- **世界启动与定义加载**
+  - 代码入口：
+    - [WorldStartupCoordinator](../../fabric/src/main/java/mmm/simulation/WorldStartupCoordinator.java)
+    - [RegistryBundleLoader](../../fabric/src/main/java/mmm/simulation/RegistryBundleLoader.java)
+  - 测试选择器：`region-state`
+
+- **世界能力包**
+  - 代码入口：
+    - [WorldCapabilityBundleStore](../../fabric/src/main/java/mmm/simulation/persistence/WorldCapabilityBundleStore.java)
+    - [WorldCapabilityStartup](../../fabric/src/main/java/mmm/simulation/persistence/WorldCapabilityStartup.java)
+  - 测试选择器：`region-state`
+
+- **捕获和恢复完整状态**
+  - 代码入口：
+    - [MinecraftRegionCheckpointSource](../../fabric/src/main/java/mmm/simulation/MinecraftRegionCheckpointSource.java)
+    - [RegionCheckpointAssembler](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointAssembler.java)
+    - [RegionCheckpointValidator](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointValidator.java)
+    - [RegionCheckpointRestorer](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointRestorer.java)
+  - 测试选择器：`region-state`
+
+- **文件编码与双槽提交**
+  - 代码入口：
+    - [RegionStateCodec](../../fabric/src/main/java/mmm/simulation/persistence/RegionStateCodec.java)
+    - [RegionGenerationStore](../../fabric/src/main/java/mmm/simulation/persistence/RegionGenerationStore.java)
+  - 测试选择器：`region-state`
+
+- **删除区域与隔离旧文件**
+  - 代码入口：
+    - [RemovedGenerationStore](../../fabric/src/main/java/mmm/simulation/persistence/RemovedGenerationStore.java)
+    - [RemovedQuarantineStore](../../fabric/src/main/java/mmm/simulation/persistence/RemovedQuarantineStore.java)
+  - 测试选择器：`region-state`
+
+- **登记和加载区域**
+  - 代码入口：
+    - [RegionRepositoryAdapter](../../fabric/src/main/java/mmm/simulation/RegionRepositoryAdapter.java)
+    - [FluidRegionOperations](../../fabric/src/main/java/mmm/simulation/FluidRegionOperations.java)
+  - 测试选择器：`region-state,region-manager`
 
 执行方式见 [验证指南](../maintenance/validation.md#cpu)。
 
@@ -32,13 +61,16 @@
 
 `mmm/world-capabilities/` 保存世界唯一的世界能力包：五个 world registry snapshot 加一份 `profile.nbt`。它是已有库存的唯一解释——区域载荷里的 stable ID 只能按这个包的 registry 解析，区域 section 不复制 registry。
 
-包是不可变的，发布一次，generation 恒为 1；定义漂移只报告 mismatch，不覆盖已提交内容。成员集合固定为 `chemical-registry.nbt`、`gas-registry.nbt`、`granular-registry.nbt`、`material-registry.nbt`、`profile.nbt`、`thermal-registry.nbt`，每个成员的字节就是对应 registry codec 的严格规范编码（`*RegistryCodec.snapshotBytes`），所以包内 checksum 与 codec 自身编出的字节逐字节一致。
+包是不可变的，发布一次，generation 恒为 1；定义漂移只报告 mismatch，不覆盖已提交内容。成员集合固定为 `chemical-registry.nbt`、`gas-registry.nbt`、`granular-registry.nbt`、`material-registry.nbt`、
+`profile.nbt`、`thermal-registry.nbt`，每个成员的字节就是对应 registry codec 的严格规范编码（`*RegistryCodec.snapshotBytes`），所以包内 checksum 与 codec 自身编出的字节逐字节一致。
 
 **包是 registry snapshot 的唯一根**：五个 codec 没有各自独立的世界目录；若存在 `mmm/chemistry`、`mmm/gas` 等旧式 per-kind 目录，均按未知条目处理。
 
 manifest 校验和覆盖 manifest 自身，HEAD 额外绑定 manifest 校验和、profile fingerprint 与 aggregate fingerprint。
 
-发布序列与区域 checkpoint 同构：先在 `mmm/quarantine/world-capability-staging/<transaction>.preparing` 写 manifest，原子移为 `slot-a.tmp`；再按规范顺序写成员、回读校验；原子移为 `slot-a`；最后写 `HEAD.nbt.tmp`、回读校验、原子移为 `HEAD.nbt`。**只有 HEAD rename 是 commit point**，slot 在 HEAD 绑定它之前只是 staging。
+发布序列与区域 checkpoint 同构：先在 `mmm/quarantine/world-capability-staging/<transaction>.preparing` 写 manifest，原子移为 `slot-a.tmp`；
+再按规范顺序写成员、回读校验；原子移为 `slot-a`；最后写 `HEAD.nbt.tmp`、回读校验、原子移为 `HEAD.nbt`。
+**只有 HEAD rename 是 commit point**，slot 在 HEAD 绑定它之前只是 staging。
 
 重开时按目录内容判定唯一状态：`{HEAD, slot-a}` 已提交；`{slot-a, HEAD.nbt.tmp}` 补完 HEAD 移动；`{slot-a}` 补发 HEAD；`{slot-a.tmp}` 把中断的 staging 原样移入 quarantine 后重新发布；空目录首次发布；其他组合一律拒绝并原样保留。
 
@@ -57,7 +89,9 @@ staging 目录不作主动删除；无 publication identity 的 staging 判定�
 
 **恢复不查当前定义源**：`COMMIT_CANDIDATE` 只凭已写出的 slot 就补完 HEAD，不要求 datapack 仍能解码。已提交包即使与 datapack 不一致也保持权威，只报告 drift，不修复、不重发。
 
-`mmm/` 下的权威域（`container-transfer`、`ownership`、`region-state`）只在存在已提交包时才允许存在；`quarantine` 是已知的持久证据归档根，但不拥有物理原始数据。没有包却出现权威，或出现任何其他未知条目，一律 LOCKED 并原样保留。这里没有迁移、没有版本嗅探、没有字段补全——旧实现产出的存档不被解释。
+`mmm/` 下的权威域（`container-transfer`、`ownership`、`region-state`）只在存在已提交包时才允许存在；
+`quarantine` 是已知的持久证据归档根，但不拥有物理原始数据。没有包却出现权威，或出现任何其他未知条目，一律 LOCKED 并原样保留。
+这里没有迁移、没有版本嗅探、没有字段补全——旧实现产出的存档不被解释。
 
 此规则覆盖 per-kind registry 目录：registry snapshot 仅允许保存在能力包内。发现遗留或未知目录时，世界置为 LOCKED，目录原样保留，严禁静默采纳或自动合并。同理，任何 `mmm/` 下无法归属的文件或目录均触发 LOCKED。
 
@@ -73,13 +107,21 @@ slot-a/removed.nbt                     # 或 REMOVED 删除标记
 slot-b/removed.nbt                     # 或 REMOVED 删除标记
 ```
 
-同一个 slot 只能是完整 ACTIVE generation 或只含一个 `removed.nbt` 的 REMOVED 删除标记，不能混合。逻辑原始数据是 loader-neutral `RegionCheckpoint`：`RegionIdentity`、`RegionGeometry` 与 `RegionRuntimeIntent` 只保存 stable value，manifest/section/extension 不引用 `BlockPos`、`ResourceKey`、live region 或 lifecycle class。
+同一个 slot 只能是完整 ACTIVE generation 或只含一个 `removed.nbt` 的 REMOVED 删除标记，不能混合。
+逻辑原始数据是 loader-neutral `RegionCheckpoint`：`RegionIdentity`、`RegionGeometry` 与 `RegionRuntimeIntent` 只保存 stable value，
+manifest/section/extension 不引用 `BlockPos`、`ResourceKey`、live region 或 lifecycle class。
 
-`MinecraftRegionCheckpointSource` 是唯一从 loaded `FluidRegion` 映射这些值并导出 solver snapshot 的 adapter；`RegionCheckpointAssembler` 按 pure/material/chemical/granular/thermal layout 组装完整 section、extension 和总账，`RegionCheckpointValidator` 审计跨 section identity/ownership/ledger，`RegionCheckpointRestorer` 只重建既有 immutable solver state。
+`MinecraftRegionCheckpointSource` 是唯一从 loaded `FluidRegion` 映射这些值并导出 solver snapshot 的 adapter；
+`RegionCheckpointAssembler` 按 pure/material/chemical/granular/thermal layout 组装完整 section、extension 和总账，`RegionCheckpointValidator` 审计跨 section
+identity/ownership/ledger，`RegionCheckpointRestorer` 只重建既有 immutable solver state。
 
-`RegionState` 只是 durable store 的 27 行 DTO adapter，不 capture 或 reconstruct live runtime。`RegionStateCodec` 只编解码 ACTIVE NBT；`RemovedRegionManifest` 是不可重建 solver 的严格零库存终止原始数据；`RegionStateIntegrity` 生成与 NBT 字段顺序无关的规范 CRC32C。
+`RegionState` 只是 durable store 的 27 行 DTO adapter，不 capture 或 reconstruct live runtime。
+`RegionStateCodec` 只编解码 ACTIVE NBT；`RemovedRegionManifest` 是不可重建 solver 的严格零库存终止原始数据；
+`RegionStateIntegrity` 生成与 NBT 字段顺序无关的规范 CRC32C。
 
-`RegionGenerationStore` 独占 prepare/commit/abort/read/discover 状态机和 HEAD 发布顺序。它组合 package-private `RegionHeadStore`、`ActiveGenerationStore`、`RemovedGenerationStore`、`RemovedQuarantineStore` 与 `RegionDiscovery`：子 store 分别拥有严格 HEAD、ACTIVE、REMOVED、quarantine 和启动分类职责，但不能单独形成第二个提交点。
+`RegionGenerationStore` 独占 prepare/commit/abort/read/discover 状态机和 HEAD 发布顺序。
+它组合 package-private `RegionHeadStore`、`ActiveGenerationStore`、`RemovedGenerationStore`、`RemovedQuarantineStore` 与 `RegionDiscovery`：子 store
+分别拥有严格 HEAD、ACTIVE、REMOVED、quarantine 和启动分类职责，但不能单独形成第二个提交点。
 
 `RegionRepositoryAdapter` 组合 Minecraft checkpoint source、generation store、当前 registries/profile 与 live restore；`OwnershipTransactionCoordinator` 才执行 Minecraft 方块 ownership 事务。
 
@@ -87,7 +129,9 @@ slot-b/removed.nbt                     # 或 REMOVED 删除标记
 
 HEAD 使用固定 `region-head` schema 并显式区分 `ACTIVE` / `REMOVED` kind。ACTIVE manifest 与每个 section 使用语义 `Layout`：`pure`、`material`、`chemical`、`granular` 或 `thermal`。
 
-其中 `granular`、`thermal` 的附加 capability 精确声明是否同时携带 chemistry/granular 状态。启动时由已提交 world capability profile 得到唯一预期 layout 和 registry fingerprint，存档必须精确匹配；未知 kind/layout、未知必需 extension、缺字段或额外能力都不能按数字顺序猜测兼容性，也没有自动迁移或默认补全。
+其中 `granular`、`thermal` 的附加 capability 精确声明是否同时携带 chemistry/granular 状态。
+启动时由已提交 world capability profile 得到唯一预期 layout 和 registry fingerprint，存档必须精确匹配；
+未知 kind/layout、未知必需 extension、缺字段或额外能力都不能按数字顺序猜测兼容性，也没有自动迁移或默认补全。
 
 ## 提交模型
 
@@ -100,7 +144,8 @@ HEAD 使用固定 `region-head` schema 并显式区分 `ACTIVE` / `REMOVED` kind
 
 HEAD 发布前，当前已提交 generation 仍是唯一权威状态。失败的 staging 和被拒绝 slot 不得被当作已提交状态，也不得覆盖原 HEAD。
 
-显式 controller checkpoint 先由 Minecraft adapter 冻结 region UUID、expected checkpoint generation 与 container-WAL presence，再经 loader-neutral `CheckpointRegionCommand` 进入 `RegionApplicationService`。
+显式 controller checkpoint 先由 Minecraft adapter 冻结 region UUID、expected checkpoint generation 与 container-WAL presence，
+再经 loader-neutral `CheckpointRegionCommand` 进入 `RegionApplicationService`。
 
 pending WAL 在触达持久端口前拒绝；`RegionCheckpointPort` 在写入前重新查找同一 region 并核对 generation、controller/loaded 身份与 ownership lock。
 
@@ -126,7 +171,8 @@ pending WAL 在触达持久端口前拒绝；`RegionCheckpointPort` 在写入前
 
 只有 `REMOVED` HEAD 的原子替换是删除 commit point；此前 exact staging 可丢弃，ACTIVE generation 仍是唯一原始数据。容量预算只在该提交前准入；HEAD 已是 REMOVED 后必须继续幂等收敛，不能用变化后的预算拒绝已提交事务。
 
-`REMOVED` HEAD 发布后，旧 ACTIVE slot 不再是库存原始数据，也绝不能用于恢复 solver。服务层先发送 network removal 删除标记 并注销 runtime owner，持久层再把旧 slot 原子移动到 `mmm/quarantine/removed-region/<uuid>/<target>/payload`，写入匹配的 `quarantine.nbt` 并回读 exact AFTER 状态。
+`REMOVED` HEAD 发布后，旧 ACTIVE slot 不再是库存原始数据，也绝不能用于恢复 solver。服务层先发送 network removal 删除标记 并注销 runtime owner，持久层再把旧 slot 原子移动到 `mmm/quarantine/removed-region/<uuid>/<target>/payload`，
+写入匹配的 `quarantine.nbt` 并回读 exact AFTER 状态。
 
 删除标记 永久留在原 region UUID 路径，因此该 UUID 不能重新创建。
 
@@ -175,11 +221,12 @@ material[] + mass[]
 solidMask[]
 ```
 
-启用的 chemistry/granular/thermal extension 继续绑定相同 ordinal，并保存 cell-local deposit/coherent 数据。ordinal 在全 region 唯一且 cardinality 必须与所有 required side column 相等；section identity、local bounds、体积/质量/species/energy 汇总必须重新合到 manifest。
+启用的 chemistry/granular/thermal extension 继续绑定相同 ordinal，并保存 cell-local deposit/coherent 数据。
+ordinal 在全 region 唯一且 cardinality 必须与所有 required side column 相等；section identity、local bounds、体积/质量/species/energy 汇总必须重新合到 manifest。
 
 granular section 保存每份活动颗粒的 `ceilMask` 原始字节。完整重建按该颗粒的位置、SVQ 和域尺寸校验核支撑、floor/ceil 配额及份额精确总量，再恢复同一选择。
 
-共同液体形状使用 `mmm:liquid_shapes` section extension，按全域 cell 递增保存精确二进制盒范围及实际发布载体的三轴体积位置矩；纯液体、材料与化学布局共用该载荷。每格最多八个互不重叠正盒，extension 上限为 16 MiB。读取校核 cell 归属、范围、碰撞掩码、原始体积与位置矩，以及几何位置矩的坐标存储误差界。恢复先安装载体与形状，再重建气体归属和压力几何。
+液体空间状态由载体的位置、体积、质量及相身份保存。恢复先安装液体与固体库存，再从同一库存和碰撞几何重建 PLIC、气腔归属与压力工作区。当前载荷由基础列及已启用的材料、化学、颗粒、气体和热学扩展组成。
 
 运行时 handle 由 world registry snapshot 重新解析，数组位置不作持久化 stable ID。
 
@@ -198,13 +245,17 @@ section、palette、mixture、deposit group、gas node 和 ledger 都必须采�
 - materials 决定 marker 是否必须有 material ordinal 和独立 mass；
 - chemistry 决定 mixture/indicator/species/residual 列及 registry fingerprint 是否 required；
 - granular 决定 active/deposit、solid composition、SVQ/mass/porosity 与 granular ledger 是否 required；
-- thermal 决定所有 solver carrier `U`、coherent store、gas topology/inventory/energy、外部注入与环境气体的配置温度、audit、buoyancy identity 和 pending phase-work 是否 required；配置温度以 Kelvin 原始 double 保存在热学 manifest，恢复时与库存一起交接。非空有限热设备集合是 manifest-only extension，其 provider/object 只作 locator，kg 与 `U` 仍由同一 region HEAD 持有。
+- thermal 决定所有 solver carrier `U`、coherent store、gas topology/inventory/energy、外部注入与环境气体的配置温度、audit、buoyancy identity 和 pending phase-work 是否
+  required；配置温度以 Kelvin 原始 double 保存在热学 manifest，恢复时与库存一起交接。非空有限热设备集合是 manifest-only extension，其 provider/object 只作 locator，
+  kg 与 `U` 仍由同一 region HEAD 持有。
 
 一个 capability 存在时，它的 manifest 和每个相关 section extension 必须成套出现；不存在时也不得偷偷携带该 truth。unknown optional extension 只有在不影响当前 required truth 时才允许跳过。
 
 ## 读取与 admission
 
-启动顺序是先加载并冻结 world registries 与 world capability bundle，再扫描 region-state root。扫描遇到非 UUID 条目、非目录、损坏 HEAD、未知必需布局或 checksum/identity 失败时保留原路径为 issue。若无法从路径安全识别 region，禁止创建所有新区；若能识别，则只锁对应 region。
+启动顺序是先加载并冻结 world registries 与 world capability bundle，再扫描 region-state root。
+扫描遇到非 UUID 条目、非目录、损坏 HEAD、未知必需布局或 checksum/identity 失败时保留原路径为 issue。
+若无法从路径安全识别 region，禁止创建所有新区；若能识别，则只锁对应 region。
 
 完整恢复按以下顺序：
 
@@ -237,7 +288,8 @@ controller console 的 summary 只读现有 metadata 和已维护的 bounded led
 
 显式 refresh availability 才可尝试当前 runtime admission/restore，成功后仍按保存的 operator intent 决定是否 step。
 
-`RegionRuntime` 仅为单次 tick 的不可变调度快照，不进入 checkpoint。checkpoint 保存 resume state、operator intent、entity/debug 开关、step interval 与 tick；wall-time hard-overrun/recovery streak 是进程内短期调度指标，重启时不解释为持久 PAUSED 或数值失败。
+`RegionRuntime` 仅为单次 tick 的不可变调度快照，不进入 checkpoint。checkpoint 保存 resume state、operator intent、entity/debug 开关、step interval 与 tick；
+wall-time hard-overrun/recovery streak 是进程内短期调度指标，重启时不解释为持久 PAUSED 或数值失败。
 
 ## 恢复
 
@@ -246,7 +298,8 @@ controller console 的 summary 只读现有 metadata 和已维护的 bounded led
 - 恢复命令完整重建并审计紧邻上一槽，再原子移动 HEAD；成功后必须退出并重新进入世界。
 - 该命令仅用于回滚到紧邻上一代同布局的有效存档，不修改被拒绝的当前槽位。
 
-恢复上一完整代的原子边界仍然只有 HEAD：命令要求操作者给出当前 expected generation，先重新读取并完全重建 inactive slot，确认其恰为 `current - 1`；发布前再次核对当前 HEAD generation/checksum 未移动，再只替换 HEAD。被拒绝的当前 slot 保持字节不变，下一次正常 checkpoint 才可能覆盖它。
+恢复上一完整代的原子边界仍然只有 HEAD：命令要求操作者给出当前 expected generation，先重新读取并完全重建 inactive slot，确认其恰为 `current - 1`；
+发布前再次核对当前 HEAD generation/checksum 未移动，再只替换 HEAD。被拒绝的当前 slot 保持字节不变，下一次正常 checkpoint 才可能覆盖它。
 
 这条路径不自动触发，是因为“另一个 slot 可读”不能证明它比当前失败状态更符合操作者意图，也不能解决外部 ownership/item WAL 的歧义。
 
@@ -254,7 +307,8 @@ controller console 的 summary 只读现有 metadata 和已维护的 bounded led
 
 热区域 capture 前必须先把 current marker/occupancy 与 gas topology、gas inventory 和 gas energy ordinal 同步到同一个逻辑时刻。同步失败时 checkpoint 失败，活动 solver 保留，原 HEAD 不变。
 
-同步为 capture 的前置必要环节：先根据待发布 marker/solid/coherent geometry 派生 cavity topology，再以稳定 overlap 规则规划 gas merge/split/ambient exchange，联合验证 gas inventory、node `U` 和 topology key。只有同步候选闭合后，section marker 和 gas extension 才能一起编码。
+同步为 capture 的前置必要环节：先根据待发布 marker/solid/coherent geometry 派生 cavity topology，再以稳定 overlap 规则规划 gas merge/split/ambient exchange，
+联合验证 gas inventory、node `U` 和 topology key。只有同步候选闭合后，section marker 和 gas extension 才能一起编码。
 
 ## 故障、清理与删除
 
@@ -266,4 +320,6 @@ controller console 的 summary 只读现有 metadata 和已维护的 bounded led
 
 普通 checkpoint 不删除上一完整 slot，因为它既是原子覆盖的另一半，也是显式 recoverprevious 的唯一候选。清理逻辑绝不能触碰 HEAD 当前指向的 slot。
 
-气体区域载荷保存完整 `8N` 微盒归属主列 `pieceNodeOrdinal`，按全域 minimum-piece key 规范节点排序并随 section 拆分、组装。section 保留全域节点编号并校核 `sealedPieceCount`；恢复从完整载体几何重新生成微盒归属与容量，核对库存和热能的同序绑定。具体格式见 [气体状态](gas-state.md)。
+气体区域载荷保存完整 `8N` 微盒归属主列 `pieceNodeOrdinal`，按全域 minimum-piece key 规范节点排序并随 section 拆分、组装。
+section 保留全域节点编号并校核 `sealedPieceCount`；恢复从完整载体几何重新生成微盒归属与容量，核对库存和热能的同序绑定。
+具体格式见 [气体状态](gas-state.md)。

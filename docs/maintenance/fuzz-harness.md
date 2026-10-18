@@ -37,7 +37,8 @@
 
 ## 四、动作矩阵与权重
 
-权威阈值表在 `FuzzConfig.actionName(int)`：`applyExpandedRandomAction` 按名称 `switch` 分派，`FuzzMinimizer.branchName` 直接复用它，因此两者不会漂移。下表按权重档顺序列出动作与物理含义，`pick` 区间以该函数为准（`pick = random.nextInt(100)`）。
+权威阈值表在 `FuzzConfig.actionName(int)`：`applyExpandedRandomAction` 按名称 `switch` 分派，`FuzzMinimizer.branchName` 直接复用它，
+因此两者不会漂移。下表按权重档顺序列出动作与物理含义，`pick` 区间以该函数为准（`pick = random.nextInt(100)`）。
 
 | 动作 | 次数/参数 | 物理含义 |
 |---|---|---|
@@ -78,7 +79,9 @@
 | `clear` / `vent` | — | 操作者清空 / 排空密封气体 |
 | `settle` | — | 结算未决相位功 |
 
-暂停期间 `step`/`steps`/`thermalStep`/`movingBody`/`settle` 返回 `skip(paused)`；`insert`/`extract`/`temperature` 不受暂停限制（对应生产中的 inventory bypass）。`applicationStep`/`sleepWake`/`blockAndRetry` 只在 `disk`/`partialdisk`（存在 `FluidRegion`）时生效，其余模式返回 `skip(...)`。
+暂停期间 `step`/`steps`/`thermalStep`/`movingBody`/`settle` 返回 `skip(paused)`；
+`insert`/`extract`/`temperature` 不受暂停限制（对应生产中的 inventory bypass）。
+`applicationStep`/`sleepWake`/`blockAndRetry` 只在 `disk`/`partialdisk`（存在 `FluidRegion`）时生效，其余模式返回 `skip(...)`。
 
 ## 五、场景
 
@@ -127,9 +130,12 @@
 
 ## 八、观测指标
 
-每轮结束打印 `action coverage`、`process coverage`（真实发生的求解事件：相变、颗粒沉积/唤醒、化学求值、重播种合/分）、`action hotspots`（按动作类型汇总总耗时/次数/单次均耗时/机械子步）与 `slowest jobs`（最慢单个 job 及其子步数）。`picks` token 提供逐动作耗时与子步数，用于区分「子步多」与「单步贵」。
+每轮结束打印 `action coverage`、`process coverage`（真实发生的求解事件：相变、颗粒沉积/唤醒、化学求值、重播种合/分）、`action hotspots`（按动作类型汇总总耗时/次数/单次均耗时/机械子步）与 `slowest jobs`（最慢单个
+job 及其子步数）。`picks` token 提供逐动作耗时与子步数，用于区分「子步多」与「单步贵」。
 
-过程覆盖是**按场景**判定的：某场景执行过某物理族的动作、却一次该族事件都没出现时打印 `COVERAGE GAP scene=... family=...`；`REQUIRED_ACTIONS` 中的动作若全程没成功过，也打印 `COVERAGE GAP action=...`。最后一行汇总 `FUZZ COVERAGE adequate` 或 `insufficient gaps=N`，作为与「失败数为零」并列的独立结果。默认只是报告；加 `-Dmmm.fuzzRequireCoverage=true` 才会因覆盖不足而失败。
+过程覆盖是**按场景**判定的：某场景执行过某物理族的动作、却一次该族事件都没出现时打印 `COVERAGE GAP scene=... family=...`；
+`REQUIRED_ACTIONS` 中的动作若全程没成功过，也打印 `COVERAGE GAP action=...`。最后一行汇总 `FUZZ COVERAGE adequate` 或 `insufficient gaps=N`，
+作为与「失败数为零」并列的独立结果。默认只是报告；加 `-Dmmm.fuzzRequireCoverage=true` 才会因覆盖不足而失败。
 
 扫描等待有可配置超时 `-Dmmm.fuzzJobTimeoutMillis`（默认 30 分钟/job）。真卡死时进程打印可回放参数并以退出码 3 结束，因为忽略中断的挂起无法在进程内回收。
 
@@ -149,7 +155,8 @@
 
 尚未覆盖的层（潜在缺口）：
 
-- 容器转移的 item 层与 WAL：`ContainerTransferUseCase`、`ContainerTransferCoordinator` 的真实 `RegionPort`、`FaultPoint` 注入、`MinecraftContainerTransactionAdapter`、`ContainerItemMapper` / `ItemStack` / `MmmComponents`。
+- 容器转移的 item 层与 WAL：`ContainerTransferUseCase`、`ContainerTransferCoordinator` 的真实 `RegionPort`、`FaultPoint` 注入、`MinecraftContainerTransactionAdapter`、
+  `ContainerItemMapper` / `ItemStack` / `MmmComponents`。
 - 容器 recovery：`ContainerRecoveryCoordinator`、`CrossDomainRecovery` 与真实文件/世界状态的组合（目前只有 `ContainerApplicationValidation` 与 `ContainerTransferStoreValidation` 的确定性场景）。
 - `MinecraftRegionTick` 的调度与降级：`ensureAvailable`、`unloadForFailure`、`PERFORMANCE_PAUSE` / `NUMERICAL_PAUSE` 的真实触发与恢复、硬超时（`hardOverrunStreak` / `recoveryStreak`）。
 - ownership：`OwnershipTransactionCoordinator`、ownership 锁/committed 状态、removal 与 quarantine。
