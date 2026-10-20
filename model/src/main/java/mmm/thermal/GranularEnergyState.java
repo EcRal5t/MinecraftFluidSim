@@ -292,7 +292,27 @@ public final class GranularEnergyState {
 				materialByGranularHandle[granularMaterial], mass, composition));
 	}
 
-	void addCoherentExternal(CoherentPhaseStore.Group group) {
+	public final class CoherentExternalPlan implements GranularInventory.EnergyPlan {
+		private final CoherentPhaseStore.Group candidate;
+		private final int index;
+		private final long sourceRevision = revision;
+		private final ThermalAuditLedger auditBefore = audit.ledger(), auditAfter;
+		private CoherentExternalPlan(CoherentPhaseStore.Group candidate, int index, ThermalAuditLedger auditAfter) {
+			this.candidate = candidate; this.index = index; this.auditAfter = auditAfter;
+		}
+		public ThermalAuditLedger auditAfter() { return auditAfter; }
+		@Override public void requireCurrent() {
+			if (revision != sourceRevision || audit.ledger() != auditBefore)
+				throw new IllegalStateException("Coherent external source changed after preparation");
+		}
+		@Override public void commit() {
+			requireCurrent();
+			coherentPhases.commitPreparedAdd(index, candidate);
+			audit.replace(auditAfter); revision++;
+		}
+	}
+
+	CoherentExternalPlan planCoherentExternal(CoherentPhaseStore.Group group) {
 		int material = registry.materialHandle(group.phaseId());
 		if (registry.material(material).carrierKind() != ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID) {
 			throw new IllegalArgumentException("Coherent group phase is not a coherent-solid thermal material");
@@ -310,9 +330,8 @@ public final class GranularEnergyState {
 		SignedDyadic source = SignedDyadic.of(group.internalEnergy());
 		SignedDyadic roundoff = SignedDyadic.of(candidate.internalEnergy()).subtract(oldEnergy).subtract(source);
 		ThermalAuditLedger auditAfter = audit.ledger().withExternalSourceEnergy(source).withRoundoff(roundoff);
-		coherentPhases.add(group);
-		audit.replace(auditAfter);
-		revision++;
+		auditAfter.expectedInventory();
+		return new CoherentExternalPlan(candidate, previous, auditAfter);
 	}
 
 	GranularInventory.EnergyPlan planEnergyReplacement(double[] active,List<GranularEnergyColumn.DepositEnergy> deposits,

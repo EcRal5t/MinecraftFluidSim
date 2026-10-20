@@ -432,9 +432,21 @@ final class DomainCapabilities {
 		}
 		var addition = new CoherentPhaseStore.Group(cell, phaseId, occupiedVolumeSvq, massUnits, composition, internalEnergy);
 		addition.requireCompositionMass(domain.chemicalParcels == null ? null : domain.chemicalParcels.registry());
-		domain.thermalState.addCoherentExternal(addition);
-		refreshCoherentOccupancy();
-		domain.gridDirty = true;
+		var thermal = domain.thermalState.planCoherentExternal(addition);
+		long[] before = domain.granularCoupling.copySolidSvq(), after = before.clone();
+		after[cell] = Math.addExact(after[cell], occupiedVolumeSvq);
+		var displacement = GranularLiquidDisplacement.prepareInsertion(domain, before, after);
+		var audit = thermal.auditAfter().withMechanicalWork(displacement.inventory.mechanicalHeat())
+				.withRoundoff(displacement.energyRoundoff);
+		var gas = displacement.gasTopology == null ? null : displacement.gasTopology.thermalPlan();
+		if (gas != null) audit = audit.withExternalSourceEnergy(gas.sourceEnergy()).withExternalSinkEnergy(gas.sinkEnergy())
+				.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff());
+		audit.expectedInventory();
+		thermal.requireCurrent();
+		GranularLiquidDisplacement.publish(domain, displacement, () -> {
+			thermal.commit();
+			refreshCoherentOccupancy();
+		});
 	}
 	public long totalCoherentSolidVolumeSvq() {
 		return domain.thermalState == null ? 0L : domain.thermalState.coherentPhases().totalOccupiedSvq();

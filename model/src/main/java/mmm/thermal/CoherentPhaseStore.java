@@ -119,13 +119,18 @@ public final class CoherentPhaseStore {
 	int add(Group addition) {
 		Group candidate = previewAdd(addition);
 		int found = find(addition.cell(), addition.phaseId());
+		commitPreparedAdd(found, candidate);
+		return found >= 0 ? found : -found - 1;
+	}
+
+	/** The thermal owner has already checked the complete candidate and its source revision. */
+	void commitPreparedAdd(int found, Group candidate) {
 		if (found >= 0) {
 			groups.set(found, candidate);
-			return found;
+			return;
 		}
 		int insertion = -found - 1;
 		groups.add(insertion, candidate);
-		return insertion;
 	}
 
 	/** Validates an addition and returns its canonical post-merge value without changing inventory. */

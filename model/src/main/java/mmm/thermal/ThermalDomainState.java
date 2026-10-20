@@ -533,7 +533,9 @@ public final class ThermalDomainState {
 		return granularState.planEnergyReplacement(active,deposits,coherent);
 	}
 
-	public void addCoherentExternal(CoherentPhaseStore.Group group) { granularState.addCoherentExternal(group); }
+	public GranularEnergyState.CoherentExternalPlan planCoherentExternal(CoherentPhaseStore.Group group) {
+		return granularState.planCoherentExternal(group);
+	}
 	public void addCoherentInternal(CoherentPhaseStore.Group group) { granularState.addCoherentInternal(group); }
 	public CoherentPhaseStore.Group takeCoherentInternal(int cell, String phaseId, long occupiedSvq,
 	                                                  mmm.chemistry.ChemicalRegistry chemistry) {
