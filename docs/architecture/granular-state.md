@@ -207,6 +207,7 @@ A_pressure = rho_reference * h^3 * (C M_face^-1 C^T + B M_solid^-1 B^T) + A_gas_
 
 沉积与松弛共同交接整数体积、质量、组成和内能。
 液体排开与气腔后继采用相同未来占容；转换前后的宏观重心与势能同时检查。
+转换开始时准备源液体物性、占容与 MAC 视图；床层候选变化期间的剪切采样和起动功读取这份液体视图。起动支付的动量变化立即更新对应 MAC 面，全部固体转换完成后统一排开液体并发布气腔后继。
 床层松弛采用局部水平移动加竖直下落路径，障碍物决定接收位置是否可达。
 
 `GranularLiquidDisplacement.prepare` 准备液体排开，`GranularInventory.WakePlan` 准备床库存取出与活动颗粒追加。

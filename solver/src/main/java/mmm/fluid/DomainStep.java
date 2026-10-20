@@ -221,12 +221,15 @@ final class DomainStep {
 	}
 	GranularDepositDynamics granularDepositDynamics() { return domain.granularDepositDynamics; }
 	GranularDepositDynamics.Environment granularDepositEnvironment(long[] plannedSolid) {
+		return granularDepositEnvironment(plannedSolid, GranularBedShear.prepareFlow(domain, null));
+	}
+	GranularDepositDynamics.Environment granularDepositEnvironment(long[] plannedSolid, GranularBedShear.Flow flow) {
 		return new GranularDepositDynamics.Environment() {
 			private GranularBedShear.LiftWork liftWork;
 			private SignedDyadic wakeRounding=SignedDyadic.ZERO;
 			private GranularInventory.EnergyPlan relaxationEnergy;
 			@Override public boolean planWakeWork(int cell, SignedDyadic joules) {
-				liftWork = GranularBedShear.planLift(domain, cell, joules);
+				liftWork = flow.planLift(cell, joules);
 				return liftWork != null;
 			}
 			@Override public void requireWakeWorkCurrent(){liftWork.requireCurrent(domain);}
@@ -262,7 +265,7 @@ final class DomainStep {
 			}
 
 			@Override public double shields(int surfaceCell, mmm.granular.ParticulateMaterial material) {
-				return GranularBedShear.shields(domain, surfaceCell, material);
+				return flow.shields(surfaceCell, material);
 			}
 
 			@Override public boolean verticalPathOpen(float x, float fromY, float z, float toY, long solidSvq) {

@@ -90,7 +90,10 @@ final class GranularMechanicalStage {
 	}
 
 	GranularMechanics.FluidSample sample(float x, float y, float z) {
-		CarrierProperties properties = carrierProperties(x, y, z);
+		return samplePrepared(x,y,z,domain.domainPhaseInventory.derivedCarrierState(),null);
+	}
+	GranularMechanics.FluidSample samplePrepared(float x,float y,float z,LiquidCarrierProperties prepared,long[] sourceSolid){
+		CarrierProperties properties = carrierProperties(x, y, z,prepared,sourceSolid);
 		if (!(properties.submerged() > 0)) {
 			return new GranularMechanics.FluidSample(false, 0, 0, 0, LiquidCarrierProperties.AIR_DENSITY,
 					LiquidCarrierProperties.AIR_VISCOSITY, LiquidCarrierProperties.AIR_MAXIMUM_REYNOLDS, 0, 0, 0, 0);
@@ -107,8 +110,7 @@ final class GranularMechanicalStage {
 	private record CarrierProperties(double submerged, double density, double viscosity, double maximumReynolds) { }
 
 	/** Wet support follows the parcel's continuous volume footprint across cell and liquid interfaces. */
-	private CarrierProperties carrierProperties(float px, float py, float pz) {
-		LiquidCarrierProperties properties = domain.domainPhaseInventory.derivedCarrierState();
+	private CarrierProperties carrierProperties(float px, float py, float pz,LiquidCarrierProperties properties,long[] sourceSolid) {
 		double h = domain.config.cellSize();
 		double x = px / h - 0.5, y = py / h - 0.5, z = pz / h - 0.5;
 		int x0 = (int) Math.floor(x), y0 = (int) Math.floor(y), z0 = (int) Math.floor(z);
@@ -120,7 +122,8 @@ final class GranularMechanicalStage {
 			double weight = (ox == 0 ? 1 - fx : fx) * (oy == 0 ? 1 - fy : fy) * (oz == 0 ? 1 - fz : fz);
 			support += weight;
 			int cell = (cz * domain.sizeY + cy) * domain.sizeX + cx;
-			double capacity = domain.domainCollision.effectiveOpenCellVolume(cell);
+			double capacity = sourceSolid==null?domain.domainCollision.effectiveOpenCellVolume(cell)
+					:domain.geometry.cutCells.openCellVolume(cell)-Math.scalb((double)sourceSolid[cell],-24);
 			if (weight <= 0 || capacity <= 0 || !properties.hasLiquid(cell)) continue;
 			double portion = weight * Math.min(1.0, domain.liquidGrid.cellStockVolume[cell] / capacity);
 			double cellViscosity = properties.viscosityPascalSeconds(cell);

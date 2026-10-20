@@ -19,6 +19,9 @@ final class GranularTransitionStage {
 		long[] previousSolid = GranularLiquidDisplacement.begin(domain);
 		GranularDomainState granular = domain.granularState;
 		GranularCouplingFields coupling = domain.granularCoupling;
+		GranularDepositDynamics dynamics = domain.granularDepositDynamics;
+		// Liquid observations belong to the source inventory until the joint displacement commits.
+		var flow = dynamics == null ? null : GranularBedShear.prepareFlow(domain, previousSolid);
 		var compaction = new mmm.granular.GranularInventory.CompactionStats(0, 0);
 		if (granular != null && granular.parcels.count() > 1) {
 			coupling.rebuild(granular.parcels, granular.deposits);
@@ -41,14 +44,13 @@ final class GranularTransitionStage {
 				throw new IllegalStateException("Granular active compaction differs from its exact occupancy plan");
 			}
 		}
-		GranularDepositDynamics dynamics = domain.granularDepositDynamics;
 		if (dynamics == null) return new Outcome(EMPTY_STATS.withCompaction(compaction));
 		long[] dynamicsSolid = null;
 		GranularDepositDynamics.Stats stats;
 		if (domain.domainPhaseInventory.hasGranularInventory() || dynamics.dirtyColumnCount() != 0) {
 			coupling.rebuild(granular.parcels, granular.deposits);
 			dynamicsSolid = coupling.copySolidSvq();
-			stats = dynamics.step(domain.domainStep.granularDepositEnvironment(dynamicsSolid), domain.config.timeStep());
+			stats = dynamics.step(domain.domainStep.granularDepositEnvironment(dynamicsSolid, flow), domain.config.timeStep());
 		} else {
 			stats = EMPTY_STATS;
 		}

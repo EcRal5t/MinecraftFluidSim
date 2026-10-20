@@ -3,6 +3,7 @@ package mmm.fluid;
 import mmm.inventory.LiquidCellInventory;
 
 import mmm.granular.ParticulateMaterial;
+import mmm.granular.GranularMechanics;
 import mmm.granular.SolidVolume;
 import mmm.units.SignedDyadic;
 
@@ -16,9 +17,12 @@ final class GranularBedShear {
 		return planLift(domain, cell, SignedDyadic.of(joules));
 	}
 	static LiftWork planLift(FluidDomain domain, int cell, SignedDyadic work) {
+		domain.domainFlowFields.ensureVelocityGrid();
+		return planLiftPrepared(domain,cell,work);
+	}
+	private static LiftWork planLiftPrepared(FluidDomain domain,int cell,SignedDyadic work){
 		if (domain == null || cell < 0 || cell >= domain.cellCount || work == null || !Double.isFinite(work.toDouble()))
 			throw new IllegalArgumentException("Invalid bed lift work");
-		domain.domainFlowFields.ensureGrid();
 		var faces = new java.util.ArrayList<Face>(8);
 		int x=cell%domain.sizeX, y=cell/domain.sizeX%domain.sizeY, z=cell/(domain.sizeX*domain.sizeY);
 		// Whole dual faces of the bed cell and the free-flow cell above share the local traction.
@@ -97,8 +101,26 @@ final class GranularBedShear {
 		}
 	}
 
+	/** Source liquid observation remains valid while a local solid transition changes its candidate beds. */
+	static final class Flow {
+		private final FluidDomain domain;
+		private final LiquidCarrierProperties properties;
+		private final long[] sourceSolid;
+		private Flow(FluidDomain domain,LiquidCarrierProperties properties,long[] sourceSolid){
+			this.domain=domain;this.properties=properties;this.sourceSolid=sourceSolid;
+		}
+		LiftWork planLift(int cell,SignedDyadic work){return planLiftPrepared(domain,cell,work);}
+		double shields(int cell,ParticulateMaterial material){return shieldsPrepared(domain,cell,material,this);}
+		GranularMechanics.FluidSample sample(float x,float y,float z){return domain.granularMechanicalStage.samplePrepared(x,y,z,properties,sourceSolid);}
+	}
+	static Flow prepareFlow(FluidDomain domain,long[] sourceSolid){
+		domain.domainFlowFields.ensureVelocityGrid();
+		return new Flow(domain,domain.domainPhaseInventory.derivedCarrierState(),sourceSolid);
+	}
 	static double shields(FluidDomain domain, int cell, ParticulateMaterial material) {
-		domain.domainFlowFields.ensureGrid();
+		return prepareFlow(domain,null).shields(cell,material);
+	}
+	private static double shieldsPrepared(FluidDomain domain,int cell,ParticulateMaterial material,Flow flow){
 		int x = cell % domain.sizeX, y = cell / domain.sizeX % domain.sizeY;
 		int z = cell / (domain.sizeX * domain.sizeY);
 		double h = domain.config.cellSize();
@@ -117,7 +139,7 @@ final class GranularBedShear {
 					|| domain.geometry.cutCells.pointInsideSolid(px, (float) cy, pz, (float) h)) return 0;
 		}
 		if (domain.geometry.cutCells.pointInsideSolid(px, py, pz, (float) h)) return 0;
-		var liquid = domain.granularMechanicalStage.sample(px, py, pz);
+		var liquid = flow.sample(px, py, pz);
 		if (!liquid.hasLiquid()) return 0;
 		double speed = Math.hypot(liquid.velocityX(), liquid.velocityZ());
 		if (speed == 0) return 0;
