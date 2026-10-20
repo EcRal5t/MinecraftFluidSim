@@ -236,18 +236,30 @@ public final class FlipFluidFreeSurfaceValidation {
 			var config=strictConfig();var domain=new FluidDomain(2,5,2,config);
 			for(int z=0;z<2;z++)for(int y=0;y<3;y++)for(int x=0;x<2;x++)domain.setVolume(x,y,z,y==2?fraction:1);
 			var volume=volume(domain);long mass=mass(domain);double initialCenter=FluidPhysicalAssertions.inventoryCenterY(domain);
+			domain.domainFlowFields.ensureGrid();
+			String firstGravity="g="+domain.pressureSystem.faces.gravityAcceleration(domain.pressureSystem.faces.offsets[1]+domain.domainFlowFields.yFaceIndex(0,1,0))
+					+","+domain.pressureSystem.faces.gravityAcceleration(domain.pressureSystem.faces.offsets[1]+domain.domainFlowFields.yFaceIndex(0,2,0));
+			String firstState="";
 			for(int step=0;step<200;step++){
 				var candidate=advance(domain);check(Float.isFinite(candidate.stats().pressureResidual()),"Fractional column pressure became nonfinite");domain=candidate.claimPreparedCpuDomain();
+				if(step==0)firstState=hydrostaticColumnState(domain);
 			}
 			for(int y=0;y<=2;y++){
 				// Pressure is averaged over the liquid control volume. Its top
 				// fractional cell has its liquid centroid at half the wet height.
 				float depth=y==2?.5F*fraction:2+fraction-y-.5F;
 				float expected=config.density()*config.gravity()*config.cellSize()*depth,actual=domain.pressure(0,y,0);
-				FluidPhysicalAssertions.hydrostaticPressure(domain,actual,expected,"Fractional column f="+fraction+", y="+y);
+				FluidPhysicalAssertions.hydrostaticPressure(domain,actual,expected,"Fractional column f="+fraction+", y="+y+", initial "+firstGravity+", first "+firstState+", final "+hydrostaticColumnState(domain));
 			}
 			FluidPhysicalAssertions.hydrostaticRest(domain,initialCenter,"Fractional hydrostatic column");assertInventory(domain,volume,mass);
 		}
+	}
+	private static String hydrostaticColumnState(FluidDomain domain){
+		StringBuilder result=new StringBuilder();
+		for(int y=0;y<domain.sizeY;y++)result.append(" [y=").append(y).append(", V=")
+				.append(domain.liquidCells.exactCellVolume(domain.domainFlowFields.cellIndex(0,y,0)).toDouble())
+				.append(", p=").append(domain.pressure(0,y,0)).append(']');
+		return result.append(" RMS=").append(FluidPhysicalAssertions.motion(domain).rmsSpeed()).toString();
 	}
 
 	private static void thinLayerRegularizationRemainsStable() {
