@@ -95,7 +95,7 @@ public final class GasLiquidPhaseModel {
 
 	/** Creates a gas-side batch with exact phase mass and stable standard-volume nanos. */
 	public GasInventory gasBatch(ThermalPhaseTransition transition, long batches) {
-		long massUnits = mmm.units.Mass.exactUnits(transition.massKgPerBatch().multiply(batches).numerator(), transition.massKgPerBatch().multiply(batches).denominator());
+		long massUnits = Math.multiplyExact(requirePair(transition).massUnitsPerBatch(),batches);
 		return gasBatch(transition, batches, Map.of(), massUnits);
 	}
 
@@ -111,17 +111,8 @@ public final class GasLiquidPhaseModel {
 			throw new IllegalArgumentException("Gas phase chemical columns are invalid");
 		}
 		PhasePair pair = requirePair(transition);
-		double referenceTemperature = pair.referenceTemperatureK();
-		double mass = transition.massKgPerBatch().multiply(batches).toDouble();
 		GasComponentDefinition component = gasRegistry.component(pair.gas().carrierId());
-		double standardVolumePerBatch = (double) transition.upperVolumeSvqPerBatch() / SolidVolume.SVQ_PER_CUBIC_METER
-				* GasRegistry.STANDARD_TEMPERATURE_K / referenceTemperature;
-		long nanosPerBatch = AirNetwork.nanos(standardVolumePerBatch);
-		if (nanosPerBatch <= 0L
-				|| Math.abs(AirNetwork.cubicMeters(nanosPerBatch) - standardVolumePerBatch) > 0.5E-9) {
-			throw new IllegalArgumentException("Gas phase batch is not representable in standard-volume nanos");
-		}
-		long nanos = Math.multiplyExact(nanosPerBatch, batches);
+		long nanos = Math.multiplyExact(pair.nanosPerBatch(), batches);
 		TreeMap<String, Long> canonical = new TreeMap<>();
 		for (Map.Entry<String, Long> entry : speciesQuanta.entrySet()) {
 			if (entry.getKey() == null || entry.getValue() == null || entry.getValue() <= 0L) {
@@ -133,7 +124,7 @@ public final class GasLiquidPhaseModel {
 			}
 			canonical.merge(entry.getKey(), entry.getValue(), Math::addExact);
 		}
-		return new GasInventory(List.of(new GasComponentAmount(component.id(), nanos, mmm.units.Mass.exactUnits(transition.massKgPerBatch().multiply(batches).numerator(), transition.massKgPerBatch().multiply(batches).denominator()),
+		return new GasInventory(List.of(new GasComponentAmount(component.id(), nanos, Math.multiplyExact(pair.massUnitsPerBatch(),batches),
 				canonical.entrySet().stream().map(entry -> new GasComponentAmount.SpeciesAmount(
 						entry.getKey(), entry.getValue())).toList(), massResidualUnits)));
 	}
@@ -190,7 +181,11 @@ public final class GasLiquidPhaseModel {
 				&& Double.isFinite(gasConstant) && gasConstant > 0.0)) {
 			throw new IllegalArgumentException("Liquid/gas transition has an invalid latent state function");
 		}
-		PhasePair pair = new PhasePair(transition, liquid, gas, referenceTemperature, latentEnthalpy, gasConstant);
+		long massUnits=mmm.units.Mass.exactUnits(transition.massKgPerBatch().numerator(),transition.massKgPerBatch().denominator());
+		long nanos=AirNetwork.nanos(standardGasVolume);
+		if(nanos<=0||Math.abs(AirNetwork.cubicMeters(nanos)-standardGasVolume)>0.5E-9)
+			throw new IllegalArgumentException("Gas phase batch is not representable in standard-volume nanos");
+		PhasePair pair = new PhasePair(transition, liquid, gas, referenceTemperature, latentEnthalpy, gasConstant,massUnits,nanos);
 		preparedPair = pair;
 		return pair;
 	}
@@ -202,6 +197,7 @@ public final class GasLiquidPhaseModel {
 	private record PhasePair(
 			ThermalPhaseTransition transition,
 			ThermalMaterialDefinition liquid, ThermalMaterialDefinition gas,
-			double referenceTemperatureK, double latentEnthalpyPerMass, double gasConstantPerMass
+			double referenceTemperatureK, double latentEnthalpyPerMass, double gasConstantPerMass,
+			long massUnitsPerBatch,long nanosPerBatch
 	) { }
 }

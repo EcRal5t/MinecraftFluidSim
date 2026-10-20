@@ -354,6 +354,7 @@ public final class ThermalDomainState {
 	public boolean gasModelBound() { return gasState.gasModelBound(); }
 	public double gasNodeEnergy(int nodeId, AirNetwork network) { return gasState.nodeEnergy(nodeId, network); }
 	public double gasTemperature(int nodeId, AirNetwork network) { return gasState.temperature(nodeId, network); }
+	public GasEnergyStore.PhaseState gasPhaseState(int nodeId,AirNetwork network) { return gasState.phaseState(nodeId,network); }
 	public double gasGaugePressure(int nodeId, AirNetwork network) { return gasState.gaugePressure(nodeId, network); }
 	public AirNetwork.NodeThermodynamics gasThermodynamics(AirNetwork network) { return gasState.thermodynamics(network); }
 	public double gasDensity(int nodeId, AirNetwork network) { return gasState.density(nodeId, network); }
@@ -814,7 +815,7 @@ public final class ThermalDomainState {
 		for (var trial : trials) {
 			if (trial == null || trial.owner != this || !revision.equals(trial.revision))
 				throw new IllegalStateException("Phase batch source changed during planning");
-			assignments.add(cellOperations.preparePhaseCellEnergy(trial.cell, trial.raw, trial.emptyEnergyRemainder));
+			assignments.add(cellOperations.prepareBatchCellEnergy(trial.cell, trial.raw, trial.emptyEnergyRemainder));
 		}
 		return new PhaseBatchEnergyPlan(this, revision, cellOperations.preparePhaseBatch(assignments, liquidCounts, gasRoundoff, mechanicalHeat, markers,futureCoherent));
 	}
@@ -828,7 +829,7 @@ public final class ThermalDomainState {
 		for(int i=0;i<trials.size();i++) {
 			var trial=trials.get(i);
 			if(trial.owner!=this||!revision.equals(trial.revision)) throw new IllegalStateException("Owned cell source changed");
-			var assignment=cellOperations.preparePhaseCellEnergy(trial.cell,trial.raw,trial.emptyEnergyRemainder);
+			var assignment=cellOperations.prepareBatchCellEnergy(trial.cell,trial.raw,trial.emptyEnergyRemainder);
 			assignments.add(assignment);counts[i]=assignment.raw().entries().size();
 		}
 		return new PhaseBatchEnergyPlan(this,revision,cellOperations.prepareOwnedBatch(assignments,counts,mechanicalHeat));

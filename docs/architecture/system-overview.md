@@ -373,6 +373,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 各实际载体保存总内能 `U`，温度与热容由现有分段状态函数反演。LTE 工作区用于接触、反应与相变候选；只读观察、属性计算与真实能量重分配有各自入口。导热成对搬运内能，恒温热浴的实际通量记外部 source/sink。反应按精确物种批次改变组成和参考能，相变按实际批次联合修改两相库存与内能。
 温度、接触与载体能量准备按稳定的单元顺序遍历，同代热视图复用已准备的载体列表；库存增量索引提前筛去缺少反应物的区域。
 导热接触与求解共享一次实际载体采集，终态与热账在首次写入前准备完成。
+相变候选复用同代 LTE 的单元载体索引与参考能，固相能量目标在准备阶段匹配一次，提交直接写入已准备目标；每格存储余差在整批热账汇总一次。恒定平衡温度直接比较温度，压力相关曲线采样一次实际压力；气腔相变共用一次库存、容量与内能派生的压力、温度和热容。
 载体内能按共同温度一次分配，最大热容载体承接存储余量，实际写入的内能汇总与舍入账保持一致。热浮力读取实际库存温度，温度准备与可选黏性定义分别处理。
 
 热化学顺序为导热 → 液相反应 → 颗粒反应 → 固液相变 → 气液相变，之后执行颗粒形态转换。凝固、熔化、汽化和凝结在固定区域体积下联合守恒两相内能，`PendingPhaseVolumeWork` 保存几何同步任务；下一次真实投影完成后清除。物品转移遇到待同步几何时，先执行仅含力学的私有候选，再准备物品事务。
@@ -387,6 +388,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
     - [ThermalDomainState](../../model/src/main/java/mmm/thermal/ThermalDomainState.java)
     - [ThermalCaloricInversion](../../model/src/main/java/mmm/thermal/ThermalCaloricInversion.java)
     - [ThermalCellEnergyAssignment](../../model/src/main/java/mmm/thermal/ThermalCellEnergyAssignment.java)：一次准备实际载体内能及精确汇总
+    - [ThermalCellOperations](../../model/src/main/java/mmm/thermal/ThermalCellOperations.java)：`preparePhaseCandidateCells` 复用单元载体索引，`preparePhaseSolidEnergies` 准备固相写入目标，`commitPhaseBatch` 提交整批热账
     - [ThermalTransport](../../model/src/main/java/mmm/thermal/ThermalTransport.java)
     - [LiquidThermalConduction](../../solver/src/main/java/mmm/fluid/LiquidThermalConduction.java)
     - [ThermochemistryPipeline](../../solver/src/main/java/mmm/fluid/ThermochemistryPipeline.java)：`stepTransport` 与反应、相变顺序

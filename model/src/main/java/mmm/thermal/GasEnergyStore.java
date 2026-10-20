@@ -95,6 +95,16 @@ public final class GasEnergyStore {
 		if (network.inventory(nodeId).isEmpty()) return insertionTemperatureK;
 		return nodeState(nodeId, network).temperatureK();
 	}
+	public record PhaseState(double absolutePressurePa,double temperatureK,double heatCapacityJPerK) { }
+	/** Phase preparation reads the same N/U caloric state once for both pressure and heat response. */
+	public PhaseState phaseState(int nodeId,AirNetwork network) {
+		requireGasNode(nodeId,network);var inventory=network.inventory(nodeId);
+		if(inventory.isEmpty())return new PhaseState(gasModel.absolutePressure(inventory,network.availableVolume(nodeId),
+				nodeEnergy[nodeId-1]),insertionTemperatureK,0);
+		var thermal=nodeState(nodeId,network);
+		return new PhaseState(gasModel.absolutePressure(inventory,network.availableVolume(nodeId),thermal),
+				thermal.temperatureK(),thermal.heatCapacityJPerK());
+	}
 
 	public double gaugePressure(int nodeId, AirNetwork network) {
 		requireGasNode(nodeId, network);

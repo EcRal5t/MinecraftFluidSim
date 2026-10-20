@@ -283,32 +283,34 @@ final class ThermalCellOperations {
 			preparedCandidatesOwners = markers;
 			preparedCandidatesRevision = revision;
 		}
-		cells = Arrays.stream(cells).filter(cell -> preparedCandidates[cell] == null).distinct().toArray();
-		if (cells.length == 0) return preparedCandidates;
-		boolean[] selected=new boolean[count];
-		@SuppressWarnings("unchecked") var solids=(ArrayList<ThermalStateFunction.InventoryPortion>[])new ArrayList<?>[count];
-		SignedDyadic[] energies=new SignedDyadic[count];
+		var access=cellGrid.carrierAccess();
+		int coherentStart=markers.markerCount(),activeStart=coherentStart+granular.coherentPhases().groupCount();
+		int depositStart=activeStart+markers.activeParcelCount();var deposits=markers.depositKeys();
 		for(int cell:cells) {
-			if(cell<0||cell>=count||selected[cell]) throw new IllegalArgumentException("Invalid repeated phase batch cell");
-			selected[cell]=true; solids[cell]=new ArrayList<>();
-			energies[cell]=cellGrid.exactCarrierEnergyInCell(cell);
+			if(cell<0||cell>=count) throw new IllegalArgumentException("Invalid phase batch cell");
+			if(preparedCandidates[cell]!=null)continue;
+			var solids=new ArrayList<ThermalStateFunction.InventoryPortion>();var owners=new ArrayList<PhaseOwner>();
+			// The prepared LTE grid already indexes every carrier by cell and has its reference energy.
+			for(int carrier=cellGrid.firstCarrier(cell);carrier>=0;carrier=cellGrid.nextCarrier(carrier)) {
+				if(carrier<coherentStart)continue;
+				Map<String,Long> composition;
+				if(carrier<activeStart) {
+					var group=granular.coherentPhases().group(carrier-coherentStart);
+					composition=group.composition()==null?Map.of():group.composition().stableAmounts();
+				} else if(carrier<depositStart) composition=markers.solidComposition(markers.activeParcelComposition(carrier-activeStart));
+				else composition=markers.solidComposition(deposits.get(carrier-depositStart).compositionHandle());
+				var material=access.material(carrier);double mass=access.mass(carrier);
+				solids.add(new ThermalStateFunction.InventoryPortion(registry.materialHandle(material.id()),mass,composition));
+				owners.add(new PhaseOwner(material,mass,cellGrid.cachedBaseEnergy(carrier)));
+			}
+			preparedCandidates[cell]=new ThermalDomainState.PhaseCandidateCell(owner,revision,cell,
+					cellGrid.exactCarrierEnergyInCell(cell),solids,owners.toArray(PhaseOwner[]::new));
 		}
-		for(var group:granular.coherentPhases().snapshot()) if(selected[group.cell()])
-			solids[group.cell()].add(new ThermalStateFunction.InventoryPortion(registry.materialHandle(group.phaseId()),group.mass(),
-					group.composition()==null?Map.of():group.composition().stableAmounts()));
-		for(int active=0;active<markers.activeParcelCount();active++) {
-			int cell=markers.activeParcelCell(active);
-			if(selected[cell]) granular.addGranularPortion(solids[cell],markers.activeParcelMaterial(active),markers.activeParcelMass(active),
-					markers.solidComposition(markers.activeParcelComposition(active)));
-		}
-		for(var key:markers.depositKeys()) if(selected[key.cell()]) granular.addGranularPortion(solids[key.cell()],key.materialHandle(),
-				markers.depositMass(key),markers.solidComposition(key.compositionHandle()));
-		for(int cell:cells) preparedCandidates[cell]=new ThermalDomainState.PhaseCandidateCell(owner,revision,cell,energies[cell],solids[cell],prepareInventory(solids[cell]).owners());
 		return preparedCandidates;
 	}
 
 	record PhaseCellAssignment(int cell, ThermalCellEnergyAssignment.Plan raw,
-			ThermalAuditLedger beforeAudit, ThermalAuditLedger afterAudit) { }
+			ThermalAuditLedger beforeAudit, ThermalAuditLedger afterAudit, SignedDyadic roundoff) { }
 
 	record PhaseOwner(ThermalMaterialDefinition material, double mass, double base) { }
 	private record PhaseInventory(PhaseOwner[] owners) implements ThermalCellEnergyAssignment.Inventory {
@@ -372,18 +374,27 @@ final class ThermalCellOperations {
 	}
 
 	PhaseCellAssignment preparePhaseCellEnergy(int cell, ThermalCellEnergyAssignment.Trial trial, SignedDyadic emptyEnergyRemainder) {
+		return preparePhaseCellEnergy(cell,trial,emptyEnergyRemainder,true);
+	}
+	PhaseCellAssignment prepareBatchCellEnergy(int cell,ThermalCellEnergyAssignment.Trial trial,SignedDyadic emptyEnergyRemainder) {
+		return preparePhaseCellEnergy(cell,trial,emptyEnergyRemainder,false);
+	}
+	private PhaseCellAssignment preparePhaseCellEnergy(int cell,ThermalCellEnergyAssignment.Trial trial,SignedDyadic emptyEnergyRemainder,boolean individualAudit) {
 		var raw = trial == null ? new ThermalCellEnergyAssignment.Plan(List.of(), SignedDyadic.ZERO, null)
 				: ThermalCellEnergyAssignment.prepare(trial);
 		SignedDyadic requested = trial == null ? emptyEnergyRemainder : trial.requested;
 		ThermalAuditLedger before = audit.ledger();
-		ThermalAuditLedger after = before.withRoundoff(raw.actualEnergy().subtract(requested));
-		after.expectedInventory();
-		return new PhaseCellAssignment(cell, raw, before, after);
+		SignedDyadic roundoff=raw.actualEnergy().subtract(requested);
+		ThermalAuditLedger after=individualAudit?before.withRoundoff(roundoff):null;
+		if(individualAudit)after.expectedInventory();
+		return new PhaseCellAssignment(cell,raw,before,after,roundoff);
 	}
 
 	private record CaloricOwner(ThermalMaterialDefinition material, double mass, double base) { }
+	private record SolidEnergyWrite(boolean coherent,int ordinal,GranularEnergyColumn.DepositKey deposit,double energy) { }
 	record PhaseBatchAssignment(List<PhaseCellAssignment> cells, int[] liquidCounts,
-	                            ThermalAuditLedger beforeAudit, ThermalAuditLedger afterAudit, CoherentPhaseStore coherent, boolean callerPublishesAll) { }
+	                            ThermalAuditLedger beforeAudit, ThermalAuditLedger afterAudit, CoherentPhaseStore coherent,
+	                            boolean callerPublishesAll,List<SolidEnergyWrite> solidEnergies) { }
 
 	PhaseBatchAssignment preparePhaseBatch(List<PhaseCellAssignment> cells, int[] liquidCounts,
 	                                      SignedDyadic gasRoundoff, SignedDyadic mechanicalHeat, ThermalCarrierContext markers) {
@@ -395,50 +406,74 @@ final class ThermalCellOperations {
 		if (cells.size() != liquidCounts.length || gasRoundoff == null)
 			throw new IllegalArgumentException("Phase batch cell counts differ");
 		SignedDyadic roundoff = gasRoundoff;
-		for (var cell : cells) roundoff = roundoff.add(cell.afterAudit().roundoffResidual().subtract(cell.beforeAudit().roundoffResidual()));
+		for (var cell : cells) roundoff = roundoff.add(cell.roundoff());
 		var coherent=futureCoherent==null?null:granular.coherentPhases().prepareReplacement(futureCoherent);
-		var result = new PhaseBatchAssignment(List.copyOf(cells), liquidCounts.clone(), audit.ledger(),
-				audit.ledger().withMechanicalWork(mechanicalHeat).withRoundoff(roundoff),coherent,false);
-		// Liquid metadata is supplied by the future cell-inventory transaction. All solid heat baths remain unchanged.
-		matchPhaseBatchSolids(result, coherent==null?carrierAccess(markers):carrierAccess(markers,coherent), false);
-		return result;
+		var after=audit.ledger().withMechanicalWork(mechanicalHeat).withRoundoff(roundoff);
+		after.expectedInventory();
+		return new PhaseBatchAssignment(List.copyOf(cells),liquidCounts.clone(),audit.ledger(),after,coherent,false,
+				preparePhaseSolidEnergies(cells,liquidCounts,markers,coherent==null?granular.coherentPhases():coherent));
 	}
 
 	PhaseBatchAssignment prepareOwnedBatch(List<PhaseCellAssignment> cells,int[] counts,SignedDyadic heat) {
 		SignedDyadic roundoff=SignedDyadic.ZERO;
-		for(var cell:cells) roundoff=roundoff.add(cell.afterAudit().roundoffResidual().subtract(cell.beforeAudit().roundoffResidual()));
-		return new PhaseBatchAssignment(List.copyOf(cells),counts.clone(),audit.ledger(),audit.ledger().withMechanicalWork(heat).withRoundoff(roundoff),null,true);
+		for(var cell:cells) roundoff=roundoff.add(cell.roundoff());
+		var after=audit.ledger().withMechanicalWork(heat).withRoundoff(roundoff);after.expectedInventory();
+		return new PhaseBatchAssignment(List.copyOf(cells),counts.clone(),audit.ledger(),after,null,true,List.of());
 	}
 	void commitOwnedBatch(PhaseBatchAssignment batch) { audit.replace(batch.afterAudit()); }
 
 	void commitPhaseBatch(PhaseBatchAssignment batch, ThermalCarrierContext markers) {
 		if(batch.coherent()!=null) granular.commitCoherentReplacement(batch.coherent());
-		matchPhaseBatchSolids(batch, carrierAccess(markers), true);
+		for(var write:batch.solidEnergies()) {
+			if(write.coherent())granular.coherentPhases().setInternalEnergy(write.ordinal(),write.energy());
+			else if(write.deposit()==null)granular.column().setActiveEnergy(write.ordinal(),write.energy());
+			else granular.column().setDepositEnergy(write.deposit(),write.energy());
+		}
 		audit.replace(batch.afterAudit());
 	}
 
-	private void matchPhaseBatchSolids(PhaseBatchAssignment batch, ThermalCellGrid.CarrierAccess current, boolean publish) {
+	private List<SolidEnergyWrite> preparePhaseSolidEnergies(List<PhaseCellAssignment> cells,int[] liquidCounts,
+			ThermalCarrierContext markers,CoherentPhaseStore coherent) {
 		var byCell = new HashMap<Integer, HashMap<CaloricOwner, ArrayDeque<ThermalCellEnergyAssignment.Entry>>>();
-		for (int index = 0; index < batch.cells().size(); index++) {
-			var cell = batch.cells().get(index); var owners = new HashMap<CaloricOwner, ArrayDeque<ThermalCellEnergyAssignment.Entry>>();
+		for (int index = 0; index < cells.size(); index++) {
+			var cell = cells.get(index); var owners = new HashMap<CaloricOwner, ArrayDeque<ThermalCellEnergyAssignment.Entry>>();
 			if (byCell.put(cell.cell(), owners) != null) throw new IllegalArgumentException("Repeated phase batch cell");
-			var entries = cell.raw().entries(); int liquidCount = batch.liquidCounts()[index];
+			var entries = cell.raw().entries(); int liquidCount = liquidCounts[index];
 			if (liquidCount < 0 || liquidCount > entries.size()) throw new IllegalArgumentException("Phase liquid owner count differs");
 			for (int owner = liquidCount; owner < entries.size(); owner++) {
 				var entry = entries.get(owner);
 				owners.computeIfAbsent(new CaloricOwner(entry.material(), entry.mass(), entry.base()), ignored -> new ArrayDeque<>()).add(entry);
 			}
 		}
-		for (int owner = 0; owner < current.carrierCount(); owner++) {
-			if (current.material(owner).carrierKind() == ThermalMaterialDefinition.CarrierKind.LIQUID) continue;
-			var matches = byCell.get(current.cell(owner)); if (matches == null) continue;
-			var entries = matches.get(new CaloricOwner(current.material(owner), current.mass(owner), current.baseEnergy(owner)));
-			if (entries == null || entries.isEmpty()) throw new IllegalStateException("Phase batch solid heat bath changed");
-			var entry = entries.removeFirst();
-			if (publish) current.setInternalEnergy(owner, entry.energy());
+		var writes=new ArrayList<SolidEnergyWrite>();
+		for(int ordinal=0;ordinal<coherent.groupCount();ordinal++) {
+			var group=coherent.group(ordinal);var matches=byCell.get(group.cell());if(matches==null)continue;
+			var material=registry.material(registry.materialHandle(group.phaseId()));
+			double base=stateFunction.baseEnergy(registry.materialHandle(group.phaseId()),group.mass(),
+					group.composition()==null?Map.of():group.composition().stableAmounts());
+			writes.add(new SolidEnergyWrite(true,ordinal,null,takePhaseSolidEnergy(matches,material,group.mass(),base)));
+		}
+		for(int ordinal=0;ordinal<markers.activeParcelCount();ordinal++) {
+			var matches=byCell.get(markers.activeParcelCell(ordinal));if(matches==null)continue;
+			int handle=materialByGranularHandle[markers.activeParcelMaterial(ordinal)];double mass=markers.activeParcelMass(ordinal);
+			double base=stateFunction.baseEnergy(handle,mass,markers.solidComposition(markers.activeParcelComposition(ordinal)));
+			writes.add(new SolidEnergyWrite(false,ordinal,null,takePhaseSolidEnergy(matches,registry.material(handle),mass,base)));
+		}
+		for(var key:markers.depositKeys()) {
+			var matches=byCell.get(key.cell());if(matches==null)continue;
+			int handle=materialByGranularHandle[key.materialHandle()];double mass=markers.depositMass(key);
+			double base=stateFunction.baseEnergy(handle,mass,markers.solidComposition(key.compositionHandle()));
+			writes.add(new SolidEnergyWrite(false,0,key,takePhaseSolidEnergy(matches,registry.material(handle),mass,base)));
 		}
 		for (var owners : byCell.values()) for (var entries : owners.values()) if (!entries.isEmpty())
 			throw new IllegalStateException("Phase batch retains a missing solid heat bath");
+		return List.copyOf(writes);
+	}
+	private static double takePhaseSolidEnergy(HashMap<CaloricOwner,ArrayDeque<ThermalCellEnergyAssignment.Entry>> matches,
+			ThermalMaterialDefinition material,double mass,double base) {
+		var entries=matches.get(new CaloricOwner(material,mass,base));
+		if(entries==null||entries.isEmpty())throw new IllegalStateException("Phase batch solid heat bath changed");
+		return entries.removeFirst().energy();
 	}
 
 	void commitPhaseCellEnergy(PhaseCellAssignment plan, ThermalCarrierContext markers) {

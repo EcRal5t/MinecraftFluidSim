@@ -415,7 +415,7 @@ public final class ThermalCellGrid {
 		return value;
 	}
 
-	private double cachedBaseEnergy(int carrier) {
+	double cachedBaseEnergy(int carrier) {
 		double value = carrierBaseEnergy[carrier];
 		if (Double.isNaN(value)) {
 			value = carriers.baseEnergy(carrier);
