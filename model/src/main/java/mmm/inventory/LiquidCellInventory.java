@@ -120,8 +120,7 @@ public final class LiquidCellInventory {
 	}
 
 	/** The same transported integer mass is available to the MAC momentum operator. */
-	public record Transfer(int face, Key source, Key target, SignedDyadic volume, long massUnits,
-	                       ChemicalMixtureRecord mixture, SignedDyadic internalEnergy) { }
+	public record Transfer(int face, Key source, Key target, SignedDyadic volume, long massUnits) { }
 	/** One face transfer or the retained portion of a numerical transport pass. */
 	public record TransportRoute(int face,Key source,Key target,SignedDyadic volume) {
 		public TransportRoute {
@@ -141,7 +140,7 @@ public final class LiquidCellInventory {
 	/** A bound caloric model partitions carried U after the actual integer shares are known. */
 	@FunctionalInterface
 	public interface EnergyPartitioner {
-		SignedDyadic[] partition(Stock source,long[] masses,ChemicalMixtureRecord[] mixtures);
+		double[] partition(Stock source,long[] masses,ChemicalMixtureRecord[] mixtures);
 	}
 	/** Actual quantity settlement for the mechanical operator, before target U is stored. */
 	public record TransportQuantities(List<Transfer> transfers,long[] beforeMass,long[] afterMass,double[] afterVolume) { }
@@ -456,7 +455,7 @@ public final class LiquidCellInventory {
 		if(destinations.size()==1){
 			if(!destinations.get(0).volume().equals(source.volume()))throw new IllegalArgumentException("Liquid transport routes differ from the original stock volume");
 			partition.masses=new long[]{source.massUnits()};partition.mixtures=new ChemicalMixtureRecord[]{source.mixture()};
-			partition.energies=new SignedDyadic[]{SignedDyadic.of(source.internalEnergy())};
+			partition.energies=new double[]{source.internalEnergy()};
 			totals.donor(source);return partition;
 		}
 		var weights = new SignedDyadic[destinations.size()];
@@ -466,18 +465,20 @@ public final class LiquidCellInventory {
 			if(weights[i].compareTo(weights[largest])>0)largest=i;
 		}
 		if(!sourceVolume.equals(source.volume()))throw new IllegalArgumentException("Liquid transport routes differ from the original stock volume");
-		long[] masses=partition.masses=allocateQuantities(source.massUnits(),weights,source.volume(),largest);
+		var shares=new QuantityShares(weights,source.volume(),largest);
+		long[] masses=partition.masses=shares.allocate(source.massUnits());
 		long[][] species = new long[source.mixture() == null ? 0 : source.mixture().entryCount()][];
-		for(int i=0;i<species.length;i++)species[i]=allocateQuantities(source.mixture().amountAt(i),weights,source.volume(),largest);
+		for(int i=0;i<species.length;i++)species[i]=shares.allocate(source.mixture().amountAt(i));
 		var mixtures=partition.mixtures=new ChemicalMixtureRecord[destinations.size()];
 		if(mixtures.length==1)mixtures[0]=source.mixture();
 		else for(int i=0;i<mixtures.length;i++)mixtures[i]=mixturePart(source.mixture(),species,i,masses[i]);
-		// Both partitioners close source U by assigning their exact remainder.
+		// Caloric transport uses floating shares; the largest share retains the
+		// numerical remainder and the committed endpoint ledger records rounding.
 		partition.energies=caloric==null?splitEnergy(source,masses):caloric.partition(source,masses,mixtures);
 		var retained=totals.donor(source);
 		for (int i = 0; i < destinations.size(); i++) {
 			var route=destinations.get(i);
-			if(route.face()<0)retained.add(route.volume(),masses[i],mixtures[i],partition.energies[i],source.indicator());
+			if(route.face()<0)retained.addTransport(route.volume(),masses[i],mixtures[i],partition.energies[i],source.indicator());
 		}
 		return partition;
 	}
@@ -488,8 +489,8 @@ public final class LiquidCellInventory {
 			var route=partition.routes.get(i);if(route.face()<0)continue;
 			var target=totals.owner(route.target());
 			var energy=partition.energies[i];var mixture=partition.mixtures[i];long mass=partition.masses[i];
-			target.add(route.volume(),mass,mixture,energy,source.indicator());
-			transfers.add(new Transfer(route.face(),route.source(),route.target(),route.volume(),mass,mixture,energy));
+			target.addTransport(route.volume(),mass,mixture,energy,source.indicator());
+			transfers.add(new Transfer(route.face(),route.source(),route.target(),route.volume(),mass));
 		}
 	}
 	/** Actual face quantities provide the common mass and geometry inputs to momentum. */
@@ -511,7 +512,7 @@ public final class LiquidCellInventory {
 	}
 	private static final class RoutePartition {
 		final Stock source;final List<TransportRoute> routes;
-		boolean changed;long[] masses;ChemicalMixtureRecord[] mixtures;SignedDyadic[] energies;
+		boolean changed;long[] masses;ChemicalMixtureRecord[] mixtures;double[] energies;
 		RoutePartition(SourceRoutes group){
 			source=group.source();routes=group.routes();
 		}
@@ -537,17 +538,18 @@ public final class LiquidCellInventory {
 			var total=find(key);if(total==null){total=new Accumulator(key,stock(key));row(key.cell()).add(total);}return total;
 		}
 	}
-	/** Already partitioned inventory quantities are assembled once, retaining their exact source-part residuals. */
+	/** Exact material quantities and numerical U are assembled into their final stored owners. */
 	private Plan prepareTransport(TransportTargets totals,List<Transfer> transfers,Map<Integer,SignedDyadic> heat){
 		var mechanicalHeat=addTransportHeat(totals,heat);
 		var futureRows=new ArrayList<>(rows);
 		int[] futureSpecies=null,futureMaterials=null;boolean geometryChanged=false;
-		var roundoff=SignedDyadic.ZERO;
+		int ownersCount=0;for(int cell:totals.cells)ownersCount+=totals.byCell[cell].size();
+		double[] beforeEnergy=new double[ownersCount],afterEnergy=new double[ownersCount];int energyIndex=0;
 		for(int cell:totals.cells){
 			var old=rows.get(cell);var owners=totals.byCell[cell];owners.sort(java.util.Comparator.comparing(total->total.key));
 			var row=new ArrayList<Stock>(old.size()+owners.size());int original=0;
 			for(var total:owners){
-				var key=total.key;var before=total.original;var after=total.preparedStock();
+				var key=total.key;var before=total.original;var after=total.preparedTransportStock();
 				while(original<old.size()&&old.get(original).key().compareTo(key)<0)row.add(old.get(original++));
 				if(original<old.size()&&old.get(original).key().equals(key))original++;
 				if(after!=null)row.add(after);
@@ -557,7 +559,8 @@ public final class LiquidCellInventory {
 					adjustPresence(before,-1,futureSpecies,futureMaterials);adjustPresence(after,1,futureSpecies,futureMaterials);
 				}
 				geometryChanged|=before==null?after!=null:after==null||!before.volume().equals(after.volume());
-				if(after!=null)roundoff=roundoff.add(SignedDyadic.of(after.internalEnergy()).subtract(total.energy));
+				beforeEnergy[energyIndex]=before==null?0:before.internalEnergy();
+				afterEnergy[energyIndex++]=after==null?0:after.internalEnergy();
 			}
 			while(original<old.size())row.add(old.get(original++));
 			futureRows.set(cell,List.copyOf(row));
@@ -566,8 +569,10 @@ public final class LiquidCellInventory {
 		future.totalVolume=totalVolume;future.totalMass=totalMass;
 		if(futureSpecies!=null)future.presence=new PresenceIndex(futureSpecies,futureMaterials);
 		if(geometryChanged){future.geometryRevision++;future.geometryIdentity=new Object();}
-		// Every source closes its exact volume, integer quantities and U before aggregation.
-		// Target storage adds only the explicitly computed mechanical heat and its roundoff.
+		// Only committed binary64 owners enter exact energy accounting. Numerical
+		// partitioning and mixing roundoff is the endpoint difference after the
+		// separately computed mechanical heat has been removed.
+		var roundoff=SignedDyadic.sum(afterEnergy).subtract(SignedDyadic.sum(beforeEnergy)).subtract(mechanicalHeat);
 		return new Plan(this,future,totals.cells,transfers,SignedDyadic.ZERO,0,mechanicalHeat.add(roundoff),roundoff,mechanicalHeat);
 	}
 	private SignedDyadic addTransportHeat(TransportTargets totals,Map<Integer,SignedDyadic> heat){
@@ -584,9 +589,9 @@ public final class LiquidCellInventory {
 			if(largest==null)throw new IllegalArgumentException("Mechanical heat requires actual liquid mass");
 			var remaining=amount;
 			for(var owner:owners)if(owner!=largest&&owner.mass>0){
-				var part=SignedDyadic.of(amount.toDouble()*(owner.mass/(double)mass));owner.energy=owner.energy.add(part);remaining=remaining.subtract(part);
+				var part=SignedDyadic.of(amount.toDouble()*(owner.mass/(double)mass));owner.addTransportEnergy(part.toDouble());remaining=remaining.subtract(part);
 			}
-			largest.energy=largest.energy.add(remaining);sum=sum.add(amount);
+			largest.addTransportEnergy(remaining.toDouble());sum=sum.add(amount);
 		}
 		return sum;
 	}
@@ -629,33 +634,59 @@ public final class LiquidCellInventory {
 		return allocateQuantities(total,weights,sum,largest);
 	}
 	private static long[] allocateQuantities(long total,SignedDyadic[] weights,SignedDyadic sum,int largest){
-		var result = new long[weights.length]; long assigned = 0;
-		for (int i = 0; i < weights.length; i++) if (i != largest) { result[i] = Mass.portion(total, weights[i], sum); assigned = Math.addExact(assigned, result[i]); }
-		result[largest] = Math.subtractExact(total, assigned); return result;
+		return new QuantityShares(weights,sum,largest).allocate(total);
 	}
-	public static SignedDyadic[] partitionEnergy(Stock source,long[] masses,ChemicalMixtureRecord[] mixtures,EnergyPartitioner caloric) {
+	/** One exact ratio preparation serves mass and every species column of a donor. */
+	private static final class QuantityShares {
+		final long[] numerator,denominator;
+		final java.math.BigInteger[] wideNumerator,wideDenominator;
+		final int largest;
+		QuantityShares(SignedDyadic[] weights,SignedDyadic total,int largest){
+			this.largest=largest;int size=weights.length;
+			numerator=new long[size];denominator=new long[size];
+			java.math.BigInteger[] top=null,bottom=null;
+			for(int i=0;i<size;i++)if(i!=largest){
+				var weight=weights[i];int common=Math.min(weight.exponent(),total.exponent());
+				if(weight.fitsLongUnits(common)&&total.fitsLongUnits(common)){
+					numerator[i]=weight.longUnitsExact(common);denominator[i]=total.longUnitsExact(common);
+				}else{
+					if(top==null){top=new java.math.BigInteger[size];bottom=new java.math.BigInteger[size];}
+					top[i]=weight.significand().shiftLeft(weight.exponent()-common);
+					bottom[i]=total.significand().shiftLeft(total.exponent()-common);
+				}
+			}
+			wideNumerator=top;wideDenominator=bottom;
+		}
+		long[] allocate(long total){
+			var result=new long[numerator.length];long assigned=0;
+			for(int i=0;i<result.length;i++)if(i!=largest){
+				result[i]=denominator[i]>0?Mass.portion(total,numerator[i],denominator[i])
+						:java.math.BigInteger.valueOf(total).multiply(wideNumerator[i]).divide(wideDenominator[i]).longValueExact();
+				assigned=Math.addExact(assigned,result[i]);
+			}
+			result[largest]=Math.subtractExact(total,assigned);return result;
+		}
+	}
+	public static double[] partitionEnergy(Stock source,long[] masses,ChemicalMixtureRecord[] mixtures,EnergyPartitioner caloric) {
 		if(masses.length==0||mixtures.length!=masses.length)throw new IllegalArgumentException("Liquid energy partition columns differ");
 		long totalMass=0;for(long mass:masses){if(mass<0)throw new IllegalArgumentException("Negative liquid energy partition mass");totalMass=Math.addExact(totalMass,mass);}
 		if(totalMass!=source.massUnits())throw new IllegalArgumentException("Liquid energy partition mass differs from source");
 		var result=caloric==null?splitEnergy(source,masses):caloric.partition(source,masses,mixtures);
 		if(result==null||result.length!=masses.length)throw new IllegalArgumentException("Liquid energy partition result differs");
-		var total=SignedDyadic.ZERO;
 		for(int i=0;i<result.length;i++){
-			if(result[i]==null||masses[i]==0&&result[i].signum()!=0)throw new IllegalArgumentException("Geometric liquid tail carried energy");
-			total=total.add(result[i]);
+			if(!Double.isFinite(result[i])||masses[i]==0&&result[i]!=0)throw new IllegalArgumentException("Geometric liquid tail carried energy");
 		}
-		if(!total.equals(SignedDyadic.of(source.internalEnergy())))throw new IllegalArgumentException("Liquid energy partition did not conserve source U");
 		return result;
 	}
-	private static SignedDyadic[] splitEnergy(Stock source, long[] masses) {
-		var result = new SignedDyadic[masses.length]; int largest = 0;
+	private static double[] splitEnergy(Stock source, long[] masses) {
+		var result = new double[masses.length]; int largest = 0;
 		for (int i = 1; i < masses.length; i++) if (masses[i] > masses[largest]) largest = i;
-		var remainder = SignedDyadic.of(source.internalEnergy());
+		double sum=0,error=0;
 		for (int i = 0; i < masses.length; i++) if (i != largest) {
-			result[i] = masses[i] == 0 ? SignedDyadic.ZERO : SignedDyadic.of(source.internalEnergy() * (masses[i] / (double) source.massUnits()));
-			remainder = remainder.subtract(result[i]);
+			result[i] = masses[i] == 0 ? 0 : source.internalEnergy() * (masses[i] / (double) source.massUnits());
+			double corrected=result[i]-error,next=sum+corrected;error=(next-sum)-corrected;sum=next;
 		}
-		result[largest] = remainder; return result;
+		result[largest] = source.internalEnergy()-sum; return result;
 	}
 	private ChemicalMixtureRecord mixturePart(ChemicalMixtureRecord source, long[][] amounts, int index, long mass) {
 		if (source == null) return null;
@@ -667,6 +698,7 @@ public final class LiquidCellInventory {
 	}
 	private final class Accumulator {
 		final Key key; SignedDyadic volume = SignedDyadic.ZERO, energy = SignedDyadic.ZERO; long mass,residualMass; boolean indicator, chemical;
+		double transportEnergy,transportEnergyError;
 		final Stock original;
 		ChemicalMixtureRecord firstMixture;
 		int[] speciesHandles;long[] speciesAmounts;int speciesCount;
@@ -676,11 +708,22 @@ public final class LiquidCellInventory {
 			this.key=key;original=initial;
 			if(initial!=null){
 				volume=initial.volume();mass=initial.massUnits();energy=SignedDyadic.of(initial.internalEnergy());indicator=initial.indicator();
+				transportEnergy=initial.internalEnergy();
 				firstMixture=initial.mixture();chemical=firstMixture!=null;residualMass=chemical?firstMixture.massResidualUnits():mass;
 			}
 		}
 		void add(SignedDyadic amount, long mass, ChemicalMixtureRecord mixture, SignedDyadic energy, boolean indicator) {
-			volume = volume.add(amount); this.mass = Math.addExact(this.mass, mass); this.energy = this.energy.add(energy); this.indicator |= indicator;
+			this.energy=this.energy.add(energy);addQuantities(amount,mass,mixture,indicator);
+		}
+		void addTransport(SignedDyadic amount,long mass,ChemicalMixtureRecord mixture,double carriedEnergy,boolean indicator){
+			addTransportEnergy(carriedEnergy);addQuantities(amount,mass,mixture,indicator);
+		}
+		void addTransportEnergy(double value){
+			double corrected=value-transportEnergyError,next=transportEnergy+corrected;
+			transportEnergyError=(next-transportEnergy)-corrected;transportEnergy=next;
+		}
+		private void addQuantities(SignedDyadic amount,long mass,ChemicalMixtureRecord mixture,boolean indicator){
+			volume = volume.add(amount); this.mass = Math.addExact(this.mass, mass); this.indicator |= indicator;
 			residualMass=Math.addExact(residualMass,mixture==null?mass:mixture.massResidualUnits());
 			if(mixture==null)return;
 			if(!chemical){chemical=true;firstMixture=mixture;return;}
@@ -704,13 +747,17 @@ public final class LiquidCellInventory {
 			return new Edit(key,preparedStock(),energy);
 		}
 		Stock preparedStock(){
+			return preparedStock(energy.toDouble());
+		}
+		Stock preparedTransportStock(){return preparedStock(transportEnergy);}
+		private Stock preparedStock(double storedEnergy){
 			if(volume.signum()==0)return null;
 			ChemicalMixtureRecord mixture = null;
 			if (chemical) {
 				mixture=speciesHandles==null?firstMixture.withMassResidualUnits(residualMass)
 						:new ChemicalMixtureRecord(java.util.Arrays.copyOf(speciesHandles,speciesCount),java.util.Arrays.copyOf(speciesAmounts,speciesCount),residualMass);
 			}
-			return new Stock(key,volume,mass,mixture,energy.toDouble(),indicator);
+			return new Stock(key,volume,mass,mixture,storedEnergy,indicator);
 		}
 	}
 }

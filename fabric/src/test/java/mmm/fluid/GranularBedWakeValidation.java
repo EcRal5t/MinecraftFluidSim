@@ -1,7 +1,6 @@
 package mmm.fluid;
 
 import mmm.granular.BuiltinGranularDefinitions;
-import mmm.granular.GranularTransferLedger;
 import mmm.granular.SolidVolume;
 import mmm.simulation.FullCapabilityTestFixture;
 import mmm.thermal.ThermalTransport;
@@ -10,7 +9,7 @@ import mmm.world.MovingBodyFluidCoupling;
 
 import java.util.List;
 
-/** Real liquid -> sleeping deposit -> active parcel path, using production registries and backend handoff. */
+/** One released parcel settles onto a static bed before weak shear, erosion and re-settling through the backend. */
 public final class GranularBedWakeValidation {
 	private GranularBedWakeValidation() { }
 
@@ -119,11 +118,13 @@ public final class GranularBedWakeValidation {
 		FluidDomainState sleeping = null;
 		double initialMoment = 0;
 		int settlingSteps = settlingStepLimit(domain);
+		int bedSleepStarted = -1;
+		double weakSpeed=0;
+		int[] surfaces=new int[domain.sizeX*domain.sizeZ];
 		int phase = 0, phaseStep = 0;
-		for (int step = 0; step < 2 * settlingSteps + 90; step++, phaseStep++) {
-			double speed = phase == 1 ? .03 : phase == 2 ? 3.0 : 0;
-			var requests = phase == 0 ? List.<MovingBodyFluidCoupling.Request>of()
-					: List.of(new MovingBodyFluidCoupling.Request(2, .75F, 2, speed, 0, 0, .75));
+		for (int step = 0; step < 2 * (settlingSteps + mmm.granular.GranularDepositDynamics.SLEEP_LOGICAL_STEPS) + 90; step++, phaseStep++) {
+			double speed = phase == 1 ? weakSpeed : phase == 2 ? 3.0 : 0;
+			var requests=List.of(new MovingBodyFluidCoupling.Request(2,.75F,2,speed,0,0,.75));
 			long stepStarted = System.nanoTime();
 			var source=domain.captureAuthoritativeState();FluidStepCandidate candidate;
 			try{candidate=backend.evaluate(new FluidStepRequest(step,source,requests,true,ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));}
@@ -146,14 +147,42 @@ public final class GranularBedWakeValidation {
 					&&granular.escapedSink().equals(initialLedger.escapedSink()),"Internal bed transitions changed granular source/sink ledgers");
 			require(domain.gasBoundary().auditClosed() && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 					"Bed transport broke gas/energy audit");
+			java.util.Arrays.fill(surfaces,-1);
+			for(var deposit:granular.depositGroups()){
+				int cell=deposit.cell(),column=cell/(domain.sizeX*domain.sizeY)*domain.sizeX+cell%domain.sizeX;
+				surfaces[column]=Math.max(surfaces[column],cell);
+			}
+			double maxShields=0,maxShieldsRatio=0;
+			for(int cell:surfaces)if(cell>=0){
+				var material=domain.granularState.registry.material(domain.granularState.deposits.dominantGroup(cell).materialHandle());
+				double shields=GranularBedShear.shields(domain,cell,material);
+				maxShields=Math.max(maxShields,shields);maxShieldsRatio=Math.max(maxShieldsRatio,shields/material.criticalShields());
+			}
 			boolean atRest = domain.granularState.parcels.count() == 0
 					&& domain.domainStep.granularDepositDynamics().dirtyColumnCount() == 0;
+			if (phase == 0 || phase == 3) {
+				// Terminal settling bounds suspended material; the committed bed then
+				// completes the scheduler's own stability window before sleeping.
+				if (domain.granularState.parcels.count() != 0) {
+					bedSleepStarted = -1;
+					require(phaseStep < settlingSteps, "Bed exceeded the registry-derived settling time: phase=" + phase);
+				} else {
+					if (bedSleepStarted < 0) bedSleepStarted = phaseStep;
+					require(atRest || phaseStep - bedSleepStarted < mmm.granular.GranularDepositDynamics.SLEEP_LOGICAL_STEPS,
+							"Deposited bed did not complete its stability window: phase=" + phase);
+				}
+			}
 			if (phase == 0 && atRest) {
 				require(settled > 0 && domain.granularState.deposits.groupCount()>0, "Initial bed did not settle and sleep");
+				require(maxShieldsRatio<1,"Resting-bed fixture retained supercritical initial flow");
 				sleeping = domain.captureAuthoritativeState();
+				weakSpeed=weakDriveSpeed(domain,surfaces);
+				System.out.printf("bed weak readiness step=%d maximumShieldsRatio=%.6f derivedSpeed=%.6f m/s%n",step,maxShieldsRatio,weakSpeed);
 				weakWakeBaseline=woken;weakContactBaseline=contacts;
 				phase = 1; phaseStep = -1;
 			}
+			if(phase==1&&phaseStep>=0)require(maxShieldsRatio<1,
+					"Registry-derived weak flow exceeded actual bed initiation stress: ratio="+maxShieldsRatio);
 			if (phase == 1 && phaseStep == 29) {
 				require(woken-weakWakeBaseline == 0 && contacts-weakContactBaseline > 0,
 						"Subcritical real liquid caused new erosion or missed the body");
@@ -161,13 +190,8 @@ public final class GranularBedWakeValidation {
 				phase = 2; phaseStep = -1;
 			} else if (phase == 2 && phaseStep == 59) {
 				require(woken-strongWakeBaseline>0&&peakActive>0,"Strong flow never woke deposited sand");
-				phase = 3; phaseStep = -1;
+				phase = 3; phaseStep = -1; bedSleepStarted = -1;
 			} else if (phase == 3 && atRest) break;
-			if ((phase == 0 || phase == 3) && phaseStep >= settlingSteps)
-				throw new AssertionError("Bed exceeded the registry-derived settling time: phase=" + phase);
-			double maxShields = 0;
-			for (var deposit : domain.exportGranularState().depositGroups()) maxShields = Math.max(maxShields,
-					GranularBedShear.shields(domain, deposit.cell(), domain.granularState.registry.material(domain.granularState.deposits.dominantGroup(deposit.cell()).materialHandle())));
 			if (step % 20 == 19) System.out.printf("bed step=%d speed=%.2f active=%d deposits=%d sleeping=%d settled=%d woken=%d theta=%.6f contacts=%d fullMs=%.3f%n",
 					step, speed, domain.granularState.parcels.count(), domain.granularState.deposits.groupCount(),
 					domain.domainStep.granularDepositDynamics().sleepingColumnCount(), settled, woken, maxShields, candidate.movingBodyCoupling().coupledMarkers(), fullMs);
@@ -180,6 +204,26 @@ public final class GranularBedWakeValidation {
 		wakeStartsAtRest(sleeping);
 		System.out.printf("Bed lifecycle passed: initialWakes=%d strongAndResettlingWakes=%d peakActive=%d horizontalMomentChange=%.6f kg*m steps=%d meanMs=%.3f maxMs=%.3f%n",
 				weakWakeBaseline, woken-strongWakeBaseline, peakActive, depositMoment(domain) - initialMoment, completedSteps, totalStepMs / completedSteps, maximumStepMs);
+	}
+	/** A weak drive has one quarter of the critical friction velocity in the production wall law. */
+	private static double weakDriveSpeed(FluidDomain domain,int[] surfaces){
+		double result=Double.POSITIVE_INFINITY,h=domain.config.cellSize();
+		for(int cell:surfaces)if(cell>=0){
+			var material=domain.granularState.registry.material(domain.granularState.deposits.dominantGroup(cell).materialHandle());
+			int x=cell%domain.sizeX,y=cell/domain.sizeX%domain.sizeY,z=cell/(domain.sizeX*domain.sizeY);
+			var liquid=domain.granularMechanicalStage.sample((float)((x+.5)*h),(float)((y+1.5)*h),(float)((z+.5)*h));
+			if(!liquid.hasLiquid())continue;
+			double stress=material.criticalShields()*Math.max(0,material.referenceDensity()-liquid.density())
+					*domain.config.gravity()*material.primaryGrainDiameterMeters()/(16*liquid.submergedFraction());
+			double bed=(y+domain.granularState.deposits.cellBulkVolumeSvq(cell)/(double)SolidVolume.SVQ_PER_CELL)*h;
+			double distance=(y+1.5)*h-bed,low=0,high=stress*distance/liquid.dynamicViscosity();
+			for(int iteration=0;iteration<40;iteration++){
+				double speed=.5*(low+high);
+				if(GranularBedShear.shearStress(speed,distance,liquid.density(),liquid.dynamicViscosity())>stress)high=speed;else low=speed;
+			}
+			result=Math.min(result,.5*(low+high));
+		}
+		require(Double.isFinite(result),"Weak-flow fixture has no wet bed surface");return result;
 	}
 
 	private static int settlingStepLimit(FluidDomain domain) {
@@ -344,15 +388,29 @@ public final class GranularBedWakeValidation {
 				new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 400, 1e-5F, .002F, .8F), 4096);
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, r.liquids());
+		domain.bindChemistry(r.chemical());
+		int sand=r.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		var material=r.granular().material(sand);
+		long svq=SolidVolume.SVQ_PER_CELL/4;
+		long bedMass=mmm.units.Mass.fromKilograms(material.referenceDensity()*svq/SolidVolume.SVQ_PER_CUBIC_METER);
+		var beds=new java.util.ArrayList<mmm.granular.GranularStateSnapshot.DepositGroup>();
+		for (int z = 2; z < 6; z++) for (int x = 2; x < 6; x++) {
+			beds.add(new mmm.granular.GranularStateSnapshot.DepositGroup(domain.domainFlowFields.cellIndex(x,0,z),
+					material.restPorosityQ(),sand,0,svq,bedMass));
+		}
+		// One released representative exercises actual settling without exciting the
+		// entire bed's gravitational energy before the weak-shear observation.
+		long fallingSvq=mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+		long fallingMass=mmm.units.Mass.fromKilograms(material.referenceDensity()*fallingSvq/SolidVolume.SVQ_PER_CUBIC_METER);
+		var kernel=new mmm.granular.GranularKernel(8,8,8,.5F);kernel.capture(2.25F,.75F,2.25F,fallingSvq);
+		var parcel=new mmm.granular.GranularStateSnapshot.ActiveParcel(2.25F,.75F,2.25F,0,0,0,
+				fallingSvq,fallingMass,sand,0,0,(byte)0,kernel.canonicalMask());
+		domain.restoreGranularState(new mmm.granular.GranularStateSnapshot(8,8,8,r.granular().fingerprint(),
+				r.granular().materials().stream().map(mmm.granular.ParticulateMaterial::id).toList(),List.of(parcel),beds,
+				Math.addExact(svq*beds.size(),fallingSvq),Math.addExact(bedMass*beds.size(),fallingMass)),
+				r.granular(),domain.materialRegistry,r.materials());
 		int water = r.liquids().handle("mmm:water");
 		FullCapabilityTestFixture.bindFull(domain, r, 293.15, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-		long svq = SolidVolume.SVQ_PER_CELL / 4;
-		double density = r.granular().material(r.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND)).referenceDensity();
-		var ledger = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
-				BuiltinGranularDefinitions.FINE_SAND, svq, mmm.units.Mass.fromKilograms(density * svq / SolidVolume.SVQ_PER_CUBIC_METER), null)));
-		for (int z = 2; z < 6; z++) for (int x = 2; x < 6; x++) {
-			require(domain.tryInsertExactGranular(x, 0, z, ledger, 0, true).inserted(), "Sand rejected");
-		}
 		domain.domainFlowFields.ensureGrid();
 		for (int z = 0; z < 8; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 8; x++) {
 			float open = domain.domainCollision.effectiveOpenCellVolume(domain.domainFlowFields.cellIndex(x, y, z));

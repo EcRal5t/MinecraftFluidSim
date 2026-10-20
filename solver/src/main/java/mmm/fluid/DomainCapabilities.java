@@ -318,10 +318,12 @@ final class DomainCapabilities {
 		if (!prepareThermalBinding(registry, domain.materialRegistry, initialTemperature)) {
 			throw new IllegalStateException("Thermal restore target is already bound");
 		}
-		ThermalDomainState candidate = FluidThermalBinding.createRestoreTarget(registry, domain.materialRegistry, initialTemperature,
+		var liquidEnergy = domain.liquidCells.planPhysicalEnergyUpdate(state.copyInternalEnergy());
+		ThermalDomainState candidate = FluidThermalBinding.createOwnerRestoreTarget(registry, domain.materialRegistry, initialTemperature,
 				domain.liquidCells.physicalSize(), domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), thermalMarkerContext(), domain.gasState.network,
-				maximumTransportSubsteps, state.copyInternalEnergy());
+				maximumTransportSubsteps);
 		FluidThermalBinding.restore(candidate, state, thermalMarkerContext(), domain.gasState.network);
+		liquidEnergy.commit();
 		domain.thermalState = candidate;
 		try { finishThermalBinding(); }
 		catch (RuntimeException failure) {

@@ -41,6 +41,9 @@
 
 气液物种转换及其热学后继可用 `:fabric:runThermalValidation --args="--phase-species"` 聚焦运行；场景沿用完整热学入口。
 
+热平流与分层后继使用 `:fabric:runThermalValidation --args="--flow"`；自然对流及后续换热使用 `--convection`；实际载体内能分配使用 `--assignment`。这些选择器共用完整热学入口的场景，已通过且未受改动影响的部分直接复用。
+热平流、分层、自然对流及换热后继可用 `:fabric:runThermalValidation --args="--flow"` 聚焦运行，与完整入口共用同一场景列表。
+
 `free-surface:short` 省略长静水、5,000 步溃坝、300 步台阶流动，以及输运中的连续交接轨迹和 1 秒、4 秒多网格旋流。其他短组合仍可能包含成本较高的领域；具体省略项由对应入口输出。
 
 <a id="cpu"></a>
@@ -216,9 +219,9 @@
 
 注液使用 `:fabric:runBoundaryPourDiagnostic`，默认执行 4 个完整步及捕获恢复；`--args="--steps=200"` 指定步数，`--args="--l-shape"` 切换 L 形来源，`--flux` 追加输运统计。每步报告完整耗时、捕获与计算耗时、子步、压力迭代、残差和动能；失败保留异常并以非零状态退出。
 
-自然对流增长率随 `thermal` 选择器常驻校验：两级网格、临界 Ra 两侧、两倍线性振幅，以及体积、材料质量、species、壁面 source/sink、舍入与载体内能闭合。
+自然对流随 `thermal` 选择器检查宏观增长：一档普通扰动、两级网格、临界 Ra 两侧，增长率按空间离散与时间步长的误差范围评价，同时检查体积、材料质量、物种、壁面热源汇、舍入与载体内能闭合。
 单独运行用 `./gradlew.bat :fabric:runConvectionExperiment --args="--verify-growth" --offline --no-daemon`；
-省去 `--verify-growth` 可仅输出测量。物性缩放、墙面条件与热量近似见[线性对流有效域](../architecture/thermal-state.md#自然对流的线性有效域)。
+省去 `--verify-growth` 可仅输出测量。物性缩放、墙面条件与热量近似见[自然对流的宏观增长](../architecture/thermal-state.md#自然对流的宏观增长)。
 
 粒子分布离线研究使用 `./gradlew.bat :fabric:runMarkerDistributionExperiment --offline --no-daemon`。
 用 `--args="analytic transport"` 选择解析平流对照，`--args="free-analytic"` 观察自由面覆盖误差与细化。
@@ -396,19 +399,22 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 | 正式流程 | 实际结果与日志 |
 |---|---|
-| 单元库存、动量、墙面交接及编辑恢复 | `review2-functional4.log`：`cell-inventory` 完整通过，3.481 s |
+| 单元库存、动量、墙面交接及编辑恢复 | `review2-shared-core.log`：`cell-inventory` 完整通过，2.678 s，覆盖共享数量分配与浮点内能分份 |
 | 化学输运、抽取、热量与恢复 | `review2-functional5.log`：`chemistry` 完整通过，3.283 s |
 | 气腔连通、液塞及恢复 | `review2-functional6.log`：`air-cavity` 完整通过，0.172 s |
 | 气液正负压静水及连续压缩 | `review2-functional9.log`：两种静水各 1,000 步、48 批连续填充压缩完成；该次最后的孔流夹具失败，领域未整次通过 |
 | 有限孔流 | 修正孔口夹具的实际连通通道后，`review2-orifice.log` 复用正式 Gradle 产物运行同一 `M5GasLiquidCouplingValidation --orifice`；59 步后压差余量为初值的 0.71% |
 | 切格正常流动 | `review2-integration.log`：完整 `cut-cell` 通过，含 600 步障碍物流动，2.987 s |
 | 自由面、静水、旋流、台阶和溃坝 | `review2-integration2.log`：完整 `free-surface` 通过，22.592 s，含 5,000 步溃坝及库存、容量和恢复检查 |
-| 沙床生命周期及完整热学 | 剩余后继仍在修复，未计作通过 |
-| 原完整步墙钟预算 | `review2-live-budget2.log`：控制器 20 步通过，中位数 15.422 ms、最大 37.667 ms；最大 demo 连续完成 20 步，最大 243.850 ms，超过 200 ms 最多连续一步，满足原暂停要求 |
+| 沙床生命周期 | `review2-shared-core.log` 的正式 `runGranularBedValidation` 完成 674 步，弱扰动、强起动、再沉积与恢复通过；平均完整步 14.762 ms。全部入床按原终速预算检查，随后按生产稳定时窗判定休眠 |
+| 热学库存、相变、反应及恢复 | `review2-thermal-flow.log` 的完整入口依次通过定义、气腔、反应、凝聚相、所有者、接触、颗粒内能、容器及局部热浮力；该次停于随后热平流中的旧载体身份夹具，整次入口未通过 |
+| 热平流、分层与自然对流 | `review2-thermal-flow-complete.log` 的 `--flow` 通过完整热平流和稳定／不稳定分层；`review2-thermal-convection.log` 的 `--convection` 通过两级网格、临界 Rayleigh 数上下的四组宏观增长及后续换热，停于最后的拥挤单元精度认证。修复后的末项另列，未重跑已通过部分 |
+| 实际载体内能分配 | `review2-thermal-assignment.log`：正式 `--assignment` 通过热量所有者、热接触及拥挤单元的能量分配，保留实际 U、舍入账和原子性检查 |
+| 原完整步墙钟预算 | `review2-final-budget2.log`：控制器中位数 17.645 ms、最大 27.830 ms，逐步低于 40 ms；最大 demo 中位数 191.559 ms、最大 286.903 ms，超过 200 ms 最多连续两步，低于原三步暂停阈值。两种负载均完成原 20 步采样，预算通过 |
 
-日志均位于仓库 `build/`。`review2-integration2.log` 对应 `d93af20` 加工作区修改，源码 SHA-256 为 `b03332e2d36baa6d993d51316fc533b8a7153fd51ea7c06244f0ec42b2c980e7`，本地产物 SHA-256 为 `7a1704014d46d2ef76fbbb6fb7d909898637f676b031bbf0612fb0909e227390`。预算直接复用该次 Gradle 导出的完整 classpath；停止 Gradle daemon 后运行，默认优先级、`-ea -Xmx512m`、JDK 26.0.2，预热和采样保持原入口。
+日志均位于仓库 `build/`。最终预算直接复用 `review2-shared-core.log` 的正式 Gradle 产物与导出的完整 classpath：版本 `07f8b98` 加工作区修改，源码 SHA-256 `50b99cfc2315593d252eca71a850c628eb2f2116bb9d7209999cd2e1344c519f`，本地产物 SHA-256 `30e7129a5468394d878e7cea4fd1bbc9884f3eed534f65964af17d0ef9348404`。停止 Gradle daemon 后运行，默认优先级、`-ea -Xmx512m`、JDK 26.0.2，原输入、装量、预热、采样、子步及压力迭代额度均保留。最大 demo 采样阶段实际发生相变。
 
-上述初次预算 `review2-live-budget.log` 在 demo 第 7 步失败：蒸汽先并入旧接触气腔，新生干容却位于液封另一侧。修复相变来源交接后的正式预算为 `review2-live-budget2.log`，对应 `68542ce` 加工作区修改，源码 SHA-256 `bdd78774dadc8edd703d33e1790b8de7b24317f6407ad0bbd65ff8fcd007faaa`，本地产物 SHA-256 `17b00e69a0d1e7aa2e962cb1e28885985b56c06dbd91ec8f00b9f12199bc0847`。该次通过 Gradle 的正式 `production-live-budget` 入口运行，默认优先级、`-ea -Xmx512m`、JDK 26.0.2，原物理配置、预热、采样和压力迭代预算均保留。
+预算后修改涉及冷恢复原子性、无可选黏性定义时的热浮力温度准备，以及局部热分配的线性化处理。完整材料定义下的力学与输运主干沿用上述预算结果；后两项的热学后继按表中入口覆盖。有九成把握的未受影响部分复用已有结果，未重复整组或长流程。
 
 5,000 步溃坝在第 1,000–5,000 步的 RMS 速度为 0.091–0.106 m/s，动能 112–152 J，后段保持有界。静水与压力误差按共享的 `FluidPhysicalAssertions` 评价宏观水头、动能和库存质心；整数质量、物种、体积及内能交接继续使用原精确断言。
 

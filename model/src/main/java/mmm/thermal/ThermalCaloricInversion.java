@@ -11,7 +11,6 @@ final class ThermalCaloricInversion {
 		int first(); int next(int item);
 		ThermalMaterialDefinition material(int item);
 		double mass(int item);
-		default SignedDyadic exactMass(int item) { return SignedDyadic.of(mass(item)); }
 	}
 	private static final double COLD_ROUNDOFF_K = 1e-7;
 	private ThermalCaloricInversion() { }
@@ -23,9 +22,6 @@ final class ThermalCaloricInversion {
 	}
 	static ThermalStateFunction.State single(ThermalMaterialDefinition material, double mass, SignedDyadic sensible) {
 		return solveSingle(material,mass,sensible.toDouble());
-	}
-	static ThermalStateFunction.State single(ThermalMaterialDefinition material, SignedDyadic mass, SignedDyadic sensible) {
-		return single(material,mass.toDouble(),sensible);
 	}
 	/** Walk the material's existing segments from its reference point; end segments extend outward. */
 	private static ThermalStateFunction.State solveSingle(ThermalMaterialDefinition material,double mass,double target) {
@@ -92,9 +88,8 @@ final class ThermalCaloricInversion {
 
 	/** Positive piecewise-affine caloric curve with one grouping per actual material. */
 	static final class Curve {
-		private final ThermalMaterialDefinition[] materials;
-		private final double[] masses,knots,energies,capacities;
-		private final double coldCapacity,minimumCapacity;
+		private final double[] knots,energies,capacities;
+		private final double coldCapacity;
 		Curve(Inventory inventory){
 			var positions=new IdentityHashMap<ThermalMaterialDefinition,Integer>();
 			var groupedMaterials=new ArrayList<ThermalMaterialDefinition>();var groupedMass=new ArrayList<Double>();
@@ -105,8 +100,8 @@ final class ThermalCaloricInversion {
 				else groupedMass.set(index,groupedMass.get(index)+mass);
 			}
 			if(groupedMaterials.isEmpty())throw new IllegalArgumentException("Thermal caloric inventory is empty");
-			materials=groupedMaterials.toArray(ThermalMaterialDefinition[]::new);
-			masses=groupedMass.stream().mapToDouble(Double::doubleValue).toArray();
+			var materials=groupedMaterials.toArray(ThermalMaterialDefinition[]::new);
+			var masses=groupedMass.stream().mapToDouble(Double::doubleValue).toArray();
 			var changes=new TreeMap<Double,Double>();var totalCapacity=new Sum();
 			for(int group=0;group<materials.length;group++){
 				var segments=materials[group].caloricSegments();totalCapacity.add(masses[group]*segments.getFirst().specificHeatJPerKgK());
@@ -117,7 +112,7 @@ final class ThermalCaloricInversion {
 			}
 			changes.values().removeIf(value->value==0);changes.putIfAbsent(materials[0].referenceTemperatureK(),0.0);
 			knots=new double[changes.size()];energies=new double[knots.length];capacities=new double[knots.length];
-			coldCapacity=totalCapacity.value();double capacity=coldCapacity,minimum=capacity;var energy=new Sum();
+			coldCapacity=totalCapacity.value();double capacity=coldCapacity;var energy=new Sum();
 			double first=changes.firstKey();
 			for(int group=0;group<materials.length;group++)energy.add(masses[group]*materials[group].sensibleSpecificEnergyBetween(materials[group].referenceTemperatureK(),first));
 			int index=0;
@@ -125,9 +120,8 @@ final class ThermalCaloricInversion {
 				knots[index]=change.getKey();
 				if(index>0)energy.add((knots[index]-knots[index-1])*capacity);
 				capacity+=change.getValue();energies[index]=energy.value();capacities[index]=capacity;
-				minimum=Math.min(minimum,capacity);index++;
+				index++;
 			}
-			minimumCapacity=minimum;
 		}
 		ThermalStateFunction.State solve(SignedDyadic target){return solve(target.toDouble());}
 		ThermalStateFunction.State solve(double target){
@@ -142,11 +136,6 @@ final class ThermalCaloricInversion {
 		ThermalStateFunction.State stateAt(double temperature){
 			int index=java.util.Arrays.binarySearch(knots,temperature);if(index<0)index=-index-2;
 			return checkedState(temperature,index<0?coldCapacity:capacities[index]);
-		}
-		double assignmentTemperatureTolerance(SignedDyadic requested,SignedDyadic absoluteReference,int owners,double temperature){
-			var magnitude=new Sum();magnitude.add(absoluteReference.toDouble());
-			for(int group=0;group<materials.length;group++)magnitude.add(Math.abs(masses[group]*materials[group].sensibleSpecificEnergyAt(temperature)));
-			return COLD_ROUNDOFF_K+((owners+2)*Math.ulp(Math.abs(requested.toDouble())+2*magnitude.value()))/minimumCapacity;
 		}
 	}
 	private static void requireOwner(ThermalMaterialDefinition material,double mass){

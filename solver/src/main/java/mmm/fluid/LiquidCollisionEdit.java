@@ -98,7 +98,7 @@ final class LiquidCollisionEdit {
 				var energies=LiquidCellInventory.partitionEnergy(stock,masses,mixtures,FluidThermalBinding.liquidEnergyPartitioner(domain));
 				for (int j = 0; j < amounts.length; j++) if (amounts[j].signum() > 0) {
 					var key = j < components.size() ? new LiquidCellInventory.Key(cell, stock.key().material(), components.get(j)) : stock.key();
-					var part = new LiquidCellInventory.Stock(key, amounts[j], masses[j], mixtures[j], energies[j].toDouble(), stock.indicator());
+					var part = new LiquidCellInventory.Stock(key, amounts[j], masses[j], mixtures[j], energies[j], stock.indicator());
 					if (j < components.size()) { retained.add(part); changedKeys.add(key); }
 					else escaped.add(part);
 				}

@@ -240,15 +240,17 @@ final class PhaseQuantitySettlement {
         }
         private boolean levels(){
             Arrays.fill(level,0,vertices,-1);int first=0,last=0;queue[last++]=0;level[0]=0;
-            while(first<last){
+            // Build the complete shortest sink layer. Returning at its first
+            // predecessor leaves the other independent congestion repairs for
+            // another full search; exploring beyond it opens irrelevant pores.
+            while(first<last&&(level[1]<0||level[queue[first]]<level[1])){
                 int vertex=queue[first++];expand(vertex);
                 for(int e=head[vertex];e>=0;e=next[e])if(remaining[e].signum()>0&&level[to[e]]<0){
                     int target=to[e];level[target]=level[vertex]+1;
-                    if(target==1)return true;
-                    queue[last++]=target;
+                    if(target!=1)queue[last++]=target;
                 }
             }
-            return false;
+            return level[1]>=0;
         }
         private boolean augment(){
             int depth=0;pathVertex[0]=0;

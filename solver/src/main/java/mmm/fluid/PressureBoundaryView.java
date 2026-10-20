@@ -16,18 +16,27 @@ final class PressureBoundaryView {
 	boolean gasNodeHasContinuumState(int node) {
 		return node > 0 && !domain.gasState.network.inventory(node).isEmpty();
 	}
-	double gasNodeVolumeCompliance(int node) {
+	double gasNodeVolumeCompliance(int node, double loadGaugePressure) {
 		if (!gasNodeHasContinuumState(node)) {
 			throw new IllegalArgumentException("Vacuum or ambient has no compressible pressure unknown");
 		}
 		double volume = domain.gasState.network.availableVolume(node);
-		if (domain.thermalState != null && domain.thermalState.gasModelBound()) {
-			return FluidThermalBinding.gasVolumeCompliance(domain.thermalState, node, domain.gasState.network);
-		}
 		double absolutePressure = AirNetwork.REFERENCE_PRESSURE + domain.gasState.network.gaugePressure(node);
-		double compliance = volume / absolutePressure;
+		double exponent = 1;
+		if (domain.thermalState != null && domain.thermalState.gasModelBound()) {
+			var state = domain.thermalState.gasHydrodynamicState(node, domain.gasState.network);
+			absolutePressure = state.absolutePressurePa();
+			exponent = state.isentropicExponent();
+		}
+		double load = Math.max(absolutePressure, AirNetwork.REFERENCE_PRESSURE + loadGaugePressure);
+		double difference = load - absolutePressure;
+		// The EOS chord spans the available gas volume and the surrounding liquid
+		// load. A near-vacuum tangent would permit many complete cavity volumes
+		// to enter while its predicted pressure remained close to zero.
+		double compliance = difference == 0 ? volume / (exponent * absolutePressure)
+				: -volume * Math.expm1(-Math.log1p(difference / absolutePressure) / exponent) / difference;
 		if (!(Double.isFinite(compliance) && compliance > 0.0)) {
-			throw new IllegalStateException("Isothermal gas-node compliance is invalid");
+			throw new IllegalStateException("Gas pressure-volume response is invalid");
 		}
 		return compliance;
 	}

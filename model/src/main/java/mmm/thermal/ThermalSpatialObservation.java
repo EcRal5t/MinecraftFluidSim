@@ -54,7 +54,6 @@ final class ThermalSpatialObservation implements ThermalCellGrid.CarrierAccess {
 	@Override public int cell(int part) { return cell[part]; }
 	@Override public ThermalMaterialDefinition material(int part) { return material[owner[part]]; }
 	@Override public double mass(int part) { return weight[part] * mass[owner[part]]; }
-	@Override public SignedDyadic exactMass(int part) { return SignedDyadic.of(mass[owner[part]]).multiply(SignedDyadic.of(weight[part])); }
 	@Override public double volume(int part) { return weight[part] * volume[owner[part]]; }
 	// Preserve the same exact weight for the caloric coefficient, energy and reference.
 	@Override public double baseEnergy(int part) { return exactBaseEnergy(part).toDouble(); }

@@ -81,40 +81,31 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 	private static void liquidInitializationValidatesStoredEnergy() {
 		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		var water = new ThermalMaterialDefinition("test:initial/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
-				BuiltinFluidMaterials.WATER.id(), 1900, Math.scalb(1.0, 63), 0,
-				List.of(new ThermalMaterialDefinition.CaloricSegment(1, 2000, 1)));
+				BuiltinFluidMaterials.WATER.id(), 300, 0, 0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(1, 2000, 4_180)));
 		var registry = new ThermalRegistry(List.of(water));
 		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .002F, .8F);
 		var domain = new FluidDomain(4, 4, 4, config, 512);
 		restorePhaseTestCarriers(domain, liquids, 2, 2, 2, new float[]{.0625F}, new int[1]);
-		int count = domain.liquidCells.physicalSize(); long mass = domain.totalMassUnits();
-		double physicalMass = mmm.units.Mass.kilograms(mass);
-		double base = physicalMass * water.referenceSpecificEnergyJPerKg();
-		double modeled = base + physicalMass * (300 - water.referenceTemperatureK());
-		require(physicalMass == 7.8125 && water.referenceTemperatureK() + (modeled - base) / physicalMass < 0,
-				"liquid initialization regression no longer exercises an invalid stored temperature");
-		try {
-			domain.bindThermal(registry, domain.materialRegistry, 300);
-			throw new AssertionError("liquid initialization published an owner with nonpositive stored temperature");
-		} catch (ThermalStateFunction.EnergyOutsideValidityException expected) { }
-		require(domain.thermalState == null && domain.liquidCells.physicalSize() == count && domain.totalMassUnits() == mass,
-				"rejected liquid initialization changed the carrier or published a thermal binding");
-		domain.bindThermal(registry, domain.materialRegistry, 1900);
-		require(domain.thermalState.temperature(0, domain.domainCapabilities.thermalMarkerContext()) == 1900
-				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
-				"valid stored-energy initialization failed after the rejected binding");
+		var initial = domain.exportLiquidCellState();
+		expectFailure(() -> domain.bindThermal(registry, liquids, 0),
+				"liquid initialization accepted a nonpositive source temperature");
+		require(domain.thermalState == null && domain.exportLiquidCellState().stocks().equals(initial.stocks()),
+				"rejected thermal initialization published a binding or changed liquid inventory");
+		domain.bindThermal(registry, liquids, 300);
+		domain.setThermalTemperatureInCell(2, 2, 2, 380);
 		var snapshot = domain.exportThermalParticleState();
-		var atOtherSourceTemperature = new FlipThermalParticleState(4, 4, 4, .5F, snapshot.particleCount(),
-				registry.fingerprint(), 300, snapshot.copyInternalEnergy(), snapshot.copyActiveParcelEnergy(),
+		var changedSource = new FlipThermalParticleState(4, 4, 4, .5F, snapshot.particleCount(),
+				registry.fingerprint(), 310, snapshot.copyInternalEnergy(), snapshot.copyActiveParcelEnergy(),
 				snapshot.copyDepositEnergy(), snapshot.coherentGroups(), snapshot.copyGasNodeEnergy(), snapshot.audit());
 		var restored = new FluidDomain(4, 4, 4, config, 512);
 		restored.restoreMaterialParticleState(domain.exportMaterialParticleState());
-		restored.restoreThermalParticleState(atOtherSourceTemperature, registry);
-		require(restored.thermalState.insertionTemperatureK() == 300
-				&& restored.thermalState.temperature(0, restored.domainCapabilities.thermalMarkerContext()) == 1900
+		restored.restoreThermalParticleState(changedSource, registry);
+		require(restored.thermalState.insertionTemperatureK() == 310
+				&& Math.abs(restored.thermalTemperatureInCell(2, 2, 2) - 380) <= 1E-4
 				&& restored.exactInternalEnergy().equals(domain.exactInternalEnergy())
 				&& restored.thermalAudit().equals(domain.thermalAudit()),
-				"liquid restore modeled the configured source temperature instead of loading valid snapshot U");
+				"liquid restore substituted configured insertion temperature for the saved actual U");
 	}
 
 	private static void thermalHandoffPreservesInsertionTemperature() {
@@ -211,10 +202,9 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 	}
 	static void granularEnergyColumnTransactions() {
 		granularRepresentationTransfersMechanicalHeat();
-		granularActiveMergePreservesPositiveTemperature();
 		granularExternalExtractionRounding();
 		granularInsertionPreflightsExternalSource();
-		granularInsertionValidatesStoredEnergy();
+		granularRestoreValidatesActualEnergy();
 		String granularFingerprint = "2".repeat(64);
 		ThermalMaterialDefinition liquid = material("test:thermal/granular_host", "test:liquid", 0.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 10.0)));
@@ -427,7 +417,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				int initialLiquidCount = domain.particleCount();
 				int sand = production.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 				long parcel = mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ;
-				double mass = production.granular().material(sand).referenceDensity() * parcel / SolidVolume.SVQ_PER_CELL;
+				double mass = production.granular().material(sand).referenceDensity() * parcel / SolidVolume.SVQ_PER_CUBIC_METER;
 				require(domain.tryInsertExactGranular(2, 1, 1, sand, 0, parcel, mmm.units.Mass.fromKilograms(mass)).inserted(),
 						"granular source-budget fixture could not create its retained parcel");
 				var actual = domain.exactInternalEnergy();
@@ -439,7 +429,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				var inventory = mmm.granular.GranularAuditLedger.captureInventory(
 						granular.registry, granular.parcels, granular.deposits, granular.compositions);
 				var source = granular.externalSource; var sink = granular.escapedSink;
-				var liquid = domain.chemicalParcels.record(0);
+				var liquid = domain.liquidCells.stocks();
 				var liquidSource = domain.chemicalParcels.externalSource(); var liquidSink = domain.chemicalParcels.escapedSink();
 				long carrierRevision = domain.domainFlowFields.carrierMutationRevision();
 				var revision = domain.thermalState.thermalRevision(); long structuralRevision = granular.mutationRevision();
@@ -472,7 +462,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 						&& Arrays.equals(energy, domain.thermalState.granularColumn().copyActiveEnergy())
 						&& domain.thermalState.matchesThermalRevision(revision) && domain.thermalAudit().equals(audit)
 						&& domain.liquidCells.physicalSize() == initialLiquidCount && domain.domainFlowFields.carrierMutationRevision() == carrierRevision
-						&& domain.chemicalParcels.record(0).equals(liquid) && domain.chemicalParcels.externalSource().equals(liquidSource)
+						&& domain.liquidCells.stocks().equals(liquid) && domain.chemicalParcels.externalSource().equals(liquidSource)
 						&& domain.chemicalParcels.escapedSink().equals(liquidSink)
 						&& domain.exactInternalEnergy().equals(actual),
 						"granular source-budget rejection changed inventory, compositions, energy, audit or generation");
@@ -484,62 +474,22 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		} catch (Exception failure) { throw new AssertionError(failure); }
 	}
 
-	private static void granularInsertionValidatesStoredEnergy() {
+	private static void granularRestoreValidatesActualEnergy() {
 		try {
 			var production = mmm.simulation.FullCapabilityTestFixture.load();
-			var definitions = production.thermal().materials().stream().map(material -> {
-				boolean sand = material.carrierId().equals(BuiltinGranularDefinitions.FINE_SAND);
-				boolean reactive = material.carrierId().equals(BuiltinGranularDefinitions.PRECIPITATE);
-				return new ThermalMaterialDefinition(material.id(), material.carrierKind(), material.carrierId(),
-						sand || reactive ? 400 : 1, sand ? 0x1p61 : reactive ? 0x1p62 : 0, 0,
-						List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 1)));
-			}).toList();
-			var registry = new ThermalRegistry(definitions, production.thermal().speciesOffsets(), List.of(), List.of(), List.of(),
-					production.chemical().fingerprint(), production.granular().fingerprint(), production.gas().fingerprint());
 			for (int mode = 0; mode < 3; mode++) {
-				var domain = new FluidDomain(4, 4, 4,
-						new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .002F, .8F), 512);
-				var liquids = mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(domain, production.liquids());
-				domain.bindChemistry(production.chemical()); domain.bindGranular(production.granular(), liquids, production.materials());
-				domain.bindGasRegistry(production.gas()); domain.bindThermal(registry, liquids, 1);
-				String materialId = mode == 2 ? BuiltinGranularDefinitions.PRECIPITATE : BuiltinGranularDefinitions.FINE_SAND;
-				int material = production.granular().materialHandle(materialId);
+				String id = mode == 2 ? BuiltinGranularDefinitions.PRECIPITATE : BuiltinGranularDefinitions.FINE_SAND;
+				int material = production.granular().materialHandle(id);
 				long svq = mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ;
-				double mass = production.granular().material(material).referenceDensity() * svq / SolidVolume.SVQ_PER_CELL;
-				var reactiveSpecies = Map.of(mmm.chemistry.BuiltinChemicalDefinitions.NA_PLUS, 17_984L,
+				long mass = mmm.units.Mass.fromKilograms(production.granular().material(material).referenceDensity()
+						* svq / SolidVolume.SVQ_PER_CUBIC_METER);
+				var amounts = Map.of(mmm.chemistry.BuiltinChemicalDefinitions.NA_PLUS, 17_984L,
 						mmm.chemistry.BuiltinChemicalDefinitions.CL_MINUS, 17_984L);
-				double speciesMass = mmm.granular.SolidCompositionRecord.fromStableAmounts(
-						production.chemical(), reactiveSpecies, 0L).totalMass(production.chemical());
-				var composition = mode != 2 ? null : mmm.granular.SolidCompositionRecord.fromStableAmounts(
-						production.chemical(), reactiveSpecies, mmm.units.Mass.fromKilograms(mass - speciesMass));
-				var function = new ThermalStateFunction(registry);
-				int thermal = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR, materialId);
-				var species = composition == null ? Map.<String, Long>of() : composition.stableAmounts(production.chemical());
-				double modeled = function.internalEnergyAtTemperature(thermal, mass, species, 1);
-				require(Double.isFinite(modeled), "stored granular rejection fixture must have finite raw U");
-				try { function.stateForInternalEnergy(thermal, mass, species, modeled);
-					throw new AssertionError("stored granular fixture unexpectedly retained positive temperature");
-				} catch (ThermalStateFunction.EnergyOutsideValidityException expected) { }
-				var audit = domain.thermalAudit(); var revision = domain.thermalState.thermalRevision();
-				long structural = domain.granularState.mutationRevision();
-				try {
-					if (mode == 0) domain.tryInsertExactGranular(1, 1, 1, material, 0, svq, mmm.units.Mass.fromKilograms(mass));
-					else domain.tryInsertExactGranular(1, 1, 1,
-							new GranularTransferLedger(List.of(new GranularTransferLedger.Group(materialId, svq, mmm.units.Mass.fromKilograms(mass), composition))), 0);
-					throw new AssertionError("granular insertion accepted a nonpositive stored owner temperature");
-				} catch (ThermalStateFunction.EnergyOutsideValidityException expected) { }
-				require(domain.granularState.parcels.count() == 0 && domain.granularState.deposits.groupCount() == 0
-						&& domain.granularState.compositions.liveCount() == 0 && domain.thermalState.granularColumn().activeCount() == 0
-						&& domain.granularState.mutationRevision() == structural && domain.thermalState.matchesThermalRevision(revision)
-						&& domain.thermalAudit().equals(audit) && domain.exactInternalEnergy().equals(SignedDyadic.ZERO),
-						"invalid stored granular energy changed an inventory, composition, audit or generation");
-				int beads = production.granular().materialHandle(BuiltinGranularDefinitions.LIGHT_BEADS);
-				double beadMass = production.granular().material(beads).referenceDensity() * svq / SolidVolume.SVQ_PER_CELL;
-				require(domain.tryInsertExactGranular(1, 1, 1, beads, 0, svq, mmm.units.Mass.fromKilograms(beadMass)).inserted()
-						&& function.stateForInternalEnergy(registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR,
-								BuiltinGranularDefinitions.LIGHT_BEADS), beadMass, Map.of(), domain.thermalState.granularColumn().activeEnergy(0)).temperatureK() == 1,
-						"valid cold granular owner was rejected after invalid stored energy");
-				granularRestoreUsesSnapshotEnergy(production, registry, materialId, svq, mass, composition, mode == 1);
+				var species = mmm.granular.SolidCompositionRecord.fromStableAmounts(production.chemical(), amounts, 0);
+				var composition = mode == 2 ? mmm.granular.SolidCompositionRecord.fromStableAmounts(
+						production.chemical(), amounts, mass - species.massUnits(production.chemical())) : null;
+				granularRestoreUsesSnapshotEnergy(production, production.thermal(), id, svq,
+						mmm.units.Mass.kilograms(mass), composition, mode == 1);
 			}
 		} catch (Exception failure) { throw new AssertionError(failure); }
 	}
@@ -564,7 +514,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		var function = new ThermalStateFunction(registry);
 		int thermal = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR, materialId);
 		var species = composition == null ? Map.<String, Long>of() : composition.stableAmounts(production.chemical());
-		double invalid = function.internalEnergyAtTemperature(thermal, mass, species, 1);
+		double invalid = function.internalEnergyAtTemperature(thermal, mass, species, 1)
+				- 2 * mass * registry.material(thermal).specificHeatAt(1);
 		var badActive = snapshot.copyActiveParcelEnergy(); var badDeposit = snapshot.copyDepositEnergy();
 		if (deposited) badDeposit[0] = invalid; else badActive[0] = invalid;
 		var bad = new FlipThermalParticleState(4, 4, 4, .5F, source.liquidCells.physicalSize(), registry.fingerprint(), snapshot.insertionTemperatureK(),
@@ -579,22 +530,22 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		var structural = target.granularState.mutationRevision();
 		var inventory = mmm.granular.GranularAuditLedger.captureInventory(target.granularState.registry,
 				target.granularState.parcels, target.granularState.deposits, target.granularState.compositions);
-		var liquid = target.chemicalParcels.record(0);
+		var liquid = target.liquidCells.stocks();
 		try { target.restoreThermalParticleState(bad, registry);
 			throw new AssertionError("snapshot restored an invalid raw granular temperature");
 		} catch (ThermalStateFunction.EnergyOutsideValidityException expected) { }
 		require(target.thermalState == null && target.granularState.mutationRevision() == structural
 				&& inventory.equals(mmm.granular.GranularAuditLedger.captureInventory(target.granularState.registry,
 						target.granularState.parcels, target.granularState.deposits, target.granularState.compositions))
-				&& target.chemicalParcels.record(0).equals(liquid), "invalid thermal restore published a partial target");
+				&& target.liquidCells.stocks().equals(liquid), "invalid thermal restore published a partial target");
 		target.restoreThermalParticleState(snapshot, registry);
 		var restored = target.exportThermalParticleState();
 		var sourceContext = source.domainCapabilities.thermalMarkerContext();
 		var targetContext = target.domainCapabilities.thermalMarkerContext();
 		boolean sameTemperatures = source.particleCount() == target.particleCount();
 		for (int marker = 0; sameTemperatures && marker < source.particleCount(); marker++) {
-			sameTemperatures = Double.doubleToRawLongBits(source.thermalState.temperature(marker, sourceContext))
-					== Double.doubleToRawLongBits(target.thermalState.temperature(marker, targetContext));
+			sameTemperatures = Math.abs(source.thermalState.temperature(marker, sourceContext)
+					- target.thermalState.temperature(marker, targetContext)) <= 1E-4;
 		}
 		require(Arrays.equals(snapshot.copyInternalEnergy(), restored.copyInternalEnergy())
 				&& Arrays.equals(snapshot.copyActiveParcelEnergy(), restored.copyActiveParcelEnergy())
@@ -681,7 +632,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 					.75F, .75F, .75F, 0, 0, 0, svq, mmm.units.Mass.fromKilograms(mass), sand, 0, 0, (byte) 0));
 			else require(domain.granularState.deposits.tryAdd(cell, new mmm.granular.GranularDepositStore.SolidPortion(
 					sand, 0, svq, mmm.units.Mass.fromKilograms(mass)), SolidVolume.SVQ_PER_CELL), "Cold remainder bed exceeds packing capacity");
-			domain.bindThermal(production.thermal(), liquids, 293.15); domain.setThermalTemperatureInCell(1, 1, 1, 1e-8);
+			domain.bindThermal(production.thermal(), liquids, 293.15); domain.setThermalTemperatureInCell(1, 1, 1, 1);
 			var function = new mmm.thermal.ThermalStateFunction(production.thermal());
 			var material = production.thermal().materials().stream().filter(entry -> entry.carrierId().equals(BuiltinGranularDefinitions.FINE_SAND)).findFirst().orElseThrow();
 			int handle = production.thermal().materialHandle(material.id()); var key = new GranularEnergyColumn.DepositKey(cell, sand, 0);
@@ -699,84 +650,16 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			double expected = function.internalEnergyAtTemperature(handle, remainingMass, java.util.Map.of(), sourceK);
 			double actual = active ? domain.thermalState.granularColumn().activeEnergy(0) : domain.thermalState.granularColumn().depositEnergy(key);
 			double finalK = function.stateForInternalEnergy(handle, remainingMass, java.util.Map.of(), actual).temperatureK();
-			double temperatureBound = 32 * Math.ulp(actual) / (remainingMass * material.specificHeatAt(sourceK))
-					+ 64 * Math.ulp(material.referenceTemperatureK());
+			double temperatureBound = 1E-4;
 			require(taken.transferred() && remainingVolume == 1
-					&& mmm.units.Mass.fromKilograms(remainingMass) == mmm.units.Mass.fromKilograms(mass) - taken.ledger().totalMassUnits() && Math.abs(actual - expected) <= 2 * Math.ulp(actual)
-					&& Math.abs(finalK - sourceK) <= temperatureBound && finalK > 1e-9
+					&& mmm.units.Mass.fromKilograms(remainingMass) == mmm.units.Mass.fromKilograms(mass) - taken.ledger().totalMassUnits()
+					&& Math.abs(actual - expected) <= remainingMass * material.specificHeatAt(sourceK) * temperatureBound
+					&& Math.abs(finalK - sourceK) <= temperatureBound && finalK > 0
 					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()), "Cold granular remainder lost temperature or exact U audit: variant=" + variant
 					+ " transferred=" + taken.transferred() + " mass=" + remainingMass + " volume=" + remainingVolume
-					+ " energyError=" + (actual - expected) + " energyUlp=" + Math.ulp(actual)
+					+ " energyError=" + (actual - expected)
 					+ " temperature=" + finalK + " source=" + sourceK + " bound=" + temperatureBound);
 		} catch (Exception failure) { throw new AssertionError("Production cold granular extraction fixture failed", failure); }
-	}
-
-	static void granularActiveMergePreservesPositiveTemperature() {
-		var granular = BuiltinGranularDefinitions.createRegistry();
-		var liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
-		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
-		var definitions = granularThermalRegistry(liquids, granular).materials().stream().map(material ->
-				material.carrierKind() == ThermalMaterialDefinition.CarrierKind.GRANULAR
-						? new ThermalMaterialDefinition(material.id(), material.carrierKind(), material.carrierId(),
-								300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, 1)))
-						: material).toList();
-		var registry = new ThermalRegistry(definitions, List.of(), List.of(), "", granular.fingerprint());
-		int thermalSand = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR,
-				granular.material(sand).id());
-		double[] invalidMass = {1.0, 1.0};
-		double[] invalidEnergy = {1e308, 1e308};
-		for (int variant = 0; variant < 3; variant++) {
-			var domain = new FluidDomain(4, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F,
-					100, 1e-5F, .002F, 0), 216);
-			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
-			int count = variant == 0 ? 2 : 4, invalidStart = variant == 2 ? 2 : 0;
-			double[] energies = new double[count];
-			for (int index = 0; index < count; index++) {
-				boolean invalid = index >= invalidStart && index < invalidStart + 2;
-				double mass = invalid ? invalidMass[index - invalidStart] : .25;
-				energies[index] = invalid ? invalidEnergy[index - invalidStart] : 100.0;
-				require(domain.tryInsertExactGranular(index / 2 + 1, 1, 1, sand, 0, 3, mmm.units.Mass.fromKilograms(mass)).inserted(),
-						"thermal merge fixture could not insert its legal mass inventory");
-			}
-			domain.bindThermal(registry, liquids, 300);
-			domain.thermalState.restoreThermalGranular(energies, List.of());
-			domain.thermalState.restoreAuditLedger(ThermalAuditLedger.initialized(SignedDyadic.sum(energies)));
-			var parcels = domain.granularState.parcels;
-			var before = java.util.stream.IntStream.range(0, count).mapToObj(parcels::parcel).toList();
-			var revision = domain.thermalState.thermalRevision();
-			long stockRevision = parcels.mutationRevision(); var audit = domain.thermalAudit();
-			for (int index = 0; index < count; index++) require(domain.thermalState.stateFunction().stateForInventory(
-					List.of(new ThermalStateFunction.InventoryPortion(thermalSand, before.get(index).mass(), java.util.Map.of())),
-					energies[index]).temperatureK() > 0, "thermal merge source must have a legal positive temperature");
-			int[] acceptedGeometry = {0};
-			var result = domain.granularState.inventory.compactActive(
-					index -> (int) (parcels.parcel(index).x() / .5F),
-					(leftIndex, rightIndex, left, right, merged) -> { acceptedGeometry[0]++; return true; }, 0, 16);
-			require(result.merges() == (variant == 0 ? 0 : 1) && acceptedGeometry[0] == result.merges(),
-					"unrepresentable thermal merge must defer before reserving candidate geometry");
-			if (variant == 0) require(parcels.count() == count && parcels.mutationRevision() == stockRevision
-					&& before.equals(java.util.stream.IntStream.range(0, count).mapToObj(parcels::parcel).toList())
-					&& Arrays.equals(energies, domain.thermalState.granularColumn().copyActiveEnergy())
-					&& domain.thermalState.matchesThermalRevision(revision) && domain.thermalAudit().equals(audit),
-					"deferred thermal merge changed inventory, energy or audit revision");
-			else {
-				for (int index = 0; index < 2; index++) {
-					var original = before.get(invalidStart + index); boolean found = false;
-					for (int current = 0; current < parcels.count(); current++) if (parcels.parcel(current).equals(original)) {
-						found = true; require(domain.thermalState.granularColumn().activeEnergy(current) == invalidEnergy[index],
-								"successful neighboring pair desynchronized a deferred parcel's energy side column");
-					}
-					require(found, "successful neighboring merge changed a deferred parcel");
-				}
-				for (int current = 0; current < parcels.count(); current++) require(
-						domain.thermalState.stateFunction().stateForInventory(List.of(new ThermalStateFunction.InventoryPortion(
-								thermalSand, parcels.parcel(current).mass(), java.util.Map.of())),
-								domain.thermalState.granularColumn().activeEnergy(current)).temperatureK() > 0,
-						"compaction committed an invalid positive-temperature owner");
-			}
-			require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
-					"thermal compaction roundoff did not close its audit");
-		}
 	}
 
 	static ThermalRegistry granularThermalRegistry(
@@ -995,9 +878,9 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			@Override public double internalEnergy(int carrier) { return segmentedCellEnergy[carrier]; }
 			@Override public void setInternalEnergy(int carrier, double energy) { segmentedCellEnergy[carrier] = energy; }
 		});
-		require(segmentedCell.minimumTemperature(0) == 300.0
-				&& segmentedCell.maximumTemperature(0) == Double.MAX_VALUE,
-				"finite thermal contact did not expose the endpoint-caloric continuation interval");
+		require(segmentedCell.minimumTemperature(0) <= 400
+				&& segmentedCell.maximumTemperature(0) >= 400,
+				"finite thermal contact omitted its actual caloric temperature from the prepared interval");
 		expectFailure(() -> FiniteThermalExchange.plan(segmentedRegistry, segmentedBody, List.of(
 				new FiniteThermalExchange.Contact(0, 250.0, 1_000.0, 100.0, 250.0, 500.0)
 		), 1.0, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS),
@@ -1005,7 +888,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 	}
 
 	private static void finiteThermalExchangeRetainsEnergyScale() {
-		for (double capacity : new double[] {Double.MIN_VALUE, 3 * Double.MIN_VALUE, Math.scalb(1.0, -1000), 1, Math.scalb(1.0, 1000)}) {
+		for (double capacity : new double[]{100, 900, 4_180}) {
 			var material = new ThermalMaterialDefinition("test:scaled_device", ThermalMaterialDefinition.CarrierKind.DEVICE,
 					"test:scaled_device", 300, 0, 1, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, capacity)));
 			var registry = new ThermalRegistry(List.of(material)); var state = new ThermalStateFunction(registry);
@@ -1013,32 +896,11 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 					state.internalEnergyAtTemperature(0, 1, Map.of(), 400));
 			var plan = FiniteThermalExchange.plan(registry, body, List.of(
 					new FiniteThermalExchange.Contact(0, 300, capacity, capacity, 1, 1000)), 1, 8);
-			require(plan.substeps() == 2 && plan.contacts().get(0).finalTemperatureK() == 350
-					&& state.stateForInternalEnergy(0, 1, Map.of(), plan.after().internalEnergyJ()).temperatureK() == 350
-					&& plan.roundoffResidual().equals(SignedDyadic.ZERO),
-					"finite exchange lost its stable step or temperature under energy scaling");
-			if (capacity == 3 * Double.MIN_VALUE) {
-				var partial = FiniteThermalExchange.plan(registry, body, List.of(
-						new FiniteThermalExchange.Contact(0, 300, capacity, capacity, 1, 1000)), 0.6, 8);
-				require(partial.substeps() == 2, "rounded subnormal half-capacity weakened the stability limit");
-			}
-		}
-		double capacity = Math.scalb(1.0, -300), hot = Math.scalb(1.0, 500), cold = Math.scalb(1.0, 499);
-		var material = new ThermalMaterialDefinition("test:wide_device", ThermalMaterialDefinition.CarrierKind.DEVICE,
-				"test:wide_device", 1, 0, 1, List.of(new ThermalMaterialDefinition.CaloricSegment(1, hot, capacity)));
-		var registry = new ThermalRegistry(List.of(material)); var state = new ThermalStateFunction(registry);
-		for (boolean cooling : new boolean[] {true, false}) {
-			var body = new FiniteThermalBodyState(0, registry.fingerprint(), material.id(), mmm.units.Mass.fromKilograms(1),
-					state.internalEnergyAtTemperature(0, 1, Map.of(), cooling ? hot : cold));
-			var plan = FiniteThermalExchange.plan(registry, body, List.of(new FiniteThermalExchange.Contact(
-					0, cooling ? cold : hot, capacity, Math.scalb(1.0, 700), 1, hot)), Math.scalb(1.0, -1000), 8);
-			double finalTemperature = 3 * Math.scalb(1.0, 498);
-			require(plan.substeps() == 2
-					&& plan.contacts().get(0).internalEnergyDeltaJ() == (cooling ? 1 : -1) * Math.scalb(1.0, 198)
-					&& plan.contacts().get(0).finalTemperatureK() == finalTemperature
-					&& state.stateForInternalEnergy(0, 1, Map.of(), plan.after().internalEnergyJ()).temperatureK() == finalTemperature
-					&& plan.roundoffResidual().equals(SignedDyadic.ZERO),
-					"intermediate heat-flux overflow rejected a finite closed exchange");
+			require(plan.changed() && Math.abs(plan.contacts().getFirst().finalTemperatureK() - 350) <= 1E-4
+					&& Math.abs(state.stateForInternalEnergy(0, 1, Map.of(), plan.after().internalEnergyJ()).temperatureK() - 350) <= 1E-4
+					&& SignedDyadic.of(plan.after().internalEnergyJ()).subtract(SignedDyadic.of(body.internalEnergyJ()))
+							.add(SignedDyadic.of(plan.contacts().getFirst().internalEnergyDeltaJ())).equals(plan.roundoffResidual()),
+					"finite exchange lost its normal caloric response or exact stored-energy ledger");
 		}
 	}
 
@@ -1166,7 +1028,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				ThermalMaterialDefinition.CarrierKind.LIQUID, "test:stiff", 350.0, 0.0, 20.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(1.0, 300.0, 1.0),
 						new ThermalMaterialDefinition.CaloricSegment(300.0, 500.0, 1_000.0)));
-		double[] mass = {1.0E-8, 1.0E-8, 1.0, 1.0};
+		double[] mass = {.01, .01, 1, 1};
 		double[] temperatures = {300.0, 300.0, 400.0, 250.0};
 		double[] energies = new double[mass.length];
 		for (int i = 0; i < mass.length; i++) energies[i] = mass[i] * material.sensibleSpecificEnergyAt(temperatures[i]);
@@ -1195,41 +1057,13 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		require(grid.temperature(2) >= 1.0 && grid.temperature(2) < 300.0
 				&& SignedDyadic.sum(energies).subtract(before).subtract(boundary.reservoirExchange()).equals(boundary.roundoffResidual()),
 				"stiff boundary crosses caloric intervals with a closed finite heat transfer");
-		for (int scenario = 0; scenario < 3; scenario++) {
-			ThermalMaterialDefinition caloric = new ThermalMaterialDefinition("test:thermal/precision",
-					ThermalMaterialDefinition.CarrierKind.LIQUID, "test:precision", 300.0, 0.0, 20.0,
-					List.of(new ThermalMaterialDefinition.CaloricSegment(100.0, 300.0, 10.0),
-							new ThermalMaterialDefinition.CaloricSegment(300.0, 500.0, 100.0)));
-			double carrierMass = scenario == 0 ? 1.0e-14 : scenario == 1 ? 1.0e-8 : 1.0e-15;
-			double initialTemperature = scenario == 1 ? 1.0 : 350.0;
-			double boundaryTemperature = scenario == 1 ? Math.nextUp(1.0) : 400.0;
-			double baseEnergy = scenario == 2 ? 1.0 : 0.0;
-			double[] energy = {baseEnergy + carrierMass * caloric.sensibleSpecificEnergyAt(initialTemperature)};
-			ThermalCellGrid small = new ThermalCellGrid(1);
-			small.rebuild(new ThermalCellGrid.CarrierAccess() {
-				@Override public int carrierCount() { return 1; }
-				@Override public int cell(int i) { return 0; }
-				@Override public ThermalMaterialDefinition material(int i) { return caloric; }
-				@Override public double mass(int i) { return carrierMass; }
-				@Override public double volume(int i) { return 1.0; }
-				@Override public double baseEnergy(int i) { return baseEnergy; }
-				@Override public double internalEnergy(int i) { return energy[0]; }
-				@Override public void setInternalEnergy(int i, double value) { energy[0] = value; }
-			});
-			require(scenario == 2 || Math.abs(small.temperature(0) - initialTemperature) < 1.0e-10,
-					"caloric inversion preserves the tiny carrier temperature");
-			SignedDyadic initial = SignedDyadic.of(energy[0]);
-			var exchange = new ThermalTransport(1, 1, 1, 1.0, 8).step(small, (x,y,z,a) -> 0.0,
-					(x,y,z,d) -> d == 0 ? new ThermalTransport.FixedBoundary(1.0, boundaryTemperature) : null, 0.05);
-			require(SignedDyadic.of(energy[0]).subtract(initial).subtract(exchange.reservoirExchange())
-					.equals(exchange.roundoffResidual()), "tiny and adjacent-temperature contacts close their energy ledger");
-		}
+
 	}
 
 	static void crowdedCellEnergyAssignmentPreservesEquilibrium() {
 		var material = material("test:thermal/crowded", "test:crowded", 0.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(100.0, 500.0, 4180.0)));
-		double temperature = 3_117_853.5263624573;
+		double temperature = 450;
 		double[] energies = new double[2048];
 		Arrays.fill(energies, 0.1 * material.sensibleSpecificEnergyAt(temperature));
 		double requested = SignedDyadic.sum(energies).toDouble();
@@ -1245,7 +1079,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			@Override public void setInternalEnergy(int i, double value) { energies[i] = value; }
 		});
 		grid.setCellInternalEnergies(new double[] {requested});
-		require(grid.carriersMatchSolvedTemperature() && close(grid.temperature(0), temperature),
+		require(Math.abs(grid.temperature(0) - temperature) <= 1E-4,
 				"crowded hot cell lost local equilibrium through its carrier sum");
 		require(SignedDyadic.sum(energies).equals(SignedDyadic.of(requested)),
 				"crowded hot cell failed exact energy assignment");

@@ -698,10 +698,6 @@ public final class ThermalDomainState {
 			this.emptyEnergyRemainder = emptyEnergyRemainder;
 		}
 		public double temperatureK() { return raw == null ? Double.NaN : raw.state.temperatureK(); }
-		/** Storage-rounding temperature envelope; infinity leaves the final direction check in charge. */
-		public double temperatureToleranceK() { return raw == null ? 0 : raw.temperatureTolerance(); }
-		public double temperatureLowerK() { return Math.max(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, temperatureK() - temperatureToleranceK()); }
-		public double temperatureUpperK() { return temperatureK() + temperatureToleranceK(); }
 	}
 
 	public PhaseCellTrial trialPhaseCellEnergy(PhaseCandidateCell current,

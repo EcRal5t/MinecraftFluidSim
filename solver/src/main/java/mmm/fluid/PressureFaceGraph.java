@@ -14,6 +14,7 @@ final class PressureFaceGraph {
 	private int[] rows;
 	private double[] coefficients;
 	private int entries;
+	double[] gasPressureLoad = new double[0];
 	private final int[] liquidStart;
 	private int[] liquidLeftSupport, liquidRightSupport;
 	private double[] liquidCoefficient;
@@ -86,11 +87,11 @@ final class PressureFaceGraph {
 		var p = domain.projection; int count = domain.gasState.network.nodeCount(); p.ensureGasCapacity(count);
 		Arrays.fill(p.gasPressureUnknown, false); p.gasUnknownCount = p.fluidUnknownCount = 0;
 		Arrays.fill(p.gasStorageCoefficient, 0); Arrays.fill(p.gasMatrixDiagonal, 0);
+		if(gasPressureLoad.length<count+1)gasPressureLoad=new double[count+1];
+		double head=domain.config.density()*domain.config.gravity()*domain.config.cellSize();
+		Arrays.fill(gasPressureLoad,head);
 		for (int node = 1; node <= count; node++) {
 			p.gasPressureUnknown[node] = true; p.gasUnknownNodes[p.gasUnknownCount++] = node;
-			if(domain.pressureBoundaryView.gasNodeHasContinuumState(node))
-				p.gasStorageCoefficient[node] = domain.config.density() * domain.pressureBoundaryView.gasNodeVolumeCompliance(node)
-						/ (dt * (double) dt * domain.unitScale.cubicMetersPerNormalizedVolume());
 		}
 		entries = liquidEntries = 0; Arrays.fill(inverseMass, 0); Arrays.fill(affine, 0);
 		Arrays.fill(constrained, false); Arrays.fill(anchored, false);
@@ -118,11 +119,19 @@ final class PressureFaceGraph {
 			int kept = start[f];
 			for (int i = start[f]; i < entries; i++) if (coefficients[i] != 0) { rows[kept] = rows[i]; coefficients[kept++] = coefficients[i]; }
 			entries = kept;
-			int liquid = -1; boolean reference = false; double sum = 0;
+			int liquid = -1; boolean reference = false; double sum = 0,liquidLoad=Double.NEGATIVE_INFINITY;
 			for (int i = start[f]; i < entries; i++) {
 				int row = rows[i]; sum += coefficients[i];
 				if (row >= domain.cellCount) reference = true;
-				else if (liquid < 0) liquid = row; else union(liquid, row);
+				else {
+					liquidLoad=Math.max(liquidLoad,p.pressure[row]+head);
+					if (liquid < 0) liquid = row; else union(liquid, row);
+				}
+			}
+			// Reuse this face's row classification while the committed liquid
+			// pressure is still present; only gas-contact faces need a second pass.
+			if(reference&&liquid>=0)for(int i=start[f];i<entries;i++)if(rows[i]>=domain.cellCount) {
+				int node=rows[i]-domain.cellCount;gasPressureLoad[node]=Math.max(gasPressureLoad[node],liquidLoad);
 			}
 			if (liquid >= 0 && (reference || Math.abs(sum) > 16 * Math.ulp(coefficient))) constrained[liquid] = true;
 		}
@@ -251,11 +260,12 @@ final class PressureFaceGraph {
 		for(int face=0;face<faceCount;face++){
 			double total=0,value=0;
 			for(int i=start[face];i<start[face+1];i++)if(rows[i]>=domain.cellCount){
-				double weight=Math.abs(coefficients[i]);total+=weight;value+=weight*pressure[rows[i]];
+				double weight=Math.abs(coefficients[i])*domain.projection.gasStorageCoefficient[rows[i]-domain.cellCount];
+				total+=weight;value+=weight*pressure[rows[i]];
 			}
 			if(total==0)continue;
 			for(int i=start[face];i<start[face+1];i++)if(rows[i]>=0&&rows[i]<domain.cellCount){
-				int group=root(rows[i]);double weight=Math.abs(coefficients[i]);
+				int group=root(rows[i]);double weight=Math.abs(coefficients[i])*total;
 				seedPressureSum[group]+=weight*(value/total);seedPressureWeight[group]+=weight;
 			}
 		}

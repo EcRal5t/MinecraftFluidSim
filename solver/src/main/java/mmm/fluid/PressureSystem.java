@@ -44,8 +44,8 @@ final class PressureSystem {
 	PressureProjectionResult solveProjection(float dt) {
 		duration = dt; domain.domainFlowFields.ensureGrid(); solidFaces.rebuild(); faces.rebuild(dt);
 		var p = domain.projection;
-		Arrays.fill(p.pressure, 0); Arrays.fill(p.gasPressure, 0);
 		prepareGasStorage();
+		Arrays.fill(p.pressure, 0); Arrays.fill(p.gasPressure, 0);
 		granular.prepare(dt);
 		// Fixed interface loads and the paired parcel reaction join the same prediction.
 		for (int f = 0; f < faces.faceCount; f++) {
@@ -90,8 +90,10 @@ final class PressureSystem {
 		for (int i = 0; i < domain.projection.gasUnknownCount; i++) {
 			int node = domain.projection.gasUnknownNodes[i];
 			if (domain.pressureBoundaryView.gasNodeHasContinuumState(node)) {
-				// V(P) = V_old - C_old * (P - P_old), with C_old from
-				// the real inventory, internal energy and heat-capacity model.
+				domain.projection.gasStorageCoefficient[node] = factor
+						* domain.pressureBoundaryView.gasNodeVolumeCompliance(node,faces.gasPressureLoad[node]);
+				// V(P) = V_old - C_secant * (P - P_old). Both endpoints
+				// of the load interval lie on the positive-volume EOS curve.
 				gasStorageRhs[node] = domain.projection.gasStorageCoefficient[node]
 						* domain.pressureBoundaryView.gasPressureOfNode(node);
 			} else gasStorageRhs[node] = -factor * domain.gasState.network.availableVolume(node);

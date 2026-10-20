@@ -212,7 +212,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 压力系统使用同一面系数组装矩阵、预条件器和速度修正。
 `PressureLinearSolver` 与 `PressurePreconditioner` 统一 PCG 及不完全 Cholesky 预条件，颗粒阻力按有限质量成对处理。
-已解析液气界面采用给定压力或有限气腔储存项，步初状态方程切线提供一次半隐式压力预测。
+已解析液气界面采用给定压力或有限气腔储存项，状态方程按液体压载区间给出有限体积响应，参加一次半隐式压力预测。
 活动颗粒体积分配到共同 MAC 面，液体读取剩余开口，两相真实有限质量与各自体积散度的转置共同构成压力算子。
 压力同时更新液体与颗粒速度，接触和位置预测随后准备实际整数占容，真实终点孔容由共同有界输运结算。
 作用与反作用、外部约束冲量和压力功按实际写回结算；整数库存按最终位置独立核对真实容量，具体离散见[颗粒参考](granular-state.md#统一排水与压力)。
@@ -369,17 +369,20 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 各实际载体保存总内能 `U`，温度与热容由现有分段状态函数反演。LTE 工作区用于接触、反应与相变候选；只读观察、属性计算与真实能量重分配有各自入口。导热成对搬运内能，恒温热浴的实际通量记外部 source/sink。反应按精确物种批次改变组成和参考能，相变按实际批次联合修改两相库存与内能。
 温度、接触与载体能量准备按稳定的单元顺序遍历，同代热视图复用已准备的载体列表；库存增量索引提前筛去缺少反应物的区域。
+载体内能按共同温度一次分配，最大热容载体承接存储余量，实际写入的内能汇总与舍入账保持一致。热浮力读取实际库存温度，温度准备与可选黏性定义分别处理。
 
 热化学顺序为导热 → 液相反应 → 颗粒反应 → 固液相变 → 气液相变，之后执行颗粒形态转换。凝固、熔化、汽化和凝结在固定区域体积下联合守恒两相内能，`PendingPhaseVolumeWork` 保存几何同步任务；下一次真实投影完成后清除。物品转移遇到待同步几何时，先执行仅含力学的私有候选，再准备物品事务。
 `ThermochemistryPipeline` 集中调用上述阶段，各阶段直接读取域的库存、能力和提交接口。
 蒸发产生的气体库存与内能按来源单元和固定孔隙分量进入实际新生干容；旧气体按原来源迁移。凝结联合分配步初库存与真实气容，同批蒸发产生的气体在下一步参与凝结。液封隔开的新旧气腔分别结算。
 
 颗粒运动、初始化、提取、沉积和起动读取共同整数占容。活动颗粒与床层转换同时规划来源、接收位置、材料组成、内能、势能变化和床体反力；起动提升功由实际液流提供。表示转换主动耗散与既有黏性、阻力等物理耗散分别结算；各项实现范围详见热学、颗粒参考，交付要求由实施计划维护。
+外部连续固体插入同样先准备本地占容、液体位移、MAC 动量、气腔和热量来源，再共同发布；捕获与恢复读取此次提交后的气腔归属。
 
 - **内能、状态函数与导热**
   - 主要文件：
     - [ThermalDomainState](../../model/src/main/java/mmm/thermal/ThermalDomainState.java)
     - [ThermalCaloricInversion](../../model/src/main/java/mmm/thermal/ThermalCaloricInversion.java)
+    - [ThermalCellEnergyAssignment](../../model/src/main/java/mmm/thermal/ThermalCellEnergyAssignment.java)：一次准备实际载体内能及精确汇总
     - [ThermalTransport](../../model/src/main/java/mmm/thermal/ThermalTransport.java)
     - [LiquidThermalConduction](../../solver/src/main/java/mmm/fluid/LiquidThermalConduction.java)
     - [ThermochemistryPipeline](../../solver/src/main/java/mmm/fluid/ThermochemistryPipeline.java)：`stepTransport` 与反应、相变顺序

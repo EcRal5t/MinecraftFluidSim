@@ -206,7 +206,7 @@ final class MaterialTransferPlanner {
 			var takenMixture = splitMixture(stock.mixture(), kept, stock.volume(), takenMass, true);
 			var energyParts=LiquidCellInventory.partitionEnergy(stock,new long[]{keptMass,takenMass},
 					new ChemicalMixtureRecord[]{keptMixture,takenMixture},FluidThermalBinding.liquidEnergyPartitioner(domain));
-			double keptEnergy=energyParts[0].toDouble();
+			double keptEnergy=energyParts[0];
 			var after = kept.signum() == 0 ? null : new LiquidCellInventory.Stock(stock.key(), kept, keptMass, keptMixture, keptEnergy, stock.indicator());
 			edits.add(new LiquidCellInventory.Edit(stock.key(), after));
 			removedEnergy = removedEnergy.add(SignedDyadic.of(stock.internalEnergy()).subtract(SignedDyadic.of(keptEnergy)));

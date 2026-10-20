@@ -13,7 +13,6 @@ import mmm.thermal.ThermalRegistry;
 import mmm.thermal.ThermalTransport;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
@@ -28,25 +27,20 @@ final class FluidThermalBinding {
 		var function = thermal.stateFunction();
 		var chemistry = domain.liquidCells.chemicalRegistry();
 		return (source, masses, mixtures) -> {
-			var energies = new SignedDyadic[masses.length];
-			Arrays.fill(energies, SignedDyadic.ZERO);
+			var energies = new double[masses.length];
 			if (source.massUnits() == 0) return energies;
 			int material = thermal.thermalMaterialHandleForFluid(source.key().material());
 			int largest = 0;
 			for (int i = 1; i < masses.length; i++) if (masses[i] > masses[largest]) largest = i;
-			var sourceReference = SignedDyadic.of(function.baseEnergy(
-					material, source.massKilograms(), source.mixture(), chemistry));
-			var sourceEnergy = SignedDyadic.of(source.internalEnergy());
-			double sensibleEnergy = sourceEnergy.subtract(sourceReference).toDouble();
-			var remaining = sourceEnergy;
+			double sourceReference = function.baseEnergy(material, source.massKilograms(), source.mixture(), chemistry);
+			double sensibleEnergy = source.internalEnergy()-sourceReference;
+			double assigned=0,error=0;
 			for (int i = 0; i < masses.length; i++) if (i != largest && masses[i] > 0) {
-				var reference = SignedDyadic.of(function.baseEnergy(
-						material, Mass.kilograms(masses[i]), mixtures[i], chemistry));
-				var carried = SignedDyadic.of(sensibleEnergy * (masses[i] / (double) source.massUnits()));
-				energies[i] = reference.add(carried);
-				remaining = remaining.subtract(energies[i]);
+				double reference = function.baseEnergy(material, Mass.kilograms(masses[i]), mixtures[i], chemistry);
+				energies[i] = reference+sensibleEnergy*(masses[i]/(double)source.massUnits());
+				double corrected=energies[i]-error,next=assigned+corrected;error=(next-assigned)-corrected;assigned=next;
 			}
-			energies[largest] = remaining;
+			energies[largest] = source.internalEnergy()-assigned;
 			return energies;
 		};
 	}
@@ -60,18 +54,6 @@ final class FluidThermalBinding {
 		return new ThermalDomainState(registry, mappings.liquid(), mappings.granular(),
 				initialTemperatureK, initialCapacity, sizeX, sizeY, sizeZ, cellSize, markers,
 				airNetwork, maximumTransportSubsteps);
-	}
-
-	static ThermalDomainState createRestoreTarget(
-			ThermalRegistry registry, FluidMaterialRegistry liquids, double initialTemperatureK,
-			int initialCapacity, int sizeX, int sizeY, int sizeZ, float cellSize,
-			ThermalCarrierContext markers, AirNetwork airNetwork, int maximumTransportSubsteps,
-			double[] restoredLiquidEnergy
-	) {
-		MaterialMappings mappings = mappings(registry, liquids, initialTemperatureK, markers);
-		return ThermalDomainState.restoreTarget(registry, mappings.liquid(), mappings.granular(),
-				initialTemperatureK, initialCapacity, sizeX, sizeY, sizeZ, cellSize, markers,
-				airNetwork, maximumTransportSubsteps, restoredLiquidEnergy);
 	}
 
 	private static MaterialMappings mappings(
@@ -148,6 +130,15 @@ final class FluidThermalBinding {
 			ThermalCarrierContext markers, AirNetwork airNetwork
 	) {
 		if (state.coherentPhases().groupCount() != 0) throw new IllegalStateException("Thermal restore target is not empty");
+		// The candidate aggregate reads the live carrier identities, while restored liquid
+		// energy stays private until every carrier and the shared audit have passed.
+		double[] liquidEnergy = snapshot.copyInternalEnergy();
+		if (liquidEnergy.length != markers.markerCount()) throw new IllegalArgumentException("Restored liquid energy count differs");
+		for (int ordinal = 0; ordinal < liquidEnergy.length; ordinal++) {
+			state.liquid().temperatureForInventory(markers.fluidMaterialHandle(ordinal), markers.mass(ordinal),
+					markers.mixture(ordinal), liquidEnergy[ordinal], markers.chemicalRegistry());
+		}
+		SignedDyadic restoredEnergy = SignedDyadic.sum(liquidEnergy);
 		for (CoherentPhaseStore.Group group : snapshot.coherentGroups()) {
 			group.requireCompositionMass(markers.chemicalRegistry());
 			int material = state.registry().materialHandle(group.phaseId());
@@ -158,6 +149,7 @@ final class FluidThermalBinding {
 			state.stateFunction().stateForInternalEnergy(material, group.mass(),
 					group.composition() == null ? Map.of() : group.composition().stableAmounts(),
 					group.internalEnergy());
+			restoredEnergy = restoredEnergy.add(SignedDyadic.of(group.internalEnergy()));
 		}
 		state.restoreThermalCoherent(snapshot.coherentGroups());
 		double[] activeEnergy = snapshot.copyActiveParcelEnergy();
@@ -177,18 +169,12 @@ final class FluidThermalBinding {
 			throw new IllegalArgumentException("Restored gas thermal ordinals differ from gas inventory");
 		}
 		state.restoreGasEnergies(airNetwork, restoredGas);
-		if (markers.markerCount() > 0) state.temperature(0, markers);
-		for (int marker = 0; marker < markers.markerCount(); marker++) state.temperature(marker, markers);
+		restoredEnergy = restoredEnergy.add(SignedDyadic.sum(activeEnergy))
+				.add(SignedDyadic.sum(depositEnergy)).add(SignedDyadic.sum(restoredGas));
 		state.restoreAuditLedger(snapshot.audit());
-		if (!state.exactEnergy(markers.markerCount()).equals(state.audit().ledger().expectedInventory())) {
+		if (!restoredEnergy.equals(state.audit().ledger().expectedInventory())) {
 			throw new IllegalArgumentException("Restored thermal audit does not close");
 		}
-	}
-
-
-	static double gasVolumeCompliance(ThermalDomainState state, int nodeId, AirNetwork network) {
-		return network.availableVolume(nodeId)
-				* state.gasHydrodynamicState(nodeId, network).pressureCompliancePerPa();
 	}
 
 	private static void requireTemperature(ThermalMaterialDefinition material, double temperatureK) {

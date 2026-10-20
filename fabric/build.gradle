@@ -111,6 +111,7 @@ tasks.register('runCpuValidation', JavaExec) {
 
 ['runMarkerPressureValidation': 'mmm.fluid.MarkerPressureValidation',
  'runGranularCarrierValidation': 'mmm.fluid.GranularCarrierValidation',
+ 'runGranularBedValidation': 'mmm.fluid.GranularBedWakeValidation',
  'runThermalValidation': 'mmm.fluid.M9ThermalValidation',
  'runCarrierMutationValidation': 'mmm.fluid.CarrierMutationValidation',
  'runLiquidTransportValidation': 'mmm.fluid.LiquidVolumeTransportValidation',

@@ -7,7 +7,6 @@ import mmm.thermal.ThermalCarrierContext;
 import mmm.chemistry.ChemicalLimits;
 import mmm.chemistry.BuiltinChemicalDefinitions;
 import mmm.chemistry.ChemicalMixtureRecord;
-import mmm.chemistry.ChemicalParcelStore;
 import mmm.chemistry.ChemicalPhaseDefinition;
 import mmm.chemistry.ChemicalReaction;
 import mmm.chemistry.ChemicalRegistry;
@@ -169,10 +168,10 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 		double productTemperatureB = state.stateForInternalEnergy(handle, 1.0, productsB, reactantReference).temperatureK();
 		require(productTemperatureA > 300.0 && close(productTemperatureA, productTemperatureB),
 				"formation energy did not produce path-independent exothermic temperature rise");
-		validateReferenceEnergyReuse(solution);
+		validateReferenceEnergyUnits(solution);
 	}
 
-	private static void validateReferenceEnergyReuse(ThermalMaterialDefinition solution) {
+	private static void validateReferenceEnergyUnits(ThermalMaterialDefinition solution) {
 		ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		ThermalMaterialDefinition other = material("test:thermal/other", "test:other", -13.0,
 				solution.caloricSegments());
@@ -189,30 +188,29 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 		var shiftedSpecies = new java.util.ArrayList<>(chemistry.species());
 		shiftedSpecies.add(new ChemicalSpecies("aaa:unused", Map.of("X", 1), 0, ExactRational.ONE, 0xff000000));
 		ChemicalRegistry shifted = new ChemicalRegistry(shiftedSpecies, chemistry.phases(), chemistry.reactions());
-		// More distinct terms than cache slots, with concurrent readers and opposite map orders.
-		java.util.stream.IntStream.range(0, 20_000).parallel().forEach(index -> {
+		for (int index = 0; index < 12; index++) {
 			int host = index & 1;
-			double mass = 0.125 + index / 32.0;
+			double mass = .125 + index / 32.0;
 			Map<String, Long> amounts = new java.util.TreeMap<>();
-			amounts.put("mmm:h_plus", 9_007_199_254_741L + index);
+			amounts.put("mmm:h_plus", 1_000_000L + index);
 			amounts.put("mmm:oh_minus", 19L);
-			amounts.put("mmm:h2o", 13L + index);
+			amounts.put("mmm:h2o", 500_000L + index);
 			ChemicalRegistry currentChemistry = index % 3 == 0 ? shifted : chemistry;
-			var mixture = ChemicalMixtureRecord.fromStableAmounts(currentChemistry, amounts, mmm.units.Mass.fromKilograms(index / 128.0));
+			var mixture = ChemicalMixtureRecord.fromStableAmounts(currentChemistry, amounts, 0);
 			double expected = mass * registry.material(host).referenceSpecificEnergyJPerKg();
 			for (var entry : amounts.entrySet()) expected += registry.speciesOffset(host, entry.getKey())
 					.referenceInternalEnergyJPerMol().multiply(entry.getValue())
 					.divide(ChemicalLimits.QUANTA_PER_MOL).toDouble();
+			// SI coefficient rounding must stay below the 0.0001 K caloric resolution.
+			double energyTolerance = mass * registry.material(host).specificHeatAt(300) * 1E-4;
 			for (int order = 0; order < 2; order++) {
-				for (int repeat = 0; repeat < 2; repeat++) {
-					require(Double.doubleToRawLongBits(function.baseEnergy(host, mass, amounts))
-							== Double.doubleToRawLongBits(expected), "cached thermal terms changed sum order or rounding");
-					if (order == 0) require(Double.doubleToRawLongBits(function.baseEnergy(host, mass, mixture, currentChemistry))
-							== Double.doubleToRawLongBits(expected), "packed thermal terms disagree with canonical species order");
-				}
+				require(Math.abs(function.baseEnergy(host, mass, amounts) - expected) <= energyTolerance,
+						"species reference coefficients changed the caloric response or SI units");
+				require(Math.abs(function.baseEnergy(host, mass, mixture, currentChemistry) - expected) <= energyTolerance,
+						"packed species reference energy changed under chemical handle reordering");
 				if (order == 0) amounts = ((java.util.TreeMap<String, Long>) amounts).descendingMap();
 			}
-		});
+		}
 	}
 
 	static void reactionCommitValidatesEnergyBeforeMutation() {

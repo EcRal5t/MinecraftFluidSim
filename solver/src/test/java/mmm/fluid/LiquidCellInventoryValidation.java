@@ -19,7 +19,7 @@ public final class LiquidCellInventoryValidation {
 		collisionPreservesGeometricTail();
 		chemicalTailRetainsComposition();
 		preparedRowsAndRecoveryAreAtomic();
-		targetEnergyRoundsOnce();
+		targetEnergyClosesAtStoredOwners();
 		explicitMechanicalHeatIsOneAtomicCandidate();
 		sharedFaceFluxUsesCellInventory();
 		System.out.println("Liquid cell inventory validation passed: six-face quantities, atomic rows, recovery and U rounding");
@@ -234,19 +234,21 @@ public final class LiquidCellInventoryValidation {
 		boolean rejected=false; try { prepared.commit(); } catch (IllegalStateException expected) { rejected=true; }
 		require(rejected,"An unheated predecessor could publish after the complete heated candidate");
 	}
-	private static void targetEnergyRoundsOnce() {
+	private static void targetEnergyClosesAtStoredOwners() {
 		var cells = new LiquidCellInventory(3, null); var edits = new ArrayList<LiquidCellInventory.Edit>();
 		for (int cell = 0; cell < 3; cell++) {
 			var key = new LiquidCellInventory.Key(cell, 0, 255);
 			edits.add(new LiquidCellInventory.Edit(key, new LiquidCellInventory.Stock(key, SignedDyadic.of(.25), 10, null, cell == 1 ? 1e16 : 1, false)));
 		}
 		cells.planEdits(edits).commit();
+		var sourceEnergy=cells.exactInternalEnergy();
 		var plan = cells.planRoutes(List.of(
 				new LiquidCellInventory.SourceRoutes(cells.stockAt(0),List.of(new LiquidCellInventory.TransportRoute(0,new LiquidCellInventory.Key(0,0,255),new LiquidCellInventory.Key(1,0,255),SignedDyadic.of(.25)))),
 				new LiquidCellInventory.SourceRoutes(cells.stockAt(2),List.of(new LiquidCellInventory.TransportRoute(1,new LiquidCellInventory.Key(2,0,255),new LiquidCellInventory.Key(1,0,255),SignedDyadic.of(.25))))),null);
 		plan.commit();
-		require(cells.size() == 1 && cells.stockAt(0).internalEnergy() == 1e16 + 2 && plan.energyRoundoff().signum() == 0,
-				"Incoming U was rounded per transfer instead of once per target stock");
+		require(cells.size() == 1 && Math.abs(cells.stockAt(0).internalEnergy()-sourceEnergy.toDouble())<=Math.ulp(sourceEnergy.toDouble())
+				&&cells.exactInternalEnergy().subtract(sourceEnergy).equals(plan.energyRoundoff()),
+				"Compensated target U changed energy outside floating resolution or its exact endpoint ledger");
 	}
 	private static void require(boolean condition, String message) { if (!condition) throw new AssertionError(message); }
 }

@@ -23,7 +23,6 @@ public final class ThermalCellGrid {
 		int cell(int carrier);
 		ThermalMaterialDefinition material(int carrier);
 		double mass(int carrier);
-		default SignedDyadic exactMass(int carrier) { return SignedDyadic.of(mass(carrier)); }
 		double volume(int carrier);
 		double baseEnergy(int carrier);
 		default SignedDyadic exactBaseEnergy(int carrier) { return SignedDyadic.of(baseEnergy(carrier)); }
@@ -266,7 +265,6 @@ public final class ThermalCellGrid {
 			public int next(int carrier) { return carrierNext[carrier]; }
 			public ThermalMaterialDefinition material(int carrier) { return carrierMaterial[carrier]; }
 			public double mass(int carrier) { return carrierMass[carrier]; }
-			public SignedDyadic exactMass(int carrier) { return carriers.exactMass(carrier); }
 			public double baseEnergy(int carrier) { return cachedBaseEnergy(carrier); }
 			public SignedDyadic exactBaseEnergy(int carrier) { return carriers.exactBaseEnergy(carrier); }
 		}, requested);
@@ -379,7 +377,6 @@ public final class ThermalCellGrid {
 			public int first() { return cellHead[cell]; } public int next(int carrier) { return carrierNext[carrier]; }
 			public ThermalMaterialDefinition material(int carrier) { return carrierMaterial[carrier]; }
 			public double mass(int carrier) { return carrierMass[carrier]; }
-			public SignedDyadic exactMass(int carrier) { return carriers.exactMass(carrier); }
 		};
 	}
 
