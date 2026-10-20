@@ -67,7 +67,7 @@ public final class ChemicalRegistry {
 	public List<ChemicalReaction> reactions() { return reactions; }
 	public List<ChemicalReaction> reactionOrder() { return reactionOrder; }
 	public ChemicalSpecies species(int handle) { return species.get(handle); }
-	long speciesMassUnits(int handle,long quanta){return Math.multiplyExact(speciesMassUnitsPerQuantum[handle],quanta);}
+	public long speciesMassUnits(int handle,long quanta){return Math.multiplyExact(speciesMassUnitsPerQuantum[handle],quanta);}
 	ExactRational speciesMass(int handle, long quanta) {
 		ExactRational factor = speciesMassPerQuantum[handle];
 		return factor == null ? species.get(handle).molarMassKgPerMol().multiply(quanta).divide(ChemicalLimits.QUANTA_PER_MOL)
