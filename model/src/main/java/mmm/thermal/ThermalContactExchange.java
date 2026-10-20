@@ -5,7 +5,7 @@ import mmm.units.SignedDyadic;
 /** Conservative backward-Euler heat transfer through one finite conductance, in J/(s K). */
 public final class ThermalContactExchange {
 	/** A caloric curve evaluated against the same initial inventory throughout one contact solve. */
-	public interface Body {
+	public sealed interface Body permits Carrier,Reservoir {
 		double temperatureK();
 		double heatCapacityJPerK();
 		double energyChangeToTemperature(double temperatureK);
@@ -139,9 +139,17 @@ public final class ThermalContactExchange {
 			if (next == amount) break;
 			amount = next;
 		}
-		// The lower bracket retains positive temperature order if a step crosses
-		// several caloric knots within the fixed work allowance.
-		return sign * low;
+		// The largest possible caloric slope bounds the backward-Euler response
+		// from below. Complex registered curves therefore retain positive heat
+		// exchange even if all bounded Newton samples stayed above the root.
+		double bounded=response(Math.abs(secondT-firstT),minimumCapacity(first),minimumCapacity(second),conductanceWPerK,dtSeconds);
+		return sign*Math.max(low,Math.min(high,bounded));
+	}
+	private static double minimumCapacity(Body body){
+		if(body instanceof Reservoir)return Double.POSITIVE_INFINITY;
+		var carrier=(Carrier)body;double minimum=Double.POSITIVE_INFINITY;
+		for(var segment:carrier.material().caloricSegments())minimum=Math.min(minimum,segment.specificHeatJPerKgK());
+		return carrier.massKilograms()*minimum;
 	}
 
 	/** delta / (1/(G dt) + 1/C1 + 1/C2), keeping the shared binary scale outside the sum. */

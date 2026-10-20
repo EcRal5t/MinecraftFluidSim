@@ -39,7 +39,7 @@ import java.util.UUID;
 	/** Current feature-layout admission and restore checks for chemistry, granular and thermal regions. */
 public final class M7RegionChemistryPersistenceValidation {
 	private static final FluidSolverConfig CONFIG = new FluidSolverConfig(
-			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F, 0.80F);
 	private static final ResourceKey<Registry<Level>> DIMENSION_REGISTRY = ResourceKey.createRegistryKey(
 			Identifier.fromNamespaceAndPath("mmm", "m7_persistence_registry"));
 	private static final ResourceKey<Level> DIMENSION = ResourceKey.create(DIMENSION_REGISTRY,
@@ -67,7 +67,7 @@ public final class M7RegionChemistryPersistenceValidation {
 				new mmm.simulation.persistence.WorldCapabilityBundleStore.QuarantineAdmission(64, 64L << 20));
 		var committed = store.openOrPublish(definitions).bundle();
 		FluidSolverConfig noSlip = new FluidSolverConfig(CONFIG.cellSize(), CONFIG.density(), CONFIG.gravity(),
-				CONFIG.timeStep(), CONFIG.maxPressureIterations(), CONFIG.pressureTolerance(), CONFIG.maxCourantNumber(),
+				CONFIG.timeStep(), CONFIG.maxPressureIterations(), CONFIG.pressureTolerance(),
 				CONFIG.fluidEpsilon(), CONFIG.interfaceCompression(), FluidSolverConfig.WallCondition.NO_SLIP);
 		FluidRegion source = populatedRegion(UUID.randomUUID(), noSlip);
 		bindDefaultMaterials(source);

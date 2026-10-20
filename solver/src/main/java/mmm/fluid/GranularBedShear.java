@@ -18,15 +18,15 @@ final class GranularBedShear {
 	static LiftWork planLift(FluidDomain domain, int cell, SignedDyadic work) {
 		if (domain == null || cell < 0 || cell >= domain.cellCount || work == null || !Double.isFinite(work.toDouble()))
 			throw new IllegalArgumentException("Invalid bed lift work");
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		var faces = new java.util.ArrayList<Face>(8);
 		int x=cell%domain.sizeX, y=cell/domain.sizeX%domain.sizeY, z=cell/(domain.sizeX*domain.sizeY);
 		// Whole dual faces of the bed cell and the free-flow cell above share the local traction.
 		for(int row=y;row<=Math.min(y+1,domain.sizeY-1);row++) {
-			addFace(domain,faces,0,domain.xFaceIndex(x,row,z));
-			addFace(domain,faces,0,domain.xFaceIndex(x+1,row,z));
-			addFace(domain,faces,2,domain.zFaceIndex(x,row,z));
-			addFace(domain,faces,2,domain.zFaceIndex(x,row,z+1));
+			addFace(domain,faces,0,domain.domainFlowFields.xFaceIndex(x,row,z));
+			addFace(domain,faces,0,domain.domainFlowFields.xFaceIndex(x+1,row,z));
+			addFace(domain,faces,2,domain.domainFlowFields.zFaceIndex(x,row,z));
+			addFace(domain,faces,2,domain.domainFlowFields.zFaceIndex(x,row,z+1));
 		}
 		double kinetic=0;
 		for(var face:faces) kinetic+=face.energy(face.before());
@@ -98,7 +98,7 @@ final class GranularBedShear {
 	}
 
 	static double shields(FluidDomain domain, int cell, ParticulateMaterial material) {
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		int x = cell % domain.sizeX, y = cell / domain.sizeX % domain.sizeY;
 		int z = cell / (domain.sizeX * domain.sizeY);
 		double h = domain.config.cellSize();
@@ -109,11 +109,11 @@ final class GranularBedShear {
 		if (y + 1 >= domain.sizeY) return 0;
 		float py = (float) ((y + 1.5) * h);
 		if (!(py > bed)) return 0;
-		int sampleCell = domain.cellIndex(x, (int) (py / h), z);
+		int sampleCell = domain.domainFlowFields.cellIndex(x, (int) (py / h), z);
 		// Extrapolated MAC velocities in dry cells cannot erode a bed. Check the actual carrier.
 		if (domain.liquidCells.exactCellVolume(sampleCell).signum() == 0) return 0;
 		for (double cy = bed; cy < py; cy += h / 4) {
-			if (domain.liquidCells.exactCellVolume(domain.cellIndex(x, (int) (cy / h), z)).signum() == 0
+			if (domain.liquidCells.exactCellVolume(domain.domainFlowFields.cellIndex(x, (int) (cy / h), z)).signum() == 0
 					|| domain.geometry.cutCells.pointInsideSolid(px, (float) cy, pz, (float) h)) return 0;
 		}
 		if (domain.geometry.cutCells.pointInsideSolid(px, py, pz, (float) h)) return 0;

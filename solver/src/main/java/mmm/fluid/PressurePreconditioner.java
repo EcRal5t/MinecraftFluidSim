@@ -65,7 +65,7 @@ final class PressurePreconditioner {
 
 	private void add(int cell, int neighbor, double faceCoefficient) {
 		if (!(faceCoefficient > 0)) return;
-		if (neighbor < 0 || neighbor >= domain.cellCount || !domain.isFluid(neighbor)) return;
+		if (neighbor < 0 || neighbor >= domain.cellCount || !domain.domainFlowFields.isFluid(neighbor)) return;
 		int row = neighbor;
 		if (rank[row] < 0 || rank[row] >= rank[cell]) return;
 		int high = rank[row] > rank[cell] ? row : cell, low = high == row ? cell : row;

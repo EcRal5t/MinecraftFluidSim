@@ -27,8 +27,8 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 			for (int refinement = 0; ; refinement++) {
 				FluidDomain candidate = restoreCandidate(request.state());
 				candidate.minimumMechanicalSubsteps = minimumSubsteps;
-				MovingBodyFluidCoupling.Result movingBodyCoupling = candidate.applyMovingBodyCouplings(request.movingBodies());
-				int substeps = candidate.calculateSubsteps(candidate.config.timeStep());
+				MovingBodyFluidCoupling.Result movingBodyCoupling = candidate.domainStep.applyMovingBodyCouplings(request.movingBodies());
+				int substeps = candidate.domainStep.calculateSubsteps(candidate.config.timeStep());
 				spentSubsteps = Math.addExact(spentSubsteps, substeps);
 				if (spentSubsteps > MAXIMUM_CUMULATIVE_SUBSTEPS) {
 					// The private candidate is still the only thing that exists here, so the whole
@@ -40,8 +40,8 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 				FluidDomain.StepStats stats;
 				try {
 					stats = request.pendingPhaseSettlementOnly()
-						? candidate.step(false, 0, false, false, substeps)
-						: candidate.step(request.phaseChangeEnabled(), request.maximumPhaseOperations(),
+						? candidate.domainStep.step(false, 0, false, false, substeps)
+						: candidate.domainStep.step(request.phaseChangeEnabled(), request.maximumPhaseOperations(),
 								request.mechanicalAuditEnabled(), true, substeps);
 				} catch (MechanicalTimeRefinement finer) {
 					refinementReason = finer.getMessage();

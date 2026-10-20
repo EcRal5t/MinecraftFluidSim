@@ -59,9 +59,9 @@ final class GasTopologyCoordinator {
 			throw new IllegalArgumentException("Gas restore identity/dimensions mismatch");
 		if (domain.gasState.frame != null || domain.gasState.network.nodeCount() != 0)
 			throw new IllegalStateException("Gas restore requires an uninitialized topology");
-		domain.ensureInventoryGrid(); long[] occupied = currentOccupied();
+		domain.domainFlowFields.ensureInventoryGrid(); long[] occupied = currentOccupied();
 		if (!groups.isEmpty()) {
-			domain.validateCoherentRestoreCapacity(groups);
+			domain.domainCapabilities.validateCoherentRestoreCapacity(groups);
 			var occupancy = new GranularCouplingFields(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());
 			long[] fixed = new long[domain.cellCount];
 			for (var group : groups) fixed[group.cell()] = Math.addExact(fixed[group.cell()], group.occupiedVolumeSvq());
@@ -95,7 +95,7 @@ final class GasTopologyCoordinator {
 	}
 
 	void refresh() {
-		domain.ensureInventoryGrid();
+		domain.domainFlowFields.ensureInventoryGrid();
 		var frame = domain.gasState.frame;
 		var occupied = currentOccupied();
 		if (frame != null && frame == committedFrame && domain.gasState.network == committedNetwork
@@ -160,7 +160,7 @@ final class GasTopologyCoordinator {
 				: domain.thermalState.partitionGasNodeEnergy(node, parts, domain.gasState.network);
 	}
 	GasTopologyPlan planAfterOperatorClear(LiquidCellInventory future) {
-		domain.ensureInventoryGrid();
+		domain.domainFlowFields.ensureInventoryGrid();
 		return planCells(future,new long[domain.cellCount],null,false,null,null);
 	}
 	GasTopologyPlan planAfterCondensedClear(LiquidCellInventory future) {
@@ -229,23 +229,8 @@ final class GasTopologyCoordinator {
 				if(retainControl)inherited[node-1]=inherited[node-1].add(SignedDyadic.of(volume));
 				if(retainControl)transferredVacuum[node-1]=transferredVacuum[node-1].add(SignedDyadic.of(volume));
 			}
-			if(retainControl&&count>0) {
-				var opened=new SignedDyadic[count];Arrays.fill(opened,SignedDyadic.ZERO);
-				for(var component:next.capacity().components()) {
-					int cell=component.cell();
-					int newlyOpen=old.geometry().collisionMask(cell)&~next.geometry().collisionMask(cell)&component.supportMask();
-					if(newlyOpen==0)continue;
-					for(var piece:GasPieceCapacity.capture(cell,component.supportMask(),component.availableVolumeNormalized(),next.geometry())) {
-						int node=next.nodeOfPiece(piece.id());
-						if(node>0&&(newlyOpen&1<<(piece.id()&7))!=0)
-							opened[node-1]=opened[node-1].add(SignedDyadic.of(piece.cubicMeters()));
-					}
-				}
-				for(int node=0;node<count;node++)if(opened[node].compareTo(transferredVacuum[node])>0)
-					// Removing a wall exposes zero-energy control volume. A relocated old cavity
-					// or an explicitly allocated vacuum has already supplied its part of that volume.
-					inherited[node]=inherited[node].add(opened[node].subtract(transferredVacuum[node]));
-			}
+			if(retainControl&&count>0&&!old.geometry().sameCollisionMasks(next.geometry()))
+				includeNewlyOpenedVacuum(old,next,transferredVacuum,inherited);
 			if(next.sealedExterior()&&(!sourceDelta.isEmpty()||!sinkDelta.isEmpty()))
 				throw new GasTopologyBlockedException("Closed gas topology attempted an external source or sink");
 		}
@@ -258,6 +243,26 @@ final class GasTopologyCoordinator {
 		var gasPlan=domain.gasState.network.planRemapNodes(available,inventories,
 				edit==null?sourceDelta:sourceDelta.add(edit.source()),edit==null?sinkDelta:sinkDelta.add(edit.sink()),edges);
 		return new GasTopologyPlan(next,old,gasPlan,thermalPlan,domain.gasState.network,domain.gasState.network.revision());
+	}
+	/** Wall removal adds new vacuum control volume after the transported gas has been assigned. */
+	private void includeNewlyOpenedVacuum(GasRuntimeGeometry old,GasRuntimeGeometry next,
+	                                     SignedDyadic[] transferredVacuum,SignedDyadic[] inherited) {
+		int count=next.nodeCount();
+		var opened=new SignedDyadic[count];Arrays.fill(opened,SignedDyadic.ZERO);
+		for(var component:next.capacity().components()) {
+			int cell=component.cell();
+			int newlyOpen=old.geometry().collisionMask(cell)&~next.geometry().collisionMask(cell)&component.supportMask();
+			if(newlyOpen==0)continue;
+			for(var piece:GasPieceCapacity.capture(cell,component.supportMask(),component.availableVolumeNormalized(),next.geometry())) {
+				int node=next.nodeOfPiece(piece.id());
+				if(node>0&&(newlyOpen&1<<(piece.id()&7))!=0)
+					opened[node-1]=opened[node-1].add(SignedDyadic.of(piece.cubicMeters()));
+			}
+		}
+		for(int node=0;node<count;node++)if(opened[node].compareTo(transferredVacuum[node])>0)
+			// Removing a wall exposes zero-energy control volume. A relocated old cavity
+			// or an explicitly allocated vacuum has already supplied its part of that volume.
+			inherited[node]=inherited[node].add(opened[node].subtract(transferredVacuum[node]));
 	}
 	private java.util.Set<Long> survivingContacts(GasRuntimeGeometry old,GasRuntimeGeometry next) {
 		if(old.nodeCount()==0||next.nodeCount()==0)return java.util.Set.of();
@@ -330,12 +335,12 @@ final class GasTopologyCoordinator {
 			throw new IllegalStateException("Gas clear successor changed after planning");
 	}
 	void requireBeforeCarrierCommit(GasTopologyPlan plan) {
-		requireOwnersCurrent(plan); domain.ensureInventoryGrid();
+		requireOwnersCurrent(plan); domain.domainFlowFields.ensureInventoryGrid();
 		if (!plan.frame().matchesSourceCarrierGeometry(domain, currentOccupied()))
 			throw new IllegalStateException("Gas source geometry changed after carrier edit planning");
 	}
 	void commit(GasTopologyPlan plan) {
-		domain.ensureInventoryGrid();commitPrepared(plan,currentOccupied());
+		domain.domainFlowFields.ensureInventoryGrid();commitPrepared(plan,currentOccupied());
 	}
 	/** Joint publishers already hold the committed solid endpoint; derived cell grids remain lazy. */
 	void commitPrepared(GasTopologyPlan plan,long[] occupied) {

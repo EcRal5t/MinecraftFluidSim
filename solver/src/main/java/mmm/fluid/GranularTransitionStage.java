@@ -7,41 +7,18 @@ import mmm.granular.GranularParcelStore;
 
 /** Performs active compaction followed by deposit settlement/relaxation/wake transitions. */
 final class GranularTransitionStage {
-	record Workspace(FluidSolverConfig config) { }
-	record Outcome(GranularDepositDynamics.Stats depositStats, FluidDomain.LiquidTransportStats liquidTransport) { }
-
-	interface Access {
-		long[] beginGeometryTransition();
-		FluidDomain.LiquidTransportStats commitGeometryTransition(long[] previous);
-		GranularDomainState granularState();
-		GranularCouplingFields coupling();
-		GranularDepositDynamics depositDynamics();
-		boolean hasInventory();
-		int parcelCell(GranularParcelStore.Parcel parcel);
-		boolean planMerge(
-				long[] planned, GranularParcelStore.Parcel first,
-				GranularParcelStore.Parcel second, GranularParcelStore.Parcel merged);
-		float mergeVelocityDelta();
-		GranularDepositDynamics.Environment depositEnvironment(long[] plannedSolid);
-		boolean occupancyFitsGeometry(GranularCouplingFields coupling);
-		void pressureCoupling(GranularCouplingFields coupling);
-	}
+	record Outcome(GranularDepositDynamics.Stats depositStats) { }
 
 	private static final GranularDepositDynamics.Stats EMPTY_STATS =
 			new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
 
-	private final Workspace state;
-	private final Access access;
-
-	GranularTransitionStage(Workspace state, Access access) {
-		this.state = state;
-		this.access = access;
-	}
+	private final FluidDomain domain;
+	GranularTransitionStage(FluidDomain domain) { this.domain = domain; }
 
 	Outcome step() {
-		long[] previousSolid = access.beginGeometryTransition();
-		GranularDomainState granular = access.granularState();
-		GranularCouplingFields coupling = access.coupling();
+		long[] previousSolid = GranularLiquidDisplacement.begin(domain);
+		GranularDomainState granular = domain.granularState;
+		GranularCouplingFields coupling = domain.granularCoupling;
 		var compaction = new mmm.granular.GranularInventory.CompactionStats(0, 0);
 		if (granular != null && granular.parcels.count() > 1) {
 			coupling.rebuild(granular.parcels, granular.deposits);
@@ -52,48 +29,49 @@ final class GranularTransitionStage {
 			// Charge the source capture and bound every pair visit plus its full future-sphere scan.
 			int candidateBudget = (GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP - count) / (count + 1);
 			compaction = granular.inventory.compactActive(
-					index -> access.parcelCell(granular.parcels.parcel(index)),
+					index -> domain.domainStep.granularParcelCell(granular.parcels.parcel(index)),
 					(firstIndex, secondIndex, first, second, merged) -> {
 						if (!mergeFitsActiveSpheres(future, firstIndex, secondIndex, merged)
-								|| !access.planMerge(compactedSolid, first, second, merged)) return false;
+								|| !domain.domainStep.planGranularMerge(compactedSolid, first, second, merged)) return false;
 						future[firstIndex] = merged; future[secondIndex] = null;
 						return true;
-					}, access.mergeVelocityDelta(), candidateBudget, state.config().gravity());
+					}, domain.domainStep.granularMergeVelocityDelta(), candidateBudget, domain.config.gravity());
 			coupling.rebuild(granular.parcels, granular.deposits);
 			if (!coupling.matchesSolidSvq(compactedSolid)) {
 				throw new IllegalStateException("Granular active compaction differs from its exact occupancy plan");
 			}
 		}
-		GranularDepositDynamics dynamics = access.depositDynamics();
-		if (dynamics == null) return new Outcome(EMPTY_STATS.withCompaction(compaction), FluidDomain.LiquidTransportStats.INACTIVE);
+		GranularDepositDynamics dynamics = domain.granularDepositDynamics;
+		if (dynamics == null) return new Outcome(EMPTY_STATS.withCompaction(compaction));
 		long[] dynamicsSolid = null;
 		GranularDepositDynamics.Stats stats;
-		if (access.hasInventory() || dynamics.dirtyColumnCount() != 0) {
+		if (domain.domainPhaseInventory.hasGranularInventory() || dynamics.dirtyColumnCount() != 0) {
 			coupling.rebuild(granular.parcels, granular.deposits);
 			dynamicsSolid = coupling.copySolidSvq();
-			stats = dynamics.step(access.depositEnvironment(dynamicsSolid), state.config().timeStep());
+			stats = dynamics.step(domain.domainStep.granularDepositEnvironment(dynamicsSolid), domain.config.timeStep());
 		} else {
 			stats = EMPTY_STATS;
 		}
-		if (access.hasInventory()) {
+		if (domain.domainPhaseInventory.hasGranularInventory()) {
 			coupling.rebuild(granular.parcels, granular.deposits);
 			if (!coupling.matchesSolidSvq(dynamicsSolid)) {
 				throw new IllegalStateException("Granular deposit transition differs from its exact occupancy plan");
 			}
-			if (!access.occupancyFitsGeometry(coupling)) {
+			if (!domain.domainStep.granularOccupancyFitsGeometry(coupling)) {
 				throw new IllegalStateException("Granular deposit transition exceeds geometry");
 			}
-			access.pressureCoupling(coupling);
+			domain.pressureGranularCoupling = coupling;
 		} else {
 			coupling.clear();
-			access.pressureCoupling(null);
+			domain.pressureGranularCoupling = null;
 		}
-		return new Outcome(stats.withCompaction(compaction), access.commitGeometryTransition(previousSolid));
+		GranularLiquidDisplacement.commit(domain, previousSolid);
+		return new Outcome(stats.withCompaction(compaction));
 	}
 
 	private boolean mergeFitsActiveSpheres(GranularParcelStore.Parcel[] future, int first, int second,
 	                                      GranularParcelStore.Parcel merged) {
-		float h = state.config().cellSize();
+		float h = domain.config.cellSize();
 		float radius = mmm.granular.GranularMechanics.representativeRadius(merged.solidVolumeSvq(), h);
 		for (int i = 0; i < future.length; i++) {
 			var other = future[i]; if (i == first || i == second || other == null) continue;

@@ -35,8 +35,9 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 		FluidDomain.VolumeAddition second = domain.addVolumeNearBudgeted(3, 3, 5, 112.0F, 6);
 		require(second.addedVolume() == 112.0F && !second.markerBudgetLimited(),
 				"gas-free control did not inject the second 14 m³ source: " + second);
-		double expectedVolume = domain.totalVolumeExact();
-		double expectedMass = domain.totalMass();
+		var expectedVolume=domain.exportLiquidCellState().stocks().stream().map(mmm.inventory.LiquidCellInventory.Stock::volume)
+				.reduce(mmm.units.SignedDyadic.ZERO, mmm.units.SignedDyadic::add);
+		long expectedMass=domain.totalMassUnits();
 		double maximumKinetic = 0.0, tailMaximumKinetic = 0.0, finalKinetic = 0.0;
 		double initialMechanicalEnergy = Double.NaN, maximumMechanicalEnergy = 0.0;
 		FluidDomain.MechanicalStepAudit maximumMechanicalAudit = null;
@@ -44,8 +45,6 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 		float maximumMechanicalPressure = 0.0F;
 		FluidDomain.VolumeDistribution maximumMechanicalDistribution = null;
 		double cumulativePressureWork = 0.0;
-		double reportedVolumeChange = 0.0, reportedMassChange = 0.0;
-		long reseededMerges = 0;
 		state = domain.captureAuthoritativeState();
 		for (int step = 0; step < 1_000; step++) {
 			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
@@ -65,26 +64,13 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 				maximumMechanicalDistribution = domain.volumeDistribution(8.0F / 255.0F);
 			}
 			cumulativePressureWork += audit.pressureProjectionWorkJoules();
-			reportedVolumeChange += stats.reseedLedgerError();
-			reportedMassChange += stats.reseedMassLedgerError();
-			reseededMerges += stats.reseededMerges();
 			maximumKinetic = Math.max(maximumKinetic, finalKinetic);
 			if (step >= 800) tailMaximumKinetic = Math.max(tailMaximumKinetic, finalKinetic);
 			state = candidate.state();
 		}
-		double volumeChange = domain.totalVolumeExact() - expectedVolume;
-		double massChange = domain.totalMass() - expectedMass;
-		double volumeRoundoff = floatingPointOperationBound(expectedVolume, reseededMerges, 24);
-		double massRoundoff = floatingPointOperationBound(expectedMass, reseededMerges, 53);
-		double reconciliationRoundoff = floatingPointOperationBound(
-				Math.max(Math.abs(volumeChange), Math.abs(reportedVolumeChange)), 1_000, 53);
-		require(Math.abs(volumeChange) <= volumeRoundoff && Math.abs(massChange) <= massRoundoff
-				&& Math.abs(volumeChange - reportedVolumeChange) <= reconciliationRoundoff
-				&& Math.abs(massChange - reportedMassChange) <= massRoundoff,
-				"reported two-pour replay exceeded or bypassed its floating-point reseed ledger: volume="
-						+ volumeChange + " (reported " + reportedVolumeChange + ", bound " + volumeRoundoff
-						+ "), mass=" + massChange + " (reported " + reportedMassChange + ", bound "
-						+ massRoundoff + "), merges=" + reseededMerges);
+		require(domain.exportLiquidCellState().stocks().stream().map(mmm.inventory.LiquidCellInventory.Stock::volume)
+				.reduce(mmm.units.SignedDyadic.ZERO, mmm.units.SignedDyadic::add).equals(expectedVolume)&&domain.totalMassUnits()==expectedMass,
+				"Two-pour replay changed exact liquid volume or integer mass inventory");
 		require(cumulativePressureWork < 0.0,
 				"reported two-pour pressure projection injected net kinetic energy: "
 						+ cumulativePressureWork + " J");

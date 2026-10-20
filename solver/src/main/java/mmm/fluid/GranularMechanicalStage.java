@@ -2,44 +2,23 @@ package mmm.fluid;
 
 import mmm.granular.GranularMechanics;
 import mmm.granular.SolidVolume;
-import mmm.granular.GranularCouplingFields;
-import mmm.units.SolverUnitScale;
 
 /** Moves the jointly pressure-projected solid velocity through the collision-resolved position endpoint. */
 final class GranularMechanicalStage {
-	record Workspace(
-			FluidSolverConfig config, DomainGeometry geometry, MarkerGridIndex markerGrid,
-			MacVelocityGrid mac, SolverUnitScale unitScale, int sizeX, int sizeY, int sizeZ
-	) { }
-
-	interface Access {
-		boolean hasGranularInventory();
-		GranularDomainState granularState();
-		FlipGranularCollision granularCollision();
-		GranularCouplingFields granularCoupling();
-		GranularCouplingFields granularNextCoupling();
-		void addBoundaryImpulse(FlipGranularCollision.BoundaryImpulse impulse);
-		boolean granularOccupancyFitsGeometry(GranularCouplingFields coupling);
-		/** Derived per-cell liquid carrier properties for the current revision. */
-		LiquidCarrierProperties liquidCarrierProperties();
-		boolean granularCarrierFaceActive(int axis, int x, int y, int z);
-		float effectiveOpenCellVolume(int cell);
-		float trilinearWeight(int ox, int oy, int oz, float fx, float fy, float fz);
-	}
-
-	private final Workspace state;
-	private final Access access;
+	private final FluidDomain domain;
 	private boolean collisionPending;
+	GranularMechanicalStage(FluidDomain domain) { this.domain = domain; }
 
-	GranularMechanicalStage(Workspace state, Access access) {
-		this.state = state;
-		this.access = access;
+	private void addBoundaryImpulse(FlipGranularCollision.BoundaryImpulse impulse) {
+		domain.lastGranularBoundaryImpulseX += impulse.x();
+		domain.lastGranularBoundaryImpulseY += impulse.y();
+		domain.lastGranularBoundaryImpulseZ += impulse.z();
 	}
 
 	GranularMechanics.StepStats predictVelocities(float dt) {
 		collisionPending = false;
-		if (!access.hasGranularInventory()) return null;
-		var granular = access.granularState();
+		if (!domain.domainPhaseInventory.hasGranularInventory()) return null;
+		var granular = domain.granularState;
 		int submerged = 0;
 		for (int index = 0; index < granular.parcels.count(); index++) {
 			var p = granular.parcels.parcel(index);
@@ -49,7 +28,7 @@ final class GranularMechanicalStage {
 		double maximum = 0, roundingY = 0;
 		for (int index = 0; index < granular.parcels.count(); index++) {
 			var p = granular.parcels.parcel(index);
-			double predictedY = p.velocityY() - state.config.gravity() * (double) dt;
+			double predictedY = p.velocityY() - domain.config.gravity() * (double) dt;
 			float vy = (float) predictedY;
 			roundingY += p.mass() * (predictedY - vy);
 			granular.parcels.overwrite(index, new mmm.granular.GranularParcelStore.Parcel(
@@ -63,8 +42,8 @@ final class GranularMechanicalStage {
 
 	/** Checks the material carrier range at the committed candidate velocity. */
 	void validateVelocities() {
-		if (!access.hasGranularInventory()) return;
-		var granular = access.granularState();
+		if (!domain.domainPhaseInventory.hasGranularInventory()) return;
+		var granular = domain.granularState;
 		for (int index = 0; index < granular.parcels.count(); index++) {
 			var p = granular.parcels.parcel(index);
 			GranularMechanics.validateCarrierRange(p, granular.registry.material(p.materialHandle()),
@@ -74,18 +53,18 @@ final class GranularMechanicalStage {
 
 	void previewCollision(float dt) {
 		collisionPending = false;
-		if (!access.hasGranularInventory()) return;
-		GranularDomainState state = access.granularState();
+		if (!domain.domainPhaseInventory.hasGranularInventory()) return;
+		GranularDomainState state = domain.granularState;
 		// Both phases have received the same pressure projection before this drift.
-		access.granularCollision().preview(state.parcels, state.registry, dt);
-		access.granularNextCoupling().rebuild(state.parcels, state.deposits,
-				access.granularCollision()::previewPosition);
-		if (!access.granularOccupancyFitsGeometry(access.granularNextCoupling())) {
-			access.granularCollision().resolveCapacity(state.parcels, access.granularCoupling(),
-					cell -> SolidVolume.fromCellVolumeExact(this.state.geometry.cutCells.openCellVolume(cell)));
-				access.granularNextCoupling().rebuild(state.parcels, state.deposits,
-					access.granularCollision()::previewPosition);
-			if (!access.granularOccupancyFitsGeometry(access.granularNextCoupling())) {
+		domain.granularCollision.preview(state.parcels, state.registry, dt);
+		domain.granularNextCoupling.rebuild(state.parcels, state.deposits,
+				domain.granularCollision::previewPosition);
+		if (!domain.domainStep.granularOccupancyFitsGeometry(domain.granularNextCoupling)) {
+			domain.granularCollision.resolveCapacity(state.parcels, domain.granularCoupling,
+					cell -> SolidVolume.fromCellVolumeExact(domain.geometry.cutCells.openCellVolume(cell)));
+				domain.granularNextCoupling.rebuild(state.parcels, state.deposits,
+					domain.granularCollision::previewPosition);
+			if (!domain.domainStep.granularOccupancyFitsGeometry(domain.granularNextCoupling)) {
 				throw new IllegalStateException("Locally resolved granular occupancy exceeds geometry");
 			}
 		}
@@ -94,7 +73,7 @@ final class GranularMechanicalStage {
 
 	boolean collisionPending(){return collisionPending;}
 	void publishCollisionVelocities(){
-		if(collisionPending)access.addBoundaryImpulse(access.granularCollision().publishVelocities(access.granularState().parcels));
+		if(collisionPending)addBoundaryImpulse(domain.granularCollision.publishVelocities(domain.granularState.parcels));
 	}
 
 	/** Publishes the preview once, with the occupancy used by the joint liquid/gas candidate. */
@@ -104,9 +83,9 @@ final class GranularMechanicalStage {
 
 	void commitCollision() {
 		if (!collisionPending) return;
-		var granular = access.granularState();
-		access.addBoundaryImpulse(access.granularCollision().commit(granular.parcels));
-		access.granularCoupling().copyFrom(access.granularNextCoupling());
+		var granular = domain.granularState;
+		addBoundaryImpulse(domain.granularCollision.commit(granular.parcels));
+		domain.granularCoupling.copyFrom(domain.granularNextCoupling);
 		collisionPending = false;
 	}
 
@@ -116,9 +95,9 @@ final class GranularMechanicalStage {
 			return new GranularMechanics.FluidSample(false, 0, 0, 0, LiquidCarrierProperties.AIR_DENSITY,
 					LiquidCarrierProperties.AIR_VISCOSITY, LiquidCarrierProperties.AIR_MAXIMUM_REYNOLDS, 0, 0, 0, 0);
 		}
-		CarrierKernel xKernel = sampleCarrier(state.mac.velocityX, state.mac.p2gWeightX, 0, x, y, z);
-		CarrierKernel yKernel = sampleCarrier(state.mac.velocityY, state.mac.p2gWeightY, 1, x, y, z);
-		CarrierKernel zKernel = sampleCarrier(state.mac.velocityZ, state.mac.p2gWeightZ, 2, x, y, z);
+		CarrierKernel xKernel = sampleCarrier(domain.mac.velocityX, domain.mac.faceMassX, 0, x, y, z);
+		CarrierKernel yKernel = sampleCarrier(domain.mac.velocityY, domain.mac.faceMassY, 1, x, y, z);
+		CarrierKernel zKernel = sampleCarrier(domain.mac.velocityZ, domain.mac.faceMassZ, 2, x, y, z);
 		return new GranularMechanics.FluidSample(true, xKernel.velocity(), yKernel.velocity(), zKernel.velocity(),
 				properties.density(), properties.viscosity(), properties.maximumReynolds(), properties.submerged(),
 				xKernel.mass(), yKernel.mass(), zKernel.mass());
@@ -129,21 +108,21 @@ final class GranularMechanicalStage {
 
 	/** Wet support follows the parcel's continuous volume footprint across cell and liquid interfaces. */
 	private CarrierProperties carrierProperties(float px, float py, float pz) {
-		LiquidCarrierProperties properties = access.liquidCarrierProperties();
-		double h = state.config.cellSize();
+		LiquidCarrierProperties properties = domain.domainPhaseInventory.derivedCarrierState();
+		double h = domain.config.cellSize();
 		double x = px / h - 0.5, y = py / h - 0.5, z = pz / h - 0.5;
 		int x0 = (int) Math.floor(x), y0 = (int) Math.floor(y), z0 = (int) Math.floor(z);
 		double fx = x - x0, fy = y - y0, fz = z - z0;
 		double support = 0, wet = 0, density = 0, viscosity = 0, maximumSlipDiameter = Double.POSITIVE_INFINITY;
 		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
 			int cx = x0 + ox, cy = y0 + oy, cz = z0 + oz;
-			if (cx < 0 || cx >= state.sizeX || cy < 0 || cy >= state.sizeY || cz < 0 || cz >= state.sizeZ) continue;
+			if (cx < 0 || cx >= domain.sizeX || cy < 0 || cy >= domain.sizeY || cz < 0 || cz >= domain.sizeZ) continue;
 			double weight = (ox == 0 ? 1 - fx : fx) * (oy == 0 ? 1 - fy : fy) * (oz == 0 ? 1 - fz : fz);
 			support += weight;
-			int cell = (cz * state.sizeY + cy) * state.sizeX + cx;
-			double capacity = access.effectiveOpenCellVolume(cell);
+			int cell = (cz * domain.sizeY + cy) * domain.sizeX + cx;
+			double capacity = domain.domainCollision.effectiveOpenCellVolume(cell);
 			if (weight <= 0 || capacity <= 0 || !properties.hasLiquid(cell)) continue;
-			double portion = weight * Math.min(1.0, state.markerGrid.exactCellMarkerVolume[cell] / capacity);
+			double portion = weight * Math.min(1.0, domain.liquidGrid.cellStockVolume[cell] / capacity);
 			double cellViscosity = properties.viscosityPascalSeconds(cell);
 			double cellDensity = properties.density(cell);
 			wet += portion;
@@ -163,10 +142,10 @@ final class GranularMechanicalStage {
 	private CarrierKernel sampleCarrier(
 			float[] field, double[] faceMass, int axis, float px, float py, float pz
 	) {
-		float h = state.config.cellSize();
-		int nx = axis == 0 ? state.sizeX + 1 : state.sizeX;
-		int ny = axis == 1 ? state.sizeY + 1 : state.sizeY;
-		int nz = axis == 2 ? state.sizeZ + 1 : state.sizeZ;
+		float h = domain.config.cellSize();
+		int nx = axis == 0 ? domain.sizeX + 1 : domain.sizeX;
+		int ny = axis == 1 ? domain.sizeY + 1 : domain.sizeY;
+		int nz = axis == 2 ? domain.sizeZ + 1 : domain.sizeZ;
 		float gx = px / h - (axis == 0 ? 0.0F : 0.5F);
 		float gy = py / h - (axis == 1 ? 0.0F : 0.5F);
 		float gz = pz / h - (axis == 2 ? 0.0F : 0.5F);
@@ -177,15 +156,15 @@ final class GranularMechanicalStage {
 			int x = x0 + ox, y = y0 + oy, z = z0 + oz;
 			if (x < 0 || x >= nx || y < 0 || y >= ny || z < 0 || z >= nz) continue;
 			int face = (z * ny + y) * nx + x;
-			if (!(faceMass[face] > 0.0F) || !access.granularCarrierFaceActive(axis, x, y, z)) continue;
-			double weight = access.trilinearWeight(ox, oy, oz, fx, fy, fz);
+			if (!(faceMass[face] > 0.0F) || !domain.domainFlowFields.granularCarrierFaceActive(axis, x, y, z)) continue;
+			double weight = domain.trilinearWeight(ox, oy, oz, fx, fy, fz);
 			double massWeight = weight * faceMass[face];
 			weightedVelocity += massWeight * field[face];
 			weightedMass += massWeight;
 			squaredWeightMass += massWeight * weight;
 		}
 		return weightedMass > 0.0 ? new CarrierKernel(weightedVelocity / weightedMass,
-				state.unitScale.kilograms(weightedMass * weightedMass / squaredWeightMass)) : new CarrierKernel(0.0, 0.0);
+				domain.unitScale.kilograms(weightedMass * weightedMass / squaredWeightMass)) : new CarrierKernel(0.0, 0.0);
 	}
 
 

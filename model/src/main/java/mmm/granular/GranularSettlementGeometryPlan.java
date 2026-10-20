@@ -11,22 +11,20 @@ final class GranularSettlementGeometryPlan {
 	private final GranularParcelStore parcels;
 	private final GranularDepositStore deposits;
 	private final GranularBedAdmission admission;
-	private final int[] members;
-	private final int[] targets;
-	private final long[] open;
-	private final boolean[] included;
+	private int[] members = new int[0], targets = new int[0];
+	private long[] open = new long[0];
+	private boolean[] included = new boolean[0];
 	private final TreeMap<Integer, Target> packing = new TreeMap<>();
 	private int count;
 	private record Target(int cell, long open, GranularDepositStore.AdditionPacking packing) { }
 
 	GranularSettlementGeometryPlan(GranularInventory inventory, GranularParcelStore parcels, GranularDepositStore deposits,
-	                              GranularBedAdmission admission, int capacity) {
+	                              GranularBedAdmission admission) {
 		this.inventory = inventory; this.parcels = parcels; this.deposits = deposits; this.admission = admission;
-		members = new int[capacity]; included = new boolean[capacity];
-		targets = new int[capacity]; open = new long[capacity];
 	}
 
 	GranularInventory.SettlementPlan find(int seed, int cell, IntUnaryOperator legalTarget, IntToLongFunction geometricOpen) {
+		ensureCapacity(parcels.count());
 		long parcelRevision = parcels.mutationRevision(); count = 0;
 		try {
 			if (!include(seed, cell, geometricOpen)) return null;
@@ -53,6 +51,11 @@ final class GranularSettlementGeometryPlan {
 			for (int index = 0; index < count; index++) included[members[index]] = false;
 			packing.clear();
 		}
+	}
+	private void ensureCapacity(int required){
+		if(required<=members.length)return;
+		int grown=Math.min(parcels.capacity(),Math.max(required,members.length+Math.max(16,members.length/2)));
+		members=new int[grown];targets=new int[grown];open=new long[grown];included=new boolean[grown];
 	}
 	long bulkVolumeAfterAdd(int cell, GranularDepositStore.SolidPortion portion) {
 		var target = packing.get(cell);

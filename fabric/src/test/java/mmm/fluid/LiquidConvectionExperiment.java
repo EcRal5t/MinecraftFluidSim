@@ -8,7 +8,7 @@ import java.util.List;
 /** Registry-derived free-slip Rayleigh growth and complete transport ledgers on two meshes. */
 public final class LiquidConvectionExperiment {
 	private static final double DELTA_T = 10, T_REF = 293.15, DIFFUSION_RATE = 0.01;
-	private record Measurement(double rayleigh, double prandtl, double growth, double viscous, double p2g, double g2p) { }
+	private record Measurement(double rayleigh,double prandtl,double growth,double viscous) { }
 	private LiquidConvectionExperiment() { }
 
 	public static void main(String[] args) {
@@ -24,7 +24,7 @@ public final class LiquidConvectionExperiment {
 				System.out.printf("Convection N=%d Ra=%.6f Ra/Rac=%.2f Pr=%.6f A=%.4f K normalizedGrowth=%.6f predicted=%.6f%n",
 						grid, actual.rayleigh(), actual.rayleigh() / critical, actual.prandtl(), amplitude, actual.growth(),
 						-q2 + Math.sqrt(actual.rayleigh() * a * a / q2));
-				System.out.printf("  mechanical energy: viscous=%g P2G=%g G2P=%g J%n", actual.viscous(), actual.p2g(), actual.g2p());
+				System.out.printf("  mechanical energy: viscous=%g J%n",actual.viscous());
 				if (verifyGrowth && actual.growth() * predicted <= 0) throw new AssertionError("Rayleigh mode has the wrong growth sign");
 				if (verifyGrowth && Double.isFinite(firstGrowth) && Math.abs(actual.growth() - firstGrowth) > 0.03 * Math.abs(firstGrowth))
 					throw new AssertionError("Convection amplitudes left the declared 3% linear-response domain");
@@ -50,7 +50,7 @@ public final class LiquidConvectionExperiment {
 		var baseline = BuiltinFluidMaterials.createRegistry();
 		var expansion = baseline.entry(water.id()).thermalExpansion();
 		double gravity = ra * kappa * kappa / (expansion.volumetricCoefficientPerK() * DELTA_T * height * height * height);
-		var config = new FluidSolverConfig(0.5F, 1000, (float) gravity, 0.05F, 1200, 1e-7F, 0.4F, 0.002F, 0);
+		var config = new FluidSolverConfig(0.5F, 1000, (float) gravity, 0.05F, 1200, 1e-7F, 0.002F, 0);
 		var domain = new FluidDomain(2 * n, n, 2, config, 2 * n * n * 2 * 16);
 		var liquids = new FluidMaterialRegistry(List.of(water));domain.bindMaterialRegistry(liquids);
 		float[] filled=new float[domain.cellCount];Arrays.fill(filled,1);domain.setVolumes(filled);
@@ -73,13 +73,13 @@ public final class LiquidConvectionExperiment {
 		double[] boundary = new double[domain.cellCount * 6];
 		Arrays.fill(boundary, Double.NaN);
 		for (int z = 0; z < 2; z++) for (int y = 0; y < n; y++) for (int x = 0; x < 2 * n; x++) {
-			int cell = domain.cellIndex(x, y, z);
+			int cell = domain.domainFlowFields.cellIndex(x, y, z);
 			if (y == 0) boundary[6 * cell + 2] = T_REF + DELTA_T / 2;
 			if (y == n - 1) boundary[6 * cell + 3] = T_REF - DELTA_T / 2;
 		}
 		domain.replaceThermalBoundaryTemperatures(boundary);
 		// Initialize the actual carrier field, including its stationary affine conduction profile.
-		var context = domain.thermalMarkerContext();
+		var context = domain.domainCapabilities.thermalMarkerContext();
 		var energyBefore = domain.exactInternalEnergy();
 		double[] energy = domain.exportThermalParticleState().copyInternalEnergy();
 		for (int p = 0; p < domain.particleCount(); p++) {
@@ -92,16 +92,16 @@ public final class LiquidConvectionExperiment {
 		domain.thermalState.restoreAuditLedger(domain.thermalAudit().withHeatExchange(domain.exactInternalEnergy().subtract(energyBefore)));
 		double q2 = 1.25 * Math.PI * Math.PI;
 		double velocity = kappa / height * (growth + q2) * amplitude / DELTA_T;
-		domain.ensureGrid();double h=domain.config.cellSize();
+		domain.domainFlowFields.ensureGrid();double h=domain.config.cellSize();
 		for(int z=0;z<2;z++)for(int y=0;y<n;y++)for(int x=0;x<=2*n;x++)
-			domain.mac.velocityX[domain.xFaceIndex(x,y,z)]=(float)(-2*velocity*Math.sin(Math.PI*x*h/(2*height))*Math.cos(Math.PI*(y+.5)*h/height));
+			domain.mac.velocityX[domain.domainFlowFields.xFaceIndex(x,y,z)]=(float)(-2*velocity*Math.sin(Math.PI*x*h/(2*height))*Math.cos(Math.PI*(y+.5)*h/height));
 		for(int z=0;z<2;z++)for(int y=0;y<=n;y++)for(int x=0;x<2*n;x++)
-			domain.mac.velocityY[domain.yFaceIndex(x,y,z)]=(float)(velocity*Math.cos(Math.PI*(x+.5)*h/(2*height))*Math.sin(Math.PI*y*h/height));
+			domain.mac.velocityY[domain.domainFlowFields.yFaceIndex(x,y,z)]=(float)(velocity*Math.cos(Math.PI*(x+.5)*h/(2*height))*Math.sin(Math.PI*y*h/height));
 		domain.bodyForceStage.enforceSolidFaceVelocities();domain.cellMacStage.publishMomentum();
 		var volumeBefore = domain.liquidCells.exactVolume();
 		long massBefore = domain.liquidCells.massUnits();
 		long[] speciesBefore = LiquidStratificationValidation.speciesTotals(domain);
-		double first = Double.NaN, last = Double.NaN, viscous = 0, p2g = 0, g2p = 0;
+		double first=Double.NaN,last=Double.NaN,viscous=0;
 		for (int step = 0; step < 100; step++) {
 			var stepEnergyBefore = domain.exactInternalEnergy();
 			var auditBefore = domain.thermalAudit();
@@ -109,8 +109,6 @@ public final class LiquidConvectionExperiment {
 			domain = candidate.claimPreparedCpuDomain();
 			var stats = candidate.stats();
 			viscous += stats.viscosity().dissipatedJoules();
-			p2g += stats.mechanicalAudit().particleToGridTransferJoules();
-			g2p += stats.mechanicalAudit().gridToParticleTransferJoules();
 			if (!domain.liquidCells.exactVolume().equals(volumeBefore) || domain.liquidCells.massUnits() != massBefore
 					|| !Arrays.equals(speciesBefore, LiquidStratificationValidation.speciesTotals(domain))
 					|| !domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
@@ -129,7 +127,7 @@ public final class LiquidConvectionExperiment {
 			if (step == 19) first = last;
 		}
 		return new Measurement(actualRa, nu / alpha,
-				Math.log(Math.abs(last / first)) / (80 * config.timeStep() * alpha / (height * height)), viscous, p2g, g2p);
+				Math.log(Math.abs(last / first)) / (80 * config.timeStep() * alpha / (height * height)),viscous);
 	}
 
 	private static FluidStepCandidate advance(FluidDomain domain) {
@@ -144,7 +142,7 @@ public final class LiquidConvectionExperiment {
 			int cell=domain.liquidCells.physicalStockAt(p).key().cell();
 			double x=(cell%domain.sizeX+.5)*domain.config.cellSize()/height,y=(cell/domain.sizeX%domain.sizeY+.5)*domain.config.cellSize()/height;
 			double mode = Math.cos(Math.PI * x / 2) * Math.sin(Math.PI * y);
-			double temperature = domain.thermalState.temperature(p, domain.thermalMarkerContext());
+			double temperature = domain.thermalState.temperature(p, domain.domainCapabilities.thermalMarkerContext());
 			double volume = domain.liquidCells.physicalStockAt(p).volumeFraction();
 			sum += volume * mode * (temperature - T_REF - DELTA_T * (0.5 - y));
 			norm += volume * mode * mode;

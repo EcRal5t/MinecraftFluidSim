@@ -24,7 +24,7 @@ final class LiquidInitialInput {
 		float h = domain.config.cellSize();
 		for (int p = 0; p < input.particleCount(); p++) {
 			int x = (int) Math.floor(points[4 * p] / h), y = (int) Math.floor(points[4 * p + 1] / h), z = (int) Math.floor(points[4 * p + 2] / h);
-			int cell = domain.cellIndex(x, y, z);
+			int cell = domain.domainFlowFields.cellIndex(x, y, z);
 			int support = CellRemapMicroTopology.positionSupport(Byte.toUnsignedInt(masks[cell]), h, points[4 * p], points[4 * p + 1], points[4 * p + 2]);
 			int material = materials == null ? 0 : materials[p];
 			if (palette != null) palette.material(material);
@@ -32,21 +32,23 @@ final class LiquidInitialInput {
 					SignedDyadic.of(points[4 * p + 3]), masses[p], mixtures == null ? null : mixtures.get(p), 0,
 					indicated != null && indicated[p] != 0));
 			double halfMass = .5 * mmm.units.Mass.kilograms(masses[p]);
-			momentum[0][domain.xFaceIndex(x, y, z)] += halfMass * velocity[3 * p];
-			momentum[0][domain.xFaceIndex(x + 1, y, z)] += halfMass * velocity[3 * p];
-			momentum[1][domain.yFaceIndex(x, y, z)] += halfMass * velocity[3 * p + 1];
-			momentum[1][domain.yFaceIndex(x, y + 1, z)] += halfMass * velocity[3 * p + 1];
-			momentum[2][domain.zFaceIndex(x, y, z)] += halfMass * velocity[3 * p + 2];
-			momentum[2][domain.zFaceIndex(x, y, z + 1)] += halfMass * velocity[3 * p + 2];
+			momentum[0][domain.domainFlowFields.xFaceIndex(x, y, z)] += halfMass * velocity[3 * p];
+			momentum[0][domain.domainFlowFields.xFaceIndex(x + 1, y, z)] += halfMass * velocity[3 * p];
+			momentum[1][domain.domainFlowFields.yFaceIndex(x, y, z)] += halfMass * velocity[3 * p + 1];
+			momentum[1][domain.domainFlowFields.yFaceIndex(x, y + 1, z)] += halfMass * velocity[3 * p + 1];
+			momentum[2][domain.domainFlowFields.zFaceIndex(x, y, z)] += halfMass * velocity[3 * p + 2];
+			momentum[2][domain.domainFlowFields.zFaceIndex(x, y, z + 1)] += halfMass * velocity[3 * p + 2];
 		}
 		inventory.planAdditions(additions).commit();
+		var constrained=domain.cellMacStage.prepareMomentumInput(momentum,inventory,masks);
+		inventory.planEdits(List.of()).withMechanicalHeat(constrained.heatByCell()).commit();
 		// All input validation precedes publication of the new owners.
-		domain.clearThermalBinding();
+		domain.domainCapabilities.clearThermalBinding();
 		domain.geometry.cutCells.restoreMicroMasks(masks);
 		for (int cell = 0; cell < masks.length; cell++) domain.geometry.solid[cell] = Byte.toUnsignedInt(masks[cell]) == 255;
 		domain.liquidCells = inventory; domain.materialRegistry = palette;
         domain.phaseOccupancy = null;
-		domain.mac.restoreMomentum(new MacMomentumState(domain.sizeX, domain.sizeY, domain.sizeZ, momentum[0], momentum[1], momentum[2]));
+		domain.cellMacStage.commitMomentum(constrained);
 		domain.markCellInventoryChanged();
 	}
 }

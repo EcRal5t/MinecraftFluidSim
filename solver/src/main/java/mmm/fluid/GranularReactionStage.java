@@ -76,7 +76,7 @@ final class GranularReactionStage {
     // Filter before allocating any private solid, momentum or caloric candidate.
     var solidCells = new TreeSet<Integer>();
     for (int index = 0; index < domain.granularState.parcels.count(); index++)
-      solidCells.add(domain.granularParcelCell(domain.granularState.parcels.parcel(index)));
+      solidCells.add(domain.domainStep.granularParcelCell(domain.granularState.parcels.parcel(index)));
     domain.granularState.deposits.forEachGroup((cell, porosity, material, composition, volume, mass) -> solidCells.add(cell));
     var participating = new TreeSet<Integer>();
     for (int cell : dirtyCells) {
@@ -90,7 +90,7 @@ final class GranularReactionStage {
       }
     }
     if (participating.isEmpty()) return new FluidDomain.PhaseTransferStats(0, 0, 0, 0);
-    domain.ensureGrid();
+    domain.domainFlowFields.ensureGrid();
     int transfers = 0, precipitated = 0, dissolved = 0, evaluations = 0;
     long signedVolume = 0;
     for (int cell : participating) {
@@ -132,13 +132,13 @@ final class GranularReactionStage {
                   / rule.solidVolumeSvqPerBatch()
                   * rule.solidExtentPerBatch();
           if (cap == 0) continue;
-          var plan = domain.granularPhaseTransfer().plan(rule, portions, existing, cap);
+          var plan = domain.domainPhaseInventory.granularPhaseTransfer().plan(rule, portions, existing, cap);
           if (plan.changed()
               && !plan.precipitation()
               && -plan.signedExtent() > accessible.selected().extent())
             plan =
                 domain
-                    .granularPhaseTransfer()
+                    .domainPhaseInventory.granularPhaseTransfer()
                     .plan(rule, portions, existing, Math.min(cap, accessible.selected().extent()));
           if (!plan.changed()) {
             if (plan.retryRequired()) domain.chemicalParcels.markDirtyCell(cell);
@@ -148,7 +148,7 @@ final class GranularReactionStage {
           long thermalCap = energyLimitedExtent(cell, rule, plan);
           if (thermalCap < Math.abs(plan.signedExtent())) {
             if (thermalCap == 0) { domain.chemicalParcels.markDirtyCell(cell); continue; }
-            plan = domain.granularPhaseTransfer().plan(rule, portions, existing, thermalCap);
+            plan = domain.domainPhaseInventory.granularPhaseTransfer().plan(rule, portions, existing, thermalCap);
             if (!plan.changed()) continue;
           }
           if (plan.precipitation()) precipitate(cell, support, rule, plan);
@@ -184,7 +184,7 @@ final class GranularReactionStage {
     increase += Math.abs(plan.signedSolidMass()) * domain.config.gravity() * domain.config.cellSize() * .5;
     if (increase <= 0) return extent;
     var inventory = candidate.energyOwners(cell).stream().map(Candidate.EnergyOwner::portion).toList();
-    var current = thermal.preparePhaseCandidateCell(cell, domain.thermalMarkerContext());
+    var current = thermal.preparePhaseCandidateCell(cell, domain.domainCapabilities.thermalMarkerContext());
     var available = current.cellEnergy().add(candidate.heatByCell.getOrDefault(cell, SignedDyadic.ZERO))
         .subtract(SignedDyadic.of(function.inventoryEnergyAtTemperature(inventory, cold)));
     long batches = Math.min(extent / rule.solidExtentPerBatch(),
@@ -237,7 +237,7 @@ final class GranularReactionStage {
       for (int i = 0; i < parcels().count(); i++)
         activeByCell
             .computeIfAbsent(
-                domain.granularParcelCell(parcels().parcel(i)), ignored -> new ArrayList<>())
+                domain.domainStep.granularParcelCell(parcels().parcel(i)), ignored -> new ArrayList<>())
             .add(i);
     }
     return activeByCell.getOrDefault(cell, new ArrayList<>());
@@ -443,7 +443,7 @@ final class GranularReactionStage {
     for (int iz = Math.max(0, cz - 1); iz <= Math.min(domain.sizeZ - 1, cz + 1); iz++)
       for (int iy = Math.max(0, cy - 1); iy <= Math.min(domain.sizeY - 1, cy + 1); iy++)
         for (int ix = Math.max(0, cx - 1); ix <= Math.min(domain.sizeX - 1, cx + 1); ix++)
-          for (int index : active(domain.cellIndex(ix, iy, iz))) {
+          for (int index : active(domain.domainFlowFields.cellIndex(ix, iy, iz))) {
             var p = parcels().parcel(index);
             if (GranularSphereGeometry.touchesBox(p.x(), p.y(), p.z(),
                 GranularMechanics.representativeRadius(p.solidVolumeSvq(), domain.config.cellSize()),
@@ -495,7 +495,7 @@ final class GranularReactionStage {
       sourceY = p.y();
       if (full) {
         int last = parcels().count() - 1,
-            lastCell = domain.granularParcelCell(parcels().parcel(last));
+            lastCell = domain.domainStep.granularParcelCell(parcels().parcel(last));
         activeByCell.get(cell).remove(Integer.valueOf(solid.index()));
         if (last != solid.index()) {
           activeByCell.get(lastCell).remove(Integer.valueOf(last));
@@ -555,7 +555,7 @@ final class GranularReactionStage {
 
   private boolean fitsSpheres(float x, float y, float z, long volume, int excluded) {
     int cell =
-        domain.cellIndex(
+        domain.domainFlowFields.cellIndex(
             (int) (x / domain.config.cellSize()),
             (int) (y / domain.config.cellSize()),
             (int) (z / domain.config.cellSize()));
@@ -567,7 +567,7 @@ final class GranularReactionStage {
     for (int iz = Math.max(0, cz - 1); iz <= Math.min(domain.sizeZ - 1, cz + 1); iz++)
       for (int iy = Math.max(0, cy - 1); iy <= Math.min(domain.sizeY - 1, cy + 1); iy++)
         for (int ix = Math.max(0, cx - 1); ix <= Math.min(domain.sizeX - 1, cx + 1); ix++)
-          for (int index : active(domain.cellIndex(ix, iy, iz))) {
+          for (int index : active(domain.domainFlowFields.cellIndex(ix, iy, iz))) {
             if (index == excluded) continue;
             var p = parcels().parcel(index);
             if (GranularSpawnAdmission.interiorsOverlap(
@@ -693,8 +693,8 @@ final class GranularReactionStage {
           y = cell / domain.sizeX % domain.sizeY,
           z = cell / (domain.sizeX * domain.sizeY);
       return axis == 0
-          ? domain.xFaceIndex(x + side, y, z)
-          : axis == 1 ? domain.yFaceIndex(x, y + side, z) : domain.zFaceIndex(x, y, z + side);
+          ? domain.domainFlowFields.xFaceIndex(x + side, y, z)
+          : axis == 1 ? domain.domainFlowFields.yFaceIndex(x, y + side, z) : domain.domainFlowFields.zFaceIndex(x, y, z + side);
     }
 
     double[] removeLiquidMass(int cell, long units) {
@@ -761,7 +761,7 @@ final class GranularReactionStage {
       if (domain.thermalState != null) {
         int[] cells = changed.stream().mapToInt(Integer::intValue).toArray();
         var current =
-            domain.thermalState.preparePhaseCandidateCells(cells, domain.thermalMarkerContext());
+            domain.thermalState.preparePhaseCandidateCells(cells, domain.domainCapabilities.thermalMarkerContext());
         var trials = new ArrayList<ThermalDomainState.PhaseCellTrial>();
         var ownersByCell = new TreeMap<Integer, List<EnergyOwner>>();
         for (int cell : cells) {
@@ -775,7 +775,7 @@ final class GranularReactionStage {
         SignedDyadic heat = SignedDyadic.ZERO;
         for (var value : heatByCell.values()) heat = heat.add(value);
         energyPlan =
-            domain.thermalState.planOwnedBatchEnergy(trials, domain.thermalMarkerContext(), heat);
+            domain.thermalState.planOwnedBatchEnergy(trials, domain.domainCapabilities.thermalMarkerContext(), heat);
         var edits = new ArrayList<LiquidCellInventory.Edit>();
         for (var cell : ownersByCell.entrySet()) {
           double[] energies = energyPlan.ownerEnergies(cell.getKey());
@@ -814,20 +814,18 @@ final class GranularReactionStage {
       }
       SignedDyadic advectionRoundoff = SignedDyadic.ZERO;
       SignedDyadic advectionHeat = SignedDyadic.ZERO;
-      MacMomentumState preparedMomentum;
+      CellMomentumTransport.Prepared preparedMomentum;
       GasVolumeAllocation transportedGas;
       // Every reactive endpoint uses the same liquid and finite-gas capacity
       // plan, including volume changes that fit the pore but displace gas.
       {
         var flux = new ConservativeLiquidFlux(domain);
         flux.prepareDisplacement(occupied,liquid);
-        if (domain.cellLiquidVolumeTransport == null)
-          domain.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain);
-        var transport = domain.cellLiquidVolumeTransport.prepareFlux(flux, 0, liquid);
+        var transport = domain.cellMacStage.prepareLiquid(flux,liquid);
         var momentumTransfer =
             new CellMomentumTransport(domain)
                 .prepare(transport, new float[][]{velocities(0), velocities(1), velocities(2)});
-        preparedMomentum = momentumTransfer.momentum();
+        preparedMomentum = momentumTransfer;
         var transportedLiquid = transport.inventory().withMechanicalHeat(momentumTransfer.heatByCell());
         advectionRoundoff = transportedLiquid.energyRoundoff();
         advectionHeat = transportedLiquid.mechanicalHeat();
@@ -862,7 +860,7 @@ final class GranularReactionStage {
       domain.granularState.parcels.adoptPrepared(parcels, parcelRevision);
       domain.granularState.deposits.adoptPrepared(deposits, depositRevision);
       domain.granularState.compositions.adoptPrepared(compositions, compositionRevision);
-      domain.mac.restoreMomentum(preparedMomentum);
+      domain.cellMacStage.commitMomentum(preparedMomentum);
       domain.granularCoupling.copyFrom(coupling);
       domain.lastGranularBoundaryImpulseX += bedImpulse[0];
       domain.lastGranularBoundaryImpulseY += bedImpulse[1];
@@ -874,7 +872,7 @@ final class GranularReactionStage {
       domain.markCellInventoryChanged();
       for (int cell : changed) {
         domain.chemicalParcels.markDirtyCell(cell);
-        domain.granularDepositDynamics().disturbCell(cell);
+        domain.domainStep.granularDepositDynamics().disturbCell(cell);
       }
       if (gas != null) domain.gasTopologyCoordinator.commit(gas);
       if(domain.thermalState!=null)domain.thermalState.restoreAuditLedger(domain.thermalState.auditLedger()

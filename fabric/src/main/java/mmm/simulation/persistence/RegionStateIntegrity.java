@@ -133,7 +133,6 @@ final class RegionStateIntegrity {
 		out.writeInt(Float.floatToRawIntBits(config.timeStep()));
 		out.writeInt(config.maxPressureIterations());
 		out.writeInt(Float.floatToRawIntBits(config.pressureTolerance()));
-		out.writeInt(Float.floatToRawIntBits(config.maxCourantNumber()));
 		out.writeInt(Float.floatToRawIntBits(config.fluidEpsilon()));
 		out.writeInt(Float.floatToRawIntBits(config.interfaceCompression()));
 		out.writeUTF(config.viscousWallCondition().name());

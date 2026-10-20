@@ -9,7 +9,7 @@ final class GranularBedAdmission {
 	private final GranularDepositStore deposits;
 	private final int sizeX, sizeY, sizeZ;
 	private final double h;
-	private final int[] head, next, previous, cells;
+	private int[] head = new int[0], next = new int[0], previous = new int[0], cells = new int[0];
 	private int count, visits, limit;
 	private boolean budgetBlocked;
 
@@ -17,13 +17,13 @@ final class GranularBedAdmission {
 	                     int x, int y, int z, float h) {
 		this.parcels = parcels; this.deposits = deposits;
 		this.sizeX = x; this.sizeY = y; this.sizeZ = z; this.h = h;
-		head = new int[deposits.cellCount()]; next = new int[parcels.capacity()];
-		previous = new int[next.length]; cells = new int[next.length];
 	}
 
 	void rebuild() {
-		Arrays.fill(head, -1); count = 0; visits = 0;
+		if(count>0||parcels.count()>0)Arrays.fill(head, -1);
+		count = 0; visits = 0;
 		limit = GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP; budgetBlocked = false;
+		ensureCapacity(parcels.count());
 		for (int index = 0; index < parcels.count(); index++) append(index);
 	}
 
@@ -41,6 +41,7 @@ final class GranularBedAdmission {
 
 	boolean allows(int cell, long bulk, IntPredicate excluded, IntPredicate acceptBlocking) {
 		if (bulk <= deposits.cellBulkVolumeSvq(cell)) return true;
+		if(count==0)return true;
 		int x = cell % sizeX, yz = cell / sizeX, y = yz % sizeY, z = yz / sizeY;
 		double minX = x * h, minY = y * h, minZ = z * h;
 		double maxX = (x + 1) * h, maxY = (y + bulk / (double) SolidVolume.SVQ_PER_CELL) * h, maxZ = (z + 1) * h;
@@ -74,11 +75,19 @@ final class GranularBedAdmission {
 
 	void append(int index) {
 		if (index != count) throw new IllegalStateException("Bed admission index append is out of order");
+		ensureCapacity(index+1);
 		var p = parcels.parcel(index);
 		int cell = (coordinate(p.z(), sizeZ) * sizeY + coordinate(p.y(), sizeY)) * sizeX + coordinate(p.x(), sizeX);
 		cells[index] = cell; previous[index] = -1; next[index] = head[cell];
 		if (head[cell] >= 0) previous[head[cell]] = index;
 		head[cell] = index; count++;
+	}
+	private void ensureCapacity(int required){
+		if(required==0)return;
+		if(head.length==0){head=new int[deposits.cellCount()];Arrays.fill(head,-1);}
+		if(required<=next.length)return;
+		int grown=Math.min(parcels.capacity(),Math.max(required,next.length+Math.max(16,next.length/2)));
+		next=Arrays.copyOf(next,grown);previous=Arrays.copyOf(previous,grown);cells=Arrays.copyOf(cells,grown);
 	}
 
 	private void unlink(int index) {

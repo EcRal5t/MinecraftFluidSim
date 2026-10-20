@@ -177,7 +177,7 @@ public final class GpuOccupancyBreakEvenValidation {
 
 	private static FluidDomain createCpuDomain(Scenario scenario) {
 		FluidSolverConfig config = new FluidSolverConfig(CELL_SIZE, RHO, GRAVITY, DT,
-				200, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F);
+				200, 1.0E-5F, 2.0E-3F, 0.80F);
 		FluidDomain domain = new FluidDomain(scenario.nx(), scenario.ny(), scenario.nz(), config);
 		float cellVolume = scenario.markersPerCell() * 0.125F;
 		for (int cell = 0; cell < scenario.occupiedCells(); cell++) {

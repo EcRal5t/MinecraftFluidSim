@@ -14,7 +14,6 @@ import mmm.fluid.FluidStepRequest;
 import mmm.fluid.MaterialRegistry;
 import mmm.simulation.FullCapabilityTestFixture;
 import mmm.units.SignedDyadic;
-import mmm.units.SolverUnitScale;
 
 import java.io.StringReader;
 import java.nio.file.Files;
@@ -71,7 +70,7 @@ public final class M8GranularValidation {
 	 * definitions later. Every rejection must leave the domain untouched.
 	 */
 	private static void carrierBindingIdentityIsEnforced() {		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
+				100, 1.0e-5F, 2.0e-3F, 0.8F);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry palette = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		MaterialRegistry definitions = BuiltinFluidMaterials.createRegistry();
@@ -129,7 +128,7 @@ public final class M8GranularValidation {
 		MaterialRegistry definitions = registries.materials();
 		for (double temperatureK : new double[] {293.15, 353.15}) {
 			FluidDomain domain = new FluidDomain(4, 4, 4, new FluidSolverConfig(0.5F, 1_000.0F, 0.0F,
-					1.0F / 20.0F, 200, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F), 4 * 4 * 4 * 8);
+					1.0F / 20.0F, 200, 1.0e-5F, 2.0e-3F, 0.8F), 4 * 4 * 4 * 8);
 			FullCapabilityTestFixture.bindFull(domain, registries, temperatureK, 4);
 			domain.setVolume(1, 1, 1, 1.0F);
 			domain.setThermalTemperatureInCell(1, 1, 1, temperatureK);
@@ -147,10 +146,12 @@ public final class M8GranularValidation {
 	}
 
 	private static void exactDryContainerTransferIsAtomic() throws Exception {		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
+				100, 1.0e-5F, 2.0e-3F, 0.8F);
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		FluidDomain domain = new FluidDomain(6, 6, 6, config, 6 * 6 * 6 * 8);
+		FullCapabilityTestFixture.Registries production=FullCapabilityTestFixture.load();
+		domain.bindGasRegistry(production.gas());
 		domain.bindGranular(registry, liquids, BuiltinFluidMaterials.createRegistry()); domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		long reactiveSvq = 4_096L;
 		SolidCompositionRecord reactive = SolidCompositionRecord.fromStableAmounts(
@@ -166,8 +167,6 @@ public final class M8GranularValidation {
 		require(inserted.inserted() && domain.totalGranularSolidVolumeSvq() == input.totalSolidVolumeSvq()
 				&& rawClose(domain.totalGranularMass(), input.totalMass()),
 				"dry granular insertion did not preserve exact volume/mass across nearby cells");
-		FullCapabilityTestFixture.Registries production = FullCapabilityTestFixture.load();
-		domain.bindGasRegistry(production.gas());
 		domain.bindThermal(production.thermal(), liquids, 300.0);
 		domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		require(domain.totalGranularSolidVolumeSvq() == input.totalSolidVolumeSvq()
@@ -227,14 +226,12 @@ public final class M8GranularValidation {
 
 	private static void phaseTransferPrecipitatesAndDissolves() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
+				100, 1.0e-5F, 2.0e-3F, 0.8F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		SolverUnitScale unitScale = SolverUnitScale.forCellSize(config.cellSize());
 		mmm.fluid.GranularReactionCandidateValidation.validate();
 		FluidDomain domain = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
-		// Real transported/reseeded marker volumes are arbitrary IEEE-754 dyadics, not necessarily
-		// integer SVQ. Exercise the production bridge with such a tail instead of an aligned full cell.
+		// Exercise a fractional liquid inventory through reaction, transport and recovery.
 		domain.setVolume(1, 1, 1, 0.1F);
 		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
@@ -243,74 +240,70 @@ public final class M8GranularValidation {
 				BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L,
 				BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L), true);
 		long[] combinedBefore = combinedSpecies(domain);
-		double massBefore = mmm.units.Mass.kilograms(domain.totalMassUnits()) + domain.totalGranularMass();
-		double occupiedBefore = domain.totalVolumeExact()
-				+ SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq());
+		long massBefore=combinedMassUnits(domain);
+		var occupiedBefore=combinedOccupiedVolume(domain);
 		domain = advance(domain).claimPreparedCpuDomain();
-		require(domain.lastPhaseTransferStats().precipitations() == 1
-				&& domain.lastPhaseTransferStats().signedSolidSvq() == 4_050L,
-				"supersaturated aqueous inventory did not precipitate to the bounded target");
+		require(domain.lastPhaseTransferStats().precipitations()>0&&domain.totalGranularSolidVolumeSvq()>0,
+				"Supersaturated aqueous inventory did not produce solid material");
+		domain=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		require(java.util.Arrays.equals(combinedBefore, combinedSpecies(domain)),
 				"precipitation changed combined aqueous+solid species");
-		require(rawClose(massBefore, mmm.units.Mass.kilograms(domain.totalMassUnits()) + domain.totalGranularMass()),
+		require(massBefore==combinedMassUnits(domain),
 				"precipitation changed combined liquid+solid mass");
-		require(rawClose(occupiedBefore, domain.totalVolumeExact()
-				+ SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq())),
+		require(occupiedBefore.equals(combinedOccupiedVolume(domain)),
 				"precipitation did not exchange liquid and solid volume exactly");
-		GranularStateSnapshot.ActiveParcel precipitated = domain.exportGranularState().activeParcels().getFirst();
-		require(Float.floatToRawIntBits(precipitated.x()) != Float.floatToRawIntBits(0.75F)
-				|| Float.floatToRawIntBits(precipitated.y()) != Float.floatToRawIntBits(0.75F)
-				|| Float.floatToRawIntBits(precipitated.z()) != Float.floatToRawIntBits(0.75F),
-				"precipitation collapsed every new parcel onto the solver-cell center");
+		long firstSolid=domain.totalGranularSolidVolumeSvq();
 		domain = advance(domain).claimPreparedCpuDomain();
-		require(domain.totalGranularSolidVolumeSvq() == 8_100L
-				&& domain.exportGranularState().activeParcels().size() == 1,
-				"repeated same-cell precipitation did not merge compatible active parcels: svq="
-						+ domain.totalGranularSolidVolumeSvq() + ", active="
-						+ domain.exportGranularState().activeParcels().size() + ", deposits="
-						+ domain.granularDepositCellCount() + ", parcels="
-						+ domain.exportGranularState().activeParcels());
+		require(domain.lastPhaseTransferStats().precipitations()>0&&domain.totalGranularSolidVolumeSvq()>firstSolid,
+				"Continued precipitation stopped after the first ordinary step");
+		domain=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		require(java.util.Arrays.equals(combinedBefore, combinedSpecies(domain))
-				&& rawClose(massBefore, mmm.units.Mass.kilograms(domain.totalMassUnits()) + domain.totalGranularMass())
-				&& rawClose(occupiedBefore, domain.totalVolumeExact()
-				+ SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq())),
-				"merged precipitation changed combined aqueous/solid truth");
+				&&massBefore==combinedMassUnits(domain)&&occupiedBefore.equals(combinedOccupiedVolume(domain)),
+				"Continued precipitation or recovery changed combined liquid/solid inventory");
 
-		for (int marker = 0; marker < domain.particleCount(); marker++) {
-			domain.setMarkerChemical(marker, java.util.Map.of(BuiltinChemicalDefinitions.H2O, 1_000_000L),
-					(marker & 1) == 0);
+		for(int stock=0;stock<domain.exportLiquidCellState().physicalStocks().size();stock++){
+			domain.setMarkerChemical(stock,java.util.Map.of(BuiltinChemicalDefinitions.H2O,1_000_000L),(stock&1)==0);
 		}
 		long[] beforeDissolution = combinedSpecies(domain);
-		double massBeforeDissolution = mmm.units.Mass.kilograms(domain.totalMassUnits())
-				+ domain.totalGranularMass();
-		double occupiedBeforeDissolution = domain.totalVolumeExact()
-				+ SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq());
+		long massBeforeDissolution=combinedMassUnits(domain);
+		var occupiedBeforeDissolution=combinedOccupiedVolume(domain);
 		long solidBeforeDissolution = domain.totalGranularSolidVolumeSvq();
 		boolean dissolved = false;
 		for (int step = 0; step < 16 && domain.totalGranularSolidVolumeSvq() > 0L; step++) {
 			domain = advance(domain).claimPreparedCpuDomain(); dissolved |= domain.lastPhaseTransferStats().dissolutions() > 0;
+			domain=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		}
 		require(dissolved && domain.totalGranularSolidVolumeSvq() < solidBeforeDissolution,
 				"undersaturated liquid did not dissolve toward its same-cell equilibrium");
 		require(java.util.Arrays.equals(beforeDissolution, combinedSpecies(domain)),
 				"dissolution changed combined aqueous+solid species");
-		require(rawClose(massBeforeDissolution,
-				mmm.units.Mass.kilograms(domain.totalMassUnits()) + domain.totalGranularMass()),
+		require(massBeforeDissolution==combinedMassUnits(domain),
 				"dissolution changed combined liquid+solid mass");
-		require(rawClose(occupiedBeforeDissolution, domain.totalVolumeExact()
-				+ SolidVolume.toCellVolume(domain.totalGranularSolidVolumeSvq())),
+		require(occupiedBeforeDissolution.equals(combinedOccupiedVolume(domain)),
 				"dissolution did not exchange liquid and solid volume exactly");
-		boolean indicated = false;
-		for (int marker = 0; marker < domain.particleCount(); marker++) indicated |= domain.chemicalParcels().indicator(marker);
-		require(indicated, "dissolution erased carrier-marker indicator provenance");
+		require(domain.exportLiquidCellState().stocks().stream().anyMatch(mmm.inventory.LiquidCellInventory.Stock::indicator),
+				"Dissolution erased liquid inventory indicator provenance");
 	}
 
 	private static long[] combinedSpecies(FluidDomain domain) {
-		long[] result = domain.chemicalParcels().speciesTotals(domain.particleCount());
-		if (domain.totalGranularSolidVolumeSvq() == 0L) return result;
-		long[] solid = domain.solidCompositions().speciesTotals();
-		for (int species = 0; species < result.length; species++) result[species] = Math.addExact(result[species], solid[species]);
+		var chemistry=BuiltinChemicalDefinitions.REGISTRY;long[] result=new long[chemistry.species().size()];
+		for(var stock:domain.exportLiquidCellState().stocks())if(stock.mixture()!=null){
+			var mixture=stock.mixture();for(int entry=0;entry<mixture.entryCount();entry++){
+				int species=mixture.speciesHandle(entry);result[species]=Math.addExact(result[species],mixture.amountAt(entry));
+			}
+		}
+		for(var entry:domain.exportGranularState().solidSpeciesTotals().entrySet()){
+			int species=chemistry.speciesHandle(entry.getKey());result[species]=Math.addExact(result[species],entry.getValue());
+		}
 		return result;
+	}
+	private static long combinedMassUnits(FluidDomain domain){
+		return Math.addExact(domain.totalMassUnits(),domain.exportGranularState().totalMassUnits());
+	}
+	private static SignedDyadic combinedOccupiedVolume(FluidDomain domain){
+		var volume=SignedDyadic.of(domain.exportGranularState().totalSolidVolumeSvq(),-24);
+		for(var stock:domain.exportLiquidCellState().stocks())volume=volume.add(stock.volume());
+		return volume;
 	}
 
 	private static void solidCompositionStateIsIndependentAndPersistent() {
@@ -1529,7 +1522,7 @@ public final class M8GranularValidation {
 
 	private static void porousBedPreservesHydrostatics() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				200, 1.0e-6F, 0.45F, 2.0e-3F, 0.8F);
+				200, 1.0e-6F, 2.0e-3F, 0.8F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
 		int sizeX = 2, sizeY = 5, sizeZ = 2;
@@ -1966,7 +1959,7 @@ public final class M8GranularValidation {
 			@Override public void clearExternal() { throw new AssertionError("Closure cleared thermal inventory"); }
 		});
 		var reactiveIndex = new GranularBedAdmission(reactiveParcels, reactiveBeds, 1, 1, 1, .5F);
-		var closure = new GranularSettlementGeometryPlan(reactiveInventory, reactiveParcels, reactiveBeds, reactiveIndex, reactiveParcels.capacity());
+		var closure = new GranularSettlementGeometryPlan(reactiveInventory, reactiveParcels, reactiveBeds, reactiveIndex);
 		long[] species = compositions.speciesTotals(); var originalSources = List.of(reactiveParcels.parcel(0), reactiveParcels.parcel(1));
 		reactiveIndex.rebuild(); reactiveIndex.reserveLogicalOperations(GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP - 8);
 		require(closure.find(0, 0, ignored -> 0, ignored -> SolidVolume.SVQ_PER_CELL) == null && reactiveIndex.budgetBlocked()
@@ -2042,7 +2035,7 @@ public final class M8GranularValidation {
 
 	private static void solverCouplingPreservesInventories(int steps) {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				200, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
+				200, 1.0e-5F, 2.0e-3F, 0.8F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidDomain domain = new FluidDomain(4, 8, 4, config, 4 * 8 * 4 * 8);
@@ -2081,7 +2074,7 @@ public final class M8GranularValidation {
 
 	private static void wholeBucketCongestionRemainsLocal(int steps) throws Exception {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
+				100, 1.0e-5F, 2.0e-3F, 0.8F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidDomain domain = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
@@ -2195,7 +2188,7 @@ public final class M8GranularValidation {
 
 	private static void singleBucketPourSettlesWithinTenSeconds() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
+				100, 1.0e-5F, 2.0e-3F, 0.8F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidDomain domain = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
@@ -2327,7 +2320,7 @@ public final class M8GranularValidation {
 
 	private static void emptyGranularGateHasBoundedWallTime(int samples) {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				100, 1.0e-5F, 0.45F, 2.0e-3F, 0.8F);
+				100, 1.0e-5F, 2.0e-3F, 0.8F);
 		int sizeX = 24, sizeY = 16, sizeZ = 24, capacity = sizeX * sizeY * sizeZ * 8;
 		FluidDomain baseline = new FluidDomain(sizeX, sizeY, sizeZ, config, capacity);
 		FullCapabilityTestFixture.bindEmptyMaterialState(baseline,

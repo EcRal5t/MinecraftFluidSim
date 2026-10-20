@@ -6,49 +6,68 @@ import mmm.units.SignedDyadic;
 
 /**
  * The single production ordering authority for conduction, liquid chemistry, granular
- * reaction and condensed/gas phase change. Granular mechanics transitions and liquid
- * reseeding deliberately remain the following logical-axis stages.
+ * reaction and condensed/gas phase change. Granular deposit transitions follow this axis.
  */
 final class ThermochemistryPipeline {
-	private final ThermalTransportStage transport;
+	private final FluidDomain domain;
 	private final ChemicalReactionStage chemistry;
 	private final GranularReactionStage granularReaction;
-	private final CondensedPhaseChangeStage condensedPhase;
-	private final GasLiquidPhaseChangeStage gasPhase;
+	final CondensedPhaseChangeStage condensedPhase;
+	final GasLiquidPhaseChangeStage gasPhase;
+	private String stage = "IDLE";
 
-	ThermochemistryPipeline(
-			ThermalTransportStage transport, ChemicalReactionStage chemistry,
-			GranularReactionStage granularReaction, CondensedPhaseChangeStage condensedPhase,
-			GasLiquidPhaseChangeStage gasPhase
-	) {
-		this.transport = transport;
-		this.chemistry = chemistry;
-		this.granularReaction = granularReaction;
-		this.condensedPhase = condensedPhase;
-		this.gasPhase = gasPhase;
+	ThermochemistryPipeline(FluidDomain domain) {
+		this.domain=domain;
+		chemistry=new ChemicalReactionStage(domain);
+		granularReaction=new GranularReactionStage(domain);
+		condensedPhase=new CondensedPhaseChangeStage(domain);
+		gasPhase=new GasLiquidPhaseChangeStage(domain);
+	}
+	ThermalTransport.Stats stepTransport(double dtSeconds){
+		var thermal=domain.thermalState;
+		if(thermal==null)throw new IllegalStateException("Thermal state is not bound");
+		return thermal.stepCarrierConduction(domain.domainCapabilities.thermalMarkerContext(),LiquidThermalConduction.contacts(domain),dtSeconds);
 	}
 
 	FluidDomain.ThermalAxisStats step(
 			boolean thermalBound, boolean granularReactionEnabled, double dtSeconds,
 			boolean phaseChangeEnabled, int maximumPhaseOperations
 	) {
+		try {
+			return runStep(thermalBound, granularReactionEnabled, dtSeconds, phaseChangeEnabled, maximumPhaseOperations);
+		} catch (RuntimeException failure) {
+			failure.addSuppressed(new IllegalStateException("Thermochemistry stage=" + stage + ", dt=" + dtSeconds
+					+ ", phaseChange=" + phaseChangeEnabled));
+			throw failure;
+		}
+	}
+
+	private FluidDomain.ThermalAxisStats runStep(boolean thermalBound, boolean granularReactionEnabled,
+			double dtSeconds, boolean phaseChangeEnabled, int maximumPhaseOperations) {
+		stage = "DIRTY_CELLS";
 		int[] granularPhaseCells = granularReactionEnabled ? chemistry.captureDirtyCells() : new int[0];
 		ThermalTransport.Stats transportStats;
+		stage = "CONDUCTION";
 		try {
-			transportStats = thermalBound ? transport.step(dtSeconds)
+			transportStats = thermalBound ? stepTransport(dtSeconds)
 					: new ThermalTransport.Stats(0, 0, 0.0, SignedDyadic.ZERO, SignedDyadic.ZERO);
 		} catch (IllegalArgumentException invalid) {
 			throw new FluidDomain.ThermalTransportBlockedException(invalid.getMessage(), invalid);
 		}
+		stage = "LIQUID_REACTION";
 		ChemicalParcelStore.ReactionStats chemicalStats = chemistry.step();
+		stage = "GRANULAR_REACTION";
 		FluidDomain.PhaseTransferStats granularStats = granularReaction.step(granularPhaseCells);
 		FluidDomain.ThermalPhaseStats condensedStats = new FluidDomain.ThermalPhaseStats(0, 0, 0, 0L);
 		FluidDomain.GasThermalPhaseStats gasStats = new FluidDomain.GasThermalPhaseStats(0, 0, 0);
 		if (phaseChangeEnabled) {
 			boolean phaseGridPrepared = false;
+			stage = "CONDENSED_PHASE_CHANGE";
 			condensedStats = condensedPhase.step(maximumPhaseOperations, phaseGridPrepared);
+			stage = "GAS_LIQUID_PHASE_CHANGE";
 			gasStats = gasPhase.step(maximumPhaseOperations - condensedStats.operations(), condensedStats.operations() == 0);
 		}
+		stage = "COMPLETE";
 		return new FluidDomain.ThermalAxisStats(
 				transportStats, chemicalStats, granularStats, condensedStats, gasStats);
 	}

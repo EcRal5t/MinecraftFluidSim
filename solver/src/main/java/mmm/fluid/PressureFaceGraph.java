@@ -44,8 +44,8 @@ final class PressureFaceGraph {
 				axis[face] = a; localFace[face] = local;
 				int coordinate = a == 0 ? x : a == 1 ? y : z, length = a == 0 ? domain.sizeX : a == 1 ? domain.sizeY : domain.sizeZ;
 				if (coordinate == 0 || coordinate == length) continue;
-				secondCell[face] = domain.cellIndex(x, y, z);
-				firstCell[face] = domain.cellIndex(x - (a == 0 ? 1 : 0), y - (a == 1 ? 1 : 0), z - (a == 2 ? 1 : 0));
+				secondCell[face] = domain.domainFlowFields.cellIndex(x, y, z);
+				firstCell[face] = domain.domainFlowFields.cellIndex(x - (a == 0 ? 1 : 0), y - (a == 1 ? 1 : 0), z - (a == 2 ? 1 : 0));
 			}
 		}
 	}
@@ -124,7 +124,7 @@ final class PressureFaceGraph {
 		}
 		start[faceCount] = entries; liquidStart[faceCount] = liquidEntries;
 		for (int c = 0; c < parent.length; c++) if (constrained[c]) constrained[root(c)] = true;
-		for (int c = 0; c < parent.length; c++) if (domain.isFluid(c)) {
+		for (int c = 0; c < parent.length; c++) if (domain.domainFlowFields.isFluid(c)) {
 			int group = root(c);
 			if (!constrained[group] && !anchored[group]) { anchored[group] = true; anchored[c] = true; }
 			else p.fluidUnknownCells[p.fluidUnknownCount++] = c;
@@ -171,7 +171,7 @@ final class PressureFaceGraph {
 	}
 
 	void ensurePortCoefficients() {
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		if (coefficientInventory == null || !domain.liquidCells.hasSameGeometry(coefficientInventory) || coefficientFrame != domain.gasState.frame)
 			rebuild(domain.config.timeStep());
 	}
@@ -203,17 +203,17 @@ final class PressureFaceGraph {
 		consumer.accept(variable ? domain.cellCount + node : -1, weight, fixed + partialPressureOffset(cell));
 	}
 	private double partialPressureOffset(int cell) {
-		if (domain.markerGrid.markerCount[cell] == 0) return 0;
+		if (domain.liquidGrid.stockCount[cell] == 0) return 0;
 		return -domain.tension.surfaceTensionPressure[cell] * domain.pressurePhaseGeometry.liquidFraction(cell) + hydrostaticOffset(cell);
 	}
 	double hydrostaticOffset(int cell) {
-		if (domain.markerGrid.markerCount[cell] == 0) return 0;
+		if (domain.liquidGrid.stockCount[cell] == 0) return 0;
 		var phase = domain.pressurePhaseGeometry;
 		double nx = phase.planeNormal(cell, 0), ny = phase.planeNormal(cell, 1), nz = phase.planeNormal(cell, 2);
 		double norm = Math.sqrt(nx * nx + ny * ny + nz * nz);
 		double upward = norm > 0 ? Math.max(0, ny / norm) : 0;
 		// Cell-scale centroid pressure of a partially filled layer; the shared PLIC supplies its orientation.
-		return .5 * domain.markerGrid.cellDensity[cell]
+		return .5 * domain.liquidGrid.cellDensity[cell]
 				* domain.config.gravity() * domain.config.cellSize() * phase.liquidFraction(cell) * upward;
 	}
 	private void add(int face, int row, double coefficient, double fixed) {

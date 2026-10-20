@@ -660,9 +660,10 @@ final class ControllerInventoryDurabilityValidation {
 
 		void temperature(double kelvin) {
 			FuzzMetrics.note(scene.name(), "thermal");
+			boolean[] owners=thermalOwnerCells();
 			for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
 				for (int x = 0; x < domain.sizeX(); x++) {
-					if (domain.exactVolumeNear(x, y, z, 0, -1) > 0.0) {
+					if(owners[(z*domain.sizeY()+y)*domain.sizeX()+x]){
 						domain.setThermalTemperatureInCell(x, y, z, kelvin);
 					}
 				}
@@ -671,9 +672,10 @@ final class ControllerInventoryDurabilityValidation {
 
 		void rampTemperature(double delta) {
 			FuzzMetrics.note(scene.name(), "thermal");
+			boolean[] owners=thermalOwnerCells();
 			for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
 				for (int x = 0; x < domain.sizeX(); x++) {
-					if (domain.exactVolumeNear(x, y, z, 0, -1) > 0.0) {
+					if(owners[(z*domain.sizeY()+y)*domain.sizeX()+x]){
 						double current = domain.thermalTemperatureInCell(x, y, z);
 						domain.setThermalTemperatureInCell(x, y, z,
 								Math.min(20_000.0, Math.max(0.5, current + delta)));
@@ -682,6 +684,22 @@ final class ControllerInventoryDurabilityValidation {
 			}
 		}
 
+		private boolean[] thermalOwnerCells(){
+			boolean[] cells=new boolean[cellBudget()];
+			for(var stock:domain.exportLiquidCellState().physicalStocks())cells[stock.key().cell()]=true;
+			for(var group:domain.exportThermalOwnerState().coherentGroups())cells[group.cell()]=true;
+			if(domain.hasGranularState()){
+				var solid=domain.exportGranularState();double h=domain.config().cellSize();
+				for(var parcel:solid.activeParcels()){
+					int x=Math.clamp((int)Math.floor(parcel.x()/h),0,domain.sizeX()-1);
+					int y=Math.clamp((int)Math.floor(parcel.y()/h),0,domain.sizeY()-1);
+					int z=Math.clamp((int)Math.floor(parcel.z()/h),0,domain.sizeZ()-1);
+					cells[(z*domain.sizeY()+y)*domain.sizeX()+x]=true;
+				}
+				for(var group:solid.depositGroups())cells[group.cell()]=true;
+			}
+			return cells;
+		}
 		void insertWater() { insertLiquid(water); }
 		void insertMercury() { insertLiquid(mercury); }
 		void insertLiquid(int material) {
@@ -2194,7 +2212,7 @@ final class ControllerInventoryDurabilityValidation {
 
 	private static FluidSolverConfig productionConfig() {
 		return new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				240, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+				240, 1.0E-4F, 2.0E-3F, 0.80F);
 	}
 
 	private static void check(boolean condition, String message) {

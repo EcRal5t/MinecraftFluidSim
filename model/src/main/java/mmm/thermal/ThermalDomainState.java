@@ -912,15 +912,14 @@ public final class ThermalDomainState {
 	public ThermalTransport.Stats stepCarrierConduction(
 			ThermalCarrierContext markers, List<ThermalCarrierTransport.Contact> contacts, double dtSeconds
 	) {
-		SignedDyadic before = exactEnergy(markers.markerCount());
 		var owners = carrierAccess(markers);
 		double[] snapshot = new double[owners.carrierCount()];
 		for (int owner = 0; owner < snapshot.length; owner++) snapshot[owner] = owners.internalEnergy(owner);
 		try {
 			var result = ThermalCarrierTransport.step(owners, contacts, dtSeconds, transport.maximumSubsteps());
-			SignedDyadic physicalDelta = exactEnergy(markers.markerCount()).subtract(before);
+			// The transport candidate already sums every changed carrier exactly; gas is unchanged.
 			var ledger = auditState.ledger().withHeatExchange(result.reservoirExchange())
-					.withRoundoff(physicalDelta.subtract(result.reservoirExchange()));
+					.withRoundoff(result.roundoffResidual());
 			auditState.replace(ledger);
 			spatialObservationPrepared = false;
 			lastTransport = result;

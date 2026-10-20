@@ -11,8 +11,8 @@ public final class PressureCapacityValidation {
 		System.out.println("Capacity/gas pressure adjoint, positive operator and shallow equilibrium PASS");
 	}
 	private static void fixedPorePressurePort() {
-		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(1, 1000, 0, .05F, 120, 1e-5F, .4F, .002F, 0));
-		domain.setVolume(1, 0, 0, .5F); domain.ensureGrid();
+		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(1, 1000, 0, .05F, 120, 1e-5F, .002F, 0));
+		domain.setVolume(1, 0, 0, .5F); domain.domainFlowFields.ensureGrid();
 		var graph = domain.pressureSystem.faces; graph.rebuild(.05F);
 		double port=graph.totalPortCoefficient(0,1,0,255,255);
 		domain.mac.velocityX[1]=-.25F; graph.rebuild(.05F);
@@ -24,9 +24,9 @@ public final class PressureCapacityValidation {
 
 	private static void vacuumCapacityClosure() {
 		float dt=.05F;
-		var d=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,dt,120,1e-5F,.4F,.002F,0));
+		var d=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,dt,120,1e-5F,.002F,0));
 		double cellCubicMeters=d.unitScale.cubicMetersPerNormalizedVolume();
-		d.sealDomainBoundary();d.setVolumes(new float[]{.5F,1,1,1,1,1,1,.5F});d.ensureGrid();
+		d.sealDomainBoundary();d.setVolumes(new float[]{.5F,1,1,1,1,1,1,.5F});d.domainFlowFields.ensureGrid();
 		if(d.gasBoundary().nodeCount()!=2)throw new AssertionError("Capacity fixture requires two separated vacuum chambers");
 		for(int node=1;node<=2;node++)d.setGasNodeStandardVolume(node,0);
 		var liquids=new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER));
@@ -36,8 +36,8 @@ public final class PressureCapacityValidation {
 						BuiltinFluidMaterials.WATER.id(),300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,4184))),
 				new mmm.thermal.ThermalMaterialDefinition("test:capacity_air",mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
 						mmm.fluid.air.BuiltinGasDefinitions.AIR,300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,718)))));
-		d.bindThermal(thermal,liquids,300);d.ensureGrid();
-		d.mac.velocityX[d.xFaceIndex(1,0,0)]=-100;d.cellMacStage.publishMomentum();
+		d.bindThermal(thermal,liquids,300);d.domainFlowFields.ensureGrid();
+		d.mac.velocityX[d.domainFlowFields.xFaceIndex(1,0,0)]=-100;d.cellMacStage.publishMomentum();
 		var graph=d.pressureSystem.faces;graph.rebuild(dt);
 		var predicted=new double[d.cellCount+3];graph.addDivergence(faceVelocities(d,graph),predicted,1);
 		double[] initialVolume={0,d.gasBoundary().availableVolume(1),d.gasBoundary().availableVolume(2)};
@@ -78,7 +78,7 @@ public final class PressureCapacityValidation {
 	}
 
 	private static FluidDomain fixture(boolean full) {
-		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .05F, 120, 1e-5F, .4F, .002F, .8F));
+		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .05F, 120, 1e-5F, .002F, .8F));
 		float amount = full ? 1 : .5F; float[] points = new float[32];
 		for (int cell = 0; cell < 8; cell++) {
 			points[4 * cell] = (cell % 2 + .5F) * .5F; points[4 * cell + 1] = (cell / 2 % 2 + .5F) * .5F;
@@ -86,7 +86,7 @@ public final class PressureCapacityValidation {
 		}
 		domain.restoreParticleState(new FlipParticleState(2, 2, 2, .5F, 8, full ? 8 : 6, points, new float[24],
 				mmm.units.Mass.createLiquid(.5F, 1000, points), new byte[8]));
-		domain.sealDomainBoundary(); domain.ensureGrid(); return domain;
+		domain.sealDomainBoundary(); domain.domainFlowFields.ensureGrid(); return domain;
 	}
 	private static void checkGraph(FluidDomain domain) {
 		var graph = domain.pressureSystem.faces; graph.rebuild(.05F);
@@ -109,7 +109,7 @@ public final class PressureCapacityValidation {
 		graph.pressureVelocity(source, response); graph.addDivergence(response, result, 1); return result;
 	}
 	private static void shallowHydrostatics(boolean column) {
-		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 9.81F, .025F, 120, 1e-5F, .4F, .002F, .8F));
+		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 9.81F, .025F, 120, 1e-5F, .002F, .8F));
 		for (int z = 0; z < 2; z++) for (int x = 0; x < 2; x++) {
 			domain.setVolume(x, 0, z, column ? 1 : .2F); if (column) domain.setVolume(x, 1, z, .2F);
 		}

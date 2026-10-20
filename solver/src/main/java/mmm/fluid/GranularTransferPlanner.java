@@ -41,7 +41,7 @@ final class GranularTransferPlanner {
 	) {
 		GranularDomainState granular = domain.granularState;
 		if (granular == null) return FluidDomain.GranularInsertion.rejected("Granular state is not bound");
-		int cell = domain.cellIndexChecked(cellX, cellY, cellZ);
+		int cell = domain.domainFlowFields.cellIndexChecked(cellX, cellY, cellZ);
 		if (solidVolumeSvq <= 0L || massUnits <= 0L) {
 			throw new IllegalArgumentException("Granular insertion inventory is invalid");
 		}
@@ -54,7 +54,7 @@ final class GranularTransferPlanner {
 		if (compositionHandle != 0 && (granular.compositions == null || !granular.compositions.isLive(compositionHandle))) {
 			throw new IllegalArgumentException("Granular insertion has no live solid composition");
 		}
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		domain.granularCoupling.rebuild(granular.parcels, granular.deposits);
 		long[] previousSolid = domain.granularCoupling.copySolidSvq();
 		long[] plannedSolid = previousSolid.clone();
@@ -69,7 +69,7 @@ final class GranularTransferPlanner {
 			if (candidate != null) position = candidate;
 		}
 		if (position == null) return FluidDomain.GranularInsertion.rejected("Target cell has no collision-valid solid capacity");
-		if (!domain.canAddCarrierVolume(solidVolumeSvq / (double) SolidVolume.SVQ_PER_CELL)) {
+		if (!domain.domainCollision.canAddCarrierVolume(solidVolumeSvq / (double) SolidVolume.SVQ_PER_CELL)) {
 			return FluidDomain.GranularInsertion.rejected("Sealed region has no combined fluid/solid capacity");
 		}
 		GranularParcelStore.Parcel parcel = new GranularParcelStore.Parcel(
@@ -77,7 +77,7 @@ final class GranularTransferPlanner {
 				solidVolumeSvq, massUnits, materialHandle, compositionHandle, 0, (byte) 0, position.ceilMask());
 		if (!granular.parcels.canAdd(parcel)) return FluidDomain.GranularInsertion.rejected("Active granular parcel budget exceeded");
 		double thermalEnergy = domain.thermalState == null ? 0.0 : domain.thermalState.planExternalGranularEnergy(
-				materialHandle, compositionHandle, mmm.units.Mass.kilograms(massUnits), domain.thermalMarkerContext());
+				materialHandle, compositionHandle, mmm.units.Mass.kilograms(massUnits), domain.domainCapabilities.thermalMarkerContext());
 		GranularLiquidDisplacement.Prepared displacement;
 		try { displacement = GranularLiquidDisplacement.prepareInsertion(domain, previousSolid, plannedSolid); }
 		catch (GranularLiquidDisplacement.CapacityUnavailable unavailable) {
@@ -89,7 +89,7 @@ final class GranularTransferPlanner {
 		Runnable publishSolid = () -> {
 			granular.parcels.add(parcel);
 			if (domain.thermalState != null) domain.thermalState.commitExternalActiveInsertions(new double[]{thermalEnergy});
-			domain.markGranularExternalChange(cell);
+			domain.domainPhaseInventory.markGranularExternalChange(cell);
 		};
 		if (displacement != null) GranularLiquidDisplacement.publish(domain, displacement, publishSolid);
 		else { publishSolid.run(); if (gas != null) domain.gasTopologyCoordinator.commit(gas); }
@@ -105,7 +105,7 @@ final class GranularTransferPlanner {
 		if (granular == null) return FluidDomain.GranularInsertion.rejected("Granular state is not bound");
 		if (ledger == null) throw new IllegalArgumentException("Granular insertion ledger is missing");
 		if (maxRadius < 0) throw new IllegalArgumentException("Granular insertion radius is invalid");
-		domain.cellIndexChecked(cellX, cellY, cellZ); domain.ensureGrid();
+		domain.domainFlowFields.cellIndexChecked(cellX, cellY, cellZ); domain.domainFlowFields.ensureGrid();
 		domain.granularCoupling.rebuild(granular.parcels, granular.deposits);
 		long insertedSvq = ledger.totalSolidVolumeSvq(); long insertedMass = ledger.totalMassUnits();
 		try {
@@ -113,7 +113,7 @@ final class GranularTransferPlanner {
 		} catch (ArithmeticException overflow) {
 			return FluidDomain.GranularInsertion.rejected("Granular mass capacity exceeded");
 		}
-		if (!domain.canAddCarrierVolume(insertedSvq / (double) SolidVolume.SVQ_PER_CELL)) {
+		if (!domain.domainCollision.canAddCarrierVolume(insertedSvq / (double) SolidVolume.SVQ_PER_CELL)) {
 			return FluidDomain.GranularInsertion.rejected("Sealed region has no combined fluid/solid capacity");
 		}
 		ArrayList<GranularParcelDraft> drafts = new ArrayList<>(); int reactiveDrafts = 0;
@@ -147,7 +147,7 @@ final class GranularTransferPlanner {
 				|| reactiveDrafts > 0 && !granular.compositions.hasCapacity(reactiveDrafts)) {
 			return FluidDomain.GranularInsertion.rejected("Active granular parcel/composition budget exceeded");
 		}
-		List<FluidDomain.CellCandidate> insertionCells = domain.nearbyCells(cellX, cellY, cellZ, maxRadius);
+		List<FluidDomain.CellCandidate> insertionCells = domain.domainFlowFields.nearbyCells(cellX, cellY, cellZ, maxRadius);
 		// A dry pour is a loose release envelope, not a vertical stack of mutually blocking
 		// numerical parcels. Prefer nearby horizontal cells; vertical cells remain bounded
 		// fallbacks when the port neighborhood or exact occupancy requires them.
@@ -162,7 +162,7 @@ final class GranularTransferPlanner {
 				domain.config.cellSize(), granular.parcels, drafts.size());
 		int[] plannedParcelCounts = new int[domain.cellCount];
 		for (int parcel = 0; parcel < granular.parcels.count(); parcel++) {
-			plannedParcelCounts[domain.granularParcelCell(granular.parcels.parcel(parcel))]++;
+			plannedParcelCounts[domain.domainStep.granularParcelCell(granular.parcels.parcel(parcel))]++;
 		}
 		ArrayList<GranularParcelDraft> positioned = new ArrayList<>(drafts.size());
 		for (GranularParcelDraft draft : drafts) {
@@ -228,7 +228,7 @@ final class GranularTransferPlanner {
 			}
 			if (domain.thermalState != null) thermalInsertions = domain.thermalState.planExternalActiveInsertions(
 					originalCount, drafts.size(),
-					new DraftParcelContext(domain.thermalMarkerContext(), drafts, compositionByDraft));
+					new DraftParcelContext(domain.domainCapabilities.thermalMarkerContext(), drafts, compositionByDraft));
 			displacement = GranularLiquidDisplacement.prepareInsertion(domain, previousSolid, plannedSolid);
 			gas = displacement == null ? prepareInsertionGas(plannedSolid) : displacement.gasTopology;
 			requireInsertionSuccessor(gas, thermalInsertions, displacement);
@@ -252,7 +252,7 @@ final class GranularTransferPlanner {
 			if (domain.thermalState != null) domain.thermalState.commitExternalActiveInsertions(preparedEnergies);
 			boolean[] changedCells = new boolean[domain.cellCount];
 			for (GranularParcelDraft draft : preparedDrafts) if (!changedCells[draft.cell()]) {
-				domain.markGranularExternalChange(draft.cell()); changedCells[draft.cell()] = true;
+				domain.domainPhaseInventory.markGranularExternalChange(draft.cell()); changedCells[draft.cell()] = true;
 			}
 			granular.externalSource = sourceAfter;
 		};
@@ -263,7 +263,7 @@ final class GranularTransferPlanner {
 	}
 
 	private long solidInsertionCapacity(int cell) {
-		return domain.granularGeometricOpenSvq(cell);
+		return domain.domainStep.granularGeometricOpenSvq(cell);
 	}
 
 	private GranularCouplingFields.Position planInsertionPosition(GranularCouplingFields.Position position,
@@ -312,7 +312,7 @@ final class GranularTransferPlanner {
 		}
 		for (int parcel = 0; parcel < granular.parcels.count(); parcel++) {
 			GranularParcelStore.Parcel existing = granular.parcels.parcel(parcel);
-			if (nearby[domain.granularParcelCell(existing)]) {
+			if (nearby[domain.domainStep.granularParcelCell(existing)]) {
 				looseBulkSvq = Math.addExact(looseBulkSvq, SolidVolume.bulkVolumeCeil(
 						existing.solidVolumeSvq(), granular.registry.material(existing.materialHandle()).restPorosityQ()));
 			}
@@ -347,14 +347,14 @@ final class GranularTransferPlanner {
 			throw new IllegalArgumentException("Granular extraction capacity is invalid");
 		}
 		if (maxRadius < 0) throw new IllegalArgumentException("Granular extraction radius is invalid");
-		domain.cellIndexChecked(cellX, cellY, cellZ); long remaining = maximumSolidVolumeSvq;
-		List<FluidDomain.CellCandidate> extractionCells = domain.nearbyCells(cellX, cellY, cellZ, maxRadius);
+		domain.domainFlowFields.cellIndexChecked(cellX, cellY, cellZ); long remaining = maximumSolidVolumeSvq;
+		List<FluidDomain.CellCandidate> extractionCells = domain.domainFlowFields.nearbyCells(cellX, cellY, cellZ, maxRadius);
 		boolean[] near = new boolean[domain.cellCount]; for (FluidDomain.CellCandidate candidate : extractionCells) near[candidate.index()] = true;
 		ArrayList<GranularRemoval> removals = new ArrayList<>();
 		GranularLedgerBuilder ledger = new GranularLedgerBuilder();
 		for (int parcelIndex = 0; parcelIndex < granular.parcels.count() && remaining > 0L; parcelIndex++) {
 			GranularParcelStore.Parcel parcel = granular.parcels.parcel(parcelIndex);
-			int parcelCell = domain.granularParcelCell(parcel);
+			int parcelCell = domain.domainStep.granularParcelCell(parcel);
 			if (!near[parcelCell] || !ledger.canAccept(granular.registry.material(parcel.materialHandle()).id())) continue;
 			long taken = Math.min(remaining, parcel.solidVolumeSvq());
 			if (parcel.solidCompositionHandle() != 0 && taken != parcel.solidVolumeSvq()) continue;
@@ -393,13 +393,13 @@ final class GranularTransferPlanner {
 		if (!itemAcceptance.test(transfer)) {
 			return FluidDomain.GranularExtraction.rejected("Accessible granular inventory cannot be represented by the dry container");
 		}
-		domain.ensureInventoryGrid(); domain.granularCoupling.rebuild(granular.parcels, granular.deposits);
+		domain.domainFlowFields.ensureInventoryGrid(); domain.granularCoupling.rebuild(granular.parcels, granular.deposits);
 		long[] futureSolid = domain.granularCoupling.copySolidSvq();
 		var remainingParcels = new java.util.HashMap<Integer, GranularParcelStore.Parcel>();
 		for (var removal : removals) {
 			if (removal.deposit()) { futureSolid[removal.cell()] -= removal.solidVolumeSvq(); continue; }
 			var source = granular.parcels.parcel(removal.index());
-			domain.granularCoupling.removePlannedParcel(futureSolid, FluidDomainStepCoordinator.parcelPosition(source), source.solidVolumeSvq());
+			domain.granularCoupling.removePlannedParcel(futureSolid, DomainStep.parcelPosition(source), source.solidVolumeSvq());
 			if (removal.solidVolumeSvq() == removal.originalSolidVolumeSvq()) continue;
 			var next = granular.parcels.prepareOverwrite(removal.index(), new GranularParcelStore.Parcel(source.x(), source.y(), source.z(),
 					source.velocityX(), source.velocityY(), source.velocityZ(), source.solidVolumeSvq() - removal.solidVolumeSvq(),
@@ -429,7 +429,7 @@ final class GranularTransferPlanner {
 						removal.massUnits(), removal.originalMassUnits())
 						: energy.previewActiveRemaining(removal.index(), removal.massUnits(), removal.originalMassUnits());
 				if (removal.solidVolumeSvq() != removal.originalSolidVolumeSvq()) {
-					var context = domain.thermalMarkerContext();
+					var context = domain.domainCapabilities.thermalMarkerContext();
 					double remainingMass = removal.deposit() ? mmm.units.Mass.kilograms(Math.subtractExact(granular.deposits.matchingGroup(removal.cell(), removal.materialHandle(), group -> group.solidCompositionHandle() == removal.compositionHandle()).massUnits(), removal.massUnits()))
 							: remainingParcels.get(removal.index()).mass();
 					int material = domain.thermalState.registry().materialHandle(mmm.thermal.ThermalMaterialDefinition.CarrierKind.GRANULAR,
@@ -458,11 +458,11 @@ final class GranularTransferPlanner {
 			var next = entry.getValue(); var source = granular.parcels.parcel(ordinal);
 			var kernel = new GranularKernel(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());
 			kernel.capture(next.x(), next.y(), next.z(), next.solidVolumeSvq());
-			java.util.function.IntToLongFunction available = cell -> domain.granularGeometricOpenSvq(cell)
-					- mmm.granular.SolidVolume.cellVolumeSvqCeil(domain.markerGrid.exactCellVolumeInventory[cell]) - futureSolid[cell];
+			java.util.function.IntToLongFunction available = cell -> domain.domainStep.granularGeometricOpenSvq(cell)
+					- mmm.granular.SolidVolume.cellVolumeSvqCeil(domain.liquidGrid.exactCellVolumeInventory[cell]) - futureSolid[cell];
 			int[] nonIncreasing = GranularIntegerAllocation.admissibleMasks(kernel,
 					cell -> Math.min(available.applyAsLong(cell), domain.granularCoupling.parcelShareAtCell(
-							FluidDomainStepCoordinator.parcelPosition(source), source.solidVolumeSvq(), cell)));
+							DomainStep.parcelPosition(source), source.solidVolumeSvq(), cell)));
 			int[] admissible = GranularIntegerAllocation.admissibleMasks(kernel, available);
 			if (admissible.length == 0) return FluidDomain.GranularExtraction.rejected("Remaining granular floor/ceil choices cannot share the current liquid capacity");
 			boolean[] tried = new boolean[256]; boolean selected = false; RuntimeException lastFailure = null;
@@ -470,15 +470,15 @@ final class GranularTransferPlanner {
 				for (int mask : choices) {
 					if (tried[mask]) continue;
 					tried[mask] = true; var candidate = next.withCeilMask(mask);
-					if (!domain.granularCoupling.tryPlanParcel(futureSolid, FluidDomainStepCoordinator.parcelPosition(candidate), candidate.solidVolumeSvq(),
-							cell -> domain.granularGeometricOpenSvq(cell) - mmm.granular.SolidVolume.cellVolumeSvqCeil(domain.markerGrid.exactCellVolumeInventory[cell]))) continue;
+					if (!domain.granularCoupling.tryPlanParcel(futureSolid, DomainStep.parcelPosition(candidate), candidate.solidVolumeSvq(),
+							cell -> domain.domainStep.granularGeometricOpenSvq(cell) - mmm.granular.SolidVolume.cellVolumeSvqCeil(domain.liquidGrid.exactCellVolumeInventory[cell]))) continue;
 					try {
 						gas = prepareExtractionGas(futureSolid, thermalAfter);
 						remainingParcels.put(ordinal, candidate); selected = true; break;
 					} catch (GasTopologyBlockedException | IllegalArgumentException | ArithmeticException unavailable) {
 						lastFailure = unavailable;
 					}
-					domain.granularCoupling.removePlannedParcel(futureSolid, FluidDomainStepCoordinator.parcelPosition(candidate), candidate.solidVolumeSvq());
+					domain.granularCoupling.removePlannedParcel(futureSolid, DomainStep.parcelPosition(candidate), candidate.solidVolumeSvq());
 				}
 				if (selected) break;
 			}
@@ -512,7 +512,7 @@ final class GranularTransferPlanner {
 		if (domain.thermalState != null) domain.thermalState.settleExternalExtraction(bookedEnergy, removedEnergy);
 		boolean[] changedCells = new boolean[domain.cellCount];
 		for (GranularRemoval removal : removals) if (!changedCells[removal.cell()]) {
-			domain.markGranularExternalChange(removal.cell()); changedCells[removal.cell()] = true;
+			domain.domainPhaseInventory.markGranularExternalChange(removal.cell()); changedCells[removal.cell()] = true;
 		}
 		if (gas != null) domain.gasTopologyCoordinator.commit(gas);
 		granular.escapedSink = sinkAfter;

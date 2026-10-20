@@ -37,20 +37,20 @@ public final class M5GasLiquidCouplingValidation {
 
 	private static void validateSealedGasAndCapillaryJumpShareFaces() {
 		FluidSolverConfig config = new FluidSolverConfig(
-				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F);
+				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 2.0E-3F, 0.80F);
 		FluidDomain domain = new FluidDomain(4, 4, 4, config, 64);
 		domain.setVolume(1, 1, 1, 1.0F);
 		FluidMaterialRegistry registry = new FluidMaterialRegistry(java.util.List.of(
 				new FluidMaterial("mmm:gas_contact_test", DENSITY, "mmm:gas_contact_test",
 						0.0728, Math.PI / 2.0)));
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
-			domain.setMarkerMaterial(marker, registry, 0);
+			domain.domainCollision.setMarkerMaterial(marker, registry, 0);
 		}
 		domain.sealDomainBoundary();
 		domain.bootstrapGasState(null);
 		long gasInventory = domain.gasBoundary().sealedInventoryNanos();
-		domain.step();
-		float jump = domain.surfaceTensionPressureAt(1, 1, 1);
+		domain.domainStep.step();
+		float jump = domain.domainCollision.surfaceTensionPressureAt(1, 1, 1);
 		float solvedGasPressure = domain.pressureReference + domain.projection.gasPressure[1];
 		check(domain.projection.gasPressureUnknown[1]
 				&& Math.abs(domain.pressure(1, 1, 1) - solvedGasPressure - jump) <= 1.0E-6F,
@@ -65,7 +65,7 @@ public final class M5GasLiquidCouplingValidation {
 	private static void validateEmptyControllerBoundaryPourRetainsLineage() {
 		int n = 8;
 		FluidSolverConfig config = new FluidSolverConfig(
-				0.5F, DENSITY, GRAVITY, 1.0F / 20.0F, 120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+				0.5F, DENSITY, GRAVITY, 1.0F / 20.0F, 120, 1.0E-4F, 2.0E-3F, 0.80F);
 		FluidDomain domain = new FluidDomain(n, n, n, config, 4_096);
 		domain.sealDomainBoundary();
 		domain.bootstrapGasState(null);
@@ -93,7 +93,7 @@ public final class M5GasLiquidCouplingValidation {
 
 	private static void validateFiniteClosedGasWithoutCapacityBlocksTyped() {
 		FluidSolverConfig config = new FluidSolverConfig(
-				0.5F, DENSITY, GRAVITY, 1.0F / 20.0F, 120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+				0.5F, DENSITY, GRAVITY, 1.0F / 20.0F, 120, 1.0E-4F, 2.0E-3F, 0.80F);
 		FluidDomain domain = new FluidDomain(2, 2, 2, config, 128);
 		domain.sealDomainBoundary();
 		domain.bootstrapGasState(null);
@@ -112,7 +112,7 @@ public final class M5GasLiquidCouplingValidation {
 
 	private static void validateFiniteGasNodeUsesEquationOfStateCompliance() {
 		FluidDomain domain = utubeDomain(true);
-		domain.step();
+		domain.domainStep.step();
 		double volume = domain.gasBoundary().availableVolume(1);
 		domain.setGasNodeStandardVolume(1, 1.5 * volume);
 		double absolutePressure = AirNetwork.REFERENCE_PRESSURE + domain.gasBoundary().gaugePressure(1);
@@ -120,7 +120,7 @@ public final class M5GasLiquidCouplingValidation {
 		double h = domain.config().cellSize();
 		float expectedStorage = (float) (domain.config.density() * volume / absolutePressure
 				/ (dt * dt * h * h * h));
-		domain.step();
+		domain.domainStep.step();
 		check(domain.projection.gasPressureUnknown[1],
 				"finite sealed gas touching liquid stayed a lagged Dirichlet boundary");
 		check(Math.abs(domain.projection.gasStorageCoefficient[1] - expectedStorage)
@@ -136,7 +136,7 @@ public final class M5GasLiquidCouplingValidation {
 	private static void validateClosedCavityAfterBootstrapStartsAsVacuum() {
 		int n = 4;
 		FluidSolverConfig config = new FluidSolverConfig(
-				0.5F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F);
+				0.5F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 2.0E-3F, 0.80F);
 		FluidDomain domain = new FluidDomain(n, n, n, config, n * n * n * 8);
 		domain.sealDomainBoundary();
 		for (int z = 0; z < n; z++) for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
@@ -238,7 +238,7 @@ public final class M5GasLiquidCouplingValidation {
 	private static void validateSplitRetainsSealedShareWhenPeerVents() {
 		int n = 8;
 		FluidSolverConfig config = new FluidSolverConfig(
-				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F);
+				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 2.0E-3F, 0.80F);
 		FluidDomain domain = new FluidDomain(n, n, n, config, n * n * n * 8);
 		for (int z = 0; z < n; z++) for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
 			boolean shell = x == 0 || x == n - 1 || y == 0 || y == n - 1 || z == 0 || z == n - 1;
@@ -298,7 +298,7 @@ public final class M5GasLiquidCouplingValidation {
 
 	private static void validateOpenTubesStayAmbient() {
 		FluidDomain domain = utubeDomain(false);
-		domain.step();
+		domain.domainStep.step();
 		check(!domain.gasPressureActive(), "open-topped tube pair must not create sealed gas");
 		check(domain.gasBoundary().nodeCount() == 0, "open-topped tube pair must keep zero sealed nodes");
 		checkLedger(domain.gasBoundary(), "open tubes");
@@ -411,7 +411,7 @@ public final class M5GasLiquidCouplingValidation {
 	private static FluidDomain utubeDomain(boolean sealLeft) {
 		int sizeX = 12, sizeY = 24, sizeZ = 4;
 		FluidSolverConfig config = new FluidSolverConfig(
-				1.0F, DENSITY, GRAVITY, 1.0F / 20.0F, 400, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F);
+				1.0F, DENSITY, GRAVITY, 1.0F / 20.0F, 400, 1.0E-6F, 2.0E-3F, 0.80F);
 		FluidDomain domain = new FluidDomain(sizeX, sizeY, sizeZ, config, sizeX * sizeY * sizeZ * 8);
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			boolean shell = x == 0 || x == sizeX - 1 || z == 0 || z == sizeZ - 1 || y == 0;
@@ -432,7 +432,7 @@ public final class M5GasLiquidCouplingValidation {
 	private static FluidDomain chamberPairDomain() {
 		int n = 8;
 		FluidSolverConfig config = new FluidSolverConfig(
-				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F);
+				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 2.0E-3F, 0.80F);
 		FluidDomain domain = new FluidDomain(n, n, n, config, n * n * n * 8);
 		for (int z = 0; z < n; z++) for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
 			boolean shell = x == 0 || x == n - 1 || z == 0 || z == n - 1 || y == 0 || y == n - 1;

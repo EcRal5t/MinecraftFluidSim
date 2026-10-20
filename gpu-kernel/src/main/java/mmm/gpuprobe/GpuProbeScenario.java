@@ -52,7 +52,7 @@ final class GpuProbeScenario {
 
 	static FluidSolverConfig cpuConfig() {
 		return new FluidSolverConfig(CELL_SIZE, DENSITY, GRAVITY, TIME_STEP,
-				200, PRESSURE_TOLERANCE, 0.45F, 2.0E-3F, 0.80F);
+				200, PRESSURE_TOLERANCE, 2.0E-3F, 0.80F);
 	}
 
 	static FluidStepCandidate evaluateCpuStep(FluidDomain domain, long generation) {

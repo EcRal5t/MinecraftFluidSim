@@ -8,7 +8,7 @@ import java.util.TreeMap;
 
 /** One donor pass shares the liquid quantity transfers and their local mixing heat. */
 final class CellMomentumTransport {
-    record Prepared(MacMomentumState momentum,Map<Integer,SignedDyadic> heatByCell) { }
+    record Prepared(MacMomentumState momentum,Map<Integer,SignedDyadic> heatByCell,CellMacStage.WallImpulse wallImpulse) { }
     private final FluidDomain domain;
     private final long[][] massFlux;
     private final long[] before,after;
@@ -24,10 +24,10 @@ final class CellMomentumTransport {
         velocity=new double[][]{new double[domain.mac.velocityX.length],new double[domain.mac.velocityY.length],new double[domain.mac.velocityZ.length]};
         for(int axis=0;axis<3;axis++)components[axis]=new MacMomentumAdvection(domain.sizeX,domain.sizeY,domain.sizeZ,axis);
     }
-    Prepared prepare(CellLiquidVolumeTransport.Prepared liquid){
+    Prepared prepare(CellMacStage.PreparedLiquid liquid){
         return prepare(liquid,new float[][]{domain.mac.velocityX,domain.mac.velocityY,domain.mac.velocityZ});
     }
-    Prepared prepare(CellLiquidVolumeTransport.Prepared liquid,float[][] initial){
+    Prepared prepare(CellMacStage.PreparedLiquid liquid,float[][] initial){
         cellMass(liquid.sourceInventory(),before);cellMass(liquid.inventory().future(),after);
         for(int cell=0;cell<volume.length;cell++)volume[cell]=liquid.inventory().future().exactCellVolume(cell).toDouble();
         return prepare(liquid.volumeFlux(),liquid.inventory().transfers(),before,after,initial);
@@ -55,8 +55,9 @@ final class CellMomentumTransport {
             }
             components[axis].addHeatToCells(afterMass,heat);
         }
+        var walls=domain.cellMacStage.stopWallMomentum(result,afterMass,heat,null);
         var exactHeat=new TreeMap<Integer,SignedDyadic>();for(int cell=0;cell<heat.length;cell++)if(heat[cell]>0)exactHeat.put(cell,SignedDyadic.of(heat[cell]));
-        return new Prepared(new MacMomentumState(domain.sizeX,domain.sizeY,domain.sizeZ,result[0],result[1],result[2]),Map.copyOf(exactHeat));
+        return new Prepared(new MacMomentumState(domain.sizeX,domain.sizeY,domain.sizeZ,result[0],result[1],result[2]),Map.copyOf(exactHeat),walls);
     }
     /** Unresolved films share motion with the nearest resolved liquid through fixed open cells. */
     private boolean prepareUnresolvedNeighborhood(long[] afterMass){
@@ -76,9 +77,9 @@ final class CellMomentumTransport {
                 int axis=direction/2,sign=(direction&1)==0?-1:1;
                 int xx=x+(axis==0?sign:0),yy=y+(axis==1?sign:0),zz=z+(axis==2?sign:0);
                 if(xx<0||yy<0||zz<0||xx>=domain.sizeX||yy>=domain.sizeY||zz>=domain.sizeZ)continue;
-                int next=domain.cellIndex(xx,yy,zz);if(nearest[next]>=0||CellRemapMicroTopology.components(cut.mask(next)).length!=1)continue;
+                int next=domain.domainFlowFields.cellIndex(xx,yy,zz);if(nearest[next]>=0||CellRemapMicroTopology.components(cut.mask(next)).length!=1)continue;
                 int fx=x+(axis==0&&sign>0?1:0),fy=y+(axis==1&&sign>0?1:0),fz=z+(axis==2&&sign>0?1:0);
-                int face=axis==0?domain.xFaceIndex(fx,fy,fz):axis==1?domain.yFaceIndex(fx,fy,fz):domain.zFaceIndex(fx,fy,fz);
+                int face=axis==0?domain.domainFlowFields.xFaceIndex(fx,fy,fz):axis==1?domain.domainFlowFields.yFaceIndex(fx,fy,fz):domain.domainFlowFields.zFaceIndex(fx,fy,fz);
                 if(!(domain.pressureSystem.solidFaces.fixedPoreOpen(axis,face)>0))continue;
                 nearest[next]=nearest[cell];queue[end++]=next;
             }
@@ -91,7 +92,7 @@ final class CellMomentumTransport {
             int xx=x+(axis==0?side:0),yy=y+(axis==1?side:0),zz=z+(axis==2?side:0);
             int coordinate=axis==0?xx:axis==1?yy:zz,size=axis==0?domain.sizeX:axis==1?domain.sizeY:domain.sizeZ;
             if(coordinate==0||coordinate==size)continue;
-            int face=axis==0?domain.xFaceIndex(xx,yy,zz):axis==1?domain.yFaceIndex(xx,yy,zz):domain.zFaceIndex(xx,yy,zz);
+            int face=axis==0?domain.domainFlowFields.xFaceIndex(xx,yy,zz):axis==1?domain.domainFlowFields.yFaceIndex(xx,yy,zz):domain.domainFlowFields.zFaceIndex(xx,yy,zz);
             if(domain.pressureSystem.solidFaces.open(axis,face)>0)return face;
         }
         return -1;

@@ -109,7 +109,7 @@ final class M3MaterialSurfaceValidation {
 	private static FluidDomain layeredDomain(FluidMaterialRegistry registry, int leftMaterial, int rightMaterial) {
 		FluidDomain domain = filledDomain();
 		for (int z = 1; z <= 4; z++) for (int y = 1; y <= 4; y++) for (int x = 1; x <= 4; x++) {
-			domain.setMaterialInCell(x, y, z, registry, x <= 2 ? leftMaterial : rightMaterial);
+			domain.domainCollision.setMaterialInCell(x, y, z, registry, x <= 2 ? leftMaterial : rightMaterial);
 		}
 		return domain;
 	}
@@ -120,7 +120,7 @@ final class M3MaterialSurfaceValidation {
 		FluidDomain domain = filledDomain();
 		for (int z = 1; z <= 4; z++) for (int y = 1; y <= 4; y++) for (int x = 1; x <= 4; x++) {
 			int material = x <= 2 ? leftMaterial : z <= 2 ? lowRightMaterial : highRightMaterial;
-			domain.setMaterialInCell(x, y, z, registry, material);
+			domain.domainCollision.setMaterialInCell(x, y, z, registry, material);
 		}
 		return domain;
 	}
@@ -128,7 +128,7 @@ final class M3MaterialSurfaceValidation {
 	private static FluidDomain filledDomain() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, 1_000.0F, 0.0F, 1.0F / 40.0F,
-				200, 1.0E-5F, 0.40F, 2.0E-3F, 0.80F
+				200, 1.0E-5F, 2.0E-3F, 0.80F
 		);
 		FluidDomain domain = new FluidDomain(6, 6, 6, config, 1_024);
 		for (int z = 1; z <= 4; z++) for (int y = 1; y <= 4; y++) for (int x = 1; x <= 4; x++) {

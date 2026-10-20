@@ -39,7 +39,7 @@ public final class CapillaryNeckValidation {
 			SignedDyadic mass = SignedDyadic.of(d.liquidCells.massUnits(), 0);
 
 			check(mass.equals(m0),"Neck changed exact integer mass");
-			d.ensureInventoryGrid(); Topology topology = observer.observe(d); Mechanics mechanics = mechanics(d);
+			d.domainFlowFields.ensureInventoryGrid(); Topology topology = observer.observe(d); Mechanics mechanics = mechanics(d);
 			peakMarkers = Math.max(peakMarkers, d.liquidCells.physicalSize()); peakCells = Math.max(peakCells, topology.occupied);
 			peakCellMarkers = Math.max(peakCellMarkers, topology.maxCellMarkers);
 			if (step == 0) { check(!topology.separated, "Neck started separated"); observer.report(d, topology, mechanics, "initial", step, dt); }
@@ -73,11 +73,11 @@ public final class CapillaryNeckValidation {
 
 	private static FluidDomain initialize(int resolution, float dt) {
 		float h = (float) (R / resolution); int nx = 9 * resolution, ny = 5 * resolution / 2;
-		FluidDomain d = new FluidDomain(nx, ny, ny, new FluidSolverConfig(h, 1000, 0, dt, 800, 1e-7F, .45F, .002F, .8F), nx * ny * ny * 8);
+		FluidDomain d = new FluidDomain(nx, ny, ny, new FluidSolverConfig(h, 1000, 0, dt, 800, 1e-7F, .002F, .8F), nx * ny * ny * 8);
 		float[] fractions=new float[d.cellCount];double integrated=0;
 		for(int z=0;z<ny;z++)for(int y=0;y<ny;y++)for(int x=0;x<nx;x++) {
 			double volume=box(x*(double)h,y*(double)h,z*(double)h,h)[0];integrated+=volume;
-			fractions[d.cellIndex(x,y,z)]=(float)Math.clamp(volume/(h*(double)h*h),0,1);
+			fractions[d.domainFlowFields.cellIndex(x,y,z)]=(float)Math.clamp(volume/(h*(double)h*h),0,1);
 		}
 		var water = new FluidMaterial("mmm:water", RHO, "mmm:aqueous", SIGMA, Math.PI / 2);
 		var entry = BuiltinFluidMaterials.createRegistry().entries().stream().filter(e -> e.material().id().equals(water.id())).findFirst().orElseThrow();
@@ -98,20 +98,20 @@ public final class CapillaryNeckValidation {
 			Arrays.fill(parent, -1); Arrays.fill(volume, 0); Arrays.fill(left, false); Arrays.fill(right, false); int occupied = 0, max = 0;
 			SignedDyadic full = SignedDyadic.of(1);
 			for (int c = 0; c < d.cellCount; c++) {
-				var v = d.markerGrid.exactCellVolumeInventory[c]; double open = d.effectiveOpenCellVolume(c);
+				var v = d.liquidGrid.exactCellVolumeInventory[c]; double open = d.domainCollision.effectiveOpenCellVolume(c);
 				check(v.compareTo(open == 1 ? full : SignedDyadic.of(open)) <= 0, "Neck exceeded actual open cell capacity");
-				if (v.signum() > 0) { parent[c] = c; occupied++; max = Math.max(max, d.markerGrid.markerCount[c]); }
+				if (v.signum() > 0) { parent[c] = c; occupied++; max = Math.max(max, d.liquidGrid.stockCount[c]); }
 			}
 			for (int c = 0; c < d.cellCount; c++) if (parent[c] >= 0) {
 				int x = c % d.sizeX, y = c / d.sizeX % d.sizeY, z = c / (d.sizeX * d.sizeY);
 				for (int axis = 0; axis < 3; axis++) {
 					int xx = x + (axis == 0 ? 1 : 0), yy = y + (axis == 1 ? 1 : 0), zz = z + (axis == 2 ? 1 : 0);
-					if (!d.inside(xx, yy, zz)) continue; int next = d.cellIndex(xx, yy, zz);
+					if (!d.domainFlowFields.inside(xx, yy, zz)) continue; int next = d.domainFlowFields.cellIndex(xx, yy, zz);
 					if (parent[next] >= 0 && d.pressurePhaseGeometry.sharedLiquidFaceArea(c, next, axis, d.geometry.cutCells) > 0) parent[root(next)] = root(c);
 				}
 			}
 			for (int c = 0; c < d.cellCount; c++) if (parent[c] >= 0) {
-				int r = root(c); volume[r] += d.unitScale.cubicMeters(d.markerGrid.exactCellVolumeInventory[c].toDouble()); left[r] |= c % d.sizeX == 0; right[r] |= c % d.sizeX == d.sizeX - 1;
+				int r = root(c); volume[r] += d.unitScale.cubicMeters(d.liquidGrid.exactCellVolumeInventory[c].toDouble()); left[r] |= c % d.sizeX == 0; right[r] |= c % d.sizeX == d.sizeX - 1;
 			}
 			int count = 0, l = -1, r = -1, first = -1, second = -1;
 			for (int c = 0; c < d.cellCount; c++) if (volume[c] > 0) {
@@ -127,8 +127,8 @@ public final class CapillaryNeckValidation {
 			double totalArea = 0, mainArea = 0, h = d.config.cellSize(); int pressureCells = 0;
 			for (int c = 0; c < d.cellCount; c++) if (parent[c] >= 0) {
 				int r = root(c), y = c / d.sizeX % d.sizeY, z = c / (d.sizeX * d.sizeY);
-				if (r != t.first && r != t.second) tailV = tailV.add(d.markerGrid.exactCellVolumeInventory[c]);
-				if (y == d.sizeY - 1 || z == d.sizeZ - 1) { outerV = outerV.add(d.markerGrid.exactCellVolumeInventory[c]); if (d.isFluid(c)) pressureCells++; }
+				if (r != t.first && r != t.second) tailV = tailV.add(d.liquidGrid.exactCellVolumeInventory[c]);
+				if (y == d.sizeY - 1 || z == d.sizeZ - 1) { outerV = outerV.add(d.liquidGrid.exactCellVolumeInventory[c]); if (d.domainFlowFields.isFluid(c)) pressureCells++; }
 				double area = (y == d.sizeY - 1 ? wetFace(d, c, 1) : 0) + (z == d.sizeZ - 1 ? wetFace(d, c, 2) : 0);
 				totalArea += area * h * h; if (r == t.first) mainArea += area * h * h;
 			}
@@ -145,7 +145,7 @@ public final class CapillaryNeckValidation {
 	}
 
 	private static Mechanics mechanics(FluidDomain d) {
-		d.ensureGrid();double[] cm=new double[3];double mass=0,h=d.config.cellSize();
+		d.domainFlowFields.ensureGrid();double[] cm=new double[3];double mass=0,h=d.config.cellSize();
 		for(var stock:d.liquidCells.physicalStocks()) {
 			int cell=stock.key().cell();double m=stock.massKilograms();mass+=m;
 			cm[0]+=m*(cell%d.sizeX+.5)*h;cm[1]+=m*(cell/d.sizeX%d.sizeY+.5)*h;cm[2]+=m*(cell/(d.sizeX*d.sizeY)+.5)*h;

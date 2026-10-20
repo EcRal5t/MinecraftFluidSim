@@ -22,28 +22,39 @@ final class ChemicalReactionCandidateValidation {
 					new ChemicalPhaseDefinition("test:cell/phase",liquid,List.of(a,b),Map.of(a,ExactRational.ONE),false)),List.of(
 					new ChemicalReaction("test:cell/isomer",ChemicalReaction.Kind.INSTANTANEOUS,"test:cell/phase",Map.of(a,1),Map.of(b,1),ExactRational.ZERO)));
 			var liquids=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension(liquid,1000,"test:cell/miscible",0,90)));
-			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.45F,.002F,0),64);
+			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.002F,0),64);
 			domain.bindMaterialRegistry(liquids);domain.setVolume(1,1,1,.125F);domain.bindChemistry(chemistry);
 			var air=new ThermalMaterialDefinition("test:cell/air",ThermalMaterialDefinition.CarrierKind.GAS,mmm.fluid.air.BuiltinGasDefinitions.AIR,300,0,.025,
 					List.of(new ThermalMaterialDefinition.CaloricSegment(150,800,718)));
 			var thermal=new ThermalRegistry(List.of(identityThermalMaterial(material,liquid),air),List.of(
 					new ThermalSpeciesOffset("test:cell/oa",a,material,ExactRational.ZERO),
-					new ThermalSpeciesOffset("test:cell/ob",b,material,unavailable?ExactRational.parse("1"+"0".repeat(308)):ExactRational.ZERO)),List.of(),chemistry.fingerprint(),"");
+					new ThermalSpeciesOffset("test:cell/ob",b,material,unavailable?ExactRational.of(1_000_000_000):ExactRational.ZERO)),List.of(),chemistry.fingerprint(),"");
 			domain.bindThermal(thermal,liquids,300);
 			var before=domain.liquidCells.physicalStockAt(0);var u=domain.exactInternalEnergy();var momentum=domain.mac.captureMomentum();
 			for(int pass=0;pass<2;pass++) {
-				var stats=domain.runThermalReactionPhaseAxis(false,0).chemistry();var actual=domain.liquidCells.stock(before.key());
-				require(stats.changedMarkers()==(unavailable||pass>0?0:1),"Cell reaction progress or retry changed");
+				var stats=domain.domainStep.runThermalReactionPhaseAxis(false,0).chemistry();var actual=domain.liquidCells.stock(before.key());
+				require(stats.changedMarkers()==(pass>0?0:1),"Cell reaction progress or retry changed");
 				require(actual.massUnits()==before.massUnits()&&actual.volume().equals(before.volume())
 						&&actual.mixture().exactSpeciesMassKilograms(chemistry).equals(before.mixture().exactSpeciesMassKilograms(chemistry))
 						&&actual.mixture().massResidualUnits()==before.mixture().massResidualUnits()
-						&&actual.mixture().amount(chemistry.speciesHandle(unavailable?a:b))==before.mixture().amount(chemistry.speciesHandle(a)),
+						&&actual.mixture().totalQuanta()==before.mixture().totalQuanta(),
 						"Cell chemistry changed physical mass, residual or stoichiometric inventory");
+				long remaining=actual.mixture().amount(chemistry.speciesHandle(a)),products=actual.mixture().amount(chemistry.speciesHandle(b));
+				require(products>0&&(unavailable?remaining>0:remaining==0)&&domain.thermalTemperatureInCell(1,1,1)>0,
+						"Energy-limited chemistry failed to publish a positive-temperature partial extent");
 				require(domain.exactInternalEnergy().equals(u)&&domain.thermalAudit().expectedInventory().equals(u)
 						&&Arrays.equals(momentum.copyX(),domain.mac.captureMomentum().copyX())
 						&&Arrays.equals(momentum.copyY(),domain.mac.captureMomentum().copyY())
 						&&Arrays.equals(momentum.copyZ(),domain.mac.captureMomentum().copyZ()),"Cell reaction changed energy or MAC momentum");
 				require(domain.chemicalParcels.hasDirtyCells()==unavailable,"Energy-limited reaction lost its retry state");
+			}
+			if(unavailable){
+				long remaining=domain.liquidCells.stock(before.key()).mixture().amount(chemistry.speciesHandle(a));
+				domain.setThermalTemperatureInCell(1,1,1,300);
+				require(domain.domainStep.runThermalReactionPhaseAxis(false,0).chemistry().changedMarkers()>0
+						&&domain.liquidCells.stock(before.key()).mixture().amount(chemistry.speciesHandle(a))<remaining
+						&&domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+						"Energy-limited reaction did not resume after finite reheating");
 			}
 		}
 	}
@@ -87,7 +98,7 @@ final class ChemicalReactionCandidateValidation {
 		var tiny=products(2,ExactRational.parse("0.0001"));var small=new Fixture(tiny,List.of(mixture(tiny,"test:source",1,0)),new int[]{0});
 		require(small.step().changedMarkers()==1&&small.inventory.physicalStockAt(0).mixture().entryCount()==2,"Small integer mass reaction did not finish");
 		var region=new Fixture(registry,List.of(mixture(registry,BuiltinChemicalDefinitions.HCL,750_000_000_000_000L,0),mixture(registry,BuiltinChemicalDefinitions.HCL,750_000_000_000_000L,0)),new int[]{0,1});
-		require(region.step().changedMarkers()==0,"Combined region species capacity was exceeded");
+		require(region.step().changedMarkers()==1&&region.scheduler.hasDirtyCells(),"Combined region species capacity did not admit its available partial extent");
 		var old=region.inventory.stocksInCell(1).getFirst();var water=mixture(registry,BuiltinChemicalDefinitions.H2O,1,0);
 		region.inventory.planEdits(List.of(new LiquidCellInventory.Edit(old.key(),new LiquidCellInventory.Stock(old.key(),old.volume(),water.massUnits(registry),water,0,false)))).commit();
 		require(region.step().changedMarkers()==1&&!region.scheduler.hasDirtyCells(),"Deferred cell did not finish after capacity became available");
@@ -99,14 +110,14 @@ final class ChemicalReactionCandidateValidation {
 				List.of(new ChemicalPhaseDefinition("test:heat/phase",liquid,List.of(a,b),Map.of(a,ExactRational.ONE),false)),List.of(
 				new ChemicalReaction("test:heat/reaction",ChemicalReaction.Kind.INSTANTANEOUS,"test:heat/phase",Map.of(a,1),Map.of(b,1),ExactRational.ZERO)));
 		var fluids=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension(liquid,1,"test:heat/miscible",0,90)));
-		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1,0,.05F,100,1e-5F,.45F,.002F,0),16);
+		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1,0,.05F,100,1e-5F,.002F,0),16);
 		domain.bindMaterialRegistry(fluids);domain.setVolume(0,0,0,1);domain.bindChemistry(chemistry);domain.setMarkerChemical(0,Map.of(a,ChemicalLimits.QUANTA_PER_MOL),false);
 		var thermal=new ThermalRegistry(List.of(new ThermalMaterialDefinition(material,ThermalMaterialDefinition.CarrierKind.LIQUID,liquid,300,0,0,List.of(new ThermalMaterialDefinition.CaloricSegment(200,500,10))),
 				new ThermalMaterialDefinition("test:heat/air",ThermalMaterialDefinition.CarrierKind.GAS,mmm.fluid.air.BuiltinGasDefinitions.AIR,300,0,.025,List.of(new ThermalMaterialDefinition.CaloricSegment(150,800,718)))),
 				List.of(new ThermalSpeciesOffset("test:heat/oa",a,material,ExactRational.ZERO),new ThermalSpeciesOffset("test:heat/ob",b,material,ExactRational.of(-100))),List.of(),chemistry.fingerprint(),"");
 		domain.bindThermal(thermal,fluids,300);var energy=domain.exactInternalEnergy();
-		require(domain.runThermalReactionPhaseAxis(false,0).chemistry().changedMarkers()==1&&domain.exactInternalEnergy().equals(energy)
-				&&Math.abs(domain.thermalState.temperature(0,domain.thermalMarkerContext())-380)<1e-9,"Reaction heat did not follow the conserved cell energy");
+		require(domain.domainStep.runThermalReactionPhaseAxis(false,0).chemistry().changedMarkers()==1&&domain.exactInternalEnergy().equals(energy)
+				&&Math.abs(domain.thermalState.temperature(0,domain.domainCapabilities.thermalMarkerContext())-380)<1e-9,"Reaction heat did not follow the conserved cell energy");
 	}
 
 	private static void evaluationBudgetRotates() {
@@ -129,7 +140,8 @@ final class ChemicalReactionCandidateValidation {
 		private final ChemicalReactionStage stage;
 		Fixture(ChemicalRegistry registry,List<ChemicalMixtureRecord> inputs,int[] cells) {this(registry,inputs,cells,null);}
 		Fixture(ChemicalRegistry registry,List<ChemicalMixtureRecord> inputs,int[] cells,int[] supports) {
-			this.registry=registry;int cellCount=Arrays.stream(cells).max().orElse(0)+1;
+			this.registry=registry;int sizeX=Math.max(2,Arrays.stream(cells).max().orElse(0)+1);
+			int cellCount=Math.multiplyExact(sizeX,4);
 			inventory=new LiquidCellInventory(cellCount,registry);scheduler=new ChemicalParcelStore(registry,SolverUnitScale.forCellSize(1),Math.max(1,inputs.size()),cellCount);
 			for(int i=0;i<inputs.size();i++) {
 				var key=new LiquidCellInventory.Key(cells[i],0,supports==null?255:supports[i]);var input=inputs.get(i);var old=inventory.stock(key);
@@ -139,10 +151,9 @@ final class ChemicalReactionCandidateValidation {
 				inventory.planEdits(List.of(new LiquidCellInventory.Edit(key,new LiquidCellInventory.Stock(key,volume,mass,mixture,0,false)))).commit();scheduler.markDirtyCell(cells[i]);
 			}
 			var fluids=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension(registry.phases().getFirst().materialId(),1000,"test:miscible",0,90)));
-			stage=new ChemicalReactionStage(new ChemicalReactionStage.Workspace(cellCount,null),new ChemicalReactionStage.Access(){
-				public ChemicalParcelStore chemicalParcels(){return scheduler;}public FluidMaterialRegistry materialRegistry(){return fluids;}
-				public LiquidCellInventory liquidCells(){return inventory;}public ThermalDomainState thermalState(){return null;}public void markGridDirty(){}
-			});
+			var domain=new FluidDomain(sizeX,2,2,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.002F,0),Math.max(1,inputs.size()));
+			domain.bindMaterialRegistry(fluids);domain.liquidCells=inventory;domain.chemicalParcels=scheduler;
+			stage=new ChemicalReactionStage(domain);
 		}
 		ChemicalParcelStore.ReactionStats step(){return stage.step();}
 		long totalMass(){long mass=0;for(var stock:inventory.stocks())mass=Math.addExact(mass,stock.massUnits());return mass;}

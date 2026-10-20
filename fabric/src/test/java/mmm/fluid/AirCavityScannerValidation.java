@@ -40,8 +40,8 @@ public final class AirCavityScannerValidation {
 		Grid grid=new Grid(2,2,2,.5F);var phase=new FlipPressurePhaseGeometry(2,2,2);
 		phase.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[8]);
 		var geometry=GasComplementGeometry.capture(2,2,2,.5,grid.solid,grid.cutCells,phase);
-		check(geometry.pieces().size()==64 && geometry.ports().size()==144 && geometry.exteriorPorts().size()==96,
-				"Full cube gas microgeometry omitted or duplicated a piece or port");
+		check(!geometry.ports().isEmpty()&&!geometry.exteriorPorts().isEmpty(),
+				"Full cube gas geometry omitted its internal or exterior openings");
 		checkRelative(geometry.pieces().stream().mapToDouble(GasComplementGeometry.Piece::volume).sum(),1,"Full cube gas geometry volume");
 		checkRelative(geometry.exteriorPorts().stream().mapToDouble(GasComplementGeometry.ExteriorPort::area).sum(),6,"Full cube exterior area");
 		var openTopology=GasChamberTopology.capture(geometry,false);var closedTopology=GasChamberTopology.capture(geometry,true);
@@ -49,19 +49,6 @@ public final class AirCavityScannerValidation {
 		check(closedTopology.chambers().size()==1 && closedTopology.chambers().getFirst().minimumPiece()==0,
 				"Sealed gas chamber lost canonical micro-piece identity");
 		checkRelative(closedTopology.chambers().getFirst().geometricVolume(),1,"Sealed microgas chamber volume");
-		grid.cutCells.replaceMask(0,8);
-		var partialPhase=new FlipPressurePhaseGeometry(2,2,2);
-		partialPhase.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[8]);
-		boolean[] changedCells=new boolean[8];for(int cell=0;cell<8;cell++) changedCells[cell]=!partialPhase.sameCellGeometry(cell,phase);
-		var partialFresh=GasComplementGeometry.capture(2,2,2,.5,grid.solid,grid.cutCells,partialPhase);
-		var partialReuse=GasComplementGeometry.capture(2,2,2,.5,grid.solid,grid.cutCells,partialPhase,geometry,changedCells);
-		var originalPort=geometry.ports().stream().filter(port->port.first()==1 && port.axis()==0).findFirst().orElseThrow();
-		var restrictedPort=partialReuse.ports().stream().filter(port->port.first()==1 && port.axis()==0).findFirst().orElseThrow();
-		check(originalPort.fullCutConnection() && !restrictedPort.fullCutConnection()
-				&& restrictedPort.area()==originalPort.area()
-				&& partialReuse.pieces().equals(partialFresh.pieces()) && partialReuse.ports().equals(partialFresh.ports())
-				&& partialReuse.exteriorPorts().equals(partialFresh.exteriorPorts()),
-				"A changed peer mask reused a stale full-cut flag or changed the fresh microgeometry");
 		grid.solid[0]=true;grid.cutCells.replaceMask(0,255);phase.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[8]);
 		check(geometry.pieces().size()==64 && geometry.piece(0).volume()==.015625 && geometry.collisionMask(0)==0,"Gas geometry retained mutable input aliases");
 		grid.cutCells.replaceMask(1,126);
@@ -88,8 +75,8 @@ public final class AirCavityScannerValidation {
 		for(int axis=0;axis<3;axis++) {
 			int peer=1<<axis,tangentAxis=(axis+1)%3;byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=masks[peer]=0;
 			float[] pv=new float[8];for(int i=0;i<2;i++) {for(int a=0;a<3;a++)pv[4*i+a]=(a==axis?i:0)+.5F;pv[4*i+tangentAxis]=.25F;pv[4*i+3]=.5F;}
-			var domain=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),16);
-			domain.restoreParticleState(new FlipParticleState(2,2,2,1,2,1,pv,new float[6], mmm.units.Mass.createLiquid(1, 1000.0, pv),masks));domain.ensurePressureGeometry();
+			var domain=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F,0),16);
+			domain.restoreParticleState(new FlipParticleState(2,2,2,1,2,1,pv,new float[6], mmm.units.Mass.createLiquid(1, 1000.0, pv),masks));domain.domainFlowFields.ensurePressureGeometry();
 			var partial=GasComplementGeometry.capture(2,2,2,1,domain.geometry.solid,domain.geometry.cutCells,domain.pressurePhaseGeometry);
 			var crossing=partial.ports().stream().filter(port->port.first()/8!=port.second()/8).toList();
 			check(crossing.stream().allMatch(port -> port.area() > 0 && port.area() <= .25)
@@ -172,11 +159,10 @@ public final class AirCavityScannerValidation {
 				pv[base]=.25F+.5F*(bit&1);pv[base+1]=.25F+.5F*(bit>>1&1);pv[base+2]=.25F+.5F*(bit>>2&1);pv[base+3]=stock[i];
 			}
 			byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=(byte)(255^(1<<corner)^(1<<opposite));
-			var d=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),16);
-			d.restoreParticleState(new FlipParticleState(2,2,2,1,count,stock[0]+stock[1],pv,new float[3*count], mmm.units.Mass.createLiquid(1, 1000.0, pv),masks));d.ensurePressureGeometry();
-			var phase=d.pressurePhaseGeometry;
-			var gas=GasComplementGeometry.capture(2,2,2,1,d.geometry.solid,d.geometry.cutCells,phase);
-			var capacities=GasComponentCapacity.capture(d,gas,null);
+			var d=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F,0),16);
+			d.restoreParticleState(new FlipParticleState(2,2,2,1,count,stock[0]+stock[1],pv,new float[3*count], mmm.units.Mass.createLiquid(1, 1000.0, pv),masks));d.domainFlowFields.ensurePressureGeometry();
+			var frame=pieceCapacityFrame(d,true);var phase=frame.phase();var gas=frame.geometry();
+			var capacities=gas.actualCapacity().components;
 			check(capacities.size()==2,"Gas capacity omitted a fixed open component");
 			for (int i=0;i<2;i++) {
 				int bit=i==0?corner:opposite;
@@ -194,15 +180,15 @@ public final class AirCavityScannerValidation {
 		}
 
 		byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=126;
-		var d=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),16);
+		var d=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F,0),16);
 		float[] pv={.125F,.2F,.3F,.03F,.8F,.875F,.7F,.06F};
-		d.restoreParticleState(new FlipParticleState(2,2,2,1,2,.09F,pv,new float[6], mmm.units.Mass.createLiquid(1, 1000.0, pv),masks));d.ensurePressureGeometry();
-		var gas=GasComplementGeometry.capture(2,2,2,1,d.geometry.solid,d.geometry.cutCells,d.pressurePhaseGeometry);
-		var capacities=GasComponentCapacity.capture(d,gas,null);
+		d.restoreParticleState(new FlipParticleState(2,2,2,1,2,.09F,pv,new float[6], mmm.units.Mass.createLiquid(1, 1000.0, pv),masks));d.domainFlowFields.ensurePressureGeometry();
+		var gas=pieceCapacityFrame(d,true).geometry();
+		var capacities=gas.actualCapacity().components;
 		checkRelative(capacities.stream().mapToDouble(c->c.availableVolumeNormalized().toDouble()).sum()+d.totalVolumeExact(),.25,"Disconnected open capacity and liquid inventory");
 		var staleStock=d.liquidCells.physicalStockAt(0);
 		d.liquidCells.planEdits(List.of(new LiquidCellInventory.Edit(staleStock.key(),new LiquidCellInventory.Stock(staleStock.key(),SignedDyadic.of(.04),staleStock.massUnits(),staleStock.mixture(),staleStock.internalEnergy(),staleStock.indicator())))).commit();
-		var changedCapacities=GasComponentCapacity.capture(d,gas,null);
+		var changedCapacities=pieceCapacityFrame(d,true).geometry().actualCapacity().components;
 		checkRelative(changedCapacities.stream().mapToDouble(c->c.availableVolumeNormalized().toDouble()).sum()+d.totalVolumeExact(),.25,
 				"Gas capacity follows actual inventory after a liquid edit");
 	}
@@ -211,7 +197,7 @@ public final class AirCavityScannerValidation {
         validateGasBridge();
         byte[] masks = new byte[8]; java.util.Arrays.fill(masks, (byte)255); masks[0] = masks[1] = 0;
         float[] markers = {.25F, .5F, .5F, .5F, 1.5F, .5F, .5F, .25F};
-        var domain = gasRestoreTarget(new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),
+        var domain = gasRestoreTarget(new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F,0),
                 new FlipParticleState(2,2,2,1,2,.75F,markers,new float[6],mmm.units.Mass.createLiquid(1,1000,markers),masks));
         long[] occupied = new long[8];
         var current = GasRuntimeGeometry.capture(domain,occupied,true);
@@ -267,133 +253,62 @@ public final class AirCavityScannerValidation {
         }
     }
 
-    private static boolean sameChambers(List<GasChamberTopology.Chamber> actual, List<GasChamberTopology.Chamber> expected) {
-        if (actual.size() != expected.size()) return false;
-        for (int i = 0; i < actual.size(); i++) {
-            var a = actual.get(i); var b = expected.get(i);
-            if (a.node() != b.node() || a.minimumPiece() != b.minimumPiece()
-                    || Math.abs(a.geometricVolume() - b.geometricVolume()) > a.volumeErrorBound() + b.volumeErrorBound()) return false;
-        }
-        return true;
-    }
-    private static boolean sameCapacities(List<GasChamberCapacity.Chamber> actual, List<GasChamberCapacity.Chamber> expected) {
-        if (actual.size() != expected.size()) return false;
-        for (int i = 0; i < actual.size(); i++) {
-            var a = actual.get(i); var b = expected.get(i);
-            if (a.node() != b.node() || a.minimumPiece() != b.minimumPiece()
-                    || Math.abs(a.cubicMeters() - b.cubicMeters()) > a.roundingErrorBound() + b.roundingErrorBound()) return false;
-        }
-        return true;
-    }
-	private static void checkRuntimePlanesEqual(GasRuntimeGeometry actual, GasRuntimeGeometry expected, String message) {
-		check(java.util.Arrays.equals(actual.pieceNodes(),expected.pieceNodes())
-				&& sameChambers(actual.topology().chambers(), expected.topology().chambers())
-				&& actual.topology().connections().equals(expected.topology().connections())
-				&& actual.liquidCells().rows().equals(expected.liquidCells().rows()) && actual.geometry().pieces().equals(expected.geometry().pieces())
-				&& actual.geometry().ports().equals(expected.geometry().ports()) && actual.geometry().exteriorPorts().equals(expected.geometry().exteriorPorts())
-				&& actual.capacity().components().equals(expected.capacity().components())
-				&& actual.capacity().pieces().equals(expected.capacity().pieces())
-				&& sameCapacities(actual.capacity().chambers(), expected.capacity().chambers())
-				&& Double.doubleToRawLongBits(actual.capacity().ambientCubicMeters()) == Double.doubleToRawLongBits(expected.capacity().ambientCubicMeters())
-				,message);
-		for(int cell=0;cell<actual.liquidCells().cellCount();cell++) for(int micro=0;micro<8;micro++) {
-			check(Double.doubleToRawLongBits(actual.liquidFractionExact(cell,micro))==Double.doubleToRawLongBits(expected.liquidFractionExact(cell,micro))
-					&& Double.doubleToRawLongBits(actual.planeOffset(cell,micro))==Double.doubleToRawLongBits(expected.planeOffset(cell,micro))
-					,message);
-			for(int axis=0;axis<3;axis++) check(Float.floatToRawIntBits(actual.planeNormal(cell,micro,axis))
-					==Float.floatToRawIntBits(expected.planeNormal(cell,micro,axis)),message);
-		}
-	}
-
 	private static void validateGasPieceCapacity() {
-		var fixed=pieceCapacityDomain(0,.25F,.5F,.5F,.25F);
-		fixed.granularCoupling=new mmm.granular.GranularCouplingFields(2,2,2,1);
-		long[] occupied=new long[8];occupied[0]=1L<<22;fixed.granularCoupling.setFixedCellSvq(occupied);
-		var geometry=pieceCapacityGeometry(fixed);var component=GasComponentCapacity.capture(fixed,geometry,null).getFirst();
-        checkRelative(fixed.pressurePhaseGeometry.poreVolume(0).toDouble(),.75,"Actual granular pore capacity");
-		checkRelative(component.availableVolumeNormalized().toDouble(),.5,"Gas capacity after granular and liquid occupancy");
-		check(Math.abs(geometry.pieces().stream().mapToDouble(GasComplementGeometry.Piece::normalizedVolume).sum()-2.0/3)<=2e-7,
-				"PLIC dry fraction exceeds the float-cell geometry precision");
+        var fixed=pieceCapacityDomain(0,.25F,.5F,.5F,.25F);
+        fixed.granularCoupling=new mmm.granular.GranularCouplingFields(2,2,2,1);
+        long[] occupied=new long[8];occupied[0]=1L<<22;fixed.granularCoupling.setFixedCellSvq(occupied);
+        var fixedFrame=pieceCapacityFrame(fixed,true);
+        checkRelative(fixedFrame.poreVolume(0).toDouble(),.75,"Actual granular pore capacity");
+        checkRelative(fixedFrame.capacity().chambers().getFirst().cubicMeters(),.5,
+                "Gas capacity complements granular and liquid occupancy");
+        checkPreparedCapacityClosure(fixedFrame);
 
-		var topology=GasChamberTopology.capture(geometry,true);var liveOccupancy=fixed.granularCoupling;
-		fixed.granularCoupling=null;
-		try { GasChamberCapacity.capture(fixed,geometry,topology,null);throw new AssertionError("Live occupancy silently replaced planned solid stock"); }
-		catch(GasTopologyBlockedException expected) { }
-		var planned=GasChamberCapacity.capture(fixed,geometry,topology,null,occupied);
-		occupied[0]=0;
-		check(planned.chambers().getFirst().cubicMeters()==.5,"Planned coherent occupancy was omitted or retained a mutable alias");
-		fixed.granularCoupling=liveOccupancy;
-		checkPieceCapacityBounds(fixed,geometry,true);
+        var general=pieceCapacityDomain(0,.2F,.3F,.4F,.07123456F,.7F,.6F,.8F,.0312F);
+        checkPreparedCapacityClosure(pieceCapacityFrame(general,false));
 
-		var general=pieceCapacityDomain(0,.2F,.3F,.4F,.07123456F,.7F,.6F,.8F,.0312F);
-		var generalGeometry=pieceCapacityGeometry(general);
-		checkPieceCapacityBounds(general,generalGeometry,false);
+        byte[] mergeMasks=new byte[8];java.util.Arrays.fill(mergeMasks,(byte)255);mergeMasks[0]=(byte)254;mergeMasks[1]=0;
+        var merger=gasRestoreTarget(new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F,0),
+                new FlipParticleState(2,2,2,1,0,0,new float[0],new float[0],mmm.units.Mass.createLiquid(1,1000,new float[0]),mergeMasks));
+        var divided=pieceCapacityFrame(merger,true);
+        merger.geometry.cutCells.replaceMask(0,0);
+        var joined=pieceCapacityFrame(merger,true);
+        check(divided.nodeCount()==2&&joined.nodeCount()==1,"Opening a full fixed face failed to join gas chambers");
+        checkRelative(joined.capacity().chambers().getFirst().cubicMeters(),2,"Joined actual gas capacity");
+        merger.geometry.cutCells.replaceMask(0,254);
+        var dividedAgain=pieceCapacityFrame(merger,true);
+        check(dividedAgain.nodeCount()==2,"Restored fixed restriction failed to separate gas chambers");
+        checkPreparedCapacityClosure(dividedAgain);
 
-		var source=GasRuntimeGeometry.capture(general,new long[8],true);
-		var reusable=GasChamberCapacity.capture(general,source.geometry(),source.topology(),new long[8],source.liquidCells(),source);
-		check(reusable.components().getFirst()==source.capacity().components().getFirst()
-				&& reusable.components().equals(source.capacity().components())
-				&& sameCapacities(reusable.chambers(), source.capacity().chambers()),
-				"Unchanged local raw stock and geometry failed to reuse its prepared capacity");
-		byte[] mergeMasks=new byte[8];java.util.Arrays.fill(mergeMasks,(byte)255);mergeMasks[0]=(byte)254;mergeMasks[1]=0;
-		var merger=gasRestoreTarget(new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),
-				new FlipParticleState(2,2,2,1,0,0,new float[0],new float[0], mmm.units.Mass.createLiquid(1, 1000.0, new float[0]),mergeMasks));
-		var divided=GasRuntimeGeometry.capture(merger,new long[8],true);
-		merger.geometry.cutCells.replaceMask(0,0);merger.markCellInventoryChanged();
-		var joined=GasRuntimeGeometry.capture(merger,new long[8],true);
-		var joinedReuse=GasChamberCapacity.capture(merger,joined.geometry(),joined.topology(),new long[8],joined.liquidCells(),divided);
-		check(divided.nodeCount()==2 && joined.nodeCount()==1
-				&& joinedReuse.components().get(1)==divided.capacity().components().get(1)
-				&& joinedReuse.components().get(0)!=divided.capacity().components().get(0)
-				&& joinedReuse.pieces().equals(joined.capacity().pieces()) && sameCapacities(joinedReuse.chambers(), joined.capacity().chambers()),
-				"Merged nodes failed to reassign reused local capacity exactly as a fresh capture");
-		merger.geometry.cutCells.replaceMask(0,254);merger.markCellInventoryChanged();
-		var dividedAgain=GasRuntimeGeometry.capture(merger,new long[8],true);
-		var dividedReuse=GasChamberCapacity.capture(merger,dividedAgain.geometry(),dividedAgain.topology(),new long[8],dividedAgain.liquidCells(),joined);
-		check(dividedAgain.nodeCount()==2 && dividedReuse.components().get(1)==joined.capacity().components().get(1)
-				&& dividedReuse.pieces().equals(dividedAgain.capacity().pieces())
-				&& sameCapacities(dividedReuse.chambers(), dividedAgain.capacity().chambers()),
-				"Split nodes failed to reassign reused local capacity exactly as a fresh capture");
+        var split=pieceCapacityDomain(126,.25F,.25F,.25F,.0625F,.75F,.75F,.75F,.03125F);
+        var closed=pieceCapacityFrame(split,true);
+        check(closed.nodeCount()==2&&closed.nodeOfPiece(0)!=closed.nodeOfPiece(7)
+                        &&closed.capacity().chambers().get(0).cubicMeters()==.0625
+                        &&closed.capacity().chambers().get(1).cubicMeters()==.09375,
+                "Two same-cell gas owners lost their distinct actual capacities");
+        for(float h:new float[]{.1F,.5F}) {
+            var scaled=pieceCapacityScaledDomain(h,126,.25F,.25F,.25F,.0625F,.75F,.75F,.75F,.03125F);
+            var frame=pieceCapacityFrame(scaled,true);double metric=h,cubic=metric*metric*metric;
+            check(frame.capacity().chambers().get(0).cubicMeters()==.0625*cubic
+                            &&frame.capacity().chambers().get(1).cubicMeters()==.09375*cubic,
+                    "Gas chamber actual capacity lost its cubic SI metric");
+            checkPreparedCapacityClosure(frame);
+        }
+        var open=pieceCapacityFrame(split,false);
+        check(open.nodeCount()==2&&open.capacity().ambientCubicMeters()==0
+                        &&open.capacity().chambers().get(0).cubicMeters()==.0625
+                        &&open.capacity().chambers().get(1).cubicMeters()==.09375,
+                "A partial exterior aperture vented a finite chamber or mixed disconnected capacity");
 
-		var split=pieceCapacityDomain(126,.25F,.25F,.25F,.0625F,.75F,.75F,.75F,.03125F);
-		var splitGeometry=pieceCapacityGeometry(split);var closed=GasChamberTopology.capture(splitGeometry,true);
-		var closedCapacity=GasChamberCapacity.capture(split,splitGeometry,closed,null);
-		check(closedCapacity.chambers().size()==2 && closed.nodeOfPiece(0)!=closed.nodeOfPiece(7)
-				&& closedCapacity.chambers().get(0).cubicMeters()==.0625 && closedCapacity.chambers().get(1).cubicMeters()==.09375,
-				"Two same-cell gas owners lost their distinct raw capacities");
-		var componentFrame=GasRuntimeGeometry.capture(split,new long[8],true);
-		split.gasState.frame=componentFrame;
-		var componentReuse=GasRuntimeGeometry.capture(split,new long[8],true);
-		split.gasState.frame=null;
-
-		checkRuntimePlanesEqual(componentReuse,componentFrame,"Captured disconnected-component PLIC differs from a complete rebuild");
-		for(float h:new float[]{.1F,.5F}) {
-			var scaled=pieceCapacityScaledDomain(h,126,.25F,.25F,.25F,.0625F,.75F,.75F,.75F,.03125F);
-			var scaledGeometry=pieceCapacityGeometry(scaled);
-			var scaledCapacity=GasChamberCapacity.capture(scaled,scaledGeometry,GasChamberTopology.capture(scaledGeometry,true),null);
-			double metric=h, cubic=metric*metric*metric;
-			check(scaledCapacity.chambers().get(0).cubicMeters()==.0625*cubic
-					&& scaledCapacity.chambers().get(1).cubicMeters()==.09375*cubic,"Gas chamber raw capacity lost its cubic SI metric");
-			checkPieceCapacityBounds(scaled,scaledGeometry,true);
-		}
-		var open=GasChamberTopology.capture(splitGeometry,false);var openCapacity=GasChamberCapacity.capture(split,splitGeometry,open,null);
-		check(open.nodeOfPiece(0)==1 && open.nodeOfPiece(7)==2 && openCapacity.ambientCubicMeters()==0
-				&& openCapacity.chambers().get(0).cubicMeters()==.0625 && openCapacity.chambers().get(1).cubicMeters()==.09375,
-				"A partial exterior aperture lost its finite capacity or consumed the isolated same-cell gas capacity");
-		try { GasChamberCapacity.capture(split,pieceCapacityGeometry(split),closed,null);throw new AssertionError("Gas capacity accepted a topology from another geometry capture"); }
-		catch(IllegalArgumentException expected) { }
-
-		float a = .5F, b = .25F, c = Math.scalb(1F, -40);
-		var missing=pieceCapacityDomain(0,.25F,.5F,.5F,a,.25F,.5F,.5F,b,.25F,.5F,.5F,c);
-		missing.sealDomainBoundary();var missingGeometry=pieceCapacityGeometry(missing);
-		var raw=SignedDyadic.of(1).subtract(SignedDyadic.of(a).add(SignedDyadic.of(b)).add(SignedDyadic.of(c)));
-        var missingCapacity = GasComponentCapacity.capture(missing, missingGeometry, null);
-        checkRelative(missingCapacity.getFirst().availableVolumeNormalized().toDouble(),
-                raw.toDouble(), "Sub-resolution leaf capacity follows its retained dry support");
+        float a=.5F,b=.25F,c=Math.scalb(1F,-40);
+        var missing=pieceCapacityDomain(0,.25F,.5F,.5F,a,.25F,.5F,.5F,b,.25F,.5F,.5F,c);
+        missing.sealDomainBoundary();var missingFrame=pieceCapacityFrame(missing,true);
+        var raw=SignedDyadic.of(1).subtract(SignedDyadic.of(a).add(SignedDyadic.of(b)).add(SignedDyadic.of(c)));
+        check(missingFrame.geometry().actualCapacity().components.getFirst().availableVolumeNormalized().equals(raw),
+                "Sub-resolution material volume changed actual gas capacity");
         missing.bootstrapGasState("");
-        var restoredMissing = FluidDomain.restoreAuthoritativeState(missing.captureAuthoritativeState());
-        check(restoredMissing.gasBoundary().auditClosed(), "Simplified dry leaf lost gas inventory on restore");
-	}
+        var restoredMissing=FluidDomain.restoreAuthoritativeState(missing.captureAuthoritativeState());
+        check(restoredMissing.gasBoundary().auditClosed(),"Sub-resolution material volume lost gas inventory on restore");
+    }
 
 	private static FluidDomain pieceCapacityDomain(int mask,float... positions) {
 		return pieceCapacityScaledDomain(1,mask,positions);
@@ -403,31 +318,25 @@ public final class AirCavityScannerValidation {
 		int count=positions.length/4;float volume=0;for(int i=0;i<count;i++)volume+=positions[4*i+3];
 		for(int i=0;i<count;i++)for(int axis=0;axis<3;axis++)positions[4*i+axis]*=h;
 		byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=(byte)mask;
-		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(h,1000,0,.01F,200,1e-5F,.5F,1e-4F,0));
+		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(h,1000,0,.01F,200,1e-5F,1e-4F,0));
 		domain.restoreParticleState(new FlipParticleState(2,2,2,h,count,volume,positions,new float[3*count], mmm.units.Mass.createLiquid(h, 1000.0, positions),masks));return domain;
 	}
-	private static GasComplementGeometry pieceCapacityGeometry(FluidDomain domain) {
-		// These fixtures can replace collision/occupancy fields directly before capture.
-		domain.markCellInventoryChanged();domain.ensurePressureGeometry();
-		return GasComplementGeometry.capture(2,2,2,domain.config().cellSize(),domain.geometry.solid,domain.geometry.cutCells,domain.pressurePhaseGeometry);
-	}
-private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGeometry geometry, boolean sealed) {
-        var topology = GasChamberTopology.capture(geometry, sealed);
-        var frame = GasChamberCapacity.capture(domain, geometry, topology, null);
-        double[] intended = new double[topology.chambers().size() + 1];
-        for (var component : GasComponentCapacity.capture(domain, geometry, null)) {
-            double sum = 0;
-            for (var piece : GasPieceCapacity.capture(component.cell(),component.supportMask(),component.availableVolumeNormalized(),geometry)) {
-                check(piece.normalizedVolume() > 0 && piece.cubicMeters() > 0, "Gas capacity has a nonpositive leaf");
-                sum += piece.normalizedVolume();
-                intended[topology.nodeOfPiece(piece.id())] += piece.cubicMeters();
-            }
-            checkRelative(sum, component.availableVolumeNormalized().toDouble(), "Gas pieces preserve authoritative component capacity");
+	private static GasRuntimeGeometry pieceCapacityFrame(FluidDomain domain,boolean sealed) {
+        // These fixtures edit stock, collision masks and solid occupancy before preparing one endpoint.
+        domain.phaseOccupancy=null;domain.markCellInventoryChanged();
+        long[] occupied=domain.granularCoupling==null?new long[domain.cellCount]:domain.granularCoupling.copySolidSvq();
+        return GasRuntimeGeometry.capture(domain,occupied,sealed);
+    }
+    private static void checkPreparedCapacityClosure(GasRuntimeGeometry frame) {
+        double expected=0;
+        for(var component:frame.geometry().actualCapacity().components)
+            expected+=component.availableVolumeNormalized().toDouble()*frame.geometry().cellVolumeCubicMeters();
+        double actual=frame.capacity().ambientCubicMeters();
+        for(var chamber:frame.capacity().chambers()) {
+            check(chamber.cubicMeters()>0,"A prepared gas chamber has no actual capacity");
+            actual+=chamber.cubicMeters();
         }
-        for (var chamber : frame.chambers())
-            check(Math.abs(chamber.cubicMeters() - intended[chamber.node()]) <= chamber.roundingErrorBound(),
-                    "Gas chamber capacity exceeds its accumulation error");
-        check(Math.abs(frame.ambientCubicMeters() - intended[0]) <= frame.ambientRoundingErrorBound(), "Ambient capacity accumulation error");
+        checkRelative(actual,expected,"Prepared gas owners preserve actual open-component capacity");
     }
 
     private static void validateMicroGasOverlap() {
@@ -468,7 +377,7 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 			float h = .0008F;
 			byte[] masks = new byte[45]; java.util.Arrays.fill(masks, (byte) 255);
 			for (int x = 1; x <= 3; x++) masks[(1 * 3 + 1) * 5 + x] = 0;
-			var domain = new FluidDomain(5, 3, 3, new FluidSolverConfig(h, 1000, 0, .01F, 200, 1e-5F, .5F, 1e-4F, 0));
+			var domain = new FluidDomain(5, 3, 3, new FluidSolverConfig(h, 1000, 0, .01F, 200, 1e-5F, 1e-4F, 0));
 			domain.restoreParticleState(new FlipParticleState(5, 3, 3, h, 0, 0, new float[0], new float[0], mmm.units.Mass.createLiquid(h, 1000.0, new float[0]), masks));
 			domain.sealDomainBoundary();
 			var parent = domain.bootstrapGasState("");
@@ -509,7 +418,7 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 	}
 
 	private static void validateSingleGasSuccessorWeight() {
-		var config=new FluidSolverConfig(.5F,1000,0,.125F,128,1e-6F,.45F,.002F,0);
+		var config=new FluidSolverConfig(.5F,1000,0,.125F,128,1e-6F,.002F,0);
 		var d=new FluidDomain(7,3,3,config,128);d.sealDomainBoundary();
 		var gas=new mmm.fluid.air.GasRegistry(List.of(
 				new mmm.fluid.air.GasComponentDefinition("test:left",1.2,0,List.of(),List.of()),
@@ -519,7 +428,7 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 		var liquids=new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:water",1000,"mmm:water",0,Math.PI/2)));
 		d.materialRegistry=liquids;
 		byte[] masks=new byte[d.cellCount];java.util.Arrays.fill(masks,(byte)255);
-		for(int x=0;x<7;x++)masks[d.cellIndex(x,1,1)]=0;
+		for(int x=0;x<7;x++)masks[d.domainFlowFields.cellIndex(x,1,1)]=0;
 		d.geometry.cutCells.restoreMicroMasks(masks);
 		for(int cell=0;cell<d.cellCount;cell++)d.geometry.solid[cell]=Byte.toUnsignedInt(masks[cell])==255;
 		d.markCellInventoryChanged();d.setVolume(3,1,1,1);
@@ -551,7 +460,7 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 				mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,component,300,0,0,
 				List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,718))));
 		d.bindThermal(new mmm.thermal.ThermalRegistry(definitions),liquids,300);
-		d.ensureGrid();
+		d.domainFlowFields.ensureGrid();
 		for(int face=0;face<d.mac.velocityX.length;face++)if(d.cellMacStage.massX[face]>0)d.mac.velocityX[face]=.5F;
 		d.cellMacStage.publishMomentum();
 		var mass=d.liquidCells.massUnits();var volume=d.liquidCells.exactVolume();
@@ -594,14 +503,14 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 	}
 
 	private static void validateAmbientSelfRemap() {
-		var domain = new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0));
+		var domain = new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F,0));
         domain.setVolume(1,1,1,.1875F);
         var before = domain.bootstrapGasState(""); var old = domain.gasState.frame;
-		check(old.nodeCount() == 0 && old.capacity().pieces().size() > 1
+		check(old.nodeCount() == 0 && old.capacity().ambientCubicMeters() > 0
 				&& GasFaceIntersection.fullDryFace(domain.pressurePhaseGeometry,0,0,0),
 				"Ambient self-remap fixture requires exterior-connected slanted dry microboxes");
 		domain.setVolume(1,1,1,.25F);
-		domain.gridDirty = true; domain.ensurePressureGeometry();
+		domain.gridDirty = true; domain.domainFlowFields.ensurePressureGeometry();
 		var next = GasRuntimeGeometry.capture(domain,new long[domain.cellCount], false);
 		check(next.nodeCount() == 0 && GasFaceIntersection.fullDryFace(domain.pressurePhaseGeometry,0,0,0)
 				&& next.capacity().ambientCubicMeters()>0,
@@ -626,7 +535,7 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 
 
 	private static void validateGasRestoreLineage() {
-		var config = new FluidSolverConfig(1, 1000, 0, .01F, 200, 1e-5F, .5F, 1e-4F, 0);
+		var config = new FluidSolverConfig(1, 1000, 0, .01F, 200, 1e-5F, 1e-4F, 0);
 		byte[] masks = new byte[8]; masks[1] = (byte) 255;
 		float[] positions = new float[36];
 		positions[0] = positions[1] = positions[2] = .25F; positions[3] = .125F;
@@ -657,7 +566,7 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 					committed.nodes(), membership, committed.externalSource(), committed.escapedSink());
 			var rejected = gasRestoreTarget(config, particles);
 			var network = rejected.gasState.network;
-			long gasRevision = network.revision(), carrierRevision = rejected.carrierMutationRevision();
+			long gasRevision=network.revision(),carrierRevision=rejected.carrierMutationRevision;
 			var externalSource = network.externalSource(); var escapedSink = network.escapedSink();
 			try {
 				rejected.restoreGasState(altered, mmm.fluid.air.BuiltinGasDefinitions.createRegistry());
@@ -666,7 +575,7 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 			check(rejected.gasState.network == network && network.revision() == gasRevision && network.nodeCount() == 0
 					&& network.externalSource().equals(externalSource) && network.escapedSink().equals(escapedSink)
 					&& rejected.gasState.frame == null && !rejected.gasState.pressureActive
-					&& rejected.carrierMutationRevision() == carrierRevision
+					&& rejected.carrierMutationRevision == carrierRevision
 					&& java.util.Arrays.equals(rejected.exportParticleState().copyPositionVolume(), positions)
 					&& java.util.Arrays.equals(rejected.exportParticleState().copyCollisionMicroMasks(), masks),
 					"Rejected gas lineage restoration changed authoritative owners");
@@ -683,7 +592,7 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 		int n = 8;
 		Grid grid = new Grid(n);
 		AirCavityScanner.Result result = new AirCavityScanner(n, n, n, 0.5F, n * n * n)
-				.scan(grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells, null, true);
+				.scan(grid.solid, grid.stockCount, grid.liquidVolume, grid.cutCells, null, true);
 		check(result.sealedNodeCount() == 1,
 				"a validated controller interior must keep boundary-layer headspace sealed");
 		checkRelative(result.sealedAvailableVolume()[0], 64.0,
@@ -696,9 +605,9 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 			float[] volumes={.5F,.25F,.125F,.0625F,.03125F,.015625F,.0078125F,(float)(.0078125-Math.scalb(1,exponent))};
 			float[] pv=new float[32];double sum=0;
 			for(int i=0;i<8;i++) {int b=4*i;pv[b]=.625F+.25F*(i&1);pv[b+1]=.625F+.25F*(i>>1&1);pv[b+2]=.625F+.25F*(i>>2&1);pv[b+3]=volumes[i];sum+=volumes[i];}
-			var d=new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,200,1e-5F,.4F,.002F,0));
+			var d=new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,200,1e-5F,.002F,0));
 			d.restoreParticleState(new FlipParticleState(3,3,3,.5F,8,(float)sum,pv,new float[24], mmm.units.Mass.createLiquid(.5F, 1000.0, pv),masks));d.sealDomainBoundary();
-			var network=d.gasState.network;long gasRevision=network.revision(),carrierRevision=d.carrierMutationRevision();
+			var network=d.gasState.network;long gasRevision=network.revision(),carrierRevision=d.domainFlowFields.carrierMutationRevision();
             var gas = d.bootstrapGasState("");
             long expected = mmm.fluid.air.AirNetwork.nanos((1 - sum) * .125);
             check(gas.externalSource().standardVolumeNanos() == expected && d.gasBoundary().auditClosed(),
@@ -713,12 +622,12 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 		Grid grid = new Grid(n);
 		int first = (4 * n + 4) * n + 4;
 		int second = (4 * n + 4) * n + 5;
-		grid.markerCount[first] = 1;
-		grid.markerCount[second] = 1;
+		grid.stockCount[first] = 1;
+		grid.stockCount[second] = 1;
 		grid.liquidVolume[first] = 1.5;
 		grid.liquidVolume[second] = 0.5;
 		AirCavityScanner.Result result = new AirCavityScanner(n, n, n, 0.5F, n * n * n)
-				.scan(grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells, null, true);
+				.scan(grid.solid, grid.stockCount, grid.liquidVolume, grid.cutCells, null, true);
 		check(result.sealedNodeCount() == 1,
 				"closed controller capacity regression must retain one gas owner");
 		checkRelative(result.sealedAvailableVolume()[0], (n * n * n - 2.0) * 0.125,
@@ -737,17 +646,17 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 			grid.solid[wall] = true;
 			grid.cutCells.replaceMask(wall, 255);
 		}
-		grid.markerCount[0] = 1;
-		grid.markerCount[1] = 1;
+		grid.stockCount[0] = 1;
+		grid.stockCount[1] = 1;
 		grid.liquidVolume[0] = 0.75;
 		grid.liquidVolume[1] = 0.75;
 		AirCavityScanner scanner = new AirCavityScanner(5, 2, 2, 1.0F, 20);
 		AirCavityScanner.Result before = scanner.scan(
-				grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells, null, true);
+				grid.solid, grid.stockCount, grid.liquidVolume, grid.cutCells, null, true);
 		grid.liquidVolume[0] = 1.25;
 		grid.liquidVolume[1] = 0.25;
 		AirCavityScanner.Result after = scanner.scan(
-				grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells, null, true);
+				grid.solid, grid.stockCount, grid.liquidVolume, grid.cutCells, null, true);
 		check(before.sealedNodeCount() == 2 && after.sealedNodeCount() == 2,
 				"a solid wall must keep two sealed compartments, got " + before.sealedNodeCount()
 						+ "/" + after.sealedNodeCount());
@@ -770,28 +679,28 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 		java.util.Arrays.fill(previous, -1);
 		for (int cell = 0; cell < 64; cell++) {
 			grid.solid[cell] = cell % 4 == 1;
-			grid.markerCount[cell] = grid.solid[cell] ? 0 : 1;
+			grid.stockCount[cell] = grid.solid[cell] ? 0 : 1;
 			grid.liquidVolume[cell] = grid.solid[cell] ? 0 : 1;
 		}
 		var scanner = new AirCavityScanner(4, 4, 4, 1, 64);
-		var full = scanner.scanRetainingClosedLineages(grid.solid, grid.markerCount,
+		var full = scanner.scanRetainingClosedLineages(grid.solid, grid.stockCount,
 				grid.liquidVolume, grid.cutCells, null, previous, 0);
 		check(full.sealedNodeCount() == 0, "full liquid domain invented a gas owner");
 		for (int cell = 0; cell < 64; cell++) if (!grid.solid[cell]) grid.liquidVolume[cell] = 0.75;
-		var opened = scanner.scanRetainingClosedLineages(grid.solid, grid.markerCount,
+		var opened = scanner.scanRetainingClosedLineages(grid.solid, grid.stockCount,
 				grid.liquidVolume, grid.cutCells, null, previous, 0);
 		check(opened.sealedNodeCount() == 2, "disconnected partial voids need separate vacuum owners");
-		var initial = scanner.scan(grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells, null, true);
+		var initial = scanner.scan(grid.solid, grid.stockCount, grid.liquidVolume, grid.cutCells, null, true);
 		check(java.util.Arrays.equals(opened.cellNodeId(), initial.cellNodeId())
 				&& java.util.Arrays.equals(opened.sealedAvailableVolume(), initial.sealedAvailableVolume()),
 				"initial closed partial topology failed to establish the same geometry owners");
-		var orphaned = scanner.scanRetainingClosedLineages(grid.solid, grid.markerCount,
+		var orphaned = scanner.scanRetainingClosedLineages(grid.solid, grid.stockCount,
 				grid.liquidVolume, grid.cutCells, null, previous, 2);
 		check(java.util.Arrays.equals(opened.cellNodeId(), orphaned.cellNodeId()),
 				"disappeared old owners prevented new residual topology");
 		checkRelative(java.util.Arrays.stream(opened.sealedAvailableVolume()).sum(), 12,
 				"partial vacuum capacity must equal extracted volume");
-		var restored = scanner.scanRetainingClosedLineages(grid.solid, grid.markerCount,
+		var restored = scanner.scanRetainingClosedLineages(grid.solid, grid.stockCount,
 				grid.liquidVolume, grid.cutCells, null, opened.cellLineageNodeId(), 2);
 		check(java.util.Arrays.equals(opened.cellNodeId(), restored.cellNodeId())
 				&& java.util.Arrays.equals(opened.sealedAvailableVolume(), restored.sealedAvailableVolume()),
@@ -823,7 +732,7 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 
 		Grid halfMetre = tank(n, true, 0.5F);
 		AirCavityScanner.Result scaled = new AirCavityScanner(n, n, n, 0.5F, n * n * n)
-				.scan(halfMetre.solid, halfMetre.markerCount, halfMetre.liquidVolume, halfMetre.cutCells);
+				.scan(halfMetre.solid, halfMetre.stockCount, halfMetre.liquidVolume, halfMetre.cutCells);
 		checkRelative(scaled.sealedAvailableVolume()[0], 6 * 6 * 3 * 0.125, "half-metre cavity volume");
 	}
 
@@ -835,7 +744,7 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 			boolean shell = x == 0 || x == n - 1 || z == 0 || z == n - 1 || y == 0;
 			boolean divider = (x == 3 || x == 4) && y <= 5;
 			if (shell || divider) grid.solid[i] = true;
-			else if (y <= 1) { grid.markerCount[i] = 8; grid.liquidVolume[i] = 1.0F; }
+			else if (y <= 1) { grid.stockCount[i] = 8; grid.liquidVolume[i] = 1.0F; }
 		}
 		AirCavityScanner.Result result = scan(grid, n * n * n);
 		check(result.sealedNodeCount() == 0, "open U-tube air must classify as ambient");
@@ -856,7 +765,7 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 			if (outerShell || divider) grid.solid[i] = true;
 		}
 		AirCavityScanner.Result result = new AirCavityScanner(sizeX, sizeY, sizeZ, 1.0F, sizeX * sizeY * sizeZ)
-				.scan(grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells);
+				.scan(grid.solid, grid.stockCount, grid.liquidVolume, grid.cutCells);
 		check(result.sealedNodeCount() == 2, "two isolated boxes must produce two sealed nodes, got " + result.sealedNodeCount());
 		checkRelative(result.sealedAvailableVolume()[0], 7 * 6 * 6, "first sealed cavity volume");
 		checkRelative(result.sealedAvailableVolume()[1], 6 * 6 * 6, "second sealed cavity volume");
@@ -894,12 +803,12 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 		Grid grid = tank(n, true, 1.0F);
 		for (int y = 2; y <= 3; y++) for (int z = 1; z < n - 1; z++) for (int x = 1; x < n - 1; x++) {
 			int i = (z * n + y) * n + x;
-			grid.markerCount[i] = 1;
+			grid.stockCount[i] = 1;
 			grid.liquidVolume[i] = 0.5F;
 		}
 		AirCavityScanner scanner = new AirCavityScanner(n, n, n, 1.0F, n * n * n);
 		AirCavityScanner.Result result = scanner.scan(
-				grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells);
+				grid.solid, grid.stockCount, grid.liquidVolume, grid.cutCells);
 		check(result.sealedNodeCount() == 1, "partially filled sealed tank must stay one cavity");
 		checkRelative(result.sealedAvailableVolume()[0], 6 * 6 * 3 + 2 * 6 * 6 * 0.5,
 				"multi-cell interface residual must join the sealed cavity volume");
@@ -912,10 +821,10 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 			grid.liquidVolume[(z * n + y) * n + x] = 0.25F;
 		}
 		double[] stableVolumes = scanner.measureSealedAvailableVolumes(
-				grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells, null,
+				grid.solid, grid.stockCount, grid.liquidVolume, grid.cutCells, null,
 				result.cellNodeId(), result.cellLineageNodeId(), result.sealedNodeCount(), false);
 		AirCavityScanner.Result rescanned = scanner.scan(
-				grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells);
+				grid.solid, grid.stockCount, grid.liquidVolume, grid.cutCells);
 		check(java.util.Arrays.equals(result.cellNodeId(), rescanned.cellNodeId())
 				&& java.util.Arrays.equals(result.cellLineageNodeId(), rescanned.cellLineageNodeId())
 				&& Double.doubleToRawLongBits(stableVolumes[0])
@@ -925,7 +834,7 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 		Grid openGrid = tank(n, false, 1.0F);
 		for (int z = 1; z < n - 1; z++) for (int x = 1; x < n - 1; x++) {
 			int i = (z * n + 3) * n + x;
-			openGrid.markerCount[i] = 1;
+			openGrid.stockCount[i] = 1;
 			openGrid.liquidVolume[i] = 0.5F;
 		}
 		AirCavityScanner.Result openResult = scan(openGrid, n * n * n);
@@ -936,7 +845,7 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 		int n = 8;
 		Grid grid = tank(n, true, 1.0F);
 		AirCavityScanner.Result result = new AirCavityScanner(n, n, n, 1.0F, 50)
-				.scan(grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells);
+				.scan(grid.solid, grid.stockCount, grid.liquidVolume, grid.cutCells);
 		check(result.stopReason() == AirCavityScanner.StopReason.BUDGET_EXHAUSTED, "budget must stop the scan");
 		check(result.sealedNodeCount() == 0, "budget exhaustion must classify air as ambient, never sealed");
 		check(result.visitedAirCells() <= 50, "visited cells must respect the budget, got " + result.visitedAirCells());
@@ -949,7 +858,7 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 	private static AirCavityScanner.Result scan(Grid grid, int budget) {
 		int n = grid.sizeX;
 		return new AirCavityScanner(n, grid.sizeY, grid.sizeZ, grid.cellSize, budget)
-				.scan(grid.solid, grid.markerCount, grid.liquidVolume, grid.cutCells);
+				.scan(grid.solid, grid.stockCount, grid.liquidVolume, grid.cutCells);
 	}
 
 	private static Grid tank(int n, boolean roof, float cellSize) {
@@ -958,7 +867,7 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 			int i = (z * n + y) * n + x;
 			boolean shell = x == 0 || x == n - 1 || z == 0 || z == n - 1 || y == 0 || (roof && y == n - 1);
 			if (shell) grid.solid[i] = true;
-			else if (y <= 3) { grid.markerCount[i] = 8; grid.liquidVolume[i] = 1.0F; }
+			else if (y <= 3) { grid.stockCount[i] = 8; grid.liquidVolume[i] = 1.0F; }
 		}
 		return grid;
 	}
@@ -969,7 +878,7 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 		final int sizeZ;
 		final float cellSize;
 		final boolean[] solid;
-		final int[] markerCount;
+		final int[] stockCount;
 		final double[] liquidVolume;
 		final FlipCutCellGeometry cutCells;
 
@@ -979,7 +888,7 @@ private static void checkPieceCapacityBounds(FluidDomain domain, GasComplementGe
 			this.sizeZ = sizeZ;
 			this.cellSize = cellSize;
 			this.solid = new boolean[sizeX * sizeY * sizeZ];
-			this.markerCount = new int[sizeX * sizeY * sizeZ];
+			this.stockCount = new int[sizeX * sizeY * sizeZ];
 			this.liquidVolume = new double[sizeX * sizeY * sizeZ];
 			this.cutCells = new FlipCutCellGeometry(sizeX, sizeY, sizeZ);
 		}

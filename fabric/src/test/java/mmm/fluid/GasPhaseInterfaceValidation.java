@@ -81,7 +81,7 @@ public final class GasPhaseInterfaceValidation {
 					definitions=new mmm.thermal.ThermalRegistry(java.util.List.of(equalEnergyWater,equalEnergyVapor,hotAir),java.util.List.of(),java.util.List.of(transition),"","");
 				}
 				byte[] masks=new byte[8];Arrays.fill(masks,(byte)255);masks[0]=0;if(partialNeighbor)masks[1]=0;if(mergingPeers)for(int peer:new int[]{1,2,4})masks[peer]=0;
-				var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),32);
+				var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,1e-4F,0),32);
 				float volume=completeDepletion?mmm.granular.SolidVolume.toCellVolume(8*168):.5F;
 				float[] positions=partialNeighbor?new float[]{.25F,.125F,.25F,volume, .75F,.125F,.25F,.5F}
 						:new float[]{.25F,.125F,.25F,volume};
@@ -127,7 +127,7 @@ public final class GasPhaseInterfaceValidation {
 				offsets.add(new mmm.thermal.ThermalSpeciesOffset("test:batch/offset"+offsets.size(),species.id(),material.id(),mmm.chemistry.ExactRational.ZERO));
 			var registry=new mmm.thermal.ThermalRegistry(java.util.List.of(liquid,solid,air),offsets,java.util.List.of(transition),
 					chemical?mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY.fingerprint():"","");
-			var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),32);
+			var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,1e-4F,0),32);
 			var fluids=new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER));domain.bindMaterialRegistry(fluids);domain.setVolume(0,0,0,.5F);
 			if(chemical)domain.bindChemistry(mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY);
 			domain.bindThermal(registry,fluids,275);
@@ -161,7 +161,7 @@ public final class GasPhaseInterfaceValidation {
 		float total = 0;
 		for (int i = 3; i < markers.length; i += 4) total += markers[i];
 		FluidDomain domain = new FluidDomain(2, 2, 2,
-				new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.5F,1e-4F,0), 32);
+				new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F,0), 32);
 		domain.restoreParticleState(new FlipParticleState(2,2,2,1,markers.length/4,total,markers,
 				new float[markers.length/4*3], mmm.units.Mass.createLiquid(1, 1000.0, markers),masks));
 		domain.sealDomainBoundary();

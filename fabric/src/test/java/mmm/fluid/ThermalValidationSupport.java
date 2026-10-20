@@ -31,7 +31,7 @@ abstract class ThermalValidationSupport {
 	                                     float[] volumes, int[] materialHandles) {
 		float[] positions = new float[4 * volumes.length]; long[] masses = new long[volumes.length];
 		for (int marker = 0; marker < volumes.length; marker++) {
-			float[] position = domain.markerSlotPosition(x, y, z, marker);
+			float[] position = domain.domainFlowFields.markerSlotPosition(x, y, z, marker);
 			System.arraycopy(position, 0, positions, 4 * marker, 3); positions[4 * marker + 3] = volumes[marker];
 			masses[marker] = domain.unitScale.massUnitsForNormalized(volumes[marker] * materials.material(materialHandles[marker]).referenceDensity());
 		}

@@ -64,7 +64,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				&& close(highPressure.equilibriumTemperatureK(3_500_000.0), 273.15),
 				"solid/liquid curve was incorrectly required to cover standard pressure");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidDomain continuedPressure = new FluidDomain(2, 2, 2, config, 128);
 		continuedPressure.setVolume(0, 0, 0, 0.5F);
 		continuedPressure.bindGasRegistry(BuiltinGasDefinitions.createRegistry());
@@ -88,7 +88,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				thermalMaterials(List.of(water, ice, mercury)), List.of(), List.of(highPressure), "", "");
 		FluidDomain mercuryOnly = new FluidDomain(2, 2, 2, config, 128);
 		mercuryOnly.setVolume(0, 0, 0, 0.5F);
-		mercuryOnly.setMaterialInCell(0, 0, 0, waterAndMercury,
+		mercuryOnly.domainCollision.setMaterialInCell(0, 0, 0, waterAndMercury,
 				waterAndMercury.handle(BuiltinFluidMaterials.MERCURY.id()));
 		mercuryOnly.bindThermal(unrelatedTransition, waterAndMercury, 293.15);
 		FluidDomain.ThermalPhaseStats unrelated = mercuryOnly.stepInertPhaseChangeOnly(16);
@@ -104,9 +104,9 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		for (float fill : new float[]{0.25F, 0.5F}) {
 			FluidDomain mixedCell = new FluidDomain(2, 2, 2, config, 128);
 			mixedCell.setVolume(0, 0, 0, fill);
-			mixedCell.setMaterialInCell(0, 0, 0, waterAndMercury,
+			mixedCell.domainCollision.setMaterialInCell(0, 0, 0, waterAndMercury,
 					waterAndMercury.handle(BuiltinFluidMaterials.WATER.id()));
-			require(mixedCell.tryInsertExactMaterial(0, 0, 0, fill, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(fill * BuiltinFluidMaterials.MERCURY.referenceDensity()), 0,
+			require(mixedCell.domainInventory.tryInsertExactMaterial(0, 0, 0, fill, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(fill * BuiltinFluidMaterials.MERCURY.referenceDensity()), 0,
 					waterAndMercury.handle(BuiltinFluidMaterials.MERCURY.id())).transferred(),
 					"mixed condensed-phase fixture could not insert mercury");
 			mixedCell.bindThermal(mixedRegistry, waterAndMercury, 273.15);
@@ -176,7 +176,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				"liquid/coherent heat exchange did not close the shared energy audit");
 
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidDomain coherentCavity = new FluidDomain(3, 2, 2, config, 128);
 		coherentCavity.sealDomainBoundary();
 		coherentCavity.setVolume(0, 0, 0, 0.5F);
@@ -194,8 +194,8 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		}
 		FluidDomainState coherentSnapshot = coherentCavity.captureAuthoritativeState();
 		int[] cavityMembership = coherentSnapshot.gas().pieceNodeOrdinal();
-		int leftCavity = cavityMembership[8 * coherentCavity.cellIndex(0, 1, 1)];
-		int rightCavity = cavityMembership[8 * coherentCavity.cellIndex(2, 1, 1)];
+		int leftCavity = cavityMembership[8 * coherentCavity.domainFlowFields.cellIndex(0, 1, 1)];
+		int rightCavity = cavityMembership[8 * coherentCavity.domainFlowFields.cellIndex(2, 1, 1)];
 		require(leftCavity > 0 && rightCavity > 0 && leftCavity != rightCavity,
 				"coherent wall did not isolate the dry space on its two sides");
 		FluidDomain coherentRestored = FluidDomain.restoreAuthoritativeState(coherentSnapshot);
@@ -301,7 +301,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		ThermalRegistry roundoffRegistry = new ThermalRegistry(
 				thermalMaterials(List.of(roundoffIce, roundoffWater)), List.of(), List.of(roundoffTransition), "", "");
 		FluidSolverConfig roundoffConfig = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidDomain roundoffDomain = new FluidDomain(2, 2, 2, roundoffConfig, 128);
 		roundoffDomain.setVolume(0, 0, 0, 0.5F);
 		roundoffDomain.bindThermal(roundoffRegistry, roundoffLiquids, 273.1498);
@@ -366,7 +366,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 					ExactRational.of(batchUnits).divide(mmm.units.Mass.UNITS_PER_KILOGRAM),
 					ThermalPhaseTransition.InterfaceRequirement.NONE, 10000, 3000000);
 			var domain = new FluidDomain(3, 3, 3,
-					new FluidSolverConfig(.5F, 6.4E9F, 0, .05F, 100, 1.0E-5F, .45F, .002F, 0), 64);
+					new FluidSolverConfig(.5F, 6.4E9F, 0, .05F, 100, 1.0E-5F, .002F, 0), 64);
 			restorePhaseTestCarriers(domain, liquids, new float[]{.125F}, new int[1]);
 			domain.bindThermal(new ThermalRegistry(thermalMaterials(List.of(water, ice)), List.of(), List.of(transition), "", ""), domain.materialRegistry, 200);
 			long sourceMass = domain.totalMassUnits();
@@ -396,7 +396,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 10000, 3000000);
 		var registry = new ThermalRegistry(thermalMaterials(List.of(water, bath, ice)), List.of(), List.of(transition), "", "");
 		var domain = new FluidDomain(3, 3, 3,
-				new FluidSolverConfig(.5F, 64, 0, .05F, 100, 1.0E-5F, .45F, .002F, 0), 64);
+				new FluidSolverConfig(.5F, 64, 0, .05F, 100, 1.0E-5F, .002F, 0), 64);
 		restorePhaseTestCarriers(domain, fluids, new float[]{.125F, .125F, .125F, .125F}, new int[]{0, 0, 1, 1});
 		domain.bindThermal(registry, domain.materialRegistry, 300);
 		var before = domain.exactInternalEnergy();
@@ -414,8 +414,8 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"condensed candidate merged independent raw reference-energy owners");
 		for (int marker = 0; marker < domain.particleCount(); marker++)
-			require(Double.isFinite(domain.thermalMarkerTemperature(marker))
-					&& domain.thermalMarkerTemperature(marker) > 0, "freeze published invalid liquid energy");
+			require(Double.isFinite(domain.domainCapabilities.thermalMarkerTemperature(marker))
+					&& domain.domainCapabilities.thermalMarkerTemperature(marker) > 0, "freeze published invalid liquid energy");
 		var restored = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		require(restored.exactInternalEnergy().equals(domain.exactInternalEnergy())
 				&& restored.thermalAudit().equals(domain.thermalAudit())
@@ -491,15 +491,15 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				new ThermalSpeciesOffset("test:integer/ih", BuiltinChemicalDefinitions.H2O, ice.id(), ExactRational.ZERO)),
 				List.of(transition), chemistry.fingerprint(), "");
 		var domain = new FluidDomain(3, 3, 3,
-				new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .45F, .002F, 0), 64);
+				new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .002F, 0), 64);
 		domain.sealDomainBoundary();
 		restorePhaseTestCarriers(domain, liquids,
 				freezing ? new float[]{SolidVolume.toCellVolume(2 * batchSvq)} : new float[]{.125F, .125F},
 				freezing ? new int[]{0} : new int[]{1, 0});
 		if (freezing) {
-			if (batches == 4) require(domain.tryInsertExactVolume(1, 1, 1,
+			if (batches == 4) require(domain.domainInventory.tryInsertExactVolume(1, 1, 1,
 					SolidVolume.toCellVolume(2 * batchSvq), 0, 0).transferred(), "second integer-phase water carrier");
-			require(domain.tryInsertExactVolume(1, 1, 1, .25F, 0, 1).transferred(), "integer-phase oil heat bath");
+			require(domain.domainInventory.tryInsertExactVolume(1, 1, 1, .25F, 0, 1).transferred(), "integer-phase oil heat bath");
 		}
 		domain.bindChemistry(chemistry);
 		if (freezing) {
@@ -548,11 +548,11 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		var registry = new ThermalRegistry(thermalMaterials(List.of(solid, liquid, heatBath)), List.of(),
 				List.of(transition), "", "");
 		var config = new FluidSolverConfig(0.5F, 1.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidDomain domain = new FluidDomain(3, 3, 3, config, 512);
 		restorePhaseTestCarriers(domain, liquids, new float[]{1.0F / 4_096}, new int[]{liquids.handle(target.id())});
 		for (int marker = 1; marker < 256; marker++) {
-			require(domain.tryInsertExactVolume(1, 1, 1, 1.0F / 4_096, 1,
+			require(domain.domainInventory.tryInsertExactVolume(1, 1, 1, 1.0F / 4_096, 1,
 					liquids.handle(other.id()), false).transferred(), "phase heat-bath insertion failed");
 		}
 		domain.bindThermal(registry, domain.materialRegistry, 295.0);
@@ -609,7 +609,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				new mmm.chemistry.ChemicalReaction("test:reaction", mmm.chemistry.ChemicalReaction.Kind.INSTANTANEOUS,
 						"test:water", Map.of("test:a", 1), Map.of("test:b", 1), ExactRational.ZERO)));
 		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		String phase = "test:thermal/coherent_merge";
 		for (int compositionCase = 0; compositionCase < 3; compositionCase++) {
 			var water = new ThermalMaterialDefinition("test:thermal/merge_water",
@@ -687,7 +687,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidDomain domain = new FluidDomain(3, 3, 3, config, 256);
 		domain.setVolume(1, 1, 1, 0.75F);
 		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
@@ -753,7 +753,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		var granular = BuiltinGranularDefinitions.createRegistry();
 		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		var species = new java.util.ArrayList<mmm.chemistry.ChemicalSpecies>();
 		var ids = new java.util.ArrayList<String>();
 		for (int i = 0; i < 17; i++) {
@@ -901,7 +901,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				0.0, 10_000_000.0);
 		ThermalRegistry registry = new ThermalRegistry(thermalMaterials(List.of(lower, upper)), List.of(), List.of(transition), "", "");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidDomain domain = new FluidDomain(2, 2, 2, config, 128);
 		domain.setVolume(0, 0, 0, 0.5F);
 		domain.bindThermal(registry, liquids, 295.0);
@@ -950,14 +950,14 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 
 	private static void phaseLiquidGeometryMatchesPublishedMarkers(){
 		for(float amount:new float[]{.46875F,.53125F,.75F,0}){
-			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.001F,100,1e-6F,.45F,.002F,0),128);
+			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.001F,100,1e-6F,.002F,0),128);
 			domain.setVolume(1,1,1,.5F);domain.setVolume(2,1,1,.25F);domain.setVolume(2,0,1,.25F);
-			var neighbour=domain.liquidCells.stocksInCell(domain.cellIndex(2,1,1));
-			domain.setVolume(1,1,1,amount);domain.ensurePressureGeometry();
-			int cell=domain.cellIndex(1,1,1);
+			var neighbour=domain.liquidCells.stocksInCell(domain.domainFlowFields.cellIndex(2,1,1));
+			domain.setVolume(1,1,1,amount);domain.domainFlowFields.ensurePressureGeometry();
+			int cell=domain.domainFlowFields.cellIndex(1,1,1);
 			require(Math.abs(domain.pressurePhaseGeometry.liquidFractionExact(cell)-amount)<1e-7,"Published phase geometry missed committed cell volume");
-			require(neighbour.equals(domain.liquidCells.stocksInCell(domain.cellIndex(2,1,1))),"Local phase geometry preparation edited neighbouring inventory");
-			var restored=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());restored.ensurePressureGeometry();
+			require(neighbour.equals(domain.liquidCells.stocksInCell(domain.domainFlowFields.cellIndex(2,1,1))),"Local phase geometry preparation edited neighbouring inventory");
+			var restored=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());restored.domainFlowFields.ensurePressureGeometry();
 			require(domain.liquidCells.stocks().equals(restored.liquidCells.stocks())&&restored.gasBoundary().auditClosed(),"Phase geometry restore changed liquid or gas inventory");
 		}
 	}
@@ -1044,7 +1044,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidDomain staleGas = new FluidDomain(3, 3, 3, config, 256);
 		staleGas.sealDomainBoundary();
 		staleGas.setVolume(1, 1, 1, 0.5F);
@@ -1092,12 +1092,12 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 	}
 
 	static void operatorClearBindsTheCompleteGeometry() {
-		var d = new FluidDomain(2, 2, 2, new FluidSolverConfig(1, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, 0));
+		var d = new FluidDomain(2, 2, 2, new FluidSolverConfig(1, 1000, 0, .001F, 100, 1e-5F, .002F, 0));
 		d.sealDomainBoundary(); d.bootstrapGasState("");
 		var plan = d.planOperatorClear();
-		long carrierRevision = d.carrierMutationRevision(), gasRevision = d.gasState.network.revision();
+		long carrierRevision = d.domainFlowFields.carrierMutationRevision(), gasRevision = d.gasState.network.revision();
 		d.setSolidMicroMask(0, 0, 0, 1);
-		require(d.carrierMutationRevision() == carrierRevision && d.gasState.network.revision() == gasRevision,
+		require(d.domainFlowFields.carrierMutationRevision() == carrierRevision && d.gasState.network.revision() == gasRevision,
 				"Geometry-only clear fixture unexpectedly mutated inventory generations");
 		double volume = d.gasState.network.availableVolume(1);
 		var stock = d.gasState.network.sealedInventory();

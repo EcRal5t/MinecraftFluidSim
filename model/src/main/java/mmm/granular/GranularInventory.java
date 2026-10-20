@@ -19,9 +19,9 @@ import java.util.function.Predicate;
 public final class GranularInventory {
 	private final GranularParcelStore parcels;
 	private final GranularDepositStore deposits;
-	private final int[] activeHeadByCell, activeNext, mergeFirst, mergeSecond;
-	private final boolean[] mergePaired;
-	private final ActiveMerge[] plannedMerge;
+	private int[] activeHeadByCell = new int[0], activeNext = new int[0], mergeFirst = new int[0], mergeSecond = new int[0];
+	private boolean[] mergePaired = new boolean[0];
+	private ActiveMerge[] plannedMerge = new ActiveMerge[0];
 	private SolidCompositionPool compositions;
 	private EnergyAdapter thermalEnergy;
 
@@ -29,12 +29,6 @@ public final class GranularInventory {
 		if (parcels == null || deposits == null) throw new IllegalArgumentException("Granular stores are missing");
 		this.parcels = parcels;
 		this.deposits = deposits;
-		this.activeHeadByCell = new int[deposits.cellCount()];
-		this.activeNext = new int[parcels.capacity()];
-		this.mergeFirst = new int[parcels.capacity() / 2];
-		this.mergeSecond = new int[parcels.capacity() / 2];
-		this.mergePaired = new boolean[parcels.capacity()];
-		this.plannedMerge = new ActiveMerge[parcels.capacity() / 2];
 	}
 
 	public void bindSolidCompositions(SolidCompositionPool pool) {
@@ -367,6 +361,8 @@ public final class GranularInventory {
 				&& maximumVelocityDelta >= 0.0F) || maximumEvaluations < 0 || !(Double.isFinite(gravity) && gravity >= 0)) {
 			throw new IllegalArgumentException("Active granular compaction input is invalid");
 		}
+		if(parcels.count()<2||maximumEvaluations==0)return new CompactionStats(0,0);
+		ensureCompactionCapacity(parcels.count());
 		Arrays.fill(activeHeadByCell, -1); Arrays.fill(mergePaired, 0, parcels.count(), false);
 		int pairs = 0, evaluations = 0;
 		for (int second = 0; second < parcels.count() && evaluations < maximumEvaluations; second++) {
@@ -415,6 +411,13 @@ public final class GranularInventory {
 			plannedMerge[pair] = null;
 		}
 		return new CompactionStats(pairs, evaluations, physicalHeat, mechanicalRounding);
+	}
+	private void ensureCompactionCapacity(int required){
+		if(activeHeadByCell.length==0)activeHeadByCell=new int[deposits.cellCount()];
+		if(required<=activeNext.length)return;
+		int grown=Math.min(parcels.capacity(),Math.max(required,activeNext.length+Math.max(16,activeNext.length/2)));
+		activeNext=new int[grown];mergePaired=new boolean[grown];
+		mergeFirst=new int[grown/2];mergeSecond=new int[grown/2];plannedMerge=new ActiveMerge[grown/2];
 	}
 
 	private ActiveMerge activeMerge(int firstIndex, int secondIndex, float maximumVelocityDelta, double gravity) {

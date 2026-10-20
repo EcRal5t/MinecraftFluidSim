@@ -21,9 +21,9 @@ final class M3MaterialTransferValidation {
 
 	private static void validatePartialExtractionMassResolution() {
 		for(long mass:new long[]{1,4}) {
-			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.45F,.002F,.8F),216);
+			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.002F,.8F),216);
 			domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
-			var key=new LiquidCellInventory.Key(domain.cellIndex(1,1,1),0,255);
+			var key=new LiquidCellInventory.Key(domain.domainFlowFields.cellIndex(1,1,1),0,255);
 			domain.liquidCells.planAdditions(List.of(new LiquidCellInventory.Stock(key,mmm.units.SignedDyadic.of(.125),mass,null,0,false))).commit();
 			domain.markCellInventoryChanged();
 			var transfer=domain.tryExtractExactMixture(1,1,1,.0625F,0);
@@ -38,7 +38,7 @@ final class M3MaterialTransferValidation {
 	private static Summary validateActiveMacMomentum(FluidMaterialRegistry registry) {
 		int a=registry.handle("mmm:material_a"),b=registry.handle("mmm:material_b"),c=registry.handle("mmm:material_c");
 		var equal=materialShear(registry,a,b);var variable=materialShear(registry,a,c);
-		int face=equal.xFaceIndex(2,1,1);
+		int face=equal.domainFlowFields.xFaceIndex(2,1,1);
 		checkClose(equal.mac.velocityX[face],.5,"Equal-density shared velocity");
 		check(Math.abs(variable.mac.velocityX[face]-800.0/1800)<=4*Math.ulp((float)(800.0/1800)),"Actual mass-weighted shared velocity exceeded float storage precision");
 		checkClose(variable.cellMacStage.massX[face],900,"Actual SI shared inertia");
@@ -46,25 +46,25 @@ final class M3MaterialTransferValidation {
 		var state=variable.captureAuthoritativeState();var restored=FluidDomain.restoreAuthoritativeState(state);
 		check(restored.exportLiquidCellState().stocks().equals(state.liquid().stocks())
 				&&Arrays.equals(restored.exportMacMomentum().copyX(),state.momentum().copyX()),"Material handoff changed inventory or MAC momentum");
-		checkClose(restored.materialInventory(a).mass(),1000,"Restored material A mass");
-		checkClose(restored.materialInventory(c).mass(),800,"Restored material C mass");
+		checkClose(restored.domainCollision.materialInventory(a).mass(),1000,"Restored material A mass");
+		checkClose(restored.domainCollision.materialInventory(c).mass(),800,"Restored material C mass");
 		return new Summary(variable.totalVolumeExact(),variable.totalMass(),Arrays.stream(variable.mac.momentumX).sum(),
 				Math.abs(variable.mac.velocityX[face]-equal.mac.velocityX[face]));
 	}
 	private static FluidDomain materialShear(FluidMaterialRegistry registry,int left,int right) {
-		var domain=new FluidDomain(4,4,4,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.45F,.002F,.8F),64);
+		var domain=new FluidDomain(4,4,4,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.002F,.8F),64);
 		domain.bindMaterialRegistry(registry);float[] volume=new float[domain.cellCount];int[] material=new int[domain.cellCount];
-		volume[domain.cellIndex(1,1,1)]=volume[domain.cellIndex(2,1,1)]=1;
-		material[domain.cellIndex(1,1,1)]=left;material[domain.cellIndex(2,1,1)]=right;
-		domain.setVolumes(volume,material);domain.ensureGrid();
-		double half=.5*domain.liquidCells.stocksInCell(domain.cellIndex(2,1,1)).getFirst().massKilograms();
-		domain.mac.momentumX[domain.xFaceIndex(2,1,1)]=half;domain.mac.momentumX[domain.xFaceIndex(3,1,1)]=half;
-		domain.velocityGridDirty=true;domain.ensureGrid();return domain;
+		volume[domain.domainFlowFields.cellIndex(1,1,1)]=volume[domain.domainFlowFields.cellIndex(2,1,1)]=1;
+		material[domain.domainFlowFields.cellIndex(1,1,1)]=left;material[domain.domainFlowFields.cellIndex(2,1,1)]=right;
+		domain.setVolumes(volume,material);domain.domainFlowFields.ensureGrid();
+		double half=.5*domain.liquidCells.stocksInCell(domain.domainFlowFields.cellIndex(2,1,1)).getFirst().massKilograms();
+		domain.mac.momentumX[domain.domainFlowFields.xFaceIndex(2,1,1)]=half;domain.mac.momentumX[domain.domainFlowFields.xFaceIndex(3,1,1)]=half;
+		domain.velocityGridDirty=true;domain.domainFlowFields.ensureGrid();return domain;
 	}
 	private static FluidDomain materialCell(FluidMaterialRegistry registry,int[] materials,double[] volumes) {
-		var domain=new FluidDomain(4,4,4,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.45F,.002F,.8F),64);
+		var domain=new FluidDomain(4,4,4,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.002F,.8F),64);
 		domain.bindMaterialRegistry(registry);var stocks=new java.util.ArrayList<LiquidCellInventory.Stock>();
-		for(int i=0;i<materials.length;i++)stocks.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(domain.cellIndex(1,1,1),materials[i],255),
+		for(int i=0;i<materials.length;i++)stocks.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(domain.domainFlowFields.cellIndex(1,1,1),materials[i],255),
 				mmm.units.SignedDyadic.of(volumes[i]),mmm.units.Mass.fromKilograms(volumes[i]*registry.material(materials[i]).referenceDensity()),null,0,false));
 		domain.liquidCells.planAdditions(stocks).commit();domain.markCellInventoryChanged();return domain;
 	}
@@ -75,10 +75,10 @@ final class M3MaterialTransferValidation {
 		int c = registry.handle("mmm:material_c");
 		int d = registry.handle("mmm:material_d");
 		FluidDomain miscible = materialCell(registry,new int[]{a,d},new double[]{.5,.5});
-		check(miscible.phaseCountInCell(1, 1, 1) == 1,
+		check(miscible.domainCollision.phaseCountInCell(1, 1, 1) == 1,
 				"miscible materials did not aggregate into one local liquid phase");
-		checkClose(miscible.materialInventory(a).mass(), 500.0, "miscible material A mass");
-		checkClose(miscible.materialInventory(d).mass(), 525.0, "miscible material D mass");
+		checkClose(miscible.domainCollision.materialInventory(a).mass(), 500.0, "miscible material A mass");
+		checkClose(miscible.domainCollision.materialInventory(d).mass(), 525.0, "miscible material D mass");
 		int mixedCell = 1 + 4 * (1 + 4);
 		FluidMaterialRenderSnapshot mixedSnapshot = miscible.copyMaterialRenderSnapshot();
 		check(mixedSnapshot.phaseFraction(registry.phaseHandle(a), mixedCell) == 255,
@@ -86,35 +86,35 @@ final class M3MaterialTransferValidation {
 		check(mixedSnapshot.materialFraction(a, mixedCell) == 128
 				&& mixedSnapshot.materialFraction(d, mixedCell) == 127,
 				"miscible render fractions were not deterministically normalized");
-		FluidDomain.StepStats miscibleStats = miscible.step();
-		check(miscible.phaseCountInCell(1, 1, 1) == 1,
+		FluidDomain.StepStats miscibleStats = miscible.domainStep.step();
+		check(miscible.domainCollision.phaseCountInCell(1, 1, 1) == 1,
 				"miscible phase split during an idle active step");
 		check(miscibleStats.relativeVolumeError() <= 1.0E-7F && miscibleStats.relativeMassError() <= 1.0E-12,
 				"miscible active step changed physical inventories");
 
 		FluidDomain junction = materialCell(registry,new int[]{a,b,c},new double[]{.375,.375,.25});
-		check(junction.phaseCountInCell(1, 1, 1) == 3,
+		check(junction.domainCollision.phaseCountInCell(1, 1, 1) == 3,
 				"three-phase junction was truncated to the old two-phase cache");
 		FluidMaterialRenderSnapshot junctionSnapshot = junction.copyMaterialRenderSnapshot();
 		int phaseA = registry.phaseHandle(a), phaseB = registry.phaseHandle(b), phaseC = registry.phaseHandle(c);
 		check(Math.abs(junctionSnapshot.phaseFraction(phaseA,mixedCell)-255*.375)<=1
 				&&Math.abs(junctionSnapshot.phaseFraction(phaseB,mixedCell)-255*.375)<=1
 				&&Math.abs(junctionSnapshot.phaseFraction(phaseC,mixedCell)-255*.25)<=1,"Rendered phase fractions exceeded one display quantum");
-		FluidDomain.StepStats junctionStats = junction.step();
-		check(junction.phaseCountInCell(1, 1, 1) == 3,
+		FluidDomain.StepStats junctionStats = junction.domainStep.step();
+		check(junction.domainCollision.phaseCountInCell(1, 1, 1) == 3,
 				"three-phase junction was lost during pressure/reseeding");
 		checkClose(junction.totalMass(), 950.0, "three-phase marker mass");
 		check(junctionStats.relativeVolumeError() <= 1.0E-7F && junctionStats.relativeMassError() <= 1.0E-12,
 				"three-phase active step changed physical inventories");
 
 		FluidMaterialRegistry wrongDefault = new FluidMaterialRegistry(List.of(registry.material(c)));
-		expectIllegal(() -> singleCellDomain().setMarkerMaterial(0, wrongDefault, 0));
+		expectIllegal(() -> singleCellDomain().domainCollision.setMarkerMaterial(0, wrongDefault, 0));
 	}
 
 	private static FluidDomain singleCellDomain() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, 1_000.0F, 0.0F, 1.0F / 20.0F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F
+				100, 1.0E-5F, 2.0E-3F, 0.80F
 		);
 		FluidDomain domain = new FluidDomain(4, 4, 4, config, 64);
 		domain.setVolume(1, 1, 1, 1.0F);
@@ -166,7 +166,7 @@ final class M3MaterialTransferValidation {
 	                                                    int heavyHandle, int lightHandle) {
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
-				200, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F
+				200, 1.0E-6F, 2.0E-3F, 0.80F
 		);
 		FluidDomain domain = new FluidDomain(4, 7, 4, config, 128);
 		for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
@@ -174,12 +174,12 @@ final class M3MaterialTransferValidation {
 		}
 		for (int y = 1; y <= 5; y++) domain.setSolid(1, y, 1, false);
 		for (int y = 1; y <= 4; y++) domain.setVolume(1, y, 1, 1.0F);
-		for (int y = 1; y <= 2; y++) domain.setMaterialInCell(1, y, 1, registry, heavyHandle);
-		for (int y = 3; y <= 4; y++) domain.setMaterialInCell(1, y, 1, registry, lightHandle);
+		for (int y = 1; y <= 2; y++) domain.domainCollision.setMaterialInCell(1, y, 1, registry, heavyHandle);
+		for (int y = 3; y <= 4; y++) domain.domainCollision.setMaterialInCell(1, y, 1, registry, lightHandle);
 
 		double heavyDensity = registry.material(heavyHandle).referenceDensity();
 		double lightDensity = registry.material(lightHandle).referenceDensity();
-		FluidDomain.StepStats stats = domain.step();
+		FluidDomain.StepStats stats = domain.domainStep.step();
 		double[] expected = {
 				config.gravity() * (1.5 * lightDensity + 0.5 * (heavyDensity + lightDensity) + heavyDensity),
 				config.gravity() * (1.5 * lightDensity + 0.5 * (heavyDensity + lightDensity)),

@@ -1,7 +1,6 @@
 package mmm.fluid;
 
 import mmm.fluid.air.AirNetwork;
-import mmm.units.SignedDyadic;
 
 /**
  * Read-only aggregate metrics over the committed cell inventory: totals, extrema,
@@ -30,9 +29,9 @@ final class DomainMetrics {
 	}
 
 	double totalOpenVolumeExact() {
-		if (domain.granularCoupling != null && domain.gridDirty) domain.ensureInventoryGrid();
+		if (domain.granularCoupling != null && domain.gridDirty) domain.domainFlowFields.ensureInventoryGrid();
 		double result = 0.0;
-		for (int cell = 0; cell < domain.cellCount; cell++) result += domain.effectiveOpenCellVolume(cell);
+		for (int cell = 0; cell < domain.cellCount; cell++) result += domain.domainCollision.effectiveOpenCellVolume(cell);
 		return result;
 	}
 
@@ -44,7 +43,7 @@ final class DomainMetrics {
 	long totalMassUnits() { return domain.liquidCells.massUnits(); }
 
 	float maximumParticleSpeed() {
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		double sum = 0;
 		for (float[] velocity : new float[][]{domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ}) {
 			double maximum = 0;
@@ -55,9 +54,9 @@ final class DomainMetrics {
 	}
 
 	float maximumPressure() {
-		domain.ensurePressureGeometry();
+		domain.domainFlowFields.ensurePressureGeometry();
 		float maximum = 0.0F;
-		for (int cell = 0; cell < domain.cellCount; cell++) if (domain.markerGrid.markerCount[cell] > 0) {
+		for (int cell = 0; cell < domain.cellCount; cell++) if (domain.liquidGrid.stockCount[cell] > 0) {
 			maximum = Math.max(maximum, (float) domain.pressureSystem.liquidPressureAt(cell, ~domain.geometry.cutCells.mask(cell) & 255));
 		}
 		return maximum;
@@ -73,7 +72,7 @@ final class DomainMetrics {
 	}
 
 	FluidDomain.VolumeDistribution volumeDistribution(float visibleThreshold) {
-		domain.ensureInventoryGrid();
+		domain.domainFlowFields.ensureInventoryGrid();
 		int active = 0, visible = 0, dense = 0;
 		for (float value : domain.volume) {
 			if (value > domain.config.fluidEpsilon()) active++;
@@ -94,35 +93,35 @@ final class DomainMetrics {
 	}
 
 	boolean containsFluidAt(float localX, float localY, float localZ) {
-		domain.ensureInventoryGrid();
+		domain.domainFlowFields.ensureInventoryGrid();
 		float h = domain.config.cellSize();
 		int x = (int) Math.floor(localX / h), y = (int) Math.floor(localY / h), z = (int) Math.floor(localZ / h);
-		if (!domain.inside(x, y, z)) return false;
-		int index = domain.cellIndex(x, y, z);
+		if (!domain.domainFlowFields.inside(x, y, z)) return false;
+		int index = domain.domainFlowFields.cellIndex(x, y, z);
 		if (domain.geometry.solid[index] || domain.geometry.cutCells.pointInsideSolid(localX, localY, localZ, h)
 				|| domain.volume[index] <= domain.config.fluidEpsilon()) return false;
-		float openVolume = domain.effectiveOpenCellVolume(index);
+		float openVolume = domain.domainCollision.effectiveOpenCellVolume(index);
 		float reconstructedFill = openVolume <= 0.0F ? 0.0F : FluidDomain.clamp01(domain.volume[index] / openVolume);
 		return localY - y * h < reconstructedFill * h;
 	}
 
 	/** Derived local mass/volume density for observation and acceptance; dry cells return NaN. */
 	double densityInCell(int x, int y, int z) {
-		int cell = domain.cellIndexChecked(x, y, z);
-		domain.ensureInventoryGrid();
-		return domain.markerGrid.markerCount[cell] == 0 ? Double.NaN : domain.markerGrid.cellDensity[cell];
+		int cell = domain.domainFlowFields.cellIndexChecked(x, y, z);
+		domain.domainFlowFields.ensureInventoryGrid();
+		return domain.liquidGrid.stockCount[cell] == 0 ? Double.NaN : domain.liquidGrid.cellDensity[cell];
 	}
 
 	int markerCellCount() {
-		domain.ensureInventoryGrid();
+		domain.domainFlowFields.ensureInventoryGrid();
 		int result = 0;
-		for (int count : domain.markerGrid.markerCount) if (count > 0) result++;
+		for (int count : domain.liquidGrid.stockCount) if (count > 0) result++;
 		return result;
 	}
 
 	/** Returns the material handle with the largest exact marker volume in the given cell. */
 	int dominantMaterialInCell(int x, int y, int z) {
-		int cell = domain.cellIndexChecked(x, y, z);
+		int cell = domain.domainFlowFields.cellIndexChecked(x, y, z);
 		double[] amounts = new double[domain.materialRegistry == null ? 1 : domain.materialRegistry.size()];
 		for (var stock : domain.liquidCells.stocksInCell(cell)) amounts[stock.key().material()] += stock.volumeFraction();
 		int best = 0;
@@ -134,7 +133,7 @@ final class DomainMetrics {
 	double exactVolumeNear(int centerX, int centerY, int centerZ, int maxRadius, int materialHandle) {
 		if (maxRadius < 0) throw new IllegalArgumentException("maxRadius cannot be negative");
 		boolean[] near = new boolean[domain.cellCount];
-		for (FluidDomain.CellCandidate candidate : domain.nearbyCells(centerX, centerY, centerZ, maxRadius)) {
+		for (FluidDomain.CellCandidate candidate : domain.domainFlowFields.nearbyCells(centerX, centerY, centerZ, maxRadius)) {
 			near[candidate.index()] = true;
 		}
 		double result = 0.0;

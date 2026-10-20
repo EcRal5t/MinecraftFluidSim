@@ -99,10 +99,10 @@ final class GranularFaceVolumes {
 	double solidArea(int face){return Math.max(0,fixedPore[face]-liquid[face]);}
 
 	private int length(int axis) { return axis == 0 ? domain.mac.velocityX.length : axis == 1 ? domain.mac.velocityY.length : domain.mac.velocityZ.length; }
-	private int local(int axis, int x, int y, int z) { return axis == 0 ? domain.xFaceIndex(x, y, z) : axis == 1 ? domain.yFaceIndex(x, y, z) : domain.zFaceIndex(x, y, z); }
+	private int local(int axis, int x, int y, int z) { return axis == 0 ? domain.domainFlowFields.xFaceIndex(x, y, z) : axis == 1 ? domain.domainFlowFields.yFaceIndex(x, y, z) : domain.domainFlowFields.zFaceIndex(x, y, z); }
 	private int rightCell(int axis, int local) {
 		int nx = domain.sizeX + (axis == 0 ? 1 : 0), ny = domain.sizeY + (axis == 1 ? 1 : 0);
-		return domain.cellIndex(local % nx, local / nx % ny, local / (nx * ny));
+		return domain.domainFlowFields.cellIndex(local % nx, local / nx % ny, local / (nx * ny));
 	}
 	private double geometric(int axis, int local) {
 		int nx = domain.sizeX + (axis == 0 ? 1 : 0), ny = domain.sizeY + (axis == 1 ? 1 : 0);
@@ -115,7 +115,7 @@ final class GranularFaceVolumes {
 		int x = local % nx, y = local / nx % ny, z = local / (nx * ny);
 		if (axis == 0 && (x == 0 || x == domain.sizeX) || axis == 1 && (y == 0 || y == domain.sizeY)
 				|| axis == 2 && (z == 0 || z == domain.sizeZ)) return 0;
-		int right = domain.cellIndex(x, y, z), left = right - (axis == 0 ? 1 : axis == 1 ? domain.sizeX : domain.sizeX * domain.sizeY);
+		int right = domain.domainFlowFields.cellIndex(x, y, z), left = right - (axis == 0 ? 1 : axis == 1 ? domain.sizeX : domain.sizeX * domain.sizeY);
 		double a = domain.geometry.cutCells.openCellVolume(left), b = domain.geometry.cutCells.openCellVolume(right);
 		return Math.min(1, Math.max(a > 0 ? fixedVolume[left] / a : 1, b > 0 ? fixedVolume[right] / b : 1));
 	}

@@ -5,7 +5,6 @@ import mmm.chemistry.ChemicalLimits;
 import mmm.chemistry.ExactRational;
 import mmm.fluid.FluidDomain;
 import mmm.fluid.FluidDomainStateAssertions;
-import mmm.fluid.FlipMaterialParticleState;
 import mmm.fluid.FlipParticleState;
 import mmm.fluid.FluidMaterial;
 import mmm.fluid.FluidSolverConfig;
@@ -28,17 +27,11 @@ import mmm.units.SignedDyadic;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Random;
 
-/**
- * Standalone M6 container numeric-representation gate. Answers the pre-implementation questions:
- * long-quanta container arithmetic is exact, conversions from real solver marker volumes round
- * within one half quantum, and simulated container↔region round-trips stay inside a documented
- * drift bound without ever producing negative volumes or non-finite values.
- */
+/** Exact container quantities, actual cell transfer transactions and complete recovery. */
 public final class M6ContainerValidation {
 	private static final FluidSolverConfig CONFIG = new FluidSolverConfig(
-			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F, 0.80F);
 	private static final long BUCKET = ContainerFluidLedger.NANOS_PER_BLOCK;
 	private static int passed;
 
@@ -47,16 +40,15 @@ public final class M6ContainerValidation {
 	public static void main(String[] args) throws Exception {
 		validateCreativeSourceDescriptor();
 		run("ledger arithmetic is exact and overflow-checked", M6ContainerValidation::testArithmetic);
-		run("conversions round real marker volumes within half a quantum", M6ContainerValidation::testConversions);
+		run("display volume conversions round within half a container quantum", M6ContainerValidation::testConversions);
 		run("bucket canonicalization boundaries", M6ContainerValidation::testCanonicalization);
-		run("round-trip drift stays bounded over ten thousand cycles", M6ContainerValidation::testRoundTrip);
 		run("exact insert plans or refuses atomically", M6ContainerValidation::testExactInsert);
 		run("exact extract removes exactly or refuses", M6ContainerValidation::testExactExtract);
 		run("sub-micro residual and independent material mass survive exact transfer", M6ContainerValidation::testExactMaterialMass);
 		run("multi-material container and solver transfer close every component ledger", M6ContainerValidation::testMixtureTransfer);
-		run("malformed mixture mass and sub-float portions are rejected", M6ContainerValidation::testMixtureHardening);
+		run("malformed mixture mass and volume are rejected", M6ContainerValidation::testMixtureHardening);
 		run("granular contents are canonical and registry-bound", M6ContainerValidation::testGranularContents);
-		run("thermal contents bind raw energy to exact liquid truth", M6ContainerValidation::testThermalContents);
+		run("thermal contents bind raw energy to exact liquid inventory", M6ContainerValidation::testThermalContents);
 		run("tiny container thermal shares preserve actual caloric inventories", M6ContainerValidation::testTinyThermalShares);
 		run("full bucket round-trips through the primitives", M6ContainerValidation::testBucketRoundTrip);
 		System.out.println("M6ContainerValidation passed " + passed + " scenarios");
@@ -350,139 +342,85 @@ public final class M6ContainerValidation {
 		}
 	}
 
-	/**
-	 * Simulates the planned transfer primitive: greedy full-marker removal with a float remainder
-	 * split, quanta conversion at the container, and float re-creation on insert. The combined
-	 * region+container ledger must stay within a small documented bound over 10,000 cycles.
-	 */
-	private static void testRoundTrip() {
-		Random random = new Random(2_626L);
-		List<Float> region = new ArrayList<>(512);
-		for (int i = 0; i < 256; i++) region.add(0.015625F);
-		double initialVolume = region.stream().mapToDouble(Float::doubleValue).sum();
-		long containerNanos = 0L;
-		long worstDriftNanos = 0L;
-		for (int cycle = 0; cycle < 10_000; cycle++) {
-			if (containerNanos == 0L || (random.nextBoolean() && !region.isEmpty())) {
-				double availableVolume = region.stream().mapToDouble(Float::doubleValue).sum();
-				long request = 1L + random.nextInt((int) Math.max(1L,
-						Math.min(BUCKET, Math.round(availableVolume * 1_000_000_000.0))));
-				double taken = 0.0;
-				while (!region.isEmpty() && Math.round(taken * 1_000_000_000.0) < request) {
-					float marker = region.getLast();
-					double need = request / 1_000_000_000.0 - taken;
-					float remainder = (float) (marker - need);
-					if (remainder > 0.0F && remainder < marker) {
-						region.set(region.size() - 1, remainder);
-						taken += marker - remainder;
-					} else {
-						region.removeLast();
-						taken += marker;
-					}
-				}
-				containerNanos = ContainerFluidLedger.checkedAdd(containerNanos, ContainerFluidLedger.cubicMetersToNanos(taken));
-			} else {
-				long give = Math.min(containerNanos, BUCKET);
-				region.add((float) ContainerFluidLedger.nanosToCubicMeters(give));
-				containerNanos = ContainerFluidLedger.checkedSubtract(containerNanos, give);
-			}
-			double regionVolume = region.stream().mapToDouble(Float::doubleValue).sum();
-			check(regionVolume >= 0.0 && Double.isFinite(regionVolume) && containerNanos >= 0L,
-					"ledger produced a negative or non-finite value");
-			long drift = Math.abs(Math.round((regionVolume + containerNanos / 1_000_000_000.0 - initialVolume) * 1_000_000_000.0));
-			worstDriftNanos = Math.max(worstDriftNanos, drift);
-		}
-		check(worstDriftNanos <= 2_000L,
-				"round-trip drift exceeded the documented bound: " + worstDriftNanos + " quanta");
-		System.out.println("  worst combined drift over 10000 cycles: " + worstDriftNanos + " quanta ("
-				+ String.format("%.3e", worstDriftNanos / 1.0E9) + " m^3)");
-	}
-
 	private static void testExactInsert() {
-		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG, 512);
-		domain.setSolid(0, 0, 0, true);
-		FluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(3, 2, 3, 0.375F, 2);
-		check(inserted.transferred() && Math.abs(inserted.volume() - 0.375) < 1.0E-9,
-				"exact insert did not report the planned volume");
-		check(Math.abs(sumMarkerVolumes(domain) - inserted.volume()) < 1.0E-9,
-				"marker ledger did not gain the inserted volume");
-
-		int particlesBefore = domain.particleCount();
-		double volumesBefore = sumMarkerVolumes(domain);
-		FluidDomain.ExactVolumeTransfer oversized = domain.tryInsertExactVolume(3, 2, 3, 100.0F, 3);
-		check(!oversized.transferred(), "insert beyond open capacity was accepted");
-		check(domain.particleCount() == particlesBefore && Math.abs(sumMarkerVolumes(domain) - volumesBefore) < 1.0E-9,
-				"refused insert left partial state");
-
-		FluidDomain tiny = new FluidDomain(6, 4, 6, CONFIG, 4);
-		FluidDomain.ExactVolumeTransfer budget = tiny.tryInsertExactVolume(3, 2, 3, 1.0F, 2);
-		check(!budget.transferred() && tiny.particleCount() == 0 && sumMarkerVolumes(tiny) == 0.0,
-				"marker-budget refusal left partial state");
-		check(tiny.tryInsertExactVolume(3, 2, 3, 0.0F, 2).transferred(),
-				"a zero-volume insert is a successful no-op");
+		var domain=new FluidDomain(6,4,6,CONFIG,512);domain.setSolid(0,0,0,true);
+		var inserted=domain.tryInsertExactVolume(3,2,3,.375F,2);
+		check(inserted.transferred()&&inserted.volume()==.375
+				&&inventoryVolume(domain).equals(SignedDyadic.of(inserted.volume()))&&domain.totalMassUnits()==inserted.massUnits(),
+				"Exact insertion did not publish the reported volume and integer mass");
+		var before=domain.captureAuthoritativeState();
+		check(!domain.tryInsertExactVolume(3,2,3,100,3).transferred(),"Insertion exceeded actual open capacity");
+		FluidDomainStateAssertions.assertSameState(before,domain.captureAuthoritativeState(),"Capacity-limited insertion");
+		var compact=new FluidDomain(6,4,6,CONFIG,4);
+		var addition=compact.tryInsertExactVolume(3,2,3,1,2);
+		check(addition.transferred()&&inventoryVolume(compact).equals(SignedDyadic.of(1))&&compact.totalMassUnits()==addition.massUnits(),
+				"Insertion depended on the old display sampling budget");
+		var restored=FluidDomain.restoreAuthoritativeState(compact.captureAuthoritativeState());
+		check(restored.exportLiquidCellState().stocks().equals(compact.exportLiquidCellState().stocks()),"Inserted stock did not survive recovery");
+		before=compact.captureAuthoritativeState();
+		check(compact.tryInsertExactVolume(3,2,3,0,2).transferred(),"Zero-volume insertion failed");
+		FluidDomainStateAssertions.assertSameState(before,compact.captureAuthoritativeState(),"Zero-volume insertion");
 	}
 
 	private static void testExactExtract() {
-		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG, 512);
-		domain.tryInsertExactVolume(3, 2, 3, 0.375F, 2);
-		double before = sumMarkerVolumes(domain);
-		int particlesBefore = domain.particleCount();
+		var domain=new FluidDomain(6,4,6,CONFIG,512);
+		check(domain.tryInsertExactVolume(3,2,3,.375F,2).transferred(),"Extraction setup failed");
+		var source=domain.captureAuthoritativeState();var volume=inventoryVolume(domain);long mass=domain.totalMassUnits();
+		check(!domain.tryExtractExactVolume(3,2,3,.5F,2).transferred(),"Extraction exceeded available stock");
+		FluidDomainStateAssertions.assertSameState(source,domain.captureAuthoritativeState(),"Insufficient extraction");
+		var extracted=domain.tryExtractExactVolume(3,2,3,.25F,2);
+		check(extracted.transferred()&&extracted.volume()==.25
+				&&inventoryVolume(domain).add(SignedDyadic.of(extracted.volume())).equals(volume)
+				&&Math.addExact(domain.totalMassUnits(),extracted.massUnits())==mass,"Extraction failed its exact V/M ledger");
+		source=domain.captureAuthoritativeState();
+		check(domain.tryExtractExactVolume(3,2,3,0,2).transferred(),"Zero-volume extraction failed");
+		FluidDomainStateAssertions.assertSameState(source,domain.captureAuthoritativeState(),"Zero-volume extraction");
 
-		FluidDomain.ExactVolumeTransfer oversized = domain.tryExtractExactVolume(3, 2, 3, 0.5F, 2);
-		check(!oversized.transferred(), "extract beyond availability was accepted");
-		check(domain.particleCount() == particlesBefore && sumMarkerVolumes(domain) == before,
-				"refused extract left partial state");
-
-		FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(3, 2, 3, 0.25F, 2);
-		check(extracted.transferred() && Math.abs(extracted.volume() - 0.25) < 1.0E-12,
-				"whole-marker extraction was not exact");
-		check(Math.abs(sumMarkerVolumes(domain) - (before - extracted.volume())) < 1.0E-12,
-				"marker ledger did not lose the extracted volume");
-		check(domain.tryExtractExactVolume(3, 2, 3, 0.0F, 2).transferred(),
-				"a zero-volume extract is a successful no-op");
-
-		FluidDomain coarse = new FluidDomain(4, 4, 4, CONFIG, 64);
-		check(coarse.tryInsertExactVolume(1, 1, 1, 0.125F, 0).transferred(), "coarse marker setup");
-		var unchanged = coarse.captureAuthoritativeState();
-		float belowMarkerResolution = 0.75F * (0.125F - Math.nextDown(0.125F));
-		check(!coarse.tryExtractExactVolume(1, 1, 1, belowMarkerResolution, 0).transferred(),
-				"sub-resolution extraction reported success without removing a marker delta");
-		FluidDomainStateAssertions.assertSameState(unchanged, coarse.captureAuthoritativeState(),
-				"sub-resolution single-material refusal");
-		check(!coarse.tryExtractExactMixture(1, 1, 1, belowMarkerResolution, 0).transferred(),
-				"sub-resolution mixture extraction reported empty success");
-		FluidDomainStateAssertions.assertSameState(unchanged, coarse.captureAuthoritativeState(),
-				"sub-resolution mixture refusal");
-		FluidDomain insufficient = FluidDomain.restoreAuthoritativeState(unchanged);
-		check(insufficient.tryInsertExactVolume(2, 1, 1, belowMarkerResolution / 3.0F, 0).transferred(),
-				"partial fine marker setup");
-		var insufficientBefore = insufficient.captureAuthoritativeState();
-		check(!insufficient.tryExtractExactVolume(1, 1, 1, belowMarkerResolution, 1).transferred(),
-				"skipped coarse marker inflated tolerance for an insufficient fine extraction");
-		FluidDomainStateAssertions.assertSameState(insufficientBefore, insufficient.captureAuthoritativeState(),
-				"insufficient fine extraction did not commit its partial plan");
-
-		// A small marker remains extractable even when the same request cannot shrink a large one.
-		float fineVolume = Math.scalb(1.0F, -30);
-		check(coarse.tryInsertExactVolume(2, 1, 1, fineVolume, 0).transferred(), "fine marker setup");
-		var fineState = coarse.captureAuthoritativeState();
-		var fine = coarse.tryExtractExactVolume(1, 1, 1, fineVolume, 1);
-		check(fine.transferred() && fine.volume() == fineVolume && fine.massUnits() == mmm.units.SolverUnitScale.forCellSize(CONFIG.cellSize()).massUnitsForNormalized(fineVolume * 1_000.0),
-				"whole fine marker disappeared from the settlement next to a larger inventory");
-		FluidDomainStateAssertions.assertSameState(unchanged, coarse.captureAuthoritativeState(),
-				"fine extraction left the coarse inventory intact");
-		FluidDomain mixture = FluidDomain.restoreAuthoritativeState(fineState);
-		var fineMixture = mixture.tryExtractExactMixture(2, 1, 1, fineVolume, 0);
-		check(fineMixture.transferred() && fineMixture.portions().size() == 1
-				&& fineMixture.portions().getFirst().volume() == fineVolume
-				&& fineMixture.portions().getFirst().massUnits() == fine.massUnits(),
-				"mixture settlement lost a fine carrier delta to whole-domain cancellation");
+		var coarse=new FluidDomain(4,4,4,CONFIG,64);
+		check(coarse.tryInsertExactVolume(1,1,1,.125F,0).transferred(),"Small-transfer setup failed");
+		var original=coarse.captureAuthoritativeState();
+		// Display positions and float volume samples can stay unchanged while exact stock moves.
+		float request=.75F*(.125F-Math.nextDown(.125F));
+		for(boolean mixture:new boolean[]{false,true}){
+			var candidate=FluidDomain.restoreAuthoritativeState(original);
+			var before=inventoryVolume(candidate);long beforeMass=candidate.totalMassUnits();
+			SignedDyadic removedVolume;long removedMass;
+			if(mixture){
+				var transfer=candidate.tryExtractExactMixture(1,1,1,request,0);
+				check(transfer.transferred(),"Fine mixture extraction failed");
+				removedVolume=SignedDyadic.ZERO;removedMass=0;
+				for(var portion:transfer.portions()){removedVolume=removedVolume.add(SignedDyadic.of(portion.volume()));removedMass=Math.addExact(removedMass,portion.massUnits());}
+			}else{
+				var transfer=candidate.tryExtractExactVolume(1,1,1,request,0);
+				check(transfer.transferred(),"Fine single-material extraction failed");
+				removedVolume=SignedDyadic.of(transfer.volume());removedMass=transfer.massUnits();
+			}
+			check(removedVolume.equals(SignedDyadic.of(request))&&removedMass>0
+					&&inventoryVolume(candidate).add(removedVolume).equals(before)
+					&&Math.addExact(candidate.totalMassUnits(),removedMass)==beforeMass,"Fine transfer lost exact stock behind its display sample");
+			var restored=FluidDomain.restoreAuthoritativeState(candidate.captureAuthoritativeState());
+			check(restored.exportLiquidCellState().stocks().equals(candidate.exportLiquidCellState().stocks()),"Fine transfer did not survive recovery");
+		}
+		float fineVolume=Math.scalb(1F,-30);
+		check(coarse.tryInsertExactVolume(2,1,1,fineVolume,0).transferred(),"Fine stock setup failed");
+		var mixedScale=coarse.captureAuthoritativeState();var before=inventoryVolume(coarse);long beforeMass=coarse.totalMassUnits();
+		var fine=coarse.tryExtractExactVolume(1,1,1,fineVolume,1);
+		check(fine.transferred()&&fine.volume()==fineVolume&&fine.massUnits()>0
+				&&inventoryVolume(coarse).add(SignedDyadic.of(fine.volume())).equals(before)
+				&&Math.addExact(coarse.totalMassUnits(),fine.massUnits())==beforeMass,"Fine transfer next to a larger stock did not close V/M");
+		var mixture=FluidDomain.restoreAuthoritativeState(mixedScale);
+		var fineMixture=mixture.tryExtractExactMixture(2,1,1,fineVolume,0);
+		var removedVolume=SignedDyadic.ZERO;long removedMass=0;
+		for(var portion:fineMixture.portions()){removedVolume=removedVolume.add(SignedDyadic.of(portion.volume()));removedMass=Math.addExact(removedMass,portion.massUnits());}
+		check(fineMixture.transferred()&&removedVolume.equals(SignedDyadic.of(fineVolume))
+				&&inventoryVolume(mixture).add(removedVolume).equals(before)
+				&&Math.addExact(mixture.totalMassUnits(),removedMass)==beforeMass,"Fine mixture transfer lost a stock delta beside a larger inventory");
 	}
 
 	private static void testExactMaterialMass() {
 		FluidDomain residual = new FluidDomain(4, 4, 4, CONFIG, 64);
 		FluidDomain.ExactVolumeTransfer seeded = residual.tryInsertExactVolume(2, 2, 2, 5.0E-7F, 0);
-		check(seeded.transferred(), "could not seed a sub-micro marker");
+		check(seeded.transferred(), "could not seed a small inventory");
 		FluidDomain.ExactVolumeTransfer tiny = residual.tryExtractExactVolume(2, 2, 2, 1.0E-7F, 0);
 		check(tiny.transferred() && residual.totalVolumeExact() > 0.0
 				&& residual.totalVolumeExact() < 5.0E-7,
@@ -490,19 +428,9 @@ public final class M6ContainerValidation {
 						+ ", removed=" + tiny.volume() + ", residual=" + residual.totalVolumeExact());
 
 		FluidDomain domain = new FluidDomain(4, 4, 4, CONFIG, 80);
-		domain.setVolume(1, 1, 1, 0.125F);
-		FlipParticleState pure = domain.exportParticleState();
-		List<FluidMaterial> materials = List.of(
-				new FluidMaterial("mmm:water", 1_000.0, "mmm:aqueous", 0.0, Math.PI / 2.0),
-				new FluidMaterial("mmm:oil", 800.0, "mmm:oil", 0.0, Math.PI / 2.0));
-		double[] initialMass = new double[pure.particleCount()];
-		int[] initialMaterial = new int[pure.particleCount()];
-		for (int i = 0; i < pure.particleCount(); i++) initialMass[i] = pure.copyPositionVolume()[4 * i + 3] * CONFIG.density();
-		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
-				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(),
-				domain.totalVolumeExact(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(125.0), materials, pure.copyPositionVolume(),
-				pure.copyParticleVelocities(), pure.copySolidMask(), java.util.Arrays.stream(initialMass).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(m)).toArray(), initialMaterial));
-		domain.removeAllWaterExact();
+		domain.bindMaterialRegistry(new mmm.fluid.FluidMaterialRegistry(List.of(
+				new FluidMaterial("mmm:water",1000,"mmm:aqueous",0,Math.PI/2),
+				new FluidMaterial("mmm:oil",800,"mmm:oil",0,Math.PI/2))));
 
 		double insertedMass = 123.456789012345;
 		FluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactMaterial(
@@ -542,16 +470,9 @@ public final class M6ContainerValidation {
 		}
 
 		FluidDomain domain = new FluidDomain(4, 4, 4, CONFIG, 80);
-		domain.setVolume(1, 1, 1, 0.125F);
-		FlipParticleState pure = domain.exportParticleState();
-		List<FluidMaterial> materials = List.of(
-				new FluidMaterial("mmm:water", 1_000.0, "mmm:aqueous", 0.0, Math.PI / 2.0),
-				new FluidMaterial("mmm:oil", 800.0, "mmm:oil", 0.0, Math.PI / 2.0));
-		domain.restoreMaterialParticleState(new FlipMaterialParticleState(
-				pure.sizeX(), pure.sizeY(), pure.sizeZ(), pure.cellSize(), pure.particleCount(),
-				domain.totalVolumeExact(), mmm.units.SolverUnitScale.forCellSize(pure.cellSize()).massUnitsForNormalized(125.0), materials, pure.copyPositionVolume(),
-				pure.copyParticleVelocities(), pure.copySolidMask(), pure.copyMassUnits(), new int[pure.particleCount()]));
-		domain.removeAllWaterExact();
+		domain.bindMaterialRegistry(new mmm.fluid.FluidMaterialRegistry(List.of(
+				new FluidMaterial("mmm:water",1000,"mmm:aqueous",0,Math.PI/2),
+				new FluidMaterial("mmm:oil",800,"mmm:oil",0,Math.PI/2))));
 
 		List<FluidDomain.MaterialPortion> portions = List.of(
 				new FluidDomain.MaterialPortion(1, 3.2, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(256.125)),
@@ -571,7 +492,7 @@ public final class M6ContainerValidation {
 		check(!domain.tryInsertExactMixture(2, 2, 2,
 				List.of(new FluidDomain.MaterialPortion(0, 100.0, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(100.0))), 1).transferred()
 				&& domain.totalVolumeExact() == volumeBeforeRefusal && domain.totalMass() == massBeforeRefusal,
-				"refused mixture insert left partial markers");
+				"refused mixture insert left partial inventory");
 
 		FluidDomain.ExactMixtureTransfer extracted = domain.tryExtractExactMixture(2, 2, 2, 8.0F, 2);
 		double extractedVolume = extracted.portions().stream().mapToDouble(FluidDomain.MaterialPortion::volume).sum();
@@ -601,11 +522,11 @@ public final class M6ContainerValidation {
 		FluidDomain domain = new FluidDomain(4, 4, 4, CONFIG, 64);
 		try {
 			domain.tryInsertExactMixture(2, 2, 2,
-					List.of(new FluidDomain.MaterialPortion(0, 1.0E-300, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(1.0))), 1);
-			throw new AssertionError("Expected sub-float material volume rejection");
+					List.of(new FluidDomain.MaterialPortion(0, Double.NaN, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(1.0))), 1);
+			throw new AssertionError("Expected non-finite material volume rejection");
 		} catch (IllegalArgumentException expected) {
-			check(domain.particleCount() == 0 && domain.totalVolumeExact() == 0.0,
-					"sub-float rejection created a zero-volume marker");
+			check(inventoryVolume(domain).signum()==0&&domain.totalMassUnits()==0,
+					"Invalid volume published inventory");
 		}
 	}
 
@@ -624,7 +545,7 @@ public final class M6ContainerValidation {
 		check(filled.transferred(), "could not insert one bucket volume");
 		containerNanos = ContainerFluidLedger.checkedSubtract(containerNanos,
 				Math.min(ContainerFluidLedger.cubicMetersToNanos(units.cubicMeters(filled.volume())), containerNanos));
-		long initialNanos = ContainerFluidLedger.cubicMetersToNanos(units.cubicMeters(sumMarkerVolumes(domain)));
+		long initialNanos = ContainerFluidLedger.cubicMetersToNanos(units.cubicMeters(inventoryVolumeAsDouble(domain)));
 		long worstDrift = 0L;
 		for (int cycle = 0; cycle < 100; cycle++) {
 			FluidDomain.ExactVolumeTransfer extracted = domain.tryExtractExactVolume(3, 2, 3,
@@ -640,7 +561,7 @@ public final class M6ContainerValidation {
 			long given = ContainerFluidLedger.cubicMetersToNanos(units.cubicMeters(reinserted.volume()));
 			containerNanos = ContainerFluidLedger.checkedSubtract(containerNanos, Math.min(given, containerNanos));
 
-			long regionNanos = ContainerFluidLedger.cubicMetersToNanos(units.cubicMeters(sumMarkerVolumes(domain)));
+			long regionNanos = ContainerFluidLedger.cubicMetersToNanos(units.cubicMeters(inventoryVolumeAsDouble(domain)));
 			worstDrift = Math.max(worstDrift, Math.abs(regionNanos + containerNanos - initialNanos));
 			check(containerNanos >= 0L && containerNanos <= BUCKET, "container balance left its valid range");
 		}
@@ -648,13 +569,12 @@ public final class M6ContainerValidation {
 		System.out.println("  worst bucket round-trip drift over 100 cycles: " + worstDrift + " quanta");
 	}
 
-	private static double sumMarkerVolumes(FluidDomain domain) {
-		FlipParticleState state = domain.exportParticleState();
-		float[] markers = state.copyPositionVolume();
-		double sum = 0.0;
-		for (int i = 0; i < state.particleCount(); i++) sum += markers[i * 4 + 3];
-		return sum;
+	private static SignedDyadic inventoryVolume(FluidDomain domain){
+		var volume=SignedDyadic.ZERO;
+		for(var stock:domain.exportLiquidCellState().stocks())volume=volume.add(stock.volume());
+		return volume;
 	}
+	private static double inventoryVolumeAsDouble(FluidDomain domain){return inventoryVolume(domain).toDouble();}
 
 	private static void check(boolean condition, String message) {
 		if (!condition) throw new AssertionError(message);

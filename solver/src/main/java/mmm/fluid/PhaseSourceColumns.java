@@ -22,14 +22,19 @@ final class PhaseSourceColumns {
 	int next(int entry) { return next[entry]; }
 	long key(int entry) { return keys[entry]; }
 	double amount(int entry) { return amounts[entry]; }
+	double quantity(int row,long key) {
+		for(int entry=head[row];entry>=0;entry=next[entry])if(keys[entry]==key)return amounts[entry];
+		return 0;
+	}
 	void setAmount(int entry,double amount) { amounts[entry]=amount; }
 	int entryCount() { return entries; }
 	int rowCount() { return rows; }
 	void clear(int row) { head[row]=-1; }
 
-	/** Zero quantities retain legal expansion candidates without allocating a boxed map entry. */
+	/** Only physical nonzero phase quantities occupy this arena. */
 	int add(int row,long key,double amount) {
 		if(!(amount>=0&&Double.isFinite(amount)))throw new IllegalArgumentException("Invalid phase source quantity");
+		if(amount==0)return -1;
 		for(int entry=head[row];entry>=0;entry=next[entry])if(keys[entry]==key){
 			amounts[entry]+=amount;
 			return entry;

@@ -12,12 +12,12 @@ import java.util.List;
 /** One prepared cell inventory and gas successor for an entire fixed collision refresh. */
 final class LiquidCollisionEdit {
 	final LiquidCellInventory.Plan inventory;
-	final MacMomentumState momentum;
+	final CellMacStage.ExternalMomentum momentum;
 	final GasTopologyCoordinator.GasTopologyPlan gas;
 	final byte[] masks;
 	final List<List<LiquidCellInventory.Stock>> displaced;
 	final SignedDyadic removedEnergy, energyRoundoff;
-	private LiquidCollisionEdit(LiquidCellInventory.Plan inventory, MacMomentumState momentum,
+	private LiquidCollisionEdit(LiquidCellInventory.Plan inventory, CellMacStage.ExternalMomentum momentum,
 	                            GasTopologyCoordinator.GasTopologyPlan gas, byte[] masks,
 	                            List<List<LiquidCellInventory.Stock>> displaced) {
 		this.inventory = inventory; this.momentum = momentum; this.gas = gas;
@@ -25,7 +25,7 @@ final class LiquidCollisionEdit {
 		var observed = SignedDyadic.ZERO;
 		for (var row : displaced) for (var stock : row) observed = observed.add(SignedDyadic.of(stock.internalEnergy()));
 		this.removedEnergy = observed;
-		energyRoundoff = inventory.energyChange().add(observed);
+		energyRoundoff = inventory.energyChange().add(observed).subtract(inventory.mechanicalHeat());
 	}
 
 	static LiquidCollisionEdit prepare(FluidDomain domain, List<FluidDomain.CollisionEdit> edits,
@@ -48,7 +48,7 @@ final class LiquidCollisionEdit {
 		var eraseAll = new ArrayList<LiquidCellInventory.Edit>();
 		var retainedAll = new ArrayList<LiquidCellInventory.Stock>();
 		for (var edit : edits) {
-			int cell = domain.cellIndex(edit.x(), edit.y(), edit.z()); masks[cell] = (byte) edit.mask();
+			int cell = domain.domainFlowFields.cellIndex(edit.x(), edit.y(), edit.z()); masks[cell] = (byte) edit.mask();
 			var source = domain.liquidCells.stocksInCell(cell);
 			var components = LiquidCellInventory.connectedSupports(edit.mask());
 			var capacities = CellRemapMicroTopology.capacities(edit.mask(), SignedDyadic.of(Integer.bitCount(~edit.mask() & 255), -3)
@@ -122,7 +122,8 @@ final class LiquidCollisionEdit {
 		var inventoryEdits = new ArrayList<LiquidCellInventory.Edit>();
 		for (var key : changedKeys) inventoryEdits.add(new LiquidCellInventory.Edit(key, candidate.stock(key)));
 		var plan = domain.liquidCells.planEdits(inventoryEdits);
-		var momentum = domain.cellMacStage.prepareExternalInventoryChange(plan);
+		var momentum = domain.cellMacStage.prepareExternalMomentum(plan,masks);
+		plan = plan.withMechanicalHeat(momentum.heatByCell());
 		var gas = domain.gasTopologyCoordinator.planAfterCollisionCells(plan.future(), occupied, masks);
 		return new LiquidCollisionEdit(plan, momentum, gas, masks, removed);
 	}

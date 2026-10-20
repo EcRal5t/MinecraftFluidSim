@@ -36,14 +36,15 @@ public final class BoundaryPourDiagnostic {
 					candidate.stats().substeps(), candidate.mechanicalResolution().reservedSubsteps(), candidate.stats().pressureIterations(),
 					(double) candidate.stats().pressureResidual(), (double) domain.maximumParticleSpeed(), domain.particleCount(),
 					domain.gasState.network.nodeCount(), LiquidMacroscopicMotionValidation.Motion.capture(domain).kinetic());
-			if (flux) System.out.println("POUR transport " + candidate.stats().liquidTransport());
+			if (flux) System.out.printf("POUR inventory volume=%g massUnits=%d stocks=%d%n",
+					domain.totalVolumeExact(),domain.totalMassUnits(),domain.exportLiquidCellState().stocks().size());
 		}
 		System.out.println("Boundary pour completed " + steps + " full steps including capture/restore: " + fixture);
 	}
 
 	static FluidDomain pouredSource() {
 		var domain = new FluidDomain(8, 8, 8,
-				new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 120, 1e-4F, .40F, .002F, .80F), 4096);
+				new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 120, 1e-4F, .002F, .80F), 4096);
 		domain.sealDomainBoundary(); domain.bootstrapGasState(null); domain.setGasNodeStandardVolume(1, 34);
 		var addition = domain.addVolumeNearBudgeted(6, 0, 0, 128, 6);
 		if (addition.addedVolume() != 128 || addition.markerBudgetLimited()) throw new AssertionError("Original pour input changed");

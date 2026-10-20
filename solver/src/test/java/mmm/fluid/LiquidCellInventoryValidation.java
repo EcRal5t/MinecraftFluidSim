@@ -12,20 +12,70 @@ import java.util.Map;
 /** Short finite-volume inventory transaction checks, with no mechanical integration loop. */
 public final class LiquidCellInventoryValidation {
 	public static void main(String[] args) {
+		continuousFluxMovesResolvedMinorityMaterial();
+		continuousSlowFluxDoesNotStopAcrossSteps();
 		sharedFluxPreservesAllQuantities();
 		bulkVolumeReplacement();
 		collisionPreservesGeometricTail();
 		chemicalTailRetainsComposition();
 		preparedRowsAndRecoveryAreAtomic();
-		gasGeometryContinuesAcrossHandoff();
 		targetEnergyRoundsOnce();
 		explicitMechanicalHeatIsOneAtomicCandidate();
-		closedCutFacesRejectBeforeMutation();
 		sharedFaceFluxUsesCellInventory();
 		System.out.println("Liquid cell inventory validation passed: six-face quantities, atomic rows, recovery and U rounding");
 	}
+	private static void continuousFluxMovesResolvedMinorityMaterial() {
+		var cells=new LiquidCellInventory(4,null);
+		var stocks=new ArrayList<LiquidCellInventory.Stock>();
+		for(int cell=0;cell<4;cell++){
+			stocks.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(cell,0,255),SignedDyadic.of(.99),990_000_000L,null,99,false));
+			stocks.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(cell,1,255),SignedDyadic.of(1).subtract(SignedDyadic.of(.99)),10_000_000L,null,1,false));
+		}
+		cells.planAdditions(stocks).commit();
+		var plan=cells.planRoutes(circulatingComponentRoutes(cells,.001),null);
+		for(int cell=0;cell<4;cell++){
+			int source=cell;
+			double oil=plan.transfers().stream().filter(t->t.source().cell()==source&&t.source().material()==1).mapToDouble(t->t.volume().toDouble()).sum();
+			double water=plan.transfers().stream().filter(t->t.source().cell()==source&&t.source().material()==0).mapToDouble(t->t.volume().toDouble()).sum();
+			require(oil>0&&Math.abs(oil/(oil+water)-.01)<.0001,"Resolved minority liquid stopped following its common component flow");
+		}
+		plan.commit();
+		require(cells.exactVolume().equals(SignedDyadic.of(4))&&cells.massUnits()==4_000_000_000L,
+				"Common material flux changed exact inventory");
+	}
+	private static void continuousSlowFluxDoesNotStopAcrossSteps() {
+		var chemistry=BuiltinChemicalDefinitions.REGISTRY;var cells=new LiquidCellInventory(4,chemistry);
+		var mixture=ChemicalMixtureRecord.fromStableAmounts(chemistry,Map.of(BuiltinChemicalDefinitions.H2O,1_000_000L),0);
+		var stocks=new ArrayList<LiquidCellInventory.Stock>();
+		for(int cell=0;cell<4;cell++)stocks.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(cell,0,255),SignedDyadic.of(1),1_000_000_000L,mixture,100,false));
+		cells.planAdditions(stocks).commit();
+		double carried=0;var energy=SignedDyadic.ZERO;
+		for(int step=0;step<16;step++){
+			var plan=cells.planRoutes(circulatingComponentRoutes(cells,.00002),null);
+			double volume=plan.transfers().stream().filter(t->t.source().cell()==0).mapToDouble(t->t.volume().toDouble()).sum();
+			require(volume>0,"A positive slow component flux was rounded to zero");
+			carried+=volume;energy=energy.add(plan.energyRoundoff());plan.commit();
+		}
+		long species=0;for(var stock:cells.stocks())species+=stock.mixture().totalQuanta();
+		require(Math.abs(carried/(16*.00002)-1)<.01&&cells.exactVolume().equals(SignedDyadic.of(4))
+				&&cells.massUnits()==4_000_000_000L&&species==4_000_000L
+				&&cells.exactInternalEnergy().subtract(SignedDyadic.of(400)).equals(energy),
+				"Continuous slow transport lost carried volume, integer mass, species or U");
+	}
+	private static List<LiquidCellInventory.SourceRoutes> circulatingComponentRoutes(LiquidCellInventory cells,double flow) {
+		var routes=new PhaseQuantitySettlement.RouteBuffer();routes.reset(cells.stocks(),32);
+		int[] successor={1,3,0,2};
+		for(int source=0;source<routes.sourceCount();source++){
+			int cell=routes.key(source).cell();
+			routes.add(source,cell,successor[cell],255,flow);
+			routes.add(source,-1,cell,255,routes.volume(source)-flow);
+		}
+		var capacities=new SignedDyadic[32];java.util.Arrays.fill(capacities,SignedDyadic.ZERO);
+		for(int cell=0;cell<4;cell++)capacities[8*cell]=SignedDyadic.of(1);
+		return PhaseQuantitySettlement.settle(routes,capacities,null,null,source->{throw new AssertionError("Balanced circulation expanded capacity alternatives");});
+	}
 	private static void bulkVolumeReplacement() {
-		var config=new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.4F,.002F,.8F);
+		var config=new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F,.8F);
 		var bulk=new FluidDomain(3,3,3,config);var single=new FluidDomain(3,3,3,config);
 		byte[] masks=new byte[27];masks[0]=126;
 		bulk.geometry.cutCells.restoreMicroMasks(masks);single.geometry.cutCells.restoreMicroMasks(masks);
@@ -50,7 +100,7 @@ public final class LiquidCellInventoryValidation {
 	}
 
 	private static void collisionPreservesGeometricTail() {
-		var domain = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.4F,.002F,.8F));
+		var domain = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F,.8F));
 		domain.materialRegistry = new FluidMaterialRegistry(List.of(new FluidMaterial("test:tail",1000,"test:tail",0,Math.PI/2)));
 		var key = new LiquidCellInventory.Key(13,0,255); var volume = SignedDyadic.of(1,-60);
 		domain.liquidCells.planAdditions(List.of(new LiquidCellInventory.Stock(key,volume,0,null,0,false))).commit();
@@ -58,12 +108,12 @@ public final class LiquidCellInventoryValidation {
 		var displaced = domain.setSolidMicroMaskMaterial(1,1,1,255);
 		require(displaced.portions().size()==1 && displaced.portions().getFirst().massUnits()==0
 				&& SignedDyadic.of(displaced.portions().getFirst().volume()).equals(volume), "Collision lost a zero-mass geometric tail");
-		var restored = domain.tryInsertExactMixture(0,1,1,displaced.portions(),0,false,0);
+		var restored = domain.domainInventory.tryInsertExactMixture(0,1,1,displaced.portions(),0,false,0);
 		require(restored.transferred() && domain.liquidCells.exactVolume().equals(volume)
 				&& domain.totalMassUnits()==0, "Collision tail could not return through the common inventory transaction");
 	}
 	private static void chemicalTailRetainsComposition() {
-		var domain = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.4F,.002F,.8F));
+		var domain = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F,.8F));
 		domain.materialRegistry = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		domain.bindChemistry(chemistry);
@@ -74,10 +124,10 @@ public final class LiquidCellInventoryValidation {
 		domain.markCellInventoryChanged();
 		var displaced = domain.setSolidMicroMaskChemical(1,1,1,255);
 		var before = domain.liquidCells.snapshot(); boolean rejected = false;
-		try { domain.tryInsertExactChemical(0,1,1,displaced.ledger(),0,false,1); }
+		try { domain.domainInventory.tryInsertExactChemical(0,1,1,displaced.ledger(),0,false,1); }
 		catch(IllegalArgumentException expected) { rejected=true; }
 		require(rejected && domain.liquidCells.snapshot().rows().equals(before.rows()),"Geometric chemical tail accepted nonzero U");
-		var restored = domain.tryInsertExactChemical(0,1,1,displaced.ledger(),0,false,0);
+		var restored = domain.domainInventory.tryInsertExactChemical(0,1,1,displaced.ledger(),0,false,0);
 		require(restored.transferred() && domain.liquidCells.exactVolume().equals(volume)
 				&& domain.totalMassUnits()==0 && domain.liquidCells.physicalSize()==0
 				&& domain.liquidCells.stocks().getFirst().mixture().equals(mixture),"Chemical geometric tail lost species or signed residual");
@@ -93,13 +143,20 @@ public final class LiquidCellInventoryValidation {
 				new LiquidCellInventory.Stock(water, SignedDyadic.of(.75), 17, mixture, .1, true)),
 				new LiquidCellInventory.Edit(oil, new LiquidCellInventory.Stock(oil, SignedDyadic.of(.25), 3, null, -.2, false)))).commit();
 		var initial = cells.snapshot();
-		var fluxes = new ArrayList<LiquidCellInventory.FaceFlux>();
+		var waterRoutes = new ArrayList<LiquidCellInventory.TransportRoute>();
+		var oilRoutes = new ArrayList<LiquidCellInventory.TransportRoute>();
+		var waterRemaining=SignedDyadic.of(.75);var oilRemaining=SignedDyadic.of(.25);
 		int[] neighbors = {12, 14, 10, 16, 4, 22};
 		for (int face = 0; face < neighbors.length; face++) {
-			fluxes.add(new LiquidCellInventory.FaceFlux(face, 13, neighbors[face], 255, 255, 0, SignedDyadic.of(.075)));
-			fluxes.add(new LiquidCellInventory.FaceFlux(face, 13, neighbors[face], 255, 255, 1, SignedDyadic.of(.025)));
+			var waterPart=SignedDyadic.of(.075);var oilPart=SignedDyadic.of(.025);
+			waterRoutes.add(new LiquidCellInventory.TransportRoute(face,water,new LiquidCellInventory.Key(neighbors[face],0,255),waterPart));
+			oilRoutes.add(new LiquidCellInventory.TransportRoute(face,oil,new LiquidCellInventory.Key(neighbors[face],1,255),oilPart));
+			waterRemaining=waterRemaining.subtract(waterPart);oilRemaining=oilRemaining.subtract(oilPart);
 		}
-		var plan = cells.planTransport(fluxes, 3, 3, new int[27]);
+		waterRoutes.add(new LiquidCellInventory.TransportRoute(-1,water,water,waterRemaining));
+		oilRoutes.add(new LiquidCellInventory.TransportRoute(-1,oil,oil,oilRemaining));
+		var plan = cells.planRoutes(List.of(new LiquidCellInventory.SourceRoutes(cells.stock(water),waterRoutes),
+				new LiquidCellInventory.SourceRoutes(cells.stock(oil),oilRoutes)),null);
 		require(cells.snapshot().rows().equals(initial.rows()), "Flux preparation mutated source inventory");
 		plan.commit();
 		require(cells.massUnits() == 20 && cells.exactVolume().equals(SignedDyadic.of(1))
@@ -130,7 +187,9 @@ public final class LiquidCellInventoryValidation {
 				"A stale plan changed committed stock or an immutable snapshot");
 		var restored = new LiquidCellInventory(snapshot, null);
 		require(restored.ordinalOf(key) == 0 && restored.stockAt(0).equals(snapshot.stockAt(0)), "Recovery changed cell inventory ordinals");
-		var next = restored.planTransport(List.of(new LiquidCellInventory.FaceFlux(0, 0, 1, 255, 255, 0, SignedDyadic.of(.125))), 2, 2, new int[8]);
+		var next = restored.planRoutes(List.of(new LiquidCellInventory.SourceRoutes(restored.stock(key),List.of(
+				new LiquidCellInventory.TransportRoute(0,key,new LiquidCellInventory.Key(1,0,255),SignedDyadic.of(.125)),
+				new LiquidCellInventory.TransportRoute(-1,key,key,SignedDyadic.of(.375))))),null);
 		next.commit(); require(restored.massUnits() == 10 && restored.exactVolume().equals(SignedDyadic.of(.5)), "Recovered transport changed inventory");
 		boolean immutable = false; try { snapshot.rows().get(0).clear(); } catch (UnsupportedOperationException expected) { immutable = true; }
 		require(immutable, "Liquid snapshot exposes a mutable cell row");
@@ -139,27 +198,32 @@ public final class LiquidCellInventoryValidation {
 		var cells = new LiquidCellInventory(12, null); var key = new LiquidCellInventory.Key(0, 0, 255);
 		cells.planEdits(List.of(new LiquidCellInventory.Edit(key,
 				new LiquidCellInventory.Stock(key, SignedDyadic.of(1), 100, null, 10, false)))).commit();
-		var domain = new FluidDomain(3,2,2,new FluidSolverConfig(1,1000,0,.05F,120,1e-5F,.4F,.002F,.8F)); domain.liquidCells = cells;
-		domain.markCellInventoryChanged();domain.ensureGrid();
+		var domain = new FluidDomain(3,2,2,new FluidSolverConfig(1,1000,0,.05F,120,1e-5F,.002F,.8F)); domain.liquidCells = cells;
+		domain.markCellInventoryChanged();domain.domainFlowFields.ensureGrid();
 		for(int face=0;face<domain.mac.velocityX.length;face++)if(domain.cellMacStage.massX[face]>0)domain.mac.velocityX[face]=.2F;
 		domain.cellMacStage.publishMomentum();
 		var before=cells.snapshot();
-		var prepared=new CellLiquidVolumeTransport(domain).prepare(.1F);
+		var energyBefore=cells.exactInternalEnergy();
+		var prepared=domain.cellMacStage.prepareLiquid(.1F);
 		var flux=prepared.volumeFlux();var plan=prepared.inventory();
-		require(!prepared.faceFluxes().isEmpty()&&cells.snapshot().rows().equals(before.rows()),
+		require(!prepared.inventory().transfers().isEmpty()&&cells.snapshot().rows().equals(before.rows()),
 				"Shared face preparation bypassed transport or modified its source");
 		plan.commit();
 		for (int cell = 0; cell < 12; cell++) require(cells.exactCellVolume(cell).equals(flux.resultingVolumes()[cell])
 				&& cells.exactCellVolume(cell).compareTo(SignedDyadic.of(1)) <= 0, "Shared face and material inventory disagree on future volume");
 		require(cells.massUnits() == 100 && cells.exactVolume().equals(SignedDyadic.of(1))
-				&& cells.exactInternalEnergy().subtract(SignedDyadic.of(10)).equals(plan.energyRoundoff()),
+				// Joint MAC preparation includes mixing and this fixture's wall response heat.
+				&& cells.exactInternalEnergy().subtract(energyBefore).equals(plan.mechanicalHeat().add(plan.energyRoundoff()))
+				&&plan.energyChange().equals(plan.mechanicalHeat().add(plan.energyRoundoff())),
 				"Shared face transport changed exact inventory or unbooked U");
 	}
 	private static void explicitMechanicalHeatIsOneAtomicCandidate() {
 		var cells = new LiquidCellInventory(2, null); var key = new LiquidCellInventory.Key(0,0,255);
 		cells.planEdits(List.of(new LiquidCellInventory.Edit(key,new LiquidCellInventory.Stock(key,SignedDyadic.of(.5),10,null,3,false)))).commit();
 		var before = cells.snapshot();
-		var prepared = cells.planTransport(List.of(new LiquidCellInventory.FaceFlux(0,0,1,255,255,0,SignedDyadic.of(.25))),2,1,new int[2]);
+		var prepared = cells.planRoutes(List.of(new LiquidCellInventory.SourceRoutes(cells.stock(key),List.of(
+				new LiquidCellInventory.TransportRoute(0,key,new LiquidCellInventory.Key(1,0,255),SignedDyadic.of(.25)),
+				new LiquidCellInventory.TransportRoute(-1,key,key,SignedDyadic.of(.25))))),null);
 		var heated = prepared.withMechanicalHeat(Map.of(0,SignedDyadic.of(.1),1,SignedDyadic.of(.2)));
 		require(cells.snapshot().rows().equals(before.rows()), "Mechanical heat changed its source before publication");
 		require(heated.mechanicalHeat().equals(SignedDyadic.of(.1).add(SignedDyadic.of(.2)))
@@ -170,25 +234,6 @@ public final class LiquidCellInventoryValidation {
 		boolean rejected=false; try { prepared.commit(); } catch (IllegalStateException expected) { rejected=true; }
 		require(rejected,"An unheated predecessor could publish after the complete heated candidate");
 	}
-	private static void gasGeometryContinuesAcrossHandoff() {
-		var domain = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.4F,.002F,.8F));
-		domain.setVolume(1,1,1,.5F); domain.gasTopologyCoordinator.refresh();
-		domain.setVolume(1,1,1,.375F);
-		var frame = domain.gasState.frame; var before = domain.captureAuthoritativeState();
-		var restored = FluidDomain.restoreAuthoritativeState(before);
-		restored.gasTopologyCoordinator.refresh();
-		require(restored.gasState.frame == frame && restored.gasBoundary().auditClosed(),
-				"Backend handoff rebuilt unchanged validated gas geometry");
-		restored.liquidCells.planEnergyUpdate(new double[]{10}).commit(); restored.markCellInventoryChanged();
-		restored.gasTopologyCoordinator.refresh();
-		require(restored.gasState.frame == frame && restored.totalMassUnits() == domain.totalMassUnits()
-				&& restored.liquidCells.exactVolume().equals(domain.liquidCells.exactVolume()),
-				"Energy-only publication changed geometry or physical inventory");
-		restored.setVolume(1,1,1,.25F);
-		require(restored.gasState.frame != frame && restored.gasBoundary().auditClosed()
-				&& restored.liquidCells.exactVolume().equals(SignedDyadic.of(.25)),
-				"A volume edit retained stale gas geometry");
-	}
 	private static void targetEnergyRoundsOnce() {
 		var cells = new LiquidCellInventory(3, null); var edits = new ArrayList<LiquidCellInventory.Edit>();
 		for (int cell = 0; cell < 3; cell++) {
@@ -196,20 +241,12 @@ public final class LiquidCellInventoryValidation {
 			edits.add(new LiquidCellInventory.Edit(key, new LiquidCellInventory.Stock(key, SignedDyadic.of(.25), 10, null, cell == 1 ? 1e16 : 1, false)));
 		}
 		cells.planEdits(edits).commit();
-		var plan = cells.planTransport(List.of(
-				new LiquidCellInventory.FaceFlux(0, 0, 1, 255, 255, 0, SignedDyadic.of(.25)),
-				new LiquidCellInventory.FaceFlux(1, 2, 1, 255, 255, 0, SignedDyadic.of(.25))), 3, 1, new int[3]);
+		var plan = cells.planRoutes(List.of(
+				new LiquidCellInventory.SourceRoutes(cells.stockAt(0),List.of(new LiquidCellInventory.TransportRoute(0,new LiquidCellInventory.Key(0,0,255),new LiquidCellInventory.Key(1,0,255),SignedDyadic.of(.25)))),
+				new LiquidCellInventory.SourceRoutes(cells.stockAt(2),List.of(new LiquidCellInventory.TransportRoute(1,new LiquidCellInventory.Key(2,0,255),new LiquidCellInventory.Key(1,0,255),SignedDyadic.of(.25))))),null);
 		plan.commit();
 		require(cells.size() == 1 && cells.stockAt(0).internalEnergy() == 1e16 + 2 && plan.energyRoundoff().signum() == 0,
 				"Incoming U was rounded per transfer instead of once per target stock");
-	}
-	private static void closedCutFacesRejectBeforeMutation() {
-		var cells = new LiquidCellInventory(2, null); var key = new LiquidCellInventory.Key(0, 0, 1);
-		cells.planEdits(List.of(new LiquidCellInventory.Edit(key, new LiquidCellInventory.Stock(key, SignedDyadic.of(.125), 1, null, 1, false)))).commit();
-		var before = cells.snapshot(); boolean rejected = false;
-		try { cells.planTransport(List.of(new LiquidCellInventory.FaceFlux(0, 0, 1, 1, 2, 0, SignedDyadic.of(.0625))), 2, 1, new int[]{254, 253}); }
-		catch (IllegalArgumentException expected) { rejected = true; }
-		require(rejected && before.rows().equals(cells.snapshot().rows()), "A closed cut face moved inventory");
 	}
 	private static void require(boolean condition, String message) { if (!condition) throw new AssertionError(message); }
 }

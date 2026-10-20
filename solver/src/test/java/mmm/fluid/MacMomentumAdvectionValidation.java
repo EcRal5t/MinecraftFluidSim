@@ -11,7 +11,31 @@ public final class MacMomentumAdvectionValidation {
 		double[] source = {1, 0, 0, 0, 0, 0, 0, 0}, future = {.75, .25, 0, 0, 0, 0, 0, 0};
 		double[][] outward = {new double[12], new double[12], new double[12]}; outward[0][1] = .25;
 		check(source, future, outward, true);
+		wallImpactPublishesImpulseHeatAndRecoverableMomentum();
 		System.out.println("MAC donor mass, momentum and mixing heat PASS");
+	}
+	private static void wallImpactPublishesImpulseHeatAndRecoverableMomentum(){
+		var d=new FluidDomain(2,2,2,new FluidSolverConfig(1,1,0,.1F,80,1e-5F,.002F,.8F),64);
+		d.setVolumes(new float[]{.625F,.375F,0,0,0,0,0,0});d.domainFlowFields.ensureGrid();
+		long[] before=new long[8],after=new long[8];
+		before[0]=before[1]=mmm.units.Mass.fromKilograms(.5);after[0]=mmm.units.Mass.fromKilograms(.625);after[1]=mmm.units.Mass.fromKilograms(.375);
+		long[][] flux={new long[12],new long[12],new long[12]};flux[0][d.domainFlowFields.xFaceIndex(1,0,0)]=-mmm.units.Mass.fromKilograms(.125);
+		double[] velocity=new double[12];velocity[d.domainFlowFields.xFaceIndex(1,0,0)]=-2;
+		var donor=new MacMomentumAdvection(2,2,2,0);double[] x=donor.transport(before,after,flux,velocity);
+		if(!(x[d.domainFlowFields.xFaceIndex(0,0,0)]<0))throw new AssertionError("Incoming donor flow did not exercise the closed wall momentum path");
+		double[] heat=new double[8];donor.addHeatToCells(after,heat);double[][] p={x,new double[12],new double[12]};
+		var wall=d.cellMacStage.stopWallMomentum(p,after,heat,null);
+		var byCell=new java.util.TreeMap<Integer,mmm.units.SignedDyadic>();double totalHeat=0;
+		for(int cell=0;cell<heat.length;cell++)if(heat[cell]>0){byCell.put(cell,mmm.units.SignedDyadic.of(heat[cell]));totalHeat+=heat[cell];}
+		double totalP=0,kinetic=0;var mass=masses(new double[]{.625,.375,0,0,0,0,0,0},0);
+		for(int face=0;face<x.length;face++){totalP+=x[face];if(mass[face]>0)kinetic+=.5*x[face]*x[face]/mass[face];}
+		if(Math.abs(totalP+1-wall.x())>1e-10||!(wall.x()>0)||Math.abs(kinetic+totalHeat-1)>1e-10)
+			throw new AssertionError("Wall stopping lost impulse or failed to transfer kinetic energy into local heat");
+		var inventory=d.liquidCells.planEdits(java.util.List.of()).withMechanicalHeat(byCell);inventory.commit();
+		d.cellMacStage.commitMomentum(new CellMomentumTransport.Prepared(new MacMomentumState(2,2,2,p[0],p[1],p[2]),byCell,wall));d.markCellInventoryChanged();
+		var saved=d.captureAuthoritativeState();var restored=FluidDomain.restoreAuthoritativeState(saved);restored.domainFlowFields.ensureGrid();
+		if(saved.momentum().copyX()[d.domainFlowFields.xFaceIndex(0,0,0)]!=0||restored.mac.velocityX[d.domainFlowFields.xFaceIndex(0,0,0)]!=0
+				||!saved.liquid().stocks().equals(restored.liquidCells.stocks()))throw new AssertionError("Wall momentum or its heat changed during capture and restore");
 	}
 	private static void check(double[] before, double[] after, double[][] flux, boolean uniform) {
 		long[] source=new long[before.length],future=new long[after.length];long[][] massFlux=new long[flux.length][];

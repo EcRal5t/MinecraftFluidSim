@@ -18,22 +18,22 @@ final class SurfaceTensionCurvatureExperiment {
 	static void validateResolvedGeometry() {
 		validatePartialHeightEndpoints();
 		validateQuarterCylinderWalls();
-		FluidSolverConfig cfg = new FluidSolverConfig(1, 1000, 0, .01F, 800, 1e-7F, .45F, .002F, .8F);
+		FluidSolverConfig cfg = new FluidSolverConfig(1, 1000, 0, .01F, 800, 1e-7F, .002F, .8F);
 		for (double[] n : new double[][] {{1, 2, 0}, {1, 2, 3}, {1, 1, 1}}) for (double phase : new double[] {.25, .75})
 				for (boolean reverse : new boolean[] {false, true}) {
 			FluidDomain d = new FluidDomain(20, 20, 20, cfg, 64);
 			double offset = 10 * (n[0] + n[1] + n[2]) + phase, maximum = 0;
 			for (int z = 0; z < 20; z++) for (int y = 0; y < 20; y++) for (int x = 0; x < 20; x++) {
 				double fraction = planeFraction(n, offset - n[0] * x - n[1] * y - n[2] * z);
-				d.tension.surfaceTensionColor[d.cellIndex(x, y, z)] = reverse ? 1 - fraction : fraction;
+				d.tension.surfaceTensionColor[d.domainFlowFields.cellIndex(x, y, z)] = reverse ? 1 - fraction : fraction;
 			}
-			d.smoothSurfaceTensionColor(); d.rebuildSurfaceTensionNormals();
+			d.domainFlowFields.smoothSurfaceTensionColor(); d.domainFlowFields.rebuildSurfaceTensionNormals();
 			for (int z = 6; z < 14; z++) for (int y = 6; y < 14; y++) for (int x = 6; x < 14; x++) {
-				double c = d.tension.surfaceTensionColor[d.cellIndex(x, y, z)];
+				double c = d.tension.surfaceTensionColor[d.domainFlowFields.cellIndex(x, y, z)];
 				if (!(c > 0 && c < 1)) continue;
 				double k = HeightFunctionCurvature.compute(d, x, y, z);
 				check(Double.isFinite(k), "complete plane height column rejected");
-				maximum = Math.max(maximum, Math.abs(d.liquidGasMeanCurvature(x, y, z)));
+				maximum = Math.max(maximum, Math.abs(d.domainFlowFields.liquidGasMeanCurvature(x, y, z)));
 			}
 			check(maximum <= 1e-12, "analytic inclined plane gained curvature " + maximum);
 		}
@@ -50,22 +50,22 @@ final class SurfaceTensionCurvatureExperiment {
 		double[] colour = accurateSphereColour(size, h, center, 1);
 		double integratedVolume = Arrays.stream(colour).sum() * h * h * h;
 		check(Math.abs(integratedVolume - 4 * Math.PI / 3) < 1e-9, "sphere volume integration failed");
-		FluidSolverConfig cfg = new FluidSolverConfig(h, 1000, 0, .01F, 800, 1e-7F, .45F, .002F, .8F);
+		FluidSolverConfig cfg = new FluidSolverConfig(h, 1000, 0, .01F, 800, 1e-7F, .002F, .8F);
 		FluidDomain d = new FluidDomain(size, size, size, cfg, size * size * size * 8);
 		float[] fractions=new float[d.cellCount];
 		for(int cell=0;cell<fractions.length;cell++)fractions[cell]=(float)colour[cell];
 		d.bindMaterialRegistry(new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:test",1000,"mmm:test",.0728,Math.PI/2))));
-		d.setVolumes(fractions);d.ensureGrid();
+		d.setVolumes(fractions);d.domainFlowFields.ensureGrid();
 		double error = 0; int valid = 0, fallback = 0;
 		for (int z = 0; z < size; z++) for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
-			double c = d.tension.surfaceTensionColor[d.cellIndex(x, y, z)]; if (!(c > 0 && c < 1)) continue;
+			double c = d.tension.surfaceTensionColor[d.domainFlowFields.cellIndex(x, y, z)]; if (!(c > 0 && c < 1)) continue;
 			double k = HeightFunctionCurvature.compute(d, x, y, z);
 			if (Double.isFinite(k)) { error += Math.abs(k - 2); valid++; } else fallback++;
 		}
 		check(valid > 0, "sphere has no resolved height columns");
 		check(HeightFunctionCurvature.compute(d, size / 2, size / 2, size / 2) == 0, "deep liquid curvature must vanish");
 		var volume = d.liquidCells.exactVolume(); long mass = d.totalMassUnits();
-		d.step();
+		d.domainStep.step();
 		check(d.liquidCells.exactVolume().equals(volume) && d.totalMassUnits() == mass, "resolved sphere changed exact inventories");
 		double pressure = 0; int cells = 0;
 		for (int c = 0; c < d.cellCount; c++) if (d.projection.pressureFluid[c]) { pressure += d.projection.pressure[c]; cells++; }
@@ -96,7 +96,7 @@ final class SurfaceTensionCurvatureExperiment {
 			FluidDomain d = partialHeightSlab(reverse, wall, true);
 			int endpoint = wall ? 0 : 4, target = endpoint + 1;
 			if (reverse) { endpoint = 11 - endpoint; target = 11 - target; }
-			int cell = d.cellIndex(endpoint, 5, 5);
+			int cell = d.domainFlowFields.cellIndex(endpoint, 5, 5);
 			check(d.projection.pressureVolume[cell] == .25 && d.tension.surfaceTensionColor[cell] == .25,
 					"partial endpoint inventory and colour disagree");
 			check(d.pressurePhaseGeometry.planeNormal(cell, 0) == (reverse ? -1 : 1),
@@ -117,7 +117,7 @@ final class SurfaceTensionCurvatureExperiment {
 					"cut cell supplied an open height column");
 		}
 		FluidDomain isolated = partialHeightSlab(false, false, false);
-		int endpoint = isolated.cellIndex(4, 5, 5);
+		int endpoint = isolated.domainFlowFields.cellIndex(4, 5, 5);
 		check(isolated.pressurePhaseGeometry.planeNormal(endpoint, 0) == 1
 				&& isolated.pressurePhaseGeometry.planeOffset(endpoint) == .25,
 				"isolated endpoint must retain a real completely wet low face");
@@ -127,16 +127,16 @@ final class SurfaceTensionCurvatureExperiment {
 
 	private static FluidDomain partialHeightSlab(boolean reverse, boolean wall, boolean joint) {
 		FluidDomain d = new FluidDomain(12, 12, 12,
-				new FluidSolverConfig(1, 1000, 0, .01F, 800, 1e-7F, .45F, .002F, .8F), 4096);
+				new FluidSolverConfig(1, 1000, 0, .01F, 800, 1e-7F, .002F, .8F), 4096);
 		float[] fractions=new float[d.cellCount];
 		for(int z=0;z<12;z++)for(int y=0;y<12;y++) {
 			float q=.25F+.0625F*Math.min(4,(y-5)*(y-5));
 			int endpoint=wall?0:4;
-			fractions[d.cellIndex(reverse?11-endpoint:endpoint,y,z)]=q;
-			if(!wall&&joint)fractions[d.cellIndex(reverse?8:3,y,z)]=.75F;
+			fractions[d.domainFlowFields.cellIndex(reverse?11-endpoint:endpoint,y,z)]=q;
+			if(!wall&&joint)fractions[d.domainFlowFields.cellIndex(reverse?8:3,y,z)]=.75F;
 		}
 		d.bindMaterialRegistry(new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:height",1000,"mmm:height",.0728,Math.PI/2))));
-		d.setVolumes(fractions);d.ensureGrid();
+		d.setVolumes(fractions);d.domainFlowFields.ensureGrid();
 		return d;
 	}
 
@@ -152,7 +152,7 @@ final class SurfaceTensionCurvatureExperiment {
 		quarterCylinder(.125F, false, Math.PI / 6);
 		quarterCylinder(.125F, false, 2 * Math.PI / 3);
 		FluidDomain d = new FluidDomain(12, 12, 12,
-				new FluidSolverConfig(.25F, 1000, 0, .01F, 800, 1e-7F, .45F, .002F, .8F), 64);
+				new FluidSolverConfig(.25F, 1000, 0, .01F, 800, 1e-7F, .002F, .8F), 64);
 		Arrays.fill(d.tension.surfaceTensionColor, .5);
 		for (boolean high : new boolean[] {false, true}) {
 			for (int c = 0; c < d.cellCount; c++) {
@@ -161,9 +161,9 @@ final class SurfaceTensionCurvatureExperiment {
 				d.tension.surfaceTensionNormalY[c] = Math.sqrt(1 - nx * nx);
 			}
 			int x = high ? d.sizeX - 1 : 0;
-			check(Math.abs(d.liquidGasMeanCurvature(x, 6, 6) + 1.0 / 6) < 1e-14,
+			check(Math.abs(d.domainFlowFields.liquidGasMeanCurvature(x, 6, 6) + 1.0 / 6) < 1e-14,
 					"fallback normal reflection lost its normal derivative");
-			check(Math.abs(d.surfaceTensionMeanCurvature(x, 6, 6) + 1.0 / 12) < 1e-14,
+			check(Math.abs(d.domainFlowFields.surfaceTensionMeanCurvature(x, 6, 6) + 1.0 / 12) < 1e-14,
 					"liquid-pair smoothed curvature stencil changed");
 		}
 	}
@@ -171,26 +171,26 @@ final class SurfaceTensionCurvatureExperiment {
 	private static double[] quarterCylinder(float h, boolean upper, double angle) {
 		int size = Math.round(3 / h);
 		FluidDomain d = new FluidDomain(size, size, size,
-				new FluidSolverConfig(h, 1000, 0, .01F, 800, 1e-7F, .45F, .002F, .8F), size * size * size * 8);
+				new FluidSolverConfig(h, 1000, 0, .01F, 800, 1e-7F, .002F, .8F), size * size * size * 8);
 		double[] colour = new double[d.cellCount]; float[] fractions=new float[d.cellCount];
 		for(int z=0;z<size;z++)for(int y=0;y<size;y++)for(int x=0;x<size;x++) {
 			double a=(upper?size-1-y:y)*(double)h,b=(upper?size-1-z:z)*(double)h;
 			double f=a*a+b*b>=1?0:(a+h)*(a+h)+(b+h)*(b+h)<=1?1
 					:Math.clamp((circlePrimitive(a+h,b+h,1)-circlePrimitive(a,b+h,1)
 					-circlePrimitive(a+h,b,1)+circlePrimitive(a,b,1))/(h*h),0,1);
-			int cell=d.cellIndex(x,y,z);colour[cell]=f;fractions[cell]=(float)f;
+			int cell=d.domainFlowFields.cellIndex(x,y,z);colour[cell]=f;fractions[cell]=(float)f;
 		}
 		d.bindMaterialRegistry(new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:wall",1000,"mmm:wall",.0728,angle))));
-		d.setVolumes(fractions);d.ensureGrid();
+		d.setVolumes(fractions);d.domainFlowFields.ensureGrid();
 		System.arraycopy(colour, 0, d.tension.surfaceTensionColor, 0, colour.length);
-		d.smoothSurfaceTensionColor(); d.rebuildSurfaceTensionNormals();
+		d.domainFlowFields.smoothSurfaceTensionColor(); d.domainFlowFields.rebuildSurfaceTensionNormals();
 		double[] errors = new double[3]; int[] counts = new int[3], heights = new int[3];
 		for (int z = 0; z < size; z++) for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
-			double f = colour[d.cellIndex(x, y, z)]; if (!(f > 0 && f < 1)) continue;
+			double f = colour[d.domainFlowFields.cellIndex(x, y, z)]; if (!(f > 0 && f < 1)) continue;
 			int my = upper ? size - 1 - y : y, mz = upper ? size - 1 - z : z;
 			int region = x < 2 || x >= size - 2 ? 1 : my < 2 || mz < 2 ? 2 : 0;
 			counts[region]++; if (Double.isFinite(HeightFunctionCurvature.compute(d, x, y, z))) heights[region]++;
-			errors[region] += Math.abs(d.liquidGasMeanCurvature(x, y, z) - 1);
+			errors[region] += Math.abs(d.domainFlowFields.liquidGasMeanCurvature(x, y, z) - 1);
 			if (angle != Math.PI / 2 && (x == 0 || x == size - 1))
 				check(!Double.isFinite(HeightFunctionCurvature.compute(d, x, y, z)), "non-90 wall accepted even height reflection");
 		}

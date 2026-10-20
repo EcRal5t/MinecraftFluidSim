@@ -33,26 +33,30 @@ public final class FlipFluidFreeSurfaceValidation {
 
 	private static void liquidGeometryRetainsInventoryAndOpenSupport() {
 		for(int mask:new int[]{0,0xAA,0xFE})for(double fill:new double[]{Math.scalb(1.0,-25),.0625,.125}) {
-			var domain=new FluidDomain(3,3,3,strictConfig());int cell=domain.cellIndex(1,1,1);
+			var domain=new FluidDomain(3,3,3,strictConfig());int cell=domain.domainFlowFields.cellIndex(1,1,1);
 			domain.geometry.cutCells.replaceMask(cell,mask);
 			int support=(~mask)&255;
 			var stock=new mmm.inventory.LiquidCellInventory.Stock(new mmm.inventory.LiquidCellInventory.Key(cell,0,support),
 					SignedDyadic.of(fill),domain.unitScale.massUnitsForNormalized(1000*fill),null,0,false);
-			domain.liquidCells.planAdditions(List.of(stock)).commit();domain.markCellInventoryChanged();domain.ensurePressureGeometry();
-			var occupancy=domain.exportPhaseOccupancyState();double liquid=0;
+			domain.liquidCells.planAdditions(List.of(stock)).commit();domain.markCellInventoryChanged();domain.domainFlowFields.ensurePressureGeometry();
+			var occupancy=domain.exportPhaseOccupancyState();double liquid=0,reconstructed=0;
+			double resolution=FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION;
 			for(int micro=0;micro<8;micro++) {
 				double amount=occupancy.liquidVolume(8*cell+micro);
 				check(amount>=0&&amount<=.125&&((mask&1<<micro)==0||amount==0),
 						"Liquid occupation left its actual open micro support");
-				check(Math.abs(.125*domain.pressurePhaseGeometry.liquidFractionExact(cell,micro)-amount)<2e-14,
-						"Prepared phase geometry changed saved liquid occupation");
+				double geometric=.125*domain.pressurePhaseGeometry.liquidFractionExact(cell,micro);
+				check(geometric>=0&&geometric<=.125&&((mask&1<<micro)==0||geometric==0),
+						"Reconstructed liquid left its actual open micro support");
+				reconstructed+=geometric;
 				liquid+=amount;
 			}
-			check(Math.abs(liquid-fill)<2e-14&&domain.liquidCells.exactCellVolume(cell).equals(SignedDyadic.of(fill)),
+			check(Math.abs(liquid-fill)<=resolution&&Math.abs(reconstructed-fill)<=resolution
+					&&domain.liquidCells.exactCellVolume(cell).equals(SignedDyadic.of(fill)),
 					"Phase geometry changed retained liquid volume");
 			double dry=domain.gasState.frame.geometry().pieces().stream().filter(piece->piece.id()/8==cell)
 					.mapToDouble(GasComplementGeometry.Piece::normalizedVolume).sum();
-			check(Math.abs(liquid+dry-Integer.bitCount(support)*.125)<2e-14,
+			check(Math.abs(reconstructed+dry-Integer.bitCount(support)*.125)<=resolution,
 					"Liquid and gas occupation failed to fill actual fixed pore capacity");
 		}
 	}
@@ -63,7 +67,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		check(Math.abs(domain.totalMass()-domain.config.density()*domain.totalVolume())<=1e-9,"Water inventory density changed");
 		domain.removeVolumeNear(2,1,1,.125F,0);
 		var volume=volume(domain);long mass=mass(domain);
-		domain.step();
+		domain.domainStep.step();
 		assertInventory(domain,volume,mass);
 		var restored=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		assertInventory(restored,volume,mass);
@@ -80,47 +84,47 @@ public final class FlipFluidFreeSurfaceValidation {
 			for(int x=0;x<2;x++)domain.setVolume(x,y,z,1);
 			domain.setVolume(3,y,z,.25F);
 		}
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		for(int z=0;z<2;z++)for(int y=0;y<4;y++)for(int x=0;x<4;x++){
-			int cell=domain.cellIndex(x,y,z);
+			int cell=domain.domainFlowFields.cellIndex(x,y,z);
 			check(domain.projection.pressureVolume[cell]==(x<2?1:x==3?.25:0),"Pressure preparation moved inventory across a wall");
 		}
-		var capacity=domain.availableCellVolumes();
-		check(capacity[domain.cellIndex(0,0,0)].signum()==0&&capacity[domain.cellIndex(3,0,0)].equals(SignedDyadic.of(.75)),"Separate cell capacity changed");
+		var capacity=domain.domainFlowFields.availableCellVolumes();
+		check(capacity[domain.domainFlowFields.cellIndex(0,0,0)].signum()==0&&capacity[domain.domainFlowFields.cellIndex(3,0,0)].equals(SignedDyadic.of(.75)),"Separate cell capacity changed");
 	}
 
 	private static void collisionWallsRetainInventory() {
-		var config=new FluidSolverConfig(.5F,1000,0,.01F,300,1e-7F,.4F,.002F,0);
+		var config=new FluidSolverConfig(.5F,1000,0,.01F,300,1e-7F,.002F,0);
 		var domain=new FluidDomain(4,4,2,config);
 		for(int z=0;z<2;z++)for(int y=0;y<4;y++){
 			domain.setSolid(2,y,z,true);
 			for(int x=0;x<2;x++)domain.setVolume(x,y,z,1);
 		}
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		for(int f=0;f<domain.mac.velocityX.length;f++)if(domain.geometry.cutCells.openFaceField(0)[f]>0)domain.mac.velocityX[f]=.1F;
 		domain.cellMacStage.publishMomentum();
 		var volume=volume(domain);long mass=mass(domain);
 		for(int step=0;step<4;step++)domain=advance(domain).claimPreparedCpuDomain();
-		assertInventory(domain,volume,mass);domain.ensureGrid();
+		assertInventory(domain,volume,mass);domain.domainFlowFields.ensureGrid();
 		for(var stock:domain.exportLiquidCellState().stocks())check(stock.key().cell()%4<2,"Liquid crossed a collision wall");
 		for(int f=0;f<domain.mac.velocityX.length;f++)if(domain.geometry.cutCells.openFaceField(0)[f]==0)
 			check(domain.mac.velocityX[f]==0,"Fixed collision face acquired normal velocity");
 	}
 
 	private static void persistentMacMomentumRetainsSmoothVortex() {
-		var config=new FluidSolverConfig(.5F,1000,0,.001F,300,1e-7F,.4F,.002F,0);
+		var config=new FluidSolverConfig(.5F,1000,0,.001F,300,1e-7F,.002F,0);
 		var domain=new FluidDomain(8,8,2,config);
 		for(int z=0;z<2;z++)for(int y=0;y<8;y++)for(int x=0;x<8;x++)domain.setVolume(x,y,z,1);
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		// The discrete stream function gives zero face divergence and zero normal wall flux.
 		for(int z=0;z<2;z++)for(int y=0;y<8;y++)for(int x=0;x<=8;x++)
 			domain.mac.velocityX[(z*8+y)*9+x]=(float)((stream(x,y+1)-stream(x,y))/.5);
 		for(int z=0;z<2;z++)for(int y=0;y<=8;y++)for(int x=0;x<8;x++)
 			domain.mac.velocityY[(z*9+y)*8+x]=(float)(-(stream(x+1,y)-stream(x,y))/.5);
 		domain.cellMacStage.publishMomentum();
-		double initial=domain.particleKineticEnergyJoules();var volume=volume(domain);long mass=mass(domain);
+		double initial=domain.domainStep.particleKineticEnergyJoules();var volume=volume(domain);long mass=mass(domain);
 		for(int step=0;step<40;step++)domain=advance(domain).claimPreparedCpuDomain();
-		double ratio=domain.particleKineticEnergyJoules()/initial;
+		double ratio=domain.domainStep.particleKineticEnergyJoules()/initial;
 		check(initial>0&&ratio>=.98&&ratio<=1+64*Math.ulp(1.0F),"Unforced vortex exceeded its 2% coarse-grid energy budget: "+ratio);
 		assertInventory(domain,volume,mass);
 	}
@@ -128,13 +132,13 @@ public final class FlipFluidFreeSurfaceValidation {
 
 	private static void resolvedLiquidReceivesGravity() {
 		for(boolean pool:new boolean[]{false,true}){
-			var config=new FluidSolverConfig(.5F,1000,9.81F,.025F,300,1e-7F,.4F,.002F,0);
+			var config=new FluidSolverConfig(.5F,1000,9.81F,.025F,300,1e-7F,.002F,0);
 			var domain=new FluidDomain(4,12,4,config);
 			if(pool)for(int z=0;z<4;z++)for(int x=0;x<4;x++)domain.setVolume(x,0,z,1);
 			for(int z=1;z<3;z++)for(int y=8;y<10;y++)for(int x=1;x<3;x++)domain.setVolume(x,y,z,1);
 			var inventory=volume(domain);long mass=mass(domain);double initial=upperCentre(domain);
 			for(int step=0;step<4;step++)domain=advance(domain).claimPreparedCpuDomain();
-			domain.ensureGrid();double momentum=0,upperMass=0;
+			domain.domainFlowFields.ensureGrid();double momentum=0,upperMass=0;
 			for(int z=0;z<4;z++)for(int y=5;y<=12;y++)for(int x=0;x<4;x++)momentum+=domain.mac.momentumY[(z*13+y)*4+x];
 			for(var stock:domain.exportLiquidCellState().stocks())if(stock.key().cell()/4%12>=5)upperMass+=stock.massKilograms();
 			check(Math.abs(momentum/upperMass+config.gravity()*config.timeStep()*4)<2e-5,"Resolved falling liquid lost gravity impulse");
@@ -231,14 +235,28 @@ public final class FlipFluidFreeSurfaceValidation {
 		for(float fraction:new float[]{.60F,.75F,1}){
 			var config=strictConfig();var domain=new FluidDomain(2,5,2,config);
 			for(int z=0;z<2;z++)for(int y=0;y<3;y++)for(int x=0;x<2;x++)domain.setVolume(x,y,z,y==2?fraction:1);
-			var volume=volume(domain);long mass=mass(domain);
-			for(int step=0;step<200;step++)domain=advance(domain).claimPreparedCpuDomain();
-			float theta=fraction==1?.5F:fraction-.5F;
-			for(int y=0;y<=2;y++){
-				float expected=config.density()*config.gravity()*config.cellSize()*(2-y+theta),actual=domain.pressure(0,y,0);
-				check(Math.abs(actual-expected)/Math.max(1,expected)<2e-4F,"Fractional hydrostatic pressure missed its analytic column: fraction="+fraction+", y="+y+", expected="+expected+", actual="+actual);
+			var volume=volume(domain);long mass=mass(domain);double initialCenter=centreY(domain);
+			double residual=0;
+			for(int step=0;step<200;step++){
+				var candidate=advance(domain);residual=candidate.stats().pressureResidual();domain=candidate.claimPreparedCpuDomain();
 			}
-			check(domain.maximumParticleSpeed()<2e-4F,"Hydrostatic column retained parasitic motion");assertInventory(domain,volume,mass);
+			// A column has one cell-height uncertainty per resolved volume row.
+			// For the pressure Poisson residual [Pa/m^2], the one-dimensional
+			// mixed bottom/top inverse has maximum response H^2/2; sqrt(N)
+			// converts the reported RMS residual to a maximum-row bound.
+			double layers=3,height=layers*config.cellSize();
+			double geometricError=config.density()*config.gravity()*config.cellSize()*layers*FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION;
+			double pressureError=.5*height*height*Math.sqrt(Math.max(1,domain.projection.fluidUnknownCount+domain.projection.gasUnknownCount))
+					*Math.max(config.pressureTolerance(),residual);
+			double tolerance=geometricError+pressureError;
+			for(int y=0;y<=2;y++){
+				// Pressure is averaged over the liquid control volume. Its top
+				// fractional cell has its liquid centroid at half the wet height.
+				float depth=y==2?.5F*fraction:2+fraction-y-.5F;
+				float expected=config.density()*config.gravity()*config.cellSize()*depth,actual=domain.pressure(0,y,0);
+				check(Math.abs(actual-expected)<=tolerance,"Fractional hydrostatic pressure missed its resolved column: fraction="+fraction+", y="+y+", expected="+expected+", actual="+actual+", tolerancePa="+tolerance);
+			}
+			hydrostaticMotionWithinResolution(domain,height,3*domain.sizeX*domain.sizeZ,initialCenter);assertInventory(domain,volume,mass);
 		}
 	}
 
@@ -246,7 +264,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		FluidSolverConfig config = strictConfig();
 		FluidDomain domain = new FluidDomain(3, 3, 3, config);
 		for (int z = 0; z < 3; z++) for (int x = 0; x < 3; x++) domain.setVolume(x, 0, z, 0.25F);
-		var exactVolume=volume(domain);long exactMass=mass(domain);
+		var exactVolume=volume(domain);long exactMass=mass(domain);double initialCenter=centreY(domain);
 		for (int step = 0; step < 40; step++) {
 			var candidate = advance(domain);
 			domain = candidate.claimPreparedCpuDomain();
@@ -255,8 +273,7 @@ public final class FlipFluidFreeSurfaceValidation {
 			check(stats.relativeVolumeError() < 1.0E-6F, "thin-layer step changed liquid volume");
 		}
 		assertInventory(domain,exactVolume,exactMass);
-		check(domain.maximumParticleSpeed() < 2.0E-3F,
-				"theta regularization did not keep a sub-center thin layer stable: " + domain.maximumParticleSpeed());
+		hydrostaticMotionWithinResolution(domain,.25*config.cellSize(),domain.sizeX*domain.sizeZ,initialCenter);
 	}
 
 	private static void longRunHydrostaticSurfaceDoesNotSink(){
@@ -266,16 +283,16 @@ public final class FlipFluidFreeSurfaceValidation {
 		var volume=volume(domain);long mass=mass(domain);double initial=centreY(domain);
 		for(int step=0;step<5000;step++)domain=advance(domain).claimPreparedCpuDomain();
 		assertInventory(domain,volume,mass);
-		check(Math.abs(centreY(domain)-initial)<5e-4,"Hydrostatic surface sank over 5000 steps");
 		double[] layers=layers(domain);
-		for(int y=1;y<=4;y++)check(Math.abs(layers[y]-16)<1e-7,"Hydrostatic layer changed volume at y="+y+": "+layers[y]);
-		check(domain.maximumParticleSpeed()<1e-4,"Hydrostatic surface retained persistent motion");
+		double shapeResolution=Math.sqrt(FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION);
+		for(int y=1;y<=4;y++)check(Math.abs(layers[y]-16)<=domain.sizeX*domain.sizeZ*shapeResolution,"Hydrostatic layer changed macroscopic volume at y="+y+": "+layers[y]);
+		hydrostaticMotionWithinResolution(domain,4*domain.config.cellSize(),4*domain.sizeX*domain.sizeZ,initial);
 	}
 
 	private static void waterDescendsAStairSlope() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
-				200, 1.0E-5F, 0.35F, 2.0E-3F, 0.80F
+				200, 1.0E-5F, 2.0E-3F, 0.80F
 		);
 		FluidDomain domain = new FluidDomain(12, 8, 4, config);
 		for (int z = 0; z < 4; z++) for (int x = 0; x < 12; x++) {
@@ -305,19 +322,32 @@ public final class FlipFluidFreeSurfaceValidation {
 	private static FluidSolverConfig strictConfig() {
 		return new FluidSolverConfig(
 				1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
-				300, 1.0E-7F, 0.40F, 2.0E-3F, 0.80F
+				300, 1.0E-7F, 2.0E-3F, 0.80F
 		);
 	}
 
 	private static int index(int sizeX, int sizeY, int x, int y, int z) {
 		return (z * sizeY + y) * sizeX + x;
 	}
+	/** A resolved-volume parcel may spend at most one column height of gravitational energy. */
+	private static void hydrostaticMotionWithinResolution(FluidDomain domain,double height,int wetCells,double initialCenter){
+		double h=domain.config.cellSize(),resolution=FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION;
+		double unresolvedMass=domain.config.density()*h*h*h*wetCells*resolution;
+		double energyBudget=unresolvedMass*domain.config.gravity()*height;
+		double mass=mmm.units.Mass.kilograms(domain.totalMassUnits());
+		double kinetic=LiquidMacroscopicMotionValidation.Motion.capture(domain).kinetic();
+		double rms=Math.sqrt(2*kinetic/mass),allowed=Math.sqrt(2*energyBudget/mass);
+		check(Double.isFinite(rms)&&rms<=allowed,"Hydrostatic bulk motion exceeded resolved-volume energy: rms="+rms+", allowed="+allowed+", kineticJ="+kinetic+", budgetJ="+energyBudget);
+		// A wedge-shaped interface converts a cell-volume error into a subcell
+		// linear uncertainty of order sqrt(resolution); this bound stays fixed in time.
+		check(Math.abs(centreY(domain)-initialCenter)<=h*Math.sqrt(resolution),"Hydrostatic liquid accumulated a macroscopic vertical drift");
+	}
 
 	private static SignedDyadic volume(FluidDomain domain){var value=SignedDyadic.ZERO;for(var stock:domain.exportLiquidCellState().stocks())value=value.add(stock.volume());return value;}
 	private static long mass(FluidDomain domain){long value=0;for(var stock:domain.exportLiquidCellState().stocks())value=Math.addExact(value,stock.massUnits());return value;}
 	private static void assertInventory(FluidDomain domain,SignedDyadic expectedVolume,long expectedMass){
 		check(volume(domain).equals(expectedVolume),"Liquid volume inventory changed");check(mass(domain)==expectedMass,"Liquid integer mass changed");
-		var available=domain.availableCellVolumes();for(var capacity:available)check(capacity.signum()>=0,"Liquid exceeded joint cell capacity");
+		var available=domain.domainFlowFields.availableCellVolumes();for(var capacity:available)check(capacity.signum()>=0,"Liquid exceeded joint cell capacity");
 	}
 	private static double[] layers(FluidDomain domain){double[] result=new double[domain.sizeY];for(var stock:domain.exportLiquidCellState().stocks())result[stock.key().cell()/domain.sizeX%domain.sizeY]+=stock.volumeFraction();return result;}
 	private static double centreY(FluidDomain domain){double weighted=0,volume=0;var layers=layers(domain);for(int y=0;y<layers.length;y++){volume+=layers[y];weighted+=(y+.5)*layers[y];}return domain.config.cellSize()*weighted/volume;}

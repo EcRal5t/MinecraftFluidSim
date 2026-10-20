@@ -13,68 +13,33 @@ import mmm.granular.SolidVolume;
  * slice; thermal buoyancy shares the per-cell carrier property workspace.
  */
 final class BodyForceStage {
-	record Workspace(
-			int sizeX, int sizeY, int sizeZ, int cellCount, FluidSolverConfig config,
-			DomainGeometry geometry, MacVelocityGrid mac, MarkerGridIndex markerGrid,
-			SurfaceTensionWorkspace tension
-	) { }
-
-	interface Access {
-		GranularDomainState granularState();
-		CarrierProperties granularCarrierProperties(int cell);
-		int cellIndex(int x, int y, int z);
-		int xFaceIndex(int x, int y, int z);
-		int yFaceIndex(int x, int y, int z);
-		int zFaceIndex(int x, int y, int z);
-		boolean carrierFaceActive(int first, int second, float openArea);
-		float pressureXFaceOpen(int x, int y, int z);
-		float pressureYFaceOpen(int x, int y, int z);
-		float pressureZFaceOpen(int x, int y, int z);
-		boolean thermalActive();
-		LiquidCarrierProperties thermalBuoyancyProperties();
-		double thermalFaceRelativeBuoyancy(int first, int second, LiquidCarrierProperties properties);
-		FluidMaterialRegistry materialRegistry();
-		boolean liquidGasTensionActive();
-		boolean liquidPairTensionActive();
-		double phaseFraction(int cell, int phase);
-		void smoothSurfaceTensionColor();
-		double surfaceTensionMeanCurvature(int x, int y, int z);
-		boolean isFluid(int cell);
-		float pressureDensityScale(int first, int second);
-		float carrierDensityScale(int first, int second);
-	}
-
-	private final Workspace state;
-	private final Access access;
-	BodyForceStage(Workspace state, Access access) {
-		this.state = state;
-		this.access = access;
-	}
+	private final FluidDomain domain;
+	BodyForceStage(FluidDomain domain) { this.domain = domain; }
 	void applyGranularPorousDamping(float dt) {
-		if (access.granularState() == null || access.granularState().deposits.occupiedCellCount() == 0) return;
-		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 1; x < state.sizeX; x++) {
-			int left = access.cellIndex(x - 1, y, z), right = access.cellIndex(x, y, z);
-			state.mac.velocityX[access.xFaceIndex(x, y, z)] *= granularPorousFaceDamping(left, right, dt, false);
+		if (domain.granularState == null || domain.granularState.deposits.occupiedCellCount() == 0) return;
+		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 1; x < domain.sizeX; x++) {
+			int left = domain.domainFlowFields.cellIndex(x - 1, y, z), right = domain.domainFlowFields.cellIndex(x, y, z);
+			domain.mac.velocityX[domain.domainFlowFields.xFaceIndex(x, y, z)] *= granularPorousFaceDamping(left, right, dt, false);
 		}
-		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
-			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z);
-			state.mac.velocityY[access.yFaceIndex(x, y, z)] *= granularPorousFaceDamping(below, above, dt, true);
+		for (int z = 0; z < domain.sizeZ; z++) for (int y = 1; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
+			int below = domain.domainFlowFields.cellIndex(x, y - 1, z), above = domain.domainFlowFields.cellIndex(x, y, z);
+			domain.mac.velocityY[domain.domainFlowFields.yFaceIndex(x, y, z)] *= granularPorousFaceDamping(below, above, dt, true);
 		}
-		for (int z = 1; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
-			int back = access.cellIndex(x, y, z - 1), front = access.cellIndex(x, y, z);
-			state.mac.velocityZ[access.zFaceIndex(x, y, z)] *= granularPorousFaceDamping(back, front, dt, false);
+		for (int z = 1; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
+			int back = domain.domainFlowFields.cellIndex(x, y, z - 1), front = domain.domainFlowFields.cellIndex(x, y, z);
+			domain.mac.velocityZ[domain.domainFlowFields.zFaceIndex(x, y, z)] *= granularPorousFaceDamping(back, front, dt, false);
 		}
 	}
 
 	private float granularPorousFaceDamping(int first, int second, float dt, boolean normal) {
 		double firstK = granularPermeability(first), secondK = granularPermeability(second);
 		if (Double.isInfinite(firstK) && Double.isInfinite(secondK)) return 1.0F;
-		CarrierProperties firstCarrier = access.granularCarrierProperties(first),
-				secondCarrier = access.granularCarrierProperties(second);
+		CarrierProperties firstCarrier = domain.domainStep.granularCarrierProperties(first),
+				secondCarrier = domain.domainStep.granularCarrierProperties(second);
 		double viscosity = 0.5 * (firstCarrier.viscosity() + secondCarrier.viscosity());
 		double density = 0.5 * (firstCarrier.density() + secondCarrier.density());
-		double firstFraction = access.granularState().deposits.cellBulkVolumeSvq(first) / (double) SolidVolume.SVQ_PER_CELL;
-		double secondFraction = access.granularState().deposits.cellBulkVolumeSvq(second) / (double) SolidVolume.SVQ_PER_CELL;
+		double firstFraction = domain.granularState.deposits.cellBulkVolumeSvq(first) / (double) SolidVolume.SVQ_PER_CELL;
+		double secondFraction = domain.granularState.deposits.cellBulkVolumeSvq(second) / (double) SolidVolume.SVQ_PER_CELL;
 		double scale = dt * viscosity / density;
 		if (normal) return (float) (1 / (1 + scale * (.5 * firstFraction / firstK + .5 * secondFraction / secondK)));
 		// Parallel permeabilities, followed by ONE implicit Darcy update. Averaging two damping
@@ -86,13 +51,13 @@ final class BodyForceStage {
 
 	private double tangentialPermeability(double pore, double fraction) {
 		if (fraction == 0) return Double.POSITIVE_INFINITY;
-		double freeDepth = (1 - fraction) * state.config.cellSize();
+		double freeDepth = (1 - fraction) * domain.config.cellSize();
 		// Laminar layer with no-slip below and zero shear above: K = depth² / 3.
 		return fraction * pore + (1 - fraction) * freeDepth * freeDepth / 3;
 	}
 
 	private double granularPermeability(int cell) {
-		GranularDomainState granular = access.granularState();
+		GranularDomainState granular = domain.granularState;
 		GranularDepositStore.Group dominant = granular.deposits.dominantGroup(cell);
 		if (dominant == null) return Double.POSITIVE_INFINITY;
 		double porosity = depositsPorosity(cell);
@@ -102,82 +67,82 @@ final class BodyForceStage {
 	}
 
 	private double depositsPorosity(int cell) {
-		return access.granularState().deposits.porosityQ(cell) / (double) GranularLimits.POROSITY_SCALE;
+		return domain.granularState.deposits.porosityQ(cell) / (double) GranularLimits.POROSITY_SCALE;
 	}
 
 	void applyGravity(float dt) {
-		float impulse = state.config.gravity() * dt;
-		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
-			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z);
-			int face = access.yFaceIndex(x, y, z);
-			float open = access.pressureYFaceOpen(x, y, z);
-			if (open > 0 && (state.mac.p2gWeightY[face] > 0 || access.carrierFaceActive(below, above, open))) {
-				state.mac.velocityY[face] -= impulse;
+		float impulse = domain.config.gravity() * dt;
+		for (int z = 0; z < domain.sizeZ; z++) for (int y = 1; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
+			int below = domain.domainFlowFields.cellIndex(x, y - 1, z), above = domain.domainFlowFields.cellIndex(x, y, z);
+			int face = domain.domainFlowFields.yFaceIndex(x, y, z);
+			float open = domain.domainFlowFields.pressureYFaceOpen(x, y, z);
+			if (open > 0 && (domain.mac.faceMassY[face] > 0 || domain.domainFlowFields.carrierFaceActive(below, above, open))) {
+				domain.mac.velocityY[face] -= impulse;
 			}
 		}
 	}
 
 	/** Adds thermal buoyancy from the same cell-density segments as the pressure face. */
 	void applyThermalBuoyancy(float dt) {
-		if (!access.thermalActive() || state.config.gravity() == 0.0F) return;
-		LiquidCarrierProperties properties = access.thermalBuoyancyProperties();
-		double scale = state.config.gravity() * (double) dt;
-		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
-			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z);
-			int face = access.yFaceIndex(x, y, z);
-			float open = access.pressureYFaceOpen(x, y, z);
+		if (domain.thermalState == null || domain.config.gravity() == 0.0F) return;
+		LiquidCarrierProperties properties = domain.domainPhaseInventory.thermalBuoyancyProperties();
+		double scale = domain.config.gravity() * (double) dt;
+		for (int z = 0; z < domain.sizeZ; z++) for (int y = 1; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
+			int below = domain.domainFlowFields.cellIndex(x, y - 1, z), above = domain.domainFlowFields.cellIndex(x, y, z);
+			int face = domain.domainFlowFields.yFaceIndex(x, y, z);
+			float open = domain.domainFlowFields.pressureYFaceOpen(x, y, z);
 			if (!(open > 0)) continue;
 			double relative;
-			if (access.carrierFaceActive(below, above, open)) relative = access.thermalFaceRelativeBuoyancy(below, above, properties);
+			if (domain.domainFlowFields.carrierFaceActive(below, above, open)) relative = domain.domainFlowFields.thermalFaceRelativeBuoyancy(below, above, properties);
 			else continue;
-			state.mac.velocityY[face] += (float) (scale * relative);
+			domain.mac.velocityY[face] += (float) (scale * relative);
 		}
 	}
 
 	/** Tangential force obtained from the Young wall-energy density sigma_sl - sigma_sg. */
 	void applyLiquidSolidSurfaceEnergyForce(float dt) {
-		if (!access.liquidGasTensionActive()) return;
-		float scale = dt / (state.config.density() * state.config.cellSize());
-		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 1; x < state.sizeX; x++) {
-			int left = access.cellIndex(x - 1, y, z), right = access.cellIndex(x, y, z), face = access.xFaceIndex(x, y, z);
-			applyWallEnergyFaceForce(left, right, face, 0, scale, access.pressureXFaceOpen(x, y, z), state.mac.velocityX);
+		if (!domain.surfaceTensionActive) return;
+		float scale = dt / (domain.config.density() * domain.config.cellSize());
+		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 1; x < domain.sizeX; x++) {
+			int left = domain.domainFlowFields.cellIndex(x - 1, y, z), right = domain.domainFlowFields.cellIndex(x, y, z), face = domain.domainFlowFields.xFaceIndex(x, y, z);
+			applyWallEnergyFaceForce(left, right, face, 0, scale, domain.domainFlowFields.pressureXFaceOpen(x, y, z), domain.mac.velocityX);
 		}
-		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
-			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z), face = access.yFaceIndex(x, y, z);
-			applyWallEnergyFaceForce(below, above, face, 1, scale, access.pressureYFaceOpen(x, y, z), state.mac.velocityY);
+		for (int z = 0; z < domain.sizeZ; z++) for (int y = 1; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
+			int below = domain.domainFlowFields.cellIndex(x, y - 1, z), above = domain.domainFlowFields.cellIndex(x, y, z), face = domain.domainFlowFields.yFaceIndex(x, y, z);
+			applyWallEnergyFaceForce(below, above, face, 1, scale, domain.domainFlowFields.pressureYFaceOpen(x, y, z), domain.mac.velocityY);
 		}
-		for (int z = 1; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
-			int back = access.cellIndex(x, y, z - 1), front = access.cellIndex(x, y, z), face = access.zFaceIndex(x, y, z);
-			applyWallEnergyFaceForce(back, front, face, 2, scale, access.pressureZFaceOpen(x, y, z), state.mac.velocityZ);
+		for (int z = 1; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
+			int back = domain.domainFlowFields.cellIndex(x, y, z - 1), front = domain.domainFlowFields.cellIndex(x, y, z), face = domain.domainFlowFields.zFaceIndex(x, y, z);
+			applyWallEnergyFaceForce(back, front, face, 2, scale, domain.domainFlowFields.pressureZFaceOpen(x, y, z), domain.mac.velocityZ);
 		}
 	}
 
 	private void applyWallEnergyFaceForce(int first, int second, int face, int velocityAxis,
 	                                      float scale, float openArea, float[] velocity) {
-		if (!access.carrierFaceActive(first, second, openArea)) return;
-		double firstPotential = state.tension.wallSurfaceEnergyDensity[first]
-				* state.tension.surfaceTensionColor[first] * tangentialWallArea(first, velocityAxis);
-		double secondPotential = state.tension.wallSurfaceEnergyDensity[second]
-				* state.tension.surfaceTensionColor[second] * tangentialWallArea(second, velocityAxis);
+		if (!domain.domainFlowFields.carrierFaceActive(first, second, openArea)) return;
+		double firstPotential = domain.tension.wallSurfaceEnergyDensity[first]
+				* domain.tension.surfaceTensionColor[first] * tangentialWallArea(first, velocityAxis);
+		double secondPotential = domain.tension.wallSurfaceEnergyDensity[second]
+				* domain.tension.surfaceTensionColor[second] * tangentialWallArea(second, velocityAxis);
 		double difference = secondPotential - firstPotential;
 		if (difference == 0.0) return;
-		float densityScale = access.carrierDensityScale(first, second);
+		float densityScale = domain.domainFlowFields.carrierDensityScale(first, second);
 		velocity[face] += (float) (scale * densityScale * difference);
 	}
 
 	private double tangentialWallArea(int cell, int velocityAxis) {
 		double area = 0.0;
 		for (int wallNormalAxis = 0; wallNormalAxis < 3; wallNormalAxis++) {
-			if (wallNormalAxis != velocityAxis) area += state.geometry.cutCells.solidWallArea(cell, wallNormalAxis);
+			if (wallNormalAxis != velocityAxis) area += domain.geometry.cutCells.solidWallArea(cell, wallNormalAxis);
 		}
 		return area;
 	}
 
 	/** Balanced-force CSF momentum for every immiscible liquid pair with a positive sigma12. */
 	void applyLiquidPairSurfaceTensionForce(float dt) {
-		if (!access.liquidPairTensionActive()) return;
-		float scale = dt / (state.config.density() * state.config.cellSize());
-		for (Map.Entry<Long, Double> entry : access.materialRegistry().liquidPairTensions().entrySet()) {
+		if (!domain.liquidPairTensionActive) return;
+		float scale = dt / (domain.config.density() * domain.config.cellSize());
+		for (Map.Entry<Long, Double> entry : domain.materialRegistry.liquidPairTensions().entrySet()) {
 			if (entry.getValue() <= 0.0) continue;
 			int firstPhase = (int) (entry.getKey() >>> 32), secondPhase = (int) (entry.getKey() & 0xffffffffL);
 			applyLiquidPairSurfaceTensionPair(firstPhase, secondPhase, entry.getValue(), scale);
@@ -185,101 +150,77 @@ final class BodyForceStage {
 	}
 
 	private void applyLiquidPairSurfaceTensionPair(int phaseA, int phaseB, double tensionScale, float scale) {
-		for (int index = 0; index < state.cellCount; index++)
-			state.tension.surfaceTensionColor[index] = state.geometry.solid[index] ? 0 : access.phaseFraction(index, phaseA);
-		access.smoothSurfaceTensionColor();
-		System.arraycopy(state.tension.surfaceTensionSmoothed, 0, state.tension.surfaceTensionPairFirstSupport, 0, state.cellCount);
-		for (int index = 0; index < state.cellCount; index++) {
-			if (state.geometry.solid[index]) {
-				state.tension.surfaceTensionColor[index] = 0.0;
+		for (int index = 0; index < domain.cellCount; index++)
+			domain.tension.surfaceTensionColor[index] = domain.geometry.solid[index] ? 0 : domain.domainFlowFields.phaseFraction(index, phaseA);
+		domain.domainFlowFields.smoothSurfaceTensionColor();
+		System.arraycopy(domain.tension.surfaceTensionSmoothed, 0, domain.tension.surfaceTensionPairFirstSupport, 0, domain.cellCount);
+		for (int index = 0; index < domain.cellCount; index++) {
+			if (domain.geometry.solid[index]) {
+				domain.tension.surfaceTensionColor[index] = 0.0;
 				continue;
 			}
-			state.tension.surfaceTensionColor[index] = access.phaseFraction(index, phaseB);
+			domain.tension.surfaceTensionColor[index] = domain.domainFlowFields.phaseFraction(index, phaseB);
 		}
-		access.smoothSurfaceTensionColor();
+		domain.domainFlowFields.smoothSurfaceTensionColor();
 		rebuildLiquidPairNormals();
-		java.util.Arrays.fill(state.tension.surfaceTensionPairCurvature, 0.0);
-		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
-			int index = access.cellIndex(x, y, z);
-			if (state.geometry.solid[index] || state.markerGrid.markerCount[index] == 0) continue;
-			state.tension.surfaceTensionPairCurvature[index] = access.surfaceTensionMeanCurvature(x, y, z);
+		java.util.Arrays.fill(domain.tension.surfaceTensionPairCurvature, 0.0);
+		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
+			int index = domain.domainFlowFields.cellIndex(x, y, z);
+			if (domain.geometry.solid[index] || domain.liquidGrid.stockCount[index] == 0) continue;
+			domain.tension.surfaceTensionPairCurvature[index] = domain.domainFlowFields.surfaceTensionMeanCurvature(x, y, z);
 		}
-		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 1; x < state.sizeX; x++) {
-			int left = access.cellIndex(x - 1, y, z), right = access.cellIndex(x, y, z), face = access.xFaceIndex(x, y, z);
-			applyLiquidPairFaceForce(left, right, face, tensionScale, scale, access.pressureXFaceOpen(x, y, z), state.mac.velocityX);
+		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 1; x < domain.sizeX; x++) {
+			int left = domain.domainFlowFields.cellIndex(x - 1, y, z), right = domain.domainFlowFields.cellIndex(x, y, z), face = domain.domainFlowFields.xFaceIndex(x, y, z);
+			applyLiquidPairFaceForce(left, right, face, tensionScale, scale, domain.domainFlowFields.pressureXFaceOpen(x, y, z), domain.mac.velocityX);
 		}
-		for (int z = 0; z < state.sizeZ; z++) for (int y = 1; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
-			int below = access.cellIndex(x, y - 1, z), above = access.cellIndex(x, y, z), face = access.yFaceIndex(x, y, z);
-			applyLiquidPairFaceForce(below, above, face, tensionScale, scale, access.pressureYFaceOpen(x, y, z), state.mac.velocityY);
+		for (int z = 0; z < domain.sizeZ; z++) for (int y = 1; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
+			int below = domain.domainFlowFields.cellIndex(x, y - 1, z), above = domain.domainFlowFields.cellIndex(x, y, z), face = domain.domainFlowFields.yFaceIndex(x, y, z);
+			applyLiquidPairFaceForce(below, above, face, tensionScale, scale, domain.domainFlowFields.pressureYFaceOpen(x, y, z), domain.mac.velocityY);
 		}
-		for (int z = 1; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
-			int back = access.cellIndex(x, y, z - 1), front = access.cellIndex(x, y, z), face = access.zFaceIndex(x, y, z);
-			applyLiquidPairFaceForce(back, front, face, tensionScale, scale, access.pressureZFaceOpen(x, y, z), state.mac.velocityZ);
+		for (int z = 1; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
+			int back = domain.domainFlowFields.cellIndex(x, y, z - 1), front = domain.domainFlowFields.cellIndex(x, y, z), face = domain.domainFlowFields.zFaceIndex(x, y, z);
+			applyLiquidPairFaceForce(back, front, face, tensionScale, scale, domain.domainFlowFields.pressureZFaceOpen(x, y, z), domain.mac.velocityZ);
 		}
 	}
 
 	private void applyLiquidPairFaceForce(int first, int second, int face,
 	                                      double tensionScale, float scale, float openArea, float[] velocity) {
-		if (openArea <= 0.0F || !access.isFluid(first) || !access.isFluid(second)) return;
+		if (openArea <= 0.0F || !domain.domainFlowFields.isFluid(first) || !domain.domainFlowFields.isFluid(second)) return;
 		double delta = liquidPairGradient(first, second);
 		if (delta == 0.0) return;
-		float densityScale = access.pressureDensityScale(first, second);
-		double kappa = 0.5 * (state.tension.surfaceTensionPairCurvature[first] + state.tension.surfaceTensionPairCurvature[second]);
+		float densityScale = domain.domainFlowFields.pressureDensityScale(first, second);
+		double kappa = 0.5 * (domain.tension.surfaceTensionPairCurvature[first] + domain.tension.surfaceTensionPairCurvature[second]);
 		float forceDifference = (float) (tensionScale * kappa * delta);
 		velocity[face] += scale * densityScale * forceDifference;
 	}
 
 	/** Multiphase CSF gradient alpha_A grad(alpha_B) - alpha_B grad(alpha_A). */
 	private double liquidPairGradient(int first, int second) {
-		return state.tension.surfaceTensionPairFirstSupport[first] * state.tension.surfaceTensionSmoothed[second]
-				- state.tension.surfaceTensionPairFirstSupport[second] * state.tension.surfaceTensionSmoothed[first];
+		return domain.tension.surfaceTensionPairFirstSupport[first] * domain.tension.surfaceTensionSmoothed[second]
+				- domain.tension.surfaceTensionPairFirstSupport[second] * domain.tension.surfaceTensionSmoothed[first];
 	}
 
 	private void rebuildLiquidPairNormals() {
-		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
-			int cell = access.cellIndex(x, y, z);
-			double gx = liquidPairGradient(access.cellIndex(Math.max(0, x - 1), y, z), access.cellIndex(Math.min(state.sizeX - 1, x + 1), y, z));
-			double gy = liquidPairGradient(access.cellIndex(x, Math.max(0, y - 1), z), access.cellIndex(x, Math.min(state.sizeY - 1, y + 1), z));
-			double gz = liquidPairGradient(access.cellIndex(x, y, Math.max(0, z - 1)), access.cellIndex(x, y, Math.min(state.sizeZ - 1, z + 1)));
+		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
+			int cell = domain.domainFlowFields.cellIndex(x, y, z);
+			double gx = liquidPairGradient(domain.domainFlowFields.cellIndex(Math.max(0, x - 1), y, z), domain.domainFlowFields.cellIndex(Math.min(domain.sizeX - 1, x + 1), y, z));
+			double gy = liquidPairGradient(domain.domainFlowFields.cellIndex(x, Math.max(0, y - 1), z), domain.domainFlowFields.cellIndex(x, Math.min(domain.sizeY - 1, y + 1), z));
+			double gz = liquidPairGradient(domain.domainFlowFields.cellIndex(x, y, Math.max(0, z - 1)), domain.domainFlowFields.cellIndex(x, y, Math.min(domain.sizeZ - 1, z + 1)));
 			double length = Math.sqrt(gx * gx + gy * gy + gz * gz);
-			if (state.geometry.solid[cell] || !(length > 0)) {
-				state.tension.surfaceTensionNormalX[cell] = state.tension.surfaceTensionNormalY[cell] = 0;
-				state.tension.surfaceTensionNormalZ[cell] = 1;
+			if (domain.geometry.solid[cell] || !(length > 0)) {
+				domain.tension.surfaceTensionNormalX[cell] = domain.tension.surfaceTensionNormalY[cell] = 0;
+				domain.tension.surfaceTensionNormalZ[cell] = 1;
 			} else {
-				state.tension.surfaceTensionNormalX[cell] = gx / length;
-				state.tension.surfaceTensionNormalY[cell] = gy / length;
-				state.tension.surfaceTensionNormalZ[cell] = gz / length;
+				domain.tension.surfaceTensionNormalX[cell] = gx / length;
+				domain.tension.surfaceTensionNormalY[cell] = gy / length;
+				domain.tension.surfaceTensionNormalZ[cell] = gz / length;
 			}
 		}
 	}
 
 	void enforceSolidFaceVelocities() {
-		for (int z = 0; z < state.sizeZ; z++) for (int y = 0; y < state.sizeY; y++) {
-			state.mac.velocityX[access.xFaceIndex(0, y, z)] = 0.0F;
-			state.mac.velocityX[access.xFaceIndex(state.sizeX, y, z)] = 0.0F;
-			for (int x = 1; x < state.sizeX; x++) {
-				if (state.geometry.cutCells.xFaceOpen(x, y, z) <= 0.0F) {
-					state.mac.velocityX[access.xFaceIndex(x, y, z)] = 0.0F;
-				}
-			}
-		}
-		for (int z = 0; z < state.sizeZ; z++) for (int x = 0; x < state.sizeX; x++) {
-			state.mac.velocityY[access.yFaceIndex(x, 0, z)] = 0.0F;
-			state.mac.velocityY[access.yFaceIndex(x, state.sizeY, z)] = 0.0F;
-			for (int y = 1; y < state.sizeY; y++) {
-				if (state.geometry.cutCells.yFaceOpen(x, y, z) <= 0.0F) {
-					state.mac.velocityY[access.yFaceIndex(x, y, z)] = 0.0F;
-				}
-			}
-		}
-		for (int y = 0; y < state.sizeY; y++) for (int x = 0; x < state.sizeX; x++) {
-			state.mac.velocityZ[access.zFaceIndex(x, y, 0)] = 0.0F;
-			state.mac.velocityZ[access.zFaceIndex(x, y, state.sizeZ)] = 0.0F;
-			for (int z = 1; z < state.sizeZ; z++) {
-				if (state.geometry.cutCells.zFaceOpen(x, y, z) <= 0.0F) {
-					state.mac.velocityZ[access.zFaceIndex(x, y, z)] = 0.0F;
-				}
-			}
-		}
+		float[][] velocities={domain.mac.velocityX,domain.mac.velocityY,domain.mac.velocityZ};
+		for(int axis=0;axis<3;axis++)for(int face=0;face<velocities[axis].length;face++)
+			if(domain.cellMacStage.isWallFace(axis,face,null))velocities[axis][face]=0;
 	}
 }

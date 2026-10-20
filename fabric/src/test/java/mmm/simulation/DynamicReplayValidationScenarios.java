@@ -343,6 +343,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		long generation = 0L;
 		for (int step = 0; step < REPLAY_STEPS; step++) {
+			long cpuStart=java.lang.management.ManagementFactory.getThreadMXBean().getCurrentThreadCpuTime();
 			long start = System.nanoTime();
 			FluidDomain.StepStats stats;
 			try {
@@ -358,12 +359,13 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 						+ ": " + failure.getMessage(), failure);
 			}
 			double milliseconds = (System.nanoTime() - start) / 1_000_000.0;
+			double cpuMillis=cpuStart<0?Double.NaN:(java.lang.management.ManagementFactory.getThreadMXBean().getCurrentThreadCpuTime()-cpuStart)/1_000_000.0;
 			elapsed.add(milliseconds);
 			require(domain.totalVolumeExact() == volume && domain.totalMass() == mass,
 					"default production step changed liquid volume or mass at step " + step);
-			System.out.printf("  production live step %02d: %.3f ms, liquidStocks=%d, volume=%.9f, "
+			System.out.printf("  production live step %02d: %.3f ms (CPU %.3f ms), liquidStocks=%d, volume=%.9f, "
 					+ "maxSpeed=%.6f, substeps=%d, PCG=%d, residual=%.6g%n",
-					step + 1, milliseconds, domain.particleCount(), domain.totalVolumeExact(),
+					step + 1, milliseconds, cpuMillis, domain.particleCount(), domain.totalVolumeExact(),
 					domain.maximumParticleSpeed(), stats.substeps(), stats.pressureIterations(),
 					stats.pressureResidual());
 			require(milliseconds <= STEP_BUDGET_MILLIS,
@@ -398,12 +400,14 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		for (int generation = 0; generation < 20; generation++) {
 			double volumeBefore = domain.totalVolumeExact();
 			double massBefore = domain.totalMass();
+			long cpuStart=java.lang.management.ManagementFactory.getThreadMXBean().getCurrentThreadCpuTime();
 			long start = System.nanoTime();
 			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
 					generation, domain.captureAuthoritativeState(), List.of(), true,
 					ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));
 			domain = requirePreparedCpuDomain(candidate);
 			double elapsedMillis = (System.nanoTime() - start) / 1_000_000.0;
+			double cpuMillis=cpuStart<0?Double.NaN:(java.lang.management.ManagementFactory.getThreadMXBean().getCurrentThreadCpuTime()-cpuStart)/1_000_000.0;
 			maximumMillis = Math.max(maximumMillis, elapsedMillis);
 			consecutiveOverruns = elapsedMillis > performancePauseThresholdMillis
 					? consecutiveOverruns + 1 : 0;
@@ -419,9 +423,9 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			require(Double.isFinite(domain.totalVolumeExact()) && domain.totalVolumeExact() > 0.0
 					&& Double.isFinite(domain.totalMass()) && domain.totalMass() > 0.0,
 					"dam-break production step produced invalid liquid inventory");
-			System.out.printf("  dam-break live step %d: %.3f ms, liquidStocks=%d, volume=%.9f, "
+			System.out.printf("  dam-break live step %d: %.3f ms (CPU %.3f ms), liquidStocks=%d, volume=%.9f, "
 					+ "substeps=%d, PCG=%d, residual=%.6g, phase=%d%n",
-					generation + 1, elapsedMillis, domain.particleCount(),
+					generation + 1, elapsedMillis, cpuMillis, domain.particleCount(),
 					domain.totalVolumeExact(), candidate.stats().substeps(),
 					candidate.stats().pressureIterations(), candidate.stats().pressureResidual(), phaseOperations);
 		}

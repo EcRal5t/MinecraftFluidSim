@@ -23,10 +23,10 @@ public final class GranularBedWakeValidation {
 
 	/** Isolates the bed-to-active potential change and its MAC traction; no pressure step. */
 	private static void macLiftPaysPotentialAndRecoil() {
-		var config=new FluidSolverConfig(.5F,1000,9.81F,.01F,120,1e-6F,.4F,.002F,0);
+		var config=new FluidSolverConfig(.5F,1000,9.81F,.01F,120,1e-6F,.002F,0);
 		var domain=new FluidDomain(3,3,3,config);
-		int cell=domain.cellIndex(1,1,1);
-		domain.setVolume(1,1,1,.5F);domain.setVolume(1,2,1,.5F);domain.ensureGrid();
+		int cell=domain.domainFlowFields.cellIndex(1,1,1);
+		domain.setVolume(1,1,1,.5F);domain.setVolume(1,2,1,.5F);domain.domainFlowFields.ensureGrid();
 		for(int f=0;f<domain.mac.velocityX.length;f++)if(domain.cellMacStage.massX[f]>0)domain.mac.velocityX[f]=2;
 		for(int f=0;f<domain.mac.velocityY.length;f++)if(domain.cellMacStage.massY[f]>0)domain.mac.velocityY[f]=.25F;
 		for(int f=0;f<domain.mac.velocityZ.length;f++)if(domain.cellMacStage.massZ[f]>0)domain.mac.velocityZ[f]=-1;
@@ -44,7 +44,7 @@ public final class GranularBedWakeValidation {
 		require(work.signum()>0,"Bed work fixture has no lift potential");
 		var beforeEnergy=macHorizontalEnergy(domain);double beforeX=sum(domain.mac.momentumX),beforeZ=sum(domain.mac.momentumZ);
 		var vertical=domain.mac.momentumY.clone();var liquid=domain.exportLiquidCellState().stocks();
-		var environment=domain.granularDepositEnvironment(new long[27]);
+		var environment=domain.domainStep.granularDepositEnvironment(new long[27]);
 		require(environment.planWakeWork(cell,work),"Resolved MAC flow could not pay its bed lift");
 		environment.requireWakeWorkCurrent();inventory.requireCurrent(wake);
 		inventory.commitWake(wake);environment.commitWakeWork();
@@ -57,7 +57,7 @@ public final class GranularBedWakeValidation {
 		require(parcels.count()==1&&parcels.parcel(0).velocityX()==0&&parcels.parcel(0).velocityY()==0&&parcels.parcel(0).velocityZ()==0,"Bed release invented launch momentum");
 		var current=macHorizontalEnergy(domain);
 		require(GranularBedShear.planLift(domain,cell,current.add(mmm.units.SignedDyadic.of(1)))==null,"Bed lift spent unavailable MAC energy");
-		var stale=GranularBedShear.planLift(domain,cell,1);int face=domain.xFaceIndex(1,1,1);domain.mac.momentumX[face]+=.25;
+		var stale=GranularBedShear.planLift(domain,cell,1);int face=domain.domainFlowFields.xFaceIndex(1,1,1);domain.mac.momentumX[face]+=.25;
 		var x=domain.mac.momentumX.clone();var z=domain.mac.momentumZ.clone();boolean rejected=false;
 		try{stale.apply(domain);}catch(IllegalStateException expected){rejected=true;}
 		require(rejected&&java.util.Arrays.equals(x,domain.mac.momentumX)&&java.util.Arrays.equals(z,domain.mac.momentumZ),"Stale bed traction changed a MAC face");
@@ -126,7 +126,7 @@ public final class GranularBedWakeValidation {
 			var source=domain.captureAuthoritativeState();FluidStepCandidate candidate;
 			try{candidate=backend.evaluate(new FluidStepRequest(step,source,requests,true,ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));}
 			catch(RuntimeException failure){
-				System.err.printf("BED failed step=%d phase=%d phaseStep=%d speed=%g oldMaximumSpeed=%g initialSubsteps=%d active=%d deposits=%d%n",step,phase,phaseStep,speed,domain.maximumParticleSpeed(),domain.calculateSubsteps(domain.config.timeStep()),domain.granularParcelCount(),domain.granularDepositCellCount());
+				System.err.printf("BED failed step=%d phase=%d phaseStep=%d speed=%g oldMaximumSpeed=%g initialSubsteps=%d active=%d deposits=%d%n",step,phase,phaseStep,speed,domain.maximumParticleSpeed(),domain.domainStep.calculateSubsteps(domain.config.timeStep()),domain.granularParcelCount(),domain.granularDepositCellCount());
 				throw failure;
 			}
 			domain = candidate.claimPreparedCpuDomain();
@@ -142,10 +142,10 @@ public final class GranularBedWakeValidation {
 			require(domain.gasBoundary().auditClosed() && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 					"Bed transport broke gas/energy audit");
 			boolean atRest = domain.granularState.parcels.count() == 0
-					&& domain.granularDepositDynamics().dirtyColumnCount() == 0;
+					&& domain.domainStep.granularDepositDynamics().dirtyColumnCount() == 0;
 			if (phase == 0 && atRest) {
 				require(settled > 0 && woken == 0 && domain.granularState.parcels.count() == 0
-						&& domain.granularDepositDynamics().dirtyColumnCount() == 0, "Initial bed did not settle and sleep");
+						&& domain.domainStep.granularDepositDynamics().dirtyColumnCount() == 0, "Initial bed did not settle and sleep");
 				sleeping = domain.captureAuthoritativeState();
 				initialMoment = depositMoment(domain);
 				phase = 1; phaseStep = -1;
@@ -163,11 +163,11 @@ public final class GranularBedWakeValidation {
 					GranularBedShear.shields(domain, deposit.cell(), domain.granularState.registry.material(domain.granularState.deposits.dominantGroup(deposit.cell()).materialHandle())));
 			if (step % 20 == 19) System.out.printf("bed step=%d speed=%.2f active=%d deposits=%d sleeping=%d settled=%d woken=%d theta=%.6f contacts=%d fullMs=%.3f%n",
 					step, speed, domain.granularState.parcels.count(), domain.granularState.deposits.groupCount(),
-					domain.granularDepositDynamics().sleepingColumnCount(), settled, woken, maxShields, candidate.movingBodyCoupling().coupledMarkers(), fullMs);
+					domain.domainStep.granularDepositDynamics().sleepingColumnCount(), settled, woken, maxShields, candidate.movingBodyCoupling().coupledMarkers(), fullMs);
 		}
 		require(sleeping != null, "Initial bed exceeded the physical settling budget");
 		require(woken > 0 && peakActive > 0, "Real water never woke deposited sand");
-		require(domain.granularState.parcels.count() == 0 && domain.granularDepositDynamics().dirtyColumnCount() == 0,
+		require(domain.granularState.parcels.count() == 0 && domain.domainStep.granularDepositDynamics().dirtyColumnCount() == 0,
 				"Sand did not re-settle and sleep after reducing flow");
 		require(Math.abs(depositMoment(domain) - initialMoment) > .01, "Released sand did not move horizontally");
 		wakeStartsAtRest(sleeping);
@@ -191,11 +191,11 @@ public final class GranularBedWakeValidation {
 	}
 	private static void carrierTemperatureRefreshAndDiagnostics() throws Exception {
 		var domain = new FluidDomain(4, 4, 4,
-				new FluidSolverConfig(.5F, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, .8F), 512);
+				new FluidSolverConfig(.5F, 1000, 0, .05F, 200, 1e-5F, .002F, .8F), 512);
 		var registries = FullCapabilityTestFixture.load();
 		FullCapabilityTestFixture.bindFull(domain, registries, 293.15, 4);
 		domain.setVolume(1, 1, 1, .5F);
-		int cell = domain.cellIndex(1, 1, 1);
+		int cell = domain.domainFlowFields.cellIndex(1, 1, 1);
 		domain.carrierPropertiesWorkspace.beginStep();
 		for (double temperature : new double[] {1, 5000, 353.15}) {
 			domain.setThermalTemperatureInCell(1, 1, 1, temperature);
@@ -206,7 +206,7 @@ public final class GranularBedWakeValidation {
 						"Carrier properties retained an obsolete thermal state");
 				require(Math.abs(domain.granularMechanicalStage.sample(.75F, .75F, .75F).dynamicViscosity() - expected)
 						< expected * 1e-12, "Drag and bed shear must use the refreshed viscosity");
-				require(Math.abs(domain.granularCarrierProperties(cell).viscosity() - expected) < expected * 1e-12,
+				require(Math.abs(domain.domainStep.granularCarrierProperties(cell).viscosity() - expected) < expected * 1e-12,
 						"Darcy damping must use the same refreshed viscosity");
 			}
 			require(domain.exactInternalEnergy().equals(before), "Property observation changed authoritative energy");
@@ -229,9 +229,9 @@ public final class GranularBedWakeValidation {
 		long svq = mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 		double mass = registries.granular().material(sand).referenceDensity() * svq / SolidVolume.SVQ_PER_CUBIC_METER;
 		require(domain.tryInsertExactGranular(1, 0, 1, sand, 0, svq, mmm.units.Mass.fromKilograms(mass)).inserted(), "Occupied wake fixture rejected its retained parcel");
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		occupiedWakePointKeepsState(domain);
-		var inventory = domain.granularState.inventory; int bedCell = domain.cellIndex(1, 0, 1);
+		var inventory = domain.granularState.inventory; int bedCell = domain.domainFlowFields.cellIndex(1, 0, 1);
 		require(inventory.depositParcel(0, bedCell, SolidVolume.SVQ_PER_CELL), "thermal wake plan fixture failed to retain its bed energy");
 		var plan = inventory.planWake(bedCell, sand, 0, svq, .75F, .25F, .75F, 0, 0, 0);
 		domain.setThermalTemperatureInCell(1, 1, 1, 303.15);
@@ -269,7 +269,7 @@ public final class GranularBedWakeValidation {
 		var blockedAudit = domain.thermalAudit(); long blockedRevision = domain.granularState.parcels.mutationRevision();
 		require(domain.granularCollision.positionValid(active.x(), active.y(), active.z(), wakeSvq),
 				"Blocked wake fixture requires a fixed-geometry-valid release point");
-		require(!domain.granularDepositEnvironment(planned).planWake(domain.cellIndex(1, 0, 1), wakeSvq, active.x(), active.y(), active.z())
+		require(!domain.domainStep.granularDepositEnvironment(planned).planWake(domain.domainFlowFields.cellIndex(1, 0, 1), wakeSvq, active.x(), active.y(), active.z())
 				&& java.util.Arrays.equals(planned, beforePlanned)
 				&& domain.granularState.parcels.mutationRevision() == blockedRevision
 				&& domain.exportGranularState().activeParcels().equals(beforeBlocked.activeParcels())
@@ -290,7 +290,7 @@ public final class GranularBedWakeValidation {
 		require(domain.granularCoupling.totalSolidSvq() == domain.totalGranularSolidVolumeSvq()
 				+ domain.totalCoherentSolidVolumeSvq(), "Thermal restore lost granular joint occupancy");
 		jointCapacity(domain);
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		for(int f=0;f<domain.mac.velocityX.length;f++)if(domain.cellMacStage.massX[f]>0)domain.mac.velocityX[f]=2;
 		java.util.Arrays.fill(domain.mac.velocityY,0);java.util.Arrays.fill(domain.mac.velocityZ,0);
 		domain.cellMacStage.publishMomentum();
@@ -311,7 +311,7 @@ public final class GranularBedWakeValidation {
 						<= beforeK + beforeCount * Math.ulp(beforeK)
 				&& domain.totalGranularMass() == beforeMass, "Bed release created energy or changed inventory: dU=" + domain.exactInternalEnergy().subtract(beforeU)
 						+ " dK=" + (macHorizontalEnergy(domain).toDouble() - beforeK) + " dMass=" + (domain.totalGranularMass() - beforeMass));
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		jointCapacity(domain);
 		for (int p = 0; p < domain.granularState.parcels.count(); p++) {
 			var parcel = domain.granularState.parcels.parcel(p);
@@ -334,7 +334,7 @@ public final class GranularBedWakeValidation {
 	private static FluidDomain fixture() throws Exception {
 		var r = FullCapabilityTestFixture.load();
 		var domain = new FluidDomain(8, 8, 8,
-				new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 400, 1e-5F, .45F, .002F, .8F), 4096);
+				new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 400, 1e-5F, .002F, .8F), 4096);
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, r.liquids());
 		int water = r.liquids().handle("mmm:water");
@@ -346,10 +346,10 @@ public final class GranularBedWakeValidation {
 		for (int z = 2; z < 6; z++) for (int x = 2; x < 6; x++) {
 			require(domain.tryInsertExactGranular(x, 0, z, ledger, 0, true).inserted(), "Sand rejected");
 		}
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		for (int z = 0; z < 8; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 8; x++) {
-			float open = domain.effectiveOpenCellVolume(domain.cellIndex(x, y, z));
-			require(domain.tryInsertExactVolume(x, y, z, open, 0, water).transferred(), "Pore water rejected");
+			float open = domain.domainCollision.effectiveOpenCellVolume(domain.domainFlowFields.cellIndex(x, y, z));
+			require(domain.domainInventory.tryInsertExactVolume(x, y, z, open, 0, water).transferred(), "Pore water rejected");
 		}
 		float displaced = (float) (256 - domain.totalVolumeExact());
 		require(domain.addVolumeNear(4, 4, 4, displaced, 12) == displaced, "Displaced pore water rejected");
@@ -372,8 +372,8 @@ public final class GranularBedWakeValidation {
 	}
 
 	private static void jointCapacity(FluidDomain domain) {
-		for (int c = 0; c < domain.cellCount; c++) require(domain.markerGrid.exactCellVolumeInventory[c].compareTo(
-				mmm.units.SignedDyadic.of(domain.effectiveOpenCellVolume(c))) <= 0,
+		for (int c = 0; c < domain.cellCount; c++) require(domain.liquidGrid.exactCellVolumeInventory[c].compareTo(
+				mmm.units.SignedDyadic.of(domain.domainCollision.effectiveOpenCellVolume(c))) <= 0,
 				"Published bed state overlaps liquid and skeleton at cell " + c);
 	}
 

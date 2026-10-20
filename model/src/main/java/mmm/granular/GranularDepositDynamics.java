@@ -113,7 +113,7 @@ public final class GranularDepositDynamics {
 		}
 		this.registry = registry; this.parcels = parcels; this.deposits = deposits; this.inventory = inventory;
 		this.admission = new GranularBedAdmission(parcels, deposits, sizeX, sizeY, sizeZ, cellSize);
-		this.settlement = new GranularSettlementGeometryPlan(inventory, parcels, deposits, admission, parcels.capacity());
+		this.settlement = new GranularSettlementGeometryPlan(inventory, parcels, deposits, admission);
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.cellSize = cellSize;
 		this.columnCount = Math.multiplyExact(sizeX, sizeZ);
 		this.dirtyQueue = new int[columnCount]; this.stableAge = new int[columnCount];

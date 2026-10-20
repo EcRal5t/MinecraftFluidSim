@@ -12,10 +12,25 @@ public final class ThermalContactValidation {
 		finiteContactMatchesAnalyticPair();
 		finiteContactRetainsEnergyScale();
 		heterogeneousContactsPreserveTemperatureOrderAndEntropy();
+		registeredMultiSegmentContactKeepsPositiveResponse();
 		invalidCarrierCannotHideInValidCellMean();
 		carrierGraphPreservesCaloricInventoryAndPreflights();
 		condensedCellTransportHasFiniteRates();
 		isolatedContactRangesRetainTheirOwners();
+	}
+	private static void registeredMultiSegmentContactKeepsPositiveResponse(){
+		var segments=new java.util.ArrayList<ThermalMaterialDefinition.CaloricSegment>();
+		for(int segment=0;segment<12;segment++)segments.add(new ThermalMaterialDefinition.CaloricSegment(
+				1+100*segment,101+100*segment,Math.scalb(16.0,11-segment)));
+		var material=new ThermalMaterialDefinition("test:thermal/multi_segment",ThermalMaterialDefinition.CarrierKind.DEVICE,
+				"test:multi_segment",300,0,1,segments);
+		for(double dt:new double[]{.001,1,1000}){
+			var cold=carrier(material,1,0,10);var hot=carrier(material,2,0,1190);
+			double q=ThermalContactExchange.transfer(cold,hot,1000,dt);
+			double first=cold.stateAfterEnergyChange(q).temperatureK(),second=hot.stateAfterEnergyChange(-q).temperatureK();
+			require(q>0&&first>=10&&first<=second+1e-4&&second<=1190,
+					"Registered caloric segments stalled a finite heat contact or reversed temperature order");
+		}
 	}
 
 	private static void isolatedContactRangesRetainTheirOwners() {

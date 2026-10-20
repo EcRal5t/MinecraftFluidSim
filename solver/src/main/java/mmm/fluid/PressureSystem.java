@@ -28,10 +28,6 @@ final class PressureSystem {
 				Arrays.fill(result, 0); readVelocity(velocityWork);
 				faces.addDivergence(velocityWork, result, -domain.config.density() / duration);
 				granular.addDivergence(result, -domain.config.density() / duration);
-				var p = domain.projection;
-				for (int i = 0; i < p.fluidUnknownCount; i++) { int cell = p.fluidUnknownCells[i]; result[cell] += p.rhs[cell]; }
-				for (int i = 0; i < p.gasUnknownCount; i++) { int node = p.gasUnknownNodes[i];
-					result[domain.cellCount + node] += p.gasRhs[node]; }
 				addStorageRhs(result);
 			}
 			@Override public void applyMatrix(double[] source, double[] result) {
@@ -39,7 +35,6 @@ final class PressureSystem {
 				faces.addDivergence(velocityWork, result, domain.config.density());
 				granular.applyMatrix(source, result, domain.config.density());
 				var p = domain.projection;
-				for (int i = 0; i < p.gasUnknownCount; i++) { int node = p.gasUnknownNodes[i]; p.gasMatrixInput[node] = source[domain.cellCount + node]; }
 				for (int i = 0; i < p.gasUnknownCount; i++) { int node = p.gasUnknownNodes[i];
 					result[domain.cellCount + node] += p.gasStorageCoefficient[node] * source[domain.cellCount + node]; }
 			}
@@ -47,8 +42,8 @@ final class PressureSystem {
 		solver = new PressureLinearSolver(domain, linearOperator);
 	}
 	PressureProjectionResult solveProjection(float dt) {
-		duration = dt; domain.ensureGrid(); solidFaces.rebuild(); faces.rebuild(dt);
-		var p = domain.projection; Arrays.fill(p.rhs, 0); Arrays.fill(p.gasRhs, 0);
+		duration = dt; domain.domainFlowFields.ensureGrid(); solidFaces.rebuild(); faces.rebuild(dt);
+		var p = domain.projection;
 		Arrays.fill(p.pressure, 0); Arrays.fill(p.gasPressure, 0); Arrays.fill(p.divergence, 0);
 		prepareGasStorage();
 		granular.prepare(dt);
@@ -78,7 +73,7 @@ final class PressureSystem {
 	}
 	void predictDrag(float dt){
 		if(domain.granularState==null||domain.granularState.parcels.count()==0)return;
-		domain.ensureGrid();faces.rebuild(dt);drag.prepare(dt);drag.project();
+		domain.domainFlowFields.ensureGrid();faces.rebuild(dt);drag.prepare(dt);drag.project();
 	}
 	void beginVolumeTransport(){
 		readVelocity(transportVelocity);
@@ -109,9 +104,7 @@ final class PressureSystem {
 			float[] velocity = a == 0 ? domain.mac.velocityX : a == 1 ? domain.mac.velocityY : domain.mac.velocityZ;
 			velocity[local] += dt * velocityWork[f];
 		}
-		var p = domain.projection;
-		for (int i = 0; i < p.gasUnknownCount; i++) { int node = p.gasUnknownNodes[i]; p.gasMatrixInput[node] = pressure[domain.cellCount + node]; }
-		granular.project(dt, pressure, p.gasMatrixInput);
+		granular.project(dt,pressure);
 	}
 	private void buildDiagonal() {
 		var p = domain.projection; double h2 = domain.config.cellSize() * (double) domain.config.cellSize();
@@ -149,13 +142,13 @@ final class PressureSystem {
 		}
 	}
 	double wallBoundaryWork() { return granular.wallWork(); }
-	boolean hasLiquidPressure(int cell) { return domain.isFluid(cell); }
+	boolean hasLiquidPressure(int cell) { return domain.domainFlowFields.isFluid(cell); }
 	double liquidPressure(int cell) { return pressure.length > cell ? pressure[cell] : 0; }
 	double gasPressure(int node) { return pressure.length > domain.cellCount + node ? pressure[domain.cellCount + node] : domain.pressureBoundaryView.gasPressureOfNode(node); }
 
 	/** Gauge pressure at the retained liquid support, including a partially filled cell's gas contact. */
 	double liquidPressureAt(int cell, int support) {
-		domain.ensurePressureGeometry();
+		domain.domainFlowFields.ensurePressureGeometry();
 		if ((faces.fullSupports[cell] & support) == support) return domain.projection.pressure[cell];
 		var frame = domain.gasState.frame; double total = 0, weighted = 0;
 		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) {

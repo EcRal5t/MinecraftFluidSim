@@ -34,11 +34,11 @@ final class CellInventoryReader {
 	}
 
 	CellCarrierInventoryView observeCellCarriers(int x, int y, int z) {
-		int requested = domain.cellIndexChecked(x, y, z);
+		int requested = domain.domainFlowFields.cellIndexChecked(x, y, z);
 		TreeMap<String, SolidObservationAccumulator> accumulated = new TreeMap<>();
 		if (domain.granularState != null) for (int ordinal = 0; ordinal < domain.granularState.parcels.count(); ordinal++) {
 			GranularParcelStore.Parcel parcel = domain.granularState.parcels.parcel(ordinal);
-			if (domain.granularParcelCell(parcel) == requested) addObservedSolid(accumulated,
+			if (domain.domainStep.granularParcelCell(parcel) == requested) addObservedSolid(accumulated,
 					CellCarrierInventoryView.SolidKind.ACTIVE,
 					domain.granularState.registry.material(parcel.materialHandle()).id(), parcel.solidVolumeSvq(), parcel.mass());
 		}
@@ -87,11 +87,11 @@ final class CellInventoryReader {
 	}
 
 	boolean hasCondensedInventoryInCell(int x, int y, int z) {
-		int requested = domain.cellIndexChecked(x, y, z);
+		int requested = domain.domainFlowFields.cellIndexChecked(x, y, z);
 		if (nextMarkerInCell(requested, -1) >= 0) return true;
 		if (domain.granularState != null) {
 			for (int ordinal = 0; ordinal < domain.granularState.parcels.count(); ordinal++) {
-				if (domain.granularParcelCell(domain.granularState.parcels.parcel(ordinal)) == requested) return true;
+				if (domain.domainStep.granularParcelCell(domain.granularState.parcels.parcel(ordinal)) == requested) return true;
 			}
 		}
 		if (domain.granularState != null && domain.granularState.deposits.cellSolidVolumeSvq(requested) > 0L) return true;
@@ -99,7 +99,7 @@ final class CellInventoryReader {
 	}
 
 	FluidCellInventoryView observeCellInventory(int x, int y, int z) {
-		int requested = domain.cellIndexChecked(x, y, z);
+		int requested = domain.domainFlowFields.cellIndexChecked(x, y, z);
 		double normalizedVolume = 0.0, solverMass = 0.0;
 		double[] materialVolume = domain.materialRegistry == null
 				? new double[]{0.0} : new double[domain.materialRegistry.size()];
@@ -131,7 +131,7 @@ final class CellInventoryReader {
 		species.forEach((id, amount) -> stableSpecies.add(
 				new FluidCellInventoryView.SpeciesAmount(id, amount)));
 		OptionalDouble temperature = domain.thermalState == null ? OptionalDouble.empty()
-				: OptionalDouble.of(domain.thermalState.observeTemperatureInCell(requested, domain.thermalMarkerContext()));
+				: OptionalDouble.of(domain.thermalState.observeTemperatureInCell(requested, domain.domainCapabilities.thermalMarkerContext()));
 		return new FluidCellInventoryView(normalizedVolume * cubicMetresPerCell,
 				solverMass * cubicMetresPerCell, solverMass / normalizedVolume,
 				temperature, materials, stableSpecies);
@@ -139,13 +139,13 @@ final class CellInventoryReader {
 
 	double thermalTemperatureInCell(int x, int y, int z) {
 		if (domain.thermalState == null) throw new IllegalStateException("Thermal state is not bound");
-		return domain.thermalState.temperatureInCell(domain.cellIndexChecked(x, y, z), domain.thermalMarkerContext());
+		return domain.thermalState.temperatureInCell(domain.domainFlowFields.cellIndexChecked(x, y, z), domain.domainCapabilities.thermalMarkerContext());
 	}
 
 	long granularSolidVolumeSvq(int cellX, int cellY, int cellZ) {
 		if (domain.granularCoupling == null) return 0L;
-		int cell = domain.cellIndexChecked(cellX, cellY, cellZ);
-		domain.ensureInventoryGrid();
+		int cell = domain.domainFlowFields.cellIndexChecked(cellX, cellY, cellZ);
+		domain.domainFlowFields.ensureInventoryGrid();
 		return domain.granularCoupling.solidSvq(cell);
 	}
 

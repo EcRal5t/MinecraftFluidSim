@@ -346,17 +346,17 @@ final class RegionStateCodec {
 		tag.putInt("CellSize", Float.floatToRawIntBits(config.cellSize())); tag.putInt("Density", Float.floatToRawIntBits(config.density()));
 		tag.putInt("Gravity", Float.floatToRawIntBits(config.gravity())); tag.putInt("TimeStep", Float.floatToRawIntBits(config.timeStep()));
 		tag.putInt("PressureIterations", config.maxPressureIterations()); tag.putInt("PressureTolerance", Float.floatToRawIntBits(config.pressureTolerance()));
-		tag.putInt("Courant", Float.floatToRawIntBits(config.maxCourantNumber())); tag.putInt("FluidEpsilon", Float.floatToRawIntBits(config.fluidEpsilon()));
+		tag.putInt("FluidEpsilon", Float.floatToRawIntBits(config.fluidEpsilon()));
 		tag.putInt("InterfaceCompression", Float.floatToRawIntBits(config.interfaceCompression()));
 		tag.putString("ViscousWallCondition", config.viscousWallCondition().name());
 		return tag;
 	}
 
 	private static FluidSolverConfig decodeConfig(CompoundTag tag) throws IOException {
-		for (String field : List.of("CellSize", "Density", "Gravity", "TimeStep", "PressureIterations", "PressureTolerance", "Courant", "FluidEpsilon", "InterfaceCompression")) require(tag, field, Tag.TAG_INT);
+		for (String field : List.of("CellSize", "Density", "Gravity", "TimeStep", "PressureIterations", "PressureTolerance", "FluidEpsilon", "InterfaceCompression")) require(tag, field, Tag.TAG_INT);
 		require(tag, "ViscousWallCondition", Tag.TAG_STRING);
 		return new FluidSolverConfig(bits(tag, "CellSize"), bits(tag, "Density"), bits(tag, "Gravity"), bits(tag, "TimeStep"),
-				tag.getIntOr("PressureIterations", -1), bits(tag, "PressureTolerance"), bits(tag, "Courant"), bits(tag, "FluidEpsilon"), bits(tag, "InterfaceCompression"),
+				tag.getIntOr("PressureIterations", -1), bits(tag, "PressureTolerance"), bits(tag, "FluidEpsilon"), bits(tag, "InterfaceCompression"),
 				FluidSolverConfig.WallCondition.valueOf(tag.getStringOr("ViscousWallCondition", "")));
 	}
 

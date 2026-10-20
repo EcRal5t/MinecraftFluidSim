@@ -54,10 +54,10 @@ zeroTension.setVolume(1, y, 1, y == 2 ? 0.5F : 1.0F);
 FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
 new FluidMaterial("mmm:test", 1_000.0, "mmm:test", 0.0, Math.PI / 2.0)));
 for (int particle = 0; particle < zeroTension.particleCount(); particle++) {
-zeroTension.setMarkerMaterial(particle, registry, 0);
+zeroTension.domainCollision.setMarkerMaterial(particle, registry, 0);
 }
-pure.step();
-zeroTension.step();
+pure.domainStep.step();
+zeroTension.domainStep.step();
 check(Float.floatToRawIntBits(pure.totalVolume()) == Float.floatToRawIntBits(zeroTension.totalVolume()),
 "zero surface tension changed exact marker volume");
 check(pure.totalMassUnits() == zeroTension.totalMassUnits(),
@@ -73,17 +73,17 @@ check(Float.floatToRawIntBits(pure.pressure(x, y, z)) == Float.floatToRawIntBits
 private static void validateActiveSingleCellPressureJump() {
 FluidSolverConfig config = new FluidSolverConfig(
 1.0F, 1_000.0F, 0.0F, 1.0F / 20.0F,
-100, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F
+100, 1.0E-6F, 2.0E-3F, 0.80F
 );
 FluidDomain domain = new FluidDomain(4, 4, 4, config, 64);
 domain.setVolume(1, 1, 1, 1.0F);
 FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
 new FluidMaterial("mmm:test", 1_000.0, "mmm:test", 0.0728, Math.PI / 2.0)));
 for (int particle = 0; particle < domain.particleCount(); particle++) {
-domain.setMarkerMaterial(particle, registry, 0);
+domain.domainCollision.setMarkerMaterial(particle, registry, 0);
 }
-domain.step();
-float jump = domain.surfaceTensionPressureAt(1, 1, 1);
+domain.domainStep.step();
+float jump = domain.domainCollision.surfaceTensionPressureAt(1, 1, 1);
 check(jump > 0.0F, "single-cell surface tension pressure was not built");
 check(Math.abs(domain.pressure(1, 1, 1) - jump) <= 1.0E-6F,
 "active pressure solve did not impose the single-cell Laplace jump: pressure="
@@ -95,14 +95,14 @@ check(domain.maximumParticleSpeed() <= 1.0E-8F,
 private static void validateStaticDropletPressureJump() {
 FluidSolverConfig config = new FluidSolverConfig(
 0.5F, 1_000.0F, 0.0F, 1.0F / 20.0F,
-500, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F
+500, 1.0E-6F, 2.0E-3F, 0.80F
 );
 int size = 24;
 double radius = 4.0;
 double sigma = 0.0728;
 FluidDomain domain = sphereDroplet(size, config, radius, sigma);
 double exactVolume = domain.totalVolume();
-FluidDomain.StepStats stats = domain.step();
+FluidDomain.StepStats stats = domain.domainStep.step();
 double analyticJump = 2.0 * sigma / radius;
 double measuredJump = averageFluidPressure(domain);
 double jumpError = Math.abs(measuredJump - analyticJump) / analyticJump;
@@ -122,7 +122,7 @@ check(Math.abs(domain.totalVolume() - exactVolume) <= 1.0E-6F,
 private static void validateNoSustainedParasiticFlow() {
 FluidSolverConfig config = new FluidSolverConfig(
 0.5F, 1_000.0F, 0.0F, 1.0F / 20.0F,
-500, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F
+500, 1.0E-6F, 2.0E-3F, 0.80F
 );
 int size = 24;
 double radius = 4.0;
@@ -131,7 +131,7 @@ FluidDomain domain = sphereDroplet(size, config, radius, sigma);
 double exactVolume = domain.totalVolume();
 float previousMaximum = Float.POSITIVE_INFINITY;
 for (int step = 0; step < 10; step++) {
-FluidDomain.StepStats stats = domain.step();
+FluidDomain.StepStats stats = domain.domainStep.step();
 check(Float.isFinite(stats.pressureResidual()), "static droplet pressure residual became non-finite");
 check(Math.abs(domain.totalVolume() - exactVolume) <= 1.0E-6F,
 "static droplet changed exact marker volume");
@@ -147,7 +147,7 @@ check(previousMaximum <= 5.0E-4F, "static droplet parasitic velocity did not rem
 private static void validateContactAngleSpreading() {
 	FluidSolverConfig config = new FluidSolverConfig(
 			1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
-			300, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F
+			300, 1.0E-6F, 2.0E-3F, 0.80F
 	);
 DropletMetrics hydrophilic = runDroplet(config, Math.toRadians(30.0), 100.0, 1200);
 DropletMetrics neutral = runDroplet(config, Math.toRadians(90.0), 100.0, 1200);
@@ -184,9 +184,9 @@ totalVolume, positionVolume, velocities, mmm.units.Mass.createLiquid(config.cell
 FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
 new FluidMaterial("mmm:test", config.density(), "mmm:test", sigma, contactAngleRadians)));
 for (int marker = 0; marker < domain.particleCount(); marker++) {
-domain.setMarkerMaterial(marker, registry, 0);
+domain.domainCollision.setMarkerMaterial(marker, registry, 0);
 }
-for (int step = 0; step < steps; step++) domain.step();
+for (int step = 0; step < steps; step++) domain.domainStep.step();
 FlipMaterialParticleState state = domain.exportMaterialParticleState();
 float[] positionVolumeCopy = state.copyPositionVolume();
 double weightedX = 0.0, weightedX2 = 0.0, volume = 0.0;
@@ -204,14 +204,14 @@ private record DropletMetrics(double varianceX, float maximumSpeed) { }
 	private static void validateLiquidPairPressureJump() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 0.0F, 1.0F / 20.0F,
-				800, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F
+				800, 1.0E-6F, 2.0E-3F, 0.80F
 		);
 		int size = 20;
 		double radius = 4.0;
 		double sigma12 = 0.0728;
 		FluidDomain domain = liquidPairDroplet(size, config, radius, sigma12);
 		double exactVolume = domain.totalVolume();
-		FluidDomain.StepStats stats = domain.step();
+		FluidDomain.StepStats stats = domain.domainStep.step();
 		double measuredJump = averagePressureInside(domain, size, radius) - averagePressureOutside(domain, size, radius);
 		double expectedJump = sigma12 * SurfaceTensionCurvatureExperiment.interfaceMeanCurvature(
 				binarySphereColour(size, radius, config.cellSize()), size, config.cellSize());
@@ -228,7 +228,7 @@ private record DropletMetrics(double varianceX, float maximumSpeed) { }
 		check(Math.abs(domain.totalVolume() - exactVolume) <= 1.0E-6F,
 				"liquid-pair surface tension changed exact marker volume");
 		for (int step = 0; step < 5; step++) {
-			FluidDomain.StepStats noFlowStats = domain.step();
+			FluidDomain.StepStats noFlowStats = domain.domainStep.step();
 			check(Float.isFinite(noFlowStats.pressureResidual()), "liquid-pair droplet pressure residual became non-finite");
 			check(Math.abs(domain.totalVolume() - exactVolume) <= 1.0E-6F,
 					"liquid-pair surface tension changed exact marker volume");
@@ -239,20 +239,20 @@ private record DropletMetrics(double varianceX, float maximumSpeed) { }
 	}
 
 	private static void validateLiquidPairIdentity() {
-		FluidSolverConfig config = new FluidSolverConfig(.5F, 1000, 0, .025F, 800, 1E-6F, .45F, .002F, .8F);
+		FluidSolverConfig config = new FluidSolverConfig(.5F, 1000, 0, .025F, 800, 1E-6F, .002F, .8F);
 		FluidDomain domain = liquidPairDroplet(8, config, 1, .0728, true);
-		domain.step();
+		domain.domainStep.step();
 		check(domain.maximumPressure() == 0, "a liquid pair acted on an interface with its first phase absent");
 		check(domain.maximumParticleSpeed() == 0, "an unrelated liquid pair created liquid motion");
 		FluidDomain separated = liquidPairDroplet(12, config, .5, .0728, true);
-		separated.setMaterialInCell(0,0,0,separated.materialRegistry,1);
-		separated.step();
+		separated.domainCollision.setMaterialInCell(0,0,0,separated.materialRegistry,1);
+		separated.domainStep.step();
 		check(separated.maximumPressure() == 0, "a remote phase changed an unrelated liquid interface");
 		check(separated.maximumParticleSpeed() == 0, "disjoint liquid-pair supports created motion");
 		FluidDomain full = liquidPairDroplet(8, config, 1, .0728, true);
 		FluidDomain diluted = liquidPairDroplet(8, config, 1, .0728, true);
 		replaceAbsentFirstPhase(full,1);replaceAbsentFirstPhase(diluted,.125);
-		full.step(); diluted.step();
+		full.domainStep.step(); diluted.domainStep.step();
 		check(full.maximumPressure() > 0, "active pair failed to create a capillary pressure");
 		check(Math.abs(diluted.maximumPressure() / full.maximumPressure() - .125) < .002,
 				"pair force did not decay continuously with its first phase's local fraction");
@@ -333,7 +333,7 @@ private record DropletMetrics(double varianceX, float maximumSpeed) { }
 private static void validateMergeBreakupConservation() {
 FluidSolverConfig config = new FluidSolverConfig(
 1.0F, 1_000.0F, 0.0F, 1.0F / 20.0F,
-200, 1.0E-6F, 0.45F, 2.0E-3F, 0.80F
+200, 1.0E-6F, 2.0E-3F, 0.80F
 );
 FluidDomain domain = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
 FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
@@ -347,12 +347,12 @@ domain.setVolume(6, 2, 3, 1.0F);
 domain.setVolume(5, 3, 3, 0.5F);
 domain.setVolume(6, 3, 3, 0.5F);
 for (int particle = 0; particle < domain.particleCount(); particle++) {
-domain.setMarkerMaterial(particle, registry, 0);
+domain.domainCollision.setMarkerMaterial(particle, registry, 0);
 }
 double exactVolume = domain.totalVolume();
 double exactMass = domain.totalMass();
 for (int step = 0; step < 20; step++) {
-FluidDomain.StepStats stats = domain.step();
+FluidDomain.StepStats stats = domain.domainStep.step();
 check(stats.relativeVolumeError() <= 1.0E-7F, "surface-tension merge/breakup changed exact volume");
 check(stats.relativeMassError() <= 1.0E-12, "surface-tension merge/breakup changed exact mass");
 check(domain.totalVolume() == exactVolume && domain.totalMass() == exactMass,
@@ -391,7 +391,7 @@ totalVolume, positionVolume, velocities, mmm.units.Mass.createLiquid(h, 1000.0, 
 FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
 new FluidMaterial("mmm:test", config.density(), "mmm:test", sigma, Math.PI / 2.0)));
 for (int marker = 0; marker < domain.particleCount(); marker++) {
-domain.setMarkerMaterial(marker, registry, 0);
+domain.domainCollision.setMarkerMaterial(marker, registry, 0);
 }
 return domain;
 }
@@ -401,7 +401,7 @@ double sum = 0.0;
 int cells = 0;
 for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
 for (int x = 0; x < domain.sizeX(); x++) {
-if (!domain.isFluid(domain.cellIndex(x, y, z))) continue;
+if (!domain.domainFlowFields.isFluid(domain.domainFlowFields.cellIndex(x, y, z))) continue;
 sum += domain.pressure(x, y, z);
 cells++;
 }
@@ -412,7 +412,7 @@ return cells == 0 ? 0.0 : sum / cells;
 private static FluidSolverConfig strictConfig() {
 return new FluidSolverConfig(
 1.0F, 1_000.0F, 0.0F, 1.0F / 40.0F,
-300, 1.0E-7F, 0.40F, 2.0E-3F, 0.80F
+300, 1.0E-7F, 2.0E-3F, 0.80F
 );
 }
 

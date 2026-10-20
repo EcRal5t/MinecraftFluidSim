@@ -1,7 +1,6 @@
 package mmm.fluid;
 
 import mmm.granular.GranularMechanics;
-import mmm.thermal.ThermalDomainState;
 
 
 /**
@@ -17,68 +16,62 @@ final class MechanicalStepPipeline {
 		IDLE, GRID_REBUILD, GAS_TOPOLOGY, CARRIER_PROPERTIES, GRANULAR_PREDICTION,
 		POROUS_DAMPING, SOLID_FACE_CONSTRAINT, VISCOSITY, GRAVITY, THERMAL_BUOYANCY,
 		SURFACE_TENSION, PRESSURE_SOLVE, PRESSURE_PUBLICATION,
-		GRANULAR_COLLISION_PREVIEW, ADVECTION, GRANULAR_COLLISION_COMMIT, COMPLETE
+		GRANULAR_COLLISION_PREVIEW, ADVECTION, COMPLETE
 	}
 	private Stage diagnosticStage = Stage.IDLE;
-	Stage diagnosticStage() { return diagnosticStage; }
-	record Workspace(
-			GasTopologyCoordinator gasTopology, PendingPhaseVolumeWork pendingPhaseVolume
-	) { }
-
-	interface Access {
-		void ensureGrid();
-		void prepareCarrierProperties();
-		double gridAndGranularKineticEnergyJoules();
-		double carrierKineticEnergyJoules();
-		double granularKineticEnergyJoules();
-		int lastPressureIterations();
-		ThermalDomainState thermalState();
-	}
-
-	private final Workspace state;
-	private final Access access;
+	private final FluidDomain domain;
 	private final GranularMechanicalStage granularMechanicalStage;
 	private final BodyForceStage bodyForceStage;
 	private final PressureProjectionStage pressureStage;
 	private final LiquidViscosityStage viscosityStage;
 	private final CellMacStage cellMac;
 
-	MechanicalStepPipeline(
-			Workspace state, Access access, GranularMechanicalStage granularMechanicalStage,
-			BodyForceStage bodyForceStage, PressureProjectionStage pressureStage, LiquidViscosityStage viscosityStage,
-			CellMacStage cellMac
-	) {
-		this.state = state;
-		this.access = access;
-		this.granularMechanicalStage = granularMechanicalStage;
-		this.bodyForceStage = bodyForceStage;
-		this.pressureStage = pressureStage;
-		this.viscosityStage = viscosityStage;
-		this.cellMac = cellMac;
+	MechanicalStepPipeline(FluidDomain domain) {
+		this.domain = domain;
+		granularMechanicalStage = domain.granularMechanicalStage;
+		bodyForceStage = domain.bodyForceStage;
+		pressureStage = domain.pressureStage;
+		viscosityStage = new LiquidViscosityStage(domain);
+		cellMac = domain.cellMacStage;
 	}
 
 	record SubstepOutcome(int pressureIterations, GranularMechanics.StepStats granularMechanics,
-	                      boolean pendingWorkConsumed, FluidDomain.ViscousStepStats viscosity,
-	                      FluidDomain.LiquidTransportStats liquidTransport) { }
+	                      FluidDomain.ViscousStepStats viscosity) { }
 
 	SubstepOutcome substep(float dt, int substep, boolean captureAudit, MechanicalAuditAccumulator audit) {
+		try { return runSubstep(dt, substep, captureAudit, audit); }
+		catch (RuntimeException failure) {
+			failure.addSuppressed(new IllegalStateException("Mechanical stage=" + diagnosticStage
+					+ ", substep=" + substep + ", dt=" + dt + ", domain=" + domain.sizeX + "x" + domain.sizeY + "x" + domain.sizeZ));
+			throw failure;
+		}
+	}
+
+	private void prepareCarrierProperties() {
+		if (domain.materialDefinitions != null) {
+			domain.carrierPropertiesWorkspace.invalidate();
+			domain.domainPhaseInventory.derivedCarrierState();
+		}
+	}
+
+	private SubstepOutcome runSubstep(float dt, int substep, boolean captureAudit, MechanicalAuditAccumulator audit) {
 		diagnosticStage = Stage.GRID_REBUILD;
-		access.ensureGrid();
-		double stageKineticEnergy = captureAudit ? access.gridAndGranularKineticEnergyJoules() : 0.0;
+		domain.domainFlowFields.ensureGrid();
+		double stageKineticEnergy = captureAudit ? domain.domainStep.mechanicalGridKineticEnergyJoules() : 0.0;
 		diagnosticStage = Stage.GAS_TOPOLOGY;
 		try {
-			state.gasTopology.step(dt);
+			domain.gasTopologyCoordinator.step(dt);
 		} catch (GasTopologyBlockedException blocked) {
 			throw blocked;
 		} catch (IllegalArgumentException | IllegalStateException invalidGasThermal) {
-			if (access.thermalState() == null) throw invalidGasThermal;
+			if (domain.thermalState == null) throw invalidGasThermal;
 			throw new FluidDomain.GasThermalBlockedException(invalidGasThermal.getMessage(), invalidGasThermal);
 		}
 		diagnosticStage = Stage.CARRIER_PROPERTIES;
-		access.prepareCarrierProperties();
+		prepareCarrierProperties();
 		diagnosticStage = Stage.GRANULAR_PREDICTION;
 		GranularMechanics.StepStats granularMechanics = granularMechanicalStage.predictVelocities(dt);
-		double nextKineticEnergy = captureAudit ? access.gridAndGranularKineticEnergyJoules() : 0.0;
+		double nextKineticEnergy = captureAudit ? domain.domainStep.mechanicalGridKineticEnergyJoules() : 0.0;
 		if (captureAudit) {
 			audit.gravityWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
@@ -88,7 +81,7 @@ final class MechanicalStepPipeline {
 		diagnosticStage = Stage.POROUS_DAMPING;
 		bodyForceStage.applyGranularPorousDamping(dt);
 		if (captureAudit) {
-			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
+			nextKineticEnergy = domain.domainStep.mechanicalGridKineticEnergyJoules();
 			audit.porousBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
@@ -96,28 +89,28 @@ final class MechanicalStepPipeline {
 		diagnosticStage = Stage.SOLID_FACE_CONSTRAINT;
 		bodyForceStage.enforceSolidFaceVelocities();
 		if (captureAudit) {
-			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
+			nextKineticEnergy = domain.domainStep.mechanicalGridKineticEnergyJoules();
 			audit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		diagnosticStage = Stage.VISCOSITY;
 		FluidDomain.ViscousStepStats viscosity = viscosityStage.apply(dt);
 		if (captureAudit) {
-			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
+			nextKineticEnergy = domain.domainStep.mechanicalGridKineticEnergyJoules();
 			audit.viscousWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		diagnosticStage = Stage.GRAVITY;
 		bodyForceStage.applyGravity(dt);
 		if (captureAudit) {
-			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
+			nextKineticEnergy = domain.domainStep.mechanicalGridKineticEnergyJoules();
 			audit.gravityWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		diagnosticStage = Stage.THERMAL_BUOYANCY;
 		bodyForceStage.applyThermalBuoyancy(dt);
 		if (captureAudit) {
-			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
+			nextKineticEnergy = domain.domainStep.mechanicalGridKineticEnergyJoules();
 			audit.thermalBuoyancyWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
@@ -125,31 +118,29 @@ final class MechanicalStepPipeline {
 		bodyForceStage.applyLiquidSolidSurfaceEnergyForce(dt);
 		bodyForceStage.applyLiquidPairSurfaceTensionForce(dt);
 		if (captureAudit) {
-			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
+			nextKineticEnergy = domain.domainStep.mechanicalGridKineticEnergyJoules();
 			audit.surfaceTensionWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		bodyForceStage.enforceSolidFaceVelocities();
 		if (captureAudit) {
-			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
+			nextKineticEnergy = domain.domainStep.mechanicalGridKineticEnergyJoules();
 			audit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		pressureStage.predictDrag(dt);
 		diagnosticStage = Stage.PRESSURE_SOLVE;
 		pressureStage.solve(dt);
-		int pressureIterations = access.lastPressureIterations();
-		boolean phaseGeometryPending = substep == 0 && state.pendingPhaseVolume.hasWork();
+		boolean phaseGeometryPending = substep == 0 && domain.pendingPhaseVolume.hasWork();
 		diagnosticStage = Stage.PRESSURE_PUBLICATION;
 		pressureStage.projectVelocities(dt);
 		diagnosticStage = Stage.GRANULAR_COLLISION_PREVIEW;
 		granularMechanicalStage.previewCollision(dt);
 		granularMechanicalStage.publishCollisionVelocities();
-		cellMac.prepareTransport(dt);
 		granularMechanicalStage.validateVelocities();
-		pressureIterations = access.lastPressureIterations();
+		int pressureIterations = domain.lastPressureIterations;
 		if (captureAudit) {
-			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
+			nextKineticEnergy = domain.domainStep.mechanicalGridKineticEnergyJoules();
 			double wallWork=pressureStage.wallBoundaryWork();
 			audit.fixedBoundaryWorkJoules+=wallWork;
 			audit.pressureProjectionWorkJoules += nextKineticEnergy - stageKineticEnergy-wallWork;
@@ -158,22 +149,20 @@ final class MechanicalStepPipeline {
 		if (phaseGeometryPending) {
 			// Phase inventories already share a conservative fixed-volume energy update.
 			// Their internal displacement is not external work on the whole thermal system.
-			state.pendingPhaseVolume.clear();
+			domain.pendingPhaseVolume.clear();
 		}
 		bodyForceStage.enforceSolidFaceVelocities();
 		if (captureAudit) {
-			nextKineticEnergy = access.gridAndGranularKineticEnergyJoules();
+			nextKineticEnergy = domain.domainStep.mechanicalGridKineticEnergyJoules();
 			audit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		diagnosticStage = Stage.ADVECTION;
-		double beforeTransport = captureAudit ? access.carrierKineticEnergyJoules() : 0;
-		FluidDomain.LiquidTransportStats transport = cellMac.transport(dt);
-		diagnosticStage = Stage.GRANULAR_COLLISION_COMMIT;
-		granularMechanicalStage.commitCollision();
-		if (captureAudit) audit.volumeTransportTransferJoules += access.carrierKineticEnergyJoules() - beforeTransport;
+		double beforeTransport = captureAudit ? domain.domainStep.mechanicalCarrierKineticEnergyJoules() : 0;
+		cellMac.transport(dt);
+		if (captureAudit) audit.volumeTransportTransferJoules += domain.domainStep.mechanicalCarrierKineticEnergyJoules() - beforeTransport;
 		diagnosticStage = Stage.COMPLETE;
-		return new SubstepOutcome(pressureIterations, granularMechanics, phaseGeometryPending, viscosity, transport);
+		return new SubstepOutcome(pressureIterations, granularMechanics, viscosity);
 	}
 
 }

@@ -42,10 +42,20 @@ final class CellRemapMicroTopology {
 			result[0] = totalEffectiveOpen;
 			return result;
 		}
-		SignedDyadic[] weights = new SignedDyadic[components.length];
-		// Keep the solid-capacity lattice even when the whole-cell capacity has a compact exponent.
-		for (int i = 0; i < weights.length; i++) weights[i] = SignedDyadic.of(Integer.bitCount(components[i]), -24);
-		long[] solidShares = ExactVolumeAllocation.allocate(solid.longUnitsExact(-24), weights);
+		// At most eight micro-boxes: these integer products fit in long and retain the SVQ lattice.
+		long units = solid.longUnitsExact(-24), assigned = 0;
+		int boxes = Integer.bitCount(~mask & 255);
+		long[] solidShares = new long[components.length], remainders = new long[components.length];
+		for (int i = 0; i < components.length; i++) {
+			long numerator = units * Integer.bitCount(components[i]);
+			solidShares[i] = numerator / boxes; remainders[i] = numerator % boxes;
+			assigned += solidShares[i];
+		}
+		for (long left = units - assigned; left > 0; left--) {
+			int largest = 0;
+			for (int i = 1; i < components.length; i++) if (remainders[i] > remainders[largest]) largest = i;
+			solidShares[largest]++; remainders[largest] = -1;
+		}
 		for (int i = 0; i < result.length; i++) result[i] = SignedDyadic.of(Integer.bitCount(components[i]), -3)
 				.subtract(SignedDyadic.of(solidShares[i], -24));
 		return result;

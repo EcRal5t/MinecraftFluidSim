@@ -21,7 +21,7 @@
 | 名称加 `:short`，例如 `cut-cell:short` | 单独运行该领域的短入口；没有短入口的领域运行完整入口并标明 `full` |
 | 省略参数或使用 `fast` | 运行默认组合，提供短模式的场景使用短模式 |
 | `milestone` | 较广的阶段验收组合，仍使用各场景的短模式 |
-| `soak` | 完整运行 `gas-liquid`、`free-surface`、`reseeding` |
+| `soak` | 完整运行 `gas-liquid`、`free-surface`、`cell-inventory` |
 | `full` | 完整运行所有已登记的领域 |
 | `list` | 输出当前组合与选择器名称 |
 
@@ -100,19 +100,24 @@
   - 选择器：`free-surface`
   - 测试源码入口：[FlipFluidFreeSurfaceValidation](../../fabric/src/test/java/mmm/fluid/FlipFluidFreeSurfaceValidation.java)
 
-- **实际质量的稀疏速度传递与转置虚功**
+- **实际格面惯性与初始动量交接**
   - 选择器：`marker-transfer`
   - 测试源码入口：[MarkerVelocityTransferValidation](../../fabric/src/test/java/mmm/fluid/MarkerVelocityTransferValidation.java)
 
-- **仿射速度、压力惯性、功与有限气体储存**
+- **共同压力、薄层与有限气腔**
   - 选择器：`marker-pressure`
   - 测试源码入口：[MarkerPressureValidation](../../fabric/src/test/java/mmm/fluid/MarkerPressureValidation.java)
 
-- **粒子拆分、合并和数据列搬移**
-  - 选择器：`reseeding`
+- **单元库存、动量、墙面交接与正常事务**
+  - 选择器：`cell-inventory`
   - 测试源码入口：
-    - [FlipFluidReseedingValidation](../../fabric/src/test/java/mmm/fluid/FlipFluidReseedingValidation.java)
+    - [LiquidCellInventoryValidation](../../solver/src/test/java/mmm/fluid/LiquidCellInventoryValidation.java)
+    - [MacMomentumAdvectionValidation](../../solver/src/test/java/mmm/fluid/MacMomentumAdvectionValidation.java)
     - [CarrierMutationValidation](../../fabric/src/test/java/mmm/fluid/CarrierMutationValidation.java)
+
+- **相向液体的连续合流**
+  - 选择器：`liquid-joining`，显式完整场景
+  - 测试源码入口：[LiquidHandoffContinuityValidation](../../fabric/src/test/java/mmm/fluid/LiquidHandoffContinuityValidation.java)
 
 - **黏性解析解、谱界、局部网格碰撞和连续碰撞检测**
   - 选择器：`cut-cell`
@@ -215,13 +220,13 @@
 粒子分布离线研究使用 `./gradlew.bat :fabric:runMarkerDistributionExperiment --offline --no-daemon`。
 用 `--args="analytic transport"` 选择解析平流对照，`--args="free-analytic"` 观察自由面覆盖误差与细化。
 完整 `free-surface` 包含长时溃坝，检查库存、逐格容量和压力工作区交接。
-`reseeding` 检查拆并、旋转与载体侧列；替换表示时同步调整绑定内部矩与样本数量的旧断言。
+`cell-inventory` 集中检查库存分配、低速与少数相连续流、墙面动量与热量交接、宏观旋转及正常库存事务；其他领域直接运行所属场景。
 场景参数在测试源码维护，生产成本按[完整步预算](#performance)评价。
 
 ### 什么时候追加测试
 
 - 改存档字段或恢复状态：追加 `region-state`。
-- 改压力算法并影响气体：追加 `gas-liquid`；改变粒子分布时追加 `reseeding`。
+- 改压力算法并影响气体：追加 `gas-liquid`；改变库存输运或动量表示时追加 `cell-inventory`。
 - 改气体热力学：运行 `thermal`；改等温状态方程追加 `air-network`，改压力矩阵接入追加 `gas-liquid,free-surface`。
 - 改气腔与局部方块形状共享的几何：追加 `cut-cell`；Minecraft 采样变化再追加 `shape`。
 - 改控制器摘要或预览授权：使用 `protocol,lifecycle`；改删除提交再加 `region-state,ownership`。
@@ -267,7 +272,7 @@
 | 场景 | 规模 | 耗时要求 |
 |---|---|---|
 | 默认控制器注入 16 m³ | `8×8×8` 场景，20 个实际计算步 | 每步不超过 40 ms |
-| 空场景最大装量的 `demo` | `24×16×24` 网格，2,592 条初始 Stock、液体体积 324 m³，完整物理功能，20 步 | 连续超过 200 ms 的步数小于三步 |
+| 空场景最大装量的 `demo` | `24×16×24` 网格，2,880 条初始 Stock、液体体积 324 m³，完整物理功能，20 步 | 连续超过 200 ms 的步数小于三步 |
 
 报告分别记录 JVM 预热和被测步的耗时，并保留粒子数、体积、相变操作、子步数、PCG 次数与残差。优化后用同一物理配置复测，保持原有预算和守恒检查。
 
@@ -384,136 +389,57 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 ## 当前验证证据
 
-当前按生产成本优先推进，有九成把握的改动跳过独立算子、精度短例与重复回归。
-当前主干以粗单元开放连通分量结算液体通量和真实容量，八微格承担界面与气体来源；逐微格容量流图和逐微格压缩约束已删除。
+### 审阅整改：2026-10-21
 
-最新功能集成已完成：
+使用正式生产 classes 与仓库测试入口，JDK 26.0.2。预算 JVM 为 `-Xmx768m`，功能入口为 `-Xmx512m`；计时前已停止 Gradle daemon。
+最终增量编译见 `build/review-build-final.log`；本轮新增的预算 CPU 时间字段随后直接编译到同一测试 classes，生产算子保持原构建。
+生产预算入口为 `CpuValidationSuite production-live-budget`，对应 Gradle 命令：
 
-- `build/m10-precipitate/final-seed4-suffix.log`、`m10-joint-core/mixed-pressure-seed54-103.log`：三个固定种子的原六十动作全部完成，已通过前缀接续保存输入，恢复、库存与热账核对保留。
-- `build/m10-precipitate/final-precipitate120-suffix.log`、`final-cold40-suffix.log`：原砂与沉淀一百二十步、1 K 冷酸碱四十步及逐步恢复完成。
-- `m10-joint-core/shared-capacity-named-matrix.log`、`mixed-pressure-named-matrix.log`、`named5-retained-source-suffix.log`、`mixed-pressure-named6-continuation.log`：结合上述两个长流程，原三十三组操作组合全部完成。
-
-`m10-joint-core/grid-contact-production-live-budget.log` 是最终构建的正式预算记录：控制器十步预热、原二十步采样完成，中位数 18.101 ms、最大 35.235 ms，通过逐步 40 ms。
-最大 demo 保持原 24×16×24 单元、2,880 份初始库存及 324 m³ 装量，原二十步 phase-on 全部完成；完整步中位数 154.144 ms、最大 227.986 ms，超 200 ms 最多连续一步，满足原连续三步暂停判定。
-第十步实际完成五次相变。全部使用一个机械步，计时覆盖捕获、私有求解及候选接管。
-生产输入、预热和预算数值保持原值；预算断言在二十步结束后统一报告，完整保留连续超时判定。
-本次按几何解析尺度分配数值通量，未解析余量留在原库存；实际质量通量、MAC 动量与混合热共用一次库存构造。
-相变接触采用微格湿干邻接，单个热接触采用解析热容响应与固定次数浮点求解；已删除逐微面求交及 ULP 精度无界搜索。
-高把握改动按当前工作要求复用已有流程证据，额外算子、精度短例及重复回归跳过。
-以下较早预算记录保留其原构建口径，最终资格采用本段记录。
-
-`build/m10-joint-core/bounded-phase-live-budget.log`：正式控制器十步预热、二十步采样完成，完整步中位数 15.274 ms、最大 19.939 ms，满足逐步 40 ms。
-同构建最大 demo 二十步完整完成，中位数 170.969 ms、最大 276.821 ms，超 200 ms 最多连续两步，满足原连续三步暂停判定；第十九、二十步实际发生相变。
-全部使用一个机械步，计时覆盖捕获、私有求解与候选接管。
-
-`bounded-phase-pour.log`：原密闭注液四步及逐步恢复完成，完整流程耗时 82.343 / 39.080 / 31.990 / 26.739 ms。
-`bounded-phase-l-shape.log`：原 L 形八步及逐步恢复完成，末态动能为初态约 96.7%。
-`bed-bounded-correction-startup.log`：原沙床启动三步及逐步恢复完成，全部一个机械步，第三步形成十六个沉积单元。
-
-本轮综合流程：
-
-- `phase400-production-chain.log`：原四百步 phase-on、中途二次注液、逐步恢复及最终排液全部完成。
-- `phase-batch-formal.log`：五组有限气腔连续相变，以及冻结、恢复、融化和后继完成。
-- `production-cut600.log`：原六百步切格障碍物流动及恢复完成。
-- `final-dam-bounded-momentum.log`：原五千步溃坝、库存、容量及逐步恢复完成。未解析薄层与最近已解析液体按有限质量混合，末步最大速度 2.536 m/s、质量加权 RMS 0.0474 m/s、动能 30.332 J；动能持续衰减。
-- `build/m10-bed-lifecycle/lifecycle-contact-continuation.log`：完整沙床沉降、弱扰动、强扰动起动、再沉积、睡眠及恢复通过，共一百八十四步；平均完整步 28.447 ms，冷启动最大 255.175 ms。
-- `container-operation-matrix.log`：正常材料操作及二十四次注液、WAL／重启已完成；固定种子与沉淀排水后继使用本节开头的完整接续结果。
-- `thermal-advection-final.log`、`thermal-stratification-final.log`、`thermal-convection-final.log`：热平流、完整分层和八组线性对流完成。
-  热学夹具改用共同单元库存、MAC 与气腔联合提交；稳定分层最大速度约 8×10⁻⁵ m/s，三组不稳定层均达到原质心位移要求。
-  分层耗时 4.565 秒、八组对流耗时 10.820 秒；原增长、衰减及网格误差要求保持。
-- `partialdisk49-same-geometry.log`：原 `replay partialdisk 1 200 49` 全部完成，耗时 2.746 秒。
-  生产与冷恢复使用同一 PLIC 输入，气体来源按实际正容量的固定开放分量继任；严格库存、热账、液封与微盒归属核对保持。
-
-`compile-resolved-joint-transport.log`：model、solver、fabric 生产与测试源码统一编译通过，24 秒；最终相变接触替换复用同次产物，`compile-grid-phase-contact.log` 完成 solver 增量编译，11 秒。
-`compile-common-capacity.log` 中的 `verifyArchitecture` 已扫描 515 份生产源码，依赖方向与单元库存写入归属通过；后续改动保持相同依赖方向和库存归属，复用该架构结果。
-独立算子及额外精度短例按当前工作要求跳过。
-
-正式预算继续覆盖捕获、私有求解和候选接管。
-最终构建通过两项生产预算，结合上述完整流程与恢复证据完成 M10 综合验收；下列较早记录按其原构建口径保留。
-实施进度见[当前计划](../roadmap/solver-consolidation-plan.md)，历史结果见[阶段记录](../archive/progress/solver-validation-2026-10-18.md)。
-
-### 共同主干整合：2026-10-18
-
-当前工作区已进入单元库存与 MAC 动量的整体替换。
-正式构建通过 `model`、`solver`、`app` 与 `fabric` 主源码、测试源码和客户端依赖；最新结果见本节开头。
-新主干已取得下列连续短流程证据；统一后端预算及 M10 综合验收仍待完成。
-以下旧模型结果保存场景依据，新模型通过同样的宏观流程后再更新结论。
-日志路径均相对于 `build/`。
-
-| 结果 | 原流程与证据 |
-|---|---|
-| 颗粒共同面算子及压力通过 | `m10-profile/granular-integrated.log`；共同平移、近墙浮力、压力总冲量、接触与气腔代数 |
-| 压力及 L 形后继通过 | `m10-profile/marker-integrated.log`；L 形连续 8 步、逐步恢复，同格不同面独立气腔连续后继 |
-| 共同采样、输运及化学微量交接通过 | `m10-remap/reseeding-full.log`；完整剪切及 5000 步溃坝；`components`、`chemical-tails` 与 M7 短组合通过 |
-| 热平流完整入口通过 | `m10-remap/thermal-advection.log`；观察支撑上的响应保持原误差要求，连续解析响应核对二阶网格收敛；重采样动能转热单独入账 |
-| 气腔及连续相变通过 | `m10-profile/air-network-integrated4.log`、`m10-profile/air-cavity-integrated4c.log`；包含液封、多腔、微量气体、完整迁移及五类相变后继与恢复 |
-| 固液微量分配通过 | `m10-profile/reaction-phase-integrated.log`；空物种数值样本、实际质量份额、整数组成与质量、热候选及恢复 |
-| 满液插沙原负载初始化与一个后端步通过 | `m10-drag/large-validation.log`；96 笔投放、1536 颗粒及冷恢复，未提高载体预算；该并发诊断完整步约 13 s，性能未通过 |
-| 旧构建 M8 通过，后继构建出现正常流程失败 | `m10-profile/m8-full-integrated6.log`；沙床沉降、起动与再沉积、两桶 200 步、单桶沉积休眠、10,000 次转换及恢复；单桶第 27 步完成沉积，两桶最终约 1.9% 体积保留为静止代表球 |
-| 完整热学通过 | `m10-remap/thermal-integrated5-final.log`；含热平流、气腔功、连续相变、固液交接及恢复；正比容热膨胀模型的八组线性对流见 `m10-validation-integrated5/wide-convection-current-source.log` |
-| 原 600 步切格流动通过 | `m10-validation-integrated5/cut-cell-full.log`；保留原障碍、装量及步数 |
-| 未来浮点几何及正常后继通过 | `m10-gasgeometry/pour.log`、`m10-gasgeometry/l-shape.log`；原注液和 L 形各连续四步、逐步恢复、无细分；完整气腔及五组热气腔后继通过 |
-| 注油后四桶细沙与恢复通过 | `m10-validation-integrated5/sand-shared-budget.log`；沿原水、油、汞、酸液状态投放四桶细沙，复用共同残量面通量及原操作预算；加沙后的完整运行仍待复核 |
-
-新模型当前证据：
-
-- `m10-cells/validation.log`：单元库存六面联合分配、物种与整数质量、内能、容量、旧候选拒绝与不可变交接。
-- `m10-global-gas/short.log`、`network-short.log`、`network-contracts-short.log`：全网隐式孔流的宏观压差衰减、解析存储响应及严格库存、热账。
-- `m10-mac-short/classes` 中 `MacMomentumAdvectionValidation`：独立编译与运行约一秒，闭环通量和流入干单元的三轴质量一致输运、动量、动能及均匀平移通过。
-  该例验证交错网格中点算子的代数关系，尚未验证完整压力、气腔和颗粒耦合。
-
-- `m10-cells/transport-short.log`：单元有限体积连续输运、切格分量、外部数量交接和恢复。
-- `m10-cells/thermal-short.log`：分段热容平流、有限体积导热、切格绝热及 LTE 候选原子性；N=8/16 的热衰减率相对误差为 1.2785%/0.3209%，符合二阶空间收敛。
-- `m10-cell-state/codec-short.log`、`geometry-short.log`：单元库存与 MAC 的 typed section 存盘往返、冷恢复、正常不可变行交接及共享几何。
-- `m10-phase/interface-new-core.log`、`condensed-batch.log`、`chemical-production.log`：联合气液相变、冻结—恢复—融化后继，以及生产单元化学事务和热约束原子性。
-- `m10-bed-mac/energy-short.log`：床层起动读取权威格面动量，核对势能、实际反作用及代次变化后的原子拒绝。
-- `m10-pressure-cell/short.log`：共同压力散度与作用力互为转置、算子对称非负、薄层及完整液列静水。
-- `m10-common-core/cavities.log`：同格独立气腔在新主源码构建上连续三步、逐步恢复，液体与气体库存保持。
-- `m10-phase-gap/l-shape.log`：新 PLIC 小体积表示下，原 L 形连续八步并逐步恢复，末态动能为初态约 98.3%；属于功能短例，尚未独占核对生产预算。
-- `m10-phase-gap/pour-successors.log`、`l-shape-successors.log`：统一气体时序归属后，原注液四步与原 L 形八步完成并逐步恢复；全部一个子步。
-  原注液功能短跑完整耗时约 164/116/63/59 ms，性能验收仍待独占测量；旧拒绝反例保留在 `m10-common-core/pour.log`。
-- `m10-final-core/macro-rotation.log`：三轴旋转各四步及双密度输运四步，逐步恢复，动能、宏观角动量、各材料体积和整数质量通过。
-- `m10-cells/reaction-short.log`、`tail-short.log`：整批沉淀、合并、热溶解、满液排水、恢复与原子拒绝；零质量几何尾项及非空物种、负质量余量的碰撞往返。
-  短入口运行时间涵盖独立编译与验证，完整生产步预算另测。
-
-- `m10-contact/contacts-formal.log`：固定成本对称 PGS 的正式接触入口通过；9 个代表粒子、23 条接触约束实际访问 1495 行，最大法向闭合残量约 2.04×10⁻⁵ m/s。
-  步长 0.05 s 时对应约 1.02×10⁻⁶ m 位移；固定墙合法位置、成对冲量、固定反力、回弹与耗散检查保留。
-- `m10-contact/bed-capacity-source/` 保存新沙床第二步的 typed 库存与 MAC 失败输入；`m10-capacity/bed-successors.log` 在共同终点容量投影后完成三个后继及恢复。
-  其中第一、三步因微量气腔被填满而细分至 54、1024 子步，耗时约 4.1、18.4 s，性能仍失败；后继改用该失败输入开发。
-- `m10-final-core/cost-failure.log`：控制器在第五个后继遇到 2 nanos 有限气腔容量被填到零，直接单步可重现；正式后端反复细化最终耗尽 4096 累计子步。
-  本次预算采样停在预热阶段，没有控制器和最大 demo 的有效预算结论。压力正容量与共同通量联合结算完成后再测。
-
-旧模型的最新阻塞与预算证据：
-
-- `m10-heat/granular-fast.log`：沙床第 279 步出现 `Contact projection did not converge at carrier velocity precision: particles=9 contacts=23`，旧细分走到 4096 仍失败；后继 M8 未通过。
-- `m10-heat/thermal-full.log`：旧模型完整热学与显式局部机械耗散转热通过，数值存储误差单独记账。
-- `m10-validation-integrated9/sand-complete-successor.log`：原水、油、汞、酸液后的四桶细沙、完整后端步、清空、排气、再注液及恢复通过；并行功能运行中的完整步为 28,348.142 ms、35 子步，预算未通过。
-- `m10-gasgeometry/live-budget1.log`：独占控制器完整步均值 85.784 ms、最大 159.530 ms，超过 40 ms 要求。
-  开发场景前十步均超过 200 ms；后两步受第二 JVM 干扰，不计预算证据。
-- `m10-gasgeometry/live-integrated8.log`：共同 PCG 已完成开发场景连续 20 步，属于并行功能证据；完整步均值约 5,582 ms，性能未通过。
-- `m10-validation-integrated9/containers-full.log` 已中止，未取得完整容器测试结论。
-  旧自由面长溃坝进程在模型替换后已主动终止，日志保留；原 5,000 步完整验收等待最终构建。
-
-
-新气腔与相变准备在独立 JVM 测得沙床启动三步生产耗时 `977.622 / 628.543 / 525.300 ms`，
-额外恢复分别为 `54.890 / 60.743 / 37.050 ms`；`m10-profile/bed-startup-phase-lazy.log`。
-原注液四步完整耗时 `321.606 / 168.298 / 129.019 / 136.826 ms`；`m10-profile/pour-gas-simplified.log`。
-上述为热缓存与未来几何简化前的启动诊断，完整步成本超生产要求；后续独占预算测试按原 40/200 ms 判定。
-
-<a id="si-units"></a>
-### SI 与定点质量：2026-10-18
-
-以下日志均位于 `build/`，对应 `50db878` 后的质量迁移工作区。
+```powershell
+./gradlew.bat :fabric:runCpuValidation '-PcpuValidation=production-live-budget' --offline --no-daemon
+```
 
 | 结果 | 场景与日志 |
 |---|---|
-| 编译、架构及 model/app 通过 | 服务端、客户端、测试及 GPU 编译；`mass-final-build13.log`、`mass-final-build12.log` |
-| 化学、存档、协议、空气网络及载体流程通过 | `mass-final-contracts29.log`（8 个领域全部通过） |
-| 液体质量分配与短交接通过 | `mass-final-transport-mass.log`、`mass-final-handoff29.log` |
-| 相变、气腔交接与颗粒热库存通过 | `mass-final-phase29--gas-topology.log`、`mass-final-phase29--phase-volume.log`、`mass-final-phase29--granular-energy.log` |
-| 容器 WAL、部分转移、24 次完整配置注液及重启通过 | `mass-final-containers28.log`；随后三材料矩阵仍在注油处拒绝 |
+| 控制器原预算通过 | `build/review-live-budget.log`：原十步预热、二十步完整采样；中位数 16.562 ms、最大 19.701 ms，满足每步 40 ms |
+| 最大 demo 原预算待通过 | 同一日志：原 24×16×24 单元、2,880 条初始化库存与 324 m³ 装量，完整二十步 phase-on；墙钟中位数 366.064 ms、最大 1540.936 ms，超过 200 ms 最多连续十七步 |
+| 调度诊断 | 同一日志：demo 主线程 CPU 中位数 148.438 ms、最大 250 ms；同机并行游戏与浏览器有持续负载。`build/review-budget-controlled.log` 采用 AboveNormal 计时进程，墙钟中位数 263.893 ms、最大 1067.770 ms、最多连续十二步超时，仍保留原失败判定 |
+| 共同通量与正常后继通过 | `build/review-transport.log`：`LiquidVolumeTransportValidation --fast`，包括固定分量、微量流、移动孔容、排水与恢复 |
+| 墙面交接通过 | `build/review-wall.log`：实际 donor 入射、最终格面动量约束、墙冲量、停止热与库存恢复 |
+| 分段热容接触通过 | `build/review-contact.log`：有限接触与复杂分段热容的正响应、内能成对交接 |
+| 自由面短流程通过 | `build/review-functional-final.log`：`free-surface:short`，几何按共同分辨率、静水按液体体积平均压力判定 |
 
-完整 thermal 仍在热平流导数 −0.1038155 处失败；granular 短流程仍在堆积坡度 `rise=12486758 > 11329194` 处失败：`mass-final-integration27.log`。
-后者与自由面速度重建失败均在迁移前 `f15bd92` 复现：`mass-baseline-granular.log`、`mass-baseline-free-surface.log`。
-输运 `components` 的多气腔归属、`chemical-tails` 的旧节点拒绝断言也在该基线复现：`mass-baseline-transport-*.log`。
-此前随机场景 0、seed=101、第 26 动作的容量超额及完整床层 phase=3 完成时间失败仍待处理，见 `unit-normal-replay-delivery.log`、`unit-validation2.log`。
+最大 demo 全部一个机械子步，实际发生气液相变；捕获、私有求解与候选接管全部计时。墙钟与主线程 CPU 时间分别报告，原墙钟标准继续决定预算结果。
+以上功能结果来自本轮对应职责的整改过程。最终数据布局、命名、组合迁移与删除属于高把握修改，复用既有结果。
+`review-functional-final.log` 中库存、旋转、双密度、容器原语、WAL 与应用流程已有执行结果；组合入口随后遇到的旧粒子、热初始化、位置精度与零质量几何尾项夹具已迁移。
+拒绝物质插入前触发气腔初始化的副作用也已沿预检职责修复；该组合日志保留原失败记录，迁移后的整组测试按减少重复验证的要求留待相关改动需要时执行。
+
+### 复用的完整流程证据
+
+以下来自本轮整改之前的共同库存主干；路径以 `build/` 为根。
+保存输入上的前缀与后继共同覆盖原操作序列，记录保留各自构建口径。
+
+| 覆盖范围 | 已有证据 |
+|---|---|
+| 三个固定种子的原六十动作与恢复 | `m10-precipitate/final-seed4-suffix.log`、`m10-joint-core/mixed-pressure-seed54-103.log`，沿已通过前缀的保存输入继续 |
+| 砂与沉淀一百二十步、1 K 冷反应四十步 | `m10-precipitate/final-precipitate120-suffix.log`、`final-cold40-suffix.log`，包含保存前缀与逐步恢复 |
+| 原三十三组操作组合 | `m10-joint-core/shared-capacity-named-matrix.log`、`mixed-pressure-named-matrix.log`、`named5-retained-source-suffix.log`、`mixed-pressure-named6-continuation.log` 与上述长流程 |
+| 原密闭注液、L 形与沙床启动后继 | `m10-joint-core/bounded-phase-pour.log`、`bounded-phase-l-shape.log`、`bed-bounded-correction-startup.log` |
+| 四百步相变、二次注液、排液与恢复 | `m10-joint-core/phase400-production-chain.log` |
+| 五组有限气腔相变、冻结—恢复—融化 | `m10-joint-core/phase-batch-formal.log` |
+| 六百步切格流动与恢复 | `m10-joint-core/production-cut600.log` |
+| 五千步溃坝、库存、容量与逐步恢复 | `m10-joint-core/final-dam-bounded-momentum.log` |
+| 沉积、扰动、起动、再沉积与睡眠 | `m10-bed-lifecycle/lifecycle-contact-continuation.log`：完整一百八十四步 |
+| 正常材料操作、二十四次注液、WAL 与重启 | `m10-joint-core/container-operation-matrix.log` |
+| 热平流、完整分层和八组线性对流 | `m10-joint-core/thermal-advection-final.log`、`thermal-stratification-final.log`、`thermal-convection-final.log` |
+| 分数抽取后盘上气腔归属 | `m10-joint-core/partialdisk49-same-geometry.log`，原二百动作完成 |
+
+这些结果支持已覆盖输入中的宏观行为、恢复与守恒交接。当前模型采用一阶时间分裂和正权动量混合；机械阶段的动能差审计与实际热量账本分别解释。
+全域物理黏性、阻力和实体做功的完整热机械结算由产品路线维护。
+实施状态见[当前计划](../roadmap/solver-consolidation-plan.md)，更早记录见[阶段记录](../archive/progress/solver-validation-2026-10-18.md)。
+
+<a id="si-units"></a>
+### SI 与定点质量
+
+单位迁移后的构建与契约记录位于 `build/mass-final-build13.log`、`mass-final-build12.log`、`mass-final-contracts29.log`。
+稳定单位与库存编码以[设计书](../architecture/system-overview.md#units)为准；当前流程资格采用本节列出的共同库存主干结果。

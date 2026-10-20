@@ -14,7 +14,6 @@ public record FluidSolverConfig(
 		float timeStep,
 		int maxPressureIterations,
 		float pressureTolerance,
-		float maxCourantNumber,
 		float fluidEpsilon,
 		float interfaceCompression,
 		WallCondition viscousWallCondition
@@ -22,10 +21,10 @@ public record FluidSolverConfig(
 	public enum WallCondition { FREE_SLIP, NO_SLIP }
 
 	public FluidSolverConfig(float cellSize, float density, float gravity, float timeStep,
-			int maxPressureIterations, float pressureTolerance, float maxCourantNumber,
+			int maxPressureIterations, float pressureTolerance,
 			float fluidEpsilon, float interfaceCompression) {
 		this(cellSize, density, gravity, timeStep, maxPressureIterations, pressureTolerance,
-				maxCourantNumber, fluidEpsilon, interfaceCompression, WallCondition.FREE_SLIP);
+				fluidEpsilon, interfaceCompression, WallCondition.FREE_SLIP);
 	}
 
 	public FluidSolverConfig {
@@ -36,9 +35,6 @@ public record FluidSolverConfig(
 		if (!(Float.isFinite(timeStep) && timeStep > 0.0F)) throw new IllegalArgumentException("timeStep must be finite and positive");
 		if (maxPressureIterations < 1) throw new IllegalArgumentException("maxPressureIterations must be positive");
 		if (!(Float.isFinite(pressureTolerance) && pressureTolerance > 0.0F)) throw new IllegalArgumentException("pressureTolerance must be finite and positive");
-		if (!(maxCourantNumber > 0.0F && maxCourantNumber <= 1.0F)) {
-			throw new IllegalArgumentException("maxCourantNumber must be in (0, 1]");
-		}
 		if (!(fluidEpsilon > 0.0F && fluidEpsilon < 1.0F)) {
 			throw new IllegalArgumentException("fluidEpsilon must be in (0, 1)");
 		}
@@ -55,7 +51,6 @@ public record FluidSolverConfig(
 				1.0F / 20.0F,
 				200,
 				1.0E-5F,
-				0.45F,
 				2.0E-3F,
 				0.80F
 		);

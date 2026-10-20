@@ -10,7 +10,7 @@ final class LiquidThermalConduction {
 	private LiquidThermalConduction() { }
 	static List<ThermalCarrierTransport.Contact> contacts(FluidDomain domain) {
 		if (domain.thermalState == null) return List.of();
-		var context=domain.thermalMarkerContext();var owners=domain.thermalState.carrierAccess(context);
+		var context=domain.domainCapabilities.thermalMarkerContext();var owners=domain.thermalState.carrierAccess(context);
 		int count=owners.carrierCount(),liquids=context.markerCount();
 		var head=new int[domain.cellCount];var next=new int[count];var support=new int[count];Arrays.fill(head,-1);
 		var conductivity=new double[count];var fraction=new double[count];var coverage=new double[8*domain.cellCount];
@@ -48,7 +48,7 @@ final class LiquidThermalConduction {
 					}
 					if(domain.thermalBoundaryTemperatureK!=null)for(int side=0;side<2;side++) {
 						int direction=2*axis+side;double temperature=domain.thermalBoundaryTemperatureK[6*cell+direction];if(Double.isNaN(temperature))continue;
-						double blocked=1-domain.thermalOpenFaceFraction(x,y,z,direction);if(blocked<=0)continue;
+						double blocked=1-domain.domainCapabilities.thermalOpenFaceFraction(x,y,z,direction);if(blocked<=0)continue;
 						int pieces=0;for(int bit=0;bit<8;bit++)if((bit>>axis&1)==side&&(support[p]&1<<bit)!=0)pieces++;
 						double g=2*conductivity[p]*h*.25*pieces*fraction[p]*blocked;
 						if(g>0)contacts.add(p,-1,g,temperature);

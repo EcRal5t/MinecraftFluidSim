@@ -36,8 +36,19 @@
 世界读取、方块修改、物品变化与磁盘提交由服务器主线程执行；数值模块计算私有后继。[ArchitectureDependencyValidation](../../fabric/src/test/java/mmm/validation/ArchitectureDependencyValidation.java)
 检查依赖方向、包循环、注册点与生产类行数。
 
-`FluidDomain` 是运行中的物理聚合根。其包内实现类分别承担存储、契约、力学工作区、计算顺序、库存事务、碰撞和能力绑定，共用同一对象与数组。
-新增规则放到对应数据或阶段的处理器；装配由 `MechanicalStageAssembly`、`ThermochemistryStageAssembly` 和 Fabric 的 `MmmRuntimeFactory` 完成。
+`FluidDomain` 集中保存运行字段、公共类型和外部调用契约，包内处理器通过组合访问同一域。
+阶段直接持有该域，内部调用沿对应职责处理器进行；Fabric 的 `MmmRuntimeFactory` 组装世界服务与后端。
+职责入口如下：
+
+- [DomainFlowFields](../../solver/src/main/java/mmm/fluid/DomainFlowFields.java)：库存派生网格、几何、速度与表面张力工作区。
+- [DomainStep](../../solver/src/main/java/mmm/fluid/DomainStep.java)：完整力学步、独立热轴、实体输入与机械观察。
+- [DomainInventory](../../solver/src/main/java/mmm/fluid/DomainInventory.java)：物质查询、注入、提取及外部库存事务。
+- [DomainCollision](../../solver/src/main/java/mmm/fluid/DomainCollision.java)：固定碰撞编辑、容量修改、批量初始化与材料绑定。
+- [DomainCapabilities](../../solver/src/main/java/mmm/fluid/DomainCapabilities.java)：化学和热能力绑定、实际热量所有者及相变接口。
+- [DomainPhaseInventory](../../solver/src/main/java/mmm/fluid/DomainPhaseInventory.java)：颗粒与气体库存、共同物性及完整状态交接。
+
+`FluidDomain.markCellInventoryChanged` 集中推进库存代次并标记派生工作区失效。
+实际库存仍由对应库存对象持有，处理器组织操作与提交顺序。
 
 ## 哪些数据决定物质库存
 
@@ -148,9 +159,10 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - **容量与库存编辑**
   - `setVolume` 与整批 `setVolumes` 共用单元目标替换，按真实开放容量裁剪，并在一份候选中结算整数质量、物种、内能、MAC 动量和气腔后继。
     初始化一次收集全部目标格后提交；材料注册直接绑定现有库存与动量。
+    候选格枚举读取库存派生量与固定碰撞；容量及热量预检保持来源气体状态，接受后的计划统一准备动量与气腔交接。
   - 主要文件：
-    - [FluidDomainCollisionState](../../solver/src/main/java/mmm/fluid/FluidDomainCollisionState.java)：`setVolumes`、`bindMaterialRegistry`
-    - [FluidDomainInventoryTransactions](../../solver/src/main/java/mmm/fluid/FluidDomainInventoryTransactions.java)
+    - [DomainCollision](../../solver/src/main/java/mmm/fluid/DomainCollision.java)：`setVolumes`、`bindMaterialRegistry`
+    - [DomainInventory](../../solver/src/main/java/mmm/fluid/DomainInventory.java)
     - [MaterialTransferPlanner](../../solver/src/main/java/mmm/fluid/MaterialTransferPlanner.java)：`replaceCellVolumes`
     - [FluidRegionFactory](../../fabric/src/main/java/mmm/simulation/FluidRegionFactory.java)：原版水采集与材料绑定
     - [MinecraftDebugFixtures](../../fabric/src/main/java/mmm/simulation/MinecraftDebugFixtures.java)：整批演示初始化
@@ -159,7 +171,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 <a id="physics"></a>
 ## 一个完整计算步
 
-[FluidDomainStepCoordinator](../../solver/src/main/java/mmm/fluid/FluidDomainStepCoordinator.java) 组织下列职责链：
+[DomainStep](../../solver/src/main/java/mmm/fluid/DomainStep.java) 组织下列职责链：
 
 1. 捕获库存、内能收支和待同步相变体积；从碰撞、固体占容与气腔建立同代输入。
 2. 从单元整数质量构造 MAC 双控制体积惯性，以格面动量派生速度，执行多孔阻力、局部应变耗散和重力、浮力、张力等作用。
@@ -171,6 +183,9 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 力学阶段在 [MechanicalStepPipeline](../../solver/src/main/java/mmm/fluid/MechanicalStepPipeline.java)，热化学阶段在 [ThermochemistryPipeline](../../solver/src/main/java/mmm/fluid/ThermochemistryPipeline.java)，
 颗粒形态转换由 `GranularTransitionStage` 组织。
+管线和各阶段直接访问 `FluidDomain` 及其职责处理器，导热由 `ThermochemistryPipeline.stepTransport` 调用实际载体热交换。
+每个机械子步执行一次完整时长的粗单元液体推进；供体库存和接收容量限定实际流量，未解析快流通过限流与混合耗散处理。
+机械子步数按显式最小要求设置，颗粒轨迹细分保持完整逻辑步的总推进时长和输入的一次使用规则。
 查询、几何、反应与恢复共用对应库存模块的数量和单位规则。
 
 <a id="mechanics"></a>
@@ -195,7 +210,8 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - **库存、PLIC 与速度工作区失效**
   - 主要文件：
     - [CellMacStage](../../solver/src/main/java/mmm/fluid/CellMacStage.java)
-    - [FluidDomainMechanicalFields](../../solver/src/main/java/mmm/fluid/FluidDomainMechanicalFields.java)
+    - [DomainFlowFields](../../solver/src/main/java/mmm/fluid/DomainFlowFields.java)
+    - [CellLiquidGrid](../../solver/src/main/java/mmm/fluid/CellLiquidGrid.java)：单元库存派生索引与物性
   - 验证选择器 / 参考：`free-surface,materials`；[流体离散](fluid-solver.md#单元库存与-mac-动量)
 
 - **压力与气腔耦合**
@@ -253,13 +269,15 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 液体输运以粗单元的固定开放连通分量为库存和容量单位。
 `PressureSystem.volumeFlux` 提供共同 MAC 速度与实际面开口决定的总通量 `Qt`，颗粒本步实际整数占容决定终点孔容。
 `ConservativeLiquidFlux` 从八微盒 PLIC 几何取得液相扫掠偏好，汇总为分量之间的有向面通量。
-`PhaseQuantitySettlement` 使用机器整数体积份额，按共同开放邻接联合满足原供体库存、接收分量容量与有限气体正容量。
+`PhaseQuantitySettlement` 先按固定开放分量结算共同连续体积通量，以同一库存容量图满足原供体库存、接收分量容量与有限气体正容量。
 压力和 PLIC 给出面通量偏好，正常运动与颗粒排水共用双向邻接路线和一次容量投影。
-修正后的液相通量与原几何气相通量组成最终共同 `Qt`，整数质量、动量和气体来源使用同次结算结果。
+材料随后共享已经接受的分量路线，分别拆分实际体积、整数质量、物种与内能；少量材料沿同一分量流动。
+气相互补通量读取已经接受的液相 `QL`，包括容量修正，整数质量、动量和气体来源使用同次结算结果。
 非空有限气腔保留实际尺度的正空间代表，同组空间自由重排，气体来源按相同分组交接。
 气体膨胀由实际液流推进，终态状态方程与热功读取真实容量。
 每个机械子步执行一次完整时长的有限体积推进，按实际份额分配材料整数质量、物种与内能，活动域发布一次。
 原地全量保留的库存行直接共享，整份跨格转移直接携带原质量、组成和内能，真实拆分才分配各项整数份额。
+分量路线按原来源直接分组进入库存，目标按单元聚合并一次合并有序行，质量和物种共用同次分配权重。
 MAC 动量输运读取同次结算的实际整数质量通量。
 
 每个粗单元固定开放分量使用一套粗梯度 PLIC 平面，按最终库存液量确定偏移；持久微盒列保存共同重建输入，积分形状由 PLIC 工作区派生。
@@ -271,7 +289,8 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 气腔以干微盒连通和规范 minimum-piece key 标识。`GasRuntimeGeometry` 保存同代几何、拓扑与库存容量；
 未来编辑按最终相占据、单元库存和固体占容准备后继。
-`GasComplementGeometry.capture` 顺序扫描微盒与面，复用未变化单元和相邻面的几何，生成不可变后继。
+`GasComponentCapacity` 一次准备实际 `pore−Stock`，气片存在性、拓扑、来源交接和热力学容量共用该结果。未变库存行与孔容直接共享分量容量。
+`GasComplementGeometry.capture` 顺序扫描微盒与面，复用未变化单元和相邻面的几何，生成不可变后继；同代几何复用拓扑和气腔容量。
 气体库存、内能和旧控制体积沿同一份最终来源一次分配。
 持久化保留相占据与微盒归属；环境交换记 source/sink，新开放真空空间保持明确归属。
 真实运动改变容量时按状态方程结算等熵功；表示交接和相变内部交换分别处理，避免重复做功。
@@ -285,7 +304,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 - **共享通量、供体与接收容量**
   - 主要文件：
-    - [CellLiquidVolumeTransport](../../solver/src/main/java/mmm/fluid/CellLiquidVolumeTransport.java)
+    - [CellMacStage](../../solver/src/main/java/mmm/fluid/CellMacStage.java)：`prepareLiquid` 准备共同通量、动量与混合热，`transport` 联合提交
     - [ConservativeLiquidFlux](../../solver/src/main/java/mmm/fluid/ConservativeLiquidFlux.java)：几何液相偏好、粗分量通量与单次完整库存推进
     - [PhaseOccupancyState](../../model/src/main/java/mmm/inventory/PhaseOccupancyState.java)：不可变微盒液相体积
     - [PhaseOccupancyTransport](../../solver/src/main/java/mmm/fluid/PhaseOccupancyTransport.java)：局部八微盒形状归一与外部编辑的气体来源准备
@@ -296,7 +315,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 - **材料、物种、内能与动量交接**
   - 主要文件：
     - [LiquidCellInventory](../../model/src/main/java/mmm/inventory/LiquidCellInventory.java)：`planRoutes` 分配物质，向动量算子交付实际数量并汇入机械热，统一生成私有后继与能量舍入账
-    - [PhaseQuantitySettlement](../../solver/src/main/java/mmm/fluid/PhaseQuantitySettlement.java)：机器整数体积份额、实际面通量上限与粗分量容量结算
+    - [PhaseQuantitySettlement](../../solver/src/main/java/mmm/fluid/PhaseQuantitySettlement.java)：共同分量连续流、精确库存容量修正与材料份额分配
     - [FluidThermalBinding](../../solver/src/main/java/mmm/fluid/FluidThermalBinding.java)：`liquidEnergyPartitioner` 按实际参考能与来源显热分份
     - [CellMomentumTransport](../../solver/src/main/java/mmm/fluid/CellMomentumTransport.java)
     - [CellCarrierInventoryView](../../solver/src/main/java/mmm/fluid/CellCarrierInventoryView.java)
@@ -337,6 +356,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 温度、接触与载体能量准备按稳定的单元顺序遍历，同代热视图复用已准备的载体列表；库存增量索引提前筛去缺少反应物的区域。
 
 热化学顺序为导热 → 液相反应 → 颗粒反应 → 固液相变 → 气液相变，之后执行颗粒形态转换。凝固、熔化、汽化和凝结在固定区域体积下联合守恒两相内能，`PendingPhaseVolumeWork` 保存几何同步任务；下一次真实投影完成后清除。物品转移遇到待同步几何时，先执行仅含力学的私有候选，再准备物品事务。
+`ThermochemistryPipeline` 集中调用上述阶段，各阶段直接读取域的库存、能力和提交接口。
 
 颗粒运动、初始化、提取、沉积和起动读取共同整数占容。活动颗粒与床层转换同时规划来源、接收位置、材料组成、内能、势能变化和床体反力；起动提升功由实际液流提供。表示转换主动耗散与既有黏性、阻力等物理耗散分别结算；各项实现范围详见热学、颗粒参考，交付要求由实施计划维护。
 
@@ -346,13 +366,14 @@ MAC 动量输运读取同次结算的实际整数质量通量。
     - [ThermalCaloricInversion](../../model/src/main/java/mmm/thermal/ThermalCaloricInversion.java)
     - [ThermalTransport](../../model/src/main/java/mmm/thermal/ThermalTransport.java)
     - [LiquidThermalConduction](../../solver/src/main/java/mmm/fluid/LiquidThermalConduction.java)
+    - [ThermochemistryPipeline](../../solver/src/main/java/mmm/fluid/ThermochemistryPipeline.java)：`stepTransport` 与反应、相变顺序
   - 验证选择器 / 参考：`thermal`；[热学参考](thermal-state.md)
 
 - **反应、析出与溶解**
   - 主要文件：
     - [ChemicalReactionStage](../../solver/src/main/java/mmm/fluid/ChemicalReactionStage.java)
     - [GranularReactionStage](../../solver/src/main/java/mmm/fluid/GranularReactionStage.java)：`precipitate`、`depositPrecipitate` 共用活动代表生成与组成合并，未解析析出物向合法床库存交接物质、反冲和内能。
-    - [PhaseChangeStageSupport](../../solver/src/main/java/mmm/fluid/PhaseChangeStageSupport.java)
+    - [DomainCapabilities](../../solver/src/main/java/mmm/fluid/DomainCapabilities.java)：热能力、载体内能与联合相变交接
   - 验证选择器 / 参考：
     - `chemistry,granular,thermal`；[化学参考](chemistry-state.md)
     - [固液转移](granular-state.md#固液相转移)
@@ -495,6 +516,12 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 
 完整步成本涵盖输入捕获、私有域恢复、全部力学子步、热化学、重试和接管。独立冷恢复、世界输入、展示、网络与磁盘 I/O 分列测量。`RegionTickUseCase` 根据完整执行时间进行 pacing 和连续过载暂停，调度保持库存与逻辑步时长。
 
+故障诊断保留原异常及其 `cause` 链。
+`MechanicalStepPipeline` 通过 suppressed 异常附加失败阶段、机械子步、时间间隔和区域规模；`ThermochemistryPipeline` 同样附加导热、液体反应、固相反应或相变阶段。
+后端保留领域异常或以候选求解异常携带原始原因。
+先定位具体阶段和最内层原因，再检查该输入的真实库存、开放分量、实际固体终点和气腔容量。
+容量异常沿 `PhaseQuantitySettlement` 的供体、接收分量与气腔组追查；压力异常结合残差对应的体积误差评价，热异常结合载体质量、组成和内能定位。
+
 - **生产完整步与阶段成本**
   - 入口：
     - [ProductionStepBenchmark](../../fabric/src/test/java/mmm/simulation/ProductionStepBenchmark.java)
@@ -506,7 +533,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
   - 入口：`CellMacStage`、`LiquidCellInventory`、`GasRuntimeGeometry`、`FluidDomainStateMapper`
   - 运行方法：同一原输入的阶段计时及 [JFR 工具](../../pytool/jfr_hotspots.py)
 
-- **液固嵌套求解与接触成本**
+- **液固压力、阻力与接触成本**
   - 入口：`GranularImplicitDrag.responseDelta`、`PressureLinearSolver`、`PressurePreconditioner`、`GranularActiveContacts`、`GranularContactCompression`
   - 运行方法：沙床启动短重放、原慢步及完整生命周期
 
@@ -525,7 +552,9 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 | 现象 | 首先核对 | 继续跟到哪里 |
 |---|---|---|
 | 液面降低、水量异常 | `CellInventoryReader` 的实际体积与材料质量 | `LiquidCellInventory.Plan` 与 `MaterialTransferPlanner` 的 source/sink；再查快照量化 |
+| 低速平流或热对流停滞 | 接受的分量 `QL`、原供体库存与材料份额 | `PhaseQuantitySettlement`、`LiquidCellInventory.planRoutes` 及携带内能 |
 | 穿墙、小液滴或薄层异常 | `CollisionField` 与 `FlipCutCellGeometry` | `LiquidCollisionEdit`、共同面通量与压力支撑 |
+| 冲击后动量或热量不闭合 | 最终 MAC 动量、墙面冲量与局部机械热 | `CellMacStage.stopWallMomentum`、`CellMomentumTransport` 及对应库存提交 |
 | 气压或气腔归属异常 | `GasRuntimeGeometry` 的微盒、容量与节点归属 | `GasTopologyCoordinator` 的来源交接及 `GasThermalModel` 的库存／容量／U |
 | 温度、反应或相变无进展 | 实际组成、U、批次及候选不可执行原因 | `ThermalCaloricInversion`、`GasLiquidPhaseModel`、`GasLiquidPhaseChangeStage`、未来气腔与热账计划 |
 | 颗粒占容、压力或沉积异常 | `GranularCouplingFields`、碰撞预览及整数分配 | `GranularPressureCoupling`、`GranularSettlementGeometryPlan`、`GranularBedShear` |

@@ -136,22 +136,22 @@ final class LiquidViscosityValidation {
 	private static void sealedGasKeepsFreeSurfaceTraction() {
 		float[] reference = null;
 		for (boolean sealed : new boolean[]{false, true}) {
-			var config = new FluidSolverConfig(.5F, 1000, 0, .01F, 200, 1e-5F, .45F, .002F, .8F,
+			var config = new FluidSolverConfig(.5F, 1000, 0, .01F, 200, 1e-5F, .002F, .8F,
 					FluidSolverConfig.WallCondition.NO_SLIP);
 			var domain = new FluidDomain(4, 4, 4, config);
 			domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 			domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
 			if (sealed) domain.sealDomainBoundary();
 			float[] filled = new float[domain.cellCount];
-			for (int z = 1; z < 3; z++) for (int y = 1; y < 3; y++) for (int x = 1; x < 3; x++) filled[domain.cellIndex(x,y,z)] = 1;
-			domain.setVolumes(filled);domain.ensureGrid();
+			for (int z = 1; z < 3; z++) for (int y = 1; y < 3; y++) for (int x = 1; x < 3; x++) filled[domain.domainFlowFields.cellIndex(x,y,z)] = 1;
+			domain.setVolumes(filled);domain.domainFlowFields.ensureGrid();
 			for (int face=0;face<domain.mac.velocityX.length;face++)
 				if(domain.cellMacStage.massX[face]>0)domain.mac.velocityX[face]=1;
 			domain.bodyForceStage.enforceSolidFaceVelocities();domain.cellMacStage.publishMomentum();
-			domain.derivedCarrierState();
+			domain.domainPhaseInventory.derivedCarrierState();
 			if (sealed) require(domain.airNodeAt(2, 3, 2) > 0, "sealed gas fixture must own a finite cavity");
 			new LiquidViscosityStage(domain).apply(.001F);
-			close(domain.mac.velocityX[domain.xFaceIndex(2, 1, 2)], 1, 1e-6, "gas surface must not acquire wall drag");
+			close(domain.mac.velocityX[domain.domainFlowFields.xFaceIndex(2, 1, 2)], 1, 1e-6, "gas surface must not acquire wall drag");
 			if (reference == null) reference = domain.mac.velocityX.clone();
 			else for (int face = 0; face < reference.length; face++)
 				close(domain.mac.velocityX[face], reference[face], 1e-6, "sealed and ambient gas retain the same viscous surface condition");
@@ -159,7 +159,7 @@ final class LiquidViscosityValidation {
 	}
 
 	private static void materialBindingSurvivesHandoff() {
-		var config = new FluidSolverConfig(.5F, 1000, 0, .01F, 200, 1e-5F, .45F, .002F, .8F);
+		var config = new FluidSolverConfig(.5F, 1000, 0, .01F, 200, 1e-5F, .002F, .8F);
 		FluidDomain domain = new FluidDomain(4, 4, 4, config);
 		domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 		domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
@@ -168,7 +168,7 @@ final class LiquidViscosityValidation {
 		require(!restored.hasGranularState(), "liquid viscosity cannot require granular capability");
 		require(restored.exportLiquidCellState().stocks().equals(domain.exportLiquidCellState().stocks()),
 				"Material handoff must preserve authoritative cell inventory");
-		require(restored.carrierViscosityPascalSeconds(restored.cellIndex(1, 1, 1)) != null,
+		require(restored.carrierViscosityPascalSeconds(restored.domainFlowFields.cellIndex(1, 1, 1)) != null,
 				"material column restore must retain constitutive identity");
 		require(restored.authoritativeLayout().equals(domain.authoritativeLayout()), "liquid definitions must survive private handoff");
 		var stats = restored.stepWithMechanicalAudit(false, 0);
@@ -183,12 +183,12 @@ final class LiquidViscosityValidation {
             var definitions = new MaterialRegistry(base.entries().stream().map(entry ->
                     new MaterialRegistry.MaterialEntry(entry.material(), java.util.List.of(
                             new MaterialRegistry.ViscositySegment(200, 400, mu, mu)))).toList(), base.pairTensions());
-            var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .1F, 200, 1e-5F, .45F, .002F, .8F));
+            var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .1F, 200, 1e-5F, .002F, .8F));
             domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
             domain.bindMaterialDefinitions(definitions);
-            float[] filled=new float[domain.cellCount];Arrays.fill(filled,1);domain.setVolumes(filled);domain.ensureGrid();
+            float[] filled=new float[domain.cellCount];Arrays.fill(filled,1);domain.setVolumes(filled);domain.domainFlowFields.ensureGrid();
             for(int z=0;z<2;z++)for(int y=0;y<=2;y++)for(int x=0;x<2;x++)
-                domain.mac.velocityY[domain.yFaceIndex(x,y,z)]=.01F*((x+.5F)*domain.config.cellSize()-.5F);
+                domain.mac.velocityY[domain.domainFlowFields.yFaceIndex(x,y,z)]=.01F*((x+.5F)*domain.config.cellSize()-.5F);
             domain.bodyForceStage.enforceSolidFaceVelocities();domain.cellMacStage.publishMomentum();
             var state = domain.captureAuthoritativeState(); double volume=domain.totalVolume(),mass=domain.totalMass();
             var result = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, state, java.util.List.of(), false, 0, true));

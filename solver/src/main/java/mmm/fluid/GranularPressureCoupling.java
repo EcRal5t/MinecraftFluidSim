@@ -100,9 +100,9 @@ final class GranularPressureCoupling {
         }
     }
 
-    void project(float dt) { project(dt, null, null); }
+    void project(float dt) { project(dt,null); }
 
-    void project(float dt, double[] liquidPressure, double[] gasPressure) {
+    void project(float dt,double[] pressures) {
         if (contacts == 0) return;
         for (int p = 0; p < contacts / 3; p++) {
             var parcel = domain.granularState.parcels.parcel(p);
@@ -112,9 +112,8 @@ final class GranularPressureCoupling {
                 double force = 0;
                 for (int e = start[c]; e < start[c + 1]; e++) {
                     int r = row[e];
-                    double pressure = r < domain.cellCount
-                            ? liquidPressure == null ? domain.projection.pressure[r] : liquidPressure[r]
-                            : gasPressure == null ? domain.projection.gasPressure[r - domain.cellCount] : gasPressure[r - domain.cellCount];
+                    double pressure=pressures!=null?pressures[r]:r<domain.cellCount
+                            ?domain.projection.pressure[r]:domain.projection.gasPressure[r-domain.cellCount];
                     force += coefficient[e] * pressure;
                 }
                 change[axis] = dt * inverseMass[c] * force;

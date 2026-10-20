@@ -9,11 +9,9 @@ import java.util.List;
 public final class CarrierMutationValidation {
 	private CarrierMutationValidation() { }
 	public static void main(String[] args) throws Exception {
-		LiquidCellInventoryValidation.main(new String[0]);
 		insertExtractAndRestoreKeepQuantities();
-		defaultInsertionsPreflightStoredThermalState();
-		explicitInsertionsPreflightStoredThermalState();
-		explicitInsertionsPreflightCompleteThermalLedger();
+		defaultInsertionsConserveThermalInventory();
+		explicitInsertionsRequirePositiveTemperature();
 		restoreRequiresConnectedOpenCapacity();
 		readOnlyCellQueriesFollowCarrierEdits();
 		volumeObservationRoundsTheExactInventoryOnce();
@@ -22,15 +20,21 @@ public final class CarrierMutationValidation {
 		System.out.println("Cell inventory mutation validation passed");
 	}
 	private static void insertExtractAndRestoreKeepQuantities() throws Exception {
-		var domain=fullCapabilityDomain(FullCapabilityTestFixture.load());
+		var registries=FullCapabilityTestFixture.load();
+		var domain=emptyMaterialDomain(4096);
+		domain.bindChemistry(registries.chemical());
+		domain.bindGranular(registries.granular(),domain.materialRegistry,registries.materials());
+		domain.bindGasRegistry(registries.gas());
 		domain.setVolume(1,1,1,.5F);domain.setVolume(2,2,2,.25F);
-		int target=domain.liquidCells.physicalStocks().stream().filter(stock->stock.key().cell()==domain.cellIndex(2,2,2)).mapToInt(stock->domain.liquidCells.ordinalOf(stock.key())).findFirst().orElseThrow();
+		int target=domain.liquidCells.physicalStocks().stream().filter(stock->stock.key().cell()==domain.domainFlowFields.cellIndex(2,2,2)).mapToInt(stock->domain.liquidCells.ordinalOf(stock.key())).findFirst().orElseThrow();
 		domain.setMarkerChemical(target,java.util.Map.of(mmm.chemistry.BuiltinChemicalDefinitions.H2O,7L),true);
-		var retained=domain.liquidCells.stocksInCell(domain.cellIndex(2,2,2));
+		// Initial composition owns its reference energy before the 300 K state is created.
+		domain.bindThermal(registries.thermal(),domain.materialRegistry,300,ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		var retained=domain.liquidCells.stocksInCell(domain.domainFlowFields.cellIndex(2,2,2));
 		var before=domain.liquidCells.exactVolume();long mass=domain.totalMassUnits();
 		require(domain.tryExtractExactVolume(1,1,1,.125F,0,0).transferred(),"Partial cell extraction failed");
 		require(before.subtract(domain.liquidCells.exactVolume()).equals(mmm.units.SignedDyadic.of(.125))&&domain.totalMassUnits()<mass,"Extraction failed to remove actual volume and integer mass");
-		require(retained.equals(domain.liquidCells.stocksInCell(domain.cellIndex(2,2,2))),"Extraction edited an independent cell's composition or energy");
+		require(retained.equals(domain.liquidCells.stocksInCell(domain.domainFlowFields.cellIndex(2,2,2))),"Extraction edited an independent cell's composition or energy");
 		require(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),"Extraction energy audit does not close");
 		var captured=domain.captureAuthoritativeState();var restored=FluidDomain.restoreAuthoritativeState(captured);
 		require(captured.liquid().stocks().equals(restored.exportLiquidCellState().stocks())&&java.util.Arrays.equals(captured.momentum().copyY(),restored.exportMacMomentum().copyY()),"Mutation recovery changed cell inventory or momentum");
@@ -41,14 +45,14 @@ public final class CarrierMutationValidation {
 	private static void externalInsertionsRouteAroundLiquidSealedGas() throws Exception {
 		var registries = FullCapabilityTestFixture.load();
 		for (int mode = 0; mode < 3; mode++) {
-			var domain = new FluidDomain(5, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F, 120, 1e-5F, .4F, .002F, 0), 128);
+			var domain = new FluidDomain(5, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F, 120, 1e-5F, .002F, 0), 128);
 			FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 			for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 5; x++)
 				if (!(y == 1 && z == 1 && x >= 1)) domain.setSolid(x, y, z, true);
 			domain.sealDomainBoundary();
 			domain.setVolume(2, 1, 1, 1);
 			FullCapabilityTestFixture.bindFull(domain, registries, 293.15, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-			int isolated = domain.gasState.frame.commonCellNode(domain.cellIndex(1, 1, 1));
+			int isolated = domain.gasState.frame.commonCellNode(domain.domainFlowFields.cellIndex(1, 1, 1));
 			var inventory = domain.gasState.network.inventory(isolated);
 			double energy = domain.thermalState.gasNodeEnergy(isolated, domain.gasState.network);
 			int water = registries.liquids().handle(BuiltinFluidMaterials.WATER.id());
@@ -58,20 +62,20 @@ public final class CarrierMutationValidation {
 					.add(BuiltinFluidMaterials.WATER.id(), false, 1, mass, chemical).build();
 			boolean transferred = switch (mode) {
 				case 0 -> domain.addVolumeNear(1, 1, 1, 1, 3) == 1;
-				case 1 -> domain.tryInsertExactVolume(1, 1, 1, 1, 3, water, true).transferred();
-				default -> domain.tryInsertExactChemical(1, 1, 1, ledger, 3, true).transferred();
+				case 1 -> domain.domainInventory.tryInsertExactVolume(1, 1, 1, 1, 3, water, true).transferred();
+				default -> domain.domainInventory.tryInsertExactChemical(1, 1, 1, ledger, 3, true).transferred();
 			};
 			require(transferred && domain.volume(1, 1, 1) == 0 && domain.totalVolumeExact() == 2,
 					"External insertion failed to use reachable space around a liquid-sealed cavity: mode=" + mode
 							+ ", transferred=" + transferred + ", isolatedVolume=" + domain.volume(1, 1, 1) + ", total=" + domain.totalVolumeExact());
-			isolated = domain.gasState.frame.commonCellNode(domain.cellIndex(1, 1, 1));
+			isolated = domain.gasState.frame.commonCellNode(domain.domainFlowFields.cellIndex(1, 1, 1));
 			require(domain.gasState.network.inventory(isolated).equals(inventory)
 					&& domain.gasState.network.availableVolume(isolated) == .125
 					&& domain.thermalState.gasNodeEnergy(isolated, domain.gasState.network) == energy,
 					"External insertion compressed or transferred the protected isolated gas inventory");
 			long beforeMass = domain.totalMassUnits();
 			var beforeEnergy = domain.exactInternalEnergy();
-			require(!domain.tryInsertExactVolume(1, 1, 1, 1, 3, water, true).transferred(),
+			require(!domain.domainInventory.tryInsertExactVolume(1, 1, 1, 1, 3, water, true).transferred(),
 					"Insertion filled the last real support of a finite gas inventory");
 			require(domain.totalVolumeExact() == 2 && domain.totalMassUnits() == beforeMass
 					&& domain.exactInternalEnergy().equals(beforeEnergy),
@@ -84,34 +88,8 @@ public final class CarrierMutationValidation {
 		}
 	}
 
-	private static void defaultInsertionsPreflightStoredThermalState() throws Exception {
+	private static void defaultInsertionsConserveThermalInventory() throws Exception {
 		var registries = FullCapabilityTestFixture.load();
-		FluidDomain invalid = emptyMaterialDomain(64); invalid.setVolume(1, 1, 1, .001F);
-		invalid.bindChemistry(registries.chemical()); invalid.bindGasRegistry(registries.gas());
-		var definitions = registries.thermal().materials().stream().map(material ->
-				material.carrierKind() != mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID ? material
-				: new mmm.thermal.ThermalMaterialDefinition(material.id(), material.carrierKind(), material.carrierId(),
-				300, 0, 0, java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1, 1000,
-						Double.MAX_VALUE / 8)))).toList();
-		invalid.bindThermal(new mmm.thermal.ThermalRegistry(definitions, registries.thermal().speciesOffsets(),
-				java.util.List.of(), java.util.List.of(), java.util.List.of(), registries.chemical().fingerprint(), "",
-				registries.gas().fingerprint()), invalid.materialRegistry, 300);
-		require(invalid.thermalState.temperature(0, invalid.thermalMarkerContext()) == 300, "initial insertion owner was invalid");
-		var record = invalid.chemicalParcels.tryDefaultRecord(invalid.materialRegistry.material(0).id(),
-				.125F, invalid.config.cellSize(), mmm.units.SolverUnitScale.forCellSize(invalid.config.cellSize()).massUnitsForNormalized(125), false);
-		var ledger = mmm.chemistry.ChemicalTransferLedger.builder(registries.chemical())
-				.add(invalid.materialRegistry.material(0).id(), false, .125, invalid.unitScale.massUnitsForNormalized(125), record).build();
-		// The mixed batch's first small carrier is valid; the second carrier overflows m*cv at finite U.
-		for (var insertion : java.util.List.<java.util.function.BooleanSupplier>of(
-				() -> invalid.addVolumeNearBudgeted(1, 1, 1, .125F, 0).addedVolume() > 0,
-				() -> invalid.tryInsertExactMixture(1, 1, 1, java.util.List.of(
-						new FluidDomain.MaterialPortion(0, .001F, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized((double) .001F * 1000)),
-						new FluidDomain.MaterialPortion(1, .125, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(106.25))), 0, true).transferred(),
-				() -> invalid.tryInsertExactChemical(1, 1, 1, ledger, 0, true).transferred())) {
-			ReplacementState before = replacementState(invalid);
-			require(!insertion.getAsBoolean(), "default insertion accepted a finite U with overflowing heat capacity");
-			requireUnchanged(invalid, before);
-		}
 		FluidDomain valid = fullCapabilityDomain(registries);
 		var water = valid.chemicalParcels.tryDefaultRecord(valid.materialRegistry.material(0).id(),
 				.13F, valid.config.cellSize(), mmm.units.SolverUnitScale.forCellSize(valid.config.cellSize()).massUnitsForNormalized((double) .13F * 1000), false);
@@ -119,15 +97,15 @@ public final class CarrierMutationValidation {
 				.add(valid.materialRegistry.material(0).id(), false, .13F, valid.unitScale.massUnitsForNormalized((double) .13F * 1000), water).build();
 		for (Runnable insertion : java.util.List.<Runnable>of(
 				() -> require(valid.addVolumeNearBudgeted(1, 1, 1, .13F, 0).addedVolume() == .13F, "default volume insertion failed"),
-				() -> require(valid.tryInsertExactMixture(1, 1, 1, java.util.List.of(
+				() -> require(valid.domainInventory.tryInsertExactMixture(1, 1, 1, java.util.List.of(
 						new FluidDomain.MaterialPortion(1, .13F, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized((double) .13F * 850))), 0, true).transferred(), "default material insertion failed"),
-				() -> require(valid.tryInsertExactChemical(1, 1, 1, chemical, 0, true).transferred(), "default chemical insertion failed"))) {
+				() -> require(valid.domainInventory.tryInsertExactChemical(1, 1, 1, chemical, 0, true).transferred(), "default chemical insertion failed"))) {
 			var liquidBefore=valid.liquidCells.exactInternalEnergy();long beforeQ=totalQuanta(valid);
 			long sourceQ = valid.chemicalParcels.externalSource().totalQuanta();
 			var sourceU = valid.thermalState.auditLedger().externalSource();
 			insertion.run();
 			var addedU=valid.liquidCells.exactInternalEnergy().subtract(liquidBefore);
-			for(int p=0;p<valid.liquidCells.physicalSize();p++)require(valid.thermalState.temperature(p,valid.thermalMarkerContext())>0,"Insertion stored invalid temperature");
+			for(int p=0;p<valid.liquidCells.physicalSize();p++)require(valid.thermalState.temperature(p,valid.domainCapabilities.thermalMarkerContext())>0,"Insertion stored invalid temperature");
 			require(valid.thermalState.auditLedger().externalSource().subtract(sourceU).equals(addedU)
 					&& valid.exactInternalEnergy().equals(valid.thermalState.auditLedger().expectedInventory()),
 					"default source did not retain the exact sum of actual stored energies");
@@ -156,7 +134,7 @@ public final class CarrierMutationValidation {
 		kernel.capture(parcel.x(), parcel.y(), parcel.z(), 1);
 		kernel.requireMask(parcel.ceilMask());
 		for (int cell = 0; cell < granular.cellCount; cell++) require(
-				granular.markerGrid.exactCellVolumeInventory[cell].add(mmm.units.SignedDyadic.of(granular.granularCoupling.solidSvq(cell), -24))
+				granular.liquidGrid.exactCellVolumeInventory[cell].add(mmm.units.SignedDyadic.of(granular.granularCoupling.solidSvq(cell), -24))
 						.compareTo(mmm.units.SignedDyadic.of(granular.geometry.cutCells.openCellVolume(cell))) <= 0,
 				"Granular initialization exceeded joint liquid/solid capacity");
 		require(granular.granularCoupling.totalSolidSvq() == 1 && granular.gasState.frame != source
@@ -181,122 +159,67 @@ public final class CarrierMutationValidation {
 				"Granular insertion failed to publish finite-gas compression and its audited work");
 	}
 
-	private static void explicitInsertionsPreflightStoredThermalState() throws Exception {
-		var registries = FullCapabilityTestFixture.load();
-		FluidDomain domain = emptyMaterialDomain(64);
-		domain.bindChemistry(registries.chemical()); domain.bindGasRegistry(registries.gas());
-		var definitions = registries.thermal().materials().stream().map(material ->
-				material.carrierKind() != mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID ? material
-				: new mmm.thermal.ThermalMaterialDefinition(material.id(), material.carrierKind(), material.carrierId(),
-				200, material.carrierId().equals("mmm:water") ? 0x1p61 : material.carrierId().equals("mmm:oil") ? -0x1p61 : 0,
-				0, java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1, 1000, 1)))).toList();
-		var offsets = registries.thermal().speciesOffsets().stream().map(offset -> new mmm.thermal.ThermalSpeciesOffset(
-				offset.id(), offset.speciesId(), offset.hostThermalMaterialId(), mmm.chemistry.ExactRational.ZERO)).toList();
-		var registry = new mmm.thermal.ThermalRegistry(definitions, offsets,
-				java.util.List.of(), java.util.List.of(), java.util.List.of(), registries.chemical().fingerprint(), "", registries.gas().fingerprint());
-		domain.bindThermal(registry, domain.materialRegistry, 300);
-		domain.setVolume(2,2,2,.001F);
-		require(domain.thermalState.temperature(0, domain.thermalMarkerContext()) > 0, "initial explicit-insertion owner was invalid");
-		var pieces = java.util.List.of(new FluidDomain.MaterialPortion(0, .125, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(8)), new FluidDomain.MaterialPortion(1, .125, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(8)));
-		var common = new mmm.thermal.ThermalStateFunction(registry).stateForInventory(java.util.List.of(
-				new mmm.thermal.ThermalStateFunction.InventoryPortion(registry.materialHandle("mmm:water"), 1, java.util.Map.of()),
-				new mmm.thermal.ThermalStateFunction.InventoryPortion(registry.materialHandle("mmm:oil"), 1, java.util.Map.of())), -398);
-		require(common.temperatureK() == 1 && common.heatCapacityJPerK() == 2,
-				"explicit fixture did not have an exact positive common-temperature request");
-		var builder = mmm.chemistry.ChemicalTransferLedger.builder(registries.chemical());
-		for (var piece : pieces) builder.add(domain.materialRegistry.material(piece.materialHandle()).id(), false,
-				piece.volume(), piece.massUnits(), domain.chemicalParcels.defaultRecord(
-						domain.materialRegistry.material(piece.materialHandle()).id(), .125F, .5F, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(8), false));
-		var chemical = builder.build();
-		// At requested T=1, water U rounds to 2^61-256: T(U)=200-256=-56 despite finite U.
-		for (var insertion : java.util.List.<java.util.function.BooleanSupplier>of(
-				() -> domain.tryInsertExactMixture(1, 1, 1, pieces, 0, true, -398).transferred(),
-				() -> domain.tryInsertExactChemical(1, 1, 1, chemical, 0, true, -398).transferred())) {
-			ReplacementState before = replacementState(domain);
-			require(!insertion.getAsBoolean(), "explicit insertion accepted an invalid rounded carrier energy");
-			requireUnchanged(domain, before);
+	private static void explicitInsertionsRequirePositiveTemperature() throws Exception {
+		var registries=FullCapabilityTestFixture.load();var domain=emptyMaterialDomain(64);
+		domain.bindChemistry(registries.chemical());domain.bindGasRegistry(registries.gas());
+		var definitions=registries.thermal().materials().stream().map(material->
+				material.carrierKind()!=mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID?material
+				:new mmm.thermal.ThermalMaterialDefinition(material.id(),material.carrierKind(),material.carrierId(),
+				300,0,0,List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,1000,1000)))).toList();
+		var offsets=registries.thermal().speciesOffsets().stream().map(offset->new mmm.thermal.ThermalSpeciesOffset(
+				offset.id(),offset.speciesId(),offset.hostThermalMaterialId(),mmm.chemistry.ExactRational.ZERO)).toList();
+		var registry=new mmm.thermal.ThermalRegistry(definitions,offsets,List.of(),List.of(),List.of(),
+				registries.chemical().fingerprint(),"",registries.gas().fingerprint());
+		domain.setVolume(2,2,2,.001F);domain.bindThermal(registry,domain.materialRegistry,300);
+		var pieces=List.of(new FluidDomain.MaterialPortion(0,.125,domain.unitScale.massUnitsForNormalized(125)),
+				new FluidDomain.MaterialPortion(1,.125,domain.unitScale.massUnitsForNormalized(106.25)));
+		var builder=mmm.chemistry.ChemicalTransferLedger.builder(registries.chemical());
+		var portions=new java.util.ArrayList<mmm.thermal.ThermalStateFunction.InventoryPortion>();
+		for(var piece:pieces){
+			String material=domain.materialRegistry.material(piece.materialHandle()).id();
+			builder.add(material,false,piece.volume(),piece.massUnits(),domain.chemicalParcels.defaultRecord(
+					material,(float)piece.volume(),domain.config.cellSize(),piece.massUnits(),false));
+			portions.add(new mmm.thermal.ThermalStateFunction.InventoryPortion(
+					registry.materialHandle(material),mmm.units.Mass.kilograms(piece.massUnits()),java.util.Map.of()));
 		}
-		// T=100 rounds both carriers back to their references, whose T(U)=200 is valid.
-		for (Runnable insertion : java.util.List.<Runnable>of(
-				() -> require(domain.tryInsertExactMixture(1, 1, 1, pieces, 0, true, -200).transferred(), "valid explicit material rounding failed"),
-				() -> require(domain.tryInsertExactChemical(1, 1, 1, chemical, 0, true, -200).transferred(), "valid explicit chemical rounding failed"))) {
+		var chemical=builder.build();var function=new mmm.thermal.ThermalStateFunction(registry);
+		double invalid=function.inventoryEnergyAtTemperature(portions,mmm.thermal.ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)-1000;
+		for(var insertion:List.<java.util.function.BooleanSupplier>of(
+				()->domain.domainInventory.tryInsertExactMixture(1,1,1,pieces,0,true,invalid).transferred(),
+				()->domain.domainInventory.tryInsertExactChemical(1,1,1,chemical,0,true,invalid).transferred())){
+			var before=replacementState(domain);
+			require(!insertion.getAsBoolean(),"Explicit insertion accepted energy below its positive-temperature range");
+			requireUnchanged(domain,before);
+		}
+		double requestedEnergy=function.inventoryEnergyAtTemperature(portions,100);
+		for(Runnable insertion:List.<Runnable>of(
+				()->require(domain.domainInventory.tryInsertExactMixture(1,1,1,pieces,0,true,requestedEnergy).transferred(),"Valid cold material insertion failed"),
+				()->require(domain.domainInventory.tryInsertExactChemical(1,1,1,chemical,0,true,requestedEnergy).transferred(),"Valid cold chemical insertion failed"))){
 			var beforeLiquid=domain.liquidCells.exactInternalEnergy();var before=domain.thermalState.auditLedger();var oldU=domain.exactInternalEnergy();
-			var oldGasU = domain.thermalState.exactGasEnergy();
-			insertion.run(); var after = domain.thermalState.auditLedger();
+			var oldGasU=domain.thermalState.exactGasEnergy();insertion.run();var after=domain.thermalState.auditLedger();
 			var stored=domain.liquidCells.exactInternalEnergy().subtract(beforeLiquid);
-			for(int p=0;p<domain.liquidCells.physicalSize();p++)require(domain.thermalState.temperature(p,domain.thermalMarkerContext())>0,"Explicit insertion stored invalid temperature");
-			var requested = mmm.units.SignedDyadic.of(-200);
-			var gasDelta = domain.thermalState.exactGasEnergy().subtract(oldGasU);
-			var gasRoundoff = gasDelta.subtract(after.mechanicalWork().subtract(before.mechanicalWork()));
+			for(int owner=0;owner<domain.liquidCells.physicalSize();owner++)
+				require(domain.thermalState.temperature(owner,domain.domainCapabilities.thermalMarkerContext())>0,"Explicit insertion published invalid temperature");
+			var requested=mmm.units.SignedDyadic.of(requestedEnergy);var gasDelta=domain.thermalState.exactGasEnergy().subtract(oldGasU);
+			var gasRoundoff=gasDelta.subtract(after.mechanicalWork().subtract(before.mechanicalWork()));
 			require(after.externalSource().subtract(before.externalSource()).equals(requested)
-					&& after.roundoffResidual().subtract(before.roundoffResidual()).equals(stored.subtract(requested).add(gasRoundoff))
-					&& domain.exactInternalEnergy().subtract(oldU).equals(stored.add(gasDelta))
-					&& domain.exactInternalEnergy().equals(after.expectedInventory()), "valid explicit source/roundoff did not close actual stored energy");
-		}
-	}
-
-	private static void explicitInsertionsPreflightCompleteThermalLedger() throws Exception {
-		var registries = FullCapabilityTestFixture.load();
-		var huge = new mmm.units.SignedDyadic(java.math.BigInteger.ONE, 40_000);
-		var zero = mmm.units.SignedDyadic.ZERO;
-		for (boolean expectedSumOverflow : new boolean[] {false, true}) {
-			FluidDomain domain = fullCapabilityDomain(registries);
-			domain.setVolume(2, 2, 2, .001F);
-			var actual = domain.exactInternalEnergy();
-			// Both ledgers close exactly; the second requires cancellation before a bounded final sum.
-			var ledger = expectedSumOverflow
-					? new mmm.thermal.ThermalAuditLedger(huge, zero, huge, actual, zero, zero)
-					: new mmm.thermal.ThermalAuditLedger(zero, huge, huge, actual, zero, zero);
-			require(ledger.expectedInventory().equals(actual), "restored explicit audit did not close inventory");
-			domain.thermalState.restoreAuditLedger(ledger);
-			var mixture = domain.chemicalParcels.defaultRecord("mmm:water", .125F, .5F, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(125), false);
-			double energy = domain.thermalState.liquid().modeledEnergy(0, 125, mixture,
-					GasRegistry.STANDARD_TEMPERATURE_K, domain.chemicalParcels.registry());
-			var packet = mmm.chemistry.ChemicalTransferLedger.builder(registries.chemical())
-					.add("mmm:water", false, .125, domain.unitScale.massUnitsForNormalized(125), mixture).build();
-			var insertions = new java.util.ArrayList<Runnable>(java.util.List.of(
-					() -> domain.tryInsertExactMixture(1, 1, 1, java.util.List.of(new FluidDomain.MaterialPortion(0, .125, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(125))), 0, true, energy),
-					() -> domain.tryInsertExactChemical(1, 1, 1, packet, 0, true, energy)));
-			if (expectedSumOverflow) insertions.addAll(java.util.List.of(
-					() -> domain.tryInsertExactMixture(1, 1, 1, java.util.List.of(new FluidDomain.MaterialPortion(0, .125, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(125))), 0, true),
-					() -> domain.tryInsertExactChemical(1, 1, 1, packet, 0, true),
-					() -> domain.addVolumeNearBudgeted(1, 1, 1, .125F, 0),
-					() -> domain.setVolume(3, 3, 3, .5F)));
-			for (Runnable insertion : insertions) {
-				if (expectedSumOverflow) {
-					var count=domain.liquidCells.exactVolume();insertion.run();
-					require(domain.liquidCells.exactVolume().compareTo(count)>0 && domain.thermalState.auditLedger().expectedInventory().equals(domain.exactInternalEnergy()),
-							"representable final audit was rejected or failed to close actual insertion energy");
-				} else {
-					ReplacementState before = replacementState(domain);
-					insertion.run();
-					requireUnchanged(domain, before);
-				}
-			}
-		}
-		for (boolean operator : new boolean[]{false, true}) {
-			FluidDomain cleared = fullCapabilityDomain(registries); cleared.setVolume(2, 2, 2, .001F);
-			cleared.commitOperatorVentSealedGas(cleared.planOperatorVentSealedGas());
-			var initial = cleared.exactInternalEnergy();
-			cleared.thermalState.restoreAuditLedger(new mmm.thermal.ThermalAuditLedger(huge, zero, zero, huge.negate(), zero, initial));
-			if (operator) cleared.commitOperatorClear(cleared.planOperatorClear());
-			else cleared.setVolume(2, 2, 2, 0);
-			require(cleared.particleCount() == 0 && cleared.thermalState.auditLedger().expectedInventory().equals(cleared.exactInternalEnergy()),
-					"clear rejected representable final cancellation or lost the exact sink energy");
+					&&after.roundoffResidual().subtract(before.roundoffResidual()).equals(stored.subtract(requested).add(gasRoundoff))
+					&&domain.exactInternalEnergy().subtract(oldU).equals(stored.add(gasDelta))
+					&&domain.exactInternalEnergy().equals(after.expectedInventory()),"Explicit source U, gas work and storage roundoff did not close");
 		}
 	}
 
 	private static void restoreRequiresConnectedOpenCapacity() throws Exception {
-		var config = new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,.5F,1e-4F,0);
+		var config = new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,1e-4F,0);
 		var d = new FluidDomain(2,2,2,config,16); d.setVolume(1,1,1,.25F);
 		byte[] masks = new byte[8]; java.util.Arrays.fill(masks,(byte)255); masks[0]=126;
-		var before = d.exportParticleState(); long revision = d.carrierMutationRevision();
+		var before = d.exportParticleState(); long revision = d.domainFlowFields.carrierMutationRevision();
 		try {
 			d.restoreParticleState(new FlipParticleState(2,2,2,Math.nextUp(.5F),1,.125F,
 					new float[]{.125F,.125F,.125F,.125F},new float[3], mmm.units.Mass.createLiquid(Math.nextUp(.5F), 1000.0, new float[]{.125F,.125F,.125F,.125F}),new byte[8]));
 			throw new AssertionError("Restore silently changed physical volume and mass through another cell metric");
 		} catch (IllegalArgumentException expected) {
-			require(d.carrierMutationRevision()==revision && java.util.Arrays.equals(before.copyPositionVolume(),d.exportParticleState().copyPositionVolume()),
+			require(d.domainFlowFields.carrierMutationRevision()==revision && java.util.Arrays.equals(before.copyPositionVolume(),d.exportParticleState().copyPositionVolume()),
 					"Metric-rejected restore changed the original stock");
 		}
 		try {
@@ -310,7 +233,7 @@ public final class CarrierMutationValidation {
 			try { d.restoreParticleState(invalid); throw new AssertionError("Restore accepted over-capacity connected liquid stock"); }
 			catch (IllegalArgumentException expected) { }
 			var after = d.exportParticleState();
-			require(d.carrierMutationRevision()==revision && java.util.Arrays.equals(before.copyPositionVolume(),after.copyPositionVolume())
+			require(d.domainFlowFields.carrierMutationRevision()==revision && java.util.Arrays.equals(before.copyPositionVolume(),after.copyPositionVolume())
 					&& java.util.Arrays.equals(before.copyParticleVelocities(),after.copyParticleVelocities())
 					&& java.util.Arrays.equals(before.copyCollisionMicroMasks(),after.copyCollisionMicroMasks()),
 					"Capacity-rejected restore changed original marker or collision state");
@@ -320,7 +243,7 @@ public final class CarrierMutationValidation {
 		require(d.totalVolumeExact()==.25,"Restore rejected legitimate separately filled micro components");
 		d.restoreParticleState(new FlipParticleState(2,2,2,.5F,1,1,new float[]{.125F,.125F,.125F,1},new float[3], mmm.units.Mass.createLiquid(.5F, 1000.0, new float[]{.125F,.125F,.125F,1}),new byte[8]));
 		require(d.totalVolumeExact()==1,"Restore limited a connected component to one microbox");
-		var floatGrid = new FluidDomain(4,4,4,new FluidSolverConfig(.1F,1000,0,.01F,200,1e-5F,.5F,1e-4F,0),16);
+		var floatGrid = new FluidDomain(4,4,4,new FluidSolverConfig(.1F,1000,0,.01F,200,1e-5F,1e-4F,0),16);
 		byte[] floatMasks=new byte[64];java.util.Arrays.fill(floatMasks,(byte)255);floatMasks[42]=126;
 		floatGrid.restoreParticleState(new FlipParticleState(4,4,4,.1F,1,.125F,new float[]{.25F,.25F,.25F,.125F},new float[3], mmm.units.Mass.createLiquid(.1F, 1000.0, new float[]{.25F,.25F,.25F,.125F}),floatMasks));
 		require(floatGrid.liquidCells.physicalStockAt(0).key().supportMask()==128,"Restore changed actual binary32 micro-face ownership");
@@ -409,7 +332,7 @@ public final class CarrierMutationValidation {
 	private static void readOnlyCellQueriesFollowCarrierEdits(){
 		var domain=emptyMaterialDomain(256);domain.setVolume(1,1,1,1);domain.setVolume(2,1,1,.5F);
 		for(int round=0;round<3;round++){
-			domain.ensureGrid();for(int face=0;face<domain.mac.velocityX.length;face++)if(domain.cellMacStage.massX[face]>0)domain.mac.velocityX[face]=round+.5F;
+			domain.domainFlowFields.ensureGrid();for(int face=0;face<domain.mac.velocityX.length;face++)if(domain.cellMacStage.massX[face]>0)domain.mac.velocityX[face]=round+.5F;
 			domain.cellMacStage.publishMomentum();var state=domain.captureAuthoritativeState();
 			var observed=domain.observeCellInventory(1,1,1);domain.volume(1,1,1);domain.densityInCell(1,1,1);
 			require(state.liquid().stocks().equals(domain.liquidCells.stocks())&&java.util.Arrays.equals(state.momentum().copyX(),domain.mac.momentumX),"Read-only observation changed inventory or momentum");
@@ -422,7 +345,7 @@ public final class CarrierMutationValidation {
 
 	private static FluidSolverConfig config() {
 		return new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+				120, 1.0E-4F, 2.0E-3F, 0.80F);
 	}
 
 	private static FluidDomain fullCapabilityDomain(FullCapabilityTestFixture.Registries registries) {

@@ -24,7 +24,7 @@ final class CarrierInventoryReader {
 	private record Points(float[] packed, float[] velocity, float[] x, float[] y, float[] z, float[] volume,
 	                      int[] material, long[] mass, double total) { }
 	private Points points() {
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		int count = domain.liquidCells.physicalSize();
 		float[] packed = new float[4 * count], velocity = new float[3 * count];
 		float[] x = new float[count], y = new float[count], z = new float[count], volume = new float[count];
@@ -105,23 +105,23 @@ final class CarrierInventoryReader {
 
 	ThermalDisplaySnapshot copyThermalDisplaySnapshot() {
 		if (domain.thermalState == null) throw new IllegalStateException("Thermal state is not bound");
-		return domain.thermalState.displaySnapshot(domain.thermalMarkerContext(), domain.gasState.network);
+		return domain.thermalState.displaySnapshot(domain.domainCapabilities.thermalMarkerContext(), domain.gasState.network);
 	}
 
 	/** Read-only material rendering reconstruction; it contains no exact inventory and is not a wire format. */
 	FluidMaterialRenderSnapshot copyMaterialRenderSnapshot() {
-		domain.ensureInventoryGrid();
+		domain.domainFlowFields.ensureInventoryGrid();
 		if (domain.materialRegistry == null) {
 			throw new IllegalStateException("Material render snapshot requires a bound registry");
 		}
 		var view = points();
 		return FluidMaterialRenderSnapshot.capture(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.materialRegistry,
 				copyQuantizedVolume(), copyMarkerMask(), copyBinarySolidMask(), view.x, view.y, view.z, view.volume,
-				view.material, view.mass.length, domain.markerGrid.exactCellMarkerVolume);
+				view.material, view.mass.length, domain.liquidGrid.cellStockVolume);
 	}
 
 	byte[] copyQuantizedVolume() {
-		domain.ensureInventoryGrid();
+		domain.domainFlowFields.ensureInventoryGrid();
 		byte[] result = new byte[domain.cellCount];
 		for (int i = 0; i < domain.cellCount; i++) {
 			result[i] = (byte) Math.round(FluidDomain.clamp01(domain.volume[i]) * 255.0F);
@@ -145,9 +145,9 @@ final class CarrierInventoryReader {
 
 	/** Actual pressure-phase occupancy, separate from the smooth P2G density. */
 	byte[] copyMarkerMask() {
-		domain.ensureInventoryGrid();
+		domain.domainFlowFields.ensureInventoryGrid();
 		byte[] result = new byte[domain.cellCount];
-		for (int i = 0; i < domain.cellCount; i++) result[i] = domain.markerGrid.markerCount[i] > 0 ? (byte) 1 : (byte) 0;
+		for (int i = 0; i < domain.cellCount; i++) result[i] = domain.liquidGrid.stockCount[i] > 0 ? (byte) 1 : (byte) 0;
 		return result;
 	}
 }

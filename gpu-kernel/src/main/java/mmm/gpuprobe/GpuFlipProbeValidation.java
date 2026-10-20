@@ -544,7 +544,7 @@ public final class GpuFlipProbeValidation {
 	}
 
 	private static FluidDomain cpuDamBreak(VulkanFlipPipeline.Config config) {
-		FluidSolverConfig cpuConfig = new FluidSolverConfig(CELL_SIZE, RHO, GRAVITY, DT, 200, 1.0E-5F, 0.45F, 2.0E-3F, 0.80F);
+		FluidSolverConfig cpuConfig = new FluidSolverConfig(CELL_SIZE, RHO, GRAVITY, DT, 200, 1.0E-5F, 2.0E-3F, 0.80F);
 		FluidDomain domain = new FluidDomain(config.nx(), config.ny(), config.nz(), cpuConfig);
 		for (int z = 0; z < config.nz(); z++) for (int y = 0; y < config.ny() * 3 / 4; y++) for (int x = 0; x < config.nx() * 2 / 5; x++) {
 			domain.setVolume(x, y, z, 1.0F);

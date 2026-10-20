@@ -11,16 +11,7 @@ import java.util.*;
 
 /** Same-support cell chemistry with one inventory and caloric publication per logical pass. */
 final class ChemicalReactionStage {
-	record Workspace(int cellCount, mmm.thermal.ThermalCarrierContext thermalMarkers) { }
-	interface Access {
-		ChemicalParcelStore chemicalParcels();
-		FluidMaterialRegistry materialRegistry();
-		LiquidCellInventory liquidCells();
-		ThermalDomainState thermalState();
-		void markGridDirty();
-	}
-	private final Workspace state;
-	private final Access access;
+	private final FluidDomain domain;
 	private ChemicalRegistry candidateRegistry;
 	private boolean[] reactantSpecies;
 	private List<ReactionInput> reactionInputs;
@@ -71,9 +62,9 @@ final class ChemicalReactionStage {
 		}
 		return false;
 	}
-	ChemicalReactionStage(Workspace state, Access access) { this.state=state; this.access=access; }
+	ChemicalReactionStage(FluidDomain domain) { this.domain=domain; }
 	int[] captureDirtyCells() {
-		var chemistry=access.chemicalParcels();
+		var chemistry=domain.chemicalParcels;
 		return chemistry==null?new int[0]:chemistry.dirtyCells();
 	}
 	private record Group(int support,int phase) implements Comparable<Group> {
@@ -81,15 +72,15 @@ final class ChemicalReactionStage {
 	}
 
 	ChemicalParcelStore.ReactionStats step() {
-		var scheduler=access.chemicalParcels();
+		var scheduler=domain.chemicalParcels;
 		if(scheduler==null||!scheduler.hasDirtyCells()) return new ChemicalParcelStore.ReactionStats(0,0,0);
-		var store=access.liquidCells(); var registry=store.chemicalRegistry(); var thermal=access.thermalState();
+		var store=domain.liquidCells; var registry=store.chemicalRegistry(); var thermal=domain.thermalState;
 		prepareReactionInputs(registry);
 		if (!hasReactionInputs(store)) {
 			scheduler.restoreDirtyCells(new int[0]);
 			return new ChemicalParcelStore.ReactionStats(0,0,0);
 		}
-		var engine=new ChemicalReactionEngine(registry);
+		var function=thermal==null?null:new ThermalStateFunction(thermal.registry());
 		int[] costs=new int[registry.phases().size()];
 		for(var rule:registry.reactionOrder()) costs[registry.phaseHandle(rule.phaseId())]++;
 		var dirty=new TreeSet<Integer>(); for(int cell:scheduler.dirtyCells()) dirty.add(cell);
@@ -101,7 +92,7 @@ final class ChemicalReactionStage {
 			if(!possible) { consumed.add(cell);continue; }
 			var groups=new TreeMap<Group,List<LiquidCellInventory.Stock>>();
 			for(var stock:store.physicalStocksInCell(cell)) {
-				int phase=registry.phaseHandleForMaterial(access.materialRegistry().material(stock.key().material()).id());
+				int phase=registry.phaseHandleForMaterial(domain.materialRegistry.material(stock.key().material()).id());
 				groups.computeIfAbsent(new Group(stock.key().supportMask(),phase),ignored->new ArrayList<>()).add(stock);
 			}
 			groups.entrySet().removeIf(entry->!canReact(entry.getKey(),entry.getValue()));
@@ -112,37 +103,66 @@ final class ChemicalReactionStage {
 			scheduler.restoreDirtyCells(dirty.stream().mapToInt(Integer::intValue).toArray());
 			return new ChemicalParcelStore.ReactionStats(consumed.size(),0,0);
 		}
-		var originalThermal=thermal==null?null:thermal.preparePhaseCandidateCells(eligible.keySet().stream().mapToInt(Integer::intValue).toArray(),state.thermalMarkers());
+		var originalThermal=thermal==null?null:thermal.preparePhaseCandidateCells(eligible.keySet().stream().mapToInt(Integer::intValue).toArray(),domain.domainCapabilities.thermalMarkerContext());
 		var futureCells=new TreeMap<Integer,List<LiquidCellInventory.Stock>>();
 		var trials=new TreeMap<Integer,ThermalDomainState.PhaseCellTrial>();
 		long regionQuanta=0;
 		for(var stock:store.stocks()) if(stock.mixture()!=null) regionQuanta=Math.addExact(regionQuanta,stock.mixture().totalQuanta());
 		int visited=consumed.size(),evaluations=0,changed=0,cursor=scheduler.reactionCursor();
-		for(int offset=0;offset<state.cellCount();offset++) {
-			int cell=(scheduler.reactionCursor()+offset)%state.cellCount();
+		for(int offset=0;offset<domain.cellCount;offset++) {
+			int cell=(scheduler.reactionCursor()+offset)%domain.cellCount;
 			if(!dirty.contains(cell)) continue;
 			var groups=eligible.get(cell);
 			int cost=0; for(var group:groups.keySet()) cost=Math.addExact(cost,costs[group.phase]);
 			if(cost>ChemicalLimits.MAX_REACTION_EVALUATIONS_PER_STEP-evaluations) { cursor=cell;break; }
-			cursor=(cell+1)%state.cellCount();visited++;evaluations+=cost;
+			cursor=(cell+1)%domain.cellCount;visited++;evaluations+=cost;
 			var future=new TreeMap<LiquidCellInventory.Key,LiquidCellInventory.Stock>();
 			for(var stock:store.stocksInCell(cell)) future.put(stock.key(),stock);
 			long delta=0; int cellChanged=0;
+			boolean pending=false;
+			var cold=thermal==null?SignedDyadic.ZERO:coldEnergy(future.values(),function);
+			if(thermal!=null)for(var solid:originalThermal[cell].unchangedSolids())cold=cold.add(SignedDyadic.of(
+					function.internalEnergyAtTemperature(solid.materialHandle(),solid.massKg(),solid.speciesQuanta(),mmm.thermal.ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)));
 			try {
 				for(var entry:groups.entrySet()) {
 					long[] amounts=new long[registry.species().size()];
 					for(var stock:entry.getValue()) for(int i=0;i<stock.mixture().entryCount();i++)
 						amounts[stock.mixture().speciesHandle(i)]=Math.addExact(amounts[stock.mixture().speciesHandle(i)],stock.mixture().amountAt(i));
-					if(Arrays.stream(amounts).allMatch(n->n==0)) continue;
-					long[] reacted=engine.reactInventory(entry.getKey().phase,amounts).inventory();
-					if(Arrays.equals(amounts,reacted)) continue;
-					var replacements=distribute(entry.getValue(),reacted,registry);
-					for(var replacement:replacements) {
-						var before=future.put(replacement.key(),replacement);
-						delta=Math.addExact(delta,replacement.mixture().totalQuanta()-before.mixture().totalQuanta());
-						if(!replacement.mixture().equals(before.mixture())) cellChanged++;
+					var sources=entry.getValue();
+					for(var rule:registry.reactionOrder())if(registry.phaseHandle(rule.phaseId())==entry.getKey().phase){
+						long extent=Long.MAX_VALUE;
+						for(var term:rule.reactants().entrySet())extent=Math.min(extent,amounts[registry.speciesHandle(term.getKey())]/term.getValue());
+						if(extent<=0||extent==Long.MAX_VALUE)continue;
+						long maximum=extent;
+						long totalCoefficient=rule.products().values().stream().mapToLong(Integer::longValue).sum()-rule.reactants().values().stream().mapToLong(Integer::longValue).sum();
+						if(totalCoefficient>0)extent=Math.min(extent,(ChemicalLimits.MAX_REGION_TOTAL_QUANTA-regionQuanta-delta)/totalCoefficient);
+						if(extent==0){pending=true;continue;}
+						var reacted=react(amounts,rule,extent,registry);
+						var replacements=distribute(sources,reacted,registry);
+						var coldChange=thermal==null?SignedDyadic.ZERO:coldEnergy(replacements,function).subtract(coldEnergy(sources,function));
+						if(thermal!=null&&coldChange.compareTo(originalThermal[cell].cellEnergy().subtract(cold))>0){
+							// At fixed material masses only the reference composition changes.
+							// Its affine extent is limited by this complete cell's cold energy.
+							var baseline=coldEnergy(distribute(sources,amounts,registry),function).subtract(coldEnergy(sources,function));
+							double slope=coldChange.subtract(baseline).toDouble()/extent;
+							// Integer distribution can differ by one species quantum per owner.
+							// Reserve the difference between two rounded allocation endpoints.
+							double allowance=allocationEnergyResolution(sources,amounts,reacted,registry);
+							double available=originalThermal[cell].cellEnergy().subtract(cold).subtract(baseline).toDouble()-allowance;
+							extent=slope>0?Math.min(extent,(long)Math.floor(Math.max(0,available)/slope)):0;
+							pending=true;if(extent==0)continue;
+							reacted=react(amounts,rule,extent,registry);replacements=distribute(sources,reacted,registry);
+							coldChange=coldEnergy(replacements,function).subtract(coldEnergy(sources,function));
+						}
+						if(extent<maximum)pending=true;
+						for(var replacement:replacements){
+							var before=future.put(replacement.key(),replacement);
+							delta=Math.addExact(delta,replacement.mixture().totalQuanta()-before.mixture().totalQuanta());
+						}
+						cold=cold.add(coldChange);amounts=reacted;sources=replacements;
 					}
 				}
+				for(var after:future.values())if(!Objects.equals(after.mixture(),store.stock(after.key()).mixture()))cellChanged++;
 				if(regionQuanta+delta>ChemicalLimits.MAX_REGION_TOTAL_QUANTA)
 					throw new ChemicalReactionEngine.BudgetExceededException("Reaction exceeds region species inventory");
 				var rows=List.copyOf(future.values());
@@ -157,16 +177,15 @@ final class ChemicalReactionStage {
 					futureCells.put(cell,rows); if(trial!=null) trials.put(cell,trial);
 					regionQuanta+=delta;changed+=cellChanged;
 				}
-				dirty.remove(cell);
-			} catch(ChemicalReactionEngine.BudgetExceededException | ThermalStateFunction.EnergyOutsideValidityException
-			        | ThermalStateFunction.EnergyRepresentationException unavailable) {
-				// An energy-limited extent is retried after transport changes this cell's available heat.
+				if(!pending)dirty.remove(cell);
+			} catch(ChemicalReactionEngine.BudgetExceededException unavailable) {
+				// Composition capacity retains the cell until a material transfer changes it.
 			}
 		}
 		ThermalDomainState.PhaseBatchEnergyPlan energy=null;
 		if(thermal!=null&&!trials.isEmpty()) {
 			int[] counts=futureCells.values().stream().mapToInt(rows->(int)rows.stream().filter(s->s.massUnits()>0).count()).toArray();
-			energy=thermal.planPhaseBatchEnergy(List.copyOf(trials.values()),counts,SignedDyadic.ZERO,SignedDyadic.ZERO,state.thermalMarkers());
+			energy=thermal.planPhaseBatchEnergy(List.copyOf(trials.values()),counts,SignedDyadic.ZERO,SignedDyadic.ZERO,domain.domainCapabilities.thermalMarkerContext());
 		}
 		var edits=new ArrayList<LiquidCellInventory.Edit>();
 		for(var entry:futureCells.entrySet()) {
@@ -179,10 +198,32 @@ final class ChemicalReactionStage {
 		}
 		if(!edits.isEmpty()) {
 			var plan=store.planEdits(edits);plan.requireCurrent();if(energy!=null) thermal.requirePhaseBatchEnergyCurrent(energy);
-			plan.commit();if(energy!=null) thermal.commitPhaseBatchEnergy(energy,state.thermalMarkers());access.markGridDirty();
+			plan.commit();if(energy!=null) thermal.commitPhaseBatchEnergy(energy,domain.domainCapabilities.thermalMarkerContext());domain.gridDirty=true;
 		}
 		scheduler.restoreDirtyCells(dirty.stream().mapToInt(Integer::intValue).toArray());scheduler.restoreReactionCursor(cursor);
 		return new ChemicalParcelStore.ReactionStats(visited,evaluations,changed);
+	}
+	private static long[] react(long[] before,ChemicalReaction rule,long extent,ChemicalRegistry registry){
+		var after=before.clone();
+		for(var term:rule.reactants().entrySet()){int species=registry.speciesHandle(term.getKey());after[species]=Math.subtractExact(after[species],Math.multiplyExact(extent,term.getValue()));}
+		for(var term:rule.products().entrySet()){int species=registry.speciesHandle(term.getKey());after[species]=Math.addExact(after[species],Math.multiplyExact(extent,term.getValue()));}
+		return after;
+	}
+	private SignedDyadic coldEnergy(Collection<LiquidCellInventory.Stock> stocks,ThermalStateFunction function){
+		var energy=SignedDyadic.ZERO;
+		for(var stock:stocks)if(stock.massUnits()>0)energy=energy.add(SignedDyadic.of(function.internalEnergyAtTemperature(
+				domain.thermalState.thermalMaterialHandleForFluid(stock.key().material()),stock.massKilograms(),stock.mixture(),domain.liquidCells.chemicalRegistry(),mmm.thermal.ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)));
+		return energy;
+	}
+	private double allocationEnergyResolution(List<LiquidCellInventory.Stock> stocks,long[] before,long[] after,ChemicalRegistry chemistry){
+		if(stocks.size()==1)return 0;
+		double energy=0;
+		for(var stock:stocks){
+			int material=domain.thermalState.thermalMaterialHandleForFluid(stock.key().material());
+			for(int species=0;species<before.length;species++)if(before[species]>0||after[species]>0)
+				energy+=Math.abs(domain.thermalState.registry().speciesOffset(material,chemistry.species(species).id()).referenceInternalEnergyJPerMol().toDouble()/ChemicalLimits.QUANTA_PER_MOL);
+		}
+		return 2*energy;
 	}
 
 	/** Products follow actual SI mass. Mass, cell volume and momentum are unchanged by chemistry. */

@@ -364,7 +364,7 @@ public final class MinecraftDebugFixtures {
 		if (!preview.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + preview.failure());
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 9.81F, 1.0F / 40.0F,
-				300, 1.0E-5F, 0.35F, 2.0E-3F, 0.80F
+				300, 1.0E-5F, 2.0E-3F, 0.80F
 		);
 		FluidDomain domain = new FluidDomain(
 				BLOCK_SIZE_X * FluidRegionFactory.CELLS_PER_BLOCK,

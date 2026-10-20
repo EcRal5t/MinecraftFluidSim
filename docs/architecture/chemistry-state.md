@@ -13,7 +13,7 @@
 - **液体单元组成与提交**
   - 代码入口：
     - [LiquidCellInventory](../../model/src/main/java/mmm/inventory/LiquidCellInventory.java)
-  - 测试选择器：`chemistry,reseeding`
+  - 测试选择器：`chemistry,cell-inventory`
 
 - **指示剂操作**
   - 代码入口：

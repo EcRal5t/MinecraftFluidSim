@@ -41,7 +41,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 400.0, 4_000.0)));
 		ThermalRegistry registry = new ThermalRegistry(List.of(water));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidDomain domain = new FluidDomain(4, 3, 3, config, 512);
 		domain.setVolume(1, 1, 1, 0.125F);
 		domain.bindThermal(registry, liquids, 300.0);
@@ -49,7 +49,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 
 		double importedEnergy = SolverUnitScale.forCellSize(config.cellSize()).kilograms(1_000.0)
 				* 4_000.0 * 20.0;
-		FluidDomain.ExactVolumeTransfer inserted = domain.tryInsertExactVolume(
+		FluidDomain.ExactVolumeTransfer inserted = domain.domainInventory.tryInsertExactVolume(
 				1, 1, 1, 1.0F, 1, 0, false, importedEnergy);
 		require(inserted.transferred() && close(inserted.internalEnergy(), importedEnergy)
 				&& close(domain.thermalTemperatureInCell(1, 1, 1), 320.0)
@@ -60,7 +60,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		require(extracted.transferred() && close(extracted.internalEnergy(), importedEnergy)
 				&& domain.particleCount() == 0 && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"container extraction did not return the exact removed marker energy");
-		FluidDomain.ExactVolumeTransfer restored = domain.tryInsertExactVolume(
+		FluidDomain.ExactVolumeTransfer restored = domain.domainInventory.tryInsertExactVolume(
 				1, 1, 1, 1.0F, 1, 0, false, extracted.internalEnergy());
 		require(restored.transferred() && close(domain.thermalTemperatureInCell(1, 1, 1), 320.0)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
@@ -71,7 +71,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				&& domain.particleCount() == 0,
 				"collision displacement did not carry the removed material energy ledger");
 		domain.setSolidMicroMaskMaterial(1, 1, 1, 0);
-		FluidDomain.ExactMixtureTransfer relocated = domain.tryInsertExactMixture(
+		FluidDomain.ExactMixtureTransfer relocated = domain.domainInventory.tryInsertExactMixture(
 				1, 1, 1, collision.portions(), 1, false, collision.internalEnergy());
 		require(relocated.transferred() && close(domain.thermalTemperatureInCell(1, 1, 1), 320.0)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
@@ -84,7 +84,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				BuiltinFluidMaterials.WATER.id(), 1900, Math.scalb(1.0, 63), 0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(1, 2000, 1)));
 		var registry = new ThermalRegistry(List.of(water));
-		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, .8F);
+		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .002F, .8F);
 		var domain = new FluidDomain(4, 4, 4, config, 512);
 		restorePhaseTestCarriers(domain, liquids, 2, 2, 2, new float[]{.0625F}, new int[1]);
 		int count = domain.liquidCells.physicalSize(); long mass = domain.totalMassUnits();
@@ -100,7 +100,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		require(domain.thermalState == null && domain.liquidCells.physicalSize() == count && domain.totalMassUnits() == mass,
 				"rejected liquid initialization changed the carrier or published a thermal binding");
 		domain.bindThermal(registry, domain.materialRegistry, 1900);
-		require(domain.thermalState.temperature(0, domain.thermalMarkerContext()) == 1900
+		require(domain.thermalState.temperature(0, domain.domainCapabilities.thermalMarkerContext()) == 1900
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"valid stored-energy initialization failed after the rejected binding");
 		var snapshot = domain.exportThermalParticleState();
@@ -111,7 +111,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		restored.restoreMaterialParticleState(domain.exportMaterialParticleState());
 		restored.restoreThermalParticleState(atOtherSourceTemperature, registry);
 		require(restored.thermalState.insertionTemperatureK() == 300
-				&& restored.thermalState.temperature(0, restored.thermalMarkerContext()) == 1900
+				&& restored.thermalState.temperature(0, restored.domainCapabilities.thermalMarkerContext()) == 1900
 				&& restored.exactInternalEnergy().equals(domain.exactInternalEnergy())
 				&& restored.thermalAudit().equals(domain.thermalAudit()),
 				"liquid restore modeled the configured source temperature instead of loading valid snapshot U");
@@ -120,7 +120,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 	private static void thermalHandoffPreservesInsertionTemperature() {
 		var granular = BuiltinGranularDefinitions.createRegistry();
 		var liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
-		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, .8F);
+		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .002F, .8F);
 		for (boolean narrow : new boolean[]{false, true}) {
 			var materials = new java.util.ArrayList<ThermalMaterialDefinition>();
 			for (var fluid : liquids.materials()) materials.add(new ThermalMaterialDefinition(
@@ -272,7 +272,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry productionLiquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.8F);
+				100, 1.0E-5F, 2.0E-3F, 0.8F);
 		FluidDomain domain = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
 		domain.bindGranular(granular, productionLiquids, BuiltinFluidMaterials.createRegistry());
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
@@ -319,7 +319,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		long mass = mmm.units.Mass.fromKilograms(2600.0 / 8 / 256);
 		for (boolean thermal : new boolean[]{false, true}) {
 			var domain = new FluidDomain(4, 4, 4, new FluidSolverConfig(.5F, 1000, 9.81F, .05F,
-					100, 1e-5F, .45F, .002F, 0), 512);
+					100, 1e-5F, .002F, 0), 512);
 			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 			var state = domain.granularState;
 			state.parcels.add(new mmm.granular.GranularParcelStore.Parcel(.75F, .70F, .75F,
@@ -329,7 +329,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			if (thermal) domain.bindThermal(granularThermalRegistry(liquids, granular), liquids, 300);
 			SignedDyadic before = thermal ? domain.exactInternalEnergy() : SignedDyadic.ZERO;
 			double mechanicalBefore = granularMechanicalEnergy(domain, 9.81F);
-			var merge = state.inventory.compactActive(index -> domain.cellIndex(1, 1, 1),
+			var merge = state.inventory.compactActive(index -> domain.domainFlowFields.cellIndex(1, 1, 1),
 					(first, second, left, right, replacement) -> true, 2, 4, 9.81F);
 			SignedDyadic expectedHeat = SignedDyadic.of(1.5 * mmm.units.Mass.kilograms(mass));
 			require(merge.merges() == 1 && merge.physicalHeat().equals(expectedHeat) && merge.mechanicalRounding().signum() != 0
@@ -345,10 +345,10 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		}
 		for (boolean relaxation : new boolean[]{false, true}) {
 			var domain = new FluidDomain(2, 4, 2, new FluidSolverConfig(.5F, 1000, 9.81F, .05F,
-					100, 1e-5F, .45F, .002F, 0), 64);
+					100, 1e-5F, .002F, 0), 64);
 			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 			var state = domain.granularState;
-			if (relaxation) require(state.deposits.tryAdd(domain.cellIndex(0, 2, 0),
+			if (relaxation) require(state.deposits.tryAdd(domain.domainFlowFields.cellIndex(0, 2, 0),
 					new mmm.granular.GranularDepositStore.SolidPortion(sand, 0,
 							SolidVolume.SVQ_PER_CELL / 4, mmm.units.Mass.fromKilograms(2600.0 / 32)), SolidVolume.SVQ_PER_CELL),
 					"Mechanical bed-heat fixture did not fit its source");
@@ -361,7 +361,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			double initialMechanical = granularMechanicalEnergy(domain, 9.81F);
 			var dynamics = new mmm.granular.GranularDepositDynamics(granular, state.parcels, state.deposits,
 					state.inventory, 2, 4, 2, .5F);
-			if (relaxation) dynamics.disturbCell(domain.cellIndex(0, 2, 0));
+			if (relaxation) dynamics.disturbCell(domain.domainFlowFields.cellIndex(0, 2, 0));
 			var environment = new mmm.granular.GranularDepositDynamics.Environment() {
 				private mmm.granular.GranularInventory.EnergyPlan energy;
 				@Override public long geometricOpenSvq(int cell) { return SolidVolume.SVQ_PER_CELL; }
@@ -420,7 +420,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			var huge = SignedDyadic.of(1L, 40_000);
 			for (double temperature : new double[]{280, 300}) for (int mode = 0; mode < 3; mode++) {
 				var domain = new FluidDomain(4, 4, 4,
-						new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, .8F), 512);
+						new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .002F, .8F), 512);
 				mmm.simulation.FullCapabilityTestFixture.bindFull(domain, production, temperature,
 						ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 				domain.setVolume(2, 2, 2, .001F);
@@ -441,7 +441,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				var source = granular.externalSource; var sink = granular.escapedSink;
 				var liquid = domain.chemicalParcels.record(0);
 				var liquidSource = domain.chemicalParcels.externalSource(); var liquidSink = domain.chemicalParcels.escapedSink();
-				long carrierRevision = domain.carrierMutationRevision();
+				long carrierRevision = domain.domainFlowFields.carrierMutationRevision();
 				var revision = domain.thermalState.thermalRevision(); long structuralRevision = granular.mutationRevision();
 				var energy = domain.thermalState.granularColumn().copyActiveEnergy();
 				int compositions = granular.compositions.liveCount();
@@ -471,7 +471,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 								granular.registry, granular.parcels, granular.deposits, granular.compositions))
 						&& Arrays.equals(energy, domain.thermalState.granularColumn().copyActiveEnergy())
 						&& domain.thermalState.matchesThermalRevision(revision) && domain.thermalAudit().equals(audit)
-						&& domain.liquidCells.physicalSize() == initialLiquidCount && domain.carrierMutationRevision() == carrierRevision
+						&& domain.liquidCells.physicalSize() == initialLiquidCount && domain.domainFlowFields.carrierMutationRevision() == carrierRevision
 						&& domain.chemicalParcels.record(0).equals(liquid) && domain.chemicalParcels.externalSource().equals(liquidSource)
 						&& domain.chemicalParcels.escapedSink().equals(liquidSink)
 						&& domain.exactInternalEnergy().equals(actual),
@@ -498,7 +498,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 					production.chemical().fingerprint(), production.granular().fingerprint(), production.gas().fingerprint());
 			for (int mode = 0; mode < 3; mode++) {
 				var domain = new FluidDomain(4, 4, 4,
-						new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, .8F), 512);
+						new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .002F, .8F), 512);
 				var liquids = mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(domain, production.liquids());
 				domain.bindChemistry(production.chemical()); domain.bindGranular(production.granular(), liquids, production.materials());
 				domain.bindGasRegistry(production.gas()); domain.bindThermal(registry, liquids, 1);
@@ -548,7 +548,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			ThermalRegistry registry, String materialId, long svq, double mass,
 			mmm.granular.SolidCompositionRecord composition, boolean deposited) {
 		mass = mmm.units.Mass.kilograms(mmm.units.Mass.fromKilograms(mass));
-		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, .8F);
+		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .002F, .8F);
 		var source = new FluidDomain(4, 4, 4, config, 512);
 		var liquids = mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(source, production.liquids());
 		source.bindChemistry(production.chemical()); source.bindGranular(production.granular(), liquids, production.materials());
@@ -556,7 +556,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		int material = production.granular().materialHandle(materialId);
 		int handle = composition == null ? 0 : source.granularState.compositions.create(composition);
 		require(source.tryInsertExactGranular(1, 1, 1, material, handle, svq, mmm.units.Mass.fromKilograms(mass)).inserted(), "snapshot grain could not be inserted");
-		if (deposited) require(source.granularState.inventory.depositParcel(0, source.cellIndex(1, 1, 1), SolidVolume.SVQ_PER_CELL),
+		if (deposited) require(source.granularState.inventory.depositParcel(0, source.domainFlowFields.cellIndex(1, 1, 1), SolidVolume.SVQ_PER_CELL),
 				"snapshot grain could not be deposited");
 		source.bindThermal(registry, liquids, 400);
 		source.setThermalTemperatureInCell(2, 2, 2, 1);
@@ -589,8 +589,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				&& target.chemicalParcels.record(0).equals(liquid), "invalid thermal restore published a partial target");
 		target.restoreThermalParticleState(snapshot, registry);
 		var restored = target.exportThermalParticleState();
-		var sourceContext = source.thermalMarkerContext();
-		var targetContext = target.thermalMarkerContext();
+		var sourceContext = source.domainCapabilities.thermalMarkerContext();
+		var targetContext = target.domainCapabilities.thermalMarkerContext();
 		boolean sameTemperatures = source.particleCount() == target.particleCount();
 		for (int marker = 0; sameTemperatures && marker < source.particleCount(); marker++) {
 			sameTemperatures = Double.doubleToRawLongBits(source.thermalState.temperature(marker, sourceContext))
@@ -613,7 +613,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		for (double[] energies : List.of(new double[]{.1, .2, .3}, new double[]{.3, .2, .1},
 				new double[]{.1, .2, -.1}, new double[]{-.1, .2, .1})) {
@@ -651,7 +651,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			domain.thermalState.restoreThermalGranular(new double[]{1.0}, List.of());
 			domain.thermalState.restoreAuditLedger(ThermalAuditLedger.initialized(SignedDyadic.of(1.0)));
 			if (deposited) require(domain.granularState.inventory.depositParcel(0,
-					domain.cellIndexChecked(1, 1, 1), SolidVolume.SVQ_PER_CELL), "partial deposit fixture could not settle");
+					domain.domainFlowFields.cellIndexChecked(1, 1, 1), SolidVolume.SVQ_PER_CELL), "partial deposit fixture could not settle");
 			var extracted = domain.tryExtractExactGranular(1, 1, 1, 1, 0, false);
 			SignedDyadic actualRemoval = SignedDyadic.of(1.0).subtract(domain.exactInternalEnergy());
 			require(extracted.transferred() && extracted.ledger().totalSolidVolumeSvq() == 1
@@ -667,11 +667,11 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		for (int variant = 0; variant < 3; variant++) try {
 			var production = mmm.simulation.FullCapabilityTestFixture.load();
 			var domain = new FluidDomain(3, 3, 3,
-					new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, .8F), 216);
+					new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .002F, .8F), 216);
 			var liquids = mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(domain, production.liquids());
 			domain.bindChemistry(production.chemical()); domain.bindGranular(production.granular(), liquids, production.materials());
 			domain.bindGasRegistry(production.gas());
-			int cell = domain.cellIndexChecked(1, 1, 1), sand = production.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+			int cell = domain.domainFlowFields.cellIndexChecked(1, 1, 1), sand = production.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 			boolean active = variant == 2;
 			long svq = variant == 0 ? 10_401_873 : active ? 262_143 : 10_401_812;
 			double mass = production.granular().material(sand).referenceDensity() * Math.scalb((double) svq, -27)
@@ -727,7 +727,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		double[] invalidEnergy = {1e308, 1e308};
 		for (int variant = 0; variant < 3; variant++) {
 			var domain = new FluidDomain(4, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F,
-					100, 1e-5F, .45F, .002F, 0), 216);
+					100, 1e-5F, .002F, 0), 216);
 			domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 			int count = variant == 0 ? 2 : 4, invalidStart = variant == 2 ? 2 : 0;
 			double[] energies = new double[count];
@@ -803,7 +803,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 4_000.0)));
 		ThermalRegistry registry = new ThermalRegistry(List.of(water));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidDomain domain = new FluidDomain(4, 3, 3, config, 512);
 		domain.setVolume(1, 1, 1, 1.0F);
 		domain.setVolume(2, 1, 1, 1.0F);
@@ -814,8 +814,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		FluidDomain stiff = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		stiff.stepThermalOnly(10_000.0);
 		for (int p = 0; p < stiff.particleCount(); p++) require(
-				stiff.thermalState.temperature(p, stiff.thermalMarkerContext()) >= 250
-						&& stiff.thermalState.temperature(p, stiff.thermalMarkerContext()) <= 350,
+				stiff.thermalState.temperature(p, stiff.domainCapabilities.thermalMarkerContext()) >= 250
+						&& stiff.thermalState.temperature(p, stiff.domainCapabilities.thermalMarkerContext()) <= 350,
 				"stiff finite carrier contacts exceeded the initial temperature range");
 		require(Math.abs(stiff.thermalTemperatureInCell(1, 1, 1) - 300) < 50
 				&& stiff.exactInternalEnergy().equals(stiff.thermalAudit().expectedInventory()),
@@ -881,7 +881,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				293.15, 0.0, 0.598,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4_184.0)));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 0.05F,
-				100, 1.0E-5F, 0.40F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidDomain domain = new FluidDomain(6, 6, 6, config, 1_728);
 		for (int z = 0; z < 6; z++) for (int y = 0; y < 6; y++) for (int x = 0; x < 6; x++) {
 			if (x == 0 || x == 5 || y == 0 || y == 5 || z == 0 || z == 5) domain.setSolid(x, y, z, true);
@@ -909,7 +909,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K, 10.0, 0.025,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidDomain domain = new FluidDomain(4, 3, 3, config, 512);
 		// Two microcells obstruct the shared +x face: the authoritative aperture is exactly one half.
 		domain.setSolidMicroMask(1, 1, 1, 0x22);
@@ -1092,7 +1092,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				293.15, 0.0, 0.598,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4_184.0)));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidDomain domain = new FluidDomain(4, 3, 3, config, 512);
 		domain.setVolume(0, 1, 1, 1.0F);
 		domain.bindThermal(new ThermalRegistry(List.of(water)), liquids, 293.15);

@@ -5,7 +5,8 @@ import mmm.fluid.AirCavityScannerValidation;
 import mmm.fluid.CarrierMutationValidation;
 import mmm.fluid.FlipCutCellValidation;
 import mmm.fluid.FlipFluidFreeSurfaceValidation;
-import mmm.fluid.FlipFluidReseedingValidation;
+import mmm.fluid.LiquidCellInventoryValidation;
+import mmm.fluid.LiquidMacroscopicMotionValidation;
 import mmm.fluid.M3ConnectedVesselValidation;
 import mmm.fluid.M4SurfaceTensionValidation;
 import mmm.fluid.M5GasLiquidCouplingValidation;
@@ -50,14 +51,14 @@ public final class CpuValidationSuite {
 	private static final String[] FAST = {"--fast"};
 	private static final List<String> FAST_GROUP = List.of(
 			"audit", "air-network", "air-cavity", "region-manager", "lifecycle", "entity-fluid", "production-replay",
-			"marker-transfer", "marker-pressure", "free-surface", "reseeding", "cut-cell", "shape", "protocol", "boundary", "containers", "chemistry", "granular",
+			"marker-transfer", "marker-pressure", "free-surface", "cell-inventory", "cut-cell", "shape", "protocol", "boundary", "containers", "chemistry", "granular",
 			"thermal");
 	private static final List<String> MILESTONE_GROUP = List.of(
 			"materials", "surface-tension", "air-network", "air-cavity", "gas-liquid",
-			"region-manager", "lifecycle", "entity-fluid", "production-replay", "marker-transfer", "marker-pressure", "free-surface", "reseeding", "cut-cell", "shape",
+			"region-manager", "lifecycle", "entity-fluid", "production-replay", "marker-transfer", "marker-pressure", "free-surface", "cell-inventory", "cut-cell", "shape",
 			"region-state", "protocol", "boundary", "takeover", "containers", "ownership", "audit", "chemistry", "granular",
 			"thermal");
-	private static final List<String> SOAK_GROUP = List.of("gas-liquid", "free-surface", "reseeding");
+	private static final List<String> SOAK_GROUP = List.of("gas-liquid", "free-surface", "cell-inventory");
 
 	private CpuValidationSuite() { }
 
@@ -170,10 +171,13 @@ public final class CpuValidationSuite {
 		gate(gates, "production-replay", () -> ProductionFluidReplayValidation.main(NONE));
 		gate(gates, "free-surface", () -> FlipFluidFreeSurfaceValidation.main(NONE),
 				() -> FlipFluidFreeSurfaceValidation.main(FAST));
-		gate(gates, "reseeding", () -> {
-			FlipFluidReseedingValidation.main(NONE);
+		gate(gates, "cell-inventory", () -> {
+			LiquidCellInventoryValidation.main(NONE);
+			mmm.fluid.MacMomentumAdvectionValidation.main(NONE);
+			LiquidMacroscopicMotionValidation.main(new String[]{"joint-moments"});
 			CarrierMutationValidation.main(NONE);
-		}, () -> FlipFluidReseedingValidation.main(FAST));
+		});
+		gate(gates, "liquid-joining", () -> mmm.fluid.LiquidHandoffContinuityValidation.main(NONE));
 		gate(gates, "marker-transfer", () -> MarkerVelocityTransferValidation.main(NONE));
 		gate(gates, "marker-pressure", () -> MarkerPressureValidation.main(NONE));
 		gate(gates, "cut-cell", () -> FlipCutCellValidation.main(NONE),

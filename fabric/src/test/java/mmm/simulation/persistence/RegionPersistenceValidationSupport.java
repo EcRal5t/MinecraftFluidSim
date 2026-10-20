@@ -37,7 +37,7 @@ import java.util.UUID;
 
 abstract class RegionPersistenceValidationSupport {
 	static final FluidSolverConfig CONFIG = new FluidSolverConfig(
-			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F, 0.80F);
 	static final ResourceKey<Registry<Level>> DIMENSION_REGISTRY = ResourceKey.createRegistryKey(
 			Identifier.fromNamespaceAndPath("mmm", "persistence_validation_registry"));
 	static final ResourceKey<Level> DIMENSION = ResourceKey.create(DIMENSION_REGISTRY,

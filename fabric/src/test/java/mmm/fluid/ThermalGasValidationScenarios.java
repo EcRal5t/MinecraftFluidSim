@@ -343,7 +343,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				"test:restore_gas", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 400, 750),
 				new ThermalMaterialDefinition.CaloricSegment(400, 600, 1e308)));
 		var registry = new ThermalRegistry(List.of(water, material));
-		var config = new FluidSolverConfig(.5F, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, .8F);
+		var config = new FluidSolverConfig(.5F, 1000, 0, .001F, 100, 1e-5F, .002F, .8F);
 		var source = new FluidDomain(2, 2, 2, config, 256);
 		source.sealDomainBoundary(); source.bindGasRegistry(gas); source.bindThermal(registry, liquids, 300);
 		var snapshot = source.captureAuthoritativeState(); var inventory = snapshot.gas().nodes().getFirst().inventory();
@@ -844,7 +844,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			var inventory = new GasInventory(List.of(new GasComponentAmount("test:a", 1_000_000L, mmm.units.Mass.fromKilograms(mass), List.of(), mmm.units.Mass.fromKilograms(mass)),
 					new GasComponentAmount("test:b", 1_000_000L, mmm.units.Mass.fromKilograms(mass), List.of(), mmm.units.Mass.fromKilograms(mass))));
 			var domain = new FluidDomain(8, 4, 4,
-					new FluidSolverConfig(.5F, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, 0), 128);
+					new FluidSolverConfig(.5F, 1000, 0, .001F, 100, 1e-5F, .002F, 0), 128);
 			domain.sealDomainBoundary(); domain.setVolume(0, 0, 0, .125F);
 			domain.bindGasRegistry(gas);
 			var geometryTwin = new FluidDomain(8, 4, 4, domain.config, 128);
@@ -910,7 +910,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					scenario == 4 ? 2_000_000_000L : scenario == 5 ? 100_000_000L : 0L);
 			var before = domain.captureAuthoritativeState();
 			var beforeMarkers = domain.exportMaterialParticleState();
-			int bridgeCell = domain.cellIndex(phaseTopologyScene(false).bridges()[0], 1, 1);
+			int bridgeCell = domain.domainFlowFields.cellIndex(phaseTopologyScene(false).bridges()[0], 1, 1);
 			var beforeThermal = domain.exportThermalParticleState();
 			var beforeGas = domain.gasState.network.sealedInventory();
 			var beforeNodes = List.of(domain.gasState.network.inventory(1), domain.gasState.network.inventory(2));
@@ -994,9 +994,9 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var phase = domain.thermalState.gasLiquidPhase(domain.gasState.network);
 		var transition = domain.thermalState.registry().transitions().getFirst();
 		require(domain.gasState.network.nodeCount() == 3 && domain.totalVolumeExact() == 2
-				&& domain.gasState.frame.commonCellNode(domain.cellIndex(samples[0], 1, 1)) == 1
-				&& domain.gasState.frame.commonCellNode(domain.cellIndex(samples[1], 1, 1)) == 2
-				&& domain.gasState.frame.commonCellNode(domain.cellIndex(samples[2], 1, 1)) == 3,
+				&& domain.gasState.frame.commonCellNode(domain.domainFlowFields.cellIndex(samples[0], 1, 1)) == 1
+				&& domain.gasState.frame.commonCellNode(domain.domainFlowFields.cellIndex(samples[1], 1, 1)) == 2
+				&& domain.gasState.frame.commonCellNode(domain.domainFlowFields.cellIndex(samples[2], 1, 1)) == 3,
 				"independent interfaces did not begin in three distinct sealed cavities");
 		for (int node = 1; node <= 3; node++) require(phase.saturation(transition, 400,
 				domain.gasState.network.inventory(node), domain.thermalState.requireGasNodeState(node,
@@ -1008,7 +1008,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var joinedStats = domain.stepGasPhaseChangeOnly(2);
 		var firstStats = separate.stepGasPhaseChangeOnly(1);
 		require(firstStats.operations() == 1 && separate.gasState.network.nodeCount() == 2
-				&& separate.gasState.frame.commonCellNode(separate.cellIndex(samples[2], 1, 1)) == 2,
+				&& separate.gasState.frame.commonCellNode(separate.domainFlowFields.cellIndex(samples[2], 1, 1)) == 2,
 				"the first bridge did not merge its cavities and renumber the independent cavity");
 		separate = FluidDomain.restoreAuthoritativeState(separate.captureAuthoritativeState());
 		var secondStats = separate.stepGasPhaseChangeOnly(1);
@@ -1075,7 +1075,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		int width = scene.width();
 		int[] bridges = scene.bridges();
 		FluidDomain domain = new FluidDomain(width, 3, 3,
-				new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .45F, .002F, 0), 64);
+				new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .002F, 0), 64);
 		domain.sealDomainBoundary();
 		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < width; x++)
 			if (y != 1 || z != 1 || x == 0 || x == width - 1 || x == scene.separatingWall())
@@ -1143,7 +1143,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				topologyMaterial("test:tc", ThermalMaterialDefinition.CarrierKind.GAS, "test:c", -1e18, 1)));
 		for (var order : List.of(List.of("test:a", "test:b", "test:c"), List.of("test:a", "test:c", "test:b"))) {
 			FluidDomain domain = new FluidDomain(5, 2, 2,
-					new FluidSolverConfig(.5F, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, .8F), 128);
+					new FluidSolverConfig(.5F, 1000, 0, .001F, 100, 1e-5F, .002F, .8F), 128);
 			domain.sealDomainBoundary();
 			for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 5; x++)
 				if (!(y == 0 && z == 0 && x % 2 == 0)) domain.setSolid(x, y, z, true);
@@ -1151,7 +1151,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			var nodes = new java.util.ArrayList<mmm.fluid.air.GasStateSnapshot.Node>();
 			var source = mmm.fluid.air.GasAuditLedger.EMPTY;
 			for (int i = 0; i < 3; i++) {
-				int cell = domain.cellIndex(i * 2, 0, 0); Arrays.fill(membership, cell * 8, cell * 8 + 8, i + 1);
+				int cell = domain.domainFlowFields.cellIndex(i * 2, 0, 0); Arrays.fill(membership, cell * 8, cell * 8 + 8, i + 1);
 				var inventory = new GasInventory(List.of(new GasComponentAmount(order.get(i), 125_000_000, mmm.units.Mass.fromKilograms(1), List.of(), mmm.units.Mass.fromKilograms(1))));
 				nodes.add(new mmm.fluid.air.GasStateSnapshot.Node(cell * 8, inventory)); source = source.add(inventory);
 			}
@@ -1208,7 +1208,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				"mmm:water", 0, 1), topologyMaterial("test:ta", ThermalMaterialDefinition.CarrierKind.GAS, "test:a", 1e308, 1),
 				topologyMaterial("test:tb", ThermalMaterialDefinition.CarrierKind.GAS, "test:b", 1e308, 1)));
 		FluidDomain domain = new FluidDomain(5, 3, 3,
-				new FluidSolverConfig(.5F, 1000, 0, .001F, 100, 1e-5F, .45F, .002F, .8F), 128);
+				new FluidSolverConfig(.5F, 1000, 0, .001F, 100, 1e-5F, .002F, .8F), 128);
 		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 5; x++)
 			if (!(y == 1 && z == 1 && (x == 1 || x == 3 || initiallyAmbient && (x == 0 || x == 4))))
 				domain.setSolid(x, y, z, true);
@@ -1218,7 +1218,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			var nodes = new java.util.ArrayList<mmm.fluid.air.GasStateSnapshot.Node>();
 			var source = mmm.fluid.air.GasAuditLedger.EMPTY;
 			for (int i = 0; i < 2; i++) {
-				int cell = domain.cellIndex(1 + 2 * i, 1, 1); Arrays.fill(membership, cell * 8, cell * 8 + 8, i + 1);
+				int cell = domain.domainFlowFields.cellIndex(1 + 2 * i, 1, 1); Arrays.fill(membership, cell * 8, cell * 8 + 8, i + 1);
 				var inventory = new GasInventory(List.of(new GasComponentAmount(i == 0 ? "test:a" : "test:b",
 						125_000_000, mmm.units.Mass.fromKilograms(1), List.of(), mmm.units.Mass.fromKilograms(1))));
 				nodes.add(new mmm.fluid.air.GasStateSnapshot.Node(cell * 8, inventory)); source = source.add(inventory);
@@ -1341,7 +1341,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 
 	static void persistenceBarrierSynchronizesGasTopology() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
 		ThermalRegistry thermal = new ThermalRegistry(List.of(
@@ -1357,7 +1357,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		FluidDomain domain = new FluidDomain(4, 4, 4, config, 1_024);
 		domain.sealDomainBoundary();
 		domain.setVolume(0, 0, 0, 0.5F);
-		domain.setMarkerMaterial(0, liquids, 0);
+		domain.domainCollision.setMarkerMaterial(0, liquids, 0);
 		domain.bindGasRegistry(gas);
 		domain.bootstrapGasState("");
 		domain.bindThermal(thermal, liquids, 300.0);
@@ -1478,7 +1478,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	}
 
 	private static void gasExpansionRetainsTheOldControlVolume() {
-		var config = new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .45F, .002F, 0);
+		var config = new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .002F, 0);
 		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		var gas = BuiltinGasDefinitions.createRegistry();
 		var thermal = new ThermalRegistry(List.of(
@@ -1492,7 +1492,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			byte[] masks = new byte[8]; Arrays.fill(masks, (byte)255); masks[0] = masks[1] = 0;
 			domain.restoreParticleState(new FlipParticleState(2, 2, 2, .5F, 0, 0, new float[0], new float[0], mmm.units.Mass.createLiquid(.5F, 1000.0, new float[0]), masks));
 			domain.sealDomainBoundary(); domain.setVolume(1, 0, 0, initial);
-			domain.setMarkerMaterial(0, liquids, 0); domain.bindGasRegistry(gas); domain.bootstrapGasState("");
+			domain.domainCollision.setMarkerMaterial(0, liquids, 0); domain.bindGasRegistry(gas); domain.bootstrapGasState("");
 			domain.bindThermal(thermal, liquids, 600);
 			int oldNodes=domain.gasBoundary().nodeCount();GasInventory stock=GasInventory.EMPTY;
 			SignedDyadic oldVolume=SignedDyadic.ZERO,oldEnergy=SignedDyadic.ZERO;
@@ -1612,13 +1612,13 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			// Closing the only stock-bearing cell leaves its inventory without a successor.
 			var frame = refused.gasState.frame; long gasRevision = refused.gasState.network.revision();
 			var thermalRevision = refused.thermalState.thermalRevision();
-			long carrierRevision = refused.carrierMutationRevision();
+			long carrierRevision = refused.domainFlowFields.carrierMutationRevision();
 			var audit = refused.thermalAudit();
 			long chemicalRevision = refused.chemicalParcels == null ? 0 : refused.chemicalParcels.mutationRevision();
 			require(!insertGasFixtureLiquid(refused, insertion, 1), "finite gas cavity disappearance accepted insertion");
 			require(refused.particleCount() == 0 && refused.gasState.frame == frame
 					&& refused.gasState.network.revision() == gasRevision
-					&& refused.carrierMutationRevision() == carrierRevision
+					&& refused.domainFlowFields.carrierMutationRevision() == carrierRevision
 					&& refused.thermalState.thermalRevision().equals(thermalRevision) && refused.thermalAudit() == audit
 					&& (refused.chemicalParcels == null ? 0 : refused.chemicalParcels.mutationRevision()) == chemicalRevision
 					&& refused.exportGasState("").nodes().equals(state.gas().nodes()),
@@ -1644,18 +1644,18 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	}
 
 	private static boolean insertGasFixtureLiquid(FluidDomain domain, int insertion, float volume) {
-		if (insertion == 0) return domain.tryInsertExactVolume(0, 0, 0, volume, 0, 0, true).transferred();
-		if (insertion == 1) return domain.tryInsertExactMixture(0, 0, 0,
+		if (insertion == 0) return domain.domainInventory.tryInsertExactVolume(0, 0, 0, volume, 0, 0, true).transferred();
+		if (insertion == 1) return domain.domainInventory.tryInsertExactMixture(0, 0, 0,
 				List.of(new FluidDomain.MaterialPortion(0, volume, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(volume * 1000))), 0, true, 1.001).transferred();
 		if (insertion == 2) return domain.addVolumeNearBudgeted(0, 0, 0, volume, 0).addedVolume() == volume;
 		var record = domain.chemicalParcels.defaultRecord(BuiltinFluidMaterials.WATER.id(), volume, .5F, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(volume * 1000), false);
 		var ledger = mmm.chemistry.ChemicalTransferLedger.builder(domain.chemicalParcels.registry())
 				.add(BuiltinFluidMaterials.WATER.id(), false, volume, mmm.units.Mass.fromKilograms(volume * 125), record).build();
-		return domain.tryInsertExactChemical(0, 0, 0, ledger, 0, true, 1.001).transferred();
+		return domain.domainInventory.tryInsertExactChemical(0, 0, 0, ledger, 0, true, 1.001).transferred();
 	}
 
 	private static void coldGasExpansionRejectsExtractionBeforeWrite() {
-		var config = new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .45F, .002F, 0);
+		var config = new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .002F, 0);
 		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		var thermal = new ThermalRegistry(List.of(
 				new ThermalMaterialDefinition("test:cold_water", ThermalMaterialDefinition.CarrierKind.LIQUID,
@@ -1672,7 +1672,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		domain.bootstrapGasState(""); domain.bindThermal(thermal, liquids, Double.MIN_NORMAL);
 		var before = domain.exportMaterialParticleState(); var gas = domain.exportGasState("");
 		var frame = domain.gasState.frame; var network = domain.gasState.network;
-		long revision = network.revision(), carrierRevision = domain.carrierMutationRevision();
+		long revision = network.revision(), carrierRevision = domain.domainFlowFields.carrierMutationRevision();
 		var thermalRevision = domain.thermalState.thermalRevision(); var audit = domain.thermalAudit();
 		require(!domain.tryExtractExactVolume(0, 0, 0, .5F, 0).transferred(),
 				"unrepresentable gas expansion did not refuse the complete container extraction");
@@ -1684,7 +1684,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& gasAfter.externalSource().equals(gas.externalSource()) && gasAfter.escapedSink().equals(gas.escapedSink())
 				&& domain.gasState.frame == frame
 				&& domain.gasState.network == network && network.revision() == revision
-				&& domain.carrierMutationRevision() == carrierRevision && domain.thermalAudit() == audit
+				&& domain.domainFlowFields.carrierMutationRevision() == carrierRevision && domain.thermalAudit() == audit
 				&& domain.thermalState.thermalRevision().equals(thermalRevision)
 				&& domain.exactInternalEnergy().equals(audit.expectedInventory()),
 				"rejected extraction changed liquid, gas or thermal owners");
@@ -1746,7 +1746,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 
 	static void thermalGasPressureRowUsesIsentropicCompliance() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
 		ThermalRegistry thermal = new ThermalRegistry(List.of(
@@ -1762,7 +1762,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		domain.sealDomainBoundary();
 		domain.setVolume(1, 1, 1, 1.0F);
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
-			domain.setMarkerMaterial(marker, liquids, 0);
+			domain.domainCollision.setMarkerMaterial(marker, liquids, 0);
 		}
 		domain.bindGasRegistry(gas);
 		domain.bootstrapGasState("");
@@ -1775,7 +1775,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		double expectedStorage = config.density() * available * state.pressureCompliancePerPa()
 				/ (config.timeStep() * (double) config.timeStep()
 				* config.cellSize() * config.cellSize() * config.cellSize());
-		domain.step();
+		domain.domainStep.step();
 		require(domain.projection.gasPressureUnknown[1]
 				&& Math.abs(domain.projection.gasStorageCoefficient[1] - expectedStorage)
 				<= Math.ulp((float) expectedStorage),
@@ -1799,7 +1799,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		deepCold.sealDomainBoundary();
 		deepCold.setVolume(1, 1, 1, 1.0F);
 		for (int marker = 0; marker < deepCold.particleCount(); marker++) {
-			deepCold.setMarkerMaterial(marker, liquids, 0);
+			deepCold.domainCollision.setMarkerMaterial(marker, liquids, 0);
 		}
 		deepCold.bindGasRegistry(gas);
 		deepCold.bootstrapGasState("");
@@ -1821,7 +1821,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 
 	static void operatorVentClearsGasAndEnergyTogether() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
 		ThermalRegistry thermal = new ThermalRegistry(List.of(
@@ -1836,7 +1836,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		FluidDomain domain = new FluidDomain(3, 3, 3, config, 256);
 		domain.sealDomainBoundary();
 		domain.setVolume(1, 1, 1, 0.5F);
-		domain.setMarkerMaterial(0, liquids, 0);
+		domain.domainCollision.setMarkerMaterial(0, liquids, 0);
 		domain.bindGasRegistry(gas);
 		domain.bootstrapGasState("");
 		domain.bindThermal(thermal, liquids, 300.0);
@@ -2032,11 +2032,11 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		ThermalRegistry thermal = new ThermalRegistry(
 				List.of(water, oil, air, vapor), List.of(), List.of(boiling), "", "");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidDomain dense=new FluidDomain(4,4,4,config,256); dense.sealDomainBoundary();
 		for(int z=0;z<4;z++) for(int y=0;y<4;y++) for(int x=0;x<4;x++) dense.setSolid(x,y,z,true);
 		dense.setSolid(1,1,1,false); dense.setVolume(1,1,1,Math.nextDown(1F));
-		for(int marker=0;marker<dense.particleCount();marker++) dense.setMarkerMaterial(marker,liquids,0);
+		for(int marker=0;marker<dense.particleCount();marker++) dense.domainCollision.setMarkerMaterial(marker,liquids,0);
 		dense.bindGasRegistry(BuiltinGasDefinitions.createRegistry()); dense.bootstrapGasState("");
 		dense.bindThermal(thermal,liquids,GasRegistry.STANDARD_TEMPERATURE_K);
 		dense.commitOperatorVentSealedGas(dense.planOperatorVentSealedGas()); dense.stepGasPhaseChangeOnly(0);
@@ -2053,7 +2053,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		isolated.setSolidMicroMask(1, 1, 1, 0xAA);
 		isolated.setSolid(2, 1, 1, false);
 		isolated.setVolume(1, 1, 1, 0.5F);
-		isolated.setMarkerMaterial(0, liquids, 0);
+		isolated.domainCollision.setMarkerMaterial(0, liquids, 0);
 		isolated.bindThermal(thermal, liquids, 500.0);
 		SignedDyadic isolatedEnergy = isolated.exactInternalEnergy();
 		require(isolated.stepGasPhaseChangeOnly(128).operations() == 0
@@ -2080,10 +2080,10 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			if (x == 0 || x == 3 || y == 0 || y == 3 || z == 0 || z == 3) domain.setSolid(x, y, z, true);
 		}
 		domain.setVolume(1, 1, 1, 1.0F);
-		domain.setMarkerMaterial(0, liquids, 1);
+		domain.domainCollision.setMarkerMaterial(0, liquids, 1);
 		domain.bindThermal(thermal, liquids, 500.0);
-		domain.thermalState.preparePhaseScan(domain.thermalMarkerContext());
-		var emptyCandidate = domain.thermalState.preparePhaseCandidateCell(0, domain.thermalMarkerContext());
+		domain.thermalState.preparePhaseScan(domain.domainCapabilities.thermalMarkerContext());
+		var emptyCandidate = domain.thermalState.preparePhaseCandidateCell(0, domain.domainCapabilities.thermalMarkerContext());
 		var emptyCandidateBeforeEnergy = domain.exactInternalEnergy();
 		var emptyCandidateBeforeAudit = domain.thermalAudit();
 		var emptyCandidateBeforeRevision = domain.thermalState.thermalRevision();
@@ -2206,7 +2206,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		FluidDomain thin = new FluidDomain(3, 3, 3, config, 256);
 		thin.sealDomainBoundary();
 		thin.setVolume(1, 1, 1, 0.00016F);
-		thin.setMarkerMaterial(0, liquids, 0);
+		thin.domainCollision.setMarkerMaterial(0, liquids, 0);
 		thin.bindGasRegistry(BuiltinGasDefinitions.createRegistry()); thin.bootstrapGasState("");
 		thin.bindThermal(thermal, liquids, GasRegistry.STANDARD_TEMPERATURE_K);
 		thin.commitOperatorVentSealedGas(thin.planOperatorVentSealedGas());
@@ -2215,7 +2215,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var thinPhase = thin.stepGasPhaseChangeOnly(1);
 		require(thinPhase.operations() == 0 && thin.totalVolumeExact() == thinVolume && thin.totalMass() == thinMass
 				&& thin.exactInternalEnergy().equals(thinEnergy) && thin.gasBoundary().sealedInventory().isEmpty()
-				&& thin.thermalState.temperature(0, thin.thermalMarkerContext()) == GasRegistry.STANDARD_TEMPERATURE_K,
+				&& thin.thermalState.temperature(0, thin.domainCapabilities.thermalMarkerContext()) == GasRegistry.STANDARD_TEMPERATURE_K,
 				"sub-quantum evaporation crossed saturation and spent latent heat on a thin liquid carrier");
 		FluidDomain finiteVapor = new FluidDomain(3, 3, 3, config, 256);
 		finiteVapor.sealDomainBoundary();
@@ -2229,7 +2229,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		finiteVapor.gasState.network.commitPhaseSource(1, phaseModel.gasBatch(boiling, 2));
 		finiteVapor.bindThermal(thermal, finiteVapor.materialRegistry, GasRegistry.STANDARD_TEMPERATURE_K);
 		float[] condensationVelocity = {2.0F, -1.0F, 0.5F};
-		finiteVapor.ensureGrid();
+		finiteVapor.domainFlowFields.ensureGrid();
 		Arrays.fill(finiteVapor.mac.velocityX,condensationVelocity[0]);Arrays.fill(finiteVapor.mac.velocityY,condensationVelocity[1]);Arrays.fill(finiteVapor.mac.velocityZ,condensationVelocity[2]);
 		finiteVapor.bodyForceStage.enforceSolidFaceVelocities();finiteVapor.cellMacStage.publishMomentum();
 		long condensationMassBefore=finiteVapor.totalMassUnits();double[] condensationMomentum=macMomentumTotals(finiteVapor);
@@ -2257,7 +2257,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				return upper.carrierKind() == ThermalMaterialDefinition.CarrierKind.GAS
 						&& upper.carrierId().equals(BuiltinGasDefinitions.WATER_VAPOR);
 			}).findFirst().orElseThrow();
-			var domain = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,200,1e-5F,.45F,.002F,0),128);
+			var domain = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,200,1e-5F,.002F,0),128);
 			domain.sealDomainBoundary();
 			float volume = SolidVolume.toCellVolume(8*transition.lowerVolumeSvqPerBatch());
 			double solverMass = domain.unitScale.solverMass(transition.massKgPerBatch().multiply(8).toDouble());
@@ -2298,7 +2298,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			}).findFirst().orElseThrow();
 			for (boolean retainAir : new boolean[]{false, true}) {
 				var domain = new FluidDomain(3, 3, 3,
-						new FluidSolverConfig(.5F, 1000, 0, .05F, 200, 1e-5F, .45F, .002F, 0), 128);
+						new FluidSolverConfig(.5F, 1000, 0, .05F, 200, 1e-5F, .002F, 0), 128);
 				domain.sealDomainBoundary();
 				var masks = new byte[27]; Arrays.fill(masks, (byte) 255); masks[13] = 0;
 				float volume = 1 - SolidVolume.toCellVolume(8 * transition.lowerVolumeSvqPerBatch());
@@ -2376,10 +2376,10 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		ThermalRegistry thermal = new ThermalRegistry(
 				List.of(water, air, vapor), List.of(), List.of(boiling), "", "");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidDomain domain = new FluidDomain(4, 4, 4, config, 512);
 		domain.setVolume(2, 1, 1, 1.0F);
-		domain.setMarkerMaterial(0, liquids, 0);
+		domain.domainCollision.setMarkerMaterial(0, liquids, 0);
 		domain.bindGasRegistry(BuiltinGasDefinitions.createRegistry());
 		domain.bootstrapGasState("");
 		domain.bindThermal(thermal, liquids, 500.0);
@@ -2455,7 +2455,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						vapor.id(), ExactRational.ZERO)), List.of(boiling),
 				chemistry.fingerprint(), granular.fingerprint());
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidDomain domain = new FluidDomain(4, 4, 4, config, 512);
 		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
 			if (x == 0 || x == 3 || y == 0 || y == 3 || z == 0 || z == 3) domain.setSolid(x, y, z, true);
@@ -2593,7 +2593,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				SolidVolume.SVQ_PER_CELL / 64, SolidVolume.SVQ_PER_CUBIC_METER / 8, ExactRational.of(batchMass),
 				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 0, 1e8);
 		var registry = new ThermalRegistry(List.of(water, vapor), List.of(), List.of(transition), "", "");
-		var domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(.5F, 100_000, 0, .05F, 100, 1e-5F, .45F, .002F, 0), 64);
+		var domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(.5F, 100_000, 0, .05F, 100, 1e-5F, .002F, 0), 64);
 		domain.sealDomainBoundary();
 		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++)
 			if (y != 1 || z != 1 || x == 0) domain.setSolid(x, y, z, true);
@@ -2647,12 +2647,12 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 0, 1e8);
 		var registry = new ThermalRegistry(List.of(water, air, vapor), List.of(), List.of(transition), "", "");
 		var gases = BuiltinGasDefinitions.createRegistry();
-		var domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(.5F, 1e10F, 0, .05F, 100, 1e-5F, .45F, .002F, 0), 64);
+		var domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(.5F, 1e10F, 0, .05F, 100, 1e-5F, .002F, 0), 64);
 		domain.sealDomainBoundary();
 		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++)
 			if (y != 1 || z != 1 || x == 0) domain.setSolid(x, y, z, true);
 		restorePhaseTestCarriers(domain, liquids, new float[]{.125F}, new int[1]);
-		if (secondReceiver) require(domain.tryInsertExactMaterial(1, 1, 1, .125F, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(16), 0, 0).transferred(),
+		if (secondReceiver) require(domain.domainInventory.tryInsertExactMaterial(1, 1, 1, .125F, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(16), 0, 0).transferred(),
 				"mass-resolution receiver setup failed");
 		domain.bindGasRegistry(gases); domain.bootstrapGasState("");
 		domain.commitOperatorVentSealedGas(domain.planOperatorVentSealedGas());
@@ -2715,7 +2715,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				SolidVolume.SVQ_PER_CELL / 8, SolidVolume.SVQ_PER_CUBIC_METER / 32, ExactRational.ONE,
 				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 0, 1e8);
 		var registry = new ThermalRegistry(List.of(water, plus, minus, air, vapor), List.of(), List.of(transition), "", "");
-		var domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(.5F, 64, 0, .05F, 100, 1e-5F, .45F, .002F, 0), 64);
+		var domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(.5F, 64, 0, .05F, 100, 1e-5F, .002F, 0), 64);
 		domain.sealDomainBoundary();
 		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++)
 			if (y != 1 || z != 1 || x == 0) domain.setSolid(x, y, z, true);
@@ -2753,7 +2753,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				new ThermalSpeciesOffset("test:receiver/vapor_h2o", BuiltinChemicalDefinitions.H2O, vapor.id(), ExactRational.ZERO)),
 				List.of(transition), chemistry.fingerprint(), "");
 		var domain = new FluidDomain(3, 3, 3,
-				new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .45F, .002F, 0), 64);
+				new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .002F, 0), 64);
 		domain.sealDomainBoundary();
 		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++)
 			if (y != 1 || z != 1 || x == 0) domain.setSolid(x, y, z, true);
@@ -2833,12 +2833,12 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				new ThermalSpeciesOffset("test:search/vapor_h2o", BuiltinChemicalDefinitions.H2O, vapor.id(), ExactRational.ZERO)),
 				List.of(transition), chemistry.fingerprint(), "");
 		var domain = new FluidDomain(3, 3, 3,
-				new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .45F, .002F, 0), 64);
+				new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .002F, 0), 64);
 		domain.sealDomainBoundary();
 		restorePhaseTestCarriers(domain, liquids, new float[]{SolidVolume.toCellVolume(2 * batchSvq)}, new int[1]);
-		if (maximum == 4) require(domain.tryInsertExactVolume(1, 1, 1,
+		if (maximum == 4) require(domain.domainInventory.tryInsertExactVolume(1, 1, 1,
 				SolidVolume.toCellVolume(2 * batchSvq), 0, 0).transferred(), "integer-search second water insertion");
-		require(domain.tryInsertExactVolume(1, 1, 1, .125F, 0, 1).transferred(), "integer-search oil heat bath insertion");
+		require(domain.domainInventory.tryInsertExactVolume(1, 1, 1, .125F, 0, 1).transferred(), "integer-search oil heat bath insertion");
 		domain.bindChemistry(chemistry);
 		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1L), false);
 		if (maximum == 4) domain.setMarkerChemical(1, Map.of(BuiltinChemicalDefinitions.H2O, 3L), false);

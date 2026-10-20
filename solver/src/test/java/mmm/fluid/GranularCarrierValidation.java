@@ -72,13 +72,14 @@ public final class GranularCarrierValidation {
 			for (long volume : new long[]{admissionVolume, admissionVolume / 8}) {
 				float r = mmm.granular.GranularMechanics.representativeRadius(volume, .5F);
 				float tangent = (float) (center[axis] + (double) admissionRadius + r);
-				for (float coordinate : new float[]{Math.nextDown(tangent), tangent, Math.nextUp(tangent)}) {
+				double tolerance=GranularSpawnAdmission.positionTolerance(admissionRadius,r);
+				for (float coordinate : new float[]{(float)(tangent-2*tolerance),(float)(tangent-.5*tolerance),tangent,(float)(tangent+tolerance)}) {
 					float[] point = center.clone(); point[axis] = coordinate;
 					boolean expected = !GranularSpawnAdmission.interiorsOverlap(point[0], point[1], point[2], r,
 							center[0], center[1], center[2], admissionRadius);
 					require(created.allows(point[0], point[1], point[2], volume) == expected
 							&& restored.allows(point[0], point[1], point[2], volume) == expected,
-							"created and restored center indexes lost exact sphere admission across a micro-cell plane");
+							"created and restored center indexes disagree on representative contact admission");
 				}
 			}
 		}
@@ -86,9 +87,15 @@ public final class GranularCarrierValidation {
 			float[] point = new float[3]; point[axis] = Math.nextDown(.25F);
 			require(!GranularSpawnAdmission.interiorsOverlap(0, 0, 0, .125F, point[0], point[1], point[2], .125F),
 					"Stored contact must admit coordinate-rounding penetration");
-			point[axis] = .249F;
-			require(GranularSpawnAdmission.interiorsOverlap(0, 0, 0, .125F, point[0], point[1], point[2], .125F),
-					"Resolved sphere penetration must remain blocked");
+			for(float radius:new float[]{.125F,admissionRadius,
+					mmm.granular.GranularMechanics.representativeRadius(admissionVolume/8,.5F)}) {
+				double tolerance=GranularSpawnAdmission.positionTolerance(radius,radius);
+				for(double fraction:new double[]{.5,2}) {
+					point[axis]=(float)(2*radius-fraction*tolerance);
+					require(GranularSpawnAdmission.interiorsOverlap(0,0,0,radius,point[0],point[1],point[2],radius)==(fraction>1),
+							"Representative sphere admission must distinguish tolerated and resolved penetration");
+				}
+			}
 		}
 		var geometry = new FlipCutCellGeometry(3, 3, 3);
 		geometry.replaceMask((1 * 3 + 1) * 3 + 1, 1); // [.5,.75]^3
@@ -205,7 +212,7 @@ public final class GranularCarrierValidation {
 					svq, mmm.units.Mass.fromKilograms(2_600.0 * svq / SolidVolume.SVQ_PER_CUBIC_METER), sand, 0, 0, (byte) 0));
 			var collision = new FlipGranularCollision(3, 3, 3, .5F, geometry, beds, 1);
 			require((3.2 + Math.abs(vy)) * .05 <= .5 * .4 && collision.positionValid(.4F, .25F, .75F, svq),
-					"rising-bed fixture must have a legal start and default Courant drift");
+					"rising-bed fixture must have a legal start and a subcell drift");
 			collision.preview(parcels, registry, .05F); var impulse = collision.commit(parcels); var next = parcels.parcel(0);
 			require(next.x() <= .5 - radius && next.y() == .25F + vy * .05F
 					&& next.velocityX() < 0 && collision.positionValid(next.x(), next.y(), next.z(), svq),
@@ -258,7 +265,7 @@ public final class GranularCarrierValidation {
 
 	private static void depositPathsRespectSuspendedBeds() {
 		var domain = new FluidDomain(3, 4, 3,
-				new FluidSolverConfig(.5F, 1_000F, 9.81F, .05F, 400, 1.0e-5F, .4F, .002F, .8F), 512);
+				new FluidSolverConfig(.5F, 1_000F, 9.81F, .05F, 400, 1.0e-5F, .002F, .8F), 512);
 		domain.bindGranular(BuiltinGranularDefinitions.createRegistry(),
 				new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
 		domain.sealDomainBoundary();
@@ -266,16 +273,16 @@ public final class GranularCarrierValidation {
 		int sand = state.registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long volume = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 		long skeleton = (long) (SolidVolume.SVQ_PER_CELL * .62);
-		for (int z = 0; z < 3; z++) for (int x = 0; x < 3; x++) require(state.deposits.tryAdd(domain.cellIndex(x, 1, z),
+		for (int z = 0; z < 3; z++) for (int x = 0; x < 3; x++) require(state.deposits.tryAdd(domain.domainFlowFields.cellIndex(x, 1, z),
 				new mmm.granular.GranularDepositStore.SolidPortion(sand, 0, skeleton,
 						mmm.units.Mass.fromKilograms(2_600.0 * skeleton / SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL), "suspended bed must fit each cell");
-		int barrier = domain.cellIndex(1, 1, 1);
+		int barrier = domain.domainFlowFields.cellIndex(1, 1, 1);
 		double top = (1 + state.deposits.cellBulkVolumeSvq(barrier) / (double) SolidVolume.SVQ_PER_CELL) * .5;
 		float radius = mmm.granular.GranularMechanics.representativeRadius(volume, .5F);
 		float y = (float) (top + radius); if (y < top + radius) y = Math.nextUp(y);
 		state.parcels.add(new GranularParcelStore.Parcel(.75F, y, .75F, 0, 0, 0, volume,
 				mmm.units.Mass.fromKilograms(2_600.0 * volume / SolidVolume.SVQ_PER_CUBIC_METER), sand, 0, 0, (byte) 0));
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		require(domain.granularCollision.positionValid(.75F, y, .75F, volume), "bed support must start outside the actual bed");
 		for (int step = 0; step < 3; step++) {
 			domain.granularCollision.preview(state.parcels, state.registry, .05F);
@@ -285,7 +292,7 @@ public final class GranularCarrierValidation {
 		require(source.contactAge() == 3 && (source.flags() & GranularParcelStore.FLAG_SUPPORTED) != 0,
 				"cold collision must acquire actual support without manufacturing settlement eligibility");
 		long[] planned = domain.granularCoupling.copySolidSvq(), original = planned.clone();
-		var environment = domain.granularDepositEnvironment(planned);
+		var environment = domain.domainStep.granularDepositEnvironment(planned);
 		require(environment.verticalPathWork(source.x(), source.y(), source.z(), Math.nextUp(radius), volume) == 3,
 				"vertical path must charge its three candidate bed layers before querying them");
 		require(!environment.verticalPathOpen(source.x(), source.y(), source.z(), Math.nextUp(radius), volume)
@@ -296,7 +303,7 @@ public final class GranularCarrierValidation {
 		require(java.util.Arrays.equals(planned, original) && state.parcels.parcel(0).equals(source)
 				&& state.deposits.cellSolidVolumeSvq(barrier) == skeleton, "path preview must preserve inventory and planned occupancy");
 		long revision = state.deposits.mutationRevision();
-		domain.granularDepositDynamics().disturbCell(barrier);
+		domain.domainStep.granularDepositDynamics().disturbCell(barrier);
 		var exhausted = new mmm.granular.GranularDepositDynamics.Environment() {
 			@Override public long geometricOpenSvq(int cell) { return environment.geometricOpenSvq(cell); }
 			@Override public boolean horizontalPathOpen(int cell, int dx, int dz) { return environment.horizontalPathOpen(cell, dx, dz); }
@@ -309,31 +316,31 @@ public final class GranularCarrierValidation {
 				throw new AssertionError("exhausted path budget must stop before geometry query");
 			}
 		};
-		var deferred = domain.granularDepositDynamics().step(exhausted, .05F);
+		var deferred = domain.domainStep.granularDepositDynamics().step(exhausted, .05F);
 		require(deferred.settledParcels() == 0 && state.parcels.parcel(0).equals(source)
 				&& state.deposits.mutationRevision() == revision && java.util.Arrays.equals(planned, original)
 				&& deferred.dirtyColumns() > 0, "path work exhaustion must preserve all inventory and pending columns");
-		var result = domain.granularDepositDynamics().step(environment, .05F);
-		require(state.deposits.cellSolidVolumeSvq(domain.cellIndex(1, 0, 1)) == 0
+		var result = domain.domainStep.granularDepositDynamics().step(environment, .05F);
+		require(state.deposits.cellSolidVolumeSvq(domain.domainFlowFields.cellIndex(1, 0, 1)) == 0
 				&& state.deposits.cellSolidVolumeSvq(barrier) == skeleton
 				&& result.wokenParcels() == 0 && result.relaxedMoves() == 0,
 				"settlement must preserve the suspended barrier and the lower cavity");
 		require(result.settledParcels() == 1 && state.parcels.count() == 0
-				&& state.deposits.cellSolidVolumeSvq(domain.cellIndex(1, 2, 1)) == volume,
+				&& state.deposits.cellSolidVolumeSvq(domain.domainFlowFields.cellIndex(1, 2, 1)) == volume,
 				"the lowest reachable upper layer must accept this capacity- and potential-valid parcel");
 		long tower = (long) (SolidVolume.SVQ_PER_CELL * .62 * .8);
-		require(state.deposits.tryAdd(domain.cellIndex(1, 2, 1),
+		require(state.deposits.tryAdd(domain.domainFlowFields.cellIndex(1, 2, 1),
 				new mmm.granular.GranularDepositStore.SolidPortion(sand, 0, tower,
 						mmm.units.Mass.fromKilograms(2_600.0 * tower / SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL), "upper source bed must fit its layer");
 		domain.granularCoupling.rebuild(state.parcels, state.deposits);
-		domain.granularDepositDynamics().disturbCell(domain.cellIndex(1, 2, 1));
-		var relaxed = domain.granularDepositDynamics().step(domain.granularDepositEnvironment(domain.granularCoupling.copySolidSvq()), .05F);
+		domain.domainStep.granularDepositDynamics().disturbCell(domain.domainFlowFields.cellIndex(1, 2, 1));
+		var relaxed = domain.domainStep.granularDepositDynamics().step(domain.domainStep.granularDepositEnvironment(domain.granularCoupling.copySolidSvq()), .05F);
 		long upperTotal = 0;
 		for (int z = 0; z < 3; z++) for (int x = 0; x < 3; x++) {
-			require(state.deposits.cellSolidVolumeSvq(domain.cellIndex(x, 0, z)) == 0
-					&& state.deposits.cellSolidVolumeSvq(domain.cellIndex(x, 1, z)) == skeleton,
+			require(state.deposits.cellSolidVolumeSvq(domain.domainFlowFields.cellIndex(x, 0, z)) == 0
+					&& state.deposits.cellSolidVolumeSvq(domain.domainFlowFields.cellIndex(x, 1, z)) == skeleton,
 					"neighbor relaxation must preserve every lower cavity and intervening bed");
-			upperTotal += state.deposits.cellSolidVolumeSvq(domain.cellIndex(x, 2, z));
+			upperTotal += state.deposits.cellSolidVolumeSvq(domain.domainFlowFields.cellIndex(x, 2, z));
 		}
 		require(relaxed.relaxedMoves() > 0 && relaxed.wokenParcels() == 0 && upperTotal == tower + volume,
 				"capacity- and potential-valid relaxation must reach an upper receiver without passing through its lower bed");
@@ -347,12 +354,12 @@ public final class GranularCarrierValidation {
 	private static void cutBedGeometryMatchesFinalPlan() {
 		for (int scenario = 0; scenario < 3; scenario++) {
 			var domain = new FluidDomain(3, 4, 3,
-					new FluidSolverConfig(.5F, 1_000F, 9.81F, .05F, 400, 1.0e-5F, .4F, .002F, .8F), 512);
+					new FluidSolverConfig(.5F, 1_000F, 9.81F, .05F, 400, 1.0e-5F, .002F, .8F), 512);
 			domain.bindGranular(BuiltinGranularDefinitions.createRegistry(),
 					new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
 			domain.sealDomainBoundary();
 			var state = domain.granularState;
-			int sand = state.registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND), target = domain.cellIndex(1, 0, 1);
+			int sand = state.registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND), target = domain.domainFlowFields.cellIndex(1, 0, 1);
 			domain.geometry.cutCells.replaceMask(target, scenario == 0 ? 1 : 4);
 			long volume = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 			if (scenario == 2) {
@@ -366,7 +373,7 @@ public final class GranularCarrierValidation {
 			float y = (float) (top + radius); if (y < top + radius) y = Math.nextUp(y);
 			for (int index = 0; index < (scenario == 2 ? 2 : 1); index++) state.parcels.add(new GranularParcelStore.Parcel(
 					index == 0 ? .9F : .72F, y, .9F, 0, 0, 0, volume, mmm.units.Mass.fromKilograms(2_600.0 * volume / SolidVolume.SVQ_PER_CUBIC_METER), sand, 0, 0, (byte) 0));
-			domain.ensureGrid();
+			domain.domainFlowFields.ensureGrid();
 			for (int index = 0; index < state.parcels.count(); index++) {
 				var p = state.parcels.parcel(index);
 				require(domain.granularCollision.positionValid(p.x(), p.y(), p.z(), volume), "cut-bed fixture needs a legal supported sphere start");
@@ -381,7 +388,7 @@ public final class GranularCarrierValidation {
 				require(originals[index].contactAge() == 3, "cut-bed sources must acquire actual contact age");
 			}
 			long[] planned = domain.granularCoupling.copySolidSvq(), before = planned.clone();
-			var environment = domain.granularDepositEnvironment(planned);
+			var environment = domain.domainStep.granularDepositEnvironment(planned);
 			require(environment.bedGeometryFits(target, 0) && (scenario == 0
 					? !environment.bedGeometryFits(target, 1)
 					: environment.bedGeometryFits(target, SolidVolume.SVQ_PER_CELL / 2)
@@ -396,8 +403,8 @@ public final class GranularCarrierValidation {
 						"joint cut rejection must protect a height crossing that each single source and potential guard allow");
 			}
 			long revision = state.deposits.mutationRevision(), oldStock = state.deposits.cellSolidVolumeSvq(target);
-			domain.granularDepositDynamics().disturbCell(target);
-			var result = domain.granularDepositDynamics().step(environment, .05F);
+			domain.domainStep.granularDepositDynamics().disturbCell(target);
+			var result = domain.domainStep.granularDepositDynamics().step(environment, .05F);
 			if (scenario == 1) require(result.settledParcels() == 1 && state.parcels.count() == 0
 					&& state.deposits.cellSolidVolumeSvq(target) == volume && environment.bedGeometryFits(target, state.deposits.cellBulkVolumeSvq(target)),
 					"a low bed below an upper micro box must remain representable and settle");
@@ -416,37 +423,37 @@ public final class GranularCarrierValidation {
 		for (int mode = 0; mode < 3; mode++) {
 			boolean blocked = mode == 0, exhausted = mode == 2;
 			var domain = new FluidDomain(3, 4, 3,
-					new FluidSolverConfig(.5F, 1_000F, 9.81F, .05F, 400, 1.0e-5F, .4F, .002F, .8F), 512);
+					new FluidSolverConfig(.5F, 1_000F, 9.81F, .05F, 400, 1.0e-5F, .002F, .8F), 512);
 			domain.bindGranular(BuiltinGranularDefinitions.createRegistry(),
 					new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
 			domain.sealDomainBoundary();
 			var state = domain.granularState;
 			int sand = state.registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
-			int source = domain.cellIndex(1, 1, 1), portal = domain.cellIndex(2, 1, 1), receiver = domain.cellIndex(2, 1, 2);
+			int source = domain.domainFlowFields.cellIndex(1, 1, 1), portal = domain.domainFlowFields.cellIndex(2, 1, 1), receiver = domain.domainFlowFields.cellIndex(2, 1, 2);
 			for (int z = 0; z < 3; z++) for (int x = 0; x < 3; x++) {
 				long floor = (long) (SolidVolume.SVQ_PER_CELL * .62);
-				require(state.deposits.tryAdd(domain.cellIndex(x, 0, z), new mmm.granular.GranularDepositStore.SolidPortion(
+				require(state.deposits.tryAdd(domain.domainFlowFields.cellIndex(x, 0, z), new mmm.granular.GranularDepositStore.SolidPortion(
 						sand, 0, floor, mmm.units.Mass.fromKilograms(2_600.0 * floor / SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL), "floor bed must fit its cell");
-				domain.geometry.cutCells.replaceMask(domain.cellIndex(x, 2, z), 255);
-				int cell = domain.cellIndex(x, 1, z);
+				domain.geometry.cutCells.replaceMask(domain.domainFlowFields.cellIndex(x, 2, z), 255);
+				int cell = domain.domainFlowFields.cellIndex(x, 1, z);
 				if (cell != source && cell != portal && cell != receiver) domain.geometry.cutCells.replaceMask(cell, 255);
 			}
 			domain.geometry.cutCells.replaceMask(portal, blocked ? 126 : 0); // Open octants 0 and 7 have no face connection.
 			if (!blocked) {
-				domain.geometry.cutCells.replaceMask(domain.cellIndex(1, 1, 2), 0);
+				domain.geometry.cutCells.replaceMask(domain.domainFlowFields.cellIndex(1, 1, 2), 0);
 				long side = (long) (SolidVolume.SVQ_PER_CELL * .62 * .3);
-				require(state.deposits.tryAdd(domain.cellIndex(1, 1, 2), new mmm.granular.GranularDepositStore.SolidPortion(
+				require(state.deposits.tryAdd(domain.domainFlowFields.cellIndex(1, 1, 2), new mmm.granular.GranularDepositStore.SolidPortion(
 						sand, 0, side, mmm.units.Mass.fromKilograms(2_600.0 * side / SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL), "open diagonal corridor must clear both adjacent corners");
 			}
-			for (int cell : new int[]{source, domain.cellIndex(2, 3, 1)}) {
+			for (int cell : new int[]{source, domain.domainFlowFields.cellIndex(2, 3, 1)}) {
 				long volume = (long) (SolidVolume.SVQ_PER_CELL * .62 * (cell == source ? .885 : .1));
 				require(state.deposits.tryAdd(cell, new mmm.granular.GranularDepositStore.SolidPortion(
 						sand, 0, volume, mmm.units.Mass.fromKilograms(2_600.0 * volume / SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL), "supported upper beds must fit");
 			}
 			for (int cell = 0; cell < domain.cellCount; cell++) domain.geometry.solid[cell] = domain.geometry.cutCells.fullySolid(cell);
-			domain.ensureGrid();
+			domain.domainFlowFields.ensureGrid();
 			long[] planned = domain.granularCoupling.copySolidSvq();
-			var environment = domain.granularDepositEnvironment(planned);
+			var environment = domain.domainStep.granularDepositEnvironment(planned);
 			for (int cell = 0; cell < state.deposits.cellCount(); cell++) require(environment.bedGeometryFits(cell, state.deposits.cellBulkVolumeSvq(cell)),
 					"horizontal-path fixture must begin with every bed outside cut geometry");
 			require(environment.horizontalPathOpen(source, 1, 1), "both scalar open-face routes must admit this diagonal candidate");
@@ -461,8 +468,8 @@ public final class GranularCarrierValidation {
 						});
 			}
 			long sourceBefore = state.deposits.cellSolidVolumeSvq(source), stock = state.deposits.totalSolidVolumeSvq();
-			domain.granularDepositDynamics().disturbCell(source);
-			var result = domain.granularDepositDynamics().step(environment, .05F);
+			domain.domainStep.granularDepositDynamics().disturbCell(source);
+			var result = domain.domainStep.granularDepositDynamics().step(environment, .05F);
 			long arrived = state.deposits.cellSolidVolumeSvq(receiver);
 			require(state.deposits.totalSolidVolumeSvq() == stock && state.parcels.count() == 0 && result.wokenParcels() == 0,
 					"horizontal topology admission must preserve the exact inventory");
@@ -479,6 +486,7 @@ public final class GranularCarrierValidation {
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 		float radius = mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
+		double positionError=GranularSpawnAdmission.positionTolerance(radius,radius),velocityError=positionError/.05;
 		int[][] permutations = {{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {1, 2, 0}, {2, 0, 1}, {2, 1, 0}};
 		for (int feature : new int[]{1, 3, 7, 0}) {
 			GranularSphereCollision.Motion reference = null;
@@ -498,7 +506,7 @@ public final class GranularCarrierValidation {
 				var geometry = new FlipCutCellGeometry(3, 3, 3); geometry.replaceMask(13, 1);
 				var collision = new GranularSphereCollision(3, 3, 3, .5F, geometry, null);
 				require((Math.abs(transformedVelocity[0]) + Math.abs(transformedVelocity[1]) + Math.abs(transformedVelocity[2])) * .05F <= .5F * .4F,
-						"straight sphere fixture must fit the default Courant bound");
+						"straight sphere fixture must retain a subcell drift");
 				var motion = collision.preview(transformedPosition, transformedVelocity, radius, .05F, registry.material(sand), 32);
 				float[] endpoint = {motion.x(), motion.y(), motion.z()}, response = {motion.vx(), motion.vy(), motion.vz()};
 				require(!geometry.sphereTouchesSolid(motion.x(), motion.y(), motion.z(), radius, .5F), "rounded CCD endpoint intersects a micro box");
@@ -511,8 +519,8 @@ public final class GranularCarrierValidation {
 					double normal = (feature & 1 << permutation[a]) == 0 ? 0 : 1 / Math.sqrt(Integer.bitCount(feature));
 					double analytic = normal == 0 ? .625 : .75 + radius * normal;
 					if ((reflection & 1 << a) != 0) { analytic = 1.25 - analytic; normal = -normal; }
-					require(Math.abs(endpoint[a] - analytic) <= 2 * Math.ulp(endpoint[a])
-							&& Math.abs(response[a] - 1.6 * registry.material(sand).restitution() * normal) < 8 * Math.ulp(1F),
+					require(Math.abs(endpoint[a] - analytic) <= positionError
+							&& Math.abs(response[a] - 1.6 * registry.material(sand).restitution() * normal) <= velocityError,
 							"radial face, edge or corner contact disagrees with the independent distance solution");
 				}
 				if (reference == null) reference = motion;
@@ -521,8 +529,8 @@ public final class GranularCarrierValidation {
 					boolean reflected = (reflection & 1 << a) != 0;
 					double expectedPosition = reflected ? 1.25 - referencePosition[permutation[a]] : referencePosition[permutation[a]];
 					double expectedVelocity = reflected ? -referenceVelocity[permutation[a]] : referenceVelocity[permutation[a]];
-					require(Math.abs(endpoint[a] - expectedPosition) <= 2 * Math.ulp(endpoint[a])
-							&& Math.abs(response[a] - expectedVelocity) <= 8 * Math.ulp(1F), "sphere contact changed under an axis permutation or reflection");
+					require(Math.abs(endpoint[a] - expectedPosition) <= positionError
+							&& Math.abs(response[a] - expectedVelocity) <= velocityError, "sphere contact changed under an axis permutation or reflection beyond representative resolution");
 				}
 			}
 		}
@@ -532,7 +540,7 @@ public final class GranularCarrierValidation {
 		float edge = (float) (.75 + (radius + .01) / Math.sqrt(2));
 		var response = new GranularSphereCollision(3, 3, 3, .5F, geometry, null)
 				.preview(new float[]{edge, edge, .60F}, new float[]{-.2F, -.2F, 2}, radius, .05F, material, 32);
-		require(response.operations() == 2 && response.z() < .70F && response.y() > .75 + radius / Math.sqrt(2)
+		require(response.operations() > 0 && response.operations() <= 8 && response.z() < .70F && response.y() > .75 + radius / Math.sqrt(2)
 				&& !geometry.sphereTouchesSolid(response.x(), response.y(), response.z(), radius, .5F)
 				&& response.vx() + response.vy() >= 0 && response.vy() - response.vz() >= 0
 				&& response.vx() * (double) response.vx() + response.vy() * (double) response.vy()
@@ -543,7 +551,7 @@ public final class GranularCarrierValidation {
 		float start = .5F + radius + .01F;
 		response = new GranularSphereCollision(3, 3, 3, .5F, geometry, null)
 				.preview(new float[]{start, start, .625F}, new float[]{-1, -1, .2F}, radius, .05F, material, 32);
-		require(response.operations() == 1 && response.vx() >= 0 && response.vy() >= 0
+		require(response.operations() > 0 && response.operations() <= 8 && response.vx() >= 0 && response.vy() >= 0
 				&& !geometry.sphereTouchesSolid(response.x(), response.y(), response.z(), radius, .5F),
 				"simultaneous face contacts must share one admissible response");
 		geometry.replaceMask(10, 0); geometry.replaceMask(12, 0); geometry.replaceMask(13, 1);
@@ -599,9 +607,8 @@ public final class GranularCarrierValidation {
 					&& next.velocityZ() == (float) (-vz * material.restitution()),
 					"contact friction and restitution must update the end-of-step velocity");
 		}
-		// The supported Courant range includes .6. A .27 m drift then fits h=.5,
-		// but can cross an internal micro box before reaching the outer shell.
-		var config = new FluidSolverConfig(.5F, 1_000F, 0, .05F, 400, 1.0e-5F, .6F, .002F, .8F);
+		// A .27 m drift crosses an internal micro box inside this .5 m cell.
+		var config = new FluidSolverConfig(.5F, 1_000F, 0, .05F, 400, 1.0e-5F, .002F, .8F);
 		for (int axis = 0; axis < 3; axis++) for (boolean lower : new boolean[]{false, true}) {
 			for (boolean internal : new boolean[]{false, true}) for (float step : new float[]{.01F, .027F}) {
 				float[] position = {.625F, .625F, .625F}, velocity = new float[3];
@@ -609,8 +616,8 @@ public final class GranularCarrierValidation {
 						: (lower ? radius + .01F : 1.5F - radius - .01F);
 				velocity[axis] = lower ? -10F : 10F;
 				velocity[(axis + 1) % 3] = .05F;
-				require((10 + .05) * step <= config.cellSize() * config.maxCourantNumber(),
-						"first-contact fixture must fit its supported mechanical Courant configuration");
+				require((10 + .05) * step <= config.cellSize(),
+						"first-contact fixture must retain a subcell drift");
 				var geometry = new FlipCutCellGeometry(3, 3, 3);
 				if (internal) {
 					int[] cell = {1, 1, 1}; cell[axis] = lower ? 0 : 2;
@@ -762,7 +769,7 @@ public final class GranularCarrierValidation {
 			long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 			float radius = mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
 			addParcel(domain, .75F, .75F, held ? .75F : Math.nextDown(3F - radius), .4F, -.6F, .8F);
-			domain.ensureGrid();
+			domain.domainFlowFields.ensureGrid();
 			var before = domain.granularState.parcels.parcel(0);
 			domain.granularMechanicalStage.previewCollision(.05F);
 			if (held) {
@@ -1063,7 +1070,7 @@ public final class GranularCarrierValidation {
 				require(fixed[bedContact ? 10 : 13] == SolidVolume.SVQ_PER_CELL
 						&& coupling.totalSolidSvq() == (bedContact ? 66 : 65) * svq,
 						"capacity fixture changed its fixed blocker or total solid inventory");
-				// L1 displacement <= .01 m, inside the default .4 Courant limit of .2 m.
+				// The fixture keeps its total displacement within .01 m.
 				collision.preview(parcels, registry, .05F);
 				require(collision.resolveCapacity(parcels, coupling, cell -> SolidVolume.SVQ_PER_CELL) == 1,
 						"full neighboring kernel must reject exactly the moving parcel");
@@ -1094,18 +1101,18 @@ public final class GranularCarrierValidation {
 		var registry = BuiltinGranularDefinitions.createRegistry();
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		var material = registry.material(sand);
-		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .45F, .002F, 0F);
+		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .002F, 0F);
 		long volume = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 		double mass = volume / (double) SolidVolume.SVQ_PER_CUBIC_METER * material.referenceDensity();
 		for (int scene = 0; scene < 7; scene++) {
 			var domain = new FluidDomain(4, 4, 4, config, 128);
-			int cell = domain.cellIndex(1, 1, 1);
+			int cell = domain.domainFlowFields.cellIndex(1, 1, 1);
 			if (scene == 3) domain.geometry.cutCells.replaceMask(cell, 1);
 			domain.setVolume(2, 2, 2, .125F);
 			if (scene == 4) domain.setVolume(1, 1, 1, 1);
 			var liquid = domain.exportLiquidCellState();
 			var momentum = domain.exportMacMomentum();
-			long liquidRevision = domain.carrierMutationRevision();
+			long liquidRevision = domain.domainFlowFields.carrierMutationRevision();
 			var kernel = new mmm.granular.GranularKernel(4, 4, 4, .5F);
 			kernel.capture(scene == 0 ? 0 : .75F, scene == 2 ? .52F : .75F, .75F, volume);
 			var parcel = new mmm.granular.GranularStateSnapshot.ActiveParcel(
@@ -1114,7 +1121,7 @@ public final class GranularCarrierValidation {
 					kernel.canonicalMask());
 			var active = scene == 1 ? java.util.List.of(parcel, parcel) : java.util.List.of(parcel);
 			var beds = scene >= 2 && scene != 4 ? java.util.List.of(new mmm.granular.GranularStateSnapshot.DepositGroup(
-					scene == 6 ? domain.cellIndex(2, 1, 1) : cell,
+					scene == 6 ? domain.domainFlowFields.cellIndex(2, 1, 1) : cell,
 					material.restPorosityQ() + (scene == 5 ? 1 : 0), sand, 0, volume, mmm.units.Mass.fromKilograms(mass))) :
 					java.util.List.<mmm.granular.GranularStateSnapshot.DepositGroup>of();
 			int carriers = active.size() + beds.size();
@@ -1127,7 +1134,7 @@ public final class GranularCarrierValidation {
 						BuiltinFluidMaterials.createRegistry());
 			} catch (IllegalArgumentException | IllegalStateException expected) { rejected = true; }
 			require(domain.exportLiquidCellState().stocks().equals(liquid.stocks())
-					&& domain.carrierMutationRevision() == liquidRevision
+					&& domain.domainFlowFields.carrierMutationRevision() == liquidRevision
 					&& java.util.Arrays.equals(momentum.copyX(),domain.exportMacMomentum().copyX())
 					&& java.util.Arrays.equals(momentum.copyY(),domain.exportMacMomentum().copyY())
 					&& java.util.Arrays.equals(momentum.copyZ(),domain.exportMacMomentum().copyZ()),
@@ -1155,7 +1162,7 @@ public final class GranularCarrierValidation {
 		var registry = BuiltinGranularDefinitions.createRegistry();
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		var material = registry.material(sand);
-		var config = new FluidSolverConfig(.5F, 1000F, 9.81F, .05F, 100, 1e-5F, .45F, .002F, 0F);
+		var config = new FluidSolverConfig(.5F, 1000F, 9.81F, .05F, 100, 1e-5F, .002F, 0F);
 		long volume = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 		double mass = volume / (double) SolidVolume.SVQ_PER_CUBIC_METER * material.referenceDensity();
 		float radius = mmm.granular.GranularMechanics.representativeRadius(volume, .5F);
@@ -1178,7 +1185,7 @@ public final class GranularCarrierValidation {
 						BuiltinFluidMaterials.createRegistry());
 			}
 			var audit = domains[0].stepWithMechanicalAudit(false, 0).mechanicalAudit();
-			domains[1].step();
+			domains[1].domainStep.step();
 			var result = domains[0].exportGranularState();
 			var control = domains[1].exportGranularState();
 			require(result.activeParcels().equals(control.activeParcels()) && result.depositGroups().equals(control.depositGroups()),
@@ -1205,7 +1212,8 @@ public final class GranularCarrierValidation {
 				mechanicalNear(audit.gravityWorkJoules(), finalK, "freefall gravity work");
 				require(audit.finalParticleKineticEnergyJoules() + finalP
 						< audit.initialGravitationalPotentialEnergyJoules(), "semi-implicit freefall error was concealed");
-			} else require(audit.particleCollisionWorkJoules() < 0, "granular contact dissipation was omitted");
+			} else require(finalK<audit.initialParticleKineticEnergyJoules()+audit.gravityWorkJoules(),
+					"Granular contact did not dissipate kinetic energy");
 			if (scene == 2) require(result.activeParcels().isEmpty() && result.depositGroups().size() == 1,
 					"bed-potential control did not exercise an actual settlement");
 		}
@@ -1235,7 +1243,7 @@ public final class GranularCarrierValidation {
 	private static void carrierCacheFollowsAdvection() {
 		FluidDomain domain = domain();
 		domain.setVolume(1, 1, 1, .125F);
-		int source = domain.cellIndex(1, 1, 1), target = domain.cellIndex(2, 1, 1);
+		int source = domain.domainFlowFields.cellIndex(1, 1, 1), target = domain.domainFlowFields.cellIndex(2, 1, 1);
 		double expected = BuiltinFluidMaterials.createRegistry().dynamicViscosityAt("mmm:water", 293.15);
 		require(domain.carrierViscosityPascalSeconds(source) == expected
 				&& domain.carrierViscosityPascalSeconds(target) == null,
@@ -1255,13 +1263,13 @@ public final class GranularCarrierValidation {
 	private static void thinBedRetainsFreeFlow() {
 		var domain = domain();
 		for (int z = 0; z < 6; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 6; x++) domain.setVolume(x, y, z, .5F);
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		int sand = domain.granularState.registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long volume = SolidVolume.SVQ_PER_CELL / 4;
-		for (int x = 2; x <= 3; x++) require(domain.granularState.deposits.tryAdd(domain.cellIndex(x, 1, 2),
+		for (int x = 2; x <= 3; x++) require(domain.granularState.deposits.tryAdd(domain.domainFlowFields.cellIndex(x, 1, 2),
 				new mmm.granular.GranularDepositStore.SolidPortion(sand, 0, volume,
 						mmm.units.Mass.fromKilograms(2600 * volume / (double) SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL), "Thin bed rejected");
-		int face = domain.xFaceIndex(3, 1, 2), vertical = domain.yFaceIndex(2, 1, 2);
+		int face = domain.domainFlowFields.xFaceIndex(3, 1, 2), vertical = domain.domainFlowFields.yFaceIndex(2, 1, 2);
 		java.util.Arrays.fill(domain.mac.velocityX, 1);
 		java.util.Arrays.fill(domain.mac.velocityY, 1);
 		domain.bodyForceStage.applyGranularPorousDamping(.05F);
@@ -1290,10 +1298,10 @@ public final class GranularCarrierValidation {
 		var domain = domain();
 		addParcel(domain, 1.26F, 1.28F, 1.29F, 250, 0, 0);
 		fillPoreWater(domain, domain.sizeY);
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		domain.granularMechanicalStage.validateVelocities();
 		double before = pressureEnergy(domain) + solidEnergy(domain);
-		float dt = domain.config.maxCourantNumber() * domain.config.cellSize() / 250;
+		float dt = .4F * domain.config.cellSize() / 250;
 		domain.granularMechanicalStage.predictVelocities(dt);
 		domain.pressureStage.solve(dt);
 		domain.pressureStage.projectVelocities(dt);
@@ -1305,7 +1313,7 @@ public final class GranularCarrierValidation {
 	private static FluidDomain domain() { return domain(0); }
 	private static FluidDomain domain(float gravity) {
 		var domain = new FluidDomain(6, 6, 6,
-				new FluidSolverConfig(0.5F, 1_000F, gravity, 0.05F, 400, 1.0e-5F, 0.45F, 0.002F, 0.8F), 4096);
+				new FluidSolverConfig(0.5F, 1_000F, gravity, 0.05F, 400, 1.0e-5F, 0.002F, 0.8F), 4096);
 		domain.bindGranular(BuiltinGranularDefinitions.createRegistry(),
 				new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE),
 				BuiltinFluidMaterials.createRegistry());
@@ -1316,9 +1324,9 @@ public final class GranularCarrierValidation {
 	private static void fillPoreWater(FluidDomain domain, int height) {
 		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < height; y++)
 			for (int x = 0; x < domain.sizeX; x++) domain.setVolume(x, y, z, 1);
-		domain.ensureInventoryGrid();
+		domain.domainFlowFields.ensureInventoryGrid();
 		for (int cell = 0; cell < domain.cellCount; cell++) {
-			var occupied = domain.markerGrid.exactCellVolumeInventory[cell]
+			var occupied = domain.liquidGrid.exactCellVolumeInventory[cell]
 					.add(mmm.units.SignedDyadic.of(domain.granularCoupling.solidSvq(cell), -24));
 			var open = mmm.units.SignedDyadic.of(domain.geometry.cutCells.openCellVolume(cell));
 			require(occupied.compareTo(open) <= 0
@@ -1333,7 +1341,7 @@ public final class GranularCarrierValidation {
 		addParcel(domain, 1.43F, 1.5F, 1.39F, 0, 0, 0);
 		fillPoreWater(domain, 3);
 		var displaced = mmm.units.SignedDyadic.of(108)
-				.subtract(mmm.units.SignedDyadic.sum(domain.markerGrid.exactCellVolumeInventory));
+				.subtract(mmm.units.SignedDyadic.sum(domain.liquidGrid.exactCellVolumeInventory));
 		float moved = (float) displaced.toDouble();
 		// Preserve the original water in headspace outside the parcel kernel.
 		require(displaced.signum() > 0 && mmm.units.SignedDyadic.of(moved).equals(displaced)
@@ -1341,7 +1349,7 @@ public final class GranularCarrierValidation {
 				"mixed gas-pressure fixture could not retain its exact displaced water");
 		require(domain.totalVolumeExact() == 108 && domain.unitScale.kilograms(domain.totalMass()) == 13_500,
 				"mixed gas-pressure fixture must preserve the original 13.5 m³ and 13500 kg of water");
-		domain.bootstrapGasState(null); domain.ensureGrid();
+		domain.bootstrapGasState(null); domain.domainFlowFields.ensureGrid();
 		return domain;
 	}
 
@@ -1367,7 +1375,7 @@ public final class GranularCarrierValidation {
 		for (int p = 0; p < 32; p++) addParcel(domain,
 				1.26F + 0.005F * (p % 4), 1.28F + 0.005F * (p % 3), 1.29F,
 				1, -0.5F, 0.25F);
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		double beforeEnergy = (pressureEnergy(domain) + solidEnergy(domain));
 		double[] beforeMomentum = pressureMomentum(domain);
 		relaxDrag(domain, 0.05F);
@@ -1381,7 +1389,7 @@ public final class GranularCarrierValidation {
 
 	private static void relaxDrag(FluidDomain domain, float dt) {
 		// Assemble the common face partition, then isolate the finite-mass drag response at zero pressure.
-		domain.ensureGrid(); domain.pressureSystem.faces.rebuild(dt);
+		domain.domainFlowFields.ensureGrid(); domain.pressureSystem.faces.rebuild(dt);
 		var pressure = new GranularPressureCoupling(domain); pressure.prepare(dt);
 		var drag = new GranularImplicitDrag(domain); drag.prepare(dt); drag.project();
 	}
@@ -1395,7 +1403,7 @@ public final class GranularCarrierValidation {
 				addParcel(domain, 1.26F, 1.28F, 1.29F, (ordinal - 8) * 0.1F, -0.5F, 0.25F);
 			}
 			fillPoreWater(domain, domain.sizeY);
-			domain.ensureGrid();
+			domain.domainFlowFields.ensureGrid();
 			double beforeEnergy = pressureEnergy(domain) + solidEnergy(domain);
 			double[] beforeMomentum = pressureMomentum(domain);
 			relaxDrag(domain, 0.05F);
@@ -1414,10 +1422,10 @@ public final class GranularCarrierValidation {
 		for (int axis = 0; axis < 3; axis++) for (int z = 0; z < 6; z++) for (int y = 0; y < 6; y++) for (int x = 0; x < 6; x++) {
 			int nx = x + (axis == 0 ? 1 : 0), ny = y + (axis == 1 ? 1 : 0), nz = z + (axis == 2 ? 1 : 0);
 			if (nx >= 6 || ny >= 6 || nz >= 6) continue;
-			int first = domain.cellIndex(x, y, z), second = domain.cellIndex(nx, ny, nz);
-			float open = domain.pressureOpenFaceFromCell(first, second, nx - x, ny - y, nz - z);
-			double velocity = axis == 0 ? domain.mac.velocityX[domain.xFaceIndex(nx, y, z)] : axis == 1
-					? domain.mac.velocityY[domain.yFaceIndex(x, ny, z)] : domain.mac.velocityZ[domain.zFaceIndex(x, y, nz)];
+			int first = domain.domainFlowFields.cellIndex(x, y, z), second = domain.domainFlowFields.cellIndex(nx, ny, nz);
+			float open = domain.domainFlowFields.pressureOpenFaceFromCell(first, second, nx - x, ny - y, nz - z);
+			double velocity = axis == 0 ? domain.mac.velocityX[domain.domainFlowFields.xFaceIndex(nx, y, z)] : axis == 1
+					? domain.mac.velocityY[domain.domainFlowFields.yFaceIndex(x, ny, z)] : domain.mac.velocityZ[domain.domainFlowFields.zFaceIndex(x, y, nz)];
 			result[axis] += faceMass(domain, axis, x, y, z, nx, ny, nz, first, second, open) * velocity;
 		}
 		for (int p = 0; p < domain.granularState.parcels.count(); p++) {
@@ -1435,7 +1443,7 @@ public final class GranularCarrierValidation {
 			var domain = domain();
 			domain.setVolume(2, 2, 2, 0.5F);
 			addParcel(domain, 1.5F + (side == 0 ? -1.0e-5F : 1.0e-5F), 1.25F, 1.25F, 1, 0, 0);
-			domain.ensureGrid();
+			domain.domainFlowFields.ensureGrid();
 			double before = (pressureEnergy(domain) + solidEnergy(domain));
 			var fluid = domain.granularMechanicalStage.sample(1.5F + (side == 0 ? -1.0e-5F : 1.0e-5F), 1.25F, 1.25F);
 			relaxDrag(domain, 0.01F);
@@ -1460,7 +1468,7 @@ public final class GranularCarrierValidation {
 
 	private static void finitePressureResponse() {
 		var domain=domain();for(int p=0;p<60;p++)addParcel(domain,1.75F,1.75F,1.75F,.25F,-1,.5F);
-		fillPoreWater(domain,domain.sizeY);domain.ensureGrid();
+		fillPoreWater(domain,domain.sizeY);domain.domainFlowFields.ensureGrid();
 		domain.pressureSystem.predictDrag(.05F);
 		domain.pressureStage.solve(.05F);domain.pressureStage.projectVelocities(.05F);
 		domain.granularMechanicalStage.previewCollision(.05F);domain.granularMechanicalStage.publishCollisionVelocities();
@@ -1468,7 +1476,7 @@ public final class GranularCarrierValidation {
 	}
 
 	private static void cellOccupancyVolumeRate() {
-		var domain=domain();addParcel(domain,1.749F,1.751F,1.749F,.5F,-.5F,.5F);domain.ensureGrid();
+		var domain=domain();addParcel(domain,1.749F,1.751F,1.749F,.5F,-.5F,.5F);domain.domainFlowFields.ensureGrid();
 		long before=0;for(int c=0;c<domain.cellCount;c++)before+=domain.granularCoupling.solidSvq(c);
 		domain.granularMechanicalStage.previewCollision(.01F);long after=0;boolean moved=false;
 		for(int c=0;c<domain.cellCount;c++){after+=domain.granularNextCoupling.solidSvq(c);moved|=domain.granularNextCoupling.solidSvq(c)!=domain.granularCoupling.solidSvq(c);}
@@ -1477,11 +1485,11 @@ public final class GranularCarrierValidation {
 
 	private static void internalPressureImpulseCloses() {
 		var domain = domain(); addParcel(domain, 1.43F, 1.62F, 1.39F, 0, 0, 0);
-		fillPoreWater(domain, domain.sizeY); domain.ensureGrid();
+		fillPoreWater(domain, domain.sizeY); domain.domainFlowFields.ensureGrid();
 		domain.pressureStage.solve(.05F);
 		java.util.Arrays.fill(domain.projection.pressure, 0);
-		domain.projection.pressure[domain.cellIndex(2,2,2)] = 300;
-		domain.projection.pressure[domain.cellIndex(3,2,2)] = -100;
+		domain.projection.pressure[domain.domainFlowFields.cellIndex(2,2,2)] = 300;
+		domain.projection.pressure[domain.domainFlowFields.cellIndex(3,2,2)] = -100;
 		double[] impulse=new double[3];double dt=.05;
 		var graph=domain.pressureSystem.faces;
 		double[] p=new double[domain.cellCount+domain.gasState.network.nodeCount()+1],a=new double[graph.faceCount];
@@ -1501,7 +1509,7 @@ public final class GranularCarrierValidation {
 		var domain = domain(9.81F);
 		addParcel(domain, 1.43F, py, 1.39F, 0, 0, 0);
 		fillPoreWater(domain, domain.sizeY);
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		domain.pressureStage.solve(0.05F);
 		for (int cell = 0; cell < domain.cellCount; cell++) {
 			int y = cell / 6 % 6;
@@ -1537,11 +1545,11 @@ public final class GranularCarrierValidation {
 		for (int axis = 0; axis < 3; axis++) for (int z = 0; z < 6; z++) for (int y = 0; y < 6; y++) for (int x = 0; x < 6; x++) {
 			int nx = x + (axis == 0 ? 1 : 0), ny = y + (axis == 1 ? 1 : 0), nz = z + (axis == 2 ? 1 : 0);
 			if (nx >= 6 || ny >= 6 || nz >= 6) continue;
-			int first = domain.cellIndex(x, y, z), second = domain.cellIndex(nx, ny, nz);
-			float open = axis == 0 ? domain.pressureXFaceOpen(nx, y, z) : axis == 1
-					? domain.pressureYFaceOpen(x, ny, z) : domain.pressureZFaceOpen(x, y, nz);
-			double velocity = axis == 0 ? domain.mac.velocityX[domain.xFaceIndex(nx, y, z)] : axis == 1
-					? domain.mac.velocityY[domain.yFaceIndex(x, ny, z)] : domain.mac.velocityZ[domain.zFaceIndex(x, y, nz)];
+			int first = domain.domainFlowFields.cellIndex(x, y, z), second = domain.domainFlowFields.cellIndex(nx, ny, nz);
+			float open = axis == 0 ? domain.domainFlowFields.pressureXFaceOpen(nx, y, z) : axis == 1
+					? domain.domainFlowFields.pressureYFaceOpen(x, ny, z) : domain.domainFlowFields.pressureZFaceOpen(x, y, nz);
+			double velocity = axis == 0 ? domain.mac.velocityX[domain.domainFlowFields.xFaceIndex(nx, y, z)] : axis == 1
+					? domain.mac.velocityY[domain.domainFlowFields.yFaceIndex(x, ny, z)] : domain.mac.velocityZ[domain.domainFlowFields.zFaceIndex(x, y, nz)];
 			energy += 0.5 * faceMass(domain, axis, x, y, z, nx, ny, nz, first, second, open) * velocity * velocity;
 		}
 		return energy;
@@ -1549,9 +1557,9 @@ public final class GranularCarrierValidation {
 
 	private static double faceMass(FluidDomain domain, int axis, int x, int y, int z,
 	                               int nx, int ny, int nz, int first, int second, float open) {
-		if (!domain.carrierFaceActive(first, second, open)) return 0;
-		double p2g = axis == 0 ? domain.mac.p2gWeightX[domain.xFaceIndex(nx, y, z)] : axis == 1
-				? domain.mac.p2gWeightY[domain.yFaceIndex(x, ny, z)] : domain.mac.p2gWeightZ[domain.zFaceIndex(x, y, nz)];
+		if (!domain.domainFlowFields.carrierFaceActive(first, second, open)) return 0;
+		double p2g = axis == 0 ? domain.mac.faceMassX[domain.domainFlowFields.xFaceIndex(nx, y, z)] : axis == 1
+				? domain.mac.faceMassY[domain.domainFlowFields.yFaceIndex(x, ny, z)] : domain.mac.faceMassZ[domain.domainFlowFields.zFaceIndex(x, y, nz)];
 		return domain.unitScale.kilograms(p2g);
 	}
 

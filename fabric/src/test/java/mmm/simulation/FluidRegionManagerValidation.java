@@ -19,7 +19,7 @@ public final class FluidRegionManagerValidation {
 	private static long nextRegionId;
 	private static final FluidSolverConfig CONFIG = new FluidSolverConfig(
 			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-			32, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F
+			32, 1.0E-4F, 2.0E-3F, 0.80F
 	);
 	private static final ResourceKey<Registry<Level>> DIMENSION_REGISTRY = ResourceKey.createRegistryKey(
 			Identifier.fromNamespaceAndPath("mmm", "validation_dimension_registry")

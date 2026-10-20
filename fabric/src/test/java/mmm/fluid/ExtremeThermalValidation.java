@@ -17,12 +17,12 @@ public final class ExtremeThermalValidation {
 			double temperature = state[0], pressure = state[1];
 			// Microgravity isolates the extreme caloric/EoS/phase domain from the local Boussinesq approximation.
 			var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-					240, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+					240, 1.0E-4F, 2.0E-3F, 0.80F);
 			FluidDomain domain = new FluidDomain(4, 4, 4, config, 4096);
 			domain.sealDomainBoundary();
 			domain.setVolume(1, 1, 1, 0.5F);
 			for (int marker = 0; marker < domain.particleCount(); marker++) {
-				domain.setMarkerMaterial(marker, registries.liquids(), 0);
+				domain.domainCollision.setMarkerMaterial(marker, registries.liquids(), 0);
 			}
 			domain.bindGasRegistry(registries.gas());
 			domain.bootstrapGasState("");
@@ -41,7 +41,7 @@ public final class ExtremeThermalValidation {
 					.subtract(SignedDyadic.sum(snapshot.copyGasNodeEnergy()));
 			FluidThermalBinding.restore(domain.thermalState, new FlipThermalParticleState(4, 4, 4, 0.5F, domain.particleCount(),
 					registries.thermal().fingerprint(), snapshot.insertionTemperatureK(), snapshot.copyInternalEnergy(), new double[0], new double[0],
-					List.of(), new double[] {gasEnergy}, snapshot.audit().withHeatExchange(delta)), domain.thermalMarkerContext(), domain.gasState.network);
+					List.of(), new double[] {gasEnergy}, snapshot.audit().withHeatExchange(delta)), domain.domainCapabilities.thermalMarkerContext(), domain.gasState.network);
 			double actualPressure = GasRegistry.STANDARD_PRESSURE_PA + domain.thermalState.gasGaugePressure(1, domain.gasState.network);
 			ThermalValidationSupport.require(actualPressure > 0.5 * pressure && actualPressure < 1.5 * pressure,
 					"extreme fixture did not establish the requested pressure");

@@ -27,7 +27,7 @@ final class GasLifecyclePlanner {
 		if (domain.hasPendingPhaseVolumeWork()) {
 			throw new IllegalStateException("Pending phase volume/work must be projected before operator vent");
 		}
-		domain.ensureInventoryGrid();
+		domain.domainFlowFields.ensureInventoryGrid();
 		GasRuntimeGeometry sourceGeometry = domain.gasState.frame == null ? null : GasRuntimeGeometry.capture(domain,
 				domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq(),
 				domain.gasState.sealedDomainBoundary);
@@ -51,7 +51,7 @@ final class GasLifecyclePlanner {
 
 	/** Leaves a complete sealed vacuum topology and books the removed gas plus U to sinks. */
 	FluidDomain.OperatorGasVent commitVent(FluidDomain.OperatorGasVentPlan plan) {
-		domain.ensureInventoryGrid();
+		domain.domainFlowFields.ensureInventoryGrid();
 		if (plan == null || domain.gasState.network.nodeCount() != plan.nodeCount()
 				|| (domain.gasState.frame == null) != (plan.sourceGeometry() == null)
 				|| plan.sourceGeometry() != null && !plan.sourceGeometry().matchesCarrierGeometry(domain,

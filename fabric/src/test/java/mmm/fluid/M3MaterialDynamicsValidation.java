@@ -19,7 +19,7 @@ final class M3MaterialDynamicsValidation {
 	private static void movingBodyCommitsOnlyMarkerMomentum() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 0.0F, 1.0F / 40.0F,
-				200, 1.0E-5F, 0.40F, 2.0E-3F, 0.80F);
+				200, 1.0E-5F, 2.0E-3F, 0.80F);
 		FluidDomain domain = new FluidDomain(3, 3, 3, config, 128);
 		domain.setVolume(1, 1, 1, 1.0F);
 		FlipParticleState before = domain.exportParticleState();
@@ -82,7 +82,7 @@ final class M3MaterialDynamicsValidation {
 		double minimumDifference = initialDifference;
 		int minimumStep = 0;
 		for (int step = 0; step < 1_200; step++) {
-			FluidDomain.StepStats stats = domain.step();
+			FluidDomain.StepStats stats = domain.domainStep.step();
 			check(stats.relativeVolumeError() <= 2.0E-6F && stats.relativeMassError() <= 2.0E-12,
 					"unequal-area connector changed physical inventories");
 			double difference = connectedHeadDifference(domain);
@@ -137,26 +137,26 @@ final class M3MaterialDynamicsValidation {
 			domain.setVolume(x, y, z, 1.0F);
 		}
 		for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
-			domain.setMaterialInCell(x, 1, z, registry, light);
-			domain.setMaterialInCell(x, 4, z, registry, heavy);
+			domain.domainCollision.setMaterialInCell(x, 1, z, registry, light);
+			domain.domainCollision.setMaterialInCell(x, 4, z, registry, heavy);
 			// Equal-volume step perturbation of the otherwise flat heavy-over-light interface.
 			// The pressure/gravity coupling, rather than a prescribed marker velocity, must amplify it.
-			domain.setMaterialInCell(x, 2, z, registry, x <= 2 ? heavy : light);
-			domain.setMaterialInCell(x, 3, z, registry, x <= 2 ? light : heavy);
+			domain.domainCollision.setMaterialInCell(x, 2, z, registry, x <= 2 ? heavy : light);
+			domain.domainCollision.setMaterialInCell(x, 3, z, registry, x <= 2 ? light : heavy);
 		}
-		FluidDomain.MaterialInventory initialHeavy = domain.materialInventory(heavy);
-		FluidDomain.MaterialInventory initialLight = domain.materialInventory(light);
+		FluidDomain.MaterialInventory initialHeavy = domain.domainCollision.materialInventory(heavy);
+		FluidDomain.MaterialInventory initialLight = domain.domainCollision.materialInventory(light);
 		double maximumMassError = 0.0;
 		double minimumSeparation = initialHeavy.centerY() - initialLight.centerY();
 		float maximumSpeedObserved = domain.maximumParticleSpeed();
 		int inversionStep = -1;
 		for (int step = 0; step < 4_800; step++) {
-			FluidDomain.StepStats stats = domain.step();
+			FluidDomain.StepStats stats = domain.domainStep.step();
 			maximumMassError = Math.max(maximumMassError, stats.relativeMassError());
 			check(stats.relativeVolumeError() <= 2.0E-6F,
 					"density inversion changed exact marker volume");
-			FluidDomain.MaterialInventory heavyNow = domain.materialInventory(heavy);
-			FluidDomain.MaterialInventory lightNow = domain.materialInventory(light);
+			FluidDomain.MaterialInventory heavyNow = domain.domainCollision.materialInventory(heavy);
+			FluidDomain.MaterialInventory lightNow = domain.domainCollision.materialInventory(light);
 			double separation = heavyNow.centerY() - lightNow.centerY();
 			maximumSpeedObserved = Math.max(maximumSpeedObserved, domain.maximumParticleSpeed());
 			if (separation < minimumSeparation) {
@@ -165,8 +165,8 @@ final class M3MaterialDynamicsValidation {
 			}
 			if (minimumSeparation < -0.20) break;
 		}
-		FluidDomain.MaterialInventory finalHeavy = domain.materialInventory(heavy);
-		FluidDomain.MaterialInventory finalLight = domain.materialInventory(light);
+		FluidDomain.MaterialInventory finalHeavy = domain.domainCollision.materialInventory(heavy);
+		FluidDomain.MaterialInventory finalLight = domain.domainCollision.materialInventory(light);
 		check(minimumSeparation < -0.20,
 				"perturbed heavy-over-light interface never underwent Rayleigh-Taylor inversion: minimum separation="
 						+ minimumSeparation + ", final heavy/light=" + finalHeavy.centerY() + "/" + finalLight.centerY()
@@ -184,7 +184,7 @@ final class M3MaterialDynamicsValidation {
 	private static FluidSolverConfig config() {
 		return new FluidSolverConfig(
 				1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
-				200, 1.0E-5F, 0.40F, 2.0E-3F, 0.80F
+				200, 1.0E-5F, 2.0E-3F, 0.80F
 		);
 	}
 

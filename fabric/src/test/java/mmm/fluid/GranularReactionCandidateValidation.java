@@ -33,7 +33,7 @@ public final class GranularReactionCandidateValidation {
     continuousPrecipitationAndRecovery();
     thermalMomentumTransfer();
     bedDissolution();
-    thermalDissolutionAndRejection();
+    thermalDissolutionAndEnergyLimitedProgress();
     dissolutionUsesSharedCapacityTransport();
     System.out.println(
         "Cell granular reactions passed: integer inventory, continuous phase transfer, local heat"
@@ -97,7 +97,7 @@ public final class GranularReactionCandidateValidation {
     var d = fixture(false, false);
     var initial = inventory(d);
     for (int step = 0; step < 3; step++) {
-      var stats = new GranularReactionStage(d).step(new int[] {d.cellIndex(1, 1, 1)});
+      var stats = new GranularReactionStage(d).step(new int[] {d.domainFlowFields.cellIndex(1, 1, 1)});
       require(stats.precipitations() > 0, "Normal repeated precipitation stopped at step " + step);
       require(inventory(d).equals(initial), "Precipitation changed total integer inventory");
       d = FluidDomain.restoreAuthoritativeState(d.captureAuthoritativeState());
@@ -112,11 +112,11 @@ public final class GranularReactionCandidateValidation {
       double beforeK = kinetic(d), beforeU = d.exactInternalEnergy().toDouble();
       double beforeP = momentumX(d), beforeHeat = d.thermalAudit().mechanicalWork().toDouble();
       var stage = new GranularReactionStage(d);
-      var stats = stage.step(new int[] {d.cellIndex(1, 1, 1)});
+      var stats = stage.step(new int[] {d.domainFlowFields.cellIndex(1, 1, 1)});
       require(
           stats.precipitations() > 0 && inventory(d).equals(initial),
           "Thermal candidate did not publish conserved phase transfer");
-      d.ensureGrid();
+      d.domainFlowFields.ensureGrid();
       double heat = d.thermalAudit().mechanicalWork().toDouble() - beforeHeat;
       require(
           Math.abs(momentumX(d) - beforeP) < 1e-7, "Reaction changed combined MAC/solid momentum");
@@ -145,7 +145,7 @@ public final class GranularReactionCandidateValidation {
 
   private static void bedDissolution() {
     var d = fixture(false, false);
-    int cell = d.cellIndex(1, 1, 1);
+    int cell = d.domainFlowFields.cellIndex(1, 1, 1);
     new GranularReactionStage(d).step(new int[] {cell});
     require(
         d.granularState.inventory.depositParcel(0, cell, SolidVolume.SVQ_PER_CELL),
@@ -164,9 +164,9 @@ public final class GranularReactionCandidateValidation {
     require(inventory(restored).equals(initial), "Bed dissolution did not survive restoration");
   }
 
-  private static void thermalDissolutionAndRejection() {
+  private static void thermalDissolutionAndEnergyLimitedProgress() {
     var d = fixture(true, true);
-    int cell = d.cellIndex(1, 1, 1);
+    int cell = d.domainFlowFields.cellIndex(1, 1, 1);
     for (int step = 0; step < 3; step++) {
       var stage = new GranularReactionStage(d);
       var before = inventory(d);
@@ -194,30 +194,28 @@ public final class GranularReactionCandidateValidation {
     require(
         dissolved && d.thermalTemperatureInCell(1, 1, 1) < initialTemperature,
         "Dissolution did not consume sensible heat");
-    var invalid = fixture(true, false, 1e12);
-    var cells = invalid.liquidCells.snapshot();
-    var audit = invalid.thermalAudit();
-    var inventory = inventory(invalid);
-    double[] momentum = invalid.mac.momentumX.clone();
-    boolean rejected = false;
-    try {
-      new GranularReactionStage(invalid).step(new int[] {cell});
-    } catch (IllegalArgumentException | IllegalStateException expected) {
-      rejected = true;
-    }
+    var limited = fixture(true, false, 1e6);
+    limited.setThermalTemperatureInCell(1,1,1,1);
+    var inventory = inventory(limited);
+    var result = new GranularReactionStage(limited).step(new int[] {cell});
     require(
-        rejected
-            && invalid.liquidCells.snapshot().rows().equals(cells.rows())
-            && inventory(invalid).equals(inventory)
-            && invalid.thermalAudit().equals(audit)
-            && Arrays.equals(momentum, invalid.mac.momentumX),
-        "Invalid caloric candidate partially published");
+        result.precipitations()>0
+            && inventory(limited).equals(inventory)
+            && limited.thermalTemperatureInCell(1,1,1)>0
+            && limited.thermalTemperatureInCell(1,1,1)<1
+            && limited.exactInternalEnergy().equals(limited.thermalAudit().expectedInventory()),
+        "Cold endothermic precipitation did not admit its energy-limited extent");
+    var restored=FluidDomain.restoreAuthoritativeState(limited.captureAuthoritativeState());
+    new GranularReactionStage(restored).step(new int[] {cell});
+    require(inventory(restored).equals(inventory)
+            && restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),
+        "Energy-limited reaction did not continue through cold recovery");
   }
 
   private static void dissolutionUsesSharedCapacityTransport() {
     var d =
         new FluidDomain(
-            3, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .45F, .002F, 0), 216);
+            3, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .002F, 0), 216);
     d.sealDomainBoundary();
     var granular = BuiltinGranularDefinitions.createRegistry();
     d.bindGranular(
@@ -265,10 +263,10 @@ public final class GranularReactionCandidateValidation {
     }
     d.liquidCells.planAdditions(stocks).commit();
     d.markCellInventoryChanged();
-    d.ensureGrid();
+    d.domainFlowFields.ensureGrid();
     d.bootstrapGasState(null);
     var before = inventory(d);
-    int cell = d.cellIndex(1, 1, 1);
+    int cell = d.domainFlowFields.cellIndex(1, 1, 1);
     var stats = new GranularReactionStage(d).step(new int[] {cell});
     require(
         stats.dissolutions() > 0 && inventory(d).equals(before),
@@ -289,7 +287,7 @@ public final class GranularReactionCandidateValidation {
   private static FluidDomain fixture(boolean thermal, boolean shear, double formationEnergy) {
     var d =
         new FluidDomain(
-            3, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .45F, .002F, 0), 216);
+            3, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .002F, 0), 216);
     d.sealDomainBoundary();
     d.setVolume(1, 1, 1, .5F);
     var granular = BuiltinGranularDefinitions.createRegistry();
@@ -359,9 +357,9 @@ public final class GranularReactionCandidateValidation {
           d.materialRegistry(),
           300);
     }
-    d.ensureGrid();
+    d.domainFlowFields.ensureGrid();
     Arrays.fill(d.mac.velocityX, .25F);
-    if (shear) d.mac.velocityX[d.xFaceIndex(2, 1, 1)] = .75F;
+    if (shear) d.mac.velocityX[d.domainFlowFields.xFaceIndex(2, 1, 1)] = .75F;
     d.cellMacStage.publishMomentum();
     d.bootstrapGasState(null);
     return d;
@@ -403,7 +401,7 @@ public final class GranularReactionCandidateValidation {
   }
 
   private static double kinetic(FluidDomain d) {
-    d.ensureGrid();
+    d.domainFlowFields.ensureGrid();
     double value = 0;
     for (int axis = 0; axis < 3; axis++) {
       double[] mass =

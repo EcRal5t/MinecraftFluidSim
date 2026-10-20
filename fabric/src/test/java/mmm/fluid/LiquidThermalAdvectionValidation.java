@@ -28,14 +28,17 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 	}
 	private static void integerSpeciesCarriesReferenceEnergy() throws Exception {
 		var r=mmm.simulation.FullCapabilityTestFixture.load();
-		var d=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.4F,.002F,0),64);
+		var d=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.002F,0),64);
 		d.sealDomainBoundary();mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(d,r.liquids());
 		mmm.simulation.FullCapabilityTestFixture.bindFull(d,r,293.15,ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 		int water=r.liquids().handle("mmm:water");
-		require(d.tryInsertExactVolume(0,0,0,1,0,water,true).transferred(),"Reference-energy source insertion failed");
+		require(d.domainInventory.tryInsertExactVolume(0,0,0,1,0,water,true).transferred(),"Reference-energy source insertion failed");
 		var before=d.liquidCells.snapshot();var volume=d.liquidCells.exactVolume();long mass=d.liquidCells.massUnits();
-		var plan=d.liquidCells.planTransport(List.of(new LiquidCellInventory.FaceFlux(0,0,1,255,255,water,SignedDyadic.of(1,-32))),
-				2,2,new int[8],FluidThermalBinding.liquidEnergyPartitioner(d));
+		var sourceKey=new LiquidCellInventory.Key(0,water,255);var movedVolume=SignedDyadic.of(1,-32);
+		var plan=d.liquidCells.planRoutes(List.of(new LiquidCellInventory.SourceRoutes(d.liquidCells.stock(sourceKey),List.of(
+				new LiquidCellInventory.TransportRoute(0,sourceKey,new LiquidCellInventory.Key(1,water,255),movedVolume),
+				new LiquidCellInventory.TransportRoute(-1,sourceKey,sourceKey,d.liquidCells.stock(sourceKey).volume().subtract(movedVolume))))),
+				FluidThermalBinding.liquidEnergyPartitioner(d));
 		require(before.rows().equals(d.liquidCells.snapshot().rows()),"Caloric transport changed committed rows during preparation");
 		for(var stock:plan.future().physicalStocks()){
 			double t=d.thermalState.stateFunction().stateForInternalEnergy(d.thermalState.thermalMaterialHandleForFluid(water),stock.massKilograms(),
@@ -46,7 +49,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		plan.commit();d.thermalState.recordRoundoff(plan.energyRoundoff());d.markCellInventoryChanged();
 		d.gasTopologyCoordinator.commitPrepared(gas,new long[d.cellCount]);
 		require(d.liquidCells.exactVolume().equals(volume)&&d.liquidCells.massUnits()==mass&&d.exactInternalEnergy().equals(d.thermalAudit().expectedInventory()),"Caloric transport changed exact stock or audit");
-		var restored=FluidDomain.restoreAuthoritativeState(d.captureAuthoritativeState());restored.thermalState.preparePhaseScan(restored.thermalMarkerContext());
+		var restored=FluidDomain.restoreAuthoritativeState(d.captureAuthoritativeState());restored.thermalState.preparePhaseScan(restored.domainCapabilities.thermalMarkerContext());
 		require(restored.liquidCells.snapshot().rows().equals(d.liquidCells.snapshot().rows()),"Caloric transport changed during recovery");
 		var species=mmm.chemistry.ChemicalMixtureRecord.fromStableAmounts(r.chemical(),java.util.Map.of("mmm:h2o",3L),0);
 		var tailMixture=species.withMassResidualUnits(-species.speciesMassUnits(r.chemical()));
@@ -54,7 +57,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		var energies=LiquidCellInventory.partitionEnergy(tail,new long[]{0,0},new mmm.chemistry.ChemicalMixtureRecord[]{tailMixture,null},FluidThermalBinding.liquidEnergyPartitioner(d));
 		require(energies[0].signum()==0&&energies[1].signum()==0,"Zero-mass chemical tail entered caloric inversion or gained U");
 		var tails=new LiquidCellInventory(8,r.chemical());tails.planAdditions(List.of(tail)).commit();
-		var moved=tails.planTransport(List.of(new LiquidCellInventory.FaceFlux(0,4,5,255,255,water,tail.volume())),2,2,new int[8],FluidThermalBinding.liquidEnergyPartitioner(d));moved.commit();
+		var moved=tails.planRoutes(List.of(new LiquidCellInventory.SourceRoutes(tail,List.of(new LiquidCellInventory.TransportRoute(0,tail.key(),new LiquidCellInventory.Key(5,water,255),tail.volume())))),FluidThermalBinding.liquidEnergyPartitioner(d));moved.commit();
 		var received=tails.stock(new LiquidCellInventory.Key(5,water,255));
 		require(tails.physicalSize()==0&&received.internalEnergy()==0&&received.mixture().equals(tailMixture)
 				&&tails.exactVolume().equals(tail.volume()),"Geometric chemical tail lost inventory or became an LTE carrier");
@@ -66,12 +69,12 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 	private static void bulkReplacementPublishesThermalInventory() {
 		var d=pool(3,3,3,0,false,0);
 		for(int z=0;z<3;z++)for(int y=0;y<3;y++)for(int x=0;x<3;x++)d.setThermalTemperatureInCell(x,y,z,305);
-		d.ensureGrid();Arrays.fill(d.mac.velocityX,.25F);d.cellMacStage.publishMomentum();
+		d.domainFlowFields.ensureGrid();Arrays.fill(d.mac.velocityX,.25F);d.cellMacStage.publishMomentum();
 		float[] targets=new float[d.cellCount];Arrays.fill(targets,.5F);
 		long revision=d.liquidCells.revision();d.setVolumes(targets);
 		require(d.liquidCells.revision()==revision+1 && d.exactInternalEnergy().equals(d.thermalAudit().expectedInventory()),"Bulk source/sink U did not publish once");
 		for(var stock:d.liquidCells.physicalStocks())require(Math.abs(temperature(d,stock)-300)<1e-4,"Bulk replacement retained old external U");
-		d.ensureGrid();double before=d.thermalAudit().mechanicalWork().toDouble();Arrays.fill(targets,.75F);d.setVolumes(targets);
+		d.domainFlowFields.ensureGrid();double before=d.thermalAudit().mechanicalWork().toDouble();Arrays.fill(targets,.75F);d.setVolumes(targets);
 		require(d.thermalAudit().mechanicalWork().toDouble()>before && d.exactInternalEnergy().equals(d.thermalAudit().expectedInventory()),"Stationary bulk injection lost MAC mixing heat or gas energy");
 		var restored=FluidDomain.restoreAuthoritativeState(d.captureAuthoritativeState());
 		require(restored.liquidCells.snapshot().rows().equals(d.liquidCells.snapshot().rows()) && restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),"Bulk thermal initialization did not restore");
@@ -84,9 +87,9 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 			for(int z=0;z<2;z++)for(int y=0;y<3;y++){d.setVolume(0,y,z,0);d.setVolume(5,y,z,0);}
 			var initialVolume=d.liquidCells.exactVolume();long initialMass=d.liquidCells.massUnits();
 			for(int step=0;step<3;step++) {
-				d.ensureGrid();Arrays.fill(d.mac.velocityX,.125F);d.cellMacStage.publishMomentum();
-				var prior=d.liquidCells.snapshot();var plan=new CellLiquidVolumeTransport(d).prepare(.05F);
-				require(!plan.faceFluxes().isEmpty(),"Prescribed thermal translation produced no shared face transport");
+				d.domainFlowFields.ensureGrid();Arrays.fill(d.mac.velocityX,.125F);d.cellMacStage.publishMomentum();
+				var prior=d.liquidCells.snapshot();var plan=d.cellMacStage.prepareLiquid(.05F);
+				require(!plan.inventory().transfers().isEmpty(),"Prescribed thermal translation produced no shared face transport");
 				require(d.liquidCells.snapshot().rows().equals(prior.rows()),"Thermal transport modified source before publication");
 				for(var stock:plan.inventory().future().physicalStocks()) {
 					double t=temperature(d,stock);require(t>=295-1e-8&&t<=305+1e-8,"Temperature advection created a new extremum: "+t);
@@ -101,7 +104,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 	private static void zeroFluxRetainsCaloricReference() {
 		for(double reference:new double[]{0,3e6,-3e6}) {
 			var d=pool(3,2,2,0,false,reference);d.setThermalTemperatureInCell(1,0,0,428);
-			var before=d.liquidCells.snapshot();var plan=new CellLiquidVolumeTransport(d).prepare(.05F);
+			var before=d.liquidCells.snapshot();var plan=d.cellMacStage.prepareLiquid(.05F);
 			require(plan.inventory().future().snapshot().rows().equals(before.rows()),"Stationary cell transport reconstructed caloric owners");
 			plan.inventory().commit();require(Math.abs(d.thermalTemperatureInCell(1,0,0)-428)<1e-8,"Stationary reference energy changed temperature");
 		}
@@ -117,14 +120,14 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		}
 	}
 	private static void disconnectedSupportsInsulate() {
-		var d=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.4F,.002F,0),64);
+		var d=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.002F,0),64);
 		var masks=new byte[8];Arrays.fill(masks,(byte)126);d.geometry.cutCells.restoreMicroMasks(masks);
 		var edits=new java.util.ArrayList<LiquidCellInventory.Edit>();
 		for(int support:new int[]{1,128}){var key=new LiquidCellInventory.Key(0,0,support);edits.add(new LiquidCellInventory.Edit(key,new LiquidCellInventory.Stock(key,SignedDyadic.of(.125),d.unitScale.massUnitsForNormalized(125),null,0,false)));}
 		d.liquidCells.planEdits(edits).commit();d.markCellInventoryChanged();
 		var caloric=new ThermalMaterialDefinition("test:thermal/cut",ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water",300,0,1000,List.of(new ThermalMaterialDefinition.CaloricSegment(1,600,4000)));
 		d.bindThermal(new ThermalRegistry(thermalMaterials(List.of(caloric))),new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)),300);
-		for(int ordinal=0;ordinal<2;ordinal++)d.thermalState.resetMarkerTemperature(ordinal,ordinal==0?270:350,d.thermalMarkerContext(),d.exactInternalEnergy());
+		for(int ordinal=0;ordinal<2;ordinal++)d.thermalState.resetMarkerTemperature(ordinal,ordinal==0?270:350,d.domainCapabilities.thermalMarkerContext(),d.exactInternalEnergy());
 		var before=d.liquidCells.snapshot();d.stepThermalOnly(1000);
 		require(d.liquidCells.snapshot().rows().equals(before.rows()),"Disjoint cut supports conducted through a cell-average shortcut");
 	}
@@ -145,7 +148,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 	private static void conductingLinearWallProfileIsStationary() {
 		var d=pool(2,6,2,4e6,false,0);double h=d.config.cellSize(),height=6*h;
 		var boundary=new double[d.cellCount*6];Arrays.fill(boundary,Double.NaN);
-		for(int z=0;z<2;z++)for(int x=0;x<2;x++){boundary[6*d.cellIndex(x,0,z)+2]=310;boundary[6*d.cellIndex(x,5,z)+3]=290;}
+		for(int z=0;z<2;z++)for(int x=0;x<2;x++){boundary[6*d.domainFlowFields.cellIndex(x,0,z)+2]=310;boundary[6*d.domainFlowFields.cellIndex(x,5,z)+3]=290;}
 		for(int z=0;z<2;z++)for(int y=0;y<6;y++)for(int x=0;x<2;x++)d.setThermalTemperatureInCell(x,y,z,310-20*(y+.5)*h/height);
 		d.replaceThermalBoundaryTemperatures(boundary);var result=d.stepThermalOnly(.001);double maximum=0;
 		for(var stock:d.liquidCells.physicalStocks())maximum=Math.max(maximum,Math.abs(temperature(d,stock)-(310-20*(stock.key().cell()/2%6+.5)*h/height)));
@@ -155,7 +158,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		return d.thermalState.stateFunction().stateForInternalEnergy(d.thermalState.thermalMaterialHandleForFluid(stock.key().material()),stock.massKilograms(),java.util.Map.of(),stock.internalEnergy()).temperatureK();
 	}
 	private static FluidDomain pool(int nx,int ny,int nz,double conductivity,boolean segmented,double reference) {
-		var d=new FluidDomain(nx,ny,nz,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.4F,.002F,0),8*nx*ny*nz);
+		var d=new FluidDomain(nx,ny,nz,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.002F,0),8*nx*ny*nz);
 		for(int z=0;z<nz;z++)for(int y=0;y<ny;y++)for(int x=0;x<nx;x++)d.setVolume(x,y,z,1);
 		var caloric=new ThermalMaterialDefinition("test:thermal/advection",ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water",300,reference,conductivity,
 				segmented?List.of(new ThermalMaterialDefinition.CaloricSegment(1,300,1000),new ThermalMaterialDefinition.CaloricSegment(300,600,100000)):List.of(new ThermalMaterialDefinition.CaloricSegment(1,600,4000)));

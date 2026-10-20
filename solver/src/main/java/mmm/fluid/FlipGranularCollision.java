@@ -20,11 +20,13 @@ final class FlipGranularCollision {
 	private final float cellSize;
 	private final GranularCollisionGeometry geometry;
 	private final GranularSphereCollision sphereCollision;
-	private final float[] nextX, nextY, nextZ, nextVelocityX, nextVelocityY, nextVelocityZ;
-	private final int[] nextContactAge, nextCeilMask;
+	private float[] nextX = new float[0], nextY = new float[0], nextZ = new float[0];
+	private float[] nextVelocityX = new float[0], nextVelocityY = new float[0], nextVelocityZ = new float[0];
+	private int[] nextContactAge = new int[0], nextCeilMask = new int[0];
+	private final int capacityLimit;
 	private final GranularKernel kernel;
-	private final byte[] nextFlags;
-	private final boolean[] capacityPending;
+	private byte[] nextFlags = new byte[0];
+	private boolean[] capacityPending = new boolean[0];
 	private int previewCount;
 	private long previewRevision;
 	private GranularParcelStore previewSource;
@@ -38,18 +40,14 @@ final class FlipGranularCollision {
 		this.cellSize = cellSize; this.geometry = new GranularCollisionGeometry(sizeX, sizeY, sizeZ, cellSize, cutCells, deposits);
 		this.sphereCollision = new GranularSphereCollision(sizeX, sizeY, sizeZ, cellSize, cutCells,
 				deposits);
-		this.nextX = new float[capacity]; this.nextY = new float[capacity]; this.nextZ = new float[capacity];
-		this.nextVelocityX = new float[capacity]; this.nextVelocityY = new float[capacity];
-		this.nextVelocityZ = new float[capacity];
-		this.nextContactAge = new int[capacity]; this.nextFlags = new byte[capacity];
-		this.nextCeilMask = new int[capacity]; this.kernel = new GranularKernel(sizeX, sizeY, sizeZ, cellSize);
-		this.capacityPending = new boolean[capacity];
+		this.capacityLimit=capacity;this.kernel = new GranularKernel(sizeX, sizeY, sizeZ, cellSize);
 	}
 
 	void preview(GranularParcelStore parcels, GranularRegistry registry, float dt) {
 		previewReady = false;velocitiesPublished=false;
 		if (!(Float.isFinite(dt) && dt > 0.0F)) throw new IllegalArgumentException("Granular preview dt is invalid");
 		previewCount = parcels.count();
+		ensurePreviewCapacity(previewCount);
 		previewRevision = parcels.mutationRevision();
 		previewSource = parcels;
 		lastCapacityHeld = 0;
@@ -89,6 +87,13 @@ final class FlipGranularCollision {
 					: (byte) (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED);
 		}
 		prepareMasks(parcels);
+	}
+	private void ensurePreviewCapacity(int required){
+		if(required<=nextX.length)return;
+		int grown=Math.min(capacityLimit,Math.max(required,nextX.length+Math.max(16,nextX.length/2)));
+		nextX=new float[grown];nextY=new float[grown];nextZ=new float[grown];
+		nextVelocityX=new float[grown];nextVelocityY=new float[grown];nextVelocityZ=new float[grown];
+		nextContactAge=new int[grown];nextCeilMask=new int[grown];nextFlags=new byte[grown];capacityPending=new boolean[grown];
 	}
 	private void prepareMasks(GranularParcelStore parcels) {
 		for (int index = 0; index < previewCount; index++) {

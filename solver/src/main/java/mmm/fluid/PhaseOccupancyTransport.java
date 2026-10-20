@@ -23,7 +23,7 @@ final class PhaseOccupancyTransport {
 
 	static void ensure(FluidDomain domain) {
 		if (domain.phaseOccupancy != null) return;
-		domain.ensureInventoryGrid();
+		domain.domainFlowFields.ensureInventoryGrid();
 		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
 		double[] pore = poreVolumes(domain, occupied, null);
 		double[] liquid = reconstruct(domain, domain.liquidCells, pore, null, new FlipPressurePhaseGeometry(domain.sizeX, domain.sizeY, domain.sizeZ));
@@ -54,9 +54,12 @@ final class PhaseOccupancyTransport {
 			phase.setExactPoreVolumes(cut, occupied);
 			boolean[] solid = new boolean[domain.cellCount];
 			for (int cell = 0; cell<solid.length; cell++) solid[cell] = cut.fullySolid(cell);
-			geometry = GasComplementGeometry.capture(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), solid, cut, phase, null, null, future.snapshot());
+			var sourceFrame=domain.gasState.frame;boolean[] changed=new boolean[domain.cellCount];
+			for(int cell=0;cell<changed.length;cell++)changed[cell]=!phase.sameCellGeometry(cell,sourceFrame.phase());
+			geometry = GasComplementGeometry.capture(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), solid, cut, phase,
+					sourceFrame.geometry(), changed, future.snapshot());
 			var topology=GasChamberTopology.capture(geometry,domain.gasState.sealedDomainBoundary);
-			var components=GasComponentCapacity.capture(domain,geometry,occupied,future.snapshot(),domain.gasState.frame);
+			var components=geometry.actualCapacity().components;
 			var sources=new HashMap<Integer,TreeMap<Integer,Double>>();
 			int[] representative=new int[components.size()],owner=new int[components.size()];
 			java.util.Arrays.fill(representative,-1);
@@ -100,7 +103,7 @@ final class PhaseOccupancyTransport {
 
 	static void requireCurrentGeometry(FluidDomain domain, PhaseOccupancyState state) {
 		if (state == null || state.cellCount() != domain.cellCount) throw new IllegalArgumentException("Phase occupation dimensions differ from domain");
-		domain.ensureInventoryGrid();
+		domain.domainFlowFields.ensureInventoryGrid();
 		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
 		requireGeometry(domain, state, occupied);
 	}

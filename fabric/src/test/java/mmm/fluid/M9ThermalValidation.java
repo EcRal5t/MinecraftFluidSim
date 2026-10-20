@@ -72,7 +72,6 @@ public final class M9ThermalValidation {
 		ThermalTransportValidationScenarios.productionFixedBoundaryFieldAuditsExchange();
 		ThermalTransportValidationScenarios.fixedBoundaryAuditsCaloricContinuation();
 		ThermalTransportValidationScenarios.crowdedCellEnergyAssignmentPreservesEquilibrium();
-		LiquidCellInventoryValidation.main(new String[0]);
 		System.out.println("M9 thermal validation passed");
 	}
 }

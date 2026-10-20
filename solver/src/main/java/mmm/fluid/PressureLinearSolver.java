@@ -53,6 +53,18 @@ final class PressureLinearSolver {
 		}
 		operator.buildRhs(rhs);refreshResidual();
 		Arrays.fill(free,false);updateFreeSet(target);restartDirection();
+		int iterations=iterate(target);
+		refreshResidual();double rms=projectedNorm();
+		for(int ordinal=0;ordinal<domain.projection.fluidUnknownCount;ordinal++) {
+			int cell=domain.projection.fluidUnknownCells[ordinal];domain.projection.pressure[cell]=(float)pressure[cell];
+		}
+		for(int ordinal=0;ordinal<domain.projection.gasUnknownCount;ordinal++) {
+			int node=domain.projection.gasUnknownNodes[ordinal];domain.projection.gasPressure[node]=(float)pressure[domain.cellCount+node];
+		}
+		return new PressureProjectionResult(iterations,rms,Double.isFinite(rms)&&rms<=attainableTolerance(target));
+	}
+	/** Advances the active-set PCG independently of row preparation and result publication. */
+	private int iterate(double target) {
 		double rz=dotFree(residual,direction),rms=projectedNorm();int iterations=0;
 		for(;rms>target&&iterations<domain.config.maxPressureIterations();iterations++) {
 			operator.applyMatrix(direction,product);double denominator=dotFree(direction,product);
@@ -83,14 +95,7 @@ final class PressureLinearSolver {
 			for(int ordinal=0;ordinal<freeCount;ordinal++){int row=freeUnknowns[ordinal];direction[row]=preconditioned[row]+beta*direction[row];}
 			rz=nextRz;
 		}
-		refreshResidual();rms=projectedNorm();
-		for(int ordinal=0;ordinal<domain.projection.fluidUnknownCount;ordinal++) {
-			int cell=domain.projection.fluidUnknownCells[ordinal];domain.projection.pressure[cell]=(float)pressure[cell];
-		}
-		for(int ordinal=0;ordinal<domain.projection.gasUnknownCount;ordinal++) {
-			int node=domain.projection.gasUnknownNodes[ordinal];domain.projection.gasPressure[node]=(float)pressure[domain.cellCount+node];
-		}
-		return new PressureProjectionResult(iterations,rms,Double.isFinite(rms)&&rms<=attainableTolerance(target));
+		return iterations;
 	}
 	private void refreshResidual(){
 		operator.applyMatrix(pressure,product);

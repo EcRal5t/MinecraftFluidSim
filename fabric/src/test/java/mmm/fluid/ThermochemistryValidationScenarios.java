@@ -222,7 +222,7 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 
 	static void granularReactionHeatUsesOneConservedCellEnergy() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 1.0F / 20.0F,
-				100, 1.0E-5F, 0.45F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F, 0.0F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidDomain domain = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
@@ -235,7 +235,7 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 		domain.bindThermal(reactiveGranularThermalRegistry(liquids, granular), liquids, 300.0);
 		domain.setPrecipitationEnabled(true);
 		SignedDyadic beforePrecipitation = domain.exactInternalEnergy();
-		domain.step();
+		domain.domainStep.step();
 		double precipitationTemperature = domain.thermalTemperatureInCell(1, 1, 1);
 		require(domain.lastPhaseTransferStats().precipitations() == 1
 				&& precipitationTemperature > 300.0
@@ -252,7 +252,7 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 		long solidBeforeDissolution = domain.totalGranularSolidVolumeSvq();
 		boolean dissolved = false;
 		for (int step = 0; step < 16 && domain.totalGranularSolidVolumeSvq() > 0L; step++) {
-			domain.step(); dissolved |= domain.lastPhaseTransferStats().dissolutions() > 0;
+			domain.domainStep.step(); dissolved |= domain.lastPhaseTransferStats().dissolutions() > 0;
 		}
 		double dissolutionTemperature = domain.thermalTemperatureInCell(1, 1, 1);
 		require(dissolved && domain.totalGranularSolidVolumeSvq() == 0L

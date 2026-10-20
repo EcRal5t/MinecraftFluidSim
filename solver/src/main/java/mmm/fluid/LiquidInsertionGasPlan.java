@@ -11,7 +11,6 @@ final class LiquidInsertionGasPlan {
 		CapacityRouting(FluidDomain domain) {
 			groupsByCell = new int[domain.cellCount][];
 			if (domain.gasState.frame == null) { remainingCells = new int[0]; finiteStock = new boolean[0]; return; }
-			domain.gasTopologyCoordinator.refresh();
 			var frame = domain.gasState.frame;
 			int[] parent = new int[frame.nodeCount() + 1];
 			for (int node = 0; node < parent.length; node++) parent[node] = node;

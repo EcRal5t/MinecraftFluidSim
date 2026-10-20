@@ -28,7 +28,7 @@ final class DomainInventoryLifecyclePlanner {
 	 */
 	FluidDomain.GranularClearPlan planGranularClear() {
 		long granularRevision = domain.granularState == null ? 0L : domain.granularState.mutationRevision();
-		if (domain.granularState == null || !domain.hasGranularInventory()) {
+		if (domain.granularState == null || !domain.domainPhaseInventory.hasGranularInventory()) {
 			return new FluidDomain.GranularClearPlan(GranularAuditLedger.EMPTY,
 					domain.granularState == null ? GranularAuditLedger.EMPTY : domain.granularState.escapedSink,
 					0L, 0L, 0, 0,
@@ -56,7 +56,7 @@ final class DomainInventoryLifecyclePlanner {
 		FluidDomain.GranularClearPlan granular = planGranularClear();
 		GasTopologyCoordinator.GasTopologyPlan gasTopology = null;
 		if (domain.gasState.frame != null) {
-			domain.ensureInventoryGrid();
+			domain.domainFlowFields.ensureInventoryGrid();
 			gasTopology = domain.gasTopologyCoordinator.planAfterOperatorClear(condensed.liquid().inventory().future());
 		}
 		ThermalDomainState.Revision thermalRevision = domain.thermalState == null

@@ -129,7 +129,7 @@ abstract class ProductionReplayValidationSupport {
 
 	static FluidSolverConfig productionConfig() {
 		return new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				120, 1.0E-4F, 0.40F, 2.0E-3F, 0.80F);
+				120, 1.0E-4F, 2.0E-3F, 0.80F);
 	}
 
 	static FullCapabilityTestFixture.Registries loadProductionRegistries() throws Exception {
@@ -147,13 +147,6 @@ abstract class ProductionReplayValidationSupport {
 				"full-capability gas topology or inventory changed across capture/restore");
 	}
 
-	/** Higham's gamma bound for a sequence of correctly rounded operations. */
-	static double floatingPointOperationBound(double magnitude, long operations, int precisionBits) {
-		if (operations <= 0 || magnitude == 0.0) return 0.0;
-		double accumulatedRoundoff = operations * Math.scalb(1.0, -precisionBits);
-		if (!(accumulatedRoundoff < 1.0)) return Double.POSITIVE_INFINITY;
-		return Math.abs(magnitude) * accumulatedRoundoff / (1.0 - accumulatedRoundoff);
-	}
 
 	static void require(boolean condition, String message) {
 		if (!condition) throw new AssertionError(message);

@@ -77,8 +77,6 @@ final class FuzzMetrics {
 		if (stats == null) return;
 		addEvent(scene, "chemistry:evaluations", stats.chemistryEvaluations());
 		addEvent(scene, "chemistry:changedMarkers", stats.chemistryChangedMarkers());
-		addEvent(scene, "reseed:merges", stats.reseededMerges());
-		addEvent(scene, "reseed:splits", stats.reseededSplits());
 		var granular = stats.granularTransition();
 		if (granular != null) {
 			addEvent(scene, "granular:settledParcels", granular.settledParcels());

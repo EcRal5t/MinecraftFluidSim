@@ -13,24 +13,46 @@ final class ThermalCaloricInversion {
 		double mass(int item);
 		default SignedDyadic exactMass(int item) { return SignedDyadic.of(mass(item)); }
 	}
-	private record Single(ThermalMaterialDefinition material, double mass) implements Inventory {
-		public int first() { return 0; } public int next(int item) { return -1; }
-		public ThermalMaterialDefinition material(int item) { return material; }
-		public double mass(int item) { return mass; }
-	}
 	private static final double COLD_ROUNDOFF_K = 1e-7;
 	private ThermalCaloricInversion() { }
 
 	static ThermalStateFunction.State owner(ThermalMaterialDefinition material, double mass, double energy, double base) {
 		if (!(Double.isFinite(mass) && mass > 0 && Double.isFinite(energy) && Double.isFinite(base)))
 			throw new IllegalArgumentException("Thermal owner inventory is invalid");
-		return solve(new Single(material,mass),energy-base);
+		return solveSingle(material,mass,energy-base);
 	}
 	static ThermalStateFunction.State single(ThermalMaterialDefinition material, double mass, SignedDyadic sensible) {
-		return solve(new Single(material,mass),sensible.toDouble());
+		return solveSingle(material,mass,sensible.toDouble());
 	}
 	static ThermalStateFunction.State single(ThermalMaterialDefinition material, SignedDyadic mass, SignedDyadic sensible) {
 		return single(material,mass.toDouble(),sensible);
+	}
+	/** Walk the material's existing segments from its reference point; end segments extend outward. */
+	private static ThermalStateFunction.State solveSingle(ThermalMaterialDefinition material,double mass,double target) {
+		requireOwner(material,mass);
+		if(!Double.isFinite(target))throw new ThermalStateFunction.EnergyRepresentationException();
+		var segments=material.caloricSegments();
+		double temperature=material.referenceTemperatureK();
+		int index=0,last=segments.size()-1;
+		while(index<last&&temperature>=segments.get(index).maximumTemperatureK())index++;
+		if(target>=0){
+			for(;;index++){
+				var segment=segments.get(index);
+				double capacity=mass*segment.specificHeatJPerKgK();
+				double end=segment.maximumTemperatureK(),span=(end-temperature)*capacity;
+				if(index==last||target<span)return checkedState(temperature+target/capacity,capacity);
+				target-=span;temperature=end;
+			}
+		}
+		double remaining=-target;
+		for(;;index--){
+			var segment=segments.get(index);
+			double capacity=mass*segment.specificHeatJPerKgK();
+			double end=segment.minimumTemperatureK(),span=(temperature-end)*capacity;
+			// At an exact knot the material uses the warmer segment's heat capacity.
+			if(index==0||remaining<=span)return checkedState(temperature-remaining/capacity,capacity);
+			remaining-=span;temperature=end;
+		}
 	}
 	static double heatCapacity(Inventory inventory, double temperature) {
 		var total=new Sum();
@@ -55,6 +77,8 @@ final class ThermalCaloricInversion {
 	}
 	static ThermalStateFunction.State solve(Inventory inventory,SignedDyadic target) { return solve(inventory,target.toDouble()); }
 	static ThermalStateFunction.State solve(Inventory inventory,double target) {
+		int first=inventory.first();
+		if(first>=0&&inventory.next(first)<0)return solveSingle(inventory.material(first),inventory.mass(first),target);
 		var capacity=new Sum();var numerator=new Sum();numerator.add(target);
 		for(int item=inventory.first();item>=0;item=inventory.next(item)){
 			var material=inventory.material(item);double mass=inventory.mass(item);

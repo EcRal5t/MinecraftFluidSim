@@ -13,7 +13,7 @@ final class FluidDomainStateMapper {
 
 	static FluidDomainState capture(FluidDomain domain) {
 		if (domain == null) throw new IllegalArgumentException("Domain is missing");
-		if (domain.collisionTransactionActive()) {
+		if (domain.domainPhaseInventory.collisionTransactionActive()) {
 			throw new IllegalStateException("Cannot capture while a collision transaction is active");
 		}
 		var chemistry = domain.chemicalParcels == null ? null : domain.chemicalParcels.registry();
@@ -98,7 +98,7 @@ final class FluidDomainStateMapper {
 					domain.projection.pressure, 0, domain.cellCount);
 		}
 		if (state.precipitationEnabled()) domain.setPrecipitationEnabled(true);
-		domain.ensureGrid();
+		domain.domainFlowFields.ensureGrid();
 		return domain;
 	}
 }

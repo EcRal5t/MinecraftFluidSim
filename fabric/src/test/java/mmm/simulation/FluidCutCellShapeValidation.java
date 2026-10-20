@@ -95,7 +95,7 @@ public final class FluidCutCellShapeValidation {
 	private static void documentedStairPlacementRestoresExactLedger() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				160, 5.0E-5F, 0.40F, 2.0E-3F, 0.80F
+				160, 5.0E-5F, 2.0E-3F, 0.80F
 		);
 		FluidDomain domain = new FluidDomain(24, 16, 24, config, 73_728);
 		for (int z = 0; z < 24; z++) for (int y = 0; y < 12; y++) for (int x = 0; x < 9; x++) {

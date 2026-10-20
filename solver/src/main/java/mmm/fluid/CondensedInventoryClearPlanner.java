@@ -38,7 +38,7 @@ final class CondensedInventoryClearPlanner {
 				domain.totalMassUnits(), drained,
 				domain.thermalState == null ? SignedDyadic.ZERO
 						: domain.liquidCells.exactInternalEnergy(),
-				domain.carrierMutationRevision(),
+				domain.domainFlowFields.carrierMutationRevision(),
 				domain.chemicalParcels == null ? 0L : domain.chemicalParcels.mutationRevision(),domain.transferPlanner.planLiquidClear());
 	}
 
@@ -72,7 +72,7 @@ final class CondensedInventoryClearPlanner {
 		long coherentMass = domain.thermalState == null ? 0L : domain.thermalState.coherentPhases().totalMassUnits();
 		return new FluidDomain.CondensedClearPlan(liquid, groups, drained, coherentEnergy, coherentSvq,
 				coherentMass,
-				domain.carrierMutationRevision(),
+				domain.domainFlowFields.carrierMutationRevision(),
 				domain.chemicalParcels == null ? 0L : domain.chemicalParcels.mutationRevision());
 	}
 

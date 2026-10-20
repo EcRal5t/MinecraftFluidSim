@@ -30,22 +30,25 @@ final class GasRuntimeGeometry {
 		sourceCollisionMasks=domain.geometry.cutCells.copyMicroMasks();
 		byte[] masks=futureMasks==null?sourceCollisionMasks:futureMasks;
 		if(masks.length!=domain.cellCount)throw new IllegalArgumentException("Future phase collision shape differs");
+		var old=domain.gasState.frame;
 		FlipCutCellGeometry cut=null;
 		if(preparedPhase==null||preparedGeometry==null){
 			cut=domain.geometry.cutCells;
 			if(futureMasks!=null){cut=new FlipCutCellGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);cut.restoreMicroMasks(masks);}
 		}
-		if(preparedPhase==null){phase=new FlipPressurePhaseGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);phase.rebuildOccupancy(occupancy,cut,occupiedSvq);}
+		if(preparedPhase==null&&old!=null&&occupancy.geometryIdentity()==old.occupancy.geometryIdentity()
+				&&Arrays.equals(occupiedSvq,old.occupiedSvq)&&old.geometry.matchesCollisionMasks(masks))phase=old.phase;
+		else if(preparedPhase==null){phase=new FlipPressurePhaseGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);phase.rebuildOccupancy(occupancy,cut,occupiedSvq);}
 		else phase=preparedPhase;
-		var old=domain.gasState.frame;boolean[] changed=old==null?null:new boolean[domain.cellCount];
+		boolean[] changed=old==null?null:new boolean[domain.cellCount];
 		if(preparedGeometry==null){
 			boolean[] solid=new boolean[domain.cellCount];for(int cell=0;cell<solid.length;cell++)solid[cell]=cut.fullySolid(cell);
-			if(old!=null)for(int cell=0;cell<changed.length;cell++)changed[cell]=!phase.sameCellGeometry(cell,old.phase);
+			if(old!=null&&phase!=old.phase)for(int cell=0;cell<changed.length;cell++)changed[cell]=!phase.sameCellGeometry(cell,old.phase);
 			geometry=GasComplementGeometry.capture(domain.sizeX,domain.sizeY,domain.sizeZ,cellSize,solid,cut,phase,
 					old==null?null:old.geometry,changed,targetCells);
 		}else geometry=preparedGeometry;
 		topology=GasChamberTopology.capture(geometry,sealed);
-		capacity=GasChamberCapacity.capture(domain,geometry,topology,occupiedSvq,targetCells,old);
+		capacity=GasChamberCapacity.capturePrepared(geometry,topology);
 		minimumPieceKeys=new int[topology.chambers().size()+1];Arrays.fill(minimumPieceKeys,-1);
 		for(var chamber:topology.chambers())minimumPieceKeys[chamber.node()]=chamber.minimumPiece();
 	}

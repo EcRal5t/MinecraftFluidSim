@@ -159,13 +159,13 @@ final class GranularImplicitDrag {
 		int x0 = (int) Math.floor(x), y0 = (int) Math.floor(y), z0 = (int) Math.floor(z);
 		int nx = domain.sizeX + (axis == 0 ? 1 : 0), ny = domain.sizeY + (axis == 1 ? 1 : 0);
 		int nz = domain.sizeZ + (axis == 2 ? 1 : 0), count = 0, base = contacts * 8;
-		double[] p2g = axis == 0 ? domain.mac.p2gWeightX : axis == 1 ? domain.mac.p2gWeightY : domain.mac.p2gWeightZ;
+		double[] p2g = axis == 0 ? domain.mac.faceMassX : axis == 1 ? domain.mac.faceMassY : domain.mac.faceMassZ;
 		double sum = 0;
 		for (int oz = 0; oz <= 1; oz++) for (int oy = 0; oy <= 1; oy++) for (int ox = 0; ox <= 1; ox++) {
 			int cx = x0 + ox, cy = y0 + oy, cz = z0 + oz;
 			if (cx < 0 || cx >= nx || cy < 0 || cy >= ny || cz < 0 || cz >= nz) continue;
 			int local = (cz * ny + cy) * nx + cx, face = offsets[axis] + local;
-			if (!(mass[face] > 0 && p2g[local] > 0) || !domain.granularCarrierFaceActive(axis, cx, cy, cz)) continue;
+			if (!(mass[face] > 0 && p2g[local] > 0) || !domain.domainFlowFields.granularCarrierFaceActive(axis, cx, cy, cz)) continue;
 			double weight = (ox == 0 ? 1 - x + x0 : x - x0) * (oy == 0 ? 1 - y + y0 : y - y0)
 					* (oz == 0 ? 1 - z + z0 : z - z0) * p2g[local];
 			if (!(weight > 0)) continue;

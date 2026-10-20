@@ -116,13 +116,13 @@ final class LiquidCarrierProperties {
 	 * <p>{@code thermal} may be null for layouts without thermal capability; those cells then take the
 	 * isothermal computation convention from {@link MaterialRegistry#STANDARD_TEMPERATURE_K}.
 	 */
-	void refresh(FluidDomainStorage domain, ThermalCarrierContext markers, FluidMaterialRegistry materials,
+	void refresh(FluidDomain domain, ThermalCarrierContext markers, FluidMaterialRegistry materials,
 			MaterialRegistry definitions, GranularDomainState granular, ThermalDomainState thermal, long carrierMutation) {
 		long chemistryMutation = domain.chemicalParcels == null ? 0 : domain.chemicalParcels.mutationRevision();
 		if (built != null && built.carrierMutation() == carrierMutation
 				&& built.chemistryMutation() == chemistryMutation
 				&& (thermal == null ? built.thermal() == null : thermal.matchesThermalRevision(built.thermal()))) return;
-		MarkerGridIndex grid = domain.markerGrid;
+		CellLiquidGrid grid = domain.liquidGrid;
 		if (definitions != null && thermal != null) thermal.preparePhaseScan(markers);
 		buoyancyPrepared = false;
 		extrapolatedCells = 0;
@@ -131,11 +131,11 @@ final class LiquidCarrierProperties {
 			density[cell] = grid.cellDensity[cell];
 			int handle = domain.liquidCarrierMaterialByCell == null ? -1
 					: domain.liquidCarrierMaterialByCell[cell];
-			boolean wet = definitions != null && handle >= 0 && grid.markerCount[cell] > 0;
+			boolean wet = definitions != null && handle >= 0 && grid.stockCount[cell] > 0;
 			if (!wet) {
 				liquid[cell] = false;
 				materialHandle[cell] = -1;
-				if (grid.markerCount[cell] == 0) density[cell] = AIR_DENSITY;
+				if (grid.stockCount[cell] == 0) density[cell] = AIR_DENSITY;
 				temperatureK[cell] = Double.NaN;
 				viscosityPascalSeconds[cell] = AIR_VISCOSITY;
 				maximumReynolds[cell] = AIR_MAXIMUM_REYNOLDS;

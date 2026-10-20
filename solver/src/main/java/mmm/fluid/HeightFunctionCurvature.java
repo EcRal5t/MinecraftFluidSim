@@ -7,7 +7,7 @@ final class HeightFunctionCurvature {
     private HeightFunctionCurvature() { }
 
     static double compute(FluidDomain d, int x, int y, int z) {
-        int cell = d.cellIndex(x, y, z);
+        int cell = d.domainFlowFields.cellIndex(x, y, z);
         double[] color = d.tension.surfaceTensionColor;
         double gx = difference(d, color, x, y, z, 0, cell);
         double gy = difference(d, color, x, y, z, 1, cell);
@@ -91,7 +91,7 @@ final class HeightFunctionCurvature {
         x += axis == 0 ? offset : 0; y += axis == 1 ? offset : 0; z += axis == 2 ? offset : 0;
         int coordinate = axis == 0 ? x : axis == 1 ? y : z, size = axis == 0 ? d.sizeX : axis == 1 ? d.sizeY : d.sizeZ;
         if (Math.floorMod(coordinate, 2 * size) >= size) { side = 1 - side; orientation = -orientation; }
-        int cell = d.cellIndex(reflect(x, d.sizeX), reflect(y, d.sizeY), reflect(z, d.sizeZ));
+        int cell = d.domainFlowFields.cellIndex(reflect(x, d.sizeX), reflect(y, d.sizeY), reflect(z, d.sizeZ));
         if (d.projection.pressureVolume[cell] != c) return false;
         var plane = d.pressurePhaseGeometry;
 
@@ -104,14 +104,14 @@ final class HeightFunctionCurvature {
 
     private static double sample(FluidDomain d, double[] color, int x, int y, int z, int axis, int offset, int target) {
         x += axis == 0 ? offset : 0; y += axis == 1 ? offset : 0; z += axis == 2 ? offset : 0;
-        boolean reflected = !d.inside(x, y, z);
+        boolean reflected = !d.domainFlowFields.inside(x, y, z);
         if (reflected) {
-            if (d.surfaceTensionContactAngleAtCell(target) != Math.PI / 2) return Double.NaN;
+            if (d.domainFlowFields.surfaceTensionContactAngleAtCell(target) != Math.PI / 2) return Double.NaN;
             x = reflect(x, d.sizeX); y = reflect(y, d.sizeY); z = reflect(z, d.sizeZ);
         }
-        int c = d.cellIndex(x, y, z);
-        if (d.geometry.solid[c] || d.geometry.cutCells.mask(c) != 0 || d.effectiveOpenCellVolume(c) != 1) return Double.NaN;
-        if (reflected && color[c] > 0 && d.surfaceTensionContactAngleAtCell(c) != Math.PI / 2) return Double.NaN;
+        int c = d.domainFlowFields.cellIndex(x, y, z);
+        if (d.geometry.solid[c] || d.geometry.cutCells.mask(c) != 0 || d.domainCollision.effectiveOpenCellVolume(c) != 1) return Double.NaN;
+        if (reflected && color[c] > 0 && d.domainFlowFields.surfaceTensionContactAngleAtCell(c) != Math.PI / 2) return Double.NaN;
         return color[c];
     }
     private static int reflect(int coordinate, int size) {

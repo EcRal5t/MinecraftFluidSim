@@ -7,7 +7,7 @@ import java.util.Arrays;
 /** Indexed batches retain full-scan floating-point order, including overlapping body supports. */
 public final class MovingBodyNeighborhoodValidation {
 	public static void main(String[] args) {
-		var config = new FluidSolverConfig(0.5F, 1000, 0, 0.025F, 200, 1e-5F, 0.4F, 2e-3F, 0.8F);
+		var config = new FluidSolverConfig(0.5F, 1000, 0, 0.025F, 200, 1e-5F, 2e-3F, 0.8F);
 		var reference = new FluidDomain(10, 6, 8, config, 4096);
 		var indexed = new FluidDomain(10, 6, 8, config, 4096);
 		for (int z = 0; z < 8; z++) for (int y = 0; y < 6; y++) for (int x = 0; x < 10; x++) {
@@ -20,7 +20,7 @@ public final class MovingBodyNeighborhoodValidation {
 		for (int round = 0; round < 2; round++) {
 			var expected = MovingBodyFluidCoupling.Result.NONE;
 			for (var request : requests) expected = expected.plus(reference.applyMovingBodyCoupling(request));
-			var actual = indexed.applyMovingBodyCouplings(requests);
+			var actual = indexed.domainStep.applyMovingBodyCouplings(requests);
 			if (!expected.equals(actual) || !Arrays.equals(reference.exportParticleState().copyParticleVelocities(),
 					indexed.exportParticleState().copyParticleVelocities())) {
 				throw new AssertionError("Indexed moving-body batch differs from ordered full scans");
