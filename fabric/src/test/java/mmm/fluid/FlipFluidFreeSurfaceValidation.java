@@ -235,28 +235,18 @@ public final class FlipFluidFreeSurfaceValidation {
 		for(float fraction:new float[]{.60F,.75F,1}){
 			var config=strictConfig();var domain=new FluidDomain(2,5,2,config);
 			for(int z=0;z<2;z++)for(int y=0;y<3;y++)for(int x=0;x<2;x++)domain.setVolume(x,y,z,y==2?fraction:1);
-			var volume=volume(domain);long mass=mass(domain);double initialCenter=centreY(domain);
-			double residual=0;
+			var volume=volume(domain);long mass=mass(domain);double initialCenter=FluidPhysicalAssertions.inventoryCenterY(domain);
 			for(int step=0;step<200;step++){
-				var candidate=advance(domain);residual=candidate.stats().pressureResidual();domain=candidate.claimPreparedCpuDomain();
+				var candidate=advance(domain);check(Float.isFinite(candidate.stats().pressureResidual()),"Fractional column pressure became nonfinite");domain=candidate.claimPreparedCpuDomain();
 			}
-			// A column has one cell-height uncertainty per resolved volume row.
-			// For the pressure Poisson residual [Pa/m^2], the one-dimensional
-			// mixed bottom/top inverse has maximum response H^2/2; sqrt(N)
-			// converts the reported RMS residual to a maximum-row bound.
-			double layers=3,height=layers*config.cellSize();
-			double geometricError=config.density()*config.gravity()*config.cellSize()*layers*FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION;
-			double pressureError=.5*height*height*Math.sqrt(Math.max(1,domain.projection.fluidUnknownCount+domain.projection.gasUnknownCount))
-					*Math.max(config.pressureTolerance(),residual);
-			double tolerance=geometricError+pressureError;
 			for(int y=0;y<=2;y++){
 				// Pressure is averaged over the liquid control volume. Its top
 				// fractional cell has its liquid centroid at half the wet height.
 				float depth=y==2?.5F*fraction:2+fraction-y-.5F;
 				float expected=config.density()*config.gravity()*config.cellSize()*depth,actual=domain.pressure(0,y,0);
-				check(Math.abs(actual-expected)<=tolerance,"Fractional hydrostatic pressure missed its resolved column: fraction="+fraction+", y="+y+", expected="+expected+", actual="+actual+", tolerancePa="+tolerance);
+				FluidPhysicalAssertions.hydrostaticPressure(domain,actual,expected,"Fractional column f="+fraction+", y="+y);
 			}
-			hydrostaticMotionWithinResolution(domain,height,3*domain.sizeX*domain.sizeZ,initialCenter);assertInventory(domain,volume,mass);
+			FluidPhysicalAssertions.hydrostaticRest(domain,initialCenter,"Fractional hydrostatic column");assertInventory(domain,volume,mass);
 		}
 	}
 
@@ -264,7 +254,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		FluidSolverConfig config = strictConfig();
 		FluidDomain domain = new FluidDomain(3, 3, 3, config);
 		for (int z = 0; z < 3; z++) for (int x = 0; x < 3; x++) domain.setVolume(x, 0, z, 0.25F);
-		var exactVolume=volume(domain);long exactMass=mass(domain);double initialCenter=centreY(domain);
+		var exactVolume=volume(domain);long exactMass=mass(domain);double initialCenter=FluidPhysicalAssertions.inventoryCenterY(domain);
 		for (int step = 0; step < 40; step++) {
 			var candidate = advance(domain);
 			domain = candidate.claimPreparedCpuDomain();
@@ -273,20 +263,20 @@ public final class FlipFluidFreeSurfaceValidation {
 			check(stats.relativeVolumeError() < 1.0E-6F, "thin-layer step changed liquid volume");
 		}
 		assertInventory(domain,exactVolume,exactMass);
-		hydrostaticMotionWithinResolution(domain,.25*config.cellSize(),domain.sizeX*domain.sizeZ,initialCenter);
+		FluidPhysicalAssertions.hydrostaticRest(domain,initialCenter,"Resting thin layer");
 	}
 
 	private static void longRunHydrostaticSurfaceDoesNotSink(){
 		var domain=new FluidDomain(4,8,4,strictConfig());
 		for(int z=0;z<4;z++)for(int x=0;x<4;x++)domain.setSolid(x,0,z,true);
 		for(int z=0;z<4;z++)for(int y=1;y<=4;y++)for(int x=0;x<4;x++)domain.setVolume(x,y,z,1);
-		var volume=volume(domain);long mass=mass(domain);double initial=centreY(domain);
+		var volume=volume(domain);long mass=mass(domain);double initial=FluidPhysicalAssertions.inventoryCenterY(domain);
 		for(int step=0;step<5000;step++)domain=advance(domain).claimPreparedCpuDomain();
 		assertInventory(domain,volume,mass);
 		double[] layers=layers(domain);
 		double shapeResolution=Math.sqrt(FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION);
 		for(int y=1;y<=4;y++)check(Math.abs(layers[y]-16)<=domain.sizeX*domain.sizeZ*shapeResolution,"Hydrostatic layer changed macroscopic volume at y="+y+": "+layers[y]);
-		hydrostaticMotionWithinResolution(domain,4*domain.config.cellSize(),4*domain.sizeX*domain.sizeZ,initial);
+		FluidPhysicalAssertions.hydrostaticRest(domain,initial,"Long hydrostatic surface");
 	}
 
 	private static void waterDescendsAStairSlope() {
@@ -329,19 +319,6 @@ public final class FlipFluidFreeSurfaceValidation {
 	private static int index(int sizeX, int sizeY, int x, int y, int z) {
 		return (z * sizeY + y) * sizeX + x;
 	}
-	/** A resolved-volume parcel may spend at most one column height of gravitational energy. */
-	private static void hydrostaticMotionWithinResolution(FluidDomain domain,double height,int wetCells,double initialCenter){
-		double h=domain.config.cellSize(),resolution=FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION;
-		double unresolvedMass=domain.config.density()*h*h*h*wetCells*resolution;
-		double energyBudget=unresolvedMass*domain.config.gravity()*height;
-		double mass=mmm.units.Mass.kilograms(domain.totalMassUnits());
-		double kinetic=LiquidMacroscopicMotionValidation.Motion.capture(domain).kinetic();
-		double rms=Math.sqrt(2*kinetic/mass),allowed=Math.sqrt(2*energyBudget/mass);
-		check(Double.isFinite(rms)&&rms<=allowed,"Hydrostatic bulk motion exceeded resolved-volume energy: rms="+rms+", allowed="+allowed+", kineticJ="+kinetic+", budgetJ="+energyBudget);
-		// A wedge-shaped interface converts a cell-volume error into a subcell
-		// linear uncertainty of order sqrt(resolution); this bound stays fixed in time.
-		check(Math.abs(centreY(domain)-initialCenter)<=h*Math.sqrt(resolution),"Hydrostatic liquid accumulated a macroscopic vertical drift");
-	}
 
 	private static SignedDyadic volume(FluidDomain domain){var value=SignedDyadic.ZERO;for(var stock:domain.exportLiquidCellState().stocks())value=value.add(stock.volume());return value;}
 	private static long mass(FluidDomain domain){long value=0;for(var stock:domain.exportLiquidCellState().stocks())value=Math.addExact(value,stock.massUnits());return value;}
@@ -350,7 +327,6 @@ public final class FlipFluidFreeSurfaceValidation {
 		var available=domain.domainFlowFields.availableCellVolumes();for(var capacity:available)check(capacity.signum()>=0,"Liquid exceeded joint cell capacity");
 	}
 	private static double[] layers(FluidDomain domain){double[] result=new double[domain.sizeY];for(var stock:domain.exportLiquidCellState().stocks())result[stock.key().cell()/domain.sizeX%domain.sizeY]+=stock.volumeFraction();return result;}
-	private static double centreY(FluidDomain domain){double weighted=0,volume=0;var layers=layers(domain);for(int y=0;y<layers.length;y++){volume+=layers[y];weighted+=(y+.5)*layers[y];}return domain.config.cellSize()*weighted/volume;}
 	private static void check(boolean condition,String message){if(!condition)throw new AssertionError(message);}
 	/** One complete private production candidate, including supported mechanical time refinement. */
 	private static FluidStepCandidate advance(FluidDomain domain) {

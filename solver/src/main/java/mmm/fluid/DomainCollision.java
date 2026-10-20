@@ -424,9 +424,11 @@ final class DomainCollision {
 	}
 	public void bindMaterialRegistry(FluidMaterialRegistry registry) {
 		if (registry == null) throw new IllegalArgumentException("Material registry must not be null");
-		if (domain.materialRegistry != null && domain.materialRegistry != registry) {
-			throw new IllegalArgumentException("A domain cannot mix runtime handles from different material registries");
+		if (domain.materialRegistry != null && !domain.materialRegistry.materials().equals(registry.materials())) {
+			throw new IllegalArgumentException("A domain cannot change its ordered liquid palette");
 		}
+		// Equal ordered definitions give the same material and phase handles. Retain
+		// the bound registry and its runtime pair tensions across restored inputs.
 		if (domain.materialRegistry != null) return;
 		double defaultDensity = registry.material(0).referenceDensity();
 		double tolerance = Math.max(1.0E-9, Math.abs(domain.config.density()) * 1.0E-12);

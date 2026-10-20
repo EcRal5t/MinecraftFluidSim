@@ -114,6 +114,7 @@
     - [LiquidCellInventoryValidation](../../solver/src/test/java/mmm/fluid/LiquidCellInventoryValidation.java)
     - [MacMomentumAdvectionValidation](../../solver/src/test/java/mmm/fluid/MacMomentumAdvectionValidation.java)
     - [CarrierMutationValidation](../../fabric/src/test/java/mmm/fluid/CarrierMutationValidation.java)
+    - [LiquidMacroscopicMotionValidation](../../solver/src/test/java/mmm/fluid/LiquidMacroscopicMotionValidation.java)：组合运行 `joint-moments`，其他正常轨迹通过该类的对应选择器运行。
 
 - **相向液体的连续合流**
   - 选择器：`liquid-joining`，显式完整场景
@@ -388,7 +389,23 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 ### 第二轮审阅整改：2026-10-21
 
-第二轮正式入口在 `07dc0ab` 报告 `cell-inventory`、`granular`、`gas-liquid`、`chemistry`、`thermal` 与 `air-cavity` 失败。修复后采用同一次正式 Gradle 构建重新运行这些已知失败流程；结果待本轮实际执行后登记。
+第二轮审阅以 `07dc0ab` 为基线，报告库存、颗粒、气液、化学、热学与气腔失败。修复按职责分批构建，已通过且未受后续改动影响的流程复用相应正式产物；临时诊断用于定位，完整领域的通过状态以正式入口为准。
+
+| 正式流程 | 实际结果与日志 |
+|---|---|
+| 单元库存、动量、墙面交接及编辑恢复 | `review2-functional4.log`：`cell-inventory` 完整通过，3.481 s |
+| 化学输运、抽取、热量与恢复 | `review2-functional5.log`：`chemistry` 完整通过，3.283 s |
+| 气腔连通、液塞及恢复 | `review2-functional6.log`：`air-cavity` 完整通过，0.172 s |
+| 气液正负压静水及连续压缩 | `review2-functional9.log`：两种静水各 1,000 步、48 批连续填充压缩完成；该次最后的孔流夹具失败，领域未整次通过 |
+| 有限孔流 | 修正孔口夹具的实际连通通道后，`review2-orifice.log` 复用正式 Gradle 产物运行同一 `M5GasLiquidCouplingValidation --orifice`；59 步后压差余量为初值的 0.71% |
+| 切格正常流动 | `review2-integration.log`：完整 `cut-cell` 通过，含 600 步障碍物流动，2.987 s |
+| 自由面、静水、旋流、台阶和溃坝 | `review2-integration2.log`：完整 `free-surface` 通过，22.592 s，含 5,000 步溃坝及库存、容量和恢复检查 |
+| 沙床生命周期及完整热学 | 剩余后继仍在修复，未计作通过 |
+| 原完整步墙钟预算 | `review2-live-budget.log`：控制器 20 步通过，中位数 13.248 ms、最大 21.316 ms；最大 demo 在相变后第 7 步压力求解失败，完整预算未通过 |
+
+日志均位于仓库 `build/`。`review2-integration2.log` 对应 `d93af20` 加工作区修改，源码 SHA-256 为 `b03332e2d36baa6d993d51316fc533b8a7153fd51ea7c06244f0ec42b2c980e7`，本地产物 SHA-256 为 `7a1704014d46d2ef76fbbb6fb7d909898637f676b031bbf0612fb0909e227390`。预算直接复用该次 Gradle 导出的完整 classpath；停止 Gradle daemon 后运行，默认优先级、`-ea -Xmx512m`、JDK 26.0.2，预热和采样保持原入口。
+
+5,000 步溃坝在第 1,000–5,000 步的 RMS 速度为 0.091–0.106 m/s，动能 112–152 J，后段保持有界。静水与压力误差按共享的 `FluidPhysicalAssertions` 评价宏观水头、动能和库存质心；整数质量、物种、体积及内能交接继续使用原精确断言。
 
 `runCpuValidation` 在执行前输出 Git 版本、源码与本地 classpath 产物 SHA-256、JVM、堆限制、断言开关、选择器和完整 classpath。源码摘要包含五个 CPU 模块的源码、资源及构建配置。增量构建按内容判定；换行转换导致的时间戳变化不能单独判断产物是否过期。
 

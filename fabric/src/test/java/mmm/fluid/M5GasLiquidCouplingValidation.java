@@ -67,7 +67,7 @@ public final class M5GasLiquidCouplingValidation {
 		check(domain.projection.gasPressureUnknown[gasNode]
 				&& Math.abs(domain.pressure(1, 1, 1) - solvedGasPressure - jump) <= .01*capillaryScale,
 				"finite gas compliance and capillary jump did not share one balanced interface face");
-		checkStaticKineticEnergy(domain,capillaryScale,.001,"Static gas/capillary contact");
+		FluidPhysicalAssertions.staticMotion(domain,capillaryScale,FluidPhysicalAssertions.SETTLED_ENERGY_FRACTION,"Static gas/capillary contact");
 		check(domain.gasBoundary().sealedInventory().equals(gasInventory)
 				&& domain.gasBoundary().auditClosed(),
 				"static sealed gas/capillary contact changed gas inventory truth");
@@ -226,12 +226,13 @@ public final class M5GasLiquidCouplingValidation {
 		double liquidVolume = domain.totalVolumeExact();
 		long liquidMass=domain.totalMassUnits();
 		FluidDomain.StepStats stats = null;
-		double peakKineticEnergy = 0.0;
+		double peakRms = 0.0;
 		for (int step = 0; step < 1_000; step++) {
 			var candidate = advance(domain);
 			domain = candidate.claimPreparedCpuDomain();
 			stats = candidate.stats();
-			peakKineticEnergy=Math.max(peakKineticEnergy,checkStaticKineticEnergy(domain,expected,.01,"Hydrostatic transient"));
+			var motion=FluidPhysicalAssertions.staticMotion(domain,expected,FluidPhysicalAssertions.TRANSIENT_ENERGY_FRACTION,"Hydrostatic transient");
+			peakRms=Math.max(peakRms,motion.rmsSpeed());
 			check(Float.isFinite(stats.pressureResidual()), "analytic hydrostatic residual became non-finite");
 			check(domain.totalVolumeExact() == liquidVolume&&domain.totalMassUnits()==liquidMass, "analytic hydrostatic head changed liquid volume or integer mass");
 			checkLedger(domain.gasBoundary(), "analytic hydrostatic step " + sign + "/" + step);
@@ -241,17 +242,14 @@ public final class M5GasLiquidCouplingValidation {
 				* (columnSurface(domain, 7, 10, 8) - columnSurface(domain, 1, 5, 10));
 		double bottomMismatch = Math.abs(domain.pressure(5, 1, 1) - domain.pressure(7, 1, 1));
 		double relativeHeadError = Math.abs(gasPressure - measuredHead) / Math.abs(gasPressure);
-		double finalKineticEnergy=checkStaticKineticEnergy(domain,expected,.001,"Hydrostatic equilibrium");
-		double mass=mmm.units.Mass.kilograms(domain.totalMassUnits());
+		var finalMotion=FluidPhysicalAssertions.staticMotion(domain,expected,FluidPhysicalAssertions.SETTLED_ENERGY_FRACTION,"Hydrostatic equilibrium");
 		System.out.printf("  analytic %s-gauge head: p=%.3f Pa measured=%.3f Pa error=%.6g%% "
 				+ "RMS peak/final=%.6g/%.6g m/s bottomMismatch=%.6g Pa%n",
 				sign > 0 ? "positive" : "negative", gasPressure, measuredHead, relativeHeadError * 100.0,
-				Math.sqrt(2*peakKineticEnergy/mass),Math.sqrt(2*finalKineticEnergy/mass), bottomMismatch);
-		double pressureTolerance=.05*DENSITY*GRAVITY*domain.config.cellSize();
-		check(Math.abs(gasPressure - expected) <= pressureTolerance,
-				"analytic gas pressure changed from its imposed hydrostatic head");
-		check(Math.abs(gasPressure-measuredHead)<=pressureTolerance,"Gas pressure and liquid head differed by more than 0.05 cell heights");
-		check(bottomMismatch<=pressureTolerance,"U-tube bottom pressure differed by more than 0.05 cell heights");
+				peakRms,finalMotion.rmsSpeed(), bottomMismatch);
+		FluidPhysicalAssertions.hydrostaticPressure(domain,gasPressure,expected,"Analytic gas pressure");
+		FluidPhysicalAssertions.hydrostaticPressure(domain,gasPressure,measuredHead,"Gas pressure and liquid head");
+		FluidPhysicalAssertions.hydrostaticPressure(domain,bottomMismatch,0,"U-tube bottom pressure");
 		checkLedger(domain.gasBoundary(),"analytic hydrostatic final gas inventory");
 	}
 
@@ -509,16 +507,6 @@ public final class M5GasLiquidCouplingValidation {
 	private static int sealedColumnNode(FluidDomain domain){
 		int node=domain.airNodeAt(2,domain.sizeY-2,1);
 		check(node>0,"The upper sealed column lost its finite gas owner");return node;
-	}
-	/** Small residual motion is measured by actual liquid mass and a physical energy scale. */
-	private static double checkStaticKineticEnergy(FluidDomain domain,double pressureScale,double fraction,String context){
-		double mass=mmm.units.Mass.kilograms(domain.totalMassUnits());
-		double gravity=Math.abs(domain.config.gravity());
-		double scale=gravity>0?mass*gravity*domain.config.cellSize()
-				:Math.abs(pressureScale)*domain.unitScale.cubicMeters(domain.totalVolumeExact());
-		double kinetic=domain.liquidKineticEnergyJoules();
-		check(Double.isFinite(kinetic)&&kinetic<=fraction*scale,context+" exceeded its mass-weighted kinetic energy budget: "+kinetic+" J / "+scale+" J");
-		return kinetic;
 	}
 
 	private static void check(boolean condition, String message) {

@@ -7,6 +7,7 @@ import mmm.fluid.BuiltinFluidMaterials;
 import mmm.fluid.CpuFluidSolverBackend;
 import mmm.fluid.FluidDomain;
 import mmm.fluid.FluidDomainState;
+import mmm.fluid.FluidPhysicalAssertions;
 import mmm.fluid.FluidMaterialRegistry;
 import mmm.fluid.FluidSolverConfig;
 import mmm.fluid.FluidStepCandidate;
@@ -1579,19 +1580,12 @@ public final class M8GranularValidation {
 			// deep, so its centroid lies .875h above the full cell beneath it.
 			float expectedGradient = config.density() * config.gravity() * config.cellSize() * (y == 0 ? 1 : .875F);
 			float actualGradient = actualPressure[y] - actualPressure[y + 1];
-			float relativeError = Math.abs(actualGradient - expectedGradient) / expectedGradient;
-			require(relativeError < .02F, "porous granular bed missed macroscopic hydrostatic gradient: y="
-					+ y + ", pressure=" + Arrays.toString(actualPressure) + ", expectedGradient="
-					+ expectedGradient + ", speed=" + domain.maximumParticleSpeed() + ", error=" + relativeError);
+			FluidPhysicalAssertions.hydrostaticGradient(actualGradient,expectedGradient,
+					"Porous bed y="+y+", pressure="+Arrays.toString(actualPressure));
 		}
-		double meanSquaredSpeed=2*domain.liquidKineticEnergyJoules()/mmm.units.Mass.kilograms(liquidMass);
-		// The coarse free surface permits small numerical waves. Measure their actual
-		// inertia against the gravity-wave scale instead of the fastest inventory tail.
-		require(Float.isFinite(stats.pressureResidual())
-				&& meanSquaredSpeed < .0025*config.gravity()*config.cellSize(),
-				"porous granular bed developed macroscopic kinetic energy: RMS="
-						+ Math.sqrt(meanSquaredSpeed) + ", PCG=" + stats.pressureIterations()
-						+ "/" + stats.pressureResidual());
+		require(Float.isFinite(stats.pressureResidual()),"Porous hydrostatic pressure became nonfinite");
+		FluidPhysicalAssertions.staticMotion(domain,0,.00125,
+				"Porous hydrostatic bed, PCG="+stats.pressureIterations()+"/"+stats.pressureResidual());
 		var expectedVolume=mmm.units.SignedDyadic.ZERO;for(var stock:liquidVolume)expectedVolume=expectedVolume.add(stock.volume());
 		require(domain.totalMassUnits()==liquidMass&&domain.exportLiquidCellState().stocks().stream()
 				.map(mmm.inventory.LiquidCellInventory.Stock::volume).reduce(mmm.units.SignedDyadic.ZERO,mmm.units.SignedDyadic::add).equals(expectedVolume),
