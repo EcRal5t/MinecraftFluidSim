@@ -9,6 +9,13 @@ public final class M4SurfaceTensionValidation {
 private M4SurfaceTensionValidation() { }
 
 public static void main(String[] args) {
+	if (args.length == 1 && args[0].equals("--wetting")) {
+		validateContactAngleSpreading();
+		validateLiquidPairPressureJump();
+		validateLiquidPairIdentity();
+		System.out.println("M4 wetting and liquid-pair validation passed");
+		return;
+	}
 	SurfaceTensionCurvatureExperiment.validateResolvedGeometry();
 	if (args.length == 1 && args[0].equals("--curvature")) return;
 	validateSigmaZeroDegeneration();
@@ -124,12 +131,13 @@ private static void validateContactAngleSpreading() {
 DropletMetrics hydrophilic = runDroplet(config, Math.toRadians(30.0), 100.0, 1200);
 DropletMetrics neutral = runDroplet(config, Math.toRadians(90.0), 100.0, 1200);
 DropletMetrics hydrophobic = runDroplet(config, Math.toRadians(120.0), 100.0, 1200);
-System.out.printf("  contact-angle wall moments theta30=%.6f theta90=%.6f theta120=%.6f "
-		+ "maxSpeed=%.3g/%.3g/%.3g%n",
-hydrophilic.varianceX(), neutral.varianceX(), hydrophobic.varianceX(),
-hydrophilic.maximumSpeed(), neutral.maximumSpeed(), hydrophobic.maximumSpeed());
-check(hydrophilic.varianceX() > neutral.varianceX() && neutral.varianceX() > hydrophobic.varianceX(),
-"Young wall energy did not monotonically widen the continuous liquid footprint");
+System.out.printf("  contact-angle initial outward impulse moments theta30=%g theta90=%g theta120=%g kg*m^2/s; final varianceX=%g/%g/%g m^2; peakK=%g/%g/%g J; finalRMS=%g/%g/%g m/s%n",
+hydrophilic.outwardImpulse(),neutral.outwardImpulse(),hydrophobic.outwardImpulse(),
+hydrophilic.varianceX(),neutral.varianceX(),hydrophobic.varianceX(),
+hydrophilic.maximumKinetic(),neutral.maximumKinetic(),hydrophobic.maximumKinetic(),
+hydrophilic.rmsSpeed(),neutral.rmsSpeed(),hydrophobic.rmsSpeed());
+check(hydrophilic.outwardImpulse() > neutral.outwardImpulse() && neutral.outwardImpulse() > hydrophobic.outwardImpulse(),
+"Young wall energy did not direct the initial wetting impulse according to contact angle");
 }
 
 private static DropletMetrics runDroplet(FluidSolverConfig config, double contactAngleRadians, double sigma, int steps) {
@@ -143,21 +151,51 @@ for (int z = 1; z <= 2; z++) for (int x = 4; x <= 7; x++)
 fractions[domain.domainFlowFields.cellIndex(x,1,z)] = 1;
 domain.setVolumes(fractions);
 var initialVolume = domain.liquidCells.exactVolume(); long initialMass = domain.totalMassUnits();
+double outwardImpulse = initialWettingImpulse(domain), potential = 0, wallArea = 0, h = config.cellSize();
+for (var stock : domain.liquidCells.physicalStocks())
+potential += stock.massKilograms()*config.gravity()*(stock.key().cell()/domain.sizeX%domain.sizeY+.5)*h;
+for (int cell = 0; cell < domain.cellCount; cell++) if (!domain.geometry.solid[cell])
+for (int axis = 0; axis < 3; axis++) wallArea += domain.geometry.cutCells.solidWallArea(cell,axis)*h*h;
+// Initial gravity and interface energy can become K; Young energy is bounded below
+// by -sigma times the available fixed-wall area, independently of the final shape.
+double energyBudget = potential + sigma*(6*domain.unitScale.cubicMeters(initialVolume.toDouble())/h + wallArea);
+double peakKinetic = 0;
 for (int step = 0; step < steps; step++) {
 domain.domainStep.step();
 check(domain.liquidCells.exactVolume().equals(initialVolume) && domain.totalMassUnits() == initialMass,
 "contact-angle spreading changed exact mass or volume");
+double kinetic = domain.liquidKineticEnergyJoules();
+check(Double.isFinite(kinetic) && kinetic <= energyBudget,
+"wetting motion exceeded the available gravity and surface energy: K="+kinetic+", budget="+energyBudget);
+peakKinetic = Math.max(peakKinetic,kinetic);
 }
 double weightedX = 0, weightedX2 = 0, volume = 0;
 for (var stock : domain.liquidCells.physicalStocks()) {
-double x = (stock.key().cell() % domain.sizeX + .5) * config.cellSize(), amount = stock.volumeFraction();
-weightedX += x * amount; weightedX2 += x*x * amount; volume += amount;
+double x = (stock.key().cell()%domain.sizeX+.5)*h, amount = stock.volumeFraction();
+weightedX += x*amount; weightedX2 += x*x*amount; volume += amount;
 }
-double meanX = weightedX / volume;
-return new DropletMetrics(weightedX2 / volume - meanX * meanX, domain.maximumParticleSpeed());
+double meanX = weightedX/volume;
+return new DropletMetrics(weightedX2/volume-meanX*meanX,outwardImpulse,peakKinetic,
+FluidPhysicalAssertions.motion(domain).rmsSpeed());
 }
 
-private record DropletMetrics(double varianceX, float maximumSpeed) { }
+/** Preview only the initial Young impulse, before pressure, gravity or shape evolution. */
+private static double initialWettingImpulse(FluidDomain domain) {
+domain.domainFlowFields.ensureGrid();
+double centerX = domain.centerOfMassX();
+domain.bodyForceStage.applyLiquidSolidSurfaceEnergyForce(domain.config.timeStep());
+double outward = 0, h = domain.config.cellSize();
+for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x <= domain.sizeX; x++) {
+int face = domain.domainFlowFields.xFaceIndex(x,y,z);
+outward += (x*h-centerX)*domain.cellMacStage.massX[face]*domain.mac.velocityX[face];
+}
+// Restore the derived velocities through the existing committed-momentum interface.
+domain.cellMacStage.rebuildVelocity();
+check(Double.isFinite(outward),"initial Young impulse is not finite");
+return outward;
+}
+
+private record DropletMetrics(double varianceX, double outwardImpulse, double maximumKinetic, double rmsSpeed) { }
 
 	private static void validateLiquidPairPressureJump() {
 		FluidSolverConfig config = new FluidSolverConfig(
