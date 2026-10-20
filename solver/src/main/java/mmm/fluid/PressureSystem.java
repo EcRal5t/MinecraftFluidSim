@@ -166,7 +166,7 @@ final class PressureSystem {
 	/** Gauge pressure at the retained liquid support, including a partially filled cell's gas contact. */
 	double liquidPressureAt(int cell, int support) {
 		domain.domainFlowFields.ensurePressureGeometry();
-		if ((faces.fullSupports[cell] & support) == support)
+		if ((faces.pressureSupports[cell] & support) == support)
 			return domain.projection.pressure[cell]+domain.tension.surfaceTensionPressure[cell];
 		var frame = domain.gasState.frame; double total = 0, weighted = 0;
 		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) {
