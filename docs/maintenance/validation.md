@@ -39,6 +39,8 @@
 
 气腔刷新、持久化同步、压缩功、排气及气液相变的热账交接可用 `:fabric:runThermalValidation --args="--gas-topology"` 聚焦运行，复用现有热学场景。沸腾搜索固定输入与端口复用的对照归属 `air-cavity`。
 
+气液物种转换及其热学后继可用 `:fabric:runThermalValidation --args="--phase-species"` 聚焦运行；场景沿用完整热学入口。
+
 `free-surface:short` 省略长静水、5,000 步溃坝、300 步台阶流动，以及输运中的连续交接轨迹和 1 秒、4 秒多网格旋流。其他短组合仍可能包含成本较高的领域；具体省略项由对应入口输出。
 
 <a id="cpu"></a>
@@ -292,6 +294,7 @@
 使用正式全能力注册表与逐步捕获恢复，覆盖“沉积休眠 → 弱扰动 → 强扰动起动搬运 → 再次沉积休眠”。
 每步检查液固联合容量、物质与内能收支，并记录起动、接触和床面受力。
 该流程与薄床自由流动、时间细化共同构成正常沙床验收，具体场景参数由测试维护。
+单独运行使用 `./gradlew.bat :fabric:runGranularBedValidation --offline`。
 
 批量排查使用 [ControllerInventoryDurabilityValidation](../../fabric/src/test/java/mmm/simulation/ControllerInventoryDurabilityValidation.java) 的带种子操作序列，
 每次操作后执行完整状态往返。参数依次是起始种子、种子数量、操作数和是否禁用沙粒（可省略，默认 `false`）：
@@ -401,9 +404,11 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 | 切格正常流动 | `review2-integration.log`：完整 `cut-cell` 通过，含 600 步障碍物流动，2.987 s |
 | 自由面、静水、旋流、台阶和溃坝 | `review2-integration2.log`：完整 `free-surface` 通过，22.592 s，含 5,000 步溃坝及库存、容量和恢复检查 |
 | 沙床生命周期及完整热学 | 剩余后继仍在修复，未计作通过 |
-| 原完整步墙钟预算 | `review2-live-budget.log`：控制器 20 步通过，中位数 13.248 ms、最大 21.316 ms；最大 demo 在相变后第 7 步压力求解失败，完整预算未通过 |
+| 原完整步墙钟预算 | `review2-live-budget2.log`：控制器 20 步通过，中位数 15.422 ms、最大 37.667 ms；最大 demo 连续完成 20 步，最大 243.850 ms，超过 200 ms 最多连续一步，满足原暂停要求 |
 
 日志均位于仓库 `build/`。`review2-integration2.log` 对应 `d93af20` 加工作区修改，源码 SHA-256 为 `b03332e2d36baa6d993d51316fc533b8a7153fd51ea7c06244f0ec42b2c980e7`，本地产物 SHA-256 为 `7a1704014d46d2ef76fbbb6fb7d909898637f676b031bbf0612fb0909e227390`。预算直接复用该次 Gradle 导出的完整 classpath；停止 Gradle daemon 后运行，默认优先级、`-ea -Xmx512m`、JDK 26.0.2，预热和采样保持原入口。
+
+上述初次预算 `review2-live-budget.log` 在 demo 第 7 步失败：蒸汽先并入旧接触气腔，新生干容却位于液封另一侧。修复相变来源交接后的正式预算为 `review2-live-budget2.log`，对应 `68542ce` 加工作区修改，源码 SHA-256 `bdd78774dadc8edd703d33e1790b8de7b24317f6407ad0bbd65ff8fcd007faaa`，本地产物 SHA-256 `17b00e69a0d1e7aa2e962cb1e28885985b56c06dbd91ec8f00b9f12199bc0847`。该次通过 Gradle 的正式 `production-live-budget` 入口运行，默认优先级、`-ea -Xmx512m`、JDK 26.0.2，原物理配置、预热、采样和压力迭代预算均保留。
 
 5,000 步溃坝在第 1,000–5,000 步的 RMS 速度为 0.091–0.106 m/s，动能 112–152 J，后段保持有界。静水与压力误差按共享的 `FluidPhysicalAssertions` 评价宏观水头、动能和库存质心；整数质量、物种、体积及内能交接继续使用原精确断言。
 

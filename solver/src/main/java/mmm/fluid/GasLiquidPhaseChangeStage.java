@@ -179,27 +179,28 @@ final class GasLiquidPhaseChangeStage {
 		if(totalDesired==0) return new FluidDomain.GasThermalPhaseStats(0,0,0);
 		long[] counts=allocate(Math.min(maximumOperations,totalDesired),desired);
 		for(int i=0;i<counts.length;i++) proposals.get(i).batches=counts[i];
-		var gas=new ArrayList<GasInventory>(network.nodeCount()); double[] energy=new double[network.nodeCount()];
-		for(int node:network.nodeIds()) { gas.add(network.inventory(node)); energy[node-1]=thermal.gasNodeEnergy(node,network); }
+		var retainedGas=new ArrayList<GasInventory>(network.nodeCount()); double[] retainedEnergy=new double[network.nodeCount()];
+		for(int node:network.nodeIds()) { retainedGas.add(network.inventory(node)); retainedEnergy[node-1]=thermal.gasNodeEnergy(node,network); }
+		var births=new ArrayList<GasTopologyCoordinator.PhaseBirth>();var birthNodes=new ArrayList<Integer>();
 		// Every component exchange in a chamber shares its actual remaining pore capacity.
 		var gasRoom=new SignedDyadic[network.nodeCount()];Arrays.fill(gasRoom,SignedDyadic.ZERO);
 		for(var component:domain.gasState.frame.capacity().components()) if(component.availableVolumeNormalized().signum()>0) {
 			int node=domain.gasState.frame.topology().nodeOfComponent(component.cell(),component.supportMask());
 			if(node>0)gasRoom[node-1]=gasRoom[node-1].add(component.availableVolumeNormalized());
 		}
-		for(var p:proposals)if(p.boiling&&p.batches>0)
-			gasRoom[p.node-1]=gasRoom[p.node-1].add(p.batchVolume.multiply(SignedDyadic.of(p.batches)));
 		GasAuditLedger created=GasAuditLedger.EMPTY,removed=GasAuditLedger.EMPTY;
 		int operations=0,boiled=0,condensed=0;
 		for(var group:groups.values()) {
-			int node=group.getFirst().node; var inventory=gas.get(node-1);
+			int node=group.getFirst().node; var inventory=retainedGas.get(node-1);
 			for(var p:group) if(p.boiling&&p.batches>0) {
 				var moved=boil(p,phase,function);
-				try { inventory=inventory.merge(moved); }
-				catch(GasInventory.RepresentationException unavailable) { return new FluidDomain.GasThermalPhaseStats(0,0,0); }
+				births.add(new GasTopologyCoordinator.PhaseBirth(p.cell.id,p.source.key().supportMask(),moved,p.cell.transfer));
+				birthNodes.add(node);
 				created=created.add(moved);
 				operations+=Math.toIntExact(p.batches); boiled++;
 			}
+			// Condensation uses the old chamber stock. Newly born vapor follows its
+			// released cell capacity and first becomes a receiver on the next step.
 			var receivers=group.stream().filter(p->!p.boiling&&p.batches>0).toList();
 			if(!receivers.isEmpty()) {
 				var vapor=inventory.component(receivers.getFirst().component);
@@ -215,10 +216,10 @@ final class GasLiquidPhaseChangeStage {
 					operations+=Math.toIntExact(p.batches); condensed++;
 				}
 			}
-			SignedDyadic totalEnergy=SignedDyadic.of(energy[node-1]); Cell last=null;
-			for(var p:group) if(p.cell.future!=p.cell.original) { totalEnergy=totalEnergy.add(SignedDyadic.of(p.cell.transfer)); last=p.cell; }
+			SignedDyadic totalEnergy=SignedDyadic.of(retainedEnergy[node-1]); Cell last=null;
+			for(var p:group) if(!p.boiling&&p.cell.future!=p.cell.original) { totalEnergy=totalEnergy.add(SignedDyadic.of(p.cell.transfer)); last=p.cell; }
 			if(inventory.isEmpty()&&last!=null) { last.transfer-=totalEnergy.toDouble(); totalEnergy=SignedDyadic.ZERO; }
-			gas.set(node-1,inventory); energy[node-1]=totalEnergy.toDouble();
+			retainedGas.set(node-1,inventory); retainedEnergy[node-1]=totalEnergy.toDouble();
 		}
 		if(operations==0) return new FluidDomain.GasThermalPhaseStats(0,0,0);
 		var cells=new ArrayList<>(proposals.stream().map(p->p.cell).filter(c->c.future!=c.original).toList());
@@ -233,21 +234,32 @@ final class GasLiquidPhaseChangeStage {
 			cells.add(capturedCells.computeIfAbsent(cell,key->captureCell(key,function,thermal.preparePhaseCandidateCell(key,domain.domainCapabilities.thermalMarkerContext()))));
 		SignedDyadic mechanicalHeat=SignedDyadic.of(momentum.removedKineticEnergy());
 		for(var heat:momentum.heatByCell().values()) mechanicalHeat=mechanicalHeat.add(heat);
-		// A lumped gas chamber thermalizes the kinetic energy carried by newly vaporized mass.
-		long[] evaporated=new long[network.nodeCount()]; long evaporatedTotal=0;
-		for(var p:proposals) if(p.boiling&&p.batches>0) {
-			long mass=Math.multiplyExact(p.batches,p.batchMass);
-			evaporated[p.node-1]=Math.addExact(evaporated[p.node-1],mass); evaporatedTotal=Math.addExact(evaporatedTotal,mass);
-		}
+		// The newborn vapor carries its own source U and thermalized liquid kinetic energy.
+		long evaporatedTotal=0;
+		for(var birth:births)evaporatedTotal=Math.addExact(evaporatedTotal,birth.inventory().totalMassUnits());
 		SignedDyadic remainingHeat=SignedDyadic.of(momentum.removedKineticEnergy());
 		long remainingMass=evaporatedTotal;
-		for(int node=0;node<evaporated.length;node++) if(evaporated[node]>0) {
-			SignedDyadic heat=evaporated[node]==remainingMass?remainingHeat
-					:SignedDyadic.of(remainingHeat.toDouble()*(evaporated[node]/(double)remainingMass));
-			energy[node]=SignedDyadic.of(energy[node]).add(heat).toDouble();
-			remainingHeat=remainingHeat.subtract(heat); remainingMass-=evaporated[node];
+		for(int index=0;index<births.size();index++) {
+			var birth=births.get(index);long mass=birth.inventory().totalMassUnits();
+			SignedDyadic heat=mass==remainingMass?remainingHeat
+					:SignedDyadic.of(remainingHeat.toDouble()*(mass/(double)remainingMass));
+			births.set(index,new GasTopologyCoordinator.PhaseBirth(birth.cell(),birth.supportMask(),birth.inventory(),
+					SignedDyadic.of(birth.energy()).add(heat).toDouble()));
+			remainingHeat=remainingHeat.subtract(heat); remainingMass-=mass;
 		}
 		if(remainingHeat.signum()!=0) throw new IllegalStateException("Removed liquid kinetic energy has no vapor receiver");
+		// The old-node aggregate is the caloric batch baseline; topology remapping
+		// receives retained stock and spatially located births as separate inputs.
+		var gas=new ArrayList<>(retainedGas);double[] energy=retainedEnergy.clone();
+		var aggregateEnergy=new SignedDyadic[energy.length];
+		for(int node=0;node<energy.length;node++)aggregateEnergy[node]=SignedDyadic.of(energy[node]);
+		for(int index=0;index<births.size();index++) {
+			var birth=births.get(index);int node=birthNodes.get(index)-1;
+			try {gas.set(node,gas.get(node).merge(birth.inventory()));}
+			catch(GasInventory.RepresentationException unavailable){return new FluidDomain.GasThermalPhaseStats(0,0,0);}
+			aggregateEnergy[node]=aggregateEnergy[node].add(SignedDyadic.of(birth.energy()));
+		}
+		for(int node=0;node<energy.length;node++)energy[node]=aggregateEnergy[node].toDouble();
 		var trials=new ArrayList<ThermalDomainState.PhaseCellTrial>(); int[] liquidCounts=new int[cells.size()];
 		SignedDyadic transfer=SignedDyadic.of(momentum.removedKineticEnergy());
 		for(int i=0;i<cells.size();i++) {
@@ -270,7 +282,8 @@ final class GasLiquidPhaseChangeStage {
 			for(var stock:cell.original) if(!futureKeys.contains(stock.key())) edits.add(new LiquidCellInventory.Edit(stock.key(),null));
 		}
 		var liquidPlan=liquids.planEdits(edits);
-		var batch=new GasTopologyCoordinator.PhaseBatch(gas,energy,created,removed,gasEnergy,cellEnergy);
+		var batch=new GasTopologyCoordinator.PhaseBatch(gas,created,removed,gasEnergy,cellEnergy,
+				retainedGas,retainedEnergy,births);
 		GasTopologyCoordinator.GasTopologyPlan topology;
 		try { topology=domain.gasTopologyCoordinator.planAfterPhaseBatch(liquidPlan.future(),batch); }
 		catch(GasInventory.RepresentationException unavailable) { return new FluidDomain.GasThermalPhaseStats(0,0,0); }

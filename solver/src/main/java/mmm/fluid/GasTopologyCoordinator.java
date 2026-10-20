@@ -27,11 +27,18 @@ final class GasTopologyCoordinator {
 	private GasRuntimeGeometry committedFrame;
 	private AirNetwork committedNetwork;
 	private long committedNetworkRevision;
-	record PhaseBatch(List<GasInventory> inventories, double[] energies,
+	record PhaseBirth(int cell, int supportMask, GasInventory inventory, double energy) { }
+	record PhaseBatch(List<GasInventory> inventories,
 	                  GasAuditLedger source, GasAuditLedger sink,
 	                  GasEnergyStore.InventoryEnergyPlan gasThermal,
-	                  ThermalDomainState.PhaseBatchEnergyPlan cellThermal) {
-		PhaseBatch { inventories = List.copyOf(inventories); energies = energies.clone(); }
+	                  ThermalDomainState.PhaseBatchEnergyPlan cellThermal,
+	                  List<GasInventory> retainedInventories, double[] retainedEnergies,
+	                  List<PhaseBirth> births) {
+		PhaseBatch {
+			inventories = List.copyOf(inventories);
+			retainedInventories = List.copyOf(retainedInventories); retainedEnergies = retainedEnergies.clone();
+			births = List.copyOf(births);
+		}
 	}
 	GasTopologyCoordinator(FluidDomain domain) { this.domain = domain; }
 
@@ -148,10 +155,10 @@ final class GasTopologyCoordinator {
 				phase.cellThermal(), domain.gasState.network);
 	}
 	private GasInventory inventory(int node, PhaseBatch edit) {
-		return edit != null ? edit.inventories().get(node - 1) : domain.gasState.network.inventory(node);
+		return edit != null ? edit.retainedInventories().get(node - 1) : domain.gasState.network.inventory(node);
 	}
 	private double energy(int node, PhaseBatch edit) {
-		return edit != null ? edit.energies()[node - 1] : domain.thermalState.gasNodeEnergy(node, domain.gasState.network);
+		return edit != null ? edit.retainedEnergies()[node - 1] : domain.thermalState.gasNodeEnergy(node, domain.gasState.network);
 	}
 	private double[] partitionEnergy(int node, List<GasInventory> parts, PhaseBatch edit) {
 		return edit != null
@@ -233,6 +240,19 @@ final class GasTopologyCoordinator {
 				includeNewlyOpenedVacuum(old,next,transferredVacuum,inherited);
 			if(next.sealedExterior()&&(!sourceDelta.isEmpty()||!sinkDelta.isEmpty()))
 				throw new GasTopologyBlockedException("Closed gas topology attempted an external source or sink");
+		}
+		if(edit!=null)for(var birth:edit.births()) {
+			// The liquid source releases this control volume. An adjacent old gas
+			// contact may remain behind a resolved liquid seal after reconstruction.
+			int node=next.topology().nodeOfComponent(birth.cell(),birth.supportMask());
+			if(node<0)throw new GasTopologyBlockedException("Vaporized liquid has no gas capacity in its source support");
+			if(node==0) {
+				sinkDelta=sinkDelta.add(birth.inventory());
+				sinkEnergy=sinkEnergy.add(SignedDyadic.of(birth.energy()));
+			}else {
+				inventories.set(node-1,inventories.get(node-1).merge(birth.inventory()));
+				mixed[node-1]=mixed[node-1].add(SignedDyadic.of(birth.energy()));
+			}
 		}
 		double[] mixedEnergy=doubles(mixed),inheritedVolume=retainControl?doubles(inherited):thermal?available.clone():null;
 		GasEnergyStore.GasRemapPlan thermalPlan=!thermal?null:edit==null
