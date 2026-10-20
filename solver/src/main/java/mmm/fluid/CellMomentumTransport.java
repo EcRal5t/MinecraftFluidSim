@@ -28,33 +28,41 @@ final class CellMomentumTransport {
         return prepare(liquid,new float[][]{domain.mac.velocityX,domain.mac.velocityY,domain.mac.velocityZ});
     }
     Prepared prepare(CellLiquidVolumeTransport.Prepared liquid,float[][] initial){
+        cellMass(liquid.sourceInventory(),before);cellMass(liquid.inventory().future(),after);
+        for(int cell=0;cell<volume.length;cell++)volume[cell]=liquid.inventory().future().exactCellVolume(cell).toDouble();
+        return prepare(liquid.volumeFlux(),liquid.inventory().transfers(),before,after,initial);
+    }
+    Prepared prepare(ConservativeLiquidFlux flux,LiquidCellInventory.TransportQuantities quantities){
+        System.arraycopy(quantities.afterVolume(),0,volume,0,volume.length);
+        return prepare(flux,quantities.transfers(),quantities.beforeMass(),quantities.afterMass(),
+                new float[][]{domain.mac.velocityX,domain.mac.velocityY,domain.mac.velocityZ});
+    }
+    private Prepared prepare(ConservativeLiquidFlux flux,java.util.List<LiquidCellInventory.Transfer> transfers,long[] beforeMass,long[] afterMass,float[][] initial){
         for(int axis=0;axis<3;axis++)for(int i=0;i<velocity[axis].length;i++)velocity[axis][i]=initial[axis][i];
         Arrays.fill(heat,0);double[][] result=new double[3][];
-        for(var column:massFlux)Arrays.fill(column,0);var flux=liquid.volumeFlux();
-        for(var transfer:liquid.inventory().transfers())if(transfer.massUnits()>0){
+        for(var column:massFlux)Arrays.fill(column,0);
+        for(var transfer:transfers)if(transfer.massUnits()>0){
             int face=transfer.face(),axis=flux.axis[face],right=flux.right[face],x=right%domain.sizeX,y=right/domain.sizeX%domain.sizeY,z=right/(domain.sizeX*domain.sizeY);
             int index=(z*(domain.sizeY+(axis==1?1:0))+y)*(domain.sizeX+(axis==0?1:0))+x;
             massFlux[axis][index]+=transfer.massUnits()*(transfer.source().cell()==flux.left[face]?1:-1);
         }
-        cellMass(liquid.sourceInventory(),before);cellMass(liquid.inventory().future(),after);
-        boolean tails=prepareUnresolvedNeighborhood(liquid.inventory().future());
+        boolean tails=prepareUnresolvedNeighborhood(afterMass);
         for(int axis=0;axis<3;axis++){
-            result[axis]=components[axis].transport(before,after,massFlux,velocity[axis]);
+            result[axis]=components[axis].transport(beforeMass,afterMass,massFlux,velocity[axis]);
             if(tails){
                 for(int cell=0;cell<anchors.length;cell++)anchors[cell]=nearest[cell]<0?-1:resolvedFace(nearest[cell],axis);
-                components[axis].mixUnresolved(after,volume,anchors,domain.geometry.cutCells.openFaceField(axis));
+                components[axis].mixUnresolved(afterMass,volume,anchors,domain.geometry.cutCells.openFaceField(axis));
             }
-            components[axis].addHeatToCells(after,heat);
+            components[axis].addHeatToCells(afterMass,heat);
         }
         var exactHeat=new TreeMap<Integer,SignedDyadic>();for(int cell=0;cell<heat.length;cell++)if(heat[cell]>0)exactHeat.put(cell,SignedDyadic.of(heat[cell]));
         return new Prepared(new MacMomentumState(domain.sizeX,domain.sizeY,domain.sizeZ,result[0],result[1],result[2]),Map.copyOf(exactHeat));
     }
     /** Unresolved films share motion with the nearest resolved liquid through fixed open cells. */
-    private boolean prepareUnresolvedNeighborhood(LiquidCellInventory inventory){
+    private boolean prepareUnresolvedNeighborhood(long[] afterMass){
         boolean tails=false;int end=0;Arrays.fill(nearest,-1);
         for(int cell=0;cell<volume.length;cell++){
-            volume[cell]=inventory.exactCellVolume(cell).toDouble();
-            if(after[cell]<=0)continue;
+            if(afterMass[cell]<=0)continue;
             if(volume[cell]>mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION){nearest[cell]=cell;queue[end++]=cell;}
             else tails=true;
         }

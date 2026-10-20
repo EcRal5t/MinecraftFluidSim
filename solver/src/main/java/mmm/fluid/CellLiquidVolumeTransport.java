@@ -19,6 +19,7 @@ final class CellLiquidVolumeTransport {
         ConservativeLiquidFlux volumeFlux(){return volumeFlux;}
         GasVolumeAllocation gasAllocation(){return gasAllocation;}
         LiquidCellInventory sourceInventory(){return sourceInventory;}
+        CellMomentumTransport.Prepared preparedMomentum(){return volumeFlux.preparedMomentum;}
         List<LiquidCellInventory.FaceFlux> faceFluxes(){if(faceFluxes==null)faceFluxes=volumeFlux.faceFluxes(inventory);return faceFluxes;}
     }
     private final FluidDomain domain;
@@ -36,7 +37,10 @@ final class CellLiquidVolumeTransport {
         if(!(Float.isFinite(dt)&&dt>0))throw new IllegalArgumentException("Liquid transport duration must be positive");
         domain.ensurePressureGeometry();
         long[] occupied=domain.granularCoupling==null?new long[domain.cellCount]:domain.granularState!=null&&domain.granularState.parcels.count()>0?domain.granularNextCoupling.copySolidSvq():domain.granularCoupling.copySolidSvq();
-        transport.prepare(dt,occupied);return transport;
+        transport.prepare(dt,occupied,quantities->{
+            transport.preparedMomentum=domain.cellMacStage.prepareMomentumTransport(transport,quantities);
+            return transport.preparedMomentum.heatByCell();
+        });return transport;
     }
 	Prepared prepareFlux(ConservativeLiquidFlux transport, float dt) { return prepareFlux(transport,dt,domain.liquidCells); }
 	Prepared prepareFlux(ConservativeLiquidFlux transport, float dt, LiquidCellInventory source) {

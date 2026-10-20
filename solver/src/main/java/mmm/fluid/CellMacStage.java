@@ -113,8 +113,13 @@ final class CellMacStage {
 	void publishMomentum() { domain.mac.publishMomentum(massX, massY, massZ); }
 
 	CellMomentumTransport.Prepared prepareMomentumTransport(CellLiquidVolumeTransport.Prepared liquid) {
+		if(liquid.preparedMomentum()!=null)return liquid.preparedMomentum();
 		if (momentumTransport == null) momentumTransport = new CellMomentumTransport(domain);
 		return momentumTransport.prepare(liquid);
+	}
+	CellMomentumTransport.Prepared prepareMomentumTransport(ConservativeLiquidFlux flux,LiquidCellInventory.TransportQuantities quantities) {
+		if(momentumTransport==null)momentumTransport=new CellMomentumTransport(domain);
+		return momentumTransport.prepare(flux,quantities);
 	}
 
 	/** Stationary insertion adds inertia; extraction removes the carried momentum at its current velocity. */
@@ -172,7 +177,7 @@ final class CellMacStage {
 		}
 		var liquid = domain.cellLiquidVolumeTransport.prepareFlux(preparedFlux, dt); preparedFlux = null;
 		var momentum = prepareMomentumTransport(liquid);
-		var inventory = liquid.inventory().withMechanicalHeat(momentum.heatByCell());
+		var inventory = liquid.preparedMomentum()==null?liquid.inventory().withMechanicalHeat(momentum.heatByCell()):liquid.inventory();
 		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount]
 				: domain.granularState != null && domain.granularState.parcels.count() > 0
 				? domain.granularNextCoupling.copySolidSvq() : domain.granularCoupling.copySolidSvq();

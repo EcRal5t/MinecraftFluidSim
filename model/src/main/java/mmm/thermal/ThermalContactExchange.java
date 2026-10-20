@@ -14,18 +14,23 @@ public final class ThermalContactExchange {
 	}
 
 	/** One real carrier, including its unchanged material and species reference energy. */
-	public record Carrier(ThermalMaterialDefinition material, double massKilograms,
-	                      double baseEnergyJ, double internalEnergyJ) implements Body {
-		public Carrier {
+	public static final class Carrier implements Body {
+		private final ThermalMaterialDefinition material;
+		private final double massKilograms,baseEnergyJ,internalEnergyJ;
+		private final ThermalStateFunction.State initial;
+		public Carrier(ThermalMaterialDefinition material,double massKilograms,double baseEnergyJ,double internalEnergyJ) {
 			if (material == null || !(Double.isFinite(massKilograms) && massKilograms > 0.0)
 					|| !Double.isFinite(baseEnergyJ) || !Double.isFinite(internalEnergyJ))
 				throw new IllegalArgumentException("Thermal contact carrier inventory is invalid");
-			ThermalCaloricInversion.owner(material, massKilograms, internalEnergyJ, baseEnergyJ);
+			this.material=material;this.massKilograms=massKilograms;this.baseEnergyJ=baseEnergyJ;this.internalEnergyJ=internalEnergyJ;
+			initial=ThermalCaloricInversion.owner(material,massKilograms,internalEnergyJ,baseEnergyJ);
 		}
-		@Override public double temperatureK() {
-			return ThermalCaloricInversion.owner(material, massKilograms, internalEnergyJ, baseEnergyJ).temperatureK();
-		}
-		@Override public double heatCapacityJPerK() { return massKilograms * material.specificHeatAt(temperatureK()); }
+		public ThermalMaterialDefinition material(){return material;}
+		public double massKilograms(){return massKilograms;}
+		public double baseEnergyJ(){return baseEnergyJ;}
+		public double internalEnergyJ(){return internalEnergyJ;}
+		@Override public double temperatureK() { return initial.temperatureK(); }
+		@Override public double heatCapacityJPerK() { return initial.heatCapacityJPerK(); }
 		@Override public double energyChangeToTemperature(double target) {
 			return energyChangeBetween(material, massKilograms, temperatureK(), target);
 		}
@@ -112,7 +117,9 @@ public final class ThermalContactExchange {
 		double amount = Math.min(high, response(Math.abs(secondT - firstT),
 				first.heatCapacityJPerK(), second.heatCapacityJPerK(), conductanceWPerK, dtSeconds));
 		if (amount == 0.0) return 0.0;
-		while (true) {
+		// One local caloric contact has bounded work. Constant-Cv segments use the
+		// analytic response above; knots use safeguarded Newton at visible accuracy.
+		for (int iteration=0;iteration<8;iteration++) {
 			var firstState = first.stateAfterEnergyChange(sign * amount);
 			var secondState = second.stateAfterEnergyChange(-sign * amount);
 			double drop = amount * inverseConductanceDt;
@@ -122,8 +129,7 @@ public final class ThermalContactExchange {
 					exponent(amount) - exponent(conductanceWPerK) - exponent(dtSeconds));
 			double residual = drop
 					- sign * (secondState.temperatureK() - firstState.temperatureK());
-			double precision = Math.max(Math.ulp(secondState.temperatureK()), Math.ulp(firstState.temperatureK()));
-			if (Math.abs(residual) / 16.0 <= precision || Math.nextUp(low) >= high) break;
+			if (Math.abs(residual)<=1e-4 || Math.nextUp(low)>=high) return sign*amount;
 			if (amount == Double.MAX_VALUE && residual < 0.0)
 				throw new IllegalArgumentException("Thermal contact transfer is not representable");
 			if (residual > 0.0) high = amount; else low = amount;
@@ -133,7 +139,9 @@ public final class ThermalContactExchange {
 			if (next == amount) break;
 			amount = next;
 		}
-		return sign * amount;
+		// The lower bracket retains positive temperature order if a step crosses
+		// several caloric knots within the fixed work allowance.
+		return sign * low;
 	}
 
 	/** delta / (1/(G dt) + 1/C1 + 1/C2), keeping the shared binary scale outside the sum. */

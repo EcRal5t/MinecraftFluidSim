@@ -141,6 +141,10 @@ public final class LiquidCellInventory {
 	public interface EnergyPartitioner {
 		SignedDyadic[] partition(Stock source,long[] masses,ChemicalMixtureRecord[] mixtures);
 	}
+	/** Actual quantity settlement for the mechanical operator, before target U is stored. */
+	public record TransportQuantities(List<Transfer> transfers,long[] beforeMass,long[] afterMass,double[] afterVolume) { }
+	@FunctionalInterface
+	public interface TransportFinalizer { Map<Integer,SignedDyadic> finish(TransportQuantities quantities); }
 
 	public static final class Plan {
 		private final LiquidCellInventory owner, future;
@@ -442,6 +446,9 @@ public final class LiquidCellInventory {
 
 	/** Partitions actual donor quantities over the bounded face transfers of one numerical pass. */
 	public Plan planRoutes(List<TransportRoute> paths,EnergyPartitioner caloric) {
+		return planRoutes(paths,caloric,null);
+	}
+	public Plan planRoutes(List<TransportRoute> paths,EnergyPartitioner caloric,TransportFinalizer finalizer) {
 		var routes=new LinkedHashMap<Key,List<TransportRoute>>();
 		for(var path:paths){
 			if(path.volume().signum()==0)continue;
@@ -491,20 +498,32 @@ public final class LiquidCellInventory {
 				if(route.face()>=0)transfers.add(new Transfer(route.face(),route.source(),route.target(),route.volume(),masses[i],mixture,energies[i]));
 			}
 		}
-		var plan = prepareTransport(totals,transfers);
-		if (plan.massChange() != 0 || plan.volumeChange().signum() != 0 || !plan.energyChange().equals(plan.energyRoundoff()))
-			throw new IllegalStateException("Closed liquid transport did not conserve its inventory");
-		return plan;
+		Map<Integer,SignedDyadic> heat=Map.of();
+		if(finalizer!=null){
+			long[] beforeMass=new long[cellCount()],afterMass=new long[cellCount()];double[] afterVolume=new double[cellCount()];
+			for(int cell=0;cell<cellCount();cell++)for(var stock:rows.get(cell)){
+				beforeMass[cell]=Math.addExact(beforeMass[cell],stock.massUnits());afterVolume[cell]+=stock.volumeFraction();
+			}
+			System.arraycopy(beforeMass,0,afterMass,0,beforeMass.length);
+			for(var total:totals.values()){
+				int cell=total.key.cell();var before=stock(total.key);
+				if(before!=null){afterMass[cell]=Math.subtractExact(afterMass[cell],before.massUnits());afterVolume[cell]-=before.volumeFraction();}
+				afterMass[cell]=Math.addExact(afterMass[cell],total.mass);afterVolume[cell]+=total.volume.toDouble();
+			}
+			heat=finalizer.finish(new TransportQuantities(java.util.Collections.unmodifiableList(transfers),beforeMass,afterMass,afterVolume));
+		}
+		return prepareTransport(totals,transfers,heat);
 	}
 	/** Unchanged owners keep their original Stock; incoming routes may still add to that owner. */
 	private boolean retainsOriginal(Key key, List<TransportRoute> routes) {
 		return routes.size() == 1 && routes.get(0).face() < 0 && routes.get(0).volume().equals(stock(key).volume());
 	}
 	/** Already partitioned inventory quantities are assembled once, retaining their exact source-part residuals. */
-	private Plan prepareTransport(Map<Key,Accumulator> totals,List<Transfer> transfers){
+	private Plan prepareTransport(Map<Key,Accumulator> totals,List<Transfer> transfers,Map<Integer,SignedDyadic> heat){
+		var mechanicalHeat=addTransportHeat(totals,heat);
 		var futureRows=new ArrayList<>(rows);var changed=new LinkedHashMap<Integer,ArrayList<Stock>>();
 		int[] futureSpecies=null,futureMaterials=null;boolean geometryChanged=false;
-		var volumeChange=SignedDyadic.ZERO;var energyChange=SignedDyadic.ZERO;var roundoff=SignedDyadic.ZERO;long massChange=0;
+		var roundoff=SignedDyadic.ZERO;
 		for(var total:totals.values()){
 			var key=total.key;var before=stock(key);var after=total.preparedStock();
 			var row=changed.computeIfAbsent(key.cell(),cell->new ArrayList<>(rows.get(cell)));int i=0;
@@ -517,17 +536,43 @@ public final class LiquidCellInventory {
 				adjustPresence(before,-1,futureSpecies,futureMaterials);adjustPresence(after,1,futureSpecies,futureMaterials);
 			}
 			geometryChanged|=before==null?after!=null:after==null||!before.volume().equals(after.volume());
-			if(before!=null){volumeChange=volumeChange.subtract(before.volume());massChange=Math.subtractExact(massChange,before.massUnits());energyChange=energyChange.subtract(SignedDyadic.of(before.internalEnergy()));}
 			if(after!=null){
-				volumeChange=volumeChange.add(after.volume());massChange=Math.addExact(massChange,after.massUnits());
-				var stored=SignedDyadic.of(after.internalEnergy());energyChange=energyChange.add(stored);roundoff=roundoff.add(stored.subtract(total.energy));
+				roundoff=roundoff.add(SignedDyadic.of(after.internalEnergy()).subtract(total.energy));
 			}
 		}
 		for(var entry:changed.entrySet())futureRows.set(entry.getKey(),List.copyOf(entry.getValue()));
 		var future=new LiquidCellInventory(this,java.util.Collections.unmodifiableList(futureRows),revision+1);
 		if(futureSpecies!=null)future.presence=new PresenceIndex(futureSpecies,futureMaterials);
 		if(geometryChanged){future.geometryRevision++;future.geometryIdentity=new Object();}
-		return new Plan(this,future,new ArrayList<>(changed.keySet()),transfers,volumeChange,massChange,energyChange,roundoff,SignedDyadic.ZERO);
+		// Every source closes its exact volume, integer quantities and U before aggregation.
+		// Target storage adds only the explicitly computed mechanical heat and its roundoff.
+		return new Plan(this,future,new ArrayList<>(changed.keySet()),transfers,SignedDyadic.ZERO,0,mechanicalHeat.add(roundoff),roundoff,mechanicalHeat);
+	}
+	private SignedDyadic addTransportHeat(Map<Key,Accumulator> totals,Map<Integer,SignedDyadic> heat){
+		if(heat.isEmpty())return SignedDyadic.ZERO;
+		var byCell=new java.util.HashMap<Integer,ArrayList<Accumulator>>();
+		for(var total:totals.values())if(heat.containsKey(total.key.cell()))
+			byCell.computeIfAbsent(total.key.cell(),ignored->new ArrayList<>()).add(total);
+		var sum=SignedDyadic.ZERO;
+		for(var entry:heat.entrySet()){
+			int cell=entry.getKey();var amount=entry.getValue();
+			if(amount==null||amount.signum()<0)throw new IllegalArgumentException("Mechanical heat must be nonnegative");
+			if(amount.signum()==0)continue;
+			var owners=byCell.computeIfAbsent(cell,ignored->new ArrayList<>());
+			for(var stock:rows.get(cell))if(!totals.containsKey(stock.key())){
+				var total=new Accumulator(stock.key());total.add(stock.volume(),stock.massUnits(),stock.mixture(),SignedDyadic.of(stock.internalEnergy()),stock.indicator());
+				totals.put(stock.key(),total);owners.add(total);
+			}
+			long mass=0;Accumulator largest=null;
+			for(var owner:owners){mass=Math.addExact(mass,owner.mass);if(owner.mass>0&&(largest==null||owner.mass>largest.mass))largest=owner;}
+			if(largest==null)throw new IllegalArgumentException("Mechanical heat requires actual liquid mass");
+			var remaining=amount;
+			for(var owner:owners)if(owner!=largest&&owner.mass>0){
+				var part=SignedDyadic.of(amount.toDouble()*(owner.mass/(double)mass));owner.energy=owner.energy.add(part);remaining=remaining.subtract(part);
+			}
+			largest.energy=largest.energy.add(remaining);sum=sum.add(amount);
+		}
+		return sum;
 	}
 
 	private record Route(int face, Key target, SignedDyadic volume) { }
@@ -638,12 +683,28 @@ public final class LiquidCellInventory {
 	}
 	private final class Accumulator {
 		final Key key; SignedDyadic volume = SignedDyadic.ZERO, energy = SignedDyadic.ZERO; long mass,residualMass; boolean indicator, chemical;
-		final TreeMap<Integer, Long> species = new TreeMap<>();
+		ChemicalMixtureRecord firstMixture;
+		int[] speciesHandles;long[] speciesAmounts;int speciesCount;
 		Accumulator(Key key) { this.key = key; }
 		void add(SignedDyadic amount, long mass, ChemicalMixtureRecord mixture, SignedDyadic energy, boolean indicator) {
 			volume = volume.add(amount); this.mass = Math.addExact(this.mass, mass); this.energy = this.energy.add(energy); this.indicator |= indicator;
 			residualMass=Math.addExact(residualMass,mixture==null?mass:mixture.massResidualUnits());
-			if (mixture != null) { chemical = true; for (int i = 0; i < mixture.entryCount(); i++) species.merge(mixture.speciesHandle(i), mixture.amountAt(i), Math::addExact); }
+			if(mixture==null)return;
+			if(!chemical){chemical=true;firstMixture=mixture;return;}
+			if(speciesHandles==null){
+				speciesCount=firstMixture.entryCount();int capacity=Math.max(4,speciesCount+mixture.entryCount());
+				speciesHandles=java.util.Arrays.copyOf(firstMixture.copySpeciesHandles(),capacity);
+				speciesAmounts=java.util.Arrays.copyOf(firstMixture.copyAmounts(),capacity);
+			}
+			for(int i=0;i<mixture.entryCount();i++){
+				int handle=mixture.speciesHandle(i),index=java.util.Arrays.binarySearch(speciesHandles,0,speciesCount,handle);
+				if(index>=0){speciesAmounts[index]=Math.addExact(speciesAmounts[index],mixture.amountAt(i));continue;}
+				index=-index-1;
+				if(speciesCount==speciesHandles.length){speciesHandles=java.util.Arrays.copyOf(speciesHandles,2*speciesCount);speciesAmounts=java.util.Arrays.copyOf(speciesAmounts,2*speciesCount);}
+				System.arraycopy(speciesHandles,index,speciesHandles,index+1,speciesCount-index);
+				System.arraycopy(speciesAmounts,index,speciesAmounts,index+1,speciesCount-index);
+				speciesHandles[index]=handle;speciesAmounts[index]=mixture.amountAt(i);speciesCount++;
+			}
 		}
 		Edit edit() {
 			if (volume.signum() == 0) return new Edit(key, null);
@@ -653,9 +714,8 @@ public final class LiquidCellInventory {
 			if(volume.signum()==0)return null;
 			ChemicalMixtureRecord mixture = null;
 			if (chemical) {
-				int[] handles = new int[species.size()]; long[] quantities = new long[species.size()]; int next = 0;
-				for (var entry : species.entrySet()) { handles[next] = entry.getKey(); quantities[next++] = entry.getValue(); }
-				mixture = new ChemicalMixtureRecord(handles, quantities, residualMass);
+				mixture=speciesHandles==null?firstMixture.withMassResidualUnits(residualMass)
+						:new ChemicalMixtureRecord(java.util.Arrays.copyOf(speciesHandles,speciesCount),java.util.Arrays.copyOf(speciesAmounts,speciesCount),residualMass);
 			}
 			return new Stock(key,volume,mass,mixture,energy.toDouble(),indicator);
 		}

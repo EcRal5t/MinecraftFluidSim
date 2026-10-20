@@ -393,9 +393,14 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 - `build/m10-precipitate/final-precipitate120-suffix.log`、`final-cold40-suffix.log`：原砂与沉淀一百二十步、1 K 冷酸碱四十步及逐步恢复完成。
 - `m10-joint-core/shared-capacity-named-matrix.log`、`mixed-pressure-named-matrix.log`、`named5-retained-source-suffix.log`、`mixed-pressure-named6-continuation.log`：结合上述两个长流程，原三十三组操作组合全部完成。
 
-`m10-joint-core/floating-thermal-production-live-budget.log` 是本轮成本替换后的预算记录：控制器完整步中位数 17.255 ms、最大 22.731 ms，通过 40 ms；最大 demo 前三步为 289.970 / 234.512 / 249.898 ms，连续三步超过 200 ms，当前生产预算尚未通过。
-完整步均为一个机械步，包含捕获、私有求解及接管；正在继续删除数量结算中的规模成本。
-下列较早预算通过记录保留原构建口径，最终资格以新主干的后续完整预算测量为准。
+`m10-joint-core/grid-contact-production-live-budget.log` 是最终构建的正式预算记录：控制器十步预热、原二十步采样完成，中位数 18.101 ms、最大 35.235 ms，通过逐步 40 ms。
+最大 demo 保持原 24×16×24 单元、2,880 份初始库存及 324 m³ 装量，原二十步 phase-on 全部完成；完整步中位数 154.144 ms、最大 227.986 ms，超 200 ms 最多连续一步，满足原连续三步暂停判定。
+第十步实际完成五次相变。全部使用一个机械步，计时覆盖捕获、私有求解及候选接管。
+生产输入、预热和预算数值保持原值；预算断言在二十步结束后统一报告，完整保留连续超时判定。
+本次按几何解析尺度分配数值通量，未解析余量留在原库存；实际质量通量、MAC 动量与混合热共用一次库存构造。
+相变接触采用微格湿干邻接，单个热接触采用解析热容响应与固定次数浮点求解；已删除逐微面求交及 ULP 精度无界搜索。
+高把握改动按当前工作要求复用已有流程证据，额外算子、精度短例及重复回归跳过。
+以下较早预算记录保留其原构建口径，最终资格采用本段记录。
 
 `build/m10-joint-core/bounded-phase-live-budget.log`：正式控制器十步预热、二十步采样完成，完整步中位数 15.274 ms、最大 19.939 ms，满足逐步 40 ms。
 同构建最大 demo 二十步完整完成，中位数 170.969 ms、最大 276.821 ms，超 200 ms 最多连续两步，满足原连续三步暂停判定；第十九、二十步实际发生相变。
@@ -419,12 +424,12 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 - `partialdisk49-same-geometry.log`：原 `replay partialdisk 1 200 49` 全部完成，耗时 2.746 秒。
   生产与冷恢复使用同一 PLIC 输入，气体来源按实际正容量的固定开放分量继任；严格库存、热账、液封与微盒归属核对保持。
 
-`compile-common-capacity.log`：model、solver、fabric 生产与测试源码统一编译通过，27 秒。
-同次 `verifyArchitecture` 完成，扫描 515 份生产源码，依赖方向与单元库存写入归属通过。
+`compile-resolved-joint-transport.log`：model、solver、fabric 生产与测试源码统一编译通过，24 秒；最终相变接触替换复用同次产物，`compile-grid-phase-contact.log` 完成 solver 增量编译，11 秒。
+`compile-common-capacity.log` 中的 `verifyArchitecture` 已扫描 515 份生产源码，依赖方向与单元库存写入归属通过；后续改动保持相同依赖方向和库存归属，复用该架构结果。
 独立算子及额外精度短例按当前工作要求跳过。
 
 正式预算继续覆盖捕获、私有求解和候选接管。
-当前构建通过控制器预算，最大 demo 预算仍在推进；下列较早记录按其原构建口径保留。
+最终构建通过两项生产预算，结合上述完整流程与恢复证据完成 M10 综合验收；下列较早记录按其原构建口径保留。
 实施进度见[当前计划](../roadmap/solver-consolidation-plan.md)，历史结果见[阶段记录](../archive/progress/solver-validation-2026-10-18.md)。
 
 ### 共同主干整合：2026-10-18

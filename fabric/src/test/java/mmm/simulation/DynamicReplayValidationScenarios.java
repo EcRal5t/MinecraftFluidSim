@@ -424,12 +424,12 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 					generation + 1, elapsedMillis, domain.particleCount(),
 					domain.totalVolumeExact(), candidate.stats().substeps(),
 					candidate.stats().pressureIterations(), candidate.stats().pressureResidual(), phaseOperations);
-			require(consecutiveOverruns < 3,
-					"dam-break production path would trigger the wall-time pause at step " + generation
-							+ ": max=" + maximumMillis + " ms, consecutive overruns=" + consecutiveOverruns);
 		}
 		System.out.printf("  dam-break live maximum %.3f ms; consecutive > %.1f ms=%d (< 3 pause limit)%n",
 				maximumMillis, performancePauseThresholdMillis, maximumConsecutiveOverruns);
+		require(maximumConsecutiveOverruns < 3,
+				"dam-break production path would trigger the wall-time pause: max=" + maximumMillis
+						+ " ms, consecutive overruns=" + maximumConsecutiveOverruns);
 	}
 
 	/**

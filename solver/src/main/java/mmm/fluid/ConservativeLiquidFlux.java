@@ -30,6 +30,8 @@ final class ConservativeLiquidFlux {
 	private double[] phaseLiquid, phasePore;
 	private LiquidCellInventory input, working;
 	private LiquidCellInventory.Plan prepared;
+	private LiquidCellInventory.TransportFinalizer inventoryFinalizer;
+	CellMomentumTransport.Prepared preparedMomentum;
 	private GasVolumeAllocation allocation;
 	private GasCapacityGroups gasCapacityGroups;
 	private record GasCapacityGroups(int[] receiverGroup,SignedDyadic[] upper,int[] nodeGroup) { }
@@ -152,11 +154,15 @@ final class ConservativeLiquidFlux {
 	}
 
 	void prepare(float dt, long[] occupied) {
-		preparePlan(dt, occupied, domain.liquidCells);
+		prepare(dt,occupied,null);
+	}
+	void prepare(float dt,long[] occupied,LiquidCellInventory.TransportFinalizer finalizer) {
+		preparePlan(dt,occupied,domain.liquidCells,finalizer);
 	}
 
 	/** Prepares one coarse finite-volume pass against the actual pore endpoint. */
-	private void preparePlan(float dt, long[] occupied, LiquidCellInventory source) {
+	private void preparePlan(float dt, long[] occupied, LiquidCellInventory source,LiquidCellInventory.TransportFinalizer finalizer) {
+		inventoryFinalizer=finalizer;preparedMomentum=null;
 		domain.ensurePhaseOccupancy();
 		reconstructionWorkspace = new FlipPressurePhaseGeometry(sizeX, sizeY, sizeZ);
 		input = working = source;
@@ -330,7 +336,7 @@ final class ConservativeLiquidFlux {
 		var routes=PhaseQuantitySettlement.settle(numericalRoutes,capacities,
                 gasCapacityGroups==null?null:gasCapacityGroups.receiverGroup(),gasCapacityGroups==null?null:gasCapacityGroups.upper(),
                 source -> prepareAlternatives(source, origins, capacities));
-		return working.planRoutes(routes, FluidThermalBinding.liquidEnergyPartitioner(domain));
+		return working.planRoutes(routes, FluidThermalBinding.liquidEnergyPartitioner(domain),inventoryFinalizer);
 	}
 
 	/** The initial allocation contains only physical preferences and the retained source share. */
@@ -512,7 +518,7 @@ final class ConservativeLiquidFlux {
 			// Reactions can change liquid volume before the joint solid endpoint and
 			// displacement are settled. Geometry and gas start from the real old
 			// domain; only the final displaced inventory has to fit the new pore.
-			preparePlan(0, occupied, source);
+			preparePlan(0, occupied, source,null);
 		}
 	}
 

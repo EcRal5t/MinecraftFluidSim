@@ -10,7 +10,7 @@ import java.util.function.IntConsumer;
 
 /** One quantity allocation followed by lazy residual repair of actual capacity violations. */
 final class PhaseQuantitySettlement {
-    static final int UNIT_EXPONENT = -32;
+    static final int UNIT_EXPONENT = -15;
     private PhaseQuantitySettlement() { }
 
     /** Actual preferences and lazily visited capacity alternatives share the same primitive arena. */
@@ -87,7 +87,15 @@ final class PhaseQuantitySettlement {
         }
         if(adjust){
             var repair=new ResidualRepair(raw,supply,amount,load,upper,localTails,receiverGroup,groupLoad,groupHigh,alternatives);
-            repair.solve();amount=new long[raw.size];
+            try{repair.solve();}
+            catch(ConservativeLiquidFlux.CapacityUnavailable coarsePore){
+                // Integer solid endpoints can leave less than one numerical FV
+                // word of legal space. Resolve that actual inventory remainder
+                // through the existing exact quantity allocation.
+                try{return settleTails(raw,upper,receiverGroup,groupUpper,alternatives);}
+                catch(ConservativeLiquidFlux.CapacityUnavailable actualPore){actualPore.addSuppressed(coarsePore);throw actualPore;}
+            }
+            amount=new long[raw.size];
             for(int r=0;r<raw.size;r++)amount[r]=repair.amount(r);
         }
         var result=new ArrayList<LiquidCellInventory.TransportRoute>(raw.size);
