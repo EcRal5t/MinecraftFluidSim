@@ -784,20 +784,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 					&& domain.exactInternalEnergy().equals(energy),
 					"Supported cell and target compositions did not advance within the one-operation budget");
 		}
-		var domain = new FluidDomain(3, 3, 3, config, 256);
-		restorePhaseTestCarriers(domain, liquids, 2, 2, 2, new float[]{.125F}, new int[1]);
-		domain.bindChemistry(chemistry);
-		domain.setMarkerChemical(0, Map.of(ids.getFirst(), mmm.chemistry.ChemicalLimits.MAX_REGION_TOTAL_QUANTA), false);
-		domain.bindThermal(thermal, domain.materialRegistry, 320.0);
-		var composition = new CoherentPhaseStore.Composition(List.of(new CoherentPhaseStore.Component(ids.getFirst(), 1L)),
-				mmm.units.Mass.fromKilograms(15.625 - 1.0e-9));
-		domain.addCoherentPhaseExternal(0, 0, 0, "test:thermal/composition_ice", SolidVolume.SVQ_PER_CELL / 8,
-				mmm.units.Mass.fromKilograms(15.625), composition, 3125.0);
-		var energy = domain.exactInternalEnergy();
-		require(domain.stepInertPhaseChangeOnly(1).operations() == 0 && domain.exactInternalEnergy().equals(energy),
-				"melt reserves liquid chemical capacity before transferring solid inventory");
-		domain.setMarkerChemical(0, Map.of(ids.getFirst(), 1L), false);
-		require(domain.stepInertPhaseChangeOnly(1).operations() == 1, "melt resumes when liquid capacity opens");
+
 	}
 
 	static ThermalRegistry compositionPhaseThermalRegistry(

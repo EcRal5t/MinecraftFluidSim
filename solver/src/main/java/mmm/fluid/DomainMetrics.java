@@ -43,7 +43,7 @@ final class DomainMetrics {
 	long totalMassUnits() { return domain.liquidCells.massUnits(); }
 
 	float maximumParticleSpeed() {
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.ensureVelocityGrid();
 		double sum = 0;
 		for (float[] velocity : new float[][]{domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ}) {
 			double maximum = 0;

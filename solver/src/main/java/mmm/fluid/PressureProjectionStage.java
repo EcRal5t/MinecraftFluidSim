@@ -12,6 +12,5 @@ final class PressureProjectionStage {
 				+ result.residualRms() + ", iterations=" + result.iterations());
 	}
 	void predictDrag(float dt){system.predictDrag(dt);}
-	double wallBoundaryWork() { return system.wallBoundaryWork(); }
 	void projectVelocities(float dt) { system.projectVelocities(dt); }
 }

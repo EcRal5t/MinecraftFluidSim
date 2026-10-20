@@ -152,7 +152,7 @@ public final class GranularReactionCandidateValidation {
         "Reactive bed fixture could not settle");
     d.granularCoupling.rebuild(d.granularState.parcels, d.granularState.deposits);
     for (int i = 0; i < d.liquidCells.physicalSize(); i++)
-      d.setMarkerChemical(i, Map.of(BuiltinChemicalDefinitions.H2O, 1_000_000L), false);
+      mmm.simulation.FullCapabilityTestFixture.assignPureSpecies(d, i, BuiltinChemicalDefinitions.H2O, false);
     var initial = inventory(d);
     long solid = d.totalGranularSolidVolumeSvq();
     var stats = new GranularReactionStage(d).step(new int[] {cell});
@@ -179,7 +179,7 @@ public final class GranularReactionCandidateValidation {
           "Thermal merge changed inventory");
     }
     for (int i = 0; i < d.liquidCells.physicalSize(); i++)
-      d.setMarkerChemical(i, Map.of(BuiltinChemicalDefinitions.H2O, 1_000_000L), false);
+      mmm.simulation.FullCapabilityTestFixture.assignPureSpecies(d, i, BuiltinChemicalDefinitions.H2O, false);
     var before = inventory(d);
     double initialTemperature = d.thermalTemperatureInCell(1, 1, 1);
     boolean dissolved = false;

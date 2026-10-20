@@ -127,9 +127,13 @@ public final class CarrierMutationValidation {
 		var gasInventoryBefore = granular.gasState.network.sealedInventory();
 		var packet = new mmm.granular.GranularTransferLedger(java.util.List.of(
 				new mmm.granular.GranularTransferLedger.Group(sand.id(), 1, mmm.units.Mass.fromKilograms(mass), null)));
+		var granularAuditBefore = granular.thermalAudit();
 		require(granular.tryInsertExactGranular(1, 1, 1, packet, 0, true).inserted(),
 				"Granular initialization failed to prepare its joint liquid/solid successor");
 		var parcel = granular.granularState.parcels.parcel(0);
+		require(granular.thermalAudit().externalSource().subtract(granularAuditBefore.externalSource())
+				.equals(mmm.units.SignedDyadic.of(granular.thermalState.granularColumn().activeEnergy(0))),
+				"Liquid displacement overwrote or repeated the imported granular energy");
 		var kernel = new mmm.granular.GranularKernel(4, 4, 4, .5F);
 		kernel.capture(parcel.x(), parcel.y(), parcel.z(), 1);
 		kernel.requireMask(parcel.ceilMask());
@@ -144,11 +148,15 @@ public final class CarrierMutationValidation {
 				"Granular initialization failed to publish conservative liquid displacement and gas/thermal stock");
 		var restored = FluidDomain.restoreAuthoritativeState(granular.captureAuthoritativeState());
 		require(restored.granularState.parcels.parcel(0).equals(parcel)
-				&& restored.exactInternalEnergy().equals(granular.exactInternalEnergy()),
+				&& restored.exactInternalEnergy().equals(granular.exactInternalEnergy())
+				&& restored.thermalAudit().equals(granular.thermalAudit())
+				&& restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),
 				"Granular initialization lost its actual integer choice during restore");
 		FluidDomain finite = fullCapabilityDomain(registries);
 		var finiteSource = finite.gasState.frame;
 		double oldVolume = finite.gasState.network.availableVolume(1), oldEnergy = finite.thermalState.gasNodeEnergy(1, finite.gasState.network);
+		var finiteAuditBefore = finite.thermalAudit();var finiteEnergyBefore = finite.exactInternalEnergy();
+		var finiteGasBefore = finite.thermalState.exactGasEnergy();
 		long amount = mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 		packet = new mmm.granular.GranularTransferLedger(java.util.List.of(
 				new mmm.granular.GranularTransferLedger.Group(sand.id(), amount, mmm.units.Mass.fromKilograms(amount * mass), null)));
@@ -157,6 +165,38 @@ public final class CarrierMutationValidation {
 				&& finite.thermalState.gasNodeEnergy(1, finite.gasState.network) > oldEnergy
 				&& finite.exactInternalEnergy().equals(finite.thermalState.auditLedger().expectedInventory()),
 				"Granular insertion failed to publish finite-gas compression and its audited work");
+		var imported = mmm.units.SignedDyadic.of(finite.thermalState.granularColumn().activeEnergy(0));
+		var gasChange = finite.thermalState.exactGasEnergy().subtract(finiteGasBefore);
+		require(finite.thermalAudit().externalSource().subtract(finiteAuditBefore.externalSource()).equals(imported)
+				&& finite.thermalAudit().externalSink().equals(finiteAuditBefore.externalSink())
+				&& finite.thermalAudit().mechanicalWork().subtract(finiteAuditBefore.mechanicalWork())
+					.add(finite.thermalAudit().roundoffResidual().subtract(finiteAuditBefore.roundoffResidual())).equals(gasChange)
+				&& finite.exactInternalEnergy().subtract(finiteEnergyBefore).equals(imported.add(gasChange)),
+				"Granular source energy and gas compression were not booked exactly once");
+		var finiteRestored = FluidDomain.restoreAuthoritativeState(finite.captureAuthoritativeState());
+		require(finiteRestored.thermalAudit().equals(finite.thermalAudit())
+				&& finiteRestored.exactInternalEnergy().equals(finite.exactInternalEnergy()),
+				"Restoring granular insertion changed its energy transfers");
+		var extractionAuditBefore = finiteRestored.thermalAudit();
+		var extractionEnergyBefore = finiteRestored.exactInternalEnergy();
+		var extractionGasBefore = finiteRestored.thermalState.exactGasEnergy();
+		var extraction = finiteRestored.tryExtractExactGranular(1,1,1,amount,0,true);
+		require(extraction.transferred() && extraction.ledger().totalSolidVolumeSvq()==amount,
+				"Restored granular stock could not be extracted");
+		var exported = mmm.units.SignedDyadic.of(extraction.internalEnergy());
+		gasChange = finiteRestored.thermalState.exactGasEnergy().subtract(extractionGasBefore);
+		require(finiteRestored.thermalAudit().externalSource().equals(extractionAuditBefore.externalSource())
+				&& finiteRestored.thermalAudit().externalSink().subtract(extractionAuditBefore.externalSink()).equals(exported)
+				&& finiteRestored.exactInternalEnergy().subtract(extractionEnergyBefore).equals(gasChange.subtract(exported))
+				&& finiteRestored.thermalAudit().mechanicalWork().subtract(extractionAuditBefore.mechanicalWork())
+					.add(finiteRestored.thermalAudit().roundoffResidual().subtract(extractionAuditBefore.roundoffResidual())).equals(gasChange)
+				&& finiteRestored.exactInternalEnergy().equals(finiteRestored.thermalAudit().expectedInventory()),
+				"Granular exported energy and gas expansion were not booked exactly once");
+		var extractedRestored = FluidDomain.restoreAuthoritativeState(finiteRestored.captureAuthoritativeState());
+		require(extractedRestored.granularState.parcels.count()==0
+				&& extractedRestored.thermalAudit().equals(finiteRestored.thermalAudit())
+				&& extractedRestored.exactInternalEnergy().equals(finiteRestored.exactInternalEnergy()),
+				"Restoring granular extraction changed its stock or thermal ledger");
 	}
 
 	private static void explicitInsertionsRequirePositiveTemperature() throws Exception {
@@ -264,7 +304,18 @@ public final class CarrierMutationValidation {
 				.filter(phase->phase.materialId().equals("mmm:water")).toList(),builtin.reactions());
 		var emptyIncoming=new FlipMaterialParticleState(4,4,4,.5F,0,0, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(0),material.materialRegistry.materials(),
 				new float[0],new float[0],new byte[64], java.util.Arrays.stream(new double[0]).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(m)).toArray(),new int[0]);
-		var incompatible=FlipChemicalParticleState.capture(emptyIncoming,waterOnly,java.util.List.of(),new byte[0],
+		var emptyChemical=FlipChemicalParticleState.capture(emptyIncoming,waterOnly,java.util.List.of(),new byte[0],
+				mmm.chemistry.ChemicalTransferLedger.EMPTY,mmm.chemistry.ChemicalTransferLedger.EMPTY);
+		var emptyRestored=emptyMaterialDomain(64);emptyRestored.restoreChemicalParticleState(emptyChemical,waterOnly);
+		require(emptyRestored.liquidCells.exactVolume().signum()==0 && emptyRestored.totalMassUnits()==0
+				&& emptyRestored.materialRegistry.materials().equals(material.materialRegistry.materials()),
+				"Empty chemical input required capabilities for unused palette materials");
+		int oil=material.materialRegistry.handle(BuiltinFluidMaterials.OIL.id());
+		long oilMass=material.unitScale.massUnitsForNormalized(.125*BuiltinFluidMaterials.OIL.referenceDensity());
+		var oilIncoming=new FlipMaterialParticleState(4,4,4,.5F,1,.125,oilMass,material.materialRegistry.materials(),
+				new float[]{.125F,.125F,.125F,.125F},new float[3],new byte[64],new long[]{oilMass},new int[]{oil});
+		var incompatible=FlipChemicalParticleState.capture(oilIncoming,waterOnly,List.of(
+				mmm.chemistry.ChemicalMixtureRecord.fromStableAmounts(waterOnly,java.util.Map.of(),oilMass)),new byte[1],
 				mmm.chemistry.ChemicalTransferLedger.EMPTY,mmm.chemistry.ChemicalTransferLedger.EMPTY);
 		try { material.restoreChemicalParticleState(incompatible,waterOnly); throw new AssertionError("Restore accepted unsupported chemical material phases"); }
 		catch (IllegalArgumentException expected) { }

@@ -74,11 +74,38 @@ tasks.register('runCpuValidation', JavaExec) {
 	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
 	mainClass = 'mmm.validation.CpuValidationSuite'
 	enableAssertions = true
+	maxHeapSize = providers.gradleProperty('cpuValidationHeap').getOrElse('512m')
 	args providers.gradleProperty('cpuValidation').getOrElse('fast')
 	systemProperty 'mmm.validation.keepGoing', providers.gradleProperty('cpuValidationKeepGoing').getOrElse('false')
 	def validationWorkDir = layout.buildDirectory.dir('cpu-validation-work').get().asFile
 	workingDir validationWorkDir
-	doFirst { validationWorkDir.mkdirs() }
+	doFirst {
+		validationWorkDir.mkdirs()
+		def fingerprint = { files ->
+			def digest = java.security.MessageDigest.getInstance('SHA-256')
+			files.findAll { it.isFile() }.sort { it.absolutePath }.each { file ->
+				digest.update(rootProject.relativePath(file).replace('\\', '/').getBytes('UTF-8'))
+				file.withInputStream { stream ->
+					byte[] buffer = new byte[65536]; int count
+					while ((count = stream.read(buffer)) >= 0) if (count > 0) digest.update(buffer, 0, count)
+				}
+			}
+			digest.digest().encodeHex().toString()
+		}
+		def sources = ['api', 'model', 'solver', 'app', 'fabric'].collectMany { module ->
+			rootProject.fileTree(module + '/src').files.toList()
+		}
+		sources += rootProject.fileTree(rootProject.rootDir) { include '*.gradle', 'gradle.properties', 'api/build.gradle', 'model/build.gradle', 'solver/build.gradle', 'app/build.gradle', 'fabric/build.gradle' }.files
+		def artifacts = classpath.files.collectMany { file ->
+			if (!file.absolutePath.startsWith(rootProject.rootDir.absolutePath)) return []
+			file.isDirectory() ? rootProject.fileTree(file) { include '**/*.class' }.files.toList() : [file]
+		}
+		def revision = providers.exec { workingDir rootProject.rootDir; commandLine 'git', 'rev-parse', 'HEAD' }.standardOutput.asText.get().trim()
+		logger.lifecycle("CPU validation revision=${revision}, sourceSHA256=${fingerprint(sources)}, artifactSHA256=${fingerprint(artifacts)}")
+		logger.lifecycle("CPU validation JVM=${executable}, heap=${maxHeapSize}, selection=${args}, assertions=${enableAssertions}")
+		logger.lifecycle("CPU validation classpath=${classpath.asPath}")
+		new File(validationWorkDir, 'classpath.txt').text = classpath.asPath
+	}
 }
 
 ['runMarkerPressureValidation': 'mmm.fluid.MarkerPressureValidation',

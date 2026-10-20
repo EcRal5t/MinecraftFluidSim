@@ -22,12 +22,19 @@ final class PhaseOccupancyTransport {
 	}
 
 	static void ensure(FluidDomain domain) {
-		if (domain.phaseOccupancy != null) return;
+		if (domain.phaseOccupancy != null && !domain.phaseOccupancyDirty) return;
 		domain.domainFlowFields.ensureInventoryGrid();
 		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
+		var frame=domain.gasState.frame;
+		if(frame!=null&&frame.matchesCarrierInventory(domain,occupied)){
+			publish(domain,frame.occupancy());return;
+		}
 		double[] pore = poreVolumes(domain, occupied, null);
 		double[] liquid = reconstruct(domain, domain.liquidCells, pore, null, new FlipPressurePhaseGeometry(domain.sizeX, domain.sizeY, domain.sizeZ));
-		domain.phaseOccupancy = new PhaseOccupancyState(liquid);
+		publish(domain,new PhaseOccupancyState(liquid));
+	}
+	static void publish(FluidDomain domain,PhaseOccupancyState state){
+		domain.phaseOccupancy=state;domain.phaseOccupancyDirty=false;
 	}
 
 	static GasVolumeAllocation prepareEdit(FluidDomain domain, LiquidCellInventory future, long[] occupied, byte[] masks, List<GasInventory> effectiveInventories) {

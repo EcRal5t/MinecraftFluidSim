@@ -3,16 +3,14 @@ package mmm.fluid;
 import java.util.Arrays;
 
 /**
- * Discardable pressure-projection workspace: fluid classification, air-node bookkeeping and
- * the assembled face operator. Rebuilt per projection from geometry and marker state; memory may be
+ * Discardable pressure-projection workspace: fluid classification and the assembled face operator.
+ * Rebuilt per projection from current inventory and geometry; memory may be
  * reused across steps but nothing here persists. Solver-internal package-private access only.
  */
 final class PressureProjectionWorkspace {
 	final boolean[] pressureFluid;
-	final int[] pressureAirNodeId;
 	final double[] pressureVolume;
-	final float[] pressure;
-	final float[] divergence;
+	final float[] pressure; // Full-liquid reduced pressure pi; physical liquid pressure is reconstructed at query.
 	final int[] fluidUnknownCells;
 	final double[] matrixDiagonal;
 	final double[] matrixNegativeX;
@@ -32,11 +30,8 @@ final class PressureProjectionWorkspace {
 
 	PressureProjectionWorkspace(int cellCount) {
 		this.pressureFluid = new boolean[cellCount];
-		this.pressureAirNodeId = new int[cellCount];
-		Arrays.fill(this.pressureAirNodeId, -1);
 		this.pressureVolume = new double[cellCount];
 		this.pressure = new float[cellCount];
-		this.divergence = new float[cellCount];
 		this.fluidUnknownCells = new int[cellCount];
 		this.matrixDiagonal = new double[cellCount];
 		this.matrixNegativeX = new double[cellCount];

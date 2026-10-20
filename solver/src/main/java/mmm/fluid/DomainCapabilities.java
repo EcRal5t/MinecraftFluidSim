@@ -213,7 +213,6 @@ final class DomainCapabilities {
 		}
 		ChemicalParcelStore candidate = new ChemicalParcelStore(
 				registry, domain.unitScale, domain.maximumParticleCount, domain.cellCount);
-		for (FluidMaterial material : domain.materialRegistry.materials()) registry.phaseHandleForMaterial(material.id());
 		var additions = new ArrayList<LiquidCellInventory.Stock>();
 		for (var stock : domain.liquidCells.stocks()) {
 			var mixture = candidate.defaultRecord(domain.materialRegistry.material(stock.key().material()).id(),

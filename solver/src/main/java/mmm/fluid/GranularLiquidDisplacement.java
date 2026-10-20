@@ -53,7 +53,10 @@ final class GranularLiquidDisplacement {
 		solidPublication.run();
 		domain.markCellInventoryChanged();
 		if (candidate.gasTopology != null) domain.gasTopologyCoordinator.commit(candidate.gasTopology);
-		if (audit != null) domain.thermalState.restoreAuditLedger(audit);
+		// Solid import/export and the gas remap publish their own energy transfers.
+		// Append only this liquid transport's terms to that current shared ledger.
+		if (audit != null) domain.thermalState.restoreAuditLedger(domain.thermalState.auditLedger()
+				.withMechanicalWork(candidate.inventory.mechanicalHeat()).withRoundoff(candidate.energyRoundoff));
 	}
 	static Prepared prepare(FluidDomain domain, long[] previous, long[] next) { return prepare(domain, previous, next, false); }
 	static Prepared prepareInsertion(FluidDomain domain, long[] previous, long[] next) { return prepare(domain, previous, next, true); }

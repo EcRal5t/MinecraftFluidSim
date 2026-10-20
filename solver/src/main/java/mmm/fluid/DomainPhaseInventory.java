@@ -220,7 +220,7 @@ final class DomainPhaseInventory {
 		domain.granularState.escapedSink = plan.sinkAfter(); domain.granularDepositDynamics.clear();
 		domain.granularCoupling.clear(); domain.granularNextCoupling.clear(); domain.pressureGranularCoupling = null;
 		domain.lastGranularDepositStats = new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
-		domain.gridDirty = true;
+		domain.markCellInventoryChanged();
 		return new GranularClear(cleared.solidVolumeSvq(), cleared.massUnits(),
 				cleared.activeParcels(), cleared.depositGroups());
 	}
@@ -350,7 +350,7 @@ final class DomainPhaseInventory {
 		domain.granularCollision = prepared.collision();
 		domain.granularPhaseTransfer = prepared.phaseTransfer();
 		domain.granularReactivePreviousCells = prepared.previousCells();
-		domain.gridDirty = true;
+		domain.markCellInventoryChanged();
 	}
 	public void restoreGranularState(
 			GranularStateSnapshot snapshot, GranularRegistry registry, FluidMaterialRegistry liquidRegistry,
@@ -439,6 +439,6 @@ final class DomainPhaseInventory {
 	void markGranularExternalChange(int cell) {
 		domain.granularDepositDynamics.disturbCell(cell);
 		if (domain.precipitationEnabled) domain.chemicalParcels.markDirtyCell(cell);
-		domain.gridDirty = true;
+		domain.markCellInventoryChanged();
 	}
 }

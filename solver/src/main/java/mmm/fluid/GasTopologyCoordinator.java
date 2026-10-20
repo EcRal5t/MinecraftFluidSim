@@ -347,7 +347,7 @@ final class GasTopologyCoordinator {
 		requireOwnersCurrent(plan);
 		if (!plan.frame().matchesCarrierInventory(domain, occupied))
 			throw new IllegalStateException("Gas successor geometry differs from published carrier stock");
-		domain.phaseOccupancy=plan.frame().occupancy();
+		PhaseOccupancyTransport.publish(domain,plan.frame().occupancy());
 		if (plan.thermalPlan() != null) domain.thermalState.commitGasRemap(plan.thermalPlan());
 		if(plan.gasPlan()!=null) {
 			domain.gasState.network.commitRemapNodes(plan.gasPlan()); domain.gasState.frame = plan.frame();

@@ -2,7 +2,6 @@ package mmm.fluid;
 
 import mmm.units.SignedDyadic;
 import mmm.inventory.LiquidCellInventory;
-import mmm.inventory.PhaseOccupancyState;
 
 
 import java.util.ArrayList;
@@ -10,7 +9,7 @@ import java.util.List;
 import java.util.Arrays;
 import java.util.Collections;
 
-/** Coarse fixed-pore gas connections with PLIC geometry for unresolved pockets and finite apertures. */
+/** Actual coarse gas capacity with shared PLIC dry openings and finite fixed apertures. */
 final class GasComplementGeometry {
 	/** Stable microbox key; normalizedVolume is the floating fraction of one whole cell, volume uses SI. */
     record Piece(int id, int cell, int micro, double volume, double normalizedVolume,
@@ -107,13 +106,13 @@ final class GasComplementGeometry {
 				if(source!=null)while(oldPort<source.portArray.length&&portKey(source.portArray[oldPort])<key)oldPort++;
 				if(source!=null&&!changed[cell]&&!changed[peer]){
 					while(oldPort<source.portArray.length&&portKey(source.portArray[oldPort])==key)ports.add(source.portArray[oldPort++]);
-				}else captureFace(cell,peer,axis,byId,canonical,componentDry,cut,phase,h2,fullFaces,first,second,areas,ports);
+				}else captureFace(cell,peer,axis,byId,canonical,cut,phase,h2,fullFaces,first,second,areas,ports);
 			}
 			int bit=coordinate==0?0:coordinate+1==size?1:-1;if(bit<0)continue;long key=6L*cell+2*axis+bit;
 			if(source!=null)while(oldExterior<source.exteriorArray.length&&exteriorKey(source.exteriorArray[oldExterior])<key)oldExterior++;
 			if(source!=null&&!changed[cell]){
 				while(oldExterior<source.exteriorArray.length&&exteriorKey(source.exteriorArray[oldExterior])==key)exterior.add(source.exteriorArray[oldExterior++]);
-			}else captureExteriorFace(cell,axis,bit,byId,canonical,componentDry,cut,phase,h2,fullFaces,first,areas,exterior);
+			}else captureExteriorFace(cell,axis,bit,byId,canonical,cut,phase,h2,fullFaces,first,areas,exterior);
 		}
 		return new GasComplementGeometry(sizeX,sizeY,sizeZ,h3,actualCapacity==null?cut.copyMicroMasks():actualCapacity.masks,pores,componentDry,byId,
 				pieces.toArray(Piece[]::new),ports.toArray(Port[]::new),exterior.toArray(ExteriorPort[]::new),actualCapacity);
@@ -134,10 +133,6 @@ final class GasComplementGeometry {
             }
         }
         return dry;
-    }
-    private static boolean resolvedDry(double[] dry,FlipCutCellGeometry cut,int cell,int micro){
-        int support=CellRemapMicroTopology.support(cut.mask(cell),micro);
-        return support!=0&&dry[8*cell+Integer.numberOfTrailingZeros(support)]>PhaseOccupancyState.VOLUME_RESOLUTION;
     }
 	private static long portKey(Port port) { return 3L*(port.first()/8)+port.axis(); }
 	private static long exteriorKey(ExteriorPort port) { return 6L*(port.piece()/8)+2*port.axis()+(port.sign()>0?1:0); }
@@ -199,10 +194,11 @@ final class GasComplementGeometry {
 		}
 	}
 
-	private static void captureFace(int cell,int peer,int axis,Piece[] pieces,int[] canonical,double[] componentDry,FlipCutCellGeometry cut,
+	private static void captureFace(int cell,int peer,int axis,Piece[] pieces,int[] canonical,FlipCutCellGeometry cut,
 	                                FlipPressurePhaseGeometry phase,double h2,byte[] fullFaces,int[] first,int[] second,double[] areas,List<Port> result){
         boolean full=fullFixedFace(cut,cell,axis,1,fullFaces)&&fullFixedFace(cut,peer,axis,0,fullFaces);
-        if(full&&resolvedDry(componentDry,cut,cell,1<<axis)&&resolvedDry(componentDry,cut,peer,0)){
+        if(full&&canonical[8*cell+(1<<axis)]>=0&&canonical[8*peer]>=0
+                &&GasFaceIntersection.fullDryFace(phase,cell,axis,1)&&GasFaceIntersection.fullDryFace(phase,peer,axis,0)){
             result.add(new Port(canonical[8*cell+(1<<axis)],canonical[8*peer],axis,h2,true));
             return;
         }
@@ -217,10 +213,10 @@ final class GasComplementGeometry {
 		if(count==0)return;
 		for(int i=0;i<count;i++)result.add(new Port(first[i],second[i],axis,physicalArea(areas[i],h2,cell),full));
 	}
-	private static void captureExteriorFace(int cell,int axis,int bit,Piece[] pieces,int[] canonical,double[] componentDry,FlipCutCellGeometry cut,
+	private static void captureExteriorFace(int cell,int axis,int bit,Piece[] pieces,int[] canonical,FlipCutCellGeometry cut,
 	                                        FlipPressurePhaseGeometry phase,double h2,byte[] fullFaces,int[] first,double[] areas,List<ExteriorPort> result){
         boolean full=fullFixedFace(cut,cell,axis,bit,fullFaces);
-        if(full&&resolvedDry(componentDry,cut,cell,bit<<axis)){
+        if(full&&canonical[8*cell+(bit<<axis)]>=0&&GasFaceIntersection.fullDryFace(phase,cell,axis,bit)){
             result.add(new ExteriorPort(canonical[8*cell+(bit<<axis)],axis,bit==0?-1:1,h2,true));
             return;
         }

@@ -142,7 +142,7 @@ final class DomainStep {
 		if (!(Double.isFinite(energy) && energy >= 0)) throw new ArithmeticException("Mechanical carrier energy is invalid");
 		return energy;
 	}
-	double particleKineticEnergyJoules() { domain.domainFlowFields.ensureGrid(); return gridKineticEnergyJoules(); }
+	double particleKineticEnergyJoules() { domain.domainFlowFields.ensureVelocityGrid(); return gridKineticEnergyJoules(); }
 	double gravitationalPotentialEnergyJoules() {
 		double energy = 0;
 		for (var stock : domain.liquidCells.physicalStocks()) {

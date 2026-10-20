@@ -20,7 +20,7 @@ final class DomainInventory {
 				&& maximumX > minimumX && maximumY > minimumY && maximumZ > minimumZ)) {
 			throw new IllegalArgumentException("Axis-aligned body bounds are invalid");
 		}
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.ensureVelocityGrid();
 		double h = domain.config.cellSize();
 		int firstX = Math.max(0, (int) Math.floor(minimumX / h));
 		int firstY = Math.max(0, (int) Math.floor(minimumY / h));
@@ -95,7 +95,7 @@ final class DomainInventory {
 				velocityXSum * inverse, velocityYSum * inverse, velocityZSum * inverse);
 	}
 	public VelocitySample sampleVelocity(float localX, float localY, float localZ) {
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.ensureVelocityGrid();
 		if (localX < 0.0F || localX > domain.sizeX * domain.config.cellSize()
 				|| localY < 0.0F || localY > domain.sizeY * domain.config.cellSize()
 				|| localZ < 0.0F || localZ > domain.sizeZ * domain.config.cellSize()) return VelocitySample.ZERO;

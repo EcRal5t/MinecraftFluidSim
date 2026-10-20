@@ -290,7 +290,8 @@ final class GranularTransferPlanner {
 		if (displacement != null) displacement.inventory.requireCurrent();
 		if (energies != null) {
 			var after = domain.thermalState.auditLedger().withExternalSourceEnergy(SignedDyadic.sum(energies));
-			if (displacement != null) after = after.withRoundoff(displacement.energyRoundoff);
+			if (displacement != null) after = after.withMechanicalWork(displacement.inventory.mechanicalHeat())
+					.withRoundoff(displacement.energyRoundoff);
 			var thermal = gas == null ? null : gas.thermalPlan();
 			if (thermal != null) after = after.withExternalSourceEnergy(thermal.sourceEnergy()).withExternalSinkEnergy(thermal.sinkEnergy())
 					.withMechanicalWork(thermal.mechanicalWork()).withRoundoff(thermal.roundoff());

@@ -117,6 +117,10 @@ final class GranularFaceVolumes {
 				|| axis == 2 && (z == 0 || z == domain.sizeZ)) return 0;
 		int right = domain.domainFlowFields.cellIndex(x, y, z), left = right - (axis == 0 ? 1 : axis == 1 ? domain.sizeX : domain.sizeX * domain.sizeY);
 		double a = domain.geometry.cutCells.openCellVolume(left), b = domain.geometry.cutCells.openCellVolume(right);
-		return Math.min(1, Math.max(a > 0 ? fixedVolume[left] / a : 1, b > 0 ? fixedVolume[right] / b : 1));
+		if (!(a > 0 && b > 0) || fixedVolume[left] >= a || fixedVolume[right] >= b) return 1;
+		// The dual control volume contains half of each adjacent cell. Its fixed
+		// porosity must use the same volume average as the actual liquid inertia;
+		// a bottleneck/minimum aperture would spuriously steepen static pressure.
+		return Math.clamp((fixedVolume[left] + fixedVolume[right]) / (a + b), 0, 1);
 	}
 }

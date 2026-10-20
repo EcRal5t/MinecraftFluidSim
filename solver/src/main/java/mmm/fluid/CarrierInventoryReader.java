@@ -24,7 +24,7 @@ final class CarrierInventoryReader {
 	private record Points(float[] packed, float[] velocity, float[] x, float[] y, float[] z, float[] volume,
 	                      int[] material, long[] mass, double total) { }
 	private Points points() {
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.ensureVelocityGrid();
 		int count = domain.liquidCells.physicalSize();
 		float[] packed = new float[4 * count], velocity = new float[3 * count];
 		float[] x = new float[count], y = new float[count], z = new float[count], volume = new float[count];

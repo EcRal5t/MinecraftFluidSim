@@ -52,6 +52,21 @@ public final class ChemicalMixtureRecord {
 		speciesMass = source.speciesMass;
 	}
 
+	/** Fill the remaining carrier mass with whole solvent quanta and an exact mass remainder. */
+	public static ChemicalMixtureRecord fromSolutesAndSolventMass(
+			ChemicalRegistry registry, Map<String, Long> solutes, String solvent, long massUnits
+	) {
+		if (massUnits < 0 || solutes.containsKey(solvent)) throw new IllegalArgumentException("Invalid solution mass or solvent entry");
+		var dissolved = fromStableAmounts(registry, solutes, 0);
+		long dissolvedMass = dissolved.speciesMassUnits(registry);
+		if (dissolvedMass > massUnits) throw new IllegalArgumentException("Solutes exceed the solution mass");
+		long solventAmount = (massUnits - dissolvedMass) / registry.speciesMassUnits(registry.speciesHandle(solvent), 1);
+		var amounts = new TreeMap<>(solutes);
+		if (solventAmount > 0) amounts.put(solvent, solventAmount);
+		var result = fromStableAmounts(registry, amounts, 0);
+		return result.withMassResidualUnits(massUnits - result.speciesMassUnits(registry));
+	}
+
 	public static ChemicalMixtureRecord fromStableAmounts(
 			ChemicalRegistry registry, Map<String, Long> stableAmounts, long massResidualUnits
 	) {

@@ -14,6 +14,14 @@ import mmm.thermal.ThermalRegistry;
 public final class FullCapabilityTestFixture {
 	private FullCapabilityTestFixture() { }
 
+	/** Set a resolved pure composition within the stock's actual mass. */
+	public static void assignPureSpecies(FluidDomain domain, int ordinal, String species, boolean indicator) {
+		var registry = domain.chemicalParcels().registry();
+		long mass = domain.exportLiquidCellState().physicalStocks().get(ordinal).massUnits();
+		var mixture = mmm.chemistry.ChemicalMixtureRecord.fromSolutesAndSolventMass(registry, java.util.Map.of(), species, mass);
+		domain.setMarkerChemical(ordinal, mixture.stableAmounts(registry), indicator);
+	}
+
 	public static Registries load() throws Exception {
 		ProductionRegistries.Set production = ProductionRegistries.load();
 		return new Registries(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE),

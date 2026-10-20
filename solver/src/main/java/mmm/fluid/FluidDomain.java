@@ -83,6 +83,7 @@ public final class FluidDomain {
 	boolean liquidPairTensionActive;
 	LiquidCellInventory liquidCells;
 	PhaseOccupancyState phaseOccupancy;
+	boolean phaseOccupancyDirty = true;
 	long carrierMutationRevision;
 	FluidMaterialRegistry materialRegistry;
 	MaterialRegistry materialDefinitions;
@@ -201,7 +202,7 @@ public final class FluidDomain {
 	public void restorePhaseOccupancyState(PhaseOccupancyState state) {
 		if(gasState.frame!=null)throw new IllegalStateException("Phase occupancy restore requires an uninitialized gas topology");
 		PhaseOccupancyTransport.requireCurrentGeometry(this,state);
-		phaseOccupancy=state;
+		PhaseOccupancyTransport.publish(this,state);
 		gridDirty=pressureGeometryDirty=velocityGridDirty=true;
 	}
 	public void restoreLiquidCellState(LiquidCellInventory.Snapshot state, mmm.chemistry.ChemicalRegistry chemistry) {
@@ -224,7 +225,7 @@ public final class FluidDomain {
 		phaseOccupancy=null;
 		markCellInventoryChanged();
 	}
-	public double liquidKineticEnergyJoules() { domainFlowFields.ensureGrid(); return domainStep.gridKineticEnergyJoules(); }
+	public double liquidKineticEnergyJoules() { domainFlowFields.ensureVelocityGrid(); return domainStep.gridKineticEnergyJoules(); }
 	public MacMomentumState exportMacMomentum() { return mac.captureMomentum(); }
 	public void restoreMacMomentum(MacMomentumState state) {
 		mac.restoreMomentum(state);
@@ -236,6 +237,8 @@ public final class FluidDomain {
 	}
 	void markCellInventoryChanged() {
 		carrierMutationRevision++;
+		// Retain the source object until a prepared gas successor is committed.
+		phaseOccupancyDirty = true;
 		gridDirty = pressureGeometryDirty = velocityGridDirty = true;
 		carrierPropertiesWorkspace.invalidate();
 	}
@@ -562,6 +565,7 @@ public final class FluidDomain {
 			double viscousWorkJoules,
 			double fixedBoundaryWorkJoules,
 			double pressureProjectionWorkJoules,
+			double contactWorkJoules,
 			double volumeTransportTransferJoules,
 			double carrierInventoryTransferJoules,
 			SignedDyadic thermalInventoryMechanicalWork,
@@ -569,7 +573,7 @@ public final class FluidDomain {
 	) {
 		static MechanicalStepAudit notCaptured() {
 			return new MechanicalStepAudit(false,0,0,0,0,
-					0,0,0,0,0,0,0,0,0,SignedDyadic.ZERO,0);
+					0,0,0,0,0,0,0,0,0,0,SignedDyadic.ZERO,0);
 		}
 	}
 	record MaterialInventory(double volume, double mass, double centerY) { }
@@ -684,11 +688,13 @@ public final class FluidDomain {
 		final long totalMassUnits;
 		final GranularCollisionPlan granular;
 		final LiquidCollisionEdit liquid;
+		final ThermalDomainState.Revision thermalRevision;
 		boolean consumed;
 
 		CollisionEditPlan(
 				FluidDomain owner, List<CollisionEdit> edits, int[] previousMasks,
-				int planMarkerCount, long totalVolumeBits, long totalMassUnits, GranularCollisionPlan granular, LiquidCollisionEdit liquid
+				int planMarkerCount, long totalVolumeBits, long totalMassUnits, GranularCollisionPlan granular, LiquidCollisionEdit liquid,
+				ThermalDomainState.Revision thermalRevision
 		) {
 			this.owner = owner;
 			this.edits = edits;
@@ -696,14 +702,15 @@ public final class FluidDomain {
 			this.planMarkerCount = planMarkerCount;
 			this.totalVolumeBits = totalVolumeBits;
 			this.totalMassUnits = totalMassUnits;
-			this.granular = granular; this.liquid = liquid;
+			this.granular = granular; this.liquid = liquid; this.thermalRevision = thermalRevision;
 		}
 	}
 	record CollisionDeposit(int cell, GranularDepositStore.Group group) { }
 	record GranularCollisionPlan(
 			boolean[] selectedParcels, List<CollisionDeposit> depositGroups,
 			GranularAuditLedger sinkAfter, boolean[] affectedCells,
-			int parcelCount, long totalSvq, long totalMassUnits
+			int parcelCount, long totalSvq, long totalMassUnits,
+			SignedDyadic removedEnergy, ThermalDomainState.Revision thermalRevision
 	) { }
 	public static final class CollisionEditBlockedException extends IllegalStateException {
 		public CollisionEditBlockedException(String message, Throwable cause) { super(message, cause); }

@@ -11,7 +11,7 @@ import java.util.List;
 final class ConservativeLiquidFlux {
 	final int sizeX, sizeY, sizeZ, cellCount, physicalFaceCount;
 	final int[] left, right, axis;
-	final double[] flux, predictedFaceFlux;
+	final double[] flux;
 	private final FluidDomain domain;
 	private final int[] coarseFaceAt, pressureFace;
 	private final int[] capacitySlots;
@@ -48,7 +48,6 @@ final class ConservativeLiquidFlux {
 		right = new int[physicalFaceCount];
 		axis = new int[physicalFaceCount];
 		flux = new double[physicalFaceCount];
-		predictedFaceFlux = flux.clone();
 		after = new SignedDyadic[cellCount];
 		coarseFaceAt = new int[6 * cellCount];
 		pressureFace = new int[physicalFaceCount];
@@ -155,7 +154,6 @@ final class ConservativeLiquidFlux {
 				if (dry > 0) gasTags.add(8 * cell + Integer.numberOfTrailingZeros(support), node, dry);
 			}
 		}
-		Arrays.fill(predictedFaceFlux, 0);
 		SignedDyadic[] finalCapacity = componentCapacities(occupied);
 		if (dt > 0) domain.pressureSystem.beginVolumeTransport();
 		advance(dt, endpoint, finalCapacity, dt == 0);
@@ -221,7 +219,6 @@ final class ConservativeLiquidFlux {
 						: intersection(phase, from, a == 0 ? low : 0, a == 1 ? low : 0, a == 2 ? low : 0,
 								a == 0 ? high : 1, a == 1 ? high : 1, a == 2 ? high : 1, pore[from]);
 				ql = Math.clamp(ql, 0, portion);
-				predictedFaceFlux[f] += positive ? ql : -ql;
 				addMacro(f, from, target, ql, portion);
 			}
 		}
@@ -490,48 +487,6 @@ final class ConservativeLiquidFlux {
 
 
 
-
-	int componentCount() {
-		int count = 0;
-		for (int cell = 0; cell < cellCount; cell++) count += CellRemapMicroTopology.components(domain.geometry.cutCells.mask(cell)).length;
-		return count;
-	}
-
-
-
-	int gasSourceEntryCount() {
-		return gasTags.entryCount();
-	}
-
-	int materialRouteCount() {
-		return prepared.transfers().size();
-	}
-
-
-
-	double faceFluxCorrectionVolume() {
-		double sum = 0;
-		for (int f = 0; f<flux.length; f++) sum += Math.abs(flux[f] - predictedFaceFlux[f]);
-		return sum;
-	}
-
-	double maximumFaceFluxCorrection() {
-		double max = 0;
-		for (int f = 0; f<flux.length; f++) max = Math.max(max, Math.abs(flux[f] - predictedFaceFlux[f]));
-		return max;
-	}
-
-	boolean positive(int f) {
-		return flux[f] >= 0;
-	}
-
-	int donor(int f) {
-		return positive(f) ? left[f] : right[f];
-	}
-
-	int receiver(int f) {
-		return positive(f) ? right[f] : left[f];
-	}
 
 	static final class CapacityUnavailable extends IllegalStateException {
 		CapacityUnavailable(String message) {

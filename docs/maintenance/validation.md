@@ -204,7 +204,7 @@
 ```
 
 常用输运参数为 `components`、`geometry-remap` 和 `handoff-short`，长轨迹使用 `handoff` 与 `continuity`。
-空间矩入口按 `transport-moments`、`joint-moments` 或 `common-mesh` 选择场景。
+空间矩入口 [LiquidMacroscopicMotionValidation](../../solver/src/test/java/mmm/fluid/LiquidMacroscopicMotionValidation.java) 按 `transport-moments`、`joint-moments` 或 `common-mesh` 选择场景。`cell-inventory` 组合只运行其中的 `joint-moments`；完整宏观入口使用 `:fabric:runRemapMomentsValidation`，省略参数。
 省略参数执行完整入口，全部参数及逐项断言以对应测试源码为准。
 
 `common-mesh` 运行三格 L 形连续 8 步并逐步恢复，检查库存、宏观位移和动能。`transport-moments` 追加多方向平移和多密度库存；`joint-moments` 与 `footprint-only` 保留为宏观旋转和材料输运的选择器。具体通过状态见[验证证据](#当前验证证据)。
@@ -272,7 +272,7 @@
 | 场景 | 规模 | 耗时要求 |
 |---|---|---|
 | 默认控制器注入 16 m³ | `8×8×8` 场景，20 个实际计算步 | 每步不超过 40 ms |
-| 空场景最大装量的 `demo` | `24×16×24` 网格，2,880 条初始 Stock、液体体积 324 m³，完整物理功能，20 步 | 连续超过 200 ms 的步数小于三步 |
+| 空场景最大装量的 `demo` | `24×16×24` 网格，2,592 条初始 Stock（9×12×24）、液体体积 324 m³，完整物理功能，20 步 | 连续超过 200 ms 的步数小于三步 |
 
 报告分别记录 JVM 预热和被测步的耗时，并保留粒子数、体积、相变操作、子步数、PCG 次数与残差。优化后用同一物理配置复测，保持原有预算和守恒检查。
 
@@ -364,7 +364,7 @@ Windows 上若 `vkCreateInstance` 返回 `-9`，可在当前 PowerShell 进程�
 可用 `$env:VK_DRIVER_FILES` 指定清单验证已安装驱动；清单中的 `ICD.library_path` 应指向驱动 DLL 的绝对路径，必要时在 `build` 下生成清单副本。
 任务继承此环境变量，验证后恢复原值。驱动发现机制与环境变量见 [Khronos 加载器文档](https://github.com/KhronosGroup/Vulkan-Loader/blob/main/docs/LoaderDriverInterface.md#overriding-the-default-driver-discovery)。
 
-GPU 校验中的 CPU 对照通过 `CpuFluidSolverBackend` 计算完整候选结果，按投影后的运动自动细分时间步，再接收完成的区域状态；同一外部步始终推进完整的配置时长。
+GPU 校验中的 CPU 对照通过 `CpuFluidSolverBackend` 计算完整候选结果；占容几何要求时间细化时，从原始请求重新准备完整候选，再接收完成的区域状态。同一外部步推进完整配置时长，液体平流由供体库存与接收容量限流。
 
 GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒，着色器中的 `precise` 保证编译器保留该运算顺序。长跑比较精确库存、机械能、空间限制与展示覆盖范围。并行归约允许解析得到的舍入误差，CPU/GPU 逐格轨迹按各自数值容差比较。
 
@@ -389,56 +389,19 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 ## 当前验证证据
 
-### 审阅整改：2026-10-21
+### 第二轮审阅整改：2026-10-21
 
-使用正式生产 classes 与仓库测试入口，JDK 26.0.2。预算 JVM 为 `-Xmx768m`，功能入口为 `-Xmx512m`；计时前已停止 Gradle daemon。
-源码基线为 `e7d1155`。最终增量编译见 `build/review-build-final.log`；预算 CPU 时间字段随后直接编译到同一测试 classes，生产算子保持原构建。
-最终计时在用户提供的空闲窗口执行，使用默认进程优先级，结果见 `build/review-live-budget-idle.log`。
-生产预算入口为 `CpuValidationSuite production-live-budget`，对应 Gradle 命令：
+第二轮正式入口在 `07dc0ab` 报告 `cell-inventory`、`granular`、`gas-liquid`、`chemistry`、`thermal` 与 `air-cavity` 失败。修复后采用同一次正式 Gradle 构建重新运行这些已知失败流程；结果待本轮实际执行后登记。
 
-```powershell
-./gradlew.bat :fabric:runCpuValidation '-PcpuValidation=production-live-budget' --offline --no-daemon
-```
+`runCpuValidation` 在执行前输出 Git 版本、源码与本地 classpath 产物 SHA-256、JVM、堆限制、断言开关、选择器和完整 classpath。源码摘要包含五个 CPU 模块的源码、资源及构建配置。增量构建按内容判定；换行转换导致的时间戳变化不能单独判断产物是否过期。
 
-| 结果 | 场景与日志 |
-|---|---|
-| 控制器原预算通过 | `build/review-live-budget-idle.log`：原十步预热、二十步完整采样；中位数 16.510 ms、最大 20.662 ms，满足每步 40 ms |
-| 最大 demo 原预算通过 | 同一日志：原 24×16×24 单元、2,880 条初始化库存与 324 m³ 装量，保留五步原 phase-on 预热与二十步完整采样；中位数 151.959 ms、最大 216.803 ms，超过 200 ms 最多连续一步，满足连续三步暂停规则 |
-| 调度诊断 | 最终空闲计时的 demo 主线程 CPU 中位数 125 ms、最大 187.5 ms。此前有并行游戏与浏览器负载的 `build/review-live-budget.log` 及 AboveNormal 诊断 `build/review-budget-controlled.log` 均失败；它们保留诊断口径，最终资格采用默认优先级的空闲计时 |
-| 共同通量与正常后继通过 | `build/review-transport.log`：`LiquidVolumeTransportValidation --fast`，包括固定分量、微量流、移动孔容、排水与恢复 |
-| 墙面交接通过 | `build/review-wall.log`：实际 donor 入射、最终格面动量约束、墙冲量、停止热与库存恢复 |
-| 分段热容接触通过 | `build/review-contact.log`：有限接触与复杂分段热容的正响应、内能成对交接 |
-| 自由面短流程通过 | `build/review-functional-final.log`：`free-surface:short`，几何按共同分辨率、静水按液体体积平均压力判定 |
+### 历史结果与适用范围
 
-最大 demo 全部一个机械子步，实际发生气液相变；捕获、私有求解与候选接管全部计时。墙钟与主线程 CPU 时间分别报告，原墙钟标准继续决定预算结果。
-以上功能结果来自本轮对应职责的整改过程。最终数据布局、命名、组合迁移与删除属于高把握修改，复用既有结果。
-`review-functional-final.log` 中库存、旋转、双密度、容器原语、WAL 与应用流程已有执行结果；组合入口随后遇到的旧粒子、热初始化、位置精度与零质量几何尾项夹具已迁移。
-拒绝物质插入前触发气腔初始化的副作用也已沿预检职责修复；该组合日志保留原失败记录，迁移后的整组测试按减少重复验证的要求留待相关改动需要时执行。
+`e7d1155` 的空闲窗口预算见 `build/review-live-budget-idle.log`：默认进程优先级，控制器中位数 16.510 ms、最大 20.662 ms；最大 demo 中位数 151.959 ms、最大 216.803 ms，超过 200 ms 最多连续一步。demo 初始库存为 2,592 条、324 m³，原预热与采样数量不变。这份结果对应当时构建，本轮物理算子修改后的预算另行登记。并行游戏、浏览器负载及提升进程优先级的失败测量保留为调度诊断。
 
-### 复用的完整流程证据
+旧 `build/m10-*` 目录包括正式入口、临时探针、保存前缀、后缀重放及失败日志，供排障定位使用。整段完成资格以正式入口、实际构建和完整动作数为准；前缀拼接或临时改写算子产生的结果需沿正式入口完成后再计入。`partialdisk49-same-geometry.log` 实际完成 49 个动作。
 
-以下来自本轮整改之前的共同库存主干；路径以 `build/` 为根。
-保存输入上的前缀与后继共同覆盖原操作序列，记录保留各自构建口径。
-
-| 覆盖范围 | 已有证据 |
-|---|---|
-| 三个固定种子的原六十动作与恢复 | `m10-precipitate/final-seed4-suffix.log`、`m10-joint-core/mixed-pressure-seed54-103.log`，沿已通过前缀的保存输入继续 |
-| 砂与沉淀一百二十步、1 K 冷反应四十步 | `m10-precipitate/final-precipitate120-suffix.log`、`final-cold40-suffix.log`，包含保存前缀与逐步恢复 |
-| 原三十三组操作组合 | `m10-joint-core/shared-capacity-named-matrix.log`、`mixed-pressure-named-matrix.log`、`named5-retained-source-suffix.log`、`mixed-pressure-named6-continuation.log` 与上述长流程 |
-| 原密闭注液、L 形与沙床启动后继 | `m10-joint-core/bounded-phase-pour.log`、`bounded-phase-l-shape.log`、`bed-bounded-correction-startup.log` |
-| 四百步相变、二次注液、排液与恢复 | `m10-joint-core/phase400-production-chain.log` |
-| 五组有限气腔相变、冻结—恢复—融化 | `m10-joint-core/phase-batch-formal.log` |
-| 六百步切格流动与恢复 | `m10-joint-core/production-cut600.log` |
-| 五千步溃坝、库存、容量与逐步恢复 | `m10-joint-core/final-dam-bounded-momentum.log` |
-| 沉积、扰动、起动、再沉积与睡眠 | `m10-bed-lifecycle/lifecycle-contact-continuation.log`：完整一百八十四步 |
-| 正常材料操作、二十四次注液、WAL 与重启 | `m10-joint-core/container-operation-matrix.log` |
-| 热平流、完整分层和八组线性对流 | `m10-joint-core/thermal-advection-final.log`、`thermal-stratification-final.log`、`thermal-convection-final.log` |
-| 分数抽取后盘上气腔归属 | `m10-joint-core/partialdisk49-same-geometry.log`，原二百动作完成 |
-
-这些结果支持已覆盖输入中的宏观行为、恢复与守恒交接。当前模型采用一阶时间分裂和正权动量混合；机械阶段的动能差审计与实际热量账本分别解释。
-全域物理黏性、阻力和实体做功的完整热机械结算由产品路线维护。
-实施状态见[当前计划](../roadmap/solver-consolidation-plan.md)，更早记录见[阶段记录](../archive/progress/solver-validation-2026-10-18.md)。
-
+当前模型采用一阶时间分裂和正权动量混合；机械动能差审计与实际热账分别解释。全域物理黏性、阻力及实体做功的完整热机械结算由产品路线维护。实施状态见[当前计划](../roadmap/solver-consolidation-plan.md)，更早记录见[阶段记录](../archive/progress/solver-validation-2026-10-18.md)。
 <a id="si-units"></a>
 ### SI 与定点质量
 

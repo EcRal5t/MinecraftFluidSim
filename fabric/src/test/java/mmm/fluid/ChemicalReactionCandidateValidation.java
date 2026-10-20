@@ -106,7 +106,7 @@ final class ChemicalReactionCandidateValidation {
 
 	static void reactionHeatChangesTemperature() {
 		String a="test:heat/a",b="test:heat/b",liquid="test:heat/liquid",material="test:heat/thermal";
-		var chemistry=new ChemicalRegistry(List.of(new ChemicalSpecies(a,Map.of("X",1),0,ExactRational.ONE,0),new ChemicalSpecies(b,Map.of("X",1),0,ExactRational.ONE,0)),
+		var chemistry=new ChemicalRegistry(List.of(new ChemicalSpecies(a,Map.of("X",1),0,ExactRational.parse("0.125"),0),new ChemicalSpecies(b,Map.of("X",1),0,ExactRational.parse("0.125"),0)),
 				List.of(new ChemicalPhaseDefinition("test:heat/phase",liquid,List.of(a,b),Map.of(a,ExactRational.ONE),false)),List.of(
 				new ChemicalReaction("test:heat/reaction",ChemicalReaction.Kind.INSTANTANEOUS,"test:heat/phase",Map.of(a,1),Map.of(b,1),ExactRational.ZERO)));
 		var fluids=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension(liquid,1,"test:heat/miscible",0,90)));

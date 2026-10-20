@@ -81,6 +81,7 @@ final class CellMacStage {
 		domain.liquidPairTensionActive = domain.domainFlowFields.hasAnyLiquidPairTension();
 		domain.carrierPropertiesWorkspace.invalidate();
 		grid.inventoryRevision = inventory.revision(); inventoryRevision = inventory.revision();
+		rebuildFaceInertia();
 		domain.gridDirty = false;
 	}
 
@@ -96,6 +97,12 @@ final class CellMacStage {
 
 	void rebuildVelocity() {
 		rebuildInventory();
+		domain.mac.deriveVelocity(massX, massY, massZ);
+		domain.bodyForceStage.enforceSolidFaceVelocities();
+		domain.velocityGridDirty = false;
+	}
+	/** Face inertia belongs to the same inventory generation as cell mass. */
+	private void rebuildFaceInertia() {
 		for (int axis = 0; axis < 3; axis++) {
 			double[] mass = axis == 0 ? massX : axis == 1 ? massY : massZ;
 			double[] normalized = axis == 0 ? domain.mac.faceMassX : axis == 1 ? domain.mac.faceMassY : domain.mac.faceMassZ;
@@ -113,13 +120,11 @@ final class CellMacStage {
 				valid[face] = mass[face] > 0;
 			}
 		}
-		domain.mac.deriveVelocity(massX, massY, massZ);
-		domain.bodyForceStage.enforceSolidFaceVelocities();
-		domain.velocityGridDirty = false;
 	}
 
 	/** Publishes explicit velocity input through the same stationary-wall impulse and heat plan. */
 	void publishMomentum() {
+		rebuildInventory();
 		double[][] values=new double[3][];
 		for(int axis=0;axis<3;axis++){
 			float[] velocity=axis==0?domain.mac.velocityX:axis==1?domain.mac.velocityY:domain.mac.velocityZ;

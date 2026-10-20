@@ -130,6 +130,4 @@ final class GranularPressureCoupling {
         domain.lastGranularBoundaryImpulseY += parcel.mass() * (vy - (float) vy);
         domain.lastGranularBoundaryImpulseZ += parcel.mass() * (vz - (float) vz);
     }
-
-    double wallWork() { return 0; }
 }

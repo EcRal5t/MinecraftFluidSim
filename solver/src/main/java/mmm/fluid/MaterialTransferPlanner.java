@@ -109,11 +109,17 @@ final class MaterialTransferPlanner {
 			}
 			if (remaining.signum() > 0) return false;
 		}
-		var pieces = insertionStocks(inputs, placements, energy);
-		var plan = domain.liquidCells.planAdditions(pieces);
-		var sourceLedger = externalSource ? ledger(inputs) : ChemicalTransferLedger.EMPTY;
-		var sourceEnergy = domain.thermalState == null ? SignedDyadic.ZERO : SignedDyadic.of(suppliedEnergy(inputs, energy));
-		prepare(plan, sourceLedger, ChemicalTransferLedger.EMPTY, sourceEnergy, SignedDyadic.ZERO).commit();
+		Transaction candidate;
+		try {
+			var pieces = insertionStocks(inputs, placements, energy);
+			var plan = domain.liquidCells.planAdditions(pieces);
+			var sourceLedger = externalSource ? ledger(inputs) : ChemicalTransferLedger.EMPTY;
+			var sourceEnergy = domain.thermalState == null ? SignedDyadic.ZERO : SignedDyadic.of(suppliedEnergy(inputs, energy));
+			candidate = prepare(plan, sourceLedger, ChemicalTransferLedger.EMPTY, sourceEnergy, SignedDyadic.ZERO);
+		} catch (ThermalStateFunction.EnergyOutsideValidityException | ThermalStateFunction.EnergyRepresentationException unavailable) {
+			return false;
+		}
+		candidate.commit();
 		return true;
 	}
 	private List<LiquidCellInventory.Stock> insertionStocks(List<Input> inputs, List<Placement> placements, Double energy) {

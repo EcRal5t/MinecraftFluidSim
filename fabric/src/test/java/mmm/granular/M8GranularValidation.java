@@ -211,10 +211,20 @@ public final class M8GranularValidation {
 		collision.bindGranular(registry, liquids, BuiltinFluidMaterials.createRegistry()); collision.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		require(collision.tryInsertExactGranular(1, 1, 1, small, 0, true).inserted(),
 				"collision displacement fixture could not insert its local parcel");
+		collision.bindThermal(production.thermal(), liquids, 300);
 		FluidDomain.CollisionEditPlan collisionPlan = collision.planCollisionEdits(List.of(
 				new FluidDomain.CollisionEdit(1, 1, 1, 0xff),
 				new FluidDomain.CollisionEdit(2, 1, 1, 0xff)));
-		collision.beginCollisionEdits(collisionPlan);
+		collision.setThermalTemperatureInCell(1,1,1,400);
+		var collisionEnergyBefore = collision.exactInternalEnergy();var collisionAuditBefore = collision.thermalAudit();
+		expectIllegal("Thermal inventory changed", () -> collision.beginCollisionEdits(collisionPlan));
+		require(collision.totalGranularSolidVolumeSvq()==small.totalSolidVolumeSvq()
+				&& collision.solidMicroMask(1,1,1)==0 && collision.solidMicroMask(2,1,1)==0
+				&& collision.exactInternalEnergy().equals(collisionEnergyBefore)
+				&& collision.thermalAudit().equals(collisionAuditBefore),
+				"Stale thermal collision plan changed physical inventory or its energy ledger");
+		collision.beginCollisionEdits(collision.planCollisionEdits(List.of(
+				new FluidDomain.CollisionEdit(1,1,1,0xff),new FluidDomain.CollisionEdit(2,1,1,0xff))));
 		collision.setSolid(1, 1, 1, true);
 		collision.setSolid(2, 1, 1, true);
 		long collisionSink = collision.granularEscapedSink().entries().stream()
@@ -222,6 +232,16 @@ public final class M8GranularValidation {
 		require(collision.totalGranularSolidVolumeSvq() == 0L
 				&& collisionSink == small.totalSolidVolumeSvq(),
 				"runtime collision edit did not conservatively move overlapping granular truth to escaped sink");
+		require(collision.exactInternalEnergy().signum()==0
+				&& collision.thermalAudit().externalSink().subtract(collisionAuditBefore.externalSink()).equals(collisionEnergyBefore)
+				&& collision.thermalAudit().externalSource().equals(collisionAuditBefore.externalSource())
+				&& collision.exactInternalEnergy().equals(collision.thermalAudit().expectedInventory()),
+				"Collision without gas failed to export granular energy exactly once");
+		var collisionRestored = FluidDomain.restoreAuthoritativeState(collision.captureAuthoritativeState());
+		require(collisionRestored.totalGranularSolidVolumeSvq()==0
+				&& collisionRestored.thermalAudit().equals(collision.thermalAudit())
+				&& collisionRestored.exactInternalEnergy().equals(collision.exactInternalEnergy()),
+				"Collision recovery changed the exported granular energy ledger");
 	}
 
 	private static void phaseTransferPrecipitatesAndDissolves() {
@@ -262,7 +282,7 @@ public final class M8GranularValidation {
 				"Continued precipitation or recovery changed combined liquid/solid inventory");
 
 		for(int stock=0;stock<domain.exportLiquidCellState().physicalStocks().size();stock++){
-			domain.setMarkerChemical(stock,java.util.Map.of(BuiltinChemicalDefinitions.H2O,1_000_000L),(stock&1)==0);
+			FullCapabilityTestFixture.assignPureSpecies(domain, stock, BuiltinChemicalDefinitions.H2O, (stock&1)==0);
 		}
 		long[] beforeDissolution = combinedSpecies(domain);
 		long massBeforeDissolution=combinedMassUnits(domain);
@@ -1553,8 +1573,10 @@ public final class M8GranularValidation {
 			stats = candidate.stats();
 		}
 		float[] actualPressure = {domain.pressure(0, 0, 0), domain.pressure(0, 1, 0), domain.pressure(0, 2, 0)};
-		float expectedGradient = config.density() * config.gravity() * config.cellSize();
 		for (int y = 0; y < 2; y++) {
+			// Pressure queries return liquid-volume means. The top layer is .75h
+			// deep, so its centroid lies .875h above the full cell beneath it.
+			float expectedGradient = config.density() * config.gravity() * config.cellSize() * (y == 0 ? 1 : .875F);
 			float actualGradient = actualPressure[y] - actualPressure[y + 1];
 			float relativeError = Math.abs(actualGradient - expectedGradient) / expectedGradient;
 			require(relativeError < 3.0e-4F, "porous granular bed missed analytic hydrostatic gradient: y="

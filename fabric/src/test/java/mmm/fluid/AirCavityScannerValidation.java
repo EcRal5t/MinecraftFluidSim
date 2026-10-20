@@ -77,13 +77,14 @@ public final class AirCavityScannerValidation {
 			float[] pv=new float[8];for(int i=0;i<2;i++) {for(int a=0;a<3;a++)pv[4*i+a]=(a==axis?i:0)+.5F;pv[4*i+tangentAxis]=.25F;pv[4*i+3]=.5F;}
 			var domain=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F,0),16);
 			domain.restoreParticleState(new FlipParticleState(2,2,2,1,2,1,pv,new float[6], mmm.units.Mass.createLiquid(1, 1000.0, pv),masks));domain.domainFlowFields.ensurePressureGeometry();
-			var partial=GasComplementGeometry.capture(2,2,2,1,domain.geometry.solid,domain.geometry.cutCells,domain.pressurePhaseGeometry);
+			var partial=domain.gasState.frame.geometry();
 			var crossing=partial.ports().stream().filter(port->port.first()/8!=port.second()/8).toList();
-			check(crossing.stream().allMatch(port -> port.area() > 0 && port.area() <= .25)
-					&& partial.ports().stream().filter(port->port.first()/8==port.second()/8).allMatch(GasComplementGeometry.Port::fullCutConnection),
-					"Complete microfaces manufactured a complete cell face or split a convex within-cell gas volume");
-			check(!crossing.isEmpty() && crossing.stream().allMatch(GasComplementGeometry.Port::fullCutConnection),
-					"A positive dry port across a complete fixed face failed to join its gas supports");
+			// Each stock reconstructs a horizontal half-filled cell. Side-by-side
+			// cells share dry space; vertically stacked cells have a wet separating face.
+			boolean liquidSeal=axis==1;
+			check(crossing.isEmpty()==liquidSeal && crossing.stream().allMatch(port -> port.area()>0 && port.fullCutConnection())
+					&& crossing.stream().mapToDouble(GasComplementGeometry.Port::area).sum()<=1,
+					"Shared PLIC face lost its dry connection or its resolved liquid seal");
 			var gas=domain.bootstrapGasState("");
 			check(gas.nodes().isEmpty() && gas.externalSource().standardVolumeNanos()==0
 					&& domain.gasState.network.edgeCount()==0 && domain.gasState.network.auditClosed(),
@@ -93,12 +94,16 @@ public final class AirCavityScannerValidation {
 			var sealed=new FluidDomain(2,2,2,domain.config(),16);
 			sealed.restoreParticleState(new FlipParticleState(2,2,2,1,2,1,pv,new float[6],mmm.units.Mass.createLiquid(1,1000,pv),masks));
 			sealed.sealDomainBoundary();var closed=sealed.bootstrapGasState("");
-			check(closed.nodes().size()==1 && sealed.gasState.network.edgeCount()==0 && sealed.gasState.network.auditClosed(),
-					"A complete fixed face split a connected sealed gas cavity");
-			checkRelative(sealed.gasState.network.availableVolume(1),1,"Joined cavity preserves physical gas capacity");
+			int expectedChambers=liquidSeal?2:1;
+			check(closed.nodes().size()==expectedChambers && sealed.gasState.network.edgeCount()==0 && sealed.gasState.network.auditClosed(),
+					"Sealed supports lost their dry connection or crossed their separating liquid face");
+			checkRelative(sealed.gasBoundary().nodeIds().stream().mapToDouble(sealed.gasBoundary()::availableVolume).sum(),1,
+					"Gas connections changed actual cavity capacity");
 			var restored=FluidDomain.restoreAuthoritativeState(sealed.captureAuthoritativeState());
-			check(restored.gasState.network.nodeCount()==1 && restored.gasState.network.inventory(1).equals(sealed.gasState.network.inventory(1))
-					&& restored.gasState.network.auditClosed(),"Joined gas inventory or connectivity changed on restore");
+			check(restored.gasState.network.nodeCount()==expectedChambers
+					&&restored.gasBoundary().sealedInventory().equals(sealed.gasBoundary().sealedInventory())
+					&&java.util.Arrays.equals(restored.exportGasState("").pieceNodeOrdinal(),closed.pieceNodeOrdinal())
+					&&restored.gasState.network.auditClosed(),"Gas inventory, dry connection or liquid seal changed on restore");
 
 		}
 		validateGasFaceAreas();
@@ -464,11 +469,12 @@ public final class AirCavityScannerValidation {
 		for(int face=0;face<d.mac.velocityX.length;face++)if(d.cellMacStage.massX[face]>0)d.mac.velocityX[face]=.5F;
 		d.cellMacStage.publishMomentum();
 		var mass=d.liquidCells.massUnits();var volume=d.liquidCells.exactVolume();
+		var expectedGas=mmm.fluid.air.GasAuditLedger.of(a.merge(b));
 		for(int step=0;step<8;step++) {
 			d=new CpuFluidSolverBackend().evaluate(new FluidStepRequest(step,d.captureAuthoritativeState(),List.of(),false,0,true)).claimPreparedCpuDomain();
 			var snapshot=d.exportGasState("");
-			check(d.gasBoundary().sealedInventory().equals(a.merge(b))&&d.gasBoundary().auditClosed()
-					&&snapshot.externalSource().equals(mmm.fluid.air.GasAuditLedger.of(a.merge(b)))&&snapshot.escapedSink().isEmpty(),
+			check(d.gasBoundary().sealedInventory().equals(expectedGas)&&d.gasBoundary().auditClosed()
+					&&snapshot.externalSource().equals(expectedGas)&&snapshot.escapedSink().isEmpty(),
 					"Moving liquid plug changed finite component inventory or external gas ledgers");
 			for(int node=1;node<=d.gasBoundary().nodeCount();node++) {
 				var inventory=d.gasBoundary().inventory(node);
@@ -565,6 +571,7 @@ public final class AirCavityScannerValidation {
 			var altered = new mmm.fluid.air.GasStateSnapshot(2, 2, 2, committed.registryFingerprint(), "",
 					committed.nodes(), membership, committed.externalSource(), committed.escapedSink());
 			var rejected = gasRestoreTarget(config, particles);
+			var before = rejected.captureAuthoritativeState();
 			var network = rejected.gasState.network;
 			long gasRevision=network.revision(),carrierRevision=rejected.carrierMutationRevision;
 			var externalSource = network.externalSource(); var escapedSink = network.escapedSink();
@@ -575,10 +582,9 @@ public final class AirCavityScannerValidation {
 			check(rejected.gasState.network == network && network.revision() == gasRevision && network.nodeCount() == 0
 					&& network.externalSource().equals(externalSource) && network.escapedSink().equals(escapedSink)
 					&& rejected.gasState.frame == null && !rejected.gasState.pressureActive
-					&& rejected.carrierMutationRevision == carrierRevision
-					&& java.util.Arrays.equals(rejected.exportParticleState().copyPositionVolume(), positions)
-					&& java.util.Arrays.equals(rejected.exportParticleState().copyCollisionMicroMasks(), masks),
+					&& rejected.carrierMutationRevision == carrierRevision,
 					"Rejected gas lineage restoration changed authoritative owners");
+			FluidDomainStateAssertions.assertSameState(before,rejected.captureAuthoritativeState(),"Rejected gas lineage restoration");
 		}
 	}
 

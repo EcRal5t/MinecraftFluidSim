@@ -17,6 +17,7 @@ final class MechanicalAuditAccumulator {
 	double viscousWorkJoules;
 	double fixedBoundaryWorkJoules;
 	double pressureProjectionWorkJoules;
+	double contactWorkJoules;
 	double volumeTransportTransferJoules;
 	double carrierInventoryTransferJoules;
 
@@ -35,7 +36,7 @@ final class MechanicalAuditAccumulator {
 	) {
 		double accounted = porousBoundaryWorkJoules + gravityWorkJoules + thermalBuoyancyWorkJoules
 				+ surfaceTensionWorkJoules + viscousWorkJoules + fixedBoundaryWorkJoules
-				+ pressureProjectionWorkJoules + volumeTransportTransferJoules + carrierInventoryTransferJoules;
+				+ pressureProjectionWorkJoules + contactWorkJoules + volumeTransportTransferJoules + carrierInventoryTransferJoules;
 		double residual = finalParticleKineticEnergyJoules
 				- initialParticleKineticEnergyJoules - accounted;
 		return new FluidDomain.MechanicalStepAudit(true,
@@ -43,7 +44,7 @@ final class MechanicalAuditAccumulator {
 				initialGravitationalPotentialEnergyJoules, finalGravitationalPotentialEnergyJoules,
 				porousBoundaryWorkJoules,
 				gravityWorkJoules, thermalBuoyancyWorkJoules, surfaceTensionWorkJoules, viscousWorkJoules,
-				fixedBoundaryWorkJoules, pressureProjectionWorkJoules,
+				fixedBoundaryWorkJoules, pressureProjectionWorkJoules,contactWorkJoules,
 				volumeTransportTransferJoules,carrierInventoryTransferJoules,
 				thermalInventoryMechanicalWork, residual);
 	}

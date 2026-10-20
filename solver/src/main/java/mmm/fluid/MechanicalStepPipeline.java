@@ -129,11 +129,19 @@ final class MechanicalStepPipeline {
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		pressureStage.predictDrag(dt);
+		if(captureAudit){
+			nextKineticEnergy=domain.domainStep.mechanicalGridKineticEnergyJoules();
+			audit.porousBoundaryWorkJoules+=nextKineticEnergy-stageKineticEnergy;stageKineticEnergy=nextKineticEnergy;
+		}
 		diagnosticStage = Stage.PRESSURE_SOLVE;
 		pressureStage.solve(dt);
 		boolean phaseGeometryPending = substep == 0 && domain.pendingPhaseVolume.hasWork();
 		diagnosticStage = Stage.PRESSURE_PUBLICATION;
 		pressureStage.projectVelocities(dt);
+		if(captureAudit){
+			nextKineticEnergy=domain.domainStep.mechanicalGridKineticEnergyJoules();
+			audit.pressureProjectionWorkJoules+=nextKineticEnergy-stageKineticEnergy;stageKineticEnergy=nextKineticEnergy;
+		}
 		diagnosticStage = Stage.GRANULAR_COLLISION_PREVIEW;
 		granularMechanicalStage.previewCollision(dt);
 		granularMechanicalStage.publishCollisionVelocities();
@@ -141,9 +149,7 @@ final class MechanicalStepPipeline {
 		int pressureIterations = domain.lastPressureIterations;
 		if (captureAudit) {
 			nextKineticEnergy = domain.domainStep.mechanicalGridKineticEnergyJoules();
-			double wallWork=pressureStage.wallBoundaryWork();
-			audit.fixedBoundaryWorkJoules+=wallWork;
-			audit.pressureProjectionWorkJoules += nextKineticEnergy - stageKineticEnergy-wallWork;
+			audit.contactWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		if (phaseGeometryPending) {

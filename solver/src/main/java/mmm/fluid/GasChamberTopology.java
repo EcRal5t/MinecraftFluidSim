@@ -8,8 +8,8 @@ import java.util.List;
 import java.util.TreeMap;
 
 /**
- * Gas shares one pressure within each coarse fixed-pore component, including unresolved liquid films.
- * Resolved coarse dry capacity joins complete fixed faces; tiny pockets and cut apertures use actual dry ports.
+ * Gas shares one pressure within each coarse fixed-pore component.
+ * Adjacent components connect through their shared PLIC dry opening; fixed cut apertures retain finite orifice flow.
  */
 final class GasChamberTopology {
 	record Chamber(int node, int minimumPiece, double geometricVolume, double volumeErrorBound) { }

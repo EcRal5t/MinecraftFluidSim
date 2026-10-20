@@ -167,8 +167,6 @@ public final class LiquidCellInventory {
 		public LiquidCellInventory future() { return future; }
 		public List<Integer> changedCells() { return changedCells; }
 		public List<Transfer> transfers() { return transfers; }
-		public SignedDyadic volumeChange() { return volumeChange; }
-		public long massChange() { return massChange; }
 		public SignedDyadic energyChange() { return energyChange; }
 		public SignedDyadic energyRoundoff() { return energyRoundoff; }
 		public SignedDyadic mechanicalHeat() { return mechanicalHeat; }

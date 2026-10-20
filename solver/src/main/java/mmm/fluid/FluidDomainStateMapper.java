@@ -34,7 +34,7 @@ final class FluidDomainStateMapper {
 				domain.thermalState == null ? null : domain.thermalState.exportOwnerState(),
 				domain.thermalState == null ? 0 : domain.thermalState.maximumTransportSubsteps(),
 				domain.thermalState == null ? null : domain.exportPendingPhaseVolumeState(),domain.thermalBoundaryTemperatureK,
-				domain.thermalState == null ? null : new CondensedPhasePressureField(domain.pressureReference,domain.projection.pressure),domain.materialDefinitions);
+				domain.thermalState == null ? null : domain.pressureSystem.captureLiquidPressure(),domain.materialDefinitions);
 		if (gas != null) captured.attachGasRuntime(domain.gasState.frame,domain.gasState.network.runtimeSnapshot());
 		return captured;
 	}
@@ -81,7 +81,7 @@ final class FluidDomainStateMapper {
 					state.materialDefinitions());
 			domain.granularDepositDynamics.restoreState(state.granularDynamics());
 		}
-		if (state.gasRuntimeGeometry() != null) domain.phaseOccupancy = state.phaseOccupancy();
+		if (state.gasRuntimeGeometry() != null) PhaseOccupancyTransport.publish(domain,state.phaseOccupancy());
 		else domain.restorePhaseOccupancyState(state.phaseOccupancy());
 		if (state.gas() == null) domain.bindGasRegistry(state.gasRegistry());
 		else if (state.gasRuntimeGeometry() != null) domain.gasTopologyCoordinator.restoreRuntime(state.gasRuntimeGeometry(),state.gasRuntimeNetwork());
@@ -92,13 +92,10 @@ final class FluidDomainStateMapper {
 			domain.restorePendingPhaseVolumeState(state.pendingPhaseVolume());
 			double[] thermalBoundary = state.copyThermalBoundaryTemperaturesK();
 			if (thermalBoundary != null) domain.replaceThermalBoundaryTemperatures(thermalBoundary);
-			CondensedPhasePressureField phasePressure = state.condensedPhasePressure();
-			domain.pressureReference = phasePressure.pressureReferencePa();
-			System.arraycopy(phasePressure.copyRelativeGaugePressurePa(), 0,
-					domain.projection.pressure, 0, domain.cellCount);
 		}
 		if (state.precipitationEnabled()) domain.setPrecipitationEnabled(true);
 		domain.domainFlowFields.ensureGrid();
+		if(state.condensedPhasePressure()!=null)domain.pressureSystem.restoreLiquidPressure(state.condensedPhasePressure());
 		return domain;
 	}
 }

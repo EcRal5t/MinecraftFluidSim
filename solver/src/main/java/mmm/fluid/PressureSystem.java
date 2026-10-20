@@ -44,7 +44,7 @@ final class PressureSystem {
 	PressureProjectionResult solveProjection(float dt) {
 		duration = dt; domain.domainFlowFields.ensureGrid(); solidFaces.rebuild(); faces.rebuild(dt);
 		var p = domain.projection;
-		Arrays.fill(p.pressure, 0); Arrays.fill(p.gasPressure, 0); Arrays.fill(p.divergence, 0);
+		Arrays.fill(p.pressure, 0); Arrays.fill(p.gasPressure, 0);
 		prepareGasStorage();
 		granular.prepare(dt);
 		// Fixed interface loads and the paired parcel reaction join the same prediction.
@@ -59,6 +59,7 @@ final class PressureSystem {
 			int node = p.gasUnknownNodes[i];
 			pressure[domain.cellCount + node] = domain.pressureBoundaryView.gasPressureOfNode(node);
 		}
+		faces.seedLiquidPressures(pressure);
 		// Resolve pressure to the same cell-volume scale as the phase geometry.
 		// The RHS residual becomes normalized volume through dt²/rho; the RMS
 		// factor keeps the resulting maximum row defect within that scale.
@@ -141,15 +142,30 @@ final class PressureSystem {
 			int node = p.gasUnknownNodes[i]; result[domain.cellCount + node] += gasStorageRhs[node];
 		}
 	}
-	double wallBoundaryWork() { return granular.wallWork(); }
-	boolean hasLiquidPressure(int cell) { return domain.domainFlowFields.isFluid(cell); }
-	double liquidPressure(int cell) { return pressure.length > cell ? pressure[cell] : 0; }
 	double gasPressure(int node) { return pressure.length > domain.cellCount + node ? pressure[domain.cellCount + node] : domain.pressureBoundaryView.gasPressureOfNode(node); }
+	CondensedPhasePressureField captureLiquidPressure(){
+		float[] actual=new float[domain.cellCount];
+		if(domain.gasState.frame==null){
+			// Before the first gas/mechanical preparation, preserve the last physical
+			// pressure sample without initializing a topology during snapshot capture.
+			for(int cell=0;cell<actual.length;cell++)actual[cell]=domain.projection.pressure[cell]+domain.tension.surfaceTensionPressure[cell];
+			return new CondensedPhasePressureField(0,actual);
+		}
+		domain.domainFlowFields.ensurePressureGeometry();
+		for(int cell=0;cell<actual.length;cell++)actual[cell]=(float)liquidPressureAt(cell,~domain.geometry.cutCells.mask(cell)&255);
+		return new CondensedPhasePressureField(0,actual);
+	}
+	void restoreLiquidPressure(CondensedPhasePressureField state){
+		float[] actual=state.copyRelativeGaugePressurePa();domain.pressureReference=0;
+		for(int cell=0;cell<domain.cellCount;cell++)domain.projection.pressure[cell]=
+				(float)(state.pressureReferencePa()+actual[cell]-domain.tension.surfaceTensionPressure[cell]);
+	}
 
 	/** Gauge pressure at the retained liquid support, including a partially filled cell's gas contact. */
 	double liquidPressureAt(int cell, int support) {
 		domain.domainFlowFields.ensurePressureGeometry();
-		if ((faces.fullSupports[cell] & support) == support) return domain.projection.pressure[cell];
+		if ((faces.fullSupports[cell] & support) == support)
+			return domain.projection.pressure[cell]+domain.tension.surfaceTensionPressure[cell];
 		var frame = domain.gasState.frame; double total = 0, weighted = 0;
 		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) {
 			int node = frame.nodeOfPiece(8 * cell + micro); if (node < 0) continue;
@@ -158,6 +174,6 @@ final class PressureSystem {
 			if (node > 0) weighted += volume * domain.pressureBoundaryView.gasPressureOfNode(node);
 		}
 		return (total > 0 ? weighted / total : domain.projection.pressure[cell])
-				+ domain.tension.surfaceTensionPressure[cell] + faces.hydrostaticOffset(cell);
+				+ domain.tension.surfaceTensionPressure[cell] + faces.hydrostaticOffset(cell,support);
 	}
 }

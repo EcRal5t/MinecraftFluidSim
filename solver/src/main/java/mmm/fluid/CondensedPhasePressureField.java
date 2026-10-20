@@ -1,8 +1,8 @@
 package mmm.fluid;
 
 /**
- * Immutable copy of the last completed mechanical pressure projection consumed by condensed
- * phase equilibrium. This is derived runtime input: it never contributes inventory to a
+ * Immutable physical liquid-pressure field, including capillary and geometric hydrostatic
+ * reconstruction, consumed by condensed phase equilibrium. This is derived runtime input: it never contributes inventory to a
  * checkpoint and must never be used to reconstruct carrier or gas quantities.
  */
 public final class CondensedPhasePressureField {

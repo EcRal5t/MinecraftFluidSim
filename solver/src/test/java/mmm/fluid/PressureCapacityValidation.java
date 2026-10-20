@@ -8,6 +8,7 @@ public final class PressureCapacityValidation {
 		fixedPorePressurePort(); vacuumCapacityClosure();
 		if (args.length==1) { System.out.println("Common pressure incidence and transpose PASS"); return; }
 		shallowHydrostatics(false); shallowHydrostatics(true);
+		cutHydrostatics();
 		System.out.println("Capacity/gas pressure adjoint, positive operator and shallow equilibrium PASS");
 	}
 	private static void fixedPorePressurePort() {
@@ -119,6 +120,29 @@ public final class PressureCapacityValidation {
 			if (domain.totalMassUnits() != mass || !domain.liquidCells.exactVolume().equals(volume)) throw new AssertionError("Shallow inventory changed");
 			if (column && Math.abs(domain.pressure(0, 0, 0) - 1000 * 9.81 * .5 * .7) > .01) throw new AssertionError("Centroid hydrostatic pressure differs: " + domain.pressure(0, 0, 0));
 			if (domain.maximumParticleSpeed() > 1e-5) throw new AssertionError("Shallow layer accelerated: " + domain.maximumParticleSpeed());
+		}
+	}
+	static void cutHydrostatics(){
+		float h=.5F,dt=.025F,amount=.2F;
+		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(h,1000,9.81F,dt,120,1e-5F,.002F,0));
+		float[] points=new float[32];byte[] masks=new byte[8];
+		for(int cell=0;cell<8;cell++){
+			int y=cell/2%2;points[4*cell]=(cell%2+.5F)*h;points[4*cell+1]=(y==0?.5F:1.1F)*h;
+			points[4*cell+2]=(cell/4+.5F)*h;points[4*cell+3]=y==0?1:amount;
+			if(y==1)masks[cell]=(byte)0xcc; // Only the bottom half is open; wet depth is amount*h.
+		}
+		domain.sealDomainBoundary();domain.restoreParticleState(new FlipParticleState(2,2,2,h,8,4+4*amount,points,new float[24],
+				mmm.units.Mass.createLiquid(h,1000,points),masks));
+		long mass=domain.totalMassUnits();var volume=domain.liquidCells.exactVolume();
+		for(int step=0;step<3;step++){
+			domain.stepMechanicsOnly();
+			double partial=1000*9.81*h*.5*amount,below=1000*9.81*h*(.5+amount);
+			if(Math.abs(domain.pressure(0,1,0)-partial)>.1||Math.abs(domain.pressure(0,0,0)-below)>.1)
+				throw new AssertionError("Bottom-half cut hydrostatic pressure used open fraction as wet height");
+			if(domain.maximumParticleSpeed()>2*mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION*h/dt)
+				throw new AssertionError("A stationary horizontal cut layer acquired resolved motion");
+			if(domain.totalMassUnits()!=mass||!domain.liquidCells.exactVolume().equals(volume))
+				throw new AssertionError("Cut hydrostatic projection changed liquid inventory");
 		}
 	}
 	private static void close(double first, double second, String reason) {

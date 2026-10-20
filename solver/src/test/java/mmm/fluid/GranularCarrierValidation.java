@@ -1111,8 +1111,15 @@ public final class GranularCarrierValidation {
 			domain.setVolume(2, 2, 2, .125F);
 			if (scene == 4) domain.setVolume(1, 1, 1, 1);
 			var liquid = domain.exportLiquidCellState();
+			var input = domain.exportMacMomentum();
+			double[] px = input.copyX(), py = input.copyY(), pz = input.copyZ();
+			px[domain.domainFlowFields.xFaceIndex(2, 2, 2)] = .25;
+			py[domain.domainFlowFields.yFaceIndex(2, 2, 2)] = -.5;
+			pz[domain.domainFlowFields.zFaceIndex(2, 2, 2)] = .125;
+			domain.restoreMacMomentum(new MacMomentumState(4, 4, 4, px, py, pz));
 			var momentum = domain.exportMacMomentum();
-			long liquidRevision = domain.domainFlowFields.carrierMutationRevision();
+			long liquidRevision = domain.liquidCells.revision();
+			long geometryRevision = domain.domainFlowFields.carrierMutationRevision();
 			var kernel = new mmm.granular.GranularKernel(4, 4, 4, .5F);
 			kernel.capture(scene == 0 ? 0 : .75F, scene == 2 ? .52F : .75F, .75F, volume);
 			var parcel = new mmm.granular.GranularStateSnapshot.ActiveParcel(
@@ -1134,7 +1141,7 @@ public final class GranularCarrierValidation {
 						BuiltinFluidMaterials.createRegistry());
 			} catch (IllegalArgumentException | IllegalStateException expected) { rejected = true; }
 			require(domain.exportLiquidCellState().stocks().equals(liquid.stocks())
-					&& domain.domainFlowFields.carrierMutationRevision() == liquidRevision
+					&& domain.liquidCells.revision() == liquidRevision
 					&& java.util.Arrays.equals(momentum.copyX(),domain.exportMacMomentum().copyX())
 					&& java.util.Arrays.equals(momentum.copyY(),domain.exportMacMomentum().copyY())
 					&& java.util.Arrays.equals(momentum.copyZ(),domain.exportMacMomentum().copyZ()),
@@ -1142,10 +1149,13 @@ public final class GranularCarrierValidation {
 			if (scene < 6 && scene != 1) {
 				require(rejected && domain.granularState == null && domain.materialRegistry == null
 						&& domain.materialDefinitions == null && domain.granularCoupling == null
-						&& domain.granularPhaseTransfer == null,
+						&& domain.granularPhaseTransfer == null
+						&& domain.domainFlowFields.carrierMutationRevision() == geometryRevision,
 						"rejected granular restore published partial state, scene=" + scene);
 			} else {
 				require(!rejected, "valid granular restore was rejected");
+				require(domain.gridDirty && domain.pressureGeometryDirty && domain.velocityGridDirty,
+						"Granular restore must refresh joint occupancy and derived face inertia");
 				var restored = domain.exportGranularState();
 				require(restored.activeParcels().equals(active) && restored.depositGroups().equals(beds)
 						&& restored.totalSolidVolumeSvq() == snapshot.totalSolidVolumeSvq()
@@ -1249,15 +1259,25 @@ public final class GranularCarrierValidation {
 				&& domain.carrierViscosityPascalSeconds(target) == null,
 				"liquid properties must be available without any granular inventory");
 		long revision = domain.carrierMutationRevision;
+		var volume=domain.liquidCells.exactVolume();long mass=domain.liquidCells.massUnits();
+		var sourceVolume=domain.liquidCells.exactCellVolume(source);
 		java.util.Arrays.fill(domain.mac.velocityX, 1);
 		java.util.Arrays.fill(domain.mac.velocityY, 0);
 		java.util.Arrays.fill(domain.mac.velocityZ, 0);
 		domain.cellMacStage.publishMomentum();
 		domain.cellMacStage.transport(.5F);
 		require(domain.carrierMutationRevision > revision, "Cell transport did not publish its inventory revision");
-		require(domain.carrierViscosityPascalSeconds(source) == null
-				&& domain.carrierViscosityPascalSeconds(target) == expected,
-				"advection must invalidate spatial carrier properties despite unchanged inventory revision");
+		require(domain.liquidCells.exactVolume().equals(volume)&&domain.liquidCells.massUnits()==mass
+				&&domain.liquidCells.exactCellVolume(source).compareTo(sourceVolume)<0
+				&&domain.liquidCells.exactCellVolume(target).signum()>0,
+				"Cell transport must move the carrier while preserving liquid inventory");
+		var restored=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		for(int cell=0;cell<domain.cellCount;cell++){
+			Double viscosity=domain.liquidCells.exactCellVolume(cell).signum()>0?expected:null;
+			require(java.util.Objects.equals(domain.carrierViscosityPascalSeconds(cell),viscosity)
+					&&java.util.Objects.equals(restored.carrierViscosityPascalSeconds(cell),viscosity),
+					"Transport and recovery must derive carrier properties from the retained cell inventory");
+		}
 	}
 
 	private static void thinBedRetainsFreeFlow() {

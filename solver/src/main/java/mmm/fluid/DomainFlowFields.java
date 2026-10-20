@@ -300,7 +300,6 @@ final class DomainFlowFields {
 		return room;
 	}
 	List<CellCandidate> nearbyCells(int centerX, int centerY, int centerZ, int maxRadius) {
-		ensureInventoryGrid();
 		List<CellCandidate> result = new ArrayList<>();
 		int radiusSquared = maxRadius * maxRadius;
 		for (int z = Math.max(0, centerZ - maxRadius); z <= Math.min(domain.sizeZ - 1, centerZ + maxRadius); z++)
@@ -314,6 +313,10 @@ final class DomainFlowFields {
 	}
 	void ensureGrid() {
 		ensurePressureGeometry();
+		ensureVelocityGrid();
+	}
+	void ensureVelocityGrid() {
+		ensureInventoryGrid();
 		if (domain.velocityGridDirty) domain.cellMacStage.rebuildVelocity();
 	}
 	void ensureInventoryGrid() { if (domain.gridDirty) domain.cellMacStage.rebuildInventory(); }

@@ -106,9 +106,10 @@ private static void validateInternalTransferLedgerDiversity() {
 		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
 		domain.setVolume(1, 1, 1, 0.125F);
 		domain.bindMaterialRegistry(materials);
+		domain.domainCollision.setMarkerMaterial(0, materials, 1);
 		try {
 			domain.bindChemistry(CHEMISTRY);
-			throw new AssertionError("material palette with no chemical phase was accepted");
+			throw new AssertionError("occupied material with no chemical phase was accepted");
 		} catch (IllegalArgumentException expected) {
 			check(!domain.hasChemistryState(), "failed chemistry binding left a partial parcel store");
 		}
@@ -392,9 +393,10 @@ private static void validateChemicalContainerRoundTrip() throws Exception {
 		for(var stock:source.exportLiquidCellState().physicalStocks()){
 			int cell=stock.key().cell(),x=cell%source.sizeX(),y=cell/source.sizeX()%source.sizeY(),z=cell/(source.sizeX()*source.sizeY());
 			boolean acid=(x+.5)*config.cellSize()<2;
-			var amounts=new java.util.TreeMap<>(stock.mixture().stableAmounts(registries.chemical()));
-			amounts.put(acid ? BuiltinChemicalDefinitions.HCL : BuiltinChemicalDefinitions.NAOH, 1_000_000L);
-			setCellChemical(source,x,y,z,stock.key().material(),amounts,acid);
+			var mixture=mmm.chemistry.ChemicalMixtureRecord.fromSolutesAndSolventMass(registries.chemical(),
+					Map.of(acid ? BuiltinChemicalDefinitions.HCL : BuiltinChemicalDefinitions.NAOH, 1_000_000L),
+					BuiltinChemicalDefinitions.H2O, stock.massUnits());
+			setCellChemical(source,x,y,z,stock.key().material(),mixture.stableAmounts(registries.chemical()),acid);
 		}
 		return source;
 	}
@@ -545,7 +547,9 @@ private static void validateChemicalContainerRoundTrip() throws Exception {
 		long removed=extracted.ledger().totalQuanta(),retained=domain.totalChemicalSpeciesQuanta();
 		check(removed+retained==1&&domain.totalMassUnits()+extracted.ledger().totalMassUnits()==before.liquid().stocks().stream().mapToLong(LiquidCellInventory.Stock::massUnits).sum(),
 				"Trace transfer did not conserve integer species and mass");
-		var restored=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		var captured=domain.captureAuthoritativeState();
+		check(Arrays.stream(captured.phaseOccupancy().copyLiquidMicroVolumes()).sum()==.0625,"Extraction capture retained the source phase occupation");
+		var restored=FluidDomain.restoreAuthoritativeState(captured);
 		check(restored.exportLiquidCellState().stocks().equals(domain.exportLiquidCellState().stocks()),"Trace transfer failed complete recovery");
 	}
 

@@ -9,6 +9,8 @@ import java.util.ArrayList;
 import mmm.granular.GranularParcelStore;
 import mmm.granular.SolidVolume;
 import mmm.thermal.GranularEnergyColumn;
+import mmm.thermal.ThermalDomainState;
+import mmm.units.SignedDyadic;
 import mmm.granular.GranularAuditLedger;
 import mmm.granular.GranularDepositStore;
 import mmm.chemistry.ChemicalRegistry;
@@ -25,7 +27,9 @@ final class DomainCollision {
 		var stock = domain.liquidCells.physicalStockAt(ordinal);
 		var registry = domain.chemicalParcels().registry();
 		var zero = ChemicalMixtureRecord.fromStableAmounts(registry, stableAmounts, 0);
-		var record = zero.withMassResidualUnits(Math.subtractExact(stock.massUnits(), zero.speciesMassUnits(registry)));
+		long speciesMass=zero.speciesMassUnits(registry);
+		if(speciesMass>stock.massUnits())throw new IllegalArgumentException("Chemical assignment exceeds the existing stock mass");
+		var record = zero.withMassResidualUnits(Math.subtractExact(stock.massUnits(), speciesMass));
 		domain.chemicalParcels.requireCompatible(record, domain.materialRegistry.material(stock.key().material()).id(), indicator);
 		if (domain.thermalState != null) domain.thermalState.requireReactionState(ordinal, record,
 				domain.unitScale.normalizedMass(stock.massUnits()), domain.domainCapabilities.thermalMarkerContext());
@@ -59,7 +63,10 @@ final class DomainCollision {
 		for (int index : indices) mixtures.add(table.get(index));
 		var metadata = new ChemicalParcelStore(registry, domain.unitScale, domain.maximumParticleCount, domain.cellCount);
 		metadata.restoreAuditLedgers(state.externalSource(), state.escapedSink());
-		LiquidInitialInput.restore(domain, incoming.particles(), palette, incoming.copyMaterialPaletteIndex(), mixtures, state.copyIndicator(), registry);
+		int[] materials = incoming.copyMaterialPaletteIndex();byte[] indicators = state.copyIndicator();
+		for (int ordinal = 0; ordinal < materials.length; ordinal++)
+			metadata.requireCompatible(mixtures.get(ordinal), palette.material(materials[ordinal]).id(), indicators[ordinal] != 0);
+		LiquidInitialInput.restore(domain, incoming.particles(), palette, materials, mixtures, indicators, registry);
 		domain.chemicalParcels = metadata;
 		for (var stock : domain.liquidCells.stocks()) domain.chemicalParcels.markDirtyCell(stock.key().cell());
 	}
@@ -94,7 +101,7 @@ final class DomainCollision {
 	}
 	public CollisionEditPlan planCollisionEdits(List<CollisionEdit> edits) {
 		if (edits == null || edits.isEmpty()) throw new IllegalArgumentException("Collision edit batch is missing or empty");
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.ensureVelocityGrid();
 		ArrayList<CollisionEdit> canonical = new ArrayList<>(edits.size());
 		int[] previousMasks = new int[edits.size()];
 		boolean[] granularCells = domain.granularState == null ? null : new boolean[domain.cellCount];
@@ -126,12 +133,14 @@ final class DomainCollision {
 		}
 		return new CollisionEditPlan((FluidDomain) domain, List.copyOf(canonical), previousMasks, domain.liquidCells.size(),
 				Double.doubleToRawLongBits(totalVolumeExact()), totalMassUnits(), granularPlan,
-				LiquidCollisionEdit.prepare(domain, canonical, granularPlan));
+				LiquidCollisionEdit.prepare(domain, canonical, granularPlan),
+				domain.thermalState == null ? null : domain.thermalState.thermalRevision());
 	}
 	public void beginCollisionEdits(CollisionEditPlan plan) {
 		if (plan == null || plan.owner != domain || plan.consumed || domain.activeCollisionPlan != null) {
 			throw new IllegalArgumentException("Collision edit plan is missing, foreign or already consumed");
 		}
+		requireCollisionThermalCurrent(plan.thermalRevision);
 		if (domain.liquidCells.size() != plan.planMarkerCount
 				|| Double.doubleToRawLongBits(totalVolumeExact()) != plan.totalVolumeBits
 				|| totalMassUnits() != plan.totalMassUnits) {
@@ -146,11 +155,13 @@ final class DomainCollision {
 		plan.liquid.inventory.requireCurrent();
 		if (plan.liquid.gas != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(plan.liquid.gas);
 		if (domain.thermalState != null) {
-			var audit = domain.thermalState.auditLedger().withExternalSinkEnergy(plan.liquid.removedEnergy)
-					.withMechanicalWork(plan.liquid.inventory.mechanicalHeat()).withRoundoff(plan.liquid.energyRoundoff);
+			var audit = domain.thermalState.auditLedger().withExternalSinkEnergy(
+					plan.granular == null ? SignedDyadic.ZERO : plan.granular.removedEnergy());
 			var gas = plan.liquid.gas == null ? null : plan.liquid.gas.thermalPlan();
-			if (gas != null) audit.withExternalSourceEnergy(gas.sourceEnergy()).withExternalSinkEnergy(gas.sinkEnergy())
-					.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff()).expectedInventory();
+			if (gas != null) audit = audit.withExternalSourceEnergy(gas.sourceEnergy()).withExternalSinkEnergy(gas.sinkEnergy())
+					.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff());
+			audit.withExternalSinkEnergy(plan.liquid.removedEnergy).withMechanicalWork(plan.liquid.inventory.mechanicalHeat())
+					.withRoundoff(plan.liquid.energyRoundoff).expectedInventory();
 		}
 		if (plan.granular != null) try {
 			commitGranularCollision(plan.granular);
@@ -232,17 +243,25 @@ final class DomainCollision {
 			if (selectedDepositCells[groupCell]) depositGroups.add(new CollisionDeposit(groupCell,
 					new GranularDepositStore.Group(material, composition, svq, mass)));
 		});
+		SignedDyadic removedEnergy = SignedDyadic.ZERO;
 		if (domain.thermalState != null) {
-			for (int parcel = 0; parcel < selectedParcels.length; parcel++) if (selectedParcels[parcel]) {
+			var audit = domain.thermalState.auditLedger();
+			// Prepare the same descending swap-removal energy chain that will be published.
+			for (int parcel = selectedParcels.length - 1; parcel >= 0; parcel--) if (selectedParcels[parcel]) {
 				GranularParcelStore.Parcel state = domain.granularState.parcels.parcel(parcel);
-				domain.thermalState.previewActiveTake(parcel, state.massUnits(), state.massUnits());
+				var energy = SignedDyadic.of(domain.thermalState.previewActiveTake(parcel, state.massUnits(), state.massUnits()));
+				removedEnergy = removedEnergy.add(energy);
+				audit = audit.withExternalSinkEnergy(energy);
 			}
 			for (CollisionDeposit deposit : depositGroups) {
 				GranularDepositStore.Group group = deposit.group();
-				domain.thermalState.previewDepositTake(new GranularEnergyColumn.DepositKey(
+				var energy = SignedDyadic.of(domain.thermalState.previewDepositTake(new GranularEnergyColumn.DepositKey(
 						deposit.cell(), group.materialHandle(), group.solidCompositionHandle()),
-						group.massUnits(), group.massUnits());
+						group.massUnits(), group.massUnits()));
+				removedEnergy = removedEnergy.add(energy);
+				audit = audit.withExternalSinkEnergy(energy);
 			}
+			audit.expectedInventory();
 		}
 
 		long plannedSvq = 0L;
@@ -267,27 +286,34 @@ final class DomainCollision {
 		}
 		return new GranularCollisionPlan(selectedParcels, List.copyOf(depositGroups), sinkAfter,
 				affectedCells.clone(), domain.granularState.parcels.count(), domain.granularState.inventory.totalSolidVolumeSvq(),
-				domain.granularState.inventory.totalMassUnits());
+				domain.granularState.inventory.totalMassUnits(), removedEnergy,
+				domain.thermalState == null ? null : domain.thermalState.thermalRevision());
+	}
+	private void requireCollisionThermalCurrent(ThermalDomainState.Revision revision) {
+		if (domain.thermalState == null ? revision != null : !domain.thermalState.matchesThermalRevision(revision))
+			throw new IllegalStateException("Thermal inventory changed after collision planning");
 	}
 	void commitGranularCollision(GranularCollisionPlan plan) {
+		requireCollisionThermalCurrent(plan.thermalRevision());
 		if (domain.granularState.parcels.count() != plan.parcelCount()
 				|| domain.granularState.inventory.totalSolidVolumeSvq() != plan.totalSvq()
 				|| domain.granularState.inventory.totalMassUnits() != plan.totalMassUnits()) {
 			throw new IllegalStateException("Granular inventory changed after collision planning");
 		}
 		for (int parcel = plan.selectedParcels().length - 1; parcel >= 0; parcel--) if (plan.selectedParcels()[parcel]) {
-			GranularParcelStore.Parcel state = domain.granularState.parcels.removeSwap(parcel);
+			GranularParcelStore.Parcel state = domain.granularState.parcels.parcel(parcel);
 			if (domain.thermalState != null) domain.thermalState.commitExternalActiveTake(
 					parcel, state.massUnits(), state.massUnits());
+			domain.granularState.parcels.removeSwap(parcel);
 			if (state.solidCompositionHandle() != 0) domain.granularState.compositions.release(state.solidCompositionHandle());
 		}
 		for (CollisionDeposit deposit : plan.depositGroups()) {
 			GranularDepositStore.Group group = deposit.group();
-			GranularDepositStore.SolidPortion taken = domain.granularState.deposits.take(
-					deposit.cell(), group.materialHandle(), group.solidCompositionHandle(), group.solidVolumeSvq());
 			if (domain.thermalState != null) domain.thermalState.commitExternalDepositTake(new GranularEnergyColumn.DepositKey(
 					deposit.cell(), group.materialHandle(), group.solidCompositionHandle()),
 					group.massUnits(), group.massUnits());
+			GranularDepositStore.SolidPortion taken = domain.granularState.deposits.take(
+					deposit.cell(), group.materialHandle(), group.solidCompositionHandle(), group.solidVolumeSvq());
 			if (taken.solidCompositionHandle() != 0) domain.granularState.compositions.release(taken.solidCompositionHandle());
 		}
 		domain.granularState.escapedSink = plan.sinkAfter();
@@ -364,7 +390,7 @@ final class DomainCollision {
 		return new MaterialInventory(volume, mass, volume == 0 ? Double.NaN : weightedY / volume);
 	}
 	int phaseCountInCell(int x, int y, int z) {
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.ensureInventoryGrid();
 		int result = 0;
 		for (int entry = domain.liquidGrid.cellPhaseHead[domain.domainFlowFields.cellIndexChecked(x, y, z)]; entry >= 0; entry = domain.liquidGrid.phaseEntryNext[entry]) result++;
 		return result;

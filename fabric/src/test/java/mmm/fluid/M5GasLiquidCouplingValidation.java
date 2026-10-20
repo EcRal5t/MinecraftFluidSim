@@ -13,7 +13,12 @@ public final class M5GasLiquidCouplingValidation {
 	private static final float GRAVITY = 9.81F;
 
 	public static void main(String[] args) {
+		if(java.util.Arrays.asList(args).contains("--interfaces")){
+			validateSealedGasAndCapillaryJumpShareFaces();PressureCapacityValidation.cutHydrostatics();
+			System.out.println("M5 capillary and cut hydrostatic reconstruction PASS");return;
+		}
 		PressureCapacityValidation.main(new String[]{"--algebra"});
+		PressureCapacityValidation.cutHydrostatics();
 		validateSealedGasAndCapillaryJumpShareFaces();
 		validateSplitRetainsSealedShareWhenPeerVents();
 		validateClosedCavityAfterBootstrapStartsAsVacuum();
@@ -36,10 +41,11 @@ public final class M5GasLiquidCouplingValidation {
 	}
 
 	private static void validateSealedGasAndCapillaryJumpShareFaces() {
+		for(float amount:new float[]{.25F,.7F,1}){
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 2.0E-3F, 0.80F);
 		FluidDomain domain = new FluidDomain(4, 4, 4, config, 64);
-		domain.setVolume(1, 1, 1, 1.0F);
+		domain.setVolume(1, 1, 1, amount);
 		FluidMaterialRegistry registry = new FluidMaterialRegistry(java.util.List.of(
 				new FluidMaterial("mmm:gas_contact_test", DENSITY, "mmm:gas_contact_test",
 						0.0728, Math.PI / 2.0)));
@@ -60,6 +66,7 @@ public final class M5GasLiquidCouplingValidation {
 		check(domain.gasBoundary().sealedInventoryNanos() == gasInventory
 				&& domain.gasBoundary().auditClosed(),
 				"static sealed gas/capillary contact changed gas inventory truth");
+		}
 	}
 
 	private static void validateEmptyControllerBoundaryPourRetainsLineage() {
@@ -98,16 +105,21 @@ public final class M5GasLiquidCouplingValidation {
 		domain.sealDomainBoundary();
 		domain.bootstrapGasState(null);
 		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) {
-			domain.setVolume(x, y, z, 1.0F);
+			if(x!=1||y!=1||z!=1)domain.setVolume(x, y, z, 1.0F);
 		}
+		var before=domain.captureAuthoritativeState();
 		try {
-			domain.synchronizeGasTopologyForPersistence();
-			throw new AssertionError("finite closed gas without capacity did not reject its topology candidate");
+			domain.setVolume(1,1,1,1);
+			throw new AssertionError("finite closed gas without capacity did not reject its liquid edit candidate");
 		} catch (GasTopologyBlockedException expected) {
 			check(domain.gasBoundary().sealedInventoryNanos() == 1_000_000_000L
 					&& domain.gasBoundary().auditClosed(),
 					"typed gas-topology rejection changed the committed inventory");
 		}
+		FluidDomainStateAssertions.assertSameState(before,domain.captureAuthoritativeState(),"Rejected finite-gas capacity edit");
+		domain.synchronizeGasTopologyForPersistence();
+		var restored=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		FluidDomainStateAssertions.assertSameState(before,restored.captureAuthoritativeState(),"Finite-gas recovery after rejected edit");
 	}
 
 	private static void validateFiniteGasNodeUsesEquationOfStateCompliance() {
@@ -299,8 +311,14 @@ public final class M5GasLiquidCouplingValidation {
 	private static void validateOpenTubesStayAmbient() {
 		FluidDomain domain = utubeDomain(false);
 		domain.domainStep.step();
-		check(!domain.gasPressureActive(), "open-topped tube pair must not create sealed gas");
-		check(domain.gasBoundary().nodeCount() == 0, "open-topped tube pair must keep zero sealed nodes");
+		for(int z=1;z<=2;z++)for(int y=9;y<domain.sizeY;y++)for(int x=1;x<=10;x++)if(x!=6)
+			check(domain.airNodeAt(x,y,z)==0,"Open tube headspace lost its connection to ambient");
+		check(domain.gasBoundary().sealedInventory().isEmpty()&&domain.gasBoundary().externalSource().isEmpty()
+				&&domain.gasBoundary().escapedSink().isEmpty(),"Open tubes created finite gas stock or external gas transfers");
+		var frame=domain.gasState.frame;
+		for(var component:frame.capacity().components())if(frame.topology().nodeOfComponent(component.cell(),component.supportMask())>0)
+			check(component.availableVolumeNormalized().toDouble()<=mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION,
+					"Open tubes trapped a resolved gas cavity below their free surface");
 		checkLedger(domain.gasBoundary(), "open tubes");
 	}
 
@@ -444,14 +462,12 @@ public final class M5GasLiquidCouplingValidation {
 		return domain;
 	}
 
-	/** Mean water surface height in cells over a column range from authoritative marker volume. */
+	/** Mean water surface height in cells over a column range from the committed liquid stock. */
 	private static double columnSurface(FluidDomain domain, int fromX, int toX, int crossSection) {
 		double volume = 0.0;
-		FlipParticleState state = domain.exportParticleState();
-		float[] positionVolume = state.copyPositionVolume();
-		for (int offset = 0; offset < positionVolume.length; offset += 4) {
-			int cellX = (int) Math.floor(positionVolume[offset] / state.cellSize());
-			if (cellX >= fromX && cellX <= toX) volume += positionVolume[offset + 3];
+		for(var stock:domain.exportLiquidCellState().stocks()){
+			int cellX=stock.key().cell()%domain.sizeX;
+			if(cellX>=fromX&&cellX<=toX)volume+=stock.volumeFraction();
 		}
 		check(volume > 0.0, "column " + fromX + ".." + toX + " has no water");
 		return volume / crossSection;
