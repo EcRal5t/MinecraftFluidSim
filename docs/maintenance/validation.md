@@ -392,7 +392,8 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 ### 审阅整改：2026-10-21
 
 使用正式生产 classes 与仓库测试入口，JDK 26.0.2。预算 JVM 为 `-Xmx768m`，功能入口为 `-Xmx512m`；计时前已停止 Gradle daemon。
-最终增量编译见 `build/review-build-final.log`；本轮新增的预算 CPU 时间字段随后直接编译到同一测试 classes，生产算子保持原构建。
+源码基线为 `e7d1155`。最终增量编译见 `build/review-build-final.log`；预算 CPU 时间字段随后直接编译到同一测试 classes，生产算子保持原构建。
+最终计时在用户提供的空闲窗口执行，使用默认进程优先级，结果见 `build/review-live-budget-idle.log`。
 生产预算入口为 `CpuValidationSuite production-live-budget`，对应 Gradle 命令：
 
 ```powershell
@@ -401,9 +402,9 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 | 结果 | 场景与日志 |
 |---|---|
-| 控制器原预算通过 | `build/review-live-budget.log`：原十步预热、二十步完整采样；中位数 16.562 ms、最大 19.701 ms，满足每步 40 ms |
-| 最大 demo 原预算待通过 | 同一日志：原 24×16×24 单元、2,880 条初始化库存与 324 m³ 装量，完整二十步 phase-on；墙钟中位数 366.064 ms、最大 1540.936 ms，超过 200 ms 最多连续十七步 |
-| 调度诊断 | 同一日志：demo 主线程 CPU 中位数 148.438 ms、最大 250 ms；同机并行游戏与浏览器有持续负载。`build/review-budget-controlled.log` 采用 AboveNormal 计时进程，墙钟中位数 263.893 ms、最大 1067.770 ms、最多连续十二步超时，仍保留原失败判定 |
+| 控制器原预算通过 | `build/review-live-budget-idle.log`：原十步预热、二十步完整采样；中位数 16.510 ms、最大 20.662 ms，满足每步 40 ms |
+| 最大 demo 原预算通过 | 同一日志：原 24×16×24 单元、2,880 条初始化库存与 324 m³ 装量，保留五步原 phase-on 预热与二十步完整采样；中位数 151.959 ms、最大 216.803 ms，超过 200 ms 最多连续一步，满足连续三步暂停规则 |
+| 调度诊断 | 最终空闲计时的 demo 主线程 CPU 中位数 125 ms、最大 187.5 ms。此前有并行游戏与浏览器负载的 `build/review-live-budget.log` 及 AboveNormal 诊断 `build/review-budget-controlled.log` 均失败；它们保留诊断口径，最终资格采用默认优先级的空闲计时 |
 | 共同通量与正常后继通过 | `build/review-transport.log`：`LiquidVolumeTransportValidation --fast`，包括固定分量、微量流、移动孔容、排水与恢复 |
 | 墙面交接通过 | `build/review-wall.log`：实际 donor 入射、最终格面动量约束、墙冲量、停止热与库存恢复 |
 | 分段热容接触通过 | `build/review-contact.log`：有限接触与复杂分段热容的正响应、内能成对交接 |
