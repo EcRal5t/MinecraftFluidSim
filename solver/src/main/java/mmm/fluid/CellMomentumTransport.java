@@ -50,7 +50,7 @@ final class CellMomentumTransport {
             result[axis]=components[axis].transport(beforeMass,afterMass,massFlux,velocity[axis]);
             prepareMergeAnchors(afterMass,axis);
             components[axis].mixUnresolved(afterMass,volume,anchors,domain.geometry.cutCells.openFaceField(axis),
-                    domain.pressurePhaseGeometry,domain.geometry.cutCells);
+                    domain.pressurePhaseGeometry,domain.geometry.cutCells,domain.cellMacStage.constrainedNormalFaces(axis));
             components[axis].addHeatToCells(afterMass,heat);
         }
         var walls=domain.cellMacStage.stopWallMomentum(result,afterMass,heat,null);
@@ -70,6 +70,7 @@ final class CellMomentumTransport {
                 int coordinate=axis==0?xx:axis==1?yy:zz,size=axis==0?domain.sizeX:axis==1?domain.sizeY:domain.sizeZ;
                 if(coordinate==0||coordinate==size)continue;
                 int face=axis==0?domain.domainFlowFields.xFaceIndex(xx,yy,zz):axis==1?domain.domainFlowFields.yFaceIndex(xx,yy,zz):domain.domainFlowFields.zFaceIndex(xx,yy,zz);
+                if(domain.cellMacStage.isUnresolvedWallFace(axis,face))continue;
                 if(!(domain.pressureSystem.solidFaces.fixedPoreOpen(axis,face)>0))continue;
                 long dual=mass[cell]+mass[cell+(side==0?-stride:stride)];
                 if(dual>largest){largest=dual;anchors[cell]=face;}

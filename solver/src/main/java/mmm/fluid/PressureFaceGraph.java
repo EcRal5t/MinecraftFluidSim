@@ -325,6 +325,19 @@ final class PressureFaceGraph {
 			}
 		}
 	}
+	/** A grounded column's dry normal face has no independent liquid motion. */
+	boolean isGroundedDryNormalFace(int local){
+		int face=offsets[1]+local,a=firstCell[face],b=secondCell[face];if(a<0)return false;
+		for(int port=0;port<4;port++)if(wetPortArea[4*face+port]>0)return false;
+		for(int side=0;side<2;side++){
+			int cell=side==0?a:b;
+			for(int support:CellRemapMicroTopology.components(domain.geometry.cutCells.mask(cell))){
+				int slot=8*cell+Integer.numberOfTrailingZeros(support);
+				if(supportFill[slot]>0&&groundedSupport[slot])return true;
+			}
+		}
+		return false;
+	}
 	/** Downward acceleration of a grounded column, or ordinary free fall for airborne liquid. */
 	double gravityAcceleration(int face){
 		prepareSupportGeometry();int a=firstCell[face],b=secondCell[face];if(a<0)return 0;
