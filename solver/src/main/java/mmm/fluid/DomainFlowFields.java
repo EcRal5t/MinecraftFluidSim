@@ -38,7 +38,6 @@ final class DomainFlowFields {
 	}
 	void rebuildSurfaceTensionPressure() {
 		Arrays.fill(domain.tension.surfaceTensionPressure, 0.0F);
-		Arrays.fill(domain.tension.wallSurfaceEnergyDensity, 0.0);
 		if (!domain.surfaceTensionActive) return;
 		for (int index = 0; index < domain.cellCount; index++) {
 			if (domain.geometry.solid[index]) {
@@ -59,8 +58,6 @@ final class DomainFlowFields {
 			if (sigma <= 0.0) continue;
 			double kappa = liquidGasMeanCurvature(x, y, z);
 			domain.tension.surfaceTensionPressure[index] = (float) (sigma * kappa);
-			domain.tension.wallSurfaceEnergyDensity[index] = -sigma
-					* Math.cos(surfaceTensionContactAngleAtCell(index)) / domain.config.cellSize();
 		}
 	}
 	void smoothSurfaceTensionColor() {
@@ -111,10 +108,37 @@ final class DomainFlowFields {
 			double normalX = gradientX / length;
 			double normalY = gradientY / length;
 			double normalZ = gradientZ / length;
+			if (domain.liquidGrid.stockCount[index] > 0) {
+				// Fixed-face area differences point from the wall into the open fluid.
+				double wx = fixedLiquidContact(index,x,y,z,0,0)-fixedLiquidContact(index,x,y,z,0,1);
+				double wy = fixedLiquidContact(index,x,y,z,1,0)-fixedLiquidContact(index,x,y,z,1,1);
+				double wz = fixedLiquidContact(index,x,y,z,2,0)-fixedLiquidContact(index,x,y,z,2,1);
+				double wallLength = Math.sqrt(wx*wx+wy*wy+wz*wz);
+				if (wallLength > 0) {
+					wx /= wallLength; wy /= wallLength; wz /= wallLength;
+					double dot = normalX*wx+normalY*wy+normalZ*wz;
+					double tx = normalX-dot*wx, ty = normalY-dot*wy, tz = normalZ-dot*wz;
+					double tangentLength = Math.sqrt(tx*tx+ty*ty+tz*tz);
+					if (tangentLength > 0) {
+						double angle = surfaceTensionContactAngleAtCell(index), sine = Math.sin(angle), cosine = Math.cos(angle);
+						// Stored interface normals point inward: n = sin(theta)*t - cos(theta)*n_wall.
+						normalX = sine*tx/tangentLength-cosine*wx;
+						normalY = sine*ty/tangentLength-cosine*wy;
+						normalZ = sine*tz/tangentLength-cosine*wz;
+					}
+				}
+			}
 			domain.tension.surfaceTensionNormalX[index] = normalX;
 			domain.tension.surfaceTensionNormalY[index] = normalY;
 			domain.tension.surfaceTensionNormalZ[index] = normalZ;
 		}
+	}
+	private double fixedLiquidContact(int cell,int x,int y,int z,int axis,int side) {
+		var cut = domain.geometry.cutCells;
+		double open = axis == 0 ? cut.xFaceOpen(x+side,y,z)
+				: axis == 1 ? cut.yFaceOpen(x,y+side,z) : cut.zFaceOpen(x,y,z+side);
+		if (open >= 1 || domain.pressurePhaseGeometry == null) return 0;
+		return (1-open)*domain.pressurePhaseGeometry.liquidFaceArea(cell,axis,side,cut);
 	}
 	double surfaceTensionContactAngleAtCell(int cell) {
 		if (domain.materialRegistry == null) return Math.PI / 2.0;
@@ -151,19 +175,27 @@ final class DomainFlowFields {
 	private double surfaceTensionNeighborNormal(int x, int y, int z, int dx, int dy, int dz, int component,
 			boolean liquidGasReflection) {
 		int nx = x + dx, ny = y + dy, nz = z + dz;
+		if (liquidGasReflection) {
+			int target = cellIndex(x,y,z), axis = dx != 0 ? 0 : dy != 0 ? 1 : 2;
+			double open = axis == 0 ? domain.geometry.cutCells.xFaceOpen(x+(dx>0?1:0),y,z)
+					: axis == 1 ? domain.geometry.cutCells.yFaceOpen(x,y+(dy>0?1:0),z)
+					: domain.geometry.cutCells.zFaceOpen(x,y,z+(dz>0?1:0));
+			if (!inside(nx,ny,nz)) open = 0;
+			if (open < 1) {
+				int sample = cellIndex(Math.clamp(nx,0,domain.sizeX-1),Math.clamp(ny,0,domain.sizeY-1),Math.clamp(nz,0,domain.sizeZ-1));
+				double local = cachedSurfaceTensionNormal(target,component);
+				boolean touching = fixedLiquidContact(target,x,y,z,axis,dx+dy+dz>0?1:0) > 0;
+				double wallNormal = component == axis ? (touching ? (dx+dy+dz)*Math.cos(surfaceTensionContactAngleAtCell(target)) : 0) : local;
+				double ghost = 2*wallNormal-local;
+				return open*cachedSurfaceTensionNormal(sample,component)+(1-open)*ghost;
+			}
+		}
 		if (inside(nx, ny, nz) && domain.geometry.solid[cellIndex(nx, ny, nz)]) {
 			return cachedSurfaceTensionNormal(cellIndex(x, y, z), component);
 		}
 		int target = cellIndex(x, y, z), sample = cellIndex(Math.min(domain.sizeX - 1, Math.max(0, nx)),
 				Math.min(domain.sizeY - 1, Math.max(0, ny)), Math.min(domain.sizeZ - 1, Math.max(0, nz)));
 		double value = cachedSurfaceTensionNormal(sample, component);
-		if (liquidGasReflection && !inside(nx, ny, nz) && surfaceTensionContactAngleAtCell(target) == Math.PI / 2
-				&& (domain.tension.surfaceTensionColor[sample] == 0 || surfaceTensionContactAngleAtCell(sample) == Math.PI / 2)
-				&& domain.geometry.cutCells.mask(target) == 0 && domain.geometry.cutCells.mask(sample) == 0
-				&& domain.domainCollision.effectiveOpenCellVolume(target) == 1 && domain.domainCollision.effectiveOpenCellVolume(sample) == 1) {
-			if (component == 0 && (nx < 0 || nx >= domain.sizeX) || component == 1 && (ny < 0 || ny >= domain.sizeY)
-					|| component == 2 && (nz < 0 || nz >= domain.sizeZ)) value = -value;
-		}
 		return value;
 	}
 	double cachedSurfaceTensionNormal(int cell, int component) {

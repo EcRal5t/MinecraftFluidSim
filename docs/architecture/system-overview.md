@@ -275,7 +275,8 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
   - 主要文件：
     - [SurfaceTensionWorkspace](../../solver/src/main/java/mmm/fluid/SurfaceTensionWorkspace.java)
     - [HeightFunctionCurvature](../../solver/src/main/java/mmm/fluid/HeightFunctionCurvature.java)
-    - [BodyForceStage](../../solver/src/main/java/mmm/fluid/BodyForceStage.java)
+    - [DomainFlowFields](../../solver/src/main/java/mmm/fluid/DomainFlowFields.java)：共同曲率与墙面接触角法向，毛细压差进入共同压力投影。
+    - [BodyForceStage](../../solver/src/main/java/mmm/fluid/BodyForceStage.java)：液液物相对的显式 CSF。
   - 验证选择器 / 参考：`surface-tension`；[界面离散](fluid-solver.md#plic表面张力与润湿)
 
 <a id="transport"></a>

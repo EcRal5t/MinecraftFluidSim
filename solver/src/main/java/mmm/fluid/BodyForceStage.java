@@ -9,7 +9,7 @@ import mmm.granular.SolidVolume;
 /**
  * Body-force stages of the substep, in pipeline order: porous damping of the previously
  * committed flow, gravity, thermal buoyancy and the solid-face
- * velocity enforcement. Liquid-gas, liquid-solid and liquid-pair surface forces join this stage in their own
+ * velocity enforcement. Liquid-pair surface forces join this stage in their own
  * slice; thermal buoyancy shares the per-cell carrier property workspace.
  */
 final class BodyForceStage {
@@ -99,46 +99,6 @@ final class BodyForceStage {
 			else continue;
 			domain.mac.velocityY[face] += (float) (scale * relative);
 		}
-	}
-
-	/** Tangential force obtained from the Young wall-energy density sigma_sl - sigma_sg. */
-	void applyLiquidSolidSurfaceEnergyForce(float dt) {
-		if (!domain.surfaceTensionActive) return;
-		float scale = dt / (domain.config.density() * domain.config.cellSize());
-		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 1; x < domain.sizeX; x++) {
-			int left = domain.domainFlowFields.cellIndex(x - 1, y, z), right = domain.domainFlowFields.cellIndex(x, y, z), face = domain.domainFlowFields.xFaceIndex(x, y, z);
-			applyWallEnergyFaceForce(left, right, face, 0, scale, domain.domainFlowFields.pressureXFaceOpen(x, y, z), domain.mac.velocityX);
-		}
-		for (int z = 0; z < domain.sizeZ; z++) for (int y = 1; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
-			int below = domain.domainFlowFields.cellIndex(x, y - 1, z), above = domain.domainFlowFields.cellIndex(x, y, z), face = domain.domainFlowFields.yFaceIndex(x, y, z);
-			applyWallEnergyFaceForce(below, above, face, 1, scale, domain.domainFlowFields.pressureYFaceOpen(x, y, z), domain.mac.velocityY);
-		}
-		for (int z = 1; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
-			int back = domain.domainFlowFields.cellIndex(x, y, z - 1), front = domain.domainFlowFields.cellIndex(x, y, z), face = domain.domainFlowFields.zFaceIndex(x, y, z);
-			applyWallEnergyFaceForce(back, front, face, 2, scale, domain.domainFlowFields.pressureZFaceOpen(x, y, z), domain.mac.velocityZ);
-		}
-	}
-
-	private void applyWallEnergyFaceForce(int first, int second, int face, int velocityAxis,
-	                                      float scale, float openArea, float[] velocity) {
-		if(domain.cellMacStage.isUnresolvedWallFace(velocityAxis,face))return;
-		if (!domain.domainFlowFields.carrierFaceActive(first, second, openArea)) return;
-		double firstPotential = domain.tension.wallSurfaceEnergyDensity[first]
-				* domain.tension.surfaceTensionColor[first] * tangentialWallArea(first, velocityAxis);
-		double secondPotential = domain.tension.wallSurfaceEnergyDensity[second]
-				* domain.tension.surfaceTensionColor[second] * tangentialWallArea(second, velocityAxis);
-		double difference = secondPotential - firstPotential;
-		if (difference == 0.0) return;
-		float densityScale = domain.domainFlowFields.carrierDensityScale(first, second);
-		velocity[face] += (float) (scale * densityScale * difference);
-	}
-
-	private double tangentialWallArea(int cell, int velocityAxis) {
-		double area = 0.0;
-		for (int wallNormalAxis = 0; wallNormalAxis < 3; wallNormalAxis++) {
-			if (wallNormalAxis != velocityAxis) area += domain.geometry.cutCells.solidWallArea(cell, wallNormalAxis);
-		}
-		return area;
 	}
 
 	/** Balanced-force CSF momentum for every immiscible liquid pair with a positive sigma12. */

@@ -121,7 +121,6 @@ final class MechanicalStepPipeline {
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		diagnosticStage = Stage.SURFACE_TENSION;
-		bodyForceStage.applyLiquidSolidSurfaceEnergyForce(dt);
 		bodyForceStage.applyLiquidPairSurfaceTensionForce(dt);
 		if (captureAudit) {
 			nextKineticEnergy = domain.domainStep.mechanicalGridKineticEnergyJoules();

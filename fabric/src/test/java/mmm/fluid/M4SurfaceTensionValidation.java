@@ -147,11 +147,12 @@ FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
 new FluidMaterial("mmm:test", config.density(), "mmm:test", sigma, contactAngleRadians)));
 domain.bindMaterialRegistry(registry);
 float[] fractions = new float[domain.cellCount];
-for (int z = 1; z <= 2; z++) for (int x = 4; x <= 7; x++)
-fractions[domain.domainFlowFields.cellIndex(x,1,z)] = 1;
+for (int z = 1; z <= 2; z++) for (int y = 1; y <= 2; y++) for (int x = 5; x <= 6; x++)
+fractions[domain.domainFlowFields.cellIndex(x,y,z)] = 1;
 domain.setVolumes(fractions);
 var initialVolume = domain.liquidCells.exactVolume(); long initialMass = domain.totalMassUnits();
-double outwardImpulse = initialWettingImpulse(domain), potential = 0, wallArea = 0, h = config.cellSize();
+double initialCenterX = domain.centerOfMassX(), outwardImpulse = Double.NaN;
+double potential = 0, wallArea = 0, h = config.cellSize();
 for (var stock : domain.liquidCells.physicalStocks())
 potential += stock.massKilograms()*config.gravity()*(stock.key().cell()/domain.sizeX%domain.sizeY+.5)*h;
 for (int cell = 0; cell < domain.cellCount; cell++) if (!domain.geometry.solid[cell])
@@ -162,6 +163,7 @@ double energyBudget = potential + sigma*(6*domain.unitScale.cubicMeters(initialV
 double peakKinetic = 0;
 for (int step = 0; step < steps; step++) {
 domain.domainStep.step();
+if (step == 0) outwardImpulse = outwardMomentumMoment(domain,initialCenterX);
 check(domain.liquidCells.exactVolume().equals(initialVolume) && domain.totalMassUnits() == initialMass,
 "contact-angle spreading changed exact mass or volume");
 double kinetic = domain.liquidKineticEnergyJoules();
@@ -179,19 +181,14 @@ return new DropletMetrics(weightedX2/volume-meanX*meanX,outwardImpulse,peakKinet
 FluidPhysicalAssertions.motion(domain).rmsSpeed());
 }
 
-/** Preview only the initial Young impulse, before pressure, gravity or shape evolution. */
-private static double initialWettingImpulse(FluidDomain domain) {
-domain.domainFlowFields.ensureGrid();
-double centerX = domain.centerOfMassX();
-domain.bodyForceStage.applyLiquidSolidSurfaceEnergyForce(domain.config.timeStep());
+/** Initial committed momentum records the combined capillary pressure and wall response. */
+private static double outwardMomentumMoment(FluidDomain domain, double centerX) {
 double outward = 0, h = domain.config.cellSize();
 for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x <= domain.sizeX; x++) {
 int face = domain.domainFlowFields.xFaceIndex(x,y,z);
-outward += (x*h-centerX)*domain.cellMacStage.massX[face]*domain.mac.velocityX[face];
+outward += (x*h-centerX)*domain.mac.momentumX[face];
 }
-// Restore the derived velocities through the existing committed-momentum interface.
-domain.cellMacStage.rebuildVelocity();
-check(Double.isFinite(outward),"initial Young impulse is not finite");
+check(Double.isFinite(outward),"initial capillary impulse is not finite");
 return outward;
 }
 
