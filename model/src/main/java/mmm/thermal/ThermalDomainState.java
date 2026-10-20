@@ -908,24 +908,17 @@ public final class ThermalDomainState {
 
 	/** Finite conduction on real carrier contacts supplied by the spatial discretization. */
 	public ThermalTransport.Stats stepCarrierConduction(
-			ThermalCarrierContext markers, List<ThermalCarrierTransport.Contact> contacts, double dtSeconds
+			ThermalCarrierTransport.Batch batch, List<ThermalCarrierTransport.Contact> contacts, double dtSeconds
 	) {
-		var owners = carrierAccess(markers);
-		double[] snapshot = new double[owners.carrierCount()];
-		for (int owner = 0; owner < snapshot.length; owner++) snapshot[owner] = owners.internalEnergy(owner);
-		try {
-			var result = ThermalCarrierTransport.step(owners, contacts, dtSeconds, transport.maximumSubsteps());
-			// The transport candidate already sums every changed carrier exactly; gas is unchanged.
-			var ledger = auditState.ledger().withHeatExchange(result.reservoirExchange())
-					.withRoundoff(result.roundoffResidual());
-			auditState.replace(ledger);
-			spatialObservationPrepared = false;
-			lastTransport = result;
-			return result;
-		} catch (RuntimeException failure) {
-			owners.setInternalEnergies(snapshot);
-			throw failure;
-		}
+		var result = ThermalCarrierTransport.solve(batch, contacts, dtSeconds, transport.maximumSubsteps());
+		var ledger = auditState.ledger().withHeatExchange(result.reservoirExchange())
+				.withRoundoff(result.roundoffResidual());
+		ledger.expectedInventory();
+		batch.commit();
+		auditState.replace(ledger);
+		spatialObservationPrepared = false;
+		lastTransport = result;
+		return result;
 	}
 
 	// ---- finite device delegation ----

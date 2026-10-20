@@ -18,21 +18,51 @@ public final class ThermalCarrierTransport {
 	}
 
 	private ThermalCarrierTransport() { }
+	/** One private carrier sample shared by spatial contacts, caloric solve and final publication. */
+	public static final class Batch implements ThermalCellGrid.CarrierAccess {
+		private final ThermalCellGrid.CarrierAccess owners;
+		private final ThermalMaterialDefinition[] materials;
+		private final double[] mass, base, energy, initialTemperature;
+		private boolean publish;
+		private Batch(ThermalCellGrid.CarrierAccess owners) {
+			this.owners = owners;
+			int count = owners.carrierCount();
+			materials = new ThermalMaterialDefinition[count];
+			mass = new double[count]; base = new double[count]; energy = new double[count];
+			initialTemperature = new double[count];
+			for (int owner = 0; owner < count; owner++) {
+				materials[owner] = owners.material(owner); mass[owner] = owners.mass(owner);
+				base[owner] = owners.baseEnergy(owner); energy[owner] = owners.internalEnergy(owner);
+				initialTemperature[owner] = ThermalCaloricInversion.owner(materials[owner], mass[owner], energy[owner], base[owner]).temperatureK();
+			}
+		}
+		@Override public int carrierCount() { return energy.length; }
+		@Override public int cell(int owner) { return owners.cell(owner); }
+		@Override public ThermalMaterialDefinition material(int owner) { return materials[owner]; }
+		@Override public double mass(int owner) { return mass[owner]; }
+		@Override public double volume(int owner) { return owners.volume(owner); }
+		@Override public double baseEnergy(int owner) { return base[owner]; }
+		@Override public double internalEnergy(int owner) { return energy[owner]; }
+		@Override public void setInternalEnergy(int owner, double value) { throw new UnsupportedOperationException("Conduction batch is private"); }
+		void commit() { if (publish) owners.setInternalEnergies(energy); }
+	}
+	public static Batch prepare(ThermalCellGrid.CarrierAccess owners) { return new Batch(owners); }
 
 	static ThermalTransport.Stats step(ThermalCellGrid.CarrierAccess owners, List<Contact> contacts,
 	                                 double dt, int maximumSubsteps) {
+		var batch = prepare(owners);
+		var result = solve(batch, contacts, dt, maximumSubsteps);
+		batch.commit();
+		return result;
+	}
+	static ThermalTransport.Stats solve(Batch batch, List<Contact> contacts, double dt, int maximumSubsteps) {
 		if (contacts == null || !(Double.isFinite(dt) && dt > 0))
 			throw new IllegalArgumentException("Invalid carrier conduction input");
 		ThermalCarrierContacts graph = contacts instanceof ThermalCarrierContacts packed ? packed : new ThermalCarrierContacts(contacts);
-		int n = owners.carrierCount();
-		var materials = new ThermalMaterialDefinition[n];
-		double[] mass = new double[n], base = new double[n], energy = new double[n];
-		double[] initialT = new double[n], degree = new double[n];
-			for (int p = 0; p < n; p++) {
-				materials[p] = owners.material(p); mass[p] = owners.mass(p); base[p] = owners.baseEnergy(p);
-				energy[p] = owners.internalEnergy(p);
-				initialT[p] = new ThermalContactExchange.Carrier(materials[p], mass[p], base[p], energy[p]).temperatureK();
-			}
+		int n = batch.carrierCount();
+		var materials = batch.materials;
+		double[] mass = batch.mass, base = batch.base, energy = batch.energy;
+		double[] initialT = batch.initialTemperature, degree = new double[n];
 		boolean exchangeRequired = false;
 		for (int i = 0; i < graph.size(); i++) {
 			int first = graph.first[i], second = graph.second[i]; double g = graph.conductance[i];
@@ -100,8 +130,7 @@ public final class ThermalCarrierTransport {
 			maximumChange = Math.max(maximumChange, Math.abs(t - initialT[p]));
 		}
 		SignedDyadic after = SignedDyadic.sum(energy);
-		// All prospective caloric states pass before the first real owner is edited.
-		owners.setInternalEnergies(energy);
+		batch.publish = true;
 		return new ThermalTransport.Stats(substeps, contacts.size(), maximumChange, maximumTransfer,
 				after.subtract(before).subtract(reservoir), reservoir);
 	}

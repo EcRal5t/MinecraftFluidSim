@@ -163,8 +163,10 @@ final class PressureFaceGraph {
 		int other=CellRemapMicroTopology.support(domain.geometry.cutCells.mask(neighbor),peer);
 		double fill=supportFill[8*cell+Integer.numberOfTrailingZeros(support)];
 		double peerFill=supportFill[8*neighbor+Integer.numberOfTrailingZeros(other)];
-		// p_mix = pi + f*J. Balanced CSF leaves -f_face grad(J); a dry
-		// neighbor uses the same interface curvature as its contacting liquid.
+		// -grad(p_mix) + J_face grad(f), p_mix=pi+f*J, gives
+		// -grad(pi)-f_face grad(J). Equal J cancels at a static interface;
+		// unequal wet-side J retains the shape-changing capillary load. A dry
+		// neighbor extends its contacting liquid's J across the same face.
 		double jump=fill>0?domain.tension.surfaceTensionPressure[cell]:peerFill>0?domain.tension.surfaceTensionPressure[neighbor]:0;
 		pressureAtMicro(cell,micro,axis,weight,.5*(fill+peerFill)*jump,consumer);
 	}

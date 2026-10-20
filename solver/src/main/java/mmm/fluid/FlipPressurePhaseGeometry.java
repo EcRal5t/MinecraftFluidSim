@@ -24,6 +24,7 @@ final class FlipPressurePhaseGeometry {
 	private double[] microFraction, microPoreScale, microOffset;
 	private float[] microNormalX, microNormalY, microNormalZ;
 	private PlicPlaneOffset.Result[] microBracket;
+	private PhaseOccupancyState microOccupancy;
 	private final double[] faceX = new double[16], faceY = new double[16];
 	private final double[] clippedX = new double[16], clippedY = new double[16];
 
@@ -67,6 +68,11 @@ final class FlipPressurePhaseGeometry {
         rebuildOccupancy(state,cut,pore);System.arraycopy(exact,0,poreVolumes,0,exact.length);
     }
     void rebuildOccupancy(PhaseOccupancyState state,FlipCutCellGeometry cut,double[] pore) {
+		rebuildOccupancy(state,cut,pore,null);
+	}
+	/** Identical local inventory and six-neighbour inputs share the same immutable PLIC plane. */
+	void rebuildOccupancy(PhaseOccupancyState state,FlipCutCellGeometry cut,double[] pore,FlipPressurePhaseGeometry captured) {
+		if(captured==this)throw new IllegalArgumentException("Occupancy reconstruction requires a distinct source");
         int count=8*fraction.length;
         if(microFraction==null||microFraction.length!=count){microFraction=new double[count];microPoreScale=new double[count];microOffset=new double[count];microNormalX=new float[count];microNormalY=new float[count];microNormalZ=new float[count];microBracket=new PlicPlaneOffset.Result[count];}
         java.util.Arrays.fill(microOffset,0);java.util.Arrays.fill(microNormalX,0);java.util.Arrays.fill(microNormalY,0);java.util.Arrays.fill(microNormalZ,0);java.util.Arrays.fill(microBracket,null);
@@ -77,6 +83,17 @@ final class FlipPressurePhaseGeometry {
         }
 		for(int cell=0;cell<fraction.length;cell++){
 			int x=cell%sizeX,y=cell/sizeX%sizeY,z=cell/(sizeX*sizeY);double center=fraction[cell];
+			if(center>0&&center<1&&captured!=null&&sameOccupancyInputs(cell,x,y,z,state,pore,captured)){
+				copyCell(captured,cell);
+				int p=8*cell;
+				System.arraycopy(captured.microFraction,p,microFraction,p,8);
+				System.arraycopy(captured.microNormalX,p,microNormalX,p,8);
+				System.arraycopy(captured.microNormalY,p,microNormalY,p,8);
+				System.arraycopy(captured.microNormalZ,p,microNormalZ,p,8);
+				System.arraycopy(captured.microOffset,p,microOffset,p,8);
+				System.arraycopy(captured.microBracket,p,microBracket,p,8);
+				continue;
+			}
 			double nx=coarseSample(x-1,y,z,center)-coarseSample(x+1,y,z,center);
 			double ny=coarseSample(x,y-1,z,center)-coarseSample(x,y+1,z,center);
 			double nz=coarseSample(x,y,z-1,center)-coarseSample(x,y,z+1,center);
@@ -98,7 +115,23 @@ final class FlipPressurePhaseGeometry {
 				}
 			}
 		}
-		revision=Math.addExact(revision,1);
+		microOccupancy=state;revision=Math.addExact(revision,1);
+	}
+	private boolean sameOccupancyInputs(int cell,int x,int y,int z,PhaseOccupancyState state,double[] pore,FlipPressurePhaseGeometry old){
+		if(old.microOccupancy==null||collisionMask(cell)!=old.collisionMask(cell)||fraction[cell]!=old.fraction[cell])return false;
+		for(int bit=0;bit<8;bit++)if(8*pore[8*cell+bit]!=old.microPoreScale[8*cell+bit])return false;
+		for(int support:CellRemapMicroTopology.components(collisionMask(cell))){
+			double current=0,previous=0;
+			for(int bits=support;bits!=0;bits&=bits-1){int p=8*cell+Integer.numberOfTrailingZeros(bits);current+=state.liquidVolume(p);previous+=old.microOccupancy.liquidVolume(p);}
+			if(current!=previous)return false;
+		}
+		double center=fraction[cell];
+		return coarseSample(x-1,y,z,center)==old.coarseSample(x-1,y,z,center)
+				&&coarseSample(x+1,y,z,center)==old.coarseSample(x+1,y,z,center)
+				&&coarseSample(x,y-1,z,center)==old.coarseSample(x,y-1,z,center)
+				&&coarseSample(x,y+1,z,center)==old.coarseSample(x,y+1,z,center)
+				&&coarseSample(x,y,z-1,center)==old.coarseSample(x,y,z-1,center)
+				&&coarseSample(x,y,z+1,center)==old.coarseSample(x,y,z+1,center);
 	}
 	/** Unresolved small phases use a volume-preserving layer in their real fixed support. */
 	private static PlicPlaneOffset.Result horizontalLayer(int support, double target) {
@@ -156,6 +189,7 @@ final class FlipPressurePhaseGeometry {
 				|| sameLocalStock == null || sameLocalStock.length != fraction.length))
 			throw new IllegalArgumentException("Captured PLIC requires a distinct matching frame and local stock checks");
 		microFraction=microPoreScale=microOffset=null;microNormalX=microNormalY=microNormalZ=null;microBracket=null;
+		microOccupancy=null;
 		PhaseLiquidGeometryEdit[] overlay = edits.isEmpty() ? null : new PhaseLiquidGeometryEdit[fraction.length];
 		for (var edit : edits) {
 			if (edit == null || edit.cell() >= fraction.length || overlay[edit.cell()] != null
@@ -253,6 +287,7 @@ final class FlipPressurePhaseGeometry {
 			microOffset=source.microOffset.clone();microNormalX=source.microNormalX.clone();microNormalY=source.microNormalY.clone();
 			microNormalZ=source.microNormalZ.clone();microBracket=source.microBracket.clone();}
 		revision = source.revision;
+		microOccupancy=source.microOccupancy;
 	}
 	FlipPressurePhaseGeometry copy() { return new FlipPressurePhaseGeometry(this); }
 

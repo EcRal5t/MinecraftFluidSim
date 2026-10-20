@@ -103,14 +103,14 @@ public final class LiquidVolumeTransportValidation {
 				d.unitScale.massUnitsForNormalized(62.5),null,0,false))).commit();d.markCellInventoryChanged();d.domainFlowFields.ensureGrid();
 		d.mac.velocityX[d.domainFlowFields.xFaceIndex(1,0,0)]=.5F;d.mac.velocityY[d.domainFlowFields.yFaceIndex(0,1,0)]=.5F;d.mac.velocityZ[d.domainFlowFields.zFaceIndex(0,0,1)]=.5F;d.cellMacStage.publishMomentum();
 
-		var flux=d.cellMacStage.prepareLiquid(.1F).volumeFlux();double outgoing=0;
-		for(var port:flux.ports())if(port.donorCell()==0&&port.donorSupport()==128)outgoing+=port.volume().toDouble();
-		require(outgoing>0&&outgoing<.0625
-				&&Math.abs(flux.resultingVolumes()[0].toDouble()+outgoing-.0625)<1e-12,
+		var plan=d.cellMacStage.prepareLiquid(.1F).inventory();var outgoing=SignedDyadic.ZERO;
+		for(var transfer:plan.transfers())if(transfer.source().cell()==0&&transfer.source().supportMask()==128)outgoing=outgoing.add(transfer.volume());
+		require(outgoing.signum()>0&&outgoing.compareTo(SignedDyadic.of(.0625))<0
+				&&plan.future().exactCellVolume(0).add(outgoing).equals(SignedDyadic.of(.0625)),
 				"Geometric phase outflow exceeded its actual connected donor or disagreed with the cell endpoint");
 		d.mac.velocityX[d.domainFlowFields.xFaceIndex(1,0,0)]=-.5F;d.mac.velocityY[d.domainFlowFields.yFaceIndex(0,1,0)]=-.5F;d.mac.velocityZ[d.domainFlowFields.zFaceIndex(0,0,1)]=-.5F;d.cellMacStage.publishMomentum();
-		var reversed=d.cellMacStage.prepareLiquid(.1F).volumeFlux();
-		require(reversed.ports().isEmpty()&&reversed.resultingVolumes()[0].equals(SignedDyadic.of(.0625)),
+		var reversed=d.cellMacStage.prepareLiquid(.1F).inventory();
+		require(reversed.transfers().isEmpty()&&reversed.future().exactCellVolume(0).equals(SignedDyadic.of(.0625)),
 				"A velocity reversal drained liquid from the actual dry donor");
 	}
 	private static void saturatedInteriorCannotCreateVacuum(){

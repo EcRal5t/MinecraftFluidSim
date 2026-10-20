@@ -156,11 +156,16 @@ public final class LiquidCellInventoryValidation {
 		waterRoutes.add(new LiquidCellInventory.TransportRoute(-1,water,water,waterRemaining));
 		oilRoutes.add(new LiquidCellInventory.TransportRoute(-1,oil,oil,oilRemaining));
 		var plan = cells.planRoutes(List.of(new LiquidCellInventory.SourceRoutes(cells.stock(water),waterRoutes),
-				new LiquidCellInventory.SourceRoutes(cells.stock(oil),oilRoutes)),null);
+				new LiquidCellInventory.SourceRoutes(cells.stock(oil),oilRoutes)),(source,masses,mixtures,remainder,energies)->{
+			for(int i=0;i<masses.length;i++)if(i!=remainder)energies[i]=source.internalEnergy()*(masses[i]/(double)source.massUnits());
+			// The provider's remainder slot is ignored and assigned by the inventory.
+			energies[remainder]=Double.NaN;
+		});
 		require(cells.snapshot().rows().equals(initial.rows()), "Flux preparation mutated source inventory");
 		plan.commit();
 		require(cells.massUnits() == 20 && cells.exactVolume().equals(SignedDyadic.of(1))
 				&& plan.energyChange().equals(plan.energyRoundoff())
+				&&Math.abs(plan.energyRoundoff().toDouble())<=32*Math.ulp(.2)
 				&& cells.exactInternalEnergy().subtract(SignedDyadic.of(.1).add(SignedDyadic.of(-.2))).equals(plan.energyRoundoff()),
 				"Six-face transport did not preserve mass, volume and carried U");
 		long species = 0;
@@ -205,11 +210,11 @@ public final class LiquidCellInventoryValidation {
 		var before=cells.snapshot();
 		var energyBefore=cells.exactInternalEnergy();
 		var prepared=domain.cellMacStage.prepareLiquid(.1F);
-		var flux=prepared.volumeFlux();var plan=prepared.inventory();
+		var plan=prepared.inventory();
 		require(!prepared.inventory().transfers().isEmpty()&&cells.snapshot().rows().equals(before.rows()),
 				"Shared face preparation bypassed transport or modified its source");
 		plan.commit();
-		for (int cell = 0; cell < 12; cell++) require(cells.exactCellVolume(cell).equals(flux.resultingVolumes()[cell])
+		for (int cell = 0; cell < 12; cell++) require(cells.exactCellVolume(cell).equals(plan.future().exactCellVolume(cell))
 				&& cells.exactCellVolume(cell).compareTo(SignedDyadic.of(1)) <= 0, "Shared face and material inventory disagree on future volume");
 		require(cells.massUnits() == 100 && cells.exactVolume().equals(SignedDyadic.of(1))
 				// Joint MAC preparation includes mixing and this fixture's wall response heat.

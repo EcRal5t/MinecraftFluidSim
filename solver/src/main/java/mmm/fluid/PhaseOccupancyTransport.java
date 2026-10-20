@@ -183,7 +183,8 @@ final class PhaseOccupancyTransport {
 			cut = new FlipCutCellGeometry(domain.sizeX, domain.sizeY, domain.sizeZ);
 			cut.restoreMicroMasks(masks);
 		}
-		workspace.rebuildOccupancy(new PhaseOccupancyState(liquid), cut, pore);
+		workspace.rebuildOccupancy(new PhaseOccupancyState(liquid), cut, pore,
+				domain.gasState.frame==null?null:domain.gasState.frame.phase());
 		// Persist the reconstruction input. The prepared frame and a cold restore must
 		// derive the same PLIC, rather than invert its approximate integrated output again.
 		return liquid;

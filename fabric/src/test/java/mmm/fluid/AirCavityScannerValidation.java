@@ -423,7 +423,20 @@ public final class AirCavityScannerValidation {
 	}
 
 	private static void validateSingleGasSuccessorWeight() {
-		var config=new FluidSolverConfig(.5F,1000,0,.125F,128,1e-6F,.002F,0);
+		double h=.5, rho=1000, temperature=300, gasCv=718;
+		double pressure=mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA;
+		double plugVolume=h*h*h, chamberVolume=3*plugVolume, liquidMass=rho*plugVolume;
+		double gamma=1+pressure/(1.2*mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K*gasCv);
+		// Give the piston enough inertia to compress one chamber and expand the
+		// other by its own volume, including the resolved donor-mixing losses.
+		double compressionWork=pressure*chamberVolume/(gamma-1)
+				*(Math.pow(chamberVolume/(chamberVolume-plugVolume),gamma-1)-1);
+		double expansionWork=pressure*chamberVolume/(gamma-1)
+				*(Math.pow(chamberVolume/(chamberVolume+plugVolume),gamma-1)-1);
+		double initialSpeed=Math.sqrt(16*(compressionWork+expansionWork)/liquidMass);
+		int steps=8;
+		float dt=(float)(2*h/(steps*initialSpeed));
+		var config=new FluidSolverConfig((float)h,(float)rho,0,dt,128,1e-6F,.002F,0);
 		var d=new FluidDomain(7,3,3,config,128);d.sealDomainBoundary();
 		var gas=new mmm.fluid.air.GasRegistry(List.of(
 				new mmm.fluid.air.GasComponentDefinition("test:left",1.2,0,List.of(),List.of()),
@@ -441,9 +454,10 @@ public final class AirCavityScannerValidation {
 		int left=d.airNodeAt(0,1,1),right=d.airNodeAt(6,1,1);
 		check(left>0&&right>0&&left!=right&&topology.nodes().size()==2,
 				"A full-micro liquid plug failed to separate its two finite gas chambers");
-		// Low initial pressure gives an inertia-dominated one-cell translation, with labelled gas on each side.
-		var a=new mmm.fluid.air.GasInventory(List.of(new mmm.fluid.air.GasComponentAmount("test:left",1000,12000,List.of(),12000)));
-		var b=new mmm.fluid.air.GasInventory(List.of(new mmm.fluid.air.GasComponentAmount("test:right",1000,12000,List.of(),12000)));
+		// Standard-state volume is stock; the chamber's actual geometric capacity
+		// and its temperature determine pressure through the same production EOS.
+		var a=labelledGasAtPressure("test:left",gas,d.gasBoundary().availableVolume(left),temperature,pressure);
+		var b=labelledGasAtPressure("test:right",gas,d.gasBoundary().availableVolume(right),temperature,pressure);
 		var nodes=new java.util.ArrayList<mmm.fluid.air.GasStateSnapshot.Node>();
 		for(int ordinal=1;ordinal<=topology.nodes().size();ordinal++)nodes.add(new mmm.fluid.air.GasStateSnapshot.Node(
 				topology.nodes().get(ordinal-1).topologyKey(),ordinal==left?a:b));
@@ -463,14 +477,15 @@ public final class AirCavityScannerValidation {
 				"mmm:water",300,0,0,List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,4184))));
 		for(String component:List.of("test:left","test:right"))definitions.add(new mmm.thermal.ThermalMaterialDefinition(component,
 				mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,component,300,0,0,
-				List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,718))));
-		d.bindThermal(new mmm.thermal.ThermalRegistry(definitions),liquids,300);
+				List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,gasCv))));
+		d.bindThermal(new mmm.thermal.ThermalRegistry(definitions),liquids,temperature);
 		d.domainFlowFields.ensureGrid();
-		for(int face=0;face<d.mac.velocityX.length;face++)if(d.cellMacStage.massX[face]>0)d.mac.velocityX[face]=.5F;
+		for(int face=0;face<d.mac.velocityX.length;face++)if(d.cellMacStage.massX[face]>0)d.mac.velocityX[face]=(float)initialSpeed;
 		d.cellMacStage.publishMomentum();
 		var mass=d.liquidCells.massUnits();var volume=d.liquidCells.exactVolume();
 		var expectedGas=mmm.fluid.air.GasAuditLedger.of(a.merge(b));
-		for(int step=0;step<8;step++) {
+		double maximumPosition=3.5;
+		for(int step=0;step<steps;step++) {
 			d=new CpuFluidSolverBackend().evaluate(new FluidStepRequest(step,d.captureAuthoritativeState(),List.of(),false,0,true)).claimPreparedCpuDomain();
 			var snapshot=d.exportGasState("");
 			check(d.gasBoundary().sealedInventory().equals(expectedGas)&&d.gasBoundary().auditClosed()
@@ -487,15 +502,26 @@ public final class AirCavityScannerValidation {
 			check(d.liquidCells.massUnits()==mass&&d.liquidCells.exactVolume().equals(volume)
 					&&d.exactInternalEnergy().equals(d.thermalAudit().expectedInventory()),
 					"Moving plug lost liquid inventory or its thermal audit");
+			double moment=0;
+			for(var stock:d.liquidCells.stocks())moment+=(stock.key().cell()%7+.5)*stock.massUnits();
+			maximumPosition=Math.max(maximumPosition,moment/mass);
 			if(step==3) {
 				var state=d.captureAuthoritativeState();
 				d=FluidDomain.restoreAuthoritativeState(coldState(state));
 				FluidDomainStateAssertions.assertSameState(state,d.captureAuthoritativeState(),"Moving plug cold restore");
 			}
 		}
-		double moment=0;
-		for(var stock:d.liquidCells.stocks())moment+=(stock.key().cell()%7+.5)*stock.massUnits();
-		check(moment/mass>4.25,"The inertia-driven liquid plug did not advance through its original cell face");
+		// A sealed gas spring may reverse the piston after it crosses the face.
+		check(maximumPosition>4.25,"The inertia-driven liquid plug did not advance through its original cell face");
+	}
+	private static mmm.fluid.air.GasInventory labelledGasAtPressure(String component,mmm.fluid.air.GasRegistry registry,
+			double actualVolume,double temperature,double absolutePressure){
+		double standardVolume=actualVolume*absolutePressure/mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA
+				*mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K/temperature;
+		long nanos=mmm.fluid.air.AirNetwork.nanos(standardVolume);
+		long mass=mmm.units.Mass.fromKilograms(registry.component(component).standardDensityKgPerCubicMeter()
+				*mmm.fluid.air.AirNetwork.cubicMeters(nanos));
+		return new mmm.fluid.air.GasInventory(List.of(new mmm.fluid.air.GasComponentAmount(component,nanos,mass,List.of(),mass)));
 	}
 
 	/** Value-only state forces reconstruction from saved occupancy instead of a prepared runtime graph. */

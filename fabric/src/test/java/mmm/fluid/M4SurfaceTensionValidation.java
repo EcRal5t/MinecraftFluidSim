@@ -336,6 +336,7 @@ FluidSolverConfig config = new FluidSolverConfig(
 200, 1.0E-6F, 2.0E-3F, 0.80F
 );
 FluidDomain domain = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
+FluidDomain zeroTension = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
 FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
 new FluidMaterial("mmm:test", 1_000.0, "mmm:test", 0.0728, Math.PI / 2.0)));
 domain.setVolume(2, 2, 3, 1.0F);
@@ -346,18 +347,25 @@ domain.setVolume(5, 2, 3, 1.0F);
 domain.setVolume(6, 2, 3, 1.0F);
 domain.setVolume(5, 3, 3, 0.5F);
 domain.setVolume(6, 3, 3, 0.5F);
+for(var stock:domain.liquidCells.stocks()){
+int cell=stock.key().cell();zeroTension.setVolume(cell%8,cell/8%8,cell/64,(float)stock.volumeFraction());
+}
 for (int particle = 0; particle < domain.particleCount(); particle++) {
 domain.domainCollision.setMarkerMaterial(particle, registry, 0);
 }
 double exactVolume = domain.totalVolume();
 double exactMass = domain.totalMass();
+double peakCapillaryKinetic=0,peakZeroKinetic=0;
 for (int step = 0; step < 20; step++) {
-FluidDomain.StepStats stats = domain.domainStep.step();
-check(stats.relativeVolumeError() <= 1.0E-7F, "surface-tension merge/breakup changed exact volume");
-check(stats.relativeMassError() <= 1.0E-12, "surface-tension merge/breakup changed exact mass");
+domain.domainStep.step();zeroTension.domainStep.step();
 check(domain.totalVolume() == exactVolume && domain.totalMass() == exactMass,
 "surface-tension merge/breakup changed physical ledgers");
+check(zeroTension.totalVolume()==exactVolume&&zeroTension.totalMass()==exactMass,"zero-tension control changed physical ledgers");
+peakCapillaryKinetic=Math.max(peakCapillaryKinetic,domain.liquidKineticEnergyJoules());
+peakZeroKinetic=Math.max(peakZeroKinetic,zeroTension.liquidKineticEnergyJoules());
 }
+check(Double.isFinite(peakCapillaryKinetic)&&peakCapillaryKinetic>peakZeroKinetic,
+"A nonuniform-curvature interface had no mechanical response relative to its zero-tension control");
 }
 
 /** Full-cell spherical droplet; all marker cells are exactly full, so the capacity constraint stays inactive. */

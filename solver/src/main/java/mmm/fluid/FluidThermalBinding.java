@@ -26,22 +26,14 @@ final class FluidThermalBinding {
 		var thermal = domain.thermalState;
 		var function = thermal.stateFunction();
 		var chemistry = domain.liquidCells.chemicalRegistry();
-		return (source, masses, mixtures) -> {
-			var energies = new double[masses.length];
-			if (source.massUnits() == 0) return energies;
+		return (source, masses, mixtures, largest, energies) -> {
 			int material = thermal.thermalMaterialHandleForFluid(source.key().material());
-			int largest = 0;
-			for (int i = 1; i < masses.length; i++) if (masses[i] > masses[largest]) largest = i;
 			double sourceReference = function.baseEnergy(material, source.massKilograms(), source.mixture(), chemistry);
 			double sensibleEnergy = source.internalEnergy()-sourceReference;
-			double assigned=0,error=0;
 			for (int i = 0; i < masses.length; i++) if (i != largest && masses[i] > 0) {
 				double reference = function.baseEnergy(material, Mass.kilograms(masses[i]), mixtures[i], chemistry);
 				energies[i] = reference+sensibleEnergy*(masses[i]/(double)source.massUnits());
-				double corrected=energies[i]-error,next=assigned+corrected;error=(next-assigned)-corrected;assigned=next;
 			}
-			energies[largest] = source.internalEnergy()-assigned;
-			return energies;
 		};
 	}
 

@@ -31,10 +31,7 @@ final class ConservativeLiquidFlux {
 	private GasVolumeAllocation allocation;
 	private GasCapacityGroups gasCapacityGroups;
 	private record GasCapacityGroups(int[] receiverGroup,SignedDyadic[] upper,int[] nodeGroup) { }
-	private final SignedDyadic[] after;
 	private long[] targetOccupied;
-	record Port(int face, int donorCell, int receiverCell, int donorSupport, int receiverSupport, SignedDyadic volume) {
-	}
 
 	/** Builds the shared coarse face indexing once. */
 	ConservativeLiquidFlux(FluidDomain domain) {
@@ -48,7 +45,6 @@ final class ConservativeLiquidFlux {
 		right = new int[physicalFaceCount];
 		axis = new int[physicalFaceCount];
 		flux = new double[physicalFaceCount];
-		after = new SignedDyadic[cellCount];
 		coarseFaceAt = new int[6 * cellCount];
 		pressureFace = new int[physicalFaceCount];
 		Arrays.fill(coarseFaceAt, - 1);
@@ -453,7 +449,7 @@ final class ConservativeLiquidFlux {
 		return prepared;
 	}
 
-	GasVolumeAllocation gasAllocation(LiquidCellInventory future) {
+	GasVolumeAllocation gasAllocation() {
 		return allocation;
 	}
 
@@ -471,22 +467,6 @@ final class ConservativeLiquidFlux {
 			preparePlan(0, occupied, source,null);
 		}
 	}
-
-	List<Port> ports() {
-		var list = new ArrayList<Port>();
-		for (var t : prepared.transfers()) list.add(new Port(t.face(), t.source().cell(), t.target().cell(), t.source().supportMask(), t.target().supportMask(), t.volume()));
-		return list;
-	}
-
-	SignedDyadic[] resultingVolumes() {
-        for(int cell=0;cell<cellCount;cell++)after[cell]=prepared.future().exactCellVolume(cell);
-		return after;
-	}
-
-
-
-
-
 
 	static final class CapacityUnavailable extends IllegalStateException {
 		CapacityUnavailable(String message) {

@@ -15,7 +15,7 @@ import java.util.Arrays;
  *
  * <p>The arrays are fixed-capacity scratch. Nothing here is authoritative and nothing here is
  * persisted: the workspace is rebuilt from the marker grid, the world material definitions and the
- * authoritative thermal carriers, and a restored or candidate domain rebuilds it from its own state.
+	 * authoritative thermal carriers, and a restored or candidate domain rebuilds it from its own state.
  */
 final class LiquidCarrierProperties {
 	/** Cell key of the derived arrays; rebuilt whenever any component advances. */
@@ -67,6 +67,8 @@ final class LiquidCarrierProperties {
 		if (buoyancyPrepared) return;
 		Arrays.fill(relativeBuoyancy, 0.0);
 		Arrays.fill(observationMass, 0.0);
+		// The standalone liquid has constant density and no expansion law.
+		if (thermal == null || materials == null) { buoyancyPrepared = true; return; }
 		for (int marker = 0; marker < markers.markerCount(); marker++) {
 			int cell=markers.cell(marker);double mass=markers.mass(marker);
 			if (!(mass > 0)) continue;
@@ -132,7 +134,7 @@ final class LiquidCarrierProperties {
 			density[cell] = grid.cellDensity[cell];
 			int handle = domain.liquidCarrierMaterialByCell == null ? -1
 					: domain.liquidCarrierMaterialByCell[cell];
-			boolean wet = handle >= 0 && grid.cellStockMass[cell] > 0 && grid.stockCount[cell] > 0;
+			boolean wet = grid.cellStockMass[cell] > 0 && grid.stockCount[cell] > 0;
 			if (!wet) {
 				liquid[cell] = false;
 				materialHandle[cell] = -1;
@@ -142,23 +144,23 @@ final class LiquidCarrierProperties {
 				maximumReynolds[cell] = AIR_MAXIMUM_REYNOLDS;
 				continue;
 			}
-			String materialId = materials.material(handle).id();
+			String materialId = materials == null ? null : materials.material(handle).id();
 			double cellTemperature = thermal == null ? MaterialRegistry.STANDARD_TEMPERATURE_K
 					: thermal.phaseScanTemperatureInCell(cell);
 			// Positive liquid mass carries heat independently of optional viscosity data.
 			if (!Double.isFinite(cellTemperature)) {
 				throw new IllegalStateException("Liquid carrier cell " + cell
-						+ " has no derived temperature for material " + materialId);
+						+ " has no derived temperature for " + (materialId == null ? "the standalone liquid" : materialId));
 			}
-			double mu = definitions == null ? 0 : definitions.dynamicViscosityExtendingAt(materialId, cellTemperature);
+			double mu = definitions == null || materialId == null ? 0 : definitions.dynamicViscosityExtendingAt(materialId, cellTemperature);
 			liquid[cell] = true;
-			materialHandle[cell] = handle;
+			materialHandle[cell] = materials == null ? -1 : handle;
 			temperatureK[cell] = cellTemperature;
 			viscosityPascalSeconds[cell] = mu;
-			GranularCarrier carrier = granular == null ? null
+			GranularCarrier carrier = granular == null || materialId == null ? null
 					: granular.registry.carrier(granular.registry.carrierHandle(materialId));
 			maximumReynolds[cell] = carrier == null ? AIR_MAXIMUM_REYNOLDS : carrier.maximumReynolds();
-			if (definitions != null && !definitions.viscosityDomainContains(materialId, cellTemperature)) {
+			if (definitions != null && materialId != null && !definitions.viscosityDomainContains(materialId, cellTemperature)) {
 				extrapolatedCells++;
 				if (sampleMaterialId == null) {
 					sampleMaterialId = materialId;

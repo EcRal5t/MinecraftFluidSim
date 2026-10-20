@@ -174,7 +174,7 @@ final class PhaseQuantitySettlement {
             // receiver loads are the existing flow, not a second inventory sum.
             for(int r=0;r<amount.length;r++){
                 routeEdge[r]=edges;
-                pair(firstSource+raw.source[r],receiver(raw.target[r]),raw.volume[raw.source[r]].subtract(amount[r]),amount[r]);
+                pair(firstSource+raw.source[r],receiver(raw.target[r]),null,amount[r]);
             }
             for(int i=0;i<receivers;i++){int slot=receiverSlots[i];balance[receiverVertex[slot]]=value(load[slot]);}
             for(int g=0;g<groups;g++)add(firstGroup+g,pool,groupHigh[g],min(groupLoad[g],groupHigh[g]));
@@ -214,7 +214,10 @@ final class PhaseQuantitySettlement {
             int source=vertex-firstSource;if(source<0||source>=raw.sources||expanded[source])return;
             expanded[source]=true;int first=raw.size;alternatives.accept(source);
             if(routeEdge.length<raw.size)routeEdge=Arrays.copyOf(routeEdge,Math.max(raw.size,2*routeEdge.length));
-            for(int r=first;r<raw.size;r++)routeEdge[r]=add(vertex,receiver(raw.target[r]),raw.volume[source],SignedDyadic.ZERO);
+            for(int r=first;r<raw.size;r++){
+                int target=receiver(raw.target[r]);routeEdge[r]=edges;
+                pair(vertex,target,null,SignedDyadic.ZERO);
+            }
         }
         void solve(){
             while(levels()){
@@ -245,7 +248,7 @@ final class PhaseQuantitySettlement {
             // another full search; exploring beyond it opens irrelevant pores.
             while(first<last&&(level[1]<0||level[queue[first]]<level[1])){
                 int vertex=queue[first++];expand(vertex);
-                for(int e=head[vertex];e>=0;e=next[e])if(remaining[e].signum()>0&&level[to[e]]<0){
+                for(int e=head[vertex];e>=0;e=next[e])if(positive(remaining[e])&&level[to[e]]<0){
                     int target=to[e];level[target]=level[vertex]+1;
                     if(target!=1)queue[last++]=target;
                 }
@@ -257,15 +260,28 @@ final class PhaseQuantitySettlement {
             while(depth>=0){
                 int vertex=pathVertex[depth];
                 if(vertex==1){
-                    SignedDyadic amount=null;for(int i=0;i<depth;i++)amount=amount==null?remaining[pathEdge[i]]:min(amount,remaining[pathEdge[i]]);
-                    for(int i=0;i<depth;i++){int edge=pathEdge[i];remaining[edge]=remaining[edge].subtract(amount);remaining[edge^1]=remaining[edge^1].add(amount);}return true;
+                    SignedDyadic amount=null;
+                    for(int i=0;i<depth;i++){
+                        var capacity=remaining[pathEdge[i]];
+                        if(capacity!=null)amount=amount==null?capacity:min(amount,capacity);
+                    }
+                    for(int i=0;i<depth;i++){
+                        int edge=pathEdge[i];
+                        if(remaining[edge]!=null)remaining[edge]=remaining[edge].subtract(amount);
+                        if(remaining[edge^1]!=null)remaining[edge^1]=remaining[edge^1].add(amount);
+                    }
+                    return true;
                 }
-                int edge=cursor[vertex];while(edge>=0&&(remaining[edge].signum()<=0||level[to[edge]]!=level[vertex]+1))edge=next[edge];cursor[vertex]=edge;
+                int edge=cursor[vertex];while(edge>=0&&(!positive(remaining[edge])||level[to[edge]]!=level[vertex]+1))edge=next[edge];cursor[vertex]=edge;
                 if(edge<0){level[vertex]=-1;if(depth==0)return false;depth--;cursor[pathVertex[depth]]=next[pathEdge[depth]];}
                 else{pathEdge[depth]=edge;pathVertex[++depth]=to[edge];}
             }
             return false;
         }
+        // A donor can only be reached by withdrawing an existing assigned share.
+        // Its fixed total and nonnegative reverse flows already bound every route;
+        // null denotes the redundant unbounded forward reassignment capacity.
+        private static boolean positive(SignedDyadic capacity){return capacity==null||capacity.signum()>0;}
         SignedDyadic amount(int route){return remaining[routeEdge[route]^1];}
     }
 }

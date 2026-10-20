@@ -250,7 +250,7 @@ final class CellMacStage {
 	PreparedLiquid prepareLiquid(ConservativeLiquidFlux flux){return prepareLiquid(flux,domain.liquidCells);}
 	PreparedLiquid prepareLiquid(ConservativeLiquidFlux flux,LiquidCellInventory source){
 		var inventory=flux.prepareInventory(source);
-		return new PreparedLiquid(inventory,flux,flux.gasAllocation(inventory.future()));
+		return new PreparedLiquid(inventory,flux,flux.gasAllocation());
 	}
 	void transport(float dt) {
 		var liquid = prepareLiquid(dt);

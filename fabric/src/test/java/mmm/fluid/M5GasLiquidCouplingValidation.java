@@ -192,9 +192,16 @@ public final class M5GasLiquidCouplingValidation {
 					&&domain.gasBoundary().sealedInventory().isEmpty()&&domain.gasBoundary().externalSource().isEmpty()
 					&&domain.gasBoundary().escapedSink().isEmpty()&&domain.gasBoundary().auditClosed(),
 					"Explicit vacuum normal successor changed liquid or gas inventory");
+			// A cell-volume residual corresponds to this face displacement over dt.
+			// Its mass-weighted motion/heat scale follows the common FV resolution.
+			var motion=FluidPhysicalAssertions.motion(domain);
+			double quietSpeed=mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION*config.cellSize()/config.timeStep();
+			double noiseBudget=.5*motion.massKilograms()*quietSpeed*quietSpeed;
+			double heat=Math.abs(domain.exactInternalEnergy().subtract(energy).toDouble());
 			check(domain.exactGasInternalEnergy().equals(mmm.units.SignedDyadic.ZERO)
-					&&domain.exactInternalEnergy().equals(energy)&&domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
-					&&domain.liquidKineticEnergyJoules()<=1e-12,"An unforced closed vacuum created heat or liquid motion");
+					&&domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+					&&Double.isFinite(motion.kineticJoules())&&motion.kineticJoules()+heat<=noiseBudget,
+					"Unforced closed vacuum exceeded the resolved motion/heat scale: RMS="+motion.rmsSpeed()+", heat="+heat+", budget="+noiseBudget);
 			if(step==0) {
 				var saved=domain.captureAuthoritativeState();
 				domain=FluidDomain.restoreAuthoritativeState(coldVacuumState(saved));

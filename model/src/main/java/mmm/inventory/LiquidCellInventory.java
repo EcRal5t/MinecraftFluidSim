@@ -137,10 +137,10 @@ public final class LiquidCellInventory {
 			for(var route:routes)if(!route.source().equals(source.key()))throw new IllegalArgumentException("Liquid route differs from its donor");
 		}
 	}
-	/** A bound caloric model partitions carried U after the actual integer shares are known. */
+	/** A caloric model writes non-remainder shares; the inventory assigns the source U remainder. */
 	@FunctionalInterface
 	public interface EnergyPartitioner {
-		double[] partition(Stock source,long[] masses,ChemicalMixtureRecord[] mixtures);
+		void partition(Stock source,long[] masses,ChemicalMixtureRecord[] mixtures,int remainder,double[] energies);
 	}
 	/** Actual quantity settlement for the mechanical operator, before target U is stored. */
 	public record TransportQuantities(List<Transfer> transfers,long[] beforeMass,long[] afterMass,double[] afterVolume) { }
@@ -152,14 +152,12 @@ public final class LiquidCellInventory {
 		private final long sourceRevision;
 		private final List<Integer> changedCells;
 		private final List<Transfer> transfers;
-		private final SignedDyadic volumeChange, energyChange, energyRoundoff, mechanicalHeat;
-		private final long massChange;
+		private final SignedDyadic energyChange, energyRoundoff, mechanicalHeat;
 		private Plan(LiquidCellInventory owner, LiquidCellInventory future, List<Integer> changedCells,
-		             List<Transfer> transfers, SignedDyadic volumeChange, long massChange,
+		             List<Transfer> transfers,
 		             SignedDyadic energyChange, SignedDyadic energyRoundoff, SignedDyadic mechanicalHeat) {
 			this.owner = owner; this.future = future; sourceRevision = owner.revision;
 			this.changedCells = List.copyOf(changedCells); this.transfers = List.copyOf(transfers);
-			this.volumeChange = volumeChange; this.massChange = massChange;
 			this.energyChange = energyChange; this.energyRoundoff = energyRoundoff;
 			this.mechanicalHeat = mechanicalHeat;
 		}
@@ -320,7 +318,7 @@ public final class LiquidCellInventory {
 		if(row!=null)futureRows.set(currentCell,List.copyOf(row));
 		var successor=new LiquidCellInventory(this,futureRows==null?rows:java.util.Collections.unmodifiableList(futureRows),revision+1);
 		successor.quantities=quantities;successor.totalVolume=totalVolume;successor.totalMass=totalMass;
-		return new Plan(this,successor,changed,List.of(),SignedDyadic.ZERO,0,energyChange,SignedDyadic.ZERO,SignedDyadic.ZERO);
+		return new Plan(this,successor,changed,List.of(),energyChange,SignedDyadic.ZERO,SignedDyadic.ZERO);
 	}
 	private static List<Stock> flatten(List<List<Stock>> rows) {
 		var flat = new ArrayList<Stock>(); for (var row : rows) flat.addAll(row); return List.copyOf(flat);
@@ -373,7 +371,7 @@ public final class LiquidCellInventory {
 		if(totalMass!=null)future.totalMass=Math.addExact(totalMass,massChange);
 		if (futureSpecies != null) future.presence = new PresenceIndex(futureSpecies, futureMaterials);
 		if (geometryChanged) { future.geometryRevision++; future.geometryIdentity = new Object(); }
-		return new Plan(this, future, new ArrayList<>(changed.keySet()), transfers, volumeChange, massChange, energyChange, roundoff, SignedDyadic.ZERO);
+		return new Plan(this, future, new ArrayList<>(changed.keySet()), transfers, energyChange, roundoff, SignedDyadic.ZERO);
 	}
 	/** Local kinetic mixing heat updates the prepared owners while sharing their validated quantities. */
 	private Plan addMechanicalHeat(Plan base, Map<Integer, SignedDyadic> heatByCell) {
@@ -402,7 +400,7 @@ public final class LiquidCellInventory {
 		if(totalHeat.signum()==0)return base;
 		var successor=new LiquidCellInventory(base.future,java.util.Collections.unmodifiableList(futureRows),revision+1);
 		successor.quantities=base.future.quantities;successor.totalVolume=base.future.totalVolume;successor.totalMass=base.future.totalMass;
-		return new Plan(this,successor,changed,base.transfers,base.volumeChange,base.massChange,
+		return new Plan(this,successor,changed,base.transfers,
 				base.energyChange.add(energyChange),base.energyRoundoff.add(roundoff),base.mechanicalHeat.add(totalHeat));
 	}
 	private static boolean samePresence(Stock before, Stock after) {
@@ -474,7 +472,7 @@ public final class LiquidCellInventory {
 		else for(int i=0;i<mixtures.length;i++)mixtures[i]=mixturePart(source.mixture(),species,i,masses[i]);
 		// Caloric transport uses floating shares; the largest share retains the
 		// numerical remainder and the committed endpoint ledger records rounding.
-		partition.energies=caloric==null?splitEnergy(source,masses):caloric.partition(source,masses,mixtures);
+		partition.energies=energyShares(source,masses,mixtures,largest,caloric);
 		var retained=totals.donor(source);
 		for (int i = 0; i < destinations.size(); i++) {
 			var route=destinations.get(i);
@@ -573,7 +571,7 @@ public final class LiquidCellInventory {
 		// partitioning and mixing roundoff is the endpoint difference after the
 		// separately computed mechanical heat has been removed.
 		var roundoff=SignedDyadic.sum(afterEnergy).subtract(SignedDyadic.sum(beforeEnergy)).subtract(mechanicalHeat);
-		return new Plan(this,future,totals.cells,transfers,SignedDyadic.ZERO,0,mechanicalHeat.add(roundoff),roundoff,mechanicalHeat);
+		return new Plan(this,future,totals.cells,transfers,mechanicalHeat.add(roundoff),roundoff,mechanicalHeat);
 	}
 	private SignedDyadic addTransportHeat(TransportTargets totals,Map<Integer,SignedDyadic> heat){
 		if(heat.isEmpty())return SignedDyadic.ZERO;
@@ -669,24 +667,29 @@ public final class LiquidCellInventory {
 	}
 	public static double[] partitionEnergy(Stock source,long[] masses,ChemicalMixtureRecord[] mixtures,EnergyPartitioner caloric) {
 		if(masses.length==0||mixtures.length!=masses.length)throw new IllegalArgumentException("Liquid energy partition columns differ");
-		long totalMass=0;for(long mass:masses){if(mass<0)throw new IllegalArgumentException("Negative liquid energy partition mass");totalMass=Math.addExact(totalMass,mass);}
-		if(totalMass!=source.massUnits())throw new IllegalArgumentException("Liquid energy partition mass differs from source");
-		var result=caloric==null?splitEnergy(source,masses):caloric.partition(source,masses,mixtures);
-		if(result==null||result.length!=masses.length)throw new IllegalArgumentException("Liquid energy partition result differs");
-		for(int i=0;i<result.length;i++){
-			if(!Double.isFinite(result[i])||masses[i]==0&&result[i]!=0)throw new IllegalArgumentException("Geometric liquid tail carried energy");
+		long totalMass=0;int largest=0;
+		for(int i=0;i<masses.length;i++){
+			long mass=masses[i];if(mass<0)throw new IllegalArgumentException("Negative liquid energy partition mass");
+			totalMass=Math.addExact(totalMass,mass);if(mass>masses[largest])largest=i;
 		}
-		return result;
+		if(totalMass!=source.massUnits())throw new IllegalArgumentException("Liquid energy partition mass differs from source");
+		return energyShares(source,masses,mixtures,largest,caloric);
 	}
-	private static double[] splitEnergy(Stock source, long[] masses) {
-		var result = new double[masses.length]; int largest = 0;
-		for (int i = 1; i < masses.length; i++) if (masses[i] > masses[largest]) largest = i;
+	/** Numerical U has one remainder owner for every caller and caloric provider. */
+	private static double[] energyShares(Stock source,long[] masses,ChemicalMixtureRecord[] mixtures,int largest,EnergyPartitioner caloric){
+		var result=new double[masses.length];
+		if(source.massUnits()==0)return result;
+		if(caloric!=null)caloric.partition(source,masses,mixtures,largest,result);
+		else for(int i=0;i<masses.length;i++)if(i!=largest&&masses[i]>0)
+			result[i]=source.internalEnergy()*(masses[i]/(double)source.massUnits());
 		double sum=0,error=0;
 		for (int i = 0; i < masses.length; i++) if (i != largest) {
-			result[i] = masses[i] == 0 ? 0 : source.internalEnergy() * (masses[i] / (double) source.massUnits());
+			if(!Double.isFinite(result[i])||masses[i]==0&&result[i]!=0)throw new IllegalArgumentException("Invalid carried liquid energy share");
 			double corrected=result[i]-error,next=sum+corrected;error=(next-sum)-corrected;sum=next;
 		}
-		result[largest] = source.internalEnergy()-sum; return result;
+		result[largest]=source.internalEnergy()-sum;
+		if(!Double.isFinite(result[largest]))throw new IllegalArgumentException("Liquid energy remainder is not finite");
+		return result;
 	}
 	private ChemicalMixtureRecord mixturePart(ChemicalMixtureRecord source, long[][] amounts, int index, long mass) {
 		if (source == null) return null;
