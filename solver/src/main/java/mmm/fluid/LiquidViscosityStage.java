@@ -23,6 +23,8 @@ final class LiquidViscosityStage {
 			@Override public double density(int cell) { return domain.liquidGrid.cellDensity[cell]; }
 			@Override public double viscosity(int cell) { return domain.carrierPropertiesWorkspace.viscosityPascalSeconds(cell); }
 			@Override public double aperture(int axis, int x, int y, int z) {
+				int face=(z*(domain.sizeY+(axis==1?1:0))+y)*(domain.sizeX+(axis==0?1:0))+x;
+				if(domain.cellMacStage.isUnresolvedWallFace(axis,face))return 0;
 				return switch (axis) {
 					case 0 -> domain.domainFlowFields.pressureXFaceOpen(x, y, z);
 					case 1 -> domain.domainFlowFields.pressureYFaceOpen(x, y, z);

@@ -75,6 +75,7 @@ final class BodyForceStage {
 		for (int z = 0; z < domain.sizeZ; z++) for (int y = 1; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
 			int below = domain.domainFlowFields.cellIndex(x, y - 1, z), above = domain.domainFlowFields.cellIndex(x, y, z);
 			int face = domain.domainFlowFields.yFaceIndex(x, y, z);
+			if(domain.cellMacStage.isUnresolvedWallFace(1,face))continue;
 			float open = domain.domainFlowFields.pressureYFaceOpen(x, y, z);
 			if (open > 0 && (domain.mac.faceMassY[face] > 0 || domain.domainFlowFields.carrierFaceActive(below, above, open))) {
 				domain.mac.velocityY[face] -= impulse;
@@ -90,6 +91,7 @@ final class BodyForceStage {
 		for (int z = 0; z < domain.sizeZ; z++) for (int y = 1; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
 			int below = domain.domainFlowFields.cellIndex(x, y - 1, z), above = domain.domainFlowFields.cellIndex(x, y, z);
 			int face = domain.domainFlowFields.yFaceIndex(x, y, z);
+			if(domain.cellMacStage.isUnresolvedWallFace(1,face))continue;
 			float open = domain.domainFlowFields.pressureYFaceOpen(x, y, z);
 			if (!(open > 0)) continue;
 			double relative;
@@ -119,6 +121,7 @@ final class BodyForceStage {
 
 	private void applyWallEnergyFaceForce(int first, int second, int face, int velocityAxis,
 	                                      float scale, float openArea, float[] velocity) {
+		if(domain.cellMacStage.isUnresolvedWallFace(velocityAxis,face))return;
 		if (!domain.domainFlowFields.carrierFaceActive(first, second, openArea)) return;
 		double firstPotential = domain.tension.wallSurfaceEnergyDensity[first]
 				* domain.tension.surfaceTensionColor[first] * tangentialWallArea(first, velocityAxis);
@@ -185,6 +188,8 @@ final class BodyForceStage {
 
 	private void applyLiquidPairFaceForce(int first, int second, int face,
 	                                      double tensionScale, float scale, float openArea, float[] velocity) {
+		int axis=velocity==domain.mac.velocityX?0:velocity==domain.mac.velocityY?1:2;
+		if(domain.cellMacStage.isUnresolvedWallFace(axis,face))return;
 		if (openArea <= 0.0F || !domain.domainFlowFields.isFluid(first) || !domain.domainFlowFields.isFluid(second)) return;
 		double delta = liquidPairGradient(first, second);
 		if (delta == 0.0) return;

@@ -29,6 +29,10 @@ public final class MarkerDistributionExperiment {
 			var motion=motion(domain);
 			if(!Double.isFinite(motion.energy)||motion.energy>1.25*initialPotential+1)
 				throw new AssertionError("Dam kinetic energy exceeds its initial gravitational energy budget: "+motion.energy);
+			// After many gravity times the closed tank is a resting flow. Retain the
+			// shared macroscopic one-cell energy allowance throughout the long tail.
+			if(step>=1000)FluidPhysicalAssertions.staticMotion(domain,0,
+					FluidPhysicalAssertions.TRANSIENT_ENERGY_FRACTION,"Dam settled tail step="+step);
 			if(step%1000==0){
 				domain=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 				System.out.printf("dam step=%d stocks=%d centreX=%g speed=%g K=%g RMS=%g resolvedMax=%g tailK=%g potential=%g%n",step,domain.liquidCells.size(),domain.centerOfMassX(),domain.maximumParticleSpeed(),motion.energy,Math.sqrt(2*motion.energy/mmm.units.Mass.kilograms(mass)),motion.resolvedMaximum,motion.tailEnergy,domain.domainStep.gravitationalPotentialEnergyJoules());

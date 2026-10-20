@@ -99,7 +99,8 @@ final class PressureFaceGraph {
 		for (int f = 0; f < faceCount; f++) {
 			start[f] = entries; liquidStart[f] = liquidEntries; int a = firstCell[f], b = secondCell[f]; if (a < 0) continue;
 			double mass = faceMass(f); if (!(mass > 0)) continue;
-			int d = axis[f]; double open = domain.pressureSystem.solidFaces.open(d, localFace[f]);
+			int d = axis[f]; if(domain.cellMacStage.isUnresolvedWallFace(d,localFace[f]))continue;
+			double open = domain.pressureSystem.solidFaces.open(d, localFace[f]);
 			if (!(open > 0)) continue;
 			inverseMass[f] = domain.unitScale.cubicMetersPerNormalizedVolume() / mass;
 			final int face = f; double coefficient = open / domain.config.cellSize();

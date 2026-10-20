@@ -374,6 +374,24 @@ final class FlipPressurePhaseGeometry {
 	}
 
 	/** Area occupied by both PLICs on their shared open face; left is the negative-axis cell. */
+	double liquidFaceArea(int cell, int axis, int side, FlipCutCellGeometry cut) {
+		double area=0;
+		for(int a=0;a<2;a++)for(int b=0;b<2;b++){
+			double x=.5*a,y=.5*b;
+			int micro=microAtFace(cell,axis,side,x,y);
+			if((cut.mask(cell)&1<<micro)!=0||liquidFractionExact(cell,micro)<=0)continue;
+			faceX[0]=faceX[3]=x;faceX[1]=faceX[2]=x+.5;
+			faceY[0]=faceY[1]=y;faceY[2]=faceY[3]=y+.5;
+			int count=liquidFractionExact(cell,micro)>=1?4:clipFace(4,
+					planeNormal(cell,micro,(axis+1)%3),planeNormal(cell,micro,(axis+2)%3),
+					planeOffset(cell,micro)-side*planeNormal(cell,micro,axis));
+			double twice=0;
+			for(int i=1;i+1<count;i++)twice+=(faceX[i]-faceX[0])*(faceY[i+1]-faceY[0])-(faceY[i]-faceY[0])*(faceX[i+1]-faceX[0]);
+			area+=.5*Math.abs(twice);
+		}
+		return area;
+	}
+
 	double sharedLiquidFaceArea(int left, int right, int axis, FlipCutCellGeometry cut) {
 		if (!(fraction[left] > 0) || !(fraction[right] > 0)) return 0;
 		if (microFraction==null && cut.mask(left) == 0 && cut.mask(right) == 0) return wetRectangle(left, right, axis, 0, 0, 1);

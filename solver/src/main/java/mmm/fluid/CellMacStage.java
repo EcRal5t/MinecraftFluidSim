@@ -12,6 +12,9 @@ final class CellMacStage {
 	final double[] massX, massY, massZ;
 	private final double[] cellMass;
 	private long inventoryRevision = -1;
+	private final boolean[][] unresolvedWall;
+	private FlipPressurePhaseGeometry wallPhase;
+	private LiquidCellInventory.Snapshot wallInventory;
 	private CellMomentumTransport momentumTransport;
 	private ConservativeLiquidFlux liquidTransport;
 	static final class PreparedLiquid {
@@ -33,6 +36,7 @@ final class CellMacStage {
 		massY = new double[domain.mac.velocityY.length];
 		massZ = new double[domain.mac.velocityZ.length];
 		cellMass = new double[domain.cellCount];
+		unresolvedWall=new boolean[][]{new boolean[massX.length],new boolean[massY.length],new boolean[massZ.length]};
 	}
 
 	void rebuildInventory() {
@@ -91,6 +95,7 @@ final class CellMacStage {
 		domain.pressurePhaseGeometry = domain.gasState.frame.phase();
 		domain.pressureSystem.faces.classify();
 		domain.pressureSystem.solidFaces.rebuild();
+		rebuildWallSupport();
 		domain.domainFlowFields.rebuildSurfaceTensionPressure();
 		domain.pressureGeometryDirty = false;
 	}
@@ -100,6 +105,57 @@ final class CellMacStage {
 		domain.mac.deriveVelocity(massX, massY, massZ);
 		domain.bodyForceStage.enforceSolidFaceVelocities();
 		domain.velocityGridDirty = false;
+	}
+
+	/** A wall-supported layer has no independent normal inertia above its unresolved free face. */
+	private void rebuildWallSupport(){
+		var phase=domain.pressurePhaseGeometry;var cut=domain.geometry.cutCells;
+		for(int axis=0;axis<3;axis++){
+			Arrays.fill(unresolvedWall[axis],false);
+			int nx=domain.sizeX+(axis==0?1:0),ny=domain.sizeY+(axis==1?1:0);
+			int stride=axis==0?1:axis==1?nx:nx*ny;
+			for(int cell=0;cell<domain.cellCount;cell++){
+				if(!(cellMass[cell]>0)||CellRemapMicroTopology.components(cut.mask(cell)).length!=1)continue;
+				int x=cell%domain.sizeX,y=cell/domain.sizeX%domain.sizeY,z=cell/(domain.sizeX*domain.sizeY);
+				int lower=(z*ny+y)*nx+x,upper=lower+stride;
+				boolean lowWall=isWallFace(axis,lower,null),highWall=isWallFace(axis,upper,null);
+				if(lowWall==highWall)continue;
+				int side=lowWall?0:1,face=lowWall?upper:lower;
+				if(!(phase.liquidFaceArea(cell,axis,side,cut)>FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION))continue;
+				int a=domain.pressureSystem.faces.firstCell[domain.pressureSystem.faces.offsets[axis]+face];
+				int b=domain.pressureSystem.faces.secondCell[domain.pressureSystem.faces.offsets[axis]+face];
+				if(a<0||b<0)continue;
+				if(phase.sharedLiquidFaceArea(a,b,axis,cut)>FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION)continue;
+				unresolvedWall[axis][face]=true;
+			}
+		}
+		wallPhase=phase;wallInventory=domain.liquidCells.snapshot();
+	}
+	boolean isUnresolvedWallFace(int axis,int face){
+		return wallPhase==domain.pressurePhaseGeometry&&domain.liquidCells.hasSameGeometry(wallInventory)&&unresolvedWall[axis][face];
+	}
+
+	/** Retires existing normal momentum once, before any force can act on the constrained mode. */
+	void constrainUnresolvedWallMomentum(){
+		double[][] old={domain.mac.momentumX,domain.mac.momentumY,domain.mac.momentumZ};boolean changed=false;
+		for(int axis=0;axis<3&&!changed;axis++)for(int face=0;face<old[axis].length;face++)if(old[axis][face]!=0&&isUnresolvedWallFace(axis,face)){changed=true;break;}
+		if(!changed)return;
+		double[][] values={old[0].clone(),old[1].clone(),old[2].clone()};double[] heat=new double[domain.cellCount],impulse=new double[3];
+		for(int axis=0;axis<3;axis++)for(int face=0;face<values[axis].length;face++){
+			double p=values[axis][face];if(p==0||!isUnresolvedWallFace(axis,face))continue;
+			int f=domain.pressureSystem.faces.offsets[axis]+face,a=domain.pressureSystem.faces.firstCell[f],b=domain.pressureSystem.faces.secondCell[f];
+			double total=cellMass[a]+cellMass[b],energy=p*p/total,first=energy*(cellMass[a]/total);
+			heat[a]+=first;heat[b]+=energy-first;impulse[axis]-=p;values[axis][face]=0;
+		}
+		var byCell=new java.util.TreeMap<Integer,SignedDyadic>();
+		for(int cell=0;cell<heat.length;cell++)if(heat[cell]>0)byCell.put(cell,SignedDyadic.of(heat[cell]));
+		var plan=domain.liquidCells.planEdits(java.util.List.of()).withMechanicalHeat(byCell);
+		var audit=domain.thermalState==null?null:domain.thermalState.auditLedger().withMechanicalWork(plan.mechanicalHeat()).withRoundoff(plan.energyRoundoff());
+		if(audit!=null)audit.expectedInventory();
+		plan.commit();domain.mac.restoreMomentum(new MacMomentumState(domain.sizeX,domain.sizeY,domain.sizeZ,values[0],values[1],values[2]));
+		recordWallImpulse(new WallImpulse(impulse[0],impulse[1],impulse[2]));
+		if(audit!=null)domain.thermalState.restoreAuditLedger(audit);
+		domain.markCellInventoryChanged();rebuildVelocity();
 	}
 	/** Face inertia belongs to the same inventory generation as cell mass. */
 	private void rebuildFaceInertia() {

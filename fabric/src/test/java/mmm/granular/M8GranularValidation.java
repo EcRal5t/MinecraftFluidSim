@@ -2102,6 +2102,9 @@ public final class M8GranularValidation {
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidDomain domain = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
+		FullCapabilityTestFixture.Registries production = FullCapabilityTestFixture.load();
+		// Granular insertion commits pore geometry and starts the gas topology.
+		domain.bindGasRegistry(production.gas());
 		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		double density = granular.material(granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND))
 				.referenceDensity();
@@ -2117,8 +2120,6 @@ public final class M8GranularValidation {
 		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted(),
 				"two-bucket granular congestion fixture could not be inserted");
 		mmm.fluid.GranularCarrierValidation.requireNonOverlappingRelease(domain.exportGranularState(), config.cellSize());
-		FullCapabilityTestFixture.Registries production = FullCapabilityTestFixture.load();
-		domain.bindGasRegistry(production.gas());
 		domain.bindThermal(production.thermal(), liquids, 300.0);
 		domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		require(domain.totalGranularSolidVolumeSvq() == 2L * SolidVolume.SVQ_PER_CUBIC_METER,

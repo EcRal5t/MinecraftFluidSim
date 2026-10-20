@@ -58,6 +58,12 @@ final class MechanicalStepPipeline {
 		diagnosticStage = Stage.GRID_REBUILD;
 		domain.domainFlowFields.ensureGrid();
 		double stageKineticEnergy = captureAudit ? domain.domainStep.mechanicalGridKineticEnergyJoules() : 0.0;
+		cellMac.constrainUnresolvedWallMomentum();
+		if(captureAudit){
+			double constrained=domain.domainStep.mechanicalGridKineticEnergyJoules();
+			audit.fixedBoundaryWorkJoules+=constrained-stageKineticEnergy;
+			stageKineticEnergy=constrained;
+		}
 		diagnosticStage = Stage.GAS_TOPOLOGY;
 		try {
 			domain.gasTopologyCoordinator.step(dt);
