@@ -67,20 +67,6 @@ final class MicroBoxPlaneVolume {
 			return Math.clamp(complement ? 1-f : f,0,1)*volume;
 		}
 	}
-	/** Adds wet volume and depth moment using the same four horizontal columns. */
-	static void addVerticalColumns(int micro,double nx,double ny,double nz,double offset,
-	                               double supportTop,double[] integral){
-		if(!(ny>0))return;
-		double bottom=.5*(micro>>>1&1),left=.5*(micro&1),back=.5*(micro>>>2&1),moment=0;
-		for(int z=0;z<2;z++)for(int x=0;x<2;x++){
-			double surface=Math.min(supportTop,(offset-nx*(left+.125+.25*x)-nz*(back+.125+.25*z))/ny);
-			double height=surface-bottom;
-			double wet=Math.clamp(height,0,.5);
-			moment+=.0625*wet*(height-.5*wet);
-			integral[0]+=.0625*wet;
-		}
-		integral[1]+=moment;
-	}
     static double wetVolume(int micro, GasGeometryOverlap.HalfSpace plane) {
         return box(new double[]{plane.nx(), plane.ny(), plane.nz()}, plane.threshold(), micro, .5);
     }

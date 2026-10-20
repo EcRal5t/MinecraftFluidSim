@@ -19,8 +19,9 @@ final class PressureFaceGraph {
 	private int[] liquidLeftSupport, liquidRightSupport;
 	private double[] liquidCoefficient;
 	private int liquidEntries;
-	private final double[] supportFill,supportDepth;
-	private final double[] columnIntegral = new double[2];
+	private final double[] supportFill,supportDepth,wetPortArea,sideWetArea,columnBottomPressure,hydrostaticReference;
+	private final boolean[] groundedSupport;
+	private final int[] verticalLiquidContact;
 	private FlipPressurePhaseGeometry supportGeometry;
 	private long supportRevision=-1;
 	private final int[] parent;
@@ -37,6 +38,8 @@ final class PressureFaceGraph {
 		liquidCoefficient = new double[liquidLeftSupport.length]; inverseMass = new double[faceCount]; affine = new double[faceCount];
 		fullSupports = new int[domain.cellCount]; parent = new int[domain.cellCount];
 		supportFill=new double[8*domain.cellCount];supportDepth=new double[supportFill.length];
+		wetPortArea=new double[4*faceCount];sideWetArea=new double[8*faceCount];columnBottomPressure=new double[supportFill.length];hydrostaticReference=new double[supportFill.length];
+		groundedSupport=new boolean[supportFill.length];verticalLiquidContact=new int[domain.mac.velocityY.length];
 		constrained = new boolean[domain.cellCount]; anchored = constrained.clone();
 		seedPressureSum = new double[domain.cellCount]; seedPressureWeight = new double[domain.cellCount];
 		rows = new int[4 * faceCount]; coefficients = new double[rows.length];
@@ -71,6 +74,7 @@ final class PressureFaceGraph {
 			}
 			domain.projection.pressureFluid[cell] = fullSupports[cell] != 0;
 		}
+		prepareHydrostaticReference();
 	}
 	private boolean hasFiniteGas(int cell, int support) {
 		var frame = domain.gasState.frame;
@@ -112,9 +116,10 @@ final class PressureFaceGraph {
 					&& (maskA & 1 << micro) == 0 && (maskB & 1 << (micro ^ 1 << d)) == 0) {
 				int peer = micro ^ 1 << d;
 				int supportA = CellRemapMicroTopology.support(maskA, micro), supportB = CellRemapMicroTopology.support(maskB, peer);
-				double portArea = open / ports;
+				int port=(micro>>>((d+1)%3)&1)+2*(micro>>>((d+2)%3)&1);
+				double portArea = wetPortArea[4*f+port]*(open/(.25*ports));
 				addLiquidPort(f, supportA, supportB, open / ports);
-				if(wallSupported)continue;
+				if(wallSupported||!(portArea>0))continue;
 				pressureAtSide(a,b,micro,peer,d,1,(row,weight,fixed)->add(face,row,portArea/domain.config.cellSize()*weight,fixed));
 				pressureAtSide(b,a,peer,micro,d,1,(row,weight,fixed)->add(face,row,-portArea/domain.config.cellSize()*weight,fixed));
 			}
@@ -158,7 +163,13 @@ final class PressureFaceGraph {
 		if (ports == 0) return;
 		for (int micro = 0; micro < 8; micro++) {
 			if ((micro >>> d & 1) != side || (mask & 1 << micro) != 0 || (peerMask & 1 << (micro ^ 1 << d)) != 0) continue;
-			pressureAtSide(cell,neighbor,micro,micro^(1<<d),d,1.0/ports,consumer);
+			int right=Math.max(cell,neighbor);
+			int x=right%domain.sizeX,y=right/domain.sizeX%domain.sizeY,z=right/(domain.sizeX*domain.sizeY);
+			int face=offsets[d]+(z*(domain.sizeY+(d==1?1:0))+y)*(domain.sizeX+(d==0?1:0))+x;
+			int port=(micro>>>((d+1)%3)&1)+2*(micro>>>((d+2)%3)&1);
+			// The solid's complementary share sees the same liquid contact fraction.
+			double weight=wetPortArea[4*face+port]/(.25*ports);
+			if(weight>0)pressureAtSide(cell,neighbor,micro,micro^(1<<d),d,weight,consumer);
 		}
 	}
 	private void pressureAtSide(int cell,int neighbor,int micro,int peer,int axis,double weight,SideConsumer consumer){
@@ -171,19 +182,24 @@ final class PressureFaceGraph {
 		// unequal wet-side J retains the shape-changing capillary load. A dry
 		// neighbor extends its contacting liquid's J across the same face.
 		double jump=fill>0?domain.tension.surfaceTensionPressure[cell]:peerFill>0?domain.tension.surfaceTensionPressure[neighbor]:0;
-		pressureAtMicro(cell,micro,axis,weight,.5*(fill+peerFill)*jump,consumer);
+		int right=Math.max(cell,neighbor),x=right%domain.sizeX,y=right/domain.sizeX%domain.sizeY,z=right/(domain.sizeX*domain.sizeY);
+		int face=offsets[axis]+(z*(domain.sizeY+(axis==1?1:0))+y)*(domain.sizeX+(axis==0?1:0))+x;
+		int port=(micro>>>((axis+1)%3)&1)+2*(micro>>>((axis+2)%3)&1);
+		double area=wetPortArea[4*face+port];
+		double hydroFraction=area>0?sideWetArea[8*face+2*port+(cell>neighbor?1:0)]/area:0;
+		pressureAtMicro(cell,micro,axis,weight,.5*(fill+peerFill)*jump,hydroFraction,consumer);
 	}
-	private void pressureAtMicro(int cell,int micro,int axis,double weight,double capillary,SideConsumer consumer) {
+	private void pressureAtMicro(int cell,int micro,int axis,double weight,double capillary,double hydroFraction,SideConsumer consumer) {
 		if ((fullSupports[cell] & 1 << micro) != 0) { consumer.accept(anchored[cell] ? -1 : cell, weight, capillary); return; }
 		int node = domain.gasState.frame.nodeOfPiece(8 * cell + micro);
-		if (node >= 0) { gasSide(cell,micro,axis,node,weight,capillary,consumer); return; }
+		if (node >= 0) { gasSide(cell,micro,axis,node,weight,capillary,hydroFraction,consumer); return; }
 		int support = CellRemapMicroTopology.support(domain.geometry.cutCells.mask(cell), micro); double total = 0;
 		for (int bit = 0; bit < 8; bit++) if ((support & 1 << bit) != 0 && domain.gasState.frame.nodeOfPiece(8 * cell + bit) >= 0)
 			total += domain.gasState.frame.geometry().piece(8 * cell + bit).normalizedVolume();
 		if (!(total > 0)) { consumer.accept(anchored[cell] ? -1 : cell, weight, capillary); return; }
 		for (int bit = 0; bit < 8; bit++) if ((support & 1 << bit) != 0) {
 			int owner = domain.gasState.frame.nodeOfPiece(8 * cell + bit); if (owner < 0) continue;
-			gasSide(cell,micro,axis,owner,weight*domain.gasState.frame.geometry().piece(8*cell+bit).normalizedVolume()/total,capillary,consumer);
+			gasSide(cell,micro,axis,owner,weight*domain.gasState.frame.geometry().piece(8*cell+bit).normalizedVolume()/total,capillary,hydroFraction,consumer);
 		}
 	}
 	private double poreVolume(int cell) {
@@ -212,16 +228,15 @@ final class PressureFaceGraph {
 		return 0;
 	}
 
-	private void gasSide(int cell,int micro,int axis,int node,double weight,double capillary,SideConsumer consumer) {
+	private void gasSide(int cell,int micro,int axis,int node,double weight,double capillary,double hydroFraction,SideConsumer consumer) {
 		boolean variable = node > 0 && domain.projection.gasPressureUnknown[node];
 		double fixed = variable || node == 0 ? 0 : domain.pressureBoundaryView.gasPressureOfNode(node);
 		int support=CellRemapMicroTopology.support(domain.geometry.cutCells.mask(cell),micro);
 		int slot=8*cell+Integer.numberOfTrailingZeros(support);
-		double hydrostatic=domain.liquidGrid.cellDensity[cell]*domain.config.gravity()*domain.config.cellSize()
-				*supportDepth[slot]*(axis==1?1:supportFill[slot]);
+		double hydrostatic=domain.liquidGrid.cellDensity[cell]*domain.config.gravity()*domain.config.cellSize()*supportDepth[slot]*hydroFraction;
 		consumer.accept(variable ? domain.cellCount + node : -1, weight, fixed+capillary+hydrostatic);
 	}
-	/** Actual liquid-volume mean pressure head; fixed cut boxes retain their real vertical extent. */
+	/** Coarse inventory wet height, shared by pressure publication and face loading. */
 	double hydrostaticOffset(int cell,int support){
 		prepareSupportGeometry();double volume=0,depth=0;
 		for(int component:CellRemapMicroTopology.components(domain.geometry.cutCells.mask(cell)))if((component&support)!=0){
@@ -235,21 +250,93 @@ final class PressureFaceGraph {
 		if(supportGeometry==phase&&supportRevision==phase.revision())return;
 		Arrays.fill(supportFill,0);Arrays.fill(supportDepth,0);
 		for(int cell=0;cell<domain.cellCount;cell++)for(int support:CellRemapMicroTopology.components(domain.geometry.cutCells.mask(cell))){
-			double wet=0;columnIntegral[0]=columnIntegral[1]=0;
-			double top=(support&0xcc)!=0?1:.5;
+			double wet=0;
 			for(int bits=support;bits!=0;bits&=bits-1){
 				int micro=Integer.numberOfTrailingZeros(bits);wet+=.125*phase.liquidFractionExact(cell,micro);
-				MicroBoxPlaneVolume.addVerticalColumns(micro,phase.planeNormal(cell,micro,0),phase.planeNormal(cell,micro,1),
-						phase.planeNormal(cell,micro,2),phase.planeOffset(cell,micro),top,columnIntegral);
 			}
 			int slot=8*cell+Integer.numberOfTrailingZeros(support);
 			supportFill[slot]=Math.clamp(wet/(.125*Integer.bitCount(support)),0,1);
-			// The static head ends at this support's real vertical extent. A steep
-			// plane may extrapolate beyond it; that exterior column carries no liquid.
 			double height=(support&0x33)!=0&&(support&0xcc)!=0?1:.5;
-			supportDepth[slot]=columnIntegral[0]>0?Math.clamp(columnIntegral[1]/columnIntegral[0],0,height):0;
+			supportDepth[slot]=.5*height*supportFill[slot];
 		}
+		prepareWetFaces();
 		supportGeometry=phase;supportRevision=phase.revision();
+	}
+	private void prepareWetFaces(){
+		var phase=domain.pressurePhaseGeometry;var cut=domain.geometry.cutCells;
+		Arrays.fill(wetPortArea,0);Arrays.fill(sideWetArea,0);Arrays.fill(verticalLiquidContact,0);
+		for(int face=0;face<faceCount;face++){
+			int left=firstCell[face],right=secondCell[face],d=axis[face];if(left<0)continue;
+			for(int a=0;a<2;a++)for(int b=0;b<2;b++){
+				int port=a+2*b;
+				int minus=phase.microAtFace(left,d,1,.5*a,.5*b),plus=phase.microAtFace(right,d,0,.5*a,.5*b);
+				if((cut.mask(left)&1<<minus)!=0||(cut.mask(right)&1<<plus)!=0)continue;
+				double leftArea=phase.liquidPortArea(left,d,1,a,b,cut),rightArea=phase.liquidPortArea(right,d,0,a,b,cut);
+				double shared=phase.sharedLiquidPortArea(left,right,d,a,b,cut);
+				sideWetArea[8*face+2*port]=leftArea;sideWetArea[8*face+2*port+1]=rightArea;
+				wetPortArea[4*face+port]=Math.clamp(leftArea+rightArea-shared,0,.25);
+				if(d==1&&shared>0)verticalLiquidContact[localFace[face]]|=1<<port;
+			}
+		}
+	}
+	/** A wall-supported vertical column uses the same coarse pressure head and contact area as C/CT. */
+	private void prepareHydrostaticReference(){
+		Arrays.fill(groundedSupport,false);Arrays.fill(columnBottomPressure,0);Arrays.fill(hydrostaticReference,0);
+		var cut=domain.geometry.cutCells;var phase=domain.pressurePhaseGeometry;
+		for(int z=0;z<domain.sizeZ;z++)for(int x=0;x<domain.sizeX;x++)for(int y=0;y<domain.sizeY;y++){
+			int cell=domain.domainFlowFields.cellIndex(x,y,z),below=cell-domain.sizeX;
+			int face=domain.domainFlowFields.yFaceIndex(x,y,z);
+			for(int support:CellRemapMicroTopology.components(cut.mask(cell))){
+				int slot=8*cell+Integer.numberOfTrailingZeros(support);if(!(supportFill[slot]>0))continue;
+				boolean ground=false;
+				if((support&0x33)==0)ground=true; // The lower half is fixed solid.
+				else if(phase.liquidFaceArea(cell,1,0,cut)>0){
+					if(y==0||domain.cellMacStage.isWallFace(1,face,null))ground=true;
+					else for(int micro=0;micro<8;micro++)if((micro&2)==0&&(support&1<<micro)!=0){
+						int port=(micro>>>2&1)+2*(micro&1);
+						if((verticalLiquidContact[face]&1<<port)==0)continue;
+						int lower=CellRemapMicroTopology.support(cut.mask(below),micro|2);
+						if(lower!=0&&groundedSupport[8*below+Integer.numberOfTrailingZeros(lower)])ground=true;
+					}
+				}
+				groundedSupport[slot]=ground;
+			}
+		}
+		for(int z=0;z<domain.sizeZ;z++)for(int x=0;x<domain.sizeX;x++)for(int y=domain.sizeY-1;y>=0;y--){
+			int cell=domain.domainFlowFields.cellIndex(x,y,z),above=cell+domain.sizeX;
+			int face=domain.domainFlowFields.yFaceIndex(x,y+1,z);
+			for(int support:CellRemapMicroTopology.components(cut.mask(cell))){
+				int slot=8*cell+Integer.numberOfTrailingZeros(support);if(!groundedSupport[slot])continue;
+				double upperPressure=0,upperWeight=0;
+				if(y+1<domain.sizeY)for(int micro=0;micro<8;micro++)if((micro&2)!=0&&(support&1<<micro)!=0){
+					int port=(micro>>>2&1)+2*(micro&1);if((verticalLiquidContact[face]&1<<port)==0)continue;
+					int upper=CellRemapMicroTopology.support(cut.mask(above),micro^2);
+					if(upper!=0){int next=8*above+Integer.numberOfTrailingZeros(upper);if(groundedSupport[next]){upperPressure+=columnBottomPressure[next];upperWeight++;}}
+				}
+				if(upperWeight>0)upperPressure/=upperWeight;
+				double weight=domain.liquidGrid.cellDensity[cell]*domain.config.gravity()*domain.config.cellSize();
+				hydrostaticReference[slot]=weight*supportDepth[slot]+((fullSupports[cell]&support)==support?upperPressure:0);
+				columnBottomPressure[slot]=upperPressure+2*weight*supportDepth[slot];
+			}
+		}
+	}
+	/** Downward acceleration of a grounded column, or ordinary free fall for airborne liquid. */
+	double gravityAcceleration(int face){
+		prepareSupportGeometry();int a=firstCell[face],b=secondCell[face];if(a<0)return 0;
+		var cut=domain.geometry.cutCells;double load=0;boolean supported=false;
+		int ports=0;for(int micro=0;micro<8;micro++)if((micro&2)!=0&&(cut.mask(a)&1<<micro)==0&&(cut.mask(b)&1<<(micro^2))==0)ports++;
+		if(ports==0)return 0;
+		for(int micro=0;micro<8;micro++)if((micro&2)!=0&&(cut.mask(a)&1<<micro)==0&&(cut.mask(b)&1<<(micro^2))==0){
+			int sa=CellRemapMicroTopology.support(cut.mask(a),micro),sb=CellRemapMicroTopology.support(cut.mask(b),micro^2);
+			int ia=8*a+Integer.numberOfTrailingZeros(sa),ib=8*b+Integer.numberOfTrailingZeros(sb);
+			if(!groundedSupport[ia]&&!groundedSupport[ib])continue;
+			supported=true;int port=(micro>>>2&1)+2*(micro&1);
+			load+=sideWetArea[8*face+2*port]*hydrostaticReference[ia]-sideWetArea[8*face+2*port+1]*hydrostaticReference[ib];
+		}
+		if(!supported)return -domain.config.gravity();
+		double mass=faceMass(face);if(!(mass>0))return 0;
+		double open=domain.pressureSystem.solidFaces.open(1,localFace[face]);
+		return -domain.unitScale.cubicMetersPerNormalizedVolume()/mass*open/(.25*ports)*load/domain.config.cellSize();
 	}
 	private void add(int face, int row, double coefficient, double fixed) {
 		affine[face] += coefficient * fixed;

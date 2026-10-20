@@ -107,10 +107,11 @@ final class MechanicalStepPipeline {
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		diagnosticStage = Stage.GRAVITY;
-		bodyForceStage.applyGravity(dt);
+		double supportWeightWork=bodyForceStage.applyGravity(dt);
 		if (captureAudit) {
 			nextKineticEnergy = domain.domainStep.mechanicalGridKineticEnergyJoules();
-			audit.gravityWorkJoules += nextKineticEnergy - stageKineticEnergy;
+			audit.gravityWorkJoules += nextKineticEnergy - stageKineticEnergy-supportWeightWork;
+			audit.fixedBoundaryWorkJoules += supportWeightWork;
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		diagnosticStage = Stage.THERMAL_BUOYANCY;

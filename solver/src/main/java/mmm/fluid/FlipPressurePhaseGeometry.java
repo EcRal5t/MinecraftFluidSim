@@ -373,23 +373,28 @@ final class FlipPressurePhaseGeometry {
 		return components[cell] == null ? fallback : plane == null ? 0 : plane.porosity();
 	}
 
-	/** Area occupied by both PLICs on their shared open face; left is the negative-axis cell. */
+	/** One-sided liquid contact area on a cell face. */
 	double liquidFaceArea(int cell, int axis, int side, FlipCutCellGeometry cut) {
 		double area=0;
 		for(int a=0;a<2;a++)for(int b=0;b<2;b++){
-			double x=.5*a,y=.5*b;
-			int micro=microAtFace(cell,axis,side,x,y);
-			if((cut.mask(cell)&1<<micro)!=0||liquidFractionExact(cell,micro)<=0)continue;
-			faceX[0]=faceX[3]=x;faceX[1]=faceX[2]=x+.5;
-			faceY[0]=faceY[1]=y;faceY[2]=faceY[3]=y+.5;
-			int count=liquidFractionExact(cell,micro)>=1?4:clipFace(4,
-					planeNormal(cell,micro,(axis+1)%3),planeNormal(cell,micro,(axis+2)%3),
-					planeOffset(cell,micro)-side*planeNormal(cell,micro,axis));
-			double twice=0;
-			for(int i=1;i+1<count;i++)twice+=(faceX[i]-faceX[0])*(faceY[i+1]-faceY[0])-(faceY[i]-faceY[0])*(faceX[i+1]-faceX[0]);
-			area+=.5*Math.abs(twice);
+			area+=liquidPortArea(cell,axis,side,a,b,cut);
 		}
 		return area;
+	}
+	double liquidPortArea(int cell,int axis,int side,int a,int b,FlipCutCellGeometry cut){
+		double x=.5*a,y=.5*b;int micro=microAtFace(cell,axis,side,x,y);
+		if((cut.mask(cell)&1<<micro)!=0||liquidFractionExact(cell,micro)<=0)return 0;
+		rectangle(x,y,.5);
+		int count=liquidFractionExact(cell,micro)>=1?4:clipFace(4,
+				planeNormal(cell,micro,(axis+1)%3),planeNormal(cell,micro,(axis+2)%3),
+				planeOffset(cell,micro)-side*planeNormal(cell,micro,axis));
+		double twice=0;
+		for(int i=1;i+1<count;i++)twice+=(faceX[i]-faceX[0])*(faceY[i+1]-faceY[0])-(faceY[i]-faceY[0])*(faceX[i+1]-faceX[0]);
+		return .5*Math.abs(twice);
+	}
+	double sharedLiquidPortArea(int left,int right,int axis,int a,int b,FlipCutCellGeometry cut){
+		int minus=microAtFace(left,axis,1,.5*a,.5*b),plus=microAtFace(right,axis,0,.5*a,.5*b);
+		return (cut.mask(left)&1<<minus)!=0||(cut.mask(right)&1<<plus)!=0?0:wetRectangle(left,right,axis,.5*a,.5*b,.5);
 	}
 
 	double sharedLiquidFaceArea(int left, int right, int axis, FlipCutCellGeometry cut) {

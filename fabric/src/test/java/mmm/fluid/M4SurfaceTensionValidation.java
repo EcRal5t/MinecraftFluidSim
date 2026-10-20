@@ -160,15 +160,31 @@ for (int axis = 0; axis < 3; axis++) wallArea += domain.geometry.cutCells.solidW
 // Initial gravity and interface energy can become K; Young energy is bounded below
 // by -sigma times the available fixed-wall area, independently of the final shape.
 double energyBudget = potential + sigma*(6*domain.unitScale.cubicMeters(initialVolume.toDouble())/h + wallArea);
-double peakKinetic = 0;
+double peakKinetic = 0, gravityWork = 0, pressureWork = 0, transportWork = 0, fixedWallWork = 0, surfaceWork = 0;
 for (int step = 0; step < steps; step++) {
-domain.domainStep.step();
+var audit = domain.domainStep.stepWithMechanicalAudit(false,0).mechanicalAudit();
+gravityWork += audit.gravityWorkJoules();
+pressureWork += audit.pressureProjectionWorkJoules();
+transportWork += audit.volumeTransportTransferJoules()+audit.carrierInventoryTransferJoules();
+fixedWallWork += audit.fixedBoundaryWorkJoules();
+surfaceWork += audit.surfaceTensionWorkJoules();
 if (step == 0) outwardImpulse = outwardMomentumMoment(domain,initialCenterX);
 check(domain.liquidCells.exactVolume().equals(initialVolume) && domain.totalMassUnits() == initialMass,
 "contact-angle spreading changed exact mass or volume");
 double kinetic = domain.liquidKineticEnergyJoules();
-check(Double.isFinite(kinetic) && kinetic <= energyBudget,
-"wetting motion exceeded the available gravity and surface energy: K="+kinetic+", budget="+energyBudget);
+if (!Double.isFinite(kinetic) || kinetic > energyBudget) {
+double mass = 0, weightedY = 0;
+for (var stock : domain.liquidCells.physicalStocks()) {
+double amount = stock.massKilograms();
+mass += amount;
+weightedY += amount*(stock.key().cell()/domain.sizeX%domain.sizeY+.5)*h;
+}
+throw new AssertionError("wetting motion exceeded the available gravity and surface energy: step="+(step+1)
++", theta="+Math.toDegrees(contactAngleRadians)+", K="+kinetic+", budget="+energyBudget
++", RMS="+FluidPhysicalAssertions.motion(domain).rmsSpeed()+", COMy="+weightedY/mass
++", cumulativeWork[J]={gravity="+gravityWork+", pressure="+pressureWork+", transport="+transportWork
++", fixedWall="+fixedWallWork+", surface="+surfaceWork+"}, lastAudit="+audit);
+}
 peakKinetic = Math.max(peakKinetic,kinetic);
 }
 double weightedX = 0, weightedX2 = 0, volume = 0;

@@ -70,17 +70,25 @@ final class BodyForceStage {
 		return domain.granularState.deposits.porosityQ(cell) / (double) GranularLimits.POROSITY_SCALE;
 	}
 
-	void applyGravity(float dt) {
+	double applyGravity(float dt) {
 		float impulse = domain.config.gravity() * dt;
+		double supportWork=0,supportImpulse=0;
 		for (int z = 0; z < domain.sizeZ; z++) for (int y = 1; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
 			int below = domain.domainFlowFields.cellIndex(x, y - 1, z), above = domain.domainFlowFields.cellIndex(x, y, z);
 			int face = domain.domainFlowFields.yFaceIndex(x, y, z);
 			if(domain.cellMacStage.isUnresolvedWallFace(1,face))continue;
 			float open = domain.domainFlowFields.pressureYFaceOpen(x, y, z);
 			if (open > 0 && (domain.mac.faceMassY[face] > 0 || domain.domainFlowFields.carrierFaceActive(below, above, open))) {
-				domain.mac.velocityY[face] -= impulse;
+				double mass=domain.cellMacStage.massY[face],old=domain.mac.velocityY[face];float free=(float)(old-impulse);
+				double acceleration=domain.pressureSystem.faces.gravityAcceleration(domain.pressureSystem.faces.offsets[1]+face);
+				float next=acceleration==-domain.config.gravity()?free:(float)(old+dt*acceleration);
+				domain.mac.velocityY[face]=next;
+				supportImpulse+=mass*(next-free);
+				supportWork+=.5*mass*((double)next*next-(double)free*free);
 			}
 		}
+		domain.cellMacStage.recordSupportedWeightImpulse(supportImpulse);
+		return supportWork;
 	}
 
 	/** Adds thermal buoyancy from the same cell-density segments as the pressure face. */

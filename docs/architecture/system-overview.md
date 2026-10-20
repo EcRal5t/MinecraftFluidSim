@@ -60,7 +60,7 @@
 | 编辑后物性、面质量或恢复占据陈旧 | `FluidDomain.markCellInventoryChanged`、`DomainFlowFields` 的分层准备、`PhaseOccupancyTransport.ensure/publish` |
 | 跨相操作丢热账或重复计功 | 对应编辑计划的整笔预检与提交增量、`ThermalDomainState` 的库存与账本 |
 | 液封误通、环境气体被微膜截留 | `GasFaceIntersection` 的共享干区、`GasComplementGeometry` 的端口；节点容量仍读实际库存 |
-| 静水梯度或床层压力异常 | `PressureFaceGraph` 的共同载荷与 `GranularFaceVolumes` 的双单元孔隙率 |
+| 静水梯度或床层压力异常 | `PressureFaceGraph.prepareWetFaces/prepareHydrostaticReference/gravityAcceleration` 的接液载荷与支撑参考，`GranularFaceVolumes` 的双单元孔隙率 |
 | 尾液动量增长或输运耗散异常 | `CellMomentumTransport`、`MacMomentumAdvection` 的实际质量通量与局部控制体合并 |
 | 沸腾、凝结推进停滞 | `GasLiquidPhaseChangeStage` 的气腔压力、温度与容量联合响应 |
 

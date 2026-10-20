@@ -213,6 +213,7 @@ final class CellMacStage {
 	private void recordWallImpulse(WallImpulse impulse){
 		domain.lastLiquidBoundaryImpulseX+=impulse.x();domain.lastLiquidBoundaryImpulseY+=impulse.y();domain.lastLiquidBoundaryImpulseZ+=impulse.z();
 	}
+	void recordSupportedWeightImpulse(double impulseY){recordWallImpulse(new WallImpulse(0,impulseY,0));}
 	boolean isWallFace(int axis,int face,byte[] masks){
 		int nx=domain.sizeX+(axis==0?1:0),ny=domain.sizeY+(axis==1?1:0);
 		int x=face%nx,y=face/nx%ny,z=face/(nx*ny),coordinate=axis==0?x:axis==1?y:z,size=axis==0?domain.sizeX:axis==1?domain.sizeY:domain.sizeZ;
