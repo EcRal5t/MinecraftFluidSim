@@ -319,7 +319,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 - **共享通量、供体与接收容量**
   - 主要文件：
-    - [CellMacStage](../../solver/src/main/java/mmm/fluid/CellMacStage.java)：`prepareLiquid` 准备共同通量、动量与混合热，`transport` 联合提交
+    - [CellMacStage](../../solver/src/main/java/mmm/fluid/CellMacStage.java)：准备共同通量、动量与混合热并联合提交；同代 `rebuildWallSupport` 与 `constrainUnresolvedWallMomentum` 集中处理贴墙未解析法向支撑及能量交接
     - [ConservativeLiquidFlux](../../solver/src/main/java/mmm/fluid/ConservativeLiquidFlux.java)：几何液相偏好、粗分量通量与单次完整库存推进
     - [PhaseOccupancyState](../../model/src/main/java/mmm/inventory/PhaseOccupancyState.java)：不可变微盒液相体积
     - [PhaseOccupancyTransport](../../solver/src/main/java/mmm/fluid/PhaseOccupancyTransport.java)：局部八微盒形状归一与外部编辑的气体来源准备

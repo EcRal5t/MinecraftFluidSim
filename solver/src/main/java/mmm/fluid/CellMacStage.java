@@ -115,7 +115,8 @@ final class CellMacStage {
 			int nx=domain.sizeX+(axis==0?1:0),ny=domain.sizeY+(axis==1?1:0);
 			int stride=axis==0?1:axis==1?nx:nx*ny;
 			for(int cell=0;cell<domain.cellCount;cell++){
-				if(!(cellMass[cell]>0)||CellRemapMicroTopology.components(cut.mask(cell)).length!=1)continue;
+				double fill=phase.liquidFractionExact(cell);
+				if(!(cellMass[cell]>0&&fill>0&&fill<1)||CellRemapMicroTopology.components(cut.mask(cell)).length!=1)continue;
 				int x=cell%domain.sizeX,y=cell/domain.sizeX%domain.sizeY,z=cell/(domain.sizeX*domain.sizeY);
 				int lower=(z*ny+y)*nx+x,upper=lower+stride;
 				boolean lowWall=isWallFace(axis,lower,null),highWall=isWallFace(axis,upper,null);
@@ -125,7 +126,10 @@ final class CellMacStage {
 				int a=domain.pressureSystem.faces.firstCell[domain.pressureSystem.faces.offsets[axis]+face];
 				int b=domain.pressureSystem.faces.secondCell[domain.pressureSystem.faces.offsets[axis]+face];
 				if(a<0||b<0)continue;
-				if(phase.sharedLiquidFaceArea(a,b,axis,cut)>FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION)continue;
+				// Either liquid may enter this face. A dry gap between two wet
+				// endpoints still carries real donor motion into the empty space.
+				if(phase.liquidFaceArea(a,axis,1,cut)>FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION
+						||phase.liquidFaceArea(b,axis,0,cut)>FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION)continue;
 				unresolvedWall[axis][face]=true;
 			}
 		}

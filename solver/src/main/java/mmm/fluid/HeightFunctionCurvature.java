@@ -1,6 +1,6 @@
 package mmm.fluid;
 
-/** Height graph from nine consistently oriented open-cell columns with an entirely wet integration base. */
+/** Height graph from nine open-cell columns, anchored in liquid or at an orthogonal wetted wall. */
 final class HeightFunctionCurvature {
     // A dominant-axis plane crosses this 3x3 tangent stencil within 4.5 cells.
     private static final int COLUMN_REACH = 5;
@@ -62,8 +62,9 @@ final class HeightFunctionCurvature {
                 double c = sample(d, color, x, y, z, axis, -sign * distance, target);
                 if (!Double.isFinite(c)) return Double.NaN;
                 int endpoint = -sign * distance, side = sign > 0 ? 0 : 1;
-                if (c == 1 || c > 0 && wetFace(d, color, x, y, z, axis, endpoint, side, sign, target)
-                        && wetFace(d, color, x, y, z, axis, endpoint - sign, 1 - side, 0, target)) {
+                if (c == 1 || c > 0 && (wallBase(d, color, x, y, z, axis, endpoint, side, target)
+                        || wetFace(d, color, x, y, z, axis, endpoint, side, sign, target)
+                        && wetFace(d, color, x, y, z, axis, endpoint - sign, 1 - side, 0, target))) {
                     base = endpoint; baseFound = true;
                 }
             }
@@ -79,6 +80,20 @@ final class HeightFunctionCurvature {
         }
         int coordinate = axis == 0 ? x : axis == 1 ? y : z;
         return coordinate + base + (partial ? (sign > 0 ? 0 : 1) : (sign > 0 ? 1 : 0)) + sign * sum;
+    }
+
+    /** The physical wall is the integration base of a single-valued contact height.
+     * A partial PLIC face need only touch it; the column integral retains actual volume. */
+    private static boolean wallBase(FluidDomain d,double[] color,int x,int y,int z,
+                                    int axis,int offset,int side,int target) {
+        x += axis == 0 ? offset : 0; y += axis == 1 ? offset : 0; z += axis == 2 ? offset : 0;
+        int coordinate=axis==0?x:axis==1?y:z,size=axis==0?d.sizeX:axis==1?d.sizeY:d.sizeZ;
+        if (!(side==0 && coordinate==0 || side==1 && coordinate==size-1)) return false;
+        int cell=d.domainFlowFields.cellIndex(reflect(x,d.sizeX),reflect(y,d.sizeY),reflect(z,d.sizeZ));
+        return d.domainFlowFields.surfaceTensionContactAngleAtCell(target)==Math.PI/2
+                &&d.domainFlowFields.surfaceTensionContactAngleAtCell(cell)==Math.PI/2
+                &&d.projection.pressureVolume[cell]==color[cell]
+                &&d.pressurePhaseGeometry.liquidFaceArea(cell,axis,side,d.geometry.cutCells)>0;
     }
 
     /** A common entirely wet section supplies a liquid neighbourhood on both sides.

@@ -99,10 +99,10 @@ final class PressureFaceGraph {
 		for (int f = 0; f < faceCount; f++) {
 			start[f] = entries; liquidStart[f] = liquidEntries; int a = firstCell[f], b = secondCell[f]; if (a < 0) continue;
 			double mass = faceMass(f); if (!(mass > 0)) continue;
-			int d = axis[f]; if(domain.cellMacStage.isUnresolvedWallFace(d,localFace[f]))continue;
+			int d = axis[f]; boolean wallSupported=domain.cellMacStage.isUnresolvedWallFace(d,localFace[f]);
 			double open = domain.pressureSystem.solidFaces.open(d, localFace[f]);
 			if (!(open > 0)) continue;
-			inverseMass[f] = domain.unitScale.cubicMetersPerNormalizedVolume() / mass;
+			if(!wallSupported)inverseMass[f] = domain.unitScale.cubicMetersPerNormalizedVolume() / mass;
 			final int face = f; double coefficient = open / domain.config.cellSize();
 			int maskA = domain.geometry.cutCells.mask(a), maskB = domain.geometry.cutCells.mask(b), ports = 0;
 			for (int micro = 0; micro < 8; micro++) if ((micro >>> d & 1) != 0
@@ -114,9 +114,11 @@ final class PressureFaceGraph {
 				int supportA = CellRemapMicroTopology.support(maskA, micro), supportB = CellRemapMicroTopology.support(maskB, peer);
 				double portArea = open / ports;
 				addLiquidPort(f, supportA, supportB, open / ports);
+				if(wallSupported)continue;
 				pressureAtSide(a,b,micro,peer,d,1,(row,weight,fixed)->add(face,row,portArea/domain.config.cellSize()*weight,fixed));
 				pressureAtSide(b,a,peer,micro,d,1,(row,weight,fixed)->add(face,row,-portArea/domain.config.cellSize()*weight,fixed));
 			}
+			if(wallSupported)continue;
 			int kept = start[f];
 			for (int i = start[f]; i < entries; i++) if (coefficients[i] != 0) { rows[kept] = rows[i]; coefficients[kept++] = coefficients[i]; }
 			entries = kept;
