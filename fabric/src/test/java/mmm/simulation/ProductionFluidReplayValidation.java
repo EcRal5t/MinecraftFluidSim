@@ -7,6 +7,10 @@ public final class ProductionFluidReplayValidation {
 	private ProductionFluidReplayValidation() { }
 
 	public static void main(String[] args) throws Exception {
+		if (args.length == 1 && args[0].equals("--demo-budget")) {
+			DynamicReplayValidationScenarios.damBreakProductionStepsRemainBelowPauseThreshold();
+			return;
+		}
 		ControllerReplayValidationScenarios.controllerPourSequenceWithoutGasSettles();
 		ControllerReplayValidationScenarios.controllerPourSequencePreservesGasInventoryAcrossBackend();
 		ControllerReplayValidationScenarios.phaseEnabledControllerPourRemainsDefinedAcrossBackend();

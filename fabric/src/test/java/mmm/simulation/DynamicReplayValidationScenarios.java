@@ -381,7 +381,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		damBreakProductionStepsRemainBelowPauseThreshold();
 	}
 
-	private static void damBreakProductionStepsRemainBelowPauseThreshold() throws Exception {
+	static void damBreakProductionStepsRemainBelowPauseThreshold() throws Exception {
 		final double performancePauseThresholdMillis = 200.0;
 		FullCapabilityTestFixture.Registries registries = loadProductionRegistries();
 		FluidDomain warmup = createFullyBoundHalfFilledDomain(registries);

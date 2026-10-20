@@ -60,6 +60,7 @@
 - **表面张力和润湿**
   - 选择器：`surface-tension`
   - 测试源码入口：[M4SurfaceTensionValidation](../../fabric/src/test/java/mmm/fluid/M4SurfaceTensionValidation.java)
+  - 同一构建的聚焦入口：`M4SurfaceTensionValidation --wetting` 复用润湿 1,200 步及液液界面后继，`--liquid-pair` 单独运行该后继，`--curvature` 保留共同曲率场景。直接启动时使用 `fabric/build/cpu-validation-work/classpath.txt`、相同工作目录与 `-ea -Xmx512m`，记录对应构建摘要。
 
 - **气体库存、状态方程与孔流**
   - 选择器：`air-network`
@@ -280,6 +281,8 @@
 | 默认控制器注入 16 m³ | `8×8×8` 场景，20 个实际计算步 | 每步不超过 40 ms |
 | 空场景最大装量的 `demo` | `24×16×24` 网格，2,592 条初始 Stock（9×12×24）、液体体积 324 m³，完整物理功能，20 步 | 连续超过 200 ms 的步数小于三步 |
 
+定位最大场景成本时，`ProductionFluidReplayValidation --demo-budget` 可直接运行同一最大 demo；它保留原场景、预热、20 个完整步和暂停判据。正式预算汇总仍采用同时覆盖控制器与最大 demo 的 `production-live-budget`。
+
 报告分别记录 JVM 预热和被测步的耗时，并保留粒子数、体积、相变操作、子步数、PCG 次数与残差。优化后用同一物理配置复测，保持原有预算和守恒检查。
 
 `production-replay` 检查长时间注液、清空、气腔归属、相变功结算、实体响应以及后端捕获/恢复。它关注每步物质与能量收支。性能是否达标由上面的独立测试判定。
@@ -401,15 +404,16 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 |---|---|
 | 库存、动量、墙面交接与恢复 | `review3-final-functional.log`：`cell-inventory` 完整通过；末次热量提交的成本调整保持同一质量、体积、几何与能量结算 |
 | 气腔、移动液封与恢复 | `review3-final-functional.log`：`air-cavity` 完整通过，液柱按实际容量、EOS 与压缩功设置惯性，并保持一跳输运可解析的满截面核心 |
-| 颗粒、沙床与两桶后继 | 最终结果待登记 |
+| 颗粒、沙床与两桶后继 | `review3-final.log`：`granular:short` 完整通过，372 步完成沉降—起动—再沉积；整桶及孔隙整桶后继完成沉积、休眠和冷恢复 |
 | 气液压力与真空残差 | `review3-complete.log`：`gas-liquid:short` 通过，包含共同压力算子、静止真空、压缩与相变后继 |
-| 毛细曲率、压差与实际驱动力 | 最终结果待登记 |
+| 毛细曲率、压差与实际驱动力 | `review3-pressure-final.log` 的曲率、静态液滴及合并前段通过；`review3-wetting-final.log` 的三组原 1,200 步润湿通过，30°／90°／120°的水平扩展方差为 23.98／22.10／15.09，峰值动能 4.49／4.38／3.38 kJ，均低于同一物理能量预算。`review3-pair-final.log` 的液液界面实际做功与六步守恒通过，压差按生产体积解析尺度评价 |
 | 热平流、分层、对流、相变与热恢复 | `review3-final-functional.log`：完整 `thermal` 通过；末次改动仅保持纯内能提交的数值结果并复用质量、几何工作区 |
 | 切格、障碍物流动 | `review3-final-functional.log`：完整 `cut-cell` 通过，含 600 步流动 |
-| 自由面、静水、旋流与溃坝 | `review3-complete.log`：完整 `free-surface` 通过，含原 5,000 步溃坝及精确库存、容量和恢复检查。第 1,000–5,000 步动能 13.65→4.45 J，RMS 速度 0.0318→0.0182 m/s，后段保持共同宏观动能要求 |
-| 原完整步墙钟预算 | 最终产物计时待登记 |
+| 自由面、静水、旋流与溃坝 | `review3-hydro-final.log`：最终压力模型的完整 `free-surface` 通过，含分数液柱、薄层及原 5,000 步溃坝的精确库存、容量和恢复检查。第 1,000–5,000 步动能 359–812 J，RMS 速度 0.163–0.245 m/s，后段均满足共同宏观动能要求；第 5,000 步 506 J |
+| 原完整步墙钟预算 | `review3-budget-idle-1.log`／`review3-budget-idle-2.log`：`eefbdd9` 空闲窗口的控制器最大 32.10／26.95 ms，通过；最大 demo 最大 368.32／317.00 ms，连续超 200 ms 达 14／7 步，未通过。当前继续整改输运、压力与相变成本 |
 
-当前构建与产物摘要待最终结果登记。`runCpuValidation` 输出 Git 版本、源码与本地 classpath 产物 SHA-256、JVM、堆、选择器、断言开关及完整 classpath；源码摘要覆盖五个 CPU 模块的源码、资源与构建配置。计时保持原输入、装量、预热、采样、子步与压力迭代额度，使用默认进程优先级。
+静水拆分后的物理流程构建为 `61e383d49820bf4d6831c61d152d677dd22cca9f`，源码 SHA-256 为 `a383eb1ed13cb53597c93b8e403803fff54d3f107d6f58eb92396cc62fa867d5`，本地 classpath 产物 SHA-256 为 `2d8618221eb3b78df825ae626e06d3cc7c0a3ab1b6a8f90f8cc50e275a04ade0`，清单来自 `review3-hydro-final.log`。液液界面聚焦流程见 `review3-final-manifest.log` 与 `review3-pair-final.log`；后续等价几何复用的预算构建见 `review3-budget-manifest.log`，版本 `eefbdd9`、源码摘要 `b808859cf22cea8a6c7ecedf87c1c1d70352b9924daad6ac2dbb5555e69dfccc`、产物摘要 `eaadc0ecba2f4a5740ebf74a073ccbea43e191061b3375fb94b5ba7a3d887273`。
+`runCpuValidation` 输出 Git 版本、源码与本地 classpath 产物摘要、JVM、堆、选择器、断言开关及完整 classpath；源码摘要覆盖五个 CPU 模块的源码、资源与构建配置。计时保持原输入、装量、预热、采样、子步与压力迭代额度，使用默认进程优先级。
 
 真空静止误差按体积残差、格长与步长换算，库存与热账精确核对。毛细验收同时观察变曲率初态相对零张力对照的真实动量响应；局部温度舍入与高流速前锋的解析限制按设计书评价。化学、容器与持久事务沿用未受本轮改动影响的既有正式结果；第三轮审阅中的 `chemistry:short` 和 `containers:short` 亦已通过。
 
