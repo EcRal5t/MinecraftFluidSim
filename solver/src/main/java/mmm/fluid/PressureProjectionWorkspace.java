@@ -12,17 +12,9 @@ final class PressureProjectionWorkspace {
 	final double[] pressureVolume;
 	final float[] pressure; // Full-liquid reduced pressure pi; physical liquid pressure is reconstructed at query.
 	final int[] fluidUnknownCells;
-	final double[] matrixDiagonal;
-	final double[] matrixNegativeX;
-	final double[] matrixPositiveX;
-	final double[] matrixNegativeY;
-	final double[] matrixPositiveY;
-	final double[] matrixNegativeZ;
-	final double[] matrixPositiveZ;
 	boolean[] gasPressureUnknown;
 	int[] gasUnknownNodes;
 	float[] gasPressure;
-	double[] gasMatrixDiagonal;
 	double[] gasStorageCoefficient;
 	int gasNodeCount;
 	int fluidUnknownCount;
@@ -33,18 +25,10 @@ final class PressureProjectionWorkspace {
 		this.pressureVolume = new double[cellCount];
 		this.pressure = new float[cellCount];
 		this.fluidUnknownCells = new int[cellCount];
-		this.matrixDiagonal = new double[cellCount];
-		this.matrixNegativeX = new double[cellCount];
-		this.matrixPositiveX = new double[cellCount];
-		this.matrixNegativeY = new double[cellCount];
-		this.matrixPositiveY = new double[cellCount];
-		this.matrixNegativeZ = new double[cellCount];
-		this.matrixPositiveZ = new double[cellCount];
 		// One-based gas scratch grows with the actual micro-piece chamber count.
 		this.gasPressureUnknown = new boolean[cellCount + 1];
 		this.gasUnknownNodes = new int[cellCount];
 		this.gasPressure = new float[cellCount + 1];
-		this.gasMatrixDiagonal = new double[cellCount + 1];
 		this.gasStorageCoefficient = new double[cellCount + 1];
 	}
 
@@ -57,7 +41,6 @@ final class PressureProjectionWorkspace {
 		gasPressureUnknown = Arrays.copyOf(gasPressureUnknown, length);
 		gasUnknownNodes = Arrays.copyOf(gasUnknownNodes, nodes);
 		gasPressure = Arrays.copyOf(gasPressure, length);
-		gasMatrixDiagonal = Arrays.copyOf(gasMatrixDiagonal, length);
 		gasStorageCoefficient = Arrays.copyOf(gasStorageCoefficient, length);
 	}
 }

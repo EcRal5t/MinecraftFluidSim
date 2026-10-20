@@ -212,6 +212,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 压力系统使用同一面系数组装矩阵、预条件器和速度修正。
 `PressureLinearSolver` 与 `PressurePreconditioner` 统一 PCG 及不完全 Cholesky 预条件，颗粒阻力按有限质量成对处理。
+`PressureSparseMatrix` 一次组装液体、颗粒和气体共同 CSR，矩阵乘与 IC(0) 直接复用该算子；真空活动集沿当前自由行求解。
 已解析液气界面采用给定压力或有限气腔储存项，状态方程按液体压载区间给出有限体积响应，参加一次半隐式压力预测。
 活动颗粒体积分配到共同 MAC 面，液体读取剩余开口，两相真实有限质量与各自体积散度的转置共同构成压力算子。
 压力同时更新液体与颗粒速度，接触和位置预测随后准备实际整数占容，真实终点孔容由共同有界输运结算。
@@ -234,6 +235,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
     - [PressureProjectionStage](../../solver/src/main/java/mmm/fluid/PressureProjectionStage.java)
     - [PressureSystem](../../solver/src/main/java/mmm/fluid/PressureSystem.java)
     - [PressureLinearSolver](../../solver/src/main/java/mmm/fluid/PressureLinearSolver.java)
+    - [PressureSparseMatrix](../../solver/src/main/java/mmm/fluid/PressureSparseMatrix.java)：液体、气体与颗粒共同 CSR 算子
     - [PressurePreconditioner](../../solver/src/main/java/mmm/fluid/PressurePreconditioner.java)
     - [PressureFaceGraph](../../solver/src/main/java/mmm/fluid/PressureFaceGraph.java)
     - [PressureBoundaryView](../../solver/src/main/java/mmm/fluid/PressureBoundaryView.java)

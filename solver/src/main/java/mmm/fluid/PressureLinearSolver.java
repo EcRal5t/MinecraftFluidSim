@@ -4,31 +4,32 @@ import java.util.Arrays;
 
 /** Common double-precision PCG and incomplete Cholesky for liquid, gas and coupled solid pressure. */
 final class PressureLinearSolver {
-	interface Operator {
+	interface RightHandSide {
 		void buildRhs(double[] destination);
-		void applyMatrix(double[] source, double[] destination);
 	}
 	private final FluidDomain domain;
-	private final Operator operator;
+	private final RightHandSide rhsBuilder;
+	private final PressureSparseMatrix matrix;
 	private final PressurePreconditioner preconditioner;
 	private double[] pressure = new double[0], rhs = new double[0], residual = new double[0], direction = new double[0];
-	private double[] product = new double[0], diagonal = new double[0], preconditioned = new double[0];
+	private double[] product = new double[0], preconditioned = new double[0];
 	private int[] unknowns = new int[0], freeUnknowns = new int[0];
 	private boolean[] bounded = new boolean[0], free = new boolean[0];
 	private int count, freeCount;
 	private static final double GAS_LOWER = -mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE;
 
-	PressureLinearSolver(FluidDomain domain, Operator operator) {
+	PressureLinearSolver(FluidDomain domain, PressureSparseMatrix matrix, RightHandSide rhsBuilder) {
 		this.domain = domain;
-		this.operator = operator;
-		preconditioner = new PressurePreconditioner(domain);
+		this.matrix = matrix;
+		this.rhsBuilder = rhsBuilder;
+		preconditioner = new PressurePreconditioner();
 		ensureCapacity();
 	}
 	private void ensureCapacity() {
 		int size = Math.addExact(domain.cellCount, Math.addExact(domain.projection.gasNodeCount, 1));
 		if (pressure.length >= size) return;
 		pressure = Arrays.copyOf(pressure, size); rhs = Arrays.copyOf(rhs, size); residual = Arrays.copyOf(residual, size);
-		direction = Arrays.copyOf(direction, size); product = Arrays.copyOf(product, size); diagonal = Arrays.copyOf(diagonal, size);
+		direction = Arrays.copyOf(direction, size); product = Arrays.copyOf(product, size);
 		preconditioned = Arrays.copyOf(preconditioned, size); unknowns = Arrays.copyOf(unknowns, size);
 		freeUnknowns=Arrays.copyOf(freeUnknowns,size);bounded=Arrays.copyOf(bounded,size);free=Arrays.copyOf(free,size);
 	}
@@ -40,18 +41,16 @@ final class PressureLinearSolver {
 	}
 
 	PressureProjectionResult solve(double target) {
-		ensureCapacity();count=0;Arrays.fill(bounded,false);double h=domain.config.cellSize();
+		ensureCapacity();count=0;Arrays.fill(bounded,false);
 		for(int ordinal=0;ordinal<domain.projection.fluidUnknownCount;ordinal++) {
 			int cell=domain.projection.fluidUnknownCells[ordinal];unknowns[count++]=cell;
-			diagonal[cell]=domain.projection.matrixDiagonal[cell]/(h*h);
 		}
 		for(int ordinal=0;ordinal<domain.projection.gasUnknownCount;ordinal++) {
 			int node=domain.projection.gasUnknownNodes[ordinal],row=domain.cellCount+node;unknowns[count++]=row;
-			diagonal[row]=domain.projection.gasMatrixDiagonal[node];
 			bounded[row]=true;
 			pressure[row]=Math.max(GAS_LOWER,pressure[row]);
 		}
-		operator.buildRhs(rhs);refreshResidual();
+		rhsBuilder.buildRhs(rhs);refreshResidual();
 		Arrays.fill(free,false);updateFreeSet(target);restartDirection();
 		int iterations=iterate(target);
 		refreshResidual();double rms=projectedNorm();
@@ -67,7 +66,7 @@ final class PressureLinearSolver {
 	private int iterate(double target) {
 		double rz=dotFree(residual,direction),rms=projectedNorm();int iterations=0;
 		for(;rms>target&&iterations<domain.config.maxPressureIterations();iterations++) {
-			operator.applyMatrix(direction,product);double denominator=dotFree(direction,product);
+			matrix.multiply(direction,product);double denominator=dotFree(direction,product);
 			if(!(denominator>0&&Double.isFinite(denominator)&&rz>0&&Double.isFinite(rz)))break;
 			double alpha=rz/denominator;boolean blocked=false;
 			for(int ordinal=0;ordinal<freeCount;ordinal++) {
@@ -98,7 +97,7 @@ final class PressureLinearSolver {
 		return iterations;
 	}
 	private void refreshResidual(){
-		operator.applyMatrix(pressure,product);
+		matrix.multiply(pressure,product);
 		for(int ordinal=0;ordinal<count;ordinal++){int row=unknowns[ordinal];residual[row]=rhs[row]-product[row];}
 	}
 	/** Pressure at its lower limit permits expansion at zero predicted absolute pressure. */
@@ -112,13 +111,14 @@ final class PressureLinearSolver {
 	}
 	private void restartDirection(){
 		Arrays.fill(direction,0);if(freeCount==0)return;
-		preconditioner.prepare(freeUnknowns,freeCount,diagonal);preconditioner.apply(freeUnknowns,freeCount,residual,direction);
+		preconditioner.prepare(matrix, freeUnknowns, freeCount);
+		preconditioner.apply(freeUnknowns, freeCount, residual, direction);
 		// A coupled preconditioner can point out of a released lower bound. The
 		// diagonal projected-gradient restart is feasible and strictly descending.
 		for(int ordinal=0;ordinal<freeCount;ordinal++) {
 			int row=freeUnknowns[ordinal];
 			if(bounded[row]&&pressure[row]<=GAS_LOWER&&direction[row]<0) {
-				for(int j=0;j<freeCount;j++){int freeRow=freeUnknowns[j];direction[freeRow]=residual[freeRow]/diagonal[freeRow];}
+				for(int j=0;j<freeCount;j++){int freeRow=freeUnknowns[j];direction[freeRow]=residual[freeRow]/matrix.diagonal(freeRow);}
 				break;
 			}
 		}
@@ -146,7 +146,7 @@ final class PressureLinearSolver {
 			int row = unknowns[ordinal];
 			if(bounded[row]&&pressure[row]<=GAS_LOWER&&residual[row]<=0)continue;
 			equations++;
-			double bound = Math.abs(rhs[row]) + 2 * diagonal[row] * maximumPressure;
+			double bound = Math.abs(rhs[row]) + 2 * matrix.diagonal(row) * maximumPressure;
 			scale = Math.hypot(scale, bound);
 		}
 		double floor = (equations + 8.0) * Math.ulp(1.0) * 0.5 * scale / Math.sqrt(Math.max(1, equations));

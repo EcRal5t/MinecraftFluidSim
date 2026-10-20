@@ -89,23 +89,17 @@ final class GranularPressureCoupling {
         }
     }
 
-    /** Adds rho B_s (h^3 M_s^-1) B_s^T with primitive gather/scatter. */
-    void applyMatrix(double[] pressure, double[] result, double factor) {
+    /** Assemble rho B_s (h^3 M_s^-1) B_s^T once into the common pressure matrix. */
+    void assembleMatrix(PressureSparseMatrix matrix, double factor) {
         for (int c = 0; c < contacts; c++) {
-            double force = 0;
-            for (int e = start[c]; e < start[c + 1]; e++) force += coefficient[e] * pressure[row[e]];
-            double response = factor * inverseMass[c] * force;
-            for (int e = start[c]; e < start[c + 1]; e++) result[row[e]] += coefficient[e] * response;
-        }
-    }
-
-    void addDiagonal() {
-        double h = domain.config.cellSize(), density = domain.config.density();
-        var p = domain.projection;
-        for (int c = 0; c < contacts; c++) for (int e = start[c]; e < start[c + 1]; e++) {
-            double value = density * inverseMass[c] * coefficient[e] * coefficient[e];
-            if (row[e] < domain.cellCount) p.matrixDiagonal[row[e]] += value * h * h;
-            else p.gasMatrixDiagonal[row[e] - domain.cellCount] += value;
+            double response = factor * inverseMass[c];
+            for (int i = start[c]; i < start[c + 1]; i++) {
+                if (!matrix.active(row[i])) continue;
+                double weight = response * coefficient[i];
+                for (int j = start[c]; j < start[c + 1]; j++) {
+                    matrix.add(row[i], row[j], weight * coefficient[j]);
+                }
+            }
         }
     }
 

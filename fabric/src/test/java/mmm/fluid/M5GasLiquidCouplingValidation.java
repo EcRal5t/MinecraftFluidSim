@@ -145,7 +145,7 @@ public final class M5GasLiquidCouplingValidation {
 		check(Math.abs(domain.projection.gasStorageCoefficient[gasNode] - expectedStorage)
 				<= .001*expectedStorage,
 				"isothermal cavity pressure row did not use V/p absolute EoS compliance");
-		check(domain.projection.gasMatrixDiagonal[gasNode] > domain.projection.gasStorageCoefficient[gasNode],
+		check(domain.pressureSystem.matrix.diagonal(domain.cellCount+gasNode) > domain.projection.gasStorageCoefficient[gasNode],
 				"compressible gas row did not share any symmetric liquid interface face");
 		check(Float.isFinite(domain.projection.gasPressure[gasNode])
 				&& domain.projection.gasPressure[gasNode] != 0.0F,

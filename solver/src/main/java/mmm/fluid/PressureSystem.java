@@ -9,7 +9,7 @@ final class PressureSystem {
 	private final GranularImplicitDrag drag;
 	private final double[] transportVelocity;
 	private final PressureLinearSolver solver;
-	private final PressureLinearSolver.Operator linearOperator;
+	final PressureSparseMatrix matrix = new PressureSparseMatrix();
 	final GranularFaceVolumes solidFaces;
 	final PressureFaceGraph faces;
 	private final double[] velocityWork;
@@ -23,23 +23,14 @@ final class PressureSystem {
 		granular = new GranularPressureCoupling(domain); drag = new GranularImplicitDrag(domain);
 		transportVelocity=new double[faces.faceCount];
 		velocityWork = new double[faces.faceCount];
-		linearOperator = new PressureLinearSolver.Operator() {
-			@Override public void buildRhs(double[] result) {
-				Arrays.fill(result, 0); readVelocity(velocityWork);
-				faces.addDivergence(velocityWork, result, -domain.config.density() / duration);
-				granular.addDivergence(result, -domain.config.density() / duration);
-				addStorageRhs(result);
-			}
-			@Override public void applyMatrix(double[] source, double[] result) {
-				Arrays.fill(result, 0); faces.pressureVelocity(source, velocityWork);
-				faces.addDivergence(velocityWork, result, domain.config.density());
-				granular.applyMatrix(source, result, domain.config.density());
-				var p = domain.projection;
-				for (int i = 0; i < p.gasUnknownCount; i++) { int node = p.gasUnknownNodes[i];
-					result[domain.cellCount + node] += p.gasStorageCoefficient[node] * source[domain.cellCount + node]; }
-			}
-		};
-		solver = new PressureLinearSolver(domain, linearOperator);
+		solver = new PressureLinearSolver(domain, matrix, this::buildRhs);
+	}
+	private void buildRhs(double[] result) {
+		Arrays.fill(result, 0);
+		readVelocity(velocityWork);
+		faces.addDivergence(velocityWork, result, -domain.config.density() / duration);
+		granular.addDivergence(result, -domain.config.density() / duration);
+		addStorageRhs(result);
 	}
 	PressureProjectionResult solveProjection(float dt) {
 		duration = dt; domain.domainFlowFields.ensureGrid(); solidFaces.rebuild(); faces.rebuild(dt);
@@ -53,7 +44,8 @@ final class PressureSystem {
 			float[] velocity = a == 0 ? domain.mac.velocityX : a == 1 ? domain.mac.velocityY : domain.mac.velocityZ;
 			velocity[local] += dt * faces.inverseMass[f] * faces.affine[f];
 		}
-		buildDiagonal(); solver.reset();
+		assembleMatrix();
+		solver.reset();
 		pressure = solver.pressure();
 		for (int i = 0; i < p.gasUnknownCount; i++) {
 			int node = p.gasUnknownNodes[i];
@@ -109,30 +101,29 @@ final class PressureSystem {
 		}
 		granular.project(dt,pressure);
 	}
-	private void buildDiagonal() {
-		var p = domain.projection; double h2 = domain.config.cellSize() * (double) domain.config.cellSize();
-		double[][] neighbors = {p.matrixNegativeX, p.matrixPositiveX, p.matrixNegativeY, p.matrixPositiveY, p.matrixNegativeZ, p.matrixPositiveZ};
-		for (var column : neighbors) Arrays.fill(column, 0); Arrays.fill(p.matrixDiagonal, 0);
-		System.arraycopy(p.gasStorageCoefficient, 0, p.gasMatrixDiagonal, 0, p.gasStorageCoefficient.length);
+	private void assembleMatrix() {
+		var p = domain.projection;
+		matrix.begin(domain.cellCount + p.gasNodeCount + 1, p.fluidUnknownCount + p.gasUnknownCount);
+		for (int i = 0; i < p.fluidUnknownCount; i++) matrix.activate(p.fluidUnknownCells[i]);
+		for (int i = 0; i < p.gasUnknownCount; i++) matrix.activate(domain.cellCount + p.gasUnknownNodes[i]);
 		for (int f = 0; f < faces.faceCount; f++) {
 			double response = domain.config.density() * faces.inverseMass[f];
+			if (response == 0) continue;
 			for (int i = faces.start[f]; i < faces.start[f + 1]; i++) {
-				int row = faces.rowAt(i); if (row < 0) continue;
-				double c = faces.coefficientAt(i), diagonal = response * c * c;
-				if (row < domain.cellCount) p.matrixDiagonal[row] += diagonal * h2;
-				else p.gasMatrixDiagonal[row - domain.cellCount] += diagonal;
-				if (row >= domain.cellCount) continue;
+				int row = faces.rowAt(i);
+				if (!matrix.active(row)) continue;
+				double weight = response * faces.coefficientAt(i);
 				for (int j = faces.start[f]; j < faces.start[f + 1]; j++) {
-					int other = faces.rowAt(j); if (other < 0 || other >= domain.cellCount || other == row) continue;
-					int direction=-1,delta=other-row;
-					if(Math.abs(delta)==1 && other/domain.sizeX==row/domain.sizeX)direction=delta>0?1:0;
-					else if(Math.abs(delta)==domain.sizeX && other/(domain.sizeX*domain.sizeY)==row/(domain.sizeX*domain.sizeY))direction=delta>0?3:2;
-					else if(Math.abs(delta)==domain.sizeX*domain.sizeY)direction=delta>0?5:4;
-					if(direction>=0)neighbors[direction][row] -= response * c * faces.coefficientAt(j) * h2;
+					matrix.add(row, faces.rowAt(j), weight * faces.coefficientAt(j));
 				}
 			}
 		}
-		granular.addDiagonal();
+		granular.assembleMatrix(matrix, domain.config.density());
+		for (int i = 0; i < p.gasUnknownCount; i++) {
+			int node = p.gasUnknownNodes[i];
+			matrix.add(domain.cellCount + node, domain.cellCount + node, p.gasStorageCoefficient[node]);
+		}
+		matrix.finish();
 	}
 	private void readVelocity(double[] target) {
 		float[][] fields = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};

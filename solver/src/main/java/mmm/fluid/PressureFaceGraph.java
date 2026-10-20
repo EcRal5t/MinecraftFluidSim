@@ -103,7 +103,7 @@ final class PressureFaceGraph {
 		classify();
 		var p = domain.projection; int count = domain.gasState.network.nodeCount(); p.ensureGasCapacity(count);
 		Arrays.fill(p.gasPressureUnknown, false); p.gasUnknownCount = p.fluidUnknownCount = 0;
-		Arrays.fill(p.gasStorageCoefficient, 0); Arrays.fill(p.gasMatrixDiagonal, 0);
+		Arrays.fill(p.gasStorageCoefficient, 0);
 		if(gasPressureLoad.length<count+1)gasPressureLoad=new double[count+1];
 		double head=domain.config.density()*domain.config.gravity()*domain.config.cellSize();
 		Arrays.fill(gasPressureLoad,head);
