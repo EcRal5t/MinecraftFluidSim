@@ -181,18 +181,29 @@ final class GasLiquidPhaseChangeStage {
 		for(int i=0;i<counts.length;i++) proposals.get(i).batches=counts[i];
 		var gas=new ArrayList<GasInventory>(network.nodeCount()); double[] energy=new double[network.nodeCount()];
 		for(int node:network.nodeIds()) { gas.add(network.inventory(node)); energy[node-1]=thermal.gasNodeEnergy(node,network); }
+		// Every component exchange in a chamber shares its actual remaining pore capacity.
+		var gasRoom=new SignedDyadic[network.nodeCount()];Arrays.fill(gasRoom,SignedDyadic.ZERO);
+		for(var component:domain.gasState.frame.capacity().components()) if(component.availableVolumeNormalized().signum()>0) {
+			int node=domain.gasState.frame.topology().nodeOfComponent(component.cell(),component.supportMask());
+			if(node>0)gasRoom[node-1]=gasRoom[node-1].add(component.availableVolumeNormalized());
+		}
+		for(var p:proposals)if(p.boiling&&p.batches>0)
+			gasRoom[p.node-1]=gasRoom[p.node-1].add(p.batchVolume.multiply(SignedDyadic.of(p.batches)));
 		GasAuditLedger created=GasAuditLedger.EMPTY,removed=GasAuditLedger.EMPTY;
 		int operations=0,boiled=0,condensed=0;
 		for(var group:groups.values()) {
 			int node=group.getFirst().node; var inventory=gas.get(node-1);
 			for(var p:group) if(p.boiling&&p.batches>0) {
-				var moved=boil(p,phase,function); inventory=inventory.merge(moved); created=created.add(moved);
+				var moved=boil(p,phase,function);
+				try { inventory=inventory.merge(moved); }
+				catch(GasInventory.RepresentationException unavailable) { return new FluidDomain.GasThermalPhaseStats(0,0,0); }
+				created=created.add(moved);
 				operations+=Math.toIntExact(p.batches); boiled++;
 			}
 			var receivers=group.stream().filter(p->!p.boiling&&p.batches>0).toList();
 			if(!receivers.isEmpty()) {
 				var vapor=inventory.component(receivers.getFirst().component);
-				admitCondensation(receivers,vapor);
+				admitCondensation(receivers,inventory,vapor,gasRoom[node-1]);
 				for(var p:receivers) if(p.batches>0) {
 					long nanos=Math.multiplyExact(p.batches,p.nanos),mass=Math.multiplyExact(p.batches,p.batchMass);
 					var proportional=inventory.splitComponent(p.component,nanos).first().components().getFirst();
@@ -200,6 +211,7 @@ final class GasLiquidPhaseChangeStage {
 					var take=inventory.splitComponent(p.component,nanos,mass,residual);
 					inventory=take.second(); removed=removed.add(take.first());
 					condense(p,take.first(),phase,function);
+					gasRoom[node-1]=gasRoom[node-1].subtract(p.batchVolume.multiply(SignedDyadic.of(p.batches)));
 					operations+=Math.toIntExact(p.batches); condensed++;
 				}
 			}
@@ -259,7 +271,9 @@ final class GasLiquidPhaseChangeStage {
 		}
 		var liquidPlan=liquids.planEdits(edits);
 		var batch=new GasTopologyCoordinator.PhaseBatch(gas,energy,created,removed,gasEnergy,cellEnergy);
-		var topology=domain.gasTopologyCoordinator.planAfterPhaseBatch(liquidPlan.future(),batch);
+		GasTopologyCoordinator.GasTopologyPlan topology;
+		try { topology=domain.gasTopologyCoordinator.planAfterPhaseBatch(liquidPlan.future(),batch); }
+		catch(GasInventory.RepresentationException unavailable) { return new FluidDomain.GasThermalPhaseStats(0,0,0); }
 		liquidPlan.requireCurrent(); domain.gasTopologyCoordinator.requireAfterPhaseBatchCurrent(topology,batch);
 		liquidPlan.commit();
 		domain.cellMacStage.commitMomentum(momentum);
@@ -274,23 +288,40 @@ final class GasLiquidPhaseChangeStage {
 	}
 
 	/** One common limiter for inventory demand, followed by exact local component splits. */
-	private static void admitCondensation(List<Proposal> receivers,GasComponentAmount vapor) {
+	private static void admitCondensation(List<Proposal> receivers,GasInventory inventory,GasComponentAmount vapor,SignedDyadic room) {
 		if(vapor==null) { for(var p:receivers) p.batches=0; return; }
-		long mass=0,nanos=0;
-		for(var p:receivers) { mass=Math.addExact(mass,Math.multiplyExact(p.batches,p.batchMass)); nanos=Math.addExact(nanos,Math.multiplyExact(p.batches,p.nanos)); }
+		long mass=0,nanos=0;var volume=SignedDyadic.ZERO;
+		for(var p:receivers) {
+			mass=Math.addExact(mass,Math.multiplyExact(p.batches,p.batchMass)); nanos=Math.addExact(nanos,Math.multiplyExact(p.batches,p.nanos));
+			volume=volume.add(p.batchVolume.multiply(SignedDyadic.of(p.batches)));
+		}
+		if(mass==0)return;
 		double scale=Math.min(1,Math.min(vapor.massUnits()/(double)mass,vapor.standardVolumeNanos()/(double)nanos));
-		if(scale>=1) return;
+		scale=Math.min(scale,room.toDouble()/volume.toDouble());
+		if(scale>=1&&fitsCondensation(inventory,vapor,mass,nanos,volume,room)) return;
 		var order=new ArrayList<Proposal>(receivers); var remainders=new IdentityHashMap<Proposal,Double>();
-		long usedMass=0,usedNanos=0;
+		long usedMass=0,usedNanos=0;var usedVolume=SignedDyadic.ZERO;
 		for(var p:receivers) {
 			double target=p.batches*scale; long admitted=(long)Math.floor(target);
+			admitted=Math.min(admitted,Math.min((vapor.massUnits()-usedMass)/p.batchMass,(vapor.standardVolumeNanos()-usedNanos)/p.nanos));
+			admitted=volumeBatches(room.subtract(usedVolume),p.batchVolume,admitted);
+			var nextVolume=usedVolume.add(p.batchVolume.multiply(SignedDyadic.of(admitted)));
+			if(admitted>0&&!fitsCondensation(inventory,vapor,usedMass+admitted*p.batchMass,usedNanos+admitted*p.nanos,nextVolume,room)) {
+				admitted--;nextVolume=nextVolume.subtract(p.batchVolume);
+			}
 			remainders.put(p,target-admitted); p.batches=admitted;
 			usedMass=Math.addExact(usedMass,Math.multiplyExact(admitted,p.batchMass)); usedNanos=Math.addExact(usedNanos,Math.multiplyExact(admitted,p.nanos));
+			usedVolume=nextVolume;
 		}
 		order.sort(Comparator.<Proposal>comparingDouble(remainders::get).reversed().thenComparingInt(p->p.cell.id));
-		for(var p:order) if(remainders.get(p)>0&&p.batchMass<=vapor.massUnits()-usedMass&&p.nanos<=vapor.standardVolumeNanos()-usedNanos) {
-			p.batches++; usedMass+=p.batchMass; usedNanos+=p.nanos;
+		for(var p:order) if(remainders.get(p)>0&&fitsCondensation(inventory,vapor,usedMass+p.batchMass,usedNanos+p.nanos,usedVolume.add(p.batchVolume),room)) {
+			p.batches++; usedMass+=p.batchMass; usedNanos+=p.nanos;usedVolume=usedVolume.add(p.batchVolume);
 		}
+	}
+	private static boolean fitsCondensation(GasInventory inventory,GasComponentAmount vapor,long mass,long nanos,SignedDyadic volume,SignedDyadic room) {
+		if(mass>vapor.massUnits()||nanos>vapor.standardVolumeNanos())return false;
+		int remaining=volume.compareTo(room);
+		return remaining<0||remaining==0&&inventory.components().size()==1&&mass==vapor.massUnits()&&nanos==vapor.standardVolumeNanos();
 	}
 
 	private Cell captureCell(int id,ThermalStateFunction function,ThermalDomainState.PhaseCandidateCell current) {
@@ -374,12 +405,14 @@ final class GasLiquidPhaseChangeStage {
 		if(gasVolume==0) gasVolume=candidate.batchVolumeM3();
 		double gasResponse=nanos*1e-9/batchKg*GasRegistry.STANDARD_PRESSURE_PA/GasRegistry.STANDARD_TEMPERATURE_K
 				*(inventory.isEmpty()?sourceTemperature:gasTemperature)/gasVolume;
+		// The same phase mass changes both vapor inventory and the liquid-excluded gas volume.
+		gasResponse-=candidate.saturation().componentPartialPressurePa()*candidate.batchVolumeM3()/batchKg/gasVolume;
 		if(gasCapacity>0) gasResponse+=candidate.saturation().componentPartialPressurePa()/gasTemperature
 				*(carried-gasBase-registry.material(gas).sensibleSpecificEnergyAt(gasTemperature))/gasCapacity;
 		return new Proposal(cell,candidate,liquid,component,boiling,high,normalized,lower,upper,liquidResponse,Math.max(0,gasResponse));
 	}
 
-	/** Fixed-volume, frozen-Cv closure; P/T splitting error is first order in exchanged mass. */
+	/** Frozen-Cv chamber closure with inventory and pore-volume pressure response. */
 	private static void closeChamber(List<Proposal> group) {
 		double reference=group.getFirst().saturationPressure;
 		double initial=group.getFirst().partialPressure-reference,low=initial,high=initial;

@@ -1,6 +1,7 @@
 package mmm.fluid;
 
 import mmm.units.SignedDyadic;
+import mmm.inventory.PhaseOccupancyState;
 import java.util.List;
 
 /** Standard floating convex clipping on a local open microface rectangle. */
@@ -29,7 +30,7 @@ final class GasFaceIntersection {
             throw new IllegalArgumentException("Invalid complete gas cell face");
         for(int a=0;a<2;a++)for(int b=0;b<2;b++) {
             double tangent=.5*a,other=.5*b;int micro=phase.microAtFace(cell,axis,coordinate,tangent,other);
-            double fraction=phase.liquidFractionExact(cell,micro);
+            double fraction=faceLiquidFraction(phase,cell,micro);
             if(!(fraction>=0&&fraction<=1))throw new IllegalArgumentException("Invalid gas face phase fraction");
             if(fraction>=1)return false;
             if(fraction>0&&!covers(tangent,other,.5,phase.planeNormal(cell,micro,(axis+1)%3),
@@ -60,8 +61,8 @@ final class GasFaceIntersection {
     }
     private static double area(FlipPressurePhaseGeometry phase,int firstCell,int firstMicro,FlipPressurePhaseGeometry secondPhase,int secondCell,int secondMicro,int axis,
             double firstCoordinate,double secondCoordinate,double tangentStart,double otherStart,double width) {
-        double firstFraction=phase.liquidFractionExact(firstCell,firstMicro);
-        double secondFraction=secondCell<0?0:secondPhase.liquidFractionExact(secondCell,secondMicro);
+        double firstFraction=faceLiquidFraction(phase,firstCell,firstMicro);
+        double secondFraction=secondCell<0?0:faceLiquidFraction(secondPhase,secondCell,secondMicro);
         if(!(firstFraction>=0&&firstFraction<=1&&secondFraction>=0&&secondFraction<=1))
             throw new IllegalArgumentException("Invalid gas face phase fraction");
         if(width==0||firstFraction>=1||secondFraction>=1)return 0;
@@ -71,6 +72,25 @@ final class GasFaceIntersection {
         if(firstFraction>0)cut(polygon,phase,firstCell,firstMicro,axis,firstCoordinate,tangentStart,otherStart);
         if(secondFraction>0)cut(polygon,secondPhase,secondCell,secondMicro,axis,secondCoordinate,tangentStart,otherStart);
         return polygon.area(width);
+    }
+    /** Unresolved liquid occupies a compact interior drop, leaving its support's faces open to gas. */
+    private static double faceLiquidFraction(FlipPressurePhaseGeometry phase,int cell,int micro){
+        double fraction=phase.liquidFractionExact(cell,micro);
+        if(fraction==0)return 0;
+        int support=CellRemapMicroTopology.support(phase.collisionMask(cell),micro);
+        double capacity=.125*Integer.bitCount(support);
+        var plane=phase.offsetBracket(cell,micro);
+        double liquid=plane==null?fraction*capacity:plane.targetVolume();
+        if(liquid>0&&liquid<capacity){
+            double scale;
+            if(phase.hasComponentPlanes(cell))scale=phase.componentPoreScale(cell,micro,1);
+            else{
+                double open=.125*Integer.bitCount(~phase.collisionMask(cell)&255);
+                scale=open>0?phase.poreVolume(cell).toDouble()/open:0;
+            }
+            if(scale>0&&liquid*scale<=PhaseOccupancyState.VOLUME_RESOLUTION)return 0;
+        }
+        return fraction;
     }
     private static void cut(Polygon polygon,FlipPressurePhaseGeometry phase,int cell,int micro,int axis,
             double coordinate,double x,double y) {

@@ -47,7 +47,7 @@ final class GranularSphereCollision {
 			for (int a = 0; a < 3; a++) { p[a] += time * d[a]; d[a] *= 1 - time; }
 			for (Hit hit : hits) {
 				planes.add(new ContactPlane(hit.normal, dot(hit.normal, p)));
-				double gap = hit.axis >= 0 ? Math.abs(p[hit.axis] - hit.minimum[0]) : Math.abs(norm2(boxNormal(p, hit.minimum, hit.maximum)) - radius * radius);
+				double gap = hit.axis >= 0 ? Math.abs(p[hit.axis] - hit.minimum[0]) : Math.abs(Math.sqrt(norm2(boxNormal(p, hit.minimum, hit.maximum))) - radius);
 				history.add(new Hit(0, 0, hit.normal, hit.minimum, hit.maximum, Math.max(hit.envelope, gap), hit.axis));
 			}
 			history = touching(p, radius, history);
@@ -60,7 +60,7 @@ final class GranularSphereCollision {
 		boolean supported = velocity[1] <= 0 && history.stream().anyMatch(hit -> hit.normal[1] > 0);
 		return new Motion(endpoint[0], endpoint[1], endpoint[2], (float) v[0], (float) v[1], (float) v[2], supported, budget - remainingOperations);
 	}
-	/** Cold support at a stored resting pose, using the same coordinate rounding envelope as motion. */
+	/** Stored support and moving contact share the representative position resolution. */
 	boolean supportsAtRest(float x, float y, float z, float radius) {
 		return touching(new double[]{x, y, z}, radius, new ArrayList<>()).stream().anyMatch(hit -> hit.normal[1] > 0);
 	}
@@ -179,12 +179,13 @@ final class GranularSphereCollision {
 			for (int a = 0; a < 3; a++) { double at = p[a] + time * d[a]; normal[a] = at - Math.max(lo[a], Math.min(hi[a], at)); }
 			double magnitude = Math.sqrt(norm2(normal)); if (magnitude == 0) throw new IllegalStateException("Initial granular sphere penetration");
 			for (int a = 0; a < 3; a++) normal[a] /= magnitude;
-			if (dot(normal, d) < 0) return new Hit(time, Math.min(1, Math.nextUp(start + upper)), normal, lo, hi, error, -1);
+			if (dot(normal, d) < 0) return new Hit(time, Math.min(1, Math.nextUp(start + upper)), normal, lo, hi, error/(magnitude+radius), -1);
 		}
 		return null;
 	}
 	private List<Hit> touching(double[] p, double radius, List<Hit> history) {
 		List<Hit> candidates = new ArrayList<>(history), active = new ArrayList<>();
+		double contactTolerance=GranularSpawnAdmission.positionTolerance(radius,radius);
 		double[] quantum = new double[3];
 		for (int a = 0; a < 3; a++) { float stored = (float) p[a]; quantum[a] = Math.max(Math.nextUp(stored) - (double) stored, stored - (double) Math.nextDown(stored)); }
 		for (int a = 0; a < 3; a++) for (int side : new int[]{-1, 1}) {
@@ -192,17 +193,18 @@ final class GranularSphereCollision {
 			candidates.add(new Hit(0, 0, normal, new double[]{plane, 0, 0}, null, 0, a));
 		}
 		double[] lo = new double[3], hi = new double[3];
-		for (int a = 0; a < 3; a++) { lo[a] = p[a] - radius - quantum[a]; hi[a] = p[a] + radius + quantum[a]; }
+		for (int a = 0; a < 3; a++) { lo[a] = p[a] - radius - contactTolerance - quantum[a]; hi[a] = p[a] + radius + contactTolerance + quantum[a]; }
 		geometry.forEachBox(lo, hi, (minimum, maximum) -> candidates.add(new Hit(0, 0, new double[3], minimum, maximum, 0, -1)));
 		for (Hit hit : candidates) {
 			double[] normal = hit.normal;
 			if (hit.axis >= 0) {
-				if (Math.abs(p[hit.axis] - hit.minimum[0]) > hit.envelope + quantum[hit.axis] + gamma(3) * (Math.abs(p[hit.axis]) + Math.abs(hit.minimum[0]))) continue;
+				if (Math.abs(p[hit.axis] - hit.minimum[0]) > contactTolerance + hit.envelope + quantum[hit.axis] + gamma(3) * (Math.abs(p[hit.axis]) + Math.abs(hit.minimum[0]))) continue;
 			} else {
-				normal = new double[3]; double error = 0;
-				for (int a = 0; a < 3; a++) { double plane = Math.max(hit.minimum[a], Math.min(hit.maximum[a], p[a])); normal[a] = p[a] - plane; double round = quantum[a] + gamma(1) * (Math.abs(p[a]) + Math.abs(plane)); error += 2 * Math.abs(normal[a]) * round + round * round; }
-				double squared = norm2(normal); if (squared == 0 || Math.abs(squared - radius * radius) > hit.envelope + error + gamma(6) * (squared + radius * radius)) continue;
-				double length = Math.sqrt(squared); for (int a = 0; a < 3; a++) normal[a] /= length;
+				normal = new double[3]; double roundoff = 0;
+				for (int a = 0; a < 3; a++) { double plane = Math.max(hit.minimum[a], Math.min(hit.maximum[a], p[a])); normal[a] = p[a] - plane; double round = quantum[a] + gamma(1) * (Math.abs(p[a]) + Math.abs(plane)); roundoff=Math.hypot(roundoff,round); }
+				double length = Math.sqrt(norm2(normal));
+				if (length == 0 || Math.abs(length-radius)>contactTolerance+hit.envelope+roundoff) continue;
+				for (int a = 0; a < 3; a++) normal[a] /= length;
 			}
 			boolean duplicate = false; for (Hit old : active) duplicate |= Arrays.equals(old.normal, normal);
 			if (!duplicate) active.add(new Hit(0, 0, normal, hit.minimum, hit.maximum, hit.envelope, hit.axis));

@@ -102,7 +102,8 @@ tasks.register('runCpuValidation', JavaExec) {
 		}
 		def revision = providers.exec { workingDir rootProject.rootDir; commandLine 'git', 'rev-parse', 'HEAD' }.standardOutput.asText.get().trim()
 		logger.lifecycle("CPU validation revision=${revision}, sourceSHA256=${fingerprint(sources)}, artifactSHA256=${fingerprint(artifacts)}")
-		logger.lifecycle("CPU validation JVM=${executable}, heap=${maxHeapSize}, selection=${args}, assertions=${enableAssertions}")
+		def runtimeExecutable = executable ?: javaLauncher.get().executablePath.asFile.absolutePath
+		logger.lifecycle("CPU validation JVM=${runtimeExecutable}, heap=${maxHeapSize}, selection=${args}, assertions=${enableAssertions}")
 		logger.lifecycle("CPU validation classpath=${classpath.asPath}")
 		new File(validationWorkDir, 'classpath.txt').text = classpath.asPath
 	}

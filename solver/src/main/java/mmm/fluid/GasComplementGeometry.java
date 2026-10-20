@@ -106,13 +106,13 @@ final class GasComplementGeometry {
 				if(source!=null)while(oldPort<source.portArray.length&&portKey(source.portArray[oldPort])<key)oldPort++;
 				if(source!=null&&!changed[cell]&&!changed[peer]){
 					while(oldPort<source.portArray.length&&portKey(source.portArray[oldPort])==key)ports.add(source.portArray[oldPort++]);
-				}else captureFace(cell,peer,axis,byId,canonical,cut,phase,h2,fullFaces,first,second,areas,ports);
+				}else captureFace(cell,peer,axis,canonical,cut,phase,h2,fullFaces,first,second,areas,ports);
 			}
 			int bit=coordinate==0?0:coordinate+1==size?1:-1;if(bit<0)continue;long key=6L*cell+2*axis+bit;
 			if(source!=null)while(oldExterior<source.exteriorArray.length&&exteriorKey(source.exteriorArray[oldExterior])<key)oldExterior++;
 			if(source!=null&&!changed[cell]){
 				while(oldExterior<source.exteriorArray.length&&exteriorKey(source.exteriorArray[oldExterior])==key)exterior.add(source.exteriorArray[oldExterior++]);
-			}else captureExteriorFace(cell,axis,bit,byId,canonical,cut,phase,h2,fullFaces,first,areas,exterior);
+			}else captureExteriorFace(cell,axis,bit,canonical,cut,phase,h2,fullFaces,first,areas,exterior);
 		}
 		return new GasComplementGeometry(sizeX,sizeY,sizeZ,h3,actualCapacity==null?cut.copyMicroMasks():actualCapacity.masks,pores,componentDry,byId,
 				pieces.toArray(Piece[]::new),ports.toArray(Port[]::new),exterior.toArray(ExteriorPort[]::new),actualCapacity);
@@ -194,7 +194,7 @@ final class GasComplementGeometry {
 		}
 	}
 
-	private static void captureFace(int cell,int peer,int axis,Piece[] pieces,int[] canonical,FlipCutCellGeometry cut,
+	private static void captureFace(int cell,int peer,int axis,int[] canonical,FlipCutCellGeometry cut,
 	                                FlipPressurePhaseGeometry phase,double h2,byte[] fullFaces,int[] first,int[] second,double[] areas,List<Port> result){
         boolean full=fullFixedFace(cut,cell,axis,1,fullFaces)&&fullFixedFace(cut,peer,axis,0,fullFaces);
         if(full&&canonical[8*cell+(1<<axis)]>=0&&canonical[8*peer]>=0
@@ -205,7 +205,7 @@ final class GasComplementGeometry {
 		int count=0;
 		for(int a=0;a<2;a++)for(int b=0;b<2;b++){
 			int slot=1<<axis|a<<((axis+1)%3)|b<<((axis+2)%3),other=slot^(1<<axis);
-			if(pieces[8*cell+slot]==null||pieces[8*peer+other]==null)continue;
+			if(canonical[8*cell+slot]<0||canonical[8*peer+other]<0)continue;
 			double area=GasFaceIntersection.area(phase,cell,slot,peer,other,axis,1,0,.5*a,.5*b,.5);if(area<=0)continue;
 			int from=canonical[8*cell+slot],to=canonical[8*peer+other],entry=0;while(entry<count&&(first[entry]!=from||second[entry]!=to))entry++;
 			if(entry==count){first[count]=from;second[count]=to;areas[count++]=0;}areas[entry]+=area;
@@ -213,7 +213,7 @@ final class GasComplementGeometry {
 		if(count==0)return;
 		for(int i=0;i<count;i++)result.add(new Port(first[i],second[i],axis,physicalArea(areas[i],h2,cell),full));
 	}
-	private static void captureExteriorFace(int cell,int axis,int bit,Piece[] pieces,int[] canonical,FlipCutCellGeometry cut,
+	private static void captureExteriorFace(int cell,int axis,int bit,int[] canonical,FlipCutCellGeometry cut,
 	                                        FlipPressurePhaseGeometry phase,double h2,byte[] fullFaces,int[] first,double[] areas,List<ExteriorPort> result){
         boolean full=fullFixedFace(cut,cell,axis,bit,fullFaces);
         if(full&&canonical[8*cell+(bit<<axis)]>=0&&GasFaceIntersection.fullDryFace(phase,cell,axis,bit)){
@@ -222,7 +222,7 @@ final class GasComplementGeometry {
         }
 		int count=0;
 		for(int a=0;a<2;a++)for(int b=0;b<2;b++){
-			int slot=bit<<axis|a<<((axis+1)%3)|b<<((axis+2)%3);if(pieces[8*cell+slot]==null)continue;
+			int slot=bit<<axis|a<<((axis+1)%3)|b<<((axis+2)%3);if(canonical[8*cell+slot]<0)continue;
 			double area=GasFaceIntersection.area(phase,cell,-1,axis,bit,0,.5*a,.5*b,.5);if(area<=0)continue;
 			int from=canonical[8*cell+slot],entry=0;while(entry<count&&first[entry]!=from)entry++;
 			if(entry==count){first[count]=from;areas[count++]=0;}areas[entry]+=area;

@@ -15,12 +15,12 @@ final class CellMomentumTransport {
     private final double[] heat;
     private final double[][] velocity;
     private final double[] volume;
-    private final int[] nearest,queue,anchors;
+    private final int[] anchors;
     private final MacMomentumAdvection[] components=new MacMomentumAdvection[3];
     CellMomentumTransport(FluidDomain domain){
         this.domain=domain;massFlux=new long[][]{new long[domain.mac.velocityX.length],new long[domain.mac.velocityY.length],new long[domain.mac.velocityZ.length]};
         before=new long[domain.cellCount];after=before.clone();heat=new double[domain.cellCount];
-        volume=new double[domain.cellCount];nearest=new int[domain.cellCount];queue=new int[domain.cellCount];anchors=new int[domain.cellCount];
+        volume=new double[domain.cellCount];anchors=new int[domain.cellCount];
         velocity=new double[][]{new double[domain.mac.velocityX.length],new double[domain.mac.velocityY.length],new double[domain.mac.velocityZ.length]};
         for(int axis=0;axis<3;axis++)components[axis]=new MacMomentumAdvection(domain.sizeX,domain.sizeY,domain.sizeZ,axis);
     }
@@ -46,56 +46,35 @@ final class CellMomentumTransport {
             int index=(z*(domain.sizeY+(axis==1?1:0))+y)*(domain.sizeX+(axis==0?1:0))+x;
             massFlux[axis][index]+=transfer.massUnits()*(transfer.source().cell()==flux.left[face]?1:-1);
         }
-        boolean tails=prepareUnresolvedNeighborhood(afterMass);
         for(int axis=0;axis<3;axis++){
             result[axis]=components[axis].transport(beforeMass,afterMass,massFlux,velocity[axis]);
-            if(tails){
-                for(int cell=0;cell<anchors.length;cell++)anchors[cell]=nearest[cell]<0?-1:resolvedFace(nearest[cell],axis);
-                components[axis].mixUnresolved(afterMass,volume,anchors,domain.geometry.cutCells.openFaceField(axis));
-            }
+            prepareMergeAnchors(afterMass,axis);
+            components[axis].mixUnresolved(afterMass,volume,anchors,domain.geometry.cutCells.openFaceField(axis),
+                    domain.pressurePhaseGeometry,domain.geometry.cutCells);
             components[axis].addHeatToCells(afterMass,heat);
         }
         var walls=domain.cellMacStage.stopWallMomentum(result,afterMass,heat,null);
         var exactHeat=new TreeMap<Integer,SignedDyadic>();for(int cell=0;cell<heat.length;cell++)if(heat[cell]>0)exactHeat.put(cell,SignedDyadic.of(heat[cell]));
         return new Prepared(new MacMomentumState(domain.sizeX,domain.sizeY,domain.sizeZ,result[0],result[1],result[2]),Map.copyOf(exactHeat),walls);
     }
-    /** Unresolved films share motion with the nearest resolved liquid through fixed open cells. */
-    private boolean prepareUnresolvedNeighborhood(long[] afterMass){
-        boolean tails=false;int end=0;Arrays.fill(nearest,-1);
-        for(int cell=0;cell<volume.length;cell++){
-            if(afterMass[cell]<=0)continue;
-            if(volume[cell]>mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION){nearest[cell]=cell;queue[end++]=cell;}
-            else tails=true;
-        }
-        if(!tails)return false;
-        var cut=domain.geometry.cutCells;
-        for(int head=0;head<end;head++){
-            int cell=queue[head],x=cell%domain.sizeX,y=cell/domain.sizeX%domain.sizeY,z=cell/(domain.sizeX*domain.sizeY);
-            // Split cut cells retain their separate motion rather than joining liquid across an internal wall.
-            if(CellRemapMicroTopology.components(cut.mask(cell)).length!=1)continue;
-            for(int direction=0;direction<6;direction++){
-                int axis=direction/2,sign=(direction&1)==0?-1:1;
-                int xx=x+(axis==0?sign:0),yy=y+(axis==1?sign:0),zz=z+(axis==2?sign:0);
-                if(xx<0||yy<0||zz<0||xx>=domain.sizeX||yy>=domain.sizeY||zz>=domain.sizeZ)continue;
-                int next=domain.domainFlowFields.cellIndex(xx,yy,zz);if(nearest[next]>=0||CellRemapMicroTopology.components(cut.mask(next)).length!=1)continue;
-                int fx=x+(axis==0&&sign>0?1:0),fy=y+(axis==1&&sign>0?1:0),fz=z+(axis==2&&sign>0?1:0);
-                int face=axis==0?domain.domainFlowFields.xFaceIndex(fx,fy,fz):axis==1?domain.domainFlowFields.yFaceIndex(fx,fy,fz):domain.domainFlowFields.zFaceIndex(fx,fy,fz);
+    /** Same-cell parallel faces share a finite control volume; split supports retain separate motion. */
+    private void prepareMergeAnchors(long[] mass,int axis){
+        Arrays.fill(anchors,-1);
+        int stride=axis==0?1:axis==1?domain.sizeX:domain.sizeX*domain.sizeY;
+        for(int cell=0;cell<anchors.length;cell++){
+            if(mass[cell]<=0||CellRemapMicroTopology.components(domain.geometry.cutCells.mask(cell)).length!=1)continue;
+            int x=cell%domain.sizeX,y=cell/domain.sizeX%domain.sizeY,z=cell/(domain.sizeX*domain.sizeY);
+            long largest=-1;
+            for(int side=0;side<2;side++){
+                int xx=x+(axis==0?side:0),yy=y+(axis==1?side:0),zz=z+(axis==2?side:0);
+                int coordinate=axis==0?xx:axis==1?yy:zz,size=axis==0?domain.sizeX:axis==1?domain.sizeY:domain.sizeZ;
+                if(coordinate==0||coordinate==size)continue;
+                int face=axis==0?domain.domainFlowFields.xFaceIndex(xx,yy,zz):axis==1?domain.domainFlowFields.yFaceIndex(xx,yy,zz):domain.domainFlowFields.zFaceIndex(xx,yy,zz);
                 if(!(domain.pressureSystem.solidFaces.fixedPoreOpen(axis,face)>0))continue;
-                nearest[next]=nearest[cell];queue[end++]=next;
+                long dual=mass[cell]+mass[cell+(side==0?-stride:stride)];
+                if(dual>largest){largest=dual;anchors[cell]=face;}
             }
         }
-        return true;
-    }
-    private int resolvedFace(int cell,int axis){
-        int x=cell%domain.sizeX,y=cell/domain.sizeX%domain.sizeY,z=cell/(domain.sizeX*domain.sizeY);
-        for(int side=0;side<2;side++){
-            int xx=x+(axis==0?side:0),yy=y+(axis==1?side:0),zz=z+(axis==2?side:0);
-            int coordinate=axis==0?xx:axis==1?yy:zz,size=axis==0?domain.sizeX:axis==1?domain.sizeY:domain.sizeZ;
-            if(coordinate==0||coordinate==size)continue;
-            int face=axis==0?domain.domainFlowFields.xFaceIndex(xx,yy,zz):axis==1?domain.domainFlowFields.yFaceIndex(xx,yy,zz):domain.domainFlowFields.zFaceIndex(xx,yy,zz);
-            if(domain.pressureSystem.solidFaces.open(axis,face)>0)return face;
-        }
-        return -1;
     }
     private void cellMass(LiquidCellInventory inventory,long[] result){for(int cell=0;cell<result.length;cell++){long mass=0;for(var stock:inventory.stocksInCell(cell))mass=Math.addExact(mass,stock.massUnits());result[cell]=mass;}}
 }

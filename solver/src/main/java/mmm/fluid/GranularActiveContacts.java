@@ -216,14 +216,13 @@ final class GranularActiveContacts {
 	}
 	private boolean addFixedPlane(int i, double[] normal, double minimum) {
 		boolean duplicate = false;
+		double tolerance=GranularSpawnAdmission.positionTolerance(radius[i],radius[i]);
 		for (var old : constraints) if (old.row().first() == i && old.row().second() < 0
-				&& Arrays.equals(old.row().normal(), normal) && Math.abs(old.minimum() - minimum) <= Math.ulp(minimum) * 8) {
+				&& Arrays.equals(old.row().normal(), normal) && Math.abs(old.minimum() - minimum) <= tolerance) {
 			duplicate = true; break;
 		}
 		if (!duplicate) {
-			// A fixed surface must round to a legal stored pose. Leave a fraction of its coordinate quantum.
-			constraints.add(new Constraint(new GranularContactCompression.Row(i, -1, normal), minimum,
-					.125 * Math.ulp((float) Math.max(Math.abs(minimum), radius[i]))));
+			constraints.add(new Constraint(new GranularContactCompression.Row(i, -1, normal), minimum,tolerance));
 		}
 		return !duplicate;
 	}

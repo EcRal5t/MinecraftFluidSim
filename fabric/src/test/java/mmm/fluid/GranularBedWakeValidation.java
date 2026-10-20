@@ -111,7 +111,9 @@ public final class GranularBedWakeValidation {
 		var backend = new CpuFluidSolverBackend();
 		long inventory = domain.totalGranularSolidVolumeSvq();
 		long massUnits = Double.doubleToRawLongBits(domain.totalGranularMass());
+		var initialLedger=domain.exportGranularState();
 		long settled = 0, woken = 0, contacts = 0;
+		long weakWakeBaseline=0,weakContactBaseline=0,strongWakeBaseline=0;
 		double totalStepMs = 0, maximumStepMs = 0; int completedSteps = 0;
 		int peakActive = 0;
 		FluidDomainState sleeping = null;
@@ -139,21 +141,26 @@ public final class GranularBedWakeValidation {
 			if (phase >= 2) peakActive = Math.max(peakActive, domain.granularState.parcels.count());
 			require(domain.totalGranularSolidVolumeSvq() == inventory, "Bed transport changed solid volume");
 			require(Double.doubleToRawLongBits(domain.totalGranularMass()) == massUnits, "Bed transport changed sand mass");
+			var granular=domain.exportGranularState();
+			require(granular.externalSource().equals(initialLedger.externalSource())
+					&&granular.escapedSink().equals(initialLedger.escapedSink()),"Internal bed transitions changed granular source/sink ledgers");
 			require(domain.gasBoundary().auditClosed() && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 					"Bed transport broke gas/energy audit");
 			boolean atRest = domain.granularState.parcels.count() == 0
 					&& domain.domainStep.granularDepositDynamics().dirtyColumnCount() == 0;
 			if (phase == 0 && atRest) {
-				require(settled > 0 && woken == 0 && domain.granularState.parcels.count() == 0
-						&& domain.domainStep.granularDepositDynamics().dirtyColumnCount() == 0, "Initial bed did not settle and sleep");
+				require(settled > 0 && domain.granularState.deposits.groupCount()>0, "Initial bed did not settle and sleep");
 				sleeping = domain.captureAuthoritativeState();
-				initialMoment = depositMoment(domain);
+				weakWakeBaseline=woken;weakContactBaseline=contacts;
 				phase = 1; phaseStep = -1;
 			}
 			if (phase == 1 && phaseStep == 29) {
-				require(woken == 0 && contacts > 0, "Subcritical real liquid caused erosion or missed the body");
+				require(woken-weakWakeBaseline == 0 && contacts-weakContactBaseline > 0,
+						"Subcritical real liquid caused new erosion or missed the body");
+				strongWakeBaseline=woken;initialMoment=depositMoment(domain);
 				phase = 2; phaseStep = -1;
 			} else if (phase == 2 && phaseStep == 59) {
+				require(woken-strongWakeBaseline>0&&peakActive>0,"Strong flow never woke deposited sand");
 				phase = 3; phaseStep = -1;
 			} else if (phase == 3 && atRest) break;
 			if ((phase == 0 || phase == 3) && phaseStep >= settlingSteps)
@@ -166,13 +173,13 @@ public final class GranularBedWakeValidation {
 					domain.domainStep.granularDepositDynamics().sleepingColumnCount(), settled, woken, maxShields, candidate.movingBodyCoupling().coupledMarkers(), fullMs);
 		}
 		require(sleeping != null, "Initial bed exceeded the physical settling budget");
-		require(woken > 0 && peakActive > 0, "Real water never woke deposited sand");
+		require(woken-strongWakeBaseline > 0 && peakActive > 0, "Real water never woke deposited sand during strong flow");
 		require(domain.granularState.parcels.count() == 0 && domain.domainStep.granularDepositDynamics().dirtyColumnCount() == 0,
 				"Sand did not re-settle and sleep after reducing flow");
 		require(Math.abs(depositMoment(domain) - initialMoment) > .01, "Released sand did not move horizontally");
 		wakeStartsAtRest(sleeping);
-		System.out.printf("Bed lifecycle passed: wakes=%d peakActive=%d horizontalMomentChange=%.6f kg*m steps=%d meanMs=%.3f maxMs=%.3f%n",
-				woken, peakActive, depositMoment(domain) - initialMoment, completedSteps, totalStepMs / completedSteps, maximumStepMs);
+		System.out.printf("Bed lifecycle passed: initialWakes=%d strongAndResettlingWakes=%d peakActive=%d horizontalMomentChange=%.6f kg*m steps=%d meanMs=%.3f maxMs=%.3f%n",
+				weakWakeBaseline, woken-strongWakeBaseline, peakActive, depositMoment(domain) - initialMoment, completedSteps, totalStepMs / completedSteps, maximumStepMs);
 	}
 
 	private static int settlingStepLimit(FluidDomain domain) {

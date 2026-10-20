@@ -53,6 +53,17 @@
 相占据由 `PhaseOccupancyTransport.ensure/publish` 集中准备与发布，库存编辑标记失效，捕获读取当前库存对应的占据；旧占据保留到气体来源交接结束。
 实际库存仍由对应库存对象持有，处理器组织操作与提交顺序。跨相操作准备整笔热账，发布时将各物相增量合入当前账本；碰撞计划同时保存库存与热学代次，在首次写入前核对。
 
+排障先沿规则所有者定位，再看该次调用者：
+
+| 现象 | 先查的规则入口 |
+|---|---|
+| 编辑后物性、面质量或恢复占据陈旧 | `FluidDomain.markCellInventoryChanged`、`DomainFlowFields` 的分层准备、`PhaseOccupancyTransport.ensure/publish` |
+| 跨相操作丢热账或重复计功 | 对应编辑计划的整笔预检与提交增量、`ThermalDomainState` 的库存与账本 |
+| 液封误通、环境气体被微膜截留 | `GasFaceIntersection` 的共享干区、`GasComplementGeometry` 的端口；节点容量仍读实际库存 |
+| 静水梯度或床层压力异常 | `PressureFaceGraph` 的共同载荷与 `GranularFaceVolumes` 的双单元孔隙率 |
+| 尾液动量增长或输运耗散异常 | `CellMomentumTransport`、`MacMomentumAdvection` 的实际质量通量与局部控制体合并 |
+| 沸腾、凝结推进停滞 | `GasLiquidPhaseChangeStage` 的气腔压力、温度与容量联合响应 |
+
 ## 哪些数据决定物质库存
 
 | 领域 | 保存的权威数据 | 派生量 |
@@ -385,7 +396,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 - **相变批次、接触与未来气腔**
   - 主要文件：
     - [CondensedPhaseChangeStage](../../solver/src/main/java/mmm/fluid/CondensedPhaseChangeStage.java)
-    - [GasLiquidPhaseChangeStage](../../solver/src/main/java/mmm/fluid/GasLiquidPhaseChangeStage.java)
+    - [GasLiquidPhaseChangeStage](../../solver/src/main/java/mmm/fluid/GasLiquidPhaseChangeStage.java)：`propose`、`closeChamber` 联合组分库存、气温与真实容量的分压响应；`admitCondensation` 共同分配批次和正容量，`step` 一次提交两相库存与内能。
     - [GasLiquidPhaseModel](../../model/src/main/java/mmm/thermal/GasLiquidPhaseModel.java)：饱和压力、解析斜率及潜热
     - [GasPhaseInterfaceResolver](../../solver/src/main/java/mmm/fluid/GasPhaseInterfaceResolver.java)
   - 验证选择器 / 参考：`thermal,gas-liquid`；[相变参考](thermal-state.md#相变)

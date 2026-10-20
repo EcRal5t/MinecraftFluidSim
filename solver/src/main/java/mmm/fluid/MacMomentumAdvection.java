@@ -2,14 +2,14 @@ package mmm.fluid;
 
 /** Positive donor transport on MAC dual cells, using actual integer mass transfers. */
 final class MacMomentumAdvection {
-    private final int nx,ny,nz,count;
+    private final int nx,ny,nz,count,component;
     private final int[] left,right,fluxAxis,firstFlux,secondFlux,firstCell,secondCell;
     private final long[] remaining,flow;
     private final double[] oldVelocity,velocity,momentum,heat;
     private final int[] mergeTarget;
     private final double[] mergedMass,mergedMomentum;
     MacMomentumAdvection(int nx,int ny,int nz,int component){
-        this.nx=nx;this.ny=ny;this.nz=nz;
+        this.nx=nx;this.ny=ny;this.nz=nz;this.component=component;
         int sx=nx+(component==0?1:0),sy=ny+(component==1?1:0),sz=nz+(component==2?1:0);
         count=sx*sy*sz;int edges=(sx-1)*sy*sz+sx*(sy-1)*sz+sx*sy*(sz-1);
         left=new int[edges];right=new int[edges];fluxAxis=new int[edges];firstFlux=new int[edges];secondFlux=new int[edges];flow=new long[edges];
@@ -51,31 +51,41 @@ final class MacMomentumAdvection {
         }
         return momentum;
     }
-    /** Finite-mass mixing removes sub-resolution film velocities while conserving their impulse. */
-    void mixUnresolved(long[] after,double[] volume,int[] anchors,float[] open){
+    /** Dry-face inertia shares its actual finite mass and impulse with a same-cell parallel face. */
+    void mixUnresolved(long[] after,double[] volume,int[] anchors,float[] open,
+                       FlipPressurePhaseGeometry phase,FlipCutCellGeometry cut){
         double scale=.5/mmm.units.Mass.UNITS_PER_KILOGRAM;
         for(int i=0;i<count;i++){
-            mergeTarget[i]=-1;mergedMass[i]=scale*(value(after,firstCell[i])+value(after,secondCell[i]));mergedMomentum[i]=momentum[i];
+            mergeTarget[i]=i;mergedMass[i]=mergedMomentum[i]=0;
         }
-        for(int i=0;i<count;i++)if(mergedMass[i]>0){
+        for(int i=0;i<count;i++){
             int a=firstCell[i],b=secondCell[i];
-            if(a<0||b<0||!(open[i]>0))continue;
-            if(a>=0&&volume[a]>mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION||b>=0&&volume[b]>mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION)continue;
-            int target=a>=0?anchors[a]:-1;if(target<0&&b>=0)target=anchors[b];
-            if(target<0||target==i||!(mergedMass[target]>0))continue;
-            mergeTarget[i]=target;mergedMass[target]+=scale*(value(after,a)+value(after,b));mergedMomentum[target]+=momentum[i];
+            long mass=value(after,a)+value(after,b);
+            if(a<0||b<0||mass<=0||!(open[i]>0))continue;
+            boolean tiny=volume[a]<=mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION
+                    &&volume[b]<=mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION;
+            if(!tiny&&(phase.liquidFractionExact(a)>=1&&phase.liquidFractionExact(b)>=1
+                    ||phase.sharedLiquidFaceArea(a,b,component,cut)>mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION))continue;
+            int target=i;long largest=mass;
+            for(int side=0;side<2;side++){
+                int candidate=anchors[side==0?a:b];if(candidate<0)continue;
+                long candidateMass=value(after,firstCell[candidate])+value(after,secondCell[candidate]);
+                if(candidateMass>largest||candidateMass==largest&&candidate<target){target=candidate;largest=candidateMass;}
+            }
+            if(target!=i)mergeTarget[root(i)]=root(target);
         }
-        for(int i=0;i<count;i++)if(mergeTarget[i]<0&&mergedMass[i]>0){
-            double mixed=mergedMomentum[i]/mergedMass[i],mass=scale*(value(after,firstCell[i])+value(after,secondCell[i]));
-            if(mergedMass[i]==mass)continue;
-            double difference=velocity[i]-mixed;heat[i]+=.5*mass*difference*difference;
-            velocity[i]=mixed;momentum[i]=mass*mixed;
+        for(int i=0;i<count;i++){
+            int group=root(i);double mass=scale*(value(after,firstCell[i])+value(after,secondCell[i]));
+            mergedMass[group]+=mass;mergedMomentum[group]+=momentum[i];
         }
-        for(int i=0;i<count;i++)if(mergeTarget[i]>=0){
-            int target=mergeTarget[i];double mass=scale*(value(after,firstCell[i])+value(after,secondCell[i])),difference=velocity[i]-velocity[target];
-            heat[target]+=.5*mass*difference*difference;velocity[i]=velocity[target];momentum[i]=mass*velocity[i];
+        for(int i=0;i<count;i++){
+            int group=root(i);double mass=scale*(value(after,firstCell[i])+value(after,secondCell[i]));
+            if(!(mass>0)||mergedMass[group]==mass)continue;
+            double mixed=mergedMomentum[group]/mergedMass[group],difference=velocity[i]-mixed;
+            heat[i]+=.5*mass*difference*difference;velocity[i]=mixed;momentum[i]=mass*mixed;
         }
     }
+    private int root(int face){while(mergeTarget[face]!=face){mergeTarget[face]=mergeTarget[mergeTarget[face]];face=mergeTarget[face];}return face;}
     void addHeatToCells(long[] after,double[] cells){
         for(int i=0;i<count;i++)if(heat[i]>0){int a=firstCell[i],b=secondCell[i];long ma=value(after,a),mb=value(after,b);double first=ma+mb>0?heat[i]*(ma/(double)(ma+mb)):0;if(a>=0)cells[a]+=first;if(b>=0)cells[b]+=heat[i]-first;}
     }
