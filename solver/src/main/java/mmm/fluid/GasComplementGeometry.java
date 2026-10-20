@@ -60,6 +60,13 @@ final class GasComplementGeometry {
     static GasComplementGeometry capture(int sizeX,int sizeY,int sizeZ,double cellSize,
                                         boolean[] solid,FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,
                                         GasComplementGeometry source,boolean[] changed,LiquidCellInventory.Snapshot cells) {
+		return capture(sizeX,sizeY,sizeZ,cellSize,solid,cut,phase,source,changed,cells,null);
+	}
+	/** The liquid transaction may already own the exact pore-minus-stock endpoint. */
+	static GasComplementGeometry capture(int sizeX,int sizeY,int sizeZ,double cellSize,
+	                                    boolean[] solid,FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,
+	                                    GasComplementGeometry source,boolean[] changed,LiquidCellInventory.Snapshot cells,
+	                                    GasComponentCapacity.Prepared preparedCapacity) {
 		validateShape(sizeX, sizeY, sizeZ, solid, cut, phase);
 		double h2 = cellSize * cellSize, h3 = h2 * cellSize;
 		if (!(cellSize > 0 && h2 > 0 && h3 > 0 && Double.isFinite(h2) && Double.isFinite(h3)))
@@ -68,7 +75,7 @@ final class GasComplementGeometry {
 		if (source != null && (source.sizeX != sizeX || source.sizeY != sizeY || source.sizeZ != sizeZ
 				|| source.cellVolumeCubicMeters != h3 || changed == null || changed.length != count))
 			throw new IllegalArgumentException("Gas geometry continuation differs in shape or scale");
-		var actualCapacity=cells==null?null:GasComponentCapacity.prepare(cut,phase,cells,source==null?null:source.actualCapacity);
+		var actualCapacity=preparedCapacity!=null?preparedCapacity:cells==null?null:GasComponentCapacity.prepare(cut,phase,cells,source==null?null:source.actualCapacity);
 		double[] componentDry=actualCapacity==null?componentDry(cut,phase,count):actualCapacity.dry;
 		if(source!=null){
 			changed=changed.clone();

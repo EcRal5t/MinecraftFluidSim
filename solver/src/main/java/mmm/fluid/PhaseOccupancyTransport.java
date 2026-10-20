@@ -105,7 +105,7 @@ final class PhaseOccupancyTransport {
 				}
 			}
 		}
-		return new GasVolumeAllocation(domain, future, state, shares, phase, geometry);
+		return new GasVolumeAllocation(domain, future, state, shares, phase, geometry, geometry==null?null:geometry.actualCapacity());
 	}
 
 	static void requireCurrentGeometry(FluidDomain domain, PhaseOccupancyState state) {

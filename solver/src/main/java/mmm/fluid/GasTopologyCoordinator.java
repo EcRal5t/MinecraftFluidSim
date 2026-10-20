@@ -138,7 +138,7 @@ final class GasTopologyCoordinator {
 	                                boolean deferVolumeWork,PhaseBatch phase,GasVolumeAllocation allocation) {
 		if(allocation==null)allocation=GasVolumeAllocation.prepare(domain,future,occupied,masks,phase==null?null:phase.inventories());
 		allocation.requireCurrent(domain,future);
-		var next=GasRuntimeGeometry.captureCellFuture(domain,future,occupied,domain.gasState.sealedDomainBoundary,masks,allocation.futureOccupancy(),allocation.preparedPhase(),allocation.preparedGeometry());
+		var next=GasRuntimeGeometry.captureCellFuture(domain,future,occupied,domain.gasState.sealedDomainBoundary,masks,allocation.futureOccupancy(),allocation.preparedPhase(),allocation.preparedGeometry(),allocation.preparedCapacity());
 		if(domain.gasState.frame==null)return new GasTopologyPlan(next,null,null,null,domain.gasState.network,domain.gasState.network.revision());
 		return plan(next,deferVolumeWork,phase,allocation);
 	}
@@ -299,20 +299,10 @@ final class GasTopologyCoordinator {
 			throw new IllegalStateException("Gas phase transport source changed before remapping");
 		var result=new TreeMap<Integer,TreeMap<Integer,Double>>();
 		boolean[] owned=new boolean[next.nodeCount()+1];
-		int[] targetOwners=new int[8*domain.cellCount];Arrays.fill(targetOwners,-1);
-		for(var component:next.capacity().components())if(component.availableVolumeNormalized().signum()>0){
-			int owner=-1;
-			for(int bits=component.supportMask();bits!=0;bits&=bits-1){
-				owner=next.nodeOfPiece(8*component.cell()+Integer.numberOfTrailingZeros(bits));
-				if(owner>=0)break;
-			}
-			if(owner<0)throw new IllegalStateException("Positive gas component has no future dry occupation");
-			for(int bits=component.supportMask();bits!=0;bits&=bits-1)
-				targetOwners[8*component.cell()+Integer.numberOfTrailingZeros(bits)]=owner;
-		}
 		for(var share:allocation.shares()) {
 			// Source shares belong to a fixed pore component; its PLIC may move the dry micro view.
-			int target=targetOwners[share.targetPiece()];
+			int cell=share.targetPiece()/8,support=CellRemapMicroTopology.support(next.geometry().collisionMask(cell),share.targetPiece()&7);
+			int target=support==0?-1:next.topology().nodeOfComponent(cell,support);
 			if(target<0)throw new IllegalStateException("Positive gas phase transfer has no future component capacity");
 			owned[target]=true;
 			int source=switch(share.kind()){case EXISTING->share.sourceNode();case AMBIENT->0;case EXPLICIT_VACUUM->-1;};

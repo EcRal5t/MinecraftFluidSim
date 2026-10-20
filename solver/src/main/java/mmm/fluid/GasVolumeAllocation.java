@@ -24,14 +24,15 @@ final class GasVolumeAllocation {
     private final List<Share> shares;
     private final FlipPressurePhaseGeometry preparedPhase;
     private final GasComplementGeometry preparedGeometry;
+    private final GasComponentCapacity.Prepared preparedCapacity;
     GasVolumeAllocation(FluidDomain domain,LiquidCellInventory future,PhaseOccupancyState occupancy,List<Share> shares){
-        this(domain,future,occupancy,shares,null,null);
+        this(domain,future,occupancy,shares,null,null,null);
     }
     GasVolumeAllocation(FluidDomain domain,LiquidCellInventory future,PhaseOccupancyState occupancy,List<Share> shares,
-                        FlipPressurePhaseGeometry phase,GasComplementGeometry geometry){
+                        FlipPressurePhaseGeometry phase,GasComplementGeometry geometry,GasComponentCapacity.Prepared capacity){
         sourceGeometry=domain.gasState.frame;sourceNetwork=domain.gasState.network;networkRevision=sourceNetwork.revision();
         sourceInventory=domain.liquidCells.snapshot();futureInventory=future.snapshot();sourceOccupancy=domain.phaseOccupancy;futureOccupancy=occupancy;this.shares=List.copyOf(shares);
-        preparedPhase=phase;preparedGeometry=geometry;
+        preparedPhase=phase;preparedGeometry=geometry;preparedCapacity=capacity;
         if(occupancy==null||occupancy.cellCount()!=domain.cellCount)throw new IllegalArgumentException("Gas allocation requires complete future phase occupation");
         for(var share:this.shares)if(share.targetPiece()>=8*domain.cellCount||share.kind()==SourceKind.EXISTING&&(sourceGeometry==null||share.sourceNode()>sourceGeometry.nodeCount()))throw new IllegalArgumentException("Gas allocation names an absent source or target");
     }
@@ -43,6 +44,7 @@ final class GasVolumeAllocation {
     List<Share> shares(){return shares;}
     FlipPressurePhaseGeometry preparedPhase(){return preparedPhase;}
     GasComplementGeometry preparedGeometry(){return preparedGeometry;}
+    GasComponentCapacity.Prepared preparedCapacity(){return preparedCapacity;}
     void requireCurrent(FluidDomain domain,LiquidCellInventory future){
         if(domain.gasState.frame!=sourceGeometry||domain.gasState.network!=sourceNetwork||sourceNetwork.revision()!=networkRevision
                 ||domain.phaseOccupancy!=sourceOccupancy||!domain.liquidCells.hasSameGeometry(sourceInventory)||!future.hasSameGeometry(futureInventory))

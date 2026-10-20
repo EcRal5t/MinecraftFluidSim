@@ -21,6 +21,7 @@ final class ConservativeLiquidFlux {
 	private static SignedDyadic[] openCapacities(){var values=new SignedDyadic[9];for(int n=0;n<=8;n++)values[n]=SignedDyadic.of(n,-3);return values;}
 	private double[] liquid, pore;
 	private double[] finalDry;
+	private GasComponentCapacity.Prepared preparedCapacity;
 	private PhaseSourceColumns gasTags, nextGasTags, macroFlows, macroTotal, gasReservation;
 	private FlipPressurePhaseGeometry phase;
 	private FlipPressurePhaseGeometry reconstructionWorkspace;
@@ -186,11 +187,15 @@ final class ConservativeLiquidFlux {
 		prepareFacePreferences(dt,displacement);
 		prepared=settle(capacities);
 		working=prepared.future();
-		prepareFinalDry(capacities);
 		advanceGasSources(prepared.transfers(),displacement);
 		pore=targetPore;
 		liquid=PhaseOccupancyTransport.reconstruct(domain,working,pore,null,reconstructionWorkspace);
 		phase=reconstructionWorkspace;phaseLiquid=liquid;phasePore=pore;
+		phase.setExactPoreVolumes(domain.geometry.cutCells,targetOccupied);
+		var sourceFrame=domain.gasState.frame;
+		preparedCapacity=GasComponentCapacity.prepare(domain.geometry.cutCells,phase,working.snapshot(),
+				sourceFrame==null?null:sourceFrame.geometry().actualCapacity());
+		finalDry=preparedCapacity.dry;
 		var swap=gasTags;gasTags=nextGasTags;nextGasTags=swap;
 		normalizeGasSources();
 		inheritGasReservoirs();
@@ -258,17 +263,6 @@ final class ConservativeLiquidFlux {
 			}
 			if (gasTags.first(row)<0) gasTags.add(row, - 1, dry);
 			else gasTags.scale(row, dry);
-		}
-	}
-	/** One exact stock remainder supplies normalization and the published gas allocation. */
-	private void prepareFinalDry(SignedDyadic[] capacities){
-		if(finalDry==null)finalDry=new double[capacities.length];
-		for(int i=0;i<capacityCount;i++){
-			int row=capacitySlots[i],cell=row/8,support=CellRemapMicroTopology.support(domain.geometry.cutCells.mask(cell),row&7);
-			var amount=SignedDyadic.ZERO;
-			if(support==(255^domain.geometry.cutCells.mask(cell)))amount=working.exactCellVolume(cell);
-			else for(var stock:working.stocksInCell(cell))if(stock.key().supportMask()==support)amount=amount.add(stock.volume());
-			finalDry[row]=capacities[row].subtract(amount).toDouble();
 		}
 	}
 
@@ -437,8 +431,7 @@ final class ConservativeLiquidFlux {
 			}
 		}
 		preparePhase();
-		phase.setExactPoreVolumes(domain.geometry.cutCells, targetOccupied);
-		return new GasVolumeAllocation(domain, future, new PhaseOccupancyState(liquid), shares, phase, null);
+		return new GasVolumeAllocation(domain, future, new PhaseOccupancyState(liquid), shares, phase, null,preparedCapacity);
 	}
 
 	private void preparePhase() {
