@@ -221,7 +221,10 @@ private record DropletMetrics(double varianceX, double maximumKinetic, double rm
 				+ "PCG=%d residual=%.3g maxSpeed=%.3g%n",
 				sigma12, expectedJump, measuredJump, jumpError,
 				stats.pressureIterations(), stats.pressureResidual(), domain.maximumParticleSpeed());
-		check(Double.isFinite(measuredJump) && measuredJump > 0, "liquid pair lost its positive physical pressure jump");
+		double allowance = pressureResolution(config);
+		check(Double.isFinite(measuredJump) && Math.abs(measuredJump-expectedJump)<=allowance,
+				"liquid-pair pressure error exceeded the cell-volume resolution: actual="+measuredJump
+						+", expected="+expectedJump+", allowancePa="+allowance);
 		check(Float.isFinite(stats.pressureResidual()), "liquid-pair pressure residual became non-finite");
 		check(domain.liquidCells.exactVolume().equals(exactVolume) && domain.totalMassUnits() == exactMass,
 				"liquid-pair surface tension changed exact mass or volume");
@@ -249,10 +252,18 @@ private record DropletMetrics(double varianceX, double maximumKinetic, double rm
 		FluidDomain full = liquidPairDroplet(8, config, 1, .0728, true);
 		FluidDomain diluted = liquidPairDroplet(8, config, 1, .0728, true);
 		replaceAbsentFirstPhase(full,1);replaceAbsentFirstPhase(diluted,.125);
-		full.domainStep.step(); diluted.domainStep.step();
-		check(full.maximumPressure() > 0, "active pair failed to create a capillary pressure");
-		check(diluted.maximumPressure() > 0 && diluted.maximumPressure() < full.maximumPressure(),
-				"pair pressure did not decrease with the first phase's local fraction");
+		double fullWork=full.domainStep.stepWithMechanicalAudit(false,0).mechanicalAudit().surfaceTensionWorkJoules();
+		double dilutedWork=diluted.domainStep.stepWithMechanicalAudit(false,0).mechanicalAudit().surfaceTensionWorkJoules();
+		check(Double.isFinite(fullWork)&&Double.isFinite(dilutedWork)&&fullWork>0&&dilutedWork>0&&dilutedWork<fullWork,
+				"liquid-pair force response did not decrease with the participating phase fraction");
+		check(diluted.maximumPressure()<=full.maximumPressure()+pressureResolution(config),
+				"liquid-pair pressure response reversed beyond the cell-volume resolution");
+	}
+
+	/** delta V = dt^2 delta p/(rho h^2), at the production geometry's cell-volume resolution. */
+	private static double pressureResolution(FluidSolverConfig config){
+		return config.density()*config.cellSize()*config.cellSize()
+				*FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION/(config.timeStep()*(double)config.timeStep());
 	}
 
 	private static FluidDomain liquidPairDroplet(int size, FluidSolverConfig config, double radius, double sigma12) {
