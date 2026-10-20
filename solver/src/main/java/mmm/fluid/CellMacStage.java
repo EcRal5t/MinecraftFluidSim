@@ -102,6 +102,9 @@ final class CellMacStage {
 
 	void rebuildVelocity() {
 		rebuildInventory();
+		derivePreparedVelocity();
+	}
+	private void derivePreparedVelocity(){
 		domain.mac.deriveVelocity(massX, massY, massZ);
 		domain.bodyForceStage.enforceSolidFaceVelocities();
 		domain.velocityGridDirty = false;
@@ -159,7 +162,8 @@ final class CellMacStage {
 		plan.commit();domain.mac.restoreMomentum(new MacMomentumState(domain.sizeX,domain.sizeY,domain.sizeZ,values[0],values[1],values[2]));
 		recordWallImpulse(new WallImpulse(impulse[0],impulse[1],impulse[2]));
 		if(audit!=null)domain.thermalState.restoreAuditLedger(audit);
-		domain.markCellInventoryChanged();rebuildVelocity();
+		// Heat changes U alone; the existing mass, PLIC and gas frame stay current.
+		domain.carrierPropertiesWorkspace.invalidate();derivePreparedVelocity();
 	}
 	/** Face inertia belongs to the same inventory generation as cell mass. */
 	private void rebuildFaceInertia() {

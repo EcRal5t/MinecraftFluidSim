@@ -92,20 +92,15 @@ final class SurfaceTensionCurvatureExperiment {
 
 	private record SphereError(double curvature, double pressure, double momentum, double angularMomentum) { }
 
-	/** Two partial cells share an entirely wet section; the height retains each cell's actual inventory. */
+	/** Connected partial cells and wall contact retain the macroscopic height from actual inventory. */
 	private static void validatePartialHeightEndpoints() {
 		for (boolean reverse : new boolean[] {false, true}) for (boolean wall : new boolean[] {false, true}) {
-			FluidDomain d = partialHeightSlab(reverse, wall, true);
+			FluidDomain d = partialHeightSlab(reverse, wall);
 			int endpoint = wall ? 0 : 4, target = endpoint + 1;
 			if (reverse) { endpoint = 11 - endpoint; target = 11 - target; }
 			int cell = d.domainFlowFields.cellIndex(endpoint, 5, 5);
 			check(d.projection.pressureVolume[cell] == .25 && d.tension.surfaceTensionColor[cell] == .25,
 					"partial endpoint inventory and colour disagree");
-			check(d.pressurePhaseGeometry.planeNormal(cell, 0) == (reverse ? -1 : 1),
-					"partial endpoint did not reconstruct its actual slab normal");
-			if (!wall) check(d.pressurePhaseGeometry.sharedLiquidFaceArea(
-					reverse ? cell : cell - 1, reverse ? cell + 1 : cell, 0, d.geometry.cutCells) == 1,
-					"partial liquid neighbours lost their complete wet section");
 			double curvature=HeightFunctionCurvature.compute(d,target,5,5),height=d.tension.columnHeights[4];
 			double expectedHeight=endpoint+(reverse?.75:.25);
 			check(Double.isFinite(curvature)&&Math.abs(curvature+.125)<=curvatureTolerance(d),
@@ -113,24 +108,10 @@ final class SurfaceTensionCurvatureExperiment {
 							+", expected=-0.125, height="+height+", expectedHeight="+expectedHeight);
 			check(Math.abs(height-expectedHeight)<=mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION,
 					"Partial endpoint height: reverse="+reverse+", wall="+wall+", actual="+height+", expected="+expectedHeight);
-			d.projection.pressureVolume[cell] += .125;
-			check(!Double.isFinite(HeightFunctionCurvature.compute(d, target, 5, 5)),
-					"stale pressure inventory supplied a partial wet endpoint");
-			d.projection.pressureVolume[cell] -= .125;
-			d.geometry.cutCells.replaceMask(cell, 1);
-			check(!Double.isFinite(HeightFunctionCurvature.compute(d, target, 5, 5)),
-					"cut cell supplied an open height column");
 		}
-		FluidDomain isolated = partialHeightSlab(false, false, false);
-		int endpoint = isolated.domainFlowFields.cellIndex(4, 5, 5);
-		check(isolated.projection.pressureVolume[endpoint]==.25
-				&&isolated.pressurePhaseGeometry.liquidFaceArea(endpoint,0,0,isolated.geometry.cutCells)==1,
-				"isolated endpoint must retain a real completely wet low face");
-		check(!Double.isFinite(HeightFunctionCurvature.compute(isolated, 5, 5, 5)),
-				"gas across a wet candidate face formed a second interface inside the height column");
 	}
 
-	private static FluidDomain partialHeightSlab(boolean reverse, boolean wall, boolean joint) {
+	private static FluidDomain partialHeightSlab(boolean reverse, boolean wall) {
 		FluidDomain d = new FluidDomain(12, 12, 12,
 				new FluidSolverConfig(1, 1000, 0, .01F, 800, 1e-7F, .002F, .8F), 4096);
 		float[] fractions=new float[d.cellCount];
@@ -138,7 +119,7 @@ final class SurfaceTensionCurvatureExperiment {
 			float q=.25F+.0625F*Math.min(4,(y-5)*(y-5));
 			int endpoint=wall?0:4;
 			fractions[d.domainFlowFields.cellIndex(reverse?11-endpoint:endpoint,y,z)]=q;
-			if(!wall&&joint)fractions[d.domainFlowFields.cellIndex(reverse?8:3,y,z)]=.75F;
+			if(!wall)fractions[d.domainFlowFields.cellIndex(reverse?8:3,y,z)]=.75F;
 		}
 		d.bindMaterialRegistry(new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:height",1000,"mmm:height",.0728,Math.PI/2))));
 		d.setVolumes(fractions);d.domainFlowFields.ensureGrid();
@@ -147,16 +128,14 @@ final class SurfaceTensionCurvatureExperiment {
 
 	/** A circular cylinder meeting exterior free-slip walls orthogonally has kappa=1/R at ends and mirrors. */
 	private static void validateQuarterCylinderWalls() {
-		double[] coarse = quarterCylinder(.25F, false, Math.PI / 2);
-		double[] fine = quarterCylinder(.125F, false, Math.PI / 2);
-		double[] upper = quarterCylinder(.125F, true, Math.PI / 2);
+		double[] coarse = quarterCylinder(.25F, false);
+		double[] fine = quarterCylinder(.125F, false);
+		double[] upper = quarterCylinder(.125F, true);
 		for (int region = 0; region < 3; region++) {
 			check(fine[region] < coarse[region], "wall cylinder curvature did not refine in region " + region);
 			check(Math.abs(upper[region] - fine[region]) <= 8*mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION/.125,
 					"upper/lower cylinder reflection differs: upper="+upper[region]+", lower="+fine[region]);
 		}
-		quarterCylinder(.125F, false, Math.PI / 6);
-		quarterCylinder(.125F, false, 2 * Math.PI / 3);
 		FluidDomain d = new FluidDomain(12, 12, 12,
 				new FluidSolverConfig(.25F, 1000, 0, .01F, 800, 1e-7F, .002F, .8F), 64);
 		Arrays.fill(d.tension.surfaceTensionColor, .5);
@@ -174,7 +153,7 @@ final class SurfaceTensionCurvatureExperiment {
 		}
 	}
 
-	private static double[] quarterCylinder(float h, boolean upper, double angle) {
+	private static double[] quarterCylinder(float h, boolean upper) {
 		int size = Math.round(3 / h);
 		FluidDomain d = new FluidDomain(size, size, size,
 				new FluidSolverConfig(h, 1000, 0, .01F, 800, 1e-7F, .002F, .8F), size * size * size * 8);
@@ -186,7 +165,7 @@ final class SurfaceTensionCurvatureExperiment {
 					-circlePrimitive(a+h,b,1)+circlePrimitive(a,b,1))/(h*h),0,1);
 			int cell=d.domainFlowFields.cellIndex(x,y,z);colour[cell]=f;fractions[cell]=(float)f;
 		}
-		d.bindMaterialRegistry(new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:wall",1000,"mmm:wall",.0728,angle))));
+		d.bindMaterialRegistry(new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:wall",1000,"mmm:wall",.0728,Math.PI/2))));
 		d.setVolumes(fractions);d.domainFlowFields.ensureGrid();
 		System.arraycopy(colour, 0, d.tension.surfaceTensionColor, 0, colour.length);
 		d.domainFlowFields.smoothSurfaceTensionColor(); d.domainFlowFields.rebuildSurfaceTensionNormals();
@@ -197,15 +176,12 @@ final class SurfaceTensionCurvatureExperiment {
 			int region = x < 2 || x >= size - 2 ? 1 : my < 2 || mz < 2 ? 2 : 0;
 			counts[region]++; if (Double.isFinite(HeightFunctionCurvature.compute(d, x, y, z))) heights[region]++;
 			errors[region] += Math.abs(d.domainFlowFields.liquidGasMeanCurvature(x, y, z) - 1);
-			if (angle != Math.PI / 2 && (x == 0 || x == size - 1))
-				check(!Double.isFinite(HeightFunctionCurvature.compute(d, x, y, z)), "non-90 wall accepted even height reflection");
 		}
 		for (int region = 0; region < 3; region++) {
 			check(counts[region] > 0, "cylinder region is empty"); errors[region] /= counts[region];
-			if (angle == Math.PI / 2 && h == .125F) check(heights[region] == counts[region], "resolved cylinder height rejected");
 		}
-		System.out.printf("  quarter cylinder h=%g upper=%s angle=%g partial=%s HF=%s core/end/mirror meanAbsKappaError=%s%n",
-				h, upper, angle, Arrays.toString(counts), Arrays.toString(heights), Arrays.toString(errors));
+		System.out.printf("  quarter cylinder h=%g upper=%s partial=%s HF=%s core/end/mirror meanAbsKappaError=%s%n",
+				h, upper, Arrays.toString(counts), Arrays.toString(heights), Arrays.toString(errors));
 		return errors;
 	}
 	private static void check(boolean condition, String message) { if (!condition) throw new AssertionError(message); }

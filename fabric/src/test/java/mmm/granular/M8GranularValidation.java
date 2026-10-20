@@ -2134,11 +2134,17 @@ public final class M8GranularValidation {
 		long previous = granularMotionSignature(domain.exportGranularState());
 		int unchangedSteps = 0;
 		int emptyAt = -1;
+		int completedSteps = 0;
 		boolean moved = false, locallyHeld = false;
-		for (int step = 0; step < steps; step++) {
+		// The original observation period covers falling and contacts. Once all
+		// material is deposited, finish the scheduler's separate stability window.
+		for (int step = 0; step < steps + GranularDepositDynamics.SLEEP_LOGICAL_STEPS; step++) {
+			if (step >= steps && (domain.granularParcelCount() != 0 || domain.granularReadyForHydrostaticSleep())) break;
+			GranularDepositDynamics.Stats transition;
 			try {
 				FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
 						generation, handoffState, List.of(), false, 0));
+				transition = candidate.stats().granularTransition();
 				handoffState = candidate.state();
 				domain = FluidDomain.restoreAuthoritativeState(handoffState);
 				generation++;
@@ -2147,13 +2153,15 @@ public final class M8GranularValidation {
 				throw new AssertionError("whole-bucket congestion failed at logical step " + step
 						+ ": active=" + failed.activeParcels().size() + ", deposits="
 						+ failed.depositGroups().size() + ", held=" + domain.lastGranularCapacityHeld()
-						+ ", dynamics=" + domain.lastGranularDepositStats(), failure);
+						+ ", sleeping=" + domain.granularSleepingColumnCount()
+						+ ", queued=" + handoffState.granularDynamics().queuedColumns().length, failure);
 			}
+			completedSteps = step + 1;
 			GranularStateSnapshot state = domain.exportGranularState();
 			if (emptyAt < 0 && state.activeParcels().isEmpty()) emptyAt = step + 1;
-			if (step % 20 == 19) System.out.printf("pile step=%d active=%d activeSvq=%d deposits=%d dirty=%d%n", step,
+			if (step % 20 == 19) System.out.printf("pile step=%d active=%d activeSvq=%d deposits=%d dirty=%d sleeping=%d%n", step,
 					state.activeParcels().size(), state.activeParcels().stream().mapToLong(GranularStateSnapshot.ActiveParcel::solidVolumeSvq).sum(),
-					state.depositGroups().size(), domain.lastGranularDepositStats().dirtyColumns());
+					state.depositGroups().size(), transition.dirtyColumns(), domain.granularSleepingColumnCount());
 			assertTransientPileHasSupport(state,
 					granular.material(granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND)));
 			long signature = granularMotionSignature(state);
@@ -2195,7 +2203,7 @@ public final class M8GranularValidation {
 				Math.min(7, (int) (parcel.z() / 0.5F)) * 8 + Math.min(7, (int) (parcel.x() / 0.5F)))
 				.distinct().count();
 		System.out.printf("  two-bucket granular fixture after %d steps: active=%d emptyAt=%d floor=%d moving=%d columns=%d depositGroups=%d%n",
-				steps, settled.activeParcels().size(), emptyAt, floorActive, movingActive, activeColumns,
+				completedSteps, settled.activeParcels().size(), emptyAt, floorActive, movingActive, activeColumns,
 				settled.depositGroups().size());
 		FluidDomain.GranularClear cleared = domain.removeAllGranularExact();
 		GranularStateSnapshot clearedState = domain.exportGranularState();
