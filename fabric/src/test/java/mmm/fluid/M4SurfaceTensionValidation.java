@@ -9,6 +9,12 @@ public final class M4SurfaceTensionValidation {
 private M4SurfaceTensionValidation() { }
 
 public static void main(String[] args) {
+	if (args.length == 1 && args[0].equals("--liquid-pair")) {
+		validateLiquidPairPressureJump();
+		validateLiquidPairIdentity();
+		System.out.println("M4 liquid-pair validation passed");
+		return;
+	}
 	if (args.length == 1 && args[0].equals("--wetting")) {
 		validateContactAngleSpreading();
 		validateLiquidPairPressureJump();
@@ -131,13 +137,12 @@ private static void validateContactAngleSpreading() {
 DropletMetrics hydrophilic = runDroplet(config, Math.toRadians(30.0), 100.0, 1200);
 DropletMetrics neutral = runDroplet(config, Math.toRadians(90.0), 100.0, 1200);
 DropletMetrics hydrophobic = runDroplet(config, Math.toRadians(120.0), 100.0, 1200);
-System.out.printf("  contact-angle initial outward impulse moments theta30=%g theta90=%g theta120=%g kg*m^2/s; final varianceX=%g/%g/%g m^2; peakK=%g/%g/%g J; finalRMS=%g/%g/%g m/s%n",
-hydrophilic.outwardImpulse(),neutral.outwardImpulse(),hydrophobic.outwardImpulse(),
+System.out.printf("  contact-angle spreading varianceX=%g/%g/%g m^2; peakK=%g/%g/%g J; finalRMS=%g/%g/%g m/s%n",
 hydrophilic.varianceX(),neutral.varianceX(),hydrophobic.varianceX(),
 hydrophilic.maximumKinetic(),neutral.maximumKinetic(),hydrophobic.maximumKinetic(),
 hydrophilic.rmsSpeed(),neutral.rmsSpeed(),hydrophobic.rmsSpeed());
-check(hydrophilic.outwardImpulse() > neutral.outwardImpulse() && neutral.outwardImpulse() > hydrophobic.outwardImpulse(),
-"Young wall energy did not direct the initial wetting impulse according to contact angle");
+check(hydrophilic.varianceX() > neutral.varianceX() && neutral.varianceX() > hydrophobic.varianceX(),
+"contact angle did not order the macroscopic spreading response");
 }
 
 private static DropletMetrics runDroplet(FluidSolverConfig config, double contactAngleRadians, double sigma, int steps) {
@@ -151,7 +156,6 @@ for (int z = 1; z <= 2; z++) for (int y = 1; y <= 2; y++) for (int x = 5; x <= 6
 fractions[domain.domainFlowFields.cellIndex(x,y,z)] = 1;
 domain.setVolumes(fractions);
 var initialVolume = domain.liquidCells.exactVolume(); long initialMass = domain.totalMassUnits();
-double initialCenterX = domain.centerOfMassX(), outwardImpulse = Double.NaN;
 double potential = 0, wallArea = 0, h = config.cellSize();
 for (var stock : domain.liquidCells.physicalStocks())
 potential += stock.massKilograms()*config.gravity()*(stock.key().cell()/domain.sizeX%domain.sizeY+.5)*h;
@@ -168,7 +172,6 @@ pressureWork += audit.pressureProjectionWorkJoules();
 transportWork += audit.volumeTransportTransferJoules()+audit.carrierInventoryTransferJoules();
 fixedWallWork += audit.fixedBoundaryWorkJoules();
 surfaceWork += audit.surfaceTensionWorkJoules();
-if (step == 0) outwardImpulse = outwardMomentumMoment(domain,initialCenterX);
 check(domain.liquidCells.exactVolume().equals(initialVolume) && domain.totalMassUnits() == initialMass,
 "contact-angle spreading changed exact mass or volume");
 double kinetic = domain.liquidKineticEnergyJoules();
@@ -193,22 +196,11 @@ double x = (stock.key().cell()%domain.sizeX+.5)*h, amount = stock.volumeFraction
 weightedX += x*amount; weightedX2 += x*x*amount; volume += amount;
 }
 double meanX = weightedX/volume;
-return new DropletMetrics(weightedX2/volume-meanX*meanX,outwardImpulse,peakKinetic,
+return new DropletMetrics(weightedX2/volume-meanX*meanX,peakKinetic,
 FluidPhysicalAssertions.motion(domain).rmsSpeed());
 }
 
-/** Initial committed momentum records the combined capillary pressure and wall response. */
-private static double outwardMomentumMoment(FluidDomain domain, double centerX) {
-double outward = 0, h = domain.config.cellSize();
-for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x <= domain.sizeX; x++) {
-int face = domain.domainFlowFields.xFaceIndex(x,y,z);
-outward += (x*h-centerX)*domain.mac.momentumX[face];
-}
-check(Double.isFinite(outward),"initial capillary impulse is not finite");
-return outward;
-}
-
-private record DropletMetrics(double varianceX, double outwardImpulse, double maximumKinetic, double rmsSpeed) { }
+private record DropletMetrics(double varianceX, double maximumKinetic, double rmsSpeed) { }
 
 	private static void validateLiquidPairPressureJump() {
 		FluidSolverConfig config = new FluidSolverConfig(
