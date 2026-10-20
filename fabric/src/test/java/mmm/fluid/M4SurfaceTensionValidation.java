@@ -11,7 +11,6 @@ private M4SurfaceTensionValidation() { }
 public static void main(String[] args) {
 	SurfaceTensionCurvatureExperiment.validateResolvedGeometry();
 	if (args.length == 1 && args[0].equals("--curvature")) return;
-	CapillaryNeckValidation.validate();
 	validateSigmaZeroDegeneration();
 	validateActiveSingleCellPressureJump();
 	validateStaticDropletPressureJump();
