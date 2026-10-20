@@ -181,6 +181,20 @@ public final class ThermalStateFunction {
 		return referenceCache().energy(offset, quanta);
 	}
 
+	/** A transport source supplies canonical species columns without intermediate recipient mixtures. */
+	public double baseEnergy(int materialHandle,double massKg,ChemicalMixtureRecord source,
+	                         ChemicalRegistry chemistry,long[][] speciesAmounts,int part){
+		if(!(Double.isFinite(massKg)&&massKg>0))throw new IllegalArgumentException("Thermal carrier mass must be finite and positive");
+		double total=massKg*registry.material(materialHandle).referenceSpecificEnergyJPerKg();
+		if(source!=null){
+			var offsets=offsets(chemistry)[materialHandle];
+			for(int entry=0;entry<speciesAmounts.length;entry++)if(speciesAmounts[entry][part]>0)
+				total+=referenceEnergy(requireOffset(offsets,source.speciesHandle(entry)),speciesAmounts[entry][part]);
+		}
+		if(!Double.isFinite(total))throw new EnergyRepresentationException();
+		return total;
+	}
+
 	/** Absolute binary64 error from reference-term conversion and ordered additions. */
 	public double baseEnergyRoundoff(int materialHandle, double massKg, ChemicalMixtureRecord mixture, ChemicalRegistry chemistry) {
 		double total = massKg * registry.material(materialHandle).referenceSpecificEnergyJPerKg();

@@ -170,6 +170,7 @@ final class CellMacStage {
 		recordWallImpulse(new WallImpulse(impulse[0],impulse[1],impulse[2]));
 		if(audit!=null)domain.thermalState.restoreAuditLedger(audit);
 		// Heat changes U alone; the existing mass, PLIC and gas frame stay current.
+		inventoryRevision=domain.liquidCells.revision();
 		domain.carrierPropertiesWorkspace.invalidate();derivePreparedVelocity();
 	}
 	/** Face inertia belongs to the same inventory generation as cell mass. */

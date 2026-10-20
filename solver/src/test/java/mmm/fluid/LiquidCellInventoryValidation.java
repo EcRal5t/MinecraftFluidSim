@@ -156,7 +156,7 @@ public final class LiquidCellInventoryValidation {
 		waterRoutes.add(new LiquidCellInventory.TransportRoute(-1,water,water,waterRemaining));
 		oilRoutes.add(new LiquidCellInventory.TransportRoute(-1,oil,oil,oilRemaining));
 		var plan = cells.planRoutes(List.of(new LiquidCellInventory.SourceRoutes(cells.stock(water),waterRoutes),
-				new LiquidCellInventory.SourceRoutes(cells.stock(oil),oilRoutes)),(source,masses,mixtures,remainder,energies)->{
+				new LiquidCellInventory.SourceRoutes(cells.stock(oil),oilRoutes)),(source,masses,speciesAmounts,remainder,energies)->{
 			for(int i=0;i<masses.length;i++)if(i!=remainder)energies[i]=source.internalEnergy()*(masses[i]/(double)source.massUnits());
 			// The provider's remainder slot is ignored and assigned by the inventory.
 			energies[remainder]=Double.NaN;

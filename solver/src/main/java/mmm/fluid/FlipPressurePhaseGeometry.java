@@ -19,6 +19,7 @@ final class FlipPressurePhaseGeometry {
 	private final PlicPlaneOffset.Result[] offsetBrackets;
 	private final SignedDyadic[] poreVolumes;
 	private final PlicComponentGeometry[] components;
+	private final Object[] cellShapeIdentity;
 	private byte[] collisionMasks;
 	private long revision;
 	private double[] microFraction, microPoreScale, microOffset;
@@ -45,6 +46,7 @@ final class FlipPressurePhaseGeometry {
 		this.poreVolumes = new SignedDyadic[cellCount];
 		java.util.Arrays.fill(poreVolumes,SignedDyadic.ZERO);
 		this.components = new PlicComponentGeometry[cellCount];
+		this.cellShapeIdentity = new Object[cellCount];
 		this.collisionMasks = new byte[cellCount];
 	}
 
@@ -81,10 +83,13 @@ final class FlipPressurePhaseGeometry {
             double total=0,liquid=0;for(int bit=0;bit<8;bit++){int piece=8*cell+bit;double capacity=pore[piece],amount=state.liquidVolume(piece);total+=capacity;liquid+=amount;microPoreScale[piece]=8*capacity;microFraction[piece]=0;}
             poreVolumes[cell]=SignedDyadic.of(total);fraction[cell]=total>0?Math.clamp(liquid/total,0,1):0;normalX[cell]=normalY[cell]=normalZ[cell]=0;planeOffset[cell]=0;
         }
+		// Identity is compared only at the same cell; one token names this reconstruction batch.
+		Object rebuiltShape=new Object();
 		for(int cell=0;cell<fraction.length;cell++){
 			int x=cell%sizeX,y=cell/sizeX%sizeY,z=cell/(sizeX*sizeY);double center=fraction[cell];
-			if(center>0&&center<1&&captured!=null&&sameOccupancyInputs(cell,x,y,z,state,pore,captured)){
+			if(captured!=null&&sameOccupancyInputs(cell,x,y,z,state,pore,captured)){
 				copyCell(captured,cell);
+				cellShapeIdentity[cell]=captured.cellShapeIdentity[cell];
 				int p=8*cell;
 				System.arraycopy(captured.microFraction,p,microFraction,p,8);
 				System.arraycopy(captured.microNormalX,p,microNormalX,p,8);
@@ -94,6 +99,7 @@ final class FlipPressurePhaseGeometry {
 				System.arraycopy(captured.microBracket,p,microBracket,p,8);
 				continue;
 			}
+			cellShapeIdentity[cell]=rebuiltShape;
 			double nx=coarseSample(x-1,y,z,center)-coarseSample(x+1,y,z,center);
 			double ny=coarseSample(x,y-1,z,center)-coarseSample(x,y+1,z,center);
 			double nz=coarseSample(x,y,z-1,center)-coarseSample(x,y,z+1,center);
@@ -126,6 +132,7 @@ final class FlipPressurePhaseGeometry {
 			if(current!=previous)return false;
 		}
 		double center=fraction[cell];
+		if(center==0||center==1)return true;
 		return coarseSample(x-1,y,z,center)==old.coarseSample(x-1,y,z,center)
 				&&coarseSample(x+1,y,z,center)==old.coarseSample(x+1,y,z,center)
 				&&coarseSample(x,y-1,z,center)==old.coarseSample(x,y-1,z,center)
@@ -152,6 +159,7 @@ final class FlipPressurePhaseGeometry {
 	/** Exact inputs read by dry-piece and microface construction, including absent gas pieces. */
 	boolean sameCellGeometry(int cell, FlipPressurePhaseGeometry other) {
 		if (collisionMask(cell) != other.collisionMask(cell) || !poreVolumes[cell].equals(other.poreVolumes[cell])) return false;
+		if(cellShapeIdentity[cell]!=null&&cellShapeIdentity[cell]==other.cellShapeIdentity[cell])return true;
 		for (int micro = 0; micro < 8; micro++) {
 			if (Double.doubleToRawLongBits(liquidFractionExact(cell, micro)) != Double.doubleToRawLongBits(other.liquidFractionExact(cell, micro))
 					|| Double.doubleToRawLongBits(planeOffset(cell, micro)) != Double.doubleToRawLongBits(other.planeOffset(cell, micro))
@@ -190,6 +198,7 @@ final class FlipPressurePhaseGeometry {
 			throw new IllegalArgumentException("Captured PLIC requires a distinct matching frame and local stock checks");
 		microFraction=microPoreScale=microOffset=null;microNormalX=microNormalY=microNormalZ=null;microBracket=null;
 		microOccupancy=null;
+		java.util.Arrays.fill(cellShapeIdentity,null);
 		PhaseLiquidGeometryEdit[] overlay = edits.isEmpty() ? null : new PhaseLiquidGeometryEdit[fraction.length];
 		for (var edit : edits) {
 			if (edit == null || edit.cell() >= fraction.length || overlay[edit.cell()] != null
@@ -282,6 +291,7 @@ final class FlipPressurePhaseGeometry {
 		normalX = source.normalX.clone(); normalY = source.normalY.clone(); normalZ = source.normalZ.clone();
 		planeOffset = source.planeOffset.clone(); offsetBrackets = source.offsetBrackets.clone();
 		poreVolumes = source.poreVolumes.clone(); components = source.components.clone();
+		cellShapeIdentity=source.cellShapeIdentity.clone();
 		collisionMasks = source.collisionMasks.clone();
 		if(source.microFraction!=null){microFraction=source.microFraction.clone();microPoreScale=source.microPoreScale.clone();
 			microOffset=source.microOffset.clone();microNormalX=source.microNormalX.clone();microNormalY=source.microNormalY.clone();
@@ -297,9 +307,11 @@ final class FlipPressurePhaseGeometry {
 	                         FlipCutCellGeometry cut, boolean[] solid, float cellSize) {
 
 		revision = Math.addExact(revision, 1);
+		cellShapeIdentity[edit.cell()]=null;
 		double open = poreVolumes[edit.cell()].toDouble();
 		fraction[edit.cell()] = solid[edit.cell()] || open <= 0 ? 0 : clamp(edit.volume().toDouble() / open, 0, 1);
 		for (int cell : cells) {
+			cellShapeIdentity[cell]=null;
 			int x = cell % sizeX, y = cell / sizeX % sizeY, z = cell / (sizeX * sizeY);
 			normalX[cell] = normalY[cell] = normalZ[cell] = 0; planeOffset[cell] = 0;
 			offsetBrackets[cell] = null; components[cell] = null;
