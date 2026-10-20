@@ -24,6 +24,10 @@ final class PressureFaceGraph {
 	private final int[] verticalLiquidContact;
 	private FlipPressurePhaseGeometry supportGeometry;
 	private long supportRevision=-1;
+	private FlipPressurePhaseGeometry classifiedGeometry;
+	private GasRuntimeGeometry classifiedGasFrame;
+	private mmm.fluid.air.AirNetwork classifiedGasNetwork;
+	private long classifiedGeometryRevision=-1,classifiedCarrierRevision=-1,classifiedGasRevision=-1;
 	private final int[] parent;
 	private final boolean[] constrained, anchored;
 	private final double[] seedPressureSum, seedPressureWeight;
@@ -59,6 +63,11 @@ final class PressureFaceGraph {
 	}
 
 	void classify() {
+		var phase=domain.pressurePhaseGeometry;var network=domain.gasState.network;
+		if(classifiedGeometry==phase&&classifiedGeometryRevision==phase.revision()
+				&&classifiedCarrierRevision==domain.liquidGrid.inventoryRevision
+				&&classifiedGasFrame==domain.gasState.frame&&classifiedGasNetwork==network
+				&&classifiedGasRevision==network.revision())return;
 		prepareSupportGeometry();
 		Arrays.fill(pressureSupports, 0);
 		for (int cell = 0; cell < domain.cellCount; cell++) {
@@ -76,6 +85,9 @@ final class PressureFaceGraph {
 		}
 		prepareHydrostaticReference();
 		for(int cell=0;cell<domain.cellCount;cell++)domain.projection.pressureFluid[cell]=pressureSupports[cell]!=0;
+		classifiedGeometry=phase;classifiedGeometryRevision=phase.revision();
+		classifiedCarrierRevision=domain.liquidGrid.inventoryRevision;classifiedGasFrame=domain.gasState.frame;
+		classifiedGasNetwork=network;classifiedGasRevision=network.revision();
 	}
 	private boolean hasFiniteGas(int cell, int support) {
 		var frame = domain.gasState.frame;
@@ -287,12 +299,14 @@ final class PressureFaceGraph {
 		Arrays.fill(wetPortArea,0);Arrays.fill(sideWetArea,0);Arrays.fill(verticalLiquidContact,0);
 		for(int face=0;face<faceCount;face++){
 			int left=firstCell[face],right=secondCell[face],d=axis[face];if(left<0)continue;
+			if(!(phase.liquidFractionExact(left)>0)&&!(phase.liquidFractionExact(right)>0))continue;
 			for(int a=0;a<2;a++)for(int b=0;b<2;b++){
 				int port=a+2*b;
 				int minus=phase.microAtFace(left,d,1,.5*a,.5*b),plus=phase.microAtFace(right,d,0,.5*a,.5*b);
 				if((cut.mask(left)&1<<minus)!=0||(cut.mask(right)&1<<plus)!=0)continue;
 				double leftArea=phase.liquidPortArea(left,d,1,a,b,cut),rightArea=phase.liquidPortArea(right,d,0,a,b,cut);
-				double shared=phase.sharedLiquidPortArea(left,right,d,a,b,cut);
+				double shared=leftArea==0||rightArea==0?0:leftArea==.25?rightArea:rightArea==.25?leftArea
+						:phase.sharedLiquidPortArea(left,right,d,a,b,cut);
 				sideWetArea[8*face+2*port]=leftArea;sideWetArea[8*face+2*port+1]=rightArea;
 				wetPortArea[4*face+port]=Math.clamp(leftArea+rightArea-shared,0,.25);
 				if(d==1&&shared>0)verticalLiquidContact[localFace[face]]|=1<<port;

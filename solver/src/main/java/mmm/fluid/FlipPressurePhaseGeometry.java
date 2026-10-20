@@ -384,8 +384,9 @@ final class FlipPressurePhaseGeometry {
 	double liquidPortArea(int cell,int axis,int side,int a,int b,FlipCutCellGeometry cut){
 		double x=.5*a,y=.5*b;int micro=microAtFace(cell,axis,side,x,y);
 		if((cut.mask(cell)&1<<micro)!=0||liquidFractionExact(cell,micro)<=0)return 0;
+		if(liquidFractionExact(cell,micro)>=1)return .25;
 		rectangle(x,y,.5);
-		int count=liquidFractionExact(cell,micro)>=1?4:clipFace(4,
+		int count=clipFace(4,
 				planeNormal(cell,micro,(axis+1)%3),planeNormal(cell,micro,(axis+2)%3),
 				planeOffset(cell,micro)-side*planeNormal(cell,micro,axis));
 		double twice=0;
