@@ -67,33 +67,35 @@ final class CondensedPhaseChangeStage {
 			boolean hasLiquid=store.hasMaterial(liquid),hasCoherent=false;
 			for(var group:originalGroups) if(group.phaseId().equals(transition.lowerEnergyMaterialId())) { hasCoherent=true;break; }
 			if(!hasLiquid&&!hasCoherent) continue;
-			double equilibrium=transition.equilibriumCurve().getFirst().temperatureK();
-			boolean constant=true;
-			for(var point:transition.equilibriumCurve()) if(point.temperatureK()!=equilibrium) { constant=false;break; }
-			if(constant&&temperatureRange!=null
-					&&(!hasLiquid||temperatureRange.minimumK()>=equilibrium)
-					&&(!hasCoherent||temperatureRange.maximumK()<=equilibrium)) continue;
-			var possible=new TreeMap<Integer,Candidate>();
+			double minimumMelting=transition.minimumEquilibriumTemperatureK(),maximumMelting=transition.maximumEquilibriumTemperatureK();
+			boolean canFreeze=hasLiquid&&(temperatureRange==null||temperatureRange.minimumK()<maximumMelting);
+			boolean canMelt=hasCoherent&&(temperatureRange==null||temperatureRange.maximumK()>minimumMelting);
+			if(!canFreeze&&!canMelt)continue;
+			boolean constant=minimumMelting==maximumMelting;
 			var liquidSupports=new TreeMap<Integer,Integer>();
-			for(var stock:store.physicalStocks()) if(stock.key().material()==liquid&&!stock.indicator())
+			if(canFreeze)for(var stock:store.physicalStocks()) if(stock.key().material()==liquid&&!stock.indicator())
 				liquidSupports.merge(stock.key().cell(),stock.key().supportMask(),(a,b)->a|b);
-			for(var entry:liquidSupports.entrySet()) {
-				int cell=entry.getKey();
-				// Constant melting curves have no pressure dependency and need no pressure geometry.
-				double melting=constant?equilibrium:transition.equilibriumTemperatureK(Math.max(0,
-						AirNetwork.REFERENCE_PRESSURE+domain.pressureSystem.liquidPressureAt(cell,entry.getValue())));
-				double temperature=thermal.phaseScanTemperatureInCell(cell);
-				if(temperature<melting) possible.put(cell,new Candidate(cell,liquid,transition,melting,temperature));
+			var meltingCells=new HashSet<Integer>();
+			if(canMelt)for(var group:originalGroups) if(group.phaseId().equals(transition.lowerEnergyMaterialId())) {
+				meltingCells.add(group.cell());
 			}
-			for(var group:originalGroups) if(group.phaseId().equals(transition.lowerEnergyMaterialId())) {
-				int cell=group.cell(),liquidSupport=liquidSupports.getOrDefault(cell,0);
+			var possibleCells=new TreeSet<Integer>(liquidSupports.keySet());possibleCells.addAll(meltingCells);
+			for(int cell:possibleCells) {
+				double temperature=thermal.phaseScanTemperatureInCell(cell);
+				boolean freezing=liquidSupports.containsKey(cell)&&temperature<maximumMelting;
+				boolean melting=meltingCells.contains(cell)&&temperature>minimumMelting;
+				// The full pressure-curve envelope excludes impossible phase directions before geometry preparation.
+				if(!freezing&&!melting)continue;
+				int liquidSupport=liquidSupports.getOrDefault(cell,0);
+				if(!canFreeze)for(var stock:store.physicalStocksInCell(cell))
+					if(stock.key().material()==liquid&&!stock.indicator())liquidSupport|=stock.key().supportMask();
 				if(liquidSupport==0) liquidSupport=~domain.geometry.cutCells.mask(cell)&255;
-				double melting=constant?equilibrium:transition.equilibriumTemperatureK(Math.max(0,
+				double equilibrium=constant?minimumMelting:transition.equilibriumTemperatureK(Math.max(0,
 						AirNetwork.REFERENCE_PRESSURE+domain.pressureSystem.liquidPressureAt(cell,liquidSupport)));
-				double temperature=thermal.phaseScanTemperatureInCell(cell);
-				if(temperature>melting) possible.put(cell,new Candidate(cell,liquid,transition,melting,temperature));
+				if(freezing&&temperature<equilibrium||melting&&temperature>equilibrium) {
+					selectedCells.add(cell);candidates.add(new Candidate(cell,liquid,transition,equilibrium,temperature));
+				}
 			}
-			selectedCells.addAll(possible.keySet());candidates.addAll(possible.values());
 		}
 		if(candidates.isEmpty()) return new FluidDomain.ThermalPhaseStats(0,0,0,0);
 		prepareGranularOccupancy();

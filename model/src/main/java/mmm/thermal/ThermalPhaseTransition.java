@@ -75,6 +75,26 @@ public record ThermalPhaseTransition(
 
 	public double maximumPressurePa() { return equilibriumCurve.getLast().pressurePa(); }
 
+	/** Extrema of the admitted pressure curve; condensed endpoint segments continue over P >= 0. */
+	public double minimumEquilibriumTemperatureK() { return equilibriumTemperatureBound(true); }
+	public double maximumEquilibriumTemperatureK() { return equilibriumTemperatureBound(false); }
+	private double equilibriumTemperatureBound(boolean minimum) {
+		double bound=minimum?Double.POSITIVE_INFINITY:Double.NEGATIVE_INFINITY;
+		for(var point:equilibriumCurve)
+			bound=minimum?Math.min(bound,point.temperatureK()):Math.max(bound,point.temperatureK());
+		if(interfaceRequirement==InterfaceRequirement.NONE) {
+			var first=equilibriumCurve.getFirst();var second=equilibriumCurve.get(1);
+			double firstSlope=(second.temperatureK()-first.temperatureK())/(second.pressurePa()-first.pressurePa());
+			double atZero=Math.fma(-first.pressurePa(),firstSlope,first.temperatureK());
+			bound=minimum?Math.min(bound,atZero):Math.max(bound,atZero);
+			var last=equilibriumCurve.getLast();var previous=equilibriumCurve.get(equilibriumCurve.size()-2);
+			double lastSlope=(last.temperatureK()-previous.temperatureK())/(last.pressurePa()-previous.pressurePa());
+			if(minimum&&lastSlope<0)return Double.NEGATIVE_INFINITY;
+			if(!minimum&&lastSlope>0)return Double.POSITIVE_INFINITY;
+		}
+		return bound;
+	}
+
 	/** Piecewise linear phase curve with endpoint continuation for condensed phases. */
 	public double equilibriumTemperatureK(double absolutePressurePa) {
 		if (!(Double.isFinite(absolutePressurePa) && absolutePressurePa >= 0.0)
