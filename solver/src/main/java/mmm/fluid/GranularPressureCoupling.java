@@ -8,7 +8,7 @@ final class GranularPressureCoupling {
     private final FluidDomain domain;
     private int contacts, entries;
     private int[] start = new int[0], row = new int[64];
-    private double[] coefficient = new double[64], inverseMass = new double[0], affine = new double[0];
+    private double[] coefficient = new double[64], inverseMass = new double[0], affine = new double[0],referenceAffine=new double[0];
 
     GranularPressureCoupling(FluidDomain domain) { this.domain = domain; }
 
@@ -21,6 +21,7 @@ final class GranularPressureCoupling {
             start = new int[contacts + 1];
             inverseMass = new double[contacts];
             affine = new double[contacts];
+            referenceAffine = new double[contacts];
         }
         var graph = domain.pressureSystem.faces;
         var solid = domain.pressureSystem.solidFaces;
@@ -32,14 +33,17 @@ final class GranularPressureCoupling {
                 start[contact] = entries;
                 inverseMass[contact] = cellVolume / parcel.mass();
                 affine[contact] = 0;
+                referenceAffine[contact] = 0;
                 for (int slot = 0; slot < solid.parcelFaceCount(p, axis); slot++) {
                     int face = solid.parcelFace(p, axis, slot);
                     double area = solid.solidArea(face) * solid.parcelPressureShare(p, axis, slot);
                     int first = graph.firstCell[face], second = graph.secondCell[face];
                     if (!(area > 0) || first < 0 || second < 0) continue;
                     double weight = area / h;
-                    graph.forEachSide(first, second, (r, w, fixed) -> add(contact, r, weight * w, fixed));
-                    graph.forEachSide(second, first, (r, w, fixed) -> add(contact, r, -weight * w, fixed));
+                    graph.forEachSide(first, second, (r, w, fixed) -> add(contact, r, weight * w, fixed),
+                            reference->referenceAffine[contact]+=weight*reference);
+                    graph.forEachSide(second, first, (r, w, fixed) -> add(contact, r, -weight * w, fixed),
+                            reference->referenceAffine[contact]-=weight*reference);
                 }
             }
         }
@@ -49,6 +53,11 @@ final class GranularPressureCoupling {
             write(p, parcel, parcel.velocityX() + dt * inverseMass[3 * p] * affine[3 * p],
                     parcel.velocityY() + dt * inverseMass[3 * p + 1] * affine[3 * p + 1],
                     parcel.velocityZ() + dt * inverseMass[3 * p + 2] * affine[3 * p + 2]);
+            // The hydrostatic column's fixed support supplies this reference
+            // impulse. Residual pressure and capillary coupling keep their paired rows.
+            domain.lastGranularBoundaryImpulseX+=dt*cellVolume*referenceAffine[3*p];
+            domain.lastGranularBoundaryImpulseY+=dt*cellVolume*referenceAffine[3*p+1];
+            domain.lastGranularBoundaryImpulseZ+=dt*cellVolume*referenceAffine[3*p+2];
         }
     }
 

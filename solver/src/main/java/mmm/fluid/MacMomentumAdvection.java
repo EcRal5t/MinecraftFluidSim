@@ -61,14 +61,14 @@ final class MacMomentumAdvection {
         for(int i=0;i<count;i++){
             int a=firstCell[i],b=secondCell[i];
             long mass=value(after,a)+value(after,b);
-            if(a<0||b<0||mass<=0||!(open[i]>0)||constrained[i])continue;
+            if(a<0||b<0||mass<=0||!(open[i]>0)||constrained!=null&&constrained[i])continue;
             boolean tiny=volume[a]<=mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION
                     &&volume[b]<=mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION;
             if(!tiny&&(phase.liquidFractionExact(a)>=1&&phase.liquidFractionExact(b)>=1
                     ||phase.sharedLiquidFaceArea(a,b,component,cut)>mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION))continue;
             int target=i;long largest=mass;
             for(int side=0;side<2;side++){
-                int candidate=anchors[side==0?a:b];if(candidate<0||constrained[candidate])continue;
+                int candidate=anchors[side==0?a:b];if(candidate<0||constrained!=null&&constrained[candidate])continue;
                 long candidateMass=value(after,firstCell[candidate])+value(after,secondCell[candidate]);
                 if(candidateMass>largest||candidateMass==largest&&candidate<target){target=candidate;largest=candidateMass;}
             }

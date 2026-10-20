@@ -80,12 +80,18 @@ final class BodyForceStage {
 			float open = domain.domainFlowFields.pressureYFaceOpen(x, y, z);
 			if (open > 0 && (domain.mac.faceMassY[face] > 0 || domain.domainFlowFields.carrierFaceActive(below, above, open))) {
 				double mass=domain.cellMacStage.massY[face],old=domain.mac.velocityY[face];float free=(float)(old-impulse);
-				double acceleration=domain.pressureSystem.faces.gravityAcceleration(domain.pressureSystem.faces.offsets[1]+face);
+				double acceleration=domain.pressureSystem.faces.freeFallAcceleration(domain.pressureSystem.faces.offsets[1]+face);
 				float next=acceleration==-domain.config.gravity()?free:(float)(old+dt*acceleration);
 				domain.mac.velocityY[face]=next;
 				supportImpulse+=mass*(next-free);
 				supportWork+=.5*mass*((double)next*next-(double)free*free);
 			}
+		}
+		var graph=domain.pressureSystem.faces;
+		for(int face=0;face<graph.faceCount;face++){
+			int axis=graph.axis[face],local=graph.localFace[face];if(axis==1||domain.cellMacStage.isUnresolvedWallFace(axis,local))continue;
+			float[] velocity=axis==0?domain.mac.velocityX:domain.mac.velocityZ;
+			velocity[local]+=(float)(dt*graph.barotropicAcceleration(face));
 		}
 		domain.cellMacStage.recordSupportedWeightImpulse(supportImpulse);
 		return supportWork;

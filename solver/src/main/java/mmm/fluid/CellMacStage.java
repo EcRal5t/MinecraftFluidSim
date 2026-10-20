@@ -142,7 +142,9 @@ final class CellMacStage {
 				&&domain.pressureSystem.faces.isGroundedDryNormalFace(face))unresolvedWall[1][face]=true;
 		wallPhase=phase;wallInventory=domain.liquidCells.snapshot();
 	}
-	boolean[] constrainedNormalFaces(int axis){return unresolvedWall[axis];}
+	boolean[] constrainedNormalFaces(int axis){
+		return wallPhase==domain.pressurePhaseGeometry&&domain.liquidCells.hasSameGeometry(wallInventory)?unresolvedWall[axis]:null;
+	}
 	boolean isUnresolvedWallFace(int axis,int face){
 		return wallPhase==domain.pressurePhaseGeometry&&domain.liquidCells.hasSameGeometry(wallInventory)&&unresolvedWall[axis][face];
 	}

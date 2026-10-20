@@ -1530,10 +1530,11 @@ public final class GranularCarrierValidation {
 		addParcel(domain, 1.43F, py, 1.39F, 0, 0, 0);
 		fillPoreWater(domain, domain.sizeY);
 		domain.domainFlowFields.ensureGrid();
-		domain.pressureStage.solve(0.05F);
+		domain.pressureSystem.faces.rebuild(0.05F);
 		for (int cell = 0; cell < domain.cellCount; cell++) {
 			int y = cell / 6 % 6;
-			domain.projection.pressure[cell] = 1_000F * 9.81F * (3 - (y + 0.5F) * 0.5F);
+			domain.projection.pressure[cell] = (float)(1_000F * 9.81F * (3 - (y + 0.5F) * 0.5F)
+					-domain.pressureSystem.faces.referencePressure(cell,255));
 		}
 		var coupling = new GranularPressureCoupling(domain);
 		coupling.prepare(0.05F);

@@ -160,14 +160,15 @@ final class PressureSystem {
 	void restoreLiquidPressure(CondensedPhasePressureField state){
 		float[] actual=state.copyRelativeGaugePressurePa();domain.pressureReference=0;
 		for(int cell=0;cell<domain.cellCount;cell++)domain.projection.pressure[cell]=
-				(float)(state.pressureReferencePa()+actual[cell]-domain.tension.surfaceTensionPressure[cell]);
+				(float)(state.pressureReferencePa()+actual[cell]-domain.tension.surfaceTensionPressure[cell]
+						-faces.referencePressure(cell,~domain.geometry.cutCells.mask(cell)&255));
 	}
 
 	/** Gauge pressure at the retained liquid support, including a partially filled cell's gas contact. */
 	double liquidPressureAt(int cell, int support) {
 		domain.domainFlowFields.ensurePressureGeometry();
 		if ((faces.pressureSupports[cell] & support) == support)
-			return domain.projection.pressure[cell]+domain.tension.surfaceTensionPressure[cell];
+			return domain.projection.pressure[cell]+domain.tension.surfaceTensionPressure[cell]+faces.referencePressure(cell,support);
 		var frame = domain.gasState.frame; double total = 0, weighted = 0;
 		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) {
 			int node = frame.nodeOfPiece(8 * cell + micro); if (node < 0) continue;

@@ -237,8 +237,8 @@ public final class FlipFluidFreeSurfaceValidation {
 			for(int z=0;z<2;z++)for(int y=0;y<3;y++)for(int x=0;x<2;x++)domain.setVolume(x,y,z,y==2?fraction:1);
 			var volume=volume(domain);long mass=mass(domain);double initialCenter=FluidPhysicalAssertions.inventoryCenterY(domain);
 			domain.domainFlowFields.ensureGrid();
-			String firstGravity="g="+domain.pressureSystem.faces.gravityAcceleration(domain.pressureSystem.faces.offsets[1]+domain.domainFlowFields.yFaceIndex(0,1,0))
-					+","+domain.pressureSystem.faces.gravityAcceleration(domain.pressureSystem.faces.offsets[1]+domain.domainFlowFields.yFaceIndex(0,2,0));
+			String firstGravity="freeFall="+domain.pressureSystem.faces.freeFallAcceleration(domain.pressureSystem.faces.offsets[1]+domain.domainFlowFields.yFaceIndex(0,1,0))
+					+","+domain.pressureSystem.faces.freeFallAcceleration(domain.pressureSystem.faces.offsets[1]+domain.domainFlowFields.yFaceIndex(0,2,0));
 			String firstState="";
 			for(int step=0;step<200;step++){
 				var candidate=advance(domain);check(Float.isFinite(candidate.stats().pressureResidual()),"Fractional column pressure became nonfinite");domain=candidate.claimPreparedCpuDomain();
