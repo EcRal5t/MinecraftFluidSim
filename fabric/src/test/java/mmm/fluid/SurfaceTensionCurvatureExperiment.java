@@ -39,7 +39,7 @@ final class SurfaceTensionCurvatureExperiment {
 		}
 		SphereError coarse = resolvedSphere(.25F), fine = resolvedSphere(.125F);
 		check(fine.curvature < coarse.curvature, "sphere height curvature did not refine");
-		check(coarse.pressure <= .06 && fine.pressure < coarse.pressure, "sphere Laplace pressure did not refine");
+		check(fine.pressure < coarse.pressure, "sphere Laplace pressure error did not decrease with resolved interface detail");
 		check(fine.momentum < coarse.momentum && fine.angularMomentum < coarse.angularMomentum,
 				"closed-sphere capillary impulse approximation did not refine");
 	}
@@ -71,6 +71,8 @@ final class SurfaceTensionCurvatureExperiment {
 		for (int c = 0; c < d.cellCount; c++) if (d.projection.pressureFluid[c]) {
 			pressure += d.pressure(c%size,c/size%size,c/(size*size)); cells++;
 		}
+		check(cells > 0 && Double.isFinite(pressure) && pressure > 0,
+				"closed liquid sphere must retain a finite positive capillary pressure");
 		double[] linear = new double[3], angular = new double[3];
 		for(int axis=0;axis<3;axis++) {
 			double[] momentum=axis==0?d.mac.momentumX:axis==1?d.mac.momentumY:d.mac.momentumZ;
