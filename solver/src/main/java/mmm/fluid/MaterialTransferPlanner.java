@@ -220,13 +220,8 @@ final class MaterialTransferPlanner {
 	LiquidCellInventory.Plan planLiquidClear() {
 		return domain.liquidCells.planEdits(domain.liquidCells.stocks().stream().map(stock -> new LiquidCellInventory.Edit(stock.key(), null)).toList());
 	}
-	void clearLiquid() {
-		var removed = new LinkedHashMap<Kind, Removed>();
-		for (var stock : domain.liquidCells.stocks()) removed.computeIfAbsent(new Kind(stock.key().material(), stock.indicator()),
-				kind -> new Removed(kind.material(), kind.indicator())).add(stock.volume(), stock.massUnits(), stock.mixture());
-		var groups = new ArrayList<ChemicalTransferLedger.Group>(); if (domain.chemicalParcels != null) for (var group : removed.values()) groups.add(group.group());
-		var energy = domain.liquidCells.exactInternalEnergy();
-		prepare(planLiquidClear(), ChemicalTransferLedger.EMPTY, new ChemicalTransferLedger(groups), SignedDyadic.ZERO, energy).commit();
+	void clearLiquid(LiquidCellInventory.Plan inventory, ChemicalTransferLedger drained, SignedDyadic energy) {
+		prepare(inventory, ChemicalTransferLedger.EMPTY, drained, SignedDyadic.ZERO, energy).commit();
 	}
 	void replaceCellVolumes(int[] cells, float[] requestedVolumes, int[] materials) {
 		if (cells.length != requestedVolumes.length || materials != null && materials.length != cells.length) throw new IllegalArgumentException("Cell volume arrays differ");

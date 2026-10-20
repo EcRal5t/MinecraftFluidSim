@@ -387,19 +387,44 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 当前按生产成本优先推进，有九成把握的改动跳过独立算子、精度短例与重复回归。
 当前主干以粗单元开放连通分量结算液体通量和真实容量，八微格承担界面与气体来源；逐微格容量流图和逐微格压缩约束已删除。
 
+最新功能集成已完成：
+
+- `build/m10-precipitate/final-seed4-suffix.log`、`m10-joint-core/mixed-pressure-seed54-103.log`：三个固定种子的原六十动作全部完成，已通过前缀接续保存输入，恢复、库存与热账核对保留。
+- `build/m10-precipitate/final-precipitate120-suffix.log`、`final-cold40-suffix.log`：原砂与沉淀一百二十步、1 K 冷酸碱四十步及逐步恢复完成。
+- `m10-joint-core/shared-capacity-named-matrix.log`、`mixed-pressure-named-matrix.log`、`named5-retained-source-suffix.log`、`mixed-pressure-named6-continuation.log`：结合上述两个长流程，原三十三组操作组合全部完成。
+
+`m10-joint-core/floating-thermal-production-live-budget.log` 是本轮成本替换后的预算记录：控制器完整步中位数 17.255 ms、最大 22.731 ms，通过 40 ms；最大 demo 前三步为 289.970 / 234.512 / 249.898 ms，连续三步超过 200 ms，当前生产预算尚未通过。
+完整步均为一个机械步，包含捕获、私有求解及接管；正在继续删除数量结算中的规模成本。
+下列较早预算通过记录保留原构建口径，最终资格以新主干的后续完整预算测量为准。
+
 `build/m10-joint-core/bounded-phase-live-budget.log`：正式控制器十步预热、二十步采样完成，完整步中位数 15.274 ms、最大 19.939 ms，满足逐步 40 ms。
 同构建最大 demo 二十步完整完成，中位数 170.969 ms、最大 276.821 ms，超 200 ms 最多连续两步，满足原连续三步暂停判定；第十九、二十步实际发生相变。
 全部使用一个机械步，计时覆盖捕获、私有求解与候选接管。
 
 `bounded-phase-pour.log`：原密闭注液四步及逐步恢复完成，完整流程耗时 82.343 / 39.080 / 31.990 / 26.739 ms。
 `bounded-phase-l-shape.log`：原 L 形八步及逐步恢复完成，末态动能为初态约 96.7%。
-`bounded-phase-bed-startup.log`：沙床启动在联合容量分配处失败，正在沿实际颗粒占容、排水及气腔容量链处理。
+`bed-bounded-correction-startup.log`：原沙床启动三步及逐步恢复完成，全部一个机械步，第三步形成十六个沉积单元。
 
-`compile-bounded-phase.log`：model、solver、fabric 生产与测试源码编译通过，21 秒。
+本轮综合流程：
+
+- `phase400-production-chain.log`：原四百步 phase-on、中途二次注液、逐步恢复及最终排液全部完成。
+- `phase-batch-formal.log`：五组有限气腔连续相变，以及冻结、恢复、融化和后继完成。
+- `production-cut600.log`：原六百步切格障碍物流动及恢复完成。
+- `final-dam-bounded-momentum.log`：原五千步溃坝、库存、容量及逐步恢复完成。未解析薄层与最近已解析液体按有限质量混合，末步最大速度 2.536 m/s、质量加权 RMS 0.0474 m/s、动能 30.332 J；动能持续衰减。
+- `build/m10-bed-lifecycle/lifecycle-contact-continuation.log`：完整沙床沉降、弱扰动、强扰动起动、再沉积、睡眠及恢复通过，共一百八十四步；平均完整步 28.447 ms，冷启动最大 255.175 ms。
+- `container-operation-matrix.log`：正常材料操作及二十四次注液、WAL／重启已完成；固定种子与沉淀排水后继使用本节开头的完整接续结果。
+- `thermal-advection-final.log`、`thermal-stratification-final.log`、`thermal-convection-final.log`：热平流、完整分层和八组线性对流完成。
+  热学夹具改用共同单元库存、MAC 与气腔联合提交；稳定分层最大速度约 8×10⁻⁵ m/s，三组不稳定层均达到原质心位移要求。
+  分层耗时 4.565 秒、八组对流耗时 10.820 秒；原增长、衰减及网格误差要求保持。
+- `partialdisk49-same-geometry.log`：原 `replay partialdisk 1 200 49` 全部完成，耗时 2.746 秒。
+  生产与冷恢复使用同一 PLIC 输入，气体来源按实际正容量的固定开放分量继任；严格库存、热账、液封与微盒归属核对保持。
+
+`compile-common-capacity.log`：model、solver、fabric 生产与测试源码统一编译通过，27 秒。
+同次 `verifyArchitecture` 完成，扫描 515 份生产源码，依赖方向与单元库存写入归属通过。
 独立算子及额外精度短例按当前工作要求跳过。
 
 正式预算继续覆盖捕获、私有求解和候选接管。
-当前构建已通过两项生产预算，M10 综合验收仍在推进；下列较早记录按其原构建口径保留。
+当前构建通过控制器预算，最大 demo 预算仍在推进；下列较早记录按其原构建口径保留。
 实施进度见[当前计划](../roadmap/solver-consolidation-plan.md)，历史结果见[阶段记录](../archive/progress/solver-validation-2026-10-18.md)。
 
 ### 共同主干整合：2026-10-18

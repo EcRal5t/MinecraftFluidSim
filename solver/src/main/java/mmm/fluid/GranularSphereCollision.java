@@ -37,7 +37,9 @@ final class GranularSphereCollision {
 			if (!Arrays.equals(d, drift) || !Arrays.equals(v, response)) operation();
 			d = drift; v = response;
 		}
-		while (norm2(d) > 0) {
+		// Unresolved repeated contact motion waits at the last legal endpoint for the next step.
+		// The computed velocity remains authoritative; this position approximation removes no energy.
+		for (int event = 0; event < 8 && norm2(d) > 0; event++) {
 			List<Hit> hits = first(p, d, radius);
 			if (hits.isEmpty()) { for (int a = 0; a < 3; a++) p[a] += d[a]; break; }
 			operation();
@@ -78,7 +80,47 @@ final class GranularSphereCollision {
 		return result;
 	}
 	float[] roundContactPoint(double[] position, float radius) { return roundOutside(position, radius); }
-	private void operation() { if (--remainingOperations < 0) throw new MechanicalTimeRefinement(2, "Granular sphere contact operations"); }
+
+	/** Local PBD correction against the same shell, fixed micro boxes and actual bed boxes as CCD. */
+	ContactPlane[] projectPosition(double[] position, float radius) {
+		var planes = new ArrayList<ContactPlane>();
+		for (int a = 0; a < 3; a++) {
+			double lower = radius, upper = sizes[a] * h - radius;
+			if (position[a] < lower || position[a] > upper) {
+				double[] normal = new double[3]; normal[a] = position[a] < lower ? 1 : -1;
+				position[a] = Math.clamp(position[a], lower, upper);
+				planes.add(new ContactPlane(normal, dot(normal, position)));
+			}
+		}
+		double[] lower = new double[3], upper = new double[3];
+		for (int a = 0; a < 3; a++) { lower[a] = position[a] - radius; upper[a] = position[a] + radius; }
+		geometry.forEachBox(lower, upper, (minimum, maximum) -> {
+			double[] normal = boxNormal(position, minimum, maximum);
+			double length = Math.sqrt(norm2(normal));
+			if (length > radius) return;
+			if (length == 0) {
+				int selected = 0; double nearest = Double.POSITIVE_INFINITY, sign = -1;
+				for (int a = 0; a < 3; a++) {
+					double lo = position[a] - minimum[a], hi = maximum[a] - position[a];
+					if (lo < nearest) { nearest = lo; selected = a; sign = -1; }
+					if (hi < nearest) { nearest = hi; selected = a; sign = 1; }
+				}
+				normal[selected] = sign;
+				position[selected] = sign < 0 ? minimum[selected] - radius : maximum[selected] + radius;
+			} else {
+				for (int a = 0; a < 3; a++) {
+					normal[a] /= length;
+					position[a] += (radius - length) * normal[a];
+				}
+			}
+			// Leave space for storing the position outside the closed fixed shape.
+			for (int a = 0; a < 3; a++)
+				position[a] += 2 * Math.ulp((float) position[a]) * normal[a];
+			planes.add(new ContactPlane(normal, dot(normal, position)));
+		});
+		return planes.toArray(ContactPlane[]::new);
+	}
+	private void operation() { if (--remainingOperations < 0) throw new IllegalStateException("Granular sphere contact operations"); }
 	private List<Hit> first(double[] p, double[] d, double radius) {
 		List<Hit> candidates = new ArrayList<>();
 		for (int a = 0; a < 3; a++) if (d[a] != 0) {
@@ -86,10 +128,10 @@ final class GranularSphereCollision {
 			double[] normal = new double[3]; normal[a] = d[a] > 0 ? -1 : 1;
 			planeHit(candidates, (plane - p[a]) / d[a], gamma(3) * (Math.abs(plane) + Math.abs(p[a])) / Math.abs(d[a]), normal, a, plane, d[a]);
 		}
-		// CFL bounds the initial L1 drift by h; projection cannot increase L2.
-		// Local queries cover at most 4^3 micro boxes and 3^3 bed cells.
+		// Every fixed obstacle before the nearest shell hit lies inside this bounded swept box.
+		double shellTime = candidates.stream().mapToDouble(Hit::upper).min().orElse(1);
 		double[] lo = new double[3], hi = new double[3];
-		for (int a = 0; a < 3; a++) { lo[a] = Math.min(p[a], p[a] + d[a]) - radius; hi[a] = Math.max(p[a], p[a] + d[a]) + radius; }
+		for (int a = 0; a < 3; a++) { lo[a] = Math.min(p[a], p[a] + shellTime * d[a]) - radius; hi[a] = Math.max(p[a], p[a] + shellTime * d[a]) + radius; }
 		geometry.forEachBox(lo, hi, (minimum, maximum) -> {
 			Hit hit = box(p, d, minimum, maximum, radius); if (hit != null) candidates.add(hit);
 		});
@@ -181,65 +223,20 @@ final class GranularSphereCollision {
 		return result;
 	}
 	private double[] project(double[] v, double[][] normals) {
-		// Diameter < one micro box: at most eight micro boxes, eight bed boxes,
-		// and three shell planes. At most 1159 active subsets in 3D.
-		if (normals.length > 19) throw new MechanicalTimeRefinement(2, "Granular contact support");
-		if (feasible(v, normals, new double[3])) return v.clone();
-		double[] best = null; double cost = Double.POSITIVE_INFINITY; int n = normals.length;
-		for (int a = 0; a < n; a++) for (int b = -1; b < n; b++) for (int c = -1; c < n; c++) {
-			if (b >= 0 && b <= a || c >= 0 && (b < 0 || c <= b)) continue;
-			int[] indices = c >= 0 ? new int[]{a, b, c} : b >= 0 ? new int[]{a, b} : new int[]{a}; int count = indices.length;
-			double[][] matrix = new double[count][count + 1];
-			for (int i = 0; i < count; i++) {
-				for (int j = 0; j < count; j++) matrix[i][j] = dot(normals[indices[i]], normals[indices[j]]);
-				matrix[i][count] = -dot(normals[indices[i]], v);
+		double[] result = v.clone();
+		// Standard alternating projections onto local unilateral contact half-spaces.
+		// The bounded solve dissipates unresolved corner motion without active-set enumeration.
+		for (int pass = 0; pass < 8; pass++)
+			for (int visit = 0; visit < normals.length; visit++) {
+				double[] normal = normals[(pass & 1) == 0 ? visit : normals.length - 1 - visit];
+				double closing = dot(result, normal);
+				if (closing >= 0) continue;
+				double correction = -closing / norm2(normal);
+				for (int a = 0; a < 3; a++) result[a] = Math.fma(correction, normal[a], result[a]);
 			}
-			double[] lambda = solve(matrix); if (lambda == null) continue;
-			double[] candidate = v.clone(), formation = new double[3]; boolean positive = true;
-			for (int j = 0; j < 3; j++) formation[j] = Math.abs(v[j]);
-			for (int i = 0; i < count; i++) {
-				if (lambda[i] < 0) { positive = false; break; }
-				for (int j = 0; j < 3; j++) { double term = lambda[i] * normals[indices[i]][j]; candidate[j] += term; formation[j] += Math.abs(term); }
-			}
-			if (!positive || !feasible(candidate, normals, formation)) continue;
-			boolean zero = true; for (int j = 0; j < 3; j++) zero &= Math.abs(candidate[j]) <= gamma(6) * formation[j];
-			if (zero) Arrays.fill(candidate, 0);
-			double change = 0; for (int j = 0; j < 3; j++) change += (candidate[j] - v[j]) * (candidate[j] - v[j]);
-			if (change < cost) { cost = change; best = candidate; }
-		}
-		if (best == null) throw new MechanicalTimeRefinement(2, "Granular contact cone conditioning");
-		if (normals.length == 1) {
-			int pivot = 0; for (int a = 1; a < 3; a++) if (Math.abs(normals[0][a]) > Math.abs(normals[0][pivot])) pivot = a;
-			if (dot(best, normals[0]) < 0) {
-				double others = 0, magnitude = 0;
-				for (int a = 0; a < 3; a++) if (a != pivot) { double term = best[a] * normals[0][a]; others += term; magnitude += Math.abs(term); }
-				// Direct dot-product error compensation avoids walking through subnormal
-				// or cancellation-scale ULPs of a nearly zero projected component.
-				best[pivot] = (-others + gamma(6) * magnitude) / normals[0][pivot];
-				best[pivot] = Math.nextAfter(best[pivot], normals[0][pivot] > 0 ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY);
-				if (dot(best, normals[0]) < 0) throw new MechanicalTimeRefinement(2, "Granular contact projection rounding");
-			}
-		}
-		return best;
+		return result;
 	}
 	private static double[] boxNormal(double[] p, double[] lo, double[] hi) { double[] n = new double[3]; for (int a = 0; a < 3; a++) n[a] = p[a] - Math.max(lo[a], Math.min(hi[a], p[a])); return n; }
-	private static boolean feasible(double[] v, double[][] normals, double[] formation) {
-		for (double[] normal : normals) {
-			double sum = 0, formed = 0; for (int a = 0; a < 3; a++) { sum += Math.abs(v[a] * normal[a]); formed += Math.abs(normal[a]) * formation[a]; }
-			if (dot(v, normal) < -gamma(3) * sum - gamma(6) * formed) return false;
-		}
-		return true;
-	}
-	private static double[] solve(double[][] matrix) {
-		int n = matrix.length;
-		for (int j = 0; j < n; j++) {
-			int pivot = j; for (int i = j + 1; i < n; i++) if (Math.abs(matrix[i][j]) > Math.abs(matrix[pivot][j])) pivot = i;
-			if (matrix[pivot][j] == 0) return null; double[] swap = matrix[j]; matrix[j] = matrix[pivot]; matrix[pivot] = swap;
-			double scale = matrix[j][j]; for (int k = j; k <= n; k++) matrix[j][k] /= scale;
-			for (int i = 0; i < n; i++) if (i != j) { double factor = matrix[i][j]; for (int k = j; k <= n; k++) matrix[i][k] -= factor * matrix[j][k]; }
-		}
-		double[] result = new double[n]; for (int j = 0; j < n; j++) result[j] = matrix[j][n]; return result;
-	}
 	private static double[] tangent(double[] v, double[][] normals) {
 		double[] cross = null; double largest = 0;
 		for (int a = 0; a < normals.length; a++) for (int b = a + 1; b < normals.length; b++) {
@@ -263,7 +260,7 @@ final class GranularSphereCollision {
 			if (squared >= error || !validEndpoint(candidate, radius)) continue;
 			best = candidate; error = squared;
 		}
-		if (best == null) throw new MechanicalTimeRefinement(2, "No representable granular sphere endpoint at "
+		if (best == null) throw new IllegalStateException("No representable granular sphere endpoint at "
 				+ Arrays.toString(point) + " radius=" + radius);
 		return best;
 	}

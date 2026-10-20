@@ -476,14 +476,11 @@ abstract class FluidDomainGasAndGranular extends FluidDomainCapabilities {
 				throw new IllegalArgumentException("Granular snapshot bed intersects fixed geometry at cell " + cell);
 			}
 		});
-		var admission = new GranularSpawnAdmission(sizeX, sizeY, sizeZ, config.cellSize(), state.parcels.count());
 		for (int index = 0; index < state.parcels.count(); index++) {
 			var parcel = state.parcels.parcel(index);
-			if (!prepared.collision().positionValid(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq())
-					|| !admission.allows(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq())) {
+			if (!prepared.collision().positionValid(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq())) {
 				throw new IllegalArgumentException("Granular snapshot sphere has invalid geometry at parcel " + index);
 			}
-			admission.append(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq());
 		}
 		prepared.coupling().rebuild(state.parcels, state.deposits);
 		var liquid = new SignedDyadic[cellCount];

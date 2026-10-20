@@ -601,7 +601,7 @@ public final class ThermalDomainState {
 	// ---- pending phase mechanical work ----
 
 	public void requirePendingPhaseCells(SignedDyadic[] pendingCellVolume, ThermalCarrierContext markers) {
-		cellOperations.requirePendingPhaseCells(pendingCellVolume, markers);
+		cellOperations.requirePendingPhaseCells(pendingCellVolume, markers, thermalRevision());
 	}
 
 

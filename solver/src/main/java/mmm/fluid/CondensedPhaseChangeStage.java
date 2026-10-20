@@ -168,13 +168,30 @@ final class CondensedPhaseChangeStage {
 			high=Math.min(high,volumeBatches(room,normalized(delta),maximum));
 		}
 		if(high==0) return null;
-		double equilibriumEnergy=0;
-		for(var stock:store.physicalStocksInCell(cell)) equilibriumEnergy+=energy(function,thermal.thermalMaterialHandleForFluid(stock.key().material()),stock.massKilograms(),stock.mixture(),equilibrium);
-		for(var portion:current.unchangedSolids()) equilibriumEnergy+=function.internalEnergyAtTemperature(portion.materialHandle(),portion.massKg(),portion.speciesQuanta(),equilibrium);
+		double equilibriumEnergy=0;SignedDyadic minimumEnergy=SignedDyadic.ZERO;
+		for(var stock:store.physicalStocksInCell(cell)) {
+			int handle=thermal.thermalMaterialHandleForFluid(stock.key().material());
+			equilibriumEnergy+=energy(function,handle,stock.massKilograms(),stock.mixture(),equilibrium);
+			minimumEnergy=minimumEnergy.add(SignedDyadic.of(energy(function,handle,stock.massKilograms(),stock.mixture(),ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)));
+		}
+		for(var portion:current.unchangedSolids()) {
+			equilibriumEnergy+=function.internalEnergyAtTemperature(portion.materialHandle(),portion.massKg(),portion.speciesQuanta(),equilibrium);
+			minimumEnergy=minimumEnergy.add(SignedDyadic.of(function.internalEnergyAtTemperature(portion.materialHandle(),portion.massKg(),portion.speciesQuanta(),ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)));
+		}
 		Map<String,Long> composition=new TreeMap<>();
 		if(freezing) for(var stock:sources) add(composition,amounts(stock.mixture()));else if(coherent.composition()!=null) composition.putAll(coherent.composition().stableAmounts());
 		int lower=thermal.registry().materialHandle(transition.lowerEnergyMaterialId()),upper=thermal.registry().materialHandle(transition.upperEnergyMaterialId());
 		double kg=Mass.kilograms(mass);
+		// Positive heat capacities make the cold endpoint the energy feasibility limit.
+		// A phase with a smaller Cv can have a higher cold endpoint despite its latent heat.
+		int from=freezing?upper:lower,to=freezing?lower:upper;
+		double coldIncrease=(function.internalEnergyAtTemperature(to,kg,composition,ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)
+				-function.internalEnergyAtTemperature(from,kg,composition,ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K))/kg;
+		if(coldIncrease>0) {
+			double available=Math.max(0,current.cellEnergy().subtract(minimumEnergy).toDouble());
+			high=Math.min(high,(long)Math.floor(available/(coldIncrease*Mass.kilograms(batchMass))));
+			if(high==0)return null;
+		}
 		double latent=(function.internalEnergyAtTemperature(upper,kg,composition,equilibrium)-function.internalEnergyAtTemperature(lower,kg,composition,equilibrium))/kg;
 		if(!(latent>0)) throw new IllegalArgumentException("Condensed transition has nonpositive latent heat");
 		double desired=Math.abs(current.cellEnergy().toDouble()-equilibriumEnergy)/(latent*Mass.kilograms(batchMass));

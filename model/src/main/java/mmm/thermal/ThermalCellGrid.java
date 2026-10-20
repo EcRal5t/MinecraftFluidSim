@@ -90,7 +90,7 @@ public final class ThermalCellGrid {
 			internalEnergy[carriers.cell(carrier)] += energy;
 		}
 			for (int carrier = 0; carrier < topologyCarrierCount; carrier++)
-				validateCarrierEnergy(carrier, carriers.exactInternalEnergy(carrier));
+				validateCarrierEnergy(carrier, carriers.internalEnergy(carrier));
 			for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0)
 				solveCarrierCell(cell);
 		updateObservedTemperatureRange();
@@ -222,7 +222,7 @@ public final class ThermalCellGrid {
 		if (topologyCarrierCount > 0) carrierAccess.baseEnergy(0);
 		if (validateUntouched)
 			for (int carrier = 0; carrier < topologyCarrierCount; carrier++) if (carrierAccess.cell(carrier) != prospectiveCell)
-				validateCarrierEnergy(carrier, carrierAccess.exactInternalEnergy(carrier));
+				validateCarrierEnergy(carrier, carrierAccess.internalEnergy(carrier));
 	}
 
 	public void setCellInternalEnergies(double[] targetEnergy) {
@@ -357,19 +357,19 @@ public final class ThermalCellGrid {
 	}
 
 	private void solveCarrierCell(int cell) {
-		SignedDyadic target = exactCarrierEnergyInCell(cell);
-		internalEnergy[cell] = target.toDouble();
+		var target=new ThermalCaloricInversion.Sum();
+		for(int carrier=cellHead[cell];carrier>=0;carrier=carrierNext[carrier])target.add(carriers.internalEnergy(carrier));
+		internalEnergy[cell] = target.value();
 		if (!Double.isFinite(internalEnergy[cell])) throw new IllegalArgumentException("Thermal cell energy is not finite");
-		solveCell(cell, target);
+		solveCell(cell, internalEnergy[cell]);
 	}
 
-	private void solveCell(int cell, double targetEnergy) { solveCell(cell, SignedDyadic.of(targetEnergy)); }
-
-	private void solveCell(int cell, SignedDyadic target) {
-		SignedDyadic reference = SignedDyadic.ZERO;
+	private void solveCell(int cell, SignedDyadic target) { solveCell(cell,target.toDouble()); }
+	private void solveCell(int cell, double target) {
+		var reference=new ThermalCaloricInversion.Sum();
 		for (int carrier = cellHead[cell]; carrier >= 0; carrier = carrierNext[carrier])
-			reference = reference.add(carriers.exactBaseEnergy(carrier));
-		var state = ThermalCaloricInversion.solve(caloricInventory(cell), target.subtract(reference));
+			reference.add(cachedBaseEnergy(carrier));
+		var state = ThermalCaloricInversion.solve(caloricInventory(cell), target-reference.value());
 		temperature[cell] = state.temperatureK(); heatCapacity[cell] = state.heatCapacityJPerK();
 		updateLinearTemperatureInterval(cell);
 	}
@@ -429,12 +429,8 @@ public final class ThermalCellGrid {
 	}
 
 	private void validateCarrierEnergy(int carrier, double energy) {
-		validateCarrierEnergy(carrier, SignedDyadic.of(energy));
-	}
-
-	private void validateCarrierEnergy(int carrier, SignedDyadic energy) {
 		try {
-			ThermalCaloricInversion.single(carrierMaterial[carrier], carriers.exactMass(carrier), energy.subtract(carriers.exactBaseEnergy(carrier)));
+			ThermalCaloricInversion.owner(carrierMaterial[carrier],carrierMass[carrier],energy,cachedBaseEnergy(carrier));
 		} catch (IllegalArgumentException failure) {
 			throw new IllegalArgumentException("Thermal carrier energy is invalid (carrier=" + carrier
 					+ ", cell=" + carriers.cell(carrier) + ", material=" + carrierMaterial[carrier].id() + ")", failure);

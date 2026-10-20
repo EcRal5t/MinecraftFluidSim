@@ -31,23 +31,5 @@ final class PressureBoundaryView {
 		}
 		return compliance;
 	}
-	record Compression(double volume, double pressure, mmm.thermal.GasThermalModel.PressureVolumeCurve thermal) {
-		mmm.thermal.GasThermalModel.PressureVolume atPressure(double absolutePressure) {
-			return thermal != null ? thermal.atPressure(absolutePressure)
-					: new mmm.thermal.GasThermalModel.PressureVolume(volume * pressure / absolutePressure,
-							volume * pressure / (absolutePressure * absolutePressure));
-		}
-	}
-	Compression prepareCompression(int node) {
-		var network = domain.gasState.network;
-		double volume = network.availableVolume(node);
-		if (domain.thermalState == null || !domain.thermalState.gasModelBound())
-			return new Compression(volume, AirNetwork.REFERENCE_PRESSURE + network.gaugePressure(node), null);
-		var thermal = domain.thermalState;
-		var curve = new mmm.thermal.GasThermalModel(thermal.registry(), network.registry())
-				.pressureVolumeCurve(network.inventory(node), volume, thermal.gasNodeEnergy(node, network));
-		return new Compression(volume, AirNetwork.REFERENCE_PRESSURE + gasPressureOfNode(node), curve);
-	}
-
 	double gasPressureOfNode(int node) { return domain.gasBoundary.nodeGaugePressurePa(node); }
 }

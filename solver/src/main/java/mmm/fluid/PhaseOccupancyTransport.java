@@ -55,47 +55,47 @@ final class PhaseOccupancyTransport {
 			boolean[] solid = new boolean[domain.cellCount];
 			for (int cell = 0; cell<solid.length; cell++) solid[cell] = cut.fullySolid(cell);
 			geometry = GasComplementGeometry.capture(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), solid, cut, phase, null, null, future.snapshot());
-			int[] parent = new int[8 * domain.cellCount];
-			for (int p = 0; p<parent.length; p++) parent[p] = p;
-			for(int cell=0;cell<domain.cellCount;cell++)for(int support:CellRemapMicroTopology.components(cut.mask(cell))){
-				int first=-1;
-				for(int bits=support;bits!=0;bits&=bits-1){int p=8*cell+Integer.numberOfTrailingZeros(bits);if(geometry.piece(p)==null)continue;if(first<0)first=p;else union(parent,first,p);}
+			var topology=GasChamberTopology.capture(geometry,domain.gasState.sealedDomainBoundary);
+			var components=GasComponentCapacity.capture(domain,geometry,occupied,future.snapshot(),domain.gasState.frame);
+			var sources=new HashMap<Integer,TreeMap<Integer,Double>>();
+			int[] representative=new int[components.size()],owner=new int[components.size()];
+			java.util.Arrays.fill(representative,-1);
+			var old=domain.gasState.frame;
+			for(int i=0;i<components.size();i++) {
+				var component=components.get(i);
+				if(component.availableVolumeNormalized().signum()==0)continue;
+				for(int bits=component.supportMask();bits!=0;bits&=bits-1) {
+					int piece=8*component.cell()+Integer.numberOfTrailingZeros(bits);
+					if(geometry.piece(piece)!=null){representative[i]=piece;owner[i]=topology.nodeOfPiece(piece);break;}
+				}
+				if(representative[i]<0)throw new GasTopologyBlockedException("Edited gas component has no dry representation");
+				var origins=sources.computeIfAbsent(owner[i],ignored->new TreeMap<>());
+				// A coarse pore retains its gas even when its rebuilt plane moves every
+				// dry micro piece. Source identity belongs to the whole fixed support.
+				for(int bits=component.supportMask();bits!=0;bits&=bits-1) {
+					int piece=8*component.cell()+Integer.numberOfTrailingZeros(bits),previous=old.nodeOfPiece(piece);
+					var oldPiece=old.geometry().piece(piece);
+					if(previous>=0&&oldPiece!=null)origins.merge(previous,oldPiece.normalizedVolume(),Double::sum);
+				}
 			}
-			for (var port : geometry.ports()) if (port.fullCutConnection()) union(parent, port.first(), port.second());
-			var sources = new HashMap<Integer, TreeMap<Integer, Double >> ();
-			for (var piece : geometry.pieces()) {
-				int previous = domain.gasState.frame.nodeOfPiece(piece.id());
-				if (previous >= 0 && domain.gasState.frame.geometry().piece(piece.id()) != null) sources.computeIfAbsent(root(parent, piece.id()), ignored -> new TreeMap<>()).merge(previous, piece.normalizedVolume(), Double::sum);
-			}
-			if (!domain.gasState.sealedDomainBoundary) for (var port : geometry.exteriorPorts()) sources.computeIfAbsent(root(parent, port.piece()), ignored -> new TreeMap<>()).putIfAbsent(0, 1.0);
-			for (var piece : geometry.pieces()) {
-				double amount = pore[piece.id()] - liquid[piece.id()];
-				if (amount <= 0) continue;
-				var origins = sources.get(root(parent, piece.id()));
-				if (origins == null || origins.isEmpty()) shares.add(new GasVolumeAllocation.Share( - 1, piece.id(), amount, GasVolumeAllocation.SourceKind.EXPLICIT_VACUUM));
-				else {
-					double total = origins.values().stream().mapToDouble(Double::doubleValue).sum();
-					for (var source : origins.entrySet()) {
-						double part = amount * (source.getValue() / total);
-						if (part> 0) shares.add(new GasVolumeAllocation.Share(source.getKey(), piece.id(), part, source.getKey() == 0 ? GasVolumeAllocation.SourceKind.AMBIENT : GasVolumeAllocation.SourceKind.EXISTING));
+			for(int i=0;i<components.size();i++)if(representative[i]>=0) {
+				double amount=components.get(i).availableVolumeNormalized().toDouble();
+				var origins=sources.get(owner[i]);
+				if(origins.isEmpty()) {
+					boolean ambient=owner[i]==0;
+					shares.add(new GasVolumeAllocation.Share(ambient?0:-1,representative[i],amount,
+							ambient?GasVolumeAllocation.SourceKind.AMBIENT:GasVolumeAllocation.SourceKind.EXPLICIT_VACUUM));
+				}else {
+					double total=0;for(double value:origins.values())total+=value;
+					for(var source:origins.entrySet()) {
+						double part=amount*(source.getValue()/total);
+						if(part>0)shares.add(new GasVolumeAllocation.Share(source.getKey(),representative[i],part,
+								source.getKey()==0?GasVolumeAllocation.SourceKind.AMBIENT:GasVolumeAllocation.SourceKind.EXISTING));
 					}
 				}
 			}
 		}
 		return new GasVolumeAllocation(domain, future, state, shares, phase, geometry);
-	}
-
-	private static int root(int[] parent, int node) {
-		while (parent[node] != node) {
-			parent[node] = parent[parent[node]];
-			node = parent[node];
-		}
-		return node;
-	}
-
-	private static void union(int[] parent, int first, int second) {
-		int a = root(parent, first), b = root(parent, second);
-		if (a != b) parent[a] = b;
 	}
 
 	static void requireCurrentGeometry(FluidDomain domain, PhaseOccupancyState state) {
@@ -174,7 +174,8 @@ final class PhaseOccupancyTransport {
 			cut.restoreMicroMasks(masks);
 		}
 		workspace.rebuildOccupancy(new PhaseOccupancyState(liquid), cut, pore);
-		workspace.copyLiquidMicroVolumes(liquid);
+		// Persist the reconstruction input. The prepared frame and a cold restore must
+		// derive the same PLIC, rather than invert its approximate integrated output again.
 		return liquid;
 	}
 }

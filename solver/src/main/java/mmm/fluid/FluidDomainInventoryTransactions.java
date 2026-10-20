@@ -10,6 +10,7 @@ import mmm.fluid.air.GasAuditLedger;
 import mmm.granular.GranularAuditLedger;
 import mmm.granular.GranularDepositStore;
 import mmm.units.SignedDyadic;
+import mmm.inventory.LiquidCellInventory;
 import mmm.thermal.CoherentPhaseStore;
 
 import java.util.ArrayList;
@@ -150,6 +151,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 
 	/** Commits a previously validated liquid clear; no new ledger candidate is constructed here. */
 	public void commitRemoveAllWaterExact(WaterClearPlan plan) {
+		if (plan != null) plan.inventory().requireCurrent();
 		if (plan == null || liquidCells.size() != plan.markerCount()
 				|| carrierMutationRevision() != plan.mutationRevision()
 				|| (chemicalParcels == null ? 0 : chemicalParcels.mutationRevision()) != plan.chemicalRevision()
@@ -157,7 +159,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 				|| domain().totalMassUnits() != plan.totalMassUnits()
 				|| !liquidCells.exactInternalEnergy().equals(plan.internalEnergy()))
 			throw new IllegalStateException("Liquid inventory changed after clear planning");
-		transferPlanner.clearLiquid();
+		transferPlanner.clearLiquid(plan.inventory(), plan.drained(), plan.internalEnergy());
 	}
 
 	/** Plans one operator clear across liquid markers and every coherent condensed phase. */
@@ -168,7 +170,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 	/** Commits a jointly prevalidated liquid/coherent clear and records only the energy actually removed. */
 	public CondensedClear commitRemoveAllCondensedExact(CondensedClearPlan plan) {
 		preflightCondensedClear(plan);
-		var gas = gasTopologyCoordinator.planAfterCondensedClear();
+		var gas = gasTopologyCoordinator.planAfterCondensedClear(plan.liquid().inventory().future());
 		if (gas != null) gasTopologyCoordinator.requireBeforeCarrierCommit(gas);
 		if (thermalState != null) thermalState.requireCanCommitOperatorClear(thermalState.thermalRevision(),
 				plan.liquid().internalEnergy(), plan.coherentEnergy(), SignedDyadic.ZERO,
@@ -181,6 +183,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 	/** Reruns every fallible condensed-clear check against live truth without mutating anything. */
 	void preflightCondensedClear(CondensedClearPlan plan) {
 		if (plan == null) throw new IllegalArgumentException("Condensed clear plan is missing");
+		plan.liquid().inventory().requireCurrent();
 		if (carrierMutationRevision() != plan.mutationRevision()
 				|| (chemicalParcels == null ? 0L : chemicalParcels.mutationRevision()) != plan.chemicalRevision()) {
 			throw new IllegalStateException("Liquid inventory changed after condensed clear planning");
@@ -214,7 +217,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 			thermalState.recordExternalSink(plan.liquid().internalEnergy());
 			thermalState.clearCoherentExternal(plan.coherentGroups(), plan.coherentEnergy());
 		}
-		transferPlanner.planLiquidClear().commit();
+		plan.liquid().inventory().commit();
 		mac.restoreMomentum(new MacMomentumState(sizeX, sizeY, sizeZ, new double[mac.velocityX.length],
 				new double[mac.velocityY.length], new double[mac.velocityZ.length]));
 		domain().markCellInventoryChanged();
@@ -264,7 +267,7 @@ abstract class FluidDomainInventoryTransactions extends FluidDomainStepCoordinat
 
 	public record WaterClearPlan(
 			int markerCount, long totalVolumeBits, long totalMassUnits, ChemicalTransferLedger drained,
-			SignedDyadic internalEnergy, long mutationRevision, long chemicalRevision
+			SignedDyadic internalEnergy, long mutationRevision, long chemicalRevision, LiquidCellInventory.Plan inventory
 	) { }
 	public record CondensedClear(long coherentVolumeSvq, long coherentMassUnits, int coherentGroups) {
 		public double coherentMass() { return mmm.units.Mass.kilograms(coherentMassUnits); }

@@ -123,8 +123,12 @@ public final class GranularBedWakeValidation {
 			var requests = phase == 0 ? List.<MovingBodyFluidCoupling.Request>of()
 					: List.of(new MovingBodyFluidCoupling.Request(2, .75F, 2, speed, 0, 0, .75));
 			long stepStarted = System.nanoTime();
-			var candidate = backend.evaluate(new FluidStepRequest(step, domain.captureAuthoritativeState(), requests,
-					true, ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));
+			var source=domain.captureAuthoritativeState();FluidStepCandidate candidate;
+			try{candidate=backend.evaluate(new FluidStepRequest(step,source,requests,true,ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP));}
+			catch(RuntimeException failure){
+				System.err.printf("BED failed step=%d phase=%d phaseStep=%d speed=%g oldMaximumSpeed=%g initialSubsteps=%d active=%d deposits=%d%n",step,phase,phaseStep,speed,domain.maximumParticleSpeed(),domain.calculateSubsteps(domain.config.timeStep()),domain.granularParcelCount(),domain.granularDepositCellCount());
+				throw failure;
+			}
 			domain = candidate.claimPreparedCpuDomain();
 			double fullMs = (System.nanoTime() - stepStarted) / 1e6;
 			totalStepMs += fullMs; maximumStepMs = Math.max(maximumStepMs, fullMs); completedSteps++;

@@ -30,6 +30,16 @@ public final class Mass {
 		if (numerator < 0 || denominator <= 0 || numerator > denominator) throw new IllegalArgumentException("Invalid mass fraction");
 		if(total>=0&&denominator<=0x1_0000_0000L)
 			return (total/denominator)*numerator+Long.divideUnsigned((total%denominator)*numerator,denominator);
+		if(total>=0) {
+			// A floating quotient only selects a nearby integer. Two-word products
+			// then recover the exact signed remainder and correct the quotient.
+			long quotient=Math.min(total,(long)((double)total*numerator/denominator));
+			long first=total*numerator,second=quotient*denominator;
+			long remainder=first-second;
+			long high=Math.multiplyHigh(total,numerator)-Math.multiplyHigh(quotient,denominator)
+					-(Long.compareUnsigned(first,second)<0?1:0);
+			if(high==(remainder>>63))return quotient+Math.floorDiv(remainder,denominator);
+		}
 		return BigInteger.valueOf(total).multiply(BigInteger.valueOf(numerator))
 				.divide(BigInteger.valueOf(denominator)).longValueExact();
 	}
@@ -43,6 +53,9 @@ public final class Mass {
 	public static long portion(long total, SignedDyadic top, SignedDyadic bottom) {
 		if (top.signum() < 0 || bottom.signum() <= 0 || top.compareTo(bottom) > 0) throw new IllegalArgumentException("Invalid mass weight");
 		if(top.fitsLongUnits(-32)&&bottom.fitsLongUnits(-32))return portion(total,top.longUnitsExact(-32),bottom.longUnitsExact(-32));
+		int common=Math.min(top.exponent(),bottom.exponent());
+		if(top.fitsLongUnits(common)&&bottom.fitsLongUnits(common))
+			return portion(total,top.longUnitsExact(common),bottom.longUnitsExact(common));
 		BigInteger n = BigInteger.valueOf(total).multiply(top.significand()), d = bottom.significand();
 		int shift = top.exponent() - bottom.exponent();
 		if (shift >= 0) n = n.shiftLeft(shift); else d = d.shiftLeft(-shift);

@@ -98,8 +98,9 @@ public final class LiquidConvectionExperiment {
 		for(int z=0;z<2;z++)for(int y=0;y<=n;y++)for(int x=0;x<2*n;x++)
 			domain.mac.velocityY[domain.yFaceIndex(x,y,z)]=(float)(velocity*Math.cos(Math.PI*(x+.5)*h/(2*height))*Math.sin(Math.PI*y*h/height));
 		domain.bodyForceStage.enforceSolidFaceVelocities();domain.cellMacStage.publishMomentum();
-		double volumeBefore = domain.totalVolume(), massBefore = domain.totalMass();
-		long[] speciesBefore = domain.chemicalParcels().speciesTotals(domain.particleCount());
+		var volumeBefore = domain.liquidCells.exactVolume();
+		long massBefore = domain.liquidCells.massUnits();
+		long[] speciesBefore = LiquidStratificationValidation.speciesTotals(domain);
 		double first = Double.NaN, last = Double.NaN, viscous = 0, p2g = 0, g2p = 0;
 		for (int step = 0; step < 100; step++) {
 			var stepEnergyBefore = domain.exactInternalEnergy();
@@ -110,8 +111,8 @@ public final class LiquidConvectionExperiment {
 			viscous += stats.viscosity().dissipatedJoules();
 			p2g += stats.mechanicalAudit().particleToGridTransferJoules();
 			g2p += stats.mechanicalAudit().gridToParticleTransferJoules();
-			if (domain.totalVolume() != volumeBefore || Math.abs(domain.totalMass() - massBefore) > 1e-8
-					|| !Arrays.equals(speciesBefore, domain.chemicalParcels().speciesTotals(domain.particleCount()))
+			if (!domain.liquidCells.exactVolume().equals(volumeBefore) || domain.liquidCells.massUnits() != massBefore
+					|| !Arrays.equals(speciesBefore, LiquidStratificationValidation.speciesTotals(domain))
 					|| !domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
 					|| Math.abs(stats.mechanicalAudit().closureResidualJoules()) > 1e-6)
 				throw new AssertionError("Convection experiment lost volume, material mass, species or energy closure");

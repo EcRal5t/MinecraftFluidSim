@@ -86,15 +86,27 @@ final class FlipPressurePhaseGeometry {
 				double amount=0,capacity=0;for(int bit=0;bit<8;bit++)if((support&1<<bit)!=0){int p=8*cell+bit;amount+=state.liquidVolume(p);capacity+=pore[p];}
 				double value=capacity>0?Math.clamp(amount/capacity,0,1):0;
 				if(value==0||value==1){for(int bit=0;bit<8;bit++)if((support&1<<bit)!=0)microFraction[8*cell+bit]=value;continue;}
-				var plane=PlicPlaneOffset.solve(support,fx,fy,fz,value*Integer.bitCount(support)*.125);
-				double offset=plane.offset();normalX[cell]=fx;normalY[cell]=fy;normalZ[cell]=fz;planeOffset[cell]=offset;offsetBrackets[cell]=plane;
+				boolean unresolved = Math.min(amount, capacity - amount) <= CELL_VOLUME_RESOLUTION;
+				float px = unresolved ? 0 : fx, py = unresolved ? 1 : fy, pz = unresolved ? 0 : fz;
+				double target = value * Integer.bitCount(support) * .125;
+				var plane = unresolved ? horizontalLayer(support, target) : PlicPlaneOffset.solve(support,px,py,pz,target);
+				double offset=plane.offset();normalX[cell]=px;normalY[cell]=py;normalZ[cell]=pz;planeOffset[cell]=offset;offsetBrackets[cell]=plane;
 				for(int bit=0;bit<8;bit++)if((support&1<<bit)!=0){
-					int p=8*cell+bit;microNormalX[p]=fx;microNormalY[p]=fy;microNormalZ[p]=fz;microOffset[p]=offset;microBracket[p]=plane;
-					microFraction[p]=FlipFreeSurfaceGeometry.unitCubeLiquidFraction(.5*fx,.5*fy,.5*fz,offset-.5*(fx*(bit&1)+fy*(bit>>>1&1)+fz*(bit>>>2&1)));
+					int p=8*cell+bit;microNormalX[p]=px;microNormalY[p]=py;microNormalZ[p]=pz;microOffset[p]=offset;microBracket[p]=plane;
+					microFraction[p]=unresolved ? Math.clamp(2 * offset - (bit >>> 1 & 1), 0, 1)
+							: FlipFreeSurfaceGeometry.unitCubeLiquidFraction(.5*px,.5*py,.5*pz,offset-.5*(px*(bit&1)+py*(bit>>>1&1)+pz*(bit>>>2&1)));
 				}
 			}
 		}
 		revision=Math.addExact(revision,1);
+	}
+	/** Unresolved small phases use a volume-preserving layer in their real fixed support. */
+	private static PlicPlaneOffset.Result horizontalLayer(int support, double target) {
+		double lower = Integer.bitCount(support & 0x33) * .125;
+		double upper = Integer.bitCount(support & 0xcc) * .125;
+		double offset = lower > 0 && target <= lower ? .5 * target / lower
+				: .5 + .5 * (target - lower) / upper;
+		return new PlicPlaneOffset.Result(offset, target);
 	}
 	private double coarseSample(int x,int y,int z,double fallback) {
 		if(!inside(x,y,z))return fallback;

@@ -7,8 +7,8 @@ import mmm.thermal.ThermalDomainState;
 /**
  * Composes one mechanical substep from the explicit solver stages in the established order:
  * shared cell geometry, gas topology, granular mechanics, porous damping, viscous stress,
- * gravity, thermal buoyancy, surface tension, solid-face enforcement, pressure solve, the pending
- * phase-geometry synchronization, velocity projection, finite-volume mass and momentum transport
+ * gravity, thermal buoyancy, surface tension, solid-face enforcement, joint finite-inertia pressure
+ * projection, collision/position prediction, bounded finite-volume mass and momentum transport
  * and collision commit. The pipeline returns only typed stats and the pending-geometry
  * completion flag; thermal and chemistry axes stay outside.
  */
@@ -136,15 +136,15 @@ final class MechanicalStepPipeline {
 			stageKineticEnergy = nextKineticEnergy;
 		}
 		pressureStage.predictDrag(dt);
-		diagnosticStage = Stage.GRANULAR_COLLISION_PREVIEW;
-		granularMechanicalStage.previewCollision(dt);
-		granularMechanicalStage.publishCollisionVelocities();
 		diagnosticStage = Stage.PRESSURE_SOLVE;
 		pressureStage.solve(dt);
 		int pressureIterations = access.lastPressureIterations();
 		boolean phaseGeometryPending = substep == 0 && state.pendingPhaseVolume.hasWork();
 		diagnosticStage = Stage.PRESSURE_PUBLICATION;
 		pressureStage.projectVelocities(dt);
+		diagnosticStage = Stage.GRANULAR_COLLISION_PREVIEW;
+		granularMechanicalStage.previewCollision(dt);
+		granularMechanicalStage.publishCollisionVelocities();
 		cellMac.prepareTransport(dt);
 		granularMechanicalStage.validateVelocities();
 		pressureIterations = access.lastPressureIterations();

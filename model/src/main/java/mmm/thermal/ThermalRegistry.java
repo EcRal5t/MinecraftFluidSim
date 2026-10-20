@@ -34,7 +34,7 @@ public final class ThermalRegistry {
 	private final String gasRegistryFingerprint;
 	private final byte[] canonicalBytes;
 	private final String fingerprint;
-	private volatile ThermalReferenceEnergyCache referenceEnergies;
+	private final ThermalReferenceEnergyCache referenceEnergies;
 	private volatile SpeciesOffsets speciesOffsetTable;
 	private record SpeciesOffsets(ChemicalRegistry chemistry, ThermalSpeciesOffset[][] offsets) { }
 
@@ -52,6 +52,7 @@ public final class ThermalRegistry {
 		this.materials = canonicalUnique(materials, ThermalLimits.MAX_MATERIALS,
 				ThermalMaterialDefinition::id, "thermal material");
 		this.speciesOffsets = canonicalOffsets(speciesOffsets);
+		this.referenceEnergies = new ThermalReferenceEnergyCache(this.speciesOffsets);
 		this.transitions = canonicalUniqueOptional(transitions, ThermalLimits.MAX_PHASE_TRANSITIONS,
 				ThermalPhaseTransition::id, "thermal transition");
 		this.boundaries = canonicalUniqueOptional(boundaries, ThermalLimits.MAX_BOUNDARIES,
@@ -153,9 +154,7 @@ public final class ThermalRegistry {
 
 	/** Derived terms survive candidate replacement; immutable definitions fix every cache input. */
 	ThermalReferenceEnergyCache referenceEnergyCache() {
-		ThermalReferenceEnergyCache cache = referenceEnergies;
-		if (cache == null) referenceEnergies = cache = new ThermalReferenceEnergyCache();
-		return cache;
+		return referenceEnergies;
 	}
 
 	ThermalSpeciesOffset[][] speciesOffsetTable(ChemicalRegistry chemistry) {

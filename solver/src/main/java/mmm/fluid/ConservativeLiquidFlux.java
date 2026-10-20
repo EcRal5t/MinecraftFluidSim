@@ -14,6 +14,9 @@ final class ConservativeLiquidFlux {
 	final double[] flux, predictedFaceFlux;
 	private final FluidDomain domain;
 	private final int[] coarseFaceAt, pressureFace;
+	private final int[] neighborStart, neighborSource, neighborTarget;
+	private byte[] neighborMasks;
+	private int neighborCount;
 	private final double[] outTotal,sourceVolume;
 	private final int[] capacitySlots;
 	private int capacityCount;
@@ -53,6 +56,9 @@ final class ConservativeLiquidFlux {
 		after = new SignedDyadic[cellCount];
 		coarseFaceAt = new int[6 * cellCount];
 		pressureFace = new int[physicalFaceCount];
+		neighborStart = new int[2 * physicalFaceCount + 1];
+		neighborSource = new int[8 * physicalFaceCount];
+		neighborTarget = new int[neighborSource.length];
 		Arrays.fill(coarseFaceAt, - 1);
 		int f = 0;
 		for (int z = 0; z<sizeZ; z++) for (int y = 0; y<sizeY; y++) for (int x = 1; x<sizeX; x++) f = coarseFace(f, (z * sizeY + y) * sizeX + x - 1, 0);
@@ -89,6 +95,34 @@ final class ConservativeLiquidFlux {
 				: axis == 1 ? 2 | (port & 1) | ((port & 2) << 1) : 4 | port;
 	}
 
+	/** Capacity alternatives are fixed-support adjacency, independent of the physical phase flux. */
+	private void prepareNeighbors() {
+		byte[] masks = domain.geometry.cutCells.copyMicroMasks();
+		if (Arrays.equals(neighborMasks, masks)) return;
+		neighborMasks = masks;
+		neighborCount = 0;
+		for (int face = 0; face < physicalFaceCount; face++) {
+			int a = axis[face], firstMask = Byte.toUnsignedInt(masks[left[face]]);
+			int secondMask = Byte.toUnsignedInt(masks[right[face]]);
+			for (int direction = 0; direction < 2; direction++) {
+				int row = 2 * face + direction;
+				neighborStart[row] = neighborCount;
+				for (int port = 0; port < 4; port++) {
+					int micro = faceMicro(a, port), peer = micro ^ (1 << a);
+					int first = CellRemapMicroTopology.support(firstMask, micro);
+					int second = CellRemapMicroTopology.support(secondMask, peer);
+					if (first == 0 || second == 0) continue;
+					int source = direction == 0 ? first : second, target = direction == 0 ? second : first;
+					boolean found = false;
+					for (int e = neighborStart[row]; e < neighborCount; e++)
+						if (neighborSource[e] == source && neighborTarget[e] == target) { found = true; break; }
+					if (!found) { neighborSource[neighborCount] = source; neighborTarget[neighborCount++] = target; }
+				}
+			}
+		}
+		neighborStart[2 * physicalFaceCount] = neighborCount;
+	}
+
 	/** Actual coarse donor outflow relative to its available pore volume. */
 	double courantRate(double verticalPrediction) {
 		long[] occupied = currentOccupied();
@@ -118,11 +152,11 @@ final class ConservativeLiquidFlux {
 	}
 
 	void prepare(float dt, long[] occupied) {
-		prepare(dt, occupied, domain.liquidCells, null, null);
+		preparePlan(dt, occupied, domain.liquidCells);
 	}
 
 	/** Prepares one coarse finite-volume pass against the actual pore endpoint. */
-	private void prepare(float dt, long[] occupied, LiquidCellInventory source, PhaseOccupancyState seed, List<GasVolumeAllocation.Share> seedGas) {
+	private void preparePlan(float dt, long[] occupied, LiquidCellInventory source) {
 		domain.ensurePhaseOccupancy();
 		reconstructionWorkspace = new FlipPressurePhaseGeometry(sizeX, sizeY, sizeZ);
 		input = working = source;
@@ -130,12 +164,14 @@ final class ConservativeLiquidFlux {
 		prepared = null;
 		allocation = null;
 		targetOccupied = occupied.clone();
-		liquid = (seed == null ? domain.phaseOccupancy : seed).copyLiquidMicroVolumes();
-		long[] oldOccupied = currentOccupied();
+		liquid = domain.phaseOccupancy.copyLiquidMicroVolumes();
+		var sourceFrame = domain.gasState.frame;
+		// Bed transitions may already have published their private solid columns.
+		// Gas and phase sources still belong to the retained geometry generation.
+		long[] oldOccupied = sourceFrame == null ? currentOccupied() : sourceFrame.occupiedSvq();
 		pore = PhaseOccupancyTransport.poreVolumes(domain, oldOccupied, null);
 		double[] endpoint = PhaseOccupancyTransport.poreVolumes(domain, occupied, null);
-		var sourceFrame = domain.gasState.frame;
-		if (seed == null && source == domain.liquidCells && sourceFrame != null && sourceFrame.matchesCarrierGeometry(domain, oldOccupied)) {
+		if (source == domain.liquidCells && sourceFrame != null && sourceFrame.matchesCarrierGeometry(domain, oldOccupied)) {
 			phase = sourceFrame.phase();
 			phaseLiquid = liquid;
 			phasePore = pore;
@@ -144,20 +180,31 @@ final class ConservativeLiquidFlux {
 			phasePore = null;
 		}
 		gasTags.reset(liquid.length);
-		if (seedGas != null && !seedGas.isEmpty()) {
-			for (var share : seedGas) gasTags.add(slot(share.targetPiece()), share.sourceNode(), share.volume());
-		} else for (int p = 0; p<liquid.length; p++) if (pore[p]> liquid[p]) {
-			int node = domain.gasState.frame == null ? (domain.gasState.sealedDomainBoundary ? - 1 : 0) : domain.gasState.frame.nodeOfPiece(p);
-			gasTags.add(slot(p), node, pore[p] - liquid[p]);
+		for (int cell = 0; cell < cellCount; cell++) {
+			for (int support : CellRemapMicroTopology.components(domain.geometry.cutCells.mask(cell))) {
+				double capacity = 0, stock = 0;
+				int node = domain.gasState.sealedDomainBoundary ? -1 : 0;
+				boolean found = false;
+				for (int bits = support; bits != 0; bits &= bits - 1) {
+					int p = 8 * cell + Integer.numberOfTrailingZeros(bits);
+					capacity += pore[p];
+					int owner = sourceFrame == null ? -1 : sourceFrame.nodeOfPiece(p);
+					if (!found && owner >= 0) { node = owner; found = true; }
+				}
+				for (var row : domain.liquidCells.stocksInCell(cell))
+					if (row.key().supportMask() == support) stock += row.volumeFraction();
+				double dry = capacity - stock;
+				if (dry > 0) gasTags.add(8 * cell + Integer.numberOfTrailingZeros(support), node, dry);
+			}
 		}
 		visits = paths = 0;
 		correction = maxResidual = 0;
 		Arrays.fill(predictedFaceFlux, 0);
 		SignedDyadic[] finalCapacity = componentCapacities(occupied);
+		prepareNeighbors();
 		if (dt > 0) domain.pressureSystem.beginVolumeTransport();
 		advance(dt, endpoint, finalCapacity, dt == 0);
-		if (dt == 0) allocation = PhaseOccupancyTransport.prepareEdit(domain, working, occupied, null, null, new PhaseOccupancyState(liquid));
-		else allocation = gasAllocation(working, finalCapacity);
+		allocation = gasAllocation(working, finalCapacity);
 		Arrays.fill(flux,0);for(var transfer:prepared.transfers())flux[transfer.face()]+=(transfer.source().cell()==left[transfer.face()]?1:-1)*transfer.volume().toDouble();
 
 	}
@@ -186,7 +233,7 @@ final class ConservativeLiquidFlux {
 		// Each shared coarse flux needs at most four donor PLIC slab integrals.
 		for (int f = 0; f < physicalFaceCount; f++) {
 			double qt=displacement?0:domain.pressureSystem.volumeFlux(pressureFace[f],dt);
-            if(!displacement&&qt==0)continue;
+			if (qt == 0) continue;
 			int a = axis[f], maskLeft = domain.geometry.cutCells.mask(left[f]);
 			int maskRight = domain.geometry.cutCells.mask(right[f]), openPorts = 0;
 			for (int port = 0; port < 4; port++) {
@@ -198,16 +245,12 @@ final class ConservativeLiquidFlux {
 			for (int bits = openPorts; bits != 0; bits &= bits - 1) {
 				int micro = faceMicro(a, Integer.numberOfTrailingZeros(bits));
 				int first = 8 * left[f] + micro, second = 8 * right[f] + (micro ^ (1 << a));
-				if (displacement) {
-					if (pore[first] > 0 && targetPore[second] > 0) addMacro(f, first, second, 0, 1);
-					if (pore[second] > 0 && targetPore[first] > 0) addMacro(f, second, first, 0, 1);
-					continue;
-				}
 				boolean positive = qt > 0;
 				int from = positive ? first : second, target = positive ? second : first;
 				double width = pore[from] > 0 ? Math.clamp(portion / pore[from], 0, 1) : 0;
 				double low = positive ? 1 - width : 0, high = positive ? 1 : width;
-				double ql = liquid[from] <= 0 ? 0 : liquid[from] >= pore[from] ? portion
+				double wet = phase.liquidFractionExact(from / 8, from & 7);
+				double ql = wet <= 0 ? 0 : wet >= 1 ? portion
 						: intersection(phase, from, a == 0 ? low : 0, a == 1 ? low : 0, a == 2 ? low : 0,
 								a == 0 ? high : 1, a == 1 ? high : 1, a == 2 ? high : 1, pore[from]);
 				ql = Math.clamp(ql, 0, portion);
@@ -215,27 +258,23 @@ final class ConservativeLiquidFlux {
 				addMacro(f, from, target, ql, portion);
 			}
 		}
-		var next = settle(capacities, displacement);
+		// Quantity correction changes only the liquid part of this common port flux.
+		// Preserve geometric gas transport while the bounded stock graph closes liquid capacity.
+		double[] gasFlux = new double[macroTotal.entryCount()];
+		if (!displacement) for (int row=0;row<macroTotal.rowCount();row++) for(int e=macroTotal.first(row);e>=0;e=macroTotal.next(e)) {
+			double ql=0;
+			for(int q=macroFlows.first(row);q>=0;q=macroFlows.next(q))if(macroFlows.key(q)==macroTotal.key(e)){ql=macroFlows.amount(q);break;}
+			gasFlux[e]=Math.max(0,macroTotal.amount(e)-ql);
+		}
+		var next = settle(capacities);
 		prepared = next;
 		working = next.future();
-		if (!displacement) {
-			macroFlows.reset(2 * physicalFaceCount);
-			for (var t : next.transfers()) {
-				int face = t.face(), row = 2 * face + (t.source().cell() == left[face] ? 0 : 1);
-				macroFlows.add(row, (long) t.source().supportMask() << 8 | t.target().supportMask(), t.volume().toDouble());
-			}
-		}
 		nextGasTags.reset(count);
 		if (!displacement) for (int row = 0; row<macroTotal.rowCount(); row++) for (int e = macroTotal.first(row); e >= 0; e = macroTotal.next(e)) {
 			int face = row / 2, from = row % 2 == 0 ? left[face] : right[face], target = row % 2 == 0 ? right[face] : left[face];
 			long key = macroTotal.key(e);
-			double ql = 0;
-			for (int q = macroFlows.first(row); q >= 0; q = macroFlows.next(q)) if (macroFlows.key(q) == key) {
-				ql = macroFlows.amount(q);
-				break;
-			}
 			int sourceSlot = 8 * from + Integer.numberOfTrailingZeros((int)(key >>> 8)), targetSlot = 8 * target + Integer.numberOfTrailingZeros((int) key & 255);
-			copyGas(sourceSlot, targetSlot, Math.max(0, macroTotal.amount(e) - ql));
+			copyGas(sourceSlot, targetSlot, gasFlux[e]);
 		}
 		for (int row = 0; row<gasTags.rowCount(); row++) if (gasTags.first(row) >= 0) copyGas(row, row, gasTags.rowSum(row));
 		pore = targetPore;
@@ -268,16 +307,12 @@ final class ConservativeLiquidFlux {
 		if (sourceSupport == 0 || targetSupport == 0) return;
 		int row = 2 * face + (from / 8 == left[face] ? 0 : 1);
 		long key = (long) sourceSupport << 8 | targetSupport;
-		macroFlows.add(row, key, preferred);
+		if (preferred > 0) macroFlows.add(row, key, preferred);
 		macroTotal.add(row, key, total);
 	}
 
 	private int support(int piece) {
 		return CellRemapMicroTopology.support(domain.geometry.cutCells.mask(piece / 8), piece & 7);
-	}
-
-	private int slot(int piece) {
-		return 8 * (piece / 8) + Integer.numberOfTrailingZeros(support(piece));
 	}
 
 	private void copyGas(int from, int target, double amount) {
@@ -288,22 +323,19 @@ final class ConservativeLiquidFlux {
 	}
 
 	/** Allocates the complete coarse inventory shares. */
-	private LiquidCellInventory.Plan settle(SignedDyadic[] capacities, boolean displacement) {
+	private LiquidCellInventory.Plan settle(SignedDyadic[] capacities) {
 		var origins = working.stocks();
-		numericalRoutes.reset(origins,capacitySlots,capacityCount);
-		boolean[] gasSource = new boolean[capacities.length], gasReach = new boolean[capacities.length];
-		for (int row = 0; row<gasTags.rowCount(); row++) if (gasTags.first(row) >= 0) gasSource[row] = gasReach[row] = true;
-		if (!displacement) for (int row = 0; row<macroTotal.rowCount(); row++) for (int e = macroTotal.first(row); e >= 0; e = macroTotal.next(e)) {
-			int face = row / 2, from = row % 2 == 0 ? left[face] : right[face], target = row % 2 == 0 ? right[face] : left[face], sourceSupport = (int)(macroTotal.key(e) >>> 8), targetSupport = (int) macroTotal.key(e) & 255;
-			if (!gasSource[8 * from + Integer.numberOfTrailingZeros(sourceSupport)]) continue;
-			double ql = 0;
-			for (int q = macroFlows.first(row); q >= 0; q = macroFlows.next(q)) if (macroFlows.key(q) == macroTotal.key(e)) {
-				ql = macroFlows.amount(q);
-				break;
-			}
-			double qg = macroTotal.amount(e) - ql;
-			if (qg> PhaseOccupancyState.VOLUME_RESOLUTION) gasReach[8 * target + Integer.numberOfTrailingZeros(targetSupport)] = true;
-		}
+		prepareRoutes(origins, capacities);
+		gasCapacityGroups=prepareGasGroups(capacities);
+		var routes=PhaseQuantitySettlement.settle(numericalRoutes,capacities,
+                gasCapacityGroups==null?null:gasCapacityGroups.receiverGroup(),gasCapacityGroups==null?null:gasCapacityGroups.upper(),
+                source -> prepareAlternatives(source, origins, capacities));
+		return working.planRoutes(routes, FluidThermalBinding.liquidEnergyPartitioner(domain));
+	}
+
+	/** The initial allocation contains only physical preferences and the retained source share. */
+	private void prepareRoutes(List<LiquidCellInventory.Stock> origins, SignedDyadic[] capacities) {
+		numericalRoutes.reset(origins);
 		for (int source = 0; source<origins.size(); source++) {
 			var stock = origins.get(source);
 			int cell = stock.key().cell(), support = stock.key().supportMask();
@@ -313,37 +345,49 @@ final class ConservativeLiquidFlux {
 				int face = coarseFaceAt[6 * cell + side];
 				if (face<0) continue;
 				int direction = cell == left[face] ? 0 : 1, row = 2 * face + direction, target = direction == 0 ? right[face] : left[face];
-				for (int e = macroTotal.first(row); e >= 0; e = macroTotal.next(e)) if ((int)(macroTotal.key(e) >>> 8) == support) {
-					int targetSupport = (int) macroTotal.key(e) & 255;
+				for (int e = neighborStart[row]; e < neighborStart[row + 1]; e++) if (neighborSource[e] == support) {
+					int targetSupport = neighborTarget[e];
+					if (capacities[8 * target + Integer.numberOfTrailingZeros(targetSupport)].signum() == 0) continue;
 					double amount = 0;
-					for (int q = macroFlows.first(row); q >= 0; q = macroFlows.next(q)) if (macroFlows.key(q) == macroTotal.key(e)) amount = macroFlows.amount(q);
+					long key = (long) support << 8 | targetSupport;
+					for (int q = macroFlows.first(row); q >= 0; q = macroFlows.next(q)) if (macroFlows.key(q) == key) amount = macroFlows.amount(q);
 					double fraction = volume / component;
 					amount *= fraction;
 					outgoing += amount;
-					numericalRoutes.add(source,face,target,targetSupport,amount,displacement?volume:macroTotal.amount(e)*fraction);
+					if (amount > 0) numericalRoutes.add(source,face,target,targetSupport,amount);
 				}
 			}
-			numericalRoutes.add(source,-1,cell,support,Math.max(0,volume-outgoing),volume);
+			numericalRoutes.add(source,-1,cell,support,Math.max(0,volume-outgoing));
 		}
-		var minimum = new SignedDyadic[capacities.length];
-		Arrays.fill(minimum, SignedDyadic.ZERO);
-		if(!displacement)for(int i=0;i<capacityCount;i++){int slot=capacitySlots[i];if(!gasReach[slot])minimum[slot]=capacities[slot];}
-		gasCapacityGroups=displacement?null:prepareGasGroups(capacities,gasReach);
-		var routes=PhaseQuantitySettlement.settle(numericalRoutes,capacities,minimum,
-                gasCapacityGroups==null?null:gasCapacityGroups.receiverGroup(),gasCapacityGroups==null?null:gasCapacityGroups.upper());
-		return working.planRoutes(routes, FluidThermalBinding.liquidEnergyPartitioner(domain));
+	}
+
+	/** Standard residual search opens alternatives only for the actual source being visited. */
+	private void prepareAlternatives(int source, List<LiquidCellInventory.Stock> origins, SignedDyadic[] capacities) {
+		var stock = origins.get(source);
+		int cell = stock.key().cell(), support = stock.key().supportMask();
+		for (int side = 0; side < 6; side++) {
+			int face = coarseFaceAt[6 * cell + side];
+			if (face < 0) continue;
+			int direction = cell == left[face] ? 0 : 1, row = 2 * face + direction;
+			int target = direction == 0 ? right[face] : left[face];
+			for (int e = neighborStart[row]; e < neighborStart[row + 1]; e++) if (neighborSource[e] == support) {
+				int targetSupport = neighborTarget[e];
+				if (capacities[8 * target + Integer.numberOfTrailingZeros(targetSupport)].signum() > 0)
+					numericalRoutes.alternative(source, face, target, targetSupport);
+			}
+		}
 	}
 
 	/** A finite chamber constrains aggregate space while liquid may rearrange freely inside it. */
-    private GasCapacityGroups prepareGasGroups(SignedDyadic[] capacities,boolean[] gasReach){
+    private GasCapacityGroups prepareGasGroups(SignedDyadic[] capacities){
         var frame=domain.gasState.frame;if(frame==null||frame.nodeCount()==0)return null;
         int count=frame.nodeCount();gasReservation.reset(capacities.length);
-        for(int row=0;row<gasTags.rowCount();row++)for(int e=gasTags.first(row);e>=0;e=gasTags.next(e)){
+        for(int i=0;i<capacityCount;i++){int row=capacitySlots[i];for(int e=gasTags.first(row);e>=0;e=gasTags.next(e)){
             int node=(int)gasTags.key(e);if(node>0&&!domain.gasState.network.inventory(node).isEmpty())gasReservation.add(row,node,gasTags.amount(e));
-        }
+        }}
         for(int row=0;row<macroTotal.rowCount();row++)for(int e=macroTotal.first(row);e>=0;e=macroTotal.next(e)){
             int face=row/2,from=row%2==0?left[face]:right[face],to=row%2==0?right[face]:left[face];long key=macroTotal.key(e);
-            int source=8*from+Integer.numberOfTrailingZeros((int)(key>>>8)),receiver=8*to+Integer.numberOfTrailingZeros((int)key&255);if(!gasReach[receiver])continue;
+            int source=8*from+Integer.numberOfTrailingZeros((int)(key>>>8)),receiver=8*to+Integer.numberOfTrailingZeros((int)key&255);
             double ql=0;for(int q=macroFlows.first(row);q>=0;q=macroFlows.next(q))if(macroFlows.key(q)==key){ql=macroFlows.amount(q);break;}
             double qg=macroTotal.amount(e)-ql,total=gasTags.rowSum(source);if(qg<=PhaseOccupancyState.VOLUME_RESOLUTION||total<=0)continue;
             for(int q=gasTags.first(source);q>=0;q=gasTags.next(q)){int node=(int)gasTags.key(q);if(node>0&&!domain.gasState.network.inventory(node).isEmpty())gasReservation.add(receiver,node,qg*gasTags.amount(q)/total);}
@@ -351,20 +395,28 @@ final class ConservativeLiquidFlux {
         int[] parent=new int[count+1],first=new int[capacities.length],nodeGroup=new int[count+1];
         for(int node=0;node<=count;node++)parent[node]=node;
         Arrays.fill(first,-1);Arrays.fill(nodeGroup,-1);
-        for(int row=0;row<gasReservation.rowCount();row++)for(int e=gasReservation.first(row);e>=0;e=gasReservation.next(e)){
+        for(int i=0;i<capacityCount;i++){int row=capacitySlots[i];for(int e=gasReservation.first(row);e>=0;e=gasReservation.next(e)){
             int node=(int)gasReservation.key(e);if(first[row]<0)first[row]=node;else{int a=gasRoot(parent,first[row]),b=gasRoot(parent,node);parent[b]=a;}
-        }
-        int groups=0;for(int row=0;row<first.length;row++)if(first[row]>0){int root=gasRoot(parent,first[row]);if(nodeGroup[root]<0)nodeGroup[root]=groups++;}
+        }}
+        int groups=0;for(int i=0;i<capacityCount;i++){int row=capacitySlots[i];if(first[row]>0){int root=gasRoot(parent,first[row]);if(nodeGroup[root]<0)nodeGroup[root]=groups++;}}
         if(groups==0)return null;
         for(int node=1;node<=count;node++)nodeGroup[node]=nodeGroup[gasRoot(parent,node)];
         int[] receiverGroup=new int[capacities.length];Arrays.fill(receiverGroup,-1);
         double[] groupPore=new double[groups],target=new double[groups];double available=0,totalTarget=0;
-        for(int row=0;row<capacities.length;row++){
+        for(int i=0;i<capacityCount;i++){int row=capacitySlots[i];
             available+=capacities[row].toDouble();if(first[row]>0){int group=nodeGroup[first[row]];receiverGroup[row]=group;groupPore[group]+=capacities[row].toDouble();}
         }
         for(var stock:working.stocks())available-=stock.volumeFraction();
-        for(int node=1;node<=count;node++)if(nodeGroup[node]>=0){double volume=domain.pressureSystem.predictedGasVolumeNormalized(node);target[nodeGroup[node]]+=volume;totalTarget+=volume;}
-        double scale=totalTarget>available?Math.max(0,available)/totalTarget:1;var upper=new SignedDyadic[groups];
+        for(int node=1;node<=count;node++)if(nodeGroup[node]>=0){
+			// The EOS predicts pressure, while actual bounded liquid flux determines
+			// the new chamber capacity. Preserve a resolvable representative of a
+			// finite reservoir rather than imposing a second predicted volume.
+            double oldVolume=domain.gasState.network.availableVolume(node)/domain.unitScale.cubicMetersPerNormalizedVolume();
+			double volume=Math.min(oldVolume,PhaseOccupancyState.VOLUME_RESOLUTION);
+            target[nodeGroup[node]]+=volume;totalTarget+=volume;
+        }
+        if(!(available>0))throw new CapacityUnavailable("Nonempty finite gas has no actual remaining pore volume");
+        double scale=totalTarget>available?available/totalTarget:1;var upper=new SignedDyadic[groups];
         for(int group=0;group<groups;group++){
             double volume=Math.min(groupPore[group],scale*target[group]);long words=(long)Math.floor(Math.scalb(volume,-PhaseQuantitySettlement.UNIT_EXPONENT));
             var reserved=words>0?SignedDyadic.of(words,PhaseQuantitySettlement.UNIT_EXPONENT):SignedDyadic.of(volume);
@@ -382,7 +434,7 @@ final class ConservativeLiquidFlux {
         double[] total=new double[head.length];
         for(int node=1;node<nodes.length;node++)if(nodes[node]>=0){int group=nodes[node];next[node]=head[group];head[group]=node;total[group]+=domain.gasState.network.availableVolume(node);}
         gasReservation.reset(gasTags.rowCount());
-        for(int row=0;row<gasTags.rowCount();row++){
+        for(int i=0;i<capacityCount;i++){int row=capacitySlots[i];
             double dry=gasTags.rowSum(row);if(dry<=0)continue;int group=groups[row];
             if(group<0){for(int e=gasTags.first(row);e>=0;e=gasTags.next(e))gasReservation.add(row,gasTags.key(e),gasTags.amount(e));continue;}
             for(int e=gasTags.first(row);e>=0;e=gasTags.next(e))if(gasTags.key(e)<=0)gasReservation.add(row,gasTags.key(e),gasTags.amount(e));
@@ -457,8 +509,10 @@ final class ConservativeLiquidFlux {
 	void prepareDisplacement(long[] occupied, LiquidCellInventory source) {
 		if (source == domain.liquidCells) prepare(0, occupied);
 		else {
-			var seed = PhaseOccupancyTransport.prepareEdit(domain, source, currentOccupied(), null, null);
-			prepare(0, occupied, source, seed.futureOccupancy(), seed.shares());
+			// Reactions can change liquid volume before the joint solid endpoint and
+			// displacement are settled. Geometry and gas start from the real old
+			// domain; only the final displaced inventory has to fit the new pore.
+			preparePlan(0, occupied, source);
 		}
 	}
 

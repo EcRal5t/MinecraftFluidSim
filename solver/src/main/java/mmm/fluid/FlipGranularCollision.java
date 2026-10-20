@@ -47,10 +47,6 @@ final class FlipGranularCollision {
 	}
 
 	void preview(GranularParcelStore parcels, GranularRegistry registry, float dt) {
-		preview(parcels, registry, dt, 1.0F);
-	}
-
-	void preview(GranularParcelStore parcels, GranularRegistry registry, float dt, float courant) {
 		previewReady = false;velocitiesPublished=false;
 		if (!(Float.isFinite(dt) && dt > 0.0F)) throw new IllegalArgumentException("Granular preview dt is invalid");
 		previewCount = parcels.count();
@@ -60,7 +56,7 @@ final class FlipGranularCollision {
 		lastMaximumPositionCorrection = lastPositionCorrectionMassY = 0;
 		if (previewCount > 1) {
 			boolean[] supported = new boolean[previewCount];
-			var contacts = new GranularActiveContacts(parcels, registry, sphereCollision, sizeX, sizeY, sizeZ, cellSize, dt, courant);
+			var contacts = new GranularActiveContacts(parcels, registry, sphereCollision, sizeX, sizeY, sizeZ, cellSize, dt);
 			contacts.preview(nextX, nextY, nextZ, nextVelocityX, nextVelocityY, nextVelocityZ, supported);
 			lastMaximumPositionCorrection = contacts.maximumPositionCorrection();
 			lastPositionCorrectionMassY = contacts.positionCorrectionMassY();
@@ -177,12 +173,7 @@ final class FlipGranularCollision {
 	}
 
 	boolean positionValid(float x, float y, float z, long solidVolumeSvq) {
-		float radius = collisionRadius(solidVolumeSvq);
-		if (x < radius || x > sizeX * (double) cellSize - radius
-				|| y < radius || y > sizeY * (double) cellSize - radius
-				|| z < radius || z > sizeZ * (double) cellSize - radius
-				|| sphereTouchesSolid(x, y, z, radius)) return false;
-		return true;
+		return geometry.positionValid(x, y, z, collisionRadius(solidVolumeSvq));
 	}
 
 	boolean verticalSpherePathTouchesSolid(float x, float fromY, float z, float toY, long solidVolumeSvq) {
@@ -259,7 +250,6 @@ final class FlipGranularCollision {
 		for (int index = 0; index < previewCount; index++) {
 			if (capacityPending[index]) holdParcel(parcels, index);
 		}
-		requirePairEndpoints(parcels);
 		lastCapacityHeld = pending;
 		previewReady = true;
 		return pending;
@@ -284,7 +274,7 @@ final class FlipGranularCollision {
 	}
 	BoundaryImpulse commit(GranularParcelStore parcels) {
 		if(parcels!=previewSource||parcels.count()!=previewCount||!previewReady)throw new IllegalStateException("Granular position preview changed");
-		if(!velocitiesPublished){requireSourceRevision(parcels);requirePairEndpoints(parcels);}
+		if(!velocitiesPublished)requireSourceRevision(parcels);
 		double x=0,y=0,z=0;
 		for(int i=0;i<previewCount;i++){
 			var p=parcels.parcel(i);float vx=velocitiesPublished?p.velocityX():nextVelocityX[i],vy=velocitiesPublished?p.velocityY():nextVelocityY[i],vz=velocitiesPublished?p.velocityZ():nextVelocityZ[i];
@@ -313,21 +303,6 @@ final class FlipGranularCollision {
 	}
 
 	private static int incrementContactAge(int age) { return age == Integer.MAX_VALUE ? age : age + 1; }
-
-	private void requirePairEndpoints(GranularParcelStore parcels) {
-		if (previewCount < 2) return;
-		var admission = new GranularSpawnAdmission(sizeX, sizeY, sizeZ, cellSize, previewCount);
-		for (int index = 0; index < previewCount; index++) {
-			long volume = parcels.parcel(index).solidVolumeSvq();
-			if (!admission.allows(nextX[index], nextY[index], nextZ[index], volume))
-				throw new MechanicalTimeRefinement(2, "Granular capacity hold conflicts with an active contact endpoint");
-			admission.append(nextX[index], nextY[index], nextZ[index], volume);
-		}
-	}
-
-	private boolean sphereTouchesSolid(float x, float y, float z, float radius) {
-		return geometry.sphereTouchesSolid(x, y, z, radius);
-	}
 
 	private float collisionRadius(long svq) {
 		return mmm.granular.GranularMechanics.representativeRadius(svq, cellSize);

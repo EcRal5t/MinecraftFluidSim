@@ -238,7 +238,7 @@ public final class LiquidCellInventory {
 	public int physicalSize() { return physicalStocks().size(); }
 	public Stock physicalStockAt(int ordinal) { return physicalStocks().get(ordinal); }
 	public int physicalOrdinalOf(Key key) { return findOrdinal(physicalStocks(), key); }
-	public List<Stock> physicalStocksInCell(int cell) { return rows.get(cell).stream().filter(stock -> stock.massUnits() > 0).toList(); }
+	public List<Stock> physicalStocksInCell(int cell) { return physical(rows.get(cell)); }
 	public Stock stock(Key key) {
 		for (var stock : rows.get(key.cell())) if (stock.key().equals(key)) return stock;
 		return null;
@@ -275,6 +275,9 @@ public final class LiquidCellInventory {
 		return planEnergyUpdate(energies, stocks());
 	}
 	public Plan planPhysicalEnergyUpdate(double[] energies) { return planEnergyUpdate(energies, physicalStocks()); }
+	public Plan planPhysicalEnergyUpdate(int ordinal, double energy) {
+		return planEnergyUpdate(new double[]{energy}, List.of(physicalStockAt(ordinal)));
+	}
 	/** Energy-only writes share quantities, species and the inventory presence index. */
 	private Plan planEnergyUpdate(double[] energies, List<Stock> stocks) {
 		if (energies.length != stocks.size()) throw new IllegalArgumentException("Liquid energy ordinals differ from cell inventory");
@@ -447,10 +450,27 @@ public final class LiquidCellInventory {
 			routes.computeIfAbsent(path.source(),ignored->new ArrayList<>()).add(path);
 		}
 		var totals = new LinkedHashMap<Key, Accumulator>();
-		for (var key : routes.keySet()) totals.put(key, new Accumulator(key));
+		for (var entry : routes.entrySet()) if (!retainsOriginal(entry.getKey(), entry.getValue()))
+			totals.put(entry.getKey(), new Accumulator(entry.getKey()));
 		var transfers = new ArrayList<Transfer>();
 		for (var entry : routes.entrySet()) {
 			Stock source = stock(entry.getKey()); var destinations = entry.getValue();
+			if (retainsOriginal(entry.getKey(), destinations)) continue;
+			if (destinations.size() == 1) {
+				var route = destinations.get(0);
+				if (!route.volume().equals(source.volume()))
+					throw new IllegalArgumentException("Liquid transport routes differ from the original stock volume");
+				var target = totals.computeIfAbsent(route.target(), key -> {
+					var result = new Accumulator(key); var existing = stock(key);
+					if (existing != null) result.add(existing.volume(), existing.massUnits(), existing.mixture(), SignedDyadic.of(existing.internalEnergy()), existing.indicator());
+					return result;
+				});
+				var energy = SignedDyadic.of(source.internalEnergy());
+				target.add(source.volume(), source.massUnits(), source.mixture(), energy, source.indicator());
+				if (route.face() >= 0) transfers.add(new Transfer(route.face(), route.source(), route.target(),
+						source.volume(), source.massUnits(), source.mixture(), energy));
+				continue;
+			}
 			var weights = new SignedDyadic[destinations.size()];
 			var sourceVolume=SignedDyadic.ZERO;
 			for (int i = 0; i < weights.length; i++) { weights[i] = destinations.get(i).volume(); sourceVolume=sourceVolume.add(weights[i]); }
@@ -475,6 +495,10 @@ public final class LiquidCellInventory {
 		if (plan.massChange() != 0 || plan.volumeChange().signum() != 0 || !plan.energyChange().equals(plan.energyRoundoff()))
 			throw new IllegalStateException("Closed liquid transport did not conserve its inventory");
 		return plan;
+	}
+	/** Unchanged owners keep their original Stock; incoming routes may still add to that owner. */
+	private boolean retainsOriginal(Key key, List<TransportRoute> routes) {
+		return routes.size() == 1 && routes.get(0).face() < 0 && routes.get(0).volume().equals(stock(key).volume());
 	}
 	/** Already partitioned inventory quantities are assembled once, retaining their exact source-part residuals. */
 	private Plan prepareTransport(Map<Key,Accumulator> totals,List<Transfer> transfers){

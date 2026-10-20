@@ -57,7 +57,7 @@ final class DomainInventoryLifecyclePlanner {
 		GasTopologyCoordinator.GasTopologyPlan gasTopology = null;
 		if (domain.gasState.frame != null) {
 			domain.ensureInventoryGrid();
-			gasTopology = domain.gasTopologyCoordinator.planFromFreshScan();
+			gasTopology = domain.gasTopologyCoordinator.planAfterOperatorClear(condensed.liquid().inventory().future());
 		}
 		ThermalDomainState.Revision thermalRevision = domain.thermalState == null
 				? null : domain.thermalState.thermalRevision();

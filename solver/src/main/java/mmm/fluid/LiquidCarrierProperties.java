@@ -30,7 +30,6 @@ final class LiquidCarrierProperties {
 	private final double[] maximumReynolds;
 	private final double[] relativeBuoyancy;
 	private final double[] observationMass;
-	private final double[] observationVolume;
 	private boolean buoyancyPrepared;
 	private Revision built;
 	private boolean recording;
@@ -53,7 +52,6 @@ final class LiquidCarrierProperties {
 		this.maximumReynolds = new double[cellCount];
 		this.relativeBuoyancy = new double[cellCount];
 		this.observationMass = new double[cellCount];
-		this.observationVolume = new double[cellCount];
 	}
 
 	boolean hasLiquid(int cell) { return liquid[cell]; }
@@ -63,30 +61,24 @@ final class LiquidCarrierProperties {
 	double maximumReynolds(int cell) { return maximumReynolds[cell]; }
 	double relativeBuoyancy(int cell) { return relativeBuoyancy[cell]; }
 
-	/** Uses the same positive spatial support for composition mass and each real carrier's thermal correction. */
+	/** All phases use the prepared cell temperature and retain their own expansion coefficient. */
 	void prepareBuoyancy(ThermalCarrierContext markers,
 			FluidMaterialRegistry materials, MaterialRegistry definitions, ThermalDomainState thermal) {
 		if (buoyancyPrepared) return;
 		Arrays.fill(relativeBuoyancy, 0.0);
+		Arrays.fill(observationMass, 0.0);
 		for (int marker = 0; marker < markers.markerCount(); marker++) {
-			// Validate before averaging: an invalid carrier must not disappear into a valid cell mean.
-			double correctionMass = markers.mass(marker) * markerRelativeBuoyancy(markers, materials, definitions, thermal, marker);
-			markers.observationSupport(marker, (cell, weight) -> relativeBuoyancy[cell] += weight * correctionMass);
+			int cell=markers.cell(marker);double mass=markers.mass(marker);
+			String id=materials.material(markers.fluidMaterialHandle(marker)).id();
+			var expansion=definitions==null?LiquidThermalExpansion.require(id):definitions.entry(id).thermalExpansion();
+			if(expansion==null)throw new IllegalStateException("Liquid "+id+" has no committed thermal expansion definition");
+			relativeBuoyancy[cell]+=mass*expansion.relativeBuoyancy(temperatureK[cell]);
+			observationMass[cell]+=mass;
 		}
 		for (int cell = 0; cell < cellCount; cell++) {
 			if (observationMass[cell] > 0) relativeBuoyancy[cell] /= observationMass[cell];
 		}
 		buoyancyPrepared = true;
-	}
-
-	static double markerRelativeBuoyancy(ThermalCarrierContext markers, FluidMaterialRegistry materials,
-			MaterialRegistry definitions, ThermalDomainState thermal, int marker) {
-		String id = materials.material(markers.fluidMaterialHandle(marker)).id();
-		LiquidThermalExpansion.Definition expansion = definitions == null
-				? LiquidThermalExpansion.require(id) : definitions.entry(id).thermalExpansion();
-		if (expansion == null) throw new IllegalStateException(
-				"Liquid " + id + " has no committed thermal expansion definition at marker " + marker);
-		return expansion.relativeBuoyancy(thermal.temperature(marker, markers));
 	}
 
 	/** Cells whose temperature left the material's declared viscosity domain in the last build. */
@@ -133,23 +125,10 @@ final class LiquidCarrierProperties {
 		MarkerGridIndex grid = domain.markerGrid;
 		if (definitions != null && thermal != null) thermal.preparePhaseScan(markers);
 		buoyancyPrepared = false;
-		Arrays.fill(observationMass, 0.0);
-		Arrays.fill(observationVolume, 0.0);
-		if (thermal != null) {
-			markers.prepareObservationSupport();
-			for (int marker = 0; marker < markers.markerCount(); marker++) {
-				double mass = markers.mass(marker), volume = markers.volume(marker);
-				markers.observationSupport(marker, (cell, weight) -> {
-					observationMass[cell] += weight * mass;
-					observationVolume[cell] += weight * volume;
-				});
-			}
-		}
 		extrapolatedCells = 0;
 		sampleMaterialId = null;
 		for (int cell = 0; cell < cellCount; cell++) {
-			density[cell] = observationVolume[cell] > 0 ? observationMass[cell] / observationVolume[cell]
-					: grid.cellDensity[cell];
+			density[cell] = grid.cellDensity[cell];
 			int handle = domain.liquidCarrierMaterialByCell == null ? -1
 					: domain.liquidCarrierMaterialByCell[cell];
 			boolean wet = definitions != null && handle >= 0 && grid.markerCount[cell] > 0;

@@ -751,15 +751,15 @@ public final class ContainerTransferStoreValidation {
 			var requested = contents.toLedger(BuiltinChemicalDefinitions.REGISTRY, domain.unitScale());
 			var result = domain.tryInsertExactChemical(1, 1, 1, requested, 3, false);
 			check(result.transferred(), "representable chemical insertion was refused");
-			long[] mass = domain.exportMaterialParticleState().copyParticleMassUnits();
-			check(mmm.units.Mass.sum(mass) == mmm.units.Mass.fromKilograms(sourceMass),
-					"Chemical insertion changed integer mass inventory");
-			long residual = 0L, species = 0L;
-			for (int i = 0; i < mass.length; i++) {
-				var record = domain.chemicalParcels().record(i);
+			long mass = 0L, residual = 0L, species = 0L;
+			for (var stock : domain.exportLiquidCellState().stocks()) {
+				mass = Math.addExact(mass, stock.massUnits());
+				var record = stock.mixture();
 				residual = Math.addExact(residual, record.massResidualUnits());
 				species = Math.addExact(species, record.totalQuanta());
 			}
+			check(mass == mmm.units.Mass.fromKilograms(sourceMass),
+					"Chemical insertion changed integer mass inventory");
 			check(species == 1_000 * ChemicalLimits.QUANTA_PER_MOL && residual == mmm.units.Mass.fromKilograms(sourceResidual),
 					"Chemical insertion changed species or integer mass residual");
 		}
@@ -775,7 +775,8 @@ public final class ContainerTransferStoreValidation {
 		var registry = new ThermalRegistry(List.of(definition));
 		for (double sign : new double[] {-1.0, 1.0}) {
 			var source = new FluidDomain(3, 3, 3, config, 216);
-			source.setVolume(1, 1, 1, 0.25F);
+			source.setVolume(1, 1, 1, 0.125F);
+			source.setVolume(2, 1, 1, 0.125F);
 			source.bindThermal(registry, liquids, 300.0);
 			var domain = new FluidDomain(3, 3, 3, config, 216);
 			domain.restoreMaterialParticleState(source.exportMaterialParticleState());

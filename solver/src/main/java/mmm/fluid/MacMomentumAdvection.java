@@ -6,6 +6,8 @@ final class MacMomentumAdvection {
     private final int[] left,right,fluxAxis,firstFlux,secondFlux,firstCell,secondCell;
     private final long[] remaining,flow;
     private final double[] oldVelocity,velocity,momentum,heat;
+    private final int[] mergeTarget;
+    private final double[] mergedMass,mergedMomentum;
     MacMomentumAdvection(int nx,int ny,int nz,int component){
         this.nx=nx;this.ny=ny;this.nz=nz;
         int sx=nx+(component==0?1:0),sy=ny+(component==1?1:0),sz=nz+(component==2?1:0);
@@ -13,6 +15,7 @@ final class MacMomentumAdvection {
         left=new int[edges];right=new int[edges];fluxAxis=new int[edges];firstFlux=new int[edges];secondFlux=new int[edges];flow=new long[edges];
         firstCell=new int[count];secondCell=new int[count];remaining=new long[count];
         oldVelocity=new double[count];velocity=new double[count];momentum=new double[count];heat=new double[count];
+        mergeTarget=new int[count];mergedMass=new double[count];mergedMomentum=new double[count];
         int edge=0;
         for(int z=0;z<sz;z++)for(int y=0;y<sy;y++)for(int x=0;x<sx;x++){
             int i=(z*sy+y)*sx+x;firstCell[i]=cell(x,y,z);secondCell[i]=cell(x-(component==0?1:0),y-(component==1?1:0),z-(component==2?1:0));
@@ -47,6 +50,31 @@ final class MacMomentumAdvection {
             heat[to]+=.5*kgPerDoubledUnit*Math.abs(flow[e])*difference*difference;
         }
         return momentum;
+    }
+    /** Finite-mass mixing removes sub-resolution film velocities while conserving their impulse. */
+    void mixUnresolved(long[] after,double[] volume,int[] anchors,float[] open){
+        double scale=.5/mmm.units.Mass.UNITS_PER_KILOGRAM;
+        for(int i=0;i<count;i++){
+            mergeTarget[i]=-1;mergedMass[i]=scale*(value(after,firstCell[i])+value(after,secondCell[i]));mergedMomentum[i]=momentum[i];
+        }
+        for(int i=0;i<count;i++)if(mergedMass[i]>0){
+            int a=firstCell[i],b=secondCell[i];
+            if(a<0||b<0||!(open[i]>0))continue;
+            if(a>=0&&volume[a]>mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION||b>=0&&volume[b]>mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION)continue;
+            int target=a>=0?anchors[a]:-1;if(target<0&&b>=0)target=anchors[b];
+            if(target<0||target==i||!(mergedMass[target]>0))continue;
+            mergeTarget[i]=target;mergedMass[target]+=scale*(value(after,a)+value(after,b));mergedMomentum[target]+=momentum[i];
+        }
+        for(int i=0;i<count;i++)if(mergeTarget[i]<0&&mergedMass[i]>0){
+            double mixed=mergedMomentum[i]/mergedMass[i],mass=scale*(value(after,firstCell[i])+value(after,secondCell[i]));
+            if(mergedMass[i]==mass)continue;
+            double difference=velocity[i]-mixed;heat[i]+=.5*mass*difference*difference;
+            velocity[i]=mixed;momentum[i]=mass*mixed;
+        }
+        for(int i=0;i<count;i++)if(mergeTarget[i]>=0){
+            int target=mergeTarget[i];double mass=scale*(value(after,firstCell[i])+value(after,secondCell[i])),difference=velocity[i]-velocity[target];
+            heat[target]+=.5*mass*difference*difference;velocity[i]=velocity[target];momentum[i]=mass*velocity[i];
+        }
     }
     void addHeatToCells(long[] after,double[] cells){
         for(int i=0;i<count;i++)if(heat[i]>0){int a=firstCell[i],b=secondCell[i];long ma=value(after,a),mb=value(after,b);double first=ma+mb>0?heat[i]*(ma/(double)(ma+mb)):0;if(a>=0)cells[a]+=first;if(b>=0)cells[b]+=heat[i]-first;}

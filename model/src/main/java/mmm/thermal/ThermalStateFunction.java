@@ -70,7 +70,7 @@ public final class ThermalStateFunction {
 	}
 
 	/** One inventory energy column: retain each reference and caloric integral until final storage rounding. */
-	double inventoryEnergyAtTemperature(List<InventoryPortion> portions, double temperatureK) {
+	public double inventoryEnergyAtTemperature(List<InventoryPortion> portions, double temperatureK) {
 		if (portions == null || portions.isEmpty()) throw new IllegalArgumentException("Thermal LTE inventory is missing");
 		SignedDyadic energy = SignedDyadic.ZERO;
 		for (InventoryPortion portion : portions) {
@@ -190,7 +190,7 @@ public final class ThermalStateFunction {
 			var offset = requireOffset(offsets, mixture.speciesHandle(entry));
 			double term = referenceEnergy(offset, mixture.amountAt(entry));
 			total += term;
-			// Rational numerator, denominator and quotient each have one final conversion.
+			// The registered J/quantum coefficient and its product are each rounded once.
 			error += 3 * Math.ulp(term) + Math.ulp(total);
 		}
 		return error;

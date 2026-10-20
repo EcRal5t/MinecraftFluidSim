@@ -15,10 +15,7 @@ final class PressureSystem {
 	private final double[] velocityWork;
 	private double[] pressure = new double[0];
 	private float duration;
-	private PressureBoundaryView.Compression[] gasCompression = new PressureBoundaryView.Compression[0];
 	private double[] gasStorageRhs = new double[0];
-	private double[] point = new double[0], trial = new double[0], nonlinearProduct = new double[0], nonlinearRhs = new double[0];
-	private double liquidResidual, gasVolumeResidual;
 
 	PressureSystem(FluidDomain domain) {
 		this.domain = domain;
@@ -30,15 +27,17 @@ final class PressureSystem {
 			@Override public void buildRhs(double[] result) {
 				Arrays.fill(result, 0); readVelocity(velocityWork);
 				faces.addDivergence(velocityWork, result, -domain.config.density() / duration);
+				granular.addDivergence(result, -domain.config.density() / duration);
 				var p = domain.projection;
 				for (int i = 0; i < p.fluidUnknownCount; i++) { int cell = p.fluidUnknownCells[i]; result[cell] += p.rhs[cell]; }
 				for (int i = 0; i < p.gasUnknownCount; i++) { int node = p.gasUnknownNodes[i];
 					result[domain.cellCount + node] += p.gasRhs[node]; }
-				addStorageRhs(result, duration);
+				addStorageRhs(result);
 			}
 			@Override public void applyMatrix(double[] source, double[] result) {
 				Arrays.fill(result, 0); faces.pressureVelocity(source, velocityWork);
 				faces.addDivergence(velocityWork, result, domain.config.density());
+				granular.applyMatrix(source, result, domain.config.density());
 				var p = domain.projection;
 				for (int i = 0; i < p.gasUnknownCount; i++) { int node = p.gasUnknownNodes[i]; p.gasMatrixInput[node] = source[domain.cellCount + node]; }
 				for (int i = 0; i < p.gasUnknownCount; i++) { int node = p.gasUnknownNodes[i];
@@ -51,8 +50,8 @@ final class PressureSystem {
 		duration = dt; domain.ensureGrid(); solidFaces.rebuild(); faces.rebuild(dt);
 		var p = domain.projection; Arrays.fill(p.rhs, 0); Arrays.fill(p.gasRhs, 0);
 		Arrays.fill(p.pressure, 0); Arrays.fill(p.gasPressure, 0); Arrays.fill(p.divergence, 0);
-		prepareGasCompression();
-		granular.prepare(dt); prepareEndpointRhs(dt);
+		prepareGasStorage();
+		granular.prepare(dt);
 		// Fixed interface loads and the paired parcel reaction join the same prediction.
 		for (int f = 0; f < faces.faceCount; f++) {
 			int a = faces.axis[f], local = faces.localFace[f];
@@ -61,12 +60,9 @@ final class PressureSystem {
 		}
 		buildDiagonal(); solver.reset();
 		pressure = solver.pressure();
-		int size = pressure.length;
-		point = new double[size]; trial = new double[size]; nonlinearProduct = new double[size]; nonlinearRhs = new double[size];
 		for (int i = 0; i < p.gasUnknownCount; i++) {
 			int node = p.gasUnknownNodes[i];
-			pressure[domain.cellCount + node] = gasCompression[node]==null ? -mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE
-					:gasCompression[node].pressure()-mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE;
+			pressure[domain.cellCount + node] = domain.pressureBoundaryView.gasPressureOfNode(node);
 		}
 		// Resolve pressure to the same cell-volume scale as the phase geometry.
 		// The RHS residual becomes normalized volume through dt²/rho; the RMS
@@ -74,53 +70,15 @@ final class PressureSystem {
 		double target=Math.max(domain.config.pressureTolerance(),
 				FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION*domain.config.density()
 				/(dt*(double)dt*Math.sqrt(Math.max(1,p.fluidUnknownCount+p.gasUnknownCount))));
-		int total = 0; double residual = Double.POSITIVE_INFINITY;
-		for (int iteration = 0; iteration < 8; iteration++) {
-			System.arraycopy(pressure, 0, point, 0, size);
-			linearizeGas(point); buildDiagonal();
-			PressureLinearSolver.Operator operator = linearOperator;
-			double before = nonlinearResidual(operator, point);
-			var result = solver.solve(target);
-			total += result.iterations();
-			pressure = solver.pressure();
-			if (!result.converged()) { publishPressure(); return new PressureProjectionResult(total, result.residualRms(), false); }
-			System.arraycopy(pressure, 0, trial, 0, size);
-			double scale = 1;
-			for (int i = 0; i < p.gasUnknownCount; i++) {
-				int node=p.gasUnknownNodes[i];if(gasCompression[node]==null)continue;
-				int row = domain.cellCount + node;
-				double absolute = point[row] + mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE;
-				if (trial[row] + mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE <= 0)
-					scale = Math.min(scale, .8 * absolute / (point[row] - trial[row]));
-			}
-			for (int search = 0; search < 12; search++) {
-				for (int row = 0; row < size; row++) pressure[row] = point[row] + scale * (trial[row] - point[row]);
-				residual = nonlinearResidual(operator, pressure);
-				if (residual <= Math.max(target, 2 * result.residualRms()) || residual < before) break;
-				scale *= .5;
-			}
-			if (Boolean.getBoolean("mmm.pressure.trace")) System.out.printf("GAS_NEWTON i=%d before=%g after=%g liquid=%g gasVolume=%g linear=%g scale=%g%n",
-					iteration, before, residual, liquidResidual, gasVolumeResidual, result.residualRms(), scale);
-			if (liquidResidual <= Math.max(target, 2 * result.residualRms())
-					&& gasVolumeResidual <= FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION) {
-				publishPressure(); return new PressureProjectionResult(total, residual, true);
-			}
-		}
-		publishPressure();
-		return new PressureProjectionResult(total, residual, false);
+		// One semi-implicit pressure prediction. Bounded inventory transport owns
+		// the actual pore endpoint; final EOS and compression work use that volume.
+		var result = solver.solve(target);
+		pressure = solver.pressure();
+		return result;
 	}
 	void predictDrag(float dt){
 		if(domain.granularState==null||domain.granularState.parcels.count()==0)return;
 		domain.ensureGrid();faces.rebuild(dt);drag.prepare(dt);drag.project();
-	}
-	private void prepareEndpointRhs(float dt){
-		if(!domain.granularMechanicalStage.collisionPending())return;
-		double scale=domain.config.density()/(dt*(double)dt);
-		for(int cell=0;cell<domain.cellCount;cell++){
-			double change=Math.scalb((double)(domain.granularNextCoupling.solidSvq(cell)-domain.granularCoupling.solidSvq(cell)),-24);
-			if(change==0)continue;final double source=scale*change;
-			faces.forEachCell(cell,(row,weight,fixed)->{if(row>=0){if(row<domain.cellCount)domain.projection.rhs[row]+=source*weight;else domain.projection.gasRhs[row-domain.cellCount]+=source*weight;}});
-		}
 	}
 	void beginVolumeTransport(){
 		readVelocity(transportVelocity);
@@ -128,55 +86,20 @@ final class PressureSystem {
 	}
 	double volumeFlux(int face,double dt){return faces.fluidArea(face)*transportVelocity[face]*dt/domain.config.cellSize();}
 	double transportVelocity(int face){return transportVelocity[face];}
-	private void prepareGasCompression() {
+	private void prepareGasStorage() {
 		int count = domain.gasState.network.nodeCount();
-		gasCompression = new PressureBoundaryView.Compression[count + 1];
 		gasStorageRhs = new double[count + 1];
+		double factor = domain.config.density()
+				/ (duration * (double) duration * domain.unitScale.cubicMetersPerNormalizedVolume());
 		for (int i = 0; i < domain.projection.gasUnknownCount; i++) {
 			int node = domain.projection.gasUnknownNodes[i];
-			if(domain.pressureBoundaryView.gasNodeHasContinuumState(node))gasCompression[node] = domain.pressureBoundaryView.prepareCompression(node);
+			if (domain.pressureBoundaryView.gasNodeHasContinuumState(node)) {
+				// V(P) = V_old - C_old * (P - P_old), with C_old from
+				// the real inventory, internal energy and heat-capacity model.
+				gasStorageRhs[node] = domain.projection.gasStorageCoefficient[node]
+						* domain.pressureBoundaryView.gasPressureOfNode(node);
+			} else gasStorageRhs[node] = -factor * domain.gasState.network.availableVolume(node);
 		}
-	}
-	private double gasFactor() {
-		return domain.config.density() / (duration * (double) duration * domain.unitScale.cubicMetersPerNormalizedVolume());
-	}
-	private void linearizeGas(double[] point) {
-		var p = domain.projection; double factor = gasFactor();
-		for (int i = 0; i < p.gasUnknownCount; i++) {
-			int node = p.gasUnknownNodes[i]; double gauge = point[domain.cellCount + node];
-			if(gasCompression[node]==null){p.gasStorageCoefficient[node]=0;gasStorageRhs[node]=-factor*domain.gasState.network.availableVolume(node);continue;}
-			var state = gasCompression[node].atPressure(gauge + mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE);
-			p.gasStorageCoefficient[node] = factor * state.compliance();
-			gasStorageRhs[node] = factor * (state.volume() - gasCompression[node].volume() + state.compliance() * gauge);
-		}
-	}
-	private double nonlinearResidual(PressureLinearSolver.Operator operator, double[] source) {
-		operator.applyMatrix(source, nonlinearProduct); operator.buildRhs(nonlinearRhs);
-		var p = domain.projection; double norm = 0, factor = gasFactor();
-		for (int i = 0; i < p.fluidUnknownCount; i++) {
-			int row = p.fluidUnknownCells[i]; norm = Math.hypot(norm, nonlinearProduct[row] - nonlinearRhs[row]);
-		}
-		double liquidNorm=norm;int equations=p.fluidUnknownCount;
-		gasVolumeResidual = 0;
-		for (int i = 0; i < p.gasUnknownCount; i++) {
-			int node = p.gasUnknownNodes[i], row = domain.cellCount + node;
-			if(gasCompression[node]==null) {
-				double residual=nonlinearProduct[row]-nonlinearRhs[row];
-				if(source[row]<=-mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE)residual=Math.min(0,residual);
-				if(source[row]>-mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE||residual<0)equations++;
-				norm=Math.hypot(norm,residual);
-				gasVolumeResidual=Math.max(gasVolumeResidual,Math.abs(residual)*duration*duration/domain.config.density());
-				continue;
-			}
-			equations++;
-			var state = gasCompression[node].atPressure(source[row] + mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE);
-			double residual = nonlinearProduct[row] - nonlinearRhs[row] - p.gasStorageCoefficient[node] * source[row]
-					+ gasStorageRhs[node] + factor * (gasCompression[node].volume() - state.volume());
-			norm = Math.hypot(norm, residual);
-			gasVolumeResidual = Math.max(gasVolumeResidual, Math.abs(residual) * duration * duration / domain.config.density());
-		}
-		liquidResidual=liquidNorm/Math.sqrt(Math.max(1,equations));
-		return norm / Math.sqrt(Math.max(1,equations));
 	}
 
 	void projectVelocities(float dt) {
@@ -189,11 +112,6 @@ final class PressureSystem {
 		var p = domain.projection;
 		for (int i = 0; i < p.gasUnknownCount; i++) { int node = p.gasUnknownNodes[i]; p.gasMatrixInput[node] = pressure[domain.cellCount + node]; }
 		granular.project(dt, pressure, p.gasMatrixInput);
-	}
-	private void publishPressure() {
-		var p = domain.projection;
-		for (int i = 0; i < p.fluidUnknownCount; i++) { int cell = p.fluidUnknownCells[i]; p.pressure[cell] = (float) pressure[cell]; }
-		for (int i = 0; i < p.gasUnknownCount; i++) { int node = p.gasUnknownNodes[i]; p.gasPressure[node] = (float) pressure[domain.cellCount + node]; }
 	}
 	private void buildDiagonal() {
 		var p = domain.projection; double h2 = domain.config.cellSize() * (double) domain.config.cellSize();
@@ -218,12 +136,13 @@ final class PressureSystem {
 				}
 			}
 		}
+		granular.addDiagonal();
 	}
 	private void readVelocity(double[] target) {
 		float[][] fields = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};
 		for (int a = 0; a < 3; a++) for (int i = 0; i < fields[a].length; i++) target[faces.offsets[a] + i] = fields[a][i];
 	}
-	void addStorageRhs(double[] result, double dt) {
+	private void addStorageRhs(double[] result) {
 		var p = domain.projection;
 		for (int i = 0; i < p.gasUnknownCount; i++) {
 			int node = p.gasUnknownNodes[i]; result[domain.cellCount + node] += gasStorageRhs[node];
@@ -233,12 +152,6 @@ final class PressureSystem {
 	boolean hasLiquidPressure(int cell) { return domain.isFluid(cell); }
 	double liquidPressure(int cell) { return pressure.length > cell ? pressure[cell] : 0; }
 	double gasPressure(int node) { return pressure.length > domain.cellCount + node ? pressure[domain.cellCount + node] : domain.pressureBoundaryView.gasPressureOfNode(node); }
-    double predictedGasVolumeNormalized(int node) {
-        double volume=node<gasCompression.length&&gasCompression[node]!=null
-                ?gasCompression[node].atPressure(gasPressure(node)+mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE).volume()
-                :domain.gasState.network.availableVolume(node);
-        return volume/domain.unitScale.cubicMetersPerNormalizedVolume();
-    }
 
 	/** Gauge pressure at the retained liquid support, including a partially filled cell's gas contact. */
 	double liquidPressureAt(int cell, int support) {

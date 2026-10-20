@@ -39,7 +39,7 @@ final class CondensedInventoryClearPlanner {
 				domain.thermalState == null ? SignedDyadic.ZERO
 						: domain.liquidCells.exactInternalEnergy(),
 				domain.carrierMutationRevision(),
-				domain.chemicalParcels == null ? 0L : domain.chemicalParcels.mutationRevision());
+				domain.chemicalParcels == null ? 0L : domain.chemicalParcels.mutationRevision(),domain.transferPlanner.planLiquidClear());
 	}
 
 	/** Plans one operator clear across liquid markers and every coherent condensed phase. */

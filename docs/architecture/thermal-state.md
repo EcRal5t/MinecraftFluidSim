@@ -8,6 +8,8 @@
   - 代码入口：
     - [ThermalDomainState](../../model/src/main/java/mmm/thermal/ThermalDomainState.java)：热状态、共同审计和批能量事务
     - [LiquidEnergyColumn](../../model/src/main/java/mmm/thermal/LiquidEnergyColumn.java)：库存内能访问与派生热学缓存
+    - [ThermalRegistry](../../model/src/main/java/mmm/thermal/ThermalRegistry.java)、[ThermalReferenceEnergyCache](../../model/src/main/java/mmm/thermal/ThermalReferenceEnergyCache.java)：注册物种的每微摩尔参考能系数
+    - [ThermalCellOperations](../../model/src/main/java/mmm/thermal/ThermalCellOperations.java)：同代热网格、相变候选与能量分配
     - [FluidThermalBinding](../../solver/src/main/java/mmm/fluid/FluidThermalBinding.java)
     - [ThermalOwnerSnapshot](../../model/src/main/java/mmm/thermal/ThermalOwnerSnapshot.java)
     - [LiquidCellInventory](../../model/src/main/java/mmm/inventory/LiquidCellInventory.java)
@@ -141,8 +143,10 @@ U_h(T) = m * u_ref,h
 ```
 
 每个 caloric segment 内比热为常量，积分与温度反演共用分段线性曲线。
-求温使用有尺度处理的浮点除法，恒热容材料的混合库存直接求解共同线性关系。
+温度、热容及分段曲线采用浮点解析计算，混合库存以补偿求和汇总；恒热容材料直接求解共同线性关系。
 组成参考能、载体内能及收支继续按既有精确数量契约结算，温度反演误差按浮点传播评价。
+物种参考能定义保留有理数和 J/mol 单位，注册时一次换算为每微摩尔的浮点系数；实际整数物种数量直接乘该系数派生参考能。
+内能搬运及所有者分配采用同一系数，实际库存与守恒剩余量按精确账本提交，派生参考能的舍入按宏观温度误差评价。
 同格异质载体使用局部热平衡温度（LTE），按完整质量、组成和总内能求解。
 首尾段向标定温区外连续延拓；外推的相态精度受物性模型限制。
 恒温设备等外部设定值仍受已提交注册表的标定范围约束。
@@ -159,6 +163,7 @@ U_h(T) = m * u_ref,h
 黏性和颗粒载体属性使用一次建格、多格读取的批量观察。
 该过程只更新派生工作区，保留所有载体 `U`；局部反应或设备交换仅分配受影响单元的能量。
 库存、组成、位置或内能变化后重建工作区，候选和冷恢复各自重新派生。
+待同步相变体积的恢复检查复用同代批量温度准备，随后的物性读取直接使用已准备的热网格。
 
 连续空间温度观察使用连通单相区域中的正三线性权重。
 开放支撑被外壳截断时归一化；切割单元和同格多相采用所属单元近似。
@@ -238,8 +243,8 @@ rho(T) = rho_ref / (1 + beta*(T-T_ref))
 Delta u_y = g * dt * thermal_density_correction_face / rho_face
 ```
 
-参考密度来自同一组成的实际质量与体积，温度来自实际载体内能。
-组成密度和热密度修正使用一致的空间支撑、面惯性与界面距离加权。
+参考密度来自实际单元质量与体积，温度复用同代单元的局部热平衡结果。
+同格液相分别读取自身热膨胀物性，再按实际质量汇总浮力修正；物性、压力和体力共用单元及格面支撑。
 这项体力修正保持质量与体积库存原样。
 
 每种液体声明 `T_ref` 与 `beta`，定义随材料指纹保存。
@@ -292,6 +297,8 @@ Ra = g*beta*DeltaT*H³/(nu*alpha)
 冷恢复先重建压力投影，再执行需要该压力的热学计算。
 
 批次搜索选择更接近平衡温度的可提交整数状态。
+凝聚相转换先按质量、体积和真实孔容限定批量，再以全单元内能与正温下限能量限定可行区间。
+热容延拓使目标物相的低温能量高于来源时，转换消耗该单元相对于低温下限的实际能量余量。
 剩余温差反映批次量化、库存或容量限制，避免连续步骤在相邻批次间反复冻融。
 搜索细节由 `ThermalPhaseExtentCurve` 与相变阶段代码维护。
 
@@ -339,6 +346,8 @@ p_partial = p_absolute * Vstd,vapor / Vstd,total
 外部注热才进入热源列，同一反应能量按一条账结算。
 
 析出、溶解和合并使用完整未来载体库存预检热状态，再分配组成记录并提交物质。
+固液反应按完整单元的实际内能、各物相正温下限和反应计量限定可转移批量，同时预留格内位置变化所需的势能。
+有限能量允许的整数批次正常交接，其余物质继续参与后续传热和反应。
 失败保留原库存及待处理任务。
 
 ## Logical step 顺序

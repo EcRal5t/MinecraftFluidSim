@@ -508,14 +508,7 @@ abstract class FluidDomainStepCoordinator extends FluidDomainMechanicalFields {
 	}
 
 	int calculateSubsteps(float dt) {
-		double required = 1;
-		double maximum = 0;
-		if (granularState != null) for (int index = 0; index < granularState.parcels.count(); index++) {
-			var parcel = granularState.parcels.parcel(index);
-			maximum = Math.max(maximum, Math.abs(parcel.velocityX()) + Math.abs(parcel.velocityY()) + Math.abs(parcel.velocityZ()));
-		}
-		if (maximum > 0) required = Math.max(required, (maximum + config.gravity() * dt) * dt / (config.cellSize() * config.maxCourantNumber()));
-		return Math.max(minimumMechanicalSubsteps, Math.max(1, (int) Math.ceil(required)));
+		return Math.max(1, minimumMechanicalSubsteps);
 	}
 
 	/**

@@ -1,88 +1,74 @@
 package mmm.fluid;
 
 import mmm.granular.ParticulateMaterial;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.BitSet;
 import static mmm.fluid.GranularContactCompression.*;
 
-/** Common-source contact response using mass-weighted normal impulses and Coulomb friction. */
+/** Fixed-cost accumulated normal and Coulomb impulses for one representative contact component. */
 final class GranularComponentResponse {
-	private final double h;
-	private final GranularSphereCollision fixed;
-	private final Runnable spend;
+    private final double h;
+    private final Runnable spend;
+    GranularComponentResponse(double h,Runnable spend){this.h=h;this.spend=spend;}
 
-	GranularComponentResponse(double h, GranularSphereCollision fixed, Runnable spend) {
-		this.h = h; this.fixed = fixed; this.spend = spend;
-	}
-
-	Result respond(double[] mass, double[][] v, ParticulateMaterial[] materials, Row[] rows) {
-		var normalCompression = solve(mass, v, rows, spend);
-		double[][] velocityError = new double[mass.length][3];
-		var fixedRows = new ArrayList<ArrayList<Integer>>(mass.length);
-		for (int i = 0; i < mass.length; i++) fixedRows.add(new ArrayList<>());
-		for (int row = 0; row < rows.length; row++) {
-			spend.run(); if (rows[row].second() < 0) fixedRows.get(rows[row].first()).add(row);
-		}
-		var velocitySupported = loadedSupport(mass.length, rows, normalCompression.impulses());
-		double[] restitution = new double[rows.length];
-		for (int i = 0; i < mass.length; i++) {
-			double[] change = new double[3];
-			for (int axis = 0; axis < 3; axis++) change[axis] = normalCompression.values()[i][axis] - v[i][axis];
-			double e = materials[i].restitution();
-			if (e * Math.hypot(Math.hypot(change[0], change[1]), change[2]) <= h * .125) e = 0;
-			for (int row : fixedRows.get(i)) {
-				spend.run(); if (GranularSphereCollision.closing(v[i], rows[row].normal(), velocityError[i])) restitution[row] = e;
-			}
-		}
-		for (int row = 0; row < rows.length; row++) if (rows[row].second() >= 0) {
-			spend.run(); var contact = rows[row]; int first = contact.first(), second = contact.second();
-			double e = Math.min(materials[first].restitution(), materials[second].restitution());
-			double velocityGap = 0;
-			for (int axis = 0; axis < 3; axis++) {
-				velocityGap = Math.fma(contact.normal()[axis], v[second][axis] - v[first][axis], velocityGap);
-			}
-			boolean velocityLoaded = normalCompression.impulses()[row] > 0 && velocitySupported.get(first);
-			if ((!velocityLoaded || -e * velocityGap > h * .125) && !admits(contact, v, velocityError)) restitution[row] = e;
-		}
-		var response = GranularContactCompression.respond(mass, v, rows, normalCompression, restitution, spend);
-		var frictionInput = response.values().clone(); boolean frictionChanged = false;
-		for (int i = 0; i < mass.length; i++) {
-			var normals = new ArrayList<double[]>(); double[] load = new double[3];
-			for (int row : fixedRows.get(i)) {
-				spend.run(); var normal = rows[row].normal(); normals.add(normal);
-				for (int axis = 0; axis < 3; axis++) load[axis] = Math.fma(response.impulses()[row] / mass[i], normal[axis], load[axis]);
-			}
-			if (normals.isEmpty()) continue;
-			frictionInput[i] = fixed.friction(response.values()[i], normals.toArray(double[][]::new),
-					Math.hypot(Math.hypot(load[0], load[1]), load[2]), materials[i]);
-			frictionChanged |= !Arrays.equals(frictionInput[i], response.values()[i]);
-		}
-		if (frictionChanged) response = solve(mass, frictionInput, rows, spend);
-		return response;
-	}
-
-	private BitSet loadedSupport(int count, Row[] rows, double[] impulses) {
-		int[] parent = new int[count]; byte[] rank = new byte[count];
-		for (int i = 0; i < count; i++) { spend.run(); parent[i] = i; }
-		BitSet anchored = new BitSet(count), supported = new BitSet(count);
-		for (int k = 0; k < rows.length; k++) {
-			spend.run(); if (impulses[k] == 0) continue;
-			var row = rows[k];
-			if (row.second() < 0) { anchored.set(row.first()); continue; }
-			int first = root(parent, row.first()), second = root(parent, row.second());
-			if (first == second) continue;
-			if (rank[first] < rank[second]) parent[first] = second;
-			else { parent[second] = first; if (rank[first] == rank[second]) rank[first]++; }
-		}
-		for (int i = anchored.nextSetBit(0); i >= 0; i = anchored.nextSetBit(i + 1)) { spend.run(); supported.set(root(parent, i)); }
-		BitSet result = new BitSet(count);
-		for (int i = 0; i < count; i++) { spend.run(); if (supported.get(root(parent, i))) result.set(i); }
-		return result;
-	}
-	private int root(int[] parent, int i) {
-		while (parent[i] != i) { spend.run(); parent[i] = parent[parent[i]]; i = parent[i]; }
-		return i;
-	}
-
+    Result respond(double[] mass,double[][] input,ParticulateMaterial[] materials,Row[] rows){
+        // Compression provides a warm start and the energy available to restitution.
+        var compressed=solve(mass,input,rows,spend);
+        double[][] values=new double[mass.length][3],tangent=new double[rows.length][3];
+        for(int i=0;i<values.length;i++)values[i]=compressed.values()[i].clone();
+        double[] normal=compressed.impulses().clone(),target=new double[rows.length];
+        double[] inverse=new double[rows.length],norm2=new double[rows.length],muStatic=new double[rows.length],muDynamic=new double[rows.length];
+        boolean loaded=false;
+        for(int k=0;k<rows.length;k++)loaded|=rows[k].second()<0&&normal[k]>0;
+        for(int k=0;k<rows.length;k++){
+            var row=rows[k];int i=row.first(),j=row.second();double closing=0;
+            for(int a=0;a<3;a++){double n=row.normal()[a];norm2[k]=Math.fma(n,n,norm2[k]);closing=Math.fma(n,j<0?input[i][a]:input[j][a]-input[i][a],closing);}
+            inverse[k]=1/mass[i]+(j<0?0:1/mass[j]);
+            double e=j<0?materials[i].restitution():Math.min(materials[i].restitution(),materials[j].restitution());
+            target[k]=closing<0&&(j>=0&&!loaded||-e*closing>h*.125)?-e*closing:0;
+            muStatic[k]=j<0?materials[i].staticFriction():0;
+            muDynamic[k]=j<0?materials[i].dynamicFriction():0;
+        }
+        for(int pass=0;pass<2*SWEEPS;pass++){
+            boolean changed=false;
+            for(int visit=0;visit<rows.length;visit++){
+                spend.run();int k=(pass&1)==0?visit:rows.length-1-visit;var row=rows[k];int i=row.first(),j=row.second();double gap=0;
+                for(int a=0;a<3;a++)gap=Math.fma(row.normal()[a],j<0?values[i][a]:values[j][a]-values[i][a],gap);
+                double next=Math.max(0,normal[k]+(target[k]-gap)/(inverse[k]*norm2[k])),delta=next-normal[k];normal[k]=next;changed|=delta!=0;
+                for(int a=0;a<3;a++)apply(values,mass,i,j,a,delta*row.normal()[a]);
+                // Translational representative pairs carry normal impulses; fixed surfaces carry Coulomb traction.
+                if(j>=0)continue;
+                gap=0;for(int a=0;a<3;a++)gap=Math.fma(row.normal()[a],j<0?values[i][a]:values[j][a]-values[i][a],gap);
+                double tx=tangent[k][0]-((j<0?values[i][0]:values[j][0]-values[i][0])-gap*row.normal()[0]/norm2[k])/inverse[k];
+                double ty=tangent[k][1]-((j<0?values[i][1]:values[j][1]-values[i][1])-gap*row.normal()[1]/norm2[k])/inverse[k];
+                double tz=tangent[k][2]-((j<0?values[i][2]:values[j][2]-values[i][2])-gap*row.normal()[2]/norm2[k])/inverse[k];
+                double length=Math.hypot(Math.hypot(tx,ty),tz),load=normal[k]*Math.sqrt(norm2[k]);
+                double scale=length==0||length<=muStatic[k]*load?1:Math.min(1,muDynamic[k]*load/length);
+                for(int a=0;a<3;a++){
+                    double value=(a==0?tx:a==1?ty:tz)*scale,change=value-tangent[k][a];tangent[k][a]=value;changed|=change!=0;
+                    apply(values,mass,i,j,a,change);
+                }
+            }
+            if(!changed)break;
+        }
+        // Simultaneous rebound spends at most the kinetic energy released by compression.
+        double available=0,linear=0,quadratic=0;
+        for(int i=0;i<mass.length;i++)for(int a=0;a<3;a++){
+            double c=compressed.values()[i][a],d=values[i][a]-c;
+            available+=.5*mass[i]*(input[i][a]-c)*(input[i][a]+c);
+            linear+=mass[i]*c*d;quadratic+=.5*mass[i]*d*d;
+        }
+        if(linear+quadratic>Math.max(0,available)&&quadratic>0){
+            double root=Math.sqrt(linear*linear+4*quadratic*Math.max(0,available));
+            double scale=Math.clamp(linear>=0?(available<=0?0:2*available/(linear+root)):(root-linear)/(2*quadratic),0,1);
+            for(int i=0;i<mass.length;i++)for(int a=0;a<3;a++)values[i][a]=Math.fma(scale,values[i][a]-compressed.values()[i][a],compressed.values()[i][a]);
+            for(int k=0;k<normal.length;k++)normal[k]=Math.fma(scale,normal[k]-compressed.impulses()[k],compressed.impulses()[k]);
+        }
+        double[][] error=new double[mass.length][3];double[] gapError=new double[rows.length];
+        for(int i=0;i<mass.length;i++)for(int a=0;a<3;a++)error[i][a]=64*Math.ulp(Math.max(Math.abs(values[i][a]),Math.abs(input[i][a])));
+        for(int k=0;k<rows.length;k++)gapError[k]=GranularContactCompression.gapError(rows[k],values,error);
+        return new Result(values,normal,gapError,error);
+    }
+    private static void apply(double[][] values,double[] mass,int first,int second,int axis,double impulse){
+        values[first][axis]+=(second<0?impulse:-impulse)/mass[first];
+        if(second>=0)values[second][axis]+=impulse/mass[second];
+    }
 }

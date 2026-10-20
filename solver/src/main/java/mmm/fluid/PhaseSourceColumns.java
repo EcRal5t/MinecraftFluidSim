@@ -22,6 +22,7 @@ final class PhaseSourceColumns {
 	int next(int entry) { return next[entry]; }
 	long key(int entry) { return keys[entry]; }
 	double amount(int entry) { return amounts[entry]; }
+	void setAmount(int entry,double amount) { amounts[entry]=amount; }
 	int entryCount() { return entries; }
 	int rowCount() { return rows; }
 	void clear(int row) { head[row]=-1; }

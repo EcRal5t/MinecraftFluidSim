@@ -204,7 +204,7 @@ public final class LiquidVolumeTransportValidation {
 		var full = d.tryInsertExactMaterial(1,1,1,1,mass,0,0);
 		require(!full.transferred() && d.liquidCells.snapshot().rows().equals(prior.rows()), "Failed capacity preparation published a partial insertion");
 		d.setVolume(1,1,1,.25F); require(d.liquidCells.exactVolume().equals(SignedDyadic.of(.25)), "setVolume bypassed common cell inventory");
-		d.transferPlanner.clearLiquid(); require(d.liquidCells.size() == 0 && d.liquidCells.massUnits() == 0, "Liquid clear left persistent quantities");
+		d.removeAllWaterExact(); require(d.liquidCells.size() == 0 && d.liquidCells.massUnits() == 0, "Liquid clear left persistent quantities");
 	}
 	private static void movingMaterialContinuesAfterRecovery() {
 		var d=domain(5,3,2);d.setVolume(1,1,1,.5F);d.ensureGrid();

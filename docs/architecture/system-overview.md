@@ -163,7 +163,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 1. 捕获库存、内能收支和待同步相变体积；从碰撞、固体占容与气腔建立同代输入。
 2. 从单元整数质量构造 MAC 双控制体积惯性，以格面动量派生速度，执行多孔阻力、局部应变耗散和重力、浮力、张力等作用。
-3. 预览颗粒移动、碰撞与实际整数占容，以实际排水量求解液体压力和有限气腔响应；颗粒接收压力反作用，复检投影后的 Courant 数。
+3. 以液体面质量、颗粒质量和两相体积散度共同求解压力与有限气腔响应，同时修正两相速度，再准备颗粒碰撞位置与实际整数占容。
 4. 以共享通量在私有库存中执行一次完整时长的粗单元输运，用同一次实际整数质量通量推进 MAC 动量，联合提交液体、颗粒和气腔后继。
 5. 在新位置上完成导热、液相反应、颗粒反应、固液与气液相变。相变共用操作预算，体积变化留待后续真实力学同步。
 6. 执行颗粒沉积、起动和床层松弛，随物质搬运组成与内能。
@@ -182,8 +182,9 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 压力系统使用同一面系数组装矩阵、预条件器和速度修正。
 `PressureLinearSolver` 与 `PressurePreconditioner` 统一 PCG 及不完全 Cholesky 预条件，颗粒阻力按有限质量成对处理。
-已解析液气界面采用给定压力或有限气腔储存项；颗粒以本步实际占容变化参与排水，压力反作用更新下一步速度。
-活动颗粒体积分配到共同 MAC 面，液体读取剩余开口，颗粒压力响应读取同一面体积的散度及其转置。
+已解析液气界面采用给定压力或有限气腔储存项，步初状态方程切线提供一次半隐式压力预测。
+活动颗粒体积分配到共同 MAC 面，液体读取剩余开口，两相真实有限质量与各自体积散度的转置共同构成压力算子。
+压力同时更新液体与颗粒速度，接触和位置预测随后准备实际整数占容，真实终点孔容由共同有界输运结算。
 作用与反作用、外部约束冲量和压力功按实际写回结算；整数库存按最终位置独立核对真实容量，具体离散见[颗粒参考](granular-state.md#统一排水与压力)。
 
 液体持久动量位于 MAC 格面，格面速度从同一双控制体积的实际质量与动量派生。
@@ -250,14 +251,18 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 ## 守恒输运与气腔交接
 
 液体输运以粗单元的固定开放连通分量为库存和容量单位。
-`PhasePoreFlux` 提供共同 MAC 速度与实际面开口决定的总通量 `Qt`，颗粒本步实际整数占容决定终点孔容。
+`PressureSystem.volumeFlux` 提供共同 MAC 速度与实际面开口决定的总通量 `Qt`，颗粒本步实际整数占容决定终点孔容。
 `ConservativeLiquidFlux` 从八微盒 PLIC 几何取得液相扫掠偏好，汇总为分量之间的有向面通量。
-`PhaseQuantitySettlement` 使用机器整数体积份额，联合满足原供体库存、实际 `Qt` 上限和接收分量容量。
-有限气腔的状态方程预测空间转为可达分量组的总液量上限，同组空间自由重排，气体来源按相同分组交接。
+`PhaseQuantitySettlement` 使用机器整数体积份额，按共同开放邻接联合满足原供体库存、接收分量容量与有限气体正容量。
+压力和 PLIC 给出面通量偏好，正常运动与颗粒排水共用双向邻接路线和一次容量投影。
+修正后的液相通量与原几何气相通量组成最终共同 `Qt`，整数质量、动量和气体来源使用同次结算结果。
+非空有限气腔保留实际尺度的正空间代表，同组空间自由重排，气体来源按相同分组交接。
+气体膨胀由实际液流推进，终态状态方程与热功读取真实容量。
 每个机械子步执行一次完整时长的有限体积推进，按实际份额分配材料整数质量、物种与内能，活动域发布一次。
+原地全量保留的库存行直接共享，整份跨格转移直接携带原质量、组成和内能，真实拆分才分配各项整数份额。
 MAC 动量输运读取同次结算的实际整数质量通量。
 
-每个粗单元固定开放分量使用一套粗梯度 PLIC 平面，按最终库存液量确定偏移，八微盒保存该平面积分得到的几何形状。
+每个粗单元固定开放分量使用一套粗梯度 PLIC 平面，按最终库存液量确定偏移；持久微盒列保存共同重建输入，积分形状由 PLIC 工作区派生。
 未解析液片与气隙可合并，允许格内形状调整和细尺度耗散；实际物质与携带能量继续守恒。
 气体来源按固定开放分量汇总，随实际宏观互补通量和本地保留空间推进，最终通过分量中的规范干片交接。
 新开放空腔使用显式真空来源。
@@ -284,7 +289,6 @@ MAC 动量输运读取同次结算的实际整数质量通量。
     - [ConservativeLiquidFlux](../../solver/src/main/java/mmm/fluid/ConservativeLiquidFlux.java)：几何液相偏好、粗分量通量与单次完整库存推进
     - [PhaseOccupancyState](../../model/src/main/java/mmm/inventory/PhaseOccupancyState.java)：不可变微盒液相体积
     - [PhaseOccupancyTransport](../../solver/src/main/java/mmm/fluid/PhaseOccupancyTransport.java)：局部八微盒形状归一与外部编辑的气体来源准备
-    - [PhasePoreFlux](../../solver/src/main/java/mmm/fluid/PhasePoreFlux.java)：共享粗格面总通量与 RT0 微面偏好
     - [PhaseSourceColumns](../../solver/src/main/java/mmm/fluid/PhaseSourceColumns.java)：复用粗分量气体来源与面份额的连续稀疏列
     - [GranularLiquidDisplacement](../../solver/src/main/java/mmm/fluid/GranularLiquidDisplacement.java)
   - 验证选择器 / 参考：`free-surface`；`LiquidVolumeTransportValidation components` / `chemical-tails`；[有限体积输运](fluid-solver.md#几何与单元输运)
@@ -347,7 +351,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 - **反应、析出与溶解**
   - 主要文件：
     - [ChemicalReactionStage](../../solver/src/main/java/mmm/fluid/ChemicalReactionStage.java)
-    - [GranularReactionStage](../../solver/src/main/java/mmm/fluid/GranularReactionStage.java)
+    - [GranularReactionStage](../../solver/src/main/java/mmm/fluid/GranularReactionStage.java)：`precipitate`、`depositPrecipitate` 共用活动代表生成与组成合并，未解析析出物向合法床库存交接物质、反冲和内能。
     - [PhaseChangeStageSupport](../../solver/src/main/java/mmm/fluid/PhaseChangeStageSupport.java)
   - 验证选择器 / 参考：
     - `chemistry,granular,thermal`；[化学参考](chemistry-state.md)

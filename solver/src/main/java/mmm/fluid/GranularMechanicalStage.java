@@ -5,7 +5,7 @@ import mmm.granular.SolidVolume;
 import mmm.granular.GranularCouplingFields;
 import mmm.units.SolverUnitScale;
 
-/** Prepares the collision-resolved solid position endpoint before the pressure velocity kick. */
+/** Moves the jointly pressure-projected solid velocity through the collision-resolved position endpoint. */
 final class GranularMechanicalStage {
 	record Workspace(
 			FluidSolverConfig config, DomainGeometry geometry, MarkerGridIndex markerGrid,
@@ -76,18 +76,8 @@ final class GranularMechanicalStage {
 		collisionPending = false;
 		if (!access.hasGranularInventory()) return;
 		GranularDomainState state = access.granularState();
-		// Displacement uses the predicted velocity; the later pressure kick belongs to the next drift.
-		double maximum = 0;
-		for (int index = 0; index < state.parcels.count(); index++) {
-			var parcel = state.parcels.parcel(index);
-			maximum = Math.max(maximum, Math.abs((double) parcel.velocityX())
-					+ Math.abs(parcel.velocityY()) + Math.abs(parcel.velocityZ()));
-		}
-		double distance = this.state.config.cellSize() * this.state.config.maxCourantNumber();
-		if (maximum * dt > distance * (1 + 8 * Math.ulp(1.0F))) {
-			throw new MechanicalTimeRefinement((int) Math.ceil(maximum * this.state.config.timeStep() / distance));
-		}
-		access.granularCollision().preview(state.parcels, state.registry, dt, this.state.config.maxCourantNumber());
+		// Both phases have received the same pressure projection before this drift.
+		access.granularCollision().preview(state.parcels, state.registry, dt);
 		access.granularNextCoupling().rebuild(state.parcels, state.deposits,
 				access.granularCollision()::previewPosition);
 		if (!access.granularOccupancyFitsGeometry(access.granularNextCoupling())) {

@@ -16,8 +16,7 @@ final class PressureLinearSolver {
 	private int[] unknowns = new int[0], freeUnknowns = new int[0];
 	private boolean[] bounded = new boolean[0], free = new boolean[0];
 	private int count, freeCount;
-	private boolean freshlyReset;
-	private static final double VACUUM_LOWER = -mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE;
+	private static final double GAS_LOWER = -mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE;
 
 	PressureLinearSolver(FluidDomain domain, Operator operator) {
 		this.domain = domain;
@@ -37,7 +36,7 @@ final class PressureLinearSolver {
 	double[] pressure() { return pressure; }
 	void reset() {
 		ensureCapacity();
-		Arrays.fill(pressure, 0); Arrays.fill(direction, 0);freshlyReset=true;
+		Arrays.fill(pressure, 0); Arrays.fill(direction, 0);
 	}
 
 	PressureProjectionResult solve(double target) {
@@ -49,10 +48,10 @@ final class PressureLinearSolver {
 		for(int ordinal=0;ordinal<domain.projection.gasUnknownCount;ordinal++) {
 			int node=domain.projection.gasUnknownNodes[ordinal],row=domain.cellCount+node;unknowns[count++]=row;
 			diagonal[row]=domain.projection.gasMatrixDiagonal[node];
-			bounded[row]=domain.gasState.network.inventory(node).isEmpty();
-			if(bounded[row])pressure[row]=freshlyReset?VACUUM_LOWER:Math.max(VACUUM_LOWER,pressure[row]);
+			bounded[row]=true;
+			pressure[row]=Math.max(GAS_LOWER,pressure[row]);
 		}
-		freshlyReset=false;operator.buildRhs(rhs);refreshResidual();
+		operator.buildRhs(rhs);refreshResidual();
 		Arrays.fill(free,false);updateFreeSet(target);restartDirection();
 		double rz=dotFree(residual,direction),rms=projectedNorm();int iterations=0;
 		for(;rms>target&&iterations<domain.config.maxPressureIterations();iterations++) {
@@ -61,15 +60,15 @@ final class PressureLinearSolver {
 			double alpha=rz/denominator;boolean blocked=false;
 			for(int ordinal=0;ordinal<freeCount;ordinal++) {
 				int row=freeUnknowns[ordinal];if(bounded[row]&&direction[row]<0) {
-					double distance=(pressure[row]-VACUUM_LOWER)/-direction[row];
+					double distance=(pressure[row]-GAS_LOWER)/-direction[row];
 					if(distance<=alpha){alpha=distance;blocked=true;}
 				}
 			}
 			for(int ordinal=0;ordinal<count;ordinal++) {
 				int row=unknowns[ordinal];boolean hits=bounded[row]&&direction[row]<0
-						&&(pressure[row]-VACUUM_LOWER)/-direction[row]<=alpha;
-				pressure[row]=hits?VACUUM_LOWER:pressure[row]+alpha*direction[row];residual[row]-=alpha*product[row];
-				if(bounded[row]&&pressure[row]<VACUUM_LOWER)pressure[row]=VACUUM_LOWER;
+						&&(pressure[row]-GAS_LOWER)/-direction[row]<=alpha;
+				pressure[row]=hits?GAS_LOWER:pressure[row]+alpha*direction[row];residual[row]-=alpha*product[row];
+				if(bounded[row]&&pressure[row]<GAS_LOWER)pressure[row]=GAS_LOWER;
 			}
 			rms=projectedNorm();
 			boolean restart=blocked||updateFreeSet(target);
@@ -97,11 +96,11 @@ final class PressureLinearSolver {
 		operator.applyMatrix(pressure,product);
 		for(int ordinal=0;ordinal<count;ordinal++){int row=unknowns[ordinal];residual[row]=rhs[row]-product[row];}
 	}
-	/** Bound nodes satisfy r<=0; negative r is their remaining nonnegative physical volume. */
+	/** Pressure at its lower limit permits expansion at zero predicted absolute pressure. */
 	private boolean updateFreeSet(double tolerance){
 		boolean changed=false;freeCount=0;
 		for(int ordinal=0;ordinal<count;ordinal++) {
-			int row=unknowns[ordinal];boolean active=!bounded[row]||pressure[row]>VACUUM_LOWER||residual[row]>tolerance;
+			int row=unknowns[ordinal];boolean active=!bounded[row]||pressure[row]>GAS_LOWER||residual[row]>tolerance;
 			changed|=active!=free[row];free[row]=active;if(active)freeUnknowns[freeCount++]=row;
 		}
 		return changed;
@@ -113,7 +112,7 @@ final class PressureLinearSolver {
 		// diagonal projected-gradient restart is feasible and strictly descending.
 		for(int ordinal=0;ordinal<freeCount;ordinal++) {
 			int row=freeUnknowns[ordinal];
-			if(bounded[row]&&pressure[row]<=VACUUM_LOWER&&direction[row]<0) {
+			if(bounded[row]&&pressure[row]<=GAS_LOWER&&direction[row]<0) {
 				for(int j=0;j<freeCount;j++){int freeRow=freeUnknowns[j];direction[freeRow]=residual[freeRow]/diagonal[freeRow];}
 				break;
 			}
@@ -123,7 +122,7 @@ final class PressureLinearSolver {
 		double sum=0;int equations=0;
 		for(int ordinal=0;ordinal<count;ordinal++) {
 			int row=unknowns[ordinal];double value=residual[row];
-			if(bounded[row]&&pressure[row]<=VACUUM_LOWER&&value<=0)continue;
+			if(bounded[row]&&pressure[row]<=GAS_LOWER&&value<=0)continue;
 			equations++;
 			sum+=value*value;
 		}
@@ -140,7 +139,7 @@ final class PressureLinearSolver {
 				maximumPressure, Math.abs(pressure[unknowns[ordinal]]));
 		for (int ordinal = 0; ordinal < count; ordinal++) {
 			int row = unknowns[ordinal];
-			if(bounded[row]&&pressure[row]<=VACUUM_LOWER&&residual[row]<=0)continue;
+			if(bounded[row]&&pressure[row]<=GAS_LOWER&&residual[row]<=0)continue;
 			equations++;
 			double bound = Math.abs(rhs[row]) + 2 * diagonal[row] * maximumPressure;
 			scale = Math.hypot(scale, bound);

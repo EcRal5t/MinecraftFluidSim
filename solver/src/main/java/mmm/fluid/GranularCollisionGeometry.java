@@ -42,6 +42,13 @@ final class GranularCollisionGeometry {
 		return touches[0];
 	}
 
+	boolean positionValid(float x, float y, float z, float radius) {
+		return x >= radius && x <= sizes[0] * h - radius
+				&& y >= radius && y <= sizes[1] * h - radius
+				&& z >= radius && z <= sizes[2] * h - radius
+				&& !sphereTouchesSolid(x, y, z, radius);
+	}
+
 	/** Candidate full-footprint bed versus its eight fixed micro boxes, with pure tangency allowed. */
 	boolean bedGeometryFits(int cell, long bulk) {
 		if (bulk < 0) throw new IllegalArgumentException("Candidate bed bulk is negative");

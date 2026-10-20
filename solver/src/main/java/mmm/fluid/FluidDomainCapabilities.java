@@ -301,7 +301,6 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 				.equals(chemicalParcels.registry().fingerprint())) {
 			throw new IllegalArgumentException("Thermal registry chemical dependency mismatch");
 		}
-		ensureInventoryGrid();
 		return true;
 	}
 
@@ -595,22 +594,11 @@ abstract class FluidDomainCapabilities extends FluidDomainCollisionState {
 			@Override public double liquidInternalEnergy(int ordinal) { return stock(ordinal).internalEnergy(); }
 			@Override public long liquidInventoryRevision() { return liquidCells.revision(); }
 			@Override public void setLiquidInternalEnergy(int ordinal, double energy) {
-				var before = stock(ordinal);
-				var after = new LiquidCellInventory.Stock(before.key(), before.volume(), before.massUnits(),
-						before.mixture(), energy, before.indicator());
-				liquidCells.planEdits(List.of(new LiquidCellInventory.Edit(before.key(), after))).commit();
+				liquidCells.planPhysicalEnergyUpdate(ordinal, energy).commit();
 			}
 			@Override public void setLiquidInternalEnergies(double[] energies) {
-				var stocks = liquidCells.physicalStocks();
-				if (energies == null || energies.length != stocks.size()) throw new IllegalArgumentException("Liquid energy count differs from inventory");
-				var edits = new ArrayList<LiquidCellInventory.Edit>();
-				for (int ordinal = 0; ordinal < energies.length; ordinal++) {
-					var before = stocks.get(ordinal);
-					if (Double.doubleToLongBits(before.internalEnergy()) != Double.doubleToLongBits(energies[ordinal]))
-						edits.add(new LiquidCellInventory.Edit(before.key(), new LiquidCellInventory.Stock(before.key(), before.volume(),
-							before.massUnits(), before.mixture(), energies[ordinal], before.indicator())));
-				}
-				liquidCells.planEdits(edits).commit();
+				if (energies == null) throw new IllegalArgumentException("Liquid energy column is missing");
+				liquidCells.planPhysicalEnergyUpdate(energies).commit();
 			}
 			@Override public int cell(int ordinal) { return stock(ordinal).key().cell(); }
 			@Override public int nextMarkerInCell(int cell, int after) {

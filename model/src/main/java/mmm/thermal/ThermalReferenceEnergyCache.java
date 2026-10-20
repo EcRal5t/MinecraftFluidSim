@@ -2,44 +2,24 @@ package mmm.thermal;
 
 import mmm.chemistry.ChemicalLimits;
 
-import java.util.concurrent.atomic.AtomicReferenceArray;
+import java.util.IdentityHashMap;
+import java.util.List;
 
-/** Bounded derived species terms shared by state functions bound to one immutable world registry. */
+/** Immutable SI reference coefficients prepared once for the registered species definitions. */
 final class ThermalReferenceEnergyCache {
-	private static final int CAPACITY = 16_384;
-	private final AtomicReferenceArray<Entry> entries = new AtomicReferenceArray<>(CAPACITY);
-	private record Entry(ThermalSpeciesOffset offset, long quanta, double energy) { }
+	private final IdentityHashMap<ThermalSpeciesOffset,Double> coefficients=new IdentityHashMap<>();
+	ThermalReferenceEnergyCache(List<ThermalSpeciesOffset> offsets) {
+		for(var offset:offsets){
+			double coefficient=offset.referenceInternalEnergyJPerMol().divide(ChemicalLimits.QUANTA_PER_MOL).toDouble();
+			if(!Double.isFinite(coefficient))throw new IllegalArgumentException("Species reference energy exceeds its SI coefficient representation");
+			coefficients.put(offset,coefficient);
+		}
+	}
 
 	double energy(ThermalSpeciesOffset offset, long quanta) {
 		if (offset.referenceInternalEnergyJPerMol().isZero()) return 0;
-		long hash = quanta ^ ((long) System.identityHashCode(offset) << 32);
-		hash = (hash ^ (hash >>> 30)) * 0xbf58476d1ce4e5b9L;
-		hash = (hash ^ (hash >>> 27)) * 0x94d049bb133111ebL;
-		int slot = (int) (hash ^ (hash >>> 31)) & (CAPACITY - 1);
-		Entry entry = entries.get(slot);
-		if (entry != null && entry.offset() == offset && entry.quanta() == quanta) return entry.energy();
-		double energy = exactEnergy(offset, quanta);
-		entries.set(slot, new Entry(offset, quanta, energy));
-		return energy;
+		Double coefficient=coefficients.get(offset);
+		if(coefficient==null)throw new IllegalArgumentException("Unregistered species reference energy");
+		return coefficient*quanta;
 	}
-	private static double exactEnergy(ThermalSpeciesOffset offset, long quanta) {
-		var rational = offset.referenceInternalEnergyJPerMol();
-		if (rational.numerator().bitLength() < 64 && rational.denominator().bitLength() < 64) {
-			try {
-				long numerator = Math.multiplyExact(rational.numerator().longValueExact(), quanta);
-				long denominator = Math.multiplyExact(rational.denominator().longValueExact(), ChemicalLimits.QUANTA_PER_MOL);
-				if (numerator != Long.MIN_VALUE) {
-					long a = Math.abs(numerator), b = denominator;
-					while (b != 0) { long remainder = a % b; a = b; b = remainder; }
-					long reducedNumerator = numerator / a, reducedDenominator = denominator / a;
-					// Exact binary64 operands retain the same single quotient rounding as the wide path.
-					if ((Math.abs(reducedNumerator) >>> 53) == 0 && (reducedDenominator >>> 53) == 0) {
-						return (double) reducedNumerator / (double) reducedDenominator;
-					}
-				}
-			} catch (ArithmeticException wide) { /* Retain the bounded exact-rational calculation below. */ }
-		}
-		return rational.multiply(quanta).divide(ChemicalLimits.QUANTA_PER_MOL).toDouble();
-	}
-
 }

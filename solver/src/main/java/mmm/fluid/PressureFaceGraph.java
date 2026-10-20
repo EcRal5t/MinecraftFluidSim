@@ -60,12 +60,21 @@ final class PressureFaceGraph {
 				for (var stock : domain.liquidCells.stocksInCell(cell)) if (stock.key().supportMask() == components[j]) {
 					volume = volume.add(stock.volume()); mass = Math.addExact(mass, stock.massUnits());
 				}
-				if (mass > 0 && capacities[j].signum() > 0
+				if (mass > 0 && capacities[j].signum() > 0 && !hasFiniteGas(cell, components[j])
 						&& capacities[j].subtract(volume).toDouble() <= mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION)
 					fullSupports[cell] |= components[j];
 			}
 			domain.projection.pressureFluid[cell] = fullSupports[cell] != 0;
 		}
+	}
+	private boolean hasFiniteGas(int cell, int support) {
+		var frame = domain.gasState.frame;
+		if (frame == null) return false;
+		for (int bits = support; bits != 0; bits &= bits - 1) {
+			int node = frame.nodeOfPiece(8 * cell + Integer.numberOfTrailingZeros(bits));
+			if (node > 0 && domain.pressureBoundaryView.gasNodeHasContinuumState(node)) return true;
+		}
+		return false;
 	}
 
 	void rebuild(float dt) {

@@ -13,16 +13,8 @@ final class GranularContactCompression {
 	private GranularContactCompression() { }
 
 	static Result solve(double[] mass, double[][] input, Row[] rows, Runnable spend) {
-		double[] impulse = project(mass, input, rows, null, spend);
+		double[] impulse = project(mass, input, rows, spend);
 		return rebuild(mass, input, rows, impulse, spend);
-	}
-
-	/** Every pair correction preserves the mass-weighted center; wall rows carry fixed reactions. */
-	static double[][] positions(double[] mass, double[][] input, Row[] rows,
-	                            double[] minimum, double[] tolerance, Runnable spend) {
-		double[] target = minimum.clone();
-		for (int k = 0; k < rows.length; k++) if (rows[k].second() >= 0) target[k] -= .5 * tolerance[k];
-		return rebuild(mass, input, rows, project(mass, input, rows, target, spend), spend).values();
 	}
 
 	/**
@@ -30,7 +22,7 @@ final class GranularContactCompression {
 	 * The iteration count is independent of conditioning. Unresolved residual motion is handled by
 	 * the next ordinary step and by the shared representative-position resolution.
 	 */
-	private static double[] project(double[] mass, double[][] input, Row[] rows, double[] target, Runnable spend) {
+	private static double[] project(double[] mass, double[][] input, Row[] rows, Runnable spend) {
 		if (mass.length != input.length) throw new IllegalArgumentException("Contact input size mismatch");
 		double[][] values = new double[input.length][3];
 		for (int i = 0; i < mass.length; i++) {
@@ -57,46 +49,13 @@ final class GranularContactCompression {
 			boolean changed = false;
 			for (int visit = 0; visit < rows.length; visit++) {
 				spend.run(); int k = (pass & 1) == 0 ? visit : rows.length - 1 - visit;
-				double next = Math.max(0, impulse[k] - (gap(rows[k], values) - (target == null ? 0 : target[k])) / diagonal[k]);
+				double next = Math.max(0, impulse[k] - gap(rows[k], values) / diagonal[k]);
 				double change = next - impulse[k]; impulse[k] = next; changed |= change != 0;
 				apply(mass, values, rows[k], change);
 			}
 			if (!changed) break;
 		}
 		return impulse;
-	}
-
-	/** Poisson expansion is bounded by the kinetic energy released in compression. */
-	static Result respond(double[] mass, double[][] input, Row[] rows, Result compression,
-	                      double[] restitution, Runnable spend) {
-		if (restitution.length != rows.length) throw new IllegalArgumentException("Contact restitution size mismatch");
-		double[] total = compression.impulses().clone(); boolean expanding = false;
-		for (int k = 0; k < rows.length; k++) {
-			double e = restitution[k];
-			if (!(Double.isFinite(e) && e >= 0 && e <= 1)) throw new IllegalArgumentException("Invalid restitution");
-			total[k] *= 1 + e; expanding |= e * compression.impulses()[k] > 0;
-		}
-		if (!expanding) return compression;
-		var expanded = rebuild(mass, input, rows, total, spend);
-		var correction = solve(mass, expanded.values(), rows, spend);
-		for (int k = 0; k < rows.length; k++) total[k] += correction.impulses()[k];
-		var response = rebuild(mass, input, rows, total, spend);
-		double available = 0, linear = 0, quadratic = 0;
-		for (int i = 0; i < mass.length; i++) for (int a = 0; a < 3; a++) {
-			double c = compression.values()[i][a], d = response.values()[i][a] - c;
-			available += .5 * mass[i] * (input[i][a] - c) * (input[i][a] + c);
-			linear += mass[i] * c * d; quadratic += .5 * mass[i] * d * d;
-		}
-		if (linear + quadratic > Math.max(0, available) && quadratic > 0) {
-			double discriminant = Math.sqrt(linear * linear + 4 * quadratic * Math.max(0, available));
-			double scale = linear >= 0 ? (available <= 0 ? 0 : 2 * available / (linear + discriminant))
-					: (discriminant - linear) / (2 * quadratic);
-			scale = Math.clamp(scale, 0, 1);
-			for (int k = 0; k < rows.length; k++)
-				total[k] = compression.impulses()[k] + scale * (total[k] - compression.impulses()[k]);
-			response = rebuild(mass, input, rows, total, spend);
-		}
-		return response;
 	}
 
 	private static Result rebuild(double[] mass, double[][] input, Row[] rows, double[] impulse, Runnable spend) {

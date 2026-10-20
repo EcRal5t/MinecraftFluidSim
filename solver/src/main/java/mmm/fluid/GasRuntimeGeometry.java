@@ -31,7 +31,10 @@ final class GasRuntimeGeometry {
 		byte[] masks=futureMasks==null?sourceCollisionMasks:futureMasks;
 		if(masks.length!=domain.cellCount)throw new IllegalArgumentException("Future phase collision shape differs");
 		FlipCutCellGeometry cut=null;
-		if(preparedPhase==null||preparedGeometry==null){cut=new FlipCutCellGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);cut.restoreMicroMasks(masks);}
+		if(preparedPhase==null||preparedGeometry==null){
+			cut=domain.geometry.cutCells;
+			if(futureMasks!=null){cut=new FlipCutCellGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);cut.restoreMicroMasks(masks);}
+		}
 		if(preparedPhase==null){phase=new FlipPressurePhaseGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);phase.rebuildOccupancy(occupancy,cut,occupiedSvq);}
 		else phase=preparedPhase;
 		var old=domain.gasState.frame;boolean[] changed=old==null?null:new boolean[domain.cellCount];

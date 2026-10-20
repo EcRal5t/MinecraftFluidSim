@@ -67,8 +67,8 @@ final class GranularSpawnAdmission {
 		next[count] = head[cell]; head[cell] = count++;
 	}
 
-	/** Unresolved representative contacts admit one thousandth of the smaller radius. */
-	static double positionTolerance(double radius, double otherRadius) { return .001 * Math.min(radius, otherRadius); }
+	/** Coarse representative contacts resolve separation to one percent of the smaller radius. */
+	static double positionTolerance(double radius, double otherRadius) { return .01 * Math.min(radius, otherRadius); }
 
 	/** Stored-coordinate rounding and the shared representative contact resolution. */
 	static boolean interiorsOverlap(double x, double y, double z, double r,

@@ -12,6 +12,9 @@ import mmm.granular.GranularCouplingFields;
 import mmm.granular.GranularDepositStore;
 import mmm.granular.GranularLimits;
 import mmm.granular.GranularParcelStore;
+import mmm.granular.GranularSphereGeometry;
+import mmm.granular.GranularMechanics;
+import mmm.granular.SolidVolume;
 import mmm.granular.GranularPhaseTransferEngine;
 import mmm.granular.SolidCompositionPool;
 import mmm.granular.SolidCompositionRecord;
@@ -142,6 +145,12 @@ final class GranularReactionStage {
             continue;
           }
           ensureCandidate();
+          long thermalCap = energyLimitedExtent(cell, rule, plan);
+          if (thermalCap < Math.abs(plan.signedExtent())) {
+            if (thermalCap == 0) { domain.chemicalParcels.markDirtyCell(cell); continue; }
+            plan = domain.granularPhaseTransfer().plan(rule, portions, existing, thermalCap);
+            if (!plan.changed()) continue;
+          }
           if (plan.precipitation()) precipitate(cell, support, rule, plan);
           else dissolve(cell, accessible.selected(), plan);
           candidate.applyLiquid(plan);
@@ -154,6 +163,33 @@ final class GranularReactionStage {
     }
     publish();
     return new FluidDomain.PhaseTransferStats(transfers, precipitated, dissolved, signedVolume);
+  }
+
+  private long energyLimitedExtent(int cell, SolidLiquidReaction rule, GranularPhaseTransferEngine.Plan plan) {
+    long extent = Math.abs(plan.signedExtent());
+    if (domain.thermalState == null) return extent;
+    var thermal = domain.thermalState;
+    var function = thermal.stateFunction();
+    double cold = mmm.thermal.ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K, increase = 0;
+    for (var update : plan.stockUpdates()) {
+      var before = candidate.row(cell).get(update.key());
+      int handle = thermal.thermalMaterialHandleForFluid(update.key().material());
+      increase += function.internalEnergyAtTemperature(handle, Mass.kilograms(update.massUnits()), update.mixture(), domain.chemicalParcels.registry(), cold)
+          - function.internalEnergyAtTemperature(handle, before.massKilograms(), before.mixture(), domain.chemicalParcels.registry(), cold);
+    }
+    int solid = thermal.registry().materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR, rule.solidMaterialId());
+    increase += (plan.precipitation() ? 1 : -1) * function.internalEnergyAtTemperature(solid,
+        Math.abs(plan.signedSolidMass()), plan.transferredComposition().stableAmounts(domain.chemicalParcels.registry()), cold);
+    // A new representative or dissolving bed may lift the moved mass within this cell.
+    increase += Math.abs(plan.signedSolidMass()) * domain.config.gravity() * domain.config.cellSize() * .5;
+    if (increase <= 0) return extent;
+    var inventory = candidate.energyOwners(cell).stream().map(Candidate.EnergyOwner::portion).toList();
+    var current = thermal.preparePhaseCandidateCell(cell, domain.thermalMarkerContext());
+    var available = current.cellEnergy().add(candidate.heatByCell.getOrDefault(cell, SignedDyadic.ZERO))
+        .subtract(SignedDyadic.of(function.inventoryEnergyAtTemperature(inventory, cold)));
+    long batches = Math.min(extent / rule.solidExtentPerBatch(),
+        (long)Math.floor(Math.max(0, available.toDouble()) / increase * (extent / rule.solidExtentPerBatch())));
+    return batches * rule.solidExtentPerBatch();
   }
 
   private boolean canPrecipitate(int cell, int support, SolidLiquidReaction rule) {
@@ -239,25 +275,19 @@ final class GranularReactionStage {
     }
     // A cell bed has one connected pore volume; fixed disjoint micro components retain separate
     // liquids.
-    var bed = deposits().dominantGroup(cell);
-    if (bed != null
-        && bed.materialHandle() == material
-        && LiquidCellInventory.connectedSupports(domain.geometry.cutCells.mask(cell)).size() == 1) {
-      long extent =
-          extent(bed.solidCompositionHandle(), bed.solidVolumeSvq(), bed.massUnits(), rule);
-      if (extent > 0) {
-        total = Math.addExact(total, extent);
-        if (selected == null)
-          selected =
-              new Entity(
-                  true,
-                  cell,
-                  cell,
-                  material,
-                  bed.solidCompositionHandle(),
-                  bed.solidVolumeSvq(),
-                  bed.massUnits(),
-                  extent);
+    if (LiquidCellInventory.connectedSupports(domain.geometry.cutCells.mask(cell)).size() == 1) {
+      var groups = new ArrayList<GranularDepositStore.Group>();
+      deposits().forEachGroupInCell(cell, (c, p, m, composition, volume, mass) -> {
+        if (m == material) groups.add(new GranularDepositStore.Group(m, composition, volume, mass));
+      });
+      for (var bed : groups) {
+        long extent = extent(bed.solidCompositionHandle(), bed.solidVolumeSvq(), bed.massUnits(), rule);
+        if (extent > 0) {
+          total = Math.addExact(total, extent);
+          if (selected == null)
+            selected = new Entity(true, cell, cell, material, bed.solidCompositionHandle(),
+                bed.solidVolumeSvq(), bed.massUnits(), extent);
+        }
       }
     }
     return selected == null ? null : new Accessible(total, selected);
@@ -312,7 +342,7 @@ final class GranularReactionStage {
       float x = (float) (p.x() + (cellCenter(cell, 0) - p.x()) * (mass / combined)),
           y = (float) (p.y() + (oldY - p.y()) * (mass / combined)),
           z = (float) (p.z() + (cellCenter(cell, 2) - p.z()) * (mass / combined));
-      if (!domain.granularCollision.positionValid(x, y, z, volume)
+      if (!candidate.positionValid(x, y, z, volume)
           || !fitsSpheres(x, y, z, volume, index)) continue;
       var merged =
           new GranularParcelStore.Parcel(
@@ -352,16 +382,29 @@ final class GranularReactionStage {
       parcels().overwrite(index, merged);
       return;
     }
-    var position = birthPosition(cell, support, plan.signedSolidSvq());
+    var position =
+        domain.granularCollision.planSpawnPosition(
+            cell % domain.sizeX,
+            cell / domain.sizeX % domain.sizeY,
+            cell / (domain.sizeX * domain.sizeY),
+            plan.signedSolidSvq(),
+            parcels().count(),
+            Float.NaN, Float.NaN, Float.NaN,
+            p -> CellRemapMicroTopology.positionSupport(
+                        domain.geometry.cutCells.mask(cell), domain.config.cellSize(), p.x(), p.y(), p.z())
+                    == support
+                && candidate.positionValid(p.x(), p.y(), p.z(), plan.signedSolidSvq())
+                && fitsSpheres(p.x(), p.y(), p.z(), plan.signedSolidSvq(), -1) ? p : null);
+    if (position == null && depositPrecipitate(cell, material, plan, velocity)) return;
     if (position == null)
       throw new GranularPhaseTransferEngine.BlockedException(
-          "Reactive liquid has no collision-resolved precipitate position");
+          "Reactive solid exceeds available active and bed geometry at cell " + cell);
     int composition = compositions().create(plan.transferredComposition());
     var parcel =
         new GranularParcelStore.Parcel(
-            position[0],
-            position[1],
-            position[2],
+            position.x(),
+            position.y(),
+            position.z(),
             (float) velocity[0],
             (float) velocity[1],
             (float) velocity[2],
@@ -376,6 +419,55 @@ final class GranularReactionStage {
     candidate.activeEnergy.add(0.0);
     candidate.heat(cell, -mass * domain.config.gravity() * (parcel.y() - oldY));
     mechanicalRoundingJoules += .5 * mass * dot(velocity, velocity) - kinetic(parcel);
+  }
+
+  /** Unresolved mineral can join the cell bed without requiring a separate representative sphere. */
+  private boolean depositPrecipitate(
+      int cell, int material, GranularPhaseTransferEngine.Plan plan, double[] velocity) {
+    if (LiquidCellInventory.connectedSupports(domain.geometry.cutCells.mask(cell)).size() != 1)
+      return false;
+    var matching = deposits().matchingGroup(cell, material, group -> group.solidCompositionHandle() != 0
+        && plan.transferredComposition().proportionalTo(
+            compositions().record(group.solidCompositionHandle()),
+            plan.signedSolidSvq(), group.solidVolumeSvq()));
+    int composition = matching == null ? 0 : matching.solidCompositionHandle();
+    var portion = new GranularDepositStore.SolidPortion(
+        material, composition, plan.signedSolidSvq(), plan.signedSolidMassUnits());
+    long open = Math.round(domain.geometry.cutCells.openCellVolume(cell) * SolidVolume.SVQ_PER_CELL);
+    long bulk = deposits().previewCellBulkVolumeAfterAdd(cell, portion);
+    if (bulk > open || !domain.granularCollision.bedGeometryFits(cell, bulk)) return false;
+    double h = domain.config.cellSize();
+    int cx = cell % domain.sizeX, cy = cell / domain.sizeX % domain.sizeY,
+        cz = cell / (domain.sizeX * domain.sizeY);
+    double top = (cy + bulk / (double) SolidVolume.SVQ_PER_CELL) * h;
+    for (int iz = Math.max(0, cz - 1); iz <= Math.min(domain.sizeZ - 1, cz + 1); iz++)
+      for (int iy = Math.max(0, cy - 1); iy <= Math.min(domain.sizeY - 1, cy + 1); iy++)
+        for (int ix = Math.max(0, cx - 1); ix <= Math.min(domain.sizeX - 1, cx + 1); ix++)
+          for (int index : active(domain.cellIndex(ix, iy, iz))) {
+            var p = parcels().parcel(index);
+            if (GranularSphereGeometry.touchesBox(p.x(), p.y(), p.z(),
+                GranularMechanics.representativeRadius(p.solidVolumeSvq(), domain.config.cellSize()),
+                cx * h, cy * h, cz * h, (cx + 1) * h, top, (cz + 1) * h)) return false;
+          }
+    double oldPotential = bedPotential(cell);
+    if (matching == null) composition = compositions().create(plan.transferredComposition());
+    portion = new GranularDepositStore.SolidPortion(
+        material, composition, plan.signedSolidSvq(), plan.signedSolidMassUnits());
+    if (!deposits().tryAdd(cell, portion, open)) {
+      if (matching == null) compositions().release(composition);
+      return false;
+    }
+    if (matching != null)
+      compositions().overwrite(composition,
+          compositions().record(composition).plus(plan.transferredComposition()));
+    var key = new GranularEnergyColumn.DepositKey(cell, material, composition);
+    candidate.depositEnergy.putIfAbsent(key, 0.0);
+    double mass = Mass.kilograms(plan.signedSolidMassUnits());
+    candidate.heat(cell, .5 * mass * dot(velocity, velocity)
+        + mass * domain.config.gravity() * cellCenter(cell, 1)
+        + oldPotential - bedPotential(cell));
+    for (int axis = 0; axis < 3; axis++) candidate.bedImpulse[axis] += mass * velocity[axis];
+    return true;
   }
 
   private void dissolve(int cell, Entity solid, GranularPhaseTransferEngine.Plan plan) {
@@ -461,25 +553,6 @@ final class GranularReactionStage {
         domain.chemicalParcels.registry(), map, source.massResidualUnits());
   }
 
-  private float[] birthPosition(int cell, int support, long volume) {
-    int x = cell % domain.sizeX,
-        y = cell / domain.sizeX % domain.sizeY,
-        z = cell / (domain.sizeX * domain.sizeY);
-    float h = domain.config.cellSize();
-    for (int slot = -1; slot < 8; slot++) {
-      if (slot >= 0 && (support & 1 << slot) == 0) continue;
-      float px = (x + (slot < 0 ? .5F : .25F + .5F * (slot & 1))) * h,
-          py = (y + (slot < 0 ? .5F : .25F + .5F * (slot >> 1 & 1))) * h,
-          pz = (z + (slot < 0 ? .5F : .25F + .5F * (slot >> 2 & 1))) * h;
-      if (domain.granularCollision.positionValid(px, py, pz, volume)
-          && CellRemapMicroTopology.positionSupport(
-                  domain.geometry.cutCells.mask(cell), h, px, py, pz)
-              == support
-          && fitsSpheres(px, py, pz, volume, -1)) return new float[] {px, py, pz};
-    }
-    return null;
-  }
-
   private boolean fitsSpheres(float x, float y, float z, long volume, int excluded) {
     int cell =
         domain.cellIndex(
@@ -544,6 +617,8 @@ final class GranularReactionStage {
         changedRows = new TreeMap<>();
     final GranularParcelStore parcels = domain.granularState.parcels.copy();
     final GranularDepositStore deposits = domain.granularState.deposits.copy();
+    final GranularCollisionGeometry collision = new GranularCollisionGeometry(
+        domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.geometry.cutCells, deposits);
     final SolidCompositionPool compositions = domain.granularState.compositions.copy();
     final long parcelRevision = domain.granularState.parcels.mutationRevision(),
         depositRevision = domain.granularState.deposits.mutationRevision(),
@@ -554,6 +629,7 @@ final class GranularReactionStage {
     final TreeMap<GranularEnergyColumn.DepositKey, Double> depositEnergy = new TreeMap<>();
     final ArrayList<CoherentPhaseStore.Group> coherent = new ArrayList<>();
     final Map<Integer, ArrayList<Integer>> coherentByCell = new HashMap<>();
+    final double[] bedImpulse = new double[3];
     final double[][] momentum = {
       domain.mac.momentumX.clone(), domain.mac.momentumY.clone(), domain.mac.momentumZ.clone()
     };
@@ -575,6 +651,11 @@ final class GranularReactionStage {
               .computeIfAbsent(coherent.get(i).cell(), ignored -> new ArrayList<>())
               .add(i);
       } else for (int i = 0; i < parcels.count(); i++) activeEnergy.add(0.0);
+    }
+
+    boolean positionValid(float x, float y, float z, long volume) {
+      return collision.positionValid(x, y, z,
+          GranularMechanics.representativeRadius(volume, domain.config.cellSize()));
     }
 
     void heat(int cell, double value) {
@@ -724,28 +805,20 @@ final class GranularReactionStage {
       coupling.setFixedCellSvq(fixed);
       coupling.rebuild(parcels, deposits);
       long[] occupied = coupling.copySolidSvq();
-      var volume = new SignedDyadic[domain.cellCount];
-      var capacity = new SignedDyadic[domain.cellCount];
-      var displacement = new SignedDyadic[domain.cellCount];
-      boolean displace = false;
-      for (int cell = 0; cell < volume.length; cell++) {
-        volume[cell] = liquid.exactCellVolume(cell);
-        capacity[cell] =
+      for (int cell = 0; cell < domain.cellCount; cell++) {
+        var capacity =
             SignedDyadic.of(domain.geometry.cutCells.openCellVolume(cell))
                 .subtract(SignedDyadic.of(occupied[cell], -24));
-        if (capacity[cell].signum() < 0)
+        if (capacity.signum() < 0)
           throw new IllegalStateException("Reactive solid exceeds geometric capacity at " + cell);
-        displacement[cell] =
-            volume[cell].compareTo(capacity[cell]) > 0
-                ? volume[cell].subtract(capacity[cell])
-                : SignedDyadic.ZERO;
-        displace |= displacement[cell].signum() > 0 || CellRemapMicroTopology.exceedsCapacity(liquid,cell,domain.geometry.cutCells.mask(cell),capacity[cell]);
       }
       SignedDyadic advectionRoundoff = SignedDyadic.ZERO;
       SignedDyadic advectionHeat = SignedDyadic.ZERO;
       MacMomentumState preparedMomentum;
-      GasVolumeAllocation transportedGas=null;
-      if (displace) {
+      GasVolumeAllocation transportedGas;
+      // Every reactive endpoint uses the same liquid and finite-gas capacity
+      // plan, including volume changes that fit the pore but displace gas.
+      {
         var flux = new ConservativeLiquidFlux(domain);
         flux.prepareDisplacement(occupied,liquid);
         if (domain.cellLiquidVolumeTransport == null)
@@ -760,10 +833,7 @@ final class GranularReactionStage {
         advectionHeat = transportedLiquid.mechanicalHeat();
         transportedGas=transport.gasAllocation();
         transportedLiquid.commit();
-      } else
-        preparedMomentum =
-            new MacMomentumState(
-                domain.sizeX, domain.sizeY, domain.sizeZ, momentum[0], momentum[1], momentum[2]);
+      }
       var edits = new ArrayList<LiquidCellInventory.Edit>();
       for (int cell = 0; cell < domain.cellCount; cell++)
         if (domain.liquidCells.stocksInCell(cell) != liquid.stocksInCell(cell)) {
@@ -777,7 +847,7 @@ final class GranularReactionStage {
       var stockPlan = domain.liquidCells.planEdits(edits);
       var gas =
           domain.gasTopologyCoordinator.planAfterLiquidCells(stockPlan.future(), occupied,
-              transportedGas==null?GasVolumeAllocation.prepare(domain,stockPlan.future(),occupied,null):new GasVolumeAllocation(domain,stockPlan.future(),transportedGas.futureOccupancy(),transportedGas.shares(),transportedGas.preparedPhase(),transportedGas.preparedGeometry()));
+              new GasVolumeAllocation(domain,stockPlan.future(),transportedGas.futureOccupancy(),transportedGas.shares(),transportedGas.preparedPhase(),transportedGas.preparedGeometry()));
       if(domain.thermalState!=null)domain.thermalState.auditLedger().withMechanicalWork(advectionHeat).withRoundoff(advectionRoundoff).expectedInventory();
       stockPlan.requireCurrent();
       domain.granularState.parcels.requirePrepared(parcels, parcelRevision);
@@ -794,6 +864,9 @@ final class GranularReactionStage {
       domain.granularState.compositions.adoptPrepared(compositions, compositionRevision);
       domain.mac.restoreMomentum(preparedMomentum);
       domain.granularCoupling.copyFrom(coupling);
+      domain.lastGranularBoundaryImpulseX += bedImpulse[0];
+      domain.lastGranularBoundaryImpulseY += bedImpulse[1];
+      domain.lastGranularBoundaryImpulseZ += bedImpulse[2];
       if (energyPlan != null) {
         solidEnergy.commit();
         domain.thermalState.commitOwnedBatchEnergy(energyPlan);
@@ -817,51 +890,24 @@ final class GranularReactionStage {
 
     List<EnergyOwner> energyOwners(int cell) {
       var result = new ArrayList<EnergyOwner>();
-      for (var stock : liquid.physicalStocksInCell(cell))
-        result.add(
-            new EnergyOwner(
-                0,
-                stock.key(),
-                -1,
-                null,
-                null,
-                new ThermalStateFunction.InventoryPortion(
-                    domain.thermalState.thermalMaterialHandleForFluid(stock.key().material()),
-                    stock.massKilograms(),
-                    stock.mixture() == null
-                        ? Map.of()
-                        : stock.mixture().stableAmounts(domain.chemicalParcels.registry()))));
+      for (var stock : physicalStocks(cell))
+        result.add(new EnergyOwner(0, stock.key(), -1, null, null,
+            new ThermalStateFunction.InventoryPortion(
+                domain.thermalState.thermalMaterialHandleForFluid(stock.key().material()), stock.massKilograms(),
+                stock.mixture() == null ? Map.of() : stock.mixture().stableAmounts(domain.chemicalParcels.registry()))));
       for (int i : active(cell)) {
         var p = parcels.parcel(i);
-        result.add(
-            new EnergyOwner(
-                1,
-                null,
-                i,
-                null,
-                null,
-                solidPortion(p.materialHandle(), p.massUnits(), p.solidCompositionHandle())));
+        result.add(new EnergyOwner(1, null, i, null, null,
+            solidPortion(p.materialHandle(), p.massUnits(), p.solidCompositionHandle())));
       }
-      deposits.forEachGroupInCell(
-          cell,
-          (c, porosity, material, composition, volume, mass) -> {
-            var key = new GranularEnergyColumn.DepositKey(c, material, composition);
-            result.add(
-                new EnergyOwner(2, null, -1, key, null, solidPortion(material, mass, composition)));
-          });
+      deposits.forEachGroupInCell(cell, (c, porosity, material, composition, volume, mass) ->
+          result.add(new EnergyOwner(2, null, -1, new GranularEnergyColumn.DepositKey(c, material, composition),
+              null, solidPortion(material, mass, composition))));
       for (int i : coherentByCell.getOrDefault(cell, new ArrayList<>())) {
         var group = coherent.get(i);
-        result.add(
-            new EnergyOwner(
-                3,
-                null,
-                i,
-                null,
-                group,
-                new ThermalStateFunction.InventoryPortion(
-                    domain.thermalState.registry().materialHandle(group.phaseId()),
-                    group.mass(),
-                    group.composition() == null ? Map.of() : group.composition().stableAmounts())));
+        result.add(new EnergyOwner(3, null, i, null, group, new ThermalStateFunction.InventoryPortion(
+            domain.thermalState.registry().materialHandle(group.phaseId()), group.mass(),
+            group.composition() == null ? Map.of() : group.composition().stableAmounts())));
       }
       return result;
     }

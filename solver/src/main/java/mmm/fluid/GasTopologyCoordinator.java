@@ -159,17 +159,14 @@ final class GasTopologyCoordinator {
 						.partitionEnergy(inventory(node, edit), energy(node, edit), parts)
 				: domain.thermalState.partitionGasNodeEnergy(node, parts, domain.gasState.network);
 	}
-	GasTopologyPlan planFromFreshScan() {
+	GasTopologyPlan planAfterOperatorClear(LiquidCellInventory future) {
 		domain.ensureInventoryGrid();
-		var empty=new LiquidCellInventory(domain.cellCount,domain.liquidCells.chemicalRegistry());
-		if(domain.gasState.frame==null)return plan(GasRuntimeGeometry.allDry(domain,domain.gasState.sealedDomainBoundary),false,null,null);
-		return planCells(empty,new long[domain.cellCount],null,false,null,null);
+		return planCells(future,new long[domain.cellCount],null,false,null,null);
 	}
-	GasTopologyPlan planAfterCondensedClear() {
+	GasTopologyPlan planAfterCondensedClear(LiquidCellInventory future) {
 		var retained=new GranularCouplingFields(domain.sizeX,domain.sizeY,domain.sizeZ,domain.config.cellSize());
 		if(domain.granularState!=null)retained.rebuild(domain.granularState.parcels,domain.granularState.deposits);
-		return planCells(new LiquidCellInventory(domain.cellCount,domain.liquidCells.chemicalRegistry()),
-				retained.copySolidSvq(),null,false,null,null);
+		return planCells(future,retained.copySolidSvq(),null,false,null,null);
 	}
 
 	/** Each allocated gas volume has one origin; inventory, energy and old control volume share it. */
@@ -277,9 +274,21 @@ final class GasTopologyCoordinator {
 			throw new IllegalStateException("Gas phase transport source changed before remapping");
 		var result=new TreeMap<Integer,TreeMap<Integer,Double>>();
 		boolean[] owned=new boolean[next.nodeCount()+1];
+		int[] targetOwners=new int[8*domain.cellCount];Arrays.fill(targetOwners,-1);
+		for(var component:next.capacity().components())if(component.availableVolumeNormalized().signum()>0){
+			int owner=-1;
+			for(int bits=component.supportMask();bits!=0;bits&=bits-1){
+				owner=next.nodeOfPiece(8*component.cell()+Integer.numberOfTrailingZeros(bits));
+				if(owner>=0)break;
+			}
+			if(owner<0)throw new IllegalStateException("Positive gas component has no future dry occupation");
+			for(int bits=component.supportMask();bits!=0;bits&=bits-1)
+				targetOwners[8*component.cell()+Integer.numberOfTrailingZeros(bits)]=owner;
+		}
 		for(var share:allocation.shares()) {
-			int target=next.nodeOfPiece(share.targetPiece());
-			if(target<0)throw new IllegalStateException("Positive gas phase transfer has no future micro occupation");
+			// Source shares belong to a fixed pore component; its PLIC may move the dry micro view.
+			int target=targetOwners[share.targetPiece()];
+			if(target<0)throw new IllegalStateException("Positive gas phase transfer has no future component capacity");
 			owned[target]=true;
 			int source=switch(share.kind()){case EXISTING->share.sourceNode();case AMBIENT->0;case EXPLICIT_VACUUM->-1;};
 			result.computeIfAbsent(source,ignored->new TreeMap<>()).merge(target,share.volume(),Double::sum);

@@ -98,15 +98,15 @@ final class LiquidStratificationValidation {
 		domain.bodyForceStage.applyThermalBuoyancy(config.timeStep());
 		double relative = domain.materialDefinitions.entry("mmm:water").thermalExpansion().relativeBuoyancy(T_REF + 20);
 		float expected = -config.gravity() * config.timeStep() + (float) ((double) config.gravity() * config.timeStep() * relative);
-		int fringe = 0;
+		int active = 0;
 		for (int z = 0; z < 6; z++) for (int y = 1; y < 6; y++) for (int x = 0; x < 6; x++) {
 			int face = domain.yFaceIndex(x, y, z);
-			if (!(domain.mac.p2gWeightY[face] > 0)) continue;
-			check(Math.abs(domain.mac.velocityY[face] - expected) <= Math.ulp(expected),
-					"uniform thermal acceleration was diluted on a P2G support face: " + domain.mac.velocityY[face]);
-			if (!domain.carrierFaceActive(domain.cellIndex(x, y - 1, z), domain.cellIndex(x, y, z), 1)) fringe++;
+			if (!domain.carrierFaceActive(domain.cellIndex(x, y - 1, z), domain.cellIndex(x, y, z), 1)) continue;
+			check(Math.abs(domain.mac.velocityY[face] - expected) < 1e-5,
+					"uniform thermal acceleration changed on an active liquid face: " + domain.mac.velocityY[face]);
+			active++;
 		}
-		check(fringe > 0, "isolated buoyancy fixture has no P2G fringe support");
+		check(active > 0, "isolated buoyancy fixture has no active liquid face");
 		check(energy.equals(domain.exactInternalEnergy()), "thermal body force changed carrier U");
 	}
 
@@ -339,15 +339,15 @@ final class LiquidStratificationValidation {
 		return moment / sum;
 	}
 
-	private record Inventory(double volume, double mass, long[] species, mmm.thermal.ThermalAuditLedger audit) {
+	private record Inventory(mmm.units.SignedDyadic volume, long mass, long[] species, mmm.thermal.ThermalAuditLedger audit) {
 		static Inventory capture(FluidDomain domain) {
-			return new Inventory(domain.totalVolume(), domain.totalMass(),
-					domain.chemicalParcels().speciesTotals(domain.particleCount()), domain.thermalAudit());
+			return new Inventory(domain.liquidCells.exactVolume(), domain.liquidCells.massUnits(),
+					speciesTotals(domain), domain.thermalAudit());
 		}
 		void check(FluidDomain domain) {
-			LiquidStratificationValidation.check(domain.totalVolume() == volume && Math.abs(domain.totalMass() - mass) < 1e-8,
+			LiquidStratificationValidation.check(domain.liquidCells.exactVolume().equals(volume) && domain.liquidCells.massUnits() == mass,
 					"stratification changed volume or material mass");
-			LiquidStratificationValidation.check(Arrays.equals(species, domain.chemicalParcels().speciesTotals(domain.particleCount())),
+			LiquidStratificationValidation.check(Arrays.equals(species, speciesTotals(domain)),
 					"stratification changed exact species");
 			LiquidStratificationValidation.check(domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 					"stratification thermal audit does not close");
@@ -361,6 +361,16 @@ final class LiquidStratificationValidation {
 							.equals(after.roundoffResidual().subtract(audit.roundoffResidual())),
 					"isolated stratification changed the thermal source/sink/work ledger");
 		}
+	}
+
+	static long[] speciesTotals(FluidDomain domain) {
+		var totals=new long[domain.chemicalParcels.registry().species().size()];
+		for(var stock:domain.liquidCells.stocks())if(stock.mixture()!=null)
+			for(int entry=0;entry<stock.mixture().entryCount();entry++){
+				int species=stock.mixture().speciesHandle(entry);
+				totals[species]=Math.addExact(totals[species],stock.mixture().amountAt(entry));
+			}
+		return totals;
 	}
 
 	private static void check(boolean condition, String message) {

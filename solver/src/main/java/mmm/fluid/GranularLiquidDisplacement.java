@@ -3,7 +3,6 @@ package mmm.fluid;
 import mmm.inventory.LiquidCellInventory;
 
 import mmm.granular.SolidVolume;
-import mmm.granular.GranularLimits;
 import mmm.units.SignedDyadic;
 import java.util.Arrays;
 
@@ -28,7 +27,7 @@ final class GranularLiquidDisplacement {
 		}
 	}
 	static long[] begin(FluidDomain domain) {
-		if (domain.liquidCells.size() == 0 || !domain.hasGranularInventory()) return null;
+		if (!domain.hasGranularInventory()) return null;
 		domain.ensureInventoryGrid();
 		domain.granularCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits);
 		return domain.granularCoupling.copySolidSvq();
@@ -64,28 +63,17 @@ final class GranularLiquidDisplacement {
 			throw new IllegalArgumentException("Solid transition requires complete source and future occupancy");
 		if (Arrays.equals(previous, next)) return null;
 		var flux = new ConservativeLiquidFlux(domain);
-		var volume = new SignedDyadic[domain.cellCount];
-		var capacity = new SignedDyadic[domain.cellCount]; var displaced = new SignedDyadic[domain.cellCount];
-		long totalBefore = 0, totalAfter = 0; boolean componentOverfull=false;
-		for (int cell = 0; cell < volume.length; cell++) {
-			volume[cell] = domain.liquidCells.exactCellVolume(cell);
+		long totalBefore = 0, totalAfter = 0;
+		for (int cell = 0; cell < domain.cellCount; cell++) {
 			if (previous[cell] < 0 || next[cell] < 0) throw new IllegalArgumentException("Solid occupation cannot be negative");
 			totalBefore = Math.addExact(totalBefore, previous[cell]); totalAfter = Math.addExact(totalAfter, next[cell]);
 			var open = SignedDyadic.of(domain.geometry.cutCells.openCellVolume(cell));
-			var old = open.subtract(solidVolume(previous[cell])); capacity[cell] = open.subtract(solidVolume(next[cell]));
-			if (volume[cell].compareTo(old) > 0 || capacity[cell].signum() < 0)
+			var old = open.subtract(solidVolume(previous[cell]));
+			if (domain.liquidCells.exactCellVolume(cell).compareTo(old) > 0 || open.compareTo(solidVolume(next[cell])) < 0)
 				throw new IllegalStateException("Solid transition requires valid source capacity at cell " + cell);
-			componentOverfull |= CellRemapMicroTopology.exceedsCapacity(domain.liquidCells,cell,domain.geometry.cutCells.mask(cell),capacity[cell]);
-			if (insertion) displaced[cell] = volume[cell].compareTo(capacity[cell]) > 0 ? volume[cell].subtract(capacity[cell]) : SignedDyadic.ZERO;
-			else if (next[cell] > previous[cell] && volume[cell].signum() > 0) {
-				displaced[cell] = SignedDyadic.of(solidVolume(next[cell] - previous[cell]).toDouble() * (volume[cell].toDouble() / old.toDouble()));
-				if (displaced[cell].compareTo(volume[cell]) > 0) displaced[cell] = volume[cell];
-			} else displaced[cell] = SignedDyadic.ZERO;
 		}
 		if (insertion ? totalAfter < totalBefore : totalBefore != totalAfter)
 			throw new IllegalStateException("Solid displacement changed skeleton quantity outside its operation");
-		boolean changed = componentOverfull; for (var amount : displaced) changed |= amount.signum() > 0;
-		if (!changed) return null;
 		try { flux.prepareDisplacement(next,domain.liquidCells); }
 		catch (MechanicalTimeRefinement | ConservativeLiquidFlux.CapacityUnavailable unavailable) { throw new CapacityUnavailable(unavailable); }
 		if (domain.cellLiquidVolumeTransport == null) domain.cellLiquidVolumeTransport = new CellLiquidVolumeTransport(domain);
