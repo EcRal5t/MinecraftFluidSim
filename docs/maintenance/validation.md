@@ -416,6 +416,8 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 预算后修改涉及冷恢复原子性、无可选黏性定义时的热浮力温度准备，以及局部热分配的线性化处理。完整材料定义下的力学与输运主干沿用上述预算结果；后两项的热学后继按表中入口覆盖。有九成把握的未受影响部分复用已有结果，未重复整组或长流程。
 
+最终实现提交为 `804277e`。`review2-thermal-assignment.log` 已实际重编译受影响的 model、solver、app、fabric 生产与测试源码并通过末项；随后 `review2-final-manifest.log` 以 `:fabric:runCpuValidation -PcpuValidation=list` 导出同一正式产物的元数据，源码 SHA-256 `93abba40bd5336d45298c88ac92aec55772d7a453c83f3acfed07afbad0f8dc4`，本地产物 SHA-256 `e3016c2bb53c8ee9b899d57009a0209133a76766f14d4efc2a1fa9994561c852`。`list` 仅导出选择器与构建身份，其通过状态用于说明构建与来源。
+
 5,000 步溃坝在第 1,000–5,000 步的 RMS 速度为 0.091–0.106 m/s，动能 112–152 J，后段保持有界。静水与压力误差按共享的 `FluidPhysicalAssertions` 评价宏观水头、动能和库存质心；整数质量、物种、体积及内能交接继续使用原精确断言。
 
 `runCpuValidation` 在执行前输出 Git 版本、源码与本地 classpath 产物 SHA-256、JVM、堆限制、断言开关、选择器和完整 classpath。源码摘要包含五个 CPU 模块的源码、资源及构建配置。增量构建按内容判定；换行转换导致的时间戳变化不能单独判断产物是否过期。
