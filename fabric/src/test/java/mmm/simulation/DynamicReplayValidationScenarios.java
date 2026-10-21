@@ -541,9 +541,9 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			require(Double.isFinite(domain.totalVolumeExact()) && domain.totalVolumeExact() > 0.0
 					&& Double.isFinite(domain.totalMass()) && domain.totalMass() > 0.0,
 					"dam-break production step produced invalid liquid inventory");
-			System.out.printf("  dam-break live step %d: %.3f ms (CPU %.3f ms), liquidStocks=%d, volume=%.9f, "
+			System.out.printf("  dam-break live step %d: %.3f ms (CPU %.3f ms), liquidStocks=%d, gasNodes=%d, volume=%.9f, "
 					+ "substeps=%d, PCG=%d, residual=%.6g, phase=%d%n",
-					generation + 1, elapsedMillis, cpuMillis, domain.particleCount(),
+					generation + 1, elapsedMillis, cpuMillis, domain.particleCount(),domain.gasBoundary().nodeCount(),
 					domain.totalVolumeExact(), candidate.stats().substeps(),
 					candidate.stats().pressureIterations(), candidate.stats().pressureResidual(), phaseOperations);
 		}

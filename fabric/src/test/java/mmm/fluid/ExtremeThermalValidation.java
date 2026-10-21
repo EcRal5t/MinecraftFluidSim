@@ -20,14 +20,15 @@ public final class ExtremeThermalValidation {
 					240, 1.0E-4F, 2.0E-3F, 0.80F);
 			FluidDomain domain = new FluidDomain(4, 4, 4, config, 4096);
 			domain.sealDomainBoundary();
-			// High pressure retains its original intensity in one half-liquid cell;
-			// the smaller real cavity keeps gas mass within the integer inventory range.
+			// A connected four-cell chamber retains a liquid pressure field while
+			// keeping the cold high-pressure gas mass inside the integer inventory range.
 			if (pressure >= 1.0E12) {
 				for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
-					domain.setSolid(x, y, z, x != 1 || y != 1 || z != 1);
+					domain.setSolid(x, y, z, y != 1 || x < 1 || x > 2 || z < 1 || z > 2);
 				}
 			}
-			domain.setVolume(1, 1, 1, 0.5F);
+			int side=pressure>=1.0E12?2:1;
+			for(int z=1;z<=side;z++)for(int x=1;x<=side;x++)domain.setVolume(x,1,z,0.5F);
 			for (int marker = 0; marker < domain.particleCount(); marker++) {
 				domain.domainCollision.setMarkerMaterial(marker, registries.liquids(), 0);
 			}
@@ -40,7 +41,7 @@ public final class ExtremeThermalValidation {
 			domain.bindGranular(registries.granular(), registries.liquids(), registries.materials());
 			domain.setPrecipitationEnabled(true);
 			domain.bindThermal(registries.thermal(), registries.liquids(), 293.15, 8);
-			domain.setThermalTemperatureInCell(1, 1, 1, temperature);
+			for(int z=1;z<=side;z++)for(int x=1;x<=side;x++)domain.setThermalTemperatureInCell(x,1,z,temperature);
 			var snapshot = domain.exportThermalParticleState();
 			double gasEnergy = new GasThermalModel(registries.thermal(), registries.gas())
 					.internalEnergyAtTemperature(domain.gasBoundary().inventory(1), temperature);
@@ -50,7 +51,7 @@ public final class ExtremeThermalValidation {
 					registries.thermal().fingerprint(), snapshot.insertionTemperatureK(), snapshot.copyInternalEnergy(), new double[0], new double[0],
 					List.of(), new double[] {gasEnergy}, snapshot.audit().withHeatExchange(delta)), domain.domainCapabilities.thermalMarkerContext(), domain.gasState.network);
 			double actualPressure = GasRegistry.STANDARD_PRESSURE_PA + domain.thermalState.gasGaugePressure(1, domain.gasState.network);
-			ThermalValidationSupport.require(actualPressure > 0.5 * pressure && actualPressure < 1.5 * pressure,
+			ThermalValidationSupport.require(Math.abs(actualPressure-pressure)<=0.01*pressure,
 					"extreme fixture did not establish the requested pressure");
 
 			var backend = new CpuFluidSolverBackend();

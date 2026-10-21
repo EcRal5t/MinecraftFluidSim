@@ -18,6 +18,7 @@ final class PhaseQuantitySettlement {
         private int[] sourceAt=new int[0],firstStock=new int[0],nextStock=new int[0];
         private SignedDyadic[] volume=new SignedDyadic[0];
 		private double[] numericalVolume=new double[0];
+		private boolean[] alternativesPrepared=new boolean[0];
         private int[] source=new int[32],target=new int[32],support=new int[32],face=new int[32],next=new int[32];
         private double[] preferred=new double[32];
         private int[] head=new int[0],retained=new int[0];
@@ -40,13 +41,13 @@ final class PhaseQuantitySettlement {
             if(sourceAt.length<slots)sourceAt=new int[slots];
             Arrays.fill(sourceAt,0,slots,-1);
             if(firstStock.length<values.size()){
-                int n=values.size();firstStock=new int[n];nextStock=new int[n];volume=new SignedDyadic[n];numericalVolume=new double[n];
+                int n=values.size();firstStock=new int[n];nextStock=new int[n];volume=new SignedDyadic[n];numericalVolume=new double[n];alternativesPrepared=new boolean[n];
                 head=new int[n];retained=new int[n];preferredTotal=new double[n];
             }
             for(int i=0;i<values.size();i++){
                 var stock=values.get(i);int slot=slot(stock.key()),s=sourceAt[slot];
                 if(s<0){
-                    sourceAt[slot]=s=sources++;firstStock[s]=-1;volume[s]=SignedDyadic.ZERO;numericalVolume[s]=Double.NaN;
+                    sourceAt[slot]=s=sources++;firstStock[s]=-1;volume[s]=SignedDyadic.ZERO;numericalVolume[s]=Double.NaN;alternativesPrepared[s]=false;
                     head[s]=retained[s]=-1;preferredTotal[s]=0;
                 }
                 nextStock[i]=firstStock[s];firstStock[s]=i;volume[s]=volume[s].add(stock.volume());
@@ -57,6 +58,9 @@ final class PhaseQuantitySettlement {
 		double outgoing(int source){return preferredTotal[source];}
         LiquidCellInventory.Key key(int s){return stocks.get(firstStock[s]).key();}
         double volume(int s){double value=numericalVolume[s];if(Double.isNaN(value))numericalVolume[s]=value=volume[s].toDouble();return value;}
+        void prepareAlternatives(int source,IntConsumer alternatives){
+            if(!alternativesPrepared[source]){alternatives.accept(source);alternativesPrepared[source]=true;}
+        }
         void add(int ordinal,int sharedFace,int cell,int supportMask,double preference){
             if(!(preference>=0&&Double.isFinite(preference)))throw new IllegalArgumentException("Invalid liquid volume preference");
             if(size==source.length){int n=2*size;source=Arrays.copyOf(source,n);target=Arrays.copyOf(target,n);support=Arrays.copyOf(support,n);face=Arrays.copyOf(face,n);next=Arrays.copyOf(next,n);preferred=Arrays.copyOf(preferred,n);}
@@ -104,14 +108,14 @@ final class PhaseQuantitySettlement {
             touched[touchedCount++]=slot;loadTerms[slot]=1;
         }
         CapacityForest forest=null;
-        if(lower!=null)for(int s=0;s<raw.sources;s++){
-            int slot=slot(raw.key(s));
-            if(lower[slot]==null||lower[slot].signum()==0)continue;
-            double low=lower[slot].toDouble(),high=upper[slot].toDouble();
+        for(int i=0;i<touchedCount;i++){
+            int slot=touched[i];
+            double low=lower==null||lower[slot]==null?0:lower[slot].toDouble(),high=upper[slot].toDouble();
             double endpoint=Math.clamp(load[slot],low,high);
             if(exceedsAccumulationError(load[slot],endpoint,loadTerms[slot])){
-                forest=new CapacityForest(raw,lower);
-                touchedCount=forest.project(raw,numerical,load,lower,upper,loadTerms,touched,touchedCount);break;
+                forest=new CapacityForest(raw,lower,upper,numerical,load,alternatives);
+                if(numerical.length<raw.size)numerical=Arrays.copyOf(numerical,raw.size);
+                touchedCount=forest.project(numerical,load,loadTerms,touched,touchedCount);break;
             }
         }
         boolean adjust=false;
@@ -155,9 +159,12 @@ final class PhaseQuantitySettlement {
             exactLoad[slot]=SignedDyadic.ZERO;touched[touchedCount++]=slot;
         }
         adjust=requiresCommitRepair(exactLoad,upper,lower,receiverGroup,exactGroupLoad,groupUpper,touched,touchedCount);
-        if(adjust&&lower!=null&&hasCapacityDefect(raw,exactLoad,lower,upper)){
-            if(forest==null)forest=new CapacityForest(raw,lower);
-            amount=forest.commit(raw,amount,exactLoad,lower,upper);
+        if(adjust&&hasCapacityDefect(exactLoad,lower,upper,touched,touchedCount)){
+            if(forest==null){
+                for(int i=0;i<touchedCount;i++)load[touched[i]]=exactLoad[touched[i]].toDouble();
+                forest=new CapacityForest(raw,lower,upper,numerical,load,alternatives);
+            }
+            amount=forest.commit(amount,exactLoad);
             touchedCount=0;
             for(int slot=0;slot<exactLoad.length;slot++)if(exactLoad[slot]!=null)touched[touchedCount++]=slot;
             Arrays.fill(exactGroupLoad,SignedDyadic.ZERO);
@@ -191,96 +198,251 @@ final class PhaseQuantitySettlement {
     private static boolean exceedsAccumulationError(double amount,double bound,int terms){
         return Math.abs(amount-bound)>Math.ulp(Math.max(Math.abs(amount),Math.abs(bound)))*(terms+2.0);
     }
-    private static boolean hasCapacityDefect(RouteBuffer raw,SignedDyadic[] load,SignedDyadic[] lower,SignedDyadic[] upper){
-        for(int s=0;s<raw.sources;s++){
-            int slot=slot(raw.key(s));
-            if(lower[slot]!=null&&lower[slot].signum()>0){
-                var amount=value(load[slot]);if(amount.compareTo(lower[slot])<0||amount.compareTo(upper[slot])>0)return true;
-            }
+    private static boolean hasCapacityDefect(SignedDyadic[] load,SignedDyadic[] lower,SignedDyadic[] upper,int[] touched,int touchedCount){
+        for(int i=0;i<touchedCount;i++){
+            int slot=touched[i];var amount=load[slot];
+            if(amount.compareTo(upper[slot])>0||lower!=null&&lower[slot]!=null&&amount.compareTo(lower[slot])<0)return true;
         }
         return false;
     }
 
-    /** Physical component routes define one bounded-volume forest for numerical projection and exact submission. */
+    /** All donor supports share one bounded tree; source-free receivers provide real spill storage. */
     private static final class CapacityForest {
-        private final int[] parent,edge,order;
-        private int count;
-        CapacityForest(RouteBuffer raw,SignedDyadic[] lower){
-            int[] incoming=new int[raw.sources],next=new int[raw.size];Arrays.fill(incoming,-1);
+        private final RouteBuffer raw;
+        private final SignedDyadic[] lower,upper;
+        private final int[] own,parent,order,firstChild,nextChild,toParent,fromParent;
+        private final int[] emptySlots,firstIncoming,nextIncoming,spillHead,spillNext,spillRoute;
+        private final double[] sourceLow,sourceHigh;
+        private int emptyCount,count;
+        private double[] numerical,load,accept,release;
+        private int[] terms,touched;
+        private int touchedCount;
+        private SignedDyadic[] exact,exactLoad,exactAccept,exactRelease;
+
+        CapacityForest(RouteBuffer raw,SignedDyadic[] lower,SignedDyadic[] upper,double[] amount,double[] load,IntConsumer alternatives){
+            this.raw=raw;this.lower=lower;this.upper=upper;
+            int n=raw.sources;
+            for(int s=0;s<n;s++)raw.prepareAlternatives(s,alternatives);
+            own=new int[n];parent=new int[n];order=new int[n];firstChild=new int[n];nextChild=new int[n];
+            toParent=new int[n];fromParent=new int[n];sourceLow=new double[n];sourceHigh=new double[n];
+            spillHead=new int[n];spillNext=new int[upper.length];spillRoute=new int[upper.length];
+            firstIncoming=new int[upper.length];nextIncoming=new int[raw.size];emptySlots=new int[raw.size];
+            Arrays.fill(firstChild,-1);Arrays.fill(spillHead,-1);Arrays.fill(spillRoute,-1);Arrays.fill(firstIncoming,-1);
+            int[] component=new int[n],best=new int[n],incoming=new int[n],nextSource=new int[raw.size];
+            Arrays.fill(best,-1);Arrays.fill(incoming,-1);
+            for(int s=0;s<n;s++){
+                own[s]=slot(raw.key(s));component[s]=s;
+                sourceLow[s]=minimum(own[s]).toDouble();sourceHigh[s]=upper[own[s]].toDouble();
+            }
             for(int r=0;r<raw.size;r++){
-                int target=raw.sourceAt[raw.target[r]];
-                if(target>=0&&target!=raw.source[r]){next[r]=incoming[target];incoming[target]=r;}
+                int s=raw.source[r],target=raw.sourceAt[raw.target[r]];
+                if(target>=0){
+                    if(target==s)continue;
+                    int a=root(component,s),b=root(component,target);if(a!=b)component[a]=b;
+                    nextSource[r]=incoming[target];incoming[target]=r;
+                }else{
+                    int slot=raw.target[r];if(firstIncoming[slot]<0)emptySlots[emptyCount++]=slot;
+                    nextIncoming[r]=firstIncoming[slot];firstIncoming[slot]=r;
+                    int previous=spillRoute[slot];
+                    if(previous<0||initial(amount,raw.retained[s])+initial(amount,r)
+                            >initial(amount,raw.retained[raw.source[previous]])+initial(amount,previous))spillRoute[slot]=r;
+                }
             }
-            parent=new int[raw.sources];edge=new int[raw.sources];order=new int[raw.sources];
-            Arrays.fill(parent,-2);int visited=0;
-            for(int s=0;s<raw.sources;s++){
-                int slot=slot(raw.key(s));
-                if(lower[slot]==null||lower[slot].signum()==0){parent[s]=-1;order[count++]=s;}
+            for(int i=0;i<emptyCount;i++){
+                int slot=emptySlots[i],s=raw.source[spillRoute[slot]];spillNext[slot]=spillHead[s];spillHead[s]=slot;
             }
-            for(int seed=-1;seed<raw.sources;seed++){
-                if(seed>=0&&parent[seed]==-2){parent[seed]=-1;order[count++]=seed;}
-                while(visited<count){
-                    int s=order[visited++];
-                    for(int pass=0;pass<2;pass++)for(int r=pass==0?raw.head[s]:incoming[s];r>=0;r=pass==0?raw.next[r]:next[r]){
-                        int child=pass==0?raw.sourceAt[raw.target[r]]:raw.source[r];
-                        if(child<0||parent[child]!=-2)continue;
-                        parent[child]=s;edge[child]=r;order[count++]=child;
-                    }
+            double[] score=new double[n];
+            for(int s=0;s<n;s++){
+                double spill=0;
+                for(int r=raw.head[s];r>=0;r=raw.next[r])if(raw.sourceAt[raw.target[r]]<0)
+                    spill+=Math.max(0,upper[raw.target[r]].toDouble()-load[raw.target[r]]);
+                score[s]=Math.max(0,sourceHigh[s]-load[own[s]])+Math.min(spill,initial(amount,raw.retained[s]));
+                int c=root(component,s),previous=best[c];
+                if(previous<0||score[s]>score[previous]||score[s]==score[previous]
+                        &&initial(amount,raw.retained[s])>initial(amount,raw.retained[previous]))best[c]=s;
+            }
+            Arrays.fill(parent,-2);
+            for(int s:best)if(s>=0){parent[s]=-1;order[count++]=s;}
+            int[] treeFace=new int[n];int visited=0;
+            while(visited<count){
+                int s=order[visited++];
+                for(int pass=0;pass<2;pass++)for(int r=pass==0?raw.head[s]:incoming[s];r>=0;r=pass==0?raw.next[r]:nextSource[r]){
+                    int child=pass==0?raw.sourceAt[raw.target[r]]:raw.source[r];
+                    if(child<0||parent[child]!=-2)continue;
+                    parent[child]=s;treeFace[child]=raw.face[r];order[count++]=child;
+                }
+            }
+            for(int s=0;s<n;s++)if(parent[s]>=0){
+                int p=parent[s],face=treeFace[s];
+                raw.alternative(s,face,own[p]/8,raw.key(p).supportMask());
+                raw.alternative(p,face,own[s]/8,raw.key(s).supportMask());
+                toParent[s]=route(s,own[p],face);fromParent[s]=route(p,own[s],face);
+                nextChild[s]=firstChild[p];firstChild[p]=s;
+            }
+        }
+        private static double initial(double[] amount,int r){return r<amount.length?amount[r]:0;}
+        private static int root(int[] component,int s){
+            int r=s;while(component[r]!=r)r=component[r];
+            while(component[s]!=s){int next=component[s];component[s]=r;s=next;}return r;
+        }
+        private SignedDyadic minimum(int slot){return lower==null||lower[slot]==null?SignedDyadic.ZERO:lower[slot];}
+        private int route(int source,int target,int face){
+            for(int r=raw.head[source];r>=0;r=raw.next[r])if(raw.target[r]==target&&raw.face[r]==face)return r;
+            throw new IllegalStateException("Capacity tree lost its open component route");
+        }
+        private double low(int slot){int s=raw.sourceAt[slot];return s<0?minimum(slot).toDouble():sourceLow[s];}
+        private double high(int slot){int s=raw.sourceAt[slot];return s<0?upper[slot].toDouble():sourceHigh[s];}
+        private double numericalNeed(int s){
+            double current=load[own[s]],target=Math.clamp(current,sourceLow[s],sourceHigh[s]);
+            return exceedsAccumulationError(current,target,terms[own[s]])?target-current:0;
+        }
+        private void moveLoad(int from,int to,double amount){
+            if(amount==0)return;
+            load[from]-=amount;load[to]+=amount;
+            if(terms[from]==0)touched[touchedCount++]=from;
+            if(terms[to]==0)touched[touchedCount++]=to;
+            int operations=addTerms(addTerms(terms[from],terms[to]),8);terms[from]=terms[to]=operations;
+        }
+        /** A positive shift moves volume from the parent receiver to its child receiver. */
+        private double shift(int child,double wanted){
+            int p=parent[child];boolean increase=wanted>0;double need=Math.abs(wanted);
+            int cancel=increase?toParent[child]:fromParent[child],retained=increase?raw.retained[child]:raw.retained[p];
+            double first=Math.min(need,numerical[cancel]);numerical[cancel]-=first;numerical[retained]+=first;
+            int donor=increase?raw.retained[p]:raw.retained[child],out=increase?fromParent[child]:toParent[child];
+            double second=Math.min(need-first,numerical[donor]);numerical[donor]-=second;numerical[out]+=second;
+            double moved=first+second;
+            if(increase)moveLoad(own[p],own[child],moved);else moveLoad(own[child],own[p],moved);
+            return increase?moved:-moved;
+        }
+        /** Source-free receivers clamp by limiting their actual incoming routes. */
+        private void prepareEmpty(){
+            for(int i=0;i<emptyCount;i++){
+                int slot=emptySlots[i];double target=Math.clamp(load[slot],low(slot),high(slot));
+                if(!exceedsAccumulationError(load[slot],target,terms[slot]))continue;
+                boolean remove=load[slot]>target;double need=Math.abs(load[slot]-target);
+                for(int r=firstIncoming[slot];r>=0&&need>0;r=nextIncoming[r]){
+                    int s=raw.source[r],retained=raw.retained[s];double amount=Math.min(need,numerical[remove?r:retained]);
+                    if(remove){numerical[r]-=amount;numerical[retained]+=amount;moveLoad(slot,own[s],amount);}
+                    else{numerical[retained]-=amount;numerical[r]+=amount;moveLoad(own[s],slot,amount);}
+                    need-=amount;
                 }
             }
         }
-        private int route(RouteBuffer raw,int source,int target){
-            for(int r=raw.head[source];r>=0;r=raw.next[r])if(raw.target[r]==target)return r;
-            throw new IllegalStateException("Capacity forest lost its component route");
-        }
-        int project(RouteBuffer raw,double[] amount,double[] load,SignedDyadic[] lower,SignedDyadic[] upper,int[] terms,int[] touched,int touchedCount){
-            for(int i=count-1;i>=0;i--){
-                int child=order[i],p=parent[child];if(p<0)continue;
-                int own=slot(raw.key(child)),peer=slot(raw.key(p));
-                double target=Math.clamp(load[own],lower[own].toDouble(),upper[own].toDouble());
-                if(!exceedsAccumulationError(load[own],target,terms[own]))continue;
-                double delta=target-load[own];int face=raw.face[edge[child]];
-                raw.alternative(child,face,peer/8,raw.key(p).supportMask());
-                raw.alternative(p,face,own/8,raw.key(child).supportMask());
-                int toParent=route(raw,child,peer),fromParent=route(raw,p,own);
-                boolean increase=delta>0;double need=Math.abs(delta);
-                int cancel=increase?toParent:fromParent,retained=increase?raw.retained[child]:raw.retained[p];
-                double first=Math.min(need,amount[cancel]);amount[cancel]-=first;amount[retained]+=first;
-                int donor=increase?raw.retained[p]:raw.retained[child],out=increase?fromParent:toParent;
-                double second=Math.min(need-first,amount[donor]);amount[donor]-=second;amount[out]+=second;
-                double moved=first+second;if(!increase)moved=-moved;
-                load[own]+=moved;load[peer]-=moved;
-                if(terms[peer]==0)touched[touchedCount++]=peer;
-                // Delta, donor updates and endpoint updates propagate eight rounded operations.
-                terms[peer]=addTerms(terms[peer],addTerms(terms[own],8));terms[own]=addTerms(terms[own],8);
+        private void useSpill(int s){
+            double need=numericalNeed(s);
+            for(int r=raw.head[s];r>=0&&need!=0;r=raw.next[r]){
+                int slot=raw.target[r];if(raw.sourceAt[slot]>=0)continue;
+                int retained=raw.retained[s];
+                if(need<0){
+                    double amount=Math.min(-need,Math.min(numerical[retained],Math.max(0,high(slot)-load[slot])));
+                    numerical[retained]-=amount;numerical[r]+=amount;moveLoad(own[s],slot,amount);need+=amount;
+                }else{
+                    double amount=Math.min(need,Math.min(numerical[r],Math.max(0,load[slot]-low(slot))));
+                    numerical[r]-=amount;numerical[retained]+=amount;moveLoad(slot,own[s],amount);need-=amount;
+                }
             }
-            return touchedCount;
         }
-        SignedDyadic[] commit(RouteBuffer raw,SignedDyadic[] amount,SignedDyadic[] load,SignedDyadic[] lower,SignedDyadic[] upper){
+        int project(double[] amount,double[] load,int[] terms,int[] touched,int touchedCount){
+            numerical=amount;this.load=load;this.terms=terms;this.touched=touched;this.touchedCount=touchedCount;
+            prepareEmpty();
+            for(int i=count-1;i>=0;i--){int s=order[i];useSpill(s);double need=numericalNeed(s);if(parent[s]>=0&&need!=0)shift(s,need);}
+            boolean remaining=false;for(int s=0;s<raw.sources;s++)remaining|=numericalNeed(s)!=0;
+            if(!remaining)return this.touchedCount;
+            accept=new double[raw.sources];release=new double[raw.sources];
             for(int i=count-1;i>=0;i--){
-                int child=order[i],p=parent[child];if(p<0)continue;
-                int own=slot(raw.key(child)),peer=slot(raw.key(p));
-                var current=value(load[own]);
-                var target=min(current,upper[own]);if(target.compareTo(lower[own])<0)target=lower[own];
-                if(target==current)continue;
-                var delta=target.subtract(current);
-                int face=raw.face[edge[child]];
-                raw.alternative(child,face,peer/8,raw.key(p).supportMask());
-                raw.alternative(p,face,own/8,raw.key(child).supportMask());
-                if(amount.length<raw.size){int old=amount.length;amount=Arrays.copyOf(amount,Math.max(raw.size,2*old));Arrays.fill(amount,old,amount.length,SignedDyadic.ZERO);}
-                int toParent=route(raw,child,peer),fromParent=route(raw,p,own);
-                boolean increase=delta.signum()>0;var need=increase?delta:delta.negate();
-                int cancel=increase?toParent:fromParent,retained=increase?raw.retained[child]:raw.retained[p];
-                var first=min(need,amount[cancel]);amount[cancel]=amount[cancel].subtract(first);amount[retained]=amount[retained].add(first);
-                int donor=increase?raw.retained[p]:raw.retained[child],out=increase?fromParent:toParent;
-                var second=min(need.subtract(first),amount[donor]);amount[donor]=amount[donor].subtract(second);amount[out]=amount[out].add(second);
-                var moved=first.add(second);if(!increase)moved=moved.negate();
-                load[own]=value(load[own]).add(moved);load[peer]=value(load[peer]).subtract(moved);
+                int s=order[i];double down=sourceHigh[s]-load[own[s]],up=load[own[s]]-sourceLow[s];
+                for(int slot=spillHead[s];slot>=0;slot=spillNext[slot]){
+                    down+=Math.max(0,high(slot)-load[slot]);
+                    up+=Math.min(numerical[spillRoute[slot]],Math.max(0,load[slot]-low(slot)));
+                }
+                for(int c=firstChild[s];c>=0;c=nextChild[c]){down+=accept[c];up+=release[c];}
+                accept[s]=Math.max(0,down);release[s]=Math.max(0,up);
             }
-            return amount;
+            for(int i=0;i<count;i++){
+                int s=order[i];useSpill(s);double need=numericalNeed(s);
+                for(int c=firstChild[s];c>=0&&need!=0;c=nextChild[c]){
+                    double moved=shift(c,need<0?Math.min(-need,accept[c]):-Math.min(need,release[c]));
+                    accept[c]=Math.max(0,accept[c]-moved);release[c]=Math.max(0,release[c]+moved);need+=moved;
+                }
+            }
+            return this.touchedCount;
         }
-    }
-    /** Both the component face totals and each original material volume close exactly. */
+
+        private SignedDyadic exactNeed(int s){
+            var current=value(exactLoad[own[s]]);var target=min(current,upper[own[s]]);var low=minimum(own[s]);
+            if(target.compareTo(low)<0)target=low;return target==current?SignedDyadic.ZERO:target.subtract(current);
+        }
+        private void moveExactLoad(int from,int to,SignedDyadic amount){
+            if(amount.signum()==0)return;
+            exactLoad[from]=value(exactLoad[from]).subtract(amount);exactLoad[to]=value(exactLoad[to]).add(amount);
+        }
+        private SignedDyadic shiftExact(int child,SignedDyadic wanted){
+            int p=parent[child];boolean increase=wanted.signum()>0;var need=increase?wanted:wanted.negate();
+            int cancel=increase?toParent[child]:fromParent[child],retained=increase?raw.retained[child]:raw.retained[p];
+            var first=min(need,exact[cancel]);exact[cancel]=exact[cancel].subtract(first);exact[retained]=exact[retained].add(first);
+            int donor=increase?raw.retained[p]:raw.retained[child],out=increase?fromParent[child]:toParent[child];
+            var second=min(need.subtract(first),exact[donor]);exact[donor]=exact[donor].subtract(second);exact[out]=exact[out].add(second);
+            var moved=first.add(second);
+            if(increase)moveExactLoad(own[p],own[child],moved);else moveExactLoad(own[child],own[p],moved);
+            return increase?moved:moved.negate();
+        }
+        private void prepareEmptyExact(){
+            for(int i=0;i<emptyCount;i++){
+                int slot=emptySlots[i];var current=value(exactLoad[slot]);var low=minimum(slot);var target=min(current,upper[slot]);
+                if(target.compareTo(low)<0)target=low;if(target==current)continue;
+                boolean remove=current.compareTo(target)>0;var need=remove?current.subtract(target):target.subtract(current);
+                for(int r=firstIncoming[slot];r>=0&&need.signum()>0;r=nextIncoming[r]){
+                    int s=raw.source[r],retained=raw.retained[s];var amount=min(need,exact[remove?r:retained]);
+                    if(remove){exact[r]=exact[r].subtract(amount);exact[retained]=exact[retained].add(amount);moveExactLoad(slot,own[s],amount);}
+                    else{exact[retained]=exact[retained].subtract(amount);exact[r]=exact[r].add(amount);moveExactLoad(own[s],slot,amount);}
+                    need=need.subtract(amount);
+                }
+            }
+        }
+        private void useSpillExact(int s){
+            var need=exactNeed(s);
+            for(int r=raw.head[s];r>=0&&need.signum()!=0;r=raw.next[r]){
+                int slot=raw.target[r];if(raw.sourceAt[slot]>=0)continue;
+                int retained=raw.retained[s];var current=value(exactLoad[slot]);
+                if(need.signum()<0){
+                    var room=upper[slot].subtract(current);if(room.signum()<=0)continue;
+                    var amount=min(need.negate(),min(exact[retained],room));
+                    exact[retained]=exact[retained].subtract(amount);exact[r]=exact[r].add(amount);moveExactLoad(own[s],slot,amount);need=need.add(amount);
+                }else{
+                    var room=current.subtract(minimum(slot));if(room.signum()<=0)continue;
+                    var amount=min(need,min(exact[r],room));
+                    exact[r]=exact[r].subtract(amount);exact[retained]=exact[retained].add(amount);moveExactLoad(slot,own[s],amount);need=need.subtract(amount);
+                }
+            }
+        }
+        SignedDyadic[] commit(SignedDyadic[] amount,SignedDyadic[] load){
+            exact=amount;exactLoad=load;
+            if(exact.length<raw.size){int old=exact.length;exact=Arrays.copyOf(exact,raw.size);Arrays.fill(exact,old,exact.length,SignedDyadic.ZERO);}
+            prepareEmptyExact();
+            for(int i=count-1;i>=0;i--){int s=order[i];useSpillExact(s);var need=exactNeed(s);if(parent[s]>=0&&need.signum()!=0)shiftExact(s,need);}
+            boolean remaining=false;for(int s=0;s<raw.sources;s++)remaining|=exactNeed(s).signum()!=0;
+            if(!remaining)return exact;
+            exactAccept=new SignedDyadic[raw.sources];exactRelease=new SignedDyadic[raw.sources];
+            for(int i=count-1;i>=0;i--){
+                int s=order[i];var current=value(load[own[s]]);var down=upper[own[s]].subtract(current);var up=current.subtract(minimum(own[s]));
+                for(int slot=spillHead[s];slot>=0;slot=spillNext[slot]){
+                    var dry=upper[slot].subtract(value(load[slot]));if(dry.signum()>0)down=down.add(dry);
+                    var room=value(load[slot]).subtract(minimum(slot));if(room.signum()>0)up=up.add(min(exact[spillRoute[slot]],room));
+                }
+                for(int c=firstChild[s];c>=0;c=nextChild[c]){down=down.add(exactAccept[c]);up=up.add(exactRelease[c]);}
+                exactAccept[s]=down.signum()>0?down:SignedDyadic.ZERO;exactRelease[s]=up.signum()>0?up:SignedDyadic.ZERO;
+            }
+            for(int i=0;i<count;i++){
+                int s=order[i];useSpillExact(s);var need=exactNeed(s);
+                for(int c=firstChild[s];c>=0&&need.signum()!=0;c=nextChild[c]){
+                    var wanted=need.signum()<0?min(need.negate(),exactAccept[c]):min(need,exactRelease[c]).negate();
+                    var moved=shiftExact(c,wanted);
+                    exactAccept[c]=exactAccept[c].subtract(moved);exactRelease[c]=exactRelease[c].add(moved);need=need.add(moved);
+                }
+            }
+            return exact;
+        }
+    }    /** Both the component face totals and each original material volume close exactly. */
     private static List<LiquidCellInventory.SourceRoutes> partitionMaterials(RouteBuffer raw,SignedDyadic[] amounts){
         var result=new ArrayList<LiquidCellInventory.SourceRoutes>(raw.stocks.size());
         for(int s=0;s<raw.sources;s++){
@@ -500,7 +662,7 @@ final class PhaseQuantitySettlement {
         private void expand(int vertex){
             int source=vertex-firstSource;
             if(source>=0&&source<raw.sources){
-                if(expanded[source])return;expanded[source]=true;alternatives.accept(source);
+                if(expanded[source])return;expanded[source]=true;raw.prepareAlternatives(source,alternatives);
                 ensureRouteCapacity();
                 for(int r=raw.head[source];r>=0;r=raw.next[r])route(r);
                 return;

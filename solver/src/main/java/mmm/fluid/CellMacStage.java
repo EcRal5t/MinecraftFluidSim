@@ -13,6 +13,7 @@ final class CellMacStage {
 	private final double[] cellMass;
 	private long inventoryRevision=-1,quantityRevision;
 	private LiquidCellInventory.Snapshot preparedQuantities;
+	private FluidMaterialRegistry preparedMaterialRegistry;
 	private FlipPressurePhaseGeometry preparedPhase;
 	private mmm.granular.GranularCouplingFields preparedSolid;
 	private mmm.granular.GranularParcelStore preparedParcels;
@@ -115,39 +116,43 @@ final class CellMacStage {
 
 	void rebuildInventory() {
 		var inventory = domain.liquidCells;
-		if (inventoryRevision == inventory.revision() && !domain.gridDirty) return;
-		var grid = domain.liquidGrid;
-		grid.ensureStockCapacity(inventory.physicalSize());
-		Arrays.fill(grid.stockCount, 0);
-		Arrays.fill(grid.cellStockMass, 0); Arrays.fill(grid.cellPhaseHead, -1);
-		grid.phaseEntryCount=0;boolean quantitiesChanged=!inventory.hasSameQuantities(preparedQuantities);
-		if (grid.exactCellVolumeInventory == null) grid.exactCellVolumeInventory = new SignedDyadic[domain.cellCount];
-		if (domain.liquidCarrierMaterialByCell == null) {
-			domain.liquidCarrierMaterialByCell = new int[domain.cellCount];
-			domain.liquidCarrierVolumeByCell = new double[domain.cellCount];
-		}
-		Arrays.fill(domain.liquidCarrierMaterialByCell, -1);
-		Arrays.fill(domain.liquidCarrierVolumeByCell, 0);
-		for (int cell = 0; cell < domain.cellCount; cell++) {
-			var volume = inventory.exactCellVolume(cell);
-			grid.exactCellVolumeInventory[cell] = volume;
-			grid.cellStockVolume[cell] = volume.toDouble();
-			domain.volume[cell] = (float) volume.toDouble();
-			domain.projection.pressureVolume[cell] = volume.toDouble();
-			long mass = 0;
-			for (var stock : inventory.stocksInCell(cell)) mass = Math.addExact(mass, stock.massUnits());
-			cellMass[cell]=Mass.kilograms(mass);
-			grid.cellStockMass[cell] = domain.unitScale.normalizedMass(mass);
-			grid.cellDensity[cell] = mass > 0 ? grid.cellStockMass[cell] / volume.toDouble() : LiquidCarrierProperties.AIR_DENSITY;
-		}
-		for (int ordinal = 0; ordinal < inventory.physicalSize(); ordinal++) {
-			var stock = inventory.physicalStockAt(ordinal); int cell = stock.key().cell();
-			grid.stockCount[cell]++;
-			int phase = domain.materialRegistry == null ? 0 : domain.materialRegistry.phaseHandle(stock.key().material());
-			grid.addCellPhaseVolume(cell, phase, (float) stock.volumeFraction());
-			if (stock.volumeFraction() > domain.liquidCarrierVolumeByCell[cell]) {
-				domain.liquidCarrierVolumeByCell[cell] = stock.volumeFraction();
-				domain.liquidCarrierMaterialByCell[cell] = stock.key().material();
+		boolean materialsChanged=preparedMaterialRegistry!=domain.materialRegistry;
+		if(inventoryRevision==inventory.revision()&&!domain.gridDirty&&!materialsChanged)return;
+		var grid=domain.liquidGrid;
+		boolean quantitiesChanged=!inventory.hasSameQuantities(preparedQuantities);
+		if(quantitiesChanged||materialsChanged){
+			grid.ensureStockCapacity(inventory.physicalSize());
+			Arrays.fill(grid.stockCount, 0);
+			Arrays.fill(grid.cellStockMass, 0); Arrays.fill(grid.cellPhaseHead, -1);
+			grid.phaseEntryCount=0;
+			if (grid.exactCellVolumeInventory == null) grid.exactCellVolumeInventory = new SignedDyadic[domain.cellCount];
+			if (domain.liquidCarrierMaterialByCell == null) {
+				domain.liquidCarrierMaterialByCell = new int[domain.cellCount];
+				domain.liquidCarrierVolumeByCell = new double[domain.cellCount];
+			}
+			Arrays.fill(domain.liquidCarrierMaterialByCell, -1);
+			Arrays.fill(domain.liquidCarrierVolumeByCell, 0);
+			for (int cell = 0; cell < domain.cellCount; cell++) {
+				var volume = inventory.exactCellVolume(cell);
+				grid.exactCellVolumeInventory[cell] = volume;
+				grid.cellStockVolume[cell] = volume.toDouble();
+				domain.volume[cell] = (float) volume.toDouble();
+				domain.projection.pressureVolume[cell] = volume.toDouble();
+				long mass = 0;
+				for (var stock : inventory.stocksInCell(cell)) mass = Math.addExact(mass, stock.massUnits());
+				cellMass[cell]=Mass.kilograms(mass);
+				grid.cellStockMass[cell] = domain.unitScale.normalizedMass(mass);
+				grid.cellDensity[cell] = mass > 0 ? grid.cellStockMass[cell] / volume.toDouble() : LiquidCarrierProperties.AIR_DENSITY;
+			}
+			for (int ordinal = 0; ordinal < inventory.physicalSize(); ordinal++) {
+				var stock = inventory.physicalStockAt(ordinal); int cell = stock.key().cell();
+				grid.stockCount[cell]++;
+				int phase = domain.materialRegistry == null ? 0 : domain.materialRegistry.phaseHandle(stock.key().material());
+				grid.addCellPhaseVolume(cell, phase, (float) stock.volumeFraction());
+				if (stock.volumeFraction() > domain.liquidCarrierVolumeByCell[cell]) {
+					domain.liquidCarrierVolumeByCell[cell] = stock.volumeFraction();
+					domain.liquidCarrierMaterialByCell[cell] = stock.key().material();
+				}
 			}
 		}
 		if (domain.granularCoupling != null) {
@@ -160,7 +165,7 @@ final class CellMacStage {
 		domain.carrierPropertiesWorkspace.invalidate();
 		grid.inventoryRevision = inventory.revision(); inventoryRevision = inventory.revision();
 		if(quantitiesChanged){quantityRevision++;rebuildFaceInertia();}
-		preparedQuantities=inventory.snapshot();
+		preparedQuantities=inventory.snapshot();preparedMaterialRegistry=domain.materialRegistry;
 		domain.gridDirty = false;
 	}
 
