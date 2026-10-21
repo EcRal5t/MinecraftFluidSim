@@ -174,18 +174,26 @@ public final class RegionDiagnosticsReport {
 		if (region == null || !region.solverLoaded() || !region.domain().hasChemistryState()) {
 			return "当前维度没有已加载且选中的化学区域";
 		}
-		long[] totals = region.domain().chemicalParcels().speciesTotals(region.domain().particleCount());
+		var snapshot=region.domain().exportLiquidCellState();
+		long[] totals=new long[region.domain().chemistry().registry().species().size()];long totalQuanta=0,residualUnits=0;
+		for(var row:snapshot.rows())for(var stock:row)if(stock.mixture()!=null){
+			var mixture=stock.mixture();residualUnits=Math.addExact(residualUnits,mixture.massResidualUnits());
+			for(int entry=0;entry<mixture.entryCount();entry++){
+				long amount=mixture.amountAt(entry);totals[mixture.speciesHandle(entry)]=Math.addExact(totals[mixture.speciesHandle(entry)],amount);
+				totalQuanta=Math.addExact(totalQuanta,amount);
+			}
+		}
 		StringBuilder text = new StringBuilder("region ").append(region.id())
 				.append(" generation ").append(region.checkpointGeneration())
 				.append(" fingerprint ").append(world.chemicalRegistry().fingerprint())
-				.append(" totalQuanta ").append(region.domain().chemicalParcels().totalQuanta())
+				.append(" totalQuanta ").append(totalQuanta)
 				.append(" residualUnits 0x").append(Long.toUnsignedString(
-						region.domain().exportChemicalParticleState().residualLedgerUnits(), 16));
+						residualUnits, 16));
 		for (int handle = 0; handle < totals.length; handle++) if (totals[handle] != 0L) {
 			text.append('\n').append(world.chemicalRegistry().species(handle).id()).append('=').append(totals[handle]);
 		}
-		text.append("\nexternalSourceQuanta=").append(region.domain().chemicalParcels().externalSource().totalQuanta())
-				.append(" escapedSinkQuanta=").append(region.domain().chemicalParcels().escapedSink().totalQuanta());
+		text.append("\nexternalSourceQuanta=").append(region.domain().chemistry().externalSource().totalQuanta())
+				.append(" escapedSinkQuanta=").append(region.domain().chemistry().escapedSink().totalQuanta());
 		return text.toString();
 	}
 

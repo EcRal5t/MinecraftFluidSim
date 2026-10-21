@@ -541,7 +541,7 @@ public final class FluidRegionLifecycleValidation {
 				"0".repeat(64), 3L, 5L, new ControllerSummary.Footprint(1, 2, 3, 4, 5, 6, 120L, 4),
 				true, ControllerSummary.OperatorIntent.PAUSED, ControllerSummary.MotionState.UNLOADED,
 				ControllerSummary.ThermalState.UNBOUND, new ControllerSummary.Availability(null, null),
-				new ControllerSummary.Usage(unavailableCapacity, unavailableCapacity, unavailableCapacity,
+				new ControllerSummary.Usage(unavailableCapacity, unavailableCapacity,
 						unavailableCapacity, unavailableCapacity, unavailableCapacity, unavailableCapacity,
 						unavailableCapacity), unavailable,
 				new ControllerSummary.Gates(true, false, false, false, false),

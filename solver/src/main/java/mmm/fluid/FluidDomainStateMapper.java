@@ -16,17 +16,17 @@ final class FluidDomainStateMapper {
 		if (domain.domainPhaseInventory.collisionTransactionActive()) {
 			throw new IllegalStateException("Cannot capture while a collision transaction is active");
 		}
-		var chemistry = domain.chemicalParcels == null ? null : domain.chemicalParcels.registry();
+		var chemistry = domain.chemistry == null ? null : domain.chemistry.registry();
 		GranularStateSnapshot granular = domain.granularState == null ? null : domain.exportGranularState();
 		domain.ensurePhaseOccupancy();
 		GasStateSnapshot gas = domain.gasState.frame == null ? null : domain.exportGasState(chemistry == null ? "" : chemistry.fingerprint());
 		var captured = new FluidDomainState(domain.sizeX,domain.sizeY,domain.sizeZ,domain.config,domain.maximumParticleCount,
-				domain.gasState.sealedDomainBoundary,domain.liquidCells.snapshot(),domain.phaseOccupancy,domain.mac.captureMomentum(),domain.geometry.cutCells.copyMicroMasks(),
+				domain.gasState.sealedDomainBoundary,domain.liquidCells.snapshot(),domain.phaseOccupancy,domain.mac.captureMomentum(),domain.geometry.cutCells.snapshot(),
 				domain.materialRegistry == null ? List.of() : domain.materialRegistry.materials(),chemistry,
-				domain.chemicalParcels == null ? mmm.chemistry.ChemicalTransferLedger.EMPTY : domain.chemicalParcels.externalSource(),
-				domain.chemicalParcels == null ? mmm.chemistry.ChemicalTransferLedger.EMPTY : domain.chemicalParcels.escapedSink(),
-				domain.chemicalParcels == null ? null : domain.chemicalParcels.dirtyCells(),
-				domain.chemicalParcels == null ? 0 : domain.chemicalParcels.reactionCursor(),
+				domain.chemistry == null ? mmm.chemistry.ChemicalTransferLedger.EMPTY : domain.chemistry.externalSource(),
+				domain.chemistry == null ? mmm.chemistry.ChemicalTransferLedger.EMPTY : domain.chemistry.escapedSink(),
+				domain.chemistry == null ? null : domain.chemistry.dirtyCells(),
+				domain.chemistry == null ? 0 : domain.chemistry.reactionCursor(),
 				domain.granularState == null ? null : domain.granularState.registry,granular,
 				domain.granularDepositDynamics == null ? null : domain.granularDepositDynamics.captureState(),
 				domain.precipitationEnabled(),domain.gasState.network.registry(),gas,
@@ -41,14 +41,14 @@ final class FluidDomainStateMapper {
 
 	static FluidDomainState.Layout layout(FluidDomain domain) {
 		if (domain == null) throw new IllegalArgumentException("Domain is missing");
-		FluidDomainState.CarrierKind carrierKind = domain.chemicalParcels != null
+		FluidDomainState.CarrierKind carrierKind = domain.chemistry != null
 				? FluidDomainState.CarrierKind.CHEMICAL
 				: domain.materialRegistry != null ? FluidDomainState.CarrierKind.MATERIAL
 				: FluidDomainState.CarrierKind.PURE;
 		return new FluidDomainState.Layout(domain.config, domain.sizeX, domain.sizeY, domain.sizeZ,
 				domain.maximumParticleCount, domain.gasState.sealedDomainBoundary, carrierKind,
 				domain.materialRegistry == null ? List.of() : domain.materialRegistry.materials(),
-				domain.chemicalParcels == null ? "" : domain.chemicalParcels.registry().fingerprint(),
+				domain.chemistry == null ? "" : domain.chemistry.registry().fingerprint(),
 				domain.granularState == null ? "" : domain.granularState.registry.fingerprint(),
 				domain.precipitationEnabled(), domain.gasState.network.registry().fingerprint(),
 				domain.thermalState == null ? "" : domain.thermalState.registry().fingerprint(),
@@ -62,14 +62,13 @@ final class FluidDomainStateMapper {
 		FluidDomain domain = new FluidDomain(state.sizeX(), state.sizeY(), state.sizeZ(),
 				state.config(), state.maximumParticleCount());
 		if (state.sealedDomainBoundary()) domain.sealDomainBoundary();
-		domain.geometry.cutCells.restoreMicroMasks(state.copyCollisionMasks());
-		for (int cell = 0; cell < domain.cellCount; cell++) domain.geometry.solid[cell] = domain.geometry.cutCells.mask(cell) == 255;
+		domain.geometry.cutCells.restoreSnapshot(state.fixedGeometry());
 		if (!state.materialPalette().isEmpty()) domain.materialRegistry = new FluidMaterialRegistry(state.materialPalette());
 		if (state.chemicalRegistry() != null) {
-			domain.chemicalParcels = new mmm.chemistry.ChemicalParcelStore(state.chemicalRegistry(),domain.unitScale,state.maximumParticleCount(),domain.cellCount);
-			domain.chemicalParcels.restoreAuditLedgers(state.chemicalSource(),state.chemicalSink());
-			domain.chemicalParcels.restoreDirtyCells(state.copyChemicalDirtyCells());
-			domain.chemicalParcels.restoreReactionCursor(state.chemicalReactionCursor());
+			domain.chemistry = new mmm.chemistry.RegionChemistry(state.chemicalRegistry(),domain.cellCount);
+			domain.chemistry.restoreAuditLedgers(state.chemicalSource(),state.chemicalSink());
+			domain.chemistry.restoreDirtyCells(state.copyChemicalDirtyCells());
+			domain.chemistry.restoreReactionCursor(state.chemicalReactionCursor());
 		}
 		domain.liquidCells = LiquidCellInventory.fromValidatedSnapshot(state.liquid(),state.chemicalRegistry());
 		domain.markCellInventoryChanged();

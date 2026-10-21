@@ -76,7 +76,7 @@ final class FuzzMetrics {
 	static void recordEvents(String scene, mmm.fluid.FluidDomain.StepStats stats) {
 		if (stats == null) return;
 		addEvent(scene, "chemistry:evaluations", stats.chemistryEvaluations());
-		addEvent(scene, "chemistry:changedMarkers", stats.chemistryChangedMarkers());
+		addEvent(scene, "chemistry:changedMarkers", stats.chemistryChangedStocks());
 		var granular = stats.granularTransition();
 		if (granular != null) {
 			addEvent(scene, "granular:settledParcels", granular.settledParcels());

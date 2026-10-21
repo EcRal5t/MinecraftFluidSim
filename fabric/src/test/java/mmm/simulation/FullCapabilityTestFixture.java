@@ -16,7 +16,7 @@ public final class FullCapabilityTestFixture {
 
 	/** Set a resolved pure composition within the stock's actual mass. */
 	public static void assignPureSpecies(FluidDomain domain, int ordinal, String species, boolean indicator) {
-		var registry = domain.chemicalParcels().registry();
+		var registry = domain.chemistry().registry();
 		long mass = domain.exportLiquidCellState().physicalStocks().get(ordinal).massUnits();
 		var mixture = mmm.chemistry.ChemicalMixtureRecord.fromSolutesAndSolventMass(registry, java.util.Map.of(), species, mass);
 		domain.setMarkerChemical(ordinal, mixture.stableAmounts(registry), indicator);

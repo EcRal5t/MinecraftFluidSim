@@ -114,12 +114,12 @@ final class DomainFlowFields {
 		float ox = (slot & 1) == 0 ? 0.25F : 0.75F;
 		float oy = (slot & 2) == 0 ? 0.25F : 0.75F;
 		float oz = (slot & 4) == 0 ? 0.25F : 0.75F;
-		if (cellX == 0 || domain.geometry.solid[cellIndex(cellX - 1, cellY, cellZ)]) ox = Math.max(ox, radiusFraction);
-		if (cellX + 1 == domain.sizeX || domain.geometry.solid[cellIndex(cellX + 1, cellY, cellZ)]) ox = Math.min(ox, 1.0F - radiusFraction);
-		if (cellY == 0 || domain.geometry.solid[cellIndex(cellX, cellY - 1, cellZ)]) oy = Math.max(oy, radiusFraction);
-		if (cellY + 1 == domain.sizeY || domain.geometry.solid[cellIndex(cellX, cellY + 1, cellZ)]) oy = Math.min(oy, 1.0F - radiusFraction);
-		if (cellZ == 0 || domain.geometry.solid[cellIndex(cellX, cellY, cellZ - 1)]) oz = Math.max(oz, radiusFraction);
-		if (cellZ + 1 == domain.sizeZ || domain.geometry.solid[cellIndex(cellX, cellY, cellZ + 1)]) oz = Math.min(oz, 1.0F - radiusFraction);
+		if (cellX == 0 || domain.geometry.cutCells.fullySolid(cellIndex(cellX - 1, cellY, cellZ))) ox = Math.max(ox, radiusFraction);
+		if (cellX + 1 == domain.sizeX || domain.geometry.cutCells.fullySolid(cellIndex(cellX + 1, cellY, cellZ))) ox = Math.min(ox, 1.0F - radiusFraction);
+		if (cellY == 0 || domain.geometry.cutCells.fullySolid(cellIndex(cellX, cellY - 1, cellZ))) oy = Math.max(oy, radiusFraction);
+		if (cellY + 1 == domain.sizeY || domain.geometry.cutCells.fullySolid(cellIndex(cellX, cellY + 1, cellZ))) oy = Math.min(oy, 1.0F - radiusFraction);
+		if (cellZ == 0 || domain.geometry.cutCells.fullySolid(cellIndex(cellX, cellY, cellZ - 1))) oz = Math.max(oz, radiusFraction);
+		if (cellZ + 1 == domain.sizeZ || domain.geometry.cutCells.fullySolid(cellIndex(cellX, cellY, cellZ + 1))) oz = Math.min(oz, 1.0F - radiusFraction);
 		float px = (cellX + ox) * h, py = (cellY + oy) * h, pz = (cellZ + oz) * h;
 		if (Math.floor(px / h) != cellX || Math.floor(py / h) != cellY || Math.floor(pz / h) != cellZ
 				|| CellRemapMicroTopology.positionMicro(h, px, py, pz) != slot)
@@ -142,7 +142,7 @@ final class DomainFlowFields {
 			for (int y = Math.max(0, centerY - maxRadius); y <= Math.min(domain.sizeY - 1, centerY + maxRadius); y++)
 				for (int x = Math.max(0, centerX - maxRadius); x <= Math.min(domain.sizeX - 1, centerX + maxRadius); x++) {
 					int dx = x - centerX, dy = y - centerY, dz = z - centerZ, index = cellIndex(x, y, z);
-					if (dx * dx + dy * dy + dz * dz <= radiusSquared && !domain.geometry.solid[index]) result.add(new CellCandidate(index, dx * dx + dy * dy + dz * dz));
+					if (dx * dx + dy * dy + dz * dz <= radiusSquared && !domain.geometry.cutCells.fullySolid(index)) result.add(new CellCandidate(index, dx * dx + dy * dy + dz * dz));
 				}
 		result.sort(Comparator.comparingInt(CellCandidate::distanceSquared));
 		return result;
@@ -158,9 +158,9 @@ final class DomainFlowFields {
 	void ensureInventoryGrid() { if (domain.gridDirty) domain.cellMacStage.rebuildInventory(); }
 	long carrierMutationRevision() { return domain.carrierMutationRevision; }
 	boolean isFluid(int index) { return domain.pressureSystem.faces.pressureSupports[index]!=0; }
-	boolean isAir(int index) { return !domain.geometry.solid[index] && !isFluid(index); }
+	boolean isAir(int index) { return !domain.geometry.cutCells.fullySolid(index) && !isFluid(index); }
 	boolean carrierFaceActive(int first, int second, float openArea) {
-		return openArea > 0.0F && !domain.geometry.solid[first] && !domain.geometry.solid[second]
+		return openArea > 0.0F && !domain.geometry.cutCells.fullySolid(first) && !domain.geometry.cutCells.fullySolid(second)
 				&& (domain.liquidGrid.stockCount[first] > 0 || domain.liquidGrid.stockCount[second] > 0);
 	}
 	boolean granularCarrierFaceActive(int axis, int x, int y, int z) {
@@ -168,7 +168,7 @@ final class DomainFlowFields {
 		if (!inside(ax, ay, az) || !inside(x, y, z)) return false;
 		int first = cellIndex(ax, ay, az), second = cellIndex(x, y, z);
 		float open = pressureOpenFaceFromCell(first, second, x - ax, y - ay, z - az);
-		return open > 0 && !domain.geometry.solid[first] && !domain.geometry.solid[second]
+		return open > 0 && !domain.geometry.cutCells.fullySolid(first) && !domain.geometry.cutCells.fullySolid(second)
 				&& (isFluid(first) || isFluid(second) || carrierFaceActive(first, second, open));
 	}
 	boolean inside(int x, int y, int z) { return x >= 0 && x < domain.sizeX && y >= 0 && y < domain.sizeY && z >= 0 && z < domain.sizeZ; }

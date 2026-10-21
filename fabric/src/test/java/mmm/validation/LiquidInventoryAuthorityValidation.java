@@ -23,7 +23,6 @@ public final class LiquidInventoryAuthorityValidation {
 
 	private static final List<String> FORBIDDEN_CALLS = List.of(
 			"particles.setCount(", "particles.incrementCount(", "particles.swapRemove(",
-			"chemicalParcels.swapRemove(", "chemicalParcels.assignDefault(",
 			"thermalState.removeExternalAndSwap(", "thermalState.removeInternalAndSwap(",
 			"thermalState.addExternalMarker(", "thermalState.addInternalMarker(");
 

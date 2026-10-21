@@ -36,7 +36,7 @@ final class DomainInventory {
 		for (int z = firstZ; z <= lastZ; z++) for (int y = firstY; y <= lastY; y++) {
 			for (int x = firstX; x <= lastX; x++) {
 				int cell = domain.domainFlowFields.cellIndex(x, y, z);
-				if (domain.geometry.solid[cell] || domain.volume[cell] <= domain.config.fluidEpsilon()) continue;
+				if (domain.geometry.cutCells.fullySolid(cell) || domain.volume[cell] <= domain.config.fluidEpsilon()) continue;
 				double geometricOpen = domain.geometry.cutCells.openCellVolume(cell);
 				double effectiveOpen = domain.domainCollision.effectiveOpenCellVolume(cell);
 				if (!(geometricOpen > 0.0 && effectiveOpen > 0.0)) continue;
@@ -118,6 +118,11 @@ final class DomainInventory {
 	public float removeVolumeNear(int centerX, int centerY, int centerZ, float amount, int maxRadius) {
 		return domain.transferPlanner.removeVolumeNear(centerX, centerY, centerZ, amount, maxRadius);
 	}
+	private void requireChemicalAudit(mmm.chemistry.RegionChemistry.AuditExchange audit){
+		if(audit==null){if(domain.chemistry!=null)throw new IllegalStateException("Chemistry changed after clear planning");return;}
+		if(domain.chemistry==null)throw new IllegalStateException("Chemistry changed after clear planning");
+		domain.chemistry.requireCurrentAuditExchange(audit);
+	}
 	public void removeAllWaterExact() {
 		commitRemoveAllWaterExact(planRemoveAllWaterExact());
 	}
@@ -125,10 +130,9 @@ final class DomainInventory {
 		return domain.clearPlanner.planWater();
 	}
 	public void commitRemoveAllWaterExact(WaterClearPlan plan) {
-		if (plan != null) plan.inventory().requireCurrent();
+		if (plan != null) { plan.inventory().requireCurrent();requireChemicalAudit(plan.chemicalAudit()); }
 		if (plan == null || domain.liquidCells.size() != plan.markerCount()
 				|| domain.domainFlowFields.carrierMutationRevision() != plan.mutationRevision()
-				|| (domain.chemicalParcels == null ? 0 : domain.chemicalParcels.mutationRevision()) != plan.chemicalRevision()
 				|| Double.doubleToRawLongBits(domain.totalVolumeExact()) != plan.totalVolumeBits()
 				|| domain.totalMassUnits() != plan.totalMassUnits()
 				|| !domain.liquidCells.exactInternalEnergy().equals(plan.internalEnergy()))
@@ -151,9 +155,8 @@ final class DomainInventory {
 	}
 	void preflightCondensedClear(CondensedClearPlan plan) {
 		if (plan == null) throw new IllegalArgumentException("Condensed clear plan is missing");
-		plan.liquid().inventory().requireCurrent();
-		if (domain.domainFlowFields.carrierMutationRevision() != plan.mutationRevision()
-				|| (domain.chemicalParcels == null ? 0L : domain.chemicalParcels.mutationRevision()) != plan.chemicalRevision()) {
+		plan.liquid().inventory().requireCurrent();requireChemicalAudit(plan.chemicalAudit());
+		if (domain.domainFlowFields.carrierMutationRevision() != plan.mutationRevision()) {
 			throw new IllegalStateException("Liquid inventory changed after condensed clear planning");
 		}
 		WaterClearPlan liquid = plan.liquid();
@@ -176,8 +179,8 @@ final class DomainInventory {
 		}
 	}
 	CondensedClear applyCondensedClear(CondensedClearPlan plan) {
-		if (domain.chemicalParcels != null) {
-			domain.chemicalParcels.recordEscapedSink(plan.drained());
+		if (domain.chemistry != null) {
+			domain.chemistry.commitAuditExchange(plan.chemicalAudit());
 		}
 		if (domain.thermalState != null) {
 			domain.thermalState.recordExternalSink(plan.liquid().internalEnergy());

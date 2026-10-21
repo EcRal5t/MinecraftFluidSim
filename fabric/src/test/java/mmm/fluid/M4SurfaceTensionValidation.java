@@ -233,7 +233,7 @@ for(int axis=0;axis<3;axis++)for(int side=0;side<2;side++){
 int nx=x+(axis==0?2*side-1:0),ny=y+(axis==1?2*side-1:0),nz=z+(axis==2?2*side-1:0);
 if(!domain.domainFlowFields.inside(nx,ny,nz))continue;
 int neighbor=domain.domainFlowFields.cellIndex(nx,ny,nz);
-if(!domain.geometry.solid[neighbor]&&domain.liquidGrid.stockCount[neighbor]==0)
+if(!domain.geometry.cutCells.fullySolid(neighbor)&&domain.liquidGrid.stockCount[neighbor]==0)
 freeArea+=domain.pressureSystem.phaseGeometry().liquidFaceArea(cell,axis,side,domain.geometry.cutCells)*h*h;
 }}
 double initialMechanicalAndSurface=potential+sigma*freeArea;

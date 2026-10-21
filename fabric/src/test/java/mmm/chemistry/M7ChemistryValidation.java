@@ -31,8 +31,7 @@ public final class M7ChemistryValidation {
 
 	private static void validateDefaultParcels() {
 		var registry = BuiltinChemicalDefinitions.REGISTRY;
-		var scale = mmm.units.SolverUnitScale.forCellSize(1.0F);
-		var store = new ChemicalParcelStore(registry, scale, 2, 1);
+		var store = new RegionChemistry(registry,1);
 		var original = store.defaultRecord("mmm:water", 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0), false);
 		check(original == store.defaultRecord(new String("mmm:water"), 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0), false),
 				"identical default inputs did not reuse immutable inventory");
@@ -43,7 +42,7 @@ public final class M7ChemistryValidation {
 			double mass = index == 2 ? Math.nextUp(125.0) : 125.0;
 			boolean indicator = index == 3;
 			var actual = store.defaultRecord(materials[index], volume, size, mmm.units.SolverUnitScale.forCellSize(size).massUnitsForNormalized(mass), indicator);
-			var fresh = new ChemicalParcelStore(registry, scale, 1, 1)
+			var fresh = new RegionChemistry(registry,1)
 					.defaultRecord(materials[index], volume, size, mmm.units.SolverUnitScale.forCellSize(size).massUnitsForNormalized(mass), indicator);
 			check(actual.equals(fresh), "default reuse mixed an input field at index " + index);
 		}
@@ -58,12 +57,6 @@ public final class M7ChemistryValidation {
 		expectFailure(() -> store.defaultRecord("mmm:water", Float.NaN, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0), false), "default reuse accepted non-finite volume");
 		expectFailure(() -> store.defaultRecord("mmm:water", 0.125F, Float.POSITIVE_INFINITY, mmm.units.SolverUnitScale.forCellSize(Float.POSITIVE_INFINITY).massUnitsForNormalized(125.0), false), "default reuse accepted non-finite cell size");
 		expectFailure(() -> store.defaultRecord("mmm:water", 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(Double.NaN), false), "default reuse accepted non-finite mass");
-		store.assignDefault(0, "mmm:water", 20_000.0F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(20_000_000.0), false);
-		long inventory = store.totalQuanta(), revision = store.mutationRevision();
-		expectFailure(() -> store.assignDefault(1, "mmm:water", 20_000.0F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(20_000_000.0), false),
-				"default reuse bypassed the region inventory limit");
-		check(store.totalQuanta() == inventory && store.mutationRevision() == revision && !store.isAssigned(1),
-				"rejected default assignment changed inventory ownership");
 	}
 
 	private static void validateRationalsAndCodec() {

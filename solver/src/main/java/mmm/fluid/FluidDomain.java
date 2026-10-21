@@ -4,7 +4,7 @@ import mmm.inventory.LiquidCellInventory;
 import mmm.inventory.PhaseOccupancyState;
 import mmm.thermal.ThermalDomainState;
 import mmm.thermal.ThermalCarrierContext;
-import mmm.chemistry.ChemicalParcelStore;
+import mmm.chemistry.RegionChemistry;
 import mmm.granular.GranularCouplingFields;
 import mmm.granular.GranularDepositDynamics;
 import mmm.granular.GranularPhaseTransferEngine;
@@ -84,7 +84,7 @@ public final class FluidDomain {
 	FluidMaterialRegistry materialRegistry;
 	MaterialRegistry materialDefinitions;
 	final LiquidCarrierProperties carrierPropertiesWorkspace;
-	ChemicalParcelStore chemicalParcels;
+	RegionChemistry chemistry;
 	int[] chemicalPreviousCells;
 	int[] chemicalMovingMarkers;
 	final GasDomainState gasState = new GasDomainState();
@@ -97,8 +97,8 @@ public final class FluidDomain {
 	FluidDomain.PhaseTransferStats lastPhaseTransferStats = new FluidDomain.PhaseTransferStats(0, 0, 0, 0L);
 	FluidDomain.ThermalPhaseStats lastThermalPhaseStats = new FluidDomain.ThermalPhaseStats(0, 0, 0, 0L);
 	FluidDomain.GasThermalPhaseStats lastGasThermalPhaseStats = new FluidDomain.GasThermalPhaseStats(0, 0, 0);
-	ChemicalParcelStore.ReactionStats lastChemicalReactionStats =
-			new ChemicalParcelStore.ReactionStats(0, 0, 0);
+	RegionChemistry.ReactionStats lastChemicalReactionStats =
+			new RegionChemistry.ReactionStats(0, 0, 0);
 	GranularDepositDynamics granularDepositDynamics;
 	GranularDepositDynamics.Stats lastGranularDepositStats =
 			new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
@@ -140,10 +140,10 @@ public final class FluidDomain {
 		FluidDomain domain = this;
 		this.gasBoundary = new GasPressureBoundary(domain);
 		this.liquidCells = new LiquidCellInventory(cellCount, null);
-		int initialParticleCapacity = Math.min(16_384, maximumParticleCount);
-		this.geometry = new DomainGeometry(sizeX, sizeY, sizeZ, cellCount);
+
+		this.geometry = new DomainGeometry(sizeX, sizeY, sizeZ);
 		this.carrierPropertiesWorkspace = new LiquidCarrierProperties(cellCount);
-		this.liquidGrid = new CellLiquidGrid(cellCount, initialParticleCapacity);
+		this.liquidGrid = new CellLiquidGrid(cellCount);
 		this.volume = new float[cellCount];
 		this.mac = new MacVelocityGrid(sizeX, sizeY, sizeZ);
 		this.cellMacStage = new CellMacStage(domain);
@@ -359,7 +359,7 @@ public final class FluidDomain {
 	public SolidDistribution solidDistribution() { return domainCollision.solidDistribution(); }
 	public boolean containsFluidAt(float localX, float localY, float localZ) { return domainCollision.containsFluidAt(localX, localY, localZ); }
 	public FluidMaterialRegistry materialRegistry() { return domainCapabilities.materialRegistry(); }
-	public ChemicalParcelStore chemicalParcels() { return domainCapabilities.chemicalParcels(); }
+	public RegionChemistry chemistry() { return domainCapabilities.chemistry(); }
 	public ChemicalDisplaySnapshot copyChemicalDisplaySnapshot() { return domainCapabilities.copyChemicalDisplaySnapshot(); }
 	public ChemicalTransferLedger chemicalLedgerForMarkerRange(int fromInclusive, int toExclusive) { return domainCapabilities.chemicalLedgerForMarkerRange(fromInclusive, toExclusive); }
 	public IndicatorEditResult editIndicatorFloodFill(
@@ -433,7 +433,7 @@ public final class FluidDomain {
 	public boolean hasThermalState() { return domainPhaseInventory.hasThermalState(); }
 	public boolean hasAmbientGasCells() { return domainPhaseInventory.hasAmbientGasCells(); }
 	public ThermalCellGrid.TemperatureRange observedCarrierTemperatureRange() { return domainPhaseInventory.observedCarrierTemperatureRange(); }
-	public int chemicalParcelCount() { return domainPhaseInventory.chemicalParcelCount(); }
+	public int chemicalStockCount() { return domainPhaseInventory.chemicalStockCount(); }
 	public long totalChemicalSpeciesQuanta() { return domainPhaseInventory.totalChemicalSpeciesQuanta(); }
 	public int granularDepositGroupCount() { return domainPhaseInventory.granularDepositGroupCount(); }
 	public int coherentPhaseGroupCount() { return domainPhaseInventory.coherentPhaseGroupCount(); }
@@ -478,7 +478,7 @@ public final class FluidDomain {
 	public PhaseTransferStats lastPhaseTransferStats() { return domainPhaseInventory.lastPhaseTransferStats(); }
 	public ThermalPhaseStats lastThermalPhaseStats() { return domainPhaseInventory.lastThermalPhaseStats(); }
 	public GasThermalPhaseStats lastGasThermalPhaseStats() { return domainPhaseInventory.lastGasThermalPhaseStats(); }
-	public ChemicalParcelStore.ReactionStats lastChemicalReactionStats() { return domainPhaseInventory.lastChemicalReactionStats(); }
+	public RegionChemistry.ReactionStats lastChemicalReactionStats() { return domainPhaseInventory.lastChemicalReactionStats(); }
 	public void setPrecipitationEnabled(boolean enabled) { domainPhaseInventory.setPrecipitationEnabled(enabled); }
 	public void bindGranular(GranularRegistry registry, FluidMaterialRegistry liquidRegistry,
 			MaterialRegistry materialDefinitions) { domainPhaseInventory.bindGranular(registry, liquidRegistry, materialDefinitions); }
@@ -595,9 +595,9 @@ public final class FluidDomain {
 			float volumeAfter,
 			double massBefore,
 			double massAfter,
-			int chemistryDirtyCells,
+			int chemistryVisitedCells,
 			int chemistryEvaluations,
-			int chemistryChangedMarkers,
+			int chemistryChangedStocks,
 			FluidDomain.ThermalPhaseStats condensedPhase,
 			FluidDomain.GasThermalPhaseStats gasPhase,
 			MechanicalStepAudit mechanicalAudit,
@@ -620,7 +620,7 @@ public final class FluidDomain {
 	}
 	public record ThermalAxisStats(
 			ThermalTransport.Stats transport,
-			ChemicalParcelStore.ReactionStats chemistry,
+			RegionChemistry.ReactionStats chemistry,
 			PhaseTransferStats granularPhase,
 			FluidDomain.ThermalPhaseStats condensedPhase,
 			FluidDomain.GasThermalPhaseStats gasPhase
@@ -628,7 +628,7 @@ public final class FluidDomain {
 	public record PhaseTransferStats(int transfers, int precipitations, int dissolutions, long signedSolidSvq) { }
 	public record WaterClearPlan(
 			int markerCount, long totalVolumeBits, long totalMassUnits, ChemicalTransferLedger drained,
-			SignedDyadic internalEnergy, long mutationRevision, long chemicalRevision, LiquidCellInventory.Plan inventory
+			SignedDyadic internalEnergy, long mutationRevision, RegionChemistry.AuditExchange chemicalAudit, LiquidCellInventory.Plan inventory
 	) { }
 	public record CondensedClear(long coherentVolumeSvq, long coherentMassUnits, int coherentGroups) {
 		public double coherentMass() { return mmm.units.Mass.kilograms(coherentMassUnits); }
@@ -636,7 +636,7 @@ public final class FluidDomain {
 	public record CondensedClearPlan(
 			WaterClearPlan liquid, List<CoherentPhaseStore.Group> coherentGroups,
 			ChemicalTransferLedger drained, SignedDyadic coherentEnergy,
-			long coherentVolumeSvq, long coherentMassUnits, long mutationRevision, long chemicalRevision
+			long coherentVolumeSvq, long coherentMassUnits, long mutationRevision, RegionChemistry.AuditExchange chemicalAudit
 	) {
 		public CondensedClearPlan { coherentGroups = List.copyOf(coherentGroups); }
 	}

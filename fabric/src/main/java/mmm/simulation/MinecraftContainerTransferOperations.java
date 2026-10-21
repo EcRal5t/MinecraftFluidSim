@@ -159,7 +159,7 @@ final class MinecraftContainerTransferOperations {
 		FluidDomain domain = region.domain();
 		if (!domain.hasChemistryState()) return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents), "该区域不是化学区域");
 		try {
-			contents.validateAgainst(domain.chemicalParcels().registry());
+			contents.validateAgainst(domain.chemistry().registry());
 		} catch (IllegalArgumentException invalid) {
 			return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents), "化学桶 registry 或账本不合法：" + invalid.getMessage());
 		}
@@ -170,13 +170,13 @@ final class MinecraftContainerTransferOperations {
 		while (candidate > 0L) {
 			ChemicalContents.Split split;
 			try {
-				split = contents.split(candidate, domain.chemicalParcels().registry());
+				split = contents.split(candidate, domain.chemistry().registry());
 			} catch (IllegalArgumentException belowResolution) {
 				candidate /= 2L;
 				continue;
 			}
 			mmm.chemistry.ChemicalTransferLedger requested = split.inserted().toLedger(
-					domain.chemicalParcels().registry(), domain.unitScale());
+					domain.chemistry().registry(), domain.unitScale());
 			ThermalContents.EnergySplit thermalSplit = thermalContents == null ? null
 					: LiquidContainerThermodynamics.split(world.thermalRegistry(), thermalContents, contents,
 							split.inserted(), split.remaining());

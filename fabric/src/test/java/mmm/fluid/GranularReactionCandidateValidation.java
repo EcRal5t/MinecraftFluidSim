@@ -257,7 +257,7 @@ public final class GranularReactionCandidateValidation {
       var key = new LiquidCellInventory.Key(c, 0, 255);
       long mass = d.unitScale.massUnitsForNormalized(volume.toDouble() * 1000);
       var mixture =
-          d.chemicalParcels.defaultRecord(
+          d.chemistry.defaultRecord(
               BuiltinFluidMaterials.WATER.id(), volume.toDouble(), .5F, mass, false);
       stocks.add(new LiquidCellInventory.Stock(key, volume, mass, mixture, 0, false));
     }

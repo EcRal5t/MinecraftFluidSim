@@ -163,7 +163,7 @@ final class FluidRegionWorldInteraction {
 								request.chemistry(), 8);
 				if (!restoration.transferred()) {
 					escaped += request.volume();
-					domain.chemicalParcels().recordEscapedSink(request.chemistry());
+					domain.chemistry().recordEscapedSink(request.chemistry());
 					markerBudgetLimited |= domain.particleCount() >= domain.maximumParticleCount();
 				}
 			} else if (domain.hasMaterialState()) {

@@ -65,7 +65,7 @@ final class GranularReactionStage {
       for (var rule : domain.granularState.registry.reactions()) {
         boolean complete = true;
         for (String species : rule.aqueousStoichiometry().keySet())
-          if (!domain.liquidCells.hasSpecies(domain.chemicalParcels.registry().speciesHandle(species))) {
+          if (!domain.liquidCells.hasSpecies(domain.chemistry.registry().speciesHandle(species))) {
             complete = false; break;
           }
         if (complete) { possible = true; break; }
@@ -99,18 +99,18 @@ final class GranularReactionStage {
           var accessible = solidCells.contains(cell) || candidate != null ? accessible(cell, support, rule) : null;
           if ((accessible == null || !rule.reversible()) && !canPrecipitate(cell, support, rule)) continue;
           if (evaluations++ == GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP) {
-            for (int deferred : dirtyCells) domain.chemicalParcels.markDirtyCell(deferred);
+            for (int deferred : dirtyCells) domain.chemistry.markDirtyCell(deferred);
             publish();
             return new FluidDomain.PhaseTransferStats(
                 transfers, precipitated, dissolved, signedVolume);
           }
           var portions = new ArrayList<GranularPhaseTransferEngine.LiquidPortion>();
-          int phase = domain.chemicalParcels.registry().phaseHandle(rule.liquidPhaseId());
+          int phase = domain.chemistry.registry().phaseHandle(rule.liquidPhaseId());
           for (var stock : physicalStocks(cell))
             if (stock.key().supportMask() == support
                 && stock.mixture() != null
                 && domain
-                        .chemicalParcels
+                        .chemistry
                         .registry()
                         .phaseHandleForMaterial(
                             domain.materialRegistry.material(stock.key().material()).id())
@@ -141,13 +141,13 @@ final class GranularReactionStage {
                     .domainPhaseInventory.granularPhaseTransfer()
                     .plan(rule, portions, existing, Math.min(cap, accessible.selected().extent()));
           if (!plan.changed()) {
-            if (plan.retryRequired()) domain.chemicalParcels.markDirtyCell(cell);
+            if (plan.retryRequired()) domain.chemistry.markDirtyCell(cell);
             continue;
           }
           ensureCandidate();
           long thermalCap = energyLimitedExtent(cell, rule, plan);
           if (thermalCap < Math.abs(plan.signedExtent())) {
-            if (thermalCap == 0) { domain.chemicalParcels.markDirtyCell(cell); continue; }
+            if (thermalCap == 0) { domain.chemistry.markDirtyCell(cell); continue; }
             plan = domain.domainPhaseInventory.granularPhaseTransfer().plan(rule, portions, existing, thermalCap);
             if (!plan.changed()) continue;
           }
@@ -174,12 +174,12 @@ final class GranularReactionStage {
     for (var update : plan.stockUpdates()) {
       var before = candidate.row(cell).get(update.key());
       int handle = thermal.thermalMaterialHandleForFluid(update.key().material());
-      increase += function.internalEnergyAtTemperature(handle, Mass.kilograms(update.massUnits()), update.mixture(), domain.chemicalParcels.registry(), cold)
-          - function.internalEnergyAtTemperature(handle, before.massKilograms(), before.mixture(), domain.chemicalParcels.registry(), cold);
+      increase += function.internalEnergyAtTemperature(handle, Mass.kilograms(update.massUnits()), update.mixture(), domain.chemistry.registry(), cold)
+          - function.internalEnergyAtTemperature(handle, before.massKilograms(), before.mixture(), domain.chemistry.registry(), cold);
     }
     int solid = thermal.registry().materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR, rule.solidMaterialId());
     increase += (plan.precipitation() ? 1 : -1) * function.internalEnergyAtTemperature(solid,
-        Math.abs(plan.signedSolidMass()), plan.transferredComposition().stableAmounts(domain.chemicalParcels.registry()), cold);
+        Math.abs(plan.signedSolidMass()), plan.transferredComposition().stableAmounts(domain.chemistry.registry()), cold);
     // A new representative or dissolving bed may lift the moved mass within this cell.
     increase += Math.abs(plan.signedSolidMass()) * domain.config.gravity() * domain.config.cellSize() * .5;
     if (increase <= 0) return extent;
@@ -193,7 +193,7 @@ final class GranularReactionStage {
   }
 
   private boolean canPrecipitate(int cell, int support, SolidLiquidReaction rule) {
-    var registry = domain.chemicalParcels.registry();
+    var registry = domain.chemistry.registry();
     int phase = registry.phaseHandle(rule.liquidPhaseId());
     var stocks = physicalStocks(cell);
     for (var term : rule.aqueousStoichiometry().entrySet()) {
@@ -297,12 +297,12 @@ final class GranularReactionStage {
     if (handle == 0 || !compositions().isLive(handle)) return 0;
     var composition = compositions().record(handle);
     if (composition.massResidualUnits() != 0
-        || composition.massUnits(domain.chemicalParcels.registry()) != mass
+        || composition.massUnits(domain.chemistry.registry()) != mass
         || composition.entryCount() != rule.solidComposition().size()) return 0;
     long result = -1;
     for (var term : rule.solidComposition().entrySet()) {
       long amount =
-          composition.amount(domain.chemicalParcels.registry().speciesHandle(term.getKey()));
+          composition.amount(domain.chemistry.registry().speciesHandle(term.getKey()));
       if (amount <= 0 || amount % term.getValue() != 0) return 0;
       long value = amount / term.getValue();
       if (result < 0) result = value;
@@ -547,10 +547,10 @@ final class GranularReactionStage {
       long amount = Math.subtractExact(source.amountAt(i), removed.amount(source.speciesHandle(i)));
       if (amount < 0) throw new IllegalStateException("Reactive solid composition underflow");
       if (amount > 0)
-        map.put(domain.chemicalParcels.registry().species(source.speciesHandle(i)).id(), amount);
+        map.put(domain.chemistry.registry().species(source.speciesHandle(i)).id(), amount);
     }
     return SolidCompositionRecord.fromStableAmounts(
-        domain.chemicalParcels.registry(), map, source.massResidualUnits());
+        domain.chemistry.registry(), map, source.massResidualUnits());
   }
 
   private boolean fitsSpheres(float x, float y, float z, long volume, int excluded) {
@@ -868,7 +868,7 @@ final class GranularReactionStage {
       }
       domain.markCellInventoryChanged();
       for (int cell : changed) {
-        domain.chemicalParcels.markDirtyCell(cell);
+        domain.chemistry.markDirtyCell(cell);
         domain.domainStep.granularDepositDynamics().disturbCell(cell);
       }
       if (gas != null) domain.gasTopologyCoordinator.commitPrepared(gas,occupied);
@@ -892,7 +892,7 @@ final class GranularReactionStage {
         result.add(new EnergyOwner(0, stock.key(), -1, null, null,
             new ThermalStateFunction.InventoryPortion(
                 domain.thermalState.thermalMaterialHandleForFluid(stock.key().material()), stock.massKilograms(),
-                stock.mixture() == null ? Map.of() : stock.mixture().stableAmounts(domain.chemicalParcels.registry()))));
+                stock.mixture() == null ? Map.of() : stock.mixture().stableAmounts(domain.chemistry.registry()))));
       for (int i : active(cell)) {
         var p = parcels.parcel(i);
         result.add(new EnergyOwner(1, null, i, null, null,
@@ -923,7 +923,7 @@ final class GranularReactionStage {
           Mass.kilograms(mass),
           composition == 0
               ? Map.of()
-              : compositions.record(composition).stableAmounts(domain.chemicalParcels.registry()));
+              : compositions.record(composition).stableAmounts(domain.chemistry.registry()));
     }
 
     private final class EnergyOwner {

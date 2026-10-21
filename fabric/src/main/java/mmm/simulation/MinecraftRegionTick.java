@@ -319,7 +319,7 @@ final class MinecraftRegionTick {
 				|| !after.externalSink().equals(before.externalSink())
 				|| !after.mechanicalWork().equals(before.mechanicalWork())
 				|| !after.finiteDeviceExchange().equals(before.finiteDeviceExchange());
-		boolean chemistryDirty = thermalAxis.chemistry().changedMarkers() != 0;
+		boolean chemistryDirty = thermalAxis.chemistry().changedStocks() != 0;
 		boolean granularDirty = thermalAxis.granularPhase().transfers() != 0
 				|| carrierMotion && (granularTransition.settledParcels() != 0
 				|| granularTransition.relaxedMoves() != 0

@@ -64,21 +64,21 @@ final class ChemicalReactionStage {
 	}
 	ChemicalReactionStage(FluidDomain domain) { this.domain=domain; }
 	int[] captureDirtyCells() {
-		var chemistry=domain.chemicalParcels;
+		var chemistry=domain.chemistry;
 		return chemistry==null?new int[0]:chemistry.dirtyCells();
 	}
 	private record Group(int support,int phase) implements Comparable<Group> {
 		public int compareTo(Group other) { int s=Integer.compare(support,other.support);return s!=0?s:Integer.compare(phase,other.phase); }
 	}
 
-	ChemicalParcelStore.ReactionStats step() {
-		var scheduler=domain.chemicalParcels;
-		if(scheduler==null||!scheduler.hasDirtyCells()) return new ChemicalParcelStore.ReactionStats(0,0,0);
+	RegionChemistry.ReactionStats step() {
+		var scheduler=domain.chemistry;
+		if(scheduler==null||!scheduler.hasDirtyCells()) return new RegionChemistry.ReactionStats(0,0,0);
 		var store=domain.liquidCells; var registry=store.chemicalRegistry(); var thermal=domain.thermalState;
 		prepareReactionInputs(registry);
 		if (!hasReactionInputs(store)) {
 			scheduler.restoreDirtyCells(new int[0]);
-			return new ChemicalParcelStore.ReactionStats(0,0,0);
+			return new RegionChemistry.ReactionStats(0,0,0);
 		}
 		var function=thermal==null?null:new ThermalStateFunction(thermal.registry());
 		int[] costs=new int[registry.phases().size()];
@@ -101,7 +101,7 @@ final class ChemicalReactionStage {
 		for (int cell : consumed) dirty.remove(cell);
 		if(eligible.isEmpty()) {
 			scheduler.restoreDirtyCells(dirty.stream().mapToInt(Integer::intValue).toArray());
-			return new ChemicalParcelStore.ReactionStats(consumed.size(),0,0);
+			return new RegionChemistry.ReactionStats(consumed.size(),0,0);
 		}
 		var originalThermal=thermal==null?null:thermal.preparePhaseCandidateCells(eligible.keySet().stream().mapToInt(Integer::intValue).toArray(),domain.domainCapabilities.thermalMarkerContext());
 		var futureCells=new TreeMap<Integer,List<LiquidCellInventory.Stock>>();
@@ -201,7 +201,7 @@ final class ChemicalReactionStage {
 			plan.commit();if(energy!=null) thermal.commitPhaseBatchEnergy(energy,domain.domainCapabilities.thermalMarkerContext());domain.gridDirty=true;
 		}
 		scheduler.restoreDirtyCells(dirty.stream().mapToInt(Integer::intValue).toArray());scheduler.restoreReactionCursor(cursor);
-		return new ChemicalParcelStore.ReactionStats(visited,evaluations,changed);
+		return new RegionChemistry.ReactionStats(visited,evaluations,changed);
 	}
 	private static long[] react(long[] before,ChemicalReaction rule,long extent,ChemicalRegistry registry){
 		var after=before.clone();

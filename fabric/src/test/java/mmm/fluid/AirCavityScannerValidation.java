@@ -39,7 +39,7 @@ public final class AirCavityScannerValidation {
 		validateMicroGasPoreCapacity();
 		Grid grid=new Grid(2,2,2,.5F);var phase=new FlipPressurePhaseGeometry(2,2,2);
 		phase.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[8]);
-		var geometry=GasComplementGeometry.capture(2,2,2,.5,grid.solid,grid.cutCells,phase);
+		var geometry=GasComplementGeometry.capture(2,2,2,.5,grid.cutCells,phase);
 		check(!geometry.ports().isEmpty()&&!geometry.exteriorPorts().isEmpty(),
 				"Full cube gas geometry omitted its internal or exterior openings");
 		checkRelative(geometry.pieces().stream().mapToDouble(GasComplementGeometry.Piece::volume).sum(),1,"Full cube gas geometry volume");
@@ -52,7 +52,7 @@ public final class AirCavityScannerValidation {
 		grid.solid[0]=true;grid.cutCells.replaceMask(0,255);phase.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[8]);
 		check(geometry.pieces().size()==64 && geometry.piece(0).volume()==.015625 && geometry.collisionMask(0)==0,"Gas geometry retained mutable input aliases");
 		grid.cutCells.replaceMask(1,126);
-		try { GasComplementGeometry.capture(2,2,2,.5,grid.solid,grid.cutCells,phase);throw new AssertionError("Stale PLIC collision geometry was captured"); }
+		try { GasComplementGeometry.capture(2,2,2,.5,grid.cutCells,phase);throw new AssertionError("Stale PLIC collision geometry was captured"); }
 		catch(IllegalArgumentException expected) { }
 		try { geometry.pieces().clear();throw new AssertionError("Gas pieces remained mutable"); }
 		catch(UnsupportedOperationException expected) { }
@@ -60,7 +60,7 @@ public final class AirCavityScannerValidation {
 		for(int cell=0;cell<8;cell++)split.cutCells.replaceMask(cell,255);
 		split.solid[0]=false;split.cutCells.replaceMask(0,126);var splitPhase=new FlipPressurePhaseGeometry(2,2,2);
 		splitPhase.rebuild(split.solid,split.liquidVolume,split.cutCells,null,new boolean[8]);
-		var separate=GasComplementGeometry.capture(2,2,2,1,split.solid,split.cutCells,splitPhase);
+		var separate=GasComplementGeometry.capture(2,2,2,1,split.cutCells,splitPhase);
 		check(separate.pieces().size()==2 && separate.ports().isEmpty() && separate.piece(0)!=null && separate.piece(7)!=null,
 				"Two opposite open microboxes acquired a gas connection through solid");
 		checkRelative(separate.pieces().stream().mapToDouble(GasComplementGeometry.Piece::volume).sum(),.25,"Disconnected gas volume");
@@ -145,7 +145,7 @@ public final class AirCavityScannerValidation {
 		for(long volume:new long[]{1L<<22,(1L<<22)-1}) {
 			fixed[0]=volume;pore.setFixedCellSvq(fixed);
 			phase.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,pore,new boolean[8]);
-			var gas=GasComplementGeometry.capture(2,2,2,1,grid.solid,grid.cutCells,phase);
+			var gas=GasComplementGeometry.capture(2,2,2,1,grid.cutCells,phase);
 			check(gas.poreVolume(0).equals(mmm.units.SignedDyadic.of((1L<<22)-volume,-24)),"Gas geometry changed exact pore capacity");
 			if(volume==1L<<22) check(gas.pieces().isEmpty() && gas.ports().isEmpty() && GasChamberTopology.capture(gas,true).chambers().isEmpty(),
 					"A fully occupied pore component acquired a gas chamber");
@@ -245,11 +245,11 @@ public final class AirCavityScannerValidation {
         for(int x=0;x<4;x++){grid.solid[20+x]=false;grid.cutCells.replaceMask(20+x,0);}
         var dry=new FlipPressurePhaseGeometry(5,3,3);
         dry.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[45]);
-        var source=GasComplementGeometry.capture(5,3,3,1,grid.solid,grid.cutCells,dry);
+        var source=GasComplementGeometry.capture(5,3,3,1,grid.cutCells,dry);
         grid.liquidVolume[21]=1;
         var wet=new FlipPressurePhaseGeometry(5,3,3);
         wet.rebuild(grid.solid,grid.liquidVolume,grid.cutCells,null,new boolean[45]);
-        var target=GasComplementGeometry.capture(5,3,3,1,grid.solid,grid.cutCells,wet);
+        var target=GasComplementGeometry.capture(5,3,3,1,grid.cutCells,wet);
         for(boolean sealed:new boolean[]{false,true}) {
             var split=GasChamberTopology.capture(target,sealed);
             check(split.chambers().size()==(sealed?2:1),"Closing gas bridge lost a chamber or ambient ownership");
@@ -448,7 +448,7 @@ public final class AirCavityScannerValidation {
 		byte[] masks=new byte[d.cellCount];java.util.Arrays.fill(masks,(byte)255);
 		for(int x=0;x<length;x++)masks[d.domainFlowFields.cellIndex(x,1,1)]=0;
 		d.geometry.cutCells.restoreMicroMasks(masks);
-		for(int cell=0;cell<d.cellCount;cell++)d.geometry.solid[cell]=Byte.toUnsignedInt(masks[cell])==255;
+		for(int cell=0;cell<d.cellCount;cell++)d.geometry.cutCells.fullySolid(cell)=Byte.toUnsignedInt(masks[cell])==255;
 		d.markCellInventoryChanged();
 		// Each end can affect one new cell per pass, including after a reversal.
 		// Two eight-cell influence ranges leave a full-section core between them.
@@ -469,7 +469,7 @@ public final class AirCavityScannerValidation {
 		var liquidState=d.exportLiquidCellState();var momentum=d.exportMacMomentum();var phase=d.exportPhaseOccupancyState();
 		var restored=new FluidDomain(length,3,3,config,8*length);restored.sealDomainBoundary();
 		restored.geometry.cutCells.restoreMicroMasks(masks);
-		for(int cell=0;cell<restored.cellCount;cell++)restored.geometry.solid[cell]=Byte.toUnsignedInt(masks[cell])==255;
+		for(int cell=0;cell<restored.cellCount;cell++)restored.geometry.cutCells.fullySolid(cell)=Byte.toUnsignedInt(masks[cell])==255;
 		restored.materialRegistry=liquids;
 		restored.restoreLiquidCellState(new LiquidCellInventory.Snapshot(liquidState.rows()),null);
 		restored.restoreMacMomentum(momentum);
@@ -531,7 +531,7 @@ public final class AirCavityScannerValidation {
 	private static FluidDomainState coldState(FluidDomainState s) {
 		return new FluidDomainState(s.sizeX(),s.sizeY(),s.sizeZ(),s.config(),s.maximumParticleCount(),s.sealedDomainBoundary(),
 				new LiquidCellInventory.Snapshot(s.liquid().rows()),new mmm.inventory.PhaseOccupancyState(s.phaseOccupancy().copyLiquidMicroVolumes()),
-				s.momentum(),s.copyCollisionMasks(),s.materialPalette(),s.chemicalRegistry(),s.chemicalSource(),s.chemicalSink(),
+				s.momentum(),s.fixedGeometry(),s.materialPalette(),s.chemicalRegistry(),s.chemicalSource(),s.chemicalSink(),
 				s.copyChemicalDirtyCells(),s.chemicalReactionCursor(),s.granularRegistry(),s.granular(),s.granularDynamics(),s.precipitationEnabled(),
 				s.gasRegistry(),s.gas(),s.thermalRegistry(),s.thermalOwner(),s.maximumThermalTransportSubsteps(),s.pendingPhaseVolume(),
 				s.copyThermalBoundaryTemperaturesK(),s.condensedPhasePressure(),s.materialDefinitions());

@@ -1181,7 +1181,7 @@ final class ControllerInventoryDurabilityValidation {
 			if (transport == null) return null;
 			if (transport.maximumAbsoluteTransferJ() != 0.0
 					|| !transport.reservoirExchange().equals(mmm.units.SignedDyadic.ZERO)) return null;
-			if (domain.chemicalParcels() != null && domain.chemicalParcels().hasDirtyCells()) return null;
+			if (domain.chemistry() != null && domain.chemistry().hasDirtyCells()) return null;
 			if (domain.hasPendingPhaseVolumeWork() || !domainIsAtRest()) return null;
 			return new ThermalActivity.Observation(transport, false, false, false, false, false, false, true);
 		}

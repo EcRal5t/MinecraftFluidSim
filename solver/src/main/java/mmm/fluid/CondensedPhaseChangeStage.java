@@ -164,7 +164,7 @@ final class CondensedPhaseChangeStage {
 			long delta=p.batches*(p.freezing?p.transition.lowerVolumeSvqPerBatch()-p.transition.upperVolumeSvqPerBatch()
 					:p.transition.upperVolumeSvqPerBatch()-p.transition.lowerVolumeSvqPerBatch());
 			if(delta!=0) domain.pendingPhaseVolume.add(p.cell,normalized(delta));
-			if(domain.chemicalParcels!=null) domain.chemicalParcels.markDirtyCell(p.cell);
+			if(domain.chemistry!=null) domain.chemistry.markDirtyCell(p.cell);
 		}
 		domain.domainCapabilities.refreshCoherentOccupancy();domain.markCellInventoryChanged();if(gas!=null) domain.gasTopologyCoordinator.commit(gas);
 		return new FluidDomain.ThermalPhaseStats(operations,frozen,melted,signed);

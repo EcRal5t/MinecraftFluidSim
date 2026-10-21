@@ -425,7 +425,7 @@ final class LiquidStratificationValidation {
 	}
 
 	static long[] speciesTotals(FluidDomain domain) {
-		var totals=new long[domain.chemicalParcels.registry().species().size()];
+		var totals=new long[domain.chemistry.registry().species().size()];
 		for(var stock:domain.liquidCells.stocks())if(stock.mixture()!=null)
 			for(int entry=0;entry<stock.mixture().entryCount();entry++){
 				int species=stock.mixture().speciesHandle(entry);

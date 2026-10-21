@@ -98,7 +98,7 @@ final class DomainMetrics {
 		int x = (int) Math.floor(localX / h), y = (int) Math.floor(localY / h), z = (int) Math.floor(localZ / h);
 		if (!domain.domainFlowFields.inside(x, y, z)) return false;
 		int index = domain.domainFlowFields.cellIndex(x, y, z);
-		if (domain.geometry.solid[index] || domain.geometry.cutCells.pointInsideSolid(localX, localY, localZ, h)
+		if (domain.geometry.cutCells.fullySolid(index) || domain.geometry.cutCells.pointInsideSolid(localX, localY, localZ, h)
 				|| domain.volume[index] <= domain.config.fluidEpsilon()) return false;
 		float openVolume = domain.domainCollision.effectiveOpenCellVolume(index);
 		float reconstructedFill = openVolume <= 0.0F ? 0.0F : FluidDomain.clamp01(domain.volume[index] / openVolume);

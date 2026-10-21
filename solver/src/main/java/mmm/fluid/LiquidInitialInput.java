@@ -45,7 +45,6 @@ final class LiquidInitialInput {
 		// All input validation precedes publication of the new owners.
 		domain.domainCapabilities.clearThermalBinding();
 		domain.geometry.cutCells.restoreMicroMasks(masks);
-		for (int cell = 0; cell < masks.length; cell++) domain.geometry.solid[cell] = Byte.toUnsignedInt(masks[cell]) == 255;
 		domain.liquidCells = inventory; domain.materialRegistry = palette;
         domain.phaseOccupancy = null;
 		domain.cellMacStage.commitMomentum(constrained);

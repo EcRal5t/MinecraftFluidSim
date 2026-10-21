@@ -131,7 +131,7 @@ public final class LiquidMacroscopicMotionValidation {
 	record Inventory(SignedDyadic volume, long mass, long[] species, GasAuditLedger gas, double gasCapacity) {
 		static Inventory capture(FluidDomain domain) {
 			domain.synchronizeGasTopologyForPersistence();
-			return new Inventory(rawVolume(domain), domain.liquidCells.massUnits(), domain.chemicalParcels == null ? null
+			return new Inventory(rawVolume(domain), domain.liquidCells.massUnits(), domain.chemistry == null ? null
 					: speciesTotals(domain), domain.gasState.network.sealedInventory(), LiquidMacroscopicMotionValidation.gasCapacity(domain));
 		}
 		void requireUnchanged(FluidDomain domain, String context) {
@@ -189,7 +189,7 @@ public final class LiquidMacroscopicMotionValidation {
 		for(var stock:domain.liquidCells.stocks())result[stock.key().material()]=result[stock.key().material()].add(SignedDyadic.of(stock.massUnits(),0));return result;
 	}
 	private static long[] speciesTotals(FluidDomain domain) {
-		var chemistry=domain.chemicalParcels.registry();long[] result=new long[chemistry.species().size()];
+		var chemistry=domain.chemistry.registry();long[] result=new long[chemistry.species().size()];
 		for(var stock:domain.liquidCells.stocks())if(stock.mixture()!=null)for(int i=0;i<stock.mixture().entryCount();i++)result[stock.mixture().speciesHandle(i)]=Math.addExact(result[stock.mixture().speciesHandle(i)],stock.mixture().amountAt(i));return result;
 	}
 	private static float[] velocities(FluidDomain d,int axis){return axis==0?d.mac.velocityX:axis==1?d.mac.velocityY:d.mac.velocityZ;}

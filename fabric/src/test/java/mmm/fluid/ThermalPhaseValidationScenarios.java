@@ -997,7 +997,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		require(domain.particleCount() == 0 && domain.totalCoherentSolidVolumeSvq() == 0L
 				&& cleared.condensed().coherentVolumeSvq() == coherentSvq
 				&& cleared.condensed().coherentGroups() > 0
-				&& domain.chemicalParcels().escapedSink().totalQuanta() == initialQuanta
+				&& domain.chemistry().escapedSink().totalQuanta() == initialQuanta
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"operator empty did not jointly clear/audit liquid and coherent carriers: cleared=" + cleared
 						+ " U=" + domain.exactInternalEnergy()

@@ -14,14 +14,14 @@ final class LiquidCollisionEdit {
 	final LiquidCellInventory.Plan inventory;
 	final CellMacStage.ExternalMomentum momentum;
 	final GasTopologyCoordinator.GasTopologyPlan gas;
-	final byte[] masks;
+	final FixedGeometrySnapshot fixedGeometry;
 	final List<List<LiquidCellInventory.Stock>> displaced;
 	final SignedDyadic removedEnergy, energyRoundoff;
 	private LiquidCollisionEdit(LiquidCellInventory.Plan inventory, CellMacStage.ExternalMomentum momentum,
-	                            GasTopologyCoordinator.GasTopologyPlan gas, byte[] masks,
+	                            GasTopologyCoordinator.GasTopologyPlan gas, FixedGeometrySnapshot fixedGeometry,
 	                            List<List<LiquidCellInventory.Stock>> displaced) {
 		this.inventory = inventory; this.momentum = momentum; this.gas = gas;
-		this.masks = masks; this.displaced = List.copyOf(displaced);
+		this.fixedGeometry = fixedGeometry; this.displaced = List.copyOf(displaced);
 		var observed = SignedDyadic.ZERO;
 		for (var row : displaced) for (var stock : row) observed = observed.add(SignedDyadic.of(stock.internalEnergy()));
 		this.removedEnergy = observed;
@@ -107,9 +107,9 @@ final class LiquidCollisionEdit {
 		}
 		candidate.planEdits(eraseAll).commit(); candidate.planAdditions(retainedAll).commit();
 		// Public displacement payloads are validated before any collision owner is published.
-		var totalChemistry = domain.chemicalParcels == null ? null : ChemicalTransferLedger.builder(domain.chemicalParcels.registry());
+		var totalChemistry = domain.chemistry == null ? null : ChemicalTransferLedger.builder(domain.chemistry.registry());
 		for (var row : removed) {
-			var chemical = totalChemistry == null ? null : ChemicalTransferLedger.builder(domain.chemicalParcels.registry());
+			var chemical = totalChemistry == null ? null : ChemicalTransferLedger.builder(domain.chemistry.registry());
 			var material = domain.materialRegistry == null ? null : new FluidDomain.RemovedMaterialLedger(domain.materialRegistry.size());
 			for (var stock : row) {
 				if (chemical != null) chemical.add(domain.materialRegistry.material(stock.key().material()).id(), stock.indicator(), stock.volumeFraction(), stock.massUnits(), stock.mixture());
@@ -118,14 +118,14 @@ final class LiquidCollisionEdit {
 			if (chemical != null) totalChemistry.add(chemical.build());
 			if (material != null) material.build();
 		}
-		if (totalChemistry != null) domain.chemicalParcels.requireCanRecordEscapedSink(totalChemistry.build());
+		if (totalChemistry != null) domain.chemistry.requireCanRecordEscapedSink(totalChemistry.build());
 		var inventoryEdits = new ArrayList<LiquidCellInventory.Edit>();
 		for (var key : changedKeys) inventoryEdits.add(new LiquidCellInventory.Edit(key, candidate.stock(key)));
 		var plan = domain.liquidCells.planEdits(inventoryEdits);
 		var momentum = domain.cellMacStage.prepareExternalMomentum(plan,masks);
 		plan = plan.withMechanicalHeat(momentum.heatByCell());
 		var gas = domain.gasTopologyCoordinator.planAfterCollisionCells(plan.future(), occupied, masks);
-		return new LiquidCollisionEdit(plan, momentum, gas, masks, removed);
+		return new LiquidCollisionEdit(plan, momentum, gas, gas.frame().geometry().actualCapacity().fixedGeometry, removed);
 	}
 
 	float report(int index, FluidDomain domain, ChemicalTransferLedger.Builder chemistry,

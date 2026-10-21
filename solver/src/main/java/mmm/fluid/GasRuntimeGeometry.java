@@ -11,7 +11,7 @@ final class GasRuntimeGeometry {
 	private final float cellSize;
 	private final boolean sealedExterior;
 	private final long[] occupiedSvq,sourceOccupiedSvq;
-	private final byte[] sourceCollisionMasks;
+	private final FixedGeometrySnapshot sourceFixedGeometry;
 	private final LiquidCellInventory.Snapshot sourceCells,targetCells;
 	private final PhaseOccupancyState sourceOccupancy,occupancy;
 	private final FlipPressurePhaseGeometry phase;
@@ -28,8 +28,8 @@ final class GasRuntimeGeometry {
 		cellSize=domain.config.cellSize();sealedExterior=sealed;sourceCells=domain.liquidCells.snapshot();targetCells=future.snapshot();
 		sourceOccupancy=domain.phaseOccupancy;occupancy=futureOccupancy;occupiedSvq=occupied.clone();
 		sourceOccupiedSvq=domain.granularCoupling==null?new long[domain.cellCount]:domain.granularCoupling.copySolidSvq();
-		sourceCollisionMasks=domain.geometry.cutCells.copyMicroMasks();
-		byte[] masks=futureMasks==null?sourceCollisionMasks:futureMasks;
+		sourceFixedGeometry=domain.geometry.cutCells.snapshot();
+		byte[] masks=futureMasks==null?sourceFixedGeometry.masksView():futureMasks;
 		if(masks.length!=domain.cellCount)throw new IllegalArgumentException("Future phase collision shape differs");
 		var old=domain.gasState.frame;
 		FlipCutCellGeometry cut=null;
@@ -43,8 +43,7 @@ final class GasRuntimeGeometry {
 		else phase=preparedPhase;
 		if(preparedGeometry==null&&old!=null&&phase==old.phase&&future.hasSameGeometry(old.targetCells))geometry=old.geometry;
 		else if(preparedGeometry==null){
-			boolean[] solid=new boolean[domain.cellCount];for(int cell=0;cell<solid.length;cell++)solid[cell]=cut.fullySolid(cell);
-			geometry=GasComplementGeometry.capture(domain.sizeX,domain.sizeY,domain.sizeZ,cellSize,solid,cut,phase,
+			geometry=GasComplementGeometry.capture(domain.sizeX,domain.sizeY,domain.sizeZ,cellSize,cut,phase,
 					old==null?null:old.geometry,old==null?null:old.phase,targetCells,preparedCapacity);
 		}else geometry=preparedGeometry;
 		topology=GasChamberTopology.capture(geometry,sealed);
@@ -54,7 +53,7 @@ final class GasRuntimeGeometry {
 	/** Rebinds a value-equivalent inventory endpoint while retaining its prepared geometry. */
 	private GasRuntimeGeometry(GasRuntimeGeometry prepared,LiquidCellInventory.Snapshot future){
 		cellSize=prepared.cellSize;sealedExterior=prepared.sealedExterior;
-		occupiedSvq=prepared.occupiedSvq;sourceOccupiedSvq=prepared.sourceOccupiedSvq;sourceCollisionMasks=prepared.sourceCollisionMasks;
+		occupiedSvq=prepared.occupiedSvq;sourceOccupiedSvq=prepared.sourceOccupiedSvq;sourceFixedGeometry=prepared.sourceFixedGeometry;
 		sourceCells=prepared.sourceCells;targetCells=future;sourceOccupancy=prepared.sourceOccupancy;occupancy=prepared.occupancy;
 		phase=prepared.phase;geometry=prepared.geometry;topology=prepared.topology;capacity=prepared.capacity;
 		openedPoreVolumes=prepared.openedPoreVolumes;
@@ -70,7 +69,7 @@ final class GasRuntimeGeometry {
 	}
 	private GasRuntimeGeometry(GasRuntimeGeometry retained,FluidDomain domain,LiquidCellInventory.Snapshot future){
 		cellSize=retained.cellSize;sealedExterior=retained.sealedExterior;occupiedSvq=retained.occupiedSvq;
-		sourceOccupiedSvq=retained.occupiedSvq;sourceCollisionMasks=retained.geometry.actualCapacity().masks;
+		sourceOccupiedSvq=retained.occupiedSvq;sourceFixedGeometry=retained.geometry.actualCapacity().fixedGeometry;
 		sourceCells=domain.liquidCells.snapshot();targetCells=future;sourceOccupancy=domain.phaseOccupancy;
 		occupancy=retained.occupancy;phase=retained.phase;geometry=retained.geometry;
 		topology=retained.topology;capacity=retained.capacity;openedPoreVolumes=null;
@@ -165,13 +164,15 @@ final class GasRuntimeGeometry {
 		return matchesGeometryInputs(domain,occupied,occupiedSvq,null)&&sameLiquidVolumes(domain.liquidCells,targetCells);
 	}
 	boolean matchesSourceCarrierGeometry(FluidDomain domain,long[] occupied) {
-		return matchesGeometryInputs(domain,occupied,sourceOccupiedSvq,sourceCollisionMasks)
+		return matchesGeometryInputs(domain,occupied,sourceOccupiedSvq,sourceFixedGeometry)
 				&&sameLiquidVolumes(domain.liquidCells,sourceCells)&&domain.phaseOccupancy==sourceOccupancy;
 	}
-	private boolean matchesGeometryInputs(FluidDomain domain,long[] occupied,long[] expected,byte[] masks) {
+	private boolean matchesGeometryInputs(FluidDomain domain,long[] occupied,long[] expected,FixedGeometrySnapshot fixed) {
 		if(domain==null||domain.sizeX!=geometry.sizeX()||domain.sizeY!=geometry.sizeY()||domain.sizeZ!=geometry.sizeZ()
 				||Float.floatToRawIntBits(cellSize)!=Float.floatToRawIntBits(domain.config.cellSize())||!Arrays.equals(occupied,expected))return false;
-		for(int cell=0;cell<domain.cellCount;cell++)if(domain.geometry.cutCells.mask(cell)!=(masks==null?geometry.collisionMask(cell):Byte.toUnsignedInt(masks[cell])))return false;
+		var expectedFixed=fixed==null?geometry.actualCapacity().fixedGeometry:fixed;
+		if(domain.geometry.cutCells.snapshot()!=expectedFixed)
+			for(int cell=0;cell<domain.cellCount;cell++)if(domain.geometry.cutCells.mask(cell)!=expectedFixed.mask(cell))return false;
 		return true;
 	}
 	GasComplementGeometry geometry(){return geometry;}

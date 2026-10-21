@@ -17,7 +17,7 @@
 阶段直接访问域及对应处理器，内部调用沿职责入口进行。
 库存代次与工作区失效由域集中更新，完整状态交接由 `FluidDomainStateMapper` 处理。
 
-`FluidDomainState` 保存液体单元库存、微盒相占据、三轴 MAC 动量、固定碰撞掩码、材料和注册表身份，以及颗粒、气体和热学能力状态。
+`FluidDomainState` 保存液体单元库存、微盒相占据、三轴 MAC 动量、固定几何快照、材料和注册表身份，以及颗粒、气体和热学能力状态。
 `Layout` 绑定网格、配置、容量预算、外壳模式和各注册表指纹。
 化学待处理单元和轮转位置、颗粒床层调度、待同步相变体积、世界热交换面和最近真实压力场随完整状态交接。
 
@@ -27,6 +27,7 @@ CPU 根据请求建立私有域，完整执行各阶段后返回后继；接管�
 请求中的实体输入在完整逻辑步使用一次，失败保留活动区域。
 
 普通交接直接共享已验证 `LiquidCellInventory.Snapshot` 的不可变行，复制 MAC 动量与可变非液体列。
+固定碰撞沿 `FixedGeometrySnapshot` 共享已构建的孔容、面开口与墙面积，私有候选绑定同一不可变快照。
 `PhaseOccupancyState` 的不可变空间列随同共享；冷恢复读取保存的八微盒体积，核对库存总量、固定碰撞和实际孔容。
 气体网络通过独立的 `AirNetwork.RuntimeSnapshot` 恢复，几何 frame 保持不可变共享。
 `ThermalOwnerSnapshot` 携带非液体内能和热账；其 prepared 来源使普通交接沿用已验证物性状态。
@@ -234,8 +235,10 @@ CPU 使用 binary64 压力数组，`PressureLinearSolver` 和 `PressurePrecondit
 ## 固体与碰撞
 
 Fabric 将 `VoxelShape` 采样为不可变 `CollisionField`。
-`FlipCutCellGeometry` 从每格 `2×2×2` 微盒掩码派生开放体积、连通分量与面开口。
-单元库存、压力、液体输运和颗粒接触读取同一几何输入；checkpoint 和后端交接保存原始掩码。
+[`FixedGeometrySnapshot`](../../solver/src/main/java/mmm/fluid/FixedGeometrySnapshot.java) 保存每格 `2×2×2` 微盒掩码、开放体积、面开口与墙面积；开放连通分量沿固定掩码表读取。
+`FluidDomainState` 持有这份不可变固定几何，冷读将编码掩码构造成同一表示，checkpoint 编码导出其掩码。
+[`FlipCutCellGeometry`](../../solver/src/main/java/mmm/fluid/FlipCutCellGeometry.java) 是各域的编辑视图。普通恢复直接绑定快照；真实掩码变化时复制可写掩码，并在读取面几何或捕获状态时一次构建新快照。碰撞候选提交直接接管其已准备的快照。
+单元库存、压力、液体输运、颗粒接触及气体后继共享这份固定几何；旧气体帧保留原快照，私有候选替壳后仍可独立读取。满固体判定直接读取掩码。
 
 碰撞编辑批量规划被挤出的实际液体与固体库存，联合核对开放支撑、接收容量、组成、动量和内能后提交。
 液体通过固定面开口与容量约束保持在开放空间，活动颗粒通过球体接触响应处理恢复和摩擦。

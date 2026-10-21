@@ -87,7 +87,7 @@ final class FlipPressurePhaseGeometry {
 	void rebuildOccupancy(PhaseOccupancyState state,FlipCutCellGeometry cut,double[] pore,FlipPressurePhaseGeometry captured) {
 		if(captured==this)throw new IllegalArgumentException("Occupancy reconstruction requires a distinct source");
 		occupancyCells=new OccupancyCell[fraction.length];
-        collisionMasks=cut.copyMicroMasks();java.util.Arrays.fill(components,null);java.util.Arrays.fill(offsetBrackets,null);
+        collisionMasks=cut.snapshot().masksView();java.util.Arrays.fill(components,null);java.util.Arrays.fill(offsetBrackets,null);
         for(int cell=0;cell<fraction.length;cell++){
             double total=0,liquid=0;for(int bit=0;bit<8;bit++){int piece=8*cell+bit;total+=pore[piece];liquid+=state.liquidVolume(piece);}
             poreVolumes[cell]=SignedDyadic.of(total);fraction[cell]=total>0?Math.clamp(liquid/total,0,1):0;normalX[cell]=normalY[cell]=normalZ[cell]=0;planeOffset[cell]=0;
@@ -262,7 +262,7 @@ final class FlipPressurePhaseGeometry {
 			overlay[edit.cell()] = edit;
 		}
 		revision = Math.addExact(revision,1);
-		collisionMasks = cutCells.copyMicroMasks();
+		collisionMasks = cutCells.snapshot().masksView();
 		java.util.Arrays.fill(components,null);
 		java.util.Arrays.fill(offsetBrackets,null);
 		for (int cell = 0; cell < fraction.length; cell++) {

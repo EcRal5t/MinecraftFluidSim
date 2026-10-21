@@ -450,7 +450,6 @@ public final class GranularCarrierValidation {
 				require(state.deposits.tryAdd(cell, new mmm.granular.GranularDepositStore.SolidPortion(
 						sand, 0, volume, mmm.units.Mass.fromKilograms(2_600.0 * volume / SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL), "supported upper beds must fit");
 			}
-			for (int cell = 0; cell < domain.cellCount; cell++) domain.geometry.solid[cell] = domain.geometry.cutCells.fullySolid(cell);
 			domain.domainFlowFields.ensureGrid();
 			long[] planned = domain.granularCoupling.copySolidSvq();
 			var environment = domain.domainStep.granularDepositEnvironment(planned);

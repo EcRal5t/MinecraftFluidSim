@@ -56,13 +56,13 @@ final class CarrierInventoryReader {
 				domain.geometry.cutCells.copyMicroMasks(), view.mass, view.material);
 	}
 	FlipChemicalParticleState exportChemicalParticleState() {
-		if (domain.chemicalParcels == null) throw new IllegalStateException("Chemical view requires chemistry");
+		if (domain.chemistry == null) throw new IllegalStateException("Chemical view requires chemistry");
 		var mixtures = new ArrayList<ChemicalMixtureRecord>(); byte[] indicator = new byte[domain.liquidCells.physicalSize()];
 		for (int i = 0; i < indicator.length; i++) {
 			var stock = domain.liquidCells.physicalStockAt(i); mixtures.add(stock.mixture()); indicator[i] = stock.indicator() ? (byte) 1 : 0;
 		}
-		return FlipChemicalParticleState.capture(exportMaterialParticleState(), domain.chemicalParcels.registry(), mixtures, indicator,
-				domain.chemicalParcels.externalSource(), domain.chemicalParcels.escapedSink());
+		return FlipChemicalParticleState.capture(exportMaterialParticleState(), domain.chemistry.registry(), mixtures, indicator,
+				domain.chemistry.externalSource(), domain.chemistry.escapedSink());
 	}
 
 	FlipThermalParticleState exportThermalParticleState() {
@@ -87,8 +87,8 @@ final class CarrierInventoryReader {
 	}
 
 	ChemicalDisplaySnapshot copyChemicalDisplaySnapshot() {
-		if (domain.chemicalParcels == null) throw new IllegalStateException("Chemistry is not bound");
-		var registry = domain.chemicalParcels.registry();
+		if (domain.chemistry == null) throw new IllegalStateException("Chemistry is not bound");
+		var registry = domain.chemistry.registry();
 		long[][] totals = new long[domain.cellCount][registry.species().size()];
 		double[] volume = new double[domain.cellCount], indicated = new double[domain.cellCount];
 		for (var stock : domain.liquidCells.stocks()) {

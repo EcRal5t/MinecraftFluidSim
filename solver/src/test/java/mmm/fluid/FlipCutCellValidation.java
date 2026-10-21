@@ -139,6 +139,11 @@ public final class FlipCutCellValidation {
 		checkClose(displacedOnRefresh, 0.0F, 0.0F,
 				"unchanged world geometry displaced liquid after checkpoint restore");
 		checkClose(restored.totalVolume(), exactVolume, 0.0F, "restored liquid volume");
+		restored.setSolid(2,2,2,true);
+		check(checkpoint.fixedGeometry().mask(index(4,4,2,2,2))==0&&!live.isSolid(2,2,2),
+				"Private collision edit changed its checkpoint or original domain");
+		checkClose(restored.geometry.cutCells.xFaceOpen(2,2,2),0,0,"Edited collision aperture");
+		checkClose(live.geometry.cutCells.xFaceOpen(2,2,2),1,0,"Original collision aperture changed through a private edit");
 	}
 
 	private static void partialObstacleFlowRemainsFiniteAndConservative() {

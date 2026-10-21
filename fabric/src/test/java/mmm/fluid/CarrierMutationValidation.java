@@ -57,7 +57,7 @@ public final class CarrierMutationValidation {
 			double energy = domain.thermalState.gasNodeEnergy(isolated, domain.gasState.network);
 			int water = registries.liquids().handle(BuiltinFluidMaterials.WATER.id());
 			long mass = domain.unitScale.massUnitsForNormalized(1000);
-			var chemical = domain.chemicalParcels.tryDefaultRecord(BuiltinFluidMaterials.WATER.id(), 1, .5F, mass, false);
+			var chemical = domain.chemistry.defaultRecord(BuiltinFluidMaterials.WATER.id(), 1, .5F, mass, false);
 			var ledger = mmm.chemistry.ChemicalTransferLedger.builder(registries.chemical())
 					.add(BuiltinFluidMaterials.WATER.id(), false, 1, mass, chemical).build();
 			boolean transferred = switch (mode) {
@@ -91,7 +91,7 @@ public final class CarrierMutationValidation {
 	private static void defaultInsertionsConserveThermalInventory() throws Exception {
 		var registries = FullCapabilityTestFixture.load();
 		FluidDomain valid = fullCapabilityDomain(registries);
-		var water = valid.chemicalParcels.tryDefaultRecord(valid.materialRegistry.material(0).id(),
+		var water = valid.chemistry.defaultRecord(valid.materialRegistry.material(0).id(),
 				.13F, valid.config.cellSize(), mmm.units.SolverUnitScale.forCellSize(valid.config.cellSize()).massUnitsForNormalized((double) .13F * 1000), false);
 		var chemical = mmm.chemistry.ChemicalTransferLedger.builder(registries.chemical())
 				.add(valid.materialRegistry.material(0).id(), false, .13F, valid.unitScale.massUnitsForNormalized((double) .13F * 1000), water).build();
@@ -101,7 +101,7 @@ public final class CarrierMutationValidation {
 						new FluidDomain.MaterialPortion(1, .13F, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized((double) .13F * 850))), 0, true).transferred(), "default material insertion failed"),
 				() -> require(valid.domainInventory.tryInsertExactChemical(1, 1, 1, chemical, 0, true).transferred(), "default chemical insertion failed"))) {
 			var liquidBefore=valid.liquidCells.exactInternalEnergy();long beforeQ=totalQuanta(valid);
-			long sourceQ = valid.chemicalParcels.externalSource().totalQuanta();
+			long sourceQ = valid.chemistry.externalSource().totalQuanta();
 			var sourceU = valid.thermalState.auditLedger().externalSource();
 			insertion.run();
 			var addedU=valid.liquidCells.exactInternalEnergy().subtract(liquidBefore);
@@ -109,7 +109,7 @@ public final class CarrierMutationValidation {
 			require(valid.thermalState.auditLedger().externalSource().subtract(sourceU).equals(addedU)
 					&& valid.exactInternalEnergy().equals(valid.thermalState.auditLedger().expectedInventory()),
 					"default source did not retain the exact sum of actual stored energies");
-			require(totalQuanta(valid)-beforeQ == valid.chemicalParcels.externalSource().totalQuanta() - sourceQ,
+			require(totalQuanta(valid)-beforeQ == valid.chemistry.externalSource().totalQuanta() - sourceQ,
 					"default insertion chemical source did not close");
 		}
 		FluidDomain granular = emptyMaterialDomain(4096);
@@ -217,7 +217,7 @@ public final class CarrierMutationValidation {
 		var portions=new java.util.ArrayList<mmm.thermal.ThermalStateFunction.InventoryPortion>();
 		for(var piece:pieces){
 			String material=domain.materialRegistry.material(piece.materialHandle()).id();
-			builder.add(material,false,piece.volume(),piece.massUnits(),domain.chemicalParcels.defaultRecord(
+			builder.add(material,false,piece.volume(),piece.massUnits(),domain.chemistry.defaultRecord(
 					material,(float)piece.volume(),domain.config.cellSize(),piece.massUnits(),false));
 			portions.add(new mmm.thermal.ThermalStateFunction.InventoryPortion(
 					registry.materialHandle(material),mmm.units.Mass.kilograms(piece.massUnits()),java.util.Map.of()));
@@ -322,7 +322,7 @@ public final class CarrierMutationValidation {
 		requireUnchanged(material,materialBefore);
 		var valid=material.exportChemicalParticleState();
 		var restored=new FluidDomain(4,4,4,material.config(),material.maximumParticleCount());
-		restored.restoreChemicalParticleState(valid,material.chemicalParcels.registry());
+		restored.restoreChemicalParticleState(valid,material.chemistry.registry());
 		require(restored.totalVolumeExact()==material.totalVolumeExact() && restored.totalMass()==material.totalMass()
 				&& java.util.Arrays.equals(speciesTotals(restored),valid.copySpeciesTotals())
 				&& java.util.Arrays.equals(restored.exportChemicalParticleState().materials().copyPositionVolume(),valid.materials().copyPositionVolume()),
@@ -419,12 +419,12 @@ public final class CarrierMutationValidation {
 	private static ReplacementState replacementState(FluidDomain domain){
 		String state=domain.liquidCells.revision()+":"+domain.liquidCells.stocks()+":"+java.util.Arrays.toString(domain.mac.momentumX)+":"+java.util.Arrays.toString(domain.mac.momentumY)+":"+java.util.Arrays.toString(domain.mac.momentumZ)+":"+java.util.Arrays.toString(domain.geometry.cutCells.copyMicroMasks());
 		if(domain.thermalState!=null)state+=":"+domain.thermalState.thermalRevision();
-		return new ReplacementState(state,domain.chemicalParcels==null?null:domain.chemicalParcels.externalSource(),domain.chemicalParcels==null?null:domain.chemicalParcels.escapedSink(),domain.thermalState==null?null:domain.thermalState.auditLedger());
+		return new ReplacementState(state,domain.chemistry==null?null:domain.chemistry.externalSource(),domain.chemistry==null?null:domain.chemistry.escapedSink(),domain.thermalState==null?null:domain.thermalState.auditLedger());
 	}
 	private static void requireUnchanged(FluidDomain domain,ReplacementState before){
 		var after=replacementState(domain);require(before.equals(after),"Rejected edit changed inventory, momentum or audit");
 	}
 	private static long totalQuanta(FluidDomain domain){long total=0;for(var stock:domain.liquidCells.stocks())if(stock.mixture()!=null)for(int i=0;i<stock.mixture().entryCount();i++)total=Math.addExact(total,stock.mixture().amountAt(i));return total;}
-	private static long[] speciesTotals(FluidDomain domain){var result=new long[domain.chemicalParcels.registry().species().size()];for(var stock:domain.liquidCells.stocks())if(stock.mixture()!=null)for(int entry=0;entry<stock.mixture().entryCount();entry++)result[stock.mixture().speciesHandle(entry)]=Math.addExact(result[stock.mixture().speciesHandle(entry)],stock.mixture().amountAt(entry));return result;}
+	private static long[] speciesTotals(FluidDomain domain){var result=new long[domain.chemistry.registry().species().size()];for(var stock:domain.liquidCells.stocks())if(stock.mixture()!=null)for(int entry=0;entry<stock.mixture().entryCount();entry++)result[stock.mixture().speciesHandle(entry)]=Math.addExact(result[stock.mixture().speciesHandle(entry)],stock.mixture().amountAt(entry));return result;}
 
 }

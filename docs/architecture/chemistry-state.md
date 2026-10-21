@@ -6,7 +6,7 @@
 
 - **组分状态和反应**
   - 代码入口：
-    - [ChemicalParcelStore](../../model/src/main/java/mmm/chemistry/ChemicalParcelStore.java)
+    - [RegionChemistry](../../model/src/main/java/mmm/chemistry/RegionChemistry.java)
     - [ChemicalReactionStage](../../solver/src/main/java/mmm/fluid/ChemicalReactionStage.java)
   - 测试选择器：`chemistry`
 
@@ -62,15 +62,15 @@ registry 校验未知 ID、重复 ID、非正质量、组成/电荷/质量不守
 ## 独立保存的数据
 
 - `LiquidCellInventory.Stock` 直接保存材料、体积、质量、不可变物种组成、质量余量、指示剂与内能。
-- 区域保存逐物种总量、电荷、组成及外部源汇审计。
+- `RegionChemistry` 保存区域注册表引用、化学源汇审计、待处理单元与反应轮转位置；逐物种总量、电荷和组成直接从单元库存汇总。
 - `FluidMixture` 保存机械材料库存，`ChemicalContents` 保存完整化学容器库存，物品按其实际类型保存。
 
 `1 quantum = 1 μmol`，`10^6 quanta = 1 mol`，物种数量为非负整数，数量运算检查溢出。
 每份单元记录的键为 `(cell, material, supportMask)`，同格各固定开放分量分别保存组成。
-物种、整数质量、质量余量和内能随同一共享通量分配；供体承接可表示性余数，来源总量精确闭合。
+实际体积通量先分配整数质量，物种按接受的质量份额分配，参考能读取同一物种列；最大实际质量份额承接物种与内能余量，来源总量精确闭合。原生零质量几何尾项保留组成和零内能。
 
 反应和指示剂操作通过单元库存计划准备完整后继，在首次写入前验证来源代次、质量、物种和容量。
-化学源汇账、待处理单元和轮转位置随 `FluidDomainState` 单独交接。
+化学源汇账、待处理单元和轮转位置随 `FluidDomainState` 单独交接。审计计划绑定区域化学对象与原源汇账身份，库存计划绑定实际单元库存代次，准备与提交共同保持原子性。
 checkpoint 在单元记录中保存组成，manifest 绑定物种 palette、注册表指纹与总账；冷恢复校验后绑定当前注册表。
 
 质量关系为：

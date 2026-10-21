@@ -11,13 +11,14 @@ final class GasComponentCapacity {
     /** One immutable stock-derived preparation shared by dry pieces, topology and thermodynamics. */
     static final class Prepared {
         final LiquidCellInventory.Snapshot cells;
+        final FixedGeometrySnapshot fixedGeometry;
         final byte[] masks;
         final SignedDyadic[] pores;
         final int[] offsets;
         final List<Component> components;
         final double[] dry;
-        Prepared(LiquidCellInventory.Snapshot cells,byte[] masks,SignedDyadic[] pores,int[] offsets,List<Component> components,double[] dry){
-            this.cells=cells;this.masks=masks;this.pores=pores;this.offsets=offsets;this.components=List.copyOf(components);this.dry=dry;
+        Prepared(LiquidCellInventory.Snapshot cells,FixedGeometrySnapshot fixedGeometry,SignedDyadic[] pores,int[] offsets,List<Component> components,double[] dry){
+            this.cells=cells;this.fixedGeometry=fixedGeometry;this.masks=fixedGeometry.masksView();this.pores=pores;this.offsets=offsets;this.components=List.copyOf(components);this.dry=dry;
         }
     }
     private static final SignedDyadic[] OPEN_PORE=openPores();
@@ -36,7 +37,7 @@ final class GasComponentCapacity {
     private static Prepared prepare(FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,SignedDyadic[] preparedPores,long[] occupied,
                                     LiquidCellInventory.Snapshot cells,Prepared source){
         int count=cells.cellCount();var components=new ArrayList<Component>(source==null?count:source.components.size());
-        byte[] masks=cut.copyMicroMasks();var pores=new SignedDyadic[count];int[] offsets=new int[count+1];double[] dry=new double[8*count];
+        var fixedGeometry=cut.snapshot();byte[] masks=fixedGeometry.masksView();var pores=new SignedDyadic[count];int[] offsets=new int[count+1];double[] dry=new double[8*count];
         boolean unchanged=source!=null;
         for(int cell=0;cell<count;cell++){
             int mask=Byte.toUnsignedInt(masks[cell]);var supports=CellRemapMicroTopology.components(mask);
@@ -68,7 +69,7 @@ final class GasComponentCapacity {
             }
         }
         if(unchanged)return source;
-        offsets[count]=components.size();return new Prepared(cells,masks,pores,offsets,components,dry);
+        offsets[count]=components.size();return new Prepared(cells,fixedGeometry,pores,offsets,components,dry);
     }
     /** Shared stock-derived endpoint for both dry geometry presence and actual chamber capacity. */
     private static SignedDyadic availableVolume(int cell,int support,SignedDyadic capacity,List<LiquidCellInventory.Stock> row){

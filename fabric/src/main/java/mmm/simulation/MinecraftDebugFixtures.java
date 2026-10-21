@@ -212,7 +212,7 @@ public final class MinecraftDebugFixtures {
 		var stocks = domain.exportLiquidCellState().physicalStocks();
 		for (int marker = 0; marker < domain.particleCount(); marker++) {
 			boolean acid = positionVolume[marker * 4] < divider;
-			var registry = domain.chemicalParcels().registry();
+			var registry = domain.chemistry().registry();
 			var stock = stocks.get(marker);
 			var solution = mmm.chemistry.ChemicalMixtureRecord.fromSolutesAndSolventMass(registry,
 					java.util.Map.of(acid ? "mmm:hcl" : "mmm:naoh", reagentMicromoles), "mmm:h2o", stock.massUnits());

@@ -1581,13 +1581,14 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			var thermalRevision = refused.thermalState.thermalRevision();
 			long carrierRevision = refused.domainFlowFields.carrierMutationRevision();
 			var audit = refused.thermalAudit();
-			long chemicalRevision = refused.chemicalParcels == null ? 0 : refused.chemicalParcels.mutationRevision();
+			var chemistry=refused.chemistry;
+			var chemicalSource=chemistry==null?null:chemistry.externalSource();var chemicalSink=chemistry==null?null:chemistry.escapedSink();
 			require(!insertGasFixtureLiquid(refused, insertion, 1), "finite gas cavity disappearance accepted insertion");
 			require(refused.particleCount() == 0 && refused.gasState.frame == frame
 					&& refused.gasState.network.revision() == gasRevision
 					&& refused.domainFlowFields.carrierMutationRevision() == carrierRevision
 					&& refused.thermalState.thermalRevision().equals(thermalRevision) && refused.thermalAudit() == audit
-					&& (refused.chemicalParcels == null ? 0 : refused.chemicalParcels.mutationRevision()) == chemicalRevision
+					&& refused.chemistry==chemistry&&(chemistry==null||chemistry.externalSource()==chemicalSource&&chemistry.escapedSink()==chemicalSink)
 					&& refused.exportGasState("").nodes().equals(state.gas().nodes()),
 					"rejected insertion changed a carrier, gas, thermal or chemical owner");
 		}
@@ -1616,8 +1617,8 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		if (insertion == 1) return domain.domainInventory.tryInsertExactMixture(0, 0, 0,
 				List.of(new FluidDomain.MaterialPortion(0, volume, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(volume * 1000))), 0, true, 1.001).transferred();
 		if (insertion == 2) return domain.addVolumeNearBudgeted(0, 0, 0, volume, 0).addedVolume() == volume;
-		var record = domain.chemicalParcels.defaultRecord(BuiltinFluidMaterials.WATER.id(), volume, .5F, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(volume * 1000), false);
-		var ledger = mmm.chemistry.ChemicalTransferLedger.builder(domain.chemicalParcels.registry())
+		var record = domain.chemistry.defaultRecord(BuiltinFluidMaterials.WATER.id(), volume, .5F, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(volume * 1000), false);
+		var ledger = mmm.chemistry.ChemicalTransferLedger.builder(domain.chemistry.registry())
 				.add(BuiltinFluidMaterials.WATER.id(), false, volume, mmm.units.Mass.fromKilograms(volume * 125), record).build();
 		return domain.domainInventory.tryInsertExactChemical(0, 0, 0, ledger, 0, true, 1.001).transferred();
 	}

@@ -1,6 +1,6 @@
 package mmm.fluid;
 
-import mmm.chemistry.ChemicalParcelStore;
+import mmm.chemistry.RegionChemistry;
 import mmm.granular.GranularCouplingFields;
 import mmm.granular.GranularDepositDynamics;
 import java.util.List;
@@ -81,7 +81,7 @@ final class DomainStep {
 			domain.lastThermalPhaseStats = thermalAxis.condensedPhase();
 			domain.lastGasThermalPhaseStats = thermalAxis.gasPhase();
 		}
-		ChemicalParcelStore.ReactionStats chemistry = thermalAxis.chemistry();
+		RegionChemistry.ReactionStats chemistry = thermalAxis.chemistry();
 		GranularTransitionStage.Outcome granularTransition = domain.granularTransitionStage.step();
 		domain.lastGranularDepositStats = granularTransition.depositStats();
 
@@ -90,7 +90,7 @@ final class DomainStep {
 				finalParticleKineticEnergy - carrierTransferInitialKineticEnergy;
 		return new StepStats(
 				substeps, pressureIterations, (float)domain.pressureSystem.lastResult().residualRms(), before, domain.totalVolume(), massBefore, domain.totalMass(),
-				chemistry.dirtyCells(), chemistry.evaluations(), chemistry.changedMarkers(),
+				chemistry.visitedCells(), chemistry.evaluations(), chemistry.changedStocks(),
 				thermalAxis.condensedPhase(), thermalAxis.gasPhase(),
 				captureMechanicalAudit ? mechanicalAudit.finish(
 						finalParticleKineticEnergy, mechanicalPotentialEnergyJoules(),
@@ -102,7 +102,7 @@ final class DomainStep {
 	private static ThermalAxisStats inactiveThermalAxisStats() {
 		return new ThermalAxisStats(
 				new ThermalTransport.Stats(0, 0, 0.0, SignedDyadic.ZERO, SignedDyadic.ZERO),
-				new ChemicalParcelStore.ReactionStats(0, 0, 0),
+				new RegionChemistry.ReactionStats(0, 0, 0),
 				new PhaseTransferStats(0, 0, 0, 0L),
 				new FluidDomain.ThermalPhaseStats(0, 0, 0, 0L),
 				new FluidDomain.GasThermalPhaseStats(0, 0, 0));
@@ -370,7 +370,7 @@ final class DomainStep {
 			}
 
 			@Override public void onSolidChanged(int cell) {
-				if (domain.precipitationEnabled) domain.chemicalParcels.markDirtyCell(cell);
+				if (domain.precipitationEnabled) domain.chemistry.markDirtyCell(cell);
 			}
 		};
 	}
@@ -407,8 +407,8 @@ final class DomainStep {
 			if (previous < 0) continue;
 			int current = granularParcelCell(domain.granularState.parcels.parcel(parcel));
 			if (current != previous) {
-				domain.chemicalParcels.markDirtyCell(previous);
-				domain.chemicalParcels.markDirtyCell(current);
+				domain.chemistry.markDirtyCell(previous);
+				domain.chemistry.markDirtyCell(current);
 			}
 		}
 	}

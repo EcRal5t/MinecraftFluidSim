@@ -24,7 +24,7 @@ public final class FluidDomainState {
 	private final LiquidCellInventory.Snapshot liquid;
 	private final PhaseOccupancyState phaseOccupancy;
 	private final MacMomentumState momentum;
-	private final byte[] collisionMasks;
+	private final FixedGeometrySnapshot fixedGeometry;
 	private final List<FluidMaterial> palette;
 	private final ChemicalRegistry chemicalRegistry;
 	private final ChemicalTransferLedger chemicalSource, chemicalSink;
@@ -59,7 +59,7 @@ public final class FluidDomainState {
 
 	public FluidDomainState(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config, int maximumParticleCount,
 			boolean sealedDomainBoundary, LiquidCellInventory.Snapshot liquid, PhaseOccupancyState phaseOccupancy, MacMomentumState momentum,
-			byte[] collisionMasks, List<FluidMaterial> palette, ChemicalRegistry chemicalRegistry,
+			FixedGeometrySnapshot fixedGeometry, List<FluidMaterial> palette, ChemicalRegistry chemicalRegistry,
 			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells, int chemicalReactionCursor,
 			GranularRegistry granularRegistry, GranularStateSnapshot granular, GranularDepositDynamics.State granularDynamics,
 			boolean precipitationEnabled, GasRegistry gasRegistry, GasStateSnapshot gas,
@@ -73,9 +73,9 @@ public final class FluidDomainState {
 		this.liquid = Objects.requireNonNull(liquid); this.momentum = Objects.requireNonNull(momentum);
 		this.phaseOccupancy = Objects.requireNonNull(phaseOccupancy);
 		if (phaseOccupancy.cellCount() != cells) throw new IllegalArgumentException("Phase occupancy shape differs from domain");
-		if (liquid.cellCount() != cells || collisionMasks.length != cells || momentum.sizeX() != sizeX || momentum.sizeY() != sizeY || momentum.sizeZ() != sizeZ)
+		if (liquid.cellCount() != cells || fixedGeometry==null || !fixedGeometry.matchesShape(sizeX,sizeY,sizeZ) || momentum.sizeX() != sizeX || momentum.sizeY() != sizeY || momentum.sizeZ() != sizeZ)
 			throw new IllegalArgumentException("Liquid inventory, collision and MAC shapes differ");
-		this.collisionMasks = collisionMasks.clone(); this.palette = List.copyOf(palette);
+		this.fixedGeometry = fixedGeometry; this.palette = List.copyOf(palette);
 		this.chemicalRegistry = chemicalRegistry; this.chemicalSource = Objects.requireNonNull(chemicalSource);
 		this.chemicalSink = Objects.requireNonNull(chemicalSink);
 		this.chemicalDirtyCells = chemicalDirtyCells == null ? null : chemicalDirtyCells.clone();
@@ -115,7 +115,8 @@ public final class FluidDomainState {
 	public LiquidCellInventory.Snapshot liquid() { return liquid; }
 	public PhaseOccupancyState phaseOccupancy() { return phaseOccupancy; }
 	public MacMomentumState momentum() { return momentum; }
-	public byte[] copyCollisionMasks() { return collisionMasks.clone(); }
+	public FixedGeometrySnapshot fixedGeometry() { return fixedGeometry; }
+	public byte[] copyCollisionMasks() { return fixedGeometry.copyMasks(); }
 	public List<FluidMaterial> materialPalette() { return palette; }
 	public CarrierKind carrierKind() { return chemicalRegistry != null ? CarrierKind.CHEMICAL : palette.isEmpty() ? CarrierKind.PURE : CarrierKind.MATERIAL; }
 	public ChemicalRegistry chemicalRegistry() { return chemicalRegistry; }

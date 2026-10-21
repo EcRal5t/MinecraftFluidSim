@@ -25,13 +25,12 @@ final class CondensedInventoryClearPlanner {
 	/** Completes every fallible liquid-clear audit check without changing marker truth. */
 	FluidDomain.WaterClearPlan planWater() {
 		ChemicalTransferLedger drained = ChemicalTransferLedger.EMPTY;
-		if (domain.chemicalParcels != null) {
-			ChemicalTransferLedger.Builder builder = ChemicalTransferLedger.builder(domain.chemicalParcels.registry());
+		if (domain.chemistry != null) {
+			ChemicalTransferLedger.Builder builder = ChemicalTransferLedger.builder(domain.chemistry.registry());
 			for (var stock : domain.liquidCells.stocks()) builder.add(
 					domain.materialRegistry.material(stock.key().material()).id(), stock.indicator(),
 					stock.volumeFraction(), stock.massUnits(), stock.mixture());
 			drained = builder.build();
-			domain.chemicalParcels.requireCanRecordEscapedSink(drained);
 		}
 		return new FluidDomain.WaterClearPlan(domain.liquidCells.size(),
 				Double.doubleToRawLongBits(domain.totalVolumeExact()),
@@ -39,7 +38,7 @@ final class CondensedInventoryClearPlanner {
 				domain.thermalState == null ? SignedDyadic.ZERO
 						: domain.liquidCells.exactInternalEnergy(),
 				domain.domainFlowFields.carrierMutationRevision(),
-				domain.chemicalParcels == null ? 0L : domain.chemicalParcels.mutationRevision(),domain.transferPlanner.planLiquidClear());
+				domain.chemistry == null ? null : domain.chemistry.planAuditExchange(ChemicalTransferLedger.EMPTY,drained),domain.transferPlanner.planLiquidClear());
 	}
 
 	/** Plans one operator clear across liquid markers and every coherent condensed phase. */
@@ -49,8 +48,8 @@ final class CondensedInventoryClearPlanner {
 				? List.of() : domain.thermalState.coherentPhases().snapshot();
 		ChemicalTransferLedger coherentChemistry = ChemicalTransferLedger.EMPTY;
 		if (!groups.isEmpty()) {
-			ChemicalTransferLedger.Builder builder = domain.chemicalParcels == null
-					? null : ChemicalTransferLedger.builder(domain.chemicalParcels.registry());
+			ChemicalTransferLedger.Builder builder = domain.chemistry == null
+					? null : ChemicalTransferLedger.builder(domain.chemistry.registry());
 			for (CoherentPhaseStore.Group group : groups) {
 				if (group.composition() == null) continue;
 				if (builder == null) {
@@ -65,7 +64,6 @@ final class CondensedInventoryClearPlanner {
 			if (builder != null) coherentChemistry = builder.build();
 		}
 		ChemicalTransferLedger drained = liquid.drained().plus(coherentChemistry);
-		if (domain.chemicalParcels != null) domain.chemicalParcels.requireCanRecordEscapedSink(drained);
 		SignedDyadic coherentEnergy = domain.thermalState == null
 				? SignedDyadic.ZERO : domain.thermalState.coherentPhases().exactEnergy();
 		long coherentSvq = domain.thermalState == null ? 0L : domain.thermalState.coherentPhases().totalOccupiedSvq();
@@ -73,7 +71,7 @@ final class CondensedInventoryClearPlanner {
 		return new FluidDomain.CondensedClearPlan(liquid, groups, drained, coherentEnergy, coherentSvq,
 				coherentMass,
 				domain.domainFlowFields.carrierMutationRevision(),
-				domain.chemicalParcels == null ? 0L : domain.chemicalParcels.mutationRevision());
+				domain.chemistry == null ? null : domain.chemistry.planAuditExchange(ChemicalTransferLedger.EMPTY,drained));
 	}
 
 	private String coherentLiquidMaterialId(String coherentPhaseId) {

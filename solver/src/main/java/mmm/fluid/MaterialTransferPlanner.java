@@ -4,7 +4,7 @@ import mmm.inventory.LiquidCellInventory;
 
 import mmm.chemistry.ChemicalLimits;
 import mmm.chemistry.ChemicalMixtureRecord;
-import mmm.chemistry.ChemicalParcelStore;
+import mmm.chemistry.RegionChemistry;
 import mmm.chemistry.ChemicalTransferLedger;
 import mmm.thermal.ThermalAuditLedger;
 import mmm.thermal.ThermalStateFunction;
@@ -43,16 +43,16 @@ final class MaterialTransferPlanner {
 	}
 	FluidDomain.ExactChemicalTransfer insertChemical(int x, int y, int z, ChemicalTransferLedger ledger,
 	                                                int radius, boolean externalSource, Double energy) {
-		if (domain.chemicalParcels == null) throw new IllegalStateException("Chemical insertion requires chemistry");
+		if (domain.chemistry == null) throw new IllegalStateException("Chemical insertion requires chemistry");
 		if (ledger == null) throw new IllegalArgumentException("Chemical ledger is missing");
 		if (ledger.isEmpty()) return new FluidDomain.ExactChemicalTransfer(true, ledger);
-		var inputs = new ArrayList<Input>(); var chemistry = domain.chemicalParcels.registry();
+		var inputs = new ArrayList<Input>(); var chemistry = domain.chemistry.registry();
 		for (var group : ledger.groups()) {
 			if (externalSource && group.massUnits() <= 0) throw new IllegalArgumentException("External liquid source requires actual positive mass");
 			int material = domain.materialRegistry.handle(group.materialId());
 			var mixture = ChemicalMixtureRecord.fromStableAmounts(chemistry, group.speciesQuanta(), group.massResidualUnits());
 			if (mixture.massUnits(chemistry) != group.massUnits()) throw new IllegalArgumentException("Chemical source mass differs from its species and residual");
-			domain.chemicalParcels.requireCompatible(mixture, group.materialId(), group.indicator());
+			domain.chemistry.requireCompatible(mixture, group.materialId(), group.indicator());
 			inputs.add(new Input(material, SignedDyadic.of(group.normalizedVolume()), group.massUnits(), mixture, group.indicator()));
 		}
 		boolean inserted = insert(inputs, domain.domainFlowFields.nearbyCells(x, y, z, radius), externalSource, energy);
@@ -76,7 +76,7 @@ final class MaterialTransferPlanner {
 	}
 	private Input defaultInput(int material, SignedDyadic volume, long mass) {
 		if (mass < 0) throw new IllegalArgumentException("Liquid packet mass must be non-negative");
-		var mixture = domain.chemicalParcels == null ? null : domain.chemicalParcels.defaultRecord(
+		var mixture = domain.chemistry == null ? null : domain.chemistry.defaultRecord(
 				materialId(material), volume.toDouble(), domain.config.cellSize(), mass, false);
 		return new Input(material, volume, mass, mixture, false);
 	}
@@ -182,7 +182,7 @@ final class MaterialTransferPlanner {
 	}
 	FluidDomain.ExactChemicalTransfer extractChemical(int x, int y, int z, float amount, int radius,
 	                                                java.util.function.Predicate<ChemicalTransferLedger> accepts) {
-		if (domain.chemicalParcels == null) throw new IllegalStateException("Chemical extraction requires chemistry");
+		if (domain.chemistry == null) throw new IllegalStateException("Chemical extraction requires chemistry");
 		if (accepts == null) throw new IllegalArgumentException("Chemical extraction validator is missing");
 		domain.domainFlowFields.validateVolumeEdit(amount, radius);
 		var extraction = extract(domain.domainFlowFields.nearbyCells(x, y, z, radius), SignedDyadic.of(amount), -1, false);
@@ -222,7 +222,7 @@ final class MaterialTransferPlanner {
 		for (var group : removed.values()) {
 			if (canonical && group.mass == 0) return null;
 			if (group.mass > 0) portions.add(new FluidDomain.MaterialPortion(group.material, group.volume.toDouble(), group.mass));
-			if (domain.chemicalParcels != null) groups.add(group.group());
+			if (domain.chemistry != null) groups.add(group.group());
 		}
 		return new Extraction(domain.liquidCells.planEdits(edits), List.copyOf(portions), new ChemicalTransferLedger(groups), removedEnergy.toDouble(), requested);
 	}
@@ -237,7 +237,7 @@ final class MaterialTransferPlanner {
 		for (int i=0;i<cells.length;i++) {
 			if (cells[i]<0 || cells[i]>=domain.cellCount || !Float.isFinite(requestedVolumes[i]))
 				throw new IllegalArgumentException("Cell replacement is outside the grid or nonfinite");
-			if (domain.geometry.solid[cells[i]] && requestedVolumes[i]>0)
+			if (domain.geometry.cutCells.fullySolid(cells[i]) && requestedVolumes[i]>0)
 				throw new IllegalStateException("Cannot place fluid in a solid cell");
 		}
 		if (domain.granularCoupling != null) domain.domainFlowFields.ensureInventoryGrid();
@@ -271,7 +271,7 @@ final class MaterialTransferPlanner {
 			for(var stock:insertionStocks(List.of(input),placements,null)) edits.put(stock.key(),new LiquidCellInventory.Edit(stock.key(),stock));
 		}
 		var sinkGroups=new ArrayList<ChemicalTransferLedger.Group>();
-		if(domain.chemicalParcels!=null) for(var group:removed.values()) sinkGroups.add(group.group());
+		if(domain.chemistry!=null) for(var group:removed.values()) sinkGroups.add(group.group());
 		prepare(domain.liquidCells.planEdits(new ArrayList<>(edits.values())),ledger(sourceGroups),new ChemicalTransferLedger(sinkGroups),source,sink).commit();
 	}
 
@@ -285,7 +285,7 @@ final class MaterialTransferPlanner {
 			for (var stock : inventory.future().physicalStocksInCell(cell))
 				domain.thermalState.stateFunction().stateForInternalEnergy(domain.thermalState.thermalMaterialHandleForFluid(stock.key().material()),
 						stock.massKilograms(), stable(stock.mixture()), stock.internalEnergy());
-		var chemical = domain.chemicalParcels == null ? null : domain.chemicalParcels.planAuditExchange(source, sink);
+		var chemical = domain.chemistry == null ? null : domain.chemistry.planAuditExchange(source, sink);
 		var before = domain.thermalState == null ? null : domain.thermalState.auditLedger();
 		var after = before == null ? null : before.withExternalSourceEnergy(sourceEnergy).withExternalSinkEnergy(sinkEnergy)
 				.withMechanicalWork(inventory.mechanicalHeat()).withRoundoff(inventory.energyChange().subtract(sourceEnergy).add(sinkEnergy).subtract(inventory.mechanicalHeat()));
@@ -302,21 +302,21 @@ final class MaterialTransferPlanner {
 	}
 	private final class Transaction {
 		final LiquidCellInventory.Plan inventory; final CellMacStage.ExternalMomentum momentum; final double removedKinetic;
-		final GasTopologyCoordinator.GasTopologyPlan gas; final ChemicalParcelStore.AuditExchange chemical; final ThermalAuditLedger before, after;
+		final GasTopologyCoordinator.GasTopologyPlan gas; final RegionChemistry.AuditExchange chemical; final ThermalAuditLedger before, after;
 		Transaction(LiquidCellInventory.Plan inventory, CellMacStage.ExternalMomentum momentum, double removedKinetic,
-		            GasTopologyCoordinator.GasTopologyPlan gas, ChemicalParcelStore.AuditExchange chemical, ThermalAuditLedger before, ThermalAuditLedger after) {
+		            GasTopologyCoordinator.GasTopologyPlan gas, RegionChemistry.AuditExchange chemical, ThermalAuditLedger before, ThermalAuditLedger after) {
 			this.inventory = inventory; this.momentum = momentum; this.removedKinetic = removedKinetic; this.gas = gas; this.chemical = chemical; this.before = before; this.after = after;
 		}
 		void commit() {
 			inventory.requireCurrent();
-			if (chemical != null) domain.chemicalParcels.requireCurrentAuditExchange(chemical);
+			if (chemical != null) domain.chemistry.requireCurrentAuditExchange(chemical);
 			if (before != null && domain.thermalState.auditLedger() != before) throw new IllegalStateException("Liquid external thermal audit changed after preparation");
 			if (gas != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gas);
 			inventory.commit(); domain.cellMacStage.commitMomentum(momentum);
-			if (chemical != null) domain.chemicalParcels.commitAuditExchange(chemical);
+			if (chemical != null) domain.chemistry.commitAuditExchange(chemical);
 			if (after != null) domain.thermalState.restoreAuditLedger(after);
 			externalKineticSinkJoules += removedKinetic;
-			for (int cell : inventory.changedCells()) if (domain.chemicalParcels != null) domain.chemicalParcels.markDirtyCell(cell);
+			for (int cell : inventory.changedCells()) if (domain.chemistry != null) domain.chemistry.markDirtyCell(cell);
 			domain.markCellInventoryChanged(); if (gas != null) domain.gasTopologyCoordinator.commit(gas);
 		}
 	}
@@ -334,19 +334,19 @@ final class MaterialTransferPlanner {
 		return total;
 	}
 	private String materialId(int material) { return domain.materialRegistry == null ? BuiltinFluidMaterials.WATER.id() : domain.materialRegistry.material(material).id(); }
-	private Map<String, Long> stable(ChemicalMixtureRecord mixture) { return mixture == null ? Map.of() : mixture.stableAmounts(domain.chemicalParcels.registry()); }
+	private Map<String, Long> stable(ChemicalMixtureRecord mixture) { return mixture == null ? Map.of() : mixture.stableAmounts(domain.chemistry.registry()); }
 	private double modeledEnergy(int material, long mass, ChemicalMixtureRecord mixture, double temperature) {
 		return domain.thermalState.stateFunction().internalEnergyAtTemperature(domain.thermalState.thermalMaterialHandleForFluid(material), Mass.kilograms(mass), stable(mixture), temperature);
 	}
 	private boolean canonical(LiquidCellInventory.Stock stock) {
 		if (stock.indicator()) return false;
 		if (stock.mixture() == null) return true;
-		var registry = domain.chemicalParcels.registry(); var phase = registry.phase(registry.phaseHandleForMaterial(materialId(stock.key().material())));
+		var registry = domain.chemistry.registry(); var phase = registry.phase(registry.phaseHandleForMaterial(materialId(stock.key().material())));
 		for (int i = 0; i < stock.mixture().entryCount(); i++) if (!phase.defaultConcentrationMolPerCubicMeter().containsKey(registry.species(stock.mixture().speciesHandle(i)).id())) return false;
 		return true;
 	}
 	private ChemicalTransferLedger ledger(List<Input> inputs) {
-		if (domain.chemicalParcels == null) return ChemicalTransferLedger.EMPTY;
+		if (domain.chemistry == null) return ChemicalTransferLedger.EMPTY;
 		var groups = new ArrayList<ChemicalTransferLedger.Group>();
 		for (var input : inputs) groups.add(new ChemicalTransferLedger.Group(materialId(input.material()), input.indicator(), input.volume().toDouble(),
 				input.mass(), input.mixture().massResidualUnits(), stable(input.mixture())));
@@ -361,7 +361,7 @@ final class MaterialTransferPlanner {
 		int[] handles = new int[amounts.size()]; long[] quantities = new long[amounts.size()]; int i = 0;
 		for (var entry : amounts.entrySet()) { handles[i] = entry.getKey(); quantities[i++] = entry.getValue(); }
 		var record = new ChemicalMixtureRecord(handles, quantities, 0);
-		return record.withMassResidualUnits(Math.subtractExact(mass, record.speciesMassUnits(domain.chemicalParcels.registry())));
+		return record.withMassResidualUnits(Math.subtractExact(mass, record.speciesMassUnits(domain.chemistry.registry())));
 	}
 	private final class Removed {
 		final int material; final boolean indicator; SignedDyadic volume = SignedDyadic.ZERO; long mass; final TreeMap<String, Long> species = new TreeMap<>();
@@ -371,9 +371,9 @@ final class MaterialTransferPlanner {
 			if (mixture != null) stable(mixture).forEach((id, amount) -> species.merge(id, amount, Math::addExact));
 		}
 		ChemicalTransferLedger.Group group() {
-			var record = ChemicalMixtureRecord.fromStableAmounts(domain.chemicalParcels.registry(), species, 0);
+			var record = ChemicalMixtureRecord.fromStableAmounts(domain.chemistry.registry(), species, 0);
 			return new ChemicalTransferLedger.Group(materialId(material), indicator, volume.toDouble(), mass,
-					Math.subtractExact(mass, record.speciesMassUnits(domain.chemicalParcels.registry())), species);
+					Math.subtractExact(mass, record.speciesMassUnits(domain.chemistry.registry())), species);
 		}
 	}
 	private static SignedDyadic minimum(SignedDyadic first, SignedDyadic second) { return first.compareTo(second) < 0 ? first : second; }

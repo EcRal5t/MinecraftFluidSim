@@ -83,8 +83,6 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
 				new ControllerSummary.Usage(
 						capacity(region.reservedCellCapacity(), regions.limits().maximumCellsPerRegion()),
 						capacity(markerCount, region.reservedMarkerCapacity()),
-						live ? capacity(domain.chemicalParcelCount(), region.reservedMarkerCapacity())
-								: unavailable(region.reservedMarkerCapacity()),
 						live ? capacity(domain.granularParcelCount(), GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION)
 								: unavailable(GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION),
 						live ? capacity(domain.granularDepositGroupCount(), depositLimit) : unavailable(depositLimit),

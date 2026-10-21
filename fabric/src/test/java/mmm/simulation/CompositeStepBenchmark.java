@@ -103,7 +103,7 @@ public final class CompositeStepBenchmark {
                     var thermal = CPU.evaluateThermal(new FluidThermalStepRequest(regions[1].solverGeneration(),
                             regions[1].domain().captureAuthoritativeState(), true, PHASE_BUDGET));
                     regions[1].adoptThermalStepCandidate(thermal, CPU.id()); count.thermal++;
-                    count.changed += thermal.stats().chemistry().changedMarkers();
+                    count.changed += thermal.stats().chemistry().changedStocks();
                     count.precipitated += thermal.stats().granularPhase().precipitations();
                     count.idle++; // Third region is explicitly held unchanged.
                 } else {
@@ -235,7 +235,7 @@ public final class CompositeStepBenchmark {
         void add(FluidStepCandidate candidate) {
             motion++;
             var stats = candidate.stats(); substeps += stats.substeps(); pcg += stats.pressureIterations();
-            changed += stats.chemistryChangedMarkers(); precipitated += stats.thermalAxis().granularPhase().precipitations();
+            changed += stats.chemistryChangedStocks(); precipitated += stats.thermalAxis().granularPhase().precipitations();
             settled += stats.granularTransition().settledParcels(); woken += stats.granularTransition().wokenParcels();
             var body = candidate.movingBodyCoupling(); coupled += body.coupledMarkers();
             impulse += Math.sqrt(Math.pow(body.impulseXKilogramMetresPerSecond(), 2)

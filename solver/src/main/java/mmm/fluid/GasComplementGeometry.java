@@ -54,19 +54,19 @@ final class GasComplementGeometry {
 	}
 
 	static GasComplementGeometry capture(int sizeX,int sizeY,int sizeZ,double cellSize,
-	                                    boolean[] solid,FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase) {
-		return capture(sizeX,sizeY,sizeZ,cellSize,solid,cut,phase,null,null,null,null);
+	                                    FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase) {
+		return capture(sizeX,sizeY,sizeZ,cellSize,cut,phase,null,null,null,null);
 	}
 	/** One preparation owns geometry change detection, exact capacity and incident dry ports. */
 	static GasComplementGeometry capture(int sizeX,int sizeY,int sizeZ,double cellSize,
-	                                    boolean[] solid,FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,
+	                                    FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,
 	                                    GasComplementGeometry source,FlipPressurePhaseGeometry sourcePhase,
 	                                    LiquidCellInventory.Snapshot cells,GasComponentCapacity.Prepared preparedCapacity) {
-		validateShape(sizeX, sizeY, sizeZ, solid, cut, phase);
+		validateShape(sizeX, sizeY, sizeZ, cut, phase);
 		double h2 = cellSize * cellSize, h3 = h2 * cellSize;
 		if (!(cellSize > 0 && h2 > 0 && h3 > 0 && Double.isFinite(h2) && Double.isFinite(h3)))
 			throw new IllegalArgumentException("Gas complement SI area and volume must be representable");
-		int count = solid.length;
+		int count = Math.multiplyExact(sizeX,Math.multiplyExact(sizeY,sizeZ));
 		if (source != null && (source.sizeX != sizeX || source.sizeY != sizeY || source.sizeZ != sizeZ
 				|| source.cellVolumeCubicMeters != h3 || sourcePhase == null))
 			throw new IllegalArgumentException("Gas geometry continuation differs in shape or scale");
@@ -94,7 +94,7 @@ final class GasComplementGeometry {
 		for (int cell = 0; cell < count; cell++) {
 			if (source == null || changed[cell]) {
 				Arrays.fill(bySlot,8*cell,8*cell+8,null);if(actualCapacity==null)pores[cell]=phase.poreVolume(cell);
-				captureCell(cell,solid,cut,phase,h3,pores[cell],componentDry,cells!=null,bySlot);
+				captureCell(cell,cut,phase,h3,pores[cell],componentDry,cells!=null,bySlot);
 			}
 			for(int support:CellRemapMicroTopology.components(cut.mask(cell))){
 				var component=bySlot[8*cell+Integer.numberOfTrailingZeros(support)];if(component!=null)components.add(component);
@@ -120,7 +120,7 @@ final class GasComplementGeometry {
 				while(oldExterior<source.exteriorArray.length&&exteriorKey(source.exteriorArray[oldExterior])==key)exterior.add(source.exteriorArray[oldExterior++]);
 			}else captureExteriorFace(cell,axis,bit,canonical,cut,phase,h2,first,areas,exterior);
 		}
-		var result=new GasComplementGeometry(sizeX,sizeY,sizeZ,h3,actualCapacity==null?cut.copyMicroMasks():actualCapacity.masks,pores,componentDry,bySlot,
+		var result=new GasComplementGeometry(sizeX,sizeY,sizeZ,h3,actualCapacity==null?cut.snapshot().masksView():actualCapacity.masks,pores,componentDry,bySlot,
 				components,ports.toArray(Port[]::new),exterior.toArray(ExteriorPort[]::new),actualCapacity);
 		if(source!=null)GasChamberTopology.continueCached(result,source);
 		return result;
@@ -144,17 +144,16 @@ final class GasComplementGeometry {
     }
 	private static long portKey(Port port) { return 3L*(port.first()/8)+port.axis(); }
 	private static long exteriorKey(ExteriorPort port) { return 6L*(port.piece()/8)+2*port.axis()+(port.sign()>0?1:0); }
-	private static void validateShape(int sizeX, int sizeY, int sizeZ, boolean[] solid, FlipCutCellGeometry cut, FlipPressurePhaseGeometry phase) {
-		if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || solid == null || cut == null || phase == null
-				|| solid.length != Math.multiplyExact(sizeX, Math.multiplyExact(sizeY, sizeZ))
+	private static void validateShape(int sizeX, int sizeY, int sizeZ, FlipCutCellGeometry cut, FlipPressurePhaseGeometry phase) {
+		if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || cut == null || phase == null
 				|| !cut.matchesShape(sizeX, sizeY, sizeZ) || !phase.matchesShape(sizeX, sizeY, sizeZ))
 			throw new IllegalArgumentException("Gas complement geometry shapes differ");
 	}
-    private static void captureCell(int cell,boolean[] solid,FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,
+    private static void captureCell(int cell,FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,
                                     double physicalScale,SignedDyadic poreVolume,double[] componentDry,
                                     boolean actualInventory,Component[] bySlot) {
         if(phase.collisionMask(cell)!=cut.mask(cell))throw new IllegalArgumentException("Gas complement PLIC collision geometry differs at cell "+cell);
-        if(solid[cell])return;
+        if(cut.fullySolid(cell))return;
         int[] supports=CellRemapMicroTopology.components(cut.mask(cell));
         var capacities=actualInventory?null:CellRemapMicroTopology.capacities(cut.mask(cell),poreVolume);
         for(int i=0;i<supports.length;i++) {

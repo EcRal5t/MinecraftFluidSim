@@ -160,7 +160,7 @@ final class FluidSnapshotPublisher {
 			FluidRegion region, FluidMaterialSnapshotPayload base
 	) {
 		return FluidChemicalSnapshotPayload.snapshot(base,
-				region.domain().chemicalParcels().registry().fingerprint(),
+				region.domain().chemistry().registry().fingerprint(),
 				region.domain().copyChemicalDisplaySnapshot());
 	}
 

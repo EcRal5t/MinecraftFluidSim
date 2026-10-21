@@ -7,7 +7,7 @@ import mmm.chemistry.BuiltinChemicalDefinitions;
 import mmm.chemistry.ChemicalAuditLedgerCodec;
 import mmm.chemistry.ChemicalLimits;
 import mmm.chemistry.ChemicalMixtureRecord;
-import mmm.chemistry.ChemicalParcelStore;
+import mmm.chemistry.RegionChemistry;
 import mmm.chemistry.ChemicalPhaseDefinition;
 import mmm.chemistry.ChemicalReaction;
 import mmm.chemistry.ChemicalRegistry;
@@ -86,8 +86,7 @@ private static void validateInternalTransferLedgerDiversity() {
 		for (int marker = 0; marker < 9_216; marker++) {
 			demo.add(BuiltinFluidMaterials.WATER.id(), false, 0.125, markerMassUnits, base);
 		}
-		ChemicalParcelStore audit = new ChemicalParcelStore(CHEMISTRY,
-				SolverUnitScale.forCellSize(0.5F), 1, 1);
+		RegionChemistry audit = new RegionChemistry(CHEMISTRY,1);
 		audit.requireCanRecordEscapedSink(demo.build());
 	}
 
@@ -120,11 +119,11 @@ private static void validateInternalTransferLedgerDiversity() {
 		FluidDomain domain = domainWithCell(1, 1, 1, 0.125F);
 		FluidDomain.ExactVolumeTransfer survival = domain.domainInventory.tryInsertExactVolume(1, 1, 1,
 				0.125F, 0, 0, false);
-		check(survival.transferred() && domain.chemicalParcels().externalSource().isEmpty(),
+		check(survival.transferred() && domain.chemistry().externalSource().isEmpty(),
 				"conservative insertion was recorded as an external source");
 		FluidDomain.ExactVolumeTransfer creative = domain.domainInventory.tryInsertExactVolume(1, 1, 1,
 				0.125F, 0, 0, true);
-		check(creative.transferred() && !domain.chemicalParcels().externalSource().isEmpty(),
+		check(creative.transferred() && !domain.chemistry().externalSource().isEmpty(),
 				"explicit external insertion was not recorded atomically");
 	}
 
@@ -167,7 +166,7 @@ private static void validateInternalTransferLedgerDiversity() {
 			additions.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(cell,material,255),SignedDyadic.of(.125),mass,mixture,0,false));
 		}
 		domain.liquidCells.planAdditions(additions).commit();domain.markCellInventoryChanged();
-		domain.chemicalParcels.markDirtyCell(cell);long mass=domain.totalMassUnits();var volume=domain.liquidCells.exactVolume();
+		domain.chemistry.markDirtyCell(cell);long mass=domain.totalMassUnits();var volume=domain.liquidCells.exactVolume();
 		domain.step();domain=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		var totals=speciesTotals(domain);
 		check(totals[chemistry.speciesHandle(acid.id())]==10_000L&&totals[chemistry.speciesHandle(base.id())]==10_000L
@@ -181,7 +180,7 @@ private static void validateSameCellReaction() {
 				BuiltinChemicalDefinitions.NAOH,1_000_000L),true);
 		var volume=domain.liquidCells.exactVolume();long mass=domain.totalMassUnits();
 		domain=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
-		check(domain.step().chemistryChangedMarkers()>0,"Mixed liquid stock did not react");
+		check(domain.step().chemistryChangedStocks()>0,"Mixed liquid stock did not react");
 		var totals=speciesTotals(domain);
 		check(totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.H_PLUS)]==0
 				&&totals[CHEMISTRY.speciesHandle(BuiltinChemicalDefinitions.OH_MINUS)]==0
@@ -266,7 +265,7 @@ private static void validateCollisionDisplacement() {
 				"Collision did not remove liquid inventory");
 		check(displaced.ledger().totalQuanta() == Arrays.stream(before).sum(),
 				"collision displacement ledger lost species");
-		check(domain.chemicalParcels().escapedSink().isEmpty(),
+		check(domain.chemistry().escapedSink().isEmpty(),
 				"recoverable collision displacement was recorded as escaped before restoration");
 		domain.setSolidMicroMaskChemical(1, 1, 1, 0);
 		FluidDomain.ExactChemicalTransfer restored = domain.domainInventory.tryInsertExactChemical(
@@ -283,12 +282,12 @@ private static void validateCollisionDisplacement() {
 		var source=domainWithCell(1,1,1,1);
 		setCellChemical(source,1,1,1,0,Map.of(BuiltinChemicalDefinitions.H2O,123_457L,BuiltinChemicalDefinitions.NACL,999L),true);
 		var auditFixture=source.chemicalLedgerForMarkerRange(0,source.liquidCells.physicalSize());
-		source.chemicalParcels().recordExternalSource(auditFixture);source.chemicalParcels().recordEscapedSink(auditFixture);
+		source.chemistry().recordExternalSource(auditFixture);source.chemistry().recordEscapedSink(auditFixture);
 		var state=source.captureAuthoritativeState();var before=source.exportLiquidCellState();
 		var restored=FluidDomain.restoreAuthoritativeState(state);
 		check(restored.exportLiquidCellState().rows().equals(before.rows())&&Arrays.equals(speciesTotals(source),speciesTotals(restored))
-				&&source.chemicalParcels().externalSource().equals(restored.chemicalParcels().externalSource())
-				&&source.chemicalParcels().escapedSink().equals(restored.chemicalParcels().escapedSink()),
+				&&source.chemistry().externalSource().equals(restored.chemistry().externalSource())
+				&&source.chemistry().escapedSink().equals(restored.chemistry().escapedSink()),
 				"Complete chemical recovery changed stock quantities or source/sink inventory");
 		setCellChemical(restored,1,1,1,0,Map.of(BuiltinChemicalDefinitions.H2O,27L),false);
 		check(source.exportLiquidCellState().rows().equals(before.rows())&&state.liquid().rows().equals(before.rows()),
@@ -456,7 +455,7 @@ private static void validateChemicalContainerRoundTrip() throws Exception {
 		for (int step = 0; step < 4; step++) {
 			var plainStats = baseline.domainStep.step();
 			var chemicalStats = chemical.domainStep.step();
-			check(plainStats.chemistryDirtyCells() == 0 && chemicalStats.chemistryDirtyCells() == 0,
+			check(plainStats.chemistryVisitedCells() == 0 && chemicalStats.chemistryVisitedCells() == 0,
 					"Inactive chemistry created reaction work");
 			check(baseline.liquidCells.massUnits() == chemical.liquidCells.massUnits()
 					&& baseline.liquidCells.exactVolume().equals(chemical.liquidCells.exactVolume()),
@@ -494,7 +493,7 @@ private static void validateChemicalContainerRoundTrip() throws Exception {
 		for(int iteration=-20;iteration<samples.length;iteration++) {
 			var fixture=new ChemicalReactionCandidateValidation.Fixture(CHEMISTRY,inputs,cells);long start=System.nanoTime();
 			var stats=fixture.step();long elapsed=System.nanoTime()-start;
-			check(stats.dirtyCells()==1&&stats.changedMarkers()>0,"Acid/base budget fixture did not execute its cell reaction");
+			check(stats.visitedCells()==1&&stats.changedStocks()>0,"Acid/base budget fixture did not execute its cell reaction");
 			if(iteration>=0)samples[iteration]=elapsed;
 		}
 		return percentile(samples,.95);
@@ -564,7 +563,7 @@ private static void validateChemicalContainerRoundTrip() throws Exception {
 	}
 
 private static long[] speciesTotals(FluidDomain domain){
-		var result=new long[domain.chemicalParcels().registry().species().size()];
+		var result=new long[domain.chemistry().registry().species().size()];
 		for(var stock:domain.exportLiquidCellState().stocks())if(stock.mixture()!=null){
 			var mixture=stock.mixture();for(int entry=0;entry<mixture.entryCount();entry++){
 				int species=mixture.speciesHandle(entry);result[species]=Math.addExact(result[species],mixture.amountAt(entry));

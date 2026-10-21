@@ -1,6 +1,6 @@
 package mmm.fluid;
 
-import mmm.chemistry.ChemicalParcelStore;
+import mmm.chemistry.RegionChemistry;
 import mmm.thermal.ThermalTransport;
 import mmm.units.SignedDyadic;
 
@@ -61,7 +61,7 @@ final class ThermochemistryPipeline {
 			throw new FluidDomain.ThermalTransportBlockedException(invalid.getMessage(), invalid);
 		}
 		stage = "LIQUID_REACTION";
-		ChemicalParcelStore.ReactionStats chemicalStats = chemistry.step();
+		RegionChemistry.ReactionStats chemicalStats = chemistry.step();
 		stage = "GRANULAR_REACTION";
 		FluidDomain.PhaseTransferStats granularStats = granularReaction.step(granularPhaseCells);
 		FluidDomain.ThermalPhaseStats condensedStats = new FluidDomain.ThermalPhaseStats(0, 0, 0, 0L);

@@ -46,34 +46,6 @@ public final class ChemicalDisplaySnapshot {
 		}
 	}
 
-	public static ChemicalDisplaySnapshot build(
-			ChemicalRegistry registry, ChemicalParcelStore parcels,
-			int sizeX, int sizeY, int sizeZ, float cellSize,
-			float[] x, float[] y, float[] z, float[] volume, int particleCount
-	) {
-		int cells = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
-		if (particleCount < 0 || particleCount > x.length || particleCount > y.length
-				|| particleCount > z.length || particleCount > volume.length) {
-			throw new IllegalArgumentException("Invalid chemical display marker arrays");
-		}
-		long[][] totals = new long[cells][registry.species().size()];
-		double[] cellVolume = new double[cells], indicatedVolume = new double[cells];
-		for (int marker = 0; marker < particleCount; marker++) {
-			int cellX = Math.min(sizeX - 1, Math.max(0, (int) Math.floor(x[marker] / cellSize)));
-			int cellY = Math.min(sizeY - 1, Math.max(0, (int) Math.floor(y[marker] / cellSize)));
-			int cellZ = Math.min(sizeZ - 1, Math.max(0, (int) Math.floor(z[marker] / cellSize)));
-			int cell = (cellZ * sizeY + cellY) * sizeX + cellX;
-			ChemicalMixtureRecord mixture = parcels.record(marker);
-			for (int entry = 0; entry < mixture.entryCount(); entry++) {
-				int handle = mixture.speciesHandle(entry);
-				totals[cell][handle] = Math.addExact(totals[cell][handle], mixture.amountAt(entry));
-			}
-			cellVolume[cell] += volume[marker];
-			if (parcels.indicator(marker)) indicatedVolume[cell] += volume[marker];
-		}
-		return fromTotals(registry, cellSize, totals, cellVolume, indicatedVolume);
-	}
-	/** Builds the bounded display field from cell-wise species and liquid-volume totals. */
 	public static ChemicalDisplaySnapshot fromTotals(ChemicalRegistry registry, float cellSize,
 	                                                  long[][] totals, double[] cellVolume, double[] indicatedVolume) {
 		int cells = totals.length;

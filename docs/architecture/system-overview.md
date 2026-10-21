@@ -209,7 +209,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 纯液体与含固相区域共用 MAC 压力、局部应变耗散和有限体积输运。液体逐材料质量和体积决定惯性与组成密度；不可互溶相共享宏观速度和机械压力，保留材料身份与界面张力。热浮力按正的体膨胀关系推导密度修正，黏度读取世界材料定义的 `mu(T)`。
 
-固定碰撞由 Minecraft `VoxelShape` 保守采样成每格 `2×2×2` 微盒掩码，压力开口、液体通量和 CCD 读取同一几何。活动颗粒、沉积和 coherent 固相共享固体骨架占容；液体可用容量为开放体积减去全部固体占容，孔隙水由普通液体库存持有。
+固定碰撞由 Minecraft `VoxelShape` 保守采样成每格 `2×2×2` 微盒掩码，压力开口、液体通量和 CCD 读取同一几何。固定掩码、孔容、面开口与墙面积由不可变快照共同持有，状态恢复和气体帧共享该快照，真实改壳时复制并生成新快照。活动颗粒、沉积和 coherent 固相共享固体骨架占容；液体可用容量为开放体积减去全部固体占容，孔隙水由普通液体库存持有。
 
 压力系统共用同一体积散度及其转置，已知压力、迭代修正和最终速度采用同一个有限质量与隐式阻力响应。
 `PressureLinearSolver` 与 `PressurePreconditioner` 统一 PCG 及不完全 Cholesky 预条件，颗粒阻力按有限质量成对处理。
@@ -234,6 +234,8 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 - **库存、PLIC 与速度工作区失效**
   - 主要文件：
+    - [FixedGeometrySnapshot](../../solver/src/main/java/mmm/fluid/FixedGeometrySnapshot.java)：固定掩码、孔容、面开口与墙面积的不可变数据，供状态、气体帧与候选共享。
+    - [FlipCutCellGeometry](../../solver/src/main/java/mmm/fluid/FlipCutCellGeometry.java)：`snapshot` / `restoreSnapshot` 交接固定几何，`replaceMask` 在真实编辑时隔离写入。
     - [CellMacStage](../../solver/src/main/java/mmm/fluid/CellMacStage.java)：按物质数量准备惯性、墙面约束和持久动量，内能更新复用原数量
     - [DomainFlowFields](../../solver/src/main/java/mmm/fluid/DomainFlowFields.java)
     - [CellLiquidGrid](../../solver/src/main/java/mmm/fluid/CellLiquidGrid.java)：单元库存派生索引与物性
@@ -410,6 +412,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 - **反应、析出与溶解**
   - 主要文件：
+    - [RegionChemistry](../../model/src/main/java/mmm/chemistry/RegionChemistry.java)：区域注册表、化学源汇审计与反应调度；库存数量和组成由 `LiquidCellInventory` 保存。
     - [ChemicalReactionStage](../../solver/src/main/java/mmm/fluid/ChemicalReactionStage.java)
     - [GranularReactionStage](../../solver/src/main/java/mmm/fluid/GranularReactionStage.java)：`precipitate`、`depositPrecipitate` 共用活动代表生成与组成合并，未解析析出物向合法床库存交接物质、反冲和内能。
     - [DomainCapabilities](../../solver/src/main/java/mmm/fluid/DomainCapabilities.java)：热能力、载体内能与联合相变交接

@@ -420,7 +420,7 @@ final class CellMacStage {
 		if (gas != null) domain.gasTopologyCoordinator.commitPrepared(gas,liquid.occupied);
 		energy.commitGranular();domain.mechanicalEnergy.clear();
 		if (auditAfter != null) domain.thermalState.restoreAuditLedger(auditAfter);
-		for (int cell : inventory.changedCells()) if (domain.chemicalParcels != null) domain.chemicalParcels.markDirtyCell(cell);
+		for (int cell : inventory.changedCells()) if (domain.chemistry != null) domain.chemistry.markDirtyCell(cell);
 	}
 
 	double faceMass(int first, int second) { return .5 * (cellMass[first] + cellMass[second]); }

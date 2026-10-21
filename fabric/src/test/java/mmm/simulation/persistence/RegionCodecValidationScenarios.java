@@ -543,8 +543,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				BuiltinChemicalDefinitions.H2O, 123_457L,
 				BuiltinChemicalDefinitions.NACL, 9_999L), true);
 		var auditFixture = region.domain().chemicalLedgerForMarkerRange(0, 1);
-		region.domain().chemicalParcels().recordExternalSource(auditFixture);
-		region.domain().chemicalParcels().recordEscapedSink(auditFixture);
+		region.domain().chemistry().recordExternalSource(auditFixture);
+		region.domain().chemistry().recordEscapedSink(auditFixture);
 		FlipChemicalParticleState expected = region.domain().exportChemicalParticleState();
 		RegionState state = RegionCheckpointFixtures.captureChemical(region, 1L);
 		state.validate();

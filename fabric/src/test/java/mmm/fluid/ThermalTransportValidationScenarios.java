@@ -492,7 +492,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 						granular.registry, granular.parcels, granular.deposits, granular.compositions);
 				var source = granular.externalSource; var sink = granular.escapedSink;
 				var liquid = domain.liquidCells.stocks();
-				var liquidSource = domain.chemicalParcels.externalSource(); var liquidSink = domain.chemicalParcels.escapedSink();
+				var liquidSource = domain.chemistry.externalSource(); var liquidSink = domain.chemistry.escapedSink();
 				long carrierRevision = domain.domainFlowFields.carrierMutationRevision();
 				var revision = domain.thermalState.thermalRevision(); long structuralRevision = granular.mutationRevision();
 				var energy = domain.thermalState.granularColumn().copyActiveEnergy();
@@ -524,8 +524,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 						&& Arrays.equals(energy, domain.thermalState.granularColumn().copyActiveEnergy())
 						&& domain.thermalState.matchesThermalRevision(revision) && domain.thermalAudit().equals(audit)
 						&& domain.liquidCells.physicalSize() == initialLiquidCount && domain.domainFlowFields.carrierMutationRevision() == carrierRevision
-						&& domain.liquidCells.stocks().equals(liquid) && domain.chemicalParcels.externalSource().equals(liquidSource)
-						&& domain.chemicalParcels.escapedSink().equals(liquidSink)
+						&& domain.liquidCells.stocks().equals(liquid) && domain.chemistry.externalSource().equals(liquidSource)
+						&& domain.chemistry.escapedSink().equals(liquidSink)
 						&& domain.exactInternalEnergy().equals(actual),
 						"granular source-budget rejection changed inventory, compositions, energy, audit or generation");
 				domain.thermalState.restoreAuditLedger(ThermalAuditLedger.initialized(actual));

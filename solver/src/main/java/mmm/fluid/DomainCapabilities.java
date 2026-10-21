@@ -3,7 +3,7 @@ package mmm.fluid;
 import mmm.inventory.LiquidCellInventory;
 import mmm.thermal.ThermalDomainState;
 import mmm.thermal.ThermalCarrierContext;
-import mmm.chemistry.ChemicalParcelStore;
+import mmm.chemistry.RegionChemistry;
 import mmm.granular.GranularCouplingFields;
 import mmm.granular.GranularPhaseTransferEngine;
 import java.util.List;
@@ -39,17 +39,17 @@ final class DomainCapabilities {
 	private final FluidDomain domain;
 	DomainCapabilities(FluidDomain domain) { this.domain = domain; }
 	public FluidMaterialRegistry materialRegistry() { return domain.materialRegistry; }
-	public ChemicalParcelStore chemicalParcels() {
-		if (domain.chemicalParcels == null) throw new IllegalStateException("Chemistry is not bound");
-		return domain.chemicalParcels;
+	public RegionChemistry chemistry() {
+		if (domain.chemistry == null) throw new IllegalStateException("Chemistry is not bound");
+		return domain.chemistry;
 	}
 	public ChemicalDisplaySnapshot copyChemicalDisplaySnapshot() { return domain.carriers.copyChemicalDisplaySnapshot(); }
 	public ChemicalTransferLedger chemicalLedgerForMarkerRange(int fromInclusive, int toExclusive) {
-		if (domain.chemicalParcels == null) throw new IllegalStateException("Chemistry is not bound");
+		if (domain.chemistry == null) throw new IllegalStateException("Chemistry is not bound");
 		if (fromInclusive < 0 || toExclusive < fromInclusive || toExclusive > domain.liquidCells.physicalSize()) {
 			throw new IndexOutOfBoundsException("Invalid chemical marker range");
 		}
-		ChemicalTransferLedger.Builder result = ChemicalTransferLedger.builder(domain.chemicalParcels.registry());
+		ChemicalTransferLedger.Builder result = ChemicalTransferLedger.builder(domain.chemistry.registry());
 		for (int marker = fromInclusive; marker < toExclusive; marker++) {
 			result.add(domain.materialRegistry.material(domain.liquidCells.physicalStockAt(marker).key().material()).id(), domain.liquidCells.physicalStockAt(marker).indicator(),
 					(float) domain.liquidCells.physicalStockAt(marker).volumeFraction(), domain.liquidCells.physicalStockAt(marker).massUnits(), domain.liquidCells.physicalStockAt(marker).mixture());
@@ -59,7 +59,7 @@ final class DomainCapabilities {
 	public IndicatorEditResult editIndicatorFloodFill(
 			int startX, int startY, int startZ, boolean indicated, int maxScannedCells, double maximumAddedVolumeCubicMeters
 	) {
-		if (domain.chemicalParcels == null || domain.materialRegistry == null) {
+		if (domain.chemistry == null || domain.materialRegistry == null) {
 			return IndicatorEditResult.rejected("Chemistry is not bound");
 		}
 		if (maxScannedCells <= 0 || maxScannedCells > domain.cellCount) {
@@ -82,7 +82,7 @@ final class DomainCapabilities {
 					|| candidate == dominantVolume[cell] && marker < dominantMarker[cell]) {
 				dominantVolume[cell] = candidate;
 				dominantMarker[cell] = marker;
-				dominantPhase[cell] = domain.chemicalParcels.registry().phaseHandleForMaterial(
+				dominantPhase[cell] = domain.chemistry.registry().phaseHandleForMaterial(
 						domain.materialRegistry.material(domain.liquidCells.physicalStockAt(marker).key().material()).id());
 			}
 		}
@@ -90,7 +90,7 @@ final class DomainCapabilities {
 		if (seed.cell() < 0) return IndicatorEditResult.rejected(seed.failure());
 		int start = seed.cell();
 		int targetPhase = dominantPhase[start];
-		if (indicated && !domain.chemicalParcels.registry().phase(targetPhase).acceptsIndicator()) {
+		if (indicated && !domain.chemistry.registry().phase(targetPhase).acceptsIndicator()) {
 			return IndicatorEditResult.rejected("Target chemical phase rejects indicator");
 		}
 
@@ -100,7 +100,7 @@ final class DomainCapabilities {
 		Arrays.fill(cellHead, -1);
 		for (int marker = domain.liquidCells.physicalSize() - 1; marker >= 0; marker--) {
 			String materialId = domain.materialRegistry.material(domain.liquidCells.physicalStockAt(marker).key().material()).id();
-			if (domain.chemicalParcels.registry().phaseHandleForMaterial(materialId) != targetPhase) continue;
+			if (domain.chemistry.registry().phaseHandleForMaterial(materialId) != targetPhase) continue;
 			int cell = domain.liquidCells.physicalStockAt(marker).key().cell();
 			markerNext[marker] = cellHead[cell];
 			cellHead[cell] = marker;
@@ -200,8 +200,8 @@ final class DomainCapabilities {
 			throw new IllegalStateException("Chemistry must be bound before transient thermal initialization");
 		}
 		if (domain.materialRegistry == null) throw new IllegalStateException("Chemistry requires a material registry");
-		if (domain.chemicalParcels != null) {
-			if (!domain.chemicalParcels.registry().fingerprint().equals(registry.fingerprint())) {
+		if (domain.chemistry != null) {
+			if (!domain.chemistry.registry().fingerprint().equals(registry.fingerprint())) {
 				throw new IllegalArgumentException("A domain cannot change its chemical registry");
 			}
 			return;
@@ -210,8 +210,7 @@ final class DomainCapabilities {
 				&& !domain.granularState.registry.chemicalRegistryFingerprint().equals(registry.fingerprint())) {
 			throw new IllegalArgumentException("Granular registry chemical dependency mismatch");
 		}
-		ChemicalParcelStore candidate = new ChemicalParcelStore(
-				registry, domain.unitScale, domain.maximumParticleCount, domain.cellCount);
+		RegionChemistry candidate = new RegionChemistry(registry,domain.cellCount);
 		var additions = new ArrayList<LiquidCellInventory.Stock>();
 		for (var stock : domain.liquidCells.stocks()) {
 			var mixture = candidate.defaultRecord(domain.materialRegistry.material(stock.key().material()).id(),
@@ -221,8 +220,8 @@ final class DomainCapabilities {
 		var inventory = new LiquidCellInventory(domain.cellCount, registry);
 		inventory.planAdditions(additions).commit();
 		domain.liquidCells = inventory;
-		domain.chemicalParcels = candidate;
-		for (var stock : domain.liquidCells.stocks()) domain.chemicalParcels.markDirtyCell(stock.key().cell());
+		domain.chemistry = candidate;
+		for (var stock : domain.liquidCells.stocks()) domain.chemistry.markDirtyCell(stock.key().cell());
 		domain.markCellInventoryChanged();
 		bindSolidCompositionPoolIfReady();
 	}
@@ -257,8 +256,8 @@ final class DomainCapabilities {
 			}
 			return false;
 		}
-		if (domain.chemicalParcels != null && !registry.chemicalRegistryFingerprint()
-				.equals(domain.chemicalParcels.registry().fingerprint())) {
+		if (domain.chemistry != null && !registry.chemicalRegistryFingerprint()
+				.equals(domain.chemistry.registry().fingerprint())) {
 			throw new IllegalArgumentException("Thermal registry chemical dependency mismatch");
 		}
 		return true;
@@ -432,7 +431,7 @@ final class DomainCapabilities {
 			throw new IllegalStateException("Sealed region has no combined liquid/solid capacity");
 		}
 		var addition = new CoherentPhaseStore.Group(cell, phaseId, occupiedVolumeSvq, massUnits, composition, internalEnergy);
-		addition.requireCompositionMass(domain.chemicalParcels == null ? null : domain.chemicalParcels.registry());
+		addition.requireCompositionMass(domain.chemistry == null ? null : domain.chemistry.registry());
 		var thermal = domain.thermalState.planCoherentExternal(addition);
 		long[] before = domain.granularCoupling.copySolidSvq(), after = before.clone();
 		after[cell] = Math.addExact(after[cell], occupiedVolumeSvq);
@@ -566,10 +565,10 @@ final class DomainCapabilities {
 			}
 			@Override public Map<String, Long> solidComposition(int compositionHandle) {
 				if (compositionHandle == 0) return Map.of();
-				if (domain.granularState.compositions == null || domain.chemicalParcels == null) {
+				if (domain.granularState.compositions == null || domain.chemistry == null) {
 					throw new IllegalArgumentException("Solid thermal composition state is unavailable");
 				}
-				return domain.granularState.compositions.record(compositionHandle).stableAmounts(domain.chemicalParcels.registry());
+				return domain.granularState.compositions.record(compositionHandle).stableAmounts(domain.chemistry.registry());
 			}
 		};
 	}
@@ -650,15 +649,15 @@ final class DomainCapabilities {
 		}
 	}
 	void bindSolidCompositionPoolIfReady() {
-		if (domain.granularState == null || domain.granularState.compositions != null || domain.chemicalParcels == null
+		if (domain.granularState == null || domain.granularState.compositions != null || domain.chemistry == null
 				|| !domain.granularState.registry.hasReactiveRules()) return;
-		if (!domain.granularState.registry.chemicalRegistryFingerprint().equals(domain.chemicalParcels.registry().fingerprint())) {
+		if (!domain.granularState.registry.chemicalRegistryFingerprint().equals(domain.chemistry.registry().fingerprint())) {
 			throw new IllegalArgumentException("Granular registry chemical dependency mismatch");
 		}
 		int depositCapacity = Math.min(GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
 				Math.multiplyExact(domain.cellCount, GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL));
-		domain.granularState.bindCompositions(new SolidCompositionPool(domain.chemicalParcels.registry(),
+		domain.granularState.bindCompositions(new SolidCompositionPool(domain.chemistry.registry(),
 				Math.addExact(GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, depositCapacity)));
-		domain.granularPhaseTransfer = new GranularPhaseTransferEngine(domain.chemicalParcels.registry(), domain.unitScale);
+		domain.granularPhaseTransfer = new GranularPhaseTransferEngine(domain.chemistry.registry(), domain.unitScale);
 	}
 }

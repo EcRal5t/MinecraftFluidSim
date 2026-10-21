@@ -216,7 +216,7 @@ public final class M5GasLiquidCouplingValidation {
 	private static FluidDomainState coldVacuumState(FluidDomainState s) {
 		return new FluidDomainState(s.sizeX(),s.sizeY(),s.sizeZ(),s.config(),s.maximumParticleCount(),s.sealedDomainBoundary(),
 				new mmm.inventory.LiquidCellInventory.Snapshot(s.liquid().rows()),new mmm.inventory.PhaseOccupancyState(s.phaseOccupancy().copyLiquidMicroVolumes()),
-				s.momentum(),s.copyCollisionMasks(),s.materialPalette(),s.chemicalRegistry(),s.chemicalSource(),s.chemicalSink(),
+				s.momentum(),s.fixedGeometry(),s.materialPalette(),s.chemicalRegistry(),s.chemicalSource(),s.chemicalSink(),
 				s.copyChemicalDirtyCells(),s.chemicalReactionCursor(),s.granularRegistry(),s.granular(),s.granularDynamics(),s.precipitationEnabled(),
 				s.gasRegistry(),s.gas(),s.thermalRegistry(),s.thermalOwner(),s.maximumThermalTransportSubsteps(),s.pendingPhaseVolume(),
 				s.copyThermalBoundaryTemperaturesK(),s.condensedPhasePressure(),s.materialDefinitions());

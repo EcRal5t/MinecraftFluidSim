@@ -19,21 +19,22 @@ final class CellLiquidGrid {
 	int phaseEntryCount;
 	long inventoryRevision;
 
-	CellLiquidGrid(int cellCount, int stockCapacity) {
+	CellLiquidGrid(int cellCount) {
 		this.cellCount = cellCount;
 		this.stockCount = new int[cellCount];
 		this.cellStockVolume = new double[cellCount];
 		this.cellStockMass = new double[cellCount];
 		this.cellDensity = new double[cellCount];
 		this.cellPhaseHead = new int[cellCount];
-		this.phaseEntryLabel = new int[stockCapacity];
-		this.phaseEntryNext = new int[stockCapacity];
-		this.phaseEntryVolume = new double[stockCapacity];
+		this.phaseEntryLabel = new int[0];
+		this.phaseEntryNext = new int[0];
+		this.phaseEntryVolume = new double[0];
 	}
 
 	/** Reserves material-phase entries for the current liquid stock count. */
 	void ensureStockCapacity(int capacity) {
 		if (capacity <= phaseEntryLabel.length) return;
+		capacity = Math.max(capacity, phaseEntryLabel.length + phaseEntryLabel.length / 2);
 		phaseEntryLabel = Arrays.copyOf(phaseEntryLabel, capacity);
 		phaseEntryNext = Arrays.copyOf(phaseEntryNext, capacity);
 		phaseEntryVolume = Arrays.copyOf(phaseEntryVolume, capacity);

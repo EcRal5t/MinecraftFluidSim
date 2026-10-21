@@ -29,7 +29,7 @@ public final class RegionCheckpointRestorer {
 		var gasState=manifest.hasGasState()?reconstructGas(gasRegistry,chemistry):null;
 		var heat=manifest.hasThermalState()?reconstructThermalOwners(thermal):null;
 		if(heat!=null){var liquidU=SignedDyadic.ZERO;for(var stock:liquid.stocks())liquidU=liquidU.add(SignedDyadic.of(stock.internalEnergy()));heat.requireClosed(liquidU,cells);}
-		try{return new FluidDomainState(manifest.sizeX(),manifest.sizeY(),manifest.sizeZ(),manifest.solverConfig(),Math.toIntExact(manifest.reservedMarkerCapacity()),runtime.sealed(),liquid,reconstructPhaseOccupancy(),momentum,reconstructCollisionMasks(),manifest.materialPalette(),
+		try{return new FluidDomainState(manifest.sizeX(),manifest.sizeY(),manifest.sizeZ(),manifest.solverConfig(),Math.toIntExact(manifest.reservedMarkerCapacity()),runtime.sealed(),liquid,reconstructPhaseOccupancy(),momentum,reconstructFixedGeometry(),manifest.materialPalette(),
 				manifest.hasChemicalState()?chemistry:null,chemicalAudit.externalSource(),chemicalAudit.escapedSink(),manifest.hasChemicalState()?runtime.dirty():null,runtime.cursor(),
 				solids==null?null:granular,solids,runtime.granular(),runtime.precipitation(),gasRegistry,gasState,heat==null?null:thermal,heat,
 				heat==null?0:runtime.maximumThermalSubsteps(),heat==null?null:reconstructPendingPhaseVolume(),heat==null?null:runtime.boundary(),heat==null?null:runtime.pressure(),manifest.materialPalette().isEmpty()?null:materials);
@@ -70,9 +70,9 @@ public final class RegionCheckpointRestorer {
 		try{return new PhaseOccupancyState(volumes);}
 		catch(IllegalArgumentException invalid){throw new IOException("Invalid persisted phase occupancy",invalid);}
 	}
-	public byte[] reconstructCollisionMasks()throws IOException {
+	public FixedGeometrySnapshot reconstructFixedGeometry()throws IOException {
 		validateCheckpoint();int nx=manifest.sizeX(),ny=manifest.sizeY();byte[] masks=new byte[nx*ny*manifest.sizeZ()];
-		for(var section:sections){byte[] slice=section.solidMask();int local=0;for(int z=section.localStartZ();z<section.localStartZ()+section.sizeZ();z++)for(int y=section.localStartY();y<section.localStartY()+section.sizeY();y++)for(int x=section.localStartX();x<section.localStartX()+section.sizeX();x++)masks[x+nx*(y+ny*z)]=slice[local++];}return masks;
+		for(var section:sections){byte[] slice=section.solidMask();int local=0;for(int z=section.localStartZ();z<section.localStartZ()+section.sizeZ();z++)for(int y=section.localStartY();y<section.localStartY()+section.sizeY();y++)for(int x=section.localStartX();x<section.localStartX()+section.sizeX();x++)masks[x+nx*(y+ny*z)]=slice[local++];}return FixedGeometrySnapshot.fromMasks(nx,ny,manifest.sizeZ(),masks);
 	}
 	/** Diagnostic sampling views; restore services use reconstructAuthoritativeState. */
 	public FlipParticleState reconstruct()throws IOException{if(manifest.layout().hasMaterials())throw new IOException("Material state requires its palette");return debugState(null).particles();}
@@ -80,7 +80,7 @@ public final class RegionCheckpointRestorer {
 	public FlipChemicalParticleState reconstructChemical(ChemicalRegistry chemistry)throws IOException{if(!manifest.hasChemicalState())throw new IOException("Chemical diagnostic layout differs");return debugState(chemistry).chemicals();}
 	private FluidDomainState debugState(ChemicalRegistry chemistry)throws IOException {
 		var run=runtime();var audit=chemistry==null?new ChemicalAuditLedgerCodec.AuditLedgers(ChemicalTransferLedger.EMPTY,ChemicalTransferLedger.EMPTY):decodeChemicalAuditExtension();
-		return new FluidDomainState(manifest.sizeX(),manifest.sizeY(),manifest.sizeZ(),manifest.solverConfig(),Math.toIntExact(manifest.reservedMarkerCapacity()),run.sealed(),reconstructLiquid(chemistry),reconstructPhaseOccupancy(),reconstructMomentum(),reconstructCollisionMasks(),manifest.materialPalette(),chemistry,audit.externalSource(),audit.escapedSink(),chemistry==null?null:run.dirty(),run.cursor(),null,null,null,false,BuiltinGasDefinitions.createRegistry(),null,null,null,0,null,null,null,null);
+		return new FluidDomainState(manifest.sizeX(),manifest.sizeY(),manifest.sizeZ(),manifest.solverConfig(),Math.toIntExact(manifest.reservedMarkerCapacity()),run.sealed(),reconstructLiquid(chemistry),reconstructPhaseOccupancy(),reconstructMomentum(),reconstructFixedGeometry(),manifest.materialPalette(),chemistry,audit.externalSource(),audit.escapedSink(),chemistry==null?null:run.dirty(),run.cursor(),null,null,null,false,BuiltinGasDefinitions.createRegistry(),null,null,null,0,null,null,null,null);
 	}
 	public GasStateSnapshot reconstructGas(GasRegistry gas,ChemicalRegistry chemistry)throws IOException {validateCheckpoint();return reconstructGasPayload(gas,chemistry);}
 	public ThermalOwnerSnapshot reconstructThermalOwners(ThermalRegistry registry)throws IOException {

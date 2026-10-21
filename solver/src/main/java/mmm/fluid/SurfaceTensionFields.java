@@ -66,7 +66,7 @@ final class SurfaceTensionFields {
 		Arrays.fill(surfaceTensionPressure, 0.0F);
 		if (!domain.tension.hasAnySurfaceTension()) return;
 		for (int index = 0; index < domain.cellCount; index++) {
-			if (domain.geometry.solid[index]) {
+			if (domain.geometry.cutCells.fullySolid(index)) {
 				surfaceTensionColor[index] = 0.0;
 				continue;
 			}
@@ -79,7 +79,7 @@ final class SurfaceTensionFields {
 		rebuildSurfaceTensionNormals();
 		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
 			int index = domain.domainFlowFields.cellIndex(x, y, z);
-			if (domain.geometry.solid[index] || domain.liquidGrid.stockCount[index] == 0) continue;
+			if (domain.geometry.cutCells.fullySolid(index) || domain.liquidGrid.stockCount[index] == 0) continue;
 			double sigma = surfaceTensionAtCell(index);
 			if (sigma <= 0.0) continue;
 			double kappa = liquidGasMeanCurvature(x, y, z);
@@ -98,7 +98,7 @@ final class SurfaceTensionFields {
 				int sx = x + dx, sy = y + dy, sz = z + dz;
 				if (!domain.domainFlowFields.inside(sx, sy, sz)) continue;
 				int neighbor = domain.domainFlowFields.cellIndex(sx, sy, sz);
-				if (domain.geometry.solid[neighbor]) continue;
+				if (domain.geometry.cutCells.fullySolid(neighbor)) continue;
 				sum += color[neighbor];
 				count++;
 			}
@@ -121,7 +121,7 @@ final class SurfaceTensionFields {
 	private void rebuildNormals(double[] color,double[] companion,double[] normalX,double[] normalY,double[] normalZ) {
 		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
 			int index = domain.domainFlowFields.cellIndex(x, y, z);
-			if (domain.geometry.solid[index]) {
+			if (domain.geometry.cutCells.fullySolid(index)) {
 				normalX[index] = normalY[index] = 0.0;
 				normalZ[index] = 1.0;
 				continue;
@@ -143,15 +143,15 @@ final class SurfaceTensionFields {
 	}
 	void prepareLiquidPair(int firstPhase,int secondPhase){
 		if(pair==null)pair=new PairInterface(domain.cellCount);
-		for(int cell=0;cell<domain.cellCount;cell++)pair.color[cell]=domain.geometry.solid[cell]?0:domain.domainFlowFields.phaseFraction(cell,firstPhase);
+		for(int cell=0;cell<domain.cellCount;cell++)pair.color[cell]=domain.geometry.cutCells.fullySolid(cell)?0:domain.domainFlowFields.phaseFraction(cell,firstPhase);
 		smooth(pair.color,pair.first);
-		for(int cell=0;cell<domain.cellCount;cell++)pair.color[cell]=domain.geometry.solid[cell]?0:domain.domainFlowFields.phaseFraction(cell,secondPhase);
+		for(int cell=0;cell<domain.cellCount;cell++)pair.color[cell]=domain.geometry.cutCells.fullySolid(cell)?0:domain.domainFlowFields.phaseFraction(cell,secondPhase);
 		smooth(pair.color,pair.second);
 		rebuildNormals(pair.second,pair.first,pair.normalX,pair.normalY,pair.normalZ);
 		Arrays.fill(pair.curvature,0);
 		for(int z=0;z<domain.sizeZ;z++)for(int y=0;y<domain.sizeY;y++)for(int x=0;x<domain.sizeX;x++){
 			int cell=domain.domainFlowFields.cellIndex(x,y,z);
-			if(!domain.geometry.solid[cell]&&domain.liquidGrid.stockCount[cell]>0)
+			if(!domain.geometry.cutCells.fullySolid(cell)&&domain.liquidGrid.stockCount[cell]>0)
 				pair.curvature[cell]=curvature(x,y,z,false,pair.normalX,pair.normalY,pair.normalZ);
 		}
 	}
@@ -238,7 +238,7 @@ final class SurfaceTensionFields {
 				return open*normal[sample]+(1-open)*ghost;
 			}
 		}
-		if (domain.domainFlowFields.inside(nx, ny, nz) && domain.geometry.solid[domain.domainFlowFields.cellIndex(nx, ny, nz)]) {
+		if (domain.domainFlowFields.inside(nx, ny, nz) && domain.geometry.cutCells.fullySolid(domain.domainFlowFields.cellIndex(nx, ny, nz))) {
 			return normal[domain.domainFlowFields.cellIndex(x,y,z)];
 		}
 		int sample = domain.domainFlowFields.cellIndex(Math.min(domain.sizeX - 1, Math.max(0, nx)),

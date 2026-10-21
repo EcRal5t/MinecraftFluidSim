@@ -1,6 +1,6 @@
 package mmm.fluid;
 
-import mmm.chemistry.ChemicalParcelStore;
+import mmm.chemistry.RegionChemistry;
 import mmm.granular.GranularCouplingFields;
 import mmm.granular.GranularDepositDynamics;
 import mmm.granular.GranularPhaseTransferEngine;
@@ -110,14 +110,14 @@ final class DomainPhaseInventory {
 	public SolverUnitScale unitScale() { return domain.unitScale; }
 	public double physicalVolumeCubicMetres(double normalizedVolume) { return domain.unitScale.cubicMeters(normalizedVolume); }
 	public boolean hasMaterialState() { return domain.materialRegistry != null; }
-	public boolean hasChemistryState() { return domain.chemicalParcels != null; }
+	public boolean hasChemistryState() { return domain.chemistry != null; }
 	public boolean hasGranularState() { return domain.granularState != null; }
 	public boolean hasThermalState() { return domain.thermalState != null; }
 	public boolean hasAmbientGasCells() { return domain.metrics.hasAmbientGasCells(); }
 	public ThermalCellGrid.TemperatureRange observedCarrierTemperatureRange() {
 		return domain.thermalState == null ? null : domain.thermalState.observedCarrierTemperatureRange();
 	}
-	public int chemicalParcelCount() { return domain.chemicalParcels == null ? 0 : domain.chemicalParcels.pool().liveCount(); }
+	public int chemicalStockCount() { if(domain.chemistry==null)return 0;int count=0;for(var stock:domain.liquidCells.stocks())if(stock.mixture()!=null)count++;return count; }
 	public long totalChemicalSpeciesQuanta() {
 		long total=0;for(var stock:domain.liquidCells.stocks()) if(stock.mixture()!=null) total=Math.addExact(total,stock.mixture().totalQuanta());return total;
 	}
@@ -181,7 +181,7 @@ final class DomainPhaseInventory {
 	public boolean granularReadyForHydrostaticSleep() {
 		if (domain.granularState == null) return true;
 		if (domain.granularState.parcels.count() != 0 || domain.granularDepositDynamics.dirtyColumnCount() != 0) return false;
-		return !domain.precipitationEnabled || domain.chemicalParcels == null || !domain.chemicalParcels.hasDirtyCells();
+		return !domain.precipitationEnabled || domain.chemistry == null || !domain.chemistry.hasDirtyCells();
 	}
 	public GranularDepositDynamics.Stats lastGranularDepositStats() { return domain.lastGranularDepositStats; }
 	public double lastGranularBoundaryImpulseX() { return domain.lastGranularBoundaryImpulseX; }
@@ -270,9 +270,9 @@ final class DomainPhaseInventory {
 	public PhaseTransferStats lastPhaseTransferStats() { return domain.lastPhaseTransferStats; }
 	public ThermalPhaseStats lastThermalPhaseStats() { return domain.lastThermalPhaseStats; }
 	public GasThermalPhaseStats lastGasThermalPhaseStats() { return domain.lastGasThermalPhaseStats; }
-	public ChemicalParcelStore.ReactionStats lastChemicalReactionStats() { return domain.lastChemicalReactionStats; }
+	public RegionChemistry.ReactionStats lastChemicalReactionStats() { return domain.lastChemicalReactionStats; }
 	public void setPrecipitationEnabled(boolean enabled) {
-		if (enabled && (domain.chemicalParcels == null || domain.granularState == null || domain.granularState.compositions == null
+		if (enabled && (domain.chemistry == null || domain.granularState == null || domain.granularState.compositions == null
 				|| !domain.granularState.registry.hasReactiveRules())) {
 			throw new IllegalStateException("Precipitation requires bound chemistry, granular state and reactive rules");
 		}
@@ -314,8 +314,8 @@ final class DomainPhaseInventory {
 				throw new IllegalArgumentException("No granular carrier definition for liquid " + material.id());
 			}
 		}
-		if (domain.chemicalParcels != null && registry.hasReactiveRules()
-				&& !registry.chemicalRegistryFingerprint().equals(domain.chemicalParcels.registry().fingerprint())) {
+		if (domain.chemistry != null && registry.hasReactiveRules()
+				&& !registry.chemicalRegistryFingerprint().equals(domain.chemistry.registry().fingerprint())) {
 			throw new IllegalArgumentException("Granular registry chemical dependency mismatch");
 		}
 		return liquidRegistry;
@@ -323,12 +323,12 @@ final class DomainPhaseInventory {
 	private PreparedGranularBinding prepareGranularBinding(GranularRegistry registry) {
 		var state = new GranularDomainState(registry, domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());
 		GranularPhaseTransferEngine phaseTransfer = null;
-		if (domain.chemicalParcels != null && registry.hasReactiveRules()) {
+		if (domain.chemistry != null && registry.hasReactiveRules()) {
 			int depositCapacity = Math.min(GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
 					Math.multiplyExact(domain.cellCount, GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL));
-			state.bindCompositions(new SolidCompositionPool(domain.chemicalParcels.registry(),
+			state.bindCompositions(new SolidCompositionPool(domain.chemistry.registry(),
 					Math.addExact(GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, depositCapacity)));
-			phaseTransfer = new GranularPhaseTransferEngine(domain.chemicalParcels.registry(), domain.unitScale);
+			phaseTransfer = new GranularPhaseTransferEngine(domain.chemistry.registry(), domain.unitScale);
 		}
 		return new PreparedGranularBinding(state,
 				new GranularDepositDynamics(registry, state.parcels, state.deposits, state.inventory,
@@ -438,7 +438,7 @@ final class DomainPhaseInventory {
 	}
 	void markGranularExternalChange(int cell) {
 		domain.granularDepositDynamics.disturbCell(cell);
-		if (domain.precipitationEnabled) domain.chemicalParcels.markDirtyCell(cell);
+		if (domain.precipitationEnabled) domain.chemistry.markDirtyCell(cell);
 		domain.markCellInventoryChanged();
 	}
 }

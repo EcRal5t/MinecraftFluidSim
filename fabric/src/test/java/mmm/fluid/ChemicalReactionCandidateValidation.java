@@ -33,7 +33,7 @@ final class ChemicalReactionCandidateValidation {
 			var before=domain.liquidCells.physicalStockAt(0);var u=domain.exactInternalEnergy();var momentum=domain.mac.captureMomentum();
 			for(int pass=0;pass<2;pass++) {
 				var stats=domain.domainStep.runThermalReactionPhaseAxis(false,0).chemistry();var actual=domain.liquidCells.stock(before.key());
-				require(stats.changedMarkers()==(pass>0?0:1),"Cell reaction progress or retry changed");
+				require(stats.changedStocks()==(pass>0?0:1),"Cell reaction progress or retry changed");
 				require(actual.massUnits()==before.massUnits()&&actual.volume().equals(before.volume())
 						&&actual.mixture().exactSpeciesMassKilograms(chemistry).equals(before.mixture().exactSpeciesMassKilograms(chemistry))
 						&&actual.mixture().massResidualUnits()==before.mixture().massResidualUnits()
@@ -46,12 +46,12 @@ final class ChemicalReactionCandidateValidation {
 						&&Arrays.equals(momentum.copyX(),domain.mac.captureMomentum().copyX())
 						&&Arrays.equals(momentum.copyY(),domain.mac.captureMomentum().copyY())
 						&&Arrays.equals(momentum.copyZ(),domain.mac.captureMomentum().copyZ()),"Cell reaction changed energy or MAC momentum");
-				require(domain.chemicalParcels.hasDirtyCells()==unavailable,"Energy-limited reaction lost its retry state");
+				require(domain.chemistry.hasDirtyCells()==unavailable,"Energy-limited reaction lost its retry state");
 			}
 			if(unavailable){
 				long remaining=domain.liquidCells.stock(before.key()).mixture().amount(chemistry.speciesHandle(a));
 				domain.setThermalTemperatureInCell(1,1,1,300);
-				require(domain.domainStep.runThermalReactionPhaseAxis(false,0).chemistry().changedMarkers()>0
+				require(domain.domainStep.runThermalReactionPhaseAxis(false,0).chemistry().changedStocks()>0
 						&&domain.liquidCells.stock(before.key()).mixture().amount(chemistry.speciesHandle(a))<remaining
 						&&domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 						"Energy-limited reaction did not resume after finite reheating");
@@ -86,22 +86,22 @@ final class ChemicalReactionCandidateValidation {
 		for(var source:List.of(List.of(mixture(registry,BuiltinChemicalDefinitions.H_PLUS,1,0),mixture(registry,BuiltinChemicalDefinitions.OH_MINUS,1,0)),
 				List.of(mixture(registry,BuiltinChemicalDefinitions.H_PLUS,2,-1.9e-9),mixture(registry,BuiltinChemicalDefinitions.OH_MINUS,1,-1.69e-8)))) {
 			var fixture=new Fixture(registry,source,new int[source.size()]);long mass=fixture.totalMass();
-			require(fixture.step().changedMarkers()>0&&!fixture.scheduler.hasDirtyCells(),"Low-quantity cell reaction did not finish");
+			require(fixture.step().changedStocks()>0&&!fixture.scheduler.hasDirtyCells(),"Low-quantity cell reaction did not finish");
 			require(fixture.totalMass()==mass&&fixture.totals()[registry.speciesHandle(BuiltinChemicalDefinitions.H2O)]==1,"Low-quantity cell reaction lost mass or product");
 		}
 		var split=new Fixture(registry,List.of(mixture(registry,BuiltinChemicalDefinitions.H_PLUS,1,0),mixture(registry,BuiltinChemicalDefinitions.OH_MINUS,1,0)),new int[]{0,0},new int[]{1,128});
-		require(split.step().changedMarkers()==0&&split.totals()[registry.speciesHandle(BuiltinChemicalDefinitions.H2O)]==0,"Reaction crossed a fixed solid partition");
+		require(split.step().changedStocks()==0&&split.totals()[registry.speciesHandle(BuiltinChemicalDefinitions.H2O)]==0,"Reaction crossed a fixed solid partition");
 		var noop=new Fixture(registry,List.of(mixture(registry,BuiltinChemicalDefinitions.H2O,1001,.125)),new int[]{0});
-		var before=noop.inventory.snapshot();require(noop.step().changedMarkers()==0&&noop.inventory.snapshot().rows()==before.rows(),"No-op chemistry rewrote persistent inventory");
+		var before=noop.inventory.snapshot();require(noop.step().changedStocks()==0&&noop.inventory.snapshot().rows()==before.rows(),"No-op chemistry rewrote persistent inventory");
 		var wide=products(17,ExactRational.ONE);var deferred=new Fixture(wide,List.of(mixture(wide,"test:source",1,0)),new int[]{0});
-		before=deferred.inventory.snapshot();require(deferred.step().changedMarkers()==0&&deferred.scheduler.hasDirtyCells()&&deferred.inventory.snapshot().rows()==before.rows(),"Species-capacity deferral changed its source");
+		before=deferred.inventory.snapshot();require(deferred.step().changedStocks()==0&&deferred.scheduler.hasDirtyCells()&&deferred.inventory.snapshot().rows()==before.rows(),"Species-capacity deferral changed its source");
 		var tiny=products(2,ExactRational.parse("0.0001"));var small=new Fixture(tiny,List.of(mixture(tiny,"test:source",1,0)),new int[]{0});
-		require(small.step().changedMarkers()==1&&small.inventory.physicalStockAt(0).mixture().entryCount()==2,"Small integer mass reaction did not finish");
+		require(small.step().changedStocks()==1&&small.inventory.physicalStockAt(0).mixture().entryCount()==2,"Small integer mass reaction did not finish");
 		var region=new Fixture(registry,List.of(mixture(registry,BuiltinChemicalDefinitions.HCL,750_000_000_000_000L,0),mixture(registry,BuiltinChemicalDefinitions.HCL,750_000_000_000_000L,0)),new int[]{0,1});
-		require(region.step().changedMarkers()==1&&region.scheduler.hasDirtyCells(),"Combined region species capacity did not admit its available partial extent");
+		require(region.step().changedStocks()==1&&region.scheduler.hasDirtyCells(),"Combined region species capacity did not admit its available partial extent");
 		var old=region.inventory.stocksInCell(1).getFirst();var water=mixture(registry,BuiltinChemicalDefinitions.H2O,1,0);
 		region.inventory.planEdits(List.of(new LiquidCellInventory.Edit(old.key(),new LiquidCellInventory.Stock(old.key(),old.volume(),water.massUnits(registry),water,0,false)))).commit();
-		require(region.step().changedMarkers()==1&&!region.scheduler.hasDirtyCells(),"Deferred cell did not finish after capacity became available");
+		require(region.step().changedStocks()==1&&!region.scheduler.hasDirtyCells(),"Deferred cell did not finish after capacity became available");
 	}
 
 	static void reactionHeatChangesTemperature() {
@@ -116,7 +116,7 @@ final class ChemicalReactionCandidateValidation {
 				new ThermalMaterialDefinition("test:heat/air",ThermalMaterialDefinition.CarrierKind.GAS,mmm.fluid.air.BuiltinGasDefinitions.AIR,300,0,.025,List.of(new ThermalMaterialDefinition.CaloricSegment(150,800,718)))),
 				List.of(new ThermalSpeciesOffset("test:heat/oa",a,material,ExactRational.ZERO),new ThermalSpeciesOffset("test:heat/ob",b,material,ExactRational.of(-100))),List.of(),chemistry.fingerprint(),"");
 		domain.bindThermal(thermal,fluids,300);var energy=domain.exactInternalEnergy();
-		require(domain.domainStep.runThermalReactionPhaseAxis(false,0).chemistry().changedMarkers()==1&&domain.exactInternalEnergy().equals(energy)
+		require(domain.domainStep.runThermalReactionPhaseAxis(false,0).chemistry().changedStocks()==1&&domain.exactInternalEnergy().equals(energy)
 				&&Math.abs(domain.thermalState.temperature(0,domain.domainCapabilities.thermalMarkerContext())-380)<1e-9,"Reaction heat did not follow the conserved cell energy");
 	}
 
@@ -128,7 +128,7 @@ final class ChemicalReactionCandidateValidation {
 		int count=ChemicalLimits.MAX_REACTION_EVALUATIONS_PER_STEP/reactions.size()+1;var input=new ArrayList<ChemicalMixtureRecord>();int[] cells=new int[count];
 		for(int i=0;i<count;i++){input.add(mixture(registry,"test:s0",1,0));cells[i]=i;}
 		var fixture=new Fixture(registry,input,cells);
-		require(fixture.step().changedMarkers()==count-1&&fixture.scheduler.reactionCursor()==count-1,"Cell reaction budget did not save its next cursor");
+		require(fixture.step().changedStocks()==count-1&&fixture.scheduler.reactionCursor()==count-1,"Cell reaction budget did not save its next cursor");
 		for(int i=0;i<count-1;i++)fixture.scheduler.markDirtyCell(i);fixture.step();
 		require(fixture.inventory.stocksInCell(count-1).getFirst().mixture().amount(registry.speciesHandle("test:s255"))==1,"Rotating reaction budget starved the tail cell");
 	}
@@ -136,13 +136,13 @@ final class ChemicalReactionCandidateValidation {
 	static final class Fixture {
 		final ChemicalRegistry registry;
 		final LiquidCellInventory inventory;
-		final ChemicalParcelStore scheduler;
+		final RegionChemistry scheduler;
 		private final ChemicalReactionStage stage;
 		Fixture(ChemicalRegistry registry,List<ChemicalMixtureRecord> inputs,int[] cells) {this(registry,inputs,cells,null);}
 		Fixture(ChemicalRegistry registry,List<ChemicalMixtureRecord> inputs,int[] cells,int[] supports) {
 			this.registry=registry;int sizeX=Math.max(2,Arrays.stream(cells).max().orElse(0)+1);
 			int cellCount=Math.multiplyExact(sizeX,4);
-			inventory=new LiquidCellInventory(cellCount,registry);scheduler=new ChemicalParcelStore(registry,SolverUnitScale.forCellSize(1),Math.max(1,inputs.size()),cellCount);
+			inventory=new LiquidCellInventory(cellCount,registry);scheduler=new RegionChemistry(registry,cellCount);
 			for(int i=0;i<inputs.size();i++) {
 				var key=new LiquidCellInventory.Key(cells[i],0,supports==null?255:supports[i]);var input=inputs.get(i);var old=inventory.stock(key);
 				long mass=input.massUnits(registry);var amounts=new TreeMap<>(input.stableAmounts(registry));SignedDyadic volume=SignedDyadic.of(.125);
@@ -152,10 +152,10 @@ final class ChemicalReactionCandidateValidation {
 			}
 			var fluids=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension(registry.phases().getFirst().materialId(),1000,"test:miscible",0,90)));
 			var domain=new FluidDomain(sizeX,2,2,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.002F,0),Math.max(1,inputs.size()));
-			domain.bindMaterialRegistry(fluids);domain.liquidCells=inventory;domain.chemicalParcels=scheduler;
+			domain.bindMaterialRegistry(fluids);domain.liquidCells=inventory;domain.chemistry=scheduler;
 			stage=new ChemicalReactionStage(domain);
 		}
-		ChemicalParcelStore.ReactionStats step(){return stage.step();}
+		RegionChemistry.ReactionStats step(){return stage.step();}
 		long totalMass(){long mass=0;for(var stock:inventory.stocks())mass=Math.addExact(mass,stock.massUnits());return mass;}
 		long[] totals(){long[] totals=new long[registry.species().size()];for(var stock:inventory.stocks())for(int i=0;i<stock.mixture().entryCount();i++)totals[stock.mixture().speciesHandle(i)]=Math.addExact(totals[stock.mixture().speciesHandle(i)],stock.mixture().amountAt(i));return totals;}
 	}
