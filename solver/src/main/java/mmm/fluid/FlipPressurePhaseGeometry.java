@@ -402,13 +402,9 @@ final class FlipPressurePhaseGeometry {
 		double x=.5*a,y=.5*b;int micro=microAtFace(cell,axis,side,x,y);
 		if((cut.mask(cell)&1<<micro)!=0||liquidFractionExact(cell,micro)<=0)return 0;
 		if(liquidFractionExact(cell,micro)>=1)return .25;
-		rectangle(x,y,.5);
-		int count=clipFace(4,
+		return halfPlaneRectangleArea(x,y,.5,
 				planeNormal(cell,micro,(axis+1)%3),planeNormal(cell,micro,(axis+2)%3),
 				planeOffset(cell,micro)-side*planeNormal(cell,micro,axis));
-		double twice=0;
-		for(int i=1;i+1<count;i++)twice+=(faceX[i]-faceX[0])*(faceY[i+1]-faceY[0])-(faceY[i]-faceY[0])*(faceX[i+1]-faceX[0]);
-		return .5*Math.abs(twice);
 	}
 	double sharedLiquidPortArea(int left,int right,int axis,int a,int b,FlipCutCellGeometry cut){
 		int minus=microAtFace(left,axis,1,.5*a,.5*b),plus=microAtFace(right,axis,0,.5*a,.5*b);
@@ -430,20 +426,37 @@ final class FlipPressurePhaseGeometry {
 		return area;
 	}
 
-	private double wetRectangle(int left, int right, int axis, double x, double y, double span) {
-
-		int minus = microAtFace(left,axis,1,x,y), plus = microAtFace(right,axis,0,x,y);
-		if (liquidFractionExact(left,minus) == 0 || liquidFractionExact(right,plus) == 0) return 0;
-		faceX[0] = faceX[3] = x; faceX[1] = faceX[2] = x + span;
-		faceY[0] = faceY[1] = y; faceY[2] = faceY[3] = y + span;
-		int tangent = (axis + 1) % 3, other = (axis + 2) % 3;
-		int count = liquidFractionExact(left,minus) >= 1 ? 4 : clipFace(4, planeNormal(left,minus,tangent), planeNormal(left,minus,other),
-				planeOffset(left,minus) - planeNormal(left,minus,axis));
-		if (liquidFractionExact(right,plus) < 1) count = clipFace(count, planeNormal(right,plus,tangent), planeNormal(right,plus,other), planeOffset(right,plus));
-		double twiceArea = 0;
-		for (int i = 1; i + 1 < count; i++) twiceArea += (faceX[i] - faceX[0]) * (faceY[i + 1] - faceY[0])
-				- (faceY[i] - faceY[0]) * (faceX[i + 1] - faceX[0]);
-		return .5 * Math.abs(twiceArea);
+	private double wetRectangle(int left,int right,int axis,double x,double y,double span){
+		int minus=microAtFace(left,axis,1,x,y),plus=microAtFace(right,axis,0,x,y);
+		double first=liquidFractionExact(left,minus),second=liquidFractionExact(right,plus);
+		if(first==0||second==0)return 0;
+		int tangent=(axis+1)%3,other=(axis+2)%3;
+		if(first>=1){
+			if(second>=1)return span*span;
+			return halfPlaneRectangleArea(x,y,span,planeNormal(right,plus,tangent),planeNormal(right,plus,other),planeOffset(right,plus));
+		}
+		if(second>=1)return halfPlaneRectangleArea(x,y,span,planeNormal(left,minus,tangent),planeNormal(left,minus,other),
+				planeOffset(left,minus)-planeNormal(left,minus,axis));
+		rectangle(x,y,span);
+		int count=clipFace(4,planeNormal(left,minus,tangent),planeNormal(left,minus,other),
+				planeOffset(left,minus)-planeNormal(left,minus,axis));
+		count=clipFace(count,planeNormal(right,plus,tangent),planeNormal(right,plus,other),planeOffset(right,plus));
+		double twiceArea=0;
+		for(int i=1;i+1<count;i++)twiceArea+=(faceX[i]-faceX[0])*(faceY[i+1]-faceY[0])
+				-(faceY[i]-faceY[0])*(faceX[i+1]-faceX[0]);
+		return .5*Math.abs(twiceArea);
+	}
+	/** The CDF of two uniform coordinates gives the area below one plane directly. */
+	private static double halfPlaneRectangleArea(double x,double y,double span,double nx,double ny,double offset){
+		double dx=nx*span,dy=ny*span,a=Math.abs(dx),b=Math.abs(dy),area=span*span;
+		double t=offset-nx*x-ny*y-Math.min(0,dx)-Math.min(0,dy);
+		if(a==0&&b==0)return t>=0?area:0;
+		if(t<=0)return 0;
+		double sum=a+b;if(t>=sum)return area;
+		boolean upper=t>.5*sum;if(upper)t=sum-t;
+		double small=Math.min(a,b),large=Math.max(a,b);
+		double fraction=small==0?t/large:t<=small?.5*(t/small)*(t/large):(t-.5*small)/large;
+		return area*(upper?1-fraction:fraction);
 	}
 
 	private int clipFace(int count, double nx, double ny, double offset) {

@@ -364,7 +364,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
     - [GasRuntimeGeometry](../../solver/src/main/java/mmm/fluid/GasRuntimeGeometry.java)：固定开放分量的干区几何、节点归属和实际容量；存盘时展开微盒节点索引
     - [GasChamberTopology](../../solver/src/main/java/mmm/fluid/GasChamberTopology.java)：真实干区连通与冷恢复归属校验
     - [GasVolumeAllocation](../../solver/src/main/java/mmm/fluid/GasVolumeAllocation.java)：随相通量推进的空间来源及环境／真空来源
-    - [GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java)：按最终来源一次准备库存、内能和控制体积
+    - [GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java)：按最终来源准备库存、内能和控制体积；`balanceMechanicalWork` 将各旧腔实际功交给同一机械连通体，统一预检后提交
     - [AirNetwork](../../model/src/main/java/mmm/fluid/air/AirNetwork.java)
     - [GasOrificeFlow](../../model/src/main/java/mmm/fluid/air/GasOrificeFlow.java)
     - [GasEnergyStore](../../model/src/main/java/mmm/thermal/GasEnergyStore.java)
@@ -592,6 +592,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 | 穿墙、小液滴或薄层异常 | `CollisionField` 与 `FlipCutCellGeometry` | `LiquidCollisionEdit`、共同面通量与压力支撑 |
 | 冲击后动量或热量不闭合 | 最终 MAC 动量、墙面冲量与局部机械热 | `CellMacStage.stopWallMomentum`、`CellMomentumTransport` 及对应库存提交 |
 | 气压或气腔归属异常 | `GasRuntimeGeometry` 的微盒、容量与节点归属 | `GasTopologyCoordinator` 的来源交接及 `GasThermalModel` 的库存／容量／U |
+| 近空液体温度异常或压缩功去向异常 | 实际载体 M、U 及旧气腔做功 | `PressureSystem` 的实际动能变化、`CellMacStage.finishMechanicalHeat` 的质量势能通量及 `GasTopologyCoordinator.balanceMechanicalWork` 的机械连通体 |
 | 等容交接后气体异常升温 | `GasTopologyCoordinator` 的旧腔控制体积与各接收气腔的净扩容 | 物质来源权重、局部释放的真空与绝热功结算 |
 | 均压静水或微扰后出现气穴与温漂 | `PressureSystem` 的共同压力增量、`ConservativeLiquidFlux` 的实际干面接触 | `PhaseQuantitySettlement` 的内部充满约束，再跟到实际气容及压缩功 |
 | 接触角铺展方向异常 | `SurfaceTensionFields` 的曲率及墙面法向通量 | 同一字段进入共同压力载荷的实际做功 |

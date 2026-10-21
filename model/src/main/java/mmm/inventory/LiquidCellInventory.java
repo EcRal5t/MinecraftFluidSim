@@ -402,28 +402,35 @@ public final class LiquidCellInventory {
 	private Plan addMechanicalHeatByStock(Plan base,Map<Key,SignedDyadic> heatByStock){
 		if(heatByStock.isEmpty())return base;
 		var changedRows=new LinkedHashMap<Integer,ArrayList<Stock>>();
-		var totalHeat=SignedDyadic.ZERO;var energyChange=SignedDyadic.ZERO;var roundoff=SignedDyadic.ZERO;
+		var totalHeat=SignedDyadic.ZERO;
+		double[] beforeEnergy=null,afterEnergy=null;int energyCount=0;
 		for(var entry:heatByStock.entrySet()){
 			var heat=entry.getValue();
 			if(heat==null)throw new IllegalArgumentException("Mechanical energy transfer is missing");
 			if(heat.signum()==0)continue;
 			var key=entry.getKey();
+			var originalRow=base.future.rows.get(key.cell());int index=findOrdinal(originalRow,key);
+			if(index<0||originalRow.get(index).massUnits()==0)throw new IllegalArgumentException("Mechanical heat requires an actual liquid owner");
+			var stock=originalRow.get(index);double stored=stock.internalEnergy()+heat.toDouble();
+			totalHeat=totalHeat.add(heat);
+			if(Double.doubleToLongBits(stored)==Double.doubleToLongBits(stock.internalEnergy()))continue;
 			var row=changedRows.computeIfAbsent(key.cell(),cell->new ArrayList<>(base.future.rows.get(cell)));
-			int index=findOrdinal(row,key);
-			if(index<0||row.get(index).massUnits()==0)throw new IllegalArgumentException("Mechanical heat requires an actual liquid owner");
-			var stock=row.get(index);var before=SignedDyadic.of(stock.internalEnergy());double stored=before.add(heat).toDouble();
 			row.set(index,new Stock(key,stock.volume(),stock.massUnits(),stock.mixture(),stored,stock.indicator()));
-			var delta=SignedDyadic.of(stored).subtract(before);
-			energyChange=energyChange.add(delta);roundoff=roundoff.add(delta.subtract(heat));totalHeat=totalHeat.add(heat);
+			if(beforeEnergy==null){beforeEnergy=new double[heatByStock.size()];afterEnergy=new double[heatByStock.size()];}
+			beforeEnergy[energyCount]=stock.internalEnergy();afterEnergy[energyCount++]=stored;
 		}
-		if(changedRows.isEmpty())return base;
-		var futureRows=new ArrayList<>(base.future.rows);var changed=new ArrayList<>(base.changedCells);var included=new boolean[cellCount()];
-		for(int cell:changed)included[cell]=true;
-		for(var entry:changedRows.entrySet()){
-			int cell=entry.getKey();futureRows.set(cell,List.copyOf(entry.getValue()));
-			if(!included[cell]){included[cell]=true;changed.add(cell);}
+		var energyChange=energyCount==0?SignedDyadic.ZERO:SignedDyadic.sum(afterEnergy,energyCount).subtract(SignedDyadic.sum(beforeEnergy,energyCount));
+		var roundoff=energyChange.subtract(totalHeat);
+		var successor=base.future;List<Integer> changed=base.changedCells;
+		if(!changedRows.isEmpty()){
+			var futureRows=new ArrayList<>(base.future.rows);changed=new ArrayList<>(base.changedCells);var included=new boolean[cellCount()];
+			for(int cell:changed)included[cell]=true;
+			for(var entry:changedRows.entrySet()){
+				int cell=entry.getKey();futureRows.set(cell,List.copyOf(entry.getValue()));
+				if(!included[cell]){included[cell]=true;changed.add(cell);}
+			}
+			successor=new LiquidCellInventory(base.future,java.util.Collections.unmodifiableList(futureRows),revision+1,null);
 		}
-		var successor=new LiquidCellInventory(base.future,java.util.Collections.unmodifiableList(futureRows),revision+1,null);
 		return new Plan(this,successor,changed,base.transfers,
 				base.energyChange.add(energyChange),base.energyRoundoff.add(roundoff),base.mechanicalHeat.add(totalHeat));
 	}
