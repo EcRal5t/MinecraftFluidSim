@@ -215,6 +215,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 `PressureSparseMatrix` 一次组装液体、颗粒和气体共同 CSR，矩阵乘与 IC(0) 直接复用该算子；真空活动集沿当前自由行求解。
 压力支撑分类直接读取同代气体几何已准备的分量孔容与实际干容，精确容量由共同库存准备一次。
 真实真空腔与有库存气腔均保留自己的压力接触。静水参考只提供已知载荷，压力自由度由实际容量与气腔归属决定。
+静水承载使用实际液体接触及统一的未解析薄干缝近似，接地传播与上覆压力使用同一判定。可解析真空继续保留其压力与运动响应。
 已解析液气界面采用给定压力或有限气腔储存项，状态方程按液体压载区间给出有限体积响应，参加一次半隐式压力预测。
 活动颗粒体积分配到共同 MAC 面，液体读取剩余开口，两相真实有限质量与各自体积散度的转置共同构成压力算子。
 压力同时更新液体与颗粒速度，接触和位置预测随后准备实际整数占容，真实终点孔容由共同有界输运结算。
@@ -586,6 +587,8 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 | 穿墙、小液滴或薄层异常 | `CollisionField` 与 `FlipCutCellGeometry` | `LiquidCollisionEdit`、共同面通量与压力支撑 |
 | 冲击后动量或热量不闭合 | 最终 MAC 动量、墙面冲量与局部机械热 | `CellMacStage.stopWallMomentum`、`CellMomentumTransport` 及对应库存提交 |
 | 气压或气腔归属异常 | `GasRuntimeGeometry` 的微盒、容量与节点归属 | `GasTopologyCoordinator` 的来源交接及 `GasThermalModel` 的库存／容量／U |
+| 等容交接后气体异常升温 | `GasTopologyCoordinator` 的旧腔控制体积与真实净新增孔容 | 物质来源权重、真空标签与绝热功结算 |
+| 接触角铺展方向异常 | `SurfaceTensionFields` 的曲率及墙面法向通量 | 同一字段进入共同压力载荷的实际做功 |
 | 温度、反应或相变无进展 | 实际组成、U、批次及候选不可执行原因 | `ThermalCaloricInversion`、`GasLiquidPhaseModel`、`GasLiquidPhaseChangeStage`、未来气腔与热账计划 |
 | 颗粒占容、压力或沉积异常 | `GranularCouplingFields`、碰撞预览及整数分配 | `GranularPressureCoupling`、`GranularSettlementGeometryPlan`、`GranularBedShear` |
 | 容器／区域锁定 | HEAD、WAL 与外部已存盘状态的分类 | `ContainerRecoveryCoordinator`、`OwnershipCoordinator`；[恢复决策](world-ownership-and-containers.md#恢复决策表) |
