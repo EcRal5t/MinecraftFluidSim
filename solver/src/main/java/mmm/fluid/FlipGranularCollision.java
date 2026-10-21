@@ -34,7 +34,6 @@ final class FlipGranularCollision {
 	private GranularParcelStore previewSource;
 	private boolean previewReady,velocitiesPublished;
 	private int lastCapacityHeld;
-	private double lastMaximumPositionCorrection, lastPositionCorrectionMassY;
 
 	FlipGranularCollision(int sizeX, int sizeY, int sizeZ, float cellSize,
 	                      FlipCutCellGeometry cutCells, GranularDepositStore deposits, int capacity) {
@@ -54,13 +53,10 @@ final class FlipGranularCollision {
 		previewRevision = parcels.mutationRevision();
 		previewSource = parcels;
 		lastCapacityHeld = 0;
-		lastMaximumPositionCorrection = lastPositionCorrectionMassY = 0;
 		if (previewCount > 1) {
 			var contacts = new GranularActiveContacts(parcels, registry, sphereCollision, cellSize, dt);
 			activeContacts = contacts;
 			contacts.preview(nextX, nextY, nextZ, nextVelocityX, nextVelocityY, nextVelocityZ, nextSupported);
-			lastMaximumPositionCorrection = contacts.maximumPositionCorrection();
-			lastPositionCorrectionMassY = contacts.positionCorrectionMassY();
 			for (int index = 0; index < previewCount; index++) {
 				nextContactComponent[index] = contacts.contactComponent(index);
 				var parcel = parcels.parcel(index); float restingSpeed = cellSize * .05F;
@@ -270,9 +266,6 @@ final class FlipGranularCollision {
 	}
 
 	int lastCapacityHeld() { return lastCapacityHeld; }
-	/** Position projection observation in metres; its signed gravitational work is gravity times mass-height change. */
-	double lastMaximumPositionCorrection() { return lastMaximumPositionCorrection; }
-	double lastPositionCorrectionMassY() { return lastPositionCorrectionMassY; }
 
 	/** Momentum received by the fixed geometry and capacity constraints, in kg m/s. */
 	record BoundaryImpulse(double x, double y, double z) { }

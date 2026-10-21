@@ -1917,13 +1917,31 @@ public final class M8GranularValidation {
 		var dynamics = new GranularDepositDynamics(registry, parcels, beds, inventory, 2, 1, 1, .5F);
 		var environment = new TestDepositEnvironment(2, 1, 1, 0) { @Override public double gravity() { return 9.81; } };
 		var before = inventory.totalMassUnits();
-		require(dynamics.step(environment, .05F).settledParcels() == 3 && parcels.count() == 0
-				&& beds.cellSolidVolumeSvq(0) == base + svq && beds.cellSolidVolumeSvq(1) == 2 * svq
-				&& inventory.totalMassUnits() == before, "a stable sand bed with lower-repose incoming beads must evaluate the complete neighboring cohort");
-		double rise = (beds.cellBulkVolumeSvq(0) - beds.cellBulkVolumeSvq(1)) / (double) SolidVolume.SVQ_PER_CELL;
+		double[] potentialBefore = {0};
+		beds.forEachGroupInCell(0, (cell, porosity, material, composition, volume, groupMass) ->
+				potentialBefore[0] += mmm.units.Mass.kilograms(groupMass) * 9.81 * .5 * top);
+		for (int i = 0; i < parcels.count(); i++) potentialBefore[0] += parcels.parcel(i).mass() * 9.81 * parcels.parcel(i).y();
+		var stats = dynamics.step(environment, .05F);
+		long[] materialVolume = new long[2];
+		double[] potentialAfter = {0};
+		for (int cell = 0; cell < 2; cell++) {
+			double center = .25 * beds.cellBulkVolumeSvq(cell) / SolidVolume.SVQ_PER_CELL;
+			beds.forEachGroupInCell(cell, (ignored, porosity, material, composition, volume, groupMass) -> {
+				require(material == sand || material == beads, "mixed resting settlement introduced a material");
+				materialVolume[material == sand ? 0 : 1] += volume;
+				potentialAfter[0] += mmm.units.Mass.kilograms(groupMass) * 9.81 * center;
+			});
+		}
+		require(stats.settledParcels() == 3 && parcels.count() == 0
+				&& materialVolume[0] == base && materialVolume[1] == 3 * svq
+				&& inventory.totalMassUnits() == before,
+				"supported mixed-material settlement must finish with the original material volumes and mass: settled="
+						+ stats.settledParcels() + ", remaining=" + parcels.count());
+		double rise = Math.abs(beds.cellBulkVolumeSvq(0) - beds.cellBulkVolumeSvq(1)) / (double) SolidVolume.SVQ_PER_CELL;
 		require(rise < Math.tan(registry.material(beads).reposeAngleRadians())
+				&& potentialAfter[0] <= potentialBefore[0] && stats.physicalHeat().signum() >= 0
 				&& environment.impulseX == 0 && environment.impulseY == 0 && environment.impulseZ == 0,
-				"the joint candidate must satisfy the incoming repose angle and exact resting momentum closure");
+				"mixed resting settlement must preserve incoming repose, non-increasing potential and exact momentum closure");
 
 	}
 

@@ -32,7 +32,6 @@ final class GranularActiveContacts {
 	private final ArrayList<Constraint> constraints = new ArrayList<>();
 	private final HashSet<Long> pairs = new HashSet<>();
 	private int operations, nodeCount, heapSize;
-	private double maximumPositionCorrection, positionCorrectionMassY;
 
 	GranularActiveContacts(GranularParcelStore parcels, GranularRegistry registry, GranularSphereCollision fixed,
 	                      float h, float duration) {
@@ -66,8 +65,7 @@ final class GranularActiveContacts {
 	}
 
 	void preview(float[] x, float[] y, float[] z, float[] vx, float[] vy, float[] vz, boolean[] supported) {
-		double[][] source = predicted;
-		double[][] points = Arrays.stream(source).map(double[]::clone).toArray(double[][]::new);
+		double[][] points = Arrays.stream(predicted).map(double[]::clone).toArray(double[][]::new);
 		for (int pass = 0; pass < GEOMETRIC_PASSES; pass++) {
 			findContacts(points, pass);
 			if (pass > 0 && positionsResolved(points)) break;
@@ -98,10 +96,6 @@ final class GranularActiveContacts {
 			float[] p = fixed.roundContactPoint(points[i], radius[i]);
 			x[i] = p[0]; y[i] = p[1]; z[i] = p[2];
 			vx[i] = (float) outgoing[i][0]; vy[i] = (float) outgoing[i][1]; vz[i] = (float) outgoing[i][2];
-			double correction = 0;
-			for (int a = 0; a < 3; a++) correction = Math.hypot(correction, p[a] - source[i][a]);
-			maximumPositionCorrection = Math.max(maximumPositionCorrection, correction);
-			positionCorrectionMassY += mass[i] * (p[1] - source[i][1]);
 		}
 		refreshSupport(x, y, z, supported);
 	}
@@ -129,8 +123,6 @@ final class GranularActiveContacts {
 		}
 	}
 
-	double maximumPositionCorrection() { return maximumPositionCorrection; }
-	double positionCorrectionMassY() { return positionCorrectionMassY; }
 	int contactComponent(int index) { return root(contactParent, index); }
 
 	private void projectPosition(Constraint constraint, double[][] points) {
