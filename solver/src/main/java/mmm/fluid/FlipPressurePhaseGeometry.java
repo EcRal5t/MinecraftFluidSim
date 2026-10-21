@@ -19,12 +19,11 @@ final class FlipPressurePhaseGeometry {
 	private final PlicPlaneOffset.Result[] offsetBrackets;
 	private final SignedDyadic[] poreVolumes;
 	private final PlicComponentGeometry[] components;
-	private final Object[] cellShapeIdentity;
 	private byte[] collisionMasks;
 	private long revision;
-	private double[] microFraction, microPoreScale, microOffset;
-	private float[] microNormalX, microNormalY, microNormalZ;
-	private PlicPlaneOffset.Result[] microBracket;
+	/** Immutable local geometry; unchanged cells share their fractions and component planes. */
+	private record OccupancyCell(double[] fractions,PlicComponentGeometry.Plane[] planes) { }
+	private OccupancyCell[] occupancyCells;
 	private PhaseOccupancyState microOccupancy;
 	private final double[] faceX = new double[16], faceY = new double[16];
 	private final double[] clippedX = new double[16], clippedY = new double[16];
@@ -46,7 +45,6 @@ final class FlipPressurePhaseGeometry {
 		this.poreVolumes = new SignedDyadic[cellCount];
 		java.util.Arrays.fill(poreVolumes,SignedDyadic.ZERO);
 		this.components = new PlicComponentGeometry[cellCount];
-		this.cellShapeIdentity = new Object[cellCount];
 		this.collisionMasks = new byte[cellCount];
 	}
 
@@ -54,7 +52,8 @@ final class FlipPressurePhaseGeometry {
 	long revision() { return revision; }
 	int collisionMask(int cell) { return Byte.toUnsignedInt(collisionMasks[cell]); }
 	SignedDyadic poreVolume(int cell) { return poreVolumes[cell]; }
-	boolean hasMicroOccupation() { return microFraction!=null; }
+	boolean hasMicroOccupation() { return occupancyCells!=null; }
+	PhaseOccupancyState occupancyState() { return microOccupancy; }
 	void setExactPoreVolumes(FlipCutCellGeometry cut,long[] occupied) {
 		for(int cell=0;cell<fraction.length;cell++)poreVolumes[cell]=SignedDyadic.of(Integer.bitCount(~cut.mask(cell)&255),-3).subtract(SignedDyadic.of(occupied[cell],-24));
 	}
@@ -75,57 +74,53 @@ final class FlipPressurePhaseGeometry {
 	/** Identical local inventory and six-neighbour inputs share the same immutable PLIC plane. */
 	void rebuildOccupancy(PhaseOccupancyState state,FlipCutCellGeometry cut,double[] pore,FlipPressurePhaseGeometry captured) {
 		if(captured==this)throw new IllegalArgumentException("Occupancy reconstruction requires a distinct source");
-        int count=8*fraction.length;
-        if(microFraction==null||microFraction.length!=count){microFraction=new double[count];microPoreScale=new double[count];microOffset=new double[count];microNormalX=new float[count];microNormalY=new float[count];microNormalZ=new float[count];microBracket=new PlicPlaneOffset.Result[count];}
-        java.util.Arrays.fill(microOffset,0);java.util.Arrays.fill(microNormalX,0);java.util.Arrays.fill(microNormalY,0);java.util.Arrays.fill(microNormalZ,0);java.util.Arrays.fill(microBracket,null);
+		occupancyCells=new OccupancyCell[fraction.length];
         collisionMasks=cut.copyMicroMasks();java.util.Arrays.fill(components,null);java.util.Arrays.fill(offsetBrackets,null);
         for(int cell=0;cell<fraction.length;cell++){
-            double total=0,liquid=0;for(int bit=0;bit<8;bit++){int piece=8*cell+bit;double capacity=pore[piece],amount=state.liquidVolume(piece);total+=capacity;liquid+=amount;microPoreScale[piece]=8*capacity;microFraction[piece]=0;}
+            double total=0,liquid=0;for(int bit=0;bit<8;bit++){int piece=8*cell+bit;total+=pore[piece];liquid+=state.liquidVolume(piece);}
             poreVolumes[cell]=SignedDyadic.of(total);fraction[cell]=total>0?Math.clamp(liquid/total,0,1):0;normalX[cell]=normalY[cell]=normalZ[cell]=0;planeOffset[cell]=0;
         }
-		// Identity is compared only at the same cell; one token names this reconstruction batch.
-		Object rebuiltShape=new Object();
 		for(int cell=0;cell<fraction.length;cell++){
 			int x=cell%sizeX,y=cell/sizeX%sizeY,z=cell/(sizeX*sizeY);double center=fraction[cell];
 			if(captured!=null&&sameOccupancyInputs(cell,x,y,z,state,pore,captured)){
 				copyCell(captured,cell);
-				cellShapeIdentity[cell]=captured.cellShapeIdentity[cell];
-				int p=8*cell;
-				System.arraycopy(captured.microFraction,p,microFraction,p,8);
-				System.arraycopy(captured.microNormalX,p,microNormalX,p,8);
-				System.arraycopy(captured.microNormalY,p,microNormalY,p,8);
-				System.arraycopy(captured.microNormalZ,p,microNormalZ,p,8);
-				System.arraycopy(captured.microOffset,p,microOffset,p,8);
-				System.arraycopy(captured.microBracket,p,microBracket,p,8);
+				occupancyCells[cell]=captured.occupancyCells[cell];
 				continue;
 			}
-			cellShapeIdentity[cell]=rebuiltShape;
 			double nx=coarseSample(x-1,y,z,center)-coarseSample(x+1,y,z,center);
 			double ny=coarseSample(x,y-1,z,center)-coarseSample(x,y+1,z,center);
 			double nz=coarseSample(x,y,z-1,center)-coarseSample(x,y,z+1,center);
 			double length=Math.sqrt(nx*nx+ny*ny+nz*nz);if(length==0){ny=1;length=1;}
 			float fx=(float)(nx/length),fy=(float)(ny/length),fz=(float)(nz/length);
+			var fractions=new double[8];var planes=new PlicComponentGeometry.Plane[8];
 			for(int support:CellRemapMicroTopology.components(cut.mask(cell))){
 				double amount=0,capacity=0;for(int bit=0;bit<8;bit++)if((support&1<<bit)!=0){int p=8*cell+bit;amount+=state.liquidVolume(p);capacity+=pore[p];}
 				double value=capacity>0?Math.clamp(amount/capacity,0,1):0;
-				if(value==0||value==1){for(int bit=0;bit<8;bit++)if((support&1<<bit)!=0)microFraction[8*cell+bit]=value;continue;}
+				double porosity=8*pore[8*cell+Integer.numberOfTrailingZeros(support)];
+				if(value==0||value==1){
+					var plane=new PlicComponentGeometry.Plane(support,value,porosity,0,0,0,null);
+					for(int bit=0;bit<8;bit++)if((support&1<<bit)!=0){fractions[bit]=value;planes[bit]=plane;}
+					continue;
+				}
 				boolean unresolved = Math.min(amount, capacity - amount) <= CELL_VOLUME_RESOLUTION;
 				float px = unresolved ? 0 : fx, py = unresolved ? 1 : fy, pz = unresolved ? 0 : fz;
 				double target = value * Integer.bitCount(support) * .125;
 				var plane = unresolved ? horizontalLayer(support, target) : PlicPlaneOffset.solve(support,px,py,pz,target);
 				double offset=plane.offset();normalX[cell]=px;normalY[cell]=py;normalZ[cell]=pz;planeOffset[cell]=offset;offsetBrackets[cell]=plane;
+				var component=new PlicComponentGeometry.Plane(support,value,porosity,px,py,pz,plane);
 				for(int bit=0;bit<8;bit++)if((support&1<<bit)!=0){
-					int p=8*cell+bit;microNormalX[p]=px;microNormalY[p]=py;microNormalZ[p]=pz;microOffset[p]=offset;microBracket[p]=plane;
-					microFraction[p]=unresolved ? Math.clamp(2 * offset - (bit >>> 1 & 1), 0, 1)
+					planes[bit]=component;
+					fractions[bit]=unresolved ? Math.clamp(2 * offset - (bit >>> 1 & 1), 0, 1)
 							: FlipFreeSurfaceGeometry.unitCubeLiquidFraction(.5*px,.5*py,.5*pz,offset-.5*(px*(bit&1)+py*(bit>>>1&1)+pz*(bit>>>2&1)));
 				}
 			}
+			occupancyCells[cell]=new OccupancyCell(fractions,planes);
 		}
 		microOccupancy=state;revision=Math.addExact(revision,1);
 	}
 	private boolean sameOccupancyInputs(int cell,int x,int y,int z,PhaseOccupancyState state,double[] pore,FlipPressurePhaseGeometry old){
 		if(old.microOccupancy==null||collisionMask(cell)!=old.collisionMask(cell)||fraction[cell]!=old.fraction[cell])return false;
-		for(int bit=0;bit<8;bit++)if(8*pore[8*cell+bit]!=old.microPoreScale[8*cell+bit])return false;
+		for(int bit=0;bit<8;bit++)if(8*pore[8*cell+bit]!=old.componentPoreScale(cell,bit,0))return false;
 		for(int support:CellRemapMicroTopology.components(collisionMask(cell))){
 			double current=0,previous=0;
 			for(int bits=support;bits!=0;bits&=bits-1){int p=8*cell+Integer.numberOfTrailingZeros(bits);current+=state.liquidVolume(p);previous+=old.microOccupancy.liquidVolume(p);}
@@ -153,13 +148,14 @@ final class FlipPressurePhaseGeometry {
 		int cell=cellIndex(x,y,z);return poreVolumes[cell].signum()>0?fraction[cell]:fallback;
 	}
 	void copyLiquidMicroVolumes(double[] target){
-		for(int p=0;p<microFraction.length;p++)target[p]=microFraction[p]*microPoreScale[p]*.125;
+		for(int cell=0;cell<fraction.length;cell++)for(int bit=0;bit<8;bit++)
+			target[8*cell+bit]=liquidFractionExact(cell,bit)*componentPoreScale(cell,bit,0)*.125;
 	}
 
 	/** Exact inputs read by dry-piece and microface construction, including absent gas pieces. */
 	boolean sameCellGeometry(int cell, FlipPressurePhaseGeometry other) {
 		if (collisionMask(cell) != other.collisionMask(cell) || !poreVolumes[cell].equals(other.poreVolumes[cell])) return false;
-		if(cellShapeIdentity[cell]!=null&&cellShapeIdentity[cell]==other.cellShapeIdentity[cell])return true;
+		if(occupancyCells!=null&&other.occupancyCells!=null&&occupancyCells[cell]==other.occupancyCells[cell])return true;
 		for (int micro = 0; micro < 8; micro++) {
 			if (Double.doubleToRawLongBits(liquidFractionExact(cell, micro)) != Double.doubleToRawLongBits(other.liquidFractionExact(cell, micro))
 					|| Double.doubleToRawLongBits(planeOffset(cell, micro)) != Double.doubleToRawLongBits(other.planeOffset(cell, micro))
@@ -196,9 +192,8 @@ final class FlipPressurePhaseGeometry {
 		if (captured != null && (captured == this || !captured.matchesShape(sizeX, sizeY, sizeZ)
 				|| sameLocalStock == null || sameLocalStock.length != fraction.length))
 			throw new IllegalArgumentException("Captured PLIC requires a distinct matching frame and local stock checks");
-		microFraction=microPoreScale=microOffset=null;microNormalX=microNormalY=microNormalZ=null;microBracket=null;
+		occupancyCells=null;
 		microOccupancy=null;
-		java.util.Arrays.fill(cellShapeIdentity,null);
 		PhaseLiquidGeometryEdit[] overlay = edits.isEmpty() ? null : new PhaseLiquidGeometryEdit[fraction.length];
 		for (var edit : edits) {
 			if (edit == null || edit.cell() >= fraction.length || overlay[edit.cell()] != null
@@ -291,11 +286,8 @@ final class FlipPressurePhaseGeometry {
 		normalX = source.normalX.clone(); normalY = source.normalY.clone(); normalZ = source.normalZ.clone();
 		planeOffset = source.planeOffset.clone(); offsetBrackets = source.offsetBrackets.clone();
 		poreVolumes = source.poreVolumes.clone(); components = source.components.clone();
-		cellShapeIdentity=source.cellShapeIdentity.clone();
 		collisionMasks = source.collisionMasks.clone();
-		if(source.microFraction!=null){microFraction=source.microFraction.clone();microPoreScale=source.microPoreScale.clone();
-			microOffset=source.microOffset.clone();microNormalX=source.microNormalX.clone();microNormalY=source.microNormalY.clone();
-			microNormalZ=source.microNormalZ.clone();microBracket=source.microBracket.clone();}
+		if(source.occupancyCells!=null)occupancyCells=source.occupancyCells.clone();
 		revision = source.revision;
 		microOccupancy=source.microOccupancy;
 	}
@@ -307,11 +299,9 @@ final class FlipPressurePhaseGeometry {
 	                         FlipCutCellGeometry cut, boolean[] solid, float cellSize) {
 
 		revision = Math.addExact(revision, 1);
-		cellShapeIdentity[edit.cell()]=null;
 		double open = poreVolumes[edit.cell()].toDouble();
 		fraction[edit.cell()] = solid[edit.cell()] || open <= 0 ? 0 : clamp(edit.volume().toDouble() / open, 0, 1);
 		for (int cell : cells) {
-			cellShapeIdentity[cell]=null;
 			int x = cell % sizeX, y = cell / sizeX % sizeY, z = cell / (sizeX * sizeY);
 			normalX[cell] = normalY[cell] = normalZ[cell] = 0; planeOffset[cell] = 0;
 			offsetBrackets[cell] = null; components[cell] = null;
@@ -358,29 +348,29 @@ final class FlipPressurePhaseGeometry {
 	float liquidFraction(int cell) { return (float) fraction[cell]; }
 	float planeNormal(int cell, int axis) { return axis == 0 ? normalX[cell] : axis == 1 ? normalY[cell] : normalZ[cell]; }
 	double planeOffset(int cell) { return planeOffset[cell]; }
-	boolean hasComponentPlanes(int cell) { return microFraction!=null || components[cell] != null; }
+	boolean hasComponentPlanes(int cell) { return occupancyCells!=null || components[cell] != null; }
 	float planeNormal(int cell, int micro, int axis) {
-		if(microFraction!=null){int piece=8*cell+micro;return axis==0?microNormalX[piece]:axis==1?microNormalY[piece]:microNormalZ[piece];}
+		if(occupancyCells!=null){var plane=occupancyCells[cell].planes()[micro];return plane==null?0:plane.normal(axis);}
 		var plane = components[cell] == null ? null : components[cell].plane(micro);
 		return components[cell] == null ? planeNormal(cell,axis) : plane == null ? 0 : plane.normal(axis);
 	}
 	double planeOffset(int cell, int micro) {
-		if(microFraction!=null)return microOffset[8*cell+micro];
+		if(occupancyCells!=null){var plane=occupancyCells[cell].planes()[micro];return plane==null?0:plane.offset();}
 		var plane = components[cell] == null ? null : components[cell].plane(micro);
 		return components[cell] == null ? planeOffset[cell] : plane == null ? 0 : plane.offset();
 	}
 	PlicPlaneOffset.Result offsetBracket(int cell,int micro) {
-		if(microFraction!=null)return microBracket[8*cell+micro];
+		if(occupancyCells!=null){var plane=occupancyCells[cell].planes()[micro];return plane==null?null:plane.bracket();}
 		var plane = components[cell] == null ? null : components[cell].plane(micro);
 		return components[cell] == null ? offsetBrackets[cell] : plane == null ? null : plane.bracket();
 	}
 	double liquidFractionExact(int cell, int micro) {
-		if(microFraction!=null)return microFraction[8*cell+micro];
+		if(occupancyCells!=null)return occupancyCells[cell].fractions()[micro];
 		var plane = components[cell] == null ? null : components[cell].plane(micro);
 		return components[cell] == null ? fraction[cell] : plane == null ? 0 : plane.fraction();
 	}
 	double componentPoreScale(int cell,int micro,double fallback) {
-		if(microFraction!=null)return microPoreScale[8*cell+micro];
+		if(occupancyCells!=null){var plane=occupancyCells[cell].planes()[micro];return plane==null?0:plane.porosity();}
 		var plane = components[cell] == null ? null : components[cell].plane(micro);
 		return components[cell] == null ? fallback : plane == null ? 0 : plane.porosity();
 	}
@@ -412,7 +402,7 @@ final class FlipPressurePhaseGeometry {
 
 	double sharedLiquidFaceArea(int left, int right, int axis, FlipCutCellGeometry cut) {
 		if (!(fraction[left] > 0) || !(fraction[right] > 0)) return 0;
-		if (microFraction==null && cut.mask(left) == 0 && cut.mask(right) == 0) return wetRectangle(left, right, axis, 0, 0, 1);
+		if (occupancyCells==null && cut.mask(left) == 0 && cut.mask(right) == 0) return wetRectangle(left, right, axis, 0, 0, 1);
 		double area = 0;
 		for (int a = 0; a < 2; a++) for (int b = 0; b < 2; b++) {
 			boolean open = switch (axis) {

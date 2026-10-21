@@ -35,14 +35,14 @@ final class GasComplementGeometry {
 
 	/** All arrays are owned snapshots; the public lists cannot modify their backing arrays. */
 	private GasComplementGeometry(int sizeX, int sizeY, int sizeZ, double h3, byte[] masks,
-	                              SignedDyadic[] poreVolumes, double[] componentDry, Piece[] byId, Piece[] pieces, Port[] ports,
+	                              SignedDyadic[] poreVolumes, double[] componentDry, Piece[] byId, List<Piece> pieces, Port[] ports,
 	                              ExteriorPort[] exterior,GasComponentCapacity.Prepared actualCapacity) {
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
 		cellVolumeCubicMeters = h3;
 		collisionMasks = masks; this.poreVolumes = poreVolumes; this.componentDry=componentDry; this.byId = byId;
 		this.actualCapacity=actualCapacity;
 		portArray = ports; exteriorArray = exterior;
-		this.pieces = Collections.unmodifiableList(Arrays.asList(pieces));
+		this.pieces = Collections.unmodifiableList(pieces);
 		this.ports = Collections.unmodifiableList(Arrays.asList(ports));
 		exteriorPorts = Collections.unmodifiableList(Arrays.asList(exterior));
 	}
@@ -91,7 +91,9 @@ final class GasComplementGeometry {
 		}
 		Piece[] byId = source == null ? new Piece[Math.multiplyExact(count,8)] : source.byId.clone();
 		SignedDyadic[] pores = actualCapacity!=null?actualCapacity.pores:source == null ? new SignedDyadic[count] : source.poreVolumes.clone();
-		var pieces = new ArrayList<Piece>(); var ports = new ArrayList<Port>(); var exterior = new ArrayList<ExteriorPort>();
+		var pieces = new ArrayList<Piece>(source==null?count:source.pieces.size());
+		var ports = new ArrayList<Port>(source==null?count:source.portArray.length);
+		var exterior = new ArrayList<ExteriorPort>(source==null?0:source.exteriorArray.length);
 		for (int cell = 0; cell < count; cell++) {
 			if (source == null || changed[cell]) {
 				Arrays.fill(byId,8*cell,8*cell+8,null);if(actualCapacity==null)pores[cell] = phase.poreVolume(cell);
@@ -121,8 +123,10 @@ final class GasComplementGeometry {
 				while(oldExterior<source.exteriorArray.length&&exteriorKey(source.exteriorArray[oldExterior])==key)exterior.add(source.exteriorArray[oldExterior++]);
 			}else captureExteriorFace(cell,axis,bit,canonical,cut,phase,h2,fullFaces,first,areas,exterior);
 		}
-		return new GasComplementGeometry(sizeX,sizeY,sizeZ,h3,actualCapacity==null?cut.copyMicroMasks():actualCapacity.masks,pores,componentDry,byId,
-				pieces.toArray(Piece[]::new),ports.toArray(Port[]::new),exterior.toArray(ExteriorPort[]::new),actualCapacity);
+		var result=new GasComplementGeometry(sizeX,sizeY,sizeZ,h3,actualCapacity==null?cut.copyMicroMasks():actualCapacity.masks,pores,componentDry,byId,
+				pieces,ports.toArray(Port[]::new),exterior.toArray(ExteriorPort[]::new),actualCapacity);
+		if(source!=null)GasChamberTopology.continueCached(result,source);
+		return result;
 	}
     /** Resolution decisions read the coarse pore remainder, independently of a face's PLIC film. */
     private static double[] componentDry(FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,int count){

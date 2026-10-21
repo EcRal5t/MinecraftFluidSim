@@ -30,8 +30,9 @@ final class PhaseOccupancyTransport {
 			publish(domain,frame.occupancy());return;
 		}
 		double[] pore = poreVolumes(domain, occupied, null);
-		double[] liquid = reconstruct(domain, domain.liquidCells, pore, null, new FlipPressurePhaseGeometry(domain.sizeX, domain.sizeY, domain.sizeZ));
-		publish(domain,new PhaseOccupancyState(liquid));
+		var phase=new FlipPressurePhaseGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);
+		reconstruct(domain,domain.liquidCells,pore,null,phase);
+		publish(domain,phase.occupancyState());
 	}
 	static void publish(FluidDomain domain,PhaseOccupancyState state){
 		domain.phaseOccupancy=state;domain.phaseOccupancyDirty=false;
@@ -51,8 +52,8 @@ final class PhaseOccupancyTransport {
 			cut.restoreMicroMasks(masks);
 		}
 		var rebuilt = new FlipPressurePhaseGeometry(domain.sizeX, domain.sizeY, domain.sizeZ);
-		double[] liquid = reconstruct(domain, future, pore, masks, rebuilt);
-		var state = new PhaseOccupancyState(liquid);
+		reconstruct(domain,future,pore,masks,rebuilt);
+		var state=rebuilt.occupancyState();
 		var shares = new ArrayList<GasVolumeAllocation.Share>();
 		FlipPressurePhaseGeometry phase = null;
 		GasComplementGeometry geometry = null;
@@ -68,18 +69,23 @@ final class PhaseOccupancyTransport {
 			var topology=GasChamberTopology.capture(geometry,domain.gasState.sealedDomainBoundary);
 			var components=geometry.actualCapacity().components;
 			var sources=new HashMap<Integer,TreeMap<Integer,Double>>();
-			int[] representative=new int[components.size()],owner=new int[components.size()];
+			int[] representative=new int[topology.chambers().size()+1];
+			double[] targetVolumes=new double[representative.length];
 			java.util.Arrays.fill(representative,-1);
 			var old=domain.gasState.frame;
 			for(int i=0;i<components.size();i++) {
 				var component=components.get(i);
 				if(component.availableVolumeNormalized().signum()==0)continue;
+				int target=topology.nodeOfComponent(component.cell(),component.supportMask());
+				if(target<0)throw new GasTopologyBlockedException("Edited gas component has no dry representation");
+				if(representative[target]<0)
 				for(int bits=component.supportMask();bits!=0;bits&=bits-1) {
 					int piece=8*component.cell()+Integer.numberOfTrailingZeros(bits);
-					if(geometry.piece(piece)!=null){representative[i]=piece;owner[i]=topology.nodeOfPiece(piece);break;}
+					if(geometry.piece(piece)!=null){representative[target]=piece;break;}
 				}
-				if(representative[i]<0)throw new GasTopologyBlockedException("Edited gas component has no dry representation");
-				var origins=sources.computeIfAbsent(owner[i],ignored->new TreeMap<>());
+				if(representative[target]<0)throw new GasTopologyBlockedException("Edited gas component has no dry representation");
+				targetVolumes[target]+=component.availableVolumeNormalized().toDouble();
+				var origins=sources.computeIfAbsent(target,ignored->new TreeMap<>());
 				// A coarse pore retains its gas even when its rebuilt plane moves every
 				// dry micro piece. Source identity belongs to the whole fixed support.
 				for(int bits=component.supportMask();bits!=0;bits&=bits-1) {
@@ -88,18 +94,20 @@ final class PhaseOccupancyTransport {
 					if(previous>=0&&oldPiece!=null)origins.merge(previous,oldPiece.normalizedVolume(),Double::sum);
 				}
 			}
-			for(int i=0;i<components.size();i++)if(representative[i]>=0) {
-				double amount=components.get(i).availableVolumeNormalized().toDouble();
-				var origins=sources.get(owner[i]);
+			// Origins already mix over a complete future chamber. Keep that aggregation
+			// through remapping instead of expanding it back to every coarse component.
+			for(int target=0;target<representative.length;target++)if(representative[target]>=0) {
+				double amount=targetVolumes[target];
+				var origins=sources.get(target);
 				if(origins.isEmpty()) {
-					boolean ambient=owner[i]==0;
-					shares.add(new GasVolumeAllocation.Share(ambient?0:-1,representative[i],amount,
+					boolean ambient=target==0;
+					shares.add(new GasVolumeAllocation.Share(ambient?0:-1,representative[target],amount,
 							ambient?GasVolumeAllocation.SourceKind.AMBIENT:GasVolumeAllocation.SourceKind.EXPLICIT_VACUUM));
 				}else {
 					double total=0;for(double value:origins.values())total+=value;
 					for(var source:origins.entrySet()) {
 						double part=amount*(source.getValue()/total);
-						if(part>0)shares.add(new GasVolumeAllocation.Share(source.getKey(),representative[i],part,
+						if(part>0)shares.add(new GasVolumeAllocation.Share(source.getKey(),representative[target],part,
 								source.getKey()==0?GasVolumeAllocation.SourceKind.AMBIENT:GasVolumeAllocation.SourceKind.EXISTING));
 					}
 				}

@@ -40,8 +40,8 @@ final class GasRuntimeGeometry {
 				&&Arrays.equals(occupiedSvq,old.occupiedSvq)&&old.geometry.matchesCollisionMasks(masks))phase=old.phase;
 		else if(preparedPhase==null){phase=new FlipPressurePhaseGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);phase.rebuildOccupancy(occupancy,cut,occupiedSvq);}
 		else phase=preparedPhase;
-		boolean[] changed=old==null?null:new boolean[domain.cellCount];
 		if(preparedGeometry==null){
+			boolean[] changed=old==null?null:new boolean[domain.cellCount];
 			boolean[] solid=new boolean[domain.cellCount];for(int cell=0;cell<solid.length;cell++)solid[cell]=cut.fullySolid(cell);
 			if(old!=null&&phase!=old.phase)for(int cell=0;cell<changed.length;cell++)changed[cell]=!phase.sameCellGeometry(cell,old.phase);
 			geometry=GasComplementGeometry.capture(domain.sizeX,domain.sizeY,domain.sizeZ,cellSize,solid,cut,phase,

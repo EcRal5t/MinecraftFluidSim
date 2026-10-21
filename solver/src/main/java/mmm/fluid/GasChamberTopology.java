@@ -91,14 +91,72 @@ final class GasChamberTopology {
 			chambers.add(new Chamber(owner, (int) (roots[node] >>> 32), volume,
 					Math.nextUp(errors[owner] + Math.ulp(volume))));
 		}
-		var areas = new TreeMap<Long, Double>();
-		for (var port : geometry.ports()) addArea(areas, pieceNodes[port.first()], pieceNodes[port.second()], port.area());
-		if (!sealedExterior) for (var port : geometry.exteriorPorts()) addArea(areas, 0, pieceNodes[port.piece()], port.area());
-		var connections = new ArrayList<Connection>(areas.size());
-		for (var entry : areas.entrySet()) connections.add(new Connection((int) (entry.getKey() >>> 32),
-				(int) (long) entry.getKey(), positive(entry.getValue(), "Gas chamber port area")));
-		var result=new GasChamberTopology(geometry, pieceNodes, componentNodes, chambers, connections, sealedExterior);
+		var result=new GasChamberTopology(geometry,pieceNodes,componentNodes,chambers,connections(geometry,pieceNodes,sealedExterior),sealedExterior);
 		geometry.cacheTopology(sealedExterior,result);return result;
+	}
+	/** Reuse component membership when the fixed pore graph is unchanged; capacity and orifice areas remain current. */
+	static void continueCached(GasComplementGeometry geometry,GasComplementGeometry source) {
+		if(!geometry.sameCollisionMasks(source)||!sameConnections(geometry,source))return;
+		int cells=cellCount(geometry);
+		for(int cell=0;cell<cells;cell++)for(int support:CellRemapMicroTopology.components(geometry.collisionMask(cell))) {
+			boolean before=false,after=false;
+			for(int bits=support;bits!=0;bits&=bits-1) {
+				int piece=8*cell+Integer.numberOfTrailingZeros(bits);
+				before|=source.piece(piece)!=null;after|=geometry.piece(piece)!=null;
+			}
+			if(before!=after)return;
+		}
+		for(boolean sealed:new boolean[]{false,true}) {
+			var previous=source.cachedTopology(sealed);if(previous==null)continue;
+			int nodes=previous.chambers.size();
+			int[] pieceNodes=new int[8*cells],minimum=new int[nodes+1];
+			Arrays.fill(pieceNodes,-1);Arrays.fill(minimum,Integer.MAX_VALUE);
+			double[] volumes=new double[nodes+1],errors=new double[nodes+1];
+			for(var piece:geometry.pieces()) {
+				int slot=componentSlot(geometry,piece.id()),node=previous.componentNodes[slot];
+				pieceNodes[piece.id()]=node;minimum[node]=Math.min(minimum[node],piece.id());
+				volumes[node]+=piece.volume();errors[node]+=pieceError(piece)+Math.ulp(volumes[node]);
+			}
+			// Stable node numbering still follows the current minimum represented piece.
+			boolean ordered=true;
+			for(int node=1;node<=nodes;node++)if(minimum[node]==Integer.MAX_VALUE||node>1&&minimum[node]<=minimum[node-1]){ordered=false;break;}
+			if(!ordered)continue;
+			var chambers=new ArrayList<Chamber>(nodes);
+			for(int node=1;node<=nodes;node++) {
+				double volume=positive(volumes[node],"Gas chamber volume");
+				chambers.add(new Chamber(node,minimum[node],volume,Math.nextUp(errors[node]+Math.ulp(volume))));
+			}
+			geometry.cacheTopology(sealed,new GasChamberTopology(geometry,pieceNodes,previous.componentNodes,chambers,
+					connections(geometry,pieceNodes,sealed),sealed));
+		}
+	}
+	private static boolean sameConnections(GasComplementGeometry first,GasComplementGeometry second) {
+		var a=first.ports();var b=second.ports();if(a.size()!=b.size())return false;
+		for(int i=0;i<a.size();i++) {
+			var x=a.get(i);var y=b.get(i);
+			if(x.axis()!=y.axis()||x.fullCutConnection()!=y.fullCutConnection()
+					||componentSlot(first,x.first())!=componentSlot(second,y.first())
+					||componentSlot(first,x.second())!=componentSlot(second,y.second()))return false;
+		}
+		var c=first.exteriorPorts();var d=second.exteriorPorts();if(c.size()!=d.size())return false;
+		for(int i=0;i<c.size();i++) {
+			var x=c.get(i);var y=d.get(i);
+			if(x.axis()!=y.axis()||x.sign()!=y.sign()||x.fullCutConnection()!=y.fullCutConnection()
+					||componentSlot(first,x.piece())!=componentSlot(second,y.piece()))return false;
+		}
+		return true;
+	}
+	private static int componentSlot(GasComplementGeometry geometry,int piece) {
+		int cell=piece/8,support=CellRemapMicroTopology.support(geometry.collisionMask(cell),piece&7);
+		return 8*cell+Integer.numberOfTrailingZeros(support);
+	}
+	private static List<Connection> connections(GasComplementGeometry geometry,int[] pieceNodes,boolean sealed) {
+		var areas=new TreeMap<Long,Double>();
+		for(var port:geometry.ports())addArea(areas,pieceNodes[port.first()],pieceNodes[port.second()],port.area());
+		if(!sealed)for(var port:geometry.exteriorPorts())addArea(areas,0,pieceNodes[port.piece()],port.area());
+		var result=new ArrayList<Connection>(areas.size());
+		for(var entry:areas.entrySet())result.add(new Connection((int)(entry.getKey()>>>32),(int)(long)entry.getKey(),positive(entry.getValue(),"Gas chamber port area")));
+		return result;
 	}
 	private static void addArea(TreeMap<Long, Double> areas, int first, int second, double area) {
 		if (first == second) return;

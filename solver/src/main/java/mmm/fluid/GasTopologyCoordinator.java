@@ -183,10 +183,11 @@ final class GasTopologyCoordinator {
 
 		boolean thermal=domain.thermalState!=null&&domain.thermalState.gasModelBound();
 		boolean retainControl=thermal&&!deferVolumeWork;
+		boolean openedWallVolume=retainControl&&old!=null&&!old.geometry().sameCollisionMasks(next.geometry());
 		int count=next.nodeCount();double[] available=volumes(next);
-		var directContact=retainControl&&old!=null?survivingContacts(old,next):java.util.Set.<Long>of();
-		SignedDyadic[] transferredVacuum=retainControl?new SignedDyadic[count]:null;
-		if(retainControl)Arrays.fill(transferredVacuum,SignedDyadic.ZERO);
+		var directContact=openedWallVolume?survivingContacts(old,next):java.util.Set.<Long>of();
+		SignedDyadic[] transferredVacuum=openedWallVolume?new SignedDyadic[count]:null;
+		if(openedWallVolume)Arrays.fill(transferredVacuum,SignedDyadic.ZERO);
 		var inventories=new ArrayList<GasInventory>(java.util.Collections.nCopies(count,GasInventory.EMPTY));
 		SignedDyadic[] mixed=thermal?new SignedDyadic[count]:null,inherited=retainControl?new SignedDyadic[count]:null;
 		if(thermal)Arrays.fill(mixed,SignedDyadic.ZERO);
@@ -219,7 +220,7 @@ final class GasTopologyCoordinator {
 						if(thermal)mixed[node-1]=mixed[node-1].add(SignedDyadic.of(energies[part]));
 						if(retainControl){
 							var volume=SignedDyadic.of(control[part]);inherited[node-1]=inherited[node-1].add(volume);
-							if(!directContact.contains((long)previous<<32|Integer.toUnsignedLong(node)))
+							if(openedWallVolume&&!directContact.contains((long)previous<<32|Integer.toUnsignedLong(node)))
 								transferredVacuum[node-1]=transferredVacuum[node-1].add(volume);
 						}}
 					part++;
@@ -234,9 +235,9 @@ final class GasTopologyCoordinator {
 				}
 				// An explicit newly opened vacuum contributes geometric control volume and zero stock/U.
 				if(retainControl)inherited[node-1]=inherited[node-1].add(SignedDyadic.of(volume));
-				if(retainControl)transferredVacuum[node-1]=transferredVacuum[node-1].add(SignedDyadic.of(volume));
+				if(openedWallVolume)transferredVacuum[node-1]=transferredVacuum[node-1].add(SignedDyadic.of(volume));
 			}
-			if(retainControl&&count>0&&!old.geometry().sameCollisionMasks(next.geometry()))
+			if(openedWallVolume&&count>0)
 				includeNewlyOpenedVacuum(old,next,transferredVacuum,inherited);
 			if(next.sealedExterior()&&(!sourceDelta.isEmpty()||!sinkDelta.isEmpty()))
 				throw new GasTopologyBlockedException("Closed gas topology attempted an external source or sink");
