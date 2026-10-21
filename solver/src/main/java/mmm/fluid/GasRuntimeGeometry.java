@@ -4,6 +4,7 @@ import mmm.inventory.LiquidCellInventory;
 import mmm.inventory.PhaseOccupancyState;
 import mmm.units.SignedDyadic;
 import java.util.Arrays;
+import java.util.List;
 
 /** Immutable fixed-pore component geometry and actual capacity derived from phase occupation. */
 final class GasRuntimeGeometry {
@@ -50,6 +51,41 @@ final class GasRuntimeGeometry {
 		capacity=GasChamberCapacity.capturePrepared(geometry,topology);
 		openedPoreVolumes=captureOpenedPore(old);
 	}
+	/** Rebinds a value-equivalent inventory endpoint while retaining its prepared geometry. */
+	private GasRuntimeGeometry(GasRuntimeGeometry prepared,LiquidCellInventory.Snapshot future){
+		cellSize=prepared.cellSize;sealedExterior=prepared.sealedExterior;
+		occupiedSvq=prepared.occupiedSvq;sourceOccupiedSvq=prepared.sourceOccupiedSvq;sourceCollisionMasks=prepared.sourceCollisionMasks;
+		sourceCells=prepared.sourceCells;targetCells=future;sourceOccupancy=prepared.sourceOccupancy;occupancy=prepared.occupancy;
+		phase=prepared.phase;geometry=prepared.geometry;topology=prepared.topology;capacity=prepared.capacity;
+		openedPoreVolumes=prepared.openedPoreVolumes;
+	}
+	GasRuntimeGeometry rebindInventory(LiquidCellInventory future){
+		if(!sameLiquidVolumes(future,targetCells))throw new IllegalStateException(
+				"Prepared gas successor has different liquid support volumes: plannedRevision="+targetCells.revision()+" actualRevision="+future.revision());
+		return new GasRuntimeGeometry(this,future.snapshot());
+	}
+	/** Identity is a cache shortcut; independently settled plans can carry equal support volumes. */
+	static boolean sameLiquidVolumes(LiquidCellInventory actual,LiquidCellInventory.Snapshot expected){
+		if(actual.hasSameGeometry(expected))return true;
+		if(expected==null||actual.cellCount()!=expected.cellCount())return false;
+		for(int cell=0;cell<expected.cellCount();cell++){
+			var before=expected.rows().get(cell);var after=actual.stocksInCell(cell);if(before==after)continue;
+			for(var stock:before){
+				int support=stock.key().supportMask();
+				if(!supportVolume(before,support).equals(supportVolume(after,support)))return false;
+			}
+			for(var stock:after){
+				int support=stock.key().supportMask();
+				if(!supportVolume(before,support).equals(supportVolume(after,support)))return false;
+			}
+		}
+		return true;
+	}
+	private static SignedDyadic supportVolume(List<LiquidCellInventory.Stock> stocks,int support){
+		var volume=SignedDyadic.ZERO;for(var stock:stocks)if(stock.key().supportMask()==support)volume=volume.add(stock.volume());
+		return volume;
+	}
+
 	/** Only actual solid/collision changes create new vacuum control volume. */
 	private SignedDyadic[] captureOpenedPore(GasRuntimeGeometry old){
 		if(old==null||geometry==old.geometry||Arrays.equals(occupiedSvq,old.occupiedSvq)&&geometry.sameCollisionMasks(old.geometry))return null;
@@ -115,11 +151,11 @@ final class GasRuntimeGeometry {
 				&&domain.phaseOccupancy.geometryIdentity()==occupancy.geometryIdentity();
 	}
 	boolean matchesCarrierInventory(FluidDomain domain,long[] occupied) {
-		return matchesGeometryInputs(domain,occupied,occupiedSvq,null)&&domain.liquidCells.hasSameGeometry(targetCells);
+		return matchesGeometryInputs(domain,occupied,occupiedSvq,null)&&sameLiquidVolumes(domain.liquidCells,targetCells);
 	}
 	boolean matchesSourceCarrierGeometry(FluidDomain domain,long[] occupied) {
 		return matchesGeometryInputs(domain,occupied,sourceOccupiedSvq,sourceCollisionMasks)
-				&&domain.liquidCells.hasSameGeometry(sourceCells)&&domain.phaseOccupancy==sourceOccupancy;
+				&&sameLiquidVolumes(domain.liquidCells,sourceCells)&&domain.phaseOccupancy==sourceOccupancy;
 	}
 	private boolean matchesGeometryInputs(FluidDomain domain,long[] occupied,long[] expected,byte[] masks) {
 		if(domain==null||domain.sizeX!=geometry.sizeX()||domain.sizeY!=geometry.sizeY()||domain.sizeZ!=geometry.sizeZ()

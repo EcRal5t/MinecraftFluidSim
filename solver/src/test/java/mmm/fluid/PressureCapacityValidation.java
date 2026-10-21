@@ -49,6 +49,7 @@ public final class PressureCapacityValidation {
 		if(!overrun)throw new AssertionError("Vacuum predictor did not exercise finite capacity overrun");
 		double initialK=d.liquidKineticEnergyJoules();var initialU=d.exactInternalEnergy();var audit=d.thermalAudit();
 		var stock=d.liquidCells.snapshot();var gas=d.gasBoundary().sealedInventory();
+		var gasSource=d.gasBoundary().externalSource();var gasSink=d.gasBoundary().escapedSink();
 		var result=d.pressureSystem.solveProjection(dt);
 		if(!result.converged())throw new AssertionError("Finite vacuum capacity projection did not converge: "+result);
 		d.pressureSystem.projectVelocities(dt);d.cellMacStage.publishMomentum();
@@ -67,10 +68,34 @@ public final class PressureCapacityValidation {
 		if(!closed)throw new AssertionError("Finite vacuum closure did not oppose the overshooting liquid predictor");
 		if(d.liquidKineticEnergyJoules()>initialK*(1+8*Math.ulp(1F)))
 			throw new AssertionError("Closed vacuum pressure projection generated kinetic energy without external work");
-		if(!stock.stocks().equals(d.liquidCells.snapshot().stocks())||!d.exactInternalEnergy().equals(initialU)
-				||!d.exactGasInternalEnergy().equals(mmm.units.SignedDyadic.ZERO)||!d.thermalAudit().equals(audit)
-				||!d.gasBoundary().sealedInventory().equals(gas)||!d.gasBoundary().auditClosed())
-			throw new AssertionError("Vacuum projection altered inventory or inserted heat to balance its mechanical response");
+		var afterStock=d.liquidCells.snapshot();
+		if(stock.size()!=afterStock.size())throw new AssertionError("Vacuum projection changed liquid stock keys");
+		for(int row=0;row<stock.size();row++){
+			var before=stock.stockAt(row);var after=afterStock.stockAt(row);
+			if(!before.key().equals(after.key())||!before.volume().equals(after.volume())||before.massUnits()!=after.massUnits()
+					||!java.util.Objects.equals(before.mixture(),after.mixture()))
+				throw new AssertionError("Vacuum projection changed liquid mass, actual volume or species: "+before.key());
+		}
+		if(!d.exactGasInternalEnergy().equals(mmm.units.SignedDyadic.ZERO)
+				||!d.gasBoundary().sealedInventory().equals(gas)||!d.gasBoundary().auditClosed()
+				||!d.gasBoundary().externalSource().equals(gasSource)||!d.gasBoundary().escapedSink().equals(gasSink))
+			throw new AssertionError("Vacuum projection changed gas inventory, energy or external transfers");
+		double finalK=d.liquidKineticEnergyJoules();var finalU=d.exactInternalEnergy();var afterAudit=d.thermalAudit();
+		var heat=finalU.subtract(initialU);double kineticLoss=initialK-finalK;
+		// MAC velocities are binary32. Measure actual K and stored U independently of the heat plan.
+		double energyError=8*Math.ulp(1F)*Math.max(1,Math.max(initialK,finalK));
+		if(Math.abs(heat.toDouble()-kineticLoss)>energyError
+				||Math.abs((finalU.toDouble()+finalK)-(initialU.toDouble()+initialK))
+					>energyError+2*Math.ulp(Math.max(Math.abs(initialU.toDouble()),Math.abs(finalU.toDouble()))))
+			throw new AssertionError("Vacuum closure failed K+U conservation: deltaU="+heat+" kineticLoss="+kineticLoss);
+		var work=afterAudit.mechanicalWork().subtract(audit.mechanicalWork());
+		var roundoff=afterAudit.roundoffResidual().subtract(audit.roundoffResidual());
+		if(!heat.equals(work.add(roundoff))||Math.abs(work.toDouble()-kineticLoss)>energyError
+				||!afterAudit.initialInventory().equals(audit.initialInventory())
+				||!afterAudit.externalSource().equals(audit.externalSource())||!afterAudit.externalSink().equals(audit.externalSink())
+				||!afterAudit.finiteDeviceExchange().equals(audit.finiteDeviceExchange())
+				||!finalU.equals(afterAudit.expectedInventory()))
+			throw new AssertionError("Vacuum closure mechanical exchange or storage roundoff entered the wrong audit source");
 	}
 	/** A subcell dry seam transmits weight while a half-cell cavity still permits free fall. */
 	private static void unresolvedGapKeepsVacuumPressureContact() {

@@ -55,16 +55,25 @@ final class GasVolumeAllocation {
     }
     /** Energy and composition settlement can rebind an unchanged volume successor. */
     GasVolumeAllocation rebindFuture(FluidDomain domain,LiquidCellInventory future){
-        requireCurrent(domain,future);
-        return new GasVolumeAllocation(domain,future,preparedFrame,sources,ambientControls);
+        requireSourceCurrent(domain);
+        return new GasVolumeAllocation(domain,future,preparedFrame.rebindInventory(future),sources,ambientControls);
     }
     GasRuntimeGeometry preparedFrame(){return preparedFrame;}
     PhaseSourceColumns sources(){return sources;}
     SignedDyadic ambientControl(int node){return ambientControls==null?SignedDyadic.ZERO:ambientControls[node];}
+    private void requireSourceCurrent(FluidDomain domain){
+        if(domain.gasState.frame!=sourceGeometry||domain.gasState.network!=sourceNetwork||sourceNetwork.revision()!=networkRevision)
+            throw new IllegalStateException("Gas allocation source frame/network changed: plannedNetworkRevision="+networkRevision
+                    +" actualNetworkRevision="+domain.gasState.network.revision());
+        if(domain.phaseOccupancy!=sourceOccupancy||!GasRuntimeGeometry.sameLiquidVolumes(domain.liquidCells,sourceInventory))
+            throw new IllegalStateException("Gas allocation source phase/support volume changed: plannedInventoryRevision="
+                    +sourceInventory.revision()+" actualInventoryRevision="+domain.liquidCells.revision());
+    }
     void requireCurrent(FluidDomain domain,LiquidCellInventory future){
-        if(domain.gasState.frame!=sourceGeometry||domain.gasState.network!=sourceNetwork||sourceNetwork.revision()!=networkRevision
-                ||domain.phaseOccupancy!=sourceOccupancy||!domain.liquidCells.hasSameGeometry(sourceInventory)||!future.hasSameGeometry(futureInventory))
-            throw new IllegalStateException("Gas phase source or future inventory changed");
+        requireSourceCurrent(domain);
+        if(!GasRuntimeGeometry.sameLiquidVolumes(future,futureInventory))
+            throw new IllegalStateException("Gas allocation future support volume changed: plannedInventoryRevision="
+                    +futureInventory.revision()+" actualInventoryRevision="+future.revision());
     }
     static GasVolumeAllocation prepare(FluidDomain domain,LiquidCellInventory future,long[] occupied,byte[] masks){
         return PhaseOccupancyTransport.prepareEdit(domain,future,occupied,masks);

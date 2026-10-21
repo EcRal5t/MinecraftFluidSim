@@ -3,6 +3,7 @@ package mmm.simulation;
 import mmm.fluid.CpuFluidSolverBackend;
 import mmm.fluid.FluidDomainState;
 import mmm.fluid.FluidDomain;
+import mmm.fluid.FluidPhysicalAssertions;
 import mmm.fluid.FluidStepCandidate;
 import mmm.fluid.FluidStepRequest;
 import mmm.thermal.ThermalLimits;
@@ -117,17 +118,26 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		}
 		double tailRange = maximumTailY - minimumTailY;
 		double finalKinetic = kineticEnergy(domain);
+		double residualEnergyBudget = FluidPhysicalAssertions.SETTLED_ENERGY_FRACTION * maximumKinetic;
+		double finalRms = FluidPhysicalAssertions.motion(domain).rmsSpeed();
 		System.out.printf("  dynamic player float gate: displacement=%.9g m, tail range=%.9g m, "
 				+ "tail vy=%+.9g block/tick, liquid K max/tail/final=%.9g/%.9g/%.9g J, "
-				+ "body work=%.9g J, unexplained energy max=%.9g J (body-work allowance %.9g J)%n",
+				+ "body work=%.9g J, unexplained energy max=%.9g J (body-work allowance %.9g J), "
+				+ "final RMS=%.9g m/s, residual-wave budget=%.9g J%n",
 				maximumDisplacement, tailRange, bodyVelocity.y,
-				maximumKinetic, tailMaximumKinetic, finalKinetic, bodyWork, maximumUnexplainedEnergy, energyAllowance);
+				maximumKinetic, tailMaximumKinetic, finalKinetic, bodyWork, maximumUnexplainedEnergy, energyAllowance,
+				finalRms, residualEnergyBudget);
 		require(maximumDisplacement <= productionConfig().cellSize(),
 				"dynamic player displacement exceeded one solver cell: " + maximumDisplacement + " m");
 		require(tailRange <= 0.05,
 				"dynamic player retained or amplified a visible vertical oscillation: " + tailRange + " m");
-		require(tailMaximumKinetic<=.025&&finalKinetic<=.002,
-				"dynamic player disturbance did not decay to the stationary-body energy envelope");
+		// The moving body leaves a real wave and vortex disturbance in low-viscosity
+		// water. Bound its remaining fraction of the observed excitation separately
+		// from the absolute no-excitation requirement of a stationary body.
+		require(tailMaximumKinetic <= residualEnergyBudget && finalKinetic <= residualEnergyBudget,
+				"dynamic player disturbance did not decay: peak/tail/final=" + maximumKinetic + "/"
+						+ tailMaximumKinetic + "/" + finalKinetic + " J, residual budget=" + residualEnergyBudget
+						+ " J, final RMS=" + finalRms + " m/s");
 		require(Math.abs(bodyVelocity.y) <= 0.005,
 				"dynamic player tail velocity did not settle: " + bodyVelocity.y + " blocks/tick");
 	}

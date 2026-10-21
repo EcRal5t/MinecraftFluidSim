@@ -247,7 +247,8 @@ public final class LiquidCellInventoryValidation {
 		require(immutable, "Liquid snapshot exposes a mutable cell row");
 	}
 	private static void sharedFaceFluxUsesCellInventory() {
-		var cells = new LiquidCellInventory(12, null); var key = new LiquidCellInventory.Key(0, 0, 255);
+		// Interior translation supplies the full donor with upstream gas capacity.
+		var cells = new LiquidCellInventory(12, null); var key = new LiquidCellInventory.Key(1, 0, 255);
 		cells.planEdits(List.of(new LiquidCellInventory.Edit(key,
 				new LiquidCellInventory.Stock(key, SignedDyadic.of(1), 100, null, 10, false)))).commit();
 		var domain = new FluidDomain(3,2,2,new FluidSolverConfig(1,1000,0,.05F,120,1e-5F,.002F,.8F)); domain.liquidCells = cells;

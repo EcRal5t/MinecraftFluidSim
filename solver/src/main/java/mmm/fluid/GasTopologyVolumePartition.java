@@ -24,7 +24,9 @@ final class GasTopologyVolumePartition {
 
     /** Signed receiver deformation is apportioned on its existing exact control-volume lattice. */
     static SignedDyadic[] partitionChange(SignedDyadic change,SignedDyadic[] controls){
-        int exponent=change.exponent();
+        // A whole-volume change still has fractional source shares. Retain the
+        // existing binary52 allocation precision before closing the exact remainder.
+        int exponent=Math.subtractExact(change.exponent(),52);
         for(var control:controls)if(control.signum()>0)exponent=Math.min(exponent,control.exponent());
         var total=BigInteger.ZERO;var weights=new BigInteger[controls.length];
         for(int i=0;i<controls.length;i++){
