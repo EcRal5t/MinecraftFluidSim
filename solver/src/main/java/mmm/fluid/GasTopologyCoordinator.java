@@ -127,9 +127,9 @@ final class GasTopologyCoordinator {
 	GasTopologyPlan planAfterCarrierEdit(LiquidCellInventory future,long[] occupied){
 		return planCells(future,occupied,null,VolumeWork.ADIABATIC,null,null);
 	}
-	/** A condensed phase candidate settles its complete fixed-volume energy before mechanical evolution. */
-	GasTopologyPlan planAfterCondensedPhaseChange(LiquidCellInventory future,long[] occupied){
-		return planCells(future,occupied,null,VolumeWork.FIXED_ENERGY,null,null);
+	/** Internal phase and reaction conversions settle fixed-volume energy before mechanical evolution. */
+	GasTopologyPlan planAfterInternalConversion(LiquidCellInventory future,long[] occupied,GasVolumeAllocation allocation){
+		return planCells(future,occupied,null,VolumeWork.FIXED_ENERGY,null,allocation);
 	}
 	GasTopologyPlan planAfterLiquidCells(LiquidCellInventory future,long[] occupied,GasVolumeAllocation allocation) {
 		return planCells(future,occupied,null,VolumeWork.ADIABATIC,null,allocation);
@@ -187,7 +187,6 @@ final class GasTopologyCoordinator {
 		boolean thermal=domain.thermalState!=null&&domain.thermalState.gasModelBound();
 		boolean retainControl=thermal&&volumeWork==VolumeWork.ADIABATIC;
 		int count=next.nodeCount();double[] available=volumes(next);
-		double[] importedControl=retainControl?new double[count]:null;
 		var inventories=new ArrayList<GasInventory>(java.util.Collections.nCopies(count,GasInventory.EMPTY));
 		SignedDyadic[] mixed=thermal?new SignedDyadic[count]:null,inherited=retainControl?new SignedDyadic[count]:null;
 		if(thermal)Arrays.fill(mixed,SignedDyadic.ZERO);
@@ -235,10 +234,9 @@ final class GasTopologyCoordinator {
 				// vacuum has no additional old volume: retained cavities already supplied it.
 				if(retainControl&&origin.getKey()==0){
 					inherited[node-1]=inherited[node-1].add(SignedDyadic.of(volume));
-					importedControl[node-1]+=volume;
 				}
 			}
-			if(retainControl&&count>0)includeOpenedPoreVolume(old,next,importedControl,inherited);
+			if(retainControl&&count>0)includeOpenedPoreVolume(old,next,available,inherited);
 			if(next.sealedExterior()&&(!sourceDelta.isEmpty()||!sinkDelta.isEmpty()))
 				throw new GasTopologyBlockedException("Closed gas topology attempted an external source or sink");
 		}
@@ -265,25 +263,23 @@ final class GasTopologyCoordinator {
 				edit==null?sourceDelta:sourceDelta.add(edit.source()),edit==null?sinkDelta:sinkDelta.add(edit.sink()),edges);
 		return new GasTopologyPlan(next,old,gasPlan,thermalPlan,domain.gasState.network,domain.gasState.network.revision());
 	}
-	/** Only a net increase of actual pore space adds zero-energy expansion volume. */
+	/** Newly exposed vacuum belongs to its actual receiving chamber, up to its net expansion. */
 	private void includeOpenedPoreVolume(GasRuntimeGeometry old,GasRuntimeGeometry next,
-	                                    double[] importedControl,SignedDyadic[] inherited){
-		var net=SignedDyadic.ZERO;
-		for(int cell=0;cell<domain.cellCount;cell++){
-			var before=old.phase().poreVolume(cell);var after=next.phase().poreVolume(cell);
-			if(!before.equals(after))net=net.add(after.subtract(before));
-		}
-		// Moving liquid or translating an occupied solid changes local dry geometry,
-		// while the complete old gas control volumes have already been partitioned.
-		if(net.signum()<=0)return;
-		double scaleToMeters=domain.unitScale.cubicMetersPerNormalizedVolume();
-		double[] opened=new double[next.nodeCount()];double total=0;
+	                                    double[] available,SignedDyadic[] inherited){
+		var previous=old.geometry().actualCapacity();
+		double[] opened=new double[next.nodeCount()];
 		for(var component:next.capacity().components()){
 			if(component.availableVolumeNormalized().signum()==0)continue;
 			int cell=component.cell(),node=next.topology().nodeOfComponent(cell,component.supportMask());
 			if(node<=0)continue;
-			var gain=next.phase().poreVolume(cell).subtract(old.phase().poreVolume(cell));
-			if(gain.signum()<=0)continue;
+			double oldPore=0;
+			for(int i=previous.offsets[cell];i<previous.offsets[cell+1];i++){
+				var support=previous.components.get(i);
+				int overlap=support.supportMask()&component.supportMask();
+				oldPore+=support.poreVolumeNormalized().toDouble()*Integer.bitCount(overlap)/Integer.bitCount(support.supportMask());
+			}
+			double gain=component.poreVolumeNormalized().toDouble()-oldPore;
+			if(!(gain>0))continue;
 			double volume=0;
 			int newOpen=old.geometry().collisionMask(cell)&~next.geometry().collisionMask(cell)&component.supportMask();
 			if(newOpen!=0){
@@ -298,16 +294,16 @@ final class GasTopologyCoordinator {
 				}
 			}else{
 				// Removing solid occupation releases its share of this fixed support.
-				double released=gain.toDouble()*component.poreVolumeNormalized().toDouble()/next.phase().poreVolume(cell).toDouble();
-				volume=Math.min(component.availableVolumeNormalized().toDouble(),released);
+				volume=Math.min(component.availableVolumeNormalized().toDouble(),gain);
 			}
-			opened[node-1]+=volume;total+=volume;
+			opened[node-1]+=volume;
 		}
-		if(total==0)return;
-		double fraction=Math.min(1,net.toDouble()/total);
+		double scaleToMeters=domain.unitScale.cubicMetersPerNormalizedVolume();
 		for(int node=0;node<opened.length;node++){
-			// Gas imported from ambient already represents its newly opened space.
-			double vacuum=Math.max(0,opened[node]*fraction*scaleToMeters-importedControl[node]);
+			// Inherited control already includes all old gas, old vacuum and ambient imports.
+			// A solid translation within this chamber therefore adds no duplicate volume.
+			double expansion=Math.max(0,available[node]-inherited[node].toDouble());
+			double vacuum=Math.min(opened[node]*scaleToMeters,expansion);
 			if(vacuum>0)inherited[node]=inherited[node].add(SignedDyadic.of(vacuum));
 		}
 	}

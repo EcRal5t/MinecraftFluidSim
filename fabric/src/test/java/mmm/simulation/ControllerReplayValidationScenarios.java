@@ -356,13 +356,14 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 	/** One coarse cell bounds the aggregate unresolved pocket capacity, independently of node count. */
 	private static int requireMacroscopicHeadspace(FluidDomain domain, double expectedCapacity) {
 		int largest = -1;
-		double largestCapacity = 0.0, totalCapacity = 0.0;
+		double largestCapacity = 0.0, totalCapacity = 0.0, pressureVolume = 0.0;
 		for (int node : domain.gasBoundary().nodeIds()) {
 			double capacity = domain.gasBoundary().availableVolume(node);
 			double pressure = domain.gasNodeGaugePressurePa(node);
 			require(Double.isFinite(capacity) && capacity > 0.0 && Double.isFinite(pressure),
 					"controller has an invalid gas capacity or pressure at node " + node);
 			totalCapacity += capacity;
+			pressureVolume += (GasRegistry.STANDARD_PRESSURE_PA + pressure) * capacity;
 			if (capacity > largestCapacity) { largest = node; largestCapacity = capacity; }
 			if (!domain.gasBoundary().inventory(node).isEmpty()) {
 				double expectedPressure = AirNetwork.REFERENCE_PRESSURE
@@ -379,6 +380,15 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 				"controller lost its compressed macroscopic headspace: largest=" + largestCapacity
 						+ " m3, total=" + totalCapacity + " m3, pocket allowance=" + cellVolume
 						+ " m3; " + gasLedgerDetail(domain));
+		// Tiny pockets may have a hydrostatic pressure offset, but must not sequester
+		// enough gas or energy to change the macroscopic head pressure by a cell of water.
+		double bulkPressure=pressureVolume/totalCapacity;
+		double headPressure=GasRegistry.STANDARD_PRESSURE_PA+domain.gasNodeGaugePressurePa(largest);
+		double pressureAllowance=domain.config().density()*domain.config().gravity()*domain.config().cellSize()
+				+8*Math.ulp(bulkPressure);
+		require(Math.abs(headPressure-bulkPressure)<=pressureAllowance,
+				"Residual pockets changed macroscopic head pressure: head="+headPressure+", bulk="+bulkPressure
+						+", cell pressure allowance="+pressureAllowance+"; "+gasLedgerDetail(domain));
 		return largest;
 	}
 

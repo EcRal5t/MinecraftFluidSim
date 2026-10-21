@@ -292,6 +292,10 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 	}
 
 	static void compressedPlanarHalfFillRemainsStableAcrossBackend() throws Exception {
+		compressedPlanarHalfFillRemainsStableAcrossBackend(1_000);
+	}
+
+	static void compressedPlanarHalfFillRemainsStableAcrossBackend(int totalSteps) throws Exception {
 		FullCapabilityTestFixture.Registries registries = loadProductionRegistries();
 		FluidDomain initial = createFullyBoundCompressedPlanarHalfFill(registries);
 		FluidDomainState state = initial.captureAuthoritativeState();
@@ -323,7 +327,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		System.out.printf("  compressed planar initial: V=%.12f m3 p=%+.6f Pa T=%.9f K U=%.9g J%n",
 				previousAvailable, restored.gasNodeGaugePressurePa(1),
 				restored.gasNodeTemperatureK(1), restored.exactInternalEnergy().toDouble());
-		for (int step = 0; step < 1_000; step++) {
+		for (int step = 0; step < totalSteps; step++) {
 			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
 					generation, state, List.of(), false, 0, true));
 			require(candidate.movingBodyCoupling().equals(MovingBodyFluidCoupling.Result.NONE),
@@ -369,10 +373,10 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			previousAvailable = available;
 			if ((step + 1) % 100 == 0) {
 				System.out.printf("  compressed planar backend step %03d: K=%.9g J dV=%+.9g m3 "
-						+ "PCG=%d residual=%.9g p=%+.3f Pa T=%.6f K%n",
+						+ "PCG=%d residual=%.9g p=%+.3f Pa T=%.6f K unresolvedE=%.9g J%n",
 						step + 1, kinetic, deltaAvailable, stats.pressureIterations(),
 						stats.pressureResidual(), restored.gasNodeGaugePressurePa(headspace),
-						restored.gasNodeTemperatureK(headspace));
+						restored.gasNodeTemperatureK(headspace),energyError);
 			}
 		}
 		double finalKinetic = kineticEnergy(restored);

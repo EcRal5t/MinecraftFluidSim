@@ -224,16 +224,19 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidDomain domain = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		domain.sealDomainBoundary();
 		domain.setVolume(1, 1, 1, 0.1F);
 		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		domain.setMarkerChemical(0, Map.of(
 				BuiltinChemicalDefinitions.NA_PLUS, 1_100_000L,
 				BuiltinChemicalDefinitions.CL_MINUS, 1_100_000L), true);
+		domain.bindGasRegistry(mmm.fluid.air.BuiltinGasDefinitions.createRegistry());
+		domain.bootstrapGasState("");
 		domain.bindThermal(reactiveGranularThermalRegistry(liquids, granular), liquids, 300.0);
 		domain.setPrecipitationEnabled(true);
 		SignedDyadic beforePrecipitation = domain.exactInternalEnergy();
-		domain.domainStep.step();
+		domain.domainStep.stepThermalAxis(false,0);
 		double precipitationTemperature = domain.thermalTemperatureInCell(1, 1, 1);
 		require(domain.lastPhaseTransferStats().precipitations() == 1
 				&& precipitationTemperature > 300.0
@@ -250,7 +253,7 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 		long solidBeforeDissolution = domain.totalGranularSolidVolumeSvq();
 		boolean dissolved = false;
 		for (int step = 0; step < 16 && domain.totalGranularSolidVolumeSvq() > 0L; step++) {
-			domain.domainStep.step(); dissolved |= domain.lastPhaseTransferStats().dissolutions() > 0;
+			domain.domainStep.stepThermalAxis(false,0); dissolved |= domain.lastPhaseTransferStats().dissolutions() > 0;
 		}
 		double dissolutionTemperature = domain.thermalTemperatureInCell(1, 1, 1);
 		require(dissolved && domain.totalGranularSolidVolumeSvq() == 0L
@@ -263,6 +266,11 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 						+ domain.totalGranularSolidVolumeSvq()
 						+ " audit=" + domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
 						+ " deltaU=" + domain.exactInternalEnergy().subtract(beforeDissolution));
+		var restored=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		restored.domainStep.step();
+		require(restored.gasBoundary().auditClosed()
+				&&restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),
+				"Closed reactive conversion failed its restored mechanical successor");
 	}
 
 	static ThermalRegistry reactiveGranularThermalRegistry(
@@ -291,7 +299,7 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 						speciesId, host.id(), precipitate ? ExactRational.of(-1) : ExactRational.ZERO));
 			}
 		}
-		return new ThermalRegistry(materials, offsets, List.of(), BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
+		return new ThermalRegistry(thermalMaterials(materials), offsets, List.of(), BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
 				granular.fingerprint());
 	}
 

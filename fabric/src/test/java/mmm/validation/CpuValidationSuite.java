@@ -159,7 +159,7 @@ public final class CpuValidationSuite {
 	});
 		gate(gates, "entity-fluid", () -> {
 			EntityFluidWiringValidation.main(NONE);
-			mmm.fluid.MovingBodyNeighborhoodValidation.main(NONE);
+			mmm.fluid.MovingBodyCouplingValidation.main(NONE);
 			ProductionFluidReplayValidation.dynamicPlayerFloatRemainsBoundedAcrossBackend();
 			ProductionFluidReplayValidation.walkingBodyDisturbsThenSettlesAcrossBackend();
 		});

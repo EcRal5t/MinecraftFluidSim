@@ -977,6 +977,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 
 	private static void gasTopologyRemapsMixIntoNewVacuum() {
 		gasTopologyExchangePreservesExactRegionalEnergy();
+		independentCavityEditsKeepTheirOwnVolumeWork();
 		var gasDefinitions = List.of(new mmm.fluid.air.GasComponentDefinition("test:a", 8, 8, List.of(), List.of()),
 				new mmm.fluid.air.GasComponentDefinition("test:b", 8, 8, List.of(), List.of()),
 				new mmm.fluid.air.GasComponentDefinition("test:c", 8, 8, List.of(), List.of()));
@@ -1026,6 +1027,39 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					"gas expansion recovery changed temperature or its exact energy ledger");
 			previousTemperature=temperature;
 		}
+	}
+
+	/** Simultaneous edits behind a fixed partition have the same local thermodynamics as separate edits. */
+	private static void independentCavityEditsKeepTheirOwnVolumeWork() {
+		var liquids=new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+		var thermal=new ThermalRegistry(List.of(AIR,topologyMaterial("test:isolated/water",
+				ThermalMaterialDefinition.CarrierKind.LIQUID,BuiltinFluidMaterials.WATER.id(),0,1000)));
+		var domain=new FluidDomain(5,2,2,new FluidSolverConfig(.5F,1000,0,.01F,100,1e-5F,.002F,0),32);
+		domain.sealDomainBoundary();
+		for(int z=0;z<2;z++)for(int y=0;y<2;y++)for(int x=0;x<5;x++)
+			if(y!=0||z!=0||x==1||x==2)domain.setSolid(x,y,z,true);
+		domain.bindGasRegistry(BuiltinGasDefinitions.createRegistry());domain.bootstrapGasState("");
+		domain.bindThermal(thermal,liquids,300);
+		var stock=domain.gasBoundary().sealedInventory();
+		double initialLeftEnergy=domain.thermalState.gasNodeEnergy(domain.gasState.frame.commonCellNode(0),domain.gasState.network);
+		var separate=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		separate.setSolid(1,0,0,false);separate.setSolid(4,0,0,true);
+		var edits=List.of(new FluidDomain.CollisionEdit(1,0,0,0),new FluidDomain.CollisionEdit(4,0,0,255));
+		domain.beginCollisionEdits(domain.planCollisionEdits(edits));
+		domain.setSolid(1,0,0,false);domain.setSolid(4,0,0,true);
+		for(int cell:new int[]{0,3}){
+			int node=domain.gasState.frame.commonCellNode(cell),reference=separate.gasState.frame.commonCellNode(cell);
+			double energy=domain.thermalState.gasNodeEnergy(node,domain.gasState.network);
+			double expected=separate.thermalState.gasNodeEnergy(reference,separate.gasState.network);
+			require(domain.gasState.network.inventory(node).equals(separate.gasState.network.inventory(reference))
+					&&Math.abs(energy-expected)<=8*Math.ulp(expected),
+					"Disconnected cavity edits exchanged control volume or work across a fixed seal: cell="+cell+", U="+energy+", expected="+expected);
+			if(cell==0)require(Math.abs(energy-initialLeftEnergy)<=8*Math.ulp(initialLeftEnergy),
+					"Opening new vacuum cooled its isolated source gas");
+		}
+		require(domain.gasBoundary().sealedInventory().equals(stock)&&domain.gasBoundary().auditClosed()
+				&&domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"Independent cavity edits lost exact inventory or energy accounting");
 	}
 
 	private static void gasTopologyExchangePreservesExactRegionalEnergy() {
