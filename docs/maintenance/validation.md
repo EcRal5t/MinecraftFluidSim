@@ -398,21 +398,22 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 ### 第三轮审阅整改：2026-10-21
 
-本轮撤回第二轮的 M10 完成结论，修复无材料域物性、墙面未解析法向支撑和正常操作后继；当前资格按下表的实际运行范围汇总。日志位于仓库 `build/`，已通过且有九成把握未受后续改动影响的部分复用对应产物。各领域的独立通过记录共同组成验收，未重复运行整个 `fast` 或 `full` 组合。
+第三轮整改完成无材料域物性、墙面未解析法向支撑、静水和润湿载荷，以及共同输运、压力、相变和气体空间的成本重构。当前资格按下表的实际运行范围汇总。日志位于仓库 `build/`，已通过且有九成把握未受后续等价改动影响的部分复用对应产物。各领域的独立通过记录与最终两次原预算共同组成 M10 验收，未重复运行整个 `fast` 或 `full` 组合。
 
 | 正式流程 | 实际结果与范围 |
 |---|---|
-| 库存、动量、墙面交接与恢复 | `review3-final-functional.log`：`cell-inventory` 完整通过；末次热量提交的成本调整保持同一质量、体积、几何与能量结算 |
-| 气腔、移动液封与恢复 | `review3-final-functional.log`：`air-cavity` 完整通过，液柱按实际容量、EOS 与压缩功设置惯性，并保持一跳输运可解析的满截面核心 |
+| 库存、动量、墙面交接与恢复 | `review3-margin-inventory.log`：动量与容量布局重构后的 `cell-inventory` 完整通过，含共同平移、旋转、两密度输运和热账；后续气体对象合并保持同一几何与物质结算 |
+| 气腔、移动液封、相变接触与恢复 | `review3-component-air.log`：最终产物的完整 `air-cavity` 通过，包含分量接口、有限相变批次、真实容量、液封与恢复。液柱按实际容量、EOS 与压缩功设置惯性，并保持一跳输运可解析的满截面核心 |
 | 颗粒、沙床与两桶后继 | `review3-final.log`：`granular:short` 完整通过，372 步完成沉降—起动—再沉积；整桶及孔隙整桶后继完成沉积、休眠和冷恢复 |
 | 气液压力与真空残差 | `review3-complete.log`：`gas-liquid:short` 通过，包含共同压力算子、静止真空、压缩与相变后继 |
 | 毛细曲率、压差与实际驱动力 | `review3-pressure-final.log` 的曲率、静态液滴及合并前段通过；`review3-wetting-final.log` 的三组原 1,200 步润湿通过，30°／90°／120°的水平扩展方差为 23.98／22.10／15.09，峰值动能 4.49／4.38／3.38 kJ，均低于同一物理能量预算。`review3-pair-final.log` 的液液界面实际做功与六步守恒通过，压差按生产体积解析尺度评价 |
-| 热平流、分层、对流、相变与热恢复 | `review3-final-functional.log`：完整 `thermal` 通过；末次改动仅保持纯内能提交的数值结果并复用质量、几何工作区 |
+| 热平流、分层、对流、相变与热恢复 | `review3-final-functional.log`：完整 `thermal` 通过；后续候选准备、参考能与气腔热状态复用保持同一状态函数及内能结算，气液相变接口和批次另由最终 `air-cavity` 覆盖 |
 | 切格、障碍物流动 | `review3-final-functional.log`：完整 `cut-cell` 通过，含 600 步流动 |
 | 自由面、静水、旋流与溃坝 | `review3-hydro-final.log`：最终压力模型的完整 `free-surface` 通过，含分数液柱、薄层及原 5,000 步溃坝的精确库存、容量和恢复检查。第 1,000–5,000 步动能 359–812 J，RMS 速度 0.163–0.245 m/s，后段均满足共同宏观动能要求；第 5,000 步 506 J |
-| 原完整步墙钟预算 | `review3-budget-idle-1.log`／`review3-budget-idle-2.log`：`eefbdd9` 空闲窗口的控制器最大 32.10／26.95 ms，通过；最大 demo 最大 368.32／317.00 ms，连续超 200 ms 达 14／7 步，未通过。当前继续整改输运、压力与相变成本 |
+| 原完整步墙钟预算 | `review3-component-budget-1.log`／`review3-component-budget-2.log`：最终同一产物两次完整入口均通过。控制器中位数 17.73／15.41 ms、最大 30.98／21.57 ms；最大 demo 中位数 140.14／120.47 ms、最大 183.22／203.99 ms，连续超 200 ms 为 0／1 步。demo 主线程平均 CPU 时间 120.31／118.75 ms |
 
-静水拆分后的物理流程构建为 `61e383d49820bf4d6831c61d152d677dd22cca9f`，源码 SHA-256 为 `a383eb1ed13cb53597c93b8e403803fff54d3f107d6f58eb92396cc62fa867d5`，本地 classpath 产物 SHA-256 为 `2d8618221eb3b78df825ae626e06d3cc7c0a3ab1b6a8f90f8cc50e275a04ade0`，清单来自 `review3-hydro-final.log`。液液界面聚焦流程见 `review3-final-manifest.log` 与 `review3-pair-final.log`；后续等价几何复用的预算构建见 `review3-budget-manifest.log`，版本 `eefbdd9`、源码摘要 `b808859cf22cea8a6c7ecedf87c1c1d70352b9924daad6ac2dbb5555e69dfccc`、产物摘要 `eaadc0ecba2f4a5740ebf74a073ccbea43e191061b3375fb94b5ba7a3d887273`。
+最终生产实现为 `3679a2471128686e6a37f4b7ba72d335d3d9b354`，源码 SHA-256 为 `c9d89b67ca95d0f8719fe6c8748690449a55a36a1e492fdfc840af4e4427a9c4`，本地 classpath 产物 SHA-256 为 `5d1121855a224eee845eba029eaad4f8d46039c05cf206d1a2fe38edd2b429a1`。清单来自 `review3-component-air.log`；两次预算直接复用该 classpath、工作目录和 JVM 配置，期间无源码或构建变更。
+静水拆分后的长流程清单见 `review3-hydro-final.log`（`61e383d`），液液界面聚焦流程见 `review3-final-manifest.log` 与 `review3-pair-final.log`。后续 CSR 装配、容量修正按需展开、动量与不可变几何布局重构保持同一离散、状态函数和库存约束，复用相应职责的已完成长流程；最终产物未重复运行这些长流程。
 `runCpuValidation` 输出 Git 版本、源码与本地 classpath 产物摘要、JVM、堆、选择器、断言开关及完整 classpath；源码摘要覆盖五个 CPU 模块的源码、资源与构建配置。计时保持原输入、装量、预热、采样、子步与压力迭代额度，使用默认进程优先级。
 
 真空静止误差按体积残差、格长与步长换算，库存与热账精确核对。毛细验收同时观察变曲率初态相对零张力对照的真实动量响应；局部温度舍入与高流速前锋的解析限制按设计书评价。化学、容器与持久事务沿用未受本轮改动影响的既有正式结果；第三轮审阅中的 `chemistry:short` 和 `containers:short` 亦已通过。
@@ -420,6 +421,7 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 ### 证据适用范围
 
 `review3-functional.log` 和 `review3-final-functional.log` 含本轮定位中的失败，只取表中明确列出的完成范围。旧溃坝仅有初始势能量级的动能上限，曾遗漏后段持续增长；原场景现已追加共同的宏观静水动能要求。第二轮预算与历史 `build/m10-*` 探针供定位，当前预算采用最终产物的正式测量。
+成本重构中的 `review3-budget-idle-*`、`review3-delivery-budget-*` 和 `review3-margin-idle-*` 记录了中间产物的实际失败，不计入最终预算通过；它们对应的超时促成了共同 CSR、拥堵区域修正及气体分量布局的替换。
 
 当前模型采用一阶时间分裂与正权动量混合，机械动能差诊断与真实热账分别解释。全域物理黏性、阻力及实体做功的完整热机械结算由产品路线维护。实施状态见[当前计划](../roadmap/solver-consolidation-plan.md)。
 

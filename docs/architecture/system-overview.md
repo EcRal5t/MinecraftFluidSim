@@ -350,7 +350,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
     - [GasChamberCapacity](../../solver/src/main/java/mmm/fluid/GasChamberCapacity.java)：按固定开放分量直接汇总库存派生的气容量
     - [GasComponentCapacity](../../solver/src/main/java/mmm/fluid/GasComponentCapacity.java)
     - [GasPartitionWeights](../../model/src/main/java/mmm/fluid/air/GasPartitionWeights.java)
-  - 验证选择器 / 参考：`air-cavity`；[气体几何](gas-state.md#微盒气体几何)
+  - 验证选择器 / 参考：`air-cavity`；[气体几何](gas-state.md#分量气体几何)
 
 - **气体拓扑、库存与体积功**
   - 主要文件：

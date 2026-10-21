@@ -351,7 +351,7 @@ checkpoint 捕获读取已提交的同代单元库存、固体占容、气腔归
 
 普通 checkpoint 不删除上一完整 slot，因为它既是原子覆盖的另一半，也是显式 recoverprevious 的唯一候选。清理逻辑绝不能触碰 HEAD 当前指向的 slot。
 
-气体区域载荷保存完整 `8N` 微盒归属主列 `pieceNodeOrdinal`，按全域 minimum-piece key 规范节点排序并随 section 拆分、组装。
+气体区域载荷保存完整 `8N` 微盒节点索引 `pieceNodeOrdinal`，按全域最小干微盒编号规范节点排序并随 section 拆分、组装；捕获存盘状态时从运行分量归属展开该索引。
 section 保留全域节点编号并校核 `sealedPieceCount`；恢复从保存的相占据与固体几何生成微盒容量，核对气腔归属、库存和热能的同序绑定。
 具体格式见 [气体状态](gas-state.md)。
 
