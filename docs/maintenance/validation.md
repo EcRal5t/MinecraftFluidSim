@@ -412,25 +412,29 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 ## 当前验证证据
 
-### 第五轮整改：最终验收待完成
+### 第五轮整改：M10 综合验收完成
 
-最新综合产物已完成同次 `full` 29/29 和两组 5,000 步重放，两个独立 JVM 的原预算均失败。当前继续削减完整计算链的成本，M10 保持待性能验收。
+同一最终产物通过 `full` 29/29、静止与有限扰动各 5,000 步重放，以及两个独立 JVM 的原生产预算。最大 demo 的两次峰值为 153.537 ms 和 162.791 ms，距 200 ms 分别保留 46.463 ms 和 37.209 ms；两轮均无超 200 ms 步。输入、装量、预热、步数、JVM 堆大小和原预算阈值保持。
 
 | 验收对象 | 最近综合产物结果 |
 |---|---|
-| 源码、产物与 JVM | `d3356a2cb6aa225e60074b130cc027dd6a0ca497`；sourceSHA256 `2d642cce281a71c9dc18c035d4a82d4d363aaa337d7b99228aaff8739792b834`；artifactSHA256 `85fe936a32ff10b816774acfbd0f8a10233f1b0879cf72be4006a6d3cd9bf128`；JDK 26.0.2，`-ea -Xmx512m` |
-| 完整 CPU 领域 | `build/review5-qualified-full.log`，同次 `full` 29/29，361.680 s；含全部容器随机操作、原整桶与单桶沉积后继 |
+| 源码、产物与 JVM | `cb925f9cc40d6ad9da966541a02295798c0ba98f`；sourceSHA256 `53376fedda882374c33db213dff9bf8aa7b6887be12f9288a3d3eeaea0123eaa`；artifactSHA256 `16b140a8c71ecfd34a3d3313eb6e7c647f0ee77035443caf9fa1a1483cd204a9`；JDK 26.0.2，`-ea -Xmx512m` |
+| 完整 CPU 领域 | `build/review5-final-integrated-full.log`，同次 `full` 29/29，313.375 s；含热对流、惯性旋转、墙面交接、气体来源与液封、全部容器随机操作、原整桶及单桶沉积后继；容器领域 180.926 s |
 | 构建、架构与 GPU 命令适配器 | 同次 `test runValidation assemble` 成功；架构扫描 501 个生产源码，GPU 命令适配器通过；硬件 GPU 数值未运行 |
-| 静止与有限扰动长重放 | `build/review5-qualified-soak.log`，各 5,000 步通过；静止 K 与原始能量误差为 0；有限扰动初始 K 5.33899240 J，末态 0.0904466482 J，独立能量误差最大 0.000726269406 J／容差 0.291949620 J，实际库存增热最大 5.09943370 J／容差 5.36399240 J；库存与 EOS 保持 |
-| 独立 JVM 正式预算 | 两次均失败，详见下表；全量中的暖运行通过不能代替独立运行 |
+| 静止与有限扰动长重放 | `build/review5-final-integrated-soak.log`，各 5,000 步通过；静止 K 与原始能量误差为 0；有限扰动初始 K 5.33899240 J，最大／尾段／末态 K 为 4.00066031／0.183101864／0.0907492362 J，独立能量误差最大 0.000294805105 J／容差 0.291949620 J，实际库存增热最大 4.90988971 J／容差 5.36399240 J；库存与 EOS 保持 |
+| 独立 JVM 正式预算 | 两次通过，详见下表；完整步包含捕获输入、私有候选恢复、全部物理计算与候选接管 |
 
 | 日志 | 控制器中位数／最大值 | 最大 demo 完整步／连续超 200 ms | 结果 |
 |---|---|---|---|
-| `review5-qualified-full.log` | 2.179／3.676 ms | 96.343 ms／0 步 | 通过 |
-| `review5-qualified-budget-1.log` | 24.932／35.209 ms | 281.761 ms／3 步 | 失败 |
-| `review5-qualified-budget-2.log` | 20.747／26.921 ms | 501.258 ms／4 步 | 失败 |
+| `review5-immutable-geometry-budget.log` | 15.725／19.874 ms | 153.537 ms／0 步 | 通过 |
+| `review5-immutable-geometry-budget-2.log` | 15.747／18.417 ms | 162.791 ms／0 步 | 通过 |
+| `review5-final-integrated-full.log` | 2.060／2.379 ms | 79.616 ms／0 步 | 完整组合中的暖运行通过 |
 
-独立运行中的 demo 主线程 CPU 时间主要为 109–203 ms，首步与实际相变步达到约 219–234 ms，尚缺生产余量。`review5-cold-budget-profile.log` 与对应 JFR 为另次采样诊断，最大 202.008 ms、连续超时 1 步；该带采样运行的计时独立于正式预算。采样热点集中于库存输运、相几何准备、三轴动量工作区和实际相变重复数量计划，当前按完整职责链削减这些工作。
+四份最终日志的源码与 classpath 产物摘要完全一致。第一轮预算由 Gradle 启动，`keepGoing=false`；第二轮与完整组合为直接 JVM，`keepGoing=true`，长重放采用其独立入口。主线程 CPU 时间随每步墙钟一并记录；全量暖运行与独立预算分别登记。
+
+长期静止场保持 V=32 m³、Pg=165591.223673 Pa、T=386.116412384 K；有限扰动场撤去输入后持续衰减。末态质心变化约 1.67×10⁻⁶ m；几何质心对应的势能观测不确定性 72.2883131 J 保留为诊断，独立能量容差仍为原 0.291949620 J。
+
+测试迁移删除旧保留路线、粒子池及 `solid` 派生列的装配代码；新增量模型补充零质量出流携带物种参考能的回归断言，固定几何快照补充候选替壳隔离断言。物种、质量、体积、能量、恢复及宏观物理断言保留，原 40/200 ms 生产要求保持。
 
 ### 既往失败与诊断范围
 
@@ -438,6 +442,10 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 | 记录 | 实际范围与限制 |
 |---|---|
+| `build/review5-qualified-full.log`、`review5-qualified-soak.log`、`review5-qualified-budget-{1,2}.log` | `d3356a2` 的完整组合 29/29、两组 5,000 步通过；独立预算最大 demo 分别 281.761 ms／连续 3 步、501.258 ms／连续 4 步，均失败，后续整链成本重构取代该资格 |
+| `build/review5-shared-preparation-build-budget.log` | 仅减少重复准备的 `24f0406` 仍失败，最大 demo 419.473 ms、连续超时 5 步 |
+| `build/review5-face-increment-budget.log`、`review5-face-increment-profile.log` | 中间面增量模型在最大 demo 第九步失败；独立体积分份可产生零质量、正物种出流，参考能失配。最终由实际质量→物种→参考能的共同数量链修复 |
+| `build/review5-linear-flux-budget.log`、`review5-linear-flux-budget-{1,2}.log` | `0fb5037` 的线性散度校正已跑通连续流程；构建内预算峰值 266.372 ms，独立运行一次控制器 62.493 ms 失败，另次 demo 峰值 218.211 ms，余量不足；随后完成固定几何与区域化学职责替换 |
 | `build/review5-final-full.log` | `7653ffa8` 的完整组合为 27/29，整桶安息角及连续注液第 544 步伪压缩功失败；后续由颗粒支撑/下坡入床与气腔实际机械模式职责链修复 |
 | `build/drift-capacity-full.log` | `f299f56` 的一次 `full` 为 28/29，`production-replay` 在压缩扰动场景失败；整条入口失败 |
 | `build/drift-capacity-final.log` | 另一构建只补跑完整 `production-replay`；该领域通过，未运行一次新的 `full` |
