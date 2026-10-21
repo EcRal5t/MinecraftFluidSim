@@ -22,6 +22,7 @@ final class GasVolumeAllocation {
     private final PhaseOccupancyState sourceOccupancy,futureOccupancy;
     private final LiquidCellInventory.Snapshot sourceInventory,futureInventory;
     private final List<Share> shares;
+    private final GasRuntimeGeometry preparedFrame;
     private final FlipPressurePhaseGeometry preparedPhase;
     private final GasComplementGeometry preparedGeometry;
     private final GasComponentCapacity.Prepared preparedCapacity;
@@ -30,6 +31,15 @@ final class GasVolumeAllocation {
     }
     GasVolumeAllocation(FluidDomain domain,LiquidCellInventory future,PhaseOccupancyState occupancy,List<Share> shares,
                         FlipPressurePhaseGeometry phase,GasComplementGeometry geometry,GasComponentCapacity.Prepared capacity){
+        this(domain,future,occupancy,shares,phase,geometry,capacity,null);
+    }
+    GasVolumeAllocation(FluidDomain domain,LiquidCellInventory future,GasRuntimeGeometry frame,List<Share> shares){
+        this(domain,future,frame.occupancy(),shares,frame.phase(),frame.geometry(),frame.geometry().actualCapacity(),frame);
+    }
+    private GasVolumeAllocation(FluidDomain domain,LiquidCellInventory future,PhaseOccupancyState occupancy,List<Share> shares,
+                                FlipPressurePhaseGeometry phase,GasComplementGeometry geometry,GasComponentCapacity.Prepared capacity,
+                                GasRuntimeGeometry frame){
+        preparedFrame=frame;
         sourceGeometry=domain.gasState.frame;sourceNetwork=domain.gasState.network;networkRevision=sourceNetwork.revision();
         sourceInventory=domain.liquidCells.snapshot();futureInventory=future.snapshot();sourceOccupancy=domain.phaseOccupancy;futureOccupancy=occupancy;this.shares=List.copyOf(shares);
         preparedPhase=phase;preparedGeometry=geometry;preparedCapacity=capacity;
@@ -42,6 +52,7 @@ final class GasVolumeAllocation {
     PhaseOccupancyState sourceOccupancy(){return sourceOccupancy;}
     PhaseOccupancyState futureOccupancy(){return futureOccupancy;}
     List<Share> shares(){return shares;}
+    GasRuntimeGeometry preparedFrame(){return preparedFrame;}
     FlipPressurePhaseGeometry preparedPhase(){return preparedPhase;}
     GasComplementGeometry preparedGeometry(){return preparedGeometry;}
     GasComponentCapacity.Prepared preparedCapacity(){return preparedCapacity;}

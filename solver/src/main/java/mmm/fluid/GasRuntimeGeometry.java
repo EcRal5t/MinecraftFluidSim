@@ -17,7 +17,6 @@ final class GasRuntimeGeometry {
 	private final GasComplementGeometry geometry;
 	private final GasChamberTopology topology;
 	private final GasChamberCapacity capacity;
-	private final int[] minimumPieceKeys;
 
 	private GasRuntimeGeometry(FluidDomain domain,LiquidCellInventory future,long[] occupied,boolean sealed,
 	                           byte[] futureMasks,PhaseOccupancyState futureOccupancy,
@@ -40,17 +39,14 @@ final class GasRuntimeGeometry {
 				&&Arrays.equals(occupiedSvq,old.occupiedSvq)&&old.geometry.matchesCollisionMasks(masks))phase=old.phase;
 		else if(preparedPhase==null){phase=new FlipPressurePhaseGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);phase.rebuildOccupancy(occupancy,cut,occupiedSvq);}
 		else phase=preparedPhase;
-		if(preparedGeometry==null){
-			boolean[] changed=old==null?null:new boolean[domain.cellCount];
+		if(preparedGeometry==null&&old!=null&&phase==old.phase&&future.hasSameGeometry(old.targetCells))geometry=old.geometry;
+		else if(preparedGeometry==null){
 			boolean[] solid=new boolean[domain.cellCount];for(int cell=0;cell<solid.length;cell++)solid[cell]=cut.fullySolid(cell);
-			if(old!=null&&phase!=old.phase)for(int cell=0;cell<changed.length;cell++)changed[cell]=!phase.sameCellGeometry(cell,old.phase);
 			geometry=GasComplementGeometry.capture(domain.sizeX,domain.sizeY,domain.sizeZ,cellSize,solid,cut,phase,
-					old==null?null:old.geometry,changed,targetCells,preparedCapacity);
+					old==null?null:old.geometry,old==null?null:old.phase,targetCells,preparedCapacity);
 		}else geometry=preparedGeometry;
 		topology=GasChamberTopology.capture(geometry,sealed);
 		capacity=GasChamberCapacity.capturePrepared(geometry,topology);
-		minimumPieceKeys=new int[topology.chambers().size()+1];Arrays.fill(minimumPieceKeys,-1);
-		for(var chamber:topology.chambers())minimumPieceKeys[chamber.node()]=chamber.minimumPiece();
 	}
 	static GasRuntimeGeometry capture(FluidDomain domain,long[] occupied,boolean sealed) {
 		domain.ensurePhaseOccupancy();
@@ -104,9 +100,8 @@ final class GasRuntimeGeometry {
 	long occupiedSvq(int cell){return occupiedSvq[cell];}
 	long[] occupiedSvq(){return occupiedSvq.clone();}
 	int[] pieceNodes(){return topology.copyPieceNodes();}
-	int[] minimumPieceKeys(){return minimumPieceKeys.clone();}
-	int nodeCount(){return minimumPieceKeys.length-1;}
-	int minimumPiece(int node){return minimumPieceKeys[node];}
+	int nodeCount(){return topology.chambers().size();}
+	int minimumPiece(int node){return topology.chambers().get(node-1).minimumPiece();}
 	int nodeOfPiece(int piece){return topology.nodeOfPiece(piece);}
 	int commonCellNode(int cell) {
 		int owner=-1;

@@ -255,7 +255,9 @@ final class GasTopologyCoordinator {
 	                                VolumeWork volumeWork,PhaseBatch phase,GasVolumeAllocation allocation) {
 		if(allocation==null)allocation=GasVolumeAllocation.prepare(domain,future,occupied,masks);
 		allocation.requireCurrent(domain,future);
-		var next=GasRuntimeGeometry.captureCellFuture(domain,future,occupied,domain.gasState.sealedDomainBoundary,masks,allocation.futureOccupancy(),allocation.preparedPhase(),allocation.preparedGeometry(),allocation.preparedCapacity());
+		var next=allocation.preparedFrame();
+		if(next==null)next=GasRuntimeGeometry.captureCellFuture(domain,future,occupied,domain.gasState.sealedDomainBoundary,
+				masks,allocation.futureOccupancy(),allocation.preparedPhase(),allocation.preparedGeometry(),allocation.preparedCapacity());
 		if(domain.gasState.frame==null)return new GasTopologyPlan(next,null,null,null,domain.gasState.network,domain.gasState.network.revision(),new SignedDyadic[0],new TreeMap<>(),-1);
 		return plan(next,volumeWork,phase,allocation);
 	}

@@ -332,8 +332,9 @@ final class ConservativeLiquidFlux {
 	private LiquidCellInventory.Plan settle(SignedDyadic[] capacities) {
 		var origins = working.stocks();
 		prepareRoutes(origins, capacities);
-		var gasCapacityGroups=prepareGasGroups(capacities);
-		var routes=PhaseQuantitySettlement.settle(numericalRoutes,capacities,interiorLiquidMinimum(capacities),
+		var minimum=interiorLiquidMinimum(capacities);
+		var gasCapacityGroups=prepareGasGroups(capacities,minimum);
+		var routes=PhaseQuantitySettlement.settle(numericalRoutes,capacities,minimum,
                 gasCapacityGroups==null?null:gasCapacityGroups.receiverGroup(),gasCapacityGroups==null?null:gasCapacityGroups.upper(),
                 source -> prepareAlternatives(source, capacities));
 		return working.planRoutes(routes, FluidThermalBinding.liquidEnergyPartitioner(domain),inventoryFinalizer);
@@ -407,36 +408,50 @@ final class ConservativeLiquidFlux {
 	}
 
 	/** A finite chamber constrains aggregate space while liquid may rearrange freely inside it. */
-    private GasCapacityGroups prepareGasGroups(SignedDyadic[] capacities){
+    private GasCapacityGroups prepareGasGroups(SignedDyadic[] capacities,SignedDyadic[] minimum){
         var frame=domain.gasState.frame;if(frame==null||frame.nodeCount()==0)return null;
         int count=frame.nodeCount(),groups=0;
         int[] nodeGroup=new int[count+1];Arrays.fill(nodeGroup,-1);
         for(int node=1;node<=count;node++)if(!domain.gasState.network.inventory(node).isEmpty())nodeGroup[node]=groups++;
         if(groups==0)return null;
         int[] receiverGroup=new int[capacities.length];Arrays.fill(receiverGroup,-1);
-        double[] groupPore=new double[groups],target=new double[groups];double totalTarget=0;
+        var groupPore=new SignedDyadic[groups];Arrays.fill(groupPore,SignedDyadic.ZERO);
+        var groupDry=new SignedDyadic[groups];Arrays.fill(groupDry,SignedDyadic.ZERO);
+        var groupRoom=new SignedDyadic[groups];Arrays.fill(groupRoom,SignedDyadic.ZERO);
         var totalCapacity=SignedDyadic.ZERO;
         // Independent pressure owners reserve their own actual dry support. Capacity
         // feasibility never merges reservoirs merely because a predicted gas flux connects them.
         for(int i=0;i<capacityCount;i++){
-            int row=capacitySlots[i];double capacity=capacities[row].toDouble();totalCapacity=totalCapacity.add(capacities[row]);
+            int row=capacitySlots[i];var capacity=capacities[row];totalCapacity=totalCapacity.add(capacity);
             for(int e=gasTags.first(row);e>=0;e=gasTags.next(e)){
                 int node=(int)gasTags.key(e);if(node<=0||nodeGroup[node]<0)continue;
-                int group=nodeGroup[node];receiverGroup[row]=group;groupPore[group]+=capacity;break;
+                int group=nodeGroup[node];receiverGroup[row]=group;
+                groupPore[group]=groupPore[group].add(capacity);
+                var floor=minimum==null||minimum[row]==null?SignedDyadic.ZERO:minimum[row];
+                groupRoom[group]=groupRoom[group].add(capacity.subtract(floor));break;
             }
         }
-        double available=totalCapacity.subtract(working.exactVolume()).toDouble();
-        for(int node=1;node<=count;node++)if(nodeGroup[node]>=0){
-            double oldVolume=domain.gasState.network.availableVolume(node)/domain.unitScale.cubicMetersPerNormalizedVolume();
-            double volume=Math.min(oldVolume,PhaseOccupancyState.VOLUME_RESOLUTION);
-            target[nodeGroup[node]]=volume;totalTarget+=volume;
+        // Both the near-filled floor and the chamber reserve use this same exact
+        // stock-derived dry volume. Rounded SI EOS volumes cannot tighten it.
+        for(var component:frame.capacity().components()){
+            int row=8*component.cell()+Integer.numberOfTrailingZeros(component.supportMask());
+            int group=receiverGroup[row];if(group>=0)groupDry[group]=groupDry[group].add(component.availableVolumeNormalized());
         }
-        if(!(available>0))throw new CapacityUnavailable("Nonempty finite gas has no actual remaining pore volume");
-        double scale=totalTarget>available?available/totalTarget:1;var upper=new SignedDyadic[groups];
+        var available=totalCapacity.subtract(working.exactVolume());
+        if(available.signum()<=0)throw new CapacityUnavailable("Nonempty finite gas has no actual remaining pore volume");
+        var resolution=SignedDyadic.of(PhaseOccupancyState.VOLUME_RESOLUTION);
+        var reserve=new SignedDyadic[groups];var totalReserve=SignedDyadic.ZERO;
         for(int group=0;group<groups;group++){
-            double volume=Math.min(groupPore[group],scale*target[group]);
-            upper[group]=SignedDyadic.of(groupPore[group]).subtract(SignedDyadic.of(volume));
+            var volume=groupDry[group].compareTo(resolution)<0?groupDry[group]:resolution;
+            if(volume.compareTo(groupRoom[group])>0)volume=groupRoom[group];
+            reserve[group]=volume;totalReserve=totalReserve.add(volume);
         }
+        if(totalReserve.compareTo(available)>0){
+            var weights=new double[groups];for(int group=0;group<groups;group++)weights[group]=reserve[group].toDouble();
+            reserve=LiquidCellInventory.allocateVolumes(available,reserve,weights);
+        }
+        var upper=new SignedDyadic[groups];
+        for(int group=0;group<groups;group++)upper[group]=groupPore[group].subtract(reserve[group]);
         return new GasCapacityGroups(receiverGroup,upper);
     }
 

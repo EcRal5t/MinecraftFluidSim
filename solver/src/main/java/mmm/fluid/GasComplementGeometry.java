@@ -53,40 +53,30 @@ final class GasComplementGeometry {
 		exteriorPorts = Collections.unmodifiableList(Arrays.asList(exterior));
 	}
 
-	static GasComplementGeometry capture(int sizeX, int sizeY, int sizeZ, double cellSize,
-	                                    boolean[] solid, FlipCutCellGeometry cut, FlipPressurePhaseGeometry phase) {
-		return capture(sizeX,sizeY,sizeZ,cellSize,solid,cut,phase,null,null);
+	static GasComplementGeometry capture(int sizeX,int sizeY,int sizeZ,double cellSize,
+	                                    boolean[] solid,FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase) {
+		return capture(sizeX,sizeY,sizeZ,cellSize,solid,cut,phase,null,null,null,null);
 	}
-	/** One ordered scan reuses unchanged cells and incident faces without a separate region index. */
-	static GasComplementGeometry capture(int sizeX, int sizeY, int sizeZ, double cellSize,
-	                                    boolean[] solid, FlipCutCellGeometry cut, FlipPressurePhaseGeometry phase,
-	                                    GasComplementGeometry source, boolean[] changed) {
-        return capture(sizeX,sizeY,sizeZ,cellSize,solid,cut,phase,source,changed,null);
-    }
-    static GasComplementGeometry capture(int sizeX,int sizeY,int sizeZ,double cellSize,
-                                        boolean[] solid,FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,
-                                        GasComplementGeometry source,boolean[] changed,LiquidCellInventory.Snapshot cells) {
-		return capture(sizeX,sizeY,sizeZ,cellSize,solid,cut,phase,source,changed,cells,null);
-	}
-	/** The liquid transaction may already own the exact pore-minus-stock endpoint. */
+	/** One preparation owns geometry change detection, exact capacity and incident dry ports. */
 	static GasComplementGeometry capture(int sizeX,int sizeY,int sizeZ,double cellSize,
 	                                    boolean[] solid,FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,
-	                                    GasComplementGeometry source,boolean[] changed,LiquidCellInventory.Snapshot cells,
-	                                    GasComponentCapacity.Prepared preparedCapacity) {
+	                                    GasComplementGeometry source,FlipPressurePhaseGeometry sourcePhase,
+	                                    LiquidCellInventory.Snapshot cells,GasComponentCapacity.Prepared preparedCapacity) {
 		validateShape(sizeX, sizeY, sizeZ, solid, cut, phase);
 		double h2 = cellSize * cellSize, h3 = h2 * cellSize;
 		if (!(cellSize > 0 && h2 > 0 && h3 > 0 && Double.isFinite(h2) && Double.isFinite(h3)))
 			throw new IllegalArgumentException("Gas complement SI area and volume must be representable");
 		int count = solid.length;
 		if (source != null && (source.sizeX != sizeX || source.sizeY != sizeY || source.sizeZ != sizeZ
-				|| source.cellVolumeCubicMeters != h3 || changed == null || changed.length != count))
+				|| source.cellVolumeCubicMeters != h3 || sourcePhase == null))
 			throw new IllegalArgumentException("Gas geometry continuation differs in shape or scale");
 		var actualCapacity=preparedCapacity!=null?preparedCapacity:cells==null?null:GasComponentCapacity.prepare(cut,phase,cells,source==null?null:source.actualCapacity);
 		double[] componentDry=actualCapacity==null?componentDry(cut,phase,count):actualCapacity.dry;
+		boolean[] changed=source==null?null:new boolean[count];
 		if(source!=null){
-			changed=changed.clone();
 			boolean anyChanged=false;
 			for(int cell=0;cell<count;cell++){
+				changed[cell]=phase!=sourcePhase&&!phase.sameCellGeometry(cell,sourcePhase);
 				for(int support:CellRemapMicroTopology.components(cut.mask(cell))){
 					int slot=8*cell+Integer.numberOfTrailingZeros(support);
 					if(componentDry[slot]!=source.componentDry[slot])changed[cell]=true;
@@ -112,7 +102,7 @@ final class GasComplementGeometry {
 		int[] canonical=new int[8*count];Arrays.fill(canonical,-1);
         for(var component:components)for(int bits=component.supportMask();bits!=0;bits&=bits-1)
             canonical[8*component.cell()+Integer.numberOfTrailingZeros(bits)]=component.minimumPiece();
-		byte[] fullFaces=new byte[6*count];int[] first=new int[4],second=new int[4];double[] areas=new double[4];
+		int[] first=new int[4],second=new int[4];double[] areas=new double[4];
 		int oldPort=0,oldExterior=0;
 		for(int cell=0;cell<count;cell++)for(int axis=0;axis<3;axis++){
 			int coordinate=coordinate(cell,axis,sizeX,sizeY),size=axis==0?sizeX:axis==1?sizeY:sizeZ;
@@ -121,13 +111,13 @@ final class GasComplementGeometry {
 				if(source!=null)while(oldPort<source.portArray.length&&portKey(source.portArray[oldPort])<key)oldPort++;
 				if(source!=null&&!changed[cell]&&!changed[peer]){
 					while(oldPort<source.portArray.length&&portKey(source.portArray[oldPort])==key)ports.add(source.portArray[oldPort++]);
-				}else captureFace(cell,peer,axis,canonical,cut,phase,h2,fullFaces,first,second,areas,ports);
+				}else captureFace(cell,peer,axis,canonical,cut,phase,h2,first,second,areas,ports);
 			}
 			int bit=coordinate==0?0:coordinate+1==size?1:-1;if(bit<0)continue;long key=6L*cell+2*axis+bit;
 			if(source!=null)while(oldExterior<source.exteriorArray.length&&exteriorKey(source.exteriorArray[oldExterior])<key)oldExterior++;
 			if(source!=null&&!changed[cell]){
 				while(oldExterior<source.exteriorArray.length&&exteriorKey(source.exteriorArray[oldExterior])==key)exterior.add(source.exteriorArray[oldExterior++]);
-			}else captureExteriorFace(cell,axis,bit,canonical,cut,phase,h2,fullFaces,first,areas,exterior);
+			}else captureExteriorFace(cell,axis,bit,canonical,cut,phase,h2,first,areas,exterior);
 		}
 		var result=new GasComplementGeometry(sizeX,sizeY,sizeZ,h3,actualCapacity==null?cut.copyMicroMasks():actualCapacity.masks,pores,componentDry,bySlot,
 				components,ports.toArray(Port[]::new),exterior.toArray(ExteriorPort[]::new),actualCapacity);
@@ -200,7 +190,7 @@ final class GasComplementGeometry {
     }
 
 	private static void captureFace(int cell,int peer,int axis,int[] canonical,FlipCutCellGeometry cut,
-	                                FlipPressurePhaseGeometry phase,double h2,byte[] fullFaces,int[] first,int[] second,double[] areas,List<Port> result){
+	                                FlipPressurePhaseGeometry phase,double h2,int[] first,int[] second,double[] areas,List<Port> result){
         boolean full=fullFixedConnection(cut,cell,peer,axis);
         if(full&&canonical[8*cell+(1<<axis)]>=0&&canonical[8*peer]>=0
                 &&GasFaceIntersection.fullDryFace(phase,cell,axis,1)&&GasFaceIntersection.fullDryFace(phase,peer,axis,0)){
@@ -219,8 +209,8 @@ final class GasComplementGeometry {
 		for(int i=0;i<count;i++)result.add(new Port(first[i],second[i],axis,physicalArea(areas[i],h2,cell),full));
 	}
 	private static void captureExteriorFace(int cell,int axis,int bit,int[] canonical,FlipCutCellGeometry cut,
-	                                        FlipPressurePhaseGeometry phase,double h2,byte[] fullFaces,int[] first,double[] areas,List<ExteriorPort> result){
-        boolean full=fullFixedFace(cut,cell,axis,bit,fullFaces);
+	                                        FlipPressurePhaseGeometry phase,double h2,int[] first,double[] areas,List<ExteriorPort> result){
+        boolean full=fullFixedFace(cut,cell,axis,bit);
         if(full&&canonical[8*cell+(bit<<axis)]>=0&&GasFaceIntersection.fullDryFace(phase,cell,axis,bit)){
             result.add(new ExteriorPort(canonical[8*cell+(bit<<axis)],axis,bit==0?-1:1,h2,true));
             return;
@@ -238,25 +228,14 @@ final class GasComplementGeometry {
 	private static int coordinate(int cell, int axis, int sizeX, int sizeY) {
 		return axis == 0 ? cell % sizeX : axis == 1 ? cell / sizeX % sizeY : cell / (sizeX * sizeY);
 	}
-	private static boolean open(FlipCutCellGeometry cut, int cell, int slot) {
-		return cut.microCellOpen(cell, slot & 1, slot >>> 1 & 1, slot >>> 2 & 1);
-	}
 	/** The carrier and topology use the same criterion for an unrestricted fixed opening. */
 	static boolean fullFixedConnection(FlipCutCellGeometry cut,int first,int second,int axis) {
 		int positive=switch(axis){case 0->0xaa;case 1->0xcc;default->0xf0;};
 		return (cut.mask(first)&positive)==0&&(cut.mask(second)&(positive^255))==0;
 	}
-	private static boolean fullFixedFace(FlipCutCellGeometry cut, int cell,
-	                                   int axis, int coordinate, byte[] cached) {
-		int key = 6 * cell + 2 * axis + coordinate;
-		if (cached[key] != 0) return cached[key] == 2;
-		boolean full = true;
-		for (int a = 0; a < 2; a++) for (int b = 0; b < 2; b++) {
-			int micro = coordinate << axis | a << ((axis + 1) % 3) | b << ((axis + 2) % 3);
-			full &= open(cut, cell, micro);
-		}
-		cached[key] = (byte) (full ? 2 : 1);
-		return full;
+	private static boolean fullFixedFace(FlipCutCellGeometry cut,int cell,int axis,int side) {
+		int positive=switch(axis){case 0->0xaa;case 1->0xcc;default->0xf0;};
+		return (cut.mask(cell)&(side==1?positive:positive^255))==0;
 	}
 	private static double physicalArea(double normalizedArea, double h2, int cell) {
 		if (normalizedArea == 0) return 0;
