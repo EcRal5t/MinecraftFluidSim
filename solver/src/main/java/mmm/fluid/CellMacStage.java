@@ -403,7 +403,7 @@ final class CellMacStage {
 		var liquid = prepareLiquid(dt);
 		var momentum = prepareMomentumTransport(liquid);
 		var inventory = liquid.preparedMomentum()==null?liquid.inventory().withMechanicalHeat(momentum.heatByCell()):liquid.inventory();
-		var gas = domain.gasTopologyCoordinator.planAfterLiquidCells(inventory.future(), liquid.occupied, liquid.gasAllocation());
+		var gas = domain.gasTopologyCoordinator.planAfterMechanicalTransport(inventory.future(), liquid.occupied, liquid.gasAllocation());
 		var energy=domain.mechanicalEnergy.prepare(inventory,gas);inventory=energy.inventory();
 		var auditAfter = domain.thermalState == null ? null : domain.thermalState.auditLedger()
 				.withMechanicalWork(inventory.mechanicalHeat()).withRoundoff(inventory.energyRoundoff());

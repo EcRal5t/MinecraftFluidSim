@@ -39,6 +39,8 @@ final class PressureSystem {
 	private float duration;
 	private double pressureDatum;
 	private double[] gasStorageRhs = new double[0];
+    private GasRuntimeGeometry mechanicalGasSource;
+    private boolean[] mechanicalGasModes=new boolean[0];
 
 	PressureSystem(FluidDomain domain) {
 		this.domain = domain;
@@ -249,6 +251,8 @@ final class PressureSystem {
         // Constitutive resistance reads source slip before any known pressure impulse.
         drag.prepare(dt);preparePrediction(dt);
 		retainCoupledGasRows();
+        mechanicalGasSource=domain.gasState.frame;
+        mechanicalGasModes=Arrays.copyOf(gasPressureUnknown,gasNodeCount+1);
 		assembleMatrix();solver.reset(rows);
 		// Resolve pressure to the same cell-volume scale as the phase geometry.
 		// The RHS residual becomes normalized volume through dt²/rho; the RMS
@@ -335,6 +339,13 @@ final class PressureSystem {
 		for(int node=1;node<=gasNodeCount;node++)if(gasPressureUnknown[node])
 			gasUnknownNodes[gasUnknownCount++]=node;
 	}
+    boolean hasGasMechanicalModes(GasRuntimeGeometry source){return source!=null&&source==mechanicalGasSource;}
+    /** Modes belong to the old frame on which a pressure step actually acted. */
+    boolean sourceGasDoesVolumeWork(GasRuntimeGeometry source,int node){
+        if(!hasGasMechanicalModes(source))throw new IllegalStateException("Mechanical gas modes belong to a different source frame");
+        return node>0&&node<mechanicalGasModes.length&&mechanicalGasModes[node];
+    }
+
 	private void assembleMatrix() {
 		matrix.begin(domain.cellCount + gasNodeCount + 1, fluidUnknownCount + gasUnknownCount);
 		for (int i = 0; i < fluidUnknownCount; i++) matrix.activate(fluidUnknownCells[i]);

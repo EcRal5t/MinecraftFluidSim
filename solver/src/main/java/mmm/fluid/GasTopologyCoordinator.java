@@ -26,9 +26,9 @@ final class GasTopologyCoordinator {
 	private GasRuntimeGeometry committedFrame;
 	private AirNetwork committedNetwork;
 	private long committedNetworkRevision;
-	private enum VolumeWork { ADIABATIC, FIXED_ENERGY }
+	private enum VolumeWork { ADIABATIC, MECHANICAL_TRANSPORT, FIXED_ENERGY }
 	private record SourceVolumeWork(int node,SignedDyadic volume,double energy,List<GasInventory> parts,
-	                                int[] targets,SignedDyadic[] controls,double[] partEnergy) { }
+	                                int[] targets,SignedDyadic[] controls,double[] partEnergy,boolean mechanicalMode) { }
 	record PhaseBirth(int cell, int supportMask, GasInventory inventory, double energy) { }
 	record PhaseBatch(List<GasInventory> inventories,
 	                  GasAuditLedger source, GasAuditLedger sink,
@@ -132,7 +132,15 @@ final class GasTopologyCoordinator {
 	GasTopologyPlan planAfterInternalConversion(LiquidCellInventory future,long[] occupied,GasVolumeAllocation allocation){
 		return planCells(future,occupied,null,VolumeWork.FIXED_ENERGY,null,allocation);
 	}
-	GasTopologyPlan planAfterLiquidCells(LiquidCellInventory future,long[] occupied,GasVolumeAllocation allocation) {
+    GasTopologyPlan planAfterMechanicalTransport(LiquidCellInventory future,long[] occupied,GasVolumeAllocation allocation){
+        // A prescribed velocity field without a prepared pressure step retains its
+        // explicit displacement work; missing modes never classify gas as unresolved.
+        var work=domain.pressureSystem.hasGasMechanicalModes(domain.gasState.frame)
+                ?VolumeWork.MECHANICAL_TRANSPORT:VolumeWork.ADIABATIC;
+        return planCells(future,occupied,null,work,null,allocation);
+    }
+
+	GasTopologyPlan planAfterLiquidDisplacement(LiquidCellInventory future,long[] occupied,GasVolumeAllocation allocation) {
 		return planCells(future,occupied,null,VolumeWork.ADIABATIC,null,allocation);
 	}
 	GasTopologyPlan planAfterCollisionCells(LiquidCellInventory future,long[] occupied,byte[] masks) {
@@ -216,7 +224,7 @@ final class GasTopologyCoordinator {
 		var origins=old==null?null:allocation.sources();
 
 		boolean thermal=domain.thermalState!=null&&domain.thermalState.gasModelBound();
-		boolean retainControl=thermal&&volumeWork==VolumeWork.ADIABATIC;
+		boolean retainControl=thermal&&volumeWork!=VolumeWork.FIXED_ENERGY;
 		var sourceWork=retainControl?new ArrayList<SourceVolumeWork>():null;
 		int count=next.nodeCount();double[] available=volumes(next);
 		var inventories=new ArrayList<GasInventory>(java.util.Collections.nCopies(count,GasInventory.EMPTY));
@@ -258,7 +266,8 @@ final class GasTopologyCoordinator {
 						}}
 				}
 				if(retainControl)sourceWork.add(new SourceVolumeWork(previous,old.capacity().normalizedVolume(previous),
-						stock.isEmpty()?0:energy(previous,edit),parts,targets,control,energies));
+						stock.isEmpty()?0:energy(previous,edit),parts,targets,control,energies,
+                        volumeWork==VolumeWork.ADIABATIC||domain.pressureSystem.sourceGasDoesVolumeWork(old,previous)));
 			}
 			// Ambient is source row 1. Explicit vacuum (row 0) imports neither stock nor old control.
 			for(int entry=origins.first(1);entry>=0;entry=origins.next(entry)) {
@@ -341,8 +350,11 @@ final class GasTopologyCoordinator {
 		var model=new GasThermalModel(domain.thermalState.registry(),domain.gasState.network.registry());
 		var scale=SignedDyadic.of(domain.unitScale.cubicMetersPerNormalizedVolume());var work=SignedDyadic.ZERO;
 		for(int index=0;index<sources.size();index++){
-			if(changes[index].signum()==0)continue;
-			var source=sources.get(index);var retained=new ArrayList<GasInventory>();var stock=GasInventory.EMPTY;
+			var source=sources.get(index);
+            // An unresolved source has no pressure-work mechanism in this mechanical step.
+            // Its complete N/U split remains the conservative remap prepared above.
+            if(!source.mechanicalMode()||changes[index].signum()==0)continue;
+			var retained=new ArrayList<GasInventory>();var stock=GasInventory.EMPTY;
 			var retainedVolume=SignedDyadic.ZERO;var retainedEnergy=SignedDyadic.ZERO;boolean vented=false;
 			for(int part=0;part<source.targets().length;part++){
 				if(source.targets()[part]==0)vented=true;

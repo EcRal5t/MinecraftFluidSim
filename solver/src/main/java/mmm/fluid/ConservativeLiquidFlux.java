@@ -416,23 +416,19 @@ final class ConservativeLiquidFlux {
         var groupDry=new SignedDyadic[groups];Arrays.fill(groupDry,SignedDyadic.ZERO);
         var groupRoom=new SignedDyadic[groups];Arrays.fill(groupRoom,SignedDyadic.ZERO);
         var totalCapacity=SignedDyadic.ZERO;
-        // Independent pressure owners reserve their own actual dry support. Capacity
-        // feasibility never merges reservoirs merely because a predicted gas flux connects them.
-        for(int i=0;i<capacityCount;i++){
-            int row=capacitySlots[i];var capacity=capacities[row];totalCapacity=totalCapacity.add(capacity);
-            for(int e=gasTags.first(row);e>=0;e=gasTags.next(e)){
-                int node=(int)gasTags.key(e);if(node<=0||nodeGroup[node]<0)continue;
-                int group=nodeGroup[node];receiverGroup[row]=group;
-                groupPore[group]=groupPore[group].add(capacity);
-                var floor=minimum==null||minimum[row]==null?SignedDyadic.ZERO:minimum[row];
-                groupRoom[group]=groupRoom[group].add(capacity.subtract(floor));break;
-            }
-        }
-        // Both the near-filled floor and the chamber reserve use this same exact
-        // stock-derived dry volume. Rounded SI EOS volumes cannot tighten it.
+        for(int i=0;i<capacityCount;i++)totalCapacity=totalCapacity.add(capacities[capacitySlots[i]]);
+        // A chamber's quantity constraint belongs to its actual old dry support;
+        // transported source ordering never changes that physical capacity owner.
         for(var component:frame.capacity().components()){
-            int row=8*component.cell()+Integer.numberOfTrailingZeros(component.supportMask());
-            int group=receiverGroup[row];if(group>=0)groupDry[group]=groupDry[group].add(component.availableVolumeNormalized());
+            if(component.availableVolumeNormalized().signum()==0)continue;
+            int node=frame.topology().nodeOfComponent(component.cell(),component.supportMask());
+            if(node<=0||nodeGroup[node]<0)continue;
+            int row=8*component.cell()+Integer.numberOfTrailingZeros(component.supportMask()),group=nodeGroup[node];
+            receiverGroup[row]=group;var capacity=capacities[row];
+            groupPore[group]=groupPore[group].add(capacity);
+            var floor=minimum==null||minimum[row]==null?SignedDyadic.ZERO:minimum[row];
+            groupRoom[group]=groupRoom[group].add(capacity.subtract(floor));
+            groupDry[group]=groupDry[group].add(component.availableVolumeNormalized());
         }
         var available=totalCapacity.subtract(working.exactVolume());
         if(available.signum()<=0)throw new CapacityUnavailable("Nonempty finite gas has no actual remaining pore volume");

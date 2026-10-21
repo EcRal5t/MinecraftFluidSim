@@ -81,7 +81,7 @@ final class GranularLiquidDisplacement {
 		var transport = domain.cellMacStage.prepareLiquid(flux);
 		var momentum=domain.cellMacStage.prepareMomentumTransport(transport);
 		var inventory=transport.inventory().withMechanicalHeat(momentum.heatByCell());
-		var gas = domain.gasTopologyCoordinator.planAfterLiquidCells(inventory.future(), next, transport.gasAllocation());
+		var gas = domain.gasTopologyCoordinator.planAfterLiquidDisplacement(inventory.future(), next, transport.gasAllocation());
 		return new Prepared(transport, inventory, gas, momentum);
 	}
 	private static SignedDyadic solidVolume(long svq) { return SignedDyadic.of(svq, -24); }

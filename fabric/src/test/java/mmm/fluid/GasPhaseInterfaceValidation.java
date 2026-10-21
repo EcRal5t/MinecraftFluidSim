@@ -81,7 +81,7 @@ public final class GasPhaseInterfaceValidation {
 		var flow=new ConservativeLiquidFlux(domain);flow.prepare(.01F,new long[8]);
 		var liquid=flow.prepareInventory(domain.liquidCells);
 		check(!liquid.transfers().isEmpty(),"Restricted phase fixture did not exercise actual liquid transport");
-		var gas=domain.gasTopologyCoordinator.planAfterLiquidCells(liquid.future(),new long[8],flow.gasAllocation());
+		var gas=domain.gasTopologyCoordinator.planAfterLiquidDisplacement(liquid.future(),new long[8],flow.gasAllocation());
 		domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gas);liquid.commit();domain.markCellInventoryChanged();
 		domain.gasTopologyCoordinator.commitPrepared(gas,new long[8]);
 		first=domain.gasState.frame.commonCellNode(0);second=domain.gasState.frame.commonCellNode(1);
