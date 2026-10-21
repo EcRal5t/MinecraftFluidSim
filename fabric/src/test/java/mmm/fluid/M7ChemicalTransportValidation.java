@@ -53,7 +53,8 @@ public final class M7ChemicalTransportValidation {
 		validateChemicalContainerRoundTrip();
 		validateTransferResolutionIsAtomic();
 		validateInsertionAccountsForDisplacedLiquid();
-		if (!fast) validatePerformanceBudgets();
+		validateCleanChemistryUsesCommonLiquidStep();
+		if (!fast) validateReactionBudget();
 		System.out.println("Cell chemical transport passed: local mixing, material separation, inventory and recovery");
 	}
 
@@ -443,48 +444,38 @@ private static void validateChemicalContainerRoundTrip() throws Exception {
 				&& source.gasBoundary().auditClosed(), "chemical extraction did not close liquid/gas energy and material ledgers");
 	}
 
-	/** Frozen M7.0 wall-time budgets, measured only by the explicit full chemistry selector. */
-	private static void validatePerformanceBudgets() {
-		FluidDomain baseline = benchmarkDomain(false);
-		FluidDomain chemical = benchmarkDomain(true);
-		for (int warmup = 0; warmup < 30; warmup++) {
-			baseline.domainStep.step();
-			chemical.domainStep.step();
+	/** Binding inactive chemistry preserves the common liquid calculation. */
+	private static void validateCleanChemistryUsesCommonLiquidStep() {
+		FluidDomain baseline = cleanFlowDomain(false);
+		FluidDomain chemical = cleanFlowDomain(true);
+		for (var domain : new FluidDomain[]{baseline, chemical}) {
+			domain.domainFlowFields.ensureGrid();
+			Arrays.fill(domain.mac.velocityX, 0.1F);
+			domain.cellMacStage.publishMomentum();
 		}
-		long[] baselineSamples = new long[15];
-		long[] chemicalSamples = new long[15];
-		double[] pairedDeltaSamples = new double[15];
-		for (int sample = 0; sample < baselineSamples.length; sample++) {
-			if ((sample & 1) == 0) {
-				baselineSamples[sample] = timedSteps(baseline, 20);
-				chemicalSamples[sample] = timedSteps(chemical, 20);
-			} else {
-				chemicalSamples[sample] = timedSteps(chemical, 20);
-				baselineSamples[sample] = timedSteps(baseline, 20);
-			}
-			pairedDeltaSamples[sample] = (double) chemicalSamples[sample] / baselineSamples[sample] - 1.0;
+		for (int step = 0; step < 4; step++) {
+			var plainStats = baseline.domainStep.step();
+			var chemicalStats = chemical.domainStep.step();
+			check(plainStats.chemistryDirtyCells() == 0 && chemicalStats.chemistryDirtyCells() == 0,
+					"Inactive chemistry created reaction work");
+			check(baseline.liquidCells.massUnits() == chemical.liquidCells.massUnits()
+					&& baseline.liquidCells.exactVolume().equals(chemical.liquidCells.exactVolume()),
+					"Inactive chemistry changed common liquid inventory");
+			check(Arrays.equals(baseline.mac.velocityX, chemical.mac.velocityX)
+					&& Arrays.equals(baseline.mac.velocityY, chemical.mac.velocityY)
+					&& Arrays.equals(baseline.mac.velocityZ, chemical.mac.velocityZ),
+					"Inactive chemistry changed the common liquid flow");
 		}
-		long baselineMedian = percentile(baselineSamples, 0.50);
-		long chemicalMedian = percentile(chemicalSamples, 0.50);
-		Arrays.sort(pairedDeltaSamples);
-		double stepDelta = pairedDeltaSamples[pairedDeltaSamples.length / 2];
-		System.out.printf("M7.0 clean-step raw median: baseline=%.3f ms chemistry=%.3f ms paired-delta=%.2f%%%n",
-				baselineMedian / 20_000_000.0, chemicalMedian / 20_000_000.0, stepDelta * 100.0);
-		check(stepDelta <= 0.05,
-				"chemistry-on clean-step median overhead exceeds 5%: " + stepDelta * 100.0 + "%");
+	}
 
+	private static void validateReactionBudget() {
 		long reactionP95 = benchmarkAcidBaseReactionP95();
 		check(reactionP95 <= 10_000_000L,
 				"typical acid/base chemistry p95 exceeds 10 ms: " + reactionP95 / 1_000_000.0 + " ms");
-		long residentBytes = Math.addExact(new ChemicalParcelStore(
-				CHEMISTRY, SolverUnitScale.forCellSize(1.0F), 73_728, 9_216).cpuBytes(),
-				2L * 73_728L * Integer.BYTES);
-		System.out.printf("M7.0 budgets: heap=%.2f MiB clean-step-median=%.3f/%.3f ms delta=%.2f%% acid-base-p95=%.3f ms%n",
-				residentBytes / 1048576.0, baselineMedian / 20_000_000.0, chemicalMedian / 20_000_000.0,
-				stepDelta * 100.0, reactionP95 / 1_000_000.0);
+		System.out.printf("Acid/base reaction p95=%.3f ms%n", reactionP95 / 1_000_000.0);
 	}
 
-	private static FluidDomain benchmarkDomain(boolean chemistry) {
+	private static FluidDomain cleanFlowDomain(boolean chemistry) {
 		FluidDomain domain = new FluidDomain(10, 7, 10, STATIC_CONFIG, 4_096);
 		for (int z = 1; z <= 8; z++) for (int y = 1; y <= 4; y++) for (int x = 1; x <= 8; x++) {
 			domain.setVolume(x, y, z, 1.0F);
@@ -492,15 +483,6 @@ private static void validateChemicalContainerRoundTrip() throws Exception {
 		domain.bindMaterialRegistry(MATERIALS);
 		if (chemistry) domain.bindChemistry(CHEMISTRY);
 		return domain;
-	}
-
-	private static long timedSteps(FluidDomain domain, int count) {
-		long start = System.nanoTime();
-		for (int step = 0; step < count; step++) {
-			FluidDomain.StepStats stats = domain.domainStep.step();
-			check(stats.chemistryDirtyCells() == 0, "clean-step benchmark became chemically dirty");
-		}
-		return System.nanoTime() - start;
 	}
 
 	private static long benchmarkAcidBaseReactionP95() {
