@@ -4,11 +4,7 @@ import mmm.inventory.PhaseOccupancyState;
 
 import mmm.inventory.LiquidCellInventory;
 
-import mmm.fluid.air.GasInventory;
-
 import java.util.ArrayList;
-
-import java.util.List;
 
 import java.util.HashMap;
 
@@ -38,12 +34,8 @@ final class PhaseOccupancyTransport {
 		domain.phaseOccupancy=state;domain.phaseOccupancyDirty=false;
 	}
 
-	static GasVolumeAllocation prepareEdit(FluidDomain domain, LiquidCellInventory future, long[] occupied, byte[] masks, List<GasInventory> effectiveInventories) {
-		return prepareEdit(domain, future, occupied, masks, effectiveInventories, null);
-	}
-
 	/** Reconstructs external edits and their gas source shares before publication. */
-	static GasVolumeAllocation prepareEdit(FluidDomain domain, LiquidCellInventory future, long[] occupied, byte[] masks, List<GasInventory> effectiveInventories, PhaseOccupancyState prescribed) {
+	static GasVolumeAllocation prepareEdit(FluidDomain domain, LiquidCellInventory future, long[] occupied, byte[] masks) {
 		ensure(domain);
 		double[] pore = poreVolumes(domain, occupied, masks);
 		var cut = domain.geometry.cutCells;

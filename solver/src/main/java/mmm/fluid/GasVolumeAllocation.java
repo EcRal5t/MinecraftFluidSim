@@ -1,6 +1,5 @@
 package mmm.fluid;
 
-import mmm.fluid.air.GasInventory;
 import mmm.inventory.LiquidCellInventory;
 import mmm.inventory.PhaseOccupancyState;
 import java.util.List;
@@ -51,8 +50,7 @@ final class GasVolumeAllocation {
                 ||domain.phaseOccupancy!=sourceOccupancy||!domain.liquidCells.hasSameGeometry(sourceInventory)||!future.hasSameGeometry(futureInventory))
             throw new IllegalStateException("Gas phase source or future inventory changed");
     }
-    static GasVolumeAllocation prepare(FluidDomain domain,LiquidCellInventory future,long[] occupied,byte[] masks){return prepare(domain,future,occupied,masks,null);}
-    static GasVolumeAllocation prepare(FluidDomain domain,LiquidCellInventory future,long[] occupied,byte[] masks,List<GasInventory> effectiveInventories){
-        return PhaseOccupancyTransport.prepareEdit(domain,future,occupied,masks,effectiveInventories);
+    static GasVolumeAllocation prepare(FluidDomain domain,LiquidCellInventory future,long[] occupied,byte[] masks){
+        return PhaseOccupancyTransport.prepareEdit(domain,future,occupied,masks);
     }
 }

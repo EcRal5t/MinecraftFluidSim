@@ -253,7 +253,7 @@ final class GasTopologyCoordinator {
 	}
 	private GasTopologyPlan planCells(LiquidCellInventory future,long[] occupied,byte[] masks,
 	                                VolumeWork volumeWork,PhaseBatch phase,GasVolumeAllocation allocation) {
-		if(allocation==null)allocation=GasVolumeAllocation.prepare(domain,future,occupied,masks,phase==null?null:phase.inventories());
+		if(allocation==null)allocation=GasVolumeAllocation.prepare(domain,future,occupied,masks);
 		allocation.requireCurrent(domain,future);
 		var next=GasRuntimeGeometry.captureCellFuture(domain,future,occupied,domain.gasState.sealedDomainBoundary,masks,allocation.futureOccupancy(),allocation.preparedPhase(),allocation.preparedGeometry(),allocation.preparedCapacity());
 		if(domain.gasState.frame==null)return new GasTopologyPlan(next,null,null,null,domain.gasState.network,domain.gasState.network.revision(),new SignedDyadic[0],new TreeMap<>(),-1);
@@ -293,6 +293,33 @@ final class GasTopologyCoordinator {
 		return planCells(future,retained.copySolidSvq(),null,VolumeWork.ADIABATIC,null,null);
 	}
 
+	private GasTopologyBlockedException missingGasSuccessor(int node,GasInventory inventory,PhaseBatch edit,
+	                                                      GasRuntimeGeometry future,GasVolumeAllocation allocation) {
+		var old=domain.gasState.frame;var supports=new StringBuilder();int count=0;
+		for(var component:old.capacity().components()) {
+			if(component.availableVolumeNormalized().signum()==0
+					||old.topology().nodeOfComponent(component.cell(),component.supportMask())!=node)continue;
+			if(++count>8)continue;
+			if(!supports.isEmpty())supports.append(", ");
+			supports.append("{cell=").append(component.cell()).append(" support=").append(component.supportMask())
+					.append(" oldDry=").append(component.availableVolumeNormalized()).append(" future=[");
+			boolean first=true;
+			for(var candidate:future.capacity().components())if(candidate.cell()==component.cell()
+					&&(candidate.supportMask()&component.supportMask())!=0) {
+				if(!first)supports.append(", ");first=false;
+				supports.append(candidate.supportMask()).append(':').append(candidate.availableVolumeNormalized())
+						.append("/node=").append(future.topology().nodeOfComponent(candidate.cell(),candidate.supportMask()));
+			}
+			supports.append("]}");
+		}
+		var shares=new ArrayList<GasVolumeAllocation.Share>();
+		for(var share:allocation.shares())if(share.sourceNode()==node&&shares.size()<8)shares.add(share);
+		return new GasTopologyBlockedException("Allocated finite gas has no successor: node="+node
+				+" operation="+(edit==null?"carrier edit":"phase batch")
+				+" oldVolumeM3="+domain.gasState.network.availableVolume(node)+" inventory="+inventory
+				+" supports="+count+" normalizedDry=["+supports+"] sourceShares="+shares);
+	}
+
 	/** Each allocated gas volume has one origin; inventory, energy and old control volume share it. */
 	private GasTopologyPlan plan(GasRuntimeGeometry next,VolumeWork volumeWork,PhaseBatch edit,GasVolumeAllocation allocation) {
 		var old=domain.gasState.frame;
@@ -318,7 +345,7 @@ final class GasTopologyCoordinator {
 			for(int previous=1;previous<=old.nodeCount();previous++) {
 				var destinations=origins.get(previous);var stock=inventory(previous,edit);
 				if(destinations==null||destinations.isEmpty()) {
-					if(!stock.isEmpty())throw new GasTopologyBlockedException("Allocated finite gas has no successor: node="+previous);
+					if(!stock.isEmpty())throw missingGasSuccessor(previous,stock,edit,next,allocation);
 					continue;
 				}
 				boolean split=destinations.size()>1;

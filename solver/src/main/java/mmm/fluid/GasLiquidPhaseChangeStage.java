@@ -136,6 +136,9 @@ final class GasLiquidPhaseChangeStage {
 					if(saturation.direction()==GasLiquidPhaseModel.Direction.EQUILIBRIUM) continue;
 					if(saturation.direction()==GasLiquidPhaseModel.Direction.BOIL&&stock.massUnits()<batchMass) continue;
 					if(saturation.direction()==GasLiquidPhaseModel.Direction.CONDENSE) {
+						// Condensed liquid occupies this support's dry capacity and removes
+						// vapor from that same chamber. Adjacent gas alone is an evaporation contact.
+						if(domain.gasState.frame.topology().nodeOfComponent(id,stock.key().supportMask())!=node) continue;
 						var vapor=inventory.component(gasMaterial.carrierId());
 						if(vapor==null||vapor.massUnits()<batchMass) continue;
 					}
