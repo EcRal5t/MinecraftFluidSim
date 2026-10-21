@@ -307,7 +307,7 @@ public final class LiquidCellInventory {
 	private Plan planEnergyUpdate(double[] energies, List<Stock> stocks) {
 		if (energies.length != stocks.size()) throw new IllegalArgumentException("Liquid energy ordinals differ from cell inventory");
 		ArrayList<List<Stock>> futureRows=null;ArrayList<Stock> row=null;var changed=new ArrayList<Integer>();
-		int currentCell=-1;var energyChange=SignedDyadic.ZERO;
+		int currentCell=-1,energyCount=0;double[] beforeEnergy=null,afterEnergy=null;
 		for (int i = 0; i < energies.length; i++) {
 			Stock stock = stocks.get(i);
 			if(Double.doubleToLongBits(stock.internalEnergy())==Double.doubleToLongBits(energies[i]))continue;
@@ -318,10 +318,12 @@ public final class LiquidCellInventory {
 				currentCell=cell;row=new ArrayList<>(rows.get(cell));changed.add(cell);
 			}
 			row.set(findOrdinal(row,stock.key()),new Stock(stock.key(),stock.volume(),stock.massUnits(),stock.mixture(),energies[i],stock.indicator()));
-			energyChange=energyChange.add(SignedDyadic.of(energies[i]).subtract(SignedDyadic.of(stock.internalEnergy())));
+			if(beforeEnergy==null){beforeEnergy=new double[energies.length];afterEnergy=new double[energies.length];}
+			beforeEnergy[energyCount]=stock.internalEnergy();afterEnergy[energyCount++]=energies[i];
 		}
 		if(row!=null)futureRows.set(currentCell,List.copyOf(row));
 		var successor=new LiquidCellInventory(this,futureRows==null?rows:java.util.Collections.unmodifiableList(futureRows),revision+1,null);
+		var energyChange=energyCount==0?SignedDyadic.ZERO:SignedDyadic.sum(afterEnergy,energyCount).subtract(SignedDyadic.sum(beforeEnergy,energyCount));
 		return new Plan(this,successor,changed,List.of(),energyChange,SignedDyadic.ZERO,SignedDyadic.ZERO);
 	}
 	private static List<Stock> flatten(List<List<Stock>> rows) {

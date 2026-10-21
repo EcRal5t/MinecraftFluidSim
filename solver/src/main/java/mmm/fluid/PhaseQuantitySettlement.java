@@ -505,7 +505,12 @@ final class PhaseQuantitySettlement {
             }
             if(vertex<firstGroup||vertex>pool)return;
             int aggregate=vertex-firstGroup;if(expandedAggregate[aggregate])return;expandedAggregate[aggregate]=true;
-            for(int r=firstReceiver[aggregate];r>=0;r=nextReceiver[r])receiver(r);
+            for(int r=firstReceiver[aggregate];r>=0;r=nextReceiver[r]){
+                if(receiverVertex[r]!=0)continue;
+                // Only positive reverse capacity leads out of this aggregate.
+                // Physical donor routes instantiate every other receiver on demand.
+                if(committing?exactBase(r).compareTo(exactMinimum(r))>0:base(r)>minimum(r))receiver(r);
+            }
         }
         private void ensureRouteCapacity(){
             if(routeEdge.length>=raw.size)return;

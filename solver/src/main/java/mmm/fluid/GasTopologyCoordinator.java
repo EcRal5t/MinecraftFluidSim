@@ -160,12 +160,12 @@ final class GasTopologyCoordinator {
 		var heat=new TreeMap<LiquidCellInventory.Key,SignedDyadic>();gas.granularWork().clear();
 		for(var entry:exchanges.entrySet()){
 			var exchange=entry.getValue();if(exchange.signum()==0)continue;
-			var targets=liquids.get(entry.getKey());var remaining=exchange;
+			var targets=liquids.get(entry.getKey());var remaining=exchange;double numericalExchange=exchange.toDouble();
 			if(targets!=null&&!targets.isEmpty()){
 				double mass=0;LiquidCellInventory.Stock largest=null;
 				for(var stock:targets){mass+=stock.massUnits();if(largest==null||stock.massUnits()>largest.massUnits())largest=stock;}
 				for(var stock:targets)if(stock!=largest){
-					var part=SignedDyadic.of(exchange.toDouble()*(stock.massUnits()/mass));
+					var part=SignedDyadic.of(numericalExchange*(stock.massUnits()/mass));
 					heat.merge(stock.key(),part,SignedDyadic::add);remaining=remaining.subtract(part);
 				}
 				heat.merge(largest.key(),remaining,SignedDyadic::add);continue;
@@ -176,7 +176,7 @@ final class GasTopologyCoordinator {
 			for(int p:active){var parcel=domain.granularState.parcels.parcel(p);mass+=parcel.massUnits();
 				if(largest<0||parcel.massUnits()>domain.granularState.parcels.parcel(largest).massUnits())largest=p;}
 			for(int p:active)if(p!=largest){
-				var part=SignedDyadic.of(exchange.toDouble()*(domain.granularState.parcels.parcel(p).massUnits()/mass));
+				var part=SignedDyadic.of(numericalExchange*(domain.granularState.parcels.parcel(p).massUnits()/mass));
 				gas.granularWork().merge(p,part,SignedDyadic::add);remaining=remaining.subtract(part);
 			}
 			gas.granularWork().merge(largest,remaining,SignedDyadic::add);

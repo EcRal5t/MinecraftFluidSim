@@ -221,13 +221,15 @@ final class ConservativeLiquidFlux {
 				int first = 8 * left[f] + micro, second = 8 * right[f] + (micro ^ (1 << a));
 				boolean positive = qt > 0;
 				int from = positive ? first : second, target = positive ? second : first;
-				double sourcePore=microPoreVolume(from);
-				double width = sourcePore > 0 ? Math.clamp(portion / sourcePore, 0, 1) : 0;
-				double low = positive ? 1 - width : 0, high = positive ? 1 : width;
 				double wet = phase.liquidFractionExact(from / 8, from & 7);
-				double ql = wet <= 0 ? 0 : wet >= 1 ? portion
-						: intersection(phase, from, a == 0 ? low : 0, a == 1 ? low : 0, a == 2 ? low : 0,
-								a == 0 ? high : 1, a == 1 ? high : 1, a == 2 ? high : 1, sourcePore);
+				double ql=wet<=0?0:portion;
+				if(wet>0&&wet<1){
+					double sourcePore=microPoreVolume(from);
+					double width=sourcePore>0?Math.clamp(portion/sourcePore,0,1):0;
+					double low=positive?1-width:0,high=positive?1:width;
+					ql=intersection(phase,from,a==0?low:0,a==1?low:0,a==2?low:0,
+							a==0?high:1,a==1?high:1,a==2?high:1,sourcePore);
+				}
 				ql = Math.clamp(ql, 0, portion);
 				addMacro(f, from, target, ql, portion);
 			}
@@ -249,20 +251,22 @@ final class ConservativeLiquidFlux {
 		nextGasTags.reset(8*cellCount);
 		double[] outgoing=new double[8*cellCount],accepted=new double[8*cellCount];
 		for(int row=0;row<macroFlows.rowCount();row++){
-			int face=row/2;if(!advectsGas(face))continue;
+			int face=row/2;if(macroFlows.first(row)<0||!advectsGas(face))continue;
 			int from=row%2==0?left[face]:right[face];
 			for(int e=macroFlows.first(row);e>=0;e=macroFlows.next(e)){
 				long key=macroFlows.key(e);
 				int source=8*from+Integer.numberOfTrailingZeros((int)(key>>>8));
+				if(gasTags.first(source)<0)continue;
 				outgoing[source]+=gasFlux(row,e);
 			}
 		}
 		for(int row=0;row<macroFlows.rowCount();row++){
-			int face=row/2;if(!advectsGas(face))continue;
+			int face=row/2;if(macroFlows.first(row)<0||!advectsGas(face))continue;
 			int from=row%2==0?left[face]:right[face],to=row%2==0?right[face]:left[face];
 			for(int e=macroFlows.first(row);e>=0;e=macroFlows.next(e)){
 				long key=macroFlows.key(e);
 				int source=8*from+Integer.numberOfTrailingZeros((int)(key>>>8));
+				if(gasTags.first(source)<0)continue;
 				int target=8*to+Integer.numberOfTrailingZeros((int)key&255);
 				double gas=gasTags.rowSum(source);
 				// A quasi-static cavity keeps its gas on every surviving source support.
