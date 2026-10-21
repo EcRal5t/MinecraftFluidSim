@@ -1421,7 +1421,7 @@ public final class GranularCarrierValidation {
 	private static void relaxDrag(FluidDomain domain, float dt) {
 		// Assemble the common face partition, then isolate the finite-mass drag response at zero pressure.
 		domain.domainFlowFields.ensureGrid(); domain.pressureSystem.faces.rebuild(dt);
-		var pressure = new GranularPressureCoupling(domain); pressure.prepare(dt);
+		var pressure = new GranularPressureCoupling(domain); pressure.prepare(dt,0);
 		var drag = new GranularImplicitDrag(domain); drag.prepare(dt); drag.project();
 	}
 
@@ -1526,7 +1526,7 @@ public final class GranularCarrierValidation {
 		for(int cell=0;cell<domain.cellCount;cell++)p[cell]=domain.projection.pressure[cell];
 		graph.pressureVelocity(p,a);
 		for(int face=0;face<graph.faceCount;face++)impulse[graph.axis[face]]+=dt*graph.faceMass(face)*a[face];
-		var coupling = new GranularPressureCoupling(domain); coupling.prepare((float)dt); coupling.project((float)dt);
+		var coupling = new GranularPressureCoupling(domain); coupling.prepare((float)dt,0); coupling.project((float)dt);
 		var parcel = domain.granularState.parcels.parcel(0);
 		impulse[0] += parcel.mass() * parcel.velocityX(); impulse[1] += parcel.mass() * parcel.velocityY();
 		impulse[2] += parcel.mass() * parcel.velocityZ();
@@ -1547,7 +1547,7 @@ public final class GranularCarrierValidation {
 					-domain.pressureSystem.faces.referencePressure(cell,255));
 		}
 		var coupling = new GranularPressureCoupling(domain);
-		coupling.prepare(0.05F);
+		coupling.prepare(0.05F,0);
 		coupling.project(0.05F);
 		var p = domain.granularState.parcels.parcel(0);
 		double expected = 0.05 * 9.81 * 1_000 * p.solidVolumeSvq() / SolidVolume.SVQ_PER_CUBIC_METER / p.mass();

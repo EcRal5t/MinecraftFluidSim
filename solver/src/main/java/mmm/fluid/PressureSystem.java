@@ -15,6 +15,7 @@ final class PressureSystem {
 	private final double[] velocityWork;
 	private double[] pressure = new double[0];
 	private float duration;
+	private double pressureDatum;
 	private double[] gasStorageRhs = new double[0];
 
 	PressureSystem(FluidDomain domain) {
@@ -40,10 +41,11 @@ final class PressureSystem {
 	}
 	PressureProjectionResult solveProjection(float dt) {
 		duration = dt; domain.domainFlowFields.ensureGrid(); solidFaces.rebuild(); faces.rebuild(dt);
+		pressureDatum=faces.commonPressureDatum();faces.shiftPressureDatum(pressureDatum);
 		var p = domain.projection;
 		prepareGasStorage();
 		Arrays.fill(p.pressure, 0); Arrays.fill(p.gasPressure, 0);
-		granular.prepare(dt);
+		granular.prepare(dt,pressureDatum);
 		// Fixed interface loads and the paired parcel reaction join the same prediction.
 		for (int f = 0; f < faces.faceCount; f++) {
 			int a = faces.axis[f], local = faces.localFace[f];
@@ -57,7 +59,7 @@ final class PressureSystem {
 		pressure = solver.pressure();
 		for (int i = 0; i < p.gasUnknownCount; i++) {
 			int node = p.gasUnknownNodes[i];
-			pressure[domain.cellCount + node] = domain.pressureBoundaryView.gasPressureOfNode(node);
+			pressure[domain.cellCount + node] = domain.pressureBoundaryView.gasPressureOfNode(node)-pressureDatum;
 		}
 		faces.seedLiquidPressures(pressure);
 		// Resolve pressure to the same cell-volume scale as the phase geometry.
@@ -68,7 +70,7 @@ final class PressureSystem {
 				/(dt*(double)dt*Math.sqrt(Math.max(1,p.fluidUnknownCount+p.gasUnknownCount))));
 		// One semi-implicit pressure prediction. Bounded inventory transport owns
 		// the actual pore endpoint; final EOS and compression work use that volume.
-		var result = solver.solve(target);
+		var result = solver.solve(target,pressureDatum);
 		pressure = solver.pressure();
 		return result;
 	}
@@ -91,7 +93,7 @@ final class PressureSystem {
 				// V(P) = V_old - C_secant * (P - P_old). Both endpoints
 				// of the load interval lie on the positive-volume EOS curve.
 				gasStorageRhs[node] = domain.projection.gasStorageCoefficient[node]
-						* domain.pressureBoundaryView.gasPressureOfNode(node);
+						* (domain.pressureBoundaryView.gasPressureOfNode(node)-pressureDatum);
 			} else gasStorageRhs[node] = -factor * domain.gasState.network.availableVolume(node);
 		}
 	}
@@ -139,7 +141,6 @@ final class PressureSystem {
 			int node = p.gasUnknownNodes[i]; result[domain.cellCount + node] += gasStorageRhs[node];
 		}
 	}
-	double gasPressure(int node) { return pressure.length > domain.cellCount + node ? pressure[domain.cellCount + node] : domain.pressureBoundaryView.gasPressureOfNode(node); }
 	/** Conservative absolute-pressure upper bound for a bulk phase scan, without rebuilding wet faces. */
 	double liquidPressureUpperBoundPa() {
 		domain.domainFlowFields.ensureInventoryGrid();

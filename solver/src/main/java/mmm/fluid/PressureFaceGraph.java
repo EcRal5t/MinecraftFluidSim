@@ -172,6 +172,26 @@ final class PressureFaceGraph {
 		for (int i = 0; i < entries; i++) if (rows[i] < domain.cellCount && anchored[rows[i]]) rows[i] = -1;
 		domain.pressureAnchor = -1; domain.pressureReference = 0;
 	}
+	/** Closed pressure systems solve increments about the dominant finite cavity's pressure. */
+	double commonPressureDatum() {
+		if(!domain.gasState.frame.sealedExterior())return 0;
+		// An independently anchored liquid component retains its ambient pressure convention.
+		for(boolean value:anchored)if(value)return 0;
+		int largest=0;double volume=0;
+		for(int node:domain.gasState.network.nodeIds())if(!domain.gasState.network.inventory(node).isEmpty()){
+			double available=domain.gasState.network.availableVolume(node);
+			if(available>volume){largest=node;volume=available;}
+		}
+		return largest==0?0:domain.pressureBoundaryView.gasPressureOfNode(largest);
+	}
+	/** p = datum + dp on every variable row; fixed pressures keep their physical values. */
+	void shiftPressureDatum(double datum) {
+		if(datum==0)return;
+		for(int face=0;face<faceCount;face++){
+			double sum=0;for(int e=start[face];e<start[face+1];e++)if(rows[e]>=0)sum+=coefficients[e];
+			affine[face]+=datum*sum;
+		}
+	}
 	/** One face may contact several isolated gas pieces; weights follow its actual open microfaces. */
 	void forEachSide(int cell, int neighbor, SideConsumer consumer,java.util.function.DoubleConsumer referenceConsumer) {
 		int d = cell % domain.sizeX != neighbor % domain.sizeX ? 0

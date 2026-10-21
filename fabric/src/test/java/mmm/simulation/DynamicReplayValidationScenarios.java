@@ -304,15 +304,10 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		long generation = 0L;
 		double initialCenterY = centerOfMassY(restored);
 		long initialMass = restored.totalMassUnits(), initialGas = restored.gasBoundary().sealedInventoryNanos();
-		double liquidMassKg = mmm.units.Mass.kilograms(initialMass);
-		double gap = restored.config().cellSize() * mmm.fluid.FluidSolverConfig.UNRESOLVED_VERTICAL_GAP_FRACTION;
-		double kineticAllowance = 0.025 + liquidMassKg * restored.config().gravity() * gap;
-		double initialPressure = mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA + restored.gasNodeGaugePressurePa(1);
-		double surfaceArea = restored.sizeX() * (double) restored.sizeZ()
-				* restored.config().cellSize() * restored.config().cellSize();
-		// One unresolved vertical displacement bounds both gravitational storage and pressure work.
-		// The allowance is fixed from the initial loading and does not grow with elapsed time.
-		double energyAllowance = kineticAllowance + initialPressure * surfaceArea * gap;
+		// This flat, homogeneous, unforced state is an exact discrete equilibrium.
+		// A uniform cavity preload supplies no work at constant total gas volume.
+		double energyAllowance = 0.025;
+		var initialInventoryEnergy=restored.exactInternalEnergy();
 		var initialThermalWork = state.thermalOwner().audit().mechanicalWork();
 		double initialPotential = Double.NaN, buoyancyWork = 0.0, maximumEnergyError = 0.0;
 		double maximumCenterShift = 0.0;
@@ -346,17 +341,18 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			buoyancyWork += audit.thermalBuoyancyWorkJoules();
 			double thermalWork = candidate.state().thermalOwner().audit().mechanicalWork().subtract(initialThermalWork).toDouble();
 			double energyError = kinetic + audit.finalGravitationalPotentialEnergyJoules() - initialPotential
-					+ thermalWork - buoyancyWork - verticalPotentialUncertainty(restored);
+					+ thermalWork - buoyancyWork;
 			maximumEnergyError = Math.max(maximumEnergyError, energyError);
 			maximumCenterShift = Math.max(maximumCenterShift, Math.abs(centerOfMassY(restored) - initialCenterY));
-			require(Double.isFinite(energyError) && energyError <= energyAllowance,
-					"compressed planar exceeded its fixed gravity/pressure resolution energy: "
+			require(Double.isFinite(energyError) && Math.abs(energyError) <= energyAllowance
+					&&Math.abs(restored.exactInternalEnergy().subtract(initialInventoryEnergy).toDouble())<=energyAllowance,
+					"compressed planar changed equilibrium energy: "
 							+ energyError + " J, allowance=" + energyAllowance + " J at step " + step);
 			require(restored.totalMassUnits() == initialMass && restored.gasBoundary().sealedInventoryNanos() == initialGas
 					&& Math.abs(available - 32.0) <= 1.0E-12,
 					"compressed planar changed exact stock or total gas capacity at step " + step);
 			maximumKinetic = Math.max(maximumKinetic, kinetic);
-			if (step >= 500) tailMaximumKinetic = Math.max(tailMaximumKinetic, kinetic);
+			if (step >= totalSteps/2) tailMaximumKinetic = Math.max(tailMaximumKinetic, kinetic);
 			double bodyPressure = audit.gravityWorkJoules() + audit.thermalBuoyancyWorkJoules()
 					+ audit.surfaceTensionWorkJoules() + audit.fixedBoundaryWorkJoules()
 					+ audit.pressureProjectionWorkJoules();
@@ -381,11 +377,11 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		}
 		double finalKinetic = kineticEnergy(restored);
 		double centerYDelta = centerOfMassY(restored) - initialCenterY;
-		require(maximumKinetic <= kineticAllowance,
-				"compressed planar exceeded the gravity-wave speed scale of one unresolved vertical displacement: max="
-						+ maximumKinetic + " J, allowance=" + kineticAllowance + " J");
-		require(maximumCenterShift <= gap,
-				"compressed planar center of mass moved beyond the vertical resolution: " + maximumCenterShift + " m");
+		require(maximumKinetic <= .025 && tailMaximumKinetic <= .015 && finalKinetic <= .015,
+				"compressed planar self-excited: max/tail/final="+maximumKinetic+"/"+tailMaximumKinetic+"/"+finalKinetic+" J");
+		require(maximumCenterShift <= .001,
+				"compressed planar center of mass drifted: " + maximumCenterShift + " m");
+		require(maximumBodyPressureResidual<=.05,"Equilibrium body/pressure work did not balance: "+maximumBodyPressureResidual+" J");
 		require(phaseOperations == 0L && boiledCells == 0L && condensedCells == 0L,
 				"compressed mechanical-equilibrium fixture unexpectedly executed gas phase changes");
 		System.out.printf("  compressed planar backend gate: kinetic max/tail/final="

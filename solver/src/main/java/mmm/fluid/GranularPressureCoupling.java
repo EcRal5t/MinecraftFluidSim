@@ -12,7 +12,7 @@ final class GranularPressureCoupling {
 
     GranularPressureCoupling(FluidDomain domain) { this.domain = domain; }
 
-    void prepare(float dt) {
+    void prepare(float dt,double pressureDatum) {
         contacts = entries = 0;
         if (domain.granularState == null) return;
         int parcels = domain.granularState.parcels.count();
@@ -48,6 +48,10 @@ final class GranularPressureCoupling {
             }
         }
         start[contacts] = entries;
+        if(pressureDatum!=0)for(int c=0;c<contacts;c++){
+            double sum=0;for(int e=start[c];e<start[c+1];e++)sum+=coefficient[e];
+            affine[c]+=pressureDatum*sum;
+        }
         for (int p = 0; p < parcels; p++) {
             var parcel = domain.granularState.parcels.parcel(p);
             write(p, parcel, parcel.velocityX() + dt * inverseMass[3 * p] * affine[3 * p],
