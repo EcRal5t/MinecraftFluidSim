@@ -313,12 +313,13 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		long initialMass = restored.totalMassUnits(), initialGas = restored.gasBoundary().sealedInventoryNanos();
 		// This flat, homogeneous, unforced state is an exact discrete equilibrium.
 		// A uniform cavity preload supplies no work at constant total gas volume.
-		double energyAllowance = perturbed ? .1 : .025;
+		double energyAllowance = .025;
 		double initialKinetic=kineticEnergy(restored);
 		var initialInventoryEnergy=restored.exactInternalEnergy();
 		var initialThermalWork = state.thermalOwner().audit().mechanicalWork();
 		double initialPotential = Double.NaN, buoyancyWork = 0.0, maximumEnergyError = 0.0;
 		double maximumCenterShift = 0.0;
+		double maximumPotentialUncertainty=0,maximumRawEnergyError=0;
 		double maximumKinetic = 0.0, tailMaximumKinetic = 0.0;
 		double maximumBodyPressureResidual = 0.0, maximumPressureResidual = 0.0;
 		long phaseOperations = 0L, boiledCells = 0L, condensedCells = 0L;
@@ -348,8 +349,15 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			if (Double.isNaN(initialPotential)) initialPotential = audit.initialGravitationalPotentialEnergyJoules();
 			buoyancyWork += audit.thermalBuoyancyWorkJoules();
 			double thermalWork = candidate.state().thermalOwner().audit().mechanicalWork().subtract(initialThermalWork).toDouble();
-			double energyError = kinetic-initialKinetic + audit.finalGravitationalPotentialEnergyJoules() - initialPotential
+			double rawEnergyError = kinetic-initialKinetic + audit.finalGravitationalPotentialEnergyJoules() - initialPotential
 					+ thermalWork - buoyancyWork;
+			// The audit locates liquid mass at cell centres. A moving partial cell
+			// has a bounded centroid error; actual inventory U and kinetic decay
+			// remain independently constrained without this observation allowance.
+			double potentialUncertainty=perturbed?verticalPotentialUncertainty(restored):0;
+			double energyError=Math.max(0,Math.abs(rawEnergyError)-potentialUncertainty);
+			maximumPotentialUncertainty=Math.max(maximumPotentialUncertainty,potentialUncertainty);
+			maximumRawEnergyError=Math.max(maximumRawEnergyError,Math.abs(rawEnergyError));
 			maximumEnergyError = Math.max(maximumEnergyError, Math.abs(energyError));
 			maximumCenterShift = Math.max(maximumCenterShift, Math.abs(centerOfMassY(restored) - initialCenterY));
 			require(Double.isFinite(energyError) && Math.abs(energyError) <= energyAllowance
@@ -398,6 +406,8 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 				+ "max PCG residual=%.9g, max unresolved energy=%.9g J / %.9g J allowance%n",
 				maximumKinetic, tailMaximumKinetic, finalKinetic,
 				centerYDelta, maximumBodyPressureResidual, maximumPressureResidual, maximumEnergyError, energyAllowance);
+		if(perturbed)System.out.printf("  perturbed potential observation: max raw energy error=%.9g J, max cell-centre uncertainty=%.9g J%n",
+				maximumRawEnergyError,maximumPotentialUncertainty);
 	}
 
 	/** Stable observation follows the largest cavity; canonical node numbers may change when pockets split. */
