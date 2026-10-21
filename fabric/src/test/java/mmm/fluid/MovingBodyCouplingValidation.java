@@ -20,16 +20,19 @@ public final class MovingBodyCouplingValidation {
 		for(int step=0;step<32;step++) {
 			d.domainFlowFields.ensureVelocityGrid();
 			double kinetic=kinetic(d);var beforeU=d.exactInternalEnergy();var beforeRoundoff=d.thermalAudit().roundoffResidual();
+			double storageAllowance=energyStorageAllowance(d);
 			double[] beforeP=momentum(d),beforeWall=wall(d);
 			double[] velocity=step<8?new double[]{.6,-.2,.3}:step<16?new double[3]
 					:step<24?new double[]{-.4,.1,-.2}:new double[3];
 			var result=d.applyMovingBodyCoupling(new MovingBodyFluidCoupling.Request(.85F,.75F,.75F,
 					velocity[0],velocity[1],velocity[2],.1));
-			double heat=d.exactInternalEnergy().subtract(beforeU)
-					.subtract(d.thermalAudit().roundoffResidual().subtract(beforeRoundoff)).toDouble();
+			double heat=d.exactInternalEnergy().subtract(beforeU).toDouble();
+			storageAllowance+=energyStorageAllowance(d);
+			require(Math.abs(d.thermalAudit().roundoffResidual().subtract(beforeRoundoff).toDouble())<=storageAllowance,
+					"Body heat was hidden in a roundoff term larger than actual energy storage precision");
 			double afterK=kinetic(d),scale=Math.max(1,kinetic+afterK+Math.abs(result.externalWorkJoules()));
 			// Velocity publication uses float. Keep a fixed representability allowance per operation.
-			double tolerance=16*Math.ulp((float)scale);
+			double tolerance=16*Math.ulp((float)scale)+storageAllowance;
 			require(result.coupledMarkers()>0&&heat>=-tolerance
 					&&Math.abs(afterK-kinetic+heat-result.externalWorkJoules())<=tolerance,
 					"Body/wall work did not become actual kinetic energy and heat: step="+step
@@ -59,6 +62,9 @@ public final class MovingBodyCouplingValidation {
 		return new double[]{java.util.Arrays.stream(d.mac.momentumX).sum(),java.util.Arrays.stream(d.mac.momentumY).sum(),java.util.Arrays.stream(d.mac.momentumZ).sum()};
 	}
 	private static double[] wall(FluidDomain d){return new double[]{d.lastLiquidBoundaryImpulseX,d.lastLiquidBoundaryImpulseY,d.lastLiquidBoundaryImpulseZ};}
+	private static double energyStorageAllowance(FluidDomain d){
+		double allowance=0;for(var stock:d.liquidCells.physicalStocks())allowance+=2*Math.ulp(stock.internalEnergy());return allowance;
+	}
 	private static double kinetic(FluidDomain d){
 		double value=0;double[][] p={d.mac.momentumX,d.mac.momentumY,d.mac.momentumZ};
 		double[][] mass={d.cellMacStage.massX,d.cellMacStage.massY,d.cellMacStage.massZ};

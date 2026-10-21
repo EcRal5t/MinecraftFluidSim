@@ -270,7 +270,12 @@ final class GasTopologyCoordinator {
 		double[] opened=new double[next.nodeCount()];
 		for(var component:next.capacity().components()){
 			if(component.availableVolumeNormalized().signum()==0)continue;
-			int cell=component.cell(),node=next.topology().nodeOfComponent(cell,component.supportMask());
+			int cell=component.cell();
+			// Ordinary liquid motion keeps fixed pores unchanged; source transport already
+			// carries its whole old control volume, so no opening calculation is needed.
+			if(old.geometry().collisionMask(cell)==next.geometry().collisionMask(cell)
+					&&old.phase().poreVolume(cell).equals(next.phase().poreVolume(cell)))continue;
+			int node=next.topology().nodeOfComponent(cell,component.supportMask());
 			if(node<=0)continue;
 			double oldPore=0;
 			for(int i=previous.offsets[cell];i<previous.offsets[cell+1];i++){
