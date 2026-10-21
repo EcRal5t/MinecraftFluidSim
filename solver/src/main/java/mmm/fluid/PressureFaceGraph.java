@@ -457,28 +457,44 @@ final class PressureFaceGraph {
 	}
 	double pressurePortArea(int face,int port){return wetPortArea[4*face+port];}
 	double fluidArea(int face){return domain.pressureSystem.solidFaces.open(axis[face],localFace[face]);}
-	/** Seed each connected liquid pressure group with its area-averaged interface pressure. */
+	/** Seed each connected full-liquid volume with its contacting finite cavities' mean pressure. */
 	void seedLiquidPressures(double[] pressure){
 		Arrays.fill(seedPressureSum,0);Arrays.fill(seedPressureWeight,0);
 		for(int face=0;face<faceCount;face++){
-			double sum=0,scale=0,liquidWeight=0,interfaceWeight=0,gasPressure=0;
+			double total=0,value=0;
+			for(int i=start[face];i<start[face+1];i++)if(rows[i]>=domain.cellCount){
+				double weight=Math.abs(coefficients[i])*domain.projection.gasStorageCoefficient[rows[i]-domain.cellCount];
+				total+=weight;value+=weight*pressure[rows[i]];
+			}
+			if(total==0)continue;
+			for(int i=start[face];i<start[face+1];i++)if(rows[i]>=0&&rows[i]<domain.cellCount){
+				int group=root(rows[i]);double weight=Math.abs(coefficients[i])*total;
+				seedPressureSum[group]+=weight*(value/total);seedPressureWeight[group]+=weight;
+			}
+		}
+		for(int i=0;i<domain.projection.fluidUnknownCount;i++){
+			int cell=domain.projection.fluidUnknownCells[i],group=root(cell);
+			if(seedPressureWeight[group]>0)pressure[cell]=seedPressureSum[group]/seedPressureWeight[group];
+		}
+		if(!domain.surfaceTensionActive)return;
+		Arrays.fill(seedPressureSum,0);Arrays.fill(seedPressureWeight,0);
+		for(int face=0;face<faceCount;face++){
+			double sum=0,scale=0,liquidWeight=0,interfaceWeight=0;
 			for(int i=start[face];i<start[face+1];i++){
 				double coefficient=coefficients[i],weight=Math.abs(coefficient);
 				sum+=coefficient;scale=Math.max(scale,weight);
-				if(rows[i]>=domain.cellCount){interfaceWeight+=weight;gasPressure+=weight*pressure[rows[i]];}
+				if(rows[i]>=domain.cellCount)interfaceWeight+=weight;
 				else if(rows[i]>=0)liquidWeight+=weight;
 			}
-			// A nonzero coefficient sum is contact with fixed ambient pressure.
-			// Vacuum rows carry their known pressure with the same area weight as
-			// finite cavities; thermodynamic compliance does not measure contact.
+			// Fixed ambient contact has no variable gas row. Its missing coefficient
+			// still contributes the same interface area to the Laplace reference.
 			if(Math.abs(sum)>16*Math.ulp(scale))interfaceWeight+=Math.abs(sum);
 			if(!(interfaceWeight>0&&liquidWeight>0))continue;
-			gasPressure/=interfaceWeight;
 			for(int i=start[face];i<start[face+1];i++)if(rows[i]>=0&&rows[i]<domain.cellCount){
 				int cell=rows[i],neighbor=cell==firstCell[face]?secondCell[face]:firstCell[face];
 				int surface=neighbor>=0&&domain.liquidGrid.cellStockVolume[neighbor]>0?neighbor:cell;
 				int group=root(cell);double weight=Math.abs(coefficients[i])*interfaceWeight/liquidWeight;
-				seedPressureSum[group]+=weight*(gasPressure+domain.tension.surfaceTensionPressure[surface]);
+				seedPressureSum[group]+=weight*domain.tension.surfaceTensionPressure[surface];
 				seedPressureWeight[group]+=weight;
 			}
 		}
@@ -488,7 +504,7 @@ final class PressureFaceGraph {
 		// variable-curvature loads remain in the residual pressure solve.
 		for(int i=0;i<domain.projection.fluidUnknownCount;i++){
 			int cell=domain.projection.fluidUnknownCells[i],group=root(cell);
-			if(seedPressureWeight[group]>0)pressure[cell]=seedPressureSum[group]/seedPressureWeight[group]
+			if(seedPressureWeight[group]>0)pressure[cell]+=seedPressureSum[group]/seedPressureWeight[group]
 					-domain.tension.surfaceTensionPressure[cell];
 		}
 	}

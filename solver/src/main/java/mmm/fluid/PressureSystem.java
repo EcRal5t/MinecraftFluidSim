@@ -56,8 +56,10 @@ final class PressureSystem {
 		if(referencePressure.length<rows)referencePressure=new double[rows];
 		else Arrays.fill(referencePressure,0);
 		for(int i=0;i<p.gasUnknownCount;i++){
-			int node=p.gasUnknownNodes[i];
-			referencePressure[domain.cellCount+node]=domain.pressureBoundaryView.gasPressureOfNode(node)-pressureDatum;
+			int node=p.gasUnknownNodes[i];double existing=domain.pressureBoundaryView.gasPressureOfNode(node);
+			referencePressure[domain.cellCount+node]=existing-pressureDatum;
+			// Rows without an independent pressure mode still publish their physical EOS state.
+			p.gasPressure[node]=(float)existing;
 		}
 		faces.seedLiquidPressures(referencePressure);
 		granular.prepare(dt,pressureDatum);

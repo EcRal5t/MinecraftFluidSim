@@ -63,10 +63,14 @@ public final class M5GasLiquidCouplingValidation {
 		domain.domainStep.step();
 		float jump = domain.domainCollision.surfaceTensionPressureAt(1, 1, 1);
 		double capillaryScale=Math.max(Math.abs(jump),registry.material(0).surfaceTension()/config.cellSize());
-		float solvedGasPressure = domain.projection.gasPressure[gasNode];
-		check(domain.projection.gasPressureUnknown[gasNode]
-				&& Math.abs(domain.pressure(1, 1, 1) - solvedGasPressure - jump) <= .01*capillaryScale,
-				"finite gas compliance and capillary jump did not share one balanced interface face");
+		double gasPressure=domain.gasBoundary().nodeGaugePressurePa(gasNode);
+		double compliance=domain.pressureBoundaryView.gasNodeVolumeCompliance(gasNode,gasPressure);
+		check(Double.isFinite(compliance)&&compliance>0
+				&& Math.abs(domain.projection.gasPressure[gasNode]-gasPressure)<=.01*capillaryScale
+				&& Math.abs(domain.pressure(1,1,1)-gasPressure-jump)<=.01*capillaryScale,
+				"finite gas EOS/compliance and liquid capillary jump did not retain static pressure balance: fill="+amount
+						+" Pg="+gasPressure+" published="+domain.projection.gasPressure[gasNode]
+						+" Pl="+domain.pressure(1,1,1)+" jump="+jump+" compliance="+compliance);
 		FluidPhysicalAssertions.staticMotion(domain,capillaryScale,FluidPhysicalAssertions.SETTLED_ENERGY_FRACTION,"Static gas/capillary contact");
 		check(domain.gasBoundary().sealedInventory().equals(gasInventory)
 				&& domain.gasBoundary().auditClosed(),

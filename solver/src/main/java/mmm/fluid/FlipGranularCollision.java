@@ -54,7 +54,7 @@ final class FlipGranularCollision {
 		lastMaximumPositionCorrection = lastPositionCorrectionMassY = 0;
 		if (previewCount > 1) {
 			boolean[] supported = new boolean[previewCount];
-			var contacts = new GranularActiveContacts(parcels, registry, sphereCollision, sizeX, sizeY, sizeZ, cellSize, dt);
+			var contacts = new GranularActiveContacts(parcels, registry, sphereCollision, cellSize, dt);
 			contacts.preview(nextX, nextY, nextZ, nextVelocityX, nextVelocityY, nextVelocityZ, supported);
 			lastMaximumPositionCorrection = contacts.maximumPositionCorrection();
 			lastPositionCorrectionMassY = contacts.positionCorrectionMassY();

@@ -7,7 +7,6 @@ import mmm.granular.GranularRegistry;
 import mmm.granular.ParticulateMaterial;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.BitSet;
 import java.util.HashSet;
 
 /** Predictive sphere contacts with bounded geometric passes and a common finite-mass impulse solve. */
@@ -15,15 +14,14 @@ final class GranularActiveContacts {
 	private record Constraint(GranularContactCompression.Row row, double minimum, double tolerance) { }
 	private final GranularParcelStore parcels;
 	private final GranularSphereCollision fixed;
-	private final int[] sizes;
-	private final double duration, h, indexSize;
+	private final double h;
 	private final double[][] initial, predicted, velocity;
 	private final double[] mass;
 	private final float[] radius;
 	private final ParticulateMaterial[] materials;
-	private final BitSet[] cells;
-	private final int[][] registrations;
-	private final BitSet candidates = new BitSet();
+	private final double[][] lower, upper;
+	private final int[] sweepOrder;
+	private final ArrayList<ArrayList<Constraint>> fixedByParcel;
 	private final ArrayList<Constraint> constraints = new ArrayList<>();
 	private final HashSet<Long> pairs = new HashSet<>();
 	private final HashSet<Long> discovered = new HashSet<>();
@@ -32,16 +30,15 @@ final class GranularActiveContacts {
 	private double maximumPositionCorrection, positionCorrectionMassY;
 
 	GranularActiveContacts(GranularParcelStore parcels, GranularRegistry registry, GranularSphereCollision fixed,
-	                      int sizeX, int sizeY, int sizeZ, float h, float duration) {
-		this.parcels = parcels; this.fixed = fixed; this.duration = duration; this.h = h;
-		int divisions = FlipCutCellGeometry.MICRO_CELLS_PER_AXIS;
+	                      float h, float duration) {
+		this.parcels = parcels; this.fixed = fixed; this.h = h;
 		int count = parcels.count();
-		sizes = new int[]{sizeX * divisions, sizeY * divisions, sizeZ * divisions}; indexSize = h / (double) divisions;
-		cells = new BitSet[Math.multiplyExact(Math.multiplyExact(sizes[0], sizes[1]), sizes[2])];
-		registrations = new int[count][];
-		initial = new double[count][3]; predicted = new double[count][3]; velocity = new double[count][3];
+		lower = new double[3][count]; upper = new double[3][count]; sweepOrder = new int[count];
+		fixedByParcel = new ArrayList<>(count);
+		initial = new double[count][]; predicted = new double[count][]; velocity = new double[count][];
 		mass = new double[count]; radius = new float[count]; materials = new ParticulateMaterial[count];
 		for (int i = 0; i < count; i++) {
+			fixedByParcel.add(null);
 			var p = parcels.parcel(i);
 			initial[i] = new double[]{p.x(), p.y(), p.z()}; mass[i] = p.mass();
 			radius[i] = GranularMechanics.representativeRadius(p.solidVolumeSvq(), h);
@@ -58,19 +55,13 @@ final class GranularActiveContacts {
 	}
 
 	void preview(float[] x, float[] y, float[] z, float[] vx, float[] vy, float[] vz, boolean[] supported) {
-		double[][] source = Arrays.stream(predicted).map(double[]::clone).toArray(double[][]::new);
+		double[][] source = predicted;
 		double[][] points = Arrays.stream(source).map(double[]::clone).toArray(double[][]::new);
 		// New constraints are discovered geometrically, with no collision event queue or repeated zero-time events.
 		for (int pass = 0; pass < 8; pass++) {
 			int before = constraints.size();
-			index(points);
-			for (int i = 0; i < parcels.count(); i++) {
-				candidates.clear();
-				for (int cell : registrations[i]) candidates.or(cells[cell]);
-				for (int j = candidates.nextSetBit(0); j >= 0 && j < i; j = candidates.nextSetBit(j + 1)) {
-					addPair(j, i, points);
-				}
-			}
+			operationStage = "swept broad phase";
+			findContacts(points);
 			if (before == constraints.size() && pass > 0 && positionsResolved(points)) break;
 			operationStage = "position projection";
 			// Local mass-weighted PBD shares the contact rows with the velocity response.
@@ -215,16 +206,18 @@ final class GranularActiveContacts {
 		return changed;
 	}
 	private boolean addFixedPlane(int i, double[] normal, double minimum) {
-		boolean duplicate = false;
 		double tolerance=GranularSpawnAdmission.positionTolerance(radius[i],radius[i]);
-		for (var old : constraints) if (old.row().first() == i && old.row().second() < 0
-				&& Arrays.equals(old.row().normal(), normal) && Math.abs(old.minimum() - minimum) <= tolerance) {
-			duplicate = true; break;
+		var fixedContacts = fixedByParcel.get(i);
+		if (fixedContacts == null) {
+			fixedContacts = new ArrayList<>();
+			fixedByParcel.set(i, fixedContacts);
 		}
-		if (!duplicate) {
-			constraints.add(new Constraint(new GranularContactCompression.Row(i, -1, normal), minimum,tolerance));
-		}
-		return !duplicate;
+		for (var old : fixedContacts) if (Arrays.equals(old.row().normal(), normal)
+				&& Math.abs(old.minimum() - minimum) <= tolerance) return false;
+		var constraint = new Constraint(new GranularContactCompression.Row(i, -1, normal), minimum, tolerance);
+		fixedContacts.add(constraint);
+		constraints.add(constraint);
+		return true;
 	}
 
 	private void addPair(int i, int j, double[][] points) {
@@ -233,22 +226,24 @@ final class GranularActiveContacts {
 		// Repeated PBD scans of the same spatial pair are bounded arithmetic work.
 		// Only discovering another spatial relation spends the geometric work budget.
 		if (discovered.add(key)) spend();
-		double[] r = new double[3], d = new double[3];
-		for (int a = 0; a < 3; a++) {
-			r[a] = initial[j][a] - initial[i][a];
-			d[a] = (points[j][a] - initial[j][a]) - (points[i][a] - initial[i][a]);
-		}
+		double rx = initial[j][0] - initial[i][0], ry = initial[j][1] - initial[i][1], rz = initial[j][2] - initial[i][2];
+		double dx = (points[j][0] - initial[j][0]) - (points[i][0] - initial[i][0]);
+		double dy = (points[j][1] - initial[j][1]) - (points[i][1] - initial[i][1]);
+		double dz = (points[j][2] - initial[j][2]) - (points[i][2] - initial[i][2]);
 		double sum = radius[i] + (double) radius[j], tolerance = GranularSpawnAdmission.positionTolerance(radius[i], radius[j]);
-		double c = dot(r, r) - sum * sum, time;
-		if (Math.sqrt(dot(r, r)) <= sum + tolerance) time = 0;
+		double r2 = Math.fma(rx, rx, Math.fma(ry, ry, rz * rz));
+		double c = r2 - sum * sum, time;
+		if (Math.sqrt(r2) <= sum + tolerance) time = 0;
 		else {
-			double a = dot(d, d), b = dot(r, d), disc = Math.fma(-a, c, b * b);
+			double a = Math.fma(dx, dx, Math.fma(dy, dy, dz * dz));
+			double b = Math.fma(rx, dx, Math.fma(ry, dy, rz * dz)), disc = Math.fma(-a, c, b * b);
 			if (!(a > 0) || b >= 0 || disc < 0) return;
 			time = c / (-b + Math.sqrt(disc));
 			if (!(time >= 0 && time <= 1)) return;
 		}
 		double[] normal = new double[3]; double length = 0;
-		for (int a = 0; a < 3; a++) { normal[a] = Math.fma(time, d[a], r[a]); length = Math.hypot(length, normal[a]); }
+		normal[0] = Math.fma(time, dx, rx); normal[1] = Math.fma(time, dy, ry); normal[2] = Math.fma(time, dz, rz);
+		for (double value : normal) length = Math.hypot(length, value);
 		if (length > 0) for (int a = 0; a < 3; a++) normal[a] /= length;
 		else normal[(i + j) % 3] = 1;
 		// Restitution is a velocity impulse. Position contact resolves the representative radii once.
@@ -256,26 +251,59 @@ final class GranularActiveContacts {
 		pairs.add(key);
 	}
 
-	private void index(double[][] points) {
-		Arrays.fill(cells, null);
-		for (int i = 0; i < points.length; i++) {
-			int[] lo = new int[3], hi = new int[3];
-			for (int a = 0; a < 3; a++) {
+	/** Tight swept boxes keep the candidate scale tied to representative size and actual motion. */
+	private void findContacts(double[][] points) {
+		int axis = 0;
+		double widest = -1;
+		for (int a = 0; a < 3; a++) {
+			double minimum = Double.POSITIVE_INFINITY, maximum = Double.NEGATIVE_INFINITY;
+			for (int i = 0; i < points.length; i++) {
 				double reach = radius[i] + GranularSpawnAdmission.positionTolerance(radius[i], radius[i]);
-				lo[a] = coordinate(Math.min(initial[i][a], points[i][a]) - reach, a);
-				hi[a] = coordinate(Math.max(initial[i][a], points[i][a]) + reach, a);
+				lower[a][i] = Math.min(initial[i][a], points[i][a]) - reach;
+				upper[a][i] = Math.max(initial[i][a], points[i][a]) + reach;
+				minimum = Math.min(minimum, lower[a][i]);
+				maximum = Math.max(maximum, lower[a][i]);
 			}
-			int[] occupied = new int[(hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1)];
-			int n = 0;
-			for (int z = lo[2]; z <= hi[2]; z++) for (int y = lo[1]; y <= hi[1]; y++) for (int x = lo[0]; x <= hi[0]; x++) {
-				int cell = (z * sizes[1] + y) * sizes[0] + x; occupied[n++] = cell;
-				if (cells[cell] == null) cells[cell] = new BitSet(points.length);
-				cells[cell].set(i);
+			if (maximum - minimum > widest) {
+				widest = maximum - minimum;
+				axis = a;
 			}
-			registrations[i] = occupied;
+		}
+		for (int i = 0; i < sweepOrder.length; i++) sweepOrder[i] = i;
+		sortSweep(0, sweepOrder.length - 1, axis);
+		int b = (axis + 1) % 3, c = (axis + 2) % 3;
+		for (int visit = 0; visit < sweepOrder.length; visit++) {
+			int i = sweepOrder[visit];
+			for (int next = visit + 1; next < sweepOrder.length; next++) {
+				int j = sweepOrder[next];
+				if (lower[axis][j] > upper[axis][i]) break;
+				if (lower[b][j] > upper[b][i] || upper[b][j] < lower[b][i]
+						|| lower[c][j] > upper[c][i] || upper[c][j] < lower[c][i]) continue;
+				addPair(Math.min(i, j), Math.max(i, j), points);
+			}
 		}
 	}
-	private int coordinate(double p, int axis) { return Math.max(0, Math.min(sizes[axis] - 1, (int) Math.floor(p / indexSize))); }
+
+	private void sortSweep(int first, int last, int axis) {
+		if (first >= last) return;
+		int left = first, right = last, pivot = sweepOrder[(first + last) >>> 1];
+		while (left <= right) {
+			while (compareSweep(sweepOrder[left], pivot, axis) < 0) left++;
+			while (compareSweep(sweepOrder[right], pivot, axis) > 0) right--;
+			if (left <= right) {
+				int value = sweepOrder[left];
+				sweepOrder[left++] = sweepOrder[right];
+				sweepOrder[right--] = value;
+			}
+		}
+		if (first < right) sortSweep(first, right, axis);
+		if (left < last) sortSweep(left, last, axis);
+	}
+
+	private int compareSweep(int first, int second, int axis) {
+		int comparison = Double.compare(lower[axis][first], lower[axis][second]);
+		return comparison == 0 ? Integer.compare(first, second) : comparison;
+	}
 	private static double dot(double[] a, double[] b) { return Math.fma(a[0], b[0], Math.fma(a[1], b[1], a[2] * b[2])); }
 	private void spend() {
 		if (++operations > GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP)

@@ -319,7 +319,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 					*volume/SolidVolume.SVQ_PER_CUBIC_METER);
 			require(domain.tryInsertExactGranular(2,2,2,sand,0,volume,mass).inserted(),
 					"Liquid/solid slip fixture could not insert its grain");
-			domain.domainFlowFields.ensureGrid();
+			// Assemble the flooded inventory before initializing its gas topology.
+			domain.domainFlowFields.ensureInventoryGrid();
 			int water=liquids.handle(BuiltinFluidMaterials.WATER.id());
 			for(int z=0;z<5;z++)for(int y=0;y<5;y++)for(int x=0;x<5;x++){
 				float pore=domain.domainCollision.effectiveOpenCellVolume(domain.domainFlowFields.cellIndex(x,y,z));
