@@ -563,8 +563,11 @@ public final class LiquidCellInventory {
 		long[] masses=shares.allocate(source.massUnits());
 		long[][] species=new long[source.mixture()==null?0:source.mixture().entryCount()][];
 		for(int entry=0;entry<species.length;entry++)species[entry]=shares.allocate(source.mixture().amountAt(entry));
-		int energyRemainder=remainder;
-		if(masses[energyRemainder]==0)for(int part=0;part<masses.length;part++)if(masses[part]>masses[energyRemainder])energyRemainder=part;
+		// All shares retain the source material and sensible energy per mass.
+		// Its largest actual mass has the largest heat capacity and absorbs U rounding;
+		// microscopic retained stocks receive their own caloric share directly.
+		int energyRemainder=0;
+		for(int part=1;part<masses.length;part++)if(masses[part]>masses[energyRemainder])energyRemainder=part;
 		var energies=energyShares(source,masses,species,energyRemainder,caloric);
 		return new SourcePartition(retained,masses,species,energies,partial?count:-1);
 	}

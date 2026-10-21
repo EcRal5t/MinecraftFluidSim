@@ -54,7 +54,13 @@ public final class ThermalStateFunction {
 		var weightSum=new ThermalCaloricInversion.Sum();int largest=0;
 		for(int i=0;i<count;i++){
 			var owner=recipients.get(i);
-			var state=ThermalCaloricInversion.owner(owner.material(),owner.massKg(),owner.internalEnergy(),owner.baseEnergy());
+			State state;
+			try{state=ThermalCaloricInversion.owner(owner.material(),owner.massKg(),owner.internalEnergy(),owner.baseEnergy());}
+			catch(IllegalArgumentException failure){
+				failure.addSuppressed(new IllegalStateException("Mechanical caloric recipient="+i+", material="+owner.material().id()
+						+", massKg="+owner.massKg()+", U="+owner.internalEnergy()+", referenceJ="+owner.baseEnergy()
+						+", sensibleJ="+(owner.internalEnergy()-owner.baseEnergy())));throw failure;
+			}
 			if(cooling){
 				double cold=ThermalCaloricInversion.energyAt(owner.material(),owner.massKg(),owner.baseEnergy(),ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
 				// An owner already at the caloric inverter's cold rounding limit releases no further heat.
