@@ -121,11 +121,12 @@ final class HeightFunctionCurvature {
         x += axis == 0 ? offset : 0; y += axis == 1 ? offset : 0; z += axis == 2 ? offset : 0;
         boolean reflected = !d.domainFlowFields.inside(x, y, z);
         if (reflected) {
-            if (d.tension.surfaceTensionContactAngleAtCell(target) != Math.PI / 2) return Double.NaN;
             x = reflect(x, d.sizeX); y = reflect(y, d.sizeY); z = reflect(z, d.sizeZ);
         }
         int c = d.domainFlowFields.cellIndex(x, y, z);
         if (d.geometry.solid[c] || d.geometry.cutCells.mask(c) != 0 || d.domainCollision.effectiveOpenCellVolume(c) != 1) return Double.NaN;
+        // Dry exterior samples extend zero independently of the liquid's angle;
+        // a reflected wet interface needs the orthogonal wall condition.
         if (reflected && color[c] > 0 && d.tension.surfaceTensionContactAngleAtCell(c) != Math.PI / 2) return Double.NaN;
         return color[c];
     }

@@ -17,6 +17,7 @@ final class GranularPressureCoupling {
     /** Capture true float velocity and position before the gravity prediction. */
     void beginMechanicalStep(){
         int count=domain.granularState==null?0:domain.granularState.parcels.count();
+        domain.mechanicalEnergy.beginGranularForceStep(count);
         if(initialMechanicalEnergy.length<count)initialMechanicalEnergy=new double[count];
         for(int p=0;p<count;p++){
             var parcel=domain.granularState.parcels.parcel(p);
@@ -36,25 +37,7 @@ final class GranularPressureCoupling {
             var parcel=domain.granularState.parcels.parcel(p);
             double finalY=domain.granularMechanicalStage.plannedPositionY(p);
             double exchange=initialMechanicalEnergy[p]-mechanicalEnergy(parcel,finalY);
-            if(exchange==0||domain.thermalState==null)continue;
-            var solid=domain.pressureSystem.solidFaces;var faces=domain.pressureSystem.faces;
-            double total=0;int remainderAxis=-1,remainderFace=-1;double largest=0;
-            for(int axis=0;axis<3;axis++)for(int slot=0;slot<solid.parcelFaceCount(p,axis);slot++){
-                int face=solid.parcelFace(p,axis,slot);
-                if(!(faces.faceMass(face)>0))continue;
-                double share=solid.solidArea(face)*solid.parcelPressureShare(p,axis,slot);
-                total+=share;if(share>largest){largest=share;remainderAxis=axis;remainderFace=face;}
-            }
-            if(!(total>0)){domain.thermalState.addGranularMechanicalHeat(p,exchange);continue;}
-            double remaining=exchange;
-            for(int axis=0;axis<3;axis++)for(int slot=0;slot<solid.parcelFaceCount(p,axis);slot++){
-                int face=solid.parcelFace(p,axis,slot);
-                if(!(faces.faceMass(face)>0)||(axis==remainderAxis&&face==remainderFace))continue;
-                double share=solid.solidArea(face)*solid.parcelPressureShare(p,axis,slot);
-                double part=exchange*(share/total);remaining-=part;
-                if(part!=0)domain.cellMacStage.addMechanicalHeatAtFace(axis,faces.localFace[face],part);
-            }
-            domain.cellMacStage.addMechanicalHeatAtFace(remainderAxis,faces.localFace[remainderFace],remaining);
+            domain.mechanicalEnergy.recordGranularExchange(p,exchange);
         }
         mechanicalStepPrepared=false;
     }

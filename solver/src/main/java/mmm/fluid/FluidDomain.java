@@ -59,6 +59,7 @@ public final class FluidDomain {
 	final CellLiquidGrid liquidGrid;
 	final MacVelocityGrid mac;
 	final CellMacStage cellMacStage;
+	final MechanicalEnergySettlement mechanicalEnergy;
 	final PressureProjectionWorkspace projection;
 	final SurfaceTensionFields tension;
 	final CondensedInventoryClearPlanner clearPlanner;
@@ -155,6 +156,7 @@ public final class FluidDomain {
 		this.volume = new float[cellCount];
 		this.mac = new MacVelocityGrid(sizeX, sizeY, sizeZ);
 		this.cellMacStage = new CellMacStage(domain);
+		this.mechanicalEnergy = new MechanicalEnergySettlement(domain);
 		this.projection = new PressureProjectionWorkspace(cellCount);
 		this.tension = new SurfaceTensionFields(this);
 		this.pendingPhaseVolume = new PendingPhaseVolumeWork(cellCount);

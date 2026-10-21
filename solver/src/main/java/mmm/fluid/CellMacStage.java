@@ -64,7 +64,7 @@ final class CellMacStage {
 		unresolvedWall=new boolean[][]{new boolean[massX.length],new boolean[massY.length],new boolean[massZ.length]};
 	}
 
-	/** Local mechanical energy exchange remains with its source liquid until joint transport. */
+	/** Local viscous, porous and contact dissipation travels with its source liquid. */
 	void beginMechanicalHeat() { if(hasMechanicalHeat)Arrays.fill(sourceMechanicalHeat,0);hasMechanicalHeat=false; }
 	void addMechanicalHeatAtCell(int cell, double joules) {
 		if (joules == 0) return;
@@ -87,7 +87,7 @@ final class CellMacStage {
 	}
 	java.util.Map<Integer,SignedDyadic> finishMechanicalHeat(
 			LiquidCellInventory.TransportQuantities quantities, java.util.Map<Integer,SignedDyadic> mixingHeat) {
-		if(!hasMechanicalHeat&&quantities.transfers().isEmpty())return mixingHeat;
+		if(!hasMechanicalHeat)return mixingHeat;
 		Arrays.fill(transportedMechanicalHeat,0);Arrays.fill(outgoingHeatMass,0);
 		System.arraycopy(sourceMechanicalHeat,0,remainingMechanicalHeat,0,sourceMechanicalHeat.length);
 		for(var transfer:quantities.transfers()) {
@@ -97,8 +97,6 @@ final class CellMacStage {
 			transportedMechanicalHeat[to]+=heat;remainingMechanicalHeat[from]-=heat;
 			outgoingHeatMass[from]=Math.addExact(outgoingHeatMass[from],mass);
 			lastHeatTarget[from]=to;
-			int yFrom=from/domain.sizeX%domain.sizeY,yTo=to/domain.sizeX%domain.sizeY;
-			transportedMechanicalHeat[to]-=Mass.kilograms(mass)*domain.config.gravity()*domain.config.cellSize()*(yTo-yFrom);
 		}
 		for(int cell=0;cell<sourceMechanicalHeat.length;cell++)if(sourceMechanicalHeat[cell]!=0) {
 			int target=outgoingHeatMass[cell]==quantities.beforeMass()[cell]?lastHeatTarget[cell]:cell;
@@ -296,20 +294,21 @@ final class CellMacStage {
 	}
 	/** U-only edits retain the current inventory mass, PLIC, gas frame and face inertia. */
 	private void commitMomentumAndHeat(ExternalMomentum prepared) {
-		var plan=prepared.heatByCell().isEmpty()?null:domain.liquidCells.planEdits(java.util.List.of())
-				.withMechanicalHeat(prepared.heatByCell());
-		var audit=plan==null||domain.thermalState==null?null:domain.thermalState.auditLedger()
-				.withMechanicalWork(plan.mechanicalHeat()).withRoundoff(plan.energyRoundoff());
-		if(audit!=null)audit.expectedInventory();
-		if(plan!=null)plan.commit();
-		commitMomentum(prepared);
-		if(plan!=null){
-			inventoryRevision=domain.liquidCells.revision();
-			domain.carrierPropertiesWorkspace.invalidate();
-		}
-		if(audit!=null)domain.thermalState.restoreAuditLedger(audit);
-		derivePreparedVelocity();
-	}
+        var inventory=domain.liquidCells.planEdits(java.util.List.of());
+        if(!prepared.heatByCell().isEmpty())inventory=inventory.withMechanicalHeat(prepared.heatByCell());
+        var energy=domain.mechanicalEnergy.prepare(inventory,null);inventory=energy.inventory();
+        var audit=domain.thermalState==null?null:domain.thermalState.auditLedger()
+                .withMechanicalWork(inventory.mechanicalHeat()).withRoundoff(inventory.energyRoundoff());
+        audit=energy.auditAfter(audit);
+        if(audit!=null)audit.expectedInventory();
+        energy.requireCurrent();
+        boolean changed=!inventory.changedCells().isEmpty();
+        if(changed)inventory.commit();
+        commitMomentum(prepared);energy.commitGranular();domain.mechanicalEnergy.clear();
+        if(changed){inventoryRevision=domain.liquidCells.revision();domain.carrierPropertiesWorkspace.invalidate();}
+        if(audit!=null)domain.thermalState.restoreAuditLedger(audit);
+        derivePreparedVelocity();
+    }
 
 	record WallImpulse(double x,double y,double z) { }
 	void commitMomentum(CellMomentumTransport.Prepared prepared){domain.mac.restoreMomentum(prepared.momentum());recordWallImpulse(prepared.wallImpulse());}
@@ -429,16 +428,16 @@ final class CellMacStage {
 		var momentum = prepareMomentumTransport(liquid);
 		var inventory = liquid.preparedMomentum()==null?liquid.inventory().withMechanicalHeat(momentum.heatByCell()):liquid.inventory();
 		var gas = domain.gasTopologyCoordinator.planAfterLiquidCells(inventory.future(), liquid.occupied, liquid.gasAllocation());
-		inventory=domain.gasTopologyCoordinator.balanceMechanicalWork(inventory,gas);
+		var energy=domain.mechanicalEnergy.prepare(inventory,gas);inventory=energy.inventory();
 		var auditAfter = domain.thermalState == null ? null : domain.thermalState.auditLedger()
 				.withMechanicalWork(inventory.mechanicalHeat()).withRoundoff(inventory.energyRoundoff());
 		if(auditAfter!=null&&gas!=null&&gas.thermalPlan()!=null){
 			var thermal=gas.thermalPlan();auditAfter=auditAfter.withExternalSourceEnergy(thermal.sourceEnergy())
 					.withExternalSinkEnergy(thermal.sinkEnergy()).withMechanicalWork(thermal.mechanicalWork()).withRoundoff(thermal.roundoff());
 		}
-		auditAfter=domain.gasTopologyCoordinator.mechanicalWorkAudit(auditAfter,gas);
+		auditAfter=energy.auditAfter(auditAfter);
 		if(auditAfter!=null)auditAfter.expectedInventory();
-		inventory.requireCurrent();
+		energy.requireCurrent();
 		if (gas != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gas);
 		domain.granularMechanicalStage.commitCollision();
 		inventory.commit();
@@ -446,7 +445,7 @@ final class CellMacStage {
 		commitMomentum(momentum);
 		domain.markCellInventoryChanged();
 		if (gas != null) domain.gasTopologyCoordinator.commitPrepared(gas,liquid.occupied);
-		domain.gasTopologyCoordinator.commitMechanicalWork(gas);
+		energy.commitGranular();domain.mechanicalEnergy.clear();
 		if (auditAfter != null) domain.thermalState.restoreAuditLedger(auditAfter);
 		for (int cell : inventory.changedCells()) if (domain.chemicalParcels != null) domain.chemicalParcels.markDirtyCell(cell);
 	}

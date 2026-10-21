@@ -386,7 +386,7 @@ final class LiquidStratificationValidation {
 		}
 	}
 
-	private record Energy(SignedDyadic total,double kinetic,double potential,double arithmeticAllowance,
+	static record Energy(SignedDyadic total,double kinetic,double potential,double arithmeticAllowance,
 	                      double velocitySamplingAllowance,double storageAllowance) {
 		static Energy capture(FluidDomain domain) {
 			check(domain.gasState.network.nodeCount()==0&&domain.totalGranularMass()==0,

@@ -355,6 +355,12 @@ public final class ThermalDomainState {
 		return materialByFluidHandle[fluidHandle];
 	}
 
+	public int thermalMaterialHandleForGranular(int granularHandle) {
+        if(granularHandle<0||granularHandle>=materialByGranularHandle.length)
+            throw new IllegalArgumentException("Unknown granular phase carrier");
+        return materialByGranularHandle[granularHandle];
+    }
+
 	// ---- gas pass-throughs ----
 
 	public boolean hasGasEnergy(int nodeCount) { return gasState.hasGasEnergy(nodeCount); }

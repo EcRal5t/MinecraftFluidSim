@@ -96,6 +96,7 @@ public final class LiquidConvectionExperiment {
 		for (int step = 0; step < 100; step++) {
 			var stepEnergyBefore = domain.exactInternalEnergy();
 			var auditBefore = domain.thermalAudit();
+			var physicalBefore=LiquidStratificationValidation.Energy.capture(domain);
 			var candidate = advance(domain);
 			domain = candidate.claimPreparedCpuDomain();
 			var stats = candidate.stats();
@@ -106,14 +107,29 @@ public final class LiquidConvectionExperiment {
 					|| Math.abs(stats.mechanicalAudit().closureResidualJoules()) > 1e-6)
 				throw new AssertionError("Convection experiment lost volume, material mass, species or energy closure");
 			var audit = domain.thermalAudit();
-			var heat = domain.lastThermalTransportStats().reservoirExchange();
+			var transport=domain.lastThermalTransportStats();
+			var heat = transport.reservoirExchange();
 			var conversionHeat = audit.mechanicalWork().subtract(auditBefore.mechanicalWork());
-			if (!audit.externalSource().subtract(auditBefore.externalSource())
-					.subtract(audit.externalSink().subtract(auditBefore.externalSink())).equals(heat)
+			var wallAudit=auditBefore.withHeatExchange(heat);
+			if (!audit.externalSource().equals(wallAudit.externalSource())
+						|| !audit.externalSink().equals(wallAudit.externalSink())
+						|| !audit.finiteDeviceExchange().equals(auditBefore.finiteDeviceExchange())
+						|| !Arrays.equals(boundary,domain.thermalBoundaryTemperatureK)
 					|| !domain.exactInternalEnergy().subtract(stepEnergyBefore).equals(heat.add(conversionHeat).add(
-							audit.roundoffResidual().subtract(auditBefore.roundoffResidual())))
-					|| conversionHeat.signum() < 0)
+								audit.roundoffResidual().subtract(auditBefore.roundoffResidual()))))
 				throw new AssertionError("Convection wall heat, roundoff and carrier U do not close separately");
+			var physicalAfter=LiquidStratificationValidation.Energy.capture(domain);
+			double mechanicalAllowance=physicalBefore.arithmeticAllowance()+physicalAfter.arithmeticAllowance()
+					+stats.substeps()*(physicalBefore.velocitySamplingAllowance()+physicalAfter.velocitySamplingAllowance());
+			double storageAllowance=(stats.substeps()+transport.substeps())
+					*(physicalBefore.storageAllowance()+physicalAfter.storageAllowance());
+			// The wall supplies the only external energy. Conservative force work can draw U;
+			// measure raw K + PE + U against the actual heat without subtracting that work column.
+			double residual=physicalAfter.total().subtract(physicalBefore.total()).subtract(heat).toDouble();
+			if(Math.abs(residual)>mechanicalAllowance+storageAllowance
+					|| Math.abs(audit.roundoffResidual().subtract(auditBefore.roundoffResidual()).toDouble())>storageAllowance)
+				throw new AssertionError("Convection changed independently measured K + PE + U beyond wall heat and IEEE rounding: residual="
+						+residual+", allowance="+(mechanicalAllowance+storageAllowance)+", step="+step+", N="+n);
 			last = temperatureMode(domain, n);
 			if (step == 19) first = last;
 		}

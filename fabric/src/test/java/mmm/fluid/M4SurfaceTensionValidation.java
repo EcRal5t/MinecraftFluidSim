@@ -135,6 +135,7 @@ FluidPhysicalAssertions.staticMotion(domain,2*sigma/radius,FluidPhysicalAssertio
  * the local liquid pressure and pulls fluid toward the contact line. */
 private static void validateContactAngleCurvatureDirection() {
  double[] curvature = new double[3];
+ double[] contactMomentum = new double[3];
  double[] angles = {Math.PI / 6, Math.PI / 2, 2 * Math.PI / 3};
  for (int a = 0; a < angles.length; a++) {
   FluidDomain domain = new FluidDomain(10, 6, 4,
@@ -155,6 +156,10 @@ private static void validateContactAngleCurvatureDirection() {
   check(Math.abs(curvature[a] + Math.cos(angles[a])) < 1e-6,
     "planar contact-line curvature has the wrong Young pressure sign: theta="
       + Math.toDegrees(angles[a]) + ", curvature=" + curvature[a]);
+  double freeCurvature=domain.tension.liquidGasMeanCurvature(4,3,2);
+  check(Math.abs(freeCurvature)<1e-6,"contact angle changed a planar interface away from the wall");
+  domain.domainStep.step();
+  contactMomentum[a]=domain.mac.momentumX[domain.domainFlowFields.xFaceIndex(4,1,2)];
   java.util.Arrays.fill(fractions,0);
   for(int z=0;z<domain.sizeZ;z++)for(int x=0;x<domain.sizeX;x++)
    fractions[domain.domainFlowFields.cellIndex(x,1,z)]=.25F;
@@ -166,6 +171,10 @@ private static void validateContactAngleCurvatureDirection() {
  }
  check(curvature[0] < curvature[1] && curvature[1] < curvature[2],
    "wall curvature did not order the contact-line pressure response");
+ System.out.printf("  planar Young contact-line momentum=%g/%g/%g kg*m/s%n",
+   contactMomentum[0],contactMomentum[1],contactMomentum[2]);
+ check(contactMomentum[0]>contactMomentum[1]&&contactMomentum[1]>contactMomentum[2],
+   "Young pressure did not order the actual along-wall liquid impulse");
 }
 
 private static void validateContactAngleSpreading() {
@@ -181,8 +190,19 @@ System.out.printf("  contact-angle spreading varianceX=%g/%g/%g m^2; peakK=%g/%g
 hydrophilic.varianceX(),neutral.varianceX(),hydrophobic.varianceX(),
 hydrophilic.maximumKinetic(),neutral.maximumKinetic(),hydrophobic.maximumKinetic(),
 hydrophilic.rmsSpeed(),neutral.rmsSpeed(),hydrophobic.rmsSpeed());
-check(hydrophilic.varianceX() > neutral.varianceX() && neutral.varianceX() > hydrophobic.varianceX(),
-"contact angle did not order the macroscopic spreading response");
+System.out.printf("  contact-angle wet floor initial/final=%g/%g, %g/%g, %g/%g m^2; first outward wall-layer momentum=%g/%g/%g kg*m/s%n",
+hydrophilic.initialWetArea(),hydrophilic.wetArea(),neutral.initialWetArea(),neutral.wetArea(),
+hydrophobic.initialWetArea(),hydrophobic.wetArea(),
+hydrophilic.firstOutwardMomentum(),neutral.firstOutwardMomentum(),hydrophobic.firstOutwardMomentum());
+System.out.printf("  contact-angle first pressure work=%g/%g/%g J; first Young wall work=%g/%g/%g J%n",
+hydrophilic.firstPressureWork(),neutral.firstPressureWork(),hydrophobic.firstPressureWork(),
+hydrophilic.firstYoungWork(),neutral.firstYoungWork(),hydrophobic.firstYoungWork());
+// The three runs start with the same geometry and gravity prediction. Young's
+// lower contact pressure must increase the actual outward impulse in the first
+// wall layer. Later inviscid splash dispersion is recorded by varianceX above.
+check(hydrophilic.firstOutwardMomentum()>neutral.firstOutwardMomentum()
+&&neutral.firstOutwardMomentum()>hydrophobic.firstOutwardMomentum(),
+"contact angle did not order the initial along-wall spreading impulse");
 }
 
 private static DropletMetrics runDroplet(FluidSolverConfig config, double contactAngleRadians, double sigma, int steps) {
@@ -197,9 +217,14 @@ fractions[domain.domainFlowFields.cellIndex(x,y,z)] = 1;
 domain.setVolumes(fractions);
 var initialVolume = domain.liquidCells.exactVolume(); long initialMass = domain.totalMassUnits();
 domain.domainFlowFields.ensureGrid();
-double potential = 0, freeArea = 0, h = config.cellSize();
-for (var stock : domain.liquidCells.physicalStocks())
+double potential = 0, freeArea = 0, h = config.cellSize(),centerX=0,centerZ=0,totalMass=0;
+for (var stock : domain.liquidCells.physicalStocks()){
 potential += stock.massKilograms()*config.gravity()*(stock.key().cell()/domain.sizeX%domain.sizeY+.5)*h;
+double mass=stock.massKilograms();int cell=stock.key().cell();totalMass+=mass;
+centerX+=mass*(cell%domain.sizeX+.5)*h;centerZ+=mass*(cell/(domain.sizeX*domain.sizeY)+.5)*h;
+}
+centerX/=totalMass;centerZ/=totalMass;
+double initialWetArea=wetFloorArea(domain),wettedFloor=initialWetArea;
 // This initial binary block has exactly exposed coarse faces; its internal
 // liquid faces and the wetted floor are not part of liquid-gas surface energy.
 for(var stock:domain.liquidCells.physicalStocks()){
@@ -213,6 +238,7 @@ freeArea+=domain.pressurePhaseGeometry.liquidFaceArea(cell,axis,side,domain.geom
 }}
 double initialMechanicalAndSurface=potential+sigma*freeArea;
 double peakKinetic = 0, gravityWork = 0, pressureWork = 0, transportWork = 0, fixedWallWork = 0, surfaceWork = 0;
+double firstOutwardMomentum=0,firstPressureWork=0,firstYoungWork=0;
 for (int step = 0; step < steps; step++) {
 var audit = domain.domainStep.stepWithMechanicalAudit(false,0).mechanicalAudit();
 gravityWork += audit.gravityWorkJoules();
@@ -224,13 +250,18 @@ check(domain.liquidCells.exactVolume().equals(initialVolume) && domain.totalMass
 "contact-angle spreading changed exact mass or volume");
 double kinetic = domain.liquidKineticEnergyJoules();
 domain.domainFlowFields.ensureGrid();
-double currentPotential=0,wettedFloor=0;
+double currentPotential=0;wettedFloor=0;
 for(var stock:domain.liquidCells.physicalStocks()){
 int cell=stock.key().cell();
 currentPotential+=stock.massKilograms()*config.gravity()*(cell/domain.sizeX%domain.sizeY+.5)*h;
 }
 for(int z=0;z<domain.sizeZ;z++)for(int x=0;x<domain.sizeX;x++)
 wettedFloor+=domain.pressurePhaseGeometry.liquidFaceArea(domain.domainFlowFields.cellIndex(x,1,z),1,0,domain.geometry.cutCells)*h*h;
+if(step==0){
+firstOutwardMomentum=outwardWallLayerMomentum(domain,centerX,centerZ);
+firstPressureWork=audit.pressureProjectionWorkJoules();
+firstYoungWork=sigma*Math.cos(contactAngleRadians)*(wettedFloor-initialWetArea);
+}
 // Young adhesion can release at most sigma cos(theta) times actual wetted
 // floor area. Retain the same mid-cell potential allowance for partial cells.
 double potentialUncertainty=0;
@@ -258,10 +289,34 @@ weightedX += x*amount; weightedX2 += x*x*amount; volume += amount;
 }
 double meanX = weightedX/volume;
 return new DropletMetrics(weightedX2/volume-meanX*meanX,peakKinetic,
-FluidPhysicalAssertions.motion(domain).rmsSpeed());
+FluidPhysicalAssertions.motion(domain).rmsSpeed(),initialWetArea,wettedFloor,
+firstOutwardMomentum,firstPressureWork,firstYoungWork);
 }
 
-private record DropletMetrics(double varianceX, double maximumKinetic, double rmsSpeed) { }
+private static double wetFloorArea(FluidDomain domain){
+double area=0,h=domain.config.cellSize();
+for(int z=0;z<domain.sizeZ;z++)for(int x=0;x<domain.sizeX;x++)
+area+=domain.pressurePhaseGeometry.liquidFaceArea(domain.domainFlowFields.cellIndex(x,1,z),1,0,domain.geometry.cutCells)*h*h;
+return area;
+}
+
+/** Initial momentum is zero; radial MAC momentum in the first wet layer measures its actual impulse. */
+private static double outwardWallLayerMomentum(FluidDomain domain,double centerX,double centerZ){
+double result=0,h=domain.config.cellSize();
+for(int axis:new int[]{0,2}){
+double[] momentum=axis==0?domain.mac.momentumX:domain.mac.momentumZ;
+int nx=domain.sizeX+(axis==0?1:0),ny=domain.sizeY,nz=domain.sizeZ+(axis==2?1:0);
+for(int z=0;z<nz;z++)for(int x=0;x<nx;x++){
+double dx=(x+(axis==0?0:.5))*h-centerX,dz=(z+(axis==2?0:.5))*h-centerZ;
+double radius=Math.hypot(dx,dz);
+if(radius>0)result+=momentum[(z*ny+1)*nx+x]*(axis==0?dx:dz)/radius;
+}
+}
+return result;
+}
+
+private record DropletMetrics(double varianceX,double maximumKinetic,double rmsSpeed,
+double initialWetArea,double wetArea,double firstOutwardMomentum,double firstPressureWork,double firstYoungWork) { }
 
 	private static void validateLiquidPairPressureJump() {
 		FluidSolverConfig config = new FluidSolverConfig(

@@ -19,7 +19,6 @@ import mmm.units.SignedDyadic;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.TreeMap;
 
 /** Joint inventory and energy remapping on captured positive PLIC microbox supports. */
 final class GasTopologyCoordinator {
@@ -136,118 +135,6 @@ final class GasTopologyCoordinator {
 	GasTopologyPlan planAfterLiquidCells(LiquidCellInventory future,long[] occupied,GasVolumeAllocation allocation) {
 		return planCells(future,occupied,null,VolumeWork.ADIABATIC,null,allocation);
 	}
-	/** Actual EOS work is shared by the future material in the same pressure-coupled body. */
-	LiquidCellInventory.Plan balanceMechanicalWork(LiquidCellInventory.Plan inventory,GasTopologyPlan gas){
-		if(gas==null||gas.thermalPlan()==null)return inventory;
-		boolean hasWork=false;for(var work:gas.workBySource())hasWork|=work.signum()!=0;
-		if(!hasWork)return inventory;
-		int gasBase=8*domain.cellCount,particleBase=gasBase+gas.source().nodeCount()+1;
-		int parcels=domain.granularState==null?0:domain.granularState.parcels.count();
-		int[] body=mechanicalBodies(gas,inventory,particleBase,parcels);
-		var exchanges=new TreeMap<Integer,SignedDyadic>();
-		for(int node=1;node<gas.workBySource().length;node++)if(gas.workBySource()[node].signum()!=0)
-			exchanges.merge(mechanicalRoot(body,gasBase+node),gas.workBySource()[node].negate(),SignedDyadic::add);
-		var liquids=new TreeMap<Integer,ArrayList<LiquidCellInventory.Stock>>();
-		for(var stock:inventory.future().physicalStocks()){
-			int root=mechanicalRoot(body,supportVertex(stock.key()));
-			if(exchanges.containsKey(root))liquids.computeIfAbsent(root,ignored->new ArrayList<>()).add(stock);
-		}
-		var grains=new TreeMap<Integer,ArrayList<Integer>>();
-		for(int p=0;p<parcels;p++){
-			int root=mechanicalRoot(body,particleBase+p);
-			if(exchanges.containsKey(root))grains.computeIfAbsent(root,ignored->new ArrayList<>()).add(p);
-		}
-		var heat=new TreeMap<LiquidCellInventory.Key,SignedDyadic>();gas.granularWork().clear();
-		for(var entry:exchanges.entrySet()){
-			var exchange=entry.getValue();if(exchange.signum()==0)continue;
-			var targets=liquids.get(entry.getKey());var remaining=exchange;double numericalExchange=exchange.toDouble();
-			if(targets!=null&&!targets.isEmpty()){
-				double mass=0;LiquidCellInventory.Stock largest=null;
-				for(var stock:targets){mass+=stock.massUnits();if(largest==null||stock.massUnits()>largest.massUnits())largest=stock;}
-				for(var stock:targets)if(stock!=largest){
-					var part=SignedDyadic.of(numericalExchange*(stock.massUnits()/mass));
-					heat.merge(stock.key(),part,SignedDyadic::add);remaining=remaining.subtract(part);
-				}
-				heat.merge(largest.key(),remaining,SignedDyadic::add);continue;
-			}
-			var active=grains.get(entry.getKey());
-			if(active==null||active.isEmpty())throw new IllegalStateException("Gas source work has no connected mechanical carrier: body="+entry.getKey());
-			double mass=0;int largest=-1;
-			for(int p:active){var parcel=domain.granularState.parcels.parcel(p);mass+=parcel.massUnits();
-				if(largest<0||parcel.massUnits()>domain.granularState.parcels.parcel(largest).massUnits())largest=p;}
-			for(int p:active)if(p!=largest){
-				var part=SignedDyadic.of(numericalExchange*(domain.granularState.parcels.parcel(p).massUnits()/mass));
-				gas.granularWork().merge(p,part,SignedDyadic::add);remaining=remaining.subtract(part);
-			}
-			gas.granularWork().merge(largest,remaining,SignedDyadic::add);
-		}
-		return heat.isEmpty()?inventory:inventory.withMechanicalHeatByStock(heat);
-	}
-	/** Reuses the solved wet microfaces, fixed supports and accepted routes; no new geometric intersections. */
-	private int[] mechanicalBodies(GasTopologyPlan gas,LiquidCellInventory.Plan inventory,int particleBase,int parcels){
-		int gasBase=8*domain.cellCount;int[] body=new int[particleBase+parcels];
-		for(int i=0;i<body.length;i++)body[i]=i;
-		for(var component:gas.source().capacity().components()){
-			int node=gas.source().topology().nodeOfComponent(component.cell(),component.supportMask());
-			if(node>0){
-				int micro=Integer.numberOfTrailingZeros(component.supportMask());
-				int support=CellRemapMicroTopology.support(gas.source().geometry().collisionMask(component.cell()),micro);
-				joinMechanical(body,8*component.cell()+Integer.numberOfTrailingZeros(support),gasBase+node);
-			}
-		}
-		var faces=domain.pressureSystem.faces;var cut=domain.geometry.cutCells;
-		for(int face=0;face<faces.faceCount;face++){
-			if(!(faces.inverseMass[face]>0))continue;
-			int a=faces.firstCell[face],b=faces.secondCell[face],axis=faces.axis[face];if(a<0)continue;
-			int maskA=cut.mask(a),maskB=cut.mask(b);
-			for(int micro=0;micro<8;micro++)if((micro>>>axis&1)!=0){
-				int peer=micro^(1<<axis),port=(micro>>>((axis+1)%3)&1)+2*(micro>>>((axis+2)%3)&1);
-				if((maskA&1<<micro)!=0||(maskB&1<<peer)!=0||!(faces.pressurePortArea(face,port)>0))continue;
-				joinMechanical(body,8*a+Integer.numberOfTrailingZeros(CellRemapMicroTopology.support(maskA,micro)),
-						8*b+Integer.numberOfTrailingZeros(CellRemapMicroTopology.support(maskB,peer)));
-			}
-		}
-		for(var transfer:inventory.transfers())if(transfer.massUnits()>0)
-			joinMechanical(body,supportVertex(transfer.source()),supportVertex(transfer.target()));
-		var solids=domain.pressureSystem.solidFaces;
-		for(int p=0;p<parcels;p++)for(int axis=0;axis<3;axis++)for(int slot=0;slot<solids.parcelFaceCount(p,axis);slot++){
-			int face=solids.parcelFace(p,axis,slot);if(!(solids.solidArea(face)*solids.parcelPressureShare(p,axis,slot)>0))continue;
-			int a=faces.firstCell[face],b=faces.secondCell[face];if(a<0)continue;
-			int maskA=cut.mask(a),maskB=cut.mask(b);
-			for(int micro=0;micro<8;micro++)if((micro>>>axis&1)!=0){
-				int peer=micro^(1<<axis);if((maskA&1<<micro)!=0||(maskB&1<<peer)!=0)continue;
-				int sa=CellRemapMicroTopology.support(maskA,micro),sb=CellRemapMicroTopology.support(maskB,peer);
-				joinMechanical(body,particleBase+p,8*a+Integer.numberOfTrailingZeros(sa));
-				joinMechanical(body,particleBase+p,8*b+Integer.numberOfTrailingZeros(sb));
-			}
-		}
-		return body;
-	}
-	private static int supportVertex(LiquidCellInventory.Key key){return 8*key.cell()+Integer.numberOfTrailingZeros(key.supportMask());}
-	private static int mechanicalRoot(int[] body,int node){
-		while(body[node]!=node){body[node]=body[body[node]];node=body[node];}return node;
-	}
-	private static void joinMechanical(int[] body,int first,int second){
-		int a=mechanicalRoot(body,first),b=mechanicalRoot(body,second);if(a!=b)body[Math.max(a,b)]=Math.min(a,b);
-	}
-	mmm.thermal.ThermalAuditLedger mechanicalWorkAudit(mmm.thermal.ThermalAuditLedger audit,GasTopologyPlan gas){
-		if(audit==null||gas==null)return audit;
-		for(var entry:gas.granularWork().entrySet()){
-			var before=SignedDyadic.of(domain.thermalState.granularColumn().activeEnergy(entry.getKey()));
-			var exact=before.add(entry.getValue());var stored=SignedDyadic.of(exact.toDouble());
-			audit=audit.withMechanicalWork(entry.getValue()).withRoundoff(stored.subtract(exact));
-		}
-		return audit;
-	}
-	void commitMechanicalWork(GasTopologyPlan gas){
-		if(gas==null||gas.granularWork().isEmpty())return;
-		requireMechanicalWorkCurrent(gas);
-		for(var entry:gas.granularWork().entrySet())domain.thermalState.addGranularMechanicalHeat(entry.getKey(),entry.getValue());
-	}
-	private void requireMechanicalWorkCurrent(GasTopologyPlan gas){
-		if(!gas.granularWork().isEmpty()&&domain.thermalState.thermalRevision().granular()!=gas.granularRevision())
-			throw new IllegalStateException("Granular energy changed after gas mechanical work preparation");
-	}
 	GasTopologyPlan planAfterCollisionCells(LiquidCellInventory future,long[] occupied,byte[] masks) {
 		return planCells(future,occupied,masks,VolumeWork.ADIABATIC,null,null);
 	}
@@ -256,7 +143,7 @@ final class GasTopologyCoordinator {
 		if(allocation==null)allocation=GasVolumeAllocation.prepare(domain,future,occupied,masks);
 		allocation.requireCurrent(domain,future);
 		var next=allocation.preparedFrame();
-		if(domain.gasState.frame==null)return new GasTopologyPlan(next,null,null,null,domain.gasState.network,domain.gasState.network.revision(),new SignedDyadic[0],new TreeMap<>(),-1);
+		if(domain.gasState.frame==null)return new GasTopologyPlan(next,null,null,null,domain.gasState.network,domain.gasState.network.revision(),new SignedDyadic[0]);
 		return plan(next,volumeWork,phase,allocation);
 	}
 	private long[] currentOccupied() {
@@ -409,7 +296,7 @@ final class GasTopologyCoordinator {
 		var gasPlan=domain.gasState.network.planRemapNodes(available,inventories,
 				edit==null?sourceDelta:sourceDelta.add(edit.source()),edit==null?sinkDelta:sinkDelta.add(edit.sink()),edges);
 		return new GasTopologyPlan(next,old,gasPlan,thermalPlan,domain.gasState.network,domain.gasState.network.revision(),
-				workBySource,new TreeMap<>(),thermal?domain.thermalState.thermalRevision().granular():-1);
+				workBySource);
 	}
 	/** Receiver volume ratios describe actual deformation, including carried and newly opened vacuum.
 	 * Each old pressure owner receives one volume change before conservative split/mixing of its U.
@@ -512,7 +399,7 @@ final class GasTopologyCoordinator {
 			throw new IllegalStateException("Gas clear successor changed after planning");
 	}
 	void requireBeforeCarrierCommit(GasTopologyPlan plan) {
-		requireOwnersCurrent(plan);requireMechanicalWorkCurrent(plan);domain.domainFlowFields.ensureInventoryGrid();
+		requireOwnersCurrent(plan);domain.domainFlowFields.ensureInventoryGrid();
 		if (!plan.frame().matchesSourceCarrierGeometry(domain, currentOccupied()))
 			throw new IllegalStateException("Gas source geometry changed after carrier edit planning");
 	}
@@ -555,6 +442,5 @@ final class GasTopologyCoordinator {
 	void synchronizeForPersistence() { refresh(); }
 	record GasTopologyPlan(GasRuntimeGeometry frame, GasRuntimeGeometry source,
 	                       AirNetwork.RemapPlan gasPlan, GasEnergyStore.GasRemapPlan thermalPlan,
-	                       AirNetwork network,long networkRevision,SignedDyadic[] workBySource,
-	                       TreeMap<Integer,SignedDyadic> granularWork,long granularRevision) { }
+	                       AirNetwork network,long networkRevision,SignedDyadic[] workBySource) { }
 }

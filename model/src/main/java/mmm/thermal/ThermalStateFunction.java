@@ -16,6 +16,7 @@ public final class ThermalStateFunction {
 		public EnergyOutsideValidityException() {
 			super("Thermal LTE energy is outside the positive-temperature domain");
 		}
+		public EnergyOutsideValidityException(String message) { super(message); }
 	}
 	/** A well-formed prospective inventory exceeds the finite thermal column representation. */
 	public static final class EnergyRepresentationException extends IllegalArgumentException {
@@ -31,6 +32,66 @@ public final class ThermalStateFunction {
 			}
 			speciesQuanta = Map.copyOf(speciesQuanta);
 		}
+	}
+	/** Actual caloric owner after transport, with its unchanged material/species reference energy. */
+	public record MechanicalRecipient(ThermalMaterialDefinition material,double massKg,double baseEnergy,double internalEnergy) {
+		public MechanicalRecipient {
+			if(material==null||!(Double.isFinite(massKg)&&massKg>0)
+					||!Double.isFinite(baseEnergy)||!Double.isFinite(internalEnergy))
+				throw new IllegalArgumentException("Mechanical thermal recipient is invalid");
+		}
+	}
+
+	/** Partitions one connected body's work by heat capacity or available sensible energy. */
+	public static SignedDyadic[] partitionMechanicalEnergy(List<MechanicalRecipient> recipients,SignedDyadic exchange) {
+		if(recipients==null||exchange==null)throw new IllegalArgumentException("Mechanical energy allocation is missing");
+		int count=recipients.size();var parts=new SignedDyadic[count];java.util.Arrays.fill(parts,SignedDyadic.ZERO);
+		if(exchange.signum()==0)return parts;
+		if(count==0)throw new IllegalArgumentException("Mechanical energy has no thermal recipients");
+		boolean cooling=exchange.signum()<0;
+		var capacities=cooling?new SignedDyadic[count]:null;
+		var available=SignedDyadic.ZERO;var weights=new double[count];
+		var weightSum=new ThermalCaloricInversion.Sum();int largest=0;
+		for(int i=0;i<count;i++){
+			var owner=recipients.get(i);
+			var state=ThermalCaloricInversion.owner(owner.material(),owner.massKg(),owner.internalEnergy(),owner.baseEnergy());
+			if(cooling){
+				double cold=ThermalCaloricInversion.energyAt(owner.material(),owner.massKg(),owner.baseEnergy(),ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
+				// An owner already at the caloric inverter's cold rounding limit releases no further heat.
+				cold=Math.min(cold,owner.internalEnergy());
+				capacities[i]=SignedDyadic.of(owner.internalEnergy()).subtract(SignedDyadic.of(cold));
+				available=available.add(capacities[i]);weights[i]=capacities[i].toDouble();
+				if(capacities[i].compareTo(capacities[largest])>0)largest=i;
+			}else{
+				weights[i]=state.heatCapacityJPerK();if(weights[i]>weights[largest])largest=i;
+			}
+			weightSum.add(weights[i]);
+		}
+		var requested=cooling?exchange.negate():exchange;
+		if(cooling&&requested.compareTo(available)>0){
+			var total=SignedDyadic.ZERO;for(var owner:recipients)total=total.add(SignedDyadic.of(owner.internalEnergy()));
+			throw new EnergyOutsideValidityException("Mechanical body has insufficient sensible energy: U="+total
+					+", cold="+total.subtract(available)+", exchange="+exchange);
+		}
+		double totalWeight=weightSum.value(),magnitude=requested.toDouble();
+		if(!(Double.isFinite(totalWeight)&&totalWeight>0&&Double.isFinite(magnitude)))throw new EnergyRepresentationException();
+		var remaining=requested;
+		for(int i=0;i<count;i++)if(i!=largest&&weights[i]>0){
+			var part=SignedDyadic.of(magnitude*(weights[i]/totalWeight));
+			if(cooling&&part.compareTo(capacities[i])>0)part=capacities[i];
+			if(part.compareTo(remaining)>0)part=remaining;
+			parts[i]=part;remaining=remaining.subtract(part);
+		}
+		var pivot=cooling&&remaining.compareTo(capacities[largest])>0?capacities[largest]:remaining;
+		parts[largest]=pivot;remaining=remaining.subtract(pivot);
+		// At full cooling, rounded proportional shares may leave the pivot full.
+		// Spend the other owners' remaining caloric capacity in the same linear pass.
+		if(cooling&&remaining.signum()>0)for(int i=0;i<count&&remaining.signum()>0;i++){
+			var room=capacities[i].subtract(parts[i]);var part=room.compareTo(remaining)<0?room:remaining;
+			parts[i]=parts[i].add(part);remaining=remaining.subtract(part);
+		}
+		if(cooling)for(int i=0;i<count;i++)parts[i]=parts[i].negate();
+		return parts;
 	}
 	public record EquilibriumState(double temperatureK, PhaseState phaseState, double upperPhaseFraction,
 	                               double lowerBoundaryEnergy, double upperBoundaryEnergy) { }

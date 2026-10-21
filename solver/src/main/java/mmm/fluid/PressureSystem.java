@@ -41,7 +41,7 @@ final class PressureSystem {
 				+result.residualRms()+", iterations="+result.iterations());
 	}
 	/** The conservative force block exchanges its actual kinetic energy with the source inventory. */
-	void beginForceStep(){readVelocity(forceBaseline);forceStepPrepared=true;}
+	void beginForceStep(){domain.mechanicalEnergy.beginLiquidForceStep();readVelocity(forceBaseline);forceStepPrepared=true;}
 	void beginGranularForceStep(){granular.beginMechanicalStep();}
 	void finishGranularForceStep(){granular.finishMechanicalStep();}
 	PressureProjectionResult solveProjection(float dt) {
@@ -116,7 +116,7 @@ final class PressureSystem {
 			velocity[local]+=dt*velocityWork[f];
 			double before=forceBaseline[f],after=velocity[local];
 			double exchange=.5*faces.faceMass(f)*(before*before-after*after);
-			if(exchange!=0)domain.cellMacStage.addMechanicalHeatAtFace(a,local,exchange);
+			domain.mechanicalEnergy.recordLiquidExchange(f,exchange);
 		}
 		granular.project(dt,pressure);forceStepPrepared=false;
 	}

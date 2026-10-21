@@ -262,6 +262,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
     - [MacMomentumState](../../model/src/main/java/mmm/fluid/MacMomentumState.java)
     - [CellMomentumTransport](../../solver/src/main/java/mmm/fluid/CellMomentumTransport.java)
     - [MacMomentumAdvection](../../solver/src/main/java/mmm/fluid/MacMomentumAdvection.java)
+    - [MechanicalEnergySettlement](../../solver/src/main/java/mmm/fluid/MechanicalEnergySettlement.java)：`prepare` 一次归集合并同一机械体的实际 K/PE 与气腔功，准备液体和颗粒热量；`Plan` 统一预检和提交
   - 验证入口 / 参考：`MacMomentumAdvectionValidation`、`free-surface`；[库存与动量](fluid-solver.md#单元库存与-mac-动量)
 
 - **液固压力、阻力与整数占容**
