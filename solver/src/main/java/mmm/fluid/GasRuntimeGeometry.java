@@ -5,7 +5,7 @@ import mmm.inventory.PhaseOccupancyState;
 import mmm.units.SignedDyadic;
 import java.util.Arrays;
 
-/** Immutable geometry and capacity derived from the persistent micro phase occupation. */
+/** Immutable fixed-pore component geometry and actual capacity derived from phase occupation. */
 final class GasRuntimeGeometry {
 	private final float cellSize;
 	private final boolean sealedExterior;
@@ -110,7 +110,9 @@ final class GasRuntimeGeometry {
 	int nodeOfPiece(int piece){return topology.nodeOfPiece(piece);}
 	int commonCellNode(int cell) {
 		int owner=-1;
-		for(int bit=0;bit<8;bit++){int next=nodeOfPiece(8*cell+bit);if(next<0)continue;if(owner>=0&&owner!=next)return -1;owner=next;}
+		for(int support:CellRemapMicroTopology.components(geometry.collisionMask(cell))){
+			int next=topology.nodeOfComponent(cell,support);if(next<0)continue;if(owner>=0&&owner!=next)return -1;owner=next;
+		}
 		return owner;
 	}
 	boolean sealedExterior(){return sealedExterior;}

@@ -348,14 +348,13 @@ MAC 动量输运读取同次结算的实际整数质量通量。
     - [PlicPlaneOffset](../../solver/src/main/java/mmm/fluid/PlicPlaneOffset.java)
     - [GasComplementGeometry](../../solver/src/main/java/mmm/fluid/GasComplementGeometry.java)：`capture` 线性捕获与未变几何复用
     - [GasChamberCapacity](../../solver/src/main/java/mmm/fluid/GasChamberCapacity.java)：按固定开放分量直接汇总库存派生的气容量
-    - [GasPieceCapacity](../../solver/src/main/java/mmm/fluid/GasPieceCapacity.java)：拆墙等操作按需分配局部微盒容量
     - [GasComponentCapacity](../../solver/src/main/java/mmm/fluid/GasComponentCapacity.java)
     - [GasPartitionWeights](../../model/src/main/java/mmm/fluid/air/GasPartitionWeights.java)
   - 验证选择器 / 参考：`air-cavity`；[气体几何](gas-state.md#微盒气体几何)
 
 - **气体拓扑、库存与体积功**
   - 主要文件：
-    - [GasRuntimeGeometry](../../solver/src/main/java/mmm/fluid/GasRuntimeGeometry.java)
+    - [GasRuntimeGeometry](../../solver/src/main/java/mmm/fluid/GasRuntimeGeometry.java)：固定开放分量的干区几何、节点归属和实际容量；存盘时展开微盒节点索引
     - [GasChamberTopology](../../solver/src/main/java/mmm/fluid/GasChamberTopology.java)：真实干区连通与冷恢复归属校验
     - [GasVolumeAllocation](../../solver/src/main/java/mmm/fluid/GasVolumeAllocation.java)：随相通量推进的空间来源及环境／真空来源
     - [GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java)：按最终来源一次准备库存、内能和控制体积

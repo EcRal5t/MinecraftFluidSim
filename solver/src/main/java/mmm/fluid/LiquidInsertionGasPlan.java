@@ -21,13 +21,17 @@ final class LiquidInsertionGasPlan {
 			remainingCells = new int[parent.length]; finiteStock = new boolean[parent.length];
 			for (int node = 1; node < parent.length; node++)
 				if (!domain.gasState.network.inventory(node).isEmpty()) finiteStock[root(parent, node)] = true;
+			int[] groups=new int[4];
 			for (int cell = 0; cell < domain.cellCount; cell++) {
-				var groups = new java.util.TreeSet<Integer>();
-				for (int micro = 0; micro < 8; micro++) {
-					int node = frame.nodeOfPiece(8 * cell + micro);
-					if (node > 0) { int group = root(parent, node); if (group != 0) groups.add(group); }
+				int count=0;
+				for(int support:CellRemapMicroTopology.components(frame.geometry().collisionMask(cell))){
+					int node=frame.topology().nodeOfComponent(cell,support);if(node<=0)continue;
+					int group=root(parent,node);if(group==0)continue;
+					int at=0;while(at<count&&groups[at]!=group)at++;
+					if(at==count)groups[count++]=group;
 				}
-				groupsByCell[cell] = groups.stream().mapToInt(Integer::intValue).toArray();
+				if(count==0)continue;
+				groupsByCell[cell] = java.util.Arrays.copyOf(groups,count);
 				for (int group : groupsByCell[cell]) remainingCells[group]++;
 			}
 		}

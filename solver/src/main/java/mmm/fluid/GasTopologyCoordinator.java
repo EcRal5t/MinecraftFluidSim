@@ -274,11 +274,16 @@ final class GasTopologyCoordinator {
 			int cell=component.cell();
 			int newlyOpen=old.geometry().collisionMask(cell)&~next.geometry().collisionMask(cell)&component.supportMask();
 			if(newlyOpen==0)continue;
-			for(var piece:GasPieceCapacity.capture(cell,component.supportMask(),component.availableVolumeNormalized(),next.geometry())) {
-				int node=next.nodeOfPiece(piece.id());
-				if(node>0&&(newlyOpen&1<<(piece.id()&7))!=0)
-					opened[node-1]=opened[node-1].add(SignedDyadic.of(piece.cubicMeters()));
+			var dry=next.geometry().component(cell,component.supportMask());if(dry==null)continue;
+			int selected=newlyOpen&dry.dryMicroMask();if(selected==0)continue;
+			int node=next.topology().nodeOfComponent(cell,component.supportMask());if(node<=0)continue;
+			double volume=component.availableVolumeNormalized().toDouble()*next.geometry().cellVolumeCubicMeters();
+			if(selected!=dry.dryMicroMask()){
+				double weight=0;
+				for(int bits=selected;bits!=0;bits&=bits-1)weight+=next.geometry().pieceNormalizedVolume(8*cell+Integer.numberOfTrailingZeros(bits));
+				volume*=weight/dry.normalizedVolume();
 			}
+			opened[node-1]=opened[node-1].add(SignedDyadic.of(volume));
 		}
 		for(int node=0;node<count;node++)if(opened[node].compareTo(transferredVacuum[node])>0)
 			// Removing a wall exposes zero-energy control volume. A relocated old cavity
@@ -288,9 +293,14 @@ final class GasTopologyCoordinator {
 	private java.util.Set<Long> survivingContacts(GasRuntimeGeometry old,GasRuntimeGeometry next) {
 		if(old.nodeCount()==0||next.nodeCount()==0)return java.util.Set.of();
 		var result=new java.util.HashSet<Long>();
-		for(var piece:old.geometry().pieces()) {
-			int source=old.nodeOfPiece(piece.id()),target=next.nodeOfPiece(piece.id());
-			if(source>0&&target>0)result.add((long)source<<32|Integer.toUnsignedLong(target));
+		for(var component:old.geometry().components()) {
+			int source=old.topology().nodeOfComponent(component.cell(),component.supportMask());if(source<=0)continue;
+			for(int support:CellRemapMicroTopology.components(next.geometry().collisionMask(component.cell()))) {
+				var future=next.geometry().component(component.cell(),support);
+				if(future==null||(future.dryMicroMask()&component.dryMicroMask())==0)continue;
+				int target=next.topology().nodeOfComponent(component.cell(),support);
+				if(target>0)result.add((long)source<<32|Integer.toUnsignedLong(target));
+			}
 		}
 		return result;
 	}

@@ -21,22 +21,27 @@ final class GasLiquidPhaseChangeStage {
 	private boolean[] finiteInterfaceCells;
 	GasLiquidPhaseChangeStage(FluidDomain domain) { this.domain = domain; }
 
-	/** A finite interface must lie in a finite gas piece's cell or an adjacent coarse cell. */
+	/** A finite interface lies in a finite gas component's cell or an adjacent coarse cell. */
 	private boolean[] finiteInterfaceCells(GasRuntimeGeometry frame) {
-		if(interfaceFrame==frame) return finiteInterfaceCells;
-		var geometry=frame.geometry(); int nx=geometry.sizeX(),ny=geometry.sizeY(),nz=geometry.sizeZ(),plane=nx*ny;
-		var cells=new boolean[plane*nz];
-		for(int cell=0;cell<cells.length;cell++) {
-			boolean finite=false;
-			for(int micro=0;micro<8;micro++) if(frame.nodeOfPiece(8*cell+micro)>0) { finite=true;break; }
-			if(!finite) continue;
-			int x=cell%nx,y=cell/nx%ny,z=cell/plane;
-			cells[cell]=true;
-			if(x>0) cells[cell-1]=true;if(x+1<nx) cells[cell+1]=true;
-			if(y>0) cells[cell-nx]=true;if(y+1<ny) cells[cell+nx]=true;
-			if(z>0) cells[cell-plane]=true;if(z+1<nz) cells[cell+plane]=true;
+		if (interfaceFrame == frame) return finiteInterfaceCells;
+		var geometry = frame.geometry();
+		int nx = geometry.sizeX(), ny = geometry.sizeY(), nz = geometry.sizeZ(), plane = nx * ny;
+		var cells = new boolean[plane * nz];
+		for (var component : geometry.components()) {
+			if (frame.topology().nodeOfComponent(component.cell(), component.supportMask()) <= 0) continue;
+			int cell = component.cell();
+			int x = cell % nx, y = cell / nx % ny, z = cell / plane;
+			cells[cell] = true;
+			if (x > 0) cells[cell - 1] = true;
+			if (x + 1 < nx) cells[cell + 1] = true;
+			if (y > 0) cells[cell - nx] = true;
+			if (y + 1 < ny) cells[cell + nx] = true;
+			if (z > 0) cells[cell - plane] = true;
+			if (z + 1 < nz) cells[cell + plane] = true;
 		}
-		interfaceFrame=frame;finiteInterfaceCells=cells;return cells;
+		interfaceFrame = frame;
+		finiteInterfaceCells = cells;
+		return cells;
 	}
 
 	private static final class Cell {

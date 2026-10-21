@@ -4,7 +4,7 @@ import mmm.inventory.LiquidCellInventory;
 
 import java.util.Arrays;
 
-/** Actual microgeometry controls for phase contacts and disconnected liquid components. */
+/** Phase contacts follow positive gas capacity and disconnected fixed supports. */
 public final class GasPhaseInterfaceValidation {
 	private GasPhaseInterfaceValidation() { }
 
@@ -22,9 +22,9 @@ public final class GasPhaseInterfaceValidation {
 			for (var contact : contacts) {
 				check(contact.supportMask() == 1 || bothWet && contact.supportMask() == 128,
 						"Contact crossed a fixed solid partition");
-				check(contact.node()>0&&!contact.pieces().isEmpty(),"Wet fixed component lost its finite gas interface");
-				for(int piece:contact.pieces()) check(piece/8==0&&(contact.supportMask()&1<<(piece&7))!=0
-						&&frame.nodeOfPiece(piece)==contact.node()&&frame.geometry().piece(piece).volume()>0,
+				check(contact.node()>0&&!contact.components().isEmpty(),"Wet fixed component lost its finite gas interface");
+				for(var component:contact.components()) check(component.cell()==0&&component.supportMask()==contact.supportMask()
+						&&frame.topology().nodeOfComponent(component.cell(),component.supportMask())==contact.node()&&component.volume()>0,
 						"Gas interface crossed a fixed partition or lost positive capacity");
 			}
 			if(bothWet) check(contacts.get(0).node()!=contacts.get(1).node(),"Fixed solid partition joined independent gas chambers");
@@ -37,9 +37,9 @@ public final class GasPhaseInterfaceValidation {
 		var halfContacts = GasPhaseInterfaceResolver.contacts(halfFrame, 0);
 		check(!halfContacts.isEmpty(),"Half-filled liquid lost its positive gas interface");
 		for(var contact:halfContacts) {
-			check(contact.supportMask()==255&&contact.node()>0&&!contact.pieces().isEmpty(),"Half-filled interface left its open fixed support");
-			for(int piece:contact.pieces()) check(halfFrame.geometry().piece(piece).volume()>0
-					&&halfFrame.nodeOfPiece(piece)==contact.node(),"Liquid interface selected gas without positive owned capacity");
+			check(contact.supportMask()==255&&contact.node()>0&&!contact.components().isEmpty(),"Half-filled interface left its open fixed support");
+			for(var component:contact.components()) check(component.volume()>0
+					&&halfFrame.topology().nodeOfComponent(component.cell(),component.supportMask())==contact.node(),"Liquid interface selected gas without positive owned capacity");
 		}
 
 		var full = domain(0, true, new float[]{.5F,.5F,.5F,1});
@@ -47,13 +47,13 @@ public final class GasPhaseInterfaceValidation {
 		var sharedContacts = GasPhaseInterfaceResolver.contacts(fullFrame, 0);
 		check(!sharedContacts.isEmpty(),"Full liquid lost its shared wet/dry face contact");
 		for(var contact:sharedContacts) {
-			check(contact.supportMask()==255&&contact.node()>0&&!contact.pieces().isEmpty(),"Shared interface left its connected support");
-			for(int piece:contact.pieces()) check(piece/8==1&&fullFrame.geometry().piece(piece).volume()>0
-					&&fullFrame.nodeOfPiece(piece)==contact.node(),"Shared-face interface selected nonadjacent or empty gas capacity");
+			check(contact.supportMask()==255&&contact.node()>0&&!contact.components().isEmpty(),"Shared interface left its connected support");
+			for(var component:contact.components()) check(component.cell()==1&&component.volume()>0
+					&&fullFrame.topology().nodeOfComponent(component.cell(),component.supportMask())==contact.node(),"Shared-face interface selected nonadjacent or empty gas capacity");
 		}
 		validateFiniteGasBatches();
 		validateCondensedCellBatches();
-		System.out.println("Gas phase microcontact validation passed");
+		System.out.println("Gas phase component contact validation passed");
 	}
 
 	private static void validateFiniteGasBatches() {

@@ -163,7 +163,7 @@ final class PressureSystem {
 		var frame = domain.gasState.frame; double total = 0, weighted = 0;
 		for (int micro = 0; micro < 8; micro++) if ((support & 1 << micro) != 0) {
 			int node = frame.nodeOfPiece(8 * cell + micro); if (node < 0) continue;
-			double volume = frame.geometry().piece(8 * cell + micro).normalizedVolume();
+			double volume = frame.geometry().pieceNormalizedVolume(8 * cell + micro);
 			total += volume;
 			if (node > 0) weighted += volume * domain.pressureBoundaryView.gasPressureOfNode(node);
 		}

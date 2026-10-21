@@ -148,7 +148,8 @@ final class DomainMetrics {
 	boolean hasAmbientGasCells() {
 		var frame = domain.gasState.frame;
 		if (frame == null) return false;
-		for (var piece : frame.geometry().pieces()) if (frame.nodeOfPiece(piece.id()) == AirNetwork.AMBIENT_NODE) return true;
+		for (var component : frame.geometry().components())
+			if(frame.topology().nodeOfComponent(component.cell(),component.supportMask())==AirNetwork.AMBIENT_NODE)return true;
 		return false;
 	}
 }

@@ -221,11 +221,11 @@ final class PressureFaceGraph {
 		if (node >= 0) { gasSide(cell,micro,axis,node,weight,capillary,hydroFraction,consumer); return; }
 		int support = CellRemapMicroTopology.support(domain.geometry.cutCells.mask(cell), micro); double total = 0;
 		for (int bit = 0; bit < 8; bit++) if ((support & 1 << bit) != 0 && domain.gasState.frame.nodeOfPiece(8 * cell + bit) >= 0)
-			total += domain.gasState.frame.geometry().piece(8 * cell + bit).normalizedVolume();
+			total += domain.gasState.frame.geometry().pieceNormalizedVolume(8 * cell + bit);
 		if (!(total > 0)) { consumer.accept(anchored[cell] ? -1 : cell, weight, capillary); return; }
 		for (int bit = 0; bit < 8; bit++) if ((support & 1 << bit) != 0) {
 			int owner = domain.gasState.frame.nodeOfPiece(8 * cell + bit); if (owner < 0) continue;
-			gasSide(cell,micro,axis,owner,weight*domain.gasState.frame.geometry().piece(8*cell+bit).normalizedVolume()/total,capillary,hydroFraction,consumer);
+			gasSide(cell,micro,axis,owner,weight*domain.gasState.frame.geometry().pieceNormalizedVolume(8*cell+bit)/total,capillary,hydroFraction,consumer);
 		}
 	}
 

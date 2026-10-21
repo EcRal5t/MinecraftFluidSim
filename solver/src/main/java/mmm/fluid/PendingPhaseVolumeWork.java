@@ -46,8 +46,8 @@ final class PendingPhaseVolumeWork {
 			if (entry.signedCellVolume().signum() >= 0
 					|| !Double.isNaN(thermal.phaseScanTemperatureInCell(cell))) continue;
 			boolean gasStock = false;
-			if (gas.frame != null) for (int micro = 0; micro < 8; micro++) {
-				int node = gas.frame.nodeOfPiece(8 * cell + micro);
+			if (gas.frame != null) for (int support : CellRemapMicroTopology.components(gas.frame.geometry().collisionMask(cell))) {
+				int node = gas.frame.topology().nodeOfComponent(cell,support);
 				if (node > 0 && !gas.network.inventory(node).isEmpty()) { gasStock = true; break; }
 			}
 			if (!gasStock) throw new IllegalArgumentException("Depleted phase cell has no finite gas successor inventory");

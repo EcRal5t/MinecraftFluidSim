@@ -78,20 +78,21 @@ final class PhaseOccupancyTransport {
 				if(component.availableVolumeNormalized().signum()==0)continue;
 				int target=topology.nodeOfComponent(component.cell(),component.supportMask());
 				if(target<0)throw new GasTopologyBlockedException("Edited gas component has no dry representation");
-				if(representative[target]<0)
-				for(int bits=component.supportMask();bits!=0;bits&=bits-1) {
-					int piece=8*component.cell()+Integer.numberOfTrailingZeros(bits);
-					if(geometry.piece(piece)!=null){representative[target]=piece;break;}
-				}
+				if(representative[target]<0)representative[target]=geometry.component(component.cell(),component.supportMask()).minimumPiece();
 				if(representative[target]<0)throw new GasTopologyBlockedException("Edited gas component has no dry representation");
 				targetVolumes[target]+=component.availableVolumeNormalized().toDouble();
 				var origins=sources.computeIfAbsent(target,ignored->new TreeMap<>());
 				// A coarse pore retains its gas even when its rebuilt plane moves every
 				// dry micro piece. Source identity belongs to the whole fixed support.
-				for(int bits=component.supportMask();bits!=0;bits&=bits-1) {
-					int piece=8*component.cell()+Integer.numberOfTrailingZeros(bits),previous=old.nodeOfPiece(piece);
-					var oldPiece=old.geometry().piece(piece);
-					if(previous>=0&&oldPiece!=null)origins.merge(previous,oldPiece.normalizedVolume(),Double::sum);
+				for(int support:CellRemapMicroTopology.components(old.geometry().collisionMask(component.cell()))) {
+					var previousComponent=old.geometry().component(component.cell(),support);if(previousComponent==null)continue;
+					int overlap=previousComponent.dryMicroMask()&component.supportMask();if(overlap==0)continue;
+					double amount=0;
+					if(overlap==previousComponent.dryMicroMask())amount=previousComponent.normalizedVolume();
+					else for(int bits=overlap;bits!=0;bits&=bits-1)
+						amount+=old.geometry().pieceNormalizedVolume(8*component.cell()+Integer.numberOfTrailingZeros(bits));
+					int previous=old.topology().nodeOfComponent(component.cell(),support);
+					if(previous>=0)origins.merge(previous,amount,Double::sum);
 				}
 			}
 			// Origins already mix over a complete future chamber. Keep that aggregation

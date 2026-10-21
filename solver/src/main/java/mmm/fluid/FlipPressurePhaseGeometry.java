@@ -22,7 +22,7 @@ final class FlipPressurePhaseGeometry {
 	private byte[] collisionMasks;
 	private long revision;
 	/** Immutable local geometry; unchanged cells share their fractions and component planes. */
-	private record OccupancyCell(double[] fractions,PlicComponentGeometry.Plane[] planes) { }
+	record OccupancyCell(double[] fractions,PlicComponentGeometry.Plane[] planes) { }
 	private OccupancyCell[] occupancyCells;
 	private PhaseOccupancyState microOccupancy;
 	private final double[] faceX = new double[16], faceY = new double[16];
@@ -54,6 +54,7 @@ final class FlipPressurePhaseGeometry {
 	SignedDyadic poreVolume(int cell) { return poreVolumes[cell]; }
 	boolean hasMicroOccupation() { return occupancyCells!=null; }
 	PhaseOccupancyState occupancyState() { return microOccupancy; }
+	OccupancyCell occupancyCell(int cell) { return occupancyCells==null?null:occupancyCells[cell]; }
 	void setExactPoreVolumes(FlipCutCellGeometry cut,long[] occupied) {
 		for(int cell=0;cell<fraction.length;cell++)poreVolumes[cell]=SignedDyadic.of(Integer.bitCount(~cut.mask(cell)&255),-3).subtract(SignedDyadic.of(occupied[cell],-24));
 	}
@@ -368,6 +369,20 @@ final class FlipPressurePhaseGeometry {
 		if(occupancyCells!=null)return occupancyCells[cell].fractions()[micro];
 		var plane = components[cell] == null ? null : components[cell].plane(micro);
 		return components[cell] == null ? fraction[cell] : plane == null ? 0 : plane.fraction();
+	}
+	double componentLiquidFraction(int cell,int micro) {
+		var plane=occupancyCells!=null?occupancyCells[cell].planes()[micro]:components[cell]==null?null:components[cell].plane(micro);
+		return plane==null?occupancyCells==null&&components[cell]==null?fraction[cell]:0:plane.fraction();
+	}
+	PlicComponentGeometry.Plane componentPlane(int cell,int micro) {
+		if(occupancyCells!=null)return occupancyCells[cell].planes()[micro];
+		int support=CellRemapMicroTopology.support(collisionMask(cell),micro);
+		if(components[cell]!=null){var plane=components[cell].plane(micro);
+			return plane!=null?plane:new PlicComponentGeometry.Plane(support,0,0,0,0,0,null);
+		}
+		double open=Integer.bitCount(~collisionMask(cell)&255)*.125;
+		return new PlicComponentGeometry.Plane(support,fraction[cell],open>0?poreVolumes[cell].toDouble()/open:0,
+				normalX[cell],normalY[cell],normalZ[cell],offsetBrackets[cell]);
 	}
 	double componentPoreScale(int cell,int micro,double fallback) {
 		if(occupancyCells!=null){var plane=occupancyCells[cell].planes()[micro];return plane==null?0:plane.porosity();}
