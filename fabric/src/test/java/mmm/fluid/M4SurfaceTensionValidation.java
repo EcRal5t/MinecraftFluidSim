@@ -439,7 +439,7 @@ check(Double.isFinite(peakCapillaryKinetic)&&peakCapillaryKinetic>peakZeroKineti
 "A nonuniform-curvature interface had no mechanical response relative to its zero-tension control");
 }
 
-/** Cell inventories of the binary spherical reference used by the pressure and rest scenarios. */
+/** Retain the sphere's sampled cell volumes so its height columns represent the analytic radius. */
 private static FluidDomain sphereDroplet(int size, FluidSolverConfig config, double radius, double sigma) {
 FluidDomain domain = new FluidDomain(size, size, size, config, size * size * size * 8);
 double[] colour = SurfaceTensionCurvatureExperiment.sphereColour(size, radius, config.cellSize());
@@ -447,7 +447,7 @@ FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
 new FluidMaterial("mmm:test", config.density(), "mmm:test", sigma, Math.PI / 2.0)));
 domain.bindMaterialRegistry(registry);
 float[] fractions = new float[colour.length];
-for (int cell = 0; cell < fractions.length; cell++) fractions[cell] = colour[cell] >= .5 ? 1 : 0;
+for (int cell = 0; cell < fractions.length; cell++) fractions[cell] = (float) colour[cell];
 domain.setVolumes(fractions);
 return domain;
 }

@@ -317,15 +317,23 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			long volume=mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 			long mass=mmm.units.Mass.fromKilograms(production.granular().material(sand).referenceDensity()
 					*volume/SolidVolume.SVQ_PER_CUBIC_METER);
-			require(domain.tryInsertExactGranular(2,2,2,sand,0,volume,mass).inserted(),
-					"Liquid/solid slip fixture could not insert its grain");
-			// Assemble the flooded inventory before initializing its gas topology.
-			domain.domainFlowFields.ensureInventoryGrid();
+			// Bootstrap a flooded mixture before gas/thermal initialization. Container
+			// insertion initializes the empty sealed vessel's real air inventory.
+			float center=2.5F*domain.config.cellSize();
+			domain.granularState.parcels.add(new mmm.granular.GranularParcelStore.Parcel(
+					center,center,center,0,0,0,volume,mass,sand,0,0,(byte)0));
+			domain.granularCoupling.rebuild(domain.granularState.parcels,domain.granularState.deposits);
+			domain.domainPhaseInventory.markGranularExternalChange(domain.domainFlowFields.cellIndex(2,2,2));
 			int water=liquids.handle(BuiltinFluidMaterials.WATER.id());
-			for(int z=0;z<5;z++)for(int y=0;y<5;y++)for(int x=0;x<5;x++){
-				float pore=domain.domainCollision.effectiveOpenCellVolume(domain.domainFlowFields.cellIndex(x,y,z));
-				require(domain.domainInventory.tryInsertExactVolume(x,y,z,pore,0,water).transferred(),
-						"Liquid/solid slip fixture could not fill its pore water");
+			var volumes=new float[domain.cellCount];java.util.Arrays.fill(volumes,1);
+			var materials=new int[domain.cellCount];java.util.Arrays.fill(materials,water);
+			domain.setVolumes(volumes,materials);
+			for(int cell=0;cell<domain.cellCount;cell++){
+				var pore=SignedDyadic.of(1).subtract(SignedDyadic.of(domain.granularCoupling.solidSvq(cell),-24));
+				require(domain.liquidCells.exactCellVolume(cell).equals(pore),
+						"Liquid/solid slip bootstrap failed: cell="+cell+", pore="+pore
+						+", liquid="+domain.liquidCells.exactCellVolume(cell)+", gasNodes="+domain.gasState.network.nodeCount()
+						+", gasInventory="+domain.gasState.network.sealedInventoryNanos());
 			}
 			mmm.simulation.FullCapabilityTestFixture.bindFull(domain,production,293.15,ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 			for(int p=0;p<domain.granularState.parcels.count();p++){
