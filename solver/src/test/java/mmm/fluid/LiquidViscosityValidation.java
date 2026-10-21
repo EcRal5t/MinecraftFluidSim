@@ -101,7 +101,14 @@ final class LiquidViscosityValidation {
 		Arrays.fill(velocity[0], 1); Arrays.fill(velocity[1], -.3F);
 		mesh.assemble(velocity);
 		double[] before = momentum(mesh.operator);
-		var stats = mesh.operator.advance(mesh.operator.stableTimeStep() / 2);
+		double beforeEnergy=0;for(int i=0;i<mesh.operator.mass.length;i++)
+			beforeEnergy+=.5*mesh.operator.mass[i]*mesh.operator.velocity[i]*mesh.operator.velocity[i];
+		double[] heat=new double[64];
+		var stats = mesh.operator.advance(mesh.operator.stableTimeStep() / 2,(cell,joules)->heat[cell]+=joules);
+		double afterEnergy=0;for(int i=0;i<mesh.operator.mass.length;i++)
+			afterEnergy+=.5*mesh.operator.mass[i]*mesh.operator.velocity[i]*mesh.operator.velocity[i];
+		close(Arrays.stream(heat).sum(),beforeEnergy-afterEnergy,1e-8*beforeEnergy,
+				"local viscous row heat closes its actual kinetic-energy loss");
 		double[] after = momentum(mesh.operator);
 		close(after[0] - before[0], stats.boundaryImpulseX(), 1e-8, "wall X impulse");
 		close(after[1] - before[1], stats.boundaryImpulseY(), 1e-8, "wall Y impulse");

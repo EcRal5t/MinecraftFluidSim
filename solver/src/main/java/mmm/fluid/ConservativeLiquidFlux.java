@@ -22,7 +22,7 @@ final class ConservativeLiquidFlux {
 	private double[] liquid, pore;
 	private double[] finalDry;
 	private GasComponentCapacity.Prepared preparedCapacity;
-	private PhaseSourceColumns gasTags, nextGasTags, macroFlows, macroTotal, gasReservation;
+	private PhaseSourceColumns gasTags, nextGasTags, macroFlows, macroTotal;
 	private FlipPressurePhaseGeometry phase;
 	private FlipPressurePhaseGeometry reconstructionWorkspace;
 	private double[] phaseLiquid, phasePore;
@@ -31,8 +31,7 @@ final class ConservativeLiquidFlux {
 	private LiquidCellInventory.TransportFinalizer inventoryFinalizer;
 	CellMomentumTransport.Prepared preparedMomentum;
 	private GasVolumeAllocation allocation;
-	private GasCapacityGroups gasCapacityGroups;
-	private record GasCapacityGroups(int[] receiverGroup,SignedDyadic[] upper,int[] nodeGroup) { }
+	private record GasCapacityGroups(int[] receiverGroup,SignedDyadic[] upper) { }
 	private long[] targetOccupied;
 
 	/** Builds the shared coarse face indexing once. */
@@ -60,7 +59,6 @@ final class ConservativeLiquidFlux {
 		nextGasTags = new PhaseSourceColumns(count);
 		macroFlows = new PhaseSourceColumns(2 * physicalFaceCount);
 		macroTotal = new PhaseSourceColumns(2 * physicalFaceCount);
-		gasReservation = new PhaseSourceColumns(count);
 		phase = new FlipPressurePhaseGeometry(sizeX, sizeY, sizeZ);
 	}
 
@@ -187,7 +185,6 @@ final class ConservativeLiquidFlux {
 		prepareFacePreferences(dt,displacement);
 		prepared=settle(capacities);
 		working=prepared.future();
-		advanceGasSources(prepared.transfers(),displacement);
 		pore=targetPore;
 		liquid=PhaseOccupancyTransport.reconstruct(domain,working,pore,null,reconstructionWorkspace);
 		phase=reconstructionWorkspace;phaseLiquid=liquid;phasePore=pore;
@@ -196,9 +193,9 @@ final class ConservativeLiquidFlux {
 		preparedCapacity=GasComponentCapacity.prepare(domain.geometry.cutCells,phase,working.snapshot(),
 				sourceFrame==null?null:sourceFrame.geometry().actualCapacity());
 		finalDry=preparedCapacity.dry;
+		advanceGasSources(prepared.transfers(),displacement);
 		var swap=gasTags;gasTags=nextGasTags;nextGasTags=swap;
 		normalizeGasSources();
-		inheritGasReservoirs();
 	}
 	/** Integrates the actual donor slabs on shared open faces. */
 	private void prepareFacePreferences(double dt,boolean displacement) {
@@ -232,10 +229,8 @@ final class ConservativeLiquidFlux {
 			}
 		}
 	}
-	/** Carries gas identity with the already accepted liquid flux. */
+	/** Advects gas only on full fixed openings; restricted openings belong to the orifice solver. */
 	private void advanceGasSources(List<LiquidCellInventory.Transfer> transfers,boolean displacement) {
-		// Gas follows the accepted component liquid routes, including any
-		// capacity correction against the pressure-predicted port direction.
 		macroFlows.reset(2*physicalFaceCount);
 		for(var transfer:transfers){
 			int face=transfer.face(),row=2*face+(transfer.source().cell()==left[face]?0:1);
@@ -243,15 +238,44 @@ final class ConservativeLiquidFlux {
 			macroFlows.add(row,key,transfer.volume().toDouble());
 		}
 		nextGasTags.reset(liquid.length);
-		if (!displacement) for (int row = 0; row<macroTotal.rowCount(); row++) for (int e = macroTotal.first(row); e >= 0; e = macroTotal.next(e)) {
-			int face = row / 2, from = row % 2 == 0 ? left[face] : right[face], target = row % 2 == 0 ? right[face] : left[face];
-			long key = macroTotal.key(e);
-			int sourceSlot = 8 * from + Integer.numberOfTrailingZeros((int)(key >>> 8)), targetSlot = 8 * target + Integer.numberOfTrailingZeros((int) key & 255);
-			long reverse=(key&255)<<8|(key>>>8);
-			double ql=macroFlows.quantity(row,key)-macroFlows.quantity(row^1,reverse);
-			copyGas(sourceSlot,targetSlot,Math.max(0,macroTotal.amount(e)-ql));
+		double[] outgoing=new double[liquid.length],accepted=new double[liquid.length];
+		if(!displacement)for(int row=0;row<macroTotal.rowCount();row++){
+			int face=row/2;if(!advectsGas(face))continue;
+			int from=row%2==0?left[face]:right[face];
+			for(int e=macroTotal.first(row);e>=0;e=macroTotal.next(e)){
+				long key=macroTotal.key(e);
+				int source=8*from+Integer.numberOfTrailingZeros((int)(key>>>8));
+				outgoing[source]+=gasFlux(row,e);
+			}
 		}
-		for (int row = 0; row<gasTags.rowCount(); row++) if (gasTags.first(row) >= 0) copyGas(row, row, gasTags.rowSum(row));
+		if(!displacement)for(int row=0;row<macroTotal.rowCount();row++){
+			int face=row/2;if(!advectsGas(face))continue;
+			int from=row%2==0?left[face]:right[face],to=row%2==0?right[face]:left[face];
+			for(int e=macroTotal.first(row);e>=0;e=macroTotal.next(e)){
+				long key=macroTotal.key(e);
+				int source=8*from+Integer.numberOfTrailingZeros((int)(key>>>8));
+				int target=8*to+Integer.numberOfTrailingZeros((int)key&255);
+				double gas=gasTags.rowSum(source);
+				// A quasi-static cavity keeps its gas on every surviving source support.
+				// Only displaced dry control volume supplies source labels to new supports;
+				// MAC circulation within an unchanged cavity has no separate gas inventory.
+				double movable=Math.max(0,gas-finalDry[source]);
+				if(outgoing[source]>0){
+					double amount=gasFlux(row,e)*Math.min(1,movable/outgoing[source]);
+					copyGas(source,target,amount);accepted[source]+=amount;
+				}
+			}
+		}
+		for(int row=0;row<gasTags.rowCount();row++)if(gasTags.first(row)>=0)
+			copyGas(row,row,Math.max(0,gasTags.rowSum(row)-accepted[row]));
+	}
+	private double gasFlux(int row,int entry){
+		long key=macroTotal.key(entry),reverse=(key&255)<<8|(key>>>8);
+		double liquidFlux=macroFlows.quantity(row,key)-macroFlows.quantity(row^1,reverse);
+		return Math.max(0,macroTotal.amount(entry)-liquidFlux);
+	}
+	private boolean advectsGas(int face){
+		return GasComplementGeometry.fullFixedConnection(domain.geometry.cutCells,left[face],right[face],axis[face]);
 	}
 	/** Fits source weights to the final dry support geometry. */
 	private void normalizeGasSources() {
@@ -290,7 +314,7 @@ final class ConservativeLiquidFlux {
 	private LiquidCellInventory.Plan settle(SignedDyadic[] capacities) {
 		var origins = working.stocks();
 		prepareRoutes(origins, capacities);
-		gasCapacityGroups=prepareGasGroups(capacities);
+		var gasCapacityGroups=prepareGasGroups(capacities);
 		var routes=PhaseQuantitySettlement.settle(numericalRoutes,capacities,
                 gasCapacityGroups==null?null:gasCapacityGroups.receiverGroup(),gasCapacityGroups==null?null:gasCapacityGroups.upper(),
                 source -> prepareAlternatives(source, capacities));
@@ -300,6 +324,7 @@ final class ConservativeLiquidFlux {
 	/** The initial allocation contains only physical preferences and the retained source share. */
 	private void prepareRoutes(List<LiquidCellInventory.Stock> origins, SignedDyadic[] capacities) {
 		numericalRoutes.reset(origins,capacities.length);
+		numericalRoutes.materialLayers(domain.materialRegistry,sizeX,sizeY,domain.config.gravity());
 		for (int source = 0; source<numericalRoutes.sourceCount(); source++) {
 			var key = numericalRoutes.key(source);
 			int cell = key.cell(), support = key.supportMask();
@@ -345,89 +370,50 @@ final class ConservativeLiquidFlux {
 	/** A finite chamber constrains aggregate space while liquid may rearrange freely inside it. */
     private GasCapacityGroups prepareGasGroups(SignedDyadic[] capacities){
         var frame=domain.gasState.frame;if(frame==null||frame.nodeCount()==0)return null;
-        int count=frame.nodeCount();gasReservation.reset(capacities.length);
-        for(int i=0;i<capacityCount;i++){int row=capacitySlots[i];for(int e=gasTags.first(row);e>=0;e=gasTags.next(e)){
-            int node=(int)gasTags.key(e);if(node>0&&!domain.gasState.network.inventory(node).isEmpty())gasReservation.add(row,node,gasTags.amount(e));
-        }}
-        for(int row=0;row<macroTotal.rowCount();row++)for(int e=macroTotal.first(row);e>=0;e=macroTotal.next(e)){
-            int face=row/2,from=row%2==0?left[face]:right[face],to=row%2==0?right[face]:left[face];long key=macroTotal.key(e);
-            int source=8*from+Integer.numberOfTrailingZeros((int)(key>>>8)),receiver=8*to+Integer.numberOfTrailingZeros((int)key&255);
-            double ql=0;for(int q=macroFlows.first(row);q>=0;q=macroFlows.next(q))if(macroFlows.key(q)==key){ql=macroFlows.amount(q);break;}
-            double qg=macroTotal.amount(e)-ql,total=gasTags.rowSum(source);if(qg<=PhaseOccupancyState.VOLUME_RESOLUTION||total<=0)continue;
-            for(int q=gasTags.first(source);q>=0;q=gasTags.next(q)){int node=(int)gasTags.key(q);if(node>0&&!domain.gasState.network.inventory(node).isEmpty())gasReservation.add(receiver,node,qg*gasTags.amount(q)/total);}
-        }
-        int[] parent=new int[count+1],first=new int[capacities.length],nodeGroup=new int[count+1];
-        for(int node=0;node<=count;node++)parent[node]=node;
-        Arrays.fill(first,-1);Arrays.fill(nodeGroup,-1);
-        for(int i=0;i<capacityCount;i++){int row=capacitySlots[i];for(int e=gasReservation.first(row);e>=0;e=gasReservation.next(e)){
-            int node=(int)gasReservation.key(e);if(first[row]<0)first[row]=node;else{int a=gasRoot(parent,first[row]),b=gasRoot(parent,node);parent[b]=a;}
-        }}
-        int groups=0;for(int i=0;i<capacityCount;i++){int row=capacitySlots[i];if(first[row]>0){int root=gasRoot(parent,first[row]);if(nodeGroup[root]<0)nodeGroup[root]=groups++;}}
+        int count=frame.nodeCount(),groups=0;
+        int[] nodeGroup=new int[count+1];Arrays.fill(nodeGroup,-1);
+        for(int node=1;node<=count;node++)if(!domain.gasState.network.inventory(node).isEmpty())nodeGroup[node]=groups++;
         if(groups==0)return null;
-        for(int node=1;node<=count;node++)nodeGroup[node]=nodeGroup[gasRoot(parent,node)];
         int[] receiverGroup=new int[capacities.length];Arrays.fill(receiverGroup,-1);
         double[] groupPore=new double[groups],target=new double[groups];double available=0,totalTarget=0;
-        for(int i=0;i<capacityCount;i++){int row=capacitySlots[i];
-            available+=capacities[row].toDouble();if(first[row]>0){int group=nodeGroup[first[row]];receiverGroup[row]=group;groupPore[group]+=capacities[row].toDouble();}
+        // Independent pressure owners reserve their own actual dry support. Capacity
+        // feasibility never merges reservoirs merely because a predicted gas flux connects them.
+        for(int i=0;i<capacityCount;i++){
+            int row=capacitySlots[i];double capacity=capacities[row].toDouble();available+=capacity;
+            for(int e=gasTags.first(row);e>=0;e=gasTags.next(e)){
+                int node=(int)gasTags.key(e);if(node<=0||nodeGroup[node]<0)continue;
+                int group=nodeGroup[node];receiverGroup[row]=group;groupPore[group]+=capacity;break;
+            }
         }
         for(var stock:working.stocks())available-=stock.volumeFraction();
         for(int node=1;node<=count;node++)if(nodeGroup[node]>=0){
-			// The EOS predicts pressure, while actual bounded liquid flux determines
-			// the new chamber capacity. Preserve a resolvable representative of a
-			// finite reservoir rather than imposing a second predicted volume.
             double oldVolume=domain.gasState.network.availableVolume(node)/domain.unitScale.cubicMetersPerNormalizedVolume();
-			double volume=Math.min(oldVolume,PhaseOccupancyState.VOLUME_RESOLUTION);
-            target[nodeGroup[node]]+=volume;totalTarget+=volume;
+            double volume=Math.min(oldVolume,PhaseOccupancyState.VOLUME_RESOLUTION);
+            target[nodeGroup[node]]=volume;totalTarget+=volume;
         }
         if(!(available>0))throw new CapacityUnavailable("Nonempty finite gas has no actual remaining pore volume");
         double scale=totalTarget>available?available/totalTarget:1;var upper=new SignedDyadic[groups];
         for(int group=0;group<groups;group++){
             double volume=Math.min(groupPore[group],scale*target[group]);
-            var reserved=SignedDyadic.of(volume);
-            upper[group]=SignedDyadic.of(groupPore[group]).subtract(reserved);
+            upper[group]=SignedDyadic.of(groupPore[group]).subtract(SignedDyadic.of(volume));
         }
-        return new GasCapacityGroups(receiverGroup,upper,nodeGroup);
-    }
-    private static int gasRoot(int[] parent,int node){while(parent[node]!=node){parent[node]=parent[parent[node]];node=parent[node];}return node;}
-
-    /** The same aggregate reservoir carries its finite inventories into all surviving coarse dry space. */
-    private void inheritGasReservoirs(){
-        if(gasCapacityGroups==null)return;
-        int[] groups=gasCapacityGroups.receiverGroup(),nodes=gasCapacityGroups.nodeGroup();
-        int[] head=new int[gasCapacityGroups.upper().length],next=new int[nodes.length];Arrays.fill(head,-1);
-        double[] total=new double[head.length];
-        for(int node=1;node<nodes.length;node++)if(nodes[node]>=0){int group=nodes[node];next[node]=head[group];head[group]=node;total[group]+=domain.gasState.network.availableVolume(node);}
-        gasReservation.reset(gasTags.rowCount());
-        for(int i=0;i<capacityCount;i++){int row=capacitySlots[i];
-            double dry=gasTags.rowSum(row);if(dry<=0)continue;int group=groups[row];
-            if(group<0){for(int e=gasTags.first(row);e>=0;e=gasTags.next(e))gasReservation.add(row,gasTags.key(e),gasTags.amount(e));continue;}
-            for(int e=gasTags.first(row);e>=0;e=gasTags.next(e))if(gasTags.key(e)<=0)gasReservation.add(row,gasTags.key(e),gasTags.amount(e));
-            for(int node=head[group];node>=0;node=next[node])gasReservation.add(row,node,dry*domain.gasState.network.availableVolume(node)/total[group]);
-            gasReservation.scale(row,dry);
-        }
-        var swap=gasTags;gasTags=gasReservation;gasReservation=swap;
+        return new GasCapacityGroups(receiverGroup,upper);
     }
 
 	/** Associates final dry capacity with its transported gas sources. */
 	private GasVolumeAllocation gasAllocation(LiquidCellInventory future) {
 		var shares = new ArrayList<GasVolumeAllocation.Share>();
-		for (int cell = 0; cell<cellCount; cell++) for (int support : CellRemapMicroTopology.components(domain.geometry.cutCells.mask(cell))) {
-			int row = 8 * cell + Integer.numberOfTrailingZeros(support), piece = - 1;
-			double largest = 0;
-			for (int bits = support; bits != 0; bits &= bits - 1) {
-				int p = 8 * cell + Integer.numberOfTrailingZeros(bits);
-				double dry = pore[p] - liquid[p];
-				if (dry> largest) {
-					largest = dry;
-					piece = p;
-				}
-			}
-			if (piece<0) continue;
-			double gas = finalDry[row], total = gasTags.rowSum(row);
-			for (int e = gasTags.first(row); e >= 0; e = gasTags.next(e)) {
-				int node = (int) gasTags.key(e);
-				double part = gas * (gasTags.amount(e) / total);
-				if (part> 0) shares.add(new GasVolumeAllocation.Share(node, piece, part, node> 0 ? GasVolumeAllocation.SourceKind.EXISTING : node == 0 ? GasVolumeAllocation.SourceKind.AMBIENT : GasVolumeAllocation.SourceKind.EXPLICIT_VACUUM));
+		for(var component:preparedCapacity.components){
+			if(component.availableVolumeNormalized().signum()==0)continue;
+			int row=8*component.cell()+Integer.numberOfTrailingZeros(component.supportMask());
+			// Provenance belongs to this actual fixed support, including compact dry
+			// volume whose micro occupation rounds to a full liquid cell.
+			double gas=component.availableVolumeNormalized().toDouble(),total=gasTags.rowSum(row);
+			for(int e=gasTags.first(row);e>=0;e=gasTags.next(e)){
+				int node=(int)gasTags.key(e);double part=gas*(gasTags.amount(e)/total);
+				if(part>0)shares.add(new GasVolumeAllocation.Share(node,row,part,node>0
+						?GasVolumeAllocation.SourceKind.EXISTING:node==0
+						?GasVolumeAllocation.SourceKind.AMBIENT:GasVolumeAllocation.SourceKind.EXPLICIT_VACUUM));
 			}
 		}
 		preparePhase();

@@ -65,7 +65,7 @@ final class ViscousMacDiscretization {
 			for (int axis = 0; axis < 3; axis++) {
 				int lo = face(axis, x, y, z);
 				int hi = face(axis, x + (axis == 0 ? 1 : 0), y + (axis == 1 ? 1 : 0), z + (axis == 2 ? 1 : 0));
-				operator.add(2 * viscosities[cell] * h * volumes[cell], hi, 1, lo, -1, -1, 0, -1, 0);
+				operator.addOwned(2 * viscosities[cell] * h * volumes[cell], hi, 1, lo, -1, -1, 0, -1, 0, cell,-1,-1,-1);
 				if (wall == FluidSolverConfig.WallCondition.NO_SLIP) addWall(cell, axis, lo, hi);
 			}
 		}
@@ -89,7 +89,7 @@ final class ViscousMacDiscretization {
 		double area = Math.min(Math.min(apertures[ua], apertures[la]), Math.min(apertures[ub], apertures[lb]));
 		if (area == 0) return;
 		double mu = harmonic(harmonic(viscosities[c00], viscosities[c01]), harmonic(viscosities[c10], viscosities[c11]));
-		operator.add(mu * h * area, ua, 1, la, -1, ub, 1, lb, -1);
+		operator.addOwned(mu * h * area, ua, 1, la, -1, ub, 1, lb, -1, c00,c01,c10,c11);
 	}
 
 	private void addWall(int cell, int tangent, int lo, int hi) {
@@ -99,8 +99,8 @@ final class ViscousMacDiscretization {
 		// Lump the cell-owned wall area equally onto its two tangential faces. The
 		// volume-scaled half-width resolves a full cell as h/2 and shrinks with cuts.
 		double conductance = viscosities[cell] * h * area / volumes[cell];
-		operator.add(conductance, lo, 1, -1, 0, -1, 0, -1, 0);
-		operator.add(conductance, hi, 1, -1, 0, -1, 0, -1, 0);
+		operator.addOwned(conductance, lo, 1, -1, 0, -1, 0, -1, 0, cell,-1,-1,-1);
+		operator.addOwned(conductance, hi, 1, -1, 0, -1, 0, -1, 0, cell,-1,-1,-1);
 	}
 
 	FluidDomain.ViscousStepStats copyVelocityTo(float[][] target, FluidDomain.ViscousStepStats stats) {

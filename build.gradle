@@ -31,3 +31,14 @@ tasks.register('verifyArchitecture') {
 	description = 'Runs the architecture dependency/size gate.'
 	dependsOn ':fabric:runArchitectureValidation'
 }
+
+tasks.register('runValidation') {
+	group = 'verification'
+	description = 'Runs CPU main validations (default fast; -PcpuValidation=full for complete coverage), architecture and the GPU adapter once.'
+	// The CPU suite already includes model thermal ownership, solver cut-cells and application transactions.
+	dependsOn ':fabric:runCpuValidation', ':fabric:runArchitectureValidation', ':gpu-probe:runAdapterValidation'
+}
+
+tasks.named('check') {
+	dependsOn tasks.named('runValidation')
+}

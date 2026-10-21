@@ -94,7 +94,10 @@ final class FluidDomainStateMapper {
 			if (thermalBoundary != null) domain.replaceThermalBoundaryTemperatures(thermalBoundary);
 		}
 		if (state.precipitationEnabled()) domain.setPrecipitationEnabled(true);
-		domain.domainFlowFields.ensureGrid();
+		// A cold state retains the choice to initialize gas at the next physical preparation.
+		// Rebuilding inventory and velocity alone does not create ambient stock or sources.
+		if (state.gas() == null) domain.domainFlowFields.ensureVelocityGrid();
+		else domain.domainFlowFields.ensureGrid();
 		if(state.condensedPhasePressure()!=null)domain.pressureSystem.restoreLiquidPressure(state.condensedPhasePressure());
 		return domain;
 	}

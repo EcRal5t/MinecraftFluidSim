@@ -22,7 +22,6 @@ public final class RegionCheckpointRestorer {
 	public FluidDomainState reconstructAuthoritativeState(ChemicalRegistry chemistry,GranularRegistry granular,
 			ThermalRegistry thermal,GasRegistry gas,MaterialRegistry materials) throws IOException {
 		validateCheckpoint(); int cells=manifest.sizeX()*manifest.sizeY()*manifest.sizeZ();
-		if(manifest.hasChemicalState()&&(chemistry==null||!manifest.registryFingerprint().equals(chemistry.fingerprint())))throw new IOException("Authoritative chemical registry differs");
 		var runtime=runtime();var liquid=reconstructLiquid(chemistry);var momentum=reconstructMomentum();
 		var chemicalAudit=manifest.hasChemicalState()?decodeChemicalAuditExtension():new ChemicalAuditLedgerCodec.AuditLedgers(ChemicalTransferLedger.EMPTY,ChemicalTransferLedger.EMPTY);
 		var solids=manifest.hasGranularState()?reconstructGranular(granular):null;
@@ -38,7 +37,14 @@ public final class RegionCheckpointRestorer {
 	}
 	private SolverRuntimeCodec.Data runtime()throws IOException{return new SolverRuntimeCodec().decode(requiredExtension(manifest.extensions(),SolverRuntimeCodec.MANIFEST_EXTENSION).payload(),manifest.sizeX()*manifest.sizeY()*manifest.sizeZ(),Math.toIntExact(manifest.reservedMarkerCapacity()));}
 	public LiquidCellInventory.Snapshot reconstructLiquid(ChemicalRegistry chemistry)throws IOException {
-		validateCheckpoint();var rows=new ArrayList<List<LiquidCellInventory.Stock>>();int cells=manifest.sizeX()*manifest.sizeY()*manifest.sizeZ();for(int i=0;i<cells;i++)rows.add(new ArrayList<>());
+		validateCheckpoint();
+		// Saved mixture entries use registry ordinals. Every reader must establish the
+		// same definition identity before assigning meaning to those integer handles.
+		if(manifest.hasChemicalState()&&(chemistry==null
+				||!manifest.registryFingerprint().equals(chemistry.fingerprint())
+				||!manifest.speciesPalette().equals(chemistry.species().stream().map(ChemicalSpecies::id).toList())))
+			throw new IOException("Chemical registry fingerprint or species palette differs from checkpoint");
+		var rows=new ArrayList<List<LiquidCellInventory.Stock>>();int cells=manifest.sizeX()*manifest.sizeY()*manifest.sizeZ();for(int i=0;i<cells;i++)rows.add(new ArrayList<>());
 		for(var section:sections)for(var stock:section.liquidStocks())rows.get(stock.key().cell()).add(stock);
 		try{return new LiquidCellInventory(new LiquidCellInventory.Snapshot(rows),chemistry).snapshot();}catch(IllegalArgumentException invalid){throw new IOException("Invalid liquid cell quantities",invalid);}
 	}

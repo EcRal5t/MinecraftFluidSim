@@ -165,7 +165,7 @@ public final class CpuValidationSuite {
 		});
 		gate(gates, "controller-gas-lineage", () -> {
 			ProductionFluidReplayValidation.controllerEmptyThenBoundaryPourPreservesGasAcrossBackend();
-			ProductionFluidReplayValidation.controllerPoursKeepSingleSealedGasOwner();
+			ProductionFluidReplayValidation.controllerPoursRetainMacroscopicHeadspace();
 		});
 		gate(gates, "production-live-budget", ProductionFluidReplayValidation::defaultLiveStepsRemainBounded);
 		gate(gates, "production-replay", () -> ProductionFluidReplayValidation.main(NONE));

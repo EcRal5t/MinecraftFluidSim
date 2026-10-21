@@ -1323,8 +1323,8 @@ public final class GranularCarrierValidation {
 		double before = pressureEnergy(domain) + solidEnergy(domain);
 		float dt = .4F * domain.config.cellSize() / 250;
 		domain.granularMechanicalStage.predictVelocities(dt);
-		domain.pressureStage.solve(dt);
-		domain.pressureStage.projectVelocities(dt);
+		domain.pressureSystem.solve(dt);
+		domain.pressureSystem.projectVelocities(dt);
 		domain.granularMechanicalStage.validateVelocities();
 		require(pressureEnergy(domain) + solidEnergy(domain) < before,
 				"implicit drag must dissipate an initially unresolved relative velocity into a valid solution");
@@ -1404,6 +1404,17 @@ public final class GranularCarrierValidation {
 		for (int axis = 0; axis < 3; axis++) require(Math.abs(afterMomentum[axis] - beforeMomentum[axis]) < 2.0e-5,
 				"shared carrier drag lost momentum on axis " + axis + ": " + (afterMomentum[axis] - beforeMomentum[axis]));
 		require(afterEnergy < beforeEnergy - 1.0e-5, "shared carrier drag must dissipate relative kinetic energy");
+		if(!massWeighted) {
+			long[] mass=new long[domain.cellCount];double[] volume=new double[domain.cellCount];
+			for(var stock:domain.liquidCells.physicalStocks()) {
+				mass[stock.key().cell()]+=stock.massUnits();volume[stock.key().cell()]+=stock.volumeFraction();
+			}
+			var quantities=new LiquidCellInventory.TransportQuantities(java.util.List.of(),mass,mass,volume);
+			double heat=domain.cellMacStage.finishDissipation(quantities,java.util.Map.of()).values().stream()
+					.mapToDouble(mmm.units.SignedDyadic::toDouble).sum();
+			require(Math.abs(heat-(beforeEnergy-afterEnergy))<=1e-5*beforeEnergy+1e-6,
+					"implicit drag heat did not close the finite-mass liquid and parcel kinetic-energy loss");
+		}
 
 	}
 
@@ -1489,8 +1500,7 @@ public final class GranularCarrierValidation {
 	private static void finitePressureResponse() {
 		var domain=domain();for(int p=0;p<60;p++)addParcel(domain,1.75F,1.75F,1.75F,.25F,-1,.5F);
 		fillPoreWater(domain,domain.sizeY);domain.domainFlowFields.ensureGrid();
-		domain.pressureSystem.predictDrag(.05F);
-		domain.pressureStage.solve(.05F);domain.pressureStage.projectVelocities(.05F);
+		domain.pressureSystem.solve(.05F);domain.pressureSystem.projectVelocities(.05F);
 		domain.granularMechanicalStage.previewCollision(.05F);domain.granularMechanicalStage.publishCollisionVelocities();
 		require(Double.isFinite(pressureEnergy(domain)+solidEnergy(domain)),"Joint pressure response produced invalid kinetic energy");
 	}
@@ -1506,7 +1516,7 @@ public final class GranularCarrierValidation {
 	private static void internalPressureImpulseCloses() {
 		var domain = domain(); addParcel(domain, 1.43F, 1.62F, 1.39F, 0, 0, 0);
 		fillPoreWater(domain, domain.sizeY); domain.domainFlowFields.ensureGrid();
-		domain.pressureStage.solve(.05F);
+		domain.pressureSystem.solve(.05F);
 		java.util.Arrays.fill(domain.projection.pressure, 0);
 		domain.projection.pressure[domain.domainFlowFields.cellIndex(2,2,2)] = 300;
 		domain.projection.pressure[domain.domainFlowFields.cellIndex(3,2,2)] = -100;
@@ -1551,7 +1561,7 @@ public final class GranularCarrierValidation {
 	}
 
 	private static void sharedGasPressureAlgebra() {
-		var domain=headspacePressureDomain();domain.pressureStage.solve(.05F);var graph=domain.pressureSystem.faces;
+		var domain=headspacePressureDomain();domain.pressureSystem.solve(.05F);var graph=domain.pressureSystem.faces;
 		int size=domain.cellCount+domain.gasState.network.nodeCount()+1;
 		double[] a=new double[size],b=new double[size],aa=new double[size],ab=new double[size],velocity=new double[graph.faceCount];
 		for(int i=0;i<size;i++){a[i]=i%7-3;b[i]=i%11-5;}

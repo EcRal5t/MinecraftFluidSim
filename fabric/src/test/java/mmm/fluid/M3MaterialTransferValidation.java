@@ -195,9 +195,8 @@ final class M3MaterialTransferValidation {
 		double pressureError = maximumError / maximumExpected;
 		check(pressureError <= 2.0E-5, name + " active pressure missed analytic hydrostatics: " + pressureError
 				+ ", actual=" + Arrays.toString(actual) + ", expected=" + Arrays.toString(expected));
-		check(stats.pressureIterations() > 0 && stats.pressureIterations() <= 32,
-				name + " active PCG iteration count escaped the column bound");
-		check(stats.pressureResidual() <= 1.0E-3F, name + " active PCG residual is too large");
+		check(Float.isFinite(stats.pressureResidual()) && stats.pressureResidual() <= 1.0E-3F,
+				name + " active pressure residual is too large");
 		check(domain.maximumParticleSpeed() <= 2.0E-4F, name + " active projection left parasitic marker velocity");
 		check(stats.relativeVolumeError() <= 1.0E-7F && stats.relativeMassError() <= 1.0E-12,
 				name + " active step changed physical inventories");

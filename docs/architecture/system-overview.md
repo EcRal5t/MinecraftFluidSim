@@ -214,10 +214,13 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 `PressureLinearSolver` 与 `PressurePreconditioner` 统一 PCG 及不完全 Cholesky 预条件，颗粒阻力按有限质量成对处理。
 `PressureSparseMatrix` 一次组装液体、颗粒和气体共同 CSR，矩阵乘与 IC(0) 直接复用该算子；真空活动集沿当前自由行求解。
 压力支撑分类直接读取同代气体几何已准备的分量孔容与实际干容，精确容量由共同库存准备一次。
+真实真空腔与有库存气腔均保留自己的压力接触。静水参考只提供已知载荷，压力自由度由实际容量与气腔归属决定。
 已解析液气界面采用给定压力或有限气腔储存项，状态方程按液体压载区间给出有限体积响应，参加一次半隐式压力预测。
 活动颗粒体积分配到共同 MAC 面，液体读取剩余开口，两相真实有限质量与各自体积散度的转置共同构成压力算子。
 压力同时更新液体与颗粒速度，接触和位置预测随后准备实际整数占容，真实终点孔容由共同有界输运结算。
+`PressureSystem` 集中准备共同压力预测：两相先接收已知界面载荷及静水浮力，再执行有限质量阻力，随后求解共同残余压力。
 作用与反作用、外部约束冲量和压力功按实际写回结算；整数库存按最终位置独立核对真实容量，具体离散见[颗粒参考](granular-state.md#统一排水与压力)。
+实体接触以实际面冲量和规定速度结算有符号外功，接触阻力热写入相邻实际液体；动量、热量与墙面停动反力共同准备并发布。
 
 液体持久动量位于 MAC 格面，格面速度从同一双控制体积的实际质量与动量派生。
 `CellMomentumTransport` 把本次完整输运的实际整数质量通量提升到格面，`MacMomentumAdvection` 采用正权迎风混合。
@@ -233,8 +236,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 - **压力与气腔耦合**
   - 主要文件：
-    - [PressureProjectionStage](../../solver/src/main/java/mmm/fluid/PressureProjectionStage.java)
-    - [PressureSystem](../../solver/src/main/java/mmm/fluid/PressureSystem.java)
+    - [PressureSystem](../../solver/src/main/java/mmm/fluid/PressureSystem.java)：`solve` 组织已知载荷、阻力、共同矩阵及速度修正，集中发布求解结果
     - [PressureLinearSolver](../../solver/src/main/java/mmm/fluid/PressureLinearSolver.java)
     - [PressureSparseMatrix](../../solver/src/main/java/mmm/fluid/PressureSparseMatrix.java)：液体、气体与颗粒共同 CSR 算子
     - [PressurePreconditioner](../../solver/src/main/java/mmm/fluid/PressurePreconditioner.java)
@@ -276,9 +278,8 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 - **曲率、界面张力与润湿**
   - 主要文件：
-    - [SurfaceTensionWorkspace](../../solver/src/main/java/mmm/fluid/SurfaceTensionWorkspace.java)
+    - [SurfaceTensionFields](../../solver/src/main/java/mmm/fluid/SurfaceTensionFields.java)：共同曲率、接触角与全部界面字段；接触角沿固定墙法向通量施加一次
     - [HeightFunctionCurvature](../../solver/src/main/java/mmm/fluid/HeightFunctionCurvature.java)
-    - [DomainFlowFields](../../solver/src/main/java/mmm/fluid/DomainFlowFields.java)：共同曲率与墙面接触角法向，毛细压差进入共同压力投影。
     - [BodyForceStage](../../solver/src/main/java/mmm/fluid/BodyForceStage.java)：液液物相对的显式 CSF。
   - 验证选择器 / 参考：`surface-tension`；[界面离散](fluid-solver.md#plic表面张力与润湿)
 
@@ -294,7 +295,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 压力和 PLIC 给出面通量偏好，正常运动与颗粒排水共用双向邻接路线和一次容量投影。
 材料随后共享已经接受的分量路线，分别拆分实际体积、整数质量、物种与内能；少量材料沿同一分量流动。
 气相互补通量读取已经接受的液相 `QL`，包括容量修正，整数质量、动量和气体来源使用同次结算结果。
-非空有限气腔保留实际尺度的正空间代表，同组空间自由重排，气体来源按相同分组交接。
+每个非空有限气腔在其真实支撑内保留正容量；容量约束与物质来源分别准备，气体来源沿实际干空间变化交接。
 气体膨胀由实际液流推进，终态状态方程与热功读取真实容量。
 每个机械子步执行一次完整时长的有限体积推进，按实际份额分配材料整数质量、物种与内能，活动域发布一次。
 原地全量保留的库存行直接共享，整份跨格转移直接携带原质量、组成和内能，真实拆分才分配各项整数份额。
@@ -303,7 +304,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 每个粗单元固定开放分量使用一套粗梯度 PLIC 平面，按最终库存液量确定偏移；持久微盒列保存共同重建输入，积分形状由 PLIC 工作区派生。
 未解析液片与气隙可合并，允许格内形状调整和细尺度耗散；实际物质与携带能量继续守恒。
-气体来源按固定开放分量汇总，随实际宏观互补通量和本地保留空间推进，最终通过分量中的规范干片交接。
+气体来源按固定开放分量汇总，随实际宏观互补通量和本地保留空间推进，最终按真实分量容量交接。完整固定开口参与 MAC 来源输运，受限孔口的库存与焓由孔流网络结算。
 新开放空腔使用显式真空来源。
 同一粗单元固定开放分量内的干片合并气腔归属，跨完整固定开口的可解析粗分量气体共压，面内未解析液膜允许合并。
 完整液塞和固定墙阻断气体，有限固定孔口保留孔流。
@@ -315,6 +316,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 气体库存、内能和旧控制体积沿同一份最终来源一次分配。
 持久化保留相占据与微盒归属；环境交换记 source/sink，新开放真空空间保持明确归属。
 真实运动改变容量时按状态方程结算等熵功；表示交接和相变内部交换分别处理，避免重复做功。
+气体来源与绝热控制体积分别交接：旧腔库存、内能及旧容量使用同一来源权重；局部液体移动形成的真空标签携带零库存。真正新增的零能量空间由实际净新增孔容给出。
 
 气体采用集总气腔与有限孔流模型，按库存、容量和内能派生压力、温度及顺应性。
 完整固定开口两侧的实际粗分量干容量超过共同解析量时采用低 Mach 共压近似，微量气体空间沿真实干口连接。
@@ -427,6 +429,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 ## 存档和故障恢复
 
 完整状态由 `FluidDomainStateMapper` 捕获与恢复。
+气体初始化状态随同保存；尚未初始化气体的恢复只准备库存与速度，气腔库存由后续明确的物理准备创建。
 正常候选共享已验证的液体不可变库存行与气相几何，独立复制 MAC 动量和气体网络；非液体内能由 `ThermalOwnerSnapshot` 携带。
 调度进度、待同步相变几何、世界热交换面与最近真实压力投影随同交接。`FluidDomainState.Layout` 绑定网格、配置、载体布局、预算和注册表身份；区域 checkpoint 的持久字段另由存档模型定义。
 

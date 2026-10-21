@@ -90,8 +90,8 @@ final class HeightFunctionCurvature {
         int coordinate=axis==0?x:axis==1?y:z,size=axis==0?d.sizeX:axis==1?d.sizeY:d.sizeZ;
         if (!(side==0 && coordinate==0 || side==1 && coordinate==size-1)) return false;
         int cell=d.domainFlowFields.cellIndex(reflect(x,d.sizeX),reflect(y,d.sizeY),reflect(z,d.sizeZ));
-        return d.domainFlowFields.surfaceTensionContactAngleAtCell(target)==Math.PI/2
-                &&d.domainFlowFields.surfaceTensionContactAngleAtCell(cell)==Math.PI/2
+        return d.tension.surfaceTensionContactAngleAtCell(target)==Math.PI/2
+                &&d.tension.surfaceTensionContactAngleAtCell(cell)==Math.PI/2
                 &&d.projection.pressureVolume[cell]==color[cell]
                 &&d.pressurePhaseGeometry.liquidFaceArea(cell,axis,side,d.geometry.cutCells)>0;
     }
@@ -121,12 +121,12 @@ final class HeightFunctionCurvature {
         x += axis == 0 ? offset : 0; y += axis == 1 ? offset : 0; z += axis == 2 ? offset : 0;
         boolean reflected = !d.domainFlowFields.inside(x, y, z);
         if (reflected) {
-            if (d.domainFlowFields.surfaceTensionContactAngleAtCell(target) != Math.PI / 2) return Double.NaN;
+            if (d.tension.surfaceTensionContactAngleAtCell(target) != Math.PI / 2) return Double.NaN;
             x = reflect(x, d.sizeX); y = reflect(y, d.sizeY); z = reflect(z, d.sizeZ);
         }
         int c = d.domainFlowFields.cellIndex(x, y, z);
         if (d.geometry.solid[c] || d.geometry.cutCells.mask(c) != 0 || d.domainCollision.effectiveOpenCellVolume(c) != 1) return Double.NaN;
-        if (reflected && color[c] > 0 && d.domainFlowFields.surfaceTensionContactAngleAtCell(c) != Math.PI / 2) return Double.NaN;
+        if (reflected && color[c] > 0 && d.tension.surfaceTensionContactAngleAtCell(c) != Math.PI / 2) return Double.NaN;
         return color[c];
     }
     private static int reflect(int coordinate, int size) {

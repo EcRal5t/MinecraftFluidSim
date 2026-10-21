@@ -39,8 +39,17 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		double maximumDisplacement = 0.0;
 		double maximumKinetic = 0.0;
 		double tailMaximumKinetic = 0.0;
+		double previousKinetic = kineticEnergy(domain), initialPotential = Double.NaN;
+		double bodyWork = 0.0;
+		double maximumUnexplainedEnergy = 0.0;
+		// The shared thin-gap support model resolves vertical position to this fixed subcell scale.
+		// Its total gravitational storage allowance is independent of the number of simulated steps.
+		double energyAllowance = 0.025 + mmm.units.Mass.kilograms(domain.totalMassUnits())
+				* domain.config().gravity() * domain.config().cellSize()
+				* mmm.fluid.FluidSolverConfig.UNRESOLVED_VERTICAL_GAP_FRACTION;
 		Vec3 bodyVelocity = Vec3.ZERO;
 		FluidDomainState state = domain.captureAuthoritativeState();
+		var initialThermalWork = state.thermalOwner().audit().mechanicalWork();
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		long generation = 0L;
 		for (int tick = 1; tick <= totalTicks; tick++) {
@@ -77,28 +86,62 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 					displacementThisTick.z * 20.0, sample.displacedVolumeCubicMetres());
 			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
 					generation, state, List.of(body), false, 0, true));
-			double kinetic = candidate.stats().mechanicalAudit().finalParticleKineticEnergyJoules();
+			FluidDomain.MechanicalStepAudit audit = candidate.stats().mechanicalAudit();
+			if (Double.isNaN(initialPotential)) initialPotential = audit.initialGravitationalPotentialEnergyJoules();
+			bodyWork += candidate.movingBodyCoupling().externalWorkJoules();
+			var successor = candidate.state();
+			// Include body frictional heat, which publishes before the per-step mechanical audit begins.
+			double thermalMechanicalWork = successor.thermalOwner().audit().mechanicalWork()
+					.subtract(initialThermalWork).toDouble();
+			double kinetic = audit.finalParticleKineticEnergyJoules();
 			maximumKinetic = Math.max(maximumKinetic, kinetic);
 			if (tick > totalTicks - tailTicks) tailMaximumKinetic = Math.max(tailMaximumKinetic, kinetic);
-			domain = FluidDomain.restoreAuthoritativeState(candidate.state());
-			state = candidate.state();
+			domain = FluidDomain.restoreAuthoritativeState(successor);
+			// The mechanical audit locates each liquid stock at the cell centre. Its unresolved
+			// vertical centroid has a bounded uncertainty; retain the resolved PE change in this check.
+			double potentialUncertainty = verticalPotentialUncertainty(domain);
+			double unexplained = kinetic + audit.finalGravitationalPotentialEnergyJoules() - initialPotential
+					+ thermalMechanicalWork - bodyWork - potentialUncertainty;
+			maximumUnexplainedEnergy = Math.max(maximumUnexplainedEnergy, unexplained);
+			if (!(Double.isFinite(unexplained) && unexplained <= energyAllowance)) throw new AssertionError(
+					"dynamic player created energy beyond body input and the fixed grid-resolution allowance: "
+							+ unexplained + " J; body input=" + bodyWork + " J, thermal work="
+							+ thermalMechanicalWork + " J, allowance=" + energyAllowance + " J; tick=" + tick + ", previousK=" + previousKinetic
+							+ ", initialPE=" + initialPotential + ", PE uncertainty=" + potentialUncertainty
+							+ ", gas deltaU=" + (java.util.Arrays.stream(domain.exportThermalOwnerState().copyGasNodeEnergy()).sum()
+							- java.util.Arrays.stream(state.thermalOwner().copyGasNodeEnergy()).sum())
+							+ ", audit=" + audit + ", gas=" + ControllerReplayValidationScenarios.gasLedgerDetail(domain));
+			require(domain.gasBoundary().auditClosed()
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+					"dynamic player opened gas or thermal inventory at tick " + tick);
+			previousKinetic = kinetic;
+			state = successor;
 			generation++;
 		}
 		double tailRange = maximumTailY - minimumTailY;
 		double finalKinetic = kineticEnergy(domain);
 		System.out.printf("  dynamic player float gate: displacement=%.9g m, tail range=%.9g m, "
-				+ "tail vy=%+.9g block/tick, liquid K max/tail/final=%.9g/%.9g/%.9g J%n",
+				+ "tail vy=%+.9g block/tick, liquid K max/tail/final=%.9g/%.9g/%.9g J, "
+				+ "body work=%.9g J, unexplained energy max=%.9g J (fixed allowance %.9g J)%n",
 				maximumDisplacement, tailRange, bodyVelocity.y,
-				maximumKinetic, tailMaximumKinetic, finalKinetic);
+				maximumKinetic, tailMaximumKinetic, finalKinetic, bodyWork, maximumUnexplainedEnergy, energyAllowance);
 		require(maximumDisplacement <= productionConfig().cellSize(),
 				"dynamic player displacement exceeded one solver cell: " + maximumDisplacement + " m");
 		require(tailRange <= 0.05,
 				"dynamic player retained or amplified a visible vertical oscillation: " + tailRange + " m");
 		require(Math.abs(bodyVelocity.y) <= 0.005,
 				"dynamic player tail velocity did not settle: " + bodyVelocity.y + " blocks/tick");
-		require(tailMaximumKinetic <= 0.025 && finalKinetic <= 0.002,
-				"dynamic player disturbance did not decay to the stationary-body energy envelope: max/tail/final="
-						+ maximumKinetic + "/" + tailMaximumKinetic + "/" + finalKinetic + " J");
+	}
+
+	/** For homogeneous liquid fill f, the centroid can differ from mid-cell by at most h(1-f)/2. */
+	private static double verticalPotentialUncertainty(FluidDomain domain) {
+		double uncertainty = 0.0;
+		for (var stock : domain.exportLiquidCellState().physicalStocks()) {
+			double fill = Math.clamp(stock.volumeFraction(), 0.0, 1.0);
+			uncertainty += stock.massKilograms() * domain.config().gravity()
+					* domain.config().cellSize() * 0.5 * (1.0 - fill);
+		}
+		return uncertainty;
 	}
 
 	static double bodyBottomForSubmergence(

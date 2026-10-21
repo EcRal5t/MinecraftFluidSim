@@ -18,6 +18,9 @@ public record FluidSolverConfig(
 		float interfaceCompression,
 		WallCondition viscousWallCondition
 ) {
+	/** Dry gaps below this fraction of a cell transmit coarse hydrostatic support.
+	 * Their actual gas capacity and pressure degrees of freedom remain resolved. */
+	public static final double UNRESOLVED_VERTICAL_GAP_FRACTION = 1.0 / 64.0;
 	public enum WallCondition { FREE_SLIP, NO_SLIP }
 
 	public FluidSolverConfig(float cellSize, float density, float gravity, float timeStep,

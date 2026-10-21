@@ -28,8 +28,8 @@ public final class ProductionFluidReplayValidation {
 		ControllerReplayValidationScenarios.controllerEmptyThenBoundaryPourPreservesGasAcrossBackend();
 	}
 
-	public static void controllerPoursKeepSingleSealedGasOwner() {
-		ControllerReplayValidationScenarios.controllerPoursKeepSingleSealedGasOwner();
+	public static void controllerPoursRetainMacroscopicHeadspace() {
+		ControllerReplayValidationScenarios.controllerPoursRetainMacroscopicHeadspace();
 	}
 
 	public static void dynamicPlayerFloatRemainsBoundedAcrossBackend() throws Exception {

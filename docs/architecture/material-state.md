@@ -22,7 +22,7 @@
 - **材料界面和表面张力**
   - 代码入口：
     - [MaterialSurfaceGeometry](../../fabric/src/client/java/mmm/client/MaterialSurfaceGeometry.java)
-    - [SurfaceTensionWorkspace](../../solver/src/main/java/mmm/fluid/SurfaceTensionWorkspace.java)
+    - [SurfaceTensionFields](../../solver/src/main/java/mmm/fluid/SurfaceTensionFields.java)
   - 测试选择器：`materials,surface-tension`
 
 - **定义的持久化**

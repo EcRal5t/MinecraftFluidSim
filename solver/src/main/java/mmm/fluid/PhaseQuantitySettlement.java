@@ -21,6 +21,18 @@ final class PhaseQuantitySettlement {
         private double[] preferred=new double[32];
         private int[] head=new int[0],retained=new int[0];
         private double[] preferredTotal=new double[0];
+        private FluidMaterialRegistry materialRegistry;
+        private int sizeX,sizeY;
+        private double gravity;
+
+        void materialLayers(FluidMaterialRegistry registry,int cellsX,int cellsY,double acceleration){
+            materialRegistry=registry;sizeX=cellsX;sizeY=cellsY;gravity=acceleration;
+        }
+        private int verticalDirection(int route){
+            if(face[route]<0)return 0;
+            int from=key(source[route]).cell()/sizeX%sizeY,to=target[route]/8/sizeX%sizeY;
+            return Integer.compare(to,from)*(gravity>0?1:-1);
+        }
 
         void reset(List<LiquidCellInventory.Stock> values,int slots){
             stocks=values;sources=size=0;
@@ -124,6 +136,10 @@ final class PhaseQuantitySettlement {
             var materialRoutes=new ArrayList<List<LiquidCellInventory.TransportRoute>>(materials);
             for(int m=0;m<materials;m++)materialRoutes.add(new ArrayList<>());
             for(int i=raw.firstStock[s],m=0;i>=0;i=raw.nextStock[i],m++){indices[m]=i;remaining[m]=raw.stocks.get(i).volume();}
+            if(partitionLayered(raw,s,amounts,indices,remaining,materialRoutes)){
+                for(int m=0;m<materials;m++)result.add(new LiquidCellInventory.SourceRoutes(raw.stocks.get(indices[m]),materialRoutes.get(m)));
+                continue;
+            }
             for(int r=raw.head[s];r>=0;r=raw.next[r])if(r!=last&&amounts[r].signum()>0){
                 for(int m=0;m<materials;m++)weights[m]=remaining[m].toDouble();
                 var shares=LiquidCellInventory.allocateVolumes(amounts[r],remaining,weights);
@@ -138,6 +154,74 @@ final class PhaseQuantitySettlement {
             }
         }
         return result;
+    }
+
+    /** Horizontal faces sample every layer; vertical faces draw from the corresponding density end. */
+    private static boolean partitionLayered(RouteBuffer raw,int source,SignedDyadic[] amounts,int[] stocks,
+            SignedDyadic[] remaining,List<List<LiquidCellInventory.TransportRoute>> routes){
+        if(raw.materialRegistry==null||raw.gravity==0)return false;
+        boolean vertical=false;
+        for(int r=raw.head[source];r>=0;r=raw.next[r])
+            if(amounts[r].signum()>0&&raw.verticalDirection(r)!=0){vertical=true;break;}
+        if(!vertical)return false;
+        int n=stocks.length,groups=0;
+        int[] phase=new int[n],member=new int[n],order=new int[n];
+        double[] volume=new double[n],mass=new double[n];
+        for(int m=0;m<n;m++){
+            var stock=raw.stocks.get(stocks[m]);int id=raw.materialRegistry.phaseHandle(stock.key().material()),g=0;
+            while(g<groups&&phase[g]!=id)g++;
+            if(g==groups){phase[groups]=id;order[groups]=groups;groups++;}
+            member[m]=g;volume[g]+=stock.volumeFraction();mass[g]+=stock.massUnits();
+        }
+        if(groups<2)return false;
+        double[] density=new double[groups];
+        for(int g=0;g<groups;g++)density[g]=mass[g]/volume[g];
+        for(int i=1;i<groups;i++){
+            int g=order[i],j=i;
+            while(j>0&&density[order[j-1]]<density[g]){order[j]=order[j-1];j--;}
+            order[j]=g;
+        }
+        var capacities=new SignedDyadic[n];double[] weights=new double[n];
+        // Remove horizontal slabs proportionally before drawing disjoint bottom/top slabs.
+        // The retained row receives the exact material remainders after every outgoing face.
+        for(int pass=0;pass<3;pass++)for(int r=raw.head[source];r>=0;r=raw.next[r]){
+            if(raw.face[r]<0||amounts[r].signum()==0)continue;
+            int direction=raw.verticalDirection(r);
+            if(pass==0&&direction!=0||pass==1&&direction!=-1||pass==2&&direction!=1)continue;
+            var wanted=amounts[r];
+            if(direction==0){
+                for(int m=0;m<n;m++)weights[m]=remaining[m].toDouble();
+                appendShares(raw,r,stocks,remaining,routes,LiquidCellInventory.allocateVolumes(wanted,remaining,weights));
+                continue;
+            }
+            for(int step=0;step<groups&&wanted.signum()>0;){
+                int position=direction<0?step:groups-1-step,g=order[position];
+                double layerDensity=density[g];var available=SignedDyadic.ZERO;
+                for(int m=0;m<n;m++){
+                    boolean selected=density[member[m]]==layerDensity;
+                    capacities[m]=selected?remaining[m]:SignedDyadic.ZERO;
+                    weights[m]=capacities[m].toDouble();available=available.add(capacities[m]);
+                }
+                var part=min(wanted,available);
+                if(part.signum()>0){
+                    appendShares(raw,r,stocks,remaining,routes,LiquidCellInventory.allocateVolumes(part,capacities,weights));
+                    wanted=wanted.subtract(part);
+                }
+                do{step++;position=direction<0?step:groups-1-step;}
+                while(step<groups&&density[order[position]]==layerDensity);
+            }
+            if(wanted.signum()!=0)throw new IllegalStateException("Layered material flux exceeded its accepted source volume");
+        }
+        for(int m=0;m<n;m++)if(remaining[m].signum()>0)
+            routes.get(m).add(raw.route(raw.retained[source],raw.stocks.get(stocks[m]),remaining[m]));
+        return true;
+    }
+    private static void appendShares(RouteBuffer raw,int route,int[] stocks,SignedDyadic[] remaining,
+            List<List<LiquidCellInventory.TransportRoute>> routes,SignedDyadic[] shares){
+        for(int m=0;m<stocks.length;m++)if(shares[m].signum()>0){
+            routes.get(m).add(raw.route(route,raw.stocks.get(stocks[m]),shares[m]));
+            remaining[m]=remaining[m].subtract(shares[m]);
+        }
     }
 
     private static int slot(LiquidCellInventory.Key key){return 8*key.cell()+Integer.numberOfTrailingZeros(key.supportMask());}

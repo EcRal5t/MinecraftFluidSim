@@ -201,7 +201,7 @@ final class GasComplementGeometry {
 
 	private static void captureFace(int cell,int peer,int axis,int[] canonical,FlipCutCellGeometry cut,
 	                                FlipPressurePhaseGeometry phase,double h2,byte[] fullFaces,int[] first,int[] second,double[] areas,List<Port> result){
-        boolean full=fullFixedFace(cut,cell,axis,1,fullFaces)&&fullFixedFace(cut,peer,axis,0,fullFaces);
+        boolean full=fullFixedConnection(cut,cell,peer,axis);
         if(full&&canonical[8*cell+(1<<axis)]>=0&&canonical[8*peer]>=0
                 &&GasFaceIntersection.fullDryFace(phase,cell,axis,1)&&GasFaceIntersection.fullDryFace(phase,peer,axis,0)){
             result.add(new Port(canonical[8*cell+(1<<axis)],canonical[8*peer],axis,h2,true));
@@ -240,6 +240,11 @@ final class GasComplementGeometry {
 	}
 	private static boolean open(FlipCutCellGeometry cut, int cell, int slot) {
 		return cut.microCellOpen(cell, slot & 1, slot >>> 1 & 1, slot >>> 2 & 1);
+	}
+	/** The carrier and topology use the same criterion for an unrestricted fixed opening. */
+	static boolean fullFixedConnection(FlipCutCellGeometry cut,int first,int second,int axis) {
+		int positive=switch(axis){case 0->0xaa;case 1->0xcc;default->0xf0;};
+		return (cut.mask(first)&positive)==0&&(cut.mask(second)&(positive^255))==0;
 	}
 	private static boolean fullFixedFace(FlipCutCellGeometry cut, int cell,
 	                                   int axis, int coordinate, byte[] cached) {

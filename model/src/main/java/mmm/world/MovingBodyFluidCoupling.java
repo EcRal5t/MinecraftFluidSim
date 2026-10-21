@@ -1,6 +1,6 @@
 package mmm.world;
 
-/** Loader-neutral moving-body sample and the physical momentum actually committed to liquid markers. */
+/** Prescribed body motion, its delivered liquid impulse and the actual external mechanical work. */
 public final class MovingBodyFluidCoupling {
 	public static final int MAXIMUM_REQUESTS_PER_STEP = 256;
 	public static final double KERNEL_SUPPORT_CELLS = 1.5;
@@ -33,16 +33,17 @@ public final class MovingBodyFluidCoupling {
 			double coupledVolumeCubicMetres,
 			double impulseXKilogramMetresPerSecond,
 			double impulseYKilogramMetresPerSecond,
-			double impulseZKilogramMetresPerSecond
+			double impulseZKilogramMetresPerSecond,
+			double externalWorkJoules
 	) {
-		public static final Result NONE = new Result(0, 0.0, 0.0, 0.0, 0.0);
+		public static final Result NONE = new Result(0, 0.0, 0.0, 0.0, 0.0, 0.0);
 
 		public Result {
 			if (coupledMarkers < 0 || !(Double.isFinite(coupledVolumeCubicMetres)
 					&& coupledVolumeCubicMetres >= 0.0)
 					|| !(Double.isFinite(impulseXKilogramMetresPerSecond)
 					&& Double.isFinite(impulseYKilogramMetresPerSecond)
-					&& Double.isFinite(impulseZKilogramMetresPerSecond))) {
+					&& Double.isFinite(impulseZKilogramMetresPerSecond) && Double.isFinite(externalWorkJoules))) {
 				throw new IllegalArgumentException("Moving-body fluid coupling result is invalid");
 			}
 		}
@@ -53,7 +54,8 @@ public final class MovingBodyFluidCoupling {
 					coupledVolumeCubicMetres + other.coupledVolumeCubicMetres,
 					impulseXKilogramMetresPerSecond + other.impulseXKilogramMetresPerSecond,
 					impulseYKilogramMetresPerSecond + other.impulseYKilogramMetresPerSecond,
-					impulseZKilogramMetresPerSecond + other.impulseZKilogramMetresPerSecond);
+					impulseZKilogramMetresPerSecond + other.impulseZKilogramMetresPerSecond,
+					externalWorkJoules + other.externalWorkJoules);
 		}
 	}
 

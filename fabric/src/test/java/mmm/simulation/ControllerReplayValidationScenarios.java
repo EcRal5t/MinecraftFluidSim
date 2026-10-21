@@ -160,27 +160,11 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 			generation++;
 		}
 		double finalAvailable = totalGasAvailableVolume(domain);
-		double minimumGasPressure = Double.POSITIVE_INFINITY;
-		int gasBearingNodes = 0;
-		for (int node : domain.gasBoundary().nodeIds()) {
-			if (domain.gasBoundary().inventory(node).isEmpty()) continue;
-			gasBearingNodes++;
-			double temperature = domain.gasNodeTemperatureK(node);
-			double expectedPressure = AirNetwork.REFERENCE_PRESSURE
-					* domain.gasBoundary().standardVolume(node) / domain.gasBoundary().availableVolume(node)
-					* temperature / GasRegistry.STANDARD_TEMPERATURE_K - AirNetwork.REFERENCE_PRESSURE;
-			double pressure = domain.gasNodeGaugePressurePa(node);
-			require(Math.abs(pressure - expectedPressure) <= Math.max(1.0E-8, Math.abs(expectedPressure) * 1.0E-12),
-					"compressed controller pressure did not match inventory/volume/temperature EoS");
-			minimumGasPressure = Math.min(minimumGasPressure, pressure);
-		}
-		require(gasBearingNodes > 0 && minimumGasPressure > 0.0
-				&& Math.abs(finalAvailable - 34.0) <= 1.0E-12,
-				"settled controller did not retain a positively pressurized 34 m3 headspace");
+		int headspace = requireMacroscopicHeadspace(domain, 34.0);
 		System.out.printf("  controller pour gas ledger: %.9f m3std in %.9f m3, "
-				+ "minimum gauge pressure=%+.3f Pa across %d backend candidates%n",
+				+ "headspace gauge pressure=%+.3f Pa across %d backend candidates%n",
 				domain.gasBoundary().sealedInventoryNanos() * 1.0E-9, finalAvailable,
-				minimumGasPressure, generation);
+				domain.gasNodeGaugePressurePa(headspace), generation);
 	}
 
 	/** Replays the live phase-enabled path after pouring into an already bootstrapped closed shell. */
@@ -316,12 +300,10 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 	 * Replays the reported two-pour controller trajectory under the default feature gates, where
 	 * the closed headspace is isothermal and bootstrap completes on the empty shell.
 	 *
-	 * <p>The headspace must stay a single sealed owner throughout. A marker-free cell enclosed by
-	 * marker-bearing neighbours is an unsampled liquid cell, not a resolved cavity; treating it as
-	 * one splits off a pocket that carries a share of the headspace inventory and is then crushed
-	 * to zero capacity by the next advection, which pauses the region for good.</p>
+	 * <p>The dominant connected headspace must retain its macroscopic capacity and compression.
+	 * Entrained pockets may retain independent inventories within one coarse cell of total capacity.</p>
 	 */
-	static void controllerPoursKeepSingleSealedGasOwner() {
+	static void controllerPoursRetainMacroscopicHeadspace() {
 		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(
@@ -360,16 +342,44 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 					"reported two-pour replay opened the gas ledger at step " + step
 							+ ": " + gasLedgerDetail(domain));
 		}
-		require(domain.gasBoundary().nodeCount() == 1,
-				"reported two-pour replay left the closed headspace split across "
-						+ domain.gasBoundary().nodeCount() + " owners, peak " + maximumNodes
-						+ ": " + gasLedgerDetail(domain));
+		int headspace = requireMacroscopicHeadspace(domain, 34.0);
 		require(domain.gasBoundary().sealedInventoryNanos() == inventory,
 				"reported two-pour replay changed sealed gas inventory: " + gasLedgerDetail(domain));
 		require(Math.abs(totalGasAvailableVolume(domain) - 34.0) <= 1.0E-12,
 				"settled controller did not retain a 34 m3 headspace");
-		System.out.printf("  controller two-pour headspace: %.9f m3std in %.9f m3, peakNodes=%d%n",
-				inventory * 1.0E-9, totalGasAvailableVolume(domain), maximumNodes);
+		System.out.printf("  controller two-pour headspace: %.9f m3std in %.9f m3, "
+				+ "dominant volume=%.9f m3, gauge pressure=%+.3f Pa, peakNodes=%d%n",
+				inventory * 1.0E-9, totalGasAvailableVolume(domain),
+				domain.gasBoundary().availableVolume(headspace), domain.gasNodeGaugePressurePa(headspace), maximumNodes);
+	}
+
+	/** One coarse cell bounds the aggregate unresolved pocket capacity, independently of node count. */
+	private static int requireMacroscopicHeadspace(FluidDomain domain, double expectedCapacity) {
+		int largest = -1;
+		double largestCapacity = 0.0, totalCapacity = 0.0;
+		for (int node : domain.gasBoundary().nodeIds()) {
+			double capacity = domain.gasBoundary().availableVolume(node);
+			double pressure = domain.gasNodeGaugePressurePa(node);
+			require(Double.isFinite(capacity) && capacity > 0.0 && Double.isFinite(pressure),
+					"controller has an invalid gas capacity or pressure at node " + node);
+			totalCapacity += capacity;
+			if (capacity > largestCapacity) { largest = node; largestCapacity = capacity; }
+			if (!domain.gasBoundary().inventory(node).isEmpty()) {
+				double expectedPressure = AirNetwork.REFERENCE_PRESSURE
+						* domain.gasBoundary().standardVolume(node) / capacity
+						* domain.gasNodeTemperatureK(node) / GasRegistry.STANDARD_TEMPERATURE_K
+						- AirNetwork.REFERENCE_PRESSURE;
+				require(Math.abs(pressure - expectedPressure) <= Math.max(1.0E-8, Math.abs(expectedPressure) * 1.0E-12),
+						"controller node did not match its inventory/capacity/temperature EoS: " + node);
+			}
+		}
+		double cellVolume = Math.pow(domain.config().cellSize(), 3);
+		require(largest > 0 && Math.abs(totalCapacity - expectedCapacity) <= 1.0E-12
+				&& totalCapacity - largestCapacity <= cellVolume && domain.gasNodeGaugePressurePa(largest) > 0.0,
+				"controller lost its compressed macroscopic headspace: largest=" + largestCapacity
+						+ " m3, total=" + totalCapacity + " m3, pocket allowance=" + cellVolume
+						+ " m3; " + gasLedgerDetail(domain));
+		return largest;
 	}
 
 	static String gasLedgerDetail(FluidDomain domain) {

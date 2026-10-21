@@ -6,7 +6,8 @@ import mmm.granular.GranularStateSnapshot;
 import java.util.Arrays;
 
 /**
- * Exact inventory and raw phase-occupancy/MAC/thermal-bit equality for {@link FluidDomainState} handoffs. Record default equals is
+ * Exact inventory and raw phase-occupancy/MAC/thermal-bit equality for {@link FluidDomainState} handoffs. Derived physical pressure
+ * permits the float roundoff of its hydrostatic/capillary reconstruction. Record default equals is
  * not used for any array-bearing field; saved occupancy, MAC and thermal columns are compared by their exact bit
  * patterns so capture/restore/candidate refactors cannot hide silent rounding.
  */
@@ -163,18 +164,19 @@ public final class FluidDomainStateAssertions {
 	) {
 		require((expected == null) == (actual == null), context + ": phase-pressure presence changed");
 		if (expected == null) return;
-		require(Float.floatToRawIntBits(expected.pressureReferencePa())
-				== Float.floatToRawIntBits(actual.pressureReferencePa()),
-				context + ": phase-pressure reference changed");
-		requireRawFloats(expected.copyRelativeGaugePressurePa(), actual.copyRelativeGaugePressurePa(),
-				context + " phase-pressure field");
-	}
-
-	private static void requireRawFloats(float[] expected, float[] actual, String context) {
-		require(expected.length == actual.length, context + ": length changed");
-		for (int index = 0; index < expected.length; index++) {
-			require(Float.floatToRawIntBits(expected[index]) == Float.floatToRawIntBits(actual[index]),
-					context + " raw bits changed at [" + index + "]: " + expected[index] + " vs " + actual[index]);
+		float[] first = expected.copyRelativeGaugePressurePa(), second = actual.copyRelativeGaugePressurePa();
+		require(first.length == second.length, context + ": phase-pressure length changed");
+		for (int index = 0; index < first.length; index++) {
+			double before = (double) expected.pressureReferencePa() + first[index];
+			double after = (double) actual.pressureReferencePa() + second[index];
+			// Reconstructing p from float residual pressure and known loads incurs cancellation.
+			// Four float ULPs at atmospheric or local pressure scale allow that representation error.
+			float scale = (float) Math.max(mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA,
+					Math.max(Math.abs(before), Math.abs(after)));
+			double tolerance = 4.0 * Math.ulp(scale);
+			require(Math.abs(before - after) <= tolerance,
+					context + " phase-pressure changed at [" + index + "]: " + before + " vs " + after
+							+ " Pa, allowed=" + tolerance + " Pa");
 		}
 	}
 

@@ -56,6 +56,7 @@ final class CondensedPhaseChangeStage {
 		var coherentByCell=new HashMap<Integer,List<CoherentPhaseStore.Group>>();
 		for(var group:originalGroups) coherentByCell.computeIfAbsent(group.cell(),ignored->new ArrayList<>()).add(group);
 		var temperatureRange=thermal.observedCarrierTemperatureRange();
+		double maximumPressure = domain.pressureSystem.liquidPressureUpperBoundPa();
 		record Candidate(int cell,int liquid,ThermalPhaseTransition transition,double equilibrium,double temperature) { }
 		var candidates=new ArrayList<Candidate>();
 		for(var transition:thermal.registry().transitions()) {
@@ -67,7 +68,8 @@ final class CondensedPhaseChangeStage {
 			boolean hasLiquid=store.hasMaterial(liquid),hasCoherent=false;
 			for(var group:originalGroups) if(group.phaseId().equals(transition.lowerEnergyMaterialId())) { hasCoherent=true;break; }
 			if(!hasLiquid&&!hasCoherent) continue;
-			double minimumMelting=transition.minimumEquilibriumTemperatureK(),maximumMelting=transition.maximumEquilibriumTemperatureK();
+			var equilibriumRange = transition.equilibriumTemperatureRange(0.0, maximumPressure);
+			double minimumMelting=equilibriumRange.minimumK(),maximumMelting=equilibriumRange.maximumK();
 			boolean canFreeze=hasLiquid&&(temperatureRange==null||temperatureRange.minimumK()<maximumMelting);
 			boolean canMelt=hasCoherent&&(temperatureRange==null||temperatureRange.maximumK()>minimumMelting);
 			if(!canFreeze&&!canMelt)continue;
@@ -84,7 +86,7 @@ final class CondensedPhaseChangeStage {
 				double temperature=thermal.phaseScanTemperatureInCell(cell);
 				boolean freezing=liquidSupports.containsKey(cell)&&temperature<maximumMelting;
 				boolean melting=meltingCells.contains(cell)&&temperature>minimumMelting;
-				// The full pressure-curve envelope excludes impossible phase directions before geometry preparation.
+				// The current pressure interval excludes impossible directions before wet-face preparation.
 				if(!freezing&&!melting)continue;
 				int liquidSupport=liquidSupports.getOrDefault(cell,0);
 				if(!canFreeze)for(var stock:store.physicalStocksInCell(cell))

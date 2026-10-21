@@ -445,10 +445,15 @@ final class DomainStep {
 		}
 		if (total == 0) return MovingBodyFluidCoupling.Result.NONE;
 		double scale = Math.min(1, requested / total); double[] impulse = new double[3];
+		double externalWork=0;
+		double[][] momentum=new double[3][];
+		domain.cellMacStage.beginDissipation();
 		double[] target = {request.velocityXMetresPerSecond(), request.velocityYMetresPerSecond(), request.velocityZMetresPerSecond()};
 		for (int axis = 0; axis < 3; axis++) {
 			float[] velocity = axis == 0 ? domain.mac.velocityX : axis == 1 ? domain.mac.velocityY : domain.mac.velocityZ;
 			double[] masses = axis == 0 ? domain.cellMacStage.massX : axis == 1 ? domain.cellMacStage.massY : domain.cellMacStage.massZ;
+			momentum[axis]=new double[masses.length];
+			for(int face=0;face<masses.length;face++)momentum[axis][face]=masses[face]*velocity[face];
 			int nx = domain.sizeX + (axis == 0 ? 1 : 0), ny = domain.sizeY + (axis == 1 ? 1 : 0), nz = domain.sizeZ + (axis == 2 ? 1 : 0);
 			for (int z = 0; z < nz; z++) for (int y = 0; y < ny; y++) for (int x = 0; x < nx; x++) {
 				int coordinate = axis == 0 ? x : axis == 1 ? y : z, length = axis == 0 ? domain.sizeX : axis == 1 ? domain.sizeY : domain.sizeZ;
@@ -459,11 +464,19 @@ final class DomainStep {
 				if (volume == 0) continue;
 				double blend = scale * (weighted[left] + weighted[right]) / volume;
 				float old = velocity[face], next = (float) (old + blend * (target[axis] - old));
-				velocity[face] = next; impulse[axis] += masses[face] * (next - old);
+				double change=(double)next-old,faceImpulse=masses[face]*change;
+				momentum[axis][face]=masses[face]*next;
+				impulse[axis]+=faceImpulse;externalWork+=target[axis]*faceImpulse;
+				// The prescribed body supplies V*I. Its dashpot turns the remaining
+				// local work into heat; the factorization avoids subtracting large K.
+				double heat=masses[face]*change*(target[axis]-old-.5*change);
+				domain.cellMacStage.addDissipationAtFace(axis,face,heat);
 			}
 		}
-		domain.cellMacStage.publishMomentum();
-		return new MovingBodyFluidCoupling.Result(coupled, scale * total * cellVolume, impulse[0], impulse[1], impulse[2]);
+		var result=new MovingBodyFluidCoupling.Result(coupled,scale*total*cellVolume,
+				impulse[0],impulse[1],impulse[2],externalWork);
+		domain.cellMacStage.publishMomentum(momentum);
+		return result;
 	}
 	MovingBodyFluidCoupling.Result applyMovingBodyCouplings(java.util.List<MovingBodyFluidCoupling.Request> requests) {
 		MovingBodyFluidCoupling.Result result = MovingBodyFluidCoupling.Result.NONE;

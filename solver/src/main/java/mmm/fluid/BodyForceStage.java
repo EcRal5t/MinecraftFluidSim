@@ -19,16 +19,25 @@ final class BodyForceStage {
 		if (domain.granularState == null || domain.granularState.deposits.occupiedCellCount() == 0) return;
 		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 1; x < domain.sizeX; x++) {
 			int left = domain.domainFlowFields.cellIndex(x - 1, y, z), right = domain.domainFlowFields.cellIndex(x, y, z);
-			domain.mac.velocityX[domain.domainFlowFields.xFaceIndex(x, y, z)] *= granularPorousFaceDamping(left, right, dt, false);
+			dampPorousFace(0,domain.domainFlowFields.xFaceIndex(x,y,z),granularPorousFaceDamping(left,right,dt,false));
 		}
 		for (int z = 0; z < domain.sizeZ; z++) for (int y = 1; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
 			int below = domain.domainFlowFields.cellIndex(x, y - 1, z), above = domain.domainFlowFields.cellIndex(x, y, z);
-			domain.mac.velocityY[domain.domainFlowFields.yFaceIndex(x, y, z)] *= granularPorousFaceDamping(below, above, dt, true);
+			dampPorousFace(1,domain.domainFlowFields.yFaceIndex(x,y,z),granularPorousFaceDamping(below,above,dt,true));
 		}
 		for (int z = 1; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
 			int back = domain.domainFlowFields.cellIndex(x, y, z - 1), front = domain.domainFlowFields.cellIndex(x, y, z);
-			domain.mac.velocityZ[domain.domainFlowFields.zFaceIndex(x, y, z)] *= granularPorousFaceDamping(back, front, dt, false);
+			dampPorousFace(2,domain.domainFlowFields.zFaceIndex(x,y,z),granularPorousFaceDamping(back,front,dt,false));
 		}
+	}
+
+	private void dampPorousFace(int axis,int face,float damping) {
+		if(damping==1)return;
+		float[] velocity=axis==0?domain.mac.velocityX:axis==1?domain.mac.velocityY:domain.mac.velocityZ;
+		double[] mass=axis==0?domain.cellMacStage.massX:axis==1?domain.cellMacStage.massY:domain.cellMacStage.massZ;
+		double before=velocity[face];velocity[face]*=damping;
+		double heat=.5*mass[face]*(before*before-(double)velocity[face]*velocity[face]);
+		if(heat>0)domain.cellMacStage.addDissipationAtFace(axis,face,heat);
 	}
 
 	private float granularPorousFaceDamping(int first, int second, float dt, boolean normal) {
@@ -129,7 +138,7 @@ final class BodyForceStage {
 	private void applyLiquidPairSurfaceTensionPair(int phaseA, int phaseB, double tensionScale, float scale) {
 		for (int index = 0; index < domain.cellCount; index++)
 			domain.tension.surfaceTensionColor[index] = domain.geometry.solid[index] ? 0 : domain.domainFlowFields.phaseFraction(index, phaseA);
-		domain.domainFlowFields.smoothSurfaceTensionColor();
+		domain.tension.smoothSurfaceTensionColor();
 		System.arraycopy(domain.tension.surfaceTensionSmoothed, 0, domain.tension.surfaceTensionPairFirstSupport, 0, domain.cellCount);
 		for (int index = 0; index < domain.cellCount; index++) {
 			if (domain.geometry.solid[index]) {
@@ -138,13 +147,13 @@ final class BodyForceStage {
 			}
 			domain.tension.surfaceTensionColor[index] = domain.domainFlowFields.phaseFraction(index, phaseB);
 		}
-		domain.domainFlowFields.smoothSurfaceTensionColor();
+		domain.tension.smoothSurfaceTensionColor();
 		rebuildLiquidPairNormals();
 		java.util.Arrays.fill(domain.tension.surfaceTensionPairCurvature, 0.0);
 		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
 			int index = domain.domainFlowFields.cellIndex(x, y, z);
 			if (domain.geometry.solid[index] || domain.liquidGrid.stockCount[index] == 0) continue;
-			domain.tension.surfaceTensionPairCurvature[index] = domain.domainFlowFields.surfaceTensionMeanCurvature(x, y, z);
+			domain.tension.surfaceTensionPairCurvature[index] = domain.tension.surfaceTensionMeanCurvature(x, y, z);
 		}
 		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 1; x < domain.sizeX; x++) {
 			int left = domain.domainFlowFields.cellIndex(x - 1, y, z), right = domain.domainFlowFields.cellIndex(x, y, z), face = domain.domainFlowFields.xFaceIndex(x, y, z);

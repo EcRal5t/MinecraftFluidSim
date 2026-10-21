@@ -21,9 +21,31 @@ public final class LiquidCellInventoryValidation {
 		preparedRowsAndRecoveryAreAtomic();
 		targetEnergyClosesAtStoredOwners();
 		explicitMechanicalHeatIsOneAtomicCandidate();
+		dissipationFollowsAnEmptiedSource();
 		sharedFaceFluxUsesCellInventory();
 		System.out.println("Liquid cell inventory validation passed: six-face quantities, atomic rows, recovery and U rounding");
 	}
+	private static void dissipationFollowsAnEmptiedSource() {
+		var domain=new FluidDomain(3,2,2,new FluidSolverConfig(1,1000,0,.05F,120,1e-5F,.002F,.8F));
+		var cells=domain.liquidCells;var key=new LiquidCellInventory.Key(0,0,255);
+		cells.planAdditions(List.of(new LiquidCellInventory.Stock(key,SignedDyadic.of(1),100,null,16,false))).commit();
+		domain.markCellInventoryChanged();domain.cellMacStage.rebuildInventory();
+		domain.cellMacStage.beginDissipation();domain.cellMacStage.addDissipationAtCell(0,64);
+		var before=cells.snapshot();
+		var routes=List.of(new LiquidCellInventory.SourceRoutes(cells.stock(key),List.of(
+				new LiquidCellInventory.TransportRoute(0,key,new LiquidCellInventory.Key(1,0,255),SignedDyadic.of(.25)),
+				new LiquidCellInventory.TransportRoute(1,key,new LiquidCellInventory.Key(2,0,255),SignedDyadic.of(.75)))));
+		var plan=cells.planRoutes(routes,null,q->domain.cellMacStage.finishDissipation(q,Map.of()));
+		require(cells.snapshot().rows().equals(before.rows()),"Dissipation preparation changed source U");
+		require(plan.future().stocksInCell(0).isEmpty()&&plan.mechanicalHeat().equals(SignedDyadic.of(64)),
+				"Source dissipation was lost when its liquid drained completely");
+		plan.commit();
+		require(cells.stock(new LiquidCellInventory.Key(1,0,255)).internalEnergy()==20
+				&&cells.stock(new LiquidCellInventory.Key(2,0,255)).internalEnergy()==60
+				&&cells.massUnits()==100&&cells.exactVolume().equals(SignedDyadic.of(1)),
+				"Actual transported mass did not carry source heat into the single successor inventory commit");
+	}
+
 	private static void continuousFluxMovesResolvedMinorityMaterial() {
 		var cells=new LiquidCellInventory(4,null);
 		var stocks=new ArrayList<LiquidCellInventory.Stock>();

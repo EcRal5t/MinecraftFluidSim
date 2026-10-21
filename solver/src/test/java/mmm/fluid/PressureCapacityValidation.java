@@ -5,7 +5,7 @@ public final class PressureCapacityValidation {
 	public static void main(String[] args) {
 		if (args.length>1 || args.length==1&&!args[0].equals("--algebra")) throw new IllegalArgumentException("Expected --algebra or no selector");
 		checkGraph(fixture(true)); checkGraph(fixture(false));
-		fixedPorePressurePort(); vacuumCapacityClosure();
+		fixedPorePressurePort(); vacuumCapacityClosure(); unresolvedGapKeepsVacuumPressureContact();
 		if (args.length==1) { System.out.println("Common pressure incidence and transpose PASS"); return; }
 		shallowHydrostatics(false); shallowHydrostatics(true);
 		cutHydrostatics();
@@ -70,6 +70,31 @@ public final class PressureCapacityValidation {
 				||!d.gasBoundary().sealedInventory().equals(gas)||!d.gasBoundary().auditClosed())
 			throw new AssertionError("Vacuum projection altered inventory or inserted heat to balance its mechanical response");
 	}
+	/** A subcell dry seam transmits weight while a half-cell cavity still permits free fall. */
+	private static void unresolvedGapKeepsVacuumPressureContact() {
+		for(float fill:new float[]{1-1F/128,.5F}) {
+			var d=new FluidDomain(2,4,2,new FluidSolverConfig(1,1000,9.81F,.05F,120,1e-5F,.002F,0));
+			float[] volumes=new float[d.cellCount];
+			for(int z=0;z<2;z++)for(int x=0;x<2;x++)for(int y=0;y<3;y++)
+				volumes[d.domainFlowFields.cellIndex(x,y,z)]=y==1?fill:1;
+			d.sealDomainBoundary();d.setVolumes(volumes);d.domainFlowFields.ensureGrid();
+			for(int node:d.gasState.network.nodeIds())d.setGasNodeStandardVolume(node,0);
+			var graph=d.pressureSystem.faces;graph.rebuild(.05F);
+			int middle=d.domainFlowFields.cellIndex(0,1,0),node=d.gasState.frame.commonCellNode(middle);
+			if(node<=0||graph.pressureSupports[middle]!=0)
+				throw new AssertionError("Hydrostatic support removed a real vacuum pressure degree of freedom");
+			int interfaceFace=graph.offsets[1]+d.domainFlowFields.yFaceIndex(0,2,0);
+			boolean contact=false;
+			for(int entry=graph.start[interfaceFace];entry<graph.start[interfaceFace+1];entry++)
+				contact|=graph.rowAt(entry)==d.cellCount+node&&graph.coefficientAt(entry)!=0;
+			if(!contact)throw new AssertionError("Thin-seam support lost the cavity C/CT pressure contact");
+			int topFace=graph.offsets[1]+d.domainFlowFields.yFaceIndex(0,3,0);
+			double expected=fill>.9F?0:-d.config.gravity();
+			if(Math.abs(graph.freeFallAcceleration(topFace)-expected)>1e-6)
+				throw new AssertionError("Dry-seam support confused an unresolved layer with a resolved vacuum cavity");
+		}
+	}
+
 	private static double[] faceVelocities(FluidDomain d,PressureFaceGraph graph) {
 		double[] velocity=new double[graph.faceCount];
 		for(int face=0;face<velocity.length;face++)velocity[face]=switch(graph.axis[face]) {

@@ -183,11 +183,8 @@ final class GasTopologyCoordinator {
 
 		boolean thermal=domain.thermalState!=null&&domain.thermalState.gasModelBound();
 		boolean retainControl=thermal&&!deferVolumeWork;
-		boolean openedWallVolume=retainControl&&old!=null&&!old.geometry().sameCollisionMasks(next.geometry());
 		int count=next.nodeCount();double[] available=volumes(next);
-		var directContact=openedWallVolume?survivingContacts(old,next):java.util.Set.<Long>of();
-		SignedDyadic[] transferredVacuum=openedWallVolume?new SignedDyadic[count]:null;
-		if(openedWallVolume)Arrays.fill(transferredVacuum,SignedDyadic.ZERO);
+		double[] importedControl=retainControl?new double[count]:null;
 		var inventories=new ArrayList<GasInventory>(java.util.Collections.nCopies(count,GasInventory.EMPTY));
 		SignedDyadic[] mixed=thermal?new SignedDyadic[count]:null,inherited=retainControl?new SignedDyadic[count]:null;
 		if(thermal)Arrays.fill(mixed,SignedDyadic.ZERO);
@@ -220,8 +217,6 @@ final class GasTopologyCoordinator {
 						if(thermal)mixed[node-1]=mixed[node-1].add(SignedDyadic.of(energies[part]));
 						if(retainControl){
 							var volume=SignedDyadic.of(control[part]);inherited[node-1]=inherited[node-1].add(volume);
-							if(openedWallVolume&&!directContact.contains((long)previous<<32|Integer.toUnsignedLong(node)))
-								transferredVacuum[node-1]=transferredVacuum[node-1].add(volume);
 						}}
 					part++;
 				}
@@ -233,12 +228,14 @@ final class GasTopologyCoordinator {
 					var stock=ambientInventory(volume);inventories.set(node-1,inventories.get(node-1).merge(stock));sourceDelta=sourceDelta.add(stock);
 					if(thermal){var u=SignedDyadic.of(domain.thermalState.ambientGasEnergy(stock));mixed[node-1]=mixed[node-1].add(u);sourceEnergy=sourceEnergy.add(u);}
 				}
-				// An explicit newly opened vacuum contributes geometric control volume and zero stock/U.
-				if(retainControl)inherited[node-1]=inherited[node-1].add(SignedDyadic.of(volume));
-				if(openedWallVolume)transferredVacuum[node-1]=transferredVacuum[node-1].add(SignedDyadic.of(volume));
+				// Ambient stock imports its own control volume. A new dry support tagged
+				// vacuum has no additional old volume: retained cavities already supplied it.
+				if(retainControl&&origin.getKey()==0){
+					inherited[node-1]=inherited[node-1].add(SignedDyadic.of(volume));
+					importedControl[node-1]+=volume;
+				}
 			}
-			if(openedWallVolume&&count>0)
-				includeNewlyOpenedVacuum(old,next,transferredVacuum,inherited);
+			if(retainControl&&count>0)includeOpenedPoreVolume(old,next,importedControl,inherited);
 			if(next.sealedExterior()&&(!sourceDelta.isEmpty()||!sinkDelta.isEmpty()))
 				throw new GasTopologyBlockedException("Closed gas topology attempted an external source or sink");
 		}
@@ -265,44 +262,51 @@ final class GasTopologyCoordinator {
 				edit==null?sourceDelta:sourceDelta.add(edit.source()),edit==null?sinkDelta:sinkDelta.add(edit.sink()),edges);
 		return new GasTopologyPlan(next,old,gasPlan,thermalPlan,domain.gasState.network,domain.gasState.network.revision());
 	}
-	/** Wall removal adds new vacuum control volume after the transported gas has been assigned. */
-	private void includeNewlyOpenedVacuum(GasRuntimeGeometry old,GasRuntimeGeometry next,
-	                                     SignedDyadic[] transferredVacuum,SignedDyadic[] inherited) {
-		int count=next.nodeCount();
-		var opened=new SignedDyadic[count];Arrays.fill(opened,SignedDyadic.ZERO);
-		for(var component:next.capacity().components()) {
-			int cell=component.cell();
-			int newlyOpen=old.geometry().collisionMask(cell)&~next.geometry().collisionMask(cell)&component.supportMask();
-			if(newlyOpen==0)continue;
-			var dry=next.geometry().component(cell,component.supportMask());if(dry==null)continue;
-			int selected=newlyOpen&dry.dryMicroMask();if(selected==0)continue;
-			int node=next.topology().nodeOfComponent(cell,component.supportMask());if(node<=0)continue;
-			double volume=component.availableVolumeNormalized().toDouble()*next.geometry().cellVolumeCubicMeters();
-			if(selected!=dry.dryMicroMask()){
-				double weight=0;
-				for(int bits=selected;bits!=0;bits&=bits-1)weight+=next.geometry().pieceNormalizedVolume(8*cell+Integer.numberOfTrailingZeros(bits));
-				volume*=weight/dry.normalizedVolume();
-			}
-			opened[node-1]=opened[node-1].add(SignedDyadic.of(volume));
+	/** Only a net increase of actual pore space adds zero-energy expansion volume. */
+	private void includeOpenedPoreVolume(GasRuntimeGeometry old,GasRuntimeGeometry next,
+	                                    double[] importedControl,SignedDyadic[] inherited){
+		var net=SignedDyadic.ZERO;
+		for(int cell=0;cell<domain.cellCount;cell++){
+			var before=old.phase().poreVolume(cell);var after=next.phase().poreVolume(cell);
+			if(!before.equals(after))net=net.add(after.subtract(before));
 		}
-		for(int node=0;node<count;node++)if(opened[node].compareTo(transferredVacuum[node])>0)
-			// Removing a wall exposes zero-energy control volume. A relocated old cavity
-			// or an explicitly allocated vacuum has already supplied its part of that volume.
-			inherited[node]=inherited[node].add(opened[node].subtract(transferredVacuum[node]));
-	}
-	private java.util.Set<Long> survivingContacts(GasRuntimeGeometry old,GasRuntimeGeometry next) {
-		if(old.nodeCount()==0||next.nodeCount()==0)return java.util.Set.of();
-		var result=new java.util.HashSet<Long>();
-		for(var component:old.geometry().components()) {
-			int source=old.topology().nodeOfComponent(component.cell(),component.supportMask());if(source<=0)continue;
-			for(int support:CellRemapMicroTopology.components(next.geometry().collisionMask(component.cell()))) {
-				var future=next.geometry().component(component.cell(),support);
-				if(future==null||(future.dryMicroMask()&component.dryMicroMask())==0)continue;
-				int target=next.topology().nodeOfComponent(component.cell(),support);
-				if(target>0)result.add((long)source<<32|Integer.toUnsignedLong(target));
+		// Moving liquid or translating an occupied solid changes local dry geometry,
+		// while the complete old gas control volumes have already been partitioned.
+		if(net.signum()<=0)return;
+		double scaleToMeters=domain.unitScale.cubicMetersPerNormalizedVolume();
+		double[] opened=new double[next.nodeCount()];double total=0;
+		for(var component:next.capacity().components()){
+			if(component.availableVolumeNormalized().signum()==0)continue;
+			int cell=component.cell(),node=next.topology().nodeOfComponent(cell,component.supportMask());
+			if(node<=0)continue;
+			var gain=next.phase().poreVolume(cell).subtract(old.phase().poreVolume(cell));
+			if(gain.signum()<=0)continue;
+			double volume=0;
+			int newOpen=old.geometry().collisionMask(cell)&~next.geometry().collisionMask(cell)&component.supportMask();
+			if(newOpen!=0){
+				var dry=next.geometry().component(cell,component.supportMask());
+				int selected=newOpen&dry.dryMicroMask();if(selected==0)continue;
+				volume=component.availableVolumeNormalized().toDouble();
+				if(selected!=dry.dryMicroMask()){
+					double fraction=0;
+					for(int bits=selected;bits!=0;bits&=bits-1)
+						fraction+=next.geometry().pieceNormalizedVolume(8*cell+Integer.numberOfTrailingZeros(bits));
+					volume*=fraction/dry.normalizedVolume();
+				}
+			}else{
+				// Removing solid occupation releases its share of this fixed support.
+				double released=gain.toDouble()*component.poreVolumeNormalized().toDouble()/next.phase().poreVolume(cell).toDouble();
+				volume=Math.min(component.availableVolumeNormalized().toDouble(),released);
 			}
+			opened[node-1]+=volume;total+=volume;
 		}
-		return result;
+		if(total==0)return;
+		double fraction=Math.min(1,net.toDouble()/total);
+		for(int node=0;node<opened.length;node++){
+			// Gas imported from ambient already represents its newly opened space.
+			double vacuum=Math.max(0,opened[node]*fraction*scaleToMeters-importedControl[node]);
+			if(vacuum>0)inherited[node]=inherited[node].add(SignedDyadic.of(vacuum));
+		}
 	}
 
 	private TreeMap<Integer,TreeMap<Integer,Double>> origins(GasRuntimeGeometry next,GasVolumeAllocation allocation) {
@@ -312,7 +316,7 @@ final class GasTopologyCoordinator {
 		boolean[] owned=new boolean[next.nodeCount()+1];
 		for(var share:allocation.shares()) {
 			// Source shares belong to a fixed pore component; its PLIC may move the dry micro view.
-			int cell=share.targetPiece()/8,support=CellRemapMicroTopology.support(next.geometry().collisionMask(cell),share.targetPiece()&7);
+			int cell=share.targetSupportAnchor()/8,support=CellRemapMicroTopology.support(next.geometry().collisionMask(cell),share.targetSupportAnchor()&7);
 			int target=support==0?-1:next.topology().nodeOfComponent(cell,support);
 			if(target<0)throw new IllegalStateException("Positive gas phase transfer has no future component capacity");
 			owned[target]=true;

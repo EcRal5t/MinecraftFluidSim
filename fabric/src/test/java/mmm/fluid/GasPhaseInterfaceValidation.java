@@ -51,9 +51,61 @@ public final class GasPhaseInterfaceValidation {
 			for(var component:contact.components()) check(component.cell()==1&&component.volume()>0
 					&&fullFrame.topology().nodeOfComponent(component.cell(),component.supportMask())==contact.node(),"Shared-face interface selected nonadjacent or empty gas capacity");
 		}
+		validateRestrictedPhaseTransport();
 		validateFiniteGasBatches();
 		validateCondensedCellBatches();
 		System.out.println("Gas phase component contact validation passed");
+	}
+
+	/** Two half-filled supports keep separate gas inventories while liquid crosses a fixed orifice. */
+	private static void validateRestrictedPhaseTransport(){
+		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,120,1e-5F,.002F,0),16);
+		// Empty supports above establish a resolved vertical free-surface gradient.
+		// The dry aperture must survive the small accepted horizontal liquid flux.
+		byte[] masks=new byte[8];Arrays.fill(masks,(byte)255);masks[0]=masks[1]=masks[2]=masks[3]=(byte)0xf0;
+		float[] points={.5F,.25F,.25F,.25F,1.5F,.25F,.25F,.25F};
+		domain.restoreParticleState(new FlipParticleState(2,2,2,1,2,.5F,points,new float[6],
+				mmm.units.Mass.createLiquid(1,1000,points),masks));
+		domain.sealDomainBoundary();domain.domainFlowFields.ensureGrid();
+		int first=domain.gasState.frame.commonCellNode(0),second=domain.gasState.frame.commonCellNode(1);
+		check(first>0&&second>0&&first!=second,
+				"Restricted two-phase fixture lost its separate pressure nodes");
+		requireSharedGasPort(domain,first,second);
+		domain.setGasNodeStandardVolume(first,.5);domain.setGasNodeStandardVolume(second,.125);
+		var source=domain.gasState.network.inventory(first);var target=domain.gasState.network.inventory(second);
+		var total=domain.gasState.network.sealedInventory();
+		long liquidMass=domain.totalMassUnits();var liquidVolume=domain.liquidCells.exactVolume();
+		domain.domainFlowFields.ensureGrid();
+		domain.mac.velocityX[domain.domainFlowFields.xFaceIndex(1,0,0)]=.01F;
+		domain.cellMacStage.publishMomentum();domain.pressureSystem.faces.rebuild(.01F);
+		var flow=new ConservativeLiquidFlux(domain);flow.prepare(.01F,new long[8]);
+		var liquid=flow.prepareInventory(domain.liquidCells);
+		check(!liquid.transfers().isEmpty(),"Restricted phase fixture did not exercise actual liquid transport");
+		var gas=domain.gasTopologyCoordinator.planAfterLiquidCells(liquid.future(),new long[8],flow.gasAllocation());
+		domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gas);liquid.commit();domain.markCellInventoryChanged();
+		domain.gasTopologyCoordinator.commitPrepared(gas,new long[8]);
+		first=domain.gasState.frame.commonCellNode(0);second=domain.gasState.frame.commonCellNode(1);
+		check(first!=second&&domain.gasState.network.inventory(first).equals(source)
+				&&domain.gasState.network.inventory(second).equals(target),
+				"A small carrier flux mixed complete reservoirs across the restricted gas port");
+		check(domain.totalMassUnits()==liquidMass&&domain.liquidCells.exactVolume().equals(liquidVolume),
+				"Restricted two-phase transport changed exact liquid mass or volume");
+		requireSharedGasPort(domain,first,second);
+		check(domain.gasState.network.gaugePressure(first)>domain.gasState.network.gaugePressure(second),
+				"Restricted phase transport reversed its prescribed gas pressure load");
+		domain.gasTopologyCoordinator.step(1e-6F);
+		long moved=domain.gasState.network.standardVolumeNanos(second)-target.standardVolumeNanos();
+		check(moved>0&&moved<source.standardVolumeNanos()/1000,
+				"Restricted gas port did not retain a finite actual flow: moved="+moved);
+		check(domain.gasState.network.sealedInventory().equals(total)&&domain.gasState.network.auditClosed(),
+				"Restricted gas flow changed the complete gas inventory");
+	}
+
+	private static void requireSharedGasPort(FluidDomain domain,int first,int second){
+		for(var edge:domain.gasState.network.edges())
+			if((edge.firstNode()==first&&edge.secondNode()==second||edge.firstNode()==second&&edge.secondNode()==first)
+					&&edge.areaSquareMeters()>0&&edge.areaSquareMeters()<1)return;
+		throw new AssertionError("Restricted two-phase fixture has no actual shared dry port after reconstruction");
 	}
 
 	private static void validateFiniteGasBatches() {

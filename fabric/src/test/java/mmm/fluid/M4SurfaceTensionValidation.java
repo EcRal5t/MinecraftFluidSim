@@ -129,7 +129,38 @@ FluidPhysicalAssertions.staticMotion(domain,2*sigma/radius,FluidPhysicalAssertio
 }
 
 
+/** A vertical planar contact line has zero geometric curvature. Young's prescribed
+ * angle contributes -cos(theta)/h at the lower wall, so a hydrophilic wall lowers
+ * the local liquid pressure and pulls fluid toward the contact line. */
+private static void validateContactAngleCurvatureDirection() {
+ double[] curvature = new double[3];
+ double[] angles = {Math.PI / 6, Math.PI / 2, 2 * Math.PI / 3};
+ for (int a = 0; a < angles.length; a++) {
+  FluidDomain domain = new FluidDomain(10, 6, 4,
+    new FluidSolverConfig(1, 1000, 0, .025F, 300, 1e-6F, .002F, .8F), 256);
+  for (int z = 0; z < domain.sizeZ; z++) for (int x = 0; x < domain.sizeX; x++)
+   domain.setSolid(x, 0, z, true);
+  domain.bindMaterialRegistry(new FluidMaterialRegistry(List.of(
+    new FluidMaterial("mmm:contact-plane", 1000, "mmm:contact-plane", 100, angles[a]))));
+  float[] fractions = new float[domain.cellCount];
+  for (int z = 0; z < domain.sizeZ; z++) for (int y = 1; y < domain.sizeY; y++)
+   for (int x = 0; x <= 4; x++) fractions[domain.domainFlowFields.cellIndex(x,y,z)] = x == 4 ? .5F : 1;
+  domain.setVolumes(fractions);
+  domain.domainFlowFields.ensureGrid();
+  int cell = domain.domainFlowFields.cellIndex(4,1,2);
+  check(Math.abs(domain.tension.surfaceTensionNormalY[cell]) < 1e-6,
+    "contact angle rotated the measured planar interface normal");
+  curvature[a] = domain.tension.liquidGasMeanCurvature(4,1,2);
+  check(Math.abs(curvature[a] + Math.cos(angles[a])) < 1e-6,
+    "planar contact-line curvature has the wrong Young pressure sign: theta="
+      + Math.toDegrees(angles[a]) + ", curvature=" + curvature[a]);
+ }
+ check(curvature[0] < curvature[1] && curvature[1] < curvature[2],
+   "wall curvature did not order the contact-line pressure response");
+}
+
 private static void validateContactAngleSpreading() {
+ validateContactAngleCurvatureDirection();
 	FluidSolverConfig config = new FluidSolverConfig(
 			1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
 			300, 1.0E-6F, 2.0E-3F, 0.80F

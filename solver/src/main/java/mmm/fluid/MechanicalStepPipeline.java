@@ -22,7 +22,7 @@ final class MechanicalStepPipeline {
 	private final FluidDomain domain;
 	private final GranularMechanicalStage granularMechanicalStage;
 	private final BodyForceStage bodyForceStage;
-	private final PressureProjectionStage pressureStage;
+	private final PressureSystem pressure;
 	private final LiquidViscosityStage viscosityStage;
 	private final CellMacStage cellMac;
 
@@ -30,7 +30,7 @@ final class MechanicalStepPipeline {
 		this.domain = domain;
 		granularMechanicalStage = domain.granularMechanicalStage;
 		bodyForceStage = domain.bodyForceStage;
-		pressureStage = domain.pressureStage;
+		pressure = domain.pressureSystem;
 		viscosityStage = new LiquidViscosityStage(domain);
 		cellMac = domain.cellMacStage;
 	}
@@ -59,6 +59,7 @@ final class MechanicalStepPipeline {
 		domain.domainFlowFields.ensureGrid();
 		double stageKineticEnergy = captureAudit ? domain.domainStep.mechanicalGridKineticEnergyJoules() : 0.0;
 		cellMac.constrainUnresolvedWallMomentum();
+		cellMac.beginDissipation();
 		if(captureAudit){
 			double constrained=domain.domainStep.mechanicalGridKineticEnergyJoules();
 			audit.fixedBoundaryWorkJoules+=constrained-stageKineticEnergy;
@@ -134,16 +135,11 @@ final class MechanicalStepPipeline {
 			audit.fixedBoundaryWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
-		pressureStage.predictDrag(dt);
-		if(captureAudit){
-			nextKineticEnergy=domain.domainStep.mechanicalGridKineticEnergyJoules();
-			audit.porousBoundaryWorkJoules+=nextKineticEnergy-stageKineticEnergy;stageKineticEnergy=nextKineticEnergy;
-		}
 		diagnosticStage = Stage.PRESSURE_SOLVE;
-		pressureStage.solve(dt);
+		pressure.solve(dt);
 		boolean phaseGeometryPending = substep == 0 && domain.pendingPhaseVolume.hasWork();
 		diagnosticStage = Stage.PRESSURE_PUBLICATION;
-		pressureStage.projectVelocities(dt);
+		pressure.projectVelocities(dt);
 		if(captureAudit){
 			nextKineticEnergy=domain.domainStep.mechanicalGridKineticEnergyJoules();
 			audit.pressureProjectionWorkJoules+=nextKineticEnergy-stageKineticEnergy;stageKineticEnergy=nextKineticEnergy;

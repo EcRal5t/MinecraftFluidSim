@@ -20,6 +20,13 @@ public final class ExtremeThermalValidation {
 					240, 1.0E-4F, 2.0E-3F, 0.80F);
 			FluidDomain domain = new FluidDomain(4, 4, 4, config, 4096);
 			domain.sealDomainBoundary();
+			// High pressure retains its original intensity in one half-liquid cell;
+			// the smaller real cavity keeps gas mass within the integer inventory range.
+			if (pressure >= 1.0E12) {
+				for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
+					domain.setSolid(x, y, z, x != 1 || y != 1 || z != 1);
+				}
+			}
 			domain.setVolume(1, 1, 1, 0.5F);
 			for (int marker = 0; marker < domain.particleCount(); marker++) {
 				domain.domainCollision.setMarkerMaterial(marker, registries.liquids(), 0);
@@ -39,7 +46,7 @@ public final class ExtremeThermalValidation {
 					.internalEnergyAtTemperature(domain.gasBoundary().inventory(1), temperature);
 			var delta = SignedDyadic.of(gasEnergy)
 					.subtract(SignedDyadic.sum(snapshot.copyGasNodeEnergy()));
-			FluidThermalBinding.restore(domain.thermalState, new FlipThermalParticleState(4, 4, 4, 0.5F, domain.particleCount(),
+			FluidThermalBinding.restore(domain.thermalState, new FlipThermalParticleState(4, 4, 4, config.cellSize(), domain.particleCount(),
 					registries.thermal().fingerprint(), snapshot.insertionTemperatureK(), snapshot.copyInternalEnergy(), new double[0], new double[0],
 					List.of(), new double[] {gasEnergy}, snapshot.audit().withHeatExchange(delta)), domain.domainCapabilities.thermalMarkerContext(), domain.gasState.network);
 			double actualPressure = GasRegistry.STANDARD_PRESSURE_PA + domain.thermalState.gasGaugePressure(1, domain.gasState.network);

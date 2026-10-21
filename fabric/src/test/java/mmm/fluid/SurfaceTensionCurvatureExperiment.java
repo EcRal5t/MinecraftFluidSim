@@ -27,13 +27,13 @@ final class SurfaceTensionCurvatureExperiment {
 				double fraction = planeFraction(n, offset - n[0] * x - n[1] * y - n[2] * z);
 				d.tension.surfaceTensionColor[d.domainFlowFields.cellIndex(x, y, z)] = reverse ? 1 - fraction : fraction;
 			}
-			d.domainFlowFields.smoothSurfaceTensionColor(); d.domainFlowFields.rebuildSurfaceTensionNormals();
+			d.tension.smoothSurfaceTensionColor(); d.tension.rebuildSurfaceTensionNormals();
 			for (int z = 6; z < 14; z++) for (int y = 6; y < 14; y++) for (int x = 6; x < 14; x++) {
 				double c = d.tension.surfaceTensionColor[d.domainFlowFields.cellIndex(x, y, z)];
 				if (!(c > 0 && c < 1)) continue;
 				double k = HeightFunctionCurvature.compute(d, x, y, z);
 				check(Double.isFinite(k), "complete plane height column rejected");
-				maximum = Math.max(maximum, Math.abs(d.domainFlowFields.liquidGasMeanCurvature(x, y, z)));
+				maximum = Math.max(maximum, Math.abs(d.tension.liquidGasMeanCurvature(x, y, z)));
 			}
 			check(maximum <= curvatureTolerance(d), "analytic inclined plane gained curvature " + maximum);
 		}
@@ -148,9 +148,9 @@ final class SurfaceTensionCurvatureExperiment {
 				d.tension.surfaceTensionNormalY[c] = Math.sqrt(1 - nx * nx);
 			}
 			int x = high ? d.sizeX - 1 : 0;
-			check(Math.abs(d.domainFlowFields.liquidGasMeanCurvature(x, 6, 6) + 1.0 / 6) <= curvatureTolerance(d),
+			check(Math.abs(d.tension.liquidGasMeanCurvature(x, 6, 6) + 1.0 / 6) <= curvatureTolerance(d),
 					"fallback normal reflection lost its normal derivative");
-			check(Math.abs(d.domainFlowFields.surfaceTensionMeanCurvature(x, 6, 6) + 1.0 / 12) <= curvatureTolerance(d),
+			check(Math.abs(d.tension.surfaceTensionMeanCurvature(x, 6, 6) + 1.0 / 12) <= curvatureTolerance(d),
 					"liquid-pair smoothed curvature stencil changed");
 		}
 	}
@@ -170,14 +170,14 @@ final class SurfaceTensionCurvatureExperiment {
 		d.bindMaterialRegistry(new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:wall",1000,"mmm:wall",.0728,Math.PI/2))));
 		d.setVolumes(fractions);d.domainFlowFields.ensureGrid();
 		System.arraycopy(colour, 0, d.tension.surfaceTensionColor, 0, colour.length);
-		d.domainFlowFields.smoothSurfaceTensionColor(); d.domainFlowFields.rebuildSurfaceTensionNormals();
+		d.tension.smoothSurfaceTensionColor(); d.tension.rebuildSurfaceTensionNormals();
 		double[] errors = new double[3]; int[] counts = new int[3], heights = new int[3];
 		for (int z = 0; z < size; z++) for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
 			double f = colour[d.domainFlowFields.cellIndex(x, y, z)]; if (!(f > 0 && f < 1)) continue;
 			int my = upper ? size - 1 - y : y, mz = upper ? size - 1 - z : z;
 			int region = x < 2 || x >= size - 2 ? 1 : my < 2 || mz < 2 ? 2 : 0;
 			counts[region]++; if (Double.isFinite(HeightFunctionCurvature.compute(d, x, y, z))) heights[region]++;
-			errors[region] += Math.abs(d.domainFlowFields.liquidGasMeanCurvature(x, y, z) - 1);
+			errors[region] += Math.abs(d.tension.liquidGasMeanCurvature(x, y, z) - 1);
 		}
 		for (int region = 0; region < 3; region++) {
 			check(counts[region] > 0, "cylinder region is empty"); errors[region] /= counts[region];

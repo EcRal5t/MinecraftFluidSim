@@ -39,7 +39,7 @@ final class LiquidViscosityStage {
 		if (domain.materialDefinitions == null) return FluidDomain.ViscousStepStats.INACTIVE;
 		if (discretization == null) discretization = createDiscretization();
 		discretization.assemble(velocity);
-		FluidDomain.ViscousStepStats stats = discretization.operator.advance(dt);
+		FluidDomain.ViscousStepStats stats = discretization.operator.advance(dt,domain.cellMacStage::addDissipationAtCell);
 		return discretization.copyVelocityTo(velocity, stats);
 	}
 }

@@ -8,6 +8,8 @@ import java.util.Arrays;
  * Conductances include area/distance; b is dimensionless. Fixed degrees of freedom have zero mass.
  */
 final class ViscousStressOperator {
+	interface HeatSink { void add(int cell, double joules); }
+	private int[] heatCells = new int[64];
 	final double[] mass, velocity, force;
 	private final double[] rowBound;
 	private final int[] component;
@@ -35,14 +37,20 @@ final class ViscousStressOperator {
 	}
 
 	void add(double weight, int a, double ca, int b, double cb, int c, double cc, int d, double cd) {
+		addOwned(weight,a,ca,b,cb,c,cc,d,cd,-1,-1,-1,-1);
+	}
+	void addOwned(double weight, int a, double ca, int b, double cb, int c, double cc, int d, double cd,
+	              int ownerA, int ownerB, int ownerC, int ownerD) {
 		if (!(weight >= 0) || !Double.isFinite(weight)) throw new IllegalStateException("Invalid viscous conductance");
 		if (weight == 0) return;
 		if (rows == weights.length) {
 			weights = Arrays.copyOf(weights, rows * 2);
 			indices = Arrays.copyOf(indices, rows * 8);
 			coefficients = Arrays.copyOf(coefficients, rows * 8);
+			heatCells = Arrays.copyOf(heatCells, rows * 8);
 		}
 		int offset = rows * 4;
+		heatCells[offset]=ownerA;heatCells[offset+1]=ownerB;heatCells[offset+2]=ownerC;heatCells[offset+3]=ownerD;
 		indices[offset] = a; indices[offset + 1] = b; indices[offset + 2] = c; indices[offset + 3] = d;
 		coefficients[offset] = ca; coefficients[offset + 1] = cb;
 		coefficients[offset + 2] = cc; coefficients[offset + 3] = cd;
@@ -64,7 +72,8 @@ final class ViscousStressOperator {
 	}
 
 	/** Symmetric splitting: each strain row gets its exact local decay for half a step. */
-	FluidDomain.ViscousStepStats advance(double dt) {
+	FluidDomain.ViscousStepStats advance(double dt) { return advance(dt,null); }
+	FluidDomain.ViscousStepStats advance(double dt, HeatSink heatSink) {
 		if (!(dt > 0) || !Double.isFinite(dt)) throw new IllegalArgumentException("Invalid viscous duration");
 		Arrays.fill(force, 0);
 		double halfDt = .5 * dt;
@@ -83,7 +92,16 @@ final class ViscousStressOperator {
 				}
 				if (inverseMass == 0 || strain == 0) continue;
 				double impulse = -Math.expm1(-halfDt * weights[row] * inverseMass) * strain / inverseMass;
-				dissipated += Math.max(0, impulse * (strain - .5 * impulse * inverseMass));
+				double heat=Math.max(0, impulse * (strain - .5 * impulse * inverseMass));
+				dissipated += heat;
+				if(heatSink!=null&&heat>0) {
+					int count=0;for(int k=offset;k<offset+4;k++)if(heatCells[k]>=0)count++;
+					double remaining=heat,share=count==0?0:heat/count;
+					for(int k=offset;k<offset+4;k++)if(heatCells[k]>=0) {
+						double part=--count==0?remaining:share;
+						heatSink.add(heatCells[k],part);remaining-=part;
+					}
+				}
 
 				// Internal row coefficients cancel per axis. The remaining impulse is
 				// the fixed-wall reaction on the fluid; force stores its time average.

@@ -5,12 +5,13 @@ import mmm.inventory.LiquidCellInventory;
 import mmm.inventory.PhaseOccupancyState;
 import java.util.List;
 
-/** Phase-advection provenance, published with its authoritative future micro occupation. */
+/** Fixed-support provenance, published with its authoritative future phase occupation. */
 final class GasVolumeAllocation {
     enum SourceKind { EXISTING, AMBIENT, EXPLICIT_VACUUM }
-    record Share(int sourceNode,int targetPiece,double volume,SourceKind kind){
+    /** The anchor names any open microbox in the receiving fixed support. */
+    record Share(int sourceNode,int targetSupportAnchor,double volume,SourceKind kind){
         Share {
-            if(targetPiece<0||!(volume>0&&Double.isFinite(volume))||kind==null
+            if(targetSupportAnchor<0||!(volume>0&&Double.isFinite(volume))||kind==null
                     ||kind==SourceKind.EXISTING&&sourceNode<=0||kind==SourceKind.AMBIENT&&sourceNode!=0
                     ||kind==SourceKind.EXPLICIT_VACUUM&&sourceNode!=-1)
                 throw new IllegalArgumentException("Invalid transported gas source share");
@@ -34,7 +35,7 @@ final class GasVolumeAllocation {
         sourceInventory=domain.liquidCells.snapshot();futureInventory=future.snapshot();sourceOccupancy=domain.phaseOccupancy;futureOccupancy=occupancy;this.shares=List.copyOf(shares);
         preparedPhase=phase;preparedGeometry=geometry;preparedCapacity=capacity;
         if(occupancy==null||occupancy.cellCount()!=domain.cellCount)throw new IllegalArgumentException("Gas allocation requires complete future phase occupation");
-        for(var share:this.shares)if(share.targetPiece()>=8*domain.cellCount||share.kind()==SourceKind.EXISTING&&(sourceGeometry==null||share.sourceNode()>sourceGeometry.nodeCount()))throw new IllegalArgumentException("Gas allocation names an absent source or target");
+        for(var share:this.shares)if(share.targetSupportAnchor()>=8*domain.cellCount||share.kind()==SourceKind.EXISTING&&(sourceGeometry==null||share.sourceNode()>sourceGeometry.nodeCount()))throw new IllegalArgumentException("Gas allocation names an absent source or target");
     }
     GasRuntimeGeometry sourceGeometry(){return sourceGeometry;}
     long networkRevision(){return networkRevision;}

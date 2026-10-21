@@ -60,7 +60,7 @@ public final class FluidDomain {
 	final MacVelocityGrid mac;
 	final CellMacStage cellMacStage;
 	final PressureProjectionWorkspace projection;
-	final SurfaceTensionWorkspace tension;
+	final SurfaceTensionFields tension;
 	final CondensedInventoryClearPlanner clearPlanner;
 	final MaterialTransferPlanner transferPlanner;
 	final GranularTransferPlanner granularTransferPlanner;
@@ -69,7 +69,6 @@ public final class FluidDomain {
 	final GasLifecyclePlanner gasLifecyclePlanner;
 	final PressureBoundaryView pressureBoundaryView;
 	final PressureSystem pressureSystem;
-	final PressureProjectionStage pressureStage;
 	final GranularMechanicalStage granularMechanicalStage;
 	final BodyForceStage bodyForceStage;
 	final MechanicalStepPipeline mechanicalPipeline;
@@ -159,7 +158,7 @@ public final class FluidDomain {
 		this.mac = new MacVelocityGrid(sizeX, sizeY, sizeZ);
 		this.cellMacStage = new CellMacStage(domain);
 		this.projection = new PressureProjectionWorkspace(cellCount);
-		this.tension = new SurfaceTensionWorkspace(cellCount);
+		this.tension = new SurfaceTensionFields(this);
 		this.pendingPhaseVolume = new PendingPhaseVolumeWork(cellCount);
 		this.thermalMarkers = domain.domainCapabilities.createThermalMarkerContext();
 		this.metrics = new DomainMetrics(domain);
@@ -173,7 +172,6 @@ public final class FluidDomain {
 		this.gasLifecyclePlanner = new GasLifecyclePlanner(domain);
 		this.pressureBoundaryView = new PressureBoundaryView(domain);
 		this.pressureSystem = new PressureSystem(domain);
-		this.pressureStage = new PressureProjectionStage(this, pressureSystem);
 		this.granularMechanicalStage = new GranularMechanicalStage(this);
 		this.bodyForceStage = new BodyForceStage(this);
 		this.mechanicalPipeline = new MechanicalStepPipeline(this);

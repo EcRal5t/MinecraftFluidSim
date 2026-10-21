@@ -208,7 +208,32 @@ final class GranularImplicitDrag {
 	void project(){
 		if(!active())return;
 		System.arraycopy(forced,0,input,0,size);responseDelta();
+		accumulateDissipation();
 		for(int i=0;i<size;i++)delta[i]+=input[i];writeVelocities(delta,true);
+	}
+
+	/** Backward Euler: dt*D*slip_new^2 plus the local finite-inertia decay. */
+	private void accumulateDissipation() {
+		for(int contact=0;contact<contacts;contact++) {
+			int parcel=particle[contact],base=contact*8,end=base+counts[contact];
+			double slip=input[parcel]+delta[parcel];
+			for(int slot=base;slot<end;slot++)slip-=weights[slot]*(input[indices[slot]]+delta[indices[slot]]);
+			double heat=dt*dragValue[(parcel-faceCount)/3]*slip*slip+.5*mass[parcel]*delta[parcel]*delta[parcel];
+			// A near-zero interpolation weight cannot carry floating subtraction
+			// residue reliably. The largest physical share receives the remainder.
+			int remainder=base,axis=(parcel-faceCount)%3;
+			for(int slot=base+1;slot<end;slot++)if(weights[slot]>weights[remainder])remainder=slot;
+			double remaining=heat;
+			for(int slot=base;slot<end;slot++)if(slot!=remainder) {
+				double part=heat*weights[slot];remaining-=part;
+				domain.cellMacStage.addDissipationAtFace(axis,indices[slot]-offsets[axis],part);
+			}
+			domain.cellMacStage.addDissipationAtFace(axis,indices[remainder]-offsets[axis],remaining);
+		}
+		for(int axis=0;axis<3;axis++)for(int face:factors[axis].faces) {
+			double heat=.5*mass[face]*delta[face]*delta[face];
+			domain.cellMacStage.addDissipationAtFace(axis,face-offsets[axis],heat);
+		}
 	}
 
 	private void readVelocities(double[] vector) {

@@ -588,13 +588,13 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 
 		CompoundTag missingIndicator = codec.encodeSection(state.sections().stream()
 				.filter(section -> section.markerCount() > 0).findFirst().orElseThrow());
-		missingIndicator.remove("Indicator");
-		expectIOException(() -> codec.decodeSection(missingIndicator), "chemical section missing indicator bits was accepted");
+		missingIndicator.getListOrEmpty("LiquidStocks").getCompoundOrEmpty(0).remove("Indicator");
+		expectIOException(() -> codec.decodeSection(missingIndicator), "chemical stock missing its indicator was accepted");
 		CompoundTag foreignFingerprint = codec.encodeManifest(state.manifest());
 		foreignFingerprint.putString("RegistryFingerprint", "0".repeat(64));
 		RegionManifest foreign = signedManifest(codec.decodeManifest(foreignFingerprint));
 		expectIOException(() -> restorer(new RegionState(foreign, state.sections())).reconstructChemical(chemistry),
-				"foreign chemical registry was accepted without authoritative reconstruction");
+				"foreign chemical registry was accepted while decoding stored species handles");
 
 		Path regionDir = root.toAbsolutePath().normalize().resolve("mmm").resolve("region-state")
 				.resolve(region.id().toString());
@@ -626,13 +626,11 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 
 	static void validateMaterialCodec() throws Exception {
 		FluidRegion region = populatedRegion(new UUID(15L, 16L));
-		List<FluidMaterial> palette = List.of(
-				new FluidMaterial("mmm:water", 1_000.0, "mmm:water", 0.0, Math.PI / 2.0),
-				new FluidMaterial("mmm:oil", 800.0, "mmm:oil", 0.0, Math.PI / 2.0)
-		);
-		FlipMaterialParticleState expected = materialCodecParticles(region.domain().exportParticleState(), palette);
-		region.domain().restoreMaterialParticleState(expected);
+		List<FluidMaterial> palette = List.of(BuiltinFluidMaterials.WATER, BuiltinFluidMaterials.OIL);
+		region.domain().restoreMaterialParticleState(materialCodecParticles(region.domain().exportParticleState(), palette));
 		region.domain().bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
+		// Point samples are derived from the committed shared MAC field after initialization.
+		FlipMaterialParticleState expected = region.domain().exportMaterialParticleState();
 		var authoritativeBefore=region.domain().captureAuthoritativeState();
 		RegionState state = RegionCheckpointFixtures.captureMaterial(region, 1L);
 		var canonicalRegion = canonicalCodecRegion(new UUID(15L, 16L));

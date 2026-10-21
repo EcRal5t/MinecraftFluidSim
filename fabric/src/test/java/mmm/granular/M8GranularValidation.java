@@ -61,7 +61,7 @@ public final class M8GranularValidation {
 		solverCouplingPreservesInventories(fast ? 8 : 80);
 		wholeBucketCongestionRemainsLocal(fast ? 40 : 200);
 		if (!fast) singleBucketPourSettlesWithinTenSeconds();
-		emptyGranularGateHasBoundedWallTime(fast ? 8 : 24);
+		emptyGranularInventoryUsesCommonLiquidStep();
 		System.out.println("M8 granular core gate passed: exact inventory, coupling, repose, sleep and local wake");
 	}
 
@@ -2351,7 +2351,7 @@ public final class M8GranularValidation {
 		return signature;
 	}
 
-	private static void emptyGranularGateHasBoundedWallTime(int samples) {
+	private static void emptyGranularInventoryUsesCommonLiquidStep() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
 				100, 1.0e-5F, 2.0e-3F, 0.8F);
 		int sizeX = 24, sizeY = 16, sizeZ = 24, capacity = sizeX * sizeY * sizeZ * 8;
@@ -2365,32 +2365,18 @@ public final class M8GranularValidation {
 		}
 		granular.bindGranular(BuiltinGranularDefinitions.createRegistry(),
 				new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
-		for (int warmup = 0; warmup < 8; warmup++) { baseline.step(); granular.step(); }
-		long[] baselineNanos = new long[samples], granularNanos = new long[samples];
-		for (int sample = 0; sample < samples; sample++) {
-			long start;
-			if ((sample & 1) == 0) {
-				start = System.nanoTime(); baseline.step(); baselineNanos[sample] = System.nanoTime() - start;
-				start = System.nanoTime(); granular.step(); granularNanos[sample] = System.nanoTime() - start;
-			} else {
-				start = System.nanoTime(); granular.step(); granularNanos[sample] = System.nanoTime() - start;
-				start = System.nanoTime(); baseline.step(); baselineNanos[sample] = System.nanoTime() - start;
-			}
-		}
-		Arrays.sort(baselineNanos); Arrays.sort(granularNanos);
-		long baselineMedian = baselineNanos[samples / 2], granularMedian = granularNanos[samples / 2];
-		double overhead = baselineMedian == 0L ? Double.POSITIVE_INFINITY
-				: (granularMedian - baselineMedian) * 100.0 / baselineMedian;
-		System.out.printf("  empty 24x16x24 gate wall-time baseline=%.3f ms granular=%.3f ms overhead=%+.1f%%%n",
-				baselineMedian / 1.0e6, granularMedian / 1.0e6, overhead);
+		for (int step = 0; step < 4; step++) { baseline.step(); granular.step(); }
 		require(Double.doubleToRawLongBits(baseline.totalVolumeExact())
 				== Double.doubleToRawLongBits(granular.totalVolumeExact())
 				&& Float.floatToRawIntBits(baseline.maximumParticleSpeed())
 				== Float.floatToRawIntBits(granular.maximumParticleSpeed()),
 				"empty granular inventory changed the baseline liquid result");
-		long relativeOrTimerBound = Math.max((long) Math.ceil(baselineMedian * 1.05), baselineMedian + 500_000L);
-		require(granularMedian <= relativeOrTimerBound && granularMedian <= 40_000_000L,
-				"empty granular gate exceeded its 5%/0.5 ms noise envelope or the existing 40 ms pacing boundary");
+		var first=baseline.captureAuthoritativeState().momentum();
+		var second=granular.captureAuthoritativeState().momentum();
+		require(baseline.totalMassUnits()==granular.totalMassUnits()
+				&& Arrays.equals(first.copyX(),second.copyX()) && Arrays.equals(first.copyY(),second.copyY())
+				&& Arrays.equals(first.copyZ(),second.copyZ()),
+				"Empty granular inventory changed the common mass or MAC momentum");
 	}
 
 	private static GranularMechanics.Environment constantWater(

@@ -20,7 +20,7 @@ final class PressureFaceGraph {
 	private int liquidEntries;
 	private final double[] supportFill,supportDepth,wetPortArea,sideWetArea,columnBottomPressure,hydrostaticReference,freeFallFraction;
 	private final boolean[] groundedSupport;
-	private final int[] verticalLiquidContact;
+	private final int[] verticalSupportContact;
 	private final boolean[] wetFacesPrepared = new boolean[3];
 	private FlipPressurePhaseGeometry supportGeometry;
 	private long supportRevision=-1;
@@ -43,7 +43,7 @@ final class PressureFaceGraph {
 		pressureSupports = new int[domain.cellCount]; parent = new int[domain.cellCount];
 		supportFill=new double[8*domain.cellCount];supportDepth=new double[supportFill.length];
 		wetPortArea=new double[4*faceCount];sideWetArea=new double[8*faceCount];columnBottomPressure=new double[supportFill.length];hydrostaticReference=new double[supportFill.length];
-		groundedSupport=new boolean[supportFill.length];verticalLiquidContact=new int[domain.mac.velocityY.length];
+		groundedSupport=new boolean[supportFill.length];verticalSupportContact=new int[domain.mac.velocityY.length];
 		freeFallFraction=new double[domain.cellCount];
 		constrained = new boolean[domain.cellCount]; anchored = constrained.clone();
 		seedPressureSum = new double[domain.cellCount]; seedPressureWeight = new double[domain.cellCount];
@@ -76,7 +76,7 @@ final class PressureFaceGraph {
 			int cell = component.cell(), support = component.supportMask();
 			if (component.poreVolumeNormalized().signum() <= 0
 					|| component.availableVolumeNormalized().toDouble() > mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION
-					|| hasFiniteGas(cell, support)) continue;
+					|| hasGasNode(cell, support)) continue;
 			boolean hasMass = false;
 			if (support == (~domain.geometry.cutCells.mask(cell) & 255)) {
 				hasMass = domain.liquidGrid.cellStockMass[cell] > 0;
@@ -93,12 +93,12 @@ final class PressureFaceGraph {
 		classifiedCarrierRevision=domain.liquidGrid.inventoryRevision;classifiedGasFrame=domain.gasState.frame;
 		classifiedGasNetwork=network;classifiedGasRevision=network.revision();
 	}
-	private boolean hasFiniteGas(int cell, int support) {
+	private boolean hasGasNode(int cell, int support) {
 		var frame = domain.gasState.frame;
 		if (frame == null) return false;
 		for (int bits = support; bits != 0; bits &= bits - 1) {
 			int node = frame.nodeOfPiece(8 * cell + Integer.numberOfTrailingZeros(bits));
-			if (node > 0 && domain.pressureBoundaryView.gasNodeHasContinuumState(node)) return true;
+			if (node > 0) return true;
 		}
 		return false;
 	}
@@ -306,7 +306,7 @@ final class PressureFaceGraph {
 		int first = offsets[d], end = d == 2 ? faceCount : offsets[d + 1];
 		Arrays.fill(wetPortArea, 4 * first, 4 * end, 0);
 		Arrays.fill(sideWetArea, 8 * first, 8 * end, 0);
-		if (d == 1) Arrays.fill(verticalLiquidContact, 0);
+		if (d == 1) Arrays.fill(verticalSupportContact, 0);
 		for(int face=first;face<end;face++){
 			int left=firstCell[face],right=secondCell[face];if(left<0)continue;
 			if(!(phase.liquidFractionExact(left)>0)&&!(phase.liquidFractionExact(right)>0))continue;
@@ -319,12 +319,40 @@ final class PressureFaceGraph {
 						:phase.sharedLiquidPortArea(left,right,d,a,b,cut);
 				sideWetArea[8*face+2*port]=leftArea;sideWetArea[8*face+2*port+1]=rightArea;
 				wetPortArea[4*face+port]=Math.clamp(leftArea+rightArea-shared,0,.25);
-				if(d==1&&shared>0)verticalLiquidContact[localFace[face]]|=1<<port;
+				if(d==1&&(shared>0||unresolvedVerticalGap(left,minus,right,plus,.25+.5*b,.25+.5*a)))
+					verticalSupportContact[localFace[face]]|=1<<port;
 			}
 		}
 		wetFacesPrepared[d] = true;
 	}
-	/** A wall-supported vertical column uses the same coarse pressure head and contact area as C/CT. */
+	/** Fixed-open pores carry column weight across unrepresented thin dry layers.
+	 * This changes the known hydrostatic load only; wet areas, capacities and C/CT stay physical. */
+	private boolean unresolvedVerticalGap(int lower,int lowerMicro,int upper,int upperMicro,double x,double z) {
+		double top=verticalLiquidLimit(lower,lowerMicro,x,z,true);
+		double bottom=verticalLiquidLimit(upper,upperMicro,x,z,false);
+		return 1-top+bottom<=FluidSolverConfig.UNRESOLVED_VERTICAL_GAP_FRACTION;
+	}
+	private double verticalLiquidLimit(int cell,int micro,double x,double z,boolean high) {
+		var phase=domain.pressurePhaseGeometry;
+		if(!(phase.liquidFractionExact(cell,micro)>0))return Double.NaN;
+		double low=(micro>>>1&1)*.5,upper=low+.5;
+		if(phase.liquidFractionExact(cell,micro)>=1)return high?upper:low;
+		double ny=phase.planeNormal(cell,micro,1);
+		double offset=phase.planeOffset(cell,micro)-phase.planeNormal(cell,micro,0)*x-phase.planeNormal(cell,micro,2)*z;
+		if(ny>0)upper=Math.min(upper,offset/ny);
+		else if(ny<0)low=Math.max(low,offset/ny);
+		else if(offset<0)return Double.NaN;
+		return upper<low?Double.NaN:high?upper:low;
+	}
+	private boolean unresolvedWallGap(int cell,int support) {
+		for(int micro=0;micro<8;micro++)if((micro&2)==0&&(support&1<<micro)!=0) {
+			double x=(micro&1)*.5+.25,z=(micro>>>2&1)*.5+.25;
+			if(verticalLiquidLimit(cell,micro,x,z,false)<=FluidSolverConfig.UNRESOLVED_VERTICAL_GAP_FRACTION)return true;
+		}
+		return false;
+	}
+
+	/** Column head follows liquid contact and the shared unresolved thin-gap support relation. */
 	private void prepareHydrostaticReference(){
 		Arrays.fill(groundedSupport,false);Arrays.fill(columnBottomPressure,0);Arrays.fill(hydrostaticReference,0);Arrays.fill(freeFallFraction,1);
 		var cut=domain.geometry.cutCells;var phase=domain.pressurePhaseGeometry;
@@ -335,11 +363,12 @@ final class PressureFaceGraph {
 				int slot=8*cell+Integer.numberOfTrailingZeros(support);if(!(supportFill[slot]>0))continue;
 				boolean ground=false;
 				if((support&0x33)==0)ground=true; // The lower half is fixed solid.
-				else if(phase.liquidFaceArea(cell,1,0,cut)>0){
-					if(y==0||domain.cellMacStage.isWallFace(1,face,null))ground=true;
+				else {
+					if(y==0||domain.cellMacStage.isWallFace(1,face,null))
+						ground=phase.liquidFaceArea(cell,1,0,cut)>0||unresolvedWallGap(cell,support);
 					else for(int micro=0;micro<8;micro++)if((micro&2)==0&&(support&1<<micro)!=0){
 						int port=(micro>>>2&1)+2*(micro&1);
-						if((verticalLiquidContact[face]&1<<port)==0)continue;
+						if((verticalSupportContact[face]&1<<port)==0)continue;
 						int lower=CellRemapMicroTopology.support(cut.mask(below),micro|2);
 						if(lower!=0&&groundedSupport[8*below+Integer.numberOfTrailingZeros(lower)])ground=true;
 					}
@@ -360,16 +389,11 @@ final class PressureFaceGraph {
 				int slot=8*cell+Integer.numberOfTrailingZeros(support);if(!groundedSupport[slot])continue;
 				double upperPressure=0,upperWeight=0;
 				if(y+1<domain.sizeY)for(int micro=0;micro<8;micro++)if((micro&2)!=0&&(support&1<<micro)!=0){
-					int port=(micro>>>2&1)+2*(micro&1);if((verticalLiquidContact[face]&1<<port)==0)continue;
+					int port=(micro>>>2&1)+2*(micro&1);if((verticalSupportContact[face]&1<<port)==0)continue;
 					int upper=CellRemapMicroTopology.support(cut.mask(above),micro^2);
 					if(upper!=0){int next=8*above+Integer.numberOfTrailingZeros(upper);if(groundedSupport[next]){upperPressure+=columnBottomPressure[next];upperWeight++;}}
 				}
 				if(upperWeight>0)upperPressure/=upperWeight;
-				// A continuous supported liquid column carries its overburden through
-				// the common pressure row. Ambient subcell voids retain real capacity
-				// without turning an interior liquid layer into a second free surface.
-				if(upperWeight>0&&domain.liquidGrid.cellStockMass[cell]>0&&!hasFiniteGas(cell,support))
-					pressureSupports[cell]|=support;
 				double weight=domain.liquidGrid.cellDensity[cell]*domain.config.gravity()*domain.config.cellSize();
 				hydrostaticReference[slot]=weight*supportDepth[slot]+upperPressure;
 				columnBottomPressure[slot]=upperPressure+2*weight*supportDepth[slot];

@@ -32,6 +32,12 @@ final class PressureSystem {
 		granular.addDivergence(result, -domain.config.density() / duration);
 		addStorageRhs(result);
 	}
+	void solve(float dt) {
+		var result=solveProjection(dt);
+		domain.lastPressureIterations=result.iterations();domain.lastPressureResidual=(float)result.residualRms();
+		if(!result.converged())throw new FluidDomain.PressureSolveBlockedException("Pressure projection did not converge: residual="
+				+result.residualRms()+", iterations="+result.iterations());
+	}
 	PressureProjectionResult solveProjection(float dt) {
 		duration = dt; domain.domainFlowFields.ensureGrid(); solidFaces.rebuild(); faces.rebuild(dt);
 		var p = domain.projection;
@@ -44,6 +50,8 @@ final class PressureSystem {
 			float[] velocity = a == 0 ? domain.mac.velocityX : a == 1 ? domain.mac.velocityY : domain.mac.velocityZ;
 			velocity[local] += dt * faces.inverseMass[f] * faces.affine[f];
 		}
+		// Both phases receive known pressure loads before the same finite-mass drag response.
+		if(domain.granularState!=null&&domain.granularState.parcels.count()>0){drag.prepare(dt);drag.project();}
 		assembleMatrix();
 		solver.reset();
 		pressure = solver.pressure();
@@ -63,10 +71,6 @@ final class PressureSystem {
 		var result = solver.solve(target);
 		pressure = solver.pressure();
 		return result;
-	}
-	void predictDrag(float dt){
-		if(domain.granularState==null||domain.granularState.parcels.count()==0)return;
-		domain.domainFlowFields.ensureGrid();faces.rebuild(dt);drag.prepare(dt);drag.project();
 	}
 	void beginVolumeTransport(){
 		readVelocity(transportVelocity);
@@ -136,6 +140,25 @@ final class PressureSystem {
 		}
 	}
 	double gasPressure(int node) { return pressure.length > domain.cellCount + node ? pressure[domain.cellCount + node] : domain.pressureBoundaryView.gasPressureOfNode(node); }
+	/** Conservative absolute-pressure upper bound for a bulk phase scan, without rebuilding wet faces. */
+	double liquidPressureUpperBoundPa() {
+		domain.domainFlowFields.ensureInventoryGrid();
+		// Nonzero capillarity uses the current curvature field, whose height-function stencil
+		// can exceed a unit-normal divergence bound. Zero-tension production fluids need no geometry here.
+		if (domain.surfaceTensionActive) domain.domainFlowFields.ensurePressureGeometry();
+		double residual = 0.0, density = 0.0, capillary = 0.0, gas = 0.0;
+		for (int cell = 0; cell < domain.cellCount; cell++) {
+			if (domain.liquidGrid.stockCount[cell] == 0) continue;
+			residual = Math.max(residual, domain.projection.pressure[cell]);
+			density = Math.max(density, domain.liquidGrid.cellDensity[cell]);
+			capillary = Math.max(capillary, Math.abs(domain.tension.surfaceTensionPressure[cell]));
+		}
+		for (int node : domain.gasState.network.nodeIds())
+			gas = Math.max(gas, domain.pressureBoundaryView.gasPressureOfNode(node));
+		// Each vertical column is at most the domain height, at the largest current liquid density.
+		double head = density * domain.config.gravity() * domain.config.cellSize() * domain.sizeY;
+		return mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE + residual + gas + head + capillary;
+	}
 	CondensedPhasePressureField captureLiquidPressure(){
 		float[] actual=new float[domain.cellCount];
 		if(domain.gasState.frame==null){
@@ -150,6 +173,10 @@ final class PressureSystem {
 	}
 	void restoreLiquidPressure(CondensedPhasePressureField state){
 		float[] actual=state.copyRelativeGaugePressurePa();domain.pressureReference=0;
+		if(domain.gasState.frame==null){
+			for(int cell=0;cell<domain.cellCount;cell++)domain.projection.pressure[cell]=(float)(state.pressureReferencePa()+actual[cell]);
+			return;
+		}
 		for(int cell=0;cell<domain.cellCount;cell++)domain.projection.pressure[cell]=
 				(float)(state.pressureReferencePa()+actual[cell]-domain.tension.surfaceTensionPressure[cell]
 						-faces.referencePressure(cell,~domain.geometry.cutCells.mask(cell)&255));
