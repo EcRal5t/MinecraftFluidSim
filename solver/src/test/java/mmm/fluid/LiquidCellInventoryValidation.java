@@ -14,6 +14,7 @@ public final class LiquidCellInventoryValidation {
 	public static void main(String[] args) {
 		continuousFluxMovesResolvedMinorityMaterial();
 		continuousSlowFluxDoesNotStopAcrossSteps();
+		interiorFullnessSharesTheFluxSettlement();
 		sharedFluxPreservesAllQuantities();
 		bulkVolumeReplacement();
 		collisionPreservesGeometricTail();
@@ -94,7 +95,26 @@ public final class LiquidCellInventoryValidation {
 		}
 		var capacities=new SignedDyadic[32];java.util.Arrays.fill(capacities,SignedDyadic.ZERO);
 		for(int cell=0;cell<4;cell++)capacities[8*cell]=SignedDyadic.of(1);
-		return PhaseQuantitySettlement.settle(routes,capacities,null,null,source->{throw new AssertionError("Balanced circulation expanded capacity alternatives");});
+		return PhaseQuantitySettlement.settle(routes,capacities,capacities,null,null,source->{throw new AssertionError("Balanced circulation expanded capacity alternatives");});
+	}
+	private static void interiorFullnessSharesTheFluxSettlement(){
+		var cells=new LiquidCellInventory(3,null);
+		for(int cell=0;cell<3;cell++)cells.planAdditions(List.of(new LiquidCellInventory.Stock(
+				new LiquidCellInventory.Key(cell,0,255),SignedDyadic.of(cell==2?.5:1),cell==2?500:1000,null,cell==2?50:100,false))).commit();
+		var raw=new PhaseQuantitySettlement.RouteBuffer();raw.reset(cells.stocks(),24);
+		for(int s=0;s<raw.sourceCount();s++){
+			int cell=raw.key(s).cell();double outgoing=cell==0?.2:cell==1?.3:0;
+			if(outgoing>0)raw.add(s,cell,cell+1,255,outgoing);
+			raw.add(s,-1,cell,255,raw.volume(s)-outgoing);
+		}
+		var high=new SignedDyadic[24];java.util.Arrays.fill(high,SignedDyadic.ZERO);
+		for(int cell=0;cell<3;cell++)high[8*cell]=SignedDyadic.of(1);
+		var low=new SignedDyadic[24];low[0]=low[8]=SignedDyadic.of(1);
+		var routes=PhaseQuantitySettlement.settle(raw,high,low,null,null,s->{});
+		var plan=cells.planRoutes(routes,null);plan.commit();
+		require(cells.exactCellVolume(0).equals(SignedDyadic.of(1))&&cells.exactCellVolume(1).equals(SignedDyadic.of(1))
+				&&cells.exactVolume().equals(SignedDyadic.of(2.5))&&cells.massUnits()==2500
+				&&cells.exactInternalEnergy().equals(SignedDyadic.of(250)),"Full interior settlement opened a void or changed its material quantities");
 	}
 	private static void bulkVolumeReplacement() {
 		var config=new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F,.8F);

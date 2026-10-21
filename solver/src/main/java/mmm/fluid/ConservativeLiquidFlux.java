@@ -315,10 +315,33 @@ final class ConservativeLiquidFlux {
 		var origins = working.stocks();
 		prepareRoutes(origins, capacities);
 		var gasCapacityGroups=prepareGasGroups(capacities);
-		var routes=PhaseQuantitySettlement.settle(numericalRoutes,capacities,
+		var routes=PhaseQuantitySettlement.settle(numericalRoutes,capacities,interiorLiquidMinimum(capacities),
                 gasCapacityGroups==null?null:gasCapacityGroups.receiverGroup(),gasCapacityGroups==null?null:gasCapacityGroups.upper(),
                 source -> prepareAlternatives(source, capacities));
 		return working.planRoutes(routes, FluidThermalBinding.liquidEnergyPartitioner(domain),inventoryFinalizer);
+	}
+	/** Filled liquid interiors retain incompressibility during the bounded flux settlement.
+	 * Only supports in contact with an existing dry pore can expose a moving free surface. */
+	private SignedDyadic[] interiorLiquidMinimum(SignedDyadic[] capacities){
+		var frame=domain.gasState.frame;if(frame==null)return null;
+		var minimum=new SignedDyadic[capacities.length];
+		for(var component:frame.capacity().components()){
+			if(component.availableVolumeNormalized().signum()!=0||component.poreVolumeNormalized().signum()==0)continue;
+			int cell=component.cell(),support=component.supportMask(),slot=8*cell+Integer.numberOfTrailingZeros(support);
+			boolean exposed=false;
+			for(int side=0;side<6&&!exposed;side++){
+				int face=coarseFaceAt[6*cell+side];if(face<0)continue;
+				int direction=cell==left[face]?0:1,target=direction==0?right[face]:left[face];
+				for(int port=0;port<4;port++){
+					int d=axis[face],micro=faceMicro(d,port)^(direction==0?0:1<<d),peer=micro^(1<<d);
+					if((support&1<<micro)==0||frame.nodeOfPiece(8*target+peer)<0)continue;
+					double a=.5*(peer>>>((d+1)%3)&1),b=.5*(peer>>>((d+2)%3)&1);
+					if(GasFaceIntersection.area(frame.phase(),target,-1,d,direction==0?0:1,0,a,b,.5)>0){exposed=true;break;}
+				}
+			}
+			if(!exposed)minimum[slot]=capacities[slot];
+		}
+		return minimum;
 	}
 
 	/** The initial allocation contains only physical preferences and the retained source share. */

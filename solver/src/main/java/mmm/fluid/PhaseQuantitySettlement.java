@@ -73,12 +73,12 @@ final class PhaseQuantitySettlement {
         }
     }
 
-    static List<LiquidCellInventory.SourceRoutes> settle(RouteBuffer raw,SignedDyadic[] upper,
+    static List<LiquidCellInventory.SourceRoutes> settle(RouteBuffer raw,SignedDyadic[] upper,SignedDyadic[] lower,
             int[] receiverGroup,SignedDyadic[] groupUpper,IntConsumer alternatives){
         int sources=raw.sources,groups=groupUpper==null?0:groupUpper.length;
         var amount=new SignedDyadic[raw.size];Arrays.fill(amount,SignedDyadic.ZERO);
         var load=new SignedDyadic[upper.length];var groupLoad=new SignedDyadic[groups];Arrays.fill(groupLoad,SignedDyadic.ZERO);
-        int[] touched=new int[Math.max(1,sources+raw.size)];int touchedCount=0;
+        int[] touched=new int[upper.length];int touchedCount=0;
         for(int s=0;s<sources;s++){
             var remaining=raw.volume[s];double scale=raw.preferredTotal[s]>raw.volume(s)?raw.volume(s)/raw.preferredTotal[s]:1;
             int largest=raw.retained[s];
@@ -100,11 +100,15 @@ final class PhaseQuantitySettlement {
             load[slot]=load[slot].add(amount[r]);
             int group=receiverGroup==null?-1:receiverGroup[slot];if(group>=0)groupLoad[group]=groupLoad[group].add(amount[r]);
         }
+        if(lower!=null)for(int slot=0;slot<lower.length;slot++)if(lower[slot]!=null&&lower[slot].signum()>0&&load[slot]==null){
+            load[slot]=SignedDyadic.ZERO;touched[touchedCount++]=slot;
+        }
         boolean adjust=false;
         for(int i=0;i<touchedCount;i++){int slot=touched[i];adjust|=load[slot].compareTo(upper[slot])>0;}
+        if(lower!=null)for(int i=0;i<touchedCount;i++){int slot=touched[i];adjust|=lower[slot]!=null&&load[slot].compareTo(lower[slot])<0;}
         for(int g=0;g<groups;g++)adjust|=groupLoad[g].compareTo(groupUpper[g])>0;
         if(adjust){
-            var repair=new ResidualRepair(raw,amount,load,upper,receiverGroup,groupLoad,groupUpper,touched,touchedCount,alternatives);
+            var repair=new ResidualRepair(raw,amount,load,upper,lower,receiverGroup,groupLoad,groupUpper,touched,touchedCount,alternatives);
             repair.solve();amount=new SignedDyadic[raw.size];
             for(int r=0;r<raw.size;r++)amount[r]=repair.amount(r);
         }
@@ -231,7 +235,7 @@ final class PhaseQuantitySettlement {
     /** One residual graph handles inventory quantities at every volume scale. */
     private static final class ResidualRepair {
         private final RouteBuffer raw;
-        private final SignedDyadic[] upper,initialAmount,load;
+        private final SignedDyadic[] upper,lower,initialAmount,load;
         private final int[] receiverGroup,receiverVertex;
         private final IntConsumer alternatives;
         private final boolean[] expanded,expandedReceiver,expandedAggregate;
@@ -243,10 +247,10 @@ final class PhaseQuantitySettlement {
         private SignedDyadic[] remaining=new SignedDyadic[64];
         private int receivers;
 
-        ResidualRepair(RouteBuffer raw,SignedDyadic[] amount,SignedDyadic[] load,SignedDyadic[] upper,
+        ResidualRepair(RouteBuffer raw,SignedDyadic[] amount,SignedDyadic[] load,SignedDyadic[] upper,SignedDyadic[] lower,
                 int[] receiverGroup,SignedDyadic[] groupLoad,SignedDyadic[] groupHigh,
                 int[] touched,int touchedCount,IntConsumer alternatives){
-            this.raw=raw;this.upper=upper;this.receiverGroup=receiverGroup;this.alternatives=alternatives;initialAmount=amount;this.load=load;
+            this.raw=raw;this.upper=upper;this.lower=lower;this.receiverGroup=receiverGroup;this.alternatives=alternatives;initialAmount=amount;this.load=load;
             expanded=new boolean[raw.sources];receiverVertex=new int[upper.length];
             int groups=groupHigh==null?0:groupHigh.length;
             expandedReceiver=new boolean[upper.length];expandedAggregate=new boolean[groups+1];
@@ -266,8 +270,9 @@ final class PhaseQuantitySettlement {
             var poolNeed=SignedDyadic.ZERO;
             for(int i=0;i<touchedCount;i++){
                 int slot=touched[i];listReceiver(slot);
-                if(load[slot].compareTo(upper[slot])<=0)continue;
-                var excess=load[slot].subtract(upper[slot]);pair(0,receiver(slot),excess,SignedDyadic.ZERO);
+                var excess=load[slot].subtract(base(slot));
+                if(excess.signum()>0)pair(0,receiver(slot),excess,SignedDyadic.ZERO);
+                else if(excess.signum()<0)pair(receiver(slot),1,excess.negate(),SignedDyadic.ZERO);
                 int group=receiverGroup==null?-1:receiverGroup[slot];
                 if(group<0)poolNeed=poolNeed.add(excess);else receiverExcess[group]=receiverExcess[group].add(excess);
             }
@@ -281,7 +286,10 @@ final class PhaseQuantitySettlement {
                 poolNeed=poolNeed.add(excess);
             }
             if(poolNeed.signum()>0)pair(pool,1,poolNeed,SignedDyadic.ZERO);
+            else if(poolNeed.signum()<0)pair(0,pool,poolNeed.negate(),SignedDyadic.ZERO);
         }
+        private SignedDyadic minimum(int slot){return lower==null||lower[slot]==null?SignedDyadic.ZERO:lower[slot];}
+        private SignedDyadic base(int slot){var value=min(value(load[slot]),upper[slot]);return value.compareTo(minimum(slot))<0?minimum(slot):value;}
         private void listReceiver(int slot){
             if(nextReceiver[slot]!=-2)return;
             int group=receiverGroup==null?-1:receiverGroup[slot],aggregate=group<0?firstReceiver.length-1:group;
@@ -294,8 +302,8 @@ final class PhaseQuantitySettlement {
             }
             int vertex=vertices++;receiverVertex[slot]=vertex;receiverSlot[vertex]=slot;level[vertex]=-1;receivers++;
             listReceiver(slot);
-            int group=receiverGroup==null?-1:receiverGroup[slot];var base=min(value(load[slot]),upper[slot]);
-            pair(vertex,group<0?pool:firstGroup+group,upper[slot].subtract(base),base);
+            int group=receiverGroup==null?-1:receiverGroup[slot];var base=base(slot);
+            pair(vertex,group<0?pool:firstGroup+group,upper[slot].subtract(base),base.subtract(minimum(slot)));
             return vertex;
         }
         private void pair(int from,int target,SignedDyadic forward,SignedDyadic reverse){
