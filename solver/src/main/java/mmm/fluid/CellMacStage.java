@@ -354,7 +354,7 @@ final class CellMacStage {
 		inventory.commit();
 		commitMomentum(momentum);
 		domain.markCellInventoryChanged();
-		if (gas != null) domain.gasTopologyCoordinator.commitPrepared(gas,occupied);
+		if (gas != null) domain.gasTopologyCoordinator.commitPrepared(gas,liquid.occupied);
 		if (auditAfter != null) domain.thermalState.restoreAuditLedger(auditAfter);
 		for (int cell : inventory.changedCells()) if (domain.chemicalParcels != null) domain.chemicalParcels.markDirtyCell(cell);
 	}
