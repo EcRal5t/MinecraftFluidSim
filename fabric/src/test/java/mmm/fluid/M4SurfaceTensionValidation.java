@@ -155,6 +155,14 @@ private static void validateContactAngleCurvatureDirection() {
   check(Math.abs(curvature[a] + Math.cos(angles[a])) < 1e-6,
     "planar contact-line curvature has the wrong Young pressure sign: theta="
       + Math.toDegrees(angles[a]) + ", curvature=" + curvature[a]);
+  java.util.Arrays.fill(fractions,0);
+  for(int z=0;z<domain.sizeZ;z++)for(int x=0;x<domain.sizeX;x++)
+   fractions[domain.domainFlowFields.cellIndex(x,1,z)]=.25F;
+  domain.setVolumes(fractions);domain.domainFlowFields.ensureGrid();
+  double filmCurvature=domain.tension.liquidGasMeanCurvature(5,1,2);
+  check(Math.abs(filmCurvature)<1e-6,
+    "a horizontal film on a fully wetted wall gained contact-line curvature: theta="
+      +Math.toDegrees(angles[a])+", curvature="+filmCurvature);
  }
  check(curvature[0] < curvature[1] && curvature[1] < curvature[2],
    "wall curvature did not order the contact-line pressure response");

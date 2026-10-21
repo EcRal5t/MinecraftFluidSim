@@ -10,6 +10,8 @@ import mmm.thermal.LiquidThermalExpansion;
 import mmm.thermal.ThermalMaterialDefinition;
 import mmm.thermal.ThermalRegistry;
 import mmm.thermal.ThermalSpeciesOffset;
+import mmm.units.Mass;
+import mmm.units.SignedDyadic;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -124,7 +126,7 @@ final class LiquidStratificationValidation {
 				domain = candidate.claimPreparedCpuDomain();
 				var stats = candidate.stats();
 				viscous += stats.viscosity().dissipatedJoules();
-				initial.check(domain);
+				initial.check(domain, stats.substeps());
 				maximum = Math.max(maximum, domain.maximumParticleSpeed());
 			}
 			checkHydrostaticMotion(domain,initialDepths,maximum,40);
@@ -182,7 +184,7 @@ final class LiquidStratificationValidation {
 			var candidate = advance(domain);
 			domain = candidate.claimPreparedCpuDomain();
 			var stats = candidate.stats();
-			initial.check(domain);
+			initial.check(domain, stats.substeps());
 			maximum = Math.max(maximum, domain.maximumParticleSpeed());
 			check(Math.abs(stats.mechanicalAudit().closureResidualJoules()) < 1e-6,
 					"compensated heat/salt mechanical energy did not close");
@@ -225,7 +227,7 @@ final class LiquidStratificationValidation {
 				var candidate = backend.evaluate(new FluidStepRequest(step, domain.captureAuthoritativeState(), List.of(), false, 0, true));
 				var stats = candidate.stats();
 				domain = candidate.claimPreparedCpuDomain();
-				initial.check(domain);
+				initial.check(domain, stats.substeps());
 				check(Math.abs(stats.mechanicalAudit().closureResidualJoules()) < 1e-6,
 						"stratification mechanical energy stages do not close");
 				viscous += stats.viscosity().dissipatedJoules();
@@ -335,12 +337,22 @@ final class LiquidStratificationValidation {
 		return moment / sum;
 	}
 
-	private record Inventory(mmm.units.SignedDyadic volume, long mass, long[] species, mmm.thermal.ThermalAuditLedger audit) {
-		static Inventory capture(FluidDomain domain) {
-			return new Inventory(domain.liquidCells.exactVolume(), domain.liquidCells.massUnits(),
-					speciesTotals(domain), domain.thermalAudit());
+	private static final class Inventory {
+		private final SignedDyadic volume;
+		private final long mass;
+		private final long[] species;
+		private final mmm.thermal.ThermalAuditLedger audit;
+		private Energy previous;
+		private mmm.thermal.ThermalAuditLedger previousAudit;
+		private Inventory(FluidDomain domain) {
+			volume=domain.liquidCells.exactVolume();mass=domain.liquidCells.massUnits();
+			species=speciesTotals(domain);audit=previousAudit=domain.thermalAudit();previous=Energy.capture(domain);
 		}
-		void check(FluidDomain domain) {
+		static Inventory capture(FluidDomain domain) {
+			return new Inventory(domain);
+		}
+		void check(FluidDomain domain) { check(domain,1); }
+		void check(FluidDomain domain,int substeps) {
 			LiquidStratificationValidation.check(domain.liquidCells.exactVolume().equals(volume) && domain.liquidCells.massUnits() == mass,
 					"stratification changed volume or material mass");
 			LiquidStratificationValidation.check(Arrays.equals(species, speciesTotals(domain)),
@@ -350,12 +362,65 @@ final class LiquidStratificationValidation {
 			var after = domain.thermalAudit();
 			LiquidStratificationValidation.check(after.externalSource().equals(audit.externalSource())
 					&& after.externalSink().equals(audit.externalSink())
-					&& after.mechanicalWork().subtract(audit.mechanicalWork()).signum() >= 0
 					&& after.finiteDeviceExchange().equals(audit.finiteDeviceExchange())
 					&& domain.exactInternalEnergy().subtract(audit.expectedInventory())
 							.subtract(after.mechanicalWork().subtract(audit.mechanicalWork()))
 							.equals(after.roundoffResidual().subtract(audit.roundoffResidual())),
-					"isolated stratification changed the thermal source/sink/work ledger");
+					"isolated stratification changed its external heat or exact thermal ledger");
+			var current=Energy.capture(domain);
+			// Potential energy comes from integer cell masses and their fixed cell centres;
+			// kinetic energy comes from actual face momentum and independently assembled inertia.
+			// The work column is signed: lifting stock or accelerating flow can withdraw U.
+			double mechanicalAllowance=previous.arithmeticAllowance()+current.arithmeticAllowance()
+					+substeps*(previous.velocitySamplingAllowance()+current.velocitySamplingAllowance());
+			double storageAllowance=substeps*(previous.storageAllowance()+current.storageAllowance());
+			double residual=current.total().subtract(previous.total()).toDouble();
+			LiquidStratificationValidation.check(Math.abs(residual)<=mechanicalAllowance+storageAllowance,
+					"Isolated stratification changed independently measured K + PE + U: residual="+residual
+							+", allowance="+(mechanicalAllowance+storageAllowance)+", K="+previous.kinetic()+"/"+current.kinetic()
+							+", PE="+previous.potential()+"/"+current.potential());
+			double roundoff=after.roundoffResidual().subtract(previousAudit.roundoffResidual()).toDouble();
+			LiquidStratificationValidation.check(Math.abs(roundoff)<=storageAllowance,
+					"Stratification stored a material energy change as roundoff: "+roundoff+" > "+storageAllowance);
+			previous=current;previousAudit=after;
+		}
+	}
+
+	private record Energy(SignedDyadic total,double kinetic,double potential,double arithmeticAllowance,
+	                      double velocitySamplingAllowance,double storageAllowance) {
+		static Energy capture(FluidDomain domain) {
+			check(domain.gasState.network.nodeCount()==0&&domain.totalGranularMass()==0,
+					"Stratification energy observer requires its liquid-only fixture");
+			long[] mass=new long[domain.cellCount];double storage=0,arithmetic=0,sampling=0;
+			for(var stock:domain.liquidCells.stocks()) {
+				mass[stock.key().cell()]=Math.addExact(mass[stock.key().cell()],stock.massUnits());
+				// A source split, recipient sum and mechanical exchange each round binary64 U.
+				storage+=8*Math.ulp(stock.internalEnergy());
+			}
+			SignedDyadic kinetic=SignedDyadic.ZERO,potential=SignedDyadic.ZERO;
+			for(int cell=0;cell<mass.length;cell++) {
+				double term=Mass.kilograms(mass[cell])*domain.config.gravity()*domain.config.cellSize()
+						*(cell/domain.sizeX%domain.sizeY+.5);
+				potential=potential.add(SignedDyadic.of(term));arithmetic+=8*Math.ulp(term);
+			}
+			double[][] momentum={domain.mac.momentumX,domain.mac.momentumY,domain.mac.momentumZ};
+			for(int axis=0;axis<3;axis++) {
+				int nx=domain.sizeX+(axis==0?1:0),ny=domain.sizeY+(axis==1?1:0),nz=domain.sizeZ+(axis==2?1:0);
+				for(int z=0;z<nz;z++)for(int y=0;y<ny;y++)for(int x=0;x<nx;x++) {
+					int coordinate=axis==0?x:axis==1?y:z,size=axis==0?domain.sizeX:axis==1?domain.sizeY:domain.sizeZ;
+					int right=coordinate<size?(z*domain.sizeY+y)*domain.sizeX+x:-1;
+					int left=coordinate>0?((z-(axis==2?1:0))*domain.sizeY+y-(axis==1?1:0))*domain.sizeX+x-(axis==0?1:0):-1;
+					double inertia=.5*(Mass.kilograms(left<0?0:mass[left])+Mass.kilograms(right<0?0:mass[right]));
+					if(inertia==0)continue;
+					double p=momentum[axis][(z*ny+y)*nx+x],term=.5*p*p/inertia;
+					kinetic=kinetic.add(SignedDyadic.of(term));arithmetic+=8*Math.ulp(term);
+					// The solver samples binary64 P/M into binary32 velocity at each substep.
+					double velocity=(float)(p/inertia),sampled=.5*inertia*velocity*velocity;
+					sampling+=Math.abs(sampled-term)+8*Math.ulp(sampled);
+				}
+			}
+			return new Energy(domain.exactInternalEnergy().add(kinetic).add(potential),kinetic.toDouble(),potential.toDouble(),
+					arithmetic,sampling,storage);
 		}
 	}
 

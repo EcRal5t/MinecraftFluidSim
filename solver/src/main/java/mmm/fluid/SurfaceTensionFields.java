@@ -160,12 +160,32 @@ final class SurfaceTensionFields {
 		double gradient=pair.first[first]*pair.second[second]-pair.first[second]*pair.second[first];
 		return sigma*.5*(pair.curvature[first]+pair.curvature[second])*gradient;
 	}
-	private double fixedLiquidContact(int cell,int x,int y,int z,int axis,int side) {
-		var cut = domain.geometry.cutCells;
-		double open = axis == 0 ? cut.xFaceOpen(x+side,y,z)
-				: axis == 1 ? cut.yFaceOpen(x,y+side,z) : cut.zFaceOpen(x,y,z+side);
-		if (open >= 1 || domain.pressurePhaseGeometry == null) return 0;
-		return (1-open)*domain.pressurePhaseGeometry.liquidFaceArea(cell,axis,side,cut);
+	/** Liquid fraction of the fixed microfaces accessible from this cell; NaN means no wall. */
+	private double wallWetFraction(int cell,int x,int y,int z,int axis,int side) {
+		if(domain.pressurePhaseGeometry==null)return Double.NaN;
+		var cut=domain.geometry.cutCells;var phase=domain.pressurePhaseGeometry;
+		int nx=x+(axis==0?2*side-1:0),ny=y+(axis==1?2*side-1:0),nz=z+(axis==2?2*side-1:0);
+		int peer=domain.domainFlowFields.inside(nx,ny,nz)?cut.mask(domain.domainFlowFields.cellIndex(nx,ny,nz)):255;
+		double area=0,wet=0;
+		for(int a=0;a<2;a++)for(int b=0;b<2;b++){
+			int micro=phase.microAtFace(cell,axis,side,.5*a,.5*b);
+			if((cut.mask(cell)&1<<micro)!=0||(peer&1<<(micro^(1<<axis)))==0)continue;
+			area+=.25;wet+=phase.liquidPortArea(cell,axis,side,a,b,cut);
+		}
+		return area>0?wet/area:Double.NaN;
+	}
+	/** Young's condition acts where liquid and dry wall meet, including contact on a cell edge. */
+	private boolean contactLine(int cell,int x,int y,int z,int axis,int side,double wet) {
+		if(wet<1)return true;
+		for(int tangent=0;tangent<3;tangent++)if(tangent!=axis)for(int sign=-1;sign<=1;sign+=2){
+			int nx=x+(tangent==0?sign:0),ny=y+(tangent==1?sign:0),nz=z+(tangent==2?sign:0);
+			if(!domain.domainFlowFields.inside(nx,ny,nz)
+					||!(domain.domainFlowFields.openFaceFromCell(cell,tangent==0?sign:0,tangent==1?sign:0,tangent==2?sign:0)>0))continue;
+			int neighbor=domain.domainFlowFields.cellIndex(nx,ny,nz);
+			double adjacent=wallWetFraction(neighbor,nx,ny,nz,axis,side);
+			if(adjacent>=0&&adjacent<1)return true;
+		}
+		return false;
 	}
 	double surfaceTensionContactAngleAtCell(int cell) {
 		if (domain.materialRegistry == null) return Math.PI / 2.0;
@@ -208,8 +228,12 @@ final class SurfaceTensionFields {
 			if (open < 1) {
 				int sample = domain.domainFlowFields.cellIndex(Math.clamp(nx,0,domain.sizeX-1),Math.clamp(ny,0,domain.sizeY-1),Math.clamp(nz,0,domain.sizeZ-1));
 				double local = normal[target];
-				boolean touching = fixedLiquidContact(target,x,y,z,axis,dx+dy+dz>0?1:0) > 0;
-				double wallNormal = component == axis ? (touching ? (dx+dy+dz)*Math.cos(surfaceTensionContactAngleAtCell(target)) : 0) : local;
+				double wallNormal=local;
+				if(component==axis){
+					int side=dx+dy+dz>0?1:0;double wet=wallWetFraction(target,x,y,z,axis,side);
+					wallNormal=!(wet>0)?0:contactLine(target,x,y,z,axis,side,wet)
+							?(dx+dy+dz)*Math.cos(surfaceTensionContactAngleAtCell(target)):local;
+				}
 				double ghost = 2*wallNormal-local;
 				return open*normal[sample]+(1-open)*ghost;
 			}
