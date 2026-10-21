@@ -296,20 +296,50 @@ public final class GranularDepositDynamics {
 		for (var target : plan.targets()) { environment.onSolidChanged(target.cell()); disturbCell(target.cell()); }
 	}
 
-	/** Lowest bulk-capable, vertically reachable layer; later admission cannot select an upper void. */
+	/** Resting material fills its column or descends a supercritical, physically reachable neighbour. */
 	private int settlementTarget(GranularParcelStore.Parcel parcel, Environment environment) {
 		int x = coordinate(parcel.x(), sizeX), z = coordinate(parcel.z(), sizeZ);
 		var addition = new GranularDepositStore.SolidPortion(parcel.materialHandle(), parcel.solidCompositionHandle(), parcel.solidVolumeSvq(), parcel.massUnits());
-		for (int y = 0; y <= coordinate(parcel.y(), sizeY); y++) {
-			if (!admission.spend(1)) return -1;
-			int target = cell(x, y, z); long open = environment.geometricOpenSvq(target);
-			if (open <= 0) continue;
-			long bulk = settlement.bulkVolumeAfterAdd(target, addition);
-			if (bulk <= open && environment.bedGeometryFits(target, bulk)
-					&& verticalPathOpen(environment, parcel.x(), parcel.y(), parcel.z(),
-						settlementCenterY(target, parcel.solidVolumeSvq()), parcel.solidVolumeSvq())) return target;
+		int sourceCell = cell(x, coordinate(parcel.y(), sizeY), z);
+		double height = Math.max(parcel.y() / cellSize,
+				columnSurfaceSvq(z * sizeX + x) / (double) SolidVolume.SVQ_PER_CELL);
+		double repose = Math.tan(registry.material(parcel.materialHandle()).reposeAngleRadians());
+		int best = -1;
+		double bestSurface = Double.POSITIVE_INFINITY;
+		for (int candidate = -1; candidate < NEIGHBOR_X.length; candidate++) {
+			int dx = candidate < 0 ? 0 : NEIGHBOR_X[candidate], dz = candidate < 0 ? 0 : NEIGHBOR_Z[candidate];
+			int nx = x + dx, nz = z + dz;
+			if (!insideColumn(nx, nz)) continue;
+			if (candidate >= 0 && !environment.horizontalPathOpen(sourceCell, dx, dz)) continue;
+			float toX = parcel.x() + dx * cellSize, toZ = parcel.z() + dz * cellSize;
+			boolean horizontalChecked = candidate < 0;
+			for (int y = 0; y <= coordinate(parcel.y(), sizeY); y++) {
+				if (!admission.spend(1)) return -1;
+				int target = cell(nx, y, nz);
+				long open = environment.geometricOpenSvq(target);
+				if (open <= 0) continue;
+				long bulk = settlement.bulkVolumeAfterAdd(target, addition);
+				if (bulk > open || !environment.bedGeometryFits(target, bulk)) continue;
+				double surface = y + bulk / (double) SolidVolume.SVQ_PER_CELL;
+				if (surface >= bestSurface) break;
+				if (candidate >= 0 && height - surface <= Math.hypot(dx, dz) * repose) break;
+				float toY = settlementCenterY(target, parcel.solidVolumeSvq());
+				if (candidate >= 0 && toY > parcel.y()) break;
+				if (!horizontalChecked) {
+					if (!admission.spend(environment.horizontalTransferPathWork(parcel.x(), parcel.y(), parcel.z(),
+							toX, toZ, parcel.solidVolumeSvq()))) return -1;
+					if (!environment.horizontalTransferPathOpen(parcel.x(), parcel.y(), parcel.z(),
+							toX, toZ, parcel.solidVolumeSvq())) break;
+					horizontalChecked = true;
+				}
+				if (verticalPathOpen(environment, toX, parcel.y(), toZ, toY, parcel.solidVolumeSvq())) {
+					best = target;
+					bestSurface = surface;
+					break;
+				}
+			}
 		}
-		return -1;
+		return best;
 	}
 
 	private boolean settlementBedsFit(GranularInventory.SettlementPlan plan, Environment environment) {

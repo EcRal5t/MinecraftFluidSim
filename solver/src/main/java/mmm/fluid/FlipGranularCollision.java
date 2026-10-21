@@ -27,6 +27,8 @@ final class FlipGranularCollision {
 	private final GranularKernel kernel;
 	private byte[] nextFlags = new byte[0];
 	private boolean[] capacityPending = new boolean[0];
+	private boolean[] nextSupported = new boolean[0];
+	private GranularActiveContacts activeContacts;
 	private int previewCount;
 	private long previewRevision;
 	private GranularParcelStore previewSource;
@@ -45,6 +47,7 @@ final class FlipGranularCollision {
 
 	void preview(GranularParcelStore parcels, GranularRegistry registry, float dt) {
 		previewReady = false;velocitiesPublished=false;
+		activeContacts = null;
 		if (!(Float.isFinite(dt) && dt > 0.0F)) throw new IllegalArgumentException("Granular preview dt is invalid");
 		previewCount = parcels.count();
 		ensurePreviewCapacity(previewCount);
@@ -53,15 +56,15 @@ final class FlipGranularCollision {
 		lastCapacityHeld = 0;
 		lastMaximumPositionCorrection = lastPositionCorrectionMassY = 0;
 		if (previewCount > 1) {
-			boolean[] supported = new boolean[previewCount];
 			var contacts = new GranularActiveContacts(parcels, registry, sphereCollision, cellSize, dt);
-			contacts.preview(nextX, nextY, nextZ, nextVelocityX, nextVelocityY, nextVelocityZ, supported);
+			activeContacts = contacts;
+			contacts.preview(nextX, nextY, nextZ, nextVelocityX, nextVelocityY, nextVelocityZ, nextSupported);
 			lastMaximumPositionCorrection = contacts.maximumPositionCorrection();
 			lastPositionCorrectionMassY = contacts.positionCorrectionMassY();
 			for (int index = 0; index < previewCount; index++) {
 				nextContactComponent[index] = contacts.contactComponent(index);
 				var parcel = parcels.parcel(index); float restingSpeed = cellSize * .05F;
-				boolean resting = supported[index] && nextVelocityX[index] * nextVelocityX[index]
+				boolean resting = nextSupported[index] && nextVelocityX[index] * nextVelocityX[index]
 						+ nextVelocityY[index] * nextVelocityY[index] + nextVelocityZ[index] * nextVelocityZ[index] <= restingSpeed * restingSpeed;
 				nextContactAge[index] = resting ? incrementContactAge(parcel.contactAge()) : 0;
 				nextFlags[index] = resting ? (byte) (parcel.flags() | GranularParcelStore.FLAG_SUPPORTED)
@@ -96,7 +99,7 @@ final class FlipGranularCollision {
 		nextX=new float[grown];nextY=new float[grown];nextZ=new float[grown];
 		nextVelocityX=new float[grown];nextVelocityY=new float[grown];nextVelocityZ=new float[grown];
 		nextContactAge=new int[grown];nextCeilMask=new int[grown];nextContactComponent=new int[grown];
-		nextFlags=new byte[grown];capacityPending=new boolean[grown];
+		nextFlags=new byte[grown];capacityPending=new boolean[grown];nextSupported=new boolean[grown];
 	}
 	private void prepareMasks(GranularParcelStore parcels) {
 		for (int index = 0; index < previewCount; index++) {
@@ -260,6 +263,7 @@ final class FlipGranularCollision {
 		for (int index = 0; index < previewCount; index++) {
 			if (capacityPending[index]) holdParcel(parcels, index);
 		}
+		if (pending > 0) refreshRetainedSupport(parcels);
 		lastCapacityHeld = pending;
 		previewReady = true;
 		return pending;
@@ -291,7 +295,7 @@ final class FlipGranularCollision {
 			x+=p.mass()*(p.velocityX()-(double)vx);y+=p.mass()*(p.velocityY()-(double)vy);z+=p.mass()*(p.velocityZ()-(double)vz);
 			parcels.overwrite(i,new GranularParcelStore.Parcel(nextX[i],nextY[i],nextZ[i],vx,vy,vz,p.solidVolumeSvq(),p.massUnits(),p.materialHandle(),p.solidCompositionHandle(),nextContactAge[i],nextFlags[i],nextCeilMask[i]));
 		}
-		previewCount=0;previewReady=false;velocitiesPublished=false;return new BoundaryImpulse(x,y,z);
+		previewCount=0;previewReady=false;velocitiesPublished=false;activeContacts=null;return new BoundaryImpulse(x,y,z);
 	}
 
 	private void requireSourceRevision(GranularParcelStore parcels) {
@@ -301,15 +305,26 @@ final class FlipGranularCollision {
 
 	private void holdParcel(GranularParcelStore parcels, int index) {
 		GranularParcelStore.Parcel parcel = parcels.parcel(index);
-		boolean supported = sphereCollision.supportsAtRest(parcel.x(), parcel.y(), parcel.z(),
-				collisionRadius(parcel.solidVolumeSvq()));
 		nextX[index] = parcel.x(); nextY[index] = parcel.y(); nextZ[index] = parcel.z();
 		if (parcel.ceilMask() >= 0) nextCeilMask[index] = parcel.ceilMask();
 		else { kernel.capture(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq()); nextCeilMask[index] = kernel.canonicalMask(); }
 		nextVelocityX[index] = nextVelocityY[index] = nextVelocityZ[index] = 0.0F;
-		nextContactAge[index] = supported ? incrementContactAge(parcel.contactAge()) : 0;
-		nextFlags[index] = supported ? (byte) (parcel.flags() | GranularParcelStore.FLAG_SUPPORTED)
-				: (byte) (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED);
+	}
+
+	private void refreshRetainedSupport(GranularParcelStore parcels) {
+		if (activeContacts != null) activeContacts.refreshSupport(nextX, nextY, nextZ, nextSupported);
+		else for (int i = 0; i < previewCount; i++) nextSupported[i] = sphereCollision.supportsAtRest(
+				nextX[i], nextY[i], nextZ[i], collisionRadius(parcels.parcel(i).solidVolumeSvq()));
+		double restingSpeedSquared = cellSize * .05 * cellSize * .05;
+		for (int i = 0; i < previewCount; i++) {
+			var parcel = parcels.parcel(i);
+			double speedSquared = nextVelocityX[i] * (double) nextVelocityX[i]
+					+ nextVelocityY[i] * (double) nextVelocityY[i] + nextVelocityZ[i] * (double) nextVelocityZ[i];
+			boolean resting = nextSupported[i] && speedSquared <= restingSpeedSquared;
+			nextContactAge[i] = resting ? incrementContactAge(parcel.contactAge()) : 0;
+			nextFlags[i] = resting ? (byte) (parcel.flags() | GranularParcelStore.FLAG_SUPPORTED)
+					: (byte) (parcel.flags() & ~GranularParcelStore.FLAG_SUPPORTED);
+		}
 	}
 
 	private static int incrementContactAge(int age) { return age == Integer.MAX_VALUE ? age : age + 1; }

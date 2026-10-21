@@ -102,8 +102,14 @@ final class GranularActiveContacts {
 			for (int a = 0; a < 3; a++) correction = Math.hypot(correction, p[a] - source[i][a]);
 			maximumPositionCorrection = Math.max(maximumPositionCorrection, correction);
 			positionCorrectionMassY += mass[i] * (p[1] - source[i][1]);
-			supported[i] = fixed.supportsAtRest(x[i], y[i], z[i], radius[i]);
 		}
+		refreshSupport(x, y, z, supported);
+	}
+
+	/** Support belongs to the actual retained endpoint, including grain contacts after a capacity hold. */
+	void refreshSupport(float[] x, float[] y, float[] z, boolean[] supported) {
+		for (int i = 0; i < mass.length; i++)
+			supported[i] = fixed.supportsAtRest(x[i], y[i], z[i], radius[i]);
 		// Every actual upward edge is visited once when support reaches its lower representative.
 		int[] head = new int[mass.length]; Arrays.fill(head, -1);
 		int[] upper = new int[constraints.size()], next = new int[constraints.size()]; int edges = 0;
