@@ -21,6 +21,7 @@ final class PressureFaceGraph {
 	private final double[] supportFill,supportDepth,wetPortArea,sideWetArea,columnBottomPressure,hydrostaticReference,freeFallFraction;
 	private final boolean[] groundedSupport;
 	private final int[] verticalLiquidContact;
+	private final boolean[] wetFacesPrepared = new boolean[3];
 	private FlipPressurePhaseGeometry supportGeometry;
 	private long supportRevision=-1;
 	private FlipPressurePhaseGeometry classifiedGeometry;
@@ -104,6 +105,8 @@ final class PressureFaceGraph {
 
 	void rebuild(float dt) {
 		classify();
+		prepareWetFaces(0);
+		prepareWetFaces(2);
 		var p = domain.projection; int count = domain.gasState.network.nodeCount(); p.ensureGasCapacity(count);
 		Arrays.fill(p.gasPressureUnknown, false); p.gasUnknownCount = p.fluidUnknownCount = 0;
 		Arrays.fill(p.gasStorageCoefficient, 0);
@@ -173,6 +176,7 @@ final class PressureFaceGraph {
 	void forEachSide(int cell, int neighbor, SideConsumer consumer,java.util.function.DoubleConsumer referenceConsumer) {
 		int d = cell % domain.sizeX != neighbor % domain.sizeX ? 0
 				: cell / domain.sizeX % domain.sizeY != neighbor / domain.sizeX % domain.sizeY ? 1 : 2;
+		prepareWetFaces(d);
 		int side = neighbor > cell ? 1 : 0, mask = domain.geometry.cutCells.mask(cell), peerMask = domain.geometry.cutCells.mask(neighbor);
 		int ports = 0;
 		for (int micro = 0; micro < 8; micro++) if ((micro >>> d & 1) == side && (mask & 1 << micro) == 0 && (peerMask & 1 << (micro ^ 1 << d)) == 0) ports++;
@@ -290,14 +294,21 @@ final class PressureFaceGraph {
 			double height=(support&0x33)!=0&&(support&0xcc)!=0?1:.5;
 			supportDepth[slot]=.5*height*supportFill[slot];
 		}
-		prepareWetFaces();
+		Arrays.fill(wetFacesPrepared, false);
+		// Pressure observations need vertical support and column head. Horizontal
+		// contact areas are prepared when forces or matrix assembly first use them.
+		prepareWetFaces(1);
 		supportGeometry=phase;supportRevision=phase.revision();
 	}
-	private void prepareWetFaces(){
+	private void prepareWetFaces(int d){
+		if (wetFacesPrepared[d]) return;
 		var phase=domain.pressurePhaseGeometry;var cut=domain.geometry.cutCells;
-		Arrays.fill(wetPortArea,0);Arrays.fill(sideWetArea,0);Arrays.fill(verticalLiquidContact,0);
-		for(int face=0;face<faceCount;face++){
-			int left=firstCell[face],right=secondCell[face],d=axis[face];if(left<0)continue;
+		int first = offsets[d], end = d == 2 ? faceCount : offsets[d + 1];
+		Arrays.fill(wetPortArea, 4 * first, 4 * end, 0);
+		Arrays.fill(sideWetArea, 8 * first, 8 * end, 0);
+		if (d == 1) Arrays.fill(verticalLiquidContact, 0);
+		for(int face=first;face<end;face++){
+			int left=firstCell[face],right=secondCell[face];if(left<0)continue;
 			if(!(phase.liquidFractionExact(left)>0)&&!(phase.liquidFractionExact(right)>0))continue;
 			for(int a=0;a<2;a++)for(int b=0;b<2;b++){
 				int port=a+2*b;
@@ -311,6 +322,7 @@ final class PressureFaceGraph {
 				if(d==1&&shared>0)verticalLiquidContact[localFace[face]]|=1<<port;
 			}
 		}
+		wetFacesPrepared[d] = true;
 	}
 	/** A wall-supported vertical column uses the same coarse pressure head and contact area as C/CT. */
 	private void prepareHydrostaticReference(){
@@ -386,6 +398,7 @@ final class PressureFaceGraph {
 	/** Horizontal depth-integrated gravity force; the pressure solve handles only its residual. */
 	double barotropicAcceleration(int face){
 		int a=firstCell[face],b=secondCell[face],d=axis[face];if(a<0||d==1||!(faceMass(face)>0))return 0;
+		prepareWetFaces(d);
 		var cut=domain.geometry.cutCells;double load=0;int ports=0;
 		for(int micro=0;micro<8;micro++)if((micro>>>d&1)!=0&&(cut.mask(a)&1<<micro)==0&&(cut.mask(b)&1<<(micro^(1<<d)))==0){
 			ports++;int sa=CellRemapMicroTopology.support(cut.mask(a),micro),sb=CellRemapMicroTopology.support(cut.mask(b),micro^(1<<d));
