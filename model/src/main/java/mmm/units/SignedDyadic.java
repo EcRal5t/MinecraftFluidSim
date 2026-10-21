@@ -8,7 +8,6 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 	private final int exponent, magnitudeBits, sign;
 	private final long compact;
 	private volatile BigInteger significand;
-	private volatile double binary64 = Double.NaN;
 	public static final SignedDyadic ZERO = new SignedDyadic(BigInteger.ZERO, 0);
 	private static final int MIN_DOUBLE_EXPONENT = -1074;
 	private static final int MAX_DOUBLE_EXPONENT = 971;
@@ -289,14 +288,6 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 
 	/** One ties-to-even rounding in the final binary64 unit, including subnormal values. */
 	public double toDouble() {
-		double value = binary64;
-		if (!Double.isNaN(value)) return value;
-		binary64 = value = roundedDouble();
-		return value;
-	}
-
-	/** The exact immutable quantity has one correctly rounded numerical view. */
-	private double roundedDouble() {
 		if (sign == 0) return 0.0;
 		if (magnitudeBits <= 53 && exponent >= -1074) return Math.scalb((double) compact, exponent);
 		long highestExponent = (long) exponent + magnitudeBits - 1;

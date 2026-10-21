@@ -72,7 +72,7 @@ final class GasFaceIntersection {
         if(secondFraction>0)cut(polygon,secondPhase,secondCell,secondMicro,axis,secondCoordinate,tangentStart,otherStart);
         return polygon.area(width);
     }
-    /** Unresolved liquid occupies a compact interior drop, leaving its support's faces open to gas. */
+    /** Face connectivity follows the same component resolution as liquid mechanics. */
     private static double faceLiquidFraction(FlipPressurePhaseGeometry phase,int cell,int micro){
         double fraction=phase.liquidFractionExact(cell,micro);
         if(fraction==0)return 0;
@@ -87,6 +87,7 @@ final class GasFaceIntersection {
                 double open=.125*Integer.bitCount(~phase.collisionMask(cell)&255);
                 scale=open>0?phase.poreVolume(cell).toDouble()/open:0;
             }
+            if(scale>0&&scale*(capacity-liquid)<=mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION)return 1;
             if(scale>0&&liquid<=capacity*FluidSolverConfig.UNRESOLVED_LAYER_FRACTION)return 0;
         }
         return fraction;

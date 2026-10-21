@@ -338,13 +338,13 @@ final class ConservativeLiquidFlux {
                 source -> prepareAlternatives(source, capacities));
 		return working.planRoutes(routes, FluidThermalBinding.liquidEnergyPartitioner(domain),inventoryFinalizer);
 	}
-	/** Filled liquid interiors retain incompressibility during the bounded flux settlement.
-	 * Only supports in contact with an existing dry pore can expose a moving free surface. */
+	/** Near-filled interiors retain their resolved liquid volume; resolved dry ports expose a free surface. */
 	private SignedDyadic[] interiorLiquidMinimum(SignedDyadic[] capacities){
 		var frame=domain.gasState.frame;if(frame==null)return null;
 		var minimum=new SignedDyadic[capacities.length];
+		var resolution=SignedDyadic.of(PhaseOccupancyState.VOLUME_RESOLUTION);
 		for(var component:frame.capacity().components()){
-			if(component.availableVolumeNormalized().signum()!=0||component.poreVolumeNormalized().signum()==0)continue;
+			if(component.availableVolumeNormalized().compareTo(resolution)>0||component.poreVolumeNormalized().signum()==0)continue;
 			int cell=component.cell(),support=component.supportMask(),slot=8*cell+Integer.numberOfTrailingZeros(support);
 			boolean exposed=false;
 			for(int side=0;side<6&&!exposed;side++){
@@ -353,11 +353,13 @@ final class ConservativeLiquidFlux {
 				for(int port=0;port<4;port++){
 					int d=axis[face],micro=faceMicro(d,port)^(direction==0?0:1<<d),peer=micro^(1<<d);
 					if((support&1<<micro)==0||frame.nodeOfPiece(8*target+peer)<0)continue;
+					int targetSupport=CellRemapMicroTopology.support(frame.geometry().collisionMask(target),peer);
+					if(targetSupport==0||frame.geometry().actualCapacity().dry[8*target+Integer.numberOfTrailingZeros(targetSupport)]<=PhaseOccupancyState.VOLUME_RESOLUTION)continue;
 					double a=.5*(peer>>>((d+1)%3)&1),b=.5*(peer>>>((d+2)%3)&1);
 					if(GasFaceIntersection.area(frame.phase(),target,-1,d,direction==0?0:1,0,a,b,.5)>0){exposed=true;break;}
 				}
 			}
-			if(!exposed)minimum[slot]=capacities[slot];
+			if(!exposed){var floor=capacities[slot].subtract(resolution);if(floor.signum()>0)minimum[slot]=floor;}
 		}
 		return minimum;
 	}
@@ -409,17 +411,18 @@ final class ConservativeLiquidFlux {
         for(int node=1;node<=count;node++)if(!domain.gasState.network.inventory(node).isEmpty())nodeGroup[node]=groups++;
         if(groups==0)return null;
         int[] receiverGroup=new int[capacities.length];Arrays.fill(receiverGroup,-1);
-        double[] groupPore=new double[groups],target=new double[groups];double available=0,totalTarget=0;
+        double[] groupPore=new double[groups],target=new double[groups];double totalTarget=0;
+        var totalCapacity=SignedDyadic.ZERO;
         // Independent pressure owners reserve their own actual dry support. Capacity
         // feasibility never merges reservoirs merely because a predicted gas flux connects them.
         for(int i=0;i<capacityCount;i++){
-            int row=capacitySlots[i];double capacity=capacities[row].toDouble();available+=capacity;
+            int row=capacitySlots[i];double capacity=capacities[row].toDouble();totalCapacity=totalCapacity.add(capacities[row]);
             for(int e=gasTags.first(row);e>=0;e=gasTags.next(e)){
                 int node=(int)gasTags.key(e);if(node<=0||nodeGroup[node]<0)continue;
                 int group=nodeGroup[node];receiverGroup[row]=group;groupPore[group]+=capacity;break;
             }
         }
-        for(var stock:working.stocks())available-=stock.volumeFraction();
+        double available=totalCapacity.subtract(working.exactVolume()).toDouble();
         for(int node=1;node<=count;node++)if(nodeGroup[node]>=0){
             double oldVolume=domain.gasState.network.availableVolume(node)/domain.unitScale.cubicMetersPerNormalizedVolume();
             double volume=Math.min(oldVolume,PhaseOccupancyState.VOLUME_RESOLUTION);

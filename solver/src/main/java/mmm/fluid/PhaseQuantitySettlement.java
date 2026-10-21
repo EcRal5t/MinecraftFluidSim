@@ -103,13 +103,15 @@ final class PhaseQuantitySettlement {
         if(lower!=null)for(int slot=0;slot<lower.length;slot++)if(lower[slot]!=null&&lower[slot].signum()>0&&loadTerms[slot]==0){
             touched[touchedCount++]=slot;loadTerms[slot]=1;
         }
-        InteriorForest forest=null;
+        CapacityForest forest=null;
         if(lower!=null)for(int s=0;s<raw.sources;s++){
             int slot=slot(raw.key(s));
-            if(lower[slot]!=null&&lower[slot].equals(upper[slot])
-                    &&exceedsAccumulationError(load[slot],lower[slot].toDouble(),loadTerms[slot])){
-                forest=new InteriorForest(raw,lower,upper);
-                touchedCount=forest.project(raw,numerical,load,lower,loadTerms,touched,touchedCount);break;
+            if(lower[slot]==null||lower[slot].signum()==0)continue;
+            double low=lower[slot].toDouble(),high=upper[slot].toDouble();
+            double endpoint=Math.clamp(load[slot],low,high);
+            if(exceedsAccumulationError(load[slot],endpoint,loadTerms[slot])){
+                forest=new CapacityForest(raw,lower);
+                touchedCount=forest.project(raw,numerical,load,lower,upper,loadTerms,touched,touchedCount);break;
             }
         }
         boolean adjust=false;
@@ -153,9 +155,9 @@ final class PhaseQuantitySettlement {
             exactLoad[slot]=SignedDyadic.ZERO;touched[touchedCount++]=slot;
         }
         adjust=requiresCommitRepair(exactLoad,upper,lower,receiverGroup,exactGroupLoad,groupUpper,touched,touchedCount);
-        if(adjust&&lower!=null&&hasInteriorDefect(raw,exactLoad,lower,upper)){
-            if(forest==null)forest=new InteriorForest(raw,lower,upper);
-            amount=forest.commit(raw,amount,exactLoad,lower);
+        if(adjust&&lower!=null&&hasCapacityDefect(raw,exactLoad,lower,upper)){
+            if(forest==null)forest=new CapacityForest(raw,lower);
+            amount=forest.commit(raw,amount,exactLoad,lower,upper);
             touchedCount=0;
             for(int slot=0;slot<exactLoad.length;slot++)if(exactLoad[slot]!=null)touched[touchedCount++]=slot;
             Arrays.fill(exactGroupLoad,SignedDyadic.ZERO);
@@ -189,19 +191,21 @@ final class PhaseQuantitySettlement {
     private static boolean exceedsAccumulationError(double amount,double bound,int terms){
         return Math.abs(amount-bound)>Math.ulp(Math.max(Math.abs(amount),Math.abs(bound)))*(terms+2.0);
     }
-    private static boolean hasInteriorDefect(RouteBuffer raw,SignedDyadic[] load,SignedDyadic[] lower,SignedDyadic[] upper){
+    private static boolean hasCapacityDefect(RouteBuffer raw,SignedDyadic[] load,SignedDyadic[] lower,SignedDyadic[] upper){
         for(int s=0;s<raw.sources;s++){
             int slot=slot(raw.key(s));
-            if(lower[slot]!=null&&lower[slot].equals(upper[slot])&&!value(load[slot]).equals(lower[slot]))return true;
+            if(lower[slot]!=null&&lower[slot].signum()>0){
+                var amount=value(load[slot]);if(amount.compareTo(lower[slot])<0||amount.compareTo(upper[slot])>0)return true;
+            }
         }
         return false;
     }
 
-    /** Physical component routes define one forest for numerical divergence and exact endpoint closure. */
-    private static final class InteriorForest {
+    /** Physical component routes define one bounded-volume forest for numerical projection and exact submission. */
+    private static final class CapacityForest {
         private final int[] parent,edge,order;
         private int count;
-        InteriorForest(RouteBuffer raw,SignedDyadic[] lower,SignedDyadic[] upper){
+        CapacityForest(RouteBuffer raw,SignedDyadic[] lower){
             int[] incoming=new int[raw.sources],next=new int[raw.size];Arrays.fill(incoming,-1);
             for(int r=0;r<raw.size;r++){
                 int target=raw.sourceAt[raw.target[r]];
@@ -211,7 +215,7 @@ final class PhaseQuantitySettlement {
             Arrays.fill(parent,-2);int visited=0;
             for(int s=0;s<raw.sources;s++){
                 int slot=slot(raw.key(s));
-                if(lower[slot]==null||!lower[slot].equals(upper[slot])){parent[s]=-1;order[count++]=s;}
+                if(lower[slot]==null||lower[slot].signum()==0){parent[s]=-1;order[count++]=s;}
             }
             for(int seed=-1;seed<raw.sources;seed++){
                 if(seed>=0&&parent[seed]==-2){parent[seed]=-1;order[count++]=seed;}
@@ -227,12 +231,13 @@ final class PhaseQuantitySettlement {
         }
         private int route(RouteBuffer raw,int source,int target){
             for(int r=raw.head[source];r>=0;r=raw.next[r])if(raw.target[r]==target)return r;
-            throw new IllegalStateException("Interior forest lost its component route");
+            throw new IllegalStateException("Capacity forest lost its component route");
         }
-        int project(RouteBuffer raw,double[] amount,double[] load,SignedDyadic[] lower,int[] terms,int[] touched,int touchedCount){
+        int project(RouteBuffer raw,double[] amount,double[] load,SignedDyadic[] lower,SignedDyadic[] upper,int[] terms,int[] touched,int touchedCount){
             for(int i=count-1;i>=0;i--){
                 int child=order[i],p=parent[child];if(p<0)continue;
-                int own=slot(raw.key(child)),peer=slot(raw.key(p));double target=lower[own].toDouble();
+                int own=slot(raw.key(child)),peer=slot(raw.key(p));
+                double target=Math.clamp(load[own],lower[own].toDouble(),upper[own].toDouble());
                 if(!exceedsAccumulationError(load[own],target,terms[own]))continue;
                 double delta=target-load[own];int face=raw.face[edge[child]];
                 raw.alternative(child,face,peer/8,raw.key(p).supportMask());
@@ -251,11 +256,14 @@ final class PhaseQuantitySettlement {
             }
             return touchedCount;
         }
-        SignedDyadic[] commit(RouteBuffer raw,SignedDyadic[] amount,SignedDyadic[] load,SignedDyadic[] lower){
+        SignedDyadic[] commit(RouteBuffer raw,SignedDyadic[] amount,SignedDyadic[] load,SignedDyadic[] lower,SignedDyadic[] upper){
             for(int i=count-1;i>=0;i--){
                 int child=order[i],p=parent[child];if(p<0)continue;
                 int own=slot(raw.key(child)),peer=slot(raw.key(p));
-                var delta=lower[own].subtract(value(load[own]));if(delta.signum()==0)continue;
+                var current=value(load[own]);
+                var target=min(current,upper[own]);if(target.compareTo(lower[own])<0)target=lower[own];
+                if(target==current)continue;
+                var delta=target.subtract(current);
                 int face=raw.face[edge[child]];
                 raw.alternative(child,face,peer/8,raw.key(p).supportMask());
                 raw.alternative(p,face,own/8,raw.key(child).supportMask());
