@@ -448,7 +448,6 @@ public final class AirCavityScannerValidation {
 		byte[] masks=new byte[d.cellCount];java.util.Arrays.fill(masks,(byte)255);
 		for(int x=0;x<length;x++)masks[d.domainFlowFields.cellIndex(x,1,1)]=0;
 		d.geometry.cutCells.restoreMicroMasks(masks);
-		for(int cell=0;cell<d.cellCount;cell++)d.geometry.cutCells.fullySolid(cell)=Byte.toUnsignedInt(masks[cell])==255;
 		d.markCellInventoryChanged();
 		// Each end can affect one new cell per pass, including after a reversal.
 		// Two eight-cell influence ranges leave a full-section core between them.
@@ -469,7 +468,6 @@ public final class AirCavityScannerValidation {
 		var liquidState=d.exportLiquidCellState();var momentum=d.exportMacMomentum();var phase=d.exportPhaseOccupancyState();
 		var restored=new FluidDomain(length,3,3,config,8*length);restored.sealDomainBoundary();
 		restored.geometry.cutCells.restoreMicroMasks(masks);
-		for(int cell=0;cell<restored.cellCount;cell++)restored.geometry.cutCells.fullySolid(cell)=Byte.toUnsignedInt(masks[cell])==255;
 		restored.materialRegistry=liquids;
 		restored.restoreLiquidCellState(new LiquidCellInventory.Snapshot(liquidState.rows()),null);
 		restored.restoreMacMomentum(momentum);

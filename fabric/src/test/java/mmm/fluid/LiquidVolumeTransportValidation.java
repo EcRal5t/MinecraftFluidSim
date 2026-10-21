@@ -117,7 +117,6 @@ public final class LiquidVolumeTransportValidation {
 		var d=domain(4,2,2);d.sealDomainBoundary();
 		var masks=new byte[d.cellCount];java.util.Arrays.fill(masks,(byte)255);java.util.Arrays.fill(masks,0,4,(byte)0);
 		d.geometry.cutCells.restoreMicroMasks(masks);
-		for(int cell=0;cell<d.cellCount;cell++)d.geometry.cutCells.fullySolid(cell)=Byte.toUnsignedInt(masks[cell])==255;
 		var initial=new float[d.cellCount];java.util.Arrays.fill(initial,0,4,1);d.setVolumes(initial);d.domainFlowFields.ensureGrid();
 		d.mac.velocityX[d.domainFlowFields.xFaceIndex(1,0,0)]=.1F;d.cellMacStage.publishMomentum();
 		var before=d.liquidCells.snapshot();var plan=d.cellMacStage.prepareLiquid(.1F);
@@ -222,7 +221,6 @@ public final class LiquidVolumeTransportValidation {
 	private static void sharedCapacityDisplacement() {
 		var d=domain(3,2,2);byte[] masks=new byte[d.cellCount];java.util.Arrays.fill(masks,(byte)255);
 		masks[0]=masks[1]=masks[2]=0;d.geometry.cutCells.restoreMicroMasks(masks);
-		for(int cell=0;cell<d.cellCount;cell++)d.geometry.cutCells.fullySolid(cell)=Byte.toUnsignedInt(masks[cell])==255;
 		var initial=new float[d.cellCount];initial[0]=initial[1]=1;d.setVolumes(initial);d.domainFlowFields.ensureGrid();
 		var previous=new long[d.cellCount];var next=previous.clone();next[0]=mmm.granular.SolidVolume.SVQ_PER_CELL/2;
 		var before=d.liquidCells.snapshot();var prepared=GranularLiquidDisplacement.prepareInsertion(d,previous,next);
@@ -236,7 +234,6 @@ public final class LiquidVolumeTransportValidation {
 	private static void componentCapacityMovesItsOwnStock() {
 		var d=domain(3,3,3);byte[] masks=new byte[d.cellCount];java.util.Arrays.fill(masks,(byte)255);
 		masks[13]=126;masks[12]=(byte)253;d.geometry.cutCells.restoreMicroMasks(masks);
-		for(int cell=0;cell<d.cellCount;cell++)d.geometry.cutCells.fullySolid(cell)=Byte.toUnsignedInt(masks[cell])==255;
 		var key=new LiquidCellInventory.Key(13,0,1);var volume=SignedDyadic.of(.125);
 		d.liquidCells.planAdditions(java.util.List.of(new LiquidCellInventory.Stock(key,volume,d.unitScale.massUnitsForNormalized(125),null,0,false))).commit();d.markCellInventoryChanged();d.domainFlowFields.ensureGrid();
 		var source=d.liquidCells.snapshot();var previous=new long[d.cellCount];var next=previous.clone();next[13]=mmm.granular.SolidVolume.SVQ_PER_CELL/16;
