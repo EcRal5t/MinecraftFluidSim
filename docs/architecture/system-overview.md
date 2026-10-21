@@ -222,6 +222,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 `PressureSystem` 集中准备共同压力预测：两相先接收已知界面载荷及静水浮力，再执行有限质量阻力，随后求解共同残余压力。
 作用与反作用、外部约束冲量和压力功按实际写回结算；整数库存按最终位置独立核对真实容量，具体离散见[颗粒参考](granular-state.md#统一排水与压力)。
 实体接触以实际面冲量和规定速度结算有符号外功，接触阻力热写入相邻实际液体；动量、热量与墙面停动反力共同准备并发布。
+`MovingBodyCouplingValidation` 直接核对实体外功与实际 MAC 动能、库存内能增量，固定墙反冲计入同一冲量等式。
 
 液体持久动量位于 MAC 格面，格面速度从同一双控制体积的实际质量与动量派生。
 `CellMomentumTransport` 把本次完整输运的实际整数质量通量提升到格面，`MacMomentumAdvection` 采用正权迎风混合。
@@ -587,7 +588,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 | 穿墙、小液滴或薄层异常 | `CollisionField` 与 `FlipCutCellGeometry` | `LiquidCollisionEdit`、共同面通量与压力支撑 |
 | 冲击后动量或热量不闭合 | 最终 MAC 动量、墙面冲量与局部机械热 | `CellMacStage.stopWallMomentum`、`CellMomentumTransport` 及对应库存提交 |
 | 气压或气腔归属异常 | `GasRuntimeGeometry` 的微盒、容量与节点归属 | `GasTopologyCoordinator` 的来源交接及 `GasThermalModel` 的库存／容量／U |
-| 等容交接后气体异常升温 | `GasTopologyCoordinator` 的旧腔控制体积与真实净新增孔容 | 物质来源权重、真空标签与绝热功结算 |
+| 等容交接后气体异常升温 | `GasTopologyCoordinator` 的旧腔控制体积与各接收气腔的净扩容 | 物质来源权重、局部释放的真空与绝热功结算 |
 | 接触角铺展方向异常 | `SurfaceTensionFields` 的曲率及墙面法向通量 | 同一字段进入共同压力载荷的实际做功 |
 | 温度、反应或相变无进展 | 实际组成、U、批次及候选不可执行原因 | `ThermalCaloricInversion`、`GasLiquidPhaseModel`、`GasLiquidPhaseChangeStage`、未来气腔与热账计划 |
 | 颗粒占容、压力或沉积异常 | `GranularCouplingFields`、碰撞预览及整数分配 | `GranularPressureCoupling`、`GranularSettlementGeometryPlan`、`GranularBedShear` |

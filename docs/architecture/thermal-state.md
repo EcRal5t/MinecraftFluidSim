@@ -381,7 +381,7 @@ dp_v/dm = (P0/T0)/V_g * [T_g * dVstd,v/dm + Vstd,v * dT_g/dm]
 `PendingPhaseVolumeWork` 精确累计逐格待同步体积，随完整候选和存档保留。
 单元库存已经保存相变后的体积，下一次真实压力投影完成力学同步后清除记录。
 该记录标记同步需求，相界内部交换的能量已在相变步骤结算。
-凝聚相变与气液相变的气腔拓扑准备采用固定内能策略，实际力学输运、外部载体编辑和碰撞位移采用绝热容量功策略。`GasTopologyCoordinator` 的职责入口明确选择做功方式。
+凝聚相变、析出溶解等内部反应转换及气液相变的气腔拓扑准备采用固定内能策略，实际力学输运、外部载体编辑和碰撞位移采用绝热容量功策略。`GasTopologyCoordinator.planAfterInternalConversion` 统一凝聚相及反应转换的来源交接与做功方式。
 
 外部物质转移前先完成已有相变几何同步。
 管理员、玩家容器和发射器共用这一流程，具体入口见[相变几何同步](runtime-and-lifecycle.md#phase-work)。
