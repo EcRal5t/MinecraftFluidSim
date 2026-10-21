@@ -159,12 +159,14 @@ public record ChemicalContents(String registryFingerprint, long quantaPerMol, Li
 				inserted.add(group);
 				continue;
 			}
+			long groupMass = group.massUnits();
+			long insertedMass = mmm.units.Mass.portion(groupMass, insertedVolume, group.volumeNanos());
+			long remainingMass = Math.subtractExact(groupMass, insertedMass);
+			var masses=new long[]{insertedMass,remainingMass};
+			var volumes=new mmm.units.SignedDyadic[]{mmm.units.SignedDyadic.of(insertedVolume,0),mmm.units.SignedDyadic.of(remainingVolume,0)};
 			ArrayList<SpeciesAmount> insertedSpecies = new ArrayList<>(), remainingSpecies = new ArrayList<>();
 			for (SpeciesAmount species : group.species()) {
-				BigInteger numerator = BigInteger.valueOf(species.amountQuanta()).multiply(BigInteger.valueOf(insertedVolume));
-				BigInteger[] division = numerator.divideAndRemainder(BigInteger.valueOf(group.volumeNanos()));
-				long amount = division[0].longValueExact();
-				if (division[1].shiftLeft(1).compareTo(BigInteger.valueOf(group.volumeNanos())) >= 0) amount++;
+				long amount=mmm.inventory.LiquidCellInventory.allocateSpecies(species.amountQuanta(),masses,volumes)[0];
 				if (amount > 0L) insertedSpecies.add(new SpeciesAmount(species.speciesId(), amount));
 				if (amount < species.amountQuanta()) remainingSpecies.add(
 						new SpeciesAmount(species.speciesId(), species.amountQuanta() - amount));
@@ -172,9 +174,6 @@ public record ChemicalContents(String registryFingerprint, long quantaPerMol, Li
 			if (!group.species().isEmpty() && (insertedSpecies.isEmpty() || remainingSpecies.isEmpty())) {
 				throw new IllegalArgumentException("Chemical partial settlement is below species quantum resolution");
 			}
-			long groupMass = group.massUnits();
-			long insertedMass = mmm.units.Mass.portion(groupMass, insertedVolume, group.volumeNanos());
-			long remainingMass = Math.subtractExact(groupMass, insertedMass);
 			inserted.add(splitGroup(group, insertedVolume, insertedMass, insertedSpecies, registry));
 			remaining.add(splitGroup(group, remainingVolume, remainingMass, remainingSpecies, registry));
 		}

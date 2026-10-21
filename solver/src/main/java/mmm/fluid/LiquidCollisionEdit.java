@@ -81,7 +81,7 @@ final class LiquidCollisionEdit {
 				amounts[components.size()] = stock.volume().subtract(kept);
 				long[] masses = LiquidCellInventory.allocateQuantities(stock.massUnits(), amounts);
 				long[][] species = new long[stock.mixture() == null ? 0 : stock.mixture().entryCount()][];
-				for (int entry = 0; entry < species.length; entry++) species[entry] = LiquidCellInventory.allocateQuantities(stock.mixture().amountAt(entry), amounts);
+				for (int entry = 0; entry < species.length; entry++) species[entry] = LiquidCellInventory.allocateSpecies(stock.mixture().amountAt(entry),masses,amounts);
 				var mixtures=new ChemicalMixtureRecord[amounts.length];
 				for (int j = 0; j < amounts.length; j++) {
 					ChemicalMixtureRecord mixture = null;

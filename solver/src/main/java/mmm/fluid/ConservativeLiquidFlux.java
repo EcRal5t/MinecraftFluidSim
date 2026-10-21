@@ -364,6 +364,7 @@ final class ConservativeLiquidFlux {
 	private void prepareRoutes(List<LiquidCellInventory.Stock> origins, SignedDyadic[] capacities) {
 		numericalRoutes.reset(origins,capacities.length);
 		numericalRoutes.materialLayers(domain.materialRegistry,sizeX,sizeY,domain.config.gravity());
+		numericalRoutes.neighborhood(this::visitTransportNeighbors);
 		// Slab integration already resolved the actual open component pairs.
 		// Directional rows retain counterflow even when the coarse net flux is zero.
 		for(int i=0;i<preferredRowCount;i++){
@@ -379,18 +380,22 @@ final class ConservativeLiquidFlux {
 
 	/** Standard residual search opens alternatives only for the actual source being visited. */
 	private void prepareAlternatives(int source, SignedDyadic[] capacities) {
-		var key = numericalRoutes.key(source);
-		int cell = key.cell(), support = key.supportMask();
-		for (int side = 0; side < 6; side++) {
-			int face = coarseFaceAt[6 * cell + side];
-			if (face < 0) continue;
-			int direction = cell == left[face] ? 0 : 1, row = 2 * face + direction;
-			int target = direction == 0 ? right[face] : left[face];
-			for (int targets=neighborSupports(face,direction,support);targets!=0;) {
+		visitTransportNeighbors(source,(face,cell,support)->{
+			if(capacities[8*cell+Integer.numberOfTrailingZeros(support)].signum()>0)
+				numericalRoutes.alternative(source,face,cell,support);
+		});
+	}
+
+	/** Physical support adjacency is shared by linear divergence correction and congested residual search. */
+	private void visitTransportNeighbors(int source,PhaseQuantitySettlement.NeighborVisitor visitor){
+		var key=numericalRoutes.key(source);int cell=key.cell(),support=key.supportMask();
+		for(int side=0;side<6;side++){
+			int face=coarseFaceAt[6*cell+side];if(face<0)continue;
+			int direction=cell==left[face]?0:1,target=direction==0?right[face]:left[face];
+			for(int targets=neighborSupports(face,direction,support);targets!=0;){
 				int targetSupport=CellRemapMicroTopology.support(domain.geometry.cutCells.mask(target),Integer.numberOfTrailingZeros(targets));
 				targets&=~targetSupport;
-				if (capacities[8 * target + Integer.numberOfTrailingZeros(targetSupport)].signum() > 0)
-					numericalRoutes.alternative(source, face, target, targetSupport);
+				visitor.accept(face,target,targetSupport);
 			}
 		}
 	}

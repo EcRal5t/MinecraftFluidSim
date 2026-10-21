@@ -561,13 +561,12 @@ public final class LiquidCellInventory {
 		int remainder=partial?count:largest;
 		var shares=new QuantityShares(routes,start,count,source.volume(),remainder,partial);
 		long[] masses=shares.allocate(source.massUnits());
-		long[][] species=new long[source.mixture()==null?0:source.mixture().entryCount()][];
-		for(int entry=0;entry<species.length;entry++)species[entry]=shares.allocate(source.mixture().amountAt(entry));
-		// All shares retain the source material and sensible energy per mass.
-		// Its largest actual mass has the largest heat capacity and absorbs U rounding;
-		// microscopic retained stocks receive their own caloric share directly.
+		// One material source has heat capacity proportional to its actual mass.
 		int energyRemainder=0;
 		for(int part=1;part<masses.length;part++)if(masses[part]>masses[energyRemainder])energyRemainder=part;
+		var speciesShares=source.massUnits()==0?shares:new QuantityShares(masses,source.massUnits(),energyRemainder);
+		long[][] species=new long[source.mixture()==null?0:source.mixture().entryCount()][];
+		for(int entry=0;entry<species.length;entry++)species[entry]=speciesShares.allocate(source.mixture().amountAt(entry));
 		var energies=energyShares(source,masses,species,energyRemainder,caloric);
 		return new SourcePartition(retained,masses,species,energies,partial?count:-1);
 	}
@@ -721,6 +720,12 @@ public final class LiquidCellInventory {
 	private static long[] allocateQuantities(long total,SignedDyadic[] weights,SignedDyadic sum,int largest){
 		return new QuantityShares(weights,sum,largest).allocate(total);
 	}
+	/** Species travel with actual accepted mass; native zero-mass geometry retains its volume shares. */
+	public static long[] allocateSpecies(long total,long[] masses,SignedDyadic[] volumes){
+		long mass=0;int largest=0;
+		for(int part=0;part<masses.length;part++){mass=Math.addExact(mass,masses[part]);if(masses[part]>masses[largest])largest=part;}
+		return mass==0?allocateQuantities(total,volumes):new QuantityShares(masses,mass,largest).allocate(total);
+	}
 	/** Numerical geometry supplies one ratio column; integer inventories close at the largest share. */
 	private static final class QuantityShares {
 		final double[] fractions;
@@ -737,6 +742,10 @@ public final class LiquidCellInventory {
 			this.largest=largest;fractions=new double[count+(retained?1:0)];double volume=total.toDouble();
 			if(!(volume>0&&Double.isFinite(volume)))throw new IllegalArgumentException("Liquid shares require positive finite volume");
 			for(int i=0;i<count;i++)if(i!=largest)fractions[i]=routes.volume(start+i).toDouble()/volume;
+		}
+		QuantityShares(long[] masses,long total,int largest){
+			this.largest=largest;fractions=new double[masses.length];
+			for(int part=0;part<masses.length;part++)if(part!=largest)fractions[part]=masses[part]/(double)total;
 		}
 		long[] allocate(long total){
 			if(total<0)throw new IllegalArgumentException("Liquid quantity must be nonnegative");

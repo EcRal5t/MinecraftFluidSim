@@ -4,12 +4,16 @@ import mmm.inventory.LiquidCellInventory;
 import mmm.inventory.LiquidTransportRoutes;
 import mmm.units.SignedDyadic;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.List;
 import java.util.function.IntConsumer;
 
 /** Shared-face finite-volume increments; only actual outflow enters material accounting. */
 final class PhaseQuantitySettlement {
     private PhaseQuantitySettlement() { }
+
+    @FunctionalInterface interface NeighborVisitor { void accept(int face,int cell,int support); }
+    @FunctionalInterface interface Neighborhood { void visit(int source,NeighborVisitor visitor); }
 
     /** Fixed supports own face fluxes; material stocks partition only accepted outflow. */
     static final class RouteBuffer {
@@ -24,6 +28,7 @@ final class PhaseQuantitySettlement {
         private int[] head=new int[0];
         private double[] preferredTotal=new double[0];
         private FluidMaterialRegistry materialRegistry;
+        private Neighborhood neighborhood;
         private int sizeX,sizeY;
         private double gravity;
 
@@ -35,7 +40,7 @@ final class PhaseQuantitySettlement {
             return Integer.compare(to,from)*(gravity>0?1:-1);
         }
         void reset(List<LiquidCellInventory.Stock> values,int slots){
-            stocks=values;sources=size=0;
+            stocks=values;sources=size=0;neighborhood=null;
             if(sourceAt.length<slots)sourceAt=new int[slots];
             Arrays.fill(sourceAt,0,slots,-1);
             if(firstStock.length<values.size()){
@@ -51,6 +56,7 @@ final class PhaseQuantitySettlement {
                 nextStock[i]=firstStock[s];firstStock[s]=i;volume[s]=volume[s].add(stock.volume());
             }
         }
+        void neighborhood(Neighborhood value){neighborhood=value;}
         int sourceCount(){return sources;}
         int sourceFor(int cell,int supportMask){return sourceAt[8*cell+Integer.numberOfTrailingZeros(supportMask)];}
         double outgoing(int source){return preferredTotal[source];}
@@ -105,19 +111,177 @@ final class PhaseQuantitySettlement {
         }
         int groups=groupUpper==null?0:groupUpper.length;
         var groupLoad=new SignedDyadic[groups];Arrays.fill(groupLoad,SignedDyadic.ZERO);
-        boolean adjust=false;
         for(int i=0;i<count;i++){
-            int slot=occupied[i];
-            adjust|=load[slot].compareTo(upper[slot])>0||load[slot].compareTo(minimum(lower,slot))<0;
-            int group=receiverGroup==null?-1:receiverGroup[slot];
+            int slot=occupied[i],group=receiverGroup==null?-1:receiverGroup[slot];
             if(group>=0)groupLoad[group]=groupLoad[group].add(load[slot]);
         }
-        for(int g=0;g<groups;g++)adjust|=groupLoad[g].compareTo(groupUpper[g])>0;
-        if(adjust){
-            var balance=new CapacityBalance(raw,amount,outgoing,load,upper,lower,receiverGroup,groupLoad,groupUpper,occupied,count,alternatives);
-            balance.solve();amount=balance.amounts();
+        var flux=new FluxState(raw,amount,outgoing,load,upper,lower,receiverGroup,groupLoad,groupUpper,occupied,count);
+        if(flux.fullDefects>0&&raw.neighborhood!=null)new DivergenceTree(flux).correct();
+        if(flux.defects>0){
+            var balance=new CapacityBalance(raw,flux.amount,outgoing,load,upper,lower,receiverGroup,groupLoad,groupUpper,
+                    flux.occupied,flux.count,alternatives);
+            balance.solve();flux.amount=balance.amounts();
         }
+        amount=flux.amount;
         return partitionMaterials(raw,amount);
+    }
+
+    /** One accepted flux batch owns quota, endpoints and defects throughout both corrections. */
+    private static final class FluxState {
+        final RouteBuffer raw;
+        SignedDyadic[] amount;
+        final SignedDyadic[] outgoing,load,upper,lower,groupLoad,groupUpper;
+        final int[] receiverGroup;
+        int[] occupied;
+        int count,defects,fullDefects;
+        private final BitSet invalid=new BitSet();
+        private final boolean[] invalidGroup;
+
+        FluxState(RouteBuffer raw,SignedDyadic[] amount,SignedDyadic[] outgoing,SignedDyadic[] load,
+                SignedDyadic[] upper,SignedDyadic[] lower,int[] receiverGroup,SignedDyadic[] groupLoad,
+                SignedDyadic[] groupUpper,int[] occupied,int count){
+            this.raw=raw;this.amount=amount;this.outgoing=outgoing;this.load=load;this.upper=upper;this.lower=lower;
+            this.receiverGroup=receiverGroup;this.groupLoad=groupLoad;this.groupUpper=groupUpper;
+            this.occupied=occupied;this.count=count;invalidGroup=new boolean[groupLoad.length];
+            for(int i=0;i<count;i++)check(occupied[i]);
+            for(int g=0;g<groupLoad.length;g++)checkGroup(g);
+        }
+        boolean fixed(int slot){return upper[slot].signum()>0&&lower!=null&&lower[slot]!=null&&lower[slot].equals(upper[slot]);}
+        private void check(int slot){
+            boolean bad=load[slot].compareTo(upper[slot])>0||load[slot].compareTo(minimum(lower,slot))<0;
+            if(bad==invalid.get(slot))return;
+            invalid.set(slot,bad);int change=bad?1:-1;defects+=change;if(fixed(slot))fullDefects+=change;
+        }
+        private void checkGroup(int group){
+            boolean bad=groupLoad[group].compareTo(groupUpper[group])>0;
+            if(bad!=invalidGroup[group]){invalidGroup[group]=bad;defects+=bad?1:-1;}
+        }
+        SignedDyadic receiveRoom(int slot){
+            var room=upper[slot].subtract(value(load[slot]));
+            int group=receiverGroup==null?-1:receiverGroup[slot];
+            if(group>=0)room=min(room,groupUpper[group].subtract(groupLoad[group]));
+            return room.signum()>0?room:SignedDyadic.ZERO;
+        }
+        SignedDyadic releaseRoom(int slot){
+            var room=value(load[slot]).subtract(minimum(lower,slot));
+            return room.signum()>0?room:SignedDyadic.ZERO;
+        }
+        private int route(int source,int face,int target){
+            for(int r=raw.head[source];r>=0;r=raw.next[r])if(raw.face[r]==face&&raw.target[r]==target)return r;
+            return -1;
+        }
+        private void change(int route,SignedDyadic delta){
+            if(delta.signum()==0)return;
+            int source=raw.source[route],own=slot(raw.key(source)),target=raw.target[route];
+            amount[route]=amount[route].add(delta);outgoing[source]=outgoing[source].add(delta);
+            load[own]=load[own].subtract(delta);
+            if(load[target]==null){
+                load[target]=SignedDyadic.ZERO;
+                if(count==occupied.length)occupied=Arrays.copyOf(occupied,Math.max(16,2*count));
+                occupied[count++]=target;
+            }
+            load[target]=load[target].add(delta);check(own);check(target);
+            int fromGroup=receiverGroup==null?-1:receiverGroup[own],toGroup=receiverGroup==null?-1:receiverGroup[target];
+            if(fromGroup!=toGroup){
+                if(fromGroup>=0){groupLoad[fromGroup]=groupLoad[fromGroup].subtract(delta);checkGroup(fromGroup);}
+                if(toGroup>=0){groupLoad[toGroup]=groupLoad[toGroup].add(delta);checkGroup(toGroup);}
+            }
+        }
+        SignedDyadic transferRoom(int from,int target,int face){
+            var room=SignedDyadic.ZERO;int opposite=raw.sourceAt[target];
+            if(opposite>=0){int reverse=route(opposite,face,from);if(reverse>=0)room=amount[reverse];}
+            int source=raw.sourceAt[from];
+            return source<0?room:room.add(raw.volume[source].subtract(outgoing[source]));
+        }
+        /** Cancel opposite accepted flow before allocating another donor's unused quota. */
+        void transfer(int from,int target,int targetSupport,int face,SignedDyadic wanted){
+            int opposite=raw.sourceAt[target];
+            if(opposite>=0){
+                int reverse=route(opposite,face,from);
+                if(reverse>=0){var cancelled=min(wanted,amount[reverse]);change(reverse,cancelled.negate());wanted=wanted.subtract(cancelled);}
+            }
+            int source=raw.sourceAt[from];
+            if(wanted.signum()==0||source<0)return;
+            var accepted=min(wanted,raw.volume[source].subtract(outgoing[source]));
+            if(accepted.signum()==0)return;
+            int route=route(source,face,target);
+            if(route<0){
+                route=raw.size;raw.add(source,face,target/8,targetSupport,0);
+                if(amount.length<raw.size){int old=amount.length;amount=Arrays.copyOf(amount,raw.source.length);Arrays.fill(amount,old,amount.length,SignedDyadic.ZERO);}
+            }
+            change(route,accepted);
+        }
+    }
+
+    /** Linear finite-volume divergence correction on the existing physical support graph. */
+    private static final class DivergenceTree implements NeighborVisitor {
+        private final FluxState flux;
+        private final RouteBuffer raw;
+        private final boolean[] full;
+        private final int[] parent,parentFace,order,children,leaves;
+        private int visiting,tail,positiveSource,positiveSlot,positiveMask,positiveFace;
+        private int negativeSource,negativeSlot,negativeMask,negativeFace;
+        private SignedDyadic positiveRoom,negativeRoom;
+
+        DivergenceTree(FluxState flux){
+            this.flux=flux;raw=flux.raw;int n=raw.sources;
+            full=new boolean[n];parent=new int[n];Arrays.fill(parent,-2);parentFace=new int[n];
+            order=new int[n];children=new int[n];leaves=new int[n];
+            for(int s=0;s<n;s++)full[s]=flux.fixed(slot(raw.key(s)));
+        }
+        public void accept(int face,int cell,int support){
+            int target=8*cell+Integer.numberOfTrailingZeros(support),source=raw.sourceAt[target];
+            if(source>=0&&full[source]){
+                if(parent[source]==-2){parent[source]=visiting;parentFace[source]=face;order[tail++]=source;}
+                return;
+            }
+            int own=slot(raw.key(visiting));
+            var receive=min(flux.receiveRoom(target),flux.transferRoom(own,target,face));
+            if(receive.compareTo(positiveRoom)>0){
+                positiveRoom=receive;positiveSource=visiting;positiveSlot=target;positiveMask=support;positiveFace=face;
+            }
+            var release=min(flux.releaseRoom(target),flux.transferRoom(target,own,face));
+            if(release.compareTo(negativeRoom)>0){
+                negativeRoom=release;negativeSource=visiting;negativeSlot=target;negativeMask=support;negativeFace=face;
+            }
+        }
+        void correct(){
+            for(int seed=0;seed<raw.sources;seed++){
+                if(!full[seed]||parent[seed]!=-2)continue;
+                parent[seed]=-1;order[0]=seed;tail=1;
+                positiveSource=negativeSource=-1;positiveRoom=negativeRoom=SignedDyadic.ZERO;
+                var residual=SignedDyadic.ZERO;
+                for(int i=0;i<tail;i++){
+                    visiting=order[i];int own=slot(raw.key(visiting));residual=residual.add(flux.load[own].subtract(flux.upper[own]));
+                    raw.neighborhood.visit(visiting,this);
+                }
+                int root=seed,external=-1,externalMask=0,externalFace=-1;
+                if(residual.signum()>0&&positiveSource>=0){root=positiveSource;external=positiveSlot;externalMask=positiveMask;externalFace=positiveFace;}
+                else if(residual.signum()<0&&negativeSource>=0){root=negativeSource;external=negativeSlot;externalMask=negativeMask;externalFace=negativeFace;}
+                // Reverse only the selected root path; the already discovered tree stays intact.
+                int previous=-1,edge=-1,current=root;
+                while(current>=0){
+                    int next=parent[current],nextEdge=parentFace[current];parent[current]=previous;parentFace[current]=edge;
+                    previous=current;edge=nextEdge;current=next;
+                }
+                for(int i=0;i<tail;i++)if(parent[order[i]]>=0)children[parent[order[i]]]++;
+                int first=0,last=0;for(int i=0;i<tail;i++)if(children[order[i]]==0)leaves[last++]=order[i];
+                while(first<last){
+                    int source=leaves[first++],own=slot(raw.key(source)),up=parent[source];
+                    var delta=flux.load[own].subtract(flux.upper[own]);
+                    if(up>=0){
+                        int target=slot(raw.key(up));
+                        if(delta.signum()>0)flux.transfer(own,target,raw.key(up).supportMask(),parentFace[source],delta);
+                        else if(delta.signum()<0)flux.transfer(target,own,raw.key(source).supportMask(),parentFace[source],delta.negate());
+                        if(--children[up]==0)leaves[last++]=up;
+                    }else if(external>=0){
+                        if(delta.signum()>0)flux.transfer(own,external,externalMask,externalFace,min(delta,flux.receiveRoom(external)));
+                        else if(delta.signum()<0)flux.transfer(external,own,raw.key(source).supportMask(),externalFace,min(delta.negate(),flux.releaseRoom(external)));
+                    }
+                }
+                if(flux.fullDefects==0)return;
+            }
+        }
     }
 
     /**
@@ -154,7 +318,7 @@ final class PhaseQuantitySettlement {
             int capacity=Math.max(16,vertices+2*raw.sources);
             head=new int[capacity];Arrays.fill(head,-1);level=new int[capacity];cursor=new int[capacity];queue=new int[capacity];
             pathVertex=new int[capacity];pathEdge=new int[capacity];receiverSlot=new int[capacity];Arrays.fill(receiverSlot,-1);
-            for(int r=0;r<amount.length;r++)if(amount[r].signum()>0){
+            for(int r=0;r<raw.size;r++)if(amount[r].signum()>0){
                 int slot=raw.target[r];nextIncoming[r]=firstIncoming[slot];firstIncoming[slot]=r;
             }
             var receiverExcess=new SignedDyadic[groups];Arrays.fill(receiverExcess,SignedDyadic.ZERO);

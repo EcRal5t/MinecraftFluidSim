@@ -139,7 +139,7 @@ final class MaterialTransferPlanner {
 			var weights = new SignedDyadic[selected.size()]; for (int i = 0; i < weights.length; i++) weights[i] = selected.get(i).volume();
 			var masses = LiquidCellInventory.allocateQuantities(input.mass(), weights);
 			long[][] species = new long[input.mixture() == null ? 0 : input.mixture().entryCount()][];
-			for (int i = 0; i < species.length; i++) species[i] = LiquidCellInventory.allocateQuantities(input.mixture().amountAt(i), weights);
+			for (int i = 0; i < species.length; i++) species[i] = LiquidCellInventory.allocateSpecies(input.mixture().amountAt(i),masses,weights);
 			for (int i = 0; i < selected.size(); i++) {
 				var mixture = mixturePart(input.mixture(), species, i, masses[i]);
 				double internal = masses[i] == 0 ? 0 : domain.thermalState == null
@@ -202,9 +202,12 @@ final class MaterialTransferPlanner {
 			var taken = minimum(remaining, stock.volume()); var kept = stock.volume().subtract(taken);
 			long keptMass = kept.signum() == 0 ? 0 : Mass.portion(stock.massUnits(), kept, stock.volume());
 			long takenMass = stock.massUnits() - keptMass;
-			var keptMixture = splitMixture(stock.mixture(), kept, stock.volume(), keptMass, false);
-			var takenMixture = splitMixture(stock.mixture(), kept, stock.volume(), takenMass, true);
-			var energyParts=LiquidCellInventory.partitionEnergy(stock,new long[]{keptMass,takenMass},
+			var masses=new long[]{keptMass,takenMass};var volumes=new SignedDyadic[]{kept,taken};
+			var species=new long[stock.mixture()==null?0:stock.mixture().entryCount()][];
+			for(int entry=0;entry<species.length;entry++)species[entry]=LiquidCellInventory.allocateSpecies(stock.mixture().amountAt(entry),masses,volumes);
+			var keptMixture=mixturePart(stock.mixture(),species,0,keptMass);
+			var takenMixture=mixturePart(stock.mixture(),species,1,takenMass);
+			var energyParts=LiquidCellInventory.partitionEnergy(stock,masses,
 					new ChemicalMixtureRecord[]{keptMixture,takenMixture},FluidThermalBinding.liquidEnergyPartitioner(domain));
 			double keptEnergy=energyParts[0];
 			var after = kept.signum() == 0 ? null : new LiquidCellInventory.Stock(stock.key(), kept, keptMass, keptMixture, keptEnergy, stock.indicator());
@@ -352,11 +355,6 @@ final class MaterialTransferPlanner {
 	private ChemicalMixtureRecord mixturePart(ChemicalMixtureRecord source, long[][] species, int index, long mass) {
 		if (source == null) return null; var amounts = new TreeMap<Integer, Long>();
 		for (int i = 0; i < species.length; i++) if (species[i][index] > 0) amounts.put(source.speciesHandle(i), species[i][index]);
-		return mixture(amounts, mass);
-	}
-	private ChemicalMixtureRecord splitMixture(ChemicalMixtureRecord source, SignedDyadic kept, SignedDyadic total, long mass, boolean removed) {
-		if (source == null) return null; var amounts = new TreeMap<Integer, Long>();
-		for (int i = 0; i < source.entryCount(); i++) { long amount = Mass.portion(source.amountAt(i), kept, total); if (removed) amount = source.amountAt(i) - amount; if (amount > 0) amounts.put(source.speciesHandle(i), amount); }
 		return mixture(amounts, mass);
 	}
 	private ChemicalMixtureRecord mixture(TreeMap<Integer, Long> amounts, long mass) {

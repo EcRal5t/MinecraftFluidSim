@@ -10,6 +10,7 @@ import mmm.thermal.ThermalTransport;
 import mmm.units.SignedDyadic;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 /** Cell temperature advection, finite conduction and exact owner-energy publication. */
 final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
@@ -50,6 +51,26 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		require(d.liquidCells.exactVolume().equals(volume)&&d.liquidCells.massUnits()==mass&&d.exactInternalEnergy().equals(d.thermalAudit().expectedInventory()),"Caloric transport changed exact stock or audit");
 		var restored=FluidDomain.restoreAuthoritativeState(d.captureAuthoritativeState());restored.thermalState.preparePhaseScan(restored.domainCapabilities.thermalMarkerContext());
 		require(restored.liquidCells.snapshot().rows().equals(d.liquidCells.snapshot().rows()),"Caloric transport changed during recovery");
+		// A sub-mass-quantum outflow still carries geometric volume. Its chemical
+		// reference follows the accepted mass, keeping the remaining caloric owner valid.
+		var tinyCells=new LiquidCellInventory(2,r.chemical());
+		var tinyMixture=mmm.chemistry.ChemicalMixtureRecord.fromStableAmounts(r.chemical(),Map.of(mmm.chemistry.BuiltinChemicalDefinitions.H2O,2L),0);
+		tinyMixture=tinyMixture.withMassResidualUnits(1-tinyMixture.speciesMassUnits(r.chemical()));
+		int thermalMaterial=d.thermalState.thermalMaterialHandleForFluid(water);
+		double tinyEnergy=d.thermalState.stateFunction().internalEnergyAtTemperature(thermalMaterial,mmm.units.Mass.kilograms(1),tinyMixture,r.chemical(),293.15);
+		tinyCells.planAdditions(List.of(new LiquidCellInventory.Stock(sourceKey,SignedDyadic.of(1),1,tinyMixture,tinyEnergy,false))).commit();
+		var tinyRoutes=LiquidTransportRoutes.builder(1,1);tinyRoutes.source(tinyCells.stock(sourceKey));tinyRoutes.route(0,1,255,SignedDyadic.of(.5));
+		var tinyPlan=tinyCells.planRoutes(tinyRoutes.build(),FluidThermalBinding.liquidEnergyPartitioner(d));
+		long tinySpecies=0;
+		for(var stock:tinyPlan.future().stocks()){
+			tinySpecies+=stock.mixture().amount(r.chemical().speciesHandle(mmm.chemistry.BuiltinChemicalDefinitions.H2O));
+			if(stock.massUnits()==0){require(stock.internalEnergy()==0,"Zero-mass geometry acquired caloric energy");continue;}
+			double t=d.thermalState.stateFunction().stateForInternalEnergy(thermalMaterial,stock.massKilograms(),stock.mixture().stableAmounts(r.chemical()),stock.internalEnergy()).temperatureK();
+			require(Math.abs(t-293.15)<1e-4,"Sub-mass-quantum outflow detached chemical reference from its caloric carrier: "+t);
+		}
+		require(tinySpecies==2&&tinyPlan.future().massUnits()==1&&tinyPlan.future().exactVolume().equals(SignedDyadic.of(1))
+				&&tinyPlan.future().exactInternalEnergy().subtract(SignedDyadic.of(tinyEnergy)).equals(tinyPlan.energyRoundoff()),
+				"Sub-mass-quantum outflow changed exact mass, species, volume or U accounting");
 	}
 	private static void bulkReplacementPublishesThermalInventory() {
 		var d=pool(3,3,3,0,false,0);
