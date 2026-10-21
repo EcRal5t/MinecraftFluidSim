@@ -1,7 +1,6 @@
 package mmm.fluid;
 
 import java.util.Arrays;
-import mmm.units.SignedDyadic;
 
 /** Shared sparse volume incidence and its transpose for liquid capacity and finite gas storage. */
 final class PressureFaceGraph {
@@ -70,18 +69,22 @@ final class PressureFaceGraph {
 				&&classifiedGasRevision==network.revision())return;
 		prepareSupportGeometry();
 		Arrays.fill(pressureSupports, 0);
-		for (int cell = 0; cell < domain.cellCount; cell++) {
-			int mask = domain.geometry.cutCells.mask(cell); int[] components = CellRemapMicroTopology.components(mask);
-			var capacities = CellRemapMicroTopology.capacities(mask, SignedDyadic.of(poreVolume(cell)));
-			for (int j = 0; j < components.length; j++) {
-				var volume = SignedDyadic.ZERO; long mass = 0;
-				for (var stock : domain.liquidCells.stocksInCell(cell)) if (stock.key().supportMask() == components[j]) {
-					volume = volume.add(stock.volume()); mass = Math.addExact(mass, stock.massUnits());
+		// Gas geometry already owns the exact pore-minus-stock endpoint. Pressure
+		// classification reads that same preparation instead of settling it again.
+		for (var component : domain.gasState.frame.capacity().components()) {
+			int cell = component.cell(), support = component.supportMask();
+			if (component.poreVolumeNormalized().signum() <= 0
+					|| component.availableVolumeNormalized().toDouble() > mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION
+					|| hasFiniteGas(cell, support)) continue;
+			boolean hasMass = false;
+			if (support == (~domain.geometry.cutCells.mask(cell) & 255)) {
+				hasMass = domain.liquidGrid.cellStockMass[cell] > 0;
+			} else {
+				for (var stock : domain.liquidCells.stocksInCell(cell)) {
+					if (stock.key().supportMask() == support && stock.massUnits() > 0) { hasMass = true; break; }
 				}
-				if (mass > 0 && capacities[j].signum() > 0 && !hasFiniteGas(cell, components[j])
-						&& capacities[j].subtract(volume).toDouble() <= mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION)
-					pressureSupports[cell] |= components[j];
 			}
+			if (hasMass) pressureSupports[cell] |= support;
 		}
 		prepareHydrostaticReference();
 		for(int cell=0;cell<domain.cellCount;cell++)domain.projection.pressureFluid[cell]=pressureSupports[cell]!=0;
@@ -220,10 +223,6 @@ final class PressureFaceGraph {
 			int owner = domain.gasState.frame.nodeOfPiece(8 * cell + bit); if (owner < 0) continue;
 			gasSide(cell,micro,axis,owner,weight*domain.gasState.frame.geometry().piece(8*cell+bit).normalizedVolume()/total,capillary,hydroFraction,consumer);
 		}
-	}
-	private double poreVolume(int cell) {
-		return domain.geometry.cutCells.openCellVolume(cell) - (domain.granularCoupling == null ? 0
-				: Math.scalb((double) domain.granularCoupling.solidSvq(cell), -24));
 	}
 
 	private void addLiquidPort(int face, int supportA, int supportB, double area) {
