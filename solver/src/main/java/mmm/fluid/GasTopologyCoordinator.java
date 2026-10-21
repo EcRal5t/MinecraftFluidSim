@@ -444,10 +444,10 @@ final class GasTopologyCoordinator {
 					initialVolume,initialVolume+change).finalInternalEnergy();
 			var sourceWork=SignedDyadic.of(finalEnergy).subtract(SignedDyadic.of(initialEnergy));
 			workBySource[source.node()]=workBySource[source.node()].add(sourceWork);work=work.add(sourceWork);
-			double[] partitioned=model.partitionEnergy(stock,finalEnergy,retained);int next=0;
+			double[] partitioned=model.partitionEnergy(stock,finalEnergy,retained);int retainedIndex=0;
 			for(int part=0;part<source.targets().length;part++)if(source.targets()[part]>0){
 				int target=source.targets()[part]-1;
-				mixed[target]=mixed[target].subtract(SignedDyadic.of(source.partEnergy()[part])).add(SignedDyadic.of(partitioned[next++]));
+				mixed[target]=mixed[target].subtract(SignedDyadic.of(source.partEnergy()[part])).add(SignedDyadic.of(partitioned[retainedIndex++]));
 			}
 		}
 		return work;
