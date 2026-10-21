@@ -359,7 +359,10 @@ final class ConservativeLiquidFlux {
 					if(GasFaceIntersection.area(frame.phase(),target,-1,d,direction==0?0:1,0,a,b,.5)>0){exposed=true;break;}
 				}
 			}
-			if(!exposed){var floor=capacities[slot].subtract(resolution);if(floor.signum()>0)minimum[slot]=floor;}
+			if(!exposed){
+				var floor=capacities[slot].subtract(component.availableVolumeNormalized());
+				if(floor.signum()>0)minimum[slot]=floor;
+			}
 		}
 		return minimum;
 	}
