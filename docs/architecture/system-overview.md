@@ -211,9 +211,9 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 固定碰撞由 Minecraft `VoxelShape` 保守采样成每格 `2×2×2` 微盒掩码，压力开口、液体通量和 CCD 读取同一几何。活动颗粒、沉积和 coherent 固相共享固体骨架占容；液体可用容量为开放体积减去全部固体占容，孔隙水由普通液体库存持有。
 
-压力系统使用同一面系数组装矩阵、预条件器和速度修正。
+压力系统共用同一体积散度及其转置，已知压力、迭代修正和最终速度采用同一个有限质量与隐式阻力响应。
 `PressureLinearSolver` 与 `PressurePreconditioner` 统一 PCG 及不完全 Cholesky 预条件，颗粒阻力按有限质量成对处理。
-`PressureSparseMatrix` 一次组装液体、颗粒和气体共同 CSR，矩阵乘与 IC(0) 直接复用该算子；真空活动集沿当前自由行求解。
+`PressureSparseMatrix` 组装无阻力响应下的共同 CSR，提供预条件；实际含阻力算子通过 `GranularImplicitDrag` 已有稀疏分解应用速度响应，复用三角回代，真空活动集沿当前自由行求解。纯液体自然采用无阻力响应。
 压力支撑分类直接读取同代气体几何已准备的分量孔容与实际干容，精确容量由共同库存准备一次。
 真实真空腔与有库存气腔均保留自己的压力接触。静水参考只提供已知载荷，压力自由度由实际容量与气腔归属决定。
 静水承载使用实际液体接触及统一的未解析薄干缝近似，接地传播与上覆压力使用同一判定。可解析真空继续保留其压力与运动响应。
@@ -243,7 +243,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
   - 主要文件：
     - [PressureSystem](../../solver/src/main/java/mmm/fluid/PressureSystem.java)：`prepareGeometry` 集中准备相几何与固相压力份额；`prepareOperator` 准备未知行和载荷，`solve` 组织共同基准、矩阵及速度修正，并发布实际压力
     - [PressureLinearSolver](../../solver/src/main/java/mmm/fluid/PressureLinearSolver.java)：求解显式传入的未知行与约束，返回双精度压力，由 `PressureSystem` 发布
-    - [PressureSparseMatrix](../../solver/src/main/java/mmm/fluid/PressureSparseMatrix.java)：液体、气体与颗粒共同 CSR 算子
+    - [PressureSparseMatrix](../../solver/src/main/java/mmm/fluid/PressureSparseMatrix.java)：无阻力响应的共同 CSR，用于压力预条件
     - [PressurePreconditioner](../../solver/src/main/java/mmm/fluid/PressurePreconditioner.java)
     - [PressureFaceGraph](../../solver/src/main/java/mmm/fluid/PressureFaceGraph.java)：共同压力支撑、接液面积与散度系数；气压在每次装配读取实际状态，液体输运直接使用固定孔口邻接
     - [PressureBoundaryView](../../solver/src/main/java/mmm/fluid/PressureBoundaryView.java)
@@ -268,7 +268,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - **液固压力、阻力与整数占容**
   - 主要文件：
     - [GranularPressureCoupling](../../solver/src/main/java/mmm/fluid/GranularPressureCoupling.java)
-    - [GranularImplicitDrag](../../solver/src/main/java/mmm/fluid/GranularImplicitDrag.java)
+    - [GranularImplicitDrag](../../solver/src/main/java/mmm/fluid/GranularImplicitDrag.java)：有限质量阻力分解与共同压力速度响应
     - [GranularFaceVolumes](../../solver/src/main/java/mmm/fluid/GranularFaceVolumes.java)
     - [GranularCouplingFields](../../model/src/main/java/mmm/granular/GranularCouplingFields.java)
   - 验证选择器 / 参考：`granular`；[压力与占容](granular-state.md#统一排水与压力)
@@ -572,7 +572,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
   - 运行方法：同一原输入的阶段计时及 [JFR 工具](../../pytool/jfr_hotspots.py)
 
 - **液固压力、阻力与接触成本**
-  - 入口：`GranularImplicitDrag.responseDelta`、`PressureLinearSolver`、`PressurePreconditioner`、`GranularActiveContacts`、`GranularContactCompression`
+  - 入口：`GranularImplicitDrag.prepare/applyResponse`、`PressureLinearSolver`、`PressurePreconditioner`、`GranularActiveContacts`、`GranularContactCompression`
   - 运行方法：沙床启动短重放、原慢步及完整生命周期
 
 - **GPU 设备、资源、提交与回读**

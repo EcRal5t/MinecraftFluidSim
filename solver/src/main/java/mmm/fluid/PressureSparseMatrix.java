@@ -2,7 +2,7 @@ package mmm.fluid;
 
 import java.util.Arrays;
 
-/** One assembled binary64 pressure matrix, shared by multiplication and incomplete factorization. */
+/** Assembled no-drag pressure matrix: exact at D=0 and the coupled operator's IC(0) approximation. */
 final class PressureSparseMatrix {
 	int[] start = new int[0];
 	int[] column = new int[0];

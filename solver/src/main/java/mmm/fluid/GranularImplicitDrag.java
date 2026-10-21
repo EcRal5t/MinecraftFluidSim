@@ -42,7 +42,7 @@ final class GranularImplicitDrag {
 	void prepare(float step) {
 		dt = step;
 		int parcels = domain.granularState == null ? 0 : domain.granularState.parcels.count();
-		contacts = 0;
+		contacts = 0;size=faceCount+3*parcels;
 		if (parcels == 0) return;
 		if (faceOrdinal.length == 0) { faceOrdinal = new int[faceCount]; touchedFaces = new boolean[faceCount]; }
 		size = faceCount + 3 * parcels;
@@ -84,7 +84,6 @@ final class GranularImplicitDrag {
 				factors[axis].faces[ordinal] = face; faceOrdinal[face] = ordinal++;
 			}
 		}
-		readVelocities(input);
 		rebuildDiagonal();
 	}
 
@@ -190,51 +189,11 @@ final class GranularImplicitDrag {
 
 	boolean active() { return contacts > 0; }
 
-	/** Finite-mass pair drag is resolved before the collision/position predictor. */
-	void project(){
-		if(!active())return;
-		responseDelta();
-		for(int i=0;i<size;i++)delta[i]+=input[i];writeVelocities(delta,true);
-	}
-
-	private void readVelocities(double[] vector) {
-		float[][] fields = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};
-		for (int axis = 0; axis < 3; axis++) for (int face = 0; face < fields[axis].length; face++) {
-			vector[offsets[axis] + face] = fields[axis][face];
-		}
-		for (int index = 0; index < domain.granularState.parcels.count(); index++) {
-			var p = domain.granularState.parcels.parcel(index);
-			vector[faceCount + 3 * index] = p.velocityX();
-			vector[faceCount + 3 * index + 1] = p.velocityY();
-			vector[faceCount + 3 * index + 2] = p.velocityZ();
-		}
-	}
-
-	private void writeVelocities(double[] vector, boolean accountRounding) {
-		double[] rounding = new double[3];
-		float[][] fields = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};
-		for (int axis = 0; axis < 3; axis++) for (int face = 0; face < fields[axis].length; face++) {
-			double velocity = vector[offsets[axis] + face];
-			fields[axis][face] = (float) velocity;
-			if (accountRounding) rounding[axis] += mass[offsets[axis] + face] * (velocity - fields[axis][face]);
-		}
-		for (int index = 0; index < domain.granularState.parcels.count(); index++) {
-			var p = domain.granularState.parcels.parcel(index);
-			double vx = vector[faceCount + 3 * index];
-			double vy = vector[faceCount + 3 * index + 1];
-			double vz = vector[faceCount + 3 * index + 2];
-			domain.granularState.parcels.overwrite(index, new GranularParcelStore.Parcel(p.x(), p.y(), p.z(),
-					(float) vx, (float) vy, (float) vz, p.solidVolumeSvq(), p.massUnits(), p.materialHandle(),
-					p.solidCompositionHandle(), p.contactAge(), p.flags()));
-			if (accountRounding) {
-				rounding[0] += p.mass() * (vx - (float) vx);
-				rounding[1] += p.mass() * (vy - (float) vy);
-				rounding[2] += p.mass() * (vz - (float) vz);
-			}
-		}
-		domain.lastGranularBoundaryImpulseX += rounding[0];
-		domain.lastGranularBoundaryImpulseY += rounding[1];
-		domain.lastGranularBoundaryImpulseZ += rounding[2];
-	}
+    /** Applies (M + dt D)^-1 M to a joint velocity/acceleration column using the same factors. */
+    void applyResponse(double[] source,double[] destination){
+        if(!active()){if(source!=destination)System.arraycopy(source,0,destination,0,size);return;}
+        System.arraycopy(source,0,input,0,size);responseDelta();
+        for(int i=0;i<size;i++)destination[i]=input[i]+delta[i];
+    }
 
 }

@@ -9,7 +9,9 @@ final class PressureLinearSolver {
 	}
 	private final int cellCount;
 	private final FluidSolverConfig config;
+	interface Product { void multiply(double[] source,double[] destination); }
 	private final RightHandSide rhsBuilder;
+	private final Product operator;
 	private final PressureSparseMatrix matrix;
 	private final PressurePreconditioner preconditioner;
 	private double[] pressure = new double[0], rhs = new double[0], residual = new double[0], direction = new double[0];
@@ -19,10 +21,10 @@ final class PressureLinearSolver {
 	private int count, freeCount;
 	private double[] gasLower = new double[0];
 
-	PressureLinearSolver(int cellCount,FluidSolverConfig config, PressureSparseMatrix matrix, RightHandSide rhsBuilder) {
+	PressureLinearSolver(int cellCount,FluidSolverConfig config, PressureSparseMatrix matrix, RightHandSide rhsBuilder,Product operator) {
 		this.cellCount=cellCount;this.config=config;
 		this.matrix = matrix;
-		this.rhsBuilder = rhsBuilder;
+		this.rhsBuilder = rhsBuilder;this.operator=operator;
 		preconditioner = new PressurePreconditioner();
 		ensureCapacity(cellCount+1);
 	}
@@ -63,7 +65,7 @@ final class PressureLinearSolver {
 	private int iterate(double target) {
 		double rz=dotFree(residual,direction),rms=projectedNorm();int iterations=0;
 		for(;rms>target&&iterations<config.maxPressureIterations();iterations++) {
-			matrix.multiply(direction,product);double denominator=dotFree(direction,product);
+			operator.multiply(direction,product);double denominator=dotFree(direction,product);
 			if(!(denominator>0&&Double.isFinite(denominator)&&rz>0&&Double.isFinite(rz)))break;
 			double alpha=rz/denominator;boolean blocked=false;
 			for(int ordinal=0;ordinal<freeCount;ordinal++) {
@@ -94,7 +96,7 @@ final class PressureLinearSolver {
 		return iterations;
 	}
 	private void refreshResidual(){
-		matrix.multiply(pressure,product);
+		operator.multiply(pressure,product);
 		for(int ordinal=0;ordinal<count;ordinal++){int row=unknowns[ordinal];residual[row]=rhs[row]-product[row];}
 	}
 	/** Pressure at its lower limit permits expansion at zero predicted absolute pressure. */

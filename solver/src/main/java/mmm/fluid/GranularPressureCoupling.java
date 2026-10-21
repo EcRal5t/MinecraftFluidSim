@@ -84,16 +84,33 @@ final class GranularPressureCoupling {
             double sum=0;for(int e=start[c];e<start[c+1];e++)sum+=coefficient[e];
             affine[c]+=pressureDatum*sum;
         }
-        for (int p = 0; p < parcels; p++) {
-            var parcel = domain.granularState.parcels.parcel(p);
-            write(p, parcel, parcel.velocityX() + dt * inverseMass[3 * p] * affine[3 * p],
-                    parcel.velocityY() + dt * inverseMass[3 * p + 1] * affine[3 * p + 1],
-                    parcel.velocityZ() + dt * inverseMass[3 * p + 2] * affine[3 * p + 2]);
-            // The hydrostatic column's fixed support supplies this reference
-            // impulse. Residual pressure and capillary coupling keep their paired rows.
+        for(int p=0;p<parcels;p++){
+            // The hydrostatic support's actual reaction is recorded once per prepared step.
             domain.lastGranularBoundaryImpulseX+=dt*cellVolume*referenceAffine[3*p];
             domain.lastGranularBoundaryImpulseY+=dt*cellVolume*referenceAffine[3*p+1];
             domain.lastGranularBoundaryImpulseZ+=dt*cellVolume*referenceAffine[3*p+2];
+        }
+    }
+
+    void addAffineVelocity(float dt,double[] velocity,int offset){
+        for(int c=0;c<contacts;c++)velocity[offset+c]+=dt*inverseMass[c]*affine[c];
+    }
+    void pressureVelocity(double[] pressures,double[] velocity,int offset){
+        for(int c=0;c<contacts;c++){
+            double force=0;
+            for(int e=start[c];e<start[c+1];e++)force+=coefficient[e]*pressures[row[e]];
+            velocity[offset+c]=inverseMass[c]*force;
+        }
+    }
+    void addDivergence(double[] velocity,int offset,double[] result,double factor){
+        for(int c=0;c<contacts;c++)for(int e=start[c];e<start[c+1];e++)
+            result[row[e]]+=factor*coefficient[e]*velocity[offset+c];
+    }
+    void publishVelocity(double[] velocity,int offset){
+        int count=domain.granularState==null?0:domain.granularState.parcels.count();
+        for(int p=0;p<count;p++){
+            var parcel=domain.granularState.parcels.parcel(p);int index=offset+3*p;
+            write(p,parcel,velocity[index],velocity[index+1],velocity[index+2]);
         }
     }
 
@@ -112,25 +129,12 @@ final class GranularPressureCoupling {
         coefficient[entries++] = weight;
     }
 
-    /** B_s v has units of normalized volume per second. */
-    void addDivergence(double[] result, double factor) {
-        if (contacts == 0) return;
-        for (int p = 0; p < contacts / 3; p++) {
-            var parcel = domain.granularState.parcels.parcel(p);
-            for (int axis = 0; axis < 3; axis++) {
-                int c = 3 * p + axis;
-                double speed = axis == 0 ? parcel.velocityX() : axis == 1 ? parcel.velocityY() : parcel.velocityZ();
-                for (int e = start[c]; e < start[c + 1]; e++) result[row[e]] += factor * coefficient[e] * speed;
-            }
-        }
-    }
-
     /** Includes gas pressure rows coupled through an actual solid volume response. */
     void markGasPressureContacts(boolean[] coupled) {
         for(int i=0;i<entries;i++)if(row[i]>=domain.cellCount&&coefficient[i]!=0)
             coupled[row[i]-domain.cellCount]=true;
     }
-    /** Assemble rho B_s (h^3 M_s^-1) B_s^T once into the common pressure matrix. */
+    /** Assemble the solid no-drag contribution to the common pressure preconditioner. */
     void assembleMatrix(PressureSparseMatrix matrix, double factor) {
         for (int c = 0; c < contacts; c++) {
             double response = factor * inverseMass[c];
@@ -141,27 +145,6 @@ final class GranularPressureCoupling {
                     matrix.add(row[i], row[j], weight * coefficient[j]);
                 }
             }
-        }
-    }
-
-    /** The known prediction and residual projection share this pressure transpose. */
-    void project(float dt,double[] pressures) {
-        if (contacts == 0) return;
-        for (int p = 0; p < contacts / 3; p++) {
-            var parcel = domain.granularState.parcels.parcel(p);
-            double vx=parcel.velocityX(),vy=parcel.velocityY(),vz=parcel.velocityZ();
-            for (int axis = 0; axis < 3; axis++) {
-                int c = 3 * p + axis;
-                double force = 0;
-                for (int e = start[c]; e < start[c + 1]; e++) {
-                    int r = row[e];
-                    force += coefficient[e] * pressures[r];
-                }
-                double change=dt*inverseMass[c]*force;
-                if(axis==0)vx+=change;else if(axis==1)vy+=change;else vz+=change;
-            }
-            write(p,parcel,vx,vy,vz);
-
         }
     }
 

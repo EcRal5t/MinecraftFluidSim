@@ -1412,8 +1412,10 @@ public final class GranularCarrierValidation {
 	private static void relaxDrag(FluidDomain domain, float dt) {
 		// Assemble the common face partition, then isolate the finite-mass drag response at zero pressure.
 		domain.domainFlowFields.ensureGrid(); domain.pressureSystem.prepareOperator();
-		var pressure = new GranularPressureCoupling(domain); pressure.prepare(dt,0);
-		var drag = new GranularImplicitDrag(domain); drag.prepare(dt); drag.project();
+		var drag = new GranularImplicitDrag(domain); drag.prepare(dt);
+        double[] velocity=new double[domain.pressureSystem.faces.faceCount+3*domain.granularState.parcels.count()];
+        domain.pressureSystem.readJointVelocity(velocity);drag.applyResponse(velocity,velocity);
+        domain.pressureSystem.publishVelocity(velocity);
 	}
 
 	private static void implicitSharedCarrier() {
@@ -1514,7 +1516,10 @@ public final class GranularCarrierValidation {
 		p[domain.domainFlowFields.cellIndex(2,2,2)]=300;p[domain.domainFlowFields.cellIndex(3,2,2)]=-100;
 		domain.pressureSystem.pressureVelocity(p,a);
 		for(int face=0;face<graph.faceCount;face++)impulse[graph.axis[face]]+=dt*graph.faceMass(face)*a[face];
-		var coupling = new GranularPressureCoupling(domain); coupling.prepare((float)dt,0); coupling.project((float)dt,p);
+		var coupling = new GranularPressureCoupling(domain); coupling.prepare((float)dt,0);
+        double[] solidVelocity=new double[3];coupling.pressureVelocity(p,solidVelocity,0);
+        for(int axis=0;axis<3;axis++)solidVelocity[axis]*=dt;
+        coupling.addAffineVelocity((float)dt,solidVelocity,0);coupling.publishVelocity(solidVelocity,0);
 		var parcel = domain.granularState.parcels.parcel(0);
 		impulse[0] += parcel.mass() * parcel.velocityX(); impulse[1] += parcel.mass() * parcel.velocityY();
 		impulse[2] += parcel.mass() * parcel.velocityZ();
@@ -1538,7 +1543,9 @@ public final class GranularCarrierValidation {
 		var coupling = new GranularPressureCoupling(domain);
 		coupling.prepare(0.05F,0);
 		for(int node:domain.gasState.network.nodeIds())pressures[domain.cellCount+node]=domain.pressureSystem.gasPressure[node];
-		coupling.project(0.05F,pressures);
+		double[] solidVelocity=new double[3];coupling.pressureVelocity(pressures,solidVelocity,0);
+        for(int axis=0;axis<3;axis++)solidVelocity[axis]*=.05;
+        coupling.addAffineVelocity(.05F,solidVelocity,0);coupling.publishVelocity(solidVelocity,0);
 		var p = domain.granularState.parcels.parcel(0);
 		double expected = 0.05 * 9.81 * 1_000 * p.solidVolumeSvq() / SolidVolume.SVQ_PER_CUBIC_METER / p.mass();
 		// CIC derivatives and the clipped-wall hydrostatic term share the represented solid inventory.
@@ -1551,14 +1558,13 @@ public final class GranularCarrierValidation {
 	}
 
 	private static void sharedGasPressureAlgebra() {
-		var domain=headspacePressureDomain();domain.pressureSystem.solve(.05F);var graph=domain.pressureSystem.faces;
+		var domain=headspacePressureDomain();domain.pressureSystem.solve(.05F);
 		int size=domain.cellCount+domain.gasState.network.nodeCount()+1;
-		double[] a=new double[size],b=new double[size],aa=new double[size],ab=new double[size],velocity=new double[graph.faceCount];
+		double[] a=new double[size],b=new double[size],aa=new double[size],ab=new double[size];
 		for(int i=0;i<size;i++){a[i]=i%7-3;b[i]=i%11-5;}
-		domain.pressureSystem.pressureVelocity(a,velocity);domain.pressureSystem.addDivergence(velocity,aa,domain.config.density());
-		domain.pressureSystem.pressureVelocity(b,velocity);domain.pressureSystem.addDivergence(velocity,ab,domain.config.density());
+		domain.pressureSystem.multiplyPressure(a,aa);domain.pressureSystem.multiplyPressure(b,ab);
 		double x=0,y=0,q=0;for(int i=0;i<size;i++){x+=a[i]*ab[i];y+=b[i]*aa[i];q+=a[i]*aa[i];}
-		require(Math.abs(x-y)<1e-9*Math.max(1,Math.abs(x))&&q>=0,"Shared fixed fluid aperture pressure operator must remain symmetric positive");
+		require(Math.abs(x-y)<1e-9*Math.max(1,Math.abs(x))&&q>=0,"Joint finite-mass pressure/drag/gas operator must remain symmetric positive");
 	}
 
 	private static double pressureEnergy(FluidDomain domain) {

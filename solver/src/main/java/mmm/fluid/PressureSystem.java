@@ -31,9 +31,11 @@ final class PressureSystem {
 	final PressureSparseMatrix matrix = new PressureSparseMatrix();
 	final GranularFaceVolumes solidFaces;
 	final PressureFaceGraph faces;
-	private final double[] velocityWork,forceBaseline;
+	private final double[] forceBaseline;
 	private boolean forceStepPrepared;
-	private double[] pressure = new double[0], referencePressure = new double[0];
+	private double[] pressure = new double[0], referencePressure = new double[0],pressureLoad=new double[0];
+	private double[] freeVelocity=new double[0],predictedVelocity=new double[0],jointResponse=new double[0];
+	private int jointSize;
 	private float duration;
 	private double pressureDatum;
 	private double[] gasStorageRhs = new double[0];
@@ -48,8 +50,8 @@ final class PressureSystem {
 		solidFaces = new GranularFaceVolumes(domain); faces = new PressureFaceGraph(domain,anchored);
 		granular = new GranularPressureCoupling(domain); drag = new GranularImplicitDrag(domain);
 		transportVelocity=new double[faces.faceCount];
-		velocityWork = new double[faces.faceCount];forceBaseline=new double[faces.faceCount];
-		solver = new PressureLinearSolver(domain.cellCount,domain.config, matrix, this::buildRhs);
+		forceBaseline=new double[faces.faceCount];
+		solver = new PressureLinearSolver(domain.cellCount,domain.config, matrix, this::buildRhs,this::multiplyPressure);
 	}
 
 	FlipPressurePhaseGeometry phaseGeometry(){return phaseGeometry;}
@@ -181,12 +183,42 @@ final class PressureSystem {
 			if (faces.rowAt(i) >= 0) result[faces.rowAt(i)] += factor * faces.coefficientAt(i) * velocity[f];
 	}
 	private void buildRhs(double[] result) {
-		Arrays.fill(result, 0);
-		readVelocity(velocityWork);
-		addDivergence(velocityWork, result, -domain.config.density() / duration);
-		granular.addDivergence(result, -domain.config.density() / duration);
-		addStorageRhs(result);
-	}
+        Arrays.fill(result,0);
+        addDivergence(predictedVelocity,result,-domain.config.density()/duration);
+        granular.addDivergence(predictedVelocity,faces.faceCount,result,-domain.config.density()/duration);
+        addStorageRhs(result);
+    }
+    /** The inertia/drag inverse used here is also used by prediction and final velocity publication. */
+    void multiplyPressure(double[] values,double[] result){
+        if(!drag.active()){matrix.multiply(values,result);return;}
+        int rows=domain.cellCount+gasNodeCount+1;
+        for(int row=0;row<rows;row++)pressureLoad[row]=matrix.active(row)?values[row]:0;
+        pressureVelocity(pressureLoad,jointResponse);granular.pressureVelocity(pressureLoad,jointResponse,faces.faceCount);
+        drag.applyResponse(jointResponse,jointResponse);
+        Arrays.fill(result,0);
+        addDivergence(jointResponse,result,domain.config.density());
+        granular.addDivergence(jointResponse,faces.faceCount,result,domain.config.density());
+        for(int i=0;i<gasUnknownCount;i++){
+            int node=gasUnknownNodes[i],row=domain.cellCount+node;
+            result[row]+=gasStorageCoefficient[node]*values[row];
+        }
+        for(int row=0;row<rows;row++)if(!matrix.active(row))result[row]=0;
+    }
+    private void preparePrediction(float dt){
+        int parcels=domain.granularState==null?0:domain.granularState.parcels.count();
+        jointSize=faces.faceCount+3*parcels;
+        int rows=domain.cellCount+gasNodeCount+1;if(pressureLoad.length<rows)pressureLoad=new double[rows];
+        if(freeVelocity.length<jointSize){
+            freeVelocity=new double[jointSize];predictedVelocity=new double[jointSize];jointResponse=new double[jointSize];
+        }
+        readJointVelocity(freeVelocity);
+        for(int f=0;f<faces.faceCount;f++)freeVelocity[f]+=dt*faces.inverseMass[f]*faces.affine[f];
+        granular.addAffineVelocity(dt,freeVelocity,faces.faceCount);
+        pressureVelocity(referencePressure,jointResponse);granular.pressureVelocity(referencePressure,jointResponse,faces.faceCount);
+        for(int i=0;i<jointSize;i++)predictedVelocity[i]=freeVelocity[i]+dt*jointResponse[i];
+        drag.applyResponse(predictedVelocity,predictedVelocity);
+    }
+
 	void solve(float dt) {
 		var result=solveProjection(dt);
 		if(!result.converged())throw new FluidDomain.PressureSolveBlockedException("Pressure projection did not converge: residual="
@@ -214,16 +246,8 @@ final class PressureSystem {
 		}
 		seedLiquidPressures(referencePressure);
 		granular.prepare(dt,pressureDatum);
-		granular.project(dt,referencePressure);
-		// Known cavity pressure and fixed interface loads share one prediction in
-		// both phases. Drag sees that complete prediction before the residual solve.
-		pressureVelocity(referencePressure,velocityWork);
-		for(int f=0;f<faces.faceCount;f++){
-			int axis=faces.axis[f],local=faces.localFace[f];
-			float[] velocity=axis==0?domain.mac.velocityX:axis==1?domain.mac.velocityY:domain.mac.velocityZ;
-			velocity[local]+=dt*(faces.inverseMass[f]*faces.affine[f]+velocityWork[f]);
-		}
-		if(domain.granularState!=null&&domain.granularState.parcels.count()>0){drag.prepare(dt);drag.project();}
+        // Constitutive resistance reads source slip before any known pressure impulse.
+        drag.prepare(dt);preparePrediction(dt);
 		retainCoupledGasRows();
 		assembleMatrix();solver.reset(rows);
 		// Resolve pressure to the same cell-volume scale as the phase geometry.
@@ -266,17 +290,39 @@ final class PressureSystem {
 	}
 
 	void projectVelocities(float dt) {
-		pressureVelocity(pressure, velocityWork);
-		for (int f = 0; f < faces.faceCount; f++) {
-			int a = faces.axis[f], local = faces.localFace[f];
-			float[] velocity = a == 0 ? domain.mac.velocityX : a == 1 ? domain.mac.velocityY : domain.mac.velocityZ;
-			velocity[local]+=dt*velocityWork[f];
-			double before=forceBaseline[f],after=velocity[local];
-			double exchange=.5*faces.faceMass(f)*(before*before-after*after);
-			domain.mechanicalEnergy.recordLiquidExchange(f,exchange);
-		}
-		granular.project(dt,pressure);forceStepPrepared=false;
-	}
+        int rows=domain.cellCount+gasNodeCount+1;
+        if(pressureLoad.length<rows)pressureLoad=new double[rows];
+        for(int row=0;row<rows;row++)pressureLoad[row]=referencePressure[row]+pressure[row];
+        // Combine the physical pressure before applying R, so a large p0 and its
+        // cancelling increment never become an intermediate float velocity pulse.
+        pressureVelocity(pressureLoad,jointResponse);granular.pressureVelocity(pressureLoad,jointResponse,faces.faceCount);
+        for(int i=0;i<jointSize;i++)predictedVelocity[i]=freeVelocity[i]+dt*jointResponse[i];
+        drag.applyResponse(predictedVelocity,predictedVelocity);
+        publishVelocity(predictedVelocity);
+        for(int f=0;f<faces.faceCount;f++){
+            int axis=faces.axis[f],local=faces.localFace[f];
+            float[] velocity=axis==0?domain.mac.velocityX:axis==1?domain.mac.velocityY:domain.mac.velocityZ;
+            double before=forceBaseline[f],after=velocity[local];
+            domain.mechanicalEnergy.recordLiquidExchange(f,.5*faces.faceMass(f)*(before*before-after*after));
+        }
+        forceStepPrepared=false;
+    }
+    /** A joint column has MAC faces followed by three velocity components per active parcel. */
+    void readJointVelocity(double[] target){
+        readVelocity(target);int parcels=domain.granularState==null?0:domain.granularState.parcels.count();
+        for(int p=0;p<parcels;p++){
+            var parcel=domain.granularState.parcels.parcel(p);int index=faces.faceCount+3*p;
+            target[index]=parcel.velocityX();target[index+1]=parcel.velocityY();target[index+2]=parcel.velocityZ();
+        }
+    }
+    void publishVelocity(double[] values){
+        for(int f=0;f<faces.faceCount;f++){
+            float[] field=switch(faces.axis[f]){case 0->domain.mac.velocityX;case 1->domain.mac.velocityY;default->domain.mac.velocityZ;};
+            field[faces.localFace[f]]=(float)values[f];
+        }
+        granular.publishVelocity(values,faces.faceCount);
+    }
+
 	/** Unresolved dry capacity retains its inventory without an independent mechanical mode. */
 	private void retainCoupledGasRows() {
 		Arrays.fill(gasPressureUnknown,false);

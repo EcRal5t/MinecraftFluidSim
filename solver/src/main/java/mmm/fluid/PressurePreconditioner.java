@@ -2,7 +2,7 @@ package mmm.fluid;
 
 import java.util.Arrays;
 
-/** IC(0) on the current free principal submatrix of the actual assembled pressure operator. */
+/** IC(0) on the free principal submatrix of the assembled no-drag pressure approximation. */
 final class PressurePreconditioner {
 	private PressureSparseMatrix matrix;
 	private double[] factor = new double[0];
