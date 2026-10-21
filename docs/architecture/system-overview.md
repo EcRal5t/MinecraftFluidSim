@@ -298,6 +298,8 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 `PhaseQuantitySettlement` 先按固定开放分量结算共同连续体积通量，以同一库存容量图满足原供体库存、接收分量容量与有限气体正容量。满液分量新增干容由同代上风气体通量提供，已有自由界面与气体膨胀保持可动；相变减液形成的新气容随库存交接。
 库存拆分直接传递整数质量与物种列，热参考能共用该列；接收格汇总后生成组成对象，气体来源与终点干容共用同次准备结果。
 内部超出容量区间的体积沿已有通量路线线性交接，数值投影和精确提交复用连通树；剩余拥堵和气腔容量限制由按需展开的残量图处理。MAC 动量直接读取源速度和已接受的整数质量流，双单元质量准备一次，混合与转热共用非零质量流列表。
+
+未来库存先结算真实容量，再一次生成后继相占据与气体几何；空格和满格共享均匀描述，部分填充分量采用 PLIC。库存只改变组成或内能、实际空间保持一致时，共享已有相几何、拓扑与容量。两类相变在同一数量候选上完成动量准备及最终内能赋值。
 压力和 PLIC 给出面通量偏好，正常运动与颗粒排水共用双向邻接路线和一次容量投影。
 材料随后共享已经接受的分量路线，分别拆分实际体积、整数质量、物种与内能；少量材料沿同一分量流动。
 气相互补通量按已接受的液相 `QL` 计算双向 `Qt−QL`，覆盖容量修正引起的反向气流和原总通量为零的面。整数质量、动量和气体来源使用同次结算结果。
@@ -343,11 +345,11 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 - **材料、物种、内能与动量交接**
   - 主要文件：
-    - [LiquidCellInventory](../../model/src/main/java/mmm/inventory/LiquidCellInventory.java)：`planRoutes` 分配物质，向动量算子交付实际数量并汇入机械热，统一生成私有后继与能量舍入账
+    - [LiquidCellInventory](../../model/src/main/java/mmm/inventory/LiquidCellInventory.java)：`planRoutes` 一次分配实际数量，动量与来源热直接写入同批机械热列，统一生成私有后继与能量舍入账；`Plan.withInternalEnergiesByStock` 在同一数量候选上赋值最终内能。
     - [LiquidTransportRoutes](../../model/src/main/java/mmm/inventory/LiquidTransportRoutes.java)：共同容量投影交给库存的扁平路线列，供体确定材料身份，目标库存首次出现时建立键
     - [PhaseQuantitySettlement](../../solver/src/main/java/mmm/fluid/PhaseQuantitySettlement.java)：共同分量的双精度容量投影、同图精确端点结算与材料份额分配
     - [FluidThermalBinding](../../solver/src/main/java/mmm/fluid/FluidThermalBinding.java)：`liquidEnergyPartitioner` 按实际参考能与来源显热分份
-    - [CellMomentumTransport](../../solver/src/main/java/mmm/fluid/CellMomentumTransport.java)
+    - [CellMomentumTransport](../../solver/src/main/java/mmm/fluid/CellMomentumTransport.java)：三轴共用 `MacMomentumAdvection` 工作区，按同一实际整数质量流输运动量并结算局部混合热，每轴完成后保存独立的最终动量。
     - [CellCarrierInventoryView](../../solver/src/main/java/mmm/fluid/CellCarrierInventoryView.java)
   - 验证入口 / 参考：`LiquidVolumeTransportValidation`、`free-surface,thermal`；[单元输运](fluid-solver.md#几何与单元输运)
 
@@ -366,7 +368,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
     - [GasRuntimeGeometry](../../solver/src/main/java/mmm/fluid/GasRuntimeGeometry.java)：固定开放分量的干区几何、节点归属和实际容量；存盘时展开微盒节点索引
     - [GasChamberTopology](../../solver/src/main/java/mmm/fluid/GasChamberTopology.java)：真实干区连通与冷恢复归属校验
     - [GasVolumeAllocation](../../solver/src/main/java/mmm/fluid/GasVolumeAllocation.java)：完整未来帧及一次归并的旧节点到新节点稀疏来源，库存、内能、控制体积和做功共用相同目标顺序
-    - [GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java)：按最终来源准备库存、内能和控制体积；`balanceMechanicalWork` 将各旧腔实际功交给同一机械连通体，统一预检后提交
+    - [GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java)：`planAfterMechanicalTransport` 按旧来源实际机械模式准备库存、内能、控制体积与气腔功；`planAfterLiquidDisplacement` 处理显式置换，反向功由共同机械能计划结算，统一预检后提交。
     - [AirNetwork](../../model/src/main/java/mmm/fluid/air/AirNetwork.java)
     - [GasOrificeFlow](../../model/src/main/java/mmm/fluid/air/GasOrificeFlow.java)
     - [GasEnergyStore](../../model/src/main/java/mmm/thermal/GasEnergyStore.java)
@@ -594,7 +596,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 | 穿墙、小液滴或薄层异常 | `CollisionField` 与 `FlipCutCellGeometry` | `LiquidCollisionEdit`、共同面通量与压力支撑 |
 | 冲击后动量或热量不闭合 | 最终 MAC 动量、墙面冲量与局部机械热 | `CellMacStage.stopWallMomentum`、`CellMomentumTransport` 及对应库存提交 |
 | 气压或气腔归属异常 | `GasRuntimeGeometry` 的微盒、容量与节点归属 | `GasTopologyCoordinator` 的来源交接及 `GasThermalModel` 的库存／容量／U |
-| 近空液体温度异常或压缩功去向异常 | 实际载体 M、U 及旧气腔做功 | `PressureSystem` 的实际动能变化、`CellMacStage.finishMechanicalHeat` 的质量势能通量及 `GasTopologyCoordinator.balanceMechanicalWork` 的机械连通体 |
+| 近空液体温度异常或压缩功去向异常 | 实际载体 M、U、旧气腔机械模式及做功 | `MechanicalEnergySettlement.prepare` 的实际 K/PE 和气腔功分项，`PressureSystem.sourceGasDoesVolumeWork` 的旧来源分类 |
 | 等容交接后气体异常升温 | `GasTopologyCoordinator` 的旧腔控制体积与各接收气腔的净扩容 | 物质来源权重、局部释放的真空与绝热功结算 |
 | 均压静水或微扰后出现气穴与温漂 | `PressureSystem` 的共同压力增量、`ConservativeLiquidFlux` 的实际干面接触 | `PhaseQuantitySettlement` 的内部液量下限，再跟到实际气容及压缩功 |
 | 接触角铺展方向异常 | `SurfaceTensionFields` 的曲率及墙面法向通量 | 同一字段进入共同压力载荷的实际做功 |

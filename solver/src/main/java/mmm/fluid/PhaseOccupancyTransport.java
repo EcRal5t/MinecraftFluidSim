@@ -31,28 +31,23 @@ final class PhaseOccupancyTransport {
 	/** Reconstructs external edits and their gas source shares before publication. */
 	static GasVolumeAllocation prepareEdit(FluidDomain domain, LiquidCellInventory future, long[] occupied, byte[] masks) {
 		ensure(domain);
-		var retained=domain.gasState.frame;
-		GasRuntimeGeometry prepared;
-		if(retained!=null&&future.hasSameGeometry(retained.liquidCells())&&retained.matchesCarrierInventory(domain,occupied)
-				&&(masks==null||retained.geometry().matchesCollisionMasks(masks))) {
-			// N/U edits retain the same pore, PLIC and dry graph; only transaction snapshots change.
-			prepared=GasRuntimeGeometry.captureCellFuture(domain,future,occupied,domain.gasState.sealedDomainBoundary,
-					masks,retained.occupancy(),retained.phase(),retained.geometry(),retained.geometry().actualCapacity());
-		} else {
-			double[] pore=poreVolumes(domain,occupied,masks);
-			var cut=domain.geometry.cutCells;
-			if(masks!=null){cut=new FlipCutCellGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);cut.restoreMicroMasks(masks);}
-			var rebuilt=new FlipPressurePhaseGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);
-			reconstruct(domain,future,pore,masks,rebuilt);rebuilt.setExactPoreVolumes(cut,occupied);
-			prepared=GasRuntimeGeometry.captureCellFuture(domain,future,occupied,domain.gasState.sealedDomainBoundary,
-					masks,rebuilt.occupancyState(),rebuilt,null,null);
+		var cut=domain.geometry.cutCells;
+		if(masks!=null){cut=new FlipCutCellGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);cut.restoreMicroMasks(masks);}
+		var old=domain.gasState.frame;
+		var capacity=GasComponentCapacity.prepare(cut,occupied,future.snapshot(),old==null?null:old.geometry().actualCapacity());
+		FlipPressurePhaseGeometry rebuilt;
+		if(old!=null&&capacity==old.geometry().actualCapacity())rebuilt=old.phase();
+		else{
+			rebuilt=new FlipPressurePhaseGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);
+			rebuilt.rebuildInventory(cut,future.snapshot(),capacity,old==null?null:old.phase());
 		}
+		var prepared=GasRuntimeGeometry.captureCellFuture(domain,future,occupied,domain.gasState.sealedDomainBoundary,
+				masks,rebuilt.occupancyState(),rebuilt,null,capacity);
 		var sources=new PhaseSourceColumns(prepared.nodeCount()+1);
 		if(domain.gasState.frame!=null) {
 			var geometry=prepared.geometry();var topology=prepared.topology();
 			var components=geometry.actualCapacity().components;
 			double[] targetVolumes=new double[prepared.nodeCount()+1];
-			var old=domain.gasState.frame;
 			for(int i=0;i<components.size();i++) {
 				var component=components.get(i);
 				if(component.availableVolumeNormalized().signum()==0)continue;

@@ -106,7 +106,7 @@ final class GasLiquidPhaseChangeStage {
 		if(network.nodeCount()==0) return new FluidDomain.GasThermalPhaseStats(0,0,0);
 		var interfaceCells=finiteInterfaceCells(domain.gasState.frame);
 		thermal.preparePhaseScan(domain.domainCapabilities.thermalMarkerContext());
-		var phase=thermal.gasLiquidPhase(network); var function=new ThermalStateFunction(thermal.registry());
+		var phase=thermal.gasLiquidPhase(network); var function=thermal.stateFunction();
 		// One interface extent per LTE cell; all other liquid and solid owners remain its heat bath.
 		var selected=new TreeMap<Integer,Proposal>();
 		var capturedCells=new HashMap<Integer,Cell>();
@@ -224,7 +224,8 @@ final class GasLiquidPhaseChangeStage {
 			for(var stock:cell.future) { keys.add(stock.key()); sourceEdits.add(new LiquidCellInventory.Edit(stock.key(),stock)); }
 			for(var stock:cell.original) if(!keys.contains(stock.key())) sourceEdits.add(new LiquidCellInventory.Edit(stock.key(),null));
 		}
-		var momentum=domain.cellMacStage.prepareExternalMomentum(liquids.planEdits(sourceEdits));
+		var quantityPlan=liquids.planEdits(sourceEdits);
+		var momentum=domain.cellMacStage.prepareExternalMomentum(quantityPlan);
 		for(int cell:momentum.heatByCell().keySet()) if(cells.stream().noneMatch(c->c.id==cell))
 			cells.add(capturedCells.computeIfAbsent(cell,key->captureCell(key,function,thermal.preparePhaseCandidateCell(key,domain.domainCapabilities.thermalMarkerContext()))));
 		SignedDyadic mechanicalHeat=SignedDyadic.of(momentum.removedKineticEnergy());
@@ -267,16 +268,12 @@ final class GasLiquidPhaseChangeStage {
 		}
 		var gasEnergy=thermal.planGasInventoryEnergy(network,network.nodeIds(),gas,energy,transfer);
 		var cellEnergy=thermal.planPhaseBatchEnergy(trials,liquidCounts,gasEnergy.roundoff(),mechanicalHeat,domain.domainCapabilities.thermalMarkerContext());
-		var edits=new ArrayList<LiquidCellInventory.Edit>();
+		var finalEnergies=new TreeMap<LiquidCellInventory.Key,Double>();
 		for(var cell:cells) {
-			double[] energies=cellEnergy.liquidEnergies(cell.id); int ordinal=0; var futureKeys=new HashSet<LiquidCellInventory.Key>();
-			for(var stock:cell.future) {
-				futureKeys.add(stock.key()); double u=stock.massUnits()==0?0:energies[ordinal++];
-				edits.add(new LiquidCellInventory.Edit(stock.key(),new LiquidCellInventory.Stock(stock.key(),stock.volume(),stock.massUnits(),stock.mixture(),u,stock.indicator())));
-			}
-			for(var stock:cell.original) if(!futureKeys.contains(stock.key())) edits.add(new LiquidCellInventory.Edit(stock.key(),null));
+			double[] energies=cellEnergy.liquidEnergies(cell.id);int ordinal=0;
+			for(var stock:cell.future) finalEnergies.put(stock.key(),stock.massUnits()==0?0:energies[ordinal++]);
 		}
-		var liquidPlan=liquids.planEdits(edits);
+		var liquidPlan=quantityPlan.withInternalEnergiesByStock(finalEnergies);
 		var batch=new GasTopologyCoordinator.PhaseBatch(gas,created,removed,gasEnergy,cellEnergy,
 				retainedGas,retainedEnergy,births);
 		GasTopologyCoordinator.GasTopologyPlan topology;

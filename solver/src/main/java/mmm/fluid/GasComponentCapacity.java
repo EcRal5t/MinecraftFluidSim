@@ -20,13 +20,35 @@ final class GasComponentCapacity {
             this.cells=cells;this.masks=masks;this.pores=pores;this.offsets=offsets;this.components=List.copyOf(components);this.dry=dry;
         }
     }
+    private static final SignedDyadic[] OPEN_PORE=openPores();
+    private static SignedDyadic[] openPores(){var values=new SignedDyadic[9];for(int n=0;n<=8;n++)values[n]=SignedDyadic.of(n,-3);return values;}
     private GasComponentCapacity() { }
     static Prepared prepare(FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,LiquidCellInventory.Snapshot cells,Prepared source){
+        return prepare(cut,phase,null,null,cells,source);
+    }
+    /** The accepted transport already owns each exact fixed-support pore capacity. */
+    static Prepared prepare(FlipCutCellGeometry cut,SignedDyadic[] capacities,LiquidCellInventory.Snapshot cells,Prepared source){
+        return prepare(cut,null,capacities,null,cells,source);
+    }
+    static Prepared prepare(FlipCutCellGeometry cut,long[] occupied,LiquidCellInventory.Snapshot cells,Prepared source){
+        return prepare(cut,null,null,occupied,cells,source);
+    }
+    private static Prepared prepare(FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,SignedDyadic[] preparedPores,long[] occupied,
+                                    LiquidCellInventory.Snapshot cells,Prepared source){
         int count=cells.cellCount();var components=new ArrayList<Component>(source==null?count:source.components.size());
         byte[] masks=cut.copyMicroMasks();var pores=new SignedDyadic[count];int[] offsets=new int[count+1];double[] dry=new double[8*count];
         boolean unchanged=source!=null;
         for(int cell=0;cell<count;cell++){
-            int mask=Byte.toUnsignedInt(masks[cell]);var pore=phase.poreVolume(cell);pores[cell]=pore;offsets[cell]=components.size();
+            int mask=Byte.toUnsignedInt(masks[cell]);var supports=CellRemapMicroTopology.components(mask);
+            var pore=phase!=null?phase.poreVolume(cell):occupied==null?SignedDyadic.ZERO
+                    :occupied[cell]==0?OPEN_PORE[Integer.bitCount(~mask&255)]
+                    :OPEN_PORE[Integer.bitCount(~mask&255)].subtract(SignedDyadic.of(occupied[cell],-24));
+            if(preparedPores!=null){
+                if(supports.length==1)pore=preparedPores[8*cell+Integer.numberOfTrailingZeros(supports[0])];
+                else for(int support:supports)pore=pore.add(preparedPores[8*cell+Integer.numberOfTrailingZeros(support)]);
+            }
+            if(pore.signum()<0)throw blocked("Solid occupation exceeds actual open pore",cell);
+            pores[cell]=pore;offsets[cell]=components.size();
             if(source!=null&&source.masks[cell]==masks[cell]&&source.pores[cell].equals(pore)
                     &&sameVolumes(source.cells.rows().get(cell),cells.rows().get(cell))){
                 for(int i=source.offsets[cell];i<source.offsets[cell+1];i++){
@@ -34,11 +56,13 @@ final class GasComponentCapacity {
                     int slot=8*cell+Integer.numberOfTrailingZeros(component.supportMask());dry[slot]=source.dry[slot];
                 }
             }else{
-                unchanged=false;int[] supports=CellRemapMicroTopology.components(mask);
-                var capacities=CellRemapMicroTopology.capacities(mask,pore);
+                unchanged=false;
+                var capacities=preparedPores!=null||supports.length<=1?null:CellRemapMicroTopology.capacities(mask,pore);
                 for(int i=0;i<supports.length;i++){
-                    var available=availableVolume(cell,supports[i],capacities[i],cells.rows().get(cell));
-                    components.add(new Component(cell,supports[i],capacities[i],available));
+                    var capacity=preparedPores!=null?preparedPores[8*cell+Integer.numberOfTrailingZeros(supports[i])]
+                            :capacities==null?pore:capacities[i];
+                    var available=availableVolume(cell,supports[i],capacity,cells.rows().get(cell));
+                    components.add(new Component(cell,supports[i],capacity,available));
                     dry[8*cell+Integer.numberOfTrailingZeros(supports[i])]=available.toDouble();
                 }
             }

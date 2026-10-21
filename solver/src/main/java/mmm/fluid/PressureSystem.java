@@ -44,7 +44,6 @@ final class PressureSystem {
 
 	PressureSystem(FluidDomain domain) {
 		this.domain = domain;
-		phaseGeometry=new FlipPressurePhaseGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);
 		liquidPressure=new float[domain.cellCount];fluidUnknownCells=new int[domain.cellCount];
 		gasPressureUnknown=new boolean[domain.cellCount+1];gasUnknownNodes=new int[domain.cellCount];
 		gasPressure=new float[domain.cellCount+1];gasStorageCoefficient=new double[domain.cellCount+1];
@@ -56,7 +55,10 @@ final class PressureSystem {
 		solver = new PressureLinearSolver(domain.cellCount,domain.config, matrix, this::buildRhs,this::multiplyPressure);
 	}
 
-	FlipPressurePhaseGeometry phaseGeometry(){return phaseGeometry;}
+	FlipPressurePhaseGeometry phaseGeometry(){
+        if(phaseGeometry==null)phaseGeometry=new FlipPressurePhaseGeometry(domain.sizeX,domain.sizeY,domain.sizeZ);
+        return phaseGeometry;
+    }
 	PressureProjectionResult lastResult(){return lastResult;}
 	void invalidateGeometry(){geometryDirty=true;}
 	void clearLiquidPressure(int cell){liquidPressure[cell]=0;}

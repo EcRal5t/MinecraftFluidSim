@@ -4,7 +4,8 @@ import java.util.Arrays;
 
 /** Positive donor transport on MAC dual cells, using actual integer mass transfers. */
 final class MacMomentumAdvection {
-    private final int nx, ny, nz, count, component, sx, sy, sz;
+    private final int nx, ny, nz;
+    private int count, component, sx, sy, sz;
     private final int[] firstCell, secondCell, mergeTarget;
     private final long[] remaining, dualMass;
     private final double[] velocity, momentum, heat, mergedMass, mergedMomentum;
@@ -12,25 +13,31 @@ final class MacMomentumAdvection {
     private long[] flowAmount = new long[0];
     private int flows;
 
-    MacMomentumAdvection(int nx, int ny, int nz, int component) {
+    MacMomentumAdvection(int nx, int ny, int nz) {
         this.nx = nx;
         this.ny = ny;
         this.nz = nz;
+        int capacity = Math.max((nx + 1) * ny * nz,
+                Math.max(nx * (ny + 1) * nz, nx * ny * (nz + 1)));
+        firstCell = new int[capacity];
+        secondCell = new int[capacity];
+        remaining = new long[capacity];
+        dualMass = new long[capacity];
+        velocity = new double[capacity];
+        momentum = new double[capacity];
+        heat = new double[capacity];
+        mergeTarget = new int[capacity];
+        mergedMass = new double[capacity];
+        mergedMomentum = new double[capacity];
+    }
+
+    /** The three staggered components use one scratch arena and retain only their final momentum. */
+    void beginComponent(int component) {
         this.component = component;
         sx = nx + (component == 0 ? 1 : 0);
         sy = ny + (component == 1 ? 1 : 0);
         sz = nz + (component == 2 ? 1 : 0);
         count = sx * sy * sz;
-        firstCell = new int[count];
-        secondCell = new int[count];
-        remaining = new long[count];
-        dualMass = new long[count];
-        velocity = new double[count];
-        momentum = new double[count];
-        heat = new double[count];
-        mergeTarget = new int[count];
-        mergedMass = new double[count];
-        mergedMomentum = new double[count];
         for (int z = 0; z < sz; z++) for (int y = 0; y < sy; y++) for (int x = 0; x < sx; x++) {
             int face = (z * sy + y) * sx + x;
             firstCell[face] = cell(x, y, z);
@@ -38,6 +45,8 @@ final class MacMomentumAdvection {
                     y - (component == 1 ? 1 : 0), z - (component == 2 ? 1 : 0));
         }
     }
+
+    double[] copyMomentum() { return Arrays.copyOf(momentum, count); }
 
     /** Integer columns are doubled dual masses; a dual interface carries half two primal fluxes. */
     double[] transport(long[] before, long[] after, long[][] primalFlux, float[] inputVelocity) {

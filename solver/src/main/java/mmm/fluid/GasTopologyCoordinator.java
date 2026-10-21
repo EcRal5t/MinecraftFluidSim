@@ -23,9 +23,6 @@ import java.util.List;
 /** Joint inventory and energy remapping on captured positive PLIC microbox supports. */
 final class GasTopologyCoordinator {
 	private final FluidDomain domain;
-	private GasRuntimeGeometry committedFrame;
-	private AirNetwork committedNetwork;
-	private long committedNetworkRevision;
 	private enum VolumeWork { ADIABATIC, MECHANICAL_TRANSPORT, FIXED_ENERGY }
 	private record SourceVolumeWork(int node,SignedDyadic volume,double energy,List<GasInventory> parts,
 	                                int[] targets,SignedDyadic[] controls,double[] partEnergy,boolean mechanicalMode) { }
@@ -92,7 +89,6 @@ final class GasTopologyCoordinator {
 			restored.addOrMergeEdge(edge.firstNode(), edge.secondNode(), edge.area(), 0.65);
 		domain.gasState.network = restored; domain.gasState.frame = frame;
 		domain.gasState.pressureActive = frame.nodeCount() > 0;
-		rememberCommittedTopology();
 	}
 
 	/** A private candidate continues immutable geometry and an independently owned network. */
@@ -100,24 +96,17 @@ final class GasTopologyCoordinator {
 		if (domain.gasState.frame != null || domain.gasState.network.nodeCount() != 0)
 			throw new IllegalStateException("Runtime gas continuation requires an empty target");
 		domain.gasState.network = AirNetwork.fromRuntimeSnapshot(network); domain.gasState.frame = frame;
-		domain.gasState.pressureActive = frame.nodeCount() > 0; rememberCommittedTopology();
+		domain.gasState.pressureActive = frame.nodeCount() > 0;
 	}
 
 	void refresh() {
 		domain.domainFlowFields.ensureInventoryGrid();
 		var frame = domain.gasState.frame;
 		var occupied = currentOccupied();
-		if (frame != null && frame == committedFrame && domain.gasState.network == committedNetwork
-				&& committedNetworkRevision == committedNetwork.revision()
-				&& frame.sealedExterior() == domain.gasState.sealedDomainBoundary
+		if (frame != null && frame.sealedExterior() == domain.gasState.sealedDomainBoundary
 				&& frame.matchesCarrierGeometry(domain, occupied)) return;
 		if(frame==null)commit(plan(GasRuntimeGeometry.capture(domain,occupied,domain.gasState.sealedDomainBoundary),VolumeWork.ADIABATIC,null,null));
 		else commit(planCells(domain.liquidCells,occupied,null,VolumeWork.ADIABATIC,null,null));
-	}
-	private void rememberCommittedTopology() {
-		committedFrame = domain.gasState.frame;
-		committedNetwork = domain.gasState.network;
-		committedNetworkRevision = committedNetwork.revision();
 	}
 	GasTopologyPlan planAfterPhaseBatch(LiquidCellInventory future, PhaseBatch phase) {
 		domain.thermalState.requireGasInventoryEnergyCurrent(phase.gasThermal(), domain.gasState.network);
@@ -429,7 +418,6 @@ final class GasTopologyCoordinator {
 			domain.gasState.network.commitRemapNodes(plan.gasPlan()); domain.gasState.frame = plan.frame();
 			domain.gasState.pressureActive = plan.frame().nodeCount() > 0;
 		}
-		rememberCommittedTopology();
 	}
 	private void requireOwnersCurrent(GasTopologyPlan plan) {
 		if (plan == null) throw new IllegalArgumentException("Gas topology plan is missing");
@@ -448,8 +436,6 @@ final class GasTopologyCoordinator {
 		if (domain.thermalState == null || !domain.thermalState.gasModelBound()) domain.gasState.network.stepEdges(dt);
 		else domain.gasState.network.stepEdges(dt, domain.thermalState.gasThermodynamics(domain.gasState.network),
 				batch -> domain.thermalState.planGasFlow(batch, domain.gasState.network));
-		// Orifice transfers change stock and U on the same nodes, capacities and faces.
-		rememberCommittedTopology();
 	}
 	void synchronizeForPersistence() { refresh(); }
 	record GasTopologyPlan(GasRuntimeGeometry frame, GasRuntimeGeometry source,

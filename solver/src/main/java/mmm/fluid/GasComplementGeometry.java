@@ -71,6 +71,7 @@ final class GasComplementGeometry {
 				|| source.cellVolumeCubicMeters != h3 || sourcePhase == null))
 			throw new IllegalArgumentException("Gas geometry continuation differs in shape or scale");
 		var actualCapacity=preparedCapacity!=null?preparedCapacity:cells==null?null:GasComponentCapacity.prepare(cut,phase,cells,source==null?null:source.actualCapacity);
+		if(source!=null&&actualCapacity!=null&&actualCapacity==source.actualCapacity&&phase==sourcePhase)return source;
 		double[] componentDry=actualCapacity==null?componentDry(cut,phase,count):actualCapacity.dry;
 		boolean[] changed=source==null?null:new boolean[count];
 		if(source!=null){
@@ -265,7 +266,7 @@ final class GasComplementGeometry {
     double pieceNormalizedVolume(int piece){
         var component=componentAtMicro(piece);if(component==null||(component.dryMicroMask()&1<<(piece&7))==0)return 0;
         if(component.compact())return component.normalizedVolume();
-        if(component.occupancy()!=null)return MICRO_VOLUME*(1-component.occupancy().fractions()[piece&7]);
+        if(component.occupancy()!=null)return MICRO_VOLUME*(1-component.occupancy().fraction(piece&7));
         var plane=component.plane();
         return plane.fraction()==0?MICRO_VOLUME:MicroBoxPlaneVolume.dryVolume(piece&7,
                 new GasGeometryOverlap.HalfSpace(plane.nx(),plane.ny(),plane.nz(),plane.offset()));
@@ -273,7 +274,7 @@ final class GasComplementGeometry {
     Piece piece(int id) {
         if(!hasPiece(id))return null;int cell=id/8,micro=id&7;var component=componentAtMicro(id);
         double normalized=pieceNormalizedVolume(id);var p=component.plane();
-        double fraction=component.occupancy()==null?p.fraction():component.occupancy().fractions()[micro];
+        double fraction=component.occupancy()==null?p.fraction():component.occupancy().fraction(micro);
         var plane=component.compact()||fraction==0?null:new GasGeometryOverlap.HalfSpace(p.nx(),p.ny(),p.nz(),p.offset());
         return new Piece(id,cell,micro,normalized*cellVolumeCubicMeters,normalized,plane,component.compact()?null:p.bracket());
     }

@@ -36,7 +36,7 @@ public final class LiquidCellInventoryValidation {
 		var before=cells.snapshot();
 		var routes=LiquidTransportRoutes.builder(1,2);routes.source(cells.stock(key));
 		routes.route(0,1,255,SignedDyadic.of(.25));routes.route(1,2,255,SignedDyadic.of(.75));
-		var plan=cells.planRoutes(routes.build(),null,q->domain.cellMacStage.finishMechanicalHeat(q,Map.of()));
+		var plan=cells.planRoutes(routes.build(),null,domain.cellMacStage::finishMechanicalHeat);
 		require(cells.snapshot().rows().equals(before.rows()),"Dissipation preparation changed source U");
 		require(plan.future().stocksInCell(0).isEmpty()&&plan.mechanicalHeat().equals(SignedDyadic.of(64)),
 				"Source dissipation was lost when its liquid drained completely");
@@ -45,7 +45,7 @@ public final class LiquidCellInventoryValidation {
 				&&cells.stock(new LiquidCellInventory.Key(2,0,255)).internalEnergy()==60
 				&&cells.massUnits()==100&&cells.exactVolume().equals(SignedDyadic.of(1)),
 				"Actual transported mass did not carry source heat into the single successor inventory commit");
-		var exchange=cells.planRoutes(LiquidTransportRoutes.builder(0,0).build(),null,q->Map.of(1,SignedDyadic.of(-4),2,SignedDyadic.of(4)));
+		var exchange=cells.planRoutes(LiquidTransportRoutes.builder(0,0).build(),null,q->{q.addMechanicalHeat(1,-4);q.addMechanicalHeat(2,4);});
 		require(exchange.future().stock(new LiquidCellInventory.Key(1,0,255)).internalEnergy()==16
 				&&exchange.future().stock(new LiquidCellInventory.Key(2,0,255)).internalEnergy()==64
 				&&exchange.mechanicalHeat().signum()==0&&exchange.energyChange().signum()==0,

@@ -27,6 +27,10 @@ final class PressureFaceGraph {
 	private final int[] parent;
 	final boolean[] constrained;
 	private final boolean[] anchored;
+	private int assemblyFace;
+	private double assemblyCoefficient;
+	private final SideConsumer assemblySide = (row, weight, fixed) ->
+			add(assemblyFace, row, assemblyCoefficient * weight, fixed);
 
 	PressureFaceGraph(FluidDomain domain, boolean[] anchored) {
 		this.domain = domain;
@@ -117,7 +121,7 @@ final class PressureFaceGraph {
 			double open = domain.pressureSystem.solidFaces.open(d, localFace[f]);
 			if (!(open > 0)) continue;
 			if(!wallSupported)inverseMass[f] = domain.unitScale.cubicMetersPerNormalizedVolume() / mass;
-			final int face = f; double coefficient = open / domain.config.cellSize();
+			double coefficient = open / domain.config.cellSize();
 			int maskA = domain.geometry.cutCells.mask(a), maskB = domain.geometry.cutCells.mask(b), ports = 0;
 			for (int micro = 0; micro < 8; micro++) if ((micro >>> d & 1) != 0
 					&& (maskA & 1 << micro) == 0 && (maskB & 1 << (micro ^ 1 << d)) == 0) ports++;
@@ -128,8 +132,11 @@ final class PressureFaceGraph {
 				int port=(micro>>>((d+1)%3)&1)+2*(micro>>>((d+2)%3)&1);
 				double portArea = wetPortArea[4*f+port]*(open/(.25*ports));
 				if(wallSupported||!(portArea>0))continue;
-				pressureAtSide(a,b,micro,peer,d,1,(row,weight,fixed)->add(face,row,portArea/domain.config.cellSize()*weight,fixed));
-				pressureAtSide(b,a,peer,micro,d,1,(row,weight,fixed)->add(face,row,-portArea/domain.config.cellSize()*weight,fixed));
+				assemblyFace = f;
+				assemblyCoefficient = portArea / domain.config.cellSize();
+				pressureAtSide(a,b,micro,peer,d,1,assemblySide);
+				assemblyCoefficient = -assemblyCoefficient;
+				pressureAtSide(b,a,peer,micro,d,1,assemblySide);
 			}
 			if(wallSupported)continue;
 			int kept = start[f];

@@ -26,7 +26,6 @@ final class PressureLinearSolver {
 		this.matrix = matrix;
 		this.rhsBuilder = rhsBuilder;this.operator=operator;
 		preconditioner = new PressurePreconditioner();
-		ensureCapacity(cellCount+1);
 	}
 	private void ensureCapacity(int size) {
 		if (pressure.length >= size) return;

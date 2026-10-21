@@ -64,6 +64,17 @@ final class GasRuntimeGeometry {
 				"Prepared gas successor has different liquid support volumes: plannedRevision="+targetCells.revision()+" actualRevision="+future.revision());
 		return new GasRuntimeGeometry(this,future.snapshot());
 	}
+	/** The caller has retained volumes, fixed pores, collisions and exterior mode for this operation. */
+	GasRuntimeGeometry continueInventory(FluidDomain domain,LiquidCellInventory future){
+		return new GasRuntimeGeometry(this,domain,future.snapshot());
+	}
+	private GasRuntimeGeometry(GasRuntimeGeometry retained,FluidDomain domain,LiquidCellInventory.Snapshot future){
+		cellSize=retained.cellSize;sealedExterior=retained.sealedExterior;occupiedSvq=retained.occupiedSvq;
+		sourceOccupiedSvq=retained.occupiedSvq;sourceCollisionMasks=retained.geometry.actualCapacity().masks;
+		sourceCells=domain.liquidCells.snapshot();targetCells=future;sourceOccupancy=domain.phaseOccupancy;
+		occupancy=retained.occupancy;phase=retained.phase;geometry=retained.geometry;
+		topology=retained.topology;capacity=retained.capacity;openedPoreVolumes=null;
+	}
 	/** Identity is a cache shortcut; independently settled plans can carry equal support volumes. */
 	static boolean sameLiquidVolumes(LiquidCellInventory actual,LiquidCellInventory.Snapshot expected){
 		if(actual.hasSameGeometry(expected))return true;

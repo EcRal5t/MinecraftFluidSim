@@ -27,7 +27,6 @@ final class ConservativeLiquidFlux {
 	private int[] preferredRows=new int[32];
 	private int preferredRowCount;
 	private FlipPressurePhaseGeometry phase;
-	private FlipPressurePhaseGeometry reconstructionWorkspace;
 	
 	private LiquidCellInventory input, working;
 	private LiquidCellInventory.Plan prepared;
@@ -63,7 +62,6 @@ final class ConservativeLiquidFlux {
 		nextGasTags = new PhaseSourceColumns(count);
 		macroFlows = new PhaseSourceColumns(2 * physicalFaceCount);
 		macroTotal = new PhaseSourceColumns(2 * physicalFaceCount);
-		phase = new FlipPressurePhaseGeometry(sizeX, sizeY, sizeZ);
 	}
 
 	private int coarseFace(int f, int a, int dimension) {
@@ -116,7 +114,6 @@ final class ConservativeLiquidFlux {
 	private void preparePlan(float dt, long[] occupied, LiquidCellInventory source,LiquidCellInventory.TransportFinalizer finalizer) {
 		inventoryFinalizer=finalizer;preparedMomentum=null;
 		domain.ensurePhaseOccupancy();
-		reconstructionWorkspace = new FlipPressurePhaseGeometry(sizeX, sizeY, sizeZ);
 		input = working = source;
 		prepared = null;
 		allocation = null;
@@ -155,16 +152,15 @@ final class ConservativeLiquidFlux {
 				if (dry > 0) gasTags.add(8 * cell + Integer.numberOfTrailingZeros(support), node, dry);
 			}
 		}
-		double[] endpoint=new double[8*cellCount];
-		SignedDyadic[] finalCapacity = componentCapacities(occupied,endpoint);
+		SignedDyadic[] finalCapacity = componentCapacities(occupied);
 		if (dt > 0) domain.pressureSystem.beginVolumeTransport();
-		advance(dt, endpoint, finalCapacity, dt == 0);
+		advance(dt, finalCapacity, dt == 0,sourceMatches&&Arrays.equals(occupied,oldOccupied));
 		allocation = gasAllocation(working);
 		Arrays.fill(flux,0);for(var transfer:prepared.transfers())flux[transfer.face()]+=(transfer.source().cell()==left[transfer.face()]?1:-1)*transfer.volume().toDouble();
 
 	}
 
-	private SignedDyadic[] componentCapacities(long[] occupied,double[] microPore) {
+	private SignedDyadic[] componentCapacities(long[] occupied) {
         var result=new SignedDyadic[8*cellCount];Arrays.fill(result,SignedDyadic.ZERO);capacityCount=0;
         for(int cell=0;cell<cellCount;cell++){
             int mask=domain.geometry.cutCells.mask(cell);int[] supports=CellRemapMicroTopology.components(mask);
@@ -175,27 +171,26 @@ final class ConservativeLiquidFlux {
                 if(supports.length==1){int slot=8*cell+Integer.numberOfTrailingZeros(supports[0]);result[slot]=SignedDyadic.of(remaining,-24);capacitySlots[capacityCount++]=slot;}
                 else{var parts=CellRemapMicroTopology.capacities(mask,SignedDyadic.of(remaining,-24));for(int j=0;j<supports.length;j++){int slot=8*cell+Integer.numberOfTrailingZeros(supports[j]);result[slot]=parts[j];capacitySlots[capacityCount++]=slot;}}
             }
-            for(int support:supports){
-                double volume=result[8*cell+Integer.numberOfTrailingZeros(support)].toDouble()/Integer.bitCount(support);
-                for(int bits=support;bits!=0;bits&=bits-1)microPore[8*cell+Integer.numberOfTrailingZeros(bits)]=volume;
-            }
         }
         return result;
     }
 
 	/** Advances the complete duration and retains its complete inventory plan. */
-	private void advance(double dt, double[] targetPore, SignedDyadic[] capacities, boolean displacement) {
+	private void advance(double dt, SignedDyadic[] capacities, boolean displacement,boolean samePores) {
 		
 		prepareFacePreferences(dt,displacement);
 		prepared=settle(capacities);
 		working=prepared.future();
 		
-		PhaseOccupancyTransport.reconstruct(domain,working,targetPore,null,reconstructionWorkspace);
-		phase=reconstructionWorkspace;
-		phase.setExactPoreVolumes(domain.geometry.cutCells,targetOccupied);
 		var sourceFrame=domain.gasState.frame;
-		preparedCapacity=GasComponentCapacity.prepare(domain.geometry.cutCells,phase,working.snapshot(),
-				sourceFrame==null?null:sourceFrame.geometry().actualCapacity());
+		preparedCapacity=samePores&&working.hasSameGeometry(sourceFrame.liquidCells())?sourceFrame.geometry().actualCapacity()
+				:GasComponentCapacity.prepare(domain.geometry.cutCells,capacities,working.snapshot(),
+					sourceFrame==null?null:sourceFrame.geometry().actualCapacity());
+		if(sourceFrame!=null&&preparedCapacity==sourceFrame.geometry().actualCapacity())phase=sourceFrame.phase();
+		else{
+			phase=new FlipPressurePhaseGeometry(sizeX,sizeY,sizeZ);
+			phase.rebuildInventory(domain.geometry.cutCells,working.snapshot(),preparedCapacity,sourceFrame==null?null:sourceFrame.phase());
+		}
 		finalDry=preparedCapacity.dry;
 		advanceGasSources(prepared.transfers());
 		var swap=gasTags;gasTags=nextGasTags;nextGasTags=swap;

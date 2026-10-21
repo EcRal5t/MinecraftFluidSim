@@ -80,9 +80,8 @@ final class CellMacStage {
 		if(ma>0)addMechanicalHeatAtCell(a,first);
 		if(mb>0)addMechanicalHeatAtCell(b,joules-first);
 	}
-	java.util.Map<Integer,SignedDyadic> finishMechanicalHeat(
-			LiquidCellInventory.TransportQuantities quantities, java.util.Map<Integer,SignedDyadic> mixingHeat) {
-		if(!hasMechanicalHeat)return mixingHeat;
+	void finishMechanicalHeat(LiquidCellInventory.TransportQuantities quantities) {
+		if(!hasMechanicalHeat)return;
 		Arrays.fill(transportedMechanicalHeat,0);Arrays.fill(outgoingHeatMass,0);
 		System.arraycopy(sourceMechanicalHeat,0,remainingMechanicalHeat,0,sourceMechanicalHeat.length);
 		for(var transfer:quantities.transfers()) {
@@ -101,10 +100,8 @@ final class CellMacStage {
 		for(int cell=0;cell<transportedMechanicalHeat.length;cell++)if(quantities.afterMass()[cell]==0&&transportedMechanicalHeat[cell]!=0){
 			transportedMechanicalHeat[lastHeatTarget[cell]]+=transportedMechanicalHeat[cell];transportedMechanicalHeat[cell]=0;
 		}
-		var result=new java.util.TreeMap<Integer,SignedDyadic>(mixingHeat);
 		for(int cell=0;cell<transportedMechanicalHeat.length;cell++)if(transportedMechanicalHeat[cell]!=0)
-			result.merge(cell,SignedDyadic.of(transportedMechanicalHeat[cell]),SignedDyadic::add);
-		return result;
+			quantities.addMechanicalHeat(cell,transportedMechanicalHeat[cell]);
 	}
 
 	void rebuildInventory() {
@@ -387,7 +384,7 @@ final class CellMacStage {
 		long[] occupied=domain.granularCoupling==null?new long[domain.cellCount]:domain.granularState!=null&&domain.granularState.parcels.count()>0?domain.granularNextCoupling.copySolidSvq():domain.granularCoupling.copySolidSvq();
 		liquidTransport.prepare(dt,occupied,quantities->{
 			liquidTransport.preparedMomentum=prepareMomentumTransport(liquidTransport,quantities);
-			return finishMechanicalHeat(quantities,liquidTransport.preparedMomentum.heatByCell());
+			finishMechanicalHeat(quantities);
 		});
 		return prepareLiquid(liquidTransport,domain.liquidCells,occupied);
 	}

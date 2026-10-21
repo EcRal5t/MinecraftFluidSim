@@ -76,6 +76,19 @@ final class GasVolumeAllocation {
                     +futureInventory.revision()+" actualInventoryRevision="+future.revision());
     }
     static GasVolumeAllocation prepare(FluidDomain domain,LiquidCellInventory future,long[] occupied,byte[] masks){
+        PhaseOccupancyTransport.ensure(domain);
+        var retained=domain.gasState.frame;
+        if(retained!=null&&retained.sealedExterior()==domain.gasState.sealedDomainBoundary
+                &&future.hasSameGeometry(retained.liquidCells())&&retained.matchesCarrierGeometry(domain,occupied)
+                &&(masks==null||retained.geometry().matchesCollisionMasks(masks))){
+            // Unchanged actual space has one exact identity source per finite chamber.
+            // N/U settlement needs fresh transaction endpoints, not another geometric remap.
+            var frame=retained.continueInventory(domain,future);
+            var sources=new PhaseSourceColumns(retained.nodeCount()+2);
+            for(int node=1;node<=retained.nodeCount();node++)
+                sources.appendUnique(node+1,node,retained.capacity().normalizedVolume(node).toDouble());
+            return new GasVolumeAllocation(domain,future,frame,sources,null);
+        }
         return PhaseOccupancyTransport.prepareEdit(domain,future,occupied,masks);
     }
 }

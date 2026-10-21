@@ -50,7 +50,7 @@ final class CondensedPhaseChangeStage {
 		if(maximumOperations<0||maximumOperations>ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) throw new IllegalArgumentException("Invalid phase operation budget");
 		if(maximumOperations==0) return new FluidDomain.ThermalPhaseStats(0,0,0,0);
 		thermal.preparePhaseScan(domain.domainCapabilities.thermalMarkerContext());
-		var store=domain.liquidCells;var function=new ThermalStateFunction(thermal.registry());
+		var store=domain.liquidCells;var function=thermal.stateFunction();
 		var selectedCells=new TreeSet<Integer>();
 		var originalGroups=thermal.coherentPhases().snapshot();
 		var coherentByCell=new HashMap<Integer,List<CoherentPhaseStore.Group>>();
@@ -125,7 +125,7 @@ final class CondensedPhaseChangeStage {
 			operations+=Math.toIntExact(p.batches);signed+=p.freezing?p.batches:-p.batches;
 			if(p.freezing) frozen++;else melted++;
 		}
-		var provisional=store.planEdits(edits(futureCells,null));
+		var provisional=store.planEdits(quantityEdits(futureCells));
 		var momentum=domain.cellMacStage.prepareExternalMomentum(provisional);
 		var heat=new TreeMap<Integer,SignedDyadic>(momentum.heatByCell());
 		long removed=0;for(var p:selected.values()) removed+=p.removedMass;
@@ -149,7 +149,12 @@ final class CondensedPhaseChangeStage {
 			trials.add(thermal.trialCondensedCellEnergyWithHeat(captured[cell],inventory,heat.getOrDefault(cell,SignedDyadic.ZERO)));
 		}
 		var energy=thermal.planCondensedBatchEnergy(trials,counts,mechanicalHeat,domain.domainCapabilities.thermalMarkerContext(),groups);
-		var liquid=store.planEdits(edits(futureCells,energy));
+		var finalEnergies=new TreeMap<LiquidCellInventory.Key,Double>();
+		for(var entry:futureCells.entrySet()) {
+			double[] values=energy.liquidEnergies(entry.getKey());int ordinal=0;
+			for(var stock:entry.getValue()) finalEnergies.put(stock.key(),stock.massUnits()==0?0:values[ordinal++]);
+		}
+		var liquid=provisional.withInternalEnergiesByStock(finalEnergies);
 		var gas=planCondensedGeometry(liquid.future(),groups);
 		liquid.requireCurrent();thermal.requirePhaseBatchEnergyCurrent(energy);
 		if(gas!=null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gas);
@@ -265,13 +270,12 @@ final class CondensedPhaseChangeStage {
 		rows.put(liquidKey,new LiquidCellInventory.Stock(liquidKey,volume,mass,mixture,energy(function,handle,Mass.kilograms(mass),mixture,p.equilibrium),false));
 		return List.copyOf(rows.values());
 	}
-	private List<LiquidCellInventory.Edit> edits(Map<Integer,List<LiquidCellInventory.Stock>> future,ThermalDomainState.PhaseBatchEnergyPlan energy) {
+	private List<LiquidCellInventory.Edit> quantityEdits(Map<Integer,List<LiquidCellInventory.Stock>> future) {
 		var edits=new ArrayList<LiquidCellInventory.Edit>();
 		for(var entry:future.entrySet()) {
-			var keys=new HashSet<LiquidCellInventory.Key>();double[] values=energy==null?null:energy.liquidEnergies(entry.getKey());int ordinal=0;
+			var keys=new HashSet<LiquidCellInventory.Key>();
 			for(var stock:entry.getValue()) {
-				keys.add(stock.key());double u=stock.massUnits()==0?0:values==null?stock.internalEnergy():values[ordinal++];
-				edits.add(new LiquidCellInventory.Edit(stock.key(),new LiquidCellInventory.Stock(stock.key(),stock.volume(),stock.massUnits(),stock.mixture(),u,stock.indicator())));
+				keys.add(stock.key());edits.add(new LiquidCellInventory.Edit(stock.key(),stock));
 			}
 			for(var before:domain.liquidCells.stocksInCell(entry.getKey()))if(!keys.contains(before.key()))edits.add(new LiquidCellInventory.Edit(before.key(),null));
 		}

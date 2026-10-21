@@ -16,7 +16,7 @@ final class CellMomentumTransport {
     private final long[][] massFlux;
     private final double[] heat;
     private final int[] anchors;
-    private final MacMomentumAdvection[] components = new MacMomentumAdvection[3];
+    private final MacMomentumAdvection component;
     private long[] before, after;
     private double[] fallbackVolume;
 
@@ -26,9 +26,7 @@ final class CellMomentumTransport {
                 new long[domain.mac.velocityY.length], new long[domain.mac.velocityZ.length]};
         heat = new double[domain.cellCount];
         anchors = new int[domain.cellCount];
-        for (int axis = 0; axis < 3; axis++) {
-            components[axis] = new MacMomentumAdvection(domain.sizeX, domain.sizeY, domain.sizeZ, axis);
-        }
+        component = new MacMomentumAdvection(domain.sizeX, domain.sizeY, domain.sizeZ);
     }
 
     Prepared prepare(CellMacStage.PreparedLiquid liquid) {
@@ -46,16 +44,17 @@ final class CellMomentumTransport {
         for (int cell = 0; cell < fallbackVolume.length; cell++) {
             fallbackVolume[cell] = liquid.inventory().future().exactCellVolume(cell).toDouble();
         }
-        return prepare(liquid.volumeFlux(), liquid.inventory().transfers(), before, after, fallbackVolume, initial);
+        return prepare(liquid.volumeFlux(), liquid.inventory().transfers(), before, after, fallbackVolume, initial, null);
     }
 
     Prepared prepare(ConservativeLiquidFlux flux, LiquidCellInventory.TransportQuantities quantities) {
         return prepare(flux, quantities.transfers(), quantities.beforeMass(), quantities.afterMass(),
-                quantities.afterVolume(), new float[][]{domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ});
+                quantities.afterVolume(), new float[][]{domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ}, quantities);
     }
 
     private Prepared prepare(ConservativeLiquidFlux flux, List<LiquidCellInventory.Transfer> transfers,
-                             long[] beforeMass, long[] afterMass, double[] volume, float[][] initial) {
+                             long[] beforeMass, long[] afterMass, double[] volume, float[][] initial,
+                             LiquidCellInventory.TransportQuantities quantities) {
         Arrays.fill(heat, 0);
         double[][] result = new double[3][];
         for (var column : massFlux) Arrays.fill(column, 0);
@@ -69,22 +68,28 @@ final class CellMomentumTransport {
             massFlux[axis][index] += transfer.massUnits() * (transfer.source().cell() == flux.left[face] ? 1 : -1);
         }
         for (int axis = 0; axis < 3; axis++) {
-            var component = components[axis];
+            component.beginComponent(axis);
             boolean[] constrained = domain.cellMacStage.constrainedNormalFaces(axis);
-            result[axis] = component.transport(beforeMass, afterMass, massFlux, initial[axis]);
+            component.transport(beforeMass, afterMass, massFlux, initial[axis]);
             component.prepareMergeAnchors(afterMass, anchors, domain.pressureSystem.solidFaces,
                     domain.geometry.cutCells, constrained);
             component.mixUnresolved(volume, anchors, domain.geometry.cutCells.openFaceField(axis),
                     domain.pressureSystem.phaseGeometry(), domain.geometry.cutCells, constrained);
             component.addHeatToCells(afterMass, heat);
+            result[axis] = component.copyMomentum();
         }
         var walls = domain.cellMacStage.stopWallMomentum(result, afterMass, heat, null);
-        var exactHeat = new TreeMap<Integer, SignedDyadic>();
-        for (int cell = 0; cell < heat.length; cell++) {
-            if (heat[cell] > 0) exactHeat.put(cell, SignedDyadic.of(heat[cell]));
+        Map<Integer,SignedDyadic> exactHeat;
+        if(quantities!=null){
+            for(int cell=0;cell<heat.length;cell++)if(heat[cell]>0)quantities.addMechanicalHeat(cell,heat[cell]);
+            exactHeat=Map.of();
+        }else{
+            var localHeat=new TreeMap<Integer,SignedDyadic>();
+            for(int cell=0;cell<heat.length;cell++)if(heat[cell]>0)localHeat.put(cell,SignedDyadic.of(heat[cell]));
+            exactHeat=Map.copyOf(localHeat);
         }
-        return new Prepared(new MacMomentumState(domain.sizeX, domain.sizeY, domain.sizeZ,
-                result[0], result[1], result[2]), Map.copyOf(exactHeat), walls);
+        return new Prepared(MacMomentumState.takeOwned(domain.sizeX, domain.sizeY, domain.sizeZ,
+                result[0], result[1], result[2]), exactHeat, walls);
     }
 
     private void cellMass(LiquidCellInventory inventory, long[] result) {
