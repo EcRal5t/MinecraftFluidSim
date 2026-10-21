@@ -3,6 +3,7 @@ package mmm.fluid;
 import mmm.inventory.LiquidCellInventory;
 import mmm.units.SignedDyadic;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -14,6 +15,7 @@ final class CellMomentumTransport {
 
     private final FluidDomain domain;
     private final long[][] massFlux;
+    private final BitSet[] massFaces = {new BitSet(), new BitSet(), new BitSet()};
     private final double[] heat;
     private final int[] anchors;
     private final MacMomentumAdvection component;
@@ -57,7 +59,11 @@ final class CellMomentumTransport {
                              LiquidCellInventory.TransportQuantities quantities) {
         Arrays.fill(heat, 0);
         double[][] result = new double[3][];
-        for (var column : massFlux) Arrays.fill(column, 0);
+        for (int axis = 0; axis < 3; axis++) {
+            for (int face = massFaces[axis].nextSetBit(0); face >= 0; face = massFaces[axis].nextSetBit(face + 1))
+                massFlux[axis][face] = 0;
+            massFaces[axis].clear();
+        }
         for (var transfer : transfers) {
             if (transfer.massUnits() <= 0) continue;
             int face = transfer.face(), axis = flux.axis[face], right = flux.right[face];
@@ -66,11 +72,12 @@ final class CellMomentumTransport {
             int index = (z * (domain.sizeY + (axis == 1 ? 1 : 0)) + y)
                     * (domain.sizeX + (axis == 0 ? 1 : 0)) + x;
             massFlux[axis][index] += transfer.massUnits() * (transfer.source().cell() == flux.left[face] ? 1 : -1);
+            massFaces[axis].set(index);
         }
         for (int axis = 0; axis < 3; axis++) {
             component.beginComponent(axis);
             boolean[] constrained = domain.cellMacStage.constrainedNormalFaces(axis);
-            component.transport(beforeMass, afterMass, massFlux, initial[axis]);
+            component.transport(beforeMass, afterMass, massFlux, massFaces, initial[axis]);
             component.prepareMergeAnchors(afterMass, anchors, domain.pressureSystem.solidFaces,
                     domain.geometry.cutCells, constrained);
             component.mixUnresolved(volume, anchors, domain.geometry.cutCells.openFaceField(axis),

@@ -228,7 +228,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 `MovingBodyCouplingValidation` 直接核对实体外功与实际 MAC 动能、库存内能增量，固定墙反冲计入同一冲量等式。
 
 液体持久动量位于 MAC 格面，格面速度从同一双控制体积的实际质量与动量派生。
-`CellMomentumTransport` 把本次完整输运的实际整数质量通量提升到格面，`MacMomentumAdvection` 采用正权迎风混合。
+`CellMomentumTransport` 从已接受的整数质量通量直接生成相邻格面的输运，`MacMomentumAdvection` 对实际承载质量的双控制体积采用正权迎风混合。
 新湿面继承供体速度，局部混合损失转入内能，随质量搬运后与最终库存一次提交。
 固定开口与联合容量约束液体运动；颗粒代表球通过共同接触响应处理法向、恢复和摩擦。
 
@@ -349,7 +349,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
     - [LiquidTransportRoutes](../../model/src/main/java/mmm/inventory/LiquidTransportRoutes.java)：共同容量投影交给库存的扁平路线列，供体确定材料身份，目标库存首次出现时建立键
     - [PhaseQuantitySettlement](../../solver/src/main/java/mmm/fluid/PhaseQuantitySettlement.java)：共同分量的双精度容量投影、同图精确端点结算与材料份额分配
     - [FluidThermalBinding](../../solver/src/main/java/mmm/fluid/FluidThermalBinding.java)：`liquidEnergyPartitioner` 按实际参考能与来源显热分份
-    - [CellMomentumTransport](../../solver/src/main/java/mmm/fluid/CellMomentumTransport.java)：三轴共用 `MacMomentumAdvection` 工作区，按同一实际整数质量流输运动量并结算局部混合热，每轴完成后保存独立的最终动量。
+    - [CellMomentumTransport](../../solver/src/main/java/mmm/fluid/CellMomentumTransport.java)：三轴共用 `MacMomentumAdvection` 工作区，从实际质量通量生成双控制体积输运，按承载质量的格面结算动量与局部混合热，每轴保存独立的最终动量。
     - [CellCarrierInventoryView](../../solver/src/main/java/mmm/fluid/CellCarrierInventoryView.java)
   - 验证入口 / 参考：`LiquidVolumeTransportValidation`、`free-surface,thermal`；[单元输运](fluid-solver.md#几何与单元输运)
 

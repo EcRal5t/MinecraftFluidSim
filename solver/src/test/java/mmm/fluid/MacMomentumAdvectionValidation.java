@@ -21,7 +21,7 @@ public final class MacMomentumAdvectionValidation {
 		before[0]=before[1]=mmm.units.Mass.fromKilograms(.5);after[0]=mmm.units.Mass.fromKilograms(.625);after[1]=mmm.units.Mass.fromKilograms(.375);
 		long[][] flux={new long[12],new long[12],new long[12]};flux[0][d.domainFlowFields.xFaceIndex(1,0,0)]=-mmm.units.Mass.fromKilograms(.125);
 		float[] velocity=new float[12];velocity[d.domainFlowFields.xFaceIndex(1,0,0)]=-2;
-		var donor=new MacMomentumAdvection(2,2,2);donor.beginComponent(0);double[] x=donor.transport(before,after,flux,velocity);
+		var donor=new MacMomentumAdvection(2,2,2);donor.beginComponent(0);double[] x=donor.transport(before,after,flux,activeFaces(flux),velocity);
 		if(!(x[d.domainFlowFields.xFaceIndex(0,0,0)]<0))throw new AssertionError("Incoming donor flow did not exercise the closed wall momentum path");
 		double[] heat=new double[8];donor.addHeatToCells(after,heat);double[][] p={x,new double[12],new double[12]};
 		var wall=d.cellMacStage.stopWallMomentum(p,after,heat,null);
@@ -46,7 +46,7 @@ public final class MacMomentumAdvectionValidation {
 			float[] velocity = new float[12];
 			for (int i = 0; i < velocity.length; i++) velocity[i] = m0[i] == 0 ? 0 : uniform ? 1 : (float) Math.sin(i + axis);
 			var transport=new MacMomentumAdvection(2,2,2);transport.beginComponent(axis);
-			double[] momentum = transport.transport(source, future, massFlux, velocity);
+			double[] momentum = transport.transport(source, future, massFlux, activeFaces(massFlux), velocity);
 			double[] heat=new double[before.length];transport.addHeatToCells(future,heat);double dissipated=0;for(double value:heat)dissipated+=value;
 			double p0 = 0, p1 = 0, k0 = 0, k1 = 0;
 			for (int i = 0; i < momentum.length; i++) {
@@ -61,6 +61,12 @@ public final class MacMomentumAdvectionValidation {
 			if (Math.abs(p1 - p0) > 1e-9 * Math.max(1, Math.abs(p0))) throw new AssertionError("Momentum changed: " + (p1 - p0));
 			if (k1>k0+1e-9*Math.max(1,k0)||Math.abs(k1+dissipated-k0)>1e-9*Math.max(1,k0))throw new AssertionError("Momentum mixing heat differs from its kinetic loss");
 		}
+	}
+	private static java.util.BitSet[] activeFaces(long[][] flux) {
+		var faces = new java.util.BitSet[]{new java.util.BitSet(), new java.util.BitSet(), new java.util.BitSet()};
+		for (int axis = 0; axis < 3; axis++) for (int face = 0; face < flux[axis].length; face++)
+			if (flux[axis][face] != 0) faces[axis].set(face);
+		return faces;
 	}
 	private static double[] masses(double[] cell, int axis) {
 		int nx = 2 + (axis == 0 ? 1 : 0), ny = 2 + (axis == 1 ? 1 : 0), nz = 2 + (axis == 2 ? 1 : 0);
