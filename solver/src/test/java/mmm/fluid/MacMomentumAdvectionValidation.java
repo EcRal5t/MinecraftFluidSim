@@ -20,7 +20,7 @@ public final class MacMomentumAdvectionValidation {
 		long[] before=new long[8],after=new long[8];
 		before[0]=before[1]=mmm.units.Mass.fromKilograms(.5);after[0]=mmm.units.Mass.fromKilograms(.625);after[1]=mmm.units.Mass.fromKilograms(.375);
 		long[][] flux={new long[12],new long[12],new long[12]};flux[0][d.domainFlowFields.xFaceIndex(1,0,0)]=-mmm.units.Mass.fromKilograms(.125);
-		double[] velocity=new double[12];velocity[d.domainFlowFields.xFaceIndex(1,0,0)]=-2;
+		float[] velocity=new float[12];velocity[d.domainFlowFields.xFaceIndex(1,0,0)]=-2;
 		var donor=new MacMomentumAdvection(2,2,2,0);double[] x=donor.transport(before,after,flux,velocity);
 		if(!(x[d.domainFlowFields.xFaceIndex(0,0,0)]<0))throw new AssertionError("Incoming donor flow did not exercise the closed wall momentum path");
 		double[] heat=new double[8];donor.addHeatToCells(after,heat);double[][] p={x,new double[12],new double[12]};
@@ -43,7 +43,7 @@ public final class MacMomentumAdvectionValidation {
 		for(int a=0;a<flux.length;a++){massFlux[a]=new long[flux[a].length];for(int i=0;i<flux[a].length;i++)massFlux[a][i]=mmm.units.Mass.fromKilograms(flux[a][i]);}
 		for (int axis = 0; axis < 3; axis++) {
 			double[] m0 = masses(before, axis), m1 = masses(after, axis);
-			double[] velocity = new double[12];
+			float[] velocity = new float[12];
 			for (int i = 0; i < velocity.length; i++) velocity[i] = m0[i] == 0 ? 0 : uniform ? 1 : (float) Math.sin(i + axis);
 			var transport=new MacMomentumAdvection(2,2,2,axis);
 			double[] momentum = transport.transport(source, future, massFlux, velocity);

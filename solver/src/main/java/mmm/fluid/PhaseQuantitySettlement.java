@@ -92,7 +92,7 @@ final class PhaseQuantitySettlement {
         for(int i=0;i<touchedCount;i++){int slot=touched[i];adjust|=load[slot].compareTo(upper[slot])>0;}
         for(int g=0;g<groups;g++)adjust|=groupLoad[g].compareTo(groupUpper[g])>0;
         if(adjust){
-            var repair=new ResidualRepair(raw,amount,load,upper,receiverGroup,groupLoad,groupUpper,alternatives);
+            var repair=new ResidualRepair(raw,amount,load,upper,receiverGroup,groupLoad,groupUpper,touched,touchedCount,alternatives);
             repair.solve();amount=new SignedDyadic[raw.size];
             for(int r=0;r<raw.size;r++)amount[r]=repair.amount(r);
         }
@@ -147,63 +147,72 @@ final class PhaseQuantitySettlement {
     /** One residual graph handles inventory quantities at every volume scale. */
     private static final class ResidualRepair {
         private final RouteBuffer raw;
-        private final SignedDyadic[] upper;
+        private final SignedDyadic[] upper,initialAmount,load;
         private final int[] receiverGroup,receiverVertex;
         private final IntConsumer alternatives;
-        private final boolean[] expanded;
+        private final boolean[] expanded,expandedReceiver,expandedAggregate;
+        private final int[] firstIncoming,nextIncoming,firstReceiver,nextReceiver;
         private final int firstSource=2,firstGroup,pool;
         private int vertices,edges;
-        private int[] head,level,cursor,queue,pathVertex,pathEdge,receiverSlots;
-        private SignedDyadic[] balance;
+        private int[] head,level,cursor,queue,pathVertex,pathEdge,receiverSlot;
         private int[] to=new int[64],next=new int[64],routeEdge;
         private SignedDyadic[] remaining=new SignedDyadic[64];
         private int receivers;
-        private boolean initialized;
 
         ResidualRepair(RouteBuffer raw,SignedDyadic[] amount,SignedDyadic[] load,SignedDyadic[] upper,
-                int[] receiverGroup,SignedDyadic[] groupLoad,SignedDyadic[] groupHigh,IntConsumer alternatives){
-            this.raw=raw;this.upper=upper;this.receiverGroup=receiverGroup;this.alternatives=alternatives;
+                int[] receiverGroup,SignedDyadic[] groupLoad,SignedDyadic[] groupHigh,
+                int[] touched,int touchedCount,IntConsumer alternatives){
+            this.raw=raw;this.upper=upper;this.receiverGroup=receiverGroup;this.alternatives=alternatives;initialAmount=amount;this.load=load;
             expanded=new boolean[raw.sources];receiverVertex=new int[upper.length];
             int groups=groupHigh==null?0:groupHigh.length;
+            expandedReceiver=new boolean[upper.length];expandedAggregate=new boolean[groups+1];
+            firstIncoming=new int[upper.length];Arrays.fill(firstIncoming,-1);nextIncoming=new int[amount.length];
+            firstReceiver=new int[groups+1];Arrays.fill(firstReceiver,-1);nextReceiver=new int[upper.length];Arrays.fill(nextReceiver,-2);
             firstGroup=firstSource+raw.sources;pool=firstGroup+groups;vertices=pool+1;
             int capacity=Math.max(16,vertices+2*raw.sources);
             head=new int[capacity];Arrays.fill(head,-1);level=new int[capacity];cursor=new int[capacity];queue=new int[capacity];
-            pathVertex=new int[capacity];pathEdge=new int[capacity];balance=new SignedDyadic[capacity];Arrays.fill(balance,SignedDyadic.ZERO);
-            receiverSlots=new int[Math.max(16,2*raw.sources)];routeEdge=new int[Math.max(32,raw.size)];
-            // Each donor partition already closes exactly. Its balance is zero;
-            // receiver loads are the existing flow, not a second inventory sum.
-            for(int r=0;r<amount.length;r++){
-                routeEdge[r]=edges;
-                pair(firstSource+raw.source[r],receiver(raw.target[r]),null,amount[r]);
+            pathVertex=new int[capacity];pathEdge=new int[capacity];receiverSlot=new int[capacity];Arrays.fill(receiverSlot,-1);
+            routeEdge=new int[Math.max(32,raw.size)];Arrays.fill(routeEdge,-1);
+            // Index existing assignments without building their residual edges.
+            // A reverse donor edge is needed only when its receiver is visited.
+            for(int r=0;r<amount.length;r++)if(amount[r].signum()>0){
+                int slot=raw.target[r];nextIncoming[r]=firstIncoming[slot];firstIncoming[slot]=r;
             }
-            for(int i=0;i<receivers;i++){int slot=receiverSlots[i];balance[receiverVertex[slot]]=value(load[slot]);}
-            for(int g=0;g<groups;g++)add(firstGroup+g,pool,groupHigh[g],min(groupLoad[g],groupHigh[g]));
-            for(int i=0;i<receivers;i++){int slot=receiverSlots[i];capacityEdge(slot,min(value(load[slot]),upper[slot]));}
-            var unbalanced=SignedDyadic.ZERO;
-            for(int v=firstGroup;v<vertices;v++)if(v!=pool&&balance[v].signum()!=0)unbalanced=unbalanced.add(balance[v]);
-            balance[pool]=unbalanced.negate();
-            initialized=true;
-            for(int v=2;v<vertices;v++){
-                if(balance[v].signum()>0)pair(0,v,balance[v],SignedDyadic.ZERO);
-                else if(balance[v].signum()<0)pair(v,1,balance[v].negate(),SignedDyadic.ZERO);
+            var receiverExcess=new SignedDyadic[groups];Arrays.fill(receiverExcess,SignedDyadic.ZERO);
+            var poolNeed=SignedDyadic.ZERO;
+            for(int i=0;i<touchedCount;i++){
+                int slot=touched[i];listReceiver(slot);
+                if(load[slot].compareTo(upper[slot])<=0)continue;
+                var excess=load[slot].subtract(upper[slot]);pair(0,receiver(slot),excess,SignedDyadic.ZERO);
+                int group=receiverGroup==null?-1:receiverGroup[slot];
+                if(group<0)poolNeed=poolNeed.add(excess);else receiverExcess[group]=receiverExcess[group].add(excess);
             }
+            for(int g=0;g<groups;g++){
+                var excess=groupLoad[g].compareTo(groupHigh[g])>0?groupLoad[g].subtract(groupHigh[g]):SignedDyadic.ZERO;
+                var base=excess.signum()>0?groupHigh[g]:groupLoad[g];
+                pair(firstGroup+g,pool,groupHigh[g].subtract(base),base);
+                var balance=excess.subtract(receiverExcess[g]);
+                if(balance.signum()>0)pair(0,firstGroup+g,balance,SignedDyadic.ZERO);
+                else if(balance.signum()<0)pair(firstGroup+g,1,balance.negate(),SignedDyadic.ZERO);
+                poolNeed=poolNeed.add(excess);
+            }
+            if(poolNeed.signum()>0)pair(pool,1,poolNeed,SignedDyadic.ZERO);
+        }
+        private void listReceiver(int slot){
+            if(nextReceiver[slot]!=-2)return;
+            int group=receiverGroup==null?-1:receiverGroup[slot],aggregate=group<0?firstReceiver.length-1:group;
+            nextReceiver[slot]=firstReceiver[aggregate];firstReceiver[aggregate]=slot;
         }
         private int receiver(int slot){
             if(receiverVertex[slot]!=0)return receiverVertex[slot];
             if(vertices==head.length){
-                int old=head.length,n=2*old;head=Arrays.copyOf(head,n);Arrays.fill(head,old,n,-1);level=Arrays.copyOf(level,n);cursor=Arrays.copyOf(cursor,n);queue=Arrays.copyOf(queue,n);pathVertex=Arrays.copyOf(pathVertex,n);pathEdge=Arrays.copyOf(pathEdge,n);balance=Arrays.copyOf(balance,n);Arrays.fill(balance,old,n,SignedDyadic.ZERO);
+                int old=head.length,n=2*old;head=Arrays.copyOf(head,n);Arrays.fill(head,old,n,-1);level=Arrays.copyOf(level,n);cursor=Arrays.copyOf(cursor,n);queue=Arrays.copyOf(queue,n);pathVertex=Arrays.copyOf(pathVertex,n);pathEdge=Arrays.copyOf(pathEdge,n);receiverSlot=Arrays.copyOf(receiverSlot,n);Arrays.fill(receiverSlot,old,n,-1);
             }
-            int vertex=vertices++;receiverVertex[slot]=vertex;level[vertex]=-1;
-            if(receivers==receiverSlots.length)receiverSlots=Arrays.copyOf(receiverSlots,2*receivers);
-            receiverSlots[receivers++]=slot;
-            if(initialized)capacityEdge(slot,SignedDyadic.ZERO);
+            int vertex=vertices++;receiverVertex[slot]=vertex;receiverSlot[vertex]=slot;level[vertex]=-1;receivers++;
+            listReceiver(slot);
+            int group=receiverGroup==null?-1:receiverGroup[slot];var base=min(value(load[slot]),upper[slot]);
+            pair(vertex,group<0?pool:firstGroup+group,upper[slot].subtract(base),base);
             return vertex;
-        }
-        private void capacityEdge(int slot,SignedDyadic initial){
-            int group=receiverGroup==null?-1:receiverGroup[slot];add(receiverVertex[slot],group<0?pool:firstGroup+group,upper[slot],initial);
-        }
-        private int add(int from,int target,SignedDyadic upper,SignedDyadic initial){
-            int edge=edges;pair(from,target,upper.subtract(initial),initial);balance[from]=balance[from].subtract(initial);balance[target]=balance[target].add(initial);return edge;
         }
         private void pair(int from,int target,SignedDyadic forward,SignedDyadic reverse){
             if(edges+2>to.length){int n=2*to.length;to=Arrays.copyOf(to,n);next=Arrays.copyOf(next,n);remaining=Arrays.copyOf(remaining,n);}
@@ -211,13 +220,27 @@ final class PhaseQuantitySettlement {
             to[edges]=from;next[edges]=head[target];remaining[edges]=reverse;head[target]=edges++;
         }
         private void expand(int vertex){
-            int source=vertex-firstSource;if(source<0||source>=raw.sources||expanded[source])return;
-            expanded[source]=true;int first=raw.size;alternatives.accept(source);
-            if(routeEdge.length<raw.size)routeEdge=Arrays.copyOf(routeEdge,Math.max(raw.size,2*routeEdge.length));
-            for(int r=first;r<raw.size;r++){
-                int target=receiver(raw.target[r]);routeEdge[r]=edges;
-                pair(vertex,target,null,SignedDyadic.ZERO);
+            int source=vertex-firstSource;
+            if(source>=0&&source<raw.sources){
+                if(expanded[source])return;expanded[source]=true;alternatives.accept(source);
+                if(routeEdge.length<raw.size){int old=routeEdge.length;routeEdge=Arrays.copyOf(routeEdge,Math.max(raw.size,2*old));Arrays.fill(routeEdge,old,routeEdge.length,-1);}
+                for(int r=raw.head[source];r>=0;r=raw.next[r])route(r);
+                return;
             }
+            int slot=receiverSlot[vertex];
+            if(slot>=0){
+                if(expandedReceiver[slot])return;expandedReceiver[slot]=true;
+                for(int r=firstIncoming[slot];r>=0;r=nextIncoming[r])route(r);
+                return;
+            }
+            if(vertex<firstGroup||vertex>pool)return;
+            int aggregate=vertex-firstGroup;if(expandedAggregate[aggregate])return;expandedAggregate[aggregate]=true;
+            for(int r=firstReceiver[aggregate];r>=0;r=nextReceiver[r])receiver(r);
+        }
+        private void route(int r){
+            if(routeEdge[r]>=0)return;
+            int target=receiver(raw.target[r]);routeEdge[r]=edges;
+            pair(firstSource+raw.source[r],target,null,r<initialAmount.length?initialAmount[r]:SignedDyadic.ZERO);
         }
         void solve(){
             while(levels()){
@@ -235,10 +258,7 @@ final class PhaseQuantitySettlement {
                 var key=raw.key(source);
                 return "sourceCell="+key.cell()+", supportMask="+key.supportMask();
             }
-            for(int i=0;i<receivers;i++) {
-                int slot=receiverSlots[i];
-                if(receiverVertex[slot]==vertex)return "receiverCell="+(slot/8)+", component="+(slot%8);
-            }
+            int slot=receiverSlot[vertex];if(slot>=0)return "receiverCell="+(slot/8)+", component="+(slot%8);
             return vertex>=firstGroup&&vertex<pool?"gasCapacityGroup="+(vertex-firstGroup):"capacityPool";
         }
         private boolean levels(){
@@ -247,7 +267,12 @@ final class PhaseQuantitySettlement {
             // predecessor leaves the other independent congestion repairs for
             // another full search; exploring beyond it opens irrelevant pores.
             while(first<last&&(level[1]<0||level[queue[first]]<level[1])){
-                int vertex=queue[first++];expand(vertex);
+                int vertex=queue[first++];boolean endpoint=false;
+                // Reaching available capacity closes a shortest path. Its
+                // unrelated reverse assignments cannot improve this layer.
+                for(int e=head[vertex];e>=0;e=next[e])if(to[e]==1&&positive(remaining[e])){level[1]=level[vertex]+1;endpoint=true;break;}
+                if(endpoint)continue;
+                expand(vertex);
                 for(int e=head[vertex];e>=0;e=next[e])if(positive(remaining[e])&&level[to[e]]<0){
                     int target=to[e];level[target]=level[vertex]+1;
                     if(target!=1)queue[last++]=target;
@@ -282,6 +307,6 @@ final class PhaseQuantitySettlement {
         // Its fixed total and nonnegative reverse flows already bound every route;
         // null denotes the redundant unbounded forward reassignment capacity.
         private static boolean positive(SignedDyadic capacity){return capacity==null||capacity.signum()>0;}
-        SignedDyadic amount(int route){return remaining[routeEdge[route]^1];}
+        SignedDyadic amount(int route){int edge=routeEdge[route];return edge<0?(route<initialAmount.length?initialAmount[route]:SignedDyadic.ZERO):remaining[edge^1];}
     }
 }

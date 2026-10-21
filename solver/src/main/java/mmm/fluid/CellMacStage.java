@@ -22,7 +22,15 @@ final class CellMacStage {
 		private final ConservativeLiquidFlux flux;
 		private final GasVolumeAllocation gas;
 		private final LiquidCellInventory source;
-		PreparedLiquid(LiquidCellInventory.Plan inventory,ConservativeLiquidFlux flux,GasVolumeAllocation gas){this.inventory=inventory;this.flux=flux;this.gas=gas;this.source=flux.sourceInventory();}
+		private final long[] occupied;
+		PreparedLiquid(LiquidCellInventory.Plan inventory, ConservativeLiquidFlux flux,
+		               GasVolumeAllocation gas, long[] occupied) {
+			this.inventory = inventory;
+			this.flux = flux;
+			this.gas = gas;
+			this.source = flux.sourceInventory();
+			this.occupied = occupied;
+		}
 		LiquidCellInventory.Plan inventory(){return inventory;}
 		ConservativeLiquidFlux volumeFlux(){return flux;}
 		GasVolumeAllocation gasAllocation(){return gas;}
@@ -318,21 +326,21 @@ final class CellMacStage {
 			liquidTransport.preparedMomentum=prepareMomentumTransport(liquidTransport,quantities);
 			return liquidTransport.preparedMomentum.heatByCell();
 		});
-		return prepareLiquid(liquidTransport,domain.liquidCells);
+		return prepareLiquid(liquidTransport,domain.liquidCells,occupied);
 	}
 	PreparedLiquid prepareLiquid(ConservativeLiquidFlux flux){return prepareLiquid(flux,domain.liquidCells);}
 	PreparedLiquid prepareLiquid(ConservativeLiquidFlux flux,LiquidCellInventory source){
+		return prepareLiquid(flux,source,null);
+	}
+	private PreparedLiquid prepareLiquid(ConservativeLiquidFlux flux,LiquidCellInventory source,long[] occupied){
 		var inventory=flux.prepareInventory(source);
-		return new PreparedLiquid(inventory,flux,flux.gasAllocation());
+		return new PreparedLiquid(inventory,flux,flux.gasAllocation(),occupied);
 	}
 	void transport(float dt) {
 		var liquid = prepareLiquid(dt);
 		var momentum = prepareMomentumTransport(liquid);
 		var inventory = liquid.preparedMomentum()==null?liquid.inventory().withMechanicalHeat(momentum.heatByCell()):liquid.inventory();
-		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount]
-				: domain.granularState != null && domain.granularState.parcels.count() > 0
-				? domain.granularNextCoupling.copySolidSvq() : domain.granularCoupling.copySolidSvq();
-		var gas = domain.gasTopologyCoordinator.planAfterLiquidCells(inventory.future(), occupied, liquid.gasAllocation());
+		var gas = domain.gasTopologyCoordinator.planAfterLiquidCells(inventory.future(), liquid.occupied, liquid.gasAllocation());
 		var auditAfter = domain.thermalState == null ? null : domain.thermalState.auditLedger()
 				.withMechanicalWork(inventory.mechanicalHeat()).withRoundoff(inventory.energyRoundoff());
 		if(auditAfter!=null&&gas!=null&&gas.thermalPlan()!=null){
