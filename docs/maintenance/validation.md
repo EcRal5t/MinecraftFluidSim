@@ -396,9 +396,41 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 ## 当前验证证据
 
-### 第三轮审阅整改：2026-10-21
+### 完整自审基线：2026-10-21
 
-第三轮整改完成无材料域物性、墙面未解析法向支撑、静水和润湿载荷，以及共同输运、压力、相变和气体空间的成本重构。当前资格按下表的实际运行范围汇总。日志位于仓库 `build/`，已通过且有九成把握未受后续等价改动影响的部分复用对应产物。各领域的独立通过记录与最终两次原预算共同组成 M10 验收，未重复运行整个 `fast` 或 `full` 组合。
+在 `4e6bfb9` 上执行以下完整入口，生产源码为 `3679a2471128686e6a37f4b7ba72d335d3d9b354`；本次审查未改生产源码或测试：
+
+```powershell
+./gradlew.bat test runModuleValidation verifyArchitecture :fabric:runCpuValidation -PcpuValidation=full -PcpuValidationKeepGoing=true --continue --max-workers=1 --offline --no-daemon
+```
+
+日志：`build/self-audit-full-20261021.log`。Gradle 总耗时 3 分 6 秒，失败退出；CPU 完整组合执行 159.490 秒，29 个领域中 18 个通过、11 个失败。每个失败领域记录首个失败，其后子场景尚未完成。`runModuleValidation` 与 `verifyArchitecture` 通过，后者扫描 501 个生产源文件。Gradle `test` 另报 `gpu-probe` 有测试源码但未发现测试；该模块采用 main 验证入口，此失败属于任务配置，未运行硬件 GPU 数值场景。
+
+| 当前通过范围 | 结果 |
+|---|---|
+| CPU 完整领域 | `chemistry,thermal,air-cavity,region-manager,lifecycle,production-live-budget,free-surface,cell-inventory,liquid-joining,marker-transfer,marker-pressure,cut-cell,shape,protocol,boundary,takeover,ownership,audit` |
+| 当前源码原 5,000 步溃坝 | 库存、容量及恢复断言通过；1,000–5,000 步采样动能为 562.567／432.479／277.365／203.253／291.495 J，末态中心 X=6.01042 m，RMS=0.146943 m/s |
+| 原完整步预算 | 控制器最大 11.443 ms；最大 demo 最大 153.140 ms，连续超 200 ms 为 0。该入口在完整组合中执行，JVM 已由前序领域预热 |
+
+| 首个失败所在领域 | 失败事实与审查结论 |
+|---|---|
+| `granular` | 细砂未在沉降时间内完成生命周期；静水浮力晚于隐式阻力加入，存在系统性速度偏差 |
+| `thermal-extremes` | 10 K、10¹² Pa 夹具初始化超过定点质量范围，第二组热学步骤尚未执行 |
+| `materials` | 强制 PCG 次数处于 1–32；解析静水平衡允许零迭代，日志未输出实际次数，不能据此认定超过上限 |
+| `surface-tension` | 三组接触角扩展方差 16.9837／23.2160／29.5578 m²，宏观次序反向，根因待整改 |
+| `air-network` | 一秒后强制到达 10⁻³ Pa 且库存恰好到环境量，与当前一阶隐式及整数通量契约不符；完整孔流后续尚未执行 |
+| `gas-liquid` | 真空预测未触发原容量场景；静水支撑覆盖真实真空压力接触，属于生产缺陷 |
+| `entity-fluid` | 动态玩家液体动能峰值／尾段／末态为 706.034／660.672／561.786 J，超过静止体能量阈值；须结合持续实体输入功评价，当前数据不能证明发散 |
+| `controller-gas-lineage` | 末态 17 气腔，气体 64 m³std 收支精确闭合；大腔约 33.979 m³，残余约 0.0206 m³。须检查连续几何及宏观压力，节点数不足以判定库存丢失 |
+| `production-replay` | 34 m³ 头部气腔条件未满足；后续流程未完成 |
+| `region-state` | 冷恢复将未初始化气体变成环境库存，属于恢复副作用 |
+| `containers` | seed=4、action=57 的派生压力相差一 float ULP（0.0078125 Pa），未见该次失败伴随库存或 U 丢失；后续操作未完成 |
+
+只读审查另确认两相切格的容量分组会触发受限孔口两侧整腔来源混合；现有全干孔流及厚液塞场景未覆盖此组合。完整问题位置、守恒范围、液封及维护成本结论见[自审报告](../review/Self-Review-2026-10-21.md)。当前证据支持共同主干的部分物理和成本要求，M10 综合资格待整改；下列分段通过记录保留各自构建范围。
+
+### 第三轮审阅分段运行记录：2026-10-21
+
+下表保存第三轮整改期间各构建的实际运行范围，日志位于仓库 `build/`。后续完整自审暴露了此前分段覆盖与结果复用遗漏的问题；当前资格以上方完整基线及对应源码为准。
 
 | 正式流程 | 实际结果与范围 |
 |---|---|
