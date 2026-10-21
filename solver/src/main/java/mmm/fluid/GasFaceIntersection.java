@@ -67,12 +67,14 @@ final class GasFaceIntersection {
         if(width==0||firstFraction>=1||secondFraction>=1)return 0;
         requireArea(width);
         if(firstFraction==0&&secondFraction==0)return width*width;
+        if(secondFraction==0)return dryRectangle(phase,firstCell,firstMicro,axis,firstCoordinate,tangentStart,otherStart,width);
+        if(firstFraction==0)return dryRectangle(secondPhase,secondCell,secondMicro,axis,secondCoordinate,tangentStart,otherStart,width);
         var polygon=POLYGON.get();polygon.reset(width);
         if(firstFraction>0)cut(polygon,phase,firstCell,firstMicro,axis,firstCoordinate,tangentStart,otherStart);
         if(secondFraction>0)cut(polygon,secondPhase,secondCell,secondMicro,axis,secondCoordinate,tangentStart,otherStart);
         return polygon.area(width);
     }
-    /** Face connectivity follows the same component resolution as liquid mechanics. */
+    /** Real dry openings retain their topology; unresolved liquid films permit gas bypass. */
     private static double faceLiquidFraction(FlipPressurePhaseGeometry phase,int cell,int micro){
         double fraction=phase.liquidFractionExact(cell,micro);
         if(fraction==0)return 0;
@@ -87,10 +89,26 @@ final class GasFaceIntersection {
                 double open=.125*Integer.bitCount(~phase.collisionMask(cell)&255);
                 scale=open>0?phase.poreVolume(cell).toDouble()/open:0;
             }
-            if(scale>0&&scale*(capacity-liquid)<=mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION)return 1;
             if(scale>0&&liquid<=capacity*FluidSolverConfig.UNRESOLVED_LAYER_FRACTION)return 0;
         }
         return fraction;
+    }
+    private static double dryRectangle(FlipPressurePhaseGeometry phase,int cell,int micro,int axis,
+            double coordinate,double x,double y,double width){
+        return halfPlaneRectangleArea(x,y,width,-phase.planeNormal(cell,micro,(axis+1)%3),
+                -phase.planeNormal(cell,micro,(axis+2)%3),phase.planeNormal(cell,micro,axis)*coordinate-phase.planeOffset(cell,micro));
+    }
+    /** CDF of two uniform coordinates: the area nx*x + ny*y <= offset on a rectangle. */
+    static double halfPlaneRectangleArea(double x,double y,double span,double nx,double ny,double offset){
+        double dx=nx*span,dy=ny*span,a=Math.abs(dx),b=Math.abs(dy),area=span*span;
+        double t=offset-nx*x-ny*y-Math.min(0,dx)-Math.min(0,dy);
+        if(a==0&&b==0)return t>=0?area:0;
+        if(t<=0)return 0;
+        double sum=a+b;if(t>=sum)return area;
+        boolean upper=t>.5*sum;if(upper)t=sum-t;
+        double small=Math.min(a,b),large=Math.max(a,b);
+        double fraction=small==0?t/large:t<=small?.5*(t/small)*(t/large):(t-.5*small)/large;
+        return area*(upper?1-fraction:fraction);
     }
     private static void cut(Polygon polygon,FlipPressurePhaseGeometry phase,int cell,int micro,int axis,
             double coordinate,double x,double y) {

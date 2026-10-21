@@ -1,6 +1,7 @@
 package mmm.fluid;
 
 import mmm.inventory.LiquidCellInventory;
+import mmm.inventory.LiquidTransportRoutes;
 
 import mmm.chemistry.BuiltinChemicalDefinitions;
 import mmm.chemistry.ChemicalMixtureRecord;
@@ -33,10 +34,9 @@ public final class LiquidCellInventoryValidation {
 		domain.markCellInventoryChanged();domain.cellMacStage.rebuildInventory();
 		domain.cellMacStage.beginMechanicalHeat();domain.cellMacStage.addMechanicalHeatAtCell(0,64);
 		var before=cells.snapshot();
-		var routes=List.of(new LiquidCellInventory.SourceRoutes(cells.stock(key),List.of(
-				new LiquidCellInventory.TransportRoute(0,key,new LiquidCellInventory.Key(1,0,255),SignedDyadic.of(.25)),
-				new LiquidCellInventory.TransportRoute(1,key,new LiquidCellInventory.Key(2,0,255),SignedDyadic.of(.75)))));
-		var plan=cells.planRoutes(routes,null,q->domain.cellMacStage.finishMechanicalHeat(q,Map.of()));
+		var routes=LiquidTransportRoutes.builder(1,2);routes.source(cells.stock(key));
+		routes.route(0,1,255,SignedDyadic.of(.25));routes.route(1,2,255,SignedDyadic.of(.75));
+		var plan=cells.planRoutes(routes.build(),null,q->domain.cellMacStage.finishMechanicalHeat(q,Map.of()));
 		require(cells.snapshot().rows().equals(before.rows()),"Dissipation preparation changed source U");
 		require(plan.future().stocksInCell(0).isEmpty()&&plan.mechanicalHeat().equals(SignedDyadic.of(64)),
 				"Source dissipation was lost when its liquid drained completely");
@@ -45,7 +45,7 @@ public final class LiquidCellInventoryValidation {
 				&&cells.stock(new LiquidCellInventory.Key(2,0,255)).internalEnergy()==60
 				&&cells.massUnits()==100&&cells.exactVolume().equals(SignedDyadic.of(1)),
 				"Actual transported mass did not carry source heat into the single successor inventory commit");
-		var exchange=cells.planRoutes(List.of(),null,q->Map.of(1,SignedDyadic.of(-4),2,SignedDyadic.of(4)));
+		var exchange=cells.planRoutes(LiquidTransportRoutes.builder(0,0).build(),null,q->Map.of(1,SignedDyadic.of(-4),2,SignedDyadic.of(4)));
 		require(exchange.future().stock(new LiquidCellInventory.Key(1,0,255)).internalEnergy()==16
 				&&exchange.future().stock(new LiquidCellInventory.Key(2,0,255)).internalEnergy()==64
 				&&exchange.mechanicalHeat().signum()==0&&exchange.energyChange().signum()==0,
@@ -91,7 +91,7 @@ public final class LiquidCellInventoryValidation {
 				&&cells.exactInternalEnergy().subtract(SignedDyadic.of(400)).equals(energy),
 				"Continuous slow transport lost carried volume, integer mass, species or U");
 	}
-	private static List<LiquidCellInventory.SourceRoutes> circulatingComponentRoutes(LiquidCellInventory cells,double flow) {
+	private static LiquidTransportRoutes circulatingComponentRoutes(LiquidCellInventory cells,double flow) {
 		var routes=new PhaseQuantitySettlement.RouteBuffer();routes.reset(cells.stocks(),32);
 		int[] successor={1,3,0,2};
 		for(int source=0;source<routes.sourceCount();source++){
@@ -191,20 +191,19 @@ public final class LiquidCellInventoryValidation {
 				new LiquidCellInventory.Stock(water, SignedDyadic.of(.75), 17, mixture, .1, true)),
 				new LiquidCellInventory.Edit(oil, new LiquidCellInventory.Stock(oil, SignedDyadic.of(.25), 3, null, -.2, false)))).commit();
 		var initial = cells.snapshot();
-		var waterRoutes = new ArrayList<LiquidCellInventory.TransportRoute>();
-		var oilRoutes = new ArrayList<LiquidCellInventory.TransportRoute>();
+		var routes=LiquidTransportRoutes.builder(2,14);
 		var waterRemaining=SignedDyadic.of(.75);var oilRemaining=SignedDyadic.of(.25);
 		int[] neighbors = {12, 14, 10, 16, 4, 22};
+		routes.source(cells.stock(water));
 		for (int face = 0; face < neighbors.length; face++) {
-			var waterPart=SignedDyadic.of(.075);var oilPart=SignedDyadic.of(.025);
-			waterRoutes.add(new LiquidCellInventory.TransportRoute(face,water,new LiquidCellInventory.Key(neighbors[face],0,255),waterPart));
-			oilRoutes.add(new LiquidCellInventory.TransportRoute(face,oil,new LiquidCellInventory.Key(neighbors[face],1,255),oilPart));
-			waterRemaining=waterRemaining.subtract(waterPart);oilRemaining=oilRemaining.subtract(oilPart);
+			var part=SignedDyadic.of(.075);routes.route(face,neighbors[face],255,part);waterRemaining=waterRemaining.subtract(part);
 		}
-		waterRoutes.add(new LiquidCellInventory.TransportRoute(-1,water,water,waterRemaining));
-		oilRoutes.add(new LiquidCellInventory.TransportRoute(-1,oil,oil,oilRemaining));
-		var plan = cells.planRoutes(List.of(new LiquidCellInventory.SourceRoutes(cells.stock(water),waterRoutes),
-				new LiquidCellInventory.SourceRoutes(cells.stock(oil),oilRoutes)),(source,masses,speciesAmounts,remainder,energies)->{
+		routes.route(-1,13,255,waterRemaining);routes.source(cells.stock(oil));
+		for(int face=0;face<neighbors.length;face++){
+			var part=SignedDyadic.of(.025);routes.route(face,neighbors[face],255,part);oilRemaining=oilRemaining.subtract(part);
+		}
+		routes.route(-1,13,255,oilRemaining);
+		var plan = cells.planRoutes(routes.build(),(source,masses,speciesAmounts,remainder,energies)->{
 			for(int i=0;i<masses.length;i++)if(i!=remainder)energies[i]=source.internalEnergy()*(masses[i]/(double)source.massUnits());
 			// The provider's remainder slot is ignored and assigned by the inventory.
 			energies[remainder]=Double.NaN;
@@ -240,9 +239,9 @@ public final class LiquidCellInventoryValidation {
 				"A stale plan changed committed stock or an immutable snapshot");
 		var restored = new LiquidCellInventory(snapshot, null);
 		require(restored.ordinalOf(key) == 0 && restored.stockAt(0).equals(snapshot.stockAt(0)), "Recovery changed cell inventory ordinals");
-		var next = restored.planRoutes(List.of(new LiquidCellInventory.SourceRoutes(restored.stock(key),List.of(
-				new LiquidCellInventory.TransportRoute(0,key,new LiquidCellInventory.Key(1,0,255),SignedDyadic.of(.125)),
-				new LiquidCellInventory.TransportRoute(-1,key,key,SignedDyadic.of(.375))))),null);
+		var routes=LiquidTransportRoutes.builder(1,2);routes.source(restored.stock(key));
+		routes.route(0,1,255,SignedDyadic.of(.125));routes.route(-1,0,255,SignedDyadic.of(.375));
+		var next = restored.planRoutes(routes.build(),null);
 		next.commit(); require(restored.massUnits() == 10 && restored.exactVolume().equals(SignedDyadic.of(.5)), "Recovered transport changed inventory");
 		boolean immutable = false; try { snapshot.rows().get(0).clear(); } catch (UnsupportedOperationException expected) { immutable = true; }
 		require(immutable, "Liquid snapshot exposes a mutable cell row");
@@ -274,9 +273,9 @@ public final class LiquidCellInventoryValidation {
 		var cells = new LiquidCellInventory(2, null); var key = new LiquidCellInventory.Key(0,0,255);
 		cells.planEdits(List.of(new LiquidCellInventory.Edit(key,new LiquidCellInventory.Stock(key,SignedDyadic.of(.5),10,null,3,false)))).commit();
 		var before = cells.snapshot();
-		var prepared = cells.planRoutes(List.of(new LiquidCellInventory.SourceRoutes(cells.stock(key),List.of(
-				new LiquidCellInventory.TransportRoute(0,key,new LiquidCellInventory.Key(1,0,255),SignedDyadic.of(.25)),
-				new LiquidCellInventory.TransportRoute(-1,key,key,SignedDyadic.of(.25))))),null);
+		var routes=LiquidTransportRoutes.builder(1,2);routes.source(cells.stock(key));
+		routes.route(0,1,255,SignedDyadic.of(.25));routes.route(-1,0,255,SignedDyadic.of(.25));
+		var prepared = cells.planRoutes(routes.build(),null);
 		var heated = prepared.withMechanicalHeat(Map.of(0,SignedDyadic.of(.1),1,SignedDyadic.of(.2)));
 		require(cells.snapshot().rows().equals(before.rows()), "Mechanical heat changed its source before publication");
 		require(heated.mechanicalHeat().equals(SignedDyadic.of(.1).add(SignedDyadic.of(.2)))
@@ -294,7 +293,7 @@ public final class LiquidCellInventoryValidation {
 		var second=new LiquidCellInventory.Stock(secondKey,SignedDyadic.of(.0625),10_000_000L,mixture,7,false);
 		isolated.planAdditions(List.of(first,second)).commit();var original=isolated.snapshot();
 		var cooling=SignedDyadic.of(-.5);
-		var localized=isolated.planRoutes(List.of(),null).withMechanicalHeatByStock(Map.of(firstKey,cooling));
+		var localized=isolated.planRoutes(LiquidTransportRoutes.builder(0,0).build(),null).withMechanicalHeatByStock(Map.of(firstKey,cooling));
 		require(isolated.snapshot().rows().equals(original.rows()),"Stock-local mechanical work changed its source before commit");
 		localized.commit();var cooled=isolated.stock(firstKey);
 		require(cooled.internalEnergy()==2.5&&isolated.stock(secondKey).equals(second)
@@ -311,9 +310,9 @@ public final class LiquidCellInventoryValidation {
 		}
 		cells.planEdits(edits).commit();
 		var sourceEnergy=cells.exactInternalEnergy();
-		var plan = cells.planRoutes(List.of(
-				new LiquidCellInventory.SourceRoutes(cells.stockAt(0),List.of(new LiquidCellInventory.TransportRoute(0,new LiquidCellInventory.Key(0,0,255),new LiquidCellInventory.Key(1,0,255),SignedDyadic.of(.25)))),
-				new LiquidCellInventory.SourceRoutes(cells.stockAt(2),List.of(new LiquidCellInventory.TransportRoute(1,new LiquidCellInventory.Key(2,0,255),new LiquidCellInventory.Key(1,0,255),SignedDyadic.of(.25))))),null);
+		var routes=LiquidTransportRoutes.builder(2,2);routes.source(cells.stockAt(0));routes.route(0,1,255,SignedDyadic.of(.25));
+		routes.source(cells.stockAt(2));routes.route(1,1,255,SignedDyadic.of(.25));
+		var plan = cells.planRoutes(routes.build(),null);
 		plan.commit();
 		require(cells.size() == 1 && Math.abs(cells.stockAt(0).internalEnergy()-sourceEnergy.toDouble())<=Math.ulp(sourceEnergy.toDouble())
 				&&cells.exactInternalEnergy().subtract(sourceEnergy).equals(plan.energyRoundoff()),

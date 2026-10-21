@@ -343,6 +343,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 - **材料、物种、内能与动量交接**
   - 主要文件：
     - [LiquidCellInventory](../../model/src/main/java/mmm/inventory/LiquidCellInventory.java)：`planRoutes` 分配物质，向动量算子交付实际数量并汇入机械热，统一生成私有后继与能量舍入账
+    - [LiquidTransportRoutes](../../model/src/main/java/mmm/inventory/LiquidTransportRoutes.java)：共同容量投影交给库存的扁平路线列，供体确定材料身份，目标库存首次出现时建立键
     - [PhaseQuantitySettlement](../../solver/src/main/java/mmm/fluid/PhaseQuantitySettlement.java)：共同分量的双精度容量投影、同图精确端点结算与材料份额分配
     - [FluidThermalBinding](../../solver/src/main/java/mmm/fluid/FluidThermalBinding.java)：`liquidEnergyPartitioner` 按实际参考能与来源显热分份
     - [CellMomentumTransport](../../solver/src/main/java/mmm/fluid/CellMomentumTransport.java)
@@ -363,7 +364,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
   - 主要文件：
     - [GasRuntimeGeometry](../../solver/src/main/java/mmm/fluid/GasRuntimeGeometry.java)：固定开放分量的干区几何、节点归属和实际容量；存盘时展开微盒节点索引
     - [GasChamberTopology](../../solver/src/main/java/mmm/fluid/GasChamberTopology.java)：真实干区连通与冷恢复归属校验
-    - [GasVolumeAllocation](../../solver/src/main/java/mmm/fluid/GasVolumeAllocation.java)：随相通量推进的空间来源及环境／真空来源
+    - [GasVolumeAllocation](../../solver/src/main/java/mmm/fluid/GasVolumeAllocation.java)：完整未来帧及一次归并的旧节点到新节点稀疏来源，库存、内能、控制体积和做功共用相同目标顺序
     - [GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java)：按最终来源准备库存、内能和控制体积；`balanceMechanicalWork` 将各旧腔实际功交给同一机械连通体，统一预检后提交
     - [AirNetwork](../../model/src/main/java/mmm/fluid/air/AirNetwork.java)
     - [GasOrificeFlow](../../model/src/main/java/mmm/fluid/air/GasOrificeFlow.java)

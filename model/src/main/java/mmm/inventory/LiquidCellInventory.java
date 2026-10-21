@@ -151,22 +151,6 @@ public final class LiquidCellInventory {
 
 	/** The same transported integer mass is available to the MAC momentum operator. */
 	public record Transfer(int face, Key source, Key target, SignedDyadic volume, long massUnits) { }
-	/** One face transfer or the retained portion of a numerical transport pass. */
-	public record TransportRoute(int face,Key source,Key target,SignedDyadic volume) {
-		public TransportRoute {
-			if(source==null||target==null||source.material()!=target.material()||volume==null||volume.signum()<0
-					||face < -1||face==-1&&!source.equals(target)||face>=0&&source.cell()==target.cell())
-				throw new IllegalArgumentException("Invalid liquid transport route");
-		}
-	}
-	/** One original owner and its complete accepted shares, prepared together by transport. */
-	public record SourceRoutes(Stock source,List<TransportRoute> routes) {
-		public SourceRoutes {
-			if(source==null||routes==null||routes.isEmpty())throw new IllegalArgumentException("Liquid source routes are missing");
-			routes=List.copyOf(routes);
-			for(var route:routes)if(!route.source().equals(source.key()))throw new IllegalArgumentException("Liquid route differs from its donor");
-		}
-	}
 	/** A caloric model writes non-remainder shares; the inventory assigns the source U remainder. */
 	@FunctionalInterface
 	public interface EnergyPartitioner {
@@ -494,37 +478,36 @@ public final class LiquidCellInventory {
 	}
 
 	/** Partitions actual donor quantities over the bounded face transfers of one numerical pass. */
-	public Plan planRoutes(List<SourceRoutes> routes,EnergyPartitioner caloric) {
+	public Plan planRoutes(LiquidTransportRoutes routes,EnergyPartitioner caloric) {
 		return planRoutes(routes,caloric,null);
 	}
-	public Plan planRoutes(List<SourceRoutes> routes,EnergyPartitioner caloric,TransportFinalizer finalizer) {
-		var partitions=new ArrayList<RoutePartition>(routes.size());
+	public Plan planRoutes(LiquidTransportRoutes routes,EnergyPartitioner caloric,TransportFinalizer finalizer) {
+		var partitions=new RoutePartition[routes.sourceCount()];
 		var totals=new TransportTargets();var transfers=new ArrayList<Transfer>();
 		// Donors publish retained shares before incoming quantities are accumulated.
-		for(var group:routes)partitions.add(prepareSourcePartition(group,totals,caloric));
-		for(var partition:partitions)if(partition.changed)appendActualTransfers(partition,totals,transfers);
+		for(int donor=0;donor<partitions.length;donor++)partitions[donor]=prepareSourcePartition(routes,donor,totals,caloric);
+		for(var partition:partitions)if(partition.changed)appendActualTransfers(routes,partition,totals,transfers);
 		var heat=finalizer==null?Map.<Integer,SignedDyadic>of():finalizer.finish(prepareTransportQuantities(totals,transfers));
 		return prepareTransport(totals,transfers,heat);
 	}
 	/** One donor closes V, integer quantities and caloric U before recipient assembly. */
-	private RoutePartition prepareSourcePartition(SourceRoutes group,TransportTargets totals,EnergyPartitioner caloric) {
-
-		var partition=new RoutePartition(group);
-		Stock source=partition.source;var destinations=partition.routes;
+	private RoutePartition prepareSourcePartition(LiquidTransportRoutes routes,int donor,TransportTargets totals,EnergyPartitioner caloric) {
+		var partition=new RoutePartition(routes,donor);
+		Stock source=partition.source;int start=partition.start,count=partition.end-start;
 		if(source.key().cell()>=cellCount()||stock(source.key())!=source)throw new IllegalArgumentException("Liquid transport donor is not an original owner");
-		for(var route:destinations)if(route.target().cell()>=cellCount())throw new IllegalArgumentException("Liquid transport recipient is outside the grid");
-		if(destinations.size()==1&&destinations.get(0).face()<0&&destinations.get(0).volume().equals(source.volume()))return partition;
+		for(int r=start;r<partition.end;r++)if(routes.targetCell(r)>=cellCount())throw new IllegalArgumentException("Liquid transport recipient is outside the grid");
+		if(count==1&&routes.face(start)<0&&routes.volume(start).equals(source.volume()))return partition;
 		partition.changed=true;
-		if(destinations.size()==1){
-			if(!destinations.get(0).volume().equals(source.volume()))throw new IllegalArgumentException("Liquid transport routes differ from the original stock volume");
+		if(count==1){
+			if(!routes.volume(start).equals(source.volume()))throw new IllegalArgumentException("Liquid transport routes differ from the original stock volume");
 			partition.masses=new long[]{source.massUnits()};
 			partition.energies=new double[]{source.internalEnergy()};
 			totals.donor(source);return partition;
 		}
-		var weights = new SignedDyadic[destinations.size()];
+		var weights = new SignedDyadic[count];
 		var sourceVolume=SignedDyadic.ZERO;int largest=0;
 		for (int i = 0; i < weights.length; i++) {
-			weights[i]=destinations.get(i).volume();sourceVolume=sourceVolume.add(weights[i]);
+			weights[i]=routes.volume(start+i);sourceVolume=sourceVolume.add(weights[i]);
 			if(weights[i].compareTo(weights[largest])>0)largest=i;
 		}
 		if(!sourceVolume.equals(source.volume()))throw new IllegalArgumentException("Liquid transport routes differ from the original stock volume");
@@ -536,22 +519,22 @@ public final class LiquidCellInventory {
 		// numerical remainder and the committed endpoint ledger records rounding.
 		partition.energies=energyShares(source,masses,species,largest,caloric);
 		var retained=totals.donor(source);
-		for (int i = 0; i < destinations.size(); i++) {
-			var route=destinations.get(i);
-			if(route.face()<0)retained.addTransportShare(route.volume(),masses[i],source,species,i,partition.energies[i]);
+		for (int i = 0; i < count; i++) {
+			int r=start+i;
+			if(routes.face(r)<0)retained.addTransportShare(routes.volume(r),masses[i],source,species,i,partition.energies[i]);
 		}
 		return partition;
 	}
-	private void appendActualTransfers(RoutePartition partition,TransportTargets totals,List<Transfer> transfers) {
+	private void appendActualTransfers(LiquidTransportRoutes routes,RoutePartition partition,TransportTargets totals,List<Transfer> transfers) {
 
 		var source=partition.source;
-		for(int i=0;i<partition.routes.size();i++){
-			var route=partition.routes.get(i);if(route.face()<0)continue;
-			var target=totals.owner(route.target());
+		for(int i=0;i<partition.end-partition.start;i++){
+			int r=partition.start+i,face=routes.face(r);if(face<0)continue;
+			var target=totals.owner(routes.targetCell(r),source.key().material(),routes.supportMask(r));
 			var energy=partition.energies[i];long mass=partition.masses[i];
-			if(partition.species==null)target.addTransport(route.volume(),mass,source.mixture(),energy,source.indicator());
-			else target.addTransportShare(route.volume(),mass,source,partition.species,i,energy);
-			transfers.add(new Transfer(route.face(),route.source(),route.target(),route.volume(),mass));
+			if(partition.species==null)target.addTransport(routes.volume(r),mass,source.mixture(),energy,source.indicator());
+			else target.addTransportShare(routes.volume(r),mass,source,partition.species,i,energy);
+			transfers.add(new Transfer(face,source.key(),target.key,routes.volume(r),mass));
 		}
 	}
 	/** Actual face quantities provide the common mass and geometry inputs to momentum. */
@@ -566,10 +549,10 @@ public final class LiquidCellInventory {
 		return new TransportQuantities(java.util.Collections.unmodifiableList(transfers),beforeMass,afterMass,afterVolume);
 	}
 	private static final class RoutePartition {
-		final Stock source;final List<TransportRoute> routes;
+		final Stock source;final int start,end;
 		boolean changed;long[] masses;long[][] species;double[] energies;
-		RoutePartition(SourceRoutes group){
-			source=group.source();routes=group.routes();
+		RoutePartition(LiquidTransportRoutes routes,int donor){
+			source=routes.source(donor);start=routes.routeStart(donor);end=routes.routeEnd(donor);
 		}
 	}
 	/** One ordered complete recipient row supplies momentum, publication and the next inventory generation. */
@@ -580,9 +563,10 @@ public final class LiquidCellInventory {
 			var initial=rows.get(cell);owners=new ArrayList<>(initial.size()+1);
 			for(var stock:initial)owners.add(new Accumulator(stock.key(),stock));
 		}
-		int index(Key key){
+		int index(Key key){return index(key.material(),key.supportMask());}
+		int index(int material,int support){
 			int low=0,high=owners.size()-1;
-			while(low<=high){int mid=(low+high)>>>1,order=owners.get(mid).key.compareTo(key);if(order<0)low=mid+1;else if(order>0)high=mid-1;else return mid;}
+			while(low<=high){int mid=(low+high)>>>1;var key=owners.get(mid).key;int order=Integer.compare(key.material(),material);if(order==0)order=Integer.compare(key.supportMask(),support);if(order<0)low=mid+1;else if(order>0)high=mid-1;else return mid;}
 			return -low-1;
 		}
 		CellQuantities quantities(){
@@ -610,6 +594,10 @@ public final class LiquidCellInventory {
 		Accumulator owner(Key key){
 			var row=row(key.cell());int at=row.index(key);if(at>=0)return row.owners.get(at);
 			var total=new Accumulator(key,null);row.owners.add(-at-1,total);ownerCount++;return total;
+		}
+		Accumulator owner(int cell,int material,int support){
+			var row=row(cell);int at=row.index(material,support);if(at>=0)return row.owners.get(at);
+			var total=new Accumulator(new Key(cell,material,support),null);row.owners.add(-at-1,total);ownerCount++;return total;
 		}
 	}
 	/** Exact material quantities and numerical U are assembled into their final stored owners. */

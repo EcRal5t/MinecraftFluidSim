@@ -1,8 +1,8 @@
 package mmm.fluid;
 
 import mmm.inventory.LiquidCellInventory;
+import mmm.inventory.LiquidTransportRoutes;
 import mmm.units.SignedDyadic;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.IntConsumer;
@@ -74,13 +74,12 @@ final class PhaseQuantitySettlement {
             for(int r=head[ordinal];r>=0;r=next[r])if(face[r]==sharedFace&&target[r]==slot)return;
             add(ordinal,sharedFace,cell,supportMask,0);
         }
-        private LiquidCellInventory.TransportRoute route(int r,LiquidCellInventory.Stock stock,SignedDyadic amount){
-            var key=stock.key();var to=face[r]<0?key:new LiquidCellInventory.Key(target[r]/8,key.material(),support[r]);
-            return new LiquidCellInventory.TransportRoute(face[r],key,to,amount);
+        private void appendRoute(LiquidTransportRoutes.Builder result,int r,SignedDyadic amount){
+            result.route(face[r],target[r]/8,support[r],amount);
         }
     }
 
-    static List<LiquidCellInventory.SourceRoutes> settle(RouteBuffer raw,SignedDyadic[] upper,SignedDyadic[] lower,
+    static LiquidTransportRoutes settle(RouteBuffer raw,SignedDyadic[] upper,SignedDyadic[] lower,
             int[] receiverGroup,SignedDyadic[] groupUpper,IntConsumer alternatives){
         int groups=groupUpper==null?0:groupUpper.length;
         double[] numerical=new double[raw.size+2*raw.sources],load=new double[upper.length],groupLoad=new double[groups];
@@ -443,53 +442,48 @@ final class PhaseQuantitySettlement {
             return exact;
         }
     }    /** Both the component face totals and each original material volume close exactly. */
-    private static List<LiquidCellInventory.SourceRoutes> partitionMaterials(RouteBuffer raw,SignedDyadic[] amounts){
-        var result=new ArrayList<LiquidCellInventory.SourceRoutes>(raw.stocks.size());
+    private static LiquidTransportRoutes partitionMaterials(RouteBuffer raw,SignedDyadic[] amounts){
+        var result=LiquidTransportRoutes.builder(raw.stocks.size(),raw.size);
         for(int s=0;s<raw.sources;s++){
             int first=raw.firstStock[s];
             if(raw.nextStock[first]<0){
                 var stock=raw.stocks.get(first);
                 if(amounts[raw.retained[s]].equals(stock.volume()))continue;
-                var routes=new ArrayList<LiquidCellInventory.TransportRoute>();
-                for(int r=raw.head[s];r>=0;r=raw.next[r])if(amounts[r].signum()>0)routes.add(raw.route(r,stock,amounts[r]));
-                result.add(new LiquidCellInventory.SourceRoutes(stock,routes));
+                result.source(stock);
+                for(int r=raw.head[s];r>=0;r=raw.next[r])if(amounts[r].signum()>0)raw.appendRoute(result,r,amounts[r]);
                 continue;
             }
             int count=0,last=-1;
             for(int r=raw.head[s];r>=0;r=raw.next[r])if(amounts[r].signum()>0){count++;if(last<0||amounts[r].compareTo(amounts[last])>0)last=r;}
             if(count==1){
                 if(last==raw.retained[s])continue;
-                for(int i=raw.firstStock[s];i>=0;i=raw.nextStock[i]){var stock=raw.stocks.get(i);result.add(new LiquidCellInventory.SourceRoutes(stock,List.of(raw.route(last,stock,stock.volume()))));}
+                for(int i=raw.firstStock[s];i>=0;i=raw.nextStock[i]){var stock=raw.stocks.get(i);result.source(stock);raw.appendRoute(result,last,stock.volume());}
                 continue;
             }
             int materials=0;for(int i=raw.firstStock[s];i>=0;i=raw.nextStock[i])materials++;
             int[] indices=new int[materials];var remaining=new SignedDyadic[materials];double[] weights=new double[materials];
-            var materialRoutes=new ArrayList<List<LiquidCellInventory.TransportRoute>>(materials);
-            for(int m=0;m<materials;m++)materialRoutes.add(new ArrayList<>());
+            int[] active=new int[count];int lastIndex=-1;
+            for(int r=raw.head[s],i=0;r>=0;r=raw.next[r])if(amounts[r].signum()>0){if(r==last)lastIndex=i;active[i++]=r;}
+            var materialRoutes=new SignedDyadic[materials][count];
             for(int i=raw.firstStock[s],m=0;i>=0;i=raw.nextStock[i],m++){indices[m]=i;remaining[m]=raw.stocks.get(i).volume();}
-            if(partitionLayered(raw,s,amounts,indices,remaining,materialRoutes)){
-                for(int m=0;m<materials;m++)result.add(new LiquidCellInventory.SourceRoutes(raw.stocks.get(indices[m]),materialRoutes.get(m)));
-                continue;
-            }
-            for(int r=raw.head[s];r>=0;r=raw.next[r])if(r!=last&&amounts[r].signum()>0){
-                for(int m=0;m<materials;m++)weights[m]=remaining[m].toDouble();
-                var shares=LiquidCellInventory.allocateVolumes(amounts[r],remaining,weights);
-                for(int m=0;m<materials;m++)if(shares[m].signum()>0){
-                    materialRoutes.get(m).add(raw.route(r,raw.stocks.get(indices[m]),shares[m]));remaining[m]=remaining[m].subtract(shares[m]);
+            if(!partitionLayered(raw,s,amounts,indices,remaining,active,materialRoutes)){
+                for(int i=0;i<count;i++)if(i!=lastIndex){
+                    for(int m=0;m<materials;m++)weights[m]=remaining[m].toDouble();
+                    appendShares(i,remaining,materialRoutes,LiquidCellInventory.allocateVolumes(amounts[active[i]],remaining,weights));
                 }
+                for(int m=0;m<materials;m++)if(remaining[m].signum()>0)materialRoutes[m][lastIndex]=remaining[m];
             }
             for(int m=0;m<materials;m++){
-                var stock=raw.stocks.get(indices[m]);
-                if(remaining[m].signum()>0)materialRoutes.get(m).add(raw.route(last,stock,remaining[m]));
-                result.add(new LiquidCellInventory.SourceRoutes(stock,materialRoutes.get(m)));
+                result.source(raw.stocks.get(indices[m]));
+                for(int i=0;i<count;i++)if(materialRoutes[m][i]!=null)raw.appendRoute(result,active[i],materialRoutes[m][i]);
             }
         }
-        return result;
+        return result.build();
     }
 
     /** Horizontal faces sample every layer; vertical faces draw from the corresponding density end. */
     private static boolean partitionLayered(RouteBuffer raw,int source,SignedDyadic[] amounts,int[] stocks,
-            SignedDyadic[] remaining,List<List<LiquidCellInventory.TransportRoute>> routes){
+            SignedDyadic[] remaining,int[] active,SignedDyadic[][] routes){
         if(raw.materialRegistry==null||raw.gravity==0)return false;
         boolean vertical=false;
         for(int r=raw.head[source];r>=0;r=raw.next[r])
@@ -515,14 +509,14 @@ final class PhaseQuantitySettlement {
         var capacities=new SignedDyadic[n];double[] weights=new double[n];
         // Remove horizontal slabs proportionally before drawing disjoint bottom/top slabs.
         // The retained row receives the exact material remainders after every outgoing face.
-        for(int pass=0;pass<3;pass++)for(int r=raw.head[source];r>=0;r=raw.next[r]){
-            if(raw.face[r]<0||amounts[r].signum()==0)continue;
+        for(int pass=0;pass<3;pass++)for(int i=0;i<active.length;i++){
+            int r=active[i];if(raw.face[r]<0)continue;
             int direction=raw.verticalDirection(r);
             if(pass==0&&direction!=0||pass==1&&direction!=-1||pass==2&&direction!=1)continue;
             var wanted=amounts[r];
             if(direction==0){
                 for(int m=0;m<n;m++)weights[m]=remaining[m].toDouble();
-                appendShares(raw,r,stocks,remaining,routes,LiquidCellInventory.allocateVolumes(wanted,remaining,weights));
+                appendShares(i,remaining,routes,LiquidCellInventory.allocateVolumes(wanted,remaining,weights));
                 continue;
             }
             for(int step=0;step<groups&&wanted.signum()>0;){
@@ -535,7 +529,7 @@ final class PhaseQuantitySettlement {
                 }
                 var part=min(wanted,available);
                 if(part.signum()>0){
-                    appendShares(raw,r,stocks,remaining,routes,LiquidCellInventory.allocateVolumes(part,capacities,weights));
+                    appendShares(i,remaining,routes,LiquidCellInventory.allocateVolumes(part,capacities,weights));
                     wanted=wanted.subtract(part);
                 }
                 do{step++;position=direction<0?step:groups-1-step;}
@@ -543,14 +537,13 @@ final class PhaseQuantitySettlement {
             }
             if(wanted.signum()!=0)throw new IllegalStateException("Layered material flux exceeded its accepted source volume");
         }
-        for(int m=0;m<n;m++)if(remaining[m].signum()>0)
-            routes.get(m).add(raw.route(raw.retained[source],raw.stocks.get(stocks[m]),remaining[m]));
+        int retained=-1;for(int i=0;i<active.length;i++)if(active[i]==raw.retained[source])retained=i;
+        for(int m=0;m<n;m++)if(remaining[m].signum()>0)routes[m][retained]=remaining[m];
         return true;
     }
-    private static void appendShares(RouteBuffer raw,int route,int[] stocks,SignedDyadic[] remaining,
-            List<List<LiquidCellInventory.TransportRoute>> routes,SignedDyadic[] shares){
-        for(int m=0;m<stocks.length;m++)if(shares[m].signum()>0){
-            routes.get(m).add(raw.route(route,raw.stocks.get(stocks[m]),shares[m]));
+    private static void appendShares(int route,SignedDyadic[] remaining,SignedDyadic[][] routes,SignedDyadic[] shares){
+        for(int m=0;m<remaining.length;m++)if(shares[m].signum()>0){
+            routes[m][route]=routes[m][route]==null?shares[m]:routes[m][route].add(shares[m]);
             remaining[m]=remaining[m].subtract(shares[m]);
         }
     }

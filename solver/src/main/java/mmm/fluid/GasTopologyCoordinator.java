@@ -256,8 +256,6 @@ final class GasTopologyCoordinator {
 		if(allocation==null)allocation=GasVolumeAllocation.prepare(domain,future,occupied,masks);
 		allocation.requireCurrent(domain,future);
 		var next=allocation.preparedFrame();
-		if(next==null)next=GasRuntimeGeometry.captureCellFuture(domain,future,occupied,domain.gasState.sealedDomainBoundary,
-				masks,allocation.futureOccupancy(),allocation.preparedPhase(),allocation.preparedGeometry(),allocation.preparedCapacity());
 		if(domain.gasState.frame==null)return new GasTopologyPlan(next,null,null,null,domain.gasState.network,domain.gasState.network.revision(),new SignedDyadic[0],new TreeMap<>(),-1);
 		return plan(next,volumeWork,phase,allocation);
 	}
@@ -314,8 +312,11 @@ final class GasTopologyCoordinator {
 			}
 			supports.append("]}");
 		}
-		var shares=new ArrayList<GasVolumeAllocation.Share>();
-		for(var share:allocation.shares())if(share.sourceNode()==node&&shares.size()<8)shares.add(share);
+		var shares=new StringBuilder();var sources=allocation.sources();int shown=0;
+		for(int entry=sources.first(node+1);entry>=0&&shown<8;entry=sources.next(entry),shown++){
+			if(!shares.isEmpty())shares.append(", ");
+			shares.append(sources.key(entry)).append(':').append(sources.amount(entry));
+		}
 		return new GasTopologyBlockedException("Allocated finite gas has no successor: node="+node
 				+" operation="+(edit==null?"carrier edit":"phase batch")
 				+" oldVolumeM3="+domain.gasState.network.availableVolume(node)+" inventory="+inventory
@@ -325,7 +326,7 @@ final class GasTopologyCoordinator {
 	/** Each allocated gas volume has one origin; inventory, energy and old control volume share it. */
 	private GasTopologyPlan plan(GasRuntimeGeometry next,VolumeWork volumeWork,PhaseBatch edit,GasVolumeAllocation allocation) {
 		var old=domain.gasState.frame;
-		TreeMap<Integer,TreeMap<Integer,Double>> origins=old==null||old.nodeCount()==0&&next.nodeCount()==0?new TreeMap<>():origins(next,allocation);
+		var origins=old==null?null:allocation.sources();
 
 		boolean thermal=domain.thermalState!=null&&domain.thermalState.gasModelBound();
 		boolean retainControl=thermal&&volumeWork==VolumeWork.ADIABATIC;
@@ -345,44 +346,41 @@ final class GasTopologyCoordinator {
 			}
 		} else {
 			for(int previous=1;previous<=old.nodeCount();previous++) {
-				var destinations=origins.get(previous);var stock=inventory(previous,edit);
-				if(destinations==null||destinations.isEmpty()) {
+				int row=previous+1,first=origins.first(row);var stock=inventory(previous,edit);
+				if(first<0) {
 					if(!stock.isEmpty())throw missingGasSuccessor(previous,stock,edit,next,allocation);
 					continue;
 				}
-				boolean split=destinations.size()>1;
-				var weights=split?GasPartitionWeights.of(destinations.values().stream().mapToDouble(Double::doubleValue).toArray()):null;
+				int destinations=0;for(int entry=first;entry>=0;entry=origins.next(entry))destinations++;
+				boolean split=destinations>1;int[] targets=new int[destinations];double[] amounts=split?new double[destinations]:null;
+				int part=0;
+				for(int entry=first;entry>=0;entry=origins.next(entry)){
+					targets[part]=(int)origins.key(entry);if(split)amounts[part]=origins.amount(entry);part++;
+				}
+				var weights=split?GasPartitionWeights.of(amounts):null;
 				var parts=split?stock.partition(weights):List.of(stock);
 				double[] energies=!thermal?null:stock.isEmpty()?new double[parts.size()]:split?partitionEnergy(previous,parts,edit):new double[]{energy(previous,edit)};
 				double[] control=!retainControl?null:split?GasTopologyVolumePartition.partition(domain.gasState.network.availableVolume(previous),weights):new double[]{domain.gasState.network.availableVolume(previous)};
-				int part=0;
-				for(var entry:destinations.entrySet()) {
-					int node=entry.getKey();
+				for(part=0;part<targets.length;part++) {
+					int node=targets[part];
 					if(node==0){sinkDelta=sinkDelta.add(parts.get(part));if(thermal)sinkEnergy=sinkEnergy.add(SignedDyadic.of(energies[part]));}
 					else {inventories.set(node-1,inventories.get(node-1).merge(parts.get(part)));
 						if(thermal)mixed[node-1]=mixed[node-1].add(SignedDyadic.of(energies[part]));
 						if(retainControl){
 							var volume=SignedDyadic.of(control[part]);inherited[node-1]=inherited[node-1].add(volume);
 						}}
-					part++;
 				}
 				if(retainControl&&!stock.isEmpty())sourceWork.add(new SourceVolumeWork(previous,domain.gasState.network.availableVolume(previous),
-						energy(previous,edit),parts,destinations.keySet().stream().mapToInt(Integer::intValue).toArray(),control,energies));
+						energy(previous,edit),parts,targets,control,energies));
 			}
-			for(var origin:origins.entrySet())if(origin.getKey()<=0)for(var entry:origin.getValue().entrySet()) {
-				int node=entry.getKey();if(node==0)continue;
-				double volume=entry.getValue()*domain.unitScale.cubicMetersPerNormalizedVolume();
-				if(origin.getKey()==0) {
-					var stock=ambientInventory(volume);inventories.set(node-1,inventories.get(node-1).merge(stock));sourceDelta=sourceDelta.add(stock);
-					if(thermal){var u=SignedDyadic.of(domain.thermalState.ambientGasEnergy(stock));mixed[node-1]=mixed[node-1].add(u);sourceEnergy=sourceEnergy.add(u);}
-				}
-				// Ambient stock imports its own control volume. A new dry support tagged
-				// vacuum has no additional old volume: retained cavities already supplied it.
-				if(retainControl&&origin.getKey()==0){
-					inherited[node-1]=inherited[node-1].add(SignedDyadic.of(volume));
-				}
+			// Ambient is source row 1. Explicit vacuum (row 0) imports neither stock nor old control.
+			for(int entry=origins.first(1);entry>=0;entry=origins.next(entry)) {
+				int node=(int)origins.key(entry);if(node==0)continue;
+				double volume=origins.amount(entry)*domain.unitScale.cubicMetersPerNormalizedVolume();
+				var stock=ambientInventory(volume);inventories.set(node-1,inventories.get(node-1).merge(stock));sourceDelta=sourceDelta.add(stock);
+				if(thermal){var u=SignedDyadic.of(domain.thermalState.ambientGasEnergy(stock));mixed[node-1]=mixed[node-1].add(u);sourceEnergy=sourceEnergy.add(u);}
+				if(retainControl)inherited[node-1]=inherited[node-1].add(SignedDyadic.of(volume));
 			}
-			if(retainControl&&count>0)includeOpenedPoreVolume(old,next,available,inherited);
 			if(next.sealedExterior()&&(!sourceDelta.isEmpty()||!sinkDelta.isEmpty()))
 				throw new GasTopologyBlockedException("Closed gas topology attempted an external source or sink");
 		}
@@ -400,7 +398,7 @@ final class GasTopologyCoordinator {
 			}
 		}
 		SignedDyadic[] workBySource=new SignedDyadic[old==null?1:old.nodeCount()+1];Arrays.fill(workBySource,SignedDyadic.ZERO);
-		SignedDyadic mechanicalWork=retainControl?applySourceVolumeWork(sourceWork,available,inherited,mixed,workBySource):SignedDyadic.ZERO;
+		SignedDyadic mechanicalWork=retainControl?applySourceVolumeWork(sourceWork,next,available,inherited,mixed,workBySource):SignedDyadic.ZERO;
 		double[] mixedEnergy=doubles(mixed);
 		GasEnergyStore.GasRemapPlan thermalPlan=!thermal?null:edit==null
 				?domain.thermalState.planGasRemapWithSourceWork(domain.gasState.network,inventories,available,mixedEnergy,sourceEnergy,sinkEnergy,mechanicalWork)
@@ -415,11 +413,15 @@ final class GasTopologyCoordinator {
 	/** Receiver volume ratios describe actual deformation, including carried and newly opened vacuum.
 	 * Each old pressure owner receives one volume change before conservative split/mixing of its U.
 	 * At constant receiver control volume every ratio is one, so topology changes supply no work. */
-	private SignedDyadic applySourceVolumeWork(List<SourceVolumeWork> sources,double[] available,
+	private SignedDyadic applySourceVolumeWork(List<SourceVolumeWork> sources,GasRuntimeGeometry next,double[] available,
 	                                        SignedDyadic[] inherited,SignedDyadic[] mixed,SignedDyadic[] workBySource){
 		if(sources.isEmpty())return SignedDyadic.ZERO;
 		double[] ratio=new double[available.length];boolean deformed=false;
 		for(int node=0;node<ratio.length;node++){
+			// A translated solid adds only genuinely opened pore, up to net chamber expansion.
+			double expansion=Math.max(0,available[node]-inherited[node].toDouble());
+			double vacuum=Math.min(next.openedPoreVolume(node+1),expansion);
+			if(vacuum>0)inherited[node]=inherited[node].add(SignedDyadic.of(vacuum));
 			double control=inherited[node].toDouble();ratio[node]=control>0?available[node]/control:1;
 			deformed|=ratio[node]!=1;
 		}
@@ -449,74 +451,6 @@ final class GasTopologyCoordinator {
 			}
 		}
 		return work;
-	}
-	/** Newly exposed vacuum belongs to its actual receiving chamber, up to its net expansion. */
-	private void includeOpenedPoreVolume(GasRuntimeGeometry old,GasRuntimeGeometry next,
-	                                    double[] available,SignedDyadic[] inherited){
-		var previous=old.geometry().actualCapacity();
-		double[] opened=new double[next.nodeCount()];
-		for(var component:next.capacity().components()){
-			if(component.availableVolumeNormalized().signum()==0)continue;
-			int cell=component.cell();
-			// Ordinary liquid motion keeps fixed pores unchanged; source transport already
-			// carries its whole old control volume, so no opening calculation is needed.
-			if(old.geometry().collisionMask(cell)==next.geometry().collisionMask(cell)
-					&&old.phase().poreVolume(cell).equals(next.phase().poreVolume(cell)))continue;
-			int node=next.topology().nodeOfComponent(cell,component.supportMask());
-			if(node<=0)continue;
-			double oldPore=0;
-			for(int i=previous.offsets[cell];i<previous.offsets[cell+1];i++){
-				var support=previous.components.get(i);
-				int overlap=support.supportMask()&component.supportMask();
-				oldPore+=support.poreVolumeNormalized().toDouble()*Integer.bitCount(overlap)/Integer.bitCount(support.supportMask());
-			}
-			double gain=component.poreVolumeNormalized().toDouble()-oldPore;
-			if(!(gain>0))continue;
-			double volume=0;
-			int newOpen=old.geometry().collisionMask(cell)&~next.geometry().collisionMask(cell)&component.supportMask();
-			if(newOpen!=0){
-				var dry=next.geometry().component(cell,component.supportMask());
-				int selected=newOpen&dry.dryMicroMask();if(selected==0)continue;
-				volume=component.availableVolumeNormalized().toDouble();
-				if(selected!=dry.dryMicroMask()){
-					double fraction=0;
-					for(int bits=selected;bits!=0;bits&=bits-1)
-						fraction+=next.geometry().pieceNormalizedVolume(8*cell+Integer.numberOfTrailingZeros(bits));
-					volume*=fraction/dry.normalizedVolume();
-				}
-			}else{
-				// Removing solid occupation releases its share of this fixed support.
-				volume=Math.min(component.availableVolumeNormalized().toDouble(),gain);
-			}
-			opened[node-1]+=volume;
-		}
-		double scaleToMeters=domain.unitScale.cubicMetersPerNormalizedVolume();
-		for(int node=0;node<opened.length;node++){
-			// Inherited control already includes all old gas, old vacuum and ambient imports.
-			// A solid translation within this chamber therefore adds no duplicate volume.
-			double expansion=Math.max(0,available[node]-inherited[node].toDouble());
-			double vacuum=Math.min(opened[node]*scaleToMeters,expansion);
-			if(vacuum>0)inherited[node]=inherited[node].add(SignedDyadic.of(vacuum));
-		}
-	}
-
-	private TreeMap<Integer,TreeMap<Integer,Double>> origins(GasRuntimeGeometry next,GasVolumeAllocation allocation) {
-		if(allocation==null||allocation.sourceGeometry()!=domain.gasState.frame||allocation.networkRevision()!=domain.gasState.network.revision())
-			throw new IllegalStateException("Gas phase transport source changed before remapping");
-		var result=new TreeMap<Integer,TreeMap<Integer,Double>>();
-		boolean[] owned=new boolean[next.nodeCount()+1];
-		for(var share:allocation.shares()) {
-			// Source shares belong to a fixed pore component; its PLIC may move the dry micro view.
-			int cell=share.targetSupportAnchor()/8,support=CellRemapMicroTopology.support(next.geometry().collisionMask(cell),share.targetSupportAnchor()&7);
-			int target=support==0?-1:next.topology().nodeOfComponent(cell,support);
-			if(target<0)throw new IllegalStateException("Positive gas phase transfer has no future component capacity");
-			owned[target]=true;
-			int source=switch(share.kind()){case EXISTING->share.sourceNode();case AMBIENT->0;case EXPLICIT_VACUUM->-1;};
-			result.computeIfAbsent(source,ignored->new TreeMap<>()).merge(target,share.volume(),Double::sum);
-		}
-		for(int node=1;node<owned.length;node++)if(!owned[node])
-			throw new IllegalStateException("Future gas occupation has no transported or explicit source: node="+node);
-		return result;
 	}
 
 	private GasInventory ambientInventory(double volume) {

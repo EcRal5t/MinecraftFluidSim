@@ -17,6 +17,7 @@ final class GasRuntimeGeometry {
 	private final GasComplementGeometry geometry;
 	private final GasChamberTopology topology;
 	private final GasChamberCapacity capacity;
+	private final double[] openedPoreVolumes;
 
 	private GasRuntimeGeometry(FluidDomain domain,LiquidCellInventory future,long[] occupied,boolean sealed,
 	                           byte[] futureMasks,PhaseOccupancyState futureOccupancy,
@@ -47,7 +48,44 @@ final class GasRuntimeGeometry {
 		}else geometry=preparedGeometry;
 		topology=GasChamberTopology.capture(geometry,sealed);
 		capacity=GasChamberCapacity.capturePrepared(geometry,topology);
+		openedPoreVolumes=captureOpenedPore(old,domain.unitScale.cubicMetersPerNormalizedVolume());
 	}
+	/** Only actual solid/collision changes create new vacuum control volume. */
+	private double[] captureOpenedPore(GasRuntimeGeometry old,double cubicMetersPerVolume){
+		if(old==null||geometry==old.geometry||Arrays.equals(occupiedSvq,old.occupiedSvq)&&geometry.sameCollisionMasks(old.geometry))return null;
+		var previous=old.geometry.actualCapacity();var future=geometry.actualCapacity();double[] opened=null;
+		for(int cell=0;cell<occupiedSvq.length;cell++){
+			if(occupiedSvq[cell]==old.occupiedSvq[cell]&&geometry.collisionMask(cell)==old.geometry.collisionMask(cell))continue;
+			for(int at=future.offsets[cell];at<future.offsets[cell+1];at++){
+				var component=future.components.get(at);
+				if(component.availableVolumeNormalized().signum()==0)continue;
+				int node=topology.nodeOfComponent(cell,component.supportMask());if(node<=0)continue;
+				double oldPore=0;
+				for(int i=previous.offsets[cell];i<previous.offsets[cell+1];i++){
+					var support=previous.components.get(i);int overlap=support.supportMask()&component.supportMask();
+					oldPore+=support.poreVolumeNormalized().toDouble()*Integer.bitCount(overlap)/Integer.bitCount(support.supportMask());
+				}
+				double gain=component.poreVolumeNormalized().toDouble()-oldPore;if(!(gain>0))continue;
+				double volume;
+				int newOpen=old.geometry.collisionMask(cell)&~geometry.collisionMask(cell)&component.supportMask();
+				if(newOpen!=0){
+					var dry=geometry.component(cell,component.supportMask());int selected=newOpen&dry.dryMicroMask();if(selected==0)continue;
+					volume=component.availableVolumeNormalized().toDouble();
+					if(selected!=dry.dryMicroMask()){
+						double fraction=0;
+						for(int bits=selected;bits!=0;bits&=bits-1)
+							fraction+=geometry.pieceNormalizedVolume(8*cell+Integer.numberOfTrailingZeros(bits));
+						volume*=fraction/dry.normalizedVolume();
+					}
+				}else volume=Math.min(component.availableVolumeNormalized().toDouble(),gain);
+				if(volume>0){if(opened==null)opened=new double[nodeCount()];opened[node-1]+=volume;}
+			}
+		}
+		if(opened!=null)for(int node=0;node<opened.length;node++)opened[node]*=cubicMetersPerVolume;
+		return opened;
+	}
+	double openedPoreVolume(int node){return openedPoreVolumes==null?0:openedPoreVolumes[node-1];}
+
 	static GasRuntimeGeometry capture(FluidDomain domain,long[] occupied,boolean sealed) {
 		domain.ensurePhaseOccupancy();
 		return new GasRuntimeGeometry(domain,domain.liquidCells,occupied,sealed,null,domain.phaseOccupancy,null,null,null);

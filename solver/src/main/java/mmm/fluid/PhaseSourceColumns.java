@@ -38,6 +38,12 @@ final class PhaseSourceColumns {
 			amounts[entry]+=amount;
 			return entry;
 		}
+		return appendUnique(row,key,amount);
+	}
+
+	/** A prepared node transpose visits each row/key pair once. */
+	int appendUnique(int row,long key,double amount) {
+		if(!(amount>0&&Double.isFinite(amount)))throw new IllegalArgumentException("Invalid unique phase source quantity");
 		if(entries==keys.length){
 			int capacity=Math.multiplyExact(keys.length,2);
 			next=Arrays.copyOf(next,capacity);keys=Arrays.copyOf(keys,capacity);amounts=Arrays.copyOf(amounts,capacity);

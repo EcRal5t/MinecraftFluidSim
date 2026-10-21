@@ -842,7 +842,7 @@ final class GranularReactionStage {
       var stockPlan = domain.liquidCells.planEdits(edits);
       var gas =
           domain.gasTopologyCoordinator.planAfterInternalConversion(stockPlan.future(), occupied,
-              new GasVolumeAllocation(domain,stockPlan.future(),transportedGas.futureOccupancy(),transportedGas.shares(),transportedGas.preparedPhase(),transportedGas.preparedGeometry(),transportedGas.preparedCapacity()));
+              transportedGas.rebindFuture(domain,stockPlan.future()));
       if(domain.thermalState!=null)domain.thermalState.auditLedger().withMechanicalWork(advectionHeat).withRoundoff(advectionRoundoff).expectedInventory();
       stockPlan.requireCurrent();
       domain.granularState.parcels.requirePrepared(parcels, parcelRevision);

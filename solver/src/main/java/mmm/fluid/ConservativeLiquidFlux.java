@@ -457,22 +457,21 @@ final class ConservativeLiquidFlux {
 
 	/** Associates final dry capacity with its transported gas sources. */
 	private GasVolumeAllocation gasAllocation(LiquidCellInventory future) {
-		var shares = new ArrayList<GasVolumeAllocation.Share>();
+		var frame=GasRuntimeGeometry.captureCellFuture(domain,future,targetOccupied,domain.gasState.sealedDomainBoundary,
+				null,phase.occupancyState(),phase,null,preparedCapacity);
+		var sources=new PhaseSourceColumns(frame.nodeCount()+1);
 		for(var component:preparedCapacity.components){
 			if(component.availableVolumeNormalized().signum()==0)continue;
 			int row=8*component.cell()+Integer.numberOfTrailingZeros(component.supportMask());
-			// Provenance belongs to this actual fixed support, including compact dry
-			// volume whose micro occupation rounds to a full liquid cell.
+			int target=frame.topology().nodeOfComponent(component.cell(),component.supportMask());
+			if(target<0)throw new IllegalStateException("Positive transported gas has no future support: cell="+component.cell());
 			double gas=component.availableVolumeNormalized().toDouble(),total=gasTags.rowSum(row);
-			for(int e=gasTags.first(row);e>=0;e=gasTags.next(e)){
-				int node=(int)gasTags.key(e);double part=gas*(gasTags.amount(e)/total);
-				if(part>0)shares.add(new GasVolumeAllocation.Share(node,row,part,node>0
-						?GasVolumeAllocation.SourceKind.EXISTING:node==0
-						?GasVolumeAllocation.SourceKind.AMBIENT:GasVolumeAllocation.SourceKind.EXPLICIT_VACUUM));
+			for(int entry=gasTags.first(row);entry>=0;entry=gasTags.next(entry)){
+				double part=gas*(gasTags.amount(entry)/total);
+				if(part>0)sources.add(target,gasTags.key(entry),part);
 			}
 		}
-		
-		return new GasVolumeAllocation(domain, future, phase.occupancyState(), shares, phase, null,preparedCapacity);
+		return GasVolumeAllocation.fromTargetSources(domain,future,frame,sources);
 	}
 
 	private double microPoreVolume(int piece) {

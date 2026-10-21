@@ -2,60 +2,50 @@ package mmm.fluid;
 
 import mmm.inventory.LiquidCellInventory;
 import mmm.inventory.PhaseOccupancyState;
-import java.util.List;
 
-/** Fixed-support provenance, published with its authoritative future phase occupation. */
+/** One immutable future geometry and sparse old-node -> future-node source weights. */
 final class GasVolumeAllocation {
-    enum SourceKind { EXISTING, AMBIENT, EXPLICIT_VACUUM }
-    /** The anchor names any open microbox in the receiving fixed support. */
-    record Share(int sourceNode,int targetSupportAnchor,double volume,SourceKind kind){
-        Share {
-            if(targetSupportAnchor<0||!(volume>0&&Double.isFinite(volume))||kind==null
-                    ||kind==SourceKind.EXISTING&&sourceNode<=0||kind==SourceKind.AMBIENT&&sourceNode!=0
-                    ||kind==SourceKind.EXPLICIT_VACUUM&&sourceNode!=-1)
-                throw new IllegalArgumentException("Invalid transported gas source share");
-        }
-    }
-    private final GasRuntimeGeometry sourceGeometry;
+    private final GasRuntimeGeometry sourceGeometry,preparedFrame;
     private final mmm.fluid.air.AirNetwork sourceNetwork;
     private final long networkRevision;
-    private final PhaseOccupancyState sourceOccupancy,futureOccupancy;
+    private final PhaseOccupancyState sourceOccupancy;
     private final LiquidCellInventory.Snapshot sourceInventory,futureInventory;
-    private final List<Share> shares;
-    private final GasRuntimeGeometry preparedFrame;
-    private final FlipPressurePhaseGeometry preparedPhase;
-    private final GasComplementGeometry preparedGeometry;
-    private final GasComponentCapacity.Prepared preparedCapacity;
-    GasVolumeAllocation(FluidDomain domain,LiquidCellInventory future,PhaseOccupancyState occupancy,List<Share> shares){
-        this(domain,future,occupancy,shares,null,null,null);
+    // Row source+1: explicit vacuum=-1, ambient=0, then finite gas nodes.
+    private final PhaseSourceColumns sources;
+
+    private GasVolumeAllocation(FluidDomain domain,LiquidCellInventory future,GasRuntimeGeometry frame,PhaseSourceColumns sources){
+        sourceGeometry=domain.gasState.frame;preparedFrame=frame;
+        sourceNetwork=domain.gasState.network;networkRevision=sourceNetwork.revision();
+        sourceInventory=domain.liquidCells.snapshot();futureInventory=future.snapshot();sourceOccupancy=domain.phaseOccupancy;
+        this.sources=sources;
     }
-    GasVolumeAllocation(FluidDomain domain,LiquidCellInventory future,PhaseOccupancyState occupancy,List<Share> shares,
-                        FlipPressurePhaseGeometry phase,GasComplementGeometry geometry,GasComponentCapacity.Prepared capacity){
-        this(domain,future,occupancy,shares,phase,geometry,capacity,null);
+    /** Receiver aggregation is transposed once; inventory, U, control and EOS work share its ordering. */
+    static GasVolumeAllocation fromTargetSources(FluidDomain domain,LiquidCellInventory future,GasRuntimeGeometry frame,
+                                                 PhaseSourceColumns targetSources){
+        int oldCount=domain.gasState.frame==null?0:domain.gasState.frame.nodeCount();
+        var bySource=new PhaseSourceColumns(oldCount+2);
+        if(targetSources.rowCount()!=frame.nodeCount()+1)throw new IllegalArgumentException("Gas source rows differ from future topology");
+        // Descending receivers produce ascending destination chains in each source row.
+        for(int target=frame.nodeCount();target>=0;target--){
+            if(target>0&&domain.gasState.frame!=null&&targetSources.first(target)<0)
+                throw new IllegalStateException("Future gas occupation has no transported or explicit source: node="+target
+                        +" volumeM3="+frame.capacity().chambers().get(target-1).cubicMeters()
+                        +" minimumPiece="+frame.minimumPiece(target)+" oldNodes="+oldCount);
+            for(int entry=targetSources.first(target);entry>=0;entry=targetSources.next(entry)){
+                int source=(int)targetSources.key(entry);double amount=targetSources.amount(entry);
+                if(source< -1||source>oldCount)throw new IllegalArgumentException("Gas allocation names an absent source: "+source);
+                if(amount>0)bySource.appendUnique(source+1,target,amount);
+            }
+        }
+        return new GasVolumeAllocation(domain,future,frame,bySource);
     }
-    GasVolumeAllocation(FluidDomain domain,LiquidCellInventory future,GasRuntimeGeometry frame,List<Share> shares){
-        this(domain,future,frame.occupancy(),shares,frame.phase(),frame.geometry(),frame.geometry().actualCapacity(),frame);
+    /** Energy and composition settlement can rebind an unchanged volume successor. */
+    GasVolumeAllocation rebindFuture(FluidDomain domain,LiquidCellInventory future){
+        requireCurrent(domain,future);
+        return new GasVolumeAllocation(domain,future,preparedFrame,sources);
     }
-    private GasVolumeAllocation(FluidDomain domain,LiquidCellInventory future,PhaseOccupancyState occupancy,List<Share> shares,
-                                FlipPressurePhaseGeometry phase,GasComplementGeometry geometry,GasComponentCapacity.Prepared capacity,
-                                GasRuntimeGeometry frame){
-        preparedFrame=frame;
-        sourceGeometry=domain.gasState.frame;sourceNetwork=domain.gasState.network;networkRevision=sourceNetwork.revision();
-        sourceInventory=domain.liquidCells.snapshot();futureInventory=future.snapshot();sourceOccupancy=domain.phaseOccupancy;futureOccupancy=occupancy;this.shares=List.copyOf(shares);
-        preparedPhase=phase;preparedGeometry=geometry;preparedCapacity=capacity;
-        if(occupancy==null||occupancy.cellCount()!=domain.cellCount)throw new IllegalArgumentException("Gas allocation requires complete future phase occupation");
-        for(var share:this.shares)if(share.targetSupportAnchor()>=8*domain.cellCount||share.kind()==SourceKind.EXISTING&&(sourceGeometry==null||share.sourceNode()>sourceGeometry.nodeCount()))throw new IllegalArgumentException("Gas allocation names an absent source or target");
-    }
-    GasRuntimeGeometry sourceGeometry(){return sourceGeometry;}
-    long networkRevision(){return networkRevision;}
-    LiquidCellInventory.Snapshot futureInventory(){return futureInventory;}
-    PhaseOccupancyState sourceOccupancy(){return sourceOccupancy;}
-    PhaseOccupancyState futureOccupancy(){return futureOccupancy;}
-    List<Share> shares(){return shares;}
     GasRuntimeGeometry preparedFrame(){return preparedFrame;}
-    FlipPressurePhaseGeometry preparedPhase(){return preparedPhase;}
-    GasComplementGeometry preparedGeometry(){return preparedGeometry;}
-    GasComponentCapacity.Prepared preparedCapacity(){return preparedCapacity;}
+    PhaseSourceColumns sources(){return sources;}
     void requireCurrent(FluidDomain domain,LiquidCellInventory future){
         if(domain.gasState.frame!=sourceGeometry||domain.gasState.network!=sourceNetwork||sourceNetwork.revision()!=networkRevision
                 ||domain.phaseOccupancy!=sourceOccupancy||!domain.liquidCells.hasSameGeometry(sourceInventory)||!future.hasSameGeometry(futureInventory))

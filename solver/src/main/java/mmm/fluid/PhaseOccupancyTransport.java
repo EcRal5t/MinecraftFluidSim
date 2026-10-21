@@ -4,12 +4,6 @@ import mmm.inventory.PhaseOccupancyState;
 
 import mmm.inventory.LiquidCellInventory;
 
-import java.util.ArrayList;
-
-import java.util.HashMap;
-
-import java.util.TreeMap;
-
 import mmm.units.SignedDyadic;
 
 /** Persistent micro-VOF preparation, geometric phase flux and the common carrier transaction. */
@@ -53,24 +47,18 @@ final class PhaseOccupancyTransport {
 			prepared=GasRuntimeGeometry.captureCellFuture(domain,future,occupied,domain.gasState.sealedDomainBoundary,
 					masks,rebuilt.occupancyState(),rebuilt,null,null);
 		}
-		var shares=new ArrayList<GasVolumeAllocation.Share>();
+		var sources=new PhaseSourceColumns(prepared.nodeCount()+1);
 		if(domain.gasState.frame!=null) {
 			var geometry=prepared.geometry();var topology=prepared.topology();
 			var components=geometry.actualCapacity().components;
-			var sources=new HashMap<Integer,TreeMap<Integer,Double>>();
-			int[] representative=new int[topology.chambers().size()+1];
-			double[] targetVolumes=new double[representative.length];
-			java.util.Arrays.fill(representative,-1);
+			double[] targetVolumes=new double[prepared.nodeCount()+1];
 			var old=domain.gasState.frame;
 			for(int i=0;i<components.size();i++) {
 				var component=components.get(i);
 				if(component.availableVolumeNormalized().signum()==0)continue;
 				int target=topology.nodeOfComponent(component.cell(),component.supportMask());
 				if(target<0)throw new GasTopologyBlockedException("Edited gas component has no dry representation");
-				if(representative[target]<0)representative[target]=geometry.component(component.cell(),component.supportMask()).minimumPiece();
-				if(representative[target]<0)throw new GasTopologyBlockedException("Edited gas component has no dry representation");
 				targetVolumes[target]+=component.availableVolumeNormalized().toDouble();
-				var origins=sources.computeIfAbsent(target,ignored->new TreeMap<>());
 				// A coarse pore retains its gas even when its rebuilt plane moves every
 				// dry micro piece. Source identity belongs to the whole fixed support.
 				for(int support:CellRemapMicroTopology.components(old.geometry().collisionMask(component.cell()))) {
@@ -81,29 +69,16 @@ final class PhaseOccupancyTransport {
 					else for(int bits=overlap;bits!=0;bits&=bits-1)
 						amount+=old.geometry().pieceNormalizedVolume(8*component.cell()+Integer.numberOfTrailingZeros(bits));
 					int previous=old.topology().nodeOfComponent(component.cell(),support);
-					if(previous>=0)origins.merge(previous,amount,Double::sum);
+					if(previous>=0)sources.add(target,previous,amount);
 				}
 			}
-			// Origins already mix over a complete future chamber. Keep that aggregation
-			// through remapping instead of expanding it back to every coarse component.
-			for(int target=0;target<representative.length;target++)if(representative[target]>=0) {
-				double amount=targetVolumes[target];
-				var origins=sources.get(target);
-				if(origins.isEmpty()) {
-					boolean ambient=target==0;
-					shares.add(new GasVolumeAllocation.Share(ambient?0:-1,representative[target],amount,
-							ambient?GasVolumeAllocation.SourceKind.AMBIENT:GasVolumeAllocation.SourceKind.EXPLICIT_VACUUM));
-				}else {
-					double total=0;for(double value:origins.values())total+=value;
-					for(var source:origins.entrySet()) {
-						double part=amount*(source.getValue()/total);
-						if(part>0)shares.add(new GasVolumeAllocation.Share(source.getKey(),representative[target],part,
-								source.getKey()==0?GasVolumeAllocation.SourceKind.AMBIENT:GasVolumeAllocation.SourceKind.EXISTING));
-					}
-				}
+			// Coarse supports in one future chamber share its source proportions.
+			for(int target=0;target<targetVolumes.length;target++)if(targetVolumes[target]>0){
+				if(sources.first(target)<0)sources.appendUnique(target,target==0?0:-1,targetVolumes[target]);
+				else sources.scale(target,targetVolumes[target]);
 			}
 		}
-		return new GasVolumeAllocation(domain,future,prepared,shares);
+		return GasVolumeAllocation.fromTargetSources(domain,future,prepared,sources);
 	}
 
 	static void requireCurrentGeometry(FluidDomain domain, PhaseOccupancyState state) {

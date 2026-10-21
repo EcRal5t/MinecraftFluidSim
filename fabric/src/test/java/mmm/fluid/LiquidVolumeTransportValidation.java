@@ -71,7 +71,7 @@ public final class LiquidVolumeTransportValidation {
 		var volumeBefore=d.liquidCells.exactVolume();var massBefore=d.liquidCells.massUnits();
 		var before=d.captureAuthoritativeState();
 		var prepared=d.cellMacStage.prepareLiquid(.125F);
-		var future=prepared.gasAllocation().futureOccupancy();
+		var future=prepared.gasAllocation().preparedFrame().occupancy();
 		require(!prepared.inventory().transfers().isEmpty(),"Resolved phase circulation transported no liquid");
 		require(prepared.inventory().future().exactVolume().equals(volumeBefore)
 				&&prepared.inventory().future().massUnits()==massBefore,

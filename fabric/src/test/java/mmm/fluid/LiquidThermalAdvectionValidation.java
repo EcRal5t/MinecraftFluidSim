@@ -1,6 +1,7 @@
 package mmm.fluid;
 
 import mmm.inventory.LiquidCellInventory;
+import mmm.inventory.LiquidTransportRoutes;
 
 import mmm.thermal.ThermalCellGrid;
 import mmm.thermal.ThermalMaterialDefinition;
@@ -34,10 +35,9 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		require(d.domainInventory.tryInsertExactVolume(0,0,0,1,0,water,true).transferred(),"Reference-energy source insertion failed");
 		var before=d.liquidCells.snapshot();var volume=d.liquidCells.exactVolume();long mass=d.liquidCells.massUnits();
 		var sourceKey=new LiquidCellInventory.Key(0,water,255);var movedVolume=SignedDyadic.of(1,-32);
-		var plan=d.liquidCells.planRoutes(List.of(new LiquidCellInventory.SourceRoutes(d.liquidCells.stock(sourceKey),List.of(
-				new LiquidCellInventory.TransportRoute(0,sourceKey,new LiquidCellInventory.Key(1,water,255),movedVolume),
-				new LiquidCellInventory.TransportRoute(-1,sourceKey,sourceKey,d.liquidCells.stock(sourceKey).volume().subtract(movedVolume))))),
-				FluidThermalBinding.liquidEnergyPartitioner(d));
+		var routes=LiquidTransportRoutes.builder(1,2);routes.source(d.liquidCells.stock(sourceKey));
+		routes.route(0,1,255,movedVolume);routes.route(-1,0,255,d.liquidCells.stock(sourceKey).volume().subtract(movedVolume));
+		var plan=d.liquidCells.planRoutes(routes.build(),FluidThermalBinding.liquidEnergyPartitioner(d));
 		require(before.rows().equals(d.liquidCells.snapshot().rows()),"Caloric transport changed committed rows during preparation");
 		for(var stock:plan.future().physicalStocks()){
 			double t=d.thermalState.stateFunction().stateForInternalEnergy(d.thermalState.thermalMaterialHandleForFluid(water),stock.massKilograms(),
