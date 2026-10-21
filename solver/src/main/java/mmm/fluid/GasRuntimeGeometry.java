@@ -17,7 +17,7 @@ final class GasRuntimeGeometry {
 	private final GasComplementGeometry geometry;
 	private final GasChamberTopology topology;
 	private final GasChamberCapacity capacity;
-	private final double[] openedPoreVolumes;
+	private final SignedDyadic[] openedPoreVolumes;
 
 	private GasRuntimeGeometry(FluidDomain domain,LiquidCellInventory future,long[] occupied,boolean sealed,
 	                           byte[] futureMasks,PhaseOccupancyState futureOccupancy,
@@ -48,43 +48,47 @@ final class GasRuntimeGeometry {
 		}else geometry=preparedGeometry;
 		topology=GasChamberTopology.capture(geometry,sealed);
 		capacity=GasChamberCapacity.capturePrepared(geometry,topology);
-		openedPoreVolumes=captureOpenedPore(old,domain.unitScale.cubicMetersPerNormalizedVolume());
+		openedPoreVolumes=captureOpenedPore(old);
 	}
 	/** Only actual solid/collision changes create new vacuum control volume. */
-	private double[] captureOpenedPore(GasRuntimeGeometry old,double cubicMetersPerVolume){
+	private SignedDyadic[] captureOpenedPore(GasRuntimeGeometry old){
 		if(old==null||geometry==old.geometry||Arrays.equals(occupiedSvq,old.occupiedSvq)&&geometry.sameCollisionMasks(old.geometry))return null;
-		var previous=old.geometry.actualCapacity();var future=geometry.actualCapacity();double[] opened=null;
+		var previous=old.geometry.actualCapacity();var future=geometry.actualCapacity();SignedDyadic[] opened=null;
 		for(int cell=0;cell<occupiedSvq.length;cell++){
 			if(occupiedSvq[cell]==old.occupiedSvq[cell]&&geometry.collisionMask(cell)==old.geometry.collisionMask(cell))continue;
 			for(int at=future.offsets[cell];at<future.offsets[cell+1];at++){
 				var component=future.components.get(at);
 				if(component.availableVolumeNormalized().signum()==0)continue;
 				int node=topology.nodeOfComponent(cell,component.supportMask());if(node<=0)continue;
-				double oldPore=0;
+				var oldPore=SignedDyadic.ZERO;
 				for(int i=previous.offsets[cell];i<previous.offsets[cell+1];i++){
 					var support=previous.components.get(i);int overlap=support.supportMask()&component.supportMask();
-					oldPore+=support.poreVolumeNormalized().toDouble()*Integer.bitCount(overlap)/Integer.bitCount(support.supportMask());
+					if(overlap==support.supportMask())oldPore=oldPore.add(support.poreVolumeNormalized());
+					else if(overlap!=0)oldPore=oldPore.add(support.poreVolumeNormalized().multiply(
+							SignedDyadic.of(Integer.bitCount(overlap)/(double)Integer.bitCount(support.supportMask()))));
 				}
-				double gain=component.poreVolumeNormalized().toDouble()-oldPore;if(!(gain>0))continue;
-				double volume;
+				var gain=component.poreVolumeNormalized().subtract(oldPore);if(gain.signum()<=0)continue;
+				SignedDyadic volume;
 				int newOpen=old.geometry.collisionMask(cell)&~geometry.collisionMask(cell)&component.supportMask();
 				if(newOpen!=0){
 					var dry=geometry.component(cell,component.supportMask());int selected=newOpen&dry.dryMicroMask();if(selected==0)continue;
-					volume=component.availableVolumeNormalized().toDouble();
+					volume=component.availableVolumeNormalized();
 					if(selected!=dry.dryMicroMask()){
 						double fraction=0;
 						for(int bits=selected;bits!=0;bits&=bits-1)
 							fraction+=geometry.pieceNormalizedVolume(8*cell+Integer.numberOfTrailingZeros(bits));
-						volume*=fraction/dry.normalizedVolume();
+						volume=volume.multiply(SignedDyadic.of(fraction/dry.normalizedVolume()));
 					}
-				}else volume=Math.min(component.availableVolumeNormalized().toDouble(),gain);
-				if(volume>0){if(opened==null)opened=new double[nodeCount()];opened[node-1]+=volume;}
+				}else volume=component.availableVolumeNormalized().compareTo(gain)<0?component.availableVolumeNormalized():gain;
+				if(volume.signum()>0){
+					if(opened==null){opened=new SignedDyadic[nodeCount()];Arrays.fill(opened,SignedDyadic.ZERO);}
+					opened[node-1]=opened[node-1].add(volume);
+				}
 			}
 		}
-		if(opened!=null)for(int node=0;node<opened.length;node++)opened[node]*=cubicMetersPerVolume;
 		return opened;
 	}
-	double openedPoreVolume(int node){return openedPoreVolumes==null?0:openedPoreVolumes[node-1];}
+	SignedDyadic openedPoreVolume(int node){return openedPoreVolumes==null?SignedDyadic.ZERO:openedPoreVolumes[node-1];}
 
 	static GasRuntimeGeometry capture(FluidDomain domain,long[] occupied,boolean sealed) {
 		domain.ensurePhaseOccupancy();

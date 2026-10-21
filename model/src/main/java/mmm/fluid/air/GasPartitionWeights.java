@@ -67,6 +67,13 @@ public final class GasPartitionWeights {
         for (int i = 0; i < remaining; i++) shares[order[i]]++;
         return shares;
     }
+    /** Exact quantity shares retain the same bounded weights used for inventory and species. */
+    public SignedDyadic[] partitionExact(SignedDyadic total) {
+        if(total==null)throw new IllegalArgumentException("Missing exact gas partition quantity");
+        var result=new SignedDyadic[weights.length];
+        for(int i=0;i<result.length;i++)result[i]=total.multiply(SignedDyadic.of(weights[i],-52));
+        return result;
+    }
     public double[] partitionControlVolume(double total) {
         if (!Double.isFinite(total) || total < 0) throw new IllegalArgumentException("Invalid gas control volume");
         double[] result = new double[weights.length];

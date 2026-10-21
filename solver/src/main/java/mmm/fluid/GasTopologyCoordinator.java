@@ -28,8 +28,8 @@ final class GasTopologyCoordinator {
 	private AirNetwork committedNetwork;
 	private long committedNetworkRevision;
 	private enum VolumeWork { ADIABATIC, FIXED_ENERGY }
-	private record SourceVolumeWork(int node,double volume,double energy,List<GasInventory> parts,
-	                                int[] targets,double[] controls,double[] partEnergy) { }
+	private record SourceVolumeWork(int node,SignedDyadic volume,double energy,List<GasInventory> parts,
+	                                int[] targets,SignedDyadic[] controls,double[] partEnergy) { }
 	record PhaseBirth(int cell, int supportMask, GasInventory inventory, double energy) { }
 	record PhaseBatch(List<GasInventory> inventories,
 	                  GasAuditLedger source, GasAuditLedger sink,
@@ -342,7 +342,7 @@ final class GasTopologyCoordinator {
 			for(int node=1;node<=count;node++) {
 				var stock=ambientInventory(available[node-1]);inventories.set(node-1,stock);sourceDelta=sourceDelta.add(stock);
 				if(thermal){mixed[node-1]=SignedDyadic.of(domain.thermalState.ambientGasEnergy(stock));sourceEnergy=sourceEnergy.add(mixed[node-1]);}
-				if(retainControl)inherited[node-1]=SignedDyadic.of(available[node-1]);
+				if(retainControl)inherited[node-1]=next.capacity().normalizedVolume(node);
 			}
 		} else {
 			for(int previous=1;previous<=old.nodeCount();previous++) {
@@ -360,26 +360,27 @@ final class GasTopologyCoordinator {
 				var weights=split?GasPartitionWeights.of(amounts):null;
 				var parts=split?stock.partition(weights):List.of(stock);
 				double[] energies=!thermal?null:stock.isEmpty()?new double[parts.size()]:split?partitionEnergy(previous,parts,edit):new double[]{energy(previous,edit)};
-				double[] control=!retainControl?null:split?GasTopologyVolumePartition.partition(domain.gasState.network.availableVolume(previous),weights):new double[]{domain.gasState.network.availableVolume(previous)};
+				SignedDyadic[] control=!retainControl?null:split?GasTopologyVolumePartition.partition(old.capacity().normalizedVolume(previous),weights):new SignedDyadic[]{old.capacity().normalizedVolume(previous)};
 				for(part=0;part<targets.length;part++) {
 					int node=targets[part];
 					if(node==0){sinkDelta=sinkDelta.add(parts.get(part));if(thermal)sinkEnergy=sinkEnergy.add(SignedDyadic.of(energies[part]));}
 					else {inventories.set(node-1,inventories.get(node-1).merge(parts.get(part)));
 						if(thermal)mixed[node-1]=mixed[node-1].add(SignedDyadic.of(energies[part]));
 						if(retainControl){
-							var volume=SignedDyadic.of(control[part]);inherited[node-1]=inherited[node-1].add(volume);
+							inherited[node-1]=inherited[node-1].add(control[part]);
 						}}
 				}
-				if(retainControl&&!stock.isEmpty())sourceWork.add(new SourceVolumeWork(previous,domain.gasState.network.availableVolume(previous),
-						energy(previous,edit),parts,targets,control,energies));
+				if(retainControl)sourceWork.add(new SourceVolumeWork(previous,old.capacity().normalizedVolume(previous),
+						stock.isEmpty()?0:energy(previous,edit),parts,targets,control,energies));
 			}
 			// Ambient is source row 1. Explicit vacuum (row 0) imports neither stock nor old control.
 			for(int entry=origins.first(1);entry>=0;entry=origins.next(entry)) {
 				int node=(int)origins.key(entry);if(node==0)continue;
-				double volume=origins.amount(entry)*domain.unitScale.cubicMetersPerNormalizedVolume();
+				var normalized=allocation.ambientControl(node);
+				double volume=normalized.multiply(SignedDyadic.of(domain.unitScale.cubicMetersPerNormalizedVolume())).toDouble();
 				var stock=ambientInventory(volume);inventories.set(node-1,inventories.get(node-1).merge(stock));sourceDelta=sourceDelta.add(stock);
 				if(thermal){var u=SignedDyadic.of(domain.thermalState.ambientGasEnergy(stock));mixed[node-1]=mixed[node-1].add(u);sourceEnergy=sourceEnergy.add(u);}
-				if(retainControl)inherited[node-1]=inherited[node-1].add(SignedDyadic.of(volume));
+				if(retainControl)inherited[node-1]=inherited[node-1].add(normalized);
 			}
 			if(next.sealedExterior()&&(!sourceDelta.isEmpty()||!sinkDelta.isEmpty()))
 				throw new GasTopologyBlockedException("Closed gas topology attempted an external source or sink");
@@ -398,7 +399,7 @@ final class GasTopologyCoordinator {
 			}
 		}
 		SignedDyadic[] workBySource=new SignedDyadic[old==null?1:old.nodeCount()+1];Arrays.fill(workBySource,SignedDyadic.ZERO);
-		SignedDyadic mechanicalWork=retainControl?applySourceVolumeWork(sourceWork,next,available,inherited,mixed,workBySource):SignedDyadic.ZERO;
+		SignedDyadic mechanicalWork=retainControl?applySourceVolumeWork(sourceWork,next,inherited,mixed,workBySource):SignedDyadic.ZERO;
 		double[] mixedEnergy=doubles(mixed);
 		GasEnergyStore.GasRemapPlan thermalPlan=!thermal?null:edit==null
 				?domain.thermalState.planGasRemapWithSourceWork(domain.gasState.network,inventories,available,mixedEnergy,sourceEnergy,sinkEnergy,mechanicalWork)
@@ -413,41 +414,67 @@ final class GasTopologyCoordinator {
 	/** Receiver volume ratios describe actual deformation, including carried and newly opened vacuum.
 	 * Each old pressure owner receives one volume change before conservative split/mixing of its U.
 	 * At constant receiver control volume every ratio is one, so topology changes supply no work. */
-	private SignedDyadic applySourceVolumeWork(List<SourceVolumeWork> sources,GasRuntimeGeometry next,double[] available,
+	private SignedDyadic applySourceVolumeWork(List<SourceVolumeWork> sources,GasRuntimeGeometry next,
 	                                        SignedDyadic[] inherited,SignedDyadic[] mixed,SignedDyadic[] workBySource){
 		if(sources.isEmpty())return SignedDyadic.ZERO;
-		double[] ratio=new double[available.length];boolean deformed=false;
-		for(int node=0;node<ratio.length;node++){
-			// A translated solid adds only genuinely opened pore, up to net chamber expansion.
-			double expansion=Math.max(0,available[node]-inherited[node].toDouble());
-			double vacuum=Math.min(next.openedPoreVolume(node+1),expansion);
-			if(vacuum>0)inherited[node]=inherited[node].add(SignedDyadic.of(vacuum));
-			double control=inherited[node].toDouble();ratio[node]=control>0?available[node]/control:1;
-			deformed|=ratio[node]!=1;
+		var receiverChange=new SignedDyadic[next.nodeCount()];boolean deformed=false;
+		for(int node=0;node<receiverChange.length;node++){
+			var actual=next.capacity().normalizedVolume(node+1);var expansion=actual.subtract(inherited[node]);
+			var opened=next.openedPoreVolume(node+1);
+			if(expansion.signum()>0&&opened.signum()>0)
+				inherited[node]=inherited[node].add(opened.compareTo(expansion)<0?opened:expansion);
+			receiverChange[node]=inherited[node].signum()==0?SignedDyadic.ZERO:actual.subtract(inherited[node]);deformed|=receiverChange[node].signum()!=0;
 		}
 		if(!deformed)return SignedDyadic.ZERO;
-		var model=new GasThermalModel(domain.thermalState.registry(),domain.gasState.network.registry());
-		var work=SignedDyadic.ZERO;
-		for(var source:sources){
-			var retained=new ArrayList<GasInventory>();var stock=GasInventory.EMPTY;
-			double retainedVolume=0,change=0;var retainedEnergy=SignedDyadic.ZERO;boolean vented=false;
-			for(int part=0;part<source.targets().length;part++){
-				int target=source.targets()[part];
-				if(target==0)vented=true;
-				else{retained.add(source.parts().get(part));stock=stock.merge(source.parts().get(part));
-					retainedVolume+=source.controls()[part];retainedEnergy=retainedEnergy.add(SignedDyadic.of(source.partEnergy()[part]));
-					change+=source.controls()[part]*(ratio[target-1]-1);}
+		int capacity=0;for(var source:sources)capacity+=source.targets().length;
+		int[] head=new int[receiverChange.length],links=new int[capacity],owners=new int[capacity];Arrays.fill(head,-1);
+		var controls=new SignedDyadic[capacity];var known=new SignedDyadic[receiverChange.length];Arrays.fill(known,SignedDyadic.ZERO);
+		int entries=0;
+		for(int source=0;source<sources.size();source++){
+			var row=sources.get(source);
+			for(int part=0;part<row.targets().length;part++){
+				int target=row.targets()[part]-1;if(target<0||receiverChange[target].signum()==0)continue;
+				owners[entries]=source;controls[entries]=row.controls()[part];links[entries]=head[target];head[target]=entries++;
+				known[target]=known[target].add(row.controls()[part]);
 			}
-			if(stock.isEmpty()||change==0)continue;
-			double initialVolume=vented?retainedVolume:source.volume(),initialEnergy=vented?retainedEnergy.toDouble():source.energy();
-			double finalEnergy=model.compressAdiabatically(stock,initialEnergy,
-					initialVolume,initialVolume+change).finalInternalEnergy();
+		}
+		var changes=new SignedDyadic[sources.size()];Arrays.fill(changes,SignedDyadic.ZERO);
+		for(int target=0;target<receiverChange.length;target++)if(receiverChange[target].signum()!=0){
+			var other=inherited[target].subtract(known[target]);int count=other.signum()>0?1:0;
+			if(other.signum()<0)throw new IllegalStateException("Gas source controls exceed receiver inheritance: node="+(target+1));
+			for(int entry=head[target];entry>=0;entry=links[entry])count++;
+			var weights=new SignedDyadic[count];int at=0;
+			for(int entry=head[target];entry>=0;entry=links[entry])weights[at++]=controls[entry];
+			if(other.signum()>0)weights[at]=other;
+			var parts=count==1?new SignedDyadic[]{receiverChange[target]}:GasTopologyVolumePartition.partitionChange(receiverChange[target],weights);
+			at=0;for(int entry=head[target];entry>=0;entry=links[entry]){
+				int source=owners[entry];changes[source]=changes[source].add(parts[at++]);
+			}
+		}
+		var model=new GasThermalModel(domain.thermalState.registry(),domain.gasState.network.registry());
+		var scale=SignedDyadic.of(domain.unitScale.cubicMetersPerNormalizedVolume());var work=SignedDyadic.ZERO;
+		for(int index=0;index<sources.size();index++){
+			if(changes[index].signum()==0)continue;
+			var source=sources.get(index);var retained=new ArrayList<GasInventory>();var stock=GasInventory.EMPTY;
+			var retainedVolume=SignedDyadic.ZERO;var retainedEnergy=SignedDyadic.ZERO;boolean vented=false;
+			for(int part=0;part<source.targets().length;part++){
+				if(source.targets()[part]==0)vented=true;
+				else{retained.add(source.parts().get(part));stock=stock.merge(source.parts().get(part));
+					retainedVolume=retainedVolume.add(source.controls()[part]);
+					retainedEnergy=retainedEnergy.add(SignedDyadic.of(source.partEnergy()[part]));}
+			}
+			if(stock.isEmpty())continue;
+			var initialVolume=vented?retainedVolume:source.volume();var finalVolume=initialVolume.add(changes[index]);
+			double initialSI=initialVolume.multiply(scale).toDouble(),finalSI=finalVolume.multiply(scale).toDouble();
+			if(initialSI==finalSI)continue;
+			double initialEnergy=vented?retainedEnergy.toDouble():source.energy();
+			double finalEnergy=model.compressAdiabatically(stock,initialEnergy,initialSI,finalSI).finalInternalEnergy();
 			var sourceWork=SignedDyadic.of(finalEnergy).subtract(SignedDyadic.of(initialEnergy));
 			workBySource[source.node()]=workBySource[source.node()].add(sourceWork);work=work.add(sourceWork);
-			double[] partitioned=model.partitionEnergy(stock,finalEnergy,retained);int retainedIndex=0;
+			double[] partitioned=retained.size()==1?new double[]{finalEnergy}:model.partitionEnergy(stock,finalEnergy,retained);int partIndex=0;
 			for(int part=0;part<source.targets().length;part++)if(source.targets()[part]>0){
 				int target=source.targets()[part]-1;
-				mixed[target]=mixed[target].subtract(SignedDyadic.of(source.partEnergy()[part])).add(SignedDyadic.of(partitioned[retainedIndex++]));
+				mixed[target]=mixed[target].subtract(SignedDyadic.of(source.partEnergy()[part])).add(SignedDyadic.of(partitioned[partIndex++]));
 			}
 		}
 		return work;

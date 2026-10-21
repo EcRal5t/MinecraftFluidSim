@@ -2,6 +2,8 @@ package mmm.fluid;
 
 import mmm.inventory.LiquidCellInventory;
 import mmm.inventory.PhaseOccupancyState;
+import mmm.units.SignedDyadic;
+import mmm.fluid.air.GasPartitionWeights;
 
 /** One immutable future geometry and sparse old-node -> future-node source weights. */
 final class GasVolumeAllocation {
@@ -12,18 +14,20 @@ final class GasVolumeAllocation {
     private final LiquidCellInventory.Snapshot sourceInventory,futureInventory;
     // Row source+1: explicit vacuum=-1, ambient=0, then finite gas nodes.
     private final PhaseSourceColumns sources;
+    private final SignedDyadic[] ambientControls;
 
-    private GasVolumeAllocation(FluidDomain domain,LiquidCellInventory future,GasRuntimeGeometry frame,PhaseSourceColumns sources){
+    private GasVolumeAllocation(FluidDomain domain,LiquidCellInventory future,GasRuntimeGeometry frame,PhaseSourceColumns sources,SignedDyadic[] ambientControls){
         sourceGeometry=domain.gasState.frame;preparedFrame=frame;
         sourceNetwork=domain.gasState.network;networkRevision=sourceNetwork.revision();
         sourceInventory=domain.liquidCells.snapshot();futureInventory=future.snapshot();sourceOccupancy=domain.phaseOccupancy;
-        this.sources=sources;
+        this.sources=sources;this.ambientControls=ambientControls;
     }
     /** Receiver aggregation is transposed once; inventory, U, control and EOS work share its ordering. */
     static GasVolumeAllocation fromTargetSources(FluidDomain domain,LiquidCellInventory future,GasRuntimeGeometry frame,
                                                  PhaseSourceColumns targetSources){
         int oldCount=domain.gasState.frame==null?0:domain.gasState.frame.nodeCount();
         var bySource=new PhaseSourceColumns(oldCount+2);
+        SignedDyadic[] ambientControls=null;
         if(targetSources.rowCount()!=frame.nodeCount()+1)throw new IllegalArgumentException("Gas source rows differ from future topology");
         // Descending receivers produce ascending destination chains in each source row.
         for(int target=frame.nodeCount();target>=0;target--){
@@ -31,21 +35,32 @@ final class GasVolumeAllocation {
                 throw new IllegalStateException("Future gas occupation has no transported or explicit source: node="+target
                         +" volumeM3="+frame.capacity().chambers().get(target-1).cubicMeters()
                         +" minimumPiece="+frame.minimumPiece(target)+" oldNodes="+oldCount);
+            if(target>0&&targetSources.quantity(target,0)>0){
+                int count=0,ambient=-1;for(int entry=targetSources.first(target);entry>=0;entry=targetSources.next(entry))count++;
+                var weights=new double[count];int part=0;
+                for(int entry=targetSources.first(target);entry>=0;entry=targetSources.next(entry)){
+                    if(targetSources.key(entry)==0)ambient=part;weights[part++]=targetSources.amount(entry);
+                }
+                if(ambientControls==null){ambientControls=new SignedDyadic[frame.nodeCount()+1];java.util.Arrays.fill(ambientControls,SignedDyadic.ZERO);}
+                ambientControls[target]=count==1?frame.capacity().normalizedVolume(target):
+                        GasPartitionWeights.of(weights).partitionExact(frame.capacity().normalizedVolume(target))[ambient];
+            }
             for(int entry=targetSources.first(target);entry>=0;entry=targetSources.next(entry)){
                 int source=(int)targetSources.key(entry);double amount=targetSources.amount(entry);
                 if(source< -1||source>oldCount)throw new IllegalArgumentException("Gas allocation names an absent source: "+source);
                 if(amount>0)bySource.appendUnique(source+1,target,amount);
             }
         }
-        return new GasVolumeAllocation(domain,future,frame,bySource);
+        return new GasVolumeAllocation(domain,future,frame,bySource,ambientControls);
     }
     /** Energy and composition settlement can rebind an unchanged volume successor. */
     GasVolumeAllocation rebindFuture(FluidDomain domain,LiquidCellInventory future){
         requireCurrent(domain,future);
-        return new GasVolumeAllocation(domain,future,preparedFrame,sources);
+        return new GasVolumeAllocation(domain,future,preparedFrame,sources,ambientControls);
     }
     GasRuntimeGeometry preparedFrame(){return preparedFrame;}
     PhaseSourceColumns sources(){return sources;}
+    SignedDyadic ambientControl(int node){return ambientControls==null?SignedDyadic.ZERO:ambientControls[node];}
     void requireCurrent(FluidDomain domain,LiquidCellInventory future){
         if(domain.gasState.frame!=sourceGeometry||domain.gasState.network!=sourceNetwork||sourceNetwork.revision()!=networkRevision
                 ||domain.phaseOccupancy!=sourceOccupancy||!domain.liquidCells.hasSameGeometry(sourceInventory)||!future.hasSameGeometry(futureInventory))
