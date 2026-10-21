@@ -47,7 +47,7 @@ final class PressureSystem {
 	PressureProjectionResult solveProjection(float dt) {
 		duration = dt; domain.domainFlowFields.ensureGrid();
 		if(!forceStepPrepared)beginForceStep();
-		solidFaces.rebuild(); faces.rebuild(dt);
+		faces.rebuild(dt);
 		pressureDatum=faces.commonPressureDatum();faces.shiftPressureDatum(pressureDatum);
 		var p = domain.projection;
 		prepareGasStorage();

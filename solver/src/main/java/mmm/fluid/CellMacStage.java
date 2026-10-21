@@ -11,7 +11,13 @@ final class CellMacStage {
 	private final FluidDomain domain;
 	final double[] massX, massY, massZ;
 	private final double[] cellMass;
-	private long inventoryRevision = -1;
+	private long inventoryRevision=-1,quantityRevision;
+	private LiquidCellInventory.Snapshot preparedQuantities;
+	private FlipPressurePhaseGeometry preparedPhase;
+	private mmm.granular.GranularCouplingFields preparedSolid;
+	private mmm.granular.GranularParcelStore preparedParcels;
+	private mmm.granular.GranularDepositStore preparedDeposits;
+	private long preparedQuantityRevision=-1,preparedParcelRevision=-1,preparedDepositRevision=-1;
 	private final boolean[][] unresolvedWall;
 	private FlipPressurePhaseGeometry wallPhase;
 	private LiquidCellInventory.Snapshot wallInventory;
@@ -114,7 +120,7 @@ final class CellMacStage {
 		grid.ensureStockCapacity(inventory.physicalSize());
 		Arrays.fill(grid.stockCount, 0);
 		Arrays.fill(grid.cellStockMass, 0); Arrays.fill(grid.cellPhaseHead, -1);
-		Arrays.fill(cellMass, 0); grid.phaseEntryCount = 0;
+		grid.phaseEntryCount=0;boolean quantitiesChanged=!inventory.hasSameQuantities(preparedQuantities);
 		if (grid.exactCellVolumeInventory == null) grid.exactCellVolumeInventory = new SignedDyadic[domain.cellCount];
 		if (domain.liquidCarrierMaterialByCell == null) {
 			domain.liquidCarrierMaterialByCell = new int[domain.cellCount];
@@ -130,7 +136,7 @@ final class CellMacStage {
 			domain.projection.pressureVolume[cell] = volume.toDouble();
 			long mass = 0;
 			for (var stock : inventory.stocksInCell(cell)) mass = Math.addExact(mass, stock.massUnits());
-			cellMass[cell] = Mass.kilograms(mass);
+			cellMass[cell]=Mass.kilograms(mass);
 			grid.cellStockMass[cell] = domain.unitScale.normalizedMass(mass);
 			grid.cellDensity[cell] = mass > 0 ? grid.cellStockMass[cell] / volume.toDouble() : LiquidCarrierProperties.AIR_DENSITY;
 		}
@@ -153,19 +159,27 @@ final class CellMacStage {
 		domain.liquidPairTensionActive = domain.tension.hasAnyLiquidPairTension();
 		domain.carrierPropertiesWorkspace.invalidate();
 		grid.inventoryRevision = inventory.revision(); inventoryRevision = inventory.revision();
-		rebuildFaceInertia();
+		if(quantitiesChanged){quantityRevision++;rebuildFaceInertia();}
+		preparedQuantities=inventory.snapshot();
 		domain.gridDirty = false;
 	}
 
-	void rebuildGeometry() {
-		rebuildInventory();
-		domain.gasTopologyCoordinator.refresh();
-		domain.pressurePhaseGeometry = domain.gasState.frame.phase();
+	long quantityRevision(){return quantityRevision;}
+	void rebuildGeometry(){
+		rebuildInventory();domain.gasTopologyCoordinator.refresh();
+		domain.pressurePhaseGeometry=domain.gasState.frame.phase();
 		domain.pressureSystem.faces.classify();
-		domain.pressureSystem.solidFaces.rebuild();
-		rebuildWallSupport();
-		domain.tension.rebuildSurfaceTensionPressure();
-		domain.pressureGeometryDirty = false;
+		var parcels=domain.granularState==null?null:domain.granularState.parcels;
+		var deposits=domain.granularState==null?null:domain.granularState.deposits;
+		long parcelRevision=parcels==null?-1:parcels.mutationRevision(),depositRevision=deposits==null?-1:deposits.mutationRevision();
+		if(preparedPhase!=domain.pressurePhaseGeometry||preparedQuantityRevision!=quantityRevision
+				||preparedSolid!=domain.pressureGranularCoupling||preparedParcels!=parcels||preparedDeposits!=deposits
+				||preparedParcelRevision!=parcelRevision||preparedDepositRevision!=depositRevision){
+			domain.pressureSystem.solidFaces.rebuild();rebuildWallSupport();
+			preparedPhase=domain.pressurePhaseGeometry;preparedQuantityRevision=quantityRevision;preparedSolid=domain.pressureGranularCoupling;
+			preparedParcels=parcels;preparedDeposits=deposits;preparedParcelRevision=parcelRevision;preparedDepositRevision=depositRevision;
+		}
+		domain.tension.rebuildSurfaceTensionPressure();domain.pressureGeometryDirty=false;
 	}
 
 	void rebuildVelocity() {

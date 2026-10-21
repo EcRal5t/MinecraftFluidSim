@@ -16,11 +16,12 @@ public final class PressureCapacityValidation {
 		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(1, 1000, 0, .05F, 120, 1e-5F, .002F, 0));
 		domain.setVolume(1, 0, 0, .5F); domain.domainFlowFields.ensureGrid();
 		var graph = domain.pressureSystem.faces; graph.rebuild(.05F);
-		double port=graph.totalPortCoefficient(0,1,0,255,255);
+		int face=graph.offsets[0]+domain.domainFlowFields.xFaceIndex(1,0,0);
+		double port=graph.fluidArea(face);
 		domain.mac.velocityX[1]=-.25F; graph.rebuild(.05F);
-		close(graph.totalPortCoefficient(0,1,0,255,255),port,"Mixture pressure aperture changed with the transport donor direction");
+		close(graph.fluidArea(face),port,"Mixture pressure aperture changed with the transport donor direction");
 		domain.mac.velocityX[1]=.25F; graph.rebuild(.05F);
-		close(graph.totalPortCoefficient(0,1,0,255,255),port,"Mixture pressure aperture changed after flow reversal");
+		close(graph.fluidArea(face),port,"Mixture pressure aperture changed after flow reversal");
 		close(port,1,"A partial liquid cell lost its actual fixed pore port");
 	}
 

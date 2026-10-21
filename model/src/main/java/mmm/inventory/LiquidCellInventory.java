@@ -46,17 +46,47 @@ public final class LiquidCellInventory {
 	}
 
 	/** Volume uses cell-volume units; mass and species retain their integer inventory encodings. */
-	public record Stock(Key key, SignedDyadic volume, long massUnits, ChemicalMixtureRecord mixture,
-	                    double internalEnergy, boolean indicator) {
-		public Stock {
+	public static final class Stock {
+		private final Key key;
+		private final SignedDyadic volume;
+		private final long massUnits;
+		private final ChemicalMixtureRecord mixture;
+		private final double internalEnergy,volumeFraction;
+		private final boolean indicator;
+		public Stock(Key key,SignedDyadic volume,long massUnits,ChemicalMixtureRecord mixture,double internalEnergy,boolean indicator) {
 			if (internalEnergy == 0) internalEnergy = 0;
-			if (key == null || volume == null || volume.signum() <= 0 || !(volume.toDouble() > 0)
-					|| !Double.isFinite(volume.toDouble()) || massUnits < 0 || !Double.isFinite(internalEnergy)
+			double numericalVolume=volume==null?0:volume.toDouble();
+			if (key == null || volume == null || volume.signum() <= 0 || !(numericalVolume > 0)
+					|| !Double.isFinite(numericalVolume) || massUnits < 0 || !Double.isFinite(internalEnergy)
 					|| massUnits == 0 && internalEnergy != 0)
 				throw new IllegalArgumentException("Invalid liquid cell stock");
+			this.key=key;this.volume=volume;this.massUnits=massUnits;this.mixture=mixture;
+			this.internalEnergy=internalEnergy;this.indicator=indicator;volumeFraction=numericalVolume;
 		}
-		public double volumeFraction() { return volume.toDouble(); }
+		/** Energy publication shares the immutable material quantities and their numerical view. */
+		private Stock(Stock source,double energy) {
+			if(!Double.isFinite(energy)||source.massUnits==0&&energy!=0)throw new IllegalArgumentException("Invalid liquid cell energy");
+			key=source.key;volume=source.volume;massUnits=source.massUnits;mixture=source.mixture;
+			volumeFraction=source.volumeFraction;indicator=source.indicator;internalEnergy=energy==0?0:energy;
+		}
+		public Key key(){return key;}
+		public SignedDyadic volume(){return volume;}
+		public long massUnits(){return massUnits;}
+		public ChemicalMixtureRecord mixture(){return mixture;}
+		public double internalEnergy(){return internalEnergy;}
+		public boolean indicator(){return indicator;}
+		public double volumeFraction() { return volumeFraction; }
 		public double massKilograms() { return Mass.kilograms(massUnits); }
+		@Override public boolean equals(Object value){
+			return this==value||value instanceof Stock other&&key.equals(other.key)&&volume.equals(other.volume)
+					&&massUnits==other.massUnits&&java.util.Objects.equals(mixture,other.mixture)
+					&&Double.doubleToLongBits(internalEnergy)==Double.doubleToLongBits(other.internalEnergy)&&indicator==other.indicator;
+		}
+		@Override public int hashCode(){return java.util.Objects.hash(key,volume,massUnits,mixture,internalEnergy,indicator);}
+		@Override public String toString(){
+			return "Stock[key="+key+", volume="+volume+", massUnits="+massUnits+", mixture="+mixture
+					+", internalEnergy="+internalEnergy+", indicator="+indicator+"]";
+		}
 	}
 
 	/** Both row levels are immutable; unchanged rows are shared by private candidates. */
@@ -241,6 +271,8 @@ public final class LiquidCellInventory {
 	public long revision() { return revision; }
 	/** Geometry identity survives immutable handoff and energy-only edits. */
 	public boolean hasSameGeometry(Snapshot snapshot) { return snapshot != null && geometryIdentity == snapshot.geometryIdentity; }
+	/** Material quantities retain their identity through energy-only publication. */
+	public boolean hasSameQuantities(Snapshot snapshot) { return snapshot != null && quantities == snapshot.quantities; }
 	public long geometryRevision() { return geometryRevision; }
 	public ChemicalRegistry chemicalRegistry() { return chemistry; }
 	public boolean hasSpecies(int handle) { return presence.species[handle] != 0; }
@@ -317,7 +349,7 @@ public final class LiquidCellInventory {
 				if(row!=null)futureRows.set(currentCell,List.copyOf(row));
 				currentCell=cell;row=new ArrayList<>(rows.get(cell));changed.add(cell);
 			}
-			row.set(findOrdinal(row,stock.key()),new Stock(stock.key(),stock.volume(),stock.massUnits(),stock.mixture(),energies[i],stock.indicator()));
+			row.set(findOrdinal(row,stock.key()),new Stock(stock,energies[i]));
 			if(beforeEnergy==null){beforeEnergy=new double[energies.length];afterEnergy=new double[energies.length];}
 			beforeEnergy[energyCount]=stock.internalEnergy();afterEnergy[energyCount++]=energies[i];
 		}
@@ -417,7 +449,7 @@ public final class LiquidCellInventory {
 			totalHeat=totalHeat.add(heat);
 			if(Double.doubleToLongBits(stored)==Double.doubleToLongBits(stock.internalEnergy()))continue;
 			var row=changedRows.computeIfAbsent(key.cell(),cell->new ArrayList<>(base.future.rows.get(cell)));
-			row.set(index,new Stock(key,stock.volume(),stock.massUnits(),stock.mixture(),stored,stock.indicator()));
+			row.set(index,new Stock(stock,stored));
 			if(beforeEnergy==null){beforeEnergy=new double[heatByStock.size()];afterEnergy=new double[heatByStock.size()];}
 			beforeEnergy[energyCount]=stock.internalEnergy();afterEnergy[energyCount++]=stored;
 		}

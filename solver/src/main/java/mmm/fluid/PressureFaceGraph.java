@@ -14,10 +14,6 @@ final class PressureFaceGraph {
 	private double[] coefficients;
 	private int entries;
 	double[] gasPressureLoad = new double[0];
-	private final int[] liquidStart;
-	private int[] liquidLeftSupport, liquidRightSupport;
-	private double[] liquidCoefficient;
-	private int liquidEntries;
 	private final double[] supportFill,supportDepth,wetPortArea,sideWetArea,columnBottomPressure,hydrostaticReference;
 	private final boolean[] groundedSupport;
 	private final int[] verticalSupportContact;
@@ -26,8 +22,8 @@ final class PressureFaceGraph {
 	private long supportRevision=-1;
 	private FlipPressurePhaseGeometry classifiedGeometry;
 	private GasRuntimeGeometry classifiedGasFrame;
-	private mmm.fluid.air.AirNetwork classifiedGasNetwork;
-	private long classifiedGeometryRevision=-1,classifiedCarrierRevision=-1,classifiedGasRevision=-1;
+	private long classifiedGeometryRevision=-1,classifiedQuantityRevision=-1;
+	private final int[] supportGasOwner;
 	private final int[] parent;
 	private final boolean[] constrained, anchored;
 	private final double[] seedPressureSum, seedPressureWeight;
@@ -37,9 +33,8 @@ final class PressureFaceGraph {
 		offsets[1] = domain.mac.velocityX.length; offsets[2] = offsets[1] + domain.mac.velocityY.length;
 		faceCount = offsets[2] + domain.mac.velocityZ.length;
 		firstCell = new int[faceCount]; secondCell = new int[faceCount]; axis = new int[faceCount]; localFace = new int[faceCount];
-		start = new int[faceCount + 1]; liquidStart = new int[faceCount + 1];
-		liquidLeftSupport = new int[64]; liquidRightSupport = new int[liquidLeftSupport.length];
-		liquidCoefficient = new double[liquidLeftSupport.length]; inverseMass = new double[faceCount]; affine = new double[faceCount];
+		start=new int[faceCount+1];inverseMass=new double[faceCount];affine=new double[faceCount];
+		supportGasOwner=new int[8*domain.cellCount];Arrays.fill(supportGasOwner,-1);
 		pressureSupports = new int[domain.cellCount]; parent = new int[domain.cellCount];
 		supportFill=new double[8*domain.cellCount];supportDepth=new double[supportFill.length];
 		wetPortArea=new double[4*faceCount];sideWetArea=new double[8*faceCount];columnBottomPressure=new double[supportFill.length];hydrostaticReference=new double[supportFill.length];
@@ -61,37 +56,46 @@ final class PressureFaceGraph {
 		}
 	}
 
-	void classify() {
-		var phase=domain.pressurePhaseGeometry;var network=domain.gasState.network;
-		if(classifiedGeometry==phase&&classifiedGeometryRevision==phase.revision()
-				&&classifiedCarrierRevision==domain.liquidGrid.inventoryRevision
-				&&classifiedGasFrame==domain.gasState.frame&&classifiedGasNetwork==network
-				&&classifiedGasRevision==network.revision())return;
-		prepareSupportGeometry();
-		Arrays.fill(pressureSupports, 0);
-		// Gas geometry already owns the exact pore-minus-stock endpoint. Pressure
-		// classification reads that same preparation instead of settling it again.
-		// Sub-resolution dry capacity shares liquid continuum pressure. Its gas
-		// inventory, thermodynamic volume and energy remain in the retained frame.
-		for (var component : domain.gasState.frame.capacity().components()) {
-			int cell = component.cell(), support = component.supportMask();
-			if (component.poreVolumeNormalized().signum() <= 0
-					|| component.availableVolumeNormalized().toDouble() > mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION) continue;
-			boolean hasMass = false;
-			if (support == (~domain.geometry.cutCells.mask(cell) & 255)) {
-				hasMass = domain.liquidGrid.cellStockMass[cell] > 0;
-			} else {
-				for (var stock : domain.liquidCells.stocksInCell(cell)) {
-					if (stock.key().supportMask() == support && stock.massUnits() > 0) { hasMass = true; break; }
+	void classify(){
+		var phase=domain.pressurePhaseGeometry;var frame=domain.gasState.frame;
+		boolean geometryChanged=classifiedGeometry!=phase||classifiedGeometryRevision!=phase.revision()
+				||classifiedQuantityRevision!=domain.cellMacStage.quantityRevision();
+		boolean ownersChanged=classifiedGasFrame==null||classifiedGasFrame.topology()!=frame.topology();
+		if(!geometryChanged&&!ownersChanged)return;
+		if(geometryChanged){
+			prepareSupportGeometry();
+			Arrays.fill(pressureSupports, 0);
+			// Gas geometry already owns the exact pore-minus-stock endpoint. Pressure
+			// classification reads that same preparation instead of settling it again.
+			// Sub-resolution dry capacity shares liquid continuum pressure. Its gas
+			// inventory, thermodynamic volume and energy remain in the retained frame.
+			for (var component : domain.gasState.frame.capacity().components()) {
+				int cell = component.cell(), support = component.supportMask();
+				if (component.poreVolumeNormalized().signum() <= 0
+						|| component.availableVolumeNormalized().toDouble() > mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION) continue;
+				boolean hasMass = false;
+				if (support == (~domain.geometry.cutCells.mask(cell) & 255)) {
+					hasMass = domain.liquidGrid.cellStockMass[cell] > 0;
+				} else {
+					for (var stock : domain.liquidCells.stocksInCell(cell)) {
+						if (stock.key().supportMask() == support && stock.massUnits() > 0) { hasMass = true; break; }
+					}
 				}
+				if (hasMass) pressureSupports[cell] |= support;
 			}
-			if (hasMass) pressureSupports[cell] |= support;
+			prepareHydrostaticReference();
+			for(int cell=0;cell<domain.cellCount;cell++)domain.projection.pressureFluid[cell]=pressureSupports[cell]!=0;
+			classifiedGeometry=phase;classifiedGeometryRevision=phase.revision();
+			classifiedQuantityRevision=domain.cellMacStage.quantityRevision();
 		}
-		prepareHydrostaticReference();
-		for(int cell=0;cell<domain.cellCount;cell++)domain.projection.pressureFluid[cell]=pressureSupports[cell]!=0;
-		classifiedGeometry=phase;classifiedGeometryRevision=phase.revision();
-		classifiedCarrierRevision=domain.liquidGrid.inventoryRevision;classifiedGasFrame=domain.gasState.frame;
-		classifiedGasNetwork=network;classifiedGasRevision=network.revision();
+		if(geometryChanged||ownersChanged){
+			Arrays.fill(supportGasOwner,-1);
+			for(var component:frame.capacity().components()){
+				int cell=component.cell(),support=component.supportMask();
+				supportGasOwner[8*cell+Integer.numberOfTrailingZeros(support)]=frame.topology().nodeOfComponent(cell,support);
+			}
+		}
+		classifiedGasFrame=frame;
 	}
 	void rebuild(float dt) {
 		classify();
@@ -99,7 +103,6 @@ final class PressureFaceGraph {
 		// in the enclosing region. General cut supports grow through the same append path.
 		int reserve=Math.max(64,6*domain.liquidCells.stocks().size());
 		if(rows.length<reserve){rows=new int[reserve];coefficients=new double[reserve];}
-		if(liquidLeftSupport.length<reserve){liquidLeftSupport=new int[reserve];liquidRightSupport=new int[reserve];liquidCoefficient=new double[reserve];}
 		prepareWetFaces(0);
 		prepareWetFaces(2);
 		var p = domain.projection; int count = domain.gasState.network.nodeCount(); p.ensureGasCapacity(count);
@@ -111,11 +114,11 @@ final class PressureFaceGraph {
 		for (int node = 1; node <= count; node++) {
 			p.gasPressureUnknown[node] = true; p.gasUnknownNodes[p.gasUnknownCount++] = node;
 		}
-		entries = liquidEntries = 0; Arrays.fill(inverseMass, 0); Arrays.fill(affine, 0);
+		entries=0; Arrays.fill(inverseMass, 0); Arrays.fill(affine, 0);
 		Arrays.fill(constrained, false); Arrays.fill(anchored, false);
 		for (int c = 0; c < parent.length; c++) parent[c] = c;
 		for (int f = 0; f < faceCount; f++) {
-			start[f] = entries; liquidStart[f] = liquidEntries; int a = firstCell[f], b = secondCell[f]; if (a < 0) continue;
+			start[f]=entries; int a = firstCell[f], b = secondCell[f]; if (a < 0) continue;
 			double mass = faceMass(f); if (!(mass > 0)) continue;
 			int d = axis[f]; boolean wallSupported=domain.cellMacStage.isUnresolvedWallFace(d,localFace[f]);
 			double open = domain.pressureSystem.solidFaces.open(d, localFace[f]);
@@ -129,10 +132,8 @@ final class PressureFaceGraph {
 			for (int micro = 0; micro < 8; micro++) if ((micro >>> d & 1) != 0
 					&& (maskA & 1 << micro) == 0 && (maskB & 1 << (micro ^ 1 << d)) == 0) {
 				int peer = micro ^ 1 << d;
-				int supportA = CellRemapMicroTopology.support(maskA, micro), supportB = CellRemapMicroTopology.support(maskB, peer);
 				int port=(micro>>>((d+1)%3)&1)+2*(micro>>>((d+2)%3)&1);
 				double portArea = wetPortArea[4*f+port]*(open/(.25*ports));
-				addLiquidPort(f, supportA, supportB, open / ports);
 				if(wallSupported||!(portArea>0))continue;
 				pressureAtSide(a,b,micro,peer,d,1,(row,weight,fixed)->add(face,row,portArea/domain.config.cellSize()*weight,fixed));
 				pressureAtSide(b,a,peer,micro,d,1,(row,weight,fixed)->add(face,row,-portArea/domain.config.cellSize()*weight,fixed));
@@ -157,7 +158,7 @@ final class PressureFaceGraph {
 			}
 			if (liquid >= 0 && (reference || Math.abs(sum) > 16 * Math.ulp(coefficient))) constrained[liquid] = true;
 		}
-		start[faceCount] = entries; liquidStart[faceCount] = liquidEntries;
+		start[faceCount]=entries;
 		for (int c = 0; c < parent.length; c++) if (constrained[c]) constrained[root(c)] = true;
 		for (int c = 0; c < parent.length; c++) if (domain.domainFlowFields.isFluid(c)) {
 			int group = root(c);
@@ -231,37 +232,10 @@ final class PressureFaceGraph {
 	}
 	private void pressureAtMicro(int cell,int micro,int axis,double weight,double capillary,double hydroFraction,SideConsumer consumer) {
 		if ((pressureSupports[cell] & 1 << micro) != 0) { consumer.accept(anchored[cell] ? -1 : cell, weight, capillary); return; }
-		int node = domain.gasState.frame.nodeOfPiece(8 * cell + micro);
-		if (node >= 0) { gasSide(cell,micro,axis,node,weight,capillary,hydroFraction,consumer); return; }
-		int support = CellRemapMicroTopology.support(domain.geometry.cutCells.mask(cell), micro); double total = 0;
-		for (int bit = 0; bit < 8; bit++) if ((support & 1 << bit) != 0 && domain.gasState.frame.nodeOfPiece(8 * cell + bit) >= 0)
-			total += domain.gasState.frame.geometry().pieceNormalizedVolume(8 * cell + bit);
-		if (!(total > 0)) { consumer.accept(anchored[cell] ? -1 : cell, weight, capillary); return; }
-		for (int bit = 0; bit < 8; bit++) if ((support & 1 << bit) != 0) {
-			int owner = domain.gasState.frame.nodeOfPiece(8 * cell + bit); if (owner < 0) continue;
-			gasSide(cell,micro,axis,owner,weight*domain.gasState.frame.geometry().pieceNormalizedVolume(8*cell+bit)/total,capillary,hydroFraction,consumer);
-		}
-	}
-
-	private void addLiquidPort(int face, int supportA, int supportB, double area) {
-		for (int i = liquidStart[face]; i < liquidEntries; i++) if (liquidLeftSupport[i] == supportA && liquidRightSupport[i] == supportB) {
-			liquidCoefficient[i] += area; return;
-		}
-		if (liquidEntries == liquidCoefficient.length) {
-			liquidLeftSupport = Arrays.copyOf(liquidLeftSupport, 2 * liquidEntries);
-			liquidRightSupport = Arrays.copyOf(liquidRightSupport, 2 * liquidEntries);
-			liquidCoefficient = Arrays.copyOf(liquidCoefficient, 2 * liquidEntries);
-		}
-		liquidLeftSupport[liquidEntries] = supportA; liquidRightSupport[liquidEntries] = supportB;
-		liquidCoefficient[liquidEntries++] = area;
-	}
-	double totalPortCoefficient(int cell, int neighbor, int d, int sourceSupport, int targetSupport) {
-		if (neighbor < cell) { int swap = cell; cell = neighbor; neighbor = swap; swap = sourceSupport; sourceSupport = targetSupport; targetSupport = swap; }
-		int x = neighbor % domain.sizeX, y = neighbor / domain.sizeX % domain.sizeY, z = neighbor / (domain.sizeX * domain.sizeY);
-		int face = offsets[d] + (z * (domain.sizeY + (d == 1 ? 1 : 0)) + y) * (domain.sizeX + (d == 0 ? 1 : 0)) + x;
-		for (int i = liquidStart[face]; i < liquidStart[face + 1]; i++)
-			if (liquidLeftSupport[i] == sourceSupport && liquidRightSupport[i] == targetSupport) return liquidCoefficient[i];
-		return 0;
+		int support=CellRemapMicroTopology.support(domain.geometry.cutCells.mask(cell),micro);
+		int node=supportGasOwner[8*cell+Integer.numberOfTrailingZeros(support)];
+		if(node>=0)gasSide(cell,micro,axis,node,weight,capillary,hydroFraction,consumer);
+		else consumer.accept(anchored[cell]?-1:cell,weight,capillary);
 	}
 
 	private void gasSide(int cell,int micro,int axis,int node,double weight,double capillary,double hydroFraction,SideConsumer consumer) {
@@ -299,12 +273,12 @@ final class PressureFaceGraph {
 		if(supportGeometry==phase&&supportRevision==phase.revision())return;
 		Arrays.fill(supportFill,0);Arrays.fill(supportDepth,0);
 		for(int cell=0;cell<domain.cellCount;cell++)for(int support:CellRemapMicroTopology.components(domain.geometry.cutCells.mask(cell))){
-			double wet=0;
-			for(int bits=support;bits!=0;bits&=bits-1){
-				int micro=Integer.numberOfTrailingZeros(bits);wet+=.125*phase.liquidFractionExact(cell,micro);
+			int micro=Integer.numberOfTrailingZeros(support),slot=8*cell+micro;
+			if(phase.hasComponentPlanes(cell))supportFill[slot]=phase.componentLiquidFraction(cell,micro);
+			else{
+				double wet=0;for(int bits=support;bits!=0;bits&=bits-1)wet+=.125*phase.liquidFractionExact(cell,Integer.numberOfTrailingZeros(bits));
+				supportFill[slot]=Math.clamp(wet/(.125*Integer.bitCount(support)),0,1);
 			}
-			int slot=8*cell+Integer.numberOfTrailingZeros(support);
-			supportFill[slot]=Math.clamp(wet/(.125*Integer.bitCount(support)),0,1);
 			double height=(support&0x33)!=0&&(support&0xcc)!=0?1:.5;
 			supportDepth[slot]=.5*height*supportFill[slot];
 		}
@@ -324,6 +298,17 @@ final class PressureFaceGraph {
 		for(int face=first;face<end;face++){
 			int left=firstCell[face],right=secondCell[face];if(left<0)continue;
 			if(!(phase.liquidFractionExact(left)>0)&&!(phase.liquidFractionExact(right)>0))continue;
+			if(cut.mask(left)==0&&cut.mask(right)==0){
+				double lf=phase.liquidFractionExact(left),rf=phase.liquidFractionExact(right);
+				if((lf>=1||lf==0)&&(rf>=1||rf==0)){
+					for(int port=0;port<4;port++){
+						wetPortArea[4*face+port]=.25;
+						sideWetArea[8*face+2*port]=lf>=1?.25:0;sideWetArea[8*face+2*port+1]=rf>=1?.25:0;
+					}
+					if(d==1&&lf>=1&&rf>=1)verticalSupportContact[localFace[face]]=15;
+					continue;
+				}
+			}
 			for(int a=0;a<2;a++)for(int b=0;b<2;b++){
 				int port=a+2*b;
 				int minus=phase.microAtFace(left,d,1,.5*a,.5*b),plus=phase.microAtFace(right,d,0,.5*a,.5*b);
