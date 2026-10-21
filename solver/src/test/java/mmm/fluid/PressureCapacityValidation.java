@@ -130,7 +130,6 @@ public final class PressureCapacityValidation {
 		masks[cell]=(byte)(255^(1<<2|1<<5));
 		masks[below]=(byte)(255^(1<<7));masks[above]=(byte)(255^(1<<0));
 		d.geometry.cutCells.restoreMicroMasks(masks);
-		for(int c=0;c<d.cellCount;c++)d.geometry.cutCells.fullySolid(c)=d.geometry.cutCells.fullySolid(c);
 		d.sealDomainBoundary();d.setVolume(1,1,1,.25F);d.domainFlowFields.ensureGrid();
 		var stock=d.liquidCells.snapshot();var graph=d.pressureSystem.faces;d.pressureSystem.prepareOperator();
 		int lower=d.domainFlowFields.yFaceIndex(1,1,1),upper=d.domainFlowFields.yFaceIndex(1,2,1);
