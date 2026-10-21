@@ -66,10 +66,10 @@ public final class M5GasLiquidCouplingValidation {
 		double gasPressure=domain.gasBoundary().nodeGaugePressurePa(gasNode);
 		double compliance=domain.pressureBoundaryView.gasNodeVolumeCompliance(gasNode,gasPressure);
 		check(Double.isFinite(compliance)&&compliance>0
-				&& Math.abs(domain.projection.gasPressure[gasNode]-gasPressure)<=.01*capillaryScale
+				&& Math.abs(domain.pressureSystem.gasPressure[gasNode]-gasPressure)<=.01*capillaryScale
 				&& Math.abs(domain.pressure(1,1,1)-gasPressure-jump)<=.01*capillaryScale,
 				"finite gas EOS/compliance and liquid capillary jump did not retain static pressure balance: fill="+amount
-						+" Pg="+gasPressure+" published="+domain.projection.gasPressure[gasNode]
+						+" Pg="+gasPressure+" published="+domain.pressureSystem.gasPressure[gasNode]
 						+" Pl="+domain.pressure(1,1,1)+" jump="+jump+" compliance="+compliance);
 		FluidPhysicalAssertions.staticMotion(domain,capillaryScale,FluidPhysicalAssertions.SETTLED_ENERGY_FRACTION,"Static gas/capillary contact");
 		check(domain.gasBoundary().sealedInventory().equals(gasInventory)
@@ -144,15 +144,15 @@ public final class M5GasLiquidCouplingValidation {
 				/ (dt * dt * h * h * h));
 		domain.domainStep.step();
 		// Matrix columns refer to this solve's source geometry, before transport renumbers nodes.
-		check(domain.projection.gasPressureUnknown[gasNode],
+		check(domain.pressureSystem.gasPressureUnknown[gasNode],
 				"finite sealed gas touching liquid stayed a lagged Dirichlet boundary");
-		check(Math.abs(domain.projection.gasStorageCoefficient[gasNode] - expectedStorage)
+		check(Math.abs(domain.pressureSystem.gasStorageCoefficient[gasNode] - expectedStorage)
 				<= .001*expectedStorage,
 				"isothermal cavity pressure row did not use V/p absolute EoS compliance");
-		check(domain.pressureSystem.matrix.diagonal(domain.cellCount+gasNode) > domain.projection.gasStorageCoefficient[gasNode],
+		check(domain.pressureSystem.matrix.diagonal(domain.cellCount+gasNode) > domain.pressureSystem.gasStorageCoefficient[gasNode],
 				"compressible gas row did not share any symmetric liquid interface face");
-		check(Float.isFinite(domain.projection.gasPressure[gasNode])
-				&& domain.projection.gasPressure[gasNode] != 0.0F,
+		check(Float.isFinite(domain.pressureSystem.gasPressure[gasNode])
+				&& domain.pressureSystem.gasPressure[gasNode] != 0.0F,
 				"compressible gas pressure unknown did not respond to liquid interface motion");
 	}
 

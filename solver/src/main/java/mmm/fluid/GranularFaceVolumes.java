@@ -32,9 +32,9 @@ final class GranularFaceVolumes {
 		int count = domain.granularState == null ? 0 : domain.granularState.parcels.count();
 		if(parcelCounts.length<3*count){parcelCounts=new int[3*count];parcelFaces=new int[24*count];parcelVolumes=new double[24*count];}
 
-		if (domain.pressureGranularCoupling != null) {
+		if (domain.granularCoupling != null) {
 			for (int cell = 0; cell < domain.cellCount; cell++)
-				fixedVolume[cell] = SolidVolume.toCellVolume(domain.pressureGranularCoupling.fixedCellSvq(cell));
+				fixedVolume[cell] = SolidVolume.toCellVolume(domain.granularCoupling.fixedCellSvq(cell));
 			if (domain.granularState != null) domain.granularState.deposits.forEachCell(
 					(cell, svq, porosity) -> fixedVolume[cell] += SolidVolume.toCellVolume(svq));
 		}

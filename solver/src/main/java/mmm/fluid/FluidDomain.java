@@ -60,7 +60,6 @@ public final class FluidDomain {
 	final MacVelocityGrid mac;
 	final CellMacStage cellMacStage;
 	final MechanicalEnergySettlement mechanicalEnergy;
-	final PressureProjectionWorkspace projection;
 	final SurfaceTensionFields tension;
 	final CondensedInventoryClearPlanner clearPlanner;
 	final MaterialTransferPlanner transferPlanner;
@@ -77,10 +76,7 @@ public final class FluidDomain {
 	final GasLiquidPhaseChangeStage gasLiquidPhaseChangeStage;
 	final ThermochemistryPipeline thermochemistryPipeline;
 	final GranularTransitionStage granularTransitionStage;
-	FlipPressurePhaseGeometry pressurePhaseGeometry;
 	final float[] volume;
-	boolean surfaceTensionActive;
-	boolean liquidPairTensionActive;
 	LiquidCellInventory liquidCells;
 	PhaseOccupancyState phaseOccupancy;
 	boolean phaseOccupancyDirty = true;
@@ -111,15 +107,11 @@ public final class FluidDomain {
 	int[] granularReactivePreviousCells;
 	GranularCouplingFields granularCoupling;
 	GranularCouplingFields granularNextCoupling;
-	GranularCouplingFields pressureGranularCoupling;
 	FlipGranularCollision granularCollision;
 	int[] liquidCarrierMaterialByCell;
 	double[] liquidCarrierVolumeByCell;
 	boolean gridDirty = true;
-	boolean pressureGeometryDirty = true;
 	boolean velocityGridDirty = true;
-	int lastPressureIterations;
-	float lastPressureResidual;
 	ThermalDomainState thermalState;
 	final ThermalCarrierContext thermalMarkers;
 	double[] thermalBoundaryTemperatureK;
@@ -152,12 +144,10 @@ public final class FluidDomain {
 		this.geometry = new DomainGeometry(sizeX, sizeY, sizeZ, cellCount);
 		this.carrierPropertiesWorkspace = new LiquidCarrierProperties(cellCount);
 		this.liquidGrid = new CellLiquidGrid(cellCount, initialParticleCapacity);
-		this.pressurePhaseGeometry = new FlipPressurePhaseGeometry(sizeX, sizeY, sizeZ);
 		this.volume = new float[cellCount];
 		this.mac = new MacVelocityGrid(sizeX, sizeY, sizeZ);
 		this.cellMacStage = new CellMacStage(domain);
 		this.mechanicalEnergy = new MechanicalEnergySettlement(domain);
-		this.projection = new PressureProjectionWorkspace(cellCount);
 		this.tension = new SurfaceTensionFields(this);
 		this.pendingPhaseVolume = new PendingPhaseVolumeWork(cellCount);
 		this.thermalMarkers = domain.domainCapabilities.createThermalMarkerContext();
@@ -201,7 +191,7 @@ public final class FluidDomain {
 		if(gasState.frame!=null)throw new IllegalStateException("Phase occupancy restore requires an uninitialized gas topology");
 		PhaseOccupancyTransport.requireCurrentGeometry(this,state);
 		PhaseOccupancyTransport.publish(this,state);
-		gridDirty=pressureGeometryDirty=velocityGridDirty=true;
+		gridDirty=velocityGridDirty=true;pressureSystem.invalidateGeometry();
 	}
 	public void restoreLiquidCellState(LiquidCellInventory.Snapshot state, mmm.chemistry.ChemicalRegistry chemistry) {
 		if(gasState.frame!=null)throw new IllegalStateException("Liquid inventory restore requires an uninitialized gas topology");
@@ -230,14 +220,14 @@ public final class FluidDomain {
 		velocityGridDirty = true;
 	}
 	public void rebuildDerivedFromLiquidCells() {
-		gridDirty = pressureGeometryDirty = velocityGridDirty = true;
+		gridDirty = velocityGridDirty = true;pressureSystem.invalidateGeometry();
 		domainFlowFields.ensureGrid();
 	}
 	void markCellInventoryChanged() {
 		carrierMutationRevision++;
 		// Retain the source object until a prepared gas successor is committed.
 		phaseOccupancyDirty = true;
-		gridDirty = pressureGeometryDirty = velocityGridDirty = true;
+		gridDirty = velocityGridDirty = true;pressureSystem.invalidateGeometry();
 		carrierPropertiesWorkspace.invalidate();
 	}
 	static float trilinearValid(

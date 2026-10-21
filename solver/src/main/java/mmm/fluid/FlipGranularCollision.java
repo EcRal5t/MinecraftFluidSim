@@ -22,7 +22,7 @@ final class FlipGranularCollision {
 	private final GranularSphereCollision sphereCollision;
 	private float[] nextX = new float[0], nextY = new float[0], nextZ = new float[0];
 	private float[] nextVelocityX = new float[0], nextVelocityY = new float[0], nextVelocityZ = new float[0];
-	private int[] nextContactAge = new int[0], nextCeilMask = new int[0];
+	private int[] nextContactAge = new int[0], nextCeilMask = new int[0], nextContactComponent = new int[0];
 	private final int capacityLimit;
 	private final GranularKernel kernel;
 	private byte[] nextFlags = new byte[0];
@@ -59,6 +59,7 @@ final class FlipGranularCollision {
 			lastMaximumPositionCorrection = contacts.maximumPositionCorrection();
 			lastPositionCorrectionMassY = contacts.positionCorrectionMassY();
 			for (int index = 0; index < previewCount; index++) {
+				nextContactComponent[index] = contacts.contactComponent(index);
 				var parcel = parcels.parcel(index); float restingSpeed = cellSize * .05F;
 				boolean resting = supported[index] && nextVelocityX[index] * nextVelocityX[index]
 						+ nextVelocityY[index] * nextVelocityY[index] + nextVelocityZ[index] * nextVelocityZ[index] <= restingSpeed * restingSpeed;
@@ -70,6 +71,7 @@ final class FlipGranularCollision {
 		}
 		int operations = GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP;
 		for (int index = 0; index < previewCount; index++) {
+			nextContactComponent[index] = index;
 			GranularParcelStore.Parcel parcel = parcels.parcel(index);
 			ParticulateMaterial material = registry.material(parcel.materialHandle());
 			float radius = collisionRadius(parcel.solidVolumeSvq());
@@ -93,7 +95,8 @@ final class FlipGranularCollision {
 		int grown=Math.min(capacityLimit,Math.max(required,nextX.length+Math.max(16,nextX.length/2)));
 		nextX=new float[grown];nextY=new float[grown];nextZ=new float[grown];
 		nextVelocityX=new float[grown];nextVelocityY=new float[grown];nextVelocityZ=new float[grown];
-		nextContactAge=new int[grown];nextCeilMask=new int[grown];nextFlags=new byte[grown];capacityPending=new boolean[grown];
+		nextContactAge=new int[grown];nextCeilMask=new int[grown];nextContactComponent=new int[grown];
+		nextFlags=new byte[grown];capacityPending=new boolean[grown];
 	}
 	private void prepareMasks(GranularParcelStore parcels) {
 		for (int index = 0; index < previewCount; index++) {
@@ -203,6 +206,8 @@ final class FlipGranularCollision {
 		if (index < 0 || index >= previewCount) throw new IllegalArgumentException("Unknown granular preview index");
 		return new GranularCouplingFields.Position(nextX[index], nextY[index], nextZ[index], nextCeilMask[index]);
 	}
+
+	int plannedContactComponent(int index) { return nextContactComponent[index]; }
 
 	/**
 	 * Resolves exact cell capacity per representative parcel. A failed candidate remains at its current

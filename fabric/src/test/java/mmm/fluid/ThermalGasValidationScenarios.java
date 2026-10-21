@@ -1711,14 +1711,14 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				/ (config.timeStep() * (double) config.timeStep()
 				* config.cellSize() * config.cellSize() * config.cellSize());
 		domain.domainStep.step();
-		require(domain.projection.gasPressureUnknown[1]
-				&& Math.abs(domain.projection.gasStorageCoefficient[1] - expectedStorage)
+		require(domain.pressureSystem.gasPressureUnknown[1]
+				&& Math.abs(domain.pressureSystem.gasStorageCoefficient[1] - expectedStorage)
 				<= Math.ulp((float) expectedStorage),
 				"thermal gas pressure row did not use V/(gamma*p) from the authoritative inventory/U closure");
 		double isothermalStorage = config.density() * available / state.absolutePressurePa()
 				/ (config.timeStep() * (double) config.timeStep()
 				* config.cellSize() * config.cellSize() * config.cellSize());
-		require(domain.projection.gasStorageCoefficient[1] < isothermalStorage,
+		require(domain.pressureSystem.gasStorageCoefficient[1] < isothermalStorage,
 				"thermal gas pressure row silently used isothermal compliance");
 
 		ThermalRegistry deepColdThermal = new ThermalRegistry(List.of(
@@ -1746,7 +1746,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				0L, deepCold.captureAuthoritativeState(), List.of(), false, 0));
 		deepCold = deepColdCandidate.claimPreparedCpuDomain();
 		double deepColdTemperature = deepCold.thermalState.gasTemperature(1, deepCold.gasState.network);
-		require(deepCold.projection.gasPressureUnknown[1]
+		require(deepCold.pressureSystem.gasPressureUnknown[1]
 				&& deepColdTemperature > 0.0
 				&& deepCold.exactInternalEnergy().equals(deepCold.thermalAudit().expectedInventory()),
 				"One-kelvin gas lost its pressure response, positive temperature or exact energy ledger");

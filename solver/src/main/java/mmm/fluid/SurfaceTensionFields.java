@@ -18,6 +18,8 @@ final class SurfaceTensionFields {
 	final double[] surfaceTensionNormalY;
 	final double[] surfaceTensionNormalZ;
 	private PairInterface pair;
+	private FluidMaterialRegistry preparedMaterials;
+	private boolean surfaceActive,pairActive;
 	/** Pair preparation has independent scratch storage, allocated only for an active liquid pair. */
 	private static final class PairInterface {
 		final double[] color, first, second, normalX, normalY, normalZ, curvature;
@@ -37,20 +39,18 @@ final class SurfaceTensionFields {
 		this.surfaceTensionNormalY = new double[cellCount];
 		this.surfaceTensionNormalZ = new double[cellCount];
 	}
-	boolean hasAnySurfaceTension() {
-		if (domain.materialRegistry == null) return false;
-		for (FluidMaterial material : domain.materialRegistry.materials()) {
-			if (material.surfaceTension() > 0.0) return true;
+	/** Material identity refreshes liquid/gas and liquid-pair activity together. */
+	private void prepareMaterials(){
+		if(preparedMaterials==domain.materialRegistry)return;
+		surfaceActive=pairActive=false;
+		if(domain.materialRegistry!=null){
+			for(var material:domain.materialRegistry.materials())surfaceActive|=material.surfaceTension()>0;
+			for(double tension:domain.materialRegistry.liquidPairTensions().values())pairActive|=tension>0;
 		}
-		return false;
+		preparedMaterials=domain.materialRegistry;
 	}
-	boolean hasAnyLiquidPairTension() {
-		if (domain.materialRegistry == null) return false;
-		for (double tension : domain.materialRegistry.liquidPairTensions().values()) {
-			if (tension > 0.0) return true;
-		}
-		return false;
-	}
+	boolean hasAnySurfaceTension(){prepareMaterials();return surfaceActive;}
+	boolean hasAnyLiquidPairTension(){prepareMaterials();return pairActive;}
 	double surfaceTensionAtCell(int cell) {
 		if (domain.materialRegistry == null) return 0.0;
 		int phase = domain.domainFlowFields.dominantPhase(cell);
@@ -64,7 +64,7 @@ final class SurfaceTensionFields {
 	}
 	void rebuildSurfaceTensionPressure() {
 		Arrays.fill(surfaceTensionPressure, 0.0F);
-		if (!domain.surfaceTensionActive) return;
+		if (!domain.tension.hasAnySurfaceTension()) return;
 		for (int index = 0; index < domain.cellCount; index++) {
 			if (domain.geometry.solid[index]) {
 				surfaceTensionColor[index] = 0.0;
@@ -162,8 +162,8 @@ final class SurfaceTensionFields {
 	}
 	/** Liquid fraction of the fixed microfaces accessible from this cell; NaN means no wall. */
 	private double wallWetFraction(int cell,int x,int y,int z,int axis,int side) {
-		if(domain.pressurePhaseGeometry==null)return Double.NaN;
-		var cut=domain.geometry.cutCells;var phase=domain.pressurePhaseGeometry;
+		if(domain.pressureSystem.phaseGeometry()==null)return Double.NaN;
+		var cut=domain.geometry.cutCells;var phase=domain.pressureSystem.phaseGeometry();
 		int nx=x+(axis==0?2*side-1:0),ny=y+(axis==1?2*side-1:0),nz=z+(axis==2?2*side-1:0);
 		int peer=domain.domainFlowFields.inside(nx,ny,nz)?cut.mask(domain.domainFlowFields.cellIndex(nx,ny,nz)):255;
 		double area=0,wet=0;

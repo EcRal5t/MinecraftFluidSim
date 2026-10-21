@@ -150,7 +150,7 @@ final class MechanicalStepPipeline {
 		granularMechanicalStage.publishCollisionVelocities();
 		pressure.finishGranularForceStep();
 		granularMechanicalStage.validateVelocities();
-		int pressureIterations = domain.lastPressureIterations;
+		int pressureIterations = domain.pressureSystem.lastResult().iterations();
 		if (captureAudit) {
 			nextKineticEnergy = domain.domainStep.mechanicalGridKineticEnergyJoules();
 			audit.contactWorkJoules += nextKineticEnergy - stageKineticEnergy;

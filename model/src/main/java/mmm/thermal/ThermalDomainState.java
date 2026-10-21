@@ -188,7 +188,6 @@ public final class ThermalDomainState {
 	public ThermalAuditState audit() { return auditState; }
 	public ThermalAuditLedger auditLedger() { return auditState.ledger(); }
 	/** Transfers the parcel's discrete mechanical work to its carried internal energy. */
-	public void addGranularMechanicalHeat(int ordinal,double joules) { granularState.addMechanicalHeat(ordinal,joules); }
 	public void addGranularMechanicalHeat(int ordinal,SignedDyadic joules) { granularState.addMechanicalHeat(ordinal,joules); }
 
 	// ---- restore / capture ----
@@ -236,7 +235,6 @@ public final class ThermalDomainState {
 	public GasEnergyStore gas() { return gasState; }
 	public CoherentPhaseStore coherentPhases() { return granularState.coherentPhases(); }
 	public GranularEnergyColumn granularColumn() { return granularState.column(); }
-	public ThermalPhaseChangeEngine phaseChange() { return phaseChange; }
 	public ThermalStateFunction stateFunction() { return stateFunction; }
 	ThermalCellGrid grid() { return cellGrid; }
 	ThermalTransport transport() { return transport; }

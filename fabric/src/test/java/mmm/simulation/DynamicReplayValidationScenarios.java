@@ -237,7 +237,6 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		double addedMassJoules = 0.5 * productionConfig().density() * bodyVolume
 				* MinecraftRegionInputs.NEUTRAL_SUBMERGENCE
 				* walkingMetresPerSecond * walkingMetresPerSecond;
-		FluidDomainState state = initial.captureAuthoritativeState();
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		long generation = 0L;
 		double maximumKinetic = 0.0, tailMaximumKinetic = 0.0, peakImpulseX = 0.0;
@@ -257,15 +256,16 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 					(float) sample.centerZMetres(),
 					walking ? walkingMetresPerSecond : 0.0, 0.0, 0.0,
 					sample.displacedVolumeCubicMetres());
-			// Production orders this exactly the same way: capture, freeze the body, evaluate the
-			// complete candidate, then restore it. The wall time therefore covers the whole step.
+			// Include the source snapshot, private evaluation and single CPU candidate adoption,
+			// matching FluidRegion. Checkpoint restoration is exercised by the recovery replays.
 			long stepStart = System.nanoTime();
 			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
-					generation, state, List.of(body), false, 0));
+					generation, restored.captureAuthoritativeState(), List.of(body), false, 0));
 			MovingBodyFluidCoupling.Result coupling = candidate.movingBodyCoupling();
 			require(coupling.coupledMarkers() > 0 && coupling.coupledVolumeCubicMetres() > 0.0,
 					"walking body lost its wet moving-boundary support at tick " + tick);
-			restored = FluidDomain.restoreAuthoritativeState(candidate.state());
+			restored = candidate.claimPreparedCpuDomain();
+			require(restored != null, "CPU walking-body candidate has no prepared successor");
 			double stepMillis = (System.nanoTime() - stepStart) / 1_000_000.0;
 			if (tick > WARMUP_STEPS) maximumStepMillis = Math.max(maximumStepMillis, stepMillis);
 			double kinetic = kineticEnergy(restored);
@@ -276,7 +276,6 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			} else if (tick > settleTicks - 100) {
 				tailMaximumKinetic = Math.max(tailMaximumKinetic, kinetic);
 			}
-			state = candidate.state();
 			generation++;
 			if (walking) bodyMinimumX += perTick;
 		}

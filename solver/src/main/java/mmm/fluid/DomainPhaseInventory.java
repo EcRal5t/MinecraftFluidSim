@@ -213,12 +213,12 @@ final class DomainPhaseInventory {
 		if (domain.granularState == null) return new GranularClear(0L, 0L, 0, 0);
 		if (!hasGranularInventory()) {
 			domain.granularDepositDynamics.clear(); domain.granularCoupling.clear(); domain.granularNextCoupling.clear();
-			domain.pressureGranularCoupling = null;
+
 			return new GranularClear(0L, 0L, 0, 0);
 		}
 		GranularInventory.ClearStats cleared = domain.granularState.inventory.clear();
 		domain.granularState.escapedSink = plan.sinkAfter(); domain.granularDepositDynamics.clear();
-		domain.granularCoupling.clear(); domain.granularNextCoupling.clear(); domain.pressureGranularCoupling = null;
+		domain.granularCoupling.clear(); domain.granularNextCoupling.clear();
 		domain.lastGranularDepositStats = new GranularDepositDynamics.Stats(0, 0, 0, 0, 0);
 		domain.markCellInventoryChanged();
 		return new GranularClear(cleared.solidVolumeSvq(), cleared.massUnits(),

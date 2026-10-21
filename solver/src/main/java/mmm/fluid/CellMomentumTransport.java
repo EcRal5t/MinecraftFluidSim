@@ -75,7 +75,7 @@ final class CellMomentumTransport {
             component.prepareMergeAnchors(afterMass, anchors, domain.pressureSystem.solidFaces,
                     domain.geometry.cutCells, constrained);
             component.mixUnresolved(volume, anchors, domain.geometry.cutCells.openFaceField(axis),
-                    domain.pressurePhaseGeometry, domain.geometry.cutCells, constrained);
+                    domain.pressureSystem.phaseGeometry(), domain.geometry.cutCells, constrained);
             component.addHeatToCells(afterMass, heat);
         }
         var walls = domain.cellMacStage.stopWallMomentum(result, afterMass, heat, null);

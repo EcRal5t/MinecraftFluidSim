@@ -97,15 +97,15 @@ final class DomainFlowFields {
 		return pressureZFaceOpen(x, y, z + (dz > 0 ? 1 : 0));
 	}
 	float pressureXFaceOpen(int x, int y, int z) {
-		return domain.pressureGranularCoupling == null ? domain.geometry.cutCells.xFaceOpen(x, y, z)
+		return domain.granularCoupling == null ? domain.geometry.cutCells.xFaceOpen(x, y, z)
 				: domain.pressureSystem.solidFaces.open(0, xFaceIndex(x, y, z));
 	}
 	float pressureYFaceOpen(int x, int y, int z) {
-		return domain.pressureGranularCoupling == null ? domain.geometry.cutCells.yFaceOpen(x, y, z)
+		return domain.granularCoupling == null ? domain.geometry.cutCells.yFaceOpen(x, y, z)
 				: domain.pressureSystem.solidFaces.open(1, yFaceIndex(x, y, z));
 	}
 	float pressureZFaceOpen(int x, int y, int z) {
-		return domain.pressureGranularCoupling == null ? domain.geometry.cutCells.zFaceOpen(x, y, z)
+		return domain.granularCoupling == null ? domain.geometry.cutCells.zFaceOpen(x, y, z)
 				: domain.pressureSystem.solidFaces.open(2, zFaceIndex(x, y, z));
 	}
 	float[] markerSlotPosition(int cellX, int cellY, int cellZ, int slot) {
@@ -148,7 +148,7 @@ final class DomainFlowFields {
 		return result;
 	}
 	void ensureGrid() {
-		ensurePressureGeometry();
+		domain.pressureSystem.prepareGeometry();
 		ensureVelocityGrid();
 	}
 	void ensureVelocityGrid() {
@@ -156,12 +156,8 @@ final class DomainFlowFields {
 		if (domain.velocityGridDirty) domain.cellMacStage.rebuildVelocity();
 	}
 	void ensureInventoryGrid() { if (domain.gridDirty) domain.cellMacStage.rebuildInventory(); }
-	void ensurePressureGeometry() {
-		ensureInventoryGrid();
-		if (domain.pressureGeometryDirty) domain.cellMacStage.rebuildGeometry();
-	}
 	long carrierMutationRevision() { return domain.carrierMutationRevision; }
-	boolean isFluid(int index) { return domain.projection.pressureFluid[index]; }
+	boolean isFluid(int index) { return domain.pressureSystem.faces.pressureSupports[index]!=0; }
 	boolean isAir(int index) { return !domain.geometry.solid[index] && !isFluid(index); }
 	boolean carrierFaceActive(int first, int second, float openArea) {
 		return openArea > 0.0F && !domain.geometry.solid[first] && !domain.geometry.solid[second]

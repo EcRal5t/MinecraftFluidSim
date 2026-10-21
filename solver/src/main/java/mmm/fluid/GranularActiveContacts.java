@@ -9,9 +9,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 
-/** Predictive sphere contacts with bounded geometric passes and a common finite-mass impulse solve. */
+/** Local predictive contact manifolds with a common finite-mass impulse solve. */
 final class GranularActiveContacts {
-	private record Constraint(GranularContactCompression.Row row, double minimum, double tolerance) { }
+	private static final int GEOMETRIC_PASSES = 8;
+	private static final int LOCAL_CANDIDATES = 12;
+	private static final int CONTACT_DIRECTIONS = 6;
+	private record Constraint(GranularContactCompression.Row row, double minimum, double tolerance, double time) { }
 	private final GranularParcelStore parcels;
 	private final GranularSphereCollision fixed;
 	private final double h;
@@ -20,24 +23,30 @@ final class GranularActiveContacts {
 	private final float[] radius;
 	private final ParticulateMaterial[] materials;
 	private final double[][] lower, upper;
-	private final int[] sweepOrder;
+	private final int[] order, leftChild, rightChild, member, heapNode, contactParent;
+	private final double[] heapTime, heapDistance;
+	private final Constraint[] manifold = new Constraint[CONTACT_DIRECTIONS];
 	private final ArrayList<ArrayList<Constraint>> fixedByParcel;
 	private final ArrayList<Constraint> constraints = new ArrayList<>();
 	private final HashSet<Long> pairs = new HashSet<>();
-	private final HashSet<Long> discovered = new HashSet<>();
-	private int operations;
-	private String operationStage = "prediction";
+	private int operations, nodeCount, heapSize;
 	private double maximumPositionCorrection, positionCorrectionMassY;
 
 	GranularActiveContacts(GranularParcelStore parcels, GranularRegistry registry, GranularSphereCollision fixed,
 	                      float h, float duration) {
 		this.parcels = parcels; this.fixed = fixed; this.h = h;
 		int count = parcels.count();
-		lower = new double[3][count]; upper = new double[3][count]; sweepOrder = new int[count];
+		int treeCapacity = 2 * count;
+		lower = new double[3][treeCapacity]; upper = new double[3][treeCapacity];
+		order = new int[count]; leftChild = new int[treeCapacity]; rightChild = new int[treeCapacity];
+		member = new int[treeCapacity]; heapNode = new int[treeCapacity];
+		contactParent = new int[count];
+		heapTime = new double[treeCapacity]; heapDistance = new double[treeCapacity];
 		fixedByParcel = new ArrayList<>(count);
 		initial = new double[count][]; predicted = new double[count][]; velocity = new double[count][];
 		mass = new double[count]; radius = new float[count]; materials = new ParticulateMaterial[count];
 		for (int i = 0; i < count; i++) {
+			contactParent[i] = i;
 			fixedByParcel.add(null);
 			var p = parcels.parcel(i);
 			initial[i] = new double[]{p.x(), p.y(), p.z()}; mass[i] = p.mass();
@@ -57,13 +66,9 @@ final class GranularActiveContacts {
 	void preview(float[] x, float[] y, float[] z, float[] vx, float[] vy, float[] vz, boolean[] supported) {
 		double[][] source = predicted;
 		double[][] points = Arrays.stream(source).map(double[]::clone).toArray(double[][]::new);
-		// New constraints are discovered geometrically, with no collision event queue or repeated zero-time events.
-		for (int pass = 0; pass < 8; pass++) {
-			int before = constraints.size();
-			operationStage = "swept broad phase";
-			findContacts(points);
-			if (before == constraints.size() && pass > 0 && positionsResolved(points)) break;
-			operationStage = "position projection";
+		for (int pass = 0; pass < GEOMETRIC_PASSES; pass++) {
+			findContacts(points, pass);
+			if (pass > 0 && positionsResolved(points)) break;
 			// Local mass-weighted PBD shares the contact rows with the velocity response.
 			// Four sweeps per geometric pass replace a complete component solve and CCD replay.
 			for (int sweep = 0; sweep < 4; sweep++) {
@@ -77,7 +82,6 @@ final class GranularActiveContacts {
 					addFixedPlane(i, plane.normal(), plane.minimum());
 			}
 		}
-		operationStage = "velocity response";
 		double[][] outgoing = velocity.clone();
 		for (var component : components()) {
 			double[][] input = component.vectors(velocity);
@@ -118,6 +122,7 @@ final class GranularActiveContacts {
 
 	double maximumPositionCorrection() { return maximumPositionCorrection; }
 	double positionCorrectionMassY() { return positionCorrectionMassY; }
+	int contactComponent(int index) { return root(contactParent, index); }
 
 	private void projectPosition(Constraint constraint, double[][] points) {
 		var row = constraint.row();
@@ -214,18 +219,13 @@ final class GranularActiveContacts {
 		}
 		for (var old : fixedContacts) if (Arrays.equals(old.row().normal(), normal)
 				&& Math.abs(old.minimum() - minimum) <= tolerance) return false;
-		var constraint = new Constraint(new GranularContactCompression.Row(i, -1, normal), minimum, tolerance);
+		var constraint = new Constraint(new GranularContactCompression.Row(i, -1, normal), minimum, tolerance, 0);
 		fixedContacts.add(constraint);
 		constraints.add(constraint);
 		return true;
 	}
 
-	private void addPair(int i, int j, double[][] points) {
-		long key = ((long) i << 32) | j;
-		if (pairs.contains(key)) return;
-		// Repeated PBD scans of the same spatial pair are bounded arithmetic work.
-		// Only discovering another spatial relation spends the geometric work budget.
-		if (discovered.add(key)) spend();
+	private Constraint candidate(int i, int j, double[][] points) {
 		double rx = initial[j][0] - initial[i][0], ry = initial[j][1] - initial[i][1], rz = initial[j][2] - initial[i][2];
 		double dx = (points[j][0] - initial[j][0]) - (points[i][0] - initial[i][0]);
 		double dy = (points[j][1] - initial[j][1]) - (points[i][1] - initial[i][1]);
@@ -237,9 +237,9 @@ final class GranularActiveContacts {
 		else {
 			double a = Math.fma(dx, dx, Math.fma(dy, dy, dz * dz));
 			double b = Math.fma(rx, dx, Math.fma(ry, dy, rz * dz)), disc = Math.fma(-a, c, b * b);
-			if (!(a > 0) || b >= 0 || disc < 0) return;
+			if (!(a > 0) || b >= 0 || disc < 0) return null;
 			time = c / (-b + Math.sqrt(disc));
-			if (!(time >= 0 && time <= 1)) return;
+			if (!(time >= 0 && time <= 1)) return null;
 		}
 		double[] normal = new double[3]; double length = 0;
 		normal[0] = Math.fma(time, dx, rx); normal[1] = Math.fma(time, dy, ry); normal[2] = Math.fma(time, dz, rz);
@@ -247,67 +247,197 @@ final class GranularActiveContacts {
 		if (length > 0) for (int a = 0; a < 3; a++) normal[a] /= length;
 		else normal[(i + j) % 3] = 1;
 		// Restitution is a velocity impulse. Position contact resolves the representative radii once.
-		constraints.add(new Constraint(new GranularContactCompression.Row(i, j, normal), sum, tolerance));
-		pairs.add(key);
+		return new Constraint(new GranularContactCompression.Row(i, j, normal), sum, tolerance, time);
 	}
 
-	/** Tight swept boxes keep the candidate scale tied to representative size and actual motion. */
-	private void findContacts(double[][] points) {
-		int axis = 0;
+	/** Each pass replaces the soft pair manifold; fixed shell and bed planes remain complete. */
+	private void findContacts(double[][] points, int pass) {
+		constraints.clear();
+		pairs.clear();
+		for (var fixedContacts : fixedByParcel) if (fixedContacts != null) constraints.addAll(fixedContacts);
+		for (int i = 0; i < order.length; i++) order[i] = i;
+		nodeCount = 0;
+		if (order.length == 0) return;
+		buildTree(0, order.length, points);
+		int budget = (GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP - operations) / (GEOMETRIC_PASSES - pass);
+		for (int visit = 0; visit < order.length; visit++) {
+			int remaining = order.length - visit;
+			int quota = Math.min(LOCAL_CANDIDATES, (budget + remaining - 1) / remaining);
+			// Reverse visits between passes so a coarse work allocation does not favour one end of the tree.
+			int i = order[(pass & 1) == 0 ? visit : order.length - 1 - visit];
+			budget -= queryContacts(i, points, quota);
+		}
+	}
+
+	private int buildTree(int first, int end, double[][] points) {
+		int node = nodeCount++, axis = 0;
 		double widest = -1;
 		for (int a = 0; a < 3; a++) {
-			double minimum = Double.POSITIVE_INFINITY, maximum = Double.NEGATIVE_INFINITY;
-			for (int i = 0; i < points.length; i++) {
+			double lo = Double.POSITIVE_INFINITY, hi = Double.NEGATIVE_INFINITY;
+			for (int visit = first; visit < end; visit++) {
+				int i = order[visit];
 				double reach = radius[i] + GranularSpawnAdmission.positionTolerance(radius[i], radius[i]);
-				lower[a][i] = Math.min(initial[i][a], points[i][a]) - reach;
-				upper[a][i] = Math.max(initial[i][a], points[i][a]) + reach;
-				minimum = Math.min(minimum, lower[a][i]);
-				maximum = Math.max(maximum, lower[a][i]);
+				lo = Math.min(lo, Math.min(initial[i][a], points[i][a]) - reach);
+				hi = Math.max(hi, Math.max(initial[i][a], points[i][a]) + reach);
 			}
-			if (maximum - minimum > widest) {
-				widest = maximum - minimum;
+			lower[a][node] = lo;
+			upper[a][node] = hi;
+			if (hi - lo > widest) {
+				widest = hi - lo;
 				axis = a;
 			}
 		}
-		for (int i = 0; i < sweepOrder.length; i++) sweepOrder[i] = i;
-		sortSweep(0, sweepOrder.length - 1, axis);
-		int b = (axis + 1) % 3, c = (axis + 2) % 3;
-		for (int visit = 0; visit < sweepOrder.length; visit++) {
-			int i = sweepOrder[visit];
-			for (int next = visit + 1; next < sweepOrder.length; next++) {
-				int j = sweepOrder[next];
-				if (lower[axis][j] > upper[axis][i]) break;
-				if (lower[b][j] > upper[b][i] || upper[b][j] < lower[b][i]
-						|| lower[c][j] > upper[c][i] || upper[c][j] < lower[c][i]) continue;
-				addPair(Math.min(i, j), Math.max(i, j), points);
+		if (end - first == 1) {
+			member[node] = order[first];
+			return node;
+		}
+		member[node] = -1;
+		int middle = (first + end) >>> 1;
+		selectMedian(first, end - 1, middle, axis, points);
+		leftChild[node] = buildTree(first, middle, points);
+		rightChild[node] = buildTree(middle, end, points);
+		return node;
+	}
+
+	private void selectMedian(int first, int last, int middle, int axis, double[][] points) {
+		while (first < last) {
+			int left = first, right = last, pivot = order[(first + last) >>> 1];
+			while (left <= right) {
+				while (compareCenter(order[left], pivot, axis, points) < 0) left++;
+				while (compareCenter(order[right], pivot, axis, points) > 0) right--;
+				if (left <= right) {
+					int value = order[left];
+					order[left++] = order[right];
+					order[right--] = value;
+				}
 			}
+			if (middle <= right) last = right;
+			else if (middle >= left) first = left;
+			else return;
 		}
 	}
 
-	private void sortSweep(int first, int last, int axis) {
-		if (first >= last) return;
-		int left = first, right = last, pivot = sweepOrder[(first + last) >>> 1];
-		while (left <= right) {
-			while (compareSweep(sweepOrder[left], pivot, axis) < 0) left++;
-			while (compareSweep(sweepOrder[right], pivot, axis) > 0) right--;
-			if (left <= right) {
-				int value = sweepOrder[left];
-				sweepOrder[left++] = sweepOrder[right];
-				sweepOrder[right--] = value;
-			}
-		}
-		if (first < right) sortSweep(first, right, axis);
-		if (left < last) sortSweep(left, last, axis);
-	}
-
-	private int compareSweep(int first, int second, int axis) {
-		int comparison = Double.compare(lower[axis][first], lower[axis][second]);
+	private int compareCenter(int first, int second, int axis, double[][] points) {
+		int comparison = Double.compare(initial[first][axis] + points[first][axis],
+				initial[second][axis] + points[second][axis]);
 		return comparison == 0 ? Integer.compare(first, second) : comparison;
 	}
-	private static double dot(double[] a, double[] b) { return Math.fma(a[0], b[0], Math.fma(a[1], b[1], a[2] * b[2])); }
-	private void spend() {
-		if (++operations > GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP)
-			throw new IllegalStateException("Predictive granular contact operations: stage=" + operationStage
-					+ ", particles=" + mass.length + ", constraints=" + constraints.size());
+
+	/** Nearest-time tree traversal bounds both candidate tests and branches in a dense contact cloud. */
+	private int queryContacts(int i, double[][] points, int quota) {
+		if (quota == 0) return 0;
+		Arrays.fill(manifold, null);
+		heapSize = 0;
+		pushNode(0, i, points);
+		int tested = 0, visited = 0;
+		int depth = Integer.SIZE - Integer.numberOfLeadingZeros(order.length);
+		int branches = 4 * quota + 2 * depth;
+		while (heapSize > 0 && tested < quota && visited++ < branches) {
+			int node = popNode(), j = member[node];
+			if (j < 0) {
+				pushNode(leftChild[node], i, points);
+				pushNode(rightChild[node], i, points);
+			} else if (j != i) {
+				tested++;
+				var contact = candidate(Math.min(i, j), Math.max(i, j), points);
+				if (contact != null) retainContact(i, contact, points);
+			}
+		}
+		operations += tested;
+		for (var contact : manifold) if (contact != null) {
+			var row = contact.row();
+			long key = ((long) row.first() << 32) | row.second();
+			if (pairs.add(key)) {
+				constraints.add(contact);
+				int first = root(contactParent, row.first()), second = root(contactParent, row.second());
+				contactParent[Math.max(first, second)] = Math.min(first, second);
+			}
+		}
+		return tested;
 	}
+
+	private void retainContact(int i, Constraint candidate, double[][] points) {
+		var row = candidate.row();
+		int axis = 0;
+		for (int a = 1; a < 3; a++) if (Math.abs(row.normal()[a]) > Math.abs(row.normal()[axis])) axis = a;
+		double orientation = i == row.first() ? row.normal()[axis] : -row.normal()[axis];
+		int direction = 2 * axis + (orientation < 0 ? 0 : 1);
+		var previous = manifold[direction];
+		if (previous == null || candidate.time() < previous.time()
+				|| (candidate.time() == previous.time() && relativeGap(candidate, points) < relativeGap(previous, points))) {
+			manifold[direction] = candidate;
+		}
+	}
+
+	private static double relativeGap(Constraint contact, double[][] points) {
+		var row = contact.row();
+		double gap = 0;
+		for (int a = 0; a < 3; a++) gap = Math.fma(row.normal()[a], points[row.second()][a] - points[row.first()][a], gap);
+		return gap / contact.minimum();
+	}
+
+	private void pushNode(int node, int i, double[][] points) {
+		if (member[node] == i) return;
+		double entry = 0, exit = 1, distance = 0;
+		double reach = radius[i] + GranularSpawnAdmission.positionTolerance(radius[i], radius[i]);
+		for (int a = 0; a < 3; a++) {
+			double position = initial[i][a], motion = points[i][a] - position;
+			double lo = lower[a][node] - reach, hi = upper[a][node] + reach;
+			if (motion == 0) {
+				if (position < lo || position > hi) return;
+			} else {
+				double first = (lo - position) / motion, last = (hi - position) / motion;
+				entry = Math.max(entry, Math.min(first, last));
+				exit = Math.min(exit, Math.max(first, last));
+				if (entry > exit) return;
+			}
+		}
+		for (int a = 0; a < 3; a++) {
+			double motion = points[i][a] - initial[i][a];
+			double atEntry = Math.fma(entry, motion, initial[i][a]);
+			double separation = atEntry - .5 * (lower[a][node] + upper[a][node]);
+			distance = Math.fma(separation, separation, distance);
+		}
+		int index = heapSize++;
+		while (index > 0) {
+			int parent = (index - 1) >>> 1;
+			if (!before(entry, distance, node, heapTime[parent], heapDistance[parent], heapNode[parent])) break;
+			heapNode[index] = heapNode[parent];
+			heapTime[index] = heapTime[parent];
+			heapDistance[index] = heapDistance[parent];
+			index = parent;
+		}
+		heapNode[index] = node;
+		heapTime[index] = entry;
+		heapDistance[index] = distance;
+	}
+
+	private int popNode() {
+		int result = heapNode[0], last = --heapSize;
+		int node = heapNode[last];
+		double time = heapTime[last], distance = heapDistance[last];
+		int index = 0;
+		while (2 * index + 1 < heapSize) {
+			int child = 2 * index + 1;
+			if (child + 1 < heapSize && before(heapTime[child + 1], heapDistance[child + 1], heapNode[child + 1],
+					heapTime[child], heapDistance[child], heapNode[child])) child++;
+			if (!before(heapTime[child], heapDistance[child], heapNode[child], time, distance, node)) break;
+			heapNode[index] = heapNode[child];
+			heapTime[index] = heapTime[child];
+			heapDistance[index] = heapDistance[child];
+			index = child;
+		}
+		if (heapSize > 0) {
+			heapNode[index] = node;
+			heapTime[index] = time;
+			heapDistance[index] = distance;
+		}
+		return result;
+	}
+
+	private static boolean before(double time, double distance, int node, double otherTime, double otherDistance, int otherNode) {
+		return time < otherTime || time == otherTime && (distance < otherDistance || distance == otherDistance && node < otherNode);
+	}
+
+	private static double dot(double[] a, double[] b) { return Math.fma(a[0], b[0], Math.fma(a[1], b[1], a[2] * b[2])); }
 }

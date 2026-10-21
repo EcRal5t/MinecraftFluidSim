@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-/** Actual K/PE and cavity work close once on each pressure-coupled mechanical body. */
+/** Actual K/PE and cavity work close once on each body coupled by pressure, mass transfer and contacts. */
 final class MechanicalEnergySettlement {
     private final FluidDomain domain;
     private final double[] liquidExchange;
@@ -190,6 +190,8 @@ final class MechanicalEnergySettlement {
 	private int[] mechanicalBodies(GasRuntimeGeometry source,LiquidCellInventory.Plan inventory,int particleBase,int parcels){
 		int gasBase=8*domain.cellCount;int[] body=new int[particleBase+parcels];
 		for(int i=0;i<body.length;i++)body[i]=i;
+		for(int p=0;p<parcels;p++)joinMechanical(body,particleBase+p,
+				particleBase+domain.granularMechanicalStage.plannedContactComponent(p));
 		if(source!=null)for(var component:source.capacity().components()){
 			int node=source.topology().nodeOfComponent(component.cell(),component.supportMask());
 			if(node>0){

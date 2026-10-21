@@ -62,10 +62,10 @@ final class GranularTransitionStage {
 			if (!domain.domainStep.granularOccupancyFitsGeometry(coupling)) {
 				throw new IllegalStateException("Granular deposit transition exceeds geometry");
 			}
-			domain.pressureGranularCoupling = coupling;
+
 		} else {
 			coupling.clear();
-			domain.pressureGranularCoupling = null;
+
 		}
 		GranularLiquidDisplacement.commit(domain, previousSolid);
 		return new Outcome(stats.withCompaction(compaction));

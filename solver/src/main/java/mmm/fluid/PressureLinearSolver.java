@@ -7,7 +7,8 @@ final class PressureLinearSolver {
 	interface RightHandSide {
 		void buildRhs(double[] destination);
 	}
-	private final FluidDomain domain;
+	private final int cellCount;
+	private final FluidSolverConfig config;
 	private final RightHandSide rhsBuilder;
 	private final PressureSparseMatrix matrix;
 	private final PressurePreconditioner preconditioner;
@@ -18,15 +19,14 @@ final class PressureLinearSolver {
 	private int count, freeCount;
 	private double[] gasLower = new double[0];
 
-	PressureLinearSolver(FluidDomain domain, PressureSparseMatrix matrix, RightHandSide rhsBuilder) {
-		this.domain = domain;
+	PressureLinearSolver(int cellCount,FluidSolverConfig config, PressureSparseMatrix matrix, RightHandSide rhsBuilder) {
+		this.cellCount=cellCount;this.config=config;
 		this.matrix = matrix;
 		this.rhsBuilder = rhsBuilder;
 		preconditioner = new PressurePreconditioner();
-		ensureCapacity();
+		ensureCapacity(cellCount+1);
 	}
-	private void ensureCapacity() {
-		int size = Math.addExact(domain.cellCount, Math.addExact(domain.projection.gasNodeCount, 1));
+	private void ensureCapacity(int size) {
 		if (pressure.length >= size) return;
 		pressure = Arrays.copyOf(pressure, size); rhs = Arrays.copyOf(rhs, size); residual = Arrays.copyOf(residual, size);
 		direction = Arrays.copyOf(direction, size); product = Arrays.copyOf(product, size);
@@ -36,18 +36,19 @@ final class PressureLinearSolver {
 	}
 
 	double[] pressure() { return pressure; }
-	void reset() {
-		ensureCapacity();
+	void reset(int size) {
+		ensureCapacity(size);
 		Arrays.fill(pressure, 0); Arrays.fill(direction, 0);
 	}
 
-	PressureProjectionResult solve(double target,double pressureDatum,double[] reference) {
-		ensureCapacity();count=0;Arrays.fill(bounded,false);
-		for(int ordinal=0;ordinal<domain.projection.fluidUnknownCount;ordinal++) {
-			int cell=domain.projection.fluidUnknownCells[ordinal];unknowns[count++]=cell;
+	PressureProjectionResult solve(double target,double pressureDatum,double[] reference,
+			int[] fluidUnknownCells,int fluidUnknownCount,int[] gasUnknownNodes,int gasUnknownCount) {
+		ensureCapacity(reference.length);count=0;Arrays.fill(bounded,false);
+		for(int ordinal=0;ordinal<fluidUnknownCount;ordinal++) {
+			int cell=fluidUnknownCells[ordinal];unknowns[count++]=cell;
 		}
-		for(int ordinal=0;ordinal<domain.projection.gasUnknownCount;ordinal++) {
-			int node=domain.projection.gasUnknownNodes[ordinal],row=domain.cellCount+node;unknowns[count++]=row;
+		for(int ordinal=0;ordinal<gasUnknownCount;ordinal++) {
+			int node=gasUnknownNodes[ordinal],row=cellCount+node;unknowns[count++]=row;
 			bounded[row]=true;
 			gasLower[row]=-mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE-pressureDatum-reference[row];
 			pressure[row]=Math.max(gasLower[row],pressure[row]);
@@ -56,18 +57,12 @@ final class PressureLinearSolver {
 		Arrays.fill(free,false);int iterations=0;
 		if(projectedNorm()>target){updateFreeSet(target);restartDirection();iterations=iterate(target);}
 		refreshResidual();double rms=projectedNorm();
-		for(int ordinal=0;ordinal<domain.projection.fluidUnknownCount;ordinal++) {
-			int cell=domain.projection.fluidUnknownCells[ordinal];domain.projection.pressure[cell]=(float)(pressure[cell]+reference[cell]+pressureDatum);
-		}
-		for(int ordinal=0;ordinal<domain.projection.gasUnknownCount;ordinal++) {
-			int node=domain.projection.gasUnknownNodes[ordinal];domain.projection.gasPressure[node]=(float)(pressure[domain.cellCount+node]+reference[domain.cellCount+node]+pressureDatum);
-		}
 		return new PressureProjectionResult(iterations,rms,Double.isFinite(rms)&&rms<=attainableTolerance(target));
 	}
 	/** Advances the active-set PCG independently of row preparation and result publication. */
 	private int iterate(double target) {
 		double rz=dotFree(residual,direction),rms=projectedNorm();int iterations=0;
-		for(;rms>target&&iterations<domain.config.maxPressureIterations();iterations++) {
+		for(;rms>target&&iterations<config.maxPressureIterations();iterations++) {
 			matrix.multiply(direction,product);double denominator=dotFree(direction,product);
 			if(!(denominator>0&&Double.isFinite(denominator)&&rz>0&&Double.isFinite(rz)))break;
 			double alpha=rz/denominator;boolean blocked=false;

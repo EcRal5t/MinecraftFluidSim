@@ -75,6 +75,9 @@ final class GranularMechanicalStage {
 		var parcel=domain.granularState.parcels.parcel(index);
 		return collisionPending?domain.granularCollision.previewPosition(index,parcel).y():parcel.y();
 	}
+	int plannedContactComponent(int index) {
+		return collisionPending ? domain.granularCollision.plannedContactComponent(index) : index;
+	}
 	boolean collisionPending(){return collisionPending;}
 	void publishCollisionVelocities(){
 		if(collisionPending)addBoundaryImpulse(domain.granularCollision.publishVelocities(domain.granularState.parcels));

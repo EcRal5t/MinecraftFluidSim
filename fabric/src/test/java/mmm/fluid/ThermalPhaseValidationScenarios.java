@@ -866,11 +866,11 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.001F,100,1e-6F,.002F,0),128);
 			domain.setVolume(1,1,1,.5F);domain.setVolume(2,1,1,.25F);domain.setVolume(2,0,1,.25F);
 			var neighbour=domain.liquidCells.stocksInCell(domain.domainFlowFields.cellIndex(2,1,1));
-			domain.setVolume(1,1,1,amount);domain.domainFlowFields.ensurePressureGeometry();
+			domain.setVolume(1,1,1,amount);domain.pressureSystem.prepareGeometry();
 			int cell=domain.domainFlowFields.cellIndex(1,1,1);
-			require(Math.abs(domain.pressurePhaseGeometry.liquidFractionExact(cell)-amount)<1e-7,"Published phase geometry missed committed cell volume");
+			require(Math.abs(domain.pressureSystem.phaseGeometry().liquidFractionExact(cell)-amount)<1e-7,"Published phase geometry missed committed cell volume");
 			require(neighbour.equals(domain.liquidCells.stocksInCell(domain.domainFlowFields.cellIndex(2,1,1))),"Local phase geometry preparation edited neighbouring inventory");
-			var restored=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());restored.domainFlowFields.ensurePressureGeometry();
+			var restored=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());restored.pressureSystem.prepareGeometry();
 			require(domain.liquidCells.stocks().equals(restored.liquidCells.stocks())&&restored.gasBoundary().auditClosed(),"Phase geometry restore changed liquid or gas inventory");
 		}
 	}

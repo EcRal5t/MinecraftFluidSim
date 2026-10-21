@@ -76,7 +76,7 @@ public final class AirCavityScannerValidation {
 			int peer=1<<axis,tangentAxis=(axis+1)%3;byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=masks[peer]=0;
 			float[] pv=new float[8];for(int i=0;i<2;i++) {for(int a=0;a<3;a++)pv[4*i+a]=(a==axis?i:0)+.5F;pv[4*i+tangentAxis]=.25F;pv[4*i+3]=.5F;}
 			var domain=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F,0),16);
-			domain.restoreParticleState(new FlipParticleState(2,2,2,1,2,1,pv,new float[6], mmm.units.Mass.createLiquid(1, 1000.0, pv),masks));domain.domainFlowFields.ensurePressureGeometry();
+			domain.restoreParticleState(new FlipParticleState(2,2,2,1,2,1,pv,new float[6], mmm.units.Mass.createLiquid(1, 1000.0, pv),masks));domain.pressureSystem.prepareGeometry();
 			var partial=domain.gasState.frame.geometry();
 			var crossing=partial.ports().stream().filter(port->port.first()/8!=port.second()/8).toList();
 			// Each stock reconstructs a horizontal half-filled cell. Side-by-side
@@ -165,7 +165,7 @@ public final class AirCavityScannerValidation {
 			}
 			byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=(byte)(255^(1<<corner)^(1<<opposite));
 			var d=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F,0),16);
-			d.restoreParticleState(new FlipParticleState(2,2,2,1,count,stock[0]+stock[1],pv,new float[3*count], mmm.units.Mass.createLiquid(1, 1000.0, pv),masks));d.domainFlowFields.ensurePressureGeometry();
+			d.restoreParticleState(new FlipParticleState(2,2,2,1,count,stock[0]+stock[1],pv,new float[3*count], mmm.units.Mass.createLiquid(1, 1000.0, pv),masks));d.pressureSystem.prepareGeometry();
 			var frame=pieceCapacityFrame(d,true);var phase=frame.phase();var gas=frame.geometry();
 			var capacities=gas.actualCapacity().components;
 			check(capacities.size()==2,"Gas capacity omitted a fixed open component");
@@ -187,7 +187,7 @@ public final class AirCavityScannerValidation {
 		byte[] masks=new byte[8];java.util.Arrays.fill(masks,(byte)255);masks[0]=126;
 		var d=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F,0),16);
 		float[] pv={.125F,.2F,.3F,.03F,.8F,.875F,.7F,.06F};
-		d.restoreParticleState(new FlipParticleState(2,2,2,1,2,.09F,pv,new float[6], mmm.units.Mass.createLiquid(1, 1000.0, pv),masks));d.domainFlowFields.ensurePressureGeometry();
+		d.restoreParticleState(new FlipParticleState(2,2,2,1,2,.09F,pv,new float[6], mmm.units.Mass.createLiquid(1, 1000.0, pv),masks));d.pressureSystem.prepareGeometry();
 		var gas=pieceCapacityFrame(d,true).geometry();
 		var capacities=gas.actualCapacity().components;
 		checkRelative(capacities.stream().mapToDouble(c->c.availableVolumeNormalized().toDouble()).sum()+d.totalVolumeExact(),.25,"Disconnected open capacity and liquid inventory");
@@ -542,12 +542,12 @@ public final class AirCavityScannerValidation {
         domain.setVolume(1,1,1,.1875F);
         var before = domain.bootstrapGasState(""); var old = domain.gasState.frame;
 		check(old.nodeCount() == 0 && old.capacity().ambientCubicMeters() > 0
-				&& GasFaceIntersection.fullDryFace(domain.pressurePhaseGeometry,0,0,0),
+				&& GasFaceIntersection.fullDryFace(domain.pressureSystem.phaseGeometry(),0,0,0),
 				"Ambient self-remap fixture requires exterior-connected slanted dry microboxes");
 		domain.setVolume(1,1,1,.25F);
-		domain.gridDirty = true; domain.domainFlowFields.ensurePressureGeometry();
+		domain.gridDirty = true; domain.pressureSystem.prepareGeometry();
 		var next = GasRuntimeGeometry.capture(domain,new long[domain.cellCount], false);
-		check(next.nodeCount() == 0 && GasFaceIntersection.fullDryFace(domain.pressurePhaseGeometry,0,0,0)
+		check(next.nodeCount() == 0 && GasFaceIntersection.fullDryFace(domain.pressureSystem.phaseGeometry(),0,0,0)
 				&& next.capacity().ambientCubicMeters()>0,
 				"Persistent ambient space acquired unused exact remap weights");
 		domain.gasTopologyCoordinator.refresh(); var after = domain.exportGasState("");

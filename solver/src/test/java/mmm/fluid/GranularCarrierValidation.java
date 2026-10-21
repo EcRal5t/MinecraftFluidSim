@@ -1154,7 +1154,7 @@ public final class GranularCarrierValidation {
 						"rejected granular restore published partial state, scene=" + scene);
 			} else {
 				require(!rejected, "valid granular restore was rejected");
-				require(domain.gridDirty && domain.pressureGeometryDirty && domain.velocityGridDirty,
+				require(domain.gridDirty && domain.velocityGridDirty,
 						"Granular restore must refresh joint occupancy and derived face inertia");
 				var restored = domain.exportGranularState();
 				require(restored.activeParcels().equals(active) && restored.depositGroups().equals(beds)
@@ -1408,7 +1408,7 @@ public final class GranularCarrierValidation {
 
 	private static void relaxDrag(FluidDomain domain, float dt) {
 		// Assemble the common face partition, then isolate the finite-mass drag response at zero pressure.
-		domain.domainFlowFields.ensureGrid(); domain.pressureSystem.faces.rebuild(dt);
+		domain.domainFlowFields.ensureGrid(); domain.pressureSystem.prepareOperator();
 		var pressure = new GranularPressureCoupling(domain); pressure.prepare(dt,0);
 		var drag = new GranularImplicitDrag(domain); drag.prepare(dt); drag.project();
 	}
@@ -1505,14 +1505,11 @@ public final class GranularCarrierValidation {
 		var domain = domain(); addParcel(domain, 1.43F, 1.62F, 1.39F, 0, 0, 0);
 		fillPoreWater(domain, domain.sizeY); domain.domainFlowFields.ensureGrid();
 		domain.pressureSystem.solve(.05F);
-		java.util.Arrays.fill(domain.projection.pressure, 0);
-		domain.projection.pressure[domain.domainFlowFields.cellIndex(2,2,2)] = 300;
-		domain.projection.pressure[domain.domainFlowFields.cellIndex(3,2,2)] = -100;
 		double[] impulse=new double[3];double dt=.05;
 		var graph=domain.pressureSystem.faces;
 		double[] p=new double[domain.cellCount+domain.gasState.network.nodeCount()+1],a=new double[graph.faceCount];
-		for(int cell=0;cell<domain.cellCount;cell++)p[cell]=domain.projection.pressure[cell];
-		graph.pressureVelocity(p,a);
+		p[domain.domainFlowFields.cellIndex(2,2,2)]=300;p[domain.domainFlowFields.cellIndex(3,2,2)]=-100;
+		domain.pressureSystem.pressureVelocity(p,a);
 		for(int face=0;face<graph.faceCount;face++)impulse[graph.axis[face]]+=dt*graph.faceMass(face)*a[face];
 		var coupling = new GranularPressureCoupling(domain); coupling.prepare((float)dt,0); coupling.project((float)dt,p);
 		var parcel = domain.granularState.parcels.parcel(0);
@@ -1528,17 +1525,16 @@ public final class GranularCarrierValidation {
 		addParcel(domain, 1.43F, py, 1.39F, 0, 0, 0);
 		fillPoreWater(domain, domain.sizeY);
 		domain.domainFlowFields.ensureGrid();
-		domain.pressureSystem.faces.rebuild(0.05F);
+		domain.pressureSystem.prepareOperator();
+		double[] pressures=new double[domain.cellCount+domain.gasState.network.nodeCount()+1];
 		for (int cell = 0; cell < domain.cellCount; cell++) {
 			int y = cell / 6 % 6;
-			domain.projection.pressure[cell] = (float)(1_000F * 9.81F * (3 - (y + 0.5F) * 0.5F)
+			pressures[cell] = (float)(1_000F * 9.81F * (3 - (y + 0.5F) * 0.5F)
 					-domain.pressureSystem.faces.referencePressure(cell,255));
 		}
 		var coupling = new GranularPressureCoupling(domain);
 		coupling.prepare(0.05F,0);
-		double[] pressures=new double[domain.cellCount+domain.gasState.network.nodeCount()+1];
-		for(int cell=0;cell<domain.cellCount;cell++)pressures[cell]=domain.projection.pressure[cell];
-		for(int node:domain.gasState.network.nodeIds())pressures[domain.cellCount+node]=domain.projection.gasPressure[node];
+		for(int node:domain.gasState.network.nodeIds())pressures[domain.cellCount+node]=domain.pressureSystem.gasPressure[node];
 		coupling.project(0.05F,pressures);
 		var p = domain.granularState.parcels.parcel(0);
 		double expected = 0.05 * 9.81 * 1_000 * p.solidVolumeSvq() / SolidVolume.SVQ_PER_CUBIC_METER / p.mass();
@@ -1556,8 +1552,8 @@ public final class GranularCarrierValidation {
 		int size=domain.cellCount+domain.gasState.network.nodeCount()+1;
 		double[] a=new double[size],b=new double[size],aa=new double[size],ab=new double[size],velocity=new double[graph.faceCount];
 		for(int i=0;i<size;i++){a[i]=i%7-3;b[i]=i%11-5;}
-		graph.pressureVelocity(a,velocity);graph.addDivergence(velocity,aa,domain.config.density());
-		graph.pressureVelocity(b,velocity);graph.addDivergence(velocity,ab,domain.config.density());
+		domain.pressureSystem.pressureVelocity(a,velocity);domain.pressureSystem.addDivergence(velocity,aa,domain.config.density());
+		domain.pressureSystem.pressureVelocity(b,velocity);domain.pressureSystem.addDivergence(velocity,ab,domain.config.density());
 		double x=0,y=0,q=0;for(int i=0;i<size;i++){x+=a[i]*ab[i];y+=b[i]*aa[i];q+=a[i]*aa[i];}
 		require(Math.abs(x-y)<1e-9*Math.max(1,Math.abs(x))&&q>=0,"Shared fixed fluid aperture pressure operator must remain symmetric positive");
 	}

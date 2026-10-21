@@ -38,14 +38,14 @@ public final class FlipFluidFreeSurfaceValidation {
 			int support=(~mask)&255;
 			var stock=new mmm.inventory.LiquidCellInventory.Stock(new mmm.inventory.LiquidCellInventory.Key(cell,0,support),
 					SignedDyadic.of(fill),domain.unitScale.massUnitsForNormalized(1000*fill),null,0,false);
-			domain.liquidCells.planAdditions(List.of(stock)).commit();domain.markCellInventoryChanged();domain.domainFlowFields.ensurePressureGeometry();
+			domain.liquidCells.planAdditions(List.of(stock)).commit();domain.markCellInventoryChanged();domain.pressureSystem.prepareGeometry();
 			var occupancy=domain.exportPhaseOccupancyState();double liquid=0,reconstructed=0;
 			double resolution=FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION;
 			for(int micro=0;micro<8;micro++) {
 				double amount=occupancy.liquidVolume(8*cell+micro);
 				check(amount>=0&&amount<=.125&&((mask&1<<micro)==0||amount==0),
 						"Liquid occupation left its actual open micro support");
-				double geometric=.125*domain.pressurePhaseGeometry.liquidFractionExact(cell,micro);
+				double geometric=.125*domain.pressureSystem.phaseGeometry().liquidFractionExact(cell,micro);
 				check(geometric>=0&&geometric<=.125&&((mask&1<<micro)==0||geometric==0),
 						"Reconstructed liquid left its actual open micro support");
 				reconstructed+=geometric;
@@ -87,7 +87,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		domain.domainFlowFields.ensureGrid();
 		for(int z=0;z<2;z++)for(int y=0;y<4;y++)for(int x=0;x<4;x++){
 			int cell=domain.domainFlowFields.cellIndex(x,y,z);
-			check(domain.projection.pressureVolume[cell]==(x<2?1:x==3?.25:0),"Pressure preparation moved inventory across a wall");
+			check(domain.liquidGrid.cellStockVolume[cell]==(x<2?1:x==3?.25:0),"Pressure preparation moved inventory across a wall");
 		}
 		var capacity=domain.domainFlowFields.availableCellVolumes();
 		check(capacity[domain.domainFlowFields.cellIndex(0,0,0)].signum()==0&&capacity[domain.domainFlowFields.cellIndex(3,0,0)].equals(SignedDyadic.of(.75)),"Separate cell capacity changed");

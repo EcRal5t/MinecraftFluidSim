@@ -173,7 +173,7 @@ final class DomainCollision {
 		domain.geometry.cutCells.restoreMicroMasks(plan.liquid.masks);
 		for (var edit : plan.edits) {
 			int cell = domain.domainFlowFields.cellIndex(edit.x(), edit.y(), edit.z());
-			domain.geometry.solid[cell] = edit.mask() == 255; domain.projection.pressure[cell] = 0;
+			domain.geometry.solid[cell] = edit.mask() == 255; domain.pressureSystem.clearLiquidPressure(cell);
 			if (domain.chemicalParcels != null) domain.chemicalParcels.markDirtyCell(cell);
 			if (domain.granularDepositDynamics != null) domain.granularDepositDynamics.disturbCell(cell);
 		}
@@ -311,7 +311,7 @@ final class DomainCollision {
 		}
 		domain.granularState.escapedSink = plan.sinkAfter();
 		domain.granularCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits);
-		domain.pressureGranularCoupling = domain.domainPhaseInventory.hasGranularInventory() ? domain.granularCoupling : null;
+
 		for (int cell = 0; cell < plan.affectedCells().length; cell++) {
 			if (plan.affectedCells()[cell]) domain.domainPhaseInventory.markGranularExternalChange(cell);
 		}
@@ -340,11 +340,11 @@ final class DomainCollision {
 	}
 	public float pressure(int x, int y, int z) {
 		int cell = domain.domainFlowFields.cellIndexChecked(x, y, z);
-		domain.domainFlowFields.ensurePressureGeometry();
+		domain.pressureSystem.prepareGeometry();
 		return (float) domain.pressureSystem.liquidPressureAt(cell, ~domain.geometry.cutCells.mask(cell) & 255);
 	}
 	float surfaceTensionPressureAt(int x, int y, int z) {
-		domain.domainFlowFields.ensurePressureGeometry();
+		domain.pressureSystem.prepareGeometry();
 		return domain.tension.surfaceTensionPressure[domain.domainFlowFields.cellIndexChecked(x, y, z)];
 	}
 	public float totalVolume() { return domain.metrics.totalVolume(); }

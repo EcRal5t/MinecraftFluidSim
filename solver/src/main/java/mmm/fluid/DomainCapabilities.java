@@ -269,7 +269,7 @@ final class DomainCapabilities {
 			domain.granularNextCoupling = new GranularCouplingFields(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());
 		}
 		refreshCoherentOccupancy();
-		domain.gridDirty = domain.pressureGeometryDirty = domain.velocityGridDirty = true;
+		domain.gridDirty = domain.velocityGridDirty = true;domain.pressureSystem.invalidateGeometry();
 		if (domain.granularState != null) domain.granularState.inventory.bindThermalEnergy(thermalGranularAdapter());
 	}
 	GranularInventory.EnergyAdapter thermalGranularAdapter() {
@@ -584,7 +584,7 @@ final class DomainCapabilities {
 		return domain.thermalState.temperature(marker, thermalMarkerContext());
 	}
 	double thermalOccupiedFaceFraction(int cell, int direction) {
-		domain.domainFlowFields.ensurePressureGeometry();
+		domain.pressureSystem.prepareGeometry();
 		double geometricOpen = domain.geometry.cutCells.openCellVolume(cell);
 		if (!(geometricOpen > 0)) return 0;
 		double solidVolume = domain.granularCoupling == null ? 0 : SolidVolume.toCellVolume(domain.granularCoupling.solidSvq(cell));
@@ -593,13 +593,13 @@ final class DomainCapabilities {
 		int pieces = 0; double occupied = 0;
 		for (int micro = 0; micro < 8; micro++) if ((micro >> axis & 1) == side && (domain.geometry.cutCells.mask(cell) & 1 << micro) == 0) {
 			pieces++;
-			double pore = domain.pressurePhaseGeometry.componentPoreScale(cell, micro, fallback);
-			double fraction = domain.pressurePhaseGeometry.liquidFractionExact(cell, micro), wet;
+			double pore = domain.pressureSystem.phaseGeometry().componentPoreScale(cell, micro, fallback);
+			double fraction = domain.pressureSystem.phaseGeometry().liquidFractionExact(cell, micro), wet;
 			if (fraction <= 0) wet = 0;
 			else if (fraction >= 1) wet = 1;
 			else {
-				double a = domain.pressurePhaseGeometry.planeNormal(cell, micro, first), b = domain.pressurePhaseGeometry.planeNormal(cell, micro, second);
-				double offset = domain.pressurePhaseGeometry.planeOffset(cell, micro) - side * domain.pressurePhaseGeometry.planeNormal(cell, micro, axis)
+				double a = domain.pressureSystem.phaseGeometry().planeNormal(cell, micro, first), b = domain.pressureSystem.phaseGeometry().planeNormal(cell, micro, second);
+				double offset = domain.pressureSystem.phaseGeometry().planeOffset(cell, micro) - side * domain.pressureSystem.phaseGeometry().planeNormal(cell, micro, axis)
 						- .5 * (micro >> first & 1) * a - .5 * (micro >> second & 1) * b;
 				wet = FlipFreeSurfaceGeometry.unitCubeLiquidFraction(0.0, .5 * a, .5 * b, offset);
 			}
@@ -633,7 +633,7 @@ final class DomainCapabilities {
 		domain.thermalBoundaryTemperatureK = null;
 		domain.pendingPhaseVolume.clear();
 		if (domain.granularState == null) {
-			domain.granularCoupling = null; domain.granularNextCoupling = null; domain.pressureGranularCoupling = null;
+			domain.granularCoupling = null; domain.granularNextCoupling = null;
 		}
 	}
 	void refreshCoherentOccupancy() {

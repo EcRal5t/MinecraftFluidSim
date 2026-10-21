@@ -70,10 +70,6 @@ public final class GranularEnergyState {
 
 	public long revision() { return revision; }
 
-	void addMechanicalHeat(int ordinal,double joules) {
-		if(!Double.isFinite(joules))throw new IllegalArgumentException("Granular mechanical heat exchange must be finite");
-		addMechanicalHeat(ordinal,SignedDyadic.of(joules));
-	}
 	void addMechanicalHeat(int ordinal,SignedDyadic heat) {
 		if(heat.signum()==0)return;
 		double before=granularEnergy.activeEnergy(ordinal);

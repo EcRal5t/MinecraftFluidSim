@@ -14,11 +14,6 @@ final class CellMacStage {
 	private long inventoryRevision=-1,quantityRevision;
 	private LiquidCellInventory.Snapshot preparedQuantities;
 	private FluidMaterialRegistry preparedMaterialRegistry;
-	private FlipPressurePhaseGeometry preparedPhase;
-	private mmm.granular.GranularCouplingFields preparedSolid;
-	private mmm.granular.GranularParcelStore preparedParcels;
-	private mmm.granular.GranularDepositStore preparedDeposits;
-	private long preparedQuantityRevision=-1,preparedParcelRevision=-1,preparedDepositRevision=-1;
 	private final boolean[][] unresolvedWall;
 	private FlipPressurePhaseGeometry wallPhase;
 	private LiquidCellInventory.Snapshot wallInventory;
@@ -135,7 +130,6 @@ final class CellMacStage {
 				grid.exactCellVolumeInventory[cell] = volume;
 				grid.cellStockVolume[cell] = volume.toDouble();
 				domain.volume[cell] = (float) volume.toDouble();
-				domain.projection.pressureVolume[cell] = volume.toDouble();
 				long mass = 0;
 				for (var stock : inventory.stocksInCell(cell)) mass = Math.addExact(mass, stock.massUnits());
 				cellMass[cell]=Mass.kilograms(mass);
@@ -157,9 +151,7 @@ final class CellMacStage {
 			if (domain.granularState != null) domain.granularCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits);
 			else domain.granularCoupling.rebuildFixed();
 		}
-		domain.pressureGranularCoupling = domain.granularCoupling;
-		domain.surfaceTensionActive = domain.tension.hasAnySurfaceTension();
-		domain.liquidPairTensionActive = domain.tension.hasAnyLiquidPairTension();
+
 		domain.carrierPropertiesWorkspace.invalidate();
 		grid.inventoryRevision = inventory.revision(); inventoryRevision = inventory.revision();
 		if(quantitiesChanged){quantityRevision++;rebuildFaceInertia();}
@@ -168,22 +160,6 @@ final class CellMacStage {
 	}
 
 	long quantityRevision(){return quantityRevision;}
-	void rebuildGeometry(){
-		rebuildInventory();domain.gasTopologyCoordinator.refresh();
-		domain.pressurePhaseGeometry=domain.gasState.frame.phase();
-		domain.pressureSystem.faces.classify();
-		var parcels=domain.granularState==null?null:domain.granularState.parcels;
-		var deposits=domain.granularState==null?null:domain.granularState.deposits;
-		long parcelRevision=parcels==null?-1:parcels.mutationRevision(),depositRevision=deposits==null?-1:deposits.mutationRevision();
-		if(preparedPhase!=domain.pressurePhaseGeometry||preparedQuantityRevision!=quantityRevision
-				||preparedSolid!=domain.pressureGranularCoupling||preparedParcels!=parcels||preparedDeposits!=deposits
-				||preparedParcelRevision!=parcelRevision||preparedDepositRevision!=depositRevision){
-			domain.pressureSystem.solidFaces.rebuild();rebuildWallSupport();
-			preparedPhase=domain.pressurePhaseGeometry;preparedQuantityRevision=quantityRevision;preparedSolid=domain.pressureGranularCoupling;
-			preparedParcels=parcels;preparedDeposits=deposits;preparedParcelRevision=parcelRevision;preparedDepositRevision=depositRevision;
-		}
-		domain.tension.rebuildSurfaceTensionPressure();domain.pressureGeometryDirty=false;
-	}
 
 	void rebuildVelocity() {
 		rebuildInventory();
@@ -196,8 +172,8 @@ final class CellMacStage {
 	}
 
 	/** A wall-supported layer has no independent normal inertia above its unresolved free face. */
-	private void rebuildWallSupport(){
-		var phase=domain.pressurePhaseGeometry;var cut=domain.geometry.cutCells;
+	void rebuildWallSupport(){
+		var phase=domain.pressureSystem.phaseGeometry();var cut=domain.geometry.cutCells;
 		for(int axis=0;axis<3;axis++){
 			Arrays.fill(unresolvedWall[axis],false);
 			int nx=domain.sizeX+(axis==0?1:0),ny=domain.sizeY+(axis==1?1:0);
@@ -228,10 +204,10 @@ final class CellMacStage {
 		wallPhase=phase;wallInventory=domain.liquidCells.snapshot();
 	}
 	boolean[] constrainedNormalFaces(int axis){
-		return wallPhase==domain.pressurePhaseGeometry&&domain.liquidCells.hasSameGeometry(wallInventory)?unresolvedWall[axis]:null;
+		return wallPhase==domain.pressureSystem.phaseGeometry()&&domain.liquidCells.hasSameGeometry(wallInventory)?unresolvedWall[axis]:null;
 	}
 	boolean isUnresolvedWallFace(int axis,int face){
-		return wallPhase==domain.pressurePhaseGeometry&&domain.liquidCells.hasSameGeometry(wallInventory)&&unresolvedWall[axis][face];
+		return wallPhase==domain.pressureSystem.phaseGeometry()&&domain.liquidCells.hasSameGeometry(wallInventory)&&unresolvedWall[axis][face];
 	}
 
 	/** Retires existing normal momentum once, before any force can act on the constrained mode. */
@@ -406,7 +382,7 @@ final class CellMacStage {
 
 	PreparedLiquid prepareLiquid(float dt){
 		if(!(Float.isFinite(dt)&&dt>0))throw new IllegalArgumentException("Liquid transport duration must be positive");
-		domain.domainFlowFields.ensurePressureGeometry();
+		domain.pressureSystem.prepareGeometry();
 		if(liquidTransport==null)liquidTransport=new ConservativeLiquidFlux(domain);
 		long[] occupied=domain.granularCoupling==null?new long[domain.cellCount]:domain.granularState!=null&&domain.granularState.parcels.count()>0?domain.granularNextCoupling.copySolidSvq():domain.granularCoupling.copySolidSvq();
 		liquidTransport.prepare(dt,occupied,quantities->{

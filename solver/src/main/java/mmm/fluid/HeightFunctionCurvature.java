@@ -92,8 +92,8 @@ final class HeightFunctionCurvature {
         int cell=d.domainFlowFields.cellIndex(reflect(x,d.sizeX),reflect(y,d.sizeY),reflect(z,d.sizeZ));
         return d.tension.surfaceTensionContactAngleAtCell(target)==Math.PI/2
                 &&d.tension.surfaceTensionContactAngleAtCell(cell)==Math.PI/2
-                &&d.projection.pressureVolume[cell]==color[cell]
-                &&d.pressurePhaseGeometry.liquidFaceArea(cell,axis,side,d.geometry.cutCells)>0;
+                &&d.liquidGrid.cellStockVolume[cell]==color[cell]
+                &&d.pressureSystem.phaseGeometry().liquidFaceArea(cell,axis,side,d.geometry.cutCells)>0;
     }
 
     /** A common entirely wet section supplies a liquid neighbourhood on both sides.
@@ -107,8 +107,8 @@ final class HeightFunctionCurvature {
         int coordinate = axis == 0 ? x : axis == 1 ? y : z, size = axis == 0 ? d.sizeX : axis == 1 ? d.sizeY : d.sizeZ;
         if (Math.floorMod(coordinate, 2 * size) >= size) { side = 1 - side; orientation = -orientation; }
         int cell = d.domainFlowFields.cellIndex(reflect(x, d.sizeX), reflect(y, d.sizeY), reflect(z, d.sizeZ));
-        if (d.projection.pressureVolume[cell] != c) return false;
-        var plane = d.pressurePhaseGeometry;
+        if (d.liquidGrid.cellStockVolume[cell] != c) return false;
+        var plane = d.pressureSystem.phaseGeometry();
 
         double normal = plane.planeNormal(cell, axis);
         if (orientation != 0 && !(normal * orientation > 0)) return false;

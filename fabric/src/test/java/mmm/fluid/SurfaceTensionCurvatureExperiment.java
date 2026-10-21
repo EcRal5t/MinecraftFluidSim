@@ -68,7 +68,7 @@ final class SurfaceTensionCurvatureExperiment {
 		d.domainStep.step();
 		check(d.liquidCells.exactVolume().equals(volume) && d.totalMassUnits() == mass, "resolved sphere changed exact inventories");
 		double pressure = 0; int cells = 0;
-		for (int c = 0; c < d.cellCount; c++) if (d.projection.pressureFluid[c]) {
+		for (int c = 0; c < d.cellCount; c++) if (d.domainFlowFields.isFluid(c)) {
 			pressure += d.pressure(c%size,c/size%size,c/(size*size)); cells++;
 		}
 		check(cells > 0 && Double.isFinite(pressure) && pressure > 0,
@@ -101,7 +101,7 @@ final class SurfaceTensionCurvatureExperiment {
 			int endpoint = wall ? 0 : 4, target = endpoint + 1;
 			if (reverse) { endpoint = 11 - endpoint; target = 11 - target; }
 			int cell = d.domainFlowFields.cellIndex(endpoint, 5, 5);
-			check(d.projection.pressureVolume[cell] == .25 && d.tension.surfaceTensionColor[cell] == .25,
+			check(d.liquidGrid.cellStockVolume[cell] == .25 && d.tension.surfaceTensionColor[cell] == .25,
 					"partial endpoint inventory and colour disagree");
 			double curvature=HeightFunctionCurvature.compute(d,target,5,5),height=d.tension.columnHeights[4];
 			double expectedHeight=endpoint+(reverse?.75:.25);

@@ -234,15 +234,15 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 - **库存、PLIC 与速度工作区失效**
   - 主要文件：
-    - [CellMacStage](../../solver/src/main/java/mmm/fluid/CellMacStage.java)：按物质数量、相几何与固相源状态准备惯性、墙面支撑和共同格面，内能更新复用原数量
+    - [CellMacStage](../../solver/src/main/java/mmm/fluid/CellMacStage.java)：按物质数量准备惯性、墙面约束和持久动量，内能更新复用原数量
     - [DomainFlowFields](../../solver/src/main/java/mmm/fluid/DomainFlowFields.java)
     - [CellLiquidGrid](../../solver/src/main/java/mmm/fluid/CellLiquidGrid.java)：单元库存派生索引与物性
   - 验证选择器 / 参考：`free-surface,materials`；[流体离散](fluid-solver.md#单元库存与-mac-动量)
 
 - **压力与气腔耦合**
   - 主要文件：
-    - [PressureSystem](../../solver/src/main/java/mmm/fluid/PressureSystem.java)：`solve` 组织已知载荷、阻力、共同压力基准、矩阵及速度修正，集中发布实际压力
-    - [PressureLinearSolver](../../solver/src/main/java/mmm/fluid/PressureLinearSolver.java)
+    - [PressureSystem](../../solver/src/main/java/mmm/fluid/PressureSystem.java)：`prepareGeometry` 集中准备相几何与固相压力份额；`prepareOperator` 准备未知行和载荷，`solve` 组织共同基准、矩阵及速度修正，并发布实际压力
+    - [PressureLinearSolver](../../solver/src/main/java/mmm/fluid/PressureLinearSolver.java)：求解显式传入的未知行与约束，返回双精度压力，由 `PressureSystem` 发布
     - [PressureSparseMatrix](../../solver/src/main/java/mmm/fluid/PressureSparseMatrix.java)：液体、气体与颗粒共同 CSR 算子
     - [PressurePreconditioner](../../solver/src/main/java/mmm/fluid/PressurePreconditioner.java)
     - [PressureFaceGraph](../../solver/src/main/java/mmm/fluid/PressureFaceGraph.java)：共同压力支撑、接液面积与散度系数；气压在每次装配读取实际状态，液体输运直接使用固定孔口邻接

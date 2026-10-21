@@ -126,7 +126,7 @@ final class BodyForceStage {
 
 	/** Balanced-force CSF momentum for every immiscible liquid pair with a positive sigma12. */
 	void applyLiquidPairSurfaceTensionForce(float dt) {
-		if (!domain.liquidPairTensionActive) return;
+		if (!domain.tension.hasAnyLiquidPairTension()) return;
 		float scale = dt / (domain.config.density() * domain.config.cellSize());
 		for (Map.Entry<Long, Double> entry : domain.materialRegistry.liquidPairTensions().entrySet()) {
 			if (entry.getValue() <= 0.0) continue;

@@ -54,7 +54,7 @@ final class DomainMetrics {
 	}
 
 	float maximumPressure() {
-		domain.domainFlowFields.ensurePressureGeometry();
+		domain.pressureSystem.prepareGeometry();
 		float maximum = 0.0F;
 		for (int cell = 0; cell < domain.cellCount; cell++) if (domain.liquidGrid.stockCount[cell] > 0) {
 			maximum = Math.max(maximum, (float) domain.pressureSystem.liquidPressureAt(cell, ~domain.geometry.cutCells.mask(cell) & 255));

@@ -33,7 +33,7 @@ public static void main(String[] args) {
 	validateLiquidPairPressureJump();
 	validateLiquidPairIdentity();
 	System.out.println("M4 surface-tension solver gate passed: static droplet Laplace jump, "
-			+ "contact-angle spreading, liquid-pair pressure jump, no sustained parasitic flow and exact marker conservation");
+			+ "Young contact-line response, liquid-pair pressure jump, no sustained parasitic flow and exact inventory conservation");
 }
 
 private static void validateSigmaZeroDegeneration() {
@@ -234,7 +234,7 @@ int nx=x+(axis==0?2*side-1:0),ny=y+(axis==1?2*side-1:0),nz=z+(axis==2?2*side-1:0
 if(!domain.domainFlowFields.inside(nx,ny,nz))continue;
 int neighbor=domain.domainFlowFields.cellIndex(nx,ny,nz);
 if(!domain.geometry.solid[neighbor]&&domain.liquidGrid.stockCount[neighbor]==0)
-freeArea+=domain.pressurePhaseGeometry.liquidFaceArea(cell,axis,side,domain.geometry.cutCells)*h*h;
+freeArea+=domain.pressureSystem.phaseGeometry().liquidFaceArea(cell,axis,side,domain.geometry.cutCells)*h*h;
 }}
 double initialMechanicalAndSurface=potential+sigma*freeArea;
 double peakKinetic = 0, gravityWork = 0, pressureWork = 0, transportWork = 0, fixedWallWork = 0, surfaceWork = 0;
@@ -256,7 +256,7 @@ int cell=stock.key().cell();
 currentPotential+=stock.massKilograms()*config.gravity()*(cell/domain.sizeX%domain.sizeY+.5)*h;
 }
 for(int z=0;z<domain.sizeZ;z++)for(int x=0;x<domain.sizeX;x++)
-wettedFloor+=domain.pressurePhaseGeometry.liquidFaceArea(domain.domainFlowFields.cellIndex(x,1,z),1,0,domain.geometry.cutCells)*h*h;
+wettedFloor+=domain.pressureSystem.phaseGeometry().liquidFaceArea(domain.domainFlowFields.cellIndex(x,1,z),1,0,domain.geometry.cutCells)*h*h;
 if(step==0){
 firstOutwardMomentum=outwardWallLayerMomentum(domain,centerX,centerZ);
 firstPressureWork=audit.pressureProjectionWorkJoules();
@@ -296,7 +296,7 @@ firstOutwardMomentum,firstPressureWork,firstYoungWork);
 private static double wetFloorArea(FluidDomain domain){
 double area=0,h=domain.config.cellSize();
 for(int z=0;z<domain.sizeZ;z++)for(int x=0;x<domain.sizeX;x++)
-area+=domain.pressurePhaseGeometry.liquidFaceArea(domain.domainFlowFields.cellIndex(x,1,z),1,0,domain.geometry.cutCells)*h*h;
+area+=domain.pressureSystem.phaseGeometry().liquidFaceArea(domain.domainFlowFields.cellIndex(x,1,z),1,0,domain.geometry.cutCells)*h*h;
 return area;
 }
 

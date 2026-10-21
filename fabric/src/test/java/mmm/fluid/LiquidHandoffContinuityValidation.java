@@ -78,7 +78,7 @@ public final class LiquidHandoffContinuityValidation {
 						int xx = x + (axis == 0 ? sign : 0), yy = y + (axis == 1 ? sign : 0), zz = z + (axis == 2 ? sign : 0);
 						if (!domain.domainFlowFields.inside(xx, yy, zz)) continue;
 						int other = domain.domainFlowFields.cellIndex(xx, yy, zz); if (domain.liquidGrid.exactCellVolumeInventory[other].signum() <= 0) continue;
-						double area = domain.pressurePhaseGeometry.sharedLiquidFaceArea(sign > 0 ? cell : other, sign > 0 ? other : cell, axis, domain.geometry.cutCells);
+						double area = domain.pressureSystem.phaseGeometry().sharedLiquidFaceArea(sign > 0 ? cell : other, sign > 0 ? other : cell, axis, domain.geometry.cutCells);
 						if (axis == 0 && sign > 0 && (x + 1) * h == 5) centerArea += area * h * h;
 						if (area > 0 && component[other] < 0) { component[other] = count; queue[tail++] = other; }
 					}

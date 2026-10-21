@@ -77,7 +77,7 @@ public final class GasPhaseInterfaceValidation {
 		long liquidMass=domain.totalMassUnits();var liquidVolume=domain.liquidCells.exactVolume();
 		domain.domainFlowFields.ensureGrid();
 		domain.mac.velocityX[domain.domainFlowFields.xFaceIndex(1,0,0)]=.01F;
-		domain.cellMacStage.publishMomentum();domain.pressureSystem.faces.rebuild(.01F);
+		domain.cellMacStage.publishMomentum();domain.pressureSystem.prepareOperator();
 		var flow=new ConservativeLiquidFlux(domain);flow.prepare(.01F,new long[8]);
 		var liquid=flow.prepareInventory(domain.liquidCells);
 		check(!liquid.transfers().isEmpty(),"Restricted phase fixture did not exercise actual liquid transport");

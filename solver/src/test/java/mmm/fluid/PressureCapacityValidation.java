@@ -15,12 +15,12 @@ public final class PressureCapacityValidation {
 	private static void fixedPorePressurePort() {
 		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(1, 1000, 0, .05F, 120, 1e-5F, .002F, 0));
 		domain.setVolume(1, 0, 0, .5F); domain.domainFlowFields.ensureGrid();
-		var graph = domain.pressureSystem.faces; graph.rebuild(.05F);
+		var graph = domain.pressureSystem.faces; domain.pressureSystem.prepareOperator();
 		int face=graph.offsets[0]+domain.domainFlowFields.xFaceIndex(1,0,0);
 		double port=graph.fluidArea(face);
-		domain.mac.velocityX[1]=-.25F; graph.rebuild(.05F);
+		domain.mac.velocityX[1]=-.25F; domain.pressureSystem.prepareOperator();
 		close(graph.fluidArea(face),port,"Mixture pressure aperture changed with the transport donor direction");
-		domain.mac.velocityX[1]=.25F; graph.rebuild(.05F);
+		domain.mac.velocityX[1]=.25F; domain.pressureSystem.prepareOperator();
 		close(graph.fluidArea(face),port,"Mixture pressure aperture changed after flow reversal");
 		close(port,1,"A partial liquid cell lost its actual fixed pore port");
 	}
@@ -41,8 +41,8 @@ public final class PressureCapacityValidation {
 						mmm.fluid.air.BuiltinGasDefinitions.AIR,300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,718)))));
 		d.bindThermal(thermal,liquids,300);d.domainFlowFields.ensureGrid();
 		d.mac.velocityX[d.domainFlowFields.xFaceIndex(1,0,0)]=-100;d.cellMacStage.publishMomentum();
-		var graph=d.pressureSystem.faces;graph.rebuild(dt);
-		var predicted=new double[d.cellCount+3];graph.addDivergence(faceVelocities(d,graph),predicted,1);
+		var graph=d.pressureSystem.faces;d.pressureSystem.prepareOperator();
+		var predicted=new double[d.cellCount+3];d.pressureSystem.addDivergence(faceVelocities(d,graph),predicted,1);
 		double[] initialVolume={0,d.gasBoundary().availableVolume(1),d.gasBoundary().availableVolume(2)};
 		boolean overrun=false;
 		for(int node=1;node<=2;node++)overrun|=initialVolume[node]+dt*cellCubicMeters*predicted[d.cellCount+node]<0;
@@ -53,12 +53,12 @@ public final class PressureCapacityValidation {
 		var result=d.pressureSystem.solveProjection(dt);
 		if(!result.converged())throw new AssertionError("Finite vacuum capacity projection did not converge: "+result);
 		d.pressureSystem.projectVelocities(dt);d.cellMacStage.publishMomentum();
-		var corrected=new double[d.cellCount+3];graph.addDivergence(faceVelocities(d,graph),corrected,1);
+		var corrected=new double[d.cellCount+3];d.pressureSystem.addDivergence(faceVelocities(d,graph),corrected,1);
 		double volumeError=FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION*cellCubicMeters;
 		double pressureError=2*Math.ulp((float)mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE);boolean closed=false;
 		for(int node=1;node<=2;node++) {
 			double finalVolume=initialVolume[node]+dt*cellCubicMeters*corrected[d.cellCount+node];
-			double absolute=d.projection.gasPressure[node]+mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE;
+			double absolute=d.pressureSystem.gasPressure[node]+mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE;
 			if(finalVolume < -volumeError||absolute < -pressureError)
 				throw new AssertionError("Vacuum projection left negative capacity or absolute pressure");
 			if(finalVolume>volumeError&&Math.abs(absolute)>pressureError)
@@ -106,7 +106,7 @@ public final class PressureCapacityValidation {
 				volumes[d.domainFlowFields.cellIndex(x,y,z)]=y==1?fill:1;
 			d.sealDomainBoundary();d.setVolumes(volumes);d.domainFlowFields.ensureGrid();
 			for(int node:d.gasState.network.nodeIds())d.setGasNodeStandardVolume(node,0);
-			var graph=d.pressureSystem.faces;graph.rebuild(.05F);
+			var graph=d.pressureSystem.faces;d.pressureSystem.prepareOperator();
 			int middle=d.domainFlowFields.cellIndex(0,1,0),node=d.gasState.frame.commonCellNode(middle);
 			if(node<=0||graph.pressureSupports[middle]!=0)
 				throw new AssertionError("Hydrostatic support removed a real vacuum pressure degree of freedom");
@@ -132,7 +132,7 @@ public final class PressureCapacityValidation {
 		d.geometry.cutCells.restoreMicroMasks(masks);
 		for(int c=0;c<d.cellCount;c++)d.geometry.solid[c]=d.geometry.cutCells.fullySolid(c);
 		d.sealDomainBoundary();d.setVolume(1,1,1,.25F);d.domainFlowFields.ensureGrid();
-		var stock=d.liquidCells.snapshot();var graph=d.pressureSystem.faces;graph.rebuild(.05F);
+		var stock=d.liquidCells.snapshot();var graph=d.pressureSystem.faces;d.pressureSystem.prepareOperator();
 		int lower=d.domainFlowFields.yFaceIndex(1,1,1),upper=d.domainFlowFields.yFaceIndex(1,2,1);
 		close(graph.freeFallAcceleration(graph.offsets[1]+upper),0,"Airborne stock accelerated a disconnected supported pocket");
 		close(graph.freeFallAcceleration(graph.offsets[1]+lower),-d.config.gravity(),"Supported stock held up a disconnected airborne pocket");
@@ -162,24 +162,25 @@ public final class PressureCapacityValidation {
 		domain.sealDomainBoundary(); domain.domainFlowFields.ensureGrid(); return domain;
 	}
 	private static void checkGraph(FluidDomain domain) {
-		var graph = domain.pressureSystem.faces; graph.rebuild(.05F);
+		var graph = domain.pressureSystem.faces; domain.pressureSystem.prepareOperator();
 		int rows = domain.cellCount + domain.gasState.network.nodeCount() + 1;
 		double[] p = new double[rows], q = new double[rows], velocity = new double[graph.faceCount];
 		for (int i = 0; i < rows; i++) { p[i] = Math.sin(i + .3); q[i] = Math.cos(i + .7); }
 		for (int i = 0; i < velocity.length; i++) velocity[i] = Math.sin(i * .7);
 		double[] divergence = new double[rows], gradient = new double[velocity.length];
-		graph.addDivergence(velocity, divergence, 1); graph.pressureVelocity(p, gradient);
+		domain.pressureSystem.addDivergence(velocity, divergence, 1); domain.pressureSystem.pressureVelocity(p, gradient);
 		double first = dot(p, divergence), second = 0;
 		for (int face = 0; face < velocity.length; face++) if (graph.inverseMass[face] > 0)
 			second += velocity[face] * gradient[face] / graph.inverseMass[face];
 		close(first, second, "Volume incidence and pressure force are not transposes");
-		double[] ap = apply(graph, p), aq = apply(graph, q);
+		double[] ap = apply(domain.pressureSystem, p), aq = apply(domain.pressureSystem, q);
 		close(dot(p, aq), dot(q, ap), "Pressure operator is asymmetric");
 		if (dot(p, ap) < -1e-12) throw new AssertionError("Pressure inertia is not positive");
 	}
-	private static double[] apply(PressureFaceGraph graph, double[] source) {
+	private static double[] apply(PressureSystem pressure, double[] source) {
+		var graph=pressure.faces;
 		double[] response = new double[graph.faceCount], result = new double[source.length];
-		graph.pressureVelocity(source, response); graph.addDivergence(response, result, 1); return result;
+		pressure.pressureVelocity(source, response); pressure.addDivergence(response, result, 1); return result;
 	}
 	private static void shallowHydrostatics(boolean column) {
 		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 9.81F, .025F, 120, 1e-5F, .002F, .8F));

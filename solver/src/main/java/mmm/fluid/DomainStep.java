@@ -89,7 +89,7 @@ final class DomainStep {
 		if (captureMechanicalAudit) mechanicalAudit.carrierInventoryTransferJoules +=
 				finalParticleKineticEnergy - carrierTransferInitialKineticEnergy;
 		return new StepStats(
-				substeps, pressureIterations, domain.lastPressureResidual, before, domain.totalVolume(), massBefore, domain.totalMass(),
+				substeps, pressureIterations, (float)domain.pressureSystem.lastResult().residualRms(), before, domain.totalVolume(), massBefore, domain.totalMass(),
 				chemistry.dirtyCells(), chemistry.evaluations(), chemistry.changedMarkers(),
 				thermalAxis.condensedPhase(), thermalAxis.gasPhase(),
 				captureMechanicalAudit ? mechanicalAudit.finish(
