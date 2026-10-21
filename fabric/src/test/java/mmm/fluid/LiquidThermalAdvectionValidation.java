@@ -44,7 +44,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 					stock.mixture().stableAmounts(r.chemical()),stock.internalEnergy()).temperatureK();
 			require(Math.abs(t-293.15)<1e-4,"Integer chemical reference energy changed transported temperature: "+t);
 		}
-		var gas=d.gasTopologyCoordinator.planAfterLiquidCells(plan.future(),new long[d.cellCount],false);
+		var gas=d.gasTopologyCoordinator.planAfterCarrierEdit(plan.future(),new long[d.cellCount]);
 		plan.commit();d.thermalState.recordRoundoff(plan.energyRoundoff());d.markCellInventoryChanged();
 		d.gasTopologyCoordinator.commitPrepared(gas,new long[d.cellCount]);
 		require(d.liquidCells.exactVolume().equals(volume)&&d.liquidCells.massUnits()==mass&&d.exactInternalEnergy().equals(d.thermalAudit().expectedInventory()),"Caloric transport changed exact stock or audit");
