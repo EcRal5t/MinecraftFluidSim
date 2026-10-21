@@ -36,7 +36,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		var before=d.liquidCells.snapshot();var volume=d.liquidCells.exactVolume();long mass=d.liquidCells.massUnits();
 		var sourceKey=new LiquidCellInventory.Key(0,water,255);var movedVolume=SignedDyadic.of(1,-32);
 		var routes=LiquidTransportRoutes.builder(1,2);routes.source(d.liquidCells.stock(sourceKey));
-		routes.route(0,1,255,movedVolume);routes.route(-1,0,255,d.liquidCells.stock(sourceKey).volume().subtract(movedVolume));
+		routes.route(0,1,255,movedVolume);
 		var plan=d.liquidCells.planRoutes(routes.build(),FluidThermalBinding.liquidEnergyPartitioner(d));
 		require(before.rows().equals(d.liquidCells.snapshot().rows()),"Caloric transport changed committed rows during preparation");
 		for(var stock:plan.future().physicalStocks()){

@@ -518,50 +518,55 @@ public final class LiquidCellInventory {
 		return planRoutes(routes,caloric,null);
 	}
 	public Plan planRoutes(LiquidTransportRoutes routes,EnergyPartitioner caloric,TransportFinalizer finalizer) {
-		var moving=new boolean[routes.sourceCount()];
-		var totals=new TransportTargets();var transfers=new ArrayList<Transfer>();
-		// Remove original donor holdings once, before any incoming share is added.
-		for(int donor=0;donor<moving.length;donor++){
+		var totals=new TransportTargets();
+		var partitions=new SourcePartition[routes.sourceCount()];
+		// Every actual outflow reads the same original generation. Incoming quantities
+		// are merged only after all original donors have retained their own remainder.
+		for(int donor=0;donor<routes.sourceCount();donor++){
 			var source=routes.source(donor);int start=routes.routeStart(donor),end=routes.routeEnd(donor);
 			if(source.key().cell()>=cellCount()||stock(source.key())!=source)throw new IllegalArgumentException("Liquid transport donor is not an original owner");
 			for(int r=start;r<end;r++)if(routes.targetCell(r)>=cellCount())throw new IllegalArgumentException("Liquid transport recipient is outside the grid");
-			if(end-start==1&&routes.face(start)<0&&routes.volume(start).equals(source.volume()))continue;
-			totals.donor(source);moving[donor]=true;
+			var partition=partitions[donor]=partitionOutflow(routes,donor,caloric);
+			totals.donor(source).retainSource(source,partition);
 		}
-		for(int donor=0;donor<moving.length;donor++)if(moving[donor])distributeSource(routes,donor,totals,transfers,caloric);
+		var transfers=new ArrayList<Transfer>();
+		for(int donor=0;donor<routes.sourceCount();donor++){
+			var source=routes.source(donor);var partition=partitions[donor];int start=routes.routeStart(donor),end=routes.routeEnd(donor);
+			for(int r=start;r<end;r++){
+				int part=r-start;var target=totals.owner(routes.targetCell(r),source.key().material(),routes.supportMask(r));
+				long mass=partition==null?source.massUnits():partition.masses[part];
+				if(partition==null)target.addTransport(source.volume(),mass,source.mixture(),source.internalEnergy(),source.indicator());
+				else target.addTransportShare(routes.volume(r),mass,source,partition.species,part,partition.energies[part]);
+				transfers.add(new Transfer(routes.face(r),source.key(),target.key,routes.volume(r),mass));
+			}
+		}
 		var settledTransfers=List.copyOf(transfers);
 		var quantities=finalizer==null?null:prepareTransportQuantities(totals,settledTransfers);
 		if(finalizer!=null)finalizer.finish(quantities);
 		return prepareTransport(totals,settledTransfers,quantities);
 	}
-	/** One donor closes V, integer quantities and caloric U directly into recipient columns. */
-	private void distributeSource(LiquidTransportRoutes routes,int donor,TransportTargets totals,List<Transfer> transfers,EnergyPartitioner caloric) {
-		Stock source=routes.source(donor);int start=routes.routeStart(donor),count=routes.routeEnd(donor)-start;
-		if(count==1){
-			if(!routes.volume(start).equals(source.volume()))throw new IllegalArgumentException("Liquid transport routes differ from the original stock volume");
-			var target=totals.owner(routes.targetCell(start),source.key().material(),routes.supportMask(start));
-			target.addTransport(source.volume(),source.massUnits(),source.mixture(),source.internalEnergy(),source.indicator());
-			transfers.add(new Transfer(routes.face(start),source.key(),target.key,source.volume(),source.massUnits()));return;
-		}
-		var sourceVolume=SignedDyadic.ZERO;int largest=0;
+	/** Actual outgoing columns and one implicit source remainder; no retained route or stock is generated. */
+	private record SourcePartition(SignedDyadic retainedVolume,long[] masses,long[][] species,double[] energies,int retained) { }
+	private SourcePartition partitionOutflow(LiquidTransportRoutes routes,int donor,EnergyPartitioner caloric){
+		var source=routes.source(donor);int start=routes.routeStart(donor),count=routes.routeEnd(donor)-start;
+		var outgoing=SignedDyadic.ZERO;int largest=0;
 		for(int i=0;i<count;i++){
-			var volume=routes.volume(start+i);sourceVolume=sourceVolume.add(volume);
+			var volume=routes.volume(start+i);outgoing=outgoing.add(volume);
 			if(volume.compareTo(routes.volume(start+largest))>0)largest=i;
 		}
-		if(!sourceVolume.equals(source.volume()))throw new IllegalArgumentException("Liquid transport routes differ from the original stock volume");
-		var shares=new QuantityShares(routes,start,count,source.volume(),largest);
+		var retained=source.volume().subtract(outgoing);
+		if(retained.signum()<0)throw new IllegalArgumentException("Liquid outflow exceeds the original stock volume");
+		if(count==1&&retained.signum()==0)return null;
+		boolean partial=retained.signum()>0;
+		int remainder=partial?count:largest;
+		var shares=new QuantityShares(routes,start,count,source.volume(),remainder,partial);
 		long[] masses=shares.allocate(source.massUnits());
-		long[][] species=new long[source.mixture() == null ? 0 : source.mixture().entryCount()][];
-		for(int i=0;i<species.length;i++)species[i]=shares.allocate(source.mixture().amountAt(i));
-		// Caloric transport uses floating shares; the largest share retains the
-		// numerical remainder and the committed endpoint ledger records rounding.
-		var energies=energyShares(source,masses,species,largest,caloric);
-		for (int i = 0; i < count; i++) {
-			int r=start+i,face=routes.face(r);
-			var target=totals.owner(routes.targetCell(r),source.key().material(),routes.supportMask(r));
-			target.addTransportShare(routes.volume(r),masses[i],source,species,i,energies[i]);
-			if(face>=0)transfers.add(new Transfer(face,source.key(),target.key,routes.volume(r),masses[i]));
-		}
+		long[][] species=new long[source.mixture()==null?0:source.mixture().entryCount()][];
+		for(int entry=0;entry<species.length;entry++)species[entry]=shares.allocate(source.mixture().amountAt(entry));
+		int energyRemainder=remainder;
+		if(masses[energyRemainder]==0)for(int part=0;part<masses.length;part++)if(masses[part]>masses[energyRemainder])energyRemainder=part;
+		var energies=energyShares(source,masses,species,energyRemainder,caloric);
+		return new SourcePartition(retained,masses,species,energies,partial?count:-1);
 	}
 	/** Actual face quantities provide the common mass and geometry inputs to momentum. */
 	private TransportQuantities prepareTransportQuantities(TransportTargets totals,List<Transfer> transfers) {
@@ -608,7 +613,7 @@ public final class LiquidCellInventory {
 		Accumulator donor(Stock source){
 			var total=owner(source.key());
 			if(total.donor)throw new IllegalArgumentException("Repeated liquid transport donor");
-			total.resetDonor();return total;
+			total.donor=true;return total;
 		}
 		Accumulator owner(Key key){
 			var row=row(key.cell());int at=row.index(key);if(at>=0)return row.owners.get(at);
@@ -725,8 +730,8 @@ public final class LiquidCellInventory {
 				fractions[i]=weights[i].toDouble()/volume;
 			}
 		}
-		QuantityShares(LiquidTransportRoutes routes,int start,int count,SignedDyadic total,int largest){
-			this.largest=largest;fractions=new double[count];double volume=total.toDouble();
+		QuantityShares(LiquidTransportRoutes routes,int start,int count,SignedDyadic total,int largest,boolean retained){
+			this.largest=largest;fractions=new double[count+(retained?1:0)];double volume=total.toDouble();
 			if(!(volume>0&&Double.isFinite(volume)))throw new IllegalArgumentException("Liquid shares require positive finite volume");
 			for(int i=0;i<count;i++)if(i!=largest)fractions[i]=routes.volume(start+i).toDouble()/volume;
 		}
@@ -787,15 +792,31 @@ public final class LiquidCellInventory {
 				firstMixture=initial.mixture();chemical=firstMixture!=null;residualMass=chemical?firstMixture.massResidualUnits():mass;
 			}
 		}
-		void resetDonor(){
-			donor=transportChanged=true;volume=energy=SignedDyadic.ZERO;mass=residualMass=0;indicator=chemical=false;
-			transportEnergy=transportEnergyError=0;firstMixture=null;speciesHandles=null;speciesAmounts=null;speciesCount=0;
+		/** Subtracts accepted original outflow before any incoming source is merged. */
+		void retainSource(Stock source,SourcePartition partition){
+			transportChanged=true;
+			if(partition==null||partition.retained<0){
+				volume=SignedDyadic.ZERO;mass=residualMass=0;transportEnergy=transportEnergyError=0;
+				indicator=chemical=false;firstMixture=null;return;
+			}
+			int remainder=partition.retained;
+			volume=partition.retainedVolume;mass=partition.masses[remainder];transportEnergy=partition.energies[remainder];
+			if(source.mixture()==null)return;
+			boolean changed=false;
+			for(int entry=0;entry<partition.species.length;entry++)changed|=partition.species[entry][remainder]!=source.mixture().amountAt(entry);
+			if(!changed)return;
+			prepareSpecies(0);speciesCount=0;
+			for(int entry=0;entry<partition.species.length;entry++){
+				long amount=partition.species[entry][remainder];if(amount==0)continue;
+				speciesHandles[speciesCount]=source.mixture().speciesHandle(entry);speciesAmounts[speciesCount++]=amount;
+			}
 		}
 		void add(SignedDyadic amount, long mass, ChemicalMixtureRecord mixture, SignedDyadic energy, boolean indicator) {
 			this.energy=this.energy.add(energy);addQuantities(amount,mass,mixture,indicator);
 		}
 		void addTransport(SignedDyadic amount,long mass,ChemicalMixtureRecord mixture,double carriedEnergy,boolean indicator){
-			addTransportEnergy(carriedEnergy);addQuantities(amount,mass,mixture,indicator);
+			addTransportEnergy(carriedEnergy);volume=volume.add(amount);this.mass=Math.addExact(this.mass,mass);this.indicator|=indicator;
+			addComposition(mixture);
 		}
 		/** Source integer columns go directly to the recipient; only stored owners need a mixture object. */
 		void addTransportShare(SignedDyadic amount,long mass,Stock source,long[][] species,int part,double energy){
@@ -812,6 +833,9 @@ public final class LiquidCellInventory {
 		private void addQuantities(SignedDyadic amount,long mass,ChemicalMixtureRecord mixture,boolean indicator){
 			volume = volume.add(amount); this.mass = Math.addExact(this.mass, mass); this.indicator |= indicator;
 			residualMass=Math.addExact(residualMass,mixture==null?mass:mixture.massResidualUnits());
+			addComposition(mixture);
+		}
+		private void addComposition(ChemicalMixtureRecord mixture){
 			if(mixture==null)return;
 			if(!chemical){chemical=true;firstMixture=mixture;return;}
 			prepareSpecies(mixture.entryCount());

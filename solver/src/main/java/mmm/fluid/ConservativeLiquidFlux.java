@@ -360,7 +360,7 @@ final class ConservativeLiquidFlux {
 		return minimum;
 	}
 
-	/** The initial allocation contains only physical preferences and the retained source share. */
+	/** The initial batch contains only actual physical face preferences. */
 	private void prepareRoutes(List<LiquidCellInventory.Stock> origins, SignedDyadic[] capacities) {
 		numericalRoutes.reset(origins,capacities.length);
 		numericalRoutes.materialLayers(domain.materialRegistry,sizeX,sizeY,domain.config.gravity());
@@ -374,10 +374,6 @@ final class ConservativeLiquidFlux {
 				if(source>=0&&capacities[8*target+Integer.numberOfTrailingZeros(targetSupport)].signum()>0)
 					numericalRoutes.add(source,face,target,targetSupport,macroFlows.amount(e));
 			}
-		}
-		for(int source=0;source<numericalRoutes.sourceCount();source++){
-			var key=numericalRoutes.key(source);
-			numericalRoutes.add(source,-1,key.cell(),key.supportMask(),Math.max(0,numericalRoutes.volume(source)-numericalRoutes.outgoing(source)));
 		}
 	}
 

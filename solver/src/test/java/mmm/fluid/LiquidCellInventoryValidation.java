@@ -97,7 +97,6 @@ public final class LiquidCellInventoryValidation {
 		for(int source=0;source<routes.sourceCount();source++){
 			int cell=routes.key(source).cell();
 			routes.add(source,cell,successor[cell],255,flow);
-			routes.add(source,-1,cell,255,routes.volume(source)-flow);
 		}
 		var capacities=new SignedDyadic[32];java.util.Arrays.fill(capacities,SignedDyadic.ZERO);
 		for(int cell=0;cell<4;cell++)capacities[8*cell]=SignedDyadic.of(1);
@@ -111,7 +110,6 @@ public final class LiquidCellInventoryValidation {
 		for(int s=0;s<raw.sourceCount();s++){
 			int cell=raw.key(s).cell();double outgoing=cell==0?.2:cell==1?.3:0;
 			if(outgoing>0)raw.add(s,cell,cell+1,255,outgoing);
-			raw.add(s,-1,cell,255,raw.volume(s)-outgoing);
 		}
 		var high=new SignedDyadic[24];java.util.Arrays.fill(high,SignedDyadic.ZERO);
 		for(int cell=0;cell<3;cell++)high[8*cell]=SignedDyadic.of(1);
@@ -191,18 +189,16 @@ public final class LiquidCellInventoryValidation {
 				new LiquidCellInventory.Stock(water, SignedDyadic.of(.75), 17, mixture, .1, true)),
 				new LiquidCellInventory.Edit(oil, new LiquidCellInventory.Stock(oil, SignedDyadic.of(.25), 3, null, -.2, false)))).commit();
 		var initial = cells.snapshot();
-		var routes=LiquidTransportRoutes.builder(2,14);
-		var waterRemaining=SignedDyadic.of(.75);var oilRemaining=SignedDyadic.of(.25);
+		var routes=LiquidTransportRoutes.builder(2,12);
 		int[] neighbors = {12, 14, 10, 16, 4, 22};
 		routes.source(cells.stock(water));
 		for (int face = 0; face < neighbors.length; face++) {
-			var part=SignedDyadic.of(.075);routes.route(face,neighbors[face],255,part);waterRemaining=waterRemaining.subtract(part);
+			routes.route(face,neighbors[face],255,SignedDyadic.of(.075));
 		}
-		routes.route(-1,13,255,waterRemaining);routes.source(cells.stock(oil));
+		routes.source(cells.stock(oil));
 		for(int face=0;face<neighbors.length;face++){
-			var part=SignedDyadic.of(.025);routes.route(face,neighbors[face],255,part);oilRemaining=oilRemaining.subtract(part);
+			routes.route(face,neighbors[face],255,SignedDyadic.of(.025));
 		}
-		routes.route(-1,13,255,oilRemaining);
 		var plan = cells.planRoutes(routes.build(),(source,masses,speciesAmounts,remainder,energies)->{
 			for(int i=0;i<masses.length;i++)if(i!=remainder)energies[i]=source.internalEnergy()*(masses[i]/(double)source.massUnits());
 			// The provider's remainder slot is ignored and assigned by the inventory.
@@ -240,7 +236,7 @@ public final class LiquidCellInventoryValidation {
 		var restored = new LiquidCellInventory(snapshot, null);
 		require(restored.ordinalOf(key) == 0 && restored.stockAt(0).equals(snapshot.stockAt(0)), "Recovery changed cell inventory ordinals");
 		var routes=LiquidTransportRoutes.builder(1,2);routes.source(restored.stock(key));
-		routes.route(0,1,255,SignedDyadic.of(.125));routes.route(-1,0,255,SignedDyadic.of(.375));
+		routes.route(0,1,255,SignedDyadic.of(.125));
 		var next = restored.planRoutes(routes.build(),null);
 		next.commit(); require(restored.massUnits() == 10 && restored.exactVolume().equals(SignedDyadic.of(.5)), "Recovered transport changed inventory");
 		boolean immutable = false; try { snapshot.rows().get(0).clear(); } catch (UnsupportedOperationException expected) { immutable = true; }
@@ -275,7 +271,7 @@ public final class LiquidCellInventoryValidation {
 		cells.planEdits(List.of(new LiquidCellInventory.Edit(key,new LiquidCellInventory.Stock(key,SignedDyadic.of(.5),10,null,3,false)))).commit();
 		var before = cells.snapshot();
 		var routes=LiquidTransportRoutes.builder(1,2);routes.source(cells.stock(key));
-		routes.route(0,1,255,SignedDyadic.of(.25));routes.route(-1,0,255,SignedDyadic.of(.25));
+		routes.route(0,1,255,SignedDyadic.of(.25));
 		var prepared = cells.planRoutes(routes.build(),null);
 		var heated = prepared.withMechanicalHeat(Map.of(0,SignedDyadic.of(.1),1,SignedDyadic.of(.2)));
 		require(cells.snapshot().rows().equals(before.rows()), "Mechanical heat changed its source before publication");

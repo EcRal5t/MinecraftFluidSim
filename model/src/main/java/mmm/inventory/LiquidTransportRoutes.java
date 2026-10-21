@@ -3,7 +3,7 @@ package mmm.inventory;
 import mmm.units.SignedDyadic;
 import java.util.Arrays;
 
-/** Owned flat columns for complete donor shares; material identity comes from each donor. */
+/** Owned flat columns for actual donor outflow; unused stock stays with its owner. */
 public final class LiquidTransportRoutes {
     private final LiquidCellInventory.Stock[] sources;
     private final int[] starts, faces, cells, supports;
@@ -38,16 +38,15 @@ public final class LiquidTransportRoutes {
         }
         public Builder source(LiquidCellInventory.Stock source){
             if(built||source==null||sourceCount>0&&starts[sourceCount-1]==size)
-                throw new IllegalStateException("Liquid donor requires complete unpublished routes");
+                throw new IllegalStateException("Liquid donor requires unpublished outflow");
             if(sourceCount==sources.length){int n=Math.max(4,2*sourceCount);sources=Arrays.copyOf(sources,n);starts=Arrays.copyOf(starts,n+1);}
             starts[sourceCount]=size;sources[sourceCount++]=source;return this;
         }
         public Builder route(int face,int targetCell,int supportMask,SignedDyadic volume){
             if(built||sourceCount==0)throw new IllegalStateException("Liquid route requires an unpublished donor");
             var key=sources[sourceCount-1].key();
-            if(face < -1||targetCell<0||supportMask<=0||supportMask>255||volume==null||volume.signum()<0
-                    ||face==-1&&(targetCell!=key.cell()||supportMask!=key.supportMask())
-                    ||face>=0&&targetCell==key.cell())throw new IllegalArgumentException("Invalid liquid transport route");
+            if(face<0||targetCell<0||supportMask<=0||supportMask>255||volume==null||volume.signum()<=0
+                    ||targetCell==key.cell())throw new IllegalArgumentException("Invalid liquid transport route");
             if(size==faces.length){int n=Math.max(16,2*size);faces=Arrays.copyOf(faces,n);cells=Arrays.copyOf(cells,n);supports=Arrays.copyOf(supports,n);volumes=Arrays.copyOf(volumes,n);}
             faces[size]=face;cells[size]=targetCell;supports[size]=supportMask;volumes[size++]=volume;return this;
         }

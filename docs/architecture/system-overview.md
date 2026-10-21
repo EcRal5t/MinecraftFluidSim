@@ -295,19 +295,19 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 液体输运以粗单元的固定开放连通分量为库存和容量单位。
 `PressureSystem.volumeFlux` 提供共同 MAC 速度与实际面开口决定的总通量 `Qt`，颗粒本步实际整数占容决定终点孔容。
 `ConservativeLiquidFlux` 从八微盒 PLIC 几何取得液相扫掠偏好，汇总为分量之间的有向面通量。
-`PhaseQuantitySettlement` 先按固定开放分量结算共同连续体积通量，以同一库存容量图满足原供体库存、接收分量容量与有限气体正容量。满液分量新增干容由同代上风气体通量提供，已有自由界面与气体膨胀保持可动；相变减液形成的新气容随库存交接。
-库存拆分直接传递整数质量与物种列，热参考能共用该列；接收格汇总后生成组成对象，气体来源与终点干容共用同次准备结果。
-内部超出容量区间的体积沿已有通量路线线性交接，数值投影和精确提交复用连通树；剩余拥堵和气腔容量限制由按需展开的残量图处理。MAC 动量直接读取源速度和已接受的整数质量流，双单元质量准备一次，混合与转热共用非零质量流列表。
+`PhaseQuantitySettlement` 按固定开放分量结算实际面出流，终点体积为原库存加实际入流、减实际出流。供体出流受原库存限制，接收分量满足孔容与有限气体正容量；超容和满液分量的体积差额沿按需展开的残量图调整。满液分量新增干容由同代上风气体通量提供，已有自由界面与气体膨胀保持可动；相变减液形成的新气容随库存交接。
+库存只为实际出流分配整数质量与物种，未流出部分留在原库存；热参考能共用同一整数列。所有原供体扣除出流后，再合并接收量并生成组成对象，循环流动共用同一原始库存代次。气体来源与终点干容共用同次准备结果。
+容量残量图中的原地余量提供可调出流额度，交给库存的路线只保存实际跨格转移。MAC 动量直接读取源速度和已接受的整数质量流，双单元质量准备一次，混合与转热共用非零质量流列表。
 
 未来库存先结算真实容量，再一次生成后继相占据与气体几何；空格和满格共享均匀描述，部分填充分量采用 PLIC。库存只改变组成或内能、实际空间保持一致时，共享已有相几何、拓扑与容量。两类相变在同一数量候选上完成动量准备及最终内能赋值。
 压力和 PLIC 给出面通量偏好，正常运动与颗粒排水共用双向邻接路线和一次容量投影。
-材料随后共享已经接受的分量路线，分别拆分实际体积、整数质量、物种与内能；少量材料沿同一分量流动。
+材料共享已经接受的分量出流路线，分别分配实际流出的体积、整数质量、物种与内能；少量材料沿同一分量流动。
 气相互补通量按已接受的液相 `QL` 计算双向 `Qt−QL`，覆盖容量修正引起的反向气流和原总通量为零的面。整数质量、动量和气体来源使用同次结算结果。
 每个非空有限气腔在其真实支撑内保留正容量；容量约束与物质来源分别准备，气体来源沿实际干空间变化交接。
 气体膨胀由实际液流推进，终态状态方程与热功读取真实容量。
 每个机械子步执行一次完整时长的有限体积推进，按实际份额分配材料整数质量、物种与内能，活动域发布一次。
-原地全量保留的库存行直接共享，整份跨格转移直接携带原质量、组成和内能，真实拆分才分配各项整数份额。
-分量路线按原来源直接分组进入库存，目标按单元聚合并一次合并有序行，质量和物种共用同次分配权重。
+无出流库存沿用原行，整份单面跨格转移直接携带原质量、组成和内能；部分出流的整数余量留在原库存，全出空时由最大出流份额承接余量。
+实际出流按原来源分组进入库存，质量和物种共用同次分配权重；来源先保留数量余量，目标再按单元聚合并一次合并有序行。
 MAC 动量输运读取同次结算的实际整数质量通量。
 
 每个粗单元固定开放分量使用一套粗梯度 PLIC 平面，按最终库存液量确定偏移；持久微盒列保存共同重建输入，积分形状由 PLIC 工作区派生。
@@ -345,9 +345,9 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 - **材料、物种、内能与动量交接**
   - 主要文件：
-    - [LiquidCellInventory](../../model/src/main/java/mmm/inventory/LiquidCellInventory.java)：`planRoutes` 一次分配实际数量，动量与来源热直接写入同批机械热列，统一生成私有后继与能量舍入账；`Plan.withInternalEnergiesByStock` 在同一数量候选上赋值最终内能。
-    - [LiquidTransportRoutes](../../model/src/main/java/mmm/inventory/LiquidTransportRoutes.java)：共同容量投影交给库存的扁平路线列，供体确定材料身份，目标库存首次出现时建立键
-    - [PhaseQuantitySettlement](../../solver/src/main/java/mmm/fluid/PhaseQuantitySettlement.java)：共同分量的双精度容量投影、同图精确端点结算与材料份额分配
+    - [LiquidCellInventory](../../model/src/main/java/mmm/inventory/LiquidCellInventory.java)：`planRoutes` 一次分配实际出流的整数质量、物种与内能，原来源扣除出流后再合并接收量；动量与来源热写入同批机械热列，统一生成私有后继与能量舍入账；`Plan.withInternalEnergiesByStock` 在同一数量候选上赋值最终内能。
+    - [LiquidTransportRoutes](../../model/src/main/java/mmm/inventory/LiquidTransportRoutes.java)：按原供体分组的实际跨格出流列，保存面号、目标支撑与正体积，材料身份来自原库存。
+    - [PhaseQuantitySettlement](../../solver/src/main/java/mmm/fluid/PhaseQuantitySettlement.java)：以原库存加减实际面流结算分量容量，按需调整容量残量并分配实际出流的材料份额。
     - [FluidThermalBinding](../../solver/src/main/java/mmm/fluid/FluidThermalBinding.java)：`liquidEnergyPartitioner` 按实际参考能与来源显热分份
     - [CellMomentumTransport](../../solver/src/main/java/mmm/fluid/CellMomentumTransport.java)：三轴共用 `MacMomentumAdvection` 工作区，从实际质量通量生成双控制体积输运，按承载质量的格面结算动量与局部混合热，每轴保存独立的最终动量。
     - [CellCarrierInventoryView](../../solver/src/main/java/mmm/fluid/CellCarrierInventoryView.java)
