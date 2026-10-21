@@ -72,12 +72,12 @@ final class PressureSystem {
 		}
 		if(domain.granularState!=null&&domain.granularState.parcels.count()>0){drag.prepare(dt);drag.project();}
 		assembleMatrix();solver.reset();
-		// Resolve pressure to the same cell-volume scale as the phase geometry.
-		// The RHS residual becomes normalized volume through dt²/rho; the RMS
-		// factor keeps the resulting maximum row defect within that scale.
+		// Match the RMS predicted volume defect to the geometry's cell resolution.
+		// Exact transport settles each real capacity; adding cells does not demand
+		// a more accurate pressure prediction for every existing cell.
 		double target=Math.max(domain.config.pressureTolerance(),
 				FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION*domain.config.density()
-				/(dt*(double)dt*Math.sqrt(Math.max(1,p.fluidUnknownCount+p.gasUnknownCount))));
+				/(dt*(double)dt));
 		// One semi-implicit pressure prediction. Bounded inventory transport owns
 		// the actual pore endpoint; final EOS and compression work use that volume.
 		var result = solver.solve(target,pressureDatum,referencePressure);
