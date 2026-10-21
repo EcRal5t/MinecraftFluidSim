@@ -220,6 +220,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 活动颗粒体积分配到共同 MAC 面，液体读取剩余开口，两相真实有限质量与各自体积散度的转置共同构成压力算子。
 压力同时更新液体与颗粒速度，接触和位置预测随后准备实际整数占容，真实终点孔容由共同有界输运结算。
 `PressureSystem` 集中准备共同压力预测：两相先接收已知界面载荷及静水浮力，再执行有限质量阻力，随后求解共同残余压力。
+闭壳耦合系统以主气腔压力为数值基准求解增量，液体、气体储容、颗粒反作用和真空下限统一平移，发布时恢复实际压力。均压静水保持零增量，避免相消假流及其后续容量功。
 作用与反作用、外部约束冲量和压力功按实际写回结算；整数库存按最终位置独立核对真实容量，具体离散见[颗粒参考](granular-state.md#统一排水与压力)。
 实体接触以实际面冲量和规定速度结算有符号外功，接触阻力热写入相邻实际液体；动量、热量与墙面停动反力共同准备并发布。
 `MovingBodyCouplingValidation` 直接核对实体外功与实际 MAC 动能、库存内能增量，固定墙反冲计入同一冲量等式。
@@ -238,7 +239,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 - **压力与气腔耦合**
   - 主要文件：
-    - [PressureSystem](../../solver/src/main/java/mmm/fluid/PressureSystem.java)：`solve` 组织已知载荷、阻力、共同矩阵及速度修正，集中发布求解结果
+    - [PressureSystem](../../solver/src/main/java/mmm/fluid/PressureSystem.java)：`solve` 组织已知载荷、阻力、共同压力基准、矩阵及速度修正，集中发布实际压力
     - [PressureLinearSolver](../../solver/src/main/java/mmm/fluid/PressureLinearSolver.java)
     - [PressureSparseMatrix](../../solver/src/main/java/mmm/fluid/PressureSparseMatrix.java)：液体、气体与颗粒共同 CSR 算子
     - [PressurePreconditioner](../../solver/src/main/java/mmm/fluid/PressurePreconditioner.java)
@@ -291,7 +292,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 液体输运以粗单元的固定开放连通分量为库存和容量单位。
 `PressureSystem.volumeFlux` 提供共同 MAC 速度与实际面开口决定的总通量 `Qt`，颗粒本步实际整数占容决定终点孔容。
 `ConservativeLiquidFlux` 从八微盒 PLIC 几何取得液相扫掠偏好，汇总为分量之间的有向面通量。
-`PhaseQuantitySettlement` 先按固定开放分量结算共同连续体积通量，以同一库存容量图满足原供体库存、接收分量容量与有限气体正容量。
+`PhaseQuantitySettlement` 先按固定开放分量结算共同连续体积通量，以同一库存容量图满足原供体库存、接收分量容量与有限气体正容量。原本充满且接触面无气体的液体内部分量保留充满约束；自由表面按实际干面接触推进，避免数值散度在液体内部产生空洞并进入气腔压缩功。
 库存拆分直接传递整数质量与物种列，热参考能共用该列；接收格汇总后生成组成对象，气体来源与终点干容共用同次准备结果。
 容量修正按实际超额启动，残量图随搜索触达展开；未访问路线沿用初始分配。MAC 动量直接读取源速度和已接受的整数质量流，双单元质量准备一次，混合与转热共用非零质量流列表。
 压力和 PLIC 给出面通量偏好，正常运动与颗粒排水共用双向邻接路线和一次容量投影。
@@ -340,7 +341,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 - **材料、物种、内能与动量交接**
   - 主要文件：
     - [LiquidCellInventory](../../model/src/main/java/mmm/inventory/LiquidCellInventory.java)：`planRoutes` 分配物质，向动量算子交付实际数量并汇入机械热，统一生成私有后继与能量舍入账
-    - [PhaseQuantitySettlement](../../solver/src/main/java/mmm/fluid/PhaseQuantitySettlement.java)：共同分量连续流、精确库存容量修正与材料份额分配
+    - [PhaseQuantitySettlement](../../solver/src/main/java/mmm/fluid/PhaseQuantitySettlement.java)：共同分量连续流、含内部充满约束的精确容量结算与材料份额分配
     - [FluidThermalBinding](../../solver/src/main/java/mmm/fluid/FluidThermalBinding.java)：`liquidEnergyPartitioner` 按实际参考能与来源显热分份
     - [CellMomentumTransport](../../solver/src/main/java/mmm/fluid/CellMomentumTransport.java)
     - [CellCarrierInventoryView](../../solver/src/main/java/mmm/fluid/CellCarrierInventoryView.java)
@@ -589,6 +590,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 | 冲击后动量或热量不闭合 | 最终 MAC 动量、墙面冲量与局部机械热 | `CellMacStage.stopWallMomentum`、`CellMomentumTransport` 及对应库存提交 |
 | 气压或气腔归属异常 | `GasRuntimeGeometry` 的微盒、容量与节点归属 | `GasTopologyCoordinator` 的来源交接及 `GasThermalModel` 的库存／容量／U |
 | 等容交接后气体异常升温 | `GasTopologyCoordinator` 的旧腔控制体积与各接收气腔的净扩容 | 物质来源权重、局部释放的真空与绝热功结算 |
+| 均压静水或微扰后出现气穴与温漂 | `PressureSystem` 的共同压力增量、`ConservativeLiquidFlux` 的实际干面接触 | `PhaseQuantitySettlement` 的内部充满约束，再跟到实际气容及压缩功 |
 | 接触角铺展方向异常 | `SurfaceTensionFields` 的曲率及墙面法向通量 | 同一字段进入共同压力载荷的实际做功 |
 | 温度、反应或相变无进展 | 实际组成、U、批次及候选不可执行原因 | `ThermalCaloricInversion`、`GasLiquidPhaseModel`、`GasLiquidPhaseChangeStage`、未来气腔与热账计划 |
 | 颗粒占容、压力或沉积异常 | `GranularCouplingFields`、碰撞预览及整数分配 | `GranularPressureCoupling`、`GranularSettlementGeometryPlan`、`GranularBedShear` |
