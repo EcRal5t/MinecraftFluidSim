@@ -1,7 +1,6 @@
 package mmm.fluid;
 
 import mmm.units.SignedDyadic;
-import mmm.inventory.PhaseOccupancyState;
 import java.util.List;
 
 /** Standard floating convex clipping on a local open microface rectangle. */
@@ -88,7 +87,7 @@ final class GasFaceIntersection {
                 double open=.125*Integer.bitCount(~phase.collisionMask(cell)&255);
                 scale=open>0?phase.poreVolume(cell).toDouble()/open:0;
             }
-            if(scale>0&&liquid*scale<=PhaseOccupancyState.VOLUME_RESOLUTION)return 0;
+            if(scale>0&&liquid<=capacity*FluidSolverConfig.UNRESOLVED_LAYER_FRACTION)return 0;
         }
         return fraction;
     }

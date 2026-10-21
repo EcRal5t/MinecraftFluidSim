@@ -117,8 +117,6 @@ public final class FluidDomain {
 	boolean gridDirty = true;
 	boolean pressureGeometryDirty = true;
 	boolean velocityGridDirty = true;
-	int pressureAnchor = -1;
-	float pressureReference;
 	int lastPressureIterations;
 	float lastPressureResidual;
 	ThermalDomainState thermalState;

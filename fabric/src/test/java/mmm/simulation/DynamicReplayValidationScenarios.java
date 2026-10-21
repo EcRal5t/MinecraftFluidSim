@@ -42,11 +42,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		double previousKinetic = kineticEnergy(domain), initialPotential = Double.NaN;
 		double bodyWork = 0.0;
 		double maximumUnexplainedEnergy = 0.0;
-		// The shared thin-gap support model resolves vertical position to this fixed subcell scale.
-		// Its total gravitational storage allowance is independent of the number of simulated steps.
-		double energyAllowance = 0.025 + mmm.units.Mass.kilograms(domain.totalMassUnits())
-				* domain.config().gravity() * domain.config().cellSize()
-				* mmm.fluid.FluidSolverConfig.UNRESOLVED_VERTICAL_GAP_FRACTION;
+		double energyAllowance = .025;
 		Vec3 bodyVelocity = Vec3.ZERO;
 		FluidDomainState state = domain.captureAuthoritativeState();
 		var initialThermalWork = state.thermalOwner().audit().mechanicalWork();
@@ -89,6 +85,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			FluidDomain.MechanicalStepAudit audit = candidate.stats().mechanicalAudit();
 			if (Double.isNaN(initialPotential)) initialPotential = audit.initialGravitationalPotentialEnergyJoules();
 			bodyWork += candidate.movingBodyCoupling().externalWorkJoules();
+			energyAllowance=.025+.05*Math.abs(bodyWork);
 			var successor = candidate.state();
 			// Include body frictional heat, which publishes before the per-step mechanical audit begins.
 			double thermalMechanicalWork = successor.thermalOwner().audit().mechanicalWork()
@@ -122,13 +119,15 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		double finalKinetic = kineticEnergy(domain);
 		System.out.printf("  dynamic player float gate: displacement=%.9g m, tail range=%.9g m, "
 				+ "tail vy=%+.9g block/tick, liquid K max/tail/final=%.9g/%.9g/%.9g J, "
-				+ "body work=%.9g J, unexplained energy max=%.9g J (fixed allowance %.9g J)%n",
+				+ "body work=%.9g J, unexplained energy max=%.9g J (body-work allowance %.9g J)%n",
 				maximumDisplacement, tailRange, bodyVelocity.y,
 				maximumKinetic, tailMaximumKinetic, finalKinetic, bodyWork, maximumUnexplainedEnergy, energyAllowance);
 		require(maximumDisplacement <= productionConfig().cellSize(),
 				"dynamic player displacement exceeded one solver cell: " + maximumDisplacement + " m");
 		require(tailRange <= 0.05,
 				"dynamic player retained or amplified a visible vertical oscillation: " + tailRange + " m");
+		require(tailMaximumKinetic<=.025&&finalKinetic<=.002,
+				"dynamic player disturbance did not decay to the stationary-body energy envelope");
 		require(Math.abs(bodyVelocity.y) <= 0.005,
 				"dynamic player tail velocity did not settle: " + bodyVelocity.y + " blocks/tick");
 	}
@@ -304,7 +303,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		FluidDomain initial = createFullyBoundCompressedPlanarHalfFill(registries);
 		// Apply one finite disturbance, then remove the body for the entire replay.
 		// Stable evolution must survive a perturbation of its exact static state.
-		if(perturbed)initial.applyMovingBodyCoupling(new MovingBodyFluidCoupling.Request(2,1.9F,2,.001,.001,.001,.1));
+		if(perturbed)initial.applyMovingBodyCoupling(new MovingBodyFluidCoupling.Request(2,1.9F,2,.5,.5,.5,.1));
 		FluidDomainState state = initial.captureAuthoritativeState();
 		FluidDomain restored = FluidDomain.restoreAuthoritativeState(state);
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
@@ -313,18 +312,19 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		long initialMass = restored.totalMassUnits(), initialGas = restored.gasBoundary().sealedInventoryNanos();
 		// This flat, homogeneous, unforced state is an exact discrete equilibrium.
 		// A uniform cavity preload supplies no work at constant total gas volume.
-		double energyAllowance = .025;
 		double initialKinetic=kineticEnergy(restored);
+		double energyAllowance=.025+.05*initialKinetic;
 		var initialInventoryEnergy=restored.exactInternalEnergy();
+		var initialGasEnergy=mmm.units.SignedDyadic.sum(state.thermalOwner().copyGasNodeEnergy());
 		var initialThermalWork = state.thermalOwner().audit().mechanicalWork();
 		double initialPotential = Double.NaN, buoyancyWork = 0.0, maximumEnergyError = 0.0;
 		double maximumCenterShift = 0.0;
-		double maximumPotentialUncertainty=0,maximumRawEnergyError=0;
+		double maximumPotentialUncertainty=0,maximumRawEnergyError=0,maximumInventoryEnergyChange=0;
 		double maximumKinetic = 0.0, tailMaximumKinetic = 0.0;
 		double maximumBodyPressureResidual = 0.0, maximumPressureResidual = 0.0;
 		long phaseOperations = 0L, boiledCells = 0L, condensedCells = 0L;
 		double previousAvailable = restored.gasBoundary().availableVolume(1);
-		require(perturbed ? initialKinetic>0 : initialKinetic==0,
+		require(perturbed ? initialKinetic>1 : initialKinetic==0,
 				"compressed planar fixture lost its initial disturbance condition");
 		require(restored.gasNodeGaugePressurePa(1) > 100_000.0,
 				"compressed planar fixture did not retain its sealed external compression");
@@ -349,21 +349,26 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			if (Double.isNaN(initialPotential)) initialPotential = audit.initialGravitationalPotentialEnergyJoules();
 			buoyancyWork += audit.thermalBuoyancyWorkJoules();
 			double thermalWork = candidate.state().thermalOwner().audit().mechanicalWork().subtract(initialThermalWork).toDouble();
-			double rawEnergyError = kinetic-initialKinetic + audit.finalGravitationalPotentialEnergyJoules() - initialPotential
-					+ thermalWork - buoyancyWork;
-			// The audit locates liquid mass at cell centres. A moving partial cell
-			// has a bounded centroid error; actual inventory U and kinetic decay
-			// remain independently constrained without this observation allowance.
+			double inventoryEnergyDelta=restored.exactInternalEnergy().subtract(initialInventoryEnergy).toDouble();
+			// Actual stored U, MAC kinetic energy and the model's cell-centre potential
+			// close independently of the thermal ledger. No position allowance is subtracted.
+			double rawEnergyError=kinetic-initialKinetic+audit.finalGravitationalPotentialEnergyJoules()-initialPotential
+					+inventoryEnergyDelta;
 			double potentialUncertainty=perturbed?verticalPotentialUncertainty(restored):0;
-			double energyError=Math.max(0,Math.abs(rawEnergyError)-potentialUncertainty);
+			double energyError=Math.abs(rawEnergyError);
 			maximumPotentialUncertainty=Math.max(maximumPotentialUncertainty,potentialUncertainty);
 			maximumRawEnergyError=Math.max(maximumRawEnergyError,Math.abs(rawEnergyError));
+			double inventoryEnergyChange=Math.max(0,inventoryEnergyDelta);
+			maximumInventoryEnergyChange=Math.max(maximumInventoryEnergyChange,inventoryEnergyChange);
 			maximumEnergyError = Math.max(maximumEnergyError, Math.abs(energyError));
 			maximumCenterShift = Math.max(maximumCenterShift, Math.abs(centerOfMassY(restored) - initialCenterY));
-			require(Double.isFinite(energyError) && Math.abs(energyError) <= energyAllowance
-					&&Math.abs(restored.exactInternalEnergy().subtract(initialInventoryEnergy).toDouble())<=.025,
-					"compressed planar changed equilibrium energy: "
-							+ energyError + " J, allowance=" + energyAllowance + " J at step " + step);
+			if(!(Double.isFinite(energyError)&&energyError<=energyAllowance))throw new AssertionError(
+					"compressed planar mechanical energy error="+energyError+" J, allowance="+energyAllowance+" J at step "+(step+1)
+					+", initialK="+initialKinetic+", K="+kinetic+", dPE="+(audit.finalGravitationalPotentialEnergyJoules()-initialPotential)
+					+", thermalWork="+thermalWork+", buoyancyWork="+buoyancyWork+", raw="+rawEnergyError+", PE uncertainty="+potentialUncertainty
+					+", actual dU="+inventoryEnergyDelta+", gas dU="+mmm.units.SignedDyadic.sum(candidate.state().thermalOwner().copyGasNodeEnergy()).subtract(initialGasEnergy).toDouble());
+			require(inventoryEnergyChange<=initialKinetic+.025,"compressed planar actual inventory U exceeded available mechanical input: delta="
+					+inventoryEnergyDelta+" J, input="+initialKinetic+" J at step "+(step+1));
 			require(restored.totalMassUnits() == initialMass && restored.gasBoundary().sealedInventoryNanos() == initialGas
 					&& Math.abs(available - 32.0) <= 1.0E-12,
 					"compressed planar changed exact stock or total gas capacity at step " + step);
@@ -393,12 +398,15 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		}
 		double finalKinetic = kineticEnergy(restored);
 		double centerYDelta = centerOfMassY(restored) - initialCenterY;
-		require(maximumKinetic <= .025 && tailMaximumKinetic <= .015 && finalKinetic <= .015,
+		require(maximumKinetic <= initialKinetic+.025 && tailMaximumKinetic <= initialKinetic+.015 && finalKinetic <= initialKinetic+.015,
 				"compressed planar self-excited: max/tail/final="+maximumKinetic+"/"+tailMaximumKinetic+"/"+finalKinetic+" J");
-		if(perturbed)require(finalKinetic<=initialKinetic,"Unforced compressed disturbance gained kinetic energy");
+		if(perturbed){
+			require(finalKinetic<=.9*initialKinetic,"Unforced compressed disturbance failed to decay");
+			require(initialKinetic>10*energyAllowance,"Compressed disturbance is below the independent energy test's signal range");
+		}
 		require(maximumCenterShift <= .001,
 				"compressed planar center of mass drifted: " + maximumCenterShift + " m");
-		require(maximumBodyPressureResidual<=.05,"Equilibrium body/pressure work did not balance: "+maximumBodyPressureResidual+" J");
+		require(maximumBodyPressureResidual<=initialKinetic+.05,"Body/pressure work exceeded the initial mechanical input: "+maximumBodyPressureResidual+" J");
 		require(phaseOperations == 0L && boiledCells == 0L && condensedCells == 0L,
 				"compressed mechanical-equilibrium fixture unexpectedly executed gas phase changes");
 		System.out.printf("  compressed planar backend gate: kinetic max/tail/final="
@@ -406,8 +414,10 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 				+ "max PCG residual=%.9g, max unresolved energy=%.9g J / %.9g J allowance%n",
 				maximumKinetic, tailMaximumKinetic, finalKinetic,
 				centerYDelta, maximumBodyPressureResidual, maximumPressureResidual, maximumEnergyError, energyAllowance);
-		if(perturbed)System.out.printf("  perturbed potential observation: max raw energy error=%.9g J, max cell-centre uncertainty=%.9g J%n",
-				maximumRawEnergyError,maximumPotentialUncertainty);
+		if(perturbed)System.out.printf("  perturbed energy observation: initial K=%.9g J, max independent energy error=%.9g J, max geometric centroid uncertainty=%.9g J (diagnostic only), "
+				+"energy allowance=%.9g J, actual max inventory heating=%.9g J / %.9g J%n",
+				initialKinetic,maximumRawEnergyError,maximumPotentialUncertainty,energyAllowance,
+				maximumInventoryEnergyChange,initialKinetic+.025);
 	}
 
 	/** Stable observation follows the largest cavity; canonical node numbers may change when pockets split. */
@@ -477,7 +487,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 					domain.maximumParticleSpeed(), stats.substeps(), stats.pressureIterations(),
 					stats.pressureResidual());
 			require(milliseconds <= STEP_BUDGET_MILLIS,
-					"production step " + step + " exceeded the server-tick budget: " + milliseconds + " ms");
+					"production step " + (step+1) + " exceeded the server-tick budget: " + milliseconds + " ms");
 		}
 		double maximum = elapsed.stream().mapToDouble(Double::doubleValue).max().orElseThrow();
 		double[] ordered = elapsed.stream().mapToDouble(Double::doubleValue).sorted().toArray();

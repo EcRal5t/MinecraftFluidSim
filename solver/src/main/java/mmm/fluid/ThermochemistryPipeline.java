@@ -15,6 +15,8 @@ final class ThermochemistryPipeline {
 	final CondensedPhaseChangeStage condensedPhase;
 	final GasLiquidPhaseChangeStage gasPhase;
 	private String stage = "IDLE";
+	private mmm.thermal.ThermalCarrierTransport.Batch caloricSample;
+	private mmm.thermal.ThermalDomainState.Revision caloricRevision;
 
 	ThermochemistryPipeline(FluidDomain domain) {
 		this.domain=domain;
@@ -27,7 +29,9 @@ final class ThermochemistryPipeline {
 		var thermal=domain.thermalState;
 		if(thermal==null)throw new IllegalStateException("Thermal state is not bound");
 		var batch=mmm.thermal.ThermalCarrierTransport.prepare(thermal.carrierAccess(domain.domainCapabilities.thermalMarkerContext()));
-		return thermal.stepCarrierConduction(batch,LiquidThermalConduction.contacts(domain,batch),dtSeconds);
+		var result=thermal.stepCarrierConduction(batch,LiquidThermalConduction.contacts(domain,batch),dtSeconds);
+		caloricSample=batch;caloricRevision=thermal.thermalRevision();
+		return result;
 	}
 
 	FluidDomain.ThermalAxisStats step(
@@ -46,6 +50,7 @@ final class ThermochemistryPipeline {
 	private FluidDomain.ThermalAxisStats runStep(boolean thermalBound, boolean granularReactionEnabled,
 			double dtSeconds, boolean phaseChangeEnabled, int maximumPhaseOperations) {
 		stage = "DIRTY_CELLS";
+		caloricSample=null;caloricRevision=null;
 		int[] granularPhaseCells = granularReactionEnabled ? chemistry.captureDirtyCells() : new int[0];
 		ThermalTransport.Stats transportStats;
 		stage = "CONDUCTION";
@@ -62,11 +67,12 @@ final class ThermochemistryPipeline {
 		FluidDomain.ThermalPhaseStats condensedStats = new FluidDomain.ThermalPhaseStats(0, 0, 0, 0L);
 		FluidDomain.GasThermalPhaseStats gasStats = new FluidDomain.GasThermalPhaseStats(0, 0, 0);
 		if (phaseChangeEnabled) {
-			boolean phaseGridPrepared = false;
+			if(maximumPhaseOperations>0)domain.thermalState.preparePhaseScanAfterConduction(
+					domain.domainCapabilities.thermalMarkerContext(),caloricSample,caloricRevision);
 			stage = "CONDENSED_PHASE_CHANGE";
-			condensedStats = condensedPhase.step(maximumPhaseOperations, phaseGridPrepared);
+			condensedStats = condensedPhase.step(maximumPhaseOperations);
 			stage = "GAS_LIQUID_PHASE_CHANGE";
-			gasStats = gasPhase.step(maximumPhaseOperations - condensedStats.operations(), condensedStats.operations() == 0);
+			gasStats = gasPhase.step(maximumPhaseOperations - condensedStats.operations());
 		}
 		stage = "COMPLETE";
 		return new FluidDomain.ThermalAxisStats(

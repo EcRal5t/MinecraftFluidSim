@@ -204,13 +204,6 @@ final class DomainCollision {
 		if (++domain.activeCollisionEditIndex == domain.activeCollisionPlan.edits.size()) { domain.activeCollisionPlan = null; domain.activeCollisionEditIndex = 0; }
 		return displaced;
 	}
-	void displaceGranularForCollisionCell(int cell) {
-		boolean[] cells = new boolean[domain.cellCount];
-		cells[cell] = true;
-		GranularCollisionPlan plan = planGranularCollision(cells);
-		if (plan == null) throw new IllegalStateException("Granular collision occupancy has no removable authoritative owner");
-		commitGranularCollision(plan);
-	}
 	GranularCollisionPlan planGranularCollision(boolean[] affectedCells) {
 		domain.exportGranularState();
 		domain.granularCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits);

@@ -52,6 +52,8 @@ final class PhaseQuantitySettlement {
             }
         }
         int sourceCount(){return sources;}
+		int sourceFor(int cell,int supportMask){return sourceAt[8*cell+Integer.numberOfTrailingZeros(supportMask)];}
+		double outgoing(int source){return preferredTotal[source];}
         LiquidCellInventory.Key key(int s){return stocks.get(firstStock[s]).key();}
         double volume(int s){return volume[s].toDouble();}
         void add(int ordinal,int sharedFace,int cell,int supportMask,double preference){
@@ -83,13 +85,13 @@ final class PhaseQuantitySettlement {
             var remaining=raw.volume[s];double scale=raw.preferredTotal[s]>raw.volume(s)?raw.volume(s)/raw.preferredTotal[s]:1;
             int largest=raw.retained[s];
             for(int r=raw.head[s];r>=0;r=raw.next[r])if(raw.preferred[r]>raw.preferred[largest])largest=r;
-            // Numerical fluxes use relative floating precision, so an arbitrarily
-            // small positive flow remains positive. The largest share absorbs the
-            // exact inventory remainder, independently of the absolute flow scale.
+            // Numerical preferences resolve one cell to binary64 precision.
+            // The largest share retains the exact source quantity, including finer tails.
             for(int r=raw.head[s];r>=0;r=raw.next[r])if(r!=largest){
                 double preference=raw.preferred[r]*scale;
                 float rounded=(float)preference;
-                var wanted=SignedDyadic.of(rounded>0&&Float.isFinite(rounded)?rounded:preference);
+                double numerical=rounded>0&&Float.isFinite(rounded)?rounded:preference;
+                var wanted=SignedDyadic.of(Math.scalb(Math.rint(Math.scalb(numerical,52)),-52));
                 if(wanted.compareTo(remaining)>0)wanted=remaining;
                 amount[r]=wanted;remaining=remaining.subtract(wanted);
             }
@@ -107,12 +109,77 @@ final class PhaseQuantitySettlement {
         for(int i=0;i<touchedCount;i++){int slot=touched[i];adjust|=load[slot].compareTo(upper[slot])>0;}
         if(lower!=null)for(int i=0;i<touchedCount;i++){int slot=touched[i];adjust|=lower[slot]!=null&&load[slot].compareTo(lower[slot])<0;}
         for(int g=0;g<groups;g++)adjust|=groupLoad[g].compareTo(groupUpper[g])>0;
+        if(adjust&&lower!=null){
+            amount=balanceFilledInterior(raw,amount,load,lower,upper);
+            Arrays.fill(groupLoad,SignedDyadic.ZERO);adjust=false;touchedCount=0;
+            for(int slot=0;slot<load.length;slot++)if(load[slot]!=null){
+                touched[touchedCount++]=slot;var v=load[slot];
+                adjust|=v.compareTo(upper[slot])>0||lower[slot]!=null&&v.compareTo(lower[slot])<0;
+                int group=receiverGroup==null?-1:receiverGroup[slot];if(group>=0)groupLoad[group]=groupLoad[group].add(v);
+            }
+            for(int g=0;g<groups;g++)adjust|=groupLoad[g].compareTo(groupUpper[g])>0;
+        }
         if(adjust){
             var repair=new ResidualRepair(raw,amount,load,upper,lower,receiverGroup,groupLoad,groupUpper,touched,touchedCount,alternatives);
             repair.solve();amount=new SignedDyadic[raw.size];
             for(int r=0;r<raw.size;r++)amount[r]=repair.amount(r);
         }
         return partitionMaterials(raw,amount);
+    }
+
+    /** A linear local projection sends full-cell volume defects toward the free surface.
+     * Existing physical routes define the forest; a reverse route is added only when used.
+     * Congestion and independent chamber reserves continue through the same residual solve. */
+    private static SignedDyadic[] balanceFilledInterior(RouteBuffer raw,SignedDyadic[] amount,SignedDyadic[] load,
+            SignedDyadic[] lower,SignedDyadic[] upper){
+        boolean needed=false;
+        for(int s=0;s<raw.sources;s++){
+            int slot=slot(raw.key(s));
+            if(lower[slot]!=null&&lower[slot].equals(upper[slot])&&!value(load[slot]).equals(lower[slot])){needed=true;break;}
+        }
+        if(!needed)return amount;
+        int[] incoming=new int[raw.sources],next=new int[raw.size];Arrays.fill(incoming,-1);
+        for(int r=0;r<raw.size;r++){
+            int target=raw.sourceAt[raw.target[r]];
+            if(target>=0&&target!=raw.source[r]){next[r]=incoming[target];incoming[target]=r;}
+        }
+        int[] parent=new int[raw.sources],edge=new int[raw.sources],order=new int[raw.sources];
+        Arrays.fill(parent,-2);int count=0,visited=0;
+        for(int s=0;s<raw.sources;s++){
+            int slot=slot(raw.key(s));
+            if(lower[slot]==null||!lower[slot].equals(upper[slot])){parent[s]=-1;order[count++]=s;}
+        }
+        for(int seed=-1;seed<raw.sources;seed++){
+            if(seed>=0&&parent[seed]==-2){parent[seed]=-1;order[count++]=seed;}
+            while(visited<count){
+                int s=order[visited++];
+                for(int pass=0;pass<2;pass++)for(int r=pass==0?raw.head[s]:incoming[s];r>=0;r=pass==0?raw.next[r]:next[r]){
+                    int child=pass==0?raw.sourceAt[raw.target[r]]:raw.source[r];
+                    if(child<0||parent[child]!=-2)continue;
+                    parent[child]=s;edge[child]=r;order[count++]=child;
+                }
+            }
+        }
+        for(int i=count-1;i>=0;i--){
+            int child=order[i],p=parent[child];if(p<0)continue;
+            int own=slot(raw.key(child)),peer=slot(raw.key(p));
+            var delta=lower[own].subtract(value(load[own]));if(delta.signum()==0)continue;
+            int e=edge[child],face=raw.face[e];
+            raw.alternative(child,face,peer/8,raw.key(p).supportMask());
+            raw.alternative(p,face,own/8,raw.key(child).supportMask());
+            if(amount.length<raw.size){int old=amount.length;amount=Arrays.copyOf(amount,Math.max(raw.size,2*old));Arrays.fill(amount,old,amount.length,SignedDyadic.ZERO);}
+            int toParent=-1,fromParent=-1;
+            for(int r=raw.head[child];r>=0;r=raw.next[r])if(raw.target[r]==peer){toParent=r;break;}
+            for(int r=raw.head[p];r>=0;r=raw.next[r])if(raw.target[r]==own){fromParent=r;break;}
+            boolean increase=delta.signum()>0;var need=increase?delta:delta.negate();
+            int cancel=increase?toParent:fromParent,retained=increase?raw.retained[child]:raw.retained[p];
+            var first=min(need,amount[cancel]);amount[cancel]=amount[cancel].subtract(first);amount[retained]=amount[retained].add(first);
+            int donor=increase?raw.retained[p]:raw.retained[child],route=increase?fromParent:toParent;
+            var second=min(need.subtract(first),amount[donor]);amount[donor]=amount[donor].subtract(second);amount[route]=amount[route].add(second);
+            var moved=first.add(second);if(!increase)moved=moved.negate();
+            load[own]=value(load[own]).add(moved);load[peer]=value(load[peer]).subtract(moved);
+        }
+        return amount;
     }
 
     /** Both the component face totals and each original material volume close exactly. */

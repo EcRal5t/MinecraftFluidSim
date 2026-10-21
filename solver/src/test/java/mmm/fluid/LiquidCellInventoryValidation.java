@@ -31,12 +31,12 @@ public final class LiquidCellInventoryValidation {
 		var cells=domain.liquidCells;var key=new LiquidCellInventory.Key(0,0,255);
 		cells.planAdditions(List.of(new LiquidCellInventory.Stock(key,SignedDyadic.of(1),100,null,16,false))).commit();
 		domain.markCellInventoryChanged();domain.cellMacStage.rebuildInventory();
-		domain.cellMacStage.beginDissipation();domain.cellMacStage.addDissipationAtCell(0,64);
+		domain.cellMacStage.beginMechanicalHeat();domain.cellMacStage.addMechanicalHeatAtCell(0,64);
 		var before=cells.snapshot();
 		var routes=List.of(new LiquidCellInventory.SourceRoutes(cells.stock(key),List.of(
 				new LiquidCellInventory.TransportRoute(0,key,new LiquidCellInventory.Key(1,0,255),SignedDyadic.of(.25)),
 				new LiquidCellInventory.TransportRoute(1,key,new LiquidCellInventory.Key(2,0,255),SignedDyadic.of(.75)))));
-		var plan=cells.planRoutes(routes,null,q->domain.cellMacStage.finishDissipation(q,Map.of()));
+		var plan=cells.planRoutes(routes,null,q->domain.cellMacStage.finishMechanicalHeat(q,Map.of()));
 		require(cells.snapshot().rows().equals(before.rows()),"Dissipation preparation changed source U");
 		require(plan.future().stocksInCell(0).isEmpty()&&plan.mechanicalHeat().equals(SignedDyadic.of(64)),
 				"Source dissipation was lost when its liquid drained completely");
@@ -45,6 +45,12 @@ public final class LiquidCellInventoryValidation {
 				&&cells.stock(new LiquidCellInventory.Key(2,0,255)).internalEnergy()==60
 				&&cells.massUnits()==100&&cells.exactVolume().equals(SignedDyadic.of(1)),
 				"Actual transported mass did not carry source heat into the single successor inventory commit");
+		var exchange=cells.planRoutes(List.of(),null,q->Map.of(1,SignedDyadic.of(-4),2,SignedDyadic.of(4)));
+		require(exchange.future().stock(new LiquidCellInventory.Key(1,0,255)).internalEnergy()==16
+				&&exchange.future().stock(new LiquidCellInventory.Key(2,0,255)).internalEnergy()==64
+				&&exchange.mechanicalHeat().signum()==0&&exchange.energyChange().signum()==0,
+				"Opposite local mechanical work must survive a zero-sum joint energy commit");
+		exchange.commit();
 	}
 
 	private static void continuousFluxMovesResolvedMinorityMaterial() {
@@ -280,6 +286,22 @@ public final class LiquidCellInventoryValidation {
 		require(cells.massUnits()==10 && cells.exactInternalEnergy().subtract(SignedDyadic.of(3)).equals(heated.energyChange()),"Mechanical heat candidate did not publish once");
 		boolean rejected=false; try { prepared.commit(); } catch (IllegalStateException expected) { rejected=true; }
 		require(rejected,"An unheated predecessor could publish after the complete heated candidate");
+		// Disconnected supports in one cell exchange work with their own liquid stock.
+		var chemistry=BuiltinChemicalDefinitions.REGISTRY;var isolated=new LiquidCellInventory(1,chemistry);
+		var firstKey=new LiquidCellInventory.Key(0,0,0x01);var secondKey=new LiquidCellInventory.Key(0,0,0x80);
+		var mixture=ChemicalMixtureRecord.fromSolutesAndSolventMass(chemistry,Map.of(),BuiltinChemicalDefinitions.H2O,10_000_000L);
+		var first=new LiquidCellInventory.Stock(firstKey,SignedDyadic.of(.0625),10_000_000L,mixture,3,false);
+		var second=new LiquidCellInventory.Stock(secondKey,SignedDyadic.of(.0625),10_000_000L,mixture,7,false);
+		isolated.planAdditions(List.of(first,second)).commit();var original=isolated.snapshot();
+		var cooling=SignedDyadic.of(-.5);
+		var localized=isolated.planRoutes(List.of(),null).withMechanicalHeatByStock(Map.of(firstKey,cooling));
+		require(isolated.snapshot().rows().equals(original.rows()),"Stock-local mechanical work changed its source before commit");
+		localized.commit();var cooled=isolated.stock(firstKey);
+		require(cooled.internalEnergy()==2.5&&isolated.stock(secondKey).equals(second)
+				&&cooled.massUnits()==first.massUnits()&&cooled.volume().equals(first.volume())&&cooled.mixture().equals(mixture)
+				&&isolated.massUnits()==20_000_000L&&isolated.exactVolume().equals(SignedDyadic.of(.125))&&isolated.hasSameGeometry(original)
+				&&localized.mechanicalHeat().equals(cooling)&&localized.energyChange().equals(cooling)&&localized.energyRoundoff().signum()==0,
+				"Signed mechanical work crossed an isolated support or changed quantities, geometry or its exact heat total");
 	}
 	private static void targetEnergyClosesAtStoredOwners() {
 		var cells = new LiquidCellInventory(3, null); var edits = new ArrayList<LiquidCellInventory.Edit>();

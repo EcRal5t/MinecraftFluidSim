@@ -49,7 +49,6 @@ final class MechanicalStepPipeline {
 
 	private void prepareCarrierProperties() {
 		if (domain.materialDefinitions != null) {
-			domain.carrierPropertiesWorkspace.invalidate();
 			domain.domainPhaseInventory.derivedCarrierState();
 		}
 	}
@@ -59,7 +58,7 @@ final class MechanicalStepPipeline {
 		domain.domainFlowFields.ensureGrid();
 		double stageKineticEnergy = captureAudit ? domain.domainStep.mechanicalGridKineticEnergyJoules() : 0.0;
 		cellMac.constrainUnresolvedWallMomentum();
-		cellMac.beginDissipation();
+		cellMac.beginMechanicalHeat();
 		if(captureAudit){
 			double constrained=domain.domainStep.mechanicalGridKineticEnergyJoules();
 			audit.fixedBoundaryWorkJoules+=constrained-stageKineticEnergy;
@@ -77,6 +76,7 @@ final class MechanicalStepPipeline {
 		diagnosticStage = Stage.CARRIER_PROPERTIES;
 		prepareCarrierProperties();
 		diagnosticStage = Stage.GRANULAR_PREDICTION;
+		pressure.beginGranularForceStep();
 		GranularMechanics.StepStats granularMechanics = granularMechanicalStage.predictVelocities(dt);
 		double nextKineticEnergy = captureAudit ? domain.domainStep.mechanicalGridKineticEnergyJoules() : 0.0;
 		if (captureAudit) {
@@ -107,6 +107,7 @@ final class MechanicalStepPipeline {
 			audit.viscousWorkJoules += nextKineticEnergy - stageKineticEnergy;
 			stageKineticEnergy = nextKineticEnergy;
 		}
+		pressure.beginForceStep();
 		diagnosticStage = Stage.GRAVITY;
 		double supportWeightWork=bodyForceStage.applyGravity(dt);
 		if (captureAudit) {
@@ -147,6 +148,7 @@ final class MechanicalStepPipeline {
 		diagnosticStage = Stage.GRANULAR_COLLISION_PREVIEW;
 		granularMechanicalStage.previewCollision(dt);
 		granularMechanicalStage.publishCollisionVelocities();
+		pressure.finishGranularForceStep();
 		granularMechanicalStage.validateVelocities();
 		int pressureIterations = domain.lastPressureIterations;
 		if (captureAudit) {

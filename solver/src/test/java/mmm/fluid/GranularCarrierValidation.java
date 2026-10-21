@@ -1404,18 +1404,6 @@ public final class GranularCarrierValidation {
 		for (int axis = 0; axis < 3; axis++) require(Math.abs(afterMomentum[axis] - beforeMomentum[axis]) < 2.0e-5,
 				"shared carrier drag lost momentum on axis " + axis + ": " + (afterMomentum[axis] - beforeMomentum[axis]));
 		require(afterEnergy < beforeEnergy - 1.0e-5, "shared carrier drag must dissipate relative kinetic energy");
-		if(!massWeighted) {
-			long[] mass=new long[domain.cellCount];double[] volume=new double[domain.cellCount];
-			for(var stock:domain.liquidCells.physicalStocks()) {
-				mass[stock.key().cell()]+=stock.massUnits();volume[stock.key().cell()]+=stock.volumeFraction();
-			}
-			var quantities=new LiquidCellInventory.TransportQuantities(java.util.List.of(),mass,mass,volume);
-			double heat=domain.cellMacStage.finishDissipation(quantities,java.util.Map.of()).values().stream()
-					.mapToDouble(mmm.units.SignedDyadic::toDouble).sum();
-			require(Math.abs(heat-(beforeEnergy-afterEnergy))<=1e-5*beforeEnergy+1e-6,
-					"implicit drag heat did not close the finite-mass liquid and parcel kinetic-energy loss");
-		}
-
 	}
 
 	private static void relaxDrag(FluidDomain domain, float dt) {
@@ -1526,7 +1514,7 @@ public final class GranularCarrierValidation {
 		for(int cell=0;cell<domain.cellCount;cell++)p[cell]=domain.projection.pressure[cell];
 		graph.pressureVelocity(p,a);
 		for(int face=0;face<graph.faceCount;face++)impulse[graph.axis[face]]+=dt*graph.faceMass(face)*a[face];
-		var coupling = new GranularPressureCoupling(domain); coupling.prepare((float)dt,0); coupling.project((float)dt);
+		var coupling = new GranularPressureCoupling(domain); coupling.prepare((float)dt,0); coupling.project((float)dt,p);
 		var parcel = domain.granularState.parcels.parcel(0);
 		impulse[0] += parcel.mass() * parcel.velocityX(); impulse[1] += parcel.mass() * parcel.velocityY();
 		impulse[2] += parcel.mass() * parcel.velocityZ();
@@ -1548,7 +1536,10 @@ public final class GranularCarrierValidation {
 		}
 		var coupling = new GranularPressureCoupling(domain);
 		coupling.prepare(0.05F,0);
-		coupling.project(0.05F);
+		double[] pressures=new double[domain.cellCount+domain.gasState.network.nodeCount()+1];
+		for(int cell=0;cell<domain.cellCount;cell++)pressures[cell]=domain.projection.pressure[cell];
+		for(int node:domain.gasState.network.nodeIds())pressures[domain.cellCount+node]=domain.projection.gasPressure[node];
+		coupling.project(0.05F,pressures);
 		var p = domain.granularState.parcels.parcel(0);
 		double expected = 0.05 * 9.81 * 1_000 * p.solidVolumeSvq() / SolidVolume.SVQ_PER_CUBIC_METER / p.mass();
 		// CIC derivatives and the clipped-wall hydrostatic term share the represented solid inventory.

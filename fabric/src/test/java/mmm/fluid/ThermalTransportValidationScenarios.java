@@ -65,6 +65,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		require(restored.transferred() && close(domain.thermalTemperatureInCell(1, 1, 1), 320.0)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"container energy did not survive an extract/reinsert round trip");
+		require(Math.abs(domain.thermalAudit().roundoffResidual().toDouble())<=8*Math.ulp(importedEnergy),
+				"Container transfer booked a finite energy discrepancy as storage roundoff");
 
 		FluidDomain.MaterialDisplacement collision = domain.setSolidMicroMaskMaterial(1, 1, 1, 0xff);
 		require(close(collision.internalEnergy(), importedEnergy) && collision.portions().size() == 1
@@ -201,6 +203,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		}
 	}
 	static void granularEnergyColumnTransactions() {
+		liquidSolidSlipConservesActualMechanicalAndInternalEnergy();
 		granularRepresentationTransfersMechanicalHeat();
 		granularExternalExtractionRounding();
 		granularInsertionPreflightsExternalSource();
@@ -299,6 +302,56 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		require(domain.exactInternalEnergy().equals(SignedDyadic.ZERO)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"granular clear did not move all active/deposit energy to the escaped sink");
+	}
+
+	/** The complete pressure/drag/transport commit carries slip loss into actual inventory U. */
+	private static void liquidSolidSlipConservesActualMechanicalAndInternalEnergy() {
+		try {
+			var production=mmm.simulation.FullCapabilityTestFixture.load();
+			var domain=new FluidDomain(5,5,5,new FluidSolverConfig(.5F,1000,0,.025F,160,1e-5F,.002F,0),1024);
+			domain.sealDomainBoundary();
+			var liquids=mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(domain,production.liquids());
+			domain.bindChemistry(production.chemical());
+			domain.bindGranular(production.granular(),liquids,production.materials());
+			int sand=production.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+			long volume=mmm.granular.GranularLimits.MAX_PARCEL_VOLUME_SVQ;
+			long mass=mmm.units.Mass.fromKilograms(production.granular().material(sand).referenceDensity()
+					*volume/SolidVolume.SVQ_PER_CUBIC_METER);
+			require(domain.tryInsertExactGranular(2,2,2,sand,0,volume,mass).inserted(),
+					"Liquid/solid slip fixture could not insert its grain");
+			domain.domainFlowFields.ensureGrid();
+			int water=liquids.handle(BuiltinFluidMaterials.WATER.id());
+			for(int z=0;z<5;z++)for(int y=0;y<5;y++)for(int x=0;x<5;x++){
+				float pore=domain.domainCollision.effectiveOpenCellVolume(domain.domainFlowFields.cellIndex(x,y,z));
+				require(domain.domainInventory.tryInsertExactVolume(x,y,z,pore,0,water).transferred(),
+						"Liquid/solid slip fixture could not fill its pore water");
+			}
+			mmm.simulation.FullCapabilityTestFixture.bindFull(domain,production,293.15,ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+			for(int p=0;p<domain.granularState.parcels.count();p++){
+				var grain=domain.granularState.parcels.parcel(p);
+				domain.granularState.parcels.overwrite(p,new mmm.granular.GranularParcelStore.Parcel(grain.x(),grain.y(),grain.z(),
+						1,0,0,grain.solidVolumeSvq(),grain.massUnits(),grain.materialHandle(),grain.solidCompositionHandle(),grain.contactAge(),grain.flags(),grain.ceilMask()));
+			}
+			double initialK=liquidSolidKineticEnergy(domain);var initialU=domain.exactInternalEnergy();
+			require(initialK>1,"Liquid/solid slip fixture has no finite mechanical energy signal");
+			double tolerance=1e-4+1e-3*initialK;
+			for(int step=0;step<6;step++){
+				domain.domainStep.step(false,0,true,true,1);
+				double kinetic=liquidSolidKineticEnergy(domain),heat=domain.exactInternalEnergy().subtract(initialU).toDouble();
+				require(Double.isFinite(heat)&&Math.abs(kinetic+heat-initialK)<=tolerance,
+						"Full liquid/solid slip step lost actual K+U: step="+(step+1)+", K0="+initialK+", K="+kinetic+", dU="+heat);
+			}
+			require(domain.exactInternalEnergy().subtract(initialU).toDouble()>.01&&liquidSolidKineticEnergy(domain)<initialK,
+					"Full liquid/solid slip did not turn relative motion into inventory heat");
+		}catch(Exception failure){throw new AssertionError("Full liquid/solid mechanical heat validation failed",failure);}
+	}
+	private static double liquidSolidKineticEnergy(FluidDomain domain){
+		domain.domainFlowFields.ensureVelocityGrid();double energy=granularMechanicalEnergy(domain,0);
+		double[][] momentum={domain.mac.momentumX,domain.mac.momentumY,domain.mac.momentumZ};
+		double[][] mass={domain.cellMacStage.massX,domain.cellMacStage.massY,domain.cellMacStage.massZ};
+		for(int axis=0;axis<3;axis++)for(int face=0;face<momentum[axis].length;face++)if(mass[axis][face]>0)
+			energy+=.5*momentum[axis][face]*momentum[axis][face]/mass[axis][face];
+		return energy;
 	}
 
 	private static void granularRepresentationTransfersMechanicalHeat() {
@@ -591,6 +644,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 					&& domain.thermalAudit().externalSink().equals(SignedDyadic.of(extracted.internalEnergy()))
 					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 					"multi-parcel extraction did not round once at the item energy boundary");
+			require(Math.abs(domain.thermalAudit().roundoffResidual().toDouble())<=8*Math.ulp(initial.toDouble()),
+					"Granular extraction hid a finite energy discrepancy in its roundoff ledger");
 		}
 		for (boolean deposited : new boolean[]{false, true}) {
 			FluidDomain domain = new FluidDomain(4, 4, 4, config, 512);
@@ -610,6 +665,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 					&& domain.thermalAudit().externalSink().equals(SignedDyadic.of(extracted.internalEnergy()))
 					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 					"partial active/deposit item U differs from the actual raw carrier energy removal");
+			require(Math.abs(domain.thermalAudit().roundoffResidual().toDouble())<=8*Math.ulp(1.0),
+					"Partial granular extraction roundoff exceeded its stored-owner precision");
 		}
 		granularColdRemainderRetainsTemperature();
 	}

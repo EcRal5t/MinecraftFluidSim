@@ -67,6 +67,37 @@ tasks.withType(Test).configureEach {
 	failOnNoDiscoveredTests = false
 }
 
+def validationMetadataDir = layout.buildDirectory.dir('generated/validation-metadata')
+tasks.register('generateValidationMetadata') {
+	outputs.dir validationMetadataDir
+	outputs.upToDateWhen { false }
+	doLast {
+		def digest = java.security.MessageDigest.getInstance('SHA-256')
+		def sources = ['api', 'model', 'solver', 'app', 'fabric'].collectMany { module ->
+			rootProject.fileTree(module + '/src').files.toList()
+		}
+		sources += rootProject.fileTree(rootProject.rootDir) { include '*.gradle', 'gradle.properties', 'api/build.gradle', 'model/build.gradle', 'solver/build.gradle', 'app/build.gradle', 'fabric/build.gradle' }.files
+		sources.findAll { it.isFile() }.sort { it.absolutePath }.each { file ->
+			digest.update(rootProject.relativePath(file).replace('\\', '/').getBytes('UTF-8'))
+			file.withInputStream { stream ->
+				byte[] buffer = new byte[65536]; int count
+				while ((count = stream.read(buffer)) >= 0) if (count > 0) digest.update(buffer, 0, count)
+			}
+		}
+		def info = new Properties()
+		info.setProperty('workspaceRoot', rootProject.rootDir.absolutePath)
+		info.setProperty('revision', providers.exec { workingDir rootProject.rootDir; commandLine 'git', 'rev-parse', 'HEAD' }.standardOutput.asText.get().trim())
+		info.setProperty('sourceSHA256', digest.digest().encodeHex().toString())
+		def destination = validationMetadataDir.get().file('validation-build.properties').asFile
+		destination.parentFile.mkdirs()
+		destination.withOutputStream { info.store(it, 'Validation source provenance; runtime hashes the actual classpath') }
+	}
+}
+tasks.named('processTestResources') {
+	dependsOn tasks.named('generateValidationMetadata')
+	from validationMetadataDir
+}
+
 tasks.register('runCpuValidation', JavaExec) {
 	group = 'verification'
 	description = 'Runs selected CPU validation gates in one JVM (default: fast; use -PcpuValidation=list).'
@@ -81,30 +112,6 @@ tasks.register('runCpuValidation', JavaExec) {
 	workingDir validationWorkDir
 	doFirst {
 		validationWorkDir.mkdirs()
-		def fingerprint = { files ->
-			def digest = java.security.MessageDigest.getInstance('SHA-256')
-			files.findAll { it.isFile() }.sort { it.absolutePath }.each { file ->
-				digest.update(rootProject.relativePath(file).replace('\\', '/').getBytes('UTF-8'))
-				file.withInputStream { stream ->
-					byte[] buffer = new byte[65536]; int count
-					while ((count = stream.read(buffer)) >= 0) if (count > 0) digest.update(buffer, 0, count)
-				}
-			}
-			digest.digest().encodeHex().toString()
-		}
-		def sources = ['api', 'model', 'solver', 'app', 'fabric'].collectMany { module ->
-			rootProject.fileTree(module + '/src').files.toList()
-		}
-		sources += rootProject.fileTree(rootProject.rootDir) { include '*.gradle', 'gradle.properties', 'api/build.gradle', 'model/build.gradle', 'solver/build.gradle', 'app/build.gradle', 'fabric/build.gradle' }.files
-		def artifacts = classpath.files.collectMany { file ->
-			if (!file.absolutePath.startsWith(rootProject.rootDir.absolutePath)) return []
-			file.isDirectory() ? rootProject.fileTree(file) { include '**/*.class' }.files.toList() : [file]
-		}
-		def revision = providers.exec { workingDir rootProject.rootDir; commandLine 'git', 'rev-parse', 'HEAD' }.standardOutput.asText.get().trim()
-		logger.lifecycle("CPU validation revision=${revision}, sourceSHA256=${fingerprint(sources)}, artifactSHA256=${fingerprint(artifacts)}")
-		def runtimeExecutable = executable ?: javaLauncher.get().executablePath.asFile.absolutePath
-		logger.lifecycle("CPU validation JVM=${runtimeExecutable}, heap=${maxHeapSize}, selection=${args}, assertions=${enableAssertions}")
-		logger.lifecycle("CPU validation classpath=${classpath.asPath}")
 		new File(validationWorkDir, 'classpath.txt').text = classpath.asPath
 	}
 }

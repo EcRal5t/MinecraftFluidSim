@@ -44,12 +44,12 @@ final class CondensedPhaseChangeStage {
 			this.equilibrium=equilibrium;this.score=score;this.sources=sources;this.batches=batches;
 		}
 	}
-	FluidDomain.ThermalPhaseStats step(int maximumOperations,boolean phaseGridPrepared) {
+	FluidDomain.ThermalPhaseStats step(int maximumOperations) {
 		var thermal=domain.thermalState;
 		if(thermal==null) throw new IllegalStateException("Condensed phase requires thermal inventory");
 		if(maximumOperations<0||maximumOperations>ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) throw new IllegalArgumentException("Invalid phase operation budget");
 		if(maximumOperations==0) return new FluidDomain.ThermalPhaseStats(0,0,0,0);
-		if(!phaseGridPrepared) thermal.preparePhaseScan(domain.domainCapabilities.thermalMarkerContext());
+		thermal.preparePhaseScan(domain.domainCapabilities.thermalMarkerContext());
 		var store=domain.liquidCells;var function=new ThermalStateFunction(thermal.registry());
 		var selectedCells=new TreeSet<Integer>();
 		var originalGroups=thermal.coherentPhases().snapshot();

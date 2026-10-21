@@ -5,6 +5,8 @@ import mmm.units.SignedDyadic;
 /** Finite carrier contacts using cell mixing lengths and PLIC/cut-face thermal resistance. */
 public final class ThermalTransport {
 	public static final int DEFAULT_MAXIMUM_SUBSTEPS = 8;
+	/** Smallest resolved temperature contrast for building a production conduction graph. */
+	public static final double CONDUCTION_RESOLUTION_K = .001;
 
 	@FunctionalInterface
 	public interface FaceArea {

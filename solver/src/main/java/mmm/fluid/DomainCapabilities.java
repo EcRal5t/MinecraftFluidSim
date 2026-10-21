@@ -8,7 +8,6 @@ import mmm.granular.GranularCouplingFields;
 import mmm.granular.GranularPhaseTransferEngine;
 import java.util.List;
 import mmm.units.SignedDyadic;
-import mmm.thermal.LiquidEnergyColumn;
 import mmm.chemistry.ChemicalMixtureRecord;
 import mmm.chemistry.ChemicalTransferLedger;
 import java.util.ArrayList;
@@ -474,10 +473,10 @@ final class DomainCapabilities {
 		return domain.thermochemistryPipeline.stepTransport(dtSeconds);
 	}
 	public ThermalPhaseStats stepInertPhaseChangeOnly(int maximumOperations) {
-		return domain.condensedPhaseChangeStage.step(maximumOperations, false);
+		return domain.condensedPhaseChangeStage.step(maximumOperations);
 	}
 	public GasThermalPhaseStats stepGasPhaseChangeOnly(int maximumOperations) {
-		return domain.gasLiquidPhaseChangeStage.step(maximumOperations, false);
+		return domain.gasLiquidPhaseChangeStage.step(maximumOperations);
 	}
 	static long minimumPhaseBatchesForCapacity(
 			long occupiedSvq, long capacitySvq, long signedVolumeSvqPerBatch
@@ -584,26 +583,6 @@ final class DomainCapabilities {
 	double thermalMarkerTemperature(int marker) {
 		return domain.thermalState.temperature(marker, thermalMarkerContext());
 	}
-	double thermalFaceArea(int x, int y, int z, int axis) {
-		float aperture = switch (axis) {
-			case 0 -> domain.geometry.cutCells.xFaceOpen(x + 1, y, z);
-			case 1 -> domain.geometry.cutCells.yFaceOpen(x, y + 1, z);
-			case 2 -> domain.geometry.cutCells.zFaceOpen(x, y, z + 1);
-			default -> throw new IllegalArgumentException("Unknown thermal face axis");
-		};
-		if (aperture <= 0.0F) return 0.0;
-		int first = domain.domainFlowFields.cellIndex(x, y, z);
-		int second = switch (axis) {
-			case 0 -> first + 1;
-			case 1 -> first + domain.sizeX;
-			case 2 -> first + domain.sizeX * domain.sizeY;
-			default -> throw new IllegalStateException("Unreachable thermal face axis");
-		};
-		double firstCoverage = thermalOccupiedFaceFraction(first, axis * 2 + 1);
-		double secondCoverage = thermalOccupiedFaceFraction(second, axis * 2);
-		double contactFraction = Math.min(firstCoverage, secondCoverage);
-		return aperture * contactFraction * (double) domain.config.cellSize() * domain.config.cellSize();
-	}
 	double thermalOccupiedFaceFraction(int cell, int direction) {
 		domain.domainFlowFields.ensurePressureGeometry();
 		double geometricOpen = domain.geometry.cutCells.openCellVolume(cell);
@@ -648,15 +627,6 @@ final class DomainCapabilities {
 			case 5 -> domain.geometry.cutCells.zFaceOpen(x, y, z + 1);
 			default -> throw new IllegalArgumentException("Unknown thermal boundary direction");
 		};
-	}
-	LiquidEnergyColumn.Truncation planThermalTruncate(
-			int marker, double newMass, ChemicalMixtureRecord keptMixture, double previousTemperatureK
-	) {
-		return domain.thermalState == null ? null : domain.thermalState.planTruncate(
-				marker, newMass, keptMixture, previousTemperatureK, thermalMarkerContext());
-	}
-	void commitThermalTruncate(int marker, LiquidEnergyColumn.Truncation plan) {
-		if (domain.thermalState != null) domain.thermalState.commitTruncate(marker, plan);
 	}
 	void clearThermalBinding() {
 		domain.thermalState = null;

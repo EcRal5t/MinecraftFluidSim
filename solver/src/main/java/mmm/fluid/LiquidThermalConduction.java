@@ -8,8 +8,8 @@ import java.util.List;
 /** Finite-volume conduction between persistent condensed owners in connected cut-cell supports. */
 final class LiquidThermalConduction {
 	private LiquidThermalConduction() { }
-	static List<ThermalCarrierTransport.Contact> contacts(FluidDomain domain, mmm.thermal.ThermalCellGrid.CarrierAccess owners) {
-		if (domain.thermalState == null) return List.of();
+	static List<ThermalCarrierTransport.Contact> contacts(FluidDomain domain, ThermalCarrierTransport.Batch owners) {
+		if (domain.thermalState == null || owners.conductionBelowResolution(domain.thermalBoundaryTemperatureK)) return List.of();
 		int count=owners.carrierCount(),liquids=domain.liquidCells.physicalSize();
 		var head=new int[domain.cellCount];var next=new int[count];var support=new int[count];Arrays.fill(head,-1);
 		var conductivity=new double[count];var fraction=new double[count];var coverage=new double[8*domain.cellCount];

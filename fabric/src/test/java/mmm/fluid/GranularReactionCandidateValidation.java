@@ -263,11 +263,19 @@ public final class GranularReactionCandidateValidation {
     }
     d.liquidCells.planAdditions(stocks).commit();
     d.markCellInventoryChanged();
+    bindReactiveThermal(d,-1);
     d.domainFlowFields.ensureGrid();
+    Arrays.fill(d.mac.velocityX,.25F);
+    d.mac.velocityX[d.domainFlowFields.xFaceIndex(2,1,1)]=.75F;
+    d.cellMacStage.publishMomentum();
     d.bootstrapGasState(null);
     var before = inventory(d);
+    var initialU=d.exactInternalEnergy();
+    var initialAudit=d.thermalAudit();
+    double initialK=kinetic(d),storageAllowance=energyStorageAllowance(d);
     int cell = d.domainFlowFields.cellIndex(1, 1, 1);
-    var stats = new GranularReactionStage(d).step(new int[] {cell});
+    var stage=new GranularReactionStage(d);
+    var stats = stage.step(new int[] {cell});
     require(
         stats.dissolutions() > 0 && inventory(d).equals(before),
         "Full-cell dissolution changed joint inventory");
@@ -275,9 +283,26 @@ public final class GranularReactionCandidateValidation {
       require(
           d.liquidCells.exactCellVolume(c).equals(SignedDyadic.of(1)),
           "Shared capacity flux did not fill the released neighbouring pore");
+    double deltaU=d.exactInternalEnergy().subtract(initialU).toDouble();
+    double rounding=d.thermalAudit().roundoffResidual().subtract(initialAudit.roundoffResidual()).toDouble();
+    storageAllowance+=energyStorageAllowance(d);
+    double finalK=kinetic(d),error=deltaU+finalK-initialK+stage.mechanicalRoundingJoules();
+    require(Math.abs(error)<1e-6,
+        "Sheared reactive displacement changed independently measured K + U: error="+error
+            +", dU="+deltaU+", K="+initialK+"/"+finalK+", mechanicalRounding="+stage.mechanicalRoundingJoules());
+    require(Math.abs(rounding)<=storageAllowance&&d.exactInternalEnergy().equals(d.thermalAudit().expectedInventory()),
+        "Reactive displacement hid a material energy change in storage roundoff");
 
     var restored = FluidDomain.restoreAuthoritativeState(d.captureAuthoritativeState());
-    require(inventory(restored).equals(before), "Reactive capacity transport did not restore");
+    require(inventory(restored).equals(before)&&restored.exactInternalEnergy().equals(d.exactInternalEnergy()),
+        "Reactive capacity transport did not restore its actual inventory and U");
+  }
+
+  private static double energyStorageAllowance(FluidDomain d){
+    double allowance=0;
+    for(var stock:d.liquidCells.physicalStocks())allowance+=8*Math.ulp(stock.internalEnergy());
+    for(double energy:d.thermalState.granularColumn().copyActiveEnergy())allowance+=8*Math.ulp(energy);
+    return allowance;
   }
 
   private static FluidDomain fixture(boolean thermal, boolean shear) {
@@ -305,7 +330,17 @@ public final class GranularReactionCandidateValidation {
             BuiltinChemicalDefinitions.CL_MINUS,
             8_320_000L),
         false);
-    if (thermal) {
+    if (thermal) bindReactiveThermal(d,formationEnergy);
+    d.domainFlowFields.ensureGrid();
+    Arrays.fill(d.mac.velocityX, .25F);
+    if (shear) d.mac.velocityX[d.domainFlowFields.xFaceIndex(2, 1, 1)] = .75F;
+    d.cellMacStage.publishMomentum();
+    d.bootstrapGasState(null);
+    return d;
+  }
+
+  private static void bindReactiveThermal(FluidDomain d,double formationEnergy) {
+    var granular=d.granularState.registry;
       var materials = new ArrayList<ThermalMaterialDefinition>();
       var offsets = new ArrayList<ThermalSpeciesOffset>();
       materials.add(
@@ -356,13 +391,6 @@ public final class GranularReactionCandidateValidation {
               granular.fingerprint()),
           d.materialRegistry(),
           300);
-    }
-    d.domainFlowFields.ensureGrid();
-    Arrays.fill(d.mac.velocityX, .25F);
-    if (shear) d.mac.velocityX[d.domainFlowFields.xFaceIndex(2, 1, 1)] = .75F;
-    d.cellMacStage.publishMomentum();
-    d.bootstrapGasState(null);
-    return d;
   }
 
   private record Inventory(long mass, SignedDyadic volume, Map<Integer, Long> species) {}

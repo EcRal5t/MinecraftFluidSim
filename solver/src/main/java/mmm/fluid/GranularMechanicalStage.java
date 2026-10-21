@@ -71,14 +71,13 @@ final class GranularMechanicalStage {
 		collisionPending = true;
 	}
 
+	double plannedPositionY(int index){
+		var parcel=domain.granularState.parcels.parcel(index);
+		return collisionPending?domain.granularCollision.previewPosition(index,parcel).y():parcel.y();
+	}
 	boolean collisionPending(){return collisionPending;}
 	void publishCollisionVelocities(){
 		if(collisionPending)addBoundaryImpulse(domain.granularCollision.publishVelocities(domain.granularState.parcels));
-	}
-
-	/** Publishes the preview once, with the occupancy used by the joint liquid/gas candidate. */
-	void requireCollisionPreview() {
-		if (!collisionPending) throw new IllegalStateException("Joint transport requires a granular collision preview");
 	}
 
 	void commitCollision() {

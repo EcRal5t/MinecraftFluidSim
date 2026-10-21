@@ -216,8 +216,13 @@ final class ThermalCellOperations {
 	}
 
 	void preparePhaseScan(ThermalCarrierContext markers, ThermalDomainState.Revision revision) {
-		if (preparedPhaseOwners == markers && revision.equals(preparedPhaseRevision)) return;
-		cellGrid.rebuild(carrierAccess(markers));
+		preparePhaseScan(markers,revision,null);
+	}
+	void preparePhaseScan(ThermalCarrierContext markers,ThermalDomainState.Revision revision,ThermalCarrierTransport.Batch sample){
+		if(preparedPhaseOwners==markers&&preparedPhaseRevision!=null
+				&&revision.liquid()==preparedPhaseRevision.liquid()&&revision.granular()==preparedPhaseRevision.granular())return;
+		if(sample!=null)cellGrid.rebuildAfterConduction(sample);
+		else cellGrid.rebuild(carrierAccess(markers));
 		preparedPhaseOwners = markers;
 		preparedPhaseRevision = revision;
 	}

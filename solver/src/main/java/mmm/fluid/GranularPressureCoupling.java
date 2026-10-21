@@ -7,10 +7,57 @@ import mmm.granular.GranularParcelStore;
 final class GranularPressureCoupling {
     private final FluidDomain domain;
     private int contacts, entries;
+    private double[] initialMechanicalEnergy=new double[0];
+    private boolean mechanicalStepPrepared;
     private int[] start = new int[0], row = new int[64];
     private double[] coefficient = new double[64], inverseMass = new double[0], affine = new double[0],referenceAffine=new double[0];
 
     GranularPressureCoupling(FluidDomain domain) { this.domain = domain; }
+
+    /** Capture true float velocity and position before the gravity prediction. */
+    void beginMechanicalStep(){
+        int count=domain.granularState==null?0:domain.granularState.parcels.count();
+        if(initialMechanicalEnergy.length<count)initialMechanicalEnergy=new double[count];
+        for(int p=0;p<count;p++){
+            var parcel=domain.granularState.parcels.parcel(p);
+            initialMechanicalEnergy[p]=mechanicalEnergy(parcel,parcel.y());
+        }
+        mechanicalStepPrepared=true;
+    }
+    private double mechanicalEnergy(GranularParcelStore.Parcel parcel,double y){
+        double vx=parcel.velocityX(),vy=parcel.velocityY(),vz=parcel.velocityZ();
+        return parcel.mass()*(.5*(vx*vx+vy*vy+vz*vz)+domain.config.gravity()*y);
+    }
+    /** Collision velocities and the accepted position close the same local total-energy step. */
+    void finishMechanicalStep(){
+        if(!mechanicalStepPrepared)return;
+        int count=domain.granularState==null?0:domain.granularState.parcels.count();
+        for(int p=0;p<count;p++){
+            var parcel=domain.granularState.parcels.parcel(p);
+            double finalY=domain.granularMechanicalStage.plannedPositionY(p);
+            double exchange=initialMechanicalEnergy[p]-mechanicalEnergy(parcel,finalY);
+            if(exchange==0||domain.thermalState==null)continue;
+            var solid=domain.pressureSystem.solidFaces;var faces=domain.pressureSystem.faces;
+            double total=0;int remainderAxis=-1,remainderFace=-1;double largest=0;
+            for(int axis=0;axis<3;axis++)for(int slot=0;slot<solid.parcelFaceCount(p,axis);slot++){
+                int face=solid.parcelFace(p,axis,slot);
+                if(!(faces.faceMass(face)>0))continue;
+                double share=solid.solidArea(face)*solid.parcelPressureShare(p,axis,slot);
+                total+=share;if(share>largest){largest=share;remainderAxis=axis;remainderFace=face;}
+            }
+            if(!(total>0)){domain.thermalState.addGranularMechanicalHeat(p,exchange);continue;}
+            double remaining=exchange;
+            for(int axis=0;axis<3;axis++)for(int slot=0;slot<solid.parcelFaceCount(p,axis);slot++){
+                int face=solid.parcelFace(p,axis,slot);
+                if(!(faces.faceMass(face)>0)||(axis==remainderAxis&&face==remainderFace))continue;
+                double share=solid.solidArea(face)*solid.parcelPressureShare(p,axis,slot);
+                double part=exchange*(share/total);remaining-=part;
+                if(part!=0)domain.cellMacStage.addMechanicalHeatAtFace(axis,faces.localFace[face],part);
+            }
+            domain.cellMacStage.addMechanicalHeatAtFace(remainderAxis,faces.localFace[remainderFace],remaining);
+        }
+        mechanicalStepPrepared=false;
+    }
 
     void prepare(float dt,double pressureDatum) {
         contacts = entries = 0;
@@ -107,25 +154,24 @@ final class GranularPressureCoupling {
         }
     }
 
-    void project(float dt) { project(dt,null); }
-
+    /** The known prediction and residual projection share this pressure transpose. */
     void project(float dt,double[] pressures) {
         if (contacts == 0) return;
         for (int p = 0; p < contacts / 3; p++) {
             var parcel = domain.granularState.parcels.parcel(p);
-            double[] change = new double[3];
+            double vx=parcel.velocityX(),vy=parcel.velocityY(),vz=parcel.velocityZ();
             for (int axis = 0; axis < 3; axis++) {
                 int c = 3 * p + axis;
                 double force = 0;
                 for (int e = start[c]; e < start[c + 1]; e++) {
                     int r = row[e];
-                    double pressure=pressures!=null?pressures[r]:r<domain.cellCount
-                            ?domain.projection.pressure[r]:domain.projection.gasPressure[r-domain.cellCount];
-                    force += coefficient[e] * pressure;
+                    force += coefficient[e] * pressures[r];
                 }
-                change[axis] = dt * inverseMass[c] * force;
+                double change=dt*inverseMass[c]*force;
+                if(axis==0)vx+=change;else if(axis==1)vy+=change;else vz+=change;
             }
-            write(p, parcel, parcel.velocityX() + change[0], parcel.velocityY() + change[1], parcel.velocityZ() + change[2]);
+            write(p,parcel,vx,vy,vz);
+
         }
     }
 

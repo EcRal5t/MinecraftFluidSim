@@ -28,9 +28,6 @@ final class GranularImplicitDrag {
 	private int size, contacts;
 	private double dt;
 	private double[] mass = new double[0], input = new double[0], delta = new double[0];
-	private double[] initial = new double[0], forced = new double[0];
-	private boolean[] active = new boolean[0];
-	private double[] stokes = new double[0], reynoldsScale = new double[0], dragValue = new double[0];
 	private double[] residual = new double[0];
 	private int[] indices = new int[0], particle = new int[0], counts = new int[0];
 	private double[] weights = new double[0], strength = new double[0], particleResponse = new double[0];
@@ -51,15 +48,11 @@ final class GranularImplicitDrag {
 		size = faceCount + 3 * parcels;
 		if (mass.length < size) {
 			mass = new double[size]; input = new double[size]; delta = new double[size];
-			initial = new double[size]; forced = new double[size];
-			active = new boolean[parcels]; stokes = new double[parcels]; reynoldsScale = new double[parcels]; dragValue = new double[parcels];
 			residual = new double[size];
 			particle = new int[3 * parcels]; counts = new int[3 * parcels]; strength = new double[3 * parcels];
 			particleResponse = new double[3 * parcels];
 			indices = new int[24 * parcels]; weights = new double[24 * parcels];
 		}
-		Arrays.fill(active, false);
-		Arrays.fill(stokes, 0);
 		Arrays.fill(mass, 0);
 		prepareFaces();
 		for (int index = 0; index < parcels; index++) {
@@ -70,12 +63,12 @@ final class GranularImplicitDrag {
 			double diameter = domain.granularState.registry.material(p.materialHandle()).primaryGrainDiameterMeters();
 			double sx = p.velocityX() - fluid.velocityX(), sy = p.velocityY() - fluid.velocityY();
 			double sz = p.velocityZ() - fluid.velocityZ(), slip = Math.sqrt(sx*sx + sy*sy + sz*sz);
-			reynoldsScale[index] = fluid.density() * diameter / fluid.dynamicViscosity();
+			double reynolds=fluid.density()*diameter*slip/fluid.dynamicViscosity();
 			double grains = p.solidVolumeSvq() / (double) SolidVolume.SVQ_PER_CUBIC_METER
 					/ (Math.PI * diameter * diameter * diameter / 6) * fluid.submergedFraction();
-			stokes[index] = 3 * Math.PI * fluid.dynamicViscosity() * diameter * grains;
-			dragValue[index] = resistance(index, slip);
-			for (int axis = 0; axis < 3; axis++) prepareContact(index, p, axis, dragValue[index]);
+			double stokes=3*Math.PI*fluid.dynamicViscosity()*diameter*grains;
+			double resistance=stokes*GranularMechanics.dragResistanceFactor(reynolds);
+			for(int axis=0;axis<3;axis++)prepareContact(index,p,axis,resistance);
 		}
 		if (contacts == 0) return;
 		if (factors == null) factors = new AxisFactor[] {new AxisFactor(), new AxisFactor(), new AxisFactor()};
@@ -91,14 +84,8 @@ final class GranularImplicitDrag {
 				factors[axis].faces[ordinal] = face; faceOrdinal[face] = ordinal++;
 			}
 		}
-		readVelocities(initial);
-		System.arraycopy(initial, 0, forced, 0, size);
+		readVelocities(input);
 		rebuildDiagonal();
-	}
-
-	private double resistance(int parcel, double slip) {
-		double re = reynoldsScale[parcel] * slip;
-		return stokes[parcel] * GranularMechanics.dragResistanceFactor(re);
 	}
 
 	/** Eliminating each parcel leaves independent, positive face systems along the three axes. */
@@ -173,7 +160,6 @@ final class GranularImplicitDrag {
 			sum += weight; count++;
 		}
 		if (count == 0) return;
-		active[index] = true;
 		int parcel = faceCount + 3 * index + axis;
 		for (int slot = base; slot < base + count; slot++) {
 			weights[slot] /= sum;
@@ -207,33 +193,8 @@ final class GranularImplicitDrag {
 	/** Finite-mass pair drag is resolved before the collision/position predictor. */
 	void project(){
 		if(!active())return;
-		System.arraycopy(forced,0,input,0,size);responseDelta();
-		accumulateDissipation();
+		responseDelta();
 		for(int i=0;i<size;i++)delta[i]+=input[i];writeVelocities(delta,true);
-	}
-
-	/** Backward Euler: dt*D*slip_new^2 plus the local finite-inertia decay. */
-	private void accumulateDissipation() {
-		for(int contact=0;contact<contacts;contact++) {
-			int parcel=particle[contact],base=contact*8,end=base+counts[contact];
-			double slip=input[parcel]+delta[parcel];
-			for(int slot=base;slot<end;slot++)slip-=weights[slot]*(input[indices[slot]]+delta[indices[slot]]);
-			double heat=dt*dragValue[(parcel-faceCount)/3]*slip*slip+.5*mass[parcel]*delta[parcel]*delta[parcel];
-			// A near-zero interpolation weight cannot carry floating subtraction
-			// residue reliably. The largest physical share receives the remainder.
-			int remainder=base,axis=(parcel-faceCount)%3;
-			for(int slot=base+1;slot<end;slot++)if(weights[slot]>weights[remainder])remainder=slot;
-			double remaining=heat;
-			for(int slot=base;slot<end;slot++)if(slot!=remainder) {
-				double part=heat*weights[slot];remaining-=part;
-				domain.cellMacStage.addDissipationAtFace(axis,indices[slot]-offsets[axis],part);
-			}
-			domain.cellMacStage.addDissipationAtFace(axis,indices[remainder]-offsets[axis],remaining);
-		}
-		for(int axis=0;axis<3;axis++)for(int face:factors[axis].faces) {
-			double heat=.5*mass[face]*delta[face]*delta[face];
-			domain.cellMacStage.addDissipationAtFace(axis,face-offsets[axis],heat);
-		}
 	}
 
 	private void readVelocities(double[] vector) {

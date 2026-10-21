@@ -149,7 +149,6 @@ final class GasChamberTopology {
     }
     int nodeOfPiece(int piece) { return geometry.hasPiece(piece)?componentNodes[componentSlot(geometry,piece)]:-1; }
 	int nodeOfComponent(int cell,int support) { return componentNodes[8*cell+Integer.numberOfTrailingZeros(support)]; }
-	boolean matchesGeometry(GasComplementGeometry candidate) { return geometry == candidate; }
 	GasChamberCapacity preparedCapacity(){return preparedCapacity;}
 	void preparedCapacity(GasChamberCapacity capacity){preparedCapacity=capacity;}
 	List<Chamber> chambers() { return chambers; }

@@ -96,7 +96,7 @@ final class GasLiquidPhaseChangeStage {
 		public int compareTo(Group other) { int n=Integer.compare(node,other.node); return n!=0?n:component.compareTo(other.component); }
 	}
 
-	FluidDomain.GasThermalPhaseStats step(int maximumOperations,boolean phaseGridPrepared) {
+	FluidDomain.GasThermalPhaseStats step(int maximumOperations) {
 		var thermal=domain.thermalState;
 		if(thermal==null||!thermal.gasModelBound()) throw new IllegalStateException("Gas phase requires thermal owners");
 		if(maximumOperations<0||maximumOperations>ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) throw new IllegalArgumentException("Invalid phase operation budget");
@@ -105,7 +105,7 @@ final class GasLiquidPhaseChangeStage {
 		var liquids=domain.liquidCells; var network=domain.gasState.network;
 		if(network.nodeCount()==0) return new FluidDomain.GasThermalPhaseStats(0,0,0);
 		var interfaceCells=finiteInterfaceCells(domain.gasState.frame);
-		if(!phaseGridPrepared) thermal.preparePhaseScan(domain.domainCapabilities.thermalMarkerContext());
+		thermal.preparePhaseScan(domain.domainCapabilities.thermalMarkerContext());
 		var phase=thermal.gasLiquidPhase(network); var function=new ThermalStateFunction(thermal.registry());
 		// One interface extent per LTE cell; all other liquid and solid owners remain its heat bath.
 		var selected=new TreeMap<Integer,Proposal>();

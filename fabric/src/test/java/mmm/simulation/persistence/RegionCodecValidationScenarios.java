@@ -627,11 +627,13 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 	static void validateMaterialCodec() throws Exception {
 		FluidRegion region = populatedRegion(new UUID(15L, 16L));
 		List<FluidMaterial> palette = List.of(BuiltinFluidMaterials.WATER, BuiltinFluidMaterials.OIL);
-		region.domain().restoreMaterialParticleState(materialCodecParticles(region.domain().exportParticleState(), palette));
+		var input = materialCodecParticles(region.domain().exportParticleState(), palette);
+		region.domain().restoreMaterialParticleState(input);
 		region.domain().bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
 		// Point samples are derived from the committed shared MAC field after initialization.
 		FlipMaterialParticleState expected = region.domain().exportMaterialParticleState();
 		var authoritativeBefore=region.domain().captureAuthoritativeState();
+		assertFixtureMaterialQuantities(input,authoritativeBefore);
 		RegionState state = RegionCheckpointFixtures.captureMaterial(region, 1L);
 		var canonicalRegion = canonicalCodecRegion(new UUID(15L, 16L));
 		canonicalRegion.domain().restoreMaterialParticleState(materialCodecParticles(canonicalRegion.domain().exportParticleState(), palette));
@@ -704,12 +706,29 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		FlipMaterialParticleState restored = restorer(committed).reconstructMaterial();
 		assertMaterialStateEquals(expected, restored);
 		var authoritative=restorer(committed).reconstructAuthoritativeState(null,null,null,BuiltinGasDefinitions.createRegistry(),BuiltinFluidMaterials.createRegistry());
+		assertFixtureMaterialQuantities(input,authoritative);
 		require(region.recordPublishedCheckpoint(1L) && region.releaseSolverAfterCheckpoint(1L),
 				"material controller fixture did not release its published solver");
 		region.restoreAuthoritativeSolver(authoritative, 1L);
 		FluidDomainStateAssertions.assertSameDurableState(authoritativeBefore,region.domain().captureAuthoritativeState(),"Material region cold restore");
 		require(region.domain().hasMaterialState(), "material controller restore lost its bound registry");
 		assertMaterialStateEquals(expected, region.domain().exportMaterialParticleState());
+	}
+	/** The input fixture supplies independent material IDs and per-cell quantities across palette remapping. */
+	private static void assertFixtureMaterialQuantities(FlipMaterialParticleState input,mmm.fluid.FluidDomainState actual){
+		var expectedMass=new java.util.TreeMap<String,Long>();var actualMass=new java.util.TreeMap<String,Long>();
+		var expectedVolume=new java.util.TreeMap<String,mmm.units.SignedDyadic>();var actualVolume=new java.util.TreeMap<String,mmm.units.SignedDyadic>();
+		float[] points=input.copyPositionVolume();long[] mass=input.copyParticleMassUnits();int[] handles=input.copyMaterialPaletteIndex();
+		for(int i=0;i<input.particleCount();i++){
+			int x=(int)Math.floor(points[4*i]/input.cellSize()),y=(int)Math.floor(points[4*i+1]/input.cellSize()),z=(int)Math.floor(points[4*i+2]/input.cellSize());
+			String key=((z*input.sizeY()+y)*input.sizeX()+x)+":"+input.materials().get(handles[i]).id();
+			expectedMass.merge(key,mass[i],Math::addExact);expectedVolume.merge(key,mmm.units.SignedDyadic.of(points[4*i+3]),mmm.units.SignedDyadic::add);
+		}
+		for(var stock:actual.liquid().physicalStocks()){
+			String key=stock.key().cell()+":"+actual.materialPalette().get(stock.key().material()).id();
+			actualMass.merge(key,stock.massUnits(),Math::addExact);actualVolume.merge(key,stock.volume(),mmm.units.SignedDyadic::add);
+		}
+		require(expectedMass.equals(actualMass)&&expectedVolume.equals(actualVolume),"Material codec changed fixture quantities or stable-ID palette mapping");
 	}
 
 }

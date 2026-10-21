@@ -728,11 +728,6 @@ final class GranularReactionStage {
       return velocity;
     }
 
-    double faceVelocity(int cell, int axis, int side) {
-      int i = face(cell, axis, side);
-      return faceMass[axis][i] > 0 ? momentum[axis][i] / faceMass[axis][i] : 0;
-    }
-
     void addLiquidMass(int cell, long units, double[] velocity) {
       double mass = Mass.kilograms(units);
       for (int axis = 0; axis < 3; axis++)
@@ -830,7 +825,9 @@ final class GranularReactionStage {
         advectionRoundoff = transportedLiquid.energyRoundoff();
         advectionHeat = transportedLiquid.mechanicalHeat();
         transportedGas=transport.gasAllocation();
-        transportedLiquid.commit();
+        // Retain the immutable transport endpoint; the authoritative inventory
+        // is published once below, together with its solids, gas and momentum.
+        liquid = transportedLiquid.future();
       }
       var edits = new ArrayList<LiquidCellInventory.Edit>();
       for (int cell = 0; cell < domain.cellCount; cell++)
@@ -874,15 +871,18 @@ final class GranularReactionStage {
         domain.chemicalParcels.markDirtyCell(cell);
         domain.domainStep.granularDepositDynamics().disturbCell(cell);
       }
-      if (gas != null) domain.gasTopologyCoordinator.commit(gas);
+      if (gas != null) domain.gasTopologyCoordinator.commitPrepared(gas,occupied);
       if(domain.thermalState!=null)domain.thermalState.restoreAuditLedger(domain.thermalState.auditLedger()
           .withMechanicalWork(advectionHeat).withRoundoff(advectionRoundoff));
     }
 
     float[] velocities(int axis) {
       var values = new float[momentum[axis].length];
-      for (int i = 0; i < values.length; i++)
-        values[i] = faceMass[axis][i] > 0 ? (float) (momentum[axis][i] / faceMass[axis][i]) : 0;
+      for (int i = 0; i < values.length; i++) if(faceMass[axis][i]>0){
+        double speed=momentum[axis][i]/faceMass[axis][i];
+        values[i]=(float)speed;
+        mechanicalRoundingJoules+=.5*faceMass[axis][i]*(speed-values[i])*(speed+values[i]);
+      }
       return values;
     }
 

@@ -31,9 +31,11 @@
 | `full` | 完整运行所有已登记的领域 |
 | `list` | 输出当前组合与选择器名称 |
 
-显式写出的领域名称运行完整模式，即使它也出现在 `fast` 中。`production-live-budget` 和 `controller-gas-lineage` 需要显式选择，或通过 `full` 执行。根项目 `check` 默认运行 `fast`，完整验收须显式指定 `-PcpuValidation=full`。
+显式写出的领域名称运行完整模式，即使它也出现在 `fast` 中。根项目 `check` 默认运行 19 个领域的 `fast`；该组合省略 `materials`、`surface-tension`、`gas-liquid`、`region-state`、`takeover`、`ownership`、`liquid-joining`、`thermal-extremes`、`controller-gas-lineage`、`production-live-budget`。省略的领域须显式选择，完整验收使用 `-PcpuValidation=full`。
 
 同一领域同时选择短模式和完整模式时，完整模式优先。基线测量可加 `-PcpuValidationKeepGoing=true`，记录当前领域的首个失败后继续下一领域，最后仍以失败退出；默认在首个失败处停止。输出区分断言、参数配置与执行失败，并记录每个领域的耗时。超时或主动中止的进程须另行登记，已开始的场景不计作通过。
+
+`CpuValidationSuite` 与直接启动的 `ProductionFluidReplayValidation` 在日志开头记录构建时的 `revision`、`sourceSHA256`，以及本次实际 classpath 产物的 `artifactSHA256`、JVM 参数和选择器。构建元数据随测试资源生成；直接 CLI 的长重放和预算沿用同一记录入口。最终全量、长跑及独立预算分别保存日志，并核对产物摘要。某次全量失败后，在另一构建补跑失败领域得到的记录分别保留各自范围。
 
 `cut-cell:short` 保留参数、黏性、微盒几何、CCD、容量及恢复对照，省略 600 步障碍物流动。长场景单独运行：
 
@@ -48,7 +50,6 @@
 气液物种转换及其热学后继可用 `:fabric:runThermalValidation --args="--phase-species"` 聚焦运行；场景沿用完整热学入口。
 
 热平流与分层后继使用 `:fabric:runThermalValidation --args="--flow"`；自然对流及后续换热使用 `--convection`；实际载体内能分配使用 `--assignment`。这些选择器共用完整热学入口的场景，已通过且未受改动影响的部分直接复用。
-热平流、分层、自然对流及换热后继可用 `:fabric:runThermalValidation --args="--flow"` 聚焦运行，与完整入口共用同一场景列表。
 
 `free-surface:short` 省略长静水、5,000 步溃坝、300 步台阶流动，以及输运中的连续交接轨迹和 1 秒、4 秒多网格旋流。其他短组合仍可能包含成本较高的领域；具体省略项由对应入口输出。
 
@@ -245,7 +246,7 @@
 - 改控制器摘要或预览授权：使用 `protocol,lifecycle`；改删除提交再加 `region-state,ownership`。
 - 改容器提交后的事件：使用 `protocol,containers`。
 - 改颗粒与气体、压力、热学或存档共享的数据：追加相应领域。
-- 改后端状态交接：运行 `lifecycle` 的完整数据位模式比较，再运行受影响载体的测试。
+- 改后端状态交接：运行 `lifecycle`，再运行受影响载体的测试。库存、组成、MAC 动量及内能原始列保持精确内容或原始浮点位比较；由残余压力和已知载荷重建的凝聚相压力，按局部压力与大气压的较大尺度允许 4 个 float ULP，独立于原始列的位模式要求。
 
 新增回归场景放入负责该行为的现有测试。只有新失败类型确实属于独立领域时，才增加选择器。
 
@@ -289,10 +290,14 @@
 
 定位最大场景成本时，`ProductionFluidReplayValidation --demo-budget` 可直接运行同一最大 demo；它保留原场景、预热、20 个完整步和暂停判据。正式预算汇总仍采用同时覆盖控制器与最大 demo 的 `production-live-budget`。
 
+本轮优化要求代表采样步稳定低于 200 ms，并留出明显余量；沿用上表的墙钟判据。主线程 CPU 时间用于区分计算成本与外部调度影响，每次超时和失败均按实际结果记录。
+
 报告分别记录 JVM 预热和被测步的耗时，并保留粒子数、体积、相变操作、子步数、PCG 次数与残差。优化后用同一物理配置复测，保持原有预算和守恒检查。
 
 `production-replay` 检查长时间注液、清空、气腔归属、相变功结算、实体响应以及后端捕获/恢复。它关注每步物质与能量收支。性能是否达标由上面的独立测试判定。
-同一构建的 `ProductionFluidReplayValidation --compressed-soak` 分别运行压缩平面气腔的静止场及单次微扰场各 5,000 步；完整 `production-replay` 共用这两个场景，各运行 1,000 步。静止场恢复固定 0.025 J 的累计能量与实际内能限制，微扰场检查撤去外力后的动能衰减和固定小误差范围，逐步守住库存、实际容量、状态方程与热账。使用 `fabric/build/cpu-validation-work/classpath.txt`、同一工作目录与 `-ea -Xmx512m`，记录对应构建摘要。
+同一构建的 `ProductionFluidReplayValidation --compressed-soak` 分别运行压缩平面气腔的静止场及单次有限扰动场各 5,000 步；完整 `production-replay` 共用这两个场景，各运行 1,000 步。静止场检查固定 0.025 J 的累计能量与实际内能变化；有限扰动的初始动能须高于格中心势能观测误差，并检查撤力后动能衰减、实际 U 增量及热账。原始机械能误差、位置观测误差和有效误差上限同时报告，实际 U 与库存继续独立约束。使用 `fabric/build/cpu-validation-work/classpath.txt`、同一工作目录与 `-ea -Xmx512m`，保留日志头的构建及产物摘要。静止场守住离散平衡，有限扰动场用于评价演化中的误差与衰减。
+
+物理验收覆盖正常尺度下的分层、液封、惯性、旋转、孔流、热对流及有限气腔压缩。气体孔流按有限时长的一阶瞬态评价；一秒真空填充的现有判据为参考压与环境库存的 0.1% 量级，具体场景和容差由测试维护。`thermal-extremes` 覆盖物性范围、正温、状态方程及可表示库存；其中 10¹² Pa 单格夹具描述该局部状态的计算范围。多格 10¹² Pa 压力传播、毫米毛细断颈和任意尺度 CFD 精度已退出产品验收目标。
 
 `granular` 中的 [GranularCarrierValidation](../../solver/src/test/java/mmm/fluid/GranularCarrierValidation.java)
 覆盖液固阻力动量交换、耗散、压力功、浮力和跨格连续接触。
@@ -403,119 +408,49 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 ## 当前验证证据
 
-### 压缩静水及微扰后的长期稳定：2026-10-21
+### 第五轮整改：最终验收待完成
 
-共同压力主干求解相对气腔基准的压力增量，液体和颗粒沿同一算子接收载荷，物理压力在发布时还原。共同输运结算增加液体内部的充满约束，自由表面按真实干面接触识别；同一残量图同时处理接收容量上下限和有限气腔容量，防止内部细小空洞逐层产生并转成气体压缩功。没有增加第二套流体求解器或额外提交。
+本轮尚未取得同一最终产物的 `full` 29/29、两组 5,000 步重放及正式独立预算。M10 保持待验收；最终结果按下表补记，并保留失败和未完成项。
 
-原来用空间分辨率计算的大能量预算不适合检验均匀静水的精确离散平衡。本轮恢复原静止动能、质心和压力做功要求，并直接限制累计能量及实际总内能。微扰用例复用同一重放职责链，撤去外力后检查动能衰减；部分填充格的势能观察采用可推导的格中心位置误差，原始误差与该估计同时输出。实际库存 U 仍独立受 0.025 J 限制，静止用例直接核对累计能量。生产压力精度、迭代额度和完整步预算保持原值。
-
-| 范围 | 当前证据 |
+| 验收对象 | 本轮最终结果 |
 |---|---|
-| 全部领域与构建 | `build/drift-capacity-full.log`：同一生产实现 `f299f56` 下 28 个完整领域通过，包含热学、颗粒、液封、自由面和容器。唯一失败为新增微扰用例把格中心势能当作精确势能的断言；修正后 `build/drift-capacity-final.log` 的完整 `production-replay` 通过，连同 `test runValidation assemble`、500 文件架构检查和 GPU 命令适配器全部成功。最终源码摘要 `311a48b892600afc…`，产物摘要 `8dad25b9dbaa9d92…`，测试提交 `699091c`；生产实现保持相同，29 个完整领域覆盖齐全 |
-| 静止压缩气腔 | 最终同一产物 `build/drift-capacity-final-soak.log`：5,000 步 K、累计能量偏差及气容变化均为 0，温度保持 386.116412384 K；固定累计能量预算 0.025 J |
-| 单次微扰后的演化 | 同一日志另运行 5,000 步，初始 K=0.000021356 J，末态 0.000007523 J，最大未解释能量 0.000851 J。原始格中心势能偏差最大 0.171575 J，其位置不确定度最大 0.171570 J，同时输出。实际库存 U 独立通过 0.025 J 限制；同一生产实现的直接诊断 `build/drift-face-capacity-perturbed.log` 末态总 U 变化约 0.000270 J |
-| 沙床完整后继 | 全量日志中的冲刷、重新沉降和休眠完成；599 步，平均／最大完整步 8.756／48.230 ms，实际质量、固体体积和热账闭合 |
-| 原独立 JVM 完整步预算 | `build/drift-capacity-final-budget-1.log`：控制器最大 19.671 ms，最大 demo 206.511 ms、连续超过 200 ms 为 1，原标准通过。第二次 `-2.log`：控制器最大 19.620 ms，最大 demo 235.318 ms、连续超时 4，未通过；前四步 CPU 156.250–187.500 ms、墙钟 211.777–235.318 ms。输入、预热与 20 步测量保持原值；用户提供的空闲窗口复核如下 |
+| 源码、产物与 JVM | 待记录最终日志中的 revision、sourceSHA256、artifactSHA256 和 JVM 参数 |
+| 完整 CPU 领域 | 待记录同一最终产物的 `full` 结果、领域数和日志 |
+| 构建、架构与 GPU 命令适配器 | 待记录实际完成范围；硬件 GPU 数值场景另行注明 |
+| 静止与有限扰动长重放 | 待记录各 5,000 步的 K、实际 U、原始能量误差、位置观测误差、库存及 EOS 结果 |
+| 独立 JVM 正式预算 | 待记录控制器与最大 demo 的中位数、最大值、CPU 时间、连续超 200 ms 步数和全部运行结果 |
 
-最终同一产物在用户提供的空闲窗口中依次启动三个独立 JVM，两次满足原标准，一次控制器墙钟尖峰失败。第二次在控制器断言处退出，未执行大型 demo。各次结果全部保留，两个通过记录相互独立。
+整改中的 `build/review5-macro-gas.log` 已完成 `gas-liquid` 与 `air-cavity`，耗时分别为 30.970 秒和 0.241 秒；同次 `production-replay` 在有限扰动第 574 步失败，机械能误差 0.352705 J 超过既定 0.291950 J。该结果保留为后续压力投影整改的反例。投影预测载荷与压力增量、局部数值耗散转热正在共同压力职责链内整合，最终长跑尚待记录。
 
-| 日志 | 控制器中位／最大完整步 | 最大 demo 完整步／连续超过 200 ms | 原标准 |
+`build/review5-subgrid-demo.log` 的中间产物预算未通过：最大 demo 275.283 ms，连续超 200 ms 为 4 步。后续物性与 LTE 准备、库存份额结算等成本调整的正式预算尚待记录。
+
+### 既往失败与诊断范围
+
+以下记录对应第五轮整改前或过程中的产物，用于定位反例。最终验收采用上节单独登记的完整运行与产物摘要。
+
+| 记录 | 实际范围与限制 |
+|---|---|
+| `build/drift-capacity-full.log` | `f299f56` 的一次 `full` 为 28/29，`production-replay` 在压缩扰动场景失败；整条入口失败 |
+| `build/drift-capacity-final.log` | 另一构建只补跑完整 `production-replay`；该领域通过，未运行一次新的 `full` |
+| `build/drift-capacity-final-soak.log` | 静止场 5,000 步保持恒等状态；原微扰初始 K 约 0.000021356 J，远低于约 0.171570 J 的位置观测误差，有限幅运动的检验能力不足；日志缺少独立产物摘要 |
+| `build/self-review5-compressed-soak.log` | 旧 5,000 步扰动场记录最大未解释机械能 4,961.88 J、宽松预算 35,817.05 J 和约 0.026 K 温漂；质量与 U 账闭合，机械能误差仍需整改 |
+| `build/self-review5-conversion.log`、`self-review5-final.log`、`self-review5-body-final.log` | 分别覆盖所选热学、颗粒、容器、实体及生产流程；构建摘要各自不同，保留各日志实际范围 |
+| `build/review4-delivery-full.log` 与 `review4-delivery-chemistry.log` | 前者 `full` 为 28/29，化学微基准失败；后者改写该测试后单独通过化学领域，未形成同一最终产物的 29/29 全量结果 |
+| `build/self-audit-full-20261021.log` | 整改前完整组合 18/29，11 个领域失败，后续子场景未完成；详见[自审报告](../review/Self-Review-2026-10-21.md) |
+
+第五轮审阅所涉旧预算的全部运行结果如下。部分直接 CLI 日志缺少构建和产物摘要，按各自原始输出保留范围。
+
+| 历史日志 | 控制器最大完整步 | 最大 demo 完整步／连续超 200 ms | 结果 |
 |---|---|---|---|
-| `build/drift-capacity-idle-budget-1.log` | 15.545／17.668 ms | 200.773 ms／1 步 | 通过 |
-| `build/drift-capacity-idle-budget-2.log` | 单步 55.039 ms；该步主线程 CPU 读数 0 ms | 未运行 | 未通过 |
-| `build/drift-capacity-idle-budget-3.log` | 15.563／23.805 ms | 258.485 ms／2 步 | 通过 |
+| `build/drift-capacity-final-budget-1.log` | 19.671 ms | 206.511 ms／1 步 | 通过 |
+| `build/drift-capacity-final-budget-2.log` | 19.620 ms | 235.318 ms／4 步 | 失败 |
+| `build/drift-capacity-idle-budget-1.log` | 17.668 ms | 200.773 ms／1 步 | 通过 |
+| `build/drift-capacity-idle-budget-2.log` | 55.039 ms | 未运行 | 失败 |
+| `build/drift-capacity-idle-budget-3.log` | 23.805 ms | 258.485 ms／2 步 | 通过 |
 
-M10 的完整领域、长期稳定与原生产预算均取得通过结果。本机墙钟计时仍出现单次尖峰，以上记录保留了这一实际限制。
-
-下表之外的修复前结果保留作历史证据，旧温漂观测已由本节的修复与验收替代。
-
-### 整改后再次自审：2026-10-21
-
-本次按实际数据流审查来源、液封、墙面冲量、真实库存内能与测试调整。确认并修复两项遗漏：新增真空原先采用全域净孔容，隔离气腔的增减会相互抵消；析出溶解的固定区域内能结算后仍执行了额外绝热功。前者改为各接收气腔的局部释放与净扩容，后者与凝聚相变共用内部转换入口。普通液流孔容未变时跳过释放量计算。
-
-测试直接核对批量隔离气腔编辑与分开编辑的逐腔库存和 U；析出—溶解场景加入密闭气腔，核对实际总内能及恢复后的力学后继。删除两种相同实体循环相互比较的旧测试，改为 `MovingBodyCouplingValidation`：直接比较实体外功与实际 MAC 动能、库存内能增量，墙面冲量进入同一动量等式，舍入项受实际载体存储精度限制。头部气腔额外比较宏观压力与全腔压力体积均值，防止小气泡截留大量气体仍通过容量判据。
-
-| 范围 | 实际结果与构建对应关系 |
-|---|---|
-| 完整热学、颗粒、容器 | `build/self-review5-conversion.log`：`thermal` 15.225 秒、`granular` 26.888 秒、`containers` 216.681 秒全部通过，CPU 总计 258.795 秒，Gradle 4 分 56 秒成功。源码摘要 `da4f5abd788589c9…`，产物摘要 `c32eaad2840a764a…`；生产物理实现提交为 `0e5b57d`，之后仅增加等价的未变孔容快路 |
-| 实体、连续生产重放、液封与来源 | `build/self-review5-final.log`：三个完整领域通过，CPU 56.368 秒，Gradle 1 分 17 秒成功。源码摘要 `b09383a5f6404790…`，产物摘要 `6a15c97ca08f1487…`；与上一行生产实现相同，包含加强后的头部压力检查 |
-| 最终构建与实际功热检查 | `build/self-review5-body-final.log`：`test runValidation assemble -PcpuValidation=entity-fluid --offline --no-daemon --max-workers=1` 成功，实体完整 10.215 秒，Gradle 40 秒，架构与命令适配器通过。源码摘要 `df0af9f810d13097…`，产物摘要 `5a8dbfc2f8d511ef…`；包括未变孔容快路与直接实际 U 检查 |
-| 压缩气腔长重放 | `build/self-review5-compressed-soak.log`，同一编译产物直接执行 `ProductionFluidReplayValidation --compressed-soak`。沿用原场景、单步长度和固定误差预算，延长至 5,000 步；每步质量、总气容、全气腔 EOS 与内能账闭合。K 峰值/末态 162.138/4.97996 J，末态质心位移 0.0000196 m，已扣除已知热浮力功与质心不确定度的最大机械能偏差为 4,961.88 J，原固定预算 35,817.05 J |
-
-压缩场景主气腔温度从 386.116412 K 缓慢变为 386.142447 K，250 秒仿真时间内约增加 0.026 K；机械能偏差也存在缓慢漂移。该结果支持这一时长与尺度内的宏观运动稳定，保留现有数值误差，不能推断无限时长误差有界。当前严格守恒要求仍由质量、物种、实际容量与载体内能结算守护。
-
-独立预算沿用原预热、装量、步数和墙钟判据，未改变运行优先级。先前计时未通过，采样同时检测到磁盘清理及游戏进程在使用 CPU；失败完整保留。用户随后提供空闲窗口，最终产物（产物摘要 `5a8dbfc2f8d511ef…`，对应源码提交 `5bb8865`）连续启动两个独立 JVM，通过同一 `production-live-budget` 入口；期间没有重新构建或增加预热。
-
-| 运行 | 控制器中位数 / 最大值 | demo 最大值 / 连续超 200 ms | 结果 |
-|---|---|---|---|
-| `build/self-review5-budget.log` | 17.717 / 22.898 ms | 318.591 ms / 3 步 | 未通过 |
-| `build/self-review5-budget-final.log`，含未变孔容快路 | 24.788 / 30.959 ms | 355.541 ms / 8 步 | 未通过；首步 CPU 234.375 ms、墙钟 323.567 ms |
-| `build/self-review5-idle-budget-1.log` | 16.501 / 22.792 ms | 228.564 ms / 2 步 | 通过，独立 JVM 总计 5.567 秒 |
-| `build/self-review5-idle-budget-2.log` | 17.220 / 23.327 ms | 247.233 ms / 2 步 | 通过，独立 JVM 总计 5.313 秒 |
-
-原预算为控制器逐步不超过 40 ms，最大 demo 连续超 200 ms 少于三步。两次空闲窗口运行均出现两步连续超时，符合原暂停判据。
-未受本次模型改动影响的完整领域复用下节结果；本次没有重复运行全量 29 领域。当前 M10 的物理与完整步预算复核均已完成，长期数值误差的适用范围沿用上文记录。
-
-### 第四轮整改交付：2026-10-21
-
-第四轮交付时 M10 覆盖全部 29 个领域，采用一次完整运行及同一生产实现的化学领域替换结果。当时 `test runValidation assemble -PcpuValidation=chemistry --offline --no-daemon --max-workers=1` 成功，构建、架构与 GPU 命令适配器通过。没有运行硬件 GPU 数值场景。最新资格采用上节自审复核记录。
-
-| 范围 | 构建与实际结果 |
-|---|---|
-| 全量运行 | `build/review4-delivery-full.log`，执行 `test runValidation assemble -PcpuValidation=full -PcpuValidationKeepGoing=true --continue --offline --no-daemon --max-workers=1`。CPU 379.957 秒，28/29 领域通过，唯一失败是旧化学无反应微基准增幅 5.20% 超过 5%；整条命令失败退出。源码摘要 `c6c7bea64c5be9ef…`，产物摘要 `7ccdf91a606f367a…`，包含随后提交为 `884103f` 的测试调用迁移 |
-| 化学替换与最终构建 | `6fa937f`；生产实现与全量运行相同，仅替换测试。删除无反应化学的重复计时及无判定内存统计，改为有初始流速的共同库存与 MAC 一致性。`build/review4-delivery-chemistry.log`：完整化学 3.811 秒通过，酸碱反应 p95=0.233 ms；Gradle 20 秒成功。源码摘要 `74978efbc5d688e1…`，产物摘要 `665a10d61d377d55…`。其余 28 个领域复用上一行结果 |
-| 真空、液封及孔流 | `gas-liquid` 完整 35.720 秒、`air-cavity`、`air-network` 均通过。覆盖原真空超容与闭合、未解析薄隙和真实半格真空的区分，以及两侧独立半液气腔的小流量受限孔流。物种与 U 继续精确核对；一阶隐式均压按固定时限的宏观压力误差评价 |
-| 颗粒与连续操作 | `granular` 完整 25.202 秒通过，沉降—起动—再沉积 815 步完成；`containers` 完整 197.786 秒通过，包含原注液、固体插入、随机操作、重启及长沙床/析出流程；`region-state` 4.687 秒通过 |
-| 分层、热与润湿 | `materials`、`thermal`、`thermal-extremes`、`surface-tension` 完整通过。原 RT 宏观分层位移要求保留；三组接触角扩展方差 47.7642／43.9082／13.6103 m²，亲水至疏水依次降低 |
-| 长期误差 | 原 5,000 步溃坝通过库存、容量及恢复断言，末态 K=3.47422 J、中心 X=5.99983 m、RMS=0.0160421 m/s；原 1,000 步压缩平面气腔 K 峰值/末态 162.138/15.229 J、质心位移 0.000123 m，库存、全部气腔 EOS 与内能账逐步闭合，机械误差受固定空间分辨预算约束 |
-| 实体与墙面交接 | `entity-fluid` 完整 6.519 秒通过；动态浮体尾段位移范围 0.000701 m，液体 K 峰值/尾段/末态 91.514/7.639/4.018 J，实际实体外功 246.181 J。`cell-inventory` 保留墙面冲量、停动转热、完全流出后的热量交接与失败原子性 |
-
-最终产物使用 `fabric/build/cpu-validation-work/classpath.txt`，从对应工作目录以 `java -ea -Xmx512m -cp <classpath> mmm.validation.CpuValidationSuite production-live-budget` 启动两个独立 JVM，沿用原入口的预热、装量和 20 个完整步。没有在两个入口前增加预热或改变预算。
-
-| 预算运行 | 小控制器中位数 / 最大值 | 最大 demo 单步最大值 | 连续超过 200 ms | 结果 |
-|---|---|---|---|---|
-| `build/review4-delivery-budget-1.log` | 13.216 / 19.436 ms | 265.472 ms | 1 | 通过 |
-| `build/review4-delivery-budget-2.log` | 14.488 / 19.311 ms | 179.736 ms | 0 | 通过 |
-| 完整组合内的预算 | 4.010 / 5.807 ms | 115.129 ms | 0 | 通过；JVM 已由前序领域预热 |
-
-原标准为控制器逐步不超过 40 ms、最大 demo 不连续三步超过 200 ms；第一独立运行包含一次超 200 ms。库存、物种、真实容量和内能审计继续精确核对。压缩气腔和有限幅实体运动按实际外功、已知热浮力功及固定空间误差预算评价机械总能量；这些有限时长记录支持代表场景有界，长期通用行为仍由后续具体产品流程评价。
-
-毫米尺度毛细断颈时刻的旧精度要求已退出本模型验收；现有 Laplace 跳跃、零张力响应、长润湿及库存恢复覆盖宏观张力职责。大文件继续按实际数据归属维护；本轮集中压力预测、曲率与墙面接触角、气体来源及控制体积、动量与热量提交，并在设计书中提供按现象定位表。
-
-### 完整自审基线：2026-10-21
-
-在 `4e6bfb9` 上执行以下完整入口，生产源码为 `3679a2471128686e6a37f4b7ba72d335d3d9b354`；本次审查未改生产源码或测试：
-
-```powershell
-./gradlew.bat test runModuleValidation verifyArchitecture :fabric:runCpuValidation -PcpuValidation=full -PcpuValidationKeepGoing=true --continue --max-workers=1 --offline --no-daemon
-```
-
-日志：`build/self-audit-full-20261021.log`。Gradle 总耗时 3 分 6 秒，失败退出；CPU 完整组合执行 159.490 秒，29 个领域中 18 个通过、11 个失败。每个失败领域记录首个失败，其后子场景尚未完成。`runModuleValidation` 与 `verifyArchitecture` 通过，后者扫描 501 个生产源文件。Gradle `test` 另报 `gpu-probe` 有测试源码但未发现测试；该模块采用 main 验证入口，此失败属于任务配置，未运行硬件 GPU 数值场景。
-
-| 当前通过范围 | 结果 |
-|---|---|
-| CPU 完整领域 | `chemistry,thermal,air-cavity,region-manager,lifecycle,production-live-budget,free-surface,cell-inventory,liquid-joining,marker-transfer,marker-pressure,cut-cell,shape,protocol,boundary,takeover,ownership,audit` |
-| 当前源码原 5,000 步溃坝 | 库存、容量及恢复断言通过；1,000–5,000 步采样动能为 562.567／432.479／277.365／203.253／291.495 J，末态中心 X=6.01042 m，RMS=0.146943 m/s |
-| 原完整步预算 | 控制器最大 11.443 ms；最大 demo 最大 153.140 ms，连续超 200 ms 为 0。该入口在完整组合中执行，JVM 已由前序领域预热 |
-
-| 首个失败所在领域 | 失败事实与审查结论 |
-|---|---|
-| `granular` | 细砂未在沉降时间内完成生命周期；静水浮力晚于隐式阻力加入，存在系统性速度偏差 |
-| `thermal-extremes` | 10 K、10¹² Pa 夹具初始化超过定点质量范围，第二组热学步骤尚未执行 |
-| `materials` | 强制 PCG 次数处于 1–32；解析静水平衡允许零迭代，日志未输出实际次数，不能据此认定超过上限 |
-| `surface-tension` | 三组接触角扩展方差 16.9837／23.2160／29.5578 m²，宏观次序反向，根因待整改 |
-| `air-network` | 一秒后强制到达 10⁻³ Pa 且库存恰好到环境量，与当前一阶隐式及整数通量契约不符；完整孔流后续尚未执行 |
-| `gas-liquid` | 真空预测未触发原容量场景；静水支撑覆盖真实真空压力接触，属于生产缺陷 |
-| `entity-fluid` | 动态玩家液体动能峰值／尾段／末态为 706.034／660.672／561.786 J，超过静止体能量阈值；须结合持续实体输入功评价，当前数据不能证明发散 |
-| `controller-gas-lineage` | 末态 17 气腔，气体 64 m³std 收支精确闭合；大腔约 33.979 m³，残余约 0.0206 m³。须检查连续几何及宏观压力，节点数不足以判定库存丢失 |
-| `production-replay` | 34 m³ 头部气腔条件未满足；后续流程未完成 |
-| `region-state` | 冷恢复将未初始化气体变成环境库存，属于恢复副作用 |
-| `containers` | seed=4、action=57 的派生压力相差一 float ULP（0.0078125 Pa），未见该次失败伴随库存或 U 丢失；后续操作未完成 |
-
-只读审查另确认两相切格的容量分组会触发受限孔口两侧整腔来源混合。以上结果对应整改前源码，问题位置、守恒范围、液封及维护成本结论保存在[自审报告](../review/Self-Review-2026-10-21.md)。当前实现的资格采用本节最新完整构建记录。
+这五次运行含两次硬失败，已有通过记录的耗时余量不足。控制器旧日志还存在输出与断言步号错位，本轮已统一为完成步编号；最终预算采用新记录入口。
 
 <a id="si-units"></a>
 ### SI 与定点质量
 
-单位迁移后的构建与契约记录位于 `build/mass-final-build13.log`、`mass-final-build12.log`、`mass-final-contracts29.log`。
-稳定单位与库存编码以[设计书](../architecture/system-overview.md#units)为准；当前流程资格采用本节列出的共同库存主干结果。
+单位迁移的历史记录位于 `build/mass-final-build13.log`、`mass-final-build12.log`、`mass-final-contracts29.log`。稳定单位与库存编码以[设计书](../architecture/system-overview.md#units)为准；当前流程资格采用本节的最终验收记录。

@@ -213,7 +213,13 @@ public final class GasEnergyStore {
 			SignedDyadic sourceEnergy, SignedDyadic sinkEnergy
 	) {
 		return planRemap(oldNetwork, inventories, availableVolumes, mixedEnergy, inheritedAvailableVolumes,
-				sourceEnergy, sinkEnergy, nodeEnergy, null, revision);
+				sourceEnergy, sinkEnergy, nodeEnergy, null, revision, null);
+	}
+	/** Topology remapping carries already worked source energies; receivers only mix their inventories. */
+	GasRemapPlan planRemapWithSourceWork(AirNetwork oldNetwork,List<GasInventory> inventories,double[] volumes,
+	                                  double[] mixed,SignedDyadic source,SignedDyadic sink,SignedDyadic work){
+		java.util.Objects.requireNonNull(work,"Gas source work is missing");
+		return planRemap(oldNetwork,inventories,volumes,mixed,volumes,source,sink,nodeEnergy,null,revision,work);
 	}
 
 	GasRemapPlan planRemapAfterPhase(AirNetwork network, int node, double energy,
@@ -222,7 +228,7 @@ public final class GasEnergyStore {
 		requireGasNode(node, network);
 		double[] baseline = nodeEnergy.clone(); baseline[node - 1] = energy;
 		return planRemap(network, inventories, volumes, mixed, inherited, source, sink,
-				baseline, afterPhase, Math.addExact(revision, 1));
+				baseline, afterPhase, Math.addExact(revision, 1), null);
 	}
 
 	/** The phase inventory and its topology successor publish together from the original gas revision. */
@@ -231,7 +237,7 @@ public final class GasEnergyStore {
 			double[] mixed, double[] inherited, SignedDyadic source, SignedDyadic sink) {
 		requireInventoryEnergyCurrent(phase, network);
 		return planRemap(network, inventories, volumes, mixed, inherited, source, sink,
-				phase.energies, afterPhase, revision);
+				phase.energies, afterPhase, revision, null);
 	}
 	public void requireRemapAfterInventoryBatchCurrent(GasRemapPlan remap, InventoryEnergyPlan phase,
 			AirNetwork network, ThermalAuditLedger afterPhase) {
@@ -243,7 +249,7 @@ public final class GasEnergyStore {
 	private GasRemapPlan planRemap(AirNetwork oldNetwork, List<GasInventory> inventories,
 			double[] availableVolumes, double[] mixedEnergy, double[] inheritedAvailableVolumes,
 			SignedDyadic sourceEnergy, SignedDyadic sinkEnergy, double[] baselineEnergy,
-			ThermalAuditLedger beforeAudit, long baseRevision) {
+			ThermalAuditLedger beforeAudit, long baseRevision,SignedDyadic preparedSourceWork) {
 		if (!hasGasEnergy(oldNetwork.nodeCount()) || inventories == null
 				|| inventories.size() != availableVolumes.length || inventories.size() != mixedEnergy.length
 				|| inventories.size() != inheritedAvailableVolumes.length
@@ -265,7 +271,7 @@ public final class GasEnergyStore {
 				result[node] = 0.0;
 				continue;
 			}
-			if (Double.doubleToRawLongBits(inheritedAvailableVolumes[node])
+			if (preparedSourceWork!=null||Double.doubleToRawLongBits(inheritedAvailableVolumes[node])
 					== Double.doubleToRawLongBits(availableVolumes[node])) {
 				gasModel.absolutePressure(inventories.get(node), availableVolumes[node], result[node]);
 			} else {
@@ -274,10 +280,10 @@ public final class GasEnergyStore {
 			}
 		}
 		SignedDyadic oldGas = SignedDyadic.sum(baselineEnergy);
-		SignedDyadic mixed = SignedDyadic.sum(mixedEnergy);
+		SignedDyadic mixed = preparedSourceWork==null?SignedDyadic.sum(mixedEnergy):SignedDyadic.ZERO;
 		SignedDyadic finalGas = SignedDyadic.sum(result);
 		SignedDyadic source = sourceEnergy, sink = sinkEnergy;
-		SignedDyadic work = finalGas.subtract(mixed);
+		SignedDyadic work = preparedSourceWork==null?finalGas.subtract(mixed):preparedSourceWork;
 		SignedDyadic roundoff = finalGas.subtract(oldGas).subtract(source).add(sink).subtract(work);
 		ThermalAuditLedger afterAudit = (beforeAudit == null ? audit.ledger() : beforeAudit).withExternalSourceEnergy(source).withExternalSinkEnergy(sink)
 				.withMechanicalWork(work).withRoundoff(roundoff);

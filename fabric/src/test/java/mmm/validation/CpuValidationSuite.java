@@ -64,6 +64,7 @@ public final class CpuValidationSuite {
 
 	public static void main(String[] args) throws Exception {
 		Locale.setDefault(Locale.ROOT);
+		ValidationRunInfo.print("CpuValidationSuite", args);
 		Map<String, Gate> gates = gates();
 		String selection = args.length == 0 ? "fast" : String.join(",", args);
 		if (selection.equals("list")) {

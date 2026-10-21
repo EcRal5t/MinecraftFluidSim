@@ -37,7 +37,7 @@ final class BodyForceStage {
 		double[] mass=axis==0?domain.cellMacStage.massX:axis==1?domain.cellMacStage.massY:domain.cellMacStage.massZ;
 		double before=velocity[face];velocity[face]*=damping;
 		double heat=.5*mass[face]*(before*before-(double)velocity[face]*velocity[face]);
-		if(heat>0)domain.cellMacStage.addDissipationAtFace(axis,face,heat);
+		if(heat>0)domain.cellMacStage.addMechanicalHeatAtFace(axis,face,heat);
 	}
 
 	private float granularPorousFaceDamping(int first, int second, float dt, boolean normal) {
@@ -136,25 +136,7 @@ final class BodyForceStage {
 	}
 
 	private void applyLiquidPairSurfaceTensionPair(int phaseA, int phaseB, double tensionScale, float scale) {
-		for (int index = 0; index < domain.cellCount; index++)
-			domain.tension.surfaceTensionColor[index] = domain.geometry.solid[index] ? 0 : domain.domainFlowFields.phaseFraction(index, phaseA);
-		domain.tension.smoothSurfaceTensionColor();
-		System.arraycopy(domain.tension.surfaceTensionSmoothed, 0, domain.tension.surfaceTensionPairFirstSupport, 0, domain.cellCount);
-		for (int index = 0; index < domain.cellCount; index++) {
-			if (domain.geometry.solid[index]) {
-				domain.tension.surfaceTensionColor[index] = 0.0;
-				continue;
-			}
-			domain.tension.surfaceTensionColor[index] = domain.domainFlowFields.phaseFraction(index, phaseB);
-		}
-		domain.tension.smoothSurfaceTensionColor();
-		rebuildLiquidPairNormals();
-		java.util.Arrays.fill(domain.tension.surfaceTensionPairCurvature, 0.0);
-		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
-			int index = domain.domainFlowFields.cellIndex(x, y, z);
-			if (domain.geometry.solid[index] || domain.liquidGrid.stockCount[index] == 0) continue;
-			domain.tension.surfaceTensionPairCurvature[index] = domain.tension.surfaceTensionMeanCurvature(x, y, z);
-		}
+		domain.tension.prepareLiquidPair(phaseA,phaseB);
 		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 1; x < domain.sizeX; x++) {
 			int left = domain.domainFlowFields.cellIndex(x - 1, y, z), right = domain.domainFlowFields.cellIndex(x, y, z), face = domain.domainFlowFields.xFaceIndex(x, y, z);
 			applyLiquidPairFaceForce(left, right, face, tensionScale, scale, domain.domainFlowFields.pressureXFaceOpen(x, y, z), domain.mac.velocityX);
@@ -174,36 +156,9 @@ final class BodyForceStage {
 		int axis=velocity==domain.mac.velocityX?0:velocity==domain.mac.velocityY?1:2;
 		if(domain.cellMacStage.isUnresolvedWallFace(axis,face))return;
 		if (openArea <= 0.0F || !domain.domainFlowFields.isFluid(first) || !domain.domainFlowFields.isFluid(second)) return;
-		double delta = liquidPairGradient(first, second);
-		if (delta == 0.0) return;
 		float densityScale = domain.domainFlowFields.pressureDensityScale(first, second);
-		double kappa = 0.5 * (domain.tension.surfaceTensionPairCurvature[first] + domain.tension.surfaceTensionPairCurvature[second]);
-		float forceDifference = (float) (tensionScale * kappa * delta);
+		float forceDifference = (float)domain.tension.liquidPairPressureDifference(first,second,tensionScale);
 		velocity[face] += scale * densityScale * forceDifference;
-	}
-
-	/** Multiphase CSF gradient alpha_A grad(alpha_B) - alpha_B grad(alpha_A). */
-	private double liquidPairGradient(int first, int second) {
-		return domain.tension.surfaceTensionPairFirstSupport[first] * domain.tension.surfaceTensionSmoothed[second]
-				- domain.tension.surfaceTensionPairFirstSupport[second] * domain.tension.surfaceTensionSmoothed[first];
-	}
-
-	private void rebuildLiquidPairNormals() {
-		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
-			int cell = domain.domainFlowFields.cellIndex(x, y, z);
-			double gx = liquidPairGradient(domain.domainFlowFields.cellIndex(Math.max(0, x - 1), y, z), domain.domainFlowFields.cellIndex(Math.min(domain.sizeX - 1, x + 1), y, z));
-			double gy = liquidPairGradient(domain.domainFlowFields.cellIndex(x, Math.max(0, y - 1), z), domain.domainFlowFields.cellIndex(x, Math.min(domain.sizeY - 1, y + 1), z));
-			double gz = liquidPairGradient(domain.domainFlowFields.cellIndex(x, y, Math.max(0, z - 1)), domain.domainFlowFields.cellIndex(x, y, Math.min(domain.sizeZ - 1, z + 1)));
-			double length = Math.sqrt(gx * gx + gy * gy + gz * gz);
-			if (domain.geometry.solid[cell] || !(length > 0)) {
-				domain.tension.surfaceTensionNormalX[cell] = domain.tension.surfaceTensionNormalY[cell] = 0;
-				domain.tension.surfaceTensionNormalZ[cell] = 1;
-			} else {
-				domain.tension.surfaceTensionNormalX[cell] = gx / length;
-				domain.tension.surfaceTensionNormalY[cell] = gy / length;
-				domain.tension.surfaceTensionNormalZ[cell] = gz / length;
-			}
-		}
 	}
 
 	void enforceSolidFaceVelocities() {

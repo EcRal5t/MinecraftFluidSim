@@ -248,8 +248,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		pressureHandoff.bindThermal(new ThermalRegistry(
 				thermalMaterials(List.of(lower, upper)), List.of(), List.of(continuedTransition), "", ""),
 				liquids, continuedMeltingPoint + 5.0);
-		// Persist the physical projection supplied to phase equilibrium. The solver's
-		// pressureReference is a numerical reference, independent of this pressure.
+		// Persist the physical projection supplied to phase equilibrium.
 		float[] projectedPressure = new float[pressureHandoff.cellCount];
 		projectedPressure[pressureHandoff.domainFlowFields.cellIndex(0, 0, 0)] = projectedGaugePressure;
 		pressureHandoff.pressureSystem.restoreLiquidPressure(new CondensedPhasePressureField(0, projectedPressure));

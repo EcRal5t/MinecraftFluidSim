@@ -63,7 +63,7 @@ public final class M5GasLiquidCouplingValidation {
 		domain.domainStep.step();
 		float jump = domain.domainCollision.surfaceTensionPressureAt(1, 1, 1);
 		double capillaryScale=Math.max(Math.abs(jump),registry.material(0).surfaceTension()/config.cellSize());
-		float solvedGasPressure = domain.pressureReference + domain.projection.gasPressure[gasNode];
+		float solvedGasPressure = domain.projection.gasPressure[gasNode];
 		check(domain.projection.gasPressureUnknown[gasNode]
 				&& Math.abs(domain.pressure(1, 1, 1) - solvedGasPressure - jump) <= .01*capillaryScale,
 				"finite gas compliance and capillary jump did not share one balanced interface face");

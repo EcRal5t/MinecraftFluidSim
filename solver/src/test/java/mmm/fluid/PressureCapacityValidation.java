@@ -6,6 +6,7 @@ public final class PressureCapacityValidation {
 		if (args.length>1 || args.length==1&&!args[0].equals("--algebra")) throw new IllegalArgumentException("Expected --algebra or no selector");
 		checkGraph(fixture(true)); checkGraph(fixture(false));
 		fixedPorePressurePort(); vacuumCapacityClosure(); unresolvedGapKeepsVacuumPressureContact();
+		disconnectedSupportsKeepTheirOwnVerticalLoad();
 		if (args.length==1) { System.out.println("Common pressure incidence and transpose PASS"); return; }
 		shallowHydrostatics(false); shallowHydrostatics(true);
 		cutHydrostatics();
@@ -93,6 +94,26 @@ public final class PressureCapacityValidation {
 			if(Math.abs(graph.freeFallAcceleration(topFace)-expected)>1e-6)
 				throw new AssertionError("Dry-seam support confused an unresolved layer with a resolved vacuum cavity");
 		}
+	}
+
+	/** One fixed cell contains a supported upper pocket and an airborne lower pocket. */
+	private static void disconnectedSupportsKeepTheirOwnVerticalLoad(){
+		var d=new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,9.81F,.05F,120,1e-5F,.002F,0));
+		byte[] masks=new byte[d.cellCount];java.util.Arrays.fill(masks,(byte)255);
+		int cell=d.domainFlowFields.cellIndex(1,1,1),below=cell-d.sizeX,above=cell+d.sizeX;
+		masks[cell]=(byte)(255^(1<<2|1<<5));
+		masks[below]=(byte)(255^(1<<7));masks[above]=(byte)(255^(1<<0));
+		d.geometry.cutCells.restoreMicroMasks(masks);
+		for(int c=0;c<d.cellCount;c++)d.geometry.solid[c]=d.geometry.cutCells.fullySolid(c);
+		d.sealDomainBoundary();d.setVolume(1,1,1,.25F);d.domainFlowFields.ensureGrid();
+		var stock=d.liquidCells.snapshot();var graph=d.pressureSystem.faces;graph.rebuild(.05F);
+		int lower=d.domainFlowFields.yFaceIndex(1,1,1),upper=d.domainFlowFields.yFaceIndex(1,2,1);
+		close(graph.freeFallAcceleration(graph.offsets[1]+upper),0,"Airborne stock accelerated a disconnected supported pocket");
+		close(graph.freeFallAcceleration(graph.offsets[1]+lower),-d.config.gravity(),"Supported stock held up a disconnected airborne pocket");
+		d.bodyForceStage.applyGravity(d.config.timeStep());
+		if(d.mac.velocityY[upper]!=0||Math.abs(d.mac.velocityY[lower]+d.config.gravity()*d.config.timeStep())>1e-6)
+			throw new AssertionError("Disconnected vertical loads did not reach their own MAC faces");
+		if(!stock.rows().equals(d.liquidCells.snapshot().rows()))throw new AssertionError("Gravity changed the component material inventory");
 	}
 
 	private static double[] faceVelocities(FluidDomain d,PressureFaceGraph graph) {

@@ -178,11 +178,18 @@ public final class ThermalDomainState {
 				&& revision.granular() == granularState.revision()
 				&& revision.gas() == gasState.revision() && revision.audit() == auditState.revision();
 	}
+	/** Condensed caloric observations depend on liquid and solid owners. */
+	public boolean matchesCondensedRevision(Revision revision) {
+		return revision!=null&&revision.liquid()==liquidEnergy.revision()&&revision.granular()==granularState.revision();
+	}
 
 	public ThermalRegistry registry() { return registry; }
 	public double insertionTemperatureK() { return insertionTemperatureK; }
 	public ThermalAuditState audit() { return auditState; }
 	public ThermalAuditLedger auditLedger() { return auditState.ledger(); }
+	/** Transfers the parcel's discrete mechanical work to its carried internal energy. */
+	public void addGranularMechanicalHeat(int ordinal,double joules) { granularState.addMechanicalHeat(ordinal,joules); }
+	public void addGranularMechanicalHeat(int ordinal,SignedDyadic joules) { granularState.addMechanicalHeat(ordinal,joules); }
 
 	// ---- restore / capture ----
 
@@ -381,6 +388,10 @@ public final class ThermalDomainState {
 	) {
 		return gasState.planRemap(oldNetwork, inventories, availableVolumes, mixedEnergy,
 				inheritedAvailableVolumes, sourceEnergy, sinkEnergy);
+	}
+	public GasEnergyStore.GasRemapPlan planGasRemapWithSourceWork(AirNetwork old,List<GasInventory> stocks,
+			double[] volumes,double[] mixed,SignedDyadic source,SignedDyadic sink,SignedDyadic work){
+		return gasState.planRemapWithSourceWork(old,stocks,volumes,mixed,source,sink,work);
 	}
 
 	/** Plans the topology successor against the complete prepared phase energy and audit. */
@@ -617,6 +628,11 @@ public final class ThermalDomainState {
 	/** Rebuilds the derived LTE grid once before a phase scan over many cells. */
 	public void preparePhaseScan(ThermalCarrierContext markers) {
 		cellOperations.preparePhaseScan(markers, thermalRevision());
+	}
+	/** Shares the final conduction sample while no intervening reaction changed its owner revision. */
+	public void preparePhaseScanAfterConduction(ThermalCarrierContext markers,ThermalCarrierTransport.Batch sample,Revision source){
+		var current=thermalRevision();
+		cellOperations.preparePhaseScan(markers,current,sample!=null&&current.equals(source)?sample:null);
 	}
 
 	/** Rebuilds a read-only spatial caloric observation without changing the phase/transport LTE grid. */

@@ -7,6 +7,7 @@ public final class ProductionFluidReplayValidation {
 	private ProductionFluidReplayValidation() { }
 
 	public static void main(String[] args) throws Exception {
+		mmm.validation.ValidationRunInfo.print("ProductionFluidReplayValidation", args);
 		if (args.length == 1 && args[0].equals("--compressed-soak")) {
 			DynamicReplayValidationScenarios.compressedPlanarHalfFillRemainsStableAcrossBackend(5_000);
 			return;

@@ -12,8 +12,9 @@ final class PressureSystem {
 	final PressureSparseMatrix matrix = new PressureSparseMatrix();
 	final GranularFaceVolumes solidFaces;
 	final PressureFaceGraph faces;
-	private final double[] velocityWork;
-	private double[] pressure = new double[0];
+	private final double[] velocityWork,forceBaseline;
+	private boolean forceStepPrepared;
+	private double[] pressure = new double[0], referencePressure = new double[0];
 	private float duration;
 	private double pressureDatum;
 	private double[] gasStorageRhs = new double[0];
@@ -23,7 +24,7 @@ final class PressureSystem {
 		solidFaces = new GranularFaceVolumes(domain); faces = new PressureFaceGraph(domain);
 		granular = new GranularPressureCoupling(domain); drag = new GranularImplicitDrag(domain);
 		transportVelocity=new double[faces.faceCount];
-		velocityWork = new double[faces.faceCount];
+		velocityWork = new double[faces.faceCount];forceBaseline=new double[faces.faceCount];
 		solver = new PressureLinearSolver(domain, matrix, this::buildRhs);
 	}
 	private void buildRhs(double[] result) {
@@ -39,29 +40,38 @@ final class PressureSystem {
 		if(!result.converged())throw new FluidDomain.PressureSolveBlockedException("Pressure projection did not converge: residual="
 				+result.residualRms()+", iterations="+result.iterations());
 	}
+	/** The conservative force block exchanges its actual kinetic energy with the source inventory. */
+	void beginForceStep(){readVelocity(forceBaseline);forceStepPrepared=true;}
+	void beginGranularForceStep(){granular.beginMechanicalStep();}
+	void finishGranularForceStep(){granular.finishMechanicalStep();}
 	PressureProjectionResult solveProjection(float dt) {
-		duration = dt; domain.domainFlowFields.ensureGrid(); solidFaces.rebuild(); faces.rebuild(dt);
+		duration = dt; domain.domainFlowFields.ensureGrid();
+		if(!forceStepPrepared)beginForceStep();
+		solidFaces.rebuild(); faces.rebuild(dt);
 		pressureDatum=faces.commonPressureDatum();faces.shiftPressureDatum(pressureDatum);
 		var p = domain.projection;
 		prepareGasStorage();
 		Arrays.fill(p.pressure, 0); Arrays.fill(p.gasPressure, 0);
+		int rows=domain.cellCount+p.gasNodeCount+1;
+		if(referencePressure.length<rows)referencePressure=new double[rows];
+		else Arrays.fill(referencePressure,0);
+		for(int i=0;i<p.gasUnknownCount;i++){
+			int node=p.gasUnknownNodes[i];
+			referencePressure[domain.cellCount+node]=domain.pressureBoundaryView.gasPressureOfNode(node)-pressureDatum;
+		}
+		faces.seedLiquidPressures(referencePressure);
 		granular.prepare(dt,pressureDatum);
-		// Fixed interface loads and the paired parcel reaction join the same prediction.
-		for (int f = 0; f < faces.faceCount; f++) {
-			int a = faces.axis[f], local = faces.localFace[f];
-			float[] velocity = a == 0 ? domain.mac.velocityX : a == 1 ? domain.mac.velocityY : domain.mac.velocityZ;
-			velocity[local] += dt * faces.inverseMass[f] * faces.affine[f];
+		granular.project(dt,referencePressure);
+		// Known cavity pressure and fixed interface loads share one prediction in
+		// both phases. Drag sees that complete prediction before the residual solve.
+		faces.pressureVelocity(referencePressure,velocityWork);
+		for(int f=0;f<faces.faceCount;f++){
+			int axis=faces.axis[f],local=faces.localFace[f];
+			float[] velocity=axis==0?domain.mac.velocityX:axis==1?domain.mac.velocityY:domain.mac.velocityZ;
+			velocity[local]+=dt*(faces.inverseMass[f]*faces.affine[f]+velocityWork[f]);
 		}
-		// Both phases receive known pressure loads before the same finite-mass drag response.
 		if(domain.granularState!=null&&domain.granularState.parcels.count()>0){drag.prepare(dt);drag.project();}
-		assembleMatrix();
-		solver.reset();
-		pressure = solver.pressure();
-		for (int i = 0; i < p.gasUnknownCount; i++) {
-			int node = p.gasUnknownNodes[i];
-			pressure[domain.cellCount + node] = domain.pressureBoundaryView.gasPressureOfNode(node)-pressureDatum;
-		}
-		faces.seedLiquidPressures(pressure);
+		assembleMatrix();solver.reset();
 		// Resolve pressure to the same cell-volume scale as the phase geometry.
 		// The RHS residual becomes normalized volume through dt²/rho; the RMS
 		// factor keeps the resulting maximum row defect within that scale.
@@ -70,7 +80,7 @@ final class PressureSystem {
 				/(dt*(double)dt*Math.sqrt(Math.max(1,p.fluidUnknownCount+p.gasUnknownCount))));
 		// One semi-implicit pressure prediction. Bounded inventory transport owns
 		// the actual pore endpoint; final EOS and compression work use that volume.
-		var result = solver.solve(target,pressureDatum);
+		var result = solver.solve(target,pressureDatum,referencePressure);
 		pressure = solver.pressure();
 		return result;
 	}
@@ -79,7 +89,6 @@ final class PressureSystem {
 		for(int f=0;f<faces.faceCount;f++)if(!(faces.faceMass(f)>0))transportVelocity[f]=0;
 	}
 	double volumeFlux(int face,double dt){return faces.fluidArea(face)*transportVelocity[face]*dt/domain.config.cellSize();}
-	double transportVelocity(int face){return transportVelocity[face];}
 	private void prepareGasStorage() {
 		int count = domain.gasState.network.nodeCount();
 		gasStorageRhs = new double[count + 1];
@@ -90,10 +99,8 @@ final class PressureSystem {
 			if (domain.pressureBoundaryView.gasNodeHasContinuumState(node)) {
 				domain.projection.gasStorageCoefficient[node] = factor
 						* domain.pressureBoundaryView.gasNodeVolumeCompliance(node,faces.gasPressureLoad[node]);
-				// V(P) = V_old - C_secant * (P - P_old). Both endpoints
-				// of the load interval lie on the positive-volume EOS curve.
-				gasStorageRhs[node] = domain.projection.gasStorageCoefficient[node]
-						* (domain.pressureBoundaryView.gasPressureOfNode(node)-pressureDatum);
+				// The known pressure equals P_old, so storage responds only to delta P.
+				gasStorageRhs[node]=0;
 			} else gasStorageRhs[node] = -factor * domain.gasState.network.availableVolume(node);
 		}
 	}
@@ -103,9 +110,12 @@ final class PressureSystem {
 		for (int f = 0; f < faces.faceCount; f++) {
 			int a = faces.axis[f], local = faces.localFace[f];
 			float[] velocity = a == 0 ? domain.mac.velocityX : a == 1 ? domain.mac.velocityY : domain.mac.velocityZ;
-			velocity[local] += dt * velocityWork[f];
+			velocity[local]+=dt*velocityWork[f];
+			double before=forceBaseline[f],after=velocity[local];
+			double exchange=.5*faces.faceMass(f)*(before*before-after*after);
+			if(exchange!=0)domain.cellMacStage.addMechanicalHeatAtFace(a,local,exchange);
 		}
-		granular.project(dt,pressure);
+		granular.project(dt,pressure);forceStepPrepared=false;
 	}
 	private void assembleMatrix() {
 		var p = domain.projection;
@@ -173,7 +183,7 @@ final class PressureSystem {
 		return new CondensedPhasePressureField(0,actual);
 	}
 	void restoreLiquidPressure(CondensedPhasePressureField state){
-		float[] actual=state.copyRelativeGaugePressurePa();domain.pressureReference=0;
+		float[] actual=state.copyRelativeGaugePressurePa();
 		if(domain.gasState.frame==null){
 			for(int cell=0;cell<domain.cellCount;cell++)domain.projection.pressure[cell]=(float)(state.pressureReferencePa()+actual[cell]);
 			return;

@@ -41,7 +41,6 @@ final class DomainStep {
 				|| maximumPhaseOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP)) {
 			throw new IllegalArgumentException("Production phase operation budget is invalid");
 		}
-		domain.carrierPropertiesWorkspace.beginStep();
 		float before = domain.totalVolume();
 		double massBefore = domain.totalMass();
 		MechanicalAuditAccumulator mechanicalAudit = captureMechanicalAudit
@@ -447,7 +446,7 @@ final class DomainStep {
 		double scale = Math.min(1, requested / total); double[] impulse = new double[3];
 		double externalWork=0;
 		double[][] momentum=new double[3][];
-		domain.cellMacStage.beginDissipation();
+		domain.cellMacStage.beginMechanicalHeat();
 		double[] target = {request.velocityXMetresPerSecond(), request.velocityYMetresPerSecond(), request.velocityZMetresPerSecond()};
 		for (int axis = 0; axis < 3; axis++) {
 			float[] velocity = axis == 0 ? domain.mac.velocityX : axis == 1 ? domain.mac.velocityY : domain.mac.velocityZ;
@@ -470,7 +469,7 @@ final class DomainStep {
 				// The prescribed body supplies V*I. Its dashpot turns the remaining
 				// local work into heat; the factorization avoids subtracting large K.
 				double heat=masses[face]*change*(target[axis]-old-.5*change);
-				domain.cellMacStage.addDissipationAtFace(axis,face,heat);
+				domain.cellMacStage.addMechanicalHeatAtFace(axis,face,heat);
 			}
 		}
 		var result=new MovingBodyFluidCoupling.Result(coupled,scale*total*cellVolume,

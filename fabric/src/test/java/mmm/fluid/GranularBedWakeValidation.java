@@ -247,7 +247,6 @@ public final class GranularBedWakeValidation {
 		FullCapabilityTestFixture.bindFull(domain, registries, 293.15, 4);
 		domain.setVolume(1, 1, 1, .5F);
 		int cell = domain.domainFlowFields.cellIndex(1, 1, 1);
-		domain.carrierPropertiesWorkspace.beginStep();
 		for (double temperature : new double[] {1, 5000, 353.15}) {
 			domain.setThermalTemperatureInCell(1, 1, 1, temperature);
 			var before = domain.exactInternalEnergy();
@@ -263,15 +262,15 @@ public final class GranularBedWakeValidation {
 			require(domain.exactInternalEnergy().equals(before), "Property observation changed authoritative energy");
 		}
 		var stats = domain.carrierPropertiesWorkspace.finishStep();
-		require(stats.extrapolatedCells() == 2 && stats.sample().contains("mmm:water"),
-				"Step diagnostics must retain earlier excursions and count each build once");
+		require(!stats.extrapolated(), "Completed diagnostics must describe the current carrier temperature");
 		domain.setThermalTemperatureInCell(1, 1, 1, 5000);
 		for (int repeat = 0; repeat < 3; repeat++) require(domain.carrierViscosityStats().equals(stats),
 				"Reading diagnostics must retain the last completed step");
-		domain.carrierPropertiesWorkspace.beginStep();
 		domain.carrierViscosityPascalSeconds(cell);
 		require(domain.carrierViscosityStats().equals(stats), "An unfinished attempt published diagnostics");
-		domain.carrierPropertiesWorkspace.beginStep();
+		var hotStats=domain.carrierPropertiesWorkspace.finishStep();
+		require(hotStats.extrapolatedCells()==1&&hotStats.sample().contains("mmm:water"),
+				"Carrier diagnostics must count current cells rather than repeated property builds");
 		domain.setThermalTemperatureInCell(1, 1, 1, 293.15);
 		domain.carrierViscosityPascalSeconds(cell);
 		require(!domain.carrierPropertiesWorkspace.finishStep().extrapolated(),

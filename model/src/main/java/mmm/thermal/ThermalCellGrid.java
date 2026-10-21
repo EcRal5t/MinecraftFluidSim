@@ -28,7 +28,9 @@ public final class ThermalCellGrid {
 		default SignedDyadic exactBaseEnergy(int carrier) { return SignedDyadic.of(baseEnergy(carrier)); }
 		double internalEnergy(int carrier);
 		default SignedDyadic exactInternalEnergy(int carrier) { return SignedDyadic.of(internalEnergy(carrier)); }
+		/** Stores the supplied finite double unchanged; prepared caloric samples share this value. */
 		void setInternalEnergy(int carrier, double energy);
+		/** Bulk publication follows the same unchanged-double contract as individual writes. */
 		default void setInternalEnergies(double[] energies) {
 			if(energies.length!=carrierCount()) throw new IllegalArgumentException("Thermal energy layout differs");
 			for(int carrier=0;carrier<energies.length;carrier++) setInternalEnergy(carrier,energies[carrier]);
@@ -75,6 +77,21 @@ public final class ThermalCellGrid {
 					solveCarrierCell(cell);
 				}
 			}
+		updateObservedTemperatureRange();
+	}
+	/** Reuses this axis's validated post-conduction sample; publication stays on its real owners. */
+	void rebuildAfterConduction(ThermalCarrierTransport.Batch sample){
+		rebuildTopology(sample,-1,false);
+		for(int carrier=0;carrier<topologyCarrierCount;carrier++)carrierBaseEnergy[carrier]=sample.baseEnergy(carrier);
+		carriers=sample.owners();
+		for(int cell=0;cell<cellCount;cell++)if(carrierCount[cell]>0){
+			conductivity[cell]/=totalVolume[cell];
+			int first=cellHead[cell];
+			if(carrierNext[first]<0){
+				temperature[cell]=sample.temperatureK(first);heatCapacity[cell]=sample.heatCapacityJPerK(first);
+				updateLinearTemperatureInterval(cell);
+			}else solveCarrierCell(cell);
+		}
 		updateObservedTemperatureRange();
 	}
 

@@ -197,6 +197,8 @@ final class M3MaterialTransferValidation {
 				+ ", actual=" + Arrays.toString(actual) + ", expected=" + Arrays.toString(expected));
 		check(Float.isFinite(stats.pressureResidual()) && stats.pressureResidual() <= 1.0E-3F,
 				name + " active pressure residual is too large");
+		check(stats.pressureIterations()>=0&&stats.pressureIterations()<=config.maxPressureIterations()*stats.substeps(),
+				name+" active pressure exceeded its configured iteration budget");
 		check(domain.maximumParticleSpeed() <= 2.0E-4F, name + " active projection left parasitic marker velocity");
 		check(stats.relativeVolumeError() <= 1.0E-7F && stats.relativeMassError() <= 1.0E-12,
 				name + " active step changed physical inventories");

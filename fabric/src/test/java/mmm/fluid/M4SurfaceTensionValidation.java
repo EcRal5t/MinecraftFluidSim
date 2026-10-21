@@ -102,7 +102,8 @@ System.out.printf("  static droplet sigma=%.4f analyticJump=%.5f measuredJump=%.
 + "PCG=%d residual=%.3g maxSpeed=%.3g%n",
 sigma, analyticJump, measuredJump, jumpError,
 stats.pressureIterations(), stats.pressureResidual(), domain.maximumParticleSpeed());
-check(Double.isFinite(measuredJump) && measuredJump > 0, "static droplet lost its positive physical capillary pressure");
+check(Double.isFinite(measuredJump) && jumpError <= .15,
+"static droplet Laplace pressure differs from its resolved radius: actual="+measuredJump+", expected="+analyticJump);
 check(Float.isFinite(stats.pressureResidual()), "static droplet pressure residual became non-finite");
 check(domain.liquidCells.exactVolume().equals(exactVolume) && domain.totalMassUnits() == exactMass,
 "static droplet surface tension changed exact mass or volume");
@@ -187,14 +188,22 @@ for (int z = 1; z <= 2; z++) for (int y = 1; y <= 2; y++) for (int x = 5; x <= 6
 fractions[domain.domainFlowFields.cellIndex(x,y,z)] = 1;
 domain.setVolumes(fractions);
 var initialVolume = domain.liquidCells.exactVolume(); long initialMass = domain.totalMassUnits();
-double potential = 0, wallArea = 0, h = config.cellSize();
+domain.domainFlowFields.ensureGrid();
+double potential = 0, freeArea = 0, h = config.cellSize();
 for (var stock : domain.liquidCells.physicalStocks())
 potential += stock.massKilograms()*config.gravity()*(stock.key().cell()/domain.sizeX%domain.sizeY+.5)*h;
-for (int cell = 0; cell < domain.cellCount; cell++) if (!domain.geometry.solid[cell])
-for (int axis = 0; axis < 3; axis++) wallArea += domain.geometry.cutCells.solidWallArea(cell,axis)*h*h;
-// Initial gravity and interface energy can become K; Young energy is bounded below
-// by -sigma times the available fixed-wall area, independently of the final shape.
-double energyBudget = potential + sigma*(6*domain.unitScale.cubicMeters(initialVolume.toDouble())/h + wallArea);
+// This initial binary block has exactly exposed coarse faces; its internal
+// liquid faces and the wetted floor are not part of liquid-gas surface energy.
+for(var stock:domain.liquidCells.physicalStocks()){
+int cell=stock.key().cell(),x=cell%domain.sizeX,y=cell/domain.sizeX%domain.sizeY,z=cell/(domain.sizeX*domain.sizeY);
+for(int axis=0;axis<3;axis++)for(int side=0;side<2;side++){
+int nx=x+(axis==0?2*side-1:0),ny=y+(axis==1?2*side-1:0),nz=z+(axis==2?2*side-1:0);
+if(!domain.domainFlowFields.inside(nx,ny,nz))continue;
+int neighbor=domain.domainFlowFields.cellIndex(nx,ny,nz);
+if(!domain.geometry.solid[neighbor]&&domain.liquidGrid.stockCount[neighbor]==0)
+freeArea+=domain.pressurePhaseGeometry.liquidFaceArea(cell,axis,side,domain.geometry.cutCells)*h*h;
+}}
+double initialMechanicalAndSurface=potential+sigma*freeArea;
 double peakKinetic = 0, gravityWork = 0, pressureWork = 0, transportWork = 0, fixedWallWork = 0, surfaceWork = 0;
 for (int step = 0; step < steps; step++) {
 var audit = domain.domainStep.stepWithMechanicalAudit(false,0).mechanicalAudit();
@@ -206,7 +215,20 @@ surfaceWork += audit.surfaceTensionWorkJoules();
 check(domain.liquidCells.exactVolume().equals(initialVolume) && domain.totalMassUnits() == initialMass,
 "contact-angle spreading changed exact mass or volume");
 double kinetic = domain.liquidKineticEnergyJoules();
-if (!Double.isFinite(kinetic) || kinetic > energyBudget) {
+domain.domainFlowFields.ensureGrid();
+double currentPotential=0,wettedFloor=0;
+for(var stock:domain.liquidCells.physicalStocks()){
+int cell=stock.key().cell();
+currentPotential+=stock.massKilograms()*config.gravity()*(cell/domain.sizeX%domain.sizeY+.5)*h;
+}
+for(int z=0;z<domain.sizeZ;z++)for(int x=0;x<domain.sizeX;x++)
+wettedFloor+=domain.pressurePhaseGeometry.liquidFaceArea(domain.domainFlowFields.cellIndex(x,1,z),1,0,domain.geometry.cutCells)*h*h;
+// Young adhesion can release at most sigma cos(theta) times actual wetted
+// floor area. Retain the same mid-cell potential allowance for partial cells.
+double potentialUncertainty=0;
+for(var stock:domain.liquidCells.physicalStocks())potentialUncertainty+=stock.massKilograms()*config.gravity()*h*.5*(1-Math.clamp(stock.volumeFraction(),0,1));
+double energyBudget=initialMechanicalAndSurface+sigma*Math.max(0,Math.cos(contactAngleRadians))*wettedFloor+potentialUncertainty;
+if (!Double.isFinite(kinetic) || kinetic+currentPotential > energyBudget) {
 double mass = 0, weightedY = 0;
 for (var stock : domain.liquidCells.physicalStocks()) {
 double amount = stock.massKilograms();
@@ -214,7 +236,7 @@ mass += amount;
 weightedY += amount*(stock.key().cell()/domain.sizeX%domain.sizeY+.5)*h;
 }
 throw new AssertionError("wetting motion exceeded the available gravity and surface energy: step="+(step+1)
-+", theta="+Math.toDegrees(contactAngleRadians)+", K="+kinetic+", budget="+energyBudget
++", theta="+Math.toDegrees(contactAngleRadians)+", K="+kinetic+", PE="+currentPotential+", budget="+energyBudget
 +", RMS="+FluidPhysicalAssertions.motion(domain).rmsSpeed()+", COMy="+weightedY/mass
 +", cumulativeWork[J]={gravity="+gravityWork+", pressure="+pressureWork+", transport="+transportWork
 +", fixedWall="+fixedWallWork+", surface="+surfaceWork+"}, lastAudit="+audit);
@@ -240,8 +262,16 @@ private record DropletMetrics(double varianceX, double maximumKinetic, double rm
 		);
 		int size = 20;
 		double radius = 4.0;
-		double sigma12 = 0.0728;
+		// Resolve the pressure response above the production geometric pressure
+		// scale; a water-scale 0.04 Pa signal cannot distinguish pressure from zero.
+		double sigma12 = 100;
 		FluidDomain domain = liquidPairDroplet(size, config, radius, sigma12);
+		domain.domainFlowFields.ensureGrid();
+		var gasColor=domain.tension.surfaceTensionColor.clone();
+		var gasNormal=domain.tension.surfaceTensionNormalY.clone();
+		domain.tension.prepareLiquidPair(domain.materialRegistry.phaseHandle(0),domain.materialRegistry.phaseHandle(1));
+		check(java.util.Arrays.equals(gasColor,domain.tension.surfaceTensionColor)
+				&&java.util.Arrays.equals(gasNormal,domain.tension.surfaceTensionNormalY),"liquid-pair preparation overwrote the retained liquid-gas interface");
 		var exactVolume = domain.liquidCells.exactVolume(); long exactMass = domain.totalMassUnits();
 		FluidDomain.StepStats stats = domain.domainStep.step();
 		double measuredJump = averagePressureInside(domain, size, radius) - averagePressureOutside(domain, size, radius);
@@ -252,10 +282,8 @@ private record DropletMetrics(double varianceX, double maximumKinetic, double rm
 				+ "PCG=%d residual=%.3g maxSpeed=%.3g%n",
 				sigma12, expectedJump, measuredJump, jumpError,
 				stats.pressureIterations(), stats.pressureResidual(), domain.maximumParticleSpeed());
-		double allowance = pressureResolution(config);
-		check(Double.isFinite(measuredJump) && Math.abs(measuredJump-expectedJump)<=allowance,
-				"liquid-pair pressure error exceeded the cell-volume resolution: actual="+measuredJump
-						+", expected="+expectedJump+", allowancePa="+allowance);
+		check(Double.isFinite(measuredJump) && jumpError<=.2,
+				"liquid-pair Laplace pressure differs from its resolved interface: actual="+measuredJump+", expected="+expectedJump);
 		check(Float.isFinite(stats.pressureResidual()), "liquid-pair pressure residual became non-finite");
 		check(domain.liquidCells.exactVolume().equals(exactVolume) && domain.totalMassUnits() == exactMass,
 				"liquid-pair surface tension changed exact mass or volume");
@@ -344,7 +372,10 @@ private record DropletMetrics(double varianceX, double maximumKinetic, double rm
 			double dx = (x + 0.5) * domain.config().cellSize() - 0.5 * (size - 1) * domain.config().cellSize();
 			double dy = (y + 0.5) * domain.config().cellSize() - 0.5 * (size - 1) * domain.config().cellSize();
 			double dz = (z + 0.5) * domain.config().cellSize() - 0.5 * (size - 1) * domain.config().cellSize();
-			if (dx * dx + dy * dy + dz * dz <= radius * radius) {
+			// CSF smooths a three-cell stencil. Measure its bulk pressure plateau,
+			// leaving the diffuse interface itself out of the Laplace jump sample.
+			double coreRadius=radius-2*domain.config().cellSize();
+			if (dx * dx + dy * dy + dz * dz <= coreRadius * coreRadius) {
 				sum += domain.pressure(x, y, z);
 				cells++;
 			}
@@ -361,7 +392,8 @@ private record DropletMetrics(double varianceX, double maximumKinetic, double rm
 			double dx = (x + 0.5) * domain.config().cellSize() - 0.5 * (size - 1) * domain.config().cellSize();
 			double dy = (y + 0.5) * domain.config().cellSize() - 0.5 * (size - 1) * domain.config().cellSize();
 			double dz = (z + 0.5) * domain.config().cellSize() - 0.5 * (size - 1) * domain.config().cellSize();
-			if (dx * dx + dy * dy + dz * dz > radius * radius) {
+			double outerRadius=radius+2*domain.config().cellSize();
+			if (dx * dx + dy * dy + dz * dz >= outerRadius * outerRadius) {
 				sum += domain.pressure(x, y, z);
 				cells++;
 			}

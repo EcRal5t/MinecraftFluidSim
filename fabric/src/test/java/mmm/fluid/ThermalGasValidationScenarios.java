@@ -1125,6 +1125,38 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		return FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 	}
 
+	/** Unequal daughter capacities change pressure; conservative relabeling itself supplies no piston work. */
+	private static void topologySplitMergeAddsNoWork(GasRegistry gases,ThermalRegistry registry,
+	                                                FluidMaterialRegistry liquids,ThermalCarrierContext empty){
+		var network=new AirNetwork(gases);network.addNode(1,1);
+		var state=FluidThermalBinding.create(registry,liquids,GasRegistry.STANDARD_TEMPERATURE_K,
+				1,2,2,2,.5F,empty,network);
+		var stock=network.inventory(1);double initial=state.gasNodeEnergy(1,network);
+		var model=new GasThermalModel(registry,gases);var before=state.auditLedger();
+		for(int cycle=0;cycle<12;cycle++){
+			var parts=stock.partition(cycle%2==0?new long[]{1,3}:new long[]{7,1});
+			double[] energy=model.partitionEnergy(stock,state.gasNodeEnergy(1,network),parts);
+			double[] volumes={.125,.875};
+			var split=state.planGasRemapWithSourceWork(network,parts,volumes,energy,
+					SignedDyadic.ZERO,SignedDyadic.ZERO,SignedDyadic.ZERO);
+			network.remapNodes(volumes,parts,GasInventory.EMPTY,GasInventory.EMPTY);state.commitGasRemap(split);
+			for(int node=1;node<=2;node++)require(Math.abs(state.gasTemperature(node,network)-GasRegistry.STANDARD_TEMPERATURE_K)<1e-6,
+					"Topology split changed source temperature without mechanical work");
+			double combined=state.gasNodeEnergy(1,network)+state.gasNodeEnergy(2,network);
+			var merge=state.planGasRemapWithSourceWork(network,List.of(stock),new double[]{1},new double[]{combined},
+					SignedDyadic.ZERO,SignedDyadic.ZERO,SignedDyadic.ZERO);
+			network.remapNodes(new double[]{1},List.of(stock),GasInventory.EMPTY,GasInventory.EMPTY);state.commitGasRemap(merge);
+			require(network.auditClosed()&&network.inventory(1).equals(stock)
+					&&Math.abs(state.gasNodeEnergy(1,network)-initial)<1e-6
+					&&state.auditLedger().mechanicalWork().equals(before.mechanicalWork())
+					&&state.auditLedger().externalSource().equals(before.externalSource())
+					&&state.auditLedger().externalSink().equals(before.externalSink())
+					&&Math.abs(state.auditLedger().roundoffResidual().subtract(before.roundoffResidual()).toDouble())<1e-6
+					&&state.exactEnergy(0).equals(state.auditLedger().expectedInventory()),
+					"Repeated topology split/merge created gas heat, lost stock or concealed work as roundoff");
+		}
+	}
+
 	static void gasRuntimeTransfersEnergyAndWork() {
 		mmm.thermal.GasTransferValidation.validate();
 		GasRegistry gasRegistry = BuiltinGasDefinitions.createRegistry();
@@ -1140,6 +1172,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						GasRegistry.STANDARD_TEMPERATURE_K, 10.0, 0.025,
 						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)))));
 		ThermalCarrierContext empty = emptyMarkers();
+		topologySplitMergeAddsNoWork(gasRegistry,registry,liquids,empty);
 
 		AirNetwork compressedNetwork = new AirNetwork(gasRegistry);
 		compressedNetwork.addNode(1.0, 1.0);

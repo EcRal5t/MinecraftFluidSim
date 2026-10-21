@@ -32,9 +32,6 @@ final class LiquidCarrierProperties {
 	private final double[] observationMass;
 	private boolean buoyancyPrepared;
 	private Revision built;
-	private boolean recording;
-	private int stepExtrapolatedCells;
-	private String stepSample;
 	private FluidDomain.CarrierViscosityStats publishedStats = new FluidDomain.CarrierViscosityStats(0, "");
 	private int extrapolatedCells;
 	private String sampleMaterialId;
@@ -95,16 +92,8 @@ final class LiquidCarrierProperties {
 
 	void invalidate() { built = null; buoyancyPrepared = false; }
 
-	void beginStep() {
-		invalidate();
-		recording = true;
-		stepExtrapolatedCells = 0;
-		stepSample = null;
-	}
-
 	FluidDomain.CarrierViscosityStats finishStep() {
-		publishedStats = new FluidDomain.CarrierViscosityStats(stepExtrapolatedCells, stepSample);
-		recording = false;
+		publishedStats = new FluidDomain.CarrierViscosityStats(extrapolatedCells, extrapolatedSample());
 		return publishedStats;
 	}
 
@@ -124,7 +113,7 @@ final class LiquidCarrierProperties {
 		long chemistryMutation = domain.chemicalParcels == null ? 0 : domain.chemicalParcels.mutationRevision();
 		if (built != null && built.carrierMutation() == carrierMutation
 				&& built.chemistryMutation() == chemistryMutation
-				&& (thermal == null ? built.thermal() == null : thermal.matchesThermalRevision(built.thermal()))) return;
+				&& (thermal == null ? built.thermal() == null : thermal.matchesCondensedRevision(built.thermal()))) return;
 		CellLiquidGrid grid = domain.liquidGrid;
 		if (thermal != null) thermal.preparePhaseScan(markers);
 		buoyancyPrepared = false;
@@ -171,10 +160,6 @@ final class LiquidCarrierProperties {
 			}
 		}
 		built = new Revision(carrierMutation, chemistryMutation, thermal == null ? null : thermal.thermalRevision());
-		if (recording) {
-			stepExtrapolatedCells = Math.addExact(stepExtrapolatedCells, extrapolatedCells);
-			if (stepSample == null) stepSample = extrapolatedSample();
-		}
 	}
 
 	static final double AIR_DENSITY = 1.225;

@@ -70,6 +70,20 @@ public final class GranularEnergyState {
 
 	public long revision() { return revision; }
 
+	void addMechanicalHeat(int ordinal,double joules) {
+		if(!Double.isFinite(joules))throw new IllegalArgumentException("Granular mechanical heat exchange must be finite");
+		addMechanicalHeat(ordinal,SignedDyadic.of(joules));
+	}
+	void addMechanicalHeat(int ordinal,SignedDyadic heat) {
+		if(heat.signum()==0)return;
+		double before=granularEnergy.activeEnergy(ordinal);
+		var exact=SignedDyadic.of(before).add(heat);
+		double after=exact.toDouble();
+		granularEnergy.setActiveEnergy(ordinal,after);
+		audit.replace(audit.ledger().withMechanicalWork(heat).withRoundoff(SignedDyadic.of(after).subtract(exact)));
+		revision++;
+	}
+
 	public GranularEnergyColumn column() { return granularEnergy; }
 	public CoherentPhaseStore coherentPhases() { return coherentPhases; }
 
