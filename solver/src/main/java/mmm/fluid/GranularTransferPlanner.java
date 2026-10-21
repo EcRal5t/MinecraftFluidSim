@@ -282,7 +282,7 @@ final class GranularTransferPlanner {
 
 	private GasTopologyCoordinator.GasTopologyPlan prepareInsertionGas(long[] solid) {
 		var gas = domain.gasState.frame == null ? null
-				: domain.gasTopologyCoordinator.planAfterLiquidCells(domain.liquidCells, solid, false);
+				: domain.gasTopologyCoordinator.planAfterCarrierEdit(domain.liquidCells, solid);
 		return gas;
 	}
 
@@ -522,7 +522,7 @@ final class GranularTransferPlanner {
 
 	private GasTopologyCoordinator.GasTopologyPlan prepareExtractionGas(long[] futureSolid, ThermalAuditLedger afterTake) {
 		if (domain.gasState.frame == null) return null;
-		var gas = domain.gasTopologyCoordinator.planAfterLiquidCells(domain.liquidCells, futureSolid, false);
+		var gas = domain.gasTopologyCoordinator.planAfterCarrierEdit(domain.liquidCells, futureSolid);
 		if (gas.thermalPlan() != null) {
 			var remap = gas.thermalPlan();
 			afterTake.withExternalSourceEnergy(remap.sourceEnergy()).withExternalSinkEnergy(remap.sinkEnergy())

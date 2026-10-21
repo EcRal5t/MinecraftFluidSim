@@ -27,6 +27,7 @@ final class GasTopologyCoordinator {
 	private GasRuntimeGeometry committedFrame;
 	private AirNetwork committedNetwork;
 	private long committedNetworkRevision;
+	private enum VolumeWork { ADIABATIC, FIXED_ENERGY }
 	record PhaseBirth(int cell, int supportMask, GasInventory inventory, double energy) { }
 	record PhaseBatch(List<GasInventory> inventories,
 	                  GasAuditLedger source, GasAuditLedger sink,
@@ -109,8 +110,8 @@ final class GasTopologyCoordinator {
 				&& committedNetworkRevision == committedNetwork.revision()
 				&& frame.sealedExterior() == domain.gasState.sealedDomainBoundary
 				&& frame.matchesCarrierGeometry(domain, occupied)) return;
-		if(frame==null)commit(plan(GasRuntimeGeometry.capture(domain,occupied,domain.gasState.sealedDomainBoundary),false,null,null));
-		else commit(planCells(domain.liquidCells,occupied,null,false,null,null));
+		if(frame==null)commit(plan(GasRuntimeGeometry.capture(domain,occupied,domain.gasState.sealedDomainBoundary),VolumeWork.ADIABATIC,null,null));
+		else commit(planCells(domain.liquidCells,occupied,null,VolumeWork.ADIABATIC,null,null));
 	}
 	private void rememberCommittedTopology() {
 		committedFrame = domain.gasState.frame;
@@ -120,27 +121,29 @@ final class GasTopologyCoordinator {
 	GasTopologyPlan planAfterPhaseBatch(LiquidCellInventory future, PhaseBatch phase) {
 		domain.thermalState.requireGasInventoryEnergyCurrent(phase.gasThermal(), domain.gasState.network);
 		domain.thermalState.requirePhaseBatchEnergyCurrent(phase.cellThermal());
-		return planCells(future,currentOccupied(),null,true,phase,null);
+		return planCells(future,currentOccupied(),null,VolumeWork.FIXED_ENERGY,phase,null);
 	}
-	GasTopologyPlan planAfterLiquidCells(LiquidCellInventory future,long[] occupied,boolean advection) {
-		return planCells(future,occupied,null,false,null,null);
+	/** External carrier edits retain the gas response to their actual volume displacement. */
+	GasTopologyPlan planAfterCarrierEdit(LiquidCellInventory future,long[] occupied){
+		return planCells(future,occupied,null,VolumeWork.ADIABATIC,null,null);
+	}
+	/** A condensed phase candidate settles its complete fixed-volume energy before mechanical evolution. */
+	GasTopologyPlan planAfterCondensedPhaseChange(LiquidCellInventory future,long[] occupied){
+		return planCells(future,occupied,null,VolumeWork.FIXED_ENERGY,null,null);
 	}
 	GasTopologyPlan planAfterLiquidCells(LiquidCellInventory future,long[] occupied,GasVolumeAllocation allocation) {
-		return planCells(future,occupied,null,false,null,allocation);
-	}
-	GasTopologyPlan planCellFuture(LiquidCellInventory future,long[] occupied,boolean advection) {
-		return planAfterLiquidCells(future,occupied,advection);
+		return planCells(future,occupied,null,VolumeWork.ADIABATIC,null,allocation);
 	}
 	GasTopologyPlan planAfterCollisionCells(LiquidCellInventory future,long[] occupied,byte[] masks) {
-		return planCells(future,occupied,masks,false,null,null);
+		return planCells(future,occupied,masks,VolumeWork.ADIABATIC,null,null);
 	}
 	private GasTopologyPlan planCells(LiquidCellInventory future,long[] occupied,byte[] masks,
-	                                boolean deferVolumeWork,PhaseBatch phase,GasVolumeAllocation allocation) {
+	                                VolumeWork volumeWork,PhaseBatch phase,GasVolumeAllocation allocation) {
 		if(allocation==null)allocation=GasVolumeAllocation.prepare(domain,future,occupied,masks,phase==null?null:phase.inventories());
 		allocation.requireCurrent(domain,future);
 		var next=GasRuntimeGeometry.captureCellFuture(domain,future,occupied,domain.gasState.sealedDomainBoundary,masks,allocation.futureOccupancy(),allocation.preparedPhase(),allocation.preparedGeometry(),allocation.preparedCapacity());
 		if(domain.gasState.frame==null)return new GasTopologyPlan(next,null,null,null,domain.gasState.network,domain.gasState.network.revision());
-		return plan(next,deferVolumeWork,phase,allocation);
+		return plan(next,volumeWork,phase,allocation);
 	}
 	private long[] currentOccupied() {
 		return domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
@@ -168,21 +171,21 @@ final class GasTopologyCoordinator {
 	}
 	GasTopologyPlan planAfterOperatorClear(LiquidCellInventory future) {
 		domain.domainFlowFields.ensureInventoryGrid();
-		return planCells(future,new long[domain.cellCount],null,false,null,null);
+		return planCells(future,new long[domain.cellCount],null,VolumeWork.ADIABATIC,null,null);
 	}
 	GasTopologyPlan planAfterCondensedClear(LiquidCellInventory future) {
 		var retained=new GranularCouplingFields(domain.sizeX,domain.sizeY,domain.sizeZ,domain.config.cellSize());
 		if(domain.granularState!=null)retained.rebuild(domain.granularState.parcels,domain.granularState.deposits);
-		return planCells(future,retained.copySolidSvq(),null,false,null,null);
+		return planCells(future,retained.copySolidSvq(),null,VolumeWork.ADIABATIC,null,null);
 	}
 
 	/** Each allocated gas volume has one origin; inventory, energy and old control volume share it. */
-	private GasTopologyPlan plan(GasRuntimeGeometry next,boolean deferVolumeWork,PhaseBatch edit,GasVolumeAllocation allocation) {
+	private GasTopologyPlan plan(GasRuntimeGeometry next,VolumeWork volumeWork,PhaseBatch edit,GasVolumeAllocation allocation) {
 		var old=domain.gasState.frame;
 		TreeMap<Integer,TreeMap<Integer,Double>> origins=old==null||old.nodeCount()==0&&next.nodeCount()==0?new TreeMap<>():origins(next,allocation);
 
 		boolean thermal=domain.thermalState!=null&&domain.thermalState.gasModelBound();
-		boolean retainControl=thermal&&!deferVolumeWork;
+		boolean retainControl=thermal&&volumeWork==VolumeWork.ADIABATIC;
 		int count=next.nodeCount();double[] available=volumes(next);
 		double[] importedControl=retainControl?new double[count]:null;
 		var inventories=new ArrayList<GasInventory>(java.util.Collections.nCopies(count,GasInventory.EMPTY));

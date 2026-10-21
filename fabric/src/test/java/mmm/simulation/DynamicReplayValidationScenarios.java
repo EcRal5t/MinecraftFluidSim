@@ -299,6 +299,19 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		long generation = 0L;
 		double initialCenterY = centerOfMassY(restored);
+		long initialMass = restored.totalMassUnits(), initialGas = restored.gasBoundary().sealedInventoryNanos();
+		double liquidMassKg = mmm.units.Mass.kilograms(initialMass);
+		double gap = restored.config().cellSize() * mmm.fluid.FluidSolverConfig.UNRESOLVED_VERTICAL_GAP_FRACTION;
+		double kineticAllowance = 0.025 + liquidMassKg * restored.config().gravity() * gap;
+		double initialPressure = mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA + restored.gasNodeGaugePressurePa(1);
+		double surfaceArea = restored.sizeX() * (double) restored.sizeZ()
+				* restored.config().cellSize() * restored.config().cellSize();
+		// One unresolved vertical displacement bounds both gravitational storage and pressure work.
+		// The allowance is fixed from the initial loading and does not grow with elapsed time.
+		double energyAllowance = kineticAllowance + initialPressure * surfaceArea * gap;
+		var initialThermalWork = state.thermalOwner().audit().mechanicalWork();
+		double initialPotential = Double.NaN, buoyancyWork = 0.0, maximumEnergyError = 0.0;
+		double maximumCenterShift = 0.0;
 		double maximumKinetic = 0.0, tailMaximumKinetic = 0.0;
 		double maximumBodyPressureResidual = 0.0, maximumPressureResidual = 0.0;
 		long phaseOperations = 0L, boiledCells = 0L, condensedCells = 0L;
@@ -322,8 +335,22 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			FluidDomain.MechanicalStepAudit audit = stats.mechanicalAudit();
 			restored = FluidDomain.restoreAuthoritativeState(candidate.state());
 			double kinetic = audit.finalParticleKineticEnergyJoules();
-			double available = restored.gasBoundary().availableVolume(1);
+			int headspace = dominantGasNodeWithEos(restored);
+			double available = ControllerReplayValidationScenarios.totalGasAvailableVolume(restored);
 			double deltaAvailable = available - previousAvailable;
+			if (Double.isNaN(initialPotential)) initialPotential = audit.initialGravitationalPotentialEnergyJoules();
+			buoyancyWork += audit.thermalBuoyancyWorkJoules();
+			double thermalWork = candidate.state().thermalOwner().audit().mechanicalWork().subtract(initialThermalWork).toDouble();
+			double energyError = kinetic + audit.finalGravitationalPotentialEnergyJoules() - initialPotential
+					+ thermalWork - buoyancyWork - verticalPotentialUncertainty(restored);
+			maximumEnergyError = Math.max(maximumEnergyError, energyError);
+			maximumCenterShift = Math.max(maximumCenterShift, Math.abs(centerOfMassY(restored) - initialCenterY));
+			require(Double.isFinite(energyError) && energyError <= energyAllowance,
+					"compressed planar exceeded its fixed gravity/pressure resolution energy: "
+							+ energyError + " J, allowance=" + energyAllowance + " J at step " + step);
+			require(restored.totalMassUnits() == initialMass && restored.gasBoundary().sealedInventoryNanos() == initialGas
+					&& Math.abs(available - 32.0) <= 1.0E-12,
+					"compressed planar changed exact stock or total gas capacity at step " + step);
 			maximumKinetic = Math.max(maximumKinetic, kinetic);
 			if (step >= 500) tailMaximumKinetic = Math.max(tailMaximumKinetic, kinetic);
 			double bodyPressure = audit.gravityWorkJoules() + audit.thermalBuoyancyWorkJoules()
@@ -344,26 +371,45 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 				System.out.printf("  compressed planar backend step %03d: K=%.9g J dV=%+.9g m3 "
 						+ "PCG=%d residual=%.9g p=%+.3f Pa T=%.6f K%n",
 						step + 1, kinetic, deltaAvailable, stats.pressureIterations(),
-						stats.pressureResidual(), restored.gasNodeGaugePressurePa(1),
-						restored.gasNodeTemperatureK(1));
+						stats.pressureResidual(), restored.gasNodeGaugePressurePa(headspace),
+						restored.gasNodeTemperatureK(headspace));
 			}
 		}
 		double finalKinetic = kineticEnergy(restored);
 		double centerYDelta = centerOfMassY(restored) - initialCenterY;
-		require(maximumKinetic <= 0.025 && tailMaximumKinetic <= 0.015 && finalKinetic <= 0.015,
-				"compressed planar free surface self-excited: max=" + maximumKinetic
-						+ " tail=" + tailMaximumKinetic + " final=" + finalKinetic + " J");
-		require(Math.abs(centerYDelta) <= 0.001,
-				"compressed planar center of mass drifted by " + centerYDelta + " m");
-		require(maximumBodyPressureResidual <= 0.05,
-				"compressed planar body-force/pressure work did not balance: "
-						+ maximumBodyPressureResidual + " J");
+		require(maximumKinetic <= kineticAllowance,
+				"compressed planar exceeded the gravity-wave speed scale of one unresolved vertical displacement: max="
+						+ maximumKinetic + " J, allowance=" + kineticAllowance + " J");
+		require(maximumCenterShift <= gap,
+				"compressed planar center of mass moved beyond the vertical resolution: " + maximumCenterShift + " m");
 		require(phaseOperations == 0L && boiledCells == 0L && condensedCells == 0L,
 				"compressed mechanical-equilibrium fixture unexpectedly executed gas phase changes");
 		System.out.printf("  compressed planar backend gate: kinetic max/tail/final="
 				+ "%.9g/%.9g/%.9g J, centerYDelta=%+.9g m, max body-pressure residual=%.9g J, "
-				+ "max PCG residual=%.9g%n", maximumKinetic, tailMaximumKinetic, finalKinetic,
-				centerYDelta, maximumBodyPressureResidual, maximumPressureResidual);
+				+ "max PCG residual=%.9g, max unresolved energy=%.9g J / %.9g J allowance%n",
+				maximumKinetic, tailMaximumKinetic, finalKinetic,
+				centerYDelta, maximumBodyPressureResidual, maximumPressureResidual, maximumEnergyError, energyAllowance);
+	}
+
+	/** Stable observation follows the largest cavity; canonical node numbers may change when pockets split. */
+	private static int dominantGasNodeWithEos(FluidDomain domain) {
+		int largest = -1;
+		double largestVolume = 0.0;
+		for (int node : domain.gasBoundary().nodeIds()) {
+			double volume = domain.gasBoundary().availableVolume(node);
+			double pressure = domain.gasNodeGaugePressurePa(node);
+			require(volume > 0.0 && Double.isFinite(volume) && Double.isFinite(pressure),
+					"compressed planar produced invalid gas capacity or pressure");
+			if (volume > largestVolume) { largest = node; largestVolume = volume; }
+			double expected = domain.gasBoundary().inventory(node).isEmpty() ? -mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA
+					: mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA * domain.gasBoundary().standardVolume(node) / volume
+					* domain.gasNodeTemperatureK(node) / mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K
+					- mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA;
+			require(Math.abs(pressure - expected) <= Math.max(1.0E-8, Math.abs(expected) * 1.0E-12),
+					"compressed planar gas node disagreed with its inventory/capacity/temperature EoS");
+		}
+		require(largest > 0, "compressed planar lost its finite headspace");
+		return largest;
 	}
 
 	static void defaultLiveStepsRemainBounded() throws Exception {

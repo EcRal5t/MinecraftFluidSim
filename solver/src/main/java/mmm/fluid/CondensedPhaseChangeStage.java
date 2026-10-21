@@ -25,7 +25,7 @@ final class CondensedPhaseChangeStage {
 	private GasTopologyCoordinator.GasTopologyPlan planCondensedGeometry(LiquidCellInventory future,List<CoherentPhaseStore.Group> coherent){
 		long[] occupied=phaseGranularOccupancy.copySolidSvq();
 		for(var group:coherent)occupied[group.cell()]=Math.addExact(occupied[group.cell()],group.occupiedVolumeSvq());
-		return domain.gasTopologyCoordinator.planAfterLiquidCells(future,occupied,false);
+		return domain.gasTopologyCoordinator.planAfterCondensedPhaseChange(future,occupied);
 	}
 	private record GroupKey(int cell,String phase) implements Comparable<GroupKey> {
 		public int compareTo(GroupKey other) { int n=Integer.compare(cell,other.cell);return n!=0?n:phase.compareTo(other.phase); }
