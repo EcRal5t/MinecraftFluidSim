@@ -7,7 +7,8 @@ import mmm.granular.GranularParcelStore;
 final class GranularPressureCoupling {
     private final FluidDomain domain;
     private int contacts, entries;
-    private double[] initialMechanicalEnergy=new double[0];
+    private double[] initialKineticEnergy=new double[0];
+    private float[] initialPositionY=new float[0];
     private boolean mechanicalStepPrepared;
     private int[] start = new int[0], row = new int[64];
     private double[] coefficient = new double[64], inverseMass = new double[0], affine = new double[0],referenceAffine=new double[0];
@@ -18,16 +19,16 @@ final class GranularPressureCoupling {
     void beginMechanicalStep(){
         int count=domain.granularState==null?0:domain.granularState.parcels.count();
         domain.mechanicalEnergy.beginGranularForceStep(count);
-        if(initialMechanicalEnergy.length<count)initialMechanicalEnergy=new double[count];
+        if(initialKineticEnergy.length<count){initialKineticEnergy=new double[count];initialPositionY=new float[count];}
         for(int p=0;p<count;p++){
             var parcel=domain.granularState.parcels.parcel(p);
-            initialMechanicalEnergy[p]=mechanicalEnergy(parcel,parcel.y());
+            initialKineticEnergy[p]=kineticEnergy(parcel);initialPositionY[p]=parcel.y();
         }
         mechanicalStepPrepared=true;
     }
-    private double mechanicalEnergy(GranularParcelStore.Parcel parcel,double y){
+    private double kineticEnergy(GranularParcelStore.Parcel parcel){
         double vx=parcel.velocityX(),vy=parcel.velocityY(),vz=parcel.velocityZ();
-        return parcel.mass()*(.5*(vx*vx+vy*vy+vz*vz)+domain.config.gravity()*y);
+        return .5*parcel.mass()*(vx*vx+vy*vy+vz*vz);
     }
     /** Collision velocities and the accepted position close the same local total-energy step. */
     void finishMechanicalStep(){
@@ -36,8 +37,9 @@ final class GranularPressureCoupling {
         for(int p=0;p<count;p++){
             var parcel=domain.granularState.parcels.parcel(p);
             double finalY=domain.granularMechanicalStage.plannedPositionY(p);
-            double exchange=initialMechanicalEnergy[p]-mechanicalEnergy(parcel,finalY);
-            domain.mechanicalEnergy.recordGranularExchange(p,exchange);
+            double kinetic=initialKineticEnergy[p]-kineticEnergy(parcel);
+            double potential=parcel.mass()*domain.config.gravity()*(initialPositionY[p]-finalY);
+            domain.mechanicalEnergy.recordGranularExchange(p,kinetic,potential);
         }
         mechanicalStepPrepared=false;
     }

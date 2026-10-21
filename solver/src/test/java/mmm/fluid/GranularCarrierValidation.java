@@ -844,7 +844,10 @@ public final class GranularCarrierValidation {
 							+ 2 * Math.ulp(q[b]) * Math.abs(w[c]) + 2 * Math.ulp(q[c]) * Math.abs(w[b])
 							+ Math.ulp(w[c]) * Math.abs(q[b]) + Math.ulp(w[b]) * Math.abs(q[c]));
 				}
-				require(Math.abs(nextAngular - oldAngular) <= angularRounding, "pair contact changed angular momentum beyond float publication");
+				require(Math.abs(nextAngular - oldAngular) <= angularRounding,
+						"free pair contact changed angular momentum beyond its shared contact resolution: axis=" + a
+								+ ", direction=" + sign + ", before=" + oldAngular + ", after=" + nextAngular
+								+ ", error=" + Math.abs(nextAngular - oldAngular) + ", allowance=" + angularRounding);
 			}
 			require(energyAfter <= energyBefore + energyRounding && Math.abs(boundary.x()) + Math.abs(boundary.y()) + Math.abs(boundary.z()) <= 16 * Math.ulp(1.0F),
 					"internal pair contact gained mechanical energy or generated an external reaction");

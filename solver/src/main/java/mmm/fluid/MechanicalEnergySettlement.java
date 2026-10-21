@@ -16,7 +16,7 @@ import java.util.TreeMap;
 final class MechanicalEnergySettlement {
     private final FluidDomain domain;
     private final double[] liquidExchange;
-    private double[] granularExchange=new double[0];
+    private double[] granularExchange=new double[0],granularPotentialExchange=new double[0];
     private boolean hasLiquidExchange,hasGranularExchange;
 
     MechanicalEnergySettlement(FluidDomain domain){
@@ -28,8 +28,8 @@ final class MechanicalEnergySettlement {
         hasLiquidExchange=false;
     }
     void beginGranularForceStep(int count){
-        if(granularExchange.length<count)granularExchange=new double[count];
-        else if(hasGranularExchange)Arrays.fill(granularExchange,0);
+        if(granularExchange.length<count){granularExchange=new double[count];granularPotentialExchange=new double[count];}
+        else if(hasGranularExchange){Arrays.fill(granularExchange,0);Arrays.fill(granularPotentialExchange,0);}
         hasGranularExchange=false;
     }
     void recordLiquidExchange(int face,double joules){
@@ -37,10 +37,10 @@ final class MechanicalEnergySettlement {
         if(!Double.isFinite(joules))throw new IllegalStateException("Nonfinite liquid mechanical exchange");
         liquidExchange[face]+=joules;hasLiquidExchange=true;
     }
-    void recordGranularExchange(int parcel,double joules){
-        if(joules==0||domain.thermalState==null)return;
-        if(!Double.isFinite(joules))throw new IllegalStateException("Nonfinite granular mechanical exchange");
-        granularExchange[parcel]+=joules;hasGranularExchange=true;
+    void recordGranularExchange(int parcel,double kinetic,double potential){
+        if(domain.thermalState==null||(kinetic==0&&potential==0))return;
+        if(!(Double.isFinite(kinetic)&&Double.isFinite(potential)))throw new IllegalStateException("Nonfinite granular mechanical exchange");
+        granularExchange[parcel]+=kinetic+potential;granularPotentialExchange[parcel]+=potential;hasGranularExchange=true;
     }
     void clear(){beginLiquidForceStep();beginGranularForceStep(0);}
 
@@ -154,7 +154,8 @@ final class MechanicalEnergySettlement {
                 try{shares=ThermalStateFunction.partitionMechanicalEnergy(recipients,exchange);}
                 catch(IllegalArgumentException failure){
                     failure.addSuppressed(new IllegalStateException("Mechanical body="+entry.getKey()+", liquidStocks="+targets.size()
-                            +", granularParcels="+active.size()+", exchange="+exchange));throw failure;
+                            +", granularParcels="+active.size()+", exchange="+exchange
+                            +failureContributions(body,entry.getKey(),particleBase,parcels,numericalWork,inventory,gas)));throw failure;
                 }
             }
             int ordinal=0;
@@ -162,6 +163,39 @@ final class MechanicalEnergySettlement {
             for(int p:active){var part=shares[ordinal++];if(part.signum()!=0)grainHeat.merge(p,part,SignedDyadic::add);}
         }
         return new Plan(liquidHeat.isEmpty()?inventory:inventory.withMechanicalHeatByStock(liquidHeat),grainHeat);
+    }
+    /** Only a failed caloric solve gathers this operator decomposition; normal steps keep no statistics. */
+    private String failureContributions(int[] body,int root,int particleBase,int parcels,double[] numericalWork,
+                                       LiquidCellInventory.Plan inventory,GasTopologyCoordinator.GasTopologyPlan gas){
+        double route=0,grain=0,grainPotential=0;
+        for(var transfer:inventory.transfers())if(transfer.massUnits()>0&&mechanicalRoot(body,supportVertex(transfer.target()))==root){
+            int from=transfer.source().cell()/domain.sizeX%domain.sizeY,to=transfer.target().cell()/domain.sizeX%domain.sizeY;
+            route-=Mass.kilograms(transfer.massUnits())*domain.config.gravity()*domain.config.cellSize()*(to-from);
+        }
+        if(hasGranularExchange)for(int p=0;p<parcels;p++)if(mechanicalRoot(body,particleBase+p)==root){
+            grain+=granularExchange[p];grainPotential+=granularPotentialExchange[p];
+        }
+        var gasCounter=SignedDyadic.ZERO;int largestGas=-1;
+        if(gas!=null)for(int node=1;node<gas.workBySource().length;node++)if(mechanicalRoot(body,8*domain.cellCount+node)==root){
+            gasCounter=gasCounter.subtract(gas.workBySource()[node]);
+            if(largestGas<0||Math.abs(gas.workBySource()[node].toDouble())>Math.abs(gas.workBySource()[largestGas].toDouble()))largestGas=node;
+        }
+        int peak=-1;
+        for(int face=0;face<liquidExchange.length;face++)if(liquidExchange[face]!=0
+                &&(peak<0||Math.abs(liquidExchange[face])>Math.abs(liquidExchange[peak])))peak=face;
+        String peakFace="none";
+        if(peak>=0){
+            var faces=domain.pressureSystem.faces;int axis=faces.axis[peak],local=faces.localFace[peak];
+            double velocity=switch(axis){case 0->domain.mac.velocityX[local];case 1->domain.mac.velocityY[local];default->domain.mac.velocityZ[local];};
+            peakFace="{face="+peak+", axis="+axis+", cells="+faces.firstCell[peak]+"/"+faces.secondCell[peak]
+                    +", massKg="+faces.faceMass(peak)+", velocityAfter="+velocity+", exchangeJ="+liquidExchange[peak]+"}";
+        }
+        String gasSource=largestGas<0?"none":"{node="+largestGas+", oldVolumeM3="+domain.gasState.network.availableVolume(largestGas)
+                +", oldGaugePressurePa="+domain.pressureBoundaryView.gasPressureOfNode(largestGas)+", actualWorkJ="+gas.workBySource()[largestGas].toDouble()+"}";
+        return ", liquidForceExchangeJ="+(numericalWork[root]-route-grain)
+                +", granularKineticExchangeJ="+(grain-grainPotential)+", granularPotentialExchangeJ="+grainPotential
+                +", transportPotentialExchangeJ="+route+", gasCounterWorkJ="+gasCounter.toDouble()
+                +", largestGasSource="+gasSource+", globalPeakForceFace="+peakFace;
     }
     private static SignedDyadic[] massShares(List<LiquidCellInventory.Stock> targets,SignedDyadic exchange){
         var shares=new SignedDyadic[targets.size()];double total=0;int largest=0;

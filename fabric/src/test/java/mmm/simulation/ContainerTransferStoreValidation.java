@@ -62,6 +62,9 @@ public final class ContainerTransferStoreValidation {
 	private ContainerTransferStoreValidation() { }
 
 	public static void main(String[] args) throws Exception {
+        if(args.length==2&&args[0].equals("--normal-play-seed")){
+            ControllerInventoryDurabilityValidation.runNormalPlaySeed(Integer.parseInt(args[1]));return;
+        }
 		Path root = Files.createTempDirectory("mmm-container-wal-test");
 		try {
 			run("round-trip and atomic replace", ContainerTransferStoreValidation::testRoundTrip);

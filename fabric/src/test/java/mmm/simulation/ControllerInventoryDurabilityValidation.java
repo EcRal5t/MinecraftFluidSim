@@ -283,13 +283,19 @@ final class ControllerInventoryDurabilityValidation {
 				material, group.massKilograms(), group.speciesQuanta(), 293.15);
 	}
 
+    /** Selects the unchanged 60-action normal-play fixture for one reported seed. */
+    static void runNormalPlaySeed(int seed) throws Exception {
+        requireRandomizedNormalPlay(FullCapabilityTestFixture.load(),seed);
+    }
+    private static void requireRandomizedNormalPlay(FullCapabilityTestFixture.Registries registries,int seed) throws Exception {
+        Failure failure=runRandomizedNormalPlay(registries,seed,60);
+        if(failure!=null)throw new AssertionError("granular pressure replay seed="+seed
+                +", action="+failure.actionIndex()+", trace="+failure.trace(),failure.cause());
+    }
+
 	/** Crosses normal player actions with full backend handoff after every accepted transition. */
 	private static void runNormalPlayStateMatrix(FullCapabilityTestFixture.Registries registries) throws Exception {
-		for (int seed : new int[]{4, 54, 103}) {
-			Failure failure = runRandomizedNormalPlay(registries, seed, 60);
-			if (failure != null) throw new AssertionError("granular pressure replay seed=" + seed
-					+ ", action=" + failure.actionIndex() + ", trace=" + failure.trace(), failure.cause());
-		}
+		for (int seed : new int[]{4, 54, 103}) requireRandomizedNormalPlay(registries,seed);
 		runScenario("sand and precipitate long settlement", registries, state -> {
 			state.insertSand(); state.insertAcid(5); state.insertBase(5); state.steps(true, 120);
 		});

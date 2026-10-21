@@ -8,6 +8,8 @@ import mmm.granular.ParticulateMaterial;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import org.ejml.data.DMatrixRMaj;
+import org.ejml.dense.row.CommonOps_DDRM;
 
 /** Local predictive contact manifolds with a common finite-mass impulse solve. */
 final class GranularActiveContacts {
@@ -83,12 +85,13 @@ final class GranularActiveContacts {
 			}
 		}
 		double[][] outgoing = velocity.clone();
-		for (var component : components()) {
+		for (var component : components(points)) {
 			double[][] input = component.vectors(velocity);
 			var localMaterials = new ParticulateMaterial[input.length];
 			for (int i = 0; i < input.length; i++) localMaterials[i] = materials[component.members()[i]];
 			var response = new GranularComponentResponse(h, () -> { })
 					.respond(component.masses(), input, localMaterials, component.rows());
+			if (!component.fixedContact()) retainRigidMotion(component, points, input, response.values());
 			for (int i = 0; i < input.length; i++) outgoing[component.members()[i]] = response.values()[i];
 		}
 		for (int i = 0; i < points.length; i++) {
@@ -154,7 +157,7 @@ final class GranularActiveContacts {
 		return true;
 	}
 
-	private record Component(int[] members, double[] masses, GranularContactCompression.Row[] rows) {
+	private record Component(int[] members, double[] masses, GranularContactCompression.Row[] rows, boolean fixedContact) {
 		double[][] vectors(double[][] global) {
 			double[][] result = new double[members.length][];
 			for (int i = 0; i < members.length; i++) result[i] = global[members[i]];
@@ -162,37 +165,138 @@ final class GranularActiveContacts {
 		}
 	}
 
-	private ArrayList<Component> components() {
-		int[] parent = new int[mass.length];
-		for (int i = 0; i < parent.length; i++) parent[i] = i;
-		for (var constraint : constraints) {
-			var row = constraint.row();
-			if (row.second() >= 0) parent[root(parent, row.first())] = root(parent, row.second());
-		}
+	private ArrayList<Component> components(double[][] points) {
 		var groups = new java.util.TreeMap<Integer, ArrayList<Constraint>>();
-		for (var constraint : constraints) groups.computeIfAbsent(root(parent, constraint.row().first()), ignored -> new ArrayList<>()).add(constraint);
+		for (var constraint : constraints)
+			groups.computeIfAbsent(root(contactParent, constraint.row().first()), ignored -> new ArrayList<>()).add(constraint);
+		int[] local = new int[mass.length];
+		for (int i = 0; i < mass.length; i++) local[root(contactParent, i)]++;
+		var memberGroups = new java.util.TreeMap<Integer, ArrayList<Integer>>();
+		for (int i = 0; i < mass.length; i++) {
+			int component = root(contactParent, i);
+			if (local[component] > 1 || groups.containsKey(component))
+				memberGroups.computeIfAbsent(component, ignored -> new ArrayList<>()).add(i);
+		}
 		var result = new ArrayList<Component>();
-		int[] local = new int[mass.length]; Arrays.fill(local, -1);
-		for (var group : groups.values()) {
-			var indices = new ArrayList<Integer>();
-			for (var constraint : group) {
-				var row = constraint.row();
-				if (local[row.first()] < 0) { local[row.first()] = indices.size(); indices.add(row.first()); }
-				if (row.second() >= 0 && local[row.second()] < 0) { local[row.second()] = indices.size(); indices.add(row.second()); }
-			}
+		Arrays.fill(local, -1);
+		for (var entry : memberGroups.entrySet()) {
+			var group = groups.get(entry.getKey());
+			var indices = entry.getValue();
+			if (group == null && indices.size() == 1) continue;
+			if (group == null) group = new ArrayList<>();
 			int[] members = indices.stream().mapToInt(Integer::intValue).toArray();
 			double[] weights = new double[members.length];
 			var rows = new GranularContactCompression.Row[group.size()];
-			for (int i = 0; i < members.length; i++) weights[i] = mass[members[i]];
+			boolean fixedContact = false;
+			for (int i = 0; i < members.length; i++) {
+				weights[i] = mass[members[i]];
+				local[members[i]] = i;
+			}
 			for (int i = 0; i < rows.length; i++) {
 				var constraint = group.get(i); var row = constraint.row();
-				rows[i] = new GranularContactCompression.Row(local[row.first()], row.second() < 0 ? -1 : local[row.second()], row.normal());
+				double[] normal = row.normal();
+				if (row.second() < 0) fixedContact = true;
+				else {
+					double[] line = new double[3];
+					double length = 0;
+					for (int a = 0; a < 3; a++) {
+						line[a] = points[row.second()][a] - points[row.first()][a];
+						length = Math.hypot(length, line[a]);
+					}
+					if (length > 0) {
+						for (int a = 0; a < 3; a++) line[a] /= length;
+						normal = line;
+					}
+				}
+				rows[i] = new GranularContactCompression.Row(local[row.first()], row.second() < 0 ? -1 : local[row.second()], normal);
 			}
-			result.add(new Component(members, weights, rows));
+			result.add(new Component(members, weights, rows, fixedContact));
 			for (int member : members) local[member] = -1;
 		}
 		return result;
 	}
+
+	/** Preserve free-component translation and spin; only the remaining deformation modes dissipate. */
+	private void retainRigidMotion(Component component, double[][] points, double[][] input, double[][] output) {
+		int count = component.members().length;
+		double totalMass = 0;
+		double[] center = new double[3], sourceCenter = new double[3], translation = new double[3];
+		for (int i = 0; i < count; i++) {
+			int global = component.members()[i];
+			double m = component.masses()[i];
+			totalMass += m;
+			for (int a = 0; a < 3; a++) {
+				center[a] += m * points[global][a];
+				sourceCenter[a] += m * initial[global][a];
+				translation[a] += m * input[i][a];
+			}
+		}
+		for (int a = 0; a < 3; a++) {
+			center[a] /= totalMass;
+			sourceCenter[a] /= totalMass;
+			translation[a] /= totalMass;
+		}
+		var inertia = new DMatrixRMaj(3, 3);
+		double[][] relative = new double[count][3], deformation = new double[count][3];
+		double[] sourceAngular = new double[3], currentAngular = new double[3];
+		double energy = 0;
+		for (int i = 0; i < count; i++) {
+			int global = component.members()[i];
+			double m = component.masses()[i], squaredRadius = 0;
+			for (int a = 0; a < 3; a++) {
+				relative[i][a] = points[global][a] - center[a];
+				squaredRadius += relative[i][a] * relative[i][a];
+				double velocity = input[i][a] - translation[a];
+				energy += .5 * m * velocity * velocity;
+				int b = (a + 1) % 3, c = (a + 2) % 3;
+				sourceAngular[a] += m * ((initial[global][b] - sourceCenter[b]) * (input[i][c] - translation[c])
+						- (initial[global][c] - sourceCenter[c]) * (input[i][b] - translation[b]));
+			}
+			for (int a = 0; a < 3; a++) {
+				int b = (a + 1) % 3, c = (a + 2) % 3;
+				currentAngular[a] += m * (relative[i][b] * (output[i][c] - translation[c])
+						- relative[i][c] * (output[i][b] - translation[b]));
+				for (int bAxis = 0; bAxis < 3; bAxis++)
+					inertia.add(a, bAxis, m * ((a == bAxis ? squaredRadius : 0) - relative[i][a] * relative[i][bAxis]));
+			}
+		}
+		// A point pair has no inertia about its own line. The ordinary 3x3
+		// pseudoinverse retains precisely the rotational modes represented by its centers.
+		var inverse = new DMatrixRMaj(3, 3);
+		CommonOps_DDRM.pinv(inertia, inverse);
+		double[] spin = new double[3], oldSpin = new double[3];
+		for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) {
+			spin[a] += inverse.get(a, b) * sourceAngular[b];
+			oldSpin[a] += inverse.get(a, b) * currentAngular[b];
+		}
+		double rotationalEnergy = Math.max(0, .5 * dot(sourceAngular, spin));
+		if (rotationalEnergy > energy) {
+			// Collapsed unresolved geometry can carry only the spin supported by its actual kinetic budget.
+			double scale = Math.sqrt(energy / rotationalEnergy);
+			for (int a = 0; a < 3; a++) spin[a] *= scale;
+			rotationalEnergy = energy;
+		}
+		double[] meanDeformation = new double[3];
+		for (int i = 0; i < count; i++) for (int a = 0; a < 3; a++) {
+			int b = (a + 1) % 3, c = (a + 2) % 3;
+			deformation[i][a] = output[i][a] - translation[a]
+					- (oldSpin[b] * relative[i][c] - oldSpin[c] * relative[i][b]);
+			meanDeformation[a] += component.masses()[i] * deformation[i][a] / totalMass;
+		}
+		double deformationEnergy = 0;
+		for (int i = 0; i < count; i++) for (int a = 0; a < 3; a++) {
+			deformation[i][a] -= meanDeformation[a];
+			deformationEnergy += .5 * component.masses()[i] * deformation[i][a] * deformation[i][a];
+		}
+		double scale = deformationEnergy > 0
+				? Math.min(1, Math.sqrt(Math.max(0, energy - rotationalEnergy) / deformationEnergy)) : 1;
+		for (int i = 0; i < count; i++) for (int a = 0; a < 3; a++) {
+			int b = (a + 1) % 3, c = (a + 2) % 3;
+			output[i][a] = translation[a] + spin[b] * relative[i][c] - spin[c] * relative[i][b]
+					+ scale * deformation[i][a];
+		}
+	}
+
 	private static int root(int[] parent, int i) {
 		while (parent[i] != i) { parent[i] = parent[parent[i]]; i = parent[i]; }
 		return i;
