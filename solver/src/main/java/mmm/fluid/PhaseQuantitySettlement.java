@@ -79,34 +79,51 @@ final class PhaseQuantitySettlement {
     static List<LiquidCellInventory.SourceRoutes> settle(RouteBuffer raw,SignedDyadic[] upper,SignedDyadic[] lower,
             int[] receiverGroup,SignedDyadic[] groupUpper,IntConsumer alternatives){
         int groups=groupUpper==null?0:groupUpper.length;
-        double[] numerical=new double[raw.size],load=new double[upper.length],groupLoad=new double[groups];
+        double[] numerical=new double[raw.size+2*raw.sources],load=new double[upper.length],groupLoad=new double[groups];
+        int[] sourceTerms=new int[raw.sources],loadTerms=new int[upper.length],groupTerms=new int[groups];
         int[] touched=new int[upper.length];int touchedCount=0;
         for(int s=0;s<raw.sources;s++){
             double remaining=raw.volume(s),scale=raw.preferredTotal[s]>remaining?remaining/raw.preferredTotal[s]:1;
             int largest=raw.retained[s];
-            for(int r=raw.head[s];r>=0;r=raw.next[r])if(raw.preferred[r]>raw.preferred[largest])largest=r;
+            int terms=1;
+            for(int r=raw.head[s];r>=0;r=raw.next[r]){terms++;if(raw.preferred[r]>raw.preferred[largest])largest=r;}
+            sourceTerms[s]=terms;
             for(int r=raw.head[s];r>=0;r=raw.next[r])if(r!=largest){
-                double amount=Math.min(remaining,raw.preferred[r]*scale);
+                double preference=raw.preferred[r]*scale;float word=(float)preference;
+                if(word>0&&Float.isFinite(word))preference=word;
+                double amount=Math.min(remaining,preference);
                 numerical[r]=amount;remaining-=amount;
             }
             numerical[largest]=remaining;
         }
         for(int r=0;r<raw.size;r++)if(numerical[r]>0){
-            int slot=raw.target[r];if(load[slot]==0)touched[touchedCount++]=slot;
-            load[slot]+=numerical[r];int group=receiverGroup==null?-1:receiverGroup[slot];
-            if(group>=0)groupLoad[group]+=numerical[r];
+            int slot=raw.target[r];if(loadTerms[slot]==0)touched[touchedCount++]=slot;
+            load[slot]+=numerical[r];loadTerms[slot]=addTerms(loadTerms[slot],sourceTerms[raw.source[r]]+1);
         }
-        if(lower!=null)for(int slot=0;slot<lower.length;slot++)if(lower[slot]!=null&&lower[slot].signum()>0&&load[slot]==0)
-            touched[touchedCount++]=slot;
+        if(lower!=null)for(int slot=0;slot<lower.length;slot++)if(lower[slot]!=null&&lower[slot].signum()>0&&loadTerms[slot]==0){
+            touched[touchedCount++]=slot;loadTerms[slot]=1;
+        }
+        InteriorForest forest=null;
+        if(lower!=null)for(int s=0;s<raw.sources;s++){
+            int slot=slot(raw.key(s));
+            if(lower[slot]!=null&&lower[slot].equals(upper[slot])
+                    &&exceedsAccumulationError(load[slot],lower[slot].toDouble(),loadTerms[slot])){
+                forest=new InteriorForest(raw,lower,upper);
+                touchedCount=forest.project(raw,numerical,load,lower,loadTerms,touched,touchedCount);break;
+            }
+        }
         boolean adjust=false;
         for(int i=0;i<touchedCount;i++){
-            int slot=touched[i];adjust|=load[slot]>upper[slot].toDouble()
-                    ||lower!=null&&lower[slot]!=null&&load[slot]<lower[slot].toDouble();
+            int slot=touched[i];double high=upper[slot].toDouble();
+            adjust|=load[slot]>high&&exceedsAccumulationError(load[slot],high,loadTerms[slot]);
+            if(lower!=null&&lower[slot]!=null){double low=lower[slot].toDouble();adjust|=load[slot]<low&&exceedsAccumulationError(load[slot],low,loadTerms[slot]);}
+            int group=receiverGroup==null?-1:receiverGroup[slot];
+            if(group>=0){groupLoad[group]+=load[slot];groupTerms[group]=addTerms(groupTerms[group],addTerms(loadTerms[slot],1));}
         }
-        for(int g=0;g<groups;g++)adjust|=groupLoad[g]>groupUpper[g].toDouble();
+        for(int g=0;g<groups;g++){double high=groupUpper[g].toDouble();adjust|=groupLoad[g]>high&&exceedsAccumulationError(groupLoad[g],high,groupTerms[g]);}
         CapacityProjection projection=null;
         if(adjust){
-            projection=new CapacityProjection(raw,numerical,load,upper,lower,receiverGroup,groupLoad,groupUpper,touched,touchedCount,alternatives);
+            projection=new CapacityProjection(raw,numerical,load,upper,lower,receiverGroup,groupLoad,groupUpper,loadTerms,groupTerms,touched,touchedCount,alternatives);
             projection.solve();
             numerical=new double[raw.size];
             for(int r=0;r<raw.size;r++)numerical[r]=projection.numericalAmount(r);
@@ -136,15 +153,16 @@ final class PhaseQuantitySettlement {
             exactLoad[slot]=SignedDyadic.ZERO;touched[touchedCount++]=slot;
         }
         adjust=requiresCommitRepair(exactLoad,upper,lower,receiverGroup,exactGroupLoad,groupUpper,touched,touchedCount);
-        if(adjust&&lower!=null){
-            amount=closeInteriorEndpoints(raw,amount,exactLoad,lower,upper);
+        if(adjust&&lower!=null&&hasInteriorDefect(raw,exactLoad,lower,upper)){
+            if(forest==null)forest=new InteriorForest(raw,lower,upper);
+            amount=forest.commit(raw,amount,exactLoad,lower);
             touchedCount=0;
             for(int slot=0;slot<exactLoad.length;slot++)if(exactLoad[slot]!=null)touched[touchedCount++]=slot;
             Arrays.fill(exactGroupLoad,SignedDyadic.ZERO);
             adjust=requiresCommitRepair(exactLoad,upper,lower,receiverGroup,exactGroupLoad,groupUpper,touched,touchedCount);
         }
         if(adjust){
-            if(projection==null)projection=new CapacityProjection(raw,numerical,load,upper,lower,receiverGroup,groupLoad,groupUpper,
+            if(projection==null)projection=new CapacityProjection(raw,numerical,load,upper,lower,receiverGroup,groupLoad,groupUpper,loadTerms,groupTerms,
                     new int[0],0,alternatives);
             projection.prepareCommit(amount,exactLoad,exactGroupLoad,touched,touchedCount);
             projection.solve();
@@ -166,61 +184,94 @@ final class PhaseQuantitySettlement {
         for(int g=0;g<groupLoad.length;g++)adjust|=groupLoad[g].compareTo(groupUpper[g])>0;
         return adjust;
     }
-    /** Submission rounding in filled interiors follows the accepted component graph toward a free surface.
-     * Existing physical routes define the forest; a reverse route is added only when used.
-     * Congestion and independent chamber reserves continue through the same residual solve. */
-    private static SignedDyadic[] closeInteriorEndpoints(RouteBuffer raw,SignedDyadic[] amount,SignedDyadic[] load,
-            SignedDyadic[] lower,SignedDyadic[] upper){
-        boolean needed=false;
+    /** Counts the primitive additions/subtractions whose rounding reaches an endpoint. */
+    private static int addTerms(int a,int b){return (int)Math.min(Integer.MAX_VALUE,(long)a+b);}
+    private static boolean exceedsAccumulationError(double amount,double bound,int terms){
+        return Math.abs(amount-bound)>Math.ulp(Math.max(Math.abs(amount),Math.abs(bound)))*(terms+2.0);
+    }
+    private static boolean hasInteriorDefect(RouteBuffer raw,SignedDyadic[] load,SignedDyadic[] lower,SignedDyadic[] upper){
         for(int s=0;s<raw.sources;s++){
             int slot=slot(raw.key(s));
-            if(lower[slot]!=null&&lower[slot].equals(upper[slot])&&!value(load[slot]).equals(lower[slot])){needed=true;break;}
+            if(lower[slot]!=null&&lower[slot].equals(upper[slot])&&!value(load[slot]).equals(lower[slot]))return true;
         }
-        if(!needed)return amount;
-        int[] incoming=new int[raw.sources],next=new int[raw.size];Arrays.fill(incoming,-1);
-        for(int r=0;r<raw.size;r++){
-            int target=raw.sourceAt[raw.target[r]];
-            if(target>=0&&target!=raw.source[r]){next[r]=incoming[target];incoming[target]=r;}
-        }
-        int[] parent=new int[raw.sources],edge=new int[raw.sources],order=new int[raw.sources];
-        Arrays.fill(parent,-2);int count=0,visited=0;
-        for(int s=0;s<raw.sources;s++){
-            int slot=slot(raw.key(s));
-            if(lower[slot]==null||!lower[slot].equals(upper[slot])){parent[s]=-1;order[count++]=s;}
-        }
-        for(int seed=-1;seed<raw.sources;seed++){
-            if(seed>=0&&parent[seed]==-2){parent[seed]=-1;order[count++]=seed;}
-            while(visited<count){
-                int s=order[visited++];
-                for(int pass=0;pass<2;pass++)for(int r=pass==0?raw.head[s]:incoming[s];r>=0;r=pass==0?raw.next[r]:next[r]){
-                    int child=pass==0?raw.sourceAt[raw.target[r]]:raw.source[r];
-                    if(child<0||parent[child]!=-2)continue;
-                    parent[child]=s;edge[child]=r;order[count++]=child;
+        return false;
+    }
+
+    /** Physical component routes define one forest for numerical divergence and exact endpoint closure. */
+    private static final class InteriorForest {
+        private final int[] parent,edge,order;
+        private int count;
+        InteriorForest(RouteBuffer raw,SignedDyadic[] lower,SignedDyadic[] upper){
+            int[] incoming=new int[raw.sources],next=new int[raw.size];Arrays.fill(incoming,-1);
+            for(int r=0;r<raw.size;r++){
+                int target=raw.sourceAt[raw.target[r]];
+                if(target>=0&&target!=raw.source[r]){next[r]=incoming[target];incoming[target]=r;}
+            }
+            parent=new int[raw.sources];edge=new int[raw.sources];order=new int[raw.sources];
+            Arrays.fill(parent,-2);int visited=0;
+            for(int s=0;s<raw.sources;s++){
+                int slot=slot(raw.key(s));
+                if(lower[slot]==null||!lower[slot].equals(upper[slot])){parent[s]=-1;order[count++]=s;}
+            }
+            for(int seed=-1;seed<raw.sources;seed++){
+                if(seed>=0&&parent[seed]==-2){parent[seed]=-1;order[count++]=seed;}
+                while(visited<count){
+                    int s=order[visited++];
+                    for(int pass=0;pass<2;pass++)for(int r=pass==0?raw.head[s]:incoming[s];r>=0;r=pass==0?raw.next[r]:next[r]){
+                        int child=pass==0?raw.sourceAt[raw.target[r]]:raw.source[r];
+                        if(child<0||parent[child]!=-2)continue;
+                        parent[child]=s;edge[child]=r;order[count++]=child;
+                    }
                 }
             }
         }
-        for(int i=count-1;i>=0;i--){
-            int child=order[i],p=parent[child];if(p<0)continue;
-            int own=slot(raw.key(child)),peer=slot(raw.key(p));
-            var delta=lower[own].subtract(value(load[own]));if(delta.signum()==0)continue;
-            int e=edge[child],face=raw.face[e];
-            raw.alternative(child,face,peer/8,raw.key(p).supportMask());
-            raw.alternative(p,face,own/8,raw.key(child).supportMask());
-            if(amount.length<raw.size){int old=amount.length;amount=Arrays.copyOf(amount,Math.max(raw.size,2*old));Arrays.fill(amount,old,amount.length,SignedDyadic.ZERO);}
-            int toParent=-1,fromParent=-1;
-            for(int r=raw.head[child];r>=0;r=raw.next[r])if(raw.target[r]==peer){toParent=r;break;}
-            for(int r=raw.head[p];r>=0;r=raw.next[r])if(raw.target[r]==own){fromParent=r;break;}
-            boolean increase=delta.signum()>0;var need=increase?delta:delta.negate();
-            int cancel=increase?toParent:fromParent,retained=increase?raw.retained[child]:raw.retained[p];
-            var first=min(need,amount[cancel]);amount[cancel]=amount[cancel].subtract(first);amount[retained]=amount[retained].add(first);
-            int donor=increase?raw.retained[p]:raw.retained[child],route=increase?fromParent:toParent;
-            var second=min(need.subtract(first),amount[donor]);amount[donor]=amount[donor].subtract(second);amount[route]=amount[route].add(second);
-            var moved=first.add(second);if(!increase)moved=moved.negate();
-            load[own]=value(load[own]).add(moved);load[peer]=value(load[peer]).subtract(moved);
+        private int route(RouteBuffer raw,int source,int target){
+            for(int r=raw.head[source];r>=0;r=raw.next[r])if(raw.target[r]==target)return r;
+            throw new IllegalStateException("Interior forest lost its component route");
         }
-        return amount;
+        int project(RouteBuffer raw,double[] amount,double[] load,SignedDyadic[] lower,int[] terms,int[] touched,int touchedCount){
+            for(int i=count-1;i>=0;i--){
+                int child=order[i],p=parent[child];if(p<0)continue;
+                int own=slot(raw.key(child)),peer=slot(raw.key(p));double target=lower[own].toDouble();
+                if(!exceedsAccumulationError(load[own],target,terms[own]))continue;
+                double delta=target-load[own];int face=raw.face[edge[child]];
+                raw.alternative(child,face,peer/8,raw.key(p).supportMask());
+                raw.alternative(p,face,own/8,raw.key(child).supportMask());
+                int toParent=route(raw,child,peer),fromParent=route(raw,p,own);
+                boolean increase=delta>0;double need=Math.abs(delta);
+                int cancel=increase?toParent:fromParent,retained=increase?raw.retained[child]:raw.retained[p];
+                double first=Math.min(need,amount[cancel]);amount[cancel]-=first;amount[retained]+=first;
+                int donor=increase?raw.retained[p]:raw.retained[child],out=increase?fromParent:toParent;
+                double second=Math.min(need-first,amount[donor]);amount[donor]-=second;amount[out]+=second;
+                double moved=first+second;if(!increase)moved=-moved;
+                load[own]+=moved;load[peer]-=moved;
+                if(terms[peer]==0)touched[touchedCount++]=peer;
+                // Delta, donor updates and endpoint updates propagate eight rounded operations.
+                terms[peer]=addTerms(terms[peer],addTerms(terms[own],8));terms[own]=addTerms(terms[own],8);
+            }
+            return touchedCount;
+        }
+        SignedDyadic[] commit(RouteBuffer raw,SignedDyadic[] amount,SignedDyadic[] load,SignedDyadic[] lower){
+            for(int i=count-1;i>=0;i--){
+                int child=order[i],p=parent[child];if(p<0)continue;
+                int own=slot(raw.key(child)),peer=slot(raw.key(p));
+                var delta=lower[own].subtract(value(load[own]));if(delta.signum()==0)continue;
+                int face=raw.face[edge[child]];
+                raw.alternative(child,face,peer/8,raw.key(p).supportMask());
+                raw.alternative(p,face,own/8,raw.key(child).supportMask());
+                if(amount.length<raw.size){int old=amount.length;amount=Arrays.copyOf(amount,Math.max(raw.size,2*old));Arrays.fill(amount,old,amount.length,SignedDyadic.ZERO);}
+                int toParent=route(raw,child,peer),fromParent=route(raw,p,own);
+                boolean increase=delta.signum()>0;var need=increase?delta:delta.negate();
+                int cancel=increase?toParent:fromParent,retained=increase?raw.retained[child]:raw.retained[p];
+                var first=min(need,amount[cancel]);amount[cancel]=amount[cancel].subtract(first);amount[retained]=amount[retained].add(first);
+                int donor=increase?raw.retained[p]:raw.retained[child],out=increase?fromParent:toParent;
+                var second=min(need.subtract(first),amount[donor]);amount[donor]=amount[donor].subtract(second);amount[out]=amount[out].add(second);
+                var moved=first.add(second);if(!increase)moved=moved.negate();
+                load[own]=value(load[own]).add(moved);load[peer]=value(load[peer]).subtract(moved);
+            }
+            return amount;
+        }
     }
-
     /** Both the component face totals and each original material volume close exactly. */
     private static List<LiquidCellInventory.SourceRoutes> partitionMaterials(RouteBuffer raw,SignedDyadic[] amounts){
         var result=new ArrayList<LiquidCellInventory.SourceRoutes>(raw.stocks.size());
@@ -360,7 +411,7 @@ final class PhaseQuantitySettlement {
 
         CapacityProjection(RouteBuffer raw,double[] amount,double[] load,SignedDyadic[] upper,SignedDyadic[] lower,
                 int[] receiverGroup,double[] groupLoad,SignedDyadic[] groupHigh,
-                int[] touched,int touchedCount,IntConsumer alternatives){
+                int[] loadTerms,int[] groupTerms,int[] touched,int touchedCount,IntConsumer alternatives){
             this.raw=raw;this.upper=upper;this.lower=lower;this.groupHigh=groupHigh;
             this.receiverGroup=receiverGroup;this.alternatives=alternatives;initialAmount=amount;this.load=load;
             expanded=new boolean[raw.sources];receiverVertex=new int[upper.length];
@@ -376,22 +427,27 @@ final class PhaseQuantitySettlement {
             for(int r=0;r<amount.length;r++)if(amount[r]>0){
                 int slot=raw.target[r];nextIncoming[r]=firstIncoming[slot];firstIncoming[slot]=r;
             }
-            double[] receiverExcess=new double[groups];double poolNeed=0;
+            double[] receiverExcess=new double[groups];double poolNeed=0,poolScale=0;int poolTerms=1;
             for(int i=0;i<touchedCount;i++){
-                int slot=touched[i];listReceiver(slot);double excess=load[slot]-base(slot);
+                int slot=touched[i];listReceiver(slot);double base=base(slot),excess=load[slot]-base;
+                if(!exceedsAccumulationError(load[slot],base,loadTerms[slot]))excess=0;
+                poolScale+=Math.abs(load[slot]);poolTerms=addTerms(poolTerms,addTerms(loadTerms[slot],1));
                 if(excess>0)pair(0,receiver(slot),excess,0,AUXILIARY,0);
                 else if(excess<0)pair(receiver(slot),1,-excess,0,AUXILIARY,0);
                 int group=receiverGroup==null?-1:receiverGroup[slot];
                 if(group<0)poolNeed+=excess;else receiverExcess[group]+=excess;
             }
             for(int g=0;g<groups;g++){
-                double high=groupHigh[g].toDouble(),excess=Math.max(0,groupLoad[g]-high),base=Math.min(high,groupLoad[g]);
+                double high=groupHigh[g].toDouble(),excess=groupLoad[g]>high&&exceedsAccumulationError(groupLoad[g],high,groupTerms[g])?groupLoad[g]-high:0;
+                double base=Math.min(high,groupLoad[g]);
                 pair(firstGroup+g,pool,high-base,base,GROUP,g);
                 double balance=excess-receiverExcess[g];
+                if(Math.abs(balance)<=Math.ulp(Math.max(Math.abs(groupLoad[g]),Math.abs(high)))*(groupTerms[g]+2.0))balance=0;
                 if(balance>0)pair(0,firstGroup+g,balance,0,AUXILIARY,0);
                 else if(balance<0)pair(firstGroup+g,1,-balance,0,AUXILIARY,0);
                 poolNeed+=excess;
             }
+            if(Math.abs(poolNeed)<=Math.ulp(poolScale)*(poolTerms+2.0))poolNeed=0;
             if(poolNeed>0)pair(pool,1,poolNeed,0,AUXILIARY,0);
             else if(poolNeed<0)pair(0,pool,-poolNeed,0,AUXILIARY,0);
         }

@@ -71,11 +71,12 @@ final class PressureFaceGraph {
 		Arrays.fill(pressureSupports, 0);
 		// Gas geometry already owns the exact pore-minus-stock endpoint. Pressure
 		// classification reads that same preparation instead of settling it again.
+		// Sub-resolution dry capacity shares liquid continuum pressure. Its gas
+		// inventory, thermodynamic volume and energy remain in the retained frame.
 		for (var component : domain.gasState.frame.capacity().components()) {
 			int cell = component.cell(), support = component.supportMask();
 			if (component.poreVolumeNormalized().signum() <= 0
-					|| component.availableVolumeNormalized().toDouble() > mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION
-					|| hasGasNode(cell, support)) continue;
+					|| component.availableVolumeNormalized().toDouble() > mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION) continue;
 			boolean hasMass = false;
 			if (support == (~domain.geometry.cutCells.mask(cell) & 255)) {
 				hasMass = domain.liquidGrid.cellStockMass[cell] > 0;
@@ -92,16 +93,6 @@ final class PressureFaceGraph {
 		classifiedCarrierRevision=domain.liquidGrid.inventoryRevision;classifiedGasFrame=domain.gasState.frame;
 		classifiedGasNetwork=network;classifiedGasRevision=network.revision();
 	}
-	private boolean hasGasNode(int cell, int support) {
-		var frame = domain.gasState.frame;
-		if (frame == null) return false;
-		for (int bits = support; bits != 0; bits &= bits - 1) {
-			int node = frame.nodeOfPiece(8 * cell + Integer.numberOfTrailingZeros(bits));
-			if (node > 0) return true;
-		}
-		return false;
-	}
-
 	void rebuild(float dt) {
 		classify();
 		// Incidence storage follows occupied supports, rather than every dry face

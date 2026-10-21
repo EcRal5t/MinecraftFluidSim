@@ -140,6 +140,11 @@ final class GranularPressureCoupling {
         }
     }
 
+    /** Includes gas pressure rows coupled through an actual solid volume response. */
+    void markGasPressureContacts(boolean[] coupled) {
+        for(int i=0;i<entries;i++)if(row[i]>=domain.cellCount&&coefficient[i]!=0)
+            coupled[row[i]-domain.cellCount]=true;
+    }
     /** Assemble rho B_s (h^3 M_s^-1) B_s^T once into the common pressure matrix. */
     void assembleMatrix(PressureSparseMatrix matrix, double factor) {
         for (int c = 0; c < contacts; c++) {

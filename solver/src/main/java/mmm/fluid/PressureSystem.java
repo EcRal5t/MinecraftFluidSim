@@ -71,13 +71,14 @@ final class PressureSystem {
 			velocity[local]+=dt*(faces.inverseMass[f]*faces.affine[f]+velocityWork[f]);
 		}
 		if(domain.granularState!=null&&domain.granularState.parcels.count()>0){drag.prepare(dt);drag.project();}
+		retainCoupledGasRows();
 		assembleMatrix();solver.reset();
-		// Match the RMS predicted volume defect to the geometry's cell resolution.
-		// Exact transport settles each real capacity; adding cells does not demand
-		// a more accurate pressure prediction for every existing cell.
+		// Resolve pressure to the same cell-volume scale as the phase geometry.
+		// The RHS residual becomes normalized volume through dt²/rho; the RMS
+		// factor keeps the resulting maximum row defect within that scale.
 		double target=Math.max(domain.config.pressureTolerance(),
 				FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION*domain.config.density()
-				/(dt*(double)dt));
+				/(dt*(double)dt*Math.sqrt(Math.max(1,p.fluidUnknownCount+p.gasUnknownCount))));
 		// One semi-implicit pressure prediction. Bounded inventory transport owns
 		// the actual pore endpoint; final EOS and compression work use that volume.
 		var result = solver.solve(target,pressureDatum,referencePressure);
@@ -116,6 +117,18 @@ final class PressureSystem {
 			if(exchange!=0)domain.cellMacStage.addMechanicalHeatAtFace(a,local,exchange);
 		}
 		granular.project(dt,pressure);forceStepPrepared=false;
+	}
+	/** Unresolved dry capacity retains its inventory without an independent mechanical mode. */
+	private void retainCoupledGasRows() {
+		var p=domain.projection;Arrays.fill(p.gasPressureUnknown,false);
+		for(int face=0;face<faces.faceCount;face++)if(faces.inverseMass[face]>0)
+			for(int i=faces.start[face];i<faces.start[face+1];i++)
+				if(faces.rowAt(i)>=domain.cellCount&&faces.coefficientAt(i)!=0)
+					p.gasPressureUnknown[faces.rowAt(i)-domain.cellCount]=true;
+		granular.markGasPressureContacts(p.gasPressureUnknown);
+		p.gasUnknownCount=0;
+		for(int node=1;node<=p.gasNodeCount;node++)if(p.gasPressureUnknown[node])
+			p.gasUnknownNodes[p.gasUnknownCount++]=node;
 	}
 	private void assembleMatrix() {
 		var p = domain.projection;
