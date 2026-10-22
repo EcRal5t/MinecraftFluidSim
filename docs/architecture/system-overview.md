@@ -495,6 +495,8 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 <a id="client"></a>
 ## 查询和展示
 
+展示输入、当前绘制行为及 Iris 接口依据见[流体展示参考](fluid-presentation.md)。D01–D03 的待实施范围与完成条件由实施计划维护。
+
 服务端按已提交状态生成有界快照，客户端按区域身份、网络代次和 sequence 接收并插值。移除消息使旧包失效。显示温度、压力、颜色与网格采用各自量化，库存、状态方程和物理计算读取原始数据。
 
 客户端显色由 `FluidDisplaySettings` 保存当前玩家的组分、pH 或温度模式及固定温度色带范围，控制器界面的显色入口打开 `FluidDisplayScreen`。
@@ -512,6 +514,8 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 
 - **液面、材料界面与颗粒渲染**
   - 主要文件：
+    - [ClientFluidVolumeRenderer](../../fabric/src/client/java/mmm/client/ClientFluidVolumeRenderer.java)：协调快照、几何与绘制
+    - [FluidRenderBackend](../../fabric/src/client/java/mmm/client/FluidRenderBackend.java)：当前调试表面管线、GPU 缓冲与渲染 pass 提交
     - [FluidSurfaceGeometry](../../fabric/src/client/java/mmm/client/FluidSurfaceGeometry.java)
     - [MaterialSurfaceGeometry](../../fabric/src/client/java/mmm/client/MaterialSurfaceGeometry.java)：复用表面网格并准备已着色三角形
     - [FluidColorMapping](../../fabric/src/client/java/mmm/client/FluidColorMapping.java)：组分、逐相 pH、凝聚相温度与无数据颜色

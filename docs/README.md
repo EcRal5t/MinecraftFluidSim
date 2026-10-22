@@ -19,6 +19,7 @@
 | 材料定义、质量、黏度与混合物换算 | [材料参考](architecture/material-state.md) |
 | 气腔几何、库存分配、状态方程与有限孔流 | [气体参考](architecture/gas-state.md) |
 | 物种、反应与 pH 展示 | [化学参考](architecture/chemistry-state.md) |
+| 展示快照、表面绘制、材质与 Iris 接口依据 | [流体展示参考](architecture/fluid-presentation.md) |
 | 颗粒接触、整数占容、床层与固液转移 | [颗粒参考](architecture/granular-state.md) |
 | 状态函数、热接触、相变及内能分配 | [热学参考](architecture/thermal-state.md) |
 | 启动、输入刷新、调度、授权与区域操作 | [运行时参考](architecture/runtime-and-lifecycle.md) |
