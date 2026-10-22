@@ -137,7 +137,25 @@ public final class GasTransferValidation {
 		AirNetwork first = star(false), reverse = star(true);
 		first.stepEdges(.05); reverse.stepEdges(.05);
 		for (int id : first.nodeIds()) require(first.inventory(id).equals(reverse.inventory(id)), "Port order changed simultaneous donor allocation");
-		require(first.inventory(2).equals(first.inventory(3)) && first.standardVolumeNanos(1) > 0
+		// Equal real-valued ports can differ by one encoded component quantum.
+		for (var source : first.inventory(1).components()) {
+			var left = first.inventory(2).component(source.componentId());
+			var right = first.inventory(3).component(source.componentId());
+			double residualQuantum = 1 + Math.ceil((double) source.massUnits() / source.standardVolumeNanos());
+			for (var definition : first.registry().component(source.componentId()).defaultSpeciesConcentrations())
+				residualQuantum += 2 * definition.massUnitsPerQuantum();
+			require(Math.abs(left.standardVolumeNanos() - right.standardVolumeNanos()) <= 1
+					&& Math.abs(left.massUnits() - right.massUnits()) <= 1 + Math.ceil((double) source.massUnits() / source.standardVolumeNanos())
+					&& Math.abs(left.massResidualUnits() - right.massResidualUnits()) <= residualQuantum,
+					"Symmetric ports differ beyond their component-column encoding: source=" + source + " left=" + left + " right=" + right);
+			for (var species : source.species()) {
+				long a = left.species().stream().filter(value -> value.speciesId().equals(species.speciesId())).mapToLong(GasComponentAmount.SpeciesAmount::amountQuanta).sum();
+				long b = right.species().stream().filter(value -> value.speciesId().equals(species.speciesId())).mapToLong(GasComponentAmount.SpeciesAmount::amountQuanta).sum();
+				require(Math.abs(a - b) <= 1 + Math.ceil((double) species.amountQuanta() / source.standardVolumeNanos()), "Symmetric ports changed species proportions beyond encoding");
+			}
+		}
+		require(Math.abs(first.standardVolumeNanos(2) - first.standardVolumeNanos(3)) <= first.registry().ambient().size()
+				&& first.standardVolumeNanos(1) > 0
 				&& first.auditClosed() && reverse.auditClosed(), "Shared donor lost symmetry, positivity or inventory");
 	}
 	private static AirNetwork star(boolean reverse) {

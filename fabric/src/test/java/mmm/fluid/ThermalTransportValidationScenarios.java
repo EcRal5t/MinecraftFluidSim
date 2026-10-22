@@ -1023,7 +1023,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 					BuiltinFluidMaterials.WATER.id(),300,0,1,List.of(new ThermalMaterialDefinition.CaloricSegment(1,1000,1000))));
 			for(int i=0;i<count;i++){
 				String id="test:split_gas_"+i;
-				gasMaterials.add(new mmm.fluid.air.GasComponentDefinition(id,1,1,List.of(),List.of()));
+				gasMaterials.add(new mmm.fluid.air.GasComponentDefinition(id,1,List.of(),List.of()));
 				ambient.add(new mmm.fluid.air.GasRegistry.AmbientFraction(id,mmm.chemistry.ExactRational.parse("1/"+count)));
 				definitions.add(new ThermalMaterialDefinition("test:split/gas_"+i,ThermalMaterialDefinition.CarrierKind.GAS,id,
 						300,0,1,List.of(new ThermalMaterialDefinition.CaloricSegment(1,1000,1000))));

@@ -62,13 +62,6 @@ public final class AirNetwork {
 	}
 	/** Reference (ambient) absolute pressure in Pa; gauge zero matches the solver convention. */
 	public static final double REFERENCE_PRESSURE = 101_325.0;
-	/** Standard density of the built-in dry-air mole recipe, also used by empty liquid-grid slots. */
-	public static final double AIR_DENSITY = BuiltinGasDefinitions.dryAirRecipe().stream().mapToDouble(part ->
-			part.fraction().toDouble() * BuiltinGasDefinitions.standardDensity(switch (part.componentId()) {
-				case BuiltinGasDefinitions.NITROGEN -> BuiltinGasDefinitions.NITROGEN_MOLAR_MASS;
-				case BuiltinGasDefinitions.OXYGEN -> BuiltinGasDefinitions.OXYGEN_MOLAR_MASS;
-				default -> BuiltinGasDefinitions.CO2_MOLAR_MASS;
-			})).sum();
 	/** The ambient reservoir: gauge pressure zero, unbounded inventory, never stored as a node. */
 	public static final int AMBIENT_NODE = 0;
 
@@ -388,6 +381,9 @@ public final class AirNetwork {
 		if (!(Double.isFinite(dt) && dt > 0)) throw new IllegalArgumentException("Gas flow dt must be positive and finite");
 		Objects.requireNonNull(thermodynamics, "thermodynamics"); Objects.requireNonNull(thermalPlanner, "thermalPlanner");
 		if (edges.isEmpty()) return;
+		List<AirEdge> edges = this.edges.stream().sorted(java.util.Comparator
+				.comparingInt((AirEdge edge) -> Math.min(edge.firstNode(), edge.secondNode()))
+				.thenComparingInt(edge -> Math.max(edge.firstNode(), edge.secondNode()))).toList();
 		List<Integer> ids = nodeIds(); int count = ids.size();
 		var index = new java.util.HashMap<Integer, Integer>(); index.put(0, 0);
 		double[] pressure = new double[count + 1], storage = new double[count + 1], density = new double[count + 1], ratio = new double[count + 1];
@@ -404,11 +400,8 @@ public final class AirNetwork {
 		if (thermodynamics.portThermodynamics(edges.getFirst().firstNode(), edges.getFirst().secondNode()) != null) {
 			// A canonical symmetric composition removes insertion-order dependence while each
 			// local solve advances only its two cavities. Inventory is instantiated after the root.
-			var order = new ArrayList<Integer>(); for (int e = 0; e < edges.size(); e++) order.add(e);
-			order.sort(java.util.Comparator.comparingInt((Integer e) -> Math.min(edges.get(e).firstNode(), edges.get(e).secondNode()))
-					.thenComparingInt(e -> Math.max(edges.get(e).firstNode(), edges.get(e).secondNode())));
-			for (int pass = 0; pass < 2; pass++) for (int j = 0; j < order.size(); j++) {
-				int e = order.get(pass == 0 ? j : order.size() - 1 - j); AirEdge edge = edges.get(e);
+			for (int pass = 0; pass < 2; pass++) for (int j = 0; j < edges.size(); j++) {
+				int e = pass == 0 ? j : edges.size() - 1 - j; AirEdge edge = edges.get(e);
 				var port = thermodynamics.portThermodynamics(edge.firstNode(), edge.secondNode());
 				double amount = GasOrificeFlow.solveThermalPort(dt * .5, edge, port);
 				if (amount == 0) continue;

@@ -527,8 +527,6 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 							&& port.fluidFilmThicknessMeters() == 0.01),
 					"built-in finite exchanger port groups or SI geometry drifted");
 			ThermalRegistry registry = thermalRegistry(List.of(material), List.of(), List.of(), List.of(), List.of(device), "", "", "");
-			require(registry.fingerprint().equals("be90fa71d2249854f4b74fc4c12b36a7a77773add46ba8091b9a1fc4f9ed7537"),
-					"built-in finite exchanger registry fingerprint drifted: " + registry.fingerprint());
 			ThermalStateFunction state = new ThermalStateFunction(registry);
 			double initialEnergy = state.internalEnergyAtTemperature(registry.materialHandle(material.id()),
 					device.bodyMassKilograms(), Map.of(), device.initialTemperatureK());

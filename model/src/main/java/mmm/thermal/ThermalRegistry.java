@@ -232,12 +232,12 @@ public final class ThermalRegistry {
 	}
 
 	private Map<String, Map<String, ThermalSpeciesOffset>> validateSpeciesOffsets() {
-		if (!speciesOffsets.isEmpty() && chemicalRegistryFingerprint.isEmpty()) {
-			throw new IllegalArgumentException("Thermal species offsets require a chemical registry fingerprint");
-		}
 		LinkedHashMap<String, Map<String, ThermalSpeciesOffset>> result = new LinkedHashMap<>();
 		for (ThermalSpeciesOffset offset : speciesOffsets) {
-			materialHandle(offset.hostThermalMaterialId());
+			var material = material(materialHandle(offset.hostThermalMaterialId()));
+			if (chemicalRegistryFingerprint.isEmpty() && material.carrierKind() != ThermalMaterialDefinition.CarrierKind.GAS) {
+				throw new IllegalArgumentException("Condensed species offsets require a chemical registry fingerprint");
+			}
 			Map<String, ThermalSpeciesOffset> host = result.computeIfAbsent(
 					offset.hostThermalMaterialId(), ignored -> new LinkedHashMap<>());
 			if (host.putIfAbsent(offset.speciesId(), offset) != null) {

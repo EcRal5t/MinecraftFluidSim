@@ -95,11 +95,12 @@ public final class AirNetworkValidation {
 	private static void validateEquationOfState() {
 		AirNetwork network = new AirNetwork();
 		int node = network.addNode(8.0, 8.0);
+		double initialDensity = network.density(node);
 		check(network.gaugePressure(node) == 0.0 && network.density(node) == network.registry().createAmbient(8_000_000_000L).totalMass() / 8,
 				"ambient-balanced cavity must start at the registry standard state");
 		network.updateAvailableVolume(node, 4.0);
 		checkRelative(network.gaugePressure(node), AirNetwork.REFERENCE_PRESSURE, "halved volume must double absolute pressure");
-		checkRelative(network.density(node), 2.0 * AirNetwork.AIR_DENSITY,
+		checkRelative(network.density(node), 2.0 * initialDensity,
 				"halved volume must double density from the same inventory");
 		network.updateAvailableVolume(node, 2.0);
 		checkRelative(network.gaugePressure(node), 3.0 * AirNetwork.REFERENCE_PRESSURE, "quarter volume must quadruple absolute pressure");

@@ -442,8 +442,8 @@ public final class AirCavityScannerValidation {
 		var config=new FluidSolverConfig((float)h,(float)rho,0,dt,128,1e-6F,.002F);
 		var d=new FluidDomain(length,3,3,config);d.sealDomainBoundary();
 		var gas=new mmm.fluid.air.GasRegistry(List.of(
-				new mmm.fluid.air.GasComponentDefinition("test:left",1.2,0,List.of(),List.of()),
-				new mmm.fluid.air.GasComponentDefinition("test:right",1.2,0,List.of(),List.of())),
+				new mmm.fluid.air.GasComponentDefinition("test:left",1.2,List.of(),List.of()),
+				new mmm.fluid.air.GasComponentDefinition("test:right",1.2,List.of(),List.of())),
 				List.of(new mmm.fluid.air.GasRegistry.AmbientFraction("test:left",ExactRational.ONE)));
 		d.bindGasRegistry(gas);
 		var liquids=new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:water",1000,"mmm:water",0,Math.PI/2)));

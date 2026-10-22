@@ -34,9 +34,18 @@ public final class PressureCapacityValidation {
 		for(int node=1;node<=2;node++)d.setGasNodeStandardVolume(node,0);
 		var liquids=new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER));
 		d.materialRegistry=liquids;
-		var thermal=new mmm.thermal.ThermalRegistry(java.util.List.of(
-				new mmm.thermal.ThermalMaterialDefinition("test:capacity_water",mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID,
-						BuiltinFluidMaterials.WATER.id(),300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,4184)))));
+		var definitions=new java.util.ArrayList<mmm.thermal.ThermalMaterialDefinition>();
+		definitions.add(new mmm.thermal.ThermalMaterialDefinition("test:capacity_water",mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID,
+				BuiltinFluidMaterials.WATER.id(),300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,4184))));
+		var offsets=new java.util.ArrayList<mmm.thermal.ThermalSpeciesOffset>();
+		for(var gas:mmm.fluid.air.BuiltinGasDefinitions.createRegistry().components()){
+			String host="test:capacity_"+gas.id().substring(4);
+			definitions.add(new mmm.thermal.ThermalMaterialDefinition(host,mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
+					gas.id(),300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,718))));
+			for(String species:gas.allowedSpecies())offsets.add(new mmm.thermal.ThermalSpeciesOffset(
+					host+"/"+species.substring(4),species,host,mmm.chemistry.ExactRational.ZERO));
+		}
+		var thermal=new mmm.thermal.ThermalRegistry(definitions,offsets,java.util.List.of(),"","");
 		d.bindThermal(thermal,liquids,300);d.domainFlowFields.preparePhysicalState();
 		d.mac.velocityX[d.domainFlowFields.xFaceIndex(1,0,0)]=-100;d.cellMacStage.publishMomentum();
 		var graph=d.pressureSystem.faces;d.pressureSystem.prepareOperator();

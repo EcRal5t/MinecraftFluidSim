@@ -261,7 +261,7 @@ public final class GranularBedWakeValidation {
 						"Carrier properties retained an obsolete thermal state");
 				require(Math.abs(domain.granularMechanicalStage.sample(.75F, .75F, .75F).dynamicViscosity() - expected)
 						< expected * 1e-12, "Drag and bed shear must use the refreshed viscosity");
-				require(Math.abs(domain.domainStep.granularCarrierProperties(cell).viscosity() - expected) < expected * 1e-12,
+				require(Math.abs(domain.domainPhaseInventory.derivedCarrierState().viscosityPascalSeconds(cell) - expected) < expected * 1e-12,
 						"Darcy damping must use the same refreshed viscosity");
 			}
 			require(domain.exactInternalEnergy().equals(before), "Property observation changed authoritative energy");

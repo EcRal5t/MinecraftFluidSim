@@ -154,7 +154,7 @@ public final class GasEnergyStore {
 				ratio = new double[pressure.length], storage = new double[pressure.length];
 		density[0] = network.density(0) * GasRegistry.STANDARD_TEMPERATURE_K / insertionTemperatureK;
 		ratio[0] = GasRegistry.STANDARD_TEMPERATURE_K / insertionTemperatureK;
-		var ambient = network.registry().createAmbient(1_000_000_000L);
+		var ambient = network.registry().standardAmbientInventory();
 		double ambientEnergy = gasModel.internalEnergyAtTemperature(ambient, insertionTemperatureK);
 		double ambientGamma = gasModel.hydrodynamicState(ambient, 1, ambientEnergy).isentropicExponent();
 		for (int id : network.nodeIds()) {

@@ -35,6 +35,7 @@ public final class GasRegistry {
 	private final Map<String, GasComponentDefinition> byId;
 	private final byte[] canonicalBytes;
 	private final String fingerprint;
+	private volatile GasInventory standardAmbient;
 
 	public GasRegistry(List<GasComponentDefinition> components, List<AmbientFraction> ambient) {
 		if (components == null || components.isEmpty() || components.size() > GasLimits.MAX_COMPONENTS) {
@@ -112,6 +113,12 @@ public final class GasRegistry {
 
 	/** Explicit sources and presets share the same mole-fraction allocator. */
 	public GasInventory createAmbient(long standardVolumeNanos) { return createMixture(standardVolumeNanos, ambient); }
+	/** Immutable one-standard-cubic-metre sample shared by density and thermal property queries. */
+	public GasInventory standardAmbientInventory() {
+		GasInventory prepared = standardAmbient;
+		if (prepared == null) standardAmbient = prepared = createAmbient(1_000_000_000L);
+		return prepared;
+	}
 	public GasInventory createMixture(long standardVolumeNanos, List<AmbientFraction> recipe) {
 		return createMixtureInterval(0, standardVolumeNanos, recipe);
 	}
