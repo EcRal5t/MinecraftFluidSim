@@ -61,7 +61,7 @@ public final class FluidRegionManager {
 
 	private static RegionCatalog.Descriptor descriptor(FluidRegion region) {
 		Objects.requireNonNull(region, "region");
-		float cellSize = region.solverConfig().cellSize();
+		double cellSize = region.solverConfig().cellSize();
 		return new RegionCatalog.Descriptor(region.id(), region.dimension().identifier().toString(),
 				region.origin().getX(), region.origin().getY(), region.origin().getZ(),
 				region.origin().getX() + region.sizeX() * cellSize,

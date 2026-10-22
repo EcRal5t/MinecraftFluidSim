@@ -235,6 +235,21 @@ public final class GasPhaseInterfaceValidation {
 					&&condensedEnergy(domain).equals(energy)&&domain.thermalAudit().expectedInventory().equals(domain.exactInternalEnergy()),"Melt lost inventory or internal energy");
 			if(chemical)check(domain.liquidCells.physicalStockAt(0).mixture().equals(species),"Freeze/melt changed chemical inventory or residual");
 			check(domain.stepInertPhaseChangeOnly(16).operations()==0,"Equilibrated cell repeated a phase transfer");
+			var isolated=new FluidDomain(4,2,2,new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,1e-4F));
+			isolated.bindMaterialRegistry(fluids);for(int cell=0;cell<isolated.cellCount;cell++)if(cell!=0&&cell!=2)isolated.setSolid(cell%4,cell/4%2,cell/8,true);
+			isolated.setVolume(0,0,0,1);isolated.setVolume(2,0,0,.5F);
+			if(chemical)isolated.bindChemistry(mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY);
+			isolated.bindThermal(registry,fluids,275);
+			var blockedBefore=isolated.liquidCells.stocksInCell(0);var isolatedEnergy=condensedEnergy(isolated);
+			long isolatedMass=isolated.totalMassUnits();
+			var independent=isolated.stepInertPhaseChangeOnly(16);
+			check(independent.operations()>0&&independent.frozenCells()==1&&isolated.liquidCells.stocksInCell(0).equals(blockedBefore)
+					&&isolated.thermalState.coherentPhases().snapshot().stream().allMatch(group->group.cell()==2),
+					"Blocked isolated freezing prevented an independent executable phase transfer");
+			check(isolated.totalMassUnits()+isolated.thermalState.coherentPhases().totalMassUnits()==isolatedMass
+					&&condensedEnergy(isolated).equals(isolatedEnergy)&&isolated.exactInternalEnergy().equals(isolated.thermalAudit().expectedInventory()),
+					"Independent freezing changed total mass or latent energy");
+
 		}
 	}
 

@@ -119,7 +119,10 @@ public final class RegionCheckpointAssembler {
 	private static long[] bits(double[] values) {long[] bits=new long[values.length];for(int i=0;i<bits.length;i++)bits[i]=Double.doubleToRawLongBits(values[i]);return bits;}
 	private static SignedDyadic energyBits(long[] bits) {var sum=SignedDyadic.ZERO;for(long value:bits)sum=sum.add(SignedDyadic.of(Double.longBitsToDouble(value)));return sum;}
 	static RegionSectionState.SectionKey sectionOfCell(RegionGeometry geometry,int cell) {return sectionKey(geometry,(cell%geometry.sizeX()+.5F)*geometry.solverConfig().cellSize(),(cell/geometry.sizeX()%geometry.sizeY()+.5F)*geometry.solverConfig().cellSize(),(cell/(geometry.sizeX()*geometry.sizeY())+.5F)*geometry.solverConfig().cellSize());}
-	private static RegionSectionState.SectionKey sectionKey(RegionGeometry g,float x,float y,float z) {return new RegionSectionState.SectionKey(Math.floorDiv((int)Math.floor(g.origin().x()+x),16),Math.floorDiv((int)Math.floor(g.origin().y()+y),16),Math.floorDiv((int)Math.floor(g.origin().z()+z),16));}
+	static RegionSectionState.SectionKey sectionKey(RegionGeometry g,float x,float y,float z) {
+		var block=g.worldBlockPosition(x,y,z);
+		return new RegionSectionState.SectionKey(Math.floorDiv(block.x(),16),Math.floorDiv(block.y(),16),Math.floorDiv(block.z(),16));
+	}
 
 	private static RegionManifest withChecksum(RegionManifest manifest) {
 		long checksum = RegionStateIntegrity.manifestChecksum(manifest);

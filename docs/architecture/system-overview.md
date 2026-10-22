@@ -378,7 +378,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
     - [BuiltinGasDefinitions](../../model/src/main/java/mmm/fluid/air/BuiltinGasDefinitions.java)、[GasRegistry](../../model/src/main/java/mmm/fluid/air/GasRegistry.java)：组分物性、环境配方及指定温压的库存生成
     - [AirNetwork](../../model/src/main/java/mmm/fluid/air/AirNetwork.java)
     - [GasOrificeFlow](../../model/src/main/java/mmm/fluid/air/GasOrificeFlow.java)
-    - [GasEnergyStore](../../model/src/main/java/mmm/thermal/GasEnergyStore.java)
+    - [GasEnergyStore](../../model/src/main/java/mmm/thermal/GasEnergyStore.java)：`planFlow` 按实际供体余量计算焓流，与 `AirNetwork` 共同准备并提交参与端口的库存和内能。
     - [GasThermalModel](../../model/src/main/java/mmm/thermal/GasThermalModel.java)
   - 验证选择器 / 参考：`air-cavity,air-network,gas-liquid,thermal`；[气体参考](gas-state.md)
 
@@ -429,7 +429,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 - **相变批次、接触与未来气腔**
   - 主要文件：
-    - [CondensedPhaseChangeStage](../../solver/src/main/java/mmm/fluid/CondensedPhaseChangeStage.java)
+    - [CondensedPhaseChangeStage](../../solver/src/main/java/mmm/fluid/CondensedPhaseChangeStage.java)：冻结膨胀沿 `PhaseQuantitySettlement` 的共同容量网络排液；容量不足时只缩减受阻位置的冻结提议，保留独立区域的可执行批次。
     - [GasLiquidPhaseChangeStage](../../solver/src/main/java/mmm/fluid/GasLiquidPhaseChangeStage.java)：`propose`、`closeChamber` 联合组分库存、气温与真实容量的分压响应；`admitCondensation` 共同分配批次和正容量，`step` 一次提交两相库存与内能。
     - [GasLiquidPhaseModel](../../model/src/main/java/mmm/thermal/GasLiquidPhaseModel.java)：饱和压力、解析斜率及潜热
     - [GasPhaseInterfaceResolver](../../solver/src/main/java/mmm/fluid/GasPhaseInterfaceResolver.java)
@@ -473,7 +473,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 - **区域 checkpoint、HEAD 与冷恢复**
   - 主要文件：
-    - [RegionCheckpointAssembler](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointAssembler.java)
+    - [RegionCheckpointAssembler](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointAssembler.java)：`sectionKey` 共用 `RegionGeometry.worldBlockPosition` 的整数世界原点与局部偏移换算，保存、校验和恢复使用同一分区规则。
     - [RegionCheckpointRestorer](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointRestorer.java)
     - [RegionGenerationStore](../../fabric/src/main/java/mmm/simulation/persistence/RegionGenerationStore.java)
   - 验证选择器 / 参考：`region-state`；[存档参考](region-state.md)

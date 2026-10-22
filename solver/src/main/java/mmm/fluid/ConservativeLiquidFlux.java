@@ -501,8 +501,11 @@ final class ConservativeLiquidFlux {
 	}
 
 	static final class CapacityUnavailable extends IllegalStateException {
-		CapacityUnavailable(String message) {
-			super(message);
+		private final java.util.BitSet blockedCells;
+		CapacityUnavailable(String message) { this(message,null); }
+		CapacityUnavailable(String message,java.util.BitSet blockedCells) {
+			super(message);this.blockedCells=blockedCells==null?null:(java.util.BitSet)blockedCells.clone();
 		}
+		boolean affectsCell(int cell) { return blockedCells==null||blockedCells.get(cell); }
 	}
 }

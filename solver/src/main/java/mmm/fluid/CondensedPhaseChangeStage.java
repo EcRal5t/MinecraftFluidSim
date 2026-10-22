@@ -132,7 +132,9 @@ final class CondensedPhaseChangeStage {
 			for(var group:futureGroups.values())occupied[group.cell()]=Math.addExact(occupied[group.cell()],group.occupiedVolumeSvq());
 			try{displacement.prepareDisplacement(occupied,provisional.future());break;}
 			catch(ConservativeLiquidFlux.CapacityUnavailable unavailable){
-				for(var p:selected.values())p.batches/=2;
+				boolean reduced=false;
+				for(var p:selected.values())if(p.freezing&&p.batches>0&&unavailable.affectsCell(p.cell)){p.batches/=2;reduced=true;}
+				if(!reduced)throw unavailable;
 			}
 		}
 		var removedMassByCell=new TreeMap<Integer,Long>();

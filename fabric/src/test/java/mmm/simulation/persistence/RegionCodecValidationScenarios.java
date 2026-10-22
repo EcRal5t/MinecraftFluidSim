@@ -110,7 +110,14 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 
 	static void validateThermalCodec() throws Exception {
 		validateGasPieceCodec();
-		FluidRegion region = populatedRegion(new UUID(27L, 28L));
+		for(var origin:List.of(new net.minecraft.core.BlockPos(15,16,15),new net.minecraft.core.BlockPos(0,16,0),
+				new net.minecraft.core.BlockPos(16_777_213,16,16_777_213),new net.minecraft.core.BlockPos(-16_777_219,16,-16_777_219)))
+			validateThermalCodec(origin);
+	}
+
+	private static void validateThermalCodec(net.minecraft.core.BlockPos origin) throws Exception {
+		FluidRegion templateRegion = populatedRegion(new UUID(27L, 28L));
+		FluidRegion region = fixtureRegion(templateRegion.id(),templateRegion.domain(),origin);
 		FlipParticleState pure = region.domain().exportParticleState();
 		float[] positions = pure.copyPositionVolume();
 		double[] mass = new double[pure.particleCount()];
@@ -131,7 +138,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		GranularStateSnapshot granularFixture = new GranularStateSnapshot(
 				region.sizeX(), region.sizeY(), region.sizeZ(), granular.fingerprint(),
 				granular.materials().stream().map(mmm.granular.ParticulateMaterial::id).toList(),
-				List.of(new GranularStateSnapshot.ActiveParcel(0.75F, 0.75F, 0.75F,
+				List.of(new GranularStateSnapshot.ActiveParcel(2.75F, 0.75F, 2.75F,
 						0.125F, -0.25F, 0.0625F, activeSvq, mmm.units.Mass.fromKilograms(activeMass), sand, 0,
 						2, mmm.granular.GranularParcelStore.FLAG_SUPPORTED, 0)),
 				List.of(new GranularStateSnapshot.DepositGroup(depositCell, granular.material(sand).restPorosityQ(),
@@ -155,7 +162,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		region.domain().setThermalTemperatureInCell(2, 1, 2, 325.0);
 		region.domain().setThermalTemperatureInCell(1, 1, 1, 340.0);
 		region.domain().setThermalTemperatureInCell(5, 3, 5, 280.0);
-		region.domain().addCoherentPhaseExternal(3, 2, 3, "mmm:thermal/persistence_solid",
+		region.domain().addCoherentPhaseExternal(5, 2, 5, "mmm:thermal/persistence_solid",
 				SolidVolume.SVQ_PER_CELL / 8L, mmm.units.Mass.fromKilograms(0.125), null, 6.25);
 		SignedDyadic fluidBeforeDeviceExchange = region.domain().exactInternalEnergy();
 		SignedDyadic deviceBeforeExchange = expectedDevices.exactInternalEnergy();

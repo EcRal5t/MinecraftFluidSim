@@ -384,6 +384,25 @@ public final class AirNetwork {
 		List<AirEdge> edges = this.edges.stream().sorted(java.util.Comparator
 				.comparingInt((AirEdge edge) -> Math.min(edge.firstNode(), edge.secondNode()))
 				.thenComparingInt(edge -> Math.max(edge.firstNode(), edge.secondNode()))).toList();
+		if (thermodynamics.portThermodynamics(edges.getFirst().firstNode(), edges.getFirst().secondNode()) != null) {
+			for (int pass = 0; pass < 2; pass++) for (int j = 0; j < edges.size(); j++) {
+				AirEdge edge = edges.get(pass == 0 ? j : edges.size() - 1 - j);
+				var port = thermodynamics.portThermodynamics(edge.firstNode(), edge.secondNode());
+				double amount = GasOrificeFlow.solveThermalPort(dt * .5, edge, port);
+				if (amount == 0) continue;
+				var ids = new ArrayList<Integer>(2);
+				if (edge.firstNode() != 0) ids.add(edge.firstNode());
+				if (edge.secondNode() != 0) ids.add(edge.secondNode());
+				ids.sort(Integer::compare);
+				var index = new java.util.HashMap<Integer, Integer>(); index.put(0, 0);
+				for (int i = 0; i < ids.size(); i++) index.put(ids.get(i), i + 1);
+				var batch = flowBatch(ids, index, new int[]{index.get(edge.firstNode())},
+						new int[]{index.get(edge.secondNode())},
+						new double[]{port.source() == edge.firstNode() ? amount : -amount}, thermodynamics);
+				commitPortFlow(batch, thermalPlanner);
+			}
+			return;
+		}
 		List<Integer> ids = nodeIds(); int count = ids.size();
 		var index = new java.util.HashMap<Integer, Integer>(); index.put(0, 0);
 		double[] pressure = new double[count + 1], storage = new double[count + 1], density = new double[count + 1], ratio = new double[count + 1];
@@ -396,23 +415,29 @@ public final class AirNetwork {
 		}
 		int[] first = new int[edges.size()], second = new int[edges.size()];
 		for (int e = 0; e < edges.size(); e++) { first[e] = index.get(edges.get(e).firstNode()); second[e] = index.get(edges.get(e).secondNode()); }
-		java.util.function.Function<double[], FlowBatch> allocate = amounts -> flowBatch(ids, index, first, second, amounts, thermodynamics);
-		if (thermodynamics.portThermodynamics(edges.getFirst().firstNode(), edges.getFirst().secondNode()) != null) {
-			// A canonical symmetric composition removes insertion-order dependence while each
-			// local solve advances only its two cavities. Inventory is instantiated after the root.
-			for (int pass = 0; pass < 2; pass++) for (int j = 0; j < edges.size(); j++) {
-				int e = pass == 0 ? j : edges.size() - 1 - j; AirEdge edge = edges.get(e);
-				var port = thermodynamics.portThermodynamics(edge.firstNode(), edge.secondNode());
-				double amount = GasOrificeFlow.solveThermalPort(dt * .5, edge, port);
-				if (amount == 0) continue;
-				double[] amounts = new double[edges.size()]; amounts[e] = port.source() == edge.firstNode() ? amount : -amount;
-				commitFlowBatch(allocate.apply(amounts), thermalPlanner);
-			}
-			return;
-		}
 		double[] transported = GasOrificeFlow.solve(dt, edges, first, second, pressure, storage, density, ratio);
-		FlowBatch batch = allocate.apply(transported);
+		FlowBatch batch = flowBatch(ids, index, first, second, transported, thermodynamics);
 		commitFlowBatch(batch, thermalPlanner);
+	}
+
+	/** Local exact-column closure prepares both owners before either publishes the port. */
+	private void commitPortFlow(FlowBatch batch, BatchTransferPlanner thermalPlanner) {
+		if (batch.transfers().isEmpty()) return;
+		var transfer = batch.transfers().getFirst();
+		var source = transfer.source() == 0 ? transfer.moved() : GasInventory.EMPTY;
+		var sink = transfer.target() == 0 ? transfer.moved() : GasInventory.EMPTY;
+		var before = batch.nodeIds().stream().map(this::inventory).toList();
+		for (var inventory : batch.inventories()) registry.requireCompatible(inventory);
+		GasRegionAudit.requireClosure(GasRegionAudit.aggregate(before), GasRegionAudit.aggregate(batch.inventories()),
+				GasAuditLedger.of(source), GasAuditLedger.of(sink));
+		var sourceAfter = externalSource.add(source); var sinkAfter = escapedSink.add(sink);
+		sourceAfter.standardVolumeNanos(); sinkAfter.standardVolumeNanos();
+		long expectedRevision = revision;
+		TransferCommit thermal = Objects.requireNonNull(thermalPlanner.plan(batch), "Gas thermal port plan");
+		if (revision != expectedRevision) throw new IllegalStateException("Gas port source changed after planning");
+		thermal.commitPrepared();
+		for (int i = 0; i < batch.nodeIds().size(); i++) nodes.get(batch.nodeIds().get(i)).setInventory(batch.inventories().get(i));
+		externalSource = sourceAfter; escapedSink = sinkAfter; lastCommittedPhasePlan = null; revision++;
 	}
 
 	private void commitFlowBatch(FlowBatch batch, BatchTransferPlanner thermalPlanner) {

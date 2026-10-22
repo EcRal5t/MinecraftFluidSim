@@ -407,9 +407,15 @@ final class PhaseQuantitySettlement {
                 System.arraycopy(head,0,cursor,0,vertices);
                 while(augment()) { }
             }
-            for(int e=head[0];e>=0;e=next[e])if(positive(e))
+            for(int e=head[0];e>=0;e=next[e])if(positive(e)) {
+                // The final residual search already identifies the saturated capacity cut.
+                // Reuse its reached owners; independent feasible regions keep their proposals.
+                var blocked=new BitSet();
+                for(int source=0;source<raw.sources;source++)if(level[firstSource+source]>=0)blocked.set(raw.key(source).cell());
+                for(int vertex=0;vertex<vertices;vertex++)if(level[vertex]>=0&&receiverSlot[vertex]>=0)blocked.set(receiverSlot[vertex]/8);
                 throw new ConservativeLiquidFlux.CapacityUnavailable("Liquid inventory has insufficient reachable pore capacity: residual="
-                        +remaining[e].toDouble()+", "+location(to[e])+", sources="+raw.sources+", routes="+raw.size);
+                        +remaining[e].toDouble()+", "+location(to[e])+", sources="+raw.sources+", routes="+raw.size,blocked);
+            }
         }
         private String location(int vertex){
             int source=vertex-firstSource;

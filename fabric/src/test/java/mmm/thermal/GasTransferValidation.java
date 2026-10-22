@@ -25,6 +25,37 @@ public final class GasTransferValidation {
 		unequalTemperatureBlowdown();
 		ambientAndLiquidSeal();
 		productionMixturesExchangeHeatAndSpecies();
+		localPortPreparationAndFailure();
+	}
+
+	/** Disconnected cavities stay outside each port transaction; failed preparation publishes nothing. */
+	private static void localPortPreparationAndFailure() {
+		for (int size : new int[]{2, 128}) {
+			double[] volumes = new double[size]; java.util.Arrays.fill(volumes, 1); volumes[0] = 1.2; volumes[1] = .8;
+			var fixture = thermal(volumes); var network = fixture.network;
+			network.addOrMergeEdge(1, 2, .001, .65);
+			var before = network.sealedInventory(); var energies = fixture.energy.nodeEnergies();
+			long gasRevision = network.revision(), energyRevision = fixture.energy.revision();
+			var ledger = fixture.audit.ledger(); boolean rejected = false;
+			try {
+				network.stepEdges(.01, fixture.energy.thermodynamics(network), batch -> {
+					fixture.energy.planFlow(batch, network);
+					throw new IllegalStateException("Deliberate port preparation failure");
+				});
+			} catch (IllegalStateException expected) { rejected = true; }
+			require(rejected && before.equals(network.sealedInventory()) && network.revision() == gasRevision
+					&& fixture.energy.revision() == energyRevision && fixture.audit.ledger() == ledger
+					&& java.util.Arrays.equals(energies, fixture.energy.nodeEnergies()), "Failed local port preparation published state");
+			int[] preparedNodes = {0}, commits = {0};
+			network.stepEdges(.01, fixture.energy.thermodynamics(network), batch -> {
+				require(batch.nodeIds().equals(List.of(1, 2)), "Port preparation included disconnected cavities");
+				preparedNodes[0] += batch.nodeIds().size(); commits[0]++;
+				return fixture.energy.planFlow(batch, network);
+			});
+			require(commits[0] == 2 && preparedNodes[0] == 4, "Port work grew with disconnected cavity count");
+			for (int id = 3; id <= size; id++) require(fixture.energy.nodeEnergy(id, network) == energies[id - 1], "Port changed unrelated cavity energy");
+			fixture.checkAudit();
+		}
 	}
 
 	private static void productionMixturesExchangeHeatAndSpecies() {

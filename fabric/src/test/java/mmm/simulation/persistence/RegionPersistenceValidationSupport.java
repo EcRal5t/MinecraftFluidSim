@@ -58,13 +58,17 @@ abstract class RegionPersistenceValidationSupport {
 		return fixtureRegion(id, domain);
 	}
 	static FluidRegion fixtureRegion(UUID id, FluidDomain domain) {
-		BlockPos origin = new BlockPos(15, 16, 15);
-		Set<Long> interior = new HashSet<>();
-		for (int z = 15; z <= 17; z++) for (int y = 16; y <= 17; y++) for (int x = 15; x <= 17; x++) interior.add(new BlockPos(x, y, z).asLong());
-		BlockPos controller = new BlockPos(14, 16, 15);
-		Set<Long> chunks = Set.of(ChunkPos.pack(0, 0), ChunkPos.pack(1, 0), ChunkPos.pack(0, 1), ChunkPos.pack(1, 1));
-		FluidRegionFootprint footprint = new FluidRegionFootprint(controller, origin, new BlockPos(17, 17, 17),
-				interior, Set.of(controller.asLong()), chunks);
+		return fixtureRegion(id,domain,new BlockPos(15,16,15));
+	}
+	static FluidRegion fixtureRegion(UUID id, FluidDomain domain, BlockPos origin) {
+		int cellsPerBlock=Math.round(1/domain.config().cellSize());
+		BlockPos maximum=origin.offset(domain.sizeX()/cellsPerBlock-1,domain.sizeY()/cellsPerBlock-1,domain.sizeZ()/cellsPerBlock-1);
+		Set<Long> interior=new HashSet<>(),chunks=new HashSet<>();
+		for(int z=origin.getZ();z<=maximum.getZ();z++)for(int y=origin.getY();y<=maximum.getY();y++)for(int x=origin.getX();x<=maximum.getX();x++){
+			interior.add(new BlockPos(x,y,z).asLong());chunks.add(ChunkPos.pack(x>>4,z>>4));
+		}
+		BlockPos controller=origin.offset(-1,0,0);
+		FluidRegionFootprint footprint=new FluidRegionFootprint(controller,origin,maximum,interior,Set.of(controller.asLong()),chunks);
 		return new FluidRegion(id, DIMENSION, origin, domain, footprint);
 	}
 

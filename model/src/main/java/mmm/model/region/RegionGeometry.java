@@ -23,6 +23,13 @@ public record RegionGeometry(
 		}
 	}
 
+	/** Integer world origins keep the full precision of solver-local coordinates. */
+	public BlockPosition worldBlockPosition(double localX, double localY, double localZ) {
+		return new BlockPosition(Math.addExact(origin.x(), (int) Math.floor(localX)),
+				Math.addExact(origin.y(), (int) Math.floor(localY)),
+				Math.addExact(origin.z(), (int) Math.floor(localZ)));
+	}
+
 	/** Stable block coordinate with the existing checkpoint packing kept explicit. */
 	public record BlockPosition(int x, int y, int z) {
 		public int getX() { return x; }

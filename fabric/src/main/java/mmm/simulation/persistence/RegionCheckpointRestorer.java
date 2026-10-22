@@ -280,10 +280,8 @@ public final class RegionCheckpointRestorer {
 	}
 
 	private void validateGranularSectionPosition(RegionSectionState section, float x, float y, float z) throws IOException {
-		int sectionX = Math.floorDiv((int) Math.floor(manifest.origin().x() + x), 16);
-		int sectionY = Math.floorDiv((int) Math.floor(manifest.origin().y() + y), 16);
-		int sectionZ = Math.floorDiv((int) Math.floor(manifest.origin().z() + z), 16);
-		if (sectionX != section.sectionX() || sectionY != section.sectionY() || sectionZ != section.sectionZ()) {
+		var key = RegionCheckpointAssembler.sectionKey(manifest.geometry(), x, y, z);
+		if (!key.equals(section.key())) {
 			throw new IOException("Granular active parcel is stored in the wrong section");
 		}
 	}
