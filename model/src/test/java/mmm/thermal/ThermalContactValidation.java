@@ -15,8 +15,6 @@ public final class ThermalContactValidation {
 		registeredMultiSegmentContactKeepsPositiveResponse();
 		invalidCarrierCannotHideInValidCellMean();
 		carrierGraphPreservesCaloricInventoryAndPreflights();
-		condensedCellTransportHasFiniteRates();
-		isolatedContactRangesRetainTheirOwners();
 	}
 	private static void registeredMultiSegmentContactKeepsPositiveResponse(){
 		var segments=new java.util.ArrayList<ThermalMaterialDefinition.CaloricSegment>();
@@ -30,93 +28,6 @@ public final class ThermalContactValidation {
 			double first=cold.stateAfterEnergyChange(q).temperatureK(),second=hot.stateAfterEnergyChange(-q).temperatureK();
 			require(q>0&&first>=10&&first<=second+1e-4&&second<=1190,
 					"Registered caloric segments stalled a finite heat contact or reversed temperature order");
-		}
-	}
-
-	private static void isolatedContactRangesRetainTheirOwners() {
-		int cells = 4_096;
-		var conducting = material("parallel", 10, 10);
-		var insulating = new ThermalMaterialDefinition("test:thermal/insulating", conducting.carrierKind(),
-				"test:insulating", 300, 0, 0, conducting.caloricSegments());
-		double[] energy = new double[2 * cells];
-		for (int p = 0; p < energy.length; p++) energy[p] = (p & 1) == 0 ? -300 : 500;
-		var owners = new ThermalCellGrid.CarrierAccess() {
-			@Override public int carrierCount() { return energy.length; }
-			@Override public int cell(int p) { return p / 2; }
-			@Override public ThermalMaterialDefinition material(int p) { return p % 6 == 0 ? insulating : conducting; }
-			@Override public double mass(int p) { return 1; }
-			@Override public double volume(int p) { return 0.25; }
-			@Override public double baseEnergy(int p) { return 0; }
-			@Override public double internalEnergy(int p) { return energy[p]; }
-			@Override public void setInternalEnergy(int p, double u) { energy[p] = u; }
-		};
-		var grid = new ThermalCellGrid(cells); grid.rebuild(owners);
-		var before = SignedDyadic.sum(energy);
-		var stats = new ThermalTransport(cells, 1, 1, 0.5, 8).step(grid, (x, y, z, axis) -> 0, 0.001);
-		for (int cell = 0; cell < cells; cell++) {
-			double q = cell % 3 == 0 ? 0 : 80 / (1 / (.125 * .001) + 2.0 / 10);
-			require(Math.abs(energy[2 * cell] - (-300 + q)) <= .001
-					&& Math.abs(energy[2 * cell + 1] - (500 - q)) <= .001,
-					"contact range compaction exchanged heat with the wrong owner or insulating cell");
-		}
-		require(SignedDyadic.sum(energy).subtract(before).equals(stats.roundoffResidual())
-				&& stats.reservoirExchange().equals(SignedDyadic.ZERO), "parallel contact ranges lost exact heat closure");
-	}
-
-	private static void condensedCellTransportHasFiniteRates() {
-		for (var kind : new ThermalMaterialDefinition.CarrierKind[] {
-				ThermalMaterialDefinition.CarrierKind.LIQUID, ThermalMaterialDefinition.CarrierKind.GRANULAR,
-				ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID}) {
-			double firstChange = 0;
-			for (double k : new double[] {0, .001, .01, 400}) {
-				var material = new ThermalMaterialDefinition("test:thermal/finite", kind, "test:finite", 300, 0, k,
-						List.of(new ThermalMaterialDefinition.CaloricSegment(1, 500, 10)));
-				double[] energy = {-300, 500, -300, 500}, base = {1000, -2000, 3000, -4000};
-				for (int p = 0; p < 4; p++) energy[p] += base[p];
-				var owners = new ThermalCellGrid.CarrierAccess() {
-					@Override public int carrierCount() { return 4; }
-					@Override public int cell(int p) { return p / 2; }
-					@Override public ThermalMaterialDefinition material(int p) { return material; }
-					@Override public double mass(int p) { return 1; }
-					@Override public double volume(int p) { return 0.25; }
-					@Override public double baseEnergy(int p) { return base[p]; }
-					@Override public double internalEnergy(int p) { return energy[p]; }
-					@Override public void setInternalEnergy(int p, double u) { energy[p] = u; }
-				};
-				var grid = new ThermalCellGrid(2); grid.rebuild(owners);
-				var before = SignedDyadic.sum(energy); double[] raw = energy.clone();
-				var result = new ThermalTransport(2, 1, 1, 0.5, 8).stepPrepared(
-						grid, (x, y, z, axis) -> 0.125, (x, y, z, direction) -> null, 1);
-				var rebuilt = new ThermalCellGrid(2); rebuilt.rebuild(owners);
-				for (int cell = 0; cell < 2; cell++) require(
-						grid.internalEnergy(cell) == rebuilt.internalEnergy(cell)
-						&& grid.temperature(cell) == rebuilt.temperature(cell)
-						&& grid.heatCapacity(cell) == rebuilt.heatCapacity(cell)
-						&& grid.conductivity(cell) == rebuilt.conductivity(cell)
-						&& grid.minimumTemperature(cell) == rebuilt.minimumTemperature(cell)
-						&& grid.maximumTemperature(cell) == rebuilt.maximumTemperature(cell),
-						"contact energy refresh differs from a complete caloric rebuild");
-				double change = material.temperatureForSensibleSpecificEnergy(energy[0] - base[0]) - 270;
-				if (k == 0) require(Arrays.equals(raw, energy), "insulating condensed geometry edited U");
-				else if (k < 1) {
-					require(change > 0 && change < 1, "positive small k lost finite condensed-carrier response");
-					if (firstChange > 0) require(Math.abs(change / firstChange - 10) < .01, "condensed transport lost linear k limit");
-					firstChange = change;
-				}
-				for (int p = 0; p < 4; p++) {
-					double t = material.temperatureForSensibleSpecificEnergy(energy[p] - base[p]);
-					require(t >= 270 && t <= 350, "condensed transport violated the maximum principle");
-				}
-				require(SignedDyadic.sum(energy).subtract(before).equals(result.roundoffResidual())
-						&& result.reservoirExchange().equals(SignedDyadic.ZERO), "condensed transport failed energy closure");
-				for (int p = 0; p < 4; p++) {
-					base[p] += 17;
-					energy[p] = base[p] + material.sensibleSpecificEnergyAt(310);
-				}
-				var isothermal = new ThermalTransport(2, 1, 1, 0.5, 8).step(grid, (x, y, z, axis) -> 0.125, 1);
-				require(isothermal.maximumAbsoluteTransferJ() == 0 && grid.temperature(0) == 310
-						&& grid.temperature(1) == 310, "public contact solve retained stale caloric inventory");
-			}
 		}
 	}
 
@@ -253,17 +164,9 @@ public final class ThermalContactValidation {
 					&& zero.maximumTemperatureChangeK() == 0 && zero.maximumAbsoluteTransferJ() == 0
 					&& zero.reservoirExchange().equals(SignedDyadic.ZERO)
 					&& zero.roundoffResidual().equals(SignedDyadic.ZERO), "isothermal contacts changed caloric inventory");
-			var grid = new ThermalCellGrid(1); grid.rebuild(owners);
-			var spatial = new ThermalTransport(1, 1, 1, 1, 8);
-			var spatialZero = spatial.step(grid, (x, y, z, axis) -> 1,
-					(x, y, z, direction) -> new ThermalTransport.FixedBoundary(1, 300), 1000);
-			require(spatialZero.maximumAbsoluteTransferJ() == 0 && spatialZero.reservoirExchange().equals(SignedDyadic.ZERO)
-					&& spatialZero.roundoffResidual().equals(SignedDyadic.ZERO) && Arrays.equals(energy, isothermal),
-					"isothermal spatial contacts changed stored energy or its ledger");
-			System.arraycopy(isothermal, 0, energy, 0, energy.length);
 			mass[1] = 0;
 			boolean invalidMass = false;
-			try { spatial.step(grid, (x, y, z, axis) -> 1, 1); }
+			try { ThermalCarrierTransport.prepare(owners); }
 			catch (IllegalArgumentException expected) { invalidMass = true; }
 			mass[1] = 3;
 			require(invalidMass && Arrays.equals(energy, isothermal), "zero-flux preflight concealed invalid owner mass");

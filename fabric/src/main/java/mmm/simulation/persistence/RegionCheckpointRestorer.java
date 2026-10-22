@@ -32,7 +32,7 @@ public final class RegionCheckpointRestorer {
 		try{return new FluidDomainState(manifest.sizeX(),manifest.sizeY(),manifest.sizeZ(),manifest.solverConfig(),runtime.sealed(),liquid,reconstructPhaseOccupancy(),momentum,reconstructFixedGeometry(),manifest.materialPalette(),
 				manifest.hasChemicalState()?chemistry:null,chemicalAudit.externalSource(),chemicalAudit.escapedSink(),manifest.hasChemicalState()?runtime.dirty():null,runtime.cursor(),
 				solids==null?null:granular,solids,runtime.granular(),runtime.precipitation(),gasRegistry,gasState,heat==null?null:thermal,heat,
-				heat==null?0:runtime.maximumThermalSubsteps(),heat==null?null:reconstructPendingPhaseVolume(),heat==null?null:runtime.boundary(),heat==null?null:runtime.pressure(),manifest.materialPalette().isEmpty()?null:materials);
+				heat==null?0:runtime.maximumThermalSubsteps(),heat==null?null:reconstructPendingPhaseMotion(),heat==null?null:runtime.boundary(),heat==null?null:runtime.pressure(),manifest.materialPalette().isEmpty()?null:materials);
 		}catch(IllegalArgumentException invalid){throw new IOException("Invalid complete cell/MAC region state",invalid);}
 	}
 	private SolverRuntimeCodec.Data runtime()throws IOException{return new SolverRuntimeCodec().decode(requiredExtension(manifest.extensions(),SolverRuntimeCodec.MANIFEST_EXTENSION).payload(),manifest.sizeX()*manifest.sizeY()*manifest.sizeZ());}
@@ -106,16 +106,16 @@ public final class RegionCheckpointRestorer {
 	}
 	private record ThermalDepositEnergy(GranularStateSnapshot.DepositGroup group,double energy){private static final Comparator<ThermalDepositEnergy> ORDER=Comparator.comparingInt((ThermalDepositEnergy entry)->entry.group().cell()).thenComparingInt(entry->entry.group().materialPaletteIndex()).thenComparingInt(entry->entry.group().solidCompositionIndex());}
 	/** Sparse absence is the canonical empty record; presence is valid only in a complete thermal generation. */
-	public PendingPhaseVolumeState reconstructPendingPhaseVolume() throws IOException {
+	public PendingPhaseMotionState reconstructPendingPhaseMotion() throws IOException {
 		int cellCount = Math.multiplyExact(Math.multiplyExact(manifest.sizeX(), manifest.sizeY()), manifest.sizeZ());
-		if (!hasExtension(manifest.extensions(), PendingPhaseVolumeCodec.MANIFEST_EXTENSION)) {
-			return new PendingPhaseVolumeState(cellCount, List.of());
+		if (!hasExtension(manifest.extensions(), PendingPhaseMotionCodec.MANIFEST_EXTENSION)) {
+			return new PendingPhaseMotionState(cellCount, List.of());
 		}
 		if (manifest.layout() != RegionStateLayout.THERMAL) {
 			throw new IOException("Pending phase volume is only valid in a thermal region-state");
 		}
-		return new PendingPhaseVolumeCodec().decode(requiredExtension(
-				manifest.extensions(), PendingPhaseVolumeCodec.MANIFEST_EXTENSION).payload(), cellCount);
+		return new PendingPhaseMotionCodec().decode(requiredExtension(
+				manifest.extensions(), PendingPhaseMotionCodec.MANIFEST_EXTENSION).payload(), cellCount);
 	}
 
 	/** Sparse absence is the canonical empty inventory; device energy exists only in thermal state. */

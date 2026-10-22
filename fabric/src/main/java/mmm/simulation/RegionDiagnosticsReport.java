@@ -269,7 +269,7 @@ public final class RegionDiagnosticsReport {
 				audit.externalSource().toDouble(), audit.externalSink().toDouble(),
 				audit.mechanicalWork().toDouble(), audit.finiteDeviceExchange().toDouble(),
 				domain.totalCoherentSolidVolumeSvq(), phase,
-				domain.hasPendingPhaseVolumeWork() ? "yes" : "no",
+				domain.hasPendingPhaseMotionWork() ? "yes" : "no",
 				domain.exactInternalEnergy().equals(audit.expectedInventory()) ? "closed" : "FAILED");
 	}
 

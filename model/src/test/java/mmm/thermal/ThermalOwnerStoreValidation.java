@@ -33,6 +33,7 @@ public final class ThermalOwnerStoreValidation {
 
 		caloricEndpointsAndPortionsPreserveFiniteStates();
 		coolingInversionRetainsEnergyScale();
+		finiteDevicesRetainActualOwnerTemperatures();
 	}
 
 	private static void exactAggregateEnergySurvivesCaloricHandoffs() {
@@ -152,15 +153,17 @@ public final class ThermalOwnerStoreValidation {
 				SignedDyadic before = state.exactEnergy(2); state.restoreAuditLedger(ThermalAuditLedger.initialized(before));
 				var revision = state.thermalRevision();
 				var plan = state.planFiniteDeviceCellExchange(List.of(new FiniteDeviceExchangeCoordinator.CellEnergyDelta(0, delta)), context);
-				require(plan.targetCellEnergy()[0].equals(before.add(SignedDyadic.of(delta)))
+				state.preparePhaseScan(context);
+				require(plan.requestedDelta().equals(SignedDyadic.of(delta))
 						&& state.phaseScanTemperatureInCell(0) == 400 && state.exactEnergy(2).equals(before)
 						&& state.thermalRevision().equals(revision), "Finite cell preflight rounded or edited its actual baseline");
 				state.commitFiniteDeviceCellExchange(plan, context);
-				require(state.liquidInternalEnergy(reverse ? 0 : 1) == (delta == 0 ? 200 : 100 + delta / 2)
+				require(state.liquidInternalEnergy(reverse ? 0 : 1) == (200 + delta / 2)
 						&& state.auditLedger().finiteDeviceExchange().equals(SignedDyadic.of(delta))
 						&& state.auditLedger().roundoffResidual().equals(state.exactEnergy(2).subtract(before).subtract(SignedDyadic.of(delta)))
 						&& state.exactEnergy(2).equals(state.auditLedger().expectedInventory()),
 						"Finite cell exchange lost a resolvable transfer or solved a rounded target");
+				state.preparePhaseScan(context);
 				double actualTemperature = 300 + state.exactEnergy(2).subtract(SignedDyadic.of(reference)).toDouble() / 2;
 				require(state.phaseScanTemperatureInCell(0) == actualTemperature
 						&& Math.abs(state.observeTemperatureInCell(0, context)-actualTemperature)<1e-4,
@@ -246,6 +249,7 @@ public final class ThermalOwnerStoreValidation {
 		var state = ThermalDomainState.restoreTarget(new ThermalRegistry(List.of(cold)), new int[] {0}, new int[0],
 				363, 1, 1, 1, 1, .5F, coldContext, null, 1, new double[] {0});
 		var before = state.exactEnergy(1); state.restoreAuditLedger(ThermalAuditLedger.initialized(before));
+		state.preparePhaseScan(coldContext);
 		var audit = state.auditLedger(); var revision = state.thermalRevision();
 		try {
 			state.planFiniteDeviceCellExchange(List.of(new FiniteDeviceExchangeCoordinator.CellEnergyDelta(0, -364)), coldContext);
@@ -323,6 +327,36 @@ public final class ThermalOwnerStoreValidation {
 		var body = new FiniteThermalBodyState(0, registry.fingerprint(), device.id(), bodyMass, raw);
 		var exchange = FiniteThermalExchange.plan(registry, body, contacts, .01, 8);
 		require(!exchange.changed() && exchange.contacts().getFirst().internalEnergyDeltaJ() == 0, "Equivalent caloric paths created equal-temperature device heat flow");
+	}
+
+	private static void finiteDevicesRetainActualOwnerTemperatures(){
+		var cold=new ThermalMaterialDefinition("test:device/a",ThermalMaterialDefinition.CarrierKind.LIQUID,"test:device/a",300,0,0,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(1,1000,1000)));
+		var hot=new ThermalMaterialDefinition("test:device/b",ThermalMaterialDefinition.CarrierKind.LIQUID,"test:device/b",300,0,1,cold.caloricSegments());
+		var device=new ThermalMaterialDefinition("test:device/wall",ThermalMaterialDefinition.CarrierKind.DEVICE,"test:device/wall",300,0,1,cold.caloricSegments());
+		var registry=new ThermalRegistry(List.of(cold,hot,device));var context=thermalHandoffContext();
+		var state=ThermalDomainState.restoreTarget(registry,new int[]{0,1},new int[0],300,2,1,1,1,.5F,context,null,8,new double[]{0,200000});
+		state.restoreAuditLedger(ThermalAuditLedger.initialized(state.exactEnergy(2)));
+		state.preparePhaseScan(context);var revision=state.thermalRevision();
+		var contacts=state.finiteDeviceContacts(List.of(new FiniteDeviceExchangeCoordinator.CellContactRequest(0,0,1)),context);
+		require(state.matchesThermalRevision(revision),"Device observation mutated a phase cache or owner revision");
+		state.preparePhaseScan(context);state.preparePhaseCandidateCell(0,context);
+		var body=new FiniteThermalBodyState(0,registry.fingerprint(),device.id(),mmm.units.Mass.fromKilograms(1),300000);
+		var exchange=FiniteThermalExchange.plan(registry,body,contacts,1e-8,8);var delta=exchange.contacts().getFirst();
+		state.commitFiniteDeviceCellExchange(state.planFiniteDeviceCellExchange(List.of(
+				new FiniteDeviceExchangeCoordinator.CellEnergyDelta(0,delta.internalEnergyDeltaJ(),delta.carriers())),context),context);
+		require(state.liquidInternalEnergy(0)==0&&state.liquidInternalEnergy(1)>200000&&state.liquidInternalEnergy(1)-200000<.001
+				&&state.exactEnergy(2).equals(state.auditLedger().expectedInventory()),"Minute device heat equilibrated isolated hot/cold owners");
+		var segmented=new ThermalMaterialDefinition("test:device/segmented",ThermalMaterialDefinition.CarrierKind.LIQUID,"test:device/segmented",300,0,1,
+				List.of(new ThermalMaterialDefinition.CaloricSegment(1,300,10),new ThermalMaterialDefinition.CaloricSegment(300,1000,1000)));
+		var r=new ThermalRegistry(List.of(device,segmented));
+		var coldBody=new FiniteThermalBodyState(0,r.fingerprint(),device.id(),mmm.units.Mass.fromKilograms(1),-50000);
+		for(double dt:new double[]{.001,1000000}){
+			var contact=new FiniteThermalExchange.Contact(0,1000,List.of(new FiniteThermalExchange.Carrier(0,segmented,1,0,0,1)));
+			var plan=FiniteThermalExchange.plan(r,coldBody,List.of(contact),dt,8);
+			require(plan.contacts().getFirst().finalTemperatureK()<300&&plan.contacts().getFirst().finalTemperatureK()>=250
+					&&plan.after().internalEnergyJ()>coldBody.internalEnergyJ(),"Finite contact could not cool from a caloric knot across its lower segment");
+		}
 	}
 
 	private static void coolingInversionRetainsEnergyScale() {

@@ -203,14 +203,14 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 			state = candidate.state();
 			generation++;
 			if (step == 199) {
-				if (domain.hasPendingPhaseVolumeWork()) {
+				if (domain.hasPendingPhaseMotionWork()) {
 					FluidStepCandidate settlement = backend.evaluate(new FluidStepRequest(
 							generation, state, List.of(), false, 0, false));
 					domain = FluidDomain.restoreAuthoritativeState(settlement.state());
 					state = settlement.state();
 					generation++;
 				}
-				require(!domain.hasPendingPhaseVolumeWork(),
+				require(!domain.hasPendingPhaseMotionWork(),
 						"phase-off operator barrier retained phase work: stepPhase="
 								+ phase + ", cumulative=" + phaseOperations + ", boiled=" + boiledCells
 								+ ", condensed=" + condensedCells + ", " + gasLedgerDetail(domain));
@@ -222,12 +222,12 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 		}
 		require(phaseOperations > 0L,
 				"closed controller did not exercise production phase change");
-		if (domain.hasPendingPhaseVolumeWork()) {
+		if (domain.hasPendingPhaseMotionWork()) {
 			FluidStepCandidate settlement = backend.evaluate(new FluidStepRequest(
 					generation, state, List.of(), false, 0, false));
 			domain = FluidDomain.restoreAuthoritativeState(settlement.state());
 		}
-		require(!domain.hasPendingPhaseVolumeWork()
+		require(!domain.hasPendingPhaseMotionWork()
 				&& domain.removeVolumeNear(4, 1, 4, 128.0F, 6) == 128.0F,
 				"settled phase-enabled controller rejected the reported 16 m³ drain target");
 		System.out.printf("  phase-enabled controller pour: operations=%d, boiled=%d, condensed=%d, %s%n",

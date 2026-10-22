@@ -3,8 +3,6 @@ package mmm.thermal;
 import mmm.fluid.air.AirNetwork;
 import mmm.units.SignedDyadic;
 import java.util.ArrayList;
-import java.util.Map;
-import java.util.TreeMap;
 
 /** Spatial samples of a well-mixed chamber. Publication sums heat back into its sole node U. */
 final class ThermalGasCarriers implements ThermalCellGrid.CarrierAccess {
@@ -21,32 +19,38 @@ final class ThermalGasCarriers implements ThermalCellGrid.CarrierAccess {
         var supports=context.gasThermalSupports();network=context.gasNetwork();
         double[] volume=new double[network.nodeCount()+1];
         for(var support:supports)volume[support.node()]+=support.normalizedVolume();
-        var function=new ThermalStateFunction(registry);
-        record Component(ThermalMaterialDefinition material,double mass,double base,double energy,double fraction,double heatCapacity) { }
-        var components=new ArrayList<java.util.List<Component>>(network.nodeCount()+1);components.add(java.util.List.of());
+        record Mixture(ThermalMaterialDefinition material,double mass,double base,double energy,double capacity) { }
+        var mixtures=new Mixture[network.nodeCount()+1];
+        var model=new GasThermalModel(registry,network.registry());
         for(int node=1;node<=network.nodeCount();node++) {
-            var inventory=network.inventory(node);var entries=new ArrayList<Component>();
-            if(!inventory.isEmpty()) {
-                double temperature=gas.temperature(node,network);
-                for(var component:inventory.components()) {
-                    int handle=registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GAS,component.componentId());
-                    var species=new TreeMap<String,Long>();
-                    for(var amount:component.species())species.put(amount.speciesId(),amount.amountQuanta());
-                    var amounts=Map.copyOf(species);
-                    entries.add(new Component(registry.material(handle),component.mass(),
-                            function.baseEnergy(handle,component.mass(),amounts),
-                            function.internalEnergyAtTemperature(handle,component.mass(),amounts,temperature),
-                            (double)component.standardVolumeNanos()/inventory.standardVolumeNanos(),
-                            component.mass()*registry.material(handle).specificHeatAt(temperature)));
-                }
+            var inventory=network.inventory(node);if(inventory.isEmpty())continue;
+            var materials=new ArrayList<ThermalMaterialDefinition>();var masses=new ArrayList<Double>();
+            var cuts=new java.util.TreeSet<Double>();double conductivity=0;
+            for(var component:inventory.components()) {
+                var material=registry.material(registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GAS,component.componentId()));
+                materials.add(material);masses.add(component.mass());
+                for(var segment:material.caloricSegments()){cuts.add(segment.minimumTemperatureK());cuts.add(segment.maximumTemperatureK());}
+                conductivity+=material.conductivityWPerMeterK()*(double)component.standardVolumeNanos()/inventory.standardVolumeNanos();
             }
-            components.add(java.util.List.copyOf(entries));
+            double mass=inventory.totalMass(),reference=materials.getFirst().referenceTemperatureK();
+            var segments=new ArrayList<ThermalMaterialDefinition.CaloricSegment>();
+            var points=new ArrayList<>(cuts);
+            for(int i=1;i<points.size();i++){
+                double low=points.get(i-1),high=points.get(i),cv=0;
+                for(int c=0;c<materials.size();c++)cv+=masses.get(c)*materials.get(c).specificHeatAt(low+(high-low)*.5);
+                segments.add(new ThermalMaterialDefinition.CaloricSegment(low,high,cv/mass));
+            }
+            var material=new ThermalMaterialDefinition("mmm:thermal/gas_mixture",ThermalMaterialDefinition.CarrierKind.GAS,
+                    "mmm:gas_mixture",reference,0,conductivity,segments);
+            double temperature=gas.temperature(node,network);
+            mixtures[node]=new Mixture(material,mass,model.internalEnergyAtTemperature(inventory,reference),
+                    gas.nodeEnergy(node,network),mass*material.specificHeatAt(temperature));
         }
         for(var support:supports) {
+            var mixture=mixtures[support.node()];if(mixture==null)continue;
             double share=support.normalizedVolume()/volume[support.node()];
-            for(var component:components.get(support.node()))portions.add(new Portion(support.cell(),support.node(),
-                    support.supportMask(),support.normalizedVolume()*component.fraction(),component.material(),
-                    component.mass()*share,component.base()*share,component.energy()*share,component.heatCapacity()*share));
+            portions.add(new Portion(support.cell(),support.node(),support.supportMask(),support.normalizedVolume(),
+                    mixture.material(),mixture.mass()*share,mixture.base()*share,mixture.energy()*share,mixture.capacity()*share));
         }
         energy=portions.stream().mapToDouble(Portion::energy).toArray();
         // The largest heat capacity carries the stored-node rounding remainder.

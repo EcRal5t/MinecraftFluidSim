@@ -24,7 +24,7 @@ final class GasLifecyclePlanner {
 
 	/** Prevalidates an operator vent without treating ambient as inventory. */
 	FluidDomain.OperatorGasVentPlan planVent() {
-		if (domain.hasPendingPhaseVolumeWork()) {
+		if (domain.hasPendingPhaseMotionWork()) {
 			throw new IllegalStateException("Pending phase volume/work must be projected before operator vent");
 		}
 		domain.domainFlowFields.ensureInventoryGrid();

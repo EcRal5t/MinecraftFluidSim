@@ -260,7 +260,7 @@ final class DomainCapabilities {
 		for (ThermalCellEnergyDelta delta : deltas) {
 			if (delta == null) throw new IllegalArgumentException("Finite thermal cell deltas contain null");
 			mapped.add(new FiniteDeviceExchangeCoordinator.CellEnergyDelta(
-					domain.domainFlowFields.cellIndexChecked(delta.cellX(), delta.cellY(), delta.cellZ()), delta.internalEnergyDeltaJ()));
+					domain.domainFlowFields.cellIndexChecked(delta.cellX(), delta.cellY(), delta.cellZ()), delta.internalEnergyDeltaJ(),delta.carriers()));
 		}
 		return new FiniteThermalCellPlan(domain.thermalState.planFiniteDeviceCellExchange(mapped, thermalMarkerContext()));
 	}
@@ -453,40 +453,6 @@ final class DomainCapabilities {
 	double thermalMarkerTemperature(int marker) {
 		return domain.thermalState.temperature(marker, thermalMarkerContext());
 	}
-	double thermalOccupiedFaceFraction(int cell, int direction) {
-		domain.pressureSystem.prepareGeometry();
-		double geometricOpen = domain.geometry.cutCells.openCellVolume(cell);
-		if (!(geometricOpen > 0)) return 0;
-		double solidVolume = domain.granularCoupling == null ? 0 : SolidVolume.toCellVolume(domain.granularCoupling.solidSvq(cell));
-		double fallback = Math.max(0, 1 - solidVolume / geometricOpen);
-		int axis = direction / 2, side = direction & 1, first = (axis + 1) % 3, second = (axis + 2) % 3;
-		int pieces = 0; double occupied = 0;
-		for (int micro = 0; micro < 8; micro++) if ((micro >> axis & 1) == side && (domain.geometry.cutCells.mask(cell) & 1 << micro) == 0) {
-			pieces++;
-			double pore = domain.pressureSystem.phaseGeometry().componentPoreScale(cell, micro, fallback);
-			double fraction = domain.pressureSystem.phaseGeometry().liquidFractionExact(cell, micro), wet;
-			if (fraction <= 0) wet = 0;
-			else if (fraction >= 1) wet = 1;
-			else {
-				double a = domain.pressureSystem.phaseGeometry().planeNormal(cell, micro, first), b = domain.pressureSystem.phaseGeometry().planeNormal(cell, micro, second);
-				double offset = domain.pressureSystem.phaseGeometry().planeOffset(cell, micro) - side * domain.pressureSystem.phaseGeometry().planeNormal(cell, micro, axis)
-						- .5 * (micro >> first & 1) * a - .5 * (micro >> second & 1) * b;
-				wet = FlipFreeSurfaceGeometry.unitCubeLiquidFraction(0.0, .5 * a, .5 * b, offset);
-			}
-			occupied += 1 - pore + pore * wet;
-		}
-		return pieces == 0 ? 0 : occupied / pieces;
-	}
-	ThermalTransport.FixedBoundary thermalFixedBoundary(int x, int y, int z, int direction) {
-		if (domain.thermalBoundaryTemperatureK == null) return null;
-		int cell = domain.domainFlowFields.cellIndex(x, y, z);
-		double temperature = domain.thermalBoundaryTemperatureK[cell * 6 + direction];
-		if (Double.isNaN(temperature)) return null;
-		double blockedFraction = 1.0 - thermalOpenFaceFraction(x, y, z, direction);
-		double contactArea = thermalOccupiedFaceFraction(cell, direction) * blockedFraction
-				* (double) domain.config.cellSize() * domain.config.cellSize();
-		return contactArea > 0.0 ? new ThermalTransport.FixedBoundary(contactArea, temperature) : null;
-	}
 	double thermalOpenFaceFraction(int x, int y, int z, int direction) {
 		return switch (direction) {
 			case 0 -> domain.geometry.cutCells.xFaceOpen(x, y, z);
@@ -501,7 +467,7 @@ final class DomainCapabilities {
 	void clearThermalBinding() {
 		domain.thermalState = null;
 		domain.thermalBoundaryTemperatureK = null;
-		domain.pendingPhaseVolume.clear();
+		domain.pendingPhaseMotion.clear();
 		if (domain.granularState == null) {
 			domain.granularCoupling = null; domain.granularNextCoupling = null;
 		}

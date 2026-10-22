@@ -82,7 +82,7 @@ public final class ThermalCarrierTransport {
 	}
 	public static Batch prepare(ThermalCellGrid.CarrierAccess owners) { return new Batch(owners); }
 
-	static ThermalTransport.Stats step(ThermalCellGrid.CarrierAccess owners, List<Contact> contacts,
+	public static ThermalTransport.Stats step(ThermalCellGrid.CarrierAccess owners, List<Contact> contacts,
 	                                 double dt, int maximumSubsteps) {
 		var batch = prepare(owners);
 		var result = solve(batch, contacts, dt, maximumSubsteps);

@@ -33,7 +33,7 @@ final class FluidDomainStateMapper {
 				domain.thermalState == null ? null : domain.thermalState.registry(),
 				domain.thermalState == null ? null : domain.thermalState.exportOwnerState(),
 				domain.thermalState == null ? 0 : domain.thermalState.maximumTransportSubsteps(),
-				domain.thermalState == null ? null : domain.exportPendingPhaseVolumeState(),domain.thermalBoundaryTemperatureK,
+				domain.thermalState == null ? null : domain.exportPendingPhaseMotionState(),domain.thermalBoundaryTemperatureK,
 				domain.thermalState == null ? null : domain.pressureSystem.captureLiquidPressure(),domain.materialDefinitions);
 		if (gas != null) captured.attachGasRuntime(domain.gasState.frame,domain.gasState.network.runtimeSnapshot());
 		return captured;
@@ -87,7 +87,7 @@ final class FluidDomainStateMapper {
 		if (state.thermalOwner() != null) {
 			domain.restoreThermalOwnerState(state.thermalOwner(), state.thermalRegistry(),
 					state.maximumThermalTransportSubsteps());
-			domain.restorePendingPhaseVolumeState(state.pendingPhaseVolume());
+			domain.restorePendingPhaseMotionState(state.pendingPhaseMotion());
 			double[] thermalBoundary = state.copyThermalBoundaryTemperaturesK();
 			if (thermalBoundary != null) domain.replaceThermalBoundaryTemperatures(thermalBoundary);
 		}

@@ -126,7 +126,7 @@ public final class MinecraftRegionLifecycle {
 
 	private void prepareInventoryDecrease(ServerLevel level, FluidRegion region) {
 		if (availability.ensureForInventoryDecrease(level, region) && region.solverLoaded()
-				&& region.domain().hasPendingPhaseVolumeWork()
+				&& region.domain().hasPendingPhaseMotionWork()
 				&& phaseWorkBarrier.settle(level, region)) {
 			try {
 				snapshots.sendToLevel(level, region);
@@ -330,7 +330,7 @@ public final class MinecraftRegionLifecycle {
 				LifecycleOperationPreview.GasState.none(), ownershipBlocks, List.copyOf(blockers));
 
 		FluidDomain domain = region.domain();
-		if (domain.hasPendingPhaseVolumeWork()) blockers.add(LifecycleOperationPreview.Blocker.PENDING_PHASE_WORK);
+		if (domain.hasPendingPhaseMotionWork()) blockers.add(LifecycleOperationPreview.Blocker.PENDING_PHASE_WORK);
 		boolean auditClosed = domain.gasBoundary().auditClosed()
 				&& (!domain.hasThermalState()
 				|| domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));

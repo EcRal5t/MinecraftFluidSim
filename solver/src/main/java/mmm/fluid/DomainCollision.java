@@ -141,6 +141,8 @@ final class DomainCollision {
 		if (plan == null || plan.owner != domain || plan.consumed || domain.activeCollisionPlan != null) {
 			throw new IllegalArgumentException("Collision edit plan is missing, foreign or already consumed");
 		}
+		if (domain.mac.momentumRevision() != plan.momentumRevision)
+			throw new IllegalStateException("MAC momentum changed after collision planning");
 		requireCollisionThermalCurrent(plan.thermalRevision);
 		if (domain.liquidCells.size() != plan.planMarkerCount
 				|| Double.doubleToRawLongBits(totalVolumeExact()) != plan.totalVolumeBits

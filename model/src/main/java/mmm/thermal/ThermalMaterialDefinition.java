@@ -43,8 +43,7 @@ public record ThermalMaterialDefinition(
 		if (!(Double.isFinite(conductivityWPerMeterK) && conductivityWPerMeterK >= 0.0)) {
 			throw new IllegalArgumentException("Thermal conductivity must be finite and non-negative");
 		}
-		if (caloricSegments == null || caloricSegments.isEmpty()
-				|| caloricSegments.size() > ThermalLimits.MAX_SEGMENTS_PER_MATERIAL) {
+		if (caloricSegments == null || caloricSegments.isEmpty()) {
 			throw new IllegalArgumentException("Thermal caloric segments are empty or over budget");
 		}
 		ArrayList<CaloricSegment> canonical = new ArrayList<>(caloricSegments);

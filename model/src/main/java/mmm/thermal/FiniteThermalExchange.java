@@ -8,39 +8,35 @@ import java.util.List;
 
 /** Pure bounded exchange planner between one finite thermal body and independent fluid energy ports. */
 public final class FiniteThermalExchange {
-	/**
-	 * One caller-owned fluid energy port linearized inside a single caloric interval. Conductance
-	 * already includes fluid, wall and contact-area resistance and therefore has units J/(s K).
-	 */
-	public record Contact(
-			int ordinal,
-			double temperatureK,
-			double heatCapacityJPerK,
-			double conductanceWPerK,
-			double minimumTemperatureK,
-			double maximumTemperatureK
-	) {
-		public Contact {
-			if (ordinal < 0
-					|| !(Double.isFinite(temperatureK)
-					&& Double.isFinite(minimumTemperatureK) && Double.isFinite(maximumTemperatureK)
-					&& minimumTemperatureK >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K
-					&& maximumTemperatureK > minimumTemperatureK
-					&& temperatureK >= minimumTemperatureK && temperatureK <= maximumTemperatureK)
-					|| !(Double.isFinite(heatCapacityJPerK) && heatCapacityJPerK > 0.0)
-					|| !(Double.isFinite(conductanceWPerK) && conductanceWPerK > 0.0)) {
-				throw new IllegalArgumentException("Finite thermal contact is invalid");
-			}
+	/** Actual caloric owner and its fraction of the exposed contact area. */
+	public record Carrier(int owner,ThermalMaterialDefinition material,double mass,double baseEnergy,
+	                      double internalEnergy,double contactFraction) {
+		public Carrier {
+			if(owner<0||material==null||!(mass>0&&Double.isFinite(mass))||!Double.isFinite(baseEnergy)
+					||!Double.isFinite(internalEnergy)||!(contactFraction>=0&&Double.isFinite(contactFraction)))
+				throw new IllegalArgumentException("Finite thermal carrier is invalid");
 		}
+		ThermalContactExchange.Carrier caloric(){return new ThermalContactExchange.Carrier(material,mass,baseEnergy,internalEnergy);}
 	}
-
-	public record ContactDelta(int ordinal, double internalEnergyDeltaJ, double finalTemperatureK) {
-		public ContactDelta {
-			if (ordinal < 0 || !Double.isFinite(internalEnergyDeltaJ)
-					|| !Double.isFinite(finalTemperatureK)) {
-				throw new IllegalArgumentException("Finite thermal contact result is invalid");
-			}
+	/** A spatial port retains every owner's own temperature and caloric curve. */
+	public record Contact(int ordinal,double conductanceWPerK,List<Carrier> carriers) {
+		public Contact {
+			if(ordinal<0||!(conductanceWPerK>0&&Double.isFinite(conductanceWPerK))||carriers==null||carriers.isEmpty())
+				throw new IllegalArgumentException("Finite thermal contact is invalid");
+			carriers=List.copyOf(carriers);
 		}
+		/** A single constant-capacity caloric port. The declared interval continues with its endpoint heat capacity. */
+		public Contact(int ordinal,double temperature,double capacity,double conductance,double minimum,double maximum){
+			this(ordinal,conductance,List.of(new Carrier(0,new ThermalMaterialDefinition("mmm:thermal/constant_port",
+					ThermalMaterialDefinition.CarrierKind.DEVICE,"mmm:constant_port",temperature,0,0,
+					List.of(new ThermalMaterialDefinition.CaloricSegment(minimum,maximum,capacity))),1,0,0,1)));
+		}
+		public double heatCapacityJPerK(){double sum=0;for(var carrier:carriers)sum+=carrier.caloric().heatCapacityJPerK();return sum;}
+		public double temperatureK(){double sum=0,weight=0;for(var carrier:carriers){var body=carrier.caloric();double c=body.heatCapacityJPerK();sum+=c*body.temperatureK();weight+=c;}return sum/weight;}
+	}
+	public record CarrierDelta(int owner,double beforeEnergy,double afterEnergy) { }
+	public record ContactDelta(int ordinal,double internalEnergyDeltaJ,double finalTemperatureK,List<CarrierDelta> carriers) {
+		public ContactDelta { carriers=List.copyOf(carriers); }
 	}
 
 	/** Complete plan; the coordinator must compare and publish both before/after owner generations atomically. */
@@ -131,91 +127,44 @@ public final class FiniteThermalExchange {
 		if (material.carrierKind() != ThermalMaterialDefinition.CarrierKind.DEVICE) {
 			throw new IllegalArgumentException("Finite thermal body material is not a device carrier");
 		}
-		ThermalStateFunction stateFunction = new ThermalStateFunction(registry);
-		double initialBodyTemperature = stateFunction.stateForInternalEnergy(
-				materialHandle, body.massKilograms(), java.util.Map.of(), body.internalEnergyJ()).temperatureK();
-		double minimumBodyHeatCapacity = Double.POSITIVE_INFINITY;
-		for (ThermalMaterialDefinition.CaloricSegment segment : material.caloricSegments()) {
-			minimumBodyHeatCapacity = Math.min(minimumBodyHeatCapacity,
-					body.massKilograms() * segment.specificHeatJPerKgK());
+		var function=new ThermalStateFunction(registry);
+		var samples=new ArrayList<Carrier>();
+		samples.add(new Carrier(0,material,body.massKilograms(),function.baseEnergy(materialHandle,body.massKilograms(),java.util.Map.of()),body.internalEnergyJ(),1));
+		var graph=new ThermalCarrierContacts(canonical.stream().mapToInt(c->c.carriers().size()).sum());
+		for(var contact:canonical)for(var carrier:contact.carriers()){
+			int owner=samples.size();samples.add(carrier);
+			if(carrier.contactFraction()>0)graph.add(0,owner,contact.conductanceWPerK()*carrier.contactFraction(),Double.NaN);
 		}
-		if (!(Double.isFinite(minimumBodyHeatCapacity) && minimumBodyHeatCapacity > 0.0)) {
-			throw new IllegalArgumentException("Finite thermal body heat-capacity bound is invalid");
-		}
-		double conductanceSum = 0.0;
-		double stableDt = Double.POSITIVE_INFINITY;
-		boolean exchangeRequired = false;
-		for (Contact contact : canonical) {
-			exchangeRequired |= contact.temperatureK() != initialBodyTemperature;
-			conductanceSum += contact.conductanceWPerK();
-			stableDt = Math.min(stableDt, stableStep(contact.heatCapacityJPerK(), contact.conductanceWPerK()));
-		}
-		if (!(Double.isFinite(conductanceSum) && conductanceSum > 0.0)) {
-			throw new IllegalArgumentException("Finite thermal conductance sum is invalid");
-		}
-		// The body may cross a caloric-segment boundary during this plan. Using only its initial
-		// heat capacity can make a later lower-capacity segment unstable, so bind the whole plan
-		// to the smallest capacity in the registry-frozen declared segments.
-		stableDt = Math.min(stableDt, stableStep(minimumBodyHeatCapacity, conductanceSum));
-		int substeps = exchangeRequired ? Math.max(1, (int) Math.ceil(logicalDtSeconds / stableDt)) : 1;
-		if (substeps > maximumSubsteps) {
-			throw new IllegalArgumentException("Finite thermal stability substep budget exceeded: " + substeps);
-		}
-
-		double bodyEnergy = body.internalEnergyJ();
-		double[] fluidTemperature = canonical.stream().mapToDouble(Contact::temperatureK).toArray();
-		double[] fluidDelta = new double[canonical.size()];
-		double maximumTransfer = 0.0;
-		double dt = logicalDtSeconds / substeps;
-		for (int step = 0; step < substeps; step++) {
-			double bodyTemperature = stateFunction.stateForInternalEnergy(
-					materialHandle, body.massKilograms(), java.util.Map.of(), bodyEnergy).temperatureK();
-			double bodyDelta = 0.0;
-			for (int index = 0; index < canonical.size(); index++) {
-				Contact contact = canonical.get(index);
-				double transfer = ThermalContactExchange.product(contact.conductanceWPerK(),
-						bodyTemperature - fluidTemperature[index], dt);
-				if (!Double.isFinite(transfer)) throw new IllegalArgumentException("Finite thermal transfer is not finite");
-				double candidateTemperature = fluidTemperature[index] + transfer / contact.heatCapacityJPerK();
-				if (!(Double.isFinite(candidateTemperature) && candidateTemperature >= contact.minimumTemperatureK()
-						&& candidateTemperature <= contact.maximumTemperatureK())) {
-					throw new IllegalArgumentException("Finite thermal contact left its linearization interval");
-				}
-				fluidTemperature[index] = candidateTemperature;
-				fluidDelta[index] += transfer;
-				bodyDelta -= transfer;
-				maximumTransfer = Math.max(maximumTransfer, Math.abs(transfer));
+		double[] energies=samples.stream().mapToDouble(Carrier::internalEnergy).toArray();
+		var access=new ThermalCellGrid.CarrierAccess(){
+			public int carrierCount(){return samples.size();}
+			public int cell(int owner){return 0;}
+			public ThermalMaterialDefinition material(int owner){return samples.get(owner).material();}
+			public double mass(int owner){return samples.get(owner).mass();}
+			public double volume(int owner){return 1;}
+			public double baseEnergy(int owner){return samples.get(owner).baseEnergy();}
+			public double internalEnergy(int owner){return energies[owner];}
+			public void setInternalEnergy(int owner,double energy){energies[owner]=energy;}
+		};
+		var batch=ThermalCarrierTransport.prepare(access);
+		var stats=ThermalCarrierTransport.solve(batch,graph,logicalDtSeconds,maximumSubsteps);batch.commit();
+		boolean changed=energies[0]!=body.internalEnergyJ();
+		var deltas=new ArrayList<ContactDelta>();int owner=1;
+		var exactChange=SignedDyadic.of(energies[0]).subtract(SignedDyadic.of(body.internalEnergyJ()));
+		for(var contact:canonical){
+			var writes=new ArrayList<CarrierDelta>();var change=SignedDyadic.ZERO;double weighted=0,capacity=0;
+			for(var carrier:contact.carriers()){
+				double after=energies[owner++];writes.add(new CarrierDelta(carrier.owner(),carrier.internalEnergy(),after));
+				change=change.add(SignedDyadic.of(after).subtract(SignedDyadic.of(carrier.internalEnergy())));
+				var state=new ThermalContactExchange.Carrier(carrier.material(),carrier.mass(),carrier.baseEnergy(),after);
+				double c=state.heatCapacityJPerK();weighted+=state.temperatureK()*c;capacity+=c;
 			}
-			bodyEnergy += bodyDelta;
-			stateFunction.stateForInternalEnergy(materialHandle, body.massKilograms(), java.util.Map.of(), bodyEnergy);
+			double delta=change.toDouble();changed|=delta!=0;
+			deltas.add(new ContactDelta(contact.ordinal(),delta,weighted/capacity,writes));
+			exactChange=exactChange.add(SignedDyadic.of(delta));
 		}
-
-		boolean changed = Double.doubleToRawLongBits(bodyEnergy)
-				!= Double.doubleToRawLongBits(body.internalEnergyJ());
-		for (double delta : fluidDelta) changed |= delta != 0.0;
-		long generation = changed ? Math.addExact(body.generation(), 1L) : body.generation();
-		FiniteThermalBodyState after = new FiniteThermalBodyState(generation,
-				body.thermalRegistryFingerprint(), body.thermalMaterialId(), body.massUnits(), bodyEnergy);
-		ArrayList<ContactDelta> deltas = new ArrayList<>(canonical.size());
-		SignedDyadic exactChange = SignedDyadic.of(after.internalEnergyJ()).subtract(
-				SignedDyadic.of(body.internalEnergyJ()));
-		for (int index = 0; index < canonical.size(); index++) {
-			Contact contact = canonical.get(index);
-			double finalTemperature = contact.temperatureK() + fluidDelta[index] / contact.heatCapacityJPerK();
-			if (!(Double.isFinite(finalTemperature) && finalTemperature >= contact.minimumTemperatureK()
-					&& finalTemperature <= contact.maximumTemperatureK())) {
-				throw new IllegalArgumentException("Finite thermal contact result left its linearization interval");
-			}
-			deltas.add(new ContactDelta(contact.ordinal(), fluidDelta[index], finalTemperature));
-			exactChange = exactChange.add(SignedDyadic.of(fluidDelta[index]));
-		}
-		return new Plan(body, after, canonical, deltas, substeps, maximumTransfer, exactChange);
-	}
-
-	private static double stableStep(double capacity, double conductance) {
-		double half = 0.5 * capacity, result = half / conductance;
-		if (half >= Double.MIN_NORMAL && Double.isFinite(result) && result > 0.0) return result;
-		int ce = ThermalContactExchange.exponent(capacity), ge = ThermalContactExchange.exponent(conductance);
-		return Math.scalb(0.5 * Math.scalb(capacity, -ce) / Math.scalb(conductance, -ge), ce - ge);
+		var after=new FiniteThermalBodyState(changed?Math.addExact(body.generation(),1):body.generation(),
+				body.thermalRegistryFingerprint(),body.thermalMaterialId(),body.massUnits(),energies[0]);
+		return new Plan(body,after,canonical,deltas,stats.substeps(),stats.maximumAbsoluteTransferJ(),exactChange);
 	}
 }

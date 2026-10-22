@@ -54,7 +54,7 @@ final class MinecraftRegionAvailability {
 		if (available && world.hasCapability(WorldCapability.THERMAL)
 				&& region.solverLoaded() && region.domain().hasThermalState()) {
 			region.enableThermalActivity();
-			if (region.domain().hasPendingPhaseVolumeWork()) region.wakeForActivity();
+			if (region.domain().hasPendingPhaseMotionWork()) region.wakeForActivity();
 		}
 		return available;
 	}

@@ -73,7 +73,7 @@ public final class FluidDomainStateAssertions {
 		}
 		compareGas(expected.gas(), actual.gas(), context);
 		compareThermal(expected.thermalOwner(), actual.thermalOwner(), context);
-		comparePendingPhaseVolume(expected.pendingPhaseVolume(), actual.pendingPhaseVolume(), context);
+		comparePendingPhaseMotion(expected.pendingPhaseMotion(), actual.pendingPhaseMotion(), context);
 		if (includeTransient) {
 			requireRawDoublesNullable(expected.copyThermalBoundaryTemperaturesK(),
 					actual.copyThermalBoundaryTemperaturesK(), context + " thermal boundary");
@@ -149,7 +149,7 @@ public final class FluidDomainStateAssertions {
 		require(expected.audit().equals(actual.audit()), context + ": thermal audit changed");
 	}
 
-	private static void comparePendingPhaseVolume(PendingPhaseVolumeState expected, PendingPhaseVolumeState actual,
+	private static void comparePendingPhaseMotion(PendingPhaseMotionState expected, PendingPhaseMotionState actual,
 	                                              String context) {
 		require((expected == null) == (actual == null), context + ": pending phase presence changed");
 		if (expected == null) return;

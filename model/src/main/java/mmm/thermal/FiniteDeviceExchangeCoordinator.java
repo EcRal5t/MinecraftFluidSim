@@ -1,172 +1,89 @@
 package mmm.thermal;
 
 import mmm.units.SignedDyadic;
-
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/**
- * Coordinates finite thermal device exchange with the region's cell grid: contact
- * derivation, the joint body/cell plan (device U never returns to a BlockEntity) and the
- * rollback-safe cell commit with its audit booking. The device state and the exchange
- * audit stay with the region; this coordinator only plans and applies the joint edit.
- */
+/** Plans and publishes finite device heat directly on the contacted caloric owners. */
 public final class FiniteDeviceExchangeCoordinator {
-	public record CellEnergyDelta(int cell, double internalEnergyDeltaJ) {
-		public CellEnergyDelta {
-			if (cell < 0 || !Double.isFinite(internalEnergyDeltaJ)) {
-				throw new IllegalArgumentException("Finite thermal cell delta is invalid");
-			}
-		}
-	}
-	public record CellContactRequest(int cell, int ordinal, double conductanceWPerK) {
-		public CellContactRequest {
-			if (cell < 0 || ordinal < 0
-					|| !(Double.isFinite(conductanceWPerK) && conductanceWPerK > 0.0)) {
-				throw new IllegalArgumentException("Finite thermal cell contact is invalid");
-			}
-		}
-	}
-	public record FiniteDeviceCellPlan(
-			SignedDyadic[] targetCellEnergy,
-			int[] editedCells,
-			int[] carrierCells, double[] carrierEnergy,
-			List<CarrierCaloricState> caloricBefore, ThermalDomainState.Revision revisionBefore,
-			SignedDyadic inventoryBefore, SignedDyadic requestedDelta
-	) {
-		public FiniteDeviceCellPlan {
-			if (targetCellEnergy == null || editedCells == null || carrierCells == null || carrierEnergy == null
-					|| caloricBefore == null || revisionBefore == null
-					|| Arrays.stream(targetCellEnergy).anyMatch(java.util.Objects::isNull)
-					|| caloricBefore.size() != carrierCells.length
-					|| inventoryBefore == null || requestedDelta == null
-					|| carrierCells.length != carrierEnergy.length) {
-				throw new IllegalArgumentException("Finite thermal cell plan is incomplete");
-			}
-			targetCellEnergy = targetCellEnergy.clone();
-			editedCells = editedCells.clone();
-			carrierCells = carrierCells.clone();
-			carrierEnergy = carrierEnergy.clone();
-			caloricBefore = List.copyOf(caloricBefore);
-		}
-		@Override public SignedDyadic[] targetCellEnergy() { return targetCellEnergy.clone(); }
-		@Override public int[] editedCells() { return editedCells.clone(); }
-		@Override public int[] carrierCells() { return carrierCells.clone(); }
-		@Override public double[] carrierEnergy() { return carrierEnergy.clone(); }
-	}
-	public record CarrierCaloricState(ThermalMaterialDefinition material, double mass, double baseEnergy) { }
-
-	private static List<CarrierCaloricState> caloricSnapshot(ThermalCellGrid.CarrierAccess carriers) {
-		ArrayList<CarrierCaloricState> states = new ArrayList<>(carriers.carrierCount());
-		for (int carrier = 0; carrier < carriers.carrierCount(); carrier++) {
-			states.add(new CarrierCaloricState(carriers.material(carrier), carriers.mass(carrier),
-					carriers.baseEnergy(carrier)));
-		}
-		return List.copyOf(states);
-	}
-
-	private final ThermalDomainState domain;
-
-	FiniteDeviceExchangeCoordinator(ThermalDomainState domain) {
-		this.domain = domain;
-	}
-
-	public List<FiniteThermalExchange.Contact> finiteDeviceContacts(
-			List<CellContactRequest> requests, ThermalCarrierContext markers
-	) {
-		if (requests == null || requests.isEmpty()
-				|| requests.size() > ThermalLimits.MAX_FINITE_DEVICE_CONTACTS) {
-			throw new IllegalArgumentException("Finite thermal contacts are missing or over budget");
-		}
-		ArrayList<CellContactRequest> canonical = new ArrayList<>(requests);
-		if (canonical.stream().anyMatch(java.util.Objects::isNull)) {
-			throw new IllegalArgumentException("Finite thermal contacts contain null");
-		}
-		canonical.sort(java.util.Comparator.comparingInt(CellContactRequest::ordinal));
-		ThermalCellGrid cellGrid = domain.grid();
-		cellGrid.rebuild(domain.exchangeCarrierAccess(markers));
-		ArrayList<FiniteThermalExchange.Contact> result = new ArrayList<>(canonical.size());
-		java.util.HashSet<Integer> cells = new java.util.HashSet<>();
-		int previousOrdinal = -1;
-		for (CellContactRequest request : canonical) {
-			if (request.ordinal() == previousOrdinal || request.cell() >= cellGrid.cellCount()
-					|| !cells.add(request.cell()) || !cellGrid.occupied(request.cell())) {
-				throw new IllegalArgumentException("Finite thermal contacts repeat or name an empty cell");
-			}
-			previousOrdinal = request.ordinal();
-			result.add(new FiniteThermalExchange.Contact(request.ordinal(), cellGrid.temperature(request.cell()),
-					cellGrid.heatCapacity(request.cell()), request.conductanceWPerK(),
-					cellGrid.minimumTemperature(request.cell()), cellGrid.maximumTemperature(request.cell())));
-		}
-		return List.copyOf(result);
-	}
-
-	public FiniteDeviceCellPlan planFiniteDeviceCellExchange(
-			List<CellEnergyDelta> deltas, ThermalCarrierContext markers
-	) {
-		if (deltas == null || deltas.isEmpty() || deltas.size() > ThermalLimits.MAX_FINITE_DEVICE_CONTACTS) {
-			throw new IllegalArgumentException("Finite thermal cell deltas are missing or over budget");
-		}
-		ArrayList<CellEnergyDelta> canonical = new ArrayList<>(deltas);
-		if (canonical.stream().anyMatch(java.util.Objects::isNull)) {
-			throw new IllegalArgumentException("Finite thermal cell deltas contain null");
-		}
-		canonical.sort(java.util.Comparator.comparingInt(CellEnergyDelta::cell));
-		ThermalCellGrid cellGrid = domain.grid();
-		ThermalCellGrid.CarrierAccess carriers = domain.exchangeCarrierAccess(markers);
-		cellGrid.rebuild(carriers);
-		SignedDyadic[] target = new SignedDyadic[cellGrid.cellCount()];
-		for (int cell = 0; cell < target.length; cell++) target[cell] = cellGrid.exactCarrierEnergyInCell(cell);
-		SignedDyadic requested = SignedDyadic.ZERO;
-		int previousCell = -1;
-		for (CellEnergyDelta delta : canonical) {
-			if (delta.cell() >= cellGrid.cellCount() || delta.cell() == previousCell
-					|| !cellGrid.occupied(delta.cell())) {
-				throw new IllegalArgumentException("Finite thermal cell deltas repeat or name an empty cell");
-			}
-			previousCell = delta.cell();
-			target[delta.cell()] = target[delta.cell()].add(SignedDyadic.of(delta.internalEnergyDeltaJ()));
-			if (!Double.isFinite(target[delta.cell()].toDouble())) {
-				throw new IllegalArgumentException("Finite thermal cell target energy is not finite");
-			}
-			requested = requested.add(SignedDyadic.of(delta.internalEnergyDeltaJ()));
-		}
-		int[] editedCells = canonical.stream().filter(delta -> delta.internalEnergyDeltaJ() != 0.0)
-				.mapToInt(CellEnergyDelta::cell).toArray();
-		for (int cell : editedCells) cellGrid.validateCellInternalEnergy(cell, target[cell]);
-		return new FiniteDeviceCellPlan(target, editedCells, cellGrid.copyCarrierCells(),
-				cellGrid.copyCarrierInternalEnergy(), caloricSnapshot(carriers), domain.thermalRevision(),
-				domain.exactEnergy(markers.markerCount()), requested);
-	}
-
-	public void commitFiniteDeviceCellExchange(FiniteDeviceCellPlan plan, ThermalCarrierContext markers) {
-		if (plan == null) throw new IllegalArgumentException("Finite thermal cell plan is missing");
-		ThermalCellGrid cellGrid = domain.grid();
-		ThermalCellGrid.CarrierAccess carriers = domain.exchangeCarrierAccess(markers);
-		cellGrid.rebuild(carriers);
-		if (!domain.matchesThermalRevision(plan.revisionBefore())
-				|| !plan.caloricBefore().equals(caloricSnapshot(carriers))
-				|| !plan.inventoryBefore().equals(domain.exactEnergy(markers.markerCount()))
-				|| !Arrays.equals(plan.carrierCells(), cellGrid.copyCarrierCells())
-				|| !Arrays.equals(plan.carrierEnergy(), cellGrid.copyCarrierInternalEnergy())) {
-			throw new IllegalArgumentException("Finite thermal cell plan is stale");
-		}
-		double[] rollback = cellGrid.copyCarrierInternalEnergy();
-		ThermalAuditLedger beforeAudit = domain.audit().ledger();
-		try {
-			SignedDyadic[] target = plan.targetCellEnergy();
-			for (int cell : plan.editedCells()) {
-				cellGrid.setCellInternalEnergy(cell, target[cell]);
-			}
-			SignedDyadic actualDelta = domain.exactEnergy(markers.markerCount()).subtract(plan.inventoryBefore());
-			domain.audit().update(ledger -> ledger.withFiniteDeviceExchange(plan.requestedDelta())
-					.withRoundoff(actualDelta.subtract(plan.requestedDelta())));
-		} catch (RuntimeException failure) {
-			domain.audit().replace(beforeAudit);
-			try { cellGrid.restoreCarrierInternalEnergy(rollback); }
-			catch (RuntimeException rollbackFailure) { failure.addSuppressed(rollbackFailure); }
-			throw failure;
-		}
-	}
+    /** Explicit heat input or the per-owner result of a finite contact solve. */
+    public record CellEnergyDelta(int cell,double internalEnergyDeltaJ,List<FiniteThermalExchange.CarrierDelta> carriers){
+        public CellEnergyDelta { if(cell<0||!Double.isFinite(internalEnergyDeltaJ))throw new IllegalArgumentException("Invalid cell heat input");carriers=List.copyOf(carriers); }
+        public CellEnergyDelta(int cell,double energy){this(cell,energy,List.of());}
+    }
+    public record CellContactRequest(int cell,int ordinal,double conductanceWPerK){
+        public CellContactRequest { if(cell<0||ordinal<0||!(conductanceWPerK>0&&Double.isFinite(conductanceWPerK)))throw new IllegalArgumentException("Invalid device contact"); }
+    }
+    public record CarrierCaloricState(int cell,ThermalMaterialDefinition material,double mass,double baseEnergy,double energy) { }
+    public record FiniteDeviceCellPlan(List<CarrierCaloricState> before,double[] after,
+            ThermalDomainState.Revision revisionBefore,SignedDyadic inventoryBefore,SignedDyadic requestedDelta){
+        public FiniteDeviceCellPlan { before=List.copyOf(before);after=after.clone(); }
+        @Override public double[] after(){return after.clone();}
+    }
+    private final ThermalDomainState domain;
+    FiniteDeviceExchangeCoordinator(ThermalDomainState domain){this.domain=domain;}
+    private static List<CarrierCaloricState> snapshot(ThermalCellGrid.CarrierAccess access){
+        var rows=new ArrayList<CarrierCaloricState>();
+        for(int owner=0;owner<access.carrierCount();owner++)rows.add(new CarrierCaloricState(access.cell(owner),access.material(owner),access.mass(owner),access.baseEnergy(owner),access.internalEnergy(owner)));
+        return List.copyOf(rows);
+    }
+    public List<FiniteThermalExchange.Contact> finiteDeviceContacts(List<CellContactRequest> requests,ThermalCarrierContext markers){
+        if(requests==null||requests.isEmpty()||requests.size()>ThermalLimits.MAX_FINITE_DEVICE_CONTACTS)throw new IllegalArgumentException("Invalid finite contacts");
+        var access=domain.exchangeCarrierAccess(markers);var canonical=new ArrayList<>(requests);
+        canonical.sort(java.util.Comparator.comparingInt(CellContactRequest::ordinal));
+        var seen=new java.util.HashSet<Integer>();var cells=new java.util.HashSet<Integer>();var result=new ArrayList<FiniteThermalExchange.Contact>();
+        for(var request:canonical){
+            if(!seen.add(request.ordinal())||!cells.add(request.cell()))throw new IllegalArgumentException("Repeated finite contact");
+            double volume=0;for(int owner=0;owner<access.carrierCount();owner++)if(access.cell(owner)==request.cell())volume+=access.volume(owner);
+            var carriers=new ArrayList<FiniteThermalExchange.Carrier>();
+            for(int owner=0;owner<access.carrierCount();owner++)if(access.cell(owner)==request.cell()&&access.volume(owner)>0)
+                carriers.add(new FiniteThermalExchange.Carrier(owner,access.material(owner),access.mass(owner),access.baseEnergy(owner),access.internalEnergy(owner),access.material(owner).conductivityWPerMeterK()==0?0:access.volume(owner)/volume));
+            if(carriers.isEmpty())throw new IllegalArgumentException("Device contact has no conducting owner");
+            result.add(new FiniteThermalExchange.Contact(request.ordinal(),request.conductanceWPerK(),carriers));
+        }
+        return List.copyOf(result);
+    }
+    public FiniteDeviceCellPlan planFiniteDeviceCellExchange(List<CellEnergyDelta> deltas,ThermalCarrierContext markers){
+        if(deltas==null||deltas.isEmpty()||deltas.size()>ThermalLimits.MAX_FINITE_DEVICE_CONTACTS)throw new IllegalArgumentException("Invalid finite heat changes");
+        var access=domain.exchangeCarrierAccess(markers);var before=snapshot(access);
+        double[] after=before.stream().mapToDouble(CarrierCaloricState::energy).toArray();
+        var cells=new java.util.HashSet<Integer>();var requested=SignedDyadic.ZERO;
+        for(var delta:deltas){
+            if(!cells.add(delta.cell()))throw new IllegalArgumentException("Repeated heat change cell");
+            requested=requested.add(SignedDyadic.of(delta.internalEnergyDeltaJ()));
+            if(!delta.carriers().isEmpty()){
+                var sum=SignedDyadic.ZERO;
+                for(var write:delta.carriers()){
+                    int owner=write.owner();
+                    if(owner<0||owner>=before.size()||before.get(owner).cell()!=delta.cell()||write.beforeEnergy()!=after[owner])throw new IllegalArgumentException("Device caloric owner changed");
+                    sum=sum.add(SignedDyadic.of(write.afterEnergy()).subtract(SignedDyadic.of(write.beforeEnergy())));after[owner]=write.afterEnergy();
+                }
+                if(sum.toDouble()!=delta.internalEnergyDeltaJ())throw new IllegalArgumentException("Device owner heat differs from its contact total");
+            }else{
+                // Explicit source heat changes each existing owner's U; it preserves every initial temperature difference.
+                double capacity=0;int pivot=-1;double largest=0;
+                for(int owner=0;owner<before.size();owner++)if(before.get(owner).cell()==delta.cell()){
+                    var row=before.get(owner);double c=new ThermalContactExchange.Carrier(row.material(),row.mass(),row.baseEnergy(),row.energy()).heatCapacityJPerK();capacity+=c;
+                    if(c>largest){largest=c;pivot=owner;}
+                }
+                if(pivot<0)throw new IllegalArgumentException("Heat input names an empty cell");
+                double remaining=delta.internalEnergyDeltaJ();
+                for(int owner=0;owner<before.size();owner++)if(owner!=pivot&&before.get(owner).cell()==delta.cell()){
+                    var row=before.get(owner);double c=new ThermalContactExchange.Carrier(row.material(),row.mass(),row.baseEnergy(),row.energy()).heatCapacityJPerK();
+                    double heat=delta.internalEnergyDeltaJ()*c/capacity;after[owner]+=heat;remaining-=heat;
+                }
+                after[pivot]+=remaining;
+            }
+        }
+        for(int owner=0;owner<after.length;owner++){var row=before.get(owner);new ThermalContactExchange.Carrier(row.material(),row.mass(),row.baseEnergy(),after[owner]);}
+        return new FiniteDeviceCellPlan(before,after,domain.thermalRevision(),domain.exactEnergy(markers.markerCount()),requested);
+    }
+    public void commitFiniteDeviceCellExchange(FiniteDeviceCellPlan plan,ThermalCarrierContext markers){
+        var access=domain.exchangeCarrierAccess(markers);
+        if(!domain.matchesThermalRevision(plan.revisionBefore())||!plan.before().equals(snapshot(access))||!plan.inventoryBefore().equals(domain.exactEnergy(markers.markerCount())))throw new IllegalArgumentException("Finite thermal plan is stale");
+        access.setInternalEnergies(plan.after());
+        var actual=domain.exactEnergy(markers.markerCount()).subtract(plan.inventoryBefore());
+        domain.audit().update(ledger->ledger.withFiniteDeviceExchange(plan.requestedDelta()).withRoundoff(actual.subtract(plan.requestedDelta())));
+    }
 }

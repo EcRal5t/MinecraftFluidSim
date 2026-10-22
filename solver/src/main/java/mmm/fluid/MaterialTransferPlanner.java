@@ -59,7 +59,7 @@ final class MaterialTransferPlanner {
 	}
 	FluidDomain.VolumeAddition insertVolumeAtMost(int x, int y, int z, float amount, int radius) {
 		domain.domainFlowFields.validateVolumeEdit(amount, radius);
-		if (amount <= 0 || domain.hasPendingPhaseVolumeWork()) return new FluidDomain.VolumeAddition(0, false);
+		if (amount <= 0 || domain.hasPendingPhaseMotionWork()) return new FluidDomain.VolumeAddition(0, false);
 		var nearby = domain.domainFlowFields.nearbyCells(x, y, z, radius); var room = SignedDyadic.ZERO;
 		for (var candidate : nearby) room = room.add(available(candidate.index()));
 		var requested = SignedDyadic.of(amount); var accepted = minimum(room, requested);
@@ -80,7 +80,7 @@ final class MaterialTransferPlanner {
 		return new Input(material, volume, mass, mixture);
 	}
 	private boolean insert(List<Input> inputs, List<FluidDomain.CellCandidate> nearby, boolean externalSource, Double energy) {
-		if (domain.hasPendingPhaseVolumeWork()) return false;
+		if (domain.hasPendingPhaseMotionWork()) return false;
 		domain.domainFlowFields.ensureInventoryGrid();
 		var requested = SignedDyadic.ZERO; long mass = domain.liquidCells.massUnits();
 		for (var input : inputs) { requested = requested.add(input.volume()); mass = Math.addExact(mass, input.mass()); }
@@ -191,7 +191,7 @@ final class MaterialTransferPlanner {
 		return new FluidDomain.ExactChemicalTransfer(true, extraction.ledger(), extraction.energy());
 	}
 	private Extraction extract(List<FluidDomain.CellCandidate> nearby, SignedDyadic requested, int material, boolean canonical) {
-		if (requested.signum() < 0 || domain.hasPendingPhaseVolumeWork()) return null;
+		if (requested.signum() < 0 || domain.hasPendingPhaseMotionWork()) return null;
 		domain.domainFlowFields.ensureInventoryGrid();
 		var remaining = requested; var edits = new ArrayList<LiquidCellInventory.Edit>(); var removed = new LinkedHashMap<Integer, Removed>();
 		var removedEnergy = SignedDyadic.ZERO;

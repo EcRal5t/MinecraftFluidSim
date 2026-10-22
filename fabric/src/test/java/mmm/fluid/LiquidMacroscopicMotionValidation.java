@@ -103,10 +103,11 @@ public final class LiquidMacroscopicMotionValidation {
 			}
 			domain.cellMacStage.publishMomentum();
 			domain.bootstrapGasState(null);
-			var before = Motion.capture(domain); domain = runSteps(domain, 4, false, 0, "rotation-" + axis); var after = Motion.capture(domain);
-			// A 3-cell-radius diameter is coarse: quantify accumulated first-order transport dissipation.
-			check(after.angular[axis] > .8 * before.angular[axis] && after.angular[axis] <= 1.05 * before.angular[axis],
-					"Resolved macroscopic rotation exceeded the 20% transport-decay budget");
+			var before = Motion.capture(domain); domain = runSteps(domain, 320, false, 0, "rotation-" + axis); var after = Motion.capture(domain);
+			// omega*t=0.8 rad; the outer fluid travels 1.2 cells. Upwind nu~U*h/2
+            // on the 3-cell diameter gives an angular decay scale exp(-nu*(pi/L)^2*t).
+			check(after.angular[axis] > Math.exp(-.075*Math.pow(Math.PI/3,2)*8) * before.angular[axis] && after.angular[axis] <= 1.05 * before.angular[axis],
+					"Resolved macroscopic rotation exceeded its grid/time transport-decay budget");
 			check(after.kinetic <= 1.05 * before.kinetic, "Unforced rotation gained kinetic energy");
 		}
 	}

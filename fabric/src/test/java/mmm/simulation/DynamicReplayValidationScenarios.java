@@ -713,8 +713,8 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		require(domain.gasBoundary().auditClosed()
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"full-capability phase-on step did not close gas or total U audit");
-		require(committed.pendingPhaseVolume().entries().equals(
-					restored.exportPendingPhaseVolumeState().entries())
+		require(committed.pendingPhaseMotion().entries().equals(
+					restored.exportPendingPhaseMotionState().entries())
 				&& restored.gasBoundary().auditClosed()
 				&& restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),
 				"full-capability phase-on state did not preserve pending volume, gas or U across restore");
@@ -768,9 +768,9 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 					"planar no-entity backend restore opened or changed the sealed gas owner at step " + step);
 			require(restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()),
 					"planar no-entity backend restore opened total U at step " + step);
-			require(candidate.state().pendingPhaseVolume().entries().equals(
-					restored.exportPendingPhaseVolumeState().entries()),
-					"planar no-entity backend restore changed pending phase volume at step " + step);
+			require(candidate.state().pendingPhaseMotion().entries().equals(
+					restored.exportPendingPhaseMotionState().entries()),
+					"planar no-entity backend restore changed pending phase motion at step " + step);
 			state = candidate.state();
 			generation++;
 			if ((step + 1) % 100 == 0) {

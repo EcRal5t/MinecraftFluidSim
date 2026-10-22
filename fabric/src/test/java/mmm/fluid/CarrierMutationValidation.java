@@ -9,6 +9,7 @@ import java.util.List;
 public final class CarrierMutationValidation {
 	private CarrierMutationValidation() { }
 	public static void main(String[] args) throws Exception {
+		collisionPlanTracksMomentum();
 		phaseMomentumFollowsEachRemovedCell();
 		insertExtractAndRestoreKeepQuantities();
 		defaultInsertionsConserveThermalInventory();
@@ -20,6 +21,20 @@ public final class CarrierMutationValidation {
 		externalInsertionsRouteAroundLiquidSealedGas();
 		System.out.println("Cell inventory mutation validation passed");
 	}
+	private static void collisionPlanTracksMomentum() {
+        var d=new FluidDomain(4,4,4,new FluidSolverConfig(.5F,1000,0,.05F,200,1e-5F,.002F));
+        d.setVolume(1,1,1,1);d.setVolume(2,1,1,1);
+        var edits=List.of(new FluidDomain.CollisionEdit(3,3,3,255));
+        var plan=d.planCollisionEdits(edits);var before=d.exportMacMomentum();
+        int face=(1*4+1)*5+2;var x=before.copyX();x[face]=10;
+        d.restoreMacMomentum(new MacMomentumState(4,4,4,x,before.copyY(),before.copyZ()));
+        boolean rejected=false;
+        try { d.beginCollisionEdits(plan); } catch(IllegalStateException stale) { rejected=true; }
+        require(rejected&&d.exportMacMomentum().copyX()[face]==10&&d.solidMicroMask(3,3,3)==0,
+                "Stale collision plan overwrote newer momentum or geometry");
+        d.beginCollisionEdits(d.planCollisionEdits(edits));
+        require(Math.abs(d.exportMacMomentum().copyX()[face]-10)<1e-6,"Fresh dry-cell collision changed liquid momentum");
+    }
 	private static void phaseMomentumFollowsEachRemovedCell() {
 		var domain=new FluidDomain(6,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F));
 		domain.setVolume(1,1,1,.5F);domain.setVolume(2,1,1,.5F);
@@ -244,7 +259,7 @@ public final class CarrierMutationValidation {
 				300,0,0,List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,1000,1000)))).toList();
 		var offsets=registries.thermal().speciesOffsets().stream().map(offset->new mmm.thermal.ThermalSpeciesOffset(
 				offset.id(),offset.speciesId(),offset.hostThermalMaterialId(),mmm.chemistry.ExactRational.ZERO)).toList();
-		var registry=new mmm.thermal.ThermalRegistry(definitions,offsets,List.of(),List.of(),List.of(),
+		var registry=new mmm.thermal.ThermalRegistry(definitions,offsets,List.of(),List.of(),
 				registries.chemical().fingerprint(),"",registries.gas().fingerprint());
 		domain.setVolume(2,2,2,.001F);domain.bindThermal(registry,domain.materialRegistry,300);
 		var pieces=List.of(new FluidDomain.MaterialPortion(0,.125,domain.unitScale.massUnitsForNormalized(125)),

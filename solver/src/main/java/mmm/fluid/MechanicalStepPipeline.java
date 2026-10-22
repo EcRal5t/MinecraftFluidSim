@@ -138,7 +138,7 @@ final class MechanicalStepPipeline {
 		}
 		diagnosticStage = Stage.PRESSURE_SOLVE;
 		pressure.solve(dt);
-		boolean phaseGeometryPending = substep == 0 && domain.pendingPhaseVolume.hasWork();
+		boolean phaseGeometryPending = substep == 0 && domain.pendingPhaseMotion.hasWork();
 		diagnosticStage = Stage.PRESSURE_PUBLICATION;
 		pressure.projectVelocities(dt);
 		if(captureAudit){
@@ -159,7 +159,7 @@ final class MechanicalStepPipeline {
 		if (phaseGeometryPending) {
 			// Phase inventories already share a conservative fixed-volume energy update.
 			// Their internal displacement is not external work on the whole thermal system.
-			domain.pendingPhaseVolume.clear();
+			domain.pendingPhaseMotion.clear();
 		}
 		bodyForceStage.enforceSolidFaceVelocities();
 		if (captureAudit) {

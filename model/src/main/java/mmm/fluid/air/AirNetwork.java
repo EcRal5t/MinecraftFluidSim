@@ -37,9 +37,14 @@ public final class AirNetwork {
 		/** Donor fraction whose outgoing enthalpy leaves positive-temperature inventory. */
 		default double maximumOutflowFraction(int nodeId) { return Math.nextDown(1.0); }
 		/** Actual candidate pressures, indexed in batch node order; null selects isothermal storage. */
-		default double[] flowPressures(FlowBatch batch) { return null; }
+		default PortThermodynamics portThermodynamics(int first, int second) { return null; }
 
 	}
+
+	/** Continuous two-cavity response; inventory encoding is applied once after this solve. */
+	public record PortThermodynamics(int source, int target, double pressureDrop, double sourceDensity,
+	                                 double sourceRatio, double maximumVolume, double quantum,
+	                                 java.util.function.DoubleUnaryOperator pressureAfterTransfer) { }
 
 	@FunctionalInterface
 	public interface BatchTransferPlanner { TransferCommit plan(FlowBatch batch); }
@@ -391,27 +396,36 @@ public final class AirNetwork {
 		}
 		int[] first = new int[edges.size()], second = new int[edges.size()];
 		for (int e = 0; e < edges.size(); e++) { first[e] = index.get(edges.get(e).firstNode()); second[e] = index.get(edges.get(e).secondNode()); }
-		double[] transported;
-
 		java.util.function.Function<double[], FlowBatch> allocate = amounts -> flowBatch(ids, index, first, second, amounts, thermodynamics);
-		if (thermodynamics.flowPressures(allocate.apply(new double[edges.size()])) != null)
-			transported = GasOrificeFlow.solveThermal(dt, edges, first, second, pressure, density, ratio,
-					java.util.stream.IntStream.range(0, count + 1).mapToDouble(i -> i == 0 ? Double.POSITIVE_INFINITY
-					: standardVolume(ids.get(i - 1)) * thermodynamics.maximumOutflowFraction(ids.get(i - 1))).toArray(), amounts -> {
-						var candidate = allocate.apply(amounts);
-						double[] actual = thermodynamics.flowPressures(candidate), result = new double[count + 1];
-						for (int i = 1; i <= count; i++) result[i] = actual[i - 1];
-						return result;
-					});
-		else transported = GasOrificeFlow.solve(dt, edges, first, second, pressure, storage, density, ratio);
+		if (thermodynamics.portThermodynamics(edges.getFirst().firstNode(), edges.getFirst().secondNode()) != null) {
+			// A canonical symmetric composition removes insertion-order dependence while each
+			// local solve advances only its two cavities. Inventory is instantiated after the root.
+			var order = new ArrayList<Integer>(); for (int e = 0; e < edges.size(); e++) order.add(e);
+			order.sort(java.util.Comparator.comparingInt((Integer e) -> Math.min(edges.get(e).firstNode(), edges.get(e).secondNode()))
+					.thenComparingInt(e -> Math.max(edges.get(e).firstNode(), edges.get(e).secondNode())));
+			for (int pass = 0; pass < 2; pass++) for (int j = 0; j < order.size(); j++) {
+				int e = order.get(pass == 0 ? j : order.size() - 1 - j); AirEdge edge = edges.get(e);
+				var port = thermodynamics.portThermodynamics(edge.firstNode(), edge.secondNode());
+				double amount = GasOrificeFlow.solveThermalPort(dt * .5, edge, port);
+				if (amount == 0) continue;
+				double[] amounts = new double[edges.size()]; amounts[e] = port.source() == edge.firstNode() ? amount : -amount;
+				commitFlowBatch(allocate.apply(amounts), thermalPlanner);
+			}
+			return;
+		}
+		double[] transported = GasOrificeFlow.solve(dt, edges, first, second, pressure, storage, density, ratio);
 		FlowBatch batch = allocate.apply(transported);
+		commitFlowBatch(batch, thermalPlanner);
+	}
+
+	private void commitFlowBatch(FlowBatch batch, BatchTransferPlanner thermalPlanner) {
 		if (batch.transfers().isEmpty()) return;
 		ArrayList<GasInventory> sources = new ArrayList<>(), sinks = new ArrayList<>();
 		for (var transfer : batch.transfers()) {
 			if (transfer.source() == 0) sources.add(transfer.moved());
 			if (transfer.target() == 0) sinks.add(transfer.moved());
 		}
-		InventoryBatchPlan gas = planInventoryBatch(ids, batch.inventories(), GasRegionAudit.aggregate(sources), GasRegionAudit.aggregate(sinks));
+		InventoryBatchPlan gas = planInventoryBatch(batch.nodeIds(), batch.inventories(), GasRegionAudit.aggregate(sources), GasRegionAudit.aggregate(sinks));
 		TransferCommit thermal = Objects.requireNonNull(thermalPlanner.plan(batch), "Gas thermal flow plan");
 		requireInventoryBatchCurrent(gas);
 		thermal.commitPrepared(); commitInventoryBatch(gas);

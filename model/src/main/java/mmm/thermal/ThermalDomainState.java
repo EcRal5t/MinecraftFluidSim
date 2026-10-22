@@ -61,7 +61,7 @@ public final class ThermalDomainState {
 	private ThermalCellGrid observationGrid;
 	private ThermalSpatialObservation spatialObservation;
 	private boolean spatialObservationPrepared;
-	private final ThermalTransport transport;
+	private final int maximumTransportSubsteps;
 	private final double insertionTemperatureK;
 	private final ThermalAuditState auditState;
 	private final LiquidEnergyColumn liquidEnergy;
@@ -118,7 +118,9 @@ public final class ThermalDomainState {
 		this.materialByFluidHandle = materialByFluidHandle;
 		this.materialByGranularHandle = materialByGranularHandle;
 		this.cellGrid = new ThermalCellGrid(Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ));
-		this.transport = new ThermalTransport(sizeX, sizeY, sizeZ, cellSize, maximumTransportSubsteps);
+		if(maximumTransportSubsteps<=0||maximumTransportSubsteps>ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS)
+			throw new IllegalArgumentException("Thermal substep budget is invalid");
+		this.maximumTransportSubsteps=maximumTransportSubsteps;
 		CoherentPhaseStore coherentPhases = new CoherentPhaseStore(
 				Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ),
 				Math.min(ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION,
@@ -235,7 +237,6 @@ public final class ThermalDomainState {
 	public GranularEnergyColumn granularColumn() { return granularState.column(); }
 	public ThermalStateFunction stateFunction() { return stateFunction; }
 	ThermalCellGrid grid() { return cellGrid; }
-	ThermalTransport transport() { return transport; }
 
 	public ThermalCellGrid.CarrierAccess carrierAccess(ThermalCarrierContext markers) {
 		return cellOperations.carrierAccess(markers);
@@ -623,9 +624,7 @@ public final class ThermalDomainState {
 
 	// ---- pending phase mechanical work ----
 
-	public void requirePendingPhaseCells(SignedDyadic[] pendingCellVolume, ThermalCarrierContext markers) {
-		cellOperations.requirePendingPhaseCells(pendingCellVolume, markers, thermalRevision());
-	}
+
 
 
 	// ---- cell grid observations and repartitions ----
@@ -894,40 +893,13 @@ public final class ThermalDomainState {
 	// ---- transport ----
 
 	public ThermalTransport.Stats lastTransport() { return lastTransport; }
-	public int maximumTransportSubsteps() { return transport.maximumSubsteps(); }
-
-	public ThermalTransport.Stats step(
-			ThermalCarrierContext markers, ThermalTransport.FaceArea faceArea, double dtSeconds
-	) {
-		return step(markers, faceArea, (x, y, z, direction) -> null, dtSeconds);
-	}
-
-	public ThermalTransport.Stats step(
-			ThermalCarrierContext markers, ThermalTransport.FaceArea faceArea,
-			ThermalTransport.BoundaryFace boundaryFace, double dtSeconds
-	) {
-		SignedDyadic before = exactEnergy(markers.markerCount());
-		cellGrid.rebuild(carrierAccess(markers));
-		double[] snapshot = cellGrid.copyCarrierInternalEnergy();
-		try {
-			var result = transport.stepPrepared(cellGrid, faceArea, boundaryFace, dtSeconds);
-			SignedDyadic physicalDelta = exactEnergy(markers.markerCount()).subtract(before);
-			var ledger = auditState.ledger().withHeatExchange(result.reservoirExchange())
-					.withRoundoff(physicalDelta.subtract(result.reservoirExchange()));
-			auditState.replace(ledger);
-			lastTransport = result;
-			return result;
-		} catch (RuntimeException failure) {
-			cellGrid.restoreCarrierInternalEnergy(snapshot);
-			throw failure;
-		}
-	}
+	public int maximumTransportSubsteps() { return maximumTransportSubsteps; }
 
 	/** Finite conduction on real carrier contacts supplied by the spatial discretization. */
 	public ThermalTransport.Stats stepCarrierConduction(
 			ThermalCarrierTransport.Batch batch, List<ThermalCarrierTransport.Contact> contacts, double dtSeconds
 	) {
-		var result = ThermalCarrierTransport.solve(batch, contacts, dtSeconds, transport.maximumSubsteps());
+		var result = ThermalCarrierTransport.solve(batch, contacts, dtSeconds, maximumTransportSubsteps);
 		var physicalDelta=batch.commit();
 		result=new ThermalTransport.Stats(result.substeps(),result.evaluatedContacts(),result.maximumTemperatureChangeK(),
 				result.maximumAbsoluteTransferJ(),physicalDelta.subtract(result.reservoirExchange()),result.reservoirExchange());

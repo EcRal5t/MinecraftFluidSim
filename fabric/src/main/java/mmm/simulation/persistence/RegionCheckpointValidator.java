@@ -6,7 +6,7 @@ import mmm.model.region.RegionManifest;
 import mmm.model.region.RegionSectionState;
 import mmm.model.region.RegionStateLayout;
 
-import mmm.fluid.PendingPhaseVolumeState;
+import mmm.fluid.PendingPhaseMotionState;
 import mmm.chemistry.ChemicalAuditLedgerCodec;
 import mmm.granular.GranularLimits;
 import mmm.granular.GranularStateSnapshot;
@@ -71,17 +71,17 @@ final class RegionCheckpointValidator {
 		if (manifest.layout().hasMaterials()) validateMaterialLedgers();
 		if (manifest.hasChemicalState()) validateChemicalLedgers();
 		boolean gasPayload = hasExtension(manifest.extensions(), GasRegionStateCodec.MANIFEST_EXTENSION);
-		boolean pendingPhaseVolumePayload = hasExtension(manifest.extensions(),
-				PendingPhaseVolumeCodec.MANIFEST_EXTENSION);
+		boolean pendingPhaseMotionPayload = hasExtension(manifest.extensions(),
+				PendingPhaseMotionCodec.MANIFEST_EXTENSION);
 		boolean thermalBuoyancyPayload = hasExtension(manifest.extensions(),
 				ThermalBuoyancyCodec.MANIFEST_EXTENSION);
 		boolean finiteDevicePayload = hasExtension(manifest.extensions(),
 				FiniteThermalDeviceCodec.MANIFEST_EXTENSION);
 		for (RegionSectionState section : sections) if (hasExtension(section.extensions(),
-				PendingPhaseVolumeCodec.MANIFEST_EXTENSION)) {
+				PendingPhaseMotionCodec.MANIFEST_EXTENSION)) {
 			throw new IOException("Pending-volume evidence is manifest-only");
 		}
-		if (pendingPhaseVolumePayload) validatePendingPhaseVolumeCells();
+		if (pendingPhaseMotionPayload) validatePendingPhaseMotionCells();
 		if (finiteDevicePayload) {
 			if (manifest.layout() != RegionStateLayout.THERMAL) {
 				throw new IOException("Finite thermal devices are only valid in thermal region-state");
@@ -105,40 +105,9 @@ final class RegionCheckpointValidator {
 		if (manifest.hasThermalState()) validateThermalLedgers();
 	}
 
-	private void validatePendingPhaseVolumeCells() throws IOException {
-		PendingPhaseVolumeState pending = new RegionCheckpointRestorer(
-				new RegionCheckpoint(manifest, sections)).reconstructPendingPhaseVolume();
-		boolean[] carrier = new boolean[pending.cellCount()];
-		float cellSize = manifest.solverConfig().cellSize();
-		for (RegionSectionState section : sections) {
-			for(var stock:section.liquidStocks())carrier[stock.key().cell()]=true;
-			ThermalRegionStateCodec.SectionData thermal = new ThermalRegionStateCodec().decodeSection(
-					requiredExtension(section.extensions(), ThermalRegionStateCodec.SECTION_EXTENSION).payload(),
-					section.markerCount(), GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION,
-					GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION);
-			for (ThermalRegionStateCodec.CoherentEntry group : thermal.coherentGroups()) carrier[group.cell()] = true;
-			if (hasExtension(section.extensions(), GranularRegionStateCodec.SECTION_EXTENSION)) {
-				GranularRegionStateCodec.SectionData granular = new GranularRegionStateCodec().decodeSection(
-						requiredExtension(section.extensions(), GranularRegionStateCodec.SECTION_EXTENSION).payload(),
-						GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION, GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION);
-				for (GranularRegionStateCodec.ActiveEntry entry : granular.active()) {
-					GranularStateSnapshot.ActiveParcel parcel = entry.parcel();
-					int x = (int) Math.floor(parcel.x() / cellSize);
-					int y = (int) Math.floor(parcel.y() / cellSize);
-					int z = (int) Math.floor(parcel.z() / cellSize);
-					if (x < 0 || x >= manifest.sizeX() || y < 0 || y >= manifest.sizeY()
-							|| z < 0 || z >= manifest.sizeZ()) {
-						throw new IOException("Pending phase-volume validation found an out-of-domain granular parcel");
-					}
-					carrier[x + manifest.sizeX() * (y + manifest.sizeY() * z)] = true;
-				}
-				for (GranularStateSnapshot.DepositGroup group : granular.deposits()) carrier[group.cell()] = true;
-			}
-		}
-		for (PendingPhaseVolumeState.Entry entry : pending.entries()) if (!carrier[entry.cell()]) {
-			throw new IOException("Pending phase volume names a cell without a thermal carrier");
-		}
-	}
+	private void validatePendingPhaseMotionCells() throws IOException {
+        new RegionCheckpointRestorer(new RegionCheckpoint(manifest,sections)).reconstructPendingPhaseMotion();
+    }
 
 	private void validateGasLedgers() throws IOException {
 		new RegionCheckpointRestorer(new RegionCheckpoint(manifest, sections)).validateGasLedgers();

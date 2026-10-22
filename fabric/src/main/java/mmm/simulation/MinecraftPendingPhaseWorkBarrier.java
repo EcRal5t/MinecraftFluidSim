@@ -15,7 +15,7 @@ final class MinecraftPendingPhaseWorkBarrier {
 	}
 
 	boolean settle(ServerLevel level, FluidRegion region) {
-		if (!region.domain().hasPendingPhaseVolumeWork()) return true;
+		if (!region.domain().hasPendingPhaseMotionWork()) return true;
 		try {
 			motion.settlePendingPhaseWork(region);
 			return true;

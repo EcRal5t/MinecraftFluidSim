@@ -49,7 +49,7 @@ final class DomainInventoryLifecyclePlanner {
 
 	/** Prevalidates every truth removed by the operator-level condensed inventory reset. */
 	FluidDomain.OperatorClearPlan planOperatorClear() {
-		if (domain.hasPendingPhaseVolumeWork()) {
+		if (domain.hasPendingPhaseMotionWork()) {
 			throw new IllegalStateException("Pending phase volume/work must be projected before operator clear");
 		}
 		FluidDomain.CondensedClearPlan condensed = domain.planRemoveAllCondensedExact();

@@ -19,7 +19,6 @@ import mmm.fluid.air.BuiltinGasDefinitions;
 import mmm.fluid.air.GasComponentAmount;
 import mmm.fluid.air.GasInventory;
 import mmm.fluid.air.GasRegistry;
-import mmm.thermal.GasLiquidSpeciesPair;
 import mmm.thermal.GasThermalModel;
 import mmm.thermal.GasLiquidPhaseModel;
 import mmm.units.SignedDyadic;
@@ -505,95 +504,6 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		}
 	}
 
-	static void builtinCo2GasLiquidPairDataIsFrozen() {
-		java.nio.file.Path root = null;
-		String pairPath = "/data/mmm/mmm/gas_liquid_pairs/co2_water.json";
-		try (InputStreamReader pairReader = resourceReader(pairPath);
-		     InputStreamReader waterReader = resourceReader("/data/mmm/mmm/thermal_materials/water.json");
-		     InputStreamReader co2Reader = resourceReader("/data/mmm/mmm/thermal_materials/co2.json");
-		     InputStreamReader gasOffsetReader = resourceReader("/data/mmm/mmm/thermal_species/co2.json");
-		     InputStreamReader liquidOffsetReader = resourceReader(
-				     "/data/mmm/mmm/thermal_species/water_co2.json")) {
-			GasLiquidSpeciesPair pair = ThermalDefinitionCodec.decodePair("mmm:co2_water", pairReader);
-			ThermalMaterialDefinition water = ThermalDefinitionCodec.decodeMaterial("mmm:water", waterReader);
-			ThermalMaterialDefinition co2 = ThermalDefinitionCodec.decodeMaterial("mmm:co2", co2Reader);
-			ThermalSpeciesOffset gasOffset = ThermalDefinitionCodec.decodeSpecies("mmm:co2", gasOffsetReader);
-			ThermalSpeciesOffset liquidOffset = ThermalDefinitionCodec.decodeSpecies(
-					"mmm:water_co2", liquidOffsetReader);
-			GasRegistry gas = BuiltinGasDefinitions.createRegistry();
-			ChemicalRegistry chemistry = BuiltinChemicalDefinitions.REGISTRY;
-			var gasComponent = gas.component(pair.gasComponentId());
-			var liquidPhase = chemistry.phase(chemistry.phaseHandle(pair.liquidPhaseId()));
-			double gasKilograms = gasComponent.standardDensityKgPerCubicMeter()
-					* AirNetwork.cubicMeters(pair.gasStandardVolumeNanosPerBatch());
-			double liquidKilograms = chemistry.species(chemistry.speciesHandle(pair.speciesId()))
-					.molarMassKgPerMol().multiply(pair.liquidQuantaPerBatch())
-					.divide(ChemicalLimits.QUANTA_PER_MOL).toDouble();
-
-			require(pair.gasComponentId().equals(BuiltinGasDefinitions.CO2)
-					&& pair.speciesId().equals(BuiltinChemicalDefinitions.CO2)
-					&& gasComponent.allowsSpecies(pair.speciesId())
-					&& liquidPhase.allowedSpecies().contains(pair.speciesId()),
-					"built-in CO2 pair is not admitted by both frozen phase registries");
-			require(pair.gasMassUnitsPerBatch() == mmm.units.Mass.fromKilograms(gasKilograms)
-					&& pair.liquidMassUnitsPerBatch() == mmm.units.Mass.fromKilograms(liquidKilograms)
-					&& Math.addExact(pair.liquidMassUnitsPerBatch(), pair.liquidResidualMassUnitsPerBatch()) == pair.gasMassUnitsPerBatch(),
-					"CO2 batch mass and residual do not close in integer counts");
-			require(gasOffset.speciesId().equals(pair.speciesId())
-					&& gasOffset.hostThermalMaterialId().equals(co2.id())
-					&& liquidOffset.speciesId().equals(pair.speciesId())
-					&& liquidOffset.hostThermalMaterialId().equals(water.id())
-					&& liquidOffset.referenceInternalEnergyJPerMol().equals(ExactRational.of(-19_400L)),
-					"built-in CO2 thermal hosts or dissolved state-function offset drifted");
-			require(close(pair.henryConstantMolPerCubicMeterPaAt(293.15), 3.9E-4)
-					&& close(pair.henryConstantMolPerCubicMeterPaAt(288.15), 4.7E-4),
-					"built-in CO2 Henry table did not preserve knots or linear interpolation");
-			expectFailure(() -> pair.henryConstantMolPerCubicMeterPaAt(273.149),
-					"CO2 Henry model extrapolated below its declared temperature domain");
-			expectFailure(() -> pair.henryConstantMolPerCubicMeterPaAt(363.151),
-					"CO2 Henry model extrapolated above its declared temperature domain");
-			require(Double.doubleToRawLongBits(pair.totalResistanceSecondsPerMeter())
-					== Double.doubleToRawLongBits(pair.liquidFilmThicknessMeters()
-					/ pair.liquidDiffusionSquareMetersPerSecond() + pair.gasResistanceSecondsPerMeter()),
-					"CO2 pair did not use the declared series film resistance");
-
-			ThermalRegistry registry = new ThermalRegistry(List.of(water, co2),
-					List.of(gasOffset, liquidOffset), List.of(), List.of(), List.of(pair),
-					chemistry.fingerprint(), "", gas.fingerprint());
-
-			root = java.nio.file.Files.createTempDirectory("mmm-co2-pair-registry-");
-			java.nio.file.Path snapshot = root.resolve("thermal-registry.nbt");
-			ThermalRegistryCodec.writeSnapshot(snapshot, registry);
-			ThermalRegistry decoded = ThermalRegistryCodec.readSnapshot(
-					snapshot, chemistry.fingerprint(), "", gas.fingerprint());
-			require(decoded.gasLiquidPairs().equals(List.of(pair))
-							&& decoded.fingerprint().equals(registry.fingerprint()),
-					"CO2 pair did not round-trip through the thermal registry codec");
-
-			String json = resourceText(pairPath);
-			expectFailure(() -> ThermalDefinitionCodec.decodePair("mmm:co2_water",
-					new StringReader("{\"unknown\":\"rejected\"," + json.substring(1))),
-					"unknown CO2 pair JSON field was ignored");
-			expectFailure(() -> ThermalDefinitionCodec.decodePair("mmm:co2_water", new StringReader(
-					json.replace("\"gas_standard_volume_nanos_per_batch\":\"24055\"",
-							"\"gas_standard_volume_nanos_per_batch\":24055"))),
-					"numeric CO2 pair amount bypassed the exact string codec");
-			expectFailure(() -> ThermalDefinitionCodec.decodePair("mmm:co2_water", new StringReader(
-					json.replace("\"liquid_residual_kilograms_per_batch\":\"-2E-10\"",
-							"\"liquid_residual_kilograms_per_batch\":\"0.0\""))),
-					"non-closing CO2 pair residual was accepted");
-		} catch (IOException failure) {
-			throw new AssertionError("Could not validate built-in CO2 gas/liquid pair data", failure);
-		} finally {
-			if (root != null) try (var paths = java.nio.file.Files.walk(root)) {
-				for (java.nio.file.Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
-					java.nio.file.Files.deleteIfExists(path);
-				}
-			} catch (IOException cleanup) {
-				throw new AssertionError("CO2 pair registry store cleanup failed", cleanup);
-			}
-		}
-	}
 
 	static void builtinFiniteThermalDeviceDataIsFrozen() {
 		java.nio.file.Path root = null;
@@ -620,8 +530,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					&& device.ports().stream().allMatch(port -> port.wallThicknessMeters() == 0.01
 							&& port.fluidFilmThicknessMeters() == 0.01),
 					"built-in finite exchanger port groups or SI geometry drifted");
-			ThermalRegistry registry = new ThermalRegistry(List.of(material), List.of(), List.of(), List.of(),
-					List.of(), List.of(device), "", "", "");
+			ThermalRegistry registry = new ThermalRegistry(List.of(material), List.of(), List.of(), List.of(), List.of(device), "", "", "");
 			require(registry.fingerprint().equals("be90fa71d2249854f4b74fc4c12b36a7a77773add46ba8091b9a1fc4f9ed7537"),
 					"built-in finite exchanger registry fingerprint drifted: " + registry.fingerprint());
 			ThermalStateFunction state = new ThermalStateFunction(registry);
@@ -754,7 +663,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			double[] beforeGasVolume = {domain.gasState.network.availableVolume(1), domain.gasState.network.availableVolume(2)};
 			var beforeSource = domain.gasState.network.externalSource();
 			var beforeSink = domain.gasState.network.escapedSink();
-			var beforePending = domain.exportPendingPhaseVolumeState().entries();
+			var beforePending = domain.exportPendingPhaseMotionState().entries();
 			var thermalRevision = domain.thermalState.thermalRevision();
 			var transition = domain.thermalState.registry().transitions().getFirst();
 			var phase = domain.thermalState.gasLiquidPhase(domain.gasState.network);
@@ -792,8 +701,8 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						&& domain.gasState.network.availableVolume(2) == beforeGasVolume[1]
 						&& domain.gasState.network.externalSource().equals(beforeSource)
 						&& domain.gasState.network.escapedSink().equals(beforeSink)
-						&& domain.thermalAudit().equals(beforeAudit) && !domain.pendingPhaseVolume.isPending(bridgeCell)
-						&& beforePending.equals(domain.exportPendingPhaseVolumeState().entries())
+						&& domain.thermalAudit().equals(beforeAudit) && !domain.pendingPhaseMotion.isPending(bridgeCell)
+						&& beforePending.equals(domain.exportPendingPhaseMotionState().entries())
 						&& Arrays.equals(beforeMarkers.copyPositionVolume(), domain.exportMaterialParticleState().copyPositionVolume())
 						&& Arrays.equals(beforeMarkers.copyParticleMassUnits(), domain.exportMaterialParticleState().copyParticleMassUnits())
 						&& Arrays.equals(beforeThermal.copyInternalEnergy(), afterThermal.copyInternalEnergy())
@@ -806,7 +715,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			} else {
 				require(stats.operations() == 1 && stats.boiledCells() == 1 && domain.particleCount() == 0
 						&& domain.gasState.network.nodeCount() == 1
-						&& domain.exportPendingPhaseVolumeState().entries().contains(new PendingPhaseVolumeState.Entry(bridgeCell, SignedDyadic.of(-1, 0))),
+						&& domain.exportPendingPhaseMotionState().entries().contains(new PendingPhaseMotionState.Entry(bridgeCell)),
 						"a complete 32-component phase successor was not committed");
 				double pressure=domain.thermalState.requireGasNodeState(1,domain.gasState.network.inventory(1),
 						domain.thermalState.gasNodeEnergy(1,domain.gasState.network),domain.gasState.network);
@@ -828,7 +737,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			if(components==32) {
 				restored=advance(restored,false,0);
 				restored.stepGasPhaseChangeOnly(1);
-				require(!restored.hasPendingPhaseVolumeWork() && actualPhaseMass(restored).equals(beforeMass)
+				require(!restored.hasPendingPhaseMotionWork() && actualPhaseMass(restored).equals(beforeMass)
 						&& restored.gasState.network.sealedInventory().equals(domain.gasState.network.sealedInventory())
 						&& restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory())
 						&& restored.gasState.network.auditClosed(),
@@ -878,7 +787,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& domain.gasState.network.sealedInventory().equals(separate.gasState.network.sealedInventory())
 				&& domain.gasState.network.externalSource().equals(separate.gasState.network.externalSource())
 				&& domain.gasState.network.escapedSink().equals(separate.gasState.network.escapedSink())
-				&& domain.exportPendingPhaseVolumeState().entries().equals(separate.exportPendingPhaseVolumeState().entries())
+				&& domain.exportPendingPhaseMotionState().entries().equals(separate.exportPendingPhaseMotionState().entries())
 				&& Arrays.equals(joinedThermal.copyInternalEnergy(), separateThermal.copyInternalEnergy())
 				&& Arrays.equals(joinedThermal.copyActiveParcelEnergy(), separateThermal.copyActiveParcelEnergy())
 				&& Arrays.equals(joinedThermal.copyGasNodeEnergy(), separateThermal.copyGasNodeEnergy()),
@@ -2073,7 +1982,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& domain.gasBoundary().sealedInventory().standardVolumeNanos() > gasNanosBefore
 				&& domain.gasBoundary().auditClosed()
 				&& domain.thermalAudit().mechanicalWork().equals(auditBefore.mechanicalWork())
-				&& domain.hasPendingPhaseVolumeWork()
+				&& domain.hasPendingPhaseMotionWork()
 				&& close(domain.exactVolumeNear(1, 1, 1, 0, 1), oilVolumeBefore)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"sealed boiling did not jointly conserve liquid/gas mass, volume and energy truth: stats=" + stats
@@ -2086,14 +1995,14 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					+ domain.exactInternalEnergy().subtract(energyBefore)
 					+ " gasAudit=" + domain.gasBoundary().auditClosed()
 					+ " workCompare=" + domain.thermalAudit().mechanicalWork().compareTo(auditBefore.mechanicalWork())
-					+ " pending=" + domain.hasPendingPhaseVolumeWork()
+					+ " pending=" + domain.hasPendingPhaseMotionWork()
 					+ " thermalAudit=" + domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
 		FluidDomain referenceBoilingProjection = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
-		referenceBoilingProjection.pendingPhaseVolume.clear();
+		referenceBoilingProjection.pendingPhaseMotion.clear();
 		referenceBoilingProjection = advance(referenceBoilingProjection, false, 0);
 		domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		domain = advance(domain, false, 0);
-		require(!domain.hasPendingPhaseVolumeWork()
+		require(!domain.hasPendingPhaseMotionWork()
 				&& domain.exactInternalEnergy().equals(referenceBoilingProjection.exactInternalEnergy())
 				&& domain.thermalAudit().mechanicalWork().equals(referenceBoilingProjection.thermalAudit().mechanicalWork())
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
@@ -2122,7 +2031,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& domain.gasBoundary().auditClosed()
 				&& domain.thermalAudit().mechanicalWork().equals(
 						auditBeforeCondensation.mechanicalWork())
-				&& domain.hasPendingPhaseVolumeWork()
+				&& domain.hasPendingPhaseMotionWork()
 				&& close(domain.exactVolumeNear(1, 1, 1, 0, 1), oilVolumeBefore)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"sealed condensation did not reverse the exact gas batch with conserved energy: stats=" + condensed
@@ -2139,11 +2048,11 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						+ " liquid=" + SignedDyadic.sum(beforeCondensationState.copyInternalEnergy()) + "->"
 						+ SignedDyadic.sum(domain.exportThermalParticleState().copyInternalEnergy()));
 		FluidDomain referenceCondensationProjection = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
-		referenceCondensationProjection.pendingPhaseVolume.clear();
+		referenceCondensationProjection.pendingPhaseMotion.clear();
 		referenceCondensationProjection = advance(referenceCondensationProjection, false, 0);
 		domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		domain = advance(domain, false, 0);
-		require(!domain.hasPendingPhaseVolumeWork()
+		require(!domain.hasPendingPhaseMotionWork()
 				&& domain.exactInternalEnergy().equals(referenceCondensationProjection.exactInternalEnergy())
 				&& domain.thermalAudit().mechanicalWork().equals(referenceCondensationProjection.thermalAudit().mechanicalWork())
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
@@ -2290,7 +2199,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					domain.stepGasPhaseChangeOnly(8);
 					domain=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 					domain=advance(domain,false,0);
-					require(!domain.hasPendingPhaseVolumeWork() && domain.gasBoundary().availableVolume(1)>0
+					require(!domain.hasPendingPhaseMotionWork() && domain.gasBoundary().availableVolume(1)>0
 							&& air.component(BuiltinGasDefinitions.AIR).equals(domain.gasBoundary().inventory(1).component(BuiltinGasDefinitions.AIR))
 							&& actualPhaseMass(domain).equals(physicalMass)
 							&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()) && domain.gasBoundary().auditClosed(),
@@ -2302,7 +2211,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						"Pure vapor did not fully condense into its liquid-filled successor: " + result);
 				domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 				domain = advance(domain, false, 0);
-				require(!domain.hasPendingPhaseVolumeWork() && domain.exactGasInternalEnergy().signum() == 0
+				require(!domain.hasPendingPhaseMotionWork() && domain.exactGasInternalEnergy().signum() == 0
 						&& domain.gasBoundary().sealedInventory().isEmpty() && domain.totalVolumeExact() == 1
 						&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()) && domain.gasBoundary().auditClosed(),
 						"Restored complete condensation could not finish its next full mechanical step");
@@ -2428,14 +2337,14 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		requirePhaseSpeciesBalance(domain, chemistry, initialMass, initialSpecies, initialResidual);
 
 		domain = advance(domain, false, 0);
-		require(!domain.hasPendingPhaseVolumeWork(), "boiling volume was not settled before cooling");
+		require(!domain.hasPendingPhaseMotionWork(), "boiling volume was not settled before cooling");
 		setAllCondensedCellTemperatures(domain, 200);
 		var energyBefore = domain.exactInternalEnergy();
 		var auditBefore = domain.thermalAudit();
 		var condensed = domain.stepGasPhaseChangeOnly(1);
 		require(condensed.operations() == 1 && condensed.condensedCells() == 1 && condensed.boiledCells() == 0
 				&& domain.gasBoundary().sealedInventory().component(BuiltinGasDefinitions.WATER_VAPOR) != null
-				&& domain.hasPendingPhaseVolumeWork(),
+				&& domain.hasPendingPhaseMotionWork(),
 				"cooled solution did not accept one vapor batch and retain its finite remainder: " + condensed);
 		require(domain.exactInternalEnergy().subtract(energyBefore).equals(
 				domain.thermalAudit().mechanicalWork().subtract(auditBefore.mechanicalWork())
@@ -2444,7 +2353,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		requirePhaseSpeciesBalance(domain, chemistry, initialMass, initialSpecies, initialResidual);
 		domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 		domain = advance(domain, false, 0);
-		require(!domain.hasPendingPhaseVolumeWork(), "restored condensation volume did not finish its mechanical successor");
+		require(!domain.hasPendingPhaseMotionWork(), "restored condensation volume did not finish its mechanical successor");
 		requirePhaseSpeciesBalance(domain, chemistry, initialMass, initialSpecies, initialResidual);
 	}
 

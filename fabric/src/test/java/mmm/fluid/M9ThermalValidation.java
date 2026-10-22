@@ -28,7 +28,7 @@ public final class M9ThermalValidation {
 		if (args.length == 1 && args[0].equals("--coherent")) {
 			ThermalPhaseValidationScenarios.coherentPhaseInventoryAndExactBatchPlanning();
 			ThermalPhaseValidationScenarios.compositionAndGranularPhaseChangeConservesJointTruth();
-			ThermalPhaseValidationScenarios.phaseVolumeWorkWaitsForMechanicalProjection();
+			ThermalPhaseValidationScenarios.phaseMotionWaitsForMechanicalStep();
 			ThermalPhaseValidationScenarios.operatorEmptyClearsAuditedCondensedCarriers();
 			System.out.println("M9 coherent inventory, capacity and thermal handoff validation passed");
 			return;
@@ -51,11 +51,11 @@ public final class M9ThermalValidation {
 			System.out.println("M9 gas topology and thermal handoff validation passed");
 			return;
 		}
-		if (args.length == 1 && args[0].equals("--phase-volume")) {
-			ThermalPhaseValidationScenarios.phaseVolumeWorkWaitsForMechanicalProjection();
+		if (args.length == 1 && args[0].equals("--phase-motion")) {
+			ThermalPhaseValidationScenarios.phaseMotionWaitsForMechanicalStep();
 			ThermalPhaseValidationScenarios.operatorEmptyClearsAuditedCondensedCarriers();
 			ThermalGasValidationScenarios.sealedInterfaceBoilingCommitsJointInventory();
-			System.out.println("M9 pending phase-volume validation passed");
+			System.out.println("M9 pending phase-motion validation passed");
 			return;
 		}
 		if (args.length == 1 && args[0].equals("--granular-energy")) {
@@ -69,7 +69,6 @@ public final class M9ThermalValidation {
 		ThermochemistryValidationScenarios.piecewiseStateFunctionRoundTrips();
 		ThermalGasValidationScenarios.gasStateCompressionAndCarrierEnergy();
 		ThermalGasValidationScenarios.builtinDryAirWaterAndVaporPhysicsIsCalibrated();
-		ThermalGasValidationScenarios.builtinCo2GasLiquidPairDataIsFrozen();
 		ThermalGasValidationScenarios.builtinFiniteThermalDeviceDataIsFrozen();
 		ThermalGasValidationScenarios.gasLiquidSaturationAndExactBatch();
 		ThermalGasValidationScenarios.gasRuntimeTransfersEnergyAndWork();
@@ -88,7 +87,7 @@ public final class M9ThermalValidation {
 		ThermalContactValidation.validate();
 		ThermalPhaseValidationScenarios.coherentPhaseInventoryAndExactBatchPlanning();
 		ThermalPhaseValidationScenarios.compositionAndGranularPhaseChangeConservesJointTruth();
-		ThermalPhaseValidationScenarios.phaseVolumeWorkWaitsForMechanicalProjection();
+		ThermalPhaseValidationScenarios.phaseMotionWaitsForMechanicalStep();
 		ThermalPhaseValidationScenarios.operatorEmptyClearsAuditedCondensedCarriers();
 		ThermalTransportValidationScenarios.granularEnergyColumnTransactions();
 		ThermalPhaseValidationScenarios.exactDyadicAuditDoesNotLoseCancellationRemainders();

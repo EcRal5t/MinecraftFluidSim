@@ -190,12 +190,14 @@ REMOVED HEAD 接受 old payload 尚在原 slot、payload 已移动但 quarantine
 - region UUID、dimension、network/checkpoint generation、origin、网格和 solver config；
 - controller footprint、运行态和区域容量预算；
 - Minecraft 对齐的 section 描述、单元液体记录、微盒液相占据、三轴 MAC 动量和 solid mask；
-- 已提交 profile 要求的材料、化学、颗粒、气体、热能和 pending phase-work 载荷；
+- 已提交 profile 要求的材料、化学、颗粒、气体、热能和相变后待机械推进格集合；
 - manifest、section 与各独立库存的总账和 CRC。
 
 所有 required payload 必须属于同一 region、dimension 和 generation。
 材料与物种索引绑定规范 palette 和注册表；平滑密度、PLIC、曲率、mesh 与 UI 读数由恢复后的库存派生。
-最近真实压力投影作为待同步相变所需的运行输入，随 solver runtime 扩展保存。
+最近真实压力投影随 solver runtime 扩展保存，供后续力学推进使用。
+`PendingPhaseMotionCodec` 以 `mmm:pending_phase_motion` Manifest 扩展保存格总数和有序格索引，空集合省略扩展。
+集合恢复沿用 `PendingPhaseMotionState` 的网格与索引契约。完全汽化格可携带待推进标记，其气体、内能和空间归属由对应库存载荷恢复；正式 checkpoint 校验和域恢复采用同一格集合定义。
 正常后端交接共享已验证的不可变单元库存与气腔几何。
 液体几何身份随快照、候选和提交传递，仅体积或分量变化才更新；内能更新保留该身份。
 冷恢复同时读取保存的相占据与单元库存，核对容量和各固定连通分量的体积后重建派生几何。
@@ -213,7 +215,7 @@ manifest 是无需分配 solver 或 Minecraft runtime 对象即可审计和预�
 - controller position、内部/边界 block 集和 required chunk footprint；
 - 液体记录数、体积与整数质量总账、material/species palette 与 registry identity；
 - 严格排序的 section descriptor：坐标、液体记录数、体积、质量和 section checksum；
-- granular、gas、thermal、pending phase-work 等 manifest extension 与各自总账；
+- granular、gas、thermal、待机械推进格集合 等 manifest extension 与各自总账；
 - 覆盖上述规范编码的 manifest checksum。
 
 metadata discovery 只能相信已经通过 HEAD 绑定、manifest checksum 和结构预算的 manifest。它可以据此保留 UNLOADED 区域的 cell/marker 配额，但不能据此虚构 solver inventory。
@@ -273,7 +275,7 @@ section、palette、deposit group、gas node 和 ledger 均采用规范排序，
 - materials 决定液体记录的材料 palette；所有液体记录均保存整数质量；
 - chemistry 决定液体记录中的 mixture、整数物种、质量余量及 registry fingerprint 是否 required；
 - granular 决定 active/deposit、solid composition、SVQ/mass/porosity 与 granular ledger 是否 required；
-- thermal 决定非液体内能、coherent store、气腔热状态、外部注入与环境气体的配置温度、audit、buoyancy identity 和 pending phase-work 是否
+- thermal 决定非液体内能、coherent store、气腔热状态、外部注入与环境气体的配置温度、audit、buoyancy identity 和 待机械推进格集合 是否
   required；配置温度以 Kelvin 原始 double 保存在热学 manifest，恢复时与库存一起交接。非空有限热设备集合是 manifest-only extension，其 provider/object 只作 locator，
   kg 与 `U` 仍由同一 region HEAD 持有。
 

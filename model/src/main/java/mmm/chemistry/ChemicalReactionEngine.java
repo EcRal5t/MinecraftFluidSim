@@ -1,6 +1,5 @@
 package mmm.chemistry;
 
-import java.util.Arrays;
 import java.util.Map;
 
 /** Deterministic complete-dissociation and instantaneous-reaction evaluator. */
@@ -11,17 +10,13 @@ public final class ChemicalReactionEngine {
 		this.registry = java.util.Objects.requireNonNull(registry, "registry");
 	}
 
-	public Result react(int phaseHandle, ChemicalMixtureRecord input) {
-		long[] inventory = new long[registry.species().size()];
-		for (int entry = 0; entry < input.entryCount(); entry++) {
-			inventory[input.speciesHandle(entry)] = input.amountAt(entry);
-		}
-		InventoryResult result = reactInventory(phaseHandle, inventory);
-		return new Result(canonical(result.inventory, input.massResidualUnits()), result.evaluations);
+	@FunctionalInterface
+	public interface ExtentConstraint {
+		long limit(ChemicalReaction reaction, long[] before, long[] complete, long maximum);
 	}
 
-	/** Reacts one complete cell/phase inventory without applying the per-parcel 16-entry budget. */
-	public InventoryResult reactInventory(int phaseHandle, long[] input) {
+	/** Reacts one complete cell/phase inventory with a full transient species vector and caller-supplied physical extent constraints. */
+	public InventoryResult reactInventory(int phaseHandle, long[] input, ExtentConstraint constraint) {
 		if (input == null || input.length != registry.species().size()) {
 			throw new IllegalArgumentException("Reaction inventory layout does not match the registry");
 		}
@@ -34,7 +29,7 @@ public final class ChemicalReactionEngine {
 		if (inputTotal <= 0L || inputTotal > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
 			throw new BudgetExceededException("Reaction inventory is empty or over budget");
 		}
-		int evaluations = 0;
+		int evaluations = 0; boolean pending = false;
 		for (ChemicalReaction reaction : registry.reactionOrder()) {
 			if (registry.phaseHandle(reaction.phaseId()) != phaseHandle) continue;
 			if (++evaluations > ChemicalLimits.MAX_REACTION_EVALUATIONS_PER_STEP) {
@@ -45,37 +40,32 @@ public final class ChemicalReactionEngine {
 				extent = Math.min(extent, inventory[registry.speciesHandle(reactant.getKey())] / reactant.getValue());
 			}
 			if (extent <= 0L || extent == Long.MAX_VALUE) continue;
-			for (Map.Entry<String, Integer> reactant : reaction.reactants().entrySet()) {
-				int handle = registry.speciesHandle(reactant.getKey());
-				inventory[handle] = Math.subtractExact(inventory[handle],
-						Math.multiplyExact(extent, reactant.getValue()));
-			}
-			for (Map.Entry<String, Integer> product : reaction.products().entrySet()) {
-				int handle = registry.speciesHandle(product.getKey());
-				inventory[handle] = Math.addExact(inventory[handle],
-						Math.multiplyExact(extent, product.getValue()));
-			}
+			long[] complete = advance(inventory, reaction, extent);
+			long accepted = constraint.limit(reaction, inventory, complete, extent);
+			if (accepted < 0 || accepted > extent) throw new IllegalArgumentException("Invalid constrained reaction extent");
+			pending |= accepted < extent;
+			inventory = accepted == extent ? complete : advance(inventory, reaction, accepted);
 		}
 		long outputTotal = 0L;
 		for (long amount : inventory) outputTotal = Math.addExact(outputTotal, amount);
 		if (outputTotal > ChemicalLimits.MAX_REGION_TOTAL_QUANTA) {
 			throw new BudgetExceededException("Reaction result exceeds region inventory budget");
 		}
-		return new InventoryResult(inventory, evaluations);
+		return new InventoryResult(inventory, evaluations, pending);
 	}
 
-	public ChemicalMixtureRecord addAndReact(
-			int phaseHandle, ChemicalMixtureRecord base, Map<String, Long> additions
-	) {
-		long[] inventory = new long[registry.species().size()];
-		for (int entry = 0; entry < base.entryCount(); entry++) inventory[base.speciesHandle(entry)] = base.amountAt(entry);
-		for (Map.Entry<String, Long> addition : additions.entrySet()) {
-			long amount = addition.getValue() == null ? 0L : addition.getValue();
-			if (amount <= 0L) throw new IllegalArgumentException("Chemical addition must be positive");
-			int handle = registry.speciesHandle(addition.getKey());
-			inventory[handle] = Math.addExact(inventory[handle], amount);
+	/** Full work vector: transient species need no persistent mixture object. */
+	public long[] advance(long[] before, ChemicalReaction reaction, long extent) {
+		long[] after = before.clone();
+		for (var term : reaction.reactants().entrySet()) {
+			int handle = registry.speciesHandle(term.getKey());
+			after[handle] = Math.subtractExact(after[handle], Math.multiplyExact(extent, term.getValue()));
 		}
-		return react(phaseHandle, canonical(inventory, base.massResidualUnits())).mixture();
+		for (var term : reaction.products().entrySet()) {
+			int handle = registry.speciesHandle(term.getKey());
+			after[handle] = Math.addExact(after[handle], Math.multiplyExact(extent, term.getValue()));
+		}
+		return after;
 	}
 
 	public double ph(ChemicalMixtureRecord mixture) {
@@ -108,26 +98,7 @@ public final class ChemicalReactionEngine {
 				&& phase.defaultConcentrationMolPerCubicMeter().containsKey(BuiltinChemicalDefinitions.H2O);
 	}
 
-	private ChemicalMixtureRecord canonical(long[] inventory, long residualUnits) {
-		int count = 0;
-		for (long amount : inventory) {
-			if (amount < 0L) throw new IllegalArgumentException("Chemical inventory became negative");
-			if (amount > 0L) count++;
-		}
-		if (count == 0) throw new IllegalArgumentException("Chemical inventory became empty");
-		if (count > ChemicalLimits.MAX_SPECIES_PER_PARCEL) throw new BudgetExceededException("Parcel species budget exceeded");
-		int[] species = new int[count];
-		long[] amounts = new long[count];
-		int entry = 0;
-		for (int handle = 0; handle < inventory.length; handle++) if (inventory[handle] > 0L) {
-			species[entry] = handle;
-			amounts[entry++] = inventory[handle];
-		}
-		return new ChemicalMixtureRecord(species, amounts, residualUnits);
-	}
-
-	public record Result(ChemicalMixtureRecord mixture, int evaluations) { }
-	public record InventoryResult(long[] inventory, int evaluations) {
+	public record InventoryResult(long[] inventory, int evaluations, boolean pending) {
 		public InventoryResult {
 			if (inventory == null) throw new IllegalArgumentException("Reaction result inventory is missing");
 			inventory = inventory.clone();

@@ -340,7 +340,7 @@ final class GranularTransferPlanner {
 	) {
 		GranularDomainState granular = domain.granularState;
 		if (granular == null) return FluidDomain.GranularExtraction.rejected("Granular state is not bound");
-		if (domain.hasPendingPhaseVolumeWork()) {
+		if (domain.hasPendingPhaseMotionWork()) {
 			return FluidDomain.GranularExtraction.rejected("Pending phase mechanical work must be projected before extraction");
 		}
 		if (itemAcceptance == null) throw new IllegalArgumentException("Granular item acceptance is missing");

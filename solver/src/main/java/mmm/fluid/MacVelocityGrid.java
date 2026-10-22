@@ -6,6 +6,9 @@ package mmm.fluid;
  * substep publishes its momentum against the same finite-volume face masses.
  */
 final class MacVelocityGrid {
+	private long momentumRevision;
+	long momentumRevision() { return momentumRevision; }
+	void markMomentumChanged() { momentumRevision++; }
 	final double[] momentumX;
 	final double[] momentumY;
 	final double[] momentumZ;
@@ -53,6 +56,7 @@ final class MacVelocityGrid {
 		if (state.sizeX() != sizeX || state.sizeY() != sizeY || state.sizeZ() != sizeZ)
 			throw new IllegalArgumentException("MAC momentum restore differs from its grid");
 		state.copyInto(momentumX, momentumY, momentumZ);
+		markMomentumChanged();
 	}
 
 	/** The mass columns are physical kg on this same dual control volume. */
@@ -60,6 +64,7 @@ final class MacVelocityGrid {
 		publish(momentumX, velocityX, massX);
 		publish(momentumY, velocityY, massY);
 		publish(momentumZ, velocityZ, massZ);
+		markMomentumChanged();
 	}
 
 	void deriveVelocity(double[] massX, double[] massY, double[] massZ) {

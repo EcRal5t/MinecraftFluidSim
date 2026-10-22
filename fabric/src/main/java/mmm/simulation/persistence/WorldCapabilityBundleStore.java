@@ -11,7 +11,6 @@ import mmm.fluid.air.GasRegistryCodec;
 import mmm.granular.GranularCarrier;
 import mmm.granular.GranularRegistry;
 import mmm.granular.GranularRegistryCodec;
-import mmm.thermal.GasLiquidSpeciesPair;
 import mmm.thermal.ThermalMaterialDefinition;
 import mmm.thermal.ThermalRegistry;
 import mmm.thermal.ThermalRegistryCodec;
@@ -571,14 +570,6 @@ public final class WorldCapabilityBundleStore {
 			for (ThermalSpeciesOffset offset : thermal.speciesOffsets()) {
 				if (!chemical.hasSpecies(offset.speciesId())) {
 					throw new IllegalArgumentException("Thermal offset references unknown species " + offset.speciesId());
-				}
-			}
-			for (GasLiquidSpeciesPair pair : thermal.gasLiquidPairs()) {
-				GasComponentDefinition component = gas.component(pair.gasComponentId());
-				ChemicalPhaseDefinition phase = chemical.phase(chemical.phaseHandle(pair.liquidPhaseId()));
-				if (!chemical.hasSpecies(pair.speciesId()) || !component.allowsSpecies(pair.speciesId())
-						|| !phase.allowedSpecies().contains(pair.speciesId())) {
-					throw new IllegalArgumentException("Gas/liquid pair is not admitted by both registries " + pair.id());
 				}
 			}
 		}

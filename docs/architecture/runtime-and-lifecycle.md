@@ -149,9 +149,9 @@ CPU 可以把已算好的私有 `FluidDomain` 交给区域，省去正常帧的�
 <a id="phase-work"></a>
 ## 转移前同步相变几何
 
-相变造成的体积变化会留下待同步几何记录，由后续真实压力投影处理。相变本身联合守恒内能，内部相界位移不单独计入外部功。桶、发射器、管理员转移或生命周期操作若遇到这项记录，先调用 [MinecraftPendingPhaseWorkBarrier](../../fabric/src/main/java/mmm/simulation/MinecraftPendingPhaseWorkBarrier.java)。
+相变发布实际库存及几何后，将受影响格加入待机械推进集合。成功机械步根据现有库存、占容和气腔求解压力及运动，再清除集合。相变阶段同时结算物质携带的内能、动能与模型中的势能交接。桶、发射器、管理员转移或生命周期操作若遇到这项记录，先调用 [MinecraftPendingPhaseWorkBarrier](../../fabric/src/main/java/mmm/simulation/MinecraftPendingPhaseWorkBarrier.java)。
 
-它通过当前后端执行一次仅含力学的计算，完成已有相变几何的力学同步。该次计算跳过导热、反应和相变，因此不会立即新增相变待结算记录。结算成功后，以新的已提交区域状态准备容器事务或操作预览；失败时保留相应的阻止原因。
+它通过当前后端执行一次仅含力学的计算，完成已有相变几何的力学同步。该次计算跳过导热、反应和相变，完成后清除已有待推进格。提交成功后，以新的已提交区域状态准备容器事务或操作预览；失败时保留相应的阻止原因。
 
 <a id="world-inputs"></a>
 ## 实体与碰撞输入

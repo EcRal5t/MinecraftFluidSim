@@ -22,9 +22,10 @@
     [GasLiquidPhaseChangeStage](../../solver/src/main/java/mmm/fluid/GasLiquidPhaseChangeStage.java)
   - 测试选择器：`thermal`、`air-network`
 
-- **整体隐式孔流与焓交接**
+- **局部隐式孔流与焓交接**
   - 代码入口：
-    - [GasEnergyStore](../../model/src/main/java/mmm/thermal/GasEnergyStore.java)
+    - [GasEnergyStore](../../model/src/main/java/mmm/thermal/GasEnergyStore.java)：`thermodynamics`、`planFlow` 组装孔口响应并提交成对焓流
+    - [GasThermalModel](../../model/src/main/java/mmm/thermal/GasThermalModel.java)：`portThermodynamics` 准备两个气腔的连续状态函数
     - [GasOrificeFlow](../../model/src/main/java/mmm/fluid/air/GasOrificeFlow.java)
     - [GasTransferValidation](../../fabric/src/test/java/mmm/thermal/GasTransferValidation.java)
   - 测试选择器：`thermal`
@@ -253,21 +254,20 @@ Q = Cd * A * sqrt(2 * abs(delta_p) / rho_source)
 实际体积流量按源库存和容量换算为标准体积流量，环境流入同时考虑环境温度。
 节点间交换为内部转移，环境流入流出分别记外部源汇。
 
-每步一次读取各节点实际 EOS、温度、热容、库存与容量，建立正导通率的端口图。
-热状态孔流使用冻结导通率与候选库存、内能的实际压力响应：
+热状态孔流按节点编号规范排列孔口，依次正序推进半步、逆序推进半步。每个孔口读取当时两腔的库存、内能与容量，冻结该孔口的正导通率，求解两个腔的局部隐式响应：
 
 ```text
-q_standard = dt*g*(p_next_source-p_next_target)
-p_next = EOS(actual_inventory(q), actual_U(q), actual_capacity)
+q_standard = dt_port * g * (p_source(q_standard) - p_target(q_standard))
+p = EOS(continuous_inventory(q_standard), U(q_standard), actual_capacity)
 ```
 
-`GasOrificeFlow.solveThermal` 联合求解端口通量，每次压力预览复用实际整数分配和能量候选。供体余量与新流入库存分别保存，有限排气沿供体等熵温度变化积分；所有出边分配同一份排气焓。无热模型的等温路径继续使用线性储容方程。
+连续工作状态按原组分的实数质量份额建立。有限供体沿等熵排气曲线计算剩余温度和内能，移出的总能量作为同一笔焓流进入接收腔；接收腔由原库存与流入组分共同反演温度。环境供体保持世界规定的温度、组成和绝对压力，环境接收端保持标准绝对压力。
 
-同一供体的所有出边联合限制可用库存和可携焓，流入库存留待后续步骤参与供给。
-`GasInventory.partitionTransport` 一次分配供体所有份额；无法表示的整数余量留在供体。
-`GasEnergyStore.planFlow` 使用与压力预览相同的供体排气能量，在出入两侧使用同一通量。
-环境流入、流出分别记物质与热源汇。
-全部节点终态一次反演并核验有效温度和 EOS，库存与热账共同预检后一次提交。
+`GasOrificeFlow.solveThermalPort` 在可用供体范围内求连续流量，终止尺度来自标准体积与整数质量的可执行分辨率。局部试算直接读取两腔的状态函数；求根完成后，`GasInventory.partitionTransport` 才生成实际整数转移，余量留在供体。`GasEnergyStore.planFlow` 从这份实际供体余量重新计算等熵排气能量，将同一能量写入接收端或环境热汇，并与实际物质转移共同提交。连续流量与最终库存之间的差异按编码分辨率评价。
+
+每个孔口提交后，下一个孔口读取已更新状态，流入气体可继续沿串联气路流动。规范孔口顺序及正逆半步组合保持插孔顺序和边端点方向的一致性；多孔组合保留时间一阶分步误差。每次交接预检实际温度、EOS、物质与热账。
+
+无热状态的等温路径采用全网络线性储容方程，同一供体的全部出边联合分配库存。两条路径共用整数分配、库存提交及环境源汇规则。有限排气保存正温度的供体余量；显式排气操作可将气腔清为零库存、零内能的真空。
 
 该集总模型适用准静态气腔均压和有限孔口传质，冻结物性及算子分裂带来时间一阶温压误差。
 验收检查宏观压差响应、正温、液封、库存与热账，并用时间细化评价误差。

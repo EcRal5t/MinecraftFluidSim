@@ -9,6 +9,7 @@ public final class FlipFluidFreeSurfaceValidation {
 	private FlipFluidFreeSurfaceValidation() { }
 	public static void main(String[] args) {
 		var selected = Arrays.asList(args);
+        if(selected.contains("--vortex")){persistentMacMomentumRetainsSmoothVortex(false);return;}
 		planeVolumeInversionIsAccurate();
 		liquidGeometryRetainsInventoryAndOpenSupport();
 		axisAlignedInterfaceDistanceUsesExactCellLedger();
@@ -122,19 +123,30 @@ public final class FlipFluidFreeSurfaceValidation {
             for(int z=0;z<2;z++)for(int y=0;y<=n;y++)for(int x=0;x<n;x++)
                 domain.mac.velocityY[(z*(n+1)+y)*n+x]=(float)(-(stream(x+1,y,n)-stream(x,y,n))/h);
             domain.cellMacStage.publishMomentum();
-            double initial=domain.domainStep.particleKineticEnergyJoules();var volume=volume(domain);long mass=mass(domain);
-            for(int step=1;step<=(shortRun?4:160);step++){
+            double initial=domain.domainStep.particleKineticEnergyJoules(), initialAngular=vortexAngularMomentum(domain);var volume=volume(domain);long mass=mass(domain);
+            for(int step=1;step<=(shortRun?4:800);step++){
                 domain=advance(domain).claimPreparedCpuDomain();
                 double ratio=domain.domainStep.particleKineticEnergyJoules()/initial;
-                // First-order upwind viscosity scales as u*h/2; allow 20% loss across four seconds at the coarse grid.
-                double minimum=Math.exp(Math.log(.8)*step*dt/4);
+                // U*t/L reaches one: the central linearized vortex turns pi radians.
+                // First-order upwind viscosity <= U*h/2 gives a grid-dependent Fourier decay scale.
+                double travel=.2*step*dt/4, minimum=Math.exp(-2*Math.PI*Math.PI*(h/4)*travel);
+                double angular=vortexAngularMomentum(domain)/initialAngular;
+                check(angular>=Math.sqrt(minimum)&&angular<=1.05,"Vortex angular momentum exceeded transport budget: "+angular);
                 check(initial>0&&ratio>=minimum&&ratio<=1+64*Math.ulp(1.0F),"Vortex decay exceeded spatial transport budget: n="+n+", time="+step*dt+", ratio="+ratio);
-                if(step==40||step==160)System.out.printf("VORTEX grid=%d time=%g energyRatio=%g%n",n,step*dt,ratio);
+                if(step==400||step==800)System.out.printf("VORTEX grid=%d time=%g Ut/L=%g energyRatio=%g angularRatio=%g%n",n,step*dt,travel,ratio,angular);
                 assertInventory(domain,volume,mass);
             }
         }
     }
-    private static double stream(int x,int y,int n){return .02*4/Math.PI*Math.sin(Math.PI*x/n)*Math.sin(Math.PI*y/n);}
+    private static double vortexAngularMomentum(FluidDomain d) {
+        double sum=0,h=d.config.cellSize();
+        for(int z=0;z<2;z++)for(int y=0;y<d.sizeY;y++)for(int x=0;x<=d.sizeX;x++)
+            sum-=((y+.5)*h-2)*d.mac.momentumX[(z*d.sizeY+y)*(d.sizeX+1)+x];
+        for(int z=0;z<2;z++)for(int y=0;y<=d.sizeY;y++)for(int x=0;x<d.sizeX;x++)
+            sum+=((x+.5)*h-2)*d.mac.momentumY[(z*(d.sizeY+1)+y)*d.sizeX+x];
+        return sum;
+    }
+    private static double stream(int x,int y,int n){return .2*4/Math.PI*Math.sin(Math.PI*x/n)*Math.sin(Math.PI*y/n);}
 
 	private static void resolvedLiquidReceivesGravity() {
 		for(boolean pool:new boolean[]{false,true}){

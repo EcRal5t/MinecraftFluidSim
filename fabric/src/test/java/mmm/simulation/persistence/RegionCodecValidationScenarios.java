@@ -13,7 +13,7 @@ import mmm.fluid.FlipChemicalParticleState;
 import mmm.fluid.FlipMaterialParticleState;
 import mmm.fluid.FlipParticleState;
 import mmm.fluid.FlipThermalParticleState;
-import mmm.fluid.PendingPhaseVolumeState;
+import mmm.fluid.PendingPhaseMotionState;
 import mmm.fluid.BuiltinFluidMaterials;
 import mmm.fluid.FluidMaterial;
 import mmm.fluid.FluidMaterialRegistry;
@@ -184,13 +184,11 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				&& expectedDevices.exactInternalEnergy().equals(expectedDevices.audit().expectedInventory())
 				&& combinedDelta.equals(combinedRoundoff),
 				"finite device/body/cell exchange did not close its combined audit");
-		PendingPhaseVolumeState expectedPending = new PendingPhaseVolumeState(
+		PendingPhaseMotionState expectedPending = new PendingPhaseMotionState(
 				region.sizeX() * region.sizeY() * region.sizeZ(), List.of(
-				new PendingPhaseVolumeState.Entry((1 * region.sizeY() + 1) * region.sizeX() + 1,
-						SignedDyadic.of(Math.scalb(17.0, -24))),
-				new PendingPhaseVolumeState.Entry((3 * region.sizeY() + 2) * region.sizeX() + 3,
-						SignedDyadic.of(Math.scalb(-9.0, -24)))));
-		region.domain().restorePendingPhaseVolumeState(expectedPending);
+				new PendingPhaseMotionState.Entry((1 * region.sizeY() + 1) * region.sizeX() + 1),
+				new PendingPhaseMotionState.Entry((3 * region.sizeY() + 2) * region.sizeX() + 3)));
+		region.domain().restorePendingPhaseMotionState(expectedPending);
 		FlipThermalParticleState expected = region.domain().exportThermalParticleState();
 		require(Double.doubleToRawLongBits(expected.insertionTemperatureK())
 				== Double.doubleToRawLongBits(insertionTemperatureK), "configured insertion temperature was not captured");
@@ -207,8 +205,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		assertThermalStateEquals(expected, restorer(state).reconstructThermal(thermal));
 		require(restorer(state).reconstructFiniteThermalDevices(thermal).equals(expectedDevices),
 				"finite thermal device truth did not round-trip");
-		require(restorer(state).reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
-				"pending phase-volume record did not round-trip");
+		require(restorer(state).reconstructPendingPhaseMotion().entries().equals(expectedPending.entries()),
+				"pending phase-motion record did not round-trip");
 		var complete = restorer(state).reconstructAuthoritativeState(null,granular,thermal,gas,BuiltinFluidMaterials.createRegistry());
 		require(Arrays.equals(expectedOccupancy,complete.phaseOccupancy().copyLiquidMicroVolumes()),
 				"Cold checkpoint reconstruction changed micro phase occupancy");
@@ -221,8 +219,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				&& java.util.Arrays.equals(region.domain().exportMacMomentum().copyZ(),restoredDomain.exportMacMomentum().copyZ()),"Cold restore changed MAC momentum");
 		assertGranularStateEquals(expectedGranular, restoredDomain.exportGranularState());
 		assertThermalStateEquals(expected, restoredDomain.exportThermalParticleState());
-		require(restoredDomain.exportPendingPhaseVolumeState().entries().equals(expectedPending.entries()),
-				"pending phase volume was not restored beside thermal inventory");
+		require(restoredDomain.exportPendingPhaseMotionState().entries().equals(expectedPending.entries()),
+				"pending phase motion was not restored beside thermal inventory");
 
 		RegionStateCodec codec = new RegionStateCodec();
 		RegionManifest decodedManifest = codec.decodeManifest(codec.encodeManifest(state.manifest()));
@@ -258,8 +256,8 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		assertThermalStateEquals(expected, restorer(committed).reconstructThermal(thermal));
 		require(restorer(files.read(region.id())).reconstructFiniteThermalDevices(thermal).equals(expectedDevices),
 				"published finite thermal device truth did not survive committed readback");
-		require(restorer(files.read(region.id())).reconstructPendingPhaseVolume().entries().equals(expectedPending.entries()),
-				"published pending phase volume did not survive committed readback");
+		require(restorer(files.read(region.id())).reconstructPendingPhaseMotion().entries().equals(expectedPending.entries()),
+				"published pending phase motion did not survive committed readback");
 		expectIOException(() -> restorer(state).reconstructThermal(thermalRegistry(new FluidMaterialRegistry(
 				List.of(BuiltinFluidMaterials.WATER)))), "foreign thermal registry was accepted");
 

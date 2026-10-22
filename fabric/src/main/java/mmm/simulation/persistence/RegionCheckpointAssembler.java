@@ -100,7 +100,7 @@ public final class RegionCheckpointAssembler {
 					thermal.coherentGroups().size(),gasU.length,liquidU,SignedDyadic.sum(activeU),SignedDyadic.sum(depositU),coherentU,SignedDyadic.sum(gasU),thermal.audit().expectedInventory(),thermal.audit(),thermalLedgers,bits(gasU));
 			extensions.add(new RegionExtension(ThermalRegionStateCodec.MANIFEST_EXTENSION,new ThermalRegionStateCodec().encodeManifest(data)));
 			extensions.add(new RegionExtension(ThermalBuoyancyCodec.MANIFEST_EXTENSION,new ThermalBuoyancyCodec().encodeCurrent()));
-			if(!state.pendingPhaseVolume().isEmpty())extensions.add(new RegionExtension(PendingPhaseVolumeCodec.MANIFEST_EXTENSION,new PendingPhaseVolumeCodec().encode(state.pendingPhaseVolume())));
+			if(!state.pendingPhaseMotion().isEmpty())extensions.add(new RegionExtension(PendingPhaseMotionCodec.MANIFEST_EXTENSION,new PendingPhaseMotionCodec().encode(state.pendingPhaseMotion())));
 			var devices=source.finiteThermalDevices(thermal.registryFingerprint());
 			if(!devices.devices().isEmpty())extensions.add(new RegionExtension(FiniteThermalDeviceCodec.MANIFEST_EXTENSION,new FiniteThermalDeviceCodec().encode(devices)));
 		}

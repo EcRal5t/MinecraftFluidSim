@@ -56,7 +56,7 @@
 库存汇总与面惯性在同一次重建中准备；显式速度发布先准备面惯性，再接收调用方速度。
 速度查询和展示导出通过 `DomainFlowFields.ensureVelocityGrid` 准备库存与 MAC，不触发气腔初始化。
 相占据由 `PhaseOccupancyTransport.ensure/publish` 集中准备与发布，库存编辑标记失效，捕获读取当前库存对应的占据；旧占据保留到气体来源交接结束。
-实际库存仍由对应库存对象持有，处理器组织操作与提交顺序。跨相操作准备整笔热账，发布时将各物相增量合入当前账本；碰撞计划同时保存库存与热学代次，在首次写入前核对。
+实际库存仍由对应库存对象持有，处理器组织操作与提交顺序。跨相操作准备整笔热账，发布时将各物相增量合入当前账本；碰撞计划同时保存库存、MAC 动量与热学代次，在首次写入前核对。
 
 排障先沿规则所有者定位，再看该次调用者：
 
@@ -114,7 +114,7 @@ Minecraft 一个方块的边长标定为 1 m。物理定义统一使用 SI，化
 SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `SignedDyadic` 保存，可保留小于一个 SVQ 的有效余量。
 整数占容、向上／向下换算及 float 可表示性沿现有算法执行。
 
-气体状态方程、Henry 关系和相平衡使用绝对压力。液体投影的机械压力采用相对于环境的表压；查询时按接口声明换算。
+气体状态方程和相平衡使用绝对压力。液体投影的机械压力采用相对于环境的表压；查询时按接口声明换算。
 气腔实际容量以 m³ 表示，标准体积由库存按标准态定义保存，两者分别参与状态方程。
 仿真步长和累计仿真时间用 s；Minecraft tick 是服务器调度次数，正常节拍为 20 tick/s。
 计算耗时用实际时钟 ns 或 ms 衡量，pacing 和重试保持请求推进的仿真时长。
@@ -193,7 +193,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 [DomainStep](../../solver/src/main/java/mmm/fluid/DomainStep.java) 组织下列职责链：
 
-1. 捕获库存、内能收支和待同步相变体积；从碰撞、固体占容与气腔建立同代输入。
+1. 捕获库存、内能收支和待机械推进的相变格集合；从碰撞、固体占容与气腔建立同代输入。
 2. 从单元整数质量构造 MAC 双控制体积惯性，以格面动量派生速度，执行多孔阻力、局部应变耗散和重力、浮力、张力等作用。
 3. 以液体面质量、颗粒质量和两相体积散度共同求解压力与有限气腔响应，同时修正两相速度，再准备颗粒碰撞位置与实际整数占容。
 4. 以共享通量在私有库存中执行一次完整时长的粗单元输运，用同一次实际整数质量通量推进 MAC 动量，联合提交液体、颗粒和气腔后继。
@@ -390,7 +390,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 <a id="thermochemistry"></a>
 ## 热化学与物相转换
 
-气腔通过 `ThermalGasCarriers` 按实际干容生成接触样本，壁面、液面和有限热设备使用共同热交换视图，接收热量归并到唯一气腔内能。
+气腔通过 `ThermalGasCarriers` 按实际干容生成每个空间支撑唯一的混合热载体，壁面、液面和有限热设备使用共同热交换视图，接收热量归并到唯一气腔内能。
 
 各实际载体保存总内能 `U`，温度与热容由现有分段状态函数反演。LTE 工作区用于接触、反应与相变候选；只读观察、属性计算与真实能量重分配有各自入口。导热成对搬运内能，恒温热浴的实际通量记外部 source/sink。反应按精确物种批次改变组成和参考能，相变按实际批次联合修改两相库存与内能。
 温度、接触与载体能量准备按稳定的单元顺序遍历，同代热视图复用已准备的载体列表；库存增量索引提前筛去缺少反应物的区域。
@@ -399,7 +399,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 导热后的实际内能、温度与热容直接供同代相变扫描使用；反应改变库存或内能后按热状态代次重新准备。载体和热壁之间可解析的温差进入共同导热计算，低于导热分辨率时保留原始内能并省去接触图准备。
 载体内能按共同温度一次分配，最大热容载体承接存储余量，实际写入的内能汇总与舍入账保持一致。热浮力读取实际库存温度，温度准备与可选黏性定义分别处理。
 
-热化学顺序为导热 → 液相反应 → 颗粒反应 → 固液相变 → 气液相变，之后执行颗粒形态转换。凝固、熔化、汽化和凝结在固定区域体积下联合守恒两相内能，`PendingPhaseVolumeWork` 保存几何同步任务；下一次真实投影完成后清除。物品转移遇到待同步几何时，先执行仅含力学的私有候选，再准备物品事务。
+热化学顺序为导热 → 液相反应 → 颗粒反应 → 固液相变 → 气液相变，之后执行颗粒形态转换。凝固、熔化、汽化和凝结在固定区域体积下联合守恒两相内能，`PendingPhaseMotionWork` 保存几何同步任务；下一次真实投影完成后清除。物品转移遇到待同步几何时，先执行仅含力学的私有候选，再准备物品事务。
 `ThermochemistryPipeline` 集中调用上述阶段，各阶段直接读取域的库存、能力和提交接口。
 蒸发产生的气体库存与内能按来源单元和固定孔隙分量进入实际新生干容；旧气体按原来源迁移。凝结联合分配步初库存与真实气容，同批蒸发产生的气体在下一步参与凝结。液封隔开的新旧气腔分别结算。
 
@@ -412,7 +412,6 @@ MAC 动量输运读取同次结算的实际整数质量通量。
     - [ThermalCaloricInversion](../../model/src/main/java/mmm/thermal/ThermalCaloricInversion.java)
     - [ThermalCellEnergyAssignment](../../model/src/main/java/mmm/thermal/ThermalCellEnergyAssignment.java)：一次准备实际载体内能及精确汇总
     - [ThermalCellOperations](../../model/src/main/java/mmm/thermal/ThermalCellOperations.java)：`preparePhaseCandidateCells` 复用单元载体索引，`preparePhaseSolidEnergies` 准备固相写入目标，`commitPhaseBatch` 提交整批热账
-    - [ThermalTransport](../../model/src/main/java/mmm/thermal/ThermalTransport.java)
     - [ThermalGasCarriers](../../model/src/main/java/mmm/thermal/ThermalGasCarriers.java)：实际气体干容接触样本与气腔内能归并
     - [CarrierThermalConduction](../../solver/src/main/java/mmm/fluid/CarrierThermalConduction.java)
     - [ThermochemistryPipeline](../../solver/src/main/java/mmm/fluid/ThermochemistryPipeline.java)：`stepTransport` 与反应、相变顺序

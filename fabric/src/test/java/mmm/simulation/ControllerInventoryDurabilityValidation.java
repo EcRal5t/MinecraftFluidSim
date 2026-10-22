@@ -198,7 +198,7 @@ final class ControllerInventoryDurabilityValidation {
 	private static void settlePendingVolumeWork(
 			FluidRegion region, RegionRepositoryAdapter persistence
 	) throws Exception {
-		if (!region.domain().hasPendingPhaseVolumeWork()) return;
+		if (!region.domain().hasPendingPhaseMotionWork()) return;
 		var candidate = new CpuFluidSolverBackend().evaluate(FluidStepRequest.pendingPhaseSettlement(
 				region.solverGeneration(), region.domain().captureAuthoritativeState()));
 		region.adoptStepCandidate(candidate, CpuFluidSolverBackend.ID);
@@ -1155,11 +1155,11 @@ final class ControllerInventoryDurabilityValidation {
 			return "sleepWake(hydrostatic+thermal)";
 		}
 
-		/** Empirical rest: no meaningful marker motion, no pending phase lien, sealed gas audit intact. */
+		/** Empirical rest: no meaningful marker motion, no pending mechanical advancement, sealed gas audit intact. */
 		private boolean domainIsAtRest() {
 			return domain.maximumParticleSpeed() <= QUIET_MARKER_SPEED
 					&& !domain.gasBoundary().hasPressureDrivenFlow()
-					&& !domain.hasPendingPhaseVolumeWork()
+					&& !domain.hasPendingPhaseMotionWork()
 					&& (!scene.sealed() || domain.gasBoundary().auditClosed());
 		}
 
@@ -1173,7 +1173,7 @@ final class ControllerInventoryDurabilityValidation {
 			if (transport.maximumAbsoluteTransferJ() != 0.0
 					|| !transport.reservoirExchange().equals(mmm.units.SignedDyadic.ZERO)) return null;
 			if (domain.chemistry() != null && domain.chemistry().hasDirtyCells()) return null;
-			if (domain.hasPendingPhaseVolumeWork() || !domainIsAtRest()) return null;
+			if (domain.hasPendingPhaseMotionWork() || !domainIsAtRest()) return null;
 			return new ThermalActivity.Observation(transport, false, false, false, false, false, false, true);
 		}
 
@@ -1271,7 +1271,7 @@ final class ControllerInventoryDurabilityValidation {
 			check(domain.tryExtractExactChemical(target[0], target[1], target[2], 8.0F, 6).transferred(),
 					"normal-play chemical extraction was rejected at generation " + generation
 							+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
-							+ ", pending=" + domain.hasPendingPhaseVolumeWork() + ", target="
+							+ ", pending=" + domain.hasPendingPhaseMotionWork() + ", target="
 							+ java.util.Arrays.toString(target) + ", nearby=" + available);
 			roundTrip();
 		}
@@ -1302,7 +1302,7 @@ final class ControllerInventoryDurabilityValidation {
 			return true;
 		}
 		boolean settle() {
-			if (!domain.hasPendingPhaseVolumeWork()) return true;
+			if (!domain.hasPendingPhaseMotionWork()) return true;
 			FluidDomainState before = snapshot();
 			try {
 				var candidate = new CpuFluidSolverBackend().evaluate(
@@ -1312,7 +1312,7 @@ final class ControllerInventoryDurabilityValidation {
 						"pending phase-work settlement advanced thermochemistry");
 				recordSubsteps(candidate);
 				adopt(candidate);
-				check(!domain.hasPendingPhaseVolumeWork(),
+				check(!domain.hasPendingPhaseMotionWork(),
 						"pending phase-work settlement retained the prior lien");
 			} catch (RuntimeException failure) {
 				throw new IllegalStateException("normal-play pending phase-work settlement failed at generation "
@@ -1470,10 +1470,10 @@ final class ControllerInventoryDurabilityValidation {
 					"selfcheck: hot liquid must complete its normal mechanical successor");
 			int[] target = state.maximumNearbyLiquidCell(0);
 			int cell = (target[2] * state.domain.sizeY() + target[1]) * state.domain.sizeX() + target[0];
-			state.domain.restorePendingPhaseVolumeState(new mmm.fluid.PendingPhaseVolumeState(
+			state.domain.restorePendingPhaseMotionState(new mmm.fluid.PendingPhaseMotionState(
 					state.domain.sizeX() * state.domain.sizeY() * state.domain.sizeZ(), List.of(
-					new mmm.fluid.PendingPhaseVolumeState.Entry(cell, mmm.units.SignedDyadic.of(1, -20)))));
-			check(state.settle() && !state.domain.hasPendingPhaseVolumeWork(),
+					new mmm.fluid.PendingPhaseMotionState.Entry(cell))));
+			check(state.settle() && !state.domain.hasPendingPhaseMotionWork(),
 					"selfcheck: hot pending mechanical work did not finish");
 			state.roundTrip();
 

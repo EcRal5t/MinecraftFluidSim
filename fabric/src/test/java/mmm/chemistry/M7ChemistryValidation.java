@@ -1,6 +1,7 @@
 package mmm.chemistry;
 
 import java.io.StringReader;
+import mmm.fluid.ChemicalReactionCandidateValidation;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -414,7 +415,7 @@ public final class M7ChemistryValidation {
 		ChemicalMixtureRecord salts = record(Map.of(
 				BuiltinChemicalDefinitions.NACL, 4_000_000L,
 				BuiltinChemicalDefinitions.KNO3, 6_000_000L));
-		ChemicalMixtureRecord result = engine.react(phase, salts).mixture();
+		ChemicalMixtureRecord result = ChemicalReactionCandidateValidation.react(registry, phase, salts);
 		check(result.amount(registry.speciesHandle(BuiltinChemicalDefinitions.NACL)) == 0L, "NaCl did not fully dissociate");
 		check(result.amount(registry.speciesHandle(BuiltinChemicalDefinitions.KNO3)) == 0L, "KNO3 did not fully dissociate");
 		check(result.amount(registry.speciesHandle(BuiltinChemicalDefinitions.NA_PLUS)) == 4_000_000L, "Na inventory drifted");
@@ -424,12 +425,12 @@ public final class M7ChemistryValidation {
 		check(salts.exactSpeciesMassKilograms(registry).equals(result.exactSpeciesMassKilograms(registry)), "salt dissociation changed exact mass");
 		check(salts.chargeQuanta(registry) == result.chargeQuanta(registry), "salt dissociation changed charge");
 
-		ChemicalMixtureRecord firstPair = engine.react(phase, record(Map.of(
+		ChemicalMixtureRecord firstPair = ChemicalReactionCandidateValidation.react(registry, phase, record(Map.of(
 				BuiltinChemicalDefinitions.NACL, 5_000_003L,
-				BuiltinChemicalDefinitions.KNO3, 5_000_003L))).mixture();
-		ChemicalMixtureRecord secondPair = engine.react(phase, record(Map.of(
+				BuiltinChemicalDefinitions.KNO3, 5_000_003L)));
+		ChemicalMixtureRecord secondPair = ChemicalReactionCandidateValidation.react(registry, phase, record(Map.of(
 				BuiltinChemicalDefinitions.NANO3, 5_000_003L,
-				BuiltinChemicalDefinitions.KCL, 5_000_003L))).mixture();
+				BuiltinChemicalDefinitions.KCL, 5_000_003L)));
 		check(firstPair.equals(secondPair),
 				"equivalent NaCl+KNO3 and NaNO3+KCl inventories did not canonicalize identically");
 	}
@@ -438,17 +439,17 @@ public final class M7ChemistryValidation {
 		ChemicalRegistry registry = BuiltinChemicalDefinitions.REGISTRY;
 		ChemicalReactionEngine engine = new ChemicalReactionEngine(registry);
 		int phase = registry.phaseHandle(BuiltinChemicalDefinitions.AQUEOUS);
-		ChemicalMixtureRecord equal = engine.react(phase, record(Map.of(
-				BuiltinChemicalDefinitions.HCL, 10_000L, BuiltinChemicalDefinitions.NAOH, 10_000L))).mixture();
+		ChemicalMixtureRecord equal = ChemicalReactionCandidateValidation.react(registry, phase, record(Map.of(
+				BuiltinChemicalDefinitions.HCL, 10_000L, BuiltinChemicalDefinitions.NAOH, 10_000L)));
 		check(equal.amount(registry.speciesHandle(BuiltinChemicalDefinitions.H_PLUS)) == 0L, "equal acid left H+");
 		check(equal.amount(registry.speciesHandle(BuiltinChemicalDefinitions.OH_MINUS)) == 0L, "equal base left OH-");
 		check(engine.ph(equal) == 7.0, "equal acid/base is not neutral");
-		ChemicalMixtureRecord acid = engine.react(phase, record(Map.of(
-				BuiltinChemicalDefinitions.HCL, 15_000L, BuiltinChemicalDefinitions.NAOH, 10_000L))).mixture();
+		ChemicalMixtureRecord acid = ChemicalReactionCandidateValidation.react(registry, phase, record(Map.of(
+				BuiltinChemicalDefinitions.HCL, 15_000L, BuiltinChemicalDefinitions.NAOH, 10_000L)));
 		check(acid.amount(registry.speciesHandle(BuiltinChemicalDefinitions.H_PLUS)) == 5_000L, "acid excess is wrong");
 		check(engine.ph(acid) < 7.0, "acid excess pH is not acidic");
-		ChemicalMixtureRecord base = engine.react(phase, record(Map.of(
-				BuiltinChemicalDefinitions.HCL, 10_000L, BuiltinChemicalDefinitions.NAOH, 15_000L))).mixture();
+		ChemicalMixtureRecord base = ChemicalReactionCandidateValidation.react(registry, phase, record(Map.of(
+				BuiltinChemicalDefinitions.HCL, 10_000L, BuiltinChemicalDefinitions.NAOH, 15_000L)));
 		check(base.amount(registry.speciesHandle(BuiltinChemicalDefinitions.OH_MINUS)) == 5_000L, "base excess is wrong");
 		check(engine.ph(base) > 7.0, "base excess pH is not basic");
 	}
@@ -461,11 +462,7 @@ public final class M7ChemistryValidation {
 				BuiltinChemicalDefinitions.HCL, 1_000_003L,
 				BuiltinChemicalDefinitions.NAOH, 1_000_000L,
 				BuiltinChemicalDefinitions.NANO3, 123_457L));
-		ChemicalMixtureRecord expected = engine.react(phase, input).mixture();
-		for (int i = 0; i < iterations; i++) {
-			ChemicalMixtureRecord actual = engine.react(phase, expected).mixture();
-			check(actual.equals(expected), "reaction/canonicalization drift at iteration " + i);
-		}
+		ChemicalReactionCandidateValidation.validateIdempotence(registry, input, iterations);
 	}
 
 	private static ChemicalMixtureRecord record(Map<String, Long> amounts) {

@@ -5,7 +5,7 @@ import mmm.fluid.air.*;
 import mmm.units.SignedDyadic;
 import java.util.List;
 
-/** First-order simultaneous cavity flow: macroscopic pressure response and exact shared inventories. */
+/** First-order cavity flow: macroscopic pressure response and exact shared inventories. */
 public final class GasTransferValidation {
 	private GasTransferValidation() { }
 	public static void main(String[] args) {
@@ -21,6 +21,7 @@ public final class GasTransferValidation {
 		sharedDonorIsIndependentOfPortOrder();
 		pressurePropagatesAcrossAnInitiallyBalancedPort();
 		thermalEnthalpyAndPositiveTemperature();
+		thermalSeriesPorts();
 		unequalTemperatureBlowdown();
 		ambientAndLiquidSeal();
 	}
@@ -126,6 +127,31 @@ public final class GasTransferValidation {
 				"Finite thermal flow did not relax the macroscopic pressure contrast");
 		for (int i = 0; i < 4; i++) fixture.step(.05);
 		fixture.checkAudit();
+	}
+
+	private static void thermalSeriesPorts() {
+		for (int count : new int[]{4, 8, 16}) for (double area : new double[]{.015625, .0625}) {
+			double[] amounts = new double[count];
+			for (int i = 0; i < count; i++) amounts[i] = .125 * (i == 0 ? 1.1 : .9) * GasRegistry.STANDARD_TEMPERATURE_K / 300;
+			var forward = thermal(amounts); var reverse = thermal(amounts);
+			for (int i = 1; i <= count; i++) { forward.network.updateAvailableVolume(i, .125); reverse.network.updateAvailableVolume(i, .125); }
+			for (int i = 1; i < count; i++) {
+				forward.network.addOrMergeEdge(i, i + 1, area, .65);
+				reverse.network.addOrMergeEdge(count - i + 1, count - i, area, .65);
+			}
+			for (int step = 0; step < 10; step++) {
+				forward.step(.05); reverse.step(.05); forward.checkAudit(); reverse.checkAudit();
+				for (int id = 1; id <= count; id++) {
+					require(forward.network.inventory(id).equals(reverse.network.inventory(id))
+							&& forward.energy.nodeEnergy(id, forward.network) == reverse.energy.nodeEnergy(id, reverse.network),
+							"Thermal serial ports depend on insertion order or edge orientation");
+					double pressure = forward.energy.gaugePressure(id, forward.network) + AirNetwork.REFERENCE_PRESSURE;
+					require(pressure >= .9 * AirNetwork.REFERENCE_PRESSURE - .02 && pressure <= 1.1 * AirNetwork.REFERENCE_PRESSURE + .02,
+							"Serial thermal relaxation left its initial pressure range");
+				}
+			}
+			require(forward.network.standardVolumeNanos(count) > Math.floor(amounts[count - 1] * 1e9), "Serial thermal flow failed to reach the final cavity");
+		}
 	}
 
 	private static void unequalTemperatureBlowdown() {

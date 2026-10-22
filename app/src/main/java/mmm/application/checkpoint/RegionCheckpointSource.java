@@ -4,7 +4,7 @@ import mmm.fluid.FlipChemicalParticleState;
 import mmm.fluid.FlipMaterialParticleState;
 import mmm.fluid.FlipParticleState;
 import mmm.fluid.FlipThermalParticleState;
-import mmm.fluid.PendingPhaseVolumeState;
+import mmm.fluid.PendingPhaseMotionState;
 import mmm.fluid.air.GasStateSnapshot;
 import mmm.granular.GranularStateSnapshot;
 import mmm.model.region.RegionGeometry;
@@ -23,7 +23,7 @@ public interface RegionCheckpointSource {
 	GranularStateSnapshot granularState();
 	GasStateSnapshot gasState(String chemicalRegistryFingerprint);
 	FlipThermalParticleState thermalState();
-	PendingPhaseVolumeState pendingPhaseVolume();
+	PendingPhaseMotionState pendingPhaseMotion();
 	FiniteThermalDeviceInventory finiteThermalDevices(String thermalRegistryFingerprint);
 	boolean hasMaterialState();
 	boolean hasChemicalState();

@@ -95,6 +95,7 @@ final class GranularBedShear {
 				(face.axis()==0?domain.mac.momentumX:domain.mac.momentumZ)[face.index()]=face.after();
 				(face.axis()==0?domain.mac.velocityX:domain.mac.velocityZ)[face.index()]=face.observed();
 			}
+			domain.mac.markMomentumChanged();
 			// Face mass and support are unchanged; the matching velocity view was updated above.
 			committed=true;
 			return new double[]{impulseX,0,impulseZ};

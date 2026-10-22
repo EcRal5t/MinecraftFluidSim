@@ -22,11 +22,6 @@ final class CondensedPhaseChangeStage {
 		if(domain.granularState==null)phaseGranularOccupancy.clear();
 		else phaseGranularOccupancy.rebuild(domain.granularState.parcels,domain.granularState.deposits);
 	}
-	private GasTopologyCoordinator.GasTopologyPlan planCondensedGeometry(LiquidCellInventory future,List<CoherentPhaseStore.Group> coherent){
-		long[] occupied=phaseGranularOccupancy.copySolidSvq();
-		for(var group:coherent)occupied[group.cell()]=Math.addExact(occupied[group.cell()],group.occupiedVolumeSvq());
-		return domain.gasTopologyCoordinator.planAfterInternalConversion(future,occupied,null);
-	}
 	private record GroupKey(int cell,String phase) implements Comparable<GroupKey> {
 		public int compareTo(GroupKey other) { int n=Integer.compare(cell,other.cell);return n!=0?n:phase.compareTo(other.phase); }
 	}
@@ -117,15 +112,29 @@ final class CondensedPhaseChangeStage {
 			for(int i=0;assigned<maximumOperations;i++,assigned++) order.get(i).batches++;
 		}
 		var futureGroups=new TreeMap<GroupKey,CoherentPhaseStore.Group>();
-		for(var group:originalGroups) futureGroups.put(new GroupKey(group.cell(),group.phaseId()),group);
 		var futureCells=new TreeMap<Integer,List<LiquidCellInventory.Stock>>();
-		int operations=0,frozen=0,melted=0;long signed=0;
-		for(var p:selected.values()) if(p.batches>0) {
-			futureCells.put(p.cell,p.freezing?freeze(p,futureGroups,function):melt(p,futureGroups,function));
-			operations+=Math.toIntExact(p.batches);signed+=p.freezing?p.batches:-p.batches;
-			if(p.freezing) frozen++;else melted++;
+		int operations,frozen,melted;long signed;
+		LiquidCellInventory.Plan provisional;
+		long[] occupied;
+		var displacement=new ConservativeLiquidFlux(domain);
+		while(true){
+			futureGroups.clear();futureCells.clear();
+			for(var group:originalGroups)futureGroups.put(new GroupKey(group.cell(),group.phaseId()),group);
+			operations=frozen=melted=0;signed=0;
+			for(var p:selected.values()){p.removedMass=0;if(p.batches>0){
+				futureCells.put(p.cell,p.freezing?freeze(p,futureGroups,function):melt(p,futureGroups,function));
+				operations+=Math.toIntExact(p.batches);signed+=p.freezing?p.batches:-p.batches;
+				if(p.freezing)frozen++;else melted++;
+			}}
+			if(operations==0)return new FluidDomain.ThermalPhaseStats(0,0,0,0);
+			provisional=store.planEdits(quantityEdits(futureCells));
+			occupied=phaseGranularOccupancy.copySolidSvq();
+			for(var group:futureGroups.values())occupied[group.cell()]=Math.addExact(occupied[group.cell()],group.occupiedVolumeSvq());
+			try{displacement.prepareDisplacement(occupied,provisional.future());break;}
+			catch(ConservativeLiquidFlux.CapacityUnavailable unavailable){
+				for(var p:selected.values())p.batches/=2;
+			}
 		}
-		var provisional=store.planEdits(quantityEdits(futureCells));
 		var removedMassByCell=new TreeMap<Integer,Long>();
 		for(var p:selected.values())if(p.removedMass>0)removedMassByCell.put(p.cell,p.removedMass);
 		var momentum=domain.cellMacStage.preparePhaseMomentum(provisional,removedMassByCell);
@@ -151,18 +160,27 @@ final class CondensedPhaseChangeStage {
 			double[] values=energy.liquidEnergies(entry.getKey());int ordinal=0;
 			for(var stock:entry.getValue()) finalEnergies.put(stock.key(),stock.massUnits()==0?0:values[ordinal++]);
 		}
-		var liquid=provisional.withInternalEnergiesByStock(finalEnergies);
-		var gas=planCondensedGeometry(liquid.future(),groups);
+		var phaseLiquid=provisional.withInternalEnergiesByStock(finalEnergies).future();
+		displacement.prepareDisplacement(occupied,phaseLiquid);
+		var transport=domain.cellMacStage.prepareLiquid(displacement,phaseLiquid);
+		var displacedMomentum=new CellMomentumTransport(domain).prepare(transport,phaseVelocities(momentum.momentum(),phaseLiquid));
+		var moved=domain.mechanicalEnergy.prepareDisplacement(transport.inventory().withMechanicalHeat(displacedMomentum.heatByCell()),null).inventory();
+		var endpoint=new TreeMap<Integer,List<LiquidCellInventory.Stock>>();
+		for(int cell=0;cell<domain.cellCount;cell++)if(store.stocksInCell(cell)!=moved.future().stocksInCell(cell))endpoint.put(cell,moved.future().stocksInCell(cell));
+		var liquid=store.planEdits(quantityEdits(endpoint));
+		var gas=domain.gasTopologyCoordinator.planAfterInternalConversion(liquid.future(),occupied,
+				transport.gasAllocation().rebindFuture(domain,liquid.future()));
 		thermal.requirePhaseBatchEnergyCurrent(energy);
-		domain.cellMacStage.publishMaterialChange(liquid,()->domain.cellMacStage.commitMomentum(momentum),gas,null,()->{
+		domain.cellMacStage.publishMaterialChange(liquid,()->domain.cellMacStage.commitMomentum(displacedMomentum),gas,occupied,()->{
 			thermal.commitPhaseBatchEnergy(energy,domain.domainCapabilities.thermalMarkerContext());
 			for(var p:selected.values()) if(p.batches>0) {
 				long delta=p.batches*(p.freezing?p.transition.lowerVolumeSvqPerBatch()-p.transition.upperVolumeSvqPerBatch()
 						:p.transition.upperVolumeSvqPerBatch()-p.transition.lowerVolumeSvqPerBatch());
-				if(delta!=0) domain.pendingPhaseVolume.add(p.cell,normalized(delta));
+				if(delta!=0) domain.pendingPhaseMotion.mark(p.cell);
 			}
 			domain.domainCapabilities.refreshCoherentOccupancy();
 		});
+		thermal.restoreAuditLedger(thermal.auditLedger().withMechanicalWork(moved.mechanicalHeat()).withRoundoff(moved.energyRoundoff()));
 		return new FluidDomain.ThermalPhaseStats(operations,frozen,melted,signed);
 	}
 
@@ -182,14 +200,11 @@ final class CondensedPhaseChangeStage {
 		if(freezing) for(var stock:sources) volume=volume.add(stock.volume());else volume=normalized(coherent.occupiedVolumeSvq());
 		long sourceVolume=freezing?transition.upperVolumeSvqPerBatch():transition.lowerVolumeSvqPerBatch();
 		long high=Math.min(maximum,Math.min(mass/batchMass,volumeBatches(volume,normalized(sourceVolume),maximum)));
-		long delta=freezing?transition.lowerVolumeSvqPerBatch()-transition.upperVolumeSvqPerBatch()
-				:transition.upperVolumeSvqPerBatch()-transition.lowerVolumeSvqPerBatch();
-		if(delta>0) {
-			SignedDyadic occupied=normalized(phaseGranularOccupancy.solidSvq(cell));
-			for(var stock:store.stocksInCell(cell)) occupied=occupied.add(stock.volume());
-			for(var group:coherentInCell) occupied=occupied.add(normalized(group.occupiedVolumeSvq()));
-			SignedDyadic room=SignedDyadic.of(domain.geometry.cutCells.openCellVolume(cell)).subtract(occupied);
-			high=Math.min(high,volumeBatches(room,normalized(delta),maximum));
+		if(freezing){
+			SignedDyadic solids=normalized(phaseGranularOccupancy.solidSvq(cell));
+			for(var group:coherentInCell)solids=solids.add(normalized(group.occupiedVolumeSvq()));
+			var room=SignedDyadic.of(domain.geometry.cutCells.openCellVolume(cell)).subtract(solids);
+			high=Math.min(high,volumeBatches(room,normalized(transition.lowerVolumeSvqPerBatch()),maximum));
 		}
 		if(high==0) return null;
 		double equilibriumEnergy=0;SignedDyadic minimumEnergy=SignedDyadic.ZERO;
@@ -254,12 +269,6 @@ final class CondensedPhaseChangeStage {
 		int[] components=CellRemapMicroTopology.components(domain.geometry.cutCells.mask(p.cell));
 		if(components.length!=1)throw new IllegalStateException("Condensed phase requires one connected open cell component");
 		int best=components[0];
-		SignedDyadic occupied=normalized(phaseGranularOccupancy.solidSvq(p.cell));
-		for(var group:groups.values())if(group.cell()==p.cell)occupied=occupied.add(normalized(group.occupiedVolumeSvq()));
-		for(var stock:rows.values())occupied=occupied.add(stock.volume());
-		var productVolume=normalized(Math.multiplyExact(p.batches,p.transition.upperVolumeSvqPerBatch()));
-		if(occupied.add(productVolume).compareTo(SignedDyadic.of(domain.geometry.cutCells.openCellVolume(p.cell)))>0)
-			throw new IllegalStateException("Prepared melt exceeds its future pore capacity");
 		var liquidKey=new LiquidCellInventory.Key(p.cell,p.liquid,best);var old=rows.get(liquidKey);var composition=new TreeMap<String,Long>();
 		if(take.removed().composition()!=null)composition.putAll(take.removed().composition().stableAmounts());
 		if(old!=null)add(composition,amounts(old.mixture()));
@@ -268,6 +277,20 @@ final class CondensedPhaseChangeStage {
 		var mixture=mixture(composition,mass);int handle=domain.thermalState.thermalMaterialHandleForFluid(p.liquid);
 		rows.put(liquidKey,new LiquidCellInventory.Stock(liquidKey,volume,mass,mixture,energy(function,handle,Mass.kilograms(mass),mixture,p.equilibrium)));
 		return List.copyOf(rows.values());
+	}
+	private float[][] phaseVelocities(MacMomentumState momentum,LiquidCellInventory liquid){
+		long[] mass=new long[domain.cellCount];for(var stock:liquid.physicalStocks())mass[stock.key().cell()]=Math.addExact(mass[stock.key().cell()],stock.massUnits());
+		double[][] p={momentum.copyX(),momentum.copyY(),momentum.copyZ()};float[][] velocity=new float[3][];
+		for(int axis=0;axis<3;axis++){
+			int nx=domain.sizeX+(axis==0?1:0),ny=domain.sizeY+(axis==1?1:0);velocity[axis]=new float[p[axis].length];
+			for(int face=0;face<p[axis].length;face++){
+				int x=face%nx,y=face/nx%ny,z=face/(nx*ny),coordinate=axis==0?x:axis==1?y:z,size=axis==0?domain.sizeX:axis==1?domain.sizeY:domain.sizeZ;
+				int right=coordinate<size?domain.domainFlowFields.cellIndex(x,y,z):-1,left=coordinate>0?domain.domainFlowFields.cellIndex(x-(axis==0?1:0),y-(axis==1?1:0),z-(axis==2?1:0)):-1;
+				double m=.5*((left<0?0:Mass.kilograms(mass[left]))+(right<0?0:Mass.kilograms(mass[right])));
+				if(m>0)velocity[axis][face]=(float)(p[axis][face]/m);
+			}
+		}
+		return velocity;
 	}
 	private List<LiquidCellInventory.Edit> quantityEdits(Map<Integer,List<LiquidCellInventory.Stock>> future) {
 		var edits=new ArrayList<LiquidCellInventory.Edit>();

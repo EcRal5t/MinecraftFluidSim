@@ -196,19 +196,7 @@ final class ThermalCellOperations {
 		return prepareRawCellEnergy(cell, finalInventory, cellEnergy);
 	}
 
-	void requirePendingPhaseCells(SignedDyadic[] pendingCellVolume, ThermalCarrierContext markers, ThermalDomainState.Revision revision) {
-		if (pendingCellVolume == null || pendingCellVolume.length != cellGrid.cellCount()) {
-			throw new IllegalArgumentException("Pending phase-volume cells are incompatible");
-		}
-		preparePhaseScan(markers,revision);
-		for (int cell = 0; cell < pendingCellVolume.length; cell++) {
-			if (pendingCellVolume[cell] == null) throw new IllegalArgumentException("Pending phase volume is missing");
-			// Full vaporization leaves no condensed thermal carrier; its negative volume remains pending.
-			if (pendingCellVolume[cell].signum() > 0 && !cellGrid.occupied(cell)) {
-				throw new IllegalArgumentException("Pending phase volume names an empty thermal cell");
-			}
-		}
-	}
+
 
 	double temperatureInCell(int cell, ThermalCarrierContext markers) {
 		cellGrid.rebuild(carrierAccess(markers));

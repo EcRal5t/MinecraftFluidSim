@@ -9,11 +9,59 @@ import mmm.units.SolverUnitScale;
 import java.util.*;
 
 /** Production cell chemistry: conservation, finite budgets, local reactions and thermal recovery. */
-final class ChemicalReactionCandidateValidation {
+public final class ChemicalReactionCandidateValidation {
 	private ChemicalReactionCandidateValidation() { }
+	public static void main(String[] args) { validate(); System.out.println("Production chemical reaction validation passed"); }
 	static void validate() {
-		cellInventoryTransactions();lowQuantityTransactions();reactionHeatChangesTemperature();evaluationBudgetRotates();
+		transientSpeciesCapacity();cellInventoryTransactions();lowQuantityTransactions();reactionHeatChangesTemperature();evaluationBudgetRotates();
 	}
+	/** Existing reaction cases enter the same stock grouping, thermal planning and publication as runtime. */
+	public static ChemicalMixtureRecord react(ChemicalRegistry registry, int phase, ChemicalMixtureRecord input) {
+		require(registry.phaseHandle(registry.phases().getFirst().id()) == phase, "Reaction fixture phase mismatch");
+		var fixture = new Fixture(registry, List.of(input), new int[]{0}); fixture.step();
+		return fixture.inventory.physicalStockAt(0).mixture();
+	}
+	public static void validateIdempotence(ChemicalRegistry registry, ChemicalMixtureRecord input, int iterations) {
+		var fixture = new Fixture(registry, List.of(input), new int[]{0}); fixture.step();
+		var expected = fixture.inventory.physicalStockAt(0).mixture();
+		for (int i = 0; i < iterations; i++) {
+			fixture.step(); require(fixture.inventory.physicalStockAt(0).mixture().equals(expected), "Production reaction drift");
+		}
+	}
+	private static void transientSpeciesCapacity() {
+		var species = new ArrayList<ChemicalSpecies>(); var names = new ArrayList<String>(); var input = new TreeMap<String,Long>();
+		for (String name : List.of("a", "b", "c", "d")) {
+			int atoms = name.equals("a") || name.equals("d") ? 2 : 1; String id = "test:" + name; names.add(id);
+			species.add(new ChemicalSpecies(id, Map.of("H", atoms), 0, ExactRational.parse(atoms + "/1000"), 0));
+		}
+		input.put("test:a", 1000L);
+		for (int i = 0; i < 15; i++) {
+			String id = "test:inert_" + i; names.add(id); input.put(id, 1000L);
+			species.add(new ChemicalSpecies(id, Map.of("H", 1), 0, ExactRational.parse("1/1000"), 0));
+		}
+		String phase = "test:phase", liquid = "test:liquid", material = "test:thermal";
+		var registry = new ChemicalRegistry(species, List.of(new ChemicalPhaseDefinition(phase, liquid, names, Map.of("test:a", ExactRational.ONE))), List.of(
+				new ChemicalReaction("test:split", ChemicalReaction.Kind.COMPLETE_DISSOCIATION, phase, Map.of("test:a", 1), Map.of("test:b", 1, "test:c", 1), ExactRational.ZERO),
+				new ChemicalReaction("test:combine", ChemicalReaction.Kind.INSTANTANEOUS, phase, Map.of("test:b", 1, "test:c", 1), Map.of("test:d", 1), ExactRational.ZERO)));
+		var initial = ChemicalMixtureRecord.fromStableAmounts(registry, input, 0);
+		for (boolean heat : new boolean[]{false, true}) {
+			var fixture = new Fixture(registry, List.of(initial), new int[]{0}, null, .5F);
+			if (heat) {
+				var air = new ThermalMaterialDefinition("test:air", ThermalMaterialDefinition.CarrierKind.GAS,
+						mmm.fluid.air.BuiltinGasDefinitions.AIR, 300, 0, .025, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 2000, 718)));
+				var offsets = registry.species().stream().map(value -> new ThermalSpeciesOffset("test:offset/" + value.id().substring(5), value.id(), material, ExactRational.ZERO)).toList();
+				fixture.domain.bindThermal(new ThermalRegistry(List.of(identityThermalMaterial(material, liquid), air), offsets, List.of(), registry.fingerprint(), ""), fixture.domain.materialRegistry, 300);
+			}
+			long mass = fixture.totalMass(); var energy = heat ? fixture.domain.exactInternalEnergy() : SignedDyadic.ZERO;
+			require(fixture.step().changedStocks() == 1 && !fixture.scheduler.hasDirtyCells(), "Transient 17-species work vector blocked its legal final stock");
+			var result = fixture.inventory.physicalStockAt(0).mixture();
+			require(result.entryCount() == 16 && result.amount(registry.speciesHandle("test:d")) == 1000 && fixture.totalMass() == mass,
+					"Transient reaction chain changed its final composition or mass");
+			require(!heat || fixture.domain.exactInternalEnergy().equals(energy) && fixture.domain.thermalAudit().expectedInventory().equals(energy),
+					"Transient reaction chain changed thermal energy");
+		}
+	}
+
 	static void cellInventoryTransactions() {
 		for(boolean unavailable:new boolean[]{false,true}) {
 			String a="test:cell/a",b="test:cell/b",liquid="test:cell/liquid",material="test:cell/thermal";
@@ -138,8 +186,10 @@ final class ChemicalReactionCandidateValidation {
 		final LiquidCellInventory inventory;
 		final RegionChemistry scheduler;
 		private final ChemicalReactionStage stage;
+		final FluidDomain domain;
 		Fixture(ChemicalRegistry registry,List<ChemicalMixtureRecord> inputs,int[] cells) {this(registry,inputs,cells,null);}
-		Fixture(ChemicalRegistry registry,List<ChemicalMixtureRecord> inputs,int[] cells,int[] supports) {
+		Fixture(ChemicalRegistry registry,List<ChemicalMixtureRecord> inputs,int[] cells,int[] supports) {this(registry,inputs,cells,supports,1);}
+		Fixture(ChemicalRegistry registry,List<ChemicalMixtureRecord> inputs,int[] cells,int[] supports,float cellSize) {
 			this.registry=registry;int sizeX=Math.max(2,Arrays.stream(cells).max().orElse(0)+1);
 			int cellCount=Math.multiplyExact(sizeX,4);
 			inventory=new LiquidCellInventory(cellCount,registry);scheduler=new RegionChemistry(registry,cellCount);
@@ -151,7 +201,7 @@ final class ChemicalReactionCandidateValidation {
 				inventory.planEdits(List.of(new LiquidCellInventory.Edit(key,new LiquidCellInventory.Stock(key,volume,mass,mixture,0)))).commit();scheduler.markDirtyCell(cells[i]);
 			}
 			var fluids=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension(registry.phases().getFirst().materialId(),1000,"test:miscible",0,90)));
-			var domain=new FluidDomain(sizeX,2,2,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.002F));
+			domain=new FluidDomain(sizeX,2,2,new FluidSolverConfig(cellSize,1000,0,.05F,100,1e-5F,.002F));
 			domain.bindMaterialRegistry(fluids);domain.liquidCells=inventory;domain.chemistry=scheduler;
 			stage=new ChemicalReactionStage(domain);
 		}

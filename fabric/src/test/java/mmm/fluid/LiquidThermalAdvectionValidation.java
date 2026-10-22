@@ -178,7 +178,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 					"test:conducting", 300, 0, 1000, insulating.caloricSegments());
 			double[] energies = {-2990, 500, 500, -2990};
 			var grid = new ThermalCellGrid(3);
-			grid.rebuild(new ThermalCellGrid.CarrierAccess() {
+			var owners=new ThermalCellGrid.CarrierAccess() {
 				@Override public int carrierCount() { return 4; }
 				@Override public int cell(int carrier) { return Math.max(0, carrier - 1); }
 				@Override public ThermalMaterialDefinition material(int carrier) { return carrier < 2 ? insulating : conducting; }
@@ -187,9 +187,10 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 				@Override public double baseEnergy(int carrier) { return 0; }
 				@Override public double internalEnergy(int carrier) { return energies[carrier]; }
 				@Override public void setInternalEnergy(int carrier, double value) { energies[carrier] = value; }
-			});
+			};
+			grid.rebuild(owners);
 			var before = SignedDyadic.sum(energies);
-			var stats = new ThermalTransport(3, 1, 1, 1, 8).step(grid, (x, y, z, axis) -> 1, dt);
+			var stats = mmm.thermal.ThermalCarrierTransport.step(owners,List.of(new mmm.thermal.ThermalCarrierTransport.Contact(2,3,1000,Double.NaN)),dt,8);
 			require(energies[0] == -2990 && energies[1] == 500 && energies[2] < 500 && energies[3] > -2990
 					&& SignedDyadic.sum(energies).subtract(before).equals(stats.roundoffResidual()),
 					"unrelated explicit/implicit contact equilibrated an insulating cell");

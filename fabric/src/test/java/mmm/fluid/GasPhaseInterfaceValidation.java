@@ -114,6 +114,18 @@ public final class GasPhaseInterfaceValidation {
 		var transition=new mmm.thermal.ThermalPhaseTransition("test:finite-air/boil",water.id(),vapor.id(),373.15,168,168*1700L,
 				mmm.chemistry.ExactRational.of(mmm.units.Mass.fromKilograms(1000.0 * 168 / mmm.granular.SolidVolume.SVQ_PER_CUBIC_METER)).divide(mmm.units.Mass.UNITS_PER_KILOGRAM),mmm.thermal.ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS,10000,3000000);
 		var registry=new mmm.thermal.ThermalRegistry(java.util.List.of(water,vapor,air),java.util.List.of(),java.util.List.of(transition),"","");
+		var dry=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,1e-4F));
+		for(int cell=1;cell<8;cell++)dry.setSolid(cell%2,cell/2%2,cell/4,true);
+		dry.sealDomainBoundary();dry.bindMaterialRegistry(new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER)));
+		dry.bindGasRegistry(mmm.fluid.air.BuiltinGasDefinitions.createRegistry());dry.bootstrapGasState("");
+		dry.commitOperatorVentSealedGas(dry.planOperatorVentSealedGas());
+		dry.gasState.network.commitPhaseSource(1,new mmm.thermal.GasLiquidPhaseModel(registry,dry.gasState.network.registry()).gasBatch(transition,128));
+		dry.bindThermal(registry,dry.materialRegistry,300);
+		long mass=dry.gasState.network.inventory(1).totalMassUnits();
+		var condensed=dry.stepGasPhaseChangeOnly(16);
+		check(condensed.condensedCells()>0&&dry.totalVolumeExact()>0&&dry.totalMassUnits()+dry.gasState.network.inventory(1).totalMassUnits()==mass
+				&&dry.exactInternalEnergy().equals(dry.thermalAudit().expectedInventory()),"Supersaturated dry chamber failed to nucleate conserving condensate");
+
 		try {
 			for(int sourceCase=0;sourceCase<5;sourceCase++) {
 				boolean existingVapor=sourceCase==1, mergingPeers=sourceCase==4;
@@ -144,6 +156,7 @@ public final class GasPhaseInterfaceValidation {
                 double volumeBefore = domain.totalVolume();
                 for (int step = 0; step < 3; step++) {
                     domain.stepGasPhaseChangeOnly(8);
+                    if(completeDepletion&&step==0){check(domain.totalVolumeExact()==0,"Complete vaporization retained liquid");checkpointVapor(domain,definitions);}
                     check(domain.gasBoundary().auditClosed()
                                     && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
                             "Finite phase publication must conserve gas and internal energy");
@@ -158,6 +171,23 @@ public final class GasPhaseInterfaceValidation {
 		} finally { }
 	}
 
+
+	private static void checkpointVapor(FluidDomain domain,mmm.thermal.ThermalRegistry thermal){
+		try{
+			var origin=net.minecraft.core.BlockPos.ZERO;var controller=new net.minecraft.core.BlockPos(-1,0,0);
+			var footprint=new mmm.simulation.controller.FluidRegionFootprint(controller,origin,origin,java.util.Set.of(origin.asLong()),java.util.Set.of(controller.asLong()),java.util.Set.of(0L));
+			net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension=net.minecraft.resources.ResourceKey.create(
+					net.minecraft.resources.ResourceKey.createRegistryKey(net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm","phase_checkpoint_dimensions")),
+					net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm","phase_checkpoint"));
+			var region=new mmm.simulation.FluidRegion(java.util.UUID.randomUUID(),dimension,origin,domain,footprint);
+			var saved=mmm.simulation.RegionCheckpointFixtures.captureThermal(region,1);saved.validate();
+			var restored=new mmm.simulation.persistence.RegionCheckpointRestorer(saved.checkpoint()).reconstructAuthoritativeState(null,null,thermal,domain.gasState.network.registry(),BuiltinFluidMaterials.createRegistry());
+			var next=FluidDomain.restoreAuthoritativeState(restored);
+			check(next.totalVolumeExact()==0&&next.hasPendingPhaseMotionWork()&&next.exactInternalEnergy().equals(domain.exactInternalEnergy())
+					&&next.gasBoundary().sealedInventory().equals(domain.gasBoundary().sealedInventory()),"Actual fully vaporized checkpoint lost gas, energy or pending motion");
+			next.stepMechanicsOnly();check(!next.hasPendingPhaseMotionWork(),"Restored vapor checkpoint did not finish mechanical advancement");
+		}catch(java.io.IOException failed){throw new AssertionError("Actual vaporized state failed durable checkpoint",failed);}
+	}
 
 	static void validateCondensedCellBatches() {
 		for(boolean chemical:new boolean[]{false,true}) {

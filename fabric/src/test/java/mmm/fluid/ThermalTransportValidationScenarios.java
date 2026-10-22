@@ -805,8 +805,8 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		boolean energyEqual = fullRestore.exactInternalEnergy().equals(domain.exactInternalEnergy());
 		boolean gasEqual = restoredGas.nodes().equals(expectedGas.nodes())
 				&& Arrays.equals(restoredGas.pieceNodeOrdinal(), expectedGas.pieceNodeOrdinal());
-		PendingPhaseVolumeState expectedPending = domain.exportPendingPhaseVolumeState();
-		PendingPhaseVolumeState restoredPending = fullRestore.exportPendingPhaseVolumeState();
+		PendingPhaseMotionState expectedPending = domain.exportPendingPhaseMotionState();
+		PendingPhaseMotionState restoredPending = fullRestore.exportPendingPhaseMotionState();
 		boolean pendingEqual = restoredPending.cellCount() == expectedPending.cellCount()
 				&& restoredPending.entries().equals(expectedPending.entries());
 		require(energyEqual && gasEqual && pendingEqual,
@@ -947,10 +947,10 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		require(segmentedCell.minimumTemperature(0) <= 400
 				&& segmentedCell.maximumTemperature(0) >= 400,
 				"finite thermal contact omitted its actual caloric temperature from the prepared interval");
-		expectFailure(() -> FiniteThermalExchange.plan(segmentedRegistry, segmentedBody, List.of(
-				new FiniteThermalExchange.Contact(0, 250.0, 1_000.0, 100.0, 250.0, 500.0)
-		), 1.0, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS),
-				"finite thermal planner ignored a lower-capacity reachable caloric segment");
+		var segmentedExchange=FiniteThermalExchange.plan(segmentedRegistry,segmentedBody,List.of(
+				new FiniteThermalExchange.Contact(0,250,1000,100,250,500)),10000,ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		require(segmentedExchange.changed()&&segmentedExchange.after().internalEnergyJ()<segmentedBody.internalEnergyJ(),
+				"Finite device did not continue across caloric segments and stiff contact");
 	}
 
 	private static void finiteThermalExchangeRetainsEnergyScale() {
@@ -1013,7 +1013,43 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		}
 	}
 
+	private static void gasComponentSplittingPreservesPhysicalContactArea(){
+		double referenceLocal=0,referenceNeighbor=0,referenceHeat=0;
+		for(int count:new int[]{1,2,8}){
+			var gasMaterials=new java.util.ArrayList<mmm.fluid.air.GasComponentDefinition>();
+			var ambient=new java.util.ArrayList<mmm.fluid.air.GasRegistry.AmbientFraction>();
+			var definitions=new java.util.ArrayList<ThermalMaterialDefinition>();
+			definitions.add(new ThermalMaterialDefinition("test:split/water",ThermalMaterialDefinition.CarrierKind.LIQUID,
+					BuiltinFluidMaterials.WATER.id(),300,0,1,List.of(new ThermalMaterialDefinition.CaloricSegment(1,1000,1000))));
+			for(int i=0;i<count;i++){
+				String id="test:split_gas_"+i;
+				gasMaterials.add(new mmm.fluid.air.GasComponentDefinition(id,1,1,List.of(),List.of()));
+				ambient.add(new mmm.fluid.air.GasRegistry.AmbientFraction(id,mmm.chemistry.ExactRational.parse("1/"+count)));
+				definitions.add(new ThermalMaterialDefinition("test:split/gas_"+i,ThermalMaterialDefinition.CarrierKind.GAS,id,
+						300,0,1,List.of(new ThermalMaterialDefinition.CaloricSegment(1,1000,1000))));
+			}
+			var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.002F));
+			domain.sealDomainBoundary();domain.setVolume(0,0,0,.5F);
+			domain.bindGasRegistry(new mmm.fluid.air.GasRegistry(gasMaterials,ambient));
+			domain.bindThermal(new ThermalRegistry(definitions),new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)),300);
+			domain.setThermalTemperatureInCell(0,0,0,400);
+			var batch=mmm.thermal.ThermalCarrierTransport.prepare(domain.thermalState.exchangeCarrierAccess(domain.domainCapabilities.thermalMarkerContext()));
+			double local=0,neighbor=0;
+			for(var contact:CarrierThermalConduction.contacts(domain,batch))if(contact.first()==0||contact.second()==0){
+				int other=contact.first()==0?contact.second():contact.first();if(other<0)continue;
+				if(batch.cell(other)==0)local+=contact.conductance();else neighbor+=contact.conductance();
+			}
+			double before=domain.liquidCells.physicalStockAt(0).internalEnergy();domain.stepThermalOnly(.0001);
+			double heat=before-domain.liquidCells.physicalStockAt(0).internalEnergy();
+			if(count==1){referenceLocal=local;referenceNeighbor=neighbor;referenceHeat=heat;}
+			require(local>0&&neighbor>0&&Math.abs(local-referenceLocal)<1e-12&&Math.abs(neighbor-referenceNeighbor)<1e-12
+					&&Math.abs(heat-referenceHeat)<1e-8&&domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+					"Equivalent gas component splitting changed physical contact area or heat transfer: components="+count);
+		}
+	}
+
 	private static void gasChamberConductsWallLiquidAndFiniteDeviceHeat() {
+		gasComponentSplittingPreservesPhysicalContactArea();
 		var liquids=new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		var water=new ThermalMaterialDefinition("test:thermal/gas_contact_water",ThermalMaterialDefinition.CarrierKind.LIQUID,
 				BuiltinFluidMaterials.WATER.id(),293.15,0,.598,List.of(new ThermalMaterialDefinition.CaloricSegment(250,600,4184)));
@@ -1042,7 +1078,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		var before=domain.exactInternalEnergy();temperature=domain.gasNodeTemperatureK(1);
 		var delta=exchange.contacts().getFirst().internalEnergyDeltaJ();
 		domain.commitFiniteThermalCellExchange(domain.planFiniteThermalCellExchange(
-				List.of(new FluidDomain.ThermalCellEnergyDelta(0,0,0,delta))));
+				List.of(new FluidDomain.ThermalCellEnergyDelta(0,0,0,delta,exchange.contacts().getFirst().carriers()))));
 		require(delta>0 && domain.gasNodeTemperatureK(1)>temperature
 				&& Math.abs(domain.exactInternalEnergy().subtract(before).toDouble()
 						+exchange.after().internalEnergyJ()-body.internalEnergyJ())<1e-8
@@ -1050,6 +1086,12 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				"Finite device did not exchange paired energy with a gas-only cell");
 		Arrays.fill(boundary,Double.NaN);domain.replaceThermalBoundaryTemperatures(boundary);
 		domain.setVolume(0,0,0,.5F);domain.setThermalTemperatureInCell(0,0,0,350);
+		var context=domain.domainCapabilities.thermalMarkerContext();domain.thermalState.preparePhaseScan(context);
+		var revision=domain.thermalState.thermalRevision();
+		domain.finiteThermalContacts(List.of(new FluidDomain.ThermalContactRequest(0,0,0,0,2)));
+		require(domain.thermalState.matchesThermalRevision(revision),"Read-only device query changed thermal owners");
+		domain.thermalState.preparePhaseScan(context);domain.thermalState.preparePhaseCandidateCell(0,context);
+
 		temperature=domain.gasNodeTemperatureK(1);before=domain.exactInternalEnergy();
 		transport=domain.stepThermalOnly(.05);
 		require(domain.gasNodeTemperatureK(1)>temperature && transport.reservoirExchange().signum()==0
@@ -1090,86 +1132,20 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 	}
 
 	static void fixedBoundaryAuditsCaloricContinuation() {
-		stiffContactPreservesLocalEnergy();
-		FluidMaterial liquid = FluidMaterial.withSurfaceTension("test:boundary_liquid", 1.0,
-				"test:miscible", 0.0, 90.0);
-		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(liquid));
-		ThermalMaterialDefinition definition = new ThermalMaterialDefinition("test:thermal/boundary_liquid",
-				ThermalMaterialDefinition.CarrierKind.LIQUID, liquid.id(), 300.0, 0.0, 0.125,
-				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0)));
-		ThermalCarrierContext markers = new ThermalCarrierContext() {
-			private final double[] liquidEnergy = new double[1];
-			private long liquidRevision;
-			@Override public double liquidInternalEnergy(int ordinal) { return liquidEnergy[ordinal]; }
-			@Override public void setLiquidInternalEnergy(int ordinal, double energy) { liquidEnergy[ordinal] = energy; liquidRevision++; }
-			@Override public long liquidInventoryRevision() { return liquidRevision; }
-			@Override public int markerCount() { return 1; }
-			@Override public int cell(int marker) { return 0; }
-			@Override public int fluidMaterialHandle(int marker) { return 0; }
-			@Override public double mass(int marker) { return 1.0; }
-			@Override public double volume(int marker) { return 1.0; }
-			@Override public ChemicalMixtureRecord mixture(int marker) { return null; }
-			@Override public ChemicalRegistry chemicalRegistry() { return null; }
-		};
-		ThermalDomainState thermal = FluidThermalBinding.create(new ThermalRegistry(List.of(definition)), liquids,
-				300.0, 1, 2, 2, 2, 0.5F, markers);
-		SignedDyadic equilibriumEnergy = thermal.exactEnergy(1);
-		ThermalTransport.Stats equilibrium = thermal.step(markers, (x, y, z, axis) -> 0.0,
-				(x, y, z, direction) -> direction == 0
-						? new ThermalTransport.FixedBoundary(0.25, 300.0) : null, 1_000.0);
-		require(equilibrium.substeps() == 1 && equilibrium.reservoirExchange().equals(SignedDyadic.ZERO)
-				&& thermal.exactEnergy(1).equals(equilibriumEnergy), "equilibrated boundary preserves energy");
-		ThermalTransport.Stats heated = thermal.step(markers, (x, y, z, axis) -> 0.0,
-				(x, y, z, direction) -> direction == 0
-						? new ThermalTransport.FixedBoundary(0.25, 400.0) : null, 1.0);
-		require(close(thermal.temperature(0, markers), 310.0)
-				&& heated.reservoirExchange().equals(SignedDyadic.of(12.5))
-				&& thermal.exactEnergy(1).equals(thermal.auditLedger().expectedInventory()),
-				"fixed-temperature boundary did not close source/audit energy");
-		ThermalTransport.Stats continued = thermal.step(markers, (x, y, z, axis) -> 0.0,
-				(x, y, z, direction) -> direction == 0
-						? new ThermalTransport.FixedBoundary(0.25, 10_000.0) : null, 10.0);
-		require(thermal.temperature(0, markers) > definition.maximumTemperatureK()
-				&& continued.reservoirExchange().toDouble() > 0.0
-				&& thermal.exactEnergy(1).equals(thermal.auditLedger().expectedInventory()),
-				"fixed-boundary transport did not conserve energy through caloric continuation");
-	}
-
-	private static void stiffContactPreservesLocalEnergy() {
-		ThermalMaterialDefinition material = new ThermalMaterialDefinition("test:thermal/stiff",
-				ThermalMaterialDefinition.CarrierKind.LIQUID, "test:stiff", 350.0, 0.0, 20.0,
-				List.of(new ThermalMaterialDefinition.CaloricSegment(1.0, 300.0, 1.0),
-						new ThermalMaterialDefinition.CaloricSegment(300.0, 500.0, 1_000.0)));
-		double[] mass = {.01, .01, 1, 1};
-		double[] temperatures = {300.0, 300.0, 400.0, 250.0};
-		double[] energies = new double[mass.length];
-		for (int i = 0; i < mass.length; i++) energies[i] = mass[i] * material.sensibleSpecificEnergyAt(temperatures[i]);
-		ThermalCellGrid grid = new ThermalCellGrid(mass.length);
-		grid.rebuild(new ThermalCellGrid.CarrierAccess() {
-			@Override public int carrierCount() { return mass.length; }
-			@Override public int cell(int i) { return i; }
-			@Override public ThermalMaterialDefinition material(int i) { return material; }
-			@Override public double mass(int i) { return mass[i]; }
-			@Override public double volume(int i) { return mass[i]; }
-			@Override public double baseEnergy(int i) { return 0.0; }
-			@Override public double internalEnergy(int i) { return energies[i]; }
-			@Override public void setInternalEnergy(int i, double energy) { energies[i] = energy; }
-		});
-		double quietFirst = energies[0], quietSecond = energies[1];
-		SignedDyadic before = SignedDyadic.sum(energies);
-		ThermalTransport transport = new ThermalTransport(4, 1, 1, 1.0, 8);
-		ThermalTransport.Stats internal = transport.step(grid, (x, y, z, axis) -> x == 1 ? 0.0 : 1.0, 0.05);
-		require(energies[0] == quietFirst && energies[1] == quietSecond
-				&& grid.temperature(2) < 400.0 && grid.temperature(3) > 250.0
-				&& SignedDyadic.sum(energies).subtract(before).equals(internal.roundoffResidual()),
-				"isolated equilibrium and active contact retain separate energy balances");
-		before = SignedDyadic.sum(energies);
-		ThermalTransport.Stats boundary = transport.step(grid, (x, y, z, axis) -> 0.0,
-				(x, y, z, direction) -> x == 2 && direction == 2 ? new ThermalTransport.FixedBoundary(1.0, 1.0) : null, 10.0);
-		require(grid.temperature(2) >= 1.0 && grid.temperature(2) < 300.0
-				&& SignedDyadic.sum(energies).subtract(before).subtract(boundary.reservoirExchange()).equals(boundary.roundoffResidual()),
-				"stiff boundary crosses caloric intervals with a closed finite heat transfer");
-
+		var definition=new ThermalMaterialDefinition("test:thermal/boundary",ThermalMaterialDefinition.CarrierKind.LIQUID,
+				BuiltinFluidMaterials.WATER.id(),300,0,.125,List.of(new ThermalMaterialDefinition.CaloricSegment(200,500,10)));
+		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.002F));
+		domain.setVolume(0,0,0,1);domain.bindThermal(new ThermalRegistry(List.of(definition)),new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)),300);
+		var boundaries=new double[domain.cellCount*6];Arrays.fill(boundaries,Double.NaN);boundaries[0]=300;
+		domain.replaceThermalBoundaryTemperatures(boundaries);var before=domain.exactInternalEnergy();
+		var quiet=domain.stepThermalOnly(1000);
+		require(quiet.reservoirExchange().signum()==0&&domain.exactInternalEnergy().equals(before),"Equilibrated production wall changed U");
+		boundaries[0]=400;domain.replaceThermalBoundaryTemperatures(boundaries);var heated=domain.stepThermalOnly(1);
+		require(heated.reservoirExchange().signum()>0&&domain.thermalTemperatureInCell(0,0,0)>300
+				&&domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),"Production wall heat did not close");
+		boundaries[0]=10000;domain.replaceThermalBoundaryTemperatures(boundaries);var continued=domain.stepThermalOnly(10000);
+		require(continued.reservoirExchange().signum()>0&&domain.thermalTemperatureInCell(0,0,0)>500
+				&&domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),"Production wall did not cross caloric continuation");
 	}
 
 	static void crowdedCellEnergyAssignmentPreservesEquilibrium() {

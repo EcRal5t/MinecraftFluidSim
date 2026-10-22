@@ -403,7 +403,7 @@ public final class FluidRegion {
 				throw new IllegalArgumentException("Finite thermal cell binding ordinal changed");
 			}
 			deltas.add(new FluidDomain.ThermalCellEnergyDelta(binding.cellX(), binding.cellY(), binding.cellZ(),
-					contact.internalEnergyDeltaJ()));
+					contact.internalEnergyDeltaJ(),contact.carriers()));
 			contacts.add(new FluidDomain.ThermalContactRequest(binding.ordinal(),
 					binding.cellX(), binding.cellY(), binding.cellZ(),
 					exchange.initialContacts().get(index).conductanceWPerK()));

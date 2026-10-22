@@ -39,7 +39,7 @@ public final class FluidDomainState {
 	private final ThermalRegistry thermalRegistry;
 	private final ThermalOwnerSnapshot thermalOwner;
 	private final int maximumThermalTransportSubsteps;
-	private final PendingPhaseVolumeState pendingPhaseVolume;
+	private final PendingPhaseMotionState pendingPhaseMotion;
 	private final double[] thermalBoundaryTemperaturesK;
 	private final CondensedPhasePressureField condensedPhasePressure;
 	private final MaterialRegistry materialDefinitions;
@@ -64,7 +64,7 @@ public final class FluidDomainState {
 			GranularRegistry granularRegistry, GranularStateSnapshot granular, GranularDepositDynamics.State granularDynamics,
 			boolean precipitationEnabled, GasRegistry gasRegistry, GasStateSnapshot gas,
 			ThermalRegistry thermalRegistry, ThermalOwnerSnapshot thermalOwner, int maximumThermalTransportSubsteps,
-			PendingPhaseVolumeState pendingPhaseVolume, double[] thermalBoundaryTemperaturesK,
+			PendingPhaseMotionState pendingPhaseMotion, double[] thermalBoundaryTemperaturesK,
 			CondensedPhasePressureField condensedPhasePressure, MaterialRegistry materialDefinitions) {
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2) throw new IllegalArgumentException("Invalid cell domain shape");
 		int cells = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
@@ -97,13 +97,13 @@ public final class FluidDomainState {
 		this.gasRegistry = Objects.requireNonNull(gasRegistry); this.gas = gas;
 		if (gas != null && !gas.registryFingerprint().equals(gasRegistry.fingerprint())) throw new IllegalArgumentException("Gas registry identity mismatch");
 		this.thermalRegistry = thermalRegistry; this.thermalOwner = thermalOwner;
-		this.maximumThermalTransportSubsteps = maximumThermalTransportSubsteps; this.pendingPhaseVolume = pendingPhaseVolume;
+		this.maximumThermalTransportSubsteps = maximumThermalTransportSubsteps; this.pendingPhaseMotion = pendingPhaseMotion;
 		this.thermalBoundaryTemperaturesK = thermalBoundaryTemperaturesK == null ? null : thermalBoundaryTemperaturesK.clone();
 		this.condensedPhasePressure = condensedPhasePressure;
 		if ((thermalOwner == null) != (thermalRegistry == null) || thermalOwner != null && (!thermalOwner.registryFingerprint().equals(thermalRegistry.fingerprint())
-				|| maximumThermalTransportSubsteps <= 0 || pendingPhaseVolume == null || condensedPhasePressure == null || gas == null || palette.isEmpty()))
+				|| maximumThermalTransportSubsteps <= 0 || pendingPhaseMotion == null || condensedPhasePressure == null || gas == null || palette.isEmpty()))
 			throw new IllegalArgumentException("Thermal owner/registry or runtime state mismatch");
-		if (thermalOwner == null && (maximumThermalTransportSubsteps != 0 || pendingPhaseVolume != null || thermalBoundaryTemperaturesK != null || condensedPhasePressure != null))
+		if (thermalOwner == null && (maximumThermalTransportSubsteps != 0 || pendingPhaseMotion != null || thermalBoundaryTemperaturesK != null || condensedPhasePressure != null))
 			throw new IllegalArgumentException("Inactive thermal capability contains runtime state");
 		if (condensedPhasePressure != null && condensedPhasePressure.cellCount() != cells) throw new IllegalArgumentException("Pressure field shape differs");
 		if (this.thermalBoundaryTemperaturesK != null && this.thermalBoundaryTemperaturesK.length != 6 * cells) throw new IllegalArgumentException("Thermal boundary shape differs");
@@ -130,7 +130,7 @@ public final class FluidDomainState {
 	public GasRegistry gasRegistry() { return gasRegistry; } public GasStateSnapshot gas() { return gas; }
 	public ThermalRegistry thermalRegistry() { return thermalRegistry; } public ThermalOwnerSnapshot thermalOwner() { return thermalOwner; }
 	public int maximumThermalTransportSubsteps() { return maximumThermalTransportSubsteps; }
-	public PendingPhaseVolumeState pendingPhaseVolume() { return pendingPhaseVolume; }
+	public PendingPhaseMotionState pendingPhaseMotion() { return pendingPhaseMotion; }
 	public double[] copyThermalBoundaryTemperaturesK() { return thermalBoundaryTemperaturesK == null ? null : thermalBoundaryTemperaturesK.clone(); }
 	public CondensedPhasePressureField condensedPhasePressure() { return condensedPhasePressure; }
 	public MaterialRegistry materialDefinitions() { return materialDefinitions; }

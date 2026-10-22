@@ -110,7 +110,7 @@ public final class FluidDomain {
 	ThermalDomainState thermalState;
 	final ThermalCarrierContext thermalMarkers;
 	double[] thermalBoundaryTemperatureK;
-	final PendingPhaseVolumeWork pendingPhaseVolume;
+	final PendingPhaseMotionWork pendingPhaseMotion;
 	final DomainMetrics metrics;
 	final CellInventoryReader cellInventory;
 	final CarrierInventoryReader carriers;
@@ -142,7 +142,7 @@ public final class FluidDomain {
 		this.cellMacStage = new CellMacStage(domain);
 		this.mechanicalEnergy = new MechanicalEnergySettlement(domain);
 		this.tension = new SurfaceTensionFields(this);
-		this.pendingPhaseVolume = new PendingPhaseVolumeWork(cellCount);
+		this.pendingPhaseMotion = new PendingPhaseMotionWork(cellCount);
 		this.thermalMarkers = domain.domainCapabilities.createThermalMarkerContext();
 		this.metrics = new DomainMetrics(domain);
 		this.cellInventory = new CellInventoryReader(domain);
@@ -422,16 +422,16 @@ public final class FluidDomain {
 	public long totalChemicalSpeciesQuanta() { return domainPhaseInventory.totalChemicalSpeciesQuanta(); }
 	public int granularDepositGroupCount() { return domainPhaseInventory.granularDepositGroupCount(); }
 	public int coherentPhaseGroupCount() { return domainPhaseInventory.coherentPhaseGroupCount(); }
-	public boolean hasPendingPhaseVolumeWork() { return domainPhaseInventory.hasPendingPhaseVolumeWork(); }
+	public boolean hasPendingPhaseMotionWork() { return domainPhaseInventory.hasPendingPhaseMotionWork(); }
 	public double densityInCell(int x, int y, int z) { return domainPhaseInventory.densityInCell(x, y, z); }
 	public FluidCellInventoryView observeCellInventory(int x, int y, int z) { return domainPhaseInventory.observeCellInventory(x, y, z); }
 	public CellCarrierInventoryView observeCellCarriers(int x, int y, int z) { return domainPhaseInventory.observeCellCarriers(x, y, z); }
 	public boolean hasCondensedInventoryInCell(int x, int y, int z) { return domainPhaseInventory.hasCondensedInventoryInCell(x, y, z); }
-	public PendingPhaseVolumeState exportPendingPhaseVolumeState() { return domainPhaseInventory.exportPendingPhaseVolumeState(); }
+	public PendingPhaseMotionState exportPendingPhaseMotionState() { return domainPhaseInventory.exportPendingPhaseMotionState(); }
 	public FluidDomainState captureAuthoritativeState() { return domainPhaseInventory.captureAuthoritativeState(); }
 	public FluidDomainState.Layout authoritativeLayout() { return domainPhaseInventory.authoritativeLayout(); }
 	public static FluidDomain restoreAuthoritativeState(FluidDomainState state) { return DomainPhaseInventory.restoreAuthoritativeState(state); }
-	public void restorePendingPhaseVolumeState(PendingPhaseVolumeState state) { domainPhaseInventory.restorePendingPhaseVolumeState(state); }
+	public void restorePendingPhaseMotionState(PendingPhaseMotionState state) { domainPhaseInventory.restorePendingPhaseMotionState(state); }
 	public ThermalTransport.Stats lastThermalTransportStats() { return domainPhaseInventory.lastThermalTransportStats(); }
 	public ThermalAuditLedger thermalAudit() { return domainPhaseInventory.thermalAudit(); }
 	public void settleExternalContainerExtraction(double removedCarrierEnergy, double coupledItemEnergy) { domainPhaseInventory.settleExternalContainerExtraction(removedCarrierEnergy, coupledItemEnergy); }
@@ -670,6 +670,7 @@ public final class FluidDomain {
 		final GranularCollisionPlan granular;
 		final LiquidCollisionEdit liquid;
 		final ThermalDomainState.Revision thermalRevision;
+		final long momentumRevision;
 		boolean consumed;
 
 		CollisionEditPlan(
@@ -678,6 +679,7 @@ public final class FluidDomain {
 				ThermalDomainState.Revision thermalRevision
 		) {
 			this.owner = owner;
+			this.momentumRevision = owner.mac.momentumRevision();
 			this.edits = edits;
 			this.previousMasks = previousMasks.clone();
 			this.planMarkerCount = planMarkerCount;
@@ -750,7 +752,9 @@ public final class FluidDomain {
 			}
 		}
 	}
-	public record ThermalCellEnergyDelta(int cellX, int cellY, int cellZ, double internalEnergyDeltaJ) {
+	public record ThermalCellEnergyDelta(int cellX, int cellY, int cellZ, double internalEnergyDeltaJ,
+	        List<FiniteThermalExchange.CarrierDelta> carriers) {
+		public ThermalCellEnergyDelta(int x,int y,int z,double heat){this(x,y,z,heat,List.of());}
 		public ThermalCellEnergyDelta {
 			if (!Double.isFinite(internalEnergyDeltaJ)) {
 				throw new IllegalArgumentException("Finite thermal cell energy delta is invalid");

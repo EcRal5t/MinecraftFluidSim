@@ -328,7 +328,7 @@ final class MinecraftRegionTick {
 		boolean phaseDirty = thermalAxis.condensedPhase().operations() != 0
 				|| thermalAxis.gasPhase().operations() != 0;
 		boolean auditClosed = domain.exactInternalEnergy().equals(after.expectedInventory());
-		boolean pendingVolumeOrWork = domain.hasPendingPhaseVolumeWork();
+		boolean pendingVolumeOrWork = domain.hasPendingPhaseMotionWork();
 		ThermalActivity.Observation observation = new ThermalActivity.Observation(thermalAxis.transport(),
 				chemistryDirty, granularDirty, phaseDirty, gasActivity, carrierMotion,
 				pendingVolumeOrWork, auditClosed);

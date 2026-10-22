@@ -59,7 +59,7 @@ public final class ThermalRegistryCodec {
 				Map.entry("GasFingerprint", Tag.TAG_STRING),
 				Map.entry("Materials", Tag.TAG_LIST), Map.entry("SpeciesOffsets", Tag.TAG_LIST),
 				Map.entry("Transitions", Tag.TAG_LIST), Map.entry("Boundaries", Tag.TAG_LIST),
-				Map.entry("GasLiquidPairs", Tag.TAG_LIST), Map.entry("FiniteDevices", Tag.TAG_LIST)));
+				Map.entry("FiniteDevices", Tag.TAG_LIST)));
 		if (!mmm.units.Mass.ENCODING.equals(root.getStringOr("MassEncoding", ""))
 				|| !root.getStringOr("Schema", "").equals(SCHEMA)
 				|| !ThermalRegistry.UNIT_SYSTEM_ID.equals(root.getStringOr("UnitSystem", ""))) {
@@ -78,7 +78,6 @@ public final class ThermalRegistryCodec {
 					decodeOffsets(root.getListOrEmpty("SpeciesOffsets")),
 					decodeTransitions(root.getListOrEmpty("Transitions")),
 					decodeBoundaries(root.getListOrEmpty("Boundaries")),
-					decodePairs(root.getListOrEmpty("GasLiquidPairs")),
 					decodeDevices(root.getListOrEmpty("FiniteDevices")), chemical, granular, gas);
 			if (!registry.fingerprint().equals(root.getStringOr("Fingerprint", ""))
 					|| !java.util.Arrays.equals(registry.canonicalBytes(), root.getByteArray("Canonical").orElseThrow())) {
@@ -146,38 +145,6 @@ public final class ThermalRegistryCodec {
 			boundaries.add(tag);
 		}
 		root.put("Boundaries", boundaries);
-		ListTag pairs = new ListTag();
-		for (GasLiquidSpeciesPair pair : registry.gasLiquidPairs()) {
-			CompoundTag tag = new CompoundTag();
-			tag.putString("Id", pair.id());
-			tag.putString("GasComponent", pair.gasComponentId());
-			tag.putString("LiquidPhase", pair.liquidPhaseId());
-			tag.putString("Species", pair.speciesId());
-			tag.putLong("GasNanos", pair.gasStandardVolumeNanosPerBatch());
-			tag.putLong("GasMassUnitsPerBatch", pair.gasMassUnitsPerBatch());
-			tag.putLong("LiquidQuanta", pair.liquidQuantaPerBatch());
-			tag.putLong("LiquidMassUnitsPerBatch", pair.liquidMassUnitsPerBatch());
-			tag.putLong("LiquidResidualMassUnitsPerBatch", pair.liquidResidualMassUnitsPerBatch());
-			tag.putString("Moles", pair.molesPerBatch().canonical());
-			tag.putLong("MinimumPressureBits", bits(pair.minimumPressurePa()));
-			tag.putLong("MaximumPressureBits", bits(pair.maximumPressurePa()));
-			tag.putLong("MaximumConcentrationBits", bits(pair.maximumLiquidConcentrationMolPerCubicMeter()));
-			tag.putLong("LiquidDiffusionBits", bits(pair.liquidDiffusionSquareMetersPerSecond()));
-			tag.putLong("LiquidFilmThicknessBits", bits(pair.liquidFilmThicknessMeters()));
-			tag.putLong("GasResistanceBits", bits(pair.gasResistanceSecondsPerMeter()));
-			ListTag segments = new ListTag();
-			for (GasLiquidSpeciesPair.HenrySegment segment : pair.henrySegments()) {
-				CompoundTag encoded = new CompoundTag();
-				encoded.putLong("MinimumBits", bits(segment.minimumTemperatureK()));
-				encoded.putLong("MaximumBits", bits(segment.maximumTemperatureK()));
-				encoded.putLong("MinimumHenryBits", bits(segment.henryConstantMolPerCubicMeterPaAtMinimum()));
-				encoded.putLong("MaximumHenryBits", bits(segment.henryConstantMolPerCubicMeterPaAtMaximum()));
-				segments.add(encoded);
-			}
-			tag.put("HenrySegments", segments);
-			pairs.add(tag);
-		}
-		root.put("GasLiquidPairs", pairs);
 		ListTag devices = new ListTag();
 		for (FiniteThermalDeviceDefinition device : registry.finiteDevices()) {
 			CompoundTag tag = new CompoundTag();
@@ -289,47 +256,6 @@ public final class ThermalRegistryCodec {
 		return List.copyOf(result);
 	}
 
-	private static List<GasLiquidSpeciesPair> decodePairs(ListTag list) throws IOException {
-		if (list.size() > ThermalLimits.MAX_GAS_LIQUID_PAIRS) throw new IOException("Invalid gas/liquid pair count");
-		ArrayList<GasLiquidSpeciesPair> result = new ArrayList<>(list.size());
-		for (int index = 0; index < list.size(); index++) {
-			CompoundTag tag = compound(list, index, "gas/liquid pair");
-			requireAll(tag, Map.ofEntries(
-					Map.entry("Id", Tag.TAG_STRING), Map.entry("GasComponent", Tag.TAG_STRING),
-					Map.entry("LiquidPhase", Tag.TAG_STRING), Map.entry("Species", Tag.TAG_STRING),
-					Map.entry("GasNanos", Tag.TAG_LONG), Map.entry("GasMassUnitsPerBatch", Tag.TAG_LONG),
-					Map.entry("LiquidQuanta", Tag.TAG_LONG), Map.entry("LiquidMassUnitsPerBatch", Tag.TAG_LONG),
-					Map.entry("LiquidResidualMassUnitsPerBatch", Tag.TAG_LONG), Map.entry("Moles", Tag.TAG_STRING),
-					Map.entry("MinimumPressureBits", Tag.TAG_LONG), Map.entry("MaximumPressureBits", Tag.TAG_LONG),
-					Map.entry("MaximumConcentrationBits", Tag.TAG_LONG),
-					Map.entry("LiquidDiffusionBits", Tag.TAG_LONG),
-					Map.entry("LiquidFilmThicknessBits", Tag.TAG_LONG),
-					Map.entry("GasResistanceBits", Tag.TAG_LONG),
-					Map.entry("HenrySegments", Tag.TAG_LIST)));
-			ListTag encodedSegments = tag.getListOrEmpty("HenrySegments");
-			if (encodedSegments.isEmpty() || encodedSegments.size() > ThermalLimits.MAX_HENRY_SEGMENTS_PER_PAIR) {
-				throw new IOException("Invalid Henry segment count");
-			}
-			ArrayList<GasLiquidSpeciesPair.HenrySegment> segments = new ArrayList<>(encodedSegments.size());
-			for (int segment = 0; segment < encodedSegments.size(); segment++) {
-				CompoundTag value = compound(encodedSegments, segment, "Henry segment");
-				requireAll(value, Map.of("MinimumBits", Tag.TAG_LONG, "MaximumBits", Tag.TAG_LONG,
-						"MinimumHenryBits", Tag.TAG_LONG, "MaximumHenryBits", Tag.TAG_LONG));
-				segments.add(new GasLiquidSpeciesPair.HenrySegment(value(value, "MinimumBits"),
-						value(value, "MaximumBits"), value(value, "MinimumHenryBits"), value(value, "MaximumHenryBits")));
-			}
-			result.add(new GasLiquidSpeciesPair(tag.getStringOr("Id", ""),
-					tag.getStringOr("GasComponent", ""), tag.getStringOr("LiquidPhase", ""),
-					tag.getStringOr("Species", ""), tag.getLongOr("GasNanos", 0L),
-					tag.getLongOr("GasMassUnitsPerBatch", 0L), tag.getLongOr("LiquidQuanta", 0L),
-					tag.getLongOr("LiquidMassUnitsPerBatch", 0L), tag.getLongOr("LiquidResidualMassUnitsPerBatch", 0L),
-					ExactRational.parse(tag.getStringOr("Moles", "")), segments,
-					value(tag, "MinimumPressureBits"), value(tag, "MaximumPressureBits"),
-					value(tag, "MaximumConcentrationBits"), value(tag, "LiquidDiffusionBits"),
-					value(tag, "LiquidFilmThicknessBits"), value(tag, "GasResistanceBits")));
-		}
-		return List.copyOf(result);
-	}
 
 	private static List<FiniteThermalDeviceDefinition> decodeDevices(ListTag list) throws IOException {
 		if (list.size() > ThermalLimits.MAX_FINITE_DEVICE_TYPES) {

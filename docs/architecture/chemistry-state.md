@@ -7,7 +7,9 @@
 - **组分状态和反应**
   - 代码入口：
     - [RegionChemistry](../../model/src/main/java/mmm/chemistry/RegionChemistry.java)
-    - [ChemicalReactionStage](../../solver/src/main/java/mmm/fluid/ChemicalReactionStage.java)
+    - [ChemicalReactionStage](../../solver/src/main/java/mmm/fluid/ChemicalReactionStage.java)：分组、热可行性、最终库存及内能提交
+    - [ChemicalReactionEngine](../../model/src/main/java/mmm/chemistry/ChemicalReactionEngine.java)：`reactInventory` 统一推进完整物种工作向量
+  - 验证入口：[M7ChemistryValidation](../../fabric/src/test/java/mmm/chemistry/M7ChemistryValidation.java)、[ChemicalReactionCandidateValidation](../../fabric/src/test/java/mmm/fluid/ChemicalReactionCandidateValidation.java)，共同执行生产反应阶段
   - 测试选择器：`chemistry`
 
 - **液体单元组成与提交**
@@ -51,7 +53,7 @@ registry 校验未知 ID、重复 ID、非正质量、组成/电荷/质量不守
 
 `ExactRational` 在原输入位数上限内规范化分子与分母；二进制幂分母按分子尾零位精确约分，一般分母沿用整数最大公约数。共同的 `ExactRational.add` 先按分母最大公约数预约分，再按规范化结果检查原有位数上限；精确相消直接得到零。几何采用浮点权重，物种与单位换算继续遵守精确数量规则。
 
-当前数量上限包括 256 species、64 phases、512 reactions、每 parcel 16 species、每步 131072 次 reaction evaluation 和每区域 `2e15` quanta。这些上限都在分配内存和修改状态前检查。
+定义、每份最终库存、每步反应评估和区域物种总量的容量由 `ChemicalLimits` 维护。反应工作向量按注册表物种数分配，最终库存准备时检查紧凑物种列容量。
 
 ## 独立保存的数据
 
@@ -85,12 +87,16 @@ massUnits = speciesMassUnits + massResidualUnits
 候选联合核对物种、组成、电荷、质量和残差，保持实际材料身份及载体体积。
 反应调度保存待处理单元与轮转位置，预算耗尽后继续保留任务；冷恢复从实际库存重建调度。
 
+`ChemicalReactionEngine.reactInventory` 是生产反应计量推进的共同入口。它在完整物种向量上依次执行反应，`ChemicalReactionStage` 通过 extent 约束提供区域数量与正温度可行性。瞬时中间态可暂时包含超过单份库存槽位数的物种，热学计算直接按工作向量分配的物种数量和实际载体质量计算基准能。
+
+整条反应链完成后，再将最终向量生成各份 `ChemicalMixtureRecord` 并检查库存容量；物种条目超限保留原库存及待处理任务。热量不足时按整格原内能限制实际反应程度，可行的部分反应和待处理状态共同发布，补热后继续推进。
+
 反应后的整数物种按实际单元记录质量份额分配，保留各记录的质量、体积和 MAC 动量。
 组成质量余量按实际质量减去新物种质量重新计算，物种、实际质量和余量分别精确闭合。
 `ChemicalReactionStage` 以同格、同开放分量、同化学物相为一组，准备一次库存计划与 LTE 内能分配。
 温度由候选质量、组成与原总内能推导，完整预检后联合提交。
 
-容量、物种槽位或有效热状态暂时受限时，保留原库存和待处理单元。
+最终库存容量受限时保留原库存和待处理单元；反应评估预算按单元轮转，后续步骤继续尚未处理的任务。
 物质输运的空间误差随共同单元输运评价；固液转移见[颗粒参考](granular-state.md#固液相转移)。
 
 ### pH 与显色
@@ -107,7 +113,7 @@ pH 以 0.1 为步长编码 0–14，中性为 70，无数据为 255。缺少水�
 
 ## 求解顺序
 
-每个 logical step 中，机械 advection 与导热完成后按当前 cell 和 chemical phase 分组反应。反应保持每份液体载体的总内能，提交后的 species 与质量通过热状态函数重新推导温度；反应热体现为组成基准能与显热之间的转换。密度、压力和客户端颜色随后从已提交库存重新派生。
+每个计算步中，机械输运与导热完成后按单元、开放支撑和化学物相分组反应。反应保持参与单元的总内能，提交后的物种与质量通过热状态函数重新推导共同温度；反应热体现为组成基准能与显热之间的转换。密度、压力和客户端颜色随后从已提交库存重新派生。
 
 热学开启时，reaction plan 先证明 species/质量闭合，再用各载体原有总内能、候选组成与候选质量验证正温可表示性，成功后统一提交 species 与质量。
 颗粒 precipitation 使用同一 liquid chemical ledger，并在 granular/thermal 联合 plan 中验证 solid composition、SVQ、容量和 U；

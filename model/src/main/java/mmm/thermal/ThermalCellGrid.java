@@ -101,22 +101,6 @@ public final class ThermalCellGrid {
 		updateObservedTemperatureRange();
 	}
 
-	/** Refreshes U after a contact solve with unchanged carrier topology and caloric inventory. */
-	void refreshCarrierEnergy() {
-		if (carriers == null || carriers.carrierCount() != topologyCarrierCount)
-			throw new IllegalStateException("Thermal contact solve changed carrier topology");
-		Arrays.fill(internalEnergy, 0.0);
-		for (int carrier = topologyCarrierCount - 1; carrier >= 0; carrier--) {
-			double energy = carriers.internalEnergy(carrier);
-			if (!Double.isFinite(energy)) throw new IllegalArgumentException("Thermal carrier energy is not finite");
-			internalEnergy[carriers.cell(carrier)] += energy;
-		}
-			for (int carrier = 0; carrier < topologyCarrierCount; carrier++)
-				validateCarrierEnergy(carrier, carriers.internalEnergy(carrier));
-			for (int cell = 0; cell < cellCount; cell++) if (carrierCount[cell] > 0)
-				solveCarrierCell(cell);
-		updateObservedTemperatureRange();
-	}
 
 	/** Prepares changed topology and a prospective conserved target; the subsequent setter publishes owner U. */
 	public void rebuildWithCellEnergy(CarrierAccess carrierAccess, int targetCell, double targetEnergy) {
@@ -268,7 +252,6 @@ public final class ThermalCellGrid {
 	CarrierAccess carrierAccess() { return carriers; }
 	int firstCarrier(int cell) { return cellHead[cell]; }
 	int nextCarrier(int carrier) { return carrierNext[carrier]; }
-	double carrierVolume(int cell) { return totalVolume[cell]; }
 
 	private void assignCellEnergy(int cell, SignedDyadic requested) {
 		applyCellEnergy(cell, prepareCellEnergy(cell, requested));
@@ -356,26 +339,7 @@ public final class ThermalCellGrid {
 		}
 		return result;
 	}
-	public double[] copyCarrierInternalEnergy() {
-		if (carriers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
-		double[] result = new double[carriers.carrierCount()];
-		for (int carrier = 0; carrier < result.length; carrier++) result[carrier] = carriers.internalEnergy(carrier);
-		return result;
-	}
-	public int[] copyCarrierCells() {
-		if (carriers == null) throw new IllegalStateException("Thermal cell grid has not been rebuilt");
-		int[] result = new int[carriers.carrierCount()];
-		for (int carrier = 0; carrier < result.length; carrier++) result[carrier] = carriers.cell(carrier);
-		return result;
-	}
 
-	public void restoreCarrierInternalEnergy(double[] snapshot) {
-		if (carriers == null || snapshot == null || snapshot.length != carriers.carrierCount()) {
-			throw new IllegalArgumentException("Thermal carrier rollback snapshot is incompatible");
-		}
-		carriers.setInternalEnergies(snapshot);
-		rebuild(carriers);
-	}
 
 	private void solveCarrierCell(int cell) {
 		var target=new ThermalCaloricInversion.Sum();

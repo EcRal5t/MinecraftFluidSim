@@ -129,38 +129,34 @@ final class ChemicalReactionStage {
 					for(var stock:entry.getValue()) for(int i=0;i<stock.mixture().entryCount();i++)
 						amounts[stock.mixture().speciesHandle(i)]=Math.addExact(amounts[stock.mixture().speciesHandle(i)],stock.mixture().amountAt(i));
 					var sources=entry.getValue();
-					for(var rule:registry.reactionOrder())if(registry.phaseHandle(rule.phaseId())==entry.getKey().phase){
-						long extent=Long.MAX_VALUE;
-						for(var term:rule.reactants().entrySet())extent=Math.min(extent,amounts[registry.speciesHandle(term.getKey())]/term.getValue());
-						if(extent<=0||extent==Long.MAX_VALUE)continue;
-						long maximum=extent;
-						long totalCoefficient=rule.products().values().stream().mapToLong(Integer::longValue).sum()-rule.reactants().values().stream().mapToLong(Integer::longValue).sum();
-						if(totalCoefficient>0)extent=Math.min(extent,(ChemicalLimits.MAX_REGION_TOTAL_QUANTA-regionQuanta-delta)/totalCoefficient);
-						if(extent==0){pending=true;continue;}
-						var reacted=react(amounts,rule,extent,registry);
-						var replacements=distribute(sources,reacted,registry);
-						var coldChange=thermal==null?SignedDyadic.ZERO:coldEnergy(replacements,function).subtract(coldEnergy(sources,function));
-						if(thermal!=null&&coldChange.compareTo(originalThermal[cell].cellEnergy().subtract(cold))>0){
-							// At fixed material masses only the reference composition changes.
-							// Its affine extent is limited by this complete cell's cold energy.
-							var baseline=coldEnergy(distribute(sources,amounts,registry),function).subtract(coldEnergy(sources,function));
-							double slope=coldChange.subtract(baseline).toDouble()/extent;
-							// Integer distribution can differ by one species quantum per owner.
-							// Reserve the difference between two rounded allocation endpoints.
-							double allowance=allocationEnergyResolution(sources,amounts,reacted,registry);
-							double available=originalThermal[cell].cellEnergy().subtract(cold).subtract(baseline).toDouble()-allowance;
-							extent=slope>0?Math.min(extent,(long)Math.floor(Math.max(0,available)/slope)):0;
-							pending=true;if(extent==0)continue;
-							reacted=react(amounts,rule,extent,registry);replacements=distribute(sources,reacted,registry);
-							coldChange=coldEnergy(replacements,function).subtract(coldEnergy(sources,function));
-						}
-						if(extent<maximum)pending=true;
-						for(var replacement:replacements){
-							var before=future.put(replacement.key(),replacement);
-							delta=Math.addExact(delta,replacement.mixture().totalQuanta()-before.mixture().totalQuanta());
-						}
-						cold=cold.add(coldChange);amounts=reacted;sources=replacements;
+					var engine = new ChemicalReactionEngine(registry);
+					long baselineQuanta = Arrays.stream(amounts).sum();
+					long externalQuanta = regionQuanta + delta - baselineQuanta;
+					SignedDyadic otherCold = thermal == null ? SignedDyadic.ZERO : cold.subtract(coldEnergy(sources, function));
+					var result = engine.reactInventory(entry.getKey().phase, amounts, (rule, before, complete, maximum) -> {
+						long extent = maximum;
+						long coefficient = rule.products().values().stream().mapToLong(Integer::longValue).sum()
+								- rule.reactants().values().stream().mapToLong(Integer::longValue).sum();
+						if (coefficient > 0) extent = Math.min(extent, Math.max(0,
+								(ChemicalLimits.MAX_REGION_TOTAL_QUANTA - externalQuanta - Arrays.stream(before).sum()) / coefficient));
+						if (thermal == null || extent == 0) return extent;
+						long[] candidate = extent == maximum ? complete : engine.advance(before, rule, extent);
+						SignedDyadic available = originalThermal[cell].cellEnergy().subtract(otherCold);
+						SignedDyadic target = coldEnergyAmounts(sources, candidate, registry, function);
+						if (target.compareTo(available) <= 0) return extent;
+						SignedDyadic baseline = coldEnergyAmounts(sources, before, registry, function);
+						double slope = target.subtract(baseline).toDouble() / extent;
+						double allowance = allocationEnergyResolution(sources, before, candidate, registry);
+						return slope > 0 ? Math.min(extent, (long) Math.floor(Math.max(0,
+								available.subtract(baseline).toDouble() - allowance) / slope)) : 0;
+					});
+					pending |= result.pending();
+					var replacements = distribute(sources, result.inventory(), registry);
+					for (var replacement : replacements) {
+						var before = future.put(replacement.key(), replacement);
+						delta = Math.addExact(delta, replacement.mixture().totalQuanta() - before.mixture().totalQuanta());
 					}
+					if (thermal != null) cold = otherCold.add(coldEnergy(replacements, function));
 				}
 				for(var after:future.values())if(!Objects.equals(after.mixture(),store.stock(after.key()).mixture()))cellChanged++;
 				if(regionQuanta+delta>ChemicalLimits.MAX_REGION_TOTAL_QUANTA)
@@ -203,18 +199,28 @@ final class ChemicalReactionStage {
 		scheduler.restoreDirtyCells(dirty.stream().mapToInt(Integer::intValue).toArray());scheduler.restoreReactionCursor(cursor);
 		return new RegionChemistry.ReactionStats(visited,evaluations,changed);
 	}
-	private static long[] react(long[] before,ChemicalReaction rule,long extent,ChemicalRegistry registry){
-		var after=before.clone();
-		for(var term:rule.reactants().entrySet()){int species=registry.speciesHandle(term.getKey());after[species]=Math.subtractExact(after[species],Math.multiplyExact(extent,term.getValue()));}
-		for(var term:rule.products().entrySet()){int species=registry.speciesHandle(term.getKey());after[species]=Math.addExact(after[species],Math.multiplyExact(extent,term.getValue()));}
-		return after;
-	}
 	private SignedDyadic coldEnergy(Collection<LiquidCellInventory.Stock> stocks,ThermalStateFunction function){
 		var energy=SignedDyadic.ZERO;
 		for(var stock:stocks)if(stock.massUnits()>0)energy=energy.add(SignedDyadic.of(function.internalEnergyAtTemperature(
 				domain.thermalState.thermalMaterialHandleForFluid(stock.key().material()),stock.massKilograms(),stock.mixture(),domain.liquidCells.chemicalRegistry(),mmm.thermal.ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)));
 		return energy;
 	}
+	/** Cold feasibility is evaluated on the unconstrained transient species vector. */
+	private SignedDyadic coldEnergyAmounts(List<LiquidCellInventory.Stock> stocks, long[] amounts,
+	                                      ChemicalRegistry chemistry, ThermalStateFunction function) {
+		var allocated = allocate(stocks, amounts);
+		var result = SignedDyadic.ZERO;
+		for (int i = 0; i < stocks.size(); i++) {
+			var stock = stocks.get(i); if (stock.massUnits() == 0) continue;
+			var stable = new TreeMap<String, Long>();
+			for (var term : allocated.get(i).entrySet()) stable.put(chemistry.species(term.getKey()).id(), term.getValue());
+			result = result.add(SignedDyadic.of(function.internalEnergyAtTemperature(
+					domain.thermalState.thermalMaterialHandleForFluid(stock.key().material()), stock.massKilograms(), stable,
+					mmm.thermal.ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)));
+		}
+		return result;
+	}
+
 	private double allocationEnergyResolution(List<LiquidCellInventory.Stock> stocks,long[] before,long[] after,ChemicalRegistry chemistry){
 		if(stocks.size()==1)return 0;
 		double energy=0;
@@ -226,8 +232,8 @@ final class ChemicalReactionStage {
 		return 2*energy;
 	}
 
-	/** Products follow actual SI mass. Mass, cell volume and momentum are unchanged by chemistry. */
-	private static List<LiquidCellInventory.Stock> distribute(List<LiquidCellInventory.Stock> source,long[] products,ChemicalRegistry registry) {
+	private static List<TreeMap<Integer,Long>> allocate(List<LiquidCellInventory.Stock> source,long[] products) {
+
 		double[] weights=source.stream().mapToDouble(LiquidCellInventory.Stock::massUnits).toArray();
 		int[] ordinals=new int[source.size()];for(int i=0;i<ordinals.length;i++) ordinals[i]=i;
 		var allocations=new ArrayList<TreeMap<Integer,Long>>(source.size());for(int i=0;i<source.size();i++) allocations.add(new TreeMap<>());
@@ -235,6 +241,12 @@ final class ChemicalReactionStage {
 			long[] amounts=BinaryVolumeAllocator.allocate(products[species],weights,ordinals);
 			for(int i=0;i<amounts.length;i++) if(amounts[i]>0) allocations.get(i).put(species,amounts[i]);
 		}
+		return allocations;
+	}
+
+	/** Products follow actual SI mass. Mass, cell volume and momentum are unchanged by chemistry. */
+	private static List<LiquidCellInventory.Stock> distribute(List<LiquidCellInventory.Stock> source,long[] products,ChemicalRegistry registry) {
+		var allocations = allocate(source, products);
 		var result=new ArrayList<LiquidCellInventory.Stock>(source.size());
 		for(int i=0;i<source.size();i++) {
 			var stock=source.get(i);var values=allocations.get(i);

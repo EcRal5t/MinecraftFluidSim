@@ -151,7 +151,7 @@ public final class GasEnergyStore {
 	/** One thermal closure per node; flow and its positive donor bound share these values. */
 	public AirNetwork.NodeThermodynamics thermodynamics(AirNetwork network) {
 		double[] pressure = new double[nodeEnergy.length + 1], density = new double[pressure.length],
-				ratio = new double[pressure.length], storage = new double[pressure.length], fraction = new double[pressure.length];
+				ratio = new double[pressure.length], storage = new double[pressure.length];
 		density[0] = network.density(0) * GasRegistry.STANDARD_TEMPERATURE_K / insertionTemperatureK;
 		ratio[0] = GasRegistry.STANDARD_TEMPERATURE_K / insertionTemperatureK;
 		var ambient = network.ambientInventory(1_000_000_000L);
@@ -169,26 +169,15 @@ public final class GasEnergyStore {
 			pressure[id] = hydro.absolutePressurePa() - GasRegistry.STANDARD_PRESSURE_PA;
 			density[id] = hydro.densityKgPerCubicMeter(); ratio[id] = network.standardVolume(id) / network.availableVolume(id);
 			storage[id] = network.standardVolume(id) / hydro.adiabaticBulkModulusPa();
-			double minimum = gasModel.internalEnergyAtTemperature(inventory, ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
-			double sensible = nodeEnergy[id - 1] - minimum;
-			double margin = 8 * (network.edgeCount() + 1.0) * (Math.ulp(nodeEnergy[id - 1]) + Math.ulp(minimum));
-			double pressureEnergy = hydro.gasConstantJPerK() * hydro.temperatureK();
-			fraction[id] = Math.max(0, Math.nextDown((sensible - margin) / (sensible + pressureEnergy)));
 		}
 		return new AirNetwork.NodeThermodynamics() {
 			public double gaugePressure(int id) { return pressure[id]; }
 			public double density(int id) { return density[id]; }
 			public double standardVolumeRatio(int id) { return ratio[id]; }
 			public double pressureStorage(int id) { return storage[id]; }
-			public double maximumOutflowFraction(int id) { return fraction[id]; }
-			public double[] flowPressures(AirNetwork.FlowBatch batch) {
-				double[] energies = flowEnergy(batch, network), result = new double[batch.nodeIds().size()];
-				for (int i = 0; i < result.length; i++) {
-					int id = batch.nodeIds().get(i);
-					result[i] = gasModel.absolutePressure(batch.inventories().get(i), network.availableVolume(id), energies[id - 1])
-							- GasRegistry.STANDARD_PRESSURE_PA;
-				}
-				return result;
+			public double maximumOutflowFraction(int id) { return gasModel.maximumOutflowFraction(network.inventory(id), nodeEnergy[id - 1], network.availableVolume(id)); }
+			public AirNetwork.PortThermodynamics portThermodynamics(int first, int second) {
+				return gasModel.portThermodynamics(network, first, second, nodeEnergy, insertionTemperatureK);
 			}
 		};
 	}

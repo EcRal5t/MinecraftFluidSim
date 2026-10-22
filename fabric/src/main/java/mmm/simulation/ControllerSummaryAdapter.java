@@ -59,7 +59,7 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
 				? liveInventory(region, domain) : ControllerSummary.Inventory.unavailable();
 		String ownershipLock = operations.ownershipLockDescription(region);
 		boolean containerWalPending = hasPendingContainerWal.test(region.id());
-		boolean phaseWorkPending = live && domain.hasPendingPhaseVolumeWork();
+		boolean phaseWorkPending = live && domain.hasPendingPhaseMotionWork();
 		boolean checkpointAllowed = authoritativeWritesReady.getAsBoolean() && live
 				&& region.availabilityFailure() == null && ownershipLock == null && !containerWalPending;
 		FluidDomain.StepStats stats = region.lastStats();

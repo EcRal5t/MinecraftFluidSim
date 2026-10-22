@@ -181,7 +181,7 @@ public final class CompositeStepBenchmark {
     }
 
     private static void feed(FluidRegion region, FullCapabilityTestFixture.Registries r, int step, Counters count) {
-        if (region.domain().hasPendingPhaseVolumeWork()) {
+        if (region.domain().hasPendingPhaseMotionWork()) {
             var settled = CPU.evaluate(FluidStepRequest.pendingPhaseSettlement(region.solverGeneration(), region.domain().captureAuthoritativeState()));
             region.adoptStepCandidate(settled, CPU.id());
             count.add(settled);

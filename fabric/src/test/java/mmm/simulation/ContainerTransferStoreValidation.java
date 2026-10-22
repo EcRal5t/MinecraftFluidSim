@@ -952,7 +952,7 @@ public final class ContainerTransferStoreValidation {
 					"full-profile rapid-pour fixture did not publish its empty base");
 
 			for (int pour = 0; pour < 24; pour++) {
-				if (region.domain().hasPendingPhaseVolumeWork()) advance(region, false);
+				if (region.domain().hasPendingPhaseMotionWork()) advance(region, false);
 				long baseGeneration = region.checkpointGeneration();
 				FluidDomain candidate = FluidDomain.restoreAuthoritativeState(
 						region.domain().captureAuthoritativeState());
@@ -977,7 +977,7 @@ public final class ContainerTransferStoreValidation {
 				}
 			}
 
-			if (region.domain().hasPendingPhaseVolumeWork()) advance(region, false);
+			if (region.domain().hasPendingPhaseMotionWork()) advance(region, false);
 			long clearBase = region.checkpointGeneration();
 			FluidDomain cleared = FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
 			cleared.commitOperatorClear(cleared.planOperatorClear());

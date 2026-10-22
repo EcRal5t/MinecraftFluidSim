@@ -112,13 +112,26 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 			mixedCell.setThermalTemperatureInCell(0, 0, 0, 260.0);
 			double mercuryBefore = mixedCell.exactVolumeNear(0, 0, 0, 0,
 					waterAndMercury.handle(BuiltinFluidMaterials.MERCURY.id()));
+			if(fill==.5F){
+				var closed=FluidDomain.restoreAuthoritativeState(mixedCell.captureAuthoritativeState());
+				for(int cell=1;cell<closed.cellCount;cell++)closed.setVolume(cell%2,cell/2%2,cell/4,1);
+				var beforeClosed=closed.captureAuthoritativeState();
+				require(closed.stepInertPhaseChangeOnly(16).operations()==0
+						&&closed.liquidCells.snapshot().stocks().equals(beforeClosed.liquid().stocks())
+						&&closed.exactInternalEnergy().equals(closed.thermalAudit().expectedInventory()),
+						"Freezing without reachable expansion capacity changed its source inventory");
+			}
 			FluidDomain.ThermalPhaseStats mixed = mixedCell.stepInertPhaseChangeOnly(16);
-			double mercuryAfter = mixedCell.exactVolumeNear(0, 0, 0, 0,
-					waterAndMercury.handle(BuiltinFluidMaterials.MERCURY.id()));
-			require((fill < 0.5F ? mixed.operations() > 0 && mixed.frozenCells() == 1 : mixed.operations() == 0)
+			double mercuryAfter = mixedCell.liquidCells.physicalStocks().stream().filter(stock->stock.key().material()==waterAndMercury.handle(BuiltinFluidMaterials.MERCURY.id())).mapToDouble(mmm.inventory.LiquidCellInventory.Stock::volumeFraction).sum();
+			require(mixed.operations()>0&&mixed.frozenCells()==1
 					&& close(mercuryAfter, mercuryBefore),
 					"mixed-cell phase extent follows shared occupancy and retains the mercury heat bath: "
 							+ mixed + ", mercury=" + mercuryBefore + " -> " + mercuryAfter);
+			if(fill==.5F)require(mixedCell.liquidCells.stocks().stream().anyMatch(stock->stock.key().cell()!=0)
+					&&mixedCell.totalCoherentSolidVolumeSvq()>0,"Full mixed cell did not route displaced liquid into its open neighbors");
+			for(int cell=0;cell<mixedCell.cellCount;cell++)require(mixedCell.liquidCells.exactCellVolume(cell)
+					.add(SignedDyadic.of(mixedCell.granularCoupling.fixedCellSvq(cell),-24)).compareTo(SignedDyadic.of(1))<=0,
+					"Frozen cell and displaced liquid exceeded their shared pore capacity");
 		}
 	}
 
@@ -762,18 +775,13 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 
 	private record CondensedLedger(Map<String, Long> species, double massResidual) { }
 
-	static void phaseVolumeWorkWaitsForMechanicalProjection() {
-		var work = new PendingPhaseVolumeWork(8);
-		work.add(0, SignedDyadic.of(.125));
-		work.add(1, SignedDyadic.of(-.25));
-		var captured = work.capture();
-		work.add(0, SignedDyadic.of(-.125));
-		require(work.hasWork() && !work.isPending(0) && work.isPending(1)
-				&& captured.entries().size() == 2,
-				"phase-volume cancellation changed another cell or its captured state");
-		work.add(1, SignedDyadic.of(.25));
-		require(!work.hasWork() && work.capture().isEmpty(),
-				"exactly cancelled phase-volume work remained pending");
+	static void phaseMotionWaitsForMechanicalStep() {
+		var work = new PendingPhaseMotionWork(8);
+		work.mark(0);work.mark(1);var captured=work.capture();work.mark(0);
+		require(work.hasWork()&&work.isPending(0)&&work.isPending(1)&&captured.entries().size()==2,
+				"Repeated phase edits changed their pending mechanical cell set");
+		work.clear();require(!work.hasWork()&&work.capture().isEmpty()&&captured.entries().size()==2,
+				"Mechanical publication changed an earlier pending-cell snapshot");
 		phaseLiquidGeometryMatchesPublishedMarkers();
 		FluidMaterial liquid = FluidMaterial.withSurfaceTension("test:pending_liquid", 1.0,
 				"test:miscible", 0.0, 90.0);
@@ -799,34 +807,31 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		domain.bindThermal(registry, liquids, 280.0);
 		ThermalAuditLedger before = domain.thermalAudit();
 		FluidDomain.ThermalPhaseStats phase = domain.stepInertPhaseChangeOnly(16);
-		PendingPhaseVolumeState pending = domain.exportPendingPhaseVolumeState();
-		SignedDyadic signedCellVolume = pending.entries().stream()
-				.map(PendingPhaseVolumeState.Entry::signedCellVolume)
-				.reduce(SignedDyadic.ZERO, SignedDyadic::add);
-		require(phase.operations() == 4 && signedCellVolume.equals(SignedDyadic.of(0.5))
-				&& domain.hasPendingPhaseVolumeWork()
+		PendingPhaseMotionState pending = domain.exportPendingPhaseMotionState();
+		require(phase.operations() == 4 && pending.entries().equals(List.of(new PendingPhaseMotionState.Entry(0)))
+				&& domain.hasPendingPhaseMotionWork()
 				&& domain.thermalAudit().mechanicalWork().equals(before.mechanicalWork()),
 				"phase volume was not retained without prematurely booking projection work");
 		FluidDomain lienDomain = new FluidDomain(2, 2, 2, config);
 		lienDomain.setVolume(0, 0, 0, 0.125F);
 		lienDomain.bindThermal(registry, liquids, 280.0);
-		PendingPhaseVolumeState restoredLien = new PendingPhaseVolumeState(8,
-				List.of(new PendingPhaseVolumeState.Entry(0, SignedDyadic.of(0.125))));
-		lienDomain.restorePendingPhaseVolumeState(restoredLien);
+		PendingPhaseMotionState restoredLien = new PendingPhaseMotionState(8,
+				List.of(new PendingPhaseMotionState.Entry(0)));
+		lienDomain.restorePendingPhaseMotionState(restoredLien);
 		double volumeBeforeBlockedExtraction = lienDomain.totalVolumeExact();
 		FluidDomain.ExactVolumeTransfer blockedExtraction = lienDomain.tryExtractExactVolume(
 				0, 0, 0, 0.125F, 0, 0);
 		require(!blockedExtraction.transferred()
 				&& lienDomain.totalVolumeExact() == volumeBeforeBlockedExtraction
-				&& lienDomain.exportPendingPhaseVolumeState().entries().equals(restoredLien.entries()),
+				&& lienDomain.exportPendingPhaseMotionState().entries().equals(restoredLien.entries()),
 				"external extraction stranded pending phase mechanical work: transferred="
 						+ blockedExtraction.transferred() + " volume=" + lienDomain.totalVolumeExact()
 						+ "/" + volumeBeforeBlockedExtraction + " pending="
-						+ lienDomain.exportPendingPhaseVolumeState().entries() + "/" + restoredLien.entries());
+						+ lienDomain.exportPendingPhaseMotionState().entries() + "/" + restoredLien.entries());
 
 		FluidDomain.StepStats settlement = domain.stepMechanicsOnly();
 		ThermalAuditLedger after = domain.thermalAudit();
-		require(!domain.hasPendingPhaseVolumeWork()
+		require(!domain.hasPendingPhaseMotionWork()
 				&& settlement.chemistryEvaluations() == 0
 				&& settlement.thermalAxis().granularPhase().transfers() == 0
 				&& settlement.condensedPhase().operations() == 0
@@ -835,7 +840,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				&& domain.exactInternalEnergy().equals(after.expectedInventory()),
 				"internal phase displacement was incorrectly booked as external pressure work");
 		domain.stepMechanicsOnly();
-		require(!domain.hasPendingPhaseVolumeWork()
+		require(!domain.hasPendingPhaseMotionWork()
 				&& domain.thermalAudit().mechanicalWork().equals(after.mechanicalWork()),
 				"cleared phase volume repeated its mechanical work on a later projection");
 	}
@@ -968,7 +973,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				"operator-empty fixture did not create coherent condensed inventory");
 		// The operator command rejects this phase event until a real mechanical projection consumes it.
 		domain = advance(domain);
-		require(!domain.hasPendingPhaseVolumeWork(),
+		require(!domain.hasPendingPhaseMotionWork(),
 				"operator-empty fixture did not consume pending phase work");
 		long coherentSvq = domain.totalCoherentSolidVolumeSvq();
 		FluidDomain.OperatorClear cleared = domain.commitOperatorClear(domain.planOperatorClear());

@@ -112,33 +112,6 @@ public final class RegistryBundleLoader {
 					reaction.solidMaterialId());
 			for (String species : reaction.solidComposition().keySet()) registry.speciesOffset(host, species);
 		}
-		for (var pair : registry.gasLiquidPairs()) {
-			var component = gasRegistry.component(pair.gasComponentId());
-			if (!component.allowsSpecies(pair.speciesId())) throw new IllegalArgumentException(
-					"Gas/liquid pair " + pair.id() + " maps species outside gas component " + component.id());
-			var phase = chemicalRegistry.phase(chemicalRegistry.phaseHandle(pair.liquidPhaseId()));
-			if (!phase.allowedSpecies().contains(pair.speciesId())) throw new IllegalArgumentException(
-					"Gas/liquid pair " + pair.id() + " maps species outside liquid phase " + phase.id());
-			int gasHost = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.GAS, component.id());
-			int liquidHost = registry.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, phase.materialId());
-			registry.speciesOffset(gasHost, pair.speciesId());
-			registry.speciesOffset(liquidHost, pair.speciesId());
-			double mappedGasKilograms = component.standardDensityKgPerCubicMeter()
-					* AirNetwork.cubicMeters(pair.gasStandardVolumeNanosPerBatch());
-			if (mmm.units.Mass.fromKilograms(mappedGasKilograms)
-					!= pair.gasMassUnitsPerBatch()) {
-				throw new IllegalArgumentException("Gas/liquid pair " + pair.id()
-						+ " gas nanos and kilograms do not close at the gas standard state");
-			}
-			ExactRational mappedLiquidKilograms = chemicalRegistry.species(
-					chemicalRegistry.speciesHandle(pair.speciesId())).molarMassKgPerMol()
-					.multiply(pair.liquidQuantaPerBatch()).divide(ChemicalLimits.QUANTA_PER_MOL);
-			if (mmm.units.Mass.exactUnits(mappedLiquidKilograms.numerator(), mappedLiquidKilograms.denominator())
-					!= pair.liquidMassUnitsPerBatch()) {
-				throw new IllegalArgumentException("Gas/liquid pair " + pair.id()
-						+ " liquid quanta and kilograms do not close against the chemical species mass");
-			}
-		}
 	}
 
 	public record RegistryBundle(

@@ -124,14 +124,14 @@ final class DomainPhaseInventory {
 	public int coherentPhaseGroupCount() {
 		return domain.thermalState == null ? 0 : domain.thermalState.coherentPhases().groupCount();
 	}
-	public boolean hasPendingPhaseVolumeWork() { return domain.pendingPhaseVolume.hasWork(); }
+	public boolean hasPendingPhaseMotionWork() { return domain.pendingPhaseMotion.hasWork(); }
 	public double densityInCell(int x, int y, int z) { return domain.metrics.densityInCell(x, y, z); }
 	public FluidCellInventoryView observeCellInventory(int x, int y, int z) { return domain.cellInventory.observeCellInventory(x, y, z); }
 	public CellCarrierInventoryView observeCellCarriers(int x, int y, int z) { return domain.cellInventory.observeCellCarriers(x, y, z); }
 	public boolean hasCondensedInventoryInCell(int x, int y, int z) { return domain.cellInventory.hasCondensedInventoryInCell(x, y, z); }
-	public PendingPhaseVolumeState exportPendingPhaseVolumeState() {
+	public PendingPhaseMotionState exportPendingPhaseMotionState() {
 		if (domain.thermalState == null) throw new IllegalStateException("Pending phase volume requires thermal state");
-		return domain.pendingPhaseVolume.capture();
+		return domain.pendingPhaseMotion.capture();
 	}
 	public FluidDomainState captureAuthoritativeState() {
 		return FluidDomainStateMapper.capture((FluidDomain) domain);
@@ -143,8 +143,8 @@ final class DomainPhaseInventory {
 		return FluidDomainStateMapper.restore(state);
 	}
 	boolean collisionTransactionActive() { return domain.activeCollisionPlan != null; }
-	public void restorePendingPhaseVolumeState(PendingPhaseVolumeState state) {
-		domain.pendingPhaseVolume.restore(state, domain.thermalState, domain.domainCapabilities.thermalMarkerContext(), domain.gasState);
+	public void restorePendingPhaseMotionState(PendingPhaseMotionState state) {
+		domain.pendingPhaseMotion.restore(state);
 	}
 	public ThermalTransport.Stats lastThermalTransportStats() {
 		return domain.thermalState == null
