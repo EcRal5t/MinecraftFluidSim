@@ -898,34 +898,19 @@ public final class AirNetwork {
 	}
 
 	private MassColumns liveMassColumns() {
-		long mass = 0, residual = 0;
-		for (AirNode node : nodes.values()) for (GasComponentAmount amount : node.inventory().components()) {
-			mass = Math.addExact(mass, amount.massUnits()); residual = Math.addExact(residual, amount.massResidualUnits());
-		}
-		return new MassColumns(mass, residual);
+		return liveMassColumnsReplacing(null, null, null, null);
 	}
 
 	private MassColumns liveMassColumnsReplacing(
 			AirNode sourceNode, GasInventory sourceAfter,
 			AirNode targetNode, GasInventory targetAfter
 	) {
-		long mass = 0, residual = 0;
-		for (AirNode node : nodes.values()) {
-			GasInventory inventory = node == sourceNode ? sourceAfter : node == targetNode ? targetAfter : node.inventory();
-			for (GasComponentAmount amount : inventory.components()) {
-				mass = Math.addExact(mass, amount.massUnits());
-				residual = Math.addExact(residual, amount.massResidualUnits());
-			}
-		}
-		return new MassColumns(mass, residual);
+		return massColumns(nodes.values().stream().map(node ->
+				node == sourceNode ? sourceAfter : node == targetNode ? targetAfter : node.inventory()).toList());
 	}
 
 	private static MassColumns massColumns(GasInventory inventory) {
-		long mass = 0, residual = 0;
-		for (GasComponentAmount amount : inventory.components()) {
-			mass = Math.addExact(mass, amount.massUnits()); residual = Math.addExact(residual, amount.massResidualUnits());
-		}
-		return new MassColumns(mass, residual);
+		return massColumns(List.of(inventory));
 	}
 
 	private static MassColumns massColumns(List<GasInventory> inventories) {
