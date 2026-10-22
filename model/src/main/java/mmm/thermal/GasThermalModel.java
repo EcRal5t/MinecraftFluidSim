@@ -71,12 +71,13 @@ public final class GasThermalModel {
 		double sourceEnergy = source == 0 ? internalEnergyAtTemperature(donor, ambientTemperature) : energies[source - 1];
 		double standard = AirNetwork.cubicMeters(donor.standardVolumeNanos());
 		if (pa == pb || donor.isEmpty()) return new AirNetwork.PortThermodynamics(source, target, 0, 1, 1, 0, 1e-9, q -> 0);
-		double maximum = source == 0 ? Double.POSITIVE_INFINITY : standard * maximumOutflowFraction(donor, sourceEnergy, sourceVolume);
+		var sourceParts = portions(donor);
+		var sourceInitial = source == 0 ? null : hydrodynamicState(donor, sourceVolume, stateFunction.stateForInventory(sourceParts, sourceEnergy));
+		double maximum = source == 0 ? Double.POSITIVE_INFINITY : standard * maximumOutflowFraction(sourceParts, sourceEnergy, sourceInitial);
 		GasInventory receiver = target == 0 ? GasInventory.EMPTY : network.inventory(target);
 		double receiverVolume = target == 0 ? 1 : network.availableVolume(target), receiverEnergy = target == 0 ? 0 : energies[target - 1];
 		double receiverStandard = AirNetwork.cubicMeters(receiver.standardVolumeNanos());
 		var receiving = receiver.isEmpty() ? List.<ThermalStateFunction.InventoryPortion>of() : portions(receiver);
-		var sourceParts = portions(donor);
 		double sourceOffset = 0;
 		for (var part : sourceParts) sourceOffset += stateFunction.baseEnergy(part.materialHandle(), part.massKg(), part.speciesQuanta())
 				- stateFunction.baseEnergy(part.materialHandle(), part.massKg(), Map.of());
@@ -86,7 +87,7 @@ public final class GasThermalModel {
 			double fraction = amount / standard, sourcePressure, carried;
 			if (source == 0) { sourcePressure = GasRegistry.STANDARD_PRESSURE_PA; carried = fraction * enthalpy; }
 			else {
-				var expanded = compressAdiabatically(donor, sourceEnergy, sourceVolume, sourceVolume / (1 - fraction));
+				var expanded = compressAdiabatically(donor, sourceEnergy, sourceVolume, sourceVolume / (1 - fraction), sourceParts, sourceInitial);
 				double remainingEnergy = (1 - fraction) * expanded.finalInternalEnergy();
 				carried = sourceEnergy - remainingEnergy;
 				sourcePressure = GasRegistry.STANDARD_PRESSURE_PA * standard * (1 - fraction)
@@ -107,9 +108,13 @@ public final class GasThermalModel {
 
 	double maximumOutflowFraction(GasInventory inventory, double energy, double volume) {
 		if (inventory.isEmpty()) return 0;
-		double minimum = internalEnergyAtTemperature(inventory, ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
+		var parts = portions(inventory);
+		return maximumOutflowFraction(parts, energy, hydrodynamicState(inventory, volume, stateFunction.stateForInventory(parts, energy)));
+	}
+
+	private double maximumOutflowFraction(List<ThermalStateFunction.InventoryPortion> parts, double energy, HydrodynamicState hydro) {
+		double minimum = stateFunction.inventoryEnergyAtTemperature(parts, ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
 		double sensible = energy - minimum;
-		var hydro = hydrodynamicState(inventory, volume, energy);
 		double pressureEnergy = hydro.gasConstantJPerK() * hydro.temperatureK();
 		return Math.max(0, Math.nextDown((sensible - 16 * (Math.ulp(energy) + Math.ulp(minimum))) / (sensible + pressureEnergy)));
 	}
@@ -215,11 +220,20 @@ public final class GasThermalModel {
 			return new Compression(GasRegistry.STANDARD_TEMPERATURE_K,
 					GasRegistry.STANDARD_TEMPERATURE_K, 0.0, 0.0);
 		}
-		HydrodynamicState initial = hydrodynamicState(inventory, initialAvailableVolume, internalEnergy);
+		var parts = portions(inventory);
+		var initial = hydrodynamicState(inventory, initialAvailableVolume, stateFunction.stateForInventory(parts, internalEnergy));
+		return compressAdiabatically(inventory, internalEnergy, initialAvailableVolume, finalAvailableVolume, parts, initial);
+	}
+
+	/** The port root shares its immutable donor preparation across trial volumes. */
+	private Compression compressAdiabatically(GasInventory inventory, double internalEnergy,
+	                                         double initialAvailableVolume, double finalAvailableVolume,
+	                                         List<ThermalStateFunction.InventoryPortion> portions, HydrodynamicState initial) {
+		if (!(Double.isFinite(finalAvailableVolume) && finalAvailableVolume > 0.0))
+			throw new IllegalArgumentException("Gas compression volumes are invalid");
 		if (initialAvailableVolume == finalAvailableVolume) {
 			return new Compression(initial.temperatureK(), initial.temperatureK(), internalEnergy, 0.0);
 		}
-		List<ThermalStateFunction.InventoryPortion> portions = portions(inventory);
 		double entropyChange = initial.gasConstantJPerK()
 				* logRatio(initialAvailableVolume, finalAvailableVolume);
 		double targetTemperature;
@@ -241,7 +255,7 @@ public final class GasThermalModel {
 					portion.massKg(), initial.temperatureK(), targetTemperature);
 		}
 		double finalEnergy = internalEnergy + energyChange;
-		hydrodynamicState(inventory, finalAvailableVolume, finalEnergy);
+		hydrodynamicState(inventory, finalAvailableVolume, stateFunction.stateForInventory(portions, finalEnergy));
 		return new Compression(initial.temperatureK(), targetTemperature, finalEnergy, finalEnergy - internalEnergy);
 	}
 
