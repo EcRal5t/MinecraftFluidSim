@@ -455,7 +455,8 @@ public final class GranularCarrierValidation {
 			var environment = domain.domainStep.granularDepositEnvironment(planned);
 			for (int cell = 0; cell < state.deposits.cellCount(); cell++) require(environment.bedGeometryFits(cell, state.deposits.cellBulkVolumeSvq(cell)),
 					"horizontal-path fixture must begin with every bed outside cut geometry");
-			require(environment.horizontalPathOpen(source, 1, 1), "both scalar open-face routes must admit this diagonal candidate");
+			require(environment.horizontalPathOpen(source, 1, 1) == !blocked,
+					"The diagonal bed route must follow the resolved wall and its open corridors");
 			if (exhausted) {
 				var actual = environment;
 				environment = (mmm.granular.GranularDepositDynamics.Environment) java.lang.reflect.Proxy.newProxyInstance(

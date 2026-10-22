@@ -413,6 +413,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
     - [ThermalCellEnergyAssignment](../../model/src/main/java/mmm/thermal/ThermalCellEnergyAssignment.java)：一次准备实际载体内能及精确汇总
     - [ThermalCellOperations](../../model/src/main/java/mmm/thermal/ThermalCellOperations.java)：`preparePhaseCandidateCells` 复用单元载体索引，`preparePhaseSolidEnergies` 准备固相写入目标，`commitPhaseBatch` 提交整批热账
     - [ThermalTransport](../../model/src/main/java/mmm/thermal/ThermalTransport.java)
+    - [ThermalGasCarriers](../../model/src/main/java/mmm/thermal/ThermalGasCarriers.java)：实际气体干容接触样本与气腔内能归并
     - [CarrierThermalConduction](../../solver/src/main/java/mmm/fluid/CarrierThermalConduction.java)
     - [ThermochemistryPipeline](../../solver/src/main/java/mmm/fluid/ThermochemistryPipeline.java)：`stepTransport` 与反应、相变顺序
   - 验证选择器 / 参考：`thermal`；[热学参考](thermal-state.md)
