@@ -56,7 +56,7 @@ public final class LiquidConvectionExperiment {
 		var offset = new mmm.thermal.ThermalSpeciesOffset("test:offset/convection_water",
 				mmm.chemistry.BuiltinChemicalDefinitions.H2O, thermal.id(),
 				mmm.chemistry.ExactRational.of(-50));
-		domain.bindThermal(new ThermalRegistry(List.of(thermal), List.of(offset), List.of(), chemistry.fingerprint(), ""), liquids, T_REF);
+		domain.bindThermal(ThermalValidationSupport.thermalRegistry(List.of(thermal), List.of(offset), List.of(), chemistry.fingerprint(), ""), liquids, T_REF);
 		double rho = domain.densityInCell(0, 0, 0);
 		double nu = definitions.dynamicViscosityAt(water.id(), T_REF) / rho;
 		double alpha = thermal.conductivityWPerMeterK() / (rho * thermal.specificHeatAt(T_REF));

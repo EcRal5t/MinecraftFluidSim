@@ -299,7 +299,7 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 						speciesId, host.id(), precipitate ? ExactRational.of(-1) : ExactRational.ZERO));
 			}
 		}
-		return new ThermalRegistry(thermalMaterials(materials), offsets, List.of(), BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
+		return ThermalValidationSupport.thermalRegistry(thermalMaterials(materials), offsets, List.of(), BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
 				granular.fingerprint());
 	}
 

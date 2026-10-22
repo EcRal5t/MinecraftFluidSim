@@ -56,13 +56,6 @@ public record GasStateSnapshot(
 				throw new IllegalArgumentException("Gas node topology key does not match complete piece membership");
 			}
 		}
-		boolean species = nodes.stream().flatMap(node -> node.inventory().components().stream())
-				.anyMatch(component -> !component.species().isEmpty())
-				|| externalSource.entries().stream().anyMatch(entry -> !entry.species().isEmpty())
-				|| escapedSink.entries().stream().anyMatch(entry -> !entry.species().isEmpty());
-		if (species && chemicalRegistryFingerprint.isEmpty()) {
-			throw new IllegalArgumentException("Gas species state requires a chemical registry fingerprint");
-		}
 	}
 
 	@Override public int[] pieceNodeOrdinal() { return pieceNodeOrdinal.clone(); }

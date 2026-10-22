@@ -131,7 +131,7 @@ final class CellMacStage {
 				for (var stock : inventory.stocksInCell(cell)) mass = Math.addExact(mass, stock.massUnits());
 				cellMass[cell]=Mass.kilograms(mass);
 				grid.cellStockMass[cell] = domain.unitScale.normalizedMass(mass);
-				grid.cellDensity[cell] = mass > 0 ? grid.cellStockMass[cell] / volume.toDouble() : LiquidCarrierProperties.AIR_DENSITY;
+				grid.cellDensity[cell] = mass > 0 ? grid.cellStockMass[cell] / volume.toDouble() : LiquidCarrierProperties.EMPTY_LIQUID_DENSITY;
 			}
 			for (int ordinal = 0; ordinal < inventory.physicalSize(); ordinal++) {
 				var stock = inventory.physicalStockAt(ordinal); int cell = stock.key().cell();

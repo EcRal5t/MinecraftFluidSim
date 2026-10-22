@@ -66,7 +66,7 @@ public final class GasThermalModel {
 		double pa = first == 0 ? GasRegistry.STANDARD_PRESSURE_PA : absolutePressure(network.inventory(first), network.availableVolume(first), energies[first - 1]);
 		double pb = second == 0 ? GasRegistry.STANDARD_PRESSURE_PA : absolutePressure(network.inventory(second), network.availableVolume(second), energies[second - 1]);
 		int source = pa >= pb ? first : second, target = source == first ? second : first;
-		GasInventory donor = source == 0 ? network.ambientInventory(1_000_000_000L) : network.inventory(source);
+		GasInventory donor = source == 0 ? network.registry().createAmbient(1_000_000_000L) : network.inventory(source);
 		double sourceVolume = source == 0 ? ambientTemperature / GasRegistry.STANDARD_TEMPERATURE_K : network.availableVolume(source);
 		double sourceEnergy = source == 0 ? internalEnergyAtTemperature(donor, ambientTemperature) : energies[source - 1];
 		double standard = AirNetwork.cubicMeters(donor.standardVolumeNanos());

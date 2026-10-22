@@ -224,7 +224,7 @@ final class GasTopologyCoordinator {
 		SignedDyadic sourceEnergy=SignedDyadic.ZERO,sinkEnergy=SignedDyadic.ZERO;
 		if(old==null) {
 			for(int node=1;node<=count;node++) {
-				var stock=ambientInventory(available[node-1]);inventories.set(node-1,stock);sourceDelta=sourceDelta.add(stock);
+				var stock=ambientInventory(available[node-1], sourceDelta.standardVolumeNanos());inventories.set(node-1,stock);sourceDelta=sourceDelta.add(stock);
 				if(thermal){mixed[node-1]=SignedDyadic.of(domain.thermalState.ambientGasEnergy(stock));sourceEnergy=sourceEnergy.add(mixed[node-1]);}
 				if(retainControl)inherited[node-1]=next.capacity().normalizedVolume(node);
 			}
@@ -263,7 +263,7 @@ final class GasTopologyCoordinator {
 				int node=(int)origins.key(entry);if(node==0)continue;
 				var normalized=allocation.ambientControl(node);
 				double volume=normalized.multiply(SignedDyadic.of(domain.unitScale.cubicMetersPerNormalizedVolume())).toDouble();
-				var stock=ambientInventory(volume);inventories.set(node-1,inventories.get(node-1).merge(stock));sourceDelta=sourceDelta.add(stock);
+				var stock=ambientInventory(volume, sourceDelta.standardVolumeNanos());inventories.set(node-1,inventories.get(node-1).merge(stock));sourceDelta=sourceDelta.add(stock);
 				if(thermal){var u=SignedDyadic.of(domain.thermalState.ambientGasEnergy(stock));mixed[node-1]=mixed[node-1].add(u);sourceEnergy=sourceEnergy.add(u);}
 				if(retainControl)inherited[node-1]=inherited[node-1].add(normalized);
 			}
@@ -368,12 +368,13 @@ final class GasTopologyCoordinator {
 		return work;
 	}
 
-	private GasInventory ambientInventory(double volume) {
+	private GasInventory ambientInventory(double volume, long plannedSourceNanos) {
 		if (!(volume > 0 && Double.isFinite(volume))) throw new GasTopologyBlockedException("Ambient capture has no positive finite volume");
 		long nanos = AirNetwork.nanos(volume);
 		// Standard volume rounds to the nearest 10^-9 m³, including zero below half a quantum.
 		if (nanos == 0) return GasInventory.EMPTY;
-		return domain.gasState.network.ambientInventory(nanos);
+		var network = domain.gasState.network;
+		return network.registry().createAmbientInterval(Math.addExact(network.externalSource().standardVolumeNanos(), plannedSourceNanos), nanos);
 	}
 
 	private static double[] doubles(SignedDyadic[] values) {

@@ -82,14 +82,13 @@ public final class GasRegistryCodec {
 		for (GasComponentDefinition component : registry.components()) {
 			CompoundTag tag = new CompoundTag(); tag.putString("Id", component.id());
 			tag.putLong("StandardDensityKgPerM3Bits", Double.doubleToRawLongBits(component.standardDensityKgPerCubicMeter()));
-			tag.putLong("DefaultResidualDensityKgPerM3Bits", Double.doubleToRawLongBits(component.defaultResidualDensityKgPerCubicMeter()));
 			ListTag allowed = new ListTag();
 			for (String speciesId : component.allowedSpecies()) allowed.add(StringTag.valueOf(speciesId));
 			tag.put("AllowedSpecies", allowed);
 			ListTag species = new ListTag();
 			for (GasComponentDefinition.DefaultSpecies entry : component.defaultSpeciesConcentrations()) {
 				CompoundTag value = new CompoundTag(); value.putString("Species", entry.speciesId());
-				value.putString("ConcentrationMolPerStandardM3", entry.concentrationMolPerStandardCubicMeter().canonical()); species.add(value);
+				value.putString("ConcentrationMolPerStandardM3", entry.concentrationMolPerStandardCubicMeter().canonical()); value.putLong("MassUnitsPerQuantum", entry.massUnitsPerQuantum()); species.add(value);
 			}
 			tag.put("Species", species); components.add(tag);
 		}
@@ -108,7 +107,7 @@ public final class GasRegistryCodec {
 		for (int index = 0; index < list.size(); index++) {
 			CompoundTag tag = compound(list, index, "component");
 			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "StandardDensityKgPerM3Bits", Tag.TAG_LONG,
-					"DefaultResidualDensityKgPerM3Bits", Tag.TAG_LONG, "AllowedSpecies", Tag.TAG_LIST,
+					"AllowedSpecies", Tag.TAG_LIST,
 					"Species", Tag.TAG_LIST));
 			ListTag encodedAllowed = tag.getListOrEmpty("AllowedSpecies");
 			if (encodedAllowed.size() > GasLimits.MAX_SPECIES_PER_COMPONENT) {
@@ -125,13 +124,12 @@ public final class GasRegistryCodec {
 			ArrayList<GasComponentDefinition.DefaultSpecies> species = new ArrayList<>(encodedSpecies.size());
 			for (int entry = 0; entry < encodedSpecies.size(); entry++) {
 				CompoundTag value = compound(encodedSpecies, entry, "component species");
-				requireAll(value, Map.of("Species", Tag.TAG_STRING, "ConcentrationMolPerStandardM3", Tag.TAG_STRING));
+				requireAll(value, Map.of("Species", Tag.TAG_STRING, "ConcentrationMolPerStandardM3", Tag.TAG_STRING, "MassUnitsPerQuantum", Tag.TAG_LONG));
 				species.add(new GasComponentDefinition.DefaultSpecies(value.getStringOr("Species", ""),
-						ExactRational.parse(value.getStringOr("ConcentrationMolPerStandardM3", ""))));
+						ExactRational.parse(value.getStringOr("ConcentrationMolPerStandardM3", "")), value.getLongOr("MassUnitsPerQuantum", 0)));
 			}
 			result.add(new GasComponentDefinition(tag.getStringOr("Id", ""),
-					Double.longBitsToDouble(tag.getLongOr("StandardDensityKgPerM3Bits", 0L)),
-					Double.longBitsToDouble(tag.getLongOr("DefaultResidualDensityKgPerM3Bits", 0L)), allowed, species));
+					Double.longBitsToDouble(tag.getLongOr("StandardDensityKgPerM3Bits", 0L)), allowed, species));
 		}
 		return List.copyOf(result);
 	}

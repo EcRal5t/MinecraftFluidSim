@@ -194,7 +194,7 @@ public final class M7RegionChemistryPersistenceValidation {
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 1000.0))));
 		}
 		definitions.add(new ThermalMaterialDefinition("test:thermal/air", ThermalMaterialDefinition.CarrierKind.GAS,
-				BuiltinGasDefinitions.AIR, 293.15, 0.0, 0.025,
+				BuiltinGasDefinitions.NITROGEN, 293.15, 0.0, 0.025,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 718.0))));
 		definitions.add(new ThermalMaterialDefinition("test:thermal/vapor", ThermalMaterialDefinition.CarrierKind.GAS,
 				BuiltinGasDefinitions.WATER_VAPOR, 293.15, 2_400_000.0, 0.025,
@@ -219,7 +219,7 @@ public final class M7RegionChemistryPersistenceValidation {
 			for (String species : reaction.solidComposition().keySet()) offsets.add(new ThermalSpeciesOffset(
 					"test:offset/granular_" + offsetOrdinal++, species, host, ExactRational.ZERO));
 		}
-		return new ThermalRegistry(definitions, offsets, List.of(),
+		return mmm.fluid.ThermalValidationSupport.thermalRegistry(definitions, offsets, List.of(),
 				chemistry == null ? "" : chemistry.fingerprint(),
 				granular == null ? "" : granular.fingerprint());
 	}

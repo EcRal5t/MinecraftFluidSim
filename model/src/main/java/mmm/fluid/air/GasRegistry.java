@@ -17,6 +17,7 @@ import java.util.Map;
 /** Immutable canonical gas-component and ambient definition registry. */
 public final class GasRegistry {
 	public static final String UNIT_SYSTEM_ID = "mmm:gas_standard_si_mol";
+	public static final double MOLAR_GAS_CONSTANT = 8.31446261815324;
 	public static final double STANDARD_PRESSURE_PA = 101_325.0;
 	public static final double STANDARD_TEMPERATURE_K = 293.15;
 
@@ -109,29 +110,73 @@ public final class GasRegistry {
 		}
 	}
 
-	/** Creates one explicit ambient-source inventory with exact total standard nanos. */
-	public GasInventory createAmbient(long standardVolumeNanos) {
-		if (standardVolumeNanos < 0L) throw new IllegalArgumentException("Ambient gas volume cannot be negative");
-		if (standardVolumeNanos == 0L) return GasInventory.EMPTY;
-		long[] shares = rationalShares(standardVolumeNanos, ambient.stream().map(AmbientFraction::fraction).toList());
-		ArrayList<GasComponentAmount> amounts = new ArrayList<>(shares.length);
-		for (int index = 0; index < shares.length; index++) {
-			long nanos = shares[index];
-			if (nanos == 0L) continue;
-			GasComponentDefinition definition = component(ambient.get(index).componentId());
-			long mass = mmm.units.Mass.fromKilograms(definition.standardDensityKgPerCubicMeter() * AirNetwork.cubicMeters(nanos));
-			ArrayList<GasComponentAmount.SpeciesAmount> species = new ArrayList<>();
-			for (GasComponentDefinition.DefaultSpecies entry : definition.defaultSpeciesConcentrations()) {
-				BigInteger numerator = entry.concentrationMolPerStandardCubicMeter().numerator().multiply(BigInteger.valueOf(nanos))
-						.multiply(BigInteger.valueOf(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL));
-				BigInteger denominator = entry.concentrationMolPerStandardCubicMeter().denominator().multiply(BigInteger.valueOf(1_000_000_000L));
-				long quanta = numerator.divide(denominator).longValueExact();
-				if (quanta > 0L) species.add(new GasComponentAmount.SpeciesAmount(entry.speciesId(), quanta));
-			}
-			long residual = mmm.units.Mass.fromKilograms(definition.defaultResidualDensityKgPerCubicMeter() * AirNetwork.cubicMeters(nanos));
-			amounts.add(new GasComponentAmount(definition.id(), nanos, mass, species, residual));
+	/** Explicit sources and presets share the same mole-fraction allocator. */
+	public GasInventory createAmbient(long standardVolumeNanos) { return createMixture(standardVolumeNanos, ambient); }
+	public GasInventory createMixture(long standardVolumeNanos, List<AmbientFraction> recipe) {
+		return createMixtureInterval(0, standardVolumeNanos, recipe);
+	}
+	public GasInventory createAtState(double volume, double pressure, double temperature, List<AmbientFraction> recipe) {
+		if (!(Double.isFinite(volume) && volume >= 0 && Double.isFinite(pressure) && pressure >= 0 && Double.isFinite(temperature) && temperature > 0))
+			throw new IllegalArgumentException("Gas source pressure/temperature is invalid");
+		return createMixture(AirNetwork.nanos(volume * pressure / STANDARD_PRESSURE_PA * STANDARD_TEMPERATURE_K / temperature), recipe);
+	}
+	/** Cumulative-source differences preserve trace gas and chemical quanta across tiny injections. */
+	public GasInventory createAmbientInterval(long previousNanos, long addedNanos) {
+		return createMixtureInterval(previousNanos, addedNanos, ambient);
+	}
+	private GasInventory createMixtureInterval(long previous, long added, List<AmbientFraction> recipe) {
+		if (previous < 0 || added < 0) throw new IllegalArgumentException("Gas source volume cannot be negative");
+		if (added == 0) return GasInventory.EMPTY;
+		long end = Math.addExact(previous, added);
+		var sorted = new ArrayList<>(recipe); sorted.sort(Comparator.comparing(AmbientFraction::componentId));
+		ExactRational sum = ExactRational.ZERO; String last = null;
+		for (var part : sorted) {
+			component(part.componentId()); if (part.componentId().equals(last)) throw new IllegalArgumentException("Duplicate source component");
+			sum = sum.add(part.fraction()); last = part.componentId();
 		}
-		return new GasInventory(amounts);
+		if (!sum.equals(ExactRational.ONE)) throw new IllegalArgumentException("Gas source mole fractions must sum to one");
+		var weights = sorted.stream().map(AmbientFraction::fraction).toList();
+		long[] before = sourceShares(previous, weights), after = sourceShares(end, weights);
+		var result = new ArrayList<GasComponentAmount>();
+		for (int i = 0; i < sorted.size(); i++) {
+			long nanos = after[i] - before[i]; if (nanos == 0) continue;
+			var definition = component(sorted.get(i).componentId());
+			long mass = sourceMass(definition, after[i]) - sourceMass(definition, before[i]);
+			if (mass <= 0) throw new GasInventory.RepresentationException("Gas source lies below the mass encoding");
+			var species = new ArrayList<GasComponentAmount.SpeciesAmount>(); long chemicalMass = 0;
+			for (var entry : definition.defaultSpeciesConcentrations()) {
+				long quanta = sourceSpecies(entry, after[i]) - sourceSpecies(entry, before[i]);
+				if (quanta > 0) species.add(new GasComponentAmount.SpeciesAmount(entry.speciesId(), quanta));
+				chemicalMass = Math.addExact(chemicalMass, Math.multiplyExact(quanta, entry.massUnitsPerQuantum()));
+			}
+			result.add(new GasComponentAmount(definition.id(), nanos, mass, species, Math.subtractExact(mass, chemicalMass)));
+		}
+		return new GasInventory(result);
+	}
+	private static long sourceMass(GasComponentDefinition definition, long nanos) {
+		var density = ExactRational.parse(Double.toString(definition.standardDensityKgPerCubicMeter()));
+		var division = density.numerator().multiply(BigInteger.valueOf(nanos)).multiply(BigInteger.TEN).divideAndRemainder(density.denominator());
+		int half = division[1].shiftLeft(1).compareTo(density.denominator());
+		return (half > 0 || half == 0 && division[0].testBit(0) ? division[0].add(BigInteger.ONE) : division[0]).longValueExact();
+	}
+	private static long sourceSpecies(GasComponentDefinition.DefaultSpecies entry, long nanos) {
+		return entry.concentrationMolPerStandardCubicMeter().numerator().multiply(BigInteger.valueOf(nanos))
+				.multiply(BigInteger.valueOf(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL)).divide(
+						entry.concentrationMolPerStandardCubicMeter().denominator().multiply(BigInteger.valueOf(1_000_000_000L))).longValueExact();
+	}
+	/** Jefferson allocation is monotone in cumulative source size, so every difference is positive. */
+	private static long[] sourceShares(long total, List<ExactRational> weights) {
+		BigInteger common = BigInteger.ONE; for (var weight : weights) common = lcm(common, weight.denominator());
+		var integers = new ArrayList<BigInteger>(); BigInteger sum = BigInteger.ZERO;
+		for (var weight : weights) { var value = weight.numerator().multiply(common.divide(weight.denominator())); integers.add(value); sum = sum.add(value); }
+		long[] result = new long[weights.size()]; long assigned = 0;
+		for (int i = 0; i < result.length; i++) { result[i] = integers.get(i).multiply(BigInteger.valueOf(total)).divide(sum).longValueExact(); assigned += result[i]; }
+		while (assigned++ < total) {
+			int best = 0; for (int i = 1; i < result.length; i++) if (integers.get(i).multiply(BigInteger.valueOf(result[best]).add(BigInteger.ONE)).compareTo(
+					integers.get(best).multiply(BigInteger.valueOf(result[i]).add(BigInteger.ONE))) > 0) best = i;
+			result[best]++;
+		}
+		return result;
 	}
 
 	private byte[] encodeCanonical() {
@@ -141,12 +186,11 @@ public final class GasRegistry {
 				.append("temperature=").append(Long.toUnsignedString(Double.doubleToRawLongBits(STANDARD_TEMPERATURE_K))).append('\n');
 		for (GasComponentDefinition component : components) {
 			out.append("C|").append(component.id()).append('|')
-					.append(Long.toUnsignedString(Double.doubleToRawLongBits(component.standardDensityKgPerCubicMeter()))).append('|')
-					.append(Long.toUnsignedString(Double.doubleToRawLongBits(component.defaultResidualDensityKgPerCubicMeter()))).append('|');
+					.append(Long.toUnsignedString(Double.doubleToRawLongBits(component.standardDensityKgPerCubicMeter()))).append('|');
 			for (String species : component.allowedSpecies()) out.append(species).append(';');
 			out.append('|');
 			for (GasComponentDefinition.DefaultSpecies species : component.defaultSpeciesConcentrations()) {
-				out.append(species.speciesId()).append('=').append(species.concentrationMolPerStandardCubicMeter().canonical()).append(';');
+				out.append(species.speciesId()).append('=').append(species.concentrationMolPerStandardCubicMeter().canonical()).append('@').append(species.massUnitsPerQuantum()).append(';');
 			}
 			out.append('\n');
 		}
@@ -154,14 +198,6 @@ public final class GasRegistry {
 			out.append("A|").append(fraction.componentId()).append('|').append(fraction.fraction().canonical()).append('\n');
 		}
 		return out.toString().getBytes(StandardCharsets.UTF_8);
-	}
-
-	private static long[] rationalShares(long total, List<ExactRational> weights) {
-		BigInteger common = BigInteger.ONE;
-		for (ExactRational weight : weights) common = lcm(common, weight.denominator());
-		ArrayList<BigInteger> integers = new ArrayList<>(weights.size());
-		for (ExactRational weight : weights) integers.add(weight.numerator().multiply(common.divide(weight.denominator())));
-		return GasInventory.largestRemainder(total, integers);
 	}
 
 	private static BigInteger lcm(BigInteger first, BigInteger second) {

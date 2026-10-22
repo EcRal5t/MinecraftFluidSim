@@ -6,18 +6,17 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-/** Stable standard-state creation relation for one gas component; mass and residual densities use kg/m³. */
+/** Stable standard-state creation relation; density supplies mass and chemical quanta determine its residual. */
 public record GasComponentDefinition(
 		String id,
 		double standardDensityKgPerCubicMeter,
-		double defaultResidualDensityKgPerCubicMeter,
 		List<String> allowedSpecies,
 		List<DefaultSpecies> defaultSpeciesConcentrations
 ) {
-	public record DefaultSpecies(String speciesId, ExactRational concentrationMolPerStandardCubicMeter) {
+	public record DefaultSpecies(String speciesId, ExactRational concentrationMolPerStandardCubicMeter, long massUnitsPerQuantum) {
 		public DefaultSpecies {
 			GasIds.require(speciesId, "gas species id");
-			if (concentrationMolPerStandardCubicMeter == null || concentrationMolPerStandardCubicMeter.signum() <= 0) {
+			if (concentrationMolPerStandardCubicMeter == null || concentrationMolPerStandardCubicMeter.signum() <= 0 || massUnitsPerQuantum <= 0) {
 				throw new IllegalArgumentException("Gas default concentration in mol per standard m³ must be positive");
 			}
 		}
@@ -27,9 +26,6 @@ public record GasComponentDefinition(
 		GasIds.require(id, "gas component id");
 		if (!(Double.isFinite(standardDensityKgPerCubicMeter) && standardDensityKgPerCubicMeter > 0.0)) {
 			throw new IllegalArgumentException("Gas standard density in kg/m³ must be finite and positive");
-		}
-		if (!Double.isFinite(defaultResidualDensityKgPerCubicMeter)) {
-			throw new IllegalArgumentException("Gas default mass residual density must be finite");
 		}
 		if (allowedSpecies == null || allowedSpecies.size() > GasLimits.MAX_SPECIES_PER_COMPONENT) {
 			throw new IllegalArgumentException("Gas allowed species list is missing or over budget");

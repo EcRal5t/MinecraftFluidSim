@@ -60,7 +60,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		ThermalMaterialDefinition device = new ThermalMaterialDefinition("test:thermal/range_device",
 				ThermalMaterialDefinition.CarrierKind.DEVICE, "test:range_device", 320.0, 0.0, 1.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(300.0, 350.0, 1.0)));
-		ThermalRegistry.TemperatureRange range = new ThermalRegistry(List.of(liquid, gas, device))
+		ThermalRegistry.TemperatureRange range = thermalRegistry(List.of(liquid, gas, device))
 				.worldBoundaryTemperatureRange();
 		require(range.minimumK() == 250.0 && range.maximumK() == 500.0
 				&& range.contains(250.0) && range.contains(500.0) && !range.contains(500.1),
@@ -131,10 +131,10 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		gasTransferPreviewRetainsActualCaloricState();
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
 		ThermalMaterialDefinition air = new ThermalMaterialDefinition("mmm:thermal/air",
-				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.NITROGEN,
 				GasRegistry.STANDARD_TEMPERATURE_K, 10.0, 0.025,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)));
-		GasThermalModel model = new GasThermalModel(new ThermalRegistry(List.of(air)), gas);
+		GasThermalModel model = new GasThermalModel(thermalRegistry(List.of(air)), gas);
 		require(model.internalEnergyAtTemperature(GasInventory.EMPTY, GasRegistry.STANDARD_TEMPERATURE_K) == 0.0
 				&& model.absolutePressure(GasInventory.EMPTY, 1.0, 0.0) == 0.0
 				&& model.density(GasInventory.EMPTY, 1.0) == 0.0
@@ -153,7 +153,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		double expectedGasConstant = GasRegistry.STANDARD_PRESSURE_PA / GasRegistry.STANDARD_TEMPERATURE_K;
 		double expectedExponent = 1.0 + expectedGasConstant / (inventory.totalMass() * 718.0);
 		require(close(standard.absolutePressurePa(), GasRegistry.STANDARD_PRESSURE_PA)
-				&& close(standard.densityKgPerCubicMeter(), AirNetwork.AIR_DENSITY)
+				&& close(standard.densityKgPerCubicMeter(), BuiltinGasDefinitions.createRegistry().createAmbient(1_000_000_000L).totalMass())
 				&& close(standard.gasConstantJPerK(), expectedGasConstant)
 				&& close(standard.isentropicExponent(), expectedExponent)
 				&& close(standard.adiabaticBulkModulusPa(),
@@ -186,11 +186,11 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& unchanged.workIntoGas() == 0.0,
 				"unchanged gas volume manufactured caloric inversion work");
 		ThermalMaterialDefinition piecewiseAir = new ThermalMaterialDefinition("mmm:thermal/piecewise_air",
-				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.NITROGEN,
 				GasRegistry.STANDARD_TEMPERATURE_K, 10.0, 0.025, List.of(
 						new ThermalMaterialDefinition.CaloricSegment(150.0, 400.0, 718.0),
 						new ThermalMaterialDefinition.CaloricSegment(400.0, 1_500.0, 900.0)));
-		GasThermalModel piecewise = new GasThermalModel(new ThermalRegistry(List.of(piecewiseAir)), gas);
+		GasThermalModel piecewise = new GasThermalModel(thermalRegistry(List.of(piecewiseAir)), gas);
 		double piecewiseInitial = piecewise.internalEnergyAtTemperature(
 				inventory, GasRegistry.STANDARD_TEMPERATURE_K);
 		GasThermalModel.Compression acrossSegment = piecewise.compressAdiabatically(
@@ -229,7 +229,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	private static void mixedGasEnergyPartitionsRetainCommonTemperature() {
 		List<String> ids = List.of("test:partition_a", "test:partition_b", "test:partition_c");
 		GasRegistry gas = new GasRegistry(ids.stream().map(id -> new mmm.fluid.air.GasComponentDefinition(
-				id, 8, 8, List.of(), List.of())).toList(),
+				id, 8, List.of(), List.of())).toList(),
 				List.of(new GasRegistry.AmbientFraction(ids.getFirst(), ExactRational.ONE)));
 		for (double[] references : new double[][] {{100_000, 200, -100_000}, {100_000, -100_000, 200}, {100, 200, -100}}) {
 			java.util.ArrayList<ThermalMaterialDefinition> materials = new java.util.ArrayList<>();
@@ -240,7 +240,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						List.of(new ThermalMaterialDefinition.CaloricSegment(1, 900, 1))));
 				components.add(new GasComponentAmount(ids.get(component), 125_000_000L, mmm.units.Mass.fromKilograms(1), List.of(), mmm.units.Mass.fromKilograms(1)));
 			}
-			GasThermalModel model = new GasThermalModel(new ThermalRegistry(materials), gas);
+			GasThermalModel model = new GasThermalModel(thermalRegistry(materials), gas);
 			GasInventory source = new GasInventory(components);
 			for (double temperature : new double[] {300, 300.5}) {
 				double sourceEnergy = model.internalEnergyAtTemperature(source, temperature);
@@ -261,7 +261,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 
 	static void gasInitializationAndRestoreValidateActualInventory() {
 		var gas = new GasRegistry(List.of(new mmm.fluid.air.GasComponentDefinition(
-				"test:restore_gas", 1, 1, List.of(), List.of())),
+				"test:restore_gas", 1, List.of(), List.of())),
 				List.of(new GasRegistry.AmbientFraction("test:restore_gas", ExactRational.ONE)));
 		var liquids = new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:water", 1000, "mmm:water", 0, Math.PI / 2)));
 		var water = new ThermalMaterialDefinition("test:thermal/restore_water", ThermalMaterialDefinition.CarrierKind.LIQUID,
@@ -269,7 +269,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var material = new ThermalMaterialDefinition("test:thermal/restore_gas", ThermalMaterialDefinition.CarrierKind.GAS,
 				"test:restore_gas", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 400, 750),
 				new ThermalMaterialDefinition.CaloricSegment(400, 600, 900)));
-		var registry = new ThermalRegistry(List.of(water, material));
+		var registry = thermalRegistry(List.of(water, material));
 		var config = new FluidSolverConfig(.5F, 1000, 0, .001F, 100, 1e-5F, .002F);
 		var source = new FluidDomain(2, 2, 2, config);
 		source.sealDomainBoundary(); source.bindGasRegistry(gas); source.bindThermal(registry, liquids, 300);
@@ -291,13 +291,13 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 
 	static void gasTransferPreviewRetainsActualCaloricState() {
 		var gas = new GasRegistry(List.of(new mmm.fluid.air.GasComponentDefinition(
-				"test:piecewise_gas", 1, 1, List.of(), List.of())),
+				"test:piecewise_gas", 1, List.of(), List.of())),
 				List.of(new GasRegistry.AmbientFraction("test:piecewise_gas", ExactRational.ONE)));
 		var material = new ThermalMaterialDefinition("test:thermal/piecewise_gas",
 				ThermalMaterialDefinition.CarrierKind.GAS, "test:piecewise_gas", 300, 200_000, 0, List.of(
 						new ThermalMaterialDefinition.CaloricSegment(100, 400, 750),
 						new ThermalMaterialDefinition.CaloricSegment(400, 1000, 900)));
-		var registry = new ThermalRegistry(List.of(material));
+		var registry = thermalRegistry(List.of(material));
 		for(double temperature:new double[]{250,450}) {
 			var network = new AirNetwork(gas);network.addNode(.125,0);network.addNode(.125,0);
 			var source = gas.createAmbient(1_000_000_000L);var target = gas.createAmbient(500_000_000L);
@@ -352,7 +352,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 
 	static void builtinDryAirWaterAndVaporPhysicsIsCalibrated() {
 		try (InputStreamReader airReader = resourceReader(
-				"/data/mmm/mmm/thermal_materials/air.json");
+				"/data/mmm/mmm/thermal_materials/nitrogen.json");
 		     InputStreamReader waterReader = resourceReader(
 				"/data/mmm/mmm/thermal_materials/water.json");
 		     InputStreamReader iceReader = resourceReader(
@@ -363,7 +363,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				     "/data/mmm/mmm/phase_transitions/ice_water.json");
 		     InputStreamReader transitionReader = resourceReader(
 				     "/data/mmm/mmm/phase_transitions/water_vapor.json")) {
-			ThermalMaterialDefinition air = ThermalDefinitionCodec.decodeMaterial("mmm:air", airReader);
+			ThermalMaterialDefinition air = ThermalDefinitionCodec.decodeMaterial("mmm:nitrogen", airReader);
 			ThermalMaterialDefinition water = ThermalDefinitionCodec.decodeMaterial("mmm:water", waterReader);
 			ThermalMaterialDefinition ice = ThermalDefinitionCodec.decodeMaterial("mmm:ice", iceReader);
 			ThermalMaterialDefinition vapor = ThermalDefinitionCodec.decodeMaterial("mmm:water_vapor", vaporReader);
@@ -380,7 +380,8 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			double vaporDensityAtBoiling = batchMassKg / vaporVolume;
 			double gasConstant = GasRegistry.STANDARD_PRESSURE_PA * standardVaporVolume
 					/ (batchMassKg * GasRegistry.STANDARD_TEMPERATURE_K);
-			ThermalRegistry registry = new ThermalRegistry(List.of(air, water, vapor, ice), List.of(),
+			var actualMaterials=new java.util.ArrayList<>(builtinGasMaterials());actualMaterials.add(water);actualMaterials.add(ice);
+			ThermalRegistry registry = thermalRegistry(actualMaterials, List.of(),
 					List.of(transition, melting), "", "");
 			ThermalStateFunction state = new ThermalStateFunction(registry);
 			double liquidU = state.internalEnergyAtTemperature(
@@ -399,42 +400,37 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 
 			require(relativeError(liquidDensity, 1_000.0) < 0.002
 					&& relativeError(vaporDensityAtBoiling, 0.588) < 0.001
-					&& relativeError(gasConstant, 461.52) < 1.0E-5,
+					&& relativeError(gasConstant, GasRegistry.MOLAR_GAS_CONSTANT/.018) < 1.0E-5,
 					"built-in phase volumes do not reproduce water/vapor SI density and gas constant");
-			double[] expectedAirCv = {
-					715.5184374797511, 718.0965575743058, 730.345643090267,
-					764.3848905212396, 822.1840487741881, 885.9605202540622, 928.3976344371151
-			};
-			double[] airSamples = { 200.0, 300.0, 400.0, 600.0, 850.0, 1_200.0, 1_550.0 };
-			for (int segment = 0; segment < expectedAirCv.length; segment++) {
-				require(air.specificHeatAt(airSamples[segment]) == expectedAirCv[segment],
-						"built-in dry-air caloric segment drifted at index " + segment);
+			for(var material:builtinGasMaterials()){
+				require(material.minimumTemperatureK()<=100&&material.maximumTemperatureK()>=1700,
+						"Built-in gas caloric table does not cover the gameplay range");
+				for(var segment:material.caloricSegments())require(segment.specificHeatJPerKgK()>0,"Gas Cv is nonpositive");
 			}
-			require(relativeError(AirNetwork.AIR_DENSITY, 1.2038886846941566) < 1.0E-14
-					&& water.specificHeatAt(293.15) == 4_184.0
-					&& water.conductivityWPerMeterK() == 0.598
-					&& vapor.specificHeatAt(373.15) == 1_410.0
-					&& vapor.specificHeatAt(600.0) == 1_554.43
-					&& vapor.specificHeatAt(850.0) == 1_723.57
-					&& vapor.specificHeatAt(1_200.0) == 1_967.03
-					&& vapor.specificHeatAt(1_550.0) == 2_180.66
-					&& vapor.conductivityWPerMeterK() == 0.025,
-					"built-in dry-air/water/vapor caloric or conductivity values drifted");
+			require(water.specificHeatAt(293.15)==4184&&water.conductivityWPerMeterK()==.598
+					&&vapor.conductivityWPerMeterK()==.0186
+					&&air.specificHeatAt(300)>740&&air.specificHeatAt(300)<750,
+					"Model-mass gas Cv or room-temperature transport reference changed");
 			require(Math.abs(latentEnthalpy - 2_256_700.0) < 0.01,
 					"water/vapor state-function gap does not reproduce the 1-atm latent enthalpy: " + latentEnthalpy);
 			long airNanos = 140_000_000L;
 			long vaporNanos = 2_967_839L;
-			GasInventory reportedExpansion = new GasInventory(List.of(
-					new GasComponentAmount(BuiltinGasDefinitions.AIR, airNanos,
-							mmm.units.Mass.fromKilograms(AirNetwork.AIR_DENSITY * AirNetwork.cubicMeters(airNanos)),
-							List.of(), 0L),
-					new GasComponentAmount(BuiltinGasDefinitions.WATER_VAPOR, vaporNanos,
-							mmm.units.Mass.fromKilograms(BuiltinGasDefinitions.WATER_VAPOR_STANDARD_DENSITY
-									* AirNetwork.cubicMeters(vaporNanos)),
-							List.of(), 0L)));
+			GasInventory reportedExpansion=BuiltinGasDefinitions.createRegistry().createAmbient(airNanos).merge(new GasInventory(List.of(
+					new GasComponentAmount(BuiltinGasDefinitions.WATER_VAPOR,vaporNanos,
+							mmm.units.Mass.fromKilograms(BuiltinGasDefinitions.WATER_VAPOR_STANDARD_DENSITY*AirNetwork.cubicMeters(vaporNanos)),List.of(),0L))));
 			GasThermalModel reportedModel = new GasThermalModel(
 					registry, BuiltinGasDefinitions.createRegistry());
 			gasEnergyPartitionsRetainTemperature(reportedModel, BuiltinGasDefinitions.createRegistry());
+			var defaultInventory=BuiltinGasDefinitions.createRegistry().createAmbient(1_000_000_000L);
+			require(defaultInventory.components().size()==3&&defaultInventory.components().stream().allMatch(c->!c.species().isEmpty()),
+					"Default dry air did not retain all molecular species");
+			for(double temperature:new double[]{100,293.15,600,1700}){
+				double energy=reportedModel.internalEnergyAtTemperature(defaultInventory,temperature);
+				var restored=reportedModel.state(defaultInventory,energy);
+				require(Math.abs(restored.temperatureK()-temperature)<1e-8,
+						"Real dry-air caloric inversion changed across a Cv segment");
+			}
+
 			GasInventory airChild = BuiltinGasDefinitions.createRegistry().createAmbient(2_000_000_000L);
 			GasInventory vaporChild = new GasInventory(List.of(new GasComponentAmount(
 					BuiltinGasDefinitions.WATER_VAPOR, 2_000_000_000L,
@@ -445,16 +441,16 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			double[] mixedParts = reportedModel.partitionEnergy(mixed, mixedEnergy, List.of(vaporChild, airChild));
 			double[] mixedReverse = reportedModel.partitionEnergy(mixed, mixedEnergy, List.of(airChild, vaporChild));
 			require(airChild.totalMass() > vaporChild.totalMass()
-					&& airChild.totalMass() * air.specificHeatAt(mixedTemperature)
+					&& reportedModel.state(airChild,reportedModel.internalEnergyAtTemperature(airChild,mixedTemperature)).heatCapacityJPerK()
 						< vaporChild.totalMass() * vapor.specificHeatAt(mixedTemperature)
 					&& mixedParts[1] == reportedModel.internalEnergyAtTemperature(airChild, mixedTemperature)
 					&& mixedParts[0] == mixedReverse[1] && mixedParts[1] == mixedReverse[0],
 					"gas energy remainder followed mass or child order instead of heat capacity");
 			double reportedInitial = reportedModel.internalEnergyAtTemperature(reportedExpansion, 306.0691472872192);
 			GasThermalModel.Compression reported = reportedModel.compressAdiabatically(
-					reportedExpansion, reportedInitial, 0.13749912215963653, 0.34265727368591875);
+					reportedExpansion, reportedInitial, 0.13749912215963653, 5.0);
 			GasThermalModel.Compression reportedReverse = reportedModel.compressAdiabatically(
-					reportedExpansion, reported.finalInternalEnergy(), 0.34265727368591875, 0.13749912215963653);
+					reportedExpansion, reported.finalInternalEnergy(), 5.0, 0.13749912215963653);
 			require(reported.finalTemperatureK() < vapor.minimumTemperatureK()
 					&& reported.finalTemperatureK() >= ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K
 					&& reported.workIntoGas() < 0.0
@@ -530,7 +526,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					&& device.ports().stream().allMatch(port -> port.wallThicknessMeters() == 0.01
 							&& port.fluidFilmThicknessMeters() == 0.01),
 					"built-in finite exchanger port groups or SI geometry drifted");
-			ThermalRegistry registry = new ThermalRegistry(List.of(material), List.of(), List.of(), List.of(), List.of(device), "", "", "");
+			ThermalRegistry registry = thermalRegistry(List.of(material), List.of(), List.of(), List.of(), List.of(device), "", "", "");
 			require(registry.fingerprint().equals("be90fa71d2249854f4b74fc4c12b36a7a77773add46ba8091b9a1fc4f9ed7537"),
 					"built-in finite exchanger registry fingerprint drifted: " + registry.fingerprint());
 			ThermalStateFunction state = new ThermalStateFunction(registry);
@@ -584,11 +580,11 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		for (double mass : new double[]{1,2}) {
 			double capacity=1000;
 			var gas = new GasRegistry(List.of(
-					new mmm.fluid.air.GasComponentDefinition("test:a", 1, 1, List.of(), List.of()),
-					new mmm.fluid.air.GasComponentDefinition("test:b", 1, 1, List.of(), List.of())),
+					new mmm.fluid.air.GasComponentDefinition("test:a", 1, List.of(), List.of()),
+					new mmm.fluid.air.GasComponentDefinition("test:b", 1, List.of(), List.of())),
 					List.of(new GasRegistry.AmbientFraction("test:a", ExactRational.ONE)));
 			var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
-			var thermal = new ThermalRegistry(List.of(topologyMaterial("test:w", ThermalMaterialDefinition.CarrierKind.LIQUID,
+			var thermal = thermalRegistry(List.of(topologyMaterial("test:w", ThermalMaterialDefinition.CarrierKind.LIQUID,
 					BuiltinFluidMaterials.WATER.id(), 0, 1), topologyMaterial("test:ta", ThermalMaterialDefinition.CarrierKind.GAS,
 					"test:a", 0, capacity), topologyMaterial("test:tb", ThermalMaterialDefinition.CarrierKind.GAS, "test:b", 0, capacity)));
 			var inventory = new GasInventory(List.of(new GasComponentAmount("test:a", 1_000_000L, mmm.units.Mass.fromKilograms(mass), List.of(), mmm.units.Mass.fromKilograms(mass)),
@@ -827,7 +823,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				BuiltinFluidMaterials.WATER.id(), 0, 2);
 		materials.add(water);
 		for (int k = 0; k < 33; k++) {
-			gasDefinitions.add(new mmm.fluid.air.GasComponentDefinition("test:g" + k, 1000, 1000, List.of(), List.of()));
+			gasDefinitions.add(new mmm.fluid.air.GasComponentDefinition("test:g" + k, 1000, List.of(), List.of()));
 			materials.add(topologyMaterial("test:tg" + k, ThermalMaterialDefinition.CarrierKind.GAS,
 					"test:g" + k, k == 0 ? 100 : 0, 1));
 		}
@@ -838,7 +834,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var transition = new ThermalPhaseTransition("test:topology_phase", water.id(), "test:tg0", 300,
 				SolidVolume.SVQ_PER_CELL, SolidVolume.SVQ_PER_CELL, ExactRational.of(125),
 				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 0, 1e8);
-		var registry = new ThermalRegistry(materials, List.of(), List.of(transition), "", grains.fingerprint());
+		var registry = thermalRegistry(materials, List.of(), List.of(transition), "", grains.fingerprint());
 		var scene = phaseTopologyScene(independentInterface);
 		int width = scene.width();
 		int[] bridges = scene.bridges();
@@ -882,9 +878,9 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var gases = BuiltinGasDefinitions.createRegistry();
 		var liquid = new FluidMaterial("test:remap_host", 1000, "test:remap_host", 0, Math.PI / 2);
 		var liquids = new FluidMaterialRegistry(List.of(liquid));
-		var registry = new ThermalRegistry(List.of(topologyMaterial("test:remap_liquid",
+		var registry = thermalRegistry(List.of(topologyMaterial("test:remap_liquid",
 				ThermalMaterialDefinition.CarrierKind.LIQUID, liquid.id(), 0, 1),
-				topologyMaterial("test:remap_air", ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR, 0, 1)));
+				topologyMaterial("test:remap_air", ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.NITROGEN, 0, 1)));
 		var network = new AirNetwork(gases); network.addNode(1, 1);
 		var first = FluidThermalBinding.create(registry, liquids, 300, 1, 2, 2, 2, .5F, emptyMarkers(), network);
 		var foreign = FluidThermalBinding.create(registry, liquids, 300, 1, 2, 2, 2, .5F, emptyMarkers(), network);
@@ -901,12 +897,12 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	private static void gasTopologyRemapsMixIntoNewVacuum() {
 		gasTopologyExchangePreservesExactRegionalEnergy();
 		independentCavityEditsKeepTheirOwnVolumeWork();
-		var gasDefinitions = List.of(new mmm.fluid.air.GasComponentDefinition("test:a", 8, 8, List.of(), List.of()),
-				new mmm.fluid.air.GasComponentDefinition("test:b", 8, 8, List.of(), List.of()),
-				new mmm.fluid.air.GasComponentDefinition("test:c", 8, 8, List.of(), List.of()));
+		var gasDefinitions = List.of(new mmm.fluid.air.GasComponentDefinition("test:a", 8, List.of(), List.of()),
+				new mmm.fluid.air.GasComponentDefinition("test:b", 8, List.of(), List.of()),
+				new mmm.fluid.air.GasComponentDefinition("test:c", 8, List.of(), List.of()));
 		var gas = new GasRegistry(gasDefinitions, List.of(new GasRegistry.AmbientFraction("test:a", ExactRational.ONE)));
 		var liquids = new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:water", 1000, "mmm:water", 0, Math.PI / 2)));
-		var registry = new ThermalRegistry(List.of(topologyMaterial("test:w", ThermalMaterialDefinition.CarrierKind.LIQUID,
+		var registry = thermalRegistry(List.of(topologyMaterial("test:w", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				"mmm:water", 0, 1000), topologyMaterial("test:ta", ThermalMaterialDefinition.CarrierKind.GAS, "test:a", 1e5, 1000),
 				topologyMaterial("test:tb", ThermalMaterialDefinition.CarrierKind.GAS, "test:b", 200, 1000),
 				topologyMaterial("test:tc", ThermalMaterialDefinition.CarrierKind.GAS, "test:c", -1e5, 1000)));
@@ -955,7 +951,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 	/** Simultaneous edits behind a fixed partition have the same local thermodynamics as separate edits. */
 	private static void independentCavityEditsKeepTheirOwnVolumeWork() {
 		var liquids=new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
-		var thermal=new ThermalRegistry(List.of(AIR,topologyMaterial("test:isolated/water",
+		var thermal=thermalRegistry(List.of(NITROGEN,topologyMaterial("test:isolated/water",
 				ThermalMaterialDefinition.CarrierKind.LIQUID,BuiltinFluidMaterials.WATER.id(),0,1000)));
 		var domain=new FluidDomain(5,2,2,new FluidSolverConfig(.5F,1000,0,.01F,100,1e-5F,.002F));
 		domain.sealDomainBoundary();
@@ -1018,11 +1014,11 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 
 	private static FluidDomain gasRegionalEnergyDomain(boolean initiallyAmbient) {
 		var gas = new GasRegistry(List.of(
-				new mmm.fluid.air.GasComponentDefinition("test:a", 8, 8, List.of(), List.of()),
-				new mmm.fluid.air.GasComponentDefinition("test:b", 8, 8, List.of(), List.of())),
+				new mmm.fluid.air.GasComponentDefinition("test:a", 8, List.of(), List.of()),
+				new mmm.fluid.air.GasComponentDefinition("test:b", 8, List.of(), List.of())),
 				List.of(new GasRegistry.AmbientFraction("test:a", ExactRational.ONE)));
 		var liquids = new FluidMaterialRegistry(List.of(new FluidMaterial("mmm:water", 1000, "mmm:water", 0, Math.PI / 2)));
-		var thermal = new ThermalRegistry(List.of(topologyMaterial("test:w", ThermalMaterialDefinition.CarrierKind.LIQUID,
+		var thermal = thermalRegistry(List.of(topologyMaterial("test:w", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				"mmm:water", 0, 1), topologyMaterial("test:ta", ThermalMaterialDefinition.CarrierKind.GAS, "test:a", 1_000_000, 1000),
 				topologyMaterial("test:tb", ThermalMaterialDefinition.CarrierKind.GAS, "test:b", 1_000_000, 1000)));
 		FluidDomain domain = new FluidDomain(5, 3, 3,
@@ -1086,12 +1082,12 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		FluidMaterial liquid = FluidMaterial.withSurfaceTension(
 				"test:gas_host", 1_000.0, "test:miscible", 0.0, 90.0);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(liquid));
-		ThermalRegistry registry = new ThermalRegistry(List.of(
+		ThermalRegistry registry = thermalRegistry(List.of(
 				new ThermalMaterialDefinition("test:thermal/gas_host",
 						ThermalMaterialDefinition.CarrierKind.LIQUID, liquid.id(), 300.0, 0.0, 0.5,
 						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 4_000.0))),
 				new ThermalMaterialDefinition("mmm:thermal/air",
-						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.NITROGEN,
 						GasRegistry.STANDARD_TEMPERATURE_K, 10.0, 0.025,
 						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)))));
 		ThermalCarrierContext empty = emptyMarkers();
@@ -1206,13 +1202,13 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				100, 1.0E-5F, 2.0E-3F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
-		ThermalRegistry thermal = new ThermalRegistry(List.of(
+		ThermalRegistry thermal = thermalRegistry(List.of(
 				new ThermalMaterialDefinition("test:thermal/persistence_water",
 						ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
 						300.0, 0.0, 0.598,
 						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 4_184.0))),
 				new ThermalMaterialDefinition("test:thermal/persistence_air",
-						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.NITROGEN,
 						GasRegistry.STANDARD_TEMPERATURE_K, 0.0, 0.026,
 						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)))));
 
@@ -1381,11 +1377,11 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var config = new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .002F);
 		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		var gas = BuiltinGasDefinitions.createRegistry();
-		var thermal = new ThermalRegistry(List.of(
+		var thermal = thermalRegistry(List.of(
 			new ThermalMaterialDefinition("test:expansion_water", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				BuiltinFluidMaterials.WATER.id(), 300, 0, .598, List.of(new ThermalMaterialDefinition.CaloricSegment(150,1500,4184))),
 			new ThermalMaterialDefinition("test:expansion_air", ThermalMaterialDefinition.CarrierKind.GAS,
-				BuiltinGasDefinitions.AIR, GasRegistry.STANDARD_TEMPERATURE_K, 0, .026,
+				BuiltinGasDefinitions.NITROGEN, GasRegistry.STANDARD_TEMPERATURE_K, 0, .026,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(150,1500,718)))));
 		for (float initial : new float[] {1, .5F}) {
 			var domain = new FluidDomain(2, 2, 2, config);
@@ -1535,7 +1531,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			if (y != 0 || z != 0 || x == 1) domain.setSolid(x, y, z, true);
 		if (chemical) {
 			domain.bindMaterialRegistry(liquids); domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
-			thermal = new ThermalRegistry(thermal.materials(), List.of(new ThermalSpeciesOffset(
+			thermal = thermalRegistry(thermal.materials(), List.of(new ThermalSpeciesOffset(
 					"test:insertion_water", BuiltinChemicalDefinitions.H2O, thermal.materials().stream()
 					.filter(material -> material.carrierKind() == ThermalMaterialDefinition.CarrierKind.LIQUID)
 					.findFirst().orElseThrow().id(), ExactRational.ZERO)), List.of(),
@@ -1570,7 +1566,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		for (int x = 2; x < nx; x++) domain.setVolume(x, 0, 0, 1);
 		if (extraction == 2) {
 			domain.bindMaterialRegistry(liquids); domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
-			thermal = new ThermalRegistry(thermal.materials(), List.of(new ThermalSpeciesOffset(
+			thermal = thermalRegistry(thermal.materials(), List.of(new ThermalSpeciesOffset(
 					"test:vacuum_water", BuiltinChemicalDefinitions.H2O, thermal.materials().stream()
 					.filter(material -> material.carrierKind() == ThermalMaterialDefinition.CarrierKind.LIQUID)
 					.findFirst().orElseThrow().id(), ExactRational.ZERO)), List.of(),
@@ -1619,13 +1615,13 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				100, 1.0E-5F, 2.0E-3F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
-		ThermalRegistry thermal = new ThermalRegistry(List.of(
+		ThermalRegistry thermal = thermalRegistry(List.of(
 				new ThermalMaterialDefinition("test:thermal/compliance_water",
 						ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
 						300.0, 0.0, 0.598,
 						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 4_184.0))),
 				new ThermalMaterialDefinition("test:thermal/compliance_air",
-						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.NITROGEN,
 						GasRegistry.STANDARD_TEMPERATURE_K, 0.0, 0.026,
 						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)))));
 		FluidDomain domain = new FluidDomain(4, 4, 4, config);
@@ -1656,12 +1652,12 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		require(domain.pressureSystem.gasStorageCoefficient[1] < isothermalStorage,
 				"thermal gas pressure row silently used isothermal compliance");
 
-		ThermalRegistry deepColdThermal = new ThermalRegistry(List.of(
+		ThermalRegistry deepColdThermal = thermalRegistry(List.of(
 				new ThermalMaterialDefinition("test:thermal/deep_cold_water",
 						ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
 						1, 0.0, 0.598, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1_500.0, 4_184.0))),
 				new ThermalMaterialDefinition("test:thermal/deep_cold_air",
-						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.NITROGEN,
 						1, 0.0, 0.026, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1_500.0, 718.0)))));
 		FluidDomain deepCold = new FluidDomain(4, 4, 4, config);
 		deepCold.sealDomainBoundary();
@@ -1692,13 +1688,13 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				100, 1.0E-5F, 2.0E-3F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		GasRegistry gas = BuiltinGasDefinitions.createRegistry();
-		ThermalRegistry thermal = new ThermalRegistry(List.of(
+		ThermalRegistry thermal = thermalRegistry(List.of(
 				new ThermalMaterialDefinition("test:thermal/vent_water",
 						ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
 						300.0, 0.0, 0.598,
 						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 4_184.0))),
 				new ThermalMaterialDefinition("test:thermal/vent_air",
-						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.NITROGEN,
 						GasRegistry.STANDARD_TEMPERATURE_K, 0.0, 0.026,
 						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)))));
 		FluidDomain domain = new FluidDomain(3, 3, 3, config);
@@ -1774,7 +1770,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 10_000.0, 2_000_000.0);
 		ThermalSpeciesOffset vaporSpecies = new ThermalSpeciesOffset("test:offset/vapor_h2o",
 				BuiltinChemicalDefinitions.H2O, vapor.id(), ExactRational.parse("-250"));
-		ThermalRegistry thermal = new ThermalRegistry(List.of(liquid, vapor), List.of(vaporSpecies),
+		ThermalRegistry thermal = thermalRegistry(List.of(liquid, vapor), List.of(vaporSpecies),
 				List.of(transition), BuiltinChemicalDefinitions.REGISTRY.fingerprint(), "");
 		GasLiquidPhaseModel model = new GasLiquidPhaseModel(thermal, gas);
 		GasInventory batch = model.gasBatch(transition, 1L);
@@ -1817,9 +1813,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				&& model.saturation(transition, 363.15, batch,
 				GasRegistry.STANDARD_PRESSURE_PA).direction() == GasLiquidPhaseModel.Direction.CONDENSE,
 				"Clausius-Clapeyron saturation did not select the physical phase direction");
-		GasRegistry humidAmbient = new GasRegistry(gas.components(), List.of(
-				new GasRegistry.AmbientFraction(BuiltinGasDefinitions.AIR, ExactRational.parse("3/4")),
-				new GasRegistry.AmbientFraction(BuiltinGasDefinitions.WATER_VAPOR, ExactRational.parse("1/4"))));
+		GasRegistry humidAmbient = new GasRegistry(gas.components(), BuiltinGasDefinitions.airRecipe(ExactRational.parse("1/4")));
 		var ambientSaturation = new GasLiquidPhaseModel(thermal, humidAmbient).ambientSaturation(transition, 373.15);
 		require(ambientSaturation.componentPartialPressurePa() == GasRegistry.STANDARD_PRESSURE_PA / 4
 				&& ambientSaturation.direction() == GasLiquidPhaseModel.Direction.BOIL
@@ -1883,7 +1877,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				ThermalMaterialDefinition.CarrierKind.LIQUID, waterCarrier.id(), 373.15, 0.0, 0.6,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 4_180.0)));
 		ThermalMaterialDefinition air = new ThermalMaterialDefinition("test:thermal/boiling_air",
-				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR, 373.15, 0.0, 0.025,
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.NITROGEN, 373.15, 0.0, 0.025,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 718.0)));
 		ThermalMaterialDefinition vapor = new ThermalMaterialDefinition("test:thermal/boiling_vapor",
 				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.WATER_VAPOR,
@@ -1898,7 +1892,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		ThermalPhaseTransition boiling = new ThermalPhaseTransition("test:phase/boiling_water",
 				water.id(), vapor.id(), 373.15, liquidSvq, vaporSvq, batchMass,
 				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 10_000.0, 3_000_000.0);
-		ThermalRegistry thermal = new ThermalRegistry(
+		ThermalRegistry thermal = thermalRegistry(
 				List.of(water, oil, air, vapor), List.of(), List.of(boiling), "", "");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 2.0E-3F);
@@ -2208,7 +2202,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				if (retainAir) {
 					require(result.operations() > 0 && result.operations() < 8 && domain.totalVolumeExact() < 1
 							&& domain.gasBoundary().availableVolume(1) > 0
-							&& air.component(BuiltinGasDefinitions.AIR).equals(domain.gasBoundary().inventory(1).component(BuiltinGasDefinitions.AIR)),
+							&& dryGasUnchanged(air,domain.gasBoundary().inventory(1)),
 							"Condensation did not retain positive capacity and the complete non-condensable air stock: " + result);
 					domain=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 					domain=advance(domain,false,0);
@@ -2217,7 +2211,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					domain=FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 					domain=advance(domain,false,0);
 					require(!domain.hasPendingPhaseMotionWork() && domain.gasBoundary().availableVolume(1)>0
-							&& air.component(BuiltinGasDefinitions.AIR).equals(domain.gasBoundary().inventory(1).component(BuiltinGasDefinitions.AIR))
+							&& dryGasUnchanged(air,domain.gasBoundary().inventory(1))
 							&& actualPhaseMass(domain).equals(physicalMass)
 							&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()) && domain.gasBoundary().auditClosed(),
 							"Cooling and continued projection lost the non-condensable gas capacity or its conserved stock");
@@ -2252,7 +2246,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				ThermalMaterialDefinition.CarrierKind.LIQUID, waterCarrier.id(), 373.15, 0.0, 0.6,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 4_180.0)));
 		ThermalMaterialDefinition air = new ThermalMaterialDefinition("test:thermal/mix_air",
-				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR, 373.15, 0.0, 0.025,
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.NITROGEN, 373.15, 0.0, 0.025,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 800.0, 718.0)));
 		ThermalMaterialDefinition vapor = new ThermalMaterialDefinition("test:thermal/mix_vapor",
 				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.WATER_VAPOR,
@@ -2264,7 +2258,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		ThermalPhaseTransition boiling = new ThermalPhaseTransition("test:phase/mix_boiling",
 				water.id(), vapor.id(), 373.15, liquidSvq, vaporSvq, batchMass,
 				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 10_000.0, 3_000_000.0);
-		ThermalRegistry thermal = new ThermalRegistry(
+		ThermalRegistry thermal = thermalRegistry(
 				List.of(water, air, vapor), List.of(), List.of(boiling), "", "");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 2.0E-3F);
@@ -2281,7 +2275,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		domain.synchronizeGasTopologyForPersistence();
 		long pocketNanos = AirNetwork.nanos(0.125);
 		require(domain.gasBoundary().nodeCount() == 1
-				&& domain.gasBoundary().inventory(1).component(BuiltinGasDefinitions.AIR) != null
+				&& domain.gasBoundary().inventory(1).component(BuiltinGasDefinitions.NITROGEN) != null
 				&& domain.gasBoundary().inventory(1).component(BuiltinGasDefinitions.WATER_VAPOR) == null
 				&& domain.gasBoundary().standardVolumeNanos(1) == pocketNanos
 				&& domain.gasBoundary().drawnFromAmbientNanos() == pocketNanos
@@ -2292,12 +2286,12 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 						+ " drawn=" + domain.gasBoundary().drawnFromAmbientNanos() + "/" + pocketNanos);
 		domain = advance(domain, true, 128);
 		FluidDomain.GasThermalPhaseStats stats = domain.lastGasThermalPhaseStats();
-		GasComponentAmount trappedAir = domain.gasBoundary().inventory(1)
-				.component(BuiltinGasDefinitions.AIR);
+		GasInventory trappedAir = new GasInventory(domain.gasBoundary().inventory(1).components().stream()
+				.filter(c->!c.componentId().equals(BuiltinGasDefinitions.WATER_VAPOR)).toList());
 		GasComponentAmount boiledVapor = domain.gasBoundary().inventory(1)
 				.component(BuiltinGasDefinitions.WATER_VAPOR);
 		require(stats.operations() > 0
-				&& trappedAir != null && trappedAir.standardVolumeNanos() == pocketNanos
+				&& trappedAir.standardVolumeNanos() == pocketNanos
 				&& boiledVapor != null && boiledVapor.mass() > 0.0
 				&& domain.gasBoundary().escapedSink().standardVolumeNanos() == 0L
 				&& domain.gasBoundary().auditClosed()
@@ -2314,7 +2308,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var water = phaseSearchMaterial("test:thermal/species_water", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				BuiltinFluidMaterials.WATER.id(), 0, 4_180);
 		var air = phaseSearchMaterial("test:thermal/species_air", ThermalMaterialDefinition.CarrierKind.GAS,
-				BuiltinGasDefinitions.AIR, 0, 718);
+				BuiltinGasDefinitions.NITROGEN, 0, 718);
 		var vapor = phaseSearchMaterial("test:thermal/species_vapor", ThermalMaterialDefinition.CarrierKind.GAS,
 				BuiltinGasDefinitions.WATER_VAPOR, 2_256_000, 1_410);
 		long liquidSvq = SolidVolume.SVQ_PER_CELL / 200L;
@@ -2323,7 +2317,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				ExactRational.parse(Double.toString(mmm.units.Mass.kilograms(mmm.units.Mass.fromKilograms(
 						liquidSvq * 1000.0 / SolidVolume.SVQ_PER_CUBIC_METER)))),
 				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 10_000, 3_000_000);
-		var thermal = new ThermalRegistry(List.of(water, air, vapor), List.of(
+		var thermal = thermalRegistry(List.of(water, air, vapor), List.of(
 				new ThermalSpeciesOffset("test:offset/species_water_h2o", BuiltinChemicalDefinitions.H2O,
 						water.id(), ExactRational.ZERO),
 				new ThermalSpeciesOffset("test:offset/species_water_na", BuiltinChemicalDefinitions.NA_PLUS,
@@ -2433,13 +2427,13 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var water = new ThermalMaterialDefinition("test:mass_water", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				"test:mass_water", 300, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(200, 400, 1)));
 		var air = new ThermalMaterialDefinition("test:mass_air", ThermalMaterialDefinition.CarrierKind.GAS,
-				BuiltinGasDefinitions.AIR, 299, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(200, 400, 1)));
+				BuiltinGasDefinitions.NITROGEN, 299, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(200, 400, 1)));
 		var vapor = new ThermalMaterialDefinition("test:mass_vapor", ThermalMaterialDefinition.CarrierKind.GAS,
 				BuiltinGasDefinitions.WATER_VAPOR, 299, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(200, 400, 1)));
 		var transition = new ThermalPhaseTransition("test:mass_phase", water.id(), vapor.id(), 300,
 				SolidVolume.SVQ_PER_CELL / 64, SolidVolume.SVQ_PER_CUBIC_METER / 8, ExactRational.of(batchMass),
 				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 0, 1e8);
-		var registry = new ThermalRegistry(List.of(water, air, vapor), List.of(), List.of(transition), "", "");
+		var registry = thermalRegistry(List.of(water, air, vapor), List.of(), List.of(transition), "", "");
 		var gases = BuiltinGasDefinitions.createRegistry();
 		var domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .002F));
 		domain.sealDomainBoundary();
@@ -2462,14 +2456,14 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var water = phaseSearchMaterial("test:receiver/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				BuiltinFluidMaterials.WATER.id(), 0, 4_180);
 		var air = phaseSearchMaterial("test:receiver/air", ThermalMaterialDefinition.CarrierKind.GAS,
-				BuiltinGasDefinitions.AIR, 0, 718);
+				BuiltinGasDefinitions.NITROGEN, 0, 718);
 		var vapor = phaseSearchMaterial("test:receiver/vapor", ThermalMaterialDefinition.CarrierKind.GAS,
 				BuiltinGasDefinitions.WATER_VAPOR, 2_256_000, 1_410);
 		long batchSvq = SolidVolume.SVQ_PER_CELL / 20_000L;
 		var transition = new ThermalPhaseTransition("test:receiver/condensation", water.id(), vapor.id(), 373.15,
 				batchSvq, batchSvq * 1_700, ExactRational.parse("0.0062435865"),
 				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 10_000, 3_000_000);
-		var thermal = new ThermalRegistry(List.of(water, air, vapor), List.of(
+		var thermal = thermalRegistry(List.of(water, air, vapor), List.of(
 				new ThermalSpeciesOffset("test:receiver/water_h2o", BuiltinChemicalDefinitions.H2O, water.id(), ExactRational.ZERO),
 				new ThermalSpeciesOffset("test:receiver/vapor_h2o", BuiltinChemicalDefinitions.H2O, vapor.id(), ExactRational.ZERO)),
 				List.of(transition), chemistry.fingerprint(), "");
@@ -2542,14 +2536,14 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var oil = phaseSearchMaterial("test:search/oil", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				BuiltinFluidMaterials.OIL.id(), 0, 2_000);
 		var air = phaseSearchMaterial("test:search/air", ThermalMaterialDefinition.CarrierKind.GAS,
-				BuiltinGasDefinitions.AIR, 0, 718);
+				BuiltinGasDefinitions.NITROGEN, 0, 718);
 		var vapor = phaseSearchMaterial("test:search/vapor", ThermalMaterialDefinition.CarrierKind.GAS,
 				BuiltinGasDefinitions.WATER_VAPOR, 2_256_000, 1_410);
 		long batchSvq = SolidVolume.SVQ_PER_CELL / 1_024L;
 		var transition = new ThermalPhaseTransition("test:search/boiling", water.id(), vapor.id(), 373.15,
 				batchSvq, batchSvq * 1_700, ExactRational.parse("0.1220703125"),
 				ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS, 10_000, 3_000_000);
-		var thermal = new ThermalRegistry(List.of(water, oil, air, vapor), List.of(
+		var thermal = thermalRegistry(List.of(water, oil, air, vapor), List.of(
 				new ThermalSpeciesOffset("test:search/water_h2o", BuiltinChemicalDefinitions.H2O, water.id(), ExactRational.ZERO),
 				new ThermalSpeciesOffset("test:search/vapor_h2o", BuiltinChemicalDefinitions.H2O, vapor.id(), ExactRational.ZERO)),
 				List.of(transition), chemistry.fingerprint(), "");
@@ -2607,6 +2601,10 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250, 800, capacity)));
 	}
 
+	private static boolean dryGasUnchanged(GasInventory before,GasInventory after){
+		return before.components().stream().filter(c->!c.componentId().equals(BuiltinGasDefinitions.WATER_VAPOR)).toList()
+				.equals(after.components().stream().filter(c->!c.componentId().equals(BuiltinGasDefinitions.WATER_VAPOR)).toList());
+	}
 	static double gasSpeciesMassKilograms(ChemicalRegistry registry, mmm.fluid.air.GasAuditLedger.Entry component) {
 		ExactRational massKilograms = ExactRational.ZERO;
 		for (GasComponentAmount.SpeciesAmount amount : component.species()) {

@@ -552,6 +552,13 @@ public final class WorldCapabilityBundleStore {
 						throw new IllegalArgumentException("Gas component references unknown species " + species);
 					}
 				}
+				for (var entry : component.defaultSpeciesConcentrations()) {
+					var quantumMass = chemical.species(chemical.speciesHandle(entry.speciesId()))
+							.molarMassKgPerMol().divide(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL);
+					if (entry.massUnitsPerQuantum() != mmm.units.Mass.exactUnits(quantumMass.numerator(), quantumMass.denominator())) {
+						throw new IllegalArgumentException("Gas source mass differs from chemical species " + entry.speciesId());
+					}
+				}
 			}
 			Set<String> granularMaterialIds = new HashSet<>();
 			granular.materials().forEach(definition -> granularMaterialIds.add(definition.id()));

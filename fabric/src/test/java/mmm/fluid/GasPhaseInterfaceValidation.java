@@ -110,10 +110,10 @@ public final class GasPhaseInterfaceValidation {
 		var vapor=new mmm.thermal.ThermalMaterialDefinition("test:finite-air/vapor",mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
 				mmm.fluid.air.BuiltinGasDefinitions.WATER_VAPOR,373.15,2256000,.1,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(250,800,1410)));
 		var air=new mmm.thermal.ThermalMaterialDefinition("test:finite-air/air",mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
-				mmm.fluid.air.BuiltinGasDefinitions.AIR,273.15,0,.025,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(150,800,718)));
+				mmm.fluid.air.BuiltinGasDefinitions.NITROGEN,273.15,0,.025,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(150,800,718)));
 		var transition=new mmm.thermal.ThermalPhaseTransition("test:finite-air/boil",water.id(),vapor.id(),373.15,168,168*1700L,
 				mmm.chemistry.ExactRational.of(mmm.units.Mass.fromKilograms(1000.0 * 168 / mmm.granular.SolidVolume.SVQ_PER_CUBIC_METER)).divide(mmm.units.Mass.UNITS_PER_KILOGRAM),mmm.thermal.ThermalPhaseTransition.InterfaceRequirement.LIQUID_GAS,10000,3000000);
-		var registry=new mmm.thermal.ThermalRegistry(java.util.List.of(water,vapor,air),java.util.List.of(),java.util.List.of(transition),"","");
+		var registry=ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(java.util.List.of(water,vapor,air)),java.util.List.of(),java.util.List.of(transition),"","");
 		var dry=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,1e-4F));
 		for(int cell=1;cell<8;cell++)dry.setSolid(cell%2,cell/2%2,cell/4,true);
 		dry.sealDomainBoundary();dry.bindMaterialRegistry(new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER)));
@@ -137,7 +137,7 @@ public final class GasPhaseInterfaceValidation {
 							java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(250,300,7000),
 									new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(300,800,5000)));
 					var hotAir=new mmm.thermal.ThermalMaterialDefinition(air.id(),air.carrierKind(),air.carrierId(),400,0,.025,air.caloricSegments());
-					definitions=new mmm.thermal.ThermalRegistry(java.util.List.of(equalEnergyWater,equalEnergyVapor,hotAir),java.util.List.of(),java.util.List.of(transition),"","");
+					definitions=ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(java.util.List.of(equalEnergyWater,equalEnergyVapor,hotAir)),java.util.List.of(),java.util.List.of(transition),"","");
 				}
 				byte[] masks=new byte[8];Arrays.fill(masks,(byte)255);masks[0]=0;if(partialNeighbor)masks[1]=0;if(mergingPeers)for(int peer:new int[]{1,2,4})masks[peer]=0;
 				var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,1e-4F));
@@ -153,10 +153,18 @@ public final class GasPhaseInterfaceValidation {
 				if(existingVapor) domain.gasState.network.commitPhaseMutation(domain.gasState.network.planPhaseSource(node,phase.gasBatch(transition,1)));
 				domain.bindThermal(definitions,new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER)),completeDepletion||existingVapor?400:300);
 				if(completeDepletion||existingVapor)domain.setThermalTemperatureInCell(0,0,0,300);
+                var nonWaterBefore=domain.gasState.network.sealedInventory().entries().stream()
+                        .filter(entry->!entry.componentId().equals(mmm.fluid.air.BuiltinGasDefinitions.WATER_VAPOR)).toList();
+                check(nonWaterBefore.stream().map(mmm.fluid.air.GasAuditLedger.Entry::componentId).collect(java.util.stream.Collectors.toSet())
+                        .equals(java.util.Set.of(mmm.fluid.air.BuiltinGasDefinitions.NITROGEN,mmm.fluid.air.BuiltinGasDefinitions.OXYGEN,mmm.fluid.air.BuiltinGasDefinitions.CO2)),
+                        "Default phase fixture lost the complete dry mixture");
                 double volumeBefore = domain.totalVolume();
                 for (int step = 0; step < 3; step++) {
                     domain.stepGasPhaseChangeOnly(8);
                     if(completeDepletion&&step==0){check(domain.totalVolumeExact()==0,"Complete vaporization retained liquid");checkpointVapor(domain,definitions);}
+                    check(domain.gasState.network.sealedInventory().entries().stream()
+                                    .filter(entry->!entry.componentId().equals(mmm.fluid.air.BuiltinGasDefinitions.WATER_VAPOR)).toList().equals(nonWaterBefore),
+                            "Water phase exchange changed nitrogen, oxygen or carbon dioxide inventory");
                     check(domain.gasBoundary().auditClosed()
                                     && domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
                             "Finite phase publication must conserve gas and internal energy");
@@ -174,6 +182,9 @@ public final class GasPhaseInterfaceValidation {
 
 	private static void checkpointVapor(FluidDomain domain,mmm.thermal.ThermalRegistry thermal){
 		try{
+			var savedGas=domain.gasBoundary().sealedInventory();
+			check(savedGas.entries().stream().anyMatch(entry->entry.componentId().equals(mmm.fluid.air.BuiltinGasDefinitions.WATER_VAPOR)),
+					"Vapor checkpoint must retain a nondefault wet composition");
 			var origin=net.minecraft.core.BlockPos.ZERO;var controller=new net.minecraft.core.BlockPos(-1,0,0);
 			var footprint=new mmm.simulation.controller.FluidRegionFootprint(controller,origin,origin,java.util.Set.of(origin.asLong()),java.util.Set.of(controller.asLong()),java.util.Set.of(0L));
 			net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension=net.minecraft.resources.ResourceKey.create(
@@ -185,7 +196,8 @@ public final class GasPhaseInterfaceValidation {
 			var next=FluidDomain.restoreAuthoritativeState(restored);
 			check(next.totalVolumeExact()==0&&next.hasPendingPhaseMotionWork()&&next.exactInternalEnergy().equals(domain.exactInternalEnergy())
 					&&next.gasBoundary().sealedInventory().equals(domain.gasBoundary().sealedInventory()),"Actual fully vaporized checkpoint lost gas, energy or pending motion");
-			next.stepMechanicsOnly();check(!next.hasPendingPhaseMotionWork(),"Restored vapor checkpoint did not finish mechanical advancement");
+			next.stepMechanicsOnly();check(!next.hasPendingPhaseMotionWork()&&next.gasBoundary().sealedInventory().equals(savedGas),
+					"Restored wet mixture changed its composition during mechanical advancement");
 		}catch(java.io.IOException failed){throw new AssertionError("Actual vaporized state failed durable checkpoint",failed);}
 	}
 
@@ -198,11 +210,11 @@ public final class GasPhaseInterfaceValidation {
 			var transition=new mmm.thermal.ThermalPhaseTransition("test:batch/freeze",solid.id(),liquid.id(),300,1L<<21,1L<<20,
 					mmm.chemistry.ExactRational.parse("7.8125"),mmm.thermal.ThermalPhaseTransition.InterfaceRequirement.NONE,0,200000);
 			var air=new mmm.thermal.ThermalMaterialDefinition("test:batch/air",mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
-					mmm.fluid.air.BuiltinGasDefinitions.AIR,300,0,.025,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(150,800,718)));
+					mmm.fluid.air.BuiltinGasDefinitions.NITROGEN,300,0,.025,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(150,800,718)));
 			var offsets=new java.util.ArrayList<mmm.thermal.ThermalSpeciesOffset>();
 			if(chemical)for(var species:mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY.species())for(var material:java.util.List.of(liquid,solid))
 				offsets.add(new mmm.thermal.ThermalSpeciesOffset("test:batch/offset"+offsets.size(),species.id(),material.id(),mmm.chemistry.ExactRational.ZERO));
-			var registry=new mmm.thermal.ThermalRegistry(java.util.List.of(liquid,solid,air),offsets,java.util.List.of(transition),
+			var registry=ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(java.util.List.of(liquid,solid,air)),offsets,java.util.List.of(transition),
 					chemical?mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY.fingerprint():"","");
 			var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,1e-4F));
 			var fluids=new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER));domain.bindMaterialRegistry(fluids);domain.setVolume(0,0,0,.5F);

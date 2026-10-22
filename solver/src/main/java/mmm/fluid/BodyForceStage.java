@@ -43,10 +43,15 @@ final class BodyForceStage {
 	private float granularPorousFaceDamping(int first, int second, float dt, boolean normal) {
 		double firstK = granularPermeability(first), secondK = granularPermeability(second);
 		if (Double.isInfinite(firstK) && Double.isInfinite(secondK)) return 1.0F;
-		CarrierProperties firstCarrier = domain.domainStep.granularCarrierProperties(first),
-				secondCarrier = domain.domainStep.granularCarrierProperties(second);
-		double viscosity = 0.5 * (firstCarrier.viscosity() + secondCarrier.viscosity());
-		double density = 0.5 * (firstCarrier.density() + secondCarrier.density());
+		LiquidCarrierProperties properties = domain.domainPhaseInventory.derivedCarrierState();
+		boolean firstWet = properties.hasLiquid(first), secondWet = properties.hasLiquid(second);
+		if (!firstWet && !secondWet) return 1.0F;
+		// The MAC velocity belongs to liquid; a free surface uses the wet side's material.
+		double viscosity = firstWet && secondWet
+				? 0.5 * (properties.viscosityPascalSeconds(first) + properties.viscosityPascalSeconds(second))
+				: properties.viscosityPascalSeconds(firstWet ? first : second);
+		double density = firstWet && secondWet ? 0.5 * (properties.density(first) + properties.density(second))
+				: properties.density(firstWet ? first : second);
 		double firstFraction = domain.granularState.deposits.cellBulkVolumeSvq(first) / (double) SolidVolume.SVQ_PER_CELL;
 		double secondFraction = domain.granularState.deposits.cellBulkVolumeSvq(second) / (double) SolidVolume.SVQ_PER_CELL;
 		double scale = dt * viscosity / density;

@@ -39,7 +39,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
 				300.0, 0.0, 1.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 400.0, 4_000.0)));
-		ThermalRegistry registry = new ThermalRegistry(List.of(water));
+		ThermalRegistry registry = ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(water)));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 2.0E-3F);
 		FluidDomain domain = new FluidDomain(4, 3, 3, config);
@@ -85,7 +85,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		var water = new ThermalMaterialDefinition("test:initial/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				BuiltinFluidMaterials.WATER.id(), 300, 0, 0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(1, 2000, 4_180)));
-		var registry = new ThermalRegistry(List.of(water));
+		var registry = ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(water)));
 		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .002F);
 		var domain = new FluidDomain(4, 4, 4, config);
 		restorePhaseTestCarriers(domain, liquids, 2, 2, 2, new float[]{.0625F}, new int[1]);
@@ -124,7 +124,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 					"test:handoff/" + material.id().replace(':', '_'), ThermalMaterialDefinition.CarrierKind.GRANULAR,
 					material.id(), 300, 20, 0,
 					List.of(new ThermalMaterialDefinition.CaloricSegment(250, narrow ? 350 : 600, 1))));
-			var registry = new ThermalRegistry(materials, List.of(), List.of(), "", granular.fingerprint());
+			var registry = ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(materials), List.of(), List.of(), "", granular.fingerprint());
 			var source = new FluidDomain(4, 4, 4, config);
 			source.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 			source.setVolume(2, 2, 2, .001F);
@@ -214,7 +214,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		ThermalMaterialDefinition solid = new ThermalMaterialDefinition("test:thermal/granular",
 				ThermalMaterialDefinition.CarrierKind.GRANULAR, "test:sand", 300.0, 20.0, 1.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 350.0, 10.0)));
-		ThermalRegistry registry = new ThermalRegistry(List.of(liquid, solid), List.of(), List.of(), "", granularFingerprint);
+		ThermalRegistry registry = ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(liquid, solid)), List.of(), List.of(), "", granularFingerprint);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(
 				FluidMaterial.withSurfaceTension("test:liquid", 1.0, "test:miscible", 0.0, 90.0)));
 		GranularEnergyColumn.DepositKey deposit = new GranularEnergyColumn.DepositKey(0, 0, 0);
@@ -741,7 +741,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 						ThermalMaterialDefinition.CarrierKind.GRANULAR, granular.material(material).id(),
 						300.0, 20.0, 1.0,
 						List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0))));
-		return new ThermalRegistry(definitions, List.of(), List.of(), "", granular.fingerprint());
+		return ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(definitions), List.of(), List.of(), "", granular.fingerprint());
 	}
 
 	static void liquidTransportAndHandoffCloseEnergy() {
@@ -750,7 +750,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				ThermalMaterialDefinition.CarrierKind.LIQUID, BuiltinFluidMaterials.WATER.id(),
 				300.0, 0.0, 1_000.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 4_000.0)));
-		ThermalRegistry registry = new ThermalRegistry(List.of(water));
+		ThermalRegistry registry = ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(water)));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 2.0E-3F);
 		FluidDomain domain = new FluidDomain(4, 3, 3, config);
@@ -836,7 +836,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			if (x == 0 || x == 5 || y == 0 || y == 5 || z == 0 || z == 5) domain.setSolid(x, y, z, true);
 			else domain.setVolume(x, y, z, 1.0F);
 		}
-		domain.bindThermal(new ThermalRegistry(List.of(water)), liquids, 293.15);
+		domain.bindThermal(ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(water))), liquids, 293.15);
 		domain.setThermalTemperatureInCell(2, 1, 2, 333.15);
 		for (int step = 0; step < 4; step++) domain = advance(domain);
 		FluidDomain.VelocitySample plume = domain.sampleVelocity(1.25F, 0.75F, 1.25F);
@@ -854,7 +854,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				300.0, 0.0, 1.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 400.0, 4_000.0)));
 		ThermalMaterialDefinition air = new ThermalMaterialDefinition("mmm:thermal/air",
-				ThermalMaterialDefinition.CarrierKind.GAS, mmm.fluid.air.BuiltinGasDefinitions.AIR,
+				ThermalMaterialDefinition.CarrierKind.GAS, mmm.fluid.air.BuiltinGasDefinitions.NITROGEN,
 				mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K, 10.0, 0.025,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0)));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
@@ -864,7 +864,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		domain.setSolidMicroMask(1, 1, 1, 0x22);
 		domain.setVolume(1, 1, 1, 0.5F);
 		domain.setVolume(2, 1, 1, 1.0F);
-		domain.bindThermal(new ThermalRegistry(List.of(water, air)), liquids, 300.0);
+		domain.bindThermal(ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(water, air))), liquids, 300.0);
 		domain.setThermalTemperatureInCell(1, 1, 1, 350.0);
 		domain.setThermalTemperatureInCell(2, 1, 1, 250.0);
 		ThermalTransport.Stats transport = domain.stepThermalOnly(1_000.0);
@@ -883,7 +883,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				ThermalMaterialDefinition.CarrierKind.DEVICE, "test:exchanger_wall",
 				300.0, 0.0, 20.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 500.0, 500.0)));
-		ThermalRegistry registry = new ThermalRegistry(List.of(wall));
+		ThermalRegistry registry = ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(wall)));
 		ThermalStateFunction stateFunction = new ThermalStateFunction(registry);
 		double initialEnergy = stateFunction.internalEnergyAtTemperature(
 				registry.materialHandle(wall.id()), 10.0, Map.of(), 400.0);
@@ -927,7 +927,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				350.0, 0.0, 20.0, List.of(
 						new ThermalMaterialDefinition.CaloricSegment(250.0, 300.0, 1.0),
 						new ThermalMaterialDefinition.CaloricSegment(300.0, 500.0, 1_000.0)));
-		ThermalRegistry segmentedRegistry = new ThermalRegistry(List.of(segmented));
+		ThermalRegistry segmentedRegistry = ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(segmented)));
 		ThermalStateFunction segmentedState = new ThermalStateFunction(segmentedRegistry);
 		FiniteThermalBodyState segmentedBody = new FiniteThermalBodyState(1L,
 				segmentedRegistry.fingerprint(), segmented.id(), mmm.units.Mass.fromKilograms(1.0),
@@ -957,7 +957,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		for (double capacity : new double[]{100, 900, 4_180}) {
 			var material = new ThermalMaterialDefinition("test:scaled_device", ThermalMaterialDefinition.CarrierKind.DEVICE,
 					"test:scaled_device", 300, 0, 1, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 1000, capacity)));
-			var registry = new ThermalRegistry(List.of(material)); var state = new ThermalStateFunction(registry);
+			var registry = ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(material))); var state = new ThermalStateFunction(registry);
 			var body = new FiniteThermalBodyState(0, registry.fingerprint(), material.id(), mmm.units.Mass.fromKilograms(1),
 					state.internalEnergyAtTemperature(0, 1, Map.of(), 400));
 			var plan = FiniteThermalExchange.plan(registry, body, List.of(
@@ -990,7 +990,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			@Override public ChemicalMixtureRecord mixture(int marker) { return null; }
 			@Override public ChemicalRegistry chemicalRegistry() { return null; }
 		};
-		ThermalDomainState thermal = FluidThermalBinding.create(new ThermalRegistry(List.of(definition)),
+		ThermalDomainState thermal = FluidThermalBinding.create(ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(definition))),
 				new FluidMaterialRegistry(List.of(liquid)), 300.0, 3, 2, 1, 1, 0.5F, markers);
 		thermal.resetMarkerTemperature(1, 250.0, markers, thermal.exactEnergy(3));
 		thermal.resetMarkerTemperature(2, 350.0, markers, thermal.exactEnergy(3));
@@ -1031,7 +1031,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.002F));
 			domain.sealDomainBoundary();domain.setVolume(0,0,0,.5F);
 			domain.bindGasRegistry(new mmm.fluid.air.GasRegistry(gasMaterials,ambient));
-			domain.bindThermal(new ThermalRegistry(definitions),new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)),300);
+			domain.bindThermal(ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(definitions)),new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)),300);
 			domain.setThermalTemperatureInCell(0,0,0,400);
 			var batch=mmm.thermal.ThermalCarrierTransport.prepare(domain.thermalState.exchangeCarrierAccess(domain.domainCapabilities.thermalMarkerContext()));
 			double local=0,neighbor=0;
@@ -1055,7 +1055,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				BuiltinFluidMaterials.WATER.id(),293.15,0,.598,List.of(new ThermalMaterialDefinition.CaloricSegment(250,600,4184)));
 		var wall=new ThermalMaterialDefinition("test:thermal/gas_contact_device",ThermalMaterialDefinition.CarrierKind.DEVICE,
 				"test:gas_contact_device",293.15,0,20,List.of(new ThermalMaterialDefinition.CaloricSegment(250,600,500)));
-		var registry=new ThermalRegistry(List.of(water,AIR,wall));
+		var registry=ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(water,NITROGEN,wall)));
 		var config=new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.002F);
 		var domain=new FluidDomain(2,2,2,config);
 		domain.sealDomainBoundary();domain.bindGasRegistry(mmm.fluid.air.BuiltinGasDefinitions.createRegistry());
@@ -1111,7 +1111,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				100, 1.0E-5F, 2.0E-3F);
 		FluidDomain domain = new FluidDomain(4, 3, 3, config);
 		domain.setVolume(0, 1, 1, 1.0F);
-		domain.bindThermal(new ThermalRegistry(List.of(water)), liquids, 293.15);
+		domain.bindThermal(ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(water))), liquids, 293.15);
 		double[] boundaries = new double[4 * 3 * 3 * 6];
 		java.util.Arrays.fill(boundaries, Double.NaN);
 		boundaries[((1 * 3 + 1) * 4) * 6] = 10_000_000.0; // -x domain wall of cell (0,1,1)
@@ -1135,7 +1135,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		var definition=new ThermalMaterialDefinition("test:thermal/boundary",ThermalMaterialDefinition.CarrierKind.LIQUID,
 				BuiltinFluidMaterials.WATER.id(),300,0,.125,List.of(new ThermalMaterialDefinition.CaloricSegment(200,500,10)));
 		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.002F));
-		domain.setVolume(0,0,0,1);domain.bindThermal(new ThermalRegistry(List.of(definition)),new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)),300);
+		domain.setVolume(0,0,0,1);domain.bindThermal(ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(definition))),new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)),300);
 		var boundaries=new double[domain.cellCount*6];Arrays.fill(boundaries,Double.NaN);boundaries[0]=300;
 		domain.replaceThermalBoundaryTemperatures(boundaries);var before=domain.exactInternalEnergy();
 		var quiet=domain.stepThermalOnly(1000);

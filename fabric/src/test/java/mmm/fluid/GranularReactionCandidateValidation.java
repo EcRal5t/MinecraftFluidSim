@@ -380,10 +380,10 @@ public final class GranularReactionCandidateValidation {
                   host.id(),
                   formation ? ExactRational.ofDouble(formationEnergy) : ExactRational.ZERO));
         }
-      materials.add(ThermalValidationSupport.AIR);
+      materials.add(ThermalValidationSupport.NITROGEN);
       d.bindThermal(
-          new ThermalRegistry(
-              materials,
+          ThermalValidationSupport.thermalRegistry(
+              ThermalValidationSupport.thermalMaterials(materials),
               offsets,
               List.of(),
               BuiltinChemicalDefinitions.REGISTRY.fingerprint(),

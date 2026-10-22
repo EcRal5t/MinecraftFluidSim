@@ -125,10 +125,10 @@ final class LiquidCarrierProperties {
 			if (!wet) {
 				liquid[cell] = false;
 				materialHandle[cell] = -1;
-				if (grid.stockCount[cell] == 0) density[cell] = AIR_DENSITY;
+				if (grid.stockCount[cell] == 0) density[cell] = EMPTY_LIQUID_DENSITY;
 				temperatureK[cell] = Double.NaN;
-				viscosityPascalSeconds[cell] = AIR_VISCOSITY;
-				maximumReynolds[cell] = AIR_MAXIMUM_REYNOLDS;
+				viscosityPascalSeconds[cell] = EMPTY_LIQUID_VISCOSITY;
+				maximumReynolds[cell] = DEFAULT_MAXIMUM_REYNOLDS;
 				continue;
 			}
 			String materialId = materials == null ? null : materials.material(handle).id();
@@ -146,7 +146,7 @@ final class LiquidCarrierProperties {
 			viscosityPascalSeconds[cell] = mu;
 			GranularCarrier carrier = granular == null || materialId == null ? null
 					: granular.registry.carrier(granular.registry.carrierHandle(materialId));
-			maximumReynolds[cell] = carrier == null ? AIR_MAXIMUM_REYNOLDS : carrier.maximumReynolds();
+			maximumReynolds[cell] = carrier == null ? DEFAULT_MAXIMUM_REYNOLDS : carrier.maximumReynolds();
 			if (definitions != null && materialId != null && !definitions.viscosityDomainContains(materialId, cellTemperature)) {
 				extrapolatedCells++;
 				if (sampleMaterialId == null) {
@@ -160,7 +160,8 @@ final class LiquidCarrierProperties {
 		built = new Revision(carrierMutation, thermal == null ? null : thermal.thermalRevision());
 	}
 
-	static final double AIR_DENSITY = 1.225;
-	static final double AIR_VISCOSITY = 1.81e-5;
-	static final double AIR_MAXIMUM_REYNOLDS = 100_000;
+	// Finite placeholders for absent liquid. Physical forces require hasLiquid or positive liquid mass.
+	static final double EMPTY_LIQUID_DENSITY = 1.225;
+	static final double EMPTY_LIQUID_VISCOSITY = 1.81e-5;
+	static final double DEFAULT_MAXIMUM_REYNOLDS = 100_000;
 }

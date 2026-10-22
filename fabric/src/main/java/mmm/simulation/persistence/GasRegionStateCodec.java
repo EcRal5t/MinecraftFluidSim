@@ -169,13 +169,6 @@ final class GasRegionStateCodec {
 			}
 			previousSection = ledger.key();
 		}
-		boolean species = data.nodes().stream().flatMap(node -> node.inventory().components().stream())
-				.anyMatch(component -> !component.species().isEmpty())
-				|| data.externalSource().entries().stream().anyMatch(entry -> !entry.species().isEmpty())
-				|| data.escapedSink().entries().stream().anyMatch(entry -> !entry.species().isEmpty());
-		if (species && data.chemicalRegistryFingerprint().isEmpty()) {
-			throw new IllegalArgumentException("Gas species lack chemical registry identity");
-		}
 	}
 
 	private static void writeInventory(DataOutputStream out, GasInventory inventory) throws IOException {

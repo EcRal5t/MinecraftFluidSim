@@ -7,19 +7,58 @@ import java.util.List;
 
 /** One retained selector for M9 definition, state-function and later transport/phase invariants. */
 
-abstract class ThermalValidationSupport {
+public abstract class ThermalValidationSupport {
 	static final String CHEMICAL_FINGERPRINT = "1".repeat(64);
-	static final ThermalMaterialDefinition AIR = new ThermalMaterialDefinition("zztest:thermal/air",
-			ThermalMaterialDefinition.CarrierKind.GAS, mmm.fluid.air.BuiltinGasDefinitions.AIR,
-			mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K, 0, .026,
-			List.of(new ThermalMaterialDefinition.CaloricSegment(150, 1500, 718)));
+	private static final List<ThermalMaterialDefinition> BUILTIN_GAS_MATERIALS=loadBuiltinGasMaterials();
+	public static final ThermalMaterialDefinition NITROGEN=fixtureMaterial(builtinGasMaterials().getFirst(),"nitrogen");
 
-	static List<ThermalMaterialDefinition> thermalMaterials(List<ThermalMaterialDefinition> materials) {
-		if (materials.stream().anyMatch(material -> material.carrierKind() == ThermalMaterialDefinition.CarrierKind.GAS
-				&& material.carrierId().equals(mmm.fluid.air.BuiltinGasDefinitions.AIR))) return materials;
-		var complete = new java.util.ArrayList<>(materials);
-		complete.add(AIR);
+	private static ThermalMaterialDefinition fixtureMaterial(ThermalMaterialDefinition source,String carrier){
+		return new ThermalMaterialDefinition("zztest:thermal/"+carrier,ThermalMaterialDefinition.CarrierKind.GAS,"mmm:"+carrier,
+				source.referenceTemperatureK(),source.referenceSpecificEnergyJPerKg(),source.conductivityWPerMeterK(),source.caloricSegments());
+	}
+	public static List<ThermalMaterialDefinition> builtinGasMaterials(){return BUILTIN_GAS_MATERIALS;}
+	private static List<ThermalMaterialDefinition> loadBuiltinGasMaterials(){
+		var result=new java.util.ArrayList<ThermalMaterialDefinition>();
+		for(String name:List.of("nitrogen","oxygen","co2","water_vapor")){
+			try(var reader=new java.io.InputStreamReader(java.util.Objects.requireNonNull(ThermalValidationSupport.class.getResourceAsStream(
+					"/data/mmm/mmm/thermal_materials/"+name+".json")),java.nio.charset.StandardCharsets.UTF_8)){
+				result.add(mmm.thermal.ThermalDefinitionCodec.decodeMaterial("mmm:"+name,reader));
+			}catch(java.io.IOException failure){throw new java.io.UncheckedIOException(failure);}
+		}
+		return List.copyOf(result);
+	}
+	public static List<ThermalMaterialDefinition> thermalMaterials(List<ThermalMaterialDefinition> materials) {
+		var complete=new java.util.ArrayList<>(materials);
+		var template=materials.stream().filter(m->m.carrierKind()==ThermalMaterialDefinition.CarrierKind.GAS
+				&&m.carrierId().equals("mmm:nitrogen")).findFirst().orElse(null);
+		for(var material:builtinGasMaterials())if(!material.carrierId().equals("mmm:water_vapor")&&complete.stream().noneMatch(
+				m->m.carrierKind()==ThermalMaterialDefinition.CarrierKind.GAS&&m.carrierId().equals(material.carrierId()))){
+			String carrier=material.carrierId().substring(4);
+			complete.add(fixtureMaterial(template==null?material:template,carrier));
+		}
 		return List.copyOf(complete);
+	}
+	public static List<mmm.thermal.ThermalSpeciesOffset> thermalOffsets(List<ThermalMaterialDefinition> materials,List<mmm.thermal.ThermalSpeciesOffset> offsets){
+		var result=new java.util.ArrayList<>(offsets);
+		for(var material:materials)if(material.carrierKind()==ThermalMaterialDefinition.CarrierKind.GAS){
+			String species=switch(material.carrierId()){case "mmm:nitrogen"->"mmm:n2";case "mmm:oxygen"->"mmm:o2";case "mmm:co2"->"mmm:co2";case "mmm:water_vapor"->"mmm:h2o";default->null;};
+			if(species!=null&&result.stream().noneMatch(o->o.hostThermalMaterialId().equals(material.id())&&o.speciesId().equals(species)))
+				result.add(new mmm.thermal.ThermalSpeciesOffset("zztest:offset/"+material.id().replace(':','/')+"/"+species.substring(4),species,material.id(),mmm.chemistry.ExactRational.ZERO));
+		}
+		return List.copyOf(result);
+	}
+	public static mmm.thermal.ThermalRegistry thermalRegistry(List<ThermalMaterialDefinition> materials){return thermalRegistry(materials,List.of(),List.of(),"","");}
+	public static mmm.thermal.ThermalRegistry thermalRegistry(List<ThermalMaterialDefinition> materials,List<mmm.thermal.ThermalSpeciesOffset> offsets,List<mmm.thermal.ThermalPhaseTransition> transitions,String chemistry,String granular){
+		return thermalRegistry(materials,offsets,transitions,List.of(),chemistry,granular,"");
+	}
+	public static mmm.thermal.ThermalRegistry thermalRegistry(List<ThermalMaterialDefinition> materials,List<mmm.thermal.ThermalSpeciesOffset> offsets,List<mmm.thermal.ThermalPhaseTransition> transitions,List<mmm.thermal.ThermalBoundaryDefinition> boundaries,String chemistry,String granular){
+		return thermalRegistry(materials,offsets,transitions,boundaries,chemistry,granular,"");
+	}
+	public static mmm.thermal.ThermalRegistry thermalRegistry(List<ThermalMaterialDefinition> materials,List<mmm.thermal.ThermalSpeciesOffset> offsets,List<mmm.thermal.ThermalPhaseTransition> transitions,List<mmm.thermal.ThermalBoundaryDefinition> boundaries,String chemistry,String granular,String gas){
+		var complete=thermalMaterials(materials);return new mmm.thermal.ThermalRegistry(complete,thermalOffsets(complete,offsets),transitions,boundaries,chemistry,granular,gas);
+	}
+	public static mmm.thermal.ThermalRegistry thermalRegistry(List<ThermalMaterialDefinition> materials,List<mmm.thermal.ThermalSpeciesOffset> offsets,List<mmm.thermal.ThermalPhaseTransition> transitions,List<mmm.thermal.ThermalBoundaryDefinition> boundaries,List<mmm.thermal.FiniteThermalDeviceDefinition> devices,String chemistry,String granular,String gas){
+		var complete=thermalMaterials(materials);return new mmm.thermal.ThermalRegistry(complete,thermalOffsets(complete,offsets),transitions,boundaries,devices,chemistry,granular,gas);
 	}
 
 	/** Explicit raw owners for phase storage, integer partitions and carrier-count budgets. */

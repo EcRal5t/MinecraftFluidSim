@@ -97,8 +97,8 @@ final class GranularMechanicalStage {
 	GranularMechanics.FluidSample samplePrepared(float x,float y,float z,LiquidCarrierProperties prepared,long[] sourceSolid){
 		CarrierProperties properties = carrierProperties(x, y, z,prepared,sourceSolid);
 		if (!(properties.submerged() > 0)) {
-			return new GranularMechanics.FluidSample(false, 0, 0, 0, LiquidCarrierProperties.AIR_DENSITY,
-					LiquidCarrierProperties.AIR_VISCOSITY, LiquidCarrierProperties.AIR_MAXIMUM_REYNOLDS, 0, 0, 0, 0);
+			return new GranularMechanics.FluidSample(false, 0, 0, 0, LiquidCarrierProperties.EMPTY_LIQUID_DENSITY,
+					LiquidCarrierProperties.EMPTY_LIQUID_VISCOSITY, LiquidCarrierProperties.DEFAULT_MAXIMUM_REYNOLDS, 0, 0, 0, 0);
 		}
 		CarrierKernel xKernel = sampleCarrier(domain.mac.velocityX, domain.mac.faceMassX, 0, x, y, z);
 		CarrierKernel yKernel = sampleCarrier(domain.mac.velocityY, domain.mac.faceMassY, 1, x, y, z);
@@ -139,8 +139,8 @@ final class GranularMechanicalStage {
 		// Validity is the intersection of constituent slip ranges, expressed in the mixture's Reynolds scale.
 		return wet > 0 ? new CarrierProperties(wet / support, density / wet, viscosity / wet,
 				maximumSlipDiameter * density / viscosity)
-				: new CarrierProperties(0, LiquidCarrierProperties.AIR_DENSITY,
-						LiquidCarrierProperties.AIR_VISCOSITY, LiquidCarrierProperties.AIR_MAXIMUM_REYNOLDS);
+				: new CarrierProperties(0, LiquidCarrierProperties.EMPTY_LIQUID_DENSITY,
+						LiquidCarrierProperties.EMPTY_LIQUID_VISCOSITY, LiquidCarrierProperties.DEFAULT_MAXIMUM_REYNOLDS);
 	}
 
 	/** The sampled impulse response is sum(w*w*m)/sum(w*m)^2; its reciprocal is the coupled mass. */

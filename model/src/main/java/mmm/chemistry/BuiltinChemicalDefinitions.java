@@ -6,6 +6,7 @@ import java.util.Map;
 /** Frozen built-in strong-electrolyte definition set. */
 public final class BuiltinChemicalDefinitions {
 	public static final String AQUEOUS = "mmm:aqueous";
+	public static final String N2 = "mmm:n2", O2 = "mmm:o2";
 	public static final String H2O = "mmm:h2o";
 	public static final String H_PLUS = "mmm:h_plus";
 	public static final String OH_MINUS = "mmm:oh_minus";
@@ -23,6 +24,8 @@ public final class BuiltinChemicalDefinitions {
 	public static final String HG = "mmm:hg";
 
 	private static final List<ChemicalSpecies> SPECIES = List.of(
+			species(N2, Map.of("N", 2), 0, 28, 0xffb9d3ed),
+			species(O2, Map.of("O", 2), 0, 32, 0xffb9e2ed),
 			species(H2O, Map.of("H", 2, "O", 1), 0, 18, 0xff4e9cff),
 			species(H_PLUS, Map.of("H", 1), 1, 1, 0xffff5b52),
 			species(OH_MINUS, Map.of("H", 1, "O", 1), -1, 17, 0xff596dff),

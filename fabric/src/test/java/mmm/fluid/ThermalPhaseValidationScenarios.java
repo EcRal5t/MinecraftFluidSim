@@ -39,7 +39,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		ThermalPhaseTransition melt = new ThermalPhaseTransition("mmm:phase/ice_water", ice.id(), water.id(),
 				273.15, SolidVolume.SVQ_PER_CUBIC_METER, SolidVolume.SVQ_PER_CUBIC_METER * 917L / 1_000L, ExactRational.of(917),
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 80_000.0, 120_000.0);
-		ThermalRegistry registry = new ThermalRegistry(thermalMaterials(List.of(water, ice)), List.of(), List.of(melt), "", "");
+		ThermalRegistry registry = ThermalValidationSupport.thermalRegistry(thermalMaterials(List.of(water, ice)), List.of(), List.of(melt), "", "");
 		ThermalStateFunction state = new ThermalStateFunction(registry);
 		ThermalStateFunction.EquilibriumState lower = state.equilibriumState(registry.transitionHandle(melt.id()),
 				1.0, Map.of(), 0.0, GasRegistry.STANDARD_PRESSURE_PA);
@@ -57,7 +57,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				ExactRational.of(917), ThermalPhaseTransition.InterfaceRequirement.NONE,
 				List.of(new ThermalPhaseTransition.EquilibriumPoint(3_000_000.0, 273.15),
 						new ThermalPhaseTransition.EquilibriumPoint(4_000_000.0, 273.15)));
-		ThermalRegistry highPressureRegistry = new ThermalRegistry(
+		ThermalRegistry highPressureRegistry = ThermalValidationSupport.thermalRegistry(
 				thermalMaterials(List.of(water, ice)), List.of(), List.of(highPressure), "", "");
 		require(highPressureRegistry.transition(0).minimumPressurePa() == 3_000_000.0
 				&& close(highPressure.equilibriumTemperatureK(3_500_000.0), 273.15),
@@ -83,7 +83,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 140.0)));
 		FluidMaterialRegistry waterAndMercury = new FluidMaterialRegistry(
 				List.of(BuiltinFluidMaterials.WATER, BuiltinFluidMaterials.MERCURY));
-		ThermalRegistry unrelatedTransition = new ThermalRegistry(
+		ThermalRegistry unrelatedTransition = ThermalValidationSupport.thermalRegistry(
 				thermalMaterials(List.of(water, ice, mercury)), List.of(), List.of(highPressure), "", "");
 		FluidDomain mercuryOnly = new FluidDomain(2, 2, 2, config);
 		mercuryOnly.setVolume(0, 0, 0, 0.5F);
@@ -98,7 +98,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				"mmm:phase/mixed_ice_water", ice.id(), water.id(), 273.15,
 				146L, 134L, ExactRational.parse("0.001"),
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 80_000.0, 120_000.0);
-		ThermalRegistry mixedRegistry = new ThermalRegistry(
+		ThermalRegistry mixedRegistry = ThermalValidationSupport.thermalRegistry(
 				thermalMaterials(List.of(water, ice, mercury)), List.of(), List.of(mixedMelt), "", "");
 		for (float fill : new float[]{0.25F, 0.5F}) {
 			FluidDomain mixedCell = new FluidDomain(2, 2, 2, config);
@@ -149,7 +149,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		ThermalPhaseTransition transition = new ThermalPhaseTransition("test:phase/lower_upper",
 				lower.id(), upper.id(), 300.0, 1L, 1L, ExactRational.parse("0.1"),
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 0.0, 200_000.0);
-		ThermalRegistry registry = new ThermalRegistry(thermalMaterials(List.of(lower, upper)), List.of(), List.of(transition), "", "");
+		ThermalRegistry registry = ThermalValidationSupport.thermalRegistry(thermalMaterials(List.of(lower, upper)), List.of(), List.of(transition), "", "");
 
 		FluidMaterial liquid = FluidMaterial.withSurfaceTension("test:liquid", 1.0,
 				"test:miscible", 0.0, 90.0);
@@ -185,9 +185,9 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		coherentCavity.setVolume(0, 0, 0, 0.5F);
 		coherentCavity.bindGasRegistry(BuiltinGasDefinitions.createRegistry());
 		coherentCavity.bootstrapGasState("");
-		var cavityThermal = new ThermalRegistry(thermalMaterials(List.of(lower, upper,
+		var cavityThermal = ThermalValidationSupport.thermalRegistry(thermalMaterials(List.of(lower, upper,
 				new ThermalMaterialDefinition("test:thermal/coherent_cavity_air",
-						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+						ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.NITROGEN,
 						GasRegistry.STANDARD_TEMPERATURE_K, 0.0, 0.026,
 						List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0))))),
 				List.of(), List.of(transition), "", "");
@@ -235,7 +235,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		ThermalPhaseTransition cellTransition = new ThermalPhaseTransition("test:phase/cell_lower_upper",
 				lower.id(), upper.id(), 300.0, batchSvq, batchSvq, ExactRational.parse("0.015625"),
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 0.0, 200_000.0);
-		ThermalRegistry cellRegistry = new ThermalRegistry(
+		ThermalRegistry cellRegistry = ThermalValidationSupport.thermalRegistry(
 				thermalMaterials(List.of(lower, upper)), List.of(), List.of(cellTransition), "", "");
 		FluidDomain pressureHandoff = new FluidDomain(2, 2, 2, config);
 		pressureHandoff.setVolume(0, 0, 0, 1.0F);
@@ -249,7 +249,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		float projectedGaugePressure = 250_000.0F;
 		double continuedMeltingPoint = continuedTransition.equilibriumTemperatureK(
 				GasRegistry.STANDARD_PRESSURE_PA + projectedGaugePressure);
-		pressureHandoff.bindThermal(new ThermalRegistry(
+		pressureHandoff.bindThermal(ThermalValidationSupport.thermalRegistry(
 				thermalMaterials(List.of(lower, upper)), List.of(), List.of(continuedTransition), "", ""),
 				liquids, continuedMeltingPoint + 5.0);
 		// Persist the physical projection supplied to phase equilibrium.
@@ -313,7 +313,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		ThermalPhaseTransition roundoffTransition = new ThermalPhaseTransition("test:phase/roundoff_ice_water",
 				roundoffIce.id(), roundoffWater.id(), 273.15, 146L, 134L, ExactRational.parse("0.001"),
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 10_000.0, 2_000_000.0);
-		ThermalRegistry roundoffRegistry = new ThermalRegistry(
+		ThermalRegistry roundoffRegistry = ThermalValidationSupport.thermalRegistry(
 				thermalMaterials(List.of(roundoffIce, roundoffWater)), List.of(), List.of(roundoffTransition), "", "");
 		FluidSolverConfig roundoffConfig = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 2.0E-3F);
@@ -369,7 +369,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 			var domain = new FluidDomain(3, 3, 3,
 					new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1.0E-5F, .002F));
 			restorePhaseTestCarriers(domain, liquids, new float[]{.125F}, new int[1]);
-			domain.bindThermal(new ThermalRegistry(thermalMaterials(List.of(water, ice)), List.of(), List.of(transition), "", ""), domain.materialRegistry, 200);
+			domain.bindThermal(ThermalValidationSupport.thermalRegistry(thermalMaterials(List.of(water, ice)), List.of(), List.of(transition), "", ""), domain.materialRegistry, 200);
 			long sourceMass = domain.totalMassUnits();
 			var stats = domain.stepInertPhaseChangeOnly(1);
 			require(stats.operations() == 1 && domain.thermalState.coherentPhases().totalMassUnits() == batchUnits
@@ -395,7 +395,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		var transition = new ThermalPhaseTransition("test:owner/freeze", ice.id(), water.id(), 301,
 				batchSvq, batchSvq, ExactRational.parse("1/8"),
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 10000, 3000000);
-		var registry = new ThermalRegistry(thermalMaterials(List.of(water, bath, ice)), List.of(), List.of(transition), "", "");
+		var registry = ThermalValidationSupport.thermalRegistry(thermalMaterials(List.of(water, bath, ice)), List.of(), List.of(transition), "", "");
 		var domain = new FluidDomain(3, 3, 3,
 				new FluidSolverConfig(.5F, 64, 0, .05F, 100, 1.0E-5F, .002F));
 		restorePhaseTestCarriers(domain, fluids, new float[]{.25F, .25F}, new int[]{0, 1});
@@ -480,12 +480,12 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		var ice = condensedIntegerMaterial("test:integer/ice", ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID,
 				"test:ice", -334_000, 2_000);
 		var air = condensedIntegerMaterial("test:integer/air", ThermalMaterialDefinition.CarrierKind.GAS,
-				mmm.fluid.air.BuiltinGasDefinitions.AIR, 0, 718);
+				mmm.fluid.air.BuiltinGasDefinitions.NITROGEN, 0, 718);
 		long batchSvq = SolidVolume.SVQ_PER_CELL / 16;
 		var transition = new ThermalPhaseTransition("test:integer/phase", ice.id(), water.id(), 300,
 				batchSvq, batchSvq, ExactRational.parse("125/16"),
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 10_000, 3_000_000);
-		var thermal = new ThermalRegistry(thermalMaterials(List.of(water, oil, ice, air)), List.of(
+		var thermal = ThermalValidationSupport.thermalRegistry(thermalMaterials(List.of(water, oil, ice, air)), List.of(
 				new ThermalSpeciesOffset("test:integer/wh", BuiltinChemicalDefinitions.H2O, water.id(), ExactRational.ZERO),
 				new ThermalSpeciesOffset("test:integer/ih", BuiltinChemicalDefinitions.H2O, ice.id(), ExactRational.ZERO)),
 				List.of(transition), chemistry.fingerprint(), "");
@@ -554,7 +554,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 					"test:solid", 300, 0, 0, water.caloricSegments());
 			var offsets = List.of(new ThermalSpeciesOffset("test:offset/a", "test:a", phase, ExactRational.ZERO),
 					new ThermalSpeciesOffset("test:offset/b", "test:b", phase, ExactRational.ZERO));
-			var registry = new ThermalRegistry(thermalMaterials(List.of(water, solid)), offsets, List.of(), chemistry.fingerprint(), "");
+			var registry = ThermalValidationSupport.thermalRegistry(thermalMaterials(List.of(water, solid)), offsets, List.of(), chemistry.fingerprint(), "");
 			var domain = new FluidDomain(3, 3, 3, config);
 			domain.bindMaterialRegistry(liquids); domain.bindChemistry(chemistry);
 			domain.bindThermal(registry, liquids, 300);
@@ -577,7 +577,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 					"coherent merge committed an invalid final thermal owner or changed a rejected candidate");
 
 			// A valid merge must book its raw storage loss, including chemical groups.
-			var ordinary = new ThermalRegistry(thermalMaterials(List.of(water, new ThermalMaterialDefinition(phase,
+			var ordinary = ThermalValidationSupport.thermalRegistry(thermalMaterials(List.of(water, new ThermalMaterialDefinition(phase,
 					ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID, "test:solid", 300, 0, 0,
 					water.caloricSegments()))), List.of(
 					new ThermalSpeciesOffset("test:offset/a", "test:a", phase, ExactRational.of(1_000_000)),
@@ -702,7 +702,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 			for(int speciesIndex=0;speciesIndex<16;speciesIndex++)amounts.put(ids.get(speciesIndex),10L);
 			domain.setMarkerChemical(0,amounts);
 			var transition = thermal.transitions().getFirst();
-			var bounded = new ThermalRegistry(thermalMaterials(thermal.materials()), thermal.speciesOffsets(), List.of(
+			var bounded = ThermalValidationSupport.thermalRegistry(thermalMaterials(thermal.materials()), thermal.speciesOffsets(), List.of(
 					new ThermalPhaseTransition(transition.id(), transition.lowerEnergyMaterialId(), transition.upperEnergyMaterialId(),
 							300.0, transition.lowerVolumeSvqPerBatch() / divisor, transition.upperVolumeSvqPerBatch() / divisor,
 							transition.massKgPerBatch().divide(divisor), transition.interfaceRequirement(), 0, 200_000)),
@@ -730,7 +730,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		java.util.ArrayList<ThermalMaterialDefinition> materials = new java.util.ArrayList<>();
 		materials.add(water); materials.add(ice);
 		materials.add(new ThermalMaterialDefinition("test:thermal/composition_air",
-				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.NITROGEN,
 				300.0, 0.0, 0.025,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 718.0))));
 		for (int handle = 0; handle < granular.materials().size(); handle++) materials.add(
@@ -751,7 +751,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				"test:phase/composition_ice_water", ice.id(), water.id(), 300.0,
 				batchSvq, batchSvq, ExactRational.parse("15.625"),
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 0.0, 200_000.0);
-		return new ThermalRegistry(thermalMaterials(materials), offsets, List.of(transition),
+		return ThermalValidationSupport.thermalRegistry(thermalMaterials(materials), offsets, List.of(transition),
 				chemistry.fingerprint(), granular.fingerprint());
 	}
 
@@ -799,7 +799,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				lower.id(), upper.id(), 300.0, batchSvq * 2L, batchSvq,
 				ExactRational.parse("0.015625"), ThermalPhaseTransition.InterfaceRequirement.NONE,
 				0.0, 10_000_000.0);
-		ThermalRegistry registry = new ThermalRegistry(thermalMaterials(List.of(lower, upper)), List.of(), List.of(transition), "", "");
+		ThermalRegistry registry = ThermalValidationSupport.thermalRegistry(thermalMaterials(List.of(lower, upper)), List.of(), List.of(transition), "", "");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1.0F, 0.0F, 0.05F,
 				100, 1.0E-5F, 2.0E-3F);
 		FluidDomain domain = new FluidDomain(2, 2, 2, config);

@@ -48,9 +48,9 @@ public final class ChemicalReactionCandidateValidation {
 			var fixture = new Fixture(registry, List.of(initial), new int[]{0}, null, .5F);
 			if (heat) {
 				var air = new ThermalMaterialDefinition("test:air", ThermalMaterialDefinition.CarrierKind.GAS,
-						mmm.fluid.air.BuiltinGasDefinitions.AIR, 300, 0, .025, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 2000, 718)));
+						mmm.fluid.air.BuiltinGasDefinitions.NITROGEN, 300, 0, .025, List.of(new ThermalMaterialDefinition.CaloricSegment(1, 2000, 718)));
 				var offsets = registry.species().stream().map(value -> new ThermalSpeciesOffset("test:offset/" + value.id().substring(5), value.id(), material, ExactRational.ZERO)).toList();
-				fixture.domain.bindThermal(new ThermalRegistry(List.of(identityThermalMaterial(material, liquid), air), offsets, List.of(), registry.fingerprint(), ""), fixture.domain.materialRegistry, 300);
+				fixture.domain.bindThermal(ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(identityThermalMaterial(material, liquid), air)), offsets, List.of(), registry.fingerprint(), ""), fixture.domain.materialRegistry, 300);
 			}
 			long mass = fixture.totalMass(); var energy = heat ? fixture.domain.exactInternalEnergy() : SignedDyadic.ZERO;
 			require(fixture.step().changedStocks() == 1 && !fixture.scheduler.hasDirtyCells(), "Transient 17-species work vector blocked its legal final stock");
@@ -72,9 +72,9 @@ public final class ChemicalReactionCandidateValidation {
 			var liquids=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension(liquid,1000,"test:cell/miscible",0,90)));
 			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.002F));
 			domain.bindMaterialRegistry(liquids);domain.setVolume(1,1,1,.125F);domain.bindChemistry(chemistry);
-			var air=new ThermalMaterialDefinition("test:cell/air",ThermalMaterialDefinition.CarrierKind.GAS,mmm.fluid.air.BuiltinGasDefinitions.AIR,300,0,.025,
+			var air=new ThermalMaterialDefinition("test:cell/air",ThermalMaterialDefinition.CarrierKind.GAS,mmm.fluid.air.BuiltinGasDefinitions.NITROGEN,300,0,.025,
 					List.of(new ThermalMaterialDefinition.CaloricSegment(150,800,718)));
-			var thermal=new ThermalRegistry(List.of(identityThermalMaterial(material,liquid),air),List.of(
+			var thermal=ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(identityThermalMaterial(material,liquid),air)),List.of(
 					new ThermalSpeciesOffset("test:cell/oa",a,material,ExactRational.ZERO),
 					new ThermalSpeciesOffset("test:cell/ob",b,material,unavailable?ExactRational.of(1_000_000_000):ExactRational.ZERO)),List.of(),chemistry.fingerprint(),"");
 			domain.bindThermal(thermal,liquids,300);
@@ -160,8 +160,8 @@ public final class ChemicalReactionCandidateValidation {
 		var fluids=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension(liquid,1,"test:heat/miscible",0,90)));
 		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1,0,.05F,100,1e-5F,.002F));
 		domain.bindMaterialRegistry(fluids);domain.setVolume(0,0,0,1);domain.bindChemistry(chemistry);domain.setMarkerChemical(0,Map.of(a,ChemicalLimits.QUANTA_PER_MOL));
-		var thermal=new ThermalRegistry(List.of(new ThermalMaterialDefinition(material,ThermalMaterialDefinition.CarrierKind.LIQUID,liquid,300,0,0,List.of(new ThermalMaterialDefinition.CaloricSegment(200,500,10))),
-				new ThermalMaterialDefinition("test:heat/air",ThermalMaterialDefinition.CarrierKind.GAS,mmm.fluid.air.BuiltinGasDefinitions.AIR,300,0,.025,List.of(new ThermalMaterialDefinition.CaloricSegment(150,800,718)))),
+		var thermal=ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(new ThermalMaterialDefinition(material,ThermalMaterialDefinition.CarrierKind.LIQUID,liquid,300,0,0,List.of(new ThermalMaterialDefinition.CaloricSegment(200,500,10))),
+				new ThermalMaterialDefinition("test:heat/air",ThermalMaterialDefinition.CarrierKind.GAS,mmm.fluid.air.BuiltinGasDefinitions.NITROGEN,300,0,.025,List.of(new ThermalMaterialDefinition.CaloricSegment(150,800,718))))),
 				List.of(new ThermalSpeciesOffset("test:heat/oa",a,material,ExactRational.ZERO),new ThermalSpeciesOffset("test:heat/ob",b,material,ExactRational.of(-100))),List.of(),chemistry.fingerprint(),"");
 		domain.bindThermal(thermal,fluids,300);var energy=domain.exactInternalEnergy();
 		require(domain.domainStep.runThermalReactionPhaseAxis(false,0).chemistry().changedStocks()==1&&domain.exactInternalEnergy().equals(energy)

@@ -416,12 +416,6 @@ final class DomainStep {
 			}
 		}
 	}
-	CarrierProperties granularCarrierProperties(int cell) {
-		LiquidCarrierProperties properties = domain.domainPhaseInventory.derivedCarrierState();
-		return properties.hasLiquid(cell)
-				? new CarrierProperties(properties.density(cell), properties.viscosityPascalSeconds(cell))
-				: new CarrierProperties(LiquidCarrierProperties.AIR_DENSITY, LiquidCarrierProperties.AIR_VISCOSITY);
-	}
 	static float trilinearWeight(int ox, int oy, int oz, float fx, float fy, float fz) {
 		return (ox == 0 ? 1.0F - fx : fx) * (oy == 0 ? 1.0F - fy : fy) * (oz == 0 ? 1.0F - fz : fz);
 	}

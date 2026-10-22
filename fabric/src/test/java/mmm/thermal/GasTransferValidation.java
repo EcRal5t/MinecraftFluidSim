@@ -24,11 +24,49 @@ public final class GasTransferValidation {
 		thermalSeriesPorts();
 		unequalTemperatureBlowdown();
 		ambientAndLiquidSeal();
+		productionMixturesExchangeHeatAndSpecies();
+	}
+
+	private static void productionMixturesExchangeHeatAndSpecies() {
+		var gas = BuiltinGasDefinitions.createRegistry();
+		var thermal = mmm.fluid.ThermalValidationSupport.thermalRegistry(
+				mmm.fluid.ThermalValidationSupport.builtinGasMaterials());
+		var model = new GasThermalModel(thermal, gas);
+		var network = new AirNetwork(gas);
+		var hot = gas.createAtState(.125, 1.2 * GasRegistry.STANDARD_PRESSURE_PA, 900, gas.ambient());
+		var wet = gas.createAtState(.125, .8 * GasRegistry.STANDARD_PRESSURE_PA, 330, List.of(
+				new GasRegistry.AmbientFraction(BuiltinGasDefinitions.NITROGEN, ExactRational.parse("1/2")),
+				new GasRegistry.AmbientFraction(BuiltinGasDefinitions.OXYGEN, ExactRational.parse("3/10")),
+				new GasRegistry.AmbientFraction(BuiltinGasDefinitions.WATER_VAPOR, ExactRational.parse("3/20")),
+				new GasRegistry.AmbientFraction(BuiltinGasDefinitions.CO2, ExactRational.parse("1/20"))));
+		network.addNode(.125, 0); network.addNode(.125, 0);
+		network.commitPhaseSource(1, hot); network.commitPhaseSource(2, wet);
+		double[] energies = {model.internalEnergyAtTemperature(hot, 900), model.internalEnergyAtTemperature(wet, 330)};
+		var initialEnergy = SignedDyadic.of(energies[0]).add(SignedDyadic.of(energies[1]));
+		var audit = new ThermalAuditState(ThermalAuditLedger.initialized(initialEnergy));
+		var energy = new GasEnergyStore(model, 300, audit, network);
+		energy.replaceNodeEnergies(energies);
+		var fixture = new Fixture(network, energy, audit);
+		var initialInventory = network.sealedInventory();
+		network.addOrMergeEdge(1, 2, .001, .65);
+		for (int step = 0; step < 80; step++) {
+			fixture.step(.025); fixture.checkAudit();
+			require(initialInventory.equals(network.sealedInventory()),
+					"Mixed-gas port changed component quantity, mass, species or residual");
+		}
+		double deltaP = energy.gaugePressure(1, network) - energy.gaugePressure(2, network);
+		require(Math.abs(deltaP) < 10 && energy.temperature(1, network) < 900
+				&& energy.temperature(2, network) > 330, "Production mixtures did not exchange pressure and enthalpy");
+		require(Math.abs(energy.exactGasEnergy().subtract(initialEnergy).toDouble()) < 1e-7,
+				"Closed production mixtures changed total internal energy");
+		System.out.printf("  four-component hot/wet flow: deltaP=%.6g Pa, T=%.6f/%.6f K, energy error=%.6g J%n",
+				deltaP, energy.temperature(1, network), energy.temperature(2, network),
+				energy.exactGasEnergy().subtract(initialEnergy).toDouble());
 	}
 
 	/** Independent ideal-gas entropy integrals, including a heat-capacity transition. */
 	private static void pressureVolumeIsentropes() {
-		var gas = new GasRegistry(List.of(new GasComponentDefinition("test:gas", 1, 1, List.of(), List.of())),
+		var gas = new GasRegistry(List.of(new GasComponentDefinition("test:gas", 1, List.of(), List.of())),
 				List.of(new GasRegistry.AmbientFraction("test:gas", ExactRational.ONE)));
 		var inventory = gas.createAmbient(1_000_000_000L);
 		double volume0 = .75, temperature0 = 300;
@@ -201,7 +239,7 @@ public final class GasTransferValidation {
 	}
 
 	private static Fixture thermal(double... volumes) {
-		var gas = new GasRegistry(List.of(new GasComponentDefinition("test:gas", 1, 1, List.of(), List.of())),
+		var gas = new GasRegistry(List.of(new GasComponentDefinition("test:gas", 1, List.of(), List.of())),
 				List.of(new GasRegistry.AmbientFraction("test:gas", ExactRational.ONE)));
 		var thermal = new ThermalRegistry(List.of(new ThermalMaterialDefinition("test:thermal/gas",
 				ThermalMaterialDefinition.CarrierKind.GAS, "test:gas", 300, 0, 0,

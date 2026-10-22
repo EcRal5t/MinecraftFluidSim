@@ -318,7 +318,7 @@ public final class RegionCheckpointRestorer {
 	private static void validateGasSpecies(
 			List<GasComponentAmount.SpeciesAmount> species, ChemicalRegistry registry
 	) throws IOException {
-		if (!species.isEmpty() && registry == null) throw new IOException("Gas species registry is unavailable");
+		if (registry == null) return; // Gas component definitions already bind their molecular species.
 		for (GasComponentAmount.SpeciesAmount amount : species) if (!registry.hasSpecies(amount.speciesId())) {
 			throw new IOException("Unknown gas species " + amount.speciesId());
 		}

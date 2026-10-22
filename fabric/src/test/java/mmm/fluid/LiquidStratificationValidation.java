@@ -91,7 +91,7 @@ final class LiquidStratificationValidation {
 		domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
 		var caloric = new ThermalMaterialDefinition("test:thermal/isolated_buoyancy", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				"mmm:water", T_REF, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 600, 4184)));
-		domain.bindThermal(new ThermalRegistry(List.of(caloric)), LIQUIDS, T_REF + 20);
+		domain.bindThermal(ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(caloric))), LIQUIDS, T_REF + 20);
 		var energy = domain.exactInternalEnergy();
 		domain.domainFlowFields.preparePhysicalState();
 		domain.bodyForceStage.applyGravity(config.timeStep());
@@ -291,11 +291,11 @@ final class LiquidStratificationValidation {
 		var water = new ThermalMaterialDefinition("test:thermal/stratification", ThermalMaterialDefinition.CarrierKind.LIQUID,
 				"mmm:water", T_REF, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 600, 4184)));
 		var air = new ThermalMaterialDefinition("test:thermal/stratification_air", ThermalMaterialDefinition.CarrierKind.GAS,
-				"mmm:air", T_REF, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(150, 1500, 718)));
+				"mmm:nitrogen", T_REF, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(150, 1500, 718)));
 		var offsets = List.of(new ThermalSpeciesOffset("test:offset/water", BuiltinChemicalDefinitions.H2O, water.id(), ExactRational.ZERO),
 				new ThermalSpeciesOffset("test:offset/sodium", BuiltinChemicalDefinitions.NA_PLUS, water.id(), ExactRational.ZERO),
 				new ThermalSpeciesOffset("test:offset/chloride", BuiltinChemicalDefinitions.CL_MINUS, water.id(), ExactRational.ZERO));
-		domain.bindThermal(new ThermalRegistry(List.of(water, air), offsets, List.of(), CHEMISTRY.fingerprint(), ""), domain.materialRegistry, T_REF);
+		domain.bindThermal(ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(List.of(water, air)), offsets, List.of(), CHEMISTRY.fingerprint(), ""), domain.materialRegistry, T_REF);
 		for (int z = 1; z < 3; z++) for (int y = 1; y < 5; y++) for (int x = 1; x < 5; x++) {
 			boolean bottom = y <= 2;
 			if (perturb && (y == 2 || y == 3) && x <= 2) bottom = !bottom;

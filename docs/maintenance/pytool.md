@@ -31,3 +31,8 @@
 示例中历史 `build/hotspot-optimization/` 数据的本地归档与恢复位置见 [构建输出管理](build-outputs.md#本地历史资料)。
 
 `compare_step_profiles.py` 支持历史完整步程序及 `CompositeStepBenchmark` 的 CSV，分别列出每个独立 JVM 的均值。组合场景的 `--check-trajectory` 还比较调用次数、反应/沉积/接触计数、固体体积和精确内能等观测列；它不证明完整状态逐位一致。
+
+- **[gas_caloric_materials.py](../../pytool/gas_caloric_materials.py)**
+  - 用途：从 NIST Shomate 积分和 JANAF 气态水焓表生成 N₂、O₂、H₂O、CO₂ 的 100–1700 K 区间平均 Cv；统一采用模型摩尔质量 0.028/0.032/0.018/0.044 kg/mol。
+  - 运行方式：`uv run pytool/gas_caloric_materials.py`
+  - 导热率采用 NIST Huber 300 K 常数近似；CO₂ 在 298 K 以下沿用 298 K 的 Cp。同一生成过程按模型摩尔质量与相图参考点推导水蒸气批次体积，参考能保持常压潜焓 2256700 J/kg，CO₂ 参考能及原物种偏移保持。

@@ -114,6 +114,16 @@
 完整拓扑始终保留各微盒归属，压力查询的整格限制见[压力与热耦合](#压力与热耦合)。
 离线格级对照入口为 `AirCavityScanner`。
 
+## 组分与环境配方
+
+气腔采用 N₂、O₂、H₂O 蒸气、CO₂ 四种理想气体组分。“空气”是环境配方及场景名称。普通新增气体通过组分、化学映射和热材料定义接入，共用现有拓扑、孔流、导热、设备和存档实现。
+
+[BuiltinGasDefinitions](../../model/src/main/java/mmm/fluid/air/BuiltinGasDefinitions.java) 集中维护默认配方；[GasRegistry](../../model/src/main/java/mmm/fluid/air/GasRegistry.java) 按摩尔分数（等价于标准体积分数）生成库存。默认环境是项目固定干气预设：N₂ 78.958%、O₂ 21%、CO₂ 0.042%、H₂O 0，温度 293.15 K、绝对压力 101325 Pa。该预设采用常见氧气比例与固定 420 ppm CO₂，氮气补足剩余份额；省略氩气及其他微量气体，适用于当前四组分玩法。
+
+湿配方先指定水蒸气摩尔分数，干气配方同比缩放到剩余份额，再由共同生成入口按体积、总压和温度求数量。采用相对湿度时，水蒸气分数为现有饱和蒸气压乘相对湿度、再除以指定总压。几何刷新、温度变化、保存恢复及普通推进保留已有组成；环境来源只在明确初始化或实际交换时创建。
+
+模型摩尔质量 N₂/O₂/H₂O/CO₂ 分别为 0.028/0.032/0.018/0.044 kg/mol，保持 1 μmol 对应整数质量单位。标准密度统一由 `p₀ M/(R T₀)` 推导，`R=8.31446261815324 J/(mol·K)`。气体热容采用 `Cv=(Cp,m−R)/M` 的区间平均值，资料和近似见[空气成分化要求](../review/air-mixture-requirements.md)及[热学参考](thermal-state.md)。
+
 ## 权威数据
 
 - 有限节点由固定开放分量归属和最小干微盒编号标识，节点编号是本次拓扑内的稠密索引。
@@ -124,7 +134,7 @@
 气体质量与质量余量使用[统一质量整数](system-overview.md#units)，拆并转移精确闭合。压力、密度和温度由实际库存、容量与内能派生。
 液塞的惯性位移同时受两侧气腔的压缩与膨胀反力影响，评价位移时采用实际几何容量、液塞质量与热状态方程对应的压缩功。封闭气腔允许液塞回弹，液封和组分隔离在整个往返过程中保持。
 环境节点按世界定义提供组成，标准态为 `101325 Pa`、`293.15 K`。
-环境比例精确和为一，整数库存按共同权重分配。
+环境比例精确和为一，整数库存按共同权重分配。连续环境来源按已记源账的累计标准体积计算单调份额的前后差，组分、质量和 μmol 同步累积；同批多个新气腔也沿同一累计位置生成，微量组分可跨小流量逐步进入。
 
 注册表声明每个组分的密度、允许物种和默认组成。
 相变、拓扑、源汇和恢复均检查物种隶属关系；挥发物种还须具有气相热学参考能。
@@ -217,6 +227,8 @@
 
 ```text
 p_abs = P0 * (Vstd / Vavailable) * (T / T0)
+p_i = P0 * (Vstd_i / Vavailable) * (T / T0)
+p_abs = sum_i(p_i)
 p_gauge = p_abs - P0
 rho_gas = total_mass_kg / Vavailable
 R_total = P0 * Vstd / T0
@@ -263,7 +275,7 @@ p = EOS(continuous_inventory(q_standard), U(q_standard), actual_capacity)
 
 连续工作状态按原组分的实数质量份额建立。有限供体沿等熵排气曲线计算剩余温度和内能，移出的总能量作为同一笔焓流进入接收腔；接收腔由原库存与流入组分共同反演温度。环境供体保持世界规定的温度、组成和绝对压力，环境接收端保持标准绝对压力。
 
-`GasOrificeFlow.solveThermalPort` 在可用供体范围内求连续流量，终止尺度来自标准体积与整数质量的可执行分辨率。局部试算直接读取两腔的状态函数；求根完成后，`GasInventory.partitionTransport` 才生成实际整数转移，余量留在供体。`GasEnergyStore.planFlow` 从这份实际供体余量重新计算等熵排气能量，将同一能量写入接收端或环境热汇，并与实际物质转移共同提交。连续流量与最终库存之间的差异按编码分辨率评价。
+`GasOrificeFlow.solveThermalPort` 在可用供体范围内求连续流量，终止尺度来自标准体积与整数质量的可执行分辨率。有限供体的整数输运使用共同系统舍入，舍入位置由已提交库存和源汇派生，各列总量精确闭合，避免逐步向下取整持续截留微量组分。量化误差按标准体积、质量和物种各自的编码尺度评价。局部试算直接读取两腔的状态函数；求根完成后，`GasInventory.partitionTransport` 才生成实际整数转移，余量留在供体。`GasEnergyStore.planFlow` 从这份实际供体余量重新计算等熵排气能量，将同一能量写入接收端或环境热汇，并与实际物质转移共同提交。连续流量与最终库存之间的差异按编码分辨率评价。
 
 每个孔口提交后，下一个孔口读取已更新状态，流入气体可继续沿串联气路流动。规范孔口顺序及正逆半步组合保持插孔顺序和边端点方向的一致性；多孔组合保留时间一阶分步误差。每次交接预检实际温度、EOS、物质与热账。
 
@@ -276,7 +288,7 @@ p = EOS(continuous_inventory(q_standard), U(q_standard), actual_capacity)
 
 ## 持久化
 
-热区域完整保存气体组分、节点内能、微盒归属和审计。
+热区域完整保存气体组分、节点内能、微盒归属和审计。气体注册表指纹绑定组分及分子物种定义；气体物种可独立于液体化学功能保存。区域启用化学时，现有化学指纹和物种表继续同时绑定。环境来源的累计进度来自源账，恢复后继续沿原组成和内能推进。
 `pieceNodeOrdinal` 每格八项，`-1` 为无干区、`0` 为环境、正数为规范有限节点。
 运行状态按固定开放分量保存节点归属，捕获存盘状态时展开这份微盒索引。
 节点按最小干微盒编号排序，库存和内能采用同一顺序。
@@ -291,5 +303,5 @@ p = EOS(continuous_inventory(q_standard), U(q_standard), actual_capacity)
 后续库存来自真实孔流、相变或拓扑来源。
 
 气体默认物种组成使用 `concentrationMolPerStandardCubicMeter`，以标准态 mol/m³ 表示，生成库存时转换为整数 μmol。
-注册表快照分别以 `StandardDensityKgPerM3Bits`、`DefaultResidualDensityKgPerM3Bits`、`ConcentrationMolPerStandardM3` 保存标准态密度、质量余量密度与物种浓度；标准条件使用 `StandardPressurePaBits`、`StandardTemperatureKBits`。
+注册表快照以 `StandardDensityKgPerM3Bits`、`ConcentrationMolPerStandardM3`、`MassUnitsPerQuantum` 保存标准态密度、物种浓度与每物种量子的整数质量；世界定义组检查该质量与化学注册表一致。来源按实际生成物种的质量从组分总质量扣出有符号余量。标准条件使用 `StandardPressurePaBits`、`StandardTemperatureKBits`。
 标准体积按 nanos 编码取最近整数，低于半个 nanos 的环境截留量产生零库存；误差为每次不足 0.5×10⁻⁹ 标准 m³。

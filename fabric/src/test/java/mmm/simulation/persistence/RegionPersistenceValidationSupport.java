@@ -169,7 +169,7 @@ abstract class RegionPersistenceValidationSupport {
 				300.0, 50.0, 1.0,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 4_200.0))));
 		definitions.add(new ThermalMaterialDefinition("mmm:thermal/persistence_air",
-				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.AIR,
+				ThermalMaterialDefinition.CarrierKind.GAS, BuiltinGasDefinitions.NITROGEN,
 				GasRegistry.STANDARD_TEMPERATURE_K, 0.0, 0.025,
 				List.of(new ThermalMaterialDefinition.CaloricSegment(150.0, 1_500.0, 718.0))));
 		definitions.add(new ThermalMaterialDefinition("mmm:thermal/persistence_device",
@@ -182,8 +182,8 @@ abstract class RegionPersistenceValidationSupport {
 					300.0, 20.0, 1.0,
 					List.of(new ThermalMaterialDefinition.CaloricSegment(200.0, 500.0, 10.0))));
 		}
-		return granular == null ? new ThermalRegistry(definitions)
-				: new ThermalRegistry(definitions, List.of(), List.of(), "", granular.fingerprint());
+		return granular == null ? mmm.fluid.ThermalValidationSupport.thermalRegistry(definitions)
+				: mmm.fluid.ThermalValidationSupport.thermalRegistry(definitions, List.of(), List.of(), "", granular.fingerprint());
 	}
 
 	static void assertGranularStateEquals(GranularStateSnapshot expected, GranularStateSnapshot actual) {

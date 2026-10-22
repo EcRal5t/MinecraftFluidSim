@@ -132,7 +132,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		for(int support:new int[]{1,128}){var key=new LiquidCellInventory.Key(support==1?0:7,0,support);edits.add(new LiquidCellInventory.Edit(key,new LiquidCellInventory.Stock(key,SignedDyadic.of(.125),d.unitScale.massUnitsForNormalized(125),null,0)));}
 		d.liquidCells.planEdits(edits).commit();d.markCellInventoryChanged();
 		var caloric=new ThermalMaterialDefinition("test:thermal/cut",ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water",300,0,1000,List.of(new ThermalMaterialDefinition.CaloricSegment(1,600,4000)));
-		d.bindThermal(new ThermalRegistry(thermalMaterials(List.of(caloric))),new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)),300);
+		d.bindThermal(ThermalValidationSupport.thermalRegistry(thermalMaterials(List.of(caloric))),new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)),300);
 		for(int ordinal=0;ordinal<2;ordinal++)d.thermalState.resetMarkerTemperature(ordinal,ordinal==0?270:350,d.domainCapabilities.thermalMarkerContext(),d.exactInternalEnergy());
 		var before=d.liquidCells.snapshot();d.stepThermalOnly(1000);
 		require(d.liquidCells.snapshot().rows().equals(before.rows()),"Disjoint cut supports conducted through a cell-average shortcut");
@@ -168,7 +168,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		for(int z=0;z<nz;z++)for(int y=0;y<ny;y++)for(int x=0;x<nx;x++)d.setVolume(x,y,z,1);
 		var caloric=new ThermalMaterialDefinition("test:thermal/advection",ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water",300,reference,conductivity,
 				segmented?List.of(new ThermalMaterialDefinition.CaloricSegment(1,300,1000),new ThermalMaterialDefinition.CaloricSegment(300,600,100000)):List.of(new ThermalMaterialDefinition.CaloricSegment(1,600,4000)));
-		d.bindThermal(new ThermalRegistry(thermalMaterials(List.of(caloric))),new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)),300);return d;
+		d.bindThermal(ThermalValidationSupport.thermalRegistry(thermalMaterials(List.of(caloric))),new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)),300);return d;
 	}
 	static void insulatingCellsIgnoreUnrelatedFlux() {
 		for (double dt : new double[] {0.05, 1000}) {

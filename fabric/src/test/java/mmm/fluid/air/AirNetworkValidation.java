@@ -22,6 +22,7 @@ public final class AirNetworkValidation {
 		validateSplitMergeVentLedger();
 		validateAmbientInteraction();
 		validateComponentTransport();
+		validateAirRecipeAndTraceTransport();
 		validateExactTopologyPartition();
 		validateSplitPreflightsAllOwners();
 		validatePublicMutatorsPreflightAllOwners();
@@ -94,7 +95,7 @@ public final class AirNetworkValidation {
 	private static void validateEquationOfState() {
 		AirNetwork network = new AirNetwork();
 		int node = network.addNode(8.0, 8.0);
-		check(network.gaugePressure(node) == 0.0 && network.density(node) == mmm.units.Mass.kilograms(mmm.units.Mass.fromKilograms(8 * AirNetwork.AIR_DENSITY)) / 8,
+		check(network.gaugePressure(node) == 0.0 && network.density(node) == network.registry().createAmbient(8_000_000_000L).totalMass() / 8,
 				"ambient-balanced cavity must start at the registry standard state");
 		network.updateAvailableVolume(node, 4.0);
 		checkRelative(network.gaugePressure(node), AirNetwork.REFERENCE_PRESSURE, "halved volume must double absolute pressure");
@@ -386,12 +387,12 @@ public final class AirNetworkValidation {
 
 	private static void validateComponentTransport() {
 		GasRegistry registry = new GasRegistry(List.of(
-				new GasComponentDefinition("test:alpha", 1.0, 0.25,
+				new GasComponentDefinition("test:alpha", 1.0,
 						List.of("test:a"),
-						List.of(new GasComponentDefinition.DefaultSpecies("test:a", ExactRational.of(3_000L)))),
-				new GasComponentDefinition("test:beta", 2.0, 0.5,
+						List.of(new GasComponentDefinition.DefaultSpecies("test:a", ExactRational.of(3_000L), 1))),
+				new GasComponentDefinition("test:beta", 2.0,
 						List.of("test:b"),
-						List.of(new GasComponentDefinition.DefaultSpecies("test:b", ExactRational.of(6_000L))))),
+						List.of(new GasComponentDefinition.DefaultSpecies("test:b", ExactRational.of(6_000L), 1)))),
 				List.of(new GasRegistry.AmbientFraction("test:alpha", ExactRational.parse("1/3")),
 						new GasRegistry.AmbientFraction("test:beta", ExactRational.parse("2/3"))));
 		AirNetwork network = new AirNetwork(registry);
@@ -413,6 +414,42 @@ public final class AirNetworkValidation {
 				.equals(List.of("test:alpha", "test:beta")), "component transport lost stable identities");
 		check(network.auditClosed(), "component transport did not close mass/species audit");
 		validateTinyPartitionColumns();
+	}
+
+	private static void validateAirRecipeAndTraceTransport() {
+		var registry = BuiltinGasDefinitions.createRegistry();
+		var bulk = registry.createAmbient(1_000_000L);
+		check(bulk.component(BuiltinGasDefinitions.WATER_VAPOR) == null && bulk.components().size() == 3, "Dry-air recipe has incorrect components");
+		var wet = registry.createAtState(.125, GasRegistry.STANDARD_PRESSURE_PA, GasRegistry.STANDARD_TEMPERATURE_K,
+				BuiltinGasDefinitions.airRecipe(ExactRational.parse(".02")));
+		check(wet.standardVolumeNanos() == 125_000_000 && wet.component(BuiltinGasDefinitions.WATER_VAPOR).standardVolumeNanos() == 2_500_000,
+				"Wet-air recipe changed total pressure instead of replacing dry partial pressure");
+		AirNetwork sources = new AirNetwork(registry); int node = sources.addNode(1, 0);
+		for (int i = 1; i <= 10_000; i++) {
+			sources.setStandardVolume(node, i * 100e-9);
+			if (i % 1000 == 0) sources = AirNetwork.fromRuntimeSnapshot(sources.runtimeSnapshot());
+		}
+		check(sources.inventory(node).equals(bulk) && sources.auditClosed(), "Tiny repeated ambient sources lost trace components or their chemical quanta");
+		for (var component : bulk.components()) {
+			long chemicalMass = 0;
+			for (var species : component.species()) {
+				var definition = registry.component(component.componentId()).defaultSpeciesConcentrations().stream()
+						.filter(value -> value.speciesId().equals(species.speciesId())).findFirst().orElseThrow();
+				chemicalMass += species.amountQuanta() * definition.massUnitsPerQuantum();
+			}
+			check(component.massUnits() == chemicalMass + component.massResidualUnits(), "Ambient source double-counted its chemical mass residual");
+		}
+		AirNetwork flowing = new AirNetwork(registry); int from = flowing.addNode(1, 1.1), to = flowing.addNode(1, .9);
+		flowing.addOrMergeEdge(from, to, 1e-8, .65);
+		var original = flowing.sealedInventory();
+		long initialCO2 = flowing.inventory(to).component(BuiltinGasDefinitions.CO2).standardVolumeNanos();
+		for (int i = 0; i < 10_000; i++) {
+			flowing.stepEdges(.05);
+			if (i % 1000 == 0) flowing = AirNetwork.fromRuntimeSnapshot(flowing.runtimeSnapshot());
+		}
+		long co2Moved = flowing.inventory(to).component(BuiltinGasDefinitions.CO2).standardVolumeNanos() - initialCO2;
+		check(co2Moved > 100 && flowing.sealedInventory().equals(original) && flowing.auditClosed(), "Repeated low-flow ports retained their trace CO2 or changed conserved columns");
+		System.out.printf("  dry-air trace transport: 10,000 tiny ambient sources match bulk; 10,000 low-flow steps moved %d CO2 nanos%n", co2Moved);
 	}
 
 	private static void validateTinyPartitionColumns() {
@@ -454,7 +491,7 @@ public final class AirNetworkValidation {
 					"production tiny topology split failed its exact mass ledger");
 		}
 		GasInventory subQuantumMass = new GasInventory(List.of(
-				new GasComponentAmount(BuiltinGasDefinitions.AIR, 2, 1L, List.of(), 0L)));
+				new GasComponentAmount(BuiltinGasDefinitions.NITROGEN, 2, 1L, List.of(), 0L)));
 		expectThrow(() -> subQuantumMass.splitTotal(1), "unrepresentable positive gas child mass");
 	}
 
@@ -570,7 +607,7 @@ public final class AirNetworkValidation {
 				&& wide.edges().equals(edges) && wide.availableVolume(1) == .5 && wide.availableVolume(2) == .5 && wide.auditClosed(),
 				"Zero-delta split changed the wide audit or rejected a representable final ledger");
 
-		GasInventory rounded = new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.AIR,
+		GasInventory rounded = new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.NITROGEN,
 				3, mmm.units.Mass.fromKilograms(3.2), List.of(), 0L)));
 		var parts = rounded.partition(new long[] {1, 2});
 		check(Math.addExact(parts.getFirst().totalMassUnits(), parts.getLast().totalMassUnits()) == rounded.totalMassUnits(),
@@ -578,10 +615,10 @@ public final class AirNetworkValidation {
 	}
 
 	private static AirNetwork restoredWideLedger(boolean twoNodes) {
-		GasInventory inventory = new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.AIR,
+		GasInventory inventory = new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.NITROGEN,
 				twoNodes ? 500_000_000L : 1_000_000_000L, mmm.units.Mass.fromKilograms(twoNodes ? 1.5 : 3), List.of(), 0L)));
 		GasAuditLedger source = new GasAuditLedger(List.of(new GasAuditLedger.Entry(
-				BuiltinGasDefinitions.AIR, 1_000_000_000L, mmm.units.Mass.fromKilograms(3), List.of(), 0L)));
+				BuiltinGasDefinitions.NITROGEN, 1_000_000_000L, mmm.units.Mass.fromKilograms(3), List.of(), 0L)));
 		AirNetwork network = new AirNetwork();
 		network.restoreNodes(twoNodes ? new double[] {.5, .5} : new double[] {1},
 				twoNodes ? List.of(inventory, inventory) : List.of(inventory), source, GasAuditLedger.EMPTY);
@@ -590,7 +627,7 @@ public final class AirNetworkValidation {
 
 	private static void validatePublicMutatorsPreflightAllOwners() {
 		AirNetwork cumulative = new AirNetwork(new GasRegistry(List.of(new GasComponentDefinition(
-				BuiltinGasDefinitions.AIR, .01, .01, List.of(), List.of())), List.of(new GasRegistry.AmbientFraction(BuiltinGasDefinitions.AIR, ExactRational.ONE))));
+				BuiltinGasDefinitions.NITROGEN, .01, List.of(), List.of())), List.of(new GasRegistry.AmbientFraction(BuiltinGasDefinitions.NITROGEN, ExactRational.ONE))));
 		int sourceNode = cumulative.addNode(1, AirNetwork.cubicMeters(Long.MAX_VALUE));
 		cumulative.setStandardVolume(sourceNode, 0);
 		check(cumulative.auditClosed() && cumulative.drawnFromAmbientNanos() == Long.MAX_VALUE
@@ -600,8 +637,8 @@ public final class AirNetworkValidation {
 		checkNodeMutationRejectsUnchanged(cumulative, () -> cumulative.addNode(Double.NaN, 0));
 		check(cumulative.addNode(1, 0) == 2 && cumulative.auditClosed(), "Rejected creation consumed a node id");
 		GasRegistry mixture = new GasRegistry(List.of(
-				new GasComponentDefinition("test:a", .01, .01, List.of(), List.of()),
-				new GasComponentDefinition("test:b", .01, .01, List.of(), List.of())), List.of(
+				new GasComponentDefinition("test:a", .01, List.of(), List.of()),
+				new GasComponentDefinition("test:b", .01, List.of(), List.of())), List.of(
 				new GasRegistry.AmbientFraction("test:a", ExactRational.ONE.divide(2)),
 				new GasRegistry.AmbientFraction("test:b", ExactRational.ONE.divide(2))));
 		AirNetwork mixed = new AirNetwork(mixture);
@@ -631,7 +668,7 @@ public final class AirNetworkValidation {
 					"Zero-delta public edit rejected or changed its wide audit");
 		}
 		AirNetwork phase = restoredWideLedger(false);
-		phase.commitPhaseSource(1, new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.AIR,
+		phase.commitPhaseSource(1, new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.NITROGEN,
 				500_000_000L, mmm.units.Mass.fromKilograms(.5), List.of(), 0L))));
 		check(phase.inventory(1).totalMass() == 3.5 && phase.auditClosed(),
 				"Zero-delta phase source rejected a representable wide ledger");
@@ -772,12 +809,12 @@ public final class AirNetworkValidation {
 	}
 
 	private static void validateComponentSpeciesBoundary() {
-		expectThrow(() -> new GasComponentDefinition("test:invalid", 1.0, 1.0, List.of(),
-				List.of(new GasComponentDefinition.DefaultSpecies("test:a", ExactRational.ONE))),
+		expectThrow(() -> new GasComponentDefinition("test:invalid", 1.0, List.of(),
+				List.of(new GasComponentDefinition.DefaultSpecies("test:a", ExactRational.ONE, 1))),
 				"default species outside component allow-list");
 		GasRegistry registry = new GasRegistry(List.of(
-				new GasComponentDefinition("test:alpha", 1.0, 1.0, List.of("test:a"), List.of()),
-				new GasComponentDefinition("test:beta", 1.0, 1.0, List.of("test:b"), List.of())),
+				new GasComponentDefinition("test:alpha", 1.0, List.of("test:a"), List.of()),
+				new GasComponentDefinition("test:beta", 1.0, List.of("test:b"), List.of())),
 				List.of(new GasRegistry.AmbientFraction("test:alpha", ExactRational.ONE)));
 		AirNetwork network = new AirNetwork(registry);
 		int node = network.addNode(1.0, 1.0);
@@ -813,10 +850,10 @@ public final class AirNetworkValidation {
 
 	private static void validatePhaseMutationPlans() {
 		AirNetwork network = new AirNetwork(new GasRegistry(List.of(new GasComponentDefinition(
-				BuiltinGasDefinitions.AIR, .01, .01, List.of(), List.of())),
-				List.of(new GasRegistry.AmbientFraction(BuiltinGasDefinitions.AIR, ExactRational.ONE))));
+				BuiltinGasDefinitions.NITROGEN, .01, List.of(), List.of())),
+				List.of(new GasRegistry.AmbientFraction(BuiltinGasDefinitions.NITROGEN, ExactRational.ONE))));
 		int first = network.addNode(1.0, 0.0), second = network.addNode(1.0, 0.0);
-		GasInventory oneNano = new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.AIR, 1L, 1L, List.of(), 1L)));
+		GasInventory oneNano = new GasInventory(List.of(new GasComponentAmount(BuiltinGasDefinitions.NITROGEN, 1L, 1L, List.of(), 1L)));
 		AirNetwork.PhaseMutationPlan plan = network.planPhaseSource(first, oneNano);
 		check(network.standardVolumeNanos(first) == 0L, "phase planning changed live gas");
 		AirNetwork other = new AirNetwork();
@@ -852,7 +889,7 @@ public final class AirNetworkValidation {
 		java.util.ArrayList<GasComponentAmount> first = new java.util.ArrayList<>(), second = new java.util.ArrayList<>();
 		for (int component = 0; component < 33; component++) {
 			String id = "test:regional_" + component;
-			definitions.add(new GasComponentDefinition(id, 1.0, 0.0, List.of(), List.of()));
+			definitions.add(new GasComponentDefinition(id, 1.0, List.of(), List.of()));
 			(component < 17 ? first : second).add(new GasComponentAmount(id, 1L, mmm.units.Mass.fromKilograms(1.0), List.of(), 0L));
 		}
 		GasRegistry registry = new GasRegistry(definitions, List.of(new GasRegistry.AmbientFraction("test:regional_0", ExactRational.ONE)));

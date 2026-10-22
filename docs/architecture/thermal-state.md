@@ -230,7 +230,7 @@ Delta U_p = G*(T_q-T_p)*dt; Delta U_q = -Delta U_p
 气体孔流由气体处理器执行。气腔壁面、液面及有限设备热交换进入共同热载体接触图；`ThermalGasCarriers` 按格内实际干容分配集总气腔的接触样本，成对结算热量后归并气腔内能。每个气腔在同一支撑上的混合物共用一次几何面积，组分比热与参考能共同决定温度，导热率按标准体积分数混合。该空间采样采用一阶近似。
 
 内置物性的数值与采样分段以数据定义为准。
-空气和蒸气的热容依据 [NIST 数据](https://webbook.nist.gov/chemistry/)标定，生成工具见[Python 工具](../maintenance/pytool.md)。
+N₂、O₂、CO₂ 的热容由 [NIST Shomate 系数](https://webbook.nist.gov/chemistry/)积分，H₂O 蒸气采用 [JANAF 气态水焓表](https://janaf.nist.gov/tables/H-064.html)。分段保存 100–1700 K 的平均定容质量比热 `Cv=(ΔHm/ΔT−R)/M`，模型摩尔质量与气体库存一致；CO₂ 在 298 K 以下沿用端点 Cp，温区外按现有端点热容延拓。导热率保持各组分 300 K 稀薄气体参考值的常数近似，混合物按标准体积分数加权。生成工具同时推导水蒸气相变批次体积、保持常压汽化潜焓和液水参考能关系，见[Python 工具](../maintenance/pytool.md)。
 
 ### 热浮力
 

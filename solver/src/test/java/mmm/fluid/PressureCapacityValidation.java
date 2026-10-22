@@ -36,9 +36,7 @@ public final class PressureCapacityValidation {
 		d.materialRegistry=liquids;
 		var thermal=new mmm.thermal.ThermalRegistry(java.util.List.of(
 				new mmm.thermal.ThermalMaterialDefinition("test:capacity_water",mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID,
-						BuiltinFluidMaterials.WATER.id(),300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,4184))),
-				new mmm.thermal.ThermalMaterialDefinition("test:capacity_air",mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
-						mmm.fluid.air.BuiltinGasDefinitions.AIR,300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,718)))));
+						BuiltinFluidMaterials.WATER.id(),300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,4184)))));
 		d.bindThermal(thermal,liquids,300);d.domainFlowFields.preparePhysicalState();
 		d.mac.velocityX[d.domainFlowFields.xFaceIndex(1,0,0)]=-100;d.cellMacStage.publishMomentum();
 		var graph=d.pressureSystem.faces;d.pressureSystem.prepareOperator();

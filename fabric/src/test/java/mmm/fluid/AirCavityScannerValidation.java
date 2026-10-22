@@ -482,7 +482,7 @@ public final class AirCavityScannerValidation {
 		for(String component:List.of("test:left","test:right"))definitions.add(new mmm.thermal.ThermalMaterialDefinition(component,
 				mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,component,300,0,0,
 				List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,gasCv))));
-		d.bindThermal(new mmm.thermal.ThermalRegistry(definitions),liquids,temperature);
+		d.bindThermal(ThermalValidationSupport.thermalRegistry(definitions),liquids,temperature);
 		d.domainFlowFields.preparePhysicalState();
 		for(int face=0;face<d.mac.velocityX.length;face++)if(d.cellMacStage.massX[face]>0)d.mac.velocityX[face]=(float)initialSpeed;
 		d.cellMacStage.publishMomentum();

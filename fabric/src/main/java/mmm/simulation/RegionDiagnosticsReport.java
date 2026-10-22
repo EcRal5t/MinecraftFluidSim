@@ -4,7 +4,6 @@ import mmm.application.RegionCatalog;
 import mmm.fluid.FluidDomain;
 import mmm.fluid.GasPressureBoundary;
 import mmm.fluid.air.AirNetwork;
-import mmm.fluid.air.BuiltinGasDefinitions;
 import mmm.fluid.air.GasAuditLedger;
 import mmm.simulation.controller.FluidRegionFootprint;
 import mmm.thermal.ThermalAuditLedger;
@@ -273,7 +272,8 @@ public final class RegionDiagnosticsReport {
 				domain.exactInternalEnergy().equals(audit.expectedInventory()) ? "closed" : "FAILED");
 	}
 
-	private static String gasSummary(FluidDomain domain) {		GasPressureBoundary network = domain.gasBoundary();
+	private static String gasSummary(FluidDomain domain) {
+		GasPressureBoundary network = domain.gasBoundary();
 		List<Integer> ids = network.nodeIds();
 		if (ids.isEmpty()) return "";
 		StringBuilder builder = new StringBuilder("gas ");
@@ -282,18 +282,20 @@ public final class RegionDiagnosticsReport {
 			if (i > 0) builder.append("; ");
 			builder.append(String.format("node %d p=%+.0f Pa T=%.2f K V0=%.2f m³",
 					id, domain.gasNodeGaugePressurePa(id), domain.gasNodeTemperatureK(id), network.standardVolume(id)));
-			var vapor = network.inventory(id).component(BuiltinGasDefinitions.WATER_VAPOR);
-			if (vapor != null) builder.append(String.format(" vapor=%.6g kg/%.6g m³std",
-					vapor.mass(), AirNetwork.cubicMeters(vapor.standardVolumeNanos())));
+			var inventory = network.inventory(id);
+			for (var component : inventory.components()) {
+				builder.append(String.format(" %s=%.4g%%", component.componentId(),
+						100.0 * component.standardVolumeNanos() / inventory.standardVolumeNanos()));
+			}
 		}
 		if (ids.size() > 4) builder.append("; +").append(ids.size() - 4).append(" more");
-		long airSource = componentNanos(network.externalSource(), BuiltinGasDefinitions.AIR);
-		long airSink = componentNanos(network.escapedSink(), BuiltinGasDefinitions.AIR);
-		long vaporSource = componentNanos(network.externalSource(), BuiltinGasDefinitions.WATER_VAPOR);
-		long vaporSink = componentNanos(network.escapedSink(), BuiltinGasDefinitions.WATER_VAPOR);
-		builder.append(String.format(", turnover air=%.2f/%.2f vapor=%.2f/%.2f m³std (source/sink)",
-				AirNetwork.cubicMeters(airSource), AirNetwork.cubicMeters(airSink),
-				AirNetwork.cubicMeters(vaporSource), AirNetwork.cubicMeters(vaporSink)));
+		var componentIds = new java.util.TreeSet<String>();
+		for (var entry : network.externalSource().entries()) componentIds.add(entry.componentId());
+		for (var entry : network.escapedSink().entries()) componentIds.add(entry.componentId());
+		builder.append(", turnover m³std (source/sink)");
+		for (String componentId : componentIds) builder.append(String.format(" %s=%.6g/%.6g", componentId,
+				AirNetwork.cubicMeters(componentNanos(network.externalSource(), componentId)),
+				AirNetwork.cubicMeters(componentNanos(network.escapedSink(), componentId))));
 		return builder.toString();
 	}
 

@@ -62,9 +62,13 @@ public final class AirNetwork {
 	}
 	/** Reference (ambient) absolute pressure in Pa; gauge zero matches the solver convention. */
 	public static final double REFERENCE_PRESSURE = 101_325.0;
-	/** NIST dry N2/O2/Ar mixture density at the frozen gas standard state (kg/m³). */
-	public static final double AIR_DENSITY = REFERENCE_PRESSURE * 0.02895968300420168
-			/ (8.314462618 * GasRegistry.STANDARD_TEMPERATURE_K);
+	/** Standard density of the built-in dry-air mole recipe, also used by empty liquid-grid slots. */
+	public static final double AIR_DENSITY = BuiltinGasDefinitions.dryAirRecipe().stream().mapToDouble(part ->
+			part.fraction().toDouble() * BuiltinGasDefinitions.standardDensity(switch (part.componentId()) {
+				case BuiltinGasDefinitions.NITROGEN -> BuiltinGasDefinitions.NITROGEN_MOLAR_MASS;
+				case BuiltinGasDefinitions.OXYGEN -> BuiltinGasDefinitions.OXYGEN_MOLAR_MASS;
+				default -> BuiltinGasDefinitions.CO2_MOLAR_MASS;
+			})).sum();
 	/** The ambient reservoir: gauge pressure zero, unbounded inventory, never stored as a node. */
 	public static final int AMBIENT_NODE = 0;
 
@@ -124,7 +128,7 @@ public final class AirNetwork {
 		if (nodes.size() == GasLimits.MAX_NODES_PER_REGION)
 			throw new IllegalArgumentException("Gas creation exceeds the regional node budget");
 		int id = nextNodeId, nextAfter = Math.addExact(nextNodeId, 1);
-		GasInventory created = registry.createAmbient(AirNode.toNanos(standardVolume));
+		GasInventory created = ambientInventory(AirNode.toNanos(standardVolume));
 		AirNode node = new AirNode(availableVolume, created);
 		TreeMap<Integer, AirNode> replacement = new TreeMap<>(nodes);
 		replacement.put(id, node);
@@ -183,7 +187,7 @@ public final class AirNetwork {
 	public GasInventory inventory(int nodeId) { return sealed(nodeId).inventory(); }
 
 	/** Creates an ambient inventory without mutating this network; used by topology planning. */
-	public GasInventory ambientInventory(long standardVolumeNanos) { return registry.createAmbient(standardVolumeNanos); }
+	public GasInventory ambientInventory(long standardVolumeNanos) { return registry.createAmbientInterval(externalSource.standardVolumeNanos(), standardVolumeNanos); }
 
 	/** Preview for an exact phase-boundary take; no gas or ledger state is changed. */
 	public GasInventory.Split previewComponentTake(int nodeId, String componentId, long standardVolumeNanos) {
@@ -271,7 +275,7 @@ public final class AirNetwork {
 		GasInventory source = GasInventory.EMPTY, sink = GasInventory.EMPTY;
 		GasInventory after;
 		if (target > current) {
-			source = registry.createAmbient(target - current);
+			source = ambientInventory(target - current);
 			after = node.inventory().merge(source);
 		} else {
 			GasInventory.Split split = node.inventory().splitTotal(target);
@@ -440,6 +444,7 @@ public final class AirNetwork {
 		GasInventory[] retained = new GasInventory[ids.size() + 1]; retained[0] = GasInventory.EMPTY;
 		for (int i = 1; i <= ids.size(); i++) retained[i] = inventory(ids.get(i - 1));
 		ArrayList<GasTransfer> transfers = new ArrayList<>();
+		long sourceCursor = externalSource.standardVolumeNanos();
 		for (int i = 0; i <= ids.size(); i++) {
 			var ports = outgoing.get(i); if (ports.isEmpty()) continue;
 			int id = i == 0 ? 0 : ids.get(i - 1);
@@ -448,7 +453,7 @@ public final class AirNetwork {
 					long amount = quantizedVolume(Math.abs(transported[edge]));
 					if (amount == 0) continue;
 					int target = first[edge] == 0 ? second[edge] : first[edge];
-					var moved = ambientInventory(amount);
+					var moved = registry.createAmbientInterval(sourceCursor, amount); sourceCursor = Math.addExact(sourceCursor, amount);
 					transfers.add(new GasTransfer(0, ids.get(target - 1), moved));
 				}
 				continue;
@@ -465,7 +470,7 @@ public final class AirNetwork {
 				used += weights[j + 1];
 			}
 			weights[0] = total - used;
-			var shares = donor.partitionTransport(weights); retained[i] = shares.getFirst();
+			var shares = donor.partitionTransport(weights, externalSource.standardVolumeNanos() ^ Long.rotateLeft(escapedSink.standardVolumeNanos(), 23)); retained[i] = shares.getFirst();
 			for (int j = 0; j < ports.size(); j++) {
 				var moved = shares.get(j + 1); if (moved.isEmpty()) continue;
 				int edge = ports.get(j), target = first[edge] == i ? second[edge] : first[edge];

@@ -259,7 +259,7 @@ public final class CarrierMutationValidation {
 				300,0,0,List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,1000,1000)))).toList();
 		var offsets=registries.thermal().speciesOffsets().stream().map(offset->new mmm.thermal.ThermalSpeciesOffset(
 				offset.id(),offset.speciesId(),offset.hostThermalMaterialId(),mmm.chemistry.ExactRational.ZERO)).toList();
-		var registry=new mmm.thermal.ThermalRegistry(definitions,offsets,List.of(),List.of(),
+		var registry=ThermalValidationSupport.thermalRegistry(definitions,offsets,List.of(),List.of(),
 				registries.chemical().fingerprint(),"",registries.gas().fingerprint());
 		domain.setVolume(2,2,2,.001F);domain.bindThermal(registry,domain.materialRegistry,300);
 		var pieces=List.of(new FluidDomain.MaterialPortion(0,.125,domain.unitScale.massUnitsForNormalized(125)),

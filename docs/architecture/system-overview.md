@@ -333,7 +333,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 真实机械模式或外部显式置换改变容量时，对每个旧气源汇总实际体积形变，沿状态方程做一次绝热积分，再按同一库存份额分配内能；新气腔合并直接相加。接收腔的实际容量与继承控制容量共同决定旧气源形变，原有真空与新增孔容一并参加。没有机械模式的未解析气腔空间重映射、表示交接和相变内部交换按固定内能结算，状态方程始终读取实际库存、容量与内能。
 气体来源与绝热控制体积分别交接：旧腔库存、内能及旧容量使用同一来源权重；局部液体移动形成的真空标签携带零库存。真正新增的零能量空间由实际净新增孔容给出。
 
-气体采用集总气腔与有限孔流模型，按库存、容量和内能派生压力、温度及顺应性。
+气体采用集总气腔与有限孔流模型，N₂、O₂、水蒸气与 CO₂ 共用实际容量和总内能，按组分库存派生共同温度、总压、分压及顺应性。环境空气由一处摩尔配方生成，普通推进与恢复保持已有组成。
 完整固定开口两侧的实际粗分量干容量超过共同解析量时采用低 Mach 共压近似，微量气体空间沿真实干口连接。
 受限固定孔口保留有限流量，完整满液单元和固定墙保持阻断。
 热状态孔流按规范孔口顺序正向、逆向各推进半步。每孔冻结正导通率，使用两腔连续库存与等熵排气焓求局部隐式响应，按实际库存分辨率结束求根，再一次分配整数物质与同一能量通量；下一孔读取已更新的状态。
@@ -375,6 +375,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
     - [GasChamberTopology](../../solver/src/main/java/mmm/fluid/GasChamberTopology.java)：真实干区连通与冷恢复归属校验
     - [GasVolumeAllocation](../../solver/src/main/java/mmm/fluid/GasVolumeAllocation.java)：完整未来帧及一次归并的旧节点到新节点稀疏来源，库存、内能、控制体积和做功共用相同目标顺序
     - [GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java)：`planAfterMechanicalTransport` 按旧来源实际机械模式准备库存、内能、控制体积与气腔功；`planAfterLiquidDisplacement` 处理显式置换，反向功由共同机械能计划结算，统一预检后提交。
+    - [BuiltinGasDefinitions](../../model/src/main/java/mmm/fluid/air/BuiltinGasDefinitions.java)、[GasRegistry](../../model/src/main/java/mmm/fluid/air/GasRegistry.java)：组分物性、环境配方及指定温压的库存生成
     - [AirNetwork](../../model/src/main/java/mmm/fluid/air/AirNetwork.java)
     - [GasOrificeFlow](../../model/src/main/java/mmm/fluid/air/GasOrificeFlow.java)
     - [GasEnergyStore](../../model/src/main/java/mmm/thermal/GasEnergyStore.java)

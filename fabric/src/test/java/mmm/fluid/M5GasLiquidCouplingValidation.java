@@ -182,11 +182,11 @@ public final class M5GasLiquidCouplingValidation {
 				"post-bootstrap closed cavity was filled from ambient instead of remaining vacuum");
 		var liquids=new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER));
 		domain.materialRegistry=liquids;
-		var thermal=new mmm.thermal.ThermalRegistry(java.util.List.of(
+		var thermal=ThermalValidationSupport.thermalRegistry(ThermalValidationSupport.thermalMaterials(java.util.List.of(
 				new mmm.thermal.ThermalMaterialDefinition("test:vacuum_water",mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID,
 						BuiltinFluidMaterials.WATER.id(),300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,4184))),
 				new mmm.thermal.ThermalMaterialDefinition("test:vacuum_air",mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
-						mmm.fluid.air.BuiltinGasDefinitions.AIR,300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,718)))));
+						mmm.fluid.air.BuiltinGasDefinitions.NITROGEN,300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,718))))));
 		domain.bindThermal(thermal,liquids,300);
 		var volume=domain.liquidCells.exactVolume();long mass=domain.liquidCells.massUnits();var energy=domain.exactInternalEnergy();
 		for(int step=0;step<2;step++) {
