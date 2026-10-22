@@ -20,7 +20,7 @@ final class FluidDomainStateMapper {
 		GranularStateSnapshot granular = domain.granularState == null ? null : domain.exportGranularState();
 		domain.ensurePhaseOccupancy();
 		GasStateSnapshot gas = domain.gasState.frame == null ? null : domain.exportGasState(chemistry == null ? "" : chemistry.fingerprint());
-		var captured = new FluidDomainState(domain.sizeX,domain.sizeY,domain.sizeZ,domain.config,domain.maximumParticleCount,
+		var captured = new FluidDomainState(domain.sizeX,domain.sizeY,domain.sizeZ,domain.config,
 				domain.gasState.sealedDomainBoundary,domain.liquidCells.snapshot(),domain.phaseOccupancy,domain.mac.captureMomentum(),domain.geometry.cutCells.snapshot(),
 				domain.materialRegistry == null ? List.of() : domain.materialRegistry.materials(),chemistry,
 				domain.chemistry == null ? mmm.chemistry.ChemicalTransferLedger.EMPTY : domain.chemistry.externalSource(),
@@ -45,8 +45,7 @@ final class FluidDomainStateMapper {
 				? FluidDomainState.CarrierKind.CHEMICAL
 				: domain.materialRegistry != null ? FluidDomainState.CarrierKind.MATERIAL
 				: FluidDomainState.CarrierKind.PURE;
-		return new FluidDomainState.Layout(domain.config, domain.sizeX, domain.sizeY, domain.sizeZ,
-				domain.maximumParticleCount, domain.gasState.sealedDomainBoundary, carrierKind,
+		return new FluidDomainState.Layout(domain.config, domain.sizeX, domain.sizeY, domain.sizeZ, domain.gasState.sealedDomainBoundary, carrierKind,
 				domain.materialRegistry == null ? List.of() : domain.materialRegistry.materials(),
 				domain.chemistry == null ? "" : domain.chemistry.registry().fingerprint(),
 				domain.granularState == null ? "" : domain.granularState.registry.fingerprint(),
@@ -60,7 +59,7 @@ final class FluidDomainStateMapper {
 	static FluidDomain restore(FluidDomainState state) {
 		if (state == null) throw new IllegalArgumentException("Authoritative state is missing");
 		FluidDomain domain = new FluidDomain(state.sizeX(), state.sizeY(), state.sizeZ(),
-				state.config(), state.maximumParticleCount());
+				state.config());
 		if (state.sealedDomainBoundary()) domain.sealDomainBoundary();
 		domain.geometry.cutCells.restoreSnapshot(state.fixedGeometry());
 		if (!state.materialPalette().isEmpty()) domain.materialRegistry = new FluidMaterialRegistry(state.materialPalette());
@@ -96,7 +95,7 @@ final class FluidDomainStateMapper {
 		// A cold state retains the choice to initialize gas at the next physical preparation.
 		// Rebuilding inventory and velocity alone does not create ambient stock or sources.
 		if (state.gas() == null) domain.domainFlowFields.ensureVelocityGrid();
-		else domain.domainFlowFields.ensureGrid();
+		else domain.domainFlowFields.preparePhysicalState();
 		if(state.condensedPhasePressure()!=null)domain.pressureSystem.restoreLiquidPressure(state.condensedPhasePressure());
 		return domain;
 	}

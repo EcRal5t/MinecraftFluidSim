@@ -67,6 +67,27 @@ final class MicroBoxPlaneVolume {
 			return Math.clamp(complement ? 1-f : f,0,1)*volume;
 		}
 	}
+    /** First vertical moment of a clipped microbox in whole-cell coordinates.
+     * Each horizontal-section area is quadratic between projected box vertices;
+     * two-point Gauss integration therefore integrates y times area exactly. */
+    static double verticalMoment(double nx,double ny,double nz,double offset,int micro) {
+        double side=.5,low=side*(micro>>1&1);
+        double[] horizontal={nx,0,nz};
+        if(ny==0)return box(horizontal,offset,micro,side)*(low+.25);
+        double[] cuts={low,low+side,0,0,0,0};int count=2;
+        for(int x=0;x<2;x++)for(int z=0;z<2;z++) {
+            double y=(offset-nx*side*((micro&1)+x)-nz*side*((micro>>2&1)+z))/ny;
+            if(y>low&&y<low+side)cuts[count++]=y;
+        }
+        java.util.Arrays.sort(cuts,0,count);double moment=0;
+        for(int i=1;i<count;i++) {
+            double middle=.5*(cuts[i]+cuts[i-1]),half=.5*(cuts[i]-cuts[i-1]),q=half/Math.sqrt(3);
+            double first=middle-q,second=middle+q;
+            moment+=half/side*(first*box(horizontal,offset-ny*first,micro,side)
+                    +second*box(horizontal,offset-ny*second,micro,side));
+        }
+        return moment;
+    }
     static double wetVolume(int micro, GasGeometryOverlap.HalfSpace plane) {
         return box(new double[]{plane.nx(), plane.ny(), plane.nz()}, plane.threshold(), micro, .5);
     }

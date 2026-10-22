@@ -12,15 +12,13 @@ public record RegionGeometry(
 		int sizeY,
 		int sizeZ,
 		FluidSolverConfig solverConfig,
-		long reservedMarkerCapacity,
 		ControllerFootprint footprint
 ) {
 	public RegionGeometry {
 		Objects.requireNonNull(origin, "origin");
 		Objects.requireNonNull(solverConfig, "solverConfig");
 		Objects.requireNonNull(footprint, "footprint");
-		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0
-				|| reservedMarkerCapacity <= 0L || reservedMarkerCapacity > Integer.MAX_VALUE) {
+		if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0) {
 			throw new IllegalArgumentException("Invalid region checkpoint geometry");
 		}
 	}

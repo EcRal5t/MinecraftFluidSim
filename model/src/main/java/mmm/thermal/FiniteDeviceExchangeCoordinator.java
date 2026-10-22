@@ -85,7 +85,7 @@ public final class FiniteDeviceExchangeCoordinator {
 		}
 		canonical.sort(java.util.Comparator.comparingInt(CellContactRequest::ordinal));
 		ThermalCellGrid cellGrid = domain.grid();
-		cellGrid.rebuild(domain.carrierAccess(markers));
+		cellGrid.rebuild(domain.exchangeCarrierAccess(markers));
 		ArrayList<FiniteThermalExchange.Contact> result = new ArrayList<>(canonical.size());
 		java.util.HashSet<Integer> cells = new java.util.HashSet<>();
 		int previousOrdinal = -1;
@@ -114,7 +114,7 @@ public final class FiniteDeviceExchangeCoordinator {
 		}
 		canonical.sort(java.util.Comparator.comparingInt(CellEnergyDelta::cell));
 		ThermalCellGrid cellGrid = domain.grid();
-		ThermalCellGrid.CarrierAccess carriers = domain.carrierAccess(markers);
+		ThermalCellGrid.CarrierAccess carriers = domain.exchangeCarrierAccess(markers);
 		cellGrid.rebuild(carriers);
 		SignedDyadic[] target = new SignedDyadic[cellGrid.cellCount()];
 		for (int cell = 0; cell < target.length; cell++) target[cell] = cellGrid.exactCarrierEnergyInCell(cell);
@@ -143,7 +143,7 @@ public final class FiniteDeviceExchangeCoordinator {
 	public void commitFiniteDeviceCellExchange(FiniteDeviceCellPlan plan, ThermalCarrierContext markers) {
 		if (plan == null) throw new IllegalArgumentException("Finite thermal cell plan is missing");
 		ThermalCellGrid cellGrid = domain.grid();
-		ThermalCellGrid.CarrierAccess carriers = domain.carrierAccess(markers);
+		ThermalCellGrid.CarrierAccess carriers = domain.exchangeCarrierAccess(markers);
 		cellGrid.rebuild(carriers);
 		if (!domain.matchesThermalRevision(plan.revisionBefore())
 				|| !plan.caloricBefore().equals(caloricSnapshot(carriers))

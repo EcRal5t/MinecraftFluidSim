@@ -54,7 +54,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 
 	static void validateCellMacCodec() throws Exception {
 		var template=populatedRegion(new UUID(31L,32L)).domain().exportParticleState();
-		var source=new FluidDomain(template.sizeX(),template.sizeY(),template.sizeZ(),CONFIG,512);
+		var source=new FluidDomain(template.sizeX(),template.sizeY(),template.sizeZ(),CONFIG);
 		source.sealDomainBoundary();
 		source.restoreParticleState(template);
 		// Keep the cell inventory unchanged while giving its liquid a spatially distinct saved layout.
@@ -681,7 +681,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		RegionManifest base = state.manifest();
 		RegionManifest changedManifest = signedManifest(new RegionManifest(RegionStateLayout.MATERIAL, base.regionId(), base.dimensionId(), base.checkpointGeneration(),
 				base.networkGeneration(), base.origin(), base.sizeX(), base.sizeY(), base.sizeZ(), base.solverConfig(),
-				base.reservedMarkerCapacity(), base.runtime(), base.footprint(), base.totalMarkerCount(), base.totalVolumeBits(),
+				base.runtime(), base.footprint(), base.totalMarkerCount(), base.totalVolumeBits(),
 				base.materialPalette(), Math.addExact(base.totalMassUnits(), 1L), base.materialLedgers(), changedDescriptors, base.extensions(), 0L));
 		expectIOException(() -> new RegionState(changedManifest, changedSections).validate(),
 				"rechecksummed marker-mass corruption escaped exact material ledgers");

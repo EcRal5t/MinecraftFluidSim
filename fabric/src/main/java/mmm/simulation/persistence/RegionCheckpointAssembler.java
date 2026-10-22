@@ -125,7 +125,7 @@ public final class RegionCheckpointAssembler {
 		long checksum = RegionStateIntegrity.manifestChecksum(manifest);
 		return new RegionManifest(manifest.layout(), manifest.regionId(), manifest.dimensionId(), manifest.checkpointGeneration(), manifest.networkGeneration(),
 				manifest.origin(), manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
-				manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(), manifest.totalMarkerCount(),
+				manifest.runtime(), manifest.footprint(), manifest.totalMarkerCount(),
 				manifest.totalVolumeBits(), manifest.materialPalette(), manifest.totalMassUnits(), manifest.materialLedgers(),
 				manifest.sections(), manifest.extensions(), manifest.registryFingerprint(), manifest.quantaPerMol(),
 				manifest.speciesPalette(), manifest.chemicalMixtures(), manifest.chemicalSpeciesTotals(),

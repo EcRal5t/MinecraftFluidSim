@@ -148,7 +148,7 @@ public final class CompositeStepBenchmark {
     }
 
     private static FluidDomain granular(FullCapabilityTestFixture.Registries r, boolean elevated) {
-        FluidDomain d = new FluidDomain(8, 8, 8, ProductionReplayValidationSupport.productionConfig(), 4096);
+        FluidDomain d = new FluidDomain(8, 8, 8, ProductionReplayValidationSupport.productionConfig());
         d.sealDomainBoundary();
         FullCapabilityTestFixture.bindEmptyMaterialState(d, r.liquids());
         int material = r.liquids().handle("mmm:water");
@@ -225,7 +225,7 @@ public final class CompositeStepBenchmark {
 
     private static FluidRegion region(FluidDomain d) {
         return new FluidRegion(UUID.randomUUID(), ResourceKey.create(Registries.DIMENSION,
-                Identifier.fromNamespaceAndPath("mmm", "benchmark")), BlockPos.ZERO, d, d.maximumParticleCount());
+                Identifier.fromNamespaceAndPath("mmm", "benchmark")), BlockPos.ZERO, d);
     }
     private static long allocated() { return ALLOC.getThreadAllocatedBytes(THREAD); }
     private static void require(boolean condition, String message) { if (!condition) throw new IllegalStateException(message); }

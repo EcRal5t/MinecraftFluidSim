@@ -55,7 +55,7 @@ final class MechanicalStepPipeline {
 
 	private SubstepOutcome runSubstep(float dt, int substep, boolean captureAudit, MechanicalAuditAccumulator audit) {
 		diagnosticStage = Stage.GRID_REBUILD;
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.preparePhysicalState();
 		double stageKineticEnergy = captureAudit ? domain.domainStep.mechanicalGridKineticEnergyJoules() : 0.0;
 		cellMac.constrainUnresolvedWallMomentum();
 		cellMac.beginMechanicalHeat();

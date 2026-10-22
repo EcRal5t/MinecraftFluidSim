@@ -147,7 +147,7 @@ final class DomainFlowFields {
 		result.sort(Comparator.comparingInt(CellCandidate::distanceSquared));
 		return result;
 	}
-	void ensureGrid() {
+	void preparePhysicalState() {
 		domain.pressureSystem.prepareGeometry();
 		ensureVelocityGrid();
 	}

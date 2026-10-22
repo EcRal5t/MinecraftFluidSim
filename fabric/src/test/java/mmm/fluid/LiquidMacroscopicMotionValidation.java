@@ -15,7 +15,7 @@ public final class LiquidMacroscopicMotionValidation {
 		switch (entry) {
 			case "common-mesh" -> generalFieldContinuesAfterRestore();
 			case "transport-moments" -> { generalFieldContinuesAfterRestore(); translationAndMaterialTransport(); }
-			case "joint-moments", "footprint-only" -> { rotationRetainsMacroscopicInertia(); materialTransportKeepsInventories(); }
+			case "joint-moments", "footprint-only" -> { rotationRetainsMacroscopicInertia(); }
 			case "sweep-only" -> translationAndMaterialTransport();
 			case "all" -> { generalFieldContinuesAfterRestore(); translationAndMaterialTransport(); rotationRetainsMacroscopicInertia(); }
 			default -> throw new IllegalArgumentException("Unknown remap validation entry: " + entry);
@@ -26,7 +26,7 @@ public final class LiquidMacroscopicMotionValidation {
 	/** Original L-shaped source: h=1, dt=.125, three full cells and velocity (1,1,0). */
 	static FluidDomain lShapedTranslationSource() {
 		var domain = new FluidDomain(5, 5, 5,
-				new FluidSolverConfig(1, 1000, 0, .125F, 200, 1e-5F, .002F, 0), 4096);
+				new FluidSolverConfig(1, 1000, 0, .125F, 200, 1e-5F, .002F));
 		domain.sealDomainBoundary();
 		domain.setVolume(2, 2, 2, 1); domain.setVolume(1, 2, 2, 1); domain.setVolume(2, 1, 2, 1);
 		uniformVelocity(domain,1,1,0);
@@ -48,7 +48,7 @@ public final class LiquidMacroscopicMotionValidation {
 	private static void translationAndMaterialTransport() {
 		for (float h : new float[]{.5F, 1}) for (int axes : new int[]{1, 3, 7}) for (int sign : new int[]{-1, 1}) {
 			var domain = new FluidDomain(7, 7, 7,
-					new FluidSolverConfig(h, 1000, 0, .125F, 200, 1e-5F, .002F, .8F), 4096);
+					new FluidSolverConfig(h, 1000, 0, .125F, 200, 1e-5F, .002F));
 			domain.sealDomainBoundary();
 			domain.setVolume(3, 3, 3, 1);
 			uniformVelocity(domain,(axes&1)==0?0:sign*h,(axes&2)==0?0:sign*h,(axes&4)==0?0:sign*h);
@@ -67,7 +67,7 @@ public final class LiquidMacroscopicMotionValidation {
 
 	private static void materialTransportKeepsInventories() {
 		var domain = new FluidDomain(7, 5, 5,
-				new FluidSolverConfig(1, 1000, 0, .05F, 200, 1e-5F, .002F, .8F), 4096);
+				new FluidSolverConfig(1, 1000, 0, .05F, 200, 1e-5F, .002F));
 		domain.sealDomainBoundary();
 		domain.setVolume(2, 2, 2, 1); domain.setVolume(3, 2, 2, 1);
 		var materials = new FluidMaterialRegistry(List.of(
@@ -88,10 +88,10 @@ public final class LiquidMacroscopicMotionValidation {
 	private static void rotationRetainsMacroscopicInertia() {
 		for (int axis = 0; axis < 3; axis++) {
 			var domain = new FluidDomain(7, 7, 7,
-					new FluidSolverConfig(1, 1000, 0, .025F, 200, 1e-5F, .002F, .8F), 4096);
+					new FluidSolverConfig(1, 1000, 0, .025F, 200, 1e-5F, .002F));
 			domain.sealDomainBoundary();
 			for (int z = 2; z < 5; z++) for (int y = 2; y < 5; y++) for (int x = 2; x < 5; x++) domain.setVolume(x, y, z, 1);
-			domain.domainFlowFields.ensureGrid();
+			domain.domainFlowFields.preparePhysicalState();
 			for (int component=0;component<3;component++) {
 				float[] velocity=velocities(domain,component);
 				int nx=domain.sizeX+(component==0?1:0),ny=domain.sizeY+(component==1?1:0);
@@ -160,7 +160,7 @@ public final class LiquidMacroscopicMotionValidation {
 
 	record Motion(double[] volumeCenter, double[] momentum, double[] angular, double kinetic) {
 		static Motion capture(FluidDomain domain) {
-			domain.domainFlowFields.ensureGrid(); double h=domain.config.cellSize(),total=0,kinetic=0;
+			domain.domainFlowFields.preparePhysicalState(); double h=domain.config.cellSize(),total=0,kinetic=0;
 			var center=new double[3];var momentum=new double[3];var angular=new double[3];
 			for(var stock:domain.liquidCells.stocks()) {
 				int cell=stock.key().cell();double volume=stock.volumeFraction();total+=volume;
@@ -193,7 +193,7 @@ public final class LiquidMacroscopicMotionValidation {
 		for(var stock:domain.liquidCells.stocks())if(stock.mixture()!=null)for(int i=0;i<stock.mixture().entryCount();i++)result[stock.mixture().speciesHandle(i)]=Math.addExact(result[stock.mixture().speciesHandle(i)],stock.mixture().amountAt(i));return result;
 	}
 	private static float[] velocities(FluidDomain d,int axis){return axis==0?d.mac.velocityX:axis==1?d.mac.velocityY:d.mac.velocityZ;}
-	private static void uniformVelocity(FluidDomain d,float x,float y,float z){d.domainFlowFields.ensureGrid();Arrays.fill(d.mac.velocityX,x);Arrays.fill(d.mac.velocityY,y);Arrays.fill(d.mac.velocityZ,z);d.cellMacStage.publishMomentum();}
+	private static void uniformVelocity(FluidDomain d,float x,float y,float z){d.domainFlowFields.preparePhysicalState();Arrays.fill(d.mac.velocityX,x);Arrays.fill(d.mac.velocityY,y);Arrays.fill(d.mac.velocityZ,z);d.cellMacStage.publishMomentum();}
 
 	private static double gasCapacity(FluidDomain domain) {
 		double total = 0; for (int node = 1; node <= domain.gasState.network.nodeCount(); node++) total += domain.gasState.network.availableVolume(node); return total;

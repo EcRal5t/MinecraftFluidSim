@@ -311,13 +311,11 @@ final class MaterialTransferPlanner {
 			inventory.requireCurrent();
 			if (chemical != null) domain.chemistry.requireCurrentAuditExchange(chemical);
 			if (before != null && domain.thermalState.auditLedger() != before) throw new IllegalStateException("Liquid external thermal audit changed after preparation");
-			if (gas != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gas);
-			inventory.commit(); domain.cellMacStage.commitMomentum(momentum);
-			if (chemical != null) domain.chemistry.commitAuditExchange(chemical);
-			if (after != null) domain.thermalState.restoreAuditLedger(after);
-			externalKineticSinkJoules += removedKinetic;
-			for (int cell : inventory.changedCells()) if (domain.chemistry != null) domain.chemistry.markDirtyCell(cell);
-			domain.markCellInventoryChanged(); if (gas != null) domain.gasTopologyCoordinator.commit(gas);
+			domain.cellMacStage.publishMaterialChange(inventory,()->domain.cellMacStage.commitMomentum(momentum),gas,null,()->{
+                if(chemical!=null)domain.chemistry.commitAuditExchange(chemical);
+                if(after!=null)domain.thermalState.restoreAuditLedger(after);
+            });
+            externalKineticSinkJoules+=removedKinetic;
 		}
 	}
 	private SignedDyadic available(int cell) { return SignedDyadic.of(domain.domainCollision.effectiveOpenCellVolume(cell)).subtract(domain.liquidCells.exactCellVolume(cell)); }

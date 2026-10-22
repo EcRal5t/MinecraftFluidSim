@@ -17,7 +17,7 @@ import java.util.List;
 
 abstract class ControllerReplayValidationScenarios extends ProductionReplayValidationSupport {
 	static void controllerPourSequenceWithoutGasSettles() {
-		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
+		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig());
 		domain.sealDomainBoundary();
 		// The backend owns time refinement: it restores a private candidate per attempt, so a step
 		// whose projected motion needs finer substeps is retried instead of escaping to the caller.
@@ -243,7 +243,7 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 	/** Replays the thermal-off world path: restore 34 m3std, empty liquid, then pour at the boundary. */
 	static void controllerEmptyThenBoundaryPourPreservesGasAcrossBackend() throws Exception {
 		FullCapabilityTestFixture.Registries registries = loadProductionRegistries();
-		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
+		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig());
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 		FluidDomain.VolumeAddition first = domain.addVolumeNearBudgeted(5, 0, 4, 128.0F, 6);
@@ -304,7 +304,7 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 	 * Entrained pockets may retain independent inventories within one coarse cell of total capacity.</p>
 	 */
 	static void controllerPoursRetainMacroscopicHeadspace() {
-		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
+		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig());
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(
 				domain, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));

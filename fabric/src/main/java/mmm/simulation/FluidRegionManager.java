@@ -43,16 +43,16 @@ public final class FluidRegionManager {
 		return catalog.runtimeAdmission(candidate, descriptor(candidate));
 	}
 
-	public RegionCatalog.AdmissionResult previewAdd(long requiredCells, long requiredMarkers) {
-		return catalog.previewAdd(requiredCells, requiredMarkers);
+	public RegionCatalog.AdmissionResult previewAdd(long requiredCells) {
+		return catalog.previewAdd(requiredCells);
 	}
 
 	public RegionCatalog.AdmissionResult replaceSelected(FluidRegion candidate) {
 		return catalog.replaceSelected(candidate, descriptor(candidate));
 	}
 
-	public RegionCatalog.AdmissionResult previewReplacement(long requiredCells, long requiredMarkers) {
-		return catalog.previewReplacement(requiredCells, requiredMarkers);
+	public RegionCatalog.AdmissionResult previewReplacement(long requiredCells) {
+		return catalog.previewReplacement(requiredCells);
 	}
 
 	public boolean select(UUID id) { return catalog.select(id); }
@@ -67,7 +67,7 @@ public final class FluidRegionManager {
 				region.origin().getX() + region.sizeX() * cellSize,
 				region.origin().getY() + region.sizeY() * cellSize,
 				region.origin().getZ() + region.sizeZ() * cellSize,
-				region.reservedCellCapacity(), region.reservedMarkerCapacity());
+				region.reservedCellCapacity());
 	}
 
 }

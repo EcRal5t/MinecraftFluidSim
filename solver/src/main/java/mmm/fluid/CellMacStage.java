@@ -222,7 +222,7 @@ final class CellMacStage {
 		var byCell=new java.util.TreeMap<Integer,SignedDyadic>();
 		for(int cell=0;cell<heat.length;cell++)if(heat[cell]>0)byCell.put(cell,SignedDyadic.of(heat[cell]));
 		commitMomentumAndHeat(new ExternalMomentum(new MacMomentumState(domain.sizeX,domain.sizeY,domain.sizeZ,
-				values[0],values[1],values[2]),byCell,0,new WallImpulse(impulse[0],impulse[1],impulse[2])));
+				values[0],values[1],values[2]),byCell,java.util.Map.of(),new WallImpulse(impulse[0],impulse[1],impulse[2])));
 	}
 	/** Face inertia belongs to the same inventory generation as cell mass. */
 	private void rebuildFaceInertia() {
@@ -262,7 +262,7 @@ final class CellMacStage {
 		var heat=new java.util.TreeMap<Integer,SignedDyadic>(prepared.heatByCell());
 		if(hasMechanicalHeat)for(int cell=0;cell<sourceMechanicalHeat.length;cell++)if(sourceMechanicalHeat[cell]!=0)
 			heat.merge(cell,SignedDyadic.of(sourceMechanicalHeat[cell]),SignedDyadic::add);
-		commitMomentumAndHeat(new ExternalMomentum(prepared.momentum(),heat,prepared.removedKineticEnergy(),prepared.wallImpulse()));
+		commitMomentumAndHeat(new ExternalMomentum(prepared.momentum(),heat,prepared.removedKineticEnergyByCell(),prepared.wallImpulse()));
 		beginMechanicalHeat();
 	}
 	/** U-only edits retain the current inventory mass, PLIC, gas frame and face inertia. */
@@ -277,7 +277,7 @@ final class CellMacStage {
         energy.requireCurrent();
         boolean changed=!inventory.changedCells().isEmpty();
         if(changed)inventory.commit();
-        commitMomentum(prepared);energy.commitGranular();domain.mechanicalEnergy.clear();
+        commitMomentum(prepared);energy.commitGranular();
         if(changed){inventoryRevision=domain.liquidCells.revision();domain.carrierPropertiesWorkspace.invalidate();}
         if(audit!=null)domain.thermalState.restoreAuditLedger(audit);
         derivePreparedVelocity();
@@ -318,7 +318,7 @@ final class CellMacStage {
 		for(var stock:inventory.physicalStocks())mass[stock.key().cell()]=Math.addExact(mass[stock.key().cell()],stock.massUnits());
 		var walls=stopWallMomentum(values,mass,heat,masks);var byCell=new java.util.TreeMap<Integer,SignedDyadic>();
 		for(int cell=0;cell<heat.length;cell++)if(heat[cell]>0)byCell.put(cell,SignedDyadic.of(heat[cell]));
-		return new ExternalMomentum(new MacMomentumState(domain.sizeX,domain.sizeY,domain.sizeZ,values[0],values[1],values[2]),java.util.Map.copyOf(byCell),0,walls);
+		return new ExternalMomentum(new MacMomentumState(domain.sizeX,domain.sizeY,domain.sizeZ,values[0],values[1],values[2]),java.util.Map.copyOf(byCell),java.util.Map.of(),walls);
 	}
 
 	CellMomentumTransport.Prepared prepareMomentumTransport(PreparedLiquid liquid) {
@@ -332,12 +332,29 @@ final class CellMacStage {
 	}
 
 	/** Stationary insertion adds inertia; extraction removes the carried momentum at its current velocity. */
-	record ExternalMomentum(MacMomentumState momentum, java.util.Map<Integer, SignedDyadic> heatByCell, double removedKineticEnergy,WallImpulse wallImpulse) { }
+	record ExternalMomentum(MacMomentumState momentum, java.util.Map<Integer, SignedDyadic> heatByCell, java.util.Map<Integer,SignedDyadic> removedKineticEnergyByCell,WallImpulse wallImpulse) {
+		double removedKineticEnergy(){return removedKineticEnergyByCell.values().stream().mapToDouble(SignedDyadic::toDouble).sum();}
+	}
 	ExternalMomentum prepareExternalMomentum(LiquidCellInventory.Plan edit) {return prepareExternalMomentum(edit,null);}
 	ExternalMomentum prepareExternalMomentum(LiquidCellInventory.Plan edit,byte[] masks) {
+		return prepareExternalMomentum(edit,masks,null);
+	}
+	ExternalMomentum preparePhaseMomentum(LiquidCellInventory.Plan edit,java.util.Map<Integer,Long> removedMassUnits) {
+		return prepareExternalMomentum(edit,null,removedMassUnits);
+	}
+	private ExternalMomentum prepareExternalMomentum(LiquidCellInventory.Plan edit,byte[] masks,java.util.Map<Integer,Long> removedMassUnits) {
 		domain.domainFlowFields.ensureInventoryGrid();
 		if (domain.velocityGridDirty) rebuildVelocity();
-		var heat = new java.util.TreeMap<Integer, SignedDyadic>(); double removedEnergy = 0;
+		var heat = new java.util.TreeMap<Integer, SignedDyadic>();
+		var removedEnergy = new java.util.TreeMap<Integer,SignedDyadic>();
+		double[] removedMass = new double[domain.cellCount];
+		if(removedMassUnits!=null) removedMassUnits.forEach((cell,units)->removedMass[cell]=Mass.kilograms(units));
+		else for(int cell=0;cell<domain.cellCount;cell++){
+            long before=0,after=0;
+            for(var stock:domain.liquidCells.stocksInCell(cell))before=Math.addExact(before,stock.massUnits());
+            for(var stock:edit.future().stocksInCell(cell))after=Math.addExact(after,stock.massUnits());
+            removedMass[cell]=Mass.kilograms(Math.max(0,before-after));
+        }
 		double[] futureMass = new double[domain.cellCount];
 		for (int cell = 0; cell < futureMass.length; cell++) {
 			long units = 0;
@@ -356,25 +373,24 @@ final class CellMacStage {
 				int right = coordinate < size ? domain.domainFlowFields.cellIndex(x, y, z) : -1;
 				int left = coordinate > 0 ? domain.domainFlowFields.cellIndex(x - (axis == 0 ? 1 : 0), y - (axis == 1 ? 1 : 0), z - (axis == 2 ? 1 : 0)) : -1;
 				double after = .5 * ((left < 0 ? 0 : futureMass[left]) + (right < 0 ? 0 : futureMass[right]));
-				result[axis][face] = Math.min(mass[face], after) * velocity[face];
-				double speed = velocity[face], kinetic = .5 * mass[face] * speed * speed;
-				if (after > mass[face] && mass[face] > 0) {
-					double dissipated = kinetic * ((after - mass[face]) / after);
-					if (dissipated > 0) {
-						double total = (left < 0 ? 0 : futureMass[left]) + (right < 0 ? 0 : futureMass[right]);
-						var exact = SignedDyadic.of(dissipated);
-						var first = left < 0 || futureMass[left] == 0 ? SignedDyadic.ZERO
-								: right < 0 || futureMass[right] == 0 ? exact : SignedDyadic.of(dissipated * (futureMass[left] / total));
-						if (first.signum() > 0) heat.merge(left, first, SignedDyadic::add);
-						var second = exact.subtract(first);
-						if (second.signum() > 0) heat.merge(right, second, SignedDyadic::add);
-					}
-				} else if (after < mass[face]) removedEnergy += .5 * (mass[face] - after) * speed * speed;
+				double removed=.5*((left<0?0:removedMass[left])+(right<0?0:removedMass[right]));
+				double retained=Math.max(0,mass[face]-removed),speed=velocity[face];
+				result[axis][face]=retained*speed;
+				for(int cell:new int[]{left,right})if(cell>=0&&removedMass[cell]>0)
+					removedEnergy.merge(cell,SignedDyadic.of(.25*removedMass[cell]*speed*speed),SignedDyadic::add);
+				double dissipated=after>0?.5*retained*speed*speed*Math.max(0,(after-retained)/after):0;
+				if(dissipated>0){
+					double total=(left<0?0:futureMass[left])+(right<0?0:futureMass[right]);
+					var exact=SignedDyadic.of(dissipated);
+					var first=left<0||futureMass[left]==0?SignedDyadic.ZERO:right<0||futureMass[right]==0?exact:SignedDyadic.of(dissipated*futureMass[left]/total);
+					if(first.signum()>0)heat.merge(left,first,SignedDyadic::add);
+					var second=exact.subtract(first);if(second.signum()>0)heat.merge(right,second,SignedDyadic::add);
+				}
 			}
 		}
 		var constrained=prepareMomentumInput(result,edit.future(),masks);
 		for(var entry:constrained.heatByCell().entrySet())heat.merge(entry.getKey(),entry.getValue(),SignedDyadic::add);
-		return new ExternalMomentum(constrained.momentum(), java.util.Map.copyOf(heat), removedEnergy,constrained.wallImpulse());
+		return new ExternalMomentum(constrained.momentum(), java.util.Map.copyOf(heat), java.util.Map.copyOf(removedEnergy),constrained.wallImpulse());
 	}
 
 	PreparedLiquid prepareLiquid(float dt){
@@ -402,6 +418,13 @@ final class CellMacStage {
 		var inventory = liquid.preparedMomentum()==null?liquid.inventory().withMechanicalHeat(momentum.heatByCell()):liquid.inventory();
 		var gas = domain.gasTopologyCoordinator.planAfterMechanicalTransport(inventory.future(), liquid.occupied, liquid.gasAllocation());
 		var energy=domain.mechanicalEnergy.prepare(inventory,gas);inventory=energy.inventory();
+		publishTransport(energy,momentum,gas,liquid.occupied,domain.granularMechanicalStage::commitCollision);
+		beginMechanicalHeat();domain.mechanicalEnergy.clear();
+	}
+	/** Common publication for accepted liquid routes, including internal and external solid displacement. */
+	void publishTransport(MechanicalEnergySettlement.Plan energy,CellMomentumTransport.Prepared momentum,
+	                      GasTopologyCoordinator.GasTopologyPlan gas,long[] occupied,Runnable solidPublication){
+		var inventory=energy.inventory();
 		var auditAfter = domain.thermalState == null ? null : domain.thermalState.auditLedger()
 				.withMechanicalWork(inventory.mechanicalHeat()).withRoundoff(inventory.energyRoundoff());
 		if(auditAfter!=null&&gas!=null&&gas.thermalPlan()!=null){
@@ -411,17 +434,29 @@ final class CellMacStage {
 		auditAfter=energy.auditAfter(auditAfter);
 		if(auditAfter!=null)auditAfter.expectedInventory();
 		energy.requireCurrent();
-		if (gas != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gas);
-		domain.granularMechanicalStage.commitCollision();
-		inventory.commit();
-		beginMechanicalHeat();
-		commitMomentum(momentum);
-		domain.markCellInventoryChanged();
-		if (gas != null) domain.gasTopologyCoordinator.commitPrepared(gas,liquid.occupied);
-		energy.commitGranular();domain.mechanicalEnergy.clear();
-		if (auditAfter != null) domain.thermalState.restoreAuditLedger(auditAfter);
-		for (int cell : inventory.changedCells()) if (domain.chemistry != null) domain.chemistry.markDirtyCell(cell);
+		publishMaterialChange(inventory,()->commitMomentum(momentum),gas,occupied,solidPublication);
+		energy.commitGranular();
+		if (auditAfter != null) domain.thermalState.restoreAuditLedger(domain.thermalState.auditLedger()
+				.withMechanicalWork(inventory.mechanicalHeat()).withRoundoff(inventory.energyRoundoff()));
 	}
+
+    /** Publishes one material endpoint after all participating owners prepared their plans. */
+    void publishMaterialChange(LiquidCellInventory.Plan inventory,Runnable momentumPublication,
+            GasTopologyCoordinator.GasTopologyPlan gas,long[] occupied,Runnable carrierPublication){
+        publishMaterialChange(inventory,momentumPublication,gas,occupied,carrierPublication,
+                ()->{if(gas!=null)domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gas);});
+    }
+    void publishMaterialChange(LiquidCellInventory.Plan inventory,Runnable momentumPublication,
+            GasTopologyCoordinator.GasTopologyPlan gas,long[] occupied,Runnable carrierPublication,Runnable gasPreflight){
+        inventory.requireCurrent();gasPreflight.run();
+        inventory.commit();momentumPublication.run();carrierPublication.run();
+        domain.markCellInventoryChanged();
+        if(gas!=null){
+            if(occupied==null)domain.gasTopologyCoordinator.commit(gas);
+            else domain.gasTopologyCoordinator.commitPrepared(gas,occupied);
+        }
+        if(domain.chemistry!=null)for(int cell:inventory.changedCells())domain.chemistry.markDirtyCell(cell);
+    }
 
 	double faceMass(int first, int second) { return .5 * (cellMass[first] + cellMass[second]); }
 }

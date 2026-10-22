@@ -94,10 +94,9 @@ public final class RegionDiagnosticsReport {
 		RegionCatalog.BudgetUsage selectedUsage = regions.usage();
 		if (!region.solverLoaded()) {
 			return String.format(
-					"UNLOADED/PAUSED | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | controller %s | %s | origin %s | grid %dx%dx%d | checkpoint %d, liquid %s, markers %d | controller flag %s, bridge %s | takeover lock %s%s",
+					"UNLOADED/PAUSED | selected %s | regions %d/%d, reserved %d/%d cells | controller %s | %s | origin %s | grid %dx%dx%d | checkpoint %d, liquid %s, markers %d | controller flag %s, bridge %s | takeover lock %s%s",
 					region.id().toString().substring(0, 8), selectedUsage.regionCount(), regions.limits().maximumRegions(),
-					selectedUsage.reservedCells(), regions.limits().maximumTotalCells(), selectedUsage.reservedMarkers(),
-					regions.limits().maximumTotalMarkers(), region.footprint().controllerPosition().toShortString(),
+					selectedUsage.reservedCells(), regions.limits().maximumTotalCells(), region.footprint().controllerPosition().toShortString(),
 					region.availabilityFailure() == null ? "awaiting explicit run" : "blocked: " + region.availabilityFailure(),
 					region.origin().toShortString(), region.sizeX(), region.sizeY(), region.sizeZ(), region.checkpointGeneration(),
 					UnitFormat.volume(SolverUnitScale.forCellSize(region.solverConfig().cellSize()).cubicMeters(region.checkpointVolume())),
@@ -108,8 +107,10 @@ public final class RegionDiagnosticsReport {
 		FluidDomain.StepStats lastStats = region.lastStats();
 		String stats = lastStats == null
 				? "尚未步进"
-				: String.format("compute %.2f ms, substeps %d, PCG %d, residual %.4g",
-						region.lastStepMilliseconds(),lastStats.substeps(),lastStats.pressureIterations(),lastStats.pressureResidual());
+				: String.format("compute %.2f ms, substeps %d, PCG %d, residual %.4g, correction %+.5g J (absolute %.5g J), force/liquidPE/gas %+.5g/%+.5g/%+.5g J",
+						region.lastStepMilliseconds(),lastStats.substeps(),lastStats.pressureIterations(),lastStats.pressureResidual(),lastStats.mechanicalCorrection().signedJoules(),lastStats.mechanicalCorrection().absoluteJoules(),
+					lastStats.mechanicalCorrection().liquidForceJoules()+lastStats.mechanicalCorrection().granularForceJoules(),
+					lastStats.mechanicalCorrection().transportPotentialJoules(),lastStats.mechanicalCorrection().gasCounterWorkJoules());
 		FluidDomain domain = region.domain();
 		BlockPos origin = region.origin();
 		double cellVolumes = domain.totalVolumeExact();
@@ -127,17 +128,16 @@ public final class RegionDiagnosticsReport {
 		String thermal = world.hasCapability(WorldCapability.THERMAL) ? thermalSummary(region, domain) : "";
 		String carrierViscosity = carrierViscositySummary(lastStats) + viscousStressSummary(lastStats);
 		return String.format(
-				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells, %d/%d markers | %s | %s | origin %s | grid %dx%dx%d | Minecraft interval %d ticks, sim step %.6g s | liquid %s (%.2f normalized cells) | particles %d/%d in %d cells | visible %d, dense %d | takeover %d, lock %s | bridge %s | entities %s/%d, liquid impulse [%.3g,%.3g,%.3g] kg·m/s | maxP(gauge) %s | collision partial/full %d/%d, last Δ%d, escaped %s%s | %s%s%s",
+				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells | %s | %s | origin %s | grid %dx%dx%d | Minecraft interval %d ticks, sim step %.6g s | liquid %s (%.2f normalized cells) | liquid stocks %d in %d cells | visible %d, dense %d | takeover %d, lock %s | bridge %s | entities %s/%d, liquid impulse [%.3g,%.3g,%.3g] kg·m/s | maxP(gauge) %s | collision partial/full %d/%d, last Δ%d, escaped %s%s | %s%s%s",
 				region.lifecycle().state(), region.paused() ? "/PAUSED" : "",
 				region.id().toString().substring(0, 8),
 				usage.regionCount(), regions.limits().maximumRegions(),
 				usage.reservedCells(), regions.limits().maximumTotalCells(),
-				usage.reservedMarkers(), regions.limits().maximumTotalMarkers(),
 				regionSource, availability,
 				origin.toShortString(), domain.sizeX(), domain.sizeY(), domain.sizeZ(),
 				region.stepIntervalTicks(), domain.config().timeStep(),
 				UnitFormat.volume(domain.unitScale().cubicMeters(cellVolumes)), cellVolumes,
-				domain.particleCount(), domain.maximumParticleCount(), domain.markerCellCount(),
+				domain.particleCount(), domain.markerCellCount(),
 				distribution.visibleCells(), distribution.denseCells(), takeover.pendingBlockCount(), takeoverLock,
 				worldBridgeFeatureEnabled.getAsBoolean() ? "on" : "off",
 				region.entityPhysicsEnabled() ? "on" : "off", region.lastAffectedEntities(),

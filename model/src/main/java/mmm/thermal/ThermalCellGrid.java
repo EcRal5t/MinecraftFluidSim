@@ -21,6 +21,7 @@ public final class ThermalCellGrid {
 	public interface CarrierAccess {
 		int carrierCount();
 		int cell(int carrier);
+		default int supportMask(int carrier) { return 0; }
 		ThermalMaterialDefinition material(int carrier);
 		double mass(int carrier);
 		double volume(int carrier);
@@ -28,6 +29,11 @@ public final class ThermalCellGrid {
 		default SignedDyadic exactBaseEnergy(int carrier) { return SignedDyadic.of(baseEnergy(carrier)); }
 		double internalEnergy(int carrier);
 		default SignedDyadic exactInternalEnergy(int carrier) { return SignedDyadic.of(internalEnergy(carrier)); }
+		default SignedDyadic exactStoredEnergy() {
+			SignedDyadic sum=SignedDyadic.ZERO;
+			for(int carrier=0;carrier<carrierCount();carrier++)sum=sum.add(exactInternalEnergy(carrier));
+			return sum;
+		}
 		/** Stores the supplied finite double unchanged; prepared caloric samples share this value. */
 		void setInternalEnergy(int carrier, double energy);
 		/** Bulk publication follows the same unchanged-double contract as individual writes. */

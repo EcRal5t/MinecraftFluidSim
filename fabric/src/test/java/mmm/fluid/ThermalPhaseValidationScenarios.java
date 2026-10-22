@@ -19,7 +19,6 @@ import mmm.units.SolverUnitScale;
 import mmm.thermal.ThermalAuditLedger;
 import mmm.thermal.ThermalMaterialDefinition;
 import mmm.thermal.ThermalPhaseTransition;
-import mmm.thermal.ThermalPhaseChangeEngine;
 import mmm.thermal.ThermalRegistry;
 import mmm.thermal.ThermalSpeciesOffset;
 import mmm.thermal.ThermalStateFunction;
@@ -64,8 +63,8 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				&& close(highPressure.equilibriumTemperatureK(3_500_000.0), 273.15),
 				"solid/liquid curve was incorrectly required to cover standard pressure");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 2.0E-3F, 0.0F);
-		FluidDomain continuedPressure = new FluidDomain(2, 2, 2, config, 128);
+				100, 1.0E-5F, 2.0E-3F);
+		FluidDomain continuedPressure = new FluidDomain(2, 2, 2, config);
 		continuedPressure.setVolume(0, 0, 0, 0.5F);
 		continuedPressure.bindGasRegistry(BuiltinGasDefinitions.createRegistry());
 		continuedPressure.bootstrapGasState("");
@@ -86,7 +85,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				List.of(BuiltinFluidMaterials.WATER, BuiltinFluidMaterials.MERCURY));
 		ThermalRegistry unrelatedTransition = new ThermalRegistry(
 				thermalMaterials(List.of(water, ice, mercury)), List.of(), List.of(highPressure), "", "");
-		FluidDomain mercuryOnly = new FluidDomain(2, 2, 2, config, 128);
+		FluidDomain mercuryOnly = new FluidDomain(2, 2, 2, config);
 		mercuryOnly.setVolume(0, 0, 0, 0.5F);
 		mercuryOnly.domainCollision.setMaterialInCell(0, 0, 0, waterAndMercury,
 				waterAndMercury.handle(BuiltinFluidMaterials.MERCURY.id()));
@@ -102,7 +101,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		ThermalRegistry mixedRegistry = new ThermalRegistry(
 				thermalMaterials(List.of(water, ice, mercury)), List.of(), List.of(mixedMelt), "", "");
 		for (float fill : new float[]{0.25F, 0.5F}) {
-			FluidDomain mixedCell = new FluidDomain(2, 2, 2, config, 128);
+			FluidDomain mixedCell = new FluidDomain(2, 2, 2, config);
 			mixedCell.setVolume(0, 0, 0, fill);
 			mixedCell.domainCollision.setMaterialInCell(0, 0, 0, waterAndMercury,
 					waterAndMercury.handle(BuiltinFluidMaterials.WATER.id()));
@@ -138,14 +137,6 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				lower.id(), upper.id(), 300.0, 1L, 1L, ExactRational.parse("0.1"),
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 0.0, 200_000.0);
 		ThermalRegistry registry = new ThermalRegistry(thermalMaterials(List.of(lower, upper)), List.of(), List.of(transition), "", "");
-		ThermalPhaseChangeEngine engine = new ThermalPhaseChangeEngine(registry);
-		ThermalPhaseChangeEngine.Plan freeze = engine.planInert(
-				transition, 0.0, 1.0, 50.0, 16L, GasRegistry.STANDARD_PRESSURE_PA);
-		ThermalPhaseChangeEngine.Plan melt = engine.planInert(
-				transition, 1.0, 0.0, 50.0, 16L, GasRegistry.STANDARD_PRESSURE_PA);
-		require(freeze.signedBatches() == 5L && melt.signedBatches() == -5L
-				&& close(freeze.temperatureAfterK(), 300.0) && close(melt.temperatureAfterK(), 300.0),
-				"exact-batch phase planner did not derive equilibrium extent from conserved energy");
 
 		FluidMaterial liquid = FluidMaterial.withSurfaceTension("test:liquid", 1.0,
 				"test:miscible", 0.0, 90.0);
@@ -175,8 +166,8 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				"liquid/coherent heat exchange did not close the shared energy audit");
 
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 2.0E-3F, 0.0F);
-		FluidDomain coherentCavity = new FluidDomain(3, 2, 2, config, 128);
+				100, 1.0E-5F, 2.0E-3F);
+		FluidDomain coherentCavity = new FluidDomain(3, 2, 2, config);
 		coherentCavity.sealDomainBoundary();
 		coherentCavity.setVolume(0, 0, 0, 0.5F);
 		coherentCavity.bindGasRegistry(BuiltinGasDefinitions.createRegistry());
@@ -205,7 +196,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				&& coherentRestored.thermalAudit().equals(coherentCavity.thermalAudit())
 				&& coherentRestored.gasBoundary().auditClosed(),
 				"gas restore must include the incoming coherent geometry before gas-dependent thermal energy");
-		FluidDomain domain = new FluidDomain(2, 2, 2, config, 128);
+		FluidDomain domain = new FluidDomain(2, 2, 2, config);
 		domain.setVolume(0, 0, 0, 0.5F);
 		domain.bindThermal(registry, liquids, 300.0);
 		domain.addCoherentPhaseExternal(0, 0, 0, lower.id(),
@@ -233,7 +224,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 0.0, 200_000.0);
 		ThermalRegistry cellRegistry = new ThermalRegistry(
 				thermalMaterials(List.of(lower, upper)), List.of(), List.of(cellTransition), "", "");
-		FluidDomain pressureHandoff = new FluidDomain(2, 2, 2, config, 128);
+		FluidDomain pressureHandoff = new FluidDomain(2, 2, 2, config);
 		pressureHandoff.setVolume(0, 0, 0, 1.0F);
 		pressureHandoff.bindGasRegistry(BuiltinGasDefinitions.createRegistry());
 		pressureHandoff.bootstrapGasState("");
@@ -262,7 +253,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		require(pressureRestore.stepInertPhaseChangeOnly(16).operations() > 0,
 				"continued high-pressure phase curve skipped freezing below its melting point");
 
-		FluidDomain phaseDomain = new FluidDomain(2, 2, 2, config, 128);
+		FluidDomain phaseDomain = new FluidDomain(2, 2, 2, config);
 		phaseDomain.setVolume(0, 0, 0, 1.0F);
 		phaseDomain.bindThermal(cellRegistry, liquids, 295.0);
 		SignedDyadic coldEnergy = phaseDomain.exactInternalEnergy();
@@ -312,8 +303,8 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		ThermalRegistry roundoffRegistry = new ThermalRegistry(
 				thermalMaterials(List.of(roundoffIce, roundoffWater)), List.of(), List.of(roundoffTransition), "", "");
 		FluidSolverConfig roundoffConfig = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 2.0E-3F, 0.0F);
-		FluidDomain roundoffDomain = new FluidDomain(2, 2, 2, roundoffConfig, 128);
+				100, 1.0E-5F, 2.0E-3F);
+		FluidDomain roundoffDomain = new FluidDomain(2, 2, 2, roundoffConfig);
 		roundoffDomain.setVolume(0, 0, 0, 0.5F);
 		roundoffDomain.bindThermal(roundoffRegistry, roundoffLiquids, 273.1498);
 		SignedDyadic roundoffEnergy = roundoffDomain.exactInternalEnergy();
@@ -328,7 +319,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 						+ " energy=" + roundoffDomain.exactInternalEnergy() + "/" + roundoffEnergy
 						+ " expected=" + roundoffDomain.thermalAudit().expectedInventory());
 
-		FluidDomain quantizedDomain = new FluidDomain(2, 2, 2, roundoffConfig, 128);
+		FluidDomain quantizedDomain = new FluidDomain(2, 2, 2, roundoffConfig);
 		quantizedDomain.bindThermal(roundoffRegistry, roundoffLiquids, 273.15);
 		double quantizedIceEnergy = new ThermalStateFunction(roundoffRegistry).internalEnergyAtTemperature(
 				roundoffRegistry.materialHandle(roundoffIce.id()), 0.001, Map.of(), 273.16);
@@ -363,7 +354,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 					ExactRational.of(batchUnits).divide(mmm.units.Mass.UNITS_PER_KILOGRAM),
 					ThermalPhaseTransition.InterfaceRequirement.NONE, 10000, 3000000);
 			var domain = new FluidDomain(3, 3, 3,
-					new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1.0E-5F, .002F, 0), 64);
+					new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1.0E-5F, .002F));
 			restorePhaseTestCarriers(domain, liquids, new float[]{.125F}, new int[1]);
 			domain.bindThermal(new ThermalRegistry(thermalMaterials(List.of(water, ice)), List.of(), List.of(transition), "", ""), domain.materialRegistry, 200);
 			long sourceMass = domain.totalMassUnits();
@@ -393,7 +384,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				ThermalPhaseTransition.InterfaceRequirement.NONE, 10000, 3000000);
 		var registry = new ThermalRegistry(thermalMaterials(List.of(water, bath, ice)), List.of(), List.of(transition), "", "");
 		var domain = new FluidDomain(3, 3, 3,
-				new FluidSolverConfig(.5F, 64, 0, .05F, 100, 1.0E-5F, .002F, 0), 64);
+				new FluidSolverConfig(.5F, 64, 0, .05F, 100, 1.0E-5F, .002F));
 		restorePhaseTestCarriers(domain, fluids, new float[]{.25F, .25F}, new int[]{0, 1});
 		domain.bindThermal(registry, domain.materialRegistry, 300);
 		var before = domain.exactInternalEnergy();
@@ -486,7 +477,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				new ThermalSpeciesOffset("test:integer/ih", BuiltinChemicalDefinitions.H2O, ice.id(), ExactRational.ZERO)),
 				List.of(transition), chemistry.fingerprint(), "");
 		var domain = new FluidDomain(3, 3, 3,
-				new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .002F, 0), 64);
+				new FluidSolverConfig(.5F, 1_000, 0, .05F, 100, 1E-5F, .002F));
 		domain.sealDomainBoundary();
 		restorePhaseTestCarriers(domain, liquids,
 				freezing ? new float[]{SolidVolume.toCellVolume(batches * batchSvq), .25F} : new float[]{.125F, .125F},
@@ -540,7 +531,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				new mmm.chemistry.ChemicalReaction("test:reaction", mmm.chemistry.ChemicalReaction.Kind.INSTANTANEOUS,
 						"test:water", Map.of("test:a", 1), Map.of("test:b", 1), ExactRational.ZERO)));
 		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F);
 		String phase = "test:thermal/coherent_merge";
 		for (int compositionCase = 0; compositionCase < 3; compositionCase++) {
 			var water = new ThermalMaterialDefinition("test:thermal/merge_water",
@@ -551,7 +542,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 			var offsets = List.of(new ThermalSpeciesOffset("test:offset/a", "test:a", phase, ExactRational.ZERO),
 					new ThermalSpeciesOffset("test:offset/b", "test:b", phase, ExactRational.ZERO));
 			var registry = new ThermalRegistry(thermalMaterials(List.of(water, solid)), offsets, List.of(), chemistry.fingerprint(), "");
-			var domain = new FluidDomain(3, 3, 3, config, 216);
+			var domain = new FluidDomain(3, 3, 3, config);
 			domain.bindMaterialRegistry(liquids); domain.bindChemistry(chemistry);
 			domain.bindThermal(registry, liquids, 300);
 			double firstMass = 1.0, secondMass = 1.0;
@@ -579,7 +570,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 					new ThermalSpeciesOffset("test:offset/a", "test:a", phase, ExactRational.of(1_000_000)),
 					new ThermalSpeciesOffset("test:offset/b", "test:b", phase, ExactRational.of(-1_000_000))),
 					List.of(), chemistry.fingerprint(), "");
-			var accepted = new FluidDomain(3, 3, 3, config, 216);
+			var accepted = new FluidDomain(3, 3, 3, config);
 			accepted.bindMaterialRegistry(liquids); accepted.bindChemistry(chemistry);
 			accepted.bindThermal(ordinary, liquids, 300);
 			accepted.addCoherentPhaseExternal(1, 1, 1, phase, 3, mmm.units.Mass.fromKilograms(firstMass), first, 128);
@@ -597,7 +588,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 							SignedDyadic.of(groups.getFirst().internalEnergy()).subtract(importedEnergy))
 					&& accepted.exactInternalEnergy().equals(accepted.thermalAudit().expectedInventory()),
 					"coherent merge raw energy roundoff was omitted from its audit");
-			var restored = new FluidDomain(3, 3, 3, config, 216);
+			var restored = new FluidDomain(3, 3, 3, config);
 			restored.bindMaterialRegistry(liquids); restored.bindChemistry(chemistry);
 			restored.bindThermal(ordinary, liquids, 300);
 			restored.thermalState.restoreThermalCoherent(groups);
@@ -618,8 +609,8 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 2.0E-3F, 0.0F);
-		FluidDomain domain = new FluidDomain(3, 3, 3, config, 256);
+				100, 1.0E-5F, 2.0E-3F);
+		FluidDomain domain = new FluidDomain(3, 3, 3, config);
 		domain.setVolume(1, 1, 1, 0.75F);
 		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		domain.bindChemistry(chemistry);
@@ -679,7 +670,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		var granular = BuiltinGranularDefinitions.createRegistry();
 		var liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F);
 		var species = new java.util.ArrayList<mmm.chemistry.ChemicalSpecies>();
 		var ids = new java.util.ArrayList<String>();
 		for (int i = 0; i < 17; i++) {
@@ -693,7 +684,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 						Map.of("test:s0", 1), Map.of("test:s1", 1), ExactRational.ZERO)));
 		var thermal = compositionPhaseThermalRegistry(liquids, granular, chemistry);
 		for (int divisor = 1; divisor <= 2; divisor++) {
-			var domain=new FluidDomain(3,3,3,config,256);
+			var domain=new FluidDomain(3,3,3,config);
 			restorePhaseTestCarriers(domain,liquids,0,0,0,new float[]{.125F},new int[1]);domain.bindChemistry(chemistry);
 			var amounts=new java.util.TreeMap<String,Long>();
 			for(int speciesIndex=0;speciesIndex<16;speciesIndex++)amounts.put(ids.get(speciesIndex),10L);
@@ -814,8 +805,8 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				0.0, 10_000_000.0);
 		ThermalRegistry registry = new ThermalRegistry(thermalMaterials(List.of(lower, upper)), List.of(), List.of(transition), "", "");
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 2.0E-3F, 0.0F);
-		FluidDomain domain = new FluidDomain(2, 2, 2, config, 128);
+				100, 1.0E-5F, 2.0E-3F);
+		FluidDomain domain = new FluidDomain(2, 2, 2, config);
 		domain.setVolume(0, 0, 0, 0.5F);
 		domain.bindThermal(registry, liquids, 280.0);
 		ThermalAuditLedger before = domain.thermalAudit();
@@ -828,7 +819,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				&& domain.hasPendingPhaseVolumeWork()
 				&& domain.thermalAudit().mechanicalWork().equals(before.mechanicalWork()),
 				"phase volume was not retained without prematurely booking projection work");
-		FluidDomain lienDomain = new FluidDomain(2, 2, 2, config, 128);
+		FluidDomain lienDomain = new FluidDomain(2, 2, 2, config);
 		lienDomain.setVolume(0, 0, 0, 0.125F);
 		lienDomain.bindThermal(registry, liquids, 280.0);
 		PendingPhaseVolumeState restoredLien = new PendingPhaseVolumeState(8,
@@ -863,7 +854,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 
 	private static void phaseLiquidGeometryMatchesPublishedMarkers(){
 		for(float amount:new float[]{.46875F,.53125F,.75F,0}){
-			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.001F,100,1e-6F,.002F,0),128);
+			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.001F,100,1e-6F,.002F));
 			domain.setVolume(1,1,1,.5F);domain.setVolume(2,1,1,.25F);domain.setVolume(2,0,1,.25F);
 			var neighbour=domain.liquidCells.stocksInCell(domain.domainFlowFields.cellIndex(2,1,1));
 			domain.setVolume(1,1,1,amount);domain.pressureSystem.prepareGeometry();
@@ -957,8 +948,8 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-				100, 1.0E-5F, 2.0E-3F, 0.0F);
-		FluidDomain staleGas = new FluidDomain(3, 3, 3, config, 256);
+				100, 1.0E-5F, 2.0E-3F);
+		FluidDomain staleGas = new FluidDomain(3, 3, 3, config);
 		staleGas.sealDomainBoundary();
 		staleGas.setVolume(1, 1, 1, 0.5F);
 		staleGas.bootstrapGasState("");
@@ -978,7 +969,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				== Double.doubleToRawLongBits(retainedGas),
 				"rejected stale operator clear changed condensed or gas truth");
 
-		FluidDomain domain = new FluidDomain(3, 3, 3, config, 256);
+		FluidDomain domain = new FluidDomain(3, 3, 3, config);
 		domain.setVolume(1, 1, 1, 0.75F);
 		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		domain.bindChemistry(chemistry);
@@ -1005,7 +996,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 	}
 
 	static void operatorClearBindsTheCompleteGeometry() {
-		var d = new FluidDomain(2, 2, 2, new FluidSolverConfig(1, 1000, 0, .001F, 100, 1e-5F, .002F, 0));
+		var d = new FluidDomain(2, 2, 2, new FluidSolverConfig(1, 1000, 0, .001F, 100, 1e-5F, .002F));
 		d.sealDomainBoundary(); d.bootstrapGasState("");
 		var plan = d.planOperatorClear();
 		d.setSolidMicroMask(0, 0, 0, 1);

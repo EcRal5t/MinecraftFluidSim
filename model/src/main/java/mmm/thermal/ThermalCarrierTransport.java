@@ -47,6 +47,7 @@ public final class ThermalCarrierTransport {
 		}
 		@Override public int carrierCount() { return energy.length; }
 		@Override public int cell(int owner) { return owners.cell(owner); }
+		@Override public int supportMask(int owner) { return owners.supportMask(owner); }
 		@Override public ThermalMaterialDefinition material(int owner) { return materials[owner]; }
 		@Override public double mass(int owner) { return mass[owner]; }
 		@Override public double volume(int owner) { return owners.volume(owner); }
@@ -54,7 +55,12 @@ public final class ThermalCarrierTransport {
 		@Override public double internalEnergy(int owner) { return energy[owner]; }
 		@Override public void setInternalEnergy(int owner, double value) { throw new UnsupportedOperationException("Conduction batch is private"); }
 		// Carrier publication retains the supplied doubles, so the final caloric sample remains valid.
-		void commit() { if (publish) owners.setInternalEnergies(energy); }
+		SignedDyadic commit() {
+			if(!publish)return SignedDyadic.ZERO;
+			var before=owners.exactStoredEnergy();
+			owners.setInternalEnergies(energy);
+			return owners.exactStoredEnergy().subtract(before);
+		}
 		/** Exact thermal equilibrium permits omitting contact geometry before the conduction solve. */
 		/** Unresolved conduction leaves the energy columns unchanged; its temperature error stays bounded. */
 		public boolean conductionBelowResolution(double[] reservoirTemperatures) {

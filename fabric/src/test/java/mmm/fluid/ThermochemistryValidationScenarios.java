@@ -220,10 +220,10 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 
 	static void granularReactionHeatUsesOneConservedCellEnergy() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 1.0F / 20.0F,
-				100, 1.0E-5F, 2.0E-3F, 0.0F);
+				100, 1.0E-5F, 2.0E-3F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		FluidDomain domain = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		FluidDomain domain = new FluidDomain(3, 3, 3, config);
 		domain.sealDomainBoundary();
 		domain.setVolume(1, 1, 1, 0.1F);
 		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());

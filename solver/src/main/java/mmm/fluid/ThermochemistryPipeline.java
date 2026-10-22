@@ -28,9 +28,9 @@ final class ThermochemistryPipeline {
 	ThermalTransport.Stats stepTransport(double dtSeconds){
 		var thermal=domain.thermalState;
 		if(thermal==null)throw new IllegalStateException("Thermal state is not bound");
-		var batch=mmm.thermal.ThermalCarrierTransport.prepare(thermal.carrierAccess(domain.domainCapabilities.thermalMarkerContext()));
-		var result=thermal.stepCarrierConduction(batch,LiquidThermalConduction.contacts(domain,batch),dtSeconds);
-		caloricSample=batch;caloricRevision=thermal.thermalRevision();
+		var batch=mmm.thermal.ThermalCarrierTransport.prepare(thermal.exchangeCarrierAccess(domain.domainCapabilities.thermalMarkerContext()));
+		var result=thermal.stepCarrierConduction(batch,CarrierThermalConduction.contacts(domain,batch),dtSeconds);
+		caloricSample=thermal.gasModelBound()?null:batch;caloricRevision=thermal.thermalRevision();
 		return result;
 	}
 

@@ -19,8 +19,8 @@ final class M3MaterialDynamicsValidation {
 	private static void movingBodyCommitsOnlyMarkerMomentum() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 0.0F, 1.0F / 40.0F,
-				200, 1.0E-5F, 2.0E-3F, 0.80F);
-		FluidDomain domain = new FluidDomain(3, 3, 3, config, 128);
+				200, 1.0E-5F, 2.0E-3F);
+		FluidDomain domain = new FluidDomain(3, 3, 3, config);
 		domain.setVolume(1, 1, 1, 1.0F);
 		FlipParticleState before = domain.exportParticleState();
 		long massBefore = domain.totalMassUnits();
@@ -60,7 +60,7 @@ final class M3MaterialDynamicsValidation {
 
 	private static ConnectedVesselResult unequalAreaConnectedVesselBalances() {
 		FluidSolverConfig config = config();
-		FluidDomain domain = new FluidDomain(9, 9, 5, config, 768);
+		FluidDomain domain = new FluidDomain(9, 9, 5, config);
 		fillSolid(domain);
 		for (int x = 1; x <= 7; x++) open(domain, x, 1, 1);
 		for (int x = 6; x <= 7; x++) open(domain, x, 1, 2);
@@ -126,7 +126,7 @@ final class M3MaterialDynamicsValidation {
 		));
 		int heavy = registry.handle("mmm:heavy"), light = registry.handle("mmm:light");
 		FluidSolverConfig config = config();
-		FluidDomain domain = new FluidDomain(6, 7, 4, config, 1_024);
+		FluidDomain domain = new FluidDomain(6, 7, 4, config);
 		fillSolid(domain);
 		for (int y = 1; y <= 5; y++) for (int x = 1; x <= 4; x++) for (int z = 1; z <= 2; z++) {
 			open(domain, x, y, z);
@@ -184,8 +184,7 @@ final class M3MaterialDynamicsValidation {
 	private static FluidSolverConfig config() {
 		return new FluidSolverConfig(
 				1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
-				200, 1.0E-5F, 2.0E-3F, 0.80F
-		);
+				200, 1.0E-5F, 2.0E-3F);
 	}
 
 	private static void fillSolid(FluidDomain domain) {

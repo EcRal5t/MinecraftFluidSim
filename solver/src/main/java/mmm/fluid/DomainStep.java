@@ -41,6 +41,7 @@ final class DomainStep {
 				|| maximumPhaseOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP)) {
 			throw new IllegalArgumentException("Production phase operation budget is invalid");
 		}
+		domain.mechanicalEnergy.beginStep(captureMechanicalAudit);
 		float before = domain.totalVolume();
 		double massBefore = domain.totalMass();
 		MechanicalAuditAccumulator mechanicalAudit = captureMechanicalAudit
@@ -96,7 +97,7 @@ final class DomainStep {
 						finalParticleKineticEnergy, mechanicalPotentialEnergyJoules(),
 						(domain.thermalState == null ? SignedDyadic.ZERO : domain.thermalState.auditLedger().mechanicalWork())
 								.subtract(thermalMechanicalWorkBefore)) : MechanicalStepAudit.notCaptured(),
-				thermalAxis, domain.lastGranularDepositStats, domain.carrierPropertiesWorkspace.finishStep(), viscosity
+				thermalAxis, domain.lastGranularDepositStats, domain.carrierPropertiesWorkspace.finishStep(), viscosity, domain.mechanicalEnergy.correction()
 		);
 	}
 	private static ThermalAxisStats inactiveThermalAxisStats() {
@@ -124,6 +125,9 @@ final class DomainStep {
 	}
 	double mechanicalPotentialEnergyJoules() {
 		double[] energy = {gravitationalPotentialEnergyJoules()};
+        if(domain.thermalState!=null)for(var group:domain.thermalState.coherentPhases().snapshot())
+            energy[0]+=mmm.units.Mass.kilograms(group.massUnits())*domain.config.gravity()*domain.config.cellSize()
+                *(group.cell()/domain.sizeX%domain.sizeY+.5);
 		if (domain.granularState != null) {
 			for (int index = 0; index < domain.granularState.parcels.count(); index++) {
 				var p = domain.granularState.parcels.parcel(index);
@@ -169,7 +173,7 @@ final class DomainStep {
 		return energy;
 	}
 
-	void rebuildGridFromParticles() { domain.rebuildDerivedFromLiquidCells(); }
+	void rebuildInventoryFields() { domain.rebuildDerivedFromLiquidCells(); }
 	public ThermalAxisStats stepThermalAxis(boolean phaseChangeEnabled, int maximumPhaseOperations) {
 		if (domain.thermalState == null) throw new IllegalStateException("Thermal state is not bound");
 		if (phaseChangeEnabled && (maximumPhaseOperations <= 0
@@ -430,7 +434,7 @@ final class DomainStep {
 		requireFiniteMarkerVelocity(request.velocityXMetresPerSecond());
 		requireFiniteMarkerVelocity(request.velocityYMetresPerSecond());
 		requireFiniteMarkerVelocity(request.velocityZMetresPerSecond());
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.preparePhysicalState();
 		double h = domain.config.cellSize(), cellVolume = domain.unitScale.cubicMetersPerNormalizedVolume();
 		double requested = request.displacedVolumeCubicMetres() / cellVolume;
 		if (!(Double.isFinite(requested) && requested > 0)) throw new IllegalArgumentException("Body displacement exceeds solver scale");

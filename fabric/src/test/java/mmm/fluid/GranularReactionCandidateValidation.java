@@ -116,7 +116,7 @@ public final class GranularReactionCandidateValidation {
       require(
           stats.precipitations() > 0 && inventory(d).equals(initial),
           "Thermal candidate did not publish conserved phase transfer");
-      d.domainFlowFields.ensureGrid();
+      d.domainFlowFields.preparePhysicalState();
       double heat = d.thermalAudit().mechanicalWork().toDouble() - beforeHeat;
       require(
           Math.abs(momentumX(d) - beforeP) < 1e-7, "Reaction changed combined MAC/solid momentum");
@@ -215,7 +215,7 @@ public final class GranularReactionCandidateValidation {
   private static void dissolutionUsesSharedCapacityTransport() {
     var d =
         new FluidDomain(
-            3, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .002F, 0), 216);
+            3, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .002F));
     d.sealDomainBoundary();
     var granular = BuiltinGranularDefinitions.createRegistry();
     d.bindGranular(
@@ -264,7 +264,7 @@ public final class GranularReactionCandidateValidation {
     d.liquidCells.planAdditions(stocks).commit();
     d.markCellInventoryChanged();
     bindReactiveThermal(d,-1);
-    d.domainFlowFields.ensureGrid();
+    d.domainFlowFields.preparePhysicalState();
     Arrays.fill(d.mac.velocityX,.25F);
     d.mac.velocityX[d.domainFlowFields.xFaceIndex(2,1,1)]=.75F;
     d.cellMacStage.publishMomentum();
@@ -312,7 +312,7 @@ public final class GranularReactionCandidateValidation {
   private static FluidDomain fixture(boolean thermal, boolean shear, double formationEnergy) {
     var d =
         new FluidDomain(
-            3, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .002F, 0), 216);
+            3, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .002F));
     d.sealDomainBoundary();
     d.setVolume(1, 1, 1, .5F);
     var granular = BuiltinGranularDefinitions.createRegistry();
@@ -331,7 +331,7 @@ public final class GranularReactionCandidateValidation {
             8_320_000L),
         false);
     if (thermal) bindReactiveThermal(d,formationEnergy);
-    d.domainFlowFields.ensureGrid();
+    d.domainFlowFields.preparePhysicalState();
     Arrays.fill(d.mac.velocityX, .25F);
     if (shear) d.mac.velocityX[d.domainFlowFields.xFaceIndex(2, 1, 1)] = .75F;
     d.cellMacStage.publishMomentum();
@@ -429,7 +429,7 @@ public final class GranularReactionCandidateValidation {
   }
 
   private static double kinetic(FluidDomain d) {
-    d.domainFlowFields.ensureGrid();
+    d.domainFlowFields.preparePhysicalState();
     double value = 0;
     for (int axis = 0; axis < 3; axis++) {
       double[] mass =

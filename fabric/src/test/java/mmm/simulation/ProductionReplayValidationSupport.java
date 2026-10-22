@@ -18,7 +18,7 @@ abstract class ProductionReplayValidationSupport {
 	static final double STEP_BUDGET_MILLIS = 40.0;
 
 	static FluidDomain createPouredControllerDomain() {
-		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
+		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig());
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(
 				domain, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
@@ -42,7 +42,7 @@ abstract class ProductionReplayValidationSupport {
 	}
 
 	static FluidDomain createEmptyFullyBoundController(FullCapabilityTestFixture.Registries registries) {
-		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
+		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig());
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 		FullCapabilityTestFixture.bindFull(domain, registries,
@@ -51,7 +51,7 @@ abstract class ProductionReplayValidationSupport {
 	}
 
 	static FluidDomain createFullyBoundPlanarHalfFill(FullCapabilityTestFixture.Registries registries) {
-		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
+		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig());
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 		float[] volumes=new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
@@ -65,7 +65,7 @@ abstract class ProductionReplayValidationSupport {
 	}
 
 	static FluidDomain createFullyBoundCompressedPlanarHalfFill(FullCapabilityTestFixture.Registries registries) {
-		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
+		FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig());
 		domain.sealDomainBoundary();
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 		FullCapabilityTestFixture.bindFull(domain, registries,
@@ -80,7 +80,7 @@ abstract class ProductionReplayValidationSupport {
 
 	/** Maximum-fill solver-side shape and capability profile created by {@code /mmm demo} in empty space. */
 	static FluidDomain createFullyBoundDamBreakDemo(FullCapabilityTestFixture.Registries registries) {
-		FluidDomain domain = new FluidDomain(24, 16, 24, productionConfig(), 73_728);
+		FluidDomain domain = new FluidDomain(24, 16, 24, productionConfig());
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 		float[] volumes=new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
 		for (int y = 0; y < 12; y++) for (int z = 0; z < 24; z++) for (int x = 0; x < 9; x++) {
@@ -96,7 +96,7 @@ abstract class ProductionReplayValidationSupport {
 
 	/** Production {@code /mmm demo} over four full collision layers, matching the world fixture. */
 	static FluidDomain createFullyBoundFloorDamBreakDemo(FullCapabilityTestFixture.Registries registries) {
-		FluidDomain domain = new FluidDomain(24, 16, 24, productionConfig(), 73_728);
+		FluidDomain domain = new FluidDomain(24, 16, 24, productionConfig());
 		FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 		var floor=new java.util.ArrayList<FluidDomain.CollisionEdit>();
 		for (int y = 0; y < 4; y++) for (int z = 0; z < 24; z++) for (int x = 0; x < 24; x++) {
@@ -129,7 +129,7 @@ abstract class ProductionReplayValidationSupport {
 
 	static FluidSolverConfig productionConfig() {
 		return new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				120, 1.0E-4F, 2.0E-3F, 0.80F);
+				120, 1.0E-4F, 2.0E-3F);
 	}
 
 	static FullCapabilityTestFixture.Registries loadProductionRegistries() throws Exception {

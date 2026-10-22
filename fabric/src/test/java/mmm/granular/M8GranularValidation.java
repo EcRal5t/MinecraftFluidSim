@@ -71,13 +71,13 @@ public final class M8GranularValidation {
 	 * definitions later. Every rejection must leave the domain untouched.
 	 */
 	private static void carrierBindingIdentityIsEnforced() {		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				100, 1.0e-5F, 2.0e-3F, 0.8F);
+				100, 1.0e-5F, 2.0e-3F);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry palette = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		MaterialRegistry definitions = BuiltinFluidMaterials.createRegistry();
 
 		// A liquid the definitions do not mention cannot participate in carrier coupling.
-		FluidDomain unknownLiquid = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		FluidDomain unknownLiquid = new FluidDomain(3, 3, 3, config);
 		FluidMaterialRegistry extended = new FluidMaterialRegistry(List.of(
 				BuiltinFluidMaterials.WATER, BuiltinFluidMaterials.OIL, BuiltinFluidMaterials.MERCURY,
 				new mmm.fluid.FluidMaterial("mmm:ghost", 900.0, "mmm:ghost", 0.0, Math.PI / 2.0)));
@@ -87,7 +87,7 @@ public final class M8GranularValidation {
 				"a rejected binding must not leave granular or material state behind");
 
 		// A liquid that disagrees with its definition on base properties is a second source of truth.
-		FluidDomain conflicting = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		FluidDomain conflicting = new FluidDomain(3, 3, 3, config);
 		FluidMaterialRegistry wrongDensity = new FluidMaterialRegistry(List.of(
 				new mmm.fluid.FluidMaterial("mmm:water", 1_050.0, "mmm:aqueous", 0.0, Math.PI / 2.0),
 				BuiltinFluidMaterials.OIL, BuiltinFluidMaterials.MERCURY));
@@ -96,7 +96,7 @@ public final class M8GranularValidation {
 		require(!conflicting.hasGranularState(), "a rejected binding must not install granular state");
 
 		// A liquid whose definition declares no viscosity cannot be coupled at any temperature.
-		FluidDomain undeclared = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		FluidDomain undeclared = new FluidDomain(3, 3, 3, config);
 		MaterialRegistry withoutViscosity = new MaterialRegistry(List.of(
 				new MaterialRegistry.MaterialEntry(BuiltinFluidMaterials.WATER, List.of()),
 				new MaterialRegistry.MaterialEntry(BuiltinFluidMaterials.OIL,
@@ -108,7 +108,7 @@ public final class M8GranularValidation {
 		require(!undeclared.hasGranularState(), "a rejected binding must not install granular state");
 
 		// Rebinding the same definitions stays legal, including after material state already exists.
-		FluidDomain bound = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		FluidDomain bound = new FluidDomain(3, 3, 3, config);
 		bound.bindGranular(granular, palette, definitions);
 		long granularRevisionBefore = bound.totalGranularSolidVolumeSvq();
 		bound.bindGranular(granular, palette, definitions);
@@ -129,7 +129,7 @@ public final class M8GranularValidation {
 		MaterialRegistry definitions = registries.materials();
 		for (double temperatureK : new double[] {293.15, 353.15}) {
 			FluidDomain domain = new FluidDomain(4, 4, 4, new FluidSolverConfig(0.5F, 1_000.0F, 0.0F,
-					1.0F / 20.0F, 200, 1.0e-5F, 2.0e-3F, 0.8F), 4 * 4 * 4 * 8);
+					1.0F / 20.0F, 200, 1.0e-5F, 2.0e-3F));
 			FullCapabilityTestFixture.bindFull(domain, registries, temperatureK, 4);
 			domain.setVolume(1, 1, 1, 1.0F);
 			domain.setThermalTemperatureInCell(1, 1, 1, temperatureK);
@@ -147,10 +147,10 @@ public final class M8GranularValidation {
 	}
 
 	private static void exactDryContainerTransferIsAtomic() throws Exception {		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				100, 1.0e-5F, 2.0e-3F, 0.8F);
+				100, 1.0e-5F, 2.0e-3F);
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
-		FluidDomain domain = new FluidDomain(6, 6, 6, config, 6 * 6 * 6 * 8);
+		FluidDomain domain = new FluidDomain(6, 6, 6, config);
 		FullCapabilityTestFixture.Registries production=FullCapabilityTestFixture.load();
 		domain.bindGasRegistry(production.gas());
 		domain.bindGranular(registry, liquids, BuiltinFluidMaterials.createRegistry()); domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
@@ -199,7 +199,7 @@ public final class M8GranularValidation {
 				&& domain.granularExternalSource().entries().stream().mapToLong(GranularAuditLedger.Entry::solidVolumeSvq).sum()
 				== input.totalSolidVolumeSvq(), "dry granular boundary audit did not close source/sink SVQ");
 
-		FluidDomain sealed = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		FluidDomain sealed = new FluidDomain(3, 3, 3, config);
 		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) sealed.setVolume(x, y, z, 1.0F);
 		sealed.bindGranular(registry, liquids, BuiltinFluidMaterials.createRegistry()); sealed.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		GranularTransferLedger small = new GranularTransferLedger(List.of(new GranularTransferLedger.Group(
@@ -208,7 +208,7 @@ public final class M8GranularValidation {
 				&& sealed.totalGranularSolidVolumeSvq() == 0L,
 				"sealed dry granular insertion was not rejected atomically");
 
-		FluidDomain collision = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		FluidDomain collision = new FluidDomain(3, 3, 3, config);
 		collision.bindGranular(registry, liquids, BuiltinFluidMaterials.createRegistry()); collision.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		require(collision.tryInsertExactGranular(1, 1, 1, small, 0, true).inserted(),
 				"collision displacement fixture could not insert its local parcel");
@@ -247,11 +247,11 @@ public final class M8GranularValidation {
 
 	private static void phaseTransferPrecipitatesAndDissolves() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				100, 1.0e-5F, 2.0e-3F, 0.8F);
+				100, 1.0e-5F, 2.0e-3F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
 		mmm.fluid.GranularReactionCandidateValidation.validate();
-		FluidDomain domain = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		FluidDomain domain = new FluidDomain(3, 3, 3, config);
 		// Exercise a fractional liquid inventory through reaction, transport and recovery.
 		domain.setVolume(1, 1, 1, 0.1F);
 		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
@@ -1543,11 +1543,11 @@ public final class M8GranularValidation {
 
 	private static void porousBedPreservesHydrostatics() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				200, 1.0e-6F, 2.0e-3F, 0.8F);
+				200, 1.0e-6F, 2.0e-3F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry registry = BuiltinGranularDefinitions.createRegistry();
 		int sizeX = 2, sizeY = 5, sizeZ = 2;
-		FluidDomain domain = new FluidDomain(sizeX, sizeY, sizeZ, config, sizeX * sizeY * sizeZ * 8);
+		FluidDomain domain = new FluidDomain(sizeX, sizeY, sizeZ, config);
 		for (int z = 0; z < sizeZ; z++) for (int x = 0; x < sizeX; x++) {
 			domain.setVolume(x, 0, z, 0.75F);
 			domain.setVolume(x, 1, z, 1.0F);
@@ -2077,10 +2077,10 @@ public final class M8GranularValidation {
 
 	private static void solverCouplingPreservesInventories(int steps) {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				200, 1.0e-5F, 2.0e-3F, 0.8F);
+				200, 1.0e-5F, 2.0e-3F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		FluidDomain domain = new FluidDomain(4, 8, 4, config, 4 * 8 * 4 * 8);
+		FluidDomain domain = new FluidDomain(4, 8, 4, config);
 		for (int z = 0; z < 4; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 4; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
@@ -2104,7 +2104,7 @@ public final class M8GranularValidation {
 		require(domain.totalGranularSolidVolumeSvq() == svq, "solver granular coupling changed solid SVQ");
 		require(rawClose(domain.totalGranularMass(), mass), "solver granular coupling changed solid mass");
 
-		FluidDomain sealed = new FluidDomain(3, 3, 3, config, 3 * 3 * 3 * 8);
+		FluidDomain sealed = new FluidDomain(3, 3, 3, config);
 		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++) {
 			sealed.setVolume(x, y, z, 1.0F);
 		}
@@ -2116,10 +2116,10 @@ public final class M8GranularValidation {
 
 	private static void wholeBucketCongestionRemainsLocal(int steps) throws Exception {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				100, 1.0e-5F, 2.0e-3F, 0.8F);
+				100, 1.0e-5F, 2.0e-3F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		FluidDomain domain = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
+		FluidDomain domain = new FluidDomain(8, 8, 8, config);
 		FullCapabilityTestFixture.Registries production = FullCapabilityTestFixture.load();
 		// Granular insertion commits pore geometry and starts the gas topology.
 		domain.bindGasRegistry(production.gas());
@@ -2239,10 +2239,10 @@ public final class M8GranularValidation {
 
 	private static void singleBucketPourSettlesWithinTenSeconds() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				100, 1.0e-5F, 2.0e-3F, 0.8F);
+				100, 1.0e-5F, 2.0e-3F);
 		FluidMaterialRegistry liquids = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		GranularRegistry granular = BuiltinGranularDefinitions.createRegistry();
-		FluidDomain domain = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
+		FluidDomain domain = new FluidDomain(8, 8, 8, config);
 		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		double density = granular.material(granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND))
 				.referenceDensity();
@@ -2371,13 +2371,13 @@ public final class M8GranularValidation {
 
 	private static void emptyGranularInventoryUsesCommonLiquidStep() {
 		FluidSolverConfig config = new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				100, 1.0e-5F, 2.0e-3F, 0.8F);
+				100, 1.0e-5F, 2.0e-3F);
 		int sizeX = 24, sizeY = 16, sizeZ = 24, capacity = sizeX * sizeY * sizeZ * 8;
-		FluidDomain baseline = new FluidDomain(sizeX, sizeY, sizeZ, config, capacity);
+		FluidDomain baseline = new FluidDomain(sizeX, sizeY, sizeZ, config);
 		FullCapabilityTestFixture.bindEmptyMaterialState(baseline,
 				new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 		baseline.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
-		FluidDomain granular = new FluidDomain(sizeX, sizeY, sizeZ, config, capacity);
+		FluidDomain granular = new FluidDomain(sizeX, sizeY, sizeZ, config);
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < sizeX; x++) {
 			baseline.setVolume(x, y, z, 1.0F); granular.setVolume(x, y, z, 1.0F);
 		}

@@ -5,7 +5,7 @@ import mmm.fluid.air.*;
 import mmm.units.SignedDyadic;
 import java.util.List;
 
-/** Frozen-state, first-order cavity flow: macroscopic pressure response and exact shared inventories. */
+/** First-order simultaneous cavity flow: macroscopic pressure response and exact shared inventories. */
 public final class GasTransferValidation {
 	private GasTransferValidation() { }
 	public static void main(String[] args) {
@@ -21,6 +21,7 @@ public final class GasTransferValidation {
 		sharedDonorIsIndependentOfPortOrder();
 		pressurePropagatesAcrossAnInitiallyBalancedPort();
 		thermalEnthalpyAndPositiveTemperature();
+		unequalTemperatureBlowdown();
 		ambientAndLiquidSeal();
 	}
 
@@ -125,6 +126,39 @@ public final class GasTransferValidation {
 				"Finite thermal flow did not relax the macroscopic pressure contrast");
 		for (int i = 0; i < 4; i++) fixture.step(.05);
 		fixture.checkAudit();
+	}
+
+	private static void unequalTemperatureBlowdown() {
+		for (double dt : new double[]{.05, .005}) {
+			var fixture = thermal(.125 * 1.1 * GasRegistry.STANDARD_TEMPERATURE_K / 900,
+					.125 * .9 * GasRegistry.STANDARD_TEMPERATURE_K / 300);
+			fixture.network.updateAvailableVolume(1, .125); fixture.network.updateAvailableVolume(2, .125);
+			var inventories = fixture.network.nodeIds().stream().map(fixture.network::inventory).toList();
+			var model = new GasThermalModel(new ThermalRegistry(List.of(new ThermalMaterialDefinition("test:thermal/gas",
+					ThermalMaterialDefinition.CarrierKind.GAS, "test:gas", 300, 0, 0,
+					List.of(new ThermalMaterialDefinition.CaloricSegment(1, 2000, 718))))), fixture.network.registry());
+			double[] energies = {model.internalEnergyAtTemperature(inventories.get(0), 900), model.internalEnergyAtTemperature(inventories.get(1), 300)};
+			double initialEnergy = fixture.energy.nodeEnergy(1, fixture.network) + fixture.energy.nodeEnergy(2, fixture.network);
+			fixture.energy.commitInventoryEnergy(fixture.energy.planInventoryEnergy(fixture.network, fixture.network.nodeIds(), inventories,
+					energies, SignedDyadic.of(energies[0] + energies[1] - initialEnergy), SignedDyadic.ZERO, SignedDyadic.ZERO));
+			fixture.network.addOrMergeEdge(1, 2, .0625, .65);
+			double pressure1 = fixture.energy.gaugePressure(1, fixture.network) + AirNetwork.REFERENCE_PRESSURE;
+			double pressure2 = fixture.energy.gaugePressure(2, fixture.network) + AirNetwork.REFERENCE_PRESSURE;
+			double total = fixture.energy.exactGasEnergy().toDouble();
+			for (int step = 0; step < Math.round(.5 / dt); step++) {
+				fixture.step(dt);
+				require(fixture.energy.gaugePressure(1, fixture.network) - fixture.energy.gaugePressure(2, fixture.network) >= -.02,
+						"Hot-to-cold orifice flow reversed its actual pressure difference");
+			}
+			double gamma = 1 + AirNetwork.REFERENCE_PRESSURE / GasRegistry.STANDARD_TEMPERATURE_K / 718;
+			double expected = 900 * Math.pow((pressure1 + pressure2) / (2 * pressure1), (gamma - 1) / gamma);
+			require(Math.abs(fixture.energy.temperature(1, fixture.network) - expected) < .05,
+					"Coarse hot-cavity discharge changed the isentropic equilibrium temperature");
+			require(Math.abs(fixture.energy.exactGasEnergy().toDouble() - total) < 1e-7, "Closed hot/cold cavities changed total U");
+			System.out.printf("  hot/cold orifice dt=%.3f s: donor T=%.6f K, isentropic equilibrium=%.6f K, deltaP=%.6g Pa%n", dt,
+					fixture.energy.temperature(1, fixture.network), expected, fixture.energy.gaugePressure(1, fixture.network) - fixture.energy.gaugePressure(2, fixture.network));
+			fixture.checkAudit();
+		}
 	}
 
 	private static void ambientAndLiquidSeal() {

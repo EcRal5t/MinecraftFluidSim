@@ -628,9 +628,9 @@ public final class ContainerTransferStoreValidation {
 
 	private static void testActualMarkerSettlement() {
 		FluidSolverConfig config = new FluidSolverConfig(
-				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F, 0.80F);
+				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
 		for (long requested : new long[] {1L, 59L, 333_333_333L, 999_999_999L, 1_000_000_000L}) {
-			FluidDomain domain = new FluidDomain(6, 4, 6, config, 1_024);
+			FluidDomain domain = new FluidDomain(6, 4, 6, config);
 			float plannedVolume = MinecraftContainerTransferOperations.nanosToCellVolumeAtMost(domain.unitScale(), requested);
 			long plannedNanos = MinecraftContainerTransferOperations.cellVolumeToNanos(domain.unitScale(), plannedVolume);
 			check(plannedNanos > 0L && plannedNanos <= requested,
@@ -656,8 +656,8 @@ public final class ContainerTransferStoreValidation {
 
 	private static void testMaterialSettlement() {
 		FluidSolverConfig config = new FluidSolverConfig(
-				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F, 0.80F);
-		FluidDomain domain = new FluidDomain(6, 4, 6, config, 1_024);
+				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
+		FluidDomain domain = new FluidDomain(6, 4, 6, config);
 		domain.setVolume(1, 1, 1, 0.125F);
 		FlipParticleState pure = domain.exportParticleState();
 		List<FluidMaterial> materials = List.of(
@@ -697,7 +697,7 @@ public final class ContainerTransferStoreValidation {
 	}
 
 	private static void testTinyThermalMaterialSettlement() {
-		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 48, 1.0E-4F, 2.0E-3F, 0.80F);
+		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 48, 1.0E-4F, 2.0E-3F);
 		var liquids = new mmm.fluid.FluidMaterialRegistry(List.of(
 				new FluidMaterial("mmm:water", 1_000.0, "mmm:aqueous", 0.0, Math.PI / 2)));
 		var definition = new ThermalMaterialDefinition("test:thermal/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
@@ -705,7 +705,7 @@ public final class ContainerTransferStoreValidation {
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4184.0)));
 		var registry = new ThermalRegistry(List.of(definition));
 		var state = new ThermalStateFunction(registry);
-		var domain = new FluidDomain(3, 3, 3, config, 216);
+		var domain = new FluidDomain(3, 3, 3, config);
 		domain.bindThermal(registry, liquids, 300.0);
 		var source = new FluidMixture(List.of(new FluidMixture.Component("mmm:water", 999_999_999L, mmm.units.Mass.fromKilograms(999.0))));
 		var planned = MinecraftContainerTransferOperations.planMaterialInsertion(domain, source);
@@ -739,9 +739,9 @@ public final class ContainerTransferStoreValidation {
 	}
 
 	private static void testChemicalInsertionMassConservation() {
-		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 48, 1.0E-4F, 2.0E-3F, 0.80F);
+		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 48, 1.0E-4F, 2.0E-3F);
 		for (double sourceMass : new double[] {1.0, 18.0, 999.0}) {
-			var domain = new FluidDomain(3, 3, 3, config, 216);
+			var domain = new FluidDomain(3, 3, 3, config);
 			domain.bindGranular(BuiltinGranularDefinitions.createRegistry(),
 					new mmm.fluid.FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
 			domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
@@ -769,7 +769,7 @@ public final class ContainerTransferStoreValidation {
 	}
 
 	private static void testExistingBucketThermalSettlement() {
-		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 48, 1.0E-4F, 2.0E-3F, 0.80F);
+		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F, 48, 1.0E-4F, 2.0E-3F);
 		var liquids = new mmm.fluid.FluidMaterialRegistry(List.of(
 				new FluidMaterial("mmm:water", 1_000.0, "mmm:aqueous", 0.0, Math.PI / 2)));
 		var definition = new ThermalMaterialDefinition("test:thermal/water", ThermalMaterialDefinition.CarrierKind.LIQUID,
@@ -777,11 +777,11 @@ public final class ContainerTransferStoreValidation {
 				List.of(new ThermalMaterialDefinition.CaloricSegment(250.0, 600.0, 4184.0)));
 		var registry = new ThermalRegistry(List.of(definition));
 		for (double sign : new double[] {-1.0, 1.0}) {
-			var source = new FluidDomain(3, 3, 3, config, 216);
+			var source = new FluidDomain(3, 3, 3, config);
 			source.setVolume(1, 1, 1, 0.125F);
 			source.setVolume(2, 1, 1, 0.125F);
 			source.bindThermal(registry, liquids, 300.0);
-			var domain = new FluidDomain(3, 3, 3, config, 216);
+			var domain = new FluidDomain(3, 3, 3, config);
 			domain.restoreMaterialParticleState(source.exportMaterialParticleState());
 			double[] energy = new double[domain.particleCount()];
 			energy[0] = sign * 16_384.0;
@@ -818,8 +818,8 @@ public final class ContainerTransferStoreValidation {
 
 	private static void testPartialOutlet() {
 		FluidSolverConfig config = new FluidSolverConfig(
-				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F, 0.80F);
-		FluidDomain domain = new FluidDomain(4, 4, 4, config, 64);
+				0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
+		FluidDomain domain = new FluidDomain(4, 4, 4, config);
 		domain.tryInsertExactVolume(2, 2, 2, 0.5F, 1);
 		long requested = MinecraftContainerTransferOperations.extractableNanos(domain, new int[] {2, 2, 2},
 				mmm.transfer.ContainerFluidLedger.NANOS_PER_BLOCK, 1, 0);
@@ -834,17 +834,17 @@ public final class ContainerTransferStoreValidation {
 		Path root = Files.createTempDirectory("mmm-ownership-checkpoint-lock");
 		try {
 			FluidSolverConfig config = new FluidSolverConfig(
-					0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F, 0.80F);
+					0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
 			UUID regionId = UUID.randomUUID();
 			BlockPos origin = BlockPos.ZERO;
 			BlockPos controller = new BlockPos(-1, 0, 0);
 			FluidRegionFootprint footprint = new FluidRegionFootprint(
 					controller, origin, origin, Set.of(origin.asLong()), Set.of(controller.asLong()),
 					Set.of(ChunkPos.pack(0, 0)));
-			FluidDomain domain = new FluidDomain(2, 2, 2, config, 64);
+			FluidDomain domain = new FluidDomain(2, 2, 2, config);
 			domain.setVolume(1, 1, 1, 0.25F);
 			FluidRegion region = new FluidRegion(regionId, DIMENSION,
-					origin, domain, 64L, footprint);
+					origin, domain, footprint);
 			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(root, TestProfiles.materials(), null, null, null, null, TestProfiles.materialRegistry());
 			check(persistence.checkpoint(region) == 1L, "fixture did not publish its first checkpoint");
 
@@ -868,14 +868,14 @@ public final class ContainerTransferStoreValidation {
 		Path root = Files.createTempDirectory("mmm-container-target-adoption");
 		try {
 			FluidSolverConfig config = new FluidSolverConfig(
-					0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F, 0.80F);
+					0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
 			UUID regionId = UUID.randomUUID();
 			BlockPos origin = BlockPos.ZERO;
 			BlockPos controller = new BlockPos(-1, 0, 0);
 			FluidRegionFootprint footprint = new FluidRegionFootprint(
 					controller, origin, origin, Set.of(origin.asLong()), Set.of(controller.asLong()),
 					Set.of(ChunkPos.pack(0, 0)));
-			FluidDomain pure = new FluidDomain(2, 2, 2, config, 64);
+			FluidDomain pure = new FluidDomain(2, 2, 2, config);
 			pure.setVolume(1, 1, 1, 0.25F);
 			FlipParticleState particles = pure.exportParticleState();
 			float[] positionVolume = particles.copyPositionVolume();
@@ -886,12 +886,12 @@ public final class ContainerTransferStoreValidation {
 				masses[marker] = positionVolume[marker * 4 + 3] * config.density();
 				totalMass += masses[marker];
 			}
-			FluidDomain base = new FluidDomain(2, 2, 2, config, 64);
+			FluidDomain base = new FluidDomain(2, 2, 2, config);
 			base.restoreMaterialParticleState(new FlipMaterialParticleState(
 					2, 2, 2, config.cellSize(), particles.particleCount(), particles.totalVolume(), mmm.units.SolverUnitScale.forCellSize(config.cellSize()).massUnitsForNormalized(totalMass),
 					BuiltinFluidMaterials.DEFAULT_PALETTE, positionVolume, particles.copyParticleVelocities(),
 					particles.copySolidMask(), java.util.Arrays.stream(masses).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(config.cellSize()).massUnitsForNormalized(m)).toArray(), materials));
-			FluidRegion region = new FluidRegion(regionId, DIMENSION, origin, base, 64L, footprint);
+			FluidRegion region = new FluidRegion(regionId, DIMENSION, origin, base, footprint);
 			base.sealDomainBoundary();
 			base.bootstrapGasState("");
 			base.step(false, 0);
@@ -931,8 +931,8 @@ public final class ContainerTransferStoreValidation {
 		try {
 			FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
 			FluidSolverConfig config = new FluidSolverConfig(
-					0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 120, 1.0E-4F, 2.0E-3F, 0.80F);
-			FluidDomain domain = new FluidDomain(8, 8, 8, config, 4_096);
+					0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 120, 1.0E-4F, 2.0E-3F);
+			FluidDomain domain = new FluidDomain(8, 8, 8, config);
 			domain.sealDomainBoundary();
 			FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 			FullCapabilityTestFixture.bindFull(domain, registries, 293.15,
@@ -945,7 +945,7 @@ public final class ContainerTransferStoreValidation {
 			BlockPos controller = new BlockPos(-1, 1, 1);
 			FluidRegionFootprint footprint = new FluidRegionFootprint(controller, origin, new BlockPos(3, 3, 3),
 					interior, Set.of(controller.asLong()), Set.of(ChunkPos.pack(0, 0), ChunkPos.pack(-1, 0)));
-			FluidRegion region = new FluidRegion(UUID.randomUUID(), DIMENSION, origin, domain, 4_096L, footprint);
+			FluidRegion region = new FluidRegion(UUID.randomUUID(), DIMENSION, origin, domain, footprint);
 			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(root, TestProfiles.full(),
 					registries.chemical(), registries.granular(), registries.thermal(), registries.gas(), TestProfiles.materialRegistry());
 			check(persistence.checkpoint(region) == 1L,

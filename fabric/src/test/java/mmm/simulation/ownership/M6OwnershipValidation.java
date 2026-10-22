@@ -45,7 +45,7 @@ public final class M6OwnershipValidation {
 	private static final ResourceKey<Level> DIMENSION = ResourceKey.create(DIMENSION_REGISTRY,
 			Identifier.fromNamespaceAndPath("mmm", "ownership_validation"));
 	private static final FluidSolverConfig CONFIG = new FluidSolverConfig(
-			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F, 0.80F);
+			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
 	private static int passed;
 
 	private M6OwnershipValidation() { }
@@ -526,7 +526,7 @@ public final class M6OwnershipValidation {
 
 	private static FluidRegion populatedRegion(UUID id) {
 		BlockPos origin = new BlockPos(15, 16, 15);
-		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG, 512);
+		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG);
 		domain.setSolid(0, 0, 0, true);
 		domain.setVolume(1, 1, 1, 0.25F);
 		domain.setVolume(2, 1, 2, 1.0F);
@@ -544,7 +544,7 @@ public final class M6OwnershipValidation {
 		Set<Long> chunks = Set.of(ChunkPos.pack(0, 0), ChunkPos.pack(1, 0), ChunkPos.pack(0, 1), ChunkPos.pack(1, 1));
 		FluidRegionFootprint footprint = new FluidRegionFootprint(controller, origin, new BlockPos(17, 17, 17),
 				interior, Set.of(controller.asLong()), chunks);
-		return new FluidRegion(id, DIMENSION, origin, domain, 512L, footprint);
+		return new FluidRegion(id, DIMENSION, origin, domain, footprint);
 	}
 
 	private static void assertJournalEquals(OwnershipJournal expected, OwnershipJournal actual) {

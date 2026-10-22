@@ -31,7 +31,7 @@ import java.util.List;
 /** Exact container quantities, actual cell transfer transactions and complete recovery. */
 public final class M6ContainerValidation {
 	private static final FluidSolverConfig CONFIG = new FluidSolverConfig(
-			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F, 0.80F);
+			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
 	private static final long BUCKET = ContainerFluidLedger.NANOS_PER_BLOCK;
 	private static int passed;
 
@@ -279,7 +279,7 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testConversions() {
-		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG, 512);
+		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG);
 		domain.setVolume(1, 1, 1, 0.25F);
 		domain.setVolume(2, 1, 2, 1.0F);
 		domain.setVolume(4, 2, 4, 0.625F);
@@ -343,7 +343,7 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testExactInsert() {
-		var domain=new FluidDomain(6,4,6,CONFIG,512);domain.setSolid(0,0,0,true);
+		var domain=new FluidDomain(6,4,6,CONFIG);domain.setSolid(0,0,0,true);
 		var inserted=domain.tryInsertExactVolume(3,2,3,.375F,2);
 		check(inserted.transferred()&&inserted.volume()==.375
 				&&inventoryVolume(domain).equals(SignedDyadic.of(inserted.volume()))&&domain.totalMassUnits()==inserted.massUnits(),
@@ -351,7 +351,7 @@ public final class M6ContainerValidation {
 		var before=domain.captureAuthoritativeState();
 		check(!domain.tryInsertExactVolume(3,2,3,100,3).transferred(),"Insertion exceeded actual open capacity");
 		FluidDomainStateAssertions.assertSameState(before,domain.captureAuthoritativeState(),"Capacity-limited insertion");
-		var compact=new FluidDomain(6,4,6,CONFIG,4);
+		var compact=new FluidDomain(6,4,6,CONFIG);
 		var addition=compact.tryInsertExactVolume(3,2,3,1,2);
 		check(addition.transferred()&&inventoryVolume(compact).equals(SignedDyadic.of(1))&&compact.totalMassUnits()==addition.massUnits(),
 				"Insertion depended on the old display sampling budget");
@@ -363,7 +363,7 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testExactExtract() {
-		var domain=new FluidDomain(6,4,6,CONFIG,512);
+		var domain=new FluidDomain(6,4,6,CONFIG);
 		check(domain.tryInsertExactVolume(3,2,3,.375F,2).transferred(),"Extraction setup failed");
 		var source=domain.captureAuthoritativeState();var volume=inventoryVolume(domain);long mass=domain.totalMassUnits();
 		check(!domain.tryExtractExactVolume(3,2,3,.5F,2).transferred(),"Extraction exceeded available stock");
@@ -376,7 +376,7 @@ public final class M6ContainerValidation {
 		check(domain.tryExtractExactVolume(3,2,3,0,2).transferred(),"Zero-volume extraction failed");
 		FluidDomainStateAssertions.assertSameState(source,domain.captureAuthoritativeState(),"Zero-volume extraction");
 
-		var coarse=new FluidDomain(4,4,4,CONFIG,64);
+		var coarse=new FluidDomain(4,4,4,CONFIG);
 		check(coarse.tryInsertExactVolume(1,1,1,.125F,0).transferred(),"Small-transfer setup failed");
 		var original=coarse.captureAuthoritativeState();
 		// Display positions and float volume samples can stay unchanged while exact stock moves.
@@ -418,7 +418,7 @@ public final class M6ContainerValidation {
 	}
 
 	private static void testExactMaterialMass() {
-		FluidDomain residual = new FluidDomain(4, 4, 4, CONFIG, 64);
+		FluidDomain residual = new FluidDomain(4, 4, 4, CONFIG);
 		FluidDomain.ExactVolumeTransfer seeded = residual.tryInsertExactVolume(2, 2, 2, 5.0E-7F, 0);
 		check(seeded.transferred(), "could not seed a small inventory");
 		FluidDomain.ExactVolumeTransfer tiny = residual.tryExtractExactVolume(2, 2, 2, 1.0E-7F, 0);
@@ -427,7 +427,7 @@ public final class M6ContainerValidation {
 				"exact extraction zeroed a positive sub-micro residual: transferred=" + tiny.transferred()
 						+ ", removed=" + tiny.volume() + ", residual=" + residual.totalVolumeExact());
 
-		FluidDomain domain = new FluidDomain(4, 4, 4, CONFIG, 80);
+		FluidDomain domain = new FluidDomain(4, 4, 4, CONFIG);
 		domain.bindMaterialRegistry(new mmm.fluid.FluidMaterialRegistry(List.of(
 				new FluidMaterial("mmm:water",1000,"mmm:aqueous",0,Math.PI/2),
 				new FluidMaterial("mmm:oil",800,"mmm:oil",0,Math.PI/2))));
@@ -469,7 +469,7 @@ public final class M6ContainerValidation {
 			// expected: persisted strings are bounded before splitting or allocation
 		}
 
-		FluidDomain domain = new FluidDomain(4, 4, 4, CONFIG, 80);
+		FluidDomain domain = new FluidDomain(4, 4, 4, CONFIG);
 		domain.bindMaterialRegistry(new mmm.fluid.FluidMaterialRegistry(List.of(
 				new FluidMaterial("mmm:water",1000,"mmm:aqueous",0,Math.PI/2),
 				new FluidMaterial("mmm:oil",800,"mmm:oil",0,Math.PI/2))));
@@ -519,7 +519,7 @@ public final class M6ContainerValidation {
 			// A malformed item must be rejected during construction, before tooltip/WAL callers.
 		}
 
-		FluidDomain domain = new FluidDomain(4, 4, 4, CONFIG, 64);
+		FluidDomain domain = new FluidDomain(4, 4, 4, CONFIG);
 		try {
 			domain.tryInsertExactMixture(2, 2, 2,
 					List.of(new FluidDomain.MaterialPortion(0, Double.NaN, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(1.0))), 1);
@@ -536,7 +536,7 @@ public final class M6ContainerValidation {
 	 * debits at most the container's balance. The combined ledger drift stays tiny and bounded.
 	 */
 	private static void testBucketRoundTrip() {
-		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG, 512);
+		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG);
 		// Initial pour: a full bucket empties into the region.
 		var units = mmm.units.SolverUnitScale.forCellSize(CONFIG.cellSize());
 		long containerNanos = BUCKET;

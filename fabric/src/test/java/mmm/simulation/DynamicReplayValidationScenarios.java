@@ -333,6 +333,9 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		double maximumBodyPressureResidual = 0.0, maximumPressureResidual = 0.0;
 		long phaseOperations = 0L, boiledCells = 0L, condensedCells = 0L;
 		double previousAvailable = restored.gasBoundary().availableVolume(1);
+		double cumulativeCorrection=0,absoluteCorrection=0;
+		double cumulativeRepresentation=0,cumulativeResolved=0,absoluteResolved=0,cumulativeResolvedPotential=0;
+		double initialRepresentationBound=Double.NaN,finalRepresentationBound=0;
 		require(perturbed ? initialKinetic>1 : initialKinetic==0,
 				"compressed planar fixture lost its initial disturbance condition");
 		require(restored.gasNodeGaugePressurePa(1) > 100_000.0,
@@ -350,6 +353,29 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 					"compressed planar backend generation was not adjacent at step " + step);
 			FluidDomain.StepStats stats = candidate.stats();
 			FluidDomain.MechanicalStepAudit audit = stats.mechanicalAudit();
+            var correction=stats.mechanicalCorrection();
+            cumulativeCorrection+=correction.signedJoules();absoluteCorrection+=correction.absoluteJoules();
+            cumulativeRepresentation+=correction.representationJoules();cumulativeResolved+=correction.resolvedJoules();
+            absoluteResolved+=Math.abs(correction.resolvedJoules());
+            cumulativeResolvedPotential+=correction.resolvedPotentialChangeJoules();
+            if(correction.spatialObservationCaptured()){
+                if(Double.isNaN(initialRepresentationBound))initialRepresentationBound=correction.initialRepresentationBoundJoules();
+                finalRepresentationBound=correction.finalRepresentationBoundJoules();
+            }
+            require(stats.pressureIterations()<=stats.substeps()*restored.config().maxPressureIterations(),"Pressure iteration budget exceeded");
+            // Cell-centre PE changes when a thin surface slice enters the next cell. Its
+            // reversible exchange is limited by the initial/final geometric centroid range.
+            double representationBudget=(Double.isNaN(initialRepresentationBound)?0:initialRepresentationBound)+finalRepresentationBound+.025;
+            require(Math.abs(cumulativeRepresentation)<=representationBudget,
+                    "Cell-centre potential representation exceeded geometric scale: signed="+cumulativeRepresentation+", allowance="+representationBudget);
+            // Positive resolved exchange includes pressure-projection dissipation, paid by
+            // the initial motion and released PLIC potential. Negative exchange draws heat
+            // into resolved mechanical motion and retains the input-relative error budget.
+            double availableMechanical=initialKinetic+Math.max(0,-cumulativeResolvedPotential)+.025;
+            require(cumulativeResolved>=-(.2*initialKinetic+.025)&&cumulativeResolved<=availableMechanical,
+                    "Resolved force exchange exceeded mechanical input: signed="+cumulativeResolved+", borrowedHeatBudget="+(.2*initialKinetic+.025)
+                    +", availableMechanical="+availableMechanical+", total="+cumulativeCorrection+", representation="+cumulativeRepresentation);
+
 			restored = FluidDomain.restoreAuthoritativeState(candidate.state());
 			double kinetic = audit.finalParticleKineticEnergyJoules();
 			int headspace = dominantGasNodeWithEos(restored);
@@ -399,10 +425,12 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			previousAvailable = available;
 			if ((step + 1) % 100 == 0) {
 				System.out.printf("  compressed planar backend step %03d: K=%.9g J dV=%+.9g m3 "
-						+ "PCG=%d residual=%.9g p=%+.3f Pa T=%.6f K unresolvedE=%.9g J%n",
+						+ "PCG=%d residual=%.9g p=%+.3f Pa T=%.6f K unresolvedE=%.9g J correction=%+.9g absolute=%.9g J%n",
 						step + 1, kinetic, deltaAvailable, stats.pressureIterations(),
 						stats.pressureResidual(), restored.gasNodeGaugePressurePa(headspace),
-						restored.gasNodeTemperatureK(headspace),energyError);
+						restored.gasNodeTemperatureK(headspace),energyError,cumulativeCorrection,absoluteCorrection);
+				System.out.printf("  correction decomposition: representation=%+.9g J / %.9g J geometric range, resolved=%+.9g J, resolved absolute variation=%.9g J, PLIC dPE=%+.9g J%n",
+						cumulativeRepresentation,representationBudget,cumulativeResolved,absoluteResolved,cumulativeResolvedPotential);
 			}
 		}
 		double finalKinetic = kineticEnergy(restored);

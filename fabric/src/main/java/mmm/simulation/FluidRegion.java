@@ -20,7 +20,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
-/** Spatial identity, solver ownership, hard marker budget and independent runtime state for one region. */
+/** Spatial identity, solver ownership and independent runtime state for one region. */
 public final class FluidRegion {
 	private final UUID id;
 	private final ResourceKey<Level> dimension;
@@ -29,7 +29,6 @@ public final class FluidRegion {
 	private final int sizeY;
 	private final int sizeZ;
 	private final FluidSolverConfig solverConfig;
-	private final long reservedMarkerCapacity;
 	private final FluidRegionFootprint footprint;
 	private final long networkGeneration;
 	private final FluidRegionLifecycle lifecycle = new FluidRegionLifecycle();
@@ -60,8 +59,8 @@ public final class FluidRegion {
 	private ThermalActivity thermalActivity;
 	private FiniteThermalDeviceInventory finiteThermalDevices;
 
-	public FluidRegion(UUID id, ResourceKey<Level> dimension, BlockPos origin, FluidDomain domain, long reservedMarkerCapacity) {
-		this(id, dimension, origin, domain, reservedMarkerCapacity, null);
+	public FluidRegion(UUID id, ResourceKey<Level> dimension, BlockPos origin, FluidDomain domain) {
+		this(id, dimension, origin, domain, null);
 	}
 
 	public FluidRegion(
@@ -69,11 +68,10 @@ public final class FluidRegion {
 			ResourceKey<Level> dimension,
 			BlockPos origin,
 			FluidDomain domain,
-			long reservedMarkerCapacity,
 			FluidRegionFootprint footprint
 	) {
 		this(id, dimension, origin, Objects.requireNonNull(domain, "domain").sizeX(), domain.sizeY(), domain.sizeZ(),
-				domain.config(), reservedMarkerCapacity, footprint, 1L, domain);
+				domain.config(), footprint, 1L, domain);
 	}
 
 	private FluidRegion(
@@ -84,7 +82,6 @@ public final class FluidRegion {
 			int sizeY,
 			int sizeZ,
 			FluidSolverConfig solverConfig,
-			long reservedMarkerCapacity,
 			FluidRegionFootprint footprint,
 			long networkGeneration,
 			FluidDomain domain
@@ -97,14 +94,7 @@ public final class FluidRegion {
 		this.sizeY = sizeY;
 		this.sizeZ = sizeZ;
 		this.solverConfig = Objects.requireNonNull(solverConfig, "solverConfig");
-		if (reservedMarkerCapacity <= 0L || reservedMarkerCapacity > Integer.MAX_VALUE) {
-			throw new IllegalArgumentException("Reserved marker capacity must fit a positive CPU marker budget");
-		}
-		if (domain != null && reservedMarkerCapacity != domain.maximumParticleCount()) {
-			throw new IllegalArgumentException("Reserved marker capacity must equal the domain hard marker budget");
-		}
 		if (networkGeneration <= 0L) throw new IllegalArgumentException("Region network generation must be positive");
-		this.reservedMarkerCapacity = reservedMarkerCapacity;
 		this.footprint = footprint;
 		this.networkGeneration = networkGeneration;
 		this.domain = domain;
@@ -123,7 +113,6 @@ public final class FluidRegion {
 			int sizeY,
 			int sizeZ,
 			FluidSolverConfig solverConfig,
-			long reservedMarkerCapacity,
 			FluidRegionFootprint footprint,
 			long generation,
 			long checkpointGeneration,
@@ -135,9 +124,9 @@ public final class FluidRegion {
 		Objects.requireNonNull(runtime, "runtime");
 		if (checkpointGeneration <= 0L) throw new IllegalArgumentException("Checkpoint generation must be positive");
 		FluidRegion region = new FluidRegion(id, dimension, origin, sizeX, sizeY, sizeZ, solverConfig,
-				reservedMarkerCapacity, footprint, generation, null);
+				footprint, generation, null);
 		region.checkpointGeneration = checkpointGeneration;
-		if (checkpointMarkerCount < 0 || checkpointMarkerCount > reservedMarkerCapacity
+		if (checkpointMarkerCount < 0
 				|| !Float.isFinite(checkpointVolume) || checkpointVolume < 0.0F) {
 			throw new IllegalArgumentException("Invalid checkpoint marker ledger");
 		}
@@ -206,7 +195,6 @@ public final class FluidRegion {
 				? FluidDomain.restoreAuthoritativeState(Objects.requireNonNull(materializedState, "materializedState"))
 				: preparedCpuDomain;
 		if (replacement.sizeX() != sizeX || replacement.sizeY() != sizeY || replacement.sizeZ() != sizeZ
-				|| replacement.maximumParticleCount() != reservedMarkerCapacity
 				|| !replacement.config().equals(solverConfig)) {
 			throw new IllegalStateException("Backend candidate layout is incompatible with the live region");
 		}
@@ -214,7 +202,6 @@ public final class FluidRegion {
 		solverGeneration = candidateGeneration;
 	}
 
-	public long reservedMarkerCapacity() { return reservedMarkerCapacity; }
 
 	/** Validates all carrier topology before publishing a synchronous world-collision successor. */
 	void adoptCollisionCandidate(FluidDomain original, long baseGeneration, FluidDomain candidate) {
@@ -449,7 +436,7 @@ public final class FluidRegion {
 		Objects.requireNonNull(candidateDomain, "candidateDomain");
 		PersistedRuntime runtime = persistedRuntime();
 		FluidRegion candidate = new FluidRegion(id, dimension, origin, sizeX, sizeY, sizeZ, solverConfig,
-				reservedMarkerCapacity, footprint, networkGeneration, candidateDomain);
+				footprint, networkGeneration, candidateDomain);
 		candidate.checkpointGeneration = checkpointGeneration;
 		candidate.checkpointMarkerCount = checkpointMarkerCount;
 		candidate.checkpointVolume = checkpointVolume;
@@ -484,7 +471,7 @@ public final class FluidRegion {
 		long nextSolverGeneration = Math.addExact(solverGeneration, 1L);
 		if (!controllerManaged() || domain == null || publishedGeneration <= checkpointGeneration
 				|| candidateDomain.sizeX() != sizeX || candidateDomain.sizeY() != sizeY
-				|| candidateDomain.sizeZ() != sizeZ || candidateDomain.maximumParticleCount() != reservedMarkerCapacity
+				|| candidateDomain.sizeZ() != sizeZ
 				|| !candidateDomain.config().equals(solverConfig)) {
 			throw new IllegalStateException("Published private candidate is incompatible with the live region");
 		}

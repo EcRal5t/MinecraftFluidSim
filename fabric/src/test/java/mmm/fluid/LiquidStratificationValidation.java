@@ -84,7 +84,7 @@ final class LiquidStratificationValidation {
 	}
 
 	private static void isolatedSupportReceivesUniformBuoyancy() {
-		var config = new FluidSolverConfig(0.5F, 1000, 9.81F, 0.05F, 200, 1e-6F, 0.002F, 0);
+		var config = new FluidSolverConfig(0.5F, 1000, 9.81F, 0.05F, 200, 1e-6F, 0.002F);
 		var domain = new FluidDomain(6, 6, 6, config);
 		domain.setVolume(3, 3, 3, 0.125F);
 		domain.domainCollision.setMarkerMaterial(0, LIQUIDS, 0);
@@ -93,7 +93,7 @@ final class LiquidStratificationValidation {
 				"mmm:water", T_REF, 0, 0, List.of(new ThermalMaterialDefinition.CaloricSegment(250, 600, 4184)));
 		domain.bindThermal(new ThermalRegistry(List.of(caloric)), LIQUIDS, T_REF + 20);
 		var energy = domain.exactInternalEnergy();
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.preparePhysicalState();
 		domain.bodyForceStage.applyGravity(config.timeStep());
 		domain.bodyForceStage.applyThermalBuoyancy(config.timeStep());
 		double relative = domain.materialDefinitions.entry("mmm:water").thermalExpansion().relativeBuoyancy(T_REF + 20);
@@ -150,7 +150,7 @@ final class LiquidStratificationValidation {
 		double mixingDensityBound = Math.pow(maximumDensity - minimumDensity, 2) / (4 * minimumDensity);
 		// Advect composition and temperature within cells, then require both sampled density terms to change together.
 		var advected = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
-		advected.domainFlowFields.ensureGrid();
+		advected.domainFlowFields.preparePhysicalState();
 		var cellVolumes = advected.liquidGrid.exactCellVolumeInventory.clone();
 		double[] densities = new double[advected.cellCount];
 		var beforeProperties = advected.domainPhaseInventory.thermalBuoyancyProperties();
@@ -162,7 +162,7 @@ final class LiquidStratificationValidation {
 			advected.mac.velocityY[advected.domainFlowFields.yFaceIndex(x,y,z)]=(float)((compensatedStream(x,y)-compensatedStream(x+1,y))/.5);
 		advected.cellMacStage.publishMomentum();
 		Inventory advectedInventory=Inventory.capture(advected);
-		advected.cellMacStage.transport(.001F);advected.domainFlowFields.ensureGrid();
+		advected.cellMacStage.transport(.001F);advected.domainFlowFields.preparePhysicalState();
 		var afterProperties = advected.domainPhaseInventory.thermalBuoyancyProperties();
 		double maximumDensityChange = 0;
 		// Integer cell inventories undergo donor and target allocation before buoyancy is observed.
@@ -250,8 +250,8 @@ final class LiquidStratificationValidation {
 
 	private static FluidDomain fixture(double saltFraction, boolean brineOnTop, boolean perturb, double warmBottomK,
 			MaterialRegistry definitions) {
-		var config = new FluidSolverConfig(0.5F, 1000, 9.81F, 0.05F, 300, 1e-6F, 0.002F, 0);
-		FluidDomain seed = new FluidDomain(6, 6, 4, config, 2048);
+		var config = new FluidSolverConfig(0.5F, 1000, 9.81F, 0.05F, 300, 1e-6F, 0.002F);
+		FluidDomain seed = new FluidDomain(6, 6, 4, config);
 		for (int z = 0; z < 4; z++) for (int y = 0; y < 6; y++) for (int x = 0; x < 6; x++) {
 			boolean shell = x == 0 || x == 5 || y == 0 || y == 5 || z == 0 || z == 3;
 			seed.setSolid(x, y, z, shell);
@@ -284,7 +284,7 @@ final class LiquidStratificationValidation {
 				original.copyMaterialPaletteIndex());
 		var chemical = FlipChemicalParticleState.capture(materials, CHEMISTRY, mixtures, new byte[mass.length],
 				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY);
-		FluidDomain domain = new FluidDomain(6, 6, 4, config, 2048);
+		FluidDomain domain = new FluidDomain(6, 6, 4, config);
 		domain.restoreChemicalParticleState(chemical, CHEMISTRY);
 		domain.bindMaterialDefinitions(definitions);
 		domain.sealDomainBoundary();

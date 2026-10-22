@@ -51,6 +51,7 @@ final class FlipCutCellGeometry {
 
 	int replaceMask(int index,int requestedMask) {
 		if((requestedMask&~FULL_MASK)!=0)throw new IllegalArgumentException("Cut-cell mask must fit eight bits");
+		FixedGeometrySnapshot.requireConnectedOpenCell(index,requestedMask);
 		int previous=mask(index);if(previous==requestedMask)return previous;
 		if(writableMasks==null)writableMasks=layout==null?new byte[cellCount]:layout.copyMasks();
 		layout=null;writableMasks[index]=(byte)requestedMask;
@@ -59,6 +60,7 @@ final class FlipCutCellGeometry {
 	void restoreMicroMasks(byte[] microMasks) {
 		if(microMasks==null||microMasks.length!=cellCount)throw new IllegalArgumentException("Collision mask length changed");
 		if(Arrays.equals(microMasks,writableMasks)||layout!=null&&Arrays.equals(microMasks,layout.masksView()))return;
+		for(int cell=0;cell<cellCount;cell++)FixedGeometrySnapshot.requireConnectedOpenCell(cell,Byte.toUnsignedInt(microMasks[cell]));
 		writableMasks=microMasks.clone();layout=null;
 	}
 	byte[] copyMicroMasks(){return writableMasks!=null?writableMasks.clone():layout!=null?layout.copyMasks():new byte[cellCount];}

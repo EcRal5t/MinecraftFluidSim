@@ -53,7 +53,6 @@ final class RegionStateIntegrity {
 			writeBlockPos(out, manifest.origin());
 			out.writeInt(manifest.sizeX()); out.writeInt(manifest.sizeY()); out.writeInt(manifest.sizeZ());
 			writeConfig(out, manifest.solverConfig());
-			out.writeLong(manifest.reservedMarkerCapacity());
 			writeRuntime(out, manifest.runtime());
 			writeFootprint(out, manifest.footprint());
 			out.writeInt(manifest.totalMarkerCount());
@@ -134,7 +133,6 @@ final class RegionStateIntegrity {
 		out.writeInt(config.maxPressureIterations());
 		out.writeInt(Float.floatToRawIntBits(config.pressureTolerance()));
 		out.writeInt(Float.floatToRawIntBits(config.fluidEpsilon()));
-		out.writeInt(Float.floatToRawIntBits(config.interfaceCompression()));
 		out.writeUTF(config.viscousWallCondition().name());
 	}
 

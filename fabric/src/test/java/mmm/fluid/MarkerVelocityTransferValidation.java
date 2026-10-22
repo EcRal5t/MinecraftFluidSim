@@ -14,7 +14,7 @@ public final class MarkerVelocityTransferValidation {
 		closedFacesStopNormalMomentum();
 	}
 	private static FluidDomain domain() {
-		return new FluidDomain(4,4,4,new FluidSolverConfig(.5F,1000,0,.001F,400,1e-5F,.002F,.8F),2048);
+		return new FluidDomain(4,4,4,new FluidSolverConfig(.5F,1000,0,.001F,400,1e-5F,.002F));
 	}
 	private static void initialInputKeepsActualMassAndMomentum() {
 		for (double scale : new double[]{125, 1.25e8}) {
@@ -23,7 +23,7 @@ public final class MarkerVelocityTransferValidation {
 			d.restoreMaterialParticleState(new FlipMaterialParticleState(4,4,4,.5F,2,.25,
 					Math.addExact(masses[0],masses[1]),List.of(new FluidMaterial("test:liquid",1000,"test:liquid",0,Math.PI/2)),
 					new float[]{.625F,.625F,.625F,.125F, .625F,.625F,.625F,.125F},velocity,new byte[64],masses,new int[2]));
-			d.domainFlowFields.ensureGrid();
+			d.domainFlowFields.preparePhysicalState();
 			near(d.totalMassUnits(),Math.addExact(masses[0],masses[1]),0,"Integer input mass");
 			double totalMass=Mass.kilograms(masses[0])+Mass.kilograms(masses[1]);
 			double kineticInput=0;
@@ -53,12 +53,12 @@ public final class MarkerVelocityTransferValidation {
 		long first=Mass.fromKilograms(25),second=Mass.fromKilograms(100);
 		if(!d.domainInventory.tryInsertExactMaterial(1,1,1,.2F,first,0,0).transferred()
 				||!d.domainInventory.tryInsertExactMaterial(2,1,1,.2F,second,0,0).transferred())throw new AssertionError("Variable-density input was refused");
-		d.domainFlowFields.ensureGrid();
+		d.domainFlowFields.preparePhysicalState();
 		near(d.cellMacStage.massX[d.domainFlowFields.xFaceIndex(2,1,1)],.5*(Mass.kilograms(first)+Mass.kilograms(second)),0,"Shared face actual inertia");
 		near(d.cellMacStage.massX[d.domainFlowFields.xFaceIndex(1,1,1)],.5*Mass.kilograms(first),0,"Liquid/gas face actual inertia");
 	}
 	private static void closedFacesStopNormalMomentum() {
-		var d=domain();d.setSolid(1,1,1,true);d.setVolume(2,1,1,.2F);d.domainFlowFields.ensureGrid();
+		var d=domain();d.setSolid(1,1,1,true);d.setVolume(2,1,1,.2F);d.domainFlowFields.preparePhysicalState();
 		int face=d.domainFlowFields.xFaceIndex(2,1,1);d.mac.velocityX[face]=-7;
 		d.bodyForceStage.enforceSolidFaceVelocities();d.cellMacStage.publishMomentum();
 		near(d.mac.velocityX[face],0,0,"Closed face normal velocity");

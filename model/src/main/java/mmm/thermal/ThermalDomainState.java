@@ -62,7 +62,6 @@ public final class ThermalDomainState {
 	private ThermalSpatialObservation spatialObservation;
 	private boolean spatialObservationPrepared;
 	private final ThermalTransport transport;
-	private final ThermalPhaseChangeEngine phaseChange;
 	private final double insertionTemperatureK;
 	private final ThermalAuditState auditState;
 	private final LiquidEnergyColumn liquidEnergy;
@@ -124,7 +123,6 @@ public final class ThermalDomainState {
 				Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ),
 				Math.min(ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION,
 						Math.multiplyExact(Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ), 8)));
-		this.phaseChange = new ThermalPhaseChangeEngine(registry);
 		this.insertionTemperatureK = initialTemperatureK;
 		this.auditState = new ThermalAuditState(ThermalAuditLedger.initialized(SignedDyadic.ZERO));
 		this.liquidEnergy = new LiquidEnergyColumn(registry, stateFunction, unitScale, materialByFluidHandle,
@@ -241,6 +239,13 @@ public final class ThermalDomainState {
 
 	public ThermalCellGrid.CarrierAccess carrierAccess(ThermalCarrierContext markers) {
 		return cellOperations.carrierAccess(markers);
+	}
+
+	/** Spatial exchange samples include finite gas; phase LTE keeps its condensed inventory view. */
+	public ThermalCellGrid.CarrierAccess exchangeCarrierAccess(ThermalCarrierContext markers) {
+		var condensed=carrierAccess(markers);
+		return gasState.gasModelBound() && markers.gasNetwork()!=null
+				? new ThermalGasCarriers(condensed,gasState,registry,markers) : condensed;
 	}
 
 	// ---- composed energy sums ----
@@ -681,15 +686,6 @@ public final class ThermalDomainState {
 		return cellOperations.preparePhaseCandidateCells(cells, owners, this, thermalRevision());
 	}
 
-	/** Prepares the equilibrium-energy line used to order actual solid/liquid integer extents. */
-	public ThermalPhaseExtentCurve preparePhaseExtentCurve(PhaseCandidateCell current,
-			List<ThermalStateFunction.InventoryPortion> initialLiquid, int oldMaterial, int newMaterial,
-			double equilibrium, double maximumMovedMass, double massError) {
-		requirePhaseCandidateCurrent(current);
-		return ThermalPhaseExtentCurve.prepare(registry, stateFunction, current, initialLiquid, oldMaterial, newMaterial,
-				equilibrium, maximumMovedMass, massError);
-	}
-
 	/** A cell-local raw-energy assignment and its complete audit, prepared before either phase writes. */
 	public static final class PhaseCellEnergyPlan {
 		private final ThermalDomainState owner;
@@ -932,10 +928,10 @@ public final class ThermalDomainState {
 			ThermalCarrierTransport.Batch batch, List<ThermalCarrierTransport.Contact> contacts, double dtSeconds
 	) {
 		var result = ThermalCarrierTransport.solve(batch, contacts, dtSeconds, transport.maximumSubsteps());
-		var ledger = auditState.ledger().withHeatExchange(result.reservoirExchange())
-				.withRoundoff(result.roundoffResidual());
-		ledger.expectedInventory();
-		batch.commit();
+		var physicalDelta=batch.commit();
+		result=new ThermalTransport.Stats(result.substeps(),result.evaluatedContacts(),result.maximumTemperatureChangeK(),
+				result.maximumAbsoluteTransferJ(),physicalDelta.subtract(result.reservoirExchange()),result.reservoirExchange());
+		var ledger = auditState.ledger().withHeatExchange(result.reservoirExchange()).withRoundoff(result.roundoffResidual());
 		auditState.replace(ledger);
 		spatialObservationPrepared = false;
 		lastTransport = result;

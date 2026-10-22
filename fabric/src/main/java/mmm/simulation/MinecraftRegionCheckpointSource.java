@@ -41,7 +41,7 @@ public final class MinecraftRegionCheckpointSource implements RegionCheckpointSo
 	@Override
 	public RegionGeometry geometry() {
 		return new RegionGeometry(position(region.origin()), region.sizeX(), region.sizeY(), region.sizeZ(),
-				region.solverConfig(), region.reservedMarkerCapacity(), footprint(region.footprint()));
+				region.solverConfig(), footprint(region.footprint()));
 	}
 
 	@Override public RegionRuntimeIntent runtimeIntent() { return runtimeIntent(region.persistedRuntime()); }

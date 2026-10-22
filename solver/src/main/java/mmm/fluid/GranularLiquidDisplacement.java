@@ -2,7 +2,6 @@ package mmm.fluid;
 
 import mmm.inventory.LiquidCellInventory;
 
-import mmm.granular.SolidVolume;
 import mmm.units.SignedDyadic;
 import java.util.Arrays;
 
@@ -15,15 +14,15 @@ final class GranularLiquidDisplacement {
 		}
 	}
 	static final class Prepared {
-		final CellMacStage.PreparedLiquid transport;
 		final LiquidCellInventory.Plan inventory;
 		final GasTopologyCoordinator.GasTopologyPlan gasTopology;
 		final SignedDyadic energyRoundoff;
 		final CellMomentumTransport.Prepared momentum;
-		Prepared(CellMacStage.PreparedLiquid transport, LiquidCellInventory.Plan inventory, GasTopologyCoordinator.GasTopologyPlan gasTopology, CellMomentumTransport.Prepared momentum) {
-			this.transport = transport; this.inventory = inventory; this.gasTopology = gasTopology;
+		final MechanicalEnergySettlement.Plan energy;
+		Prepared(LiquidCellInventory.Plan inventory, GasTopologyCoordinator.GasTopologyPlan gasTopology, CellMomentumTransport.Prepared momentum, MechanicalEnergySettlement.Plan energy) {
+			this.inventory = inventory; this.gasTopology = gasTopology;
 			energyRoundoff = inventory.energyRoundoff();
-			this.momentum = momentum;
+			this.momentum = momentum; this.energy=energy;
 		}
 	}
 	static long[] begin(FluidDomain domain) {
@@ -38,26 +37,9 @@ final class GranularLiquidDisplacement {
 		if (candidate != null) publish(domain, candidate, () -> { });
 	}
 	static void publish(FluidDomain domain, Prepared candidate, Runnable solidPublication) {
-		candidate.inventory.requireCurrent();
-		if (candidate.gasTopology != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(candidate.gasTopology);
-		var audit = domain.thermalState == null ? null : domain.thermalState.auditLedger()
-				.withMechanicalWork(candidate.inventory.mechanicalHeat()).withRoundoff(candidate.energyRoundoff);
-		if (audit != null) {
-			var gas = candidate.gasTopology == null ? null : candidate.gasTopology.thermalPlan();
-			if (gas != null) audit = audit.withExternalSourceEnergy(gas.sourceEnergy()).withExternalSinkEnergy(gas.sinkEnergy())
-					.withMechanicalWork(gas.mechanicalWork()).withRoundoff(gas.roundoff());
-			audit.expectedInventory();
-		}
-		candidate.inventory.commit();
-		domain.cellMacStage.commitMomentum(candidate.momentum);
-		solidPublication.run();
-		domain.markCellInventoryChanged();
-		if (candidate.gasTopology != null) domain.gasTopologyCoordinator.commit(candidate.gasTopology);
-		// Solid import/export and the gas remap publish their own energy transfers.
-		// Append only this liquid transport's terms to that current shared ledger.
-		if (audit != null) domain.thermalState.restoreAuditLedger(domain.thermalState.auditLedger()
-				.withMechanicalWork(candidate.inventory.mechanicalHeat()).withRoundoff(candidate.energyRoundoff));
+		domain.cellMacStage.publishTransport(candidate.energy,candidate.momentum,candidate.gasTopology,null,solidPublication);
 	}
+
 	static Prepared prepare(FluidDomain domain, long[] previous, long[] next) { return prepare(domain, previous, next, false); }
 	static Prepared prepareInsertion(FluidDomain domain, long[] previous, long[] next) { return prepare(domain, previous, next, true); }
 	private static Prepared prepare(FluidDomain domain, long[] previous, long[] next, boolean insertion) {
@@ -82,7 +64,8 @@ final class GranularLiquidDisplacement {
 		var momentum=domain.cellMacStage.prepareMomentumTransport(transport);
 		var inventory=transport.inventory().withMechanicalHeat(momentum.heatByCell());
 		var gas = domain.gasTopologyCoordinator.planAfterLiquidDisplacement(inventory.future(), next, transport.gasAllocation());
-		return new Prepared(transport, inventory, gas, momentum);
+		var energy=insertion?domain.mechanicalEnergy.new Plan(inventory,java.util.Map.of()):domain.mechanicalEnergy.prepareDisplacement(inventory,gas);
+		return new Prepared(energy.inventory(), gas, momentum, energy);
 	}
 	private static SignedDyadic solidVolume(long svq) { return SignedDyadic.of(svq, -24); }
 }

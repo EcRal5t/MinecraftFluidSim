@@ -27,7 +27,7 @@ public final class ProductionStepBenchmark {
 	private static void run(String name, FluidDomain initial) {
 		var region = new FluidRegion(UUID.randomUUID(), ResourceKey.create(Registries.DIMENSION,
 				Identifier.fromNamespaceAndPath("mmm", "benchmark")), BlockPos.ZERO,
-				initial, initial.maximumParticleCount());
+				initial);
 		var backend = new CpuFluidSolverBackend();
 		int warmup = 20, samples = 20;
 		double[][] times = new double[4][samples];

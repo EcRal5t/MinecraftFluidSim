@@ -21,7 +21,7 @@ final class M3MaterialTransferValidation {
 
 	private static void validatePartialExtractionMassResolution() {
 		for(long mass:new long[]{1,4}) {
-			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.002F,.8F),216);
+			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.002F));
 			domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 			var key=new LiquidCellInventory.Key(domain.domainFlowFields.cellIndex(1,1,1),0,255);
 			domain.liquidCells.planAdditions(List.of(new LiquidCellInventory.Stock(key,mmm.units.SignedDyadic.of(.125),mass,null,0,false))).commit();
@@ -52,17 +52,17 @@ final class M3MaterialTransferValidation {
 				Math.abs(variable.mac.velocityX[face]-equal.mac.velocityX[face]));
 	}
 	private static FluidDomain materialShear(FluidMaterialRegistry registry,int left,int right) {
-		var domain=new FluidDomain(4,4,4,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.002F,.8F),64);
+		var domain=new FluidDomain(4,4,4,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.002F));
 		domain.bindMaterialRegistry(registry);float[] volume=new float[domain.cellCount];int[] material=new int[domain.cellCount];
 		volume[domain.domainFlowFields.cellIndex(1,1,1)]=volume[domain.domainFlowFields.cellIndex(2,1,1)]=1;
 		material[domain.domainFlowFields.cellIndex(1,1,1)]=left;material[domain.domainFlowFields.cellIndex(2,1,1)]=right;
-		domain.setVolumes(volume,material);domain.domainFlowFields.ensureGrid();
+		domain.setVolumes(volume,material);domain.domainFlowFields.preparePhysicalState();
 		double half=.5*domain.liquidCells.stocksInCell(domain.domainFlowFields.cellIndex(2,1,1)).getFirst().massKilograms();
 		domain.mac.momentumX[domain.domainFlowFields.xFaceIndex(2,1,1)]=half;domain.mac.momentumX[domain.domainFlowFields.xFaceIndex(3,1,1)]=half;
-		domain.velocityGridDirty=true;domain.domainFlowFields.ensureGrid();return domain;
+		domain.velocityGridDirty=true;domain.domainFlowFields.preparePhysicalState();return domain;
 	}
 	private static FluidDomain materialCell(FluidMaterialRegistry registry,int[] materials,double[] volumes) {
-		var domain=new FluidDomain(4,4,4,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.002F,.8F),64);
+		var domain=new FluidDomain(4,4,4,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.002F));
 		domain.bindMaterialRegistry(registry);var stocks=new java.util.ArrayList<LiquidCellInventory.Stock>();
 		for(int i=0;i<materials.length;i++)stocks.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(domain.domainFlowFields.cellIndex(1,1,1),materials[i],255),
 				mmm.units.SignedDyadic.of(volumes[i]),mmm.units.Mass.fromKilograms(volumes[i]*registry.material(materials[i]).referenceDensity()),null,0,false));
@@ -114,9 +114,8 @@ final class M3MaterialTransferValidation {
 	private static FluidDomain singleCellDomain() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, 1_000.0F, 0.0F, 1.0F / 20.0F,
-				100, 1.0E-5F, 2.0E-3F, 0.80F
-		);
-		FluidDomain domain = new FluidDomain(4, 4, 4, config, 64);
+				100, 1.0E-5F, 2.0E-3F);
+		FluidDomain domain = new FluidDomain(4, 4, 4, config);
 		domain.setVolume(1, 1, 1, 1.0F);
 		return domain;
 	}
@@ -166,9 +165,8 @@ final class M3MaterialTransferValidation {
 	                                                    int heavyHandle, int lightHandle) {
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
-				200, 1.0E-6F, 2.0E-3F, 0.80F
-		);
-		FluidDomain domain = new FluidDomain(4, 7, 4, config, 128);
+				200, 1.0E-6F, 2.0E-3F);
+		FluidDomain domain = new FluidDomain(4, 7, 4, config);
 		for (int z = 0; z < domain.sizeZ(); z++) for (int y = 0; y < domain.sizeY(); y++) {
 			for (int x = 0; x < domain.sizeX(); x++) domain.setSolid(x, y, z, true);
 		}

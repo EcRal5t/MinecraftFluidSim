@@ -181,6 +181,15 @@ public final class GasEnergyStore {
 			public double standardVolumeRatio(int id) { return ratio[id]; }
 			public double pressureStorage(int id) { return storage[id]; }
 			public double maximumOutflowFraction(int id) { return fraction[id]; }
+			public double[] flowPressures(AirNetwork.FlowBatch batch) {
+				double[] energies = flowEnergy(batch, network), result = new double[batch.nodeIds().size()];
+				for (int i = 0; i < result.length; i++) {
+					int id = batch.nodeIds().get(i);
+					result[i] = gasModel.absolutePressure(batch.inventories().get(i), network.availableVolume(id), energies[id - 1])
+							- GasRegistry.STANDARD_PRESSURE_PA;
+				}
+				return result;
+			}
 		};
 	}
 
@@ -337,22 +346,51 @@ public final class GasEnergyStore {
 
 	public record GasVentPlan(int nodeCount, SignedDyadic removedEnergy, ThermalAuditLedger auditAfter) { }
 
-	/** All ports use the same source temperatures and one paired enthalpy value per transfer. */
+	/** All ports share the donor blowdown integral and paired outgoing/incoming energy. */
 	public AirNetwork.TransferCommit planFlow(AirNetwork.FlowBatch batch, AirNetwork network) {
-		double[] result = nodeEnergy.clone(), temperature = new double[nodeEnergy.length + 1];
-		temperature[0] = insertionTemperatureK;
-		for (int id : batch.nodeIds()) temperature[id] = temperature(id, network);
+		double[] result = flowEnergy(batch, network);
 		SignedDyadic imported = SignedDyadic.ZERO, exported = SignedDyadic.ZERO;
 		for (var transfer : batch.transfers()) {
-			double carried = gasModel.enthalpy(transfer.moved(), temperature[transfer.source()]);
-			if (transfer.source() == 0) imported = imported.add(SignedDyadic.of(carried));
-			else result[transfer.source() - 1] -= carried;
-			if (transfer.target() == 0) exported = exported.add(SignedDyadic.of(carried));
-			else result[transfer.target() - 1] += carried;
+			if (transfer.source() == 0) imported = imported.add(SignedDyadic.of(gasModel.enthalpy(transfer.moved(), insertionTemperatureK)));
+			if (transfer.target() == 0) {
+				long total = 0;
+				for (var other : batch.transfers()) if (other.source() == transfer.source()) total += other.moved().standardVolumeNanos();
+				double carried = donorFlowEnergy(batch, transfer.source(), network)
+						* ((double) transfer.moved().standardVolumeNanos() / total);
+				exported = exported.add(SignedDyadic.of(carried));
+			}
 		}
 		var prepared = planInventoryEnergy(network, batch.nodeIds(), batch.inventories(), result,
 				imported, exported, SignedDyadic.ZERO);
 		return () -> commitInventoryEnergy(prepared);
+	}
+
+	/** Integrates the well-mixed donor's isentropic blowdown before mixing all incoming enthalpy. */
+	private double donorFlowEnergy(AirNetwork.FlowBatch batch, int id, AirNetwork network) {
+		int index = batch.nodeIds().indexOf(id);
+		var source = network.inventory(id); var retained = batch.retained().get(index);
+		if (source == retained || source.equals(retained)) return 0;
+		double temperature = temperature(id, network), volume = network.availableVolume(id);
+		double initial = gasModel.internalEnergyAtTemperature(retained, temperature);
+		double fraction = (double) retained.standardVolumeNanos() / source.standardVolumeNanos();
+		double finalEnergy = gasModel.compressAdiabatically(retained, initial, volume * fraction, volume).finalInternalEnergy();
+		return nodeEnergy[id - 1] - finalEnergy;
+	}
+
+	private double[] flowEnergy(AirNetwork.FlowBatch batch, AirNetwork network) {
+		double[] result = nodeEnergy.clone(), carried = new double[nodeEnergy.length + 1];
+		long[] amount = new long[carried.length];
+		for (var transfer : batch.transfers()) if (transfer.source() != 0)
+			amount[transfer.source()] += transfer.moved().standardVolumeNanos();
+		for (int id : batch.nodeIds()) if (amount[id] != 0) {
+			carried[id] = donorFlowEnergy(batch, id, network); result[id - 1] -= carried[id];
+		}
+		for (var transfer : batch.transfers()) {
+			double energy = transfer.source() == 0 ? gasModel.enthalpy(transfer.moved(), insertionTemperatureK)
+					: carried[transfer.source()] * ((double) transfer.moved().standardVolumeNanos() / amount[transfer.source()]);
+			if (transfer.target() != 0) result[transfer.target() - 1] += energy;
+		}
+		return result;
 	}
 
 	/** Final-state thermal preflight for fixed-node flow or a simultaneous gas/liquid phase transaction. */

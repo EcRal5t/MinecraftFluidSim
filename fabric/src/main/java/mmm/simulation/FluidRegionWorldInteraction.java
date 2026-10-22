@@ -164,7 +164,6 @@ final class FluidRegionWorldInteraction {
 				if (!restoration.transferred()) {
 					escaped += request.volume();
 					domain.chemistry().recordEscapedSink(request.chemistry());
-					markerBudgetLimited |= domain.particleCount() >= domain.maximumParticleCount();
 				}
 			} else if (domain.hasMaterialState()) {
 				FluidDomain.ExactMixtureTransfer restoration = domain.hasThermalState()
@@ -174,7 +173,6 @@ final class FluidRegionWorldInteraction {
 								request.materials(), 8);
 				if (!restoration.transferred()) {
 					escaped += request.volume();
-					markerBudgetLimited |= domain.particleCount() >= domain.maximumParticleCount();
 				}
 			} else {
 				FluidDomain.VolumeAddition restoration = domain.addVolumeNearBudgeted(

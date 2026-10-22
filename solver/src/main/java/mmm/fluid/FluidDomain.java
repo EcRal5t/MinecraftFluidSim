@@ -45,7 +45,6 @@ public final class FluidDomain {
 	// Authoritative state, derived workspaces and responsibility handlers.
 	static final int PARTICLES_PER_FULL_CELL = 8;
 	static final float PARTICLE_VOLUME = 1.0F / PARTICLES_PER_FULL_CELL;
-	static final int DEFAULT_MAX_PARTICLES = 262_144;
 	static final int NO_PHASE = Integer.MIN_VALUE;
 	static final int INDICATOR_AIM_SNAP_CELLS = 2;
 	final int sizeX;
@@ -54,7 +53,6 @@ public final class FluidDomain {
 	final int cellCount;
 	final FluidSolverConfig config;
 	final SolverUnitScale unitScale;
-	final int maximumParticleCount;
 	final DomainGeometry geometry;
 	final CellLiquidGrid liquidGrid;
 	final MacVelocityGrid mac;
@@ -85,8 +83,6 @@ public final class FluidDomain {
 	MaterialRegistry materialDefinitions;
 	final LiquidCarrierProperties carrierPropertiesWorkspace;
 	RegionChemistry chemistry;
-	int[] chemicalPreviousCells;
-	int[] chemicalMovingMarkers;
 	final GasDomainState gasState = new GasDomainState();
 	final GasPressureBoundary gasBoundary;
 	FluidDomain.CollisionEditPlan activeCollisionPlan;
@@ -127,16 +123,14 @@ public final class FluidDomain {
 	final DomainCapabilities domainCapabilities = new DomainCapabilities(this);
 	final DomainPhaseInventory domainPhaseInventory = new DomainPhaseInventory(this);
 
-	public FluidDomain(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config, int maximumParticleCount) {
+	public FluidDomain(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config) {
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2) throw new IllegalArgumentException("All dimensions must be at least two cells");
-		if (maximumParticleCount <= 0) throw new IllegalArgumentException("Maximum particle count must be positive");
 		this.sizeX = sizeX;
 		this.sizeY = sizeY;
 		this.sizeZ = sizeZ;
 		this.cellCount = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
 		this.config = config;
 		this.unitScale = SolverUnitScale.forCellSize(config.cellSize());
-		this.maximumParticleCount = maximumParticleCount;
 		FluidDomain domain = this;
 		this.gasBoundary = new GasPressureBoundary(domain);
 		this.liquidCells = new LiquidCellInventory(cellCount, null);
@@ -169,10 +163,6 @@ public final class FluidDomain {
 		this.condensedPhaseChangeStage = thermochemistryPipeline.condensedPhase;
 		this.gasLiquidPhaseChangeStage = thermochemistryPipeline.gasPhase;
 		this.granularTransitionStage = new GranularTransitionStage(this);
-	}
-
-	public FluidDomain(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config) {
-		this(sizeX, sizeY, sizeZ, config, DEFAULT_MAX_PARTICLES);
 	}
 
 	// External observations and operations.
@@ -221,7 +211,7 @@ public final class FluidDomain {
 	}
 	public void rebuildDerivedFromLiquidCells() {
 		gridDirty = velocityGridDirty = true;pressureSystem.invalidateGeometry();
-		domainFlowFields.ensureGrid();
+		domainFlowFields.preparePhysicalState();
 	}
 	void markCellInventoryChanged() {
 		carrierMutationRevision++;
@@ -422,7 +412,6 @@ public final class FluidDomain {
 	public double gasNodeGaugePressurePa(int nodeId) { return domainPhaseInventory.gasNodeGaugePressurePa(nodeId); }
 	public int airNodeAt(int x, int y, int z) { return domainPhaseInventory.airNodeAt(x, y, z); }
 	public byte[] copyGasNodeMask() { return domainPhaseInventory.copyGasNodeMask(); }
-	public int maximumParticleCount() { return domainPhaseInventory.maximumParticleCount(); }
 	public int markerCellCount() { return domainPhaseInventory.markerCellCount(); }
 	public FluidSolverConfig config() { return domainPhaseInventory.config(); }
 	public SolverUnitScale unitScale() { return domainPhaseInventory.unitScale(); }
@@ -587,6 +576,13 @@ public final class FluidDomain {
 					roundoffImpulseZ + other.roundoffImpulseZ);
 		}
 	}
+	/** Mechanical heat exchange and its sources. Optional PLIC observation separates cell-centre
+	 * representation exchange from resolved pressure/force exchange; absolute total variation is diagnostic. */
+	public record MechanicalCorrection(double liquidForceJoules,double granularForceJoules,double transportPotentialJoules,
+	                                  double gasCounterWorkJoules,double signedJoules,double absoluteJoules,
+	                                  boolean spatialObservationCaptured,double representationJoules,double resolvedJoules,
+	                                  double resolvedPotentialChangeJoules,double initialRepresentationBoundJoules,
+	                                  double finalRepresentationBoundJoules) { }
 	public record StepStats(
 			int substeps,
 			int pressureIterations,
@@ -604,7 +600,8 @@ public final class FluidDomain {
 			FluidDomain.ThermalAxisStats thermalAxis,
 			GranularDepositDynamics.Stats granularTransition,
 			CarrierViscosityStats carrierViscosity,
-			ViscousStepStats viscosity
+			ViscousStepStats viscosity,
+			MechanicalCorrection mechanicalCorrection
 	) {
 		public StepStats {
 			java.util.Objects.requireNonNull(thermalAxis, "thermalAxis");

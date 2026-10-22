@@ -41,8 +41,8 @@ public final class LiquidConvectionExperiment {
 		var baseline = BuiltinFluidMaterials.createRegistry();
 		var expansion = baseline.entry(water.id()).thermalExpansion();
 		double gravity = ra * kappa * kappa / (expansion.volumetricCoefficientPerK() * DELTA_T * height * height * height);
-		var config = new FluidSolverConfig(0.5F, 1000, (float) gravity, 0.05F, 1200, 1e-7F, 0.002F, 0);
-		var domain = new FluidDomain(2 * n, n, 2, config, 2 * n * n * 2 * 16);
+		var config = new FluidSolverConfig(0.5F, 1000, (float) gravity, 0.05F, 1200, 1e-7F, 0.002F);
+		var domain = new FluidDomain(2 * n, n, 2, config);
 		var liquids = new FluidMaterialRegistry(List.of(water));domain.bindMaterialRegistry(liquids);
 		float[] filled=new float[domain.cellCount];Arrays.fill(filled,1);domain.setVolumes(filled);
 		var definitions = new MaterialRegistry(List.of(new MaterialRegistry.MaterialEntry(water,
@@ -83,7 +83,7 @@ public final class LiquidConvectionExperiment {
 		domain.thermalState.restoreAuditLedger(domain.thermalAudit().withHeatExchange(domain.exactInternalEnergy().subtract(energyBefore)));
 		double q2 = 1.25 * Math.PI * Math.PI;
 		double velocity = kappa / height * (growth + q2) * amplitude / DELTA_T;
-		domain.domainFlowFields.ensureGrid();double h=domain.config.cellSize();
+		domain.domainFlowFields.preparePhysicalState();double h=domain.config.cellSize();
 		for(int z=0;z<2;z++)for(int y=0;y<n;y++)for(int x=0;x<=2*n;x++)
 			domain.mac.velocityX[domain.domainFlowFields.xFaceIndex(x,y,z)]=(float)(-2*velocity*Math.sin(Math.PI*x*h/(2*height))*Math.cos(Math.PI*(y+.5)*h/height));
 		for(int z=0;z<2;z++)for(int y=0;y<=n;y++)for(int x=0;x<2*n;x++)

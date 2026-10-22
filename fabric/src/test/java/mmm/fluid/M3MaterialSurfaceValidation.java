@@ -128,9 +128,8 @@ final class M3MaterialSurfaceValidation {
 	private static FluidDomain filledDomain() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, 1_000.0F, 0.0F, 1.0F / 40.0F,
-				200, 1.0E-5F, 2.0E-3F, 0.80F
-		);
-		FluidDomain domain = new FluidDomain(6, 6, 6, config, 1_024);
+				200, 1.0E-5F, 2.0E-3F);
+		FluidDomain domain = new FluidDomain(6, 6, 6, config);
 		for (int z = 1; z <= 4; z++) for (int y = 1; y <= 4; y++) for (int x = 1; x <= 4; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}

@@ -36,15 +36,17 @@ public final class AirNetwork {
 		default double pressureStorage(int nodeId) { return Double.NaN; }
 		/** Donor fraction whose outgoing enthalpy leaves positive-temperature inventory. */
 		default double maximumOutflowFraction(int nodeId) { return Math.nextDown(1.0); }
+		/** Actual candidate pressures, indexed in batch node order; null selects isothermal storage. */
+		default double[] flowPressures(FlowBatch batch) { return null; }
 
 	}
 
 	@FunctionalInterface
 	public interface BatchTransferPlanner { TransferCommit plan(FlowBatch batch); }
 	public record GasTransfer(int source, int target, GasInventory moved) { }
-	public record FlowBatch(List<Integer> nodeIds, List<GasInventory> inventories, List<GasTransfer> transfers) {
+	public record FlowBatch(List<Integer> nodeIds, List<GasInventory> inventories, List<GasInventory> retained, List<GasTransfer> transfers) {
 		public FlowBatch {
-			nodeIds = List.copyOf(nodeIds); inventories = List.copyOf(inventories); transfers = List.copyOf(transfers);
+			nodeIds = List.copyOf(nodeIds); inventories = List.copyOf(inventories); retained = List.copyOf(retained); transfers = List.copyOf(transfers);
 		}
 	}
 
@@ -362,8 +364,8 @@ public final class AirNetwork {
 	}
 
 	/**
-	 * Quasi-static finite-orifice flow: one backward-Euler pressure/storage graph, with
-	 * composition, source enthalpy and conductance frozen for this first-order split.
+	 * Quasi-static finite-orifice flow with frozen conductance and simultaneous inventory allocation.
+	 * Thermal flow solves the committed inventory/energy EOS; isothermal flow uses linear storage.
 	 * This models cavity equilibration; acoustic waves and resolved jets belong to the carrier solver.
 	 */
 	public void stepEdges(double dt) {
@@ -389,16 +391,42 @@ public final class AirNetwork {
 		}
 		int[] first = new int[edges.size()], second = new int[edges.size()];
 		for (int e = 0; e < edges.size(); e++) { first[e] = index.get(edges.get(e).firstNode()); second[e] = index.get(edges.get(e).secondNode()); }
-		double[] transported = GasOrificeFlow.solve(dt, edges, first, second, pressure, storage, density, ratio);
+		double[] transported;
+
+		java.util.function.Function<double[], FlowBatch> allocate = amounts -> flowBatch(ids, index, first, second, amounts, thermodynamics);
+		if (thermodynamics.flowPressures(allocate.apply(new double[edges.size()])) != null)
+			transported = GasOrificeFlow.solveThermal(dt, edges, first, second, pressure, density, ratio,
+					java.util.stream.IntStream.range(0, count + 1).mapToDouble(i -> i == 0 ? Double.POSITIVE_INFINITY
+					: standardVolume(ids.get(i - 1)) * thermodynamics.maximumOutflowFraction(ids.get(i - 1))).toArray(), amounts -> {
+						var candidate = allocate.apply(amounts);
+						double[] actual = thermodynamics.flowPressures(candidate), result = new double[count + 1];
+						for (int i = 1; i <= count; i++) result[i] = actual[i - 1];
+						return result;
+					});
+		else transported = GasOrificeFlow.solve(dt, edges, first, second, pressure, storage, density, ratio);
+		FlowBatch batch = allocate.apply(transported);
+		if (batch.transfers().isEmpty()) return;
+		ArrayList<GasInventory> sources = new ArrayList<>(), sinks = new ArrayList<>();
+		for (var transfer : batch.transfers()) {
+			if (transfer.source() == 0) sources.add(transfer.moved());
+			if (transfer.target() == 0) sinks.add(transfer.moved());
+		}
+		InventoryBatchPlan gas = planInventoryBatch(ids, batch.inventories(), GasRegionAudit.aggregate(sources), GasRegionAudit.aggregate(sinks));
+		TransferCommit thermal = Objects.requireNonNull(thermalPlanner.plan(batch), "Gas thermal flow plan");
+		requireInventoryBatchCurrent(gas);
+		thermal.commitPrepared(); commitInventoryBatch(gas);
+	}
+
+	private FlowBatch flowBatch(List<Integer> ids, java.util.Map<Integer, Integer> index,
+	                           int[] first, int[] second, double[] transported, NodeThermodynamics thermodynamics) {
 		ArrayList<ArrayList<Integer>> outgoing = new ArrayList<>();
-		for (int i = 0; i <= count; i++) outgoing.add(new ArrayList<>());
+		for (int i = 0; i <= ids.size(); i++) outgoing.add(new ArrayList<>());
 		for (int e = 0; e < transported.length; e++) if (transported[e] != 0)
 			outgoing.get(transported[e] > 0 ? first[e] : second[e]).add(e);
-		GasInventory[] retained = new GasInventory[count + 1]; retained[0] = GasInventory.EMPTY;
-		for (int i = 1; i <= count; i++) retained[i] = inventory(ids.get(i - 1));
+		GasInventory[] retained = new GasInventory[ids.size() + 1]; retained[0] = GasInventory.EMPTY;
+		for (int i = 1; i <= ids.size(); i++) retained[i] = inventory(ids.get(i - 1));
 		ArrayList<GasTransfer> transfers = new ArrayList<>();
-		ArrayList<GasInventory> sources = new ArrayList<>(), sinks = new ArrayList<>();
-		for (int i = 0; i <= count; i++) {
+		for (int i = 0; i <= ids.size(); i++) {
 			var ports = outgoing.get(i); if (ports.isEmpty()) continue;
 			int id = i == 0 ? 0 : ids.get(i - 1);
 			if (i == 0) {
@@ -406,7 +434,7 @@ public final class AirNetwork {
 					long amount = quantizedVolume(Math.abs(transported[edge]));
 					if (amount == 0) continue;
 					int target = first[edge] == 0 ? second[edge] : first[edge];
-					var moved = ambientInventory(amount); sources.add(moved);
+					var moved = ambientInventory(amount);
 					transfers.add(new GasTransfer(0, ids.get(target - 1), moved));
 				}
 				continue;
@@ -427,19 +455,15 @@ public final class AirNetwork {
 			for (int j = 0; j < ports.size(); j++) {
 				var moved = shares.get(j + 1); if (moved.isEmpty()) continue;
 				int edge = ports.get(j), target = first[edge] == i ? second[edge] : first[edge];
-				if (target == 0) sinks.add(moved);
 				transfers.add(new GasTransfer(id, target == 0 ? 0 : ids.get(target - 1), moved));
 			}
 		}
-		if (transfers.isEmpty()) return;
+		var donorRemainders = List.copyOf(java.util.Arrays.asList(java.util.Arrays.copyOfRange(retained, 1, retained.length)));
 		for (var transfer : transfers) if (transfer.target() != 0) {
 			int target = index.get(transfer.target()); retained[target] = retained[target].merge(transfer.moved());
 		}
 		var after = java.util.Arrays.asList(java.util.Arrays.copyOfRange(retained, 1, retained.length));
-		InventoryBatchPlan gas = planInventoryBatch(ids, after, GasRegionAudit.aggregate(sources), GasRegionAudit.aggregate(sinks));
-		TransferCommit thermal = Objects.requireNonNull(thermalPlanner.plan(new FlowBatch(ids, after, transfers)), "Gas thermal flow plan");
-		requireInventoryBatchCurrent(gas);
-		thermal.commitPrepared(); commitInventoryBatch(gas);
+		return new FlowBatch(ids, after, donorRemainders, transfers);
 	}
 
 	private double flowStorage(int node, NodeThermodynamics thermal, double pressure) {

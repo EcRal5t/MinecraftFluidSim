@@ -5,16 +5,16 @@ import mmm.thermal.ThermalCarrierTransport;
 import java.util.Arrays;
 import java.util.List;
 
-/** Finite-volume conduction between persistent condensed owners in connected cut-cell supports. */
-final class LiquidThermalConduction {
-	private LiquidThermalConduction() { }
+/** Finite-volume conduction between persistent thermal owners in connected cut-cell supports. */
+final class CarrierThermalConduction {
+	private CarrierThermalConduction() { }
 	static List<ThermalCarrierTransport.Contact> contacts(FluidDomain domain, ThermalCarrierTransport.Batch owners) {
 		if (domain.thermalState == null || owners.conductionBelowResolution(domain.thermalBoundaryTemperatureK)) return List.of();
 		int count=owners.carrierCount(),liquids=domain.liquidCells.physicalSize();
 		var head=new int[domain.cellCount];var next=new int[count];var support=new int[count];Arrays.fill(head,-1);
 		var conductivity=new double[count];var fraction=new double[count];var coverage=new double[8*domain.cellCount];
 		for(int owner=0;owner<count;owner++) {
-			int cell=owners.cell(owner);support[owner]=owner<liquids?domain.liquidCells.physicalStockAt(owner).key().supportMask():~domain.geometry.cutCells.mask(cell)&255;
+			int cell=owners.cell(owner);support[owner]=owners.supportMask(owner)!=0?owners.supportMask(owner):owner<liquids?domain.liquidCells.physicalStockAt(owner).key().supportMask():~domain.geometry.cutCells.mask(cell)&255;
 			conductivity[owner]=owners.material(owner).conductivityWPerMeterK();
 			fraction[owner]=owners.volume(owner)/(.125*Integer.bitCount(support[owner]));
 			next[owner]=head[cell];head[cell]=owner;

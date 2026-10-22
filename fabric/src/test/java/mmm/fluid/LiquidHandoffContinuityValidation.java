@@ -18,7 +18,7 @@ public final class LiquidHandoffContinuityValidation {
 	}
 	private static FluidDomain joiningWater(float h,float dt) {
 		int nx=Math.round(12/h),ny=Math.round(6/h);
-		var domain=new FluidDomain(nx,ny,ny,new FluidSolverConfig(h,1000,0,dt,500,1e-6F,.002F,.8F),nx*ny*ny*8);
+		var domain=new FluidDomain(nx,ny,ny,new FluidSolverConfig(h,1000,0,dt,500,1e-6F,.002F));
 		var builtin=BuiltinFluidMaterials.WATER;
 		var water=new FluidMaterial(builtin.id(),builtin.referenceDensity(),builtin.miscibilityGroup(),.0728,Math.PI/2);
 		domain.materialRegistry=new FluidMaterialRegistry(List.of(water));
@@ -27,7 +27,7 @@ public final class LiquidHandoffContinuityValidation {
 				?new MaterialRegistry.MaterialEntry(water,entry.viscosity(),entry.thermalExpansion()):entry).toList(),base.pairTensions()));
 		for(int z=Math.round(2.5F/h);z<Math.round(3.5F/h);z++)for(int y=Math.round(2.5F/h);y<Math.round(3.5F/h);y++)
 			for(int x=Math.round(3/h);x<Math.round(7/h);x++)if(x<Math.round(4/h)||x>=Math.round(6/h))domain.setVolume(x,y,z,1);
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.preparePhysicalState();
 		for(int f=0;f<domain.mac.velocityX.length;f++)if(domain.cellMacStage.massX[f]>0)
 			domain.mac.velocityX[f]=f%(nx+1)*h<5?.5F:-.5F;
 		domain.cellMacStage.publishMomentum();return domain;
@@ -39,7 +39,7 @@ public final class LiquidHandoffContinuityValidation {
 		int steps=Math.round(2.5F/dt),finalJoinStep=steps+1;boolean previous=false;JoinObservation observed=null;double firstJoin=Double.NaN;
 		for(int step=0;step<=steps;step++) {
 			check(initialV.equals(domain.liquidCells.exactVolume())&&initialM==domain.totalMassUnits(),"Water joining changed exact material inventory");
-			domain.domainFlowFields.ensureGrid();observed=topology.observe();
+			domain.domainFlowFields.preparePhysicalState();observed=topology.observe();
 			if(step==0)check(!observed.connected&&observed.components>=2,"Water bodies started connected");
 			if(observed.connected&&!previous){finalJoinStep=step;if(Double.isNaN(firstJoin))firstJoin=step*(double)dt;}
 			previous=observed.connected;

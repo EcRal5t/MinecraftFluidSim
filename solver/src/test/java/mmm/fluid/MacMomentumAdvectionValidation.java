@@ -15,8 +15,8 @@ public final class MacMomentumAdvectionValidation {
 		System.out.println("MAC donor mass, momentum and mixing heat PASS");
 	}
 	private static void wallImpactPublishesImpulseHeatAndRecoverableMomentum(){
-		var d=new FluidDomain(2,2,2,new FluidSolverConfig(1,1,0,.1F,80,1e-5F,.002F,.8F),64);
-		d.setVolumes(new float[]{.625F,.375F,0,0,0,0,0,0});d.domainFlowFields.ensureGrid();
+		var d=new FluidDomain(2,2,2,new FluidSolverConfig(1,1,0,.1F,80,1e-5F,.002F));
+		d.setVolumes(new float[]{.625F,.375F,0,0,0,0,0,0});d.domainFlowFields.preparePhysicalState();
 		long[] before=new long[8],after=new long[8];
 		before[0]=before[1]=mmm.units.Mass.fromKilograms(.5);after[0]=mmm.units.Mass.fromKilograms(.625);after[1]=mmm.units.Mass.fromKilograms(.375);
 		long[][] flux={new long[12],new long[12],new long[12]};flux[0][d.domainFlowFields.xFaceIndex(1,0,0)]=-mmm.units.Mass.fromKilograms(.125);
@@ -33,7 +33,7 @@ public final class MacMomentumAdvectionValidation {
 			throw new AssertionError("Wall stopping lost impulse or failed to transfer kinetic energy into local heat");
 		var inventory=d.liquidCells.planEdits(java.util.List.of()).withMechanicalHeat(byCell);inventory.commit();
 		d.cellMacStage.commitMomentum(new CellMomentumTransport.Prepared(new MacMomentumState(2,2,2,p[0],p[1],p[2]),byCell,wall));d.markCellInventoryChanged();
-		var saved=d.captureAuthoritativeState();var restored=FluidDomain.restoreAuthoritativeState(saved);restored.domainFlowFields.ensureGrid();
+		var saved=d.captureAuthoritativeState();var restored=FluidDomain.restoreAuthoritativeState(saved);restored.domainFlowFields.preparePhysicalState();
 		if(saved.momentum().copyX()[d.domainFlowFields.xFaceIndex(0,0,0)]!=0||restored.mac.velocityX[d.domainFlowFields.xFaceIndex(0,0,0)]!=0
 				||!saved.liquid().stocks().equals(restored.liquidCells.stocks()))throw new AssertionError("Wall momentum or its heat changed during capture and restore");
 	}

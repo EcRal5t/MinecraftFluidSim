@@ -141,9 +141,9 @@ public final class FluidRegionLifecycleValidation {
 		FluidDomain domain = new FluidDomain(4, 4, 4, config);
 		domain.setVolume(1, 1, 1, 0.5F);
 		FluidRegion region = new FluidRegion(new UUID(19L, 23L), DIMENSION, BlockPos.ZERO,
-				domain, domain.maximumParticleCount());
+				domain);
 		FluidRegionManager manager = new FluidRegionManager(new RegionCatalog.Limits(
-				4, 4_096L, Integer.MAX_VALUE, 16_384L, Integer.MAX_VALUE));
+				4, 4_096L, 16_384L));
 		require(manager.addAndSelect(region).accepted(), "application test region was not admitted");
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
 		RegionApplicationService application = application(backend, new FluidRegionRepository(manager),
@@ -315,7 +315,7 @@ public final class FluidRegionLifecycleValidation {
 		int markers = domain.particleCount();
 		float[] velocities = domain.exportParticleState().copyParticleVelocities();
 		FluidRegion region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO,
-				domain, domain.maximumParticleCount());
+				domain);
 		region.setPaused(false);
 		require(region.lifecycle().observeCompletedStep(true, 1), "sleep fixture did not enter sleep");
 		require(java.util.Arrays.equals(velocities, region.domain().exportParticleState().copyParticleVelocities()),
@@ -330,7 +330,7 @@ public final class FluidRegionLifecycleValidation {
 	private static void validateInternalConductionWakesMotion() {
 		FluidDomain domain = new FluidDomain(2, 2, 2, FluidSolverConfig.prototypeDefaults());
 		FluidRegion region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO,
-				domain, domain.maximumParticleCount());
+				domain);
 		region.setPaused(false);
 		region.enableThermalActivity();
 		require(region.lifecycle().observeCompletedStep(true, 1), "conduction fixture did not sleep");
@@ -357,7 +357,7 @@ public final class FluidRegionLifecycleValidation {
 		FullCapabilityTestFixture.bindFull(domain, registries, 300.0,
 				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 		FluidRegion region = new FluidRegion(new UUID(71L, 73L), DIMENSION, BlockPos.ZERO,
-				domain, domain.maximumParticleCount());
+				domain);
 		region.setPaused(false);
 		region.enableThermalActivity();
 		var thermal = registries.thermal();
@@ -369,7 +369,7 @@ public final class FluidRegionLifecycleValidation {
 				new FiniteThermalDeviceState("mmm:test", "mmm:device", "mmm:finite_heat_exchanger", body)));
 		region.restoreFiniteThermalDevices(devices, thermal, region.checkpointGeneration());
 		FluidRegionManager manager = new FluidRegionManager(new RegionCatalog.Limits(
-				4, 4_096L, Integer.MAX_VALUE, 16_384L, Integer.MAX_VALUE));
+				4, 4_096L, 16_384L));
 		require(manager.addAndSelect(region).accepted(), "finite device fixture was not admitted");
 		var oldCandidate = new CpuFluidSolverBackend().evaluateThermal(new FluidThermalStepRequest(
 				region.solverGeneration(), domain.captureAuthoritativeState(), false, 0));
@@ -447,7 +447,7 @@ public final class FluidRegionLifecycleValidation {
 
 		FluidDomain retryDomain = new FluidDomain(2, 2, 2, FluidSolverConfig.prototypeDefaults());
 		FluidRegion retryRegion = new FluidRegion(new UUID(11L, 13L), DIMENSION, BlockPos.ZERO,
-				retryDomain, retryDomain.maximumParticleCount());
+				retryDomain);
 		retryRegion.blockPerformance("three accepted steps exceeded the wall-time guard");
 		retryRegion.setHardOverrunStreak(3);
 		retryRegion.setRecoveryStreak(2);
@@ -541,7 +541,7 @@ public final class FluidRegionLifecycleValidation {
 				"0".repeat(64), 3L, 5L, new ControllerSummary.Footprint(1, 2, 3, 4, 5, 6, 120L, 4),
 				true, ControllerSummary.OperatorIntent.PAUSED, ControllerSummary.MotionState.UNLOADED,
 				ControllerSummary.ThermalState.UNBOUND, new ControllerSummary.Availability(null, null),
-				new ControllerSummary.Usage(unavailableCapacity, unavailableCapacity,
+				new ControllerSummary.Usage(unavailableCapacity,
 						unavailableCapacity, unavailableCapacity, unavailableCapacity, unavailableCapacity,
 						unavailableCapacity), unavailable,
 				new ControllerSummary.Gates(true, false, false, false, false),

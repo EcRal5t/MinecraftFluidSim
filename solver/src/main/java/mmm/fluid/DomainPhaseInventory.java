@@ -104,7 +104,6 @@ final class DomainPhaseInventory {
 		}
 		return mask;
 	}
-	public int maximumParticleCount() { return domain.maximumParticleCount; }
 	public int markerCellCount() { return domain.metrics.markerCellCount(); }
 	public FluidSolverConfig config() { return domain.config; }
 	public SolverUnitScale unitScale() { return domain.unitScale; }

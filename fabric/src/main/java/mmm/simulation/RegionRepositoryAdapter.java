@@ -138,7 +138,7 @@ final class RegionRepositoryAdapter {
 				FluidRegion region = FluidRegion.unloaded(manifest.regionId(), dimension,
 						MinecraftRegionCheckpointSource.blockPosition(manifest.origin()),
 						manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
-						manifest.reservedMarkerCapacity(), MinecraftRegionCheckpointSource.minecraftFootprint(manifest.footprint()),
+						MinecraftRegionCheckpointSource.minecraftFootprint(manifest.footprint()),
 						manifest.networkGeneration(), manifest.checkpointGeneration(), manifest.totalMarkerCount(),
 						(float) manifest.totalVolume(), MinecraftRegionCheckpointSource.persistedRuntime(manifest.runtime()));
 				RegionCatalog.AdmissionResult registration = manager.registerDiscovered(region);
@@ -345,8 +345,7 @@ final class RegionRepositoryAdapter {
 		if (manifest.checkpointGeneration() != region.checkpointGeneration() || manifest.networkGeneration() != region.networkGeneration()
 				|| !manifest.dimensionId().equals(region.dimension().identifier().toString())
 				|| !manifest.origin().equals(MinecraftRegionCheckpointSource.position(region.origin())) || manifest.sizeX() != region.sizeX()
-				|| manifest.sizeY() != region.sizeY() || manifest.sizeZ() != region.sizeZ()
-				|| manifest.reservedMarkerCapacity() != region.reservedMarkerCapacity()) {
+				|| manifest.sizeY() != region.sizeY() || manifest.sizeZ() != region.sizeZ()) {
 			throw new IOException("Committed checkpoint no longer matches admitted region metadata");
 		}
 		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
@@ -454,7 +453,6 @@ final class RegionRepositoryAdapter {
 				|| !manifest.origin().equals(MinecraftRegionCheckpointSource.position(region.origin())) || manifest.sizeX() != region.sizeX()
 				|| manifest.sizeY() != region.sizeY() || manifest.sizeZ() != region.sizeZ()
 				|| !manifest.solverConfig().equals(region.solverConfig())
-				|| manifest.reservedMarkerCapacity() != region.reservedMarkerCapacity()
 				|| !manifest.footprint().equals(MinecraftRegionCheckpointSource.footprint(region.footprint()))) {
 			throw new IOException("Previous checkpoint does not match the admitted controller identity");
 		}
@@ -468,7 +466,7 @@ final class RegionRepositoryAdapter {
 				ResourceKey.create(Registries.DIMENSION, dimensionId),
 				MinecraftRegionCheckpointSource.blockPosition(manifest.origin()),
 				manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
-				manifest.reservedMarkerCapacity(), MinecraftRegionCheckpointSource.minecraftFootprint(manifest.footprint()),
+				MinecraftRegionCheckpointSource.minecraftFootprint(manifest.footprint()),
 				manifest.networkGeneration(),
 				manifest.checkpointGeneration(), manifest.totalMarkerCount(),
 				(float) manifest.totalVolume(), MinecraftRegionCheckpointSource.persistedRuntime(manifest.runtime()));

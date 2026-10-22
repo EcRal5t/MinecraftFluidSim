@@ -45,7 +45,7 @@ public record RegionManifest(
 		speciesPalette = List.copyOf(speciesPalette);
 		chemicalMixtures = List.copyOf(chemicalMixtures);
 		chemicalSpeciesTotals = chemicalSpeciesTotals.clone();
-		if (totalMarkerCount < 0 || totalMarkerCount > geometry.reservedMarkerCapacity() || sections.isEmpty()) {
+		if (totalMarkerCount < 0 || sections.isEmpty()) {
 			throw new IllegalArgumentException("Invalid region manifest");
 		}
 		if (totalMassUnits < 0 || mmm.units.Mass.sum(sections.stream().mapToLong(SectionDescriptor::massUnits).toArray()) != totalMassUnits)
@@ -61,7 +61,7 @@ public record RegionManifest(
 	public RegionManifest(
 			RegionStateLayout layout, UUID regionId, String dimensionId, long checkpointGeneration,
 			long networkGeneration, RegionGeometry.BlockPosition origin, int sizeX, int sizeY, int sizeZ,
-			FluidSolverConfig solverConfig, long reservedMarkerCapacity, RegionRuntimeIntent runtime,
+			FluidSolverConfig solverConfig, RegionRuntimeIntent runtime,
 			RegionGeometry.ControllerFootprint footprint, int totalMarkerCount, long totalVolumeBits,
 			List<FluidMaterial> materialPalette, long totalMassUnits, List<MaterialLedger> materialLedgers,
 			List<SectionDescriptor> sections, List<RegionExtension> extensions, String registryFingerprint,
@@ -70,7 +70,7 @@ public record RegionManifest(
 			long chemicalResidualLedgerUnits, long checksum
 	) {
 		this(layout, new RegionIdentity(regionId, dimensionId, checkpointGeneration, networkGeneration),
-				new RegionGeometry(origin, sizeX, sizeY, sizeZ, solverConfig, reservedMarkerCapacity, footprint),
+				new RegionGeometry(origin, sizeX, sizeY, sizeZ, solverConfig, footprint),
 				runtime, totalMarkerCount, totalVolumeBits, materialPalette, totalMassUnits, materialLedgers,
 				sections, extensions, registryFingerprint, quantaPerMol, speciesPalette, chemicalMixtures,
 				chemicalSpeciesTotals, chemicalResidualLedgerUnits, checksum);
@@ -79,13 +79,12 @@ public record RegionManifest(
 	/** Convenience constructor for the pure-water feature layout. */
 	public RegionManifest(
 			UUID regionId, String dimensionId, long checkpointGeneration, long networkGeneration,
-			RegionGeometry.BlockPosition origin, int sizeX, int sizeY, int sizeZ, FluidSolverConfig solverConfig,
-			long reservedMarkerCapacity, RegionRuntimeIntent runtime, RegionGeometry.ControllerFootprint footprint,
+			RegionGeometry.BlockPosition origin, int sizeX, int sizeY, int sizeZ, FluidSolverConfig solverConfig, RegionRuntimeIntent runtime, RegionGeometry.ControllerFootprint footprint,
 			int totalMarkerCount, long totalVolumeBits, List<SectionDescriptor> sections,
 			List<RegionExtension> extensions, long checksum
 	) {
 		this(RegionStateLayout.PURE, regionId, dimensionId, checkpointGeneration, networkGeneration, origin,
-				sizeX, sizeY, sizeZ, solverConfig, reservedMarkerCapacity, runtime, footprint,
+				sizeX, sizeY, sizeZ, solverConfig, runtime, footprint,
 				totalMarkerCount, totalVolumeBits, List.of(), mmm.units.Mass.sum(sections.stream().mapToLong(SectionDescriptor::massUnits).toArray()), List.of(), sections, extensions,
 				"", 0L, List.of(), List.of(), new long[0], 0L, checksum);
 	}
@@ -94,13 +93,13 @@ public record RegionManifest(
 	public RegionManifest(
 			RegionStateLayout layout, UUID regionId, String dimensionId, long checkpointGeneration,
 			long networkGeneration, RegionGeometry.BlockPosition origin, int sizeX, int sizeY, int sizeZ,
-			FluidSolverConfig solverConfig, long reservedMarkerCapacity, RegionRuntimeIntent runtime,
+			FluidSolverConfig solverConfig, RegionRuntimeIntent runtime,
 			RegionGeometry.ControllerFootprint footprint, int totalMarkerCount, long totalVolumeBits,
 			List<FluidMaterial> materialPalette, long totalMassUnits, List<MaterialLedger> materialLedgers,
 			List<SectionDescriptor> sections, List<RegionExtension> extensions, long checksum
 	) {
 		this(layout, regionId, dimensionId, checkpointGeneration, networkGeneration, origin, sizeX, sizeY, sizeZ,
-				solverConfig, reservedMarkerCapacity, runtime, footprint, totalMarkerCount, totalVolumeBits,
+				solverConfig, runtime, footprint, totalMarkerCount, totalVolumeBits,
 				materialPalette, totalMassUnits, materialLedgers, sections, extensions,
 				"", 0L, List.of(), List.of(), new long[0], 0L, checksum);
 	}
@@ -170,7 +169,6 @@ public record RegionManifest(
 	public int sizeY() { return geometry.sizeY(); }
 	public int sizeZ() { return geometry.sizeZ(); }
 	public FluidSolverConfig solverConfig() { return geometry.solverConfig(); }
-	public long reservedMarkerCapacity() { return geometry.reservedMarkerCapacity(); }
 	public RegionGeometry.ControllerFootprint footprint() { return geometry.footprint(); }
 	@Override public long[] chemicalSpeciesTotals() { return chemicalSpeciesTotals.clone(); }
 

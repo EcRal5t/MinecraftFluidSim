@@ -64,7 +64,7 @@ final class RegionCheckpointValidator {
 			}
 			markerCount = Math.addExact(markerCount, section.markerCount());
 		}
-		if (markerCount != manifest.totalMarkerCount() || markerCount > manifest.reservedMarkerCapacity()) {
+		if (markerCount != manifest.totalMarkerCount()) {
 			throw new IOException("Manifest marker count/budget mismatch");
 		}
 		validateCellAndFaceOwnership();

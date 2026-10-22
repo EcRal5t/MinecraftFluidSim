@@ -306,7 +306,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 					+ " " + region.lifecycle().state() + "/" + (region.paused() ? "paused" : "running")
 					+ " availability=" + region.availabilityDescription()
 					+ " origin=" + region.origin().toShortString() + " grid=" + region.sizeX() + "x" + region.sizeY() + "x" + region.sizeZ()
-					+ " reserve=" + region.reservedCellCapacity() + "/" + region.reservedMarkerCapacity()
+					+ " reserve=" + region.reservedCellCapacity()
 					+ (region.solverLoaded() ? " markers=" + region.domain().particleCount() + " volume=" + region.domain().totalVolume()
 					: " checkpoint=" + region.checkpointGeneration() + " markers=" + region.checkpointMarkerCount() + " volume=" + region.checkpointVolume()));
 		}

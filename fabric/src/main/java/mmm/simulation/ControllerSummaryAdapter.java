@@ -53,7 +53,6 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
 		FluidRegionFootprint footprint = region.footprint();
 		boolean live = region.solverLoaded();
 		FluidDomain domain = live ? region.domain() : null;
-		long markerCount = live ? domain.particleCount() : region.checkpointMarkerCount();
 		long depositLimit = Math.min(GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
 				Math.multiplyExact(region.reservedCellCapacity(), GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL));
 		ControllerSummary.Inventory inventory = live
@@ -82,7 +81,6 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
 				new ControllerSummary.Availability(region.availabilityReason(), availabilityFailure),
 				new ControllerSummary.Usage(
 						capacity(region.reservedCellCapacity(), regions.limits().maximumCellsPerRegion()),
-						capacity(markerCount, region.reservedMarkerCapacity()),
 						live ? capacity(domain.granularParcelCount(), GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION)
 								: unavailable(GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION),
 						live ? capacity(domain.granularDepositGroupCount(), depositLimit) : unavailable(depositLimit),

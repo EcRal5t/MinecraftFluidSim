@@ -8,12 +8,12 @@ public final class MarkerPressureValidation {
         if (args.length == 1 && !java.util.Set.of("--thin-layer", "--kernel", "--cavities").contains(args[0]))
             throw new IllegalArgumentException("Unknown pressure selector: " + args[0]);
         if (args.length==1&&args[0].equals("--cavities")) {
-            separateCavitiesShareACoarseAirCell(); System.out.println("Independent cavity successors passed"); return;
+            separateCavitiesKeepIndependentPressure(); System.out.println("Independent cavity successors passed"); return;
         }
         thinLayersKeepBoundedVelocity();
         if (args.length == 0 || !args[0].equals("--thin-layer")) {
             closedLiquidRestsAfterRestore();
-            separateCavitiesShareACoarseAirCell();
+            separateCavitiesKeepIndependentPressure();
             LiquidMacroscopicMotionValidation.main(new String[]{"common-mesh"});
         }
         System.out.println("Shared pressure validation passed");
@@ -21,8 +21,8 @@ public final class MarkerPressureValidation {
 
     private static void thinLayersKeepBoundedVelocity() {
         for (float amount : new float[]{.02F, .2F}) for (int axis = 0; axis < 3; axis++) {
-            var d = new FluidDomain(3, 3, 3, new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.002F,0));
-            d.sealDomainBoundary(); d.setVolume(1,1,1,amount); d.domainFlowFields.ensureGrid();
+            var d = new FluidDomain(3, 3, 3, new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.002F));
+            d.sealDomainBoundary(); d.setVolume(1,1,1,amount); d.domainFlowFields.preparePhysicalState();
             java.util.Arrays.fill(axis==0?d.mac.velocityX:axis==1?d.mac.velocityY:d.mac.velocityZ,.25F);
             d.cellMacStage.publishMomentum(); d.bootstrapGasState(null);
             var volume=d.liquidCells.exactVolume(); long mass=d.totalMassUnits();
@@ -42,7 +42,7 @@ public final class MarkerPressureValidation {
     }
 
     private static void closedLiquidRestsAfterRestore() {
-        var d = new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.002F,0));
+        var d = new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,.002F));
         for(int z=0;z<3;z++)for(int y=0;y<3;y++)for(int x=0;x<3;x++)d.setVolume(x,y,z,1);
         for(int step=0;step<3;step++) {
             d = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0,d.captureAuthoritativeState(),java.util.List.of(),false,0,true)).claimPreparedCpuDomain();
@@ -53,10 +53,10 @@ public final class MarkerPressureValidation {
         }
     }
 
-    private static void separateCavitiesShareACoarseAirCell() {
-        var d = new FluidDomain(4,3,3,new FluidSolverConfig(.5F,1000,0,.01F,400,1e-5F,.002F,0));
+    private static void separateCavitiesKeepIndependentPressure() {
+        var d = new FluidDomain(4,3,3,new FluidSolverConfig(.5F,1000,0,.01F,400,1e-5F,.002F));
         byte[] masks = new byte[36]; java.util.Arrays.fill(masks,(byte)255);
-        masks[17]=masks[19]=0; masks[18]=126;
+        masks[17]=masks[19]=0;
         float[] points = new float[64];
         for(int side=0;side<2;side++)for(int bit=0;bit<8;bit++) {
             int p=side*8+bit;
@@ -66,8 +66,8 @@ public final class MarkerPressureValidation {
         }
         d.restoreParticleState(new FlipParticleState(4,3,3,.5F,16,1.5F,points,new float[48],
                 mmm.units.Mass.createLiquid(.5F,1000,points),masks));
-        d.sealDomainBoundary(); d.synchronizeGasTopologyForPersistence(); d.domainFlowFields.ensureGrid();
-        int left=d.gasState.frame.nodeOfPiece(18*8),right=d.gasState.frame.nodeOfPiece(18*8+7);
+        d.sealDomainBoundary(); d.synchronizeGasTopologyForPersistence(); d.domainFlowFields.preparePhysicalState();
+        int left=d.gasState.frame.nodeOfPiece(17*8+2),right=d.gasState.frame.nodeOfPiece(19*8+2);
         if(left<=0||right<=0||left==right)throw new AssertionError("Distinct face contacts lost cavity ownership");
         d.setGasNodeStandardVolume(left,1.01*d.gasBoundary.availableVolume(left));
         d.setGasNodeStandardVolume(right,.99*d.gasBoundary.availableVolume(right));
@@ -76,7 +76,7 @@ public final class MarkerPressureValidation {
             d=new CpuFluidSolverBackend().evaluate(new FluidStepRequest(step,d.captureAuthoritativeState(),java.util.List.of(),false,0)).claimPreparedCpuDomain();
             if(d.gasBoundary.sealedInventoryNanos()!=gas
                     ||!d.gasBoundary.auditClosed()||d.totalMassUnits()!=mass||d.totalVolumeExact()!=volume)
-                throw new AssertionError("Independent coarse-cell gas pressures lost their conservative successor");
+                throw new AssertionError("Independent spatial gas pressures lost their conservative successor");
             d=FluidDomain.restoreAuthoritativeState(d.captureAuthoritativeState());
         }
     }

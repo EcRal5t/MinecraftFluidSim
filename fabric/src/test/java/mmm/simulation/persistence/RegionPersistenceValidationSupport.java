@@ -37,14 +37,14 @@ import java.util.UUID;
 
 abstract class RegionPersistenceValidationSupport {
 	static final FluidSolverConfig CONFIG = new FluidSolverConfig(
-			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F, 0.80F);
+			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
 	static final ResourceKey<Registry<Level>> DIMENSION_REGISTRY = ResourceKey.createRegistryKey(
 			Identifier.fromNamespaceAndPath("mmm", "persistence_validation_registry"));
 	static final ResourceKey<Level> DIMENSION = ResourceKey.create(DIMENSION_REGISTRY,
 			Identifier.fromNamespaceAndPath("mmm", "persistence_validation"));
 
 	static FluidRegion populatedRegion(UUID id) {
-		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG, 512);
+		FluidDomain domain = new FluidDomain(6, 4, 6, CONFIG);
 		domain.sealDomainBoundary();
 		domain.setSolid(0, 0, 0, true);
 		domain.setVolume(1, 1, 1, 0.25F);
@@ -65,12 +65,12 @@ abstract class RegionPersistenceValidationSupport {
 		Set<Long> chunks = Set.of(ChunkPos.pack(0, 0), ChunkPos.pack(1, 0), ChunkPos.pack(0, 1), ChunkPos.pack(1, 1));
 		FluidRegionFootprint footprint = new FluidRegionFootprint(controller, origin, new BlockPos(17, 17, 17),
 				interior, Set.of(controller.asLong()), chunks);
-		return new FluidRegion(id, DIMENSION, origin, domain, 512L, footprint);
+		return new FluidRegion(id, DIMENSION, origin, domain, footprint);
 	}
 
 	/** Fixed codec columns, independent of the runtime cell-fill quadrature. */
 	static FluidRegion canonicalCodecRegion(UUID id) {
-		var domain = new FluidDomain(6, 4, 6, CONFIG, 512);
+		var domain = new FluidDomain(6, 4, 6, CONFIG);
 		domain.sealDomainBoundary();
 		domain.setSolid(0, 0, 0, true);
 		var template = domain.exportParticleState();
@@ -92,7 +92,7 @@ abstract class RegionPersistenceValidationSupport {
 
 	static FluidRegion emptyRegion(UUID id) {
 		BlockPos origin = new BlockPos(32, 16, 32);
-		FluidDomain domain = new FluidDomain(8, 8, 8, CONFIG, 4_096);
+		FluidDomain domain = new FluidDomain(8, 8, 8, CONFIG);
 		domain.sealDomainBoundary();
 		Set<Long> interior = new HashSet<>();
 		for (int z = 32; z <= 35; z++) for (int y = 16; y <= 19; y++) {
@@ -101,7 +101,7 @@ abstract class RegionPersistenceValidationSupport {
 		BlockPos controller = new BlockPos(31, 17, 33);
 		FluidRegionFootprint footprint = new FluidRegionFootprint(controller, origin, new BlockPos(35, 19, 35),
 				interior, Set.of(controller.asLong()), Set.of(ChunkPos.pack(2, 2)));
-		return new FluidRegion(id, DIMENSION, origin, domain, 4_096L, footprint);
+		return new FluidRegion(id, DIMENSION, origin, domain, footprint);
 	}
 
 	static void assertParticleStateEquals(FlipParticleState expected, FlipParticleState actual) {
@@ -228,7 +228,7 @@ abstract class RegionPersistenceValidationSupport {
 	static RegionManifest signedManifest(RegionManifest manifest) {
 		return new RegionManifest(manifest.layout(), manifest.regionId(), manifest.dimensionId(), manifest.checkpointGeneration(),
 				manifest.networkGeneration(), manifest.origin(), manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(),
-				manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(), manifest.totalMarkerCount(), manifest.totalVolumeBits(),
+				manifest.runtime(), manifest.footprint(), manifest.totalMarkerCount(), manifest.totalVolumeBits(),
 				manifest.materialPalette(), manifest.totalMassUnits(), manifest.materialLedgers(), manifest.sections(), manifest.extensions(),
 				manifest.registryFingerprint(), manifest.quantaPerMol(), manifest.speciesPalette(), manifest.chemicalMixtures(),
 				manifest.chemicalSpeciesTotals(), manifest.chemicalResidualLedgerUnits(), RegionStateIntegrity.manifestChecksum(manifest));
@@ -239,7 +239,7 @@ abstract class RegionPersistenceValidationSupport {
 	) {
 		RegionManifest unsigned = new RegionManifest(manifest.layout(), manifest.regionId(), manifest.dimensionId(),
 				manifest.checkpointGeneration(), manifest.networkGeneration(), manifest.origin(), manifest.sizeX(), manifest.sizeY(),
-				manifest.sizeZ(), manifest.solverConfig(), manifest.reservedMarkerCapacity(), manifest.runtime(), manifest.footprint(),
+				manifest.sizeZ(), manifest.solverConfig(), manifest.runtime(), manifest.footprint(),
 				manifest.totalMarkerCount(), manifest.totalVolumeBits(), manifest.materialPalette(), manifest.totalMassUnits(),
 				manifest.materialLedgers(), manifest.sections(), extensions, manifest.registryFingerprint(), manifest.quantaPerMol(),
 				manifest.speciesPalette(), manifest.chemicalMixtures(), manifest.chemicalSpeciesTotals(),

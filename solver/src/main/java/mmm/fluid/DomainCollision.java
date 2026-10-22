@@ -113,6 +113,7 @@ final class DomainCollision {
 			}
 			int cell = domain.domainFlowFields.cellIndexChecked(edit.x(), edit.y(), edit.z());
 			if (!uniqueCells.add(cell)) throw new IllegalArgumentException("Collision batch edits one cell twice");
+			FixedGeometrySnapshot.requireConnectedOpenCell(cell,edit.mask());
 			int previous = domain.geometry.cutCells.mask(cell);
 			if (previous == edit.mask()) throw new IllegalArgumentException("Collision batch contains a no-op edit");
 			previousMasks[editIndex] = previous;
@@ -153,6 +154,7 @@ final class DomainCollision {
 			}
 		}
 		plan.liquid.inventory.requireCurrent();
+		if(plan.granular!=null)requireGranularCollisionCurrent(plan.granular);
 		if (plan.liquid.gas != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(plan.liquid.gas);
 		if (domain.thermalState != null) {
 			var audit = domain.thermalState.auditLedger().withExternalSinkEnergy(
@@ -163,13 +165,13 @@ final class DomainCollision {
 			audit.withExternalSinkEnergy(plan.liquid.removedEnergy).withMechanicalWork(plan.liquid.inventory.mechanicalHeat())
 					.withRoundoff(plan.liquid.energyRoundoff).expectedInventory();
 		}
+		domain.cellMacStage.publishMaterialChange(plan.liquid.inventory,
+                ()->domain.cellMacStage.commitMomentum(plan.liquid.momentum),plan.liquid.gas,null,()->{
 		if (plan.granular != null) try {
 			commitGranularCollision(plan.granular);
 		} catch (RuntimeException failure) {
 			throw new CollisionEditBlockedException("Granular collision displacement could not be committed", failure);
 		}
-		plan.liquid.inventory.commit();
-		domain.cellMacStage.commitMomentum(plan.liquid.momentum);
 		domain.geometry.cutCells.restoreSnapshot(plan.liquid.fixedGeometry);
 		for (var edit : plan.edits) {
 			int cell = domain.domainFlowFields.cellIndex(edit.x(), edit.y(), edit.z());
@@ -177,8 +179,7 @@ final class DomainCollision {
 			if (domain.chemistry != null) domain.chemistry.markDirtyCell(cell);
 			if (domain.granularDepositDynamics != null) domain.granularDepositDynamics.disturbCell(cell);
 		}
-		domain.markCellInventoryChanged();
-		if (plan.liquid.gas != null) domain.gasTopologyCoordinator.commit(plan.liquid.gas);
+		});
 		if (domain.thermalState != null) {
 			domain.thermalState.recordExternalSink(plan.liquid.removedEnergy);
 			domain.thermalState.restoreAuditLedger(domain.thermalState.auditLedger().withMechanicalWork(plan.liquid.inventory.mechanicalHeat()));
@@ -286,13 +287,15 @@ final class DomainCollision {
 		if (domain.thermalState == null ? revision != null : !domain.thermalState.matchesThermalRevision(revision))
 			throw new IllegalStateException("Thermal inventory changed after collision planning");
 	}
-	void commitGranularCollision(GranularCollisionPlan plan) {
+	private void requireGranularCollisionCurrent(GranularCollisionPlan plan) {
 		requireCollisionThermalCurrent(plan.thermalRevision());
 		if (domain.granularState.parcels.count() != plan.parcelCount()
 				|| domain.granularState.inventory.totalSolidVolumeSvq() != plan.totalSvq()
 				|| domain.granularState.inventory.totalMassUnits() != plan.totalMassUnits()) {
 			throw new IllegalStateException("Granular inventory changed after collision planning");
 		}
+	}
+	private void commitGranularCollision(GranularCollisionPlan plan) {
 		for (int parcel = plan.selectedParcels().length - 1; parcel >= 0; parcel--) if (plan.selectedParcels()[parcel]) {
 			GranularParcelStore.Parcel state = domain.granularState.parcels.parcel(parcel);
 			if (domain.thermalState != null) domain.thermalState.commitExternalActiveTake(
@@ -410,7 +413,7 @@ final class DomainCollision {
 		edits.add(new LiquidCellInventory.Edit(key, null)); edits.add(new LiquidCellInventory.Edit(nextKey, candidate.stock(nextKey)));
 		var plan = domain.liquidCells.planEdits(edits); var momentum = domain.cellMacStage.prepareExternalMomentum(plan);
 		plan = plan.withMechanicalHeat(momentum.heatByCell());
-		plan.commit(); domain.cellMacStage.commitMomentum(momentum); domain.markCellInventoryChanged();
+		domain.cellMacStage.publishMaterialChange(plan,()->domain.cellMacStage.commitMomentum(momentum),null,null,()->{});
 		if (domain.thermalState != null) domain.thermalState.restoreAuditLedger(domain.thermalState.auditLedger()
 				.withMechanicalWork(plan.mechanicalHeat())
 				.withRoundoff(plan.energyChange().subtract(plan.mechanicalHeat())));

@@ -233,7 +233,7 @@ final class PressureSystem {
 	void beginGranularForceStep(){granular.beginMechanicalStep();}
 	void finishGranularForceStep(){granular.finishMechanicalStep();}
 	PressureProjectionResult solveProjection(float dt) {
-		duration = dt; domain.domainFlowFields.ensureGrid();
+		duration = dt; domain.domainFlowFields.preparePhysicalState();
 		if(!forceStepPrepared)beginForceStep();
 		prepareOperator();
 		pressureDatum=commonPressureDatum();shiftPressureDatum(pressureDatum);

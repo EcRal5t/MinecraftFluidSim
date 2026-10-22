@@ -51,15 +51,14 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		var authoritativeAfter=restorer(committed).reconstructAuthoritativeState(null,null,null,BuiltinGasDefinitions.createRegistry(),null);
 		FluidRegion startupMetadata = FluidRegion.unloaded(manifest.regionId(), DIMENSION,
 				MinecraftRegionCheckpointSource.blockPosition(manifest.origin()), manifest.sizeX(),
-				manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(), manifest.reservedMarkerCapacity(),
-				MinecraftRegionCheckpointSource.minecraftFootprint(manifest.footprint()),
+				manifest.sizeY(), manifest.sizeZ(), manifest.solverConfig(), MinecraftRegionCheckpointSource.minecraftFootprint(manifest.footprint()),
 				manifest.networkGeneration(), manifest.checkpointGeneration(), manifest.totalMarkerCount(),
 				(float) manifest.totalVolume(), MinecraftRegionCheckpointSource.persistedRuntime(manifest.runtime()));
 		require(!startupMetadata.solverLoaded() && startupMetadata.lifecycle().state() == FluidRegionLifecycle.State.UNLOADED,
 				"startup metadata allocated solver arrays");
 
 		require(region.recordPublishedCheckpoint(1L), "live region rejected published generation");
-		FluidRegionManager manager = new FluidRegionManager(new RegionCatalog.Limits(2, 256L, 512L, 512L, 1_024L));
+		FluidRegionManager manager = new FluidRegionManager(new RegionCatalog.Limits(2, 256L, 512L));
 		require(manager.add(region).accepted(), "loaded fixture was not admitted");
 		RegionCatalog.BudgetUsage reserved = manager.usage();
 		require(region.releaseSolverAfterCheckpoint(1L), "checkpointed solver was not released");
@@ -90,11 +89,11 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		RegionManifest base = original.manifest();
 		RegionManifest unsigned = new RegionManifest(base.regionId(), base.dimensionId(), base.checkpointGeneration(),
 				base.networkGeneration(), base.origin(), base.sizeX(), base.sizeY(), base.sizeZ(), base.solverConfig(),
-				base.reservedMarkerCapacity(), base.runtime(), base.footprint(), base.totalMarkerCount(), base.totalVolumeBits(),
+				base.runtime(), base.footprint(), base.totalMarkerCount(), base.totalVolumeBits(),
 				base.sections(), List.of(extension), 0L);
 		RegionManifest signed = new RegionManifest(unsigned.regionId(), unsigned.dimensionId(), unsigned.checkpointGeneration(),
 				unsigned.networkGeneration(), unsigned.origin(), unsigned.sizeX(), unsigned.sizeY(), unsigned.sizeZ(), unsigned.solverConfig(),
-				unsigned.reservedMarkerCapacity(), unsigned.runtime(), unsigned.footprint(), unsigned.totalMarkerCount(), unsigned.totalVolumeBits(),
+				unsigned.runtime(), unsigned.footprint(), unsigned.totalMarkerCount(), unsigned.totalVolumeBits(),
 				unsigned.sections(), unsigned.extensions(), RegionStateIntegrity.manifestChecksum(unsigned));
 		RegionStateCodec codec = new RegionStateCodec();
 		RegionManifest decoded = codec.decodeManifest(codec.encodeManifest(signed));

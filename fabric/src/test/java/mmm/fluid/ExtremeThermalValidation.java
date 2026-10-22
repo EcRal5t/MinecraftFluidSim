@@ -17,8 +17,8 @@ public final class ExtremeThermalValidation {
 			double temperature = state[0], pressure = state[1];
 			// Microgravity isolates the extreme caloric/EoS/phase domain from the local Boussinesq approximation.
 			var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
-					240, 1.0E-4F, 2.0E-3F, 0.80F);
-			FluidDomain domain = new FluidDomain(4, 4, 4, config, 4096);
+					240, 1.0E-4F, 2.0E-3F);
+			FluidDomain domain = new FluidDomain(4, 4, 4, config);
 			domain.sealDomainBoundary();
 			// A connected four-cell chamber retains a liquid pressure field while
 			// keeping the cold high-pressure gas mass inside the integer inventory range.

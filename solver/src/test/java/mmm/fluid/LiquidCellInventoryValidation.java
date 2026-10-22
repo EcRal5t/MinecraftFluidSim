@@ -28,7 +28,7 @@ public final class LiquidCellInventoryValidation {
 		System.out.println("Liquid cell inventory validation passed: six-face quantities, atomic rows, recovery and U rounding");
 	}
 	private static void dissipationFollowsAnEmptiedSource() {
-		var domain=new FluidDomain(3,2,2,new FluidSolverConfig(1,1000,0,.05F,120,1e-5F,.002F,.8F));
+		var domain=new FluidDomain(3,2,2,new FluidSolverConfig(1,1000,0,.05F,120,1e-5F,.002F));
 		var cells=domain.liquidCells;var key=new LiquidCellInventory.Key(0,0,255);
 		cells.planAdditions(List.of(new LiquidCellInventory.Stock(key,SignedDyadic.of(1),100,null,16,false))).commit();
 		domain.markCellInventoryChanged();domain.cellMacStage.rebuildInventory();
@@ -121,9 +121,9 @@ public final class LiquidCellInventoryValidation {
 				&&cells.exactInternalEnergy().equals(SignedDyadic.of(250)),"Full interior settlement opened a void or changed its material quantities");
 	}
 	private static void bulkVolumeReplacement() {
-		var config=new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F,.8F);
+		var config=new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F);
 		var bulk=new FluidDomain(3,3,3,config);var single=new FluidDomain(3,3,3,config);
-		byte[] masks=new byte[27];masks[0]=126;
+		byte[] masks=new byte[27];masks[0]=(byte)252;
 		bulk.geometry.cutCells.restoreMicroMasks(masks);single.geometry.cutCells.restoreMicroMasks(masks);
 		float[] volumes=new float[27];for(int c=0;c<27;c++)volumes[c]=c%4==0?1:.25F;
 		long revision=bulk.liquidCells.revision();bulk.setVolumes(volumes);
@@ -146,7 +146,7 @@ public final class LiquidCellInventoryValidation {
 	}
 
 	private static void collisionPreservesGeometricTail() {
-		var domain = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F,.8F));
+		var domain = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F));
 		domain.materialRegistry = new FluidMaterialRegistry(List.of(new FluidMaterial("test:tail",1000,"test:tail",0,Math.PI/2)));
 		var key = new LiquidCellInventory.Key(13,0,255); var volume = SignedDyadic.of(1,-60);
 		domain.liquidCells.planAdditions(List.of(new LiquidCellInventory.Stock(key,volume,0,null,0,false))).commit();
@@ -159,7 +159,7 @@ public final class LiquidCellInventoryValidation {
 				&& domain.totalMassUnits()==0, "Collision tail could not return through the common inventory transaction");
 	}
 	private static void chemicalTailRetainsComposition() {
-		var domain = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F,.8F));
+		var domain = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F));
 		domain.materialRegistry = new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
 		var chemistry = BuiltinChemicalDefinitions.REGISTRY;
 		domain.bindChemistry(chemistry);
@@ -247,8 +247,8 @@ public final class LiquidCellInventoryValidation {
 		var cells = new LiquidCellInventory(12, null); var key = new LiquidCellInventory.Key(1, 0, 255);
 		cells.planEdits(List.of(new LiquidCellInventory.Edit(key,
 				new LiquidCellInventory.Stock(key, SignedDyadic.of(1), 100, null, 10, false)))).commit();
-		var domain = new FluidDomain(3,2,2,new FluidSolverConfig(1,1000,0,.05F,120,1e-5F,.002F,.8F)); domain.liquidCells = cells;
-		domain.markCellInventoryChanged();domain.domainFlowFields.ensureGrid();
+		var domain = new FluidDomain(3,2,2,new FluidSolverConfig(1,1000,0,.05F,120,1e-5F,.002F)); domain.liquidCells = cells;
+		domain.markCellInventoryChanged();domain.domainFlowFields.preparePhysicalState();
 		for(int face=0;face<domain.mac.velocityX.length;face++)if(domain.cellMacStage.massX[face]>0)domain.mac.velocityX[face]=.2F;
 		domain.cellMacStage.publishMomentum();
 		var before=cells.snapshot();

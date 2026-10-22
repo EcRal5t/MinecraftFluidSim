@@ -54,7 +54,7 @@ final class GranularTransferPlanner {
 		if (compositionHandle != 0 && (granular.compositions == null || !granular.compositions.isLive(compositionHandle))) {
 			throw new IllegalArgumentException("Granular insertion has no live solid composition");
 		}
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.preparePhysicalState();
 		domain.granularCoupling.rebuild(granular.parcels, granular.deposits);
 		long[] previousSolid = domain.granularCoupling.copySolidSvq();
 		long[] plannedSolid = previousSolid.clone();
@@ -105,7 +105,7 @@ final class GranularTransferPlanner {
 		if (granular == null) return FluidDomain.GranularInsertion.rejected("Granular state is not bound");
 		if (ledger == null) throw new IllegalArgumentException("Granular insertion ledger is missing");
 		if (maxRadius < 0) throw new IllegalArgumentException("Granular insertion radius is invalid");
-		domain.domainFlowFields.cellIndexChecked(cellX, cellY, cellZ); domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.cellIndexChecked(cellX, cellY, cellZ); domain.domainFlowFields.preparePhysicalState();
 		domain.granularCoupling.rebuild(granular.parcels, granular.deposits);
 		long insertedSvq = ledger.totalSolidVolumeSvq(); long insertedMass = ledger.totalMassUnits();
 		try {

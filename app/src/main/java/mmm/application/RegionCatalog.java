@@ -24,12 +24,11 @@ public final class RegionCatalog<T> {
 	}
 
 	public BudgetUsage usage() {
-		long cells = 0L, markers = 0L;
+		long cells = 0L;
 		for (Entry<T> entry : entries.values()) {
 			cells = Math.addExact(cells, entry.descriptor().reservedCells());
-			markers = Math.addExact(markers, entry.descriptor().reservedMarkers());
 		}
-		return new BudgetUsage(entries.size(), cells, markers);
+		return new BudgetUsage(entries.size(), cells);
 	}
 
 	public AdmissionResult add(T value, Descriptor descriptor) {
@@ -37,8 +36,8 @@ public final class RegionCatalog<T> {
 		Objects.requireNonNull(descriptor, "descriptor");
 		if (entries.containsKey(descriptor.regionId())) return duplicate(descriptor.regionId());
 		BudgetUsage current = usage();
-		AdmissionResult admission = evaluate(descriptor.reservedCells(), descriptor.reservedMarkers(),
-				current.regionCount() + 1, current.reservedCells(), current.reservedMarkers());
+		AdmissionResult admission = evaluate(descriptor.reservedCells(),
+				current.regionCount() + 1, current.reservedCells());
 		if (!admission.accepted()) return admission;
 		AdmissionResult placement = evaluatePlacement(descriptor, null);
 		if (!placement.accepted()) return placement;
@@ -57,8 +56,8 @@ public final class RegionCatalog<T> {
 		Objects.requireNonNull(descriptor, "descriptor");
 		if (entries.containsKey(descriptor.regionId())) return duplicate(descriptor.regionId());
 		BudgetUsage current = usage();
-		AdmissionResult admission = evaluate(descriptor.reservedCells(), descriptor.reservedMarkers(),
-				current.regionCount() + 1, current.reservedCells(), current.reservedMarkers());
+		AdmissionResult admission = evaluate(descriptor.reservedCells(),
+				current.regionCount() + 1, current.reservedCells());
 		return admission.accepted() ? evaluatePlacement(descriptor, null) : admission;
 	}
 
@@ -81,17 +80,16 @@ public final class RegionCatalog<T> {
 					"region is not the registered committed metadata instance");
 		}
 		BudgetUsage current = usage();
-		AdmissionResult admission = evaluate(descriptor.reservedCells(), descriptor.reservedMarkers(),
-				current.regionCount(), current.reservedCells() - descriptor.reservedCells(),
-				current.reservedMarkers() - descriptor.reservedMarkers());
+		AdmissionResult admission = evaluate(descriptor.reservedCells(),
+				current.regionCount(), current.reservedCells() - descriptor.reservedCells());
 		return admission.accepted() ? evaluatePlacement(descriptor, value) : admission;
 	}
 
-	public AdmissionResult previewAdd(long requiredCells, long requiredMarkers) {
-		requireCapacity(requiredCells, requiredMarkers);
+	public AdmissionResult previewAdd(long requiredCells) {
+		requireCapacity(requiredCells);
 		BudgetUsage current = usage();
-		return evaluate(requiredCells, requiredMarkers, current.regionCount() + 1,
-				current.reservedCells(), current.reservedMarkers());
+		return evaluate(requiredCells, current.regionCount() + 1,
+				current.reservedCells());
 	}
 
 	public AdmissionResult replaceSelected(T value, Descriptor descriptor) {
@@ -104,10 +102,8 @@ public final class RegionCatalog<T> {
 		int regionCount = selected == null ? current.regionCount() + 1 : current.regionCount();
 		long baseCells = current.reservedCells()
 				- (selected == null ? 0L : selected.descriptor().reservedCells());
-		long baseMarkers = current.reservedMarkers()
-				- (selected == null ? 0L : selected.descriptor().reservedMarkers());
-		AdmissionResult admission = evaluate(descriptor.reservedCells(), descriptor.reservedMarkers(),
-				regionCount, baseCells, baseMarkers);
+		AdmissionResult admission = evaluate(descriptor.reservedCells(),
+				regionCount, baseCells);
 		if (!admission.accepted()) return admission;
 		AdmissionResult placement = evaluatePlacement(descriptor, selected == null ? null : selected.value());
 		if (!placement.accepted()) return placement;
@@ -117,16 +113,14 @@ public final class RegionCatalog<T> {
 		return admission;
 	}
 
-	public AdmissionResult previewReplacement(long requiredCells, long requiredMarkers) {
-		requireCapacity(requiredCells, requiredMarkers);
+	public AdmissionResult previewReplacement(long requiredCells) {
+		requireCapacity(requiredCells);
 		Entry<T> selected = selectedId == null ? null : entries.get(selectedId);
 		BudgetUsage current = usage();
 		int regionCount = selected == null ? current.regionCount() + 1 : current.regionCount();
 		long baseCells = current.reservedCells()
 				- (selected == null ? 0L : selected.descriptor().reservedCells());
-		long baseMarkers = current.reservedMarkers()
-				- (selected == null ? 0L : selected.descriptor().reservedMarkers());
-		return evaluate(requiredCells, requiredMarkers, regionCount, baseCells, baseMarkers);
+		return evaluate(requiredCells, regionCount, baseCells);
 	}
 
 	public boolean select(UUID id) {
@@ -157,22 +151,18 @@ public final class RegionCatalog<T> {
 	}
 
 	private AdmissionResult evaluate(
-			long requiredCells, long requiredMarkers, int regionCount, long baseCells, long baseMarkers
+			long requiredCells, int regionCount, long baseCells
 	) {
 		long remainingCells = limits.maximumTotalCells() - baseCells;
-		long remainingMarkers = limits.maximumTotalMarkers() - baseMarkers;
-		String requirement = "requires " + requiredCells + " cells/" + requiredMarkers
-				+ " markers; per-region limit " + limits.maximumCellsPerRegion() + "/"
-				+ limits.maximumMarkersPerRegion() + "; remaining " + Math.max(0L, remainingCells)
-				+ "/" + Math.max(0L, remainingMarkers);
+		String requirement = "requires " + requiredCells + " cells; per-region limit "
+				+ limits.maximumCellsPerRegion() + "; remaining " + Math.max(0L, remainingCells);
 		if (regionCount > limits.maximumRegions()) return AdmissionResult.rejected(RegionAvailabilityReason.BUDGET,
 				"region-count limit " + limits.maximumRegions() + " exceeded; " + requirement);
-		if (requiredCells > limits.maximumCellsPerRegion()
-				|| requiredMarkers > limits.maximumMarkersPerRegion()) {
+		if (requiredCells > limits.maximumCellsPerRegion()) {
 			return AdmissionResult.rejected(RegionAvailabilityReason.BUDGET,
 					"per-region budget exceeded; " + requirement);
 		}
-		if (requiredCells > remainingCells || requiredMarkers > remainingMarkers) {
+		if (requiredCells > remainingCells) {
 			return AdmissionResult.rejected(RegionAvailabilityReason.BUDGET,
 					"server fluid budget exceeded; " + requirement);
 		}
@@ -183,8 +173,8 @@ public final class RegionCatalog<T> {
 		return AdmissionResult.rejected(RegionAvailabilityReason.HEAD_INVALID, "region id already exists: " + id);
 	}
 
-	private static void requireCapacity(long cells, long markers) {
-		if (cells <= 0L || markers <= 0L) {
+	private static void requireCapacity(long cells) {
+		if (cells <= 0L) {
 			throw new IllegalArgumentException("Fluid region capacity requirements must be positive");
 		}
 	}
@@ -195,7 +185,7 @@ public final class RegionCatalog<T> {
 			UUID regionId, String dimensionId,
 			double minimumX, double minimumY, double minimumZ,
 			double maximumX, double maximumY, double maximumZ,
-			long reservedCells, long reservedMarkers
+			long reservedCells
 	) {
 		public Descriptor {
 			Objects.requireNonNull(regionId, "regionId");
@@ -203,7 +193,7 @@ public final class RegionCatalog<T> {
 					|| !(Double.isFinite(minimumX) && Double.isFinite(minimumY) && Double.isFinite(minimumZ)
 					&& Double.isFinite(maximumX) && Double.isFinite(maximumY) && Double.isFinite(maximumZ))
 					|| !(minimumX < maximumX && minimumY < maximumY && minimumZ < maximumZ)
-					|| reservedCells <= 0L || reservedMarkers <= 0L) {
+					|| reservedCells <= 0L) {
 				throw new IllegalArgumentException("Region catalog descriptor is invalid");
 			}
 		}
@@ -217,21 +207,20 @@ public final class RegionCatalog<T> {
 	}
 
 	public record Limits(
-			int maximumRegions, long maximumCellsPerRegion, long maximumMarkersPerRegion,
-			long maximumTotalCells, long maximumTotalMarkers
+			int maximumRegions, long maximumCellsPerRegion, long maximumTotalCells
 	) {
 		public Limits {
-			if (maximumRegions <= 0 || maximumCellsPerRegion <= 0L || maximumMarkersPerRegion <= 0L
-					|| maximumTotalCells <= 0L || maximumTotalMarkers <= 0L) {
+			if (maximumRegions <= 0 || maximumCellsPerRegion <= 0L
+					|| maximumTotalCells <= 0L) {
 				throw new IllegalArgumentException("Fluid region limits must be positive");
 			}
-			if (maximumCellsPerRegion > maximumTotalCells || maximumMarkersPerRegion > maximumTotalMarkers) {
+			if (maximumCellsPerRegion > maximumTotalCells) {
 				throw new IllegalArgumentException("Per-region limits cannot exceed total limits");
 			}
 		}
 	}
 
-	public record BudgetUsage(int regionCount, long reservedCells, long reservedMarkers) { }
+	public record BudgetUsage(int regionCount, long reservedCells) { }
 
 	public record AdmissionResult(boolean accepted, RegionAvailabilityReason reason, String failure) {
 		private static final AdmissionResult ACCEPTED = new AdmissionResult(true, null, null);

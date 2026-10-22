@@ -59,6 +59,58 @@ final class GasOrificeFlow {
 		for (int e = 0; e < m; e++) transported[e] = conductance[e] * (solved[first[e]] - solved[second[e]]);
 		return transported;
 	}
+	/** Coordinate roots use the same inventory/energy endpoint that will be committed. */
+	static double[] solveThermal(double dt, List<AirEdge> edges, int[] first, int[] second,
+	                            double[] pressure, double[] density, double[] ratio,
+	                            double[] limit, java.util.function.Function<double[], double[]> endpoint) {
+		double[] flow = new double[edges.size()], conductance = new double[edges.size()];
+		for (int e = 0; e < flow.length; e++) {
+			int a = first[e], b = second[e], donor = pressure[a] >= pressure[b] ? a : b;
+			double rho = density[donor] > 0 ? density[donor] : density[0];
+			double drop = Math.abs(pressure[a] - pressure[b]);
+			if (drop == 0) drop = Math.max(AirNetwork.REFERENCE_PRESSURE,
+					AirNetwork.REFERENCE_PRESSURE + Math.max(pressure[a], pressure[b]));
+			conductance[e] = dt * edges.get(e).dischargeCoefficient() * edges.get(e).areaSquareMeters()
+					* Math.sqrt(2 / rho / drop) * (ratio[donor] > 0 ? ratio[donor] : ratio[0]);
+		}
+		for (int sweep = 0; sweep < 64; sweep++) {
+			double change = 0, magnitude = 0;
+			for (int e = 0; e < flow.length; e++) {
+				double old = flow[e]; flow[e] = 0;
+				double[] p = endpoint.apply(flow);
+				double drive = conductance[e] * (p[first[e]] - p[second[e]]);
+				if (drive == 0) { change = Math.max(change, Math.abs(old)); continue; }
+				double sign = Math.signum(drive), lo = 0, hi = Math.abs(drive);
+				int donor = sign > 0 ? first[e] : second[e];
+				double remaining = limit[donor];
+				for (int j = 0; j < flow.length; j++) if (j != e)
+					if (flow[j] > 0 && first[j] == donor || flow[j] < 0 && second[j] == donor) remaining -= Math.abs(flow[j]);
+				hi = Math.min(hi, Math.max(0, remaining));
+				flow[e] = sign * hi; p = endpoint.apply(flow);
+				double lowResidual = -Math.abs(drive);
+				double highResidual = hi - sign * conductance[e] * (p[first[e]] - p[second[e]]);
+				if (highResidual > 0) {
+					boolean converged = false;
+					for (int iteration = 0; iteration < 32; iteration++) {
+						// Bracketed secants follow the smooth caloric response; the interval also
+						// resolves integer inventory plateaus without numerical derivatives.
+						double weight = Math.clamp(-lowResidual / (highResidual - lowResidual), .05, .95);
+						double mid = lo + (hi - lo) * weight; flow[e] = sign * mid;
+						p = endpoint.apply(flow);
+						double residual = mid - sign * conductance[e] * (p[first[e]] - p[second[e]]);
+						if (Math.abs(residual) <= 1e-10 + mid * 1e-10 || hi - lo <= 1e-10) { converged = true; break; }
+						if (residual > 0) { hi = mid; highResidual = residual; }
+						else { lo = mid; lowResidual = residual; }
+					}
+					if (!converged) throw new IllegalStateException("Gas port inventory/enthalpy root did not converge");
+				}
+				change = Math.max(change, Math.abs(flow[e] - old)); magnitude = Math.max(magnitude, Math.abs(flow[e]));
+			}
+			if (change <= 2e-9 + magnitude * 1e-8) return flow;
+		}
+		throw new IllegalStateException("Gas inventory/enthalpy pressure solve did not converge");
+	}
+
 	private static void apply(double[] x, double[] output, int[] first, int[] second, double[] off) {
 		System.arraycopy(x, 0, output, 0, x.length); output[0] = 0;
 		for (int e = 0; e < off.length; e++) if (off[e] != 0) {

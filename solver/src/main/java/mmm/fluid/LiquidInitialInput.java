@@ -20,6 +20,7 @@ final class LiquidInitialInput {
 		var additions = new ArrayList<LiquidCellInventory.Stock>();
 		float[] points = input.positionVolume(), velocity = input.particleVelocities();
 		long[] masses = input.massUnits(); byte[] masks = input.collisionMicroMasks();
+		for(int cell=0;cell<masks.length;cell++)FixedGeometrySnapshot.requireConnectedOpenCell(cell,Byte.toUnsignedInt(masks[cell]));
 		double[][] momentum = {new double[domain.mac.velocityX.length], new double[domain.mac.velocityY.length], new double[domain.mac.velocityZ.length]};
 		float h = domain.config.cellSize();
 		for (int p = 0; p < input.particleCount(); p++) {

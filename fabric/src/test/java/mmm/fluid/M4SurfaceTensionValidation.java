@@ -38,8 +38,8 @@ public static void main(String[] args) {
 
 private static void validateSigmaZeroDegeneration() {
 FluidSolverConfig config = strictConfig();
-FluidDomain pure = new FluidDomain(4, 4, 4, config, 64);
-FluidDomain zeroTension = new FluidDomain(4, 4, 4, config, 64);
+FluidDomain pure = new FluidDomain(4, 4, 4, config);
+FluidDomain zeroTension = new FluidDomain(4, 4, 4, config);
 for (int y = 0; y < 3; y++) {
 pure.setVolume(1, y, 1, y == 2 ? 0.5F : 1.0F);
 zeroTension.setVolume(1, y, 1, y == 2 ? 0.5F : 1.0F);
@@ -66,9 +66,8 @@ check(Float.floatToRawIntBits(pure.pressure(x, y, z)) == Float.floatToRawIntBits
 private static void validateActiveSingleCellPressureJump() {
 FluidSolverConfig config = new FluidSolverConfig(
 1.0F, 1_000.0F, 0.0F, 1.0F / 20.0F,
-100, 1.0E-6F, 2.0E-3F, 0.80F
-);
-FluidDomain domain = new FluidDomain(4, 4, 4, config, 64);
+100, 1.0E-6F, 2.0E-3F);
+FluidDomain domain = new FluidDomain(4, 4, 4, config);
 domain.setVolume(1, 1, 1, 1.0F);
 FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
 new FluidMaterial("mmm:test", 1_000.0, "mmm:test", 0.0728, Math.PI / 2.0)));
@@ -87,8 +86,7 @@ FluidPhysicalAssertions.staticMotion(domain,jump,FluidPhysicalAssertions.SETTLED
 private static void validateStaticDropletPressureJump() {
 FluidSolverConfig config = new FluidSolverConfig(
 0.5F, 1_000.0F, 0.0F, 1.0F / 20.0F,
-500, 1.0E-6F, 2.0E-3F, 0.80F
-);
+500, 1.0E-6F, 2.0E-3F);
 int size = 24;
 double radius = 4.0;
 double sigma = 0.0728;
@@ -112,8 +110,7 @@ check(domain.liquidCells.exactVolume().equals(exactVolume) && domain.totalMassUn
 private static void validateNoSustainedParasiticFlow() {
 FluidSolverConfig config = new FluidSolverConfig(
 0.5F, 1_000.0F, 0.0F, 1.0F / 20.0F,
-500, 1.0E-6F, 2.0E-3F, 0.80F
-);
+500, 1.0E-6F, 2.0E-3F);
 int size = 24;
 double radius = 4.0;
 double sigma = 0.0728;
@@ -139,7 +136,7 @@ private static void validateContactAngleCurvatureDirection() {
  double[] angles = {Math.PI / 6, Math.PI / 2, 2 * Math.PI / 3};
  for (int a = 0; a < angles.length; a++) {
   FluidDomain domain = new FluidDomain(10, 6, 4,
-    new FluidSolverConfig(1, 1000, 0, .025F, 300, 1e-6F, .002F, .8F), 256);
+    new FluidSolverConfig(1, 1000, 0, .025F, 300, 1e-6F, .002F));
   for (int z = 0; z < domain.sizeZ; z++) for (int x = 0; x < domain.sizeX; x++)
    domain.setSolid(x, 0, z, true);
   domain.bindMaterialRegistry(new FluidMaterialRegistry(List.of(
@@ -148,7 +145,7 @@ private static void validateContactAngleCurvatureDirection() {
   for (int z = 0; z < domain.sizeZ; z++) for (int y = 1; y < domain.sizeY; y++)
    for (int x = 0; x <= 4; x++) fractions[domain.domainFlowFields.cellIndex(x,y,z)] = x == 4 ? .5F : 1;
   domain.setVolumes(fractions);
-  domain.domainFlowFields.ensureGrid();
+  domain.domainFlowFields.preparePhysicalState();
   int cell = domain.domainFlowFields.cellIndex(4,1,2);
   check(Math.abs(domain.tension.surfaceTensionNormalY[cell]) < 1e-6,
     "contact angle rotated the measured planar interface normal");
@@ -163,7 +160,7 @@ private static void validateContactAngleCurvatureDirection() {
   java.util.Arrays.fill(fractions,0);
   for(int z=0;z<domain.sizeZ;z++)for(int x=0;x<domain.sizeX;x++)
    fractions[domain.domainFlowFields.cellIndex(x,1,z)]=.25F;
-  domain.setVolumes(fractions);domain.domainFlowFields.ensureGrid();
+  domain.setVolumes(fractions);domain.domainFlowFields.preparePhysicalState();
   double filmCurvature=domain.tension.liquidGasMeanCurvature(5,1,2);
   check(Math.abs(filmCurvature)<1e-6,
     "a horizontal film on a fully wetted wall gained contact-line curvature: theta="
@@ -181,8 +178,7 @@ private static void validateContactAngleSpreading() {
  validateContactAngleCurvatureDirection();
 	FluidSolverConfig config = new FluidSolverConfig(
 			1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
-			300, 1.0E-6F, 2.0E-3F, 0.80F
-	);
+			300, 1.0E-6F, 2.0E-3F);
 DropletMetrics hydrophilic = runDroplet(config, Math.toRadians(30.0), 100.0, 1200);
 DropletMetrics neutral = runDroplet(config, Math.toRadians(90.0), 100.0, 1200);
 DropletMetrics hydrophobic = runDroplet(config, Math.toRadians(120.0), 100.0, 1200);
@@ -206,7 +202,7 @@ check(hydrophilic.firstOutwardMomentum()>neutral.firstOutwardMomentum()
 }
 
 private static DropletMetrics runDroplet(FluidSolverConfig config, double contactAngleRadians, double sigma, int steps) {
-FluidDomain domain = new FluidDomain(16, 6, 4, config, 16 * 6 * 4 * 8);
+FluidDomain domain = new FluidDomain(16, 6, 4, config);
 for (int z = 0; z < 4; z++) for (int x = 0; x < 16; x++) domain.setSolid(x, 0, z, true);
 FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
 new FluidMaterial("mmm:test", config.density(), "mmm:test", sigma, contactAngleRadians)));
@@ -216,7 +212,7 @@ for (int z = 1; z <= 2; z++) for (int y = 1; y <= 2; y++) for (int x = 5; x <= 6
 fractions[domain.domainFlowFields.cellIndex(x,y,z)] = 1;
 domain.setVolumes(fractions);
 var initialVolume = domain.liquidCells.exactVolume(); long initialMass = domain.totalMassUnits();
-domain.domainFlowFields.ensureGrid();
+domain.domainFlowFields.preparePhysicalState();
 double potential = 0, freeArea = 0, h = config.cellSize(),centerX=0,centerZ=0,totalMass=0;
 for (var stock : domain.liquidCells.physicalStocks()){
 potential += stock.massKilograms()*config.gravity()*(stock.key().cell()/domain.sizeX%domain.sizeY+.5)*h;
@@ -249,7 +245,7 @@ surfaceWork += audit.surfaceTensionWorkJoules();
 check(domain.liquidCells.exactVolume().equals(initialVolume) && domain.totalMassUnits() == initialMass,
 "contact-angle spreading changed exact mass or volume");
 double kinetic = domain.liquidKineticEnergyJoules();
-domain.domainFlowFields.ensureGrid();
+domain.domainFlowFields.preparePhysicalState();
 double currentPotential=0;wettedFloor=0;
 for(var stock:domain.liquidCells.physicalStocks()){
 int cell=stock.key().cell();
@@ -321,15 +317,14 @@ double initialWetArea,double wetArea,double firstOutwardMomentum,double firstPre
 	private static void validateLiquidPairPressureJump() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 0.0F, 1.0F / 20.0F,
-				800, 1.0E-6F, 2.0E-3F, 0.80F
-		);
+				800, 1.0E-6F, 2.0E-3F);
 		int size = 20;
 		double radius = 4.0;
 		// Resolve the pressure response above the production geometric pressure
 		// scale; a water-scale 0.04 Pa signal cannot distinguish pressure from zero.
 		double sigma12 = 100;
 		FluidDomain domain = liquidPairDroplet(size, config, radius, sigma12);
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.preparePhysicalState();
 		var gasColor=domain.tension.surfaceTensionColor.clone();
 		var gasNormal=domain.tension.surfaceTensionNormalY.clone();
 		domain.tension.prepareLiquidPair(domain.materialRegistry.phaseHandle(0),domain.materialRegistry.phaseHandle(1));
@@ -361,7 +356,7 @@ double initialWetArea,double wetArea,double firstOutwardMomentum,double firstPre
 	}
 
 	private static void validateLiquidPairIdentity() {
-		FluidSolverConfig config = new FluidSolverConfig(.5F, 1000, 0, .025F, 800, 1E-6F, .002F, .8F);
+		FluidSolverConfig config = new FluidSolverConfig(.5F, 1000, 0, .025F, 800, 1E-6F, .002F);
 		FluidDomain domain = liquidPairDroplet(8, config, 1, .0728, true);
 		domain.domainStep.step();
 		check(domain.maximumPressure() == 0, "a liquid pair acted on an interface with its first phase absent");
@@ -394,7 +389,7 @@ double initialWetArea,double wetArea,double firstOutwardMomentum,double firstPre
 
 	private static FluidDomain liquidPairDroplet(int size, FluidSolverConfig config, double radius, double sigma12,
 			boolean absentFirstPhase) {
-		var domain=new FluidDomain(size,size,size,config,size*size*size*8);
+		var domain=new FluidDomain(size,size,size,config);
 		FluidMaterial a=new FluidMaterial("mmm:a",config.density(),"mmm:a",0,Math.PI/2);
 		FluidMaterial b=new FluidMaterial("mmm:b",config.density(),"mmm:b",0,Math.PI/2);
 		FluidMaterial c=new FluidMaterial("mmm:c",config.density(),"mmm:c",0,Math.PI/2);
@@ -467,10 +462,9 @@ double initialWetArea,double wetArea,double firstOutwardMomentum,double firstPre
 private static void validateMergeBreakupConservation() {
 FluidSolverConfig config = new FluidSolverConfig(
 1.0F, 1_000.0F, 0.0F, 1.0F / 20.0F,
-200, 1.0E-6F, 2.0E-3F, 0.80F
-);
-FluidDomain domain = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
-FluidDomain zeroTension = new FluidDomain(8, 8, 8, config, 8 * 8 * 8 * 8);
+200, 1.0E-6F, 2.0E-3F);
+FluidDomain domain = new FluidDomain(8, 8, 8, config);
+FluidDomain zeroTension = new FluidDomain(8, 8, 8, config);
 FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
 new FluidMaterial("mmm:test", 1_000.0, "mmm:test", 0.0728, Math.PI / 2.0)));
 domain.setVolume(2, 2, 3, 1.0F);
@@ -504,7 +498,7 @@ check(Double.isFinite(peakCapillaryKinetic)&&peakCapillaryKinetic>peakZeroKineti
 
 /** Retain the sphere's sampled cell volumes so its height columns represent the analytic radius. */
 private static FluidDomain sphereDroplet(int size, FluidSolverConfig config, double radius, double sigma) {
-FluidDomain domain = new FluidDomain(size, size, size, config, size * size * size * 8);
+FluidDomain domain = new FluidDomain(size, size, size, config);
 double[] colour = SurfaceTensionCurvatureExperiment.sphereColour(size, radius, config.cellSize());
 FluidMaterialRegistry registry = new FluidMaterialRegistry(List.of(
 new FluidMaterial("mmm:test", config.density(), "mmm:test", sigma, Math.PI / 2.0)));
@@ -531,8 +525,7 @@ return cells == 0 ? 0.0 : sum / cells;
 private static FluidSolverConfig strictConfig() {
 return new FluidSolverConfig(
 1.0F, 1_000.0F, 0.0F, 1.0F / 40.0F,
-300, 1.0E-7F, 2.0E-3F, 0.80F
-);
+300, 1.0E-7F, 2.0E-3F);
 }
 
 private static void check(boolean condition, String message) {

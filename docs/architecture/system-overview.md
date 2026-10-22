@@ -3,6 +3,8 @@
 本文按一次完整职责链组织当前模型、跨模块契约和代码索引。开发时完整阅读本文与[当前实施计划](../roadmap/solver-consolidation-plan.md)，按本轮改动查阅[验证指南](../maintenance/validation.md)中的场景与预算。
 具体公式、字段和操作细节从各节的参考链接继续查阅。实施状态集中在计划，运行结果集中在验证指南。
 
+固定碰撞在每个求解单元内保留一个连通开放空间；隔墙以求解网格解析。固定几何编辑和恢复统一执行此限制，库存、压力和格面惯性使用同一空间归属。
+
 当前运行范围为最多四个闭壳控制器区域，CPU `FluidDomain` 为物理聚合根。默认格长为 0.5 m，气体采用有限气腔与局部孔流，颗粒采用活动代表粒子与床层。玩法范围和后续能力的目标由[产品路线](../roadmap/product-roadmap.md)维护。
 
 ## 导航
@@ -47,6 +49,9 @@
 - [DomainCapabilities](../../solver/src/main/java/mmm/fluid/DomainCapabilities.java)：化学和热能力绑定、实际热量所有者及相变接口。
 - [DomainPhaseInventory](../../solver/src/main/java/mmm/fluid/DomainPhaseInventory.java)：颗粒与气体库存、共同物性及完整状态交接。
 
+`CellMacStage.publishMaterialChange` 集中预检和发布液体、动量、各业务载体、相占据及气腔，统一推进库存代次与化学失效。正常输运、颗粒排水、反应、相变、物质编辑和碰撞编辑沿此入口提交。
+`MechanicalEnergySettlement.prepare` 结算力积分与实际质量路线；`prepareDisplacement` 为内部转换结算排水势能与气腔反向功。外部插入保留外部做功归属。
+`DomainFlowFields.preparePhysicalState` 明确准备会初始化气腔的物理状态；只读库存与速度分别使用 `ensureInventoryGrid`、`ensureVelocityGrid`。
 `FluidDomain.markCellInventoryChanged` 集中推进库存代次并标记派生工作区失效。
 库存汇总与面惯性在同一次重建中准备；显式速度发布先准备面惯性，再接收调用方速度。
 速度查询和展示导出通过 `DomainFlowFields.ensureVelocityGrid` 准备库存与 MAC，不触发气腔初始化。
@@ -331,8 +336,8 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 气体采用集总气腔与有限孔流模型，按库存、容量和内能派生压力、温度及顺应性。
 完整固定开口两侧的实际粗分量干容量超过共同解析量时采用低 Mach 共压近似，微量气体空间沿真实干口连接。
 受限固定孔口保留有限流量，完整满液单元和固定墙保持阻断。
-孔流每步冻结实际状态方程与热容导出的储容及正孔口导通率，整体后向 Euler 方程求共享通量。
-供体联合限制所有出边的库存与可携焓，再统一分配整数物种并成对搬运同一能量通量。
+孔流每步冻结正孔口导通率，以候选实际库存、供体等熵排气焓与终态内能共同求解隐式通量；压力预览和最终提交读取同一状态方程。
+供体联合限制所有出边的库存与可携焓，沿同一供体排气积分分配出边能量，再统一分配整数物种并成对搬运同一能量通量。
 这是时间一阶的集总近似，气腔内部声波和空间动量受该模型限制。
 
 - **共享通量、供体与接收容量**
@@ -385,6 +390,8 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 <a id="thermochemistry"></a>
 ## 热化学与物相转换
 
+气腔通过 `ThermalGasCarriers` 按实际干容生成接触样本，壁面、液面和有限热设备使用共同热交换视图，接收热量归并到唯一气腔内能。
+
 各实际载体保存总内能 `U`，温度与热容由现有分段状态函数反演。LTE 工作区用于接触、反应与相变候选；只读观察、属性计算与真实能量重分配有各自入口。导热成对搬运内能，恒温热浴的实际通量记外部 source/sink。反应按精确物种批次改变组成和参考能，相变按实际批次联合修改两相库存与内能。
 温度、接触与载体能量准备按稳定的单元顺序遍历，同代热视图复用已准备的载体列表；库存增量索引提前筛去缺少反应物的区域。
 导热接触与求解共享一次实际载体采集，终态与热账在首次写入前准备完成。
@@ -406,7 +413,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
     - [ThermalCellEnergyAssignment](../../model/src/main/java/mmm/thermal/ThermalCellEnergyAssignment.java)：一次准备实际载体内能及精确汇总
     - [ThermalCellOperations](../../model/src/main/java/mmm/thermal/ThermalCellOperations.java)：`preparePhaseCandidateCells` 复用单元载体索引，`preparePhaseSolidEnergies` 准备固相写入目标，`commitPhaseBatch` 提交整批热账
     - [ThermalTransport](../../model/src/main/java/mmm/thermal/ThermalTransport.java)
-    - [LiquidThermalConduction](../../solver/src/main/java/mmm/fluid/LiquidThermalConduction.java)
+    - [CarrierThermalConduction](../../solver/src/main/java/mmm/fluid/CarrierThermalConduction.java)
     - [ThermochemistryPipeline](../../solver/src/main/java/mmm/fluid/ThermochemistryPipeline.java)：`stepTransport` 与反应、相变顺序
   - 验证选择器 / 参考：`thermal`；[热学参考](thermal-state.md)
 
@@ -444,7 +451,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 完整状态由 `FluidDomainStateMapper` 捕获与恢复。
 气体初始化状态随同保存；尚未初始化气体的恢复只准备库存与速度，气腔库存由后续明确的物理准备创建。
 正常候选共享已验证的液体不可变库存行与气相几何，独立复制 MAC 动量和气体网络；非液体内能由 `ThermalOwnerSnapshot` 携带。
-调度进度、待同步相变几何、世界热交换面与最近真实压力投影随同交接。`FluidDomainState.Layout` 绑定网格、配置、载体布局、预算和注册表身份；区域 checkpoint 的持久字段另由存档模型定义。
+调度进度、待同步相变几何、世界热交换面与最近真实压力投影随同交接。`FluidDomainState.Layout` 绑定网格、配置、载体布局和注册表身份；区域 checkpoint 的持久字段另由存档模型定义。
 
 `CpuFluidSolverBackend` 在私有域完成整个逻辑步；力学细化从原始请求重新恢复，保留总推进时间、外部输入和一次提交。`RegionApplicationService` 与仓库核对后端、区域身份、紧邻求解器代次和完整布局。CPU 可把已求解私有对象交接一次；其他后端提供完整不可变状态。候选失败保留原区域，成功后发布该候选的完整统计。
 
@@ -558,6 +565,8 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 ## 性能与诊断
 
 完整步成本涵盖输入捕获、私有域恢复、全部力学子步、热化学、重试和接管。独立冷恢复、世界输入、展示、网络与磁盘 I/O 分列测量。`RegionTickUseCase` 根据完整执行时间进行 pacing 和连续过载暂停，调度保持库存与逻辑步时长。
+
+成功步的 `StepStats.mechanicalCorrection` 保存力积分、输运势能、气腔反向功及机械体合并后的有符号与绝对修正量；开启机械审计时，`MicroBoxPlaneVolume.verticalMoment` 计算同一 PLIC 的竖向第一矩，区分格心势能表示交换与已解析的压力／力学交换。长重放累计有符号量与绝对变差，分别按几何空间范围和实际机械输入评价；已解析交换中的压力耗散与热浮力结合原机械审计分项判断。黏性、混合等物理耗散继续单独结算。
 
 故障诊断保留原异常及其 `cause` 链。
 `MechanicalStepPipeline` 通过 suppressed 异常附加失败阶段、机械子步、时间间隔和区域规模；`ThermochemistryPipeline` 同样附加导热、液体反应、固相反应或相变阶段。

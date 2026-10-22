@@ -265,7 +265,7 @@ public final class GranularCarrierValidation {
 
 	private static void depositPathsRespectSuspendedBeds() {
 		var domain = new FluidDomain(3, 4, 3,
-				new FluidSolverConfig(.5F, 1_000F, 9.81F, .05F, 400, 1.0e-5F, .002F, .8F), 512);
+				new FluidSolverConfig(.5F, 1_000F, 9.81F, .05F, 400, 1.0e-5F, .002F));
 		domain.bindGranular(BuiltinGranularDefinitions.createRegistry(),
 				new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
 		domain.sealDomainBoundary();
@@ -282,7 +282,7 @@ public final class GranularCarrierValidation {
 		float y = (float) (top + radius); if (y < top + radius) y = Math.nextUp(y);
 		state.parcels.add(new GranularParcelStore.Parcel(.75F, y, .75F, 0, 0, 0, volume,
 				mmm.units.Mass.fromKilograms(2_600.0 * volume / SolidVolume.SVQ_PER_CUBIC_METER), sand, 0, 0, (byte) 0));
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.preparePhysicalState();
 		require(domain.granularCollision.positionValid(.75F, y, .75F, volume), "bed support must start outside the actual bed");
 		for (int step = 0; step < 3; step++) {
 			domain.granularCollision.preview(state.parcels, state.registry, .05F);
@@ -354,7 +354,7 @@ public final class GranularCarrierValidation {
 	private static void cutBedGeometryMatchesFinalPlan() {
 		for (int scenario = 0; scenario < 3; scenario++) {
 			var domain = new FluidDomain(3, 4, 3,
-					new FluidSolverConfig(.5F, 1_000F, 9.81F, .05F, 400, 1.0e-5F, .002F, .8F), 512);
+					new FluidSolverConfig(.5F, 1_000F, 9.81F, .05F, 400, 1.0e-5F, .002F));
 			domain.bindGranular(BuiltinGranularDefinitions.createRegistry(),
 					new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
 			domain.sealDomainBoundary();
@@ -373,7 +373,7 @@ public final class GranularCarrierValidation {
 			float y = (float) (top + radius); if (y < top + radius) y = Math.nextUp(y);
 			for (int index = 0; index < (scenario == 2 ? 2 : 1); index++) state.parcels.add(new GranularParcelStore.Parcel(
 					index == 0 ? .9F : .72F, y, .9F, 0, 0, 0, volume, mmm.units.Mass.fromKilograms(2_600.0 * volume / SolidVolume.SVQ_PER_CUBIC_METER), sand, 0, 0, (byte) 0));
-			domain.domainFlowFields.ensureGrid();
+			domain.domainFlowFields.preparePhysicalState();
 			for (int index = 0; index < state.parcels.count(); index++) {
 				var p = state.parcels.parcel(index);
 				require(domain.granularCollision.positionValid(p.x(), p.y(), p.z(), volume), "cut-bed fixture needs a legal supported sphere start");
@@ -423,7 +423,7 @@ public final class GranularCarrierValidation {
 		for (int mode = 0; mode < 3; mode++) {
 			boolean blocked = mode == 0, exhausted = mode == 2;
 			var domain = new FluidDomain(3, 4, 3,
-					new FluidSolverConfig(.5F, 1_000F, 9.81F, .05F, 400, 1.0e-5F, .002F, .8F), 512);
+					new FluidSolverConfig(.5F, 1_000F, 9.81F, .05F, 400, 1.0e-5F, .002F));
 			domain.bindGranular(BuiltinGranularDefinitions.createRegistry(),
 					new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE), BuiltinFluidMaterials.createRegistry());
 			domain.sealDomainBoundary();
@@ -438,7 +438,7 @@ public final class GranularCarrierValidation {
 				int cell = domain.domainFlowFields.cellIndex(x, 1, z);
 				if (cell != source && cell != portal && cell != receiver) domain.geometry.cutCells.replaceMask(cell, 255);
 			}
-			domain.geometry.cutCells.replaceMask(portal, blocked ? 126 : 0); // Open octants 0 and 7 have no face connection.
+			domain.geometry.cutCells.replaceMask(portal, blocked ? 255 : 0); // A resolved wall separates the two corridors.
 			if (!blocked) {
 				domain.geometry.cutCells.replaceMask(domain.domainFlowFields.cellIndex(1, 1, 2), 0);
 				long side = (long) (SolidVolume.SVQ_PER_CELL * .62 * .3);
@@ -450,7 +450,7 @@ public final class GranularCarrierValidation {
 				require(state.deposits.tryAdd(cell, new mmm.granular.GranularDepositStore.SolidPortion(
 						sand, 0, volume, mmm.units.Mass.fromKilograms(2_600.0 * volume / SolidVolume.SVQ_PER_CUBIC_METER)), SolidVolume.SVQ_PER_CELL), "supported upper beds must fit");
 			}
-			domain.domainFlowFields.ensureGrid();
+			domain.domainFlowFields.preparePhysicalState();
 			long[] planned = domain.granularCoupling.copySolidSvq();
 			var environment = domain.domainStep.granularDepositEnvironment(planned);
 			for (int cell = 0; cell < state.deposits.cellCount(); cell++) require(environment.bedGeometryFits(cell, state.deposits.cellBulkVolumeSvq(cell)),
@@ -607,7 +607,7 @@ public final class GranularCarrierValidation {
 					"contact friction and restitution must update the end-of-step velocity");
 		}
 		// A .27 m drift crosses an internal micro box inside this .5 m cell.
-		var config = new FluidSolverConfig(.5F, 1_000F, 0, .05F, 400, 1.0e-5F, .002F, .8F);
+		var config = new FluidSolverConfig(.5F, 1_000F, 0, .05F, 400, 1.0e-5F, .002F);
 		for (int axis = 0; axis < 3; axis++) for (boolean lower : new boolean[]{false, true}) {
 			for (boolean internal : new boolean[]{false, true}) for (float step : new float[]{.01F, .027F}) {
 				float[] position = {.625F, .625F, .625F}, velocity = new float[3];
@@ -768,7 +768,7 @@ public final class GranularCarrierValidation {
 			long svq = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 			float radius = mmm.granular.GranularMechanics.representativeRadius(svq, .5F);
 			addParcel(domain, .75F, .75F, held ? .75F : Math.nextDown(3F - radius), .4F, -.6F, .8F);
-			domain.domainFlowFields.ensureGrid();
+			domain.domainFlowFields.preparePhysicalState();
 			var before = domain.granularState.parcels.parcel(0);
 			domain.granularMechanicalStage.previewCollision(.05F);
 			if (held) {
@@ -1103,11 +1103,11 @@ public final class GranularCarrierValidation {
 		var registry = BuiltinGranularDefinitions.createRegistry();
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		var material = registry.material(sand);
-		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .002F, 0F);
+		var config = new FluidSolverConfig(.5F, 1000F, 0F, .05F, 100, 1e-5F, .002F);
 		long volume = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 		double mass = volume / (double) SolidVolume.SVQ_PER_CUBIC_METER * material.referenceDensity();
 		for (int scene = 0; scene < 7; scene++) {
-			var domain = new FluidDomain(4, 4, 4, config, 128);
+			var domain = new FluidDomain(4, 4, 4, config);
 			int cell = domain.domainFlowFields.cellIndex(1, 1, 1);
 			if (scene == 3) domain.geometry.cutCells.replaceMask(cell, 1);
 			domain.setVolume(2, 2, 2, .125F);
@@ -1174,7 +1174,7 @@ public final class GranularCarrierValidation {
 		var registry = BuiltinGranularDefinitions.createRegistry();
 		int sand = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		var material = registry.material(sand);
-		var config = new FluidSolverConfig(.5F, 1000F, 9.81F, .05F, 100, 1e-5F, .002F, 0F);
+		var config = new FluidSolverConfig(.5F, 1000F, 9.81F, .05F, 100, 1e-5F, .002F);
 		long volume = GranularLimits.MAX_PARCEL_VOLUME_SVQ;
 		double mass = volume / (double) SolidVolume.SVQ_PER_CUBIC_METER * material.referenceDensity();
 		float radius = mmm.granular.GranularMechanics.representativeRadius(volume, .5F);
@@ -1190,7 +1190,7 @@ public final class GranularCarrierValidation {
 			var snapshot = new mmm.granular.GranularStateSnapshot(4, 4, 4, registry.fingerprint(),
 					registry.materials().stream().map(mmm.granular.ParticulateMaterial::id).toList(),
 					java.util.List.of(parcel), java.util.List.of(), volume, mmm.units.Mass.fromKilograms(mass));
-			FluidDomain[] domains = {new FluidDomain(4, 4, 4, config, 128), new FluidDomain(4, 4, 4, config, 128)};
+			FluidDomain[] domains = {new FluidDomain(4, 4, 4, config), new FluidDomain(4, 4, 4, config)};
 			for (var domain : domains) {
 				domain.sealDomainBoundary();
 				domain.restoreGranularState(snapshot, registry, new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE),
@@ -1285,7 +1285,7 @@ public final class GranularCarrierValidation {
 	private static void thinBedRetainsFreeFlow() {
 		var domain = domain();
 		for (int z = 0; z < 6; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 6; x++) domain.setVolume(x, y, z, .5F);
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.preparePhysicalState();
 		int sand = domain.granularState.registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long volume = SolidVolume.SVQ_PER_CELL / 4;
 		for (int x = 2; x <= 3; x++) require(domain.granularState.deposits.tryAdd(domain.domainFlowFields.cellIndex(x, 1, 2),
@@ -1320,7 +1320,7 @@ public final class GranularCarrierValidation {
 		var domain = domain();
 		addParcel(domain, 1.26F, 1.28F, 1.29F, 250, 0, 0);
 		fillPoreWater(domain, domain.sizeY);
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.preparePhysicalState();
 		domain.granularMechanicalStage.validateVelocities();
 		double before = pressureEnergy(domain) + solidEnergy(domain);
 		float dt = .4F * domain.config.cellSize() / 250;
@@ -1335,7 +1335,7 @@ public final class GranularCarrierValidation {
 	private static FluidDomain domain() { return domain(0); }
 	private static FluidDomain domain(float gravity) {
 		var domain = new FluidDomain(6, 6, 6,
-				new FluidSolverConfig(0.5F, 1_000F, gravity, 0.05F, 400, 1.0e-5F, 0.002F, 0.8F), 4096);
+				new FluidSolverConfig(0.5F, 1_000F, gravity, 0.05F, 400, 1.0e-5F, 0.002F));
 		domain.bindGranular(BuiltinGranularDefinitions.createRegistry(),
 				new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE),
 				BuiltinFluidMaterials.createRegistry());
@@ -1371,7 +1371,7 @@ public final class GranularCarrierValidation {
 				"mixed gas-pressure fixture could not retain its exact displaced water");
 		require(domain.totalVolumeExact() == 108 && domain.unitScale.kilograms(domain.totalMass()) == 13_500,
 				"mixed gas-pressure fixture must preserve the original 13.5 m³ and 13500 kg of water");
-		domain.bootstrapGasState(null); domain.domainFlowFields.ensureGrid();
+		domain.bootstrapGasState(null); domain.domainFlowFields.preparePhysicalState();
 		return domain;
 	}
 
@@ -1397,7 +1397,7 @@ public final class GranularCarrierValidation {
 		for (int p = 0; p < 32; p++) addParcel(domain,
 				1.26F + 0.005F * (p % 4), 1.28F + 0.005F * (p % 3), 1.29F,
 				1, -0.5F, 0.25F);
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.preparePhysicalState();
 		double beforeEnergy = (pressureEnergy(domain) + solidEnergy(domain));
 		double[] beforeMomentum = pressureMomentum(domain);
 		relaxDrag(domain, 0.05F);
@@ -1410,7 +1410,7 @@ public final class GranularCarrierValidation {
 
 	private static void relaxDrag(FluidDomain domain, float dt) {
 		// Assemble the common face partition, then isolate the finite-mass drag response at zero pressure.
-		domain.domainFlowFields.ensureGrid(); domain.pressureSystem.prepareOperator();
+		domain.domainFlowFields.preparePhysicalState(); domain.pressureSystem.prepareOperator();
 		var drag = new GranularImplicitDrag(domain); drag.prepare(dt);
         double[] velocity=new double[domain.pressureSystem.faces.faceCount+3*domain.granularState.parcels.count()];
         domain.pressureSystem.readJointVelocity(velocity);drag.applyResponse(velocity,velocity);
@@ -1426,7 +1426,7 @@ public final class GranularCarrierValidation {
 				addParcel(domain, 1.26F, 1.28F, 1.29F, (ordinal - 8) * 0.1F, -0.5F, 0.25F);
 			}
 			fillPoreWater(domain, domain.sizeY);
-			domain.domainFlowFields.ensureGrid();
+			domain.domainFlowFields.preparePhysicalState();
 			double beforeEnergy = pressureEnergy(domain) + solidEnergy(domain);
 			double[] beforeMomentum = pressureMomentum(domain);
 			relaxDrag(domain, 0.05F);
@@ -1466,7 +1466,7 @@ public final class GranularCarrierValidation {
 			var domain = domain();
 			domain.setVolume(2, 2, 2, 0.5F);
 			addParcel(domain, 1.5F + (side == 0 ? -1.0e-5F : 1.0e-5F), 1.25F, 1.25F, 1, 0, 0);
-			domain.domainFlowFields.ensureGrid();
+			domain.domainFlowFields.preparePhysicalState();
 			double before = (pressureEnergy(domain) + solidEnergy(domain));
 			var fluid = domain.granularMechanicalStage.sample(1.5F + (side == 0 ? -1.0e-5F : 1.0e-5F), 1.25F, 1.25F);
 			relaxDrag(domain, 0.01F);
@@ -1491,14 +1491,14 @@ public final class GranularCarrierValidation {
 
 	private static void finitePressureResponse() {
 		var domain=domain();for(int p=0;p<60;p++)addParcel(domain,1.75F,1.75F,1.75F,.25F,-1,.5F);
-		fillPoreWater(domain,domain.sizeY);domain.domainFlowFields.ensureGrid();
+		fillPoreWater(domain,domain.sizeY);domain.domainFlowFields.preparePhysicalState();
 		domain.pressureSystem.solve(.05F);domain.pressureSystem.projectVelocities(.05F);
 		domain.granularMechanicalStage.previewCollision(.05F);domain.granularMechanicalStage.publishCollisionVelocities();
 		require(Double.isFinite(pressureEnergy(domain)+solidEnergy(domain)),"Joint pressure response produced invalid kinetic energy");
 	}
 
 	private static void cellOccupancyVolumeRate() {
-		var domain=domain();addParcel(domain,1.749F,1.751F,1.749F,.5F,-.5F,.5F);domain.domainFlowFields.ensureGrid();
+		var domain=domain();addParcel(domain,1.749F,1.751F,1.749F,.5F,-.5F,.5F);domain.domainFlowFields.preparePhysicalState();
 		long before=0;for(int c=0;c<domain.cellCount;c++)before+=domain.granularCoupling.solidSvq(c);
 		domain.granularMechanicalStage.previewCollision(.01F);long after=0;boolean moved=false;
 		for(int c=0;c<domain.cellCount;c++){after+=domain.granularNextCoupling.solidSvq(c);moved|=domain.granularNextCoupling.solidSvq(c)!=domain.granularCoupling.solidSvq(c);}
@@ -1507,7 +1507,7 @@ public final class GranularCarrierValidation {
 
 	private static void internalPressureImpulseCloses() {
 		var domain = domain(); addParcel(domain, 1.43F, 1.62F, 1.39F, 0, 0, 0);
-		fillPoreWater(domain, domain.sizeY); domain.domainFlowFields.ensureGrid();
+		fillPoreWater(domain, domain.sizeY); domain.domainFlowFields.preparePhysicalState();
 		domain.pressureSystem.solve(.05F);
 		double[] impulse=new double[3];double dt=.05;
 		var graph=domain.pressureSystem.faces;
@@ -1531,7 +1531,7 @@ public final class GranularCarrierValidation {
 		var domain = domain(9.81F);
 		addParcel(domain, 1.43F, py, 1.39F, 0, 0, 0);
 		fillPoreWater(domain, domain.sizeY);
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.preparePhysicalState();
 		domain.pressureSystem.prepareOperator();
 		double[] pressures=new double[domain.cellCount+domain.gasState.network.nodeCount()+1];
 		for (int cell = 0; cell < domain.cellCount; cell++) {

@@ -89,7 +89,6 @@ public record ControllerSummary(
 
 	public record Usage(
 			Capacity cells,
-			Capacity markers,
 			Capacity activeParcels,
 			Capacity depositGroups,
 			Capacity coherentGroups,
@@ -98,7 +97,6 @@ public record ControllerSummary(
 	) {
 		public Usage {
 			Objects.requireNonNull(cells, "cells");
-			Objects.requireNonNull(markers, "markers");
 			Objects.requireNonNull(activeParcels, "activeParcels");
 			Objects.requireNonNull(depositGroups, "depositGroups");
 			Objects.requireNonNull(coherentGroups, "coherentGroups");

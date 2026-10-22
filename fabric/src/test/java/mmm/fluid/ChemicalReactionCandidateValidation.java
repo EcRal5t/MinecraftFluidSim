@@ -22,7 +22,7 @@ final class ChemicalReactionCandidateValidation {
 					new ChemicalPhaseDefinition("test:cell/phase",liquid,List.of(a,b),Map.of(a,ExactRational.ONE),false)),List.of(
 					new ChemicalReaction("test:cell/isomer",ChemicalReaction.Kind.INSTANTANEOUS,"test:cell/phase",Map.of(a,1),Map.of(b,1),ExactRational.ZERO)));
 			var liquids=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension(liquid,1000,"test:cell/miscible",0,90)));
-			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.002F,0),64);
+			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.002F));
 			domain.bindMaterialRegistry(liquids);domain.setVolume(1,1,1,.125F);domain.bindChemistry(chemistry);
 			var air=new ThermalMaterialDefinition("test:cell/air",ThermalMaterialDefinition.CarrierKind.GAS,mmm.fluid.air.BuiltinGasDefinitions.AIR,300,0,.025,
 					List.of(new ThermalMaterialDefinition.CaloricSegment(150,800,718)));
@@ -110,7 +110,7 @@ final class ChemicalReactionCandidateValidation {
 				List.of(new ChemicalPhaseDefinition("test:heat/phase",liquid,List.of(a,b),Map.of(a,ExactRational.ONE),false)),List.of(
 				new ChemicalReaction("test:heat/reaction",ChemicalReaction.Kind.INSTANTANEOUS,"test:heat/phase",Map.of(a,1),Map.of(b,1),ExactRational.ZERO)));
 		var fluids=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension(liquid,1,"test:heat/miscible",0,90)));
-		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1,0,.05F,100,1e-5F,.002F,0),16);
+		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1,0,.05F,100,1e-5F,.002F));
 		domain.bindMaterialRegistry(fluids);domain.setVolume(0,0,0,1);domain.bindChemistry(chemistry);domain.setMarkerChemical(0,Map.of(a,ChemicalLimits.QUANTA_PER_MOL),false);
 		var thermal=new ThermalRegistry(List.of(new ThermalMaterialDefinition(material,ThermalMaterialDefinition.CarrierKind.LIQUID,liquid,300,0,0,List.of(new ThermalMaterialDefinition.CaloricSegment(200,500,10))),
 				new ThermalMaterialDefinition("test:heat/air",ThermalMaterialDefinition.CarrierKind.GAS,mmm.fluid.air.BuiltinGasDefinitions.AIR,300,0,.025,List.of(new ThermalMaterialDefinition.CaloricSegment(150,800,718)))),
@@ -151,7 +151,7 @@ final class ChemicalReactionCandidateValidation {
 				inventory.planEdits(List.of(new LiquidCellInventory.Edit(key,new LiquidCellInventory.Stock(key,volume,mass,mixture,0,false)))).commit();scheduler.markDirtyCell(cells[i]);
 			}
 			var fluids=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension(registry.phases().getFirst().materialId(),1000,"test:miscible",0,90)));
-			var domain=new FluidDomain(sizeX,2,2,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.002F,0),Math.max(1,inputs.size()));
+			var domain=new FluidDomain(sizeX,2,2,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.002F));
 			domain.bindMaterialRegistry(fluids);domain.liquidCells=inventory;domain.chemistry=scheduler;
 			stage=new ChemicalReactionStage(domain);
 		}

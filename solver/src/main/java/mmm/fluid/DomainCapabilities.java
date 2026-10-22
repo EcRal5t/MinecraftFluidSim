@@ -486,6 +486,18 @@ final class DomainCapabilities {
 	ThermalCarrierContext thermalMarkerContext() { return domain.thermalMarkers; }
 	ThermalCarrierContext createThermalMarkerContext() {
 		return new ThermalCarrierContext() {
+			@Override public mmm.fluid.air.AirNetwork gasNetwork() { return domain.gasState.network; }
+			@Override public List<ThermalCarrierContext.GasSupport> gasThermalSupports() {
+				domain.gasTopologyCoordinator.refresh();
+				var frame=domain.gasState.frame;
+				var result=new ArrayList<ThermalCarrierContext.GasSupport>();
+				for(var component:frame.geometry().components()) {
+					int node=frame.topology().nodeOfComponent(component.cell(),component.supportMask());
+					if(node>0 && component.normalizedVolume()>0) result.add(new ThermalCarrierContext.GasSupport(
+							component.cell(),node,component.supportMask(),component.normalizedVolume()));
+				}
+				return result;
+			}
 			private LiquidCellInventory.Stock stock(int ordinal) { return domain.liquidCells.physicalStocks().get(ordinal); }
 			@Override public int markerCount() { return domain.liquidCells.physicalStocks().size(); }
 			@Override public double liquidInternalEnergy(int ordinal) { return stock(ordinal).internalEnergy(); }

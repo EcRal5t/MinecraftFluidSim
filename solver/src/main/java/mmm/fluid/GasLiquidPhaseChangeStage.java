@@ -107,9 +107,10 @@ final class GasLiquidPhaseChangeStage {
 		var interfaceCells=finiteInterfaceCells(domain.gasState.frame);
 		thermal.preparePhaseScan(domain.domainCapabilities.thermalMarkerContext());
 		var phase=thermal.gasLiquidPhase(network); var function=thermal.stateFunction();
-		// One interface extent per LTE cell; all other liquid and solid owners remain its heat bath.
+		// Keep interface candidates until chamber closure establishes executable integer batches.
 		var selected=new TreeMap<Integer,Proposal>();
 		var capturedCells=new HashMap<Integer,Cell>();
+		var pool=new ArrayList<Proposal>();
 		var contacts=new HashMap<Integer,List<GasPhaseInterfaceResolver.Contact>>();
 		var candidates=new ArrayList<Candidate>();
 		var gasStates=new GasEnergyStore.PhaseState[network.nodeCount()+1];
@@ -160,12 +161,25 @@ final class GasLiquidPhaseChangeStage {
 			var stock=candidate.stock(); int id=stock.key().cell();
 			var cell=capturedCells.computeIfAbsent(id,key->captureCell(key,function,batchCells[key]));
 			var proposal=propose(cell,candidate,phase,function,maximumOperations);
-			if(proposal!=null&&(!selected.containsKey(id)||selected.get(id).score<proposal.score)) selected.put(id,proposal);
+			if(proposal!=null) pool.add(proposal);
 		}
-		if(selected.isEmpty()) return new FluidDomain.GasThermalPhaseStats(0,0,0);
 		var groups=new TreeMap<Group,List<Proposal>>();
-		for(var p:selected.values()) groups.computeIfAbsent(new Group(p.node,p.component),ignored->new ArrayList<>()).add(p);
-		for(var group:groups.values()) closeChamber(group);
+		while(!pool.isEmpty()) {
+			groups.clear();
+			for(var p:pool) groups.computeIfAbsent(new Group(p.node,p.component),ignored->new ArrayList<>()).add(p);
+			for(var group:groups.values()) closeChamber(group);
+			limitGasRepresentation(groups,phase);
+			selected.clear();
+			for(var p:pool) if(p.batches>0&&(!selected.containsKey(p.cell.id)||selected.get(p.cell.id).score<p.score)) selected.put(p.cell.id,p);
+			if(selected.isEmpty()) return new FluidDomain.GasThermalPhaseStats(0,0,0);
+			groups.clear();
+			for(var p:selected.values()) groups.computeIfAbsent(new Group(p.node,p.component),ignored->new ArrayList<>()).add(p);
+			for(var group:groups.values()) closeChamber(group);
+			limitGasRepresentation(groups,phase);
+			var blocked=selected.values().stream().filter(p->p.batches==0).toList();
+			if(blocked.isEmpty()) break;
+			pool.removeAll(blocked);
+		}
 		var proposals=new ArrayList<>(selected.values()); long[] desired=new long[proposals.size()];
 		for(int i=0;i<desired.length;i++) {
 			var p=proposals.get(i); desired[i]=p.batches;
@@ -225,25 +239,32 @@ final class GasLiquidPhaseChangeStage {
 			for(var stock:cell.original) if(!keys.contains(stock.key())) sourceEdits.add(new LiquidCellInventory.Edit(stock.key(),null));
 		}
 		var quantityPlan=liquids.planEdits(sourceEdits);
-		var momentum=domain.cellMacStage.prepareExternalMomentum(quantityPlan);
+		var phasePotential=new TreeMap<Integer,SignedDyadic>();
+		for(var cell:cells) {
+			long before=0,after=0;
+			for(var stock:cell.original)before=Math.addExact(before,stock.massUnits());
+			for(var stock:cell.future)after=Math.addExact(after,stock.massUnits());
+			phasePotential.put(cell.id,SignedDyadic.of(Mass.kilograms(before-after)*potentialPerKilogram(cell.id)));
+		}
+		var removedMassByCell=new TreeMap<Integer,Long>();
+		for(var birth:births)removedMassByCell.merge(birth.cell(),birth.inventory().totalMassUnits(),Math::addExact);
+		var momentum=domain.cellMacStage.preparePhaseMomentum(quantityPlan,removedMassByCell);
 		for(int cell:momentum.heatByCell().keySet()) if(cells.stream().noneMatch(c->c.id==cell))
 			cells.add(capturedCells.computeIfAbsent(cell,key->captureCell(key,function,thermal.preparePhaseCandidateCell(key,domain.domainCapabilities.thermalMarkerContext()))));
 		SignedDyadic mechanicalHeat=SignedDyadic.of(momentum.removedKineticEnergy());
 		for(var heat:momentum.heatByCell().values()) mechanicalHeat=mechanicalHeat.add(heat);
+		for(var heat:phasePotential.values())mechanicalHeat=mechanicalHeat.add(heat);
 		// The newborn vapor carries its own source U and thermalized liquid kinetic energy.
-		long evaporatedTotal=0;
-		for(var birth:births)evaporatedTotal=Math.addExact(evaporatedTotal,birth.inventory().totalMassUnits());
-		SignedDyadic remainingHeat=SignedDyadic.of(momentum.removedKineticEnergy());
-		long remainingMass=evaporatedTotal;
+		var remainingHeat=new TreeMap<>(momentum.removedKineticEnergyByCell());
 		for(int index=0;index<births.size();index++) {
-			var birth=births.get(index);long mass=birth.inventory().totalMassUnits();
-			SignedDyadic heat=mass==remainingMass?remainingHeat
-					:SignedDyadic.of(remainingHeat.toDouble()*(mass/(double)remainingMass));
+			var birth=births.get(index);
+			var heat=remainingHeat.remove(birth.cell());
+			if(heat==null)heat=SignedDyadic.ZERO;
+			heat=heat.add(phasePotential.getOrDefault(birth.cell(),SignedDyadic.ZERO));
 			births.set(index,new GasTopologyCoordinator.PhaseBirth(birth.cell(),birth.supportMask(),birth.inventory(),
 					SignedDyadic.of(birth.energy()).add(heat).toDouble()));
-			remainingHeat=remainingHeat.subtract(heat); remainingMass-=mass;
 		}
-		if(remainingHeat.signum()!=0) throw new IllegalStateException("Removed liquid kinetic energy has no vapor receiver");
+		if(!remainingHeat.isEmpty()) throw new IllegalStateException("Removed liquid kinetic energy has no vapor receiver: "+remainingHeat.keySet());
 		// The old-node aggregate is the caloric batch baseline; topology remapping
 		// receives retained stock and spatially located births as separate inputs.
 		var gas=new ArrayList<>(retainedGas);double[] energy=retainedEnergy.clone();
@@ -252,19 +273,20 @@ final class GasLiquidPhaseChangeStage {
 		for(int index=0;index<births.size();index++) {
 			var birth=births.get(index);int node=birthNodes.get(index)-1;
 			try {gas.set(node,gas.get(node).merge(birth.inventory()));}
-			catch(GasInventory.RepresentationException unavailable){return new FluidDomain.GasThermalPhaseStats(0,0,0);}
+			catch(GasInventory.RepresentationException unavailable){throw new IllegalStateException("Phase vapor merge failed: node="+(node+1)+", cell="+birth.cell()+", support="+birth.supportMask()+", inventory="+birth.inventory(),unavailable);}
 			aggregateEnergy[node]=aggregateEnergy[node].add(SignedDyadic.of(birth.energy()));
 		}
 		for(int node=0;node<energy.length;node++)energy[node]=aggregateEnergy[node].toDouble();
 		var trials=new ArrayList<ThermalDomainState.PhaseCellTrial>(); int[] liquidCounts=new int[cells.size()];
 		SignedDyadic transfer=SignedDyadic.of(momentum.removedKineticEnergy());
+		for(var heat:phasePotential.values())if(heat.signum()>0)transfer=transfer.add(heat);
 		for(int i=0;i<cells.size();i++) {
 			var cell=cells.get(i); var portions=portions(cell.future); liquidCounts[i]=portions.size();
 			transfer=transfer.add(SignedDyadic.of(cell.transfer));
 			trials.add(portions.isEmpty()&&cell.thermal.unchangedSolids().isEmpty()
 					?thermal.trialVaporizedCellEnergy(cell.thermal,0).thermalTrial()
 					:thermal.trialPhaseCellEnergyWithHeat(cell.thermal,portions,cell.transfer,
-						momentum.heatByCell().getOrDefault(cell.id,SignedDyadic.ZERO)));
+						momentum.heatByCell().getOrDefault(cell.id,SignedDyadic.ZERO).add(phasePotential.getOrDefault(cell.id,SignedDyadic.ZERO).signum()<0?phasePotential.get(cell.id):SignedDyadic.ZERO)));
 		}
 		var gasEnergy=thermal.planGasInventoryEnergy(network,network.nodeIds(),gas,energy,transfer);
 		var cellEnergy=thermal.planPhaseBatchEnergy(trials,liquidCounts,gasEnergy.roundoff(),mechanicalHeat,domain.domainCapabilities.thermalMarkerContext());
@@ -278,17 +300,16 @@ final class GasLiquidPhaseChangeStage {
 				retainedGas,retainedEnergy,births);
 		GasTopologyCoordinator.GasTopologyPlan topology;
 		try { topology=domain.gasTopologyCoordinator.planAfterPhaseBatch(liquidPlan.future(),batch); }
-		catch(GasInventory.RepresentationException unavailable) { return new FluidDomain.GasThermalPhaseStats(0,0,0); }
-		liquidPlan.requireCurrent(); domain.gasTopologyCoordinator.requireAfterPhaseBatchCurrent(topology,batch);
-		liquidPlan.commit();
-		domain.cellMacStage.commitMomentum(momentum);
-		for(var cell:cells) {
-			SignedDyadic before=SignedDyadic.ZERO,after=SignedDyadic.ZERO;
-			for(var stock:cell.original) before=before.add(stock.volume());
-			for(var stock:cell.future) after=after.add(stock.volume());
-			if(!after.equals(before)) domain.pendingPhaseVolume.add(cell.id,after.subtract(before));
-		}
-		domain.markCellInventoryChanged(); thermal.commitPhaseBatchEnergy(cellEnergy,domain.domainCapabilities.thermalMarkerContext()); domain.gasTopologyCoordinator.commit(topology);
+		catch(GasInventory.RepresentationException unavailable) { throw new IllegalStateException("Phase topology preparation failed: operations="+operations+", births="+births+", retainedGas="+retainedGas,unavailable); }
+		domain.cellMacStage.publishMaterialChange(liquidPlan,()->domain.cellMacStage.commitMomentum(momentum),topology,null,()->{
+			for(var cell:cells) {
+				SignedDyadic before=SignedDyadic.ZERO,after=SignedDyadic.ZERO;
+				for(var stock:cell.original) before=before.add(stock.volume());
+				for(var stock:cell.future) after=after.add(stock.volume());
+				if(!after.equals(before)) domain.pendingPhaseVolume.add(cell.id,after.subtract(before));
+			}
+			thermal.commitPhaseBatchEnergy(cellEnergy,domain.domainCapabilities.thermalMarkerContext());
+		},()->domain.gasTopologyCoordinator.requireAfterPhaseBatchCurrent(topology,batch));
 		return new FluidDomain.GasThermalPhaseStats(operations,boiled,condensed);
 	}
 
@@ -405,6 +426,11 @@ final class GasLiquidPhaseChangeStage {
 		double coldCost=carried-liquidBase-registry.material(liquid).sensibleSpecificEnergyAt(ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
 		if(boiling&&coldCost>0) upper=Math.min(upper,Math.max(0,(cell.thermal.cellEnergy().toDouble()
 				-cell.coldEnergy)/coldCost));
+		if(!boiling&&coldCost<potentialPerKilogram(cell.id)) {
+			double cost=potentialPerKilogram(cell.id)-coldCost;
+			high=Math.min(high,(long)Math.floor(Math.max(0,cell.thermal.cellEnergy().toDouble()-cell.coldEnergy)/(cost*batchKg)));
+			if(high==0)return null;
+		}
 		double lower=boiling?0:-high*batchKg;
 		if(boiling) {
 			high=Math.min(high,(long)Math.floor(upper/batchKg));
@@ -412,7 +438,7 @@ final class GasLiquidPhaseChangeStage {
 			upper=high*batchKg;
 		}
 		double liquidResponse=phase.saturationSlopePaPerKelvin(transition,cell.temperature,candidate.saturation().saturationPressurePa())
-				*Math.max(0,latent)/cell.heatCapacity;
+				*Math.max(0,latent-(boiling?0:potentialPerKilogram(cell.id)))/cell.heatCapacity;
 		double gasTemperature=candidate.gasTemperature(),gasCapacity=candidate.gasCapacity();
 		double gasVolume=network.availableVolume(node);
 		if(gasVolume==0) gasVolume=candidate.batchVolumeM3();
@@ -421,7 +447,7 @@ final class GasLiquidPhaseChangeStage {
 		// The same phase mass changes both vapor inventory and the liquid-excluded gas volume.
 		gasResponse-=candidate.saturation().componentPartialPressurePa()*candidate.batchVolumeM3()/batchKg/gasVolume;
 		if(gasCapacity>0) gasResponse+=candidate.saturation().componentPartialPressurePa()/gasTemperature
-				*(carried-gasBase-registry.material(gas).sensibleSpecificEnergyAt(gasTemperature))/gasCapacity;
+				*(carried+(boiling?potentialPerKilogram(cell.id):0)-gasBase-registry.material(gas).sensibleSpecificEnergyAt(gasTemperature))/gasCapacity;
 		return new Proposal(cell,candidate,liquid,component,boiling,high,normalized,lower,upper,liquidResponse,Math.max(0,gasResponse));
 	}
 
@@ -491,19 +517,43 @@ final class GasLiquidPhaseChangeStage {
 		}
 	}
 
-	private GasInventory boil(Proposal p,GasLiquidPhaseModel phase,ThermalStateFunction function) {
-		long mass=Math.multiplyExact(p.batches,p.batchMass); var source=p.source;
-		var volume=source.volume().subtract(p.batchVolume.multiply(SignedDyadic.of(p.batches)));
-		var available=volatileSpecies(source,p.component); Map<String,Long> moved=new TreeMap<>();
+	/** Reserve representable vapor columns per existing chamber before choosing an LTE cell. */
+	private void limitGasRepresentation(Map<Group,List<Proposal>> groups,GasLiquidPhaseModel phase) {
+		var reserved=new HashMap<Integer,GasInventory>();
+		for(var group:groups.values()) for(var p:group) if(p.boiling&&p.batches>0) {
+			var inventory=reserved.computeIfAbsent(p.node,node->domain.gasState.network.inventory(node));
+			try { reserved.put(p.node,inventory.merge(boilInventory(p,p.batches,phase)));continue; }
+			catch(GasInventory.RepresentationException unavailable) { /* Reduce only this chamber's batch. */ }
+			long low=0,high=p.batches-1;
+			while(low<high) {
+				long middle=low+(high-low+1)/2;
+				try { inventory.merge(boilInventory(p,middle,phase));low=middle; }
+				catch(GasInventory.RepresentationException unavailable) { high=middle-1; }
+			}
+			p.batches=low;
+			if(low>0)reserved.put(p.node,inventory.merge(boilInventory(p,low,phase)));
+		}
+	}
+	private GasInventory boilInventory(Proposal p,long batches,GasLiquidPhaseModel phase) {
+		long mass=Math.multiplyExact(batches,p.batchMass);var source=p.source;
+		var volume=source.volume().subtract(p.batchVolume.multiply(SignedDyadic.of(batches)));
+		var available=volatileSpecies(source,p.component);Map<String,Long> moved=new TreeMap<>();
 		boolean allVolatile=available.size()==(source.mixture()==null?0:source.mixture().entryCount());
-		// Whole-volume depletion hands over the actual final integer mass, including batch rounding.
-		if(volume.signum()==0&&allVolatile) mass=source.massUnits();
+		if(volume.signum()==0&&allVolatile)mass=source.massUnits();
 		long availableMass=allVolatile?source.massUnits():speciesMass(available);
-		for(var entry:available.entrySet()) { long amount=Mass.portion(entry.getValue(),mass,availableMass); if(amount>0) moved.put(entry.getKey(),amount); }
-		var gas=phase.gasBatch(p.transition,p.batches,moved,mass-speciesMass(moved));
+		for(var entry:available.entrySet()) { long amount=Mass.portion(entry.getValue(),mass,availableMass);if(amount>0)moved.put(entry.getKey(),amount); }
+		var batch=phase.gasBatch(p.transition,batches,moved,mass-speciesMass(moved));
+		var component=batch.components().getFirst();
+		return new GasInventory(List.of(new GasComponentAmount(component.componentId(),component.standardVolumeNanos(),mass,
+				component.species(),component.massResidualUnits())));
+	}
+	private GasInventory boil(Proposal p,GasLiquidPhaseModel phase,ThermalStateFunction function) {
+		var gas=boilInventory(p,p.batches,phase);var source=p.source;long mass=gas.totalMassUnits();
+		var volume=source.volume().subtract(p.batchVolume.multiply(SignedDyadic.of(p.batches)));
+		var moved=gasSpecies(gas.components().getFirst());
 		var mixture=subtractMixture(source.mixture(),moved,source.massUnits()-mass);
 		setFuture(p,volume,source.massUnits()-mass,mixture,function);
-		p.cell.transfer=p.cell.future.stream().noneMatch(s->s.massUnits()>0)&&p.cell.thermal.unchangedSolids().isEmpty()
+		p.cell.transfer=p.cell.future.stream().noneMatch(stock->stock.massUnits()>0)&&p.cell.thermal.unchangedSolids().isEmpty()
 				?p.cell.thermal.cellEnergy().toDouble():phase.internalEnergyAtTemperature(p.transition,gas,p.cell.temperature);
 		return gas;
 	}
@@ -552,6 +602,9 @@ final class GasLiquidPhaseChangeStage {
 		var remaining=new TreeMap<>(source.stableAmounts(domain.liquidCells.chemicalRegistry()));
 		for(var entry:moved.entrySet()) { long amount=Math.subtractExact(remaining.getOrDefault(entry.getKey(),0L),entry.getValue()); if(amount==0) remaining.remove(entry.getKey()); else remaining.put(entry.getKey(),amount); }
 		return mixture(remaining,mass);
+	}
+	private double potentialPerKilogram(int cell) {
+		return domain.config.gravity()*(cell/domain.sizeX%domain.sizeY+.5)*domain.config.cellSize();
 	}
 	private static long sum(long[] values) { long n=0; for(long v:values) n=Math.addExact(n,v); return n; }
 	private static long volumeBatches(SignedDyadic available,SignedDyadic batch,long maximum) {

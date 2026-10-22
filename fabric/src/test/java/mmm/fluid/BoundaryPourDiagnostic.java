@@ -44,7 +44,7 @@ public final class BoundaryPourDiagnostic {
 
 	static FluidDomain pouredSource() {
 		var domain = new FluidDomain(8, 8, 8,
-				new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 120, 1e-4F, .002F, .80F), 4096);
+				new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 120, 1e-4F, .002F));
 		domain.sealDomainBoundary(); domain.bootstrapGasState(null); domain.setGasNodeStandardVolume(1, 34);
 		var addition = domain.addVolumeNearBudgeted(6, 0, 0, 128, 6);
 		if (addition.addedVolume() != 128 || addition.markerBudgetLimited()) throw new AssertionError("Original pour input changed");

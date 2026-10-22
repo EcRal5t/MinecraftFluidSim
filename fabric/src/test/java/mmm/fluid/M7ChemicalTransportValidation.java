@@ -27,7 +27,7 @@ import java.util.Map;
 /** Cell-stock chemistry, material separation, conservative transfers and complete recovery. */
 public final class M7ChemicalTransportValidation {
 	private static final FluidSolverConfig STATIC_CONFIG = new FluidSolverConfig(
-			1.0F, 1_000.0F, 0.0F, 0.01F, 64, 1.0E-6F, 0.002F, 0.0F);
+			1.0F, 1_000.0F, 0.0F, 0.01F, 64, 1.0E-6F, 0.002F);
 	private static final FluidMaterialRegistry MATERIALS = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 	private static final ChemicalRegistry CHEMISTRY = BuiltinChemicalDefinitions.REGISTRY;
 
@@ -103,7 +103,7 @@ private static void validateInternalTransferLedgerDiversity() {
 		FluidMaterialRegistry materials = new FluidMaterialRegistry(List.of(
 				BuiltinFluidMaterials.DEFAULT_PALETTE.getFirst(),
 				new FluidMaterial("test:missing_phase", 1_000.0, "test:missing_phase", 0.0, Math.PI / 2.0)));
-		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
+		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG);
 		domain.setVolume(1, 1, 1, 0.125F);
 		domain.bindMaterialRegistry(materials);
 		domain.domainCollision.setMarkerMaterial(0, materials, 1);
@@ -128,7 +128,7 @@ private static void validateInternalTransferLedgerDiversity() {
 	}
 
 	private static void validateWallSeparatedCellsDoNotReact() {
-		FluidDomain domain = new FluidDomain(5, 4, 4, STATIC_CONFIG, 64);
+		FluidDomain domain = new FluidDomain(5, 4, 4, STATIC_CONFIG);
 		domain.setVolume(1, 1, 1, 0.125F);
 		domain.setVolume(3, 1, 1, 0.125F);
 		domain.setSolid(2, 1, 1, true);
@@ -157,7 +157,7 @@ private static void validateInternalTransferLedgerDiversity() {
 						Map.of(acid.id(),1,base.id(),1),Map.of(water.id(),1),ExactRational.ZERO)));
 		var materials=new FluidMaterialRegistry(List.of(new FluidMaterial("test:material_a",1000,"test:immiscible_a",0,Math.PI/2),
 				new FluidMaterial("test:material_b",1000,"test:immiscible_b",0,Math.PI/2)));
-		var domain=new FluidDomain(4,4,4,STATIC_CONFIG,64);domain.bindMaterialRegistry(materials);domain.bindChemistry(chemistry);
+		var domain=new FluidDomain(4,4,4,STATIC_CONFIG);domain.bindMaterialRegistry(materials);domain.bindChemistry(chemistry);
 		int cell=domain.domainFlowFields.cellIndex(1,1,1);var additions=new java.util.ArrayList<LiquidCellInventory.Stock>();
 		for(int material=0;material<2;material++){
 			long mass=domain.unitScale.massUnitsForNormalized(125);
@@ -196,7 +196,7 @@ private static void validateSameCellReaction() {
 	}
 
 private static void validateAdjacentCellsDoNotReact() {
-		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
+		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG);
 		domain.setVolume(1, 1, 1, 0.125F);
 		domain.setVolume(2, 1, 1, 0.125F);
 		domain.bindMaterialRegistry(MATERIALS);
@@ -230,7 +230,7 @@ private static void validateAdjacentCellsDoNotReact() {
 	}
 
 	private static void validateIndicatorFloodFill() {
-		var domain=new FluidDomain(4,4,4,STATIC_CONFIG,64);domain.bindMaterialRegistry(MATERIALS);
+		var domain=new FluidDomain(4,4,4,STATIC_CONFIG);domain.bindMaterialRegistry(MATERIALS);
 		domain.setVolume(1,1,1,.125F);domain.setVolume(2,1,1,.125F);domain.bindChemistry(CHEMISTRY);
 		var before=domain.exportLiquidCellState();
 		check(!domain.editIndicatorFloodFill(1,1,1,true,64,.1).accepted()
@@ -248,7 +248,7 @@ private static void validateAdjacentCellsDoNotReact() {
 		check(domain.editIndicatorFloodFill(1,1,1,false,64,Double.POSITIVE_INFINITY).accepted()
 				&&domain.exportLiquidCellState().stocks().stream().noneMatch(LiquidCellInventory.Stock::indicator),
 				"Indicator erasure left marked inventory");
-		var wall=new FluidDomain(5,4,4,STATIC_CONFIG,64);wall.bindMaterialRegistry(MATERIALS);
+		var wall=new FluidDomain(5,4,4,STATIC_CONFIG);wall.bindMaterialRegistry(MATERIALS);
 		wall.setVolume(1,1,1,.125F);wall.setSolid(2,1,1,true);wall.bindChemistry(CHEMISTRY);
 		check(!wall.editIndicatorFloodFill(3,1,1,true,64,100).accepted(),"Indicator aim crossed a closed fixed face");
 	}
@@ -296,8 +296,8 @@ private static void validateCollisionDisplacement() {
 
 private static void validateConcentrationControlsDensity() {
 		for(float h:new float[]{1,.5F}){
-			var config=new FluidSolverConfig(h,1000,0,.01F,64,1e-6F,.002F,0);
-			var domain=new FluidDomain(4,4,4,config,64);domain.bindMaterialRegistry(MATERIALS);
+			var config=new FluidSolverConfig(h,1000,0,.01F,64,1e-6F,.002F);
+			var domain=new FluidDomain(4,4,4,config);domain.bindMaterialRegistry(MATERIALS);
 			domain.setVolume(1,1,1,1);domain.setVolume(2,1,1,1);domain.bindChemistry(CHEMISTRY);
 			int cell=domain.domainFlowFields.cellIndex(2,1,1);var old=domain.liquidCells.stocksInCell(cell).getFirst();
 			var amounts=new java.util.TreeMap<>(old.mixture().stableAmounts(CHEMISTRY));
@@ -383,8 +383,8 @@ private static void validateChemicalContainerRoundTrip() throws Exception {
 	static FluidDomain thermalChemicalExtractionSource() throws Exception {
 		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
 		FluidSolverConfig config = new FluidSolverConfig(
-				0.5F, 1_000.0F, 9.81F, 0.05F, 64, 1.0E-6F, 0.002F, 0.0F);
-		FluidDomain source = new FluidDomain(10, 8, 10, config, 8_192);
+				0.5F, 1_000.0F, 9.81F, 0.05F, 64, 1.0E-6F, 0.002F);
+		FluidDomain source = new FluidDomain(10, 8, 10, config);
 		source.bindMaterialRegistry(registries.liquids());
 		for (int z = 0; z < source.sizeZ(); z++) for (int y = 0; y < 6; y++) {
 			for (int x = 0; x < 4; x++) source.setVolume(x, y, z, 1.0F);
@@ -448,7 +448,7 @@ private static void validateChemicalContainerRoundTrip() throws Exception {
 		FluidDomain baseline = cleanFlowDomain(false);
 		FluidDomain chemical = cleanFlowDomain(true);
 		for (var domain : new FluidDomain[]{baseline, chemical}) {
-			domain.domainFlowFields.ensureGrid();
+			domain.domainFlowFields.preparePhysicalState();
 			Arrays.fill(domain.mac.velocityX, 0.1F);
 			domain.cellMacStage.publishMomentum();
 		}
@@ -475,7 +475,7 @@ private static void validateChemicalContainerRoundTrip() throws Exception {
 	}
 
 	private static FluidDomain cleanFlowDomain(boolean chemistry) {
-		FluidDomain domain = new FluidDomain(10, 7, 10, STATIC_CONFIG, 4_096);
+		FluidDomain domain = new FluidDomain(10, 7, 10, STATIC_CONFIG);
 		for (int z = 1; z <= 8; z++) for (int y = 1; y <= 4; y++) for (int x = 1; x <= 8; x++) {
 			domain.setVolume(x, y, z, 1.0F);
 		}
@@ -535,7 +535,7 @@ private static void validateChemicalContainerRoundTrip() throws Exception {
 	}
 
 	private static void validateInsertionAccountsForDisplacedLiquid() {
-		var domain=new FluidDomain(2,2,2,STATIC_CONFIG,256);
+		var domain=new FluidDomain(2,2,2,STATIC_CONFIG);
 		domain.bindMaterialRegistry(MATERIALS);domain.bindChemistry(CHEMISTRY);
 		float[] filled=new float[8];Arrays.fill(filled,1);filled[7]=0;domain.setVolumes(filled);
 		var before=domain.captureAuthoritativeState();
@@ -545,7 +545,7 @@ private static void validateChemicalContainerRoundTrip() throws Exception {
 	}
 
 	private static FluidDomain domainWithCell(int x, int y, int z, float volume) {
-		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG, 64);
+		FluidDomain domain = new FluidDomain(4, 4, 4, STATIC_CONFIG);
 		domain.setVolume(x, y, z, volume);
 		domain.bindMaterialRegistry(MATERIALS);
 		domain.bindChemistry(CHEMISTRY);

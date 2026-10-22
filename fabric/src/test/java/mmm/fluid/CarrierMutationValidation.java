@@ -9,6 +9,7 @@ import java.util.List;
 public final class CarrierMutationValidation {
 	private CarrierMutationValidation() { }
 	public static void main(String[] args) throws Exception {
+		phaseMomentumFollowsEachRemovedCell();
 		insertExtractAndRestoreKeepQuantities();
 		defaultInsertionsConserveThermalInventory();
 		explicitInsertionsRequirePositiveTemperature();
@@ -19,6 +20,41 @@ public final class CarrierMutationValidation {
 		externalInsertionsRouteAroundLiquidSealedGas();
 		System.out.println("Cell inventory mutation validation passed");
 	}
+	private static void phaseMomentumFollowsEachRemovedCell() {
+		var domain=new FluidDomain(6,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F));
+		domain.setVolume(1,1,1,.5F);domain.setVolume(2,1,1,.5F);
+		domain.domainFlowFields.ensureVelocityGrid();
+		int shared=domain.domainFlowFields.xFaceIndex(2,1,1);
+		domain.mac.velocityX[shared]=2;domain.cellMacStage.publishMomentum();
+		int source=domain.domainFlowFields.cellIndex(1,1,1),receiver=domain.domainFlowFields.cellIndex(2,1,1);
+		var first=domain.liquidCells.stocksInCell(source).getFirst();var second=domain.liquidCells.stocksInCell(receiver).getFirst();
+		long moved=first.massUnits()/2;
+		var edit=domain.liquidCells.planEdits(List.of(
+				new mmm.inventory.LiquidCellInventory.Edit(first.key(),new mmm.inventory.LiquidCellInventory.Stock(first.key(),mmm.units.SignedDyadic.of(.25),first.massUnits()-moved,null,0,false)),
+				new mmm.inventory.LiquidCellInventory.Edit(second.key(),new mmm.inventory.LiquidCellInventory.Stock(second.key(),mmm.units.SignedDyadic.of(.75),second.massUnits()+moved,null,0,false))));
+		double before=domain.exportMacMomentum().copyX()[shared];
+		var momentum=domain.cellMacStage.preparePhaseMomentum(edit,java.util.Map.of(source,moved));
+		require(Math.abs(momentum.momentum().copyX()[shared]-.75*before)<1e-12
+				&&Math.abs(momentum.removedKineticEnergyByCell().get(source).toDouble()-mmm.units.Mass.kilograms(moved))<1e-12,
+				"Equal neighboring removal and stationary insertion hid the source momentum or kinetic energy");
+
+		var separate=new FluidDomain(6,3,3,domain.config());
+		separate.setVolume(1,1,1,.5F);separate.setVolume(4,1,1,.5F);separate.setSolid(3,1,1,true);
+		separate.domainFlowFields.ensureVelocityGrid();
+		separate.mac.velocityX[separate.domainFlowFields.xFaceIndex(1,1,1)]=2;
+		separate.mac.velocityX[separate.domainFlowFields.xFaceIndex(5,1,1)]=4;
+		separate.cellMacStage.publishMomentum();
+		var edits=new java.util.ArrayList<mmm.inventory.LiquidCellInventory.Edit>();var removals=new java.util.TreeMap<Integer,Long>();
+		for(int x:new int[]{1,4}) {
+			int cell=separate.domainFlowFields.cellIndex(x,1,1);var stock=separate.liquidCells.stocksInCell(cell).getFirst();long mass=stock.massUnits()/2;
+			removals.put(cell,mass);edits.add(new mmm.inventory.LiquidCellInventory.Edit(stock.key(),new mmm.inventory.LiquidCellInventory.Stock(stock.key(),mmm.units.SignedDyadic.of(.25),stock.massUnits()-mass,null,0,false)));
+		}
+		var prepared=separate.cellMacStage.preparePhaseMomentum(separate.liquidCells.planEdits(edits),removals);
+		double slow=prepared.removedKineticEnergyByCell().get(separate.domainFlowFields.cellIndex(1,1,1)).toDouble();
+		double fast=prepared.removedKineticEnergyByCell().get(separate.domainFlowFields.cellIndex(4,1,1)).toDouble();
+		require(slow>0&&Math.abs(fast-4*slow)<1e-12,"Separate phase sources shared their kinetic energy by mass instead of source motion");
+	}
+
 	private static void insertExtractAndRestoreKeepQuantities() throws Exception {
 		var registries=FullCapabilityTestFixture.load();
 		var domain=emptyMaterialDomain(4096);
@@ -45,7 +81,7 @@ public final class CarrierMutationValidation {
 	private static void externalInsertionsRouteAroundLiquidSealedGas() throws Exception {
 		var registries = FullCapabilityTestFixture.load();
 		for (int mode = 0; mode < 3; mode++) {
-			var domain = new FluidDomain(5, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F, 120, 1e-5F, .002F, 0), 128);
+			var domain = new FluidDomain(5, 3, 3, new FluidSolverConfig(.5F, 1000, 0, .05F, 120, 1e-5F, .002F));
 			FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 			for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 5; x++)
 				if (!(y == 1 && z == 1 && x >= 1)) domain.setSolid(x, y, z, true);
@@ -250,9 +286,9 @@ public final class CarrierMutationValidation {
 	}
 
 	private static void restoreRequiresConnectedOpenCapacity() throws Exception {
-		var config = new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,1e-4F,0);
-		var d = new FluidDomain(2,2,2,config,16); d.setVolume(1,1,1,.25F);
-		byte[] masks = new byte[8]; java.util.Arrays.fill(masks,(byte)255); masks[0]=126;
+		var config = new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,1e-4F);
+		var d = new FluidDomain(2,2,2,config); d.setVolume(1,1,1,.25F);
+		byte[] masks = new byte[8]; java.util.Arrays.fill(masks,(byte)255); masks[0]=(byte)254;
 		var before = d.exportParticleState(); long revision = d.domainFlowFields.carrierMutationRevision();
 		try {
 			d.restoreParticleState(new FlipParticleState(2,2,2,Math.nextUp(.5F),1,.125F,
@@ -278,20 +314,21 @@ public final class CarrierMutationValidation {
 					&& java.util.Arrays.equals(before.copyCollisionMicroMasks(),after.copyCollisionMicroMasks()),
 					"Capacity-rejected restore changed original marker or collision state");
 		}
-		d.restoreParticleState(new FlipParticleState(2,2,2,.5F,2,.25F,
-				new float[]{.125F,.125F,.125F,.125F,.375F,.375F,.375F,.125F},new float[6], mmm.units.Mass.createLiquid(.5F, 1000.0, new float[]{.125F,.125F,.125F,.125F,.375F,.375F,.375F,.125F}),masks));
-		require(d.totalVolumeExact()==.25,"Restore rejected legitimate separately filled micro components");
+		masks[7]=(byte)127;
+		float[] separatePoints={.125F,.125F,.125F,.125F,.875F,.875F,.875F,.125F};
+		d.restoreParticleState(new FlipParticleState(2,2,2,.5F,2,.25F,separatePoints,new float[6],mmm.units.Mass.createLiquid(.5F,1000,separatePoints),masks));
+		require(d.totalVolumeExact()==.25,"Restore rejected separately filled spatial compartments");
 		d.restoreParticleState(new FlipParticleState(2,2,2,.5F,1,1,new float[]{.125F,.125F,.125F,1},new float[3], mmm.units.Mass.createLiquid(.5F, 1000.0, new float[]{.125F,.125F,.125F,1}),new byte[8]));
 		require(d.totalVolumeExact()==1,"Restore limited a connected component to one microbox");
-		var floatGrid = new FluidDomain(4,4,4,new FluidSolverConfig(.1F,1000,0,.01F,200,1e-5F,1e-4F,0),16);
-		byte[] floatMasks=new byte[64];java.util.Arrays.fill(floatMasks,(byte)255);floatMasks[42]=126;
+		var floatGrid = new FluidDomain(4,4,4,new FluidSolverConfig(.1F,1000,0,.01F,200,1e-5F,1e-4F));
+		byte[] floatMasks=new byte[64];java.util.Arrays.fill(floatMasks,(byte)255);floatMasks[42]=(byte)127;
 		floatGrid.restoreParticleState(new FlipParticleState(4,4,4,.1F,1,.125F,new float[]{.25F,.25F,.25F,.125F},new float[3], mmm.units.Mass.createLiquid(.1F, 1000.0, new float[]{.25F,.25F,.25F,.125F}),floatMasks));
 		require(floatGrid.liquidCells.physicalStockAt(0).key().supportMask()==128,"Restore changed actual binary32 micro-face ownership");
 
 		var material = fullCapabilityDomain(FullCapabilityTestFixture.load()); material.setVolume(1,1,1,.25F);
 		ReplacementState materialBefore=replacementState(material); byte[] originalMasks=material.geometry.cutCells.copyMicroMasks();
 		byte[] materialMasks=originalMasks.clone();
-		materialMasks[0]=126;
+		materialMasks[0]=(byte)254;
 		var mixed = new FlipMaterialParticleState(4,4,4,.5F,2,.1875, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(178.125),material.materialRegistry.materials(),
 				new float[]{.125F,.125F,.125F,.09375F,.125F,.125F,.125F,.09375F},new float[6],materialMasks, java.util.Arrays.stream(new double[]{93.75,84.375}).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(m)).toArray(),new int[]{0,1});
 		try { material.restoreMaterialParticleState(mixed); throw new AssertionError("Restore gave each material an independent component capacity"); }
@@ -321,7 +358,7 @@ public final class CarrierMutationValidation {
 		catch (IllegalArgumentException expected) { }
 		requireUnchanged(material,materialBefore);
 		var valid=material.exportChemicalParticleState();
-		var restored=new FluidDomain(4,4,4,material.config(),material.maximumParticleCount());
+		var restored=new FluidDomain(4,4,4,material.config());
 		restored.restoreChemicalParticleState(valid,material.chemistry.registry());
 		require(restored.totalVolumeExact()==material.totalVolumeExact() && restored.totalMass()==material.totalMass()
 				&& java.util.Arrays.equals(speciesTotals(restored),valid.copySpeciesTotals())
@@ -383,7 +420,7 @@ public final class CarrierMutationValidation {
 	private static void readOnlyCellQueriesFollowCarrierEdits(){
 		var domain=emptyMaterialDomain(256);domain.setVolume(1,1,1,1);domain.setVolume(2,1,1,.5F);
 		for(int round=0;round<3;round++){
-			domain.domainFlowFields.ensureGrid();for(int face=0;face<domain.mac.velocityX.length;face++)if(domain.cellMacStage.massX[face]>0)domain.mac.velocityX[face]=round+.5F;
+			domain.domainFlowFields.preparePhysicalState();for(int face=0;face<domain.mac.velocityX.length;face++)if(domain.cellMacStage.massX[face]>0)domain.mac.velocityX[face]=round+.5F;
 			domain.cellMacStage.publishMomentum();var state=domain.captureAuthoritativeState();
 			var observed=domain.observeCellInventory(1,1,1);domain.volume(1,1,1);domain.densityInCell(1,1,1);
 			require(state.liquid().stocks().equals(domain.liquidCells.stocks())&&java.util.Arrays.equals(state.momentum().copyX(),domain.mac.momentumX),"Read-only observation changed inventory or momentum");
@@ -396,7 +433,7 @@ public final class CarrierMutationValidation {
 
 	private static FluidSolverConfig config() {
 		return new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				120, 1.0E-4F, 2.0E-3F, 0.80F);
+				120, 1.0E-4F, 2.0E-3F);
 	}
 
 	private static FluidDomain fullCapabilityDomain(FullCapabilityTestFixture.Registries registries) {
@@ -411,7 +448,7 @@ public final class CarrierMutationValidation {
 	}
 
 	private static FluidDomain emptyMaterialDomain(int maximumParticles){
-		var domain=new FluidDomain(4,4,4,config(),maximumParticles);domain.sealDomainBoundary();
+		var domain=new FluidDomain(4,4,4,config());domain.sealDomainBoundary();
 		domain.materialRegistry=new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
 		domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());return domain;
 	}

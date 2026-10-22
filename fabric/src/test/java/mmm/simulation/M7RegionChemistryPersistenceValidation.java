@@ -39,7 +39,7 @@ import java.util.UUID;
 	/** Current feature-layout admission and restore checks for chemistry, granular and thermal regions. */
 public final class M7RegionChemistryPersistenceValidation {
 	private static final FluidSolverConfig CONFIG = new FluidSolverConfig(
-			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F, 0.80F);
+			0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F, 48, 1.0E-4F, 2.0E-3F);
 	private static final ResourceKey<Registry<Level>> DIMENSION_REGISTRY = ResourceKey.createRegistryKey(
 			Identifier.fromNamespaceAndPath("mmm", "m7_persistence_registry"));
 	private static final ResourceKey<Level> DIMENSION = ResourceKey.create(DIMENSION_REGISTRY,
@@ -68,7 +68,7 @@ public final class M7RegionChemistryPersistenceValidation {
 		var committed = store.openOrPublish(definitions).bundle();
 		FluidSolverConfig noSlip = new FluidSolverConfig(CONFIG.cellSize(), CONFIG.density(), CONFIG.gravity(),
 				CONFIG.timeStep(), CONFIG.maxPressureIterations(), CONFIG.pressureTolerance(),
-				CONFIG.fluidEpsilon(), CONFIG.interfaceCompression(), FluidSolverConfig.WallCondition.NO_SLIP);
+				CONFIG.fluidEpsilon(), FluidSolverConfig.WallCondition.NO_SLIP);
 		FluidRegion source = populatedRegion(UUID.randomUUID(), noSlip);
 		bindDefaultMaterials(source);
 		FullCapabilityTestFixture.bindFull(source.domain(), new FullCapabilityTestFixture.Registries(
@@ -163,7 +163,7 @@ public final class M7RegionChemistryPersistenceValidation {
 				"production restore did not reconstruct gas plus thermal truth");
 
 		FluidRegionManager constrained = new FluidRegionManager(
-				new RegionCatalog.Limits(1, 100L, 100L, 100L, 100L));
+				new RegionCatalog.Limits(1, 100L, 100L));
 		check(restoring.loadMetadata(constrained).isEmpty() && constrained.regions().size() == 1,
 				"temporary policy budget discarded valid committed metadata");
 		FluidRegion retained = constrained.regions().getFirst();
@@ -263,14 +263,14 @@ public final class M7RegionChemistryPersistenceValidation {
 	}
 
 	private static FluidRegionManager manager() {
-		return new FluidRegionManager(new RegionCatalog.Limits(4, 10_000L, 100_000L, 40_000L, 400_000L));
+		return new FluidRegionManager(new RegionCatalog.Limits(4, 10_000L, 40_000L));
 	}
 
 	private static FluidRegion populatedRegion(UUID id) { return populatedRegion(id, CONFIG); }
 
 	private static FluidRegion populatedRegion(UUID id, FluidSolverConfig config) {
 		BlockPos origin = new BlockPos(15, 16, 15);
-		FluidDomain domain = new FluidDomain(6, 4, 6, config, 512);
+		FluidDomain domain = new FluidDomain(6, 4, 6, config);
 		domain.setSolid(0, 0, 0, true);
 		domain.setVolume(1, 1, 1, 0.25F);
 		domain.setVolume(2, 1, 2, 1.0F);
@@ -283,7 +283,7 @@ public final class M7RegionChemistryPersistenceValidation {
 		Set<Long> chunks = Set.of(ChunkPos.pack(0, 0), ChunkPos.pack(1, 0), ChunkPos.pack(0, 1), ChunkPos.pack(1, 1));
 		FluidRegionFootprint footprint = new FluidRegionFootprint(controller, origin, new BlockPos(17, 17, 17),
 				interior, Set.of(controller.asLong()), chunks);
-		return new FluidRegion(id, DIMENSION, origin, domain, 512L, footprint);
+		return new FluidRegion(id, DIMENSION, origin, domain, footprint);
 	}
 
 	private static void bindDefaultMaterials(FluidRegion region) {

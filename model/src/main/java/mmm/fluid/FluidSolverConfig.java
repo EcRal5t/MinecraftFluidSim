@@ -15,7 +15,6 @@ public record FluidSolverConfig(
 		int maxPressureIterations,
 		float pressureTolerance,
 		float fluidEpsilon,
-		float interfaceCompression,
 		WallCondition viscousWallCondition
 ) {
 	/** Subgrid layers share one physical scale: thin dry gaps transmit column support,
@@ -26,9 +25,9 @@ public record FluidSolverConfig(
 
 	public FluidSolverConfig(float cellSize, float density, float gravity, float timeStep,
 			int maxPressureIterations, float pressureTolerance,
-			float fluidEpsilon, float interfaceCompression) {
+			float fluidEpsilon) {
 		this(cellSize, density, gravity, timeStep, maxPressureIterations, pressureTolerance,
-				fluidEpsilon, interfaceCompression, WallCondition.FREE_SLIP);
+				fluidEpsilon, WallCondition.FREE_SLIP);
 	}
 
 	public FluidSolverConfig {
@@ -42,9 +41,6 @@ public record FluidSolverConfig(
 		if (!(fluidEpsilon > 0.0F && fluidEpsilon < 1.0F)) {
 			throw new IllegalArgumentException("fluidEpsilon must be in (0, 1)");
 		}
-		if (!(interfaceCompression >= 0.0F && interfaceCompression <= 1.0F)) {
-			throw new IllegalArgumentException("interfaceCompression must be in [0, 1]");
-		}
 	}
 
 	public static FluidSolverConfig prototypeDefaults() {
@@ -55,8 +51,6 @@ public record FluidSolverConfig(
 				1.0F / 20.0F,
 				200,
 				1.0E-5F,
-				2.0E-3F,
-				0.80F
-		);
+				2.0E-3F);
 	}
 }

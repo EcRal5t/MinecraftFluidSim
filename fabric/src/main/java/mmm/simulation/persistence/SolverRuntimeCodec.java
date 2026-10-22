@@ -18,7 +18,7 @@ final class SolverRuntimeCodec {
 			var granular=state.granularDynamics();out.writeBoolean(granular!=null);if(granular!=null){out.writeLong(granular.logicalStep());writeInts(out,granular.stableAge());writeInts(out,granular.queuedColumns());}
 		}return bytes.toByteArray();
 	}
-	Data decode(byte[] bytes,int cells,int maximumParcels) throws IOException {
+	Data decode(byte[] bytes,int cells) throws IOException {
 		try(var input=new DataInputStream(new ByteArrayInputStream(bytes))) {
 			if(input.readInt()!=0x434d5254)throw new IOException("Unsupported solver continuation encoding");
 			boolean sealed=input.readBoolean(),precip=input.readBoolean();int substeps=input.readInt();

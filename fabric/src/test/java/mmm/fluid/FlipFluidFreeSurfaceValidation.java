@@ -18,7 +18,7 @@ public final class FlipFluidFreeSurfaceValidation {
 		cellMassLedgerTracksVolume();
 		closedComponentsUseActualCapacity();
 		collisionWallsRetainInventory();
-		persistentMacMomentumRetainsSmoothVortex();
+		persistentMacMomentumRetainsSmoothVortex(selected.contains("--fast"));
 		bodyOverlapResolvesContinuousSubmergence();
 		fractionalHydrostaticColumnsBalanceGravity();
 		thinLayerRegularizationRemainsStable();
@@ -84,7 +84,7 @@ public final class FlipFluidFreeSurfaceValidation {
 			for(int x=0;x<2;x++)domain.setVolume(x,y,z,1);
 			domain.setVolume(3,y,z,.25F);
 		}
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.preparePhysicalState();
 		for(int z=0;z<2;z++)for(int y=0;y<4;y++)for(int x=0;x<4;x++){
 			int cell=domain.domainFlowFields.cellIndex(x,y,z);
 			check(domain.liquidGrid.cellStockVolume[cell]==(x<2?1:x==3?.25:0),"Pressure preparation moved inventory across a wall");
@@ -94,51 +94,57 @@ public final class FlipFluidFreeSurfaceValidation {
 	}
 
 	private static void collisionWallsRetainInventory() {
-		var config=new FluidSolverConfig(.5F,1000,0,.01F,300,1e-7F,.002F,0);
+		var config=new FluidSolverConfig(.5F,1000,0,.01F,300,1e-7F,.002F);
 		var domain=new FluidDomain(4,4,2,config);
 		for(int z=0;z<2;z++)for(int y=0;y<4;y++){
 			domain.setSolid(2,y,z,true);
 			for(int x=0;x<2;x++)domain.setVolume(x,y,z,1);
 		}
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.preparePhysicalState();
 		for(int f=0;f<domain.mac.velocityX.length;f++)if(domain.geometry.cutCells.openFaceField(0)[f]>0)domain.mac.velocityX[f]=.1F;
 		domain.cellMacStage.publishMomentum();
 		var volume=volume(domain);long mass=mass(domain);
 		for(int step=0;step<4;step++)domain=advance(domain).claimPreparedCpuDomain();
-		assertInventory(domain,volume,mass);domain.domainFlowFields.ensureGrid();
+		assertInventory(domain,volume,mass);domain.domainFlowFields.preparePhysicalState();
 		for(var stock:domain.exportLiquidCellState().stocks())check(stock.key().cell()%4<2,"Liquid crossed a collision wall");
 		for(int f=0;f<domain.mac.velocityX.length;f++)if(domain.geometry.cutCells.openFaceField(0)[f]==0)
 			check(domain.mac.velocityX[f]==0,"Fixed collision face acquired normal velocity");
 	}
 
-	private static void persistentMacMomentumRetainsSmoothVortex() {
-		var config=new FluidSolverConfig(.5F,1000,0,.001F,300,1e-7F,.002F,0);
-		var domain=new FluidDomain(8,8,2,config);
-		for(int z=0;z<2;z++)for(int y=0;y<8;y++)for(int x=0;x<8;x++)domain.setVolume(x,y,z,1);
-		domain.domainFlowFields.ensureGrid();
-		// The discrete stream function gives zero face divergence and zero normal wall flux.
-		for(int z=0;z<2;z++)for(int y=0;y<8;y++)for(int x=0;x<=8;x++)
-			domain.mac.velocityX[(z*8+y)*9+x]=(float)((stream(x,y+1)-stream(x,y))/.5);
-		for(int z=0;z<2;z++)for(int y=0;y<=8;y++)for(int x=0;x<8;x++)
-			domain.mac.velocityY[(z*9+y)*8+x]=(float)(-(stream(x+1,y)-stream(x,y))/.5);
-		domain.cellMacStage.publishMomentum();
-		double initial=domain.domainStep.particleKineticEnergyJoules();var volume=volume(domain);long mass=mass(domain);
-		for(int step=0;step<40;step++)domain=advance(domain).claimPreparedCpuDomain();
-		double ratio=domain.domainStep.particleKineticEnergyJoules()/initial;
-		check(initial>0&&ratio>=.98&&ratio<=1+64*Math.ulp(1.0F),"Unforced vortex exceeded its 2% coarse-grid energy budget: "+ratio);
-		assertInventory(domain,volume,mass);
-	}
-	private static double stream(int x,int y){return .02*4/Math.PI*Math.sin(Math.PI*x/8)*Math.sin(Math.PI*y/8);}
+	private static void persistentMacMomentumRetainsSmoothVortex(boolean shortRun) {
+        for(int n:shortRun?new int[]{8}:new int[]{8,16}){
+            float h=4F/n,dt=.025F;
+            var domain=new FluidDomain(n,n,2,new FluidSolverConfig(h,1000,0,dt,300,1e-7F,.002F));
+            for(int z=0;z<2;z++)for(int y=0;y<n;y++)for(int x=0;x<n;x++)domain.setVolume(x,y,z,1);
+            domain.domainFlowFields.preparePhysicalState();
+            for(int z=0;z<2;z++)for(int y=0;y<n;y++)for(int x=0;x<=n;x++)
+                domain.mac.velocityX[(z*n+y)*(n+1)+x]=(float)((stream(x,y+1,n)-stream(x,y,n))/h);
+            for(int z=0;z<2;z++)for(int y=0;y<=n;y++)for(int x=0;x<n;x++)
+                domain.mac.velocityY[(z*(n+1)+y)*n+x]=(float)(-(stream(x+1,y,n)-stream(x,y,n))/h);
+            domain.cellMacStage.publishMomentum();
+            double initial=domain.domainStep.particleKineticEnergyJoules();var volume=volume(domain);long mass=mass(domain);
+            for(int step=1;step<=(shortRun?4:160);step++){
+                domain=advance(domain).claimPreparedCpuDomain();
+                double ratio=domain.domainStep.particleKineticEnergyJoules()/initial;
+                // First-order upwind viscosity scales as u*h/2; allow 20% loss across four seconds at the coarse grid.
+                double minimum=Math.exp(Math.log(.8)*step*dt/4);
+                check(initial>0&&ratio>=minimum&&ratio<=1+64*Math.ulp(1.0F),"Vortex decay exceeded spatial transport budget: n="+n+", time="+step*dt+", ratio="+ratio);
+                if(step==40||step==160)System.out.printf("VORTEX grid=%d time=%g energyRatio=%g%n",n,step*dt,ratio);
+                assertInventory(domain,volume,mass);
+            }
+        }
+    }
+    private static double stream(int x,int y,int n){return .02*4/Math.PI*Math.sin(Math.PI*x/n)*Math.sin(Math.PI*y/n);}
 
 	private static void resolvedLiquidReceivesGravity() {
 		for(boolean pool:new boolean[]{false,true}){
-			var config=new FluidSolverConfig(.5F,1000,9.81F,.025F,300,1e-7F,.002F,0);
+			var config=new FluidSolverConfig(.5F,1000,9.81F,.025F,300,1e-7F,.002F);
 			var domain=new FluidDomain(4,12,4,config);
 			if(pool)for(int z=0;z<4;z++)for(int x=0;x<4;x++)domain.setVolume(x,0,z,1);
 			for(int z=1;z<3;z++)for(int y=8;y<10;y++)for(int x=1;x<3;x++)domain.setVolume(x,y,z,1);
 			var inventory=volume(domain);long mass=mass(domain);double initial=upperCentre(domain);
 			for(int step=0;step<4;step++)domain=advance(domain).claimPreparedCpuDomain();
-			domain.domainFlowFields.ensureGrid();double momentum=0,upperMass=0;
+			domain.domainFlowFields.preparePhysicalState();double momentum=0,upperMass=0;
 			for(int z=0;z<4;z++)for(int y=5;y<=12;y++)for(int x=0;x<4;x++)momentum+=domain.mac.momentumY[(z*13+y)*4+x];
 			for(var stock:domain.exportLiquidCellState().stocks())if(stock.key().cell()/4%12>=5)upperMass+=stock.massKilograms();
 			check(Math.abs(momentum/upperMass+config.gravity()*config.timeStep()*4)<2e-5,"Resolved falling liquid lost gravity impulse");
@@ -204,7 +210,7 @@ public final class FlipFluidFreeSurfaceValidation {
 
 	private static void bodyOverlapResolvesContinuousSubmergence() {
 		FluidSolverConfig config = FluidSolverConfig.prototypeDefaults();
-		FluidDomain domain = new FluidDomain(6, 6, 6, config, 6 * 6 * 6 * 8);
+		FluidDomain domain = new FluidDomain(6, 6, 6, config);
 		for (int z = 0; z < 6; z++) for (int x = 0; x < 6; x++) {
 			domain.setVolume(x, 0, z, 1.0F);
 			domain.setVolume(x, 1, z, 1.0F);
@@ -236,7 +242,7 @@ public final class FlipFluidFreeSurfaceValidation {
 			var config=strictConfig();var domain=new FluidDomain(2,5,2,config);
 			for(int z=0;z<2;z++)for(int y=0;y<3;y++)for(int x=0;x<2;x++)domain.setVolume(x,y,z,y==2?fraction:1);
 			var volume=volume(domain);long mass=mass(domain);double initialCenter=FluidPhysicalAssertions.inventoryCenterY(domain);
-			domain.domainFlowFields.ensureGrid();
+			domain.domainFlowFields.preparePhysicalState();
 			String firstGravity="freeFall="+domain.pressureSystem.faces.freeFallAcceleration(domain.pressureSystem.faces.offsets[1]+domain.domainFlowFields.yFaceIndex(0,1,0))
 					+","+domain.pressureSystem.faces.freeFallAcceleration(domain.pressureSystem.faces.offsets[1]+domain.domainFlowFields.yFaceIndex(0,2,0));
 			String firstState="";
@@ -294,8 +300,7 @@ public final class FlipFluidFreeSurfaceValidation {
 	private static void waterDescendsAStairSlope() {
 		FluidSolverConfig config = new FluidSolverConfig(
 				1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
-				200, 1.0E-5F, 2.0E-3F, 0.80F
-		);
+				200, 1.0E-5F, 2.0E-3F);
 		FluidDomain domain = new FluidDomain(12, 8, 4, config);
 		for (int z = 0; z < 4; z++) for (int x = 0; x < 12; x++) {
 			int topSolid = x < 2 ? 3 : x < 4 ? 2 : 1;
@@ -324,8 +329,7 @@ public final class FlipFluidFreeSurfaceValidation {
 	private static FluidSolverConfig strictConfig() {
 		return new FluidSolverConfig(
 				1.0F, 1_000.0F, 9.81F, 1.0F / 40.0F,
-				300, 1.0E-7F, 2.0E-3F, 0.80F
-		);
+				300, 1.0E-7F, 2.0E-3F);
 	}
 
 	private static int index(int sizeX, int sizeY, int x, int y, int z) {

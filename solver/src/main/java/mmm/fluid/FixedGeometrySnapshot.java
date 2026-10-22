@@ -15,11 +15,17 @@ public final class FixedGeometrySnapshot {
 			throw new IllegalArgumentException("Fixed collision geometry shape differs");
 		this.sizeX=sizeX;this.sizeY=sizeY;this.sizeZ=sizeZ;occupancy=ownedMasks;
 		int count=ownedMasks.length;openCellVolume=new float[count];
-		for(int cell=0;cell<count;cell++)openCellVolume[cell]=1-Integer.bitCount(mask(cell))*.125F;
+		for(int cell=0;cell<count;cell++){requireConnectedOpenCell(cell,mask(cell));openCellVolume[cell]=1-Integer.bitCount(mask(cell))*.125F;}
 		openFaceX=new float[(sizeX+1)*sizeY*sizeZ];openFaceY=new float[sizeX*(sizeY+1)*sizeZ];openFaceZ=new float[sizeX*sizeY*(sizeZ+1)];
 		solidWallAreaX=new float[count];solidWallAreaY=new float[count];solidWallAreaZ=new float[count];
 		buildFaces();
 	}
+	/** A coarse MAC cell owns one pressure and inertia state, hence one fixed open component. */
+	static void requireConnectedOpenCell(int cell,int mask){
+		if(mmm.inventory.LiquidCellInventory.connectedSupports(mask).size()>1)
+			throw new IllegalArgumentException("Fixed geometry requires one connected open space per solver cell: cell="+cell+", mask="+mask+"; resolve the separating wall on the solver grid");
+	}
+
 	/** Decodes mutable external masks into the same immutable representation used by live candidates. */
 	public static FixedGeometrySnapshot fromMasks(int sizeX,int sizeY,int sizeZ,byte[] masks) {
 		if(masks==null)throw new IllegalArgumentException("Fixed collision masks are missing");

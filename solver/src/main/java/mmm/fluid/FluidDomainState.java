@@ -18,7 +18,7 @@ import java.util.Objects;
 /** Immutable cell inventories and SI face momentum shared with a private backend candidate. */
 public final class FluidDomainState {
 	public enum CarrierKind { PURE, MATERIAL, CHEMICAL }
-	private final int sizeX, sizeY, sizeZ, maximumParticleCount;
+	private final int sizeX, sizeY, sizeZ;
 	private final FluidSolverConfig config;
 	private final boolean sealedDomainBoundary;
 	private final LiquidCellInventory.Snapshot liquid;
@@ -57,7 +57,7 @@ public final class FluidDomainState {
 	private volatile FlipChemicalParticleState debugChemicals;
 	private volatile FlipThermalParticleState debugThermal;
 
-	public FluidDomainState(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config, int maximumParticleCount,
+	public FluidDomainState(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config,
 			boolean sealedDomainBoundary, LiquidCellInventory.Snapshot liquid, PhaseOccupancyState phaseOccupancy, MacMomentumState momentum,
 			FixedGeometrySnapshot fixedGeometry, List<FluidMaterial> palette, ChemicalRegistry chemicalRegistry,
 			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells, int chemicalReactionCursor,
@@ -66,10 +66,10 @@ public final class FluidDomainState {
 			ThermalRegistry thermalRegistry, ThermalOwnerSnapshot thermalOwner, int maximumThermalTransportSubsteps,
 			PendingPhaseVolumeState pendingPhaseVolume, double[] thermalBoundaryTemperaturesK,
 			CondensedPhasePressureField condensedPhasePressure, MaterialRegistry materialDefinitions) {
-		if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || maximumParticleCount <= 0) throw new IllegalArgumentException("Invalid cell domain shape");
+		if (sizeX < 2 || sizeY < 2 || sizeZ < 2) throw new IllegalArgumentException("Invalid cell domain shape");
 		int cells = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.config = Objects.requireNonNull(config);
-		this.maximumParticleCount = maximumParticleCount; this.sealedDomainBoundary = sealedDomainBoundary;
+		this.sealedDomainBoundary = sealedDomainBoundary;
 		this.liquid = Objects.requireNonNull(liquid); this.momentum = Objects.requireNonNull(momentum);
 		this.phaseOccupancy = Objects.requireNonNull(phaseOccupancy);
 		if (phaseOccupancy.cellCount() != cells) throw new IllegalArgumentException("Phase occupancy shape differs from domain");
@@ -110,7 +110,6 @@ public final class FluidDomainState {
 	}
 	public int sizeX() { return sizeX; } public int sizeY() { return sizeY; } public int sizeZ() { return sizeZ; }
 	public FluidSolverConfig config() { return config; }
-	public int maximumParticleCount() { return maximumParticleCount; }
 	public boolean sealedDomainBoundary() { return sealedDomainBoundary; }
 	public LiquidCellInventory.Snapshot liquid() { return liquid; }
 	public PhaseOccupancyState phaseOccupancy() { return phaseOccupancy; }
@@ -161,7 +160,7 @@ public final class FluidDomainState {
 		return cached;
 	}
 	public Layout layout() {
-		return new Layout(config,sizeX,sizeY,sizeZ,maximumParticleCount,sealedDomainBoundary,carrierKind(),palette,
+		return new Layout(config,sizeX,sizeY,sizeZ,sealedDomainBoundary,carrierKind(),palette,
 				chemicalRegistry == null ? "" : chemicalRegistry.fingerprint(), granularRegistry == null ? "" : granularRegistry.fingerprint(),
 				precipitationEnabled,gasRegistry.fingerprint(),thermalRegistry == null ? "" : thermalRegistry.fingerprint(),
 				thermalOwner == null ? 0 : thermalOwner.insertionTemperatureK(),maximumThermalTransportSubsteps,
@@ -173,7 +172,6 @@ public final class FluidDomainState {
 			int sizeX,
 			int sizeY,
 			int sizeZ,
-			int maximumParticleCount,
 			boolean sealedDomainBoundary,
 			CarrierKind carrierKind,
 			List<FluidMaterial> materials,

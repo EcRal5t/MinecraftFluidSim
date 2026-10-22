@@ -164,9 +164,7 @@ final class MinecraftContainerTransferOperations {
 			return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents), "化学桶 registry 或账本不合法：" + invalid.getMessage());
 		}
 		double spatialCellVolume = Math.max(0.0, domain.totalOpenVolumeExact() - domain.totalVolumeExact());
-		double markerCellVolume = Math.max(0, domain.maximumParticleCount() - domain.particleCount()) * 0.125;
-		long candidate = Math.min(contents.totalVolumeNanos(), Math.min(
-				cellVolumeToNanos(domain.unitScale(), spatialCellVolume), cellVolumeToNanos(domain.unitScale(), markerCellVolume)));
+		long candidate = Math.min(contents.totalVolumeNanos(), cellVolumeToNanos(domain.unitScale(), spatialCellVolume));
 		while (candidate > 0L) {
 			ChemicalContents.Split split;
 			try {

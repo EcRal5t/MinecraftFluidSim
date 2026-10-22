@@ -51,7 +51,7 @@
 
 热平流与分层后继使用 `:fabric:runThermalValidation --args="--flow"`；自然对流及后续换热使用 `--convection`；实际载体内能分配使用 `--assignment`。这些选择器共用完整热学入口的场景，已通过且未受改动影响的部分直接复用。
 
-`free-surface:short` 省略长静水、5,000 步溃坝、300 步台阶流动，以及输运中的连续交接轨迹和 1 秒、4 秒多网格旋流。其他短组合仍可能包含成本较高的领域；具体省略项由对应入口输出。
+`free-surface:short` 省略长静水、5,000 步溃坝、300 步台阶流动，以及完整 1 秒、4 秒多网格旋流；短入口保留 0.1 秒旋流。其他短组合仍可能包含成本较高的领域；具体省略项由对应入口输出。
 
 `ProductionFluidReplayValidation --controller-gas` 复用生产重放中的完整连续注液与气体库存场景，用于定位注液后继的容量、压缩功和 EOS；完整验收仍由 `production-replay` 执行全部场景。
 
@@ -129,7 +129,7 @@
     - [LiquidCellInventoryValidation](../../solver/src/test/java/mmm/fluid/LiquidCellInventoryValidation.java)
     - [MacMomentumAdvectionValidation](../../solver/src/test/java/mmm/fluid/MacMomentumAdvectionValidation.java)
     - [CarrierMutationValidation](../../fabric/src/test/java/mmm/fluid/CarrierMutationValidation.java)
-    - [LiquidMacroscopicMotionValidation](../../solver/src/test/java/mmm/fluid/LiquidMacroscopicMotionValidation.java)：组合运行 `joint-moments`，其他正常轨迹通过该类的对应选择器运行。
+    - [LiquidMacroscopicMotionValidation](../../fabric/src/test/java/mmm/fluid/LiquidMacroscopicMotionValidation.java)：完整组合运行 `joint-moments` 与 `sweep-only`，覆盖旋转及多轴、多格长平移。
 
 - **相向液体的连续合流**
   - 选择器：`liquid-joining`，显式完整场景
@@ -220,7 +220,7 @@
 ```
 
 常用输运参数为 `components`、`geometry-remap` 和 `handoff-short`，长轨迹使用 `handoff` 与 `continuity`。
-空间矩入口 [LiquidMacroscopicMotionValidation](../../solver/src/test/java/mmm/fluid/LiquidMacroscopicMotionValidation.java) 按 `transport-moments`、`joint-moments` 或 `common-mesh` 选择场景。`cell-inventory` 组合只运行其中的 `joint-moments`；完整宏观入口使用 `:fabric:runRemapMomentsValidation`，省略参数。
+空间矩入口 [LiquidMacroscopicMotionValidation](../../fabric/src/test/java/mmm/fluid/LiquidMacroscopicMotionValidation.java) 按 `transport-moments`、`joint-moments` 或 `common-mesh` 选择场景。`cell-inventory` 组合只运行其中的 `joint-moments`；完整宏观入口使用 `:fabric:runRemapMomentsValidation`，省略参数。
 省略参数执行完整入口，全部参数及逐项断言以对应测试源码为准。
 
 `common-mesh` 运行三格 L 形连续 8 步并逐步恢复，检查库存、宏观位移和动能。`transport-moments` 追加多方向平移和多密度库存；`joint-moments` 与 `footprint-only` 保留为宏观旋转和材料输运的选择器。具体通过状态见[验证证据](#当前验证证据)。
@@ -314,7 +314,7 @@
 
 [GranularBedWakeValidation](../../fabric/src/test/java/mmm/fluid/GranularBedWakeValidation.java)
 使用正式全能力注册表与逐步捕获恢复，覆盖“沉积休眠 → 弱扰动 → 强扰动起动搬运 → 再次沉积休眠”。
-每步检查液固联合容量、物质与内能收支，并记录起动、接触和床面受力。
+每步检查液固联合容量、物质与内能收支，以及独立的 U+K+PE 与外功变化，并记录起动、接触和床面受力。
 该流程与薄床自由流动、时间细化共同构成正常沙床验收，具体场景参数由测试维护。
 单独运行使用 `./gradlew.bat :fabric:runGranularBedValidation --offline`。
 
@@ -412,7 +412,13 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 ## 当前验证证据
 
-### 第五轮整改：M10 综合验收完成
+### 当前审查整改
+
+本轮集成验收进行中。针对性结果：异温孔流在 dt=0.05 s 时供体平衡温度 872.552306 K，模型解析值 872.552370 K，逐步压力方向与总内能通过；`GasTransferValidation`、`AirNetworkValidation` 通过。共同气体导热场景覆盖热壁升温增压、液气成对换热、有限设备及热调度。
+
+原湿床夹具关闭相变后运行 260 个完整后端步，最大单步独立总能量误差 2.04581×10⁻⁵ J；实际沉积步误差 4.41224×10⁻⁶ J。相变开启的完整场景另外覆盖气液转换的势能交接，结果随最终产物登记。
+
+### 第五轮历史产物的综合验收
 
 同一最终产物通过 `full` 29/29、静止与有限扰动各 5,000 步重放，以及两个独立 JVM 的原生产预算。最大 demo 的两次峰值为 153.537 ms 和 162.791 ms，距 200 ms 分别保留 46.463 ms 和 37.209 ms；两轮均无超 200 ms 步。输入、装量、预热、步数、JVM 堆大小和原预算阈值保持。
 

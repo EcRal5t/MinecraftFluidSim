@@ -18,6 +18,51 @@ final class MechanicalEnergySettlement {
     private final double[] liquidExchange;
     private double[] granularExchange=new double[0],granularPotentialExchange=new double[0];
     private boolean hasLiquidExchange,hasGranularExchange;
+    private double stepLiquidForce,stepGranularForce,stepPotential,stepGas,stepCorrection,stepAbsoluteCorrection;
+    private boolean captureSpatialObservation,spatialObserved;
+    private double representation,resolvedPotential,initialRepresentationBound,finalRepresentationBound;
+    void beginStep(boolean captureSpatialObservation){
+        stepLiquidForce=stepGranularForce=stepPotential=stepGas=stepCorrection=stepAbsoluteCorrection=0;
+        representation=resolvedPotential=initialRepresentationBound=finalRepresentationBound=0;
+        this.captureSpatialObservation=captureSpatialObservation;spatialObserved=false;
+    }
+    FluidDomain.MechanicalCorrection correction(){return new FluidDomain.MechanicalCorrection(
+            stepLiquidForce,stepGranularForce,stepPotential,stepGas,stepCorrection,stepAbsoluteCorrection,
+            spatialObserved,representation,stepCorrection-representation,resolvedPotential,
+            initialRepresentationBound,finalRepresentationBound);}
+
+    private record SpatialPotential(double cell,double plic,double bound) { }
+    /** Read-only geometry diagnostic; physical inventory continues to use its declared cell-centre PE. */
+    private SpatialPotential spatialPotential(LiquidCellInventory inventory,FlipPressurePhaseGeometry phase){
+        double cellEnergy=0,plicEnergy=0,bound=0,h=domain.config.cellSize(),g=domain.config.gravity();
+        for(var stock:inventory.physicalStocks()){
+            int cell=stock.key().cell(),support=stock.key().supportMask();double volume=0,moment=0;
+            for(int micro=0;micro<8;micro++)if((support&1<<micro)!=0){
+                double fraction=phase.liquidFractionExact(cell,micro);if(fraction<=0)continue;
+                double wet=.125*fraction,pore=phase.componentPoreScale(cell,micro,1);
+                double first=fraction>=1?wet*(.5*(micro>>1&1)+.25):MicroBoxPlaneVolume.verticalMoment(
+                        phase.planeNormal(cell,micro,0),phase.planeNormal(cell,micro,1),
+                        phase.planeNormal(cell,micro,2),phase.planeOffset(cell,micro),micro);
+                volume+=wet*pore;moment+=first*pore;
+            }
+            double weight=stock.massKilograms()*g*h,y=cell/domain.sizeX%domain.sizeY;
+            cellEnergy+=weight*(y+.5);
+            plicEnergy+=weight*(y+(volume>0?moment/volume:.5));
+            // In a full open cube the extreme centroid offset is (1-fill)/2.
+            // A cut support retains the full half-cell geometric displacement range.
+            bound+=weight*.5*(support==255?1-Math.clamp(stock.volumeFraction(),0,1):1);
+        }
+        return new SpatialPotential(cellEnergy,plicEnergy,bound);
+    }
+    private void observeSpatialExchange(LiquidCellInventory future,GasTopologyCoordinator.GasTopologyPlan gas){
+        if(!captureSpatialObservation||gas==null||gas.source()==null)return;
+        var before=spatialPotential(domain.liquidCells,gas.source().phase());
+        var after=spatialPotential(future,gas.frame().phase());
+        representation+=(before.cell()-before.plic())-(after.cell()-after.plic());
+        resolvedPotential+=after.plic()-before.plic();
+        if(!spatialObserved)initialRepresentationBound=before.bound();
+        finalRepresentationBound=after.bound();spatialObserved=true;
+    }
 
     MechanicalEnergySettlement(FluidDomain domain){
         this.domain=domain;
@@ -75,19 +120,26 @@ final class MechanicalEnergySettlement {
     }
 
     Plan prepare(LiquidCellInventory.Plan inventory,GasTopologyCoordinator.GasTopologyPlan gas){
-        boolean hasWork=hasLiquidExchange||hasGranularExchange;
+        return prepare(inventory,gas,true);
+    }
+    Plan prepareDisplacement(LiquidCellInventory.Plan inventory,GasTopologyCoordinator.GasTopologyPlan gas){
+        return prepare(inventory,gas,false);
+    }
+    private Plan prepare(LiquidCellInventory.Plan inventory,GasTopologyCoordinator.GasTopologyPlan gas,boolean forces){
+        boolean hasWork=forces&&(hasLiquidExchange||hasGranularExchange);
         if(gas!=null)for(var work:gas.workBySource())hasWork|=work.signum()!=0;
         if(!hasWork)for(var transfer:inventory.transfers())if(transfer.massUnits()>0
                 &&transfer.source().cell()/domain.sizeX%domain.sizeY!=transfer.target().cell()/domain.sizeX%domain.sizeY){
             hasWork=domain.config.gravity()!=0;break;
         }
         if(!hasWork)return new Plan(inventory,Map.of());
+        observeSpatialExchange(inventory.future(),gas);
         GasRuntimeGeometry source=gas==null?domain.gasState.frame:gas.source();
         int gasBase=8*domain.cellCount,particleBase=gasBase+(source==null?0:source.nodeCount())+1;
-        int parcels=domain.granularState==null?0:domain.granularState.parcels.count();
+        int parcels=!forces||domain.granularState==null?0:domain.granularState.parcels.count();
         int[] body=mechanicalBodies(source,inventory,particleBase,parcels);
         double[] numericalWork=new double[body.length];
-        if(hasLiquidExchange){
+        if(forces&&hasLiquidExchange){
             int[] singleBody=new int[domain.cellCount];Arrays.fill(singleBody,-2);
             for(var stock:domain.liquidCells.physicalStocks()){
                 int cell=stock.key().cell(),root=mechanicalRoot(body,supportVertex(stock.key()));
@@ -108,13 +160,20 @@ final class MechanicalEnergySettlement {
             double potential=-Mass.kilograms(transfer.massUnits())*domain.config.gravity()*domain.config.cellSize()*(to-from);
             if(potential!=0)numericalWork[mechanicalRoot(body,supportVertex(transfer.target()))]+=potential;
         }
-        if(hasGranularExchange)for(int p=0;p<parcels;p++)if(granularExchange[p]!=0)
+        if(forces&&hasGranularExchange)for(int p=0;p<parcels;p++)if(granularExchange[p]!=0)
             numericalWork[mechanicalRoot(body,particleBase+p)]+=granularExchange[p];
+        double liquidForce=0,granularForce=0,potentialWork=0,gasWork=0;
+        if(forces){for(double value:liquidExchange)liquidForce+=value;for(int p=0;p<parcels;p++)granularForce+=granularExchange[p];}
+        for(var transfer:inventory.transfers())potentialWork-=Mass.kilograms(transfer.massUnits())*domain.config.gravity()*domain.config.cellSize()
+            *(transfer.target().cell()/domain.sizeX%domain.sizeY-transfer.source().cell()/domain.sizeX%domain.sizeY);
+        if(gas!=null)for(var work:gas.workBySource())gasWork-=work.toDouble();
+        stepLiquidForce+=liquidForce;stepGranularForce+=granularForce;stepPotential+=potentialWork;stepGas+=gasWork;
         var exchanges=new TreeMap<Integer,SignedDyadic>();
         for(int root=0;root<numericalWork.length;root++)if(numericalWork[root]!=0)
             exchanges.put(root,SignedDyadic.of(numericalWork[root]));
         if(gas!=null)for(int node=1;node<gas.workBySource().length;node++)if(gas.workBySource()[node].signum()!=0)
             exchanges.merge(mechanicalRoot(body,gasBase+node),gas.workBySource()[node].negate(),SignedDyadic::add);
+        for(var value:exchanges.values()){stepCorrection+=value.toDouble();stepAbsoluteCorrection+=Math.abs(value.toDouble());}
         var liquids=new TreeMap<Integer,ArrayList<LiquidCellInventory.Stock>>();
         for(var stock:inventory.future().physicalStocks()){
             int root=mechanicalRoot(body,supportVertex(stock.key()));

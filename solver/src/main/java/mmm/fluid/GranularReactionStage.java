@@ -90,7 +90,7 @@ final class GranularReactionStage {
       }
     }
     if (participating.isEmpty()) return new FluidDomain.PhaseTransferStats(0, 0, 0, 0);
-    domain.domainFlowFields.ensureGrid();
+    domain.domainFlowFields.preparePhysicalState();
     int transfers = 0, precipitated = 0, dissolved = 0, evaluations = 0;
     long signedVolume = 0;
     for (int cell : participating) {
@@ -821,7 +821,8 @@ final class GranularReactionStage {
             new CellMomentumTransport(domain)
                 .prepare(transport, new float[][]{velocities(0), velocities(1), velocities(2)});
         preparedMomentum = momentumTransfer;
-        var transportedLiquid = transport.inventory().withMechanicalHeat(momentumTransfer.heatByCell());
+        var transportedLiquid = domain.mechanicalEnergy.prepareDisplacement(
+            transport.inventory().withMechanicalHeat(momentumTransfer.heatByCell()),null).inventory();
         advectionRoundoff = transportedLiquid.energyRoundoff();
         advectionHeat = transportedLiquid.mechanicalHeat();
         transportedGas=transport.gasAllocation();
@@ -852,26 +853,18 @@ final class GranularReactionStage {
         domain.thermalState.requirePhaseBatchEnergyCurrent(energyPlan);
         solidEnergy.requireCurrent();
       }
-      if (gas != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gas);
-      stockPlan.commit();
-      domain.granularState.parcels.adoptPrepared(parcels, parcelRevision);
-      domain.granularState.deposits.adoptPrepared(deposits, depositRevision);
-      domain.granularState.compositions.adoptPrepared(compositions, compositionRevision);
-      domain.cellMacStage.commitMomentum(preparedMomentum);
-      domain.granularCoupling.copyFrom(coupling);
-      domain.lastGranularBoundaryImpulseX += bedImpulse[0];
-      domain.lastGranularBoundaryImpulseY += bedImpulse[1];
-      domain.lastGranularBoundaryImpulseZ += bedImpulse[2];
-      if (energyPlan != null) {
-        solidEnergy.commit();
-        domain.thermalState.commitOwnedBatchEnergy(energyPlan);
-      }
-      domain.markCellInventoryChanged();
-      for (int cell : changed) {
-        domain.chemistry.markDirtyCell(cell);
-        domain.domainStep.granularDepositDynamics().disturbCell(cell);
-      }
-      if (gas != null) domain.gasTopologyCoordinator.commitPrepared(gas,occupied);
+      var preparedEnergy=energyPlan;var preparedSolidEnergy=solidEnergy;
+      domain.cellMacStage.publishMaterialChange(stockPlan,()->domain.cellMacStage.commitMomentum(preparedMomentum),gas,occupied,()->{
+        domain.granularState.parcels.adoptPrepared(parcels, parcelRevision);
+        domain.granularState.deposits.adoptPrepared(deposits, depositRevision);
+        domain.granularState.compositions.adoptPrepared(compositions, compositionRevision);
+        domain.granularCoupling.copyFrom(coupling);
+        domain.lastGranularBoundaryImpulseX += bedImpulse[0];
+        domain.lastGranularBoundaryImpulseY += bedImpulse[1];
+        domain.lastGranularBoundaryImpulseZ += bedImpulse[2];
+        if(preparedEnergy!=null){preparedSolidEnergy.commit();domain.thermalState.commitOwnedBatchEnergy(preparedEnergy);}
+        for(int cell:changed){domain.chemistry.markDirtyCell(cell);domain.domainStep.granularDepositDynamics().disturbCell(cell);}
+      });
       if(domain.thermalState!=null)domain.thermalState.restoreAuditLedger(domain.thermalState.auditLedger()
           .withMechanicalWork(advectionHeat).withRoundoff(advectionRoundoff));
     }

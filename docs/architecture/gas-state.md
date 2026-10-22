@@ -235,7 +235,7 @@ integral(Cv(T)/T dT) = R_total * ln(V_initial/V_final)
 ```
 
 各比热段解析衔接，温区外沿端点热容延拓，内能变化记机械功。
-孔流搬运源侧焓 `h = u + p*v`。
+孔流搬运源侧焓 `h = u + p*v`，有限排气量沿供体等熵温度变化积分，多个出口按同一供体积分分份。隐式孔流用实际候选组分、质量和内能计算终态压力，预览与提交共用同一状态方程。
 拆分气腔按原共同温度分配能量，合并汇总原始内能，存储舍入差单独入账。
 
 压力曲线沿同一分段热容积分求解 `integral(Cp(T)/T dT) = R_total * ln(p_final/p_initial)`，再由状态方程派生正体积与顺应性。
@@ -254,18 +254,18 @@ Q = Cd * A * sqrt(2 * abs(delta_p) / rho_source)
 节点间交换为内部转移，环境流入流出分别记外部源汇。
 
 每步一次读取各节点实际 EOS、温度、热容、库存与容量，建立正导通率的端口图。
-热气体的标准体积储容为 `C = Vstd/(gamma*p_abs)`，等温气体取 `gamma=1`。
-真空节点采用流入气体的实际物性建立初始储容。
-冻结本步物性和孔口导通率后，`GasOrificeFlow` 求整体后向 Euler 储容方程：
+热状态孔流使用冻结导通率与候选库存、内能的实际压力响应：
 
 ```text
-(C + dt*L_g) * p_next = C*p_old + ambient_terms
 q_standard = dt*g*(p_next_source-p_next_target)
+p_next = EOS(actual_inventory(q), actual_U(q), actual_capacity)
 ```
+
+`GasOrificeFlow.solveThermal` 联合求解端口通量，每次压力预览复用实际整数分配和能量候选。供体余量与新流入库存分别保存，有限排气沿供体等熵温度变化积分；所有出边分配同一份排气焓。无热模型的等温路径继续使用线性储容方程。
 
 同一供体的所有出边联合限制可用库存和可携焓，流入库存留待后续步骤参与供给。
 `GasInventory.partitionTransport` 一次分配供体所有份额；无法表示的整数余量留在供体。
-`GasEnergyStore.planFlow` 按本步源侧温度计算每份实际整数库存携带的焓，在出入两侧使用同一通量。
+`GasEnergyStore.planFlow` 使用与压力预览相同的供体排气能量，在出入两侧使用同一通量。
 环境流入、流出分别记物质与热源汇。
 全部节点终态一次反演并核验有效温度和 EOS，库存与热账共同预检后一次提交。
 

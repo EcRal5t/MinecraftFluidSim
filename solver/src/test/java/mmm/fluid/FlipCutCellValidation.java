@@ -36,13 +36,13 @@ public final class FlipCutCellValidation {
 				boolean rejected = false;
 				try {
 					new FluidSolverConfig(values[0], values[1], values[2], values[3],
-							160, values[4], .002F, .8F);
+							160, values[4], .002F);
 				} catch (IllegalArgumentException expected) { rejected = true; }
 				check(rejected, "solver config accepted nonfinite coefficient at field " + field + ": " + invalid);
 			}
 		}
-		new FluidSolverConfig(.5F, 1000, 0, .05F, 160, 5E-5F, .002F, 0);
-		new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 160, 5E-5F, .002F, 1);
+		new FluidSolverConfig(.5F, 1000, 0, .05F, 160, 5E-5F, .002F);
+		new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 160, 5E-5F, .002F);
 	}
 
 	private static void bodyOverlapExcludesOccupiedMicroCells() {
@@ -191,7 +191,7 @@ public final class FlipCutCellValidation {
 
 	private static FluidSolverConfig config() {
 		return new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				160, 5.0E-5F, 2.0E-3F, 0.80F);
+				160, 5.0E-5F, 2.0E-3F);
 	}
 
 	private static int index(int sizeX, int sizeY, int x, int y, int z) {

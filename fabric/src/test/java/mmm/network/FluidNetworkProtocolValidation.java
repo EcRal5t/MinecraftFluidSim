@@ -112,7 +112,7 @@ public final class FluidNetworkProtocolValidation {
 				ControllerSummary.OperatorIntent.RUNNING, ControllerSummary.MotionState.REDUCED,
 				ControllerSummary.ThermalState.SLEEP,
 				new ControllerSummary.Availability(RegionAvailabilityReason.CHUNK_MISSING, "required chunk missing"),
-				new ControllerSummary.Usage(full, full, full, full, full, full,
+				new ControllerSummary.Usage(full, full, full, full, full,
 						ControllerSummary.Capacity.unavailable(1_024L)),
 				new ControllerSummary.Inventory(true, 0.75, 741.0, 123L, 456L, 7.5,
 						789L, 8.5, 321L, 0.42, true, 91_000.0,

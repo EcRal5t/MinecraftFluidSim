@@ -14,7 +14,7 @@ public final class MarkerDistributionExperiment {
 		}
 	}
 	static void damDistribution() {
-		var domain=new FluidDomain(12,8,6,new FluidSolverConfig(.5F,1000,9.81F,.025F,160,1e-5F,.002F,.8F),12*8*6*8);
+		var domain=new FluidDomain(12,8,6,new FluidSolverConfig(.5F,1000,9.81F,.025F,160,1e-5F,.002F));
 		for(int z=0;z<6;z++)for(int x=0;x<12;x++)domain.setSolid(x,0,z,true);
 		for(int z=0;z<6;z++)for(int y=1;y<=6;y++)for(int x=0;x<6;x++)domain.setVolume(x,y,z,1);
 		var volume=domain.liquidCells.exactVolume();long mass=domain.totalMassUnits();
@@ -23,7 +23,7 @@ public final class MarkerDistributionExperiment {
 		for(int step=1;step<=5000;step++){
 			domain=backend.evaluate(new FluidStepRequest(step,domain.captureAuthoritativeState(),List.of(),false,0)).claimPreparedCpuDomain();
 			if(!domain.liquidCells.exactVolume().equals(volume)||domain.totalMassUnits()!=mass)throw new AssertionError("Dam flow changed exact volume or integer mass");
-			domain.domainFlowFields.ensureGrid();
+			domain.domainFlowFields.preparePhysicalState();
 			for(var available:domain.domainFlowFields.availableCellVolumes())if(available.signum()<0)throw new AssertionError("Dam flow exceeded actual cell capacity");
 			if(!Float.isFinite(domain.maximumParticleSpeed())||!domain.gasBoundary().auditClosed())throw new AssertionError("Dam flow lost finite motion or gas conservation");
 			var motion=motion(domain);

@@ -13,6 +13,9 @@ import java.util.Map;
  * the fluid facade.
  */
 public interface ThermalCarrierContext {
+	record GasSupport(int cell, int node, int supportMask, double normalizedVolume) { }
+	default mmm.fluid.air.AirNetwork gasNetwork() { return null; }
+	default List<GasSupport> gasThermalSupports() { return List.of(); }
 	int markerCount();
 	/** Internal energy belongs to the authoritative cell/material/support inventory row. */
 	double liquidInternalEnergy(int ordinal);

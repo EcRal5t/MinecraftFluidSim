@@ -26,7 +26,7 @@
   - 代码入口：
     - [ThermochemistryPipeline](../../solver/src/main/java/mmm/fluid/ThermochemistryPipeline.java)
     - [ThermalCarrierTransport](../../model/src/main/java/mmm/thermal/ThermalCarrierTransport.java)
-    - [LiquidThermalConduction](../../solver/src/main/java/mmm/fluid/LiquidThermalConduction.java)
+    - [CarrierThermalConduction](../../solver/src/main/java/mmm/fluid/CarrierThermalConduction.java)
     - [ThermalTransport](../../model/src/main/java/mmm/thermal/ThermalTransport.java)
   - 测试选择器：`thermal`
 
@@ -194,7 +194,7 @@ q = G * dt * (T_second(U_second - q) - T_first(U_first + q))
 
 ### 共同凝聚相有限体积导热
 
-`LiquidThermalConduction` 按实际库存体积和固定开放连通分量，为液体与固相建立同一组正对称热接触。
+`CarrierThermalConduction` 按实际库存体积和固定开放连通分量，为液体与固相建立同一组正对称热接触。
 相邻单元按共享开放微面和各载体占据份额分配热导；全开满液单元得到标准有限体积面热导。
 同格载体使用单元尺度的混合长度，切格隔墙隔离接触；恒温面按对应固壁面积与半格热阻换热。
 绝热外壳保持零外部热流，材料导热率采用调和平均。
@@ -219,7 +219,7 @@ q = G * dt * (T_second(U_second - q) - T_first(U_first + q))
 
 ### 有限体积离散
 
-生产接触图统一由 `LiquidThermalConduction` 建立，`ThermalCarrierTransport` 推进实际载体内能。
+生产接触图统一由 `CarrierThermalConduction` 建立，`ThermalCarrierTransport` 推进实际载体内能。
 一次导热批次采集材料、质量、参考能、内能与初温，接触图和数值求解共享该批次。全部终态和源汇、舍入账准备完毕后共同发布内能；异常发生在实际载体写入之前。
 热导使用材料调和平均、固定开放面积及实际库存占据份额；同格与固壁采用半格混合长度，相邻格采用一格长度：
 
@@ -231,7 +231,7 @@ Delta U_p = G*(T_q-T_p)*dt; Delta U_q = -Delta U_p
 
 接触求解期间保持位置、质量、材料和组成不变，直接推进对应载体内能。
 零导热载体随物质搬运内能；同格温差按有限速率消散。
-气体孔流及气腔壁热交换由气体处理器执行。
+气体孔流由气体处理器执行。气腔壁面、液面及有限设备热交换进入共同热载体接触图；`ThermalGasCarriers` 按格内实际干容分配集总气腔的接触样本，成对结算热量后归并气腔内能。该空间采样采用一阶近似。
 
 内置物性的数值与采样分段以数据定义为准。
 空气和蒸气的热容依据 [NIST 数据](https://webbook.nist.gov/chemistry/)标定，生成工具见[Python 工具](../maintenance/pytool.md)。
@@ -309,7 +309,7 @@ Ra = g*beta*DeltaT*H³/(nu*alpha)
 凝聚相转换先按质量、体积和真实孔容限定批量，再以全单元内能与正温下限能量限定可行区间。
 热容延拓使目标物相的低温能量高于来源时，转换消耗该单元相对于低温下限的实际能量余量。
 剩余温差反映批次量化、库存或容量限制，避免连续步骤在相邻批次间反复冻融。
-搜索细节由 `ThermalPhaseExtentCurve` 与相变阶段代码维护。
+平衡能差与整数批次由实际生产入口 `CondensedPhaseChangeStage` 维护。
 
 内置冰/水使用固定体积批及单一固相载体。
 熔化曲线采样自 [IAPWS 熔化曲线](https://iapws.org/public/documents/MdUFK/MeltSub2011.pdf)，
@@ -334,8 +334,7 @@ p_partial = p_absolute * Vstd,vapor / Vstd,total
 单格邻接多个独立气腔时保留各腔，气液相变按本步气腔归属准备单元／开放分量候选。
 凝结取用液体所在固定支撑的气腔蒸汽，并消耗同一气腔在该支撑的实际干容；蒸发也可经真实界面向相邻气腔交接。
 
-`GasLiquidPhaseChangeStage` 每个单元本步至多准备一个候选，同腔同挥发组分共同闭合蒸气分压，并统一分配整数批次。
-候选先按库存和饱和压力排除连一个整数批次都无法发生的交换。
+`GasLiquidPhaseChangeStage` 保留同格全部接触候选至气腔响应与整数批次确定，再选择同格可执行候选；重新闭合后成为零批次的候选退出竞争，让其他可执行界面继续推进。各独立气腔提前预留可表示库存，表示错误带节点、接触和批量信息交给失败重放。
 本步使用当前温度、热容、潜热和饱和曲线斜率构造有限热容量响应，气腔采用当前 EOS 的压力导数，固定次数的浮点迭代给出共同分压与相变提议。
 蒸气分压的响应同时包含组分库存、气温和真实容量。令 `m` 以汽化为正，标准体积为 `Vstd,v`：
 
@@ -348,6 +347,7 @@ dp_v/dm = (P0/T0)/V_g * [T_g * dVstd,v/dm + Vstd,v * dT_g/dm]
 `dV_g/dm` 由同一批次移出的液体体积求得；凝结时库存和气体容量同时减少。
 同腔各接触共同分配实际剩余容量，整数批次同时受物质库存与该容量约束。
 整数分配后按实际物质与潜热结算两相内能，终态温度由完整状态函数派生。
+相变动量计划保留各格真实移出质量及其动能，零速加入与移出分别计算。移出动能按来源格交给同地固相或新生蒸气；邻格相反质量变化仍分别交接。气液转换同时结算液体格心势能变化，气腔采用集总内能模型。
 该时间一阶近似允许步内热容及饱和压力的有限偏差，后续步沿更新后的真实状态继续推进。
 候选读取同代液体库存和气腔热状态；SVQ 容量变化直接乘 2⁻²⁷ m³。
 全部液体记录、内能、气体库存与审计预检后一次发布，最终几何与拓扑准备一次完整后继。

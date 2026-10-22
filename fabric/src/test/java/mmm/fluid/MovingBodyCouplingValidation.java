@@ -8,7 +8,7 @@ import mmm.world.MovingBodyFluidCoupling;
 public final class MovingBodyCouplingValidation {
 	public static void main(String[] args) throws Exception {
 		var registries=FullCapabilityTestFixture.load();
-		var d=new FluidDomain(5,4,4,new FluidSolverConfig(.5F,1000,0,.025F,120,1e-5F,.002F,0),256);
+		var d=new FluidDomain(5,4,4,new FluidSolverConfig(.5F,1000,0,.025F,120,1e-5F,.002F));
 		FullCapabilityTestFixture.bindEmptyMaterialState(d,registries.liquids());
 		d.sealDomainBoundary();
 		for(int z=0;z<4;z++)for(int y=0;y<4;y++)for(int x=0;x<5;x++) {

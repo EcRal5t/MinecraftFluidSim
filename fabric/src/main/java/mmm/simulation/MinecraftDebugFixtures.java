@@ -38,7 +38,6 @@ public final class MinecraftDebugFixtures {
 	static final int BLOCK_SIZE_Z = 12;
 	private static final long COMPATIBILITY_REGION_CELLS = (long) BLOCK_SIZE_X * BLOCK_SIZE_Y * BLOCK_SIZE_Z
 			* FluidRegionFactory.CELL_VOLUMES_PER_BLOCK;
-	private static final long COMPATIBILITY_REGION_MARKERS = COMPATIBILITY_REGION_CELLS * 8L;
 
 	/** Region-runtime operations the scenarios need; owned here so the surface stays narrow. */
 	interface Runtime {
@@ -362,21 +361,18 @@ public final class MinecraftDebugFixtures {
 			throw new IllegalStateException("Refusing to replace a persistent controller region; remove it explicitly first");
 		}
 		RegionCatalog.AdmissionResult preview = regions.previewReplacement(
-				COMPATIBILITY_REGION_CELLS, COMPATIBILITY_REGION_MARKERS);
+				COMPATIBILITY_REGION_CELLS);
 		if (!preview.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + preview.failure());
 		FluidSolverConfig config = new FluidSolverConfig(
 				0.5F, 1_000.0F, 9.81F, 1.0F / 40.0F,
-				300, 1.0E-5F, 2.0E-3F, 0.80F
-		);
+				300, 1.0E-5F, 2.0E-3F);
 		FluidDomain domain = new FluidDomain(
 				BLOCK_SIZE_X * FluidRegionFactory.CELLS_PER_BLOCK,
 				BLOCK_SIZE_Y * FluidRegionFactory.CELLS_PER_BLOCK,
 				BLOCK_SIZE_Z * FluidRegionFactory.CELLS_PER_BLOCK,
-				config, Math.toIntExact(COMPATIBILITY_REGION_MARKERS)
-		);
+				config);
 		FluidRegion candidate = new FluidRegion(
-				UUID.randomUUID(), level.dimension(), origin, domain, COMPATIBILITY_REGION_MARKERS
-		);
+				UUID.randomUUID(), level.dimension(), origin, domain);
 		candidate.setEntityPhysicsEnabled(defaultEntityPhysics.getAsBoolean());
 		candidate.setDebugOverlays(defaultDebugOverlays.getAsBoolean());
 		RegionCatalog.AdmissionResult admission = regions.replaceSelected(candidate);
@@ -471,12 +467,10 @@ public final class MinecraftDebugFixtures {
 			throw new IllegalStateException("Refusing to replace a persistent controller region; remove it explicitly first");
 		}
 		RegionCatalog.AdmissionResult preview = regions.previewReplacement(
-				COMPATIBILITY_REGION_CELLS, COMPATIBILITY_REGION_MARKERS);
+				COMPATIBILITY_REGION_CELLS);
 		if (!preview.accepted()) throw new IllegalStateException("Compatibility fluid region rejected: " + preview.failure());
 		FluidRegion candidate = FluidRegionFactory.createCommandRegion(
-				level, origin, BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z,
-				COMPATIBILITY_REGION_MARKERS
-		);
+				level, origin, BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z);
 		candidate.setEntityPhysicsEnabled(defaultEntityPhysics.getAsBoolean());
 		candidate.setDebugOverlays(defaultDebugOverlays.getAsBoolean());
 		RegionCatalog.AdmissionResult admission = regions.replaceSelected(candidate);

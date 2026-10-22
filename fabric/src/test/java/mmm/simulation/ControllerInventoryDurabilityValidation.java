@@ -77,12 +77,12 @@ final class ControllerInventoryDurabilityValidation {
 		Path root = Files.createTempDirectory("mmm-controller-inventory-durability");
 		try {
 		FullCapabilityTestFixture.Registries registries = FullCapabilityTestFixture.load();
-			FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig(), 4_096);
+			FluidDomain domain = new FluidDomain(8, 8, 8, productionConfig());
 			domain.sealDomainBoundary();
 			FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
 			FullCapabilityTestFixture.bindFull(domain, registries, 293.15,
 					mmm.thermal.ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-			FluidRegion region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO, domain, 4_096L,
+			FluidRegion region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO, domain,
 					footprint());
 			RegionRepositoryAdapter persistence = new RegionRepositoryAdapter(root, TestProfiles.full(),
 					registries.chemical(), registries.granular(), registries.thermal(), registries.gas(), TestProfiles.materialRegistry());
@@ -465,7 +465,7 @@ final class ControllerInventoryDurabilityValidation {
 			this.injectY = scene.injectY();
 			this.injectZ = scene.injectZ();
 			this.domain = new FluidDomain(scene.sizeX(), scene.sizeY(), scene.sizeZ(),
-					productionConfig(), scene.capacity());
+					productionConfig());
 			scene.geometry().accept(domain);
 			if (scene.sealed()) domain.sealDomainBoundary();
 			FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
@@ -489,8 +489,7 @@ final class ControllerInventoryDurabilityValidation {
 				diskRoot = Files.createTempDirectory("mmm-fuzz-disk");
 				persistence = new RegionRepositoryAdapter(diskRoot, TestProfiles.full(), registries.chemical(),
 						registries.granular(), registries.thermal(), registries.gas(), TestProfiles.materialRegistry());
-				region = new FluidRegion(java.util.UUID.randomUUID(), DIMENSION, scene.origin(), domain,
-						scene.capacity(), footprint(scene.sizeX(), scene.sizeY(), scene.sizeZ(), scene.origin()));
+				region = new FluidRegion(java.util.UUID.randomUUID(), DIMENSION, scene.origin(), domain, footprint(scene.sizeX(), scene.sizeY(), scene.sizeZ(), scene.origin()));
 				persistence.checkpoint(region);
 				wireApplicationChannel();
 			}
@@ -587,7 +586,7 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			FluidRegionManager manager = new FluidRegionManager(
 					new mmm.application.RegionCatalog.Limits(
-							8, 1_000_000L, 1_000_000L, 10_000_000L, 10_000_000L));
+							8, 1_000_000L, 10_000_000L));
 			List<String> issues = persistence.loadMetadata(manager);
 			FluidRegion fresh = manager.region(id);
 			if (fresh == null) {
@@ -1087,7 +1086,7 @@ final class ControllerInventoryDurabilityValidation {
 		private void wireApplicationChannel() {
 			if (region == null) return;
 			regionManager = new FluidRegionManager(new mmm.application.RegionCatalog.Limits(
-					8, 1_000_000L, 1_000_000L, 10_000_000L, 10_000_000L));
+					8, 1_000_000L, 10_000_000L));
 			regionManager.addAndSelect(region);
 			region.enableThermalActivity();
 			application = new mmm.application.RegionApplicationService(
@@ -2218,7 +2217,7 @@ final class ControllerInventoryDurabilityValidation {
 
 	private static FluidSolverConfig productionConfig() {
 		return new FluidSolverConfig(0.5F, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				240, 1.0E-4F, 2.0E-3F, 0.80F);
+				240, 1.0E-4F, 2.0E-3F);
 	}
 
 	private static void check(boolean condition, String message) {

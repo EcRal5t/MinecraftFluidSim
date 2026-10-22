@@ -98,7 +98,7 @@ public final class FieldProbeItem extends Item {
 				footprint.interiorBlocks(), footprint.requiredChunks()));
 		ControllerSummary.Usage usage = summary.usage();
 		text.append("\n").append(Component.translatable("message.mmm.probe.controller_usage",
-				capacity(usage.cells()), capacity(usage.markers()),
+				capacity(usage.cells()),
 				capacity(usage.activeParcels()), capacity(usage.depositGroups()),
 				capacity(usage.coherentGroups()), capacity(usage.gasNodes()), capacity(usage.finiteDevices())));
 		ControllerSummary.Inventory inventory = summary.inventory();

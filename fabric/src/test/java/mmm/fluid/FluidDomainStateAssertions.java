@@ -34,8 +34,6 @@ public final class FluidDomainStateAssertions {
 	                                 boolean includeTransient) {
 		require(expected != null && actual != null, context + ": state must not be null");
 		require(expected.config().equals(actual.config()), context + ": solver config changed");
-		require(expected.maximumParticleCount() == actual.maximumParticleCount(),
-				context + ": marker budget changed");
 		require(expected.sealedDomainBoundary() == actual.sealedDomainBoundary(),
 				context + ": sealed boundary flag changed");
 		require(expected.carrierKind() == actual.carrierKind(), context + ": carrier kind changed");

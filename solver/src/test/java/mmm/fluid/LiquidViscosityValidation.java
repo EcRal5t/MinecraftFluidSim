@@ -143,7 +143,7 @@ final class LiquidViscosityValidation {
 	private static void sealedGasKeepsFreeSurfaceTraction() {
 		float[] reference = null;
 		for (boolean sealed : new boolean[]{false, true}) {
-			var config = new FluidSolverConfig(.5F, 1000, 0, .01F, 200, 1e-5F, .002F, .8F,
+			var config = new FluidSolverConfig(.5F, 1000, 0, .01F, 200, 1e-5F, .002F,
 					FluidSolverConfig.WallCondition.NO_SLIP);
 			var domain = new FluidDomain(4, 4, 4, config);
 			domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
@@ -151,7 +151,7 @@ final class LiquidViscosityValidation {
 			if (sealed) domain.sealDomainBoundary();
 			float[] filled = new float[domain.cellCount];
 			for (int z = 1; z < 3; z++) for (int y = 1; y < 3; y++) for (int x = 1; x < 3; x++) filled[domain.domainFlowFields.cellIndex(x,y,z)] = 1;
-			domain.setVolumes(filled);domain.domainFlowFields.ensureGrid();
+			domain.setVolumes(filled);domain.domainFlowFields.preparePhysicalState();
 			for (int face=0;face<domain.mac.velocityX.length;face++)
 				if(domain.cellMacStage.massX[face]>0)domain.mac.velocityX[face]=1;
 			domain.bodyForceStage.enforceSolidFaceVelocities();domain.cellMacStage.publishMomentum();
@@ -166,7 +166,7 @@ final class LiquidViscosityValidation {
 	}
 
 	private static void materialBindingSurvivesHandoff() {
-		var config = new FluidSolverConfig(.5F, 1000, 0, .01F, 200, 1e-5F, .002F, .8F);
+		var config = new FluidSolverConfig(.5F, 1000, 0, .01F, 200, 1e-5F, .002F);
 		FluidDomain domain = new FluidDomain(4, 4, 4, config);
 		domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 		domain.bindMaterialDefinitions(BuiltinFluidMaterials.createRegistry());
@@ -190,10 +190,10 @@ final class LiquidViscosityValidation {
             var definitions = new MaterialRegistry(base.entries().stream().map(entry ->
                     new MaterialRegistry.MaterialEntry(entry.material(), java.util.List.of(
                             new MaterialRegistry.ViscositySegment(200, 400, mu, mu)))).toList(), base.pairTensions());
-            var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .1F, 200, 1e-5F, .002F, .8F));
+            var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .1F, 200, 1e-5F, .002F));
             domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
             domain.bindMaterialDefinitions(definitions);
-            float[] filled=new float[domain.cellCount];Arrays.fill(filled,1);domain.setVolumes(filled);domain.domainFlowFields.ensureGrid();
+            float[] filled=new float[domain.cellCount];Arrays.fill(filled,1);domain.setVolumes(filled);domain.domainFlowFields.preparePhysicalState();
             for(int z=0;z<2;z++)for(int y=0;y<=2;y++)for(int x=0;x<2;x++)
                 domain.mac.velocityY[domain.domainFlowFields.yFaceIndex(x,y,z)]=.01F*((x+.5F)*domain.config.cellSize()-.5F);
             domain.bodyForceStage.enforceSolidFaceVelocities();domain.cellMacStage.publishMomentum();

@@ -108,7 +108,7 @@ public final class ControllerConsoleScreen extends Screen {
 				footprint.blockSizeY(), footprint.blockSizeZ(), footprint.interiorBlocks(), footprint.requiredChunks()));
 		ControllerSummary.Usage usage = value.usage();
 		result.add(Component.translatable("screen.mmm.controller.usage_primary",
-				capacity(usage.cells()), capacity(usage.markers()),
+				capacity(usage.cells()),
 				capacity(usage.activeParcels())));
 		result.add(Component.translatable("screen.mmm.controller.usage_secondary",
 				capacity(usage.depositGroups()), capacity(usage.coherentGroups()),

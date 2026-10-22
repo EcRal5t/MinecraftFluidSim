@@ -47,8 +47,8 @@ public final class M5GasLiquidCouplingValidation {
 	private static void validateSealedGasAndCapillaryJumpShareFaces() {
 		for(float amount:new float[]{.25F,.7F,1}){
 		FluidSolverConfig config = new FluidSolverConfig(
-				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 2.0E-3F, 0.80F);
-		FluidDomain domain = new FluidDomain(4, 4, 4, config, 64);
+				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 2.0E-3F);
+		FluidDomain domain = new FluidDomain(4, 4, 4, config);
 		domain.setVolume(1, 1, 1, amount);
 		FluidMaterialRegistry registry = new FluidMaterialRegistry(java.util.List.of(
 				new FluidMaterial("mmm:gas_contact_test", DENSITY, "mmm:gas_contact_test",
@@ -81,8 +81,8 @@ public final class M5GasLiquidCouplingValidation {
 	private static void validateEmptyControllerBoundaryPourRetainsLineage() {
 		int n = 8;
 		FluidSolverConfig config = new FluidSolverConfig(
-				0.5F, DENSITY, GRAVITY, 1.0F / 20.0F, 120, 1.0E-4F, 2.0E-3F, 0.80F);
-		FluidDomain domain = new FluidDomain(n, n, n, config, 4_096);
+				0.5F, DENSITY, GRAVITY, 1.0F / 20.0F, 120, 1.0E-4F, 2.0E-3F);
+		FluidDomain domain = new FluidDomain(n, n, n, config);
 		domain.sealDomainBoundary();
 		domain.bootstrapGasState(null);
 		domain.setGasNodeStandardVolume(domain.airNodeAt(1,n-1,1), 34.0);
@@ -109,8 +109,8 @@ public final class M5GasLiquidCouplingValidation {
 
 	private static void validateFiniteClosedGasWithoutCapacityBlocksTyped() {
 		FluidSolverConfig config = new FluidSolverConfig(
-				0.5F, DENSITY, GRAVITY, 1.0F / 20.0F, 120, 1.0E-4F, 2.0E-3F, 0.80F);
-		FluidDomain domain = new FluidDomain(2, 2, 2, config, 128);
+				0.5F, DENSITY, GRAVITY, 1.0F / 20.0F, 120, 1.0E-4F, 2.0E-3F);
+		FluidDomain domain = new FluidDomain(2, 2, 2, config);
 		domain.sealDomainBoundary();
 		domain.bootstrapGasState(null);
 		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) {
@@ -159,8 +159,8 @@ public final class M5GasLiquidCouplingValidation {
 	private static void validateClosedCavityAfterBootstrapStartsAsVacuum() {
 		int n = 4;
 		FluidSolverConfig config = new FluidSolverConfig(
-				0.5F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 2.0E-3F, 0.80F);
-		FluidDomain domain = new FluidDomain(n, n, n, config, n * n * n * 8);
+				0.5F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 2.0E-3F);
+		FluidDomain domain = new FluidDomain(n, n, n, config);
 		domain.sealDomainBoundary();
 		for (int z = 0; z < n; z++) for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
 			domain.setVolume(x, y, z, 1.0F);
@@ -214,7 +214,7 @@ public final class M5GasLiquidCouplingValidation {
 		}
 	}
 	private static FluidDomainState coldVacuumState(FluidDomainState s) {
-		return new FluidDomainState(s.sizeX(),s.sizeY(),s.sizeZ(),s.config(),s.maximumParticleCount(),s.sealedDomainBoundary(),
+		return new FluidDomainState(s.sizeX(),s.sizeY(),s.sizeZ(),s.config(),s.sealedDomainBoundary(),
 				new mmm.inventory.LiquidCellInventory.Snapshot(s.liquid().rows()),new mmm.inventory.PhaseOccupancyState(s.phaseOccupancy().copyLiquidMicroVolumes()),
 				s.momentum(),s.fixedGeometry(),s.materialPalette(),s.chemicalRegistry(),s.chemicalSource(),s.chemicalSink(),
 				s.copyChemicalDirtyCells(),s.chemicalReactionCursor(),s.granularRegistry(),s.granular(),s.granularDynamics(),s.precipitationEnabled(),
@@ -268,8 +268,8 @@ public final class M5GasLiquidCouplingValidation {
 	private static void validateSplitRetainsSealedShareWhenPeerVents() {
 		int n = 8;
 		FluidSolverConfig config = new FluidSolverConfig(
-				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 2.0E-3F, 0.80F);
-		FluidDomain domain = new FluidDomain(n, n, n, config, n * n * n * 8);
+				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 2.0E-3F);
+		FluidDomain domain = new FluidDomain(n, n, n, config);
 		for (int z = 0; z < n; z++) for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
 			boolean shell = x == 0 || x == n - 1 || y == 0 || y == n - 1 || z == 0 || z == n - 1;
 			if (shell) domain.setSolid(x, y, z, true);
@@ -452,8 +452,8 @@ public final class M5GasLiquidCouplingValidation {
 	private static FluidDomain utubeDomain(boolean sealLeft) {
 		int sizeX = 12, sizeY = 24, sizeZ = 4;
 		FluidSolverConfig config = new FluidSolverConfig(
-				1.0F, DENSITY, GRAVITY, 1.0F / 20.0F, 400, 1.0E-6F, 2.0E-3F, 0.80F);
-		FluidDomain domain = new FluidDomain(sizeX, sizeY, sizeZ, config, sizeX * sizeY * sizeZ * 8);
+				1.0F, DENSITY, GRAVITY, 1.0F / 20.0F, 400, 1.0E-6F, 2.0E-3F);
+		FluidDomain domain = new FluidDomain(sizeX, sizeY, sizeZ, config);
 		for (int z = 0; z < sizeZ; z++) for (int y = 0; y < sizeY; y++) for (int x = 0; x < sizeX; x++) {
 			boolean shell = x == 0 || x == sizeX - 1 || z == 0 || z == sizeZ - 1 || y == 0;
 			boolean divider = x == 6 && y >= 5;
@@ -473,8 +473,8 @@ public final class M5GasLiquidCouplingValidation {
 	private static FluidDomain chamberPairDomain() {
 		int n = 8;
 		FluidSolverConfig config = new FluidSolverConfig(
-				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 2.0E-3F, 0.80F);
-		FluidDomain domain = new FluidDomain(n, n, n, config, n * n * n * 8);
+				1.0F, DENSITY, 0.0F, 1.0F / 20.0F, 100, 1.0E-6F, 2.0E-3F);
+		FluidDomain domain = new FluidDomain(n, n, n, config);
 		for (int z = 0; z < n; z++) for (int y = 0; y < n; y++) for (int x = 0; x < n; x++) {
 			boolean shell = x == 0 || x == n - 1 || z == 0 || z == n - 1 || y == 0 || y == n - 1;
 			boolean divider = x == 4 && y >= 1 && y < n - 1 && z >= 1 && z < n - 1;

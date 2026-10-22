@@ -13,8 +13,8 @@ public final class PressureCapacityValidation {
 		System.out.println("Capacity/gas pressure adjoint, positive operator and shallow equilibrium PASS");
 	}
 	private static void fixedPorePressurePort() {
-		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(1, 1000, 0, .05F, 120, 1e-5F, .002F, 0));
-		domain.setVolume(1, 0, 0, .5F); domain.domainFlowFields.ensureGrid();
+		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(1, 1000, 0, .05F, 120, 1e-5F, .002F));
+		domain.setVolume(1, 0, 0, .5F); domain.domainFlowFields.preparePhysicalState();
 		var graph = domain.pressureSystem.faces; domain.pressureSystem.prepareOperator();
 		int face=graph.offsets[0]+domain.domainFlowFields.xFaceIndex(1,0,0);
 		double port=graph.fluidArea(face);
@@ -27,9 +27,9 @@ public final class PressureCapacityValidation {
 
 	private static void vacuumCapacityClosure() {
 		float dt=.05F;
-		var d=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,dt,120,1e-5F,.002F,0));
+		var d=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,dt,120,1e-5F,.002F));
 		double cellCubicMeters=d.unitScale.cubicMetersPerNormalizedVolume();
-		d.sealDomainBoundary();d.setVolumes(new float[]{.5F,1,1,1,1,1,1,.5F});d.domainFlowFields.ensureGrid();
+		d.sealDomainBoundary();d.setVolumes(new float[]{.5F,1,1,1,1,1,1,.5F});d.domainFlowFields.preparePhysicalState();
 		if(d.gasBoundary().nodeCount()!=2)throw new AssertionError("Capacity fixture requires two separated vacuum chambers");
 		for(int node=1;node<=2;node++)d.setGasNodeStandardVolume(node,0);
 		var liquids=new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER));
@@ -39,7 +39,7 @@ public final class PressureCapacityValidation {
 						BuiltinFluidMaterials.WATER.id(),300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,4184))),
 				new mmm.thermal.ThermalMaterialDefinition("test:capacity_air",mmm.thermal.ThermalMaterialDefinition.CarrierKind.GAS,
 						mmm.fluid.air.BuiltinGasDefinitions.AIR,300,0,0,java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(1,2000,718)))));
-		d.bindThermal(thermal,liquids,300);d.domainFlowFields.ensureGrid();
+		d.bindThermal(thermal,liquids,300);d.domainFlowFields.preparePhysicalState();
 		d.mac.velocityX[d.domainFlowFields.xFaceIndex(1,0,0)]=-100;d.cellMacStage.publishMomentum();
 		var graph=d.pressureSystem.faces;d.pressureSystem.prepareOperator();
 		var predicted=new double[d.cellCount+3];d.pressureSystem.addDivergence(faceVelocities(d,graph),predicted,1);
@@ -100,11 +100,11 @@ public final class PressureCapacityValidation {
 	/** A subcell dry seam transmits weight while a half-cell cavity still permits free fall. */
 	private static void unresolvedGapKeepsVacuumPressureContact() {
 		for(float fill:new float[]{1-1F/128,.5F}) {
-			var d=new FluidDomain(2,4,2,new FluidSolverConfig(1,1000,9.81F,.05F,120,1e-5F,.002F,0));
+			var d=new FluidDomain(2,4,2,new FluidSolverConfig(1,1000,9.81F,.05F,120,1e-5F,.002F));
 			float[] volumes=new float[d.cellCount];
 			for(int z=0;z<2;z++)for(int x=0;x<2;x++)for(int y=0;y<3;y++)
 				volumes[d.domainFlowFields.cellIndex(x,y,z)]=y==1?fill:1;
-			d.sealDomainBoundary();d.setVolumes(volumes);d.domainFlowFields.ensureGrid();
+			d.sealDomainBoundary();d.setVolumes(volumes);d.domainFlowFields.preparePhysicalState();
 			for(int node:d.gasState.network.nodeIds())d.setGasNodeStandardVolume(node,0);
 			var graph=d.pressureSystem.faces;d.pressureSystem.prepareOperator();
 			int middle=d.domainFlowFields.cellIndex(0,1,0),node=d.gasState.frame.commonCellNode(middle);
@@ -122,17 +122,17 @@ public final class PressureCapacityValidation {
 		}
 	}
 
-	/** One fixed cell contains a supported upper pocket and an airborne lower pocket. */
+	/** Separate fixed compartments contain a supported upper pocket and an airborne lower pocket. */
 	private static void disconnectedSupportsKeepTheirOwnVerticalLoad(){
-		var d=new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,9.81F,.05F,120,1e-5F,.002F,0));
+		var d=new FluidDomain(5,3,3,new FluidSolverConfig(1,1000,9.81F,.05F,120,1e-5F,.002F));
 		byte[] masks=new byte[d.cellCount];java.util.Arrays.fill(masks,(byte)255);
-		int cell=d.domainFlowFields.cellIndex(1,1,1),below=cell-d.sizeX,above=cell+d.sizeX;
-		masks[cell]=(byte)(255^(1<<2|1<<5));
-		masks[below]=(byte)(255^(1<<7));masks[above]=(byte)(255^(1<<0));
+		int supported=d.domainFlowFields.cellIndex(1,1,1),airborne=d.domainFlowFields.cellIndex(3,1,1);
+		masks[supported]=(byte)(255^(1<<2));masks[airborne]=(byte)(255^(1<<5));
+		masks[airborne-d.sizeX]=(byte)(255^(1<<7));masks[supported+d.sizeX]=(byte)(255^(1<<0));
 		d.geometry.cutCells.restoreMicroMasks(masks);
-		d.sealDomainBoundary();d.setVolume(1,1,1,.25F);d.domainFlowFields.ensureGrid();
+		d.sealDomainBoundary();d.setVolume(1,1,1,.125F);d.setVolume(3,1,1,.125F);d.domainFlowFields.preparePhysicalState();
 		var stock=d.liquidCells.snapshot();var graph=d.pressureSystem.faces;d.pressureSystem.prepareOperator();
-		int lower=d.domainFlowFields.yFaceIndex(1,1,1),upper=d.domainFlowFields.yFaceIndex(1,2,1);
+		int lower=d.domainFlowFields.yFaceIndex(3,1,1),upper=d.domainFlowFields.yFaceIndex(1,2,1);
 		close(graph.freeFallAcceleration(graph.offsets[1]+upper),0,"Airborne stock accelerated a disconnected supported pocket");
 		close(graph.freeFallAcceleration(graph.offsets[1]+lower),-d.config.gravity(),"Supported stock held up a disconnected airborne pocket");
 		d.bodyForceStage.applyGravity(d.config.timeStep());
@@ -150,7 +150,7 @@ public final class PressureCapacityValidation {
 	}
 
 	private static FluidDomain fixture(boolean full) {
-		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .05F, 120, 1e-5F, .002F, .8F));
+		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .05F, 120, 1e-5F, .002F));
 		float amount = full ? 1 : .5F; float[] points = new float[32];
 		for (int cell = 0; cell < 8; cell++) {
 			points[4 * cell] = (cell % 2 + .5F) * .5F; points[4 * cell + 1] = (cell / 2 % 2 + .5F) * .5F;
@@ -158,7 +158,7 @@ public final class PressureCapacityValidation {
 		}
 		domain.restoreParticleState(new FlipParticleState(2, 2, 2, .5F, 8, full ? 8 : 6, points, new float[24],
 				mmm.units.Mass.createLiquid(.5F, 1000, points), new byte[8]));
-		domain.sealDomainBoundary(); domain.domainFlowFields.ensureGrid(); return domain;
+		domain.sealDomainBoundary(); domain.domainFlowFields.preparePhysicalState(); return domain;
 	}
 	private static void checkGraph(FluidDomain domain) {
 		var graph = domain.pressureSystem.faces; domain.pressureSystem.prepareOperator();
@@ -182,7 +182,7 @@ public final class PressureCapacityValidation {
 		pressure.pressureVelocity(source, response); pressure.addDivergence(response, result, 1); return result;
 	}
 	private static void shallowHydrostatics(boolean column) {
-		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 9.81F, .025F, 120, 1e-5F, .002F, .8F));
+		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 9.81F, .025F, 120, 1e-5F, .002F));
 		for (int z = 0; z < 2; z++) for (int x = 0; x < 2; x++) {
 			domain.setVolume(x, 0, z, column ? 1 : .2F); if (column) domain.setVolume(x, 1, z, .2F);
 		}
@@ -196,7 +196,7 @@ public final class PressureCapacityValidation {
 	}
 	static void cutHydrostatics(){
 		float h=.5F,dt=.025F,amount=.2F;
-		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(h,1000,9.81F,dt,120,1e-5F,.002F,0));
+		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(h,1000,9.81F,dt,120,1e-5F,.002F));
 		float[] points=new float[32];byte[] masks=new byte[8];
 		for(int cell=0;cell<8;cell++){
 			int y=cell/2%2;points[4*cell]=(cell%2+.5F)*h;points[4*cell+1]=(y==0?.5F:1.1F)*h;

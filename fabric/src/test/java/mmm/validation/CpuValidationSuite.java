@@ -176,6 +176,7 @@ public final class CpuValidationSuite {
 			LiquidCellInventoryValidation.main(NONE);
 			mmm.fluid.MacMomentumAdvectionValidation.main(NONE);
 			LiquidMacroscopicMotionValidation.main(new String[]{"joint-moments"});
+			LiquidMacroscopicMotionValidation.main(new String[]{"sweep-only"});
 			CarrierMutationValidation.main(NONE);
 		});
 		gate(gates, "liquid-joining", () -> mmm.fluid.LiquidHandoffContinuityValidation.main(NONE));

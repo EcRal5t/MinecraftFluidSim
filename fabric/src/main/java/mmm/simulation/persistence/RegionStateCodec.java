@@ -37,7 +37,6 @@ final class RegionStateCodec {
 		root.putLong("Origin", manifest.origin().asLong());
 		root.putInt("SizeX", manifest.sizeX()); root.putInt("SizeY", manifest.sizeY()); root.putInt("SizeZ", manifest.sizeZ());
 		root.put("Solver", encodeConfig(manifest.solverConfig()));
-		root.putLong("MarkerBudget", manifest.reservedMarkerCapacity());
 		root.put("Runtime", encodeRuntime(manifest.runtime()));
 		root.put("Footprint", encodeFootprint(manifest.footprint()));
 		root.putInt("MarkerCount", manifest.totalMarkerCount());
@@ -76,7 +75,7 @@ final class RegionStateCodec {
 		Identity identity = decodeIdentity(root, "manifest");
 		require(root, "NetworkGeneration", Tag.TAG_LONG); require(root, "Origin", Tag.TAG_LONG);
 		require(root, "SizeX", Tag.TAG_INT); require(root, "SizeY", Tag.TAG_INT); require(root, "SizeZ", Tag.TAG_INT);
-		require(root, "Solver", Tag.TAG_COMPOUND); require(root, "MarkerBudget", Tag.TAG_LONG);
+		require(root, "Solver", Tag.TAG_COMPOUND);
 		require(root, "Runtime", Tag.TAG_COMPOUND); require(root, "Footprint", Tag.TAG_COMPOUND);
 		require(root, "MarkerCount", Tag.TAG_INT); require(root, "VolumeBits", Tag.TAG_LONG);
 		require(root, "Sections", Tag.TAG_LIST); require(root, "Extensions", Tag.TAG_LIST); require(root, "Checksum", Tag.TAG_LONG);
@@ -128,7 +127,7 @@ final class RegionStateCodec {
 		try {
 			return new RegionManifest(identity.layout(), identity.id(), identity.dimension(), identity.generation(), root.getLongOr("NetworkGeneration", -1L),
 					RegionGeometry.BlockPosition.fromPacked(root.getLongOr("Origin", 0L)), root.getIntOr("SizeX", -1), root.getIntOr("SizeY", -1), root.getIntOr("SizeZ", -1),
-					decodeConfig(root.getCompoundOrEmpty("Solver")), root.getLongOr("MarkerBudget", -1L),
+					decodeConfig(root.getCompoundOrEmpty("Solver")),
 					decodeRuntime(root.getCompoundOrEmpty("Runtime")), decodeFootprint(root.getCompoundOrEmpty("Footprint")),
 					root.getIntOr("MarkerCount", -1), root.getLongOr("VolumeBits", 0L), materials, totalMassUnits, materialLedgers, sections,
 					decodeExtensions(root.getListOrEmpty("Extensions")), registryFingerprint, quantaPerMol, speciesPalette,
@@ -347,16 +346,15 @@ final class RegionStateCodec {
 		tag.putInt("Gravity", Float.floatToRawIntBits(config.gravity())); tag.putInt("TimeStep", Float.floatToRawIntBits(config.timeStep()));
 		tag.putInt("PressureIterations", config.maxPressureIterations()); tag.putInt("PressureTolerance", Float.floatToRawIntBits(config.pressureTolerance()));
 		tag.putInt("FluidEpsilon", Float.floatToRawIntBits(config.fluidEpsilon()));
-		tag.putInt("InterfaceCompression", Float.floatToRawIntBits(config.interfaceCompression()));
 		tag.putString("ViscousWallCondition", config.viscousWallCondition().name());
 		return tag;
 	}
 
 	private static FluidSolverConfig decodeConfig(CompoundTag tag) throws IOException {
-		for (String field : List.of("CellSize", "Density", "Gravity", "TimeStep", "PressureIterations", "PressureTolerance", "FluidEpsilon", "InterfaceCompression")) require(tag, field, Tag.TAG_INT);
+		for (String field : List.of("CellSize", "Density", "Gravity", "TimeStep", "PressureIterations", "PressureTolerance", "FluidEpsilon")) require(tag, field, Tag.TAG_INT);
 		require(tag, "ViscousWallCondition", Tag.TAG_STRING);
 		return new FluidSolverConfig(bits(tag, "CellSize"), bits(tag, "Density"), bits(tag, "Gravity"), bits(tag, "TimeStep"),
-				tag.getIntOr("PressureIterations", -1), bits(tag, "PressureTolerance"), bits(tag, "FluidEpsilon"), bits(tag, "InterfaceCompression"),
+				tag.getIntOr("PressureIterations", -1), bits(tag, "PressureTolerance"), bits(tag, "FluidEpsilon"),
 				FluidSolverConfig.WallCondition.valueOf(tag.getStringOr("ViscousWallCondition", "")));
 	}
 

@@ -26,46 +26,40 @@ final class FluidRegionFactory {
 			BlockPos origin,
 			int blockSizeX,
 			int blockSizeY,
-			int blockSizeZ,
-			long markerCapacity
+			int blockSizeZ
 	) {
 		FluidDomain domain = createDomain(
-				blockSizeX, blockSizeY, blockSizeZ, markerCapacity
+				blockSizeX, blockSizeY, blockSizeZ
 		);
-		return new FluidRegion(UUID.randomUUID(), level.dimension(), origin, domain, markerCapacity);
+		return new FluidRegion(UUID.randomUUID(), level.dimension(), origin, domain);
 	}
 
 	static FluidRegion createControllerRegion(
 			ServerLevel level,
-			FluidRegionFootprint footprint,
-			long markerCapacity
+			FluidRegionFootprint footprint
 	) {
 		FluidDomain domain = createDomain(
-				footprint.blockSizeX(), footprint.blockSizeY(), footprint.blockSizeZ(), markerCapacity
+				footprint.blockSizeX(), footprint.blockSizeY(), footprint.blockSizeZ()
 		);
 		return new FluidRegion(
-				UUID.randomUUID(), level.dimension(), footprint.minimumInterior(), domain, markerCapacity, footprint
+				UUID.randomUUID(), level.dimension(), footprint.minimumInterior(), domain, footprint
 		);
 	}
 
 	private static FluidDomain createDomain(
 			int blockSizeX,
 			int blockSizeY,
-			int blockSizeZ,
-			long markerCapacity
+			int blockSizeZ
 	) {
 		float cellSize = 1.0F / CELLS_PER_BLOCK;
 		FluidSolverConfig config = new FluidSolverConfig(
 				cellSize, 1_000.0F, 9.81F, 1.0F / 20.0F,
-				240, 1.0E-4F, 2.0E-3F, 0.80F
-		);
+				240, 1.0E-4F, 2.0E-3F);
 		return new FluidDomain(
 				Math.multiplyExact(blockSizeX, CELLS_PER_BLOCK),
 				Math.multiplyExact(blockSizeY, CELLS_PER_BLOCK),
 				Math.multiplyExact(blockSizeZ, CELLS_PER_BLOCK),
-				config,
-				Math.toIntExact(markerCapacity)
-		);
+				config);
 	}
 
 	/**

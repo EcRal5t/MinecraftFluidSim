@@ -17,19 +17,14 @@ public final class GasPhaseInterfaceValidation {
 					: new float[]{.25F,.25F,.25F,.0625F});
 			var before = domain.exportParticleState();
 			var frame = GasRuntimeGeometry.capture(domain, new long[8], true);
-			var contacts = GasPhaseInterfaceResolver.contacts(frame, 0);
-			check(contacts.size() == (bothWet ? 2 : 1), "Disconnected dry microbox became a liquid contact");
-			for (var contact : contacts) {
-				check(contact.supportMask() == 1 || bothWet && contact.supportMask() == 128,
-						"Contact crossed a fixed solid partition");
-				check(contact.node()>0&&!contact.components().isEmpty(),"Wet fixed component lost its finite gas interface");
-				for(var component:contact.components()) check(component.cell()==0&&component.supportMask()==contact.supportMask()
-						&&frame.topology().nodeOfComponent(component.cell(),component.supportMask())==contact.node()&&component.volume()>0,
-						"Gas interface crossed a fixed partition or lost positive capacity");
-			}
-			if(bothWet) check(contacts.get(0).node()!=contacts.get(1).node(),"Fixed solid partition joined independent gas chambers");
+			var first=GasPhaseInterfaceResolver.contacts(frame,0);
+			var second=GasPhaseInterfaceResolver.contacts(frame,7);
+			check(first.size()==1&&second.size()==(bothWet?1:0),"Separate dry compartment became a liquid contact");
+			for(var contact:first)check(contact.supportMask()==1&&contact.node()>0&&!contact.components().isEmpty(),"First compartment lost its owned interface");
+			for(var contact:second)check(contact.supportMask()==128&&contact.node()>0&&!contact.components().isEmpty(),"Second compartment lost its owned interface");
+			if(bothWet)check(first.getFirst().node()!=second.getFirst().node(),"Fixed wall joined separate gas chambers");
 			check(Arrays.equals(before.copyPositionVolume(), domain.exportParticleState().copyPositionVolume())
-					&& frame.matchesSourceCarrierGeometry(domain, new long[8]), "Contact observation changed its source stock");
+					&&frame.matchesSourceCarrierGeometry(domain,new long[8]),"Contact observation changed its source stock");
 		}
 		// The reconstructed half-cell interface must contact positive dry capacity.
 		var half = domain(0, false, new float[]{.5F,.25F,.5F,.5F});
@@ -59,14 +54,14 @@ public final class GasPhaseInterfaceValidation {
 
 	/** Two half-filled supports keep separate gas inventories while liquid crosses a fixed orifice. */
 	private static void validateRestrictedPhaseTransport(){
-		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,120,1e-5F,.002F,0),16);
+		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(1,1000,0,.01F,120,1e-5F,.002F));
 		// Empty supports above establish a resolved vertical free-surface gradient.
 		// The dry aperture must survive the small accepted horizontal liquid flux.
 		byte[] masks=new byte[8];Arrays.fill(masks,(byte)255);masks[0]=masks[1]=masks[2]=masks[3]=(byte)0xf0;
 		float[] points={.5F,.25F,.25F,.25F,1.5F,.25F,.25F,.25F};
 		domain.restoreParticleState(new FlipParticleState(2,2,2,1,2,.5F,points,new float[6],
 				mmm.units.Mass.createLiquid(1,1000,points),masks));
-		domain.sealDomainBoundary();domain.domainFlowFields.ensureGrid();
+		domain.sealDomainBoundary();domain.domainFlowFields.preparePhysicalState();
 		int first=domain.gasState.frame.commonCellNode(0),second=domain.gasState.frame.commonCellNode(1);
 		check(first>0&&second>0&&first!=second,
 				"Restricted two-phase fixture lost its separate pressure nodes");
@@ -75,7 +70,7 @@ public final class GasPhaseInterfaceValidation {
 		var source=domain.gasState.network.inventory(first);var target=domain.gasState.network.inventory(second);
 		var total=domain.gasState.network.sealedInventory();
 		long liquidMass=domain.totalMassUnits();var liquidVolume=domain.liquidCells.exactVolume();
-		domain.domainFlowFields.ensureGrid();
+		domain.domainFlowFields.preparePhysicalState();
 		domain.mac.velocityX[domain.domainFlowFields.xFaceIndex(1,0,0)]=.01F;
 		domain.cellMacStage.publishMomentum();domain.pressureSystem.prepareOperator();
 		var flow=new ConservativeLiquidFlux(domain);flow.prepare(.01F,new long[8]);
@@ -133,7 +128,7 @@ public final class GasPhaseInterfaceValidation {
 					definitions=new mmm.thermal.ThermalRegistry(java.util.List.of(equalEnergyWater,equalEnergyVapor,hotAir),java.util.List.of(),java.util.List.of(transition),"","");
 				}
 				byte[] masks=new byte[8];Arrays.fill(masks,(byte)255);masks[0]=0;if(partialNeighbor)masks[1]=0;if(mergingPeers)for(int peer:new int[]{1,2,4})masks[peer]=0;
-				var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,1e-4F,0),32);
+				var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,1e-4F));
 				float volume=completeDepletion?mmm.granular.SolidVolume.toCellVolume(8*168):.5F;
 				float[] positions=partialNeighbor?new float[]{.25F,.125F,.25F,volume, .75F,.125F,.25F,.5F}
 						:new float[]{.25F,.125F,.25F,volume};
@@ -179,7 +174,7 @@ public final class GasPhaseInterfaceValidation {
 				offsets.add(new mmm.thermal.ThermalSpeciesOffset("test:batch/offset"+offsets.size(),species.id(),material.id(),mmm.chemistry.ExactRational.ZERO));
 			var registry=new mmm.thermal.ThermalRegistry(java.util.List.of(liquid,solid,air),offsets,java.util.List.of(transition),
 					chemical?mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY.fingerprint():"","");
-			var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,1e-4F,0),32);
+			var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.01F,200,1e-5F,1e-4F));
 			var fluids=new FluidMaterialRegistry(java.util.List.of(BuiltinFluidMaterials.WATER));domain.bindMaterialRegistry(fluids);domain.setVolume(0,0,0,.5F);
 			if(chemical)domain.bindChemistry(mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY);
 			domain.bindThermal(registry,fluids,275);
@@ -208,12 +203,16 @@ public final class GasPhaseInterfaceValidation {
 	}
 
 	private static FluidDomain domain(int mask, boolean peerOpen, float[] markers) {
-		byte[] masks = new byte[8]; Arrays.fill(masks, (byte)255); masks[0] = (byte) mask;
+		markers=markers.clone();
+		boolean separate=mask==126;
+		if(separate)for(int marker=0;marker<markers.length/4;marker++)
+			if(markers[4*marker]>.5F)for(int axis=0;axis<3;axis++)markers[4*marker+axis]+=1;
+		byte[] masks = new byte[8]; Arrays.fill(masks, (byte)255); masks[0] = (byte)(separate?254:mask);if(separate)masks[7]=(byte)127;
 		if (peerOpen) masks[1] = 0;
 		float total = 0;
 		for (int i = 3; i < markers.length; i += 4) total += markers[i];
 		FluidDomain domain = new FluidDomain(2, 2, 2,
-				new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F,0), 32);
+				new FluidSolverConfig(1,1000,0,.01F,200,1e-5F,1e-4F));
 		domain.restoreParticleState(new FlipParticleState(2,2,2,1,markers.length/4,total,markers,
 				new float[markers.length/4*3], mmm.units.Mass.createLiquid(1, 1000.0, markers),masks));
 		domain.sealDomainBoundary();

@@ -98,7 +98,6 @@ public record ControllerSummaryPayload(ControllerSummary summary) implements Cus
 
 	private static void writeUsage(FriendlyByteBuf buffer, ControllerSummary.Usage usage) {
 		writeCapacity(buffer, usage.cells());
-		writeCapacity(buffer, usage.markers());
 		writeCapacity(buffer, usage.activeParcels());
 		writeCapacity(buffer, usage.depositGroups());
 		writeCapacity(buffer, usage.coherentGroups());
@@ -107,7 +106,7 @@ public record ControllerSummaryPayload(ControllerSummary summary) implements Cus
 	}
 
 	private static ControllerSummary.Usage readUsage(FriendlyByteBuf buffer) {
-		return new ControllerSummary.Usage(readCapacity(buffer), readCapacity(buffer),
+		return new ControllerSummary.Usage(readCapacity(buffer),
 				readCapacity(buffer), readCapacity(buffer), readCapacity(buffer), readCapacity(buffer), readCapacity(buffer));
 	}
 

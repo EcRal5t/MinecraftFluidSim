@@ -134,22 +134,20 @@ public final class MinecraftRegionActivation {
 		ControllerCreationPlan creationPlan = new ControllerCreationPlan(
 				world.profile().profileFingerprint(), footprint, ownershipPreimage);
 		long requiredCells;
-		long requiredMarkers;
 		try {
 			requiredCells = Math.multiplyExact(
 					footprint.denseBlockCapacity(), FluidRegionFactory.CELL_VOLUMES_PER_BLOCK);
-			requiredMarkers = Math.multiplyExact(requiredCells, 8L);
 		} catch (ArithmeticException exception) {
 			return Result.failed("控制器区域尺寸溢出资源计数");
 		}
-		RegionCatalog.AdmissionResult preview = regions.previewAdd(requiredCells, requiredMarkers);
+		RegionCatalog.AdmissionResult preview = regions.previewAdd(requiredCells);
 		if (!preview.accepted()) return Result.failed(preview.failure());
 		String availabilityFailure = FluidControllerRegions.availabilityFailure(level, footprint);
 		if (availabilityFailure != null) return Result.failed(availabilityFailure);
 
 		FluidRegion candidate;
 		try {
-			candidate = FluidRegionFactory.createControllerRegion(level, footprint, requiredMarkers);
+			candidate = FluidRegionFactory.createControllerRegion(level, footprint);
 		} catch (IllegalArgumentException | ArithmeticException exception) {
 			return Result.failed("无法分配控制器区域：" + exception.getMessage());
 		}

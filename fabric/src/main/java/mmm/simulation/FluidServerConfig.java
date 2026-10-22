@@ -38,7 +38,6 @@ public record FluidServerConfig(
 	private static final String SCHEMA = "controller-policy";
 	private static final int DEFAULT_REGIONS = 4;
 	private static final long DEFAULT_CELLS = 9_216L;
-	private static final long DEFAULT_MARKERS = 73_728L;
 	private static final long DEFAULT_QUARANTINE_ENTRIES = 4_096L;
 	private static final long DEFAULT_QUARANTINE_BYTES = 1_073_741_824L;
 	private static final long MAXIMUM_QUARANTINE_ENTRIES = 1_000_000L;
@@ -47,7 +46,7 @@ public record FluidServerConfig(
 			"schema", "controllersEnabled", "worldBridgeEnabled", "maximumGranularParcels",
 			"maximumGranularDepositGroups", "maximumThermalSubstepsPerStep", "maximumPhaseOperationsPerStep",
 			"maximumQuarantineEntries", "maximumQuarantineBytes", "maximumRegions", "maximumCellsPerRegion",
-			"maximumMarkersPerRegion", "maximumTotalCells", "maximumTotalMarkers");
+			"maximumTotalCells");
 
 	public FluidServerConfig {
 		Objects.requireNonNull(limits, "limits");
@@ -76,8 +75,7 @@ public record FluidServerConfig(
 	}
 
 	public static FluidServerConfig defaults() {
-		return new FluidServerConfig(true, false, new RegionCatalog.Limits(DEFAULT_REGIONS, DEFAULT_CELLS,
-				DEFAULT_MARKERS, DEFAULT_CELLS * DEFAULT_REGIONS, DEFAULT_MARKERS * DEFAULT_REGIONS));
+		return new FluidServerConfig(true, false, new RegionCatalog.Limits(DEFAULT_REGIONS, DEFAULT_CELLS, DEFAULT_CELLS * DEFAULT_REGIONS));
 	}
 
 	public static Path path(Path worldRoot) {
@@ -108,9 +106,7 @@ public record FluidServerConfig(
 			long quarantineEntries = nonNegativeLong(properties, "maximumQuarantineEntries");
 			long quarantineBytes = nonNegativeLong(properties, "maximumQuarantineBytes");
 			RegionCatalog.Limits limits = new RegionCatalog.Limits(
-					integer(properties, "maximumRegions"), positiveLong(properties, "maximumCellsPerRegion"),
-					positiveLong(properties, "maximumMarkersPerRegion"), positiveLong(properties, "maximumTotalCells"),
-					positiveLong(properties, "maximumTotalMarkers"));
+					integer(properties, "maximumRegions"), positiveLong(properties, "maximumCellsPerRegion"), positiveLong(properties, "maximumTotalCells"));
 			return new FluidServerConfig(flag(properties, "controllersEnabled"), flag(properties, "worldBridgeEnabled"),
 					granularParcels, granularDeposits, thermalSubsteps, phaseOperations, quarantineEntries,
 					quarantineBytes, limits);
@@ -134,9 +130,7 @@ public record FluidServerConfig(
 		properties.setProperty("maximumQuarantineBytes", Long.toString(maximumQuarantineBytes));
 		properties.setProperty("maximumRegions", Integer.toString(limits.maximumRegions()));
 		properties.setProperty("maximumCellsPerRegion", Long.toString(limits.maximumCellsPerRegion()));
-		properties.setProperty("maximumMarkersPerRegion", Long.toString(limits.maximumMarkersPerRegion()));
 		properties.setProperty("maximumTotalCells", Long.toString(limits.maximumTotalCells()));
-		properties.setProperty("maximumTotalMarkers", Long.toString(limits.maximumTotalMarkers()));
 		try {
 			try (OutputStream output = Files.newOutputStream(temporary, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
 				properties.store(output, "Matter, Motion & Mechanics world-local admission policy; budget changes apply after restart");
