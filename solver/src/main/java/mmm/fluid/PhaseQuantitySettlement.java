@@ -36,7 +36,7 @@ final class PhaseQuantitySettlement {
             materialRegistry=registry;sizeX=cellsX;sizeY=cellsY;gravity=acceleration;
         }
         private int verticalDirection(int route){
-            int from=key(source[route]).cell()/sizeX%sizeY,to=target[route]/8/sizeX%sizeY;
+            int from=key(source[route]).cell()/sizeX%sizeY,to=target[route]/sizeX%sizeY;
             return Integer.compare(to,from)*(gravity>0?1:-1);
         }
         void reset(List<LiquidCellInventory.Stock> values,int slots){
@@ -48,7 +48,7 @@ final class PhaseQuantitySettlement {
                 numericalVolume=new double[n];alternativesPrepared=new boolean[n];head=new int[n];preferredTotal=new double[n];
             }
             for(int i=0;i<values.size();i++){
-                var stock=values.get(i);int slot=slot(stock.key()),s=sourceAt[slot];
+                var stock=values.get(i);int slot=stock.key().cell(),s=sourceAt[slot];
                 if(s<0){
                     sourceAt[slot]=s=sources++;firstStock[s]=-1;volume[s]=SignedDyadic.ZERO;
                     numericalVolume[s]=Double.NaN;alternativesPrepared[s]=false;head[s]=-1;preferredTotal[s]=0;
@@ -58,7 +58,7 @@ final class PhaseQuantitySettlement {
         }
         void neighborhood(Neighborhood value){neighborhood=value;}
         int sourceCount(){return sources;}
-        int sourceFor(int cell,int supportMask){return sourceAt[8*cell+Integer.numberOfTrailingZeros(supportMask)];}
+        int sourceFor(int cell){return sourceAt[cell];}
         double outgoing(int source){return preferredTotal[source];}
         LiquidCellInventory.Key key(int s){return stocks.get(firstStock[s]).key();}
         double volume(int s){double value=numericalVolume[s];if(Double.isNaN(value))numericalVolume[s]=value=volume[s].toDouble();return value;}
@@ -72,16 +72,15 @@ final class PhaseQuantitySettlement {
                 int n=2*size;source=Arrays.copyOf(source,n);target=Arrays.copyOf(target,n);support=Arrays.copyOf(support,n);
                 face=Arrays.copyOf(face,n);next=Arrays.copyOf(next,n);preferred=Arrays.copyOf(preferred,n);
             }
-            source[size]=ordinal;target[size]=8*cell+Integer.numberOfTrailingZeros(supportMask);support[size]=supportMask;face[size]=sharedFace;
+            source[size]=ordinal;target[size]=cell;support[size]=supportMask;face[size]=sharedFace;
             preferred[size]=preference;preferredTotal[ordinal]+=preference;next[size]=head[ordinal];head[ordinal]=size++;
         }
         void alternative(int ordinal,int sharedFace,int cell,int supportMask){
-            int slot=8*cell+Integer.numberOfTrailingZeros(supportMask);
-            for(int r=head[ordinal];r>=0;r=next[r])if(face[r]==sharedFace&&target[r]==slot)return;
+            for(int r=head[ordinal];r>=0;r=next[r])if(face[r]==sharedFace&&target[r]==cell)return;
             add(ordinal,sharedFace,cell,supportMask,0);
         }
         private void appendRoute(LiquidTransportRoutes.Builder result,int r,SignedDyadic amount){
-            result.route(face[r],target[r]/8,support[r],amount);
+            result.route(face[r],target[r],support[r],amount);
         }
     }
 
@@ -93,7 +92,7 @@ final class PhaseQuantitySettlement {
         int[] occupied=new int[Math.max(16,raw.sources+raw.size)];int count=0;
         // Existing stocks remain in place. Only actual face increments change their endpoint.
         for(int s=0;s<raw.sources;s++){
-            int own=slot(raw.key(s));load[own]=raw.volume[s];occupied[count++]=own;
+            int own=raw.key(s).cell();load[own]=raw.volume[s];occupied[count++]=own;
             var remaining=raw.volume[s];
             double scale=raw.preferredTotal[s]>raw.volume(s)?raw.volume(s)/raw.preferredTotal[s]:1;
             for(int r=raw.head[s];r>=0;r=raw.next[r])if(raw.preferred[r]>0){
@@ -104,7 +103,7 @@ final class PhaseQuantitySettlement {
             outgoing[s]=raw.volume[s].subtract(remaining);
         }
         for(int r=0;r<raw.size;r++)if(amount[r].signum()>0){
-            int own=slot(raw.key(raw.source[r])),target=raw.target[r];
+            int own=raw.key(raw.source[r]).cell(),target=raw.target[r];
             load[own]=load[own].subtract(amount[r]);
             if(load[target]==null){load[target]=SignedDyadic.ZERO;occupied[count++]=target;}
             load[target]=load[target].add(amount[r]);
@@ -172,7 +171,7 @@ final class PhaseQuantitySettlement {
         }
         private void change(int route,SignedDyadic delta){
             if(delta.signum()==0)return;
-            int source=raw.source[route],own=slot(raw.key(source)),target=raw.target[route];
+            int source=raw.source[route],own=raw.key(source).cell(),target=raw.target[route];
             amount[route]=amount[route].add(delta);outgoing[source]=outgoing[source].add(delta);
             load[own]=load[own].subtract(delta);
             if(load[target]==null){
@@ -206,7 +205,7 @@ final class PhaseQuantitySettlement {
             if(accepted.signum()==0)return;
             int route=route(source,face,target);
             if(route<0){
-                route=raw.size;raw.add(source,face,target/8,targetSupport,0);
+                route=raw.size;raw.add(source,face,target,targetSupport,0);
                 if(amount.length<raw.size){int old=amount.length;amount=Arrays.copyOf(amount,raw.source.length);Arrays.fill(amount,old,amount.length,SignedDyadic.ZERO);}
             }
             change(route,accepted);
@@ -227,15 +226,15 @@ final class PhaseQuantitySettlement {
             this.flux=flux;raw=flux.raw;int n=raw.sources;
             full=new boolean[n];parent=new int[n];Arrays.fill(parent,-2);parentFace=new int[n];
             order=new int[n];children=new int[n];leaves=new int[n];
-            for(int s=0;s<n;s++)full[s]=flux.fixed(slot(raw.key(s)));
+            for(int s=0;s<n;s++)full[s]=flux.fixed(raw.key(s).cell());
         }
         public void accept(int face,int cell,int support){
-            int target=8*cell+Integer.numberOfTrailingZeros(support),source=raw.sourceAt[target];
+            int target=cell,source=raw.sourceAt[target];
             if(source>=0&&full[source]){
                 if(parent[source]==-2){parent[source]=visiting;parentFace[source]=face;order[tail++]=source;}
                 return;
             }
-            int own=slot(raw.key(visiting));
+            int own=raw.key(visiting).cell();
             var receive=min(flux.receiveRoom(target),flux.transferRoom(own,target,face));
             if(receive.compareTo(positiveRoom)>0){
                 positiveRoom=receive;positiveSource=visiting;positiveSlot=target;positiveMask=support;positiveFace=face;
@@ -252,7 +251,7 @@ final class PhaseQuantitySettlement {
                 positiveSource=negativeSource=-1;positiveRoom=negativeRoom=SignedDyadic.ZERO;
                 var residual=SignedDyadic.ZERO;
                 for(int i=0;i<tail;i++){
-                    visiting=order[i];int own=slot(raw.key(visiting));residual=residual.add(flux.load[own].subtract(flux.upper[own]));
+                    visiting=order[i];int own=raw.key(visiting).cell();residual=residual.add(flux.load[own].subtract(flux.upper[own]));
                     raw.neighborhood.visit(visiting,this);
                 }
                 int root=seed,external=-1,externalMask=0,externalFace=-1;
@@ -267,10 +266,10 @@ final class PhaseQuantitySettlement {
                 for(int i=0;i<tail;i++)if(parent[order[i]]>=0)children[parent[order[i]]]++;
                 int first=0,last=0;for(int i=0;i<tail;i++)if(children[order[i]]==0)leaves[last++]=order[i];
                 while(first<last){
-                    int source=leaves[first++],own=slot(raw.key(source)),up=parent[source];
+                    int source=leaves[first++],own=raw.key(source).cell(),up=parent[source];
                     var delta=flux.load[own].subtract(flux.upper[own]);
                     if(up>=0){
-                        int target=slot(raw.key(up));
+                        int target=raw.key(up).cell();
                         if(delta.signum()>0)flux.transfer(own,target,raw.key(up).supportMask(),parentFace[source],delta);
                         else if(delta.signum()<0)flux.transfer(target,own,raw.key(source).supportMask(),parentFace[source],delta.negate());
                         if(--children[up]==0)leaves[last++]=up;
@@ -298,7 +297,7 @@ final class PhaseQuantitySettlement {
         private final IntConsumer alternatives;
         private final int firstSource=2,firstGroup,pool;
         private int vertices,edges;
-        private int[] head,level,cursor,queue,pathVertex,pathEdge,receiverSlot;
+        private int[] head,level,cursor,queue,pathVertex,pathEdge,receiverCell;
         private int[] to=new int[64],next=new int[64];
         private SignedDyadic[] remaining=new SignedDyadic[64];
 
@@ -317,7 +316,7 @@ final class PhaseQuantitySettlement {
             firstGroup=firstSource+raw.sources;pool=firstGroup+groups;vertices=pool+1;
             int capacity=Math.max(16,vertices+2*raw.sources);
             head=new int[capacity];Arrays.fill(head,-1);level=new int[capacity];cursor=new int[capacity];queue=new int[capacity];
-            pathVertex=new int[capacity];pathEdge=new int[capacity];receiverSlot=new int[capacity];Arrays.fill(receiverSlot,-1);
+            pathVertex=new int[capacity];pathEdge=new int[capacity];receiverCell=new int[capacity];Arrays.fill(receiverCell,-1);
             for(int r=0;r<raw.size;r++)if(amount[r].signum()>0){
                 int slot=raw.target[r];nextIncoming[r]=firstIncoming[slot];firstIncoming[slot]=r;
             }
@@ -356,9 +355,9 @@ final class PhaseQuantitySettlement {
                 int old=head.length,n=2*old;head=Arrays.copyOf(head,n);Arrays.fill(head,old,n,-1);
                 level=Arrays.copyOf(level,n);cursor=Arrays.copyOf(cursor,n);queue=Arrays.copyOf(queue,n);
                 pathVertex=Arrays.copyOf(pathVertex,n);pathEdge=Arrays.copyOf(pathEdge,n);
-                receiverSlot=Arrays.copyOf(receiverSlot,n);Arrays.fill(receiverSlot,old,n,-1);
+                receiverCell=Arrays.copyOf(receiverCell,n);Arrays.fill(receiverCell,old,n,-1);
             }
-            int vertex=vertices++;receiverVertex[slot]=vertex;receiverSlot[vertex]=slot;level[vertex]=-1;
+            int vertex=vertices++;receiverVertex[slot]=vertex;receiverCell[vertex]=slot;level[vertex]=-1;
             listReceiver(slot);int group=receiverGroup==null?-1:receiverGroup[slot];var base=base(slot);
             pair(vertex,group<0?pool:firstGroup+group,upper[slot].subtract(base),base.subtract(minimum(lower,slot)));
             return vertex;
@@ -372,7 +371,7 @@ final class PhaseQuantitySettlement {
         }
         private void retained(int source){
             if(retainedEdge[source]>=0)return;
-            retainedEdge[source]=pair(firstSource+source,receiver(slot(raw.key(source))),outgoing[source],raw.volume[source].subtract(outgoing[source]));
+            retainedEdge[source]=pair(firstSource+source,receiver(raw.key(source).cell()),outgoing[source],raw.volume[source].subtract(outgoing[source]));
         }
         private void route(int r){
             if(routeEdge[r]>=0)return;
@@ -389,7 +388,7 @@ final class PhaseQuantitySettlement {
                 for(int r=raw.head[source];r>=0;r=raw.next[r])route(r);
                 return;
             }
-            int slot=receiverSlot[vertex];
+            int slot=receiverCell[vertex];
             if(slot>=0){
                 if(expandedReceiver[slot])return;expandedReceiver[slot]=true;
                 int own=raw.sourceAt[slot];if(own>=0)retained(own);
@@ -412,7 +411,7 @@ final class PhaseQuantitySettlement {
                 // Reuse its reached owners; independent feasible regions keep their proposals.
                 var blocked=new BitSet();
                 for(int source=0;source<raw.sources;source++)if(level[firstSource+source]>=0)blocked.set(raw.key(source).cell());
-                for(int vertex=0;vertex<vertices;vertex++)if(level[vertex]>=0&&receiverSlot[vertex]>=0)blocked.set(receiverSlot[vertex]/8);
+                for(int vertex=0;vertex<vertices;vertex++)if(level[vertex]>=0&&receiverCell[vertex]>=0)blocked.set(receiverCell[vertex]);
                 throw new ConservativeLiquidFlux.CapacityUnavailable("Liquid inventory has insufficient reachable pore capacity: residual="
                         +remaining[e].toDouble()+", "+location(to[e])+", sources="+raw.sources+", routes="+raw.size,blocked);
             }
@@ -420,7 +419,7 @@ final class PhaseQuantitySettlement {
         private String location(int vertex){
             int source=vertex-firstSource;
             if(source>=0&&source<raw.sources){var key=raw.key(source);return "sourceCell="+key.cell()+", supportMask="+key.supportMask();}
-            int slot=receiverSlot[vertex];if(slot>=0)return "receiverCell="+(slot/8)+", component="+(slot%8);
+            int slot=receiverCell[vertex];if(slot>=0)return "receiverCell="+slot;
             return vertex>=firstGroup&&vertex<pool?"gasCapacityGroup="+(vertex-firstGroup):"capacityPool";
         }
         private boolean levels(){
@@ -563,7 +562,6 @@ final class PhaseQuantitySettlement {
         }
     }
 
-    private static int slot(LiquidCellInventory.Key key){return 8*key.cell()+Integer.numberOfTrailingZeros(key.supportMask());}
     private static SignedDyadic value(SignedDyadic amount){return amount==null?SignedDyadic.ZERO:amount;}
     private static SignedDyadic minimum(SignedDyadic[] lower,int slot){return lower==null?SignedDyadic.ZERO:value(lower[slot]);}
     private static SignedDyadic min(SignedDyadic a,SignedDyadic b){return a.compareTo(b)<0?a:b;}

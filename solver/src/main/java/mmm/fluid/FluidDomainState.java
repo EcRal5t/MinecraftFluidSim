@@ -152,7 +152,12 @@ public final class FluidDomainState {
 	public int maximumThermalTransportSubsteps() { return maximumThermalTransportSubsteps; }
 	public PendingPhaseMotionState pendingPhaseMotion() { return pendingPhaseMotion; }
 	public double[] copyThermalBoundaryTemperaturesK() { return thermalBoundaryTemperaturesK == null ? null : thermalBoundaryTemperaturesK.clone(); }
-	public CondensedPhasePressureField condensedPhasePressure() { return condensedPhasePressure; }
+	/** Physical export is evaluated at the boundary from this complete immutable state. */
+	public CondensedPhasePressureField exportCondensedPhasePressure() {
+		if(condensedPhasePressure==null||!condensedPhasePressure.isRuntimeResidual())return condensedPhasePressure;
+		return FluidDomainStateMapper.restore(this).pressureSystem.captureLiquidPressure();
+	}
+	CondensedPhasePressureField pressureContinuation() { return condensedPhasePressure; }
 	public MaterialRegistry materialDefinitions() { return materialDefinitions; }
 
 	/** Disposable sampling exports for diagnostics; backend and persistence read liquid()/momentum(). */

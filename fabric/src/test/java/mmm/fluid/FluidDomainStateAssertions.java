@@ -77,8 +77,8 @@ public final class FluidDomainStateAssertions {
 		if (includeTransient) {
 			requireRawDoublesNullable(expected.copyThermalBoundaryTemperaturesK(),
 					actual.copyThermalBoundaryTemperaturesK(), context + " thermal boundary");
-			compareCondensedPhasePressure(expected.condensedPhasePressure(),
-					actual.condensedPhasePressure(), context);
+			compareCondensedPhasePressure(expected.exportCondensedPhasePressure(),
+					actual.exportCondensedPhasePressure(), context);
 		}
 	}
 
@@ -172,8 +172,8 @@ public final class FluidDomainStateAssertions {
 			float scale = (float) Math.max(mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA,
 					Math.max(Math.abs(before), Math.abs(after)));
 			double tolerance = 4.0 * Math.ulp(scale);
-			require(Math.abs(before - after) <= tolerance,
-					context + " phase-pressure changed at [" + index + "]: " + before + " vs " + after
+			if (!(Math.abs(before - after) <= tolerance))
+				throw new AssertionError(context + " phase-pressure changed at [" + index + "]: " + before + " vs " + after
 							+ " Pa, allowed=" + tolerance + " Pa");
 		}
 	}
@@ -181,8 +181,8 @@ public final class FluidDomainStateAssertions {
 	private static void requireRawDoubles(double[] expected, double[] actual, String context) {
 		require(expected.length == actual.length, context + ": length changed");
 		for (int index = 0; index < expected.length; index++) {
-			require(Double.doubleToRawLongBits(expected[index]) == Double.doubleToRawLongBits(actual[index]),
-					context + " raw bits changed at [" + index + "]: " + expected[index] + " vs " + actual[index]);
+			if (Double.doubleToRawLongBits(expected[index]) != Double.doubleToRawLongBits(actual[index]))
+				throw new AssertionError(context + " raw bits changed at [" + index + "]: " + expected[index] + " vs " + actual[index]);
 		}
 	}
 

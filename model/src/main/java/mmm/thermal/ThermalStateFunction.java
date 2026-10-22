@@ -161,14 +161,34 @@ public final class ThermalStateFunction {
 	public State stateForInventory(List<InventoryPortion> portions, SignedDyadic totalEnergy) {
 		if (portions == null || portions.isEmpty() || totalEnergy == null)
 			throw new IllegalArgumentException("Thermal LTE inventory is missing or non-finite");
-		SignedDyadic reference = SignedDyadic.ZERO;
-		for (InventoryPortion portion : portions) reference = reference.add(SignedDyadic.of(
-				baseEnergy(portion.materialHandle(), portion.massKg(), portion.speciesQuanta())));
-		return ThermalCaloricInversion.solve(new ThermalCaloricInversion.Inventory() {
-			public int first() { return 0; } public int next(int item) { return item + 1 < portions.size() ? item + 1 : -1; }
-			public ThermalMaterialDefinition material(int item) { return registry.material(portions.get(item).materialHandle()); }
-			public double mass(int item) { return portions.get(item).massKg(); }
-		}, totalEnergy.subtract(reference));
+		return prepareInventory(portions).state(totalEnergy);
+	}
+
+	/** Fixed inventory preparation belongs to one caller operation, without cross-step caching. */
+	final class PreparedInventory {
+		private final SignedDyadic reference;
+		private final ThermalCaloricInversion.Prepared caloric;
+		private PreparedInventory(List<InventoryPortion> portions) {
+			SignedDyadic base=SignedDyadic.ZERO;
+			for(var portion:portions)base=base.add(SignedDyadic.of(
+					baseEnergy(portion.materialHandle(),portion.massKg(),portion.speciesQuanta())));
+			reference=base;
+			caloric=new ThermalCaloricInversion.Prepared(new ThermalCaloricInversion.Inventory() {
+				public int first(){return 0;}
+				public int next(int item){return item+1<portions.size()?item+1:-1;}
+				public ThermalMaterialDefinition material(int item){return registry.material(portions.get(item).materialHandle());}
+				public double mass(int item){return portions.get(item).massKg();}
+			});
+		}
+		State state(double energy){
+			if(!Double.isFinite(energy))throw new EnergyRepresentationException();
+			return state(SignedDyadic.of(energy));
+		}
+		State state(SignedDyadic energy){return caloric.solve(energy.subtract(reference));}
+	}
+	PreparedInventory prepareInventory(List<InventoryPortion> portions) {
+		if(portions==null||portions.isEmpty())throw new IllegalArgumentException("Thermal LTE inventory is missing or non-finite");
+		return new PreparedInventory(portions);
 	}
 
 	public EquilibriumState equilibriumState(

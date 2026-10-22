@@ -59,7 +59,7 @@ final class GasPhaseInterfaceResolver {
 		int node = frame.topology().nodeOfComponent(component.cell(), component.supportMask());
 		if (node >= 0) {
 			found.computeIfAbsent((long) node << 8 | support, ignored -> new TreeMap<>())
-					.put(component.slot(), component);
+					.put(component.cell(), component);
 		}
 	}
 }

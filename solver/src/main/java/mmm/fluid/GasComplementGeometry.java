@@ -17,7 +17,6 @@ final class GasComplementGeometry {
     /** One fixed support's dry PLIC geometry, sharing its immutable local plane and occupation. */
     record Component(int cell,int supportMask,int dryMicroMask,double normalizedVolume,double volume,boolean compact,
                      PlicComponentGeometry.Plane plane,FlipPressurePhaseGeometry.OccupancyCell occupancy) {
-        int slot(){return 8*cell+Integer.numberOfTrailingZeros(supportMask);}
         int minimumPiece(){return 8*cell+Integer.numberOfTrailingZeros(dryMicroMask);}
     }
 	/** One actual dry opening per adjacent coarse support pair, using canonical gas-piece endpoints. */
@@ -32,7 +31,7 @@ final class GasComplementGeometry {
 	private final double[] componentDry;
 	private final GasComponentCapacity.Prepared actualCapacity;
 	private GasChamberTopology sealedTopology,openTopology;
-	private final Component[] bySlot;
+	private final Component[] byCell;
 	private final Port[] portArray;
 	private final ExteriorPort[] exteriorArray;
 	private final List<Component> components;
@@ -41,11 +40,11 @@ final class GasComplementGeometry {
 
 	/** All arrays are owned snapshots; the public lists cannot modify their backing arrays. */
 	private GasComplementGeometry(int sizeX, int sizeY, int sizeZ, double h3, byte[] masks,
-	                              SignedDyadic[] poreVolumes, double[] componentDry, Component[] bySlot, List<Component> components, Port[] ports,
+	                              SignedDyadic[] poreVolumes, double[] componentDry, Component[] byCell, List<Component> components, Port[] ports,
 	                              ExteriorPort[] exterior,GasComponentCapacity.Prepared actualCapacity) {
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
 		cellVolumeCubicMeters = h3;
-		collisionMasks = masks; this.poreVolumes = poreVolumes; this.componentDry=componentDry; this.bySlot=bySlot;
+		collisionMasks = masks; this.poreVolumes = poreVolumes; this.componentDry=componentDry; this.byCell=byCell;
 		this.actualCapacity=actualCapacity;
 		portArray = ports; exteriorArray = exterior;
 		this.components=Collections.unmodifiableList(components);
@@ -78,15 +77,15 @@ final class GasComplementGeometry {
 			if(actualCapacity==source.actualCapacity)return source;
 			changed=new boolean[count];
 		}
-		Component[] bySlot=source==null?new Component[Math.multiplyExact(count,8)]:source.bySlot.clone();
+		Component[] byCell=source==null?new Component[count]:source.byCell.clone();
 		SignedDyadic[] pores = actualCapacity!=null?actualCapacity.pores:source == null ? new SignedDyadic[count] : source.poreVolumes.clone();
 		var components=new ArrayList<Component>(source==null?count:source.components.size());
 		var ports = new ArrayList<Port>(source==null?count:source.portArray.length);
 		var exterior = new ArrayList<ExteriorPort>(source==null?0:source.exteriorArray.length);
-		captureComponents(count,source,changed,cut,phase,h3,pores,componentDry,cells!=null,actualCapacity==null,bySlot,components);
+		captureComponents(count,source,changed,cut,phase,h3,pores,componentDry,cells!=null,actualCapacity==null,byCell,components);
 		int[] canonical=canonicalPieces(count,components);
 		capturePorts(sizeX,sizeY,sizeZ,count,source,changed,canonical,cut,phase,h2,ports,exterior);
-		var result=new GasComplementGeometry(sizeX,sizeY,sizeZ,h3,actualCapacity==null?cut.snapshot().masksView():actualCapacity.masks,pores,componentDry,bySlot,
+		var result=new GasComplementGeometry(sizeX,sizeY,sizeZ,h3,actualCapacity==null?cut.snapshot().masksView():actualCapacity.masks,pores,componentDry,byCell,
 				components,ports.toArray(Port[]::new),exterior.toArray(ExteriorPort[]::new),actualCapacity);
 		if(source!=null)GasChamberTopology.continueCached(result,source);
 		return result;
@@ -97,10 +96,7 @@ final class GasComplementGeometry {
 		boolean[] changed=new boolean[count];boolean anyChanged=false;
 		for(int cell=0;cell<count;cell++) {
 			changed[cell]=cut.mask(cell)!=source.collisionMask(cell)||phase!=sourcePhase&&!phase.sameCellGeometry(cell,sourcePhase);
-			for(int support:CellRemapMicroTopology.components(cut.mask(cell))) {
-				int slot=8*cell+Integer.numberOfTrailingZeros(support);
-				if(componentDry[slot]!=source.componentDry[slot])changed[cell]=true;
-			}
+			if(componentDry[cell]!=source.componentDry[cell])changed[cell]=true;
 			anyChanged|=changed[cell];
 		}
 		return anyChanged?changed:null;
@@ -108,27 +104,23 @@ final class GasComplementGeometry {
 	private static void captureComponents(int count,GasComplementGeometry source,boolean[] changed,
 	                                      FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,double h3,
 	                                      SignedDyadic[] pores,double[] componentDry,boolean actualInventory,
-	                                      boolean capturePores,Component[] bySlot,List<Component> components) {
+	                                      boolean capturePores,Component[] byCell,List<Component> components) {
 		for (int cell = 0; cell < count; cell++) {
 			if (source == null || changed[cell]) {
-				Arrays.fill(bySlot,8*cell,8*cell+8,null);if(capturePores)pores[cell]=phase.poreVolume(cell);
-				captureCell(cell,cut,phase,h3,pores[cell],componentDry,actualInventory,bySlot);
+				byCell[cell]=null;if(capturePores)pores[cell]=phase.poreVolume(cell);
+				captureCell(cell,cut,phase,h3,pores[cell],componentDry,actualInventory,byCell);
 			}
-			for(int support:CellRemapMicroTopology.components(cut.mask(cell))){
-				var component=bySlot[8*cell+Integer.numberOfTrailingZeros(support)];if(component!=null)components.add(component);
-			}
+			var component=byCell[cell];if(component!=null)components.add(component);
 		}
 	}
 	private static int[] canonicalPieces(int count,List<Component> components) {
-		int[] canonical=new int[8*count];Arrays.fill(canonical,-1);
-		for(var component:components)for(int bits=component.supportMask();bits!=0;bits&=bits-1)
-			canonical[8*component.cell()+Integer.numberOfTrailingZeros(bits)]=component.minimumPiece();
+		int[] canonical=new int[count];Arrays.fill(canonical,-1);
+		for(var component:components)canonical[component.cell()]=component.minimumPiece();
 		return canonical;
 	}
 	private static void capturePorts(int sizeX,int sizeY,int sizeZ,int count,GasComplementGeometry source,
 	                                 boolean[] changed,int[] canonical,FlipCutCellGeometry cut,
 	                                 FlipPressurePhaseGeometry phase,double h2,List<Port> ports,List<ExteriorPort> exterior) {
-		int[] first=new int[4],second=new int[4];double[] areas=new double[4];
 		int oldPort=0,oldExterior=0;
 		for(int cell=0;cell<count;cell++)for(int axis=0;axis<3;axis++){
 			int coordinate=coordinate(cell,axis,sizeX,sizeY),size=axis==0?sizeX:axis==1?sizeY:sizeZ;
@@ -137,29 +129,26 @@ final class GasComplementGeometry {
 				if(source!=null)while(oldPort<source.portArray.length&&portKey(source.portArray[oldPort])<key)oldPort++;
 				if(source!=null&&!changed[cell]&&!changed[peer]){
 					while(oldPort<source.portArray.length&&portKey(source.portArray[oldPort])==key)ports.add(source.portArray[oldPort++]);
-				}else captureFace(cell,peer,axis,canonical,cut,phase,h2,first,second,areas,ports);
+				}else captureFace(cell,peer,axis,canonical,cut,phase,h2,ports);
 			}
 			int bit=coordinate==0?0:coordinate+1==size?1:-1;if(bit<0)continue;long key=6L*cell+2*axis+bit;
 			if(source!=null)while(oldExterior<source.exteriorArray.length&&exteriorKey(source.exteriorArray[oldExterior])<key)oldExterior++;
 			if(source!=null&&!changed[cell]){
 				while(oldExterior<source.exteriorArray.length&&exteriorKey(source.exteriorArray[oldExterior])==key)exterior.add(source.exteriorArray[oldExterior++]);
-			}else captureExteriorFace(cell,axis,bit,canonical,cut,phase,h2,first,areas,exterior);
+			}else captureExteriorFace(cell,axis,bit,canonical,cut,phase,h2,exterior);
 		}
 	}
     /** Resolution decisions read the coarse pore remainder, independently of a face's PLIC film. */
     private static double[] componentDry(FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,int count){
-        double[] dry=new double[8*count];
-        for(int cell=0;cell<count;cell++){
+        double[] dry=new double[count];
+        for(int cell=0;cell<count;cell++) {
+            int support=~cut.mask(cell)&255;if(support==0)continue;
             double open=cut.openCellVolume(cell),fallback=open>0?phase.poreVolume(cell).toDouble()/open:0;
-            int[] supports=CellRemapMicroTopology.components(cut.mask(cell));
-            for(int index=0;index<supports.length;index++){
-                int support=supports[index];
-                int micro=Integer.numberOfTrailingZeros(support),slot=8*cell+micro;
-                double scale=phase.componentPoreScale(cell,micro,fallback),capacity=scale*Integer.bitCount(support)*.125,liquid=0;
-                var plane=phase.offsetBracket(cell,micro);
-                liquid=plane==null?capacity*phase.liquidFractionExact(cell,micro):scale*plane.targetVolume();
-                dry[slot]=Math.max(0,capacity-liquid);
-            }
+            int micro=Integer.numberOfTrailingZeros(support);
+            double scale=phase.componentPoreScale(cell,micro,fallback),capacity=scale*Integer.bitCount(support)*.125;
+            var plane=phase.offsetBracket(cell,micro);
+            double liquid=plane==null?capacity*phase.liquidFractionExact(cell,micro):scale*plane.targetVolume();
+            dry[cell]=Math.max(0,capacity-liquid);
         }
         return dry;
     }
@@ -172,32 +161,28 @@ final class GasComplementGeometry {
 	}
     private static void captureCell(int cell,FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,
                                     double physicalScale,SignedDyadic poreVolume,double[] componentDry,
-                                    boolean actualInventory,Component[] bySlot) {
+                                    boolean actualInventory,Component[] byCell) {
         if(phase.collisionMask(cell)!=cut.mask(cell))throw new IllegalArgumentException("Gas complement PLIC collision geometry differs at cell "+cell);
         if(cut.fullySolid(cell))return;
-        int[] supports=CellRemapMicroTopology.components(cut.mask(cell));
-        var capacities=actualInventory?null:CellRemapMicroTopology.capacities(cut.mask(cell),poreVolume);
-        for(int i=0;i<supports.length;i++) {
-            int support=supports[i],slot=8*cell+Integer.numberOfTrailingZeros(support);
-            double available=componentDry[slot];
-            if(actualInventory?!(available>0):capacities[i].signum()<=0)continue;
-            int dryMask=0;double normalized=0;
-            if(phase.componentLiquidFraction(cell,Integer.numberOfTrailingZeros(support))==0) {
-                dryMask=support;normalized=Integer.bitCount(support)*MICRO_VOLUME;
-            } else for(int bits=support;bits!=0;bits&=bits-1) {
-                int micro=Integer.numberOfTrailingZeros(bits);double value=dryMicroVolume(phase,cell,micro);
-                if(value>0){dryMask|=1<<micro;normalized+=value;}
-            }
-            boolean compact=false;
-            if(dryMask==0&&actualInventory) {
-                dryMask=Integer.lowestOneBit(support);normalized=available;compact=true;
-            }
-            if(dryMask==0)continue;
-            double volume=normalized*physicalScale;
-            if(!(volume>0&&Double.isFinite(volume)))throw blocked("Positive gas component volume is not representable",cell);
-            bySlot[slot]=new Component(cell,support,dryMask,normalized,volume,compact,
-                    phase.componentPlane(cell,Integer.numberOfTrailingZeros(support)),phase.occupancyCell(cell));
+        int support=~cut.mask(cell)&255;
+        double available=componentDry[cell];
+        if(actualInventory?!(available>0):poreVolume.signum()<=0)return;
+        int dryMask=0;double normalized=0;
+        if(phase.componentLiquidFraction(cell,Integer.numberOfTrailingZeros(support))==0) {
+            dryMask=support;normalized=Integer.bitCount(support)*MICRO_VOLUME;
+        } else for(int bits=support;bits!=0;bits&=bits-1) {
+            int micro=Integer.numberOfTrailingZeros(bits);double value=dryMicroVolume(phase,cell,micro);
+            if(value>0){dryMask|=1<<micro;normalized+=value;}
         }
+        boolean compact=false;
+        if(dryMask==0&&actualInventory) {
+            dryMask=Integer.lowestOneBit(support);normalized=available;compact=true;
+        }
+        if(dryMask==0)return;
+        double volume=normalized*physicalScale;
+        if(!(volume>0&&Double.isFinite(volume)))throw blocked("Positive gas component volume is not representable",cell);
+        byCell[cell]=new Component(cell,support,dryMask,normalized,volume,compact,
+                phase.componentPlane(cell,Integer.numberOfTrailingZeros(support)),phase.occupancyCell(cell));
     }
     private static double dryMicroVolume(FlipPressurePhaseGeometry phase,int cell,int micro) {
         double fraction=phase.liquidFractionExact(cell,micro);
@@ -211,41 +196,37 @@ final class GasComplementGeometry {
     }
 
 	private static void captureFace(int cell,int peer,int axis,int[] canonical,FlipCutCellGeometry cut,
-	                                FlipPressurePhaseGeometry phase,double h2,int[] first,int[] second,double[] areas,List<Port> result){
+	                                FlipPressurePhaseGeometry phase,double h2,List<Port> result) {
+        if(canonical[cell]<0||canonical[peer]<0)return;
         boolean full=fullFixedConnection(cut,cell,peer,axis);
-        if(full&&canonical[8*cell+(1<<axis)]>=0&&canonical[8*peer]>=0
-                &&GasFaceIntersection.fullDryFace(phase,cell,axis,1)&&GasFaceIntersection.fullDryFace(phase,peer,axis,0)){
-            result.add(new Port(canonical[8*cell+(1<<axis)],canonical[8*peer],axis,h2,true));
-            return;
+        if(full&&GasFaceIntersection.fullDryFace(phase,cell,axis,1)&&GasFaceIntersection.fullDryFace(phase,peer,axis,0)) {
+            result.add(new Port(canonical[cell],canonical[peer],axis,h2,true));return;
         }
-		int count=0;
-		for(int a=0;a<2;a++)for(int b=0;b<2;b++){
-			int slot=1<<axis|a<<((axis+1)%3)|b<<((axis+2)%3),other=slot^(1<<axis);
-			if(canonical[8*cell+slot]<0||canonical[8*peer+other]<0)continue;
-			double area=GasFaceIntersection.area(phase,cell,slot,peer,other,axis,1,0,.5*a,.5*b,.5);if(area<=0)continue;
-			int from=canonical[8*cell+slot],to=canonical[8*peer+other],entry=0;while(entry<count&&(first[entry]!=from||second[entry]!=to))entry++;
-			if(entry==count){first[count]=from;second[count]=to;areas[count++]=0;}areas[entry]+=area;
-		}
-		if(count==0)return;
-		for(int i=0;i<count;i++)result.add(new Port(first[i],second[i],axis,physicalArea(areas[i],h2,cell),full));
-	}
+        double area=0;
+        for(int a=0;a<2;a++)for(int b=0;b<2;b++) {
+            int micro=1<<axis|a<<((axis+1)%3)|b<<((axis+2)%3),other=micro^(1<<axis);
+            if((cut.mask(cell)&1<<micro)!=0||(cut.mask(peer)&1<<other)!=0)continue;
+            double part=GasFaceIntersection.area(phase,cell,micro,peer,other,axis,1,0,.5*a,.5*b,.5);
+            if(part>0)area+=part;
+        }
+        if(area>0)result.add(new Port(canonical[cell],canonical[peer],axis,physicalArea(area,h2,cell),full));
+    }
 	private static void captureExteriorFace(int cell,int axis,int bit,int[] canonical,FlipCutCellGeometry cut,
-	                                        FlipPressurePhaseGeometry phase,double h2,int[] first,double[] areas,List<ExteriorPort> result){
+	                                        FlipPressurePhaseGeometry phase,double h2,List<ExteriorPort> result) {
+        if(canonical[cell]<0)return;
         boolean full=fullFixedFace(cut,cell,axis,bit);
-        if(full&&canonical[8*cell+(bit<<axis)]>=0&&GasFaceIntersection.fullDryFace(phase,cell,axis,bit)){
-            result.add(new ExteriorPort(canonical[8*cell+(bit<<axis)],axis,bit==0?-1:1,h2,true));
-            return;
+        if(full&&GasFaceIntersection.fullDryFace(phase,cell,axis,bit)) {
+            result.add(new ExteriorPort(canonical[cell],axis,bit==0?-1:1,h2,true));return;
         }
-		int count=0;
-		for(int a=0;a<2;a++)for(int b=0;b<2;b++){
-			int slot=bit<<axis|a<<((axis+1)%3)|b<<((axis+2)%3);if(canonical[8*cell+slot]<0)continue;
-			double area=GasFaceIntersection.area(phase,cell,-1,axis,bit,0,.5*a,.5*b,.5);if(area<=0)continue;
-			int from=canonical[8*cell+slot],entry=0;while(entry<count&&first[entry]!=from)entry++;
-			if(entry==count){first[count]=from;areas[count++]=0;}areas[entry]+=area;
-		}
-		if(count==0)return;
-		for(int i=0;i<count;i++)result.add(new ExteriorPort(first[i],axis,bit==0?-1:1,physicalArea(areas[i],h2,cell),full));
-	}
+        double area=0;
+        for(int a=0;a<2;a++)for(int b=0;b<2;b++) {
+            int micro=bit<<axis|a<<((axis+1)%3)|b<<((axis+2)%3);
+            if((cut.mask(cell)&1<<micro)!=0)continue;
+            double part=GasFaceIntersection.area(phase,cell,-1,axis,bit,0,.5*a,.5*b,.5);
+            if(part>0)area+=part;
+        }
+        if(area>0)result.add(new ExteriorPort(canonical[cell],axis,bit==0?-1:1,physicalArea(area,h2,cell),full));
+    }
 	private static int coordinate(int cell, int axis, int sizeX, int sizeY) {
 		return axis == 0 ? cell % sizeX : axis == 1 ? cell / sizeX % sizeY : cell / (sizeX * sizeY);
 	}
@@ -268,7 +249,6 @@ final class GasComplementGeometry {
 		return new GasTopologyBlockedException(message + " at cell " + cell);
 	}
 
-	double componentDry(int cell,int support){return componentDry[8*cell+Integer.numberOfTrailingZeros(support)];}
 	GasComponentCapacity.Prepared actualCapacity(){return actualCapacity;}
 	GasChamberTopology cachedTopology(boolean sealed){return sealed?sealedTopology:openTopology;}
 	void cacheTopology(boolean sealed,GasChamberTopology topology){if(sealed)sealedTopology=topology;else openTopology=topology;}
@@ -280,7 +260,7 @@ final class GasComplementGeometry {
 	int sizeX() { return sizeX; }
 	int sizeY() { return sizeY; }
 	int sizeZ() { return sizeZ; }
-	Component component(int cell,int support){return bySlot[8*cell+Integer.numberOfTrailingZeros(support)];}
+	Component component(int cell,int support){var component=byCell[cell];return component!=null&&component.supportMask()==support?component:null;}
     Component componentAtMicro(int piece){int cell=piece/8,support=CellRemapMicroTopology.support(collisionMask(cell),piece&7);return support==0?null:component(cell,support);}
     boolean hasPiece(int piece){var component=componentAtMicro(piece);return component!=null&&(component.dryMicroMask()&1<<(piece&7))!=0;}
     double pieceNormalizedVolume(int piece){

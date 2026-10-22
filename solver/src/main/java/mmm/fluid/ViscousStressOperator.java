@@ -29,6 +29,14 @@ final class ViscousStressOperator {
 		rows = 0; spectralBound = 0;
 	}
 
+	void reserveRows(int capacity) {
+		if(capacity<=weights.length)return;
+		weights=Arrays.copyOf(weights,capacity);
+		indices=Arrays.copyOf(indices,4*capacity);
+		coefficients=Arrays.copyOf(coefficients,4*capacity);
+		heatCells=Arrays.copyOf(heatCells,4*capacity);
+	}
+
 	void active(int id, int axis, double capacity, double value) {
 		if (!(capacity > 0) || !Double.isFinite(capacity) || !Double.isFinite(value)) {
 			throw new IllegalStateException("Invalid viscous momentum capacity/velocity at face " + id);
@@ -44,10 +52,7 @@ final class ViscousStressOperator {
 		if (!(weight >= 0) || !Double.isFinite(weight)) throw new IllegalStateException("Invalid viscous conductance");
 		if (weight == 0) return;
 		if (rows == weights.length) {
-			weights = Arrays.copyOf(weights, rows * 2);
-			indices = Arrays.copyOf(indices, rows * 8);
-			coefficients = Arrays.copyOf(coefficients, rows * 8);
-			heatCells = Arrays.copyOf(heatCells, rows * 8);
+			reserveRows(rows*2);
 		}
 		int offset = rows * 4;
 		heatCells[offset]=ownerA;heatCells[offset+1]=ownerB;heatCells[offset+2]=ownerC;heatCells[offset+3]=ownerD;

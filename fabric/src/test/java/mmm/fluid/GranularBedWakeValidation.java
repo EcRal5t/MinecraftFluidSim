@@ -441,6 +441,7 @@ public final class GranularBedWakeValidation {
 	}
 
 	private static void jointCapacity(FluidDomain domain) {
+		domain.domainFlowFields.ensureInventoryGrid();
 		for (int c = 0; c < domain.cellCount; c++) require(domain.liquidGrid.exactCellVolumeInventory[c].compareTo(
 				mmm.units.SignedDyadic.of(domain.domainCollision.effectiveOpenCellVolume(c))) <= 0,
 				"Published bed state overlaps liquid and skeleton at cell " + c);

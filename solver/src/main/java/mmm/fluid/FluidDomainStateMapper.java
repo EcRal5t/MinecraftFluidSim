@@ -34,7 +34,7 @@ final class FluidDomainStateMapper {
 				domain.thermalState == null ? null : domain.thermalState.exportOwnerState(),
 				domain.thermalState == null ? 0 : domain.thermalState.maximumTransportSubsteps(),
 				domain.thermalState == null ? null : domain.exportPendingPhaseMotionState(),domain.thermalBoundaryTemperatureK,
-				domain.thermalState == null ? null : domain.pressureSystem.captureLiquidPressure(),domain.materialDefinitions);
+				domain.thermalState == null ? null : domain.pressureSystem.captureRuntimePressure(),domain.materialDefinitions);
 		return captured;
 	}
 
@@ -90,12 +90,7 @@ final class FluidDomainStateMapper {
 			if (thermalBoundary != null) domain.replaceThermalBoundaryTemperatures(thermalBoundary);
 		}
 		if (state.precipitationEnabled()) domain.setPrecipitationEnabled(true);
-		// Stored actual pressure is converted back to the solver's residual using the
-		// current hydrostatic and capillary references. Velocity remains lazy.
-		if(state.condensedPhasePressure()!=null){
-			if(domain.gasState.frame!=null)domain.pressureSystem.prepareGeometry();
-			domain.pressureSystem.restoreLiquidPressure(state.condensedPhasePressure());
-		}
+		if(state.pressureContinuation()!=null)domain.pressureSystem.restoreLiquidPressure(state.pressureContinuation());
 		return domain;
 	}
 }

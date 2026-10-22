@@ -23,13 +23,15 @@ final class ThermalCellEnergyAssignment {
 		final Inventory inventory;
 		final SignedDyadic requested, reference;
 		final ThermalStateFunction.State state;
+		final ThermalCaloricInversion.Prepared caloric;
 		Trial(Inventory inventory, SignedDyadic requested) {
 			this.inventory = inventory; this.requested = requested;
 			SignedDyadic total = SignedDyadic.ZERO;
 			for (int item = inventory.first(); item >= 0; item = inventory.next(item))
 				total = total.add(inventory.exactBaseEnergy(item));
 			reference = total;
-			state = ThermalCaloricInversion.solve(inventory,requested.subtract(reference));
+			caloric=new ThermalCaloricInversion.Prepared(inventory);
+			state = caloric.solve(requested.subtract(reference));
 		}
 	}
 
@@ -66,7 +68,7 @@ final class ThermalCellEnergyAssignment {
 			SignedDyadic actualSum = others.add(SignedDyadic.of(remainder));
 			if (!Double.isFinite(actualSum.toDouble())) throw new ThermalStateFunction.EnergyRepresentationException();
 			var state = actualSum.equals(trial.requested) ? trial.state
-					: ThermalCaloricInversion.solve(inventory,actualSum.subtract(trial.reference));
+					: trial.caloric.solve(actualSum.subtract(trial.reference));
 			return new Plan(List.copyOf(actual), actualSum, state);
 		} catch (IllegalArgumentException invalid) {
 			throw new UnavailableException("Thermal assigned carrier state is invalid", invalid);

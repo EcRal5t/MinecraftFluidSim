@@ -214,6 +214,8 @@ final class DomainCapabilities {
 		return domain.thermalState.exportOwnerState();
 	}
 	void validateCoherentRestoreCapacity(List<CoherentPhaseStore.Group> groups) {
+		if(groups.isEmpty()&&(domain.granularState==null
+				||domain.granularState.parcels.count()==0&&domain.granularState.deposits.groupCount()==0))return;
 		long[] fixed = new long[domain.cellCount];
 		for (CoherentPhaseStore.Group group : groups) {
 			if (group.cell() < 0 || group.cell() >= domain.cellCount) {

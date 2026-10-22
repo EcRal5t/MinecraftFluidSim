@@ -86,6 +86,22 @@ final class ThermalCaloricInversion {
 		double cv=capacity.value();return checkedState(numerator.value()/cv,cv);
 	}
 
+	/** A local fixed-material/mass inversion, reused across energy trials. */
+	static final class Prepared {
+		private final Inventory inventory;
+		private final Curve curve;
+		Prepared(Inventory inventory) {
+			this.inventory=inventory;
+			int first=inventory.first();boolean piecewise=false;
+			if(first>=0&&inventory.next(first)>=0)
+				for(int item=first;item>=0;item=inventory.next(item))
+					if(inventory.material(item).caloricSegments().size()!=1){piecewise=true;break;}
+			curve=piecewise?new Curve(inventory):null;
+		}
+		ThermalStateFunction.State solve(SignedDyadic target){return solve(target.toDouble());}
+		ThermalStateFunction.State solve(double target){return curve==null?ThermalCaloricInversion.solve(inventory,target):curve.solve(target);}
+	}
+
 	/** Positive piecewise-affine caloric curve with one grouping per actual material. */
 	static final class Curve {
 		private final double[] knots,energies,capacities;

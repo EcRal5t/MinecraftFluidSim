@@ -14,7 +14,7 @@ final class SolverRuntimeCodec {
 			out.writeInt(0x434d5254);out.writeBoolean(state.sealedDomainBoundary());out.writeBoolean(state.precipitationEnabled());out.writeInt(state.maximumThermalTransportSubsteps());
 			int[] dirty=state.copyChemicalDirtyCells();out.writeBoolean(dirty!=null);if(dirty!=null)writeInts(out,dirty);out.writeInt(state.chemicalReactionCursor());
 			double[] boundary=state.copyThermalBoundaryTemperaturesK();out.writeBoolean(boundary!=null);if(boundary!=null){out.writeInt(boundary.length);for(double value:boundary)out.writeLong(Double.doubleToRawLongBits(value));}
-			var pressure=state.condensedPhasePressure();out.writeBoolean(pressure!=null);if(pressure!=null){out.writeFloat(pressure.pressureReferencePa());float[] values=pressure.copyRelativeGaugePressurePa();out.writeInt(values.length);for(float value:values)out.writeFloat(value);}
+			var pressure=state.exportCondensedPhasePressure();out.writeBoolean(pressure!=null);if(pressure!=null){out.writeFloat(pressure.pressureReferencePa());float[] values=pressure.copyRelativeGaugePressurePa();out.writeInt(values.length);for(float value:values)out.writeFloat(value);}
 			var granular=state.granularDynamics();out.writeBoolean(granular!=null);if(granular!=null){out.writeLong(granular.logicalStep());writeInts(out,granular.stableAge());writeInts(out,granular.queuedColumns());}
 		}return bytes.toByteArray();
 	}

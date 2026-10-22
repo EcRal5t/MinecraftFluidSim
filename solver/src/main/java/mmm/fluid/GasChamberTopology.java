@@ -14,17 +14,17 @@ import java.util.TreeMap;
 final class GasChamberTopology {
 	record Chamber(int node, int minimumPiece, double geometricVolume, double volumeErrorBound) { }
 	record Connection(int firstNode, int secondNode, double area) { }
-	private final int[] componentNodes;
+	private final int[] cellNodes;
 	private final GasComplementGeometry geometry;
 	private final List<Chamber> chambers;
 	private final List<Connection> connections;
 	private final boolean sealedExterior;
 	private GasChamberCapacity preparedCapacity;
 
-	private GasChamberTopology(GasComplementGeometry geometry, int[] componentNodes, List<Chamber> chambers, List<Connection> connections, boolean sealedExterior) {
+	private GasChamberTopology(GasComplementGeometry geometry, int[] cellNodes, List<Chamber> chambers, List<Connection> connections, boolean sealedExterior) {
 		this.geometry = geometry;
 		this.sealedExterior = sealedExterior;
-		this.componentNodes=componentNodes; this.chambers = List.copyOf(chambers); this.connections = List.copyOf(connections);
+		this.cellNodes=cellNodes; this.chambers = List.copyOf(chambers); this.connections = List.copyOf(connections);
 	}
 
 	static GasChamberTopology capture(GasComplementGeometry geometry, boolean sealedExterior) {
@@ -43,31 +43,31 @@ final class GasChamberTopology {
         if(nodes>GasLimits.MAX_NODES_PER_REGION)throw new GasTopologyBlockedException("Gas chamber count exceeds its representation budget");
         Arrays.sort(roots,0,nodes);int[] owners=new int[count];
         for(int node=0;node<nodes;node++)owners[(int)roots[node]]=node+1;
-        int[] componentNodes=new int[8*cellCount(geometry)];Arrays.fill(componentNodes,-1);
-        for(int index=0;index<count;index++)componentNodes[components.get(index).slot()]=owners[parent[index]];
-        var chambers=captureChambers(components,componentNodes,roots,nodes);
-        var result=new GasChamberTopology(geometry,componentNodes,chambers,nodes==0?List.of():connections(geometry,componentNodes,sealedExterior),sealedExterior);
+        int[] cellNodes=new int[cellCount(geometry)];Arrays.fill(cellNodes,-1);
+        for(int index=0;index<count;index++)cellNodes[components.get(index).cell()]=owners[parent[index]];
+        var chambers=captureChambers(components,cellNodes,roots,nodes);
+        var result=new GasChamberTopology(geometry,cellNodes,chambers,nodes==0?List.of():connections(geometry,cellNodes,sealedExterior),sealedExterior);
         geometry.cacheTopology(sealedExterior,result);return result;
     }
 
     private static int[] connectedComponents(GasComplementGeometry geometry,boolean sealedExterior,boolean[] ambient) {
         var components=geometry.components();int count=components.size();
-        int[] componentIndex=new int[8*cellCount(geometry)];Arrays.fill(componentIndex,-1);
-        for(int index=0;index<count;index++)componentIndex[components.get(index).slot()]=index;
+        int[] cellComponent=new int[cellCount(geometry)];Arrays.fill(cellComponent,-1);
+        for(int index=0;index<count;index++)cellComponent[components.get(index).cell()]=index;
         int[] parent=new int[count];byte[] rank=new byte[count];
         for(int index=0;index<count;index++)parent[index]=index;
         for(var port:geometry.ports())if(port.fullCutConnection())
-            join(parent,rank,componentIndex[componentSlot(geometry,port.first())],componentIndex[componentSlot(geometry,port.second())]);
+            join(parent,rank,cellComponent[(port.first()/8)],cellComponent[(port.second()/8)]);
         for(int index=0;index<count;index++)parent[index]=root(parent,index);
         if(!sealedExterior)for(var port:geometry.exteriorPorts())if(port.fullCutConnection())
-            ambient[parent[componentIndex[componentSlot(geometry,port.piece())]]]=true;
+            ambient[parent[cellComponent[(port.piece()/8)]]]=true;
         return parent;
     }
-    private static List<Chamber> captureChambers(List<GasComplementGeometry.Component> components,int[] componentNodes,long[] roots,int nodes) {
+    private static List<Chamber> captureChambers(List<GasComplementGeometry.Component> components,int[] cellNodes,long[] roots,int nodes) {
         if(nodes==0)return List.of();
         double[] volumes=new double[nodes+1],errors=new double[nodes+1];
         for(var component:components) {
-            int node=componentNodes[component.slot()];
+            int node=cellNodes[component.cell()];
             volumes[node]+=component.volume();errors[node]+=componentError(component)+Math.ulp(volumes[node]);
         }
         var chambers=new ArrayList<Chamber>(nodes);
@@ -82,18 +82,18 @@ final class GasChamberTopology {
 	static void continueCached(GasComplementGeometry geometry,GasComplementGeometry source) {
 		if(!geometry.sameCollisionMasks(source)||!sameConnections(geometry,source))return;
         var current=geometry.components();var old=source.components();if(current.size()!=old.size())return;
-        for(int index=0;index<current.size();index++)if(current.get(index).slot()!=old.get(index).slot())return;
+        for(int index=0;index<current.size();index++)if(current.get(index).cell()!=old.get(index).cell())return;
         for(boolean sealed:new boolean[]{false,true}) {
             var previous=source.cachedTopology(sealed);if(previous==null)continue;
             int nodes=previous.chambers.size();
             if(nodes==0) {
-                geometry.cacheTopology(sealed,new GasChamberTopology(geometry,previous.componentNodes,List.of(),List.of(),sealed));
+                geometry.cacheTopology(sealed,new GasChamberTopology(geometry,previous.cellNodes,List.of(),List.of(),sealed));
                 continue;
             }
             int[] minimum=new int[nodes+1];Arrays.fill(minimum,Integer.MAX_VALUE);
             double[] volumes=new double[nodes+1],errors=new double[nodes+1];
             for(var component:current){
-                int node=previous.componentNodes[component.slot()];minimum[node]=Math.min(minimum[node],component.minimumPiece());
+                int node=previous.cellNodes[component.cell()];minimum[node]=Math.min(minimum[node],component.minimumPiece());
                 volumes[node]+=component.volume();errors[node]+=componentError(component)+Math.ulp(volumes[node]);
             }
             boolean ordered=true;
@@ -104,8 +104,8 @@ final class GasChamberTopology {
                 double volume=positive(volumes[node],"Gas chamber volume");
                 chambers.add(new Chamber(node,minimum[node],volume,Math.nextUp(errors[node]+Math.ulp(volume))));
             }
-            geometry.cacheTopology(sealed,new GasChamberTopology(geometry,previous.componentNodes,chambers,
-                    connections(geometry,previous.componentNodes,sealed),sealed));
+            geometry.cacheTopology(sealed,new GasChamberTopology(geometry,previous.cellNodes,chambers,
+                    connections(geometry,previous.cellNodes,sealed),sealed));
         }
     }
 
@@ -114,25 +114,21 @@ final class GasChamberTopology {
 		for(int i=0;i<a.size();i++) {
 			var x=a.get(i);var y=b.get(i);if(x==y)continue;
 			if(x.axis()!=y.axis()||x.fullCutConnection()!=y.fullCutConnection()
-					||componentSlot(first,x.first())!=componentSlot(second,y.first())
-					||componentSlot(first,x.second())!=componentSlot(second,y.second()))return false;
+					||(x.first()/8)!=(y.first()/8)
+					||(x.second()/8)!=(y.second()/8))return false;
 		}
 		var c=first.exteriorPorts();var d=second.exteriorPorts();if(c.size()!=d.size())return false;
 		for(int i=0;i<c.size();i++) {
 			var x=c.get(i);var y=d.get(i);if(x==y)continue;
 			if(x.axis()!=y.axis()||x.sign()!=y.sign()||x.fullCutConnection()!=y.fullCutConnection()
-					||componentSlot(first,x.piece())!=componentSlot(second,y.piece()))return false;
+					||(x.piece()/8)!=(y.piece()/8))return false;
 		}
 		return true;
 	}
-	private static int componentSlot(GasComplementGeometry geometry,int piece) {
-		int cell=piece/8,support=CellRemapMicroTopology.support(geometry.collisionMask(cell),piece&7);
-		return 8*cell+Integer.numberOfTrailingZeros(support);
-	}
-	private static List<Connection> connections(GasComplementGeometry geometry,int[] componentNodes,boolean sealed) {
+	private static List<Connection> connections(GasComplementGeometry geometry,int[] cellNodes,boolean sealed) {
 		var areas=new TreeMap<Long,Double>();
-		for(var port:geometry.ports())addArea(areas,componentNodes[componentSlot(geometry,port.first())],componentNodes[componentSlot(geometry,port.second())],port.area());
-		if(!sealed)for(var port:geometry.exteriorPorts())addArea(areas,0,componentNodes[componentSlot(geometry,port.piece())],port.area());
+		for(var port:geometry.ports())addArea(areas,cellNodes[(port.first()/8)],cellNodes[(port.second()/8)],port.area());
+		if(!sealed)for(var port:geometry.exteriorPorts())addArea(areas,0,cellNodes[(port.piece()/8)],port.area());
 		var result=new ArrayList<Connection>(areas.size());
 		for(var entry:areas.entrySet())result.add(new Connection((int)(entry.getKey()>>>32),(int)(long)entry.getKey(),positive(entry.getValue(),"Gas chamber port area")));
 		return result;
@@ -162,11 +158,11 @@ final class GasChamberTopology {
 	int[] copyPieceNodes() {
         var result=new int[8*cellCount(geometry)];Arrays.fill(result,-1);
         for(var component:geometry.components())for(int bits=component.dryMicroMask();bits!=0;bits&=bits-1)
-            result[8*component.cell()+Integer.numberOfTrailingZeros(bits)]=componentNodes[component.slot()];
+            result[8*component.cell()+Integer.numberOfTrailingZeros(bits)]=cellNodes[component.cell()];
         return result;
     }
-    int nodeOfPiece(int piece) { return geometry.hasPiece(piece)?componentNodes[componentSlot(geometry,piece)]:-1; }
-	int nodeOfComponent(int cell,int support) { return componentNodes[8*cell+Integer.numberOfTrailingZeros(support)]; }
+    int nodeOfPiece(int piece) { return geometry.hasPiece(piece)?cellNodes[(piece/8)]:-1; }
+	int nodeOfComponent(int cell,int support) { return support==(~geometry.collisionMask(cell)&255)?cellNodes[cell]:-1; }
 	GasChamberCapacity preparedCapacity(){return preparedCapacity;}
 	void preparedCapacity(GasChamberCapacity capacity){preparedCapacity=capacity;}
 	List<Chamber> chambers() { return chambers; }

@@ -3,7 +3,9 @@ package mmm.granular;
 import mmm.units.SignedDyadic;
 import mmm.units.ProportionalDoubleSplit;
 
-/** Fixed-capacity primitive SoA for active granular parcels; mass columns use integer 100 ng counts. */
+import java.util.Arrays;
+
+/** Bounded, growing primitive SoA for active granular parcels; mass columns use integer 100 ng counts. */
 public final class GranularParcelStore {
 	public static final byte FLAG_SUPPORTED = 1;
 
@@ -109,12 +111,31 @@ public final class GranularParcelStore {
 		this.registry = registry;
 		this.kernel = kernel;
 		this.capacity = capacity;
-		this.x = new float[capacity]; this.y = new float[capacity]; this.z = new float[capacity];
-		this.velocityX = new float[capacity]; this.velocityY = new float[capacity]; this.velocityZ = new float[capacity];
-		this.solidVolumeSvq = new long[capacity]; this.massUnits = new long[capacity];
-		this.materialHandle = new int[capacity]; this.solidCompositionHandle = new int[capacity];
-		this.contactAge = new int[capacity]; this.flags = new byte[capacity];
-		this.ceilMask = new byte[capacity];
+		this.x = new float[0]; this.y = new float[0]; this.z = new float[0];
+		this.velocityX = new float[0]; this.velocityY = new float[0]; this.velocityZ = new float[0];
+		this.solidVolumeSvq = new long[0]; this.massUnits = new long[0];
+		this.materialHandle = new int[0]; this.solidCompositionHandle = new int[0];
+		this.contactAge = new int[0]; this.flags = new byte[0];
+		this.ceilMask = new byte[0];
+	}
+
+	private void ensureAllocated(int required) {
+		if(required>capacity)throw new BudgetExceededException("Active granular parcel budget exceeded");
+		if(required<=x.length)return;
+		int length=Math.min(capacity,Math.max(required,Math.max(16,2*x.length)));
+		x=Arrays.copyOf(x,length);
+		y=Arrays.copyOf(y,length);
+		z=Arrays.copyOf(z,length);
+		velocityX=Arrays.copyOf(velocityX,length);
+		velocityY=Arrays.copyOf(velocityY,length);
+		velocityZ=Arrays.copyOf(velocityZ,length);
+		solidVolumeSvq=Arrays.copyOf(solidVolumeSvq,length);
+		massUnits=Arrays.copyOf(massUnits,length);
+		materialHandle=Arrays.copyOf(materialHandle,length);
+		solidCompositionHandle=Arrays.copyOf(solidCompositionHandle,length);
+		contactAge=Arrays.copyOf(contactAge,length);
+		flags=Arrays.copyOf(flags,length);
+		ceilMask=Arrays.copyOf(ceilMask,length);
 	}
 
 	public int count() { return count; }
@@ -135,6 +156,7 @@ public final class GranularParcelStore {
 	/** Inventory plans have already validated the parcel and its unchanged append slot. */
 	int appendPrepared(Parcel parcel) {
 		int mask = prepareMask(parcel, -1);
+		ensureAllocated(count+1);
 		int index = count++;
 		write(index, parcel, mask);
 		mutationRevision++;

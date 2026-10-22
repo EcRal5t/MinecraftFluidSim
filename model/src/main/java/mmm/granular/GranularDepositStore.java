@@ -25,6 +25,7 @@ public final class GranularDepositStore {
 	public record Group(int materialHandle, int solidCompositionHandle, long solidVolumeSvq, long massUnits) { public double mass() { return mmm.units.Mass.kilograms(massUnits); } }
 
 	private final GranularRegistry registry;
+	private final int maximumGroups;
 	private int[] headByCell, porosityQByCell;
 	private long[] bulkVolumeSvqByCell;
 	private int[] materialHandle, solidCompositionHandle, next, freeEntries;
@@ -35,6 +36,7 @@ public final class GranularDepositStore {
 
 	private GranularDepositStore(GranularDepositStore source) {
 		this.registry=source.registry;
+		this.maximumGroups=source.maximumGroups;
 		this.headByCell=source.headByCell.clone();
 		this.porosityQByCell=source.porosityQByCell.clone();
 		this.bulkVolumeSvqByCell=source.bulkVolumeSvqByCell.clone();
@@ -53,7 +55,7 @@ public final class GranularDepositStore {
 	/** One private candidate copy for a complete inventory transaction. */
 	public GranularDepositStore copy() { return new GranularDepositStore(this); }
 	public void requirePrepared(GranularDepositStore prepared,long sourceRevision) {
-		if(prepared==null||prepared==this||mutationRevision!=sourceRevision||prepared.registry!=registry||prepared.headByCell.length!=headByCell.length||prepared.materialHandle.length!=materialHandle.length)
+		if(prepared==null||prepared==this||mutationRevision!=sourceRevision||prepared.registry!=registry||prepared.headByCell.length!=headByCell.length||prepared.maximumGroups!=maximumGroups)
 			throw new IllegalStateException("Prepared GranularDepositStore differs from its source generation");
 	}
 	/** Exchanges validated columns; the candidate receives the detached old inventory. */
@@ -82,13 +84,14 @@ public final class GranularDepositStore {
 			throw new IllegalArgumentException("Deposit group capacity is invalid");
 		}
 		this.registry = registry;
+		this.maximumGroups = maximumGroups;
 		this.headByCell = new int[cellCount]; Arrays.fill(headByCell, -1);
 		this.porosityQByCell = new int[cellCount];
 		this.bulkVolumeSvqByCell = new long[cellCount];
-		this.materialHandle = new int[maximumGroups]; this.solidCompositionHandle = new int[maximumGroups];
-		this.solidVolumeSvq = new long[maximumGroups]; this.massUnits = new long[maximumGroups];
-		this.next = new int[maximumGroups]; Arrays.fill(next, -1);
-		this.freeEntries = new int[maximumGroups];
+		this.materialHandle = new int[0]; this.solidCompositionHandle = new int[0];
+		this.solidVolumeSvq = new long[0]; this.massUnits = new long[0];
+		this.next = new int[0];
+		this.freeEntries = new int[0];
 	}
 
 	public int cellCount() { return headByCell.length; }
@@ -193,7 +196,7 @@ public final class GranularDepositStore {
 
 		int existing = find(cell, portion.materialHandle(), portion.solidCompositionHandle());
 		if (existing < 0 && (groupsInCell(cell) >= GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL
-				|| groupCount == materialHandle.length)) return false;
+				|| groupCount == maximumGroups)) return false;
 		if (existing >= 0) {
 			long newMass = Math.addExact(massUnits[existing], portion.massUnits());
 			solidVolumeSvq[existing] = Math.addExact(solidVolumeSvq[existing], portion.solidVolumeSvq());
@@ -260,7 +263,7 @@ public final class GranularDepositStore {
 			var plan = planCellAdditions(cell.cell(), cell.incoming(), cell.geometricOpenSvq());
 			if (plan == null) return null;
 			for (int entry : plan.entries) if (entry < 0) newGroups++;
-			if (newGroups > materialHandle.length - groupCount) return null;
+			if (newGroups > maximumGroups - groupCount) return null;
 			cells.add(plan);
 		}
 		return new AdditionsBatchPlan(this, cells);
@@ -325,7 +328,7 @@ public final class GranularDepositStore {
 			bulk = bulk.add(restBulk(addition.volume, key.material));
 			groups.add(new Group(key.material, key.composition, addition.volume, storedMass));
 		}
-		if (addedGroups > materialHandle.length - groupCount || skeleton > geometricOpenSvq) return null;
+		if (addedGroups > maximumGroups - groupCount || skeleton > geometricOpenSvq) return null;
 		CellPacking packing = mixedPacking(skeleton, bulk);
 		if (packing.bulkVolumeSvq() > geometricOpenSvq) return null;
 		return new AdditionsPlan(this, cell, groups, entries, packing, oldMass);
@@ -529,9 +532,23 @@ public final class GranularDepositStore {
 		}
 	}
 
+	private void ensureAllocated(int required) {
+		if(required<=materialHandle.length)return;
+		int previous=materialHandle.length;
+		int length=Math.min(maximumGroups,Math.max(required,Math.max(16,2*previous)));
+		materialHandle=Arrays.copyOf(materialHandle,length);
+		solidCompositionHandle=Arrays.copyOf(solidCompositionHandle,length);
+		solidVolumeSvq=Arrays.copyOf(solidVolumeSvq,length);
+		massUnits=Arrays.copyOf(massUnits,length);
+		next=Arrays.copyOf(next,length);
+		freeEntries=Arrays.copyOf(freeEntries,length);
+		Arrays.fill(next,previous,length,-1);
+	}
+
 	private int allocateEntry() {
 		if (freeCount > 0) return freeEntries[--freeCount];
-		if (nextUnused == materialHandle.length) throw new IllegalStateException("Deposit group budget exhausted after planning");
+		if (nextUnused == maximumGroups) throw new IllegalStateException("Deposit group budget exhausted after planning");
+		ensureAllocated(nextUnused+1);
 		return nextUnused++;
 	}
 

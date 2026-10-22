@@ -33,10 +33,12 @@ final class ViscousMacDiscretization {
 
 	void assemble(float[][] velocity) {
 		operator.clear();
+		int wetCells=0;
 		for (int cell = 0; cell < liquid.length; cell++) {
 			liquid[cell] = geometry.liquid(cell);
 			volumes[cell] = liquid[cell] ? geometry.volume(cell) : 0;
 			if (!liquid[cell]) continue;
+			wetCells++;
 			densities[cell] = geometry.density(cell); viscosities[cell] = geometry.viscosity(cell);
 			if (!(volumes[cell] > 0) || !Double.isFinite(volumes[cell])
 					|| !(densities[cell] > 0) || !Double.isFinite(densities[cell])
@@ -44,6 +46,8 @@ final class ViscousMacDiscretization {
 				throw new IllegalStateException("Invalid viscous liquid control volume/properties at cell " + cell);
 			}
 		}
+		// Each wet cell owns three normal strains, up to three shear patches and six wall rows.
+		operator.reserveRows(wetCells*(wall==FluidSolverConfig.WallCondition.NO_SLIP?12:6));
 		for (int axis = 0; axis < 3; axis++) {
 			int dx = axis == 0 ? 1 : 0, dy = axis == 1 ? 1 : 0, dz = axis == 2 ? 1 : 0;
 			for (int z = 0; z < nz + dz; z++) for (int y = 0; y < ny + dy; y++) for (int x = 0; x < nx + dx; x++) {

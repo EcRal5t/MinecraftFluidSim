@@ -399,6 +399,21 @@ final class PressureSystem {
 		double head = density * domain.config.gravity() * domain.config.cellSize() * domain.sizeY;
 		return mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE + residual + gas + head + capillary;
 	}
+	/** Normalize every cell to the same physical-pressure reference before private handoff. */
+	CondensedPhasePressureField captureRuntimePressure() {
+		float[] residual=new float[domain.cellCount];
+		if(domain.gasState.frame==null) {
+			for(int cell=0;cell<residual.length;cell++)residual[cell]=liquidPressure[cell]+domain.tension.surfaceTensionPressure[cell];
+		} else {
+			prepareGeometry();
+			for(int cell=0;cell<residual.length;cell++) {
+				int support=~domain.geometry.cutCells.mask(cell)&255;
+				float actual=(float)liquidPressureAt(cell,support);
+				residual[cell]=(float)(actual-domain.tension.surfaceTensionPressure[cell]-faces.referencePressure(cell,support));
+			}
+		}
+		return CondensedPhasePressureField.runtime(residual);
+	}
 	CondensedPhasePressureField captureLiquidPressure(){
 		float[] actual=new float[domain.cellCount];
 		if(domain.gasState.frame==null){
@@ -412,6 +427,10 @@ final class PressureSystem {
 		return new CondensedPhasePressureField(0,actual);
 	}
 	void restoreLiquidPressure(CondensedPhasePressureField state){
+		if(state.isRuntimeResidual()) {
+			state.copyRuntimeResidualTo(liquidPressure);return;
+		}
+		if(domain.gasState.frame!=null)prepareGeometry();
 		float[] actual=state.copyRelativeGaugePressurePa();
 		if(domain.gasState.frame==null){
 			for(int cell=0;cell<domain.cellCount;cell++)liquidPressure[cell]=(float)(state.pressureReferencePa()+actual[cell]);

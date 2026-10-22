@@ -82,7 +82,8 @@ public record ThermalPhaseTransition(
 		if (!(Double.isFinite(minimumPa) && Double.isFinite(maximumPa) && minimumPa >= 0.0 && maximumPa >= minimumPa)
 				|| interfaceRequirement == InterfaceRequirement.LIQUID_GAS
 				&& (minimumPa < minimumPressurePa() || maximumPa > maximumPressurePa())) {
-			throw new IllegalArgumentException("Pressure interval is outside the thermal equilibrium curve");
+			throw new IllegalArgumentException("Pressure interval is outside the thermal equilibrium curve: "
+					+ minimumPa + ".." + maximumPa + " Pa for " + id);
 		}
 		double first = continuedTemperature(minimumPa), last = continuedTemperature(maximumPa);
 		double minimum = Math.min(first, last), maximum = Math.max(first, last);

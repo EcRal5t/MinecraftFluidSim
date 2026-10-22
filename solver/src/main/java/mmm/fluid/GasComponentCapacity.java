@@ -37,34 +37,28 @@ final class GasComponentCapacity {
     private static Prepared prepare(FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,SignedDyadic[] preparedPores,long[] occupied,
                                     LiquidCellInventory.Snapshot cells,Prepared source){
         int count=cells.cellCount();var components=new ArrayList<Component>(source==null?count:source.components.size());
-        var fixedGeometry=cut.snapshot();byte[] masks=fixedGeometry.masksView();var pores=new SignedDyadic[count];int[] offsets=new int[count+1];double[] dry=new double[8*count];
+        var fixedGeometry=cut.snapshot();byte[] masks=fixedGeometry.masksView();var pores=new SignedDyadic[count];int[] offsets=new int[count+1];double[] dry=new double[count];
         boolean unchanged=source!=null;
         for(int cell=0;cell<count;cell++){
-            int mask=Byte.toUnsignedInt(masks[cell]);var supports=CellRemapMicroTopology.components(mask);
+            int mask=Byte.toUnsignedInt(masks[cell]),support=~mask&255;
             var pore=phase!=null?phase.poreVolume(cell):occupied==null?SignedDyadic.ZERO
                     :occupied[cell]==0?OPEN_PORE[Integer.bitCount(~mask&255)]
                     :OPEN_PORE[Integer.bitCount(~mask&255)].subtract(SignedDyadic.of(occupied[cell],-24));
-            if(preparedPores!=null){
-                if(supports.length==1)pore=preparedPores[8*cell+Integer.numberOfTrailingZeros(supports[0])];
-                else for(int support:supports)pore=pore.add(preparedPores[8*cell+Integer.numberOfTrailingZeros(support)]);
-            }
+            if(preparedPores!=null)pore=preparedPores[cell];
             if(pore.signum()<0)throw blocked("Solid occupation exceeds actual open pore",cell);
             pores[cell]=pore;offsets[cell]=components.size();
             if(source!=null&&source.masks[cell]==masks[cell]&&source.pores[cell].equals(pore)
                     &&sameVolumes(source.cells.rows().get(cell),cells.rows().get(cell))){
                 for(int i=source.offsets[cell];i<source.offsets[cell+1];i++){
                     var component=source.components.get(i);components.add(component);
-                    int slot=8*cell+Integer.numberOfTrailingZeros(component.supportMask());dry[slot]=source.dry[slot];
+                    dry[cell]=source.dry[cell];
                 }
             }else{
                 unchanged=false;
-                var capacities=preparedPores!=null||supports.length<=1?null:CellRemapMicroTopology.capacities(mask,pore);
-                for(int i=0;i<supports.length;i++){
-                    var capacity=preparedPores!=null?preparedPores[8*cell+Integer.numberOfTrailingZeros(supports[i])]
-                            :capacities==null?pore:capacities[i];
-                    var available=availableVolume(cell,supports[i],capacity,cells.rows().get(cell));
-                    components.add(new Component(cell,supports[i],capacity,available));
-                    dry[8*cell+Integer.numberOfTrailingZeros(supports[i])]=available.toDouble();
+                if(support!=0) {
+                    var available=availableVolume(cell,support,pore,cells.rows().get(cell));
+                    components.add(new Component(cell,support,pore,available));
+                    dry[cell]=available.toDouble();
                 }
             }
         }

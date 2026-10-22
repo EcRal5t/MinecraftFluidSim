@@ -535,7 +535,7 @@ public final class AirCavityScannerValidation {
 				s.momentum(),s.fixedGeometry(),s.materialPalette(),s.chemicalRegistry(),s.chemicalSource(),s.chemicalSink(),
 				s.copyChemicalDirtyCells(),s.chemicalReactionCursor(),s.granularRegistry(),s.granular(),s.granularDynamics(),s.precipitationEnabled(),
 				s.gasRegistry(),FluidDomainState.GasContinuation.persisted(s.gas()),s.thermalRegistry(),s.thermalOwner(),s.maximumThermalTransportSubsteps(),s.pendingPhaseMotion(),
-				s.copyThermalBoundaryTemperaturesK(),s.condensedPhasePressure(),s.materialDefinitions());
+				s.copyThermalBoundaryTemperaturesK(),s.exportCondensedPhasePressure(),s.materialDefinitions());
 	}
 
 	private static void validateAmbientSelfRemap() {
