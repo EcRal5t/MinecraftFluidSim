@@ -736,13 +736,19 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					"prospective phase topology did not retain a restorable state");
 			if(components==32) {
 				restored=advance(restored,false,0);
-				restored.stepGasPhaseChangeOnly(1);
-				require(!restored.hasPendingPhaseMotionWork() && actualPhaseMass(restored).equals(beforeMass)
-						&& restored.gasState.network.sealedInventory().equals(domain.gasState.network.sealedInventory())
-						&& restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory())
-						&& restored.gasState.network.auditClosed(),
+				require(!restored.hasPendingPhaseMotionWork()&&actualPhaseMass(restored).equals(beforeMass)
+						&&restored.gasState.network.sealedInventory().equals(domain.gasState.network.sealedInventory())
+						&&restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory())
+						&&restored.gasState.network.auditClosed(),
 						"Completed phase topology could not continue through recovery and mechanical synchronization");
+				var next=restored.stepGasPhaseChangeOnly(1);
+				require(next.operations()<=1&&actualPhaseMass(restored).equals(beforeMass)
+						&&restored.hasPendingPhaseMotionWork()==(next.operations()>0)
+						&&restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory())
+						&&restored.gasState.network.auditClosed(),
+						"Restored dry chamber phase exchange lost its batch budget, joint mass, energy or mechanical scheduling");
 			}
+
 		}
 		phaseDirectionsFollowCurrentCavity();
 	}
@@ -1174,14 +1180,25 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var drawClosure = thermodynamics(drawing, drawingNetwork);
 		double drawConductance = .65 * .1 * Math.sqrt(2 / drawClosure.density(0))
 				/ Math.sqrt(GasRegistry.STANDARD_PRESSURE_PA) * drawClosure.standardVolumeRatio(0);
-		double expectedDraw = drawConductance * GasRegistry.STANDARD_PRESSURE_PA
-				/ (1 + drawConductance / drawClosure.pressureStorage(vacuumTarget));
+		// Constant-Cv adiabatic filling has Tfill = gamma * Tambient and linear p(N).
+		// Each canonical port sweep advances half the requested duration, refreshing its secant.
+		double compliance = drawClosure.pressureStorage(vacuumTarget);
+		double firstDraw = .5 * drawConductance * GasRegistry.STANDARD_PRESSURE_PA / (1 + .5 * drawConductance / compliance);
+		double remainingDrop = GasRegistry.STANDARD_PRESSURE_PA - firstDraw / compliance;
+		double secondConductance = .65 * .1 * Math.sqrt(2 / drawClosure.density(0))
+				/ Math.sqrt(remainingDrop) * drawClosure.standardVolumeRatio(0);
+		double expectedDraw = firstDraw + .5 * secondConductance * remainingDrop / (1 + .5 * secondConductance / compliance);
 		drawingNetwork.stepEdges(1, drawClosure, batch -> drawing.planGasFlow(batch, drawingNetwork));
+		double expectedEnergy = new GasThermalModel(registry, gasRegistry).enthalpy(drawingNetwork.inventory(vacuumTarget), 600);
 		require(Math.abs(drawingNetwork.standardVolume(vacuumTarget) - expectedDraw) < 2e-9
 				&& drawing.gasGaugePressure(vacuumTarget, drawingNetwork) <= 2e-3
-				&& drawing.gasTemperature(vacuumTarget, drawingNetwork) > 0
+				&& Math.abs(drawing.gasTemperature(vacuumTarget, drawingNetwork) - gamma * 600) < 2e-5
+				&& Math.abs(drawing.gasNodeEnergy(vacuumTarget, drawingNetwork) - expectedEnergy) < 1e-7
 				&& drawing.exactEnergy(0).equals(drawing.auditLedger().expectedInventory()),
 				"ambient filling ignored enthalpy, finite storage or energy closure");
+		System.out.printf("  ambient filling Vstd=%.12g m³ (split reference %.12g), gaugeP=%.9g Pa, T=%.9g K, enthalpy error=%.9g J%n",
+				drawingNetwork.standardVolume(vacuumTarget), expectedDraw, drawing.gasGaugePressure(vacuumTarget, drawingNetwork),
+				drawing.gasTemperature(vacuumTarget, drawingNetwork), drawing.gasNodeEnergy(vacuumTarget, drawingNetwork) - expectedEnergy);
 	}
 
 	static void persistenceBarrierSynchronizesGasTopology() {
