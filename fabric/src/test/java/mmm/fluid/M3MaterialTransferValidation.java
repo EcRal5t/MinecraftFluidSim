@@ -24,7 +24,7 @@ final class M3MaterialTransferValidation {
 			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.002F));
 			domain.bindMaterialRegistry(new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE));
 			var key=new LiquidCellInventory.Key(domain.domainFlowFields.cellIndex(1,1,1),0,255);
-			domain.liquidCells.planAdditions(List.of(new LiquidCellInventory.Stock(key,mmm.units.SignedDyadic.of(.125),mass,null,0,false))).commit();
+			domain.liquidCells.planAdditions(List.of(new LiquidCellInventory.Stock(key,mmm.units.SignedDyadic.of(.125),mass,null,0))).commit();
 			domain.markCellInventoryChanged();
 			var transfer=domain.tryExtractExactMixture(1,1,1,.0625F,0);
 			check(transfer.transferred()&&domain.liquidCells.exactVolume().equals(mmm.units.SignedDyadic.of(.0625))
@@ -65,7 +65,7 @@ final class M3MaterialTransferValidation {
 		var domain=new FluidDomain(4,4,4,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.002F));
 		domain.bindMaterialRegistry(registry);var stocks=new java.util.ArrayList<LiquidCellInventory.Stock>();
 		for(int i=0;i<materials.length;i++)stocks.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(domain.domainFlowFields.cellIndex(1,1,1),materials[i],255),
-				mmm.units.SignedDyadic.of(volumes[i]),mmm.units.Mass.fromKilograms(volumes[i]*registry.material(materials[i]).referenceDensity()),null,0,false));
+				mmm.units.SignedDyadic.of(volumes[i]),mmm.units.Mass.fromKilograms(volumes[i]*registry.material(materials[i]).referenceDensity()),null,0));
 		domain.liquidCells.planAdditions(stocks).commit();domain.markCellInventoryChanged();return domain;
 	}
 

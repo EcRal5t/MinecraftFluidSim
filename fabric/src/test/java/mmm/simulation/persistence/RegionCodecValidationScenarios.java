@@ -541,7 +541,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		region.domain().bindChemistry(chemistry);
 		region.domain().setMarkerChemical(0, java.util.Map.of(
 				BuiltinChemicalDefinitions.H2O, 123_457L,
-				BuiltinChemicalDefinitions.NACL, 9_999L), true);
+				BuiltinChemicalDefinitions.NACL, 9_999L));
 		var auditFixture = region.domain().chemicalLedgerForMarkerRange(0, 1);
 		region.domain().chemistry().recordExternalSource(auditFixture);
 		region.domain().chemistry().recordEscapedSink(auditFixture);
@@ -586,10 +586,6 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		files.publish(emptyState);
 		assertChemicalStateEquals(emptyExpected, restorer(files.read(emptyRegion.id())).reconstructChemical(chemistry));
 
-		CompoundTag missingIndicator = codec.encodeSection(state.sections().stream()
-				.filter(section -> section.markerCount() > 0).findFirst().orElseThrow());
-		missingIndicator.getListOrEmpty("LiquidStocks").getCompoundOrEmpty(0).remove("Indicator");
-		expectIOException(() -> codec.decodeSection(missingIndicator), "chemical stock missing its indicator was accepted");
 		CompoundTag foreignFingerprint = codec.encodeManifest(state.manifest());
 		foreignFingerprint.putString("RegistryFingerprint", "0".repeat(64));
 		RegionManifest foreign = signedManifest(codec.decodeManifest(foreignFingerprint));
@@ -662,7 +658,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		RegionSectionState originalSection = state.sections().get(changedIndex);
 		var changedStocks = new ArrayList<>(originalSection.liquidStocks());
 		var changed = changedStocks.getFirst();
-		changedStocks.set(0,new mmm.inventory.LiquidCellInventory.Stock(changed.key(),changed.volume(),Math.addExact(changed.massUnits(),1L),changed.mixture(),changed.internalEnergy(),changed.indicator()));
+		changedStocks.set(0,new mmm.inventory.LiquidCellInventory.Stock(changed.key(),changed.volume(),Math.addExact(changed.massUnits(),1L),changed.mixture(),changed.internalEnergy()));
 		RegionSectionState changedSection = signedSection(new RegionSectionState(RegionStateLayout.MATERIAL, originalSection.regionId(),
 				originalSection.dimensionId(), originalSection.checkpointGeneration(), originalSection.sectionX(), originalSection.sectionY(),
 				originalSection.sectionZ(), originalSection.localStartX(), originalSection.localStartY(), originalSection.localStartZ(),

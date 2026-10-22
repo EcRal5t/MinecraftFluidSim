@@ -484,8 +484,8 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				new int[]{0, 1});
 		domain.bindChemistry(chemistry);
 		if (freezing) {
-			domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1L), false);
-			if (batches == 4) domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 4L), false);
+			domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1L));
+			if (batches == 4) domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 4L));
 		}
 		domain.bindThermal(thermal, domain.materialRegistry, freezing ? 200 : 500);
 		if (!freezing) {
@@ -527,7 +527,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				new mmm.chemistry.ChemicalSpecies("test:a", Map.of("A", 1), 0, ExactRational.parse("0.001"), 0),
 				new mmm.chemistry.ChemicalSpecies("test:b", Map.of("A", 1), 0, ExactRational.parse("0.001"), 0)),
 				List.of(new mmm.chemistry.ChemicalPhaseDefinition("test:water", BuiltinFluidMaterials.WATER.id(),
-						List.of("test:a", "test:b"), Map.of("test:a", ExactRational.ONE), false)), List.of(
+						List.of("test:a", "test:b"), Map.of("test:a", ExactRational.ONE))), List.of(
 				new mmm.chemistry.ChemicalReaction("test:reaction", mmm.chemistry.ChemicalReaction.Kind.INSTANTANEOUS,
 						"test:water", Map.of("test:a", 1), Map.of("test:b", 1), ExactRational.ZERO)));
 		var config = new FluidSolverConfig(0.5F, 1_000.0F, 0.0F, 0.05F,
@@ -614,7 +614,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 		domain.setVolume(1, 1, 1, 0.75F);
 		domain.bindGranular(granular, liquids, BuiltinFluidMaterials.createRegistry());
 		domain.bindChemistry(chemistry);
-		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1_000_000L), false);
+		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1_000_000L));
 		int sand = granular.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 		long sandSvq = granular.material(sand).maximumActiveParcelSvq();
 		double sandMass = sandSvq / (double) SolidVolume.SVQ_PER_CUBIC_METER
@@ -657,7 +657,6 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 				&& domain.totalCoherentSolidVolumeSvq() == 0L
 				&& melted.species().equals(initial.species())
 				&& close(melted.massResidual(), initial.massResidual())
-				&& melted.indicatorCount() == initial.indicatorCount()
 				&& domain.totalGranularSolidVolumeSvq() == initialGranularSvq
 				&& close(domain.totalGranularMass(), initialGranularMass)
 				&& close(massScale.kilograms(domain.totalMass()) + domain.totalCoherentMass(), initialMass)
@@ -678,7 +677,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 			species.add(new mmm.chemistry.ChemicalSpecies(id, Map.of("A", 1), 0, ExactRational.parse("0.001"), 0));
 		}
 		var chemistry = new ChemicalRegistry(species, List.of(new mmm.chemistry.ChemicalPhaseDefinition(
-				"test:phase", "mmm:water", ids, Map.of(ids.getFirst(), ExactRational.ONE), false)),
+				"test:phase", "mmm:water", ids, Map.of(ids.getFirst(), ExactRational.ONE))),
 				List.of(new mmm.chemistry.ChemicalReaction("test:r",
 						mmm.chemistry.ChemicalReaction.Kind.INSTANTANEOUS, "test:phase",
 						Map.of("test:s0", 1), Map.of("test:s1", 1), ExactRational.ZERO)));
@@ -688,7 +687,7 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 			restorePhaseTestCarriers(domain,liquids,0,0,0,new float[]{.125F},new int[1]);domain.bindChemistry(chemistry);
 			var amounts=new java.util.TreeMap<String,Long>();
 			for(int speciesIndex=0;speciesIndex<16;speciesIndex++)amounts.put(ids.get(speciesIndex),10L);
-			domain.setMarkerChemical(0,amounts,false);
+			domain.setMarkerChemical(0,amounts);
 			var transition = thermal.transitions().getFirst();
 			var bounded = new ThermalRegistry(thermalMaterials(thermal.materials()), thermal.speciesOffsets(), List.of(
 					new ThermalPhaseTransition(transition.id(), transition.lowerEnergyMaterialId(), transition.upperEnergyMaterialId(),
@@ -758,21 +757,10 @@ abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport 
 			}
 			residual += group.composition().massResidual();
 		}
-		byte[] indicators = liquid.copyIndicator();
-		float[] positionVolume = liquid.materials().copyPositionVolume();
-		long[] mass = liquid.materials().copyParticleMassUnits();
-		int indicatorCount = 0; float indicatorVolume = 0.0F; double indicatorMass = 0.0;
-		for (int marker = 0; marker < indicators.length; marker++) if (indicators[marker] != 0) {
-			indicatorCount++; indicatorVolume += positionVolume[marker * 4 + 3]; indicatorMass += mass[marker];
-		}
-		return new CondensedLedger(Map.copyOf(species), residual,
-				indicatorCount, indicatorVolume, indicatorMass);
+		return new CondensedLedger(Map.copyOf(species), residual);
 	}
 
-	private record CondensedLedger(
-			Map<String, Long> species, double massResidual,
-			int indicatorCount, float indicatorVolume, double indicatorMass
-	) { }
+	private record CondensedLedger(Map<String, Long> species, double massResidual) { }
 
 	static void phaseVolumeWorkWaitsForMechanicalProjection() {
 		var work = new PendingPhaseVolumeWork(8);

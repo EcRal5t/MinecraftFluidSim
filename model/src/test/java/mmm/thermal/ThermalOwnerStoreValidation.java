@@ -455,7 +455,7 @@ public final class ThermalOwnerStoreValidation {
 				new ChemicalSpecies("test:a", Map.of("A", 1), 0, ExactRational.of(1_000_000L), 0),
 				new ChemicalSpecies("test:b", Map.of("A", 2), 0, ExactRational.of(2_000_000L), 0)),
 				List.of(new ChemicalPhaseDefinition("test:phase", "test:liquid", List.of("test:a", "test:b"),
-						Map.of("test:a", ExactRational.ONE), false)), List.of(new ChemicalReaction(
+						Map.of("test:a", ExactRational.ONE))), List.of(new ChemicalReaction(
 				"test:combine", ChemicalReaction.Kind.INSTANTANEOUS, "test:phase",
 				Map.of("test:a", 2), Map.of("test:b", 1), ExactRational.ZERO)));
 		CoherentPhaseStore store = new CoherentPhaseStore(8, 8);

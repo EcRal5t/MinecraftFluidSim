@@ -146,7 +146,7 @@ final class RegionStateCodec {
 		for (var stock : section.liquidStocks()) {
 			CompoundTag tag = new CompoundTag(); tag.putInt("Cell",stock.key().cell()); tag.putInt("Material",stock.key().material()); tag.putInt("Support",stock.key().supportMask());
 			tag.putByteArray("VolumeSignificand",stock.volume().significand().toByteArray()); tag.putInt("VolumeExponent",stock.volume().exponent());
-			tag.putLong("MassUnits",stock.massUnits()); tag.putLong("InternalEnergyBits",Double.doubleToRawLongBits(stock.internalEnergy())); tag.putBoolean("Indicator",stock.indicator());
+			tag.putLong("MassUnits",stock.massUnits()); tag.putLong("InternalEnergyBits",Double.doubleToRawLongBits(stock.internalEnergy()));
 			if (stock.mixture() != null) {
 				CompoundTag mixture = new CompoundTag(); mixture.putIntArray("Species",stock.mixture().copySpeciesHandles());
 				mixture.putLongArray("Amounts",stock.mixture().copyAmounts()); mixture.putLong("ResidualUnits",stock.mixture().massResidualUnits()); tag.put("Mixture",mixture);
@@ -170,7 +170,7 @@ final class RegionStateCodec {
 			for (int i = 0; i < encoded.size(); i++) {
 				var tag = compoundAt(encoded,i,"liquid stock");
 				for (String field : List.of("Cell","Material","Support","VolumeExponent")) require(tag,field,Tag.TAG_INT);
-				require(tag,"VolumeSignificand",Tag.TAG_BYTE_ARRAY); require(tag,"MassUnits",Tag.TAG_LONG); require(tag,"InternalEnergyBits",Tag.TAG_LONG); require(tag,"Indicator",Tag.TAG_BYTE);
+				require(tag,"VolumeSignificand",Tag.TAG_BYTE_ARRAY); require(tag,"MassUnits",Tag.TAG_LONG); require(tag,"InternalEnergyBits",Tag.TAG_LONG);
 				byte[] numerator = tag.getByteArray("VolumeSignificand").orElseThrow();
 				if (numerator.length == 0 || numerator.length > mmm.units.SignedDyadic.MAX_SIGNIFICAND_BITS / 8 + 2) throw new IOException("Liquid volume significand exceeds its quantity budget");
 				var volume = new mmm.units.SignedDyadic(new java.math.BigInteger(numerator),tag.getIntOr("VolumeExponent",0));
@@ -182,7 +182,7 @@ final class RegionStateCodec {
 				}
 				stocks.add(new mmm.inventory.LiquidCellInventory.Stock(new mmm.inventory.LiquidCellInventory.Key(tag.getIntOr("Cell",-1),tag.getIntOr("Material",-1),tag.getIntOr("Support",0)),
 						volume,tag.getLongOr("MassUnits",-1),mixture,
-						Double.longBitsToDouble(tag.getLongOr("InternalEnergyBits",0)),tag.getBooleanOr("Indicator",false)));
+						Double.longBitsToDouble(tag.getLongOr("InternalEnergyBits",0))));
 			}
 			var faces = new ArrayList<RegionSectionState.FaceMomentum>(); var encodedFaces = root.getListOrEmpty("FaceMomentum");
 			for (int i = 0; i < encodedFaces.size(); i++) { var tag = compoundAt(encodedFaces,i,"MAC momentum"); require(tag,"Axis",Tag.TAG_INT); require(tag,"Face",Tag.TAG_INT); require(tag,"MomentumBits",Tag.TAG_LONG);

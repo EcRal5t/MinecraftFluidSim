@@ -15,9 +15,9 @@ public final class ChemicalTransferLedger {
 
 	public ChemicalTransferLedger(List<Group> groups) {
 		if (groups == null) throw new IllegalArgumentException("Chemical transfer groups are missing");
-		TreeMap<Key, MutableGroup> canonical = new TreeMap<>();
+		TreeMap<String, MutableGroup> canonical = new TreeMap<>();
 		for (Group group : groups) canonical.computeIfAbsent(
-				new Key(group.materialId(), group.indicator()), ignored -> new MutableGroup(group.materialId(), group.indicator()))
+				group.materialId(), ignored -> new MutableGroup(group.materialId()))
 				.add(group);
 		if (canonical.size() > ChemicalLimits.MAX_TRANSFER_GROUPS) {
 			throw new IllegalArgumentException("Chemical transfer groups are over budget");
@@ -67,7 +67,6 @@ public final class ChemicalTransferLedger {
 
 	public record Group(
 			String materialId,
-			boolean indicator,
 			double normalizedVolume,
 			long massUnits,
 			long massResidualUnits,
@@ -102,22 +101,22 @@ public final class ChemicalTransferLedger {
 
 	public static final class Builder {
 		private final ChemicalRegistry registry;
-		private final TreeMap<Key, MutableGroup> groups = new TreeMap<>();
+		private final TreeMap<String, MutableGroup> groups = new TreeMap<>();
 
 		private Builder(ChemicalRegistry registry) { this.registry = java.util.Objects.requireNonNull(registry, "registry"); }
 
 		public Builder add(
-				String materialId, boolean indicator, double normalizedVolume, long massUnits,
+				String materialId, double normalizedVolume, long massUnits,
 				ChemicalMixtureRecord mixture
 		) {
 			if (mixture == null) throw new IllegalArgumentException("Chemical transfer mixture is missing");
-			return add(new Group(materialId, indicator, normalizedVolume, massUnits,
+			return add(new Group(materialId, normalizedVolume, massUnits,
 					mixture.massResidualUnits(), mixture.stableAmounts(registry)));
 		}
 
 		public Builder add(Group group) {
-			groups.computeIfAbsent(new Key(group.materialId(), group.indicator()),
-					ignored -> new MutableGroup(group.materialId(), group.indicator())).add(group);
+			groups.computeIfAbsent(group.materialId(),
+					ignored -> new MutableGroup(group.materialId())).add(group);
 			return this;
 		}
 
@@ -132,16 +131,8 @@ public final class ChemicalTransferLedger {
 		}
 	}
 
-	private record Key(String materialId, boolean indicator) implements Comparable<Key> {
-		@Override public int compareTo(Key other) {
-			int material = materialId.compareTo(other.materialId);
-			return material != 0 ? material : Boolean.compare(indicator, other.indicator);
-		}
-	}
-
 	private static final class MutableGroup {
 		private final String materialId;
-		private final boolean indicator;
 		// These are independent inventory columns. Aggregate their binary values exactly and round once;
 		// ordinary += accumulates enough drift in a full demo region to falsify a closed mass ledger.
 		private SignedDyadic normalizedVolume = SignedDyadic.ZERO;
@@ -149,9 +140,8 @@ public final class ChemicalTransferLedger {
 		private long residualUnits;
 		private final TreeMap<String, Long> species = new TreeMap<>();
 
-		private MutableGroup(String materialId, boolean indicator) {
+		private MutableGroup(String materialId) {
 			this.materialId = materialId;
-			this.indicator = indicator;
 		}
 		private void add(Group group) {
 			normalizedVolume = normalizedVolume.add(SignedDyadic.of(group.normalizedVolume()));
@@ -163,7 +153,7 @@ public final class ChemicalTransferLedger {
 			group.speciesQuanta().forEach((id, amount) -> species.merge(id, amount, Math::addExact));
 		}
 		private Group freeze() {
-			return new Group(materialId, indicator, normalizedVolume.toDouble(), massUnits,
+			return new Group(materialId, normalizedVolume.toDouble(), massUnits,
 					residualUnits, species);
 		}
 	}

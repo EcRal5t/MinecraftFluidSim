@@ -192,7 +192,7 @@ public final class CompositeStepBenchmark {
                 BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L, BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L);
         double volume = .125, mass = volume * .125 * 1000;
         double speciesMass = ChemicalMixtureRecord.fromStableAmounts(r.chemical(), amounts, 0L).exactSpeciesMassKilograms(r.chemical()).toDouble();
-        var ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group("mmm:water", false,
+        var ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group("mmm:water",
                 volume, mmm.units.Mass.fromKilograms(mass), mmm.units.Mass.fromKilograms(mass - speciesMass), amounts)));
         require(region.domain().tryInsertExactChemical(2 + step % 4, 4, 2 + step / 4 % 4, ledger, 2, true).transferred(), "Reactant feed rejected");
     }

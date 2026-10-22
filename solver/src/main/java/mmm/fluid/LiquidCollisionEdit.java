@@ -98,7 +98,7 @@ final class LiquidCollisionEdit {
 				var energies=LiquidCellInventory.partitionEnergy(stock,masses,mixtures,FluidThermalBinding.liquidEnergyPartitioner(domain));
 				for (int j = 0; j < amounts.length; j++) if (amounts[j].signum() > 0) {
 					var key = j < components.size() ? new LiquidCellInventory.Key(cell, stock.key().material(), components.get(j)) : stock.key();
-					var part = new LiquidCellInventory.Stock(key, amounts[j], masses[j], mixtures[j], energies[j], stock.indicator());
+					var part = new LiquidCellInventory.Stock(key, amounts[j], masses[j], mixtures[j], energies[j]);
 					if (j < components.size()) { retained.add(part); changedKeys.add(key); }
 					else escaped.add(part);
 				}
@@ -112,7 +112,7 @@ final class LiquidCollisionEdit {
 			var chemical = totalChemistry == null ? null : ChemicalTransferLedger.builder(domain.chemistry.registry());
 			var material = domain.materialRegistry == null ? null : new FluidDomain.RemovedMaterialLedger(domain.materialRegistry.size());
 			for (var stock : row) {
-				if (chemical != null) chemical.add(domain.materialRegistry.material(stock.key().material()).id(), stock.indicator(), stock.volumeFraction(), stock.massUnits(), stock.mixture());
+				if (chemical != null) chemical.add(domain.materialRegistry.material(stock.key().material()).id(), stock.volumeFraction(), stock.massUnits(), stock.mixture());
 				if (material != null) material.add(stock.key().material(), stock.volumeFraction(), stock.massUnits());
 			}
 			if (chemical != null) totalChemistry.add(chemical.build());
@@ -133,7 +133,7 @@ final class LiquidCollisionEdit {
 		double volume = 0;
 		for (var stock : displaced.get(index)) {
 			volume += stock.volumeFraction();
-			if (chemistry != null) chemistry.add(domain.materialRegistry.material(stock.key().material()).id(), stock.indicator(), stock.volumeFraction(), stock.massUnits(), stock.mixture());
+			if (chemistry != null) chemistry.add(domain.materialRegistry.material(stock.key().material()).id(), stock.volumeFraction(), stock.massUnits(), stock.mixture());
 			if (materials != null) materials.add(stock.key().material(), stock.volumeFraction(), stock.massUnits());
 			if (energy != null) energy.add(stock.internalEnergy());
 		}

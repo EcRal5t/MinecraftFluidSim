@@ -19,7 +19,7 @@ final class ChemicalReactionCandidateValidation {
 			String a="test:cell/a",b="test:cell/b",liquid="test:cell/liquid",material="test:cell/thermal";
 			var chemistry=new ChemicalRegistry(List.of(new ChemicalSpecies(a,Map.of("X",1),0,ExactRational.of(3),0),
 					new ChemicalSpecies(b,Map.of("X",1),0,ExactRational.of(3),0)),List.of(
-					new ChemicalPhaseDefinition("test:cell/phase",liquid,List.of(a,b),Map.of(a,ExactRational.ONE),false)),List.of(
+					new ChemicalPhaseDefinition("test:cell/phase",liquid,List.of(a,b),Map.of(a,ExactRational.ONE))),List.of(
 					new ChemicalReaction("test:cell/isomer",ChemicalReaction.Kind.INSTANTANEOUS,"test:cell/phase",Map.of(a,1),Map.of(b,1),ExactRational.ZERO)));
 			var liquids=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension(liquid,1000,"test:cell/miscible",0,90)));
 			var domain=new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.002F));
@@ -75,7 +75,7 @@ final class ChemicalReactionCandidateValidation {
 			products.put(id, 1);
 		}
 		return new ChemicalRegistry(species, List.of(new ChemicalPhaseDefinition("test:phase", "test:liquid",
-				ids, Map.of("test:source", ExactRational.ONE), false)), List.of(new ChemicalReaction(
+				ids, Map.of("test:source", ExactRational.ONE))), List.of(new ChemicalReaction(
 				"test:reaction", ChemicalReaction.Kind.INSTANTANEOUS, "test:phase",
 				Map.of("test:source", 1), products, ExactRational.ZERO)));
 	}
@@ -100,18 +100,18 @@ final class ChemicalReactionCandidateValidation {
 		var region=new Fixture(registry,List.of(mixture(registry,BuiltinChemicalDefinitions.HCL,750_000_000_000_000L,0),mixture(registry,BuiltinChemicalDefinitions.HCL,750_000_000_000_000L,0)),new int[]{0,1});
 		require(region.step().changedStocks()==1&&region.scheduler.hasDirtyCells(),"Combined region species capacity did not admit its available partial extent");
 		var old=region.inventory.stocksInCell(1).getFirst();var water=mixture(registry,BuiltinChemicalDefinitions.H2O,1,0);
-		region.inventory.planEdits(List.of(new LiquidCellInventory.Edit(old.key(),new LiquidCellInventory.Stock(old.key(),old.volume(),water.massUnits(registry),water,0,false)))).commit();
+		region.inventory.planEdits(List.of(new LiquidCellInventory.Edit(old.key(),new LiquidCellInventory.Stock(old.key(),old.volume(),water.massUnits(registry),water,0)))).commit();
 		require(region.step().changedStocks()==1&&!region.scheduler.hasDirtyCells(),"Deferred cell did not finish after capacity became available");
 	}
 
 	static void reactionHeatChangesTemperature() {
 		String a="test:heat/a",b="test:heat/b",liquid="test:heat/liquid",material="test:heat/thermal";
 		var chemistry=new ChemicalRegistry(List.of(new ChemicalSpecies(a,Map.of("X",1),0,ExactRational.parse("0.125"),0),new ChemicalSpecies(b,Map.of("X",1),0,ExactRational.parse("0.125"),0)),
-				List.of(new ChemicalPhaseDefinition("test:heat/phase",liquid,List.of(a,b),Map.of(a,ExactRational.ONE),false)),List.of(
+				List.of(new ChemicalPhaseDefinition("test:heat/phase",liquid,List.of(a,b),Map.of(a,ExactRational.ONE))),List.of(
 				new ChemicalReaction("test:heat/reaction",ChemicalReaction.Kind.INSTANTANEOUS,"test:heat/phase",Map.of(a,1),Map.of(b,1),ExactRational.ZERO)));
 		var fluids=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension(liquid,1,"test:heat/miscible",0,90)));
 		var domain=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1,0,.05F,100,1e-5F,.002F));
-		domain.bindMaterialRegistry(fluids);domain.setVolume(0,0,0,1);domain.bindChemistry(chemistry);domain.setMarkerChemical(0,Map.of(a,ChemicalLimits.QUANTA_PER_MOL),false);
+		domain.bindMaterialRegistry(fluids);domain.setVolume(0,0,0,1);domain.bindChemistry(chemistry);domain.setMarkerChemical(0,Map.of(a,ChemicalLimits.QUANTA_PER_MOL));
 		var thermal=new ThermalRegistry(List.of(new ThermalMaterialDefinition(material,ThermalMaterialDefinition.CarrierKind.LIQUID,liquid,300,0,0,List.of(new ThermalMaterialDefinition.CaloricSegment(200,500,10))),
 				new ThermalMaterialDefinition("test:heat/air",ThermalMaterialDefinition.CarrierKind.GAS,mmm.fluid.air.BuiltinGasDefinitions.AIR,300,0,.025,List.of(new ThermalMaterialDefinition.CaloricSegment(150,800,718)))),
 				List.of(new ThermalSpeciesOffset("test:heat/oa",a,material,ExactRational.ZERO),new ThermalSpeciesOffset("test:heat/ob",b,material,ExactRational.of(-100))),List.of(),chemistry.fingerprint(),"");
@@ -124,7 +124,7 @@ final class ChemicalReactionCandidateValidation {
 		var species=new ArrayList<ChemicalSpecies>();var reactions=new ArrayList<ChemicalReaction>();var ids=new ArrayList<String>();
 		for(int i=0;i<256;i++) {String id="test:s"+i;ids.add(id);species.add(new ChemicalSpecies(id,Map.of("A",1),0,ExactRational.ONE,0));
 			if(i>0)reactions.add(new ChemicalReaction("test:r"+i,ChemicalReaction.Kind.INSTANTANEOUS,"test:phase",Map.of("test:s"+(i-1),1),Map.of(id,1),ExactRational.ZERO));}
-		var registry=new ChemicalRegistry(species,List.of(new ChemicalPhaseDefinition("test:phase","test:liquid",ids,Map.of("test:s0",ExactRational.ONE),false)),reactions);
+		var registry=new ChemicalRegistry(species,List.of(new ChemicalPhaseDefinition("test:phase","test:liquid",ids,Map.of("test:s0",ExactRational.ONE))),reactions);
 		int count=ChemicalLimits.MAX_REACTION_EVALUATIONS_PER_STEP/reactions.size()+1;var input=new ArrayList<ChemicalMixtureRecord>();int[] cells=new int[count];
 		for(int i=0;i<count;i++){input.add(mixture(registry,"test:s0",1,0));cells[i]=i;}
 		var fixture=new Fixture(registry,input,cells);
@@ -148,7 +148,7 @@ final class ChemicalReactionCandidateValidation {
 				long mass=input.massUnits(registry);var amounts=new TreeMap<>(input.stableAmounts(registry));SignedDyadic volume=SignedDyadic.of(.125);
 				if(old!=null){mass=Math.addExact(mass,old.massUnits());volume=volume.add(old.volume());for(var e:old.mixture().stableAmounts(registry).entrySet())amounts.merge(e.getKey(),e.getValue(),Math::addExact);}
 				var mixture=ChemicalMixtureRecord.fromStableAmounts(registry,amounts,0);mixture=mixture.withMassResidualUnits(mass-mixture.speciesMassUnits(registry));
-				inventory.planEdits(List.of(new LiquidCellInventory.Edit(key,new LiquidCellInventory.Stock(key,volume,mass,mixture,0,false)))).commit();scheduler.markDirtyCell(cells[i]);
+				inventory.planEdits(List.of(new LiquidCellInventory.Edit(key,new LiquidCellInventory.Stock(key,volume,mass,mixture,0)))).commit();scheduler.markDirtyCell(cells[i]);
 			}
 			var fluids=new FluidMaterialRegistry(List.of(FluidMaterial.withSurfaceTension(registry.phases().getFirst().materialId(),1000,"test:miscible",0,90)));
 			var domain=new FluidDomain(sizeX,2,2,new FluidSolverConfig(1,1000,0,.05F,100,1e-5F,.002F));

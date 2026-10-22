@@ -63,7 +63,6 @@ public final class ChemicalAuditLedgerCodec {
 		output.writeInt(ledger.groups().size());
 		for (ChemicalTransferLedger.Group group : ledger.groups()) {
 			output.writeUTF(group.materialId());
-			output.writeBoolean(group.indicator());
 			output.writeLong(Double.doubleToRawLongBits(group.normalizedVolume()));
 			output.writeLong(group.massUnits());
 			output.writeLong(group.massResidualUnits());
@@ -81,7 +80,6 @@ public final class ChemicalAuditLedgerCodec {
 		List<ChemicalTransferLedger.Group> result = new ArrayList<>(groups);
 		for (int group = 0; group < groups; group++) {
 			String material = input.readUTF();
-			boolean indicator = input.readBoolean();
 			double normalizedVolume = Double.longBitsToDouble(input.readLong());
 			long mass = input.readLong();
 			long residualUnits = input.readLong();
@@ -93,7 +91,7 @@ public final class ChemicalAuditLedgerCodec {
 			for (int entry = 0; entry < entries; entry++) {
 				if (species.put(input.readUTF(), input.readLong()) != null) throw new IOException("Duplicate chemical audit species");
 			}
-			result.add(new ChemicalTransferLedger.Group(material, indicator, normalizedVolume, mass, residualUnits, species));
+			result.add(new ChemicalTransferLedger.Group(material, normalizedVolume, mass, residualUnits, species));
 		}
 		return result.isEmpty() ? ChemicalTransferLedger.EMPTY : new ChemicalTransferLedger(result);
 	}

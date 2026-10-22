@@ -126,7 +126,7 @@ final class GasLiquidPhaseChangeStage {
 			double batchVolumeM3=(double)transition.lowerVolumeSvqPerBatch()/SolidVolume.SVQ_PER_CUBIC_METER;
 			for(var stock:liquids.physicalStocks()) {
 				int id=stock.key().cell();
-				if(!interfaceCells[id]||stock.key().material()!=liquid||stock.indicator()||domain.pendingPhaseVolume.isPending(id)) continue;
+				if(!interfaceCells[id]||stock.key().material()!=liquid||domain.pendingPhaseVolume.isPending(id)) continue;
 				for(var contact:contacts.computeIfAbsent(id,key->GasPhaseInterfaceResolver.contacts(domain.gasState.frame,key))) {
 					if(contact.node()<=0||contact.supportMask()!=stock.key().supportMask()) continue;
 					int node=contact.node(); var inventory=network.inventory(node);
@@ -570,7 +570,7 @@ final class GasLiquidPhaseChangeStage {
 		for(var stock:p.cell.original) if(!stock.key().equals(p.source.key())) result.add(stock);
 		if(volume.signum()>0) {
 			double u=mass==0?0:function.internalEnergyAtTemperature(p.liquidHandle,Mass.kilograms(mass),mixture,domain.liquidCells.chemicalRegistry(),p.cell.temperature);
-			result.add(new LiquidCellInventory.Stock(p.source.key(),volume,mass,mixture,u,p.source.indicator()));
+			result.add(new LiquidCellInventory.Stock(p.source.key(),volume,mass,mixture,u));
 		} else if(mass!=0) throw new IllegalStateException("Phase removed liquid volume without its mass");
 		result.sort(Comparator.comparing(LiquidCellInventory.Stock::key)); p.cell.future=List.copyOf(result);
 	}

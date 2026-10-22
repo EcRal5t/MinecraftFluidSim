@@ -37,8 +37,6 @@ public final class MmmCreativeEntries {
 			entries.accept(CreativeSourceItem.stack(new CreativeSourceDescriptor(
 					id, ContainerFluidLedger.NANOS_PER_BLOCK, 293.15)));
 		}
-		entries.accept(MmmItems.CHEMICAL_INDICATOR);
-		entries.accept(MmmItems.CHEMICAL_ERASER);
 		entries.accept(MmmItems.GRANULAR_CONTAINER);
 		for (String id : java.util.List.of(
 				"mmm:source/granular/fine_sand", "mmm:source/granular/light_beads")) {

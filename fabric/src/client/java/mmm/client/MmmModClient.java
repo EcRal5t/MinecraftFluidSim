@@ -28,6 +28,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class MmmModClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
+		FluidDisplaySettings.INSTANCE.load();
 		UseItemCallback.EVENT.register((player, level, hand) -> {
 			if (!level.isClientSide() || !player.getItemInHand(hand).is(MmmItems.QUICK_START_GUIDE)) {
 				return InteractionResult.PASS;

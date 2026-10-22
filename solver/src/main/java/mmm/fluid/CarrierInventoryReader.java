@@ -57,11 +57,11 @@ final class CarrierInventoryReader {
 	}
 	FlipChemicalParticleState exportChemicalParticleState() {
 		if (domain.chemistry == null) throw new IllegalStateException("Chemical view requires chemistry");
-		var mixtures = new ArrayList<ChemicalMixtureRecord>(); byte[] indicator = new byte[domain.liquidCells.physicalSize()];
-		for (int i = 0; i < indicator.length; i++) {
-			var stock = domain.liquidCells.physicalStockAt(i); mixtures.add(stock.mixture()); indicator[i] = stock.indicator() ? (byte) 1 : 0;
+		var mixtures = new ArrayList<ChemicalMixtureRecord>();
+		for (int i = 0; i < domain.liquidCells.physicalSize(); i++) {
+			var stock = domain.liquidCells.physicalStockAt(i); mixtures.add(stock.mixture());
 		}
-		return FlipChemicalParticleState.capture(exportMaterialParticleState(), domain.chemistry.registry(), mixtures, indicator,
+		return FlipChemicalParticleState.capture(exportMaterialParticleState(), domain.chemistry.registry(), mixtures,
 				domain.chemistry.externalSource(), domain.chemistry.escapedSink());
 	}
 
@@ -90,17 +90,40 @@ final class CarrierInventoryReader {
 		if (domain.chemistry == null) throw new IllegalStateException("Chemistry is not bound");
 		var registry = domain.chemistry.registry();
 		long[][] totals = new long[domain.cellCount][registry.species().size()];
-		double[] volume = new double[domain.cellCount], indicated = new double[domain.cellCount];
+		int fields = domain.cellCount * domain.materialRegistry.phaseCount();
+		double[] aqueousVolume = new double[fields];
+		long[] acid = new long[fields], base = new long[fields];
+		boolean[] aqueous = new boolean[domain.materialRegistry.size()];
+		for (int material = 0; material < aqueous.length; material++) {
+			var definition = registry.phase(registry.phaseHandleForMaterial(domain.materialRegistry.material(material).id()));
+			aqueous[material] = mmm.chemistry.ChemicalReactionEngine.supportsPh(definition);
+		}
+		int h = registry.hasSpecies(mmm.chemistry.BuiltinChemicalDefinitions.H_PLUS)
+				? registry.speciesHandle(mmm.chemistry.BuiltinChemicalDefinitions.H_PLUS) : -1;
+		int oh = registry.hasSpecies(mmm.chemistry.BuiltinChemicalDefinitions.OH_MINUS)
+				? registry.speciesHandle(mmm.chemistry.BuiltinChemicalDefinitions.OH_MINUS) : -1;
 		for (var stock : domain.liquidCells.stocks()) {
-			int cell = stock.key().cell(); var mixture = stock.mixture();
+			int cell = stock.key().cell(), material = stock.key().material();
+			var mixture = stock.mixture();
 			for (int entry = 0; entry < mixture.entryCount(); entry++) {
 				int species = mixture.speciesHandle(entry);
 				totals[cell][species] = Math.addExact(totals[cell][species], mixture.amountAt(entry));
 			}
-			volume[cell] += stock.volumeFraction();
-			if (stock.indicator()) indicated[cell] += stock.volumeFraction();
+			if (aqueous[material]) {
+				int offset = domain.materialRegistry.phaseHandle(material) * domain.cellCount + cell;
+				aqueousVolume[offset] += stock.volumeFraction();
+				acid[offset] = Math.addExact(acid[offset], mixture.amount(h));
+				base[offset] = Math.addExact(base[offset], mixture.amount(oh));
+			}
 		}
-		return ChemicalDisplaySnapshot.fromTotals(registry, domain.config.cellSize(), totals, volume, indicated);
+		byte[] ph = new byte[fields];
+		java.util.Arrays.fill(ph, (byte) ChemicalDisplaySnapshot.PH_NO_DATA);
+		var units = mmm.units.SolverUnitScale.forCellSize(domain.config.cellSize());
+		for (int offset = 0; offset < fields; offset++) if (aqueousVolume[offset] > 0.0) {
+			ph[offset] = (byte) Math.round(ChemicalDisplaySnapshot.PH_SCALE * mmm.chemistry.ChemicalReactionEngine.ph(
+					acid[offset], base[offset], units.cubicMeters(aqueousVolume[offset])));
+		}
+		return ChemicalDisplaySnapshot.fromTotals(registry, totals, ph);
 	}
 
 	ThermalDisplaySnapshot copyThermalDisplaySnapshot() {

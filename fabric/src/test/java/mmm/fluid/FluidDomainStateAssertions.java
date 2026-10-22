@@ -20,7 +20,7 @@ public final class FluidDomainStateAssertions {
 
 	/**
 	 * Durable projection of {@link #assertSameState}: excludes transient state that the on-disk wire
-	 * does not carry. The persistence layer serializes chemical mixture/indicator/species truth but
+	 * does not carry. The persistence layer serializes chemical mixture and species quantities but
 	 * not the chemistry dirty-cell queue, and it omits the granular deposit scheduler queues and ages,
 	 * the per-step condensed-phase pressure scratch and the world-derived constant-temperature
 	 * boundary field; those are rebuilt on load. Physical inventory, gas ownership, the thermal audit

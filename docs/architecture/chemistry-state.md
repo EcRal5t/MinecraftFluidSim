@@ -1,6 +1,6 @@
 # 守恒化学状态契约
 
-修改化学组分、反应、指示剂或 pH 时读本文。
+修改化学组分、反应或 pH 时读本文。
 
 ## 修改入口
 
@@ -14,12 +14,6 @@
   - 代码入口：
     - [LiquidCellInventory](../../model/src/main/java/mmm/inventory/LiquidCellInventory.java)
   - 测试选择器：`chemistry,cell-inventory`
-
-- **指示剂操作**
-  - 代码入口：
-    - [ChemicalIndicatorItem](../../fabric/src/main/java/mmm/item/ChemicalIndicatorItem.java)
-    - [MinecraftIndicatorEditing](../../fabric/src/main/java/mmm/simulation/MinecraftIndicatorEditing.java)
-  - 测试选择器：`chemistry`
 
 - **化学定义编码**
   - 代码入口：[ChemicalRegistryCodec](../../fabric/src/main/java/mmm/chemistry/ChemicalRegistryCodec.java)
@@ -49,7 +43,7 @@
 数据包分别提供 species、chemical phase 和 reaction；species JSON 的 `molar_mass_kg_per_mol` 值以 kg/mol 解释：
 
 - species：stable ID、组成基元整数向量、电荷、精确摩尔质量 kg/mol；
-- phase：绑定机械材料，声明允许物种、`default_concentration_mol_per_m3` 与 indicator 接受性；油的允许物种和默认浓度均为空，机械质量全部进入 kg 余量；
+- phase：绑定机械材料，声明允许物种、`default_concentration_mol_per_m3`；油的允许物种和默认浓度均为空，机械质量全部进入 kg 余量；
 - reaction：反应物/生成物整数计量和允许 chemical phase。
 
 exact rational 只接受整数、有限小数或 `numerator/denominator` 文本。解析前先限制 ID 长度、文本长度、小数 scale 和整数位宽，避免用短文本触发无界 `BigInteger` 工作。
@@ -61,7 +55,7 @@ registry 校验未知 ID、重复 ID、非正质量、组成/电荷/质量不守
 
 ## 独立保存的数据
 
-- `LiquidCellInventory.Stock` 直接保存材料、体积、质量、不可变物种组成、质量余量、指示剂与内能。
+- `LiquidCellInventory.Stock` 直接保存材料、体积、质量、不可变物种组成、质量余量与内能。
 - `RegionChemistry` 保存区域注册表引用、化学源汇审计、待处理单元与反应轮转位置；逐物种总量、电荷和组成直接从单元库存汇总。
 - `FluidMixture` 保存机械材料库存，`ChemicalContents` 保存完整化学容器库存，物品按其实际类型保存。
 
@@ -69,7 +63,7 @@ registry 校验未知 ID、重复 ID、非正质量、组成/电荷/质量不守
 每份单元记录的键为 `(cell, material, supportMask)`，同格各固定开放分量分别保存组成。
 实际体积通量先分配整数质量，物种按接受的质量份额分配，参考能读取同一物种列；最大实际质量份额承接物种与内能余量，来源总量精确闭合。原生零质量几何尾项保留组成和零内能。
 
-反应和指示剂操作通过单元库存计划准备完整后继，在首次写入前验证来源代次、质量、物种和容量。
+反应通过单元库存计划准备完整后继，在首次写入前验证来源代次、质量、物种和容量。
 化学源汇账、待处理单元和轮转位置随 `FluidDomainState` 单独交接。审计计划绑定区域化学对象与原源汇账身份，库存计划绑定实际单元库存代次，准备与提交共同保持原子性。
 checkpoint 在单元记录中保存组成，manifest 绑定物种 palette、注册表指纹与总账；冷恢复校验后绑定当前注册表。
 
@@ -99,14 +93,17 @@ massUnits = speciesMassUnits + massResidualUnits
 容量、物种槽位或有效热状态暂时受限时，保留原库存和待处理单元。
 物质输运的空间误差随共同单元输运评价；固液转移见[颗粒参考](granular-state.md#固液相转移)。
 
-### Indicator 与 pH
+### pH 与显色
 
-indicator 添加只标记当时可接受 indicator 的互溶连通单元库存，受 100 m³ 硬上限；超过上限整次拒绝。标记随物质平流和容器传输，后续混入的未标记库存 不自动继承。
+`ChemicalReactionEngine.ph` 集中派生强酸强碱的显示近似：以净 H⁺/OH⁻ 浓度 c（mol/m³）计算 `strength = min(7, log10(1 + c / 0.001))`，酸侧显示 `7-strength`，碱侧显示 `7+strength`。
+水相定义需包含水溶剂的默认组成，并允许 H₂O、H⁺ 与 OH⁻。`CarrierInventoryReader.copyChemicalDisplaySnapshot` 按互溶物相汇总适用水相的物种与实际体积；油等其他库存保留自己的物性与显示归属。
 
-pH 沿用既定强酸强碱的显示近似：以净 H⁺/OH⁻ 浓度 c（mol/m³）计算 `strength = min(7, log10(1 + c / 0.001))`，酸侧显示 `7-strength`，碱侧显示 `7+strength`。
-这个展示近似保留原显色响应。
+`ChemicalDisplaySnapshot` 保留每格至多四种展示物种及权重，pH 按材料快照的 `phaseGroups` 顺序逐相保存单元列。
+pH 以 0.1 为步长编码 0–14，中性为 70，无数据为 255。缺少水相、必要物种或化学能力时显示无数据；液液界面两侧按各自物相取值。
 
-pH 是根据局部 `H+`/`OH-` 相对数量派生的 0–14 展示指标，供指示剂显色与界面显示。客户端接收每格至多四个展示 species、量化 pH 和可见 indicator fraction，专用于渲染展示。
+客户端统一提供组分、pH、温度三种显色模式，默认组分。组分使用材料与既有化学配色；pH 与温度各自使用独立色带。
+温度读取服务端凝聚相单元展示值，单位 K、量化步长 1/16 K，空值为 65535；气腔温度另由气腔展示字段保存。
+模式和温度范围由客户端显示设置持有，控制器界面可打开显色设置。几何、化学及温度随同一已接受快照交接；模式、范围或展示值变化复用网格并刷新颜色，暂停区域立即响应。
 
 ## 求解顺序
 
@@ -119,12 +116,12 @@ pH 是根据局部 `H+`/`OH-` 相对数量派生的 0–14 展示指标，供指
 ## 跨层边界
 
 - region checkpoint 保存完整 parcel、registry identity 和审计账本。
-- 容器转移先验证目标物品可完整表示 species、indicator、质量和 residual，再进入 WAL 事务。
+- 容器转移先验证目标物品可完整表示 species、质量和 residual，再进入 WAL 事务。
 - 创造模式放出是 external source；创造模式装取不能制造隐藏 sink。
-- 客户端只接收 Top-N species、pH 和 indicator 等量化展示；这些字段不能恢复或结算库存。
+- 客户端只接收 Top-N species 与逐相 pH 等量化展示；这些字段不能恢复或结算库存。
 - `chemstatus` 是管理员只读诊断并写 command transcript。
 
-`ChemicalContents` 使用 canonical group 表，每组绑定 mechanical material、indicator、nanovolume、kg mass/residual 和排序 species 列。
+`ChemicalContents` 使用 canonical group 表，每组绑定 mechanical material、nanovolume、kg mass/residual 和排序 species 列。
 物品总量必须与各组 exact sum 一致；部分抽取按体积分配 quanta 和 residual，并把确定性 remainder 留给一侧。
 容器无法表示完整结果时，在 solver 修改前拒绝。
 
@@ -132,7 +129,7 @@ pH 是根据局部 `H+`/`OH-` 相对数量派生的 0–14 展示指标，供指
 区域 source/sink 的 group 聚合对归一化体积按输入浮点数的精确二进制值求和，最后舍入一次。
 机械质量与化学质量余量使用统一的 100 ng 整数编码，合并、拆分和审计直接核对整数；余量保存机械质量减去组成质量的差额。
 
-每个 source/sink transfer group 同时保存 material/indicator identity、归一化体积、kg 质量与余量、整数 μmol 物种。
+每个 source/sink transfer group 同时保存 material identity、归一化体积、kg 质量与余量、整数 μmol 物种。
 collision escape、`empty`、创造放出和创造装取共用这份完整账本。
 
 ## 功能布局

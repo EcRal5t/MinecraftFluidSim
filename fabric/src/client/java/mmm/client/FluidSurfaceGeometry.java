@@ -204,6 +204,11 @@ final class FluidSurfaceGeometry {
 		float r = lerp(WATER_SIDE_RED, WATER_TOP_RED, vertical);
 		float g = lerp(WATER_SIDE_GREEN, WATER_TOP_GREEN, vertical);
 		float blue = lerp(WATER_SIDE_BLUE, WATER_TOP_BLUE, vertical);
+		int color = FluidColorMapping.withoutDisplayData(0xff000000
+				| Math.round(r * 255) << 16 | Math.round(g * 255) << 8 | Math.round(blue * 255));
+		r = ((color >>> 16) & 255) / 255.0F;
+		g = ((color >>> 8) & 255) / 255.0F;
+		blue = (color & 255) / 255.0F;
 		float alpha = lerp(WATER_SIDE_ALPHA, WATER_TOP_ALPHA, vertical);
 		vertex(vertices, matrix, a.x, a.y, a.z, r, g, blue, alpha);
 		vertex(vertices, matrix, b.x, b.y, b.z, r, g, blue, alpha);

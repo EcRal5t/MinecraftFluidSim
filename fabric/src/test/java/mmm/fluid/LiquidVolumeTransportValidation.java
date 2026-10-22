@@ -100,7 +100,7 @@ public final class LiquidVolumeTransportValidation {
 		var d=domain(2,2,2);var masks=new byte[8];masks[0]=(byte)127;d.geometry.cutCells.restoreMicroMasks(masks);
 		var key=new mmm.inventory.LiquidCellInventory.Key(0,0,128);
 		d.liquidCells.planAdditions(java.util.List.of(new mmm.inventory.LiquidCellInventory.Stock(key,SignedDyadic.of(.0625),
-				d.unitScale.massUnitsForNormalized(62.5),null,0,false))).commit();d.markCellInventoryChanged();d.domainFlowFields.preparePhysicalState();
+				d.unitScale.massUnitsForNormalized(62.5),null,0))).commit();d.markCellInventoryChanged();d.domainFlowFields.preparePhysicalState();
 		d.mac.velocityX[d.domainFlowFields.xFaceIndex(1,0,0)]=.5F;d.mac.velocityY[d.domainFlowFields.yFaceIndex(0,1,0)]=.5F;d.mac.velocityZ[d.domainFlowFields.zFaceIndex(0,0,1)]=.5F;d.cellMacStage.publishMomentum();
 
 		var plan=d.cellMacStage.prepareLiquid(.1F).inventory();var outgoing=SignedDyadic.ZERO;
@@ -138,7 +138,7 @@ public final class LiquidVolumeTransportValidation {
 		for(int cell=0;cell<d.cellCount;cell++) if(cell/3%3<2) {
 			var volume=SignedDyadic.of(1).subtract(SignedDyadic.of(d.granularCoupling.solidSvq(cell),-24));
 			var key=new LiquidCellInventory.Key(cell,0,255);
-			stocks.add(new LiquidCellInventory.Stock(key,volume,d.unitScale.massUnitsForNormalized(volume.toDouble()*1000),null,0,false));
+			stocks.add(new LiquidCellInventory.Stock(key,volume,d.unitScale.massUnitsForNormalized(volume.toDouble()*1000),null,0));
 		}
 		d.liquidCells.planAdditions(stocks).commit();d.markCellInventoryChanged();d.domainFlowFields.preparePhysicalState();
 		d.granularNextCoupling.rebuild(d.granularState.parcels,d.granularState.deposits,
@@ -178,8 +178,8 @@ public final class LiquidVolumeTransportValidation {
 		var mixture = mmm.chemistry.ChemicalMixtureRecord.fromStableAmounts(chemistry, java.util.Map.of(mmm.chemistry.BuiltinChemicalDefinitions.H2O, 1L), 0);
 		var a = new LiquidCellInventory.Key(0,0,1); var b = new LiquidCellInventory.Key(11,0,128);
 		d.liquidCells.planEdits(java.util.List.of(
-				new LiquidCellInventory.Edit(a,new LiquidCellInventory.Stock(a,SignedDyadic.of(.0625),17,mixture,0,true)),
-				new LiquidCellInventory.Edit(b,new LiquidCellInventory.Stock(b,SignedDyadic.of(.0625),19,null,0,false)))).commit();
+				new LiquidCellInventory.Edit(a,new LiquidCellInventory.Stock(a,SignedDyadic.of(.0625),17,mixture,0)),
+				new LiquidCellInventory.Edit(b,new LiquidCellInventory.Stock(b,SignedDyadic.of(.0625),19,null,0)))).commit();
 		d.markCellInventoryChanged();
 		var before = d.liquidCells.snapshot();
 		for (int step = 0; step < 3; step++) {
@@ -235,7 +235,7 @@ public final class LiquidVolumeTransportValidation {
 		var d=domain(3,3,3);byte[] masks=new byte[d.cellCount];java.util.Arrays.fill(masks,(byte)255);
 		masks[13]=(byte)254;masks[12]=(byte)253;d.geometry.cutCells.restoreMicroMasks(masks);
 		var key=new LiquidCellInventory.Key(13,0,1);var volume=SignedDyadic.of(.125);
-		d.liquidCells.planAdditions(java.util.List.of(new LiquidCellInventory.Stock(key,volume,d.unitScale.massUnitsForNormalized(125),null,0,false))).commit();d.markCellInventoryChanged();d.domainFlowFields.preparePhysicalState();
+		d.liquidCells.planAdditions(java.util.List.of(new LiquidCellInventory.Stock(key,volume,d.unitScale.massUnitsForNormalized(125),null,0))).commit();d.markCellInventoryChanged();d.domainFlowFields.preparePhysicalState();
 		var source=d.liquidCells.snapshot();var previous=new long[d.cellCount];var next=previous.clone();next[13]=mmm.granular.SolidVolume.SVQ_PER_CELL/16;
 		var prepared=GranularLiquidDisplacement.prepareInsertion(d,previous,next);
 		require(prepared!=null,"Component overfill was hidden by whole-cell spare capacity");

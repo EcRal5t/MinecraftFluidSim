@@ -192,7 +192,7 @@ public final class AirCavityScannerValidation {
 		var capacities=gas.actualCapacity().components;
 		checkRelative(capacities.stream().mapToDouble(c->c.availableVolumeNormalized().toDouble()).sum()+d.totalVolumeExact(),.25,"Disconnected open capacity and liquid inventory");
 		var staleStock=d.liquidCells.physicalStockAt(0);
-		d.liquidCells.planEdits(List.of(new LiquidCellInventory.Edit(staleStock.key(),new LiquidCellInventory.Stock(staleStock.key(),SignedDyadic.of(.04),staleStock.massUnits(),staleStock.mixture(),staleStock.internalEnergy(),staleStock.indicator())))).commit();
+		d.liquidCells.planEdits(List.of(new LiquidCellInventory.Edit(staleStock.key(),new LiquidCellInventory.Stock(staleStock.key(),SignedDyadic.of(.04),staleStock.massUnits(),staleStock.mixture(),staleStock.internalEnergy())))).commit();
 		var changedCapacities=pieceCapacityFrame(d,true).geometry().actualCapacity().components;
 		checkRelative(changedCapacities.stream().mapToDouble(c->c.availableVolumeNormalized().toDouble()).sum()+d.totalVolumeExact(),.25,
 				"Gas capacity follows actual inventory after a liquid edit");
@@ -207,7 +207,7 @@ public final class AirCavityScannerValidation {
         long[] occupied = new long[8];
         var current = GasRuntimeGeometry.capture(domain,occupied,true);
         var stock = domain.liquidCells.physicalStockAt(0);
-        var changed = new LiquidCellInventory.Stock(stock.key(),SignedDyadic.of(.125),stock.massUnits(),stock.mixture(),stock.internalEnergy(),stock.indicator());
+        var changed = new LiquidCellInventory.Stock(stock.key(),SignedDyadic.of(.125),stock.massUnits(),stock.mixture(),stock.internalEnergy());
         var plan = domain.liquidCells.planEdits(List.of(new LiquidCellInventory.Edit(stock.key(),changed)));
         var nextVolumes=domain.exportPhaseOccupancyState().copyLiquidMicroVolumes();
         for(int micro=0;micro<8;micro++)nextVolumes[micro]*=.25;
@@ -222,7 +222,7 @@ public final class AirCavityScannerValidation {
         check(future.matchesCarrierGeometry(domain,occupied) && !current.matchesCarrierGeometry(domain,occupied)
                         && !future.matchesSourceCarrierGeometry(domain,occupied),
                 "Published cell inventory did not invalidate the old geometry source");
-        var energyOnly = new LiquidCellInventory.Stock(changed.key(),changed.volume(),changed.massUnits(),changed.mixture(),changed.internalEnergy()+1,changed.indicator());
+        var energyOnly = new LiquidCellInventory.Stock(changed.key(),changed.volume(),changed.massUnits(),changed.mixture(),changed.internalEnergy()+1);
         domain.liquidCells.planEdits(List.of(new LiquidCellInventory.Edit(changed.key(),energyOnly))).commit();
         check(future.matchesCarrierGeometry(domain,occupied),"Thermal-only inventory update rebuilt liquid geometry");
         byte[] closed=masks.clone();closed[1]=(byte)255;

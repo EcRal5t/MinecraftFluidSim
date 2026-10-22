@@ -10,8 +10,7 @@ public record ChemicalPhaseDefinition(
 		String id,
 		String materialId,
 		List<String> allowedSpecies,
-		Map<String, ExactRational> defaultConcentrationMolPerCubicMeter,
-		boolean acceptsIndicator
+		Map<String, ExactRational> defaultConcentrationMolPerCubicMeter
 ) {
 	public ChemicalPhaseDefinition {
 		ChemicalIds.requireId(id, "chemical phase id");

@@ -18,7 +18,7 @@
 | 后端字段、MAC、PLIC、压力、速度传递与碰撞离散 | [流体离散参考](architecture/fluid-solver.md) |
 | 材料定义、质量、黏度与混合物换算 | [材料参考](architecture/material-state.md) |
 | 气腔几何、库存分配、状态方程与有限孔流 | [气体参考](architecture/gas-state.md) |
-| 物种、反应与指示剂数据 | [化学参考](architecture/chemistry-state.md) |
+| 物种、反应与 pH 展示 | [化学参考](architecture/chemistry-state.md) |
 | 颗粒接触、整数占容、床层与固液转移 | [颗粒参考](architecture/granular-state.md) |
 | 状态函数、热接触、相变及内能分配 | [热学参考](architecture/thermal-state.md) |
 | 启动、输入刷新、调度、授权与区域操作 | [运行时参考](architecture/runtime-and-lifecycle.md) |

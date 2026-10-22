@@ -193,7 +193,7 @@ final class ChemicalReactionStage {
 			for(var stock:entry.getValue()) {
 				double u=stock.massUnits()==0?0:energies==null?stock.internalEnergy():energies[ordinal++];
 				edits.add(new LiquidCellInventory.Edit(stock.key(),new LiquidCellInventory.Stock(stock.key(),stock.volume(),
-						stock.massUnits(),stock.mixture(),u,stock.indicator())));
+						stock.massUnits(),stock.mixture(),u)));
 			}
 		}
 		if(!edits.isEmpty()) {
@@ -241,7 +241,7 @@ final class ChemicalReactionStage {
 			if(values.size()>ChemicalLimits.MAX_SPECIES_PER_PARCEL) throw new ChemicalReactionEngine.BudgetExceededException("Reaction cell composition exceeds species capacity");
 			var mixture=new ChemicalMixtureRecord(values.keySet().stream().mapToInt(Integer::intValue).toArray(),values.values().stream().mapToLong(Long::longValue).toArray(),0);
 			mixture=mixture.withMassResidualUnits(Math.subtractExact(stock.massUnits(),mixture.speciesMassUnits(registry)));
-			result.add(new LiquidCellInventory.Stock(stock.key(),stock.volume(),stock.massUnits(),mixture,stock.internalEnergy(),stock.indicator()));
+			result.add(new LiquidCellInventory.Stock(stock.key(),stock.volume(),stock.massUnits(),mixture,stock.internalEnergy()));
 		}
 		return result;
 	}

@@ -12,7 +12,7 @@ public final class RegionChemistry {
 	private int reactionCursor;
 	private volatile DefaultComposition defaultComposition;
 	private record DefaultComposition(String materialId,long volumeBits,int cellSizeBits,long massUnits,
-	                                  boolean indicator,ChemicalMixtureRecord mixture) { }
+	                                  ChemicalMixtureRecord mixture) { }
 	private ChemicalTransferLedger escapedSink=ChemicalTransferLedger.EMPTY;
 	private ChemicalTransferLedger externalSource=ChemicalTransferLedger.EMPTY;
 	public RegionChemistry(ChemicalRegistry registry,int cellCount){
@@ -85,7 +85,6 @@ public final class RegionChemistry {
 		if (ledger == null) throw new IllegalArgumentException("Chemical audit ledger is missing");
 		for (ChemicalTransferLedger.Group group : ledger.groups()) {
 			ChemicalPhaseDefinition phase = registry.phase(registry.phaseHandleForMaterial(group.materialId()));
-			if (group.indicator() && !phase.acceptsIndicator()) throw new IllegalArgumentException("Audit indicator/phase mismatch");
 			ExactRational exactSpeciesMass = ExactRational.ZERO;
 			for (Map.Entry<String, Long> species : group.speciesQuanta().entrySet()) {
 				int handle = registry.speciesHandle(species.getKey());
@@ -101,10 +100,9 @@ public final class RegionChemistry {
 		}
 	}
 
-	public void requireCompatible(ChemicalMixtureRecord record, String materialId, boolean indicator) {
+	public void requireCompatible(ChemicalMixtureRecord record, String materialId) {
 		validateRecord(record);
 		ChemicalPhaseDefinition phase = registry.phase(registry.phaseHandleForMaterial(materialId));
-		if (indicator && !phase.acceptsIndicator()) throw new IllegalArgumentException("Chemical phase rejects indicator");
 		for (int entry = 0; entry < record.entryCount(); entry++) {
 			String speciesId = registry.species(record.speciesHandle(entry)).id();
 			if (!phase.allowedSpecies().contains(speciesId)) {
@@ -115,12 +113,11 @@ public final class RegionChemistry {
 
 	/** Resolves source composition once; unresolved species remain in the integer mass residual. */
 	public ChemicalMixtureRecord defaultRecord(
-			String materialId, double cellVolume, float cellSize, long massUnits, boolean indicator
+			String materialId, double cellVolume, float cellSize, long massUnits
 	) {
 		if (massUnits < 0) throw new IllegalArgumentException("Negative liquid mass");
 		int phaseHandle = registry.phaseHandleForMaterial(materialId);
 		ChemicalPhaseDefinition phase = registry.phase(phaseHandle);
-		if (indicator && !phase.acceptsIndicator()) throw new IllegalArgumentException("Chemical phase rejects indicator");
 		if (!(Double.isFinite(cellVolume) && cellVolume > 0 && Float.isFinite(cellSize) && cellSize > 0))
 			throw new IllegalArgumentException("Source volume and cell size must be positive and finite");
 		if (massUnits == 0) return ChemicalMixtureRecord.fromStableAmounts(registry, Map.of(), 0);
@@ -128,8 +125,8 @@ public final class RegionChemistry {
 		if (previous != null && previous.materialId.equals(materialId)
 				&& previous.volumeBits == Double.doubleToRawLongBits(cellVolume)
 				&& previous.cellSizeBits == Float.floatToRawIntBits(cellSize)
-				&& previous.massUnits == massUnits && previous.indicator == indicator) {
-			requireCompatible(previous.mixture, materialId, indicator);
+				&& previous.massUnits == massUnits) {
+			requireCompatible(previous.mixture, materialId);
 			return previous.mixture;
 		}
 		ExactRational cubicMeters = ExactRational.ofDouble(cellVolume)
@@ -145,9 +142,9 @@ public final class RegionChemistry {
 		ChemicalMixtureRecord withoutResidual = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0L);
 		long residual = massUnits - withoutResidual.speciesMassUnits(registry);
 		ChemicalMixtureRecord record = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, residual);
-		requireCompatible(record, materialId, indicator);
+		requireCompatible(record, materialId);
 		if (previous == null) defaultComposition = new DefaultComposition(materialId, Double.doubleToRawLongBits(cellVolume),
-				Float.floatToRawIntBits(cellSize), massUnits, indicator, record);
+				Float.floatToRawIntBits(cellSize), massUnits, record);
 		return record;
 	}
 

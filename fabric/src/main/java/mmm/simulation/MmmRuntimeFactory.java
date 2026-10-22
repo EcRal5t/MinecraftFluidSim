@@ -122,8 +122,6 @@ public final class MmmRuntimeFactory {
 						return result.succeeded() ? null : result.failure();
 					}
 				}, worldRegistries.profile(), policy::defaultEntityPhysicsEnabled, policy::defaultDebugOverlays);
-		MinecraftIndicatorEditing indicatorEditing = new MinecraftIndicatorEditing(
-				worldRegistries, targets, regionOperations, snapshots, availability);
 		MinecraftRegionAdministration regionAdministration = new MinecraftRegionAdministration(
 				regionManager, regionOperations, regionApplication, containerRecovery);
 		RegionDiagnosticsReport regionDiagnostics = new RegionDiagnosticsReport(
@@ -144,7 +142,7 @@ public final class MmmRuntimeFactory {
 				regionManager, regionOperations, snapshots, containerRecovery, takeover,
 				availability, regionTick, ownership::replace);
 		return new MmmRuntime(simulationLoop, operatorActions, containerTransactions, controllerConsole,
-				regionActivation, indicatorEditing, debugFixtures, regionAdministration, regionDiagnostics,
+				regionActivation, debugFixtures, regionAdministration, regionDiagnostics,
 				playerContainerTransfers, dispenserContainerTransfers,
 				new MinecraftRegionObservation(regionManager, snapshots), containerRecovery,
 				new FabricFluidQueryApi(server, regionManager, startup.profileProven()), new ProtocolSessions(),

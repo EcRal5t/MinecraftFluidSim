@@ -1,9 +1,7 @@
 package mmm.client;
 
-import mmm.chemistry.ChemicalDisplaySnapshot;
 import mmm.fluid.FluidMaterialSurfaceMesher;
 import mmm.fluid.FluidMaterialRenderSnapshot;
-import mmm.network.FluidChemicalSnapshotPayload;
 import mmm.network.FluidMaterialSnapshotPayload;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
@@ -37,18 +35,23 @@ final class MaterialSurfaceGeometry {
 	}
 
 	static List<ColoredTriangle> prepare(FluidMaterialSnapshotPayload state, FluidMaterialRenderSnapshot snapshot,
-			FluidMaterialSurfaceMesher.Mesh mesh, ClientRegionSnapshotStore.ChemicalFrame chemical) {
+			FluidMaterialSurfaceMesher.Mesh mesh, ClientRegionSnapshotStore.ChemicalFrame chemical,
+			short[] temperatures, FluidDisplaySettings.View view) {
 		ArrayList<ColoredTriangle> triangles = new ArrayList<>(mesh.outerTriangles().size() + mesh.interfaceTriangles().size());
 		for (FluidMaterialSurfaceMesher.Triangle triangle : mesh.outerTriangles()) {
 			int material = FluidMaterialSurfaceMesher.dominantMaterialAt(snapshot, triangle.centroid());
 			if (material < 0) continue;
-			int color = chemicalArgb(chemical, state, triangle.centroid(), state.materials().get(material).argb());
+			var entry = state.materials().get(material);
+			int color = color(view, chemical, temperatures, state, triangle.centroid(),
+					state.phaseGroups().indexOf(entry.phaseGroup()), entry.argb());
 			triangles.add(new ColoredTriangle(triangle, color, 0.62F));
 		}
 		for (FluidMaterialSurfaceMesher.InterfaceTriangle owned : mesh.interfaceTriangles()) {
-			int first = phaseArgb(state, owned.firstPhase());
-			int second = phaseArgb(state, owned.secondPhase());
-			int color = chemicalArgb(chemical, state, owned.triangle().centroid(), blendArgb(first, second));
+			int first = color(view, chemical, temperatures, state, owned.triangle().centroid(),
+					owned.firstPhase(), phaseArgb(state, owned.firstPhase()));
+			int second = color(view, chemical, temperatures, state, owned.triangle().centroid(),
+					owned.secondPhase(), phaseArgb(state, owned.secondPhase()));
+			int color = FluidColorMapping.blend(first, second, 0.5);
 			triangles.add(new ColoredTriangle(owned.triangle(), color, 0.48F));
 		}
 		return List.copyOf(triangles);
@@ -56,48 +59,14 @@ final class MaterialSurfaceGeometry {
 
 	record ColoredTriangle(FluidMaterialSurfaceMesher.Triangle triangle, int argb, float alpha) { }
 
-	private static int chemicalArgb(
-			ClientRegionSnapshotStore.ChemicalFrame chemical, FluidMaterialSnapshotPayload state,
-			FluidMaterialSurfaceMesher.Point point,
-			int materialArgb
-	) {
-		if (chemical == null) return materialArgb;
-		FluidChemicalSnapshotPayload payload = chemical.payload();
-		int x = Math.max(0, Math.min(state.sizeX() - 1, (int) Math.floor(point.x() / state.cellSize())));
-		int y = Math.max(0, Math.min(state.sizeY() - 1, (int) Math.floor(point.y() / state.cellSize())));
-		int z = Math.max(0, Math.min(state.sizeZ() - 1, (int) Math.floor(point.z() / state.cellSize())));
-		int cell = (z * state.sizeY() + y) * state.sizeX() + x;
-		short[] indices = chemical.topSpecies();
-		byte[] weights = chemical.topWeights();
-		int red = ((materialArgb >>> 16) & 0xff) * Byte.toUnsignedInt(chemical.residualWeights()[cell]);
-		int green = ((materialArgb >>> 8) & 0xff) * Byte.toUnsignedInt(chemical.residualWeights()[cell]);
-		int blue = (materialArgb & 0xff) * Byte.toUnsignedInt(chemical.residualWeights()[cell]);
-		int weightTotal = Byte.toUnsignedInt(chemical.residualWeights()[cell]);
-		for (int slot = 0; slot < ChemicalDisplaySnapshot.TOP_SPECIES; slot++) {
-			int offset = cell * ChemicalDisplaySnapshot.TOP_SPECIES + slot;
-			int species = indices[offset], weight = Byte.toUnsignedInt(weights[offset]);
-			if (species < 0 || weight == 0) continue;
-			int argb = payload.species().get(species).argb();
-			red += ((argb >>> 16) & 0xff) * weight;
-			green += ((argb >>> 8) & 0xff) * weight;
-			blue += (argb & 0xff) * weight;
-			weightTotal += weight;
-		}
-		if (weightTotal > 0) {
-			red /= weightTotal;
-			green /= weightTotal;
-			blue /= weightTotal;
-		}
-		int indicator = Byte.toUnsignedInt(chemical.indicatorFraction()[cell]);
-		if (indicator > 0) {
-			double value = Byte.toUnsignedInt(chemical.ph()[cell]) * 14.0 / 255.0;
-			int phColor = value < 7.0 ? 0xffff3048 : value > 7.0 ? 0xff305cff : 0xff35d06f;
-			double blend = indicator / 255.0 * Math.min(1.0, Math.abs(value - 7.0) / 7.0 + 0.25);
-			red = (int) Math.round(red * (1.0 - blend) + ((phColor >>> 16) & 0xff) * blend);
-			green = (int) Math.round(green * (1.0 - blend) + ((phColor >>> 8) & 0xff) * blend);
-			blue = (int) Math.round(blue * (1.0 - blend) + (phColor & 0xff) * blend);
-		}
-		return 0xff000000 | red << 16 | green << 8 | blue;
+	private static int color(FluidDisplaySettings.View view,
+			ClientRegionSnapshotStore.ChemicalFrame chemical, short[] temperatures,
+			FluidMaterialSnapshotPayload state, FluidMaterialSurfaceMesher.Point point, int phase, int materialArgb) {
+		int x = Math.clamp((int) Math.floor(point.x() / state.cellSize()), 0, state.sizeX() - 1);
+		int y = Math.clamp((int) Math.floor(point.y() / state.cellSize()), 0, state.sizeY() - 1);
+		int z = Math.clamp((int) Math.floor(point.z() / state.cellSize()), 0, state.sizeZ() - 1);
+		return FluidColorMapping.color(view, chemical, temperatures, state,
+				(z * state.sizeY() + y) * state.sizeX() + x, phase, materialArgb);
 	}
 
 	private static int phaseArgb(FluidMaterialSnapshotPayload state, int phase) {
@@ -106,13 +75,6 @@ final class MaterialSurfaceGeometry {
 			if (material.phaseGroup().equals(group)) return material.argb();
 		}
 		return 0xffff00ff;
-	}
-
-	private static int blendArgb(int first, int second) {
-		int red = (((first >>> 16) & 0xff) + ((second >>> 16) & 0xff)) / 2;
-		int green = (((first >>> 8) & 0xff) + ((second >>> 8) & 0xff)) / 2;
-		int blue = ((first & 0xff) + (second & 0xff)) / 2;
-		return 0xff000000 | red << 16 | green << 8 | blue;
 	}
 
 	private static void emitMaterialTriangle(

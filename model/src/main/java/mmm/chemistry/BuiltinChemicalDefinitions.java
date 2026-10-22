@@ -44,11 +44,11 @@ public final class BuiltinChemicalDefinitions {
 			new ChemicalPhaseDefinition(AQUEOUS, "mmm:water",
 					List.of(H2O, H_PLUS, OH_MINUS, NA_PLUS, K_PLUS, CL_MINUS, NO3_MINUS,
 							HCL, NAOH, NANO3, KCL, NACL, KNO3, CO2),
-					Map.of(H2O, ExactRational.parse("500000/9")), true),
+					Map.of(H2O, ExactRational.parse("500000/9"))),
 			new ChemicalPhaseDefinition("mmm:oil_chemistry", "mmm:oil",
-					List.of(), Map.of(), false),
+					List.of(), Map.of()),
 			new ChemicalPhaseDefinition("mmm:mercury_chemistry", "mmm:mercury",
-					List.of(HG), Map.of(HG, ExactRational.of(68_000)), false)
+					List.of(HG), Map.of(HG, ExactRational.of(68_000)))
 	);
 
 	private static final List<ChemicalReaction> REACTIONS = List.of(

@@ -85,7 +85,7 @@ public record FluidGranularSnapshotPayload(
 		if (chemical == null) return null;
 		return new FluidChemicalSnapshotPayload(FluidProtocol.Layout.CHEMICAL, material,
 				chemical.registryFingerprint(), chemical.species(), chemical.topSpecies(), chemical.topWeights(),
-				chemical.residualWeights(), chemical.ph(), chemical.indicatorFraction());
+				chemical.residualWeights(), chemical.ph());
 	}
 
 	@Override public Type<FluidGranularSnapshotPayload> type() { return TYPE; }
@@ -149,7 +149,7 @@ public record FluidGranularSnapshotPayload(
 
 	public record ChemicalLayer(
 			String registryFingerprint, List<FluidChemicalSnapshotPayload.SpeciesEntry> species,
-			short[] topSpecies, byte[] topWeights, byte[] residualWeights, byte[] ph, byte[] indicatorFraction
+			short[] topSpecies, byte[] topWeights, byte[] residualWeights, byte[] ph
 	) {
 		public ChemicalLayer {
 			registryFingerprint = Objects.requireNonNull(registryFingerprint, "registryFingerprint");
@@ -158,24 +158,22 @@ public record FluidGranularSnapshotPayload(
 			topWeights = Objects.requireNonNull(topWeights, "topWeights").clone();
 			residualWeights = Objects.requireNonNull(residualWeights, "residualWeights").clone();
 			ph = Objects.requireNonNull(ph, "ph").clone();
-			indicatorFraction = Objects.requireNonNull(indicatorFraction, "indicatorFraction").clone();
 		}
 		@Override public short[] topSpecies() { return topSpecies.clone(); }
 		@Override public byte[] topWeights() { return topWeights.clone(); }
 		@Override public byte[] residualWeights() { return residualWeights.clone(); }
 		@Override public byte[] ph() { return ph.clone(); }
-		@Override public byte[] indicatorFraction() { return indicatorFraction.clone(); }
 
 		static ChemicalLayer from(String fingerprint, ChemicalDisplaySnapshot display) {
 			return new ChemicalLayer(fingerprint, display.species().stream().map(entry ->
 					new FluidChemicalSnapshotPayload.SpeciesEntry(entry.id(), entry.argb())).toList(),
 					display.copyTopSpecies(), display.copyTopWeights(), display.copyResidualWeights(),
-					display.copyPh(), display.copyIndicatorFraction());
+					display.copyPh());
 		}
 
 		void validate(FluidMaterialSnapshotPayload material) {
 			new FluidChemicalSnapshotPayload(FluidProtocol.Layout.CHEMICAL, material,
-					registryFingerprint, species, topSpecies, topWeights, residualWeights, ph, indicatorFraction);
+					registryFingerprint, species, topSpecies, topWeights, residualWeights, ph);
 		}
 
 		void encode(FriendlyByteBuf buffer) {
@@ -185,7 +183,7 @@ public record FluidGranularSnapshotPayload(
 			}
 			buffer.writeVarInt(topSpecies.length); for (short value : topSpecies) buffer.writeShort(value);
 			buffer.writeByteArray(topWeights); buffer.writeByteArray(residualWeights);
-			buffer.writeByteArray(ph); buffer.writeByteArray(indicatorFraction);
+			buffer.writeByteArray(ph);
 		}
 
 		static ChemicalLayer decode(FriendlyByteBuf buffer) {
@@ -198,7 +196,7 @@ public record FluidGranularSnapshotPayload(
 					"chemical top species");
 			short[] top = new short[topCount]; for (int index = 0; index < top.length; index++) top[index] = buffer.readShort();
 			return new ChemicalLayer(fingerprint, species, top, buffer.readByteArray(MAX_CHEMICAL_BYTES),
-					buffer.readByteArray(MAX_CELLS), buffer.readByteArray(MAX_CELLS), buffer.readByteArray(MAX_CELLS));
+					buffer.readByteArray(MAX_CELLS), buffer.readByteArray(MAX_CHEMICAL_BYTES));
 		}
 	}
 }

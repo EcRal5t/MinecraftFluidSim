@@ -28,7 +28,7 @@ final class CondensedInventoryClearPlanner {
 		if (domain.chemistry != null) {
 			ChemicalTransferLedger.Builder builder = ChemicalTransferLedger.builder(domain.chemistry.registry());
 			for (var stock : domain.liquidCells.stocks()) builder.add(
-					domain.materialRegistry.material(stock.key().material()).id(), stock.indicator(),
+					domain.materialRegistry.material(stock.key().material()).id(),
 					stock.volumeFraction(), stock.massUnits(), stock.mixture());
 			drained = builder.build();
 		}
@@ -56,7 +56,7 @@ final class CondensedInventoryClearPlanner {
 					throw new IllegalStateException("Chemical coherent phase exists without chemistry state");
 				}
 				builder.add(new ChemicalTransferLedger.Group(
-						coherentLiquidMaterialId(group.phaseId()), false,
+						coherentLiquidMaterialId(group.phaseId()),
 						domain.unitScale.normalizedVolume((double) group.occupiedVolumeSvq() / SolidVolume.SVQ_PER_CUBIC_METER),
 						group.massUnits(),
 						group.composition().massResidualUnits(), group.composition().stableAmounts()));

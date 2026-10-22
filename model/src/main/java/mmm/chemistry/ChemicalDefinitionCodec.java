@@ -28,7 +28,7 @@ public final class ChemicalDefinitionCodec {
 
 	public static ChemicalPhaseDefinition decodePhase(String stableId, Reader input) {
 		JsonObject root = object(input);
-		requireOnly(root, "material", "allowed_species", "default_concentration_mol_per_m3", "accepts_indicator");
+		requireOnly(root, "material", "allowed_species", "default_concentration_mol_per_m3");
 		JsonArray source = array(root, "allowed_species");
 		List<String> allowed = new ArrayList<>(source.size());
 		for (JsonElement element : source) allowed.add(string(element, "allowed_species entry"));
@@ -36,12 +36,8 @@ public final class ChemicalDefinitionCodec {
 		for (Map.Entry<String, JsonElement> entry : object(root, "default_concentration_mol_per_m3").entrySet()) {
 			defaults.put(entry.getKey(), exact(entry.getValue(), "default_concentration_mol_per_m3." + entry.getKey()));
 		}
-		JsonElement indicator = required(root, "accepts_indicator");
-		if (!indicator.isJsonPrimitive() || !indicator.getAsJsonPrimitive().isBoolean()) {
-			throw new IllegalArgumentException("accepts_indicator must be a JSON boolean");
-		}
 		return new ChemicalPhaseDefinition(stableId, string(required(root, "material"), "material"),
-				allowed, defaults, indicator.getAsBoolean());
+				allowed, defaults);
 	}
 
 	public static ChemicalReaction decodeReaction(String stableId, Reader input) {

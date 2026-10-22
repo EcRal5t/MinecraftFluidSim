@@ -77,7 +77,6 @@ final class FuzzConfig {
 		if (pick < 94) return "applicationStep";
 		if (pick < 95) return "sleepWake";
 		if (pick < 96) return "blockAndRetry";
-		if (pick < 97) return "indicator";
 		if (pick < 98) return "clear";
 		if (pick < 99) return "vent";
 		return "settle";

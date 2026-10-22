@@ -58,7 +58,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		tinyMixture=tinyMixture.withMassResidualUnits(1-tinyMixture.speciesMassUnits(r.chemical()));
 		int thermalMaterial=d.thermalState.thermalMaterialHandleForFluid(water);
 		double tinyEnergy=d.thermalState.stateFunction().internalEnergyAtTemperature(thermalMaterial,mmm.units.Mass.kilograms(1),tinyMixture,r.chemical(),293.15);
-		tinyCells.planAdditions(List.of(new LiquidCellInventory.Stock(sourceKey,SignedDyadic.of(1),1,tinyMixture,tinyEnergy,false))).commit();
+		tinyCells.planAdditions(List.of(new LiquidCellInventory.Stock(sourceKey,SignedDyadic.of(1),1,tinyMixture,tinyEnergy))).commit();
 		var tinyRoutes=LiquidTransportRoutes.builder(1,1);tinyRoutes.source(tinyCells.stock(sourceKey));tinyRoutes.route(0,1,255,SignedDyadic.of(.5));
 		var tinyPlan=tinyCells.planRoutes(tinyRoutes.build(),FluidThermalBinding.liquidEnergyPartitioner(d));
 		long tinySpecies=0;
@@ -129,7 +129,7 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		var d=new FluidDomain(2,2,2,new FluidSolverConfig(.5F,1000,0,.05F,100,1e-5F,.002F));
 		var masks=new byte[8];Arrays.fill(masks,(byte)255);masks[0]=(byte)254;masks[7]=(byte)127;d.geometry.cutCells.restoreMicroMasks(masks);
 		var edits=new java.util.ArrayList<LiquidCellInventory.Edit>();
-		for(int support:new int[]{1,128}){var key=new LiquidCellInventory.Key(support==1?0:7,0,support);edits.add(new LiquidCellInventory.Edit(key,new LiquidCellInventory.Stock(key,SignedDyadic.of(.125),d.unitScale.massUnitsForNormalized(125),null,0,false)));}
+		for(int support:new int[]{1,128}){var key=new LiquidCellInventory.Key(support==1?0:7,0,support);edits.add(new LiquidCellInventory.Edit(key,new LiquidCellInventory.Stock(key,SignedDyadic.of(.125),d.unitScale.massUnitsForNormalized(125),null,0)));}
 		d.liquidCells.planEdits(edits).commit();d.markCellInventoryChanged();
 		var caloric=new ThermalMaterialDefinition("test:thermal/cut",ThermalMaterialDefinition.CarrierKind.LIQUID,"mmm:water",300,0,1000,List.of(new ThermalMaterialDefinition.CaloricSegment(1,600,4000)));
 		d.bindThermal(new ThermalRegistry(thermalMaterials(List.of(caloric))),new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)),300);

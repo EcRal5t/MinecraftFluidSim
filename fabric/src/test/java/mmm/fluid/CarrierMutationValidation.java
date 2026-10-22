@@ -30,8 +30,8 @@ public final class CarrierMutationValidation {
 		var first=domain.liquidCells.stocksInCell(source).getFirst();var second=domain.liquidCells.stocksInCell(receiver).getFirst();
 		long moved=first.massUnits()/2;
 		var edit=domain.liquidCells.planEdits(List.of(
-				new mmm.inventory.LiquidCellInventory.Edit(first.key(),new mmm.inventory.LiquidCellInventory.Stock(first.key(),mmm.units.SignedDyadic.of(.25),first.massUnits()-moved,null,0,false)),
-				new mmm.inventory.LiquidCellInventory.Edit(second.key(),new mmm.inventory.LiquidCellInventory.Stock(second.key(),mmm.units.SignedDyadic.of(.75),second.massUnits()+moved,null,0,false))));
+				new mmm.inventory.LiquidCellInventory.Edit(first.key(),new mmm.inventory.LiquidCellInventory.Stock(first.key(),mmm.units.SignedDyadic.of(.25),first.massUnits()-moved,null,0)),
+				new mmm.inventory.LiquidCellInventory.Edit(second.key(),new mmm.inventory.LiquidCellInventory.Stock(second.key(),mmm.units.SignedDyadic.of(.75),second.massUnits()+moved,null,0))));
 		double before=domain.exportMacMomentum().copyX()[shared];
 		var momentum=domain.cellMacStage.preparePhaseMomentum(edit,java.util.Map.of(source,moved));
 		require(Math.abs(momentum.momentum().copyX()[shared]-.75*before)<1e-12
@@ -47,7 +47,7 @@ public final class CarrierMutationValidation {
 		var edits=new java.util.ArrayList<mmm.inventory.LiquidCellInventory.Edit>();var removals=new java.util.TreeMap<Integer,Long>();
 		for(int x:new int[]{1,4}) {
 			int cell=separate.domainFlowFields.cellIndex(x,1,1);var stock=separate.liquidCells.stocksInCell(cell).getFirst();long mass=stock.massUnits()/2;
-			removals.put(cell,mass);edits.add(new mmm.inventory.LiquidCellInventory.Edit(stock.key(),new mmm.inventory.LiquidCellInventory.Stock(stock.key(),mmm.units.SignedDyadic.of(.25),stock.massUnits()-mass,null,0,false)));
+			removals.put(cell,mass);edits.add(new mmm.inventory.LiquidCellInventory.Edit(stock.key(),new mmm.inventory.LiquidCellInventory.Stock(stock.key(),mmm.units.SignedDyadic.of(.25),stock.massUnits()-mass,null,0)));
 		}
 		var prepared=separate.cellMacStage.preparePhaseMomentum(separate.liquidCells.planEdits(edits),removals);
 		double slow=prepared.removedKineticEnergyByCell().get(separate.domainFlowFields.cellIndex(1,1,1)).toDouble();
@@ -63,7 +63,7 @@ public final class CarrierMutationValidation {
 		domain.bindGasRegistry(registries.gas());
 		domain.setVolume(1,1,1,.5F);domain.setVolume(2,2,2,.25F);
 		int target=domain.liquidCells.physicalStocks().stream().filter(stock->stock.key().cell()==domain.domainFlowFields.cellIndex(2,2,2)).mapToInt(stock->domain.liquidCells.ordinalOf(stock.key())).findFirst().orElseThrow();
-		domain.setMarkerChemical(target,java.util.Map.of(mmm.chemistry.BuiltinChemicalDefinitions.H2O,7L),true);
+		domain.setMarkerChemical(target,java.util.Map.of(mmm.chemistry.BuiltinChemicalDefinitions.H2O,7L));
 		// Initial composition owns its reference energy before the 300 K state is created.
 		domain.bindThermal(registries.thermal(),domain.materialRegistry,300,ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 		var retained=domain.liquidCells.stocksInCell(domain.domainFlowFields.cellIndex(2,2,2));
@@ -93,9 +93,9 @@ public final class CarrierMutationValidation {
 			double energy = domain.thermalState.gasNodeEnergy(isolated, domain.gasState.network);
 			int water = registries.liquids().handle(BuiltinFluidMaterials.WATER.id());
 			long mass = domain.unitScale.massUnitsForNormalized(1000);
-			var chemical = domain.chemistry.defaultRecord(BuiltinFluidMaterials.WATER.id(), 1, .5F, mass, false);
+			var chemical = domain.chemistry.defaultRecord(BuiltinFluidMaterials.WATER.id(), 1, .5F, mass);
 			var ledger = mmm.chemistry.ChemicalTransferLedger.builder(registries.chemical())
-					.add(BuiltinFluidMaterials.WATER.id(), false, 1, mass, chemical).build();
+					.add(BuiltinFluidMaterials.WATER.id(), 1, mass, chemical).build();
 			boolean transferred = switch (mode) {
 				case 0 -> domain.addVolumeNear(1, 1, 1, 1, 3) == 1;
 				case 1 -> domain.domainInventory.tryInsertExactVolume(1, 1, 1, 1, 3, water, true).transferred();
@@ -128,9 +128,9 @@ public final class CarrierMutationValidation {
 		var registries = FullCapabilityTestFixture.load();
 		FluidDomain valid = fullCapabilityDomain(registries);
 		var water = valid.chemistry.defaultRecord(valid.materialRegistry.material(0).id(),
-				.13F, valid.config.cellSize(), mmm.units.SolverUnitScale.forCellSize(valid.config.cellSize()).massUnitsForNormalized((double) .13F * 1000), false);
+				.13F, valid.config.cellSize(), mmm.units.SolverUnitScale.forCellSize(valid.config.cellSize()).massUnitsForNormalized((double) .13F * 1000));
 		var chemical = mmm.chemistry.ChemicalTransferLedger.builder(registries.chemical())
-				.add(valid.materialRegistry.material(0).id(), false, .13F, valid.unitScale.massUnitsForNormalized((double) .13F * 1000), water).build();
+				.add(valid.materialRegistry.material(0).id(), .13F, valid.unitScale.massUnitsForNormalized((double) .13F * 1000), water).build();
 		for (Runnable insertion : java.util.List.<Runnable>of(
 				() -> require(valid.addVolumeNearBudgeted(1, 1, 1, .13F, 0).addedVolume() == .13F, "default volume insertion failed"),
 				() -> require(valid.domainInventory.tryInsertExactMixture(1, 1, 1, java.util.List.of(
@@ -253,8 +253,8 @@ public final class CarrierMutationValidation {
 		var portions=new java.util.ArrayList<mmm.thermal.ThermalStateFunction.InventoryPortion>();
 		for(var piece:pieces){
 			String material=domain.materialRegistry.material(piece.materialHandle()).id();
-			builder.add(material,false,piece.volume(),piece.massUnits(),domain.chemistry.defaultRecord(
-					material,(float)piece.volume(),domain.config.cellSize(),piece.massUnits(),false));
+			builder.add(material,piece.volume(),piece.massUnits(),domain.chemistry.defaultRecord(
+					material,(float)piece.volume(),domain.config.cellSize(),piece.massUnits()));
 			portions.add(new mmm.thermal.ThermalStateFunction.InventoryPortion(
 					registry.materialHandle(material),mmm.units.Mass.kilograms(piece.massUnits()),java.util.Map.of()));
 		}
@@ -341,7 +341,7 @@ public final class CarrierMutationValidation {
 				.filter(phase->phase.materialId().equals("mmm:water")).toList(),builtin.reactions());
 		var emptyIncoming=new FlipMaterialParticleState(4,4,4,.5F,0,0, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(0),material.materialRegistry.materials(),
 				new float[0],new float[0],new byte[64], java.util.Arrays.stream(new double[0]).mapToLong(m -> mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(m)).toArray(),new int[0]);
-		var emptyChemical=FlipChemicalParticleState.capture(emptyIncoming,waterOnly,java.util.List.of(),new byte[0],
+		var emptyChemical=FlipChemicalParticleState.capture(emptyIncoming,waterOnly,java.util.List.of(),
 				mmm.chemistry.ChemicalTransferLedger.EMPTY,mmm.chemistry.ChemicalTransferLedger.EMPTY);
 		var emptyRestored=emptyMaterialDomain(64);emptyRestored.restoreChemicalParticleState(emptyChemical,waterOnly);
 		require(emptyRestored.liquidCells.exactVolume().signum()==0 && emptyRestored.totalMassUnits()==0
@@ -352,7 +352,7 @@ public final class CarrierMutationValidation {
 		var oilIncoming=new FlipMaterialParticleState(4,4,4,.5F,1,.125,oilMass,material.materialRegistry.materials(),
 				new float[]{.125F,.125F,.125F,.125F},new float[3],new byte[64],new long[]{oilMass},new int[]{oil});
 		var incompatible=FlipChemicalParticleState.capture(oilIncoming,waterOnly,List.of(
-				mmm.chemistry.ChemicalMixtureRecord.fromStableAmounts(waterOnly,java.util.Map.of(),oilMass)),new byte[1],
+				mmm.chemistry.ChemicalMixtureRecord.fromStableAmounts(waterOnly,java.util.Map.of(),oilMass)),
 				mmm.chemistry.ChemicalTransferLedger.EMPTY,mmm.chemistry.ChemicalTransferLedger.EMPTY);
 		try { material.restoreChemicalParticleState(incompatible,waterOnly); throw new AssertionError("Restore accepted unsupported chemical material phases"); }
 		catch (IllegalArgumentException expected) { }

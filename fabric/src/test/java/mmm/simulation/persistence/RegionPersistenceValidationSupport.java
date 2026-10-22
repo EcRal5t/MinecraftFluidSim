@@ -207,7 +207,6 @@ abstract class RegionPersistenceValidationSupport {
 				&& expected.speciesPalette().equals(actual.speciesPalette())
 				&& expected.mixtures().equals(actual.mixtures())
 				&& Arrays.equals(expected.copyMarkerMixtureIndex(), actual.copyMarkerMixtureIndex())
-				&& Arrays.equals(expected.copyIndicator(), actual.copyIndicator())
 				&& Arrays.equals(expected.copySpeciesTotals(), actual.copySpeciesTotals())
 				&& expected.residualLedgerUnits() == actual.residualLedgerUnits()
 				&& expected.externalSource().groups().equals(actual.externalSource().groups())

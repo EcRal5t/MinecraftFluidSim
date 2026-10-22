@@ -75,7 +75,7 @@ final class CondensedPhaseChangeStage {
 			if(!canFreeze&&!canMelt)continue;
 			boolean constant=minimumMelting==maximumMelting;
 			var liquidSupports=new TreeMap<Integer,Integer>();
-			if(canFreeze)for(var stock:store.physicalStocks()) if(stock.key().material()==liquid&&!stock.indicator())
+			if(canFreeze)for(var stock:store.physicalStocks()) if(stock.key().material()==liquid)
 				liquidSupports.merge(stock.key().cell(),stock.key().supportMask(),(a,b)->a|b);
 			var meltingCells=new HashSet<Integer>();
 			if(canMelt)for(var group:originalGroups) if(group.phaseId().equals(transition.lowerEnergyMaterialId())) {
@@ -90,7 +90,7 @@ final class CondensedPhaseChangeStage {
 				if(!freezing&&!melting)continue;
 				int liquidSupport=liquidSupports.getOrDefault(cell,0);
 				if(!canFreeze)for(var stock:store.physicalStocksInCell(cell))
-					if(stock.key().material()==liquid&&!stock.indicator())liquidSupport|=stock.key().supportMask();
+					if(stock.key().material()==liquid)liquidSupport|=stock.key().supportMask();
 				if(liquidSupport==0) liquidSupport=~domain.geometry.cutCells.mask(cell)&255;
 				double equilibrium=constant?minimumMelting:transition.equilibriumTemperatureK(Math.max(0,
 						AirNetwork.REFERENCE_PRESSURE+domain.pressureSystem.liquidPressureAt(cell,liquidSupport)));
@@ -172,7 +172,7 @@ final class CondensedPhaseChangeStage {
 		var thermal=domain.thermalState;var store=domain.liquidCells;
 		if(temperature==equilibrium) return null;
 		boolean freezing=temperature<equilibrium;
-		var sources=store.physicalStocksInCell(cell).stream().filter(s->s.key().material()==liquid&&!s.indicator()).toList();
+		var sources=store.physicalStocksInCell(cell).stream().filter(s->s.key().material()==liquid).toList();
 		int groupIndex=thermal.coherentPhases().find(cell,transition.lowerEnergyMaterialId());
 		var coherent=groupIndex<0?null:thermal.coherentPhases().group(groupIndex);
 		if(freezing&&sources.isEmpty()||!freezing&&coherent==null) return null;
@@ -238,7 +238,7 @@ final class CondensedPhaseChangeStage {
 			var moved=split(amounts(stock.mixture()),masses[i],stock.massUnits());add(composition,moved);
 			var kept=amounts(stock.mixture());for(var entry:moved.entrySet()) {long n=kept.get(entry.getKey())-entry.getValue();if(n==0)kept.remove(entry.getKey());else kept.put(entry.getKey(),n);}
 			if(volume.signum()==0) { if(mass!=0)throw new IllegalStateException("Freezing volume and integer mass disagree");rows.remove(stock.key()); }
-			else rows.put(stock.key(),new LiquidCellInventory.Stock(stock.key(),volume,mass,mixture(kept,mass),mass==0?0:stock.internalEnergy(),stock.indicator()));
+			else rows.put(stock.key(),new LiquidCellInventory.Stock(stock.key(),volume,mass,mixture(kept,mass),mass==0?0:stock.internalEnergy()));
 		}
 		long svq=Math.multiplyExact(p.batches,p.transition.lowerVolumeSvqPerBatch());var key=new GroupKey(p.cell,p.transition.lowerEnergyMaterialId());var old=groups.get(key);
 		if(old!=null) {svq=Math.addExact(svq,old.occupiedVolumeSvq());if(old.composition()!=null)add(composition,old.composition().stableAmounts());}
@@ -266,7 +266,7 @@ final class CondensedPhaseChangeStage {
 		long mass=Math.addExact(take.removed().massUnits(),old==null?0:old.massUnits());
 		var volume=normalized(Math.multiplyExact(p.batches,p.transition.upperVolumeSvqPerBatch()));if(old!=null)volume=volume.add(old.volume());
 		var mixture=mixture(composition,mass);int handle=domain.thermalState.thermalMaterialHandleForFluid(p.liquid);
-		rows.put(liquidKey,new LiquidCellInventory.Stock(liquidKey,volume,mass,mixture,energy(function,handle,Mass.kilograms(mass),mixture,p.equilibrium),false));
+		rows.put(liquidKey,new LiquidCellInventory.Stock(liquidKey,volume,mass,mixture,energy(function,handle,Mass.kilograms(mass),mixture,p.equilibrium)));
 		return List.copyOf(rows.values());
 	}
 	private List<LiquidCellInventory.Edit> quantityEdits(Map<Integer,List<LiquidCellInventory.Stock>> future) {

@@ -226,7 +226,7 @@ section 按 Minecraft section 对齐，manifest 和 section 均显式声明 `Sta
 ```text
 key = globalCell, materialPaletteIndex, connectedSupportMask
 volume = canonicalSignedDyadic(significandBytes, exponent)
-massUnits, internalEnergyBits, indicator
+massUnits, internalEnergyBits
 mixture = speciesHandles[], amountQuanta[], massResidualUnits   # chemistry 启用时
 ```
 

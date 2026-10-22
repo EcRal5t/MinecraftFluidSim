@@ -11,7 +11,6 @@ import mmm.units.SignedDyadic;
 import mmm.chemistry.ChemicalMixtureRecord;
 import mmm.chemistry.ChemicalTransferLedger;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Comparator;
 import mmm.granular.GranularInventory;
 import mmm.granular.GranularParcelStore;
@@ -31,7 +30,6 @@ import mmm.granular.SolidCompositionPool;
 import mmm.thermal.FiniteThermalExchange;
 import mmm.thermal.ThermalRegistry;
 import mmm.thermal.ThermalDisplaySnapshot;
-import java.util.ArrayDeque;
 import static mmm.fluid.FluidDomain.*;
 
 /** Binds chemistry and thermal capabilities and exposes their actual inventory owners. */
@@ -51,149 +49,10 @@ final class DomainCapabilities {
 		}
 		ChemicalTransferLedger.Builder result = ChemicalTransferLedger.builder(domain.chemistry.registry());
 		for (int marker = fromInclusive; marker < toExclusive; marker++) {
-			result.add(domain.materialRegistry.material(domain.liquidCells.physicalStockAt(marker).key().material()).id(), domain.liquidCells.physicalStockAt(marker).indicator(),
+			result.add(domain.materialRegistry.material(domain.liquidCells.physicalStockAt(marker).key().material()).id(),
 					(float) domain.liquidCells.physicalStockAt(marker).volumeFraction(), domain.liquidCells.physicalStockAt(marker).massUnits(), domain.liquidCells.physicalStockAt(marker).mixture());
 		}
 		return result.build();
-	}
-	public IndicatorEditResult editIndicatorFloodFill(
-			int startX, int startY, int startZ, boolean indicated, int maxScannedCells, double maximumAddedVolumeCubicMeters
-	) {
-		if (domain.chemistry == null || domain.materialRegistry == null) {
-			return IndicatorEditResult.rejected("Chemistry is not bound");
-		}
-		if (maxScannedCells <= 0 || maxScannedCells > domain.cellCount) {
-			throw new IllegalArgumentException("Indicator scan budget must be within the region cell budget");
-		}
-		if (indicated && !(Double.isFinite(maximumAddedVolumeCubicMeters) && maximumAddedVolumeCubicMeters > 0.0)) {
-			throw new IllegalArgumentException("Indicator volume budget must be finite and positive");
-		}
-		int requestedStart = domain.domainFlowFields.cellIndexChecked(startX, startY, startZ);
-		int[] dominantPhase = new int[domain.cellCount];
-		float[] dominantVolume = new float[domain.cellCount];
-		int[] dominantMarker = new int[domain.cellCount];
-		Arrays.fill(dominantPhase, -1);
-		Arrays.fill(dominantVolume, -1.0F);
-		Arrays.fill(dominantMarker, Integer.MAX_VALUE);
-		for (int marker = 0; marker < domain.liquidCells.physicalSize(); marker++) {
-			int cell = domain.liquidCells.physicalStockAt(marker).key().cell();
-			float candidate = (float) domain.liquidCells.physicalStockAt(marker).volumeFraction();
-			if (candidate > dominantVolume[cell]
-					|| candidate == dominantVolume[cell] && marker < dominantMarker[cell]) {
-				dominantVolume[cell] = candidate;
-				dominantMarker[cell] = marker;
-				dominantPhase[cell] = domain.chemistry.registry().phaseHandleForMaterial(
-						domain.materialRegistry.material(domain.liquidCells.physicalStockAt(marker).key().material()).id());
-			}
-		}
-		IndicatorAimSeed seed = resolveIndicatorAimSeed(requestedStart, dominantPhase, maxScannedCells);
-		if (seed.cell() < 0) return IndicatorEditResult.rejected(seed.failure());
-		int start = seed.cell();
-		int targetPhase = dominantPhase[start];
-		if (indicated && !domain.chemistry.registry().phase(targetPhase).acceptsIndicator()) {
-			return IndicatorEditResult.rejected("Target chemical phase rejects indicator");
-		}
-
-		int[] cellHead = new int[domain.cellCount];
-		int[] markerNext = new int[domain.liquidCells.physicalSize()];
-		boolean[] compatible = new boolean[domain.cellCount];
-		Arrays.fill(cellHead, -1);
-		for (int marker = domain.liquidCells.physicalSize() - 1; marker >= 0; marker--) {
-			String materialId = domain.materialRegistry.material(domain.liquidCells.physicalStockAt(marker).key().material()).id();
-			if (domain.chemistry.registry().phaseHandleForMaterial(materialId) != targetPhase) continue;
-			int cell = domain.liquidCells.physicalStockAt(marker).key().cell();
-			markerNext[marker] = cellHead[cell];
-			cellHead[cell] = marker;
-			compatible[cell] = true;
-		}
-
-		boolean[] visited = new boolean[domain.cellCount];
-		ArrayDeque<Integer> queue = new ArrayDeque<>();
-		ArrayList<Integer> affected = new ArrayList<>();
-		visited[start] = true;
-		queue.add(start);
-		int scanned = seed.scannedCells() - 1;
-		double cellVolume = 0.0;
-		while (!queue.isEmpty()) {
-			int cell = queue.removeFirst();
-			if (++scanned > maxScannedCells) return IndicatorEditResult.rejected("Indicator scan budget exceeded");
-			for (int marker = cellHead[cell]; marker >= 0; marker = markerNext[marker]) {
-				affected.add(marker);
-				cellVolume += (float) domain.liquidCells.physicalStockAt(marker).volumeFraction();
-			}
-			double cubicMeters = domain.unitScale.cubicMeters(cellVolume);
-			if (indicated && cubicMeters > maximumAddedVolumeCubicMeters) {
-				return IndicatorEditResult.rejected("Indicator volume exceeds " + maximumAddedVolumeCubicMeters + " m³");
-			}
-			int x = cell % domain.sizeX;
-			int yz = cell / domain.sizeX;
-			int y = yz % domain.sizeY;
-			int z = yz / domain.sizeY;
-			if (x > 0) enqueueIndicatorNeighbor(cell, domain.domainFlowFields.cellIndex(x - 1, y, z), -1, 0, 0, compatible, visited, queue);
-			if (x + 1 < domain.sizeX) enqueueIndicatorNeighbor(cell, domain.domainFlowFields.cellIndex(x + 1, y, z), 1, 0, 0, compatible, visited, queue);
-			if (y > 0) enqueueIndicatorNeighbor(cell, domain.domainFlowFields.cellIndex(x, y - 1, z), 0, -1, 0, compatible, visited, queue);
-			if (y + 1 < domain.sizeY) enqueueIndicatorNeighbor(cell, domain.domainFlowFields.cellIndex(x, y + 1, z), 0, 1, 0, compatible, visited, queue);
-			if (z > 0) enqueueIndicatorNeighbor(cell, domain.domainFlowFields.cellIndex(x, y, z - 1), 0, 0, -1, compatible, visited, queue);
-			if (z + 1 < domain.sizeZ) enqueueIndicatorNeighbor(cell, domain.domainFlowFields.cellIndex(x, y, z + 1), 0, 0, 1, compatible, visited, queue);
-		}
-		int changed = 0;
-		var edits = new ArrayList<LiquidCellInventory.Edit>();
-		for (int ordinal : affected) {
-			var stock = domain.liquidCells.physicalStockAt(ordinal);
-			if (stock.indicator() != indicated) {
-				edits.add(new LiquidCellInventory.Edit(stock.key(), new LiquidCellInventory.Stock(stock.key(), stock.volume(), stock.massUnits(),
-						stock.mixture(), stock.internalEnergy(), indicated)));
-				changed++;
-			}
-		}
-		domain.liquidCells.planEdits(edits).commit();
-
-		double cubicMeters = domain.unitScale.cubicMeters(cellVolume);
-		return new IndicatorEditResult(true, scanned, changed, cubicMeters, null);
-	}
-	IndicatorAimSeed resolveIndicatorAimSeed(int requested, int[] dominantPhase, int maxScannedCells) {
-		int[] distance = new int[domain.cellCount];
-		Arrays.fill(distance, -1);
-		ArrayDeque<Integer> queue = new ArrayDeque<>();
-		distance[requested] = 0;
-		queue.add(requested);
-		int scanned = 0;
-		while (!queue.isEmpty()) {
-			int cell = queue.removeFirst();
-			if (++scanned > maxScannedCells) {
-				return new IndicatorAimSeed(-1, scanned, "Indicator aim scan budget exceeded");
-			}
-			if (dominantPhase[cell] >= 0) return new IndicatorAimSeed(cell, scanned, null);
-			if (distance[cell] >= FluidDomain.INDICATOR_AIM_SNAP_CELLS) continue;
-			int x = cell % domain.sizeX;
-			int yz = cell / domain.sizeX;
-			int y = yz % domain.sizeY;
-			int z = yz / domain.sizeY;
-			if (x > 0) enqueueIndicatorAimNeighbor(cell, domain.domainFlowFields.cellIndex(x - 1, y, z), -1, 0, 0, distance, queue);
-			if (x + 1 < domain.sizeX) enqueueIndicatorAimNeighbor(cell, domain.domainFlowFields.cellIndex(x + 1, y, z), 1, 0, 0, distance, queue);
-			if (y > 0) enqueueIndicatorAimNeighbor(cell, domain.domainFlowFields.cellIndex(x, y - 1, z), 0, -1, 0, distance, queue);
-			if (y + 1 < domain.sizeY) enqueueIndicatorAimNeighbor(cell, domain.domainFlowFields.cellIndex(x, y + 1, z), 0, 1, 0, distance, queue);
-			if (z > 0) enqueueIndicatorAimNeighbor(cell, domain.domainFlowFields.cellIndex(x, y, z - 1), 0, 0, -1, distance, queue);
-			if (z + 1 < domain.sizeZ) enqueueIndicatorAimNeighbor(cell, domain.domainFlowFields.cellIndex(x, y, z + 1), 0, 0, 1, distance, queue);
-		}
-		return new IndicatorAimSeed(-1, scanned, "Target surface has no nearby chemical liquid marker");
-	}
-	void enqueueIndicatorAimNeighbor(
-			int from, int neighbor, int dx, int dy, int dz, int[] distance, ArrayDeque<Integer> queue
-	) {
-		if (distance[neighbor] < 0 && domain.domainFlowFields.openFaceFromCell(from, dx, dy, dz) > 0.0F) {
-			distance[neighbor] = distance[from] + 1;
-			queue.addLast(neighbor);
-		}
-	}
-	void enqueueIndicatorNeighbor(
-			int from, int neighbor, int dx, int dy, int dz, boolean[] compatible,
-			boolean[] visited, ArrayDeque<Integer> queue
-	) {
-		if (!visited[neighbor] && compatible[neighbor] && domain.domainFlowFields.openFaceFromCell(from, dx, dy, dz) > 0.0F) {
-			visited[neighbor] = true;
-			queue.addLast(neighbor);
-		}
 	}
 	public void bindChemistry(ChemicalRegistry registry) {
 		if (domain.thermalState != null) {
@@ -214,8 +73,8 @@ final class DomainCapabilities {
 		var additions = new ArrayList<LiquidCellInventory.Stock>();
 		for (var stock : domain.liquidCells.stocks()) {
 			var mixture = candidate.defaultRecord(domain.materialRegistry.material(stock.key().material()).id(),
-					stock.volumeFraction(), domain.config.cellSize(), stock.massUnits(), stock.indicator());
-			additions.add(new LiquidCellInventory.Stock(stock.key(), stock.volume(), stock.massUnits(), mixture, stock.internalEnergy(), stock.indicator()));
+					stock.volumeFraction(), domain.config.cellSize(), stock.massUnits());
+			additions.add(new LiquidCellInventory.Stock(stock.key(), stock.volume(), stock.massUnits(), mixture, stock.internalEnergy()));
 		}
 		var inventory = new LiquidCellInventory(domain.cellCount, registry);
 		inventory.planAdditions(additions).commit();

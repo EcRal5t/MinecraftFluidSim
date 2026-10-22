@@ -23,18 +23,18 @@ import static mmm.fluid.FluidDomain.*;
 final class DomainCollision {
 	private final FluidDomain domain;
 	DomainCollision(FluidDomain domain) { this.domain = domain; }
-	public void setMarkerChemical(int ordinal, Map<String, Long> stableAmounts, boolean indicator) {
+	public void setMarkerChemical(int ordinal, Map<String, Long> stableAmounts) {
 		var stock = domain.liquidCells.physicalStockAt(ordinal);
 		var registry = domain.chemistry().registry();
 		var zero = ChemicalMixtureRecord.fromStableAmounts(registry, stableAmounts, 0);
 		long speciesMass=zero.speciesMassUnits(registry);
 		if(speciesMass>stock.massUnits())throw new IllegalArgumentException("Chemical assignment exceeds the existing stock mass");
 		var record = zero.withMassResidualUnits(Math.subtractExact(stock.massUnits(), speciesMass));
-		domain.chemistry.requireCompatible(record, domain.materialRegistry.material(stock.key().material()).id(), indicator);
+		domain.chemistry.requireCompatible(record, domain.materialRegistry.material(stock.key().material()).id());
 		if (domain.thermalState != null) domain.thermalState.requireReactionState(ordinal, record,
 				domain.unitScale.normalizedMass(stock.massUnits()), domain.domainCapabilities.thermalMarkerContext());
 		domain.liquidCells.planEdits(List.of(new LiquidCellInventory.Edit(stock.key(), new LiquidCellInventory.Stock(stock.key(), stock.volume(),
-				stock.massUnits(), record, stock.internalEnergy(), indicator)))).commit();
+				stock.massUnits(), record, stock.internalEnergy())))).commit();
 		domain.chemistry.markDirtyCell(stock.key().cell());
 	}
 	public int materialHandle(String materialId) {
@@ -43,14 +43,14 @@ final class DomainCollision {
 	}
 	public void restoreParticleState(FlipParticleState state) {
 		if (domain.materialDefinitions != null) throw new IllegalStateException("Pure input cannot remove bound material identity");
-		LiquidInitialInput.restore(domain, state, null, null, null, null, null);
+		LiquidInitialInput.restore(domain, state, null, null, null, null);
 		domain.chemistry = null;
 	}
 	public void restoreMaterialParticleState(FlipMaterialParticleState state) {
 		if (state == null) throw new IllegalArgumentException("Material input is missing");
 		var registry = new FluidMaterialRegistry(state.materials());
 		if (domain.materialDefinitions != null) LiquidMaterialBinding.validate(domain, registry, domain.materialDefinitions);
-		LiquidInitialInput.restore(domain, state.particles(), registry, state.copyMaterialPaletteIndex(), null, null, null);
+		LiquidInitialInput.restore(domain, state.particles(), registry, state.copyMaterialPaletteIndex(), null, null);
 		domain.chemistry = null;
 	}
 	public void restoreChemicalParticleState(FlipChemicalParticleState state, ChemicalRegistry registry) {
@@ -63,10 +63,10 @@ final class DomainCollision {
 		for (int index : indices) mixtures.add(table.get(index));
 		var metadata = new RegionChemistry(registry,domain.cellCount);
 		metadata.restoreAuditLedgers(state.externalSource(), state.escapedSink());
-		int[] materials = incoming.copyMaterialPaletteIndex();byte[] indicators = state.copyIndicator();
+		int[] materials = incoming.copyMaterialPaletteIndex();
 		for (int ordinal = 0; ordinal < materials.length; ordinal++)
-			metadata.requireCompatible(mixtures.get(ordinal), palette.material(materials[ordinal]).id(), indicators[ordinal] != 0);
-		LiquidInitialInput.restore(domain, incoming.particles(), palette, materials, mixtures, indicators, registry);
+			metadata.requireCompatible(mixtures.get(ordinal), palette.material(materials[ordinal]).id());
+		LiquidInitialInput.restore(domain, incoming.particles(), palette, materials, mixtures, registry);
 		domain.chemistry = metadata;
 		for (var stock : domain.liquidCells.stocks()) domain.chemistry.markDirtyCell(stock.key().cell());
 	}
@@ -408,7 +408,7 @@ final class DomainCollision {
 		long mass = domain.unitScale.massUnitsForNormalized(stock.volumeFraction() * registry.material(materialHandle).referenceDensity());
 		var nextKey = new LiquidCellInventory.Key(key.cell(), materialHandle, key.supportMask());
 		var candidate = domain.liquidCells.copy(); candidate.planEdits(List.of(new LiquidCellInventory.Edit(key, null))).commit();
-		candidate.planAdditions(List.of(new LiquidCellInventory.Stock(nextKey, stock.volume(), mass, null, stock.internalEnergy(), stock.indicator()))).commit();
+		candidate.planAdditions(List.of(new LiquidCellInventory.Stock(nextKey, stock.volume(), mass, null, stock.internalEnergy()))).commit();
 		var edits = new ArrayList<LiquidCellInventory.Edit>();
 		edits.add(new LiquidCellInventory.Edit(key, null)); edits.add(new LiquidCellInventory.Edit(nextKey, candidate.stock(nextKey)));
 		var plan = domain.liquidCells.planEdits(edits); var momentum = domain.cellMacStage.prepareExternalMomentum(plan);

@@ -409,8 +409,8 @@ double initialWetArea,double wetArea,double firstOutwardMomentum,double firstPre
 			var first=new LiquidCellInventory.Key(stock.key().cell(),1,stock.key().supportMask());
 			var volume=mmm.units.SignedDyadic.of(stock.volumeFraction()*fraction);
 			long mass=Math.round(stock.massUnits()*fraction);
-			edits.add(new LiquidCellInventory.Edit(stock.key(),fraction==1?null:new LiquidCellInventory.Stock(stock.key(),stock.volume().subtract(volume),stock.massUnits()-mass,null,0,false)));
-			edits.add(new LiquidCellInventory.Edit(first,new LiquidCellInventory.Stock(first,volume,mass,null,0,false)));
+			edits.add(new LiquidCellInventory.Edit(stock.key(),fraction==1?null:new LiquidCellInventory.Stock(stock.key(),stock.volume().subtract(volume),stock.massUnits()-mass,null,0)));
+			edits.add(new LiquidCellInventory.Edit(first,new LiquidCellInventory.Stock(first,volume,mass,null,0)));
 		}
 		domain.liquidCells.planEdits(edits).commit();domain.markCellInventoryChanged();
 	}

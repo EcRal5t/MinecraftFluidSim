@@ -73,8 +73,8 @@
 
 | 领域 | 保存的权威数据 | 派生量 |
 |---|---|---|
-| 液体 | 单元／材料／开放分量的体积、整数质量、组成、内能与指示剂；微盒相占据；MAC 格面 SI 动量 | 速度、密度、PLIC、压力、曲率与显示点样本 |
-| 化学 | 物种数量、组成、电荷、质量余量、指示剂与收支 | pH、颜色、主要组分 |
+| 液体 | 单元／材料／开放分量的体积、整数质量、组成、内能；微盒相占据；MAC 格面 SI 动量 | 速度、密度、PLIC、压力、曲率与显示点样本 |
+| 化学 | 物种数量、组成、电荷、质量余量与收支 | pH、颜色、主要组分 |
 | 颗粒 | active/deposit 的 SVQ、质量、材料、组成、孔隙率、位置及接触状态 | 占容、床高、混合有效孔隙率与样本 |
 | 连续固相 | coherent group 的 SVQ、质量、组成与内能 | 固相显示比例 |
 | 气体 | 各组分标准体积 nanos、质量、物种、节点内能与收支 | 温度、压力、密度、孔流和临时压力自由度 |
@@ -83,7 +83,7 @@
 | 世界与物品 | 区域 HEAD、WAL、已存盘物品状态 | 控制台和诊断 |
 
 同一操作涉及多种物相时，物质、组成、动量和携带内能按同一计划交接。
-化学绑定与恢复按实际库存检查材料物相、允许物种和指示剂；空 palette 可保留尚未使用的材料。公开组成赋值要求物种质量不超过载体质量，溶液初始化按实际总质量分配溶质与溶剂。
+化学绑定与恢复按实际库存检查材料物相、允许物种；空 palette 可保留尚未使用的材料。公开组成赋值要求物种质量不超过载体质量，溶液初始化按实际总质量分配溶质与溶剂。
 液体由 `LiquidCellInventory.Stock` 保存物质记录，`PhaseOccupancyState` 保存空间占据，MAC 动量独立保存；颗粒、沉积、连续固相和气腔由各自库存模块持有。
 派生索引、PLIC、温度和展示网格读取同代库存，提交前统一核对来源与代次。
 
@@ -498,6 +498,10 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 服务端按已提交状态生成有界快照，客户端按区域身份、网络代次和 sequence 接收并插值。移除消息使旧包失效。显示温度、压力、颜色与网格采用各自量化，库存、状态方程和物理计算读取原始数据。
 
+客户端显色由 `FluidDisplaySettings` 保存当前玩家的组分、pH 或温度模式及固定温度色带范围，控制器界面的显色入口打开 `FluidDisplayScreen`。
+`FluidColorMapping` 集中映射颜色，`MaterialFrame` 持有同一已接受快照的几何、逐相 pH 与凝聚相温度。展示值改变复用网格并刷新颜色；模式与范围变化在下一显示帧生效，暂停区域保持相同物理状态。
+pH 从适用水相的 H⁺/OH⁻ 与水相体积派生，油等物相显示无数据；中性和无数据分别编码。温度直接读取服务端单元凝聚相展示值，色带以 K 标注。具体近似及编码见[化学参考](chemistry-state.md#ph-与显色)。
+
 Query API 在服务器线程读取已加载区域，单格观察保持只读；容器提交事件在区域与物品均已持久完成、WAL 清理后发布。未加载区域提供已知元数据及不可用原因。
 
 - **快照、网络和接收顺序**
@@ -510,7 +514,10 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 - **液面、材料界面与颗粒渲染**
   - 主要文件：
     - [FluidSurfaceGeometry](../../fabric/src/client/java/mmm/client/FluidSurfaceGeometry.java)
-    - [MaterialSurfaceGeometry](../../fabric/src/client/java/mmm/client/MaterialSurfaceGeometry.java)
+    - [MaterialSurfaceGeometry](../../fabric/src/client/java/mmm/client/MaterialSurfaceGeometry.java)：复用表面网格并准备已着色三角形
+    - [FluidColorMapping](../../fabric/src/client/java/mmm/client/FluidColorMapping.java)：组分、逐相 pH、凝聚相温度与无数据颜色
+    - [FluidDisplaySettings](../../fabric/src/client/java/mmm/client/FluidDisplaySettings.java) / [FluidDisplayScreen](../../fabric/src/client/java/mmm/client/FluidDisplayScreen.java)：本机设置、模式选择、图例与温度范围
+    - [CarrierInventoryReader](../../solver/src/main/java/mmm/fluid/CarrierInventoryReader.java)：`copyChemicalDisplaySnapshot` 汇总水相 pH；`copyThermalDisplaySnapshot` 导出凝聚相温度
     - [GranularSurfaceGeometry](../../fabric/src/client/java/mmm/client/GranularSurfaceGeometry.java)
   - 验证选择器 / 参考：`protocol,materials`；展示目标见[产品路线](../roadmap/product-roadmap.md#阶段-3展示几何契约与重建)
 
@@ -541,10 +548,9 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [MinecraftRegionLifecycle](../../fabric/src/main/java/mmm/simulation/MinecraftRegionLifecycle.java)
   - 验证选择器 / 参考：`boundary,lifecycle,region-manager`；[授权与操作](runtime-and-lifecycle.md#console)
 
-- **创造来源与指示剂**
+- **材料与试剂创造来源**
   - 主要文件：
     - [CreativeSourceCatalog](../../fabric/src/main/java/mmm/simulation/CreativeSourceCatalog.java)
-    - [MinecraftIndicatorEditing](../../fabric/src/main/java/mmm/simulation/MinecraftIndicatorEditing.java)
   - 验证选择器 / 参考：`containers,chemistry`
 
 - **恒温热源与快速入门界面**

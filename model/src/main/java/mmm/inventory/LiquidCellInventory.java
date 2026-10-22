@@ -52,8 +52,7 @@ public final class LiquidCellInventory {
 		private final long massUnits;
 		private final ChemicalMixtureRecord mixture;
 		private final double internalEnergy,volumeFraction;
-		private final boolean indicator;
-		public Stock(Key key,SignedDyadic volume,long massUnits,ChemicalMixtureRecord mixture,double internalEnergy,boolean indicator) {
+		public Stock(Key key,SignedDyadic volume,long massUnits,ChemicalMixtureRecord mixture,double internalEnergy) {
 			if (internalEnergy == 0) internalEnergy = 0;
 			double numericalVolume=volume==null?0:volume.toDouble();
 			if (key == null || volume == null || volume.signum() <= 0 || !(numericalVolume > 0)
@@ -61,31 +60,30 @@ public final class LiquidCellInventory {
 					|| massUnits == 0 && internalEnergy != 0)
 				throw new IllegalArgumentException("Invalid liquid cell stock");
 			this.key=key;this.volume=volume;this.massUnits=massUnits;this.mixture=mixture;
-			this.internalEnergy=internalEnergy;this.indicator=indicator;volumeFraction=numericalVolume;
+			this.internalEnergy=internalEnergy;volumeFraction=numericalVolume;
 		}
 		/** Energy publication shares the immutable material quantities and their numerical view. */
 		private Stock(Stock source,double energy) {
 			if(!Double.isFinite(energy)||source.massUnits==0&&energy!=0)throw new IllegalArgumentException("Invalid liquid cell energy");
 			key=source.key;volume=source.volume;massUnits=source.massUnits;mixture=source.mixture;
-			volumeFraction=source.volumeFraction;indicator=source.indicator;internalEnergy=energy==0?0:energy;
+			volumeFraction=source.volumeFraction;internalEnergy=energy==0?0:energy;
 		}
 		public Key key(){return key;}
 		public SignedDyadic volume(){return volume;}
 		public long massUnits(){return massUnits;}
 		public ChemicalMixtureRecord mixture(){return mixture;}
 		public double internalEnergy(){return internalEnergy;}
-		public boolean indicator(){return indicator;}
 		public double volumeFraction() { return volumeFraction; }
 		public double massKilograms() { return Mass.kilograms(massUnits); }
 		@Override public boolean equals(Object value){
 			return this==value||value instanceof Stock other&&key.equals(other.key)&&volume.equals(other.volume)
 					&&massUnits==other.massUnits&&java.util.Objects.equals(mixture,other.mixture)
-					&&Double.doubleToLongBits(internalEnergy)==Double.doubleToLongBits(other.internalEnergy)&&indicator==other.indicator;
+					&&Double.doubleToLongBits(internalEnergy)==Double.doubleToLongBits(other.internalEnergy);
 		}
-		@Override public int hashCode(){return java.util.Objects.hash(key,volume,massUnits,mixture,internalEnergy,indicator);}
+		@Override public int hashCode(){return java.util.Objects.hash(key,volume,massUnits,mixture,internalEnergy);}
 		@Override public String toString(){
 			return "Stock[key="+key+", volume="+volume+", massUnits="+massUnits+", mixture="+mixture
-					+", internalEnergy="+internalEnergy+", indicator="+indicator+"]";
+					+", internalEnergy="+internalEnergy+"]";
 		}
 	}
 
@@ -334,10 +332,10 @@ public final class LiquidCellInventory {
 		for (var addition : additions) {
 			var total = totals.computeIfAbsent(addition.key(), key -> {
 				var result = new Accumulator(key); var before = stock(key);
-				if (before != null) result.add(before.volume(), before.massUnits(), before.mixture(), SignedDyadic.of(before.internalEnergy()), before.indicator());
+				if (before != null) result.add(before.volume(), before.massUnits(), before.mixture(), SignedDyadic.of(before.internalEnergy()));
 				return result;
 			});
-			total.add(addition.volume(), addition.massUnits(), addition.mixture(), SignedDyadic.of(addition.internalEnergy()), addition.indicator());
+			total.add(addition.volume(), addition.massUnits(), addition.mixture(), SignedDyadic.of(addition.internalEnergy()));
 		}
 		var edits = new ArrayList<Edit>(); for (var total : totals.values()) edits.add(total.edit()); return planEdits(edits);
 	}
@@ -510,7 +508,7 @@ public final class LiquidCellInventory {
 		if (stock == null || stock.mixture() == null) return stock;
 		if (chemistry == null) throw new IllegalArgumentException("Chemical liquid stock requires its registry");
 		long residual = Math.subtractExact(stock.massUnits(), stock.mixture().speciesMassUnits(chemistry));
-		return new Stock(stock.key(), stock.volume(), stock.massUnits(), stock.mixture().withMassResidualUnits(residual), stock.internalEnergy(), stock.indicator());
+		return new Stock(stock.key(), stock.volume(), stock.massUnits(), stock.mixture().withMassResidualUnits(residual), stock.internalEnergy());
 	}
 
 	/** Partitions actual donor quantities over the bounded face transfers of one numerical pass. */
@@ -535,7 +533,7 @@ public final class LiquidCellInventory {
 			for(int r=start;r<end;r++){
 				int part=r-start;var target=totals.owner(routes.targetCell(r),source.key().material(),routes.supportMask(r));
 				long mass=partition==null?source.massUnits():partition.masses[part];
-				if(partition==null)target.addTransport(source.volume(),mass,source.mixture(),source.internalEnergy(),source.indicator());
+				if(partition==null)target.addTransport(source.volume(),mass,source.mixture(),source.internalEnergy());
 				else target.addTransportShare(routes.volume(r),mass,source,partition.species,part,partition.energies[part]);
 				transfers.add(new Transfer(routes.face(r),source.key(),target.key,routes.volume(r),mass));
 			}
@@ -789,7 +787,7 @@ public final class LiquidCellInventory {
 		return result;
 	}
 	private final class Accumulator {
-		final Key key; SignedDyadic volume = SignedDyadic.ZERO, energy = SignedDyadic.ZERO; long mass,residualMass; boolean indicator, chemical;
+		final Key key; SignedDyadic volume = SignedDyadic.ZERO, energy = SignedDyadic.ZERO; long mass,residualMass; boolean chemical;
 		double transportEnergy,transportEnergyError;
 		final Stock original;
 		boolean donor,transportChanged;
@@ -799,7 +797,7 @@ public final class LiquidCellInventory {
 		Accumulator(Key key,Stock initial){
 			this.key=key;original=initial;
 			if(initial!=null){
-				volume=initial.volume();mass=initial.massUnits();indicator=initial.indicator();
+				volume=initial.volume();mass=initial.massUnits();
 				transportEnergy=initial.internalEnergy();
 				firstMixture=initial.mixture();chemical=firstMixture!=null;residualMass=chemical?firstMixture.massResidualUnits():mass;
 			}
@@ -809,7 +807,7 @@ public final class LiquidCellInventory {
 			transportChanged=true;
 			if(partition==null||partition.retained<0){
 				volume=SignedDyadic.ZERO;mass=residualMass=0;transportEnergy=transportEnergyError=0;
-				indicator=chemical=false;firstMixture=null;return;
+				chemical=false;firstMixture=null;return;
 			}
 			int remainder=partition.retained;
 			volume=partition.retainedVolume;mass=partition.masses[remainder];transportEnergy=partition.energies[remainder];
@@ -823,16 +821,16 @@ public final class LiquidCellInventory {
 				speciesHandles[speciesCount]=source.mixture().speciesHandle(entry);speciesAmounts[speciesCount++]=amount;
 			}
 		}
-		void add(SignedDyadic amount, long mass, ChemicalMixtureRecord mixture, SignedDyadic energy, boolean indicator) {
-			this.energy=this.energy.add(energy);addQuantities(amount,mass,mixture,indicator);
+		void add(SignedDyadic amount, long mass, ChemicalMixtureRecord mixture, SignedDyadic energy) {
+			this.energy=this.energy.add(energy);addQuantities(amount,mass,mixture);
 		}
-		void addTransport(SignedDyadic amount,long mass,ChemicalMixtureRecord mixture,double carriedEnergy,boolean indicator){
-			addTransportEnergy(carriedEnergy);volume=volume.add(amount);this.mass=Math.addExact(this.mass,mass);this.indicator|=indicator;
+		void addTransport(SignedDyadic amount,long mass,ChemicalMixtureRecord mixture,double carriedEnergy){
+			addTransportEnergy(carriedEnergy);volume=volume.add(amount);this.mass=Math.addExact(this.mass,mass);
 			addComposition(mixture);
 		}
 		/** Source integer columns go directly to the recipient; only stored owners need a mixture object. */
 		void addTransportShare(SignedDyadic amount,long mass,Stock source,long[][] species,int part,double energy){
-			addTransportEnergy(energy);volume=volume.add(amount);this.mass=Math.addExact(this.mass,mass);indicator|=source.indicator();
+			addTransportEnergy(energy);volume=volume.add(amount);this.mass=Math.addExact(this.mass,mass);
 			if(source.mixture()==null)return;
 			prepareSpecies(source.mixture().entryCount());chemical=true;
 			for(int entry=0;entry<species.length;entry++)if(species[entry][part]>0)addSpecies(source.mixture().speciesHandle(entry),species[entry][part]);
@@ -842,8 +840,8 @@ public final class LiquidCellInventory {
 			double corrected=value-transportEnergyError,next=transportEnergy+corrected;
 			transportEnergyError=(next-transportEnergy)-corrected;transportEnergy=next;
 		}
-		private void addQuantities(SignedDyadic amount,long mass,ChemicalMixtureRecord mixture,boolean indicator){
-			volume = volume.add(amount); this.mass = Math.addExact(this.mass, mass); this.indicator |= indicator;
+		private void addQuantities(SignedDyadic amount,long mass,ChemicalMixtureRecord mixture){
+			volume = volume.add(amount); this.mass = Math.addExact(this.mass, mass);
 			residualMass=Math.addExact(residualMass,mixture==null?mass:mixture.massResidualUnits());
 			addComposition(mixture);
 		}
@@ -877,7 +875,7 @@ public final class LiquidCellInventory {
 		}
 		Stock preparedTransportStock(){
 			if(original!=null&&mass==original.massUnits()&&volume.equals(original.volume())
-					&&indicator==original.indicator()&&retainsOriginalSpecies())
+					&&retainsOriginalSpecies())
 				return transportEnergy==original.internalEnergy()?original:new Stock(original,transportEnergy);
 			return preparedStock(transportEnergy,true);
 		}
@@ -908,7 +906,7 @@ public final class LiquidCellInventory {
 				mixture=speciesHandles==null?firstMixture.withMassResidualUnits(residual)
 						:new ChemicalMixtureRecord(java.util.Arrays.copyOf(speciesHandles,speciesCount),java.util.Arrays.copyOf(speciesAmounts,speciesCount),residual);
 			}
-			return new Stock(key,volume,mass,mixture,storedEnergy,indicator);
+			return new Stock(key,volume,mass,mixture,storedEnergy);
 		}
 	}
 }

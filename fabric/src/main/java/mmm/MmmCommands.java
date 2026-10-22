@@ -61,7 +61,7 @@ public final class MmmCommands {
 								.then(Commands.argument("kind", StringArgumentType.word())
 										.suggests((context, builder) -> {
 											for (String value : List.of("hcl", "naoh", "nacl", "nano3", "kcl", "kno3",
-													"water", "indicator", "eraser")) builder.suggest(value);
+													"water")) builder.suggest(value);
 											return builder.buildFuture();
 										})
 										.executes(context -> audit(context, () -> giveReagent(

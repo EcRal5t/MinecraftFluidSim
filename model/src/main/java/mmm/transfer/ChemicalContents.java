@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Set;
 import java.math.BigInteger;
 
-/** Canonical material/indicator/species bucket inventory, independent from {@link FluidMixture}. */
+/** Canonical material/species bucket inventory, independent from {@link FluidMixture}. */
 public record ChemicalContents(String registryFingerprint, long quantaPerMol, List<Group> groups) {
 	private static final String ENCODING_TAG = "mmm:chemical-contents;" + mmm.units.Mass.ENCODING;
 	public static final int MAX_GROUPS = 16;
@@ -31,8 +31,8 @@ public record ChemicalContents(String registryFingerprint, long quantaPerMol, Li
 		Set<String> keys = new HashSet<>(); int entries = 0; long volume = 0L, quanta = 0L;
 		long mass = 0;
 		for (Group group : canonical) {
-			if (!keys.add(group.materialId() + "\u0000" + group.indicator())) {
-				throw new IllegalArgumentException("Duplicate chemical material/indicator group");
+			if (!keys.add(group.materialId())) {
+				throw new IllegalArgumentException("Duplicate chemical material group");
 			}
 			entries = Math.addExact(entries, group.species().size());
 			volume = Math.addExact(volume, group.volumeNanos()); mass = Math.addExact(mass, group.massUnits());
@@ -75,7 +75,7 @@ public record ChemicalContents(String registryFingerprint, long quantaPerMol, Li
 			List<SpeciesAmount> species = source.speciesQuanta().entrySet().stream()
 					.sorted(java.util.Map.Entry.comparingByKey())
 					.map(entry -> new SpeciesAmount(entry.getKey(), entry.getValue())).toList();
-			groups.add(new Group(source.materialId(), source.indicator(), nanos,
+			groups.add(new Group(source.materialId(), nanos,
 					source.massUnits(),
 					source.massResidualUnits(), species));
 		}
@@ -90,9 +90,7 @@ public record ChemicalContents(String registryFingerprint, long quantaPerMol, Li
 		}
 		for (Group group : groups) {
 			var phase = registry.phase(registry.phaseHandleForMaterial(group.materialId()));
-			if (group.indicator() && !phase.acceptsIndicator()) {
-				throw new IllegalArgumentException("Chemical phase does not accept indicator: " + group.materialId());
-			}
+
 			java.util.Map<String, Long> amounts = new java.util.TreeMap<>();
 			for (SpeciesAmount species : group.species()) {
 				if (!phase.allowedSpecies().contains(species.speciesId())) {
@@ -117,7 +115,7 @@ public record ChemicalContents(String registryFingerprint, long quantaPerMol, Li
 		for (Group group : groups) {
 			java.util.TreeMap<String, Long> species = new java.util.TreeMap<>();
 			for (SpeciesAmount amount : group.species()) species.put(amount.speciesId(), amount.amountQuanta());
-			result.add(new ChemicalTransferLedger.Group(group.materialId(), group.indicator(),
+			result.add(new ChemicalTransferLedger.Group(group.materialId(),
 					units.normalizedVolume(ContainerFluidLedger.nanosToCubicMeters(group.volumeNanos())),
 					group.massUnits(), group.massResidualUnits(), species));
 		}
@@ -189,7 +187,7 @@ public record ChemicalContents(String registryFingerprint, long quantaPerMol, Li
 		for (SpeciesAmount amount : species) amounts.put(amount.speciesId(), amount.amountQuanta());
 		ChemicalMixtureRecord exact = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0L);
 		long residual = Math.subtractExact(mass, exact.speciesMassUnits(registry));
-		return new Group(source.materialId(), source.indicator(), volume, mass,
+		return new Group(source.materialId(), volume, mass,
 				residual, species);
 	}
 
@@ -222,7 +220,7 @@ public record ChemicalContents(String registryFingerprint, long quantaPerMol, Li
 	public String encode() {
 		StringBuilder encoded = new StringBuilder(ENCODING_TAG).append('|').append(registryFingerprint).append('|').append(quantaPerMol);
 		for (Group group : groups) {
-			encoded.append('|').append(group.materialId()).append(',').append(group.indicator() ? '1' : '0')
+			encoded.append('|').append(group.materialId())
 					.append(',').append(group.volumeNanos()).append(',')
 					.append(Long.toUnsignedString(group.massUnits(), 16)).append(',')
 					.append(Long.toUnsignedString(group.massResidualUnits(), 16)).append(',');
@@ -247,17 +245,16 @@ public record ChemicalContents(String registryFingerprint, long quantaPerMol, Li
 		ArrayList<Group> groups = new ArrayList<>(parts.length - 3);
 		for (int index = 3; index < parts.length; index++) {
 			String[] fields = parts[index].split(",", -1);
-			if (fields.length != 6) throw new IllegalArgumentException("Malformed chemical contents group");
+			if (fields.length != 5) throw new IllegalArgumentException("Malformed chemical contents group");
 			try {
 				ArrayList<SpeciesAmount> species = new ArrayList<>();
-				for (String entry : fields[5].isEmpty() ? new String[0] : fields[5].split("\\+", -1)) {
+				for (String entry : fields[4].isEmpty() ? new String[0] : fields[4].split("\\+", -1)) {
 					String[] pair = entry.split("=", -1);
 					if (pair.length != 2) throw new IllegalArgumentException("Malformed chemical species entry");
 					species.add(new SpeciesAmount(pair[0], Long.parseLong(pair[1])));
 				}
-				groups.add(new Group(fields[0], switch (fields[1]) { case "0" -> false; case "1" -> true;
-					default -> throw new IllegalArgumentException("Invalid indicator bit"); }, Long.parseLong(fields[2]),
-						Long.parseUnsignedLong(fields[3], 16), Long.parseUnsignedLong(fields[4], 16), species));
+				groups.add(new Group(fields[0], Long.parseLong(fields[1]),
+						Long.parseUnsignedLong(fields[2], 16), Long.parseUnsignedLong(fields[3], 16), species));
 			} catch (NumberFormatException invalid) { throw new IllegalArgumentException("Malformed chemical contents number", invalid); }
 		}
 		ChemicalContents contents = new ChemicalContents(parts[1], scale, groups);
@@ -266,10 +263,10 @@ public record ChemicalContents(String registryFingerprint, long quantaPerMol, Li
 	}
 
 	public record Group(
-			String materialId, boolean indicator, long volumeNanos, long massUnits,
+			String materialId, long volumeNanos, long massUnits,
 			long massResidualUnits, List<SpeciesAmount> species
 	) {
-		private static final Comparator<Group> ORDER = Comparator.comparing(Group::materialId).thenComparing(Group::indicator);
+		private static final Comparator<Group> ORDER = Comparator.comparing(Group::materialId);
 		public Group {
 			if (!StableId.isValid(materialId, 128) || volumeNanos <= 0L
 					|| volumeNanos > ContainerFluidLedger.NANOS_PER_BLOCK || species == null

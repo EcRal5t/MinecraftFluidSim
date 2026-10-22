@@ -472,10 +472,9 @@ public final class FluidNetworkProtocolValidation {
 				&& Arrays.equals(decoded.topSpecies(), payload.topSpecies())
 				&& Arrays.equals(decoded.topWeights(), payload.topWeights())
 				&& Arrays.equals(decoded.residualWeights(), payload.residualWeights())
-				&& Arrays.equals(decoded.ph(), payload.ph())
-				&& Arrays.equals(decoded.indicatorFraction(), payload.indicatorFraction()),
+				&& Arrays.equals(decoded.ph(), payload.ph()),
 				"chemical display payload did not round-trip");
-		for (int cell = 0; cell < decoded.ph().length; cell++) {
+		for (int cell = 0; cell < decoded.residualWeights().length; cell++) {
 			int sum = Byte.toUnsignedInt(decoded.residualWeights()[cell]);
 			for (int slot = 0; slot < 4; slot++) sum += Byte.toUnsignedInt(decoded.topWeights()[cell * 4 + slot]);
 			require(sum == 255, "chemical Top-4 quantization did not close");
@@ -684,11 +683,10 @@ public final class FluidNetworkProtocolValidation {
 		short[] top = new short[8 * 4]; Arrays.fill(top, (short) -1);
 		byte[] weights = new byte[top.length];
 		for (int cell = 0; cell < 8; cell++) { top[cell * 4] = 0; weights[cell * 4] = (byte) 255; }
-		byte[] ph = new byte[8]; Arrays.fill(ph, (byte) 128);
-		byte[] indicator = new byte[8]; indicator[0] = (byte) 255;
+		byte[] ph = new byte[16]; Arrays.fill(ph, (byte) 255); Arrays.fill(ph, 0, 8, (byte) 70);
 		return new FluidChemicalSnapshotPayload(FluidProtocol.Layout.CHEMICAL, materialSnapshot(generation, sequence), fingerprint,
 				List.of(new FluidChemicalSnapshotPayload.SpeciesEntry("mmm:h2o", 0xff197ae8)),
-				top, weights, new byte[8], ph, indicator);
+				top, weights, new byte[8], ph);
 	}
 
 	private static FluidThermalSnapshotPayload thermalSnapshot(long generation, long sequence, String fingerprint) {
@@ -720,10 +718,10 @@ public final class FluidNetworkProtocolValidation {
 		short[] top = new short[cells * 4]; Arrays.fill(top, (short) -1);
 		byte[] weights = new byte[cells * 4];
 		for (int cell = 0; cell < cells; cell++) { top[cell * 4] = 0; weights[cell * 4] = (byte) 255; }
-		byte[] ph = new byte[cells]; Arrays.fill(ph, (byte) 128);
+		byte[] ph = new byte[cells]; Arrays.fill(ph, (byte) 70);
 		return new FluidChemicalSnapshotPayload(FluidProtocol.Layout.CHEMICAL, material, "a".repeat(64),
 				List.of(new FluidChemicalSnapshotPayload.SpeciesEntry("mmm:h2o", 0xff197ae8)),
-				top, weights, new byte[cells], ph, new byte[cells]);
+				top, weights, new byte[cells], ph);
 	}
 
 	private static FluidGranularSnapshotPayload granularSnapshot(
@@ -736,8 +734,7 @@ public final class FluidNetworkProtocolValidation {
 				? chemicalSnapshot(generation, sequence, "a".repeat(64)) : null;
 		FluidGranularSnapshotPayload.ChemicalLayer layer = chemical == null ? null
 				: new FluidGranularSnapshotPayload.ChemicalLayer(chemical.registryFingerprint(), chemical.species(),
-				chemical.topSpecies(), chemical.topWeights(), chemical.residualWeights(), chemical.ph(),
-				chemical.indicatorFraction());
+				chemical.topSpecies(), chemical.topWeights(), chemical.residualWeights(), chemical.ph());
 		return new FluidGranularSnapshotPayload(FluidProtocol.Layout.GRANULAR, materialSnapshot(generation, sequence), fingerprint,
 				List.of(new GranularDisplaySnapshot.MaterialEntry("mmm:fine_sand", 0xffc2a065)),
 				bulk, porosity, top, List.of(new GranularDisplaySnapshot.ParcelSample(12_000, 24_000,
@@ -752,8 +749,7 @@ public final class FluidNetworkProtocolValidation {
 				List.of(new GranularDisplaySnapshot.MaterialEntry("mmm:fine_sand", 0xffc2a065)),
 				bulk, porosity, top, List.of(new GranularDisplaySnapshot.ParcelSample(1, 2, 3, 16, 0)),
 				new FluidGranularSnapshotPayload.ChemicalLayer(chemical.registryFingerprint(), chemical.species(),
-						chemical.topSpecies(), chemical.topWeights(), chemical.residualWeights(), chemical.ph(),
-						chemical.indicatorFraction()));
+						chemical.topSpecies(), chemical.topWeights(), chemical.residualWeights(), chemical.ph()));
 	}
 
 	private static void require(boolean condition, String message) {

@@ -695,8 +695,7 @@ final class GranularReactionStage {
                 update.volume(),
                 update.massUnits(),
                 update.mixture(),
-                update.massUnits() == 0 ? 0 : before.internalEnergy(),
-                before.indicator()));
+                update.massUnits() == 0 ? 0 : before.internalEnergy()));
       }
     }
 
@@ -969,8 +968,7 @@ final class GranularReactionStage {
                         stock.volume(),
                         stock.massUnits(),
                         stock.mixture(),
-                        energy,
-                        stock.indicator())));
+                        energy)));
           }
           case 1 -> candidate.activeEnergy.set(index, energy);
           case 2 -> candidate.depositEnergy.put(deposit, energy);

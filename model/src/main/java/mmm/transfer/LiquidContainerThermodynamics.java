@@ -230,7 +230,7 @@ public final class LiquidContainerThermodynamics {
 	}
 
 	private static String chemicalKey(ChemicalContents.Group group) {
-		return group.materialId() + '\0' + group.indicator();
+		return group.materialId();
 	}
 
 	private static void requireBinding(

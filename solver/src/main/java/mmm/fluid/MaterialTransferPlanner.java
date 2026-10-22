@@ -22,9 +22,8 @@ final class MaterialTransferPlanner {
 	private double externalKineticSinkJoules;
 	MaterialTransferPlanner(FluidDomain domain) { this.domain = domain; }
 	double externalKineticSinkJoules() { return externalKineticSinkJoules; }
-	private record Input(int material, SignedDyadic volume, long mass, ChemicalMixtureRecord mixture, boolean indicator) { }
+	private record Input(int material, SignedDyadic volume, long mass, ChemicalMixtureRecord mixture) { }
 	private record Placement(LiquidCellInventory.Key key, SignedDyadic volume, int input) { }
-	private record Kind(int material, boolean indicator) { }
 	private record Extraction(LiquidCellInventory.Plan inventory, List<FluidDomain.MaterialPortion> portions,
 	                          ChemicalTransferLedger ledger, double energy, SignedDyadic volume) { }
 
@@ -52,8 +51,8 @@ final class MaterialTransferPlanner {
 			int material = domain.materialRegistry.handle(group.materialId());
 			var mixture = ChemicalMixtureRecord.fromStableAmounts(chemistry, group.speciesQuanta(), group.massResidualUnits());
 			if (mixture.massUnits(chemistry) != group.massUnits()) throw new IllegalArgumentException("Chemical source mass differs from its species and residual");
-			domain.chemistry.requireCompatible(mixture, group.materialId(), group.indicator());
-			inputs.add(new Input(material, SignedDyadic.of(group.normalizedVolume()), group.massUnits(), mixture, group.indicator()));
+			domain.chemistry.requireCompatible(mixture, group.materialId());
+			inputs.add(new Input(material, SignedDyadic.of(group.normalizedVolume()), group.massUnits(), mixture));
 		}
 		boolean inserted = insert(inputs, domain.domainFlowFields.nearbyCells(x, y, z, radius), externalSource, energy);
 		return new FluidDomain.ExactChemicalTransfer(inserted, inserted ? ledger : ChemicalTransferLedger.EMPTY, inserted ? suppliedEnergy(inputs, energy) : 0);
@@ -77,8 +76,8 @@ final class MaterialTransferPlanner {
 	private Input defaultInput(int material, SignedDyadic volume, long mass) {
 		if (mass < 0) throw new IllegalArgumentException("Liquid packet mass must be non-negative");
 		var mixture = domain.chemistry == null ? null : domain.chemistry.defaultRecord(
-				materialId(material), volume.toDouble(), domain.config.cellSize(), mass, false);
-		return new Input(material, volume, mass, mixture, false);
+				materialId(material), volume.toDouble(), domain.config.cellSize(), mass);
+		return new Input(material, volume, mass, mixture);
 	}
 	private boolean insert(List<Input> inputs, List<FluidDomain.CellCandidate> nearby, boolean externalSource, Double energy) {
 		if (domain.hasPendingPhaseVolumeWork()) return false;
@@ -145,7 +144,7 @@ final class MaterialTransferPlanner {
 				double internal = masses[i] == 0 ? 0 : domain.thermalState == null
 						? energy == null ? 0 : energy * masses[i] / inputs.stream().mapToDouble(Input::mass).sum()
 						: modeledEnergy(input.material(), masses[i], mixture, temperature);
-				result.add(new LiquidCellInventory.Stock(selected.get(i).key(), weights[i], masses[i], mixture, internal, input.indicator()));
+				result.add(new LiquidCellInventory.Stock(selected.get(i).key(), weights[i], masses[i], mixture, internal));
 			}
 		}
 		if (!result.isEmpty()) {
@@ -153,7 +152,7 @@ final class MaterialTransferPlanner {
 			for (int i = 0; i < result.size(); i++) { stored = stored.add(SignedDyadic.of(result.get(i).internalEnergy())); if (result.get(i).massUnits() > result.get(largest).massUnits()) largest = i; }
 			var stock = result.get(largest); var target = SignedDyadic.of(suppliedEnergy(inputs, energy));
 			double corrected = SignedDyadic.of(stock.internalEnergy()).add(target.subtract(stored)).toDouble();
-			result.set(largest, new LiquidCellInventory.Stock(stock.key(), stock.volume(), stock.massUnits(), stock.mixture(), corrected, stock.indicator()));
+			result.set(largest, new LiquidCellInventory.Stock(stock.key(), stock.volume(), stock.massUnits(), stock.mixture(), corrected));
 		}
 		return result;
 	}
@@ -194,7 +193,7 @@ final class MaterialTransferPlanner {
 	private Extraction extract(List<FluidDomain.CellCandidate> nearby, SignedDyadic requested, int material, boolean canonical) {
 		if (requested.signum() < 0 || domain.hasPendingPhaseVolumeWork()) return null;
 		domain.domainFlowFields.ensureInventoryGrid();
-		var remaining = requested; var edits = new ArrayList<LiquidCellInventory.Edit>(); var removed = new LinkedHashMap<Kind, Removed>();
+		var remaining = requested; var edits = new ArrayList<LiquidCellInventory.Edit>(); var removed = new LinkedHashMap<Integer, Removed>();
 		var removedEnergy = SignedDyadic.ZERO;
 		for (var cell : nearby) for (var stock : domain.liquidCells.stocksInCell(cell.index())) {
 			if (remaining.signum() == 0) break;
@@ -210,10 +209,10 @@ final class MaterialTransferPlanner {
 			var energyParts=LiquidCellInventory.partitionEnergy(stock,masses,
 					new ChemicalMixtureRecord[]{keptMixture,takenMixture},FluidThermalBinding.liquidEnergyPartitioner(domain));
 			double keptEnergy=energyParts[0];
-			var after = kept.signum() == 0 ? null : new LiquidCellInventory.Stock(stock.key(), kept, keptMass, keptMixture, keptEnergy, stock.indicator());
+			var after = kept.signum() == 0 ? null : new LiquidCellInventory.Stock(stock.key(), kept, keptMass, keptMixture, keptEnergy);
 			edits.add(new LiquidCellInventory.Edit(stock.key(), after));
 			removedEnergy = removedEnergy.add(SignedDyadic.of(stock.internalEnergy()).subtract(SignedDyadic.of(keptEnergy)));
-			removed.computeIfAbsent(new Kind(stock.key().material(), stock.indicator()), kind -> new Removed(kind.material(), kind.indicator()))
+			removed.computeIfAbsent(stock.key().material(), Removed::new)
 					.add(taken, takenMass, takenMixture);
 			remaining = remaining.subtract(taken);
 		}
@@ -241,7 +240,7 @@ final class MaterialTransferPlanner {
 				throw new IllegalStateException("Cannot place fluid in a solid cell");
 		}
 		if (domain.granularCoupling != null) domain.domainFlowFields.ensureInventoryGrid();
-		var removed = new LinkedHashMap<Kind, Removed>();
+		var removed = new LinkedHashMap<Integer, Removed>();
 		var sink = SignedDyadic.ZERO; var source = SignedDyadic.ZERO;
 		var edits = new LinkedHashMap<LiquidCellInventory.Key, LiquidCellInventory.Edit>();
 		var sourceGroups = new ArrayList<Input>();
@@ -250,7 +249,7 @@ final class MaterialTransferPlanner {
 			if (material<0 || domain.materialRegistry==null && material!=0) throw new IllegalArgumentException("Cell material requires its bound palette");
 			double density=domain.materialRegistry==null?domain.config.density():domain.materialRegistry.material(material).referenceDensity();
 			for (var stock : domain.liquidCells.stocksInCell(cell)) {
-				removed.computeIfAbsent(new Kind(stock.key().material(),stock.indicator()),kind->new Removed(kind.material(),kind.indicator()))
+				removed.computeIfAbsent(stock.key().material(),Removed::new)
 						.add(stock.volume(),stock.massUnits(),stock.mixture());
 				sink=sink.add(SignedDyadic.of(stock.internalEnergy()));
 				edits.put(stock.key(),new LiquidCellInventory.Edit(stock.key(),null));
@@ -337,7 +336,6 @@ final class MaterialTransferPlanner {
 		return domain.thermalState.stateFunction().internalEnergyAtTemperature(domain.thermalState.thermalMaterialHandleForFluid(material), Mass.kilograms(mass), stable(mixture), temperature);
 	}
 	private boolean canonical(LiquidCellInventory.Stock stock) {
-		if (stock.indicator()) return false;
 		if (stock.mixture() == null) return true;
 		var registry = domain.chemistry.registry(); var phase = registry.phase(registry.phaseHandleForMaterial(materialId(stock.key().material())));
 		for (int i = 0; i < stock.mixture().entryCount(); i++) if (!phase.defaultConcentrationMolPerCubicMeter().containsKey(registry.species(stock.mixture().speciesHandle(i)).id())) return false;
@@ -346,7 +344,7 @@ final class MaterialTransferPlanner {
 	private ChemicalTransferLedger ledger(List<Input> inputs) {
 		if (domain.chemistry == null) return ChemicalTransferLedger.EMPTY;
 		var groups = new ArrayList<ChemicalTransferLedger.Group>();
-		for (var input : inputs) groups.add(new ChemicalTransferLedger.Group(materialId(input.material()), input.indicator(), input.volume().toDouble(),
+		for (var input : inputs) groups.add(new ChemicalTransferLedger.Group(materialId(input.material()), input.volume().toDouble(),
 				input.mass(), input.mixture().massResidualUnits(), stable(input.mixture())));
 		return new ChemicalTransferLedger(groups);
 	}
@@ -362,15 +360,15 @@ final class MaterialTransferPlanner {
 		return record.withMassResidualUnits(Math.subtractExact(mass, record.speciesMassUnits(domain.chemistry.registry())));
 	}
 	private final class Removed {
-		final int material; final boolean indicator; SignedDyadic volume = SignedDyadic.ZERO; long mass; final TreeMap<String, Long> species = new TreeMap<>();
-		Removed(int material, boolean indicator) { this.material = material; this.indicator = indicator; }
+		final int material; SignedDyadic volume = SignedDyadic.ZERO; long mass; final TreeMap<String, Long> species = new TreeMap<>();
+		Removed(int material) { this.material = material; }
 		void add(SignedDyadic volume, long mass, ChemicalMixtureRecord mixture) {
 			this.volume = this.volume.add(volume); this.mass = Math.addExact(this.mass, mass);
 			if (mixture != null) stable(mixture).forEach((id, amount) -> species.merge(id, amount, Math::addExact));
 		}
 		ChemicalTransferLedger.Group group() {
 			var record = ChemicalMixtureRecord.fromStableAmounts(domain.chemistry.registry(), species, 0);
-			return new ChemicalTransferLedger.Group(materialId(material), indicator, volume.toDouble(), mass,
+			return new ChemicalTransferLedger.Group(materialId(material), volume.toDouble(), mass,
 					Math.subtractExact(mass, record.speciesMassUnits(domain.chemistry.registry())), species);
 		}
 	}

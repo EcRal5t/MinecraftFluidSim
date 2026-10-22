@@ -152,7 +152,7 @@ public final class GranularReactionCandidateValidation {
         "Reactive bed fixture could not settle");
     d.granularCoupling.rebuild(d.granularState.parcels, d.granularState.deposits);
     for (int i = 0; i < d.liquidCells.physicalSize(); i++)
-      mmm.simulation.FullCapabilityTestFixture.assignPureSpecies(d, i, BuiltinChemicalDefinitions.H2O, false);
+      mmm.simulation.FullCapabilityTestFixture.assignPureSpecies(d, i, BuiltinChemicalDefinitions.H2O);
     var initial = inventory(d);
     long solid = d.totalGranularSolidVolumeSvq();
     var stats = new GranularReactionStage(d).step(new int[] {cell});
@@ -179,7 +179,7 @@ public final class GranularReactionCandidateValidation {
           "Thermal merge changed inventory");
     }
     for (int i = 0; i < d.liquidCells.physicalSize(); i++)
-      mmm.simulation.FullCapabilityTestFixture.assignPureSpecies(d, i, BuiltinChemicalDefinitions.H2O, false);
+      mmm.simulation.FullCapabilityTestFixture.assignPureSpecies(d, i, BuiltinChemicalDefinitions.H2O);
     var before = inventory(d);
     double initialTemperature = d.thermalTemperatureInCell(1, 1, 1);
     boolean dissolved = false;
@@ -258,8 +258,8 @@ public final class GranularReactionCandidateValidation {
       long mass = d.unitScale.massUnitsForNormalized(volume.toDouble() * 1000);
       var mixture =
           d.chemistry.defaultRecord(
-              BuiltinFluidMaterials.WATER.id(), volume.toDouble(), .5F, mass, false);
-      stocks.add(new LiquidCellInventory.Stock(key, volume, mass, mixture, 0, false));
+              BuiltinFluidMaterials.WATER.id(), volume.toDouble(), .5F, mass);
+      stocks.add(new LiquidCellInventory.Stock(key, volume, mass, mixture, 0));
     }
     d.liquidCells.planAdditions(stocks).commit();
     d.markCellInventoryChanged();
@@ -328,8 +328,7 @@ public final class GranularReactionCandidateValidation {
             BuiltinChemicalDefinitions.NA_PLUS,
             8_320_000L,
             BuiltinChemicalDefinitions.CL_MINUS,
-            8_320_000L),
-        false);
+            8_320_000L));
     if (thermal) bindReactiveThermal(d,formationEnergy);
     d.domainFlowFields.preparePhysicalState();
     Arrays.fill(d.mac.velocityX, .25F);

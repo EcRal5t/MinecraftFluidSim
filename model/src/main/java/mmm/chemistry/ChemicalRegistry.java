@@ -256,7 +256,6 @@ public final class ChemicalRegistry {
 		}
 		for (ChemicalPhaseDefinition definition : phases) {
 			out.append("P|").append(definition.id()).append('|').append(definition.materialId()).append('|')
-					.append(definition.acceptsIndicator()).append('|')
 					.append(String.join(",", definition.allowedSpecies())).append('|');
 			appendRationalMap(out, definition.defaultConcentrationMolPerCubicMeter());
 		}

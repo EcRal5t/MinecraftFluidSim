@@ -230,7 +230,7 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 		domain.setMarkerChemical(0, Map.of(
 				BuiltinChemicalDefinitions.NA_PLUS, 1_100_000L,
-				BuiltinChemicalDefinitions.CL_MINUS, 1_100_000L), true);
+				BuiltinChemicalDefinitions.CL_MINUS, 1_100_000L));
 		domain.bindGasRegistry(mmm.fluid.air.BuiltinGasDefinitions.createRegistry());
 		domain.bootstrapGasState("");
 		domain.bindThermal(reactiveGranularThermalRegistry(liquids, granular), liquids, 300.0);
@@ -247,7 +247,7 @@ abstract class ThermochemistryValidationScenarios extends ThermalValidationSuppo
 						+ domain.exactInternalEnergy().subtract(beforePrecipitation));
 
 		for (int marker = 0; marker < domain.particleCount(); marker++) domain.setMarkerChemical(
-				marker, Map.of(BuiltinChemicalDefinitions.H2O, 1_000_000L), (marker & 1) == 0);
+				marker, Map.of(BuiltinChemicalDefinitions.H2O, 1_000_000L));
 		SignedDyadic beforeDissolution = domain.exactInternalEnergy();
 		double temperatureBeforeDissolution = domain.thermalTemperatureInCell(1, 1, 1);
 		long solidBeforeDissolution = domain.totalGranularSolidVolumeSvq();

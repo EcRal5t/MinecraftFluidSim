@@ -30,7 +30,7 @@ public final class LiquidCellInventoryValidation {
 	private static void dissipationFollowsAnEmptiedSource() {
 		var domain=new FluidDomain(3,2,2,new FluidSolverConfig(1,1000,0,.05F,120,1e-5F,.002F));
 		var cells=domain.liquidCells;var key=new LiquidCellInventory.Key(0,0,255);
-		cells.planAdditions(List.of(new LiquidCellInventory.Stock(key,SignedDyadic.of(1),100,null,16,false))).commit();
+		cells.planAdditions(List.of(new LiquidCellInventory.Stock(key,SignedDyadic.of(1),100,null,16))).commit();
 		domain.markCellInventoryChanged();domain.cellMacStage.rebuildInventory();
 		domain.cellMacStage.beginMechanicalHeat();domain.cellMacStage.addMechanicalHeatAtCell(0,64);
 		var before=cells.snapshot();
@@ -57,8 +57,8 @@ public final class LiquidCellInventoryValidation {
 		var cells=new LiquidCellInventory(4,null);
 		var stocks=new ArrayList<LiquidCellInventory.Stock>();
 		for(int cell=0;cell<4;cell++){
-			stocks.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(cell,0,255),SignedDyadic.of(.99),990_000_000L,null,99,false));
-			stocks.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(cell,1,255),SignedDyadic.of(1).subtract(SignedDyadic.of(.99)),10_000_000L,null,1,false));
+			stocks.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(cell,0,255),SignedDyadic.of(.99),990_000_000L,null,99));
+			stocks.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(cell,1,255),SignedDyadic.of(1).subtract(SignedDyadic.of(.99)),10_000_000L,null,1));
 		}
 		cells.planAdditions(stocks).commit();
 		var plan=cells.planRoutes(circulatingComponentRoutes(cells,.001),null);
@@ -76,7 +76,7 @@ public final class LiquidCellInventoryValidation {
 		var chemistry=BuiltinChemicalDefinitions.REGISTRY;var cells=new LiquidCellInventory(4,chemistry);
 		var mixture=ChemicalMixtureRecord.fromStableAmounts(chemistry,Map.of(BuiltinChemicalDefinitions.H2O,1_000_000L),0);
 		var stocks=new ArrayList<LiquidCellInventory.Stock>();
-		for(int cell=0;cell<4;cell++)stocks.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(cell,0,255),SignedDyadic.of(1),1_000_000_000L,mixture,100,false));
+		for(int cell=0;cell<4;cell++)stocks.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(cell,0,255),SignedDyadic.of(1),1_000_000_000L,mixture,100));
 		cells.planAdditions(stocks).commit();
 		double carried=0;var energy=SignedDyadic.ZERO;
 		for(int step=0;step<16;step++){
@@ -105,7 +105,7 @@ public final class LiquidCellInventoryValidation {
 	private static void interiorFullnessSharesTheFluxSettlement(){
 		var cells=new LiquidCellInventory(3,null);
 		for(int cell=0;cell<3;cell++)cells.planAdditions(List.of(new LiquidCellInventory.Stock(
-				new LiquidCellInventory.Key(cell,0,255),SignedDyadic.of(cell==2?.5:1),cell==2?500:1000,null,cell==2?50:100,false))).commit();
+				new LiquidCellInventory.Key(cell,0,255),SignedDyadic.of(cell==2?.5:1),cell==2?500:1000,null,cell==2?50:100))).commit();
 		var raw=new PhaseQuantitySettlement.RouteBuffer();raw.reset(cells.stocks(),24);
 		for(int s=0;s<raw.sourceCount();s++){
 			int cell=raw.key(s).cell();double outgoing=cell==0?.2:cell==1?.3:0;
@@ -149,7 +149,7 @@ public final class LiquidCellInventoryValidation {
 		var domain = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.05F,120,1e-5F,.002F));
 		domain.materialRegistry = new FluidMaterialRegistry(List.of(new FluidMaterial("test:tail",1000,"test:tail",0,Math.PI/2)));
 		var key = new LiquidCellInventory.Key(13,0,255); var volume = SignedDyadic.of(1,-60);
-		domain.liquidCells.planAdditions(List.of(new LiquidCellInventory.Stock(key,volume,0,null,0,false))).commit();
+		domain.liquidCells.planAdditions(List.of(new LiquidCellInventory.Stock(key,volume,0,null,0))).commit();
 		domain.markCellInventoryChanged();
 		var displaced = domain.setSolidMicroMaskMaterial(1,1,1,255);
 		require(displaced.portions().size()==1 && displaced.portions().getFirst().massUnits()==0
@@ -166,7 +166,7 @@ public final class LiquidCellInventoryValidation {
 		var mixture = ChemicalMixtureRecord.fromStableAmounts(chemistry,Map.of(BuiltinChemicalDefinitions.H2O,1L),0);
 		mixture = mixture.withMassResidualUnits(-mixture.speciesMassUnits(chemistry));
 		var key = new LiquidCellInventory.Key(13,0,255); var volume = SignedDyadic.of(1,-60);
-		domain.liquidCells.planAdditions(List.of(new LiquidCellInventory.Stock(key,volume,0,mixture,0,false))).commit();
+		domain.liquidCells.planAdditions(List.of(new LiquidCellInventory.Stock(key,volume,0,mixture,0))).commit();
 		domain.markCellInventoryChanged();
 		var displaced = domain.setSolidMicroMaskChemical(1,1,1,255);
 		var before = domain.liquidCells.snapshot(); boolean rejected = false;
@@ -186,8 +186,8 @@ public final class LiquidCellInventoryValidation {
 		var oil = new LiquidCellInventory.Key(13, 1, 255);
 		var mixture = ChemicalMixtureRecord.fromStableAmounts(chemistry, Map.of(BuiltinChemicalDefinitions.H2O, 7L), 0);
 		cells.planEdits(List.of(new LiquidCellInventory.Edit(water,
-				new LiquidCellInventory.Stock(water, SignedDyadic.of(.75), 17, mixture, .1, true)),
-				new LiquidCellInventory.Edit(oil, new LiquidCellInventory.Stock(oil, SignedDyadic.of(.25), 3, null, -.2, false)))).commit();
+				new LiquidCellInventory.Stock(water, SignedDyadic.of(.75), 17, mixture, .1)),
+				new LiquidCellInventory.Edit(oil, new LiquidCellInventory.Stock(oil, SignedDyadic.of(.25), 3, null, -.2)))).commit();
 		var initial = cells.snapshot();
 		var routes=LiquidTransportRoutes.builder(2,12);
 		int[] neighbors = {12, 14, 10, 16, 4, 22};
@@ -225,7 +225,7 @@ public final class LiquidCellInventoryValidation {
 	}
 	private static void preparedRowsAndRecoveryAreAtomic() {
 		var cells = new LiquidCellInventory(8, null); var key = new LiquidCellInventory.Key(0, 0, 255);
-		cells.planEdits(List.of(new LiquidCellInventory.Edit(key, new LiquidCellInventory.Stock(key, SignedDyadic.of(.5), 10, null, 3, false)))).commit();
+		cells.planEdits(List.of(new LiquidCellInventory.Edit(key, new LiquidCellInventory.Stock(key, SignedDyadic.of(.5), 10, null, 3)))).commit();
 		var snapshot = cells.snapshot(); var stale = cells.planEnergyUpdate(new double[]{4});
 		long geometryRevision = cells.geometryRevision();
 		cells.planEnergyUpdate(new double[]{5}).commit();
@@ -246,7 +246,7 @@ public final class LiquidCellInventoryValidation {
 		// Interior translation supplies the full donor with upstream gas capacity.
 		var cells = new LiquidCellInventory(12, null); var key = new LiquidCellInventory.Key(1, 0, 255);
 		cells.planEdits(List.of(new LiquidCellInventory.Edit(key,
-				new LiquidCellInventory.Stock(key, SignedDyadic.of(1), 100, null, 10, false)))).commit();
+				new LiquidCellInventory.Stock(key, SignedDyadic.of(1), 100, null, 10)))).commit();
 		var domain = new FluidDomain(3,2,2,new FluidSolverConfig(1,1000,0,.05F,120,1e-5F,.002F)); domain.liquidCells = cells;
 		domain.markCellInventoryChanged();domain.domainFlowFields.preparePhysicalState();
 		for(int face=0;face<domain.mac.velocityX.length;face++)if(domain.cellMacStage.massX[face]>0)domain.mac.velocityX[face]=.2F;
@@ -268,7 +268,7 @@ public final class LiquidCellInventoryValidation {
 	}
 	private static void explicitMechanicalHeatIsOneAtomicCandidate() {
 		var cells = new LiquidCellInventory(2, null); var key = new LiquidCellInventory.Key(0,0,255);
-		cells.planEdits(List.of(new LiquidCellInventory.Edit(key,new LiquidCellInventory.Stock(key,SignedDyadic.of(.5),10,null,3,false)))).commit();
+		cells.planEdits(List.of(new LiquidCellInventory.Edit(key,new LiquidCellInventory.Stock(key,SignedDyadic.of(.5),10,null,3)))).commit();
 		var before = cells.snapshot();
 		var routes=LiquidTransportRoutes.builder(1,2);routes.source(cells.stock(key));
 		routes.route(0,1,255,SignedDyadic.of(.25));
@@ -286,8 +286,8 @@ public final class LiquidCellInventoryValidation {
 		var chemistry=BuiltinChemicalDefinitions.REGISTRY;var isolated=new LiquidCellInventory(1,chemistry);
 		var firstKey=new LiquidCellInventory.Key(0,0,0x01);var secondKey=new LiquidCellInventory.Key(0,0,0x80);
 		var mixture=ChemicalMixtureRecord.fromSolutesAndSolventMass(chemistry,Map.of(),BuiltinChemicalDefinitions.H2O,10_000_000L);
-		var first=new LiquidCellInventory.Stock(firstKey,SignedDyadic.of(.0625),10_000_000L,mixture,3,false);
-		var second=new LiquidCellInventory.Stock(secondKey,SignedDyadic.of(.0625),10_000_000L,mixture,7,false);
+		var first=new LiquidCellInventory.Stock(firstKey,SignedDyadic.of(.0625),10_000_000L,mixture,3);
+		var second=new LiquidCellInventory.Stock(secondKey,SignedDyadic.of(.0625),10_000_000L,mixture,7);
 		isolated.planAdditions(List.of(first,second)).commit();var original=isolated.snapshot();
 		var cooling=SignedDyadic.of(-.5);
 		var localized=isolated.planRoutes(LiquidTransportRoutes.builder(0,0).build(),null).withMechanicalHeatByStock(Map.of(firstKey,cooling));
@@ -303,7 +303,7 @@ public final class LiquidCellInventoryValidation {
 		var cells = new LiquidCellInventory(3, null); var edits = new ArrayList<LiquidCellInventory.Edit>();
 		for (int cell = 0; cell < 3; cell++) {
 			var key = new LiquidCellInventory.Key(cell, 0, 255);
-			edits.add(new LiquidCellInventory.Edit(key, new LiquidCellInventory.Stock(key, SignedDyadic.of(.25), 10, null, cell == 1 ? 1e16 : 1, false)));
+			edits.add(new LiquidCellInventory.Edit(key, new LiquidCellInventory.Stock(key, SignedDyadic.of(.25), 10, null, cell == 1 ? 1e16 : 1)));
 		}
 		cells.planEdits(edits).commit();
 		var sourceEnergy=cells.exactInternalEnergy();

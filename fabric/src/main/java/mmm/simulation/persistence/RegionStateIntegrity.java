@@ -34,7 +34,7 @@ final class RegionStateIntegrity {
 			for (var stock : section.liquidStocks()) {
 				out.writeInt(stock.key().cell()); out.writeInt(stock.key().material()); out.writeInt(stock.key().supportMask());
 				writeBytes(out,stock.volume().significand().toByteArray()); out.writeInt(stock.volume().exponent());
-				out.writeLong(stock.massUnits()); out.writeLong(Double.doubleToRawLongBits(stock.internalEnergy())); out.writeBoolean(stock.indicator());
+				out.writeLong(stock.massUnits()); out.writeLong(Double.doubleToRawLongBits(stock.internalEnergy()));
 				out.writeBoolean(stock.mixture() != null);
 				if (stock.mixture() != null) { writeInts(out,stock.mixture().copySpeciesHandles()); writeLongs(out,stock.mixture().copyAmounts()); out.writeLong(stock.mixture().massResidualUnits()); }
 			}

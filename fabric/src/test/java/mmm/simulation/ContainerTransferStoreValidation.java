@@ -321,7 +321,7 @@ public final class ContainerTransferStoreValidation {
 
 		ChemicalContents chemicalContents = new ChemicalContents(BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
 				ChemicalLimits.QUANTA_PER_MOL, List.of(new ChemicalContents.Group(
-						"mmm:water", true, ContainerFluidLedger.NANOS_PER_BLOCK,
+						"mmm:water", ContainerFluidLedger.NANOS_PER_BLOCK,
 						mmm.units.Mass.fromKilograms(18.0), mmm.units.Mass.fromKilograms(0.0),
 						List.of(new ChemicalContents.SpeciesAmount(
 								BuiltinChemicalDefinitions.H2O, 1_000 * ChemicalLimits.QUANTA_PER_MOL)))));
@@ -747,7 +747,7 @@ public final class ContainerTransferStoreValidation {
 			domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
 			double sourceResidual = sourceMass - 18.0;
 			var contents = new ChemicalContents(BuiltinChemicalDefinitions.REGISTRY.fingerprint(), ChemicalLimits.QUANTA_PER_MOL,
-					List.of(new ChemicalContents.Group("mmm:water", true, 999_999_999L,
+					List.of(new ChemicalContents.Group("mmm:water", 999_999_999L,
 							mmm.units.Mass.fromKilograms(sourceMass), mmm.units.Mass.fromKilograms(sourceResidual),
 							List.of(new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O, 1_000 * ChemicalLimits.QUANTA_PER_MOL)))));
 			contents.validateAgainst(BuiltinChemicalDefinitions.REGISTRY);

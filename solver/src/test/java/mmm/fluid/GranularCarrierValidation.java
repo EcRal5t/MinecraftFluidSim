@@ -1392,7 +1392,7 @@ public final class GranularCarrierValidation {
 			var changes = new java.util.ArrayList<LiquidCellInventory.Edit>();
 			for(var stock:domain.liquidCells.stocks())changes.add(new LiquidCellInventory.Edit(stock.key(),
 					new LiquidCellInventory.Stock(stock.key(),stock.volume(),
-							mmm.units.Mass.fromKilograms(stock.massKilograms()*13.6),stock.mixture(),stock.internalEnergy(),stock.indicator())));
+							mmm.units.Mass.fromKilograms(stock.massKilograms()*13.6),stock.mixture(),stock.internalEnergy())));
 			domain.liquidCells.planEdits(changes).commit();domain.markCellInventoryChanged();
 		}
 		for (int p = 0; p < 32; p++) addParcel(domain,

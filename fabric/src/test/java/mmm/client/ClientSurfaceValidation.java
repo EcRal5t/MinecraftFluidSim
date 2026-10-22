@@ -28,13 +28,26 @@ public final class ClientSurfaceValidation {
 		store.clear();
 		store.accept(second, negotiation);
 		require(store.surfaceMesh(second, second.toRenderSnapshot()) != mesh, "Clearing releases the previous surface");
-		var red = MaterialSurfaceGeometry.prepare(first, first.toRenderSnapshot(), mesh, chemical(first, 0xffff0000));
-		var blue = MaterialSurfaceGeometry.prepare(first, first.toRenderSnapshot(), mesh, chemical(first, 0xff0000ff));
+		var red = MaterialSurfaceGeometry.prepare(first, first.toRenderSnapshot(), mesh, chemical(first, 0xffff0000), null, composition());
+		var blue = MaterialSurfaceGeometry.prepare(first, first.toRenderSnapshot(), mesh, chemical(first, 0xff0000ff), null, composition());
 		require(red.size() == mesh.outerTriangles().size() && blue.size() == red.size(), "Colour preparation preserves triangles");
 		for (int i = 0; i < red.size(); i++) {
 			require(red.get(i).triangle().equals(blue.get(i).triangle()) && red.get(i).argb() == 0xffff0000
 					&& blue.get(i).argb() == 0xff0000ff, "Composition updates colour on reused geometry");
 		}
+		var initial = new ClientRegionSnapshotStore.MaterialFrame(first, first.toRenderSnapshot(), mesh,
+				chemical(first, 0xffff0000), new short[] {4800,4800,4800,4800,4800,4800,4800,4800}, composition());
+		var ph = initial.recolor(new FluidDisplaySettings.View(FluidDisplaySettings.Mode.PH, 273.15, 373.15));
+		require(ph.mesh() == initial.mesh() && ph.triangles().getFirst().argb() == 0xff35d06f,
+				"Mode changes preserve geometry and show exact neutral pH");
+		var thermal = initial.recolor(new FluidDisplaySettings.View(FluidDisplaySettings.Mode.TEMPERATURE, 273.15, 373.15));
+		var wider = thermal.recolor(new FluidDisplaySettings.View(FluidDisplaySettings.Mode.TEMPERATURE, 273.15, 473.15));
+		require(thermal.mesh() == mesh && wider.mesh() == mesh
+				&& thermal.triangles().getFirst().argb() != wider.triangles().getFirst().argb(),
+				"Temperature range changes only colours on the accepted thermal frame");
+		require(FluidColorMapping.color(new FluidDisplaySettings.View(FluidDisplaySettings.Mode.PH, 273.15, 373.15),
+				null, null, first, 0, 0, 0xff197ae8) == FluidColorMapping.NO_DATA,
+				"Missing pH differs from neutral");
 		System.out.println("Client surface validation passed");
 	}
 
@@ -55,9 +68,16 @@ public final class ClientSurfaceValidation {
 		for (int cell = 0; cell < 8; cell++) { species[cell * 4] = 0; weights[cell * 4] = (byte) 255; }
 		var payload = new FluidChemicalSnapshotPayload(FluidProtocol.Layout.CHEMICAL, material, "a".repeat(64),
 				List.of(new FluidChemicalSnapshotPayload.SpeciesEntry("mmm:h2o", color)), species, weights,
-				new byte[8], new byte[8], new byte[8]);
+				new byte[8], ph());
 		return new ClientRegionSnapshotStore.ChemicalFrame(payload, payload.topSpecies(), payload.topWeights(),
-				payload.residualWeights(), payload.ph(), payload.indicatorFraction());
+				payload.residualWeights(), payload.ph());
+	}
+
+	private static FluidDisplaySettings.View composition() {
+		return new FluidDisplaySettings.View(FluidDisplaySettings.Mode.COMPOSITION, 273.15, 373.15);
+	}
+	private static byte[] ph() {
+		byte[] ph = new byte[8]; Arrays.fill(ph, (byte) 70); return ph;
 	}
 
 	private static void require(boolean condition, String message) {

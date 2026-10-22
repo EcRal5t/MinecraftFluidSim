@@ -282,7 +282,7 @@ final class LiquidStratificationValidation {
 		var materials = new FlipMaterialParticleState(6, 6, 4, 0.5F, seed.particleCount(), original.totalVolume(), total,
 				original.materials(), positions, original.copyParticleVelocities(), original.copySolidMask(), mass,
 				original.copyMaterialPaletteIndex());
-		var chemical = FlipChemicalParticleState.capture(materials, CHEMISTRY, mixtures, new byte[mass.length],
+		var chemical = FlipChemicalParticleState.capture(materials, CHEMISTRY, mixtures,
 				ChemicalTransferLedger.EMPTY, ChemicalTransferLedger.EMPTY);
 		FluidDomain domain = new FluidDomain(6, 6, 4, config);
 		domain.restoreChemicalParticleState(chemical, CHEMISTRY);

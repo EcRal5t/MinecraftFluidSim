@@ -259,7 +259,7 @@ public final class M8GranularValidation {
 		domain.setPrecipitationEnabled(true);
 		domain.setMarkerChemical(0, java.util.Map.of(
 				BuiltinChemicalDefinitions.NA_PLUS, 8_320_000L,
-				BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L), true);
+				BuiltinChemicalDefinitions.CL_MINUS, 8_320_000L));
 		long[] combinedBefore = combinedSpecies(domain);
 		long massBefore=combinedMassUnits(domain);
 		var occupiedBefore=combinedOccupiedVolume(domain);
@@ -283,7 +283,7 @@ public final class M8GranularValidation {
 				"Continued precipitation or recovery changed combined liquid/solid inventory");
 
 		for(int stock=0;stock<domain.exportLiquidCellState().physicalStocks().size();stock++){
-			FullCapabilityTestFixture.assignPureSpecies(domain, stock, BuiltinChemicalDefinitions.H2O, (stock&1)==0);
+			FullCapabilityTestFixture.assignPureSpecies(domain, stock, BuiltinChemicalDefinitions.H2O);
 		}
 		long[] beforeDissolution = combinedSpecies(domain);
 		long massBeforeDissolution=combinedMassUnits(domain);
@@ -302,8 +302,6 @@ public final class M8GranularValidation {
 				"dissolution changed combined liquid+solid mass");
 		require(occupiedBeforeDissolution.equals(combinedOccupiedVolume(domain)),
 				"dissolution did not exchange liquid and solid volume exactly");
-		require(domain.exportLiquidCellState().stocks().stream().anyMatch(mmm.inventory.LiquidCellInventory.Stock::indicator),
-				"Dissolution erased liquid inventory indicator provenance");
 	}
 
 	private static long[] combinedSpecies(FluidDomain domain) {

@@ -61,7 +61,7 @@ final class MmmCommandHandlers {
 		if (!fixtures.createChemistryDemo(player)) {
 			return fail(source, "无法创建酸碱化学测试域：" + fixtures.lastFailure());
 		}
-		return succeed(source, "已创建暂停的 HCl/NaOH 对半化学域；左半带 indicator，使用 /mmm step 或 /mmm run 观察混合中和", 1);
+		return succeed(source, "已创建暂停的 HCl/NaOH 对半化学域；使用 /mmm step 或 /mmm run 观察混合中和", 1);
 	}
 
 	static int createControllerDemo(CommandSourceStack source) throws CommandSyntaxException {
@@ -147,49 +147,44 @@ final class MmmCommandHandlers {
 		return succeed(source, "已生成 " + description + "（显式 creative/debug 外部源）", 1);
 	}
 
-	/** Explicit administrator source for exact chemical fixtures and indicator tools. */
+	/** Explicit administrator source for exact chemical fixtures. */
 	static int giveReagent(CommandSourceStack source, String requested) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
 		var world = MmmRuntimeRegistry.require(source.getServer()).worldRegistries();
 		if (!hasCapability(source, WorldCapability.CHEMISTRY)) return fail(source, "化学功能门本次启动未开启");
 		ItemStack stack;
-		if ("indicator".equals(requested)) {
-			stack = new ItemStack(MmmItems.CHEMICAL_INDICATOR);
-		} else if ("eraser".equals(requested)) {
-			stack = new ItemStack(MmmItems.CHEMICAL_ERASER);
+
+		String species = switch (requested) {
+			case "water" -> BuiltinChemicalDefinitions.H2O;
+			case "hcl" -> BuiltinChemicalDefinitions.HCL;
+			case "naoh" -> BuiltinChemicalDefinitions.NAOH;
+			case "nacl" -> BuiltinChemicalDefinitions.NACL;
+			case "nano3" -> BuiltinChemicalDefinitions.NANO3;
+			case "kcl" -> BuiltinChemicalDefinitions.KCL;
+			case "kno3" -> BuiltinChemicalDefinitions.KNO3;
+			default -> null;
+		};
+		if (species == null) return fail(source, "未知 reagent：" + requested);
+		ChemicalRegistry registry = world.chemicalRegistry();
+		java.util.TreeMap<String, Long> amounts = new java.util.TreeMap<>();
+		if (species.equals(BuiltinChemicalDefinitions.H2O)) {
+			amounts.put(species, 55_555_555_556L);
 		} else {
-			String species = switch (requested) {
-				case "water" -> BuiltinChemicalDefinitions.H2O;
-				case "hcl" -> BuiltinChemicalDefinitions.HCL;
-				case "naoh" -> BuiltinChemicalDefinitions.NAOH;
-				case "nacl" -> BuiltinChemicalDefinitions.NACL;
-				case "nano3" -> BuiltinChemicalDefinitions.NANO3;
-				case "kcl" -> BuiltinChemicalDefinitions.KCL;
-				case "kno3" -> BuiltinChemicalDefinitions.KNO3;
-				default -> null;
-			};
-			if (species == null) return fail(source, "未知 reagent：" + requested);
-			ChemicalRegistry registry = world.chemicalRegistry();
-			java.util.TreeMap<String, Long> amounts = new java.util.TreeMap<>();
-			if (species.equals(BuiltinChemicalDefinitions.H2O)) {
-				amounts.put(species, 55_555_555_556L);
-			} else {
-				amounts.put(BuiltinChemicalDefinitions.H2O, 50_000_000_000L);
-				amounts.put(species, mmm.chemistry.ChemicalAmount.quanta(mmm.chemistry.ExactRational.of(1000)));
-			}
-			double mass = 1_000.0;
-			ChemicalMixtureRecord exact = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0L);
-			ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry, amounts,
-					Math.subtractExact(mmm.units.Mass.fromKilograms(mass), exact.speciesMassUnits(registry)));
-			ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
-					BuiltinFluidMaterials.WATER.id(), false, 1.0, mmm.units.Mass.fromKilograms(mass),
-					mixture.massResidualUnits(),
-					mixture.stableAmounts(registry))));
-			stack = ContainerItemStacks.toStack(
-					ChemicalContents.fromLedger(ledger, registry, ContainerFluidLedger.NANOS_PER_BLOCK));
-			world.bindActualContainerProfile(stack);
-			world.attachDebugLiquidThermalContents(stack);
+			amounts.put(BuiltinChemicalDefinitions.H2O, 50_000_000_000L);
+			amounts.put(species, mmm.chemistry.ChemicalAmount.quanta(mmm.chemistry.ExactRational.of(1000)));
 		}
+		double mass = 1_000.0;
+		ChemicalMixtureRecord exact = ChemicalMixtureRecord.fromStableAmounts(registry, amounts, 0L);
+		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry, amounts,
+				Math.subtractExact(mmm.units.Mass.fromKilograms(mass), exact.speciesMassUnits(registry)));
+		ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
+				BuiltinFluidMaterials.WATER.id(), 1.0, mmm.units.Mass.fromKilograms(mass),
+				mixture.massResidualUnits(),
+				mixture.stableAmounts(registry))));
+		stack = ContainerItemStacks.toStack(
+				ChemicalContents.fromLedger(ledger, registry, ContainerFluidLedger.NANOS_PER_BLOCK));
+		world.bindActualContainerProfile(stack);
+		world.attachDebugLiquidThermalContents(stack);
 		if (!player.getInventory().add(stack)) player.drop(stack, false);
 		player.getInventory().setChanged();
 		return succeed(source, "已生成 " + requested + "（显式 creative/debug 化学外部源）", 1);

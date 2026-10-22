@@ -37,7 +37,7 @@ public final class FlipFluidFreeSurfaceValidation {
 			domain.geometry.cutCells.replaceMask(cell,mask);
 			int support=(~mask)&255;
 			var stock=new mmm.inventory.LiquidCellInventory.Stock(new mmm.inventory.LiquidCellInventory.Key(cell,0,support),
-					SignedDyadic.of(fill),domain.unitScale.massUnitsForNormalized(1000*fill),null,0,false);
+					SignedDyadic.of(fill),domain.unitScale.massUnitsForNormalized(1000*fill),null,0);
 			domain.liquidCells.planAdditions(List.of(stock)).commit();domain.markCellInventoryChanged();domain.pressureSystem.prepareGeometry();
 			var occupancy=domain.exportPhaseOccupancyState();double liquid=0,reconstructed=0;
 			double resolution=FlipPressurePhaseGeometry.CELL_VOLUME_RESOLUTION;

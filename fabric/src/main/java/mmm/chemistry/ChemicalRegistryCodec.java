@@ -85,7 +85,6 @@ public final class ChemicalRegistryCodec {
 		for (ChemicalPhaseDefinition definition : registry.phases()) {
 			CompoundTag tag = new CompoundTag();
 			tag.putString("Id", definition.id()); tag.putString("Material", definition.materialId());
-			tag.putBoolean("Indicator", definition.acceptsIndicator());
 			ListTag allowed = new ListTag();
 			for (String id : definition.allowedSpecies()) allowed.add(StringTag.valueOf(id));
 			tag.put("Allowed", allowed); tag.put("DefaultConcentrationMolPerM3", encodeRationalMap(definition.defaultConcentrationMolPerCubicMeter()));
@@ -123,7 +122,7 @@ public final class ChemicalRegistryCodec {
 		List<ChemicalPhaseDefinition> result = new ArrayList<>(list.size());
 		for (int i = 0; i < list.size(); i++) {
 			CompoundTag tag = compound(list, i, "phase");
-			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "Material", Tag.TAG_STRING, "Indicator", Tag.TAG_BYTE,
+			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "Material", Tag.TAG_STRING,
 					"Allowed", Tag.TAG_LIST, "DefaultConcentrationMolPerM3", Tag.TAG_LIST));
 			List<String> allowed = new ArrayList<>();
 			ListTag encodedAllowed = tag.getListOrEmpty("Allowed");
@@ -133,7 +132,7 @@ public final class ChemicalRegistryCodec {
 				allowed.add(text.asString().orElseThrow());
 			}
 			result.add(new ChemicalPhaseDefinition(tag.getStringOr("Id", ""), tag.getStringOr("Material", ""),
-					allowed, decodeRationalMap(tag.getListOrEmpty("DefaultConcentrationMolPerM3")), tag.getBooleanOr("Indicator", false)));
+					allowed, decodeRationalMap(tag.getListOrEmpty("DefaultConcentrationMolPerM3"))));
 		}
 		return result;
 	}

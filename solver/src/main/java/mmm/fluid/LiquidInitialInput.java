@@ -12,7 +12,7 @@ import java.util.List;
 final class LiquidInitialInput {
 	private LiquidInitialInput() { }
 	static void restore(FluidDomain domain, FlipParticleState input, FluidMaterialRegistry palette,
-	                    int[] materials, List<ChemicalMixtureRecord> mixtures, byte[] indicated,
+	                    int[] materials, List<ChemicalMixtureRecord> mixtures,
 	                    ChemicalRegistry chemistry) {
 		input.requireCompatible(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize());
 		CellRemapMicroTopology.requireRestoreCapacity(input);
@@ -30,8 +30,7 @@ final class LiquidInitialInput {
 			int material = materials == null ? 0 : materials[p];
 			if (palette != null) palette.material(material);
 			additions.add(new LiquidCellInventory.Stock(new LiquidCellInventory.Key(cell, material, support),
-					SignedDyadic.of(points[4 * p + 3]), masses[p], mixtures == null ? null : mixtures.get(p), 0,
-					indicated != null && indicated[p] != 0));
+					SignedDyadic.of(points[4 * p + 3]), masses[p], mixtures == null ? null : mixtures.get(p), 0));
 			double halfMass = .5 * mmm.units.Mass.kilograms(masses[p]);
 			momentum[0][domain.domainFlowFields.xFaceIndex(x, y, z)] += halfMass * velocity[3 * p];
 			momentum[0][domain.domainFlowFields.xFaceIndex(x + 1, y, z)] += halfMass * velocity[3 * p];

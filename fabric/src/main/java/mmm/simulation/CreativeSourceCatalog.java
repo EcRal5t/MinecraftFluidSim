@@ -92,7 +92,7 @@ final class CreativeSourceCatalog {
 		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry, amounts,
 				Math.subtractExact(mmm.units.Mass.fromKilograms(mass), exact.speciesMassUnits(registry)));
 		ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
-				carrier.id(), false, 1.0, mmm.units.Mass.fromKilograms(mass), mixture.massResidualUnits(), mixture.stableAmounts(registry))));
+				carrier.id(), 1.0, mmm.units.Mass.fromKilograms(mass), mixture.massResidualUnits(), mixture.stableAmounts(registry))));
 		ItemStack stack = world.bindActualContainerProfile(ContainerItemStacks.toStack(
 				ChemicalContents.fromLedger(ledger, registry, LIQUID_AMOUNT)));
 		world.attachLiquidThermalContents(stack, temperature(descriptor));

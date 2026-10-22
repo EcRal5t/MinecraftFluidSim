@@ -22,6 +22,7 @@ public final class M7ChemistryValidation {
 		validateInvalidDefinitions();
 		validateStrongElectrolytes();
 		validateAcidBase();
+		validatePhDisplayPhases();
 		validateNoDrift(fast ? 1_000 : 10_000);
 		System.out.printf("M7 chemistry core gate passed: fingerprint=%s iterations=%d species=%d reactions=%d%n",
 				BuiltinChemicalDefinitions.REGISTRY.fingerprint(), fast ? 1_000 : 10_000,
@@ -29,34 +30,77 @@ public final class M7ChemistryValidation {
 				BuiltinChemicalDefinitions.REGISTRY.reactions().size());
 	}
 
+	private static void validatePhDisplayPhases() {
+		var materials = new mmm.fluid.FluidMaterialRegistry(mmm.fluid.BuiltinFluidMaterials.DEFAULT_PALETTE);
+		var domain = new mmm.fluid.FluidDomain(4, 4, 4,
+				new mmm.fluid.FluidSolverConfig(.5F, 1000, 0, .01F, 64, 1e-6F, .002F));
+		domain.bindMaterialRegistry(materials);
+		domain.setVolume(1, 1, 1, .25F);
+		domain.bindChemistry(BuiltinChemicalDefinitions.REGISTRY);
+		int cells = 64, cell = 21;
+		int water = materials.handle(mmm.fluid.BuiltinFluidMaterials.WATER.id());
+		int oil = materials.handle(mmm.fluid.BuiltinFluidMaterials.OIL.id());
+		int waterOffset = materials.phaseHandle(water) * cells + cell;
+		int oilOffset = materials.phaseHandle(oil) * cells + cell;
+		byte[] neutral = domain.copyChemicalDisplaySnapshot().copyPh();
+		check(Byte.toUnsignedInt(neutral[waterOffset]) == 70
+				&& Byte.toUnsignedInt(neutral[oilOffset]) == ChemicalDisplaySnapshot.PH_NO_DATA,
+				"Neutral aqueous pH and absent oil did not keep distinct display codes");
+		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H_PLUS, 1_000_000L,
+				BuiltinChemicalDefinitions.CL_MINUS, 1_000_000L));
+		byte acid = domain.copyChemicalDisplaySnapshot().copyPh()[waterOffset];
+		check(Byte.toUnsignedInt(acid) < 70, "Acidic water did not produce an acidic pH code");
+		check(domain.tryInsertExactVolume(1, 1, 1, .25F, 0, oil).transferred(),
+				"Oil-water display fixture could not insert its oil inventory");
+		byte[] mixed = domain.copyChemicalDisplaySnapshot().copyPh();
+		check(mixed[waterOffset] == acid
+				&& Byte.toUnsignedInt(mixed[oilOffset]) == ChemicalDisplaySnapshot.PH_NO_DATA,
+				"Oil diluted the aqueous pH denominator or acquired an aqueous pH value");
+
+		var builtin = BuiltinChemicalDefinitions.REGISTRY;
+		var omitted = java.util.Set.of(BuiltinChemicalDefinitions.H_PLUS, BuiltinChemicalDefinitions.OH_MINUS);
+		var waterSpecies = builtin.species().stream().filter(value -> !omitted.contains(value.id())).toList();
+		var originalPhase = builtin.phase(builtin.phaseHandleForMaterial("mmm:water"));
+		var waterPhase = new ChemicalPhaseDefinition(originalPhase.id(), originalPhase.materialId(),
+				originalPhase.allowedSpecies().stream().filter(value -> !omitted.contains(value)).toList(),
+				originalPhase.defaultConcentrationMolPerCubicMeter());
+		var saltReactions = builtin.reactions().stream().filter(value -> value.phaseId().equals(waterPhase.id())
+				&& value.reactants().keySet().stream().noneMatch(omitted::contains)
+				&& value.products().keySet().stream().noneMatch(omitted::contains)).toList();
+		var partial = new mmm.fluid.FluidDomain(4, 4, 4, domain.config());
+		partial.bindMaterialRegistry(new mmm.fluid.FluidMaterialRegistry(List.of(mmm.fluid.BuiltinFluidMaterials.WATER)));
+		partial.setVolume(1, 1, 1, .25F);
+		partial.bindChemistry(new ChemicalRegistry(waterSpecies, List.of(waterPhase), saltReactions));
+		check(Byte.toUnsignedInt(partial.copyChemicalDisplaySnapshot().copyPh()[cell]) == ChemicalDisplaySnapshot.PH_NO_DATA,
+				"A registry without acid/base species acquired a neutral pH display value");
+	}
+
 	private static void validateDefaultParcels() {
 		var registry = BuiltinChemicalDefinitions.REGISTRY;
 		var store = new RegionChemistry(registry,1);
-		var original = store.defaultRecord("mmm:water", 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0), false);
-		check(original == store.defaultRecord(new String("mmm:water"), 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0), false),
+		var original = store.defaultRecord("mmm:water", 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0));
+		check(original == store.defaultRecord(new String("mmm:water"), 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0)),
 				"identical default inputs did not reuse immutable inventory");
 		String[] materials = {"mmm:water", "mmm:water", "mmm:water", "mmm:water", "mmm:oil", "mmm:mercury"};
 		for (int index = 0; index < materials.length; index++) {
 			float volume = index == 0 ? Math.nextUp(0.125F) : 0.125F;
 			float size = index == 1 ? Math.nextUp(1.0F) : 1.0F;
 			double mass = index == 2 ? Math.nextUp(125.0) : 125.0;
-			boolean indicator = index == 3;
-			var actual = store.defaultRecord(materials[index], volume, size, mmm.units.SolverUnitScale.forCellSize(size).massUnitsForNormalized(mass), indicator);
+			var actual = store.defaultRecord(materials[index], volume, size, mmm.units.SolverUnitScale.forCellSize(size).massUnitsForNormalized(mass));
 			var fresh = new RegionChemistry(registry,1)
-					.defaultRecord(materials[index], volume, size, mmm.units.SolverUnitScale.forCellSize(size).massUnitsForNormalized(mass), indicator);
+					.defaultRecord(materials[index], volume, size, mmm.units.SolverUnitScale.forCellSize(size).massUnitsForNormalized(mass));
 			check(actual.equals(fresh), "default reuse mixed an input field at index " + index);
 		}
-		var unresolved = store.defaultRecord("mmm:water", Math.scalb(1.0,-100), 1.0F, 1L, false);
+		var unresolved = store.defaultRecord("mmm:water", Math.scalb(1.0,-100), 1.0F, 1L);
 		check(unresolved.entryCount() == 0 && unresolved.massResidualUnits() == 1L,
 				"Unresolved default species did not retain actual integer mass");
-		var tail = store.defaultRecord("mmm:water", Float.MIN_VALUE, 1.0F, 0L, false);
+		var tail = store.defaultRecord("mmm:water", Float.MIN_VALUE, 1.0F, 0L);
 		check(tail.entryCount() == 0 && tail.massResidualUnits() == 0,
 				"Zero-mass geometric tail acquired physical composition");
-		expectFailure(() -> store.defaultRecord("mmm:oil", 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0), true), "default reuse accepted a rejected indicator");
-		expectFailure(() -> store.defaultRecord("mmm:missing", 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0), false), "default reuse accepted an unknown material");
-		expectFailure(() -> store.defaultRecord("mmm:water", Float.NaN, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0), false), "default reuse accepted non-finite volume");
-		expectFailure(() -> store.defaultRecord("mmm:water", 0.125F, Float.POSITIVE_INFINITY, mmm.units.SolverUnitScale.forCellSize(Float.POSITIVE_INFINITY).massUnitsForNormalized(125.0), false), "default reuse accepted non-finite cell size");
-		expectFailure(() -> store.defaultRecord("mmm:water", 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(Double.NaN), false), "default reuse accepted non-finite mass");
+		expectFailure(() -> store.defaultRecord("mmm:missing", 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0)), "default reuse accepted an unknown material");
+		expectFailure(() -> store.defaultRecord("mmm:water", Float.NaN, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(125.0)), "default reuse accepted non-finite volume");
+		expectFailure(() -> store.defaultRecord("mmm:water", 0.125F, Float.POSITIVE_INFINITY, mmm.units.SolverUnitScale.forCellSize(Float.POSITIVE_INFINITY).massUnitsForNormalized(125.0)), "default reuse accepted non-finite cell size");
+		expectFailure(() -> store.defaultRecord("mmm:water", 0.125F, 1.0F, mmm.units.SolverUnitScale.forCellSize(1.0F).massUnitsForNormalized(Double.NaN)), "default reuse accepted non-finite mass");
 	}
 
 	private static void validateRationalsAndCodec() {
@@ -224,7 +268,7 @@ public final class M7ChemistryValidation {
 		ChemicalMixtureRecord mixture = ChemicalMixtureRecord.fromStableAmounts(registry,
 				Map.of(BuiltinChemicalDefinitions.H2O, ChemicalLimits.QUANTA_PER_MOL), mmm.units.Mass.fromKilograms(856.0));
 		ChemicalTransferLedger ledger = new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
-				"mmm:water", true, 1.0, mmm.units.Mass.fromKilograms(1_000.0),
+				"mmm:water", 1.0, mmm.units.Mass.fromKilograms(1_000.0),
 				mixture.massResidualUnits(), mixture.stableAmounts(registry))));
 		byte[] encoded = ChemicalAuditLedgerCodec.encode(ledger, ChemicalTransferLedger.EMPTY);
 		ChemicalAuditLedgerCodec.AuditLedgers decoded = ChemicalAuditLedgerCodec.decode(encoded);
@@ -302,7 +346,7 @@ public final class M7ChemistryValidation {
 		List<ChemicalSpecies> all = List.of(h, o, hAlias, hAlias2, chargedH, heavyH);
 		ChemicalPhaseDefinition phase = new ChemicalPhaseDefinition("test:phase", "test:material",
 				List.of("test:h", "test:o", "test:h_alias", "test:h_alias2", "test:charged_h", "test:heavy_h"),
-				Map.of("test:h", ExactRational.ONE), false);
+				Map.of("test:h", ExactRational.ONE));
 		expectFailure(() -> new ChemicalRegistry(List.of(h, h), List.of(phase), List.of()), "duplicate species accepted");
 		ChemicalReaction unbalanced = new ChemicalReaction("test:bad", ChemicalReaction.Kind.INSTANTANEOUS,
 				"test:phase", Map.of("test:h", 1), Map.of("test:o", 1), ExactRational.ZERO);

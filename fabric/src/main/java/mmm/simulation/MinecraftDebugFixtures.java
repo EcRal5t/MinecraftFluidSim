@@ -215,7 +215,7 @@ public final class MinecraftDebugFixtures {
 			var stock = stocks.get(marker);
 			var solution = mmm.chemistry.ChemicalMixtureRecord.fromSolutesAndSolventMass(registry,
 					java.util.Map.of(acid ? "mmm:hcl" : "mmm:naoh", reagentMicromoles), "mmm:h2o", stock.massUnits());
-			domain.setMarkerChemical(marker, solution.stableAmounts(registry), acid);
+			domain.setMarkerChemical(marker, solution.stableAmounts(registry));
 		}
 		regions.selected().setPaused(true);
 		sendSnapshot(player.level());

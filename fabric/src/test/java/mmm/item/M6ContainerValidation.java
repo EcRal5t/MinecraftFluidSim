@@ -165,7 +165,7 @@ public final class M6ContainerValidation {
 				"test:thermal_offset/water", BuiltinChemicalDefinitions.H2O, solution.id(), ExactRational.of(12))),
 				List.of(), BuiltinChemicalDefinitions.REGISTRY.fingerprint(), "");
 		ChemicalContents source = new ChemicalContents(BuiltinChemicalDefinitions.REGISTRY.fingerprint(),
-				ChemicalLimits.QUANTA_PER_MOL, List.of(new ChemicalContents.Group("mmm:water", true, BUCKET,
+				ChemicalLimits.QUANTA_PER_MOL, List.of(new ChemicalContents.Group("mmm:water", BUCKET,
 				mmm.units.Mass.fromKilograms(18.0), mmm.units.Mass.fromKilograms(0.0), List.of(
 				new ChemicalContents.SpeciesAmount(BuiltinChemicalDefinitions.H2O, 1_000 * ChemicalLimits.QUANTA_PER_MOL)))));
 		ChemicalContents.Split inventory = source.split(333_333_333L, BuiltinChemicalDefinitions.REGISTRY);

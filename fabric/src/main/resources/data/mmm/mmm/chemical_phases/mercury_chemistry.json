@@ -1,1 +1,1 @@
-{"material":"mmm:mercury","allowed_species":["mmm:hg"],"default_concentration_mol_per_m3":{"mmm:hg":"68000"},"accepts_indicator":false}
+{"material":"mmm:mercury","allowed_species":["mmm:hg"],"default_concentration_mol_per_m3":{"mmm:hg":"68000"}}

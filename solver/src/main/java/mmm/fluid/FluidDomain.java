@@ -46,7 +46,6 @@ public final class FluidDomain {
 	static final int PARTICLES_PER_FULL_CELL = 8;
 	static final float PARTICLE_VOLUME = 1.0F / PARTICLES_PER_FULL_CELL;
 	static final int NO_PHASE = Integer.MIN_VALUE;
-	static final int INDICATOR_AIM_SNAP_CELLS = 2;
 	final int sizeX;
 	final int sizeY;
 	final int sizeZ;
@@ -304,7 +303,7 @@ public final class FluidDomain {
 	public ExactMixtureTransfer tryExtractExactMixture(
 			int centerX, int centerY, int centerZ, float volume, int maxRadius
 	) { return domainInventory.tryExtractExactMixture(centerX, centerY, centerZ, volume, maxRadius); }
-	public void setMarkerChemical(int ordinal, Map<String, Long> stableAmounts, boolean indicator) { domainCollision.setMarkerChemical(ordinal, stableAmounts, indicator); }
+	public void setMarkerChemical(int ordinal, Map<String, Long> stableAmounts) { domainCollision.setMarkerChemical(ordinal, stableAmounts); }
 	public int materialHandle(String materialId) { return domainCollision.materialHandle(materialId); }
 	public void restoreParticleState(FlipParticleState state) { domainCollision.restoreParticleState(state); }
 	public void restoreMaterialParticleState(FlipMaterialParticleState state) { domainCollision.restoreMaterialParticleState(state); }
@@ -352,9 +351,6 @@ public final class FluidDomain {
 	public RegionChemistry chemistry() { return domainCapabilities.chemistry(); }
 	public ChemicalDisplaySnapshot copyChemicalDisplaySnapshot() { return domainCapabilities.copyChemicalDisplaySnapshot(); }
 	public ChemicalTransferLedger chemicalLedgerForMarkerRange(int fromInclusive, int toExclusive) { return domainCapabilities.chemicalLedgerForMarkerRange(fromInclusive, toExclusive); }
-	public IndicatorEditResult editIndicatorFloodFill(
-			int startX, int startY, int startZ, boolean indicated, int maxScannedCells, double maximumAddedVolumeCubicMeters
-	) { return domainCapabilities.editIndicatorFloodFill(startX, startY, startZ, indicated, maxScannedCells, maximumAddedVolumeCubicMeters); }
 	public void bindChemistry(ChemicalRegistry registry) { domainCapabilities.bindChemistry(registry); }
 	public void bindThermal(
 			ThermalRegistry registry, FluidMaterialRegistry liquidRegistry, double initialTemperatureK
@@ -745,14 +741,6 @@ public final class FluidDomain {
 	}
 	public record MaterialDisplacement(float volume, List<MaterialPortion> portions, double internalEnergy) { }
 	public record MaterialPortion(int materialHandle, double volume, long massUnits) { }
-	record IndicatorAimSeed(int cell, int scannedCells, String failure) { }
-	public record IndicatorEditResult(
-			boolean accepted, int scannedCells, int changedMarkers, double affectedVolumeCubicMeters, String failure
-	) {
-		static IndicatorEditResult rejected(String failure) {
-			return new IndicatorEditResult(false, 0, 0, 0.0, failure);
-		}
-	}
 	public record ThermalContactRequest(
 			int ordinal, int cellX, int cellY, int cellZ, double conductanceWPerK
 	) {

@@ -112,13 +112,11 @@ final class ControllerInventoryDurabilityValidation {
 			double acidEnergy = reagentEnergy(registries, acid);
 			mutate(region, persistence, candidate -> check(candidate.tryInsertExactChemical(
 					7, 7, 7, acid, 6, true, acidEnergy).transferred(), "first acid bucket was rejected"));
-			mutate(region, persistence, candidate -> check(candidate.editIndicatorFloodFill(
-					7, 7, 7, true, 512, 100.0).accepted(), "acid indicator edit was rejected"));
 			mutate(region, persistence, candidate -> check(candidate.tryInsertExactChemical(
-					7, 7, 7, acid, 6, true, acidEnergy).transferred(), "post-indicator acid bucket was rejected"));
+					7, 7, 7, acid, 6, true, acidEnergy).transferred(), "second acid bucket was rejected"));
 			for (int step = 0; step < 20; step++) stepAndPublish(region, persistence, true);
 			settlePendingVolumeWork(region, persistence);
-			restart(region, persistence, "acid/indicator/post-acid phase replay");
+			restart(region, persistence, "acid/second-acid phase replay");
 
 			int sand = registries.granular().materialHandle(BuiltinGranularDefinitions.FINE_SAND);
 			double sandMass = registries.granular().material(sand).referenceDensity();
@@ -269,7 +267,7 @@ final class ControllerInventoryDurabilityValidation {
 		double bucketVolume = 1.0 / SolverUnitScale.forCellSize(
 				productionConfig().cellSize()).cubicMetersPerNormalizedVolume();
 		return new ChemicalTransferLedger(List.of(new ChemicalTransferLedger.Group(
-				BuiltinFluidMaterials.WATER.id(), false, bucketVolume, mmm.units.Mass.fromKilograms(mass),
+				BuiltinFluidMaterials.WATER.id(), bucketVolume, mmm.units.Mass.fromKilograms(mass),
 				mixture.massResidualUnits(), mixture.stableAmounts(registries.chemical()))));
 	}
 
@@ -315,9 +313,8 @@ final class ControllerInventoryDurabilityValidation {
 				state.insertAcid(); state.insertBase(); state.step(true);
 			}
 		});
-		runScenario("indicator acid-base precipitation", registries, state -> {
+		runScenario("acid-base precipitation", registries, state -> {
 			for (int bucket = 0; bucket < 15; bucket++) { state.insertAcid(); state.steps(true, 2); }
-			state.indicator(true);
 			for (int bucket = 0; bucket < 15; bucket++) { state.insertBase(); state.steps(true, 2); }
 			state.steps(true, 180);
 		});
@@ -341,8 +338,8 @@ final class ControllerInventoryDurabilityValidation {
 			state.insertAcid(4); state.insertBase(4); state.steps(true, 12); state.clear();
 			state.vent(); state.insertAcid(2); state.insertBase(2); state.steps(true, 8);
 		});
-		runScenario("reported acid-indicator-acid", registries, state -> {
-			state.insertAcid(); state.indicator(true); state.insertAcid(); state.steps(true, 20);
+		runScenario("repeated acid insertion", registries, state -> {
+			state.insertAcid(); state.insertAcid(); state.steps(true, 20);
 		});
 		runScenario("reported vent-water-resume", registries, state -> {
 			state.vent(); state.insertWater(); state.steps(true, 20);
@@ -357,8 +354,8 @@ final class ControllerInventoryDurabilityValidation {
 		runScenario("repeated-vent", registries, state -> {
 			state.vent(); state.vent(); state.step(true);
 		});
-		runScenario("vacuum-acid-indicator-phase", registries, state -> {
-			state.vent(); state.insertAcid(); state.indicator(true); state.step(true);
+		runScenario("vacuum-acid-phase", registries, state -> {
+			state.vent(); state.insertAcid(); state.step(true);
 		});
 		runScenario("vacuum-granular-motion", registries, state -> {
 			state.vent(); state.insertSand(); state.steps(false, 4);
@@ -384,9 +381,9 @@ final class ControllerInventoryDurabilityValidation {
 			state.insertAcid(6); state.insertBase(6); state.steps(true, 80);
 			state.insertBase(4); state.steps(true, 80);
 		});
-		runScenario("indicator toggled during precipitation", registries, state -> {
-			state.insertAcid(6); state.indicator(true); state.insertBase(3); state.steps(true, 10);
-			state.indicator(false); state.insertBase(3); state.steps(true, 80);
+		runScenario("staged base insertion during precipitation", registries, state -> {
+			state.insertAcid(6); state.insertBase(3); state.steps(true, 10);
+			state.insertBase(3); state.steps(true, 80);
 		});
 		runScenario("precipitate vent and reacidify", registries, state -> {
 			state.insertAcid(6); state.insertBase(6); state.steps(true, 40); state.settle();
@@ -394,7 +391,7 @@ final class ControllerInventoryDurabilityValidation {
 		});
 		runScenario("precipitate clear vacuum rebuild", registries, state -> {
 			state.insertAcid(6); state.insertBase(6); state.steps(true, 60); state.clear(); state.vent();
-			state.insertAcid(4); state.indicator(true); state.insertBase(4); state.steps(true, 60);
+			state.insertAcid(4); state.insertBase(4); state.steps(true, 60);
 		});
 		runScenario("mercury and precipitate long settlement", registries, state -> {
 			state.insertMercury(); state.insertAcid(5); state.insertBase(5); state.steps(true, 120);
@@ -771,13 +768,8 @@ final class ControllerInventoryDurabilityValidation {
 			roundTrip();
 			return true;
 		}
-		void indicator(boolean value) {
-			var edit = domain.editIndicatorFloodFill(injectX, injectY, injectZ, value, cellBudget(), 100.0);
-			check(edit.accepted(), "normal-play indicator edit was rejected: " + edit.failure()
-					+ ", liquid=" + domain.totalVolumeExact() + ", markers=" + domain.particleCount()
-					+ ", solidSvq=" + domain.totalGranularSolidVolumeSvq());
-			roundTrip();
-		}
+
+
 		void extractWater() {
 			if (!settle()) return;
 			check(domain.tryExtractExactVolume(injectX, injectY, injectZ, 8.0F, 6).transferred(),
@@ -1828,14 +1820,6 @@ final class ControllerInventoryDurabilityValidation {
 			}
 			return "skip(noCanonicalLiquid)";
 		}
-		if (pick < 87) {
-			var edit = state.domain.editIndicatorFloodFill(7, 7, 7, random.nextBoolean(), 512, 100.0);
-			if (edit.accepted()) {
-				state.roundTrip();
-				return "indicator";
-			}
-			return "skip(indicator:" + edit.failure() + ")";
-		}
 		if (pick < 91) return state.clear() ? "clear" : "skip(pendingSettlementRejected)";
 		if (pick < 96) return state.vent() ? "vent" : "skip(pendingSettlementRejected)";
 		if (!state.settle()) return "skip(pendingSettlementRejected)";
@@ -2017,15 +2001,6 @@ final class ControllerInventoryDurabilityValidation {
 				return state.sleepWake(random);
 			case "blockAndRetry":
 				return state.blockAndRetry(random);
-			case "indicator": {
-				var edit = state.domain.editIndicatorFloodFill(state.injectX, state.injectY, state.injectZ,
-						random.nextBoolean(), state.cellBudget(), 100.0);
-				if (edit.accepted()) {
-					state.roundTrip();
-					return "indicator";
-				}
-				return "skip(indicator:" + edit.failure() + ")";
-			}
 			case "clear":
 				return state.clear() ? "clear" : "skip(pendingSettlementRejected)";
 			case "vent":

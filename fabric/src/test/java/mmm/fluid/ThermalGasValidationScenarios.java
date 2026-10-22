@@ -1625,9 +1625,9 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		if (insertion == 1) return domain.domainInventory.tryInsertExactMixture(0, 0, 0,
 				List.of(new FluidDomain.MaterialPortion(0, volume, mmm.units.SolverUnitScale.forCellSize(domain.config().cellSize()).massUnitsForNormalized(volume * 1000))), 0, true, 1.001).transferred();
 		if (insertion == 2) return domain.addVolumeNearBudgeted(0, 0, 0, volume, 0).addedVolume() == volume;
-		var record = domain.chemistry.defaultRecord(BuiltinFluidMaterials.WATER.id(), volume, .5F, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(volume * 1000), false);
+		var record = domain.chemistry.defaultRecord(BuiltinFluidMaterials.WATER.id(), volume, .5F, mmm.units.SolverUnitScale.forCellSize(.5F).massUnitsForNormalized(volume * 1000));
 		var ledger = mmm.chemistry.ChemicalTransferLedger.builder(domain.chemistry.registry())
-				.add(BuiltinFluidMaterials.WATER.id(), false, volume, mmm.units.Mass.fromKilograms(volume * 125), record).build();
+				.add(BuiltinFluidMaterials.WATER.id(), volume, mmm.units.Mass.fromKilograms(volume * 125), record).build();
 		return domain.domainInventory.tryInsertExactChemical(0, 0, 0, ledger, 0, true, 1.001).transferred();
 	}
 
@@ -2411,7 +2411,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		domain.bindChemistry(chemistry);
 		// About 72 kg of volatile water and 23 g of sodium fit the actual 93.75 kg stock.
 		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 4_000_000_000L,
-				BuiltinChemicalDefinitions.NA_PLUS, 1_000_000L), false);
+				BuiltinChemicalDefinitions.NA_PLUS, 1_000_000L));
 		domain.bindThermal(thermal, liquids, 500);
 		var initial = domain.exportChemicalParticleState();
 		long initialMass = domain.totalMassUnits();
@@ -2554,7 +2554,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			if (y != 1 || z != 1 || x == 0) domain.setSolid(x, y, z, true);
 		restorePhaseTestCarriers(domain, liquids, new float[]{.1F}, new int[1]);
 		domain.bindChemistry(chemistry);
-		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1L), false);
+		domain.setMarkerChemical(0, Map.of(BuiltinChemicalDefinitions.H2O, 1L));
 		domain.bindGasRegistry(gasRegistry); domain.bootstrapGasState(chemistry.fingerprint());
 		domain.commitOperatorVentSealedGas(domain.planOperatorVentSealedGas());
 		var phase = new GasLiquidPhaseModel(thermal, gasRegistry);
@@ -2636,7 +2636,7 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 		var waterStock = domain.liquidCells.physicalStocks().stream()
 				.filter(stock -> stock.key().material() == 0).findFirst().orElseThrow();
 		domain.setMarkerChemical(domain.liquidCells.physicalOrdinalOf(waterStock.key()),
-				Map.of(BuiltinChemicalDefinitions.H2O, maximum == 4 ? 4L : 1L), false);
+				Map.of(BuiltinChemicalDefinitions.H2O, maximum == 4 ? 4L : 1L));
 		domain.bindGasRegistry(BuiltinGasDefinitions.createRegistry());
 		domain.bootstrapGasState("");
 		domain.commitOperatorVentSealedGas(domain.planOperatorVentSealedGas());

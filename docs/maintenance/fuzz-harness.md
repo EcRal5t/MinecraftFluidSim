@@ -75,7 +75,6 @@
 | `applicationStep` | — | 经 `RegionApplicationService` 步进，并验证世代令牌单次有效 |
 | `sleepWake` | — | 力学休眠与热休眠各自闩锁后分别唤醒 |
 | `blockAndRetry` | — | 注入 NUMERICAL/PERFORMANCE 可用性阻塞、断言不可步进、清除后断言恢复步进 |
-| `indicator` | — | 泛洪填充指示剂（用 `reservedCellCapacity` 作预算） |
 | `clear` / `vent` | — | 操作者清空 / 排空密封气体 |
 | `settle` | — | 结算未决相位功 |
 
@@ -145,7 +144,7 @@ job 及其子步数）。`picks` token 提供逐动作耗时与子步数，用�
 
 - 流体求解：压力投影、自由面、FLIP marker 传递、cut-cell 几何、多材料界面（`FluidDomain` 的 step / stepMechanicsOnly / 热学轴）。
 - 颗粒：力学、沉积、压实回滚、孔隙水、固液/相变转移（注入、抽取、相变步）。
-- 化学：反应引擎、量子分辨率、指示剂泛洪。
+- 化学：反应引擎与量子分辨率。
 - 热学：导热、相变、气相热学、温度与斜坡（未含有限热设备对象）。
 - 气体：腔体扫描、拓扑 lineage、孔流、压力、排空、清空、持久化同步。
 - 持久化：`RegionRepositoryAdapter` 的 checkpoint / unload / restore / staged lifecycle checkpoint / committed target adoption / `loadMetadata` 冷启动。

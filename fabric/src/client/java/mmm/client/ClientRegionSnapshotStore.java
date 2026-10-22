@@ -81,7 +81,7 @@ final class ClientRegionSnapshotStore {
 			case ACCEPT_SNAPSHOT -> {
 				FluidMaterialRenderSnapshot snapshot = payload.toRenderSnapshot();
 				latestMaterials.put(payload.regionId(), new MaterialFrame(
-						payload, snapshot, surfaceMesh(payload, snapshot), null
+						payload, snapshot, surfaceMesh(payload, snapshot), null, null
 				));
 			}
 			case REJECT_PROTOCOL -> MmmMod.LOGGER.error(
@@ -101,7 +101,7 @@ final class ClientRegionSnapshotStore {
 				latestMaterials.put(material.regionId(), new MaterialFrame(
 						material, snapshot, surfaceMesh(material, snapshot), new ChemicalFrame(
 								payload, payload.topSpecies(), payload.topWeights(), payload.residualWeights(),
-								payload.ph(), payload.indicatorFraction())));
+								payload.ph()), null));
 			}
 			case REJECT_PROTOCOL -> MmmMod.LOGGER.error(
 					"Discarded Matter, Motion & Mechanics chemical snapshot layout {} after negotiation", payload.layout());
@@ -122,9 +122,9 @@ final class ClientRegionSnapshotStore {
 				FluidChemicalSnapshotPayload chemicalPayload = payload.toChemicalPayload();
 				ChemicalFrame chemical = chemicalPayload == null ? null : new ChemicalFrame(chemicalPayload,
 						chemicalPayload.topSpecies(), chemicalPayload.topWeights(), chemicalPayload.residualWeights(),
-						chemicalPayload.ph(), chemicalPayload.indicatorFraction());
+						chemicalPayload.ph());
 				MaterialFrame materialFrame = new MaterialFrame(material, snapshot,
-						surfaceMesh(material, snapshot), chemical);
+						surfaceMesh(material, snapshot), chemical, null);
 				latestGranular.put(material.regionId(), new GranularFrame(payload, materialFrame,
 						payload.depositBulkFill(), payload.depositPorosity(), payload.depositTopMaterial()));
 			}
@@ -154,9 +154,9 @@ final class ClientRegionSnapshotStore {
 						? payload.chemicalLayer() : granular.toChemicalPayload();
 				ChemicalFrame chemical = chemicalPayload == null ? null : new ChemicalFrame(chemicalPayload,
 						chemicalPayload.topSpecies(), chemicalPayload.topWeights(), chemicalPayload.residualWeights(),
-						chemicalPayload.ph(), chemicalPayload.indicatorFraction());
+						chemicalPayload.ph());
 				MaterialFrame materialFrame = new MaterialFrame(material, snapshot,
-						surfaceMesh(material, snapshot), chemical);
+						surfaceMesh(material, snapshot), chemical, payload.cellTemperatureQ());
 				if (granular == null) {
 					latestMaterials.put(material.regionId(), materialFrame); latestGranular.remove(material.regionId());
 				} else {
@@ -195,6 +195,10 @@ final class ClientRegionSnapshotStore {
 				.filter(payload -> payload.dimension().equals(context.level().dimension().identifier()))
 				.toList();
 		synchronized (this) {
+			FluidDisplaySettings.View view = FluidDisplaySettings.INSTANCE.view();
+			latestMaterials.replaceAll((id, frame) -> frame.recolor(view));
+			latestGranular.replaceAll((id, frame) -> new GranularFrame(frame.payload(), frame.material().recolor(view),
+					frame.bulkFill(), frame.porosity(), frame.topMaterial()));
 			extractedMaterials = latestMaterials.values().stream()
 					.filter(frame -> frame.payload().dimension().equals(context.level().dimension().identifier()))
 					.toList();
@@ -259,16 +263,27 @@ final class ClientRegionSnapshotStore {
 			FluidMaterialRenderSnapshot snapshot,
 			FluidMaterialSurfaceMesher.Mesh mesh,
 			ChemicalFrame chemical,
+			short[] temperatures,
+			FluidDisplaySettings.View view,
 			List<MaterialSurfaceGeometry.ColoredTriangle> triangles
 	) {
 		MaterialFrame(FluidMaterialSnapshotPayload payload, FluidMaterialRenderSnapshot snapshot,
-				FluidMaterialSurfaceMesher.Mesh mesh, ChemicalFrame chemical) {
-			this(payload, snapshot, mesh, chemical, MaterialSurfaceGeometry.prepare(payload, snapshot, mesh, chemical));
+				FluidMaterialSurfaceMesher.Mesh mesh, ChemicalFrame chemical, short[] temperatures) {
+			this(payload, snapshot, mesh, chemical, temperatures, FluidDisplaySettings.INSTANCE.view());
+		}
+		MaterialFrame(FluidMaterialSnapshotPayload payload, FluidMaterialRenderSnapshot snapshot,
+				FluidMaterialSurfaceMesher.Mesh mesh, ChemicalFrame chemical, short[] temperatures,
+				FluidDisplaySettings.View view) {
+			this(payload, snapshot, mesh, chemical, temperatures, view,
+					MaterialSurfaceGeometry.prepare(payload, snapshot, mesh, chemical, temperatures, view));
+		}
+		MaterialFrame recolor(FluidDisplaySettings.View next) {
+			return view.equals(next) ? this : new MaterialFrame(payload, snapshot, mesh, chemical, temperatures, next);
 		}
 	}
 	record ChemicalFrame(
 			FluidChemicalSnapshotPayload payload, short[] topSpecies, byte[] topWeights,
-			byte[] residualWeights, byte[] ph, byte[] indicatorFraction
+			byte[] residualWeights, byte[] ph
 	) { }
 	record GranularFrame(
 			FluidGranularSnapshotPayload payload, MaterialFrame material,

@@ -18,7 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-/** Presentation-only controller console. Every button submits the last server-issued opaque token. */
+/** Controller status, server actions and player-local fluid display controls. */
 public final class ControllerConsoleScreen extends Screen {
 	private final ControllerSummary summary;
 	private final BlockPos controllerPosition;
@@ -57,6 +57,9 @@ public final class ControllerConsoleScreen extends Screen {
 		int lifecycleTotal = lifecycleWidth * 4 + gap * 3;
 		int lifecycleLeft = (width - lifecycleTotal) / 2;
 		int lifecycleY = height - 54;
+		addRenderableWidget(Button.builder(Component.translatable("screen.mmm.display.open"),
+				button -> minecraft.setScreenAndShow(new FluidDisplayScreen(this)))
+				.bounds(width / 2 - 100, height - 78, 200, 20).build());
 		addLifecycleButton(lifecycleLeft, lifecycleY, lifecycleWidth, "empty", LifecycleOperation.EMPTY_CONDENSED);
 		addLifecycleButton(lifecycleLeft + lifecycleWidth + gap, lifecycleY, lifecycleWidth,
 				"vent", LifecycleOperation.VENT_SEALED_GAS);
@@ -87,7 +90,7 @@ public final class ControllerConsoleScreen extends Screen {
 			String clipped = font.plainSubstrByWidth(row.getString(), Math.max(80, width - 32));
 			graphics.text(font, clipped, 16, y, 0xd8d8d8, false);
 			y += 12;
-			if (y >= height - 68) break;
+			if (y >= height - 92) break;
 		}
 	}
 

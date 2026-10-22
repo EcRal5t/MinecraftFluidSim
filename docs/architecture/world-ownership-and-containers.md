@@ -144,7 +144,7 @@ committed registry 记录 region、dimension、generation 和确切 owned block/
 
 - 液体容量使用 `long` 纳体积，1 block volume = 1,000,000,000 nanos。
 - 材料桶保存每个稳定材料的纳体积与独立 kg 质量。
-- 化学桶另外保存 species μmol 整数、quantaPerMol、indicator 和 整数质量余量。
+- 化学桶另外保存 species μmol 整数、quantaPerMol 和整数质量余量。
 - 干颗粒容器使用整数 SVQ、逐材料 kg 质量与可选 solid composition。
 - 热液体另外保存 registry-bound 总内能。
 - 任何非空 MMM actual container 还保存创建它的 world capability profile fingerprint；空容器不伪造 profile 身份。

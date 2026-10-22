@@ -9,27 +9,27 @@ import java.util.List;
 /** Bounded, display-only cell projection. Integer μmol and residual ledgers never leave the server. */
 public final class ChemicalDisplaySnapshot {
 	public static final int TOP_SPECIES = 4;
+	public static final int PH_NO_DATA = 255;
+	public static final int PH_SCALE = 10;
 	private final List<SpeciesDisplay> species;
 	private final short[] topSpecies;
 	private final byte[] topWeights;
 	private final byte[] residualWeights;
 	private final byte[] ph;
-	private final byte[] indicatorFraction;
 
 	private ChemicalDisplaySnapshot(
 			List<SpeciesDisplay> species, short[] topSpecies, byte[] topWeights,
-			byte[] residualWeights, byte[] ph, byte[] indicatorFraction
+			byte[] residualWeights, byte[] ph
 	) {
 		this.species = List.copyOf(species);
 		this.topSpecies = topSpecies.clone();
 		this.topWeights = topWeights.clone();
 		this.residualWeights = residualWeights.clone();
 		this.ph = ph.clone();
-		this.indicatorFraction = indicatorFraction.clone();
 		int cells = residualWeights.length;
 		if (species.isEmpty() || species.size() > ChemicalLimits.MAX_SPECIES
 				|| topSpecies.length != cells * TOP_SPECIES || topWeights.length != cells * TOP_SPECIES
-				|| ph.length != cells || indicatorFraction.length != cells) {
+				|| (cells == 0 ? ph.length != 0 : ph.length % cells != 0)) {
 			throw new IllegalArgumentException("Invalid chemical display field layout");
 		}
 		for (int cell = 0; cell < cells; cell++) {
@@ -46,17 +46,13 @@ public final class ChemicalDisplaySnapshot {
 		}
 	}
 
-	public static ChemicalDisplaySnapshot fromTotals(ChemicalRegistry registry, float cellSize,
-	                                                  long[][] totals, double[] cellVolume, double[] indicatedVolume) {
+	public static ChemicalDisplaySnapshot fromTotals(ChemicalRegistry registry, long[][] totals, byte[] ph) {
 		int cells = totals.length;
 		List<SpeciesDisplay> palette = registry.species().stream()
 				.map(species -> new SpeciesDisplay(species.id(), species.baseArgb())).toList();
 		short[] topSpecies = new short[cells * TOP_SPECIES]; Arrays.fill(topSpecies, (short) -1);
 		byte[] topWeights = new byte[cells * TOP_SPECIES];
-		byte[] residual = new byte[cells], ph = new byte[cells], indicator = new byte[cells];
-		int acid = registry.speciesHandle(BuiltinChemicalDefinitions.H_PLUS);
-		int base = registry.speciesHandle(BuiltinChemicalDefinitions.OH_MINUS);
-		var units = mmm.units.SolverUnitScale.forCellSize(cellSize);
+		byte[] residual = new byte[cells];
 		for (int cell = 0; cell < cells; cell++) {
 			long[] cellTotals = totals[cell];
 			long total = 0L;
@@ -81,15 +77,9 @@ public final class ChemicalDisplaySnapshot {
 			int[] quantized = quantize255(amounts, total, ties);
 			for (int slot = 0; slot < bucketCount - 1; slot++) topWeights[cell * TOP_SPECIES + slot] = (byte) quantized[slot];
 			residual[cell] = (byte) quantized[bucketCount - 1];
-			long difference = Math.abs(cellTotals[acid] - cellTotals[base]);
-			double strength = difference == 0L ? 0.0 : Math.min(7.0,
-					Math.log10(1.0 + (difference / (double) ChemicalLimits.QUANTA_PER_MOL) / (1e-3 * units.cubicMeters(cellVolume[cell]))));
-			double value = cellTotals[acid] > cellTotals[base] ? 7.0 - strength
-					: cellTotals[base] > cellTotals[acid] ? 7.0 + strength : 7.0;
-			ph[cell] = (byte) Math.round(value * 255.0 / 14.0);
-			indicator[cell] = (byte) Math.round(255.0 * indicatedVolume[cell] / cellVolume[cell]);
+
 		}
-		return new ChemicalDisplaySnapshot(palette, topSpecies, topWeights, residual, ph, indicator);
+		return new ChemicalDisplaySnapshot(palette, topSpecies, topWeights, residual, ph);
 	}
 
 	private static int[] quantize255(long[] amounts, long total, int[] ties) {
@@ -111,9 +101,9 @@ public final class ChemicalDisplaySnapshot {
 	public short[] copyTopSpecies() { return topSpecies.clone(); }
 	public byte[] copyTopWeights() { return topWeights.clone(); }
 	public byte[] copyResidualWeights() { return residualWeights.clone(); }
+	/** Phase-major pH in tenths; 255 denotes no applicable aqueous inventory. */
 	public byte[] copyPh() { return ph.clone(); }
-	public byte[] copyIndicatorFraction() { return indicatorFraction.clone(); }
-	public int cells() { return ph.length; }
+	public int cells() { return residualWeights.length; }
 
 	public record SpeciesDisplay(String id, int argb) {
 		public SpeciesDisplay {
