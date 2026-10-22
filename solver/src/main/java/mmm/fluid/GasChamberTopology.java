@@ -31,18 +31,11 @@ final class GasChamberTopology {
 		if (geometry == null) throw new IllegalArgumentException("Gas chamber geometry is missing");
 		var cached=geometry.cachedTopology(sealedExterior);if(cached!=null)return cached;
         var components=geometry.components();int count=components.size();
-        int[] componentIndex=new int[8*cellCount(geometry)];Arrays.fill(componentIndex,-1);
-        for(int index=0;index<count;index++)componentIndex[components.get(index).slot()]=index;
-        int[] parent=new int[count];byte[] rank=new byte[count];
-        for(int index=0;index<count;index++)parent[index]=index;
-        for(var port:geometry.ports())if(port.fullCutConnection())
-            join(parent,rank,componentIndex[componentSlot(geometry,port.first())],componentIndex[componentSlot(geometry,port.second())]);
         boolean[] ambient=new boolean[count];
-        if(!sealedExterior)for(var port:geometry.exteriorPorts())if(port.fullCutConnection())
-            ambient[root(parent,componentIndex[componentSlot(geometry,port.piece())])]=true;
+        int[] parent=connectedComponents(geometry,sealedExterior,ambient);
         int[] minimum=new int[count];Arrays.fill(minimum,Integer.MAX_VALUE);
         for(int index=0;index<count;index++){
-            int owner=root(parent,index);minimum[owner]=Math.min(minimum[owner],components.get(index).minimumPiece());
+            int owner=parent[index];minimum[owner]=Math.min(minimum[owner],components.get(index).minimumPiece());
         }
         long[] roots=new long[count];int nodes=0;
         for(int index=0;index<count;index++)if(parent[index]==index&&!ambient[index])
@@ -50,19 +43,39 @@ final class GasChamberTopology {
         if(nodes>GasLimits.MAX_NODES_PER_REGION)throw new GasTopologyBlockedException("Gas chamber count exceeds its representation budget");
         Arrays.sort(roots,0,nodes);int[] owners=new int[count];
         for(int node=0;node<nodes;node++)owners[(int)roots[node]]=node+1;
-        int[] componentNodes=new int[componentIndex.length];Arrays.fill(componentNodes,-1);
+        int[] componentNodes=new int[8*cellCount(geometry)];Arrays.fill(componentNodes,-1);
+        for(int index=0;index<count;index++)componentNodes[components.get(index).slot()]=owners[parent[index]];
+        var chambers=captureChambers(components,componentNodes,roots,nodes);
+        var result=new GasChamberTopology(geometry,componentNodes,chambers,nodes==0?List.of():connections(geometry,componentNodes,sealedExterior),sealedExterior);
+        geometry.cacheTopology(sealedExterior,result);return result;
+    }
+
+    private static int[] connectedComponents(GasComplementGeometry geometry,boolean sealedExterior,boolean[] ambient) {
+        var components=geometry.components();int count=components.size();
+        int[] componentIndex=new int[8*cellCount(geometry)];Arrays.fill(componentIndex,-1);
+        for(int index=0;index<count;index++)componentIndex[components.get(index).slot()]=index;
+        int[] parent=new int[count];byte[] rank=new byte[count];
+        for(int index=0;index<count;index++)parent[index]=index;
+        for(var port:geometry.ports())if(port.fullCutConnection())
+            join(parent,rank,componentIndex[componentSlot(geometry,port.first())],componentIndex[componentSlot(geometry,port.second())]);
+        for(int index=0;index<count;index++)parent[index]=root(parent,index);
+        if(!sealedExterior)for(var port:geometry.exteriorPorts())if(port.fullCutConnection())
+            ambient[parent[componentIndex[componentSlot(geometry,port.piece())]]]=true;
+        return parent;
+    }
+    private static List<Chamber> captureChambers(List<GasComplementGeometry.Component> components,int[] componentNodes,long[] roots,int nodes) {
+        if(nodes==0)return List.of();
         double[] volumes=new double[nodes+1],errors=new double[nodes+1];
-        for(int index=0;index<count;index++){
-            var component=components.get(index);int node=owners[parent[index]];componentNodes[component.slot()]=node;
+        for(var component:components) {
+            int node=componentNodes[component.slot()];
             volumes[node]+=component.volume();errors[node]+=componentError(component)+Math.ulp(volumes[node]);
         }
         var chambers=new ArrayList<Chamber>(nodes);
-        for(int node=1;node<=nodes;node++){
+        for(int node=1;node<=nodes;node++) {
             double volume=positive(volumes[node],"Gas chamber volume");
             chambers.add(new Chamber(node,(int)(roots[node-1]>>>32),volume,Math.nextUp(errors[node]+Math.ulp(volume))));
         }
-        var result=new GasChamberTopology(geometry,componentNodes,chambers,connections(geometry,componentNodes,sealedExterior),sealedExterior);
-        geometry.cacheTopology(sealedExterior,result);return result;
+        return chambers;
     }
 
 	/** Reuse component membership when the fixed pore graph is unchanged; capacity and orifice areas remain current. */
@@ -72,7 +85,12 @@ final class GasChamberTopology {
         for(int index=0;index<current.size();index++)if(current.get(index).slot()!=old.get(index).slot())return;
         for(boolean sealed:new boolean[]{false,true}) {
             var previous=source.cachedTopology(sealed);if(previous==null)continue;
-            int nodes=previous.chambers.size();int[] minimum=new int[nodes+1];Arrays.fill(minimum,Integer.MAX_VALUE);
+            int nodes=previous.chambers.size();
+            if(nodes==0) {
+                geometry.cacheTopology(sealed,new GasChamberTopology(geometry,previous.componentNodes,List.of(),List.of(),sealed));
+                continue;
+            }
+            int[] minimum=new int[nodes+1];Arrays.fill(minimum,Integer.MAX_VALUE);
             double[] volumes=new double[nodes+1],errors=new double[nodes+1];
             for(var component:current){
                 int node=previous.componentNodes[component.slot()];minimum[node]=Math.min(minimum[node],component.minimumPiece());
@@ -94,14 +112,14 @@ final class GasChamberTopology {
 	private static boolean sameConnections(GasComplementGeometry first,GasComplementGeometry second) {
 		var a=first.ports();var b=second.ports();if(a.size()!=b.size())return false;
 		for(int i=0;i<a.size();i++) {
-			var x=a.get(i);var y=b.get(i);
+			var x=a.get(i);var y=b.get(i);if(x==y)continue;
 			if(x.axis()!=y.axis()||x.fullCutConnection()!=y.fullCutConnection()
 					||componentSlot(first,x.first())!=componentSlot(second,y.first())
 					||componentSlot(first,x.second())!=componentSlot(second,y.second()))return false;
 		}
 		var c=first.exteriorPorts();var d=second.exteriorPorts();if(c.size()!=d.size())return false;
 		for(int i=0;i<c.size();i++) {
-			var x=c.get(i);var y=d.get(i);
+			var x=c.get(i);var y=d.get(i);if(x==y)continue;
 			if(x.axis()!=y.axis()||x.sign()!=y.sign()||x.fullCutConnection()!=y.fullCutConnection()
 					||componentSlot(first,x.piece())!=componentSlot(second,y.piece()))return false;
 		}

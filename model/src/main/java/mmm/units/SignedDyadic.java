@@ -293,6 +293,8 @@ public final class SignedDyadic implements Comparable<SignedDyadic> {
 		long highestExponent = (long) exponent + magnitudeBits - 1;
 		if (highestExponent > 1023) return sign < 0 ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
 		if (highestExponent < -1075) return sign < 0 ? -0.0 : 0.0;
+		// Normal results retain the integer cast's ties-to-even rounding under exact exponent scaling.
+		if (magnitudeBits < Long.SIZE && highestExponent >= Double.MIN_EXPONENT) return Math.scalb((double) compact, exponent);
 		int unitExponent = (int) Math.max(-1074, highestExponent - 52);
 		BigInteger magnitude = significand().abs();
 		int discardedBits = Math.subtractExact(unitExponent, exponent);

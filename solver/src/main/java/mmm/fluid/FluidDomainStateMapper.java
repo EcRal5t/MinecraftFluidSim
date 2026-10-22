@@ -2,7 +2,6 @@ package mmm.fluid;
 
 import mmm.inventory.LiquidCellInventory;
 
-import mmm.fluid.air.GasStateSnapshot;
 import mmm.granular.GranularStateSnapshot;
 
 import java.util.List;
@@ -19,7 +18,8 @@ final class FluidDomainStateMapper {
 		var chemistry = domain.chemistry == null ? null : domain.chemistry.registry();
 		GranularStateSnapshot granular = domain.granularState == null ? null : domain.exportGranularState();
 		domain.ensurePhaseOccupancy();
-		GasStateSnapshot gas = domain.gasState.frame == null ? null : domain.exportGasState(chemistry == null ? "" : chemistry.fingerprint());
+		var gas = domain.gasState.frame == null ? null : FluidDomainState.GasContinuation.runtime(
+				domain.gasState.frame,domain.gasState.network.runtimeSnapshot(),domain.gasState.network.registry().fingerprint());
 		var captured = new FluidDomainState(domain.sizeX,domain.sizeY,domain.sizeZ,domain.config,
 				domain.gasState.sealedDomainBoundary,domain.liquidCells.snapshot(),domain.phaseOccupancy,domain.mac.captureMomentum(),domain.geometry.cutCells.snapshot(),
 				domain.materialRegistry == null ? List.of() : domain.materialRegistry.materials(),chemistry,
@@ -35,7 +35,6 @@ final class FluidDomainStateMapper {
 				domain.thermalState == null ? 0 : domain.thermalState.maximumTransportSubsteps(),
 				domain.thermalState == null ? null : domain.exportPendingPhaseMotionState(),domain.thermalBoundaryTemperatureK,
 				domain.thermalState == null ? null : domain.pressureSystem.captureLiquidPressure(),domain.materialDefinitions);
-		if (gas != null) captured.attachGasRuntime(domain.gasState.frame,domain.gasState.network.runtimeSnapshot());
 		return captured;
 	}
 
@@ -59,9 +58,8 @@ final class FluidDomainStateMapper {
 	static FluidDomain restore(FluidDomainState state) {
 		if (state == null) throw new IllegalArgumentException("Authoritative state is missing");
 		FluidDomain domain = new FluidDomain(state.sizeX(), state.sizeY(), state.sizeZ(),
-				state.config());
+				state.config(),state.fixedGeometry());
 		if (state.sealedDomainBoundary()) domain.sealDomainBoundary();
-		domain.geometry.cutCells.restoreSnapshot(state.fixedGeometry());
 		if (!state.materialPalette().isEmpty()) domain.materialRegistry = new FluidMaterialRegistry(state.materialPalette());
 		if (state.chemicalRegistry() != null) {
 			domain.chemistry = new mmm.chemistry.RegionChemistry(state.chemicalRegistry(),domain.cellCount);
@@ -81,7 +79,7 @@ final class FluidDomainStateMapper {
 		}
 		if (state.gasRuntimeGeometry() != null) PhaseOccupancyTransport.publish(domain,state.phaseOccupancy());
 		else domain.restorePhaseOccupancyState(state.phaseOccupancy());
-		if (state.gas() == null) domain.bindGasRegistry(state.gasRegistry());
+		if (!state.hasGas()) domain.bindGasRegistry(state.gasRegistry());
 		else if (state.gasRuntimeGeometry() != null) domain.gasTopologyCoordinator.restoreRuntime(state.gasRuntimeGeometry(),state.gasRuntimeNetwork());
 		else domain.restoreGasState(state.gas(),state.gasRegistry(),state.thermalOwner());
 		if (state.thermalOwner() != null) {
@@ -92,11 +90,12 @@ final class FluidDomainStateMapper {
 			if (thermalBoundary != null) domain.replaceThermalBoundaryTemperatures(thermalBoundary);
 		}
 		if (state.precipitationEnabled()) domain.setPrecipitationEnabled(true);
-		// A cold state retains the choice to initialize gas at the next physical preparation.
-		// Rebuilding inventory and velocity alone does not create ambient stock or sources.
-		if (state.gas() == null) domain.domainFlowFields.ensureVelocityGrid();
-		else domain.domainFlowFields.preparePhysicalState();
-		if(state.condensedPhasePressure()!=null)domain.pressureSystem.restoreLiquidPressure(state.condensedPhasePressure());
+		// Stored actual pressure is converted back to the solver's residual using the
+		// current hydrostatic and capillary references. Velocity remains lazy.
+		if(state.condensedPhasePressure()!=null){
+			if(domain.gasState.frame!=null)domain.pressureSystem.prepareGeometry();
+			domain.pressureSystem.restoreLiquidPressure(state.condensedPhasePressure());
+		}
 		return domain;
 	}
 }

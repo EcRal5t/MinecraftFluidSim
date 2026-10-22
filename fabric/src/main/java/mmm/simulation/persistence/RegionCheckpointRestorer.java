@@ -31,7 +31,7 @@ public final class RegionCheckpointRestorer {
 		if(heat!=null){var liquidU=SignedDyadic.ZERO;for(var stock:liquid.stocks())liquidU=liquidU.add(SignedDyadic.of(stock.internalEnergy()));heat.requireClosed(liquidU,cells);}
 		try{return new FluidDomainState(manifest.sizeX(),manifest.sizeY(),manifest.sizeZ(),manifest.solverConfig(),runtime.sealed(),liquid,reconstructPhaseOccupancy(),momentum,reconstructFixedGeometry(),manifest.materialPalette(),
 				manifest.hasChemicalState()?chemistry:null,chemicalAudit.externalSource(),chemicalAudit.escapedSink(),manifest.hasChemicalState()?runtime.dirty():null,runtime.cursor(),
-				solids==null?null:granular,solids,runtime.granular(),runtime.precipitation(),gasRegistry,gasState,heat==null?null:thermal,heat,
+				solids==null?null:granular,solids,runtime.granular(),runtime.precipitation(),gasRegistry,FluidDomainState.GasContinuation.persisted(gasState),heat==null?null:thermal,heat,
 				heat==null?0:runtime.maximumThermalSubsteps(),heat==null?null:reconstructPendingPhaseMotion(),heat==null?null:runtime.boundary(),heat==null?null:runtime.pressure(),manifest.materialPalette().isEmpty()?null:materials);
 		}catch(IllegalArgumentException invalid){throw new IOException("Invalid complete cell/MAC region state",invalid);}
 	}

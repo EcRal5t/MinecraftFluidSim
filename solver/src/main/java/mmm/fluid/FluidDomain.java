@@ -123,6 +123,9 @@ public final class FluidDomain {
 	final DomainPhaseInventory domainPhaseInventory = new DomainPhaseInventory(this);
 
 	public FluidDomain(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config) {
+		this(sizeX,sizeY,sizeZ,config,null);
+	}
+	FluidDomain(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config, FixedGeometrySnapshot fixedGeometry) {
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2) throw new IllegalArgumentException("All dimensions must be at least two cells");
 		this.sizeX = sizeX;
 		this.sizeY = sizeY;
@@ -134,7 +137,7 @@ public final class FluidDomain {
 		this.gasBoundary = new GasPressureBoundary(domain);
 		this.liquidCells = new LiquidCellInventory(cellCount, null);
 
-		this.geometry = new DomainGeometry(sizeX, sizeY, sizeZ);
+		this.geometry = new DomainGeometry(sizeX, sizeY, sizeZ, fixedGeometry);
 		this.carrierPropertiesWorkspace = new LiquidCarrierProperties(cellCount);
 		this.liquidGrid = new CellLiquidGrid(cellCount);
 		this.volume = new float[cellCount];

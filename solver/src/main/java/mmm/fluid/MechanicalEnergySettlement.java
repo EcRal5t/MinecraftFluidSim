@@ -126,54 +126,74 @@ final class MechanicalEnergySettlement {
         return prepare(inventory,gas,false);
     }
     private Plan prepare(LiquidCellInventory.Plan inventory,GasTopologyCoordinator.GasTopologyPlan gas,boolean forces){
+        if(!hasMechanicalWork(inventory,gas,forces))return new Plan(inventory,Map.of());
+        observeSpatialExchange(inventory.future(),gas);
+        GasRuntimeGeometry source=gas==null?domain.gasState.frame:gas.source();
+        int gasBase=domain.cellCount,particleBase=gasBase+(source==null?0:source.nodeCount())+1;
+        int parcels=!forces||domain.granularState==null?0:domain.granularState.parcels.count();
+        int[] body=mechanicalBodies(source,inventory,particleBase,parcels);
+        double[] numericalWork=new double[body.length];
+        if(forces&&hasLiquidExchange)collectLiquidForceExchange(body,numericalWork);
+        collectTransportPotential(inventory,body,numericalWork);
+        if(forces&&hasGranularExchange)for(int p=0;p<parcels;p++)if(granularExchange[p]!=0)
+            numericalWork[mechanicalRoot(body,particleBase+p)]+=granularExchange[p];
+        recordContributions(inventory,gas,forces,parcels);
+        var exchanges=collectBodyExchanges(body,numericalWork,gas);
+        return prepareBodyHeat(inventory,gas,body,numericalWork,exchanges,particleBase);
+    }
+    private boolean hasMechanicalWork(LiquidCellInventory.Plan inventory,GasTopologyCoordinator.GasTopologyPlan gas,boolean forces){
         boolean hasWork=forces&&(hasLiquidExchange||hasGranularExchange);
         if(gas!=null)for(var work:gas.workBySource())hasWork|=work.signum()!=0;
         if(!hasWork)for(var transfer:inventory.transfers())if(transfer.massUnits()>0
                 &&transfer.source().cell()/domain.sizeX%domain.sizeY!=transfer.target().cell()/domain.sizeX%domain.sizeY){
             hasWork=domain.config.gravity()!=0;break;
         }
-        if(!hasWork)return new Plan(inventory,Map.of());
-        observeSpatialExchange(inventory.future(),gas);
-        GasRuntimeGeometry source=gas==null?domain.gasState.frame:gas.source();
-        int gasBase=8*domain.cellCount,particleBase=gasBase+(source==null?0:source.nodeCount())+1;
-        int parcels=!forces||domain.granularState==null?0:domain.granularState.parcels.count();
-        int[] body=mechanicalBodies(source,inventory,particleBase,parcels);
-        double[] numericalWork=new double[body.length];
-        if(forces&&hasLiquidExchange){
-            int[] singleBody=new int[domain.cellCount];Arrays.fill(singleBody,-2);
-            for(var stock:domain.liquidCells.physicalStocks()){
-                int cell=stock.key().cell(),root=mechanicalRoot(body,supportVertex(stock.key()));
-                if(singleBody[cell]==-2)singleBody[cell]=root;else if(singleBody[cell]!=root)singleBody[cell]=-1;
-            }
-            var faces=domain.pressureSystem.faces;
-            for(int face=0;face<liquidExchange.length;face++)if(liquidExchange[face]!=0){
-                int a=faces.firstCell[face],b=faces.secondCell[face];
-                int ra=a<0?-2:singleBody[a],rb=b<0?-2:singleBody[b];
-                double exchange=liquidExchange[face];
-                if(ra>=0&&(ra==rb||rb==-2))numericalWork[ra]+=exchange;
-                else if(rb>=0&&ra==-2)numericalWork[rb]+=exchange;
-                else splitFaceExchange(body,numericalWork,a,b,exchange);
-            }
+        return hasWork;
+    }
+    private void collectLiquidForceExchange(int[] body,double[] numericalWork){
+        int[] singleBody=new int[domain.cellCount];Arrays.fill(singleBody,-2);
+        for(var stock:domain.liquidCells.physicalStocks()){
+            int cell=stock.key().cell(),root=mechanicalRoot(body,supportVertex(stock.key()));
+            if(singleBody[cell]==-2)singleBody[cell]=root;else if(singleBody[cell]!=root)singleBody[cell]=-1;
         }
+        var faces=domain.pressureSystem.faces;
+        for(int face=0;face<liquidExchange.length;face++)if(liquidExchange[face]!=0){
+            int a=faces.firstCell[face],b=faces.secondCell[face];
+            int ra=a<0?-2:singleBody[a],rb=b<0?-2:singleBody[b];
+            double exchange=liquidExchange[face];
+            if(ra>=0&&(ra==rb||rb==-2))numericalWork[ra]+=exchange;
+            else if(rb>=0&&ra==-2)numericalWork[rb]+=exchange;
+            else splitFaceExchange(body,numericalWork,a,b,exchange);
+        }
+    }
+    private void collectTransportPotential(LiquidCellInventory.Plan inventory,int[] body,double[] numericalWork){
         for(var transfer:inventory.transfers())if(transfer.massUnits()>0){
             int from=transfer.source().cell()/domain.sizeX%domain.sizeY,to=transfer.target().cell()/domain.sizeX%domain.sizeY;
             double potential=-Mass.kilograms(transfer.massUnits())*domain.config.gravity()*domain.config.cellSize()*(to-from);
             if(potential!=0)numericalWork[mechanicalRoot(body,supportVertex(transfer.target()))]+=potential;
         }
-        if(forces&&hasGranularExchange)for(int p=0;p<parcels;p++)if(granularExchange[p]!=0)
-            numericalWork[mechanicalRoot(body,particleBase+p)]+=granularExchange[p];
+    }
+    private void recordContributions(LiquidCellInventory.Plan inventory,GasTopologyCoordinator.GasTopologyPlan gas,boolean forces,int parcels){
         double liquidForce=0,granularForce=0,potentialWork=0,gasWork=0;
         if(forces){for(double value:liquidExchange)liquidForce+=value;for(int p=0;p<parcels;p++)granularForce+=granularExchange[p];}
         for(var transfer:inventory.transfers())potentialWork-=Mass.kilograms(transfer.massUnits())*domain.config.gravity()*domain.config.cellSize()
             *(transfer.target().cell()/domain.sizeX%domain.sizeY-transfer.source().cell()/domain.sizeX%domain.sizeY);
         if(gas!=null)for(var work:gas.workBySource())gasWork-=work.toDouble();
         stepLiquidForce+=liquidForce;stepGranularForce+=granularForce;stepPotential+=potentialWork;stepGas+=gasWork;
+    }
+    private TreeMap<Integer,SignedDyadic> collectBodyExchanges(int[] body,double[] numericalWork,GasTopologyCoordinator.GasTopologyPlan gas){
+        int gasBase=domain.cellCount;
         var exchanges=new TreeMap<Integer,SignedDyadic>();
         for(int root=0;root<numericalWork.length;root++)if(numericalWork[root]!=0)
             exchanges.put(root,SignedDyadic.of(numericalWork[root]));
         if(gas!=null)for(int node=1;node<gas.workBySource().length;node++)if(gas.workBySource()[node].signum()!=0)
             exchanges.merge(mechanicalRoot(body,gasBase+node),gas.workBySource()[node].negate(),SignedDyadic::add);
         for(var value:exchanges.values()){stepCorrection+=value.toDouble();stepAbsoluteCorrection+=Math.abs(value.toDouble());}
+        return exchanges;
+    }
+    private Plan prepareBodyHeat(LiquidCellInventory.Plan inventory,GasTopologyCoordinator.GasTopologyPlan gas,
+                                 int[] body,double[] numericalWork,TreeMap<Integer,SignedDyadic> exchanges,int particleBase){
+        int parcels=body.length-particleBase;
         var liquids=new TreeMap<Integer,ArrayList<LiquidCellInventory.Stock>>();
         for(var stock:inventory.future().physicalStocks()){
             int root=mechanicalRoot(body,supportVertex(stock.key()));
@@ -195,21 +215,7 @@ final class MechanicalEnergySettlement {
             SignedDyadic[] shares;
             if(domain.thermalState==null)shares=massShares(targets,exchange);
             else{
-                var recipients=new ArrayList<ThermalStateFunction.MechanicalRecipient>(targets.size()+active.size());
-                var thermal=domain.thermalState;var state=thermal.stateFunction();
-                for(var stock:targets){
-                    int material=thermal.thermalMaterialHandleForFluid(stock.key().material());
-                    double mass=stock.massKilograms();
-                    double base=state.baseEnergy(material,mass,stock.mixture(),domain.liquidCells.chemicalRegistry());
-                    recipients.add(new ThermalStateFunction.MechanicalRecipient(thermal.registry().material(material),mass,base,stock.internalEnergy()));
-                }
-                for(int p:active){
-                    var parcel=domain.granularState.parcels.parcel(p);
-                    int material=thermal.thermalMaterialHandleForGranular(parcel.materialHandle());
-                    double base=state.baseEnergy(material,parcel.mass(),domain.thermalMarkers.solidComposition(parcel.solidCompositionHandle()));
-                    recipients.add(new ThermalStateFunction.MechanicalRecipient(thermal.registry().material(material),parcel.mass(),base,
-                            thermal.granularColumn().activeEnergy(p)));
-                }
+                var recipients=mechanicalRecipients(targets,active);
                 try{shares=ThermalStateFunction.partitionMechanicalEnergy(recipients,exchange);}
                 catch(IllegalArgumentException failure){
                     failure.addSuppressed(new IllegalStateException("Mechanical body="+entry.getKey()+", liquidStocks="+targets.size()
@@ -223,6 +229,24 @@ final class MechanicalEnergySettlement {
         }
         return new Plan(liquidHeat.isEmpty()?inventory:inventory.withMechanicalHeatByStock(liquidHeat),grainHeat);
     }
+    private List<ThermalStateFunction.MechanicalRecipient> mechanicalRecipients(List<LiquidCellInventory.Stock> targets,List<Integer> active){
+        var recipients=new ArrayList<ThermalStateFunction.MechanicalRecipient>(targets.size()+active.size());
+        var thermal=domain.thermalState;var state=thermal.stateFunction();
+        for(var stock:targets){
+            int material=thermal.thermalMaterialHandleForFluid(stock.key().material());
+            double mass=stock.massKilograms();
+            double base=state.baseEnergy(material,mass,stock.mixture(),domain.liquidCells.chemicalRegistry());
+            recipients.add(new ThermalStateFunction.MechanicalRecipient(thermal.registry().material(material),mass,base,stock.internalEnergy()));
+        }
+        for(int p:active){
+            var parcel=domain.granularState.parcels.parcel(p);
+            int material=thermal.thermalMaterialHandleForGranular(parcel.materialHandle());
+            double base=state.baseEnergy(material,parcel.mass(),domain.thermalMarkers.solidComposition(parcel.solidCompositionHandle()));
+            recipients.add(new ThermalStateFunction.MechanicalRecipient(thermal.registry().material(material),parcel.mass(),base,
+                    thermal.granularColumn().activeEnergy(p)));
+        }
+        return recipients;
+    }
     /** Only a failed caloric solve gathers this operator decomposition; normal steps keep no statistics. */
     private String failureContributions(int[] body,int root,int particleBase,int parcels,double[] numericalWork,
                                        LiquidCellInventory.Plan inventory,GasTopologyCoordinator.GasTopologyPlan gas){
@@ -235,7 +259,7 @@ final class MechanicalEnergySettlement {
             grain+=granularExchange[p];grainPotential+=granularPotentialExchange[p];
         }
         var gasCounter=SignedDyadic.ZERO;int largestGas=-1;
-        if(gas!=null)for(int node=1;node<gas.workBySource().length;node++)if(mechanicalRoot(body,8*domain.cellCount+node)==root){
+        if(gas!=null)for(int node=1;node<gas.workBySource().length;node++)if(mechanicalRoot(body,domain.cellCount+node)==root){
             gasCounter=gasCounter.subtract(gas.workBySource()[node]);
             if(largestGas<0||Math.abs(gas.workBySource()[node].toDouble())>Math.abs(gas.workBySource()[largestGas].toDouble()))largestGas=node;
         }
@@ -281,17 +305,13 @@ final class MechanicalEnergySettlement {
     }
 	/** Reuses the solved wet microfaces, fixed supports and accepted routes; no new geometric intersections. */
 	private int[] mechanicalBodies(GasRuntimeGeometry source,LiquidCellInventory.Plan inventory,int particleBase,int parcels){
-		int gasBase=8*domain.cellCount;int[] body=new int[particleBase+parcels];
+		int gasBase=domain.cellCount;int[] body=new int[particleBase+parcels];
 		for(int i=0;i<body.length;i++)body[i]=i;
 		for(int p=0;p<parcels;p++)joinMechanical(body,particleBase+p,
 				particleBase+domain.granularMechanicalStage.plannedContactComponent(p));
 		if(source!=null)for(var component:source.capacity().components()){
 			int node=source.topology().nodeOfComponent(component.cell(),component.supportMask());
-			if(node>0){
-				int micro=Integer.numberOfTrailingZeros(component.supportMask());
-				int support=CellRemapMicroTopology.support(source.geometry().collisionMask(component.cell()),micro);
-				joinMechanical(body,8*component.cell()+Integer.numberOfTrailingZeros(support),gasBase+node);
-			}
+			if(node>0)joinMechanical(body,component.cell(),gasBase+node);
 		}
 		var faces=domain.pressureSystem.faces;var cut=domain.geometry.cutCells;
 		for(int face=0;face<faces.faceCount;face++){
@@ -301,8 +321,7 @@ final class MechanicalEnergySettlement {
 			for(int micro=0;micro<8;micro++)if((micro>>>axis&1)!=0){
 				int peer=micro^(1<<axis),port=(micro>>>((axis+1)%3)&1)+2*(micro>>>((axis+2)%3)&1);
 				if((maskA&1<<micro)!=0||(maskB&1<<peer)!=0||!(faces.pressurePortArea(face,port)>0))continue;
-				joinMechanical(body,8*a+Integer.numberOfTrailingZeros(CellRemapMicroTopology.support(maskA,micro)),
-						8*b+Integer.numberOfTrailingZeros(CellRemapMicroTopology.support(maskB,peer)));
+				joinMechanical(body,a,b);
 			}
 		}
 		for(var transfer:inventory.transfers())if(transfer.massUnits()>0)
@@ -314,14 +333,14 @@ final class MechanicalEnergySettlement {
 			int maskA=cut.mask(a),maskB=cut.mask(b);
 			for(int micro=0;micro<8;micro++)if((micro>>>axis&1)!=0){
 				int peer=micro^(1<<axis);if((maskA&1<<micro)!=0||(maskB&1<<peer)!=0)continue;
-				int sa=CellRemapMicroTopology.support(maskA,micro),sb=CellRemapMicroTopology.support(maskB,peer);
-				joinMechanical(body,particleBase+p,8*a+Integer.numberOfTrailingZeros(sa));
-				joinMechanical(body,particleBase+p,8*b+Integer.numberOfTrailingZeros(sb));
+				joinMechanical(body,particleBase+p,a);
+				joinMechanical(body,particleBase+p,b);
 			}
 		}
 		return body;
 	}
-	private static int supportVertex(LiquidCellInventory.Key key){return 8*key.cell()+Integer.numberOfTrailingZeros(key.supportMask());}
+	// Fixed collision admission and stock restore both require the cell's sole canonical open support.
+	private static int supportVertex(LiquidCellInventory.Key key){return key.cell();}
 	private static int mechanicalRoot(int[] body,int node){
 		while(body[node]!=node){body[node]=body[body[node]];node=body[node];}return node;
 	}

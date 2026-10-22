@@ -73,36 +73,61 @@ final class GasComplementGeometry {
 		var actualCapacity=preparedCapacity!=null?preparedCapacity:cells==null?null:GasComponentCapacity.prepare(cut,phase,cells,source==null?null:source.actualCapacity);
 		if(source!=null&&actualCapacity!=null&&actualCapacity==source.actualCapacity&&phase==sourcePhase)return source;
 		double[] componentDry=actualCapacity==null?componentDry(cut,phase,count):actualCapacity.dry;
-		boolean[] changed=source==null?null:new boolean[count];
-		if(source!=null){
-			boolean anyChanged=false;
-			for(int cell=0;cell<count;cell++){
-				changed[cell]=phase!=sourcePhase&&!phase.sameCellGeometry(cell,sourcePhase);
-				for(int support:CellRemapMicroTopology.components(cut.mask(cell))){
-					int slot=8*cell+Integer.numberOfTrailingZeros(support);
-					if(componentDry[slot]!=source.componentDry[slot])changed[cell]=true;
-				}
-				anyChanged|=changed[cell];
-			}
-			if(!anyChanged&&actualCapacity==source.actualCapacity)return source;
+		boolean[] changed=source==null?null:changedCells(cut,phase,source,sourcePhase,componentDry,count);
+		if(source!=null&&changed==null) {
+			if(actualCapacity==source.actualCapacity)return source;
+			changed=new boolean[count];
 		}
 		Component[] bySlot=source==null?new Component[Math.multiplyExact(count,8)]:source.bySlot.clone();
 		SignedDyadic[] pores = actualCapacity!=null?actualCapacity.pores:source == null ? new SignedDyadic[count] : source.poreVolumes.clone();
 		var components=new ArrayList<Component>(source==null?count:source.components.size());
 		var ports = new ArrayList<Port>(source==null?count:source.portArray.length);
 		var exterior = new ArrayList<ExteriorPort>(source==null?0:source.exteriorArray.length);
+		captureComponents(count,source,changed,cut,phase,h3,pores,componentDry,cells!=null,actualCapacity==null,bySlot,components);
+		int[] canonical=canonicalPieces(count,components);
+		capturePorts(sizeX,sizeY,sizeZ,count,source,changed,canonical,cut,phase,h2,ports,exterior);
+		var result=new GasComplementGeometry(sizeX,sizeY,sizeZ,h3,actualCapacity==null?cut.snapshot().masksView():actualCapacity.masks,pores,componentDry,bySlot,
+				components,ports.toArray(Port[]::new),exterior.toArray(ExteriorPort[]::new),actualCapacity);
+		if(source!=null)GasChamberTopology.continueCached(result,source);
+		return result;
+	}
+	private static boolean[] changedCells(FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,
+	                                     GasComplementGeometry source,FlipPressurePhaseGeometry sourcePhase,
+	                                     double[] componentDry,int count) {
+		boolean[] changed=new boolean[count];boolean anyChanged=false;
+		for(int cell=0;cell<count;cell++) {
+			changed[cell]=cut.mask(cell)!=source.collisionMask(cell)||phase!=sourcePhase&&!phase.sameCellGeometry(cell,sourcePhase);
+			for(int support:CellRemapMicroTopology.components(cut.mask(cell))) {
+				int slot=8*cell+Integer.numberOfTrailingZeros(support);
+				if(componentDry[slot]!=source.componentDry[slot])changed[cell]=true;
+			}
+			anyChanged|=changed[cell];
+		}
+		return anyChanged?changed:null;
+	}
+	private static void captureComponents(int count,GasComplementGeometry source,boolean[] changed,
+	                                      FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,double h3,
+	                                      SignedDyadic[] pores,double[] componentDry,boolean actualInventory,
+	                                      boolean capturePores,Component[] bySlot,List<Component> components) {
 		for (int cell = 0; cell < count; cell++) {
 			if (source == null || changed[cell]) {
-				Arrays.fill(bySlot,8*cell,8*cell+8,null);if(actualCapacity==null)pores[cell]=phase.poreVolume(cell);
-				captureCell(cell,cut,phase,h3,pores[cell],componentDry,cells!=null,bySlot);
+				Arrays.fill(bySlot,8*cell,8*cell+8,null);if(capturePores)pores[cell]=phase.poreVolume(cell);
+				captureCell(cell,cut,phase,h3,pores[cell],componentDry,actualInventory,bySlot);
 			}
 			for(int support:CellRemapMicroTopology.components(cut.mask(cell))){
 				var component=bySlot[8*cell+Integer.numberOfTrailingZeros(support)];if(component!=null)components.add(component);
 			}
 		}
+	}
+	private static int[] canonicalPieces(int count,List<Component> components) {
 		int[] canonical=new int[8*count];Arrays.fill(canonical,-1);
-        for(var component:components)for(int bits=component.supportMask();bits!=0;bits&=bits-1)
-            canonical[8*component.cell()+Integer.numberOfTrailingZeros(bits)]=component.minimumPiece();
+		for(var component:components)for(int bits=component.supportMask();bits!=0;bits&=bits-1)
+			canonical[8*component.cell()+Integer.numberOfTrailingZeros(bits)]=component.minimumPiece();
+		return canonical;
+	}
+	private static void capturePorts(int sizeX,int sizeY,int sizeZ,int count,GasComplementGeometry source,
+	                                 boolean[] changed,int[] canonical,FlipCutCellGeometry cut,
+	                                 FlipPressurePhaseGeometry phase,double h2,List<Port> ports,List<ExteriorPort> exterior) {
 		int[] first=new int[4],second=new int[4];double[] areas=new double[4];
 		int oldPort=0,oldExterior=0;
 		for(int cell=0;cell<count;cell++)for(int axis=0;axis<3;axis++){
@@ -120,10 +145,6 @@ final class GasComplementGeometry {
 				while(oldExterior<source.exteriorArray.length&&exteriorKey(source.exteriorArray[oldExterior])==key)exterior.add(source.exteriorArray[oldExterior++]);
 			}else captureExteriorFace(cell,axis,bit,canonical,cut,phase,h2,first,areas,exterior);
 		}
-		var result=new GasComplementGeometry(sizeX,sizeY,sizeZ,h3,actualCapacity==null?cut.snapshot().masksView():actualCapacity.masks,pores,componentDry,bySlot,
-				components,ports.toArray(Port[]::new),exterior.toArray(ExteriorPort[]::new),actualCapacity);
-		if(source!=null)GasChamberTopology.continueCached(result,source);
-		return result;
 	}
     /** Resolution decisions read the coarse pore remainder, independently of a face's PLIC film. */
     private static double[] componentDry(FlipCutCellGeometry cut,FlipPressurePhaseGeometry phase,int count){

@@ -202,37 +202,40 @@ final class ConservativeLiquidFlux {
 		macroTotal.reset(2 * physicalFaceCount);
 		Arrays.fill(incomingGas,0);
 		preferredRowCount=0;
-		// Each shared coarse flux needs at most four donor PLIC slab integrals.
-		for (int f = 0; f < physicalFaceCount; f++) {
-			double qt=displacement?0:domain.pressureSystem.volumeFlux(pressureFace[f],dt);
-			if (qt == 0) continue;
-			int a = axis[f], maskLeft = domain.geometry.cutCells.mask(left[f]);
-			int maskRight = domain.geometry.cutCells.mask(right[f]), openPorts = 0;
-			for (int port = 0; port < 4; port++) {
-				int micro = faceMicro(a, port), peer = micro ^ (1 << a);
-				if ((maskLeft & (1 << micro)) == 0 && (maskRight & (1 << peer)) == 0) openPorts |= 1 << port;
+		if(displacement)return;
+		for (int face = 0; face < physicalFaceCount; face++) prepareFacePreference(face,dt);
+	}
+	/** Each shared coarse flux needs at most four donor PLIC slab integrals. */
+	private void prepareFacePreference(int f,double dt) {
+		double qt=domain.pressureSystem.volumeFlux(pressureFace[f],dt);
+		if (qt == 0) return;
+		int a = axis[f], maskLeft = domain.geometry.cutCells.mask(left[f]);
+		int maskRight = domain.geometry.cutCells.mask(right[f]), openPorts = 0;
+		for (int port = 0; port < 4; port++) {
+			int micro = faceMicro(a, port), peer = micro ^ (1 << a);
+			if ((maskLeft & (1 << micro)) == 0 && (maskRight & (1 << peer)) == 0) openPorts |= 1 << port;
+		}
+		if (openPorts == 0) return;
+		double portion = Math.abs(qt) / Integer.bitCount(openPorts);
+		for (int bits = openPorts; bits != 0; bits &= bits - 1) {
+			int micro = faceMicro(a, Integer.numberOfTrailingZeros(bits));
+			int first = 8 * left[f] + micro, second = 8 * right[f] + (micro ^ (1 << a));
+			boolean positive = qt > 0;
+			int from = positive ? first : second, target = positive ? second : first;
+			double wet = phase.liquidFractionExact(from / 8, from & 7);
+			double ql=wet<=0?0:portion;
+			if(wet>0&&wet<1){
+				double sourcePore=microPoreVolume(from);
+				double width=sourcePore>0?Math.clamp(portion/sourcePore,0,1):0;
+				double low=positive?1-width:0,high=positive?1:width;
+				ql=intersection(phase,from,a==0?low:0,a==1?low:0,a==2?low:0,
+						a==0?high:1,a==1?high:1,a==2?high:1,sourcePore);
 			}
-			if (openPorts == 0) continue;
-			double portion = Math.abs(qt) / Integer.bitCount(openPorts);
-			for (int bits = openPorts; bits != 0; bits &= bits - 1) {
-				int micro = faceMicro(a, Integer.numberOfTrailingZeros(bits));
-				int first = 8 * left[f] + micro, second = 8 * right[f] + (micro ^ (1 << a));
-				boolean positive = qt > 0;
-				int from = positive ? first : second, target = positive ? second : first;
-				double wet = phase.liquidFractionExact(from / 8, from & 7);
-				double ql=wet<=0?0:portion;
-				if(wet>0&&wet<1){
-					double sourcePore=microPoreVolume(from);
-					double width=sourcePore>0?Math.clamp(portion/sourcePore,0,1):0;
-					double low=positive?1-width:0,high=positive?1:width;
-					ql=intersection(phase,from,a==0?low:0,a==1?low:0,a==2?low:0,
-							a==0?high:1,a==1?high:1,a==2?high:1,sourcePore);
-				}
-				ql = Math.clamp(ql, 0, portion);
-				addMacro(f, from, target, ql, portion);
-			}
+			ql = Math.clamp(ql, 0, portion);
+			addMacro(f, from, target, ql, portion);
 		}
 	}
+
 	/** Advects gas only on full fixed openings; restricted openings belong to the orifice solver. */
 	private void advanceGasSources(List<LiquidCellInventory.Transfer> transfers) {
 		macroFlows.reset(2*physicalFaceCount);

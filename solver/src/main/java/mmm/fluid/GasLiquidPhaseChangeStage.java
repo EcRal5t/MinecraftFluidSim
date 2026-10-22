@@ -103,15 +103,21 @@ final class GasLiquidPhaseChangeStage {
 		if(maximumOperations<0||maximumOperations>ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP) throw new IllegalArgumentException("Invalid phase operation budget");
 		if(maximumOperations==0) return new FluidDomain.GasThermalPhaseStats(0,0,0);
 		domain.gasTopologyCoordinator.refresh();
-		var liquids=domain.liquidCells; var network=domain.gasState.network;
+		var network=domain.gasState.network;
 		if(network.nodeCount()==0) return new FluidDomain.GasThermalPhaseStats(0,0,0);
 		var interfaceCells=finiteInterfaceCells(domain.gasState.frame);
 		thermal.preparePhaseScan(domain.domainCapabilities.thermalMarkerContext());
 		var phase=thermal.gasLiquidPhase(network); var function=thermal.stateFunction();
+		var candidates=collectCandidates(thermal,phase,network,interfaceCells);
+		if(candidates.isEmpty()) return new FluidDomain.GasThermalPhaseStats(0,0,0);
+		return selectAndCommit(candidates,thermal,phase,function,network,maximumOperations);
+	}
+
+	/** Read-only interface screening stays separate from executable phase transactions. */
+	private ArrayList<Candidate> collectCandidates(ThermalDomainState thermal,GasLiquidPhaseModel phase,
+			AirNetwork network,boolean[] interfaceCells) {
+		var liquids=domain.liquidCells;
 		// Keep interface candidates until chamber closure establishes executable integer batches.
-		var selected=new TreeMap<Integer,Proposal>();
-		var capturedCells=new HashMap<Integer,Cell>();
-		var pool=new ArrayList<Proposal>();
 		var contacts=new HashMap<Integer,List<GasPhaseInterfaceResolver.Contact>>();
 		var candidates=new ArrayList<Candidate>();
 		var gasStates=new GasEnergyStore.PhaseState[network.nodeCount()+1];
@@ -162,7 +168,14 @@ final class GasLiquidPhaseChangeStage {
 			}
 
 		}
-		if(candidates.isEmpty()) return new FluidDomain.GasThermalPhaseStats(0,0,0);
+		return candidates;
+	}
+
+	private FluidDomain.GasThermalPhaseStats selectAndCommit(ArrayList<Candidate> candidates,ThermalDomainState thermal,
+			GasLiquidPhaseModel phase,ThermalStateFunction function,AirNetwork network,int maximumOperations) {
+		var selected=new TreeMap<Integer,Proposal>();
+		var capturedCells=new HashMap<Integer,Cell>();
+		var pool=new ArrayList<Proposal>();
 		var candidateGroups=new TreeMap<Group,List<Candidate>>();
 		for(var candidate:candidates) {
 			String component=thermal.registry().material(thermal.registry().materialHandle(candidate.transition().upperEnergyMaterialId())).carrierId();
@@ -203,6 +216,14 @@ final class GasLiquidPhaseChangeStage {
 		if(totalDesired==0) return new FluidDomain.GasThermalPhaseStats(0,0,0);
 		long[] counts=allocate(Math.min(maximumOperations,totalDesired),desired);
 		for(int i=0;i<counts.length;i++) proposals.get(i).batches=counts[i];
+		return commitExchange(proposals,groups,capturedCells,thermal,phase,function,network);
+	}
+
+	/** Only executable integer batches enter quantity, energy, momentum and topology publication. */
+	private FluidDomain.GasThermalPhaseStats commitExchange(ArrayList<Proposal> proposals,TreeMap<Group,List<Proposal>> groups,
+			HashMap<Integer,Cell> capturedCells,ThermalDomainState thermal,GasLiquidPhaseModel phase,
+			ThermalStateFunction function,AirNetwork network) {
+		var liquids=domain.liquidCells;
 		var retainedGas=new ArrayList<GasInventory>(network.nodeCount()); double[] retainedEnergy=new double[network.nodeCount()];
 		for(int node:network.nodeIds()) { retainedGas.add(network.inventory(node)); retainedEnergy[node-1]=thermal.gasNodeEnergy(node,network); }
 		var births=new ArrayList<GasTopologyCoordinator.PhaseBirth>();var birthNodes=new ArrayList<Integer>();

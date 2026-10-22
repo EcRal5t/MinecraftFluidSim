@@ -35,7 +35,7 @@ public final class FluidDomainState {
 	private final GranularDepositDynamics.State granularDynamics;
 	private final boolean precipitationEnabled;
 	private final GasRegistry gasRegistry;
-	private final GasStateSnapshot gas;
+	private final GasContinuation gas;
 	private final ThermalRegistry thermalRegistry;
 	private final ThermalOwnerSnapshot thermalOwner;
 	private final int maximumThermalTransportSubsteps;
@@ -43,15 +43,33 @@ public final class FluidDomainState {
 	private final double[] thermalBoundaryTemperaturesK;
 	private final CondensedPhasePressureField condensedPhasePressure;
 	private final MaterialRegistry materialDefinitions;
-	private GasRuntimeGeometry gasRuntimeGeometry;
-	private mmm.fluid.air.AirNetwork.RuntimeSnapshot gasRuntimeNetwork;
-	void attachGasRuntime(GasRuntimeGeometry geometry, mmm.fluid.air.AirNetwork.RuntimeSnapshot network) {
-		if (gasRuntimeGeometry != null || gasRuntimeNetwork != null || geometry == null || network == null)
-			throw new IllegalStateException("Gas runtime continuation can be attached once before publication");
-		gasRuntimeGeometry = geometry; gasRuntimeNetwork = network;
+	/** Exactly one captured gas representation; the persistence projection is derived lazily. */
+	public static final class GasContinuation {
+		private final GasRuntimeGeometry geometry;
+		private final mmm.fluid.air.AirNetwork.RuntimeSnapshot network;
+		private final String registryFingerprint;
+		private final GasStateSnapshot persisted;
+		private GasContinuation(GasStateSnapshot state,GasRuntimeGeometry geometry,
+				mmm.fluid.air.AirNetwork.RuntimeSnapshot network,String fingerprint) {
+			this.persisted=state;this.geometry=geometry;this.network=network;this.registryFingerprint=fingerprint;
+		}
+		public static GasContinuation persisted(GasStateSnapshot state) {
+			return state==null?null:new GasContinuation(state,null,null,state.registryFingerprint());
+		}
+		static GasContinuation runtime(GasRuntimeGeometry geometry,mmm.fluid.air.AirNetwork.RuntimeSnapshot network,String fingerprint) {
+			return new GasContinuation(null,Objects.requireNonNull(geometry),Objects.requireNonNull(network),fingerprint);
+		}
+		private GasStateSnapshot snapshot(int x,int y,int z,String chemicalFingerprint) {
+			var result=persisted;
+			if(result==null){
+				result=GasStateSnapshot.capture(x,y,z,geometry.pieceNodes(),
+						mmm.fluid.air.AirNetwork.fromRuntimeSnapshot(network),chemicalFingerprint);
+			}
+			return result;
+		}
 	}
-	GasRuntimeGeometry gasRuntimeGeometry() { return gasRuntimeGeometry; }
-	mmm.fluid.air.AirNetwork.RuntimeSnapshot gasRuntimeNetwork() { return gasRuntimeNetwork; }
+	GasRuntimeGeometry gasRuntimeGeometry() { return gas==null?null:gas.geometry; }
+	mmm.fluid.air.AirNetwork.RuntimeSnapshot gasRuntimeNetwork() { return gas==null?null:gas.network; }
 	private volatile FlipParticleState debugParticles;
 	private volatile FlipMaterialParticleState debugMaterials;
 	private volatile FlipChemicalParticleState debugChemicals;
@@ -62,7 +80,7 @@ public final class FluidDomainState {
 			FixedGeometrySnapshot fixedGeometry, List<FluidMaterial> palette, ChemicalRegistry chemicalRegistry,
 			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells, int chemicalReactionCursor,
 			GranularRegistry granularRegistry, GranularStateSnapshot granular, GranularDepositDynamics.State granularDynamics,
-			boolean precipitationEnabled, GasRegistry gasRegistry, GasStateSnapshot gas,
+			boolean precipitationEnabled, GasRegistry gasRegistry, GasContinuation gas,
 			ThermalRegistry thermalRegistry, ThermalOwnerSnapshot thermalOwner, int maximumThermalTransportSubsteps,
 			PendingPhaseMotionState pendingPhaseMotion, double[] thermalBoundaryTemperaturesK,
 			CondensedPhasePressureField condensedPhasePressure, MaterialRegistry materialDefinitions) {
@@ -95,7 +113,7 @@ public final class FluidDomainState {
 		this.materialDefinitions = materialDefinitions;
 		if (granular != null && materialDefinitions == null) throw new IllegalArgumentException("Granular properties are missing");
 		this.gasRegistry = Objects.requireNonNull(gasRegistry); this.gas = gas;
-		if (gas != null && !gas.registryFingerprint().equals(gasRegistry.fingerprint())) throw new IllegalArgumentException("Gas registry identity mismatch");
+		if (gas != null && !gas.registryFingerprint.equals(gasRegistry.fingerprint())) throw new IllegalArgumentException("Gas registry identity mismatch");
 		this.thermalRegistry = thermalRegistry; this.thermalOwner = thermalOwner;
 		this.maximumThermalTransportSubsteps = maximumThermalTransportSubsteps; this.pendingPhaseMotion = pendingPhaseMotion;
 		this.thermalBoundaryTemperaturesK = thermalBoundaryTemperaturesK == null ? null : thermalBoundaryTemperaturesK.clone();
@@ -127,7 +145,9 @@ public final class FluidDomainState {
 	public GranularStateSnapshot granular() { return granular; }
 	public GranularDepositDynamics.State granularDynamics() { return granularDynamics; }
 	public boolean precipitationEnabled() { return precipitationEnabled; }
-	public GasRegistry gasRegistry() { return gasRegistry; } public GasStateSnapshot gas() { return gas; }
+	public GasRegistry gasRegistry() { return gasRegistry; }
+	public boolean hasGas() { return gas!=null; }
+	public GasStateSnapshot gas() { return gas==null?null:gas.snapshot(sizeX,sizeY,sizeZ,chemicalRegistry==null?"":chemicalRegistry.fingerprint()); }
 	public ThermalRegistry thermalRegistry() { return thermalRegistry; } public ThermalOwnerSnapshot thermalOwner() { return thermalOwner; }
 	public int maximumThermalTransportSubsteps() { return maximumThermalTransportSubsteps; }
 	public PendingPhaseMotionState pendingPhaseMotion() { return pendingPhaseMotion; }

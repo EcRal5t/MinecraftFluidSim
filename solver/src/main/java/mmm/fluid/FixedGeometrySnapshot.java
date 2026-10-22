@@ -6,6 +6,7 @@ public final class FixedGeometrySnapshot {
 	private static final float MICRO_FACE_AREA = .25F;
 	private final int sizeX,sizeY,sizeZ;
 	private final byte[] occupancy;
+	private volatile FaceIncidence faceIncidence;
 	private final float[] openCellVolume,openFaceX,openFaceY,openFaceZ;
 	private final float[] solidWallAreaX,solidWallAreaY,solidWallAreaZ;
 
@@ -20,6 +21,38 @@ public final class FixedGeometrySnapshot {
 		solidWallAreaX=new float[count];solidWallAreaY=new float[count];solidWallAreaZ=new float[count];
 		buildFaces();
 	}
+
+	/** Candidate graphs borrow these shape-only columns; each graph owns its changing coefficients. */
+	FaceIncidence faceIncidence() {
+		var prepared=faceIncidence;
+		if(prepared==null)synchronized(this){
+			prepared=faceIncidence;
+			if(prepared==null)faceIncidence=prepared=new FaceIncidence(sizeX,sizeY,sizeZ);
+		}
+		return prepared;
+	}
+	static final class FaceIncidence {
+		final int[] offsets,firstCell,secondCell,axis,localFace;
+		final int faceCount;
+		private FaceIncidence(int sizeX,int sizeY,int sizeZ) {
+			offsets=new int[]{0,(sizeX+1)*sizeY*sizeZ,(sizeX+1)*sizeY*sizeZ+sizeX*(sizeY+1)*sizeZ};
+			faceCount=offsets[2]+sizeX*sizeY*(sizeZ+1);
+			firstCell=new int[faceCount];secondCell=new int[faceCount];axis=new int[faceCount];localFace=new int[faceCount];
+			java.util.Arrays.fill(firstCell,-1);java.util.Arrays.fill(secondCell,-1);
+			for(int a=0;a<3;a++){
+				int nx=sizeX+(a==0?1:0),ny=sizeY+(a==1?1:0),nz=sizeZ+(a==2?1:0);
+				for(int z=0;z<nz;z++)for(int y=0;y<ny;y++)for(int x=0;x<nx;x++){
+					int local=(z*ny+y)*nx+x,face=offsets[a]+local;
+					axis[face]=a;localFace[face]=local;
+					int coordinate=a==0?x:a==1?y:z,length=a==0?sizeX:a==1?sizeY:sizeZ;
+					if(coordinate==0||coordinate==length)continue;
+					secondCell[face]=(z*sizeY+y)*sizeX+x;
+					firstCell[face]=((z-(a==2?1:0))*sizeY+y-(a==1?1:0))*sizeX+x-(a==0?1:0);
+				}
+			}
+		}
+	}
+
 	/** A coarse MAC cell owns one pressure and inertia state, hence one fixed open component. */
 	static void requireConnectedOpenCell(int cell,int mask){
 		if(mmm.inventory.LiquidCellInventory.connectedSupports(mask).size()>1)

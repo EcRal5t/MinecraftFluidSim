@@ -517,20 +517,30 @@ public final class LiquidCellInventory {
 	}
 	public Plan planRoutes(LiquidTransportRoutes routes,EnergyPartitioner caloric,TransportFinalizer finalizer) {
 		var totals=new TransportTargets();
+		var partitions=retainTransportDonors(routes,caloric,totals);
+		var settledTransfers=receiveTransport(routes,partitions,totals);
+		var quantities=finalizer==null?null:prepareTransportQuantities(totals,settledTransfers);
+		if(finalizer!=null)finalizer.finish(quantities);
+		return prepareTransport(totals,settledTransfers,quantities);
+	}
+	/** All donors retain their own original-generation remainder before any incoming merge. */
+	private SourcePartition[] retainTransportDonors(LiquidTransportRoutes routes,EnergyPartitioner caloric,TransportTargets totals) {
 		var partitions=new SourcePartition[routes.sourceCount()];
-		// Every actual outflow reads the same original generation. Incoming quantities
-		// are merged only after all original donors have retained their own remainder.
-		for(int donor=0;donor<routes.sourceCount();donor++){
+		for(int donor=0;donor<routes.sourceCount();donor++) {
 			var source=routes.source(donor);int start=routes.routeStart(donor),end=routes.routeEnd(donor);
 			if(source.key().cell()>=cellCount()||stock(source.key())!=source)throw new IllegalArgumentException("Liquid transport donor is not an original owner");
 			for(int r=start;r<end;r++)if(routes.targetCell(r)>=cellCount())throw new IllegalArgumentException("Liquid transport recipient is outside the grid");
 			var partition=partitions[donor]=partitionOutflow(routes,donor,caloric);
 			totals.donor(source).retainSource(source,partition);
 		}
+		return partitions;
+	}
+	/** Recipients merge prepared shares in the original donor and face order. */
+	private List<Transfer> receiveTransport(LiquidTransportRoutes routes,SourcePartition[] partitions,TransportTargets totals) {
 		var transfers=new ArrayList<Transfer>();
-		for(int donor=0;donor<routes.sourceCount();donor++){
+		for(int donor=0;donor<routes.sourceCount();donor++) {
 			var source=routes.source(donor);var partition=partitions[donor];int start=routes.routeStart(donor),end=routes.routeEnd(donor);
-			for(int r=start;r<end;r++){
+			for(int r=start;r<end;r++) {
 				int part=r-start;var target=totals.owner(routes.targetCell(r),source.key().material(),routes.supportMask(r));
 				long mass=partition==null?source.massUnits():partition.masses[part];
 				if(partition==null)target.addTransport(source.volume(),mass,source.mixture(),source.internalEnergy());
@@ -538,10 +548,7 @@ public final class LiquidCellInventory {
 				transfers.add(new Transfer(routes.face(r),source.key(),target.key,routes.volume(r),mass));
 			}
 		}
-		var settledTransfers=List.copyOf(transfers);
-		var quantities=finalizer==null?null:prepareTransportQuantities(totals,settledTransfers);
-		if(finalizer!=null)finalizer.finish(quantities);
-		return prepareTransport(totals,settledTransfers,quantities);
+		return List.copyOf(transfers);
 	}
 	/** Actual outgoing columns and one implicit source remainder; no retained route or stock is generated. */
 	private record SourcePartition(SignedDyadic retainedVolume,long[] masses,long[][] species,double[] energies,int retained) { }
@@ -607,6 +614,10 @@ public final class LiquidCellInventory {
 		final TransportRow[] byCell=new TransportRow[cellCount()];
 		final ArrayList<Integer> cells=new ArrayList<>();
 		int ownerCount;
+		int[] futureSpecies,futureMaterials;
+		boolean geometryChanged;
+		double[] beforeEnergy,afterEnergy;
+		int energyCount;
 		TransportRow row(int cell){
 			var row=byCell[cell];if(row==null){byCell[cell]=row=new TransportRow(cell);cells.add(cell);ownerCount+=row.owners.size();}return row;
 		}
@@ -623,42 +634,51 @@ public final class LiquidCellInventory {
 			var row=row(cell);int at=row.index(material,support);if(at>=0)return row.owners.get(at);
 			var total=new Accumulator(new Key(cell,material,support),null);row.owners.add(-at-1,total);ownerCount++;return total;
 		}
-	}
-	/** Exact material quantities and numerical U are assembled into their final stored owners. */
-	private Plan prepareTransport(TransportTargets totals,List<Transfer> transfers,TransportQuantities heat){
-		var mechanicalHeat=addTransportHeat(totals,heat);
-		var futureRows=new ArrayList<>(rows);
-		int[] futureSpecies=null,futureMaterials=null;boolean geometryChanged=false;
-		double[] beforeEnergy=new double[totals.ownerCount],afterEnergy=new double[totals.ownerCount];int energyIndex=0;
-		for(int cell:totals.cells){
-			var owners=totals.byCell[cell].owners;var row=new ArrayList<Stock>(owners.size());boolean rowChanged=false;
-			for(var total:owners){
+		/** Material endpoints and their exact energy accounting share one ordered row pass. */
+		List<List<Stock>> prepareRows() {
+			beforeEnergy=new double[ownerCount];afterEnergy=new double[ownerCount];
+			var futureRows=new ArrayList<>(rows);
+			for(int cell:cells) {
+				var prepared=prepareRow(byCell[cell]);
+				if(prepared!=null)futureRows.set(cell,prepared);
+			}
+			return java.util.Collections.unmodifiableList(futureRows);
+		}
+		private List<Stock> prepareRow(TransportRow target) {
+			var row=new ArrayList<Stock>(target.owners.size());boolean changed=false;
+			for(var total:target.owners) {
 				if(!total.transportChanged){if(total.original!=null)row.add(total.original);continue;}
-				var key=total.key;var before=total.original;var after=total.preparedTransportStock();
+				var before=total.original;var after=total.preparedTransportStock();
 				if(after!=null)row.add(after);
 				if(before==after)continue;
-				rowChanged=true;
-				if(!samePresence(before,after)){
+				changed=true;
+				if(!samePresence(before,after)) {
 					if(futureSpecies==null){futureSpecies=presence.species.clone();futureMaterials=presence.materials.clone();}
 					if(after!=null&&after.key().material()>=futureMaterials.length)futureMaterials=java.util.Arrays.copyOf(futureMaterials,after.key().material()+1);
 					adjustPresence(before,-1,futureSpecies,futureMaterials);adjustPresence(after,1,futureSpecies,futureMaterials);
 				}
 				geometryChanged|=before==null?after!=null:after==null||!before.volume().equals(after.volume());
-				beforeEnergy[energyIndex]=before==null?0:before.internalEnergy();
-				afterEnergy[energyIndex++]=after==null?0:after.internalEnergy();
+				beforeEnergy[energyCount]=before==null?0:before.internalEnergy();
+				afterEnergy[energyCount++]=after==null?0:after.internalEnergy();
 			}
-			if(rowChanged)futureRows.set(cell,List.copyOf(row));
+			return changed?List.copyOf(row):null;
 		}
-		var future=new LiquidCellInventory(this,java.util.Collections.unmodifiableList(futureRows),revision+1,null);
+
+	}
+	/** Exact material quantities and numerical U are assembled into their final stored owners. */
+	private Plan prepareTransport(TransportTargets totals,List<Transfer> transfers,TransportQuantities heat){
+		var mechanicalHeat=addTransportHeat(totals,heat);
+		var futureRows=totals.prepareRows();
+		var future=new LiquidCellInventory(this,futureRows,revision+1,null);
 		future.quantities=quantities.clone();
 		for(int cell:totals.cells)future.quantities[cell]=totals.byCell[cell].quantities();
 		future.totalVolume=totalVolume;future.totalMass=totalMass;
-		if(futureSpecies!=null)future.presence=new PresenceIndex(futureSpecies,futureMaterials);
-		if(geometryChanged){future.geometryRevision++;future.geometryIdentity=new Object();}
+		if(totals.futureSpecies!=null)future.presence=new PresenceIndex(totals.futureSpecies,totals.futureMaterials);
+		if(totals.geometryChanged){future.geometryRevision++;future.geometryIdentity=new Object();}
 		// Only committed binary64 owners enter exact energy accounting. Numerical
 		// partitioning and mixing roundoff is the endpoint difference after the
 		// separately computed mechanical heat has been removed.
-		var roundoff=SignedDyadic.sum(afterEnergy,energyIndex).subtract(SignedDyadic.sum(beforeEnergy,energyIndex)).subtract(mechanicalHeat);
+		var roundoff=SignedDyadic.sum(totals.afterEnergy,totals.energyCount).subtract(SignedDyadic.sum(totals.beforeEnergy,totals.energyCount)).subtract(mechanicalHeat);
 		return new Plan(this,future,totals.cells,transfers,mechanicalHeat.add(roundoff),roundoff,mechanicalHeat);
 	}
 	private SignedDyadic addTransportHeat(TransportTargets totals,TransportQuantities heat){

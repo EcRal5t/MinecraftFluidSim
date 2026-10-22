@@ -239,7 +239,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 - **库存、PLIC 与速度工作区失效**
   - 主要文件：
-    - [FixedGeometrySnapshot](../../solver/src/main/java/mmm/fluid/FixedGeometrySnapshot.java)：固定掩码、孔容、面开口与墙面积的不可变数据，供状态、气体帧与候选共享。
+    - [FixedGeometrySnapshot](../../solver/src/main/java/mmm/fluid/FixedGeometrySnapshot.java)：固定掩码、孔容、面开口、墙面积及按网格尺寸生成的只读面索引，供状态、气体帧与候选共享。
     - [FlipCutCellGeometry](../../solver/src/main/java/mmm/fluid/FlipCutCellGeometry.java)：`snapshot` / `restoreSnapshot` 交接固定几何，`replaceMask` 在真实编辑时隔离写入。
     - [CellMacStage](../../solver/src/main/java/mmm/fluid/CellMacStage.java)：按物质数量准备惯性、墙面约束和持久动量，内能更新复用原数量
     - [DomainFlowFields](../../solver/src/main/java/mmm/fluid/DomainFlowFields.java)
@@ -252,7 +252,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
     - [PressureLinearSolver](../../solver/src/main/java/mmm/fluid/PressureLinearSolver.java)：求解显式传入的未知行与约束，返回双精度压力，由 `PressureSystem` 发布
     - [PressureSparseMatrix](../../solver/src/main/java/mmm/fluid/PressureSparseMatrix.java)：无阻力响应的共同 CSR，用于压力预条件
     - [PressurePreconditioner](../../solver/src/main/java/mmm/fluid/PressurePreconditioner.java)
-    - [PressureFaceGraph](../../solver/src/main/java/mmm/fluid/PressureFaceGraph.java)：共同压力支撑、接液面积与散度系数；气压在每次装配读取实际状态，液体输运直接使用固定孔口邻接
+    - [PressureFaceGraph](../../solver/src/main/java/mmm/fluid/PressureFaceGraph.java)：每格一个固定开放连通域对应的压力工作区、接液面积与散度系数；气压在每次装配读取实际状态，液体输运直接使用固定孔口邻接
     - [PressureBoundaryView](../../solver/src/main/java/mmm/fluid/PressureBoundaryView.java)
   - 验证选择器 / 参考：`marker-pressure,gas-liquid`；[压力离散](fluid-solver.md#自由面与压力)
 
@@ -449,8 +449,8 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 ## 存档和故障恢复
 
 完整状态由 `FluidDomainStateMapper` 捕获与恢复。
-气体初始化状态随同保存；尚未初始化气体的恢复只准备库存与速度，气腔库存由后续明确的物理准备创建。
-正常候选共享已验证的液体不可变库存行与气相几何，独立复制 MAC 动量和气体网络；非液体内能由 `ThermalOwnerSnapshot` 携带。
+气体初始化状态随同保存；恢复交接库存和动量，速度在查询或机械步骤中按需准备；气腔库存由后续明确的物理准备创建。
+正常候选直接绑定已验证的固定几何，共享只读网格面索引、液体不可变库存行与气相几何，独立复制 MAC 动量和气体网络；非液体内能由 `ThermalOwnerSnapshot` 携带。气体交接由 `FluidDomainState.GasContinuation` 持有捕获副本，存档分区投影在保存时生成。
 调度进度、待同步相变几何、世界热交换面与最近真实压力投影随同交接。`FluidDomainState.Layout` 绑定网格、配置、载体布局和注册表身份；区域 checkpoint 的持久字段另由存档模型定义。
 
 `CpuFluidSolverBackend` 在私有域完成整个逻辑步；力学细化从原始请求重新恢复，保留总推进时间、外部输入和一次提交。`RegionApplicationService` 与仓库核对后端、区域身份、紧邻求解器代次和完整布局。CPU 可把已求解私有对象交接一次；其他后端提供完整不可变状态。候选失败保留原区域，成功后发布该候选的完整统计。
