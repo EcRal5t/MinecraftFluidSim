@@ -7,7 +7,7 @@ import java.util.Arrays;
 import java.util.Locale;
 import mmm.units.SignedDyadic;
 
-/** Accepted route volumes -> quantity shares -> canonical stock/species/dyadic CSR. */
+/** Accepted cell volumes -> material routes, quantity shares, inventory/MAC and exact energy ledgers. */
 public final class GpuLiquidGatherBenchmark {
     private GpuLiquidGatherBenchmark() { }
     public static void main(String[] args) {
@@ -15,25 +15,30 @@ public final class GpuLiquidGatherBenchmark {
         int device=args.length>0?Integer.parseInt(args[0]):0;
         int samples=args.length>1?Integer.parseInt(args[1]):10;
         if(samples<1)throw new IllegalArgumentException("At least one sample required");
-        try(var context=new VulkanDeviceContext(device,true,true);var quantities=new VulkanLiquidRouteQuantities(context);
+        try(var context=new VulkanDeviceContext(device,true,true);var materialRoutes=new VulkanLiquidMaterialRoutes(context);var quantities=new VulkanLiquidRouteQuantities(context);
             var gather=new VulkanLiquidGather(context);var momentum=new VulkanLiquidMomentum(context);var ledger=new VulkanEnergyLedger(context)) {
             System.out.println("Device: "+context.deviceName());
-            System.out.println("Accepted volume quantities + gather + MAC transport/resolve + heat posting + exact energy ledgers: fixed resident input, half retained/half exchanged, two materials/species, different donor quantities and energy.");
-            System.out.println("Timed candidates are discarded; one separate candidate is committed and sampled after timing. Excludes capacity acceptance, material volume partition, pressure, gas coupling and full steps. Zero reference-energy tables select the no-reference-energy fixture.");
+            System.out.println("Accepted cell volumes + material routes + quantities + gather + MAC + heat + exact energy ledgers: fixed resident input, half retained/half exchanged, two materials/species, different donor quantities and energy.");
+            System.out.println("Timed candidates are discarded; one separate candidate is committed and sampled after timing. Excludes capacity acceptance, pressure, gas coupling and full steps. Zero reference-energy tables select the no-reference-energy fixture.");
             System.out.println("grid,source_stocks,output_stocks,median_ms,max_ms,gpu_mean_ms,upload_B_per_step,readback_B_per_step,device_MiB,staging_MiB");
             checkSignedReduction(context,ledger);
-            for(int grid:new int[]{32,64})measure(context,quantities,gather,momentum,ledger,grid,samples);
+            for(int grid:new int[]{32,64})measure(context,materialRoutes,quantities,gather,momentum,ledger,grid,samples);
         }
     }
 
-    private static void measure(VulkanDeviceContext context,VulkanLiquidRouteQuantities quantities,VulkanLiquidGather gather,VulkanLiquidMomentum momentum,VulkanEnergyLedger ledger,int grid,int samples) {
+    private static void measure(VulkanDeviceContext context,VulkanLiquidMaterialRoutes materialRoutes,VulkanLiquidRouteQuantities quantities,VulkanLiquidGather gather,VulkanLiquidMomentum momentum,VulkanEnergyLedger ledger,int grid,int samples) {
         int cells=grid*grid*grid,stocks=2*cells;
         long alignment=Math.max(8,context.storageOffsetAlignment());
         var state=new VulkanLiquidStateLayout(grid,grid,grid,stocks,stocks,stocks,alignment);
-        var routes=new VulkanLiquidRouteLayout(stocks,2*stocks,2*stocks,state.bytes(),alignment);
+        var routes=new VulkanLiquidRouteLayout(stocks,2*stocks,14*stocks,state.bytes(),alignment);
         long fixed=routes.endOffset(),mass=fixed+4L*cells,materialReference=mass+16,speciesReference=materialReference+16;
+        long acceptedBase=speciesReference+32,phaseBase=acceptedBase+140L*cells,acceptedLimb=phaseBase+8;
+        int scratchLimbs=Math.multiplyExact(7*stocks+3*cells,4);
+        var materialLayout=VulkanLiquidMaterialRoutes.layout(state,routes,Math.toIntExact(acceptedBase/4),
+                Math.toIntExact(phaseBase/4),-1,scratchLimbs,acceptedLimb+8,alignment);
+        System.out.println("material_route_capacity grid="+grid+" scratch_limbs="+scratchLimbs+" final_route_limbs="+routes.limbCapacity());
         var quantityLayout=VulkanLiquidRouteQuantities.layout(state,routes,Math.toIntExact(materialReference/4),
-                Math.toIntExact(speciesReference/4),2,speciesReference+32,alignment);
+                Math.toIntExact(speciesReference/4),2,materialLayout.endOffset(),alignment);
         var layout=VulkanLiquidGather.layout(state,state,routes,Math.toIntExact(fixed/4),
                 Math.toIntExact(mass/4),quantityLayout.endOffset(),alignment);
         int faces=state.column(VulkanLiquidStateLayout.Field.MOMENTUM_X).count()
@@ -53,6 +58,18 @@ public final class GpuLiquidGatherBenchmark {
         if(bytes>context.maxStorageBufferRange())throw new IllegalArgumentException("Gather arena exceeds device storage descriptor range");
         var initial=ByteBuffer.allocate(bytes).order(ByteOrder.LITTLE_ENDIAN);
         layout.initializeHeader(initial);
+        materialLayout.initializeHeader(initial);
+        initial.putInt(Math.toIntExact(phaseBase),0).putInt(Math.toIntExact(phaseBase+4),1);
+        initial.putInt(Math.toIntExact(acceptedLimb),1);
+        for(int cell=0;cell<cells;cell++) {
+            int moving=(cell%grid)%2==0?2:1;
+            for(int slot=0;slot<7;slot++) {
+                int at=Math.toIntExact(acceptedBase+20L*(7*cell+slot));
+                boolean active=slot==0||slot==moving;
+                initial.putInt(at,1).putInt(at+4,Math.toIntExact(acceptedLimb/4)).putInt(at+8,active?1:0)
+                        .putInt(at+12,-3).putInt(at+16,active?1:0);
+            }
+        }
         quantityLayout.initializeHeader(initial);
         momentumLayout.initializeHeader(initial);
         roundoffLayout.initializeHeader(initial);heatLayout.initializeHeader(initial);endpointLayout.initializeHeader(initial);
@@ -71,9 +88,8 @@ public final class GpuLiquidGatherBenchmark {
         put(initial,state,VulkanLiquidStateLayout.Field.COUNTS,1,stocks);
         put(initial,state,VulkanLiquidStateLayout.Field.COUNTS,2,stocks);
         for(int cell=0;cell<=cells;cell++)put(initial,state,VulkanLiquidStateLayout.Field.CELL_OFFSETS,cell,2*cell);
-        int prefix=0;
         for(int stock=0;stock<stocks;stock++) {
-            int material=stock%2,cell=stock/2,slot=(cell%grid)%2==0?2:1;
+            int material=stock%2,cell=stock/2;
             boolean even=(cell%grid)%2==0;
             put(initial,state,VulkanLiquidStateLayout.Field.MATERIALS,stock,material);
             put(initial,state,VulkanLiquidStateLayout.Field.SUPPORT_MASKS,stock,255);
@@ -89,37 +105,28 @@ public final class GpuLiquidGatherBenchmark {
             putLong(initial,state.column(VulkanLiquidStateLayout.Field.SPECIES_AMOUNTS),stock,even?80:160);
             putLong(initial,state.column(VulkanLiquidStateLayout.Field.MASS_RESIDUAL_UNITS),stock,even?20:40);
             putLong(initial,state.column(VulkanLiquidStateLayout.Field.NUMERIC_VOLUMES),stock,Double.doubleToRawLongBits(.125));
-            for(int side=0;side<7;side++) {
-                int route=7*stock+side;
-                put(initial,routes.column(VulkanLiquidRouteLayout.Field.VOLUME_OFFSETS),route,prefix);
-                put(initial,routes.column(VulkanLiquidRouteLayout.Field.SPECIES_OFFSETS),route,prefix);
-                if(side!=slot && side!=0)continue;
-                put(initial,routes.column(VulkanLiquidRouteLayout.Field.VOLUME_SIGNS),route,1);
-                put(initial,routes.column(VulkanLiquidRouteLayout.Field.VOLUME_EXPONENTS),route,-4);
-                put(initial,routes.column(VulkanLiquidRouteLayout.Field.VOLUME_LIMBS),prefix,1);
-                prefix++;
-            }
         }
         put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_OFFSETS,stocks,stocks);
         put(initial,state,VulkanLiquidStateLayout.Field.SPECIES_OFFSETS,stocks,stocks);
-        put(initial,routes.column(VulkanLiquidRouteLayout.Field.VOLUME_OFFSETS),routes.routeCapacity(),prefix);
-        put(initial,routes.column(VulkanLiquidRouteLayout.Field.SPECIES_OFFSETS),routes.routeCapacity(),prefix);
         try(var storage=new VulkanRegionStorage(context,bytes,1024*1024)) {
             storage.initialize(initial,0);
             try(var source=storage.capture()) {
-                for(int i=0;i<5;i++)advance(storage,source,quantities,quantityLayout,gather,layout,momentum,momentumLayout,ledger,roundoffLayout,heatLayout,endpointLayout,false);
+                for(int i=0;i<5;i++)advance(storage,source,materialRoutes,materialLayout,quantities,quantityLayout,gather,layout,momentum,momentumLayout,ledger,roundoffLayout,heatLayout,endpointLayout,false);
                 var before=storage.metrics();long[] nanos=new long[samples];
                 for(int i=0;i<samples;i++) {
-                    long start=System.nanoTime();advance(storage,source,quantities,quantityLayout,gather,layout,momentum,momentumLayout,ledger,roundoffLayout,heatLayout,endpointLayout,false);nanos[i]=System.nanoTime()-start;
+                    long start=System.nanoTime();advance(storage,source,materialRoutes,materialLayout,quantities,quantityLayout,gather,layout,momentum,momentumLayout,ledger,roundoffLayout,heatLayout,endpointLayout,false);nanos[i]=System.nanoTime()-start;
                 }
                 var after=storage.metrics();Arrays.sort(nanos);
                 System.out.printf("%d,%d,%d,%.3f,%.3f,%.3f,%d,%d,%.1f,%.1f%n",grid,stocks,stocks,
                         nanos[samples/2]*1e-6,nanos[samples-1]*1e-6,(after.gpuNanos()-before.gpuNanos())*1e-6/samples,
                         (after.uploadBytes()-before.uploadBytes())/samples,(after.readbackBytes()-before.readbackBytes())/samples,
                         after.deviceBytes()/1048576.0,after.stagingBytes()/1048576.0);
-                advance(storage,source,quantities,quantityLayout,gather,layout,momentum,momentumLayout,ledger,roundoffLayout,heatLayout,endpointLayout,true);
+                advance(storage,source,materialRoutes,materialLayout,quantities,quantityLayout,gather,layout,momentum,momentumLayout,ledger,roundoffLayout,heatLayout,endpointLayout,true);
             }
             try(var result=storage.capture()) {
+                int requiredScratch=read(storage,result,materialLayout.reserveOffsets().offset()+4L*materialLayout.windowCount(),4).getInt(0);
+                int requiredRoute=read(storage,result,routes.column(VulkanLiquidRouteLayout.Field.VOLUME_OFFSETS).offset()+4L*routes.routeCapacity(),4).getInt(0);
+                System.out.println("material_route_required grid="+grid+" scratch_limbs="+requiredScratch+" final_route_limbs="+requiredRoute);
                 var roundoff=readDyadic(storage,result,roundoffLayout.result().offset());
                 var endpoint=readDyadic(storage,result,endpointLayout.result().offset());
                 if(!roundoff.equals(endpoint))throw new AssertionError("Exact device energy ledger differs from endpoints: "+roundoff+" != "+endpoint);
@@ -156,12 +163,15 @@ public final class GpuLiquidGatherBenchmark {
     }
 
     private static void advance(VulkanRegionStorage storage,VulkanRegionStorage.Capture source,
+                                VulkanLiquidMaterialRoutes materialRoutes,VulkanLiquidMaterialRoutes.Layout materialLayout,
                                 VulkanLiquidRouteQuantities quantities,VulkanLiquidRouteQuantities.Layout quantityLayout,
                                 VulkanLiquidGather gather,VulkanLiquidGather.Layout layout,VulkanLiquidMomentum momentum,
                                 VulkanLiquidMomentum.Layout momentumLayout,VulkanEnergyLedger ledger,VulkanEnergyLedger.Layout roundoffLayout,
                                 VulkanEnergyLedger.Layout heatLayout,VulkanEnergyLedger.Layout endpointLayout,boolean commit) {
         try(var candidate=storage.prepare(source)) {
             int error=candidate.execute(0,(command,input,output,errors,staging,stack)-> {
+                materialRoutes.rebindRanges(new FlipKernelBindings.BufferRange(input),new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
+                materialRoutes.record(command,materialLayout);
                 quantities.rebindRanges(new FlipKernelBindings.BufferRange(input),new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
                 quantities.record(command,quantityLayout);
                 gather.rebindRanges(new FlipKernelBindings.BufferRange(input),new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));

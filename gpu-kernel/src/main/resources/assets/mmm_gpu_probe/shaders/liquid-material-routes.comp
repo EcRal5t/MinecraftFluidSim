@@ -1,0 +1,240 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) readonly buffer Source { uint sourceWords[]; };
+layout(binding=1,std430) buffer Candidate { uint candidateWords[]; };
+layout(binding=2,std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Params { int header; int stage; int count; } p;
+// DYADIC_LIBRARY
+const int COUNTS=0,CELL_OFFSETS=1,MATERIALS=2,VOLUME_OFFSETS=4,VOLUME_SIGNS=5,
+          VOLUME_EXPONENTS=6,VOLUME_LIMBS=7,MASS_UNITS=8;
+const int R_OFFSETS=0,R_SIGNS=1,R_EXPONENTS=2,R_LIMBS=3;
+uvec2 proposalWords;
+bool failed=false;
+int h(int index) { return int(candidateWords[p.header+index]); }
+int src(int field) { return h(16+field); }
+int route(int field) { return h(35+field); }
+uint dyadicWord(int bank,int index) {
+    return bank==0?sourceWords[index]:bank==1?candidateWords[index]:proposalWords[index];
+}
+void dyadicWrite(int index,uint word) { candidateWords[index]=word; }
+double getDouble(int at) { return packDouble2x32(uvec2(candidateWords[at],candidateWords[at+1])); }
+void putDouble(int at,double value) { uvec2 bits=unpackDouble2x32(value);candidateWords[at]=bits.x;candidateWords[at+1]=bits.y; }
+int64_t getLong(int at) { return int64_t(uint64_t(candidateWords[at])|(uint64_t(candidateWords[at+1])<<32)); }
+void putLong(int at,int64_t value) { candidateWords[at]=uint(value);candidateWords[at+1]=uint(uint64_t(value)>>32); }
+void fail() { failed=true;atomicOr(errors,32u); }
+DyadicTerm zero() { return DyadicTerm(1,0,0,0,0); }
+DyadicTerm accepted(int cell,int slot) {
+    int at=h(3)+5*(7*cell+slot);
+    return DyadicTerm(int(candidateWords[at]),int(candidateWords[at+1]),int(candidateWords[at+2]),
+                      int(candidateWords[at+3]),int(candidateWords[at+4]));
+}
+DyadicTerm sourceVolume(int stock) {
+    int first=int(sourceWords[src(VOLUME_OFFSETS)+stock]);
+    return DyadicTerm(0,src(VOLUME_LIMBS)+first,int(sourceWords[src(VOLUME_OFFSETS)+stock+1])-first,
+                      int(sourceWords[src(VOLUME_EXPONENTS)+stock]),int(sourceWords[src(VOLUME_SIGNS)+stock]));
+}
+int windowOffset(int window) { return h(10)+int(candidateWords[h(9)+window]); }
+int windowCapacity(int window) { return int(candidateWords[h(8)+window]); }
+DyadicTerm routed(int entry) {
+    return DyadicTerm(1,windowOffset(entry),int(candidateWords[h(11)+entry]),
+                      int(candidateWords[route(R_EXPONENTS)+entry]),int(candidateWords[route(R_SIGNS)+entry]));
+}
+void saveRoute(int entry,DyadicTerm value) {
+    candidateWords[h(11)+entry]=uint(value.count);
+    candidateWords[route(R_EXPONENTS)+entry]=uint(value.exponent);
+    candidateWords[route(R_SIGNS)+entry]=uint(value.sign);
+}
+int64_t highBit(DyadicTerm value) {
+    return int64_t(value.exponent)+int64_t(32)*int64_t(value.count-1)
+            +int64_t(findMSB(dyadicWord(value.bank,value.offset+value.count-1)));
+}
+double head(DyadicTerm value) {
+    if(!dyadicPresent(value))return 0.0;
+    double result=double(dyadicWord(value.bank,value.offset+value.count-1));
+    if(value.count>1)result+=double(dyadicWord(value.bank,value.offset+value.count-2))*2.3283064365386962890625e-10LF;
+    if(value.count>2)result+=double(dyadicWord(value.bank,value.offset+value.count-3))*5.4210108624275221700372640043497e-20LF;
+    return result;
+}
+double scaled(DyadicTerm value,int64_t power) {
+    if(!dyadicPresent(value))return 0.0;
+    int64_t shift=int64_t(value.exponent)+int64_t(32)*int64_t(value.count-1)-power;
+    if(shift<int64_t(-1100))return 0.0;
+    return ldexp(head(value),int(shift));
+}
+DyadicTerm copyTo(DyadicTerm value,int window) {
+    if(!dyadicPresent(value))return zero();
+    if(value.count>windowCapacity(window)){atomicOr(errors,64u);failed=true;return zero();}
+    int at=windowOffset(window);
+    for(int i=0;i<value.count;i++)candidateWords[at+i]=dyadicWord(value.bank,value.offset+i);
+    return DyadicTerm(1,at,value.count,value.exponent,1);
+}
+DyadicTerm combine(DyadicTerm a,DyadicTerm b,int coefficient,int window) {
+    DyadicTerm items[7];items[0]=a;items[1]=b;items[1].sign*=coefficient;
+    DyadicMeasure measure=dyadicMeasure(items,2);
+    if(measure.status==DYADIC_ZERO)return zero();
+    if(measure.status!=DYADIC_POSITIVE){fail();return zero();}
+    if(measure.words>windowCapacity(window)){atomicOr(errors,64u);failed=true;return zero();}
+    dyadicWriteSum(items,2,measure,windowOffset(window));
+    return DyadicTerm(1,windowOffset(window),measure.words,measure.exponent,1);
+}
+DyadicTerm smaller(DyadicTerm a,DyadicTerm b) { return dyadicCompare(a,b)<=0?a:b; }
+
+int phase(int stock) { return int(candidateWords[h(4)+int(sourceWords[src(MATERIALS)+stock])]); }
+bool densityEqual(int a,int b) {
+    return getLong(h(15)+2*a)==getLong(h(15)+2*b)&&getDouble(h(14)+2*a)==getDouble(h(14)+2*b);
+}
+bool denser(int a,int b) {
+    int64_t ea=getLong(h(15)+2*a),eb=getLong(h(15)+2*b);
+    return ea==eb?getDouble(h(14)+2*a)>getDouble(h(14)+2*b):ea>eb;
+}
+bool selected(int stock,int layer) { return layer<0||densityEqual(stock,layer); }
+
+void prepareDensity(int first,int last) {
+    for(int stock=first;stock<last;stock++) {
+        int leader=stock;
+        for(int other=first;other<stock;other++)if(phase(other)==phase(stock)){leader=other;break;}
+        if(leader!=stock) {
+            putDouble(h(14)+2*stock,getDouble(h(14)+2*leader));
+            putLong(h(15)+2*stock,getLong(h(15)+2*leader));continue;
+        }
+        int64_t maximum=int64_t(-9223372036854775807L);double mass=0.0;
+        for(int other=stock;other<last;other++)if(phase(other)==phase(stock)) {
+            DyadicTerm volume=sourceVolume(other);if(dyadicPresent(volume))maximum=max(maximum,highBit(volume));
+            int at=src(MASS_UNITS)+2*other;
+            mass+=double(uint64_t(sourceWords[at])|(uint64_t(sourceWords[at+1])<<32));
+        }
+        double volumeSum=0.0;
+        for(int other=stock;other<last;other++)if(phase(other)==phase(stock))volumeSum+=scaled(sourceVolume(other),maximum);
+        int power=0;double density=mass==0.0?0.0:frexp(mass/volumeSum,power);
+        putDouble(h(14)+2*stock,density);
+        putLong(h(15)+2*stock,mass==0.0?int64_t(-9223372036854775807L):int64_t(power)-maximum);
+    }
+}
+
+// Writes three disjoint intermediate results before replacing source remaining.
+// The chosen part can reference either old remaining or old budget without aliasing.
+void transfer(int stock,int slot,DyadicTerm part,inout DyadicTerm budget,inout int budgetWindow,int cell) {
+    if(!dyadicPresent(part)||failed)return;
+    int base=h(2)+3*cell,temp=base+2,other=budgetWindow==base?base+1:base;
+    int entry=7*stock+slot;
+    DyadicTerm piece=combine(routed(entry),part,1,temp);
+    if(failed)return;
+    piece=copyTo(piece,entry);saveRoute(entry,piece);
+    DyadicTerm nextBudget=combine(budget,part,-1,other);
+    if(failed)return;
+    DyadicTerm remaining=combine(routed(7*stock),part,-1,temp);
+    if(failed)return;
+    remaining=copyTo(remaining,7*stock);saveRoute(7*stock,remaining);
+    budget=nextBudget;budgetWindow=other;
+}
+
+void partitionLayer(int cell,int first,int last,int slot,int layer,inout DyadicTerm budget,inout int budgetWindow) {
+    int64_t maximum=int64_t(-9223372036854775807L);
+    for(int stock=first;stock<last;stock++)if(selected(stock,layer)) {
+        DyadicTerm value=routed(7*stock);if(dyadicPresent(value))maximum=max(maximum,highBit(value));
+    }
+    double total=0.0;
+    for(int stock=first;stock<last;stock++)if(selected(stock,layer)) {
+        double weight=scaled(routed(7*stock),maximum);putDouble(h(13)+2*stock,weight);total+=weight;
+    }
+    // Keep this face's original target immutable while the working budget alternates.
+    // Its leading three words suffice for preferences; exponent/significand copies are local.
+    DyadicTerm initial=budget;
+    double initialHead=head(initial);int64_t initialPower=int64_t(initial.exponent)+int64_t(32)*int64_t(initial.count-1);
+    for(int stock=first;stock<last&&dyadicPresent(budget)&&!failed;stock++)if(selected(stock,layer)) {
+        double ratio=total>0.0?getDouble(h(13)+2*stock)/total:0.0;
+        // Recreate a normalized three-word-free descriptor through the local proposal bank.
+        double amount=initialHead*ratio;int power=0;double mantissa=frexp(amount,power);
+        uint64_t bits=uint64_t(ldexp(mantissa,53));
+        int64_t exponent=initialPower+int64_t(power)-int64_t(53),minimum=int64_t(int(candidateWords[h(12)+cell]));
+        if(exponent<minimum) { int64_t shift=minimum-exponent;bits=shift>=int64_t(64)?uint64_t(0):bits>>int(shift);exponent=minimum; }
+        DyadicTerm wanted=zero();
+        if(bits!=uint64_t(0)) {
+            int trailing=uint(bits)==0u?32+findLSB(uint(bits>>32)):findLSB(uint(bits));bits>>=trailing;exponent+=int64_t(trailing);
+            if(exponent<int64_t(-2147483647)-int64_t(1)||exponent>int64_t(2147483647)){fail();return;}
+            proposalWords=uvec2(uint(bits),uint(bits>>32));wanted=DyadicTerm(2,0,proposalWords.y==0u?1:2,int(exponent),1);
+        }
+        transfer(stock,slot,smaller(smaller(wanted,routed(7*stock)),budget),budget,budgetWindow,cell);
+    }
+    // At most one linear pass closes the exact remainder, including subnormal or wider inputs.
+    for(int stock=first;stock<last&&dyadicPresent(budget)&&!failed;stock++)if(selected(stock,layer))
+        transfer(stock,slot,smaller(routed(7*stock),budget),budget,budgetWindow,cell);
+}
+
+void distributeFace(int cell,int first,int last,int slot,bool layered,bool heavyFirst) {
+    DyadicTerm targetVolume=accepted(cell,slot);if(!dyadicPresent(targetVolume))return;
+    int budgetWindow=h(2)+3*cell;
+    DyadicTerm budget=copyTo(targetVolume,budgetWindow);
+    while(dyadicPresent(budget)&&!failed) {
+        int layer=-1;
+        if(layered) {
+            for(int stock=first;stock<last;stock++)if(dyadicPresent(routed(7*stock)))
+                if(layer<0||(heavyFirst?denser(stock,layer):denser(layer,stock)))layer=stock;
+            if(layer<0){fail();return;}
+        }
+        partitionLayer(cell,first,last,slot,layer,budget,budgetWindow);
+        if(!layered&&dyadicPresent(budget)){fail();return;}
+    }
+}
+
+int reserveWidth(int64_t high,int minimum) {
+    return int(min(int64_t(1024),max(int64_t(1),(high-int64_t(minimum)+int64_t(32))/int64_t(32))));
+}
+void reserve(int cell) {
+    int first=int(sourceWords[src(CELL_OFFSETS)+cell]),last=int(sourceWords[src(CELL_OFFSETS)+cell+1]);
+    int minimum=2147483647;int64_t maximum=int64_t(-9223372036854775807L);
+    for(int stock=first;stock<last;stock++) {
+        DyadicTerm value=sourceVolume(stock);if(!dyadicPresent(value))continue;
+        minimum=min(minimum,value.exponent);maximum=max(maximum,highBit(value));
+    }
+    for(int slot=0;slot<7;slot++) {
+        DyadicTerm value=accepted(cell,slot);if(value.sign<0){fail();return;}
+        if(dyadicPresent(value)){minimum=min(minimum,value.exponent);maximum=max(maximum,highBit(value));}
+    }
+    if(minimum==2147483647&&maximum==int64_t(-9223372036854775807L))return;
+    if(minimum<(-2147483647+53)){fail();return;}
+    minimum-=53;candidateWords[h(12)+cell]=uint(minimum);
+    for(int stock=first;stock<last;stock++) {
+        DyadicTerm value=sourceVolume(stock);int width=dyadicPresent(value)?reserveWidth(highBit(value),minimum):1;
+        for(int slot=0;slot<7;slot++)candidateWords[h(8)+7*stock+slot]=uint(width);
+    }
+    for(int i=0;i<3;i++)candidateWords[h(8)+h(2)+3*cell+i]=uint(reserveWidth(maximum+int64_t(32),minimum));
+}
+void splitCell(int cell) {
+    if(candidateWords[h(9)+h(45)]>uint(h(6))){atomicOr(errors,64u);return;}
+    int first=int(sourceWords[src(CELL_OFFSETS)+cell]),last=int(sourceWords[src(CELL_OFFSETS)+cell+1]);
+    for(int stock=first;stock<last;stock++)saveRoute(7*stock,copyTo(sourceVolume(stock),7*stock));
+    if(failed)return;
+    bool vertical=h(5)!=0&&(dyadicPresent(accepted(cell,3))||dyadicPresent(accepted(cell,4)));
+    if(vertical)prepareDensity(first,last);
+    distributeFace(cell,first,last,1,false,false);distributeFace(cell,first,last,2,false,false);
+    distributeFace(cell,first,last,5,false,false);distributeFace(cell,first,last,6,false,false);
+    int down=h(5)>0?4:3,up=down==3?4:3;
+    distributeFace(cell,first,last,down,vertical,true);distributeFace(cell,first,last,up,vertical,false);
+    // Exact retained total also detects caller budgets inconsistent with source inventory.
+    int base=h(2)+3*cell,current=base;DyadicTerm retained=zero();
+    for(int stock=first;stock<last&&!failed;stock++) {
+        int next=current==base?base+1:base;
+        retained=combine(retained,routed(7*stock),1,next);current=next;
+    }
+    if(!failed&&dyadicCompare(retained,accepted(cell,0))!=0)fail();
+}
+void compact(int entry) {
+    if(candidateWords[route(R_OFFSETS)+h(2)]>uint(h(7))){atomicOr(errors,64u);return;}
+    int count=int(candidateWords[h(11)+entry]),from=windowOffset(entry),to=route(R_LIMBS)+int(candidateWords[route(R_OFFSETS)+entry]);
+    for(int i=0;i<count;i++)candidateWords[to+i]=candidateWords[from+i];
+}
+void main() {
+    uint id=(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x;
+    if(id>=uint(p.count))return;int item=int(id);
+    if(p.stage==0) {
+        candidateWords[h(8)+item]=0u;
+        if(item<h(2)){candidateWords[h(11)+item]=0u;candidateWords[route(R_SIGNS)+item]=0u;candidateWords[route(R_EXPONENTS)+item]=0u;}
+    } else if(errors==0u) {
+        if(p.stage==1)reserve(item);
+        else if(p.stage==2)splitCell(item);
+        else compact(item);
+    }
+}

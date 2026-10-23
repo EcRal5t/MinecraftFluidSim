@@ -193,7 +193,7 @@ void writeQuantities(int stock) {
 
 void main() {
     int index=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
-    if(index>=p.count)return;
+    if(index>=p.count||errors!=0u)return;
     if(p.stage==0){clearRoute(index);return;}
     if(uint(index)>=sourceWords[src(COUNTS)])return;
     if(p.stage==1)countSpecies(index);else writeQuantities(index);

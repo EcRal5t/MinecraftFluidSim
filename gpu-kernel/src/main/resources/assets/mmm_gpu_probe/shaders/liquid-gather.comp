@@ -198,7 +198,7 @@ void finishStock(int stock) {
 
 void main() {
     int index=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
-    if(index>=p.count)return;
+    if(index>=p.count||errors!=0u)return;
     if(p.stage==0)clearStock(index);else if(p.stage==1)mergeCell(index,false);
     else if(p.stage==2)mergeCell(index,true);else finishStock(index);
 }

@@ -56,6 +56,6 @@ void writeOperation(int operation) {
 
 void main() {
     int operation=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
-    if(operation>=p.operations)return;
+    if(operation>=p.operations||errors!=0u)return;
     if(p.stage==0)measureOperation(operation);else writeOperation(operation);
 }
