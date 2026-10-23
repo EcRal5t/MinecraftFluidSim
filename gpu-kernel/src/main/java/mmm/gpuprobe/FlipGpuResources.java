@@ -18,7 +18,7 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
 import static org.lwjgl.vulkan.VK10.*;
 
-/** Owns the FLIP storage buffers and centralizes Vulkan memory allocation. */
+/** Owns compute storage buffers and centralizes Vulkan memory allocation. */
 final class FlipGpuResources implements AutoCloseable {
 	static final int BUFFER_COUNT = 46;
 

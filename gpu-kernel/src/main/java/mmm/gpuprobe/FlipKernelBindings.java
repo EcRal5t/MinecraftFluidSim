@@ -18,6 +18,8 @@ import org.lwjgl.vulkan.VkWriteDescriptorSet;
 
 import java.nio.ByteBuffer;
 import java.nio.LongBuffer;
+import java.util.List;
+import java.util.stream.IntStream;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.system.MemoryUtil.NULL;
@@ -28,6 +30,7 @@ final class FlipKernelBindings implements AutoCloseable {
 	static final int PUSH_BYTES = 92;
 
 	private final VulkanDeviceContext context;
+	private final int bindingCount;
 	private long descriptorLayout;
 	private long pipelineLayout;
 	private long shaderModule;
@@ -40,9 +43,16 @@ final class FlipKernelBindings implements AutoCloseable {
 	}
 
 	FlipKernelBindings(VulkanDeviceContext context, FlipGpuResources resources, String source, int pushBytes) {
+		this(context, resources.size(), source, pushBytes);
+		rebind(resources);
+	}
+
+	/** Compiles once; explicit buffers are bound before recording each completed submission. */
+	FlipKernelBindings(VulkanDeviceContext context, int bindingCount, String source, int pushBytes) {
 		this.context = context;
+		this.bindingCount = bindingCount;
 		try {
-			create(resources, source, pushBytes);
+			create(source, pushBytes);
 		} catch (RuntimeException | LinkageError exception) {
 			try { close(); }
 			catch (RuntimeException | LinkageError closeFailure) { exception.addSuppressed(closeFailure); }
@@ -58,11 +68,11 @@ final class FlipKernelBindings implements AutoCloseable {
 				stack.longs(descriptorSet), null);
 	}
 
-	private void create(FlipGpuResources resources, String source, int pushBytes) {
+	private void create(String source, int pushBytes) {
 		try (MemoryStack stack = stackPush()) {
 			VkDescriptorSetLayoutBinding.Buffer bindings =
-					VkDescriptorSetLayoutBinding.calloc(resources.size(), stack);
-			for (int i = 0; i < resources.size(); i++) {
+					VkDescriptorSetLayoutBinding.calloc(bindingCount, stack);
+			for (int i = 0; i < bindingCount; i++) {
 				bindings.get(i).binding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
 						.descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
 			}
@@ -103,7 +113,7 @@ final class FlipKernelBindings implements AutoCloseable {
 			pipeline = pipelinePointer.get(0);
 
 			VkDescriptorPoolSize.Buffer poolSize = VkDescriptorPoolSize.calloc(1, stack);
-			poolSize.get(0).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(resources.size());
+			poolSize.get(0).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(bindingCount);
 			VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default()
 					.maxSets(1).pPoolSizes(poolSize);
 			LongBuffer poolPointer = stack.mallocLong(1);
@@ -118,17 +128,29 @@ final class FlipKernelBindings implements AutoCloseable {
 					"vkAllocateDescriptorSets");
 			descriptorSet = setPointer.get(0);
 		}
-		rebind(resources);
 	}
 
 	/** Replaces completed buffer bindings while retaining compiled code and the pipeline. */
 	void rebind(FlipGpuResources resources) {
+		rebind(IntStream.range(0, resources.size()).mapToObj(resources::buffer).toList());
+	}
+
+	record BufferRange(GpuBuffer buffer, long offset, long bytes) {
+		BufferRange(GpuBuffer buffer) { this(buffer, 0, buffer.size()); }
+	}
+
+	void rebind(List<GpuBuffer> buffers) {
+		rebindRanges(buffers.stream().map(BufferRange::new).toList());
+	}
+
+	void rebindRanges(List<BufferRange> buffers) {
+		if (buffers.size() != bindingCount) throw new IllegalArgumentException("Compute binding count differs");
 		try (MemoryStack stack = stackPush()) {
-			VkDescriptorBufferInfo.Buffer infos = VkDescriptorBufferInfo.calloc(resources.size(), stack);
-			VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(resources.size(), stack);
-			for (int i = 0; i < resources.size(); i++) {
-				GpuBuffer buffer = resources.buffer(i);
-				infos.get(i).buffer(buffer.handle()).offset(0).range(buffer.size());
+			VkDescriptorBufferInfo.Buffer infos = VkDescriptorBufferInfo.calloc(bindingCount, stack);
+			VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(bindingCount, stack);
+			for (int i = 0; i < bindingCount; i++) {
+				BufferRange range = buffers.get(i);
+				infos.get(i).buffer(range.buffer().handle()).offset(range.offset()).range(range.bytes());
 				writes.get(i).sType$Default().dstSet(descriptorSet).dstBinding(i)
 						.descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(1)
 						.pBufferInfo(VkDescriptorBufferInfo.create(infos.get(i).address(), 1));

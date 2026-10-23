@@ -662,7 +662,9 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [VulkanDeviceContext](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanDeviceContext.java)
     - [DeviceLiquidInventory](../../model/src/main/java/mmm/inventory/DeviceLiquidInventory.java)：`encode/decode` 交接液体与物种 CSR、整数质量和原始内能
     - [DeviceDyadicArray](../../model/src/main/java/mmm/units/DeviceDyadicArray.java)：无损体积的变长 limb、符号和指数列
-    - [VulkanInventoryTransport](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanInventoryTransport.java)：int64 设备常驻库存、候选双缓冲、代次与 checkpoint；完整区域输运接入待完成
+    - [VulkanInventoryTransport](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanInventoryTransport.java)：int64 设备常驻库存输运与 checkpoint，候选存储交由 `VulkanRegionStorage`；完整区域输运接入待完成
+    - [VulkanRegionStorage](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanRegionStorage.java)：`capture/prepare` 持有设备代次；`Candidate.execute/commit` 在单次提交中复制、执行并读取状态，成功后切换持有引用；`initialize/read` 显式分段导入与导出。仍被捕获的旧代次保留，已释放的设备缓冲区复用。
+    - [VulkanPressureKernel](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanPressureKernel.java)：`record` 录入共同 CSR 的完整压力迭代，调用方提供常驻数据切片与提交批次；[pressure.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/pressure.comp) 执行并行归约与收敛状态输出
     - [VulkanSparseMatrixCompute](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanSparseMatrixCompute.java)、[VulkanSparseMatrixProvider](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanSparseMatrixProvider.java)：设备 CSR 完整压力迭代、数量服务与运行时 provider
     - [LiquidQuantityCompute](../../model/src/main/java/mmm/inventory/LiquidQuantityCompute.java)、[VulkanLiquidQuantityCompute](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidQuantityCompute.java)：`partition` 批量计算供体的实际质量和物种份额，共享压力设备与调用作用域
     - [liquid-quantities.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/liquid-quantities.comp)：整数质量、物种分份和余量承接
@@ -671,7 +673,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [flip.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/flip.comp)
     - [MmmGpuProbeHostIntegration](../../gpu-probe/src/main/java/mmm/gpuprobe/MmmGpuProbeHostIntegration.java)
   - 运行方法：[GPU 验证](../maintenance/validation.md#gpu)；[后端扩展要求](../roadmap/performance-and-backends.md)
-  - 验证入口：`DeviceLiquidInventoryValidation`、`GpuInventoryTransportValidation`、`GpuLiquidQuantityValidation`、`GpuPressureValidation`、`GpuCurrentPhysicsValidation`、`ComputeExecutionValidation`、`ComputeDeviceLossValidation`、`GpuPressureScaleBenchmark`
+  - 验证入口：`DeviceLiquidInventoryValidation`、`GpuInventoryTransportValidation`、`GpuLiquidQuantityValidation`、`GpuPressureValidation`、`GpuCurrentPhysicsValidation`、`ComputeExecutionValidation`、`ComputeDeviceLossValidation`、`GpuPressureScaleBenchmark`；性能入口 `GpuRegionStorageBenchmark` 测代次管理，`GpuResidentPressureBenchmark` 测固定矩阵的常驻压力求解
 
 <a id="diagnosis"></a>
 ### 按现象定位

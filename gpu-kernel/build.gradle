@@ -165,3 +165,24 @@ registerGpuProbe(
 	probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
 		providers.gradleProperty('gpuPhysicsSelection').getOrElse('activity-groups,controller-gas-lineage')
 }
+
+registerGpuProbe(
+    'runGpuRegionStorageBenchmark',
+    'Measures device generation copy/adoption overhead without fluid computation.',
+    'mmm.gpuprobe.GpuRegionStorageBenchmark',
+    'gpu-region-storage-work'
+) { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        providers.gradleProperty('gpuRegionStorageSamples').getOrElse('32')
+}
+
+registerGpuProbe(
+    'runGpuResidentPressureBenchmark',
+    'Measures pressure on a resident device generation without repeated matrix or vector transfers.',
+    'mmm.gpuprobe.GpuResidentPressureBenchmark',
+    'gpu-resident-pressure-work'
+) { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        providers.gradleProperty('gpuResidentPressureGrid').getOrElse('64'),
+        providers.gradleProperty('gpuPressureSamples').getOrElse('10')
+}

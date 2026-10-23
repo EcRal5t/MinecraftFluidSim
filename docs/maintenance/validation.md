@@ -432,6 +432,16 @@ D01 进入前性能验收采用热运行：同一 JVM 已完成生产物理场�
 
 任务定义在 [kernel 构建文件](../../gpu-kernel/build.gradle)和 [Fabric 适配构建文件](../../gpu-probe/build.gradle)。
 
+当前整块迁移先测耗时，再集中验证物理结果。完整步目标为同一现有场景争取十倍提速和 `64³`、20 Hz；以下分项入口用于定位成本，完整功能与完整步预算在生产接入后判定：
+
+```powershell
+./gradlew.bat :gpu-kernel:runGpuRegionStorageBenchmark --offline --no-daemon
+./gradlew.bat :gpu-kernel:runGpuResidentPressureBenchmark -PgpuResidentPressureGrid=64 -PgpuPressureSamples=10 --offline --no-daemon
+```
+
+前者计设备代次复制、极小写入与提交，保留一个旧捕获；后者在初始化时上传固定制造矩阵，后续每次从相同零压力求解，计入命令录制、候选复制、全部迭代、状态回读和提交。两者均未覆盖流体几何、输运和热化学。完整物理验证集中后置，下面的既有验证入口按实际风险选取。
+
+
 改适配器或模块依赖时，先运行：
 
 ```powershell
@@ -621,3 +631,9 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 最终打包与架构检查 `gpu-performance-package.log` 通过，扫描 557 个生产源文件。主模组与可选 Vulkan 组件产物分别为 `fabric/build/libs/mmm-fabric-0.17.0.jar`、`gpu-probe/build/libs/mmm-gpu-probe-0.1.17.jar`。
 
 2026-10-24：`gpu-resident-contract-compile.log` 中 `:fabric:compileTestJava :gpu-kernel:compileJava` 通过。该次仅检查常驻状态访问契约的调用迁移，尚未运行新后端性能或物理验证。
+
+2026-10-24：设备代次与压力成本记录：
+
+- `build/gpu-resident-storage-compile.log` 编译通过。`build/gpu-resident-storage-cost.log` 的代次管理成本入口在 RTX 5070 Ti 上运行，1／16／64 MiB 状态的中位耗时分别为 0.149／0.162／0.292 ms，64 MiB 最大 0.533 ms。每次上传 0 B、回读 4 B；保留旧捕获时复用三份设备缓冲区，主机 staging 共 3 MiB。该入口不执行流体方程。
+- 同一日志的原 64³ 制造压力矩阵复测：热态完整压力求解均值 209.349 ms，设备时间 170.503 ms。并行汇总工作组结果后，`build/gpu-pressure-parallel-reduction-cost.log` 中对应均值为 91.118 ms，设备时间 23.089 ms，仍包含每次约 31.2 MB 上传及 2.1 MB 压力回读。两次使用同一输入、1e-5 容差和 200 次迭代上限，实际均为 128 次迭代；性能入口自身的残差重算检查通过。
+- `build/gpu-pressure-resident-generation-cost.log` 运行共用 `VulkanPressureKernel` 与设备代次存储，每次保持同一制造问题、零初始压力和原迭代要求。5 次预热后 10 次采样，中位 24.540 ms、最大 26.386 ms、设备平均 22.776 ms；每次上传 0 B、回读 4 B，显存内复制 46,923,936 B。两代逻辑设备存储约 89.5 MiB，主机 staging 共 3 MiB。设备报告每次收敛才提交；该结果仅覆盖压力，完整 64³ 流体步、原完整场景十倍提速及本次迁移后的集中物理验证尚未完成。

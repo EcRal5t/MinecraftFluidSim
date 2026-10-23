@@ -12,8 +12,9 @@ layout(binding=7,std430) buffer Metadata { int meta[]; };
 layout(binding=8,std430) readonly buffer Problem { double problem[]; };
 layout(binding=9,std430) buffer Control { double control[]; };
 layout(binding=10,std430) buffer Partials { double partials[]; };
+layout(binding=11,std430) buffer Completion { uint errors; };
 layout(push_constant) uniform Params { int count; int size; int maximumIterations; int stage; int groups; } p;
-shared double scratch[256];
+shared dvec4 scratch[256];
 int lane,n,gid,stride,group;
 #define R(row) work[row]
 #define D(row) work[n+(row)]
@@ -45,31 +46,37 @@ double hypotStable(double a,double b) {
     if(isinf(high))return high;if(high==0.0)return 0.0;
     precise double ratio=low/high;return high*sqrt(1.0+ratio*ratio);
 }
-double reduce(double value,int operation) {
+double combine(double a,double b,int operation) {
+    if(operation==0)return a+b;
+    if(operation==1)return max(a,b);
+    if(operation==2)return min(a,b);
+    return hypotStable(a,b);
+}
+dvec4 reduceStats(dvec4 value,int operationB,int operationC) {
     scratch[lane]=value;barrier();
     for(int offset=128;offset>0;offset/=2) {
         if(lane<offset) {
-            if(operation==0)scratch[lane]+=scratch[lane+offset];
-            else if(operation==1)scratch[lane]=max(scratch[lane],scratch[lane+offset]);
-            else if(operation==2)scratch[lane]=min(scratch[lane],scratch[lane+offset]);
-            else scratch[lane]=hypotStable(scratch[lane],scratch[lane+offset]);
+            dvec4 a=scratch[lane],b=scratch[lane+offset];
+            scratch[lane]=dvec4(a.x+b.x,combine(a.y,b.y,operationB),combine(a.z,b.z,operationC),max(a.w,b.w));
         }
         barrier();
     }
-    double answer=scratch[0];barrier();return answer;
+    dvec4 answer=scratch[0];barrier();return answer;
 }
 void saveStats(double a,double b,double c,double d,int operationB,int operationC) {
-    double ra=reduce(a,0),rb=reduce(b,operationB),rc=reduce(c,operationC),rd=reduce(d,1);
-    if(lane==0){partials[4*group]=ra;partials[4*group+1]=rb;partials[4*group+2]=rc;partials[4*group+3]=rd;}
+    dvec4 result=reduceStats(dvec4(a,b,c,d),operationB,operationC);
+    if(lane==0)for(int column=0;column<4;column++)partials[4*group+column]=result[column];
 }
-double collect(int column,int operation) {
-    precise double value=operation==2?1.7976931348623157e308LF:0.0;
-    for(int block=0;block<p.groups;block++) {
-        double next=partials[4*block+column];
-        if(operation==0)value+=next;else if(operation==1)value=max(value,next);
-        else if(operation==2)value=min(value,next);else value=hypotStable(value,next);
+// The final workgroup reduces block results in parallel; no single lane walks the full grid.
+dvec4 collectStats(int operationB,int operationC) {
+    if(p.groups==1)return dvec4(partials[0],partials[1],partials[2],partials[3]);
+    precise dvec4 value=dvec4(0.0,operationB==2?1.7976931348623157e308LF:0.0,
+                            operationC==2?1.7976931348623157e308LF:0.0,0.0);
+    for(int block=lane;block<p.groups;block+=256) {
+        dvec4 next=dvec4(partials[4*block],partials[4*block+1],partials[4*block+2],partials[4*block+3]);
+        value=dvec4(value.x+next.x,combine(value.y,next.y,operationB),combine(value.z,next.z,operationC),max(value.w,next.w));
     }
-    return value;
+    return reduceStats(value,operationB,operationC);
 }
 void initializeRows() {
     for(int row=gid;row<n;row+=stride) {
@@ -81,9 +88,10 @@ void initializeRows() {
     saveStats(0.0,0.0,0.0,maximum,0,0);
 }
 void initializeControl() {
+    dvec4 stats=collectStats(0,0);
     if(gid!=0)return;
     ITER=0.0;SUCCESS=0.0;RUN=1.0;RZ=0.0;ALPHA=0.0;RESTART=1.0;REFRESH=1.0;BETA=0.0;
-    PMAX=collect(3,1);PHASE=1.0;BLOCKED=0.0;
+    PMAX=stats.w;PHASE=1.0;BLOCKED=0.0;
 }
 void refreshResidual() {
     if(REFRESH==0.0)return;
@@ -99,11 +107,13 @@ void refreshResidual() {
     saveStats(sum,equations,bounds,maximum,0,3);
 }
 void finishRefresh() {
-    if(gid!=0 || REFRESH==0.0)return;
-    double equations=collect(1,0),scale=collect(2,3);RMS=sqrt(collect(0,0)/max(1.0,equations));
+    if(REFRESH==0.0)return;
+    dvec4 stats=collectStats(0,3);
+    if(gid!=0)return;
+    double equations=stats.y,scale=stats.z;RMS=sqrt(stats.x/max(1.0,equations));
     precise double floorValue=(equations+8.0)*2.220446049250313e-16*0.5*scale/sqrt(max(1.0,equations));
     TOLERANCE=finite(floorValue)?max(TARGET,floorValue):TARGET;
-    PMAX=collect(3,1);RESTART=1.0;REFRESH=0.0;
+    PMAX=stats.w;RESTART=1.0;REFRESH=0.0;
     if(PHASE==2.0){SUCCESS=(finite(RMS)&&RMS<=TOLERANCE)?1.0:0.0;RUN=0.0;}
     else if((PHASE==1.0 && !(RMS>TARGET)) || (PHASE==0.0 && RMS<=TOLERANCE))RUN=0.0;
 }
@@ -120,8 +130,10 @@ void precondition() {
     saveStats(sum,0.0,0.0,0.0,0,0);
 }
 void finishPrecondition() {
-    if(gid!=0 || RUN==0.0)return;
-    double nextRz=collect(0,0);BETA=RESTART!=0.0?0.0:nextRz/RZ;RZ=nextRz;
+    if(RUN==0.0)return;
+    dvec4 stats=collectStats(0,0);
+    if(gid!=0)return;
+    double nextRz=stats.x;BETA=RESTART!=0.0?0.0:nextRz/RZ;RZ=nextRz;
 }
 void updateDirection() {
     if(RUN==0.0 || RESTART!=0.0)return;
@@ -138,10 +150,12 @@ void directionProduct() {
     saveStats(sum,distance,0.0,0.0,2,0);
 }
 void finishProduct() {
-    if(gid!=0 || RUN==0.0)return;
-    double denominator=collect(0,0);
+    if(RUN==0.0)return;
+    dvec4 stats=collectStats(2,0);
+    if(gid!=0)return;
+    double denominator=stats.x;
     if(!(denominator>0.0 && finite(denominator) && RZ>0.0 && finite(RZ))){RUN=0.0;return;}
-    ALPHA=RZ/denominator;double distance=collect(1,2);BLOCKED=distance<=ALPHA?1.0:0.0;ALPHA=min(ALPHA,distance);
+    ALPHA=RZ/denominator;double distance=stats.y;BLOCKED=distance<=ALPHA?1.0:0.0;ALPHA=min(ALPHA,distance);
 }
 void updateSolution() {
     if(RUN==0.0)return;
@@ -161,9 +175,11 @@ void updateSolution() {
     saveStats(sum,equations,changed,maximum,0,1);
 }
 void finishUpdate() {
-    if(gid!=0 || RUN==0.0)return;
-    RMS=sqrt(collect(0,0)/max(1.0,collect(1,0)));PMAX=collect(3,1);ITER+=1.0;PHASE=0.0;
-    RESTART=(BLOCKED!=0.0 || collect(2,1)!=0.0)?1.0:0.0;REFRESH=(RESTART!=0.0 || RMS<=TARGET)?1.0:0.0;
+    if(RUN==0.0)return;
+    dvec4 stats=collectStats(0,1);
+    if(gid!=0)return;
+    RMS=sqrt(stats.x/max(1.0,stats.y));PMAX=stats.w;ITER+=1.0;PHASE=0.0;
+    RESTART=(BLOCKED!=0.0 || stats.z!=0.0)?1.0:0.0;REFRESH=(RESTART!=0.0 || RMS<=TARGET)?1.0:0.0;
     if(ITER>=double(p.maximumIterations))RUN=0.0;
 }
 void finalizeControl() {if(gid==0){REFRESH=1.0;PHASE=2.0;}}
@@ -172,6 +188,7 @@ void executeStage(int stage) {
     else if(stage==3)finishRefresh();else if(stage==4)precondition();else if(stage==5)finishPrecondition();
     else if(stage==6)updateDirection();else if(stage==7)directionProduct();else if(stage==8)finishProduct();
     else if(stage==9)updateSolution();else if(stage==10)finishUpdate();else if(stage==11)finalizeControl();
+    else if(stage==12 && gid==0 && SUCCESS==0.0)atomicOr(errors,4u);
 }
 void singleStage(int stage){executeStage(stage);syncAll();}
 void main() {
@@ -182,5 +199,5 @@ void main() {
         for(int stage=7;stage<=10;stage++)singleStage(stage);
         for(int stage=2;stage<=6;stage++)singleStage(stage);
     }
-    singleStage(11);singleStage(2);singleStage(3);
+    singleStage(11);singleStage(2);singleStage(3);singleStage(12);
 }

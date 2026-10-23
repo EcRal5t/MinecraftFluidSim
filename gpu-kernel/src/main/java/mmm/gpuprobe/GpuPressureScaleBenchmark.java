@@ -7,7 +7,7 @@ import java.util.Locale;
 /** Same-CSR manufactured pressure scaling; CPU reference is independent Jacobi-preconditioned CG. */
 public final class GpuPressureScaleBenchmark {
     private GpuPressureScaleBenchmark() { }
-    private record Fixture(int size,int[] starts,int[] columns,double[] values,int[] rows,
+    record Fixture(int size,int[] starts,int[] columns,double[] values,int[] rows,
                            double[] rhs,double[] exact,double tolerance,int maximumIterations) {
         SparseMatrixCompute.PressureProblem problem() {
             return new SparseMatrixCompute.PressureProblem(size,rows,size,new boolean[size],new double[size],
@@ -70,7 +70,7 @@ public final class GpuPressureScaleBenchmark {
     private static SparseMatrixCompute.PressureSolution gpuSolve(VulkanSparseMatrixCompute gpu,Fixture f,SparseMatrixCompute.PressureProblem p) {
         try(var matrix=gpu.prepare(f.size,f.starts,f.columns,f.values,f.rows,f.size)) {return matrix.solve(p);}
     }
-    private static Fixture manufacture(int dimension,double tolerance,int maximumIterations) {
+    static Fixture manufacture(int dimension,double tolerance,int maximumIterations) {
         if(dimension<2)throw new IllegalArgumentException("Grid side must be at least two");
         int size=Math.multiplyExact(Math.multiplyExact(dimension,dimension),dimension);
         int entries=Math.subtractExact(Math.multiplyExact(7,size),Math.multiplyExact(6,dimension*dimension));

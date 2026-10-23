@@ -1,14 +1,14 @@
 #version 450
 #extension GL_ARB_gpu_shader_int64 : require
 layout(local_size_x=256) in;
-layout(std430,binding=0) buffer StockA { int64_t a[]; };
-layout(std430,binding=1) buffer StockB { int64_t b[]; };
+layout(std430,binding=0) readonly buffer StockA { int64_t a[]; };
+layout(std430,binding=1) writeonly buffer StockB { int64_t b[]; };
 struct Edge { int source; int destination; int64_t amount; };
 layout(std430,binding=2) readonly buffer Edges { Edge edges[]; };
 layout(std430,binding=3) readonly buffer Offsets { int offsets[]; };
 layout(std430,binding=4) readonly buffer Adjacency { int adjacency[]; };
 layout(std430,binding=5) buffer Errors { uint errors; };
-layout(push_constant) uniform Params { int rows; int edgeCount; int sourceBuffer; int stage; } p;
+layout(push_constant) uniform Params { int rows; int edgeCount; int reserved; int stage; } p;
 const int64_t LIMIT = int64_t(0x7fffffffffffffffUL);
 void main() {
     uint id=gl_GlobalInvocationID.x;
@@ -21,7 +21,7 @@ void main() {
     }
     if(id>=uint(p.rows)) return;
     int row=int(id);
-    int64_t value=p.sourceBuffer==0 ? a[row] : b[row];
+    int64_t value=a[row];
     bool valid=value>=0;
     // Every outgoing amount comes from the old donor inventory.
     for(int i=offsets[row];i<offsets[row+1];i++) {
@@ -37,5 +37,5 @@ void main() {
         }
     }
     if(!valid) atomicOr(errors,2u);
-    if(p.sourceBuffer==0) b[row]=value; else a[row]=value;
+    b[row]=value;
 }

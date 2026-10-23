@@ -6,8 +6,6 @@ import org.lwjgl.vulkan.VkCommandBuffer;
 import org.lwjgl.vulkan.VkBufferCopy;
 import org.lwjgl.vulkan.VkMemoryBarrier;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
-import java.io.IOException;
 import java.util.Arrays;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
@@ -40,7 +38,7 @@ public final class VulkanSparseMatrixCompute implements SparseMatrixCompute, Aut
     private final Thread owner=Thread.currentThread();
     private FlipGpuResources resources;
     private FlipKernelBindings bindings;
-    private FlipKernelBindings pressureBindings;
+    private VulkanPressureKernel pressureBindings;
     private GpuStepScheduler scheduler;
     private VulkanLiquidQuantityCompute liquidQuantities;
     private int rowCapacity, edgeCapacity;
@@ -160,25 +158,14 @@ public final class VulkanSparseMatrixCompute implements SparseMatrixCompute, Aut
             for(int row=0;row<size;row++)staging.putInt(Math.toIntExact(problemBytes+4L*row),problem.bounded()[row]?1:0);
             copy(command,stack,slot.stagingBuffer(),resources.buffer(8),0,0,problemBytes);
             copy(command,stack,slot.stagingBuffer(),resources.buffer(7),problemBytes,0,4L*size);
+            vkCmdFillBuffer(command,resources.buffer(11).handle(),0,4,0);
             barrier(command,stack,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                     VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT);
             if(context.hasTimestampQueries()) {
                 vkCmdResetQueryPool(command,slot.timestampQueryPool(),0,2);
                 vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,slot.timestampQueryPool(),0);
             }
-            pressureBindings.bind(command,stack);
-            int groups=size<=singleWorkgroupRows?1:(size+255)/256;
-            if(groups==1)pressureStage(command,stack,problem,-1,groups,1);
-            else {
-                for(int stage=0;stage<=6;stage++)pressureStage(command,stack,problem,stage,groups,parallelStage(stage)?groups:1);
-                for(int iteration=0;iteration<problem.maxIterations();iteration++) {
-                    for(int stage=7;stage<=10;stage++)pressureStage(command,stack,problem,stage,groups,parallelStage(stage)?groups:1);
-                    for(int stage=2;stage<=6;stage++)pressureStage(command,stack,problem,stage,groups,parallelStage(stage)?groups:1);
-                }
-                pressureStage(command,stack,problem,11,groups,1);
-                pressureStage(command,stack,problem,2,groups,groups);
-                pressureStage(command,stack,problem,3,groups,1);
-            }
+            pressureBindings.record(command, problem.size(), problem.unknownCount(), problem.maxIterations());
             if(context.hasTimestampQueries())vkCmdWriteTimestamp(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,slot.timestampQueryPool(),1);
             barrier(command,stack,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
                     VK_ACCESS_SHADER_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT);
@@ -195,16 +182,6 @@ public final class VulkanSparseMatrixCompute implements SparseMatrixCompute, Aut
             return new PressureSolution(pressure,iterations,rms,converged);
         }
     }
-    private void pressureStage(VkCommandBuffer command,MemoryStack stack,PressureProblem problem,int stage,int groups,int dispatchGroups) {
-        try(MemoryStack stageStack=stackPush()) {
-            vkCmdPushConstants(command,pressureBindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,
-                    stageStack.ints(problem.unknownCount(),problem.size(),problem.maxIterations(),stage,groups));
-            vkCmdDispatch(command,dispatchGroups,1,1);
-            barrier(command,stageStack,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                    VK_ACCESS_SHADER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT);
-        }
-    }
-    private static boolean parallelStage(int stage) {return stage==0 || stage==2 || stage==4 || stage==6 || stage==7 || stage==9;}
     private void ensureCapacity(int rows,int edges) {
         if(resources!=null && rows<=rowCapacity && edges<=edgeCapacity)return;
         int grownRows=growCapacity(rowCapacity,rows),grownEdges=growCapacity(edgeCapacity,edges);
@@ -219,10 +196,11 @@ public final class VulkanSparseMatrixCompute implements SparseMatrixCompute, Aut
             resources.addDeviceStorage(8L*rows);
             resources.addDeviceStorage(8L*(3L*rows+1));resources.addDeviceStorage(128);
             resources.addDeviceStorage(32L*((rows+255)/256));
+            resources.addDeviceStorage(4);
             if(bindings==null)bindings=new FlipKernelBindings(context,resources,SHADER,4);
             else bindings.rebind(resources);
-            if(pressureBindings==null)pressureBindings=new FlipKernelBindings(context,resources,pressureShader(),20);
-            else pressureBindings.rebind(resources);
+            if(pressureBindings==null)pressureBindings=new VulkanPressureKernel(context,singleWorkgroupRows);
+            pressureBindings.rebind(resources);
             scheduler=new GpuStepScheduler(context,resources,Math.max(28L*rows+24,8L*rows+4+12L*edges));
         } catch(RuntimeException | LinkageError failure) {
             try {releaseWorkspace();}catch(RuntimeException | LinkageError closing){failure.addSuppressed(closing);}
@@ -270,12 +248,6 @@ public final class VulkanSparseMatrixCompute implements SparseMatrixCompute, Aut
         if(failure instanceof RuntimeException runtime)throw runtime;
         if(failure instanceof LinkageError linkage)throw linkage;
         if(failure!=null)throw new IllegalStateException("Vulkan resource release failed",failure);
-    }
-    private static String pressureShader() {
-        try(var stream=VulkanSparseMatrixCompute.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/pressure.comp")) {
-            if(stream==null)throw new IllegalStateException("Pressure shader missing");
-            return new String(stream.readAllBytes(),StandardCharsets.UTF_8);
-        } catch(IOException failure) {throw new IllegalStateException("Pressure shader unavailable",failure);}
     }
     @Override public void close() {
         if(closed)return;checkOwner();
