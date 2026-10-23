@@ -17,15 +17,16 @@ final class VulkanPressureMultigrid implements AutoCloseable {
         int cells() { return Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ); }
     }
 
-    record Layout(List<Level> levels, int workspaceDoubles, int pressureStride, int coarseFactorOffset) {
+    record Layout(List<Level> levels, int workspaceDoubles, int pressureStride, int coarseFactorOffset, int buildDispatchOffset) {
         Layout { levels = List.copyOf(levels); }
         long workspaceBytes() { return Math.multiplyExact(8L, workspaceDoubles); }
     }
 
     private final FlipKernelBindings bindings;
+    private FlipKernelBindings.BufferRange workspace;
 
     VulkanPressureMultigrid(VulkanDeviceContext context) {
-        bindings = new FlipKernelBindings(context, 8, shader(), 48);
+        bindings = new FlipKernelBindings(context, 9, shader(), 52);
     }
 
     /** Each level stores seven matrix entries, the residual, correction and smoothing scratch. */
@@ -47,34 +48,41 @@ final class VulkanPressureMultigrid implements AutoCloseable {
             sx = (sx + 1) / 2; sy = (sy + 1) / 2; sz = (sz + 1) / 2;
         }
         int factor=cursor,coarse=levels.getLast().cells();
-        cursor=Math.addExact(cursor,Math.multiplyExact(coarse,coarse));
-        return new Layout(levels, cursor, pressureStride,factor);
+        cursor=Math.addExact(cursor,Math.multiplyExact(2,Math.multiplyExact(coarse,coarse)));
+        int dispatch=cursor;cursor=Math.addExact(cursor,Math.multiplyExact(4,levels.size()+1));
+        return new Layout(levels, cursor, pressureStride,factor,dispatch);
     }
 
     /** Bind starts, columns, values, rows, pressure metadata, pressure work, control and this workspace. */
-    void rebindRanges(List<FlipKernelBindings.BufferRange> buffers) { bindings.rebindRanges(buffers); }
+    void rebindRanges(List<FlipKernelBindings.BufferRange> buffers) {
+        workspace=buffers.getLast();var ranges=new ArrayList<>(buffers);
+        ranges.add(workspace);bindings.rebindRanges(ranges);
+    }
 
     /** Call after FREE has been prepared; the device rebuilds only when PCG restarts. */
     void recordBuild(VkCommandBuffer command, Layout layout) {
         bind(command);
         var levels = layout.levels();
-        stage(command, layout, levels.getFirst(), levels.getFirst(), 0);
-        for (int i = 1; i < levels.size(); i++) stage(command, layout, levels.get(i), levels.get(i - 1), 1);
-        stage(command,layout,levels.getLast(),levels.getLast(),8);
+        stage(command,layout,levels.getFirst(),levels.getFirst(),10);
+        stage(command, layout, levels.getFirst(), levels.getFirst(), 0,0);
+        for (int i = 1; i < levels.size(); i++) stage(command, layout, levels.get(i), levels.get(i - 1), 1,i);
+        stage(command,layout,levels.getLast(),levels.getLast(),8,levels.size());
+        stage(command,layout,levels.getLast(),levels.getLast(),9,levels.size()+1);
     }
 
     /** A zero-start, fixed linear V-cycle; all work stays inside the caller's submission. */
     void recordApply(VkCommandBuffer command, Layout layout) {
         bind(command);
         var levels = layout.levels();
-        stage(command, layout, levels.getFirst(), levels.getFirst(), 2);
-        for (int i = 1; i < levels.size(); i++) stage(command, layout, levels.get(i), levels.get(i - 1), 3);
-        stage(command, layout, levels.getLast(), levels.getLast(), 4);
+        int dispatch=levels.size()+2;
+        stage(command, layout, levels.getFirst(), levels.getFirst(), 2,dispatch);
+        for (int i = 1; i < levels.size(); i++) stage(command, layout, levels.get(i), levels.get(i - 1), 3,dispatch+i);
+        stage(command, layout, levels.getLast(), levels.getLast(), 4,dispatch+levels.size()-1);
         for (int i = levels.size() - 2; i >= 0; i--) {
-            stage(command, layout, levels.get(i), levels.get(i + 1), 5);
-            stage(command, layout, levels.get(i), levels.get(i), 6);
+            stage(command, layout, levels.get(i), levels.get(i + 1), 5,dispatch+i);
+            stage(command, layout, levels.get(i), levels.get(i), 6,dispatch+i);
         }
-        stage(command, layout, levels.getFirst(), levels.getFirst(), 7);
+        stage(command, layout, levels.getFirst(), levels.getFirst(), 7,dispatch);
     }
 
     private void bind(VkCommandBuffer command) {
@@ -82,14 +90,19 @@ final class VulkanPressureMultigrid implements AutoCloseable {
     }
 
     private void stage(VkCommandBuffer command, Layout layout, Level level, Level peer, int stage) {
+        stage(command,layout,level,peer,stage,-1);
+    }
+    private void stage(VkCommandBuffer command, Layout layout, Level level, Level peer, int stage,int dispatchIndex) {
         try (var stack = stackPush()) {
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                     stack.ints(level.sizeX(), level.sizeY(), level.sizeZ(), stage,
                             level.offset(), peer.offset(), peer.sizeX(), peer.sizeY(), peer.sizeZ(),
-                            layout.levels().getFirst().cells(), layout.pressureStride(), layout.coarseFactorOffset()));
-            vkCmdDispatch(command, stage == 4 || stage == 8 ? 1 : (level.cells() + 127) / 128, 1, 1);
+                            layout.levels().getFirst().cells(), layout.pressureStride(), layout.coarseFactorOffset(),2*layout.buildDispatchOffset()));
+            if(dispatchIndex>=0)vkCmdDispatchIndirect(command,workspace.buffer().handle(),workspace.offset()+8L*layout.buildDispatchOffset()+16L*dispatchIndex);
+            else vkCmdDispatch(command, stage == 4 || stage == 10 ? 1 : (level.cells() + 127) / 128, 1, 1);
             barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, stack);
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | (stage==10?VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT:0),
+                    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | (stage==10?VK_ACCESS_INDIRECT_COMMAND_READ_BIT:0), stack);
         }
     }
 

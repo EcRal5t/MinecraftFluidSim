@@ -9,9 +9,11 @@ layout(binding=4,std430) readonly buffer Metadata { int meta[]; };
 layout(binding=5,std430) buffer Work { double work[]; };
 layout(binding=6,std430) readonly buffer Control { double control[]; };
 layout(binding=7,std430) buffer Hierarchy { double hierarchy[]; };
+layout(binding=8,std430) buffer Dispatch { uint dispatchWords[]; };
 layout(push_constant) uniform Params {
     int sx; int sy; int sz; int stage;
     int base; int peerBase; int psx; int psy; int psz; int fineCount; int pressureStride; int factor;
+    int buildDispatch;
 } p;
 shared double coarseCorrection[64];
 const double OMEGA=0.66666666666666666667LF;
@@ -121,9 +123,10 @@ void factorCoarse(int row,int n){
         memoryBarrierBuffer();barrier();
     }
 }
-// Forward and transposed triangular solves preserve a fixed linear symmetric preconditioner.
-void solveCoarse(int row,int n){
-    if(row<n)coarseCorrection[row]=hierarchy[rIndex(p.base,n,row)];barrier();
+// Build each inverse column once. Subsequent V-cycles apply the small dense operator without
+// serial triangular-solve barriers; both construction and application retain double precision.
+void invertCoarse(int row,int columnIndex,int n){
+    if(row<n)coarseCorrection[row]=row==columnIndex?1.0:0.0;barrier();
     for(int column=0;column<n;column++){
         if(row==column)coarseCorrection[row]/=hierarchy[p.factor+row*n+row];barrier();
         if(row<n&&row>column)coarseCorrection[row]-=hierarchy[p.factor+row*n+column]*coarseCorrection[column];barrier();
@@ -132,16 +135,44 @@ void solveCoarse(int row,int n){
         if(row==column)coarseCorrection[row]/=hierarchy[p.factor+row*n+row];barrier();
         if(row<column)coarseCorrection[row]-=hierarchy[p.factor+column*n+row]*coarseCorrection[column];barrier();
     }
-    if(row<n)hierarchy[uIndex(p.base,n,row)]=coarseCorrection[row];
+    if(row<n)hierarchy[p.factor+n*n+row*n+columnIndex]=coarseCorrection[row];
+}
+void solveCoarse(int row,int n){
+    if(row>=n)return;double result=0.0;
+    for(int column=0;column<n;column++){
+        double coefficient=.5*(hierarchy[p.factor+n*n+row*n+column]+hierarchy[p.factor+n*n+column*n+row]);
+        result+=coefficient*hierarchy[rIndex(p.base,n,column)];
+    }
+    hierarchy[uIndex(p.base,n,row)]=result;
+}
+void buildDispatches(){
+    bool rebuild=control[3]!=0.0&&control[6]!=0.0;ivec3 shape=ivec3(p.sx,p.sy,p.sz);int command=0,n;
+    for(;;){
+        n=count(shape);int at=p.buildDispatch+4*command++;
+        dispatchWords[at]=rebuild?uint((n+127)/128):0u;dispatchWords[at+1]=1u;dispatchWords[at+2]=1u;dispatchWords[at+3]=0u;
+        if(max(shape.x,max(shape.y,shape.z))<=4)break;shape=(shape+1)/2;
+    }
+    for(int operation=0;operation<2;operation++){
+        int at=p.buildDispatch+4*command++;
+        dispatchWords[at]=rebuild?uint(operation==0?1:n):0u;dispatchWords[at+1]=1u;dispatchWords[at+2]=1u;dispatchWords[at+3]=0u;
+    }
+    shape=ivec3(p.sx,p.sy,p.sz);
+    for(;;){
+        int at=p.buildDispatch+4*command++;n=count(shape);
+        dispatchWords[at]=control[3]!=0.0?uint((n+127)/128):0u;dispatchWords[at+1]=1u;dispatchWords[at+2]=1u;dispatchWords[at+3]=0u;
+        if(max(shape.x,max(shape.y,shape.z))<=4)break;shape=(shape+1)/2;
+    }
 }
 
 void main() {
+    if(p.stage==10){if(gl_GlobalInvocationID.x==0u)buildDispatches();return;}
     // These values are uniform over every workgroup, including the barrier-bearing coarse solve.
     if(control[3]==0.0)return;
-    if((p.stage<=1||p.stage==8)&&control[6]==0.0)return;
+    if((p.stage<=1||p.stage>=8)&&control[6]==0.0)return;
     int row=int(gl_GlobalInvocationID.x),n=count(ivec3(p.sx,p.sy,p.sz));
     if(p.stage==4){solveCoarse(row,n);return;}
     if(p.stage==8){factorCoarse(row,n);return;}
+    if(p.stage==9){invertCoarse(int(gl_LocalInvocationID.x),int(gl_WorkGroupID.x),n);return;}
     if(row>=n)return;
     if(p.stage==0)buildFine(row);
     else if(p.stage==1)buildCoarse(row);
