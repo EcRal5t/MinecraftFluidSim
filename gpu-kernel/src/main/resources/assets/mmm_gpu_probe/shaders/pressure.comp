@@ -13,7 +13,7 @@ layout(binding=8,std430) readonly buffer Problem { double problem[]; };
 layout(binding=9,std430) buffer Control { double control[]; };
 layout(binding=10,std430) buffer Partials { double partials[]; };
 layout(binding=11,std430) buffer Completion { uint errors; };
-layout(push_constant) uniform Params { int count; int size; int maximumIterations; int stage; int groups; int externalPreconditioner; } p;
+layout(push_constant) uniform Params { int count; int size; int maximumIterations; int stage; int groups; int externalPreconditioner; int liquidCount; } p;
 shared dvec4 scratch[256];
 int lane,n,gid,stride,group;
 #define R(row) work[row]
@@ -97,8 +97,8 @@ void refreshResidual() {
     if(REFRESH==0.0)return;
     precise double sum=0.0;double equations=0.0,bounds=0.0,maximum=0.0;
     for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
-        int row=rows[ordinal];if(row<0)continue;precise double product=0.0;
-        for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*pressure[columns[edge]];
+        int row=rows[ordinal];if(row<0)continue;precise double product=row>=p.liquidCount?Q(row):0.0;
+        if(row<p.liquidCount)for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*pressure[columns[edge]];
         R(row)=RHS(row)-product;double value=R(row);maximum=max(maximum,abs(pressure[row]));
         if(BOUNDED(row)!=0 && pressure[row]<=LOWER(row) && value<=0.0)continue;
         equations+=1.0;sum+=value*value;
@@ -123,7 +123,7 @@ void precondition() {
     for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
         int row=rows[ordinal];if(row<0)continue;
         if(RESTART!=0.0)FREE(row)=(BOUNDED(row)==0 || pressure[row]>LOWER(row) || R(row)>TARGET)?1:0;
-        if(p.externalPreconditioner==0)Z(row)=FREE(row)!=0?R(row)/DIAG(row):0.0;
+        if(p.externalPreconditioner==0||row>=p.liquidCount)Z(row)=FREE(row)!=0?R(row)/DIAG(row):0.0;
         if(RESTART!=0.0)D(row)=Z(row);
         if(FREE(row)!=0)sum+=R(row)*Z(row);
     }
@@ -150,8 +150,8 @@ void directionProduct() {
     if(RUN==0.0)return;
     precise double sum=0.0;double distance=1.7976931348623157e308LF;
     for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
-        int row=rows[ordinal];if(row<0)continue;precise double product=0.0;
-        for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*D(columns[edge]);Q(row)=product;
+        int row=rows[ordinal];if(row<0)continue;precise double product=row>=p.liquidCount?Q(row):0.0;
+        if(row<p.liquidCount)for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*D(columns[edge]);Q(row)=product;
         if(FREE(row)!=0){sum+=D(row)*product;if(BOUNDED(row)!=0 && D(row)<0.0)distance=min(distance,(pressure[row]-LOWER(row))/-D(row));}
     }
     saveStats(sum,distance,0.0,0.0,2,0);

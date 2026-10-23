@@ -12,12 +12,13 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Records the whole pressure solve into its caller's submission using resident buffer ranges. */
 final class VulkanPressureKernel implements AutoCloseable {
+    record GasOperator(VulkanGasPressure kernel, VulkanGasPressure.Layout layout) { }
     private final FlipKernelBindings bindings;
     private final int singleWorkgroupRows;
 
     VulkanPressureKernel(VulkanDeviceContext context, int singleWorkgroupRows) {
         this.singleWorkgroupRows = singleWorkgroupRows;
-        bindings = new FlipKernelBindings(context, 12, shader(), 24);
+        bindings = new FlipKernelBindings(context, 12, shader(), 28);
     }
 
     void rebind(FlipGpuResources resources) { bindings.rebind(resources); }
@@ -29,50 +30,71 @@ final class VulkanPressureKernel implements AutoCloseable {
 
     void record(VkCommandBuffer command, int size, int count, int maximumIterations,
                 VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy) {
-        if (multigrid == null && size <= singleWorkgroupRows) {
+        record(command, size, count, maximumIterations, multigrid, hierarchy, null);
+    }
+
+    void record(VkCommandBuffer command, int size, int count, int maximumIterations,
+                VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, GasOperator gas) {
+        if (gas == null && multigrid == null && size <= singleWorkgroupRows) {
             bind(command);
-            stage(command, size, count, maximumIterations, -1, 1, false);
+            stage(command, size, count, maximumIterations, -1, 1, false, null);
             return;
         }
-        recordInitialize(command, size, count, maximumIterations, multigrid, hierarchy);
-        recordIterations(command, size, count, maximumIterations, multigrid, hierarchy, maximumIterations);
-        recordFinish(command, size, count, maximumIterations, multigrid, hierarchy);
+        recordInitialize(command, size, count, maximumIterations, multigrid, hierarchy, gas);
+        recordIterations(command, size, count, maximumIterations, multigrid, hierarchy, maximumIterations, gas);
+        recordFinish(command, size, count, maximumIterations, multigrid, hierarchy, gas);
     }
 
     /** Initializes one solve; later batches retain its pressure, residual and conjugate direction. */
     void recordInitialize(VkCommandBuffer command, int size, int count, int maximumIterations,
                           VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy) {
+        recordInitialize(command, size, count, maximumIterations, multigrid, hierarchy, null);
+    }
+
+    void recordInitialize(VkCommandBuffer command, int size, int count, int maximumIterations,
+                          VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, GasOperator gas) {
         bind(command);
         int groups = groups(size, multigrid);
         for (int stage = 0; stage <= 3; stage++)
-            stage(command, size, count, maximumIterations, stage, groups, multigrid != null);
-        precondition(command, size, count, maximumIterations, groups, multigrid, hierarchy);
+            stage(command, size, count, maximumIterations, stage, groups, multigrid != null, gas);
+        precondition(command, size, count, maximumIterations, groups, multigrid, hierarchy, gas);
     }
 
     /** Records a bounded continuation; the shader retains the original solve-wide iteration limit. */
     void recordIterations(VkCommandBuffer command, int size, int count, int maximumIterations,
                           VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy,
                           int iterations) {
+        recordIterations(command, size, count, maximumIterations, multigrid, hierarchy, iterations, null);
+    }
+
+    void recordIterations(VkCommandBuffer command, int size, int count, int maximumIterations,
+                          VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy,
+                          int iterations, GasOperator gas) {
         bind(command);
         int groups = groups(size, multigrid);
         for (int iteration = 0; iteration < iterations; iteration++) {
             for (int stage = 7; stage <= 10; stage++)
-                stage(command, size, count, maximumIterations, stage, groups, multigrid != null);
+                stage(command, size, count, maximumIterations, stage, groups, multigrid != null, gas);
             for (int stage = 2; stage <= 3; stage++)
-                stage(command, size, count, maximumIterations, stage, groups, multigrid != null);
-            precondition(command, size, count, maximumIterations, groups, multigrid, hierarchy);
+                stage(command, size, count, maximumIterations, stage, groups, multigrid != null, gas);
+            precondition(command, size, count, maximumIterations, groups, multigrid, hierarchy, gas);
         }
     }
 
     /** Recomputes the final residual and publishes the existing pressure completion status. */
     void recordFinish(VkCommandBuffer command, int size, int count, int maximumIterations,
                       VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy) {
+        recordFinish(command, size, count, maximumIterations, multigrid, hierarchy, null);
+    }
+
+    void recordFinish(VkCommandBuffer command, int size, int count, int maximumIterations,
+                          VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, GasOperator gas) {
         bind(command);
         int groups = groups(size, multigrid);
-        stage(command, size, count, maximumIterations, 11, groups, multigrid != null);
-        stage(command, size, count, maximumIterations, 2, groups, multigrid != null);
-        stage(command, size, count, maximumIterations, 3, groups, multigrid != null);
-        stage(command, size, count, maximumIterations, 12, groups, multigrid != null);
+        stage(command, size, count, maximumIterations, 11, groups, multigrid != null, gas);
+        stage(command, size, count, maximumIterations, 2, groups, multigrid != null, gas);
+        stage(command, size, count, maximumIterations, 3, groups, multigrid != null, gas);
+        stage(command, size, count, maximumIterations, 12, groups, multigrid != null, gas);
     }
 
     private int groups(int size, VulkanPressureMultigrid multigrid) {
@@ -84,21 +106,25 @@ final class VulkanPressureKernel implements AutoCloseable {
     }
 
     private void precondition(VkCommandBuffer command, int size, int count, int maximumIterations, int groups,
-                              VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy) {
+                              VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, GasOperator gas) {
         if (multigrid != null) {
-            stage(command, size, count, maximumIterations, 13, groups, true);
+            stage(command, size, count, maximumIterations, 13, groups, true, gas);
             multigrid.recordBuild(command, hierarchy);
             multigrid.recordApply(command, hierarchy);
             bind(command);
         }
         for (int stage = 4; stage <= 6; stage++)
-            stage(command, size, count, maximumIterations, stage, groups, multigrid != null);
+            stage(command, size, count, maximumIterations, stage, groups, multigrid != null, gas);
     }
 
-    private void stage(VkCommandBuffer command, int size, int count, int maximumIterations, int stage, int groups, boolean external) {
+    private void stage(VkCommandBuffer command, int size, int count, int maximumIterations, int stage, int groups, boolean external, GasOperator gas) {
+        if (gas != null && (stage == 2 || stage == 7)) {
+            gas.kernel().recordProduct(command, gas.layout(), stage == 7);
+            bind(command);
+        }
         try (var stack = stackPush()) {
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                    stack.ints(count, size, maximumIterations, stage, groups, external ? 1 : 0));
+                    stack.ints(count, size, maximumIterations, stage, groups, external ? 1 : 0, gas == null ? size : gas.layout().liquidCount()));
             boolean parallel = stage == 0 || stage == 2 || stage == 4 || stage == 6 || stage == 7 || stage == 9 || stage == 13;
             vkCmdDispatch(command, parallel ? groups : 1, 1, 1);
             barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,

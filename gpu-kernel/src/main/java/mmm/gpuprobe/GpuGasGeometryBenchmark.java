@@ -21,11 +21,11 @@ import static mmm.gpuprobe.VulkanGasStateLayout.Field.*;
 /** Additional resident gas geometry/topology/EOS cost over already resident liquid geometry. */
 public final class GpuGasGeometryBenchmark {
     private GpuGasGeometryBenchmark() { }
-    private record Geometry(VulkanLiquidStateLayout.Column masks,VulkanLiquidStateLayout.Column occupied,
+    record Geometry(VulkanLiquidStateLayout.Column masks,VulkanLiquidStateLayout.Column occupied,
                             VulkanLiquidStateLayout.Column cells,VulkanLiquidStateLayout.Column planes,
                             VulkanLiquidStateLayout.Column micro,VulkanLiquidStateLayout.Column faces,
                             VulkanLiquidStateLayout.Column fluxes,long endOffset) { }
-    private record FixtureGas(GasRegistry gas,ThermalRegistry thermal,VulkanGasStateLayout.Definitions definitions) { }
+    record FixtureGas(GasRegistry gas,ThermalRegistry thermal,VulkanGasStateLayout.Definitions definitions) { }
     private record SeedRequest(double volume,double temperature) { }
     private record Seed(GasInventory inventory,double energy) { }
     public static void main(String[] args) {
@@ -98,7 +98,7 @@ public final class GpuGasGeometryBenchmark {
             }
         }
     }
-    private static int advance(VulkanRegionStorage storage,VulkanRegionStorage.Capture source,VulkanLiquidGeometry liquidKernel,
+    static int advance(VulkanRegionStorage storage,VulkanRegionStorage.Capture source,VulkanLiquidGeometry liquidKernel,
                                VulkanLiquidCellVolumes totalKernel,VulkanGasGeometry geometryKernel,VulkanGasThermodynamics thermalKernel,
                                VulkanLiquidStateLayout liquid,Geometry geometry,VulkanLiquidCellVolumes.Layout totals,
                                VulkanGasGeometry.Layout gasGeometry,VulkanGasThermodynamics.Layout thermal,
@@ -128,7 +128,7 @@ public final class GpuGasGeometryBenchmark {
             if(commit)candidate.commit();return rounds;
         }
     }
-    private static int seed(VulkanRegionStorage storage,VulkanRegionStorage.Capture source,ByteBuffer target,
+    static int seed(VulkanRegionStorage storage,VulkanRegionStorage.Capture source,ByteBuffer target,
                             VulkanGasStateLayout gas,VulkanGasGeometry.Layout geometry,FixtureGas definitions) {
         int nodes=read(storage,source,geometry.componentCount().offset(),4).getInt(0),cells=geometry.cells();
         var nodeByCell=read(storage,source,geometry.cellNodes().offset(),4*cells);
@@ -166,7 +166,7 @@ public final class GpuGasGeometryBenchmark {
         putInt(target,gas,ENERGY_PRESENT,0,1);
         System.out.printf("gas_seed cells=%d nodes=%d components=%d species=%d distinct_states=%d%n",cells,nodes,component,species,cache.size());return nodes;
     }
-    private static FixtureGas gasDefinitions() {
+    static FixtureGas gasDefinitions() {
         var gas=BuiltinGasDefinitions.createRegistry();var chemistry=BuiltinChemicalDefinitions.REGISTRY;
         var nitrogen=new ThermalMaterialDefinition("mmm:bench_nitrogen",ThermalMaterialDefinition.CarrierKind.GAS,BuiltinGasDefinitions.NITROGEN,
                 280,15000,0,List.of(new ThermalMaterialDefinition.CaloricSegment(100,320,720),new ThermalMaterialDefinition.CaloricSegment(320,600,800),new ThermalMaterialDefinition.CaloricSegment(600,1500,950)));
@@ -179,14 +179,14 @@ public final class GpuGasGeometryBenchmark {
         return new FixtureGas(gas,thermal,new VulkanGasStateLayout.Definitions(gas.fingerprint(),chemistry.fingerprint(),
                 List.of(BuiltinGasDefinitions.NITROGEN,BuiltinGasDefinitions.OXYGEN),List.of(BuiltinChemicalDefinitions.N2,BuiltinChemicalDefinitions.O2)));
     }
-    private static Geometry geometry(VulkanLiquidStateLayout state,long alignment) {
+    static Geometry geometry(VulkanLiquidStateLayout state,long alignment) {
         int cells=state.cellCount(),faces=state.column(VulkanLiquidStateLayout.Field.MOMENTUM_X).count()+state.column(VulkanLiquidStateLayout.Field.MOMENTUM_Y).count()+state.column(VulkanLiquidStateLayout.Field.MOMENTUM_Z).count();
         long[] cursor={state.bytes()};var masks=column(cursor,cells,4,alignment);var occupied=column(cursor,cells,8,alignment);
         var totals=column(cursor,4*cells,8,alignment);var planes=column(cursor,4*cells,8,alignment);var micro=column(cursor,8*cells,8,alignment);
         var face=column(cursor,4*faces,8,alignment);var flux=column(cursor,2*faces,8,alignment);
         return new Geometry(masks,occupied,totals,planes,micro,face,flux,cursor[0]);
     }
-    private static List<FlipKernelBindings.BufferRange> geometryRanges(VulkanLiquidStateLayout state,Geometry geometry,GpuBuffer buffer,GpuBuffer errors) {
+    static List<FlipKernelBindings.BufferRange> geometryRanges(VulkanLiquidStateLayout state,Geometry geometry,GpuBuffer buffer,GpuBuffer errors) {
         var ranges=new ArrayList<FlipKernelBindings.BufferRange>(14);
         ranges.addAll(state.ranges(buffer,VulkanLiquidStateLayout.Field.CELL_OFFSETS,VulkanLiquidStateLayout.Field.NUMERIC_VOLUMES,VulkanLiquidStateLayout.Field.MASS_UNITS));
         ranges.add(range(buffer,geometry.masks()));ranges.add(range(buffer,geometry.occupied()));

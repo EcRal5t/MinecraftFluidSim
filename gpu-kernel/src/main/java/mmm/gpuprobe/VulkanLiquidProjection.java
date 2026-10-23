@@ -34,6 +34,19 @@ final class VulkanLiquidProjection implements AutoCloseable {
         stage(command, sx, sy, sz, parameters, 2);
     }
 
+    void prepare(VkCommandBuffer command, int sx, int sy, int sz, Parameters parameters,
+                 VulkanGasPressure gas, VulkanGasPressure.Layout layout) {
+        if (gas == null) { prepare(command, sx, sy, sz, parameters); return; }
+        gas.recordCaptureFaces(command, layout, parameters);
+        stage(command, sx, sy, sz, parameters, 0);
+        gas.recordPrepare(command, layout, parameters);
+    }
+    void project(VkCommandBuffer command, int sx, int sy, int sz, Parameters parameters,
+                 VulkanGasPressure gas, VulkanGasPressure.Layout layout) {
+        if (gas == null) project(command, sx, sy, sz, parameters);
+        else gas.recordProject(command, layout, parameters);
+    }
+
     private void stage(VkCommandBuffer command, int sx, int sy, int sz, Parameters p, int stage) {
         int count = stage == 1 ? sx * sy * sz : (sx + 1) * sy * sz + sx * (sy + 1) * sz + sx * sy * (sz + 1);
         try (var stack = stackPush()) {

@@ -11,7 +11,7 @@ layout(binding=6,std430) readonly buffer Control { double control[]; };
 layout(binding=7,std430) buffer Hierarchy { double hierarchy[]; };
 layout(push_constant) uniform Params {
     int sx; int sy; int sz; int stage;
-    int base; int peerBase; int psx; int psy; int psz; int fineCount; int reserved0; int reserved1;
+    int base; int peerBase; int psx; int psy; int psz; int fineCount; int pressureStride; int reserved1;
 } p;
 shared double coarseCorrection[64];
 shared double coarseNext[64];
@@ -42,12 +42,12 @@ double product(int base,ivec3 shape,int row,int vectorOffset) {
 
 void buildFine(int row) {
     for(int entry=0;entry<7;entry++)hierarchy[aIndex(p.base,row,entry)]=0.0;
-    if(meta[p.fineCount+row]==0)return;
+    if(meta[p.pressureStride+row]==0)return;
     ivec3 at=coordinate(row,ivec3(p.sx,p.sy,p.sz));
     for(int edge=starts[row];edge<starts[row+1];edge++) {
         int column=columns[edge];double value=values[edge];
         if(column==row)hierarchy[aIndex(p.base,row,0)]+=value;
-        else if(meta[p.fineCount+column]!=0) {
+        else if(column<p.fineCount&&meta[p.pressureStride+column]!=0) {
             ivec3 difference=coordinate(column,ivec3(p.sx,p.sy,p.sz))-at;
             int axis=difference.x!=0?0:difference.y!=0?1:2;
             int side=2*axis+(difference[axis]>0?1:0);
@@ -77,7 +77,7 @@ void buildCoarse(int row) {
 }
 
 void loadFine(int row,int n) {
-    double rhs=meta[p.fineCount+row]!=0?work[row]:0.0;
+    double rhs=meta[p.pressureStride+row]!=0?work[row]:0.0;
     hierarchy[rIndex(p.base,n,row)]=rhs;
     hierarchy[tIndex(p.base,n,row)]=scaled(p.base,row,rhs);
 }
@@ -135,5 +135,5 @@ void main() {
         double current=hierarchy[tIndex(p.base,n,row)];
         hierarchy[uIndex(p.base,n,row)]=current+scaled(p.base,row,
             hierarchy[rIndex(p.base,n,row)]-product(p.base,ivec3(p.sx,p.sy,p.sz),row,p.base+9*n));
-    } else if(p.stage==7)work[3*p.fineCount+row]=meta[p.fineCount+row]!=0?hierarchy[uIndex(p.base,n,row)]:0.0;
+    } else if(p.stage==7)work[3*p.pressureStride+row]=meta[p.pressureStride+row]!=0?hierarchy[uIndex(p.base,n,row)]:0.0;
 }
