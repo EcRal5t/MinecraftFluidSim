@@ -51,6 +51,63 @@ import java.util.List;
 import java.util.UUID;
 
 abstract class RegionCodecValidationScenarios extends RegionPersistenceValidationSupport {
+	static void validateFarmlandJournal() throws Exception {
+		var root=Files.createTempDirectory(Path.of("."),"farmland-wal-");
+		var store=new FarmlandJournalStore(root);
+		var water=new mmm.chemistry.ChemicalTransferLedger.Group("mmm:water",0.016,
+				mmm.units.Mass.fromKilograms(2),-3,java.util.Map.of("mmm:co2",17L));
+		var changes=List.of(new FarmlandJournalStore.Change(new net.minecraft.core.BlockPos(-3,64,5).asLong(),1,3,
+				2_000_000,List.of(water),true,Math.nextUp(4123.0)),
+				new FarmlandJournalStore.Change(new net.minecraft.core.BlockPos(-2,64,5).asLong(),6,7,
+						1_000_000,List.of(new mmm.chemistry.ChemicalTransferLedger.Group("mmm:water",0.008,
+						mmm.units.Mass.fromKilograms(1),0,java.util.Map.of())),false,0));
+		var prepared=new FarmlandJournalStore.Journal(new UUID(503,509),new UUID(521,523),"minecraft:overworld",
+				"c".repeat(64),8,9,-1,mmm.recovery.CrossDomainRecovery.JournalPhase.PREPARED,changes);
+		store.write(prepared);
+		var restarted=new FarmlandJournalStore(root);
+		require(restarted.discover().equals(List.of(prepared)),"Farmland PREPARED changed actual water, species, raw U or plot identity");
+		var base=farmlandDecision(prepared,8,0,List.of(mmm.recovery.CrossDomainRecovery.ExternalTruth.BEFORE,
+				mmm.recovery.CrossDomainRecovery.ExternalTruth.BEFORE));
+		require(base.outcome()==mmm.recovery.CrossDomainRecovery.Outcome.DISCARD_UNCOMMITTED,"Farmland changed world moisture before HEAD");
+		var committed=prepared.committed(0x7139); restarted.write(committed);
+		var decoded=new FarmlandJournalStore(root).discover().getFirst();
+		require(decoded.equals(committed),"Farmland committed batch lost complete inventory or checksum");
+		for(int mask=0;mask<4;mask++) {
+			var truths=new ArrayList<mmm.recovery.CrossDomainRecovery.ExternalTruth>();
+			for(int member=0;member<2;member++) truths.add((mask&(1<<member))==0?
+					mmm.recovery.CrossDomainRecovery.ExternalTruth.BEFORE:mmm.recovery.CrossDomainRecovery.ExternalTruth.AFTER);
+			var decision=farmlandDecision(decoded,9,0x7139,truths);
+			require(decision.outcome()==mmm.recovery.CrossDomainRecovery.Outcome.CONVERGE_AFTER
+					&& decision.beforeMembers().size()==2-Integer.bitCount(mask),"Farmland did not resume only missing batch members");
+			for(int member:decision.beforeMembers()) truths.set(member,mmm.recovery.CrossDomainRecovery.ExternalTruth.AFTER);
+			require(farmlandDecision(decoded,9,0x7139,truths).beforeMembers().isEmpty(),"Farmland replay applied a soil dose twice");
+		}
+		require(farmlandDecision(decoded,9,0x7139,List.of(mmm.recovery.CrossDomainRecovery.ExternalTruth.THIRD,
+				mmm.recovery.CrossDomainRecovery.ExternalTruth.AFTER)).outcome()==mmm.recovery.CrossDomainRecovery.Outcome.LOCKED,
+				"Farmland replaced a foreign block state");
+		require(farmlandDecision(decoded,9,0x7139,List.of(mmm.recovery.CrossDomainRecovery.ExternalTruth.UNAVAILABLE,
+				mmm.recovery.CrossDomainRecovery.ExternalTruth.AFTER)).outcome()==mmm.recovery.CrossDomainRecovery.Outcome.WAIT_UNAVAILABLE,
+				"Farmland discarded an unloaded soil slot");
+		require(farmlandDecision(decoded,9,0x7140,List.of(mmm.recovery.CrossDomainRecovery.ExternalTruth.AFTER,
+				mmm.recovery.CrossDomainRecovery.ExternalTruth.AFTER)).reason()==mmm.recovery.CrossDomainRecovery.Reason.TARGET_CHECKSUM_MISMATCH,
+				"Farmland accepted another operation's HEAD");
+		require(decoded.protects("minecraft:overworld",changes.getFirst().position())
+				&& !decoded.protects("minecraft:the_nether",changes.getFirst().position())
+				&& !decoded.protects("minecraft:overworld",new net.minecraft.core.BlockPos(9,64,9).asLong()),
+				"Restarted pending farmland guard did not retain exact dimension/plot identity");
+		try {
+			restarted.write(new FarmlandJournalStore.Journal(decoded.operationId(),new UUID(541,547),decoded.dimensionId(),decoded.profile(),
+					8,9,0x7139,decoded.phase(),decoded.changes()));
+			throw new AssertionError("Farmland WAL accepted operation identity replacement");
+		} catch(java.io.IOException expected) { }
+		require(restarted.discover().equals(List.of(decoded)),"Rejected farmland replacement changed recovery evidence");
+		restarted.delete(decoded.operationId()); require(restarted.discover().isEmpty(),"Completed farmland WAL remained pending");
+	}
+	private static mmm.recovery.CrossDomainRecovery.Decision farmlandDecision(FarmlandJournalStore.Journal journal,
+			long head,long checksum,List<mmm.recovery.CrossDomainRecovery.ExternalTruth> truths) {
+		return mmm.recovery.CrossDomainRecovery.decide(new mmm.recovery.CrossDomainRecovery.Boundary(head,checksum,
+				journal.baseGeneration(),journal.targetGeneration(),journal.targetChecksum()>=0,journal.targetChecksum(),journal.phase(),false),truths);
+	}
 
 	static void validateCellMacCodec() throws Exception {
 		var template=populatedRegion(new UUID(31L,32L)).domain().exportParticleState();

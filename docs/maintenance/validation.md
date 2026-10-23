@@ -541,3 +541,11 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 `container-transfer-complete.log` 前 20 项通过，后续旧操作矩阵在 `cold acid-base precipitation` 失败：1 K 的 Henry 温度外推溢出。该记录保留为失败结果，修复使用原 40 步冷态场景的短入口 `ContainerTransferStoreValidation --cold-acid-base`，不据此声称完整矩阵通过。
 
 温区修复后的 `delivery-final-compile.log` 编译通过，`cold-acid-base-fixed.log` 原 40 步通过；`henry-temperature-range-fixed.log` 与 `henry-registry.log` 分别覆盖范围外库存／内能／源汇保持、无时间积压及定义存档往返。`henry-temperature-range.log` 是新测试误比较快照对象身份的失败记录；修正后精确比较库存条目和源汇内容。`water-contact-fire.log` 与 `entity-fire-wiring.log` 通过实际水／油／混层接触和实体响应适配，原生实体燃烧效果尚待游戏内观察。
+
+2026-10-23：控制器比较器的 `controller-comparator-lifecycle.log` 通过固定容量、部分填充、暂停、不可用、卸载／恢复与移除；`product-delivery-package.log` 打包及架构检查通过。
+
+### 耕地湿润
+
+`farmland-water-contact.log` 的 `MovingBodyCouplingValidation --water-contact` 通过实际水相足额提取、油层排除、重复接触面去重、剂量不足原子拒绝及质量／物种／内能账。`farmland-recovery.log` 的 `RegionRepositoryAdapterValidation --farmland` 通过批成员的持久往返、提交前后恢复、第三态与不可读等待。`farmland-delivery-build.log` 的 `:fabric:compileTestJava :fabric:assemble verifyArchitecture --offline --no-daemon` 通过，538个生产源文件完成架构扫描。
+
+原生游戏灌溉与跨重启尚待观察。单一场景：在运行中的控制器内部放一块干耕地，让一侧接触MMM水相，保持周围无原版水块且无降雨；观察湿度上升与区域水量对应减少（每档1 L），暂停后停止补水，退出重进后保持已交接状态。对照同场景的油侧接触应保持干燥。异常日志入口为 `Farmland transfer`／`Farmland WAL`；自动化证据仅覆盖上述核心与恢复短流程。

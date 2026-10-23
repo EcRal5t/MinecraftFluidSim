@@ -284,3 +284,15 @@ external sink 使用物品保存的 raw energy，舍入差单列 thermal roundof
 恢复先由 `CrossDomainRecovery` 核对 HEAD、WAL 阶段及世界／物品两个外部成员：base 且均为 before 时丢弃未提交操作；target 与 checksum 相符时幂等补齐仍为 before 的成员。第三种状态锁定，玩家离线或区块不可用则保留证据等待；世界及玩家耐久保存后才清理 WAL。失败不重新创造热库存。`FaultPoint` 覆盖 PREPARED、提交准备、HEAD、世界、物品与耐久保存后各交接节点。
 
 代码入口：[FiniteHeatExchangerOperations](../../fabric/src/main/java/mmm/simulation/FiniteHeatExchangerOperations.java)、[FiniteDeviceJournalStore](../../fabric/src/main/java/mmm/simulation/persistence/FiniteDeviceJournalStore.java)、[FiniteThermalDeviceItemCodec](../../model/src/main/java/mmm/thermal/FiniteThermalDeviceItemCodec.java)。自动化入口为 `RegionRepositoryAdapterValidation` 与有限端口热交换场景；原生游戏装卸仍待验证。
+
+## 耕地湿润
+
+原版 `FarmlandBlock.MOISTURE` 保存0–7档土壤水库存，每档1 L，满湿最多7 L。MMM补水要求耕地表面实际接触水相，接触库存足额提供1 L后才提交湿度加一；不足时保留原库存与世界湿度。油和其他非水材料不参与补水。
+
+水相提取携带实际材料质量、species与内能，区域分别记录向原版土壤的外部汇。土壤的原版状态保存量化水库存；雨水和原版水块补水为独立环境来源，原版湿度降低为土壤向环境散失。土壤使用现有方块状态，无新增BlockEntity。
+
+`FarmlandMoistureOperations.tickAvailable` 组织可用区域的吸水事务，`FarmlandJournalStore` 保存操作UUID、区域、维度、能力profile、base/target代次、目标checksum、提交阶段，以及逐耕地位置的湿度前后态和真实提取清单。清单携带实际来源库存，不借用容器身份。区域HEAD决定物质提交，WAL负责恢复对应MOISTURE；base保留前态，target补齐世界后态，未知第三态暂停并保留恢复证据。私有完整候选准备成功后依次写PREPARED、准备目标checkpoint、写已提交阶段WAL、推进HEAD，再补齐各耕地MOISTURE后态；世界统一耐久保存并回读后才清理WAL。`recoverIndexed` 沿共同 `CrossDomainRecovery` 恢复，第三态或暂不可读时保留WAL并暂停区域，重试不重复提水或增加湿度。
+
+接触以四侧实际15/16方块高度和同代水相材料层裁剪；顶部淹水按当前固定微盒碰撞的1 m顶面查询，保留这项网格近似。实现状态与验证范围见当前实施计划。
+
+未完成WAL涉及的位置通过 `LevelBlockMutationMixin` 暂停普通世界状态改写；事务内部仅放行当前维度、位置和预期湿度后态，写入结束即撤销豁免。恢复完成后解除保护，防止随机失湿、踩踏等改变已保存的前后状态。未知WAL证据的保护范围限于已登记控制器附近的耕地。主动暂停区域停止补水，静水休眠中的区域仍可按有界扫描找到实际水接触，成功补水后唤醒力学。

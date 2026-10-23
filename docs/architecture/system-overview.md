@@ -574,6 +574,15 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [MinecraftRegionLifecycle](../../fabric/src/main/java/mmm/simulation/MinecraftRegionLifecycle.java)
   - 验证选择器 / 参考：`boundary,lifecycle,region-manager`；[授权与操作](runtime-and-lifecycle.md#console)
 
+- **耕地湿润与外部土壤汇**
+  - 主要文件：
+    - [WaterContactGeometry](../../solver/src/main/java/mmm/fluid/WaterContactGeometry.java)：`capture` 按同代微盒／PLIC及水相材料层裁剪接触面，提供实际来源库存。
+    - [FarmlandMoistureOperations](../../fabric/src/main/java/mmm/simulation/FarmlandMoistureOperations.java)：`tickAvailable` 准备足额水相提取与湿度后态，`recoverIndexed` 恢复未完成事务。
+    - [FarmlandJournalStore](../../fabric/src/main/java/mmm/simulation/persistence/FarmlandJournalStore.java)：保存逐耕地湿度前后态、真实提取清单及区域HEAD身份。
+    - [LevelBlockMutationMixin](../../fabric/src/main/java/mmm/mixin/LevelBlockMutationMixin.java)：未完成事务的位置保持前后状态，限定本次恢复写入豁免。
+  - 验证入口：`MovingBodyCouplingValidation --water-contact`、`RegionRepositoryAdapterValidation --farmland`。
+  - 契约：[耕地湿润](world-ownership-and-containers.md#耕地湿润)、[吸水内能](thermal-state.md#耕地吸水的内能交接)；当前实现与验收状态见实施计划。
+
 - **材料与试剂创造来源**
   - 主要文件：
     - [CreativeSourceCatalog](../../fabric/src/main/java/mmm/simulation/CreativeSourceCatalog.java)

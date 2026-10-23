@@ -190,14 +190,42 @@ final class MaterialTransferPlanner {
 		prepare(extraction.inventory(), ChemicalTransferLedger.EMPTY, extraction.ledger(), SignedDyadic.ZERO, SignedDyadic.of(extraction.energy())).commit();
 		return new FluidDomain.ExactChemicalTransfer(true, extraction.ledger(), extraction.energy());
 	}
+	FluidDomain.ContactWaterTransfer extractContactWater(List<FluidDomain.WaterContactFace> faces, long requestedNanos) {
+		if (requestedNanos <= 0) throw new IllegalArgumentException("Water contact extraction requires positive nanos");
+		var contacts = WaterContactGeometry.capture(domain, faces);
+		var keys = new java.util.HashSet<LiquidCellInventory.Key>();
+		var cells = new java.util.TreeSet<Integer>();
+		for (var contact : contacts) {
+			keys.add(new LiquidCellInventory.Key(contact.cell(), contact.materialHandle(), contact.supportMask()));
+			cells.add(contact.cell());
+		}
+		if (keys.isEmpty()) return FluidDomain.ContactWaterTransfer.EMPTY;
+		double cubicMetres = requestedNanos / 1_000_000_000.0;
+		double normalized = domain.unitScale.normalizedVolume(cubicMetres);
+		while (domain.unitScale.cubicMeters(normalized) > cubicMetres) normalized = Math.nextDown(normalized);
+		var nearby = cells.stream().map(cell -> new FluidDomain.CellCandidate(cell, 0)).toList();
+		var extraction = extract(nearby, SignedDyadic.of(normalized), -1, false, stock -> keys.contains(stock.key()));
+		if (extraction == null || extraction.portions().isEmpty()) return FluidDomain.ContactWaterTransfer.EMPTY;
+		long actualNanos = Math.round(domain.unitScale.cubicMeters(extraction.volume().toDouble()) * 1_000_000_000.0);
+		if (actualNanos != requestedNanos) return FluidDomain.ContactWaterTransfer.EMPTY;
+		prepare(extraction.inventory(), ChemicalTransferLedger.EMPTY, extraction.ledger(),
+				SignedDyadic.ZERO, SignedDyadic.of(extraction.energy())).commit();
+		return new FluidDomain.ContactWaterTransfer(true, actualNanos, extraction.portions(), extraction.ledger(), extraction.energy());
+	}
+
 	private Extraction extract(List<FluidDomain.CellCandidate> nearby, SignedDyadic requested, int material, boolean canonical) {
+		return extract(nearby, requested, material, canonical, stock -> true);
+	}
+
+	private Extraction extract(List<FluidDomain.CellCandidate> nearby, SignedDyadic requested, int material,
+	                           boolean canonical, java.util.function.Predicate<LiquidCellInventory.Stock> selected) {
 		if (requested.signum() < 0 || domain.hasPendingPhaseMotionWork()) return null;
 		domain.domainFlowFields.ensureInventoryGrid();
 		var remaining = requested; var edits = new ArrayList<LiquidCellInventory.Edit>(); var removed = new LinkedHashMap<Integer, Removed>();
 		var removedEnergy = SignedDyadic.ZERO;
 		for (var cell : nearby) for (var stock : domain.liquidCells.stocksInCell(cell.index())) {
 			if (remaining.signum() == 0) break;
-			if (material >= 0 && stock.key().material() != material || canonical && !canonical(stock)) continue;
+			if (!selected.test(stock) || material >= 0 && stock.key().material() != material || canonical && !canonical(stock)) continue;
 			var taken = minimum(remaining, stock.volume()); var kept = stock.volume().subtract(taken);
 			long keptMass = kept.signum() == 0 ? 0 : Mass.portion(stock.massUnits(), kept, stock.volume());
 			long takenMass = stock.massUnits() - keptMass;

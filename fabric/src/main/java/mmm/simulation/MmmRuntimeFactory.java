@@ -89,8 +89,11 @@ public final class MmmRuntimeFactory {
 				regionTick, snapshots, worldRegistries);
 		FiniteHeatExchangerOperations finiteDevices = new FiniteHeatExchangerOperations(server, worldRoot,
 				regionManager, regionOperations, targets, availability, phaseWorkBarrier, worldRegistries, snapshots);
-		availability.additionalPending(finiteDevices::hasPending);
+		FarmlandMoistureOperations farmland = new FarmlandMoistureOperations(server, worldRoot,
+				regionManager, regionOperations, availability, phaseWorkBarrier, worldRegistries, snapshots);
+		availability.additionalPending(id -> finiteDevices.hasPending(id) || farmland.hasPending(id));
 		regionTick.finiteDeviceExchange(finiteDevices::tickExchange);
+		regionTick.farmlandHydration(farmland::tickAvailable);
 		ControllerQueryUseCase controllerQueries = new ControllerQueryUseCase(new ControllerSummaryAdapter(
 				regionManager, regionOperations, worldRegistries.profile(), worldRegistries.thermalOrNull(),
 				availability::hasPending, startup::authoritativeWritesReady,
@@ -153,7 +156,7 @@ public final class MmmRuntimeFactory {
 		MinecraftSimulationLoop simulationLoop = new MinecraftSimulationLoop(
 				regionManager, regionOperations, snapshots, containerRecovery, takeover,
 				availability, regionTick, ownership::replace);
-		return new MmmRuntime(simulationLoop, finiteDevices, operatorActions, containerTransactions, controllerConsole,
+		return new MmmRuntime(simulationLoop, finiteDevices, farmland, operatorActions, containerTransactions, controllerConsole,
 				regionActivation, debugFixtures, regionAdministration, regionDiagnostics,
 				playerContainerTransfers, dispenserContainerTransfers,
 				new MinecraftRegionObservation(regionManager, snapshots, comparatorSignals), containerRecovery,

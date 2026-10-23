@@ -534,6 +534,38 @@ public final class FluidDomain {
 	// Immutable observations and prepared transaction contracts.
 	record CellCandidate(int index, int distanceSquared) { }
 	public record VelocitySample(float x, float y, float z) { static final VelocitySample ZERO = new VelocitySample(0.0F, 0.0F, 0.0F); }
+	/** Local axis-aligned face. A=(axis+1)%3, B=(axis+2)%3; side points toward the contacted water. */
+	public record WaterContactFace(int axis, double coordinateMetres,
+			double minimumAMetres, double maximumAMetres, double minimumBMetres, double maximumBMetres, int side) {
+		public WaterContactFace {
+			if (axis < 0 || axis > 2 || side != -1 && side != 1 || !Double.isFinite(coordinateMetres)
+					|| !Double.isFinite(minimumAMetres) || !Double.isFinite(maximumAMetres)
+					|| !Double.isFinite(minimumBMetres) || !Double.isFinite(maximumBMetres)
+					|| !(maximumAMetres > minimumAMetres) || !(maximumBMetres > minimumBMetres))
+				throw new IllegalArgumentException("Water contact face is invalid");
+		}
+	}
+
+	/** One contacted water stock; water volume occurs once even when several faces touch it. */
+	public record WaterContact(int cell, int supportMask, int materialHandle,
+			double areaSquareMetres, double waterVolumeCubicMetres) { }
+
+	public record ContactWaterTransfer(boolean transferred, long actualNanos, List<MaterialPortion> portions,
+			ChemicalTransferLedger ledger, double internalEnergy) {
+		static final ContactWaterTransfer EMPTY = new ContactWaterTransfer(false, 0, List.of(), ChemicalTransferLedger.EMPTY, 0);
+		public ContactWaterTransfer { portions = List.copyOf(portions); }
+	}
+
+	/** Read-only physical water contacts; no liquid, thermal or audit inventory is changed. */
+	public List<WaterContact> waterContacts(List<WaterContactFace> faces) {
+		return WaterContactGeometry.capture(this, faces);
+	}
+
+	/** Full-dose contact-only extraction on the current domain, suitable for a private world-edit candidate. */
+	public ContactWaterTransfer extractContactWater(List<WaterContactFace> faces, long requestedNanos) {
+		return transferPlanner.extractContactWater(faces, requestedNanos);
+	}
+
 	public record BodyFluidSample(
 			double displacedVolumeCubicMetres,
 			double centerXMetres, double centerYMetres, double centerZMetres,

@@ -13,6 +13,7 @@ import java.util.Objects;
 public final class MmmRuntime {
 	private final MinecraftSimulationLoop simulationLoop;
 	private final FiniteHeatExchangerOperations finiteHeatExchangers;
+	private final FarmlandMoistureOperations farmlandMoisture;
 	private final MinecraftRegionOperatorActions operatorActions;
 	private final MinecraftContainerTransactionAdapter containerTransactions;
 	private final MinecraftControllerConsole controllerConsole;
@@ -36,6 +37,7 @@ public final class MmmRuntime {
 	MmmRuntime(
 			MinecraftSimulationLoop simulationLoop,
 			FiniteHeatExchangerOperations finiteHeatExchangers,
+			FarmlandMoistureOperations farmlandMoisture,
 			MinecraftRegionOperatorActions operatorActions,
 			MinecraftContainerTransactionAdapter containerTransactions,
 			MinecraftControllerConsole controllerConsole,
@@ -56,6 +58,7 @@ public final class MmmRuntime {
 	) {
 		this.simulationLoop = Objects.requireNonNull(simulationLoop, "Simulation loop");
 		this.finiteHeatExchangers = Objects.requireNonNull(finiteHeatExchangers);
+		this.farmlandMoisture = Objects.requireNonNull(farmlandMoisture);
 		this.operatorActions = Objects.requireNonNull(operatorActions, "Region operator actions");
 		this.containerTransactions = Objects.requireNonNull(containerTransactions, "Container transactions");
 		this.controllerConsole = Objects.requireNonNull(controllerConsole, "Controller console");
@@ -95,8 +98,10 @@ public final class MmmRuntime {
 	public WorldStartupCoordinator.Result startup() { return startup; }
 
 	public FiniteHeatExchangerOperations finiteHeatExchangers() { return finiteHeatExchangers; }
+	public FarmlandMoistureOperations farmlandMoisture() { return farmlandMoisture; }
 	public void tick(MinecraftServer server) {
 		finiteHeatExchangers.recoverIndexed();
+		farmlandMoisture.recoverIndexed();
 		simulationLoop.tick(server);
 	}
 
@@ -129,6 +134,7 @@ public final class MmmRuntime {
 		if (worldRecoveryCompleted) return;
 		simulationLoop.recoverWorld(server);
 		finiteHeatExchangers.recoverIndexed();
+		farmlandMoisture.recoverIndexed();
 		worldRecoveryCompleted = true;
 	}
 

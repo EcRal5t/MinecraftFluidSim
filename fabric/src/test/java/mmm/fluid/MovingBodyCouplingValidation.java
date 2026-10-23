@@ -7,7 +7,14 @@ import mmm.world.MovingBodyFluidCoupling;
 /** Actual body work, stationary-wall reaction and local heat share one momentum publication. */
 public final class MovingBodyCouplingValidation {
 	public static void main(String[] args) throws Exception {
+		if (java.util.Arrays.asList(args).contains("--water-contact")) {
+			wetGeometryAndHydrostaticPressure();
+			contactWaterExtraction();
+			System.out.println("Contact water extraction preserves full material/species/U inventories");
+			return;
+		}
 		wetGeometryAndHydrostaticPressure();
+		contactWaterExtraction();
 		var registries=FullCapabilityTestFixture.load();
 		var d=new FluidDomain(5,4,4,new FluidSolverConfig(.5F,1000,0,.025F,120,1e-5F,.002F));
 		FullCapabilityTestFixture.bindEmptyMaterialState(d,registries.liquids());
@@ -54,6 +61,51 @@ public final class MovingBodyCouplingValidation {
 				"Body/wall energy or momentum changed during recovery");
 		System.out.println("Moving-body work, fixed-wall impulse, actual heat and recovery passed");
 	}
+	private static void contactWaterExtraction() throws Exception {
+		var registries=FullCapabilityTestFixture.load();
+		var domain=new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.025F,120,1e-5F,.002F));
+		domain.sealDomainBoundary();
+		FullCapabilityTestFixture.bindEmptyMaterialState(domain,registries.liquids());
+		domain.bindGasRegistry(registries.gas());
+		domain.setVolume(1,1,1,.02F);
+		domain.bindChemistry(registries.chemical());
+		var stock=domain.liquidCells.physicalStockAt(0);
+		var chemistry=registries.chemical();
+		var composition=mmm.chemistry.ChemicalMixtureRecord.fromSolutesAndSolventMass(chemistry,
+				java.util.Map.of(mmm.chemistry.BuiltinChemicalDefinitions.CO2,1000L),
+				mmm.chemistry.BuiltinChemicalDefinitions.H2O,stock.massUnits());
+		domain.setMarkerChemical(0,composition.stableAmounts(chemistry));
+		domain.bindThermal(registries.thermal(),registries.liquids(),300,8);
+		var side=new FluidDomain.WaterContactFace(0,.5,.5,.75,.5,.75,1);
+		var duplicate=java.util.List.of(side,side);
+		var contacts=domain.waterContacts(duplicate);
+		require(contacts.size()==1&&contacts.getFirst().areaSquareMetres()>0
+				&&Math.abs(contacts.getFirst().waterVolumeCubicMetres()-domain.unitScale.cubicMeters(domain.totalVolumeExact()))<1e-15,
+				"Several soil faces counted a contacted water stock more than once");
+		long beforeMass=domain.totalMassUnits();
+		var beforeVolume=domain.liquidCells.exactVolume();
+		var beforeAudit=domain.thermalAudit();
+		var transfer=domain.extractContactWater(duplicate,1_000_000L);
+		require(transfer.transferred()&&transfer.actualNanos()==1_000_000L
+				&&domain.totalMassUnits()+transfer.portions().stream().mapToLong(FluidDomain.MaterialPortion::massUnits).sum()==beforeMass
+				&&domain.liquidCells.exactVolume().add(mmm.units.SignedDyadic.of(
+						transfer.portions().stream().mapToDouble(FluidDomain.MaterialPortion::volume).sum())).equals(beforeVolume)
+				&&domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory())
+				&&domain.thermalAudit().externalSink().subtract(beforeAudit.externalSink()).equals(
+						mmm.units.SignedDyadic.of(transfer.internalEnergy())),
+				"One-litre soil uptake did not preserve actual liquid mass, volume and U settlement");
+		for(var entry:composition.stableAmounts(chemistry).entrySet()) {
+			long retained=0;
+			for(var row:domain.liquidCells.stocks()) retained+=row.mixture().amount(chemistry.speciesHandle(entry.getKey()));
+			long taken=transfer.ledger().groups().stream().mapToLong(group->group.speciesQuanta().getOrDefault(entry.getKey(),0L)).sum();
+			require(retained+taken==entry.getValue(),"Soil uptake lost dissolved species "+entry.getKey());
+		}
+		var remaining=domain.liquidCells.exactVolume();var audit=domain.thermalAudit();long mass=domain.totalMassUnits();
+		require(!domain.extractContactWater(duplicate,100_000_000L).transferred()
+				&&domain.liquidCells.exactVolume().equals(remaining)&&domain.totalMassUnits()==mass&&domain.thermalAudit()==audit,
+				"Insufficient contact water partially debited the source");
+	}
+
 	private static void wetGeometryAndHydrostaticPressure() {
 		var domain = new FluidDomain(4,4,4,new FluidSolverConfig(.5F,1000,9.81F,.025F,120,1e-5F,.002F));
 		domain.sealDomainBoundary();
@@ -87,6 +139,14 @@ public final class MovingBodyCouplingValidation {
 				&&waterAndOil.waterContactVolumeCubicMetres()>0
 				&&waterAndOil.waterContactVolumeCubicMetres()<waterAndOil.displacedVolumeCubicMetres(),
 				"Body wet contact confused oil with water or lost water at the material interface");
+		var oilFace = new FluidDomain.WaterContactFace(0,.6,.8,.9,.6,.9,1);
+		var mixedFace = new FluidDomain.WaterContactFace(0,.6,.7,.8,.6,.9,1);
+		var beforeContact = layered.liquidCells.exactVolume();
+		require(layered.waterContacts(java.util.List.of(oilFace)).isEmpty()
+				&&!layered.extractContactWater(java.util.List.of(oilFace),1_000_000).transferred()
+				&&!layered.waterContacts(java.util.List.of(mixedFace)).isEmpty()
+				&&layered.liquidCells.exactVolume().equals(beforeContact),
+				"Soil contact drew through oil or changed an observed water inventory");
 		var partial = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,9.81F,.025F,120,1e-5F,.002F));
 		partial.sealDomainBoundary(); partial.setVolume(1,1,1,.5F);
 		var before = partial.sampleAxisAlignedBody(.6,.6,.6,.9,.9,.9);

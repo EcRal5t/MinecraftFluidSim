@@ -5,6 +5,8 @@ public final class RegionRepositoryAdapterValidation {
 	private RegionRepositoryAdapterValidation() { }
 
 	public static void main(String[] args) throws Exception {
+		RegionCodecValidationScenarios.validateFarmlandJournal();
+		if(java.util.Arrays.asList(args).contains("--farmland")){System.out.println("Farmland water transaction persistence validation passed");return;}
 		RegionCodecValidationScenarios.validateCellMacCodec();
 		if(java.util.Arrays.asList(args).contains("--cell-mac")){System.out.println("Cell/MAC persistence validation passed");return;}
 		RegionGenerationValidationScenarios.validateExactRoundTripAndMetadataUnload();

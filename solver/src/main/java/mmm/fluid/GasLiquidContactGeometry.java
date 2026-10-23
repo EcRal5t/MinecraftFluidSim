@@ -23,7 +23,7 @@ final class GasLiquidContactGeometry {
     }
   }
 
-  private record Point(double x, double y, double z) {
+  record Point(double x, double y, double z) {
     Point minus(Point p) {
       return new Point(x - p.x, y - p.y, z - p.z);
     }
@@ -213,7 +213,7 @@ final class GasLiquidContactGeometry {
     return result;
   }
 
-  private static List<Point> face(int micro, int axis, double coordinate) {
+  static List<Point> face(int micro, int axis, double coordinate) {
     int a = (axis + 1) % 3, b = (axis + 2) % 3;
     double[] p = {.5 * (micro & 1), .5 * (micro >> 1 & 1), .5 * (micro >> 2 & 1)};
     p[axis] = coordinate;
@@ -256,7 +256,7 @@ final class GasLiquidContactGeometry {
     return points;
   }
 
-  private static List<Point> clip(List<Point> polygon, Point n, double offset) {
+  static List<Point> clip(List<Point> polygon, Point n, double offset) {
     if (polygon.isEmpty()) return polygon;
     int inside = 0;
     for (var point : polygon) if (n.dot(point) <= offset) inside++;
@@ -276,7 +276,7 @@ final class GasLiquidContactGeometry {
     return result;
   }
 
-  private static double area(List<Point> polygon) {
+  static double area(List<Point> polygon) {
     if (polygon.size() < 3) return 0;
     var first = polygon.getFirst();
     double x = 0, y = 0, z = 0;
