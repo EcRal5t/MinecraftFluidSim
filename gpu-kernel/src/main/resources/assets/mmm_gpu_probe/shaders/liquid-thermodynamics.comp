@@ -12,7 +12,8 @@ int64_t quantity(int at){return int64_t(uint64_t(words[at])|(uint64_t(words[at+1
 void store(int at,double x){if(isnan(x)||isinf(x))atomicOr(errors,16384u);uvec2 bits=unpackDouble2x32(x);words[at]=bits.x;words[at+1]=bits.y;}
 void stockState(int stock){
     store(h(10)+2*stock,0.0);store(h(11)+2*stock,0.0);store(h(12)+2*stock,0.0);
-    if(stock>=int(words[field(0)]))return;
+    bool live=stock<h(40)?stock<int(words[field(0)]):h(41)>=0&&stock-h(40)<int(words[h(41)]);
+    if(!live)return;
     double mass=double(quantity(field(8)+2*stock))*1e-10;
     if(mass==0.0)return;
     int material=int(words[field(2)+stock]);if(mass<0.0||material<0||material>=h(1)){atomicOr(errors,16384u);return;}

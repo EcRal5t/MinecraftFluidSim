@@ -14,13 +14,32 @@ import java.util.List;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
 
-/** Derived caloric coordinates of transported stocks, for common mechanical heat allocation. */
+/** Shared piecewise caloric inversion for liquid stocks and resident solid inventories. */
 final class VulkanLiquidThermodynamics implements AutoCloseable {
+    /** Both live ranges exclude reserved rows and source/sink audit inventories. */
+    record Inventory(int rows,int countsWord,int secondaryBegin,int secondaryCountsWord,int cells,int cellOffsetsWord,
+                     int materialsWord,int massesWord,int energiesWord,int speciesOffsetsWord,int speciesHandlesWord,int speciesAmountsWord) {
+        static Inventory liquid(VulkanLiquidStateLayout layout){return new Inventory(layout.stockCapacity(),word(layout.column(VulkanLiquidStateLayout.Field.COUNTS)),
+                layout.stockCapacity(),-1,layout.cellCount(),word(layout.column(VulkanLiquidStateLayout.Field.CELL_OFFSETS)),
+                word(layout.column(VulkanLiquidStateLayout.Field.MATERIALS)),word(layout.column(VulkanLiquidStateLayout.Field.MASS_UNITS)),
+                word(layout.column(VulkanLiquidStateLayout.Field.ENERGY_BITS)),word(layout.column(VulkanLiquidStateLayout.Field.SPECIES_OFFSETS)),
+                word(layout.column(VulkanLiquidStateLayout.Field.SPECIES_HANDLES)),word(layout.column(VulkanLiquidStateLayout.Field.SPECIES_AMOUNTS)));}
+        static Inventory granular(VulkanGranularStateLayout layout){return new Inventory(Math.addExact(layout.particleCapacity(),layout.depositCapacity()),
+                layout.word(VulkanGranularStateLayout.Field.COUNTS),layout.particleCapacity(),layout.word(VulkanGranularStateLayout.Field.COUNTS)+1,0,-1,
+                layout.word(VulkanGranularStateLayout.Field.MATERIAL),layout.word(VulkanGranularStateLayout.Field.MASS_UNITS),
+                layout.word(VulkanGranularStateLayout.Field.INTERNAL_ENERGY),layout.word(VulkanGranularStateLayout.Field.SPECIES_OFFSETS),
+                layout.word(VulkanGranularStateLayout.Field.SPECIES_HANDLES),layout.word(VulkanGranularStateLayout.Field.SPECIES_AMOUNTS));}
+    }
     record Tables(int[] offsets,double[] upper,double[] capacity,double[] referenceTemperature,double[] coldSensible) { }
     static Tables tables(FluidMaterialRegistry fluid,ThermalRegistry thermal) {
         var materials=new ArrayList<ThermalMaterialDefinition>();
         for(int i=0;i<fluid.materials().size();i++)materials.add(thermal.material(thermal.materialHandle(
                 ThermalMaterialDefinition.CarrierKind.LIQUID,fluid.material(i).id())));
+        return tables(materials);
+    }
+    static Tables tables(VulkanGranularStateLayout.Definitions granular,ThermalRegistry thermal){
+        var materials=new ArrayList<ThermalMaterialDefinition>();
+        for(String id:granular.materialIds())materials.add(thermal.material(thermal.materialHandle(ThermalMaterialDefinition.CarrierKind.GRANULAR,id)));
         return tables(materials);
     }
     static Tables tables(List<ThermalMaterialDefinition> materials) {
@@ -35,7 +54,7 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
         return new Tables(offsets,upper.stream().mapToDouble(Double::doubleValue).toArray(),
                 capacity.stream().mapToDouble(Double::doubleValue).toArray(),reference,cold);
     }
-    record Layout(VulkanLiquidStateLayout liquid,Tables tables,int materialReferenceWordOffset,int speciesReferenceWordOffset,
+    record Layout(VulkanLiquidStateLayout liquid,Inventory inventory,Tables tables,int materialReferenceWordOffset,int speciesReferenceWordOffset,
                   int speciesStride,VulkanLiquidStateLayout.Column header,VulkanLiquidStateLayout.Column offsets,
                   VulkanLiquidStateLayout.Column upper,VulkanLiquidStateLayout.Column capacity,
                   VulkanLiquidStateLayout.Column referenceTemperature,VulkanLiquidStateLayout.Column coldSensible,
@@ -44,12 +63,15 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
                   VulkanLiquidStateLayout.Column cellHeatCapacities,long endOffset) {
         ByteBuffer headerBytes() {
             var out=ByteBuffer.allocateDirect(192).order(ByteOrder.LITTLE_ENDIAN);int[] data=new int[48];
-            data[0]=liquid.stockCapacity();data[1]=tables.referenceTemperature().length;data[2]=speciesStride;
+            data[0]=inventory.rows();data[1]=tables.referenceTemperature().length;data[2]=speciesStride;
             data[3]=materialReferenceWordOffset;data[4]=speciesReferenceWordOffset;data[5]=word(offsets);data[6]=word(upper);
             data[7]=word(capacity);data[8]=word(referenceTemperature);data[9]=word(coldSensible);
             data[10]=word(temperatures);data[11]=word(heatCapacities);data[12]=word(coldEnergies);
-            data[13]=word(cellTemperatures);data[14]=word(cellHeatCapacities);data[15]=liquid.cellCount();
-            for(var field:VulkanLiquidStateLayout.Field.values())data[16+field.ordinal()]=word(liquid.column(field));
+            data[13]=word(cellTemperatures);data[14]=word(cellHeatCapacities);data[15]=inventory.cells();
+            data[16]=inventory.countsWord();data[17]=inventory.cellOffsetsWord();data[18]=inventory.materialsWord();
+            data[24]=inventory.massesWord();data[25]=inventory.energiesWord();data[27]=inventory.speciesOffsetsWord();
+            data[28]=inventory.speciesHandlesWord();data[29]=inventory.speciesAmountsWord();
+            data[40]=inventory.secondaryBegin();data[41]=inventory.secondaryCountsWord();
             for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);out.putDouble(176,ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);return out;
         }
         void initializeHeaderAndTables(ByteBuffer destination) {
@@ -62,23 +84,33 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
     }
     static Layout layout(VulkanLiquidStateLayout liquid,Tables tables,int materialReferenceWordOffset,int speciesReferenceWordOffset,
                          int speciesStride,long scratchBase,long alignment) {
-        if(scratchBase<liquid.bytes()||alignment<8||(alignment&(alignment-1))!=0||materialReferenceWordOffset<0
+        if(scratchBase<liquid.bytes())throw new IllegalArgumentException("Caloric workspace overlaps liquid inventory");
+        return layout(liquid,Inventory.liquid(liquid),tables,materialReferenceWordOffset,speciesReferenceWordOffset,speciesStride,scratchBase,alignment);
+    }
+    static Layout layout(VulkanGranularStateLayout granular,Tables tables,int materialReferenceWordOffset,int speciesReferenceWordOffset,
+                         int speciesStride,long scratchBase,long alignment){
+        if(scratchBase<granular.endOffset())throw new IllegalArgumentException("Caloric workspace overlaps granular inventory");
+        return layout(null,Inventory.granular(granular),tables,materialReferenceWordOffset,speciesReferenceWordOffset,speciesStride,scratchBase,alignment);
+    }
+    private static Layout layout(VulkanLiquidStateLayout liquid,Inventory inventory,Tables tables,int materialReferenceWordOffset,int speciesReferenceWordOffset,
+                         int speciesStride,long scratchBase,long alignment) {
+        if(alignment<8||(alignment&(alignment-1))!=0||materialReferenceWordOffset<0
                 ||speciesReferenceWordOffset<0||speciesStride<0)throw new IllegalArgumentException("Invalid liquid caloric layout");
         long[] cursor={scratchBase};var header=column(cursor,48,4,alignment);var offsets=column(cursor,tables.offsets().length,4,alignment);
         var upper=column(cursor,tables.upper().length,8,alignment);var capacity=column(cursor,tables.capacity().length,8,alignment);
         var reference=column(cursor,tables.referenceTemperature().length,8,alignment);var cold=column(cursor,tables.coldSensible().length,8,alignment);
-        var temperatures=column(cursor,liquid.stockCapacity(),8,alignment);var capacities=column(cursor,liquid.stockCapacity(),8,alignment);
-        var energies=column(cursor,liquid.stockCapacity(),8,alignment);
-        var cellTemperatures=column(cursor,liquid.cellCount(),8,alignment);var cellCapacities=column(cursor,liquid.cellCount(),8,alignment);
-        return new Layout(liquid,tables,materialReferenceWordOffset,speciesReferenceWordOffset,speciesStride,header,offsets,upper,capacity,
+        var temperatures=column(cursor,inventory.rows(),8,alignment);var capacities=column(cursor,inventory.rows(),8,alignment);
+        var energies=column(cursor,inventory.rows(),8,alignment);
+        var cellTemperatures=column(cursor,inventory.cells(),8,alignment);var cellCapacities=column(cursor,inventory.cells(),8,alignment);
+        return new Layout(liquid,inventory,tables,materialReferenceWordOffset,speciesReferenceWordOffset,speciesStride,header,offsets,upper,capacity,
                 reference,cold,temperatures,capacities,energies,cellTemperatures,cellCapacities,align(cursor[0],alignment));
     }
     private final FlipKernelBindings bindings;
     VulkanLiquidThermodynamics(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,2,shader(),12);}
     void rebindRanges(FlipKernelBindings.BufferRange candidate,FlipKernelBindings.BufferRange errors){bindings.rebindRanges(List.of(candidate,errors));}
     void record(VkCommandBuffer command,Layout layout) {
-        stage(command,layout,0,layout.liquid().stockCapacity());
-        stage(command,layout,1,layout.liquid().cellCount());
+        stage(command,layout,0,layout.inventory().rows());
+        stage(command,layout,1,layout.inventory().cells());
     }
     private void stage(VkCommandBuffer command,Layout layout,int stage,int count) {
         int groups=(count+127)/128;if(groups==0)return;
