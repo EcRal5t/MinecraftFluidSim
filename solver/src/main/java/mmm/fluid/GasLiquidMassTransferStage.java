@@ -64,7 +64,7 @@ final class GasLiquidMassTransferStage {
 		var work = new TreeMap<Key, Work>();
 		for (var contact : GasLiquidContactGeometry.capture(domain)) {
 			var stock = domain.liquidCells.stock(contact.key());
-			if (stock == null || stock.mixture() == null || !(contact.areaM2() > 0)) continue;
+			if (stock == null || stock.massUnits() == 0 || stock.mixture() == null || !(contact.areaM2() > 0)) continue;
 			String material = domain.materialRegistry.material(stock.key().material()).id();
 			int phase = registry.phaseHandleForMaterial(material);
 			for (var rule : registry.gasLiquidMassTransfers()) if (phase == registry.phaseHandle(rule.liquidPhaseId())) {
@@ -301,3 +301,4 @@ final class GasLiquidMassTransferStage {
 				});
 	}
 }
+

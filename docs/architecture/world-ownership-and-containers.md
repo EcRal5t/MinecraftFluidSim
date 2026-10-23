@@ -65,7 +65,7 @@ controller 产品跨越三个具有独立生命周期的持久域：
 - Minecraft world/actor：方块、玩家手中物品或 dispenser inventory；
 - sidecar WAL/registry：记录跨域事务足以确定恢复方向的 before/after truth。
 
-所有跨域操作都采用“先持久准备与可重建结果，后发布 region HEAD，再把外部域收敛到已提交结果”的次序。WAL 专用于记录跨域事务步骤与故障回滚，事务最终以 region HEAD 提交为准。
+跨域操作先持久准备可重建结果，最终提交由 region HEAD 决定。容器和 ownership 释放采用区域先提交；原版水接管先移除并耐久保存世界水方块，再提交区域。共同恢复判定器按明确的提交顺序决定回滚外部前态或完成后态。
 
 ## Ownership 模型
 
@@ -76,17 +76,17 @@ controller 内部接管的方块标记为空气，水体由 solver 内部粒子�
 1. 只读扫描 controller footprint、required chunk、预算、既有 region overlap 和实际纯原版水 preimage，并绑定当前 profile fingerprint；
 2. 构造尚未登记到 live catalog 的完整 domain candidate，初始化 profile 要求的全部 side column，再准备新的完整 region generation；
 3. 发布 ownership WAL 与 WARNING；
-4. 修改世界方块；
-5. 发布 region HEAD；
+4. 修改世界方块并完成所属维度耐久保存；
+5. 持久写入包含 target checksum 的提交阶段，再发布 region HEAD；
 6. 建立 committed ownership 记录并清理 WAL。
 
 无水接管时同样先 stage、回读并发布首个 region HEAD。只有 HEAD 回读成功后，`MinecraftRegionActivation` 才把 candidate 登记并选入 live catalog、发送 snapshot 和返回创建成功；此前 Query、网络和其他 tick 看不到该区域。
 
 失败 candidate 不进入 catalog，也不发送 removal 来掩盖幽灵状态。controller domain 的原版水采样只接受持久 footprint interior 内的纯 `Blocks.WATER`，不会把 waterlogged、相邻其他内腔或 dense bounds 中不归属的水复制成 marker。
 
-恢复根据 region HEAD 与 WAL 的 base/target generation 判定重放或回滚。`OwnershipTransactionCoordinator` 负责 Minecraft footprint/preimage、live checkpoint capture
+恢复根据 region HEAD、WAL 的 base/target generation、target manifest checksum、操作 UUID 和提交阶段，由 `CrossDomainRecovery` 判定重放或回滚。`OwnershipTransactionCoordinator` 负责 Minecraft footprint/preimage、live checkpoint capture
 与结果写回，并把 WAL→世界→HEAD→committed 状态机委托给既有低层 `OwnershipCoordinator`；
-它不复制恢复代数。
+方块读取、修改和保存由世界适配器负责。
 
 未知文件、损坏 NBT、身份不符、generation 歧义或玩家已放置的非水方块一律保留并锁定，不猜测修复，也不覆盖玩家方块。
 
@@ -104,7 +104,7 @@ HEAD 发布前崩溃时，恢复看到 `HEAD == baseGeneration`，把世界尽�
 
 ### 释放事务
 
-release 只有在凝聚相、密闭气体、gas `U` 和有限设备库存全部为空，且 ownership/container WAL 无歧义时才允许。它使用同一套 base/target 判定，但世界操作方向相反：先尝试恢复已登记 preimage，再发布空 ownership 的 region target。玩家占据的位置保持不变并进入结果统计。
+release 只有在凝聚相、密闭气体、gas `U` 和有限设备库存全部为空，且 ownership/container WAL 无歧义时才允许。它使用共同区域先提交判定：先发布空 ownership 的 region target，再尝试恢复已登记 preimage并耐久保存世界。玩家占据的位置保持不变并进入结果统计。
 
 committed registry 记录 region、dimension、generation 和确切 owned block/preimage 集。日常 reconcile 只分类 `OWNED_AIR`、`PREIMAGE_PRESENT` 和 `OCCUPIED`，不自动把冲突方块改回空气或水。
 
@@ -202,10 +202,10 @@ insert/extract 返回“实际转移量”，WAL 和 after item 必须记录该�
 
 恢复必须核对 HEAD、checksum、actor、before/after item、resource kind、world profile fingerprint、各适用 registry fingerprint 和 generation。
 
-`core/recovery/CrossDomainRecovery` 是 region HEAD 与一个或多个外部持久成员的共同判定器；
+`model/recovery/CrossDomainRecovery` 是 region HEAD 与一个或多个外部持久成员的共同判定器；
 现有 container adapter 只负责把 durable actor readback 分类为 `BEFORE`、`AFTER`、`THIRD` 或 `UNAVAILABLE`，不能复制 commit switch。
 
-未来 world action、外部 provider 或设备 journal 也必须委托同一判定器。region、ownership 与 container 的紧邻代次统一拒绝负数和 `long` 溢出，不能让 `Long.MAX_VALUE + 1` 被误认成合法 target。
+ownership 与容器已委托同一判定器：区域先提交允许丢弃未提交候选或完成外部后态；外部先提交在 base HEAD 时执行外部回滚。不可读成员等待，第三态保留事务供冲突处理。世界恢复完成及 WAL 清理之前需确认维度保存完成。设备 journal 沿同一规则提供自己的具体载荷。region、ownership 与 container 的紧邻代次统一拒绝负数和 `long` 溢出，不能让 `Long.MAX_VALUE + 1` 被误认成合法 target。
 
 任何歧义都保留 WAL 并锁定；不得因为 item 看起来相似就推断完成状态。
 
@@ -273,3 +273,4 @@ external sink 使用物品保存的 raw energy，舍入差单列 thermal roundof
 它与区域实收能量的差额进入 thermal roundoff。所有份额必须满足实际库存的正温校验，极小余量的热状态受原始能量列的可表示精度限制。
 
 创造放出没有物品侧减少，因此明确记 region external source；创造装取仍必须从 region 删除，只是 Minecraft 保留玩家物品。这个不对称是显式 actor 语义，不得隐藏在 tooltip 或 item damage 中。
+

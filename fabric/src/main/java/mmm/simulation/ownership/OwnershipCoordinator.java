@@ -3,6 +3,8 @@ package mmm.simulation.ownership;
 import mmm.simulation.persistence.RegionState;
 import mmm.simulation.persistence.RegionGenerationStore;
 import mmm.simulation.persistence.GenerationSequence;
+import mmm.recovery.CrossDomainRecovery;
+import java.util.ArrayList;
 
 import java.io.IOException;
 import java.util.List;
@@ -47,7 +49,8 @@ public final class OwnershipCoordinator {
 			}
 			failures.hit(FailurePoint.AFTER_REGION_PREPARE, 0);
 			OwnershipJournal wal = new OwnershipJournal(regionId, dimensionId, baseGeneration,
-					target.manifest().checkpointGeneration(), OwnershipJournal.Operation.ACQUIRE, candidates);
+					target.manifest().checkpointGeneration(), OwnershipJournal.Operation.ACQUIRE, candidates,
+					UUID.randomUUID(), prepared.manifestChecksum(), CrossDomainRecovery.JournalPhase.PREPARED);
 			ownershipFiles.publishWAL(wal);
 			failures.hit(FailurePoint.AFTER_WAL_PUBLISH, 0);
 			ownershipFiles.publishWarning(warning);
@@ -65,12 +68,15 @@ public final class OwnershipCoordinator {
 				failures.hit(FailurePoint.AFTER_REMOVE_BLOCK, removed);
 			}
 
+			world.persist(dimensionId);
+			ownershipFiles.publishCommitReady(wal);
 			failures.hit(FailurePoint.BEFORE_HEAD_PUBLISH, 0);
 			long published = regionFiles.commit(prepared, (point, path) -> { });
 			failures.hit(FailurePoint.AFTER_HEAD_PUBLISH, 0);
 			ownershipFiles.publishCommitted(new OwnershipCommitted(regionId, dimensionId, published, candidates));
 			failures.hit(FailurePoint.AFTER_COMMITTED_WRITE, 0);
 			failures.hit(FailurePoint.BEFORE_CLEANUP, 0);
+			world.persist(dimensionId);
 			ownershipFiles.deleteTransaction();
 			return new AcquireResult(published, candidates.size());
 		} catch (IOException | RuntimeException failure) {
@@ -114,12 +120,14 @@ public final class OwnershipCoordinator {
 			}
 			failures.hit(FailurePoint.AFTER_REGION_PREPARE, 0);
 			OwnershipJournal wal = new OwnershipJournal(regionId, committed.dimensionId(), baseGeneration,
-					target.manifest().checkpointGeneration(), OwnershipJournal.Operation.RELEASE, committed.ownedBlocks());
+					target.manifest().checkpointGeneration(), OwnershipJournal.Operation.RELEASE, committed.ownedBlocks(),
+					UUID.randomUUID(), prepared.manifestChecksum(), CrossDomainRecovery.JournalPhase.PREPARED);
 			ownershipFiles.publishWAL(wal);
 			failures.hit(FailurePoint.AFTER_WAL_PUBLISH, 0);
 			ownershipFiles.publishWarning(warning);
 			failures.hit(FailurePoint.AFTER_WARNING_PUBLISH, 0);
 
+			ownershipFiles.publishCommitReady(wal);
 			failures.hit(FailurePoint.BEFORE_HEAD_PUBLISH, 0);
 			long published = regionFiles.commit(prepared, (point, path) -> { });
 			failures.hit(FailurePoint.AFTER_HEAD_PUBLISH, 0);
@@ -141,6 +149,7 @@ public final class OwnershipCoordinator {
 			ownershipFiles.publishCommitted(new OwnershipCommitted(regionId, committed.dimensionId(), published, List.of()));
 			failures.hit(FailurePoint.AFTER_COMMITTED_WRITE, 0);
 			failures.hit(FailurePoint.BEFORE_CLEANUP, 0);
+			world.persist(committed.dimensionId());
 			ownershipFiles.deleteTransaction();
 			return new ReleaseResult(published, restored, alreadyRestored, skipped);
 		} catch (IOException | RuntimeException failure) {
@@ -169,15 +178,36 @@ public final class OwnershipCoordinator {
 			return RecoveryResult.NONE;
 		}
 		OwnershipJournal wal = ownershipFiles.readWAL();
-		if (!world.isDimensionLoaded(wal.dimensionId())) {
-			throw new IOException("Ownership WAL dimension is not loaded: " + wal.dimensionId());
-		}
 		long head = regionFiles.committedGeneration(wal.regionId());
-
-		if (head == wal.baseGeneration()) return rollbackToBase(regionFiles, ownershipFiles, world, failures, wal);
-		if (head == wal.targetGeneration()) return completeCommitted(ownershipFiles, world, failures, wal);
-		throw new IOException("Ownership is LOCKED: region HEAD generation " + head + " matches neither WAL base "
-				+ wal.baseGeneration() + " nor target " + wal.targetGeneration() + " for region " + wal.regionId());
+		long checksum = head == 0 ? 0 : regionFiles.committedManifestChecksum(wal.regionId());
+		var members = new ArrayList<CrossDomainRecovery.ExternalTruth>();
+		if (!world.isDimensionLoaded(wal.dimensionId())) {
+			members.add(CrossDomainRecovery.ExternalTruth.UNAVAILABLE);
+		} else for (var block : wal.blocks()) {
+			var state = world.inspect(wal.dimensionId(), block);
+			// Restore preserves an occupied player block; that position already needs no write.
+			boolean preserved = state == InspectOutcome.OCCUPIED;
+			boolean before = wal.operation() == OwnershipJournal.Operation.ACQUIRE
+					? state == InspectOutcome.PREIMAGE_PRESENT : state == InspectOutcome.OWNED_AIR;
+			boolean after = wal.operation() == OwnershipJournal.Operation.ACQUIRE
+					? state == InspectOutcome.OWNED_AIR : state == InspectOutcome.PREIMAGE_PRESENT;
+			if (head == wal.baseGeneration() && wal.operation() == OwnershipJournal.Operation.RELEASE) {
+				before = true; after = false;
+			} else after |= preserved;
+			members.add(CrossDomainRecovery.classify(true, before, after, false));
+		}
+		var boundary = new CrossDomainRecovery.Boundary(head, checksum, wal.baseGeneration(), wal.targetGeneration(),
+				wal.targetManifestChecksum() >= 0, wal.targetManifestChecksum(), wal.phase(), false);
+		var decision = CrossDomainRecovery.decide(boundary, members,
+				wal.operation() == OwnershipJournal.Operation.ACQUIRE
+						? CrossDomainRecovery.CommitOrder.EXTERNAL_FIRST : CrossDomainRecovery.CommitOrder.REGION_FIRST);
+		return switch (decision.outcome()) {
+			case DISCARD_UNCOMMITTED, ROLLBACK_BEFORE -> rollbackToBase(regionFiles, ownershipFiles, world, failures, wal);
+			case CONVERGE_AFTER -> completeCommitted(ownershipFiles, world, failures, wal);
+			case WAIT_UNAVAILABLE -> throw new IOException("Ownership recovery waits for external world " + wal.dimensionId());
+			case LOCKED -> throw new IOException("Ownership is LOCKED: " + decision.reason() + ", operation="
+					+ wal.operationId() + ", region=" + wal.regionId() + ", head=" + head);
+		};
 	}
 
 	public static ReconcileResult reconcile(OwnershipFiles ownershipFiles, WorldAccess world) throws IOException {
@@ -232,6 +262,7 @@ public final class OwnershipCoordinator {
 		}
 		failures.hit(FailurePoint.BEFORE_CLEANUP, 0);
 		regionFiles.discardUncommittedAfterRollback(wal.regionId(), wal.baseGeneration());
+		world.persist(wal.dimensionId());
 		ownershipFiles.deleteTransaction();
 		return wal.operation() == OwnershipJournal.Operation.ACQUIRE
 				? RecoveryResult.acquireRolledBack(applied, alreadyApplied, skipped)
@@ -299,6 +330,7 @@ public final class OwnershipCoordinator {
 			failures.hit(FailurePoint.AFTER_RESTORE_BLOCK, processed);
 		}
 		failures.hit(FailurePoint.BEFORE_CLEANUP, 0);
+		world.persist(wal.dimensionId());
 		ownershipFiles.deleteTransaction();
 		if (wal.operation() == OwnershipJournal.Operation.RELEASE) {
 			return RecoveryResult.completed(releaseRestored, releaseAlreadyRestored, releaseSkipped);
@@ -327,6 +359,8 @@ public final class OwnershipCoordinator {
 
 	public interface WorldAccess {
 		boolean isDimensionLoaded(String dimensionId) throws IOException;
+
+		void persist(String dimensionId) throws IOException;
 
 		RemoveOutcome removeWater(String dimensionId, OwnershipJournal.BlockEntry block) throws IOException;
 

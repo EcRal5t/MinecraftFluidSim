@@ -26,10 +26,8 @@ import java.io.IOException;
 final class MinecraftContainerActorAdapter {
 	CrossDomainRecovery.ExternalTruth classify(MinecraftServer server, ContainerTransferJournal journal) {
 		ItemStack current = currentItem(server, journal.actor());
-		if (current == null) return CrossDomainRecovery.ExternalTruth.UNAVAILABLE;
-		if (matches(current, journal.beforeItem())) return CrossDomainRecovery.ExternalTruth.BEFORE;
-		if (matches(current, journal.afterItem())) return CrossDomainRecovery.ExternalTruth.AFTER;
-		return CrossDomainRecovery.ExternalTruth.THIRD;
+		return CrossDomainRecovery.classify(current != null, current != null && matches(current, journal.beforeItem()),
+				current != null && matches(current, journal.afterItem()), false);
 	}
 
 	ContainerRecoveryCoordinator.Convergence applyAfterItem(MinecraftServer server, ContainerTransferJournal journal) {
@@ -41,10 +39,8 @@ final class MinecraftContainerActorAdapter {
 
 	CrossDomainRecovery.ExternalTruth verifyAfterItem(MinecraftServer server, ContainerTransferJournal journal) {
 		ItemStack current = currentItem(server, journal.actor());
-		if (current == null) return CrossDomainRecovery.ExternalTruth.UNAVAILABLE;
-		if (matches(current, journal.afterItem())) return CrossDomainRecovery.ExternalTruth.AFTER;
-		if (matches(current, journal.beforeItem())) return CrossDomainRecovery.ExternalTruth.BEFORE;
-		return CrossDomainRecovery.ExternalTruth.THIRD;
+		return CrossDomainRecovery.classify(current != null, current != null && matches(current, journal.beforeItem()),
+				current != null && matches(current, journal.afterItem()), true);
 	}
 
 	/** The WAL may be deleted only after this forces the actor's owning save domain. */

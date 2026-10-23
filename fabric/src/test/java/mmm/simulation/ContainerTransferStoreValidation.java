@@ -62,6 +62,10 @@ public final class ContainerTransferStoreValidation {
 	private ContainerTransferStoreValidation() { }
 
 	public static void main(String[] args) throws Exception {
+		if (args.length == 1 && args[0].equals("--rapid-pour")) {
+			testRapidFullProfilePourDurability();
+			System.out.println("Rapid full-profile pour durability passed"); return;
+		}
         if(args.length==2&&args[0].equals("--normal-play-seed")){
             ControllerInventoryDurabilityValidation.runNormalPlaySeed(Integer.parseInt(args[1]));return;
         }
@@ -544,6 +548,22 @@ public final class ContainerTransferStoreValidation {
 				List.of(CrossDomainRecovery.ExternalTruth.AFTER)).reason()
 				== CrossDomainRecovery.Reason.TARGET_CHECKSUM_MISSING,
 				"target HEAD without a journal checksum did not lock as missing evidence");
+
+		var base = new CrossDomainRecovery.Boundary(4, 0, 4, 5, true, 0x6789,
+				CrossDomainRecovery.JournalPhase.PREPARED, false);
+		check(CrossDomainRecovery.decide(base, List.of(CrossDomainRecovery.ExternalTruth.BEFORE,
+				CrossDomainRecovery.ExternalTruth.AFTER), CrossDomainRecovery.CommitOrder.EXTERNAL_FIRST).outcome()
+				== CrossDomainRecovery.Outcome.ROLLBACK_BEFORE, "external-first partial mutation did not request rollback");
+		check(CrossDomainRecovery.decide(base, List.of(CrossDomainRecovery.ExternalTruth.UNAVAILABLE),
+				CrossDomainRecovery.CommitOrder.EXTERNAL_FIRST).outcome() == CrossDomainRecovery.Outcome.WAIT_UNAVAILABLE,
+				"unreadable external-first member did not retain the transaction");
+		check(CrossDomainRecovery.decide(base, List.of(CrossDomainRecovery.ExternalTruth.THIRD),
+				CrossDomainRecovery.CommitOrder.EXTERNAL_FIRST).outcome() == CrossDomainRecovery.Outcome.LOCKED,
+				"unrecognized external-first state did not retain evidence");
+		check(CrossDomainRecovery.classify(true, true, true, false) == CrossDomainRecovery.ExternalTruth.BEFORE
+				&& CrossDomainRecovery.classify(true, true, true, true) == CrossDomainRecovery.ExternalTruth.AFTER
+				&& CrossDomainRecovery.classify(false, true, true, true) == CrossDomainRecovery.ExternalTruth.UNAVAILABLE,
+				"unchanged external state classification lost mutation/readback ordering");
 
 		int combinations = 0;
 		for (CrossDomainRecovery.JournalPhase phase : CrossDomainRecovery.JournalPhase.values()) {
@@ -1085,3 +1105,4 @@ public final class ContainerTransferStoreValidation {
 		void run() throws Exception;
 	}
 }
+

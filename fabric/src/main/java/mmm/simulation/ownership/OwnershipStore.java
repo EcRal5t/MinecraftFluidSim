@@ -220,6 +220,11 @@ public final class OwnershipStore {
 		}
 
 		@Override
+		public void persist(String dimensionId) throws IOException {
+			requireLevel(dimensionId).save(null, true, false);
+		}
+
+		@Override
 		public OwnershipCoordinator.RemoveOutcome removeWater(
 				String dimensionId,
 				OwnershipJournal.BlockEntry block

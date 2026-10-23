@@ -479,6 +479,11 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 ## 当前验证证据
 
+### B00 共同恢复判定
+
+2026-10-23：C02/B00统一编译成功；修正 ownership WAL 阶段推进的原子替换后，复用已有产物定点编译 `OwnershipFiles` 并运行 `M6OwnershipValidation`，23项场景全部通过。覆盖正常接管／释放、HEAD前后与世界修改中途故障、玩家方块保护、损坏证据、目标checksum／阶段不匹配、幂等恢复。日志 `build/gas-source/b00-ownership.log`。
+
+`ContainerTransferStoreValidation` 的共同恢复判定、WAL编码与前态／后态分类场景通过；随后快速注液暴露C05对零质量几何尾项求温度的问题，已改为按实际非零物质量建立传质任务。定点 `--rapid-pour` 原24次注液与重启流程通过，日志 `build/gas-source/core-2.log`。完整控制器操作矩阵复用此前B08通过记录。
 ### C05 气液传质与实体几何首切片
 
 2026-10-23：统一 `:fabric:compileTestJava --offline --no-daemon` 成功，日志 `build/gas-source/c05-checked-compile.log`。复用该 classpath 的 `M5GasLiquidCouplingValidation --mass-transfer`、`MovingBodyCouplingValidation`、`EntityFluidWiringValidation` 和 `M7RegionChemistryPersistenceValidation` 全部通过，日志分别为 `build/gas-source/checked-0.log` 至 `checked-3.log`。传质覆盖密闭溶解降压、抽空脱气、环境吸收／加热脱气、亚微摩尔恢复和零预算延期恢复。实体覆盖实际 PLIC 排水与静水压力面积分、现有接触冲量／功／热，以及实体身份表存盘。
@@ -496,6 +501,7 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 
 **99% 的所谓“验收证据”根本不需要做。本节留空即可**
+
 
 
 

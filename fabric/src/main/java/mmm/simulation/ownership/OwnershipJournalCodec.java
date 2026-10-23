@@ -30,6 +30,10 @@ final class OwnershipJournalCodec {
 		root.putLong("BaseGeneration", journal.baseGeneration());
 		root.putLong("TargetGeneration", journal.targetGeneration());
 		root.putString("Operation", operationName(journal.operation()));
+		root.putLong("OperationUuidMost", journal.operationId().getMostSignificantBits());
+		root.putLong("OperationUuidLeast", journal.operationId().getLeastSignificantBits());
+		root.putLong("TargetManifestChecksum", journal.targetManifestChecksum());
+		root.putString("Phase", journal.phase().name());
 		ListTag entries = new ListTag();
 		Set<Long> positions = new HashSet<>();
 		for (OwnershipJournal.BlockEntry entry : journal.blocks()) {
@@ -91,7 +95,16 @@ final class OwnershipJournalCodec {
 			validateState(state, position);
 			blocks.add(new OwnershipJournal.BlockEntry(position, state));
 		}
-		return new OwnershipJournal(regionId, dimensionId, baseGeneration, targetGeneration, operation, blocks);
+		requireType(root, "OperationUuidMost", Tag.TAG_LONG);
+		requireType(root, "OperationUuidLeast", Tag.TAG_LONG);
+		requireType(root, "TargetManifestChecksum", Tag.TAG_LONG);
+		requireType(root, "Phase", Tag.TAG_STRING);
+		try {
+			return new OwnershipJournal(regionId, dimensionId, baseGeneration, targetGeneration, operation, blocks,
+					new UUID(root.getLongOr("OperationUuidMost", 0), root.getLongOr("OperationUuidLeast", 0)),
+					root.getLongOr("TargetManifestChecksum", -1),
+					mmm.recovery.CrossDomainRecovery.JournalPhase.valueOf(root.getStringOr("Phase", "")));
+		} catch (IllegalArgumentException invalid) { throw new IOException("Invalid ownership operation evidence", invalid); }
 	}
 
 	private static String operationName(OwnershipJournal.Operation operation) {

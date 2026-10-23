@@ -164,6 +164,7 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 			CrossDomainRecovery.ExternalTruth actorTruth = port.classifyActor(journal);
 			CrossDomainRecovery.Decision decision = decide(head, checksum, journal, actorTruth);
 			switch (decision.outcome()) {
+				case ROLLBACK_BEFORE -> throw new IllegalStateException("Region-first container requested external rollback");
 				case DISCARD_UNCOMMITTED -> {
 					delete(transactionId);
 					port.report(Report.WARNING,

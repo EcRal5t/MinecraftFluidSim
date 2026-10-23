@@ -67,6 +67,7 @@ public final class M6OwnershipValidation {
 		run("release crash after HEAD completes restoration", M6OwnershipValidation::testReleaseCrash);
 		run("corrupt WAL locks and is never overwritten", M6OwnershipValidation::testCorruptWalLock);
 		run("WAL generation mismatch locks", M6OwnershipValidation::testWalGenerationMismatch);
+		run("ownership target requires matching durable commit evidence", M6OwnershipValidation::testTargetCommitEvidence);
 		run("committed registry ahead of the WAL target locks", M6OwnershipValidation::testCommittedAheadLocks);
 		run("reconcile classifies air, player and water", M6OwnershipValidation::testReconcile);
 		run("regions are isolated from each other's locks", M6OwnershipValidation::testRegionIsolation);
@@ -385,6 +386,22 @@ public final class M6OwnershipValidation {
 		});
 	}
 
+	private static void testTargetCommitEvidence() throws Exception {
+		for (boolean wrongChecksum : new boolean[]{false, true}) withTemporaryWorld(root -> {
+			Fixture fixture = new Fixture(root, 2);
+			expectIOException(() -> acquire(fixture, failAt(FailurePoint.AFTER_HEAD_PUBLISH, 0)));
+			var wal = fixture.ownershipFiles().readWAL();
+			var altered = new OwnershipJournal(wal.regionId(), wal.dimensionId(), wal.baseGeneration(),
+					wal.targetGeneration(), wal.operation(), wal.blocks(), wal.operationId(),
+					wrongChecksum ? wal.targetManifestChecksum() ^ 1L : wal.targetManifestChecksum(),
+					wrongChecksum ? wal.phase() : mmm.recovery.CrossDomainRecovery.JournalPhase.PREPARED);
+			net.minecraft.nbt.NbtIo.writeCompressed(new OwnershipJournalCodec().encode(altered), fixture.ownershipFiles().walPath());
+			expectIOException(() -> recover(fixture, FailureInjector.NONE));
+			check(fixture.ownershipFiles().hasWAL() && fixture.world().airCount() == 2,
+					"Invalid ownership target evidence changed world state or deleted the WAL");
+		});
+	}
+
 	private static void testWalGenerationMismatch() throws Exception {
 		withTemporaryWorld(root -> {
 			Fixture fixture = new Fixture(root, 2);
@@ -552,7 +569,9 @@ public final class M6OwnershipValidation {
 		check(expected.dimensionId().equals(actual.dimensionId()), "dimension did not round-trip");
 		check(expected.baseGeneration() == actual.baseGeneration()
 				&& expected.targetGeneration() == actual.targetGeneration(), "generations did not round-trip");
-		check(expected.operation() == actual.operation(), "operation did not round-trip");
+		check(expected.operation() == actual.operation() && expected.operationId().equals(actual.operationId())
+				&& expected.phase() == actual.phase() && expected.targetManifestChecksum() == actual.targetManifestChecksum(),
+				"operation identity and durable evidence did not round-trip");
 		check(expected.blocks().equals(actual.blocks()), "blocks did not round-trip");
 	}
 
@@ -639,6 +658,7 @@ public final class M6OwnershipValidation {
 
 	/** String-state fake world: positions hold "water", "AIR", "PLAYER_SOLID" or "water-external". */
 	private static final class FakeWorld implements OwnershipCoordinator.WorldAccess {
+		@Override public void persist(String dimensionId) { }
 		private final Map<Long, String> original = new HashMap<>();
 		private final Map<Long, String> current = new HashMap<>();
 		private boolean dimensionLoaded = true;

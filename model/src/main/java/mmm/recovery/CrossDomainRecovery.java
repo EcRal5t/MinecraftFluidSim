@@ -6,13 +6,14 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * JDK-only recovery algebra for transactions whose sole physical commit point is a region HEAD
+ * Shared recovery decisions for transactions whose sole physical commit point is a region HEAD
  * and whose remaining members live in independently durable external domains.
  */
 public final class CrossDomainRecovery {
 	public enum JournalPhase { PREPARED, REGION_COMMITTED }
 	public enum ExternalTruth { BEFORE, AFTER, THIRD, UNAVAILABLE }
-	public enum Outcome { DISCARD_UNCOMMITTED, CONVERGE_AFTER, WAIT_UNAVAILABLE, LOCKED }
+	public enum Outcome { DISCARD_UNCOMMITTED, ROLLBACK_BEFORE, CONVERGE_AFTER, WAIT_UNAVAILABLE, LOCKED }
+	public enum CommitOrder { REGION_FIRST, EXTERNAL_FIRST }
 	public enum Reason {
 		NONE,
 		HEAD_MISMATCH,
@@ -56,7 +57,7 @@ public final class CrossDomainRecovery {
 			boolean reasonValid = switch (outcome) {
 				case LOCKED -> reason != Reason.NONE && reason != Reason.EXTERNAL_UNAVAILABLE;
 				case WAIT_UNAVAILABLE -> reason == Reason.EXTERNAL_UNAVAILABLE;
-				case DISCARD_UNCOMMITTED, CONVERGE_AFTER -> reason == Reason.NONE;
+				case DISCARD_UNCOMMITTED, ROLLBACK_BEFORE, CONVERGE_AFTER -> reason == Reason.NONE;
 			};
 			if (!reasonValid) throw new IllegalArgumentException("Cross-domain recovery reason is invalid");
 			beforeMembers = List.copyOf(beforeMembers);
@@ -94,8 +95,20 @@ public final class CrossDomainRecovery {
 
 	private CrossDomainRecovery() { }
 
+	/** Classifies an observed external member; readback prefers after when before and after coincide. */
+	public static ExternalTruth classify(boolean available, boolean beforeMatches, boolean afterMatches, boolean readback) {
+		if (!available) return ExternalTruth.UNAVAILABLE;
+		if (readback && afterMatches) return ExternalTruth.AFTER;
+		if (beforeMatches) return ExternalTruth.BEFORE;
+		return afterMatches ? ExternalTruth.AFTER : ExternalTruth.THIRD;
+	}
+
 	public static Decision decide(Boundary boundary, List<ExternalTruth> externalTruths) {
-		if (boundary == null || externalTruths == null || externalTruths.isEmpty()
+		return decide(boundary, externalTruths, CommitOrder.REGION_FIRST);
+	}
+
+	public static Decision decide(Boundary boundary, List<ExternalTruth> externalTruths, CommitOrder order) {
+		if (boundary == null || order == null || externalTruths == null || externalTruths.isEmpty()
 				|| externalTruths.stream().anyMatch(java.util.Objects::isNull)) {
 			throw new IllegalArgumentException("Cross-domain recovery input is incomplete");
 		}
@@ -113,6 +126,11 @@ public final class CrossDomainRecovery {
 		if (base && boundary.baseCandidateDirty()) return locked(Reason.BASE_CANDIDATE_DIRTY);
 
 		if (base) {
+			if (order == CommitOrder.EXTERNAL_FIRST) {
+				if (truths.contains(ExternalTruth.THIRD)) return locked(Reason.BASE_EXTERNAL_CHANGED);
+				if (truths.contains(ExternalTruth.UNAVAILABLE)) return waiting();
+				return new Decision(Outcome.ROLLBACK_BEFORE, Reason.NONE, List.of(), List.of());
+			}
 			if (truths.stream().anyMatch(value -> value == ExternalTruth.AFTER
 					|| value == ExternalTruth.THIRD)) return locked(Reason.BASE_EXTERNAL_CHANGED);
 			if (truths.contains(ExternalTruth.UNAVAILABLE)) return waiting();

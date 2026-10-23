@@ -79,6 +79,27 @@ public final class OwnershipFiles {
 		writeAtomically(walTemporaryPath(), walPath(), temporary -> NbtIo.writeCompressed(encoded, temporary));
 	}
 
+	void publishCommitReady(OwnershipJournal prepared) throws IOException {
+		if (!readWAL().equals(prepared)) throw new IOException("Ownership WAL changed before region commit");
+		var committed = prepared.committed();
+		CompoundTag encoded = journalCodec.encode(committed);
+		Path temporary = walTemporaryPath();
+		deleteOperation.deleteIfExists(temporary);
+		try {
+			NbtIo.writeCompressed(encoded, temporary);
+			forceFile(temporary);
+			var reread = journalCodec.decode(NbtIo.readCompressed(temporary, NbtAccounter.create(MAX_COMPRESSED_NBT_BYTES)));
+			if (!reread.equals(committed) || !readWAL().equals(prepared))
+				throw new IOException("Ownership WAL source or staged commit evidence changed");
+			atomicReplacer.moveReplacing(temporary, walPath());
+			DurableFileOperations.forceDirectory(directory);
+		} catch (IOException failure) {
+			try { deleteOperation.deleteIfExists(temporary); }
+			catch (IOException cleanup) { failure.addSuppressed(cleanup); }
+			throw failure;
+		}
+	}
+
 	OwnershipJournal readWAL() throws IOException {
 		if (!hasWAL()) throw new IOException("Ownership WAL does not exist at " + walPath());
 		CompoundTag root = NbtIo.readCompressed(walPath(), NbtAccounter.create(MAX_COMPRESSED_NBT_BYTES));
