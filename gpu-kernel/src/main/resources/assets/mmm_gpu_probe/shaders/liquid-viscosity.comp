@@ -114,7 +114,17 @@ void gather(int c){if(!wet(c))return;double heat=0.0,work=0.0;ivec3 pos=position
  }
  write(CELL_HEAT,c,heat);write(CELL_WORK,c,work);
 }
+// Enumerate only cells owned by this stress colour; each colour keeps its original order.
+int colouredCell(int id){
+ ivec3 dims=shape(),parity=ivec3(-1);
+ if(p.colour<6)parity[p.colour/2]=p.colour&1;
+ else{int code=p.colour-6;ivec2 axes=shearAxes(code/4);parity[axes.x]=code&1;parity[axes.y]=(code%4)>>1;}
+ for(int axis=0;axis<3;axis++)if(parity[axis]>=0)dims[axis]=(dims[axis]+1-parity[axis])/2;
+ ivec3 pos=ivec3(id%dims.x,id/dims.x%dims.y,id/(dims.x*dims.y));
+ for(int axis=0;axis<3;axis++)if(parity[axis]>=0)pos[axis]=2*pos[axis]+parity[axis];
+ return index(pos);
+}
 void main(){int id=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);if(id>=p.count||errors!=0u)return;
- if(p.stage==0)prepareCell(id);else if(p.stage==1)prepareFace(id);else if(p.stage==2){if(p.colour<6)normal(id);else if(p.colour<18)shear(id);else wall(id);}
+ if(p.stage==0)prepareCell(id);else if(p.stage==1)prepareFace(id);else if(p.stage==2){if(p.colour<18)id=colouredCell(id);if(p.colour<6)normal(id);else if(p.colour<18)shear(id);else wall(id);}
  else if(p.stage==3)prescribed(id);else if(p.stage==4)gather(id);else if(p.stage==5){write(BODY_IMPULSE,id,0.0);write(BODY_WORK,id,0.0);}
 }

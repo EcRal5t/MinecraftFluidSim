@@ -101,11 +101,20 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         stage(command,layout,1,0,layout.faces,cellSize,duration);
         if(layout.contacts!=null)stage(command,layout,5,0,layout.contacts.capacity(),cellSize,duration);
         // Every colour owns disjoint MAC faces. The middle wall group receives one full step.
-        for(int colour=0;colour<18;colour++)stage(command,layout,2,colour,layout.source.cellCount(),cellSize,.5*duration);
+        for(int colour=0;colour<18;colour++)stage(command,layout,2,colour,colourCells(layout,colour),cellSize,.5*duration);
         stage(command,layout,2,18,layout.faces,cellSize,duration);
-        for(int colour=17;colour>=0;colour--)stage(command,layout,2,colour,layout.source.cellCount(),cellSize,.5*duration);
+        for(int colour=17;colour>=0;colour--)stage(command,layout,2,colour,colourCells(layout,colour),cellSize,.5*duration);
         stage(command,layout,3,0,layout.faces,cellSize,duration);
         stage(command,layout,4,0,layout.source.cellCount(),cellSize,duration);
+    }
+    private static int colourCells(Layout layout,int colour) {
+        int[] dims={layout.source.sizeX(),layout.source.sizeY(),layout.source.sizeZ()};
+        if(colour<6){int axis=colour/2;dims[axis]=(dims[axis]+1-(colour&1))/2;}
+        else {int pair=(colour-6)/4,bits=(colour-6)%4;
+            int a=pair==2?1:0,b=pair==0?1:2;
+            dims[a]=(dims[a]+1-(bits&1))/2;dims[b]=(dims[b]+1-(bits>>1))/2;
+        }
+        return Math.multiplyExact(Math.multiplyExact(dims[0],dims[1]),dims[2]);
     }
     private void stage(VkCommandBuffer command,Layout layout,int stage,int colour,int count,double h,double dt){
         if(count==0)return;int groups=(count+127)/128;
