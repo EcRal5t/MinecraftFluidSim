@@ -23,6 +23,14 @@ dependencies {
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 	implementation project(':gpu-kernel')
 	include project(':gpu-kernel')
+	include('org.lwjgl:lwjgl:3.4.1:unsafe') { transitive = false }
+	include('org.lwjgl:lwjgl:3.4.1:natives-windows') { transitive = false }
+	['lwjgl-vulkan', 'lwjgl-shaderc', 'lwjgl-vma'].each { module ->
+		include("org.lwjgl:${module}:3.4.1") { transitive = false }
+	}
+	['lwjgl-shaderc', 'lwjgl-vma'].each { module ->
+		include("org.lwjgl:${module}:3.4.1:natives-windows") { transitive = false }
+	}
 	compileOnly project(':fabric')
 	testImplementation project(':gpu-kernel')
 	testImplementation project(':fabric')

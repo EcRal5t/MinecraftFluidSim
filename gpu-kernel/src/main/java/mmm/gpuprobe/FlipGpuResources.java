@@ -25,6 +25,14 @@ final class FlipGpuResources implements AutoCloseable {
 	private final VulkanDeviceContext context;
 	private final List<GpuBuffer> buffers = new ArrayList<>(BUFFER_COUNT);
 
+	/** Empty allocation owner for compute kernels with their own buffer layout. */
+	FlipGpuResources(VulkanDeviceContext context) { this.context = context; }
+
+	GpuBuffer addDeviceStorage(long bytes) {
+		addStorageBuffer(bytes, VulkanFlipPipeline.MemoryMode.DEVICE_LOCAL_STAGING);
+		return buffers.getLast();
+	}
+
 	FlipGpuResources(VulkanDeviceContext context, VulkanFlipPipeline.Config config,
 	                 VulkanFlipPipeline.MemoryMode memoryMode, int multigridCellCount) {
 		this.context = context;

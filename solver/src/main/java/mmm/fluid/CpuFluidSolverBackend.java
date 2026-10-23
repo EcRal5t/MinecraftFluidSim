@@ -6,7 +6,7 @@ import mmm.granular.GranularPhaseTransferEngine;
 import mmm.world.MovingBodyFluidCoupling;
 
 /** Reference backend that evaluates a request on a private restored domain. */
-public final class CpuFluidSolverBackend implements FluidSolverBackend {
+public final class CpuFluidSolverBackend implements FluidSolverBackend, AutoCloseable {
 	public static final String ID = "mmm:cpu-flip";
 	private static final int MAXIMUM_TIME_REFINEMENTS = 16;
 	/**
@@ -16,11 +16,73 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 	 */
 	public static final long MAXIMUM_CUMULATIVE_SUBSTEPS = 4096L;
 
+	private SparseMatrixCompute compute;
+	private final java.util.function.Consumer<String> recoveryNotice;
+	private String deviceLossReason;
+	private boolean closed;
+
+	public CpuFluidSolverBackend() { this.compute = null; this.recoveryNotice = ignored -> { }; }
+
+	/** Owns the injected provider until close or device-loss isolation. */
+	public CpuFluidSolverBackend(SparseMatrixCompute compute) { this(compute, ignored -> { }); }
+
+	public CpuFluidSolverBackend(SparseMatrixCompute compute, java.util.function.Consumer<String> recoveryNotice) {
+		this.compute = java.util.Objects.requireNonNull(compute);
+		this.recoveryNotice = java.util.Objects.requireNonNull(recoveryNotice);
+	}
+
+	public String executionDescription() {
+		if (deviceLossReason != null) return "CPU after Vulkan device loss: " + deviceLossReason;
+		return compute == null ? "CPU" : "CPU + Vulkan pressure (hybrid)";
+	}
+
+	@Override public void close() {
+		if (closed) return;
+		closed = true;
+		var released = compute;
+		compute = null;
+		if (released != null) released.close();
+	}
+
+	private boolean isolateLostDevice(RuntimeException failure) {
+		if (compute == null || !isDeviceLoss(failure)) return false;
+		var released = compute;
+		compute = null;
+		deviceLossReason = failure.getMessage();
+		try { released.close(); }
+		catch (RuntimeException closeFailure) {
+			if (!isDeviceLoss(closeFailure)) { closeFailure.addSuppressed(failure); throw closeFailure; }
+			failure.addSuppressed(closeFailure);
+		}
+		recoveryNotice.accept(executionDescription() + "; discarded private candidate; restarting full request on CPU");
+		return true;
+	}
+
+	private static boolean isDeviceLoss(Throwable failure) {
+		for (Throwable cause = failure; cause != null; cause = cause.getCause())
+			if (cause instanceof SparseMatrixCompute.DeviceLostException) return true;
+		return false;
+	}
+
+	private ComputeExecution execution() {
+		if (closed) throw new IllegalStateException("Fluid solver backend is closed");
+		return compute != null ? ComputeExecution.install(compute)
+				: deviceLossReason != null ? ComputeExecution.useCpu() : null;
+	}
+
 	@Override public String id() { return ID; }
 
 	@Override public FluidStepCandidate evaluate(FluidStepRequest request) {
+		try { return evaluateMechanical(request); }
+		catch (RuntimeException failure) {
+			if (!isolateLostDevice(failure)) throw failure;
+			return evaluateMechanical(request);
+		}
+	}
+
+	private FluidStepCandidate evaluateMechanical(FluidStepRequest request) {
 		if (request == null) throw new IllegalArgumentException("Step request is missing");
-		try {
+		try (var execution = execution()) {
 			int minimumSubsteps = 1;
 			long spentSubsteps = 0L;
 			String refinementReason = "";
@@ -70,8 +132,16 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 	}
 
 	@Override public FluidThermalStepCandidate evaluateThermal(FluidThermalStepRequest request) {
+		try { return evaluateThermalCandidate(request); }
+		catch (RuntimeException failure) {
+			if (!isolateLostDevice(failure)) throw failure;
+			return evaluateThermalCandidate(request);
+		}
+	}
+
+	private FluidThermalStepCandidate evaluateThermalCandidate(FluidThermalStepRequest request) {
 		if (request == null) throw new IllegalArgumentException("Thermal step request is missing");
-		try {
+		try (var execution = execution()) {
 			FluidDomain candidate = restoreCandidate(request.state());
 			FluidDomain.ThermalAxisStats stats = candidate.stepThermalAxis(
 					request.phaseChangeEnabled(), request.maximumPhaseOperations());

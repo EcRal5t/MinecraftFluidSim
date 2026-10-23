@@ -2,8 +2,8 @@
 	"schemaVersion": 1,
 	"id": "mmm_gpu_probe",
 	"version": "${version}",
-	"name": "Matter, Motion & Mechanics GPU Probe",
-	"description": "Optional windowless Vulkan compute probe for Matter, Motion & Mechanics. It never modifies world blocks or save data.",
+	"name": "Matter, Motion & Mechanics Vulkan Compute",
+	"description": "Optional Vulkan pressure computation and isolated GPU probes for Matter, Motion & Mechanics.",
 	"authors": [
 		"Ecisral"
 	],

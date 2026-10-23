@@ -32,6 +32,7 @@ public final class MmmRuntime {
 	private final CommittedEventHub committedEvents;
 	private final WorldStartupCoordinator.Result startup;
 	private final mmm.api.transfer.MmmTransferApi transfers;
+	private final mmm.fluid.CpuFluidSolverBackend solverBackend;
 	private boolean worldRecoveryCompleted;
 	private boolean closed;
 
@@ -56,7 +57,8 @@ public final class MmmRuntime {
 			CommittedWorldRegistries worldRegistries,
 			CommittedEventHub committedEvents,
 			WorldStartupCoordinator.Result startup,
-			mmm.api.transfer.MmmTransferApi transfers
+			mmm.api.transfer.MmmTransferApi transfers,
+			mmm.fluid.CpuFluidSolverBackend solverBackend
 	) {
 		this.simulationLoop = Objects.requireNonNull(simulationLoop, "Simulation loop");
 		this.finiteHeatExchangers = Objects.requireNonNull(finiteHeatExchangers);
@@ -80,6 +82,7 @@ public final class MmmRuntime {
 		this.committedEvents = Objects.requireNonNull(committedEvents, "Committed event hub");
 		this.startup = Objects.requireNonNull(startup, "World startup result");
 		this.transfers = Objects.requireNonNull(transfers);
+		this.solverBackend = Objects.requireNonNull(solverBackend);
 	}
 
 	public MinecraftRegionOperatorActions operatorActions() { return operatorActions; }
@@ -151,6 +154,7 @@ public final class MmmRuntime {
 		} finally {
 			protocolSessions.clear();
 			committedEvents.clear();
+			solverBackend.close();
 		}
 	}
 }

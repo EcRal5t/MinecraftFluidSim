@@ -3,7 +3,7 @@ package mmm.fluid;
 import java.util.Arrays;
 
 /** Assembled no-drag pressure matrix: exact at D=0 and the coupled operator's IC(0) approximation. */
-final class PressureSparseMatrix {
+final class PressureSparseMatrix implements AutoCloseable {
 	int[] start = new int[0];
 	int[] column = new int[0];
 	int[] activeRows = new int[0];
@@ -15,8 +15,10 @@ final class PressureSparseMatrix {
 	private int size;
 	private int count;
 	private int entries;
+	private SparseMatrixCompute.Matrix computeMatrix;
 
 	void begin(int size, int expectedRows) {
+		closeCompute();
 		this.size = size;
 		count = 0;
 		entries = 0;
@@ -115,6 +117,24 @@ final class PressureSparseMatrix {
 		}
 	}
 
+	void prepareCompute() {
+		var compute = ComputeExecution.current();
+		if (compute != null) computeMatrix = java.util.Objects.requireNonNull(
+				compute.prepare(size, start, column, value, activeRows, count));
+	}
+
+	SparseMatrixCompute.PressureSolution solve(SparseMatrixCompute.PressureProblem problem) {
+		return computeMatrix == null ? null : computeMatrix.solve(problem);
+	}
+
+	@Override public void close() { closeCompute(); }
+
+	void closeCompute() {
+		var prepared = computeMatrix;
+		computeMatrix = null;
+		if (prepared != null) prepared.close();
+	}
+
 	private void sort(int low, int high) {
 		while (low < high) {
 			int i = low;
@@ -143,6 +163,10 @@ final class PressureSparseMatrix {
 	}
 
 	void multiply(double[] source, double[] destination) {
+		if (computeMatrix != null) {
+			computeMatrix.multiply(source, destination);
+			return;
+		}
 		for (int ordinal = 0; ordinal < count; ordinal++) {
 			int row = activeRows[ordinal];
 			double sum = 0;

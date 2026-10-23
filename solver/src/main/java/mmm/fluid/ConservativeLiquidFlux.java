@@ -337,7 +337,9 @@ final class ConservativeLiquidFlux {
 		var routes=PhaseQuantitySettlement.settle(numericalRoutes,capacities,minimum,
                 gasCapacityGroups==null?null:gasCapacityGroups.receiverGroup(),gasCapacityGroups==null?null:gasCapacityGroups.upper(),
                 source -> prepareAlternatives(source, capacities));
-		return working.planRoutes(routes, FluidThermalBinding.liquidEnergyPartitioner(domain),inventoryFinalizer);
+		var compute=ComputeExecution.current();
+		return working.planRoutes(routes, FluidThermalBinding.liquidEnergyPartitioner(domain),inventoryFinalizer,
+				compute==null?null:compute.liquidQuantityCompute());
 	}
 	/** A full source uncovers through actual incoming gas; existing interfaces retain their free motion. */
 	private SignedDyadic[] fullLiquidMinimum(SignedDyadic[] capacities){

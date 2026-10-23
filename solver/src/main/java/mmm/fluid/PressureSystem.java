@@ -242,6 +242,11 @@ final class PressureSystem {
 	void beginGranularForceStep(){granular.beginMechanicalStep();}
 	void finishGranularForceStep(){granular.finishMechanicalStep();}
 	PressureProjectionResult solveProjection(float dt) {
+		try (matrix) {
+			return solvePreparedProjection(dt);
+		}
+	}
+	private PressureProjectionResult solvePreparedProjection(float dt) {
 		duration = dt; domain.domainFlowFields.preparePhysicalState();
 		if(!forceStepPrepared)beginForceStep();
 		prepareOperator();
@@ -390,6 +395,8 @@ final class PressureSystem {
 			matrix.add(domain.cellCount + node, domain.cellCount + node, gasStorageCoefficient[node]);
 		}
 		matrix.finish();
+		// Active granular drag applies the full joint response on the CPU.
+		if (!drag.active()) matrix.prepareCompute();
 	}
 	private void readVelocity(double[] target) {
 		float[][] fields = {domain.mac.velocityX, domain.mac.velocityY, domain.mac.velocityZ};

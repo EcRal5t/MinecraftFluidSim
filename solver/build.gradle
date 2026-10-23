@@ -41,6 +41,22 @@ tasks.register('runSolverValidation', JavaExec) {
 	enableAssertions = true
 }
 
+['DeviceLiquidInventoryValidation', 'ComputeExecutionValidation', 'ComputeDeviceLossValidation'].each { validation ->
+	tasks.register("run${validation}", JavaExec) {
+		group = 'verification'
+		dependsOn tasks.named('testClasses')
+		classpath = sourceSets.test.runtimeClasspath
+		mainClass = "mmm.fluid.${validation}"
+		enableAssertions = true
+	}
+}
+
+tasks.register('runComputeHandoffValidation') {
+	group = 'verification'
+	description = 'Checks lossless device inventory, compute scopes and device-loss candidate recovery without GPU hardware.'
+	dependsOn 'runDeviceLiquidInventoryValidation', 'runComputeExecutionValidation', 'runComputeDeviceLossValidation'
+}
+
 tasks.register('testJar', Jar) {
 	archiveClassifier = 'tests'
 	from sourceSets.test.output

@@ -1,0 +1,186 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+layout(local_size_x=256) in;
+layout(binding=0,std430) readonly buffer Starts { int starts[]; };
+layout(binding=1,std430) readonly buffer Columns { int columns[]; };
+layout(binding=2,std430) readonly buffer Values { double values[]; };
+layout(binding=3,std430) readonly buffer Rows { int rows[]; };
+layout(binding=4,std430) readonly buffer ProductInput { double inputVector[]; };
+layout(binding=5,std430) buffer Pressure { precise double pressure[]; };
+layout(binding=6,std430) buffer Workspace { precise double work[]; };
+layout(binding=7,std430) buffer Metadata { int meta[]; };
+layout(binding=8,std430) readonly buffer Problem { double problem[]; };
+layout(binding=9,std430) buffer Control { double control[]; };
+layout(binding=10,std430) buffer Partials { double partials[]; };
+layout(push_constant) uniform Params { int count; int size; int maximumIterations; int stage; int groups; } p;
+shared double scratch[256];
+int lane,n,gid,stride,group;
+#define R(row) work[row]
+#define D(row) work[n+(row)]
+#define Q(row) work[2*n+(row)]
+#define Z(row) work[3*n+(row)]
+#define DIAG(row) work[4*n+(row)]
+#define BOUNDED(row) meta[row]
+#define FREE(row) meta[n+(row)]
+#define RHS(row) problem[row]
+#define LOWER(row) problem[n+(row)]
+#define TARGET problem[3*n]
+#define ITER control[0]
+#define RMS control[1]
+#define SUCCESS control[2]
+#define RUN control[3]
+#define RZ control[4]
+#define ALPHA control[5]
+#define RESTART control[6]
+#define REFRESH control[7]
+#define BETA control[9]
+#define TOLERANCE control[10]
+#define PMAX control[11]
+#define PHASE control[12]
+#define BLOCKED control[14]
+void syncAll() { memoryBarrierBuffer(); barrier(); }
+bool finite(double value) { return !isnan(value) && !isinf(value); }
+double hypotStable(double a,double b) {
+    double high=max(abs(a),abs(b)),low=min(abs(a),abs(b));
+    if(isinf(high))return high;if(high==0.0)return 0.0;
+    precise double ratio=low/high;return high*sqrt(1.0+ratio*ratio);
+}
+double reduce(double value,int operation) {
+    scratch[lane]=value;barrier();
+    for(int offset=128;offset>0;offset/=2) {
+        if(lane<offset) {
+            if(operation==0)scratch[lane]+=scratch[lane+offset];
+            else if(operation==1)scratch[lane]=max(scratch[lane],scratch[lane+offset]);
+            else if(operation==2)scratch[lane]=min(scratch[lane],scratch[lane+offset]);
+            else scratch[lane]=hypotStable(scratch[lane],scratch[lane+offset]);
+        }
+        barrier();
+    }
+    double answer=scratch[0];barrier();return answer;
+}
+void saveStats(double a,double b,double c,double d,int operationB,int operationC) {
+    double ra=reduce(a,0),rb=reduce(b,operationB),rc=reduce(c,operationC),rd=reduce(d,1);
+    if(lane==0){partials[4*group]=ra;partials[4*group+1]=rb;partials[4*group+2]=rc;partials[4*group+3]=rd;}
+}
+double collect(int column,int operation) {
+    precise double value=operation==2?1.7976931348623157e308LF:0.0;
+    for(int block=0;block<p.groups;block++) {
+        double next=partials[4*block+column];
+        if(operation==0)value+=next;else if(operation==1)value=max(value,next);
+        else if(operation==2)value=min(value,next);else value=hypotStable(value,next);
+    }
+    return value;
+}
+void initializeRows() {
+    for(int row=gid;row<n;row+=stride) {
+        pressure[row]=BOUNDED(row)!=0?max(LOWER(row),problem[2*n+row]):problem[2*n+row];
+        FREE(row)=0;R(row)=0.0;D(row)=0.0;Q(row)=0.0;Z(row)=0.0;
+        double diagonal=0.0;for(int edge=starts[row];edge<starts[row+1];edge++)if(columns[edge]==row)diagonal=values[edge];DIAG(row)=diagonal;
+    }
+    double maximum=0.0;for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];double value=BOUNDED(row)!=0?max(LOWER(row),problem[2*n+row]):problem[2*n+row];maximum=max(maximum,abs(value));}
+    saveStats(0.0,0.0,0.0,maximum,0,0);
+}
+void initializeControl() {
+    if(gid!=0)return;
+    ITER=0.0;SUCCESS=0.0;RUN=1.0;RZ=0.0;ALPHA=0.0;RESTART=1.0;REFRESH=1.0;BETA=0.0;
+    PMAX=collect(3,1);PHASE=1.0;BLOCKED=0.0;
+}
+void refreshResidual() {
+    if(REFRESH==0.0)return;
+    precise double sum=0.0;double equations=0.0,bounds=0.0,maximum=0.0;
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
+        int row=rows[ordinal];precise double product=0.0;
+        for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*pressure[columns[edge]];
+        R(row)=RHS(row)-product;double value=R(row);maximum=max(maximum,abs(pressure[row]));
+        if(BOUNDED(row)!=0 && pressure[row]<=LOWER(row) && value<=0.0)continue;
+        equations+=1.0;sum+=value*value;
+        precise double bound=abs(RHS(row))+2.0*DIAG(row)*PMAX;bounds=hypotStable(bounds,bound);
+    }
+    saveStats(sum,equations,bounds,maximum,0,3);
+}
+void finishRefresh() {
+    if(gid!=0 || REFRESH==0.0)return;
+    double equations=collect(1,0),scale=collect(2,3);RMS=sqrt(collect(0,0)/max(1.0,equations));
+    precise double floorValue=(equations+8.0)*2.220446049250313e-16*0.5*scale/sqrt(max(1.0,equations));
+    TOLERANCE=finite(floorValue)?max(TARGET,floorValue):TARGET;
+    PMAX=collect(3,1);RESTART=1.0;REFRESH=0.0;
+    if(PHASE==2.0){SUCCESS=(finite(RMS)&&RMS<=TOLERANCE)?1.0:0.0;RUN=0.0;}
+    else if((PHASE==1.0 && !(RMS>TARGET)) || (PHASE==0.0 && RMS<=TOLERANCE))RUN=0.0;
+}
+void precondition() {
+    if(RUN==0.0)return;
+    precise double sum=0.0;
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
+        int row=rows[ordinal];
+        if(RESTART!=0.0)FREE(row)=(BOUNDED(row)==0 || pressure[row]>LOWER(row) || R(row)>TARGET)?1:0;
+        Z(row)=FREE(row)!=0?R(row)/DIAG(row):0.0;
+        if(RESTART!=0.0)D(row)=Z(row);
+        if(FREE(row)!=0)sum+=R(row)*Z(row);
+    }
+    saveStats(sum,0.0,0.0,0.0,0,0);
+}
+void finishPrecondition() {
+    if(gid!=0 || RUN==0.0)return;
+    double nextRz=collect(0,0);BETA=RESTART!=0.0?0.0:nextRz/RZ;RZ=nextRz;
+}
+void updateDirection() {
+    if(RUN==0.0 || RESTART!=0.0)return;
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(FREE(row)!=0)D(row)=Z(row)+BETA*D(row);else D(row)=0.0;}
+}
+void directionProduct() {
+    if(RUN==0.0)return;
+    precise double sum=0.0;double distance=1.7976931348623157e308LF;
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
+        int row=rows[ordinal];precise double product=0.0;
+        for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*D(columns[edge]);Q(row)=product;
+        if(FREE(row)!=0){sum+=D(row)*product;if(BOUNDED(row)!=0 && D(row)<0.0)distance=min(distance,(pressure[row]-LOWER(row))/-D(row));}
+    }
+    saveStats(sum,distance,0.0,0.0,2,0);
+}
+void finishProduct() {
+    if(gid!=0 || RUN==0.0)return;
+    double denominator=collect(0,0);
+    if(!(denominator>0.0 && finite(denominator) && RZ>0.0 && finite(RZ))){RUN=0.0;return;}
+    ALPHA=RZ/denominator;double distance=collect(1,2);BLOCKED=distance<=ALPHA?1.0:0.0;ALPHA=min(ALPHA,distance);
+}
+void updateSolution() {
+    if(RUN==0.0)return;
+    precise double sum=0.0;double equations=0.0,changed=0.0,maximum=0.0;
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
+        int row=rows[ordinal];bool hits=BOUNDED(row)!=0 && D(row)<0.0 && (pressure[row]-LOWER(row))/-D(row)<=ALPHA;
+        pressure[row]=hits?LOWER(row):pressure[row]+ALPHA*D(row);R(row)-=ALPHA*Q(row);
+        if(BOUNDED(row)!=0 && pressure[row]<LOWER(row))pressure[row]=LOWER(row);
+        if(BLOCKED==0.0) {
+            int enabled=(BOUNDED(row)==0 || pressure[row]>LOWER(row) || R(row)>TARGET)?1:0;
+            if(enabled!=FREE(row))changed=1.0;FREE(row)=enabled;
+        }
+        double value=R(row);maximum=max(maximum,abs(pressure[row]));
+        if(BOUNDED(row)!=0 && pressure[row]<=LOWER(row) && value<=0.0)continue;
+        equations+=1.0;sum+=value*value;
+    }
+    saveStats(sum,equations,changed,maximum,0,1);
+}
+void finishUpdate() {
+    if(gid!=0 || RUN==0.0)return;
+    RMS=sqrt(collect(0,0)/max(1.0,collect(1,0)));PMAX=collect(3,1);ITER+=1.0;PHASE=0.0;
+    RESTART=(BLOCKED!=0.0 || collect(2,1)!=0.0)?1.0:0.0;REFRESH=(RESTART!=0.0 || RMS<=TARGET)?1.0:0.0;
+    if(ITER>=double(p.maximumIterations))RUN=0.0;
+}
+void finalizeControl() {if(gid==0){REFRESH=1.0;PHASE=2.0;}}
+void executeStage(int stage) {
+    if(stage==0)initializeRows();else if(stage==1)initializeControl();else if(stage==2)refreshResidual();
+    else if(stage==3)finishRefresh();else if(stage==4)precondition();else if(stage==5)finishPrecondition();
+    else if(stage==6)updateDirection();else if(stage==7)directionProduct();else if(stage==8)finishProduct();
+    else if(stage==9)updateSolution();else if(stage==10)finishUpdate();else if(stage==11)finalizeControl();
+}
+void singleStage(int stage){executeStage(stage);syncAll();}
+void main() {
+    lane=int(gl_LocalInvocationID.x);n=p.size;group=int(gl_WorkGroupID.x);gid=group*256+lane;stride=p.groups*256;
+    if(p.stage>=0){executeStage(p.stage);return;}
+    for(int stage=0;stage<=6;stage++)singleStage(stage);
+    while(RUN!=0.0 && ITER<double(p.maximumIterations)) {
+        for(int stage=7;stage<=10;stage++)singleStage(stage);
+        for(int stage=2;stage<=6;stage++)singleStage(stage);
+    }
+    singleStage(11);singleStage(2);singleStage(3);
+}

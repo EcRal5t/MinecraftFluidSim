@@ -7,6 +7,7 @@ import mmm.application.RegionApplicationService;
 import mmm.application.ThermalReservoirUseCase;
 import mmm.fluid.CpuFluidSolverBackend;
 import mmm.fluid.FluidDomain;
+import mmm.fluid.SparseMatrixCompute;
 import mmm.network.ProtocolSessions;
 import mmm.simulation.persistence.ContainerJournalFileStore;
 import mmm.transfer.ContainerTransferJournal;
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.ServiceLoader;
 import java.util.UUID;
 
 /** The only world-runtime composition root; all construction-time I/O is sequenced here. */
@@ -73,7 +75,12 @@ public final class MmmRuntimeFactory {
 		MinecraftOwnershipIssues ownership = new MinecraftOwnershipIssues(ownershipIssues);
 		MinecraftRuntimePolicy policy = new MinecraftRuntimePolicy(startup, regionManager);
 		FluidWorldTargetResolver targets = new FluidWorldTargetResolver(regionManager);
-		RegionApplicationService regionApplication = new RegionApplicationService(new CpuFluidSolverBackend(),
+		SparseMatrixCompute pressureCompute = createPressureCompute();
+		CpuFluidSolverBackend solverBackend = pressureCompute == null ? new CpuFluidSolverBackend()
+				: new CpuFluidSolverBackend(pressureCompute, message -> MmmMod.LOGGER.warn("{}", message));
+		try {
+		MmmMod.LOGGER.info("Matter, Motion & Mechanics numerical execution: {}", solverBackend.executionDescription());
+		RegionApplicationService regionApplication = new RegionApplicationService(solverBackend,
 				new FluidRegionRepository(regionManager), regionOperations);
 		MinecraftMotionExecutor motion = new MinecraftMotionExecutor(regionApplication, worldRegistries, policy);
 		MinecraftTakeoverAdapter takeover = new MinecraftTakeoverAdapter();
@@ -143,7 +150,7 @@ public final class MmmRuntimeFactory {
 		RegionDiagnosticsReport regionDiagnostics = new RegionDiagnosticsReport(
 				regionManager, regionOperations, takeover, debugFixtures, worldRegistries,
 				policy::controllerEnabled, policy::liveWorldBridgeEnabled,
-				policy::configuredWorldBridgeEnabled, ownership::current, policy::maximumPhaseOperationsPerStep);
+				policy::configuredWorldBridgeEnabled, ownership::current, policy::maximumPhaseOperationsPerStep, solverBackend::executionDescription);
 		MinecraftContainerTransactionAdapter containerTransactions = new MinecraftContainerTransactionAdapter(
 				regionManager, regionOperations, containerRecovery, worldRegistries.profile().profileFingerprint(),
 				worldRegistries.thermalOrNull() == null ? null : worldRegistries.thermalOrNull().fingerprint());
@@ -164,7 +171,24 @@ public final class MmmRuntimeFactory {
 				playerContainerTransfers, dispenserContainerTransfers,
 				new MinecraftRegionObservation(regionManager, snapshots, comparatorSignals), containerRecovery,
 				new FabricFluidQueryApi(server, regionManager, startup.profileProven()), new ProtocolSessions(),
-				worldRegistries, committedEvents, startup,transferApi);
+				worldRegistries, committedEvents, startup,transferApi, solverBackend);
+		} catch (RuntimeException | Error failure) {
+			try { solverBackend.close(); }
+			catch (RuntimeException | Error closeFailure) { failure.addSuppressed(closeFailure); }
+			throw failure;
+		}
+	}
+
+	private static SparseMatrixCompute createPressureCompute() {
+		String selected = System.getProperty("mmm.pressureCompute", "cpu").trim();
+		if (selected.equals("cpu")) return null;
+		if (!selected.equals("vulkan"))
+			throw new IllegalArgumentException("Unknown mmm.pressureCompute: " + selected);
+		int device = Integer.parseInt(System.getProperty("mmm.gpuDevice", "0"));
+		if (device < 0) throw new IllegalArgumentException("mmm.gpuDevice must be nonnegative");
+		for (var provider : ServiceLoader.load(SparseMatrixCompute.Provider.class))
+			if (provider.id().equals(selected)) return Objects.requireNonNull(provider.create(device));
+		throw new IllegalStateException("Vulkan pressure compute requested; install the GPU kernel provider");
 	}
 
 	private static ContainerTransferIndex discoverContainerTransfers(ContainerJournalFileStore store) {

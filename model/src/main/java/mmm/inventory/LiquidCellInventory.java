@@ -516,21 +516,35 @@ public final class LiquidCellInventory {
 		return planRoutes(routes,caloric,null);
 	}
 	public Plan planRoutes(LiquidTransportRoutes routes,EnergyPartitioner caloric,TransportFinalizer finalizer) {
+		return planRoutes(routes,caloric,finalizer,null);
+	}
+	public Plan planRoutes(LiquidTransportRoutes routes,EnergyPartitioner caloric,TransportFinalizer finalizer,LiquidQuantityCompute compute) {
 		var totals=new TransportTargets();
-		var partitions=retainTransportDonors(routes,caloric,totals);
+		var partitions=retainTransportDonors(routes,caloric,totals,compute);
 		var settledTransfers=receiveTransport(routes,partitions,totals);
 		var quantities=finalizer==null?null:prepareTransportQuantities(totals,settledTransfers);
 		if(finalizer!=null)finalizer.finish(quantities);
 		return prepareTransport(totals,settledTransfers,quantities);
 	}
 	/** All donors retain their own original-generation remainder before any incoming merge. */
-	private SourcePartition[] retainTransportDonors(LiquidTransportRoutes routes,EnergyPartitioner caloric,TransportTargets totals) {
+	private SourcePartition[] retainTransportDonors(LiquidTransportRoutes routes,EnergyPartitioner caloric,TransportTargets totals,LiquidQuantityCompute compute) {
 		var partitions=new SourcePartition[routes.sourceCount()];
+		var outflows=new Outflow[routes.sourceCount()];
+		var requests=compute==null?null:new ArrayList<LiquidQuantityCompute.Source>();
 		for(int donor=0;donor<routes.sourceCount();donor++) {
 			var source=routes.source(donor);int start=routes.routeStart(donor),end=routes.routeEnd(donor);
 			if(source.key().cell()>=cellCount()||stock(source.key())!=source)throw new IllegalArgumentException("Liquid transport donor is not an original owner");
 			for(int r=start;r<end;r++)if(routes.targetCell(r)>=cellCount())throw new IllegalArgumentException("Liquid transport recipient is outside the grid");
-			var partition=partitions[donor]=partitionOutflow(routes,donor,caloric);
+			var outflow=outflows[donor]=prepareOutflow(routes,donor);
+			if(requests!=null&&outflow!=null)requests.add(new LiquidQuantityCompute.Source(outflow.shares.fractions,
+					outflow.shares.largest,source.massUnits(),source.mixture()==null?new long[0]:source.mixture().copyAmounts()));
+		}
+		var results=requests==null||requests.isEmpty()?null:java.util.Objects.requireNonNull(compute.partition(List.copyOf(requests)),"Liquid quantity result is missing");
+		if(results!=null&&results.size()!=requests.size())throw new IllegalStateException("Computed liquid donor count differs");
+		int result=0;
+		for(int donor=0;donor<routes.sourceCount();donor++){
+			var source=routes.source(donor);var outflow=outflows[donor];
+			var partition=partitions[donor]=outflow==null?null:partitionOutflow(source,outflow,caloric,results==null?null:results.get(result++));
 			totals.donor(source).retainSource(source,partition);
 		}
 		return partitions;
@@ -552,7 +566,8 @@ public final class LiquidCellInventory {
 	}
 	/** Actual outgoing columns and one implicit source remainder; no retained route or stock is generated. */
 	private record SourcePartition(SignedDyadic retainedVolume,long[] masses,long[][] species,double[] energies,int retained) { }
-	private SourcePartition partitionOutflow(LiquidTransportRoutes routes,int donor,EnergyPartitioner caloric){
+	private record Outflow(SignedDyadic retainedVolume,QuantityShares shares,int retained) { }
+	private Outflow prepareOutflow(LiquidTransportRoutes routes,int donor){
 		var source=routes.source(donor);int start=routes.routeStart(donor),count=routes.routeEnd(donor)-start;
 		var outgoing=SignedDyadic.ZERO;int largest=0;
 		for(int i=0;i<count;i++){
@@ -565,15 +580,22 @@ public final class LiquidCellInventory {
 		boolean partial=retained.signum()>0;
 		int remainder=partial?count:largest;
 		var shares=new QuantityShares(routes,start,count,source.volume(),remainder,partial);
-		long[] masses=shares.allocate(source.massUnits());
+		return new Outflow(retained,shares,partial?count:-1);
+	}
+	private SourcePartition partitionOutflow(Stock source,Outflow outflow,EnergyPartitioner caloric,LiquidQuantityCompute.Partition computed){
+		var shares=outflow.shares;
+		long[] masses=computed==null?shares.allocate(source.massUnits()):computed.masses();
 		// One material source has heat capacity proportional to its actual mass.
 		int energyRemainder=0;
 		for(int part=1;part<masses.length;part++)if(masses[part]>masses[energyRemainder])energyRemainder=part;
-		var speciesShares=source.massUnits()==0?shares:new QuantityShares(masses,source.massUnits(),energyRemainder);
-		long[][] species=new long[source.mixture()==null?0:source.mixture().entryCount()][];
-		for(int entry=0;entry<species.length;entry++)species[entry]=speciesShares.allocate(source.mixture().amountAt(entry));
+		long[][] species;
+		if(computed==null){
+			var speciesShares=source.massUnits()==0?shares:new QuantityShares(masses,source.massUnits(),energyRemainder);
+			species=new long[source.mixture()==null?0:source.mixture().entryCount()][];
+			for(int entry=0;entry<species.length;entry++)species[entry]=speciesShares.allocate(source.mixture().amountAt(entry));
+		}else species=computed.species();
 		var energies=energyShares(source,masses,species,energyRemainder,caloric);
-		return new SourcePartition(retained,masses,species,energies,partial?count:-1);
+		return new SourcePartition(outflow.retainedVolume,masses,species,energies,outflow.retained);
 	}
 	/** Actual face quantities provide the common mass and geometry inputs to momentum. */
 	private TransportQuantities prepareTransportQuantities(TransportTargets totals,List<Transfer> transfers) {

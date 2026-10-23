@@ -23,6 +23,7 @@ import java.util.function.Supplier;
 
 /** Read-only operator diagnostics derived from committed runtime owners and the selected live region. */
 public final class RegionDiagnosticsReport {
+	private final Supplier<String> computeDescription;
 	private final FluidRegionManager regions;
 	private final FluidRegionOperations operations;
 	private final MinecraftTakeoverAdapter takeover;
@@ -44,8 +45,10 @@ public final class RegionDiagnosticsReport {
 			BooleanSupplier worldBridgeFeatureEnabled,
 			BooleanSupplier configuredWorldBridgeFeatureEnabled,
 			Supplier<List<String>> ownershipIssues,
-			IntSupplier maximumPhaseOperationsPerStep
+			IntSupplier maximumPhaseOperationsPerStep,
+			Supplier<String> computeDescription
 	) {
+		this.computeDescription = Objects.requireNonNull(computeDescription);
 		this.regions = Objects.requireNonNull(regions, "Region manager");
 		this.operations = Objects.requireNonNull(operations, "Region operations");
 		this.takeover = Objects.requireNonNull(takeover, "Takeover adapter");
@@ -78,6 +81,10 @@ public final class RegionDiagnosticsReport {
 	}
 
 	public String status(MinecraftServer server) {
+		return computeDescription.get() + " | " + statusDetails(server);
+	}
+
+	private String statusDetails(MinecraftServer server) {
 		String takeoverLock = MinecraftTakeoverAdapter.lockDescription(server);
 		RegionCatalog.BudgetUsage usage = regions.usage();
 		FluidRegion region = regions.selected();

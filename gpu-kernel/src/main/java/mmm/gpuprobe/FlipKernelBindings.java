@@ -36,9 +36,13 @@ final class FlipKernelBindings implements AutoCloseable {
 	private long descriptorSet;
 
 	FlipKernelBindings(VulkanDeviceContext context, FlipGpuResources resources) {
+		this(context, resources, GpuProbeShaderSource.loadFlip(), PUSH_BYTES);
+	}
+
+	FlipKernelBindings(VulkanDeviceContext context, FlipGpuResources resources, String source, int pushBytes) {
 		this.context = context;
 		try {
-			create(resources);
+			create(resources, source, pushBytes);
 		} catch (RuntimeException | LinkageError exception) {
 			try { close(); }
 			catch (RuntimeException | LinkageError closeFailure) { exception.addSuppressed(closeFailure); }
@@ -54,11 +58,11 @@ final class FlipKernelBindings implements AutoCloseable {
 				stack.longs(descriptorSet), null);
 	}
 
-	private void create(FlipGpuResources resources) {
+	private void create(FlipGpuResources resources, String source, int pushBytes) {
 		try (MemoryStack stack = stackPush()) {
 			VkDescriptorSetLayoutBinding.Buffer bindings =
-					VkDescriptorSetLayoutBinding.calloc(FlipGpuResources.BUFFER_COUNT, stack);
-			for (int i = 0; i < FlipGpuResources.BUFFER_COUNT; i++) {
+					VkDescriptorSetLayoutBinding.calloc(resources.size(), stack);
+			for (int i = 0; i < resources.size(); i++) {
 				bindings.get(i).binding(i).descriptorType(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
 						.descriptorCount(1).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT);
 			}
@@ -70,7 +74,7 @@ final class FlipKernelBindings implements AutoCloseable {
 			descriptorLayout = layoutPointer.get(0);
 
 			VkPushConstantRange.Buffer pushRange = VkPushConstantRange.calloc(1, stack);
-			pushRange.get(0).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(PUSH_BYTES);
+			pushRange.get(0).stageFlags(VK_SHADER_STAGE_COMPUTE_BIT).offset(0).size(pushBytes);
 			VkPipelineLayoutCreateInfo pipelineLayoutInfo = VkPipelineLayoutCreateInfo.calloc(stack).sType$Default()
 					.pSetLayouts(stack.longs(descriptorLayout)).pPushConstantRanges(pushRange);
 			LongBuffer pipelineLayoutPointer = stack.mallocLong(1);
@@ -78,7 +82,7 @@ final class FlipKernelBindings implements AutoCloseable {
 					"vkCreatePipelineLayout");
 			pipelineLayout = pipelineLayoutPointer.get(0);
 
-			ByteBuffer spirv = compileShader(GpuProbeShaderSource.loadFlip());
+			ByteBuffer spirv = compileShader(source);
 			try {
 				VkShaderModuleCreateInfo shaderInfo = VkShaderModuleCreateInfo.calloc(stack).sType$Default().pCode(spirv);
 				LongBuffer shaderPointer = stack.mallocLong(1);
@@ -99,7 +103,7 @@ final class FlipKernelBindings implements AutoCloseable {
 			pipeline = pipelinePointer.get(0);
 
 			VkDescriptorPoolSize.Buffer poolSize = VkDescriptorPoolSize.calloc(1, stack);
-			poolSize.get(0).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(FlipGpuResources.BUFFER_COUNT);
+			poolSize.get(0).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(resources.size());
 			VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default()
 					.maxSets(1).pPoolSizes(poolSize);
 			LongBuffer poolPointer = stack.mallocLong(1);
@@ -113,10 +117,16 @@ final class FlipKernelBindings implements AutoCloseable {
 			VulkanDeviceContext.check(vkAllocateDescriptorSets(context.device(), setInfo, setPointer),
 					"vkAllocateDescriptorSets");
 			descriptorSet = setPointer.get(0);
+		}
+		rebind(resources);
+	}
 
-			VkDescriptorBufferInfo.Buffer infos = VkDescriptorBufferInfo.calloc(FlipGpuResources.BUFFER_COUNT, stack);
-			VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(FlipGpuResources.BUFFER_COUNT, stack);
-			for (int i = 0; i < FlipGpuResources.BUFFER_COUNT; i++) {
+	/** Replaces completed buffer bindings while retaining compiled code and the pipeline. */
+	void rebind(FlipGpuResources resources) {
+		try (MemoryStack stack = stackPush()) {
+			VkDescriptorBufferInfo.Buffer infos = VkDescriptorBufferInfo.calloc(resources.size(), stack);
+			VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(resources.size(), stack);
+			for (int i = 0; i < resources.size(); i++) {
 				GpuBuffer buffer = resources.buffer(i);
 				infos.get(i).buffer(buffer.handle()).offset(0).range(buffer.size());
 				writes.get(i).sType$Default().dstSet(descriptorSet).dstBinding(i)
@@ -127,12 +137,12 @@ final class FlipKernelBindings implements AutoCloseable {
 		}
 	}
 
-	private static ByteBuffer compileShader(String source) {
+	static ByteBuffer compileShader(String source) {
 		long compiler = org.lwjgl.util.shaderc.Shaderc.shaderc_compiler_initialize();
 		if (compiler == NULL) throw new IllegalStateException("Shaderc compiler unavailable");
 		long result = NULL;
 		ByteBuffer sourceBytes = MemoryUtil.memUTF8(source, false);
-		ByteBuffer fileName = MemoryUtil.memUTF8("mmm-flip.comp");
+		ByteBuffer fileName = MemoryUtil.memUTF8("mmm-compute.comp");
 		ByteBuffer entryPoint = MemoryUtil.memUTF8("main");
 		try {
 			result = org.lwjgl.util.shaderc.Shaderc.shaderc_compile_into_spv(compiler, sourceBytes,
@@ -140,7 +150,7 @@ final class FlipKernelBindings implements AutoCloseable {
 			if (result == NULL) throw new IllegalStateException("Shaderc returned NULL");
 			if (org.lwjgl.util.shaderc.Shaderc.shaderc_result_get_compilation_status(result)
 					!= org.lwjgl.util.shaderc.Shaderc.shaderc_compilation_status_success) {
-				throw new IllegalStateException("FLIP shader compile failed: "
+				throw new IllegalStateException("Vulkan compute shader compile failed: "
 						+ org.lwjgl.util.shaderc.Shaderc.shaderc_result_get_error_message(result));
 			}
 			ByteBuffer bytes = org.lwjgl.util.shaderc.Shaderc.shaderc_result_get_bytes(result);

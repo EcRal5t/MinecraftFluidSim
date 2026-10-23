@@ -221,7 +221,7 @@ final class GpuStepScheduler implements AutoCloseable {
 		}
 		if (context.device() != null) {
 			int idleResult = vkDeviceWaitIdle(context.device());
-			if (idleResult != VK_SUCCESS) {
+			if (idleResult != VK_SUCCESS && idleResult != VK_ERROR_DEVICE_LOST) {
 				IllegalStateException idleFailure = new IllegalStateException(
 						"vkDeviceWaitIdle(close-scheduler) failed with VkResult " + idleResult);
 				if (completionFailure == null) completionFailure = idleFailure;

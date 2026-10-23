@@ -54,7 +54,14 @@ final class PressureLinearSolver {
 			gasLower[row]=-mmm.fluid.air.AirNetwork.REFERENCE_PRESSURE-pressureDatum-reference[row];
 			pressure[row]=Math.max(gasLower[row],pressure[row]);
 		}
-		rhsBuilder.buildRhs(rhs);refreshResidual();
+		rhsBuilder.buildRhs(rhs);
+		var computed = matrix.solve(new SparseMatrixCompute.PressureProblem(matrix.size(), unknowns, count,
+				bounded, gasLower, rhs, pressure, target, config.maxPressureIterations()));
+		if (computed != null) {
+			System.arraycopy(computed.pressure(), 0, pressure, 0, matrix.size());
+			return new PressureProjectionResult(computed.iterations(), computed.residualRms(), computed.converged());
+		}
+		refreshResidual();
 		Arrays.fill(free,false);int iterations=0;
 		if(projectedNorm()>target){updateFreeSet(target);restartDirection();iterations=iterate(target);}
 		refreshResidual();double rms=projectedNorm();

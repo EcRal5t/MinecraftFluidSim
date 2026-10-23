@@ -35,8 +35,16 @@ final class VulkanDeviceContext implements AutoCloseable {
 	private int timestampValidBits;
 
 	VulkanDeviceContext(int deviceIndex) {
+		this(deviceIndex, false);
+	}
+
+	VulkanDeviceContext(int deviceIndex, boolean inventoryInt64) {
+		this(deviceIndex, inventoryInt64, false);
+	}
+
+	VulkanDeviceContext(int deviceIndex, boolean inventoryInt64, boolean computeFloat64) {
 		try {
-			create(deviceIndex);
+			create(deviceIndex, inventoryInt64, computeFloat64);
 		} catch (RuntimeException | LinkageError exception) {
 			try { close(); }
 			catch (RuntimeException | LinkageError closeFailure) { exception.addSuppressed(closeFailure); }
@@ -61,10 +69,10 @@ final class VulkanDeviceContext implements AutoCloseable {
 		throw new IllegalStateException("No Vulkan memory type for required flags 0x" + Integer.toHexString(required));
 	}
 
-	private void create(int deviceIndex) {
+	private void create(int deviceIndex, boolean inventoryInt64, boolean computeFloat64) {
 		try (MemoryStack stack = stackPush()) {
 			VkApplicationInfo app = VkApplicationInfo.calloc(stack).sType$Default()
-					.pApplicationName(stack.UTF8("Matter, Motion & Mechanics 3D FLIP Probe")).applicationVersion(1)
+					.pApplicationName(stack.UTF8("Matter, Motion & Mechanics Vulkan Compute")).applicationVersion(1)
 					.pEngineName(stack.UTF8("Matter, Motion & Mechanics")).engineVersion(1)
 					.apiVersion(VK_MAKE_API_VERSION(0, 1, 1, 0));
 			VkInstanceCreateInfo instanceInfo = VkInstanceCreateInfo.calloc(stack).sType$Default().pApplicationInfo(app);
@@ -93,7 +101,7 @@ final class VulkanDeviceContext implements AutoCloseable {
 			VkPhysicalDeviceFeatures2 features = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default()
 					.pNext(atomicFeatures.address());
 			vkGetPhysicalDeviceFeatures2(physicalDevice, features);
-			if (!atomicFeatures.shaderBufferFloat32AtomicAdd()) {
+			if (!inventoryInt64 && !computeFloat64 && !atomicFeatures.shaderBufferFloat32AtomicAdd()) {
 				throw new IllegalStateException(deviceName + " lacks shaderBufferFloat32AtomicAdd");
 			}
 			atomicFeatures.shaderBufferFloat32AtomicAdd(true).shaderBufferFloat32Atomics(true);
@@ -102,6 +110,13 @@ final class VulkanDeviceContext implements AutoCloseable {
 			VkDeviceCreateInfo deviceInfo = VkDeviceCreateInfo.calloc(stack).sType$Default()
 					.pNext(atomicFeatures.address()).pQueueCreateInfos(queueInfo)
 					.ppEnabledExtensionNames(stack.pointers(stack.UTF8(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME)));
+			if (inventoryInt64 || computeFloat64) {
+				if (inventoryInt64 && !features.features().shaderInt64()) throw new IllegalStateException(deviceName + " lacks shaderInt64");
+				if (computeFloat64 && !features.features().shaderFloat64()) throw new IllegalStateException(deviceName + " lacks shaderFloat64");
+				deviceInfo.pNext(0L).ppEnabledExtensionNames(null)
+						.pEnabledFeatures(org.lwjgl.vulkan.VkPhysicalDeviceFeatures.calloc(stack)
+								.shaderInt64(inventoryInt64).shaderFloat64(computeFloat64));
+			}
 			PointerBuffer devicePointer = stack.mallocPointer(1);
 			check(vkCreateDevice(physicalDevice, deviceInfo, null, devicePointer), "vkCreateDevice");
 			device = new VkDevice(devicePointer.get(0), physicalDevice, deviceInfo);
@@ -139,7 +154,7 @@ final class VulkanDeviceContext implements AutoCloseable {
 		Throwable failure = null;
 		if (device != null) {
 			int idleResult = vkDeviceWaitIdle(device);
-			if (idleResult != VK_SUCCESS) {
+			if (idleResult != VK_SUCCESS && idleResult != VK_ERROR_DEVICE_LOST) {
 				failure = new IllegalStateException("vkDeviceWaitIdle(close-device) failed with VkResult " + idleResult);
 			}
 			vkDestroyDevice(device, null);
@@ -155,6 +170,8 @@ final class VulkanDeviceContext implements AutoCloseable {
 	}
 
 	static void check(int result, String operation) {
+		if (result == VK_ERROR_DEVICE_LOST) throw new mmm.fluid.SparseMatrixCompute.DeviceLostException(
+				operation + " failed with VK_ERROR_DEVICE_LOST");
 		if (result != VK_SUCCESS) throw new IllegalStateException(operation + " failed with VkResult " + result);
 	}
 }

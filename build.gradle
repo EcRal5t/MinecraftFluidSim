@@ -36,7 +36,7 @@ tasks.register('runValidation') {
 	group = 'verification'
 	description = 'Runs CPU main validations (default fast; -PcpuValidation=full for complete coverage), architecture and the GPU adapter once.'
 	// The CPU suite already includes model thermal ownership, solver cut-cells and application transactions.
-	dependsOn ':fabric:runCpuValidation', ':fabric:runArchitectureValidation', ':gpu-probe:runAdapterValidation'
+	dependsOn ':fabric:runCpuValidation', ':fabric:runArchitectureValidation', ':gpu-probe:runAdapterValidation', ':solver:runComputeHandoffValidation'
 }
 
 tasks.named('check') {

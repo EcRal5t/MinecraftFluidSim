@@ -31,7 +31,7 @@
 | [app](../../app/src/main/java/mmm/application/) | 调度、授权、用例、区域身份与提交协调 | solver、model |
 | [fabric](../../fabric/src/main/java/mmm/) | Minecraft 世界与物品操作、持久化、命令和网络 | api、model、solver、app |
 | [fabric client](../../fabric/src/client/java/mmm/) | 快照、几何和界面 | 客户端协议与展示数据 |
-| [gpu-kernel](../../gpu-kernel/src/main/java/mmm/gpuprobe/) / [gpu-probe](../../gpu-probe/src/main/java/mmm/gpuprobe/) | Vulkan 实验与 Minecraft 适配 | solver / kernel、fabric |
+| [gpu-kernel](../../gpu-kernel/src/main/java/mmm/gpuprobe/) / [gpu-probe](../../gpu-probe/src/main/java/mmm/gpuprobe/) | Vulkan 库存内核、可选混合压力计算、实验与 Minecraft 适配 | solver / kernel、fabric |
 | [core](../../core/build.gradle) | 聚合发布 api/model/solver/app | 无生产源码 |
 
 依赖方向为 `api ← model ← solver ← app ← fabric`，Java 根包为 `mmm`，app 对应包为 `mmm.application`。
@@ -263,7 +263,8 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
   - 主要文件：
     - [PressureSystem](../../solver/src/main/java/mmm/fluid/PressureSystem.java)：`prepareGeometry` 集中准备相几何与固相压力份额；`prepareOperator` 准备未知行和载荷，`solve` 组织共同基准、矩阵及速度修正，并发布实际压力
     - [PressureLinearSolver](../../solver/src/main/java/mmm/fluid/PressureLinearSolver.java)：求解显式传入的未知行与约束，返回双精度压力，由 `PressureSystem` 发布
-    - [PressureSparseMatrix](../../solver/src/main/java/mmm/fluid/PressureSparseMatrix.java)：无阻力响应的共同 CSR，用于压力预条件
+    - [PressureSparseMatrix](../../solver/src/main/java/mmm/fluid/PressureSparseMatrix.java)：无阻力响应的共同 CSR，用于压力预条件及可选设备矩阵乘法
+    - [SparseMatrixCompute](../../solver/src/main/java/mmm/fluid/SparseMatrixCompute.java)、[ComputeExecution](../../solver/src/main/java/mmm/fluid/ComputeExecution.java)：可选 CSR 计算服务与候选内的调用作用域
     - [PressurePreconditioner](../../solver/src/main/java/mmm/fluid/PressurePreconditioner.java)
     - [PressureFaceGraph](../../solver/src/main/java/mmm/fluid/PressureFaceGraph.java)：每格一个固定开放连通域对应的压力工作区、接液面积与散度系数；气压在每次装配读取实际状态，液体输运直接使用固定孔口邻接
     - [PressureBoundaryView](../../solver/src/main/java/mmm/fluid/PressureBoundaryView.java)
@@ -480,6 +481,10 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 `CpuFluidSolverBackend` 在私有域完成整个逻辑步；力学细化从原始请求重新恢复，保留总推进时间、外部输入和一次提交。`RegionApplicationService` 与仓库核对后端、区域身份、紧邻求解器代次和完整布局。CPU 可把已求解私有对象交接一次；其他后端提供完整不可变状态。候选失败保留原区域，成功后发布该候选的完整统计。
 
+可选 Vulkan 混合计算沿同一 CPU 私有候选运行，共同 CSR 的 float64 完整压力迭代与液体批量整数质量、物种分份在设备执行。CPU 准备共同几何、耦合矩阵与精确 dyadic 体积路线，使用设备份额继续结算动量、内能及载体后继。`LiquidCellInventory.planRoutes` 的可选数量接口直接接收设备结果，原子提交保持完整区域候选。
+
+设备计算服务由服务器运行时创建，并通过单一 `ComputeExecution` 作用域绑定。明确的设备丢失会释放服务、丢弃候选，从原始请求在 CPU 重算后沿普通提交链接管；后续请求继续 CPU 并记录恢复原因。其他计算异常保留原区域。启动选择见[运行时](runtime-and-lifecycle.md#startup)。完整设备常驻区域状态、各物相输运及 checkpoint 恢复继续按[实施计划](../roadmap/solver-consolidation-plan.md)推进。
+
 存盘以 `cell-mac` 格式保存单元液体记录、微盒相占据、规范分区的三轴格面动量、碰撞掩码和非液体库存。
 液体记录直接携带组成和内能，热扩展保存非液体内能及总账。
 双槽写入、回读并验证全部成员，再原子替换 `HEAD`。删除发布 `REMOVED` 终止代次后完成移除通知、注销与载荷隔离。捕获读取已提交的同代库存和气腔状态；冷恢复完整验证支撑、容量、物性与账本。
@@ -654,11 +659,18 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 - **GPU 设备、资源、提交与回读**
   - 入口：
     - [VulkanDeviceContext](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanDeviceContext.java)
+    - [DeviceLiquidInventory](../../model/src/main/java/mmm/inventory/DeviceLiquidInventory.java)：`encode/decode` 交接液体与物种 CSR、整数质量和原始内能
+    - [DeviceDyadicArray](../../model/src/main/java/mmm/units/DeviceDyadicArray.java)：无损体积的变长 limb、符号和指数列
+    - [VulkanInventoryTransport](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanInventoryTransport.java)：int64 设备常驻库存、候选双缓冲、代次与 checkpoint；完整区域输运接入待完成
+    - [VulkanSparseMatrixCompute](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanSparseMatrixCompute.java)、[VulkanSparseMatrixProvider](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanSparseMatrixProvider.java)：设备 CSR 完整压力迭代、数量服务与运行时 provider
+    - [LiquidQuantityCompute](../../model/src/main/java/mmm/inventory/LiquidQuantityCompute.java)、[VulkanLiquidQuantityCompute](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidQuantityCompute.java)：`partition` 批量计算供体的实际质量和物种份额，共享压力设备与调用作用域
+    - [liquid-quantities.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/liquid-quantities.comp)：整数质量、物种分份和余量承接
     - [FlipGpuResources](../../gpu-kernel/src/main/java/mmm/gpuprobe/FlipGpuResources.java)
     - [GpuStepScheduler](../../gpu-kernel/src/main/java/mmm/gpuprobe/GpuStepScheduler.java)
     - [flip.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/flip.comp)
     - [MmmGpuProbeHostIntegration](../../gpu-probe/src/main/java/mmm/gpuprobe/MmmGpuProbeHostIntegration.java)
   - 运行方法：[GPU 验证](../maintenance/validation.md#gpu)；[后端扩展要求](../roadmap/performance-and-backends.md)
+  - 验证入口：`DeviceLiquidInventoryValidation`、`GpuInventoryTransportValidation`、`GpuLiquidQuantityValidation`、`GpuPressureValidation`、`GpuCurrentPhysicsValidation`、`ComputeExecutionValidation`、`ComputeDeviceLossValidation`、`GpuPressureScaleBenchmark`
 
 <a id="diagnosis"></a>
 ### 按现象定位

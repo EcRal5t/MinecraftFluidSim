@@ -586,4 +586,36 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 相同求解器产物的原负载热预算 `controller-gas-lineage,production-live-budget` 通过，日志 `build/gas-source/pool-production-budget.log`。小控制器20步最大7.283 ms，低于40 ms；最大溃坝20步最大271.535 ms，连续超过200 ms为2步，低于3步暂停条件。世界可用性输入与磁盘恢复未计入此纯生产计算场景的实测范围。
 
-原生池体交互、画面及跨游戏重启尚未实测。单一场景：建一池由完整实心方块围住、顶部敞开的2×2静水，管理员用探针正常右击预览并潜行确认；用容器取走少量水，再对池底预览、确认归还，退出并重进。预期完整常温静止纯水回到原版，零头仍可装取，取空后再次确认结束接管，水量不恢复为初始装量。用 `/mmm status` 对照剩余库存；异常日志检索 `ownership`、`Native water`、`Pool water return`。GPU 化尚未启动。
+原生池体交互、画面及跨游戏重启尚未实测。单一场景：建一池由完整实心方块围住、顶部敞开的2×2静水，管理员用探针正常右击预览并潜行确认；用容器取走少量水，再对池底预览、确认归还，退出并重进。预期完整常温静止纯水回到原版，零头仍可装取，取空后再次确认结束接管，水量不恢复为初始装量。用 `/mmm status` 对照剩余库存；异常日志检索 `ownership`、`Native water`、`Pool water return`。GPU 计算进展见下一节。
+
+
+### 当前模型的 Vulkan 计算
+
+2026-10-23：硬件为 RTX 5070 Ti，Vulkan 1.4.341。`build/gas-source/gpu-device-start.log` 的设备初始化、Shaderc 编译和实际 dispatch 通过。当前新增入口使用现有单元库存与 MAC 压力模型，旧 FLIP probe 的结果保留其原有适用范围。
+
+```powershell
+./gradlew.bat :gpu-kernel:runGpuInventoryTransportValidation :gpu-kernel:runGpuPressureValidation --offline --no-daemon
+./gradlew.bat :gpu-kernel:runGpuCurrentPhysicsValidation "-PgpuPhysicsSelection=controller-gas-lineage,production-live-budget" --offline --no-daemon
+```
+
+`DeviceLiquidInventoryValidation` 通过任意精度二进制库存、64 位质量和物种、原始内能位与空混合物的设备列往返。`ComputeExecutionValidation` 通过计算作用域的嵌套、线程与恢复规则。`gpu-hybrid-build.log` 中编译、打包与架构扫描通过；相同日志的库存内核验证覆盖超过 2^53 的数量、供体超支、接收溢出、4097 行并行处理、连续常驻、失败保留原代次，以及完整导出后重新分配设备资源并续算。该恢复场景没有注入真实设备丢失。
+
+首次逐次回读压力乘积的实现通过 `activity-groups,controller-gas-lineage`，日志 `gpu-current-physics-fixed.log`；生产预算在 `gpu-hybrid-budget.log` 失败：最大溃坝 357.252 ms，连续 7 步超过 200 ms。该结果推动压力迭代整段迁入设备，原预算保持。
+
+整段压力迭代的定点结果见 `build/gpu-resident-pressure-repair.log`：GPU 完成 10 次压力求解，包含气压下限触发及解除、连续 8 步液体推进；与 CPU 的最大 MAC 动量差为 0。累计上传 92,480 B、回读 18,896 B，Vulkan timestamp 累计 0.341 ms。这里的设备时间仅覆盖计算 dispatch，完整步成本由上述生产预算入口单独判定。首次编译的 GLSL 保留字冲突已修复。
+
+
+`gpu-liquid-quantities.log` 的生产分份验证通过：Long.MAX_VALUE 质量和物种、接近 1 的份额、2^53 尾数、零质量物种及多个供体的结果与 CPU 一致；实际 `planRoutes` 批量执行设备分份后，完整库存、转移记录及提交结果相同，1101 位精确体积尾项保持。2 次设备批提交累计上传 568 B、回读 368 B、计算 9.6 μs。`gpu-device-loss-recovery.log` 的注入故障通过原请求完整重算、下一步 CPU 续算、源状态保持与一次释放；普通计算异常继续报告。真实驱动设备丢失尚未人为触发。
+
+首次整段串行 IC(0) 压力与 GPU 分份集成的 `gpu-resident-integrated-budget.log` 完成气体传质场景，最大溃坝预算失败：最大 742.716 ms，20 步全部超过 200 ms，压力设备计算累计 4.965 s。该产物还会按微小容量变化重建工作区；后续改为容量复用并替换串行三角求解。此处保留失败证据，最终结果另列。
+
+
+2026-10-24：先按生产耗时调整实现，停止重复一致性验证。并行 Jacobi-PCG 的首次完整预算 `gpu-parallel-delivery.log` 中小控制器最大 13.405 ms；最大溃坝仍连续 3 步超过 200 ms，因此该次判为失败。后续 `gpu-performance-profile.log` 的独立冷启动预算用于 JFR 定位，同样保留其失败结果。
+
+`gpu-pressure-layout-cost.log` 使用同一制造矩阵比较提交布局。9261 行的设备内循环耗时 15.202 ms，多工作组分阶段提交为 10.212 ms；512 行分别为 1.989 ms 和 6.307 ms。两种布局共用相同着色器阶段，具体布局选择留在代码。着色器与计算管线改为创建设备服务时准备，工作区扩容只更新缓冲区绑定；活动组热路径复用一次根查找，并直接返回已压平的父节点。
+
+最终原输入、装量、步数及预算的热运行 `gpu-cached-pipeline-budget.log` 通过。原气体场景用于同 JVM 预热，完整步计时仍包含请求捕获、恢复、求解与候选接管；该次还启用了 JFR 采样。小控制器中位 4.737 ms、最大 7.151 ms，满足逐步 40 ms；最大溃坝 20 步最大 160.168 ms，超过 200 ms 的步数为 0。压力累计 516 次设备求解，整数质量／物种累计 515 批、195762 个供体。此结果代表当前混合后端。
+
+早于管线复用的规模成本见 `gpu-pressure-scale.log`：同一 7 点制造矩阵，8³／16³／32³／64³ 的 GPU 热态完整求解均值分别为 2.146／8.496／26.361／204.842 ms；相同矩阵的独立 CPU Jacobi-PCG 为 1.028／2.408／24.701／459.002 ms。64³ 时设备逻辑存储约 59.7 MB、主机 staging 约 94.8 MB，每次上传约 31.2 MB、回读约 2.1 MB。这些数字只覆盖压力，不代表完整区域 20 Hz，也没有测量 Minecraft 同时渲染。
+
+最终打包与架构检查 `gpu-performance-package.log` 通过，扫描 557 个生产源文件。主模组与可选 Vulkan 组件产物分别为 `fabric/build/libs/mmm-fabric-0.17.0.jar`、`gpu-probe/build/libs/mmm-gpu-probe-0.1.17.jar`。

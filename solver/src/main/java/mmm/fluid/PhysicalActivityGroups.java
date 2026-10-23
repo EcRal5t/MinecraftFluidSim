@@ -206,8 +206,14 @@ final class PhysicalActivityGroups {
 
 	void abortStep() { enabled=false; }
 
-	boolean mechanicsActive(int cell) {return groupAvailable(cell)&&(!enabled||root(cell)>=0&&mechanical[root(cell)]);}
-	boolean thermalActive(int cell) {return groupAvailable(cell)&&(!enabled||root(cell)>=0&&thermal[root(cell)]);}
+	boolean mechanicsActive(int cell) {
+		int r=root(cell);
+		return worldCellAvailable(cell)&&(r<0||!blocked[r])&&(!enabled||r>=0&&mechanical[r]);
+	}
+	boolean thermalActive(int cell) {
+		int r=root(cell);
+		return worldCellAvailable(cell)&&(r<0||!blocked[r])&&(!enabled||r>=0&&thermal[r]);
+	}
 	boolean mechanicsFaceActive(int first,int second) {return mechanicsActive(first)||mechanicsActive(second);}
 	boolean thermalSleeping(int cell) {int r=root(cell);return r>=0&&!thermal[r];}
 	boolean mechanicsSleeping(int cell) {int r=root(cell);return r>=0&&!mechanical[r];}
@@ -238,6 +244,7 @@ final class PhysicalActivityGroups {
 	private void joinCells(int[] cells,boolean wake) {int anchor=-1;for(int cell:cells)if(root(cell)>=0){if(anchor<0)anchor=cell;else coupleCells(anchor,cell);if(wake)wakeCell(cell);}}
 	private int root(int cell) {
 		if(cell<0||cell>=parent.length||parent[cell]<0)return -1;
+		int direct=parent[cell];if(parent[direct]==direct)return direct;
 		int r=cell;while(parent[r]!=r)r=parent[r];
 		while(parent[cell]!=cell){int next=parent[cell];parent[cell]=r;cell=next;}
 		return r;

@@ -56,6 +56,15 @@ def registerGpuProbe = { String taskName, String descriptionText, String mainCla
 }
 
 registerGpuProbe(
+	'runGpuInventoryTransportValidation',
+	'Validates resident Vulkan int64 inventory gather and atomic candidate adoption.',
+	'mmm.gpuprobe.GpuInventoryTransportValidation',
+	'gpu-inventory-validation-work'
+) { probeTask ->
+	probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+}
+
+registerGpuProbe(
 	'runHeadlessGpuProbe',
 	'Runs the windowless Vulkan/Shaderc/VMA compute capability probe.',
 	'mmm.gpuprobe.HeadlessGpuProbeMain',
@@ -106,4 +115,53 @@ publishing {
 	publications {
 		create('mavenJava', MavenPublication) { from components.java }
 	}
+}
+
+registerGpuProbe(
+	'runGpuPressureScaleBenchmark',
+	'Measures current resident pressure solver against same-CSR CPU Jacobi-PCG at 8/16/32/64 cubed.',
+	'mmm.gpuprobe.GpuPressureScaleBenchmark',
+	'gpu-pressure-scale-work'
+) { probeTask ->
+	probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+		providers.gradleProperty('gpuPressureGridSizes').getOrElse('8,16,32,64'),
+		providers.gradleProperty('gpuPressureSamples').getOrElse('3'),
+		providers.gradleProperty('gpuPressureSingleGroupRows').getOrElse('16384')
+	probeTask.jvmArgs '-Xmx1g'
+}
+
+registerGpuProbe(
+	'runGpuPressureValidation',
+	'Runs resident Vulkan pressure solves inside current finite-volume candidates.',
+	'mmm.gpuprobe.GpuPressureValidation',
+	'gpu-pressure-validation-work'
+) { probeTask ->
+	probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+}
+
+registerGpuProbe(
+	'runGpuLiquidQuantityValidation',
+	'Validates actual Vulkan liquid mass and species partitions through production inventory plans.',
+	'mmm.gpuprobe.GpuLiquidQuantityValidation',
+	'gpu-liquid-quantity-work'
+) { probeTask ->
+	probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+}
+
+registerGpuProbe(
+	'runGpuCurrentPhysicsValidation',
+	'Runs existing complete physics scenarios with Vulkan pressure and liquid quantity computation.',
+	'mmm.gpuprobe.GpuCurrentPhysicsValidation',
+	'gpu-current-physics-work'
+) { probeTask ->
+	probeTask.dependsOn ':fabric:writeGpuPhysicsClasspath'
+	probeTask.doFirst {
+		probeTask.classpath += files(rootProject.file('fabric/build/gpu-physics-classpath.txt').text.split(java.util.regex.Pattern.quote(File.pathSeparator)))
+	}
+	probeTask.jvmArgs '-ea', '-Xmx512m'
+	if (providers.gradleProperty('gpuPhysicsProfile').map(String::toBoolean).getOrElse(false)) {
+		probeTask.jvmArgs "-XX:StartFlightRecording=filename=${rootProject.file('build/gpu-physics.jfr').absolutePath},settings=profile,dumponexit=true"
+	}
+	probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+		providers.gradleProperty('gpuPhysicsSelection').getOrElse('activity-groups,controller-gas-lineage')
 }

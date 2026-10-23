@@ -98,6 +98,15 @@ tasks.named('processTestResources') {
 	from validationMetadataDir
 }
 
+tasks.register('writeGpuPhysicsClasspath') {
+	dependsOn tasks.named('testClasses')
+	def destination = layout.buildDirectory.file('gpu-physics-classpath.txt')
+	outputs.file(destination)
+	doLast {
+		destination.get().asFile.text = (sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath).asPath
+	}
+}
+
 tasks.register('runCpuValidation', JavaExec) {
 	group = 'verification'
 	description = 'Runs selected CPU validation gates in one JVM (default: fast; use -PcpuValidation=list).'

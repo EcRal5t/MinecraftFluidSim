@@ -1,0 +1,41 @@
+#version 450
+#extension GL_ARB_gpu_shader_int64 : require
+#extension GL_ARB_gpu_shader_fp64 : require
+layout(local_size_x=128) in;
+struct Donor { int partStart; int count; int remainder; int inputStart; int speciesCount; int outputStart; int pad0; int pad1; };
+layout(binding=0,std430) readonly buffer Donors { Donor donors[]; };
+layout(binding=1,std430) readonly buffer Fractions { double fractions[]; };
+layout(binding=2,std430) readonly buffer Quantities { int64_t quantities[]; };
+layout(binding=3,std430) buffer Shares { int64_t shares[]; };
+layout(push_constant) uniform Params { int count; } p;
+
+// Java's positive double-to-long cast saturates at Long.MAX_VALUE.
+int64_t share(int64_t total,double fraction,int64_t remaining) {
+    precise double numerical=double(total)*fraction;
+    if(numerical>=9223372036854775808.0)return remaining;
+    return min(remaining,int64_t(numerical));
+}
+void main() {
+    uint id=gl_GlobalInvocationID.x;if(id>=uint(p.count))return;
+    Donor d=donors[id];int64_t mass=quantities[d.inputStart],remaining=mass;
+    for(int part=0;part<d.count;part++)if(part!=d.remainder){
+        int64_t amount=share(mass,fractions[d.partStart+part],remaining);
+        shares[d.outputStart+part]=amount;remaining-=amount;
+    }
+    shares[d.outputStart+d.remainder]=remaining;
+    int largest=0;
+    for(int part=1;part<d.count;part++)if(shares[d.outputStart+part]>shares[d.outputStart+largest])largest=part;
+    int remainder=mass==0?d.remainder:largest;
+    for(int species=0;species<d.speciesCount;species++){
+        int64_t total=quantities[d.inputStart+1+species];remaining=total;
+        int outputStart=d.outputStart+(species+1)*d.count;
+        for(int part=0;part<d.count;part++)if(part!=remainder){
+            precise double fraction;
+            if(mass==0)fraction=fractions[d.partStart+part];
+            else fraction=double(shares[d.outputStart+part])/double(mass);
+            int64_t amount=share(total,fraction,remaining);
+            shares[outputStart+part]=amount;remaining-=amount;
+        }
+        shares[outputStart+remainder]=remaining;
+    }
+}
