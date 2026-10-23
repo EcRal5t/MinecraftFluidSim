@@ -15,7 +15,7 @@ import static org.lwjgl.vulkan.VK10.*;
 /** Device-local generations shared by captures and private compute candidates. */
 final class VulkanRegionStorage implements AutoCloseable {
     record Metrics(long submissions, long uploadBytes, long readbackBytes, long copiedBytes,
-                   long gpuNanos, int allocatedGenerations, long deviceBytes, long stagingBytes) { }
+                   long gpuNanos, long recordingNanos, long waitingNanos, int allocatedGenerations, long deviceBytes, long stagingBytes) { }
 
     @FunctionalInterface
     interface ComputeCommands {
@@ -31,7 +31,7 @@ final class VulkanRegionStorage implements AutoCloseable {
     private GpuBuffer errors;
     private Version committed;
     private boolean closed;
-    private long submissions, uploadBytes, readbackBytes, copiedBytes, gpuNanos;
+    private long submissions, uploadBytes, readbackBytes, copiedBytes, gpuNanos, recordingNanos, waitingNanos;
 
     VulkanRegionStorage(VulkanDeviceContext context, long bytes, int stagingBytes) {
         if (bytes < 4 || (bytes & 3) != 0 || stagingBytes < 4 || (stagingBytes & 3) != 0)
@@ -53,7 +53,7 @@ final class VulkanRegionStorage implements AutoCloseable {
     synchronized Metrics metrics() {
         long deviceBytes = 4;
         for (Slot slot : slots) deviceBytes = Math.addExact(deviceBytes, slot.buffer.size());
-        return new Metrics(submissions, uploadBytes, readbackBytes, copiedBytes, gpuNanos,
+        return new Metrics(submissions, uploadBytes, readbackBytes, copiedBytes, gpuNanos, recordingNanos, waitingNanos,
                 slots.size(), deviceBytes, (long) stagingBytes * GpuStepScheduler.RING_SIZE);
     }
 
@@ -244,6 +244,7 @@ final class VulkanRegionStorage implements AutoCloseable {
                 attempted = true; submitted = false;
                 try (MemoryStack stack = stackPush()) {
                     var submission = scheduler.acquire();
+                    long recordingStart=System.nanoTime();
                     var command = scheduler.begin(submission, "region-step");
                     if (context.hasTimestampQueries()) {
                         vkCmdResetQueryPool(command, submission.timestampQueryPool(), 0, 2);
@@ -267,7 +268,9 @@ final class VulkanRegionStorage implements AutoCloseable {
                             VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT, stack);
                     if (context.hasTimestampQueries())
                         vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, submission.timestampQueryPool(), 1);
+                    long waitingStart=System.nanoTime();recordingNanos+=waitingStart-recordingStart;
                     scheduler.submitAndWait(stack, submission, "region-step");
+                    waitingNanos+=System.nanoTime()-waitingStart;
                     error = submission.stagingBuffer().bytes().getInt(0);
                     var feedback = ByteBuffer.allocate(feedbackBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN);
                     feedback.put(submission.stagingBuffer().bytes().slice(4, feedbackBytes)).flip();

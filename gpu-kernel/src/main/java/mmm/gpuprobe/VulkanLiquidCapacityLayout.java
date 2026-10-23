@@ -48,7 +48,7 @@ final class VulkanLiquidCapacityLayout {
                 case BLOCK_GROUP, BLOCK_IN, BLOCK_OUT, BLOCK_BASE, BLOCK_PREFIX -> blockCapacity;
                 case FLOW, SOURCE_LIMIT, TARGET_LIMIT, ACTIVE_EDGES, EDGE_MARK -> edges;
                 case COUNTERS -> 4;
-                case DISPATCH -> 9;
+                case DISPATCH -> 12;
                 case ACTIVE, AFFECTED, MARK -> vertices;
                 case SCAN_WORKSPACE -> Math.toIntExact(VulkanPrefixScan.workspaceBytes(groups) / 4);
                 default -> cells;

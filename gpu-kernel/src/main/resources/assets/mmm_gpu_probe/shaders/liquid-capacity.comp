@@ -38,7 +38,7 @@ void initialize(int id){
  if(id<7*n()){putWide(FLOW,id,int64_t(0));putWide(SOURCE_LIMIT,id,INF);putWide(TARGET_LIMIT,id,INF);put(EDGE_MARK,id,0);}
  if(id<n()){put(MARK,id,1);put(ACTIVE,id,id);}
  if(id<groups()){put(GC,id,0);put(CURSOR,id,0);}
- if(id==0){for(int i=0;i<12;i++)put(CONTROL,i,0);for(int i=0;i<4;i++)put(COUNTERS,i,0);put(CONTROL,3,n());put(CONTROL,5,p.argument);put(CONTROL,7,h(4)>0?1:0);for(int i=0;i<3;i++){put(DISPATCH,3*i,0);put(DISPATCH,3*i+1,1);put(DISPATCH,3*i+2,1);}}
+ if(id==0){for(int i=0;i<12;i++)put(CONTROL,i,0);for(int i=0;i<4;i++)put(COUNTERS,i,0);put(CONTROL,3,n());put(CONTROL,5,p.argument);put(CONTROL,7,h(4)>0?1:0);for(int i=0;i<3;i++){put(DISPATCH,3*i,0);put(DISPATCH,3*i+1,1);put(DISPATCH,3*i+2,1);}put(DISPATCH,9,min((n()+127)/128,256));put(DISPATCH,10,1);put(DISPATCH,11,1);}
 }
 void countGroup(int cell){
  int g=get(GROUP_ID,cell);int64_t k=wide(K,cell),lo=wide(LOWER,cell),hi=wide(UPPER,cell);
@@ -147,6 +147,7 @@ void finishRound(){
  bool groupPhase=get(CONTROL,0)==RUNNING&&get(CONTROL,8)!=0;
  for(int i=0;i<3;i++){int blocks=groupPhase?(i==1?h(4):get(BO,groups())):0;
   put(DISPATCH,3*i,min(blocks,65535));put(DISPATCH,3*i+1,blocks==0?1:(blocks+65534)/65535);put(DISPATCH,3*i+2,1);}
+ put(DISPATCH,9,get(CONTROL,0)!=RUNNING?0:groupPhase?256:min((count+127)/128,256));put(DISPATCH,10,1);put(DISPATCH,11,1);
 }
 void finish(int id){
  if(get(CONTROL,0)!=FEASIBLE){if(id==0)atomicOr(errors,8192u);return;}

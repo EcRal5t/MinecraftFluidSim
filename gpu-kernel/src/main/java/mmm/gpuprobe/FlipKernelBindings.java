@@ -37,6 +37,10 @@ final class FlipKernelBindings implements AutoCloseable {
 	private long pipeline;
 	private long descriptorPool;
 	private long descriptorSet;
+    private final java.util.Map<List<BindingKey>,Long> descriptorSets=new java.util.HashMap<>();
+    private final java.util.List<Long> descriptorPools=new java.util.ArrayList<>();
+    private int poolAllocated;
+    private static final int SETS_PER_POOL=64;
 
 	FlipKernelBindings(VulkanDeviceContext context, FlipGpuResources resources) {
 		this(context, resources, GpuProbeShaderSource.loadFlip(), PUSH_BYTES);
@@ -113,20 +117,21 @@ final class FlipKernelBindings implements AutoCloseable {
 			pipeline = pipelinePointer.get(0);
 
 			VkDescriptorPoolSize.Buffer poolSize = VkDescriptorPoolSize.calloc(1, stack);
-			poolSize.get(0).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(bindingCount);
+			poolSize.get(0).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(bindingCount*SETS_PER_POOL);
 			VkDescriptorPoolCreateInfo poolInfo = VkDescriptorPoolCreateInfo.calloc(stack).sType$Default()
-					.maxSets(1).pPoolSizes(poolSize);
+					.maxSets(SETS_PER_POOL).pPoolSizes(poolSize);
 			LongBuffer poolPointer = stack.mallocLong(1);
 			VulkanDeviceContext.check(vkCreateDescriptorPool(context.device(), poolInfo, null, poolPointer),
 					"vkCreateDescriptorPool");
 			descriptorPool = poolPointer.get(0);
+            descriptorPools.add(descriptorPool);
 
 			VkDescriptorSetAllocateInfo setInfo = VkDescriptorSetAllocateInfo.calloc(stack).sType$Default()
 					.descriptorPool(descriptorPool).pSetLayouts(stack.longs(descriptorLayout));
 			LongBuffer setPointer = stack.mallocLong(1);
 			VulkanDeviceContext.check(vkAllocateDescriptorSets(context.device(), setInfo, setPointer),
 					"vkAllocateDescriptorSets");
-			descriptorSet = setPointer.get(0);
+			descriptorSet = setPointer.get(0);poolAllocated=1;
 		}
 	}
 
@@ -134,6 +139,12 @@ final class FlipKernelBindings implements AutoCloseable {
 	void rebind(FlipGpuResources resources) {
 		rebind(IntStream.range(0, resources.size()).mapToObj(resources::buffer).toList());
 	}
+
+    record BufferIdentity(GpuBuffer buffer) {
+        @Override public boolean equals(Object other){return other instanceof BufferIdentity identity&&buffer==identity.buffer;}
+        @Override public int hashCode(){return System.identityHashCode(buffer);}
+    }
+    private record BindingKey(BufferIdentity buffer,long offset,long bytes) { }
 
 	record BufferRange(GpuBuffer buffer, long offset, long bytes) {
 		BufferRange(GpuBuffer buffer) { this(buffer, 0, buffer.size()); }
@@ -145,7 +156,10 @@ final class FlipKernelBindings implements AutoCloseable {
 
 	void rebindRanges(List<BufferRange> buffers) {
 		if (buffers.size() != bindingCount) throw new IllegalArgumentException("Compute binding count differs");
+        var key=buffers.stream().map(range->new BindingKey(new BufferIdentity(range.buffer()),range.offset(),range.bytes())).toList();var cached=descriptorSets.get(key);
+        if(cached!=null){descriptorSet=cached;return;}
 		try (MemoryStack stack = stackPush()) {
+            if(!descriptorSets.isEmpty())descriptorSet=allocateDescriptorSet(stack);
 			VkDescriptorBufferInfo.Buffer infos = VkDescriptorBufferInfo.calloc(bindingCount, stack);
 			VkWriteDescriptorSet.Buffer writes = VkWriteDescriptorSet.calloc(bindingCount, stack);
 			for (int i = 0; i < bindingCount; i++) {
@@ -156,8 +170,21 @@ final class FlipKernelBindings implements AutoCloseable {
 						.pBufferInfo(VkDescriptorBufferInfo.create(infos.get(i).address(), 1));
 			}
 			vkUpdateDescriptorSets(context.device(), writes, null);
+            descriptorSets.put(key,descriptorSet);
 		}
 	}
+
+    private long allocateDescriptorSet(MemoryStack stack) {
+        if(poolAllocated==SETS_PER_POOL){
+            var size=VkDescriptorPoolSize.calloc(1,stack);size.get(0).type(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER).descriptorCount(bindingCount*SETS_PER_POOL);
+            var info=VkDescriptorPoolCreateInfo.calloc(stack).sType$Default().maxSets(SETS_PER_POOL).pPoolSizes(size);
+            var pointer=stack.mallocLong(1);VulkanDeviceContext.check(vkCreateDescriptorPool(context.device(),info,null,pointer),"vkCreateDescriptorPool(cache)");
+            descriptorPool=pointer.get(0);descriptorPools.add(descriptorPool);poolAllocated=0;
+        }
+        var info=VkDescriptorSetAllocateInfo.calloc(stack).sType$Default().descriptorPool(descriptorPool).pSetLayouts(stack.longs(descriptorLayout));
+        var pointer=stack.mallocLong(1);VulkanDeviceContext.check(vkAllocateDescriptorSets(context.device(),info,pointer),"vkAllocateDescriptorSets(cache)");
+        poolAllocated++;return pointer.get(0);
+    }
 
 	static ByteBuffer compileShader(String source) {
 		long compiler = org.lwjgl.util.shaderc.Shaderc.shaderc_compiler_initialize();
@@ -192,7 +219,8 @@ final class FlipKernelBindings implements AutoCloseable {
 	@Override
 	public void close() {
 		if (context.device() == null) return;
-		if (descriptorPool != VK_NULL_HANDLE) vkDestroyDescriptorPool(context.device(), descriptorPool, null);
+		for(long pool:descriptorPools)vkDestroyDescriptorPool(context.device(),pool,null);
+        descriptorPools.clear();descriptorSets.clear();
 		if (pipeline != VK_NULL_HANDLE) vkDestroyPipeline(context.device(), pipeline, null);
 		if (shaderModule != VK_NULL_HANDLE) vkDestroyShaderModule(context.device(), shaderModule, null);
 		if (pipelineLayout != VK_NULL_HANDLE) vkDestroyPipelineLayout(context.device(), pipelineLayout, null);

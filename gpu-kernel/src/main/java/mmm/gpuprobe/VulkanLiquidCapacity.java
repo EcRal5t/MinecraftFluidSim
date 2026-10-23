@@ -78,10 +78,10 @@ final class VulkanLiquidCapacity implements AutoCloseable {
             if(stage<5||stage==14)bindings.bind(command, stack);
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                     stack.ints(layout.word(VulkanLiquidCapacityLayout.Field.HEADER), stage, count, argument, 0));
-            if(stage>=5&&stage<=7) {
+            if((stage>=5&&stage<=7)||stage==10) {
                 barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
-                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+layout.column(VulkanLiquidCapacityLayout.Field.DISPATCH).offset()+12L*(stage-5));
+                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+layout.column(VulkanLiquidCapacityLayout.Field.DISPATCH).offset()+12L*(stage==10?3:stage-5));
             } else vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);
             barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, stack);
