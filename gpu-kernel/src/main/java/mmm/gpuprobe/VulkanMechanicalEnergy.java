@@ -11,7 +11,8 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Closes actual force K, transported PE and gas compression work on connected caloric bodies. */
 final class VulkanMechanicalEnergy implements AutoCloseable {
-    record GranularEnergy(VulkanLiquidThermodynamics.Layout thermal,int sourceHeatWordOffset,int externalWorkWordOffset) { }
+    record GranularEnergy(VulkanLiquidThermodynamics.Layout thermal,VulkanGranularGeometry.Layout geometry,
+                          int sourceHeatWordOffset,int externalWorkWordOffset) { }
     record Layout(VulkanMechanicalBodies.Layout bodies,VulkanLiquidMomentum.Layout momentum,
                   VulkanLiquidThermodynamics.Layout thermal,int gasWorkWordOffset,int sourceHeatWordOffset,int externalWorkWordOffset,
                   GranularEnergy granular,
@@ -45,6 +46,9 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
                 data[91]=pressure.word(VulkanGranularPressure.Field.SOURCE_Y);data[92]=pressure.word(VulkanGranularPressure.Field.FINAL_Y);
                 data[93]=state.word(VulkanGranularStateLayout.Field.MASS_UNITS);data[94]=word(granularTerms);data[95]=word(granularChanges);
                 data[96]=granular.externalWorkWordOffset();data[97]=granular.sourceHeatWordOffset();
+                data[98]=state.depositCapacity();data[99]=granular.geometry().word(VulkanGranularGeometry.Field.OFFSETS);
+                data[100]=granular.geometry().word(VulkanGranularGeometry.Field.ENTRIES);
+                data[101]=state.word(VulkanGranularStateLayout.Field.DEPOSIT_CELL);
             }
             for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);return out;
         }
@@ -80,7 +84,8 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
         if(scratchBase<Math.max(bodies.endOffset(),Math.max(momentum.endOffset(),thermal.endOffset()))
                 ||alignment<8||(alignment&(alignment-1))!=0||thermal.liquid()!=momentum.output()
                 ||bodies.source().cellCount()!=thermal.liquid().cellCount())throw new IllegalArgumentException("Mechanical energy layouts differ");
-        if((granular==null)!=(bodies.granular()==null)||granular!=null&&(scratchBase<granular.thermal().endOffset()
+        if((granular==null)!=(bodies.granular()==null)||granular!=null&&(scratchBase<Math.max(granular.thermal().endOffset(),granular.geometry().endOffset())
+                ||granular.geometry().state()!=bodies.granular().state()
                 ||granular.thermal().inventory().countsWord()!=bodies.granular().state().word(VulkanGranularStateLayout.Field.COUNTS)))
             throw new IllegalArgumentException("Granular caloric inventory differs from mechanical bodies");
         int vertices=bodies.vertices();long[] cursor={scratchBase};var header=column(cursor,128,4,alignment);
@@ -93,7 +98,8 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
         var changes=column(cursor,Math.multiplyExact(thermal.liquid().stockCapacity(),2),8,alignment);
         var dispatch=column(cursor,3,4,alignment);var scan=column(cursor,Math.toIntExact(VulkanPrefixScan.workspaceBytes(vertices)/4),4,alignment);
         int particles=granular==null?0:bodies.granular().state().particleCapacity();
-        var granularTerms=column(cursor,Math.multiplyExact(particles,4),8,alignment);var granularChanges=column(cursor,Math.multiplyExact(particles,2),8,alignment);
+        int granularRows=granular==null?0:Math.addExact(particles,bodies.granular().state().depositCapacity());
+        var granularTerms=column(cursor,Math.multiplyExact(particles,4),8,alignment);var granularChanges=column(cursor,Math.multiplyExact(granularRows,2),8,alignment);
         return new Layout(bodies,momentum,thermal,gasWorkWordOffset,sourceHeatWordOffset,externalWorkWordOffset,granular,header,faces,potential,vertex,counts,offsets,roots,partials,result,changes,dispatch,scan,granularTerms,granularChanges,align(cursor[0],alignment));
     }
     private final FlipKernelBindings bindings;
@@ -110,7 +116,7 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
     void record(VkCommandBuffer command,Layout layout,double cellSize,double gravity){
         stage(command,layout,0,layout.bodies().faces(),cellSize,gravity,false);
         stage(command,layout,1,layout.momentum().source().stockCapacity(),cellSize,gravity,false);
-        if(layout.granular()!=null)stage(command,layout,8,layout.bodies().granular().state().particleCapacity(),cellSize,gravity,false);
+        if(layout.granular()!=null)stage(command,layout,8,layout.granularChanges().count()/2,cellSize,gravity,false);
         stage(command,layout,2,layout.bodies().vertices(),cellSize,gravity,false);
         scan.record(command,layout.bodies().vertices(),word(layout.blockCounts()),word(layout.blockOffsets()),word(layout.scanWorkspace()));
         stage(command,layout,3,layout.bodies().vertices(),cellSize,gravity,false);
@@ -118,7 +124,7 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
         stage(command,layout,5,layout.bodies().vertices(),cellSize,gravity,true);
         stage(command,layout,6,layout.thermal().liquid().stockCapacity(),cellSize,gravity,false);
         stage(command,layout,7,layout.thermal().liquid().cellCount(),cellSize,gravity,false);
-        if(layout.granular()!=null)stage(command,layout,9,layout.bodies().granular().state().particleCapacity(),cellSize,gravity,false);
+        if(layout.granular()!=null)stage(command,layout,9,layout.granularChanges().count()/2,cellSize,gravity,false);
     }
     private void stage(VkCommandBuffer command,Layout layout,int stage,int count,double cellSize,double gravity,boolean indirect){
         if(count==0)return;int groups=(count+127)/128;

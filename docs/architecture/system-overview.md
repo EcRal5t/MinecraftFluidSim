@@ -707,7 +707,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [VulkanLiquidForces](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidForces.java)：从材料热膨胀律与单元共同温度派生热浮力，按 MAC 对偶质量向格面施加动量变化
     - [VulkanSurfaceTension](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanSurfaceTension.java)：高度函数与接触角曲率、液气界面平衡压力及不混溶液相对的表面张力；已与热浮力进入连续步，非零毛细场景成本待测
     - [VulkanLiquidViscosity](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidViscosity.java)、[VulkanMechanicalHeatTransport](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanMechanicalHeatTransport.java)：材料温度黏性、壁面与规定运动接触的隐式耗散、局部热量随实际整数质量路线搬运；已进入连续液气机械候选
-    - [VulkanMechanicalEnergy](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanMechanicalEnergy.java)：液体与实际接纳颗粒运动的共同力学做功、热载体分配和内能端点舍入流；设备间接派发实际归约块，连通体最终汇总由工作组协作完成
+    - [VulkanMechanicalEnergy](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanMechanicalEnergy.java)：液体与实际接纳颗粒运动的共同力学做功、热载体分配和内能端点舍入流；沉积床按所属单元参与热量分配，设备间接派发实际归约块，连通体最终汇总由工作组协作完成
     - [VulkanEnergyLedger](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanEnergyLedger.java)：`record` 按二进制位归总有符号能量项，输出精确 dyadic 热量与舍入账；中间累计采用设备整数列
     - [GpuLiquidGatherBenchmark](../../gpu-kernel/src/main/java/mmm/gpuprobe/GpuLiquidGatherBenchmark.java)：固定源已接受单元体积的材料路线、数量分配、库存归并、MAC、热写入与精确账分项成本及少量 checkpoint
     - [GpuLiquidMechanicalBenchmark](../../gpu-kernel/src/main/java/mmm/gpuprobe/GpuLiquidMechanicalBenchmark.java)：普通环境与有限气腔的液体连续提交成本，覆盖压力、容量、材料库存、MAC、气体搬运与做功、热与精确账；网格、预热和采样由 Gradle 属性指定

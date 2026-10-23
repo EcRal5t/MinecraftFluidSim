@@ -39,8 +39,9 @@ void potentialTerms(int stock){
     store(h(21)+4*stock+2,-double(mass(h(10)+2*(7*stock+4)))*1e-10*p.gravity*p.cellSize);
 }
 void particleTerms(int index){
-    for(int i=0;i<4;i++)store(h(94)+8*index+2*i,0.0);
     store(h(95)+4*index,0.0);store(h(95)+4*index+2,0.0);
+    if(index>=h(84))return;
+    for(int i=0;i<4;i++)store(h(94)+8*index+2*i,0.0);
     if(index>=int(words[h(85)]))return;
     double weight=double(mass(h(93)+2*index))*1e-10*p.gravity;
     store(h(94)+8*index,value(h(89)+2*index));store(h(94)+8*index+2,-value(h(90)+2*index));
@@ -62,6 +63,11 @@ void vertex(int index){
         }
         for(int stock=int(words[dst(1)+index]);stock<int(words[dst(1)+index+1]);stock++){
             capacity+=value(h(16)+2*stock);available+=max(0.0,value(dst(9)+2*stock)-value(h(17)+2*stock));
+        }
+        if(h(98)>0)for(int cursor=int(words[h(99)+index]);cursor<int(words[h(99)+index+1]);cursor++){
+            int entry=int(words[h(100)+cursor]);if(entry<8*h(84))continue;
+            int row=h(84)+entry-8*h(84);
+            capacity+=value(h(86)+2*row);available+=max(0.0,value(h(88)+2*row)-value(h(87)+2*row));
         }
         if(h(18)>=0)exchange=add(exchange,-value(h(18)+2*index));
         if(h(19)>=0)exchange=add(exchange,value(h(19)+2*index));
@@ -133,14 +139,16 @@ void postCell(int index){
         store(h(28)+4*stock,change.x);store(h(28)+4*stock+2,change.y);
     }
 }
-void postParticle(int particle){
-    if(particle>=int(words[h(85)]))return;
-    int root=int(words[h(12)+h(3)+h(83)+particle]);dvec4 body=data(h(27),root);double work=body.x+body.y;
-    if(work==0.0)return;double before=value(h(88)+2*particle),cold=value(h(87)+2*particle);
-    double weight=work<0.0?max(0.0,before-cold):value(h(86)+2*particle),total=work<0.0?body.w:body.z;
+void postGranular(int row){
+    int vertex;
+    if(row<h(84)){if(row>=int(words[h(85)]))return;vertex=h(3)+h(83)+row;}
+    else{int deposit=row-h(84);if(deposit>=int(words[h(85)+1]))return;vertex=int(words[h(101)+deposit]);}
+    int root=int(words[h(12)+vertex]);dvec4 body=data(h(27),root);double work=body.x+body.y;
+    if(work==0.0)return;double before=value(h(88)+2*row),cold=value(h(87)+2*row);
+    double weight=work<0.0?max(0.0,before-cold):value(h(86)+2*row),total=work<0.0?body.w:body.z;
     if(weight==0.0)return;double after=max(cold,before+work*(weight/total));
-    dvec2 change=twoSum(after,-before);store(h(88)+2*particle,after);
-    store(h(95)+4*particle,change.x);store(h(95)+4*particle+2,change.y);
+    dvec2 change=twoSum(after,-before);store(h(88)+2*row,after);
+    store(h(95)+4*row,change.x);store(h(95)+4*row+2,change.y);
 }
 void main(){
     int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),item=block*128+lane;
@@ -153,6 +161,6 @@ void main(){
     else if(p.stage==3){if(item<h(4))mapBlocks(item);}
     else if(p.stage==6){if(item<h(7)){store(h(28)+4*item,0.0);store(h(28)+4*item+2,0.0);}}
     else if(p.stage==7){if(item<h(3))postCell(item);}
-    else if(p.stage==8){if(item<h(84))particleTerms(item);}
-    else if(item<h(84))postParticle(item);
+    else if(p.stage==8){if(item<h(84)+h(98))particleTerms(item);}
+    else if(item<h(84)+h(98))postGranular(item);
 }
