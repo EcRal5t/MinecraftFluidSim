@@ -71,7 +71,7 @@ final class VulkanLiquidMaterialRoutes implements AutoCloseable {
     private final VulkanPrefixScan scan;
     VulkanLiquidMaterialRoutes(VulkanDeviceContext context) {
         bindings = new FlipKernelBindings(context, 3,
-                resource("liquid-material-routes.comp").replace("// DYADIC_LIBRARY", resource("liquid-dyadic.glsl")), 12);
+                resource("liquid-material-routes.comp").replace("// DYADIC_LIBRARY", resource("liquid-dyadic.glsl")), 16);
         try { scan = new VulkanPrefixScan(context); }
         catch (RuntimeException | LinkageError failure) {
             try { bindings.close(); } catch (RuntimeException | LinkageError closing) { failure.addSuppressed(closing); }
@@ -83,22 +83,24 @@ final class VulkanLiquidMaterialRoutes implements AutoCloseable {
         bindings.rebindRanges(List.of(source, candidate, errors));
         scan.rebindRanges(candidate, candidate, candidate, errors);
     }
-    void record(VkCommandBuffer command, Layout layout) {
-        stage(command, layout, 0, layout.windowCount());
-        stage(command, layout, 1, layout.source().cellCount());
+    void record(VkCommandBuffer command, Layout layout) { record(command, layout, layout.gravitySign()); }
+    void record(VkCommandBuffer command, Layout layout, int gravitySign) {
+        if (gravitySign < -1 || gravitySign > 1) throw new IllegalArgumentException("Invalid gravity direction");
+        stage(command, layout, 0, layout.windowCount(), gravitySign);
+        stage(command, layout, 1, layout.source().cellCount(), gravitySign);
         scan.record(command, layout.windowCount(), word(layout.reserveCounts()), word(layout.reserveOffsets()), word(layout.scanWorkspace()));
-        stage(command, layout, 2, layout.source().cellCount());
+        stage(command, layout, 2, layout.source().cellCount(), gravitySign);
         scan.record(command, layout.routes().routeCapacity(), word(layout.routeCounts()),
                 word(layout.routes().column(VulkanLiquidRouteLayout.Field.VOLUME_OFFSETS)), word(layout.scanWorkspace()));
-        stage(command, layout, 3, layout.routes().routeCapacity());
+        stage(command, layout, 3, layout.routes().routeCapacity(), gravitySign);
     }
-    private void stage(VkCommandBuffer command, Layout layout, int stage, int count) {
+    private void stage(VkCommandBuffer command, Layout layout, int stage, int count, int gravitySign) {
         if (count == 0) return;
         int groups = (int) (((long) count + 127) / 128);
         try (var stack = stackPush()) {
             bindings.bind(command, stack);
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                    stack.ints(layout.headerWordOffset(), stage, count));
+                    stack.ints(layout.headerWordOffset(), stage, count, gravitySign));
             vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);
             barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, stack);

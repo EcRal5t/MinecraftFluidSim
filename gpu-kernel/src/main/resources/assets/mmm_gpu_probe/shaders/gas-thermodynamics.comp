@@ -1,0 +1,150 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) buffer Candidate { uint words[]; };
+layout(binding=1,std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Params {
+    int header;int stage;int count;int memberOffsets;int members;int dryVolumes;int cellNodes;int cells;
+} p;
+const int COUNTS=0,KEYS=1,ROW_OFFSETS=3,COMPONENTS=4,NANOS=5,MASS=6,SPECIES_OFFSETS=8,
+          SPECIES_HANDLES=9,SPECIES_AMOUNTS=10,ENERGY_PRESENT=11,ENERGY=12;
+shared double volumeParts[128];
+shared int volumeBegin,volumeEnd,volumeValid;
+int h(int index) { return int(words[p.header+index]); }
+int gas(int field) { return h(16+field); }
+double number(int at) { return packDouble2x32(uvec2(words[at],words[at+1])); }
+void putNumber(int at,double value) { uvec2 bits=unpackDouble2x32(value);words[at]=bits.x;words[at+1]=bits.y; }
+int64_t integer(int at) { return int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32)); }
+bool finite(double value) { return !isnan(value)&&!isinf(value); }
+void invalid() { atomicOr(errors,16384u); }
+void addCompensated(inout double sum,inout double correction,double value) {
+    precise double adjusted=value-correction;precise double next=sum+adjusted;
+    correction=(next-sum)-adjusted;sum=next;
+}
+void reduceVolume(int node,int lane) {
+    // Uniform exits precede every barrier. Errors arising in one workgroup never strand another.
+    if(node>=p.count)return;
+    if(lane==0) {
+        volumeBegin=0;volumeEnd=0;volumeValid=0;
+        int actual=int(words[gas(COUNTS)]);
+        if(actual<0||actual>h(0))invalid();
+        else if(node<actual&&errors==0u) {
+            int key=int(words[gas(KEYS)+node]),cell=key/8;
+            if(key<0||cell>=p.cells)invalid();
+            else {
+                int row=int(words[p.cellNodes+cell]);
+                if(row<=0||row>p.cells)invalid();
+                else {volumeBegin=int(words[p.memberOffsets+row]);volumeEnd=int(words[p.memberOffsets+row+1]);volumeValid=1;}
+            }
+        }
+    }
+    barrier();
+    double sum=0.0,correction=0.0;
+    for(int item=volumeBegin+lane;item<volumeEnd;item+=128) {
+        int cell=int(words[p.members+item]);double volume=number(p.dryVolumes+2*cell);
+        addCompensated(sum,correction,volume);
+    }
+    volumeParts[lane]=sum;barrier();
+    for(int width=64;width>0;width>>=1) { if(lane<width)volumeParts[lane]+=volumeParts[lane+width];barrier(); }
+    if(lane==0) {
+        double volume=volumeParts[0];
+        if(volumeValid!=0&&(!finite(volume)||volume<=0.0))invalid();
+        putNumber(h(3)+2*node,volumeValid!=0?volume:0.0);
+    }
+}
+bool inventory(int node,out int first,out int last,out double anchor,out double mass,out double r) {
+    first=int(words[gas(ROW_OFFSETS)+node]);last=int(words[gas(ROW_OFFSETS)+node+1]);
+    int components=int(words[gas(COUNTS)+1]),species=int(words[gas(COUNTS)+2]);
+    if(first<0||last<first||last>components){invalid();return false;}
+    anchor=0.0;double correction=0.0;int64_t totalMass=int64_t(0),totalNanos=int64_t(0);
+    for(int component=first;component<last;component++) {
+        int handle=int(words[gas(COMPONENTS)+component]);
+        if(handle<0||handle>=h(1)){invalid();return false;}
+        int begin=int(words[h(4)+handle]),end=int(words[h(4)+handle+1]);
+        double reference=number(h(7)+2*handle);
+        int64_t componentMass=integer(gas(MASS)+2*component),nanos=integer(gas(NANOS)+2*component);
+        if(begin==end||!finite(reference)||componentMass<=int64_t(0)||nanos<=int64_t(0)
+                ||componentMass>int64_t(0x7fffffffffffffffUL)-totalMass||nanos>int64_t(0x7fffffffffffffffUL)-totalNanos) {
+            invalid();return false;
+        }
+        totalMass+=componentMass;totalNanos+=nanos;
+        addCompensated(anchor,correction,double(componentMass)*1e-10LF*reference);
+        int speciesBegin=int(words[gas(SPECIES_OFFSETS)+component]),speciesEnd=int(words[gas(SPECIES_OFFSETS)+component+1]);
+        if(speciesBegin<0||speciesEnd<speciesBegin||speciesEnd>species){invalid();return false;}
+        for(int entry=speciesBegin;entry<speciesEnd;entry++) {
+            int64_t amount=integer(gas(SPECIES_AMOUNTS)+2*entry);if(amount==int64_t(0))continue;
+            int speciesHandle=int(words[gas(SPECIES_HANDLES)+entry]);
+            if(amount<int64_t(0)||speciesHandle<0||speciesHandle>=h(2)){invalid();return false;}
+            double offset=number(h(8)+2*(handle*h(2)+speciesHandle));
+            if(!finite(offset)){invalid();return false;}
+            addCompensated(anchor,correction,double(amount)*offset);
+        }
+    }
+    mass=double(totalMass)*1e-10LF;r=double(totalNanos)*number(p.header+36);
+    if(!finite(anchor)||!finite(mass)||!finite(r)){invalid();return false;}return true;
+}
+// The union of material segment endpoints is traversed implicitly. Each iteration
+// advances to the next real caloric endpoint, so there is no numerical iteration cap.
+double capacityAndBoundary(int first,int last,double temperature,bool heating,out double boundary) {
+    boundary=heating?packDouble2x32(uvec2(0u,0x7ff00000u)):number(p.header+34);
+    double capacity=0.0,correction=0.0;
+    for(int component=first;component<last;component++) {
+        int handle=int(words[gas(COMPONENTS)+component]);
+        int begin=int(words[h(4)+handle]),end=int(words[h(4)+handle+1]),segment=begin;
+        while(segment+1<end) {
+            double upper=number(h(5)+2*segment);
+            if(heating?temperature<upper:temperature<=upper)break;
+            segment++;
+        }
+        double cp=number(h(6)+2*segment),mass=double(integer(gas(MASS)+2*component))*1e-10LF;
+        addCompensated(capacity,correction,mass*cp);
+        if(heating&&segment+1<end)boundary=min(boundary,number(h(5)+2*segment));
+        else if(!heating&&segment>begin)boundary=max(boundary,number(h(5)+2*(segment-1)));
+    }
+    return capacity;
+}
+void derive(int node) {
+    if(node>=p.count)return;
+    int outputOffset=h(9)+18*node;
+    for(int i=0;i<9;i++)putNumber(outputOffset+2*i,0.0);
+    if(errors!=0u)return;
+    int actual=int(words[gas(COUNTS)]);
+    if(actual<0||actual>h(0)){invalid();return;}if(node>=actual)return;
+    double volume=number(h(3)+2*node),energy=number(gas(ENERGY)+2*node);
+    if(!finite(volume)||volume<0.0||!finite(energy)){invalid();return;}
+    int first,last;double anchor,mass,r;
+    if(!inventory(node,first,last,anchor,mass,r))return;
+    double temperature=number(p.header+32);
+    if(first==last) {
+        if(energy!=0.0){invalid();return;}
+        putNumber(outputOffset,temperature);putNumber(outputOffset+10,1.0);return;
+    }
+    if(words[gas(ENERGY_PRESENT)]==0u||volume<=0.0){invalid();return;}
+    double residual=energy-anchor;if(!finite(residual)){invalid();return;}
+    bool heating=residual>=0.0;double remaining=abs(residual),capacity,boundary;
+    while(true) {
+        capacity=capacityAndBoundary(first,last,temperature,heating,boundary);
+        if(!(finite(capacity)&&capacity>0.0)){invalid();return;}
+        double step=remaining/capacity;
+        double span=heating?boundary-temperature:temperature-boundary;
+        if(step<=span) {temperature+=heating?step:-step;break;}
+        if(!(span>0.0&&finite(span))){invalid();return;}
+        remaining-=span*capacity;temperature=boundary;
+    }
+    if(!finite(temperature)||temperature<number(p.header+34)){invalid();return;}
+    // At a caloric endpoint, the reported derivative uses the upper-temperature segment.
+    capacity=capacityAndBoundary(first,last,temperature,true,boundary);
+    double pressure=r*temperature/volume,density=mass/volume,gamma=1.0+r/capacity;
+    double bulk=gamma*pressure,sound=sqrt(bulk/density),compliance=1.0/bulk;
+    if(!(finite(pressure)&&pressure>0.0&&finite(density)&&density>0.0&&finite(capacity)&&capacity>0.0
+            &&finite(r)&&r>0.0&&finite(gamma)&&gamma>=1.0&&finite(bulk)&&bulk>0.0
+            &&finite(sound)&&sound>0.0&&finite(compliance)&&compliance>0.0)){invalid();return;}
+    putNumber(outputOffset,temperature);putNumber(outputOffset+2,pressure);putNumber(outputOffset+4,density);
+    putNumber(outputOffset+6,capacity);putNumber(outputOffset+8,r);putNumber(outputOffset+10,gamma);
+    putNumber(outputOffset+12,bulk);putNumber(outputOffset+14,sound);putNumber(outputOffset+16,compliance);
+}
+void main() {
+    int group=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x);
+    if(p.stage==0)reduceVolume(group,lane);else derive(group*128+lane);
+}

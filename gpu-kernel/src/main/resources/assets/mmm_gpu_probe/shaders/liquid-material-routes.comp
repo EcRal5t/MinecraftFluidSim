@@ -5,7 +5,7 @@ layout(local_size_x=128) in;
 layout(binding=0,std430) readonly buffer Source { uint sourceWords[]; };
 layout(binding=1,std430) buffer Candidate { uint candidateWords[]; };
 layout(binding=2,std430) buffer Errors { uint errors; };
-layout(push_constant) uniform Params { int header; int stage; int count; } p;
+layout(push_constant) uniform Params { int header; int stage; int count; int gravitySign; } p;
 // DYADIC_LIBRARY
 const int COUNTS=0,CELL_OFFSETS=1,MATERIALS=2,VOLUME_OFFSETS=4,VOLUME_SIGNS=5,
           VOLUME_EXPONENTS=6,VOLUME_LIMBS=7,MASS_UNITS=8;
@@ -207,11 +207,11 @@ void splitCell(int cell) {
     int first=int(sourceWords[src(CELL_OFFSETS)+cell]),last=int(sourceWords[src(CELL_OFFSETS)+cell+1]);
     for(int stock=first;stock<last;stock++)saveRoute(7*stock,copyTo(sourceVolume(stock),7*stock));
     if(failed)return;
-    bool vertical=h(5)!=0&&(dyadicPresent(accepted(cell,3))||dyadicPresent(accepted(cell,4)));
+    bool vertical=p.gravitySign!=0&&(dyadicPresent(accepted(cell,3))||dyadicPresent(accepted(cell,4)));
     if(vertical)prepareDensity(first,last);
     distributeFace(cell,first,last,1,false,false);distributeFace(cell,first,last,2,false,false);
     distributeFace(cell,first,last,5,false,false);distributeFace(cell,first,last,6,false,false);
-    int down=h(5)>0?4:3,up=down==3?4:3;
+    int down=p.gravitySign>0?4:3,up=down==3?4:3;
     distributeFace(cell,first,last,down,vertical,true);distributeFace(cell,first,last,up,vertical,false);
     // Exact retained total also detects caller budgets inconsistent with source inventory.
     int base=h(2)+3*cell,current=base;DyadicTerm retained=zero();

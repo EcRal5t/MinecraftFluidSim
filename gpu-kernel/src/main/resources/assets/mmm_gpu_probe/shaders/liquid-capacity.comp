@@ -1,0 +1,167 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_ARB_gpu_shader_fp64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) buffer Arena { uint words[]; };
+layout(binding=1,std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Params { int header; int stage; int count; int argument; int reserved; } p;
+const int K=0,LOWER=1,UPPER=2,GROUP_ID=3,GROUP_CAPACITY=4,PREFERRED=5,OPEN=6,ACCEPTED=7,
+ CONTROL=8,HEADER=9,GC=10,GO=11,CURSOR=12,MEMBERS=13,BC=14,BO=15,BG=16,
+ BI=17,BOUT=18,BASE=19,BPREFIX=20,GI=21,GLIMIT=22,CROSS=23,FLOW=24,
+ SOURCE_LIMIT=25,TARGET_LIMIT=26,ACTIVE=27,AFFECTED=28,ACTIVE_EDGES=29,MARK=30,EDGE_MARK=31,COUNTERS=32;
+const int RUNNING=0,FEASIBLE=1,LIMIT=3,INVALID=4;
+const int64_t INF=int64_t(0x3fffffffffffffffUL);
+shared int64_t a[128],b[128],c[128];
+shared int groupStatus;
+int h(int i){return int(words[p.header+i]);}
+int at(int f){return h(8+f);}
+int n(){return h(3);}
+int groups(){return h(5);}
+int get(int f,int i){return int(words[at(f)+i]);}
+void put(int f,int i,int v){words[at(f)+i]=uint(v);}
+int64_t wide(int f,int i){int q=at(f)+2*i;return int64_t(uint64_t(words[q])|(uint64_t(words[q+1])<<32));}
+void putWide(int f,int i,int64_t v){int q=at(f)+2*i;words[q]=uint(v);words[q+1]=uint(uint64_t(v)>>32);}
+void invalid(){atomicExchange(words[at(CONTROL)],uint(INVALID));atomicOr(errors,4096u);}
+int64_t add(int64_t x,int64_t y){if(x<0||y<0||x>INF-y){invalid();return int64_t(0);}return x+y;}
+int neighbor(int cell,int side){
+ int x=cell%h(0),y=cell/h(0)%h(1),z=cell/(h(0)*h(1));
+ if(side==0)return x>0?cell-1:-1;if(side==1)return x+1<h(0)?cell+1:-1;
+ if(side==2)return y>0?cell-h(0):-1;if(side==3)return y+1<h(1)?cell+h(0):-1;
+ if(side==4)return z>0?cell-h(0)*h(1):-1;return z+1<h(2)?cell+h(0)*h(1):-1;
+}
+int incomingEdge(int cell,int side){int from=neighbor(cell,side);return from<0?-1:7*from+1+(side^1);}
+int cellGroup(int cell){int g=get(GROUP_ID,cell);return g<0?h(4):g;}
+int64_t incoming(int cell){int64_t v=int64_t(0);for(int s=0;s<6;s++){int e=incomingEdge(cell,s);if(e>=0)v=add(v,wide(FLOW,e));}return v;}
+int64_t outgoing(int cell){int64_t v=int64_t(0);for(int s=1;s<7;s++)v=add(v,wide(FLOW,7*cell+s));return v;}
+bool violates(int cell){int64_t v=wide(K,cell)+incoming(cell)-outgoing(cell);return v<wide(LOWER,cell)||v>wide(UPPER,cell);}
+void initialize(int id){
+ if(id<7*n()){putWide(FLOW,id,int64_t(0));putWide(SOURCE_LIMIT,id,INF);putWide(TARGET_LIMIT,id,INF);put(EDGE_MARK,id,0);}
+ if(id<n()){put(MARK,id,1);put(ACTIVE,id,id);}
+ if(id<groups()){put(GC,id,0);put(CURSOR,id,0);}
+ if(id==0){for(int i=0;i<12;i++)put(CONTROL,i,0);for(int i=0;i<4;i++)put(COUNTERS,i,0);put(CONTROL,3,n());put(CONTROL,5,p.argument);put(CONTROL,7,h(4)>0?1:0);}
+}
+void countGroup(int cell){
+ int g=get(GROUP_ID,cell);int64_t k=wide(K,cell),lo=wide(LOWER,cell),hi=wide(UPPER,cell);
+ if(g< -1||g>=h(4)||k<0||k>INF/int64_t(n())||lo<0||lo>k||hi<k||hi>INF/int64_t(n())||(get(OPEN,cell)&~63)!=0){invalid();return;}
+ if(g>=0&&(wide(GROUP_CAPACITY,g)<0||wide(GROUP_CAPACITY,g)>INF)){invalid();return;}
+ int cross=0;
+ for(int s=0;s<6;s++){
+  int other=neighbor(cell,s);if(other<0&&(get(OPEN,cell)&(1<<s))!=0){invalid();return;}
+  if(other>=0&&get(GROUP_ID,other)!=g)cross|=1<<s;
+ }
+ put(CROSS,cell,cross);
+ for(int s=0;s<7;s++)if(wide(PREFERRED,7*cell+s)<0){invalid();return;}
+ atomicAdd(words[at(GC)+cellGroup(cell)],1u);
+}
+void scatter(int cell){
+ int g=cellGroup(cell),rank=int(atomicAdd(words[at(CURSOR)+g],1u));put(MEMBERS,get(GO,g)+rank,cell);
+ int64_t left=wide(K,cell);
+ for(int s=1;s<7;s++){int64_t v=(get(OPEN,cell)&(1<<(s-1)))!=0?min(left,wide(PREFERRED,7*cell+s)):int64_t(0);putWide(FLOW,7*cell+s,v);left-=v;}
+ putWide(FLOW,7*cell,left);
+}
+void countBlocks(int g){put(BC,g,g<h(4)?(get(GC,g)+127)/128:0);}
+void mapBlocks(int g){for(int i=get(BO,g);i<get(BO,g+1);i++)put(BG,i,g);}
+void reduceShared(int lane){
+ for(int step=64;step>0;step>>=1){barrier();if(lane<step){a[lane]=add(a[lane],a[lane+step]);b[lane]=add(b[lane],b[lane+step]);c[lane]=add(c[lane],c[lane+step]);}}
+ barrier();
+}
+void blockStats(int block,int lane){
+ if(block>=get(BO,groups()))return;
+ int g=get(BG,block),rank=128*(block-get(BO,g))+lane;
+ int64_t iv=int64_t(0),ov=int64_t(0),kv=int64_t(0);
+ if(rank<get(GC,g)){
+  int cell=get(MEMBERS,get(GO,g)+rank),mask=get(CROSS,cell);kv=wide(K,cell);
+  for(int s=0;s<6;s++)if((mask&(1<<s))!=0){iv=add(iv,wide(FLOW,incomingEdge(cell,s)));ov=add(ov,wide(FLOW,7*cell+1+s));}
+ }
+ a[lane]=iv;b[lane]=ov;c[lane]=kv;reduceShared(lane);
+ if(lane==0){putWide(BI,block,a[0]);putWide(BOUT,block,b[0]);putWide(BASE,block,c[0]);}
+}
+void groupBudget(int g,int lane){
+ int start=get(BO,g),end=get(BO,g+1);a[lane]=int64_t(0);b[lane]=int64_t(0);c[lane]=int64_t(0);
+ for(int block=start+lane;block<end;block+=128){a[lane]=add(a[lane],wide(BI,block));b[lane]=add(b[lane],wide(BOUT,block));c[lane]=add(c[lane],wide(BASE,block));}
+ reduceShared(lane);
+ if(lane==0){
+  int64_t cap=wide(GROUP_CAPACITY,g);if(c[0]>cap){invalid();return;}
+  putWide(GI,g,a[0]);putWide(GLIMIT,g,min(a[0],add(cap-c[0],b[0])));
+  int64_t prefix=int64_t(0);for(int block=start;block<end;block++){putWide(BPREFIX,block,prefix);prefix=add(prefix,wide(BI,block));}
+  if(g==0)put(CONTROL,7,0);
+ }
+}
+void activate(int cell){
+ uint stamp=uint(2*get(CONTROL,1)+1);
+ if(atomicExchange(words[at(MARK)+cell],stamp)!=stamp){int i=int(atomicAdd(words[at(CONTROL)+3],1u));put(ACTIVE,i,cell);}
+}
+void markGroupChange(int edge){
+ int from=edge/7,to=neighbor(from,edge%7-1),g=get(GROUP_ID,from);
+ if(g>=0&&g!=get(GROUP_ID,to))atomicOr(words[at(CONTROL)+7],1u);
+}
+int64_t budgetPrefix(int64_t prefix,int64_t total,int64_t allowed){
+ if(prefix==total)return allowed;
+ return clamp(int64_t(double(prefix)*(double(allowed)/double(total))),int64_t(0),allowed);
+}
+void clipGroup(int block,int lane){
+ if(block>=get(BO,groups()))return;
+ int g=get(BG,block);int64_t total=wide(GI,g),allowed=wide(GLIMIT,g);if(allowed>=total)return;
+ int rank=128*(block-get(BO,g))+lane,cell=rank<get(GC,g)?get(MEMBERS,get(GO,g)+rank):-1;
+ int64_t iv=int64_t(0);int mask=cell<0?0:get(CROSS,cell);
+ for(int s=0;s<6;s++)if((mask&(1<<s))!=0)iv=add(iv,wide(FLOW,incomingEdge(cell,s)));
+ a[lane]=iv;barrier();
+ for(int step=1;step<128;step<<=1){int64_t extra=lane>=step?a[lane-step]:int64_t(0);barrier();a[lane]=add(a[lane],extra);barrier();}
+ int64_t prefix=wide(BPREFIX,block)+a[lane]-iv;
+ for(int s=0;s<6;s++)if((mask&(1<<s))!=0){
+  int edge=incomingEdge(cell,s);int64_t amount=wide(FLOW,edge),end=prefix+amount;
+  int64_t keep=min(amount,budgetPrefix(end,total,allowed)-budgetPrefix(prefix,total,allowed));prefix=end;
+  if(keep<amount){putWide(FLOW,edge,keep);activate(cell);activate(edge/7);markGroupChange(edge);}
+ }
+}
+void limitEdge(int edge,bool source,int64_t keep){
+ putWide(source?SOURCE_LIMIT:TARGET_LIMIT,edge,keep);
+ uint stamp=uint(get(CONTROL,1)+1);
+ if(atomicExchange(words[at(EDGE_MARK)+edge],stamp)!=stamp){int i=int(atomicAdd(words[at(COUNTERS)+1],1u));put(ACTIVE_EDGES,i,edge);}
+}
+void propose(int cell){
+ int64_t iv=incoming(cell),ov=outgoing(cell),k=wide(K,cell),v=k+iv-ov;
+ bool trimOut=v<wide(LOWER,cell);if(!trimOut&&v<=wide(UPPER,cell))return;
+ int64_t left=trimOut?k+iv-wide(LOWER,cell):ov+wide(UPPER,cell)-k;
+ for(int s=0;s<6;s++){
+  int edge=trimOut?7*cell+1+s:incomingEdge(cell,s);if(edge<0)continue;
+  int64_t amount=wide(FLOW,edge),keep=min(amount,left);left-=keep;if(keep<amount)limitEdge(edge,trimOut,keep);
+ }
+}
+void affect(int cell){
+ uint stamp=uint(2*get(CONTROL,1)+2);
+ if(atomicExchange(words[at(MARK)+cell],stamp)!=stamp){int i=int(atomicAdd(words[at(COUNTERS)],1u));put(AFFECTED,i,cell);}
+}
+void applyLimits(int index){
+ int edge=get(ACTIVE_EDGES,index);int64_t amount=wide(FLOW,edge),keep=min(amount,min(wide(SOURCE_LIMIT,edge),wide(TARGET_LIMIT,edge)));
+ if(keep<amount){putWide(FLOW,edge,keep);affect(edge/7);affect(neighbor(edge/7,edge%7-1));markGroupChange(edge);}
+ putWide(SOURCE_LIMIT,edge,INF);putWide(TARGET_LIMIT,edge,INF);
+}
+void collect(int index){
+ int cell=get(AFFECTED,index);if(violates(cell)){int i=int(atomicAdd(words[at(CONTROL)+2],1u));put(ACTIVE,i,cell);put(MARK,cell,2*get(CONTROL,1)+3);}
+}
+void finishRound(){
+ int round=get(CONTROL,1)+1,count=get(CONTROL,2);put(CONTROL,1,round);put(CONTROL,3,count);put(CONTROL,6,count);put(CONTROL,2,0);put(COUNTERS,0,0);put(COUNTERS,1,0);
+ if(count==0&&get(CONTROL,7)==0)put(CONTROL,0,FEASIBLE);
+ else {put(CONTROL,8,count==0?1:0);if(round>=get(CONTROL,5))put(CONTROL,0,LIMIT);}
+}
+void finish(int id){
+ if(get(CONTROL,0)!=FEASIBLE){if(id==0)atomicOr(errors,8192u);return;}
+ putWide(ACCEPTED,id,id%7==0?wide(K,id/7)-outgoing(id/7):wide(FLOW,id));
+}
+void main(){
+ int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*block+lane;
+ if(p.stage>=5&&p.stage<=7){
+  if(block>=p.count/128)return;
+  if(get(CONTROL,8)==0)return;
+  if(lane==0)groupStatus=get(CONTROL,0);barrier();if(groupStatus!=RUNNING)return;
+  if(p.stage==5)blockStats(block,lane);else if(p.stage==6)groupBudget(block,lane);else clipGroup(block,lane);return;
+ }
+ if(id>=p.count)return;
+ if(p.stage==0){initialize(id);return;}if(p.stage==14){finish(id);return;}if(get(CONTROL,0)!=RUNNING)return;
+ if(p.stage==1)countGroup(id);else if(p.stage==2)scatter(id);else if(p.stage==3)countBlocks(id);else if(p.stage==4)mapBlocks(id);
+ else if(p.stage>=10&&p.stage<=12){
+  int count=p.stage==10?get(CONTROL,3):p.stage==11?get(COUNTERS,1):get(COUNTERS,0),stride=int(gl_NumWorkGroups.x*gl_NumWorkGroups.y*128);
+  for(int i=id;i<count;i+=stride){if(p.stage==10)propose(get(ACTIVE,i));else if(p.stage==11)applyLimits(i);else collect(i);}
+ }else if(p.stage==13)finishRound();
+}

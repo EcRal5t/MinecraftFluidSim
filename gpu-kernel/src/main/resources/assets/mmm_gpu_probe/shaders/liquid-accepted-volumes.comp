@@ -1,0 +1,91 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) buffer Candidate { uint candidateWords[]; };
+layout(binding=1,std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Params { int header; int stage; int count; } p;
+// DYADIC_LIBRARY
+uvec2 integerWords;
+int h(int index) { return int(candidateWords[p.header+index]); }
+uint dyadicWord(int bank,int index) { return bank==2?integerWords[index]:candidateWords[index]; }
+void dyadicWrite(int index,uint value) { candidateWords[index]=value; }
+int64_t getLong(int at) { return int64_t(uint64_t(candidateWords[at])|(uint64_t(candidateWords[at+1])<<32)); }
+DyadicTerm totalVolume(int cell) {
+    int begin=int(candidateWords[h(4)+cell]),end=int(candidateWords[h(4)+cell+1]);
+    return DyadicTerm(1,h(7)+begin,end-begin,int(candidateWords[h(6)+cell]),int(candidateWords[h(5)+cell]));
+}
+DyadicTerm integerVolume(uint64_t value) {
+    if(value==uint64_t(0))return DyadicTerm(2,0,0,0,0);
+    int trailing=uint(value)==0u?32+findLSB(uint(value>>32)):findLSB(uint(value));
+    value>>=trailing;integerWords=uvec2(uint(value),uint(value>>32));
+    int64_t exponent=int64_t(h(2))+int64_t(trailing);
+    if(exponent>int64_t(2147483647)){atomicOr(errors,32u);return DyadicTerm(2,0,0,0,0);}
+    return DyadicTerm(2,0,integerWords.y==0u?1:2,int(exponent),1);
+}
+bool acceptedTotal(int cell,out uint64_t moving) {
+    uint64_t sum=uint64_t(0);moving=uint64_t(0);
+    for(int slot=0;slot<7;slot++) {
+        int64_t amount=getLong(h(1)+2*(7*cell+slot));
+        if(amount<int64_t(0)||uint64_t(amount)>uint64_t(0x7fffffffffffffffUL)-sum){atomicOr(errors,32u);return false;}
+        sum+=uint64_t(amount);if(slot!=0)moving+=uint64_t(amount);
+    }
+    int64_t supply=getLong(h(3)+2*cell);
+    if(supply<int64_t(0)||sum!=uint64_t(supply)){atomicOr(errors,32u);return false;}
+    return true;
+}
+void putMeasure(int cell,DyadicMeasure value) {
+    int at=h(14)+8*cell;
+    candidateWords[at]=uint(value.status);candidateWords[at+1]=uint(value.words);
+    candidateWords[at+2]=uint(value.exponent);candidateWords[at+3]=uint(value.minimumExponent);
+    candidateWords[at+4]=uint(value.firstWord);candidateWords[at+5]=uint(value.lastWord);candidateWords[at+6]=uint(value.trailingBits);
+    candidateWords[at+7]=0u;
+}
+DyadicMeasure getMeasure(int cell) {
+    int at=h(14)+8*cell;
+    return DyadicMeasure(int(candidateWords[at]),int(candidateWords[at+1]),int(candidateWords[at+2]),
+                         int(candidateWords[at+3]),int(candidateWords[at+4]),int(candidateWords[at+5]),int(candidateWords[at+6]));
+}
+void measureCell(int cell) {
+    for(int slot=0;slot<7;slot++) {
+        int entry=7*cell+slot;candidateWords[h(13)+entry]=0u;candidateWords[h(9)+entry]=0u;candidateWords[h(10)+entry]=0u;
+    }
+    if(errors!=0u)return;
+    uint64_t moving;if(!acceptedTotal(cell,moving))return;
+    DyadicTerm items[7];items[0]=totalVolume(cell);items[1]=integerVolume(moving);items[1].sign=-items[1].sign;
+    if(errors!=0u)return;
+    DyadicMeasure retained=dyadicMeasure(items,2);
+    if(retained.status!=DYADIC_ZERO&&retained.status!=DYADIC_POSITIVE){atomicOr(errors,32u);return;}
+    putMeasure(cell,retained);
+    candidateWords[h(13)+7*cell]=uint(retained.words);
+    candidateWords[h(9)+7*cell]=retained.status==DYADIC_POSITIVE?1u:0u;
+    candidateWords[h(10)+7*cell]=uint(retained.exponent);
+    for(int slot=1;slot<7;slot++) {
+        int entry=7*cell+slot;DyadicTerm value=integerVolume(uint64_t(getLong(h(1)+2*entry)));
+        candidateWords[h(13)+entry]=uint(value.count);candidateWords[h(9)+entry]=uint(value.sign);
+        candidateWords[h(10)+entry]=uint(value.exponent);
+    }
+}
+void writeCell(int cell) {
+    if(errors!=0u)return;
+    if(candidateWords[h(8)+7*h(0)]>uint(h(15))){atomicOr(errors,64u);return;}
+    uint64_t moving=uint64_t(0);
+    for(int slot=1;slot<7;slot++)moving+=uint64_t(getLong(h(1)+2*(7*cell+slot)));
+    DyadicTerm items[7];items[0]=totalVolume(cell);items[1]=integerVolume(moving);items[1].sign=-items[1].sign;
+    DyadicMeasure retained=getMeasure(cell);
+    dyadicWriteSum(items,2,retained,h(11)+int(candidateWords[h(8)+7*cell]));
+    for(int slot=0;slot<7;slot++) {
+        int entry=7*cell+slot,at=h(12)+5*entry,outputOffset=h(11)+int(candidateWords[h(8)+entry]);
+        int count=int(candidateWords[h(13)+entry]);
+        if(slot!=0&&count!=0) {
+            DyadicTerm value=integerVolume(uint64_t(getLong(h(1)+2*entry)));
+            candidateWords[outputOffset]=integerWords.x;if(value.count==2)candidateWords[outputOffset+1]=integerWords.y;
+        }
+        candidateWords[at]=1u;candidateWords[at+1]=uint(outputOffset);candidateWords[at+2]=uint(count);
+        candidateWords[at+3]=candidateWords[h(10)+entry];candidateWords[at+4]=candidateWords[h(9)+entry];
+    }
+}
+void main() {
+    uint id=(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x;
+    if(id>=uint(p.count))return;
+    if(p.stage==0)measureCell(int(id));else writeCell(int(id));
+}

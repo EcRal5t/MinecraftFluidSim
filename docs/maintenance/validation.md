@@ -440,9 +440,12 @@ D01 进入前性能验收采用热运行：同一 JVM 已完成生产物理场�
 ./gradlew.bat :gpu-kernel:runGpuLiquidGeometryBenchmark -PgpuProbeDevice=0 -PgpuGeometrySamples=10 -PgpuGeometryProjection=true -PgpuGeometryGrids=64 --offline --no-daemon
 ./gradlew.bat :gpu-kernel:runGpuDyadicSumBenchmark -PgpuProbeDevice=0 -PgpuDyadicSamples=10 --offline --no-daemon
 ./gradlew.bat :gpu-kernel:runGpuLiquidGatherBenchmark -PgpuProbeDevice=0 -PgpuGatherSamples=10 --offline --no-daemon
+./gradlew.bat :gpu-kernel:runGpuLiquidCapacityBenchmark -PgpuCapacityGrids=64 -PgpuCapacityScene=all -PgpuCapacityRounds=512 -PgpuCapacityControl=true -PgpuCapacityFlowRatio=true --offline --no-daemon
 ```
 
 `runGpuLiquidGatherBenchmark` 用 `gpuGatherSamples` 设置采样次数，固定运行32³和64³。CPU 初始化一次已接受单元体积预算，计时期间每次从同一设备捕获准备候选，执行材料路线、数量分配、库存归并、MAC 搬运、耗散热写入与精确账归总后释放候选；最后单独提交一次并抽查 checkpoint。它测量固定路线的阶段组合。
+
+`runGpuLiquidCapacityBenchmark` 接受 `full/dam/all` 场景，`gpuCapacityControl` 与 `gpuCapacityFlowRatio` 只在计时后读取控制状态和实际运输量。成本同时报告可行状态与保留流量，删除全部运动的结果按失败处理。
 
 `runGpuLiquidGeometryBenchmark` 的 `gpuGeometryProjection=false` 测库存派生几何；设为 `true` 追加重力、物理 CSR、压力、格面投影与 PLIC 面扫掠偏好。`gpuGeometryGrids` 接受逗号分隔格数，`gpuGeometrySamples` 控制采样次数，固定先预热5次。投影模式每次从零压力开始，并计入代次复制、命令录制、各批执行、状态回读和接管。
 
@@ -682,3 +685,31 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 64³ 材料路线临时 limb 预留17,825,792项，实际9,699,328项；最终路线 limb 预留7,340,032项，实际1,048,576项。初次计算管线构造在采样前完成。`VulkanLiquidCellVolumes` 当前只有着色器编译证据，尚未实际 dispatch 或计成本。
 
 `build/gpu-resident-liquid-quantity-gather-mac-ledger-cost.log` 保留尚未包含材料路线的精确账组合，较早的 `gpu-resident-liquid-quantities-gather-cost.log` 和 `gpu-resident-liquid-quantity-gather-mac-cost.log` 分别保留数量归并与MAC阶段范围；当前组合以上表为准。这些固定源分项与前述几何／投影分项分别计时，完整流体步预算按实际连续后端接入后评价。
+
+2026-10-24：整数容量阶段的64³成本见 `build/gpu-resident-liquid-capacity-cell-64.log` 的 full 和 `build/gpu-resident-liquid-capacity-cell-first-64.log` 的 dam（RTX 5070 Ti）。输入采用 q=2^-40 的几何量子，偏好确有单元或有限组容量冲突。每场只测一次，无预热；初始上传与管线构造在计时前，表中墙钟包含冷主机提交成本。计时后才读取完整 accepted 列统计非保留运输量，普通分批反馈仍为8 B。
+
+| 64³容量场景 | 实际波数 | 冷墙钟 / 设备 ms | 上传 / 正常回读 B | 运输保留比例 |
+|---|---:|---:|---:|---:|
+| full-circulation | 1 | 9.459 / 0.642 | 0 / 16 | 99.9999999998% |
+| dam-gas-groups | 33 | 14.510 / 1.656 | 0 / 64 | 6.15530% |
+
+两场均返回可行并提交，设备分配194.1 MiB，少量来源配额与接收上下限检查通过。dam 保留520Q，原偏好8448Q（Q=2^40）。按该输入现有非零偏好边，底部30行均为满格且左端无补液，其向右流量必须沿行归零；每个 z 切片仅顶行向右最多4Q、下一行向右最多4Q、顶行向下总量最多Q/8，可实现上限共520Q，即原偏好的6.15530%。当前实际运输达到这一支持图上界。单元约束收敛后才处理组预算，避免无效底层偏好抢占前沿的流量配额。此前 `cell-64` 的 dam 为32波、冷墙钟8.039 ms／设备3.498 ms、0上传／52 B回读，保留316Q（3.74053%，相当于可行上界60.7692%）；该记录保留优化前的成本与过量限流范围。
+
+旧范围保留：`gpu-resident-liquid-capacity-cost.log` 的局部推送四场均达到512轮上限；`gpu-resident-liquid-capacity-bfs-64.log` 的 full 成功而 dam 超限；`gpu-resident-liquid-capacity-prune-64.log` 的比例削减 dam 超限；`gpu-resident-liquid-capacity-saturate-64.log` 虽满足容量却删除全部 dam 运输，由非零运动检查拒绝。这些记录均不构成有效推进性能结果。
+
+容量阶段约束从可行的原地保留出发；颗粒位移、冻结膨胀与精确完全排空尚未覆盖。`VulkanLiquidCapacityInputs`、`VulkanLiquidAcceptedVolumes` 和各材料输运阶段已进入连续机械步成本入口，连续整链证据见下文；`VulkanGasGeometry` 当前只有着色器编译证据。当前分项结果继续服务于完整64³步50 ms及原完整场景十倍提速，有限气腔、其他物相、应用层交接和集中物理检查均按完整职责链完成后判定。
+
+2026-10-24：常驻普通环境液体连续机械正式成本通过，日志 `build/gpu-resident-liquid-mechanical-cost.log`。每场5步预热、10步采样，逐步实际提交并从上一代继续推进。范围为几何／重力／压力→容量→精确七路体积→材料与数量分配／归并→MAC→未来几何→热量与精确账→设备代次提交；输入采用显式夹具参考能表和 q=2^-40。压力每批8次迭代，容量每批32波，达到可行状态后同批剩余命令保持库存。有限气腔、热化学、其他物相、生产后端接管、世界和展示成本尚未包含。
+
+```powershell
+./gradlew.bat :gpu-kernel:runGpuLiquidMechanicalBenchmark '-PgpuMechanicalGrids=32,64' -PgpuMechanicalWarmup=5 -PgpuMechanicalSamples=10 --offline --no-daemon
+```
+
+| 规模 | 中位 / 最大 ms | 设备平均 ms | 每步上传 / 平均回读 B | 设备 / staging MiB |
+|---|---:|---:|---:|---:|
+| 32³ | 12.496 / 26.392 | 7.489 | 0 / 64.0 | 241.6 / 3.0 |
+| 64³ | 36.675 / 44.107 | 29.024 | 0 / 90.4 | 1928.9 / 3.0 |
+
+32³实际库存行由24,576增至28,707，64³由196,608增至211,606，连续流动改变了库存分布。末步容量分别39／82波可行，压力分别19／24次收敛，RMS分别4.6105394e-6／7.3679684e-6。64³全部10个采样步低于50 ms；该结果尚未覆盖完整物理模型或原完整场景十倍提速，集中物理检查继续后置。
+
+此前 `build/gpu-resident-liquid-mechanical-short.log`、`build/gpu-resident-liquid-mechanical-64-short.log` 各保留1步预热、3步连续提交的短跑范围，终态成本以上表为准。

@@ -1,0 +1,166 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) coherent buffer Candidate { uint words[]; };
+layout(binding=1,std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Params { int header; int stage; int count; } p;
+// DYADIC_LIBRARY
+uvec2 poreWords;
+int h(int index) { return int(words[p.header+index]); }
+uint dyadicWord(int bank,int index) { return bank==2?poreWords[index]:words[index]; }
+void dyadicWrite(int index,uint value) { words[index]=value; }
+double number(int at) { return packDouble2x32(uvec2(words[at],words[at+1])); }
+void putNumber(int at,double value) { uvec2 bits=unpackDouble2x32(value);words[at]=bits.x;words[at+1]=bits.y; }
+int64_t integer(int at) { return int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32)); }
+bool finite(double value) { return !isnan(value)&&!isinf(value); }
+ivec3 dimensions() { return ivec3(h(0),h(1),h(2)); }
+bool inside(ivec3 position) { return all(greaterThanEqual(position,ivec3(0)))&&all(lessThan(position,dimensions())); }
+int indexOf(ivec3 position) { return (position.z*h(1)+position.y)*h(0)+position.x; }
+uint support(int cell) { return (~words[h(6)+cell])&255u; }
+bool present(int cell) { return cell>=0&&words[h(16)+cell]!=0u; }
+double cellSize() { return number(p.header+34); }
+DyadicTerm liquidTotal(int cell) {
+    int begin=int(words[h(11)+cell]),end=int(words[h(11)+cell+1]);
+    return DyadicTerm(1,h(14)+begin,end-begin,int(words[h(13)+cell]),int(words[h(12)+cell]));
+}
+double exactDryNumber(DyadicTerm items[7],DyadicMeasure measure) {
+    DyadicCursor cursor=dyadicBegin(items,2);uvec3 top=uvec3(0);
+    while(cursor.position<=measure.lastWord) {
+        DyadicChunk chunk=dyadicNext(cursor,items,2);
+        for(int i=0;i<3;i++) {
+            int at=measure.lastWord-i;
+            if(at>=chunk.first&&at<chunk.first+chunk.count)top[i]=chunk.word;
+        }
+    }
+    int64_t power=int64_t(measure.minimumExponent)+int64_t(measure.lastWord)*int64_t(32);
+    double leading=double(top.x)+double(top.y)*2.3283064365386962890625e-10LF
+                                  +double(top.z)*5.4210108624275221700372640043497e-20LF;
+    double value=power<int64_t(-1106)?0.0:ldexp(leading,int(power));
+    double scale=cellSize();value*=scale*scale*scale;
+    // Presence stays exact even below the numerical geometry's representable volume.
+    return max(value,packDouble2x32(uvec2(1u,0u)));
+}
+void captureCell(int cell) {
+    words[h(16)+cell]=0u;putNumber(h(17)+2*cell,0.0);words[h(18)+cell]=0u;words[h(19)+cell]=0u;
+    words[h(22)+cell+1]=uint(-1);words[h(23)+cell]=0u;words[h(24)+cell]=uint(-1);
+    if(errors!=0u)return;
+    uint open=support(cell);int64_t occupied=integer(h(7)+2*cell);
+    int64_t pore=(int64_t(bitCount(open))<<21)-occupied;
+    if(occupied<int64_t(0)||pore<int64_t(0)){atomicOr(errors,8192u);return;}
+    poreWords=uvec2(uint(pore),uint(uint64_t(pore)>>32));
+    DyadicTerm items[7];items[0]=DyadicTerm(2,0,pore==int64_t(0)?0:poreWords.y==0u?1:2,-24,pore==int64_t(0)?0:1);
+    items[1]=liquidTotal(cell);items[1].sign=-items[1].sign;
+    DyadicMeasure dry=dyadicMeasure(items,2);
+    if(dry.status==DYADIC_ZERO)return;
+    if(dry.status!=DYADIC_POSITIVE||open==0u){atomicOr(errors,8192u);return;}
+    double volume=exactDryNumber(items,dry);
+    if(!finite(volume)){atomicOr(errors,8192u);return;}
+    words[h(16)+cell]=1u;putNumber(h(17)+2*cell,volume);words[h(22)+cell+1]=uint(cell+1);
+    double microPore=double(pore)/16777216.0/double(bitCount(open));uint dryMask=0u;
+    for(int micro=0;micro<8;micro++)if((open&(1u<<micro))!=0u)
+        if(number(h(10)+2*(8*cell+micro))<microPore)dryMask|=1u<<micro;
+    if(dryMask==0u){dryMask=1u<<findLSB(open);words[h(19)+cell]=1u;}
+    words[h(18)+cell]=dryMask;
+}
+ivec3 faceEndpoints(int face) {
+    int xFaces=(h(0)+1)*h(1)*h(2),yFaces=h(0)*(h(1)+1)*h(2);
+    int axis=face<xFaces?0:face<xFaces+yFaces?1:2,local=face-(axis==0?0:axis==1?xFaces:xFaces+yFaces);
+    ivec3 shape=dimensions();shape[axis]++;
+    ivec3 position=ivec3(local%shape.x,local/shape.x%shape.y,local/(shape.x*shape.y)),step=ivec3(0);step[axis]=1;
+    return ivec3(inside(position-step)?indexOf(position-step):-1,inside(position)?indexOf(position):-1,axis);
+}
+float fraction(int cell,int micro) {
+    double pore=number(h(8)+8*cell+4),fill=number(h(8)+8*cell+6);
+    // GasFaceIntersection permits bypass across unresolved liquid films at 1/64 fill.
+    if(fill>0.0&&fill<1.0&&fill<=0.015625&&pore>0.0)return 0.0;
+    double microPore=pore/double(bitCount(support(cell)));
+    return microPore>0.0?float(clamp(number(h(10)+2*(8*cell+micro))/microPore,0.0LF,1.0LF)):1.0;
+}
+int clipDry(inout vec2 polygon[8],int count,vec3 plane) {
+    if(count==0)return 0;
+    vec2 next[8],previous=polygon[count-1];float before=dot(plane.xy,previous)-plane.z;int size=0;
+    for(int i=0;i<count;i++) {
+        vec2 point=polygon[i];float distance=dot(plane.xy,point)-plane.z;
+        if((distance>=0)!=(before>=0))next[size++]=mix(previous,point,before/(before-distance));
+        if(distance>=0)next[size++]=point;
+        previous=point;before=distance;
+    }
+    for(int i=0;i<size;i++)polygon[i]=next[i];return size;
+}
+int clipCell(inout vec2 polygon[8],int count,int cell,int axis,int side,int a,int b) {
+    int tangent=(axis+1)%3,other=(axis+2)%3;
+    vec4 plane=vec4(number(h(9)+8*cell),number(h(9)+8*cell+2),number(h(9)+8*cell+4),number(h(9)+8*cell+6));
+    float offset=plane.w-plane[axis]*float(side)-plane[tangent]*(.5*float(a))-plane[other]*(.5*float(b));
+    return clipDry(polygon,count,vec3(plane[tangent],plane[other],offset));
+}
+float microArea(int left,int right,int axis,int a,int b) {
+    int tangent=(axis+1)%3,other=(axis+2)%3,low=(a<<tangent)|(b<<other),high=low|(1<<axis);
+    if(left>=0&&(support(left)&(1u<<high))==0u)return 0.0;
+    if(right>=0&&(support(right)&(1u<<low))==0u)return 0.0;
+    float l=left<0?0.0:fraction(left,high),r=right<0?0.0:fraction(right,low);
+    if(l>=1.0||r>=1.0)return 0.0;if(l<=0.0&&r<=0.0)return .25;
+    vec2 polygon[8];polygon[0]=vec2(0);polygon[1]=vec2(.5,0);polygon[2]=vec2(.5);polygon[3]=vec2(0,.5);
+    int count=4;if(l>0.0)count=clipCell(polygon,count,left,axis,1,a,b);
+    if(r>0.0)count=clipCell(polygon,count,right,axis,0,a,b);
+    float twice=0.0;
+    for(int i=1;i+1<count;i++) { vec2 x=polygon[i]-polygon[0],y=polygon[i+1]-polygon[0];twice+=x.x*y.y-x.y*y.x; }
+    return clamp(abs(twice)*.5,0.0,.25);
+}
+void captureFace(int face) {
+    putNumber(h(20)+2*face,0.0);words[h(21)+face]=0u;if(errors!=0u)return;
+    ivec3 ends=faceEndpoints(face);int left=ends.x,right=ends.y,axis=ends.z;
+    if((left>=0&&!present(left))||(right>=0&&!present(right)))return;
+    float area=0.0;for(int a=0;a<2;a++)for(int b=0;b<2;b++)area+=microArea(left,right,axis,a,b);
+    if(area<=0.0)return;
+    uint positive=axis==0?0xaau:axis==1?0xccu:0xf0u;
+    bool full=(left<0||(support(left)&positive)==positive)&&(right<0||(support(right)&(positive^255u))==(positive^255u));
+    double scale=cellSize();putNumber(h(20)+2*face,double(area)*scale*scale);words[h(21)+face]=full?1u:0u;
+}
+uint root(uint node) {
+    uint parent=atomicAdd(words[h(22)+int(node)],0u);
+    while(parent!=node){node=parent;parent=atomicAdd(words[h(22)+int(node)],0u);}return node;
+}
+void joinFace(int face) {
+    if(errors!=0u||words[h(21)+face]==0u)return;
+    ivec3 ends=faceEndpoints(face);if((ends.x<0||ends.y<0)&&h(5)!=0)return;
+    uint first=ends.x<0?0u:root(uint(ends.x+1)),second=ends.y<0?0u:root(uint(ends.y+1));
+    if(first==second)return;uint high=max(first,second),low=min(first,second);
+    if(atomicMin(words[h(22)+int(high)],low)>low)atomicOr(words[h(25)],1u);
+}
+void compress(int cell) {
+    if(errors!=0u||!present(cell))return;uint owner=root(uint(cell+1));
+    if(atomicMin(words[h(22)+cell+1],owner)>owner)atomicOr(words[h(25)],1u);
+}
+void rootFlag(int item) {
+    if(errors!=0u)return;
+    if(words[h(25)]!=0u){atomicOr(errors,8192u);return;}
+    words[h(27)+item]=item>0&&words[h(22)+item]==uint(item)?1u:0u;
+}
+void assignNode(int cell) {
+    if(errors!=0u)return;
+    if(cell==0)words[h(26)]=words[h(28)+h(3)+1];
+    if(!present(cell))return;
+    uint owner=words[h(22)+cell+1];int node=owner==0u?0:int(words[h(28)+int(owner)])+1;
+    words[h(24)+cell]=uint(node);words[h(23)+cell]=node==0?1u:0u;
+    atomicAdd(words[h(29)+node],1u);
+}
+void scatterMember(int cell) {
+    if(errors!=0u||!present(cell))return;int node=int(words[h(24)+cell]);
+    uint local=atomicAdd(words[h(31)+node],1u);words[h(32)+int(words[h(30)+node]+local)]=uint(cell);
+}
+void main() {
+    uint id=(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x;
+    if(id>=uint(p.count))return;int item=int(id);
+    if(p.stage==0) {
+        words[h(27)+item]=0u;words[h(29)+item]=0u;words[h(31)+item]=0u;
+        if(item==0){words[h(22)]=0u;words[h(25)]=1u;words[h(26)]=0u;}
+    } else if(p.stage==1)captureCell(item);
+    else if(p.stage==2)captureFace(item);
+    else if(p.stage==3)words[h(25)]=0u;
+    else if(p.stage==4)joinFace(item);
+    else if(p.stage==5)compress(item);
+    else if(p.stage==6)rootFlag(item);
+    else if(p.stage==7)assignNode(item);
+    else scatterMember(item);
+}

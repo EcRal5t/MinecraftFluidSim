@@ -1,0 +1,55 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) buffer Arena { uint words[]; };
+layout(binding=1,std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Params { int header; } p;
+int h(int index) { return int(words[p.header+index]); }
+int64_t integerAt(int at) { return int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32)); }
+void putInteger(int at,int64_t value) { words[at]=uint(value);words[at+1]=uint(uint64_t(value)>>32); }
+double numberAt(int at) { return packDouble2x32(uvec2(words[at],words[at+1])); }
+int faceIndex(ivec3 pos,int axis,bool positive) {
+    ivec3 dims=ivec3(h(0),h(1),h(2));dims[axis]++;if(positive)pos[axis]++;
+    int base=axis==0?0:(h(0)+1)*h(1)*h(2);
+    if(axis==2)base+=h(0)*(h(1)+1)*h(2);
+    return base+(pos.z*dims.y+pos.y)*dims.x+pos.x;
+}
+void main() {
+    int cell=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
+    if(cell>=h(3)||errors!=0u)return;
+    int64_t k=integerAt(h(5)+2*cell);
+    int64_t solid=integerAt(h(9)+2*cell);
+    int64_t pore=(int64_t(bitCount((~words[h(8)+cell])&255u))<<21)-solid;
+    bool tail=words[h(6)+cell]!=0u&&int(words[h(7)+cell])<h(4);
+    int64_t upper=(pore<<(-24-h(4)))-(tail?int64_t(1):int64_t(0));
+    if(k<int64_t(0)||pore<int64_t(0)||upper<k){atomicOr(errors,4096u);return;}
+    ivec3 pos=ivec3(cell%h(0),cell/h(0)%h(1),cell/(h(0)*h(1)));
+    double desired[6];double sum=0.0,incomingGas=0.0;uint open=0u;
+    for(int side=0;side<6;side++) {
+        int axis=side/2;bool positive=(side&1)!=0;
+        int face=faceIndex(pos,axis,positive);
+        double area=numberAt(h(10)+8*face+4),qt=numberAt(h(11)+4*face),ql=numberAt(h(11)+4*face+2);
+        if(isnan(area)||isinf(area)||isnan(qt)||isinf(qt)||isnan(ql)||isinf(ql)){atomicOr(errors,4096u);return;}
+        bool internal=positive?pos[axis]+1<ivec3(h(0),h(1),h(2))[axis]:pos[axis]>0;
+        bool connected=internal&&area>0.0;
+        if(connected)open|=1u<<side;
+        double direction=positive?1.0:-1.0;
+        desired[side]=connected?max(0.0,direction*ql):0.0;
+        sum+=desired[side];
+        if(connected)incomingGas+=max(0.0,-direction*(qt-ql));
+    }
+    double scale=ldexp(1.0,-h(4));
+    double factor=sum>0.0?min(1.0,double(k)/(sum*scale)):0.0;
+    int64_t remaining=k;
+    for(int side=0;side<6;side++) {
+        int64_t amount=int64_t(min(double(remaining),floor(desired[side]*scale*factor)));
+        putInteger(h(20)+2*(7*cell+side+1),amount);remaining-=amount;
+    }
+    putInteger(h(20)+14*cell,remaining);
+    // Exact full cells need actual incoming dry-space transport before creating new dry volume.
+    bool full=!tail&&k==upper;
+    int64_t lower=full?k-int64_t(min(double(k),floor(incomingGas*scale))):int64_t(0);
+    putInteger(h(16)+2*cell,k);putInteger(h(17)+2*cell,lower);putInteger(h(18)+2*cell,upper);
+    words[h(19)+cell]=uint(-1);words[h(21)+cell]=open;
+}

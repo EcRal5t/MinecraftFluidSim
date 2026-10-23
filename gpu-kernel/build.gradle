@@ -213,11 +213,41 @@ registerGpuProbe(
 
 registerGpuProbe(
     'runGpuLiquidGatherBenchmark',
-    'Measures resident accepted-volume quantity partition, gather, MAC momentum and heat posting.',
+    'Measures resident accepted cell-volume material routes, quantity partition, gather, MAC and energy ledgers.',
     'mmm.gpuprobe.GpuLiquidGatherBenchmark',
     'gpu-liquid-gather-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
         providers.gradleProperty('gpuGatherSamples').getOrElse('10')
     probeTask.jvmArgs '-Xmx2g'
+}
+
+registerGpuProbe(
+    'runGpuLiquidCapacityBenchmark',
+    'Measures integer capacity repair on divergent circulation and finite-gas dam inputs.',
+    'mmm.gpuprobe.GpuLiquidCapacityBenchmark',
+    'gpu-liquid-capacity-work'
+) { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        providers.gradleProperty('gpuCapacityGrids').getOrElse('32,64'),
+        providers.gradleProperty('gpuCapacityScene').getOrElse('all'),
+        providers.gradleProperty('gpuCapacityRounds').getOrElse('512'),
+        providers.gradleProperty('gpuCapacityDiagnostics').getOrElse('false'),
+        rootProject.layout.buildDirectory.dir('gpu-capacity-diagnostics').get().asFile.absolutePath,
+        providers.gradleProperty('gpuCapacityControl').getOrElse('false'),
+        providers.gradleProperty('gpuCapacityFlowRatio').getOrElse('false')
+    probeTask.jvmArgs '-Xmx2g'
+}
+
+registerGpuProbe(
+    'runGpuLiquidMechanicalBenchmark',
+    'Measures consecutive resident ambient-liquid mechanical commits with capacity and inventory transport.',
+    'mmm.gpuprobe.GpuLiquidMechanicalBenchmark',
+    'gpu-liquid-mechanical-work'
+) { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        providers.gradleProperty('gpuMechanicalGrids').getOrElse('32'),
+        providers.gradleProperty('gpuMechanicalSamples').getOrElse('10'),
+        providers.gradleProperty('gpuMechanicalWarmup').getOrElse('5')
+    probeTask.jvmArgs '-Xmx3g'
 }
