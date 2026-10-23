@@ -493,6 +493,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 - **完整候选与接管**
   - 主要文件：
+    - [FluidStateAccess](../../solver/src/main/java/mmm/fluid/FluidStateAccess.java)：持有同一代状态的引用，布局查询无需完整导出；应用层在成功、拒绝或异常后关闭捕获引用。`FluidDomainState` 直接实现 CPU 状态访问。
     - [FluidDomainState](../../solver/src/main/java/mmm/fluid/FluidDomainState.java)
     - [FluidDomainStateMapper](../../solver/src/main/java/mmm/fluid/FluidDomainStateMapper.java)
     - [ThermalOwnerSnapshot](../../model/src/main/java/mmm/thermal/ThermalOwnerSnapshot.java)

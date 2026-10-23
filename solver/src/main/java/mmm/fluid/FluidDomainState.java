@@ -17,7 +17,8 @@ import java.util.List;
 import java.util.Objects;
 
 /** Immutable cell inventories and SI face momentum shared with a private backend candidate. */
-public final class FluidDomainState {
+public final class FluidDomainState implements FluidStateAccess {
+	@Override public FluidDomainState exportState() { return this; }
 	public enum CarrierKind { PURE, MATERIAL, CHEMICAL }
 	private final int sizeX, sizeY, sizeZ;
 	private final FluidSolverConfig config;

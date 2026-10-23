@@ -36,14 +36,14 @@ public final class RegionApplicationService implements RegionTickUseCase.StepExe
 	@Override
 	public MotionStepResult stepMotion(MotionStepCommand command) {
 		Objects.requireNonNull(command, "command");
-		RegionRepository.Capture capture = captureForStep(command.regionId());
-		RegionStepStatus unavailable = captureStatus(capture);
-		if (unavailable != null) return MotionStepResult.rejected(unavailable);
-		if (capture.solverGeneration() != command.expectedSolverGeneration()) {
-			return MotionStepResult.rejected(RegionStepStatus.STALE_GENERATION);
+		try (RegionRepository.Capture capture = captureForStep(command.regionId())) {
+			RegionStepStatus unavailable = captureStatus(capture);
+			if (unavailable != null) return MotionStepResult.rejected(unavailable);
+			if (capture.solverGeneration() != command.expectedSolverGeneration()) {
+				return MotionStepResult.rejected(RegionStepStatus.STALE_GENERATION);
 		}
 		FluidStepCandidate candidate = solverBackend.evaluate(new FluidStepRequest(
-				capture.solverGeneration(), capture.state(), command.movingBodies(),
+				capture.solverGeneration(), capture.stateAccess(), command.movingBodies(),
 				command.phaseChangeEnabled(), command.maximumPhaseOperations(), command.mechanicalAuditEnabled(),
 				command.pendingPhaseSettlementOnly()));
 		RegionStepStatus invalid = validateCandidate(capture, candidate.backendId(), candidate.baseGeneration(),
@@ -52,19 +52,20 @@ public final class RegionApplicationService implements RegionTickUseCase.StepExe
 		RegionStepStatus adoption = regions.adoptMotion(command.regionId(), candidate, solverBackend.id());
 		return adoption == RegionStepStatus.ACCEPTED
 				? MotionStepResult.accepted(candidate) : MotionStepResult.rejected(adoption);
+		}
 	}
 
 	@Override
 	public ThermalStepResult stepThermal(ThermalStepCommand command) {
 		Objects.requireNonNull(command, "command");
-		RegionRepository.Capture capture = captureForStep(command.regionId());
-		RegionStepStatus unavailable = captureStatus(capture);
-		if (unavailable != null) return ThermalStepResult.rejected(unavailable);
-		if (capture.solverGeneration() != command.expectedSolverGeneration()) {
-			return ThermalStepResult.rejected(RegionStepStatus.STALE_GENERATION);
+		try (RegionRepository.Capture capture = captureForStep(command.regionId())) {
+			RegionStepStatus unavailable = captureStatus(capture);
+			if (unavailable != null) return ThermalStepResult.rejected(unavailable);
+			if (capture.solverGeneration() != command.expectedSolverGeneration()) {
+				return ThermalStepResult.rejected(RegionStepStatus.STALE_GENERATION);
 		}
 		FluidThermalStepCandidate candidate = solverBackend.evaluateThermal(new FluidThermalStepRequest(
-				capture.solverGeneration(), capture.state(), command.phaseChangeEnabled(),
+				capture.solverGeneration(), capture.stateAccess(), command.phaseChangeEnabled(),
 				command.maximumPhaseOperations()));
 		RegionStepStatus invalid = validateCandidate(capture, candidate.backendId(), candidate.baseGeneration(),
 				candidate.candidateGeneration(), candidate.layout());
@@ -72,6 +73,7 @@ public final class RegionApplicationService implements RegionTickUseCase.StepExe
 		RegionStepStatus adoption = regions.adoptThermal(command.regionId(), candidate, solverBackend.id());
 		return adoption == RegionStepStatus.ACCEPTED
 				? ThermalStepResult.accepted(candidate) : ThermalStepResult.rejected(adoption);
+		}
 	}
 
 	public CheckpointRegionResult checkpoint(CheckpointRegionCommand command) {
@@ -94,7 +96,7 @@ public final class RegionApplicationService implements RegionTickUseCase.StepExe
 				|| candidateGeneration != Math.addExact(capture.solverGeneration(), 1L)) {
 			return RegionStepStatus.STALE_GENERATION;
 		}
-		return layout.equals(capture.state().layout()) ? null : RegionStepStatus.LAYOUT_MISMATCH;
+		return layout.equals(capture.stateAccess().layout()) ? null : RegionStepStatus.LAYOUT_MISMATCH;
 	}
 
 	private RegionRepository.Capture captureForStep(java.util.UUID regionId) {

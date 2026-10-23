@@ -2,6 +2,7 @@ package mmm.application.port;
 
 import mmm.application.result.RegionStepStatus;
 import mmm.fluid.FluidDomainState;
+import mmm.fluid.FluidStateAccess;
 import mmm.fluid.FluidStepCandidate;
 import mmm.fluid.FluidThermalStepCandidate;
 
@@ -21,15 +22,17 @@ public interface RegionRepository {
 
 	enum CaptureStatus { READY, REGION_NOT_FOUND, REGION_NOT_LOADED }
 
-	record Capture(CaptureStatus status, long solverGeneration, FluidDomainState state) {
+	record Capture(CaptureStatus status, long solverGeneration, FluidStateAccess stateAccess) implements AutoCloseable {
+		public FluidDomainState state() { return stateAccess == null ? null : stateAccess.exportState(); }
+		@Override public void close() { if (stateAccess != null) stateAccess.close(); }
 		public Capture {
 			Objects.requireNonNull(status, "status");
-			if (solverGeneration < 0L || (status == CaptureStatus.READY) != (state != null)) {
+			if (solverGeneration < 0L || (status == CaptureStatus.READY) != (stateAccess != null)) {
 				throw new IllegalArgumentException("Region step capture status/state disagree");
 			}
 		}
 
-		public static Capture ready(long solverGeneration, FluidDomainState state) {
+		public static Capture ready(long solverGeneration, FluidStateAccess state) {
 			return new Capture(CaptureStatus.READY, solverGeneration, Objects.requireNonNull(state, "state"));
 		}
 

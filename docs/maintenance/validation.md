@@ -619,3 +619,5 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 早于管线复用的规模成本见 `gpu-pressure-scale.log`：同一 7 点制造矩阵，8³／16³／32³／64³ 的 GPU 热态完整求解均值分别为 2.146／8.496／26.361／204.842 ms；相同矩阵的独立 CPU Jacobi-PCG 为 1.028／2.408／24.701／459.002 ms。64³ 时设备逻辑存储约 59.7 MB、主机 staging 约 94.8 MB，每次上传约 31.2 MB、回读约 2.1 MB。这些数字只覆盖压力，不代表完整区域 20 Hz，也没有测量 Minecraft 同时渲染。
 
 最终打包与架构检查 `gpu-performance-package.log` 通过，扫描 557 个生产源文件。主模组与可选 Vulkan 组件产物分别为 `fabric/build/libs/mmm-fabric-0.17.0.jar`、`gpu-probe/build/libs/mmm-gpu-probe-0.1.17.jar`。
+
+2026-10-24：`gpu-resident-contract-compile.log` 中 `:fabric:compileTestJava :gpu-kernel:compileJava` 通过。该次仅检查常驻状态访问契约的调用迁移，尚未运行新后端性能或物理验证。
