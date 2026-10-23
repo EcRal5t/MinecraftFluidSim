@@ -30,7 +30,7 @@ public record GasStateSnapshot(
 				|| registryFingerprint == null || !registryFingerprint.matches("[0-9a-f]{64}")
 				|| chemicalRegistryFingerprint == null
 				|| !(chemicalRegistryFingerprint.isEmpty() || chemicalRegistryFingerprint.matches("[0-9a-f]{64}"))
-				|| nodes == null || nodes.size() > GasLimits.MAX_NODES_PER_REGION
+				|| nodes == null
 				|| pieceNodeOrdinal == null || pieceNodeOrdinal.length != pieceCount(sizeX, sizeY, sizeZ)
 				|| externalSource == null || escapedSink == null) {
 			throw new IllegalArgumentException("Invalid gas state identity or dimensions");

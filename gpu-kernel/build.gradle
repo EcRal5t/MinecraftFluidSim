@@ -249,7 +249,8 @@ registerGpuProbe(
         providers.gradleProperty('gpuMechanicalGrids').getOrElse('32'),
         providers.gradleProperty('gpuMechanicalSamples').getOrElse('10'),
         providers.gradleProperty('gpuMechanicalWarmup').getOrElse('5'),
-        providers.gradleProperty('gpuMechanicalGas').getOrElse('false')
+        providers.gradleProperty('gpuMechanicalGas').getOrElse('false'),
+        providers.gradleProperty('gpuMechanicalScene').getOrElse('dam')
     probeTask.jvmArgs '-Xmx3g'
     probeTask.systemProperty 'mmm.gpuMechanicalStages', providers.gradleProperty('gpuMechanicalStages').getOrElse('false')
     if (providers.gradleProperty('gpuMechanicalJfr').getOrElse('false').toBoolean()) {
@@ -291,7 +292,8 @@ registerGpuProbe(
         providers.gradleProperty('gpuGasPressureGrid').getOrElse('64'),
         providers.gradleProperty('gpuGasPressureScene').getOrElse('dam'),
         providers.gradleProperty('gpuGasPressureSamples').getOrElse('3'),
-        providers.gradleProperty('gpuGasPressureWarmup').getOrElse('1')
+        providers.gradleProperty('gpuGasPressureWarmup').getOrElse('1'),
+        providers.gradleProperty('gpuGasPressureStages').getOrElse('false')
     probeTask.jvmArgs '-Xmx3g'
 }
 

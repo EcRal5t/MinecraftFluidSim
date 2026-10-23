@@ -143,4 +143,4 @@ void transportPreference(int f) {
     faceFlux[f]=dvec2(qt,positive?liquid:-liquid);
 }
 
-void main(){int i=int(gl_GlobalInvocationID.x);int count=pc.sx*pc.sy*pc.sz;if(pc.stage==0){if(i<count)totals(i);}else if(pc.stage==1){if(i<count)reconstruct(i);}else{int countFaces=(pc.sx+1)*pc.sy*pc.sz+pc.sx*(pc.sy+1)*pc.sz+pc.sx*pc.sy*(pc.sz+1);if(i<countFaces){if(pc.stage==2)faceGeometry(i);else transportPreference(i);}}}
+void main(){if(errors!=0u)return;int i=int(gl_GlobalInvocationID.x);int count=pc.sx*pc.sy*pc.sz;if(pc.stage==0){if(i<count)totals(i);}else if(pc.stage==1){if(i<count)reconstruct(i);}else{int countFaces=(pc.sx+1)*pc.sy*pc.sz+pc.sx*(pc.sy+1)*pc.sz+pc.sx*pc.sy*(pc.sz+1);if(i<countFaces){if(pc.stage==2)faceGeometry(i);else transportPreference(i);}}}
