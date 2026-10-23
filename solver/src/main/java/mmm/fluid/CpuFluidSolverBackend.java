@@ -8,7 +8,7 @@ import mmm.world.MovingBodyFluidCoupling;
 /** Reference backend that evaluates a request on a private restored domain. */
 public final class CpuFluidSolverBackend implements FluidSolverBackend, AutoCloseable {
 	public static final String ID = "mmm:cpu-flip";
-	private static final int MAXIMUM_TIME_REFINEMENTS = 16;
+	public static final int MAXIMUM_TIME_REFINEMENTS = 16;
 	/**
 	 * Mechanical substeps one complete candidate may spend in total. Every time refinement doubles
 	 * the substep count and granular displacement may require many substeps, so counting attempts alone leaves a

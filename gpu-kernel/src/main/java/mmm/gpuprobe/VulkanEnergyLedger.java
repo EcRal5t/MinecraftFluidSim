@@ -63,6 +63,12 @@ final class VulkanEnergyLedger implements AutoCloseable {
         while(count>1){int groups=(count+63)/64;stage(command,layout,1,count,from,to,groups);count=groups;int swap=from;from=to;to=swap;}
         stage(command,layout,2,1,from,word(layout.result()),1);
     }
+    /** Adds the preceding successful private substep's exact result to this substep's result. */
+    void recordAccumulate(VkCommandBuffer command,Layout layout,int sourceCanonicalWord){
+        if(sourceCanonicalWord<0)throw new IllegalArgumentException("Invalid source energy ledger offset");
+        stage(command,layout,3,word(layout.result()),sourceCanonicalWord,word(layout.scratchA()),1);
+        stage(command,layout,2,1,word(layout.scratchA()),word(layout.result()),1);
+    }
     private void stage(VkCommandBuffer command,Layout layout,int stage,int count,int from,int to,int groups) {
         try(var stack=stackPush()) {
             bindings.bind(command,stack);

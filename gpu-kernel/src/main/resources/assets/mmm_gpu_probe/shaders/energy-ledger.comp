@@ -28,6 +28,16 @@ void addDouble(int index){
         int part=int(value&uint64_t(65535));if(part!=0)atomicAdd(bins[first+digit],sign*part);
     }
 }
+void addCanonical(int bank,int address,int limb){
+    int sign=int(readWord(bank,address)),length=int(readWord(bank,address+2));if(sign==0||limb>=length)return;
+    int power=int(readWord(bank,address+1))+1074+32*limb;
+    if((sign!=-1&&sign!=1)||length<0||length>68||power<0){atomicOr(errors,32u);return;}
+    uint64_t value=uint64_t(readWord(bank,address+4+limb))<<(power&15);int first=power>>4;
+    for(int digit=0;digit<3;digit++){
+        int part=int((value>>(16*digit))&uint64_t(65535));if(part==0)continue;
+        if(first+digit>=136){atomicOr(errors,32u);continue;}atomicAdd(bins[first+digit],sign*part);
+    }
+}
 // Normalize signed base-2^16 columns to a fixed two's-complement row. Each block has one writer.
 void writeRow(int block){
     int carry=0;uint low=0u;
@@ -58,7 +68,8 @@ void main(){
     if(block>=p.groups)return;
     if(p.stage==2){if(lane==0)canonical();return;}
     for(int digit=lane;digit<136;digit+=128)bins[digit]=0;barrier();
-    if(p.stage==0) {
+    if(p.stage==3){if(lane<68){addCanonical(0,p.inputOffset,lane);addCanonical(1,p.count,lane);}}
+    else if(p.stage==0) {
         for(uint index=1024u*uint(block)+uint(lane);index<min(uint(p.count),1024u*uint(block)+1024u);index+=128u)addDouble(int(index));
     } else {
         // A lane owns one base-2^16 digit; all source rows are read without atomics.

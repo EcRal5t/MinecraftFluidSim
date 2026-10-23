@@ -244,6 +244,19 @@ public final class GpuLiquidGatherBenchmark {
                         ||!readDyadic(storage,capture,negative.result().offset()).equals(SignedDyadic.of(-Double.MIN_VALUE)))
                     throw new AssertionError("Exact energy reduction lost subnormal after large cancellation");
             }
+            try(var source=storage.capture();var candidate=storage.prepare(source)){
+                int error=candidate.execute(0,(command,input,output,errors,staging,stack)->{
+                    ledger.rebindRanges(new FlipKernelBindings.BufferRange(input),new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
+                    ledger.record(command,positive);ledger.recordAccumulate(command,positive,Math.toIntExact(positive.result().offset()/4));
+                    ledger.record(command,negative);ledger.recordAccumulate(command,negative,Math.toIntExact(positive.result().offset()/4));
+                });
+                if(error!=0)throw new AssertionError("Private substep ledger accumulation status="+error);candidate.commit();
+            }
+            try(var capture=storage.capture()){
+                if(!readDyadic(storage,capture,positive.result().offset()).equals(SignedDyadic.of(Double.MIN_VALUE).multiply(2))
+                        ||!readDyadic(storage,capture,negative.result().offset()).equals(SignedDyadic.ZERO))
+                    throw new AssertionError("Private substep ledger accumulation lost exact addition or cancellation");
+            }
         }
         System.out.println("Exact signed energy reduction: cross-block cancellation and subnormal remainder passed");
     }
