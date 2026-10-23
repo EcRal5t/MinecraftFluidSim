@@ -253,7 +253,7 @@ public final class GpuLiquidGatherBenchmark {
                 if(error!=0)throw new AssertionError("Private substep ledger accumulation status="+error);candidate.commit();
             }
             try(var capture=storage.capture()){
-                if(!readDyadic(storage,capture,positive.result().offset()).equals(SignedDyadic.of(Double.MIN_VALUE).multiply(2))
+                if(!readDyadic(storage,capture,positive.result().offset()).equals(SignedDyadic.of(Double.MIN_VALUE).multiply(SignedDyadic.of(2.0)))
                         ||!readDyadic(storage,capture,negative.result().offset()).equals(SignedDyadic.ZERO))
                     throw new AssertionError("Private substep ledger accumulation lost exact addition or cancellation");
             }
