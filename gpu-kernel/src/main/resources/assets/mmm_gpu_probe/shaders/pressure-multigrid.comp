@@ -11,10 +11,9 @@ layout(binding=6,std430) readonly buffer Control { double control[]; };
 layout(binding=7,std430) buffer Hierarchy { double hierarchy[]; };
 layout(push_constant) uniform Params {
     int sx; int sy; int sz; int stage;
-    int base; int peerBase; int psx; int psy; int psz; int fineCount; int pressureStride; int reserved1;
+    int base; int peerBase; int psx; int psy; int psz; int fineCount; int pressureStride; int factor;
 } p;
 shared double coarseCorrection[64];
-shared double coarseNext[64];
 const double OMEGA=0.66666666666666666667LF;
 
 int count(ivec3 shape) { return shape.x*shape.y*shape.z; }
@@ -95,24 +94,43 @@ void restrictResidual(int row,int n) {
     hierarchy[tIndex(p.base,n,row)]=scaled(p.base,row,rhs);
 }
 
-// The coarsest level fits one workgroup, including odd or elongated input dimensions.
-// Fixed symmetric Jacobi keeps this approximate inverse linear and positive on the pressure range.
-void solveCoarse(int row,int n) {
-    if(row<n)coarseCorrection[row]=0.0;
-    barrier();
-    for(int iteration=0;iteration<32;iteration++) {
-        if(row<n) {
-            double value=diagonal(p.base,row)*coarseCorrection[row];
-            ivec3 at=coordinate(row,ivec3(p.sx,p.sy,p.sz));
-            for(int side=0;side<6;side++) {
-                ivec3 next=adjacent(at,side);
-                if(inside(next,ivec3(p.sx,p.sy,p.sz)))value+=hierarchy[aIndex(p.base,row,side+1)]*coarseCorrection[indexOf(next,ivec3(p.sx,p.sy,p.sz))];
-            }
-            coarseNext[row]=coarseCorrection[row]+scaled(p.base,row,hierarchy[rIndex(p.base,n,row)]-value);
+// Factor the small Galerkin operator once per active-set restart. The diagonal floor scales
+// with the dot-product roundoff bound; it regularizes only this preconditioner, never the solve.
+void factorCoarse(int row,int n){
+    if(row<n){
+        for(int column=0;column<n;column++)hierarchy[p.factor+row*n+column]=0.0;
+        hierarchy[p.factor+row*n+row]=diagonal(p.base,row);
+        ivec3 at=coordinate(row,ivec3(p.sx,p.sy,p.sz));
+        for(int side=0;side<6;side++){ivec3 next=adjacent(at,side);if(inside(next,ivec3(p.sx,p.sy,p.sz)))
+            hierarchy[p.factor+row*n+indexOf(next,ivec3(p.sx,p.sy,p.sz))]=hierarchy[aIndex(p.base,row,side+1)];}
+    }
+    memoryBarrierBuffer();barrier();
+    for(int column=0;column<n;column++){
+        if(row==column){
+            double d=diagonal(p.base,row),sum=d;
+            for(int j=0;j<column;j++){double entry=hierarchy[p.factor+row*n+j];sum-=entry*entry;}
+            double pivot=d>0.0?sqrt(max(sum,double(n)*2.22044604925031308085e-16LF*d)):1.0;
+            coarseCorrection[column]=pivot;hierarchy[p.factor+row*n+column]=pivot;
         }
-        barrier();
-        if(row<n)coarseCorrection[row]=coarseNext[row];
-        barrier();
+        memoryBarrierBuffer();barrier();
+        if(row<n&&row>column){
+            double sum=hierarchy[p.factor+row*n+column];
+            for(int j=0;j<column;j++)sum-=hierarchy[p.factor+row*n+j]*hierarchy[p.factor+column*n+j];
+            hierarchy[p.factor+row*n+column]=sum/coarseCorrection[column];
+        }
+        memoryBarrierBuffer();barrier();
+    }
+}
+// Forward and transposed triangular solves preserve a fixed linear symmetric preconditioner.
+void solveCoarse(int row,int n){
+    if(row<n)coarseCorrection[row]=hierarchy[rIndex(p.base,n,row)];barrier();
+    for(int column=0;column<n;column++){
+        if(row==column)coarseCorrection[row]/=hierarchy[p.factor+row*n+row];barrier();
+        if(row<n&&row>column)coarseCorrection[row]-=hierarchy[p.factor+row*n+column]*coarseCorrection[column];barrier();
+    }
+    for(int column=n-1;column>=0;column--){
+        if(row==column)coarseCorrection[row]/=hierarchy[p.factor+row*n+row];barrier();
+        if(row<column)coarseCorrection[row]-=hierarchy[p.factor+column*n+row]*coarseCorrection[column];barrier();
     }
     if(row<n)hierarchy[uIndex(p.base,n,row)]=coarseCorrection[row];
 }
@@ -120,9 +138,10 @@ void solveCoarse(int row,int n) {
 void main() {
     // These values are uniform over every workgroup, including the barrier-bearing coarse solve.
     if(control[3]==0.0)return;
-    if(p.stage<=1&&control[6]==0.0)return;
+    if((p.stage<=1||p.stage==8)&&control[6]==0.0)return;
     int row=int(gl_GlobalInvocationID.x),n=count(ivec3(p.sx,p.sy,p.sz));
     if(p.stage==4){solveCoarse(row,n);return;}
+    if(p.stage==8){factorCoarse(row,n);return;}
     if(row>=n)return;
     if(p.stage==0)buildFine(row);
     else if(p.stage==1)buildCoarse(row);

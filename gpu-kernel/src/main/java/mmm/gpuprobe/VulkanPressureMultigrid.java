@@ -17,7 +17,7 @@ final class VulkanPressureMultigrid implements AutoCloseable {
         int cells() { return Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ); }
     }
 
-    record Layout(List<Level> levels, int workspaceDoubles, int pressureStride) {
+    record Layout(List<Level> levels, int workspaceDoubles, int pressureStride, int coarseFactorOffset) {
         Layout { levels = List.copyOf(levels); }
         long workspaceBytes() { return Math.multiplyExact(8L, workspaceDoubles); }
     }
@@ -46,7 +46,9 @@ final class VulkanPressureMultigrid implements AutoCloseable {
             if (Math.max(sx, Math.max(sy, sz)) <= 4) break;
             sx = (sx + 1) / 2; sy = (sy + 1) / 2; sz = (sz + 1) / 2;
         }
-        return new Layout(levels, cursor, pressureStride);
+        int factor=cursor,coarse=levels.getLast().cells();
+        cursor=Math.addExact(cursor,Math.multiplyExact(coarse,coarse));
+        return new Layout(levels, cursor, pressureStride,factor);
     }
 
     /** Bind starts, columns, values, rows, pressure metadata, pressure work, control and this workspace. */
@@ -58,6 +60,7 @@ final class VulkanPressureMultigrid implements AutoCloseable {
         var levels = layout.levels();
         stage(command, layout, levels.getFirst(), levels.getFirst(), 0);
         for (int i = 1; i < levels.size(); i++) stage(command, layout, levels.get(i), levels.get(i - 1), 1);
+        stage(command,layout,levels.getLast(),levels.getLast(),8);
     }
 
     /** A zero-start, fixed linear V-cycle; all work stays inside the caller's submission. */
@@ -83,8 +86,8 @@ final class VulkanPressureMultigrid implements AutoCloseable {
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                     stack.ints(level.sizeX(), level.sizeY(), level.sizeZ(), stage,
                             level.offset(), peer.offset(), peer.sizeX(), peer.sizeY(), peer.sizeZ(),
-                            layout.levels().getFirst().cells(), layout.pressureStride(), 0));
-            vkCmdDispatch(command, stage == 4 ? 1 : (level.cells() + 127) / 128, 1, 1);
+                            layout.levels().getFirst().cells(), layout.pressureStride(), layout.coarseFactorOffset()));
+            vkCmdDispatch(command, stage == 4 || stage == 8 ? 1 : (level.cells() + 127) / 128, 1, 1);
             barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, stack);
         }
