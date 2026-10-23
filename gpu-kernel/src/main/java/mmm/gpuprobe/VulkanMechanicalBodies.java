@@ -11,8 +11,11 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Connected liquid/gas mechanical bodies sharing force, transport and compression work. */
 final class VulkanMechanicalBodies implements AutoCloseable {
+    /** Contact components use active particle ordinals; -1 omits particle-particle contact links. */
+    record GranularLinks(VulkanGranularStateLayout state,VulkanGranularPressure.Layout pressure,int contactComponentsWordOffset) { }
     record Layout(VulkanLiquidStateLayout source, VulkanLiquidRouteLayout routes,
                   int projectedFacesWordOffset, int gasCellNodesWordOffset, int gasNodeCapacity, int gasCountsWordOffset,
+                  GranularLinks granular,
                   VulkanLiquidStateLayout.Column header, VulkanLiquidStateLayout.Column parents,
                   VulkanLiquidStateLayout.Column changed, VulkanLiquidStateLayout.Column counts,
                   VulkanLiquidStateLayout.Column offsets, VulkanLiquidStateLayout.Column cursors,
@@ -32,7 +35,19 @@ final class VulkanMechanicalBodies implements AutoCloseable {
                     word(source.column(VulkanLiquidStateLayout.Field.CELL_OFFSETS)),
                     word(routes.column(VulkanLiquidRouteLayout.Field.MASS_UNITS)),projectedFacesWordOffset,
                     gasCellNodesWordOffset,gasNodeCapacity,word(parents),word(changed),word(counts),word(offsets),word(cursors),word(members),gasCountsWordOffset};
-            for(int i=0;i<values.length;i++)target.putInt(4*i,values[i]);return target;
+            for(int i=0;i<values.length;i++)target.putInt(4*i,values[i]);
+            target.putInt(72,granular==null?0:granular.state().particleCapacity());
+            if(granular!=null){var state=granular.state();var pressure=granular.pressure();
+                target.putInt(76,state.word(VulkanGranularStateLayout.Field.COUNTS));
+                target.putInt(80,pressure.word(VulkanGranularPressure.Field.FACE_IDS));
+                target.putInt(84,pressure.word(VulkanGranularPressure.Field.FACE_SHARES));
+                target.putInt(88,pressure.word(VulkanGranularPressure.Field.DRAG_WEIGHTS));
+                target.putInt(92,state.word(VulkanGranularStateLayout.Field.SUPPORT_CELLS));
+                target.putInt(96,state.word(VulkanGranularStateLayout.Field.SUPPORT_QUOTAS));
+                target.putInt(100,granular.contactComponentsWordOffset());
+                target.putInt(104,pressure.word(VulkanGranularPressure.Field.DRAG_RESISTANCE));
+            }
+            return target;
         }
         void initializeHeader(ByteBuffer destination) {
             destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());
@@ -41,16 +56,22 @@ final class VulkanMechanicalBodies implements AutoCloseable {
     static Layout layout(VulkanLiquidStateLayout source, VulkanLiquidRouteLayout routes,
                          int projectedFacesWordOffset, int gasCellNodesWordOffset, int gasNodeCapacity, int gasCountsWordOffset,
                          long scratchBase, long alignment) {
+        return layout(source,routes,projectedFacesWordOffset,gasCellNodesWordOffset,gasNodeCapacity,gasCountsWordOffset,null,scratchBase,alignment);
+    }
+    static Layout layout(VulkanLiquidStateLayout source,VulkanLiquidRouteLayout routes,
+                         int projectedFacesWordOffset,int gasCellNodesWordOffset,int gasNodeCapacity,int gasCountsWordOffset,
+                         GranularLinks granular,long scratchBase,long alignment){
         if(gasNodeCapacity<0||(gasNodeCapacity>0&&(gasCellNodesWordOffset<0||gasCountsWordOffset<0))||projectedFacesWordOffset<0
                 ||scratchBase<routes.endOffset()||alignment<8||(alignment&(alignment-1))!=0)
             throw new IllegalArgumentException("Invalid mechanical body layout");
-        int vertices=Math.addExact(source.cellCount(),gasNodeCapacity);long[] cursor={scratchBase};
+        if(granular!=null&&(granular.state().cells()!=source.cellCount()||scratchBase<granular.pressure().endOffset()))throw new IllegalArgumentException("Granular mechanical links differ");
+        int vertices=Math.addExact(Math.addExact(source.cellCount(),gasNodeCapacity),granular==null?0:granular.state().particleCapacity());long[] cursor={scratchBase};
         var header=column(cursor,32,alignment);var parents=column(cursor,vertices,alignment);
         var changed=column(cursor,1,alignment);var counts=column(cursor,vertices,alignment);
         var offsets=column(cursor,Math.addExact(vertices,1),alignment);var cursors=column(cursor,vertices,alignment);
         var members=column(cursor,vertices,alignment);
         var scan=column(cursor,Math.toIntExact(VulkanPrefixScan.workspaceBytes(vertices)/4),alignment);
-        return new Layout(source,routes,projectedFacesWordOffset,gasCellNodesWordOffset,gasNodeCapacity,gasCountsWordOffset,header,
+        return new Layout(source,routes,projectedFacesWordOffset,gasCellNodesWordOffset,gasNodeCapacity,gasCountsWordOffset,granular,header,
                 parents,changed,counts,offsets,cursors,members,scan,align(cursor[0],alignment));
     }
     private final FlipKernelBindings bindings;
@@ -68,7 +89,9 @@ final class VulkanMechanicalBodies implements AutoCloseable {
         if(iterations<1)throw new IllegalArgumentException("Mechanical connectivity needs a positive batch");
         for(int i=0;i<iterations;i++){
             stage(command,layout,1,1);stage(command,layout,2,layout.faces());
-            stage(command,layout,3,layout.source().cellCount());stage(command,layout,4,layout.vertices());
+            stage(command,layout,3,layout.source().cellCount());
+            if(layout.granular()!=null)stage(command,layout,7,layout.granular().state().particleCapacity());
+            stage(command,layout,4,layout.vertices());
         }
     }
     void recordMembers(VkCommandBuffer command,Layout layout) {
@@ -77,6 +100,7 @@ final class VulkanMechanicalBodies implements AutoCloseable {
         stage(command,layout,6,layout.vertices());
     }
     private void stage(VkCommandBuffer command,Layout layout,int stage,int count) {
+        if(count==0)return;
         int groups=(count+127)/128;
         try(var stack=stackPush()){
             bindings.bind(command,stack);

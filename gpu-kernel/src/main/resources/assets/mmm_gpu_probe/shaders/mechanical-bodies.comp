@@ -8,6 +8,8 @@ layout(binding=2,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header; int stage; int count; } p;
 int h(int i){return int(words[p.header+i]);}
 int gasCount(){return h(17)<0?0:int(words[h(17)]);}
+int particleCount(){return h(18)==0?0:int(words[h(19)]);}
+bool liveVertex(int index){if(index<h(3))return true;if(index<h(3)+h(10))return index<h(3)+gasCount();return index<h(3)+h(10)+particleCount();}
 double value(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
 int64_t mass(int at){return int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32));}
 int root(int vertex){int next=int(words[h(11)+vertex]);while(next!=vertex){vertex=next;next=int(words[h(11)+vertex]);}return vertex;}
@@ -40,6 +42,21 @@ void cell(int index){
         join(index,cellIndex(target));
     }
 }
+void particle(int index){
+    if(index>=particleCount())return;int vertex=h(3)+h(10)+index;
+    if(h(25)>=0){int component=int(words[h(25)+index]);if(component<0||component>=particleCount()){atomicOr(errors,32u);return;}join(vertex,h(3)+h(10)+component);}
+    for(int slot=0;slot<8;slot++)if(mass(h(24)+2*(8*index+slot))>int64_t(0))join(vertex,int(words[h(23)+8*index+slot]));
+    for(int entry=24*index;entry<24*(index+1);entry++){
+        if(value(h(21)+2*entry)<=0.0&&(value(h(26)+2*index)<=0.0||value(h(22)+2*entry)<=0.0))continue;
+        int f=int(words[h(20)+entry]);if(f<0)continue;
+        int nx=(h(0)+1)*h(1)*h(2),ny=h(0)*(h(1)+1)*h(2);
+        int axis=f<nx?0:f<nx+ny?1:2,local=f-(axis==0?0:axis==1?nx:nx+ny);
+        ivec3 dims=ivec3(h(0),h(1),h(2));dims[axis]++;
+        ivec3 pos=ivec3(local%dims.x,local/dims.x%dims.y,local/(dims.x*dims.y));
+        if(pos[axis]<ivec3(h(0),h(1),h(2))[axis])join(vertex,cellIndex(pos));
+        if(pos[axis]>0){pos[axis]--;join(vertex,cellIndex(pos));}
+    }
+}
 void main(){
     int item=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
     if(item>=p.count||errors!=0u)return;
@@ -47,7 +64,8 @@ void main(){
     else if(p.stage==1)words[h(12)]=0u;
     else if(p.stage==2)face(item);
     else if(p.stage==3)cell(item);
-    else if(item>=h(3)+gasCount())return;
+    else if(p.stage==7)particle(item);
+    else if(!liveVertex(item))return;
     else if(p.stage==4){int parent=root(item);uint old=atomicMin(words[h(11)+item],uint(parent));if(old!=uint(parent))atomicOr(words[h(12)],1u);}
     else if(p.stage==5){if(words[h(12)]!=0u){atomicOr(errors,8192u);return;}atomicAdd(words[h(13)+int(words[h(11)+item])],1u);}
     else {int parent=int(words[h(11)+item]);uint offset=atomicAdd(words[h(15)+parent],1u);words[h(16)+int(words[h(14)+parent]+offset)]=uint(item);}
