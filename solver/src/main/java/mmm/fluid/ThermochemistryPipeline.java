@@ -14,6 +14,7 @@ final class ThermochemistryPipeline {
 	private final GranularReactionStage granularReaction;
 	final CondensedPhaseChangeStage condensedPhase;
 	final GasLiquidPhaseChangeStage gasPhase;
+	private final GasLiquidMassTransferStage massTransfer;
 	private String stage = "IDLE";
 	private mmm.thermal.ThermalCarrierTransport.Batch caloricSample;
 	private mmm.thermal.ThermalDomainState.Revision caloricRevision;
@@ -24,6 +25,7 @@ final class ThermochemistryPipeline {
 		granularReaction=new GranularReactionStage(domain);
 		condensedPhase=new CondensedPhaseChangeStage(domain);
 		gasPhase=new GasLiquidPhaseChangeStage(domain);
+		massTransfer=new GasLiquidMassTransferStage(domain);
 	}
 	ThermalTransport.Stats stepTransport(double dtSeconds){
 		var thermal=domain.thermalState;
@@ -74,8 +76,10 @@ final class ThermochemistryPipeline {
 			stage = "GAS_LIQUID_PHASE_CHANGE";
 			gasStats = gasPhase.step(maximumPhaseOperations - condensedStats.operations());
 		}
+		stage = "GAS_LIQUID_MASS_TRANSFER";
+		var massTransferStats = massTransfer.step(dtSeconds);
 		stage = "COMPLETE";
 		return new FluidDomain.ThermalAxisStats(
-				transportStats, chemicalStats, granularStats, condensedStats, gasStats);
+				transportStats, chemicalStats, granularStats, condensedStats, gasStats, massTransferStats);
 	}
 }

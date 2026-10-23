@@ -532,9 +532,23 @@ public final class WorldCapabilityBundleStore {
 			return bundle != null && profile().equals(bundle.profile());
 		}
 
+		public static void validateMassTransferReferences(ChemicalRegistry chemical, GasRegistry gas, ThermalRegistry thermal) {
+			for (var transfer : chemical.gasLiquidMassTransfers()) {
+				var component = gas.component(transfer.gasComponentId());
+				if (!component.allowsSpecies(transfer.speciesId())) throw new IllegalArgumentException(
+						"Gas/liquid mass transfer references a species unavailable in its gas component: " + transfer.id());
+				var phase = chemical.phase(chemical.phaseHandle(transfer.liquidPhaseId()));
+				int liquid = thermal.materialHandle(ThermalMaterialDefinition.CarrierKind.LIQUID, phase.materialId());
+				int vapor = thermal.materialHandle(ThermalMaterialDefinition.CarrierKind.GAS, component.id());
+				thermal.speciesOffset(liquid, transfer.speciesId());
+				thermal.speciesOffset(vapor, transfer.speciesId());
+			}
+		}
+
 		/** A bundle is only admissible when every cross-registry reference resolves in the frozen snapshot. */
 		private static void validateReferences(MaterialRegistry material, ChemicalRegistry chemical,
 				GranularRegistry granular, GasRegistry gas, ThermalRegistry thermal) {
+			validateMassTransferReferences(chemical, gas, thermal);
 			for (ChemicalPhaseDefinition phase : chemical.phases()) {
 				if (!material.hasMaterial(phase.materialId())) {
 					throw new IllegalArgumentException("Chemical phase references unknown material " + phase.materialId());

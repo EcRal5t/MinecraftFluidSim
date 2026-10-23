@@ -53,6 +53,7 @@ public final class FluidDomain {
 	final FluidSolverConfig config;
 	final SolverUnitScale unitScale;
 	final DomainGeometry geometry;
+	EntityBodyState entityBodies = EntityBodyState.EMPTY;
 	final CellLiquidGrid liquidGrid;
 	final MacVelocityGrid mac;
 	final CellMacStage cellMacStage;
@@ -240,6 +241,12 @@ public final class FluidDomain {
 	static GranularCouplingFields.Position parcelPosition(GranularParcelStore.Parcel parcel) { return DomainStep.parcelPosition(parcel); }
 	static float trilinearWeight(int ox, int oy, int oz, float fx, float fy, float fz) { return DomainStep.trilinearWeight(ox, oy, oz, fx, fy, fz); }
 	public MovingBodyFluidCoupling.Result applyMovingBodyCoupling(MovingBodyFluidCoupling.Request request) { return domainStep.applyMovingBodyCoupling(request); }
+	public EntityBodyState entityBodyState() { return entityBodies; }
+	/** Restores accepted bodies before deriving capacity, pressure or gas geometry. */
+	public void restoreEntityBodyState(EntityBodyState state) {
+		entityBodies = java.util.Objects.requireNonNull(state, "Entity body state is missing");
+		markCellInventoryChanged();
+	}
 	static void requireFiniteMarkerVelocity(double velocity) { DomainStep.requireFiniteMarkerVelocity(velocity); }
 	public BodyFluidSample sampleAxisAlignedBody(
 			double minimumX, double minimumY, double minimumZ,
@@ -514,11 +521,18 @@ public final class FluidDomain {
 	public record BodyFluidSample(
 			double displacedVolumeCubicMetres,
 			double centerXMetres, double centerYMetres, double centerZMetres,
-			double velocityXMetresPerSecond, double velocityYMetresPerSecond, double velocityZMetresPerSecond
+			double velocityXMetresPerSecond, double velocityYMetresPerSecond, double velocityZMetresPerSecond,
+            double wetSurfaceAreaSquareMetres, double displacedMassKilograms,
+            double pressureForceXNewtons, double pressureForceYNewtons, double pressureForceZNewtons
 	) {
-		static final BodyFluidSample EMPTY = new BodyFluidSample(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+		static final BodyFluidSample EMPTY = new BodyFluidSample(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0, 0, 0);
 
 		public BodyFluidSample {
+			if (!(Double.isFinite(wetSurfaceAreaSquareMetres) && wetSurfaceAreaSquareMetres >= 0
+					&& Double.isFinite(displacedMassKilograms) && displacedMassKilograms >= 0
+					&& Double.isFinite(pressureForceXNewtons) && Double.isFinite(pressureForceYNewtons)
+					&& Double.isFinite(pressureForceZNewtons)))
+				throw new IllegalArgumentException("Body wet surface and pressure force must be finite");
 			if (!(Double.isFinite(displacedVolumeCubicMetres) && displacedVolumeCubicMetres >= 0.0
 					&& Double.isFinite(centerXMetres) && Double.isFinite(centerYMetres) && Double.isFinite(centerZMetres)
 					&& Double.isFinite(velocityXMetresPerSecond) && Double.isFinite(velocityYMetresPerSecond)
@@ -626,8 +640,10 @@ public final class FluidDomain {
 			RegionChemistry.ReactionStats chemistry,
 			PhaseTransferStats granularPhase,
 			FluidDomain.ThermalPhaseStats condensedPhase,
-			FluidDomain.GasThermalPhaseStats gasPhase
+			FluidDomain.GasThermalPhaseStats gasPhase,
+			GasLiquidMassTransferStats massTransfer
 	) { }
+	public record GasLiquidMassTransferStats(boolean active, boolean changedStocks) { }
 	public record PhaseTransferStats(int transfers, int precipitations, int dissolutions, long signedSolidSvq) { }
 	public record WaterClearPlan(
 			int markerCount, long totalVolumeBits, long totalMassUnits, ChemicalTransferLedger drained,

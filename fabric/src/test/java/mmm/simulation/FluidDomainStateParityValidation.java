@@ -65,7 +65,7 @@ public final class FluidDomainStateParityValidation {
 		boolean typed = false;
 		try {
 			new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0L, base, List.of(
-					new MovingBodyFluidCoupling.Request(0.5F, 0.5F, 0.5F,
+					MovingBodyFluidCoupling.prescribedCube(0.5F, 0.5F, 0.5F,
 							Double.MAX_VALUE, 0.0, 0.0, 0.01)), false, 0, false));
 		} catch (FluidSolverBackend.CandidateEvaluationRejectedException expected) {
 			typed = expected.getCause() instanceof IllegalArgumentException;
@@ -79,6 +79,14 @@ public final class FluidDomainStateParityValidation {
 	private static void captureRestoreCapturePreservesRawBits() throws Exception {
 		FullCapabilityTestFixture.Registries registries = ProductionFluidReplayValidation.loadProductionRegistries();
 		FluidDomain domain = ProductionFluidReplayValidation.createFullyBoundHalfFilledDomain(registries);
+		var key = domain.captureAuthoritativeState().liquid().stocks().stream()
+				.filter(stock -> domain.materialRegistry().material(stock.key().material()).id().equals("mmm:water"))
+				.findFirst().orElseThrow().key();
+		domain.chemistry().restoreMassTransferPending(List.of(new mmm.chemistry.RegionChemistry.MassTransferPending(
+				key.cell(), key.material(), key.supportMask(), "mmm:co2_water", .125, -2.5e-7)));
+		domain.restoreEntityBodyState(new mmm.fluid.EntityBodyState(List.of(
+				new mmm.world.MovingBodyFluidCoupling.Request(new java.util.UUID(29, 47),
+						new mmm.world.MovingBodyFluidCoupling.Bounds(-2, -2, -2, -1.75, -1.5, -1.25), .125, -.25, .5))));
 		FluidDomainState captured = domain.captureAuthoritativeState();
 		FluidDomain restored = FluidDomain.restoreAuthoritativeState(captured);
 		FluidDomainState recaptured = restored.captureAuthoritativeState();
@@ -137,3 +145,4 @@ public final class FluidDomainStateParityValidation {
 				"thermal-only candidate/restore/capture");
 	}
 }
+

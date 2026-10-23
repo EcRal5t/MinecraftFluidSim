@@ -20,7 +20,7 @@ public final class EntityFluidWiringValidation {
 	public static void main(String[] args) {
 		displacementObservationSpansConsecutiveTicks();
 		movingBodyRequestsCarryObservedDisplacement();
-		movingBodyRequestsSkipUnobservedBodies();
+		movingBodyRequestsInitializeUnobservedBodies();
 		movingBodyRequestsHonourTheDocumentedBudget();
 		System.out.println("Entity fluid wiring passed");
 	}
@@ -48,29 +48,28 @@ public final class EntityFluidWiringValidation {
 
 	private static void movingBodyRequestsCarryObservedDisplacement() {
 		List<MinecraftRegionInputs.BodyMotion> motions = List.of(
-				new MinecraftRegionInputs.BodyMotion(
-						1.5F, 0.75F, 2.25F, 0.4, new Vec3(0.2, -0.05, 0.0)));
+				new MinecraftRegionInputs.BodyMotion(BODY, bounds(1.5, .75, 2.25), 0.4, new Vec3(0.2, -0.05, 0.0)));
 		List<MovingBodyFluidCoupling.Request> requests =
 				MinecraftRegionInputs.movingBodyRequests(motions);
 		require(requests.size() == 1, "one observed body did not produce exactly one request");
 		MovingBodyFluidCoupling.Request request = requests.get(0);
 		require(request.localXMetres() == 1.5F && request.localYMetres() == 0.75F
 						&& request.localZMetres() == 2.25F
-						&& request.displacedVolumeCubicMetres() == 0.4,
+						&& request.bounds().equals(bounds(1.5, .75, 2.25)) && request.bodyId().equals(BODY),
 				"moving-body request did not carry the frozen contact geometry: " + request);
 		require(request.velocityXMetresPerSecond() == 4.0 && request.velocityYMetresPerSecond() == -1.0
 						&& request.velocityZMetresPerSecond() == 0.0,
 				"moving-body request did not convert blocks/tick into metres/second: " + request);
 	}
 
-	private static void movingBodyRequestsSkipUnobservedBodies() {
+	private static void movingBodyRequestsInitializeUnobservedBodies() {
 		List<MinecraftRegionInputs.BodyMotion> motions = List.of(
-				new MinecraftRegionInputs.BodyMotion(1.0F, 1.0F, 1.0F, 0.4, null),
-				new MinecraftRegionInputs.BodyMotion(2.0F, 1.0F, 1.0F, 0.4, Vec3.ZERO));
+				new MinecraftRegionInputs.BodyMotion(BODY, bounds(1, 1, 1), 0.4, null),
+				new MinecraftRegionInputs.BodyMotion(BODY, bounds(2, 1, 1), 0.4, Vec3.ZERO));
 		List<MovingBodyFluidCoupling.Request> requests =
 				MinecraftRegionInputs.movingBodyRequests(motions);
-		require(requests.size() == 1 && requests.get(0).localXMetres() == 2.0F,
-				"an unobserved body was coupled instead of skipped: " + requests);
+		require(requests.size() == 2 && requests.get(0).localXMetres() == 1.0F,
+				"an unobserved body did not initialize its geometry: " + requests);
 		require(requests.get(0).velocityXMetresPerSecond() == 0.0
 						&& requests.get(0).velocityYMetresPerSecond() == 0.0
 						&& requests.get(0).velocityZMetresPerSecond() == 0.0,
@@ -80,8 +79,7 @@ public final class EntityFluidWiringValidation {
 	private static void movingBodyRequestsHonourTheDocumentedBudget() {
 		List<MinecraftRegionInputs.BodyMotion> motions = new ArrayList<>();
 		for (int body = 0; body <= MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP; body++) {
-			motions.add(new MinecraftRegionInputs.BodyMotion(
-					1.0F + body, 1.0F, 1.0F, body, new Vec3(0.1, 0.0, 0.0)));
+			motions.add(new MinecraftRegionInputs.BodyMotion(new UUID(0, body), bounds(1 + body, 1, 1), body, new Vec3(0.1, 0.0, 0.0)));
 		}
 		List<MovingBodyFluidCoupling.Request> requests =
 				MinecraftRegionInputs.movingBodyRequests(motions);
@@ -89,13 +87,21 @@ public final class EntityFluidWiringValidation {
 				"moving-body request budget was not applied: " + requests.size());
 		double maximum = 0.0;
 		for (MovingBodyFluidCoupling.Request request : requests) {
-			maximum = Math.max(maximum, request.displacedVolumeCubicMetres());
+			maximum = Math.max(maximum, request.bodyId().getLeastSignificantBits());
 		}
 		require(maximum == MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP,
 				"moving-body budget did not keep the largest immersed volumes: " + maximum);
+	}
+
+	private static MovingBodyFluidCoupling.Bounds bounds(double x, double y, double z) {
+		return new MovingBodyFluidCoupling.Bounds(x - .2, y - .4, z - .2, x + .2, y + .4, z + .2);
 	}
 
 	private static void require(boolean condition, String message) {
 		if (!condition) throw new AssertionError(message);
 	}
 }
+
+
+
+

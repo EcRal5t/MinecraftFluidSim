@@ -1174,7 +1174,7 @@ final class ControllerInventoryDurabilityValidation {
 					|| !transport.reservoirExchange().equals(mmm.units.SignedDyadic.ZERO)) return null;
 			if (domain.chemistry() != null && domain.chemistry().hasDirtyCells()) return null;
 			if (domain.hasPendingPhaseMotionWork() || !domainIsAtRest()) return null;
-			return new ThermalActivity.Observation(transport, false, false, false, false, false, false, true);
+			return new ThermalActivity.Observation(transport, false, false, false, false, false, false, false, true);
 		}
 
 		private static final double QUIET_MARKER_SPEED = 1.0E-6;
@@ -1361,7 +1361,7 @@ final class ControllerInventoryDurabilityValidation {
 			List<MovingBodyFluidCoupling.Request> bodies = new java.util.ArrayList<>(count);
 			for (int index = 0; index < count; index++) {
 				double displaced = 0.001 + random.nextDouble() * 0.05;
-				bodies.add(new MovingBodyFluidCoupling.Request(
+				bodies.add(MovingBodyFluidCoupling.prescribedCube(
 						(float) (0.25 + random.nextDouble() * (half - 0.5)),
 						(float) (0.25 + random.nextDouble() * (half - 0.5)),
 						(float) (0.25 + random.nextDouble() * (half - 0.5)),
@@ -2204,3 +2204,4 @@ final class ControllerInventoryDurabilityValidation {
 		void apply(FluidDomain candidate) throws Exception;
 	}
 }
+

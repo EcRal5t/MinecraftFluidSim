@@ -376,14 +376,14 @@ private static void validateChemicalContainerRoundTrip() throws Exception {
 		var config = source.config;
 		// Set the disturbance from the body's actual liquid outflow response.
 		FluidDomain couplingProbe = FluidDomain.restoreAuthoritativeState(source.captureAuthoritativeState());
-		couplingProbe.applyMovingBodyCoupling(new mmm.world.MovingBodyFluidCoupling.Request(
+		couplingProbe.applyMovingBodyCoupling(mmm.world.MovingBodyFluidCoupling.prescribedCube(
 				1.0F, 1.0F, 2.0F, 1.0, 0.0, 0.0, 0.125));
 		double peakVelocity=0;
 		for(var axis:new float[][]{couplingProbe.mac.velocityX,couplingProbe.mac.velocityY,couplingProbe.mac.velocityZ})
 			for(float velocity:axis)peakVelocity=Math.max(peakVelocity,Math.abs(velocity));
 		double couplingRate=peakVelocity/config.cellSize();
 		check(couplingRate > 0.0, "moving-body fixture must produce grid outflow");
-		return new mmm.world.MovingBodyFluidCoupling.Request(
+		return mmm.world.MovingBodyFluidCoupling.prescribedCube(
 				1.0F, 1.0F, 2.0F, 2.0 / (config.timeStep() * couplingRate), 0.0, 0.0, 0.125);
 	}
 

@@ -26,6 +26,7 @@ public final class ChemicalRegistry {
 	private final List<ChemicalPhaseDefinition> phases;
 	private final List<ChemicalReaction> reactions;
 	private final List<ChemicalReaction> reactionOrder;
+	private final List<GasLiquidMassTransferDefinition> gasLiquidMassTransfers;
 	private final Map<String, Integer> speciesHandles;
 	private final Map<String, Integer> phaseHandles;
 	private final Map<String, Integer> phaseByMaterial;
@@ -37,6 +38,12 @@ public final class ChemicalRegistry {
 			List<ChemicalPhaseDefinition> phaseDefinitions,
 			List<ChemicalReaction> reactionDefinitions
 	) {
+		this(speciesDefinitions, phaseDefinitions, reactionDefinitions, List.of());
+	}
+
+	public ChemicalRegistry(List<ChemicalSpecies> speciesDefinitions,
+			List<ChemicalPhaseDefinition> phaseDefinitions, List<ChemicalReaction> reactionDefinitions,
+			List<GasLiquidMassTransferDefinition> gasLiquidMassTransfers) {
 		this.species = canonicalUnique(speciesDefinitions, ChemicalLimits.MAX_SPECIES,
 				ChemicalSpecies::id, "species");
 		this.speciesMassPerQuantum = new ExactRational[this.species.size()];
@@ -58,6 +65,11 @@ public final class ChemicalRegistry {
 		validateCompositionBasisBudget();
 		validateReactions();
 		this.reactionOrder = topologicalReactionOrder();
+		if (gasLiquidMassTransfers == null) throw new IllegalArgumentException("Gas/liquid mass transfer definitions are missing");
+		this.gasLiquidMassTransfers = gasLiquidMassTransfers.isEmpty() ? List.of()
+				: canonicalUnique(gasLiquidMassTransfers, ChemicalLimits.MAX_GAS_LIQUID_MASS_TRANSFERS,
+						GasLiquidMassTransferDefinition::id, "gas/liquid mass transfer");
+		validateGasLiquidMassTransfers();
 		this.canonicalBytes = encodeCanonical();
 		this.fingerprint = sha256(canonicalBytes);
 	}
@@ -66,6 +78,7 @@ public final class ChemicalRegistry {
 	public List<ChemicalPhaseDefinition> phases() { return phases; }
 	public List<ChemicalReaction> reactions() { return reactions; }
 	public List<ChemicalReaction> reactionOrder() { return reactionOrder; }
+	public List<GasLiquidMassTransferDefinition> gasLiquidMassTransfers() { return gasLiquidMassTransfers; }
 	public ChemicalSpecies species(int handle) { return species.get(handle); }
 	public long speciesMassUnits(int handle,long quanta){return Math.multiplyExact(speciesMassUnitsPerQuantum[handle],quanta);}
 	ExactRational speciesMass(int handle, long quanta) {
@@ -246,6 +259,18 @@ public final class ChemicalRegistry {
 		return List.copyOf(order);
 	}
 
+	private void validateGasLiquidMassTransfers() {
+		Set<String> pairs = new HashSet<>();
+		for (var transfer : gasLiquidMassTransfers) {
+			ChemicalSpecies solute = species(speciesHandle(transfer.speciesId()));
+			var phase = phase(phaseHandle(transfer.liquidPhaseId()));
+			if (solute.charge() != 0 || !phase.allowedSpecies().contains(transfer.speciesId()))
+				throw new IllegalArgumentException("Gas/liquid mass transfer requires a neutral species allowed by its liquid phase: " + transfer.id());
+			if (!pairs.add(transfer.liquidPhaseId() + "|" + transfer.speciesId() + "|" + transfer.gasComponentId()))
+				throw new IllegalArgumentException("Duplicate gas/liquid transfer relation: " + transfer.id());
+		}
+	}
+
 	private byte[] encodeCanonical() {
 		StringBuilder out = new StringBuilder(4096).append("massEncoding=").append(mmm.units.Mass.ENCODING).append('\n').append("mmm-chemistry-registry|SI|kg/mol|mol/m3|quanta-per-mol=1000000\n");
 		for (ChemicalSpecies definition : species) {
@@ -266,6 +291,14 @@ public final class ChemicalRegistry {
 			out.append('|');
 			appendInlineMap(out, definition.products());
 			out.append('|').append(definition.volumeDeltaCubicMetersPerExtent().canonical()).append('\n');
+		}
+		for (var definition : gasLiquidMassTransfers) {
+			out.append("G|").append(definition.id()).append('|').append(definition.speciesId()).append('|')
+					.append(definition.liquidPhaseId()).append('|').append(definition.gasComponentId());
+			for (double value : new double[] {definition.referenceTemperatureK(), definition.henrySolubilityMolPerM3Pa(),
+					definition.temperatureSlopeK(), definition.liquidFilmVelocityMPerS(), definition.gasFilmVelocityMPerS()})
+				out.append('|').append(Long.toUnsignedString(Double.doubleToRawLongBits(value)));
+			out.append('\n');
 		}
 		return out.toString().getBytes(StandardCharsets.UTF_8);
 	}

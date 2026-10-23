@@ -197,7 +197,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 2. 从单元整数质量构造 MAC 双控制体积惯性，以格面动量派生速度，执行多孔阻力、局部应变耗散和重力、浮力、张力等作用。
 3. 以液体面质量、颗粒质量和两相体积散度共同求解压力与有限气腔响应，同时修正两相速度，再准备颗粒碰撞位置与实际整数占容。
 4. 以共享通量在私有库存中执行一次完整时长的粗单元输运，用同一次实际整数质量通量推进 MAC 动量，联合提交液体、颗粒和气腔后继。
-5. 在新位置上完成导热、液相反应、颗粒反应、固液与气液相变。相变共用操作预算，体积变化留待后续真实力学同步。
+5. 在新位置上完成导热、液相反应、颗粒反应、固液与气液相变，最后处理气液物种传质。相变共用操作预算，体积变化留待后续真实力学同步。
 6. 执行颗粒沉积、起动和床层松弛，随物质搬运组成与内能。
 7. 核对全部收支，成功后交接完整候选、发布统计，并更新运动与热活动状态。
 
@@ -399,7 +399,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 导热后的实际内能、温度与热容直接供同代相变扫描使用；反应改变库存或内能后按热状态代次重新准备。载体和热壁之间可解析的温差进入共同导热计算，低于导热分辨率时保留原始内能并省去接触图准备。
 载体内能按共同温度一次分配，最大热容载体承接存储余量，实际写入的内能汇总与舍入账保持一致。热浮力读取实际库存温度，温度准备与可选黏性定义分别处理。
 
-热化学顺序为导热 → 液相反应 → 颗粒反应 → 固液相变 → 气液相变，之后执行颗粒形态转换。凝固、熔化、汽化和凝结在固定区域体积下联合守恒两相内能，`PendingPhaseMotionWork` 保存几何同步任务；下一次真实投影完成后清除。物品转移遇到待同步几何时，先执行仅含力学的私有候选，再准备物品事务。
+热化学顺序为导热 → 液相反应 → 颗粒反应 → 固液相变 → 气液相变 → 气液物种传质，之后执行颗粒形态转换。凝固、熔化、汽化和凝结在固定区域体积下联合守恒两相内能，`PendingPhaseMotionWork` 保存几何同步任务；下一次真实投影完成后清除。物品转移遇到待同步几何时，先执行仅含力学的私有候选，再准备物品事务。
 `ThermochemistryPipeline` 集中调用上述阶段，各阶段直接读取域的库存、能力和提交接口。
 蒸发产生的气体库存与内能按来源单元和固定孔隙分量进入实际新生干容；旧气体按原来源迁移。凝结联合分配步初库存与真实气容，同批蒸发产生的气体在下一步参与凝结。液封隔开的新旧气腔分别结算。
 
@@ -431,6 +431,8 @@ MAC 动量输运读取同次结算的实际整数质量通量。
   - 主要文件：
     - [CondensedPhaseChangeStage](../../solver/src/main/java/mmm/fluid/CondensedPhaseChangeStage.java)：冻结膨胀沿 `PhaseQuantitySettlement` 的共同容量网络排液；容量不足时只缩减受阻位置的冻结提议，保留独立区域的可执行批次。
     - [GasLiquidPhaseChangeStage](../../solver/src/main/java/mmm/fluid/GasLiquidPhaseChangeStage.java)：`propose`、`closeChamber` 联合组分库存、气温与真实容量的分压响应；`admitCondensation` 共同分配批次和正容量，`step` 一次提交两相库存与内能。
+    - [GasLiquidMassTransferStage](../../solver/src/main/java/mmm/fluid/GasLiquidMassTransferStage.java)：有限膜速率与整数物种、质量、内能联合提交；稳定库存身份的待处理时长和摩尔余量随区域状态保存。
+    - [GasLiquidContactGeometry](../../solver/src/main/java/mmm/fluid/GasLiquidContactGeometry.java)：实际 PLIC 与开放微盒提供按材料、气腔聚合的物理界面面积。
     - [GasLiquidPhaseModel](../../model/src/main/java/mmm/thermal/GasLiquidPhaseModel.java)：饱和压力、解析斜率及潜热
     - [GasPhaseInterfaceResolver](../../solver/src/main/java/mmm/fluid/GasPhaseInterfaceResolver.java)
   - 验证选择器 / 参考：`thermal,gas-liquid`；[相变参考](thermal-state.md#相变)
@@ -633,5 +635,6 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 | 温度、反应或相变无进展 | 实际组成、U、批次及候选不可执行原因 | `ThermalCaloricInversion`、`GasLiquidPhaseModel`、`GasLiquidPhaseChangeStage`、未来气腔与热账计划 |
 | 颗粒占容、压力或沉积异常 | `GranularCouplingFields`、碰撞预览及整数分配 | `GranularPressureCoupling`、`GranularSettlementGeometryPlan`、`GranularBedShear` |
 | 容器／区域锁定 | HEAD、WAL 与外部已存盘状态的分类 | `ContainerRecoveryCoordinator`、`OwnershipCoordinator`；[恢复决策](world-ownership-and-containers.md#恢复决策表) |
+
 
 

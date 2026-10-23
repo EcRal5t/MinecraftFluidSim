@@ -3,6 +3,7 @@ package mmm.chemistry;
 import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.Map;
+import java.util.List;
 import java.util.TreeMap;
 
 /** Region chemistry registry, source/sink audits and bounded reaction scheduling. */
@@ -10,6 +11,24 @@ public final class RegionChemistry {
 	private final ChemicalRegistry registry;
 	private final long[] dirtyCellWords;
 	private int reactionCursor;
+	private final int cellCount;
+	private List<MassTransferPending> massTransferPending = List.of();
+	/** Stable liquid-stock and transfer-rule identity; gas nodes are resolved again from current geometry. */
+	public record MassTransferPending(int cell, int material, int supportMask, String definitionId,
+	                                 double pendingSeconds, double residualMoles) implements Comparable<MassTransferPending> {
+		public MassTransferPending {
+			ChemicalIds.requireId(definitionId, "pending mass transfer definition id");
+			if (cell < 0 || material < 0 || supportMask <= 0 || supportMask > 255
+					|| !Double.isFinite(pendingSeconds) || pendingSeconds < 0 || !Double.isFinite(residualMoles))
+				throw new IllegalArgumentException("Invalid pending gas/liquid mass transfer");
+		}
+		@Override public int compareTo(MassTransferPending other) {
+			int order = Integer.compare(cell, other.cell);
+			if (order == 0) order = Integer.compare(material, other.material);
+			if (order == 0) order = Integer.compare(supportMask, other.supportMask);
+			return order == 0 ? definitionId.compareTo(other.definitionId) : order;
+		}
+	}
 	private volatile DefaultComposition defaultComposition;
 	private record DefaultComposition(String materialId,long volumeBits,int cellSizeBits,long massUnits,
 	                                  ChemicalMixtureRecord mixture) { }
@@ -18,10 +37,24 @@ public final class RegionChemistry {
 	public RegionChemistry(ChemicalRegistry registry,int cellCount){
 		if(cellCount<=0)throw new IllegalArgumentException("Cell count must be positive");
 		this.registry=java.util.Objects.requireNonNull(registry,"registry");
+		this.cellCount=cellCount;
 		dirtyCellWords=new long[(cellCount+63)>>>6];
 	}
 	public ChemicalRegistry registry(){return registry;}
 	public int reactionCursor(){return reactionCursor;}
+	public List<MassTransferPending> massTransferPending() { return massTransferPending; }
+	public void restoreMassTransferPending(List<MassTransferPending> pending) {
+		var ordered = new java.util.ArrayList<>(List.copyOf(pending));
+		ordered.sort(null);
+		MassTransferPending previous = null;
+		for (var entry : ordered) {
+			if (entry.cell() >= cellCount || previous != null && previous.compareTo(entry) == 0
+					|| registry.gasLiquidMassTransfers().stream().noneMatch(rule -> rule.id().equals(entry.definitionId())))
+				throw new IllegalArgumentException("Pending mass transfer identity is outside the region or registry");
+			previous = entry;
+		}
+		massTransferPending = List.copyOf(ordered);
+	}
 	public void restoreReactionCursor(int cell){
 		if(cell<0||cell>>>6>=dirtyCellWords.length)throw new IllegalArgumentException("Reaction cursor is outside the grid");
 		reactionCursor=cell;

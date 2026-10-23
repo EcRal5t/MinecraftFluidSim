@@ -204,7 +204,7 @@ public final class M7ChemistryValidation {
 		Collections.reverse(species);
 		Collections.rotate(phases, 1);
 		Collections.reverse(reactions);
-		ChemicalRegistry shuffled = new ChemicalRegistry(species, phases, reactions);
+		ChemicalRegistry shuffled = new ChemicalRegistry(species, phases, reactions, BuiltinChemicalDefinitions.gasLiquidMassTransfers());
 		check(java.util.Arrays.equals(reference.canonicalBytes(), shuffled.canonicalBytes()),
 				"registry canonical bytes depend on file order");
 		check(reference.fingerprint().equals(shuffled.fingerprint()), "registry fingerprint depends on file order");
@@ -247,7 +247,9 @@ public final class M7ChemistryValidation {
 				ChemicalDefinitionCodec::decodePhase);
 		List<ChemicalReaction> reactions = decodeDirectory(root.resolve(ChemicalDefinitionCodec.REACTIONS_PATH),
 				ChemicalDefinitionCodec::decodeReaction);
-		ChemicalRegistry bundled = new ChemicalRegistry(species, phases, reactions);
+		var transfers = decodeDirectory(root.resolve(ChemicalDefinitionCodec.GAS_LIQUID_MASS_TRANSFERS_PATH),
+				ChemicalDefinitionCodec::decodeGasLiquidMassTransfer);
+		ChemicalRegistry bundled = new ChemicalRegistry(species, phases, reactions, transfers);
 		check(bundled.fingerprint().equals(BuiltinChemicalDefinitions.REGISTRY.fingerprint()),
 				"bundled datapack definitions differ from the frozen registry");
 	}
@@ -295,6 +297,24 @@ public final class M7ChemistryValidation {
 			check(decoded.fingerprint().equals(definitions.fingerprint())
 							&& java.util.Arrays.equals(decoded.canonicalBytes(), definitions.canonicalBytes()),
 					"chemical registry snapshot did not round-trip canonically");
+			check(decoded.gasLiquidMassTransfers().equals(definitions.gasLiquidMassTransfers()),
+					"gas/liquid mass transfer definitions did not round-trip");
+			var transfer = definitions.gasLiquidMassTransfers().getFirst();
+			check(transfer.henrySolubilityAt(298.15) == 3.4e-4
+					&& transfer.henrySolubilityAt(318.15) < transfer.henrySolubilityAt(298.15),
+					"Henry reference or temperature direction changed");
+			check(transfer.overallLiquidFilmVelocityAt(298.15, mmm.fluid.air.GasRegistry.MOLAR_GAS_CONSTANT)
+					< transfer.liquidFilmVelocityMPerS(), "Series film resistance was omitted");
+			var differentTransfer = new GasLiquidMassTransferDefinition(transfer.id(), transfer.speciesId(),
+					transfer.liquidPhaseId(), transfer.gasComponentId(), transfer.referenceTemperatureK(),
+					transfer.henrySolubilityMolPerM3Pa(), transfer.temperatureSlopeK(),
+					transfer.liquidFilmVelocityMPerS() * 2, transfer.gasFilmVelocityMPerS());
+			var transferChanged = new ChemicalRegistry(definitions.species(), definitions.phases(), definitions.reactions(), List.of(differentTransfer));
+			check(!transferChanged.fingerprint().equals(definitions.fingerprint()), "Film definition must affect the world fingerprint");
+			expectFailure(() -> new ChemicalRegistry(definitions.species(), definitions.phases(), definitions.reactions(),
+					List.of(new GasLiquidMassTransferDefinition("test:unknown", "test:unknown", transfer.liquidPhaseId(),
+							transfer.gasComponentId(), 298.15, 3.4e-4, 2400, 1e-5, 1e-2))),
+					"Mass transfer accepted an unknown species");
 			check(java.util.Arrays.equals(ChemicalRegistryCodec.snapshotBytes(definitions),
 							ChemicalRegistryCodec.snapshotBytes(definitions)),
 					"chemical registry snapshot encoding is not deterministic");
@@ -303,7 +323,8 @@ public final class M7ChemistryValidation {
 			changedSpecies.set(0, new ChemicalSpecies(original.id(), original.composition(), original.charge(),
 					original.molarMassKgPerMol(), original.baseArgb() ^ 0x00010101));
 			ChemicalRegistry changed = new ChemicalRegistry(
-					changedSpecies, BuiltinChemicalDefinitions.phases(), BuiltinChemicalDefinitions.reactions());
+					changedSpecies, BuiltinChemicalDefinitions.phases(), BuiltinChemicalDefinitions.reactions(),
+					BuiltinChemicalDefinitions.gasLiquidMassTransfers());
 			check(!changed.fingerprint().equals(definitions.fingerprint()),
 					"changed species colour must change the fingerprint");
 			check(!java.util.Arrays.equals(ChemicalRegistryCodec.snapshotBytes(changed),

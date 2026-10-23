@@ -25,7 +25,7 @@ final class M3MaterialDynamicsValidation {
 		FlipParticleState before = domain.exportParticleState();
 		long massBefore = domain.totalMassUnits();
 		MovingBodyFluidCoupling.Result result = domain.applyMovingBodyCoupling(
-				new MovingBodyFluidCoupling.Request(0.75F, 0.75F, 0.75F, 2.0, -0.5, 0.25, 0.025));
+				MovingBodyFluidCoupling.prescribedCube(0.75F, 0.75F, 0.75F, 2.0, -0.5, 0.25, 0.025));
 		FlipParticleState after = domain.exportParticleState();
 		check(result.coupledMarkers() > 0 && result.coupledVolumeCubicMetres() > 0.0
 				&& result.impulseXKilogramMetresPerSecond() > 0.0

@@ -25,8 +25,10 @@ public final class ChemicalDataPackLoader {
 				ChemicalDefinitionCodec::decodePhase);
 		List<ChemicalReaction> reactions = loadCategory(resources, ChemicalDefinitionCodec.REACTIONS_PATH,
 				ChemicalDefinitionCodec::decodeReaction);
+		List<GasLiquidMassTransferDefinition> transfers = loadCategory(resources,
+				ChemicalDefinitionCodec.GAS_LIQUID_MASS_TRANSFERS_PATH, ChemicalDefinitionCodec::decodeGasLiquidMassTransfer);
 		try {
-			return new ChemicalRegistry(species, phases, reactions);
+			return new ChemicalRegistry(species, phases, reactions, transfers);
 		} catch (RuntimeException invalid) {
 			throw new IOException("Chemical datapack registry is invalid: " + invalid.getMessage(), invalid);
 		}
@@ -65,6 +67,7 @@ public final class ChemicalDataPackLoader {
 			case ChemicalSpecies value -> value.id();
 			case ChemicalPhaseDefinition value -> value.id();
 			case ChemicalReaction value -> value.id();
+			case GasLiquidMassTransferDefinition value -> value.id();
 			default -> throw new IllegalStateException("Unknown chemical definition type");
 		}));
 		return List.copyOf(definitions);

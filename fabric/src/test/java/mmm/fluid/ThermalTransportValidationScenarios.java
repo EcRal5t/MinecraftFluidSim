@@ -1069,7 +1069,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"Hot wall did not heat and pressurize its finite stationary gas chamber");
 		var activity=new mmm.simulation.ThermalActivity();
-		activity.observe(new mmm.simulation.ThermalActivity.Observation(transport,false,false,false,false,false,false,true),3);
+		activity.observe(new mmm.simulation.ThermalActivity.Observation(transport,false,false,false,false,false,false,false,true),3);
 		require(activity.state()==mmm.simulation.ThermalActivity.State.ACTIVE,"Gas wall heat exchange let thermal scheduling sleep");
 		var body=new FiniteThermalBodyState(1,registry.fingerprint(),wall.id(),mmm.units.Mass.fromKilograms(10),
 				new ThermalStateFunction(registry).internalEnergyAtTemperature(registry.materialHandle(wall.id()),10,Map.of(),400));
@@ -1180,3 +1180,4 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 	}
 
 }
+

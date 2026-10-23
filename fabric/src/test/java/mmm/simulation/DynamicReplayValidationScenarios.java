@@ -69,14 +69,16 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 					velocityBeforeResponse,
 					new Vec3(sample.velocityXMetresPerSecond(), sample.velocityYMetresPerSecond(),
 							sample.velocityZMetresPerSecond()),
-					Math.min(1.0, submergedFraction), gravity, false);
+					Math.min(1.0, submergedFraction),
+					new Vec3(sample.pressureForceXNewtons(), sample.pressureForceYNewtons(), sample.pressureForceZNewtons()),
+					MinecraftRegionInputs.effectiveBodyMass(bodyVolume, domain.config().gravity(), gravity));
 			maximumDisplacement = Math.max(maximumDisplacement, Math.abs(bodyMinimumY - initialBodyMinimumY));
 			if (tick > totalTicks - tailTicks) {
 				minimumTailY = Math.min(minimumTailY, bodyMinimumY);
 				maximumTailY = Math.max(maximumTailY, bodyMinimumY);
 			}
 			if (tick % motionIntervalTicks != 0) continue;
-			MovingBodyFluidCoupling.Request body = new MovingBodyFluidCoupling.Request(
+			MovingBodyFluidCoupling.Request body = MovingBodyFluidCoupling.prescribedCube(
 					(float) sample.centerXMetres(), (float) sample.centerYMetres(),
 					(float) sample.centerZMetres(),
 					displacementThisTick.x * 20.0, displacementThisTick.y * 20.0,
@@ -182,7 +184,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		FluidDomain initial = createFullyBoundPlanarHalfFill(registries);
 		FluidDomainState state = initial.captureAuthoritativeState();
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
-		MovingBodyFluidCoupling.Request body = new MovingBodyFluidCoupling.Request(
+		MovingBodyFluidCoupling.Request body = MovingBodyFluidCoupling.prescribedCube(
 				2.0F, 1.60F, 2.0F, 0.0, 0.0, 0.0, 0.6 * 1.8 * 0.6 * 0.72);
 		double initialCenterY = centerOfMassY(initial);
 		double maximumKinetic = 0.0, accumulatedLiquidY = 0.0, accumulatedReactionY = 0.0;
@@ -251,7 +253,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			require(submergedFraction > 0.0 && submergedFraction <= 1.0 + 1.0E-9,
 					"walking body left the finite wet AABB observation at tick " + tick
 							+ ": submergence=" + submergedFraction);
-			MovingBodyFluidCoupling.Request body = new MovingBodyFluidCoupling.Request(
+			MovingBodyFluidCoupling.Request body = MovingBodyFluidCoupling.prescribedCube(
 					(float) sample.centerXMetres(), (float) sample.centerYMetres(),
 					(float) sample.centerZMetres(),
 					walking ? walkingMetresPerSecond : 0.0, 0.0, 0.0,
@@ -312,7 +314,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		FluidDomain initial = createFullyBoundCompressedPlanarHalfFill(registries);
 		// Apply one finite disturbance, then remove the body for the entire replay.
 		// Stable evolution must survive a perturbation of its exact static state.
-		if(perturbed)initial.applyMovingBodyCoupling(new MovingBodyFluidCoupling.Request(2,1.9F,2,.5,.5,.5,.1));
+		if(perturbed)initial.applyMovingBodyCoupling(MovingBodyFluidCoupling.prescribedCube(2,1.9F,2,.5,.5,.5,.1));
 		FluidDomainState state = initial.captureAuthoritativeState();
 		FluidDomain restored = FluidDomain.restoreAuthoritativeState(state);
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
@@ -802,3 +804,6 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 	}
 
 }
+
+
+

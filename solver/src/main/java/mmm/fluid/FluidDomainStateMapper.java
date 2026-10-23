@@ -22,11 +22,12 @@ final class FluidDomainStateMapper {
 				domain.gasState.frame,domain.gasState.network.runtimeSnapshot(),domain.gasState.network.registry().fingerprint());
 		var captured = new FluidDomainState(domain.sizeX,domain.sizeY,domain.sizeZ,domain.config,
 				domain.gasState.sealedDomainBoundary,domain.liquidCells.snapshot(),domain.phaseOccupancy,domain.mac.captureMomentum(),domain.geometry.cutCells.snapshot(),
-				domain.materialRegistry == null ? List.of() : domain.materialRegistry.materials(),chemistry,
+				domain.entityBodies,domain.materialRegistry == null ? List.of() : domain.materialRegistry.materials(),chemistry,
 				domain.chemistry == null ? mmm.chemistry.ChemicalTransferLedger.EMPTY : domain.chemistry.externalSource(),
 				domain.chemistry == null ? mmm.chemistry.ChemicalTransferLedger.EMPTY : domain.chemistry.escapedSink(),
 				domain.chemistry == null ? null : domain.chemistry.dirtyCells(),
 				domain.chemistry == null ? 0 : domain.chemistry.reactionCursor(),
+				domain.chemistry == null ? List.of() : domain.chemistry.massTransferPending(),
 				domain.granularState == null ? null : domain.granularState.registry,granular,
 				domain.granularDepositDynamics == null ? null : domain.granularDepositDynamics.captureState(),
 				domain.precipitationEnabled(),domain.gasState.network.registry(),gas,
@@ -59,6 +60,7 @@ final class FluidDomainStateMapper {
 		if (state == null) throw new IllegalArgumentException("Authoritative state is missing");
 		FluidDomain domain = new FluidDomain(state.sizeX(), state.sizeY(), state.sizeZ(),
 				state.config(),state.fixedGeometry());
+		domain.restoreEntityBodyState(state.entityBodyState());
 		if (state.sealedDomainBoundary()) domain.sealDomainBoundary();
 		if (!state.materialPalette().isEmpty()) domain.materialRegistry = new FluidMaterialRegistry(state.materialPalette());
 		if (state.chemicalRegistry() != null) {
@@ -66,6 +68,7 @@ final class FluidDomainStateMapper {
 			domain.chemistry.restoreAuditLedgers(state.chemicalSource(),state.chemicalSink());
 			domain.chemistry.restoreDirtyCells(state.copyChemicalDirtyCells());
 			domain.chemistry.restoreReactionCursor(state.chemicalReactionCursor());
+			domain.chemistry.restoreMassTransferPending(state.chemicalMassTransferPending());
 		}
 		domain.liquidCells = LiquidCellInventory.fromValidatedSnapshot(state.liquid(),state.chemicalRegistry());
 		domain.markCellInventoryChanged();

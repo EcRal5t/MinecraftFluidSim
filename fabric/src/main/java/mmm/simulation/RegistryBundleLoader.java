@@ -63,7 +63,9 @@ public final class RegistryBundleLoader {
 		validateSupportedGranularCarriers(granular);
 		validateSupportedGasComponents(gas, chemical);
 		validateSupportedThermalCarriers(material, thermal, chemical, granular, gas);
+		WorldCapabilityBundleStore.Definitions.validateMassTransferReferences(chemical, gas, thermal);
 	}
+
 
 	private static void validateSupportedChemicalMaterials(ChemicalRegistry registry) {
 		for (var material : BuiltinFluidMaterials.DEFAULT_PALETTE) registry.phaseHandleForMaterial(material.id());

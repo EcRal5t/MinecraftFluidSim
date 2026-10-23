@@ -7,6 +7,7 @@ import mmm.world.MovingBodyFluidCoupling;
 /** Actual body work, stationary-wall reaction and local heat share one momentum publication. */
 public final class MovingBodyCouplingValidation {
 	public static void main(String[] args) throws Exception {
+		wetGeometryAndHydrostaticPressure();
 		var registries=FullCapabilityTestFixture.load();
 		var d=new FluidDomain(5,4,4,new FluidSolverConfig(.5F,1000,0,.025F,120,1e-5F,.002F));
 		FullCapabilityTestFixture.bindEmptyMaterialState(d,registries.liquids());
@@ -24,7 +25,7 @@ public final class MovingBodyCouplingValidation {
 			double[] beforeP=momentum(d),beforeWall=wall(d);
 			double[] velocity=step<8?new double[]{.6,-.2,.3}:step<16?new double[3]
 					:step<24?new double[]{-.4,.1,-.2}:new double[3];
-			var result=d.applyMovingBodyCoupling(new MovingBodyFluidCoupling.Request(.85F,.75F,.75F,
+			var result=d.applyMovingBodyCoupling(MovingBodyFluidCoupling.prescribedCube(.85F,.75F,.75F,
 					velocity[0],velocity[1],velocity[2],.1));
 			double heat=d.exactInternalEnergy().subtract(beforeU).toDouble();
 			storageAllowance+=energyStorageAllowance(d);
@@ -57,6 +58,25 @@ public final class MovingBodyCouplingValidation {
 				&&restored.exactInternalEnergy().equals(d.exactInternalEnergy()),
 				"Body/wall energy or momentum changed during recovery");
 		System.out.println("Moving-body work, fixed-wall impulse, actual heat and recovery passed");
+	}
+	private static void wetGeometryAndHydrostaticPressure() {
+		var domain = new FluidDomain(4,4,4,new FluidSolverConfig(.5F,1000,9.81F,.025F,120,1e-5F,.002F));
+		domain.sealDomainBoundary();
+		float[] volumes = new float[64]; java.util.Arrays.fill(volumes, 1);
+		domain.setVolumes(volumes);
+		var sample = domain.sampleAxisAlignedBody(.6,.1,.6,.9,.4,.9);
+		double expectedVolume=.3*.3*.3;
+		require(Math.abs(sample.displacedVolumeCubicMetres()-expectedVolume)<1e-12
+				&&Math.abs(sample.wetSurfaceAreaSquareMetres()-.54)<1e-12,
+				"Body/PLIC intersection lost submerged volume or wet surface area");
+		require(Math.abs(sample.pressureForceYNewtons()-1000.0*domain.config().gravity()*expectedVolume)<1e-7
+				&&Math.abs(sample.pressureForceXNewtons())<1e-7&&Math.abs(sample.pressureForceZNewtons())<1e-7,
+				"Wet body pressure integral disagrees with displaced hydrostatic weight: " + sample);
+		var empty = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,9.81F,.025F,120,1e-5F,.002F));
+		empty.setVolume(1,1,1,.1F);
+		var dry=empty.sampleAxisAlignedBody(.55,.8,.55,.7,.95,.7);
+		require(dry.displacedVolumeCubicMetres()==0&&dry.wetSurfaceAreaSquareMetres()==0,
+				"Body above the actual PLIC surface acquired artificial immersion");
 	}
 	private static double[] momentum(FluidDomain d){
 		return new double[]{java.util.Arrays.stream(d.mac.momentumX).sum(),java.util.Arrays.stream(d.mac.momentumY).sum(),java.util.Arrays.stream(d.mac.momentumZ).sum()};

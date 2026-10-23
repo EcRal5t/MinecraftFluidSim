@@ -532,8 +532,8 @@ public final class AirCavityScannerValidation {
 	private static FluidDomainState coldState(FluidDomainState s) {
 		return new FluidDomainState(s.sizeX(),s.sizeY(),s.sizeZ(),s.config(),s.sealedDomainBoundary(),
 				new LiquidCellInventory.Snapshot(s.liquid().rows()),new mmm.inventory.PhaseOccupancyState(s.phaseOccupancy().copyLiquidMicroVolumes()),
-				s.momentum(),s.fixedGeometry(),s.materialPalette(),s.chemicalRegistry(),s.chemicalSource(),s.chemicalSink(),
-				s.copyChemicalDirtyCells(),s.chemicalReactionCursor(),s.granularRegistry(),s.granular(),s.granularDynamics(),s.precipitationEnabled(),
+				s.momentum(),s.fixedGeometry(),s.entityBodyState(),s.materialPalette(),s.chemicalRegistry(),s.chemicalSource(),s.chemicalSink(),
+				s.copyChemicalDirtyCells(),s.chemicalReactionCursor(),s.chemicalMassTransferPending(),s.granularRegistry(),s.granular(),s.granularDynamics(),s.precipitationEnabled(),
 				s.gasRegistry(),FluidDomainState.GasContinuation.persisted(s.gas()),s.thermalRegistry(),s.thermalOwner(),s.maximumThermalTransportSubsteps(),s.pendingPhaseMotion(),
 				s.copyThermalBoundaryTemperaturesK(),s.exportCondensedPhasePressure(),s.materialDefinitions());
 	}

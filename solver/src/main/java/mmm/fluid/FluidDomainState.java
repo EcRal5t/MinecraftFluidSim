@@ -5,6 +5,7 @@ import mmm.inventory.PhaseOccupancyState;
 
 import mmm.chemistry.ChemicalRegistry;
 import mmm.chemistry.ChemicalTransferLedger;
+import mmm.chemistry.RegionChemistry;
 import mmm.fluid.air.GasRegistry;
 import mmm.fluid.air.GasStateSnapshot;
 import mmm.granular.GranularRegistry;
@@ -25,11 +26,13 @@ public final class FluidDomainState {
 	private final PhaseOccupancyState phaseOccupancy;
 	private final MacMomentumState momentum;
 	private final FixedGeometrySnapshot fixedGeometry;
+	private final EntityBodyState entityBodies;
 	private final List<FluidMaterial> palette;
 	private final ChemicalRegistry chemicalRegistry;
 	private final ChemicalTransferLedger chemicalSource, chemicalSink;
 	private final int[] chemicalDirtyCells;
 	private final int chemicalReactionCursor;
+	private final List<RegionChemistry.MassTransferPending> chemicalMassTransferPending;
 	private final GranularRegistry granularRegistry;
 	private final GranularStateSnapshot granular;
 	private final GranularDepositDynamics.State granularDynamics;
@@ -77,8 +80,9 @@ public final class FluidDomainState {
 
 	public FluidDomainState(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config,
 			boolean sealedDomainBoundary, LiquidCellInventory.Snapshot liquid, PhaseOccupancyState phaseOccupancy, MacMomentumState momentum,
-			FixedGeometrySnapshot fixedGeometry, List<FluidMaterial> palette, ChemicalRegistry chemicalRegistry,
+			FixedGeometrySnapshot fixedGeometry, EntityBodyState entityBodies, List<FluidMaterial> palette, ChemicalRegistry chemicalRegistry,
 			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells, int chemicalReactionCursor,
+			List<RegionChemistry.MassTransferPending> chemicalMassTransferPending,
 			GranularRegistry granularRegistry, GranularStateSnapshot granular, GranularDepositDynamics.State granularDynamics,
 			boolean precipitationEnabled, GasRegistry gasRegistry, GasContinuation gas,
 			ThermalRegistry thermalRegistry, ThermalOwnerSnapshot thermalOwner, int maximumThermalTransportSubsteps,
@@ -94,10 +98,27 @@ public final class FluidDomainState {
 		if (liquid.cellCount() != cells || fixedGeometry==null || !fixedGeometry.matchesShape(sizeX,sizeY,sizeZ) || momentum.sizeX() != sizeX || momentum.sizeY() != sizeY || momentum.sizeZ() != sizeZ)
 			throw new IllegalArgumentException("Liquid inventory, collision and MAC shapes differ");
 		this.fixedGeometry = fixedGeometry; this.palette = List.copyOf(palette);
+		this.entityBodies = Objects.requireNonNull(entityBodies, "Entity body state is missing");
 		this.chemicalRegistry = chemicalRegistry; this.chemicalSource = Objects.requireNonNull(chemicalSource);
 		this.chemicalSink = Objects.requireNonNull(chemicalSink);
 		this.chemicalDirtyCells = chemicalDirtyCells == null ? null : chemicalDirtyCells.clone();
 		this.chemicalReactionCursor = chemicalReactionCursor;
+		this.chemicalMassTransferPending = List.copyOf(chemicalMassTransferPending);
+		if (chemicalRegistry == null && !this.chemicalMassTransferPending.isEmpty())
+			throw new IllegalArgumentException("Inactive chemistry contains pending mass transfer");
+		RegionChemistry.MassTransferPending previousPending = null;
+		for (var pending : this.chemicalMassTransferPending) {
+			if (previousPending != null && previousPending.compareTo(pending) >= 0)
+				throw new IllegalArgumentException("Pending mass transfer identities are not canonical");
+			previousPending = pending;
+			if (pending.cell() >= cells || pending.material() >= this.palette.size())
+				throw new IllegalArgumentException("Pending mass transfer is outside the domain or material palette");
+			var rule = chemicalRegistry.gasLiquidMassTransfers().stream().filter(value -> value.id().equals(pending.definitionId()))
+					.findFirst().orElseThrow(() -> new IllegalArgumentException("Pending mass transfer definition is unknown"));
+			if (!chemicalRegistry.phase(chemicalRegistry.phaseHandle(rule.liquidPhaseId())).materialId()
+					.equals(this.palette.get(pending.material()).id()))
+				throw new IllegalArgumentException("Pending mass transfer material differs from its liquid phase");
+		}
 		if ((chemicalRegistry == null) != (chemicalDirtyCells == null) || chemicalRegistry != null && this.palette.isEmpty()
 				|| chemicalReactionCursor < 0 || chemicalReactionCursor >= cells)
 			throw new IllegalArgumentException("Invalid chemical registry or scheduling state");
@@ -133,6 +154,7 @@ public final class FluidDomainState {
 	public PhaseOccupancyState phaseOccupancy() { return phaseOccupancy; }
 	public MacMomentumState momentum() { return momentum; }
 	public FixedGeometrySnapshot fixedGeometry() { return fixedGeometry; }
+	public EntityBodyState entityBodyState() { return entityBodies; }
 	public byte[] copyCollisionMasks() { return fixedGeometry.copyMasks(); }
 	public List<FluidMaterial> materialPalette() { return palette; }
 	public CarrierKind carrierKind() { return chemicalRegistry != null ? CarrierKind.CHEMICAL : palette.isEmpty() ? CarrierKind.PURE : CarrierKind.MATERIAL; }
@@ -141,6 +163,7 @@ public final class FluidDomainState {
 	public ChemicalTransferLedger chemicalSink() { return chemicalSink; }
 	public int[] copyChemicalDirtyCells() { return chemicalDirtyCells == null ? null : chemicalDirtyCells.clone(); }
 	public int chemicalReactionCursor() { return chemicalReactionCursor; }
+	public List<RegionChemistry.MassTransferPending> chemicalMassTransferPending() { return chemicalMassTransferPending; }
 	public GranularRegistry granularRegistry() { return granularRegistry; }
 	public GranularStateSnapshot granular() { return granular; }
 	public GranularDepositDynamics.State granularDynamics() { return granularDynamics; }

@@ -124,7 +124,7 @@ public final class GranularBedWakeValidation {
 		int phase = 0, phaseStep = 0;
 		for (int step = 0; step < 2 * (settlingSteps + mmm.granular.GranularDepositDynamics.SLEEP_LOGICAL_STEPS) + 90; step++, phaseStep++) {
 			double speed = phase == 1 ? weakSpeed : phase == 2 ? 3.0 : 0;
-			var requests=List.of(new MovingBodyFluidCoupling.Request(2,.75F,2,speed,0,0,.75));
+			var requests=List.of(MovingBodyFluidCoupling.prescribedCube(2,.75F,2,speed,0,0,.75));
 			double beforeU=domain.exactInternalEnergy().toDouble(),beforeK=domain.domainStep.mechanicalCarrierKineticEnergyJoules(),beforePE=domain.domainStep.mechanicalPotentialEnergyJoules();
             long stepStarted = System.nanoTime();
 			var source=domain.captureAuthoritativeState();FluidStepCandidate candidate;

@@ -50,6 +50,7 @@ public final class FluidDomainStateAssertions {
 				actual.phaseOccupancy().copyLiquidMicroVolumes(),context+" phase occupancy");
 		require(expected.materialPalette().equals(actual.materialPalette()),context+": material palette changed");
 		require(Arrays.equals(expected.copyCollisionMasks(),actual.copyCollisionMasks()),context+": collision mask changed");
+		require(expected.entityBodyState().equals(actual.entityBodyState()),context+": accepted entity body geometry or motion changed");
 		requireRawDoubles(expected.momentum().copyX(),actual.momentum().copyX(),context+" MAC X momentum");
 		requireRawDoubles(expected.momentum().copyY(),actual.momentum().copyY(),context+" MAC Y momentum");
 		requireRawDoubles(expected.momentum().copyZ(),actual.momentum().copyZ(),context+" MAC Z momentum");
@@ -63,6 +64,7 @@ public final class FluidDomainStateAssertions {
 			require(Arrays.equals(expected.copyChemicalDirtyCells(), actual.copyChemicalDirtyCells()),
 					context + ": chemical dirty-cell schedule changed");
 			require(expected.chemicalReactionCursor()==actual.chemicalReactionCursor(),context+": reaction cursor changed");
+			require(expected.chemicalMassTransferPending().equals(actual.chemicalMassTransferPending()),context+": gas/liquid mass transfer continuation changed");
 		}
 		compareGranular(expected.granular(), actual.granular(), context);
 		if (includeTransient) {

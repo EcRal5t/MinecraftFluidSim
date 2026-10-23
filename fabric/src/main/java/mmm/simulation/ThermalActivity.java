@@ -18,6 +18,7 @@ public final class ThermalActivity {
 			boolean chemistryDirty,
 			boolean granularDirty,
 			boolean phaseDirty,
+			boolean massTransferActivity,
 			boolean gasActivity,
 			boolean carrierMotion,
 			boolean pendingVolumeOrWork,
@@ -30,7 +31,7 @@ public final class ThermalActivity {
 		boolean quiet() {
 			return transport.maximumAbsoluteTransferJ() == 0.0
 					&& transport.reservoirExchange().equals(SignedDyadic.ZERO)
-					&& !chemistryDirty && !granularDirty && !phaseDirty && !gasActivity && !carrierMotion
+					&& !chemistryDirty && !granularDirty && !phaseDirty && !massTransferActivity && !gasActivity && !carrierMotion
 					&& !pendingVolumeOrWork && auditClosed;
 		}
 

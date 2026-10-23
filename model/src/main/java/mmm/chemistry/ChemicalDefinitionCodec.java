@@ -11,11 +11,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-/** Strict JSON codecs for data/mmm/{species,chemical_phases,reactions}. */
+/** Strict JSON codecs for species, chemical phases, reactions and gas/liquid mass transfer definitions. */
 public final class ChemicalDefinitionCodec {
 	public static final String SPECIES_PATH = "mmm/species";
 	public static final String PHASES_PATH = "mmm/chemical_phases";
 	public static final String REACTIONS_PATH = "mmm/reactions";
+	public static final String GAS_LIQUID_MASS_TRANSFERS_PATH = "mmm/gas_liquid_mass_transfers";
 
 	private ChemicalDefinitionCodec() { }
 
@@ -51,6 +52,19 @@ public final class ChemicalDefinitionCodec {
 		}
 		return new ChemicalReaction(stableId, kind, string(required(root, "phase"), "phase"),
 				integerMap(root, "reactants"), integerMap(root, "products"), exact(root, "volume_delta_m3_per_extent"));
+	}
+
+	public static GasLiquidMassTransferDefinition decodeGasLiquidMassTransfer(String stableId, Reader input) {
+		JsonObject root = object(input);
+		requireOnly(root, "species", "liquid_phase", "gas_component", "reference_temperature_k",
+				"henry_solubility_mol_per_m3_pa", "temperature_slope_k",
+				"liquid_film_velocity_m_per_s", "gas_film_velocity_m_per_s");
+		return new GasLiquidMassTransferDefinition(stableId,
+				string(required(root, "species"), "species"), string(required(root, "liquid_phase"), "liquid_phase"),
+				string(required(root, "gas_component"), "gas_component"),
+				exact(root, "reference_temperature_k").toDouble(), exact(root, "henry_solubility_mol_per_m3_pa").toDouble(),
+				exact(root, "temperature_slope_k").toDouble(), exact(root, "liquid_film_velocity_m_per_s").toDouble(),
+				exact(root, "gas_film_velocity_m_per_s").toDouble());
 	}
 
 	private static JsonObject object(Reader input) {

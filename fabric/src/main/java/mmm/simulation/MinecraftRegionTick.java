@@ -319,7 +319,7 @@ final class MinecraftRegionTick {
 				|| !after.externalSink().equals(before.externalSink())
 				|| !after.mechanicalWork().equals(before.mechanicalWork())
 				|| !after.finiteDeviceExchange().equals(before.finiteDeviceExchange());
-		boolean chemistryDirty = thermalAxis.chemistry().changedStocks() != 0;
+		boolean chemistryDirty = thermalAxis.chemistry().changedStocks() != 0 || thermalAxis.massTransfer().changedStocks();
 		boolean granularDirty = thermalAxis.granularPhase().transfers() != 0
 				|| carrierMotion && (granularTransition.settledParcels() != 0
 				|| granularTransition.relaxedMoves() != 0
@@ -330,7 +330,7 @@ final class MinecraftRegionTick {
 		boolean auditClosed = domain.exactInternalEnergy().equals(after.expectedInventory());
 		boolean pendingVolumeOrWork = domain.hasPendingPhaseMotionWork();
 		ThermalActivity.Observation observation = new ThermalActivity.Observation(thermalAxis.transport(),
-				chemistryDirty, granularDirty, phaseDirty, gasActivity, carrierMotion,
+				chemistryDirty, granularDirty, phaseDirty, thermalAxis.massTransfer().active(), gasActivity, carrierMotion,
 				pendingVolumeOrWork, auditClosed);
 		return applyThermalObservation(region, observation);
 	}

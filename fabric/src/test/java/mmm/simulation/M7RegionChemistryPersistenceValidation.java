@@ -75,6 +75,15 @@ public final class M7RegionChemistryPersistenceValidation {
 				production.liquids(), production.chemical(), production.granular(), production.gas(),
 				production.thermal(), custom), 293.15, 4);
 		source.domain().setThermalTemperatureInCell(2, 1, 2, 353.15);
+		var pendingKey = source.domain().captureAuthoritativeState().liquid().stocks().stream()
+				.filter(stock -> source.domain().materialRegistry().material(stock.key().material()).id().equals("mmm:water"))
+				.findFirst().orElseThrow().key();
+		source.domain().chemistry().restoreMassTransferPending(java.util.List.of(
+				new mmm.chemistry.RegionChemistry.MassTransferPending(pendingKey.cell(), pendingKey.material(),
+						pendingKey.supportMask(), "mmm:co2_water", .25, 3.75e-7)));
+		source.domain().restoreEntityBodyState(new mmm.fluid.EntityBodyState(java.util.List.of(
+				new mmm.world.MovingBodyFluidCoupling.Request(new java.util.UUID(43, 59),
+						new mmm.world.MovingBodyFluidCoupling.Bounds(-2, -2, -2, -1.75, -1.5, -1.25), -.5, .25, -.125))));
 
 		try {
 			new RegionRepositoryAdapter(root, committed.profile(), committed.chemical(), committed.granular(),

@@ -8,6 +8,7 @@ public final class ChemicalLimits {
 	public static final int MAX_COMPOSITION_BASES = 64;
 	public static final int MAX_PHASES = 64;
 	public static final int MAX_REACTIONS = 512;
+	public static final int MAX_GAS_LIQUID_MASS_TRANSFERS = 256;
 	public static final int MAX_COMPOSITION_COEFFICIENT = 64;
 	public static final int MAX_ABSOLUTE_CHARGE = 16;
 	public static final int MAX_STOICHIOMETRIC_COEFFICIENT = 64;

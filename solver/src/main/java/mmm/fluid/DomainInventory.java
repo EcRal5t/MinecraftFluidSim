@@ -15,85 +15,10 @@ final class DomainInventory {
 			double minimumX, double minimumY, double minimumZ,
 			double maximumX, double maximumY, double maximumZ
 	) {
-		if (!(Double.isFinite(minimumX) && Double.isFinite(minimumY) && Double.isFinite(minimumZ)
-				&& Double.isFinite(maximumX) && Double.isFinite(maximumY) && Double.isFinite(maximumZ)
-				&& maximumX > minimumX && maximumY > minimumY && maximumZ > minimumZ)) {
-			throw new IllegalArgumentException("Axis-aligned body bounds are invalid");
-		}
-		domain.domainFlowFields.ensureVelocityGrid();
-		double h = domain.config.cellSize();
-		int firstX = Math.max(0, (int) Math.floor(minimumX / h));
-		int firstY = Math.max(0, (int) Math.floor(minimumY / h));
-		int firstZ = Math.max(0, (int) Math.floor(minimumZ / h));
-		int lastX = Math.min(domain.sizeX - 1, (int) Math.ceil(maximumX / h) - 1);
-		int lastY = Math.min(domain.sizeY - 1, (int) Math.ceil(maximumY / h) - 1);
-		int lastZ = Math.min(domain.sizeZ - 1, (int) Math.ceil(maximumZ / h) - 1);
-		if (lastX < firstX || lastY < firstY || lastZ < firstZ) return BodyFluidSample.EMPTY;
-		double microSize = h / FlipCutCellGeometry.MICRO_CELLS_PER_AXIS;
-		double displaced = 0.0, centerXSum = 0.0, centerYSum = 0.0, centerZSum = 0.0;
-		double velocityXSum = 0.0, velocityYSum = 0.0, velocityZSum = 0.0;
-		double[] layerFill = new double[FlipCutCellGeometry.MICRO_CELLS_PER_AXIS];
-		for (int z = firstZ; z <= lastZ; z++) for (int y = firstY; y <= lastY; y++) {
-			for (int x = firstX; x <= lastX; x++) {
-				int cell = domain.domainFlowFields.cellIndex(x, y, z);
-				if (domain.geometry.cutCells.fullySolid(cell) || domain.volume[cell] <= domain.config.fluidEpsilon()) continue;
-				double geometricOpen = domain.geometry.cutCells.openCellVolume(cell);
-				double effectiveOpen = domain.domainCollision.effectiveOpenCellVolume(cell);
-				if (!(geometricOpen > 0.0 && effectiveOpen > 0.0)) continue;
-				double poreScale = effectiveOpen / geometricOpen;
-				Arrays.fill(layerFill, 0.0);
-				double remainingFluid = Math.min(domain.volume[cell], effectiveOpen);
-				for (int my = 0; my < FlipCutCellGeometry.MICRO_CELLS_PER_AXIS; my++) {
-					int openInLayer = 0;
-					for (int mz = 0; mz < FlipCutCellGeometry.MICRO_CELLS_PER_AXIS; mz++) {
-						for (int mx = 0; mx < FlipCutCellGeometry.MICRO_CELLS_PER_AXIS; mx++) {
-							if (domain.geometry.cutCells.microCellOpen(cell, mx, my, mz)) openInLayer++;
-						}
-					}
-					double layerCapacity = openInLayer * poreScale
-							/ (FlipCutCellGeometry.MICRO_CELLS_PER_AXIS
-							* FlipCutCellGeometry.MICRO_CELLS_PER_AXIS
-							* FlipCutCellGeometry.MICRO_CELLS_PER_AXIS);
-					if (!(layerCapacity > 0.0)) continue;
-					layerFill[my] = Math.min(1.0, remainingFluid / layerCapacity);
-					remainingFluid -= layerFill[my] * layerCapacity;
-				}
-				for (int mz = 0; mz < FlipCutCellGeometry.MICRO_CELLS_PER_AXIS; mz++) {
-					for (int my = 0; my < FlipCutCellGeometry.MICRO_CELLS_PER_AXIS; my++) {
-						if (!(layerFill[my] > 0.0)) continue;
-						for (int mx = 0; mx < FlipCutCellGeometry.MICRO_CELLS_PER_AXIS; mx++) {
-							if (!domain.geometry.cutCells.microCellOpen(cell, mx, my, mz)) continue;
-							double lowX = Math.max(minimumX, x * h + mx * microSize);
-							double lowY = Math.max(minimumY, y * h + my * microSize);
-							double lowZ = Math.max(minimumZ, z * h + mz * microSize);
-							double highX = Math.min(maximumX, x * h + (mx + 1) * microSize);
-							double highY = Math.min(maximumY,
-									y * h + (my + layerFill[my]) * microSize);
-							double highZ = Math.min(maximumZ, z * h + (mz + 1) * microSize);
-							if (!(highX > lowX && highY > lowY && highZ > lowZ)) continue;
-							double overlap = (highX - lowX) * (highY - lowY) * (highZ - lowZ) * poreScale;
-							double centerSampleX = 0.5 * (lowX + highX);
-							double centerSampleY = 0.5 * (lowY + highY);
-							double centerSampleZ = 0.5 * (lowZ + highZ);
-							displaced += overlap;
-							centerXSum += overlap * centerSampleX;
-							centerYSum += overlap * centerSampleY;
-							centerZSum += overlap * centerSampleZ;
-							VelocitySample velocity = sampleStoredVelocity((float) centerSampleX, (float) centerSampleY, (float) centerSampleZ);
-							velocityXSum += overlap * velocity.x();
-							velocityYSum += overlap * velocity.y();
-							velocityZSum += overlap * velocity.z();
-						}
-					}
-				}
-			}
-		}
-		if (!(displaced > 0.0)) return BodyFluidSample.EMPTY;
-		double inverse = 1.0 / displaced;
-		return new BodyFluidSample(displaced,
-				centerXSum * inverse, centerYSum * inverse, centerZSum * inverse,
-				velocityXSum * inverse, velocityYSum * inverse, velocityZSum * inverse);
-	}
+        return MovingBodyWetGeometry.capture(domain, new mmm.world.MovingBodyFluidCoupling.Bounds(
+                minimumX, minimumY, minimumZ, maximumX, maximumY, maximumZ)).sample();
+    }
+
 	public VelocitySample sampleVelocity(float localX, float localY, float localZ) {
 		domain.domainFlowFields.ensureVelocityGrid();
 		if (localX < 0.0F || localX > domain.sizeX * domain.config.cellSize()

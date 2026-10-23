@@ -65,13 +65,19 @@ public final class BuiltinChemicalDefinitions {
 					Map.of(H_PLUS, 1, OH_MINUS, 1), Map.of(H2O, 1), ExactRational.ZERO)
 	);
 
-	public static final ChemicalRegistry REGISTRY = new ChemicalRegistry(SPECIES, PHASES, REACTIONS);
+	// Henry Hcp and temperature slope: https://henrys-law.org/henry/casrn/124-38-9
+	// The film velocities describe the chosen slow effective films of a dilute, gently moving water surface.
+	private static final List<GasLiquidMassTransferDefinition> GAS_LIQUID_MASS_TRANSFERS = List.of(
+			new GasLiquidMassTransferDefinition("mmm:co2_water", CO2, AQUEOUS, "mmm:co2",
+					298.15, 3.4e-4, 2400, 1e-5, 1e-2));
+	public static final ChemicalRegistry REGISTRY = new ChemicalRegistry(SPECIES, PHASES, REACTIONS, GAS_LIQUID_MASS_TRANSFERS);
 
 	private BuiltinChemicalDefinitions() { }
 
 	public static List<ChemicalSpecies> species() { return SPECIES; }
 	public static List<ChemicalPhaseDefinition> phases() { return PHASES; }
 	public static List<ChemicalReaction> reactions() { return REACTIONS; }
+	public static List<GasLiquidMassTransferDefinition> gasLiquidMassTransfers() { return GAS_LIQUID_MASS_TRANSFERS; }
 
 	private static ChemicalSpecies species(String id, Map<String, Integer> composition, int charge, long molarMassGramsPerMol, int color) {
 		return new ChemicalSpecies(id, composition, charge, ExactRational.of(molarMassGramsPerMol).divide(1000), color);

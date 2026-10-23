@@ -1,0 +1,10 @@
+{
+  "species": "mmm:co2",
+  "liquid_phase": "mmm:aqueous",
+  "gas_component": "mmm:co2",
+  "reference_temperature_k": "298.15",
+  "henry_solubility_mol_per_m3_pa": "0.00034",
+  "temperature_slope_k": "2400",
+  "liquid_film_velocity_m_per_s": "0.00001",
+  "gas_film_velocity_m_per_s": "0.01"
+}

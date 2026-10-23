@@ -214,7 +214,7 @@ public final class CompositeStepBenchmark {
             if (score < best) { best = score; nearest = i; }
         }
         require(positions.length > 0, "No liquid for disturbance");
-        return List.of(new MovingBodyFluidCoupling.Request(positions[nearest], positions[nearest + 1], positions[nearest + 2], speed, 0, 0, .75));
+        return List.of(MovingBodyFluidCoupling.prescribedCube(positions[nearest], positions[nearest + 1], positions[nearest + 2], speed, 0, 0, .75));
     }
 
     private static FluidStepCandidate motion(FluidRegion region, List<MovingBodyFluidCoupling.Request> requests) {
@@ -243,3 +243,4 @@ public final class CompositeStepBenchmark {
         }
     }
 }
+

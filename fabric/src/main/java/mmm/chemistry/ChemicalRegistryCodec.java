@@ -47,14 +47,16 @@ public final class ChemicalRegistryCodec {
 		catch (RuntimeException invalid) { throw new IOException("Unreadable chemical registry snapshot " + path, invalid); }
 		requireAll(root, Map.of("Schema", Tag.TAG_STRING, "QuantaPerMol", Tag.TAG_LONG,
 				"Fingerprint", Tag.TAG_STRING, "Canonical", Tag.TAG_BYTE_ARRAY,
-				"Species", Tag.TAG_LIST, "Phases", Tag.TAG_LIST, "Reactions", Tag.TAG_LIST));
+				"Species", Tag.TAG_LIST, "Phases", Tag.TAG_LIST, "Reactions", Tag.TAG_LIST,
+				"GasLiquidMassTransfers", Tag.TAG_LIST));
 		if (!root.getStringOr("Schema", "").equals(SCHEMA)) throw new IOException("Unsupported chemical registry schema");
 		if (root.getLongOr("QuantaPerMol", -1L) != ChemicalLimits.QUANTA_PER_MOL) throw new IOException("Chemical quanta/mol scale mismatch");
 		try {
 			List<ChemicalSpecies> species = decodeSpecies(root.getListOrEmpty("Species"));
 			List<ChemicalPhaseDefinition> phases = decodePhases(root.getListOrEmpty("Phases"));
 			List<ChemicalReaction> reactions = decodeReactions(root.getListOrEmpty("Reactions"));
-			ChemicalRegistry registry = new ChemicalRegistry(species, phases, reactions);
+			ChemicalRegistry registry = new ChemicalRegistry(species, phases, reactions,
+					decodeMassTransfers(root.getListOrEmpty("GasLiquidMassTransfers")));
 			String fingerprint = root.getStringOr("Fingerprint", "");
 			byte[] canonical = root.getByteArray("Canonical").orElseThrow();
 			if (!registry.fingerprint().equals(fingerprint)
@@ -100,7 +102,41 @@ public final class ChemicalRegistryCodec {
 			tag.putString("VolumeDeltaM3PerExtent", definition.volumeDeltaCubicMetersPerExtent().canonical()); reactions.add(tag);
 		}
 		root.put("Reactions", reactions);
+		ListTag transfers = new ListTag();
+		for (var definition : registry.gasLiquidMassTransfers()) {
+			CompoundTag tag = new CompoundTag();
+			tag.putString("Id", definition.id()); tag.putString("Species", definition.speciesId());
+			tag.putString("LiquidPhase", definition.liquidPhaseId()); tag.putString("GasComponent", definition.gasComponentId());
+			tag.putLong("ReferenceTemperatureKBits", Double.doubleToRawLongBits(definition.referenceTemperatureK()));
+			tag.putLong("HenrySolubilityMolPerM3PaBits", Double.doubleToRawLongBits(definition.henrySolubilityMolPerM3Pa()));
+			tag.putLong("TemperatureSlopeKBits", Double.doubleToRawLongBits(definition.temperatureSlopeK()));
+			tag.putLong("LiquidFilmVelocityMPerSBits", Double.doubleToRawLongBits(definition.liquidFilmVelocityMPerS()));
+			tag.putLong("GasFilmVelocityMPerSBits", Double.doubleToRawLongBits(definition.gasFilmVelocityMPerS()));
+			transfers.add(tag);
+		}
+		root.put("GasLiquidMassTransfers", transfers);
 		return root;
+	}
+
+	private static List<GasLiquidMassTransferDefinition> decodeMassTransfers(ListTag list) throws IOException {
+		if (list.size() > ChemicalLimits.MAX_GAS_LIQUID_MASS_TRANSFERS) throw new IOException("Gas/liquid mass transfer definitions exceed snapshot budget");
+		var result = new ArrayList<GasLiquidMassTransferDefinition>(list.size());
+		for (int i = 0; i < list.size(); i++) {
+			CompoundTag tag = compound(list, i, "gas/liquid mass transfer");
+			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "Species", Tag.TAG_STRING,
+					"LiquidPhase", Tag.TAG_STRING, "GasComponent", Tag.TAG_STRING,
+					"ReferenceTemperatureKBits", Tag.TAG_LONG, "HenrySolubilityMolPerM3PaBits", Tag.TAG_LONG,
+					"TemperatureSlopeKBits", Tag.TAG_LONG, "LiquidFilmVelocityMPerSBits", Tag.TAG_LONG,
+					"GasFilmVelocityMPerSBits", Tag.TAG_LONG));
+			result.add(new GasLiquidMassTransferDefinition(tag.getStringOr("Id", ""), tag.getStringOr("Species", ""),
+					tag.getStringOr("LiquidPhase", ""), tag.getStringOr("GasComponent", ""),
+					Double.longBitsToDouble(tag.getLongOr("ReferenceTemperatureKBits", 0)),
+					Double.longBitsToDouble(tag.getLongOr("HenrySolubilityMolPerM3PaBits", 0)),
+					Double.longBitsToDouble(tag.getLongOr("TemperatureSlopeKBits", 0)),
+					Double.longBitsToDouble(tag.getLongOr("LiquidFilmVelocityMPerSBits", 0)),
+					Double.longBitsToDouble(tag.getLongOr("GasFilmVelocityMPerSBits", 0))));
+		}
+		return List.copyOf(result);
 	}
 
 	private static List<ChemicalSpecies> decodeSpecies(ListTag list) throws IOException {

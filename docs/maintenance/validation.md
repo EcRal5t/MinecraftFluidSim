@@ -479,6 +479,15 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 ## 当前验证证据
 
+### C05 气液传质与实体几何首切片
+
+2026-10-23：统一 `:fabric:compileTestJava --offline --no-daemon` 成功，日志 `build/gas-source/c05-checked-compile.log`。复用该 classpath 的 `M5GasLiquidCouplingValidation --mass-transfer`、`MovingBodyCouplingValidation`、`EntityFluidWiringValidation` 和 `M7RegionChemistryPersistenceValidation` 全部通过，日志分别为 `build/gas-source/checked-0.log` 至 `checked-3.log`。传质覆盖密闭溶解降压、抽空脱气、环境吸收／加热脱气、亚微摩尔恢复和零预算延期恢复。实体覆盖实际 PLIC 排水与静水压力面积分、现有接触冲量／功／热，以及实体身份表存盘。
+
+定义和接触面积入口此前已通过（`M7ChemistryValidation --fast`、`M5GasLiquidCouplingValidation --contacts`）；`FluidRegionLifecycleValidation` 包含慢传质保持热轴活动的场景并通过。实体完整移动占容与压力联立尚未交付。
+
+`M5GasLiquidCouplingValidation --mass-transfer-cost`：9,216 格、2,592 份库存、480 个接触，20 次预热与20次计时，阶段平均 5.970 ms、每步分配 5,982,168 bytes。日志 `build/gas-source/c05-cost.log`；这是传质阶段成本，完整步生产预算沿既有证据。
+
+传质温度敏感性按 `|ΔT|≤|ΔE|/C` 和 `|ΔH/H|≈|B|ΔT/T²` 评价。以既有机械误差基准 0.025 J、此用例62.5 kg水及4180 J/(kg·K)估算，温度影响约9.57×10⁻⁸ K，293.15 K下Henry相对影响约2.67×10⁻⁹。这是基准误差的量纲上界估算；薄层应按实际较小热容量评价。后续热机械工作包继续处理未结算耗散。
 ### B08 创造气体操作
 
 2026-10-23：`:fabric:runCpuValidation -PcpuValidation=containers :fabric:assemble --offline --no-daemon` 成功；containers 用时 286.7 秒，包含气体标准体积 WAL 保存恢复和全部现有故障提交时点的重试检查。日志：`build/gas-source/validation.log`。
@@ -487,5 +496,6 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 
 **99% 的所谓“验收证据”根本不需要做。本节留空即可**
+
 
 

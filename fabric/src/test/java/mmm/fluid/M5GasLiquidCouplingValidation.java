@@ -13,6 +13,18 @@ public final class M5GasLiquidCouplingValidation {
 	private static final float GRAVITY = 9.81F;
 
 	public static void main(String[] args) {
+		if (java.util.Arrays.asList(args).contains("--mass-transfer-cost")) {
+			measureMassTransferCost(); return;
+		}
+		if (java.util.Arrays.asList(args).contains("--mass-transfer")) {
+			validateFiniteRateSoluteExchange();
+			validateAmbientSoluteExchange();
+			System.out.println("Finite-rate gas/liquid mass transfer validation passed"); return;
+		}
+		if (java.util.Arrays.asList(args).contains("--contacts")) {
+			validateMaterialGasContactAreas();
+			System.out.println("Material gas contact area validation passed"); return;
+		}
 		if(java.util.Arrays.asList(args).contains("--orifice")){
 			validateOrificeEqualization();
 			System.out.println("M5 finite orifice equalization passed");return;
@@ -22,6 +34,9 @@ public final class M5GasLiquidCouplingValidation {
 			System.out.println("M5 capillary and cut hydrostatic reconstruction PASS");return;
 		}
 		PressureCapacityValidation.main(new String[]{"--algebra"});
+		validateMaterialGasContactAreas();
+		validateFiniteRateSoluteExchange();
+		validateAmbientSoluteExchange();
 		PressureCapacityValidation.cutHydrostatics();
 		validateSealedGasAndCapillaryJumpShareFaces();
 		validateSplitRetainsSealedShareWhenPeerVents();
@@ -42,6 +57,178 @@ public final class M5GasLiquidCouplingValidation {
 		validateOrificeEqualization();
 		System.out.println("M5 gas-liquid coupling gate passed: analytic positive/negative hydrostatics, "
 				+ "sealed compression, negative-gauge suction, finite-rate orifice equalization and exact ledgers");
+	}
+
+	private static void measureMassTransferCost() {
+		mmm.simulation.FullCapabilityTestFixture.Registries registries;
+		try { registries = mmm.simulation.FullCapabilityTestFixture.load(); }
+		catch (Exception failure) { throw new IllegalStateException(failure); }
+		var domain = new FluidDomain(24, 16, 24, new FluidSolverConfig(.5F, DENSITY, 0, .025F, 100, 1e-5F, .002F));
+		domain.sealDomainBoundary();
+		mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
+		float[] volumes = new float[24 * 16 * 24];
+		for (int y = 0; y < 12; y++) for (int z = 0; z < 24; z++) for (int x = 0; x < 9; x++)
+			volumes[x + 24 * (y + 16 * z)] = 1;
+		domain.setVolumes(volumes);
+		mmm.simulation.FullCapabilityTestFixture.bindFull(domain, registries, 293.15, 8);
+		domain.bootstrapGasState(registries.chemical().fingerprint());
+		int node = domain.gasNodeAt(7, 7, 7);
+		domain.editGas(node, "mmm:co2", 10_000_000_000L, 293.15, false);
+		int contacts = GasLiquidContactGeometry.capture(domain).size();
+		var stage = new GasLiquidMassTransferStage(domain);
+		for (int step = 0; step < 20; step++) stage.step(.025);
+		var bean = (com.sun.management.ThreadMXBean) java.lang.management.ManagementFactory.getThreadMXBean();
+		long thread = Thread.currentThread().threadId();
+		long allocated = bean.getThreadAllocatedBytes(thread), start = System.nanoTime();
+		for (int step = 0; step < 20; step++) stage.step(.025);
+		double elapsed = (System.nanoTime() - start) / 1.0e6;
+		long bytes = bean.getThreadAllocatedBytes(thread) - allocated;
+		if (!domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()))
+			throw new AssertionError("Representative mass transfer cost run lost energy audit");
+		System.out.printf("Gas/liquid mass transfer cost: cells=9216 stocks=2592 contacts=%d warmup=20 samples=20 mean_ms=%.3f allocated_bytes_per_step=%d%n",
+				contacts, elapsed / 20, bytes / 20);
+	}
+
+	private static void validateFiniteRateSoluteExchange() {
+		mmm.simulation.FullCapabilityTestFixture.Registries registries;
+		try { registries = mmm.simulation.FullCapabilityTestFixture.load(); }
+		catch (Exception failure) { throw new IllegalStateException(failure); }
+		var domain = contactColumn();
+		mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
+		domain.setVolume(1, 1, 1, .5F);
+		mmm.simulation.FullCapabilityTestFixture.bindFull(domain, registries, 293.15, 8);
+		domain.bootstrapGasState(registries.chemical().fingerprint());
+		int node = domain.gasNodeAt(.625, .875, .625);
+		domain.editGas(node, mmm.fluid.air.BuiltinGasDefinitions.CO2, 100_000_000, 293.15, false);
+		long beforeSpecies = totalCo2(domain), beforeMass = totalGasLiquidMass(domain);
+		double beforePressure = domain.gasNodeGaugePressurePa(node);
+		var stage = new GasLiquidMassTransferStage(domain);
+		var deferred = stage.step(.025, 0);
+		if (!deferred.active() || deferred.changedStocks()
+				|| domain.chemistry.massTransferPending().stream().noneMatch(p -> p.pendingSeconds() == .025)
+				|| totalCo2(domain) != beforeSpecies || totalGasLiquidMass(domain) != beforeMass)
+			throw new AssertionError("Interface budget discarded pending time or changed inventory");
+		domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		stage = new GasLiquidMassTransferStage(domain);
+		stage.step(0, GasLiquidContactGeometry.capture(domain).size());
+		if (domain.chemistry.massTransferPending().stream().anyMatch(p -> p.pendingSeconds() != 0)
+				|| domain.chemistry.massTransferPending().stream().allMatch(p -> p.residualMoles() == 0)
+				&& domain.liquidCells.stocks().stream().allMatch(stock ->
+						stock.mixture().amount(registries.chemical().speciesHandle("mmm:co2")) == 0))
+			throw new AssertionError("Restored interface budget did not process its deferred time");
+		stage.step(1.0e-9);
+		if (domain.chemistry.massTransferPending().isEmpty()
+				|| domain.chemistry.massTransferPending().stream().noneMatch(p -> p.residualMoles() > 0))
+			throw new AssertionError("Slow membrane discarded sub-micromole transfer");
+		var savedPending = domain.chemistry.massTransferPending();
+		domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		if (!domain.chemistry.massTransferPending().equals(savedPending))
+			throw new AssertionError("Mass-transfer pending state did not survive complete handoff");
+		stage = new GasLiquidMassTransferStage(domain);
+		for (int step = 0; step < 40; step++) stage.step(.025);
+		int species = registries.chemical().speciesHandle("mmm:co2");
+		long dissolved = 0;
+		for (var stock : domain.liquidCells.stocks()) dissolved += stock.mixture().amount(species);
+		if (dissolved <= 0 || domain.gasNodeGaugePressurePa(node) >= beforePressure)
+			throw new AssertionError("Sealed CO2 did not dissolve and reduce gas pressure");
+		if (totalCo2(domain) != beforeSpecies || totalGasLiquidMass(domain) != beforeMass
+				|| !domain.gasBoundary().auditClosed()
+				|| !domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()))
+			throw new AssertionError("Solute transfer lost mass, species or thermal audit closure");
+		domain.editGas(node, null, Long.MAX_VALUE, 293.15, true);
+		long afterVent = totalCo2(domain), afterVentMass = totalGasLiquidMass(domain);
+		for (int step = 0; step < 40; step++) stage.step(25);
+		long afterDissolved = 0;
+		for (var stock : domain.liquidCells.stocks()) afterDissolved += stock.mixture().amount(species);
+		if (afterDissolved >= dissolved || domain.gasBoundary().inventory(node).component("mmm:co2") == null
+				|| totalCo2(domain) != afterVent || totalGasLiquidMass(domain) != afterVentMass
+				|| !domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()))
+			throw new AssertionError("Depressurization did not desorb CO2 with joint conservation: dissolved=" + dissolved
+					+ " remaining=" + afterDissolved + ", species=" + totalCo2(domain) + "/" + afterVent
+					+ ", mass=" + totalGasLiquidMass(domain) + "/" + afterVentMass
+					+ ", U=" + domain.exactInternalEnergy().subtract(domain.thermalAudit().expectedInventory()).toDouble());
+	}
+
+	private static void validateAmbientSoluteExchange() {
+		mmm.simulation.FullCapabilityTestFixture.Registries registries;
+		try { registries = mmm.simulation.FullCapabilityTestFixture.load(); }
+		catch (Exception failure) { throw new IllegalStateException(failure); }
+		var domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(.5F, DENSITY, 0, .025F, 100, 1e-5F, .002F));
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++)
+			if (x != 1 || z != 1 || y == 0) domain.setSolid(x, y, z, true);
+		mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
+		domain.setVolume(1, 1, 1, .5F);
+		mmm.simulation.FullCapabilityTestFixture.bindFull(domain, registries, 293.15, 8);
+		domain.bootstrapGasState(registries.chemical().fingerprint());
+		var stage = new GasLiquidMassTransferStage(domain);
+		stage.step(1.0e6);
+		long dissolved = totalCo2(domain);
+		if (dissolved <= 0 || domain.chemistry.externalSource().totalQuanta() != dissolved
+				|| !domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()))
+			throw new AssertionError("Ambient dissolution lost its external source inventory or energy");
+		domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		domain.setThermalTemperatureInCell(1, 1, 1, 500);
+		stage = new GasLiquidMassTransferStage(domain);
+		stage.step(1.0e6);
+		long after = totalCo2(domain);
+		if (after >= dissolved || domain.chemistry.escapedSink().totalQuanta() != dissolved - after
+				|| !domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()))
+			throw new AssertionError("Heating did not desorb dissolved gas into its external sink");
+	}
+
+	private static long totalCo2(FluidDomain domain) {
+		long amount = 0;
+		int species = domain.chemistry.registry().speciesHandle("mmm:co2");
+		for (var stock : domain.liquidCells.stocks()) amount = Math.addExact(amount, stock.mixture().amount(species));
+		for (int node : domain.gasState.network.nodeIds())
+			for (var component : domain.gasState.network.inventory(node).components())
+				for (var item : component.species()) if (item.speciesId().equals("mmm:co2"))
+					amount = Math.addExact(amount, item.amountQuanta());
+		return amount;
+	}
+
+	private static long totalGasLiquidMass(FluidDomain domain) {
+		long mass = 0;
+		for (var stock : domain.liquidCells.stocks()) mass = Math.addExact(mass, stock.massUnits());
+		for (int node : domain.gasState.network.nodeIds()) mass = Math.addExact(mass, domain.gasState.network.inventory(node).totalMassUnits());
+		return mass;
+	}
+
+	private static void validateMaterialGasContactAreas() {
+		for (float amount : new float[]{1.0E-6F, .5F, 1}) {
+			var domain = contactColumn();
+			domain.setVolume(1, 1, 1, amount);
+			domain.bootstrapGasState("");
+			var contacts = GasLiquidContactGeometry.capture(domain);
+			double area = contacts.stream().mapToDouble(GasLiquidContactGeometry.Contact::areaM2).sum();
+			if (Math.abs(area - .25) > 1.0E-10 || contacts.stream().anyMatch(c -> c.node() <= 0))
+				throw new AssertionError("PLIC liquid surface or cross-cell contact area differs: " + area);
+		}
+		var covered = contactColumn();
+		var registry = new FluidMaterialRegistry(BuiltinFluidMaterials.DEFAULT_PALETTE);
+		covered.bindMaterialRegistry(registry);
+		int cell = covered.domainFlowFields.cellIndex(1, 1, 1);
+		var stocks = new java.util.ArrayList<mmm.inventory.LiquidCellInventory.Stock>();
+		for (String id : java.util.List.of("mmm:water", "mmm:oil")) {
+			int material = registry.handle(id);
+			stocks.add(new mmm.inventory.LiquidCellInventory.Stock(
+					new mmm.inventory.LiquidCellInventory.Key(cell, material, 255),
+					mmm.units.SignedDyadic.of(.25), covered.unitScale.massUnitsForNormalized(.25 * registry.material(material).referenceDensity()), null, 0));
+		}
+		covered.liquidCells.planAdditions(stocks).commit(); covered.markCellInventoryChanged();
+		covered.bootstrapGasState("");
+		var contacts = GasLiquidContactGeometry.capture(covered);
+		if (contacts.isEmpty() || contacts.stream().anyMatch(c -> c.key().material() != registry.handle("mmm:oil"))
+				|| Math.abs(contacts.stream().mapToDouble(GasLiquidContactGeometry.Contact::areaM2).sum() - .25) > 1.0E-10)
+			throw new AssertionError("Oil covering water did not own the actual exposed gas area");
+	}
+
+	private static FluidDomain contactColumn() {
+		var domain = new FluidDomain(3, 3, 3, new FluidSolverConfig(.5F, DENSITY, 0, .025F, 100, 1e-5F, .002F));
+		domain.sealDomainBoundary();
+		for (int z = 0; z < 3; z++) for (int y = 0; y < 3; y++) for (int x = 0; x < 3; x++)
+			if (x != 1 || z != 1 || y == 0) domain.setSolid(x, y, z, true);
+		return domain;
 	}
 
 	private static void validateSealedGasAndCapillaryJumpShareFaces() {
@@ -216,8 +403,8 @@ public final class M5GasLiquidCouplingValidation {
 	private static FluidDomainState coldVacuumState(FluidDomainState s) {
 		return new FluidDomainState(s.sizeX(),s.sizeY(),s.sizeZ(),s.config(),s.sealedDomainBoundary(),
 				new mmm.inventory.LiquidCellInventory.Snapshot(s.liquid().rows()),new mmm.inventory.PhaseOccupancyState(s.phaseOccupancy().copyLiquidMicroVolumes()),
-				s.momentum(),s.fixedGeometry(),s.materialPalette(),s.chemicalRegistry(),s.chemicalSource(),s.chemicalSink(),
-				s.copyChemicalDirtyCells(),s.chemicalReactionCursor(),s.granularRegistry(),s.granular(),s.granularDynamics(),s.precipitationEnabled(),
+				s.momentum(),s.fixedGeometry(),s.entityBodyState(),s.materialPalette(),s.chemicalRegistry(),s.chemicalSource(),s.chemicalSink(),
+				s.copyChemicalDirtyCells(),s.chemicalReactionCursor(),s.chemicalMassTransferPending(),s.granularRegistry(),s.granular(),s.granularDynamics(),s.precipitationEnabled(),
 				s.gasRegistry(),FluidDomainState.GasContinuation.persisted(s.gas()),s.thermalRegistry(),s.thermalOwner(),s.maximumThermalTransportSubsteps(),s.pendingPhaseMotion(),
 				s.copyThermalBoundaryTemperaturesK(),s.exportCondensedPhasePressure(),s.materialDefinitions());
 	}

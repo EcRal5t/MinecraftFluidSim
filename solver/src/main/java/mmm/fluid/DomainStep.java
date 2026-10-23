@@ -106,7 +106,7 @@ final class DomainStep {
 				new RegionChemistry.ReactionStats(0, 0, 0),
 				new PhaseTransferStats(0, 0, 0, 0L),
 				new FluidDomain.ThermalPhaseStats(0, 0, 0, 0L),
-				new FluidDomain.GasThermalPhaseStats(0, 0, 0));
+				new FluidDomain.GasThermalPhaseStats(0, 0, 0), new FluidDomain.GasLiquidMassTransferStats(false, false));
 	}
 	double mechanicalCarrierKineticEnergyJoules() {
 		return checkedMechanicalEnergy(particleKineticEnergyJoules() + granularKineticEnergyJoules());
@@ -429,19 +429,13 @@ final class DomainStep {
 		requireFiniteMarkerVelocity(request.velocityYMetresPerSecond());
 		requireFiniteMarkerVelocity(request.velocityZMetresPerSecond());
 		domain.domainFlowFields.preparePhysicalState();
-		double h = domain.config.cellSize(), cellVolume = domain.unitScale.cubicMetersPerNormalizedVolume();
-		double requested = request.displacedVolumeCubicMetres() / cellVolume;
-		if (!(Double.isFinite(requested) && requested > 0)) throw new IllegalArgumentException("Body displacement exceeds solver scale");
-		double[] weighted = new double[domain.cellCount]; double total = 0; int coupled = 0;
-		for (int cell = 0; cell < domain.cellCount; cell++) {
-			double weight = MovingBodyFluidCoupling.kernelWeight((cell % domain.sizeX + .5) * h - request.localXMetres(),
-					(cell / domain.sizeX % domain.sizeY + .5) * h - request.localYMetres(),
-					(cell / (domain.sizeX * domain.sizeY) + .5) * h - request.localZMetres(), h);
-			weighted[cell] = weight * domain.liquidCells.exactCellVolume(cell).toDouble();
-			if (weighted[cell] > 0) { total += weighted[cell]; coupled++; }
-		}
+        double cellVolume = domain.unitScale.cubicMetersPerNormalizedVolume();
+        var contact = MovingBodyWetGeometry.capture(domain, request.bounds());
+        double[] weighted = contact.cellVolumes();
+        double total = 0; int coupled = 0;
+        for (double amount : weighted) if (amount > 0) { total += amount; coupled++; }
 		if (total == 0) return MovingBodyFluidCoupling.Result.NONE;
-		double scale = Math.min(1, requested / total); double[] impulse = new double[3];
+		double scale = 1; double[] impulse = new double[3];
 		double externalWork=0;
 		double[][] momentum=new double[3][];
 		domain.cellMacStage.beginMechanicalHeat();

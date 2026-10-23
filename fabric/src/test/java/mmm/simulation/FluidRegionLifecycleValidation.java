@@ -336,11 +336,19 @@ public final class FluidRegionLifecycleValidation {
 		require(region.lifecycle().observeCompletedStep(true, 1), "conduction fixture did not sleep");
 		var zero = mmm.units.SignedDyadic.ZERO;
 		var quiet = new ThermalActivity.Observation(new mmm.thermal.ThermalTransport.Stats(
-				1, 1, 0.0, 0.0, zero, zero), false, false, false, false, false, false, true);
+				1, 1, 0.0, 0.0, zero, zero), false, false, false, false, false, false, false, true);
 		require(!MinecraftRegionTick.applyThermalObservation(region, quiet) && !region.canStep(),
 				"zero internal heat transfer woke mechanics");
+		var slowTransfer = new ThermalActivity.Observation(quiet.transport(), false, false, false,
+				true, false, false, false, true);
+		for (int i = 0; i < 3; i++) {
+			require(!MinecraftRegionTick.applyThermalObservation(region, slowTransfer) && !region.canStep(),
+					"subquantum mass transfer unnecessarily woke mechanics");
+			require(region.thermalActivity().state() == ThermalActivity.State.ACTIVE,
+					"subquantum gas/liquid transfer entered thermal sleep");
+		}
 		var conducting = new ThermalActivity.Observation(new mmm.thermal.ThermalTransport.Stats(
-				1, 1, 1.0e-12, 1.0e-8, zero, zero), false, false, false, false, false, false, true);
+				1, 1, 1.0e-12, 1.0e-8, zero, zero), false, false, false, false, false, false, false, true);
 		require(MinecraftRegionTick.applyThermalObservation(region, conducting) && region.canStep(),
 				"internal conduction without external energy exchange failed to wake mechanics");
 		region.setPaused(true);
