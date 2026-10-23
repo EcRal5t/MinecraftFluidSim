@@ -763,3 +763,13 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 
 常驻命令与归约成本继续采用同一64³、5步预热／10步采样。共同能量最终汇总改为工作组并行后，短分项观察从约2.24 ms降至0.63 ms。粗层逆算子复用与容量条件派发后的正式记录为 `build/gpu-resident-capacity-bind-cost64.log`：中位66.482 ms、最大159.878 ms、设备平均52.829 ms，实际扩容计入，仍未达到50 ms。`build/gpu-resident-pressure-batch16-cost64.log` 增加每批压力迭代数及录制／等待分项，中位66.653 ms、最大194.900 ms、设备平均60.174 ms；无扩容步骤的命令录制耗时7.466–11.850 ms，设备等待还包含提交与主机唤醒成本。本轮据此推进命令复用，原精度和功能范围保持；尚未开展集中物理验证。
+
+2026-10-24：独立孔流完整连续链成本见 `build/gpu-resident-gas-flow-parallel-pcg-cost64.log`（RTX 5070 Ti，5步预热、10步采样）。64³夹具为一个连通大气腔与32,768个受限孔口相连的小气腔，合计32,769腔；同对气腔的最多六个孔面共同归并为一条导度。库存使用既有混合气注册表、真实整数质量／物种与异温内能，逐步实际提交并从上一代继续推进。计时包含候选复制、源EOS、半隐式标准体积储容网络和共享PCG、同步路线、整数分配、保留气体EOS、实际排气冷却、接收归并及设备提交。
+
+```powershell
+./gradlew.bat :gpu-kernel:runGpuGasFlowBenchmark -PgpuGasFlowGrid=64 -PgpuGasFlowWarmup=5 -PgpuGasFlowSamples=10 --offline --no-daemon --console=plain
+```
+
+该范围中位22.952 ms、最大24.988 ms、设备平均20.621 ms，每步上传0 B、回读24 B，逻辑设备458.8 MiB。初始气腔对容量为1，设备需求反馈增长到32,768后，从原捕获按相同提交步序重新计算；一次增长发生在预热，全部15步提交成功。大气腔首组分的标准体积实际减少431,622,828,073 nanos，末态读取在计时后进行。该结果覆盖独立孔流链，区域全模型与原完整场景十倍提速继续按合并后的实测结果评价；集中物理检查尚未开始。
+
+原普通CSR按单线程扫描大气腔长行，`build/gpu-resident-gas-flow-cost64.log` 同输入中位67.025 ms、最大68.791 ms、设备65.139 ms。当前 `pressureOperator` 保留同一矩阵、PCG和容差，短行单线程，长行工作组归约。`build/gpu-resident-gas-flow-parallel-pcg-profile64.log` 首步包含扩容重算，冷墙钟60.756 ms、设备20.147 ms，其中PCG初始化2.642 ms、八次迭代录制1.794 ms、最终残差0.134 ms；分项服务于成本定位，正式连续结果以上述5／10记录为准。32³此前普通CSR的1步预热／3步采样结果保存在 `build/gpu-resident-gas-flow-short32.log`，中位9.865 ms、最大12.137 ms，保留其实现范围。
