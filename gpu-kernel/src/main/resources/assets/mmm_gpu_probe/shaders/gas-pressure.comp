@@ -5,7 +5,7 @@ layout(binding=0,std430) buffer Arena { uint words[]; };
 layout(binding=1,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header; int stage; int count; int argument; float cellSize; float duration; float gravity; float tolerance; } p;
 const int SOURCE_K=0,PRE_K=1,POST_K=2,REFERENCE=3,STORAGE=4,DIAGONAL=5,MODE=6,CELL_P=7,NODE_P=8,NODE_DV=9,
- FACE_ROWS=10,FC=11,FO=12,CURSOR=13,NODE_FACES=14,BC=15,BO=16,BN=17,PARTS=18,DATUM=19,DISPATCH=21;
+ FACE_ROWS=10,FC=11,FO=12,CURSOR=13,NODE_FACES=14,BC=15,BO=16,BN=17,PARTS=18,DATUM=19,DISPATCH=21,LARGE_NODES=22;
 shared double part[128],otherPart[128],loadPart[128];
 shared int nodePart[128];
 int h(int i){return int(words[p.header+i]);}
@@ -68,7 +68,7 @@ void initialize(int row){
  if(row>=n()){int entry=7*n()+row-n();words[h(16)+row]=uint(entry);words[h(17)+entry]=uint(row);writeNumber(h(18)+2*entry,1.0);}
  if(row==size()-1)words[h(16)+size()]=uint(7*n()+g());
  if(row==0){writeNumber(h(23)+6*size(),double(p.tolerance));writeNumber(p.header+58,double(p.cellSize));
-  writeNumber(p.header+60,double(p.duration));writeNumber(p.header+62,double(p.gravity));dispatchCount(0,clamp(int(words[h(9)]),0,g()));}
+  writeNumber(p.header+60,double(p.duration));writeNumber(p.header+62,double(p.gravity));dispatchCount(0,clamp(int(words[h(9)]),0,g()));words[p.header+14]=0u;}
 }
 void datum(int lane){
  double largest=-1.0;int selected=-1,actual=int(words[h(9)]);if(actual<0||actual>g()){if(lane==0)invalid();actual=0;}
@@ -116,8 +116,9 @@ void liquidRow(int row){
  writeNumber(h(23)+2*(2*size()+row),enabledRow?read(CELL_P,row)-read(DATUM,0):0.0);
  if(row==0)words[h(16)+n()]=uint(7*n());
 }
-void countBlocks(int node){put(BC,node,(get(FC,node)+127)/128);}
-void mapBlocks(int node){if(node==0)dispatchCount(3,get(BO,g()));for(int block=get(BO,node);block<get(BO,node+1);block++)put(BN,block,node);}
+void countBlocks(int node){int count=get(FC,node);put(BC,node,count>128?(count+127)/128:0);
+ if(count>128){int slot=int(atomicAdd(words[p.header+14],1u));put(LARGE_NODES,slot,node);}}
+void mapBlocks(int node){if(node==0){dispatchCount(3,get(BO,g()));dispatchCount(6,h(14));}for(int block=get(BO,node);block<get(BO,node+1);block++)put(BN,block,node);}
 double vector(int row){return row<0?0.0:p.argument==0?pressure(row):number(h(21)+2*(size()+row));}
 void productBlock(int block,int lane){
  if(block>=get(BO,g()))return;int node=get(BN,block),row=n()+node,index=get(FO,node)+128*(block-get(BO,node))+lane;
@@ -128,6 +129,13 @@ void productNode(int node,int lane){
  double result=0.0;for(int block=get(BO,node)+lane;block<get(BO,node+1);block+=128)result+=read(PARTS,block);
  part[lane]=result;otherPart[lane]=0.0;loadPart[lane]=0.0;reduce(lane);
  if(lane==0)writeNumber(h(21)+2*(2*size()+n()+node),part[0]+read(STORAGE,node)*vector(n()+node));
+}
+// Small rows use a single invocation; only large chambers pay for block reductions.
+void productSmall(int node){
+ if(node>=int(words[h(9)])||get(FC,node)>128)return;
+ int row=n()+node;double own=vector(row),result=read(STORAGE,node)*own;
+ for(int i=get(FO,node);i<get(FO,node+1);i++){int f=get(NODE_FACES,i);result+=weight(f)*(own-vector(peerRow(f,row)));}
+ writeNumber(h(21)+2*(2*size()+row),result);
 }
 void project(int f){
  ivec2 r=rowsOf(f);double v=face(f,1);
@@ -142,14 +150,14 @@ void observeGas(int node,int lane){
 }
 void main(){
  int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*block+lane;
- if((p.stage==9||p.stage==10)&&number(h(24)+2*(p.argument==0?7:3))==0.0)return;
+ if((p.stage==9||p.stage==10||p.stage==14)&&number(h(24)+2*(p.argument==0?7:3))==0.0)return;
  if(p.stage==2){datum(lane);return;}
  if(p.stage==5||p.stage==9||p.stage==10||p.stage==12){
-  if(block>=(p.stage==9?get(BO,g()):int(words[h(9)])))return;
-  if(p.stage==5)gasRow(block,lane);else if(p.stage==9)productBlock(block,lane);else if(p.stage==10)productNode(block,lane);else observeGas(block,lane);return;
+  if(block>=(p.stage==9?get(BO,g()):p.stage==10?h(14):int(words[h(9)])))return;
+  if(p.stage==5)gasRow(block,lane);else if(p.stage==9)productBlock(block,lane);else if(p.stage==10)productNode(get(LARGE_NODES,block),lane);else observeGas(block,lane);return;
  }
  if(id>=p.count)return;
  if(p.stage==0)capture(id);else if(p.stage==1)initialize(id);else if(p.stage==3)prepareFace(id);else if(p.stage==4)scatter(id);
  else if(p.stage==6)liquidRow(id);else if(p.stage==7)countBlocks(id);else if(p.stage==8)mapBlocks(id);else if(p.stage==11)project(id);
- else if(p.stage==13)write(CELL_P,id,full(id)?read(DATUM,0)+pressure(id):0.0);
+ else if(p.stage==13)write(CELL_P,id,full(id)?read(DATUM,0)+pressure(id):0.0);else if(p.stage==14)productSmall(id);
 }
