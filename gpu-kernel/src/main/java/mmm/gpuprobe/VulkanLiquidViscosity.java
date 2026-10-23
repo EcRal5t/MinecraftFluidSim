@@ -97,6 +97,7 @@ final class VulkanLiquidViscosity implements AutoCloseable {
     void rebindRanges(FlipKernelBindings.BufferRange source,FlipKernelBindings.BufferRange candidate,FlipKernelBindings.BufferRange errors){bindings.rebindRanges(List.of(source,candidate,errors));}
     void record(VkCommandBuffer command,Layout layout,double cellSize,double duration){
         if(!(cellSize>0&&Double.isFinite(cellSize)&&duration>0&&Double.isFinite(duration)))throw new IllegalArgumentException("Invalid viscous step");
+        try(var stack=stackPush()){bindings.bind(command,stack);}
         stage(command,layout,0,0,layout.source.cellCount(),cellSize,duration);
         stage(command,layout,1,0,layout.faces,cellSize,duration);
         if(layout.contacts!=null)stage(command,layout,5,0,layout.contacts.capacity(),cellSize,duration);
@@ -119,7 +120,7 @@ final class VulkanLiquidViscosity implements AutoCloseable {
     private void stage(VkCommandBuffer command,Layout layout,int stage,int colour,int count,double h,double dt){
         if(count==0)return;int groups=(count+127)/128;
         try(var stack=stackPush()){
-            bindings.bind(command,stack);var push=stack.malloc(32).putInt(word(layout.header)).putInt(stage).putInt(colour).putInt(count).putDouble(h).putDouble(dt).flip();
+            var push=stack.malloc(32).putInt(word(layout.header)).putInt(stage).putInt(colour).putInt(count).putDouble(h).putDouble(dt).flip();
             vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,push);
             vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);

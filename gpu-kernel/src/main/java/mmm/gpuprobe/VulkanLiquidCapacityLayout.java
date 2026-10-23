@@ -15,7 +15,7 @@ final class VulkanLiquidCapacityLayout {
         MEMBERS(4), BLOCK_COUNTS(4), BLOCK_OFFSETS(4), BLOCK_GROUP(4), BLOCK_IN(8), BLOCK_OUT(8),
         BLOCK_BASE(8), BLOCK_PREFIX(8), GROUP_IN(8), GROUP_LIMIT(8), CROSS_MASK(4),
         FLOW(8), SOURCE_LIMIT(8), TARGET_LIMIT(8), ACTIVE(4), AFFECTED(4), ACTIVE_EDGES(4),
-        MARK(4), EDGE_MARK(4), COUNTERS(4), SCAN_WORKSPACE(4);
+        MARK(4), EDGE_MARK(4), COUNTERS(4), SCAN_WORKSPACE(4), DISPATCH(4);
         final int width;
         Field(int width) { this.width = width; }
     }
@@ -48,6 +48,7 @@ final class VulkanLiquidCapacityLayout {
                 case BLOCK_GROUP, BLOCK_IN, BLOCK_OUT, BLOCK_BASE, BLOCK_PREFIX -> blockCapacity;
                 case FLOW, SOURCE_LIMIT, TARGET_LIMIT, ACTIVE_EDGES, EDGE_MARK -> edges;
                 case COUNTERS -> 4;
+                case DISPATCH -> 9;
                 case ACTIVE, AFFECTED, MARK -> vertices;
                 case SCAN_WORKSPACE -> Math.toIntExact(VulkanPrefixScan.workspaceBytes(groups) / 4);
                 default -> cells;

@@ -8,7 +8,7 @@ layout(push_constant) uniform Params { int header; int stage; int count; int arg
 const int K=0,LOWER=1,UPPER=2,GROUP_ID=3,GROUP_CAPACITY=4,PREFERRED=5,OPEN=6,ACCEPTED=7,
  CONTROL=8,HEADER=9,GC=10,GO=11,CURSOR=12,MEMBERS=13,BC=14,BO=15,BG=16,
  BI=17,BOUT=18,BASE=19,BPREFIX=20,GI=21,GLIMIT=22,CROSS=23,FLOW=24,
- SOURCE_LIMIT=25,TARGET_LIMIT=26,ACTIVE=27,AFFECTED=28,ACTIVE_EDGES=29,MARK=30,EDGE_MARK=31,COUNTERS=32;
+ SOURCE_LIMIT=25,TARGET_LIMIT=26,ACTIVE=27,AFFECTED=28,ACTIVE_EDGES=29,MARK=30,EDGE_MARK=31,COUNTERS=32,DISPATCH=34;
 const int RUNNING=0,FEASIBLE=1,LIMIT=3,INVALID=4;
 const int64_t INF=int64_t(0x3fffffffffffffffUL);
 shared int64_t a[128],b[128],c[128];
@@ -38,7 +38,7 @@ void initialize(int id){
  if(id<7*n()){putWide(FLOW,id,int64_t(0));putWide(SOURCE_LIMIT,id,INF);putWide(TARGET_LIMIT,id,INF);put(EDGE_MARK,id,0);}
  if(id<n()){put(MARK,id,1);put(ACTIVE,id,id);}
  if(id<groups()){put(GC,id,0);put(CURSOR,id,0);}
- if(id==0){for(int i=0;i<12;i++)put(CONTROL,i,0);for(int i=0;i<4;i++)put(COUNTERS,i,0);put(CONTROL,3,n());put(CONTROL,5,p.argument);put(CONTROL,7,h(4)>0?1:0);}
+ if(id==0){for(int i=0;i<12;i++)put(CONTROL,i,0);for(int i=0;i<4;i++)put(COUNTERS,i,0);put(CONTROL,3,n());put(CONTROL,5,p.argument);put(CONTROL,7,h(4)>0?1:0);for(int i=0;i<3;i++){put(DISPATCH,3*i,0);put(DISPATCH,3*i+1,1);put(DISPATCH,3*i+2,1);}}
 }
 void countGroup(int cell){
  int g=get(GROUP_ID,cell);int64_t k=wide(K,cell),lo=wide(LOWER,cell),hi=wide(UPPER,cell);
@@ -144,6 +144,9 @@ void finishRound(){
  int round=get(CONTROL,1)+1,count=get(CONTROL,2);put(CONTROL,1,round);put(CONTROL,3,count);put(CONTROL,6,count);put(CONTROL,2,0);put(COUNTERS,0,0);put(COUNTERS,1,0);
  if(count==0&&get(CONTROL,7)==0)put(CONTROL,0,FEASIBLE);
  else {put(CONTROL,8,count==0?1:0);if(round>=get(CONTROL,5))put(CONTROL,0,LIMIT);}
+ bool groupPhase=get(CONTROL,0)==RUNNING&&get(CONTROL,8)!=0;
+ for(int i=0;i<3;i++){int blocks=groupPhase?(i==1?h(4):get(BO,groups())):0;
+  put(DISPATCH,3*i,min(blocks,65535));put(DISPATCH,3*i+1,blocks==0?1:(blocks+65534)/65535);put(DISPATCH,3*i+2,1);}
 }
 void finish(int id){
  if(get(CONTROL,0)!=FEASIBLE){if(id==0)atomicOr(errors,8192u);return;}

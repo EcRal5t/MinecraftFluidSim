@@ -17,6 +17,7 @@ final class VulkanLiquidCapacity implements AutoCloseable {
     // phase (cell/group), reserved x3. Group budgets run after cell constraints settle.
     private final FlipKernelBindings bindings;
     private final VulkanPrefixScan scan;
+    private FlipKernelBindings.BufferRange arena;
 
     VulkanLiquidCapacity(VulkanDeviceContext context) {
         bindings = new FlipKernelBindings(context, 2, shader(), 20);
@@ -28,6 +29,7 @@ final class VulkanLiquidCapacity implements AutoCloseable {
     }
 
     void rebindRanges(FlipKernelBindings.BufferRange arena, FlipKernelBindings.BufferRange errors) {
+        this.arena=arena;
         bindings.rebindRanges(List.of(arena, errors));
         scan.rebindRanges(arena, arena, arena, errors);
     }
@@ -50,6 +52,7 @@ final class VulkanLiquidCapacity implements AutoCloseable {
     /** Each wave reduces conflicting deviations from the feasible baseline on device frontiers. */
     void recordIterations(VkCommandBuffer command, VulkanLiquidCapacityLayout layout, int rounds) {
         if (rounds < 0) throw new IllegalArgumentException("Negative capacity round count");
+        try(var stack=stackPush()){bindings.bind(command,stack);}
         for (int round = 0; round < rounds; round++) {
             if (layout.gasGroups() > 0) {
                 stage(command, layout, 5, Math.multiplyExact(128, layout.blockCapacity()), 0);
@@ -72,10 +75,14 @@ final class VulkanLiquidCapacity implements AutoCloseable {
         int groups = Math.max(1, (int) (((long) count + 127) / 128));
         if (stage >= 10 && stage <= 12) groups = Math.min(groups, 256);
         try (var stack = stackPush()) {
-            bindings.bind(command, stack);
+            if(stage<5||stage==14)bindings.bind(command, stack);
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                     stack.ints(layout.word(VulkanLiquidCapacityLayout.Field.HEADER), stage, count, argument, 0));
-            vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);
+            if(stage>=5&&stage<=7) {
+                barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
+                        VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
+                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+layout.column(VulkanLiquidCapacityLayout.Field.DISPATCH).offset()+12L*(stage-5));
+            } else vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);
             barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, stack);
         }
