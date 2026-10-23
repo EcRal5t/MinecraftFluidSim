@@ -437,7 +437,10 @@ D01 进入前性能验收采用热运行：同一 JVM 已完成生产物理场�
 ```powershell
 ./gradlew.bat :gpu-kernel:runGpuRegionStorageBenchmark --offline --no-daemon
 ./gradlew.bat :gpu-kernel:runGpuResidentPressureBenchmark -PgpuResidentPressureGrid=64 -PgpuPressureSamples=10 --offline --no-daemon
+./gradlew.bat :gpu-kernel:runGpuLiquidGeometryBenchmark -PgpuProbeDevice=0 -PgpuGeometrySamples=10 -PgpuGeometryProjection=true -PgpuGeometryGrids=64 --offline --no-daemon
 ```
+
+`runGpuLiquidGeometryBenchmark` 的 `gpuGeometryProjection=false` 测库存派生几何；设为 `true` 追加重力、物理 CSR、压力、格面投影与 PLIC 面扫掠偏好。`gpuGeometryGrids` 接受逗号分隔格数，`gpuGeometrySamples` 控制采样次数，固定先预热5次。投影模式每次从零压力开始，并计入代次复制、命令录制、各批执行、状态回读和接管。
 
 前者计设备代次复制、极小写入与提交，保留一个旧捕获；后者在初始化时上传固定制造矩阵，后续每次从相同零压力求解，计入命令录制、候选复制、全部迭代、状态回读和提交。两者均未覆盖流体几何、输运和热化学。完整物理验证集中后置，下面的既有验证入口按实际风险选取。
 
@@ -637,3 +640,17 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 - `build/gpu-resident-storage-compile.log` 编译通过。`build/gpu-resident-storage-cost.log` 的代次管理成本入口在 RTX 5070 Ti 上运行，1／16／64 MiB 状态的中位耗时分别为 0.149／0.162／0.292 ms，64 MiB 最大 0.533 ms。每次上传 0 B、回读 4 B；保留旧捕获时复用三份设备缓冲区，主机 staging 共 3 MiB。该入口不执行流体方程。
 - 同一日志的原 64³ 制造压力矩阵复测：热态完整压力求解均值 209.349 ms，设备时间 170.503 ms。并行汇总工作组结果后，`build/gpu-pressure-parallel-reduction-cost.log` 中对应均值为 91.118 ms，设备时间 23.089 ms，仍包含每次约 31.2 MB 上传及 2.1 MB 压力回读。两次使用同一输入、1e-5 容差和 200 次迭代上限，实际均为 128 次迭代；性能入口自身的残差重算检查通过。
 - `build/gpu-pressure-resident-generation-cost.log` 运行共用 `VulkanPressureKernel` 与设备代次存储，每次保持同一制造问题、零初始压力和原迭代要求。5 次预热后 10 次采样，中位 24.540 ms、最大 26.386 ms、设备平均 22.776 ms；每次上传 0 B、回读 4 B，显存内复制 46,923,936 B。两代逻辑设备存储约 89.5 MiB，主机 staging 共 3 MiB。设备报告每次收敛才提交；该结果仅覆盖压力，完整 64³ 流体步、原完整场景十倍提速及本次迁移后的集中物理验证尚未完成。
+
+
+2026-10-24：常驻液体阶段链的最终成本见 `build/gpu-resident-liquid-flux-preferences-cost.log`（RTX 5070 Ti，5次预热、10次采样）。包含候选复制、接管和投影后的 PLIC 面扫掠偏好；每次从零压力求解。64³ `dam-mixture` 含196,608份库存，26次压力迭代，RMS 9.05097805e-6，沿用1e-5容差与200次上限；`cut-partial-mixture` 含524,288份库存，本输入压力迭代为0。两场景每步上传均为0 B，主机 staging 均为3 MiB。
+
+| 64³场景 | 中位 / 最大 ms | 设备平均 ms | 每步回读 B | 逻辑设备存储 MiB |
+|---|---:|---:|---:|---:|
+| dam-mixture | 10.090 / 12.053 | 7.557 | 52 | 313.1 |
+| cut-partial-mixture | 3.638 / 4.169 | 2.967 | 16 | 353.1 |
+
+此前未包含面扫掠偏好的 `build/gpu-resident-liquid-fp32-geometry-cost.log` 两场景中位分别为9.673和3.359 ms，保留其原阶段范围。
+
+首次 Jacobi-PCG 的 `build/gpu-resident-liquid-pressure-failure.log` 达到200次上限后 RMS 仍为2.6125e-5，该次失败。多重网格在相同容差和上限下26次收敛；零初始压力的完整录制成本中位22.470 ms（`gpu-resident-liquid-multigrid-zero-cost.log`），分批每8次迭代执行后为10.105 ms（`gpu-resident-liquid-pressure-batches-cost.log`），最终含面扫掠偏好的成本见上表。几何计算按4e-5体积分辨率处理，精确库存、int64数量、动力学和压力保留原精度。
+
+本次成本覆盖常驻库存→几何→重力→真实七点 CSR→压力→格面投影→PLIC 面扫掠偏好。末阶段根据真实共享开放端口和源侧 PLIC 薄片生成有符号格面体积 `(Qt,Ql)`；接收容量接受及库存和 MAC 输运尚未完成，有限气腔、热化学、完整区域应用层接管与完整步成本待完成；集中物理检查尚未开始。动态容量布局、逻辑计数头和多批存储代码已落地，分层前缀扫描尚未执行实际 dispatch。完整64³流体步20 Hz及原场景十倍提速继续按完整链交付后判定。

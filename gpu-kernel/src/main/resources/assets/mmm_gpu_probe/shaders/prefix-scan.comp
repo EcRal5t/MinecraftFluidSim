@@ -1,0 +1,59 @@
+#version 450
+layout(local_size_x=256) in;
+layout(std430,binding=0) readonly buffer Counts { uint counts[]; };
+layout(std430,binding=1) buffer Offsets { uint offsets[]; };
+layout(std430,binding=2) buffer Workspace { uint work[]; };
+layout(std430,binding=3) buffer Errors { uint errors; };
+layout(push_constant) uniform Metadata {
+    uint stage; uint count; uint base; uint parent; uint root; uint totalIndex;
+} pc;
+shared uint values[256];
+
+uint checkedAdd(uint a,uint b) {
+    uint result=a+b;
+    if(result<a || result>0x7fffffffu) atomicOr(errors,16u);
+    return result;
+}
+void main() {
+    uint block=gl_WorkGroupID.x+gl_WorkGroupID.y*65535u;
+    if(block>=(pc.count+255u)/256u && pc.count!=0u)return;
+    uint lane=gl_LocalInvocationID.x, i=block*256u+lane;
+    if(pc.stage==1u) {
+        if(i<pc.count) {
+            uint addend=work[pc.parent+block];
+            if(pc.root!=0u)offsets[i]=checkedAdd(offsets[i],addend);
+            else work[pc.base+i]=checkedAdd(work[pc.base+i],addend);
+        }
+        return;
+    }
+    uint value=0u;
+    if(i<pc.count)value=pc.root!=0u?counts[i]:work[pc.base+i];
+    if(value>0x7fffffffu)atomicOr(errors,16u);
+    values[lane]=value;
+    barrier();
+    for(uint stride=1u;stride<256u;stride*=2u) {
+        uint target=(lane+1u)*stride*2u-1u;
+        if(target<256u)values[target]=checkedAdd(values[target],values[target-stride]);
+        barrier();
+    }
+    if(lane==0u) {
+        uint total=values[255];
+        if(pc.parent==0xffffffffu)offsets[pc.totalIndex]=total;
+        else work[pc.parent+block]=total;
+        values[255]=0u;
+    }
+    barrier();
+    for(uint stride=128u;stride>0u;stride/=2u) {
+        uint target=(lane+1u)*stride*2u-1u;
+        if(target<256u) {
+            uint left=values[target-stride];
+            values[target-stride]=values[target];
+            values[target]=checkedAdd(values[target],left);
+        }
+        barrier();
+    }
+    if(i<pc.count) {
+        if(pc.root!=0u)offsets[i]=values[lane];
+        else work[pc.base+i]=values[lane];
+    }
+}

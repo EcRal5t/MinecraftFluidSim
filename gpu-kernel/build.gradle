@@ -186,3 +186,16 @@ registerGpuProbe(
         providers.gradleProperty('gpuResidentPressureGrid').getOrElse('64'),
         providers.gradleProperty('gpuPressureSamples').getOrElse('10')
 }
+
+registerGpuProbe(
+    'runGpuLiquidGeometryBenchmark',
+    'Measures resident mixed-liquid PLIC, cut-cell and MAC geometry reconstruction.',
+    'mmm.gpuprobe.GpuLiquidGeometryBenchmark',
+    'gpu-liquid-geometry-work'
+) { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        providers.gradleProperty('gpuGeometrySamples').getOrElse('10'),
+        providers.gradleProperty('gpuGeometryProjection').getOrElse('false'),
+        providers.gradleProperty('gpuGeometryGrids').getOrElse('16,32,64')
+    probeTask.jvmArgs '-Xmx1g'
+}

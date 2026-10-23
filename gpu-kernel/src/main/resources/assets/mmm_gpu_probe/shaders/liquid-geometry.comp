@@ -1,0 +1,146 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x=128) in;
+layout(push_constant) uniform Metadata { int sx; int sy; int sz; int stage; float h; float dt; } pc;
+layout(std430,binding=0) readonly buffer Offsets { int offsets[]; };
+layout(std430,binding=1) readonly buffer Volumes { double volumes[]; };
+layout(std430,binding=2) readonly buffer Masses { int64_t masses[]; };
+layout(std430,binding=3) readonly buffer Masks { uint masks[]; };
+layout(std430,binding=4) readonly buffer Solids { int64_t occupied[]; };
+layout(std430,binding=5) readonly buffer MomentumX { double momentumX[]; };
+layout(std430,binding=6) readonly buffer MomentumY { double momentumY[]; };
+layout(std430,binding=7) readonly buffer MomentumZ { double momentumZ[]; };
+layout(std430,binding=8) buffer Cells { dvec4 cells[]; };
+layout(std430,binding=9) buffer Planes { dvec4 planes[]; };
+layout(std430,binding=10) buffer Micro { double microVolume[]; };
+layout(std430,binding=11) buffer Faces { dvec4 faces[]; };
+layout(std430,binding=12) buffer Errors { uint errors; };
+layout(std430,binding=13) buffer FluxPreferences { dvec2 faceFlux[]; };
+int cellIndex(ivec3 p) { return (p.z*pc.sy+p.y)*pc.sx+p.x; }
+bool inside(ivec3 p) { return all(greaterThanEqual(p,ivec3(0)))&&all(lessThan(p,ivec3(pc.sx,pc.sy,pc.sz))); }
+ivec3 position(int i) { return ivec3(i%pc.sx,i/pc.sx%pc.sy,i/(pc.sx*pc.sy)); }
+float sampleFill(ivec3 p,float fallback) { if(!inside(p))return fallback; int c=cellIndex(p);return cells[c].z>0?float(cells[c].w):fallback; }
+// Analytic box-projection CDF, using the stable sorted-width expression of MicroBoxPlaneVolume.
+// Geometry uses float at the existing 4e-5 volume resolution; inventory and face dynamics retain double.
+float boxVolume(vec3 n,float offset,int bit,float side) {
+    vec3 origin=side*vec3(bit&1,(bit>>1)&1,(bit>>2)&1);
+    float scale=max(abs(n.x),max(abs(n.y),abs(n.z)));
+    if(scale==0)return offset>=0?side*side*side:0;
+    vec3 q=n/scale,w=abs(q)*side;
+    float t=offset/scale-dot(q,origin)-dot(min(q,vec3(0)),vec3(side));
+    if(w.x>w.y){float s=w.x;w.x=w.y;w.y=s;}if(w.y>w.z){float s=w.y;w.y=w.z;w.z=s;}if(w.x>w.y){float s=w.x;w.x=w.y;w.y=s;}
+    float total=w.x+w.y+w.z;if(t<=0)return 0;if(t>=total)return side*side*side;
+    bool complement=t>total*.5;if(complement)t=total-t;
+    float a=w.x,b=w.y,c=w.z,f;
+    if(b==0)f=t/c;
+    else if(a==0)f=t<=b?(t/b)*(t/c)*.5:(t-.5*b)/c;
+    else if(t<=a)f=(t/a)*(t/b)*(t/c)/6;
+    else if(t<=b)f=(3*t*(t-a)+a*a)/(6*b*c);
+    else if(t>=a+b)f=(t-.5*(a+b))/c;
+    else {float u=t-b,v=max(0.0,t-c);f=(3*t*(t-a)+a*a-(u*u*u+v*v*v)/a)/(6*b*c);}
+    return clamp(complement?1-f:f,0.0,1.0)*side*side*side;
+}
+float selectedVolume(uint support,vec3 n,float offset) {
+    if(support==255u)return boxVolume(n,offset,0,1);
+    float value=0;for(int b=0;b<8;b++)if((support&(1u<<b))!=0)value+=boxVolume(n,offset,b,.5);return value;
+}
+void totals(int c) {
+    double volume=0;int64_t mass=0;
+    const int64_t maximumMass=int64_t(0x7fffffffffffffffUL);
+    for(int j=offsets[c];j<offsets[c+1];j++){
+        volume+=volumes[j];
+        if(masses[j]<int64_t(0)||mass>maximumMass-masses[j])atomicOr(errors,1u);else mass+=masses[j];
+    }
+    double pore=double(bitCount((~masks[c])&255u))*.125-double(occupied[c])/16777216.0;
+    if(volume<0||pore<0||mass<int64_t(0)||volume>pore+1.0/16777216.0)atomicOr(errors,1u);
+    cells[c]=dvec4(volume,double(mass)*1e-10,pore,pore>0?clamp(volume/pore,0.0,1.0):0);
+}
+void reconstruct(int c) {
+    ivec3 p=position(c);float fill=float(cells[c].w);uint support=(~masks[c])&255u;
+    vec3 n=vec3(0);for(int a=0;a<3;a++){ivec3 e=ivec3(0);e[a]=1;n[a]=-(sampleFill(p+e,fill)-sampleFill(p-e,fill));}
+    if(dot(n,n)==0)n=vec3(0,1,0);else n/=sqrt(dot(n,n));
+    float lower=1e30,upper=-1e30;
+    for(int b=0;b<8;b++)if((support&(1u<<b))!=0){vec3 o=.5*vec3(b&1,(b>>1)&1,(b>>2)&1);lower=min(lower,dot(n,o)+dot(min(n,vec3(0)),vec3(.5)));upper=max(upper,dot(n,o)+dot(max(n,vec3(0)),vec3(.5)));}
+    float target=fill*float(bitCount(support))*.125;
+    bool unresolved=fill>0&&fill<1&&min(cells[c].x,cells[c].z-cells[c].x)<=4e-5;
+    if(unresolved)n=vec3(0,1,0);
+    if(fill<=0)upper=lower;else if(fill>=1)lower=upper;
+    else if(!unresolved)for(int k=0;k<16;k++){float mid=.5*(lower+upper);if(selectedVolume(support,n,mid)<target)lower=mid;else upper=mid;}
+    float offset=support==0u?0:.5*(lower+upper);
+    if(unresolved){float low=float(bitCount(support&0x33u))*.125,high=float(bitCount(support&0xccu))*.125;offset=low>0&&target<=low?.5*target/low:.5+.5*(target-low)/high;}
+    planes[c]=dvec4(n,offset);
+    float porosity= support==0u?0:float(cells[c].z)/(float(bitCount(support))*.125);
+    for(int b=0;b<8;b++)microVolume[8*c+b]=(support&(1u<<b))==0?0:fill<=0?0:fill>=1?.125*porosity:boxVolume(n,offset,b,.5)*porosity;
+}
+int clip(inout vec2 poly[8],int count,vec3 h) {
+    if(count==0)return 0;vec2 outPoly[8];int next=0;vec2 prev=poly[count-1];float pd=dot(h.xy,prev)-h.z;
+    for(int k=0;k<count;k++){vec2 now=poly[k];float d=dot(h.xy,now)-h.z;if((d<=0)!=(pd<=0))outPoly[next++]=mix(prev,now,pd/(pd-d));if(d<=0)outPoly[next++]=now;prev=now;pd=d;}
+    for(int k=0;k<next;k++)poly[k]=outPoly[k];return next;
+}
+float portArea(float fill,vec4 p,int axis,int side,int a,int b) {
+    if(fill<=0)return 0;if(fill>=1)return .25;
+    int t=(axis+1)%3,o=(axis+2)%3;vec3 n=vec3(0);n[t]=p[t];n[o]=p[o];
+    int bit=(a<<t)|(b<<o);return boxVolume(n,p.w-float(side)*p[axis],bit,.5)*2;
+}
+void faceGeometry(int f) {
+    int xCount=(pc.sx+1)*pc.sy*pc.sz,yCount=pc.sx*(pc.sy+1)*pc.sz;int axis=f<xCount?0:f<xCount+yCount?1:2,local=f-(axis==0?0:axis==1?xCount:xCount+yCount);
+    ivec3 dims=ivec3(pc.sx,pc.sy,pc.sz);dims[axis]++;ivec3 p=ivec3(local%dims.x,local/dims.x%dims.y,local/(dims.x*dims.y)),e=ivec3(0);e[axis]=1;
+    if(!inside(p)||!inside(p-e)){double endpointMass=(inside(p)?cells[cellIndex(p)].y:0)+(inside(p-e)?cells[cellIndex(p-e)].y:0);faces[f]=dvec4(.5*endpointMass,0,0,0);return;}int l=cellIndex(p-e),r=cellIndex(p),t=(axis+1)%3,o=(axis+2)%3;float open=0,wet=0;
+    float leftFill=float(cells[l].w),rightFill=float(cells[r].w);vec4 lp=vec4(planes[l]),rp=vec4(planes[r]);
+    for(int a=0;a<2;a++)for(int b=0;b<2;b++) {
+        int bit=(a<<t)|(b<<o);if((masks[l]&(1u<<(bit|(1<<axis))))!=0||(masks[r]&(1u<<bit))!=0)continue;
+        open+=.25;float leftArea=portArea(leftFill,lp,axis,1,a,b),rightArea=portArea(rightFill,rp,axis,0,a,b);
+        if(leftFill<=0||rightFill<=0){wet+=min(leftArea+rightArea,.25*(leftFill+rightFill));continue;}
+        vec2 poly[8];poly[0]=vec2(a,b)*.5;poly[1]=poly[0]+vec2(.5,0);poly[2]=poly[0]+vec2(.5,.5);poly[3]=poly[0]+vec2(0,.5);int count=4;
+        if(leftFill<1)count=clip(poly,count,vec3(lp[t],lp[o],lp.w-lp[axis]));if(rightFill<1)count=clip(poly,count,vec3(rp[t],rp[o],rp.w));
+        float area=0;for(int k=1;k+1<count;k++){vec2 u=poly[k]-poly[0],v=poly[k+1]-poly[0];area+=u.x*v.y-u.y*v.x;}float geometricArea=clamp(leftArea+rightArea-abs(area)*.5,0.0,.25);
+        wet+=min(geometricArea,.25*(leftFill+rightFill));
+    }
+    double mass=.5*(cells[l].y+cells[r].y),speed=open>0&&mass>0?(axis==0?momentumX[local]:axis==1?momentumY[local]:momentumZ[local])/mass:0;
+    faces[f]=dvec4(mass,speed,open,wet);
+}
+
+// Integrates one donor microcell slab in its local unit box, scaled by its actual pore volume.
+double slabLiquid(int source,int micro,int axis,bool positive,double portion,double pore) {
+    if(pore<=0.0)return 0.0;
+    float wet=float(microVolume[8*source+micro]/pore);
+    if(wet<=0.0)return 0.0;
+    if(wet>=1.0)return portion;
+    float width=float(clamp(portion/pore,0.0LF,1.0LF));
+    vec3 low=vec3(0),extent=vec3(1);extent[axis]=width;
+    if(positive)low[axis]=1.0-width;
+    vec4 plane=vec4(planes[source]);vec3 n=.5*plane.xyz;
+    vec3 microOrigin=vec3(micro&1,(micro>>1)&1,(micro>>2)&1);
+    float offset=plane.w-dot(n,microOrigin)-dot(n,low);
+    float fraction=boxVolume(n*extent,offset,0,1.0);
+    return clamp(pore*double(width)*double(fraction),0.0LF,portion);
+}
+
+// Signed total and liquid volume preferences. Capacity, materials and gas allocation decide accepted transfers.
+void transportPreference(int f) {
+    faceFlux[f]=dvec2(0);
+    int xCount=(pc.sx+1)*pc.sy*pc.sz,yCount=pc.sx*(pc.sy+1)*pc.sz;
+    int axis=f<xCount?0:f<xCount+yCount?1:2,local=f-(axis==0?0:axis==1?xCount:xCount+yCount);
+    ivec3 dims=ivec3(pc.sx,pc.sy,pc.sz);dims[axis]++;
+    ivec3 right=ivec3(local%dims.x,local/dims.x%dims.y,local/(dims.x*dims.y)),left=right;left[axis]--;
+    if(!inside(left)||!inside(right))return;
+    double qt=faces[f].z*faces[f].y*double(pc.dt)/double(pc.h);
+    if(qt==0.0)return;
+    int l=cellIndex(left),r=cellIndex(right),t=(axis+1)%3,o=(axis+2)%3,openPorts=0;
+    for(int port=0;port<4;port++) {
+        int bit=((port&1)<<t)|((port>>1)<<o);
+        if((masks[l]&(1u<<(bit|(1<<axis))))==0u&&(masks[r]&(1u<<bit))==0u)openPorts|=1<<port;
+    }
+    if(openPorts==0)return;
+    bool positive=qt>0.0;int source=positive?l:r;
+    double portion=abs(qt)/double(bitCount(openPorts));
+    double pore=cells[source].z/double(bitCount((~masks[source])&255u)),liquid=0.0;
+    for(int port=0;port<4;port++)if((openPorts&(1<<port))!=0) {
+        int micro=((port&1)<<t)|((port>>1)<<o)|(positive?1<<axis:0);
+        liquid+=slabLiquid(source,micro,axis,positive,portion,pore);
+    }
+    faceFlux[f]=dvec2(qt,positive?liquid:-liquid);
+}
+
+void main(){int i=int(gl_GlobalInvocationID.x);int count=pc.sx*pc.sy*pc.sz;if(pc.stage==0){if(i<count)totals(i);}else if(pc.stage==1){if(i<count)reconstruct(i);}else{int countFaces=(pc.sx+1)*pc.sy*pc.sz+pc.sx*(pc.sy+1)*pc.sz+pc.sx*pc.sy*(pc.sz+1);if(i<countFaces){if(pc.stage==2)faceGeometry(i);else transportPreference(i);}}}

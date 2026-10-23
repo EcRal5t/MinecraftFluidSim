@@ -1,0 +1,139 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) readonly buffer Starts { int starts[]; };
+layout(binding=1,std430) readonly buffer Columns { int columns[]; };
+layout(binding=2,std430) readonly buffer Values { double values[]; };
+layout(binding=3,std430) readonly buffer Rows { int rows[]; };
+layout(binding=4,std430) readonly buffer Metadata { int meta[]; };
+layout(binding=5,std430) buffer Work { double work[]; };
+layout(binding=6,std430) readonly buffer Control { double control[]; };
+layout(binding=7,std430) buffer Hierarchy { double hierarchy[]; };
+layout(push_constant) uniform Params {
+    int sx; int sy; int sz; int stage;
+    int base; int peerBase; int psx; int psy; int psz; int fineCount; int reserved0; int reserved1;
+} p;
+shared double coarseCorrection[64];
+shared double coarseNext[64];
+const double OMEGA=0.66666666666666666667LF;
+
+int count(ivec3 shape) { return shape.x*shape.y*shape.z; }
+int indexOf(ivec3 at,ivec3 shape) { return (at.z*shape.y+at.y)*shape.x+at.x; }
+ivec3 coordinate(int row,ivec3 shape) { return ivec3(row%shape.x,row/shape.x%shape.y,row/(shape.x*shape.y)); }
+bool inside(ivec3 at,ivec3 shape) { return all(greaterThanEqual(at,ivec3(0)))&&all(lessThan(at,shape)); }
+ivec3 adjacent(ivec3 at,int side) { at[side/2]+=(side&1)==0?-1:1;return at; }
+int aIndex(int base,int row,int entry) { return base+7*row+entry; }
+int rIndex(int base,int n,int row) { return base+7*n+row; }
+int uIndex(int base,int n,int row) { return base+8*n+row; }
+int tIndex(int base,int n,int row) { return base+9*n+row; }
+double diagonal(int base,int row) { return hierarchy[aIndex(base,row,0)]; }
+double scaled(int base,int row,double rhs) {
+    double d=diagonal(base,row);return d>0.0?OMEGA*rhs/d:0.0;
+}
+double product(int base,ivec3 shape,int row,int vectorOffset) {
+    double result=diagonal(base,row)*hierarchy[vectorOffset+row];
+    ivec3 at=coordinate(row,shape);
+    for(int side=0;side<6;side++) {
+        ivec3 next=adjacent(at,side);
+        if(inside(next,shape))result+=hierarchy[aIndex(base,row,side+1)]*hierarchy[vectorOffset+indexOf(next,shape)];
+    }
+    return result;
+}
+
+void buildFine(int row) {
+    for(int entry=0;entry<7;entry++)hierarchy[aIndex(p.base,row,entry)]=0.0;
+    if(meta[p.fineCount+row]==0)return;
+    ivec3 at=coordinate(row,ivec3(p.sx,p.sy,p.sz));
+    for(int edge=starts[row];edge<starts[row+1];edge++) {
+        int column=columns[edge];double value=values[edge];
+        if(column==row)hierarchy[aIndex(p.base,row,0)]+=value;
+        else if(meta[p.fineCount+column]!=0) {
+            ivec3 difference=coordinate(column,ivec3(p.sx,p.sy,p.sz))-at;
+            int axis=difference.x!=0?0:difference.y!=0?1:2;
+            int side=2*axis+(difference[axis]>0?1:0);
+            hierarchy[aIndex(p.base,row,side+1)]+=value;
+        }
+    }
+}
+
+// Constant prolongation and summed restriction give exactly A_coarse = P^T A_fine P.
+void buildCoarse(int row) {
+    double entries[7];for(int entry=0;entry<7;entry++)entries[entry]=0.0;
+    ivec3 at=coordinate(row,ivec3(p.sx,p.sy,p.sz)),origin=2*at;
+    for(int child=0;child<8;child++) {
+        ivec3 fine=origin+ivec3(child&1,(child>>1)&1,(child>>2)&1);
+        if(!inside(fine,ivec3(p.psx,p.psy,p.psz)))continue;
+        int fineRow=indexOf(fine,ivec3(p.psx,p.psy,p.psz));
+        entries[0]+=diagonal(p.peerBase,fineRow);
+        for(int side=0;side<6;side++) {
+            ivec3 next=adjacent(fine,side);
+            if(!inside(next,ivec3(p.psx,p.psy,p.psz)))continue;
+            double value=hierarchy[aIndex(p.peerBase,fineRow,side+1)];
+            if(all(equal(next/2,at)))entries[0]+=value;
+            else entries[side+1]+=value;
+        }
+    }
+    for(int entry=0;entry<7;entry++)hierarchy[aIndex(p.base,row,entry)]=entry==0?max(0.0,entries[entry]):entries[entry];
+}
+
+void loadFine(int row,int n) {
+    double rhs=meta[p.fineCount+row]!=0?work[row]:0.0;
+    hierarchy[rIndex(p.base,n,row)]=rhs;
+    hierarchy[tIndex(p.base,n,row)]=scaled(p.base,row,rhs);
+}
+
+void restrictResidual(int row,int n) {
+    ivec3 origin=2*coordinate(row,ivec3(p.sx,p.sy,p.sz));int fineN=count(ivec3(p.psx,p.psy,p.psz));
+    double rhs=0.0;
+    for(int child=0;child<8;child++) {
+        ivec3 fine=origin+ivec3(child&1,(child>>1)&1,(child>>2)&1);
+        if(!inside(fine,ivec3(p.psx,p.psy,p.psz)))continue;
+        int fineRow=indexOf(fine,ivec3(p.psx,p.psy,p.psz));
+        rhs+=hierarchy[rIndex(p.peerBase,fineN,fineRow)]-product(p.peerBase,ivec3(p.psx,p.psy,p.psz),fineRow,p.peerBase+9*fineN);
+    }
+    hierarchy[rIndex(p.base,n,row)]=rhs;
+    hierarchy[tIndex(p.base,n,row)]=scaled(p.base,row,rhs);
+}
+
+// The coarsest level fits one workgroup, including odd or elongated input dimensions.
+// Fixed symmetric Jacobi keeps this approximate inverse linear and positive on the pressure range.
+void solveCoarse(int row,int n) {
+    if(row<n)coarseCorrection[row]=0.0;
+    barrier();
+    for(int iteration=0;iteration<32;iteration++) {
+        if(row<n) {
+            double value=diagonal(p.base,row)*coarseCorrection[row];
+            ivec3 at=coordinate(row,ivec3(p.sx,p.sy,p.sz));
+            for(int side=0;side<6;side++) {
+                ivec3 next=adjacent(at,side);
+                if(inside(next,ivec3(p.sx,p.sy,p.sz)))value+=hierarchy[aIndex(p.base,row,side+1)]*coarseCorrection[indexOf(next,ivec3(p.sx,p.sy,p.sz))];
+            }
+            coarseNext[row]=coarseCorrection[row]+scaled(p.base,row,hierarchy[rIndex(p.base,n,row)]-value);
+        }
+        barrier();
+        if(row<n)coarseCorrection[row]=coarseNext[row];
+        barrier();
+    }
+    if(row<n)hierarchy[uIndex(p.base,n,row)]=coarseCorrection[row];
+}
+
+void main() {
+    // These values are uniform over every workgroup, including the barrier-bearing coarse solve.
+    if(control[3]==0.0)return;
+    if(p.stage<=1&&control[6]==0.0)return;
+    int row=int(gl_GlobalInvocationID.x),n=count(ivec3(p.sx,p.sy,p.sz));
+    if(p.stage==4){solveCoarse(row,n);return;}
+    if(row>=n)return;
+    if(p.stage==0)buildFine(row);
+    else if(p.stage==1)buildCoarse(row);
+    else if(p.stage==2)loadFine(row,n);
+    else if(p.stage==3)restrictResidual(row,n);
+    else if(p.stage==5) {
+        int coarseRow=indexOf(coordinate(row,ivec3(p.sx,p.sy,p.sz))/2,ivec3(p.psx,p.psy,p.psz));
+        hierarchy[tIndex(p.base,n,row)]+=hierarchy[uIndex(p.peerBase,count(ivec3(p.psx,p.psy,p.psz)),coarseRow)];
+    } else if(p.stage==6) {
+        double current=hierarchy[tIndex(p.base,n,row)];
+        hierarchy[uIndex(p.base,n,row)]=current+scaled(p.base,row,
+            hierarchy[rIndex(p.base,n,row)]-product(p.base,ivec3(p.sx,p.sy,p.sz),row,p.base+9*n));
+    } else if(p.stage==7)work[3*p.fineCount+row]=meta[p.fineCount+row]!=0?hierarchy[uIndex(p.base,n,row)]:0.0;
+}

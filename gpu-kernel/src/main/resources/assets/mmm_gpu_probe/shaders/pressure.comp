@@ -13,7 +13,7 @@ layout(binding=8,std430) readonly buffer Problem { double problem[]; };
 layout(binding=9,std430) buffer Control { double control[]; };
 layout(binding=10,std430) buffer Partials { double partials[]; };
 layout(binding=11,std430) buffer Completion { uint errors; };
-layout(push_constant) uniform Params { int count; int size; int maximumIterations; int stage; int groups; } p;
+layout(push_constant) uniform Params { int count; int size; int maximumIterations; int stage; int groups; int externalPreconditioner; } p;
 shared dvec4 scratch[256];
 int lane,n,gid,stride,group;
 #define R(row) work[row]
@@ -82,9 +82,9 @@ void initializeRows() {
     for(int row=gid;row<n;row+=stride) {
         pressure[row]=BOUNDED(row)!=0?max(LOWER(row),problem[2*n+row]):problem[2*n+row];
         FREE(row)=0;R(row)=0.0;D(row)=0.0;Q(row)=0.0;Z(row)=0.0;
-        double diagonal=0.0;for(int edge=starts[row];edge<starts[row+1];edge++)if(columns[edge]==row)diagonal=values[edge];DIAG(row)=diagonal;
+        double diagonal=0.0;for(int edge=starts[row];edge<starts[row+1];edge++)if(columns[edge]==row)diagonal+=values[edge];DIAG(row)=diagonal;
     }
-    double maximum=0.0;for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];double value=BOUNDED(row)!=0?max(LOWER(row),problem[2*n+row]):problem[2*n+row];maximum=max(maximum,abs(value));}
+    double maximum=0.0;for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(row<0)continue;double value=BOUNDED(row)!=0?max(LOWER(row),problem[2*n+row]):problem[2*n+row];maximum=max(maximum,abs(value));}
     saveStats(0.0,0.0,0.0,maximum,0,0);
 }
 void initializeControl() {
@@ -97,7 +97,7 @@ void refreshResidual() {
     if(REFRESH==0.0)return;
     precise double sum=0.0;double equations=0.0,bounds=0.0,maximum=0.0;
     for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
-        int row=rows[ordinal];precise double product=0.0;
+        int row=rows[ordinal];if(row<0)continue;precise double product=0.0;
         for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*pressure[columns[edge]];
         R(row)=RHS(row)-product;double value=R(row);maximum=max(maximum,abs(pressure[row]));
         if(BOUNDED(row)!=0 && pressure[row]<=LOWER(row) && value<=0.0)continue;
@@ -121,13 +121,20 @@ void precondition() {
     if(RUN==0.0)return;
     precise double sum=0.0;
     for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
-        int row=rows[ordinal];
+        int row=rows[ordinal];if(row<0)continue;
         if(RESTART!=0.0)FREE(row)=(BOUNDED(row)==0 || pressure[row]>LOWER(row) || R(row)>TARGET)?1:0;
-        Z(row)=FREE(row)!=0?R(row)/DIAG(row):0.0;
+        if(p.externalPreconditioner==0)Z(row)=FREE(row)!=0?R(row)/DIAG(row):0.0;
         if(RESTART!=0.0)D(row)=Z(row);
         if(FREE(row)!=0)sum+=R(row)*Z(row);
     }
     saveStats(sum,0.0,0.0,0.0,0,0);
+}
+void prepareFreeSet() {
+    if(RUN==0.0 || RESTART==0.0)return;
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
+        int row=rows[ordinal];if(row<0)continue;
+        FREE(row)=(BOUNDED(row)==0 || pressure[row]>LOWER(row) || R(row)>TARGET)?1:0;
+    }
 }
 void finishPrecondition() {
     if(RUN==0.0)return;
@@ -137,13 +144,13 @@ void finishPrecondition() {
 }
 void updateDirection() {
     if(RUN==0.0 || RESTART!=0.0)return;
-    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(FREE(row)!=0)D(row)=Z(row)+BETA*D(row);else D(row)=0.0;}
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(row<0)continue;if(FREE(row)!=0)D(row)=Z(row)+BETA*D(row);else D(row)=0.0;}
 }
 void directionProduct() {
     if(RUN==0.0)return;
     precise double sum=0.0;double distance=1.7976931348623157e308LF;
     for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
-        int row=rows[ordinal];precise double product=0.0;
+        int row=rows[ordinal];if(row<0)continue;precise double product=0.0;
         for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*D(columns[edge]);Q(row)=product;
         if(FREE(row)!=0){sum+=D(row)*product;if(BOUNDED(row)!=0 && D(row)<0.0)distance=min(distance,(pressure[row]-LOWER(row))/-D(row));}
     }
@@ -161,7 +168,7 @@ void updateSolution() {
     if(RUN==0.0)return;
     precise double sum=0.0;double equations=0.0,changed=0.0,maximum=0.0;
     for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
-        int row=rows[ordinal];bool hits=BOUNDED(row)!=0 && D(row)<0.0 && (pressure[row]-LOWER(row))/-D(row)<=ALPHA;
+        int row=rows[ordinal];if(row<0)continue;bool hits=BOUNDED(row)!=0 && D(row)<0.0 && (pressure[row]-LOWER(row))/-D(row)<=ALPHA;
         pressure[row]=hits?LOWER(row):pressure[row]+ALPHA*D(row);R(row)-=ALPHA*Q(row);
         if(BOUNDED(row)!=0 && pressure[row]<LOWER(row))pressure[row]=LOWER(row);
         if(BLOCKED==0.0) {
@@ -189,6 +196,7 @@ void executeStage(int stage) {
     else if(stage==6)updateDirection();else if(stage==7)directionProduct();else if(stage==8)finishProduct();
     else if(stage==9)updateSolution();else if(stage==10)finishUpdate();else if(stage==11)finalizeControl();
     else if(stage==12 && gid==0 && SUCCESS==0.0)atomicOr(errors,4u);
+    else if(stage==13)prepareFreeSet();
 }
 void singleStage(int stage){executeStage(stage);syncAll();}
 void main() {

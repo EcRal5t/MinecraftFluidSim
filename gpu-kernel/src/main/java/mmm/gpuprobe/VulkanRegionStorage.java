@@ -24,7 +24,6 @@ final class VulkanRegionStorage implements AutoCloseable {
     }
 
     private final VulkanDeviceContext context;
-    private final long bytes;
     private final int stagingBytes;
     private final FlipGpuResources resources;
     private final List<Slot> slots = new ArrayList<>();
@@ -38,12 +37,11 @@ final class VulkanRegionStorage implements AutoCloseable {
         if (bytes < 4 || (bytes & 3) != 0 || stagingBytes < 4 || (stagingBytes & 3) != 0)
             throw new IllegalArgumentException("Device storage and transfer sizes must be positive words");
         this.context = context;
-        this.bytes = bytes;
         this.stagingBytes = stagingBytes;
         resources = new FlipGpuResources(context);
         try {
-            slots.add(new Slot(resources.addDeviceStorage(bytes)));
-            slots.add(new Slot(resources.addDeviceStorage(bytes)));
+            slots.add(new Slot(context, bytes));
+            slots.add(new Slot(context, bytes));
             errors = resources.addDeviceStorage(4);
             scheduler = new GpuStepScheduler(context, resources, stagingBytes);
         } catch (RuntimeException | LinkageError failure) {
@@ -53,16 +51,19 @@ final class VulkanRegionStorage implements AutoCloseable {
     }
 
     synchronized Metrics metrics() {
+        long deviceBytes = 4;
+        for (Slot slot : slots) deviceBytes = Math.addExact(deviceBytes, slot.buffer.size());
         return new Metrics(submissions, uploadBytes, readbackBytes, copiedBytes, gpuNanos,
-                slots.size(), bytes * slots.size() + 4, (long) stagingBytes * GpuStepScheduler.RING_SIZE);
+                slots.size(), deviceBytes, (long) stagingBytes * GpuStepScheduler.RING_SIZE);
     }
 
-    /** Imports once at initialization or explicit restore; pinned old generations remain valid. */
+    /** Imports the complete input as a new logical layout; pinned old generations retain their own sizes. */
     synchronized void initialize(ByteBuffer input, long generation) {
         requireOpen();
-        if (input.remaining() != bytes || generation < 0)
-            throw new IllegalArgumentException("Region import layout or generation differs");
-        Slot target = reserve();
+        long bytes = input.remaining();
+        requireStorageSize(bytes);
+        if (generation < 0) throw new IllegalArgumentException("Region generation must be nonnegative");
+        Slot target = reserve(bytes);
         try {
             for (long offset = 0; offset < bytes;) {
                 int length = (int) Math.min(stagingBytes, bytes - offset);
@@ -80,7 +81,7 @@ final class VulkanRegionStorage implements AutoCloseable {
                 offset += length;
             }
             if (committed != null) release(committed.slot);
-            committed = new Version(target, generation);
+            committed = new Version(target, generation, bytes);
         } catch (RuntimeException | LinkageError failure) {
             release(target);
             throw failure;
@@ -93,20 +94,33 @@ final class VulkanRegionStorage implements AutoCloseable {
         return new Capture(committed);
     }
 
-    /** Reserves a private slot. No host copy or device submission occurs here. */
+    /** Reserves a same-layout candidate; its first submission copies the complete source generation. */
     synchronized Candidate prepare(Capture source) {
         requireCapture(source);
+        return prepareCandidate(source, source.version.logicalBytes, true);
+    }
+
+    /** Reserves a new layout without copying source bytes. The first callback must initialize every
+     * authoritative candidate column, recording any device migration and its required barriers.
+     */
+    synchronized Candidate prepareReallocated(Capture source, long candidateBytes) {
+        return prepareCandidate(source, candidateBytes, false);
+    }
+
+    private Candidate prepareCandidate(Capture source, long candidateBytes, boolean copySource) {
+        requireCapture(source);
+        requireStorageSize(candidateBytes);
         long next = Math.addExact(source.version.generation, 1);
-        Slot target = reserve();
+        Slot target = reserve(candidateBytes);
         source.version.slot.references++;
-        return new Candidate(source.version, target, next);
+        return new Candidate(source.version, target, next, candidateBytes, copySource);
     }
 
     /** Explicit range read for queries/checkpoints; normal candidate submission reads one status word. */
     synchronized void read(Capture capture, long offset, ByteBuffer output) {
         requireCapture(capture);
         int length = output.remaining();
-        if (offset < 0 || offset > bytes - length || ((offset | length) & 3) != 0)
+        if (offset < 0 || offset > capture.version.logicalBytes - length || ((offset | length) & 3) != 0)
             throw new IllegalArgumentException("Region read range differs from its storage");
         while (output.hasRemaining()) {
             int chunk = Math.min(stagingBytes, output.remaining());
@@ -127,12 +141,29 @@ final class VulkanRegionStorage implements AutoCloseable {
         }
     }
 
-    private Slot reserve() {
-        for (Slot slot : slots) if (slot.references == 0) { slot.references = 1; return slot; }
-        Slot slot = new Slot(resources.addDeviceStorage(bytes));
-        slot.references = 1;
-        slots.add(slot);
-        return slot;
+    private Slot reserve(long bytes) {
+        Slot best = null;
+        int expandable = -1;
+        for (int i = 0; i < slots.size(); i++) {
+            Slot slot = slots.get(i);
+            if (slot.references != 0) continue;
+            if (slot.buffer.size() >= bytes) {
+                if (best == null || slot.buffer.size() < best.buffer.size()) best = slot;
+            } else if (expandable < 0 || slot.buffer.size() > slots.get(expandable).buffer.size()) {
+                expandable = i;
+            }
+        }
+        if (best != null) { best.references = 1; return best; }
+        Slot target = new Slot(context, bytes);
+        target.references = 1;
+        if (expandable < 0) slots.add(target);
+        else slots.set(expandable, target).resources.close();
+        return target;
+    }
+
+    private static void requireStorageSize(long bytes) {
+        if (bytes < 4 || (bytes & 3) != 0)
+            throw new IllegalArgumentException("Device storage size must be positive words");
     }
 
     private static void release(Slot slot) { slot.references--; }
@@ -149,6 +180,7 @@ final class VulkanRegionStorage implements AutoCloseable {
         private Capture(Version version) { this.version = version; version.slot.references++; }
         private VulkanRegionStorage owner() { return VulkanRegionStorage.this; }
         long generation() { synchronized (VulkanRegionStorage.this) { requireCapture(this); return version.generation; } }
+        long logicalBytes() { synchronized (VulkanRegionStorage.this) { requireCapture(this); return version.logicalBytes; } }
         @Override public void close() {
             synchronized (VulkanRegionStorage.this) {
                 if (!released) { release(version.slot); released = true; }
@@ -159,19 +191,53 @@ final class VulkanRegionStorage implements AutoCloseable {
     final class Candidate implements AutoCloseable {
         private final Version base;
         private final Slot slot;
-        private final long generation;
-        private boolean attempted, submitted, released;
+        private final long generation, logicalBytes;
+        private final boolean copySource;
+        private boolean attempted, submitted, finished, released;
         private int error;
-        private Candidate(Version base, Slot slot, long generation) {
+        private Candidate(Version base, Slot slot, long generation, long logicalBytes, boolean copySource) {
             this.base = base; this.slot = slot; this.generation = generation;
+            this.logicalBytes = logicalBytes; this.copySource = copySource;
         }
 
-        /** Records device copy, all compute stages and status download in one submission. */
-        int execute(long uploadedBytes, ComputeCommands commands) {
+        long logicalBytes() {
             synchronized (VulkanRegionStorage.this) {
                 requireOpen();
-                if (released || attempted) throw new IllegalStateException("Candidate has already been used");
-                attempted = true;
+                if (released) throw new IllegalStateException("Candidate is closed or committed");
+                return logicalBytes;
+            }
+        }
+
+        record BatchResult(int error, ByteBuffer feedback) { }
+
+        /** Records initialization, all compute stages and status download in one submission. */
+        int execute(long uploadedBytes, ComputeCommands commands) {
+            return submit(uploadedBytes, commands, true, true, 0, 0).error();
+        }
+
+        BatchResult beginBatch(ComputeCommands commands, long feedbackOffset, int feedbackBytes) {
+            return submit(0, commands, true, false, feedbackOffset, feedbackBytes);
+        }
+
+        BatchResult continueBatch(ComputeCommands commands, long feedbackOffset, int feedbackBytes) {
+            return submit(0, commands, false, false, feedbackOffset, feedbackBytes);
+        }
+
+        int finishBatch(ComputeCommands commands) {
+            return submit(0, commands, false, true, 0, 0).error();
+        }
+
+        /** Batches retain the same private generation; only a completed final batch can be adopted. */
+        private BatchResult submit(long uploadedBytes, ComputeCommands commands, boolean first, boolean last,
+                                   long feedbackOffset, int feedbackBytes) {
+            synchronized (VulkanRegionStorage.this) {
+                requireOpen();
+                if (released || finished || (first ? attempted : !submitted || error != 0))
+                    throw new IllegalStateException("Candidate cannot execute this batch");
+                if (feedbackBytes < 0 || feedbackBytes > stagingBytes - 4 || feedbackOffset < 0
+                        || feedbackOffset > logicalBytes - feedbackBytes || ((feedbackOffset | feedbackBytes) & 3) != 0)
+                    throw new IllegalArgumentException("Candidate feedback range differs from storage");
+                attempted = true; submitted = false;
                 try (MemoryStack stack = stackPush()) {
                     var submission = scheduler.acquire();
                     var command = scheduler.begin(submission, "region-step");
@@ -181,27 +247,33 @@ final class VulkanRegionStorage implements AutoCloseable {
                     }
                     barrier(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT,
                             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, stack);
-                    copy(command, base.slot.buffer, 0, slot.buffer, 0, bytes, stack);
+                    if (first && copySource)
+                        copy(command, base.slot.buffer, 0, slot.buffer, 0, logicalBytes, stack);
+                    // Another candidate may use the shared status word between this candidate's batches.
                     vkCmdFillBuffer(command, errors.handle(), 0, 4, 0);
-                    barrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    barrier(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT,
                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, stack);
                     commands.record(command, base.slot.buffer, slot.buffer, errors, submission.stagingBuffer(), stack);
                     barrier(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT,
                             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT, stack);
                     copy(command, errors, 0, submission.stagingBuffer(), 0, 4, stack);
+                    if (feedbackBytes != 0)
+                        copy(command, slot.buffer, feedbackOffset, submission.stagingBuffer(), 4, feedbackBytes, stack);
                     barrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
                             VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_HOST_READ_BIT, stack);
                     if (context.hasTimestampQueries())
                         vkCmdWriteTimestamp(command, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, submission.timestampQueryPool(), 1);
                     scheduler.submitAndWait(stack, submission, "region-step");
                     error = submission.stagingBuffer().bytes().getInt(0);
+                    var feedback = ByteBuffer.allocate(feedbackBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+                    feedback.put(submission.stagingBuffer().bytes().slice(4, feedbackBytes)).flip();
                     submissions++;
                     uploadBytes += uploadedBytes;
-                    readbackBytes += 4;
-                    copiedBytes += bytes;
+                    readbackBytes += 4L + feedbackBytes;
+                    if (first && copySource) copiedBytes += logicalBytes;
                     if (context.hasTimestampQueries()) gpuNanos += scheduler.readTimestampNanos(submission);
-                    submitted = true;
-                    return error;
+                    submitted = true; finished = last;
+                    return new BatchResult(error, feedback);
                 }
             }
         }
@@ -210,13 +282,24 @@ final class VulkanRegionStorage implements AutoCloseable {
         long commit() {
             synchronized (VulkanRegionStorage.this) {
                 requireOpen();
-                if (released || !submitted || error != 0 || committed != base)
+                if (released || !submitted || !finished || error != 0 || committed != base)
                     throw new IllegalStateException("Candidate cannot replace this committed region generation");
                 release(committed.slot);
-                committed = new Version(slot, generation);
+                committed = new Version(slot, generation, logicalBytes);
                 release(base.slot);
                 released = true;
                 return generation;
+            }
+        }
+
+        /** Small explicit diagnostics may inspect a completed, uncommitted candidate. */
+        void read(long offset, ByteBuffer output) {
+            synchronized (VulkanRegionStorage.this) {
+                requireOpen();
+                if (released || !submitted) throw new IllegalStateException("Candidate is not available for inspection");
+                try (var capture = new Capture(new Version(slot, generation, logicalBytes))) {
+                    VulkanRegionStorage.this.read(capture, offset, output);
+                }
             }
         }
 
@@ -245,13 +328,24 @@ final class VulkanRegionStorage implements AutoCloseable {
         if (closed) return;
         closed = true;
         try { if (scheduler != null) scheduler.close(); }
-        finally { resources.close(); }
+        finally {
+            try { resources.close(); }
+            finally { for (Slot slot : slots) slot.resources.close(); }
+        }
     }
 
     private static final class Slot {
+        final FlipGpuResources resources;
         final GpuBuffer buffer;
         int references;
-        Slot(GpuBuffer buffer) { this.buffer = buffer; }
+        Slot(VulkanDeviceContext context, long bytes) {
+            resources = new FlipGpuResources(context);
+            try { buffer = resources.addDeviceStorage(bytes); }
+            catch (RuntimeException | LinkageError failure) {
+                try { resources.close(); } catch (RuntimeException | LinkageError closing) { failure.addSuppressed(closing); }
+                throw failure;
+            }
+        }
     }
-    private record Version(Slot slot, long generation) { }
+    private record Version(Slot slot, long generation, long logicalBytes) { }
 }
