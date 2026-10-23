@@ -65,6 +65,7 @@ final class VulkanPressureKernel implements AutoCloseable {
 
     void recordInitialize(VkCommandBuffer command, int size, int count, int maximumIterations,
                           VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, PressureOperator gas) {
+        if(multigrid!=null)multigrid.beginTimings(command);
         bind(command);
         int groups = groups(size, multigrid);
         for (int stage = 0; stage <= 3; stage++)

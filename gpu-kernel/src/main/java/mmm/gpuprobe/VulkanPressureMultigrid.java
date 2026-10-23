@@ -23,11 +23,17 @@ final class VulkanPressureMultigrid implements AutoCloseable {
     }
 
     private final FlipKernelBindings bindings;
+    private final VulkanStageTimings timings;
     private FlipKernelBindings.BufferRange workspace;
 
-    VulkanPressureMultigrid(VulkanDeviceContext context) {
+    VulkanPressureMultigrid(VulkanDeviceContext context) {this(context,false);}
+    VulkanPressureMultigrid(VulkanDeviceContext context,boolean profile) {
         bindings = new FlipKernelBindings(context, 9, shader(), 52);
+        try {timings=profile?new VulkanStageTimings(context,1024):null;}
+        catch(RuntimeException|Error failure){bindings.close();throw failure;}
     }
+    void beginTimings(VkCommandBuffer command){if(timings!=null)timings.reset(command);}
+    List<VulkanStageTimings.Sample> stageTimings(){return timings==null?List.of():timings.read();}
 
     /** Each level stores seven matrix entries, the residual, correction and smoothing scratch. */
     static Layout layout(int sx, int sy, int sz) {
@@ -61,6 +67,9 @@ final class VulkanPressureMultigrid implements AutoCloseable {
 
     /** Call after FREE has been prepared; the device rebuilds only when PCG restarts. */
     void recordBuild(VkCommandBuffer command, Layout layout) {
+        if(timings==null)recordBuildCommands(command,layout);else timings.record(command,"mg-build",()->recordBuildCommands(command,layout));
+    }
+    private void recordBuildCommands(VkCommandBuffer command, Layout layout) {
         bind(command);
         var levels = layout.levels();
         stage(command,layout,levels.getFirst(),levels.getFirst(),10);
@@ -72,6 +81,9 @@ final class VulkanPressureMultigrid implements AutoCloseable {
 
     /** A zero-start, fixed linear V-cycle; all work stays inside the caller's submission. */
     void recordApply(VkCommandBuffer command, Layout layout) {
+        if(timings==null)recordApplyCommands(command,layout);else timings.record(command,"mg-apply",()->recordApplyCommands(command,layout));
+    }
+    private void recordApplyCommands(VkCommandBuffer command, Layout layout) {
         bind(command);
         var levels = layout.levels();
         int dispatch=levels.size()+2;
@@ -113,5 +125,5 @@ final class VulkanPressureMultigrid implements AutoCloseable {
         } catch (IOException failure) { throw new IllegalStateException("Pressure multigrid shader unavailable", failure); }
     }
 
-    @Override public void close() { bindings.close(); }
+    @Override public void close() {try{if(timings!=null)timings.close();}finally{bindings.close();}}
 }

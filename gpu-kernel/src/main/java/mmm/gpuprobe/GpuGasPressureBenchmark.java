@@ -17,7 +17,7 @@ public final class GpuGasPressureBenchmark {
         try(var context=new VulkanDeviceContext(device,true,true);var liquidKernel=new VulkanLiquidGeometry(context);
             var totalKernel=new VulkanLiquidCellVolumes(context);var geometryKernel=new VulkanGasGeometry(context);
             var thermalKernel=new VulkanGasThermodynamics(context);var projection=new VulkanLiquidProjection(context);
-            var pressure=new VulkanPressureKernel(context,4096);var multigrid=new VulkanPressureMultigrid(context);
+            var pressure=new VulkanPressureKernel(context,4096);var multigrid=new VulkanPressureMultigrid(context,args.length>5&&Boolean.parseBoolean(args[5]));
             var gasPressure=new VulkanGasPressure(context)) {
             System.out.println("Device: "+context.deviceName());
             var fixture=GpuLiquidGeometryBenchmark.fixture(grid,cut);int n=grid*grid*grid;
@@ -97,7 +97,9 @@ public final class GpuGasPressureBenchmark {
             if(error!=0)throw new AssertionError("Gas pressure finish status="+error+", recorded="+recorded);
             if(diagnostics){var result=ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN);candidate.read(b.control().offset(),result);
                 var state=ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);candidate.read(layout.column(VulkanGasPressure.Field.NODE_ABSOLUTE_PRESSURE).offset(),state);
-                System.out.printf("pressure iterations=%.0f rms=%.9g success=%.0f first_node_absolute_P=%.9g%n",result.getDouble(0),result.getDouble(8),result.getDouble(16),state.getDouble(0));}
+                System.out.printf("pressure iterations=%.0f rms=%.9g success=%.0f first_node_absolute_P=%.9g%n",result.getDouble(0),result.getDouble(8),result.getDouble(16),state.getDouble(0));
+                var totals=new java.util.LinkedHashMap<String,Long>();for(var sample:multigrid.stageTimings())totals.merge(sample.stage(),sample.nanos(),Long::sum);
+                totals.forEach((name,nanos)->System.out.printf("pressure_stage=%s gpu_ms=%.3f%n",name,nanos*1e-6));}
         }
     }
     private static FlipKernelBindings.BufferRange range(GpuBuffer buffer,VulkanLiquidStateLayout.Column column){return new FlipKernelBindings.BufferRange(buffer,column.offset(),column.bindingBytes());}
