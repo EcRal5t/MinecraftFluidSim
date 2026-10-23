@@ -66,7 +66,7 @@ void initialize(int row){
  writeNumber(h(23)+2*row,0.0);writeNumber(h(23)+2*(size()+row),0.0);writeNumber(h(23)+2*(2*size()+row),0.0);
  if(row<g()){put(FC,row,0);put(CURSOR,row,0);put(MODE,row,0);write(STORAGE,row,0.0);}
  if(row>=n()){int entry=7*n()+row-n();words[h(16)+row]=uint(entry);words[h(17)+entry]=uint(row);writeNumber(h(18)+2*entry,1.0);}
- if(row==size()-1)words[h(16)+size()]=uint(7*n()+g());
+ if(row==size()-1)words[h(16)+size()]=uint(7*n()+size()-n());
  if(row==0){writeNumber(h(23)+6*size(),double(p.tolerance));writeNumber(p.header+58,double(p.cellSize));
   writeNumber(p.header+60,double(p.duration));writeNumber(p.header+62,double(p.gravity));dispatchCount(0,clamp(int(words[h(9)]),0,g()));words[p.header+14]=0u;}
 }
@@ -102,7 +102,7 @@ void gasRow(int node,int lane){
   int entry=7*n()+node;words[h(16)+row]=uint(entry);words[h(17)+entry]=uint(row);writeNumber(h(18)+2*entry,enabledRow?part[0]+storage:1.0);
   words[h(19)+row]=enabledRow?uint(row):uint(-1);words[h(22)+row]=enabledRow?1u:0u;
   writeNumber(h(23)+2*row,enabledRow?r:0.0);writeNumber(h(23)+2*(size()+row),-old);
-  if(node==g()-1)words[h(16)+size()]=uint(entry+1);
+  if(node==g()-1)words[h(16)+n()+g()]=uint(entry+1);
  }
 }
 void liquidRow(int row){
@@ -159,5 +159,6 @@ void main(){
  if(id>=p.count)return;
  if(p.stage==0)capture(id);else if(p.stage==1)initialize(id);else if(p.stage==3)prepareFace(id);else if(p.stage==4)scatter(id);
  else if(p.stage==6)liquidRow(id);else if(p.stage==7)countBlocks(id);else if(p.stage==8)mapBlocks(id);else if(p.stage==11)project(id);
+ else if(p.stage==15)write(POST_K,id,.5*face(id,0)*face(id,1)*face(id,1));
  else if(p.stage==13)write(CELL_P,id,full(id)?read(DATUM,0)+pressure(id):0.0);else if(p.stage==14)productSmall(id);
 }

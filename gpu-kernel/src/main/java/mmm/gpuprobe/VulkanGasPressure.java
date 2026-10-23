@@ -36,14 +36,20 @@ final class VulkanGasPressure implements AutoCloseable {
         Layout(VulkanGasThermodynamics.Layout thermodynamics, VulkanGasGeometry.Layout geometry,
                VulkanLiquidStateLayout.Column cells, VulkanLiquidStateLayout.Column faces,
                PressureBuffers pressure, long scratchBase, long alignment) {
+            this(thermodynamics,geometry,cells,faces,pressure,0,scratchBase,alignment);
+        }
+        Layout(VulkanGasThermodynamics.Layout thermodynamics, VulkanGasGeometry.Layout geometry,
+               VulkanLiquidStateLayout.Column cells, VulkanLiquidStateLayout.Column faces,
+               PressureBuffers pressure, int additionalRows, long scratchBase, long alignment) {
+            if(additionalRows<0)throw new IllegalArgumentException("Negative additional pressure rows");
             this.thermodynamics=thermodynamics;this.geometry=geometry;this.cells=cells;this.faces=faces;this.pressure=pressure;
             liquidCount=geometry.cells();gasCapacity=thermodynamics.gas().nodeCapacity();faceCount=geometry.faces();
-            pressureSize=Math.addExact(liquidCount,gasCapacity);
+            pressureSize=Math.addExact(Math.addExact(liquidCount,gasCapacity),additionalRows);
             blockCapacity=Math.addExact(Math.multiplyExact(2,faceCount)/128,gasCapacity);
             if(alignment<8||(alignment&(alignment-1))!=0||scratchBase<Math.max(thermodynamics.endOffset(),geometry.endOffset())
                     ||cells.count()<4L*liquidCount||faces.count()<4L*faceCount
-                    ||pressure.starts().count()<pressureSize+1||pressure.columns().count()<7L*liquidCount+gasCapacity
-                    ||pressure.values().count()<7L*liquidCount+gasCapacity||pressure.rows().count()<pressureSize
+                    ||pressure.starts().count()<pressureSize+1||pressure.columns().count()<7L*liquidCount+gasCapacity+additionalRows
+                    ||pressure.values().count()<7L*liquidCount+gasCapacity+additionalRows||pressure.rows().count()<pressureSize
                     ||pressure.pressure().count()<pressureSize||pressure.work().count()<5L*pressureSize
                     ||pressure.meta().count()<2L*pressureSize||pressure.problem().count()<3L*pressureSize+1)
                 throw new IllegalArgumentException("Finite gas pressure layout differs from its resident buffers");
@@ -70,6 +76,10 @@ final class VulkanGasPressure implements AutoCloseable {
         int word(Field field){return Math.toIntExact(column(field).offset()/4);}
         int headerWordOffset(){return Math.toIntExact(header.offset()/4);}
         PressureBuffers pressureBuffers(){return pressure;}
+        VulkanGasThermodynamics.Layout thermodynamics(){return thermodynamics;}
+        VulkanGasGeometry.Layout geometry(){return geometry;}
+        VulkanLiquidStateLayout.Column cells(){return cells;}
+        VulkanLiquidStateLayout.Column faces(){return faces;}
         int liquidCount(){return liquidCount;}
         int gasCapacity(){return gasCapacity;}
         int pressureSize(){return pressureSize;}
@@ -124,6 +134,11 @@ final class VulkanGasPressure implements AutoCloseable {
     }
     void recordProject(VkCommandBuffer command,Layout layout,VulkanLiquidProjection.Parameters parameters){
         stage(command,layout,parameters,11,layout.faceCount,0);
+        recordObserve(command,layout,parameters);
+    }
+    /** Recomputes gas diagnostics after a joint liquid/particle projection has published face velocities. */
+    void recordObserve(VkCommandBuffer command,Layout layout,VulkanLiquidProjection.Parameters parameters){
+        stage(command,layout,parameters,15,layout.faceCount,0);
         stage(command,layout,parameters,12,Math.multiplyExact(128,layout.gasCapacity),0);
         stage(command,layout,parameters,13,layout.liquidCount,0);
     }

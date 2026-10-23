@@ -12,13 +12,25 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Records the whole pressure solve into its caller's submission using resident buffer ranges. */
 final class VulkanPressureKernel implements AutoCloseable {
-    record GasOperator(VulkanGasPressure kernel, VulkanGasPressure.Layout layout) { }
+    /** One matrix product for the common PCG; the multigrid liquid block is shared by every model. */
+    interface PressureOperator {
+        int liquidCount();
+        int matrixFreeFromRow();
+        void recordProduct(VkCommandBuffer command, boolean direction);
+    }
+    record GasOperator(VulkanGasPressure kernel, VulkanGasPressure.Layout layout) implements PressureOperator {
+        @Override public int liquidCount() { return layout.liquidCount(); }
+        @Override public int matrixFreeFromRow() { return layout.liquidCount(); }
+        @Override public void recordProduct(VkCommandBuffer command, boolean direction) {
+            kernel.recordProduct(command, layout, direction);
+        }
+    }
     private final FlipKernelBindings bindings;
     private final int singleWorkgroupRows;
 
     VulkanPressureKernel(VulkanDeviceContext context, int singleWorkgroupRows) {
         this.singleWorkgroupRows = singleWorkgroupRows;
-        bindings = new FlipKernelBindings(context, 12, shader(), 28);
+        bindings = new FlipKernelBindings(context, 12, shader(), 32);
     }
 
     void rebind(FlipGpuResources resources) { bindings.rebind(resources); }
@@ -34,7 +46,7 @@ final class VulkanPressureKernel implements AutoCloseable {
     }
 
     void record(VkCommandBuffer command, int size, int count, int maximumIterations,
-                VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, GasOperator gas) {
+                VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, PressureOperator gas) {
         if (gas == null && multigrid == null && size <= singleWorkgroupRows) {
             bind(command);
             stage(command, size, count, maximumIterations, -1, 1, false, null);
@@ -52,7 +64,7 @@ final class VulkanPressureKernel implements AutoCloseable {
     }
 
     void recordInitialize(VkCommandBuffer command, int size, int count, int maximumIterations,
-                          VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, GasOperator gas) {
+                          VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, PressureOperator gas) {
         bind(command);
         int groups = groups(size, multigrid);
         for (int stage = 0; stage <= 3; stage++)
@@ -69,7 +81,7 @@ final class VulkanPressureKernel implements AutoCloseable {
 
     void recordIterations(VkCommandBuffer command, int size, int count, int maximumIterations,
                           VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy,
-                          int iterations, GasOperator gas) {
+                          int iterations, PressureOperator gas) {
         bind(command);
         int groups = groups(size, multigrid);
         for (int iteration = 0; iteration < iterations; iteration++) {
@@ -88,7 +100,7 @@ final class VulkanPressureKernel implements AutoCloseable {
     }
 
     void recordFinish(VkCommandBuffer command, int size, int count, int maximumIterations,
-                          VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, GasOperator gas) {
+                          VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, PressureOperator gas) {
         bind(command);
         int groups = groups(size, multigrid);
         stage(command, size, count, maximumIterations, 11, groups, multigrid != null, gas);
@@ -106,7 +118,7 @@ final class VulkanPressureKernel implements AutoCloseable {
     }
 
     private void precondition(VkCommandBuffer command, int size, int count, int maximumIterations, int groups,
-                              VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, GasOperator gas) {
+                              VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, PressureOperator gas) {
         if (multigrid != null) {
             stage(command, size, count, maximumIterations, 13, groups, true, gas);
             multigrid.recordBuild(command, hierarchy);
@@ -117,14 +129,14 @@ final class VulkanPressureKernel implements AutoCloseable {
             stage(command, size, count, maximumIterations, stage, groups, multigrid != null, gas);
     }
 
-    private void stage(VkCommandBuffer command, int size, int count, int maximumIterations, int stage, int groups, boolean external, GasOperator gas) {
+    private void stage(VkCommandBuffer command, int size, int count, int maximumIterations, int stage, int groups, boolean external, PressureOperator gas) {
         if (gas != null && (stage == 2 || stage == 7)) {
-            gas.kernel().recordProduct(command, gas.layout(), stage == 7);
+            gas.recordProduct(command, stage == 7);
             bind(command);
         }
         try (var stack = stackPush()) {
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                    stack.ints(count, size, maximumIterations, stage, groups, external ? 1 : 0, gas == null ? size : gas.layout().liquidCount()));
+                    stack.ints(count, size, maximumIterations, stage, groups, external ? 1 : 0, gas == null ? size : gas.liquidCount(), gas == null ? size : gas.matrixFreeFromRow()));
             boolean parallel = stage == 0 || stage == 2 || stage == 4 || stage == 6 || stage == 7 || stage == 9 || stage == 13;
             vkCmdDispatch(command, parallel ? groups : 1, 1, 1);
             barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
