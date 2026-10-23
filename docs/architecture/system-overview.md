@@ -679,7 +679,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [VulkanLiquidStateLayout](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidStateLayout.java)、[VulkanGasStateLayout](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanGasStateLayout.java)：液气列布局、容量、逻辑计数与显式导入导出；`copyColumns` 记录设备扩容复制
     - [VulkanLiquidRegion](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidRegion.java)：常驻液体代次、`rebuildGeometry/prepareMechanicalFields` 阶段入口与 `advanceMechanical` 连续候选提交；`MechanicalDefinitions.fromRegistries` 组装真实物性表
     - [VulkanLiquidGeometry](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidGeometry.java)、[VulkanLiquidProjection](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidProjection.java)：库存派生 PLIC、切格与 MAC 几何，重力、物理 CSR 和格面压力响应；`recordTransportPreferences` 生成 PLIC 面扫掠偏好
-    - [VulkanPressureMultigrid](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanPressureMultigrid.java)：结构网格多重网格预条件与分批压力推进
+    - [VulkanPressureMultigrid](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanPressureMultigrid.java)：结构网格多重网格预条件、最粗层分解复用与分批压力推进
     - [VulkanLiquidRouteLayout](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidRouteLayout.java)：每源七路的已接受体积、整数数量、物种与内能列
     - [VulkanLiquidCellVolumes](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidCellVolumes.java)：精确单元体积合计、dyadic CSR 与整数容量供给
     - [VulkanLiquidCapacityInputs](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidCapacityInputs.java)：固定几何、占容与投影偏好生成普通环境液体步的整数容量输入
@@ -691,6 +691,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [VulkanGasPressure](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanGasPressure.java)：共同液气压力装配、真实气腔关联面的矩阵乘积、绝对压力下限与格面响应；[GpuGasPressureBenchmark](../../gpu-kernel/src/main/java/mmm/gpuprobe/GpuGasPressureBenchmark.java) 测量固定源完整压力阶段成本
     - [VulkanGasAdiabaticWork](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanGasAdiabaticWork.java)：实际源控制体积的分段热容绝热做功、候选内能和精确端点差；库存搬运前调用
     - [VulkanGasLineage](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanGasLineage.java)、[VulkanGasRemap](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanGasRemap.java)：实际干空间通量的来源与目标 CSR、保留与逸出库存、环境捕获、未来气腔组分和物种归并、绝热功与精确内能舍入交接
+    - [VulkanGasRoutes](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanGasRoutes.java)、[VulkanGasFlow](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanGasFlow.java)：拓扑变化与孔流共用的来源／目标 CSR；`recordAssemble` 合并同对气腔的开口并组装标准体积储容方程，复用共同 PCG；`recordRoutes` 按供体可排量同步准备份额。`VulkanGasRemap.transportLayout`、`recordTransportVolumes` 和 `recordFinish` 处理整数库存、实际保留气体的排气冷却、环境焓流及精确能量舍入账
     - [VulkanLiquidMaterialRoutes](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidMaterialRoutes.java)：已接受单元体积→分材料七路 dyadic 库存，临时 limb 分配与精确原地余量
     - [VulkanLiquidRouteQuantities](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidRouteQuantities.java)：实际体积分份、物种 CSR 分配、参考能与8项内能误差展开
     - [VulkanLiquidGather](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidGather.java)：同材料到达归并、动态库存 CSR、精确体积和7项内能误差展开
@@ -700,8 +701,8 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [VulkanMechanicalBodies](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanMechanicalBodies.java)：压力湿面、实际质量路线、有限气腔、颗粒压力／阻力联系与实际支撑构成的机械连通体和成员 CSR
     - [VulkanLiquidThermodynamics](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidThermodynamics.java)：液体与颗粒库存共享真实注册表的分段热容反演，派生温度、热容与最低温度内能
     - [VulkanLiquidForces](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidForces.java)：从材料热膨胀律与单元共同温度派生热浮力，按 MAC 对偶质量向格面施加动量变化
-    - [VulkanSurfaceTension](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanSurfaceTension.java)：高度函数与接触角曲率、液气界面平衡压力及不混溶液相对的表面张力；与热浮力一同等待连续步调用接入
-    - [VulkanLiquidViscosity](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidViscosity.java)、[VulkanMechanicalHeatTransport](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanMechanicalHeatTransport.java)：材料温度黏性、壁面与规定运动接触的隐式耗散、局部热量随实际整数质量路线搬运；连续步调用待接入
+    - [VulkanSurfaceTension](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanSurfaceTension.java)：高度函数与接触角曲率、液气界面平衡压力及不混溶液相对的表面张力；已与热浮力进入连续步，非零毛细场景成本待测
+    - [VulkanLiquidViscosity](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidViscosity.java)、[VulkanMechanicalHeatTransport](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanMechanicalHeatTransport.java)：材料温度黏性、壁面与规定运动接触的隐式耗散、局部热量随实际整数质量路线搬运；已进入连续液气机械候选
     - [VulkanMechanicalEnergy](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanMechanicalEnergy.java)：液体与实际接纳颗粒运动的共同力学做功、热载体分配和内能端点舍入流；设备间接派发实际规约块
     - [VulkanEnergyLedger](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanEnergyLedger.java)：`record` 按二进制位归总有符号能量项，输出精确 dyadic 热量与舍入账；中间累计采用设备整数列
     - [GpuLiquidGatherBenchmark](../../gpu-kernel/src/main/java/mmm/gpuprobe/GpuLiquidGatherBenchmark.java)：固定源已接受单元体积的材料路线、数量分配、库存归并、MAC、热写入与精确账分项成本及少量 checkpoint
