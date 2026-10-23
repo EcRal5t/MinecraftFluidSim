@@ -12,7 +12,7 @@ import static org.lwjgl.vulkan.VK10.*;
 /** Closes actual force K, transported PE and gas compression work on connected caloric bodies. */
 final class VulkanMechanicalEnergy implements AutoCloseable {
     record Layout(VulkanMechanicalBodies.Layout bodies,VulkanLiquidMomentum.Layout momentum,
-                  VulkanLiquidThermodynamics.Layout thermal,int gasWorkWordOffset,
+                  VulkanLiquidThermodynamics.Layout thermal,int gasWorkWordOffset,int sourceHeatWordOffset,int externalWorkWordOffset,
                   VulkanLiquidStateLayout.Column header,VulkanLiquidStateLayout.Column faceTerms,
                   VulkanLiquidStateLayout.Column potentialTerms,VulkanLiquidStateLayout.Column vertexData,
                   VulkanLiquidStateLayout.Column blockCounts,VulkanLiquidStateLayout.Column blockOffsets,
@@ -27,6 +27,7 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
             data[8]=momentum.projectedFacesWordOffset();data[9]=word(momentum.cellMasses());data[10]=word(momentum.routes().column(VulkanLiquidRouteLayout.Field.MASS_UNITS));
             data[11]=gasWorkWordOffset;data[12]=word(bodies.parents());data[13]=word(bodies.offsets());data[14]=word(bodies.members());data[15]=word(bodies.counts());
             data[16]=word(thermal.heatCapacities());data[17]=word(thermal.coldEnergies());
+            data[18]=sourceHeatWordOffset;data[19]=externalWorkWordOffset;
             var fields=List.of(faceTerms,potentialTerms,vertexData,blockCounts,blockOffsets,blockRoots,partials,bodyData,energyChanges,dispatch);
             for(int i=0;i<fields.size();i++)data[20+i]=word(fields.get(i));
             for(var field:VulkanLiquidStateLayout.Field.values()){
@@ -40,11 +41,19 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
             var streams=new java.util.ArrayList<VulkanEnergyLedger.Stream>();
             streams.add(stream(faceTerms,-1));streams.add(stream(potentialTerms,-1));streams.add(stream(energyChanges,1));
             if(gasWorkWordOffset>=0)streams.add(new VulkanEnergyLedger.Stream(1,gasWorkWordOffset,2*bodies.gasNodeCapacity(),2,1));
+            if(sourceHeatWordOffset>=0)streams.add(new VulkanEnergyLedger.Stream(1,sourceHeatWordOffset,bodies.source().cellCount(),2,1));
+            if(externalWorkWordOffset>=0)streams.add(new VulkanEnergyLedger.Stream(1,externalWorkWordOffset,bodies.source().cellCount(),2,-1));
             return List.copyOf(streams);
         }
     }
     static Layout layout(VulkanMechanicalBodies.Layout bodies,VulkanLiquidMomentum.Layout momentum,
                          VulkanLiquidThermodynamics.Layout thermal,int gasWorkWordOffset,long scratchBase,long alignment) {
+        return layout(bodies,momentum,thermal,gasWorkWordOffset,-1,-1,scratchBase,alignment);
+    }
+    /** Source heat is already carried by accepted material routes; external work enters the system once. */
+    static Layout layout(VulkanMechanicalBodies.Layout bodies,VulkanLiquidMomentum.Layout momentum,
+                         VulkanLiquidThermodynamics.Layout thermal,int gasWorkWordOffset,int sourceHeatWordOffset,
+                         int externalWorkWordOffset,long scratchBase,long alignment) {
         if(scratchBase<Math.max(bodies.endOffset(),Math.max(momentum.endOffset(),thermal.endOffset()))
                 ||alignment<8||(alignment&(alignment-1))!=0||thermal.liquid()!=momentum.output()
                 ||bodies.source().cellCount()!=thermal.liquid().cellCount())throw new IllegalArgumentException("Mechanical energy layouts differ");
@@ -57,7 +66,7 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
         var result=column(cursor,Math.multiplyExact(vertices,4),8,alignment);
         var changes=column(cursor,Math.multiplyExact(thermal.liquid().stockCapacity(),2),8,alignment);
         var dispatch=column(cursor,3,4,alignment);var scan=column(cursor,Math.toIntExact(VulkanPrefixScan.workspaceBytes(vertices)/4),4,alignment);
-        return new Layout(bodies,momentum,thermal,gasWorkWordOffset,header,faces,potential,vertex,counts,offsets,roots,partials,result,changes,dispatch,scan,align(cursor[0],alignment));
+        return new Layout(bodies,momentum,thermal,gasWorkWordOffset,sourceHeatWordOffset,externalWorkWordOffset,header,faces,potential,vertex,counts,offsets,roots,partials,result,changes,dispatch,scan,align(cursor[0],alignment));
     }
     private final FlipKernelBindings bindings;
     private final VulkanPrefixScan scan;

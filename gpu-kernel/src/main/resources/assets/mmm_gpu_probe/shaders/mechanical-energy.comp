@@ -54,6 +54,8 @@ void vertex(int index){
         for(int stock=int(words[dst(1)+index]);stock<int(words[dst(1)+index+1]);stock++){
             capacity+=value(h(16)+2*stock);available+=max(0.0,value(dst(9)+2*stock)-value(h(17)+2*stock));
         }
+        if(h(18)>=0)exchange=add(exchange,-value(h(18)+2*index));
+        if(h(19)>=0)exchange=add(exchange,value(h(19)+2*index));
     }else if(h(11)>=0){int gas=index-h(3);exchange=-dvec2(value(h(11)+4*gas),value(h(11)+4*gas+2));}
     storeData(h(22),index,dvec4(exchange,capacity,available));
     int count=int(words[h(15)+index]);words[h(23)+index]=uint((count+127)/128);
