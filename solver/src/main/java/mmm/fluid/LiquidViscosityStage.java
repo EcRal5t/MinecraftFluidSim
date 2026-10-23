@@ -15,7 +15,7 @@ final class LiquidViscosityStage {
 		return new ViscousMacDiscretization(domain.sizeX, domain.sizeY, domain.sizeZ,
 				domain.config.cellSize(), new ViscousMacDiscretization.Geometry() {
 			@Override public boolean liquid(int cell) {
-				return domain.carrierPropertiesWorkspace.hasLiquid(cell);
+				return domain.activityGroups.mechanicsActive(cell) && domain.carrierPropertiesWorkspace.hasLiquid(cell);
 			}
 			@Override public double volume(int cell) {
 				return Math.min(domain.liquidGrid.cellStockVolume[cell], domain.domainCollision.effectiveOpenCellVolume(cell));
@@ -24,6 +24,7 @@ final class LiquidViscosityStage {
 			@Override public double viscosity(int cell) { return domain.carrierPropertiesWorkspace.viscosityPascalSeconds(cell); }
 			@Override public double aperture(int axis, int x, int y, int z) {
 				int face=(z*(domain.sizeY+(axis==1?1:0))+y)*(domain.sizeX+(axis==0?1:0))+x;
+				if(!domain.cellMacStage.mechanicsFaceActive(axis,face))return 0;
 				if(domain.cellMacStage.isUnresolvedWallFace(axis,face))return 0;
 				return switch (axis) {
 					case 0 -> domain.domainFlowFields.pressureXFaceOpen(x, y, z);

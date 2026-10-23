@@ -19,20 +19,26 @@ final class BodyForceStage {
 		if (domain.granularState == null || domain.granularState.deposits.occupiedCellCount() == 0) return;
 		for (int z = 0; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 1; x < domain.sizeX; x++) {
 			int left = domain.domainFlowFields.cellIndex(x - 1, y, z), right = domain.domainFlowFields.cellIndex(x, y, z);
-			dampPorousFace(0,domain.domainFlowFields.xFaceIndex(x,y,z),granularPorousFaceDamping(left,right,dt,false));
+			int face=domain.domainFlowFields.xFaceIndex(x,y,z);
+			if(!domain.cellMacStage.mechanicsFaceActive(0,face))continue;
+			dampPorousFace(0,face,granularPorousFaceDamping(left,right,dt,false));
 		}
 		for (int z = 0; z < domain.sizeZ; z++) for (int y = 1; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
 			int below = domain.domainFlowFields.cellIndex(x, y - 1, z), above = domain.domainFlowFields.cellIndex(x, y, z);
-			dampPorousFace(1,domain.domainFlowFields.yFaceIndex(x,y,z),granularPorousFaceDamping(below,above,dt,true));
+			int face=domain.domainFlowFields.yFaceIndex(x,y,z);
+			if(!domain.cellMacStage.mechanicsFaceActive(1,face))continue;
+			dampPorousFace(1,face,granularPorousFaceDamping(below,above,dt,true));
 		}
 		for (int z = 1; z < domain.sizeZ; z++) for (int y = 0; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
 			int back = domain.domainFlowFields.cellIndex(x, y, z - 1), front = domain.domainFlowFields.cellIndex(x, y, z);
-			dampPorousFace(2,domain.domainFlowFields.zFaceIndex(x,y,z),granularPorousFaceDamping(back,front,dt,false));
+			int face=domain.domainFlowFields.zFaceIndex(x,y,z);
+			if(!domain.cellMacStage.mechanicsFaceActive(2,face))continue;
+			dampPorousFace(2,face,granularPorousFaceDamping(back,front,dt,false));
 		}
 	}
 
 	private void dampPorousFace(int axis,int face,float damping) {
-		if(damping==1)return;
+		if(damping==1||!domain.cellMacStage.mechanicsFaceActive(axis,face))return;
 		float[] velocity=axis==0?domain.mac.velocityX:axis==1?domain.mac.velocityY:domain.mac.velocityZ;
 		double[] mass=axis==0?domain.cellMacStage.massX:axis==1?domain.cellMacStage.massY:domain.cellMacStage.massZ;
 		double before=velocity[face];velocity[face]*=damping;
@@ -90,7 +96,7 @@ final class BodyForceStage {
 		for (int z = 0; z < domain.sizeZ; z++) for (int y = 1; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
 			int below = domain.domainFlowFields.cellIndex(x, y - 1, z), above = domain.domainFlowFields.cellIndex(x, y, z);
 			int face = domain.domainFlowFields.yFaceIndex(x, y, z);
-			if(domain.cellMacStage.isUnresolvedWallFace(1,face))continue;
+			if(!domain.cellMacStage.mechanicsFaceActive(1,face)||domain.cellMacStage.isUnresolvedWallFace(1,face))continue;
 			float open = domain.domainFlowFields.pressureYFaceOpen(x, y, z);
 			if (open > 0 && (domain.mac.faceMassY[face] > 0 || domain.domainFlowFields.carrierFaceActive(below, above, open))) {
 				double mass=domain.cellMacStage.massY[face],old=domain.mac.velocityY[face];float free=(float)(old-impulse);
@@ -103,7 +109,7 @@ final class BodyForceStage {
 		}
 		var graph=domain.pressureSystem.faces;
 		for(int face=0;face<graph.faceCount;face++){
-			int axis=graph.axis[face],local=graph.localFace[face];if(axis==1||domain.cellMacStage.isUnresolvedWallFace(axis,local))continue;
+			int axis=graph.axis[face],local=graph.localFace[face];if(axis==1||!domain.cellMacStage.mechanicsFaceActive(axis,local)||domain.cellMacStage.isUnresolvedWallFace(axis,local))continue;
 			float[] velocity=axis==0?domain.mac.velocityX:domain.mac.velocityZ;
 			velocity[local]+=(float)(dt*graph.barotropicAcceleration(face));
 		}
@@ -119,7 +125,7 @@ final class BodyForceStage {
 		for (int z = 0; z < domain.sizeZ; z++) for (int y = 1; y < domain.sizeY; y++) for (int x = 0; x < domain.sizeX; x++) {
 			int below = domain.domainFlowFields.cellIndex(x, y - 1, z), above = domain.domainFlowFields.cellIndex(x, y, z);
 			int face = domain.domainFlowFields.yFaceIndex(x, y, z);
-			if(domain.cellMacStage.isUnresolvedWallFace(1,face))continue;
+			if(!domain.cellMacStage.mechanicsFaceActive(1,face)||domain.cellMacStage.isUnresolvedWallFace(1,face))continue;
 			float open = domain.domainFlowFields.pressureYFaceOpen(x, y, z);
 			if (!(open > 0)) continue;
 			double relative;
@@ -159,7 +165,7 @@ final class BodyForceStage {
 	private void applyLiquidPairFaceForce(int first, int second, int face,
 	                                      double tensionScale, float scale, float openArea, float[] velocity) {
 		int axis=velocity==domain.mac.velocityX?0:velocity==domain.mac.velocityY?1:2;
-		if(domain.cellMacStage.isUnresolvedWallFace(axis,face))return;
+		if(!domain.cellMacStage.mechanicsFaceActive(axis,face)||domain.cellMacStage.isUnresolvedWallFace(axis,face))return;
 		if (openArea <= 0.0F || !domain.domainFlowFields.isFluid(first) || !domain.domainFlowFields.isFluid(second)) return;
 		float densityScale = domain.domainFlowFields.pressureDensityScale(first, second);
 		float forceDifference = (float)domain.tension.liquidPairPressureDifference(first,second,tensionScale);
@@ -169,6 +175,6 @@ final class BodyForceStage {
 	void enforceSolidFaceVelocities() {
 		float[][] velocities={domain.mac.velocityX,domain.mac.velocityY,domain.mac.velocityZ};
 		for(int axis=0;axis<3;axis++)for(int face=0;face<velocities[axis].length;face++)
-			if(domain.cellMacStage.isWallFace(axis,face,null))velocities[axis][face]=0;
+			if(domain.cellMacStage.mechanicsFaceActive(axis,face)&&domain.cellMacStage.isWallFace(axis,face,null))velocities[axis][face]=0;
 	}
 }

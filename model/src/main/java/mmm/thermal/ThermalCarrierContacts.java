@@ -35,6 +35,10 @@ public final class ThermalCarrierContacts extends AbstractList<ThermalCarrierTra
 		add(contact.first(), contact.second(), contact.conductance(), contact.reservoirTemperatureK()); return true;
 	}
 	@Override public int size() { return count; }
+	public int firstOwner(int index) { return first[java.util.Objects.checkIndex(index,count)]; }
+	public int secondOwner(int index) { return second[java.util.Objects.checkIndex(index,count)]; }
+	public double conductance(int index) { return conductance[java.util.Objects.checkIndex(index,count)]; }
+	public double reservoirTemperatureK(int index) { return reservoir[java.util.Objects.checkIndex(index,count)]; }
 	@Override public ThermalCarrierTransport.Contact get(int index) {
 		java.util.Objects.checkIndex(index, count);
 		return new ThermalCarrierTransport.Contact(first[index], second[index], conductance[index], reservoir[index]);

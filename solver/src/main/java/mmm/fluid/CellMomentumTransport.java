@@ -77,7 +77,10 @@ final class CellMomentumTransport {
         for (int axis = 0; axis < 3; axis++) {
             component.beginComponent(axis);
             boolean[] constrained = domain.cellMacStage.constrainedNormalFaces(axis);
-            component.transport(beforeMass, afterMass, massFlux, massFaces, initial[axis]);
+            int componentAxis=axis;
+            double[] retained=axis==0?domain.mac.momentumX:axis==1?domain.mac.momentumY:domain.mac.momentumZ;
+            component.transport(beforeMass, afterMass, massFlux, massFaces, initial[axis],retained,
+                    face->domain.cellMacStage.mechanicsFaceActive(componentAxis,face));
             component.prepareMergeAnchors(afterMass, anchors, domain.pressureSystem.solidFaces,
                     domain.geometry.cutCells, constrained);
             component.mixUnresolved(volume, anchors, domain.geometry.cutCells.openFaceField(axis),

@@ -92,7 +92,7 @@ final class CarrierThermalConduction {
 					int overlap=Integer.bitCount(support[p]&support[q]);
 					double area=.125*overlap*Math.pow(Math.min(fraction[p],fraction[q]),2.0/3);
 					double g=2*harmonic(conductivity[p],conductivity[q])*h*area;
-					if(g>0)contacts.add(p,q,g,Double.NaN);
+					if(g>0)add(domain,owners,contacts,p,q,g,Double.NaN);
 				}
 				for(int axis=0;axis<3;axis++) {
 					int coordinate=axis==0?x:axis==1?y:z,size=axis==0?domain.sizeX:axis==1?domain.sizeY:domain.sizeZ;
@@ -105,7 +105,7 @@ final class CarrierThermalConduction {
 								if(total>0)area+=.25*fraction[p]*fraction[q]/total;
 							}
 							double g=harmonic(conductivity[p],conductivity[q])*h*area;
-							if(g>0)contacts.add(p,q,g,Double.NaN);
+							if(g>0)add(domain,owners,contacts,p,q,g,Double.NaN);
 						}
 					}
 					if(domain.thermalBoundaryTemperatureK!=null)for(int side=0;side<2;side++) {
@@ -113,12 +113,24 @@ final class CarrierThermalConduction {
 						double blocked=1-domain.domainCapabilities.thermalOpenFaceFraction(x,y,z,direction);if(blocked<=0)continue;
 						int pieces=0;for(int bit=0;bit<8;bit++)if((bit>>axis&1)==side&&(support[p]&1<<bit)!=0)pieces++;
 						double g=2*conductivity[p]*h*.25*pieces*fraction[p]*blocked;
-						if(g>0)contacts.add(p,-1,g,temperature);
+						if(g>0)add(domain,owners,contacts,p,-1,g,temperature);
 					}
 				}
 			}
 		}
-		return contacts;
+		var active=new ThermalCarrierContacts(contacts.size());
+		for(int i=0;i<contacts.size();i++) if(domain.activityGroups.thermalActive(owners.cell(contacts.firstOwner(i))))
+			active.add(contacts.firstOwner(i),contacts.secondOwner(i),contacts.conductance(i),contacts.reservoirTemperatureK(i));
+		return active;
+	}
+	private static void add(FluidDomain domain,ThermalCarrierTransport.Batch owners,ThermalCarrierContacts contacts,
+			int first,int second,double conductance,double reservoir) {
+		int cell=owners.cell(first);
+		if(second>=0) domain.activityGroups.coupleThermalCells(cell,owners.cell(second));
+		double other=second<0?reservoir:owners.temperatureK(second);
+		if(Math.abs(owners.temperatureK(first)-other)>mmm.thermal.ThermalTransport.CONDUCTION_RESOLUTION_K)
+			domain.activityGroups.keepThermalAwake(cell);
+		contacts.add(first,second,conductance,reservoir);
 	}
 	private static double harmonic(double first,double second) {
 		if(first==0||second==0)return 0;double low=Math.min(first,second),high=Math.max(first,second);return low*(2/(1+low/high));

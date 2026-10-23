@@ -55,9 +55,19 @@ final class MacMomentumAdvection {
 
     /** Integer columns are doubled dual masses; a dual interface carries half two primal fluxes. */
     double[] transport(long[] before, long[] after, long[][] primalFlux, BitSet[] primalFaces, float[] inputVelocity) {
+        return transport(before,after,primalFlux,primalFaces,inputVelocity,null,null);
+    }
+
+    double[] transport(long[] before, long[] after, long[][] primalFlux, BitSet[] primalFaces, float[] inputVelocity,
+                       double[] retainedMomentum, java.util.function.IntPredicate activeFace) {
         flows = 0;
         occupiedFaces.clear();
         for (int face = 0; face < count; face++) {
+            if(activeFace!=null&&!activeFace.test(face)) {
+                momentum[face]=retainedMomentum[face];
+                velocity[face]=heat[face]=0;
+                continue;
+            }
             remaining[face] = value(before, firstCell[face]) + value(before, secondCell[face]);
             dualMass[face] = value(after, firstCell[face]) + value(after, secondCell[face]);
             momentum[face] = velocity[face] = heat[face] = 0;

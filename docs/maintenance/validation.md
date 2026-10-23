@@ -557,3 +557,13 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 统一 `:fabric:compileTestJava :fabric:assemble verifyArchitecture` 通过，日志 `build/gas-source/section-loading-build.log`。求解主干与跨片通量未改；本轮未重复物理预算。最终完整组装仍集中执行，独立活动组休眠与大区域恢复成本尚未交付。
 
 同产物完整 `RegionRepositoryAdapterValidation` 通过，包含上述分片专项、各布局编解码、发布故障、删除与隔离、上一代显式恢复和损坏文件拒绝。日志 `build/gas-source/section-persistence-validation.log`。首次运行发现化学缺片的旧发现断言，已迁移为保留元数据、严格读取拒绝；未完成删除事务继续沿原完整恢复屏障处理。
+
+### 物理活动组
+
+2026-10-23：`PhysicalActivityGroupsValidation` 和 `PhysicalActivityThermalValidation` 通过，统一选择器为 `activity-groups`。覆盖双舱休眠、局部注入后的真实流动、另一舱库存与 MAC 原值保持、局部升温后的实际导热、冷舱 raw U 保持、总热账闭合、候选交接、只读观察、设备连接和拆墙合组。日志 `build/gas-source/activity-groups.log`、`activity-thermal.log`。首轮分别发现恢复统计遗漏和夹具采用错误格长，修复后通过。
+
+`controller-gas-lineage,production-live-budget` 同 JVM 通过，日志 `build/gas-source/activity-production-budget-final.log`。小控制器20步均低于40 ms；溃坝20步最大223.639 ms，连续超过200 ms为1步，低于3步暂停条件。首次预算回归的旧断言遗漏 CO₂ 传质导致的液体质量变化，已保留无传质时的质量不变要求并区分真实跨相交换；原失败记录在 `activity-production-budget.log`。复用 classpath 的构建元数据仍显示先前源码标识，日志中的实际 artifactSHA256 对应运行产物。
+
+活动组尚未进行原生游戏观察。当前缺区块仍暂停整个区域，独立组的部分冷加载未纳入本次完成范围。
+
+活动组统一编译、打包与架构检查通过，日志 `build/gas-source/activity-package.log`；539个生产源码文件完成架构扫描。

@@ -65,7 +65,7 @@ final class ChemicalReactionStage {
 	ChemicalReactionStage(FluidDomain domain) { this.domain=domain; }
 	int[] captureDirtyCells() {
 		var chemistry=domain.chemistry;
-		return chemistry==null?new int[0]:chemistry.dirtyCells();
+		return chemistry==null?new int[0]:Arrays.stream(chemistry.dirtyCells()).filter(domain.activityGroups::thermalActive).toArray();
 	}
 	private record Group(int support,int phase) implements Comparable<Group> {
 		public int compareTo(Group other) { int s=Integer.compare(support,other.support);return s!=0?s:Integer.compare(phase,other.phase); }
@@ -77,7 +77,7 @@ final class ChemicalReactionStage {
 		var store=domain.liquidCells; var registry=store.chemicalRegistry(); var thermal=domain.thermalState;
 		prepareReactionInputs(registry);
 		if (!hasReactionInputs(store)) {
-			scheduler.restoreDirtyCells(new int[0]);
+			scheduler.restoreDirtyCells(Arrays.stream(scheduler.dirtyCells()).filter(cell->!domain.activityGroups.thermalActive(cell)).toArray());
 			return new RegionChemistry.ReactionStats(0,0,0);
 		}
 		var function=thermal==null?null:new ThermalStateFunction(thermal.registry());
@@ -87,6 +87,7 @@ final class ChemicalReactionStage {
 		var eligible=new TreeMap<Integer,TreeMap<Group,List<LiquidCellInventory.Stock>>>();
 		var consumed=new ArrayList<Integer>();
 		for(int cell:dirty) {
+			if(!domain.activityGroups.thermalActive(cell)) continue;
 			boolean possible=false;
 			for(var stock:store.physicalStocksInCell(cell)) if(hasReactant(stock.mixture())) { possible=true;break; }
 			if(!possible) { consumed.add(cell);continue; }
@@ -111,7 +112,7 @@ final class ChemicalReactionStage {
 		int visited=consumed.size(),evaluations=0,changed=0,cursor=scheduler.reactionCursor();
 		for(int offset=0;offset<domain.cellCount;offset++) {
 			int cell=(scheduler.reactionCursor()+offset)%domain.cellCount;
-			if(!dirty.contains(cell)) continue;
+			if(!dirty.contains(cell) || !domain.activityGroups.thermalActive(cell)) continue;
 			var groups=eligible.get(cell);
 			int cost=0; for(var group:groups.keySet()) cost=Math.addExact(cost,costs[group.phase]);
 			if(cost>ChemicalLimits.MAX_REACTION_EVALUATIONS_PER_STEP-evaluations) { cursor=cell;break; }

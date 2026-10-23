@@ -48,6 +48,7 @@ public final class GranularDepositDynamics {
 	}
 
 	public interface Environment {
+		default boolean activeCell(int cell) { return true; }
 		long geometricOpenSvq(int cell);
 		default double gravity() { return 0.0; }
 		boolean horizontalPathOpen(int fromCell, int directionX, int directionZ);
@@ -231,7 +232,7 @@ public final class GranularDepositDynamics {
 		for (int column = 0; column < columnCount; column++) {
 			if (queued[column]) continue;
 			int surface = surfaceCell(column);
-			if (surface < 0) continue;
+			if (surface < 0 || !environment.activeCell(surface)) continue;
 			ParticulateMaterial material = registry.material(deposits.dominantGroup(surface).materialHandle());
 			double shields = environment.shields(surface, material);
 			if (Double.isFinite(shields) && shields > material.criticalShields()) {

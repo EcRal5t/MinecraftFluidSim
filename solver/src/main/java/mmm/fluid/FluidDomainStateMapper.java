@@ -35,7 +35,7 @@ final class FluidDomainStateMapper {
 				domain.thermalState == null ? null : domain.thermalState.exportOwnerState(),
 				domain.thermalState == null ? 0 : domain.thermalState.maximumTransportSubsteps(),
 				domain.thermalState == null ? null : domain.exportPendingPhaseMotionState(),domain.thermalBoundaryTemperatureK,
-				domain.thermalState == null ? null : domain.pressureSystem.captureRuntimePressure(),domain.materialDefinitions);
+				domain.thermalState == null ? null : domain.pressureSystem.captureRuntimePressure(),domain.materialDefinitions,domain.activityGroups.capture());
 		return captured;
 	}
 
@@ -94,6 +94,7 @@ final class FluidDomainStateMapper {
 		}
 		if (state.precipitationEnabled()) domain.setPrecipitationEnabled(true);
 		if(state.pressureContinuation()!=null)domain.pressureSystem.restoreLiquidPressure(state.pressureContinuation());
+		domain.activityGroups.restore(state.activityState());
 		return domain;
 	}
 }

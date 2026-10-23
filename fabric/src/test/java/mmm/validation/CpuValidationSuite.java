@@ -169,6 +169,10 @@ public final class CpuValidationSuite {
 			ProductionFluidReplayValidation.controllerPoursRetainMacroscopicHeadspace();
 		});
 		gate(gates, "production-live-budget", ProductionFluidReplayValidation::defaultLiveStepsRemainBounded);
+		gate(gates, "activity-groups", () -> {
+			mmm.fluid.PhysicalActivityGroupsValidation.main(NONE);
+			mmm.fluid.PhysicalActivityThermalValidation.main(NONE);
+		});
 		gate(gates, "production-replay", () -> ProductionFluidReplayValidation.main(NONE));
 		gate(gates, "free-surface", () -> FlipFluidFreeSurfaceValidation.main(NONE),
 				() -> FlipFluidFreeSurfaceValidation.main(FAST));

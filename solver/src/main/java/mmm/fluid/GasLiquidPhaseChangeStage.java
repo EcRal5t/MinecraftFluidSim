@@ -132,6 +132,7 @@ final class GasLiquidPhaseChangeStage {
 			double batchVolumeM3=(double)transition.lowerVolumeSvqPerBatch()/SolidVolume.SVQ_PER_CUBIC_METER;
 			for(var stock:liquids.physicalStocks()) {
 				int id=stock.key().cell();
+				if(!domain.activityGroups.thermalActive(id)) continue;
 				if(!interfaceCells[id]||stock.key().material()!=liquid||domain.pendingPhaseMotion.isPending(id)) continue;
 				for(var contact:contacts.computeIfAbsent(id,key->GasPhaseInterfaceResolver.contacts(domain.gasState.frame,key))) {
 					if(contact.node()<=0||contact.supportMask()!=stock.key().supportMask()) continue;
@@ -154,7 +155,7 @@ final class GasLiquidPhaseChangeStage {
 			}
 			// A supersaturated finite chamber nucleates condensate on its available cell supports.
 			for(var support:domain.gasState.frame.capacity().components()) {
-				int id=support.cell();if(domain.pendingPhaseMotion.isPending(id)||support.availableVolumeNormalized().signum()<=0)continue;
+				int id=support.cell();if(!domain.activityGroups.thermalActive(id)||domain.pendingPhaseMotion.isPending(id)||support.availableVolumeNormalized().signum()<=0)continue;
 				var key=new LiquidCellInventory.Key(id,liquid,support.supportMask());
 				if(liquids.stock(key)!=null)continue;
 				int node=domain.gasState.frame.topology().nodeOfComponent(id,support.supportMask());if(node<=0)continue;

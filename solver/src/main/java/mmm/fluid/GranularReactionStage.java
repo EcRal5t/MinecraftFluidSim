@@ -82,6 +82,7 @@ final class GranularReactionStage {
     for (int cell : dirtyCells) {
       if (cell < 0 || cell >= domain.cellCount)
         throw new IllegalArgumentException("Reactive cell is outside the domain");
+      if (!domain.activityGroups.thermalActive(cell)) continue;
       if (solidCells.contains(cell)) { participating.add(cell); continue; }
       for (int support : LiquidCellInventory.connectedSupports(domain.geometry.cutCells.mask(cell))) {
         for (var rule : domain.granularState.registry.reactions())

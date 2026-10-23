@@ -63,6 +63,7 @@ final class GasLiquidMassTransferStage {
 		var registry = chemistry.registry();
 		var work = new TreeMap<Key, Work>();
 		for (var contact : GasLiquidContactGeometry.capture(domain)) {
+			if(!domain.activityGroups.thermalActive(contact.key().cell())) continue;
 			var stock = domain.liquidCells.stock(contact.key());
 			if (stock == null || stock.massUnits() == 0 || stock.mixture() == null || !(contact.areaM2() > 0)) continue;
 			String material = domain.materialRegistry.material(stock.key().material()).id();
@@ -88,6 +89,7 @@ final class GasLiquidMassTransferStage {
 		var cells = new TreeMap<Integer, Cell>();
 		var removedMass = new TreeMap<Integer, Long>();
 		var pending = new ArrayList<RegionChemistry.MassTransferPending>();
+		for(var deferred:oldPending.values()) if(!domain.activityGroups.thermalActive(deferred.cell())) pending.add(deferred);
 		var gasSource = GasAuditLedger.EMPTY;
 		var gasSink = GasAuditLedger.EMPTY;
 		var externalSource = SignedDyadic.ZERO;
@@ -114,6 +116,7 @@ final class GasLiquidMassTransferStage {
 			}
 			if (item.contacts.size() > maximumEvaluations - evaluations) {
 				active = true;
+				domain.activityGroups.keepThermalAwake(key.stock().cell());
 				pending.add(pending(key, item.seconds, item.residual)); continue;
 			}
 			evaluations += item.contacts.size();
@@ -145,7 +148,9 @@ final class GasLiquidMassTransferStage {
 				double equilibriumMoles = (h * p - liquidMoles / volume) / response;
 				boolean donorPresent = equilibriumMoles < 0 ? stock.mixture().amount(species) > 0
 						: component != null && component.species().stream().anyMatch(s -> s.speciesId().equals(rule.speciesId()) && s.amountQuanta() > 0);
-				active |= donorPresent && Math.abs(equilibriumMoles) >= .5 / ChemicalLimits.QUANTA_PER_MOL;
+				boolean driven=donorPresent && Math.abs(equilibriumMoles) >= .5 / ChemicalLimits.QUANTA_PER_MOL;
+				active |= driven;
+				if(driven) domain.activityGroups.keepThermalAwake(key.stock().cell());
 				double transfer = item.seconds * conductance * (h * p - liquidMoles / volume)
 						/ (1 + item.seconds * conductance * response) + item.residual * contact.areaM2() / area;
 				boolean dissolve = transfer > 0;

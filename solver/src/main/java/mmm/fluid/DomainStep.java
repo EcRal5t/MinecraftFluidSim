@@ -36,6 +36,19 @@ final class DomainStep {
 			boolean phaseChangeEnabled, int maximumPhaseOperations, boolean captureMechanicalAudit,
 			boolean thermochemistryEnabled, int preparedSubsteps
 	) {
+		domain.activityGroups.beginStep();
+		try {
+			var result = stepActiveGroups(phaseChangeEnabled, maximumPhaseOperations, captureMechanicalAudit, thermochemistryEnabled, preparedSubsteps);
+			domain.activityGroups.finishStep(true, thermochemistryEnabled);
+			return result;
+		} catch (RuntimeException | Error failure) {
+			domain.activityGroups.abortStep();
+			throw failure;
+		}
+	}
+
+	private StepStats stepActiveGroups(boolean phaseChangeEnabled, int maximumPhaseOperations,
+	                                  boolean captureMechanicalAudit, boolean thermochemistryEnabled, int preparedSubsteps) {
 		if (preparedSubsteps < 0) throw new IllegalArgumentException("Prepared mechanical substeps are invalid");
 		if (phaseChangeEnabled && (maximumPhaseOperations <= 0
 				|| maximumPhaseOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP)) {
@@ -180,10 +193,17 @@ final class DomainStep {
 				|| maximumPhaseOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP)) {
 			throw new IllegalArgumentException("Production phase operation budget is invalid");
 		}
-		ThermalAxisStats result = runThermalReactionPhaseAxis(phaseChangeEnabled, maximumPhaseOperations);
-		domain.gridDirty = true;
-		domain.domainFlowFields.ensureInventoryGrid();
-		return result;
+		domain.activityGroups.beginStep();
+		try {
+			ThermalAxisStats result = runThermalReactionPhaseAxis(phaseChangeEnabled, maximumPhaseOperations);
+			domain.gridDirty = true;
+			domain.domainFlowFields.ensureInventoryGrid();
+			domain.activityGroups.finishStep(false, true);
+			return result;
+		} catch (RuntimeException | Error failure) {
+			domain.activityGroups.abortStep();
+			throw failure;
+		}
 	}
 	ThermalAxisStats runThermalReactionPhaseAxis(boolean phaseChangeEnabled, int maximumPhaseOperations) {
 		ThermalAxisStats result = domain.thermochemistryPipeline.step(
@@ -228,6 +248,7 @@ final class DomainStep {
 	}
 	GranularDepositDynamics.Environment granularDepositEnvironment(long[] plannedSolid, GranularBedShear.Flow flow) {
 		return new GranularDepositDynamics.Environment() {
+			@Override public boolean activeCell(int cell) { return domain.activityGroups.mechanicsActive(cell); }
 			private GranularBedShear.LiftWork liftWork;
 			private SignedDyadic wakeRounding=SignedDyadic.ZERO;
 			private GranularInventory.EnergyPlan relaxationEnergy;

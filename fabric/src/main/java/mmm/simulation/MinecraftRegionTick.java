@@ -41,6 +41,8 @@ final class MinecraftRegionTick {
 	private final int maximumPhaseOperationsPerStep;
 	private java.util.function.BiConsumer<ServerLevel,FluidRegion> finiteDeviceExchange = (level,region) -> { };
 	void finiteDeviceExchange(java.util.function.BiConsumer<ServerLevel,FluidRegion> exchange) { finiteDeviceExchange=exchange; }
+	private java.util.function.Consumer<FluidRegion> activityConnections = region -> { };
+	void activityConnections(java.util.function.Consumer<FluidRegion> connections) { activityConnections = Objects.requireNonNull(connections); }
 	private java.util.function.BiPredicate<ServerLevel,FluidRegion> farmlandHydration = (level,region) -> true;
 	void farmlandHydration(java.util.function.BiPredicate<ServerLevel,FluidRegion> hydration) {
 		farmlandHydration = Objects.requireNonNull(hydration);
@@ -80,6 +82,7 @@ final class MinecraftRegionTick {
 		MinecraftRegionInputs.TickInputs frozen;
 		try {
 			if (!farmlandHydration.test(level, region)) return;
+			activityConnections.accept(region);
 			frozen = inputs.captureTick(level, region, tick, profile.hasCapability(WorldCapability.THERMAL));
 		} catch (RuntimeException failure) {
 			inputs.discardEntityResponse(region);

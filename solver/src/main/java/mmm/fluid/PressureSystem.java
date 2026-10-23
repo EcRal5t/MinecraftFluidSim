@@ -14,6 +14,7 @@ final class PressureSystem {
 	private int fluidUnknownCount,gasUnknownCount,gasNodeCount;
 	private int[] gasUnknownNodes;
 	boolean[] gasPressureUnknown;
+	private boolean[] activeGasNodes=new boolean[0];
 	float[] gasPressure;
 	double[] gasStorageCoefficient;
 	private final boolean[] anchored;
@@ -88,9 +89,16 @@ final class PressureSystem {
 		int nodes=domain.gasState.network.nodeCount();ensureGasCapacity(nodes);
 		Arrays.fill(gasPressureUnknown,false);gasUnknownCount=fluidUnknownCount=0;
 		Arrays.fill(gasStorageCoefficient,0);Arrays.fill(anchored,false);
-		for(int node=1;node<=nodes;node++){gasPressureUnknown[node]=true;gasUnknownNodes[gasUnknownCount++]=node;}
+		if(activeGasNodes.length<nodes+1)activeGasNodes=new boolean[nodes+1];
+		else Arrays.fill(activeGasNodes,false);
+		var frame=domain.gasState.frame;
+		for(var component:frame.capacity().components())if(domain.activityGroups.mechanicsActive(component.cell())){
+			int node=frame.topology().nodeOfComponent(component.cell(),component.supportMask());
+			if(node>0)activeGasNodes[node]=true;
+		}
+		for(int node=1;node<=nodes;node++)if(activeGasNodes[node]){gasPressureUnknown[node]=true;gasUnknownNodes[gasUnknownCount++]=node;}
 		faces.rebuild(liquidPressure);
-		for (int c = 0; c < domain.cellCount; c++) if (domain.domainFlowFields.isFluid(c)) {
+		for (int c = 0; c < domain.cellCount; c++) if (domain.activityGroups.mechanicsActive(c) && domain.domainFlowFields.isFluid(c)) {
 			int group = faces.root(c);
 			if (!faces.constrained[group] && !anchored[group]) { anchored[group] = true; anchored[c] = true; }
 			else fluidUnknownCells[fluidUnknownCount++] = c;
@@ -239,7 +247,8 @@ final class PressureSystem {
 		prepareOperator();
 		pressureDatum=commonPressureDatum();shiftPressureDatum(pressureDatum);
 		prepareGasStorage();
-		Arrays.fill(liquidPressure, 0); Arrays.fill(gasPressure, 0);
+		for(int cell=0;cell<domain.cellCount;cell++)if(domain.activityGroups.mechanicsActive(cell))liquidPressure[cell]=0;
+		for(int node=1;node<=gasNodeCount;node++)if(activeGasNodes[node])gasPressure[node]=0;
 		int rows=domain.cellCount+gasNodeCount+1;
 		if(referencePressure.length<rows)referencePressure=new double[rows];
 		else Arrays.fill(referencePressure,0);
@@ -278,9 +287,12 @@ final class PressureSystem {
 	}
 	void beginVolumeTransport(){
 		readVelocity(transportVelocity);
-		for(int f=0;f<faces.faceCount;f++)if(!(faces.faceMass(f)>0))transportVelocity[f]=0;
+		for(int f=0;f<faces.faceCount;f++)if(!domain.activityGroups.mechanicsFaceActive(faces.firstCell[f],faces.secondCell[f])||!(faces.faceMass(f)>0))transportVelocity[f]=0;
 	}
-	double volumeFlux(int face,double dt){return faces.fluidArea(face)*transportVelocity[face]*dt/domain.config.cellSize();}
+	double volumeFlux(int face,double dt){
+		if(!domain.activityGroups.mechanicsFaceActive(faces.firstCell[face],faces.secondCell[face]))return 0;
+		return faces.fluidArea(face)*transportVelocity[face]*dt/domain.config.cellSize();
+	}
 	private void prepareGasStorage() {
 		int count = domain.gasState.network.nodeCount();
 		gasStorageRhs = new double[count + 1];
@@ -309,6 +321,7 @@ final class PressureSystem {
         publishVelocity(predictedVelocity);
         domain.entityBodyCoupling.finishPressure(pressureLoad,dt);
         for(int f=0;f<faces.faceCount;f++){
+            if(!domain.activityGroups.mechanicsFaceActive(faces.firstCell[f],faces.secondCell[f]))continue;
             int axis=faces.axis[f],local=faces.localFace[f];
             float[] velocity=axis==0?domain.mac.velocityX:axis==1?domain.mac.velocityY:domain.mac.velocityZ;
             double before=forceBaseline[f],after=velocity[local];
@@ -326,6 +339,7 @@ final class PressureSystem {
     }
     void publishVelocity(double[] values){
         for(int f=0;f<faces.faceCount;f++){
+            if(!domain.cellMacStage.mechanicsFaceActive(faces.axis[f],faces.localFace[f]))continue;
             float[] field=switch(faces.axis[f]){case 0->domain.mac.velocityX;case 1->domain.mac.velocityY;default->domain.mac.velocityZ;};
             field[faces.localFace[f]]=(float)values[f];
         }
@@ -342,8 +356,10 @@ final class PressureSystem {
 		granular.markGasPressureContacts(gasPressureUnknown);
         domain.entityBodyCoupling.markGasRows(gasPressureUnknown);
 		gasUnknownCount=0;
-		for(int node=1;node<=gasNodeCount;node++)if(gasPressureUnknown[node])
-			gasUnknownNodes[gasUnknownCount++]=node;
+		for(int node=1;node<=gasNodeCount;node++){
+			gasPressureUnknown[node]&=activeGasNodes[node];
+			if(gasPressureUnknown[node])gasUnknownNodes[gasUnknownCount++]=node;
+		}
 	}
     boolean hasGasMechanicalModes(GasRuntimeGeometry source){return source!=null&&source==mechanicalGasSource;}
     /** Modes belong to the old frame on which a pressure step actually acted. */

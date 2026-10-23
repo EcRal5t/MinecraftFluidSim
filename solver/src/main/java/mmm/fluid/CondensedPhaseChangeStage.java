@@ -78,6 +78,7 @@ final class CondensedPhaseChangeStage {
 			}
 			var possibleCells=new TreeSet<Integer>(liquidSupports.keySet());possibleCells.addAll(meltingCells);
 			for(int cell:possibleCells) {
+				if(!domain.activityGroups.thermalActive(cell)) continue;
 				double temperature=thermal.phaseScanTemperatureInCell(cell);
 				boolean freezing=liquidSupports.containsKey(cell)&&temperature<maximumMelting;
 				boolean melting=meltingCells.contains(cell)&&temperature>minimumMelting;

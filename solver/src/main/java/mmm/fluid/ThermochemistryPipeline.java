@@ -78,6 +78,8 @@ final class ThermochemistryPipeline {
 		}
 		stage = "GAS_LIQUID_MASS_TRANSFER";
 		var massTransferStats = massTransfer.step(dtSeconds);
+		if(domain.chemistry!=null) for(int cell:domain.chemistry.dirtyCells())
+			if(domain.activityGroups.thermalActive(cell)) domain.activityGroups.keepThermalAwake(cell);
 		stage = "COMPLETE";
 		return new FluidDomain.ThermalAxisStats(
 				transportStats, chemicalStats, granularStats, condensedStats, gasStats, massTransferStats);

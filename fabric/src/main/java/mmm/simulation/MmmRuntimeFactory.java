@@ -93,6 +93,7 @@ public final class MmmRuntimeFactory {
 				regionManager, regionOperations, availability, phaseWorkBarrier, worldRegistries, snapshots);
 		availability.additionalPending(id -> finiteDevices.hasPending(id) || farmland.hasPending(id));
 		regionTick.finiteDeviceExchange(finiteDevices::tickExchange);
+		regionTick.activityConnections(finiteDevices::refreshActivityConnections);
 		regionTick.farmlandHydration(farmland::tickAvailable);
 		ControllerQueryUseCase controllerQueries = new ControllerQueryUseCase(new ControllerSummaryAdapter(
 				regionManager, regionOperations, worldRegistries.profile(), worldRegistries.thermalOrNull(),

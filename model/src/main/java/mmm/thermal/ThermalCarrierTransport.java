@@ -77,7 +77,7 @@ public final class ThermalCarrierTransport {
 			return true;
 		}
 		ThermalCellGrid.CarrierAccess owners(){return owners;}
-		double temperatureK(int owner){return temperature[owner];}
+		public double temperatureK(int owner){return temperature[owner];}
 		double heatCapacityJPerK(int owner){return heatCapacity[owner];}
 	}
 	public static Batch prepare(ThermalCellGrid.CarrierAccess owners) { return new Batch(owners); }

@@ -54,6 +54,7 @@ public final class FluidDomain {
 	final SolverUnitScale unitScale;
 	final DomainGeometry geometry;
 	EntityBodyState entityBodies = EntityBodyState.EMPTY;
+	final PhysicalActivityGroups activityGroups = new PhysicalActivityGroups(this);
 	final EntityBodyCoupling entityBodyCoupling = new EntityBodyCoupling(this);
 	long[] occupiedSolidSvq() {
 		return entityBodyCoupling.addTo(granularCoupling == null ? new long[cellCount] : granularCoupling.copySolidSvq());
@@ -244,6 +245,10 @@ public final class FluidDomain {
 	public void synchronizeGasTopologyForPersistence() { domainStep.synchronizeGasTopologyForPersistence(); }
 	static GranularCouplingFields.Position parcelPosition(GranularParcelStore.Parcel parcel) { return DomainStep.parcelPosition(parcel); }
 	static float trilinearWeight(int ox, int oy, int oz, float fx, float fy, float fz) { return DomainStep.trilinearWeight(ox, oy, oz, fx, fy, fz); }
+	public record ActivityStats(int groupCount, int sleepingGroups, int sleepingCells, int activeCells) { }
+	public ActivityStats activityStats() { return activityGroups.stats(); }
+	public void replaceActivityConnections(List<int[]> cellGroups) { activityGroups.replaceConnections(cellGroups); }
+
 	public EntityBodyState entityBodyState() { return entityBodies; }
 	/** Restores accepted bodies before deriving capacity, pressure or gas geometry. */
 	public void restoreEntityBodyState(EntityBodyState state) {

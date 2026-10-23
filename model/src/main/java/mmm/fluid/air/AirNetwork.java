@@ -130,9 +130,7 @@ public final class AirNetwork {
 	}
 
 	public boolean hasNode(int nodeId) { return nodeId != AMBIENT_NODE && nodes.containsKey(nodeId); }
-
 	public List<Integer> nodeIds() { return new ArrayList<>(nodes.keySet()); }
-
 	public int nodeCount() { return nodes.size(); }
 
 	/** Uses the transport's integer equilibrium limit; slow openings remain active until that limit is zero. */
@@ -167,16 +165,13 @@ public final class AirNetwork {
 	}
 
 	public double availableVolume(int nodeId) { return sealed(nodeId).availableVolume(); }
-
 	public void updateAvailableVolume(int nodeId, double availableVolume) {
 		sealed(nodeId).setAvailableVolume(availableVolume);
 		revision++;
 	}
 
 	public long standardVolumeNanos(int nodeId) { return sealed(nodeId).standardVolumeNanos(); }
-
 	public double standardVolume(int nodeId) { return sealed(nodeId).standardVolume(); }
-
 	public GasInventory inventory(int nodeId) { return sealed(nodeId).inventory(); }
 
 	/** Creates an ambient inventory without mutating this network; used by topology planning. */
@@ -370,20 +365,26 @@ public final class AirNetwork {
 	 * Thermal flow solves the committed inventory/energy EOS; isothermal flow uses linear storage.
 	 * This models cavity equilibration; acoustic waves and resolved jets belong to the carrier solver.
 	 */
-	public void stepEdges(double dt) {
+	public void stepEdges(double dt) { stepEdges(dt,id->true); }
+	public void stepEdges(double dt,java.util.function.IntPredicate activeNode) {
 		stepEdges(dt, new NodeThermodynamics() {
 			@Override public double gaugePressure(int id) { return AirNetwork.this.gaugePressure(id); }
 			@Override public double density(int id) { return AirNetwork.this.density(id); }
-		}, batch -> () -> { });
+		}, batch -> () -> { },activeNode);
 	}
 
-	public void stepEdges(double dt, NodeThermodynamics thermodynamics, BatchTransferPlanner thermalPlanner) {
+	public void stepEdges(double dt, NodeThermodynamics thermodynamics, BatchTransferPlanner thermalPlanner) { stepEdges(dt,thermodynamics,thermalPlanner,id->true); }
+	public void stepEdges(double dt, NodeThermodynamics thermodynamics, BatchTransferPlanner thermalPlanner,
+			java.util.function.IntPredicate activeNode) {
 		if (!(Double.isFinite(dt) && dt > 0)) throw new IllegalArgumentException("Gas flow dt must be positive and finite");
 		Objects.requireNonNull(thermodynamics, "thermodynamics"); Objects.requireNonNull(thermalPlanner, "thermalPlanner");
+		Objects.requireNonNull(activeNode,"Active gas node selection");
 		if (edges.isEmpty()) return;
-		List<AirEdge> edges = this.edges.stream().sorted(java.util.Comparator
+		List<AirEdge> edges = this.edges.stream().filter(edge->(edge.firstNode()==0 || activeNode.test(edge.firstNode()))
+				&& (edge.secondNode()==0 || activeNode.test(edge.secondNode()))).sorted(java.util.Comparator
 				.comparingInt((AirEdge edge) -> Math.min(edge.firstNode(), edge.secondNode()))
 				.thenComparingInt(edge -> Math.max(edge.firstNode(), edge.secondNode()))).toList();
+		if(edges.isEmpty()) return;
 		if (thermodynamics.portThermodynamics(edges.getFirst().firstNode(), edges.getFirst().secondNode()) != null) {
 			for (int pass = 0; pass < 2; pass++) for (int j = 0; j < edges.size(); j++) {
 				AirEdge edge = edges.get(pass == 0 ? j : edges.size() - 1 - j);

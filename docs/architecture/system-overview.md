@@ -147,6 +147,12 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 库存、物种、反应批次、单位换算和提交审计保留必要的整数与精确数量运算。几何和力学采用浮点标准离散；未解析薄层、液滴和细尺度运动按单元尺度近似。表示转换耗散明确进入对应能量结算，舍入与离散误差分别评价。精度取舍和验收要求见[实施计划](../roadmap/solver-consolidation-plan.md#精度与物理取舍)。
 
 <a id="runtime"></a>
+## 物理活动组
+
+[PhysicalActivityGroups](../../solver/src/main/java/mmm/fluid/PhysicalActivityGroups.java) 按固定开放通路、有限气腔、颗粒支撑、实体与热接触组织同域活动组。力学和热化学分别休眠，局部输入唤醒相关组；共享设备的端口单元随 tick 输入建立关联。压力、黏性、体力、输运与热化学阶段共用组的活动状态，休眠库存与 MAC 原量保留。所有组仍沿完整区域候选和一个 HEAD 提交。
+
+`FluidDomainStateMapper` 保存进程内候选调度状态，冷恢复重新观察物理状态；`RegionDiagnosticsReport` 只读展示组数及活动／休眠单元。验证入口为 `activity-groups`，稳定契约见[运行时与生命周期](runtime-and-lifecycle.md#物理活动组)。
+
 ## 从游戏操作到计算结果
 
 ```text

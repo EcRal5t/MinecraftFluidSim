@@ -348,6 +348,23 @@ public final class FiniteHeatExchangerOperations {
 		return result;
 	}
 
+	/** Installed finite bodies join the cells sharing their heat inventory before scheduling. */
+	void refreshActivityConnections(FluidRegion region) {
+		if (!region.solverLoaded()) return;
+		var connections = new ArrayList<int[]>();
+		if (world.thermalOrNull() != null) {
+			var registry = world.thermalRegistry();
+			for (var device : region.finiteThermalDevices(registry.fingerprint()).devices()) {
+				if (!device.providerId().equals(PROVIDER)) continue;
+				var requests = ports(region, BlockPos.of(Long.parseLong(device.objectId())),
+						registry.finiteDevice(device.deviceTypeId()), registry);
+				connections.add(requests.stream().mapToInt(port ->
+						(port.cellZ() * region.sizeY() + port.cellY()) * region.sizeX() + port.cellX()).distinct().toArray());
+			}
+		}
+		region.domain().replaceActivityConnections(connections);
+	}
+
 	/** Shares the successful region thermal step's logical duration and owner state. */
 	void tickExchange(ServerLevel level,FluidRegion region) {
 		if(world.thermalOrNull()==null) return;

@@ -434,9 +434,9 @@ final class GasTopologyCoordinator {
 	}
 	void step(float dt) {
 		refresh(); if (!domain.gasState.pressureActive) return;
-		if (domain.thermalState == null || !domain.thermalState.gasModelBound()) domain.gasState.network.stepEdges(dt);
+		if (domain.thermalState == null || !domain.thermalState.gasModelBound()) domain.gasState.network.stepEdges(dt,domain.activityGroups::gasNodeIsActive);
 		else domain.gasState.network.stepEdges(dt, domain.thermalState.gasThermodynamics(domain.gasState.network),
-				batch -> domain.thermalState.planGasFlow(batch, domain.gasState.network));
+				batch -> domain.thermalState.planGasFlow(batch, domain.gasState.network),domain.activityGroups::gasNodeIsActive);
 	}
 	void synchronizeForPersistence() { refresh(); }
 	record GasTopologyPlan(GasRuntimeGeometry frame, GasRuntimeGeometry source,

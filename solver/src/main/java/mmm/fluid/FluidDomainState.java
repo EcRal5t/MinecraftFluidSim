@@ -46,6 +46,8 @@ public final class FluidDomainState {
 	private final double[] thermalBoundaryTemperaturesK;
 	private final CondensedPhasePressureField condensedPhasePressure;
 	private final MaterialRegistry materialDefinitions;
+	private final PhysicalActivityGroups.Snapshot activityState;
+	PhysicalActivityGroups.Snapshot activityState() { return activityState; }
 	/** Exactly one captured gas representation; the persistence projection is derived lazily. */
 	public static final class GasContinuation {
 		private final GasRuntimeGeometry geometry;
@@ -88,6 +90,20 @@ public final class FluidDomainState {
 			ThermalRegistry thermalRegistry, ThermalOwnerSnapshot thermalOwner, int maximumThermalTransportSubsteps,
 			PendingPhaseMotionState pendingPhaseMotion, double[] thermalBoundaryTemperaturesK,
 			CondensedPhasePressureField condensedPhasePressure, MaterialRegistry materialDefinitions) {
+		this(sizeX, sizeY, sizeZ, config, sealedDomainBoundary, liquid, phaseOccupancy, momentum, fixedGeometry, entityBodies, palette, chemicalRegistry, chemicalSource, chemicalSink, chemicalDirtyCells, chemicalReactionCursor, chemicalMassTransferPending, granularRegistry, granular, granularDynamics, precipitationEnabled, gasRegistry, gas, thermalRegistry, thermalOwner, maximumThermalTransportSubsteps, pendingPhaseMotion, thermalBoundaryTemperaturesK, condensedPhasePressure, materialDefinitions, PhysicalActivityGroups.Snapshot.EMPTY);
+	}
+
+	public FluidDomainState(int sizeX, int sizeY, int sizeZ, FluidSolverConfig config,
+			boolean sealedDomainBoundary, LiquidCellInventory.Snapshot liquid, PhaseOccupancyState phaseOccupancy, MacMomentumState momentum,
+			FixedGeometrySnapshot fixedGeometry, EntityBodyState entityBodies, List<FluidMaterial> palette, ChemicalRegistry chemicalRegistry,
+			ChemicalTransferLedger chemicalSource, ChemicalTransferLedger chemicalSink, int[] chemicalDirtyCells, int chemicalReactionCursor,
+			List<RegionChemistry.MassTransferPending> chemicalMassTransferPending,
+			GranularRegistry granularRegistry, GranularStateSnapshot granular, GranularDepositDynamics.State granularDynamics,
+			boolean precipitationEnabled, GasRegistry gasRegistry, GasContinuation gas,
+			ThermalRegistry thermalRegistry, ThermalOwnerSnapshot thermalOwner, int maximumThermalTransportSubsteps,
+			PendingPhaseMotionState pendingPhaseMotion, double[] thermalBoundaryTemperaturesK,
+			CondensedPhasePressureField condensedPhasePressure, MaterialRegistry materialDefinitions, PhysicalActivityGroups.Snapshot activityState) {
+		this.activityState = Objects.requireNonNull(activityState);
 		if (sizeX < 2 || sizeY < 2 || sizeZ < 2) throw new IllegalArgumentException("Invalid cell domain shape");
 		int cells = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.config = Objects.requireNonNull(config);

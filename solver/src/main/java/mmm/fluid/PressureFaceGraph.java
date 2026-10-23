@@ -105,6 +105,7 @@ final class PressureFaceGraph {
 		for (int c = 0; c < parent.length; c++) parent[c] = c;
 		for (int f = 0; f < faceCount; f++) {
 			start[f]=entries; int a = firstCell[f], b = secondCell[f]; if (a < 0) continue;
+			if(!domain.activityGroups.mechanicsFaceActive(a,b))continue;
 			double mass = faceMass(f); if (!(mass > 0)) continue;
 			int d = axis[f]; boolean wallSupported=domain.cellMacStage.isUnresolvedWallFace(d,localFace[f]);
 			double open = domain.pressureSystem.solidFaces.open(d, localFace[f]);
