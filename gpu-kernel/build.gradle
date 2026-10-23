@@ -241,15 +241,17 @@ registerGpuProbe(
 
 registerGpuProbe(
     'runGpuLiquidMechanicalBenchmark',
-    'Measures consecutive resident ambient-liquid mechanical commits with capacity and inventory transport.',
+    'Measures consecutive resident liquid mechanical commits with capacity, inventory transport and optional finite gas.',
     'mmm.gpuprobe.GpuLiquidMechanicalBenchmark',
     'gpu-liquid-mechanical-work'
 ) { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
         providers.gradleProperty('gpuMechanicalGrids').getOrElse('32'),
         providers.gradleProperty('gpuMechanicalSamples').getOrElse('10'),
-        providers.gradleProperty('gpuMechanicalWarmup').getOrElse('5')
+        providers.gradleProperty('gpuMechanicalWarmup').getOrElse('5'),
+        providers.gradleProperty('gpuMechanicalGas').getOrElse('false')
     probeTask.jvmArgs '-Xmx3g'
+    probeTask.systemProperty 'mmm.gpuMechanicalStages', providers.gradleProperty('gpuMechanicalStages').getOrElse('false')
 }
 
 registerGpuProbe(
