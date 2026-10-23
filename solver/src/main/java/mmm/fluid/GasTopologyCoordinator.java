@@ -73,7 +73,7 @@ final class GasTopologyCoordinator {
 			for (var group : groups) fixed[group.cell()] = Math.addExact(fixed[group.cell()], group.occupiedVolumeSvq());
 			occupancy.setFixedCellSvq(fixed);
 			if (domain.granularState != null) occupancy.rebuild(domain.granularState.parcels, domain.granularState.deposits);
-			occupied = occupancy.copySolidSvq();
+			occupied = domain.entityBodyCoupling.addTo(occupancy.copySolidSvq());
 		}
 		domain.ensurePhaseOccupancy();PhaseOccupancyTransport.requireGeometry(domain,domain.phaseOccupancy,occupied);
 		var frame = GasRuntimeGeometry.capture(domain, occupied, domain.gasState.sealedDomainBoundary);
@@ -144,7 +144,7 @@ final class GasTopologyCoordinator {
 		return plan(next,volumeWork,phase,allocation);
 	}
 	private long[] currentOccupied() {
-		return domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
+		return domain.occupiedSolidSvq();
 	}
 	void requireAfterPhaseBatchCurrent(GasTopologyPlan plan, PhaseBatch phase) {
 		if (plan == null || plan.source() != domain.gasState.frame
@@ -174,7 +174,7 @@ final class GasTopologyCoordinator {
 	GasTopologyPlan planAfterCondensedClear(LiquidCellInventory future) {
 		var retained=new GranularCouplingFields(domain.sizeX,domain.sizeY,domain.sizeZ,domain.config.cellSize());
 		if(domain.granularState!=null)retained.rebuild(domain.granularState.parcels,domain.granularState.deposits);
-		return planCells(future,retained.copySolidSvq(),null,VolumeWork.ADIABATIC,null,null);
+		return planCells(future,domain.entityBodyCoupling.addTo(retained.copySolidSvq()),null,VolumeWork.ADIABATIC,null,null);
 	}
 
 	private GasTopologyBlockedException missingGasSuccessor(int node,GasInventory inventory,PhaseBatch edit,

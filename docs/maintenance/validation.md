@@ -488,11 +488,11 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 2026-10-23：统一 `:fabric:compileTestJava --offline --no-daemon` 成功，日志 `build/gas-source/c05-checked-compile.log`。复用该 classpath 的 `M5GasLiquidCouplingValidation --mass-transfer`、`MovingBodyCouplingValidation`、`EntityFluidWiringValidation` 和 `M7RegionChemistryPersistenceValidation` 全部通过，日志分别为 `build/gas-source/checked-0.log` 至 `checked-3.log`。传质覆盖密闭溶解降压、抽空脱气、环境吸收／加热脱气、亚微摩尔恢复和零预算延期恢复。实体覆盖实际 PLIC 排水与静水压力面积分、现有接触冲量／功／热，以及实体身份表存盘。
 
-定义和接触面积入口此前已通过（`M7ChemistryValidation --fast`、`M5GasLiquidCouplingValidation --contacts`）；`FluidRegionLifecycleValidation` 包含慢传质保持热轴活动的场景并通过。实体完整移动占容与压力联立尚未交付。
+定义和接触面积入口此前已通过（`M7ChemistryValidation --fast`、`M5GasLiquidCouplingValidation --contacts`）；`FluidRegionLifecycleValidation` 包含慢传质保持热轴活动的场景并通过。实体完整移动占容与压力联立的后续结果见下节。
 
 `M5GasLiquidCouplingValidation --mass-transfer-cost`：9,216 格、2,592 份库存、480 个接触，20 次预热与20次计时，阶段平均 5.970 ms、每步分配 5,982,168 bytes。日志 `build/gas-source/c05-cost.log`；这是传质阶段成本，完整步生产预算沿既有证据。
 
-传质温度敏感性按 `|ΔT|≤|ΔE|/C` 和 `|ΔH/H|≈|B|ΔT/T²` 评价。以既有机械误差基准 0.025 J、此用例62.5 kg水及4180 J/(kg·K)估算，温度影响约9.57×10⁻⁸ K，293.15 K下Henry相对影响约2.67×10⁻⁹。这是基准误差的量纲上界估算；薄层应按实际较小热容量评价。后续热机械工作包继续处理未结算耗散。
+传质温度敏感性按 `|ΔT|≤|ΔE|/C` 和 `|ΔH/H|≈|B|ΔT/T²` 评价。以既有机械误差基准 0.025 J、此用例62.5 kg水及4180 J/(kg·K)估算，温度影响约9.57×10⁻⁸ K，293.15 K下Henry相对影响约2.67×10⁻⁹。这是基准误差的量纲上界估算；薄层应按实际较小热容量评价。本轮实际热机械场景的温升结果见下节。
 ### B08 创造气体操作
 
 2026-10-23：`:fabric:runCpuValidation -PcpuValidation=containers :fabric:assemble --offline --no-daemon` 成功；containers 用时 286.7 秒，包含气体标准体积 WAL 保存恢复和全部现有故障提交时点的重试检查。日志：`build/gas-source/validation.log`。
@@ -505,3 +505,39 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 
 
+
+### C02 完整实体耦合、热机械收支与 C04 有限换热器
+
+2026-10-23：复用统一编译产物并定点编译本轮修改，完整实体目标表的进入、移动、离开、容量失败源状态不变、超额整份拒绝、一次响应与 checkpoint 后继通过。`FluidDomainStateParityValidation`、`MovingBodyCouplingValidation` 及原生输入适配覆盖这些职责；本轮采用外部规定运动，有限质量动态平移尚未实现。
+
+`build/gas-source/mechanical-thermal.log` 的实际载体温升：
+
+| 场景 | 动能前→后（J） | 载体 ΔU（J） | 最大绝对温升（K） |
+|---|---:|---:|---:|
+| 六步封闭水剪切 | 62.5000005877 → 30.8155968333 | 31.6844011545 | 9.52439620505×10⁻⁷ |
+| 六步封闭液固滑移 | 2.5390625 → 0.0395623303272 | 2.49949917898 | 3.82951270694×10⁻⁸ |
+
+水剪切的局部应力耗散为 5.84410061772×10⁻⁵ J，其余机械交换为 31.6843427135 J，包含压力与粗网格离散交换，按独立观察项记录。`build/gas-source/body-coupling.log` 的持续规定运动覆盖正向、静止、反向、静止四段，累计外功 0.0143319285 J，实际 ΔU=0.416786136 J，最大绝对温升 2.53766927×10⁻⁷ K；每步实际 K/U/W 闭合。ΔU 同时包含初始运动衰减，累计外功与温升分别报告。
+
+`build/gas-source/device-codec.log` 的 `RegionRepositoryAdapterValidation` 通过，包含有限设备 place/remove/drop 的 typed WAL 往返、完整质量与内能、PREPARED/base 丢弃、HEAD target 后世界／物品部分完成恢复、checksum 不符与第三种状态拒绝、不可用成员等待。`build/gas-source/integrated-0.log` 的有限端口换热通过，覆盖实际几何端口载体及联合能量提交。C04 原生游戏安装、查询、拆卸和破坏恢复尚未在游戏内运行；D03 光影视觉仍未验收。
+
+`build/gas-source/solute-freeze-fixed.log` 的 `--solute-freeze` 通过：16 批冻结后 CO₂=1000 保留液相，质量 625000000000 units 不变，ΔU=−1093·2⁻³⁷ J（约 −7.95×10⁻⁹ J），精确对应存储舍入账。气液传质后的持续运行按全气液物种和质量守恒评价。旧 `build/gas-source/solute-freeze.log` 保存调整断言前的失败记录，当时误要求浮点内能逐位不变；修正后按内能与舍入账精确对应判定。
+
+最终原负载热运行见 `build/gas-source/entity-budget-optimized.log`：同一 JVM 先执行原 `controller-gas` 1040 步，再运行原 20+20 实体预算，保留原场景与 40／200 ms 判据。
+
+| 场景 | 完整步均值 / p95 / 最大（ms） | 调用线程分配（MiB/步） | 判定 |
+|---|---:|---:|---|
+| controller-entity | 9.270 / 11.237 / 13.258 | 6.94 | 原逐步40 ms通过 |
+| demo-entity | 107.167 / 139.063 / 159.179 | 118.05 | 原连续三步200 ms通过 |
+
+实际 `artifactSHA256=f56aea4dde326419ddea368f674df7e59381954cecee6384a56553f18fbbe918`。本轮复用产物定点编译，日志构建元数据的旧 revision/source 摘要保留原含义，不能代表本次源码状态。`contact-optimized.log`、`mass-transfer-optimized.log` 亦通过。区域 tick 的完整成本覆盖输入捕获、求解、原生实体响应、有限设备交换及热观察，最后统一记录和 pacing。
+
+此前独立冷启动小控制器首次69.76 ms、诊断44.98 ms（CPU15.625 ms，sample0）超过40 ms；优化前 `hot-2` 的 controller均9.739 ms、最大15.136 ms通过，demo连续三步200 ms失败。这些记录保留为相应运行范围；最终热运行按上述优化后原场景结果判定。
+
+### 公共转移与有限容器交接
+
+2026-10-23：`public-api-compile.log` 编译通过；`public-api-validation.log` 的 `ContainerTransferStoreValidation --public-transfers` 覆盖操作 UUID、actor 实例／代次、回执失败保留 WAL、恢复一次交接、重启及最近回执替换。`bounded-containers.log` 的 M6 12 项通过；`carried-granular-energy.log` 的 M9 `--granular-energy` 通过，包括从加热颗粒提取实际 U 后重新注入。
+
+`container-transfer-complete.log` 前 20 项通过，后续旧操作矩阵在 `cold acid-base precipitation` 失败：1 K 的 Henry 温度外推溢出。该记录保留为失败结果，修复使用原 40 步冷态场景的短入口 `ContainerTransferStoreValidation --cold-acid-base`，不据此声称完整矩阵通过。
+
+温区修复后的 `delivery-final-compile.log` 编译通过，`cold-acid-base-fixed.log` 原 40 步通过；`henry-temperature-range-fixed.log` 与 `henry-registry.log` 分别覆盖范围外库存／内能／源汇保持、无时间积压及定义存档往返。`henry-temperature-range.log` 是新测试误比较快照对象身份的失败记录；修正后精确比较库存条目和源汇内容。`water-contact-fire.log` 与 `entity-fire-wiring.log` 通过实际水／油／混层接触和实体响应适配，原生实体燃烧效果尚待游戏内观察。

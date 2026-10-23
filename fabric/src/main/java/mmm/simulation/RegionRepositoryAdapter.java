@@ -392,8 +392,7 @@ final class RegionRepositoryAdapter {
 		if (!candidate.solverLoaded()) {
 			throw new IOException("Committed container target did not restore a complete private solver");
 		}
-		region.adoptContainerCandidateDomain(
-				candidate.domain(), targetGeneration, manifest.runtime().operatorPaused());
+		region.adoptFiniteDeviceCandidate(candidate, targetGeneration);
 	}
 
 	/**

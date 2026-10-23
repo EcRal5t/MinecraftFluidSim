@@ -39,6 +39,8 @@ final class MinecraftRegionTick {
 	private final FluidSnapshotPublisher snapshots;
 	private final WorldCapabilityProfile profile;
 	private final int maximumPhaseOperationsPerStep;
+	private java.util.function.BiConsumer<ServerLevel,FluidRegion> finiteDeviceExchange = (level,region) -> { };
+	void finiteDeviceExchange(java.util.function.BiConsumer<ServerLevel,FluidRegion> exchange) { finiteDeviceExchange=exchange; }
 
 	MinecraftRegionTick(
 			RegionApplicationService application,
@@ -60,6 +62,7 @@ final class MinecraftRegionTick {
 	void finishServerTick() { inputs.finishServerTick(); }
 
 	void tickAvailable(ServerLevel level, FluidRegion region) {
+		inputs.discardEntityResponse(region);
 		long tick = region.incrementTick();
 		boolean collisionsChanged = false;
 		if (inputs.boundariesDue(tick)) {
@@ -69,12 +72,21 @@ final class MinecraftRegionTick {
 				return;
 			}
 		}
-		MinecraftRegionInputs.TickInputs frozen = inputs.captureTick(level, region, tick,
-				profile.hasCapability(WorldCapability.THERMAL));
+		long stepStarted = System.nanoTime();
+		MinecraftRegionInputs.TickInputs frozen;
+		try {
+			frozen = inputs.captureTick(level, region, tick, profile.hasCapability(WorldCapability.THERMAL));
+		} catch (RuntimeException failure) {
+			inputs.discardEntityResponse(region);
+			blockStepFailure(level, region, new RegionRepository.StateCaptureRejectedException(
+					"Complete entity and region tick inputs could not be captured: " + failure.getMessage(), failure));
+			return;
+		}
 		int affectedEntities = frozen.affectedEntities();
 		RegionRuntime tickRuntime = frozen.runtime();
 		RegionTickUseCase.Plan tickPlan = useCase.plan(tickRuntime);
 		if (tickPlan.axis() == RegionTickUseCase.Axis.NONE) {
+			inputs.discardEntityResponse(region);
 			if (collisionsChanged) snapshots.sendToLevel(level, region);
 			return;
 		}
@@ -83,7 +95,7 @@ final class MinecraftRegionTick {
 				? region.domain().thermalAudit() : null;
 		FluidDomain.ThermalAxisStats completedThermalAxis = null;
 		GranularDepositDynamics.Stats completedGranularTransition = NO_GRANULAR_TRANSITION;
-		boolean autoPause = false;
+		FluidDomain.StepStats completedMotion = null;
 		try {
 			boolean phaseChange = profile.hasCapability(WorldCapability.PHASECHANGE);
 			int phaseBudget = phaseChange ? maximumPhaseOperationsPerStep : 0;
@@ -94,9 +106,8 @@ final class MinecraftRegionTick {
 								phaseChange, phaseBudget, false));
 				if (!outcome.result().accepted()) throw new IllegalStateException(
 						"Motion step application rejected synchronous region state: " + outcome.result().status());
-				region.recordStep(outcome.result().stats(), outcome.elapsedMilliseconds());
-				applyRuntime(region, tickRuntime, outcome.runtime(), outcome.elapsedMilliseconds());
-				autoPause = outcome.autoPause();
+				inputs.commitEntityResponse(level, region, outcome.result().movingBodyCoupling());
+				completedMotion = outcome.result().stats();
 				completedThermalAxis = outcome.result().stats().thermalAxis();
 				completedGranularTransition = outcome.result().stats().granularTransition();
 				MovingBodyFluidCoupling.Result coupling = outcome.result().movingBodyCoupling();
@@ -104,24 +115,35 @@ final class MinecraftRegionTick {
 						coupling.impulseXKilogramMetresPerSecond(), coupling.impulseYKilogramMetresPerSecond(),
 						coupling.impulseZKilogramMetresPerSecond()));
 			} else {
+				inputs.discardEntityResponse(region);
 				RegionTickUseCase.ThermalOutcome outcome = useCase.executeThermal(tickPlan,
 						new ThermalStepCommand(region.id(), region.solverGeneration(), phaseChange, phaseBudget));
 				if (!outcome.result().accepted()) throw new IllegalStateException(
 						"Thermal step application rejected synchronous region state: " + outcome.result().status());
-				region.recordThermalStep(outcome.elapsedMilliseconds());
-				applyRuntime(region, tickRuntime, outcome.runtime(), outcome.elapsedMilliseconds());
-				autoPause = outcome.autoPause();
 				completedThermalAxis = outcome.result().stats();
 			}
 		} catch (RuntimeException failure) {
+			inputs.discardEntityResponse(region);
 			if (!blockStepFailure(level, region, failure)) throw failure;
 			return;
 		}
 		boolean thermalRequiresMotion = false;
 		if (profile.hasCapability(WorldCapability.THERMAL)) {
+			try { finiteDeviceExchange.accept(level,region); }
+			catch (RuntimeException failure) {
+				region.blockThermal("有限设备换热："+failure.getMessage());
+				MmmMod.LOGGER.error("Region {} finite device exchange failed",region.id(),failure);
+				return;
+			}
 			thermalRequiresMotion = observeThermalStep(region, thermalBefore, motionStepDue,
 					completedThermalAxis, completedGranularTransition);
 		}
+		double elapsedMilliseconds = (System.nanoTime() - stepStarted) / 1_000_000.0;
+		if (motionStepDue) region.recordStep(completedMotion, elapsedMilliseconds);
+		else region.recordThermalStep(elapsedMilliseconds);
+		var pacing = useCase.paceAfterAcceptedStep(tickRuntime, elapsedMilliseconds);
+		applyRuntime(region, tickRuntime, pacing.runtime(), elapsedMilliseconds);
+		boolean autoPause = pacing.autoPause();
 		FluidDomain.StepStats stats = region.lastStats();
 		float residualLimit = Math.max(1.0E-5F, region.domain().config().pressureTolerance() * 4.0F);
 		boolean hydrostaticCandidate = !collisionsChanged && affectedEntities == 0 && !thermalRequiresMotion

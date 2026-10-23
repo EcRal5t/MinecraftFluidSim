@@ -29,7 +29,7 @@ final class GasLifecyclePlanner {
 		}
 		domain.domainFlowFields.ensureInventoryGrid();
 		GasRuntimeGeometry sourceGeometry = domain.gasState.frame == null ? null : GasRuntimeGeometry.capture(domain,
-				domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq(),
+				domain.occupiedSolidSvq(),
 				domain.gasState.sealedDomainBoundary);
 		if (!domain.gasState.network.auditClosed()) throw new IllegalStateException("Gas inventory audit is open");
 		GasAuditLedger removed = domain.gasState.network.sealedInventory();
@@ -55,7 +55,7 @@ final class GasLifecyclePlanner {
 		if (plan == null || domain.gasState.network.nodeCount() != plan.nodeCount()
 				|| (domain.gasState.frame == null) != (plan.sourceGeometry() == null)
 				|| plan.sourceGeometry() != null && !plan.sourceGeometry().matchesCarrierGeometry(domain,
-						domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq())
+						domain.occupiedSolidSvq())
 				|| !domain.gasState.network.sealedInventory().equals(plan.removed())) {
 			throw new IllegalStateException("Sealed gas inventory changed after vent planning");
 		}

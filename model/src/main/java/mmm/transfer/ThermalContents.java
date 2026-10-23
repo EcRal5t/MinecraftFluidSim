@@ -20,7 +20,7 @@ public record ThermalContents(
 	public static final int MAX_ENCODED_LENGTH = 256;
 	private static final String ENCODING_TAG = "mmm:thermal-contents";
 
-	public enum UnderlyingKind { PURE_WATER, MATERIAL, CHEMICAL }
+	public enum UnderlyingKind { PURE_WATER, MATERIAL, CHEMICAL, GRANULAR }
 
 	public ThermalContents {
 		if (registryFingerprint == null || !registryFingerprint.matches("[0-9a-f]{64}")
@@ -57,6 +57,11 @@ public record ThermalContents(
 	) {
 		if (contents == null) throw new IllegalArgumentException("Thermal chemical contents are missing");
 		return create(registryFingerprint, encoded(UnderlyingKind.CHEMICAL, contents.encode()), internalEnergy);
+	}
+
+	public static ThermalContents forGranular(String registryFingerprint, GranularContents contents, double internalEnergy) {
+		if (contents == null) throw new IllegalArgumentException("Thermal granular contents are missing");
+		return create(registryFingerprint, encoded(UnderlyingKind.GRANULAR, contents.encode()), internalEnergy);
 	}
 
 	public void validateRegistryFingerprint(String authoritativeFingerprint) {

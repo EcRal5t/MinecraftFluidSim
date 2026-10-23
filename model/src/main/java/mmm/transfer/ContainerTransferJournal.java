@@ -220,8 +220,9 @@ public record ContainerTransferJournal(
 						fingerprint, FluidMixture.decode(contents), thermal.internalEnergy());
 				case CHEMICAL_BUCKET -> ThermalContents.forChemical(
 						fingerprint, ChemicalContents.decode(contents), thermal.internalEnergy());
-				case BUCKET, EMPTY_MATERIAL_BUCKET, EMPTY_GRANULAR_CONTAINER, GRANULAR_CONTAINER, CREATIVE_SOURCE ->
-						throw new IllegalArgumentException("Non-liquid WAL item carries thermal contents");
+				case GRANULAR_CONTAINER -> ThermalContents.forGranular(fingerprint,GranularContents.decode(contents),thermal.internalEnergy());
+				case BUCKET, EMPTY_MATERIAL_BUCKET, EMPTY_GRANULAR_CONTAINER, CREATIVE_SOURCE ->
+						throw new IllegalArgumentException("Empty WAL item carries thermal contents");
 			};
 			if (expected.underlyingKind() != thermal.underlyingKind()
 					|| !expected.underlyingHash().equals(thermal.underlyingHash())) {

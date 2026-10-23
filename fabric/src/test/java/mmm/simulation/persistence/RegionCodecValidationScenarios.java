@@ -110,9 +110,70 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 
 	static void validateThermalCodec() throws Exception {
 		validateGasPieceCodec();
+		validateFiniteDeviceJournal();
 		for(var origin:List.of(new net.minecraft.core.BlockPos(15,16,15),new net.minecraft.core.BlockPos(0,16,0),
 				new net.minecraft.core.BlockPos(16_777_213,16,16_777_213),new net.minecraft.core.BlockPos(-16_777_219,16,-16_777_219)))
 			validateThermalCodec(origin);
+	}
+
+	private static void validateFiniteDeviceJournal() throws Exception {
+		String fingerprint = "b".repeat(64);
+		var device = new FiniteThermalDeviceState("mmm:finite_heat_exchanger", new UUID(307, 311).toString(),
+				"mmm:finite_heat_exchanger", new FiniteThermalBodyState(7, fingerprint,
+						"mmm:thermal/copper", mmm.units.Mass.fromKilograms(16), Math.nextUp(152_345.0)));
+		String body = mmm.thermal.FiniteThermalDeviceItemCodec.encode(device);
+		Path root = Files.createTempDirectory(Path.of("."), "finite-device-wal-");
+		var store = new FiniteDeviceJournalStore(root);
+		for (int operation = 0; operation < 3; operation++) {
+			boolean placing = operation == 0, drop = operation == 2;
+			var prepared = new FiniteDeviceJournalStore.Journal(new UUID(401, operation), new UUID(409, 419),
+					"minecraft:overworld", new net.minecraft.core.BlockPos(-17, 64, 31).asLong(), 4, 5, -1,
+					mmm.recovery.CrossDomainRecovery.JournalPhase.PREPARED, placing, drop,
+					new UUID(421, 431), operation == 1, new UUID(433, operation), placing ? body : "", body, fingerprint);
+			store.write(prepared);
+			require(store.discover().equals(List.of(prepared)), "Prepared device WAL changed place/remove/drop identity");
+			var committed = prepared.committed(0x6789);
+			store.write(committed);
+			var decoded = store.discover().getFirst();
+			require(decoded.equals(committed)
+					&& mmm.thermal.FiniteThermalDeviceItemCodec.decode(decoded.bodyContents()).equals(device),
+					"Committed device WAL changed checksum or complete body inventory");
+			var base = deviceRecoveryDecision(prepared, 4, 0,
+					mmm.recovery.CrossDomainRecovery.ExternalTruth.BEFORE, mmm.recovery.CrossDomainRecovery.ExternalTruth.BEFORE);
+			require(base.outcome() == mmm.recovery.CrossDomainRecovery.Outcome.DISCARD_UNCOMMITTED,
+					"Uncommitted device WAL did not preserve world and item before states");
+			for (int alreadyApplied = 0; alreadyApplied < 2; alreadyApplied++) {
+				var partial = deviceRecoveryDecision(decoded, 5, 0x6789,
+						alreadyApplied == 0 ? mmm.recovery.CrossDomainRecovery.ExternalTruth.AFTER : mmm.recovery.CrossDomainRecovery.ExternalTruth.BEFORE,
+						alreadyApplied == 1 ? mmm.recovery.CrossDomainRecovery.ExternalTruth.AFTER : mmm.recovery.CrossDomainRecovery.ExternalTruth.BEFORE);
+				require(partial.outcome() == mmm.recovery.CrossDomainRecovery.Outcome.CONVERGE_AFTER
+						&& partial.afterMembers().equals(List.of(alreadyApplied))
+						&& partial.beforeMembers().equals(List.of(1 - alreadyApplied)),
+						"Device recovery did not resume only the missing world/item member");
+			}
+			require(deviceRecoveryDecision(decoded, 5, 0x6789, mmm.recovery.CrossDomainRecovery.ExternalTruth.THIRD,
+					mmm.recovery.CrossDomainRecovery.ExternalTruth.BEFORE).reason()
+					== mmm.recovery.CrossDomainRecovery.Reason.TARGET_EXTERNAL_THIRD,
+					"Device recovery accepted a foreign world or item state");
+			require(deviceRecoveryDecision(decoded, 5, 0x6789, mmm.recovery.CrossDomainRecovery.ExternalTruth.AFTER,
+					mmm.recovery.CrossDomainRecovery.ExternalTruth.UNAVAILABLE).outcome()
+					== mmm.recovery.CrossDomainRecovery.Outcome.WAIT_UNAVAILABLE,
+					"Device recovery discarded an unavailable player or world member");
+			require(deviceRecoveryDecision(decoded, 5, 0x6790, mmm.recovery.CrossDomainRecovery.ExternalTruth.AFTER,
+					mmm.recovery.CrossDomainRecovery.ExternalTruth.AFTER).reason()
+					== mmm.recovery.CrossDomainRecovery.Reason.TARGET_CHECKSUM_MISMATCH,
+					"Device recovery accepted a different committed HEAD");
+			store.delete(decoded.operationId());
+			require(store.discover().isEmpty(), "Completed device WAL was retained");
+		}
+	}
+
+	private static mmm.recovery.CrossDomainRecovery.Decision deviceRecoveryDecision(
+			FiniteDeviceJournalStore.Journal journal, long head, long checksum,
+			mmm.recovery.CrossDomainRecovery.ExternalTruth world, mmm.recovery.CrossDomainRecovery.ExternalTruth item) {
+		return mmm.recovery.CrossDomainRecovery.decide(new mmm.recovery.CrossDomainRecovery.Boundary(
+				head, checksum, journal.baseGeneration(), journal.targetGeneration(), journal.targetChecksum() >= 0,
+				journal.targetChecksum(), journal.phase(), false), List.of(world, item));
 	}
 
 	private static void validateThermalCodec(net.minecraft.core.BlockPos origin) throws Exception {

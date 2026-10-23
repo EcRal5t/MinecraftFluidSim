@@ -8,6 +8,14 @@ public final class M9ThermalValidation {
 	private M9ThermalValidation() { }
 
 	public static void main(String[] args) throws Exception {
+		if (args.length == 1 && args[0].equals("--solute-freeze")) {
+			ThermalPhaseValidationScenarios.freezingRetainsDissolvedGas();
+			System.out.println("Solvent freezing retains dissolved gas passed"); return;
+		}
+		if (args.length == 1 && args[0].equals("--device-ports")) {
+			ThermalTransportValidationScenarios.productionFixedBoundaryFieldAuditsExchange();
+			System.out.println("Physical finite device port exchange passed"); return;
+		}
 		if (args.length == 1 && args[0].equals("--assignment")) {
 			ThermalOwnerStoreValidation.validate();
 			ThermalContactValidation.validate();

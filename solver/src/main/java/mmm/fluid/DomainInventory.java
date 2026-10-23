@@ -3,7 +3,6 @@ package mmm.fluid;
 import java.util.List;
 import mmm.units.SignedDyadic;
 import mmm.chemistry.ChemicalTransferLedger;
-import java.util.Arrays;
 import mmm.thermal.CoherentPhaseStore;
 import static mmm.fluid.FluidDomain.*;
 

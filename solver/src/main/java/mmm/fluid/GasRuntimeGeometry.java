@@ -27,7 +27,7 @@ final class GasRuntimeGeometry {
 				||futureOccupancy.cellCount()!=domain.cellCount)throw new IllegalArgumentException("Incomplete phase geometry candidate");
 		cellSize=domain.config.cellSize();sealedExterior=sealed;sourceCells=domain.liquidCells.snapshot();targetCells=future.snapshot();
 		sourceOccupancy=domain.phaseOccupancy;occupancy=futureOccupancy;occupiedSvq=occupied.clone();
-		sourceOccupiedSvq=domain.granularCoupling==null?new long[domain.cellCount]:domain.granularCoupling.copySolidSvq();
+		sourceOccupiedSvq=domain.occupiedSolidSvq();
 		sourceFixedGeometry=domain.geometry.cutCells.snapshot();
 		byte[] masks=futureMasks==null?sourceFixedGeometry.masksView():futureMasks;
 		if(masks.length!=domain.cellCount)throw new IllegalArgumentException("Future phase collision shape differs");

@@ -190,6 +190,7 @@ final class PressureSystem {
         Arrays.fill(result,0);
         addDivergence(predictedVelocity,result,-domain.config.density()/duration);
         granular.addDivergence(predictedVelocity,faces.faceCount,result,-domain.config.density()/duration);
+        domain.entityBodyCoupling.addDivergence(result,-domain.config.density()/duration);
         addStorageRhs(result);
     }
     /** The inertia/drag inverse used here is also used by prediction and final velocity publication. */
@@ -250,6 +251,7 @@ final class PressureSystem {
 		}
 		seedLiquidPressures(referencePressure);
 		granular.prepare(dt,pressureDatum);
+        domain.entityBodyCoupling.preparePressure(pressureDatum);
         // Constitutive resistance reads source slip before any known pressure impulse.
         drag.prepare(dt);preparePrediction(dt);
 		retainCoupledGasRows();
@@ -305,6 +307,7 @@ final class PressureSystem {
         for(int i=0;i<jointSize;i++)predictedVelocity[i]=freeVelocity[i]+dt*jointResponse[i];
         drag.applyResponse(predictedVelocity,predictedVelocity);
         publishVelocity(predictedVelocity);
+        domain.entityBodyCoupling.finishPressure(pressureLoad,dt);
         for(int f=0;f<faces.faceCount;f++){
             int axis=faces.axis[f],local=faces.localFace[f];
             float[] velocity=axis==0?domain.mac.velocityX:axis==1?domain.mac.velocityY:domain.mac.velocityZ;
@@ -337,6 +340,7 @@ final class PressureSystem {
 				if(faces.rowAt(i)>=domain.cellCount&&faces.coefficientAt(i)!=0)
 					gasPressureUnknown[faces.rowAt(i)-domain.cellCount]=true;
 		granular.markGasPressureContacts(gasPressureUnknown);
+        domain.entityBodyCoupling.markGasRows(gasPressureUnknown);
 		gasUnknownCount=0;
 		for(int node=1;node<=gasNodeCount;node++)if(gasPressureUnknown[node])
 			gasUnknownNodes[gasUnknownCount++]=node;

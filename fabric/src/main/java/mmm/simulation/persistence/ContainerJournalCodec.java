@@ -58,6 +58,10 @@ root.putInt("DispenserX", dispenser.blockX());
 root.putInt("DispenserY", dispenser.blockY());
 root.putInt("DispenserZ", dispenser.blockZ());
 root.putInt("DispenserSlot", dispenser.slot());
+if (dispenser.inventoryId()!=null) {
+root.putString("InventoryId",dispenser.inventoryId().toString());
+root.putLong("ActorGeneration",dispenser.generation());
+}
 }
 }
 
@@ -144,10 +148,12 @@ requireType(root, "DispenserX", Tag.TAG_INT);
 requireType(root, "DispenserY", Tag.TAG_INT);
 requireType(root, "DispenserZ", Tag.TAG_INT);
 requireType(root, "DispenserSlot", Tag.TAG_INT);
-actor = ContainerTransferActor.dispenser(
+actor = new ContainerTransferActor.Dispenser(
 root.getStringOr("ActorDimension", ""),
 root.getIntOr("DispenserX", 0), root.getIntOr("DispenserY", 0), root.getIntOr("DispenserZ", 0),
-root.getIntOr("DispenserSlot", -1)
+root.getIntOr("DispenserSlot", -1),
+root.contains("InventoryId")?UUID.fromString(root.getStringOr("InventoryId","")):null,
+root.getLongOr("ActorGeneration",0)
 );
 }
 default -> throw new IOException("Unknown actor type " + actorType);
@@ -306,6 +312,9 @@ allowed.add("DispenserX");
 allowed.add("DispenserY");
 allowed.add("DispenserZ");
 allowed.add("DispenserSlot");
+if (((ContainerTransferActor.Dispenser)journal.actor()).inventoryId()!=null) {
+allowed.add("InventoryId"); allowed.add("ActorGeneration");
+}
 }
 }
 addFingerprintFields(allowed, "Before", journal.beforeItem(), layout);
@@ -369,10 +378,7 @@ return;
 }
 
 if (journal.resourceKind() == ContainerTransferJournal.ResourceKind.GRANULAR_SVQ) {
-if (journal.thermalTransfer() != null || journal.beforeItem().thermalContents() != null
-|| journal.afterItem().thermalContents() != null) {
-throw new IOException("Granular WAL must not carry thermal liquid truth");
-}
+validateThermalTransferShape(journal);
 validateGranularTransferShape(journal);
 return;
 }
@@ -422,7 +428,7 @@ journal.validateThermalRegistry(transfer.registryFingerprint());
 } catch (RuntimeException invalidThermal) {
 throw new IOException("Container transfer thermal identity is invalid", invalidThermal);
 }
-if (creativeSourceInsertion(journal, false)) return;
+if (creativeSourceInsertion(journal, journal.resourceKind()==ContainerTransferJournal.ResourceKind.GRANULAR_SVQ)) return;
 if (journal.phase() == ContainerTransferJournal.Phase.PREPARED) {
 if (journal.operation() == ContainerTransferJournal.Operation.INSERT && !beforeThermal) {
 throw new IOException("Prepared thermal insertion has no source item energy");
@@ -467,8 +473,8 @@ long after = granularVolume(journal.afterItem());
 boolean prepared = journal.phase() == ContainerTransferJournal.Phase.PREPARED;
 boolean valid;
 if (journal.operation() == ContainerTransferJournal.Operation.INSERT) {
-valid = creativeSourceInsertion(journal, true) || before == amount
-&& (prepared || after == 0L || journal.afterItem().equals(journal.beforeItem()));
+valid = creativeSourceInsertion(journal, true) || before >= amount && before>0
+&& (prepared || after == before-amount || journal.afterItem().equals(journal.beforeItem()));
 } else {
 valid = before == 0L && (prepared || after == amount);
 }

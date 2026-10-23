@@ -372,8 +372,8 @@ final class DomainCollision {
 	}
 	float effectiveOpenCellVolume(int cell) {
 		float geometric = domain.geometry.cutCells.openCellVolume(cell);
-		return domain.granularCoupling == null || domain.granularCoupling.totalSolidSvq() == 0 ? geometric
-				: domain.granularCoupling.effectiveOpenCellVolume(cell, geometric);
+		long granular = domain.granularCoupling == null ? 0 : domain.granularCoupling.solidSvq(cell);
+        return (float) Math.max(0, geometric - mmm.units.SignedDyadic.of(Math.addExact(granular, domain.entityBodyCoupling.occupied(cell)), -24).toDouble());
 	}
 	public long totalMassUnits() { return domain.metrics.totalMassUnits(); }
 	public double totalMass() { return domain.metrics.totalMass(); }

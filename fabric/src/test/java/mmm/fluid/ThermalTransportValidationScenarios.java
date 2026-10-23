@@ -203,6 +203,7 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		}
 	}
 	static void granularEnergyColumnTransactions() {
+		liquidShearReportsActualThermalResponse();
 		liquidSolidSlipConservesActualMechanicalAndInternalEnergy();
 		granularRepresentationTransfersMechanicalHeat();
 		granularExternalExtractionRounding();
@@ -278,16 +279,23 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 				"granular thermal domain fixture could not insert its parcel");
 		ThermalRegistry productionThermal = granularThermalRegistry(productionLiquids, granular);
 		domain.bindThermal(productionThermal, productionLiquids, 300.0);
+		var heatedCells = new java.util.TreeSet<Integer>();
+		for (int i = 0; i < domain.granularState.parcels.count(); i++)
+			heatedCells.add(domain.domainStep.granularParcelCell(domain.granularState.parcels.parcel(i)));
+		for (int cell : heatedCells) domain.setThermalTemperatureInCell(cell % 8, cell / 8 % 8, cell / 64, 315.0);
 		SignedDyadic insertedEnergy = domain.exactInternalEnergy();
+		var insertionRoundoff = domain.thermalAudit().roundoffResidual();
 		FluidDomain.GranularExtraction extracted = domain.tryExtractExactGranular(
 				4, 6, 4, parcelSvq, 3, false);
 		require(extracted.transferred() && close(extracted.internalEnergy(), insertedEnergy.toDouble())
 				&& domain.exactInternalEnergy().equals(SignedDyadic.ZERO)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"granular extraction did not move its raw energy to the external sink");
-		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3).inserted()
-				&& domain.exactInternalEnergy().equals(insertedEnergy),
-				"granular insertion did not restore its explicit-temperature source energy");
+		require(domain.tryInsertExactGranular(4, 6, 4, bucket, 3, false, extracted.internalEnergy()).inserted()
+				&& domain.exactInternalEnergy().subtract(insertedEnergy).equals(
+						domain.thermalAudit().roundoffResidual().subtract(insertionRoundoff))
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"granular insertion did not restore its actual carried energy");
 		for (int step = 0; step < 180 && domain.granularDepositCellCount() == 0; step++) {
 			var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
 					step, domain.captureAuthoritativeState(), List.of(), false, 0));
@@ -302,6 +310,50 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		require(domain.exactInternalEnergy().equals(SignedDyadic.ZERO)
 				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 				"granular clear did not move all active/deposit energy to the escaped sink");
+	}
+
+	/** Local stress heat and the full coarse-grid exchange are reported separately at actual water heat capacity. */
+	private static void liquidShearReportsActualThermalResponse() {
+		try {
+			var production = mmm.simulation.FullCapabilityTestFixture.load();
+			var domain = new FluidDomain(4, 4, 4, new FluidSolverConfig(.5F, 1000, 0, .025F, 160, 1e-5F, .002F));
+			domain.sealDomainBoundary();
+			var liquids = mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(domain, production.liquids());
+			var volume = new float[domain.cellCount]; Arrays.fill(volume, 1);
+			var materials = new int[domain.cellCount]; Arrays.fill(materials, liquids.handle(BuiltinFluidMaterials.WATER.id()));
+			domain.setVolumes(volume, materials);
+			mmm.simulation.FullCapabilityTestFixture.bindFull(domain, production, 293.15, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+			domain.domainFlowFields.ensureVelocityGrid();
+			for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) for (int x = 1; x < 4; x++)
+				domain.mac.velocityX[domain.domainFlowFields.xFaceIndex(x, y, z)] =
+						(float) (.25 * Math.sin(Math.PI * x / 4) * Math.cos(Math.PI * (y + .5) / 4));
+			domain.bodyForceStage.enforceSolidFaceVelocities(); domain.cellMacStage.publishMomentum();
+			var initialU = domain.exactInternalEnergy();
+			double initialK = liquidSolidKineticEnergy(domain), physicalViscousHeat = 0;
+			for (int step = 0; step < 6; step++) {
+				var candidate = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(
+						step, domain.captureAuthoritativeState(), List.of(), false, 0, true));
+				physicalViscousHeat += candidate.stats().viscosity().dissipatedJoules();
+				domain = candidate.claimPreparedCpuDomain();
+			}
+			double heat = domain.exactInternalEnergy().subtract(initialU).toDouble();
+			double finalK = liquidSolidKineticEnergy(domain), deltaT = maximumLiquidTemperatureChange(domain, 293.15);
+			require(physicalViscousHeat > 0 && Double.isFinite(deltaT)
+					&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+					"Closed liquid shear did not publish finite stress heat and carrier temperature");
+			System.out.printf("  closed water shear: K=%.12g -> %.12g J, localViscousHeat=%.12g J, dU=%.12g J, otherExchange=%.12g J, maxAbsDeltaT=%.12g K%n",
+					initialK, finalK, physicalViscousHeat, heat, heat - physicalViscousHeat, deltaT);
+		} catch (Exception failure) { throw new AssertionError("Closed liquid shear thermal response failed", failure); }
+	}
+
+	private static double maximumLiquidTemperatureChange(FluidDomain domain, double initialTemperature) {
+		double maximum = 0;
+		for (var stock : domain.liquidCells.physicalStocks()) {
+			int cell = stock.key().cell();
+			maximum = Math.max(maximum, Math.abs(domain.thermalTemperatureInCell(
+					cell % domain.sizeX, cell / domain.sizeX % domain.sizeY, cell / (domain.sizeX * domain.sizeY)) - initialTemperature));
+		}
+		return maximum;
 	}
 
 	/** The complete pressure/drag/transport commit carries slip loss into actual inventory U. */
@@ -352,6 +404,9 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 			}
 			require(domain.exactInternalEnergy().subtract(initialU).toDouble()>.01&&liquidSolidKineticEnergy(domain)<initialK,
 					"Full liquid/solid slip did not turn relative motion into inventory heat");
+			System.out.printf("  closed liquid/solid slip: K=%.12g -> %.12g J, dU=%.12g J, maxAbsDeltaT=%.12g K%n",
+					initialK, liquidSolidKineticEnergy(domain), domain.exactInternalEnergy().subtract(initialU).toDouble(),
+					maximumLiquidTemperatureChange(domain, 293.15));
 		}catch(Exception failure){throw new AssertionError("Full liquid/solid mechanical heat validation failed",failure);}
 	}
 	private static double liquidSolidKineticEnergy(FluidDomain domain){
@@ -1073,7 +1128,13 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 		require(activity.state()==mmm.simulation.ThermalActivity.State.ACTIVE,"Gas wall heat exchange let thermal scheduling sleep");
 		var body=new FiniteThermalBodyState(1,registry.fingerprint(),wall.id(),mmm.units.Mass.fromKilograms(10),
 				new ThermalStateFunction(registry).internalEnergyAtTemperature(registry.materialHandle(wall.id()),10,Map.of(),400));
-		var contacts=domain.finiteThermalContacts(List.of(new FluidDomain.ThermalContactRequest(0,0,0,0,2)));
+		var firstPort = new FluidDomain.ThermalPortRequest(0, 0, 0, 0, .01, 20, .01);
+		var contacts = domain.finiteThermalPortContacts(List.of(firstPort));
+		var twoFaces = domain.finiteThermalPortContacts(List.of(firstPort,
+				new FluidDomain.ThermalPortRequest(0, 0, 0, 2, .01, 20, .01)));
+		require(contacts.size() == 1 && twoFaces.size() == 1
+				&& Math.abs(twoFaces.getFirst().conductanceWPerK() - 2 * contacts.getFirst().conductanceWPerK()) < 1e-12,
+				"Finite device faces did not merge their physical conductance in the same cell");
 		var exchange=FiniteThermalExchange.plan(registry,body,contacts,.05,ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
 		var before=domain.exactInternalEnergy();temperature=domain.gasNodeTemperatureK(1);
 		var delta=exchange.contacts().getFirst().internalEnergyDeltaJ();
@@ -1180,4 +1241,3 @@ abstract class ThermalTransportValidationScenarios extends ThermalValidationSupp
 	}
 
 }
-

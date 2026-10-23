@@ -47,6 +47,47 @@ public record GranularContents(String registryFingerprint, long svqPerCubicMeter
 		groups = List.copyOf(canonical);
 	}
 
+	/** Exact complementary split of volume, integer mass, species and composition residual. */
+	public Split split(long requestedSvq, ChemicalRegistry chemistry) {
+		long total = totalSolidVolumeSvq();
+		if (requestedSvq <= 0 || requestedSvq > total) throw new IllegalArgumentException("Invalid granular selection");
+		if (requestedSvq == total) return new Split(this, null);
+		double[] weights = groups.stream().mapToDouble(Group::solidVolumeSvq).toArray();
+		int[] ids = new int[weights.length];
+		for (int i = 0; i < ids.length; i++) ids[i] = i;
+		long[] selected = mmm.chemistry.BinaryVolumeAllocator.allocate(requestedSvq, weights, ids);
+		var taken = new ArrayList<Group>();
+		var retained = new ArrayList<Group>();
+		for (int i = 0; i < groups.size(); i++) {
+			var group = groups.get(i);
+			long volume = selected[i];
+			if (volume == 0) { retained.add(group); continue; }
+			if (volume == group.solidVolumeSvq()) { taken.add(group); continue; }
+			long mass = mmm.units.Mass.portion(group.massUnits(), volume, group.solidVolumeSvq());
+			var amounts = new TreeMap<String, Long>();
+			var rest = new TreeMap<String, Long>();
+			for (var entry : group.composition()) {
+				long count = mmm.units.Mass.portion(entry.amountQuanta(), mass, group.massUnits());
+				if (count > 0) amounts.put(entry.speciesId(), count);
+				if (entry.amountQuanta() > count) rest.put(entry.speciesId(), entry.amountQuanta() - count);
+			}
+			taken.add(splitGroup(group, volume, mass, amounts, chemistry));
+			retained.add(splitGroup(group, group.solidVolumeSvq() - volume, group.massUnits() - mass, rest, chemistry));
+		}
+		return new Split(new GranularContents(registryFingerprint, svqPerCubicMeter, taken),
+				new GranularContents(registryFingerprint, svqPerCubicMeter, retained));
+	}
+
+	private static Group splitGroup(Group source, long volume, long mass, Map<String, Long> amounts, ChemicalRegistry chemistry) {
+		if (!source.reactive()) return new Group(source.materialId(), volume, mass);
+		if (amounts.isEmpty()) throw new IllegalArgumentException("Granular selection is below composition resolution");
+		long chemicalMass = SolidCompositionRecord.fromStableAmounts(chemistry, amounts, 0).speciesMassUnits(chemistry);
+		var species = amounts.entrySet().stream().map(e -> new SpeciesAmount(e.getKey(), e.getValue())).toList();
+		return new Group(source.materialId(), volume, mass, Math.subtractExact(mass, chemicalMass), species);
+	}
+
+	public record Split(GranularContents inserted, GranularContents remaining) { }
+
 	public long totalSolidVolumeSvq() {
 		long result = 0L; for (Group group : groups) result = Math.addExact(result, group.solidVolumeSvq()); return result;
 	}

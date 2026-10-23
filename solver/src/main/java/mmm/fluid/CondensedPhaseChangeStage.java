@@ -128,7 +128,7 @@ final class CondensedPhaseChangeStage {
 			}}
 			if(operations==0)return new FluidDomain.ThermalPhaseStats(0,0,0,0);
 			provisional=store.planEdits(quantityEdits(futureCells));
-			occupied=phaseGranularOccupancy.copySolidSvq();
+			occupied=domain.entityBodyCoupling.addTo(phaseGranularOccupancy.copySolidSvq());
 			for(var group:futureGroups.values())occupied[group.cell()]=Math.addExact(occupied[group.cell()],group.occupiedVolumeSvq());
 			try{displacement.prepareDisplacement(occupied,provisional.future());break;}
 			catch(ConservativeLiquidFlux.CapacityUnavailable unavailable){
@@ -197,11 +197,15 @@ final class CondensedPhaseChangeStage {
 		var coherent=groupIndex<0?null:thermal.coherentPhases().group(groupIndex);
 		if(freezing&&sources.isEmpty()||!freezing&&coherent==null) return null;
 		long batchMass=Mass.exactUnits(transition.massKgPerBatch().numerator(),transition.massKgPerBatch().denominator());
-		long mass=freezing?sources.stream().mapToLong(LiquidCellInventory.Stock::massUnits).reduce(0,Math::addExact):coherent.massUnits();
+		Set<String> carrierSpecies=freezing?carrierSpecies(liquid):Set.of();
+        long mass=freezing?sources.stream().mapToLong(stock->freezableMass(stock,carrierSpecies)).reduce(0,Math::addExact):coherent.massUnits();
+        if(mass==0)return null;
+        boolean retainsSolutes=freezing&&sources.stream().anyMatch(stock->freezableMass(stock,carrierSpecies)<stock.massUnits());
 		SignedDyadic volume=SignedDyadic.ZERO;
 		if(freezing) for(var stock:sources) volume=volume.add(stock.volume());else volume=normalized(coherent.occupiedVolumeSvq());
 		long sourceVolume=freezing?transition.upperVolumeSvqPerBatch():transition.lowerVolumeSvqPerBatch();
 		long high=Math.min(maximum,Math.min(mass/batchMass,volumeBatches(volume,normalized(sourceVolume),maximum)));
+        if(retainsSolutes&&normalized(sourceVolume).multiply(SignedDyadic.of(high)).compareTo(volume)>=0)high--;
 		if(freezing){
 			SignedDyadic solids=normalized(phaseGranularOccupancy.solidSvq(cell));
 			for(var group:coherentInCell)solids=solids.add(normalized(group.occupiedVolumeSvq()));
@@ -220,7 +224,7 @@ final class CondensedPhaseChangeStage {
 			minimumEnergy=minimumEnergy.add(SignedDyadic.of(function.internalEnergyAtTemperature(portion.materialHandle(),portion.massKg(),portion.speciesQuanta(),ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K)));
 		}
 		Map<String,Long> composition=new TreeMap<>();
-		if(freezing) for(var stock:sources) add(composition,amounts(stock.mixture()));else if(coherent.composition()!=null) composition.putAll(coherent.composition().stableAmounts());
+		if(freezing) for(var stock:sources) add(composition,carrierAmounts(stock,carrierSpecies));else if(coherent.composition()!=null) composition.putAll(coherent.composition().stableAmounts());
 		int lower=thermal.registry().materialHandle(transition.lowerEnergyMaterialId()),upper=thermal.registry().materialHandle(transition.upperEnergyMaterialId());
 		double kg=Mass.kilograms(mass);
 		// Positive heat capacities make the cold endpoint the energy feasibility limit.
@@ -243,16 +247,17 @@ final class CondensedPhaseChangeStage {
 	private List<LiquidCellInventory.Stock> freeze(Proposal p,TreeMap<GroupKey,CoherentPhaseStore.Group> groups,ThermalStateFunction function) {
 		var store=domain.liquidCells;var rows=new TreeMap<LiquidCellInventory.Key,LiquidCellInventory.Stock>();for(var stock:store.stocksInCell(p.cell)) rows.put(stock.key(),stock);
 		SignedDyadic target=normalized(Math.multiplyExact(p.batches,p.transition.upperVolumeSvqPerBatch())),total=SignedDyadic.ZERO;
-		long sourceMass=0;for(var stock:p.sources) { total=total.add(stock.volume());sourceMass=Math.addExact(sourceMass,stock.massUnits()); }
+		var carrierSpecies=carrierSpecies(p.liquid);
+        long sourceMass=0;for(var stock:p.sources) { total=total.add(stock.volume());sourceMass=Math.addExact(sourceMass,freezableMass(stock,carrierSpecies)); }
 		long requested=target.equals(total)?sourceMass:Math.multiplyExact(p.batches,p.batchMass);
-		double[] weights=p.sources.stream().mapToDouble(LiquidCellInventory.Stock::massUnits).toArray();int[] ids=new int[weights.length];for(int i=0;i<ids.length;i++) ids[i]=i;
+		double[] weights=p.sources.stream().mapToDouble(stock->freezableMass(stock,carrierSpecies)).toArray();int[] ids=new int[weights.length];for(int i=0;i<ids.length;i++) ids[i]=i;
 		long[] masses=mmm.chemistry.BinaryVolumeAllocator.allocate(requested,weights,ids);
 		var composition=new TreeMap<String,Long>();SignedDyadic remaining=target;int last=p.sources.size()-1;
 		for(int i=0;i<p.sources.size();i++) {
 			var stock=p.sources.get(i);
 			var take=target.equals(total)?stock.volume():i==last?remaining:SignedDyadic.of(target.toDouble()*(stock.volumeFraction()/total.toDouble()));
 			remaining=remaining.subtract(take);var volume=stock.volume().subtract(take);long mass=stock.massUnits()-masses[i];
-			var moved=split(amounts(stock.mixture()),masses[i],stock.massUnits());add(composition,moved);
+			var moved=freezeAmounts(stock,carrierSpecies,masses[i]);add(composition,moved);
 			var kept=amounts(stock.mixture());for(var entry:moved.entrySet()) {long n=kept.get(entry.getKey())-entry.getValue();if(n==0)kept.remove(entry.getKey());else kept.put(entry.getKey(),n);}
 			if(volume.signum()==0) { if(mass!=0)throw new IllegalStateException("Freezing volume and integer mass disagree");rows.remove(stock.key()); }
 			else rows.put(stock.key(),new LiquidCellInventory.Stock(stock.key(),volume,mass,mixture(kept,mass),mass==0?0:stock.internalEnergy()));
@@ -316,6 +321,33 @@ final class CondensedPhaseChangeStage {
 	private double energy(ThermalStateFunction f,int handle,double mass,ChemicalMixtureRecord mixture,double t) {
 		return f.internalEnergyAtTemperature(handle,mass,mixture,domain.liquidCells.chemicalRegistry(),t);
 	}
+    /** Default liquid carrier species crystallize; dissolved overlays remain in the liquid stock. */
+    private Set<String> carrierSpecies(int material) {
+        var chemistry=domain.liquidCells.chemicalRegistry();
+        if(chemistry==null)return Set.of();
+        String id=domain.materialRegistry.material(material).id();
+        return chemistry.phase(chemistry.phaseHandleForMaterial(id)).defaultConcentrationMolPerCubicMeter().keySet();
+    }
+    private TreeMap<String,Long> carrierAmounts(LiquidCellInventory.Stock stock,Set<String> carriers) {
+        var result=amounts(stock.mixture());result.keySet().retainAll(carriers);return result;
+    }
+    private long freezableMass(LiquidCellInventory.Stock stock,Set<String> carriers) {
+        if(stock.mixture()==null)return stock.massUnits();
+        var chemistry=domain.liquidCells.chemicalRegistry();long retained=0;
+        for(var entry:amounts(stock.mixture()).entrySet())if(!carriers.contains(entry.getKey()))
+            retained=Math.addExact(retained,chemistry.speciesMassUnits(chemistry.speciesHandle(entry.getKey()),entry.getValue()));
+        return Math.subtractExact(stock.massUnits(),retained);
+    }
+    private TreeMap<String,Long> freezeAmounts(LiquidCellInventory.Stock stock,Set<String> carriers,long mass) {
+        var result=new TreeMap<String,Long>();long available=freezableMass(stock,carriers);
+        if(mass==0)return result;
+        for(var entry:carrierAmounts(stock,carriers).entrySet()) {
+            long count=java.math.BigInteger.valueOf(entry.getValue()).multiply(java.math.BigInteger.valueOf(mass))
+                    .divide(java.math.BigInteger.valueOf(available)).longValueExact();
+            if(count>0)result.put(entry.getKey(),count);
+        }
+        return result;
+    }
 	private TreeMap<String,Long> amounts(ChemicalMixtureRecord mixture) {
 		return mixture==null?new TreeMap<>():new TreeMap<>(mixture.stableAmounts(domain.liquidCells.chemicalRegistry()));
 	}
@@ -329,9 +361,7 @@ final class CondensedPhaseChangeStage {
 		return new CoherentPhaseStore.Composition(parts,mixture.massResidualUnits());
 	}
 	private static void add(Map<String,Long> to,Map<String,Long> from) {for(var entry:from.entrySet())to.merge(entry.getKey(),entry.getValue(),Math::addExact);}
-	private static TreeMap<String,Long> split(Map<String,Long> source,long take,long total) {
-		var result=new TreeMap<String,Long>();for(var entry:source.entrySet()){long n=Mass.portion(entry.getValue(),take,total);if(n>0)result.put(entry.getKey(),n);}return result;
-	}
+
 	private SignedDyadic normalized(long svq) { return SignedDyadic.of(svq,-27).multiply(SignedDyadic.of(1/domain.unitScale.cubicMetersPerNormalizedVolume())); }
 	private static long volumeBatches(SignedDyadic volume,SignedDyadic batch,long maximum) {
 		if(volume.signum()<=0)return 0;long n=Math.min(maximum,(long)Math.floor(volume.toDouble()/batch.toDouble()));

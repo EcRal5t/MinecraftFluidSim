@@ -416,6 +416,13 @@ final class DomainPhaseInventory {
 	) {
 		return domain.granularTransferPlanner.insertExact(cellX, cellY, cellZ, ledger, maxRadius, externalSource);
 	}
+	public GranularInsertion tryInsertExactGranular(
+			int cellX, int cellY, int cellZ, GranularTransferLedger ledger, int maxRadius,
+			boolean externalSource, double carriedEnergy
+	) {
+		return domain.granularTransferPlanner.insertExact(cellX, cellY, cellZ, ledger, maxRadius, externalSource, carriedEnergy);
+	}
+
 	public GranularExtraction tryExtractExactGranular(
 			int cellX, int cellY, int cellZ, long maximumSolidVolumeSvq
 	) {

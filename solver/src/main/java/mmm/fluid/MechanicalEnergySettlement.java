@@ -16,6 +16,7 @@ import java.util.TreeMap;
 final class MechanicalEnergySettlement {
     private final FluidDomain domain;
     private final double[] liquidExchange;
+    private final double[] externalBodyWork;
     private double[] granularExchange=new double[0],granularPotentialExchange=new double[0];
     private boolean hasLiquidExchange,hasGranularExchange;
     private double stepLiquidForce,stepGranularForce,stepPotential,stepGas,stepCorrection,stepAbsoluteCorrection;
@@ -67,8 +68,10 @@ final class MechanicalEnergySettlement {
     MechanicalEnergySettlement(FluidDomain domain){
         this.domain=domain;
         liquidExchange=new double[domain.mac.velocityX.length+domain.mac.velocityY.length+domain.mac.velocityZ.length];
+        externalBodyWork=new double[domain.cellCount];
     }
     void beginLiquidForceStep(){
+        Arrays.fill(externalBodyWork,0);
         if(hasLiquidExchange)Arrays.fill(liquidExchange,0);
         hasLiquidExchange=false;
     }
@@ -77,6 +80,7 @@ final class MechanicalEnergySettlement {
         else if(hasGranularExchange){Arrays.fill(granularExchange,0);Arrays.fill(granularPotentialExchange,0);}
         hasGranularExchange=false;
     }
+    void recordExternalBodyWork(int cell,double work){externalBodyWork[cell]+=work;hasLiquidExchange=true;}
     void recordLiquidExchange(int face,double joules){
         if(joules==0)return;
         if(!Double.isFinite(joules))throw new IllegalStateException("Nonfinite liquid mechanical exchange");
@@ -133,7 +137,13 @@ final class MechanicalEnergySettlement {
         int parcels=!forces||domain.granularState==null?0:domain.granularState.parcels.count();
         int[] body=mechanicalBodies(source,inventory,particleBase,parcels);
         double[] numericalWork=new double[body.length];
-        if(forces&&hasLiquidExchange)collectLiquidForceExchange(body,numericalWork);
+        if(forces&&hasLiquidExchange){
+            collectLiquidForceExchange(body,numericalWork);
+            for(int cell=0;cell<externalBodyWork.length;cell++)if(externalBodyWork[cell]!=0){
+                var stocks=domain.liquidCells.stocksInCell(cell);
+                if(!stocks.isEmpty())numericalWork[mechanicalRoot(body,supportVertex(stocks.getFirst().key()))]+=externalBodyWork[cell];
+            }
+        }
         collectTransportPotential(inventory,body,numericalWork);
         if(forces&&hasGranularExchange)for(int p=0;p<parcels;p++)if(granularExchange[p]!=0)
             numericalWork[mechanicalRoot(body,particleBase+p)]+=granularExchange[p];
@@ -175,7 +185,11 @@ final class MechanicalEnergySettlement {
     }
     private void recordContributions(LiquidCellInventory.Plan inventory,GasTopologyCoordinator.GasTopologyPlan gas,boolean forces,int parcels){
         double liquidForce=0,granularForce=0,potentialWork=0,gasWork=0;
-        if(forces){for(double value:liquidExchange)liquidForce+=value;for(int p=0;p<parcels;p++)granularForce+=granularExchange[p];}
+        if(forces){
+            for(double value:liquidExchange)liquidForce+=value;
+            for(double value:externalBodyWork)liquidForce+=value;
+            for(int p=0;p<parcels;p++)granularForce+=granularExchange[p];
+        }
         for(var transfer:inventory.transfers())potentialWork-=Mass.kilograms(transfer.massUnits())*domain.config.gravity()*domain.config.cellSize()
             *(transfer.target().cell()/domain.sizeX%domain.sizeY-transfer.source().cell()/domain.sizeX%domain.sizeY);
         if(gas!=null)for(var work:gas.workBySource())gasWork-=work.toDouble();

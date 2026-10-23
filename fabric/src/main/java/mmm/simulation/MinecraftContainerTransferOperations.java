@@ -33,9 +33,16 @@ final class MinecraftContainerTransferOperations {
 			CommittedWorldRegistries world, FluidRegion region, int[] cell, long volumeNanos, int maxRadius,
 			int materialHandle, boolean externalSource, ThermalContents thermalContents
 	) {
+		return pourIntoCell(world, region, cell, volumeNanos, volumeNanos, maxRadius, materialHandle, externalSource, thermalContents);
+	}
+
+	static TransferOutcome pourIntoCell(
+			CommittedWorldRegistries world, FluidRegion region, int[] cell, long volumeNanos, long maximumNanos,
+			int maxRadius, int materialHandle, boolean externalSource, ThermalContents thermalContents
+	) {
 		if (volumeNanos <= 0L) return null;
 		FluidDomain domain = region.domain();
-		float requestedCellVolume = nanosToCellVolumeAtMost(domain.unitScale(), volumeNanos);
+		float requestedCellVolume = nanosToCellVolumeAtMost(domain.unitScale(), Math.min(volumeNanos, maximumNanos));
 		if (requestedCellVolume <= 0.0F) {
 			return new TransferOutcome(false, true, withVolume(volumeNanos), "容器余量小于 solver 可表示体积，未能注入");
 		}
@@ -110,11 +117,18 @@ final class MinecraftContainerTransferOperations {
 			CommittedWorldRegistries world, FluidRegion region, int[] cell, FluidMixture mixture, int maxRadius,
 			boolean externalSource, ThermalContents thermalContents
 	) {
+		return pourMaterialIntoCell(world, region, cell, mixture, mixture.totalVolumeNanos(), maxRadius, externalSource, thermalContents);
+	}
+
+	static TransferOutcome pourMaterialIntoCell(
+			CommittedWorldRegistries world, FluidRegion region, int[] cell, FluidMixture mixture, long maximumNanos,
+			int maxRadius, boolean externalSource, ThermalContents thermalContents
+	) {
 		if (mixture == null) return null;
 		FluidDomain domain = region.domain();
 		java.util.List<FluidDomain.MaterialPortion> portions;
 		try {
-			portions = planMaterialInsertion(domain, mixture);
+			portions = planMaterialInsertion(domain, mixture, maximumNanos);
 		} catch (IllegalArgumentException unknownMaterial) {
 			return new TransferOutcome(false, true, ContainerItemStacks.toStack(mixture),
 					"区域材料 registry 不接受该混合物：" + unknownMaterial.getMessage());
@@ -156,6 +170,13 @@ final class MinecraftContainerTransferOperations {
 			CommittedWorldRegistries world, FluidRegion region, int[] cell, ChemicalContents contents, int maxRadius,
 			boolean externalSource, ThermalContents thermalContents
 	) {
+		return pourChemicalIntoCell(world, region, cell, contents, contents.totalVolumeNanos(), maxRadius, externalSource, thermalContents);
+	}
+
+	static TransferOutcome pourChemicalIntoCell(
+			CommittedWorldRegistries world, FluidRegion region, int[] cell, ChemicalContents contents, long maximumNanos,
+			int maxRadius, boolean externalSource, ThermalContents thermalContents
+	) {
 		FluidDomain domain = region.domain();
 		if (!domain.hasChemistryState()) return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents), "该区域不是化学区域");
 		try {
@@ -164,7 +185,7 @@ final class MinecraftContainerTransferOperations {
 			return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents), "化学桶 registry 或账本不合法：" + invalid.getMessage());
 		}
 		double spatialCellVolume = Math.max(0.0, domain.totalOpenVolumeExact() - domain.totalVolumeExact());
-		long candidate = Math.min(contents.totalVolumeNanos(), cellVolumeToNanos(domain.unitScale(), spatialCellVolume));
+		long candidate = Math.min(maximumNanos, Math.min(contents.totalVolumeNanos(), cellVolumeToNanos(domain.unitScale(), spatialCellVolume)));
 		while (candidate > 0L) {
 			ChemicalContents.Split split;
 			try {
@@ -276,29 +297,50 @@ final class MinecraftContainerTransferOperations {
 			CommittedWorldRegistries world, FluidRegion region, int[] cell, GranularContents contents,
 			int maxRadius, boolean externalSource
 	) {
+		return pourGranularIntoCell(world, region, cell, contents, contents.totalSolidVolumeSvq(), maxRadius, externalSource, null);
+	}
+
+	static TransferOutcome pourGranularIntoCell(
+			CommittedWorldRegistries world, FluidRegion region, int[] cell, GranularContents contents,
+			long maximumSvq, int maxRadius, boolean externalSource, ThermalContents thermalContents
+	) {
+		var chemistry = world.hasCapability(WorldCapability.CHEMISTRY) ? world.chemicalRegistry() : null;
+		GranularContents.Split split;
 		GranularTransferLedger ledger;
+		ThermalContents.EnergySplit energies;
 		try {
-			ledger = contents.toLedger(world.granularRegistry(),
-					world.hasCapability(WorldCapability.CHEMISTRY) ? world.chemicalRegistry() : null);
+			split = contents.split(Math.min(maximumSvq, contents.totalSolidVolumeSvq()), chemistry);
+			ledger = split.inserted().toLedger(world.granularRegistry(), chemistry);
+			energies = thermalContents == null ? null : LiquidContainerThermodynamics.split(
+					world.thermalRegistry(), thermalContents, contents, split.inserted(), split.remaining());
 		} catch (RuntimeException invalid) {
 			return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents),
-					"颗粒容器 registry 或账本不合法：" + invalid.getMessage());
+					"颗粒容器 registry、组成或热状态无法表示本次分量：" + invalid.getMessage());
 		}
-		FluidDomain.GranularInsertion inserted = region.domain().tryInsertExactGranular(
-				cell[0], cell[1], cell[2], ledger, maxRadius, externalSource);
+		var domain = region.domain();
+		FluidDomain.GranularInsertion inserted = energies == null
+				? domain.tryInsertExactGranular(cell[0], cell[1], cell[2], ledger, maxRadius, externalSource)
+				: domain.tryInsertExactGranular(cell[0], cell[1], cell[2], ledger, maxRadius, externalSource, energies.selectedEnergy());
 		if (!inserted.inserted()) {
 			return new TransferOutcome(false, true, ContainerItemStacks.toStack(contents),
 					"空间、颗粒 parcel 或组成预算不足，未能注入：" + inserted.failure());
 		}
-		if (inserted.solidVolumeSvq() != contents.totalSolidVolumeSvq()
-				|| inserted.massUnits() != contents.totalMassUnits()) {
+		if (inserted.solidVolumeSvq() != split.inserted().totalSolidVolumeSvq()
+				|| inserted.massUnits() != split.inserted().totalMassUnits())
 			throw new IllegalStateException("颗粒注入没有结算完整独立库存");
+		ItemStack after = split.remaining() == null ? new ItemStack(MmmItems.GRANULAR_CONTAINER)
+				: ContainerItemStacks.toStack(split.remaining());
+		Double coupled = energies == null ? null : energies.coupledEnergy(thermalContents.internalEnergy());
+		if (energies != null) {
+			domain.settleExternalContainerInsertion(energies.selectedEnergy(), coupled);
+			if (split.remaining() != null) ContainerItemStacks.attachThermal(after, world.thermalRegistryFingerprint(), energies.remainingEnergy());
+			region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
 		}
 		region.wakeForActivity();
-		return new TransferOutcome(true, true, new ItemStack(MmmItems.GRANULAR_CONTAINER),
+		return new TransferOutcome(true, true, after,
 				String.format("已注入 %.2f%% 干式容器（%d 种材料）",
-						100.0 * inserted.solidVolumeSvq() / SolidVolume.SVQ_PER_CUBIC_METER, contents.groups().size()),
-				inserted.solidVolumeSvq());
+						100.0 * inserted.solidVolumeSvq() / SolidVolume.SVQ_PER_CUBIC_METER, split.inserted().groups().size()),
+				inserted.solidVolumeSvq(), coupled);
 	}
 
 	static TransferOutcome scoopGranularIntoCell(
@@ -321,10 +363,16 @@ final class MinecraftContainerTransferOperations {
 		}
 		long taken = extracted.ledger().totalSolidVolumeSvq();
 		if (taken != planned[0].totalSolidVolumeSvq()) throw new IllegalStateException("颗粒舀取 SVQ 账本不一致");
+		ItemStack after = ContainerItemStacks.toStack(planned[0]);
+		Double carriedEnergy = region.domain().hasThermalState() ? extracted.internalEnergy() : null;
+		if (carriedEnergy != null) {
+			ContainerItemStacks.attachThermal(after, world.thermalRegistryFingerprint(), carriedEnergy);
+			region.wakeThermal(ThermalActivity.WakeReason.CONTAINER_TRANSFER);
+		}
 		region.wakeForActivity();
-		return new TransferOutcome(true, false, ContainerItemStacks.toStack(planned[0]),
+		return new TransferOutcome(true, false, after,
 				String.format("已舀取 %.2f%% 干式容器（%d 种材料）",
-						100.0 * taken / SolidVolume.SVQ_PER_CUBIC_METER, planned[0].groups().size()), taken);
+						100.0 * taken / SolidVolume.SVQ_PER_CUBIC_METER, planned[0].groups().size()), taken, carriedEnergy);
 	}
 
 	/** Deterministic largest-remainder-style apportionment; component masses remain exact doubles. */
@@ -355,10 +403,22 @@ final class MinecraftContainerTransferOperations {
 	static java.util.List<FluidDomain.MaterialPortion> planMaterialInsertion(
 			FluidDomain domain, FluidMixture mixture
 	) {
+		return planMaterialInsertion(domain, mixture, mixture.totalVolumeNanos());
+	}
+
+	static java.util.List<FluidDomain.MaterialPortion> planMaterialInsertion(
+			FluidDomain domain, FluidMixture mixture, long maximumNanos
+	) {
+		long selected = Math.min(maximumNanos, mixture.totalVolumeNanos());
+		double[] weights = mixture.components().stream().mapToDouble(FluidMixture.Component::volumeNanos).toArray();
+		int[] ids = new int[weights.length];
+		for (int i = 0; i < ids.length; i++) ids[i] = i;
+		long[] nanos = mmm.chemistry.BinaryVolumeAllocator.allocate(selected, weights, ids);
+		int index = 0;
 		java.util.List<FluidDomain.MaterialPortion> portions = new java.util.ArrayList<>(mixture.components().size());
 		for (FluidMixture.Component component : mixture.components()) {
 			int handle = domain.materialRegistry().handle(component.materialId());
-			float plannedVolume = nanosToCellVolumeAtMost(domain.unitScale(), component.volumeNanos());
+			float plannedVolume = nanosToCellVolumeAtMost(domain.unitScale(), nanos[index++]);
 			long plannedNanos = cellVolumeToNanos(domain.unitScale(), plannedVolume);
 			if (plannedNanos <= 0L) throw new IllegalArgumentException(
 					"材料组分小于 solver 可表示体积：" + component.materialId());
@@ -417,8 +477,7 @@ final class MinecraftContainerTransferOperations {
 	static String thermalTransferFailure(
 			CommittedWorldRegistries world, FluidRegion region, ItemStack stack, TransferKind kind
 	) {
-		if (kind == TransferKind.NONE || kind == TransferKind.GRANULAR_POUR
-				|| kind == TransferKind.GRANULAR_SCOOP) return null;
+		if (kind == TransferKind.NONE) return null;
 		ThermalContents contents;
 		try {
 			contents = ContainerItemStacks.thermalContents(stack);
@@ -428,7 +487,7 @@ final class MinecraftContainerTransferOperations {
 		if (!region.domain().hasThermalState()) {
 			return contents == null ? null : "带热真值的容器不能转入未启用热状态的区域";
 		}
-		boolean sourceRequired = kind == TransferKind.POUR || kind == TransferKind.MATERIAL_POUR
+		boolean sourceRequired = kind == TransferKind.POUR || kind == TransferKind.MATERIAL_POUR || kind == TransferKind.GRANULAR_POUR
 				|| kind == TransferKind.SCOOP && heldBaseVolumeNanos(stack) > 0L;
 		if (sourceRequired && contents == null) {
 			return "热区域只接受携带 ThermalContents 的液体容器；拒绝猜测初始温度";

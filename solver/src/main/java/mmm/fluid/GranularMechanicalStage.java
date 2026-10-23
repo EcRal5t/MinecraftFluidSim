@@ -61,7 +61,7 @@ final class GranularMechanicalStage {
 				domain.granularCollision::previewPosition);
 		if (!domain.domainStep.granularOccupancyFitsGeometry(domain.granularNextCoupling)) {
 			domain.granularCollision.resolveCapacity(state.parcels, domain.granularCoupling,
-					cell -> SolidVolume.fromCellVolumeExact(domain.geometry.cutCells.openCellVolume(cell)));
+					cell -> Math.max(0, SolidVolume.fromCellVolumeExact(domain.geometry.cutCells.openCellVolume(cell)) - domain.entityBodyCoupling.occupied(cell)));
 				domain.granularNextCoupling.rebuild(state.parcels, state.deposits,
 					domain.granularCollision::previewPosition);
 			if (!domain.domainStep.granularOccupancyFitsGeometry(domain.granularNextCoupling)) {

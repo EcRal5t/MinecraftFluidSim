@@ -6,5 +6,7 @@
   "henry_solubility_mol_per_m3_pa": "0.00034",
   "temperature_slope_k": "2400",
   "liquid_film_velocity_m_per_s": "0.00001",
-  "gas_film_velocity_m_per_s": "0.01"
+  "gas_film_velocity_m_per_s": "0.01",
+  "minimum_temperature_k": "273.15",
+  "maximum_temperature_k": "373.15"
 }

@@ -7,7 +7,8 @@ import mmm.world.MovingBodyFluidCoupling.Bounds;
 
 /** Physical PLIC intersection with an axis-aligned body and pressure integrals on its wet faces. */
 final class MovingBodyWetGeometry {
-  record Capture(FluidDomain.BodyFluidSample sample, double[] cellVolumes) {}
+  record Capture(
+      FluidDomain.BodyFluidSample sample, double[] cellVolumes, double[] wetAreaByNormal) {}
 
   private record Point(double x, double y, double z) {
     Point add(Point p) {
@@ -43,7 +44,8 @@ final class MovingBodyWetGeometry {
     var frame = domain.gasState.frame;
     var phase = frame.phase();
     double[] occupied = new double[domain.cellCount];
-    double volume = 0, mass = 0, wetArea = 0;
+    double[] wetAreaByNormal = new double[3];
+    double volume = 0, mass = 0, wetArea = 0, waterVolume = 0;
     Point center = new Point(0, 0, 0), velocity = center, force = center;
     int[] start = {
       Math.max(0, (int) Math.floor(bounds.minimumX() / h)),
@@ -80,6 +82,7 @@ final class MovingBodyWetGeometry {
               domain.pressureSystem.liquidPressureAt(
                   cell, ~domain.geometry.cutCells.mask(cell) & 255);
           List<Plane> body = bodyPlanes(bounds, h, x, y, z);
+          var waterLayers = new java.util.HashMap<Integer, List<GasLiquidContactGeometry.Layer>>();
           for (int micro = 0; micro < 8; micro++) {
             if ((domain.geometry.cutCells.mask(cell) & 1 << micro) != 0) continue;
             var p = phase.componentPlane(cell, micro);
@@ -91,6 +94,22 @@ final class MovingBodyWetGeometry {
             Moment moment = moment(faces);
             if (!(moment.volume() > 0)) continue;
             double overlap = moment.volume() * p.porosity() * h3;
+            var layers = waterLayers.get(p.support());
+            if (layers == null) {
+              var stocks = new ArrayList<mmm.inventory.LiquidCellInventory.Stock>();
+              for (var stock : domain.liquidCells.stocksInCell(cell))
+                if (stock.key().supportMask() == p.support()) stocks.add(stock);
+              boolean hasWater = stocks.stream().anyMatch(stock -> isWater(domain, stock.key().material()));
+              layers = hasWater ? GasLiquidContactGeometry.layers(domain, frame, cell, p.support(), stocks)
+                  .stream().filter(layer -> isWater(domain, layer.stock().key().material())).toList() : List.of();
+              waterLayers.put(p.support(), layers);
+            }
+            for (var layer : layers) {
+              var selected = faces;
+              if (layer.lower() > 0) selected = clip(selected, new Plane(new Point(0, -1, 0), -layer.lower(), -1));
+              if (layer.upper() < 1) selected = clip(selected, new Plane(new Point(0, 1, 0), layer.upper(), -1));
+              waterVolume += selected == faces ? overlap : moment(selected).volume() * p.porosity() * h3;
+            }
             occupied[cell] += overlap / h3;
             volume += overlap;
             mass += overlap * density;
@@ -114,12 +133,14 @@ final class MovingBodyWetGeometry {
                   double load =
                       pressure + density * domain.config.gravity() * h * (liquidCenterY - py);
                   wetArea += area;
+                  wetAreaByNormal[face.plane.bodyFace / 2] += area;
                   force = force.add(face.plane.normal.times(-load * area));
                 }
               }
           }
         }
-    if (!(volume > 0)) return new Capture(FluidDomain.BodyFluidSample.EMPTY, occupied);
+    if (!(volume > 0))
+      return new Capture(FluidDomain.BodyFluidSample.EMPTY, occupied, wetAreaByNormal);
     force = force.add(gasSurfaceForce(domain, bounds, start, end));
     center = center.times(1 / volume);
     velocity = velocity.times(1 / volume);
@@ -136,8 +157,15 @@ final class MovingBodyWetGeometry {
             mass,
             force.x,
             force.y,
-            force.z),
-        occupied);
+            force.z,
+            waterVolume),
+        occupied,
+        wetAreaByNormal);
+  }
+
+  private static boolean isWater(FluidDomain domain, int material) {
+    return domain.materialRegistry == null ? material == 0
+        : domain.materialRegistry.material(material).id().equals(BuiltinFluidMaterials.WATER.id());
   }
 
   /**

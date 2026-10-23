@@ -58,7 +58,7 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 		Objects.requireNonNull(actor, "actor");
 		if (!storeIssues.isEmpty()) return true;
 		return indexed.values().stream().anyMatch(journal ->
-				journal.regionId().equals(regionId) || journal.actor().equals(actor));
+				journal.regionId().equals(regionId) || journal.actor().sameInventory(actor));
 	}
 
 	public boolean hasPending(UUID regionId) {
@@ -70,6 +70,9 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 	public boolean hasAnyLock() { return !storeIssues.isEmpty() || !indexed.isEmpty(); }
 
 	public boolean hasStoreIssues() { return !storeIssues.isEmpty(); }
+	public java.util.Optional<ContainerTransferJournal> journal(UUID operationId) {
+		return java.util.Optional.ofNullable(indexed.get(operationId));
+	}
 
 	/**
 	 * Stages one WAL and keeps it indexed whatever the store reports.
@@ -166,6 +169,7 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 			switch (decision.outcome()) {
 				case ROLLBACK_BEFORE -> throw new IllegalStateException("Region-first container requested external rollback");
 				case DISCARD_UNCOMMITTED -> {
+					port.persistReceipt(journal, false);
 					delete(transactionId);
 					port.report(Report.WARNING,
 							"Discarded uncommitted container transfer WAL " + transactionId
@@ -217,6 +221,7 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 			return;
 		}
 		port.adoptRecoveredCheckpoint(journal);
+		port.persistReceipt(journal, true);
 		delete(journal.transactionId());
 		port.publishCommitted(journal);
 		port.report(Report.WARNING,
@@ -269,7 +274,7 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 	}
 
 	public interface RecoveryPort {
-		void validate(ContainerTransferJournal journal);
+		void validate(ContainerTransferJournal journal) throws IOException;
 
 		long committedGeneration(UUID regionId) throws IOException;
 
@@ -286,6 +291,9 @@ public final class ContainerRecoveryCoordinator implements ContainerJournalRepos
 		void adoptRecoveredCheckpoint(ContainerTransferJournal journal) throws IOException;
 
 		void publishCommitted(ContainerTransferJournal journal);
+
+		/** Durable operation replay evidence is published while the recovery WAL still exists. */
+		default void persistReceipt(ContainerTransferJournal journal, boolean committed) throws IOException { }
 
 		void report(Report level, String message, Throwable failure);
 	}

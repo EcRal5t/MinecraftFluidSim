@@ -219,6 +219,28 @@ public final class M6ContainerValidation {
 						mmm.units.Mass.fromKilograms(solid.totalMass(BuiltinChemicalDefinitions.REGISTRY)),
 						Double.doubleToRawLongBits(0.0), species)));
 		contents.validateAgainst(registry, BuiltinChemicalDefinitions.REGISTRY);
+		var split = contents.split(32_773L, BuiltinChemicalDefinitions.REGISTRY);
+		check(split.inserted().totalSolidVolumeSvq() == 32_773L
+				&& split.inserted().totalMassUnits() + split.remaining().totalMassUnits() == contents.totalMassUnits(),
+				"bounded granular selection lost SVQ or integer mass");
+		split.inserted().validateAgainst(registry, BuiltinChemicalDefinitions.REGISTRY);
+		split.remaining().validateAgainst(registry, BuiltinChemicalDefinitions.REGISTRY);
+		for (int i = 0; i < contents.groups().size(); i++) {
+			var original = contents.groups().get(i);
+			var chosen = split.inserted().groups().get(i);
+			var retained = split.remaining().groups().get(i);
+			check(chosen.solidVolumeSvq() + retained.solidVolumeSvq() == original.solidVolumeSvq()
+					&& chosen.massUnits() + retained.massUnits() == original.massUnits()
+					&& chosen.massResidualUnits() + retained.massResidualUnits() == original.massResidualUnits(),
+					"bounded granular split changed a material ledger");
+			for (int entry = 0; entry < original.composition().size(); entry++)
+				check(chosen.composition().get(entry).amountQuanta() + retained.composition().get(entry).amountQuanta()
+						== original.composition().get(entry).amountQuanta(), "bounded granular split lost chemical species");
+		}
+		var thermal = ThermalContents.forGranular("a".repeat(64), contents, 12345.6789);
+		check(ThermalContents.decode(thermal.encode()).equals(thermal)
+				&& !ThermalContents.forGranular("a".repeat(64), split.remaining(), thermal.internalEnergy()).underlyingHash()
+						.equals(thermal.underlyingHash()), "granular raw U is not bound to its exact inventory");
 		GranularContents decoded = GranularContents.decode(contents.encode());
 		check(contents.equals(decoded) && decoded.totalSolidVolumeSvq() == 65_546L,
 				"granular contents canonical round-trip changed exact inventory");

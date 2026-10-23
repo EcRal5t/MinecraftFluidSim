@@ -29,6 +29,7 @@ final class MinecraftContainerRecoveryAdapter implements ContainerRecoveryCoordi
 	private final FluidRegionManager regions;
 	private final FluidRegionOperations regionOperations;
 	private final CommittedEventHub committedEvents;
+	private final mmm.simulation.persistence.PublicTransferReceiptStore receipts;
 	private final MinecraftContainerActorAdapter actors = new MinecraftContainerActorAdapter();
 
 	MinecraftContainerRecoveryAdapter(
@@ -37,7 +38,8 @@ final class MinecraftContainerRecoveryAdapter implements ContainerRecoveryCoordi
 			RegistryBundleLoader.RegistryBundle registries,
 			FluidRegionManager regions,
 			FluidRegionOperations regionOperations,
-			CommittedEventHub committedEvents
+			CommittedEventHub committedEvents,
+			mmm.simulation.persistence.PublicTransferReceiptStore receipts
 	) {
 		this.server = java.util.Objects.requireNonNull(server, "server");
 		this.startup = java.util.Objects.requireNonNull(startup, "startup");
@@ -48,10 +50,12 @@ final class MinecraftContainerRecoveryAdapter implements ContainerRecoveryCoordi
 		this.regions = java.util.Objects.requireNonNull(regions, "regions");
 		this.regionOperations = java.util.Objects.requireNonNull(regionOperations, "regionOperations");
 		this.committedEvents = java.util.Objects.requireNonNull(committedEvents, "committedEvents");
+		this.receipts = java.util.Objects.requireNonNull(receipts);
 	}
 
 	@Override
-	public void validate(ContainerTransferJournal journal) {
+	public void validate(ContainerTransferJournal journal) throws IOException {
+		receipts.validate(journal);
 		journal.validateProfileFingerprint(startup.profileProven() ? profile.profileFingerprint() : null);
 		if (journal.requiresThermalRegistry()) {
 			if (!profile.hasCapability(WorldCapability.THERMAL) || thermalRegistry == null) {
@@ -115,6 +119,11 @@ final class MinecraftContainerRecoveryAdapter implements ContainerRecoveryCoordi
 					region, journal.baseGeneration(), journal.targetGeneration());
 			return;
 		}
+	}
+
+	@Override
+	public void persistReceipt(ContainerTransferJournal journal,boolean committed) throws IOException {
+		receipts.complete(journal,committed);
 	}
 
 	@Override

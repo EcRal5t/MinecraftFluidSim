@@ -397,7 +397,7 @@ final class CellMacStage {
 		if(!(Float.isFinite(dt)&&dt>0))throw new IllegalArgumentException("Liquid transport duration must be positive");
 		domain.pressureSystem.prepareGeometry();
 		if(liquidTransport==null)liquidTransport=new ConservativeLiquidFlux(domain);
-		long[] occupied=domain.granularCoupling==null?new long[domain.cellCount]:domain.granularState!=null&&domain.granularState.parcels.count()>0?domain.granularNextCoupling.copySolidSvq():domain.granularCoupling.copySolidSvq();
+		long[] occupied=domain.granularCoupling==null?domain.occupiedSolidSvq():domain.granularState!=null&&domain.granularState.parcels.count()>0?domain.entityBodyCoupling.addTo(domain.granularNextCoupling.copySolidSvq()):domain.entityBodyCoupling.addTo(domain.granularCoupling.copySolidSvq());
 		liquidTransport.prepare(dt,occupied,quantities->{
 			liquidTransport.preparedMomentum=prepareMomentumTransport(liquidTransport,quantities);
 			finishMechanicalHeat(quantities);

@@ -25,7 +25,7 @@ final class GranularTransitionStage {
 		var compaction = new mmm.granular.GranularInventory.CompactionStats(0, 0);
 		if (granular != null && granular.parcels.count() > 1) {
 			coupling.rebuild(granular.parcels, granular.deposits);
-			long[] compactedSolid = coupling.copySolidSvq();
+			long[] compactedSolid = domain.entityBodyCoupling.addTo(coupling.copySolidSvq());
 			int count = granular.parcels.count();
 			var future = new GranularParcelStore.Parcel[count];
 			for (int i = 0; i < count; i++) future[i] = granular.parcels.parcel(i);
@@ -49,7 +49,7 @@ final class GranularTransitionStage {
 		GranularDepositDynamics.Stats stats;
 		if (domain.domainPhaseInventory.hasGranularInventory() || dynamics.dirtyColumnCount() != 0) {
 			coupling.rebuild(granular.parcels, granular.deposits);
-			dynamicsSolid = coupling.copySolidSvq();
+			dynamicsSolid = domain.entityBodyCoupling.addTo(coupling.copySolidSvq());
 			stats = dynamics.step(domain.domainStep.granularDepositEnvironment(dynamicsSolid, flow), domain.config.timeStep());
 		} else {
 			stats = EMPTY_STATS;

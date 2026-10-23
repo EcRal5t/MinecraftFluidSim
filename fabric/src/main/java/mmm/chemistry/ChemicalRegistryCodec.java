@@ -112,6 +112,8 @@ public final class ChemicalRegistryCodec {
 			tag.putLong("TemperatureSlopeKBits", Double.doubleToRawLongBits(definition.temperatureSlopeK()));
 			tag.putLong("LiquidFilmVelocityMPerSBits", Double.doubleToRawLongBits(definition.liquidFilmVelocityMPerS()));
 			tag.putLong("GasFilmVelocityMPerSBits", Double.doubleToRawLongBits(definition.gasFilmVelocityMPerS()));
+			tag.putLong("MinimumTemperatureKBits",Double.doubleToRawLongBits(definition.minimumTemperatureK()));
+			tag.putLong("MaximumTemperatureKBits",Double.doubleToRawLongBits(definition.maximumTemperatureK()));
 			transfers.add(tag);
 		}
 		root.put("GasLiquidMassTransfers", transfers);
@@ -123,18 +125,21 @@ public final class ChemicalRegistryCodec {
 		var result = new ArrayList<GasLiquidMassTransferDefinition>(list.size());
 		for (int i = 0; i < list.size(); i++) {
 			CompoundTag tag = compound(list, i, "gas/liquid mass transfer");
-			requireAll(tag, Map.of("Id", Tag.TAG_STRING, "Species", Tag.TAG_STRING,
-					"LiquidPhase", Tag.TAG_STRING, "GasComponent", Tag.TAG_STRING,
-					"ReferenceTemperatureKBits", Tag.TAG_LONG, "HenrySolubilityMolPerM3PaBits", Tag.TAG_LONG,
-					"TemperatureSlopeKBits", Tag.TAG_LONG, "LiquidFilmVelocityMPerSBits", Tag.TAG_LONG,
-					"GasFilmVelocityMPerSBits", Tag.TAG_LONG));
+			requireAll(tag, Map.ofEntries(Map.entry("Id",Tag.TAG_STRING),Map.entry("Species",Tag.TAG_STRING),
+					Map.entry("LiquidPhase",Tag.TAG_STRING),Map.entry("GasComponent",Tag.TAG_STRING),
+					Map.entry("ReferenceTemperatureKBits",Tag.TAG_LONG),Map.entry("HenrySolubilityMolPerM3PaBits",Tag.TAG_LONG),
+					Map.entry("TemperatureSlopeKBits",Tag.TAG_LONG),Map.entry("LiquidFilmVelocityMPerSBits",Tag.TAG_LONG),
+					Map.entry("GasFilmVelocityMPerSBits",Tag.TAG_LONG),Map.entry("MinimumTemperatureKBits",Tag.TAG_LONG),
+					Map.entry("MaximumTemperatureKBits",Tag.TAG_LONG)));
 			result.add(new GasLiquidMassTransferDefinition(tag.getStringOr("Id", ""), tag.getStringOr("Species", ""),
 					tag.getStringOr("LiquidPhase", ""), tag.getStringOr("GasComponent", ""),
 					Double.longBitsToDouble(tag.getLongOr("ReferenceTemperatureKBits", 0)),
 					Double.longBitsToDouble(tag.getLongOr("HenrySolubilityMolPerM3PaBits", 0)),
 					Double.longBitsToDouble(tag.getLongOr("TemperatureSlopeKBits", 0)),
 					Double.longBitsToDouble(tag.getLongOr("LiquidFilmVelocityMPerSBits", 0)),
-					Double.longBitsToDouble(tag.getLongOr("GasFilmVelocityMPerSBits", 0))));
+					Double.longBitsToDouble(tag.getLongOr("GasFilmVelocityMPerSBits", 0)),
+					Double.longBitsToDouble(tag.getLongOr("MinimumTemperatureKBits",0)),
+					Double.longBitsToDouble(tag.getLongOr("MaximumTemperatureKBits",0))));
 		}
 		return List.copyOf(result);
 	}

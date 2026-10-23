@@ -47,5 +47,6 @@ public final class MmmCreativeEntries {
 					"mmm:source/gas/" + gas, mmm.transfer.CreativeGasSource.AMOUNT_NANOS, 293.15)));
 		}
 		entries.accept(MmmBlocks.THERMAL_RESERVOIR);
+		entries.accept(MmmBlocks.FINITE_HEAT_EXCHANGER);
 	}
 }

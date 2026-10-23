@@ -56,7 +56,7 @@ final class GranularTransferPlanner {
 		}
 		domain.domainFlowFields.preparePhysicalState();
 		domain.granularCoupling.rebuild(granular.parcels, granular.deposits);
-		long[] previousSolid = domain.granularCoupling.copySolidSvq();
+		long[] previousSolid = domain.entityBodyCoupling.addTo(domain.granularCoupling.copySolidSvq());
 		long[] plannedSolid = previousSolid.clone();
 		var admission = new GranularSpawnAdmission(domain.sizeX, domain.sizeY, domain.sizeZ,
 				domain.config.cellSize(), granular.parcels, 1);
@@ -101,6 +101,15 @@ final class GranularTransferPlanner {
 	FluidDomain.GranularInsertion insertExact(
 			int cellX, int cellY, int cellZ, GranularTransferLedger ledger, int maxRadius, boolean externalSource
 	) {
+		return insertExact(cellX, cellY, cellZ, ledger, maxRadius, externalSource, null);
+	}
+
+	FluidDomain.GranularInsertion insertExact(
+			int cellX, int cellY, int cellZ, GranularTransferLedger ledger, int maxRadius, boolean externalSource,
+			Double carriedEnergy
+	) {
+		if (carriedEnergy != null && (domain.thermalState == null || !Double.isFinite(carriedEnergy)))
+			throw new IllegalArgumentException("Carried granular energy requires thermal state");
 		GranularDomainState granular = domain.granularState;
 		if (granular == null) return FluidDomain.GranularInsertion.rejected("Granular state is not bound");
 		if (ledger == null) throw new IllegalArgumentException("Granular insertion ledger is missing");
@@ -156,7 +165,7 @@ final class GranularTransferPlanner {
 				.thenComparingInt(FluidDomain.CellCandidate::distanceSquared)
 				.thenComparingInt(FluidDomain.CellCandidate::index));
 		int releaseCellCount = releaseCellCount(insertionCells, ledger);
-		long[] previousSolid = domain.granularCoupling.copySolidSvq();
+		long[] previousSolid = domain.entityBodyCoupling.addTo(domain.granularCoupling.copySolidSvq());
 		long[] plannedSolid = previousSolid.clone();
 		var admission = new GranularSpawnAdmission(domain.sizeX, domain.sizeY, domain.sizeZ,
 				domain.config.cellSize(), granular.parcels, drafts.size());
@@ -226,9 +235,12 @@ final class GranularTransferPlanner {
 					createdCompositions.add(compositionByDraft[index]);
 				}
 			}
-			if (domain.thermalState != null) thermalInsertions = domain.thermalState.planExternalActiveInsertions(
-					originalCount, drafts.size(),
-					new DraftParcelContext(domain.domainCapabilities.thermalMarkerContext(), drafts, compositionByDraft));
+			if (domain.thermalState != null) {
+				var context = new DraftParcelContext(domain.domainCapabilities.thermalMarkerContext(), drafts, compositionByDraft);
+				thermalInsertions = carriedEnergy == null
+						? domain.thermalState.planExternalActiveInsertions(originalCount, drafts.size(), context)
+						: domain.thermalState.planExternalActiveInsertions(originalCount, drafts.size(), context, carriedEnergy);
+			}
 			displacement = GranularLiquidDisplacement.prepareInsertion(domain, previousSolid, plannedSolid);
 			gas = displacement == null ? prepareInsertionGas(plannedSolid) : displacement.gasTopology;
 			requireInsertionSuccessor(gas, thermalInsertions, displacement);
@@ -249,7 +261,10 @@ final class GranularTransferPlanner {
 						draft.x(), draft.y(), draft.z(), 0.0F, 0.0F, 0.0F,
 						draft.solidVolumeSvq(), draft.massUnits(), draft.materialHandle(), compositionByDraft[index], 0, (byte) 0, draft.ceilMask()));
 			}
-			if (domain.thermalState != null) domain.thermalState.commitExternalActiveInsertions(preparedEnergies);
+			if (domain.thermalState != null) {
+				if (carriedEnergy == null) domain.thermalState.commitExternalActiveInsertions(preparedEnergies);
+				else domain.thermalState.commitExternalActiveInsertions(preparedEnergies, carriedEnergy);
+			}
 			boolean[] changedCells = new boolean[domain.cellCount];
 			for (GranularParcelDraft draft : preparedDrafts) if (!changedCells[draft.cell()]) {
 				domain.domainPhaseInventory.markGranularExternalChange(draft.cell()); changedCells[draft.cell()] = true;
@@ -395,7 +410,7 @@ final class GranularTransferPlanner {
 			return FluidDomain.GranularExtraction.rejected("Accessible granular inventory cannot be represented by the dry container");
 		}
 		domain.domainFlowFields.ensureInventoryGrid(); domain.granularCoupling.rebuild(granular.parcels, granular.deposits);
-		long[] futureSolid = domain.granularCoupling.copySolidSvq();
+		long[] futureSolid = domain.entityBodyCoupling.addTo(domain.granularCoupling.copySolidSvq());
 		var remainingParcels = new java.util.HashMap<Integer, GranularParcelStore.Parcel>();
 		for (var removal : removals) {
 			if (removal.deposit()) { futureSolid[removal.cell()] -= removal.solidVolumeSvq(); continue; }

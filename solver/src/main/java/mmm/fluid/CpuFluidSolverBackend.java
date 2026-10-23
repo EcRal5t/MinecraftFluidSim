@@ -27,7 +27,10 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 			for (int refinement = 0; ; refinement++) {
 				FluidDomain candidate = restoreCandidate(request.state());
 				candidate.minimumMechanicalSubsteps = minimumSubsteps;
-				MovingBodyFluidCoupling.Result movingBodyCoupling = candidate.domainStep.applyMovingBodyCouplings(request.movingBodies());
+				candidate.entityBodyCoupling.replace(request.pendingPhaseSettlementOnly()
+						? candidate.entityBodies.bodies().stream().map(body -> new MovingBodyFluidCoupling.Request(
+								body.bodyId(), body.bounds(), 0, 0, 0)).toList()
+						: request.movingBodies());
 				int substeps = candidate.domainStep.calculateSubsteps(candidate.config.timeStep());
 				spentSubsteps = Math.addExact(spentSubsteps, substeps);
 				if (spentSubsteps > MAXIMUM_CUMULATIVE_SUBSTEPS) {
@@ -50,6 +53,8 @@ public final class CpuFluidSolverBackend implements FluidSolverBackend {
 					continue;
 				}
 				candidate.minimumMechanicalSubsteps = 1;
+				MovingBodyFluidCoupling.Result movingBodyCoupling = request.pendingPhaseSettlementOnly()
+						? MovingBodyFluidCoupling.Result.NONE : candidate.entityBodyCoupling.result();
 				return FluidStepCandidate.preparedCpu(
 						request.baseGeneration(), candidate, stats, movingBodyCoupling,
 						new FluidStepCandidate.MechanicalResolution(refinement, spentSubsteps, refinementReason));

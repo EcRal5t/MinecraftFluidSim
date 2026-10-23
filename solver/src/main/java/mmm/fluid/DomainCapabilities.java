@@ -294,7 +294,7 @@ final class DomainCapabilities {
 		var addition = new CoherentPhaseStore.Group(cell, phaseId, occupiedVolumeSvq, massUnits, composition, internalEnergy);
 		addition.requireCompositionMass(domain.chemistry == null ? null : domain.chemistry.registry());
 		var thermal = domain.thermalState.planCoherentExternal(addition);
-		long[] before = domain.granularCoupling.copySolidSvq(), after = before.clone();
+		long[] before = domain.entityBodyCoupling.addTo(domain.granularCoupling.copySolidSvq()), after = before.clone();
 		after[cell] = Math.addExact(after[cell], occupiedVolumeSvq);
 		var displacement = GranularLiquidDisplacement.prepareInsertion(domain, before, after);
 		var audit = thermal.auditAfter().withMechanicalWork(displacement.inventory.mechanicalHeat())

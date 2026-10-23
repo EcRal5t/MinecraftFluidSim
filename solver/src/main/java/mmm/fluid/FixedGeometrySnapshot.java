@@ -6,6 +6,7 @@ public final class FixedGeometrySnapshot {
 	private static final float MICRO_FACE_AREA = .25F;
 	private final int sizeX,sizeY,sizeZ;
 	private final byte[] occupancy;
+	private final double totalOpenCellVolume;
 	private volatile FaceIncidence faceIncidence;
 	private final float[] openCellVolume,openFaceX,openFaceY,openFaceZ;
 	private final float[] solidWallAreaX,solidWallAreaY,solidWallAreaZ;
@@ -17,10 +18,14 @@ public final class FixedGeometrySnapshot {
 		this.sizeX=sizeX;this.sizeY=sizeY;this.sizeZ=sizeZ;occupancy=ownedMasks;
 		int count=ownedMasks.length;openCellVolume=new float[count];
 		for(int cell=0;cell<count;cell++){requireConnectedOpenCell(cell,mask(cell));openCellVolume[cell]=1-Integer.bitCount(mask(cell))*.125F;}
+		double total=0;for(float volume:openCellVolume)total+=volume;totalOpenCellVolume=total;
 		openFaceX=new float[(sizeX+1)*sizeY*sizeZ];openFaceY=new float[sizeX*(sizeY+1)*sizeZ];openFaceZ=new float[sizeX*sizeY*(sizeZ+1)];
 		solidWallAreaX=new float[count];solidWallAreaY=new float[count];solidWallAreaZ=new float[count];
 		buildFaces();
 	}
+
+	/** Fixed geometric capacity in normalized cell-volume units; moving carriers do not alter it. */
+	public double totalOpenCellVolume() { return totalOpenCellVolume; }
 
 	/** Candidate graphs borrow these shape-only columns; each graph owns its changing coefficients. */
 	FaceIncidence faceIncidence() {

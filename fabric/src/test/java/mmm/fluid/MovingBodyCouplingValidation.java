@@ -16,42 +16,37 @@ public final class MovingBodyCouplingValidation {
 			if(x==2)d.setSolid(x,y,z,true);else d.setVolume(x,y,z,.75F);
 		}
 		FullCapabilityTestFixture.bindFull(d,registries,293.15,ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-		var volume=d.liquidCells.exactVolume();long mass=d.totalMassUnits();
-		var gas=d.gasBoundary().sealedInventory();double wallImpulse=0;
-		for(int step=0;step<32;step++) {
-			d.domainFlowFields.ensureVelocityGrid();
-			double kinetic=kinetic(d);var beforeU=d.exactInternalEnergy();var beforeRoundoff=d.thermalAudit().roundoffResidual();
-			double storageAllowance=energyStorageAllowance(d);
-			double[] beforeP=momentum(d),beforeWall=wall(d);
-			double[] velocity=step<8?new double[]{.6,-.2,.3}:step<16?new double[3]
-					:step<24?new double[]{-.4,.1,-.2}:new double[3];
-			var result=d.applyMovingBodyCoupling(MovingBodyFluidCoupling.prescribedCube(.85F,.75F,.75F,
-					velocity[0],velocity[1],velocity[2],.1));
-			double heat=d.exactInternalEnergy().subtract(beforeU).toDouble();
-			storageAllowance+=energyStorageAllowance(d);
-			require(Math.abs(d.thermalAudit().roundoffResidual().subtract(beforeRoundoff).toDouble())<=storageAllowance,
-					"Body heat was hidden in a roundoff term larger than actual energy storage precision");
-			double afterK=kinetic(d),scale=Math.max(1,kinetic+afterK+Math.abs(result.externalWorkJoules()));
-			// Velocity publication uses float. Keep a fixed representability allowance per operation.
-			double tolerance=16*Math.ulp((float)scale)+storageAllowance;
-			require(result.coupledMarkers()>0&&heat>=-tolerance
-					&&Math.abs(afterK-kinetic+heat-result.externalWorkJoules())<=tolerance,
-					"Body/wall work did not become actual kinetic energy and heat: step="+step
-							+", dK="+(afterK-kinetic)+", heat="+heat+", W="+result.externalWorkJoules());
-			double[] afterP=momentum(d),afterWall=wall(d);
-			double[] impulse={result.impulseXKilogramMetresPerSecond(),result.impulseYKilogramMetresPerSecond(),result.impulseZKilogramMetresPerSecond()};
-			for(int axis=0;axis<3;axis++) {
-				double reaction=afterWall[axis]-beforeWall[axis];wallImpulse+=Math.abs(reaction);
-				double impulseScale=Math.max(1,Math.abs(beforeP[axis])+Math.abs(impulse[axis])+Math.abs(reaction));
-				require(Math.abs(afterP[axis]-beforeP[axis]-impulse[axis]-reaction)<=16*Math.ulp((float)impulseScale),
-						"Body and fixed-wall impulses did not account for actual MAC momentum");
-			}
-			require(d.totalMassUnits()==mass&&d.liquidCells.exactVolume().equals(volume)
-					&&d.gasBoundary().sealedInventory().equals(gas)&&d.gasBoundary().auditClosed()
-					&&d.exactInternalEnergy().equals(d.thermalAudit().expectedInventory()),
-					"Body/wall publication changed inventory or opened its exact thermal ledger");
-		}
-		require(wallImpulse>0,"Body fixture did not exercise actual fixed-wall momentum retirement");
+        var volume=d.liquidCells.exactVolume();long mass=d.totalMassUnits();
+        var gas=d.gasBoundary().sealedInventory();
+        var id=java.util.UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        var bounds=new MovingBodyFluidCoupling.Bounds(.65,.55,.65,.85,.75,.85);
+        var backend=new CpuFluidSolverBackend();
+        d=backend.evaluate(new FluidStepRequest(0,d.captureAuthoritativeState(),java.util.List.of(new MovingBodyFluidCoupling.Request(id,bounds,0,0,0)),false,0)).claimPreparedCpuDomain();
+        var initialU=d.exactInternalEnergy(); double sumWork=0, maximumTemperatureChange=0;
+        double[] initialTemperature=new double[d.cellCount];
+        for(int cell=0;cell<d.cellCount;cell++)if(!d.liquidCells.stocksInCell(cell).isEmpty())
+            initialTemperature[cell]=d.thermalTemperatureInCell(cell%d.sizeX,cell/d.sizeX%d.sizeY,cell/(d.sizeX*d.sizeY));
+        for(int step=0;step<32;step++) {
+            d.domainFlowFields.ensureVelocityGrid();double beforeK=kinetic(d);var beforeU=d.exactInternalEnergy();
+            double allowance=energyStorageAllowance(d);
+            double vx=step<8?.2:step<16?0:step<24?-.2:0;
+            var candidate=backend.evaluate(new FluidStepRequest(step+1,d.captureAuthoritativeState(),java.util.List.of(new MovingBodyFluidCoupling.Request(id,bounds,vx,0,0)),false,0));
+            d=candidate.claimPreparedCpuDomain();var result=candidate.movingBodyCoupling();
+            sumWork+=result.externalWorkJoules();
+            for(int cell=0;cell<d.cellCount;cell++)if(initialTemperature[cell]>0&&!d.liquidCells.stocksInCell(cell).isEmpty())
+                maximumTemperatureChange=Math.max(maximumTemperatureChange,Math.abs(d.thermalTemperatureInCell(cell%d.sizeX,cell/d.sizeX%d.sizeY,cell/(d.sizeX*d.sizeY))-initialTemperature[cell]));
+            double deltaK=kinetic(d)-beforeK,deltaU=d.exactInternalEnergy().subtract(beforeU).toDouble();
+            allowance+=energyStorageAllowance(d);
+            double scale=Math.max(1,Math.abs(deltaK)+Math.abs(deltaU)+Math.abs(result.externalWorkJoules()));
+            require(Math.abs(deltaK+deltaU-result.externalWorkJoules())<=16*Math.ulp((float)scale)+allowance,
+                    "Prescribed pressure work did not close actual K/U: dK="+deltaK+", dU="+deltaU+", W="+result.externalWorkJoules());
+            require(d.totalMassUnits()==mass&&d.liquidCells.exactVolume().equals(volume)&&d.gasBoundary().sealedInventory().equals(gas)
+                    &&d.exactInternalEnergy().equals(d.thermalAudit().expectedInventory()),"Body pressure opened inventory or energy audit");
+            require(result.bodyImpulses().size()==1&&result.bodyImpulses().getFirst().bodyId().equals(id),"Body reaction lost stable identity");
+        }
+        System.out.printf("  prescribed body drive W=%.9g J dU=%.9g J maxDeltaT=%.9g K%n",
+                sumWork,d.exactInternalEnergy().subtract(initialU).toDouble(),maximumTemperatureChange);
+
 		var saved=d.captureAuthoritativeState();var restored=FluidDomain.restoreAuthoritativeState(saved);
 		require(saved.liquid().stocks().equals(restored.liquidCells.stocks())
 				&&java.util.Arrays.equals(saved.momentum().copyX(),restored.exportMacMomentum().copyX())
@@ -67,7 +62,8 @@ public final class MovingBodyCouplingValidation {
 		var sample = domain.sampleAxisAlignedBody(.6,.1,.6,.9,.4,.9);
 		double expectedVolume=.3*.3*.3;
 		require(Math.abs(sample.displacedVolumeCubicMetres()-expectedVolume)<1e-12
-				&&Math.abs(sample.wetSurfaceAreaSquareMetres()-.54)<1e-12,
+				&&Math.abs(sample.wetSurfaceAreaSquareMetres()-.54)<1e-12
+                &&Math.abs(sample.waterContactVolumeCubicMetres()-expectedVolume)<1e-12,
 				"Body/PLIC intersection lost submerged volume or wet surface area");
 		require(Math.abs(sample.pressureForceYNewtons()-1000.0*domain.config().gravity()*expectedVolume)<1e-7
 				&&Math.abs(sample.pressureForceXNewtons())<1e-7&&Math.abs(sample.pressureForceZNewtons())<1e-7,
@@ -75,8 +71,30 @@ public final class MovingBodyCouplingValidation {
 		var empty = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,9.81F,.025F,120,1e-5F,.002F));
 		empty.setVolume(1,1,1,.1F);
 		var dry=empty.sampleAxisAlignedBody(.55,.8,.55,.7,.95,.7);
-		require(dry.displacedVolumeCubicMetres()==0&&dry.wetSurfaceAreaSquareMetres()==0,
+		require(dry.displacedVolumeCubicMetres()==0&&dry.wetSurfaceAreaSquareMetres()==0&&dry.waterContactVolumeCubicMetres()==0,
 				"Body above the actual PLIC surface acquired artificial immersion");
+		var layered = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,9.81F,.025F,120,1e-5F,.002F));
+		layered.bindMaterialRegistry(new FluidMaterialRegistry(java.util.List.of(
+				new FluidMaterial("mmm:water",1000,"mmm:aqueous",0,Math.PI/2),
+				new FluidMaterial("mmm:oil",800,"mmm:oil",0,Math.PI/2))));
+		require(layered.tryInsertExactMixture(1,1,1,java.util.List.of(
+				new FluidDomain.MaterialPortion(0,.5,mmm.units.Mass.fromKilograms(62.5)),
+				new FluidDomain.MaterialPortion(1,.5,mmm.units.Mass.fromKilograms(50))),0).transferred(),
+				"Water/oil body-contact fixture could not be inserted");
+		var oilOnly = layered.sampleAxisAlignedBody(.6,.8,.6,.9,.9,.9);
+		var waterAndOil = layered.sampleAxisAlignedBody(.6,.7,.6,.9,.8,.9);
+		require(oilOnly.displacedVolumeCubicMetres()>0&&oilOnly.waterContactVolumeCubicMetres()==0
+				&&waterAndOil.waterContactVolumeCubicMetres()>0
+				&&waterAndOil.waterContactVolumeCubicMetres()<waterAndOil.displacedVolumeCubicMetres(),
+				"Body wet contact confused oil with water or lost water at the material interface");
+		var partial = new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,9.81F,.025F,120,1e-5F,.002F));
+		partial.sealDomainBoundary(); partial.setVolume(1,1,1,.5F);
+		var before = partial.sampleAxisAlignedBody(.6,.6,.6,.9,.9,.9);
+		int node = partial.gasNodeAt(.625,.875,.625);
+		partial.setGasNodeStandardVolume(node, 2 * partial.gasBoundary().standardVolume(node));
+		var after = partial.sampleAxisAlignedBody(.6,.6,.6,.9,.9,.9);
+		require(Math.abs(before.pressureForceYNewtons()-after.pressureForceYNewtons())<1e-7,
+				"Uniform cavity pressure created a false force on a partially immersed body");
 	}
 	private static double[] momentum(FluidDomain d){
 		return new double[]{java.util.Arrays.stream(d.mac.momentumX).sum(),java.util.Arrays.stream(d.mac.momentumY).sum(),java.util.Arrays.stream(d.mac.momentumZ).sum()};

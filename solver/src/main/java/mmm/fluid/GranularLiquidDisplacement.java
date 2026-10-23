@@ -29,11 +29,11 @@ final class GranularLiquidDisplacement {
 		if (!domain.domainPhaseInventory.hasGranularInventory()) return null;
 		domain.domainFlowFields.ensureInventoryGrid();
 		domain.granularCoupling.rebuild(domain.granularState.parcels, domain.granularState.deposits);
-		return domain.granularCoupling.copySolidSvq();
+		return domain.entityBodyCoupling.addTo(domain.granularCoupling.copySolidSvq());
 	}
 	static void commit(FluidDomain domain, long[] previous) {
 		if (previous == null) return;
-		var candidate = prepare(domain, previous, domain.granularCoupling.copySolidSvq());
+		var candidate = prepare(domain, previous, domain.entityBodyCoupling.addTo(domain.granularCoupling.copySolidSvq()));
 		if (candidate != null) publish(domain, candidate, () -> { });
 	}
 	static void publish(FluidDomain domain, Prepared candidate, Runnable solidPublication) {
@@ -42,7 +42,9 @@ final class GranularLiquidDisplacement {
 
 	static Prepared prepare(FluidDomain domain, long[] previous, long[] next) { return prepare(domain, previous, next, false); }
 	static Prepared prepareInsertion(FluidDomain domain, long[] previous, long[] next) { return prepare(domain, previous, next, true); }
-	private static Prepared prepare(FluidDomain domain, long[] previous, long[] next, boolean insertion) {
+	static Prepared prepareExternal(FluidDomain domain, long[] previous, long[] next) { return prepare(domain, previous, next, true, true); }
+    private static Prepared prepare(FluidDomain domain, long[] previous, long[] next, boolean insertion) { return prepare(domain, previous, next, insertion, false); }
+    private static Prepared prepare(FluidDomain domain, long[] previous, long[] next, boolean insertion, boolean external) {
 		if (previous == null || next == null || previous.length != domain.cellCount || next.length != domain.cellCount)
 			throw new IllegalArgumentException("Solid transition requires complete source and future occupancy");
 		if (Arrays.equals(previous, next)) return null;
@@ -56,7 +58,7 @@ final class GranularLiquidDisplacement {
 			if (domain.liquidCells.exactCellVolume(cell).compareTo(old) > 0 || open.compareTo(solidVolume(next[cell])) < 0)
 				throw new IllegalStateException("Solid transition requires valid source capacity at cell " + cell);
 		}
-		if (insertion ? totalAfter < totalBefore : totalBefore != totalAfter)
+		if (!external && (insertion ? totalAfter < totalBefore : totalBefore != totalAfter))
 			throw new IllegalStateException("Solid displacement changed skeleton quantity outside its operation");
 		try { flux.prepareDisplacement(next,domain.liquidCells); }
 		catch (MechanicalTimeRefinement | ConservativeLiquidFlux.CapacityUnavailable unavailable) { throw new CapacityUnavailable(unavailable); }

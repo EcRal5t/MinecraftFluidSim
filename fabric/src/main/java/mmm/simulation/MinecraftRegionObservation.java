@@ -9,10 +9,18 @@ import java.util.Objects;
 public final class MinecraftRegionObservation {
 	private final FluidRegionManager regions;
 	private final FluidSnapshotPublisher snapshots;
+	private final ControllerComparatorSignals comparatorSignals;
 
-	MinecraftRegionObservation(FluidRegionManager regions, FluidSnapshotPublisher snapshots) {
+	MinecraftRegionObservation(FluidRegionManager regions, FluidSnapshotPublisher snapshots, ControllerComparatorSignals comparatorSignals) {
 		this.regions = Objects.requireNonNull(regions, "Region manager");
 		this.snapshots = Objects.requireNonNull(snapshots, "Snapshot publisher");
+		this.comparatorSignals = Objects.requireNonNull(comparatorSignals);
+	}
+
+	/** Cached committed state only: no owner discovery, chunk loading, recovery or wake-up. */
+	public int controllerComparatorSignal(ServerLevel level, net.minecraft.core.BlockPos position) {
+		if (!level.getServer().isSameThread()) return 0;
+		return comparatorSignals.signal(level.dimension(), position);
 	}
 
 	public boolean exists() {

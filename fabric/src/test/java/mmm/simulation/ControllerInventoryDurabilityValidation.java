@@ -73,6 +73,15 @@ final class ControllerInventoryDurabilityValidation {
 
 	private ControllerInventoryDurabilityValidation() { }
 
+	static void runColdAcidBase() throws Exception {
+		runColdAcidBase(FullCapabilityTestFixture.load());
+	}
+	private static void runColdAcidBase(FullCapabilityTestFixture.Registries registries) throws Exception {
+		runScenario("cold acid-base precipitation",registries,state -> {
+			state.insertAcid();state.insertBase();state.temperature(1.0);state.steps(true,40);
+		});
+	}
+
 	static void run() throws Exception {
 		Path root = Files.createTempDirectory("mmm-controller-inventory-durability");
 		try {
@@ -305,9 +314,7 @@ final class ControllerInventoryDurabilityValidation {
 		runScenario("base-then-acid precipitation", registries, state -> {
 			state.insertBase(7); state.insertAcid(7); state.steps(true, 20);
 		});
-		runScenario("cold acid-base precipitation", registries, state -> {
-			state.insertAcid(); state.insertBase(); state.temperature(1.0); state.steps(true, 40);
-		});
+		runColdAcidBase(registries);
 		runScenario("alternating acid-base precipitation", registries, state -> {
 			for (int bucket = 0; bucket < 6; bucket++) {
 				state.insertAcid(); state.insertBase(); state.step(true);

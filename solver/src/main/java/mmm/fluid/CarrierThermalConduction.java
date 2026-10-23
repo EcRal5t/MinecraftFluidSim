@@ -8,6 +8,69 @@ import java.util.List;
 /** Finite-volume conduction between persistent thermal owners in connected cut-cell supports. */
 final class CarrierThermalConduction {
 	private CarrierThermalConduction() { }
+	/** Physical cell faces; contact ordinals are linear cell indices. */
+	static List<mmm.thermal.FiniteThermalExchange.Contact> finitePorts(
+			FluidDomain domain, List<FluidDomain.ThermalPortRequest> requests) {
+		domain.domainFlowFields.preparePhysicalState();
+		if (domain.thermalState == null) throw new IllegalStateException("Thermal state is not bound");
+		var access = domain.thermalState.exchangeCarrierAccess(domain.domainCapabilities.thermalMarkerContext());
+		var byCell = new java.util.HashMap<Integer, java.util.List<Integer>>();
+		for (int owner = 0; owner < access.carrierCount(); owner++) if (access.mass(owner) > 0)
+			byCell.computeIfAbsent(access.cell(owner), ignored -> new java.util.ArrayList<>()).add(owner);
+		var conductance = new java.util.TreeMap<Integer, java.util.Map<Integer, Double>>();
+		var seen = new java.util.HashSet<Long>();
+		double h = domain.config.cellSize();
+		var phase = domain.gasState.frame.phase();
+		for (var request : requests) {
+			int cell = domain.domainFlowFields.cellIndexChecked(request.cellX(), request.cellY(), request.cellZ());
+			if (!seen.add(6L * cell + request.direction())) throw new IllegalArgumentException("Repeated thermal port face");
+			var owners = byCell.get(cell);
+			if (owners == null) continue;
+			int axis = request.direction() / 2, side = request.direction() & 1;
+			for (int micro = 0; micro < 8; micro++) {
+				if ((micro >> axis & 1) != side || (domain.geometry.cutCells.mask(cell) & 1 << micro) != 0) continue;
+				double[] coverage = new double[3];
+				for (int owner : owners) {
+					int support = access.supportMask(owner);
+					if (support == 0) support = ~domain.geometry.cutCells.mask(cell) & 255;
+					if ((support & 1 << micro) != 0) coverage[family(access.material(owner))] += access.volume(owner) / Integer.bitCount(support);
+				}
+				double tangent = .5 * (micro >> ((axis + 1) % 3) & 1);
+				double other = .5 * (micro >> ((axis + 2) % 3) & 1);
+				double dry = GasFaceIntersection.area(phase, cell, -1, axis, side, 0, tangent, other, .5);
+				double porosity = phase.componentPoreScale(cell, micro, phase.poreVolume(cell).toDouble()
+						/ (Integer.bitCount(~domain.geometry.cutCells.mask(cell) & 255) * .125));
+				double[] area = {(.25 - dry) * porosity, dry * porosity, .25 * Math.min(1, coverage[2] / .125)};
+				for (int owner : owners) {
+					int support = access.supportMask(owner);
+					if (support == 0) support = ~domain.geometry.cutCells.mask(cell) & 255;
+					if ((support & 1 << micro) == 0) continue;
+					int family = family(access.material(owner));
+					double k = access.material(owner).conductivityWPerMeterK();
+					if (k == 0 || coverage[family] == 0) continue;
+					double share = access.volume(owner) / Integer.bitCount(support) / coverage[family];
+					double g = h * h * area[family] * share
+							/ (request.wallThicknessMetres() / request.wallConductivityWPerMetreK() + request.filmThicknessMetres() / k);
+					if (g > 0) conductance.computeIfAbsent(cell, ignored -> new java.util.TreeMap<>()).merge(owner, g, Double::sum);
+				}
+			}
+		}
+		var result = new java.util.ArrayList<mmm.thermal.FiniteThermalExchange.Contact>();
+		for (var cell : conductance.entrySet()) {
+			double total = cell.getValue().values().stream().mapToDouble(Double::doubleValue).sum();
+			var carriers = new java.util.ArrayList<mmm.thermal.FiniteThermalExchange.Carrier>();
+			for (var entry : cell.getValue().entrySet()) {
+				int owner = entry.getKey();
+				carriers.add(new mmm.thermal.FiniteThermalExchange.Carrier(owner, access.material(owner), access.mass(owner),
+						access.baseEnergy(owner), access.internalEnergy(owner), entry.getValue() / total));
+			}
+			result.add(new mmm.thermal.FiniteThermalExchange.Contact(cell.getKey(), total, carriers));
+		}
+		return List.copyOf(result);
+	}
+	private static int family(mmm.thermal.ThermalMaterialDefinition material) {
+		return switch (material.carrierKind()) { case LIQUID -> 0; case GAS -> 1; default -> 2; };
+	}
 	static List<ThermalCarrierTransport.Contact> contacts(FluidDomain domain, ThermalCarrierTransport.Batch owners) {
 		if (domain.thermalState == null || owners.conductionBelowResolution(domain.thermalBoundaryTemperatureK)) return List.of();
 		int count=owners.carrierCount(),liquids=domain.liquidCells.physicalSize();

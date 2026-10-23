@@ -63,16 +63,49 @@ public final class MovingBodyFluidCoupling {
     }
   }
 
+  /** Accepted impulse delivered to the named body, opposite to the liquid/body interaction. */
+  public record BodyImpulse(
+      java.util.UUID bodyId,
+      double impulseXKilogramMetresPerSecond,
+      double impulseYKilogramMetresPerSecond,
+      double impulseZKilogramMetresPerSecond) {
+    public BodyImpulse {
+      java.util.Objects.requireNonNull(bodyId, "Body impulse identity is missing");
+      if (!(Double.isFinite(impulseXKilogramMetresPerSecond)
+          && Double.isFinite(impulseYKilogramMetresPerSecond)
+          && Double.isFinite(impulseZKilogramMetresPerSecond)))
+        throw new IllegalArgumentException("Body impulse must be finite");
+    }
+
+    BodyImpulse plus(BodyImpulse other) {
+      if (!bodyId.equals(other.bodyId)) throw new IllegalArgumentException("Cannot merge different body impulses");
+      return new BodyImpulse(bodyId, impulseXKilogramMetresPerSecond + other.impulseXKilogramMetresPerSecond,
+          impulseYKilogramMetresPerSecond + other.impulseYKilogramMetresPerSecond,
+          impulseZKilogramMetresPerSecond + other.impulseZKilogramMetresPerSecond);
+    }
+  }
+
   public record Result(
       int coupledMarkers,
       double coupledVolumeCubicMetres,
       double impulseXKilogramMetresPerSecond,
       double impulseYKilogramMetresPerSecond,
       double impulseZKilogramMetresPerSecond,
-      double externalWorkJoules) {
+      double externalWorkJoules,
+      java.util.List<BodyImpulse> bodyImpulses) {
     public static final Result NONE = new Result(0, 0.0, 0.0, 0.0, 0.0, 0.0);
 
+    public Result(int coupledMarkers, double coupledVolumeCubicMetres, double impulseXKilogramMetresPerSecond,
+        double impulseYKilogramMetresPerSecond, double impulseZKilogramMetresPerSecond, double externalWorkJoules) {
+      this(coupledMarkers, coupledVolumeCubicMetres, impulseXKilogramMetresPerSecond,
+          impulseYKilogramMetresPerSecond, impulseZKilogramMetresPerSecond, externalWorkJoules, java.util.List.of());
+    }
+
     public Result {
+      var canonical = new java.util.TreeMap<java.util.UUID, BodyImpulse>();
+      for (var impulse : java.util.List.copyOf(bodyImpulses)) canonical.merge(impulse.bodyId(), impulse, BodyImpulse::plus);
+      if (canonical.size() > MAXIMUM_REQUESTS_PER_STEP) throw new IllegalArgumentException("Body impulse list exceeds region budget");
+      bodyImpulses = java.util.List.copyOf(canonical.values());
       if (coupledMarkers < 0
           || !(Double.isFinite(coupledVolumeCubicMetres) && coupledVolumeCubicMetres >= 0.0)
           || !(Double.isFinite(impulseXKilogramMetresPerSecond)
@@ -85,13 +118,16 @@ public final class MovingBodyFluidCoupling {
 
     public Result plus(Result other) {
       if (other == null) throw new IllegalArgumentException("Moving-body result is missing");
+      var impulses = new java.util.ArrayList<>(bodyImpulses);
+      impulses.addAll(other.bodyImpulses);
       return new Result(
           Math.addExact(coupledMarkers, other.coupledMarkers),
           coupledVolumeCubicMetres + other.coupledVolumeCubicMetres,
           impulseXKilogramMetresPerSecond + other.impulseXKilogramMetresPerSecond,
           impulseYKilogramMetresPerSecond + other.impulseYKilogramMetresPerSecond,
           impulseZKilogramMetresPerSecond + other.impulseZKilogramMetresPerSecond,
-          externalWorkJoules + other.externalWorkJoules);
+          externalWorkJoules + other.externalWorkJoules,
+          impulses);
     }
   }
 

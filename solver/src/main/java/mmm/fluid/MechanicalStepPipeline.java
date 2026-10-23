@@ -102,6 +102,7 @@ final class MechanicalStepPipeline {
 		}
 		diagnosticStage = Stage.VISCOSITY;
 		FluidDomain.ViscousStepStats viscosity = viscosityStage.apply(dt);
+        domain.entityBodyCoupling.applyShear(dt);
 		if (captureAudit) {
 			nextKineticEnergy = domain.domainStep.mechanicalGridKineticEnergyJoules();
 			audit.viscousWorkJoules += nextKineticEnergy - stageKineticEnergy;

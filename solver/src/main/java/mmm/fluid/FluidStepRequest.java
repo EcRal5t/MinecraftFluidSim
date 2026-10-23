@@ -43,7 +43,7 @@ public record FluidStepRequest(
 		if (movingBodies == null || movingBodies.size() > MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP) {
 			throw new IllegalArgumentException("Moving-body request budget is invalid");
 		}
-		movingBodies = List.copyOf(movingBodies);
+		movingBodies = new EntityBodyState(movingBodies).bodies();
 		if (phaseChangeEnabled && (state.thermalOwner() == null || maximumPhaseOperations <= 0
 				|| maximumPhaseOperations > ThermalLimits.MAX_PHASE_OPERATIONS_PER_STEP)) {
 			throw new IllegalArgumentException("Phase-change request is incompatible with the state/budget");

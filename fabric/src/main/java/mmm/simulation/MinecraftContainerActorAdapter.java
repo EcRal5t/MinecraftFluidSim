@@ -25,9 +25,7 @@ import java.io.IOException;
 /** Locates, converges, and durably saves the Minecraft inventory named by a transfer actor. */
 final class MinecraftContainerActorAdapter {
 	CrossDomainRecovery.ExternalTruth classify(MinecraftServer server, ContainerTransferJournal journal) {
-		ItemStack current = currentItem(server, journal.actor());
-		return CrossDomainRecovery.classify(current != null, current != null && matches(current, journal.beforeItem()),
-				current != null && matches(current, journal.afterItem()), false);
+		return observe(server,journal,false);
 	}
 
 	ContainerRecoveryCoordinator.Convergence applyAfterItem(MinecraftServer server, ContainerTransferJournal journal) {
@@ -38,9 +36,27 @@ final class MinecraftContainerActorAdapter {
 	}
 
 	CrossDomainRecovery.ExternalTruth verifyAfterItem(MinecraftServer server, ContainerTransferJournal journal) {
-		ItemStack current = currentItem(server, journal.actor());
-		return CrossDomainRecovery.classify(current != null, current != null && matches(current, journal.beforeItem()),
-				current != null && matches(current, journal.afterItem()), true);
+		return observe(server,journal,true);
+	}
+	private CrossDomainRecovery.ExternalTruth observe(MinecraftServer server,ContainerTransferJournal journal,boolean readback) {
+		var current=currentItem(server,journal.actor());
+		if(current==null) return CrossDomainRecovery.ExternalTruth.UNAVAILABLE;
+		try {
+			mmm.transfer.TransferActorState state=null;
+			if(journal.actor() instanceof ContainerTransferActor.Dispenser actor && actor.inventoryId()!=null)
+				state=mmm.transfer.TransferActorState.decode(current.get(mmm.item.MmmComponents.TRANSFER_ACTOR));
+			return classifyInventory(ContainerItemMapper.fingerprint(current),state,journal,readback);
+		} catch(RuntimeException third) { return CrossDomainRecovery.ExternalTruth.THIRD; }
+	}
+	static CrossDomainRecovery.ExternalTruth classifyInventory(ContainerTransferJournal.ItemFingerprint inventory,
+			mmm.transfer.TransferActorState state,ContainerTransferJournal journal,boolean readback) {
+		boolean before=true,after=true;
+		if(journal.actor() instanceof ContainerTransferActor.Dispenser actor && actor.inventoryId()!=null) {
+			before=state!=null && state.instanceId().equals(actor.inventoryId()) && state.generation()==actor.generation();
+			after=state!=null && state.instanceId().equals(actor.inventoryId()) && state.generation()==actor.generation()+1;
+		}
+		return CrossDomainRecovery.classify(inventory!=null,before && journal.beforeItem().equals(inventory),
+				after && journal.afterItem().equals(inventory),readback);
 	}
 
 	/** The WAL may be deleted only after this forces the actor's owning save domain. */
@@ -80,7 +96,8 @@ final class MinecraftContainerActorAdapter {
 			case OFF -> InteractionHand.OFF_HAND;
 		};
 		ItemStack current = player.getItemInHand(hand);
-		if (!matches(current, journal.beforeItem()) && !matches(current, journal.afterItem())) {
+		if (!(matches(current, journal.beforeItem()) && matchesGeneration(current,actor,false))
+				&& !(matches(current, journal.afterItem()) && matchesGeneration(current,actor,true))) {
 			return ContainerRecoveryCoordinator.Convergence.CONFLICT;
 		}
 		player.setItemInHand(hand, ContainerItemMapper.toStack(journal.afterItem()));
@@ -101,10 +118,13 @@ final class MinecraftContainerActorAdapter {
 			return ContainerRecoveryCoordinator.Convergence.CONFLICT;
 		}
 		ItemStack current = dispenser.getItem(actor.slot());
-		if (!matches(current, journal.beforeItem()) && !matches(current, journal.afterItem())) {
+		if (!(matches(current, journal.beforeItem()) && matchesGeneration(current,actor,false))
+				&& !(matches(current, journal.afterItem()) && matchesGeneration(current,actor,true))) {
 			return ContainerRecoveryCoordinator.Convergence.CONFLICT;
 		}
-		dispenser.setItem(actor.slot(), ContainerItemMapper.toStack(journal.afterItem()));
+		ItemStack after=ContainerItemMapper.toStack(journal.afterItem());
+		attachAfterGeneration(after,actor);
+		dispenser.setItem(actor.slot(), after);
 		dispenser.setChanged();
 		return ContainerRecoveryCoordinator.Convergence.APPLIED;
 	}
@@ -140,6 +160,17 @@ final class MinecraftContainerActorAdapter {
 		} catch (IllegalArgumentException invalid) {
 			return false;
 		}
+	}
+	static boolean matchesGeneration(ItemStack item,ContainerTransferActor actor,boolean after) {
+		if (!(actor instanceof ContainerTransferActor.Dispenser dispenser) || dispenser.inventoryId()==null) return true;
+		try {
+			var state=mmm.transfer.TransferActorState.decode(item.get(mmm.item.MmmComponents.TRANSFER_ACTOR));
+			return state.instanceId().equals(dispenser.inventoryId()) && state.generation()==dispenser.generation()+(after?1:0);
+		} catch (RuntimeException invalid) { return false; }
+	}
+	static void attachAfterGeneration(ItemStack item,ContainerTransferActor.Dispenser actor) {
+		if(actor.inventoryId()!=null) item.set(mmm.item.MmmComponents.TRANSFER_ACTOR,
+				new mmm.transfer.TransferActorState(actor.inventoryId(),Math.addExact(actor.generation(),1)).encode());
 	}
 
 }

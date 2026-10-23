@@ -173,8 +173,7 @@ final class MinecraftContainerTransferPlan {
 			return new Resolution(null, "容器内容损坏、双重表示或 registry 不匹配");
 		}
 		if (requested <= 0L) return new Resolution(null, "容器转移请求没有正库存");
-		ThermalContents thermal = resourceKind == ContainerTransferJournal.ResourceKind.FLUID_NANOS
-				? MinecraftContainerTransferOperations.thermalContents(sourceStack) : null;
+		ThermalContents thermal = MinecraftContainerTransferOperations.thermalContents(sourceStack);
 		return new Resolution(new MinecraftContainerTransferPlan(transactions, world, region, cell, sourceStack, kind,
 				operation, resourceKind, requested, base, externalSource,
 				mixture, chemical, granular, thermal), null);
@@ -185,21 +184,22 @@ final class MinecraftContainerTransferPlan {
 	) {
 		return switch (kind) {
 			case POUR -> MinecraftContainerTransferOperations.pourIntoCell(
-					world, targetRegion, cell, requested, 6, 0, externalSource, thermal);
+					world, targetRegion, cell, MinecraftContainerTransferOperations.heldVolumeNanos(sourceStack),
+						requested, 6, 0, externalSource, thermal);
 			case SCOOP -> MinecraftContainerTransferOperations.scoopFromCell(
 					world, targetRegion, cell, requested, base, 6, 0, thermal);
 			case MATERIAL_POUR -> chemical == null
 					? MinecraftContainerTransferOperations.pourMaterialIntoCell(
-							world, targetRegion, cell, mixture, 6, externalSource, thermal)
+							world, targetRegion, cell, mixture, requested, 6, externalSource, thermal)
 					: MinecraftContainerTransferOperations.pourChemicalIntoCell(
-							world, targetRegion, cell, chemical, 6, externalSource, thermal);
+							world, targetRegion, cell, chemical, requested, 6, externalSource, thermal);
 			case MATERIAL_SCOOP -> chemistryEnabled()
 					? MinecraftContainerTransferOperations.scoopChemicalIntoCell(
 							world, targetRegion, cell, requested, 6, world.chemicalRegistry())
 					: MinecraftContainerTransferOperations.scoopMaterialIntoCell(
 							world, targetRegion, cell, requested, 6);
 			case GRANULAR_POUR -> MinecraftContainerTransferOperations.pourGranularIntoCell(
-					world, targetRegion, cell, granular, 6, externalSource);
+					world, targetRegion, cell, granular, requested, 6, externalSource, thermal);
 			case GRANULAR_SCOOP -> MinecraftContainerTransferOperations.scoopGranularIntoCell(
 					world, targetRegion, cell, requested, 6);
 			case NONE -> null;
@@ -228,6 +228,8 @@ final class MinecraftContainerTransferPlan {
 
 	boolean filled() { return operation == ContainerTransferJournal.Operation.INSERT; }
 	long requestedAmount() { return requestedAmount; }
+	long baseAmount() { return baseAmount; }
+	ContainerTransferJournal.ResourceKind resourceKind() { return resourceKind; }
 
 	private boolean chemistryEnabled() {
 		return world.hasCapability(WorldCapability.CHEMISTRY)

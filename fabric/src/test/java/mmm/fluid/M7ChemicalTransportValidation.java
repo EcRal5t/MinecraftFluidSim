@@ -376,8 +376,9 @@ private static void validateChemicalContainerRoundTrip() throws Exception {
 		var config = source.config;
 		// Set the disturbance from the body's actual liquid outflow response.
 		FluidDomain couplingProbe = FluidDomain.restoreAuthoritativeState(source.captureAuthoritativeState());
-		couplingProbe.applyMovingBodyCoupling(mmm.world.MovingBodyFluidCoupling.prescribedCube(
-				1.0F, 1.0F, 2.0F, 1.0, 0.0, 0.0, 0.125));
+        var probeBody=mmm.world.MovingBodyFluidCoupling.prescribedCube(1.0F,1.0F,2.0F,1,0,0,.125);
+        couplingProbe=new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0,couplingProbe.captureAuthoritativeState(),List.of(probeBody),false,0)).claimPreparedCpuDomain();
+
 		double peakVelocity=0;
 		for(var axis:new float[][]{couplingProbe.mac.velocityX,couplingProbe.mac.velocityY,couplingProbe.mac.velocityZ})
 			for(float velocity:axis)peakVelocity=Math.max(peakVelocity,Math.abs(velocity));

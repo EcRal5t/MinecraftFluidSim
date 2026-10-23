@@ -33,6 +33,7 @@ public final class FluidRegion {
 	private final long networkGeneration;
 	private final FluidRegionLifecycle lifecycle = new FluidRegionLifecycle();
 	private FluidDomain domain;
+	private Runnable committedObservationListener = () -> { };
 	/** Runtime-only owner revision for synchronous backend candidates; HEAD generation remains independent. */
 	private long solverGeneration;
 	private long checkpointGeneration;
@@ -58,6 +59,9 @@ public final class FluidRegion {
 	private String performanceBlockFailure;
 	private ThermalActivity thermalActivity;
 	private FiniteThermalDeviceInventory finiteThermalDevices;
+
+	void committedObservationListener(Runnable listener) { committedObservationListener = Objects.requireNonNull(listener); }
+	void publishCommittedObservation() { committedObservationListener.run(); }
 
 	public FluidRegion(UUID id, ResourceKey<Level> dimension, BlockPos origin, FluidDomain domain) {
 		this(id, dimension, origin, domain, null);
@@ -200,6 +204,7 @@ public final class FluidRegion {
 		}
 		domain = replacement;
 		solverGeneration = candidateGeneration;
+		publishCommittedObservation();
 	}
 
 
@@ -214,6 +219,7 @@ public final class FluidRegion {
 		candidate.captureAuthoritativeState();
 		domain = candidate;
 		solverGeneration = nextGeneration;
+		publishCommittedObservation();
 	}
 	public FluidRegionFootprint footprint() { return footprint; }
 	public boolean controllerManaged() { return footprint != null; }
@@ -306,9 +312,11 @@ public final class FluidRegion {
 	void setAvailabilityFailure(String value) {
 		if (value == null) lifecycle.clearAvailabilityBlock();
 		else lifecycle.blockAvailability(value);
+		publishCommittedObservation();
 	}
 	void setAvailabilityFailure(RegionAvailabilityReason reason, String value) {
 		lifecycle.blockAvailability(reason, value);
+		publishCommittedObservation();
 	}
 	String chemistryBlockFailure() { return chemistryBlockFailure; }
 	void blockChemistry(String failure) {
@@ -373,10 +381,40 @@ public final class FluidRegion {
 		}
 	}
 
+	FluidRegion finiteDeviceCandidate(FiniteThermalDeviceInventory inventory, ThermalRegistry registry) {
+		inventory.requireCompatible(registry);
+		var candidate = lifecycleCandidate(FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState()), paused());
+		candidate.finiteThermalDevices = inventory;
+		return candidate;
+	}
+
+	void adoptFiniteDeviceCandidate(FluidRegion candidate, long publishedGeneration) {
+		if (!id.equals(candidate.id)) throw new IllegalArgumentException("Finite device candidate belongs to another region");
+		adoptPublishedPrivateDomain(candidate.domain, publishedGeneration, candidate.paused());
+		finiteThermalDevices = candidate.finiteThermalDevices;
+		wakeForActivity();
+	}
+
 	/** Atomically applies one already-planned body/cell exchange inside this live region. */
 	public boolean commitFiniteThermalExchange(
 			String providerId, String objectId, FiniteThermalExchange.Plan exchange,
 			List<FiniteThermalCellBinding> bindings, ThermalRegistry registry
+	) {
+		return commitFiniteThermalExchange(providerId, objectId, exchange, bindings, registry, null);
+	}
+
+	public boolean commitFiniteThermalPortExchange(String providerId, String objectId,
+			FiniteThermalExchange.Plan exchange, List<FluidDomain.ThermalPortRequest> ports, ThermalRegistry registry) {
+		var bindings = exchange.initialContacts().stream().map(contact -> {
+			int cell = contact.ordinal();
+			return new FiniteThermalCellBinding(cell, cell % sizeX, cell / sizeX % sizeY, cell / (sizeX * sizeY));
+		}).toList();
+		return commitFiniteThermalExchange(providerId, objectId, exchange, bindings, registry, List.copyOf(ports));
+	}
+
+	private boolean commitFiniteThermalExchange(
+			String providerId, String objectId, FiniteThermalExchange.Plan exchange,
+			List<FiniteThermalCellBinding> bindings, ThermalRegistry registry, List<FluidDomain.ThermalPortRequest> ports
 	) {
 		Objects.requireNonNull(exchange, "exchange");
 		Objects.requireNonNull(bindings, "bindings");
@@ -408,7 +446,8 @@ public final class FluidRegion {
 					binding.cellX(), binding.cellY(), binding.cellZ(),
 					exchange.initialContacts().get(index).conductanceWPerK()));
 		}
-		if (!domain.finiteThermalContacts(contacts).equals(exchange.initialContacts())) {
+		if (!(ports == null ? domain.finiteThermalContacts(contacts) : domain.finiteThermalPortContacts(ports))
+				.equals(exchange.initialContacts())) {
 			throw new IllegalArgumentException("Finite thermal fluid contact plan is stale");
 		}
 		FiniteThermalDeviceInventory current = finiteThermalDevices(registry.fingerprint());
@@ -482,6 +521,7 @@ public final class FluidRegion {
 		checkpointVolume = candidateDomain.totalVolume();
 		collisionRefreshRequired = true;
 		lifecycle.setOperatorPaused(operatorPaused, stepIntervalTicks);
+		publishCommittedObservation();
 	}
 
 	/** Records a complete durable generation while keeping the live solver allocated. */
@@ -499,7 +539,9 @@ public final class FluidRegion {
 		unloadedResumeState = lifecycle.state() == FluidRegionLifecycle.State.UNLOADED
 				? FluidRegionLifecycle.State.ACTIVE : lifecycle.state();
 		domain = null;
-		return lifecycle.requestUnload(true, true);
+		boolean unloaded = lifecycle.requestUnload(true, true);
+		publishCommittedObservation();
+		return unloaded;
 	}
 
 	/** Restores the complete cell/MAC generation while retaining the persisted lifecycle intent. */
@@ -508,6 +550,7 @@ public final class FluidRegion {
 		if(generation!=checkpointGeneration)throw new IllegalArgumentException("Checkpoint generation changed while restoring");
 		if(state.sizeX()!=sizeX()||state.sizeY()!=sizeY()||state.sizeZ()!=sizeZ()||!state.config().equals(solverConfig()))throw new IllegalArgumentException("Checkpoint solver geometry changed");
 		domain=FluidDomain.restoreAuthoritativeState(state);collisionRefreshRequired=true;lifecycle.restoreFromUnloaded(unloadedResumeState,stepIntervalTicks);
+		publishCommittedObservation();
 	}
 
 	public record PersistedRuntime(

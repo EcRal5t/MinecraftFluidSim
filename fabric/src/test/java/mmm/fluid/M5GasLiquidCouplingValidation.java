@@ -167,7 +167,23 @@ public final class M5GasLiquidCouplingValidation {
 				|| !domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()))
 			throw new AssertionError("Ambient dissolution lost its external source inventory or energy");
 		domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
-		domain.setThermalTemperatureInCell(1, 1, 1, 500);
+		domain.setThermalTemperatureInCell(1,1,1,1);
+		var cold=domain.captureAuthoritativeState();
+		var coldEnergy=domain.exactInternalEnergy();
+		var coldSource=domain.chemistry.externalSource();var coldSink=domain.chemistry.escapedSink();
+		stage=new GasLiquidMassTransferStage(domain);
+		var inactive=stage.step(1.0e6,0);
+		var unchanged=domain.captureAuthoritativeState();
+		if(inactive.active() || inactive.changedStocks())
+			throw new AssertionError("Out-of-fit liquid temperature kept its interface active: "+inactive);
+		if(!cold.liquid().stocks().equals(unchanged.liquid().stocks()) || !domain.exactInternalEnergy().equals(coldEnergy)
+				|| !domain.chemistry.externalSource().groups().equals(coldSource.groups())
+				|| !domain.chemistry.escapedSink().groups().equals(coldSink.groups()))
+			throw new AssertionError("Out-of-fit liquid temperature changed exact stock quantities, energy, or source/sink inventory");
+		if(!domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()) || totalCo2(domain)!=dissolved
+				|| domain.chemistry.massTransferPending().stream().anyMatch(p->p.pendingSeconds()!=0))
+			throw new AssertionError("Out-of-fit liquid temperature opened an audit or accumulated interface time");
+		domain.setThermalTemperatureInCell(1, 1, 1, 333.15);
 		stage = new GasLiquidMassTransferStage(domain);
 		stage.step(1.0e6);
 		long after = totalCo2(domain);

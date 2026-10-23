@@ -22,6 +22,10 @@ public final class MmmBlocks {
 	public static final Block FLUID_BOUNDARY = register("fluid_boundary", Block::new);
 	public static final Block FLUID_CONTROLLER = register("fluid_controller", FluidControllerBlock::new);
 	public static final Block THERMAL_RESERVOIR = register("thermal_reservoir", ThermalReservoirBlock::new);
+	public static final Block FINITE_HEAT_EXCHANGER = register("finite_heat_exchanger", FiniteHeatExchangerBlock::new);
+	public static final BlockEntityType<FiniteHeatExchangerBlockEntity> FINITE_HEAT_EXCHANGER_ENTITY = Registry.register(
+			BuiltInRegistries.BLOCK_ENTITY_TYPE, MmmMod.id("finite_heat_exchanger"),
+			new BlockEntityType<>(FiniteHeatExchangerBlockEntity::new, Set.of(FINITE_HEAT_EXCHANGER)));
 	public static final BlockEntityType<ThermalReservoirBlockEntity> THERMAL_RESERVOIR_ENTITY = Registry.register(
 			BuiltInRegistries.BLOCK_ENTITY_TYPE,
 			MmmMod.id("thermal_reservoir"),
@@ -35,7 +39,7 @@ public final class MmmBlocks {
 	}
 
 	public static boolean isBoundary(BlockState state) {
-		return state.is(FLUID_BOUNDARY) || state.is(FLUID_CONTROLLER) || state.is(THERMAL_RESERVOIR);
+		return state.is(FLUID_BOUNDARY) || state.is(FLUID_CONTROLLER) || state.is(THERMAL_RESERVOIR) || state.is(FINITE_HEAT_EXCHANGER);
 	}
 
 	private static Block register(String path, Function<BlockBehaviour.Properties, Block> factory) {
@@ -53,10 +57,12 @@ public final class MmmBlocks {
 						.setId(blockKey))
 		);
 		ResourceKey<Item> itemKey = ResourceKey.create(Registries.ITEM, identifier);
+		Item.Properties itemProperties = new Item.Properties().setId(itemKey).useBlockDescriptionPrefix();
 		Registry.register(
 				BuiltInRegistries.ITEM,
 				itemKey,
-				new MmmBlockItem(block, new Item.Properties().setId(itemKey).useBlockDescriptionPrefix())
+				block instanceof FiniteHeatExchangerBlock ? new FiniteHeatExchangerBlockItem(block, itemProperties.stacksTo(1))
+						: new MmmBlockItem(block, itemProperties)
 		);
 		return block;
 	}

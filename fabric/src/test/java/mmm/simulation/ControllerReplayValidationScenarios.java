@@ -109,6 +109,8 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 				"capturing the first reported pour changed gas inventory: " + gasLedgerDetail(domain));
 		require(Math.abs(totalGasAvailableVolume(domain) - 48.0) <= 1.0E-12,
 				"first reported pour did not compress the closed headspace to 48 m3");
+		var conservedSpecies = liquidGasSpecies(domain, registries.chemical());
+		long conservedMass = liquidGasMass(domain);
 		for (int step = 0; step < 40; step++) {
 			FluidStepCandidate candidate;
 			try {
@@ -118,9 +120,8 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 				throw new IllegalStateException("first reported controller pour failed at step " + step, failure);
 			}
 			domain = FluidDomain.restoreAuthoritativeState(candidate.state());
-			require(domain.gasBoundary().externalSource().equals(initialSource)
-						&& domain.gasBoundary().escapedSink().equals(initialSink)
-						&& domain.gasBoundary().sealedInventoryNanos() == initialInventory
+			require(liquidGasSpecies(domain, registries.chemical()).equals(conservedSpecies)
+						&& liquidGasMass(domain) == conservedMass
 						&& domain.gasBoundary().auditClosed()
 						&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 					"first reported controller pour changed gas inventory at step " + step);
@@ -132,12 +133,10 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 		require(second.addedVolume() == 112.0F && !second.markerBudgetLimited(),
 				"production controller did not inject the second 14 m³ source: " + second);
 		state = domain.captureAuthoritativeState();
-		require(domain.gasBoundary().externalSource().equals(initialSource)
-					&& domain.gasBoundary().escapedSink().equals(initialSink)
-					&& domain.gasBoundary().sealedInventoryNanos() == initialInventory,
-				"capturing the second reported pour changed gas inventory: " + gasLedgerDetail(domain));
 		require(Math.abs(totalGasAvailableVolume(domain) - 34.0) <= 1.0E-12,
 				"second reported pour did not compress the closed headspace to 34 m3");
+		conservedSpecies = liquidGasSpecies(domain, registries.chemical());
+		conservedMass = liquidGasMass(domain);
 		for (int step = 0; step < 1_000; step++) {
 			FluidStepCandidate candidate;
 			try {
@@ -149,9 +148,8 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 						+ "; input " + gasLedgerDetail(diagnostic), failure);
 			}
 			domain = FluidDomain.restoreAuthoritativeState(candidate.state());
-			require(domain.gasBoundary().externalSource().equals(initialSource)
-						&& domain.gasBoundary().escapedSink().equals(initialSink)
-						&& domain.gasBoundary().sealedInventoryNanos() == initialInventory
+			require(liquidGasSpecies(domain, registries.chemical()).equals(conservedSpecies)
+						&& liquidGasMass(domain) == conservedMass
 						&& domain.gasBoundary().auditClosed()
 						&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
 					"second reported controller pour changed gas inventory at step " + step
@@ -165,6 +163,22 @@ abstract class ControllerReplayValidationScenarios extends ProductionReplayValid
 				+ "headspace gauge pressure=%+.3f Pa across %d backend candidates%n",
 				domain.gasBoundary().sealedInventoryNanos() * 1.0E-9, finalAvailable,
 				domain.gasNodeGaugePressurePa(headspace), generation);
+	}
+
+	/** Cross-phase transfer retains the closed inventory while the gas-only ledger changes. */
+	private static java.util.Map<String, Long> liquidGasSpecies(FluidDomain domain, mmm.chemistry.ChemicalRegistry registry) {
+		var totals = new java.util.TreeMap<String, Long>();
+		for (var stock : domain.exportLiquidCellState().stocks()) if (stock.mixture() != null)
+			stock.mixture().stableAmounts(registry).forEach((id, amount) -> totals.merge(id, amount, Math::addExact));
+		for (var component : domain.gasBoundary().sealedInventory().entries())
+			for (var species : component.species()) totals.merge(species.speciesId(), species.amountQuanta(), Math::addExact);
+		return totals;
+	}
+
+	private static long liquidGasMass(FluidDomain domain) {
+		long mass = domain.totalMassUnits();
+		for (var component : domain.gasBoundary().sealedInventory().entries()) mass = Math.addExact(mass, component.massUnits());
+		return mass;
 	}
 
 	/** Replays the live phase-enabled path after pouring into an already bootstrapped closed shell. */

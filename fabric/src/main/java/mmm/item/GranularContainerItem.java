@@ -22,7 +22,7 @@ public final class GranularContainerItem extends Item {
 	}
 
 	public static GranularContents unvalidatedContents(ItemStack stack) {
-		if (!(stack.getItem() instanceof GranularContainerItem) || ContainerItemStacks.hasLiquidComponents(stack)) return null;
+		if (!(stack.getItem() instanceof GranularContainerItem) || ContainerItemStacks.hasLiquidInventoryComponents(stack)) return null;
 		String encoded = stack.get(MmmComponents.GRANULAR_CONTENTS);
 		if (encoded == null) return null;
 		try { return GranularContents.decode(encoded); }

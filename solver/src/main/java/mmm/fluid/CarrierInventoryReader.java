@@ -140,7 +140,7 @@ final class CarrierInventoryReader {
 		var inventory = domain.liquidCells.snapshot();
 		var frame = domain.gasState.frame;
 		FlipPressurePhaseGeometry phase;
-		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
+		long[] occupied = domain.occupiedSolidSvq();
 		if (frame != null && frame.matchesCarrierInventory(domain, occupied)) phase = frame.phase();
 		else {
 			phase = new FlipPressurePhaseGeometry(domain.sizeX, domain.sizeY, domain.sizeZ);

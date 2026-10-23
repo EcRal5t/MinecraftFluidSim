@@ -10,6 +10,7 @@ import java.util.UUID;
 public final class FluidRegionManager {
 	private final RegionCatalog.Limits limits;
 	private final RegionCatalog<FluidRegion> catalog;
+	private java.util.function.BiConsumer<FluidRegion, Boolean> committedObserver = (region, present) -> { };
 
 	public FluidRegionManager(RegionCatalog.Limits limits) {
 		this.limits = Objects.requireNonNull(limits, "limits");
@@ -24,11 +25,11 @@ public final class FluidRegionManager {
 	public RegionCatalog.BudgetUsage usage() { return catalog.usage(); }
 
 	public RegionCatalog.AdmissionResult add(FluidRegion candidate) {
-		return catalog.add(candidate, descriptor(candidate));
+		return admitted(candidate, catalog.add(candidate, descriptor(candidate)));
 	}
 
 	public RegionCatalog.AdmissionResult addAndSelect(FluidRegion candidate) {
-		return catalog.addAndSelect(candidate, descriptor(candidate));
+		return admitted(candidate, catalog.addAndSelect(candidate, descriptor(candidate)));
 	}
 
 	public RegionCatalog.AdmissionResult previewAdd(FluidRegion candidate) {
@@ -36,7 +37,7 @@ public final class FluidRegionManager {
 	}
 
 	public RegionCatalog.AdmissionResult registerDiscovered(FluidRegion candidate) {
-		return catalog.registerDiscovered(candidate, descriptor(candidate));
+		return admitted(candidate, catalog.registerDiscovered(candidate, descriptor(candidate)));
 	}
 
 	public RegionCatalog.AdmissionResult runtimeAdmission(FluidRegion candidate) {
@@ -48,7 +49,10 @@ public final class FluidRegionManager {
 	}
 
 	public RegionCatalog.AdmissionResult replaceSelected(FluidRegion candidate) {
-		return catalog.replaceSelected(candidate, descriptor(candidate));
+		FluidRegion previous = catalog.selected();
+		var result = catalog.replaceSelected(candidate, descriptor(candidate));
+		if (result.accepted() && previous != null && previous != candidate) removed(previous);
+		return admitted(candidate, result);
 	}
 
 	public RegionCatalog.AdmissionResult previewReplacement(long requiredCells) {
@@ -56,8 +60,36 @@ public final class FluidRegionManager {
 	}
 
 	public boolean select(UUID id) { return catalog.select(id); }
-	public FluidRegion remove(UUID id) { return catalog.remove(id); }
-	public void clear() { catalog.clear(); }
+	public FluidRegion remove(UUID id) {
+		var region = catalog.remove(id);
+		if (region != null) removed(region);
+		return region;
+	}
+	public void clear() {
+		var previous = catalog.values();
+		catalog.clear();
+		for (var region : previous) removed(region);
+	}
+
+	void observeCommittedChanges(java.util.function.BiConsumer<FluidRegion, Boolean> observer) {
+		committedObserver = Objects.requireNonNull(observer);
+		for (var region : catalog.values()) bind(region);
+	}
+
+	private RegionCatalog.AdmissionResult admitted(FluidRegion region, RegionCatalog.AdmissionResult result) {
+		if (result.accepted()) bind(region);
+		return result;
+	}
+
+	private void bind(FluidRegion region) {
+		region.committedObservationListener(() -> committedObserver.accept(region, true));
+		committedObserver.accept(region, true);
+	}
+
+	private void removed(FluidRegion region) {
+		region.committedObservationListener(() -> { });
+		committedObserver.accept(region, false);
+	}
 
 	private static RegionCatalog.Descriptor descriptor(FluidRegion region) {
 		Objects.requireNonNull(region, "region");

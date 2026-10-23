@@ -74,7 +74,7 @@
 2. `MinecraftRegionInputs` 刷新到期的碰撞与热交换输入，记录实体观测，生成本 tick 的 [RegionRuntime](../../app/src/main/java/mmm/application/RegionRuntime.java) 调度快照。
 3. `RegionTickUseCase` 根据运行状态和执行间隔选择 `NONE`、`MOTION` 或 `THERMAL`。同一个 tick 选择一项，力学计算优先于单独热计算。
 4. 到期的计算通过用例持有的 `StepExecutor` 调用 `RegionApplicationService`。请求包含区域 UUID、预期求解器代次、预算和本次输入。
-5. 结果成功提交后，`MinecraftRegionTick` 更新统计、休眠判断和快照输出。`RegionTickUseCase` 使用可注入的单调时钟记录耗时，并调整执行间隔。
+5. 结果成功提交后，`MinecraftRegionTick` 应用本次原生实体冲量、推进有限设备交换并更新热观察、休眠判断和快照。完整耗时从输入捕获开始覆盖这些工作，最后统一记录统计与 pacing，沿用原40／200 ms调度。
 
 失败或跳过的计算保持原有调度进度。力学与热休眠分别记录，因此静水仍可导热、发生相变，温度稳定的液体也仍可运动。
 
@@ -154,6 +154,14 @@ CPU 可以把已算好的私有 `FluidDomain` 交给区域，省去正常帧的�
 它通过当前后端执行一次仅含力学的计算，完成已有相变几何的力学同步。该次计算跳过导热、反应和相变，完成后清除已有待推进格。提交成功后，以新的已提交区域状态准备容器事务或操作预览；失败时保留相应的阻止原因。
 
 <a id="world-inputs"></a>
+## 控制器液位与比较器
+
+`FluidControllerBlock.getAnalogOutputSignal` 通过 `MinecraftRegionObservation.controllerComparatorSignal` 读取 `ControllerComparatorSignals` 的已提交缓存。输出采用原版容器比例：空液为0；正液量输出 `1 + floor(14 × min(1, 液体体积／固定开放容量))`，满液为15。分母是固定方块碰撞留下的内腔容量，包含颗粒和连续固相所在的几何空间；实体、颗粒或固相运动均使用同一容量标尺。固定容量由 `FixedGeometrySnapshot` 构造时累加，读取为常数成本。固定方块碰撞改变时使用新的几何容量。
+
+`FluidRegion` 在成功采用运动、热、容器和生命周期候选，以及可用性、卸载、恢复改变后发布集中观察；`FluidRegionManager` 统一登记、替换和移除观察对象。快照发布入口补齐直接库存编辑，更新发生在检查在线玩家之前。`ControllerComparatorSignals` 仅在实际信号改变时通知原生比较器，不按 tick 扫描区域库存。主动暂停和静水平衡休眠保留稳定信号；区域不可用、卸载、移除和未激活时输出0。
+
+比较器读取只访问位置缓存，不加载区块、不恢复求解器、不唤醒区域、不生成网络快照，也不提交 checkpoint。服务端恢复区域后由相同观察入口重新发布液位。
+
 ## 实体与碰撞输入
 
 `MinecraftRegionInputs` 按五 tick 节拍刷新到期的世界碰撞输入。[MinecraftCollisionWorldPort](../../fabric/src/main/java/mmm/simulation/MinecraftCollisionWorldPort.java)
@@ -168,7 +176,11 @@ CPU 可以把已算好的私有 `FluidDomain` 交给区域，省去正常帧的�
 实体位置、包围盒和原版速度响应留在 Fabric。输入适配器比较相邻服务器 tick 的实际观测位置，得到本 tick 位移；`Entity#oldPosition` 会在 Minecraft tick 内被重写，无法提供这里需要的完整位移。首次观测或中断一 tick 的实体以零规定速度提交形状。
 
 求解器按实体包围盒、同代 PLIC 与固定开放微盒计算浸湿体积、湿表面及压力面积分；有限气腔对干表面的作用同时计入。[MovingBodyFluidCoupling](../../model/src/main/java/mmm/world/MovingBodyFluidCoupling.java) 把稳定实体 UUID、局部包围盒和实际位移速度交给力学请求，已接受的实体表随区域状态保存恢复。
-到期的力学计算使用一次该请求，热计算保留独立流程。当前模型采用运动学包围盒近似，双向动量与动态排水仍在产品路线中。
+到期力学请求提供完整目标表，空表移除已消失实体；超过256个请求整份拒绝。私有候选按联合占容刷新容量、开口与规定体积通量，压力转置给出逐实体反力，规定速度参与外功。成功力学提交后才对仍匹配捕获位置的原生实体应用一次响应；失败、跳过和热轴清除待响应。相变机械同步保留已接受姿态并采用零规定速度。当前实现外部规定运动的包围盒耦合；有限质量实体动态平移的联立方案尚未实现。
+
+水接触灭火复用同一已提交 PLIC／开放微盒的实体湿接触快照。`MovingBodyWetGeometry.capture` 的 `waterContactVolumeCubicMetres` 按 C05 的物理材料层计算实际水交叠体积，水油交界分别裁剪；单一水层直接复用已有交叠体积。`MinecraftRegionInputs.captureEntities` 还观察燃烧中的骑乘、飞行等实体，灭火资格独立于机械响应资格。成功力学提交后，UUID 对应实体仍存活且包围盒匹配本次观察、有正水交叠体积时调用原版 `clearFire`；失败、跳过、热轴及姿态变化均丢弃待处理响应。该行为沿用区域实体交互开关。
+
+这是水湿接触对原版燃烧标记的玩法响应近似，区域物质与内能保持原值；蒸发、吸收和燃烧放热尚未建模。材料身份来自服务端库存与物理层，客户端外观不参与判断。
 
 外部运动实体的默认响应采用等效水动力质量：720 kg/m³ × 包围盒体积 × 求解器重力／宿主重力；零重力时使用720 kg/m³ × 体积。宿主运动约束保持自己的重力，液体力由真实压力积分给出。
 

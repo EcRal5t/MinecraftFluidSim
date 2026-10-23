@@ -60,11 +60,11 @@ public final class FluidDomainStateAssertions {
 				actual.chemicalSource()==null?null:actual.chemicalSource().groups()),context+": chemical source changed");
 		require(java.util.Objects.equals(expected.chemicalSink()==null?null:expected.chemicalSink().groups(),
 				actual.chemicalSink()==null?null:actual.chemicalSink().groups()),context+": chemical sink changed");
+		require(expected.chemicalMassTransferPending().equals(actual.chemicalMassTransferPending()),context+": gas/liquid mass transfer continuation changed");
 		if (includeTransient) {
 			require(Arrays.equals(expected.copyChemicalDirtyCells(), actual.copyChemicalDirtyCells()),
 					context + ": chemical dirty-cell schedule changed");
 			require(expected.chemicalReactionCursor()==actual.chemicalReactionCursor(),context+": reaction cursor changed");
-			require(expected.chemicalMassTransferPending().equals(actual.chemicalMassTransferPending()),context+": gas/liquid mass transfer continuation changed");
 		}
 		compareGranular(expected.granular(), actual.granular(), context);
 		if (includeTransient) {

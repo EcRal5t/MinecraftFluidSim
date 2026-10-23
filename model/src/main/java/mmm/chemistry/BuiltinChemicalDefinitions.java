@@ -69,7 +69,7 @@ public final class BuiltinChemicalDefinitions {
 	// The film velocities describe the chosen slow effective films of a dilute, gently moving water surface.
 	private static final List<GasLiquidMassTransferDefinition> GAS_LIQUID_MASS_TRANSFERS = List.of(
 			new GasLiquidMassTransferDefinition("mmm:co2_water", CO2, AQUEOUS, "mmm:co2",
-					298.15, 3.4e-4, 2400, 1e-5, 1e-2));
+					298.15, 3.4e-4, 2400, 1e-5, 1e-2,273.15,373.15));
 	public static final ChemicalRegistry REGISTRY = new ChemicalRegistry(SPECIES, PHASES, REACTIONS, GAS_LIQUID_MASS_TRANSFERS);
 
 	private BuiltinChemicalDefinitions() { }

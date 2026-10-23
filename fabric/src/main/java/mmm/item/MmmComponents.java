@@ -35,6 +35,10 @@ public final class MmmComponents {
 	public static final DataComponentType<String> CREATIVE_SOURCE = registerString("creative_source");
 	/** World capability profile that uniquely interprets a filled typed container. */
 	public static final DataComponentType<String> PROFILE_FINGERPRINT = registerString("profile_fingerprint");
+	/** Complete mass, internal energy and identity of an uninstalled finite thermal device. */
+	public static final DataComponentType<String> FINITE_THERMAL_DEVICE = registerString("finite_thermal_device");
+	/** Durable identity and monotonic generation of a registered transfer container. */
+	public static final DataComponentType<String> TRANSFER_ACTOR = registerString("transfer_actor");
 
 	private MmmComponents() { }
 

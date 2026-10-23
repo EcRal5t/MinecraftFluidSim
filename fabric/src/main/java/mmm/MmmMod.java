@@ -37,7 +37,16 @@ public final class MmmMod implements ModInitializer {
 		FluidProtocolServer.register();
 		MmmCommands.register();
 		ServerLifecycleEvents.SERVER_STARTING.register(MmmRuntimeRegistry::start);
+		net.fabricmc.fabric.api.event.lifecycle.v1.ServerEntityEvents.ENTITY_LOAD.register((entity, level) -> {
+			if (entity instanceof net.minecraft.world.entity.item.ItemEntity item)
+				MmmRuntimeRegistry.require(level.getServer()).finiteHeatExchangers().releaseCompletedDelivery(item);
+		});
 		PlayerBlockBreakEvents.BEFORE.register((level, player, position, state, blockEntity) -> {
+			if (state.is(MmmBlocks.FINITE_HEAT_EXCHANGER)
+					&& player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
+				mmm.simulation.FiniteHeatExchangerOperations.breakDevice(serverPlayer, position);
+				return false;
+			}
 			if (!(level instanceof net.minecraft.server.level.ServerLevel serverLevel)
 					|| !MmmRuntimeRegistry.require(serverLevel.getServer())
 					.isLifecycleManagedBlock(serverLevel, position)) return true;

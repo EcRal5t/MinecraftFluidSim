@@ -542,6 +542,13 @@ public final class ThermalDomainState {
 	public double[] planExternalActiveInsertions(int firstOrdinal, int count, ThermalCarrierContext markers) {
 		return granularState.planExternalActiveInsertions(firstOrdinal, count, markers);
 	}
+	public double[] planExternalActiveInsertions(int firstOrdinal, int count, ThermalCarrierContext markers, double carriedEnergy) {
+		return granularState.planExternalActiveInsertions(firstOrdinal, count, markers, carriedEnergy);
+	}
+	public void commitExternalActiveInsertions(double[] energies, double carriedEnergy) {
+		granularState.commitExternalActiveInsertions(energies, carriedEnergy);
+	}
+
 	public double planExternalGranularEnergy(int material, int composition, double mass, ThermalCarrierContext markers) {
 		return granularState.planExternalGranularEnergy(material, composition, mass, markers);
 	}
@@ -636,9 +643,6 @@ public final class ThermalDomainState {
 
 	// ---- pending phase mechanical work ----
 
-
-
-
 	// ---- cell grid observations and repartitions ----
 
 	public double temperatureInCell(int cell, ThermalCarrierContext markers) {
@@ -687,7 +691,6 @@ public final class ThermalDomainState {
 	public double observeTemperatureInCell(int cell, ThermalCarrierContext markers) {
 		return cellOperations.observeTemperatureInCell(cell, markers);
 	}
-
 
 	/** Freezes exact same-cell energy and unchanged solid heat baths for a gas/liquid candidate search. */
 	public PhaseCandidateCell preparePhaseCandidateCell(int cell, ThermalCarrierContext markers) {
@@ -807,13 +810,19 @@ public final class ThermalDomainState {
 		private final ThermalDomainState owner;
 		private final Revision revision;
 		private final ThermalCellOperations.PhaseBatchAssignment assignment;
+		private final int[] assignmentByCell;
 		private PhaseBatchEnergyPlan(ThermalDomainState owner, Revision revision, ThermalCellOperations.PhaseBatchAssignment assignment) {
 			this.owner = owner; this.revision = revision; this.assignment = assignment;
+			assignmentByCell = new int[owner.cellGrid.cellCount()];
+			java.util.Arrays.fill(assignmentByCell, -1);
+			for (int index = 0; index < assignment.cells().size(); index++)
+				assignmentByCell[assignment.cells().get(index).cell()] = index;
 		}
 		/** Energies follow the supplied future liquid inventory order in this cell. */
 		public double[] ownerEnergies(int cell) { return liquidEnergies(cell); }
 		public double[] liquidEnergies(int cell) {
-			for (int index = 0; index < assignment.cells().size(); index++) if (assignment.cells().get(index).cell() == cell) {
+			int index = cell >= 0 && cell < assignmentByCell.length ? assignmentByCell[cell] : -1;
+			if (index >= 0) {
 				var entries = assignment.cells().get(index).raw().entries();
 				double[] result = new double[assignment.liquidCounts()[index]];
 				for (int owner = 0; owner < result.length; owner++) result[owner] = entries.get(owner).energy();
@@ -889,7 +898,6 @@ public final class ThermalDomainState {
 		cellOperations.commitPhaseBatch(plan.assignment, markers);
 	}
 
-
 	public void setTemperatureInCell(int cell, double temperatureK, ThermalCarrierContext markers) {
 		cellOperations.setTemperatureInCell(cell, temperatureK, markers);
 	}
@@ -906,7 +914,6 @@ public final class ThermalDomainState {
 	public void repartitionCellEnergyConserving(int cell, ThermalCarrierContext markers, SignedDyadic inventoryBefore) {
 		cellOperations.repartitionCellEnergyConserving(cell, markers, inventoryBefore);
 	}
-
 
 	// ---- display ----
 

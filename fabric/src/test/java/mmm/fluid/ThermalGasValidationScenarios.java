@@ -532,6 +532,14 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 					device.bodyMassKilograms(), Map.of(), device.initialTemperatureK());
 			require(initialEnergy == 0.0,
 					"built-in finite exchanger default body energy is not derived from the material state function");
+			var carriedDevice = new mmm.thermal.FiniteThermalDeviceState("mmm:finite_heat_exchanger",
+					new java.util.UUID(307, 311).toString(), device.id(),
+					new mmm.thermal.FiniteThermalBodyState(7, registry.fingerprint(), material.id(),
+							mmm.units.Mass.fromKilograms(device.bodyMassKilograms()),
+							state.internalEnergyAtTemperature(registry.materialHandle(material.id()), device.bodyMassKilograms(), Map.of(), 323.15)));
+			String carried = mmm.thermal.FiniteThermalDeviceItemCodec.encode(carriedDevice);
+			require(mmm.thermal.FiniteThermalDeviceItemCodec.decode(carried).equals(carriedDevice),
+					"Carried finite device lost identity, generation, mass or internal energy");
 
 			root = java.nio.file.Files.createTempDirectory("mmm-finite-device-registry-");
 			java.nio.file.Path snapshot = root.resolve("thermal-registry.nbt");

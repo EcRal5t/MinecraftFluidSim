@@ -79,6 +79,30 @@ public record FiniteThermalDeviceInventory(
 				audit.withFluidExchange(fluidDelta, plan.roundoffResidual()));
 	}
 
+	public FiniteThermalDeviceInventory insertExternal(FiniteThermalDeviceState device) {
+		if (devices.stream().anyMatch(current -> current.sameObject(device))) {
+			throw new IllegalArgumentException("Finite thermal device is already installed");
+		}
+		var future = new ArrayList<>(devices);
+		future.add(device);
+		return new FiniteThermalDeviceInventory(thermalRegistryFingerprint, future,
+				new FiniteThermalDeviceAudit(audit.initialInventory(),
+						audit.externalSource().add(SignedDyadic.of(device.body().internalEnergyJ())),
+						audit.externalSink(), audit.solverExchange(), audit.roundoffResidual()));
+	}
+
+	public FiniteThermalDeviceInventory extractExternal(String providerId, String objectId) {
+		var future = new ArrayList<>(devices);
+		var removed = future.stream().filter(device -> device.providerId().equals(providerId)
+				&& device.objectId().equals(objectId)).findFirst()
+				.orElseThrow(() -> new IllegalArgumentException("Finite thermal device is not installed"));
+		future.remove(removed);
+		return new FiniteThermalDeviceInventory(thermalRegistryFingerprint, future,
+				new FiniteThermalDeviceAudit(audit.initialInventory(), audit.externalSource(),
+						audit.externalSink().add(SignedDyadic.of(removed.body().internalEnergyJ())),
+						audit.solverExchange(), audit.roundoffResidual()));
+	}
+
 	public void requireCompatible(ThermalRegistry registry) {
 		if (registry == null || !thermalRegistryFingerprint.equals(registry.fingerprint())) {
 			throw new IllegalArgumentException("Finite thermal device registry changed");

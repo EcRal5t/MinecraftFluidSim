@@ -62,6 +62,13 @@ public final class ContainerTransferStoreValidation {
 	private ContainerTransferStoreValidation() { }
 
 	public static void main(String[] args) throws Exception {
+		if(args.length==1 && args[0].equals("--cold-acid-base")) {
+			ControllerInventoryDurabilityValidation.runColdAcidBase();
+			System.out.println("Cold acid-base precipitation 40-step replay passed");return;
+		}
+		if(args.length==1 && args[0].equals("--public-transfers")) {
+			testPublicTransfers();System.out.println("Public transfer durability passed");return;
+		}
 		if (args.length == 1 && args[0].equals("--rapid-pour")) {
 			testRapidFullProfilePourDurability();
 			System.out.println("Rapid full-profile pour durability passed"); return;
@@ -75,6 +82,7 @@ public final class ContainerTransferStoreValidation {
 			run("thermal WAL couples item and region energy", ContainerTransferStoreValidation::testThermalWal);
 			run("creative gas WAL preserves direction and actual settlement", ContainerTransferStoreValidation::testGasWal);
 			run("player and dispenser actor codecs", ContainerTransferStoreValidation::testActorCodecs);
+			run("public transfer actor generations and durable replay receipts",ContainerTransferStoreValidation::testPublicTransfers);
 			run("invalid generations and dimensions are rejected", ContainerTransferStoreValidation::testValidation);
 			run("delete removes the transaction", ContainerTransferStoreValidation::testDelete);
 			run("recovery state machine locks every ambiguous commit boundary", ContainerTransferStoreValidation::testRecoveryStateMachine);
@@ -102,6 +110,88 @@ public final class ContainerTransferStoreValidation {
 				}
 			}
 		}
+	}
+
+	private static void testPublicTransfers() throws Exception {
+		var root=Files.createTempDirectory("mmm-public-transfer-");
+		var receipts=new mmm.simulation.persistence.PublicTransferReceiptStore(root);
+		var address=new mmm.api.transfer.DispenserAddress("minecraft:overworld",1,2,3,0);
+		var ref=address.actorRef("first");var instance=UUID.randomUUID();var region=UUID.randomUUID();var operation=UUID.randomUUID();
+		var binding=new mmm.simulation.persistence.PublicTransferReceiptStore.Binding(ref,address,instance);
+		receipts.bind(binding);
+		var actor=new ContainerTransferActor.Dispenser(address.dimensionId(),1,2,3,0,instance,3);
+		var before=new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.WATER_BUCKET,-1,null);
+		var after=new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.PARTIAL,750_000_000L,null);
+		var request=new mmm.api.transfer.TransferRequest(operation,ref,3,region,address.dimensionId(),2.25,3.25,4.25,
+				mmm.api.transfer.TransferRequest.Direction.INSERT,new mmm.api.transfer.TransferQuantity.Liquid(250_000_000L,java.util.OptionalDouble.empty()));
+		var preview=new ContainerTransferJournal(operation,region,address.dimensionId(),4,5,ContainerTransferJournal.Operation.INSERT,
+				250_000_000L,actor,before,after,0,ContainerTransferJournal.Phase.REGION_COMMITTED);
+		receipts.prepare(request,binding,preview);
+		var manifest=mmm.transfer.ContainerTransferManifests.from(preview);
+		check(manifest.components().getFirst().amount()==250_000_000L
+				&& manifest.components().getFirst().massUnits()==mmm.units.Mass.fromKilograms(250),"Public manifest lost actual partial inventory");
+		check(MinecraftContainerActorAdapter.classifyInventory(before,new mmm.transfer.TransferActorState(instance,3),preview,false)==CrossDomainRecovery.ExternalTruth.BEFORE,
+				"Actor before generation was not recognized");
+		check(MinecraftContainerActorAdapter.classifyInventory(after,new mmm.transfer.TransferActorState(instance,4),preview,true)==CrossDomainRecovery.ExternalTruth.AFTER,
+				"Actor after generation was not recognized");
+		check(MinecraftContainerActorAdapter.classifyInventory(after,new mmm.transfer.TransferActorState(instance,3),preview,false)==CrossDomainRecovery.ExternalTruth.THIRD
+				&& MinecraftContainerActorAdapter.classifyInventory(after,new mmm.transfer.TransferActorState(UUID.randomUUID(),4),preview,false)==CrossDomainRecovery.ExternalTruth.THIRD,
+				"Old generation or replaced inventory was accepted as committed actor");
+		var wal=new ContainerJournalFileStore(root);long[] head={4};boolean[] afterSaved={false},failReceipt={true};int[] writes={0},events={0};
+		var recovery=new ContainerRecoveryCoordinator(wal,new ContainerRecoveryCoordinator.RecoveryPort() {
+			public void validate(ContainerTransferJournal journal)throws IOException { receipts.validate(journal); }
+			public long committedGeneration(UUID id) { return head[0]; }
+			public long committedManifestChecksum(UUID id) { return 1234; }
+			public CrossDomainRecovery.ExternalTruth classifyActor(ContainerTransferJournal journal) { return afterSaved[0]?CrossDomainRecovery.ExternalTruth.AFTER:CrossDomainRecovery.ExternalTruth.BEFORE; }
+			public ContainerRecoveryCoordinator.Convergence applyAfterItem(ContainerTransferJournal journal) { afterSaved[0]=true;writes[0]++;return ContainerRecoveryCoordinator.Convergence.APPLIED; }
+			public void persistAfterItem(ContainerTransferActor ignored) { }
+			public CrossDomainRecovery.ExternalTruth verifyAfterItem(ContainerTransferJournal journal) { return afterSaved[0]?CrossDomainRecovery.ExternalTruth.AFTER:CrossDomainRecovery.ExternalTruth.BEFORE; }
+			public void adoptRecoveredCheckpoint(ContainerTransferJournal journal) { }
+			public void persistReceipt(ContainerTransferJournal journal,boolean committed)throws IOException {
+				if(failReceipt[0]) { failReceipt[0]=false;throw new IOException("Injected durable receipt publication failure"); }
+				receipts.complete(journal,committed);
+			}
+			public void publishCommitted(ContainerTransferJournal journal) { events[0]++; }
+			public void report(ContainerRecoveryCoordinator.Report report,String detail,Throwable failure) { }
+		},java.util.Map.of(),Set.of());
+		var coordinator=new mmm.application.ContainerTransferCoordinator(recovery,new mmm.application.ContainerTransferCoordinator.RegionPort() {
+			public mmm.application.ContainerTransferCoordinator.Execution execute(mmm.application.ContainerTransferUseCase.Command command) {
+				return new mmm.application.ContainerTransferCoordinator.Execution(true,after,"Partial transfer",250_000_000L,null);
+			}
+			public mmm.application.ContainerTransferCoordinator.StagedCheckpoint stage(UUID transaction,UUID id,long generation) { return ()->1234; }
+			public void abort(mmm.application.ContainerTransferCoordinator.StagedCheckpoint staged) { }
+			public long commit(mmm.application.ContainerTransferCoordinator.StagedCheckpoint staged) { head[0]=5;return 5; }
+			public void lock(UUID id,String detail) { throw new AssertionError(detail); }
+		});
+		var outcome=new mmm.application.ContainerTransferUseCase(coordinator).execute(new mmm.application.ContainerTransferUseCase.Command(
+				region,address.dimensionId(),4,false,PROFILE,null,actor,before,before,ContainerTransferJournal.Operation.INSERT,
+				ContainerTransferJournal.ResourceKind.FLUID_NANOS,250_000_000L,0,operation));
+		check(outcome.committed() && operation.equals(outcome.transactionId()) && wal.read(operation).transactionId().equals(operation),
+				"Caller operation UUID did not traverse the existing coordinator and WAL");
+		recovery.retryTransaction(operation);
+		check(recovery.hasPending(region) && wal.read(operation)!=null && writes[0]==1 && events[0]==0
+				&& receipts.entry(operation).state()==mmm.simulation.persistence.PublicTransferReceiptStore.State.PENDING,
+				"Receipt I/O failure deleted WAL, repeated inventory writes, or published completion");
+		recovery.retryTransaction(operation);
+		check(!recovery.hasPending(region) && writes[0]==1 && events[0]==1,"Receipt retry did not finish exactly one inventory commit");
+		var restarted=new mmm.simulation.persistence.PublicTransferReceiptStore(root);
+		check(restarted.entry(operation).receipt().manifest().equals(manifest) && restarted.entry(operation).receipt().actorAfterGeneration()==4,
+				"Restart lost the actual manifest or durable actor generation");
+		var next=UUID.randomUUID();var actor2=new ContainerTransferActor.Dispenser(address.dimensionId(),1,2,3,0,instance,4);
+		var after2=new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.PARTIAL,500_000_000L,null);
+		var request2=new mmm.api.transfer.TransferRequest(next,ref,4,region,address.dimensionId(),2.25,3.25,4.25,request.direction(),request.quantity());
+		var settlement2=new ContainerTransferJournal(next,region,address.dimensionId(),5,6,ContainerTransferJournal.Operation.INSERT,250_000_000L,
+				actor2,after,after2,1235,ContainerTransferJournal.Phase.REGION_COMMITTED);
+		restarted.prepare(request2,binding,settlement2);restarted.complete(settlement2,true);
+		Files.writeString(root.resolve("mmm/public-transfer/unpublished.operation.nbt.tmp"),"unpublished");
+		var bounded=new mmm.simulation.persistence.PublicTransferReceiptStore(root);
+		check(bounded.entry(operation)==null && bounded.entry(next).receipt().committed() && bounded.entries().size()==1,
+				"Latest receipt retention grew operation history or forgot the latest result");
+		var replacement=new mmm.simulation.persistence.PublicTransferReceiptStore.Binding(address.actorRef("replacement"),address,UUID.randomUUID());
+		bounded.bind(replacement);
+		check(bounded.binding(ref).equals(binding) && bounded.binding(replacement.actor()).equals(replacement),"New inventory rebound the old actor ref");
+		checkThrows(IOException.class,()->bounded.bind(new mmm.simulation.persistence.PublicTransferReceiptStore.Binding(ref,address,UUID.randomUUID())),
+				"Existing actor ref was rebound to a different incarnation");
 	}
 
 	private static void testGasWal() throws Exception {
@@ -719,12 +809,12 @@ public final class ContainerTransferStoreValidation {
 		FluidMixture source = new FluidMixture(List.of(
 				new FluidMixture.Component("mmm:oil", 333_333_333L, mmm.units.Mass.fromKilograms(266.6666664)),
 				new FluidMixture.Component("mmm:water", 666_666_666L, mmm.units.Mass.fromKilograms(666.666666))));
-		List<FluidDomain.MaterialPortion> planned = MinecraftContainerTransferOperations.planMaterialInsertion(domain, source);
+		List<FluidDomain.MaterialPortion> planned = MinecraftContainerTransferOperations.planMaterialInsertion(domain, source, 250_000_000L);
 		FluidDomain.ExactMixtureTransfer inserted = domain.tryInsertExactMixture(3, 2, 3, planned, 3);
 		check(inserted.transferred(), "non-float-friendly material insertion failed");
 		MinecraftContainerTransferOperations.MaterialInsertionSettlement settlement =
 				MinecraftContainerTransferOperations.settleMaterialInsertion(domain, source, inserted.portions());
-		check(settlement.insertedNanos() > 0L && settlement.insertedNanos() <= source.totalVolumeNanos(),
+		check(settlement.insertedNanos() > 0L && settlement.insertedNanos() <= 250_000_000L,
 				"material insertion exceeded its source mixture");
 		long remainingNanos = settlement.remaining() == null ? 0L : settlement.remaining().totalVolumeNanos();
 		check(settlement.insertedNanos() + remainingNanos == source.totalVolumeNanos(),

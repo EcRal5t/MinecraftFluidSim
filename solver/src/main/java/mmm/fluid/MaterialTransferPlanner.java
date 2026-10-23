@@ -288,7 +288,7 @@ final class MaterialTransferPlanner {
 		var before = domain.thermalState == null ? null : domain.thermalState.auditLedger();
 		var after = before == null ? null : before.withExternalSourceEnergy(sourceEnergy).withExternalSinkEnergy(sinkEnergy)
 				.withMechanicalWork(inventory.mechanicalHeat()).withRoundoff(inventory.energyChange().subtract(sourceEnergy).add(sinkEnergy).subtract(inventory.mechanicalHeat()));
-		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
+		long[] occupied = domain.occupiedSolidSvq();
 		var gas = domain.gasState.frame == null ? null : domain.gasTopologyCoordinator.planAfterCarrierEdit(inventory.future(), occupied);
 		if (gas != null) domain.gasTopologyCoordinator.requireBeforeCarrierCommit(gas);
 		if (after != null) {

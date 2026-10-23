@@ -39,6 +39,11 @@ public final class MmmRuntimeFactory {
 		RegistryBundleLoader.RegistryBundle registries = startup.registries();
 		CommittedWorldRegistries worldRegistries = new CommittedWorldRegistries(startup);
 		FluidRegionManager regionManager = new FluidRegionManager(config.limits());
+		var comparatorSignals = new ControllerComparatorSignals(regionManager, (dimension, position) -> {
+			var level = server.getLevel(dimension);
+			if (level != null && level.hasChunkAt(position))
+				level.updateNeighbourForOutputSignal(position, level.getBlockState(position).getBlock());
+		});
 		FluidRegionOperations regionOperations = new FluidRegionOperations(worldRoot, regionManager,
 				startup.creationLocked(), startup.profileProven(), startup.profile(),
 				registries == null ? null : registries.chemical(),
@@ -56,6 +61,7 @@ public final class MmmRuntimeFactory {
 		}
 
 		ContainerJournalFileStore containerTransfers = new ContainerJournalFileStore(worldRoot);
+		var transferReceipts = new mmm.simulation.persistence.PublicTransferReceiptStore(worldRoot);
 		ContainerTransferIndex containerIndex = discoverContainerTransfers(containerTransfers);
 		FluidSnapshotPublisher snapshots = new FluidSnapshotPublisher(startup.profile(),
 				registries == null ? null : registries.chemical(),
@@ -63,7 +69,7 @@ public final class MmmRuntimeFactory {
 				registries == null ? null : registries.thermal());
 		ContainerRecoveryCoordinator containerRecovery = new ContainerRecoveryCoordinator(containerTransfers,
 				new MinecraftContainerRecoveryAdapter(server, startup, registries, regionManager, regionOperations,
-						committedEvents), containerIndex.journals(), containerIndex.issues());
+						committedEvents,transferReceipts), containerIndex.journals(), containerIndex.issues());
 		MinecraftOwnershipIssues ownership = new MinecraftOwnershipIssues(ownershipIssues);
 		MinecraftRuntimePolicy policy = new MinecraftRuntimePolicy(startup, regionManager);
 		FluidWorldTargetResolver targets = new FluidWorldTargetResolver(regionManager);
@@ -81,14 +87,18 @@ public final class MmmRuntimeFactory {
 		MinecraftRegionAvailability availability = new MinecraftRegionAvailability(
 				containerRecovery, regionOperations, policy::controllerEnabled,
 				regionTick, snapshots, worldRegistries);
+		FiniteHeatExchangerOperations finiteDevices = new FiniteHeatExchangerOperations(server, worldRoot,
+				regionManager, regionOperations, targets, availability, phaseWorkBarrier, worldRegistries, snapshots);
+		availability.additionalPending(finiteDevices::hasPending);
+		regionTick.finiteDeviceExchange(finiteDevices::tickExchange);
 		ControllerQueryUseCase controllerQueries = new ControllerQueryUseCase(new ControllerSummaryAdapter(
 				regionManager, regionOperations, worldRegistries.profile(), worldRegistries.thermalOrNull(),
-				containerRecovery::hasPending, startup::authoritativeWritesReady,
+				availability::hasPending, startup::authoritativeWritesReady,
 				policy.liveWorldBridgeEnabled()));
 		MinecraftRegionLifecycle regionLifecycle = new MinecraftRegionLifecycle(
 				startup, regionManager, regionOperations, availability, phaseWorkBarrier,
 				snapshots, targets, controllerQueries,
-				worldRegistries.thermalOrNull(), containerRecovery::hasPending);
+				worldRegistries.thermalOrNull(), availability::hasPending);
 		MinecraftControllerConsole controllerConsole = new MinecraftControllerConsole(
 				targets, controllerQueries, regionLifecycle, new ThermalReservoirUseCase(), regionTick,
 				worldRegistries.thermalOrNull(), startup, regionManager, startup::authoritativeWritesReady,
@@ -123,7 +133,7 @@ public final class MmmRuntimeFactory {
 					}
 				}, worldRegistries.profile(), policy::defaultEntityPhysicsEnabled, policy::defaultDebugOverlays);
 		MinecraftRegionAdministration regionAdministration = new MinecraftRegionAdministration(
-				regionManager, regionOperations, regionApplication, containerRecovery);
+				regionManager, regionOperations, regionApplication, availability::hasPending);
 		RegionDiagnosticsReport regionDiagnostics = new RegionDiagnosticsReport(
 				regionManager, regionOperations, takeover, debugFixtures, worldRegistries,
 				policy::controllerEnabled, policy::liveWorldBridgeEnabled,
@@ -131,6 +141,8 @@ public final class MmmRuntimeFactory {
 		MinecraftContainerTransactionAdapter containerTransactions = new MinecraftContainerTransactionAdapter(
 				regionManager, regionOperations, containerRecovery, worldRegistries.profile().profileFingerprint(),
 				worldRegistries.thermalOrNull() == null ? null : worldRegistries.thermalOrNull().fingerprint());
+		var transferApi = new FabricTransferApi(server,regionManager,startup,worldRegistries,availability,phaseWorkBarrier,
+				containerTransactions,containerRecovery,transferReceipts,snapshots);
 		PlayerContainerTransferAdapter playerContainerTransfers = new PlayerContainerTransferAdapter(
 				startup, worldRegistries, targets, availability, phaseWorkBarrier, containerTransactions, snapshots);
 		DispenserContainerTransferAdapter dispenserContainerTransfers = new DispenserContainerTransferAdapter(
@@ -141,12 +153,12 @@ public final class MmmRuntimeFactory {
 		MinecraftSimulationLoop simulationLoop = new MinecraftSimulationLoop(
 				regionManager, regionOperations, snapshots, containerRecovery, takeover,
 				availability, regionTick, ownership::replace);
-		return new MmmRuntime(simulationLoop, operatorActions, containerTransactions, controllerConsole,
+		return new MmmRuntime(simulationLoop, finiteDevices, operatorActions, containerTransactions, controllerConsole,
 				regionActivation, debugFixtures, regionAdministration, regionDiagnostics,
 				playerContainerTransfers, dispenserContainerTransfers,
-				new MinecraftRegionObservation(regionManager, snapshots), containerRecovery,
+				new MinecraftRegionObservation(regionManager, snapshots, comparatorSignals), containerRecovery,
 				new FabricFluidQueryApi(server, regionManager, startup.profileProven()), new ProtocolSessions(),
-				worldRegistries, committedEvents, startup);
+				worldRegistries, committedEvents, startup,transferApi);
 	}
 
 	private static ContainerTransferIndex discoverContainerTransfers(ContainerJournalFileStore store) {

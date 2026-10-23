@@ -81,7 +81,7 @@ final class GranularFaceVolumes {
 			float[] geometric=domain.geometry.cutCells.openFaceField(axis);
 			for (int local = 0; local < geometric.length; local++) {
 				int face = offsets[axis] + local;
-				double available = geometric[local] * (hasFixed ? 1-fixedFraction(axis,local) : 1);
+				double available = Math.max(0, geometric[local] * (hasFixed ? 1-fixedFraction(axis,local) : 1) - domain.entityBodyCoupling.area(face));
 				fixedPore[face] = (float) available;
 				liquid[face] = (float) Math.max(0, available - activeVolume[face]);
 				if (liquid[face] > available) liquid[face] = Math.nextDown(liquid[face]);

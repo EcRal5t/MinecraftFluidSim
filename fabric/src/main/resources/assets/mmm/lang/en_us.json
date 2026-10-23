@@ -10,6 +10,9 @@
   "block.mmm.fluid_boundary": "Matter, Motion & Mechanics Boundary",
   "block.mmm.fluid_controller": "Matter, Motion & Mechanics Controller",
   "block.mmm.thermal_reservoir": "Matter, Motion & Mechanics Thermal Reservoir",
+  "block.mmm.finite_heat_exchanger": "Finite Heat Exchanger",
+  "block.mmm.finite_heat_exchanger.tooltip": "Install on a controller shell block; north/south ports exchange heat. Sneak with an empty hand to remove.",
+  "item.mmm.finite_heat_exchanger.inventory": "Body mass: %s kg; internal energy: %s",
   "item.mmm.partial_water_bucket": "Partial Water Bucket",
   "item.mmm.partial_water_bucket.volume": "Water: %s",
   "item.mmm.material_bucket": "Matter, Motion & Mechanics Material Bucket",
@@ -245,7 +248,8 @@
   "screen.mmm.display.legend.ph": "pH 0 (acidic) — 7 (neutral) — 14 (alkaline)",
   "screen.mmm.display.legend.temperature": "%s K (cold) — %s K (hot)",
   "screen.mmm.display.no_data": "Gray: not applicable / no data",
-  "screen.mmm.display.local": "Changes this client only; temperature represents cell condensed matter."
+  "screen.mmm.display.local": "Changes this client only; temperature represents cell condensed matter.",
+  "message.mmm.finite_heat_exchanger.state": "Finite heat exchanger: %s K, %s kg, internal energy %s, generation %s"
 }
 
 

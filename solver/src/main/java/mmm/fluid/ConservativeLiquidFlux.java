@@ -99,7 +99,7 @@ final class ConservativeLiquidFlux {
 	}
 
 	private long[] currentOccupied() {
-		return domain.granularCoupling == null ? new long[cellCount] : domain.granularCoupling.copySolidSvq();
+		return domain.occupiedSolidSvq();
 	}
 
 	void prepare(float dt, long[] occupied) {

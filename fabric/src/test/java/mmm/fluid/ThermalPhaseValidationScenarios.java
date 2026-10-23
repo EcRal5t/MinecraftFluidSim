@@ -29,6 +29,42 @@ import java.util.Map;
 /** One retained selector for M9 definition, state-function and later transport/phase invariants. */
 
 abstract class ThermalPhaseValidationScenarios extends ThermalValidationSupport {
+	static void freezingRetainsDissolvedGas() throws Exception {
+		var registries=mmm.simulation.FullCapabilityTestFixture.load();
+		var domain=new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.025F,120,1e-5F,.002F));
+		domain.sealDomainBoundary();
+		mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(domain,registries.liquids());
+		domain.bindGasRegistry(registries.gas());
+		domain.setVolume(1,1,1,.5F);
+		domain.bindChemistry(registries.chemical());
+		var stock=domain.liquidCells.physicalStockAt(0);
+		var mixture=ChemicalMixtureRecord.fromSolutesAndSolventMass(registries.chemical(),
+				Map.of(BuiltinChemicalDefinitions.CO2,1000L),BuiltinChemicalDefinitions.H2O,stock.massUnits());
+		domain.setMarkerChemical(0,mixture.stableAmounts(registries.chemical()));
+		domain.bindGranular(registries.granular(),registries.liquids(),registries.materials());
+		domain.bindThermal(registries.thermal(),registries.liquids(),260,8);
+		long massBefore=domain.totalMassUnits();var beforeU=domain.exactInternalEnergy();
+		var beforeAudit=domain.thermalAudit();
+		var stats=domain.stepInertPhaseChangeOnly(16);
+		long dissolved=0;
+		for(var retained:domain.liquidCells.stocks())dissolved+=retained.mixture().amount(registries.chemical().speciesHandle(BuiltinChemicalDefinitions.CO2));
+		long solidMass=0;
+		for(var group:domain.thermalState.coherentPhases().snapshot()) {
+			solidMass=Math.addExact(solidMass,group.massUnits());
+			require(group.composition()==null||!group.composition().stableAmounts().containsKey(BuiltinChemicalDefinitions.CO2),
+					"Dissolved CO2 entered the frozen solvent");
+		}
+		require(stats.frozenCells()>0&&dissolved==1000&&domain.totalMassUnits()+solidMass==massBefore
+				&&domain.exactInternalEnergy().subtract(beforeU).equals(
+						domain.thermalAudit().roundoffResidual().subtract(beforeAudit.roundoffResidual()))
+				&&domain.thermalAudit().externalSource().equals(beforeAudit.externalSource())
+				&&domain.thermalAudit().externalSink().equals(beforeAudit.externalSink())
+				&&domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"Solvent freezing lost dissolved gas, integer mass or internal energy: stats="+stats
+				+", dissolved="+dissolved+", mass="+(domain.totalMassUnits()+solidMass)+"/"+massBefore
+				+", dU="+domain.exactInternalEnergy().subtract(beforeU)
+				+", auditDelta="+domain.exactInternalEnergy().subtract(domain.thermalAudit().expectedInventory()));
+	}
 	static void phasePlateauUsesTheStateFunctionGap() {
 		ThermalMaterialDefinition ice = new ThermalMaterialDefinition("mmm:thermal/ice",
 				ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID, "mmm:ice", 273.15, 0.0, 2.0,

@@ -84,12 +84,18 @@ public final class DispenserContainerTransferAdapter {
 		int slot = findSlot(source, stack);
 		if (slot < 0) return stack;
 		BlockPos actorPosition = source.pos();
-		ContainerTransferActor actor = ContainerTransferActor.dispenser(
+		mmm.transfer.TransferActorState actorState;
+		try {
+			String encoded=stack.get(mmm.item.MmmComponents.TRANSFER_ACTOR);
+			actorState=encoded==null?null:mmm.transfer.TransferActorState.decode(encoded);
+		} catch(RuntimeException invalid) { return stack; }
+		var actor = new ContainerTransferActor.Dispenser(
 				level.dimension().identifier().toString(), actorPosition.getX(), actorPosition.getY(),
-				actorPosition.getZ(), slot);
+				actorPosition.getZ(), slot,actorState==null?null:actorState.instanceId(),actorState==null?0:actorState.generation());
 		MinecraftContainerTransactionAdapter.Result transaction = plan.executeManaged(
 				level, actor, stack, false);
 		if (transaction == null || !transaction.outcome().transferred()) return stack;
+		MinecraftContainerActorAdapter.attachAfterGeneration(transaction.outcome().stack(),actor);
 		source.blockEntity().setItem(slot, transaction.outcome().stack());
 		source.blockEntity().setChanged();
 		transactions.completeCommitted(transaction.transactionId());

@@ -296,7 +296,8 @@ public final class ChemicalRegistry {
 			out.append("G|").append(definition.id()).append('|').append(definition.speciesId()).append('|')
 					.append(definition.liquidPhaseId()).append('|').append(definition.gasComponentId());
 			for (double value : new double[] {definition.referenceTemperatureK(), definition.henrySolubilityMolPerM3Pa(),
-					definition.temperatureSlopeK(), definition.liquidFilmVelocityMPerS(), definition.gasFilmVelocityMPerS()})
+					definition.temperatureSlopeK(), definition.liquidFilmVelocityMPerS(), definition.gasFilmVelocityMPerS(),
+					definition.minimumTemperatureK(),definition.maximumTemperatureK()})
 				out.append('|').append(Long.toUnsignedString(Double.doubleToRawLongBits(value)));
 			out.append('\n');
 		}

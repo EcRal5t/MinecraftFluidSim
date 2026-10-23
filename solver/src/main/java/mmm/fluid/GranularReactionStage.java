@@ -810,7 +810,7 @@ final class GranularReactionStage {
         fixed[cell] = domain.granularCoupling.fixedCellSvq(cell);
       coupling.setFixedCellSvq(fixed);
       coupling.rebuild(parcels, deposits);
-      long[] occupied = coupling.copySolidSvq();
+      long[] occupied = domain.entityBodyCoupling.addTo(coupling.copySolidSvq());
       for (int cell = 0; cell < domain.cellCount; cell++) {
         var capacity =
             SignedDyadic.of(domain.geometry.cutCells.openCellVolume(cell))

@@ -172,8 +172,10 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - **tick、调度、实体和碰撞输入**
   - 主要文件：
     - [MinecraftSimulationLoop](../../fabric/src/main/java/mmm/simulation/MinecraftSimulationLoop.java)
-    - [MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)
+    - [MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)：捕获机械及燃烧实体的已提交湿接触，`commitEntityResponse` 在成功提交后施加冲量与水接触灭火。
     - [RegionTickUseCase](../../app/src/main/java/mmm/application/RegionTickUseCase.java)
+  - 几何入口：[MovingBodyWetGeometry](../../solver/src/main/java/mmm/fluid/MovingBodyWetGeometry.java) 的 `capture` 共用物理材料层，返回独立水接触体积；[MovingBodyCouplingValidation](../../fabric/src/test/java/mmm/fluid/MovingBodyCouplingValidation.java) 覆盖干身、水和水油交界。
+  - 红石观察：[ControllerComparatorSignals](../../fabric/src/main/java/mmm/simulation/ControllerComparatorSignals.java) 按已提交液体／固定开放容量缓存控制器比较器值，由区域采用与生命周期入口更新；[FluidControllerBlock](../../fabric/src/main/java/mmm/block/FluidControllerBlock.java) 只读缓存。
   - 验证入口 / 参考：`lifecycle,entity-fluid,shape`；[输入参考](runtime-and-lifecycle.md#world-inputs)
 
 - **容量与库存编辑**
@@ -229,7 +231,8 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 已知气压与后续压力增量分别保存，真空下限逐气腔换算；观察字段发布两者之和。力积分按实际动能变化交接内能，输运按实际整数质量结算势能变化；颗粒按接受位置及实际速度结算机械能变化。气腔绝热功按同一机械连通体内的真实载体质量分配，液体内部压力功引起的局部温度分配采用体平均近似。液体的有符号机械热沿实际质量通量输运，颗粒热写入对应库存，均随候选一次提交。
 闭壳耦合系统以主气腔压力为数值基准求解增量，液体、气体储容、颗粒反作用和真空下限统一平移，发布时恢复实际压力。均压静水保持零增量，避免相消假流及其后续容量功。
 作用与反作用、外部约束冲量和压力功按实际写回结算；整数库存按最终位置独立核对真实容量，具体离散见[颗粒参考](granular-state.md#统一排水与压力)。
-实体接触以实际面冲量和规定速度结算有符号外功，接触阻力热写入相邻实际液体；动量、热量与墙面停动反力共同准备并发布。
+实体的完整 UUID／AABB／规定速度目标表替换已接受实体表，重叠实体使用联合占容；实际开放容量、面开口和规定通量参与共同压力。压力散度的转置给出逐实体冲量，规定速度与冲量结算有符号外功，剪切损失写入实际接液库存。目标表与物质候选一起提交，Fabric 在成功力学步后应用一次响应；跳过、失败和独立热轴清除待响应输入。相变机械同步保留已接受位置并使用零规定速度。
+当前支持外部规定运动；有限质量实体的动态平移联立尚未实现。
 `MovingBodyCouplingValidation` 直接核对实体外功与实际 MAC 动能、库存内能增量，固定墙反冲计入同一冲量等式。
 
 液体持久动量位于 MAC 格面，格面速度从同一双控制体积的实际质量与动量派生。
@@ -255,6 +258,14 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
     - [PressureFaceGraph](../../solver/src/main/java/mmm/fluid/PressureFaceGraph.java)：每格一个固定开放连通域对应的压力工作区、接液面积与散度系数；气压在每次装配读取实际状态，液体输运直接使用固定孔口邻接
     - [PressureBoundaryView](../../solver/src/main/java/mmm/fluid/PressureBoundaryView.java)
   - 验证选择器 / 参考：`marker-pressure,gas-liquid`；[压力离散](fluid-solver.md#自由面与压力)
+
+- **实体占容与提交响应**
+  - 主要文件：
+    - [EntityBodyState](../../solver/src/main/java/mmm/fluid/EntityBodyState.java)：规范完整目标表，随状态交接与存档恢复。
+    - [EntityBodyCoupling](../../solver/src/main/java/mmm/fluid/EntityBodyCoupling.java)：`replace` 更新联合占容与规定通量，`applyShear`、`finishPressure` 结算剪切、逐实体冲量和外功。
+    - [CpuFluidSolverBackend](../../solver/src/main/java/mmm/fluid/CpuFluidSolverBackend.java)：在私有候选中替换目标表并发布成功结果。
+    - [MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)、[MinecraftRegionTick](../../fabric/src/main/java/mmm/simulation/MinecraftRegionTick.java)：捕获完整输入、成功后一次提交原生实体响应，完整步计时包含设备交换。
+  - 验证入口：`MovingBodyCouplingValidation`、`FluidDomainStateParityValidation`、`EntityFluidWiringValidation`。
 
 - **黏性与材料物性**
   - 主要文件：
@@ -389,6 +400,8 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 <a id="thermochemistry"></a>
 ## 热化学与物相转换
+
+有限换热器的 [FiniteHeatExchangerOperations](../../fabric/src/main/java/mmm/simulation/FiniteHeatExchangerOperations.java) 组织安装、查询、拆卸与成功步端口换热；[FiniteDeviceJournalStore](../../fabric/src/main/java/mmm/simulation/persistence/FiniteDeviceJournalStore.java) 保存世界／物品双成员 WAL，[FiniteThermalDeviceItemCodec](../../model/src/main/java/mmm/thermal/FiniteThermalDeviceItemCodec.java) 携带完整设备热库存。[FiniteHeatExchangerBlockEntity](../../fabric/src/main/java/mmm/block/FiniteHeatExchangerBlockEntity.java) 保存槽位定位，`FluidDomain.finiteThermalPortContacts` 和 `FluidRegion.commitFiniteThermalPortExchange` 联合提交实际载体与设备热量。具体契约见[热设备](thermal-state.md#有限热容量设备)及[安装恢复](world-ownership-and-containers.md#有限换热器安装与拆卸)。
 
 气腔通过 `ThermalGasCarriers` 按实际干容生成每个空间支撑唯一的混合热载体，壁面、液面和有限热设备使用共同热交换视图，接收热量归并到唯一气腔内能。
 
@@ -531,10 +544,13 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [GranularSurfaceGeometry](../../fabric/src/client/java/mmm/client/GranularSurfaceGeometry.java)
   - 验证选择器 / 参考：`protocol,materials`；展示目标见[产品路线](../roadmap/product-roadmap.md#阶段-3展示几何契约与重建)
 
-- **外部查询、Jade 与事件**
+- **外部查询、转移、Jade 与事件**
   - 主要文件：
     - [MmmFabricApi](../../fabric/src/main/java/mmm/api/fabric/MmmFabricApi.java)
     - [FabricFluidQueryApi](../../fabric/src/main/java/mmm/simulation/FabricFluidQueryApi.java)
+    - [MmmTransferApi](../../api/src/main/java/mmm/api/transfer/MmmTransferApi.java) / [FabricTransferApi](../../fabric/src/main/java/mmm/simulation/FabricTransferApi.java)：`registerActor`、`plan`、`commit` 与实际数量／组成／内能清单
+    - [PublicTransferReceiptStore](../../fabric/src/main/java/mmm/simulation/persistence/PublicTransferReceiptStore.java)：持久实例绑定、未完成操作与最近终态回执；物品恢复沿共同容器 WAL
+    - [ContainerTransferManifests](../../model/src/main/java/mmm/transfer/ContainerTransferManifests.java)：从实际容器前后态生成物质与热量交接清单
     - [CommittedEventHub](../../fabric/src/main/java/mmm/simulation/CommittedEventHub.java)
     - [Jade 适配](../../fabric/src/main/java/mmm/compat/jade/)
   - 验证选择器 / 参考：`protocol,containers`；[外部 API 参考](external-api.md)

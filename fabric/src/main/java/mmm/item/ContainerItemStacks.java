@@ -92,7 +92,7 @@ public final class ContainerItemStacks {
 	public static GranularContents granularContents(
 			ItemStack stack, GranularRegistry registry, ChemicalRegistry chemistry
 	) {
-		if (!(stack.getItem() instanceof GranularContainerItem) || hasLiquidComponents(stack)) return null;
+		if (!(stack.getItem() instanceof GranularContainerItem) || hasLiquidInventoryComponents(stack)) return null;
 		String encoded = stack.get(MmmComponents.GRANULAR_CONTENTS);
 		if (encoded == null) return null;
 		GranularContents contents = GranularContents.decode(encoded);
@@ -128,20 +128,31 @@ public final class ContainerItemStacks {
 	}
 
 	public static boolean hasLiquidComponents(ItemStack stack) {
+		return hasLiquidInventoryComponents(stack) || stack.get(MmmComponents.THERMAL_CONTENTS) != null;
+	}
+
+	public static boolean hasLiquidInventoryComponents(ItemStack stack) {
 		return stack.get(MmmComponents.WATER_VOLUME) != null
 				|| stack.get(MmmComponents.FLUID_VOLUME) != null
 				|| stack.get(MmmComponents.MATERIAL_ID) != null
 				|| stack.get(MmmComponents.FLUID_MASS_UNITS) != null
 				|| stack.get(MmmComponents.MIXTURE_COMPONENTS) != null
-				|| stack.get(MmmComponents.CHEMICAL_CONTENTS) != null
-				|| stack.get(MmmComponents.THERMAL_CONTENTS) != null;
+				|| stack.get(MmmComponents.CHEMICAL_CONTENTS) != null;
 	}
 
 	private static ThermalContents thermalForUnderlying(
 			ItemStack stack, String registryFingerprint, double internalEnergy
 	) {
-		if (stack == null || stack.getCount() != 1 || stack.get(MmmComponents.GRANULAR_CONTENTS) != null) {
-			throw new IllegalArgumentException("Thermal contents require one non-granular liquid container");
+		if (stack == null || stack.getCount() != 1) {
+			throw new IllegalArgumentException("Thermal contents require one inventory container");
+		}
+		if (stack.getItem() instanceof GranularContainerItem && !hasLiquidInventoryComponents(stack)) {
+			String encoded = stack.get(MmmComponents.GRANULAR_CONTENTS);
+			if (encoded == null) throw new IllegalArgumentException("Thermal granular container is empty");
+			return ThermalContents.forGranular(registryFingerprint, GranularContents.decode(encoded), internalEnergy);
+		}
+		if (stack.get(MmmComponents.GRANULAR_CONTENTS) != null) {
+			throw new IllegalArgumentException("Container carries conflicting granular and liquid inventories");
 		}
 		if (stack.is(Items.WATER_BUCKET)) {
 			requireNoMaterialLedger(stack);

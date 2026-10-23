@@ -54,6 +54,10 @@ public final class FluidDomain {
 	final SolverUnitScale unitScale;
 	final DomainGeometry geometry;
 	EntityBodyState entityBodies = EntityBodyState.EMPTY;
+	final EntityBodyCoupling entityBodyCoupling = new EntityBodyCoupling(this);
+	long[] occupiedSolidSvq() {
+		return entityBodyCoupling.addTo(granularCoupling == null ? new long[cellCount] : granularCoupling.copySolidSvq());
+	}
 	final CellLiquidGrid liquidGrid;
 	final MacVelocityGrid mac;
 	final CellMacStage cellMacStage;
@@ -240,7 +244,6 @@ public final class FluidDomain {
 	public void synchronizeGasTopologyForPersistence() { domainStep.synchronizeGasTopologyForPersistence(); }
 	static GranularCouplingFields.Position parcelPosition(GranularParcelStore.Parcel parcel) { return DomainStep.parcelPosition(parcel); }
 	static float trilinearWeight(int ox, int oy, int oz, float fx, float fy, float fz) { return DomainStep.trilinearWeight(ox, oy, oz, fx, fy, fz); }
-	public MovingBodyFluidCoupling.Result applyMovingBodyCoupling(MovingBodyFluidCoupling.Request request) { return domainStep.applyMovingBodyCoupling(request); }
 	public EntityBodyState entityBodyState() { return entityBodies; }
 	/** Restores accepted bodies before deriving capacity, pressure or gas geometry. */
 	public void restoreEntityBodyState(EntityBodyState state) {
@@ -341,6 +344,9 @@ public final class FluidDomain {
 	public float totalVolume() { return domainCollision.totalVolume(); }
 	public double totalVolumeExact() { return domainCollision.totalVolumeExact(); }
 	public float totalOpenVolume() { return domainCollision.totalOpenVolume(); }
+	/** Read-only fixed pore capacity, independent of entity and condensed-carrier occupation. */
+	public double fixedOpenVolumeExact() { return geometry.cutCells.snapshot().totalOpenCellVolume(); }
+
 	public double totalOpenVolumeExact() { return domainCollision.totalOpenVolumeExact(); }
 	public long totalMassUnits() { return domainCollision.totalMassUnits(); }
 	public double totalMass() { return domainCollision.totalMass(); }
@@ -382,6 +388,9 @@ public final class FluidDomain {
 	public void setThermalTemperatureInCell(int x, int y, int z, double temperatureK) { domainCapabilities.setThermalTemperatureInCell(x, y, z, temperatureK); }
 	public double thermalTemperatureInCell(int x, int y, int z) { return domainCapabilities.thermalTemperatureInCell(x, y, z); }
 	public List<FiniteThermalExchange.Contact> finiteThermalContacts(List<ThermalContactRequest> requests) { return domainCapabilities.finiteThermalContacts(requests); }
+	public List<FiniteThermalExchange.Contact> finiteThermalPortContacts(List<ThermalPortRequest> requests) {
+		return CarrierThermalConduction.finitePorts(this, List.copyOf(requests));
+	}
 	public FiniteThermalCellPlan planFiniteThermalCellExchange(List<ThermalCellEnergyDelta> deltas) { return domainCapabilities.planFiniteThermalCellExchange(deltas); }
 	public void commitFiniteThermalCellExchange(FiniteThermalCellPlan plan) { domainCapabilities.commitFiniteThermalCellExchange(plan); }
 	public ThermalDisplaySnapshot copyThermalDisplaySnapshot() { return domainCapabilities.copyThermalDisplaySnapshot(); }
@@ -501,6 +510,13 @@ public final class FluidDomain {
 	public GranularInsertion tryInsertExactGranular(
 			int cellX, int cellY, int cellZ, GranularTransferLedger ledger, int maxRadius, boolean externalSource
 	) { return domainPhaseInventory.tryInsertExactGranular(cellX, cellY, cellZ, ledger, maxRadius, externalSource); }
+	public GranularInsertion tryInsertExactGranular(
+			int cellX, int cellY, int cellZ, GranularTransferLedger ledger, int maxRadius,
+			boolean externalSource, double carriedEnergy
+	) {
+		return domainPhaseInventory.tryInsertExactGranular(cellX, cellY, cellZ, ledger, maxRadius, externalSource, carriedEnergy);
+	}
+
 	public GranularExtraction tryExtractExactGranular(
 			int cellX, int cellY, int cellZ, long maximumSolidVolumeSvq
 	) { return domainPhaseInventory.tryExtractExactGranular(cellX, cellY, cellZ, maximumSolidVolumeSvq); }
@@ -523,12 +539,14 @@ public final class FluidDomain {
 			double centerXMetres, double centerYMetres, double centerZMetres,
 			double velocityXMetresPerSecond, double velocityYMetresPerSecond, double velocityZMetresPerSecond,
             double wetSurfaceAreaSquareMetres, double displacedMassKilograms,
-            double pressureForceXNewtons, double pressureForceYNewtons, double pressureForceZNewtons
+            double pressureForceXNewtons, double pressureForceYNewtons, double pressureForceZNewtons,
+            double waterContactVolumeCubicMetres
 	) {
-		static final BodyFluidSample EMPTY = new BodyFluidSample(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0, 0, 0);
+		static final BodyFluidSample EMPTY = new BodyFluidSample(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0, 0, 0, 0);
 
 		public BodyFluidSample {
-			if (!(Double.isFinite(wetSurfaceAreaSquareMetres) && wetSurfaceAreaSquareMetres >= 0
+			if (!(Double.isFinite(waterContactVolumeCubicMetres) && waterContactVolumeCubicMetres >= 0
+                    && Double.isFinite(wetSurfaceAreaSquareMetres) && wetSurfaceAreaSquareMetres >= 0
 					&& Double.isFinite(displacedMassKilograms) && displacedMassKilograms >= 0
 					&& Double.isFinite(pressureForceXNewtons) && Double.isFinite(pressureForceYNewtons)
 					&& Double.isFinite(pressureForceZNewtons)))
@@ -769,6 +787,16 @@ public final class FluidDomain {
 	}
 	public record MaterialDisplacement(float volume, List<MaterialPortion> portions, double internalEnergy) { }
 	public record MaterialPortion(int materialHandle, double volume, long massUnits) { }
+	/** A full cell face; direction is -X,+X,-Y,+Y,-Z,+Z. Contacts merge by linear cell index. */
+	public record ThermalPortRequest(int cellX, int cellY, int cellZ, int direction,
+			double wallThicknessMetres, double wallConductivityWPerMetreK, double filmThicknessMetres) {
+		public ThermalPortRequest {
+			if (direction < 0 || direction > 5 || !Double.isFinite(wallThicknessMetres) || wallThicknessMetres < 0
+					|| !Double.isFinite(wallConductivityWPerMetreK) || wallConductivityWPerMetreK <= 0
+					|| !Double.isFinite(filmThicknessMetres) || filmThicknessMetres <= 0)
+				throw new IllegalArgumentException("Invalid finite device port geometry or resistance");
+		}
+	}
 	public record ThermalContactRequest(
 			int ordinal, int cellX, int cellY, int cellZ, double conductanceWPerK
 	) {

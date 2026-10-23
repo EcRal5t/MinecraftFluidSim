@@ -12,6 +12,7 @@ import java.util.Objects;
 /** One server's composed runtime; it owns lifecycle coordination, not service convenience methods. */
 public final class MmmRuntime {
 	private final MinecraftSimulationLoop simulationLoop;
+	private final FiniteHeatExchangerOperations finiteHeatExchangers;
 	private final MinecraftRegionOperatorActions operatorActions;
 	private final MinecraftContainerTransactionAdapter containerTransactions;
 	private final MinecraftControllerConsole controllerConsole;
@@ -28,11 +29,13 @@ public final class MmmRuntime {
 	private final CommittedWorldRegistries worldRegistries;
 	private final CommittedEventHub committedEvents;
 	private final WorldStartupCoordinator.Result startup;
+	private final mmm.api.transfer.MmmTransferApi transfers;
 	private boolean worldRecoveryCompleted;
 	private boolean closed;
 
 	MmmRuntime(
 			MinecraftSimulationLoop simulationLoop,
+			FiniteHeatExchangerOperations finiteHeatExchangers,
 			MinecraftRegionOperatorActions operatorActions,
 			MinecraftContainerTransactionAdapter containerTransactions,
 			MinecraftControllerConsole controllerConsole,
@@ -48,9 +51,11 @@ public final class MmmRuntime {
 			ProtocolSessions protocolSessions,
 			CommittedWorldRegistries worldRegistries,
 			CommittedEventHub committedEvents,
-			WorldStartupCoordinator.Result startup
+			WorldStartupCoordinator.Result startup,
+			mmm.api.transfer.MmmTransferApi transfers
 	) {
 		this.simulationLoop = Objects.requireNonNull(simulationLoop, "Simulation loop");
+		this.finiteHeatExchangers = Objects.requireNonNull(finiteHeatExchangers);
 		this.operatorActions = Objects.requireNonNull(operatorActions, "Region operator actions");
 		this.containerTransactions = Objects.requireNonNull(containerTransactions, "Container transactions");
 		this.controllerConsole = Objects.requireNonNull(controllerConsole, "Controller console");
@@ -68,6 +73,7 @@ public final class MmmRuntime {
 		this.worldRegistries = Objects.requireNonNull(worldRegistries, "Committed world registries");
 		this.committedEvents = Objects.requireNonNull(committedEvents, "Committed event hub");
 		this.startup = Objects.requireNonNull(startup, "World startup result");
+		this.transfers = Objects.requireNonNull(transfers);
 	}
 
 	public MinecraftRegionOperatorActions operatorActions() { return operatorActions; }
@@ -85,9 +91,14 @@ public final class MmmRuntime {
 	public CommittedWorldRegistries worldRegistries() { return worldRegistries; }
 	public WorldCapabilityProfile worldProfile() { return worldRegistries.profile(); }
 	public MmmEventApi events() { return committedEvents; }
+	public mmm.api.transfer.MmmTransferApi transfers() { return transfers; }
 	public WorldStartupCoordinator.Result startup() { return startup; }
 
-	public void tick(MinecraftServer server) { simulationLoop.tick(server); }
+	public FiniteHeatExchangerOperations finiteHeatExchangers() { return finiteHeatExchangers; }
+	public void tick(MinecraftServer server) {
+		finiteHeatExchangers.recoverIndexed();
+		simulationLoop.tick(server);
+	}
 
 	public boolean isLifecycleManagedBlock(
 			net.minecraft.server.level.ServerLevel level, net.minecraft.core.BlockPos position
@@ -117,6 +128,7 @@ public final class MmmRuntime {
 		if (closed) throw new IllegalStateException("Matter, Motion & Mechanics runtime is closed");
 		if (worldRecoveryCompleted) return;
 		simulationLoop.recoverWorld(server);
+		finiteHeatExchangers.recoverIndexed();
 		worldRecoveryCompleted = true;
 	}
 

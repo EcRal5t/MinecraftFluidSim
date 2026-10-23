@@ -787,7 +787,6 @@ public final class AirNetwork {
 		edges = plan.replacementEdges;
 		nextNodeId = plan.nextNodeId;
 
-
 		externalSource = plan.externalSourceAfter;
 		escapedSink = plan.escapedSinkAfter;
 		lastCommittedPhasePlan = null;
@@ -894,7 +893,6 @@ public final class AirNetwork {
 		if (mutation.sourceNode() != null) mutation.sourceNode().setInventory(mutation.sourceAfter());
 		if (mutation.targetNode() != null) mutation.targetNode().setInventory(mutation.targetAfter());
 
-
 		externalSource = mutation.externalSourceAfter();
 		escapedSink = mutation.escapedSinkAfter();
 		revision++;
@@ -961,7 +959,6 @@ public final class AirNetwork {
 		private final ArrayList<AirEdge> replacementEdges;
 		private final int nextNodeId;
 
-
 		private final GasAuditLedger externalSourceAfter;
 		private final GasAuditLedger escapedSinkAfter;
 
@@ -980,7 +977,6 @@ public final class AirNetwork {
 			this.replacementNodes = replacementNodes;
 			this.replacementEdges = replacementEdges;
 			this.nextNodeId = nextNodeId;
-
 
 			this.externalSourceAfter = externalSourceAfter;
 			this.escapedSinkAfter = escapedSinkAfter;

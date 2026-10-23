@@ -198,7 +198,7 @@ public final class MinecraftRegionOperatorActions {
 		if (!availability.ensureForInventoryDecrease(level, region)) {
 			return "清空失败：流体域当前不可用：" + region.availabilityFailure();
 		}
-		if (containerRecovery.hasPending(region.id())) return "清空失败：区域存在未完成或不可识别的容器转移 WAL；拒绝清空";
+		if (availability.hasPending(region.id())) return "清空失败：区域存在未完成或不可识别的跨域事务 WAL";
 		FluidDomain domain = region.domain();
 		if (domain.hasPendingPhaseMotionWork()) return "清空失败：区域相变后尚未完成下一次机械推进";
 		double beforeCubicMeters = domain.unitScale().cubicMeters(domain.totalVolumeExact());

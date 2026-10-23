@@ -21,6 +21,16 @@ final class FluidControllerBlock extends Block {
 		super(properties);
 	}
 
+	@Override
+	protected boolean hasAnalogOutputSignal(BlockState state) { return true; }
+
+	@Override
+	protected int getAnalogOutputSignal(BlockState state, Level level, BlockPos position, net.minecraft.core.Direction direction) {
+		if (!(level instanceof net.minecraft.server.level.ServerLevel serverLevel)) return 0;
+		var runtime = MmmRuntimeRegistry.find(serverLevel.getServer());
+		return runtime == null ? 0 : runtime.regionObservation().controllerComparatorSignal(serverLevel, position);
+	}
+
 	/** Held items own their interaction; only an actually empty hand enters controller activation. */
 	@Override
 	protected InteractionResult useItemOn(

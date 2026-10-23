@@ -8,6 +8,12 @@ import java.util.UUID;
 public sealed interface ContainerTransferActor
 		permits ContainerTransferActor.PlayerHand, ContainerTransferActor.Dispenser {
 	Kind kind();
+	default boolean sameInventory(ContainerTransferActor other) {
+		if (this instanceof Dispenser first && other instanceof Dispenser second)
+			return first.dimensionId().equals(second.dimensionId()) && first.blockX()==second.blockX()
+					&& first.blockY()==second.blockY() && first.blockZ()==second.blockZ() && first.slot()==second.slot();
+		return equals(other);
+	}
 
 	static PlayerHand player(UUID playerId, Hand hand) {
 		return new PlayerHand(playerId, hand);
@@ -34,11 +40,15 @@ public sealed interface ContainerTransferActor
 	}
 
 	record Dispenser(
-			String dimensionId, int blockX, int blockY, int blockZ, int slot
+			String dimensionId, int blockX, int blockY, int blockZ, int slot, UUID inventoryId, long generation
 	) implements ContainerTransferActor {
+		public Dispenser(String dimensionId,int blockX,int blockY,int blockZ,int slot) {
+			this(dimensionId,blockX,blockY,blockZ,slot,null,0);
+		}
 		public Dispenser {
 			StableId.require(dimensionId, 128, "dimension id");
-			if (slot < 0 || slot >= 9) {
+			if (slot < 0 || slot >= 9 || generation<0 || generation==Long.MAX_VALUE
+					|| inventoryId==null && generation!=0) {
 				throw new IllegalArgumentException("Dispenser container transfer actor is invalid");
 			}
 		}

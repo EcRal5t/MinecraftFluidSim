@@ -57,6 +57,7 @@ public final class FluidRegionLifecycleValidation {
 	private FluidRegionLifecycleValidation() { }
 
 	public static void main(String[] args) throws Exception {
+		validateControllerComparatorObservation();
 		validatePacingAndOperatorPause();
 		validateRegionTickPlanningAndPacing();
 		validateAvailabilityPreservesRunIntent();
@@ -71,6 +72,55 @@ public final class FluidRegionLifecycleValidation {
 		validateMetadataOnlySummaryCannotInventInventory();
 		validateLifecyclePreviewTokensBindEveryCommitGate();
 		System.out.println("FluidRegionLifecycle validation passed");
+	}
+
+	private static void validateControllerComparatorObservation() {
+		require(ControllerComparatorSignals.strength(0, 8) == 0
+				&& ControllerComparatorSignals.strength(.001, 8) == 1
+				&& ControllerComparatorSignals.strength(4, 8) == 8
+				&& ControllerComparatorSignals.strength(7.99, 8) == 14
+				&& ControllerComparatorSignals.strength(8, 8) == 15,
+				"Controller comparator did not use the vanilla container ratio");
+		var manager = new FluidRegionManager(new RegionCatalog.Limits(4, 4096, 16384));
+		int[] notifications = {0};
+		var signals = new ControllerComparatorSignals(manager, (dimension, position) -> notifications[0]++);
+		var controller = new BlockPos(-1, 0, 0);
+		var footprint = new mmm.simulation.controller.FluidRegionFootprint(controller, BlockPos.ZERO, BlockPos.ZERO,
+				java.util.Set.of(BlockPos.ZERO.asLong()), java.util.Set.of(controller.asLong()),
+				java.util.Set.of(net.minecraft.world.level.ChunkPos.pack(0, 0)));
+		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F,1000,0,.05F,48,1e-4F,.002F));
+		domain.setSolidMicroMask(0,0,0,15);
+		var region = new FluidRegion(new UUID(127,131), DIMENSION, BlockPos.ZERO, domain, footprint);
+		require(signals.signal(DIMENSION, controller)==0 && manager.add(region).accepted()
+				&& notifications[0]==0, "Inactive or empty controller emitted a liquid signal");
+		var candidate = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
+		float[] half = {.25F,.5F,.5F,.5F,.5F,.5F,.5F,.5F};
+		candidate.setVolumes(half);
+		region.adoptContainerCandidateDomain(candidate, 1, true);
+		require(signals.signal(DIMENSION, controller)==8 && region.paused() && notifications[0]==1
+				&& candidate.fixedOpenVolumeExact()==7.5,
+				"Committed liquid signal lost the fixed pore capacity or paused observation");
+		candidate.restoreEntityBodyState(new mmm.fluid.EntityBodyState(java.util.List.of(
+				new mmm.world.MovingBodyFluidCoupling.Request(new UUID(137,139),
+						new mmm.world.MovingBodyFluidCoupling.Bounds(.1,.1,.1,.8,.8,.8),0,0,0))));
+		region.publishCommittedObservation();
+		for(int i=0;i<20;i++) require(signals.signal(DIMENSION, controller)==8, "Comparator observation changed state");
+		require(notifications[0]==1 && region.domain()==candidate && region.paused()
+				&& candidate.fixedOpenVolumeExact()==7.5, "Read-only observation woke or rebuilt the region");
+		candidate.restoreEntityBodyState(mmm.fluid.EntityBodyState.EMPTY);
+		region.setAvailabilityFailure(mmm.api.RegionAvailabilityReason.CHUNK_MISSING,"test missing chunk");
+		require(signals.signal(DIMENSION,controller)==0 && notifications[0]==2,"Unavailable controller retained output");
+		region.setAvailabilityFailure(null);
+		var saved = candidate.captureAuthoritativeState();
+		require(region.recordPublishedCheckpoint(2) && region.releaseSolverAfterCheckpoint(2)
+				&& signals.signal(DIMENSION,controller)==0,"Unloaded controller retained output");
+		int unloadedNotifications = notifications[0];
+		for(int i=0;i<20;i++) require(signals.signal(DIMENSION,controller)==0,"Read-only signal restored an unloaded solver");
+		require(!region.solverLoaded() && notifications[0]==unloadedNotifications,"Signal query mutated unloaded state");
+		region.restoreAuthoritativeSolver(saved,2);
+		require(signals.signal(DIMENSION,controller)==8,"Restored controller lost its committed ratio");
+		manager.remove(region.id());
+		require(signals.signal(DIMENSION,controller)==0,"Removed controller retained output");
 	}
 
 	private static void validateLifecyclePreviewTokensBindEveryCommitGate() {

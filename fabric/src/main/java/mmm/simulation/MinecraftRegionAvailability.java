@@ -16,6 +16,9 @@ final class MinecraftRegionAvailability {
 	private final MinecraftRegionTick regionTick;
 	private final FluidSnapshotPublisher snapshots;
 	private final CommittedWorldRegistries world;
+	private java.util.function.Predicate<java.util.UUID> additionalPending = id -> false;
+	void additionalPending(java.util.function.Predicate<java.util.UUID> pending) { additionalPending = pending; }
+	boolean hasPending(java.util.UUID id) { return containerRecovery.hasPending(id) || additionalPending.test(id); }
 
 	MinecraftRegionAvailability(
 			ContainerRecoveryCoordinator containerRecovery,
@@ -43,9 +46,9 @@ final class MinecraftRegionAvailability {
 	}
 
 	private boolean ensure(ServerLevel level, FluidRegion region, boolean inventoryDecrease) {
-		if (containerRecovery.hasPending(region.id())) {
+		if (hasPending(region.id())) {
 			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
-					"存在未完成容器转移 WAL；恢复完成后才能继续");
+					"存在未完成的跨域事务 WAL；恢复完成后才能继续");
 			return false;
 		}
 		boolean available = operations.ensureAvailable(

@@ -36,6 +36,11 @@ public final class GasRegistry {
 	private final byte[] canonicalBytes;
 	private final String fingerprint;
 	private volatile GasInventory standardAmbient;
+	private final SourceRecipe ambientSource;
+	private final Map<String, ExactRational> massPerNano;
+	private final Map<GasComponentDefinition.DefaultSpecies, ExactRational> speciesPerNano;
+	private record SourceRecipe(List<AmbientFraction> parts, BigInteger[] weights, BigInteger total) { }
+
 
 	public GasRegistry(List<GasComponentDefinition> components, List<AmbientFraction> ambient) {
 		if (components == null || components.isEmpty() || components.size() > GasLimits.MAX_COMPONENTS) {
@@ -78,6 +83,20 @@ public final class GasRegistry {
 		this.byId = Collections.unmodifiableMap(definitions);
 		this.canonicalBytes = encodeCanonical();
 		this.fingerprint = sha256(canonicalBytes);
+		this.ambientSource = prepareSource(this.ambient);
+		var masses = new LinkedHashMap<String, ExactRational>();
+		var species = new LinkedHashMap<GasComponentDefinition.DefaultSpecies, ExactRational>();
+		for (var definition : this.components) {
+			var density = ExactRational.parse(Double.toString(definition.standardDensityKgPerCubicMeter()));
+			masses.put(definition.id(), new ExactRational(density.numerator().multiply(BigInteger.TEN), density.denominator()));
+			for (var entry : definition.defaultSpeciesConcentrations()) {
+				var concentration = entry.concentrationMolPerStandardCubicMeter();
+				species.put(entry, new ExactRational(concentration.numerator().multiply(BigInteger.valueOf(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL)),
+						concentration.denominator().multiply(BigInteger.valueOf(1_000_000_000L))));
+			}
+		}
+		massPerNano = Map.copyOf(masses);
+		speciesPerNano = Map.copyOf(species);
 	}
 
 	public List<GasComponentDefinition> components() { return components; }
@@ -135,15 +154,9 @@ public final class GasRegistry {
 		if (previous < 0 || added < 0) throw new IllegalArgumentException("Gas source volume cannot be negative");
 		if (added == 0) return GasInventory.EMPTY;
 		long end = Math.addExact(previous, added);
-		var sorted = new ArrayList<>(recipe); sorted.sort(Comparator.comparing(AmbientFraction::componentId));
-		ExactRational sum = ExactRational.ZERO; String last = null;
-		for (var part : sorted) {
-			component(part.componentId()); if (part.componentId().equals(last)) throw new IllegalArgumentException("Duplicate source component");
-			sum = sum.add(part.fraction()); last = part.componentId();
-		}
-		if (!sum.equals(ExactRational.ONE)) throw new IllegalArgumentException("Gas source mole fractions must sum to one");
-		var weights = sorted.stream().map(AmbientFraction::fraction).toList();
-		long[] before = sourceShares(previous, weights), after = sourceShares(end, weights);
+		var source = recipe == ambient ? ambientSource : prepareSource(recipe);
+		var sorted = source.parts();
+		long[] before = sourceShares(previous, source), after = sourceShares(end, source);
 		var result = new ArrayList<GasComponentAmount>();
 		for (int i = 0; i < sorted.size(); i++) {
 			long nanos = after[i] - before[i]; if (nanos == 0) continue;
@@ -160,30 +173,75 @@ public final class GasRegistry {
 		}
 		return new GasInventory(result);
 	}
-	private static long sourceMass(GasComponentDefinition definition, long nanos) {
-		var density = ExactRational.parse(Double.toString(definition.standardDensityKgPerCubicMeter()));
-		var division = density.numerator().multiply(BigInteger.valueOf(nanos)).multiply(BigInteger.TEN).divideAndRemainder(density.denominator());
-		int half = division[1].shiftLeft(1).compareTo(density.denominator());
+	private long sourceMass(GasComponentDefinition definition, long nanos) {
+		var ratio = massPerNano.get(definition.id());
+		if (ratio.numerator().bitLength() < 63 && ratio.denominator().bitLength() < 63) {
+			long numerator = ratio.numerator().longValue(), denominator = ratio.denominator().longValue();
+			if (numerator == 0 || nanos <= Long.MAX_VALUE / numerator) {
+				long product = numerator * nanos, quotient = product / denominator, remainder = product % denominator;
+				int half = Long.compare(remainder, denominator - remainder);
+				return half > 0 || half == 0 && (quotient & 1) != 0 ? Math.addExact(quotient, 1) : quotient;
+			}
+		}
+		var division = ratio.numerator().multiply(BigInteger.valueOf(nanos)).divideAndRemainder(ratio.denominator());
+		int half = division[1].shiftLeft(1).compareTo(ratio.denominator());
 		return (half > 0 || half == 0 && division[0].testBit(0) ? division[0].add(BigInteger.ONE) : division[0]).longValueExact();
 	}
-	private static long sourceSpecies(GasComponentDefinition.DefaultSpecies entry, long nanos) {
-		return entry.concentrationMolPerStandardCubicMeter().numerator().multiply(BigInteger.valueOf(nanos))
-				.multiply(BigInteger.valueOf(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL)).divide(
-						entry.concentrationMolPerStandardCubicMeter().denominator().multiply(BigInteger.valueOf(1_000_000_000L))).longValueExact();
+	private long sourceSpecies(GasComponentDefinition.DefaultSpecies entry, long nanos) {
+		var ratio = speciesPerNano.get(entry);
+		return sourceFloor(ratio.numerator(), nanos, ratio.denominator());
+	}
+	private SourceRecipe prepareSource(List<AmbientFraction> recipe) {
+		var sorted = new ArrayList<>(recipe);
+		sorted.sort(Comparator.comparing(AmbientFraction::componentId));
+		ExactRational sum = ExactRational.ZERO;
+		BigInteger common = BigInteger.ONE;
+		String last = null;
+		for (var part : sorted) {
+			component(part.componentId());
+			if (part.componentId().equals(last)) throw new IllegalArgumentException("Duplicate source component");
+			sum = sum.add(part.fraction());
+			common = lcm(common, part.fraction().denominator());
+			last = part.componentId();
+		}
+		if (!sum.equals(ExactRational.ONE)) throw new IllegalArgumentException("Gas source mole fractions must sum to one");
+		BigInteger[] weights = new BigInteger[sorted.size()];
+		BigInteger total = BigInteger.ZERO;
+		for (int i = 0; i < weights.length; i++) {
+			var weight = sorted.get(i).fraction();
+			weights[i] = weight.numerator().multiply(common.divide(weight.denominator()));
+			total = total.add(weights[i]);
+		}
+		return new SourceRecipe(List.copyOf(sorted), weights, total);
 	}
 	/** Jefferson allocation is monotone in cumulative source size, so every difference is positive. */
-	private static long[] sourceShares(long total, List<ExactRational> weights) {
-		BigInteger common = BigInteger.ONE; for (var weight : weights) common = lcm(common, weight.denominator());
-		var integers = new ArrayList<BigInteger>(); BigInteger sum = BigInteger.ZERO;
-		for (var weight : weights) { var value = weight.numerator().multiply(common.divide(weight.denominator())); integers.add(value); sum = sum.add(value); }
-		long[] result = new long[weights.size()]; long assigned = 0;
-		for (int i = 0; i < result.length; i++) { result[i] = integers.get(i).multiply(BigInteger.valueOf(total)).divide(sum).longValueExact(); assigned += result[i]; }
+	private static long[] sourceShares(long total, SourceRecipe source) {
+		long[] result = new long[source.weights().length];
+		if (total == 0) return result;
+		if (result.length == 1) { result[0] = total; return result; }
+		var integers = source.weights();
+		long assigned = 0;
+		for (int i = 0; i < result.length; i++) {
+			result[i] = sourceFloor(integers[i], total, source.total());
+			assigned += result[i];
+		}
 		while (assigned++ < total) {
-			int best = 0; for (int i = 1; i < result.length; i++) if (integers.get(i).multiply(BigInteger.valueOf(result[best]).add(BigInteger.ONE)).compareTo(
-					integers.get(best).multiply(BigInteger.valueOf(result[i]).add(BigInteger.ONE))) > 0) best = i;
+			int best = 0;
+			for (int i = 1; i < result.length; i++)
+				if (integers[i].multiply(BigInteger.valueOf(result[best]).add(BigInteger.ONE)).compareTo(
+						integers[best].multiply(BigInteger.valueOf(result[i]).add(BigInteger.ONE))) > 0) best = i;
 			result[best]++;
 		}
 		return result;
+	}
+
+	private static long sourceFloor(BigInteger numerator, long amount, BigInteger denominator) {
+		if (numerator.bitLength() < 63 && denominator.bitLength() < 63) {
+			long factor = numerator.longValue();
+			if (factor == 0 || amount <= Long.MAX_VALUE / factor)
+				return factor * amount / denominator.longValue();
+		}
+		return numerator.multiply(BigInteger.valueOf(amount)).divide(denominator).longValueExact();
 	}
 
 	private byte[] encodeCanonical() {

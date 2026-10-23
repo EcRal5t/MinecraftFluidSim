@@ -29,6 +29,7 @@ public final class FluidDomainStateParityValidation {
 		phaseOnCandidateRestoresToIdenticalState();
 		thermalOnlyCandidateIsPrivateAndRestorable();
 		privateCandidateAssertionIsTypedAndLeavesLiveStateUntouched();
+		entityTargetLifecycleSurvivesCandidateAndCheckpoint();
 		System.out.println("Fluid domain state parity characterization passed.");
 	}
 
@@ -57,6 +58,89 @@ public final class FluidDomainStateParityValidation {
 		FluidDomainStateAssertions.assertSameState(first.state(), second.state(), "custom viscosity next step");
 	}
 
+	/** The complete entity target replaces the accepted table only with an accepted private successor. */
+	private static void entityTargetLifecycleSurvivesCandidateAndCheckpoint() throws Exception {
+		var domain = new FluidDomain(4, 4, 4, new mmm.fluid.FluidSolverConfig(.5F, 1000, 0, .025F, 120, 1e-5F, .002F));
+		domain.sealDomainBoundary();
+		float[] fill = new float[64];
+		for (int z = 0; z < 4; z++) for (int x = 0; x < 4; x++) fill[x + 4 * (4 * z)] = .25F;
+		domain.setVolumes(fill);
+		var original = domain.captureAuthoritativeState();
+		var backend = new CpuFluidSolverBackend();
+		var id = new java.util.UUID(101, 211);
+		var first = new MovingBodyFluidCoupling.Request(id,
+				new MovingBodyFluidCoupling.Bounds(.6, .05, .6, .7, .15, .7), 0, 0, 0);
+		var entered = backend.evaluate(new FluidStepRequest(0, original, List.of(first), false, 0));
+		FluidDomainStateAssertions.assertSameState(original, domain.captureAuthoritativeState(), "entity entry changed source before adoption");
+		if (!entered.state().entityBodyState().bodies().equals(List.of(first))) throw new AssertionError("Entity entry lost its complete target");
+		var accepted = entered.claimPreparedCpuDomain();
+		try {
+			entered.claimPreparedCpuDomain();
+			throw new AssertionError("Entity candidate was adopted twice");
+		} catch (IllegalStateException expected) { }
+		var movedBody = new MovingBodyFluidCoupling.Request(id,
+				new MovingBodyFluidCoupling.Bounds(.7, .05, .6, .8, .15, .7), .2, 0, 0);
+		var beforeMove = accepted.captureAuthoritativeState();
+		var moved = backend.evaluate(new FluidStepRequest(1, beforeMove, List.of(movedBody), false, 0));
+		FluidDomainStateAssertions.assertSameState(beforeMove, accepted.captureAuthoritativeState(), "entity movement changed accepted source");
+		if (!moved.state().entityBodyState().bodies().equals(List.of(movedBody))) throw new AssertionError("Entity movement retained its previous target");
+		var movedDomain = FluidDomain.restoreAuthoritativeState(moved.state());
+		var settled = backend.evaluate(FluidStepRequest.pendingPhaseSettlement(2, moved.state()));
+		var settledBody = settled.state().entityBodyState().bodies().getFirst();
+		if (!settledBody.bodyId().equals(id) || !settledBody.bounds().equals(movedBody.bounds())
+				|| settledBody.velocityXMetresPerSecond() != 0 || settledBody.velocityYMetresPerSecond() != 0
+				|| settledBody.velocityZMetresPerSecond() != 0 || !settled.movingBodyCoupling().equals(MovingBodyFluidCoupling.Result.NONE))
+			throw new AssertionError("Phase settlement moved an accepted body or delivered its response twice");
+		var origin = net.minecraft.core.BlockPos.ZERO;
+		var controller = new net.minecraft.core.BlockPos(-1, 0, 0);
+		var interior = new java.util.HashSet<Long>();
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++)
+			interior.add(new net.minecraft.core.BlockPos(x, y, z).asLong());
+		var footprint = new mmm.simulation.controller.FluidRegionFootprint(controller, origin,
+				new net.minecraft.core.BlockPos(1, 1, 1), interior, java.util.Set.of(controller.asLong()), java.util.Set.of(0L));
+		net.minecraft.resources.ResourceKey<net.minecraft.core.Registry<net.minecraft.world.level.Level>> dimensionRegistry =
+				net.minecraft.resources.ResourceKey.createRegistryKey(net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm", "entity_parity_registry"));
+		var dimension = net.minecraft.resources.ResourceKey.create(dimensionRegistry,
+				net.minecraft.resources.Identifier.fromNamespaceAndPath("mmm", "entity_parity"));
+		var region = new FluidRegion(new java.util.UUID(223, 227), dimension, origin, movedDomain, footprint);
+		var checkpoint = RegionCheckpointFixtures.capture(region, 1);
+		checkpoint.validate();
+		var fromDisk = new mmm.simulation.persistence.RegionCheckpointRestorer(checkpoint.checkpoint())
+				.reconstructAuthoritativeState(null, null, null, moved.state().gasRegistry(), null);
+		FluidDomainStateAssertions.assertSameDurableState(moved.state(), fromDisk, "entity target disk recovery");
+		var nextLive = backend.evaluate(new FluidStepRequest(2, moved.state(), List.of(movedBody), false, 0));
+		var nextDisk = backend.evaluate(new FluidStepRequest(2, fromDisk, List.of(movedBody), false, 0));
+		FluidDomainStateAssertions.assertSameDurableState(nextLive.state(), nextDisk.state(), "entity disk recovery successor");
+		var departed = backend.evaluate(new FluidStepRequest(3, nextDisk.state(), List.of(), false, 0));
+		if (!departed.state().entityBodyState().bodies().isEmpty() || !departed.movingBodyCoupling().bodyImpulses().isEmpty())
+			throw new AssertionError("Departed entity retained occupancy or received a delayed impulse");
+		var originalVolume = original.liquid().stocks().stream().map(mmm.inventory.LiquidCellInventory.Stock::volume)
+				.reduce(mmm.units.SignedDyadic.ZERO, mmm.units.SignedDyadic::add);
+		var finalVolume = departed.state().liquid().stocks().stream().map(mmm.inventory.LiquidCellInventory.Stock::volume)
+				.reduce(mmm.units.SignedDyadic.ZERO, mmm.units.SignedDyadic::add);
+		if (!finalVolume.equals(originalVolume)
+				|| departed.state().liquid().stocks().stream().mapToLong(mmm.inventory.LiquidCellInventory.Stock::massUnits).sum()
+				!= original.liquid().stocks().stream().mapToLong(mmm.inventory.LiquidCellInventory.Stock::massUnits).sum())
+			throw new AssertionError("Entity enter/move/depart changed material inventory");
+		var tooMany = new java.util.ArrayList<MovingBodyFluidCoupling.Request>();
+		for (int i = 0; i <= MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP; i++)
+			tooMany.add(new MovingBodyFluidCoupling.Request(new java.util.UUID(239, i), first.bounds(), 0, 0, 0));
+		try {
+			backend.evaluate(new FluidStepRequest(4, departed.state(), tooMany, false, 0));
+			throw new AssertionError("Oversized complete body target was partially applied");
+		} catch (IllegalArgumentException expected) { }
+		var full = new FluidDomain(4, 4, 4, domain.config());
+		full.sealDomainBoundary();
+		java.util.Arrays.fill(fill, 1); full.setVolumes(fill);
+		var fullBefore = full.captureAuthoritativeState();
+		boolean rejected = false;
+		try {
+			backend.evaluate(new FluidStepRequest(0, fullBefore, List.of(first), false, 0));
+		} catch (RuntimeException unavailable) { rejected = true; }
+		if (!rejected) throw new AssertionError("Entity insertion ignored a sealed full domain's physical capacity");
+		FluidDomainStateAssertions.assertSameState(fullBefore, full.captureAuthoritativeState(), "rejected entity insertion changed source");
+	}
+
 	/** An unforeseen private-candidate assertion must pause one region, never escape as a server crash. */
 	private static void privateCandidateAssertionIsTypedAndLeavesLiveStateUntouched() throws Exception {
 		FullCapabilityTestFixture.Registries registries = ProductionFluidReplayValidation.loadProductionRegistries();
@@ -67,8 +151,8 @@ public final class FluidDomainStateParityValidation {
 			new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0L, base, List.of(
 					MovingBodyFluidCoupling.prescribedCube(0.5F, 0.5F, 0.5F,
 							Double.MAX_VALUE, 0.0, 0.0, 0.01)), false, 0, false));
-		} catch (FluidSolverBackend.CandidateEvaluationRejectedException expected) {
-			typed = expected.getCause() instanceof IllegalArgumentException;
+		} catch (FluidSolverBackend.CandidateEvaluationRejectedException | FluidDomain.PressureSolveBlockedException expected) {
+			typed = true;
 		}
 		if (!typed) throw new AssertionError("private candidate assertion escaped the typed rejection boundary");
 		FluidDomainStateAssertions.assertSameState(base, live.captureAuthoritativeState(),

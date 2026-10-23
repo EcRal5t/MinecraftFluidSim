@@ -31,7 +31,7 @@ final class LiquidCollisionEdit {
 	static LiquidCollisionEdit prepare(FluidDomain domain, List<FluidDomain.CollisionEdit> edits,
 	                                  FluidDomain.GranularCollisionPlan granular) {
 		byte[] masks = domain.geometry.cutCells.copyMicroMasks();
-		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
+		long[] occupied = domain.occupiedSolidSvq();
 		if (granular != null) {
 			for (int i = 0; i < granular.selectedParcels().length; i++) if (granular.selectedParcels()[i]) {
 				var parcel = domain.granularState.parcels.parcel(i);

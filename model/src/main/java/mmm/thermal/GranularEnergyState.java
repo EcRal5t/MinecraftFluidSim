@@ -210,6 +210,43 @@ public final class GranularEnergyState {
 		return energies;
 	}
 
+	double[] planExternalActiveInsertions(int firstOrdinal, int count, ThermalCarrierContext markers, double carriedEnergy) {
+		if (!Double.isFinite(carriedEnergy) || firstOrdinal != granularEnergy.activeCount() || count <= 0
+				|| firstOrdinal + count != markers.activeParcelCount())
+			throw new IllegalArgumentException("Granular carried energy insertion is invalid");
+		var portions = new java.util.ArrayList<ThermalStateFunction.InventoryPortion>();
+		for (int i = 0; i < count; i++) {
+			int ordinal = firstOrdinal + i;
+			addGranularPortion(portions, markers.activeParcelMaterial(ordinal), markers.activeParcelMass(ordinal),
+					markers.solidComposition(markers.activeParcelComposition(ordinal)));
+		}
+		double temperature = stateFunction.stateForInventory(portions, carriedEnergy).temperatureK();
+		double[] energies = new double[count];
+		SignedDyadic remaining = SignedDyadic.of(carriedEnergy);
+		for (int i = 0; i < count; i++) {
+			var portion = portions.get(i);
+			energies[i] = i == count - 1 ? remaining.toDouble() : stateFunction.internalEnergyAtTemperature(
+					portion.materialHandle(), portion.massKg(), portion.speciesQuanta(), temperature);
+			remaining = remaining.subtract(SignedDyadic.of(energies[i]));
+			stateFunction.stateForInternalEnergy(portion.materialHandle(), portion.massKg(), portion.speciesQuanta(), energies[i]);
+			granularEnergy.requireAddActive(energies[i]);
+		}
+		carriedInsertionAudit(energies, carriedEnergy).expectedInventory();
+		return energies;
+	}
+
+	private ThermalAuditLedger carriedInsertionAudit(double[] energies, double carriedEnergy) {
+		return audit.ledger().withExternalSourceEnergy(SignedDyadic.of(carriedEnergy))
+				.withRoundoff(SignedDyadic.sum(energies).subtract(SignedDyadic.of(carriedEnergy)));
+	}
+
+	void commitExternalActiveInsertions(double[] energies, double carriedEnergy) {
+		var after = carriedInsertionAudit(energies, carriedEnergy);
+		for (double energy : energies) granularEnergy.addActive(energy);
+		audit.replace(after);
+		revision++;
+	}
+
 	double planExternalGranularEnergy(int material, int composition, double mass, ThermalCarrierContext markers) {
 		double energy = modeledGranularEnergy(material, composition, mass, insertionTemperatureK, markers);
 		granularEnergy.requireAddActive(energy);

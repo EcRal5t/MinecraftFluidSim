@@ -20,11 +20,6 @@ public final class ContainerTransferUseCase {
 		String invalid = validateProfile(command.beforeItem(), command.expectedProfileFingerprint());
 		if (invalid == null) invalid = validateProfile(command.sourceItem(), command.expectedProfileFingerprint());
 		if (invalid != null) return Result.rejected(command, invalid);
-		if (command.resourceKind() == ContainerTransferJournal.ResourceKind.GRANULAR_SVQ
-				&& (command.sourceItem().thermalContents() != null
-				|| command.beforeItem().thermalContents() != null)) {
-			return Result.rejected(command, "颗粒容器不能携带液体 ThermalContents");
-		}
 
 		if (command.resourceKind() == ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS) {
 			if (!command.regionHasThermalState() || command.actor().kind() != mmm.transfer.ContainerTransferActor.Kind.PLAYER_HAND
@@ -45,8 +40,7 @@ public final class ContainerTransferUseCase {
 		}
 
 		Double preparedEnergy = null;
-		if (command.resourceKind() == ContainerTransferJournal.ResourceKind.FLUID_NANOS
-				&& command.regionHasThermalState()) {
+		if (command.regionHasThermalState()) {
 			preparedEnergy = 0.0;
 			if (command.operation() == ContainerTransferJournal.Operation.INSERT) {
 				String encoded = command.sourceItem().thermalContents();
@@ -57,10 +51,13 @@ public final class ContainerTransferUseCase {
 				try {
 					ThermalContents source = ThermalContents.decode(encoded);
 					source.validateRegistryFingerprint(command.thermalRegistryFingerprint());
-					long totalAmount = liquidAmount(command.sourceItem());
-					ThermalContents.EnergySplit split = source.splitHomogeneousEnergy(
-							command.requestedAmount(), totalAmount);
-					preparedEnergy = split.coupledEnergy(source.internalEnergy());
+					command.sourceItem().validateThermalRegistry(command.thermalRegistryFingerprint());
+					if(command.resourceKind()==ContainerTransferJournal.ResourceKind.FLUID_NANOS
+							&& source.underlyingKind()==ThermalContents.UnderlyingKind.PURE_WATER) {
+						long totalAmount=liquidAmount(command.sourceItem());
+						var split=source.splitHomogeneousEnergy(command.requestedAmount(),totalAmount);
+						preparedEnergy=split.coupledEnergy(source.internalEnergy());
+					}
 				} catch (RuntimeException invalidThermal) {
 					return Result.rejected(command,
 							"容器热状态损坏或与当前 registry/库存不一致；转移保持不变");
@@ -105,8 +102,17 @@ public final class ContainerTransferUseCase {
 			ContainerTransferJournal.Operation operation,
 			ContainerTransferJournal.ResourceKind resourceKind,
 			long requestedAmount,
-			long baseAmount
+			long baseAmount,
+			UUID operationId
 	) {
+		public Command(UUID regionId,String dimensionId,long baseGeneration,boolean regionHasThermalState,
+				String expectedProfileFingerprint,String thermalRegistryFingerprint,ContainerTransferActor actor,
+				ContainerTransferJournal.ItemFingerprint beforeItem,ContainerTransferJournal.ItemFingerprint sourceItem,
+				ContainerTransferJournal.Operation operation,ContainerTransferJournal.ResourceKind resourceKind,
+				long requestedAmount,long baseAmount) {
+			this(regionId,dimensionId,baseGeneration,regionHasThermalState,expectedProfileFingerprint,
+					thermalRegistryFingerprint,actor,beforeItem,sourceItem,operation,resourceKind,requestedAmount,baseAmount,null);
+		}
 		public Command {
 			Objects.requireNonNull(regionId, "regionId");
 			if (dimensionId == null || dimensionId.isBlank() || baseGeneration < 0L

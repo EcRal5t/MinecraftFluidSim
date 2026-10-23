@@ -114,6 +114,20 @@ final class MinecraftContainerTransactionAdapter {
 			TransferExecutor executor,
 			FinalItemResolver finalItemResolver
 	) {
+		return execute(region,level,actor,beforeStack,sourceStack,operation,resourceKind,
+				requestedAmount,baseAmount,executor,finalItemResolver,null);
+	}
+
+	Result executePublic(UUID operationId,FluidRegion region,ServerLevel level,ContainerTransferActor actor,
+			ItemStack beforeStack,ContainerTransferJournal.Operation operation,
+			ContainerTransferJournal.ResourceKind kind,long requested,long base,TransferExecutor executor) {
+		return execute(region,level,actor,beforeStack,beforeStack,operation,kind,requested,base,executor,
+				(raw,before)->raw,operationId);
+	}
+	private Result execute(FluidRegion region,ServerLevel level,ContainerTransferActor actor,
+			ItemStack beforeStack,ItemStack sourceStack,ContainerTransferJournal.Operation operation,
+			ContainerTransferJournal.ResourceKind resourceKind,long requestedAmount,long baseAmount,
+			TransferExecutor executor,FinalItemResolver finalItemResolver,UUID publicOperationId) {
 		Objects.requireNonNull(region, "region");
 		Objects.requireNonNull(level, "level");
 		Objects.requireNonNull(executor, "executor");
@@ -134,7 +148,7 @@ final class MinecraftContainerTransactionAdapter {
 		ContainerTransferUseCase.Result result = useCase.execute(new ContainerTransferUseCase.Command(
 				region.id(), level.dimension().identifier().toString(), region.checkpointGeneration(),
 				region.domain().hasThermalState(), profileFingerprint, thermalRegistryFingerprint,
-				actor, before, source, operation, resourceKind, requestedAmount, baseAmount));
+				actor, before, source, operation, resourceKind, requestedAmount, baseAmount, publicOperationId));
 		ItemStack after;
 		try {
 			after = ContainerItemMapper.toStack(result.afterItem());

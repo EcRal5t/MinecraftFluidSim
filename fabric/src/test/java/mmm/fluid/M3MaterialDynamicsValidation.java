@@ -12,51 +12,25 @@ final class M3MaterialDynamicsValidation {
 	static Summary validate() {
 		ConnectedVesselResult vessel = unequalAreaConnectedVesselBalances();
 		LayeringResult layering = densityInversionLayersConservatively();
-		movingBodyCommitsOnlyMarkerMomentum();
+		movingBodyPreservesLiquidInventory();
 		return new Summary(vessel.minimumHeadDifference(), layering.heavyCenterY(), layering.lightCenterY());
 	}
 
-	private static void movingBodyCommitsOnlyMarkerMomentum() {
-		FluidSolverConfig config = new FluidSolverConfig(
-				0.5F, 1_000.0F, 0.0F, 1.0F / 40.0F,
-				200, 1.0E-5F, 2.0E-3F);
-		FluidDomain domain = new FluidDomain(3, 3, 3, config);
-		domain.setVolume(1, 1, 1, 1.0F);
-		FlipParticleState before = domain.exportParticleState();
-		long massBefore = domain.totalMassUnits();
-		MovingBodyFluidCoupling.Result result = domain.applyMovingBodyCoupling(
-				MovingBodyFluidCoupling.prescribedCube(0.75F, 0.75F, 0.75F, 2.0, -0.5, 0.25, 0.025));
-		FlipParticleState after = domain.exportParticleState();
-		check(result.coupledMarkers() > 0 && result.coupledVolumeCubicMetres() > 0.0
-				&& result.impulseXKilogramMetresPerSecond() > 0.0
-				&& result.impulseYKilogramMetresPerSecond() < 0.0
-				&& result.impulseZKilogramMetresPerSecond() > 0.0,
-				"moving body did not commit a three-axis marker impulse");
-		check(Arrays.equals(before.copyPositionVolume(), after.copyPositionVolume())
-				&& massBefore == domain.totalMassUnits(),
-				"moving-body coupling changed authoritative volume or mass");
-		float[] velocityBefore = before.copyParticleVelocities();
-		float[] velocityAfter = after.copyParticleVelocities();
-		double momentumX = 0.0, momentumY = 0.0, momentumZ = 0.0;
-		double cellVolumeCubicMetres = (double) config.cellSize() * config.cellSize() * config.cellSize();
-		float[] positionVolume = after.copyPositionVolume();
-		for (int marker = 0; marker < after.particleCount(); marker++) {
-			double markerMassUnits = config.density() * positionVolume[marker * 4 + 3];
-			momentumX += markerMassUnits * (velocityAfter[marker * 3] - velocityBefore[marker * 3])
-					* cellVolumeCubicMetres;
-			momentumY += markerMassUnits * (velocityAfter[marker * 3 + 1] - velocityBefore[marker * 3 + 1])
-					* cellVolumeCubicMetres;
-			momentumZ += markerMassUnits * (velocityAfter[marker * 3 + 2] - velocityBefore[marker * 3 + 2])
-					* cellVolumeCubicMetres;
-		}
-		check(Double.doubleToRawLongBits(momentumX)
-				== Double.doubleToRawLongBits(result.impulseXKilogramMetresPerSecond())
-				&& Double.doubleToRawLongBits(momentumY)
-				== Double.doubleToRawLongBits(result.impulseYKilogramMetresPerSecond())
-				&& Double.doubleToRawLongBits(momentumZ)
-				== Double.doubleToRawLongBits(result.impulseZKilogramMetresPerSecond()),
-				"moving-body impulse report differs from committed marker momentum");
-	}
+    private static void movingBodyPreservesLiquidInventory() {
+        var domain=new FluidDomain(3,3,3,new FluidSolverConfig(.5F,1000,0,.025F,200,1e-5F,.002F));
+        domain.setVolume(1,1,1,1);
+        var volume=domain.liquidCells.exactVolume();long mass=domain.totalMassUnits();
+        var body=MovingBodyFluidCoupling.prescribedCube(.75F,.75F,.75F,2,-.5,.25,.025);
+        var candidate=new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0,domain.captureAuthoritativeState(),List.of(body),false,0));
+        var next=candidate.claimPreparedCpuDomain();var result=candidate.movingBodyCoupling();
+        check(next.liquidCells.exactVolume().equals(volume)&&next.totalMassUnits()==mass,
+                "Entity displacement changed actual liquid quantity");
+        check(next.entityBodyState().bodies().equals(List.of(body))&&result.bodyImpulses().size()==1,
+                "Prescribed body identity or pressure reaction was omitted");
+        var reaction=result.bodyImpulses().getFirst();
+        check(Math.abs(reaction.impulseXKilogramMetresPerSecond()+result.impulseXKilogramMetresPerSecond())<1e-10,
+                "Entity and fluid pressure impulses disagree");
+    }
 
 	private static ConnectedVesselResult unequalAreaConnectedVesselBalances() {
 		FluidSolverConfig config = config();

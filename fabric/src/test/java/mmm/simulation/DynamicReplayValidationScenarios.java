@@ -65,26 +65,24 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 			require(submergedFraction > 0.0 && submergedFraction <= 1.0 + 1.0E-9,
 					"dynamic player left the finite wet AABB observation at tick " + tick
 							+ ": submergence=" + submergedFraction);
-			bodyVelocity = MinecraftRegionInputs.responseVelocity(
-					velocityBeforeResponse,
-					new Vec3(sample.velocityXMetresPerSecond(), sample.velocityYMetresPerSecond(),
-							sample.velocityZMetresPerSecond()),
-					Math.min(1.0, submergedFraction),
-					new Vec3(sample.pressureForceXNewtons(), sample.pressureForceYNewtons(), sample.pressureForceZNewtons()),
-					MinecraftRegionInputs.effectiveBodyMass(bodyVolume, domain.config().gravity(), gravity));
+			bodyVelocity = velocityBeforeResponse;
 			maximumDisplacement = Math.max(maximumDisplacement, Math.abs(bodyMinimumY - initialBodyMinimumY));
 			if (tick > totalTicks - tailTicks) {
 				minimumTailY = Math.min(minimumTailY, bodyMinimumY);
 				maximumTailY = Math.max(maximumTailY, bodyMinimumY);
 			}
 			if (tick % motionIntervalTicks != 0) continue;
-			MovingBodyFluidCoupling.Request body = MovingBodyFluidCoupling.prescribedCube(
-					(float) sample.centerXMetres(), (float) sample.centerYMetres(),
-					(float) sample.centerZMetres(),
-					displacementThisTick.x * 20.0, displacementThisTick.y * 20.0,
-					displacementThisTick.z * 20.0, sample.displacedVolumeCubicMetres());
+			MovingBodyFluidCoupling.Request body = new MovingBodyFluidCoupling.Request(new java.util.UUID(0, 1),
+					new MovingBodyFluidCoupling.Bounds(bodyMinimumX, bodyMinimumY, bodyMinimumZ,
+							bodyMinimumX + bodyWidth, bodyMinimumY + bodyHeight, bodyMinimumZ + bodyWidth),
+					displacementThisTick.x * 20.0, displacementThisTick.y * 20.0, displacementThisTick.z * 20.0);
 			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
 					generation, state, List.of(body), false, 0, true));
+			for (var impulse : candidate.movingBodyCoupling().bodyImpulses()) {
+				double bodyMass = MinecraftRegionInputs.effectiveBodyMass(bodyVolume, domain.config().gravity(), gravity);
+				bodyVelocity = bodyVelocity.add(new Vec3(impulse.impulseXKilogramMetresPerSecond(),
+						impulse.impulseYKilogramMetresPerSecond(), impulse.impulseZKilogramMetresPerSecond()).scale(1 / (20 * bodyMass)));
+			}
 			FluidDomain.MechanicalStepAudit audit = candidate.stats().mechanicalAudit();
 			if (Double.isNaN(initialPotential)) initialPotential = audit.initialGravitationalPotentialEnergyJoules();
 			bodyWork += candidate.movingBodyCoupling().externalWorkJoules();
@@ -192,6 +190,7 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		for (long generation = 0L; generation < 500L; generation++) {
 			FluidStepCandidate candidate = backend.evaluate(new FluidStepRequest(
 					generation, state, List.of(body), false, 0, true));
+
 			MovingBodyFluidCoupling.Result coupling = candidate.movingBodyCoupling();
 			require(coupling.coupledMarkers() > 0 && coupling.coupledVolumeCubicMetres() > 0.0,
 					"stationary player-sized body lost its wet moving-boundary support");
@@ -314,7 +313,11 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 		FluidDomain initial = createFullyBoundCompressedPlanarHalfFill(registries);
 		// Apply one finite disturbance, then remove the body for the entire replay.
 		// Stable evolution must survive a perturbation of its exact static state.
-		if(perturbed)initial.applyMovingBodyCoupling(MovingBodyFluidCoupling.prescribedCube(2,1.9F,2,.5,.5,.5,.1));
+		if (perturbed) {
+			var perturbation = new CpuFluidSolverBackend().evaluate(new FluidStepRequest(0, initial.captureAuthoritativeState(),
+					List.of(MovingBodyFluidCoupling.prescribedCube(2, 1.9F, 2, .5, .5, .5, .1)), false, 0));
+			initial = FluidDomain.restoreAuthoritativeState(perturbation.state());
+		}
 		FluidDomainState state = initial.captureAuthoritativeState();
 		FluidDomain restored = FluidDomain.restoreAuthoritativeState(state);
 		CpuFluidSolverBackend backend = new CpuFluidSolverBackend();
@@ -804,6 +807,3 @@ abstract class DynamicReplayValidationScenarios extends ProductionReplayValidati
 	}
 
 }
-
-
-

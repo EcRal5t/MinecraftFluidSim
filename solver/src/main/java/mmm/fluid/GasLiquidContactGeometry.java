@@ -9,10 +9,12 @@ import mmm.inventory.LiquidCellInventory;
 /** Material-resolved gas contacts on the committed physical PLIC and fixed open microboxes. */
 final class GasLiquidContactGeometry {
   private GasLiquidContactGeometry() {}
+  private static final List<List<List<Point>>> MICRO_FACES = microFaces();
+  private static final Point[][] MICRO_CORNERS = microCorners();
 
   record Contact(LiquidCellInventory.Key key, int node, double areaM2, double liquidVolumeM3) {}
 
-  private record Layer(LiquidCellInventory.Stock stock, double lower, double upper) {}
+  record Layer(LiquidCellInventory.Stock stock, double lower, double upper) {}
 
   private record Owner(LiquidCellInventory.Key key, int node) implements Comparable<Owner> {
     public int compareTo(Owner other) {
@@ -77,21 +79,28 @@ final class GasLiquidContactGeometry {
               int peer = neighbor(domain, cell, micro, axis, sign);
               int node = peer < 0 ? frame.sealedExterior() ? -1 : 0 : frame.nodeOfPiece(peer);
               if (node < 0) continue;
-              double coordinate = .5 * (micro >> axis & 1) + (sign > 0 ? .5 : 0);
-              var polygon = face(micro, axis, coordinate);
-              if (fraction < 1)
-                polygon = clip(polygon, new Point(p.nx(), p.ny(), p.nz()), p.offset());
+              PlicComponentGeometry.Plane dry = null;
+              int shift = 0;
               if (peer >= 0) {
                 int peerCell = peer / 8, peerMicro = peer & 7;
                 if ((frame.geometry().collisionMask(peerCell) & 1 << peerMicro) != 0) continue;
                 double peerLiquid = frame.liquidFractionExact(peerCell, peerMicro);
                 if (peerLiquid >= 1) continue;
                 if (peerLiquid > 0) {
-                  var dry = frame.phase().componentPlane(peerCell, peerMicro);
-                  int shift = peerCell == cell ? 0 : sign;
-                  double offset = dry.offset() + shift * dry.normal(axis);
-                  polygon = clip(polygon, new Point(-dry.nx(), -dry.ny(), -dry.nz()), -offset);
+                  dry = frame.phase().componentPlane(peerCell, peerMicro);
+                  shift = peerCell == cell ? 0 : sign;
                 }
+              }
+              if (fraction >= 1 && dry == null && layers.size() == 1) {
+                areas.merge(new Owner(layers.getFirst().stock().key(), node), .25 * h * h, Double::sum);
+                continue;
+              }
+              var polygon = MICRO_FACES.get(micro).get(axis * 2 + (sign > 0 ? 1 : 0));
+              if (fraction < 1)
+                polygon = clip(polygon, new Point(p.nx(), p.ny(), p.nz()), p.offset());
+              if (dry != null) {
+                double offset = dry.offset() + shift * dry.normal(axis);
+                polygon = clip(polygon, new Point(-dry.nx(), -dry.ny(), -dry.nz()), -offset);
               }
               add(areas, layers, node, polygon, h);
             }
@@ -110,7 +119,7 @@ final class GasLiquidContactGeometry {
     return List.copyOf(result);
   }
 
-  private static List<Layer> layers(
+  static List<Layer> layers(
       FluidDomain domain,
       GasRuntimeGeometry frame,
       int cell,
@@ -185,6 +194,25 @@ final class GasLiquidContactGeometry {
     return 8 * (cell + sign * stride) + (micro ^ 1 << axis);
   }
 
+  private static List<List<List<Point>>> microFaces() {
+    var result = new ArrayList<List<List<Point>>>(8);
+    for (int micro = 0; micro < 8; micro++) {
+      var faces = new ArrayList<List<Point>>(6);
+      for (int axis = 0; axis < 3; axis++) for (int side = 0; side < 2; side++)
+        faces.add(face(micro, axis, .5 * ((micro >> axis & 1) + side)));
+      result.add(List.copyOf(faces));
+    }
+    return List.copyOf(result);
+  }
+
+  private static Point[][] microCorners() {
+    var result = new Point[8][8];
+    for (int micro = 0; micro < 8; micro++) for (int corner = 0; corner < 8; corner++)
+      result[micro][corner] = new Point(.5 * ((micro & 1) + (corner & 1)),
+          .5 * ((micro >> 1 & 1) + (corner >> 1 & 1)), .5 * ((micro >> 2 & 1) + (corner >> 2 & 1)));
+    return result;
+  }
+
   private static List<Point> face(int micro, int axis, double coordinate) {
     int a = (axis + 1) % 3, b = (axis + 2) % 3;
     double[] p = {.5 * (micro & 1), .5 * (micro >> 1 & 1), .5 * (micro >> 2 & 1)};
@@ -196,7 +224,7 @@ final class GasLiquidContactGeometry {
       q[b] += .5 * (corner >> 1 & 1);
       result.add(new Point(q[0], q[1], q[2]));
     }
-    return result;
+    return List.copyOf(result);
   }
 
   private static List<Point> section(int micro, PlicComponentGeometry.Plane plane) {
@@ -205,12 +233,9 @@ final class GasLiquidContactGeometry {
     for (int axis = 0; axis < 3; axis++)
       for (int a = 0; a < 2; a++)
         for (int b = 0; b < 2; b++) {
-          double[] p = {.5 * (micro & 1), .5 * (micro >> 1 & 1), .5 * (micro >> 2 & 1)};
-          p[(axis + 1) % 3] += .5 * a;
-          p[(axis + 2) % 3] += .5 * b;
-          var first = new Point(p[0], p[1], p[2]);
-          p[axis] += .5;
-          var second = new Point(p[0], p[1], p[2]);
+          int corner = (a << ((axis + 1) % 3)) | (b << ((axis + 2) % 3));
+          var first = MICRO_CORNERS[micro][corner];
+          var second = MICRO_CORNERS[micro][corner | (1 << axis)];
           double d1 = n.dot(first) - plane.offset(), d2 = n.dot(second) - plane.offset();
           if (d1 == 0 && !points.contains(first)) points.add(first);
           if (d2 == 0 && !points.contains(second)) points.add(second);
@@ -233,13 +258,17 @@ final class GasLiquidContactGeometry {
 
   private static List<Point> clip(List<Point> polygon, Point n, double offset) {
     if (polygon.isEmpty()) return polygon;
+    int inside = 0;
+    for (var point : polygon) if (n.dot(point) <= offset) inside++;
+    if (inside == polygon.size()) return polygon;
+    if (inside == 0) return List.of();
     var result = new ArrayList<Point>();
     var previous = polygon.getLast();
     double pd = n.dot(previous) - offset;
     for (var current : polygon) {
       double cd = n.dot(current) - offset;
       if ((pd > 0) != (cd > 0))
-        result.add(previous.plus(current.minus(previous).times(pd / (pd - cd))));
+        result.add(interpolate(previous, current, pd / (pd - cd)));
       if (cd <= 0) result.add(current);
       previous = current;
       pd = cd;
@@ -250,9 +279,17 @@ final class GasLiquidContactGeometry {
   private static double area(List<Point> polygon) {
     if (polygon.size() < 3) return 0;
     var first = polygon.getFirst();
-    Point sum = new Point(0, 0, 0);
-    for (int i = 1; i + 1 < polygon.size(); i++)
-      sum = sum.plus(polygon.get(i).minus(first).cross(polygon.get(i + 1).minus(first)));
-    return .5 * Math.sqrt(sum.dot(sum));
+    double x = 0, y = 0, z = 0;
+    for (int i = 1; i + 1 < polygon.size(); i++) {
+      var a = polygon.get(i); var b = polygon.get(i + 1);
+      double ax=a.x-first.x, ay=a.y-first.y, az=a.z-first.z;
+      double bx=b.x-first.x, by=b.y-first.y, bz=b.z-first.z;
+      x+=ay*bz-az*by; y+=az*bx-ax*bz; z+=ax*by-ay*bx;
+    }
+    return .5 * Math.sqrt(x*x+y*y+z*z);
+  }
+
+  private static Point interpolate(Point a, Point b, double t) {
+    return new Point(a.x+(b.x-a.x)*t, a.y+(b.y-a.y)*t, a.z+(b.z-a.z)*t);
   }
 }

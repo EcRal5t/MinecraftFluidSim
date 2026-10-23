@@ -58,13 +58,14 @@ public final class ChemicalDefinitionCodec {
 		JsonObject root = object(input);
 		requireOnly(root, "species", "liquid_phase", "gas_component", "reference_temperature_k",
 				"henry_solubility_mol_per_m3_pa", "temperature_slope_k",
-				"liquid_film_velocity_m_per_s", "gas_film_velocity_m_per_s");
+				"liquid_film_velocity_m_per_s", "gas_film_velocity_m_per_s", "minimum_temperature_k", "maximum_temperature_k");
 		return new GasLiquidMassTransferDefinition(stableId,
 				string(required(root, "species"), "species"), string(required(root, "liquid_phase"), "liquid_phase"),
 				string(required(root, "gas_component"), "gas_component"),
 				exact(root, "reference_temperature_k").toDouble(), exact(root, "henry_solubility_mol_per_m3_pa").toDouble(),
 				exact(root, "temperature_slope_k").toDouble(), exact(root, "liquid_film_velocity_m_per_s").toDouble(),
-				exact(root, "gas_film_velocity_m_per_s").toDouble());
+				exact(root, "gas_film_velocity_m_per_s").toDouble(),exact(root,"minimum_temperature_k").toDouble(),
+				exact(root,"maximum_temperature_k").toDouble());
 	}
 
 	private static JsonObject object(Reader input) {

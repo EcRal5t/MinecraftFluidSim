@@ -305,15 +305,19 @@ public final class M7ChemistryValidation {
 					"Henry reference or temperature direction changed");
 			check(transfer.overallLiquidFilmVelocityAt(298.15, mmm.fluid.air.GasRegistry.MOLAR_GAS_CONSTANT)
 					< transfer.liquidFilmVelocityMPerS(), "Series film resistance was omitted");
+			check(!transfer.supportsTemperature(1) && !transfer.supportsTemperature(500)
+					&& transfer.supportsTemperature(273.15) && transfer.supportsTemperature(373.15),
+					"Henry law escaped its declared liquid-water fit interval");
 			var differentTransfer = new GasLiquidMassTransferDefinition(transfer.id(), transfer.speciesId(),
 					transfer.liquidPhaseId(), transfer.gasComponentId(), transfer.referenceTemperatureK(),
 					transfer.henrySolubilityMolPerM3Pa(), transfer.temperatureSlopeK(),
-					transfer.liquidFilmVelocityMPerS() * 2, transfer.gasFilmVelocityMPerS());
+					transfer.liquidFilmVelocityMPerS() * 2, transfer.gasFilmVelocityMPerS(),
+					transfer.minimumTemperatureK(),transfer.maximumTemperatureK());
 			var transferChanged = new ChemicalRegistry(definitions.species(), definitions.phases(), definitions.reactions(), List.of(differentTransfer));
 			check(!transferChanged.fingerprint().equals(definitions.fingerprint()), "Film definition must affect the world fingerprint");
 			expectFailure(() -> new ChemicalRegistry(definitions.species(), definitions.phases(), definitions.reactions(),
 					List.of(new GasLiquidMassTransferDefinition("test:unknown", "test:unknown", transfer.liquidPhaseId(),
-							transfer.gasComponentId(), 298.15, 3.4e-4, 2400, 1e-5, 1e-2))),
+							transfer.gasComponentId(), 298.15, 3.4e-4, 2400, 1e-5, 1e-2,273.15,373.15))),
 					"Mass transfer accepted an unknown species");
 			check(java.util.Arrays.equals(ChemicalRegistryCodec.snapshotBytes(definitions),
 							ChemicalRegistryCodec.snapshotBytes(definitions)),

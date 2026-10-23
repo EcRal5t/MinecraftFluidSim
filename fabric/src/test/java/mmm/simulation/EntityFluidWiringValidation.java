@@ -65,7 +65,7 @@ public final class EntityFluidWiringValidation {
 	private static void movingBodyRequestsInitializeUnobservedBodies() {
 		List<MinecraftRegionInputs.BodyMotion> motions = List.of(
 				new MinecraftRegionInputs.BodyMotion(BODY, bounds(1, 1, 1), 0.4, null),
-				new MinecraftRegionInputs.BodyMotion(BODY, bounds(2, 1, 1), 0.4, Vec3.ZERO));
+				new MinecraftRegionInputs.BodyMotion(new UUID(11, 30), bounds(2, 1, 1), 0.4, Vec3.ZERO));
 		List<MovingBodyFluidCoupling.Request> requests =
 				MinecraftRegionInputs.movingBodyRequests(motions);
 		require(requests.size() == 2 && requests.get(0).localXMetres() == 1.0F,
@@ -81,16 +81,12 @@ public final class EntityFluidWiringValidation {
 		for (int body = 0; body <= MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP; body++) {
 			motions.add(new MinecraftRegionInputs.BodyMotion(new UUID(0, body), bounds(1 + body, 1, 1), body, new Vec3(0.1, 0.0, 0.0)));
 		}
-		List<MovingBodyFluidCoupling.Request> requests =
-				MinecraftRegionInputs.movingBodyRequests(motions);
-		require(requests.size() == MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP,
-				"moving-body request budget was not applied: " + requests.size());
-		double maximum = 0.0;
-		for (MovingBodyFluidCoupling.Request request : requests) {
-			maximum = Math.max(maximum, request.bodyId().getLeastSignificantBits());
+		try {
+			MinecraftRegionInputs.movingBodyRequests(motions);
+			throw new AssertionError("Oversized entity target was partially accepted");
+		} catch (IllegalArgumentException expected) {
+			require(expected.getMessage().contains("budget"), "Unexpected entity target rejection: " + expected);
 		}
-		require(maximum == MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP,
-				"moving-body budget did not keep the largest immersed volumes: " + maximum);
 	}
 
 	private static MovingBodyFluidCoupling.Bounds bounds(double x, double y, double z) {
@@ -101,7 +97,3 @@ public final class EntityFluidWiringValidation {
 		if (!condition) throw new AssertionError(message);
 	}
 }
-
-
-
-

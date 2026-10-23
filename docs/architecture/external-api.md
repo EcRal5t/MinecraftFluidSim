@@ -22,6 +22,12 @@
     - [ContainerRecoveryCoordinator](../../app/src/main/java/mmm/application/ContainerRecoveryCoordinator.java)
   - 测试选择器：`protocol,containers`
 
+- **受控转移与持久回执**
+  - 代码入口：[MmmTransferApi](../../api/src/main/java/mmm/api/transfer/MmmTransferApi.java)、[FabricTransferApi](../../fabric/src/main/java/mmm/simulation/FabricTransferApi.java)
+  - 库存投影：[ContainerTransferManifests](../../model/src/main/java/mmm/transfer/ContainerTransferManifests.java)
+  - 身份与回执：[PublicTransferReceiptStore](../../fabric/src/main/java/mmm/simulation/persistence/PublicTransferReceiptStore.java)
+  - 实际数量与持久交接复用容器计划、`ContainerTransferCoordinator` 和 `ContainerRecoveryCoordinator`。
+
 - **探针与控制台**
   - 代码入口：
     - [ShellFluidQuery](../../fabric/src/main/java/mmm/simulation/ShellFluidQuery.java)
@@ -47,11 +53,11 @@
 
 ## 当前稳定范围
 
-当前冻结同步只读 Query API，以及只发布 durable container completion 的 committed-event API。
+同步 Query API 读取已提交区域；Transfer API 通过持久容器执行液体与颗粒转移；committed-event API 发布容器耐久提交完成通知。
 loader-neutral 契约位于 `api` 模块的 `mmm.api.query`、`mmm.api.event` 与共享 typed quantity 所在的 `mmm.api.transfer`；
-Fabric 调用方分别通过 `MmmFabricApi.query(MinecraftServer)` 和 `MmmFabricApi.events(MinecraftServer)` 发现实现。
+Fabric 调用方通过 `MmmFabricApi.query(MinecraftServer)`、`MmmFabricApi.transfers(MinecraftServer)` 和 `MmmFabricApi.events(MinecraftServer)` 发现实现。
 
-Fabric 提供可选 Jade 适配，通过 Query API 读取并展示摘要。受控转移、其他类型的提交通知、WAILA/HWYLA 和其他加载器接入见 [产品路线](../roadmap/product-roadmap.md)。
+Fabric 提供可选 Jade 适配，通过 Query API 读取并展示摘要。首个写入适配使用已加载发射器中的真实容器槽位。其他类型的提交通知、WAILA/HWYLA 和其他加载器接入见 [产品路线](../roadmap/product-roadmap.md)。
 
 `MmmQueryApi.UNIT_SYSTEM = "SI;chemical-quantum=1umol;volume-nanos=1e-9m3;SVQ=2^-27m3"`。接口只依赖 JDK 类型，不返回 Minecraft 对象、runtime handle、solver array 或 live region/domain 引用。产品功能和 Java 类型使用语义名称；格式变化直接替换当前契约，不保留按数字区分的公开入口。
 
@@ -150,8 +156,24 @@ Jade 是 Fabric 模块的可选 compile-only 依赖；未安装 Jade 时不会�
 `core/.../transfer/` 已保存与 loader 无关的容器体积、逐材料质量、species/residual、颗粒组成、raw `U`、actor identity 和 journal 数据；
 Fabric 只负责 NBT 持久编码、Minecraft actor 收敛，以及由 `ContainerItemStacks` 映射 `ItemStack` component。
 
-它们是内部事务与未来 transfer adapter 的共享模型，不等同于已经开放写权限；公开 request/plan/commit 仍须先完成可跨重启解析并强制保存的外部 actor 协议。
+公共转移适配复用这些库存模型、容器 WAL、HEAD 提交与共同恢复判定。
 
 事件是即时通知。服务器可能在删除 WAL 后、发布事件前退出，监听器也可能晚注册而错过事件。接入方需要通过 Query API 重新读取当前状态，处理漏收情况。
 
 当前通知覆盖容器提交完成。checkpoint、世界归属、相变与安全暂停事件仍待设计。
+
+## 受控转移
+
+`MmmTransferApi` 在服务器主线程执行。接入方每次服务器启动注册稳定 provider ID，其解析器将 `ActorRef(providerId, objectId)` 解析为 `DispenserAddress`。解析器返回当前可用的维度、方块坐标和槽位，遵守无加载、无库存修改的查询规则。
+
+通过 `MmmFabricApi.transfers(server)` 取得入口。内置 `mmm:dispenser` provider 可直接使用 `new DispenserAddress(dimensionId, x, y, z, slot).actorRef(registrationId)`；接入方保存该容器的稳定 `registrationId`，更换容器实例时生成新的 ID。先检查 `registerActor` 的 `OK` 状态并读取 `actorGeneration`，再据此构造请求。`plan` 的清单可能少于请求上限，调用方检查实际清单后调用 `commit(planId)`。`PENDING` 结果保留原操作 UUID，通过 `receipt(operationId)` 追踪完成。
+
+`registerActor` 将外部身份绑定到真实容器实例 UUID，并保存初始代次。容器携带身份和代次组件；每次成功转移产生下一代，随实际后态物品保存。重新放入另一只容器会产生不同实例，旧计划因此失效；新的容器实例使用新的 object ID 登记。外部身份的已保存位置与实例绑定保持稳定。
+
+`TransferRequest` 携带调用方生成的操作 UUID、actor 及预期代次、区域与维度身份、世界坐标、方向和数量。方向相对于区域库存：`INSERT` 注入区域，`EXTRACT` 提取到容器。液体使用 `TransferQuantity.Liquid` 的 nanos（10⁻⁹ m³），颗粒使用 `TransferQuantity.Granular` 的 SVQ（2⁻²⁷ m³）。请求的液体 U 字段为空；实际组成、质量和内能由来源库存计算。
+
+`plan` 返回有会话身份和有效期的临时 token，以及实际可转移的 `TransferManifest`。清单按材料列出实际数量、整数质量、质量余量和物种微摩尔量，并携带 raw U 与注册表指纹。质量及余量单位为 10⁻¹⁰ kg。计划保留实际 actor 前态和区域代次；`commit(planId)` 重新核对后沿共同容器事务提交。区域或容器变化、计划过期及服务器重启均要求重新计划。
+
+每个 actor 保存最近一次终态回执和当前未完成操作。重试仍在保留范围内的同一请求返回原操作结果；请求内容与已保存身份冲突时返回 `CONFLICT`。`receipt(operationId)` 可在重启后读取回执，尚在恢复中的操作返回 `PENDING`；未知或超出保留范围返回 `RECEIPT_UNAVAILABLE`。旧成功请求携带的旧 actor 代次会被拒绝。区域 HEAD、物品后态及 actor 下一代完成持久保存与回读，回执发布后才删除 WAL 并发送提交事件。事件可能漏收，回执和查询提供补偿读取。
+
+新请求需要已注册的 provider 和已加载的发射器；暂不可用时返回 `UNAVAILABLE`。已发布 WAL 通过保存的具体位置、实例 UUID 和代次恢复，未完成操作保持 `PENDING`。调用方重试时沿原操作身份继续。已过期计划返回 `STALE_PLAN`，容器实例或代次变化返回 `STALE_ACTOR`。状态使用封闭枚举，`detail` 用于向人说明原因。

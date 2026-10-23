@@ -47,7 +47,7 @@ public final class ContainerTransferCoordinator {
 			return result(ContainerTransferUseCase.Status.LOCKED, command, command.beforeItem(),
 					failure, 0L, null, -1L, null);
 		}
-		UUID transactionId = UUID.randomUUID();
+		UUID transactionId = command.operationId() == null ? UUID.randomUUID() : command.operationId();
 		ContainerTransferJournal prepared = journal(transactionId, command, targetGeneration,
 				command.requestedAmount(), command.beforeItem(), plan.preparedThermalEnergy(), -1L,
 				ContainerTransferJournal.Phase.PREPARED);
@@ -106,8 +106,7 @@ public final class ContainerTransferCoordinator {
 					"容器转移 after-item 真值无效；在线区域保持不变：" + invalidAfter.getMessage(),
 					ContainerTransferUseCase.Status.REJECTED);
 		}
-		boolean thermalTransfer = command.resourceKind() != ContainerTransferJournal.ResourceKind.GRANULAR_SVQ
-				&& command.regionHasThermalState();
+		boolean thermalTransfer = command.regionHasThermalState();
 		if (thermalTransfer != (execution.thermalEnergy() != null)) {
 			return discardPrivateCandidate(command, transactionId,
 					"容器转移私有候选未返回与区域热状态一致的 coupled energy；在线区域保持不变",
@@ -241,9 +240,10 @@ public final class ContainerTransferCoordinator {
 		}
 
 		if (command.resourceKind() == ContainerTransferJournal.ResourceKind.GRANULAR_SVQ) {
-			return ContainerTransferJournal.granular(transactionId, command.regionId(), command.dimensionId(),
-					command.baseGeneration(), targetGeneration, command.operation(), amount, command.actor(),
-					command.beforeItem(), after, checksum, phase);
+			return new ContainerTransferJournal(transactionId,command.regionId(),command.dimensionId(),
+					command.baseGeneration(),targetGeneration,command.operation(),command.resourceKind(),-1,amount,
+					thermalEnergy==null?null:new ContainerTransferJournal.ThermalTransfer(command.thermalRegistryFingerprint(),thermalEnergy),
+					command.actor(),command.beforeItem(),after,checksum,phase);
 		}
 		if (thermalEnergy != null) {
 			return ContainerTransferJournal.thermalFluid(transactionId, command.regionId(), command.dimensionId(),

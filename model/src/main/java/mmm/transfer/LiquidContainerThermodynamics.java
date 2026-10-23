@@ -63,6 +63,27 @@ public final class LiquidContainerThermodynamics {
 				chemicalPortions(registry, selected), remaining == null ? null : chemicalPortions(registry, remaining));
 	}
 
+	public static ThermalContents.EnergySplit split(
+			ThermalRegistry registry, ThermalContents thermal, GranularContents source,
+			GranularContents selected, GranularContents remaining
+	) {
+		requireInputs(registry, thermal);
+		requireBinding(registry, thermal, ThermalContents.forGranular(registry.fingerprint(), source, thermal.internalEnergy()));
+		return splitAtSourceTemperature(registry, thermal.internalEnergy(), granularPortions(registry, source),
+				granularPortions(registry, selected), remaining == null ? null : granularPortions(registry, remaining));
+	}
+
+	private static List<ThermalStateFunction.InventoryPortion> granularPortions(ThermalRegistry registry, GranularContents contents) {
+		var result = new ArrayList<ThermalStateFunction.InventoryPortion>();
+		for (var group : contents.groups()) {
+			var species = new TreeMap<String, Long>();
+			for (var entry : group.composition()) species.put(entry.speciesId(), entry.amountQuanta());
+			result.add(new ThermalStateFunction.InventoryPortion(registry.materialHandle(
+					ThermalMaterialDefinition.CarrierKind.GRANULAR, group.materialId()), group.mass(), species));
+		}
+		return result;
+	}
+
 	private static ThermalContents.EnergySplit splitAtSourceTemperature(
 			ThermalRegistry registry, double sourceEnergy,
 			List<ThermalStateFunction.InventoryPortion> source,

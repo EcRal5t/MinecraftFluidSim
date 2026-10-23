@@ -14,7 +14,7 @@ final class PhaseOccupancyTransport {
 	static void ensure(FluidDomain domain) {
 		if (domain.phaseOccupancy != null && !domain.phaseOccupancyDirty) return;
 		domain.domainFlowFields.ensureInventoryGrid();
-		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
+		long[] occupied = domain.occupiedSolidSvq();
 		var frame=domain.gasState.frame;
 		if(frame!=null&&frame.matchesCarrierInventory(domain,occupied)){
 			publish(domain,frame.occupancy());return;
@@ -79,7 +79,7 @@ final class PhaseOccupancyTransport {
 	static void requireCurrentGeometry(FluidDomain domain, PhaseOccupancyState state) {
 		if (state == null || state.cellCount() != domain.cellCount) throw new IllegalArgumentException("Phase occupation dimensions differ from domain");
 		domain.domainFlowFields.ensureInventoryGrid();
-		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
+		long[] occupied = domain.occupiedSolidSvq();
 		requireGeometry(domain, state, occupied);
 	}
 

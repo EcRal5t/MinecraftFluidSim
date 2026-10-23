@@ -97,31 +97,39 @@ final class GasLiquidMassTransferStage {
 		var chemicalSink = ChemicalTransferLedger.EMPTY;
 		int evaluations = 0;
 		boolean active = false;
+		GasInventory ambient = null;
 		var order = new ArrayList<>(work.entrySet());
 		order.sort(java.util.Comparator.<Map.Entry<Key, Work>>comparingDouble(entry -> entry.getValue().seconds)
 				.reversed().thenComparing(Map.Entry::getKey));
 		for (var entry : order) {
 			var key = entry.getKey(); var item = entry.getValue();
+			var original=domain.liquidCells.stock(key.stock());
+			var rule=item.rule;
+			double liquidT=thermal.stateFunction().stateForInternalEnergy(
+					thermal.thermalMaterialHandleForFluid(original.key().material()),original.massKilograms(),
+					original.mixture().stableAmounts(registry),original.internalEnergy()).temperatureK();
+			if(!rule.supportsTemperature(liquidT)) {
+				// Unsupported film time does not become a pulse when the liquid returns to the fit interval.
+				pending.add(pending(key,0,item.residual));continue;
+			}
 			if (item.contacts.size() > maximumEvaluations - evaluations) {
 				active = true;
 				pending.add(pending(key, item.seconds, item.residual)); continue;
 			}
 			evaluations += item.contacts.size();
-			var original = domain.liquidCells.stock(key.stock());
 			var cell = cells.computeIfAbsent(key.stock().cell(), id -> new Cell(id,
 					thermal.preparePhaseCandidateCell(id, domain.domainCapabilities.thermalMarkerContext()),
 					domain.liquidCells.stocksInCell(id)));
 			double remainingResidual = item.residual;
 			double area = item.contacts.stream().mapToDouble(GasLiquidContactGeometry.Contact::areaM2).sum();
+			int species = registry.speciesHandle(rule.speciesId());
+			double h = rule.henrySolubilityAt(liquidT);
+			double filmVelocity = rule.overallLiquidFilmVelocityAt(liquidT, GasRegistry.MOLAR_GAS_CONSTANT);
 			for (var contact : item.contacts) {
 				var stock = cell.stocks.get(key.stock());
-				var rule = item.rule;
-				int species = registry.speciesHandle(rule.speciesId());
-				double liquidT = thermal.stateFunction().stateForInternalEnergy(
-						thermal.thermalMaterialHandleForFluid(original.key().material()), original.massKilograms(),
-						original.mixture().stableAmounts(registry), original.internalEnergy()).temperatureK();
 				int node = contact.node();
-				var donor = node == 0 ? network.registry().createAmbient(1_000_000_000L) : gas.get(node - 1);
+				if (node == 0 && ambient == null) ambient = network.registry().createAmbient(1_000_000_000L);
+				var donor = node == 0 ? ambient : gas.get(node - 1);
 				var component = donor.component(rule.gasComponentId());
 				double gasT = node == 0 || donor.isEmpty() ? GasRegistry.STANDARD_TEMPERATURE_K
 						: gasModel.state(donor, energy[node - 1]).temperatureK();
@@ -129,8 +137,7 @@ final class GasLiquidMassTransferStage {
 						? component.standardVolumeNanos() * 1.0e-9 * GasRegistry.STANDARD_PRESSURE_PA
 						: component.standardVolumeNanos() * 1.0e-9 * GasRegistry.STANDARD_PRESSURE_PA
 								* gasT / GasRegistry.STANDARD_TEMPERATURE_K / network.availableVolume(node);
-				double h = rule.henrySolubilityAt(liquidT);
-				double conductance = rule.overallLiquidFilmVelocityAt(liquidT, GasRegistry.MOLAR_GAS_CONSTANT) * contact.areaM2();
+				double conductance = filmVelocity * contact.areaM2();
 				double volume = contact.liquidVolumeM3();
 				double liquidMoles = stock.mixture().amount(species) * 1.0e-6;
 				double response = 1 / volume + (node == 0 ? 0 : h * GasRegistry.MOLAR_GAS_CONSTANT * gasT / network.availableVolume(node));

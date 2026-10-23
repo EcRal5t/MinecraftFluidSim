@@ -10,6 +10,9 @@
   "block.mmm.fluid_boundary": "物质、运动与力学边界",
   "block.mmm.fluid_controller": "物质、运动与力学控制器",
   "block.mmm.thermal_reservoir": "物质、运动与力学温度源",
+  "block.mmm.finite_heat_exchanger": "有限换热器",
+  "block.mmm.finite_heat_exchanger.tooltip": "右击控制器外壳安装，南北端口交换热量；空手潜行右击拆卸",
+  "item.mmm.finite_heat_exchanger.inventory": "设备质量：%s kg；内能：%s",
   "item.mmm.partial_water_bucket": "部分水桶",
   "item.mmm.partial_water_bucket.volume": "水量 %s",
   "item.mmm.material_bucket": "物质、运动与力学材料桶",
@@ -245,7 +248,8 @@
   "screen.mmm.display.legend.ph": "pH 0（酸）— 7（中性）— 14（碱）",
   "screen.mmm.display.legend.temperature": "%s K（冷）— %s K（热）",
   "screen.mmm.display.no_data": "灰色：不适用 / 无数据",
-  "screen.mmm.display.local": "仅修改本机显示；温度为单元凝聚相展示值。"
+  "screen.mmm.display.local": "仅修改本机显示；温度为单元凝聚相展示值。",
+  "message.mmm.finite_heat_exchanger.state": "有限换热器：%s K，%s kg，内能 %s，代次 %s"
 }
 
 

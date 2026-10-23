@@ -211,7 +211,9 @@ q = G * dt * (T_second(U_second - q) - T_first(U_first + q))
 设备、流体实际内能及双方审计全部通过预检后一起提交，成功交换使旧计算候选失效。
 跨区域设备需要协调所有区域的提交。
 
-设备的世界接入、接触生成与生产调度状态见[当前实施计划](../roadmap/solver-consolidation-plan.md)。
+`FiniteHeatExchangerOperations` 将有限换热器安装到已启用区域的围墙槽位，固定北／南端口读取同一区域实际载体接触。`FluidDomain.finiteThermalPortContacts` 提供端口视图，`FluidRegion.commitFiniteThermalPortExchange` 联合提交设备与载体内能。区域成功步采用同一逻辑时长推进设备，暂停、不可用或有待恢复事务时保留库存；设备成本纳入区域原有完整步调度。
+
+`FiniteHeatExchangerBlockEntity` 只保存区域和世界槽位定位；区域库存保存已安装设备的质量、内能、材料、指纹与代次。拆卸物品经 `FiniteThermalDeviceItemCodec` 携带完整设备状态，再安装按目标槽位定位，保持原热库存。创造栏空硬件首次安装按世界定义初始化。安装、拆卸和破坏交接见[世界与容器事务](world-ownership-and-containers.md#有限换热器安装与拆卸)。
 
 ### 有限体积离散
 
@@ -270,7 +272,7 @@ Ra = g*beta*DeltaT*H³/(nu*alpha)
 黏性使用局部指数衰减的动能损失，Darcy 使用对应格面实际动能损失。液固压力、隐式阻力与活动颗粒接触按真实有限惯性响应推进，其实际 K/PE 变化与气腔功汇入共同机械体，由 `ThermalStateFunction.partitionMechanicalEnergy` 按热容和可用显热分配有符号交换量。该机械体内的温度变化采用集总近似，数量与能量严格交接。已知压力与求解增量经过同一有限质量阻力响应，合并压力后一次发布最终速度；动能交换读取这一实际终态。正常机械输运中，旧气腔的实际压力耦合模式决定容量功；未解析来源按固定 U 守恒重映射，真实容量和 EOS 状态继续更新，见[气体压力与热耦合](gas-state.md#压力与热耦合)。
 实际写入载体 U 的机械热和存储舍入分别入账；压力、重力与外部实体的可逆做功由机械审计记录。
 实体接触逐面使用实际冲量 `I=mΔv`，外功为规定实体速度与冲量的点积；外功扣除局部实际动能变化得到接触阻力热，与墙面停动热共同提交。`MovingBodyFluidCoupling.Result.externalWorkJoules` 保存有符号外功，候选热账包含力学审计开始前的实体接触热。
-有限振幅运动的总能量评价需考虑这项模型限制。
+黏性应变行直接给出局部指数衰减耗散；压力、重力、共同阻力的实际 K/PE 交换和气腔功经 `MechanicalEnergySettlement` 集中分配。外部规定实体的压力功与剪切功进入同一实际内能提交，诊断分项包含外部约束功。MAC 写回舍入、压力离散及空间重建交换分别观测；温升按实际载体温度报告，有限振幅运动的总能量评价保留对应空间近似。
 
 ### 气体能量与功
 

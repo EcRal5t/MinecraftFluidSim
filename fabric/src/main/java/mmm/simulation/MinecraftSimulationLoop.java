@@ -49,7 +49,7 @@ final class MinecraftSimulationLoop {
 		for (FluidRegion region : regions.regions()) {
 			ServerLevel level = server.getLevel(region.dimension());
 			if (level == null) {
-				if (containerRecovery.hasPending(region.id())) {
+				if (availability.hasPending(region.id())) {
 					region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
 							"dimension is not loaded; unresolved container transfer WAL prevents unload checkpoint");
 					continue;
@@ -84,7 +84,7 @@ final class MinecraftSimulationLoop {
 	}
 
 	void checkpointForShutdown() {
-		operations.checkpointForShutdown(region -> !containerRecovery.hasPending(region.id()));
+		operations.checkpointForShutdown(region -> !availability.hasPending(region.id()));
 	}
 
 	void restoreTakeover(MinecraftServer server) {

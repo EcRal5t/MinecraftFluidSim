@@ -274,3 +274,13 @@ external sink 使用物品保存的 raw energy，舍入差单列 thermal roundof
 
 创造放出没有物品侧减少，因此明确记 region external source；创造装取仍必须从 region 删除，只是 Minecraft 保留玩家物品。这个不对称是显式 actor 语义，不得隐藏在 tooltip 或 item damage 中。
 
+
+## 有限换热器安装与拆卸
+
+`FiniteHeatExchangerOperations` 组织围墙槽位、区域有限设备库存与物品的事务；`FiniteDeviceJournalStore` 在 `mmm/device-transfer` 保存 typed WAL。区域 HEAD 是提交点，WAL 保存操作 UUID、base/target 代次、目标 checksum、阶段、完整源物品及设备内能、世界槽位、玩家手槽或稳定掉落身份。设备热库存随区域 HEAD 保存，BE 保存定位。
+
+安装将围墙替换为有限换热器并扣除手中硬件；空手潜行拆卸恢复围墙，将完整设备交回物品，玩家破坏通过同一事务生成稳定身份掉落。固定北／南端口连接同一区域内部，设备具备高爆炸抗性并阻止活塞移动。
+
+恢复先由 `CrossDomainRecovery` 核对 HEAD、WAL 阶段及世界／物品两个外部成员：base 且均为 before 时丢弃未提交操作；target 与 checksum 相符时幂等补齐仍为 before 的成员。第三种状态锁定，玩家离线或区块不可用则保留证据等待；世界及玩家耐久保存后才清理 WAL。失败不重新创造热库存。`FaultPoint` 覆盖 PREPARED、提交准备、HEAD、世界、物品与耐久保存后各交接节点。
+
+代码入口：[FiniteHeatExchangerOperations](../../fabric/src/main/java/mmm/simulation/FiniteHeatExchangerOperations.java)、[FiniteDeviceJournalStore](../../fabric/src/main/java/mmm/simulation/persistence/FiniteDeviceJournalStore.java)、[FiniteThermalDeviceItemCodec](../../model/src/main/java/mmm/thermal/FiniteThermalDeviceItemCodec.java)。自动化入口为 `RegionRepositoryAdapterValidation` 与有限端口热交换场景；原生游戏装卸仍待验证。
