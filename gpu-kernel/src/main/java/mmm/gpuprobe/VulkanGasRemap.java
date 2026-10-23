@@ -52,64 +52,72 @@ final class VulkanGasRemap implements AutoCloseable {
         WEIGHTS(8),SOURCE_PIVOT(4),ESCAPE_GROUP(4),RETAINED_COUNTS(4),FUTURE_COUNTS(4),OUTPUT_SPECIES_COUNTS(4),
         ENERGY_ROUNDOFF(8),SOURCE_ROUNDOFF(8),RETAINED_ROUNDOFF(8),MERGE_ROUNDOFF(8),AUDIT_ENERGY(8),
         AMBIENT_HANDLES(4),AMBIENT_WEIGHTS(8),AMBIENT_MASS_NUM(8),AMBIENT_MASS_DEN(8),AMBIENT_SPECIES_OFFSETS(4),
-        AMBIENT_SPECIES_HANDLES(4),AMBIENT_SPECIES_NUM(8),AMBIENT_SPECIES_DEN(8),AMBIENT_SPECIES_MASS(8),AMBIENT_BEFORE(8),AMBIENT_AFTER(8),SCAN(4),DISPATCH(4);
+        AMBIENT_SPECIES_HANDLES(4),AMBIENT_SPECIES_NUM(8),AMBIENT_SPECIES_DEN(8),AMBIENT_SPECIES_MASS(8),AMBIENT_BEFORE(8),AMBIENT_AFTER(8),SCAN(4),DISPATCH(4),MEASURE_RAW_SPECIES(4),MEASURE_RETAINED_COMPONENTS(4),MEASURE_RETAINED_SPECIES(4),MEASURE_FUTURE_COMPONENTS(4),MEASURE_FUTURE_SPECIES(4),REQUIREMENTS(4);
         final int width;Field(int width){this.width=width;}
     }
     static final class Layout {
-        final VulkanGasLineage.Layout lineage;final VulkanGasThermodynamics.Layout sourceEOS;
+        final VulkanGasRoutes routes;final VulkanGasThermodynamics.Layout sourceEOS;
         final VulkanGasStateLayout retained,future;final AmbientTables ambient;final int partCapacity,speciesCapacity;
         final VulkanLiquidStateLayout.Column header;final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);final long endOffset;
-        Layout(VulkanGasLineage.Layout lineage,VulkanGasThermodynamics.Layout sourceEOS,VulkanGasStateLayout retained,
+        Layout(VulkanGasRoutes routes,VulkanGasThermodynamics.Layout sourceEOS,VulkanGasStateLayout retained,
                VulkanGasStateLayout future,AmbientTables ambient,int partCapacity,int speciesCapacity,long scratchBase,long alignment) {
-            this.lineage=lineage;this.sourceEOS=sourceEOS;this.retained=retained;this.future=future;this.ambient=ambient;
+            this.routes=routes;this.sourceEOS=sourceEOS;this.retained=retained;this.future=future;this.ambient=ambient;
             this.partCapacity=partCapacity;this.speciesCapacity=speciesCapacity;
-            if(retained.nodeCapacity()!=lineage.gas.nodeCapacity()||!retained.definitions().equals(lineage.gas.definitions())
-                    ||!future.definitions().equals(lineage.gas.definitions())||partCapacity<0||speciesCapacity<0
-                    ||scratchBase<Math.max(Math.max(lineage.endOffset(),sourceEOS.endOffset()),Math.max(retained.endOffset(),future.endOffset()))
+            if(retained.nodeCapacity()!=routes.gas().nodeCapacity()||!retained.definitions().equals(routes.gas().definitions())
+                    ||!future.definitions().equals(routes.gas().definitions())||partCapacity<0||speciesCapacity<0
+                    ||scratchBase<Math.max(Math.max(routes.endOffset(),sourceEOS.endOffset()),Math.max(retained.endOffset(),future.endOffset()))
                     ||alignment<8||(alignment&(alignment-1))!=0)throw new IllegalArgumentException("Invalid gas remap layout");
             long[] cursor={scratchBase};header=allocate(cursor,160,4,alignment);
             for(Field field:Field.values()) {
                 int n=switch(field) {
-                    case PART_COUNTS->lineage.groupCapacity;
-                    case PART_OFFSETS->lineage.groupCapacity+1;
+                    case PART_COUNTS->routes.capacity();
+                    case PART_OFFSETS->routes.capacity()+1;
                     case PART_HANDLES,PART_NANOS,PART_MASS,PART_RESIDUAL,SPECIES_COUNTS->partCapacity;
                     case SPECIES_OFFSETS->partCapacity+1;
                     case SPECIES_HANDLES,SPECIES_AMOUNTS->speciesCapacity;
-                    case GROUP_ENERGY,GROUP_CAPACITY,WEIGHTS->lineage.groupCapacity;
+                    case GROUP_ENERGY,GROUP_CAPACITY,WEIGHTS->routes.capacity();
                     case SOURCE_PIVOT,ESCAPE_GROUP->retained.nodeCapacity();
                     case RETAINED_COUNTS->retained.nodeCapacity()+2;
                     case FUTURE_COUNTS->future.nodeCapacity()+2;
                     case OUTPUT_SPECIES_COUNTS->Math.max(retained.componentCapacity(),future.componentCapacity());
-                    case ENERGY_ROUNDOFF,MERGE_ROUNDOFF->Math.multiplyExact(lineage.groupCapacity,2);
+                    case ENERGY_ROUNDOFF,MERGE_ROUNDOFF->Math.multiplyExact(routes.capacity(),2);
                     case SOURCE_ROUNDOFF,RETAINED_ROUNDOFF->Math.multiplyExact(retained.nodeCapacity(),2);
                     case AUDIT_ENERGY->2;
                     case AMBIENT_HANDLES,AMBIENT_WEIGHTS,AMBIENT_MASS_NUM,AMBIENT_MASS_DEN,AMBIENT_BEFORE,AMBIENT_AFTER->ambient.handles().length;
                     case AMBIENT_SPECIES_OFFSETS->ambient.speciesOffsets().length;
                     case AMBIENT_SPECIES_HANDLES,AMBIENT_SPECIES_NUM,AMBIENT_SPECIES_DEN,AMBIENT_SPECIES_MASS->ambient.speciesHandles().length;
-                    case DISPATCH->12;
-                    case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(Math.max(partCapacity,lineage.groupCapacity),Math.max(retained.nodeCapacity()+2,Math.max(future.nodeCapacity()+2,Math.max(retained.componentCapacity(),future.componentCapacity())))))/4);
+                    case DISPATCH->18;
+                    case MEASURE_RAW_SPECIES->routes.capacity();
+                    case MEASURE_RETAINED_COMPONENTS,MEASURE_RETAINED_SPECIES->retained.nodeCapacity()+2;
+                    case MEASURE_FUTURE_COMPONENTS,MEASURE_FUTURE_SPECIES->routes.futureGeometry().cells()+2;
+                    case REQUIREMENTS->9;
+                    case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(Math.max(partCapacity,routes.capacity()),Math.max(retained.nodeCapacity()+2,Math.max(future.nodeCapacity()+2,Math.max(retained.componentCapacity(),future.componentCapacity())))))/4);
                 };
                 columns.put(field,allocate(cursor,n,field.width,alignment));
             }
             endOffset=align(cursor[0],alignment);Math.toIntExact(endOffset/4);
         }
         VulkanLiquidStateLayout.Column column(Field field){return columns.get(field);}int word(Field field){return Math.toIntExact(column(field).offset()/4);}
+        /** Eight uint requirements: parts, raw species, retained components/species, future components/species, future nodes, groups.
+         * Output CSR requirements are safe source-union upper bounds before integer partition removes zero shares. */
+        VulkanLiquidStateLayout.Column requirements(){return column(Field.REQUIREMENTS);}
         int headerWordOffset(){return Math.toIntExact(header.offset()/4);}long endOffset(){return endOffset;}
-        long requiredPartsOffset(){return column(Field.PART_OFFSETS).offset()+4L*lineage.groupCapacity;}
+        long requiredPartsOffset(){return column(Field.PART_OFFSETS).offset()+4L*routes.capacity();}
         long requiredSpeciesOffset(){return column(Field.SPECIES_OFFSETS).offset()+4L*partCapacity;}
         ByteBuffer headerBytes(){
             var b=ByteBuffer.allocateDirect(640).order(ByteOrder.LITTLE_ENDIAN);int[] data=new int[160];
-            data[0]=lineage.headerWordOffset();data[1]=sourceEOS.headerWordOffset();data[2]=lineage.groupCapacity;data[3]=partCapacity;data[4]=speciesCapacity;
+            data[0]=0;data[1]=sourceEOS.headerWordOffset();data[2]=routes.capacity();data[3]=partCapacity;data[4]=speciesCapacity;
             data[5]=retained.nodeCapacity();data[6]=future.nodeCapacity();data[7]=retained.componentCapacity();data[8]=retained.speciesCapacity();
             data[9]=future.componentCapacity();data[10]=future.speciesCapacity();data[11]=ambient.handles().length;
             for(var field:VulkanGasStateLayout.Field.values()){
-                data[16+field.ordinal()]=Math.toIntExact(lineage.gas.column(field).offset()/4);
+                data[16+field.ordinal()]=Math.toIntExact(routes.gas().column(field).offset()/4);
                 data[32+field.ordinal()]=Math.toIntExact(retained.column(field).offset()/4);
                 data[48+field.ordinal()]=Math.toIntExact(future.column(field).offset()/4);
             }
             for(Field field:Field.values())data[64+field.ordinal()]=word(field);
-            data[104]=Math.toIntExact(lineage.futureGeometry.parents().offset()/4);data[105]=Math.toIntExact(lineage.futureGeometry.dryMasks().offset()/4);
-            data[106]=Math.toIntExact(lineage.futureGeometry.cellNodes().offset()/4);data[107]=lineage.oldGeometry.cells();
+            data[136]=Math.toIntExact(routes.futureGeometry().parents().offset()/4);data[137]=Math.toIntExact(routes.futureGeometry().dryMasks().offset()/4);
+            data[138]=Math.toIntExact(routes.futureGeometry().cellNodes().offset()/4);data[139]=routes.futureGeometry().cells();
+            int[] graph=routes.words();System.arraycopy(graph,0,data,120,graph.length);
             for(int i=0;i<data.length;i++)b.putInt(4*i,data[i]);b.putLong(4*112,ambient.totalWeight());b.putDouble(4*114,ambient.temperature());return b;
         }
         /** Signed terms whose exact sum is Ufuture + escapedDelta - Uold - capturedDelta - gasWork.
@@ -118,9 +126,9 @@ final class VulkanGasRemap implements AutoCloseable {
          */
         List<VulkanEnergyLedger.Stream> roundoffStreams(){
             return List.of(new VulkanEnergyLedger.Stream(1,word(Field.RETAINED_ROUNDOFF),retained.nodeCapacity(),4,1),
-                    new VulkanEnergyLedger.Stream(1,word(Field.ENERGY_ROUNDOFF)+2,lineage.groupCapacity,4,1),
+                    new VulkanEnergyLedger.Stream(1,word(Field.ENERGY_ROUNDOFF)+2,routes.capacity(),4,1),
                     new VulkanEnergyLedger.Stream(1,word(Field.SOURCE_ROUNDOFF)+2,retained.nodeCapacity(),4,1),
-                    new VulkanEnergyLedger.Stream(1,word(Field.MERGE_ROUNDOFF),2*lineage.groupCapacity,2,1));
+                    new VulkanEnergyLedger.Stream(1,word(Field.MERGE_ROUNDOFF),2*routes.capacity(),2,1));
         }
         /** AUDIT_ENERGY stores this step's captured and escaped energy, in that order. */
         void initializeHeaderAndTables(ByteBuffer destination){
@@ -147,29 +155,42 @@ final class VulkanGasRemap implements AutoCloseable {
     }
     static Layout layout(VulkanGasLineage.Layout lineage,VulkanGasThermodynamics.Layout sourceEOS,VulkanGasStateLayout retained,
                          VulkanGasStateLayout future,AmbientTables ambient,int partCapacity,int speciesCapacity,long scratchBase,long alignment){
-        return new Layout(lineage,sourceEOS,retained,future,ambient,partCapacity,speciesCapacity,scratchBase,alignment);
+        return layout(VulkanGasRoutes.from(lineage),sourceEOS,retained,future,ambient,partCapacity,speciesCapacity,scratchBase,alignment);
+    }
+    static Layout layout(VulkanGasRoutes routes,VulkanGasThermodynamics.Layout sourceEOS,VulkanGasStateLayout retained,
+                         VulkanGasStateLayout future,AmbientTables ambient,int partCapacity,int speciesCapacity,long scratchBase,long alignment){
+        return new Layout(routes,sourceEOS,retained,future,ambient,partCapacity,speciesCapacity,scratchBase,alignment);
     }
     private final FlipKernelBindings bindings;private final VulkanPrefixScan scan;private FlipKernelBindings.BufferRange arena;
     VulkanGasRemap(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,2,shader(),20);try{scan=new VulkanPrefixScan(context);}catch(RuntimeException|LinkageError failure){bindings.close();throw failure;}}
     void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){this.arena=arena;bindings.rebindRanges(List.of(arena,errors));scan.rebindRanges(arena,arena,arena,errors);}
+    /** Measures all nested capacities without writing any part/species/output pool. */
+    void recordMeasure(VkCommandBuffer command,Layout l){
+        stage(command,l,18,1,null);
+        stage(command,l,19,l.routes.capacity(),null);
+        stage(command,l,20,l.retained.nodeCapacity(),null);
+        stage(command,l,21,l.routes.futureGeometry().cells()+2,null);
+        stage(command,l,22,128,null);
+    }
     void recordPrepare(VkCommandBuffer command,Layout l){
+        recordMeasure(command,l);
         stage(command,l,17,1,null);
-        stage(command,l,0,Math.max(l.lineage.groupCapacity,Math.max(l.partCapacity,Math.max(Math.max(l.retained.componentCapacity(),l.future.componentCapacity()),Math.max(l.retained.nodeCapacity(),l.future.nodeCapacity())+2))),null);
-        scan.record(command,l.lineage.groupCapacity,l.word(Field.PART_COUNTS),l.word(Field.PART_OFFSETS),l.word(Field.SCAN));
-        stage(command,l,1,l.lineage.groupCapacity,null);
+        stage(command,l,0,Math.max(l.routes.capacity(),Math.max(l.partCapacity,Math.max(Math.max(l.retained.componentCapacity(),l.future.componentCapacity()),Math.max(l.retained.nodeCapacity(),l.future.nodeCapacity())+2))),null);
+        scan.record(command,l.routes.capacity(),l.word(Field.PART_COUNTS),l.word(Field.PART_OFFSETS),l.word(Field.SCAN));
+        stage(command,l,1,l.routes.capacity(),null);
         scan.record(command,l.partCapacity,l.word(Field.SPECIES_COUNTS),l.word(Field.SPECIES_OFFSETS),l.word(Field.SCAN));
         stage(command,l,2,l.retained.nodeCapacity(),null);stage(command,l,3,1,null);
-        stage(command,l,4,l.lineage.groupCapacity,null);stage(command,l,5,l.retained.nodeCapacity(),null);
-        gather(command,l,false,null);stage(command,l,16,l.lineage.oldGeometry.cells(),null);
+        stage(command,l,4,l.routes.capacity(),null);stage(command,l,5,l.retained.nodeCapacity(),null);
+        gather(command,l,false,null);stage(command,l,16,l.routes.futureGeometry().cells(),null);
     }
     void recordFinish(VkCommandBuffer command,Layout l,VulkanGasAdiabaticWork.Layout work){
         recordFinish(command,l,work,null);
     }
     void recordFinish(VkCommandBuffer command,Layout l,VulkanGasAdiabaticWork.Layout work,VulkanStageTimings timings){
-        timed(timings,command,"remap-group-energy",()->stage(command,l,9,l.lineage.groupCapacity,work));
+        timed(timings,command,"remap-group-energy",()->stage(command,l,9,l.routes.capacity(),work));
         timed(timings,command,"remap-source-energy",()->stage(command,l,10,l.retained.nodeCapacity(),work));
         gather(command,l,true,work,timings);
-        timed(timings,command,"remap-topology",()->stage(command,l,15,l.lineage.oldGeometry.cells(),work));
+        timed(timings,command,"remap-topology",()->stage(command,l,15,l.routes.futureGeometry().cells(),work));
     }
     private void gather(VkCommandBuffer command,Layout l,boolean future,VulkanGasAdiabaticWork.Layout work){
         gather(command,l,future,work,null);
@@ -190,7 +211,7 @@ final class VulkanGasRemap implements AutoCloseable {
         if(count==0)return;int groups=(int)(((long)count+127)/128);try(var stack=stackPush()){
             bindings.bind(cmd,stack);vkCmdPushConstants(cmd,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,stack.ints(l.headerWordOffset(),stage,count,
                     work==null?0:Math.toIntExact(work.candidateEnergy().offset()/4),work==null?0:Math.toIntExact(work.candidateTemperature().offset()/4)));
-            int indirect=switch(stage){case 1,4,9->0;case 2,5,10->1;case 6,7,8->2;case 11,12,13->3;default->-1;};
+            int indirect=switch(stage){case 1,4,9,19->0;case 2,5,10,20->1;case 6,7,8->2;case 11,12,13,21->3;default->-1;};
             if(indirect>=0){barrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
                 vkCmdDispatchIndirect(cmd,arena.buffer().handle(),arena.offset()+l.column(Field.DISPATCH).offset()+12L*indirect);
