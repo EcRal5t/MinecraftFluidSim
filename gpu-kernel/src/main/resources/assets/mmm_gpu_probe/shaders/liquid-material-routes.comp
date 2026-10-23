@@ -70,10 +70,32 @@ DyadicTerm copyTo(DyadicTerm value,int window) {
     for(int i=0;i<value.count;i++)candidateWords[at+i]=dyadicWord(value.bank,value.offset+i);
     return DyadicTerm(1,at,value.count,value.exponent,1);
 }
+// Most transported volumes fit four aligned words. Compute the same exact integer sum in registers.
+// Wider remainders retain the streaming dyadic arithmetic below.
+DyadicTerm combineNarrow(DyadicTerm a,DyadicTerm b,int coefficient,int minimum,int window) {
+    uvec4 result=uvec4(0u);uint64_t carry=uint64_t(0);
+    for(int i=0;i<4;i++){
+        uint64_t av=uint64_t(dyadicAlignedWord(a,i,minimum)),bv=uint64_t(dyadicAlignedWord(b,i,minimum));
+        if(coefficient>0){uint64_t sum=av+bv+carry;result[i]=uint(sum);carry=sum>>32;}
+        else{uint64_t sub=bv+carry;result[i]=uint(av-sub);carry=av<sub?uint64_t(1):uint64_t(0);}
+    }
+    if(carry!=uint64_t(0)){fail();return zero();}
+    int first=0;while(first<4&&result[first]==0u)first++;
+    if(first==4)return zero();int last=3;while(result[last]==0u)last--;
+    int trailing=findLSB(result[first]),bits=32*(last-first)+findMSB(result[last])-trailing+1,count=(bits+31)/32;
+    int64_t exponent=int64_t(minimum)+int64_t(32*first+trailing);
+    if(exponent>int64_t(2147483647)){fail();return zero();}
+    if(count>windowCapacity(window)){atomicOr(errors,64u);failed=true;return zero();}
+    int at=windowOffset(window);
+    for(int i=0;i<count;i++){int index=first+i;uint word=result[index]>>trailing;if(trailing!=0&&index<3)word|=result[index+1]<<(32-trailing);candidateWords[at+i]=word;}
+    return DyadicTerm(1,at,count,int(exponent),1);
+}
 DyadicTerm combine(DyadicTerm a,DyadicTerm b,int coefficient,int window) {
     if(!dyadicPresent(b))return copyTo(a,window);
     if(!dyadicPresent(a)){if(coefficient<0){fail();return zero();}return copyTo(b,window);}
     if(coefficient<0&&a.bank==b.bank&&a.offset==b.offset&&a.count==b.count&&a.exponent==b.exponent)return zero();
+    int minimum=min(a.exponent,b.exponent);
+    if(max(highBit(a),highBit(b))-int64_t(minimum)<int64_t(coefficient>0?127:128))return combineNarrow(a,b,coefficient,minimum,window);
     DyadicTerm items[7];items[0]=a;items[1]=b;items[1].sign*=coefficient;
     DyadicMeasure measure=dyadicMeasure(items,2);
     if(measure.status==DYADIC_ZERO)return zero();
