@@ -1,0 +1,74 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) readonly buffer Source { uint sourceWords[]; };
+layout(binding=1,std430) buffer Candidate { uint words[]; };
+layout(binding=2,std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Params { int header;int stage;int count;int inputOffset;int outputOffset;int groups; } p;
+shared int bins[136];
+uint readWord(int bank,int at){return bank==0?sourceWords[at]:words[at];}
+void addDouble(int index){
+    int streamCount=int(words[p.header]);int at=0,coefficient=1,bank=0;
+    for(int stream=0;stream<streamCount;stream++) {
+        int descriptor=p.header+1+6*stream,first=int(words[descriptor]),count=int(words[descriptor+1]);
+        if(index<first||index>=first+count)continue;
+        bank=int(words[descriptor+2]);at=int(words[descriptor+3])+(index-first)*int(words[descriptor+4]);
+        coefficient=int(words[descriptor+5]);break;
+    }
+    uint low=readWord(bank,at),high=readWord(bank,at+1);int exponent=int((high>>20)&2047u);
+    if(exponent==2047){atomicOr(errors,32u);return;}
+    uint64_t mantissa=(uint64_t(high&1048575u)<<32)|uint64_t(low);
+    if(exponent!=0)mantissa|=uint64_t(1)<<52;
+    if(mantissa==uint64_t(0))return;
+    int power=exponent==0?0:exponent-1,first=power>>4,shift=power&15;
+    int sign=(high&0x80000000u)==0u?coefficient:-coefficient;
+    for(int digit=0;digit<5;digit++) {
+        int relative=16*digit-shift;
+        uint64_t value=relative<0?mantissa<<(-relative):relative>=64?uint64_t(0):mantissa>>relative;
+        int part=int(value&uint64_t(65535));if(part!=0)atomicAdd(bins[first+digit],sign*part);
+    }
+}
+// Normalize signed base-2^16 columns to a fixed two's-complement row. Each block has one writer.
+void writeRow(int block){
+    int carry=0;uint low=0u;
+    for(int digit=0;digit<136;digit++) {
+        int value=bins[digit]+carry;uint bits=uint(value)&65535u;carry=value>>16;
+        if((digit&1)==0)low=bits;else words[p.outputOffset+68*block+(digit>>1)]=low|(bits<<16);
+    }
+}
+void canonical(){
+    bool negative=(words[p.inputOffset+67]&0x80000000u)!=0u;
+    uint magnitude[68];uint carry=negative?1u:0u;int first=68,last=-1;
+    for(int i=0;i<68;i++) {
+        uint value=words[p.inputOffset+i];if(negative){value=~value;uint next=value+carry;carry=next<value?1u:0u;value=next;}
+        magnitude[i]=value;if(value!=0u){first=min(first,i);last=i;}
+    }
+    int sign=last<0?0:negative?-1:1,shift=last<0?0:findLSB(magnitude[first]);
+    int length=last<0?0:last-first+1;
+    if(length>0&&shift>0&&(magnitude[last]>>shift)==0u)length--;
+    words[p.outputOffset]=uint(sign);words[p.outputOffset+1]=uint(last<0?0:-1074+32*first+shift);
+    words[p.outputOffset+2]=uint(length);words[p.outputOffset+3]=0u;
+    for(int i=0;i<68;i++) {
+        uint value=0u;if(i<length){value=magnitude[first+i]>>shift;if(shift!=0&&first+i+1<68)value|=magnitude[first+i+1]<<(32-shift);}
+        words[p.outputOffset+4+i]=value;
+    }
+}
+void main(){
+    int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x);
+    if(block>=p.groups)return;
+    if(p.stage==2){if(lane==0)canonical();return;}
+    for(int digit=lane;digit<136;digit+=128)bins[digit]=0;barrier();
+    if(p.stage==0) {
+        for(uint index=1024u*uint(block)+uint(lane);index<min(uint(p.count),1024u*uint(block)+1024u);index+=128u)addDouble(int(index));
+    } else {
+        // A lane owns one base-2^16 digit; all source rows are read without atomics.
+        for(int digit=lane;digit<136;digit+=128) {
+            int total=0;for(int row=64*block;row<min(p.count,64*block+64);row++) {
+                uint value=words[p.inputOffset+68*row+(digit>>1)];
+                int part=digit==135?int(value)>>16:int((value>>((digit&1)*16))&65535u);total+=part;
+            }
+            bins[digit]=total;
+        }
+    }
+    barrier();if(lane==0)writeRow(block);
+}

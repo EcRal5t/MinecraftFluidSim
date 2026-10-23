@@ -16,16 +16,17 @@ public final class GpuLiquidGatherBenchmark {
         int samples=args.length>1?Integer.parseInt(args[1]):10;
         if(samples<1)throw new IllegalArgumentException("At least one sample required");
         try(var context=new VulkanDeviceContext(device,true,true);var quantities=new VulkanLiquidRouteQuantities(context);
-            var gather=new VulkanLiquidGather(context);var momentum=new VulkanLiquidMomentum(context)) {
+            var gather=new VulkanLiquidGather(context);var momentum=new VulkanLiquidMomentum(context);var ledger=new VulkanEnergyLedger(context)) {
             System.out.println("Device: "+context.deviceName());
-            System.out.println("Accepted volume quantities + gather + MAC transport/resolve + heat posting: fixed resident input, half retained/half exchanged, two materials/species, different donor quantities and energy.");
+            System.out.println("Accepted volume quantities + gather + MAC transport/resolve + heat posting + exact energy ledgers: fixed resident input, half retained/half exchanged, two materials/species, different donor quantities and energy.");
             System.out.println("Timed candidates are discarded; one separate candidate is committed and sampled after timing. Excludes capacity acceptance, material volume partition, pressure, gas coupling and full steps. Zero reference-energy tables select the no-reference-energy fixture.");
             System.out.println("grid,source_stocks,output_stocks,median_ms,max_ms,gpu_mean_ms,upload_B_per_step,readback_B_per_step,device_MiB,staging_MiB");
-            for(int grid:new int[]{32,64})measure(context,quantities,gather,momentum,grid,samples);
+            checkSignedReduction(context,ledger);
+            for(int grid:new int[]{32,64})measure(context,quantities,gather,momentum,ledger,grid,samples);
         }
     }
 
-    private static void measure(VulkanDeviceContext context,VulkanLiquidRouteQuantities quantities,VulkanLiquidGather gather,VulkanLiquidMomentum momentum,int grid,int samples) {
+    private static void measure(VulkanDeviceContext context,VulkanLiquidRouteQuantities quantities,VulkanLiquidGather gather,VulkanLiquidMomentum momentum,VulkanEnergyLedger ledger,int grid,int samples) {
         int cells=grid*grid*grid,stocks=2*cells;
         long alignment=Math.max(8,context.storageOffsetAlignment());
         var state=new VulkanLiquidStateLayout(grid,grid,grid,stocks,stocks,stocks,alignment);
@@ -40,12 +41,21 @@ public final class GpuLiquidGatherBenchmark {
         long faceBase=layout.endOffset();
         var momentumLayout=VulkanLiquidMomentum.layout(state,state,routes,Math.toIntExact(faceBase/4),
                 Math.toIntExact(faceBase/4),-1,faceBase+32L*faces,alignment);
-        int bytes=Math.toIntExact(momentumLayout.endOffset());
+        var roundoffLayout=VulkanEnergyLedger.layout(java.util.List.of(
+                stream(quantityLayout.energyRemainders(),1),stream(layout.energyRemainders(),-1),
+                stream(momentumLayout.heatPostingRemainders(),1),stream(momentumLayout.heatAllocationRemainders(),1)),
+                momentumLayout.endOffset(),alignment);
+        var heatLayout=VulkanEnergyLedger.layout(java.util.List.of(stream(momentumLayout.cellHeat(),1)),roundoffLayout.endOffset(),alignment);
+        var endpointLayout=VulkanEnergyLedger.layout(java.util.List.of(
+                new VulkanEnergyLedger.Stream(0,Math.toIntExact(state.column(VulkanLiquidStateLayout.Field.ENERGY_BITS).offset()/4),stocks,2,-1),
+                stream(state.column(VulkanLiquidStateLayout.Field.ENERGY_BITS),1),stream(momentumLayout.cellHeat(),-1)),heatLayout.endOffset(),alignment);
+        int bytes=Math.toIntExact(endpointLayout.endOffset());
         if(bytes>context.maxStorageBufferRange())throw new IllegalArgumentException("Gather arena exceeds device storage descriptor range");
         var initial=ByteBuffer.allocate(bytes).order(ByteOrder.LITTLE_ENDIAN);
         layout.initializeHeader(initial);
         quantityLayout.initializeHeader(initial);
         momentumLayout.initializeHeader(initial);
+        roundoffLayout.initializeHeader(initial);heatLayout.initializeHeader(initial);endpointLayout.initializeHeader(initial);
         int face=0;
         for(int axis=0;axis<3;axis++) {
             int nx=grid+(axis==0?1:0),ny=grid+(axis==1?1:0),nz=grid+(axis==2?1:0);
@@ -97,19 +107,23 @@ public final class GpuLiquidGatherBenchmark {
         try(var storage=new VulkanRegionStorage(context,bytes,1024*1024)) {
             storage.initialize(initial,0);
             try(var source=storage.capture()) {
-                for(int i=0;i<5;i++)advance(storage,source,quantities,quantityLayout,gather,layout,momentum,momentumLayout,false);
+                for(int i=0;i<5;i++)advance(storage,source,quantities,quantityLayout,gather,layout,momentum,momentumLayout,ledger,roundoffLayout,heatLayout,endpointLayout,false);
                 var before=storage.metrics();long[] nanos=new long[samples];
                 for(int i=0;i<samples;i++) {
-                    long start=System.nanoTime();advance(storage,source,quantities,quantityLayout,gather,layout,momentum,momentumLayout,false);nanos[i]=System.nanoTime()-start;
+                    long start=System.nanoTime();advance(storage,source,quantities,quantityLayout,gather,layout,momentum,momentumLayout,ledger,roundoffLayout,heatLayout,endpointLayout,false);nanos[i]=System.nanoTime()-start;
                 }
                 var after=storage.metrics();Arrays.sort(nanos);
                 System.out.printf("%d,%d,%d,%.3f,%.3f,%.3f,%d,%d,%.1f,%.1f%n",grid,stocks,stocks,
                         nanos[samples/2]*1e-6,nanos[samples-1]*1e-6,(after.gpuNanos()-before.gpuNanos())*1e-6/samples,
                         (after.uploadBytes()-before.uploadBytes())/samples,(after.readbackBytes()-before.readbackBytes())/samples,
                         after.deviceBytes()/1048576.0,after.stagingBytes()/1048576.0);
-                advance(storage,source,quantities,quantityLayout,gather,layout,momentum,momentumLayout,true);
+                advance(storage,source,quantities,quantityLayout,gather,layout,momentum,momentumLayout,ledger,roundoffLayout,heatLayout,endpointLayout,true);
             }
             try(var result=storage.capture()) {
+                var roundoff=readDyadic(storage,result,roundoffLayout.result().offset());
+                var endpoint=readDyadic(storage,result,endpointLayout.result().offset());
+                if(!roundoff.equals(endpoint))throw new AssertionError("Exact device energy ledger differs from endpoints: "+roundoff+" != "+endpoint);
+                if(readDyadic(storage,result,heatLayout.result().offset()).signum()<0)throw new AssertionError("Negative mechanical heat ledger");
                 var counts=read(storage,result,state.column(VulkanLiquidStateLayout.Field.COUNTS).offset(),12);
                 if(counts.getInt(0)!=stocks||counts.getInt(4)!=stocks||counts.getInt(8)!=stocks)
                     throw new AssertionError("Gather logical counts differ: "+counts.getInt(0)+","+counts.getInt(4)+","+counts.getInt(8));
@@ -136,7 +150,7 @@ public final class GpuLiquidGatherBenchmark {
                     double heat=read(storage,result,momentumLayout.faceHeat().offset()+8L*index,8).getDouble(0);
                     if(!Double.isFinite(heat)||heat<0)throw new AssertionError("Invalid resident face heat");
                 }
-                System.out.println("checkpoint grid="+grid+" counts and three cells: exact volume, material, mass, species, residual and posted energy; finite MAC, heat and roundoff passed");
+                System.out.println("checkpoint grid="+grid+" counts and three cells: exact volume, material, mass, species, residual and posted energy; finite MAC, heat and exact endpoint energy ledger passed");
             }
         }
     }
@@ -144,7 +158,8 @@ public final class GpuLiquidGatherBenchmark {
     private static void advance(VulkanRegionStorage storage,VulkanRegionStorage.Capture source,
                                 VulkanLiquidRouteQuantities quantities,VulkanLiquidRouteQuantities.Layout quantityLayout,
                                 VulkanLiquidGather gather,VulkanLiquidGather.Layout layout,VulkanLiquidMomentum momentum,
-                                VulkanLiquidMomentum.Layout momentumLayout,boolean commit) {
+                                VulkanLiquidMomentum.Layout momentumLayout,VulkanEnergyLedger ledger,VulkanEnergyLedger.Layout roundoffLayout,
+                                VulkanEnergyLedger.Layout heatLayout,VulkanEnergyLedger.Layout endpointLayout,boolean commit) {
         try(var candidate=storage.prepare(source)) {
             int error=candidate.execute(0,(command,input,output,errors,staging,stack)-> {
                 quantities.rebindRanges(new FlipKernelBindings.BufferRange(input),new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
@@ -155,6 +170,9 @@ public final class GpuLiquidGatherBenchmark {
                 momentum.recordTransport(command,momentumLayout);
                 momentum.recordResolve(command,momentumLayout);
                 momentum.recordHeatPosting(command,momentumLayout);
+                ledger.rebindRanges(new FlipKernelBindings.BufferRange(input),new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
+                ledger.record(command,roundoffLayout);ledger.record(command,heatLayout);
+                if(commit)ledger.record(command,endpointLayout);
             });
             if(error!=0)throw new IllegalStateException("Resident liquid gather failed: status="+error);
             if(commit)candidate.commit();
@@ -185,6 +203,39 @@ public final class GpuLiquidGatherBenchmark {
                 ||amount.getLong(0)!=120||residual.getLong(0)!=30||!Double.isFinite(actualEnergy)||Math.abs(actualEnergy-expectedEnergy)>4*Math.ulp(expectedEnergy)
                 ||!volume.equals(SignedDyadic.of(1,-3)))
             throw new AssertionError("Gather stock differs at "+stock+" volume="+volume);
+    }
+    private static VulkanEnergyLedger.Stream stream(VulkanLiquidStateLayout.Column column,int coefficient) {
+        return new VulkanEnergyLedger.Stream(1,Math.toIntExact(column.offset()/4),column.count(),2,coefficient);
+    }
+    private static SignedDyadic readDyadic(VulkanRegionStorage storage,VulkanRegionStorage.Capture capture,long offset) {
+        var data=read(storage,capture,offset,4*(68+4));int count=data.getInt(8);BigInteger magnitude=BigInteger.ZERO;
+        for(int i=count-1;i>=0;i--)magnitude=magnitude.shiftLeft(32).add(BigInteger.valueOf(Integer.toUnsignedLong(data.getInt(16+4*i))));
+        return new SignedDyadic(data.getInt(0)<0?magnitude.negate():magnitude,data.getInt(4));
+    }
+    private static void checkSignedReduction(VulkanDeviceContext context,VulkanEnergyLedger ledger) {
+        int terms=2049;long alignment=Math.max(8,context.storageOffsetAlignment());
+        var positive=VulkanEnergyLedger.layout(java.util.List.of(new VulkanEnergyLedger.Stream(0,0,terms,2,1)),8L*terms,alignment);
+        var negative=VulkanEnergyLedger.layout(java.util.List.of(new VulkanEnergyLedger.Stream(0,0,terms,2,-1)),positive.endOffset(),alignment);
+        var initial=ByteBuffer.allocate(Math.toIntExact(negative.endOffset())).order(ByteOrder.LITTLE_ENDIAN);
+        initial.putDouble(0,Double.MAX_VALUE).putDouble(8*1023,Double.MAX_VALUE)
+                .putDouble(8*1024,-Double.MAX_VALUE).putDouble(8*2047,-Double.MAX_VALUE).putDouble(8*2048,Double.MIN_VALUE);
+        positive.initializeHeader(initial);negative.initializeHeader(initial);
+        try(var storage=new VulkanRegionStorage(context,initial.capacity(),1024*1024)) {
+            storage.initialize(initial,0);
+            try(var source=storage.capture();var candidate=storage.prepare(source)) {
+                int error=candidate.execute(0,(command,input,output,errors,staging,stack)->{
+                    ledger.rebindRanges(new FlipKernelBindings.BufferRange(input),new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
+                    ledger.record(command,positive);ledger.record(command,negative);
+                });
+                if(error!=0)throw new AssertionError("Signed energy reduction status="+error);candidate.commit();
+            }
+            try(var capture=storage.capture()) {
+                if(!readDyadic(storage,capture,positive.result().offset()).equals(SignedDyadic.of(Double.MIN_VALUE))
+                        ||!readDyadic(storage,capture,negative.result().offset()).equals(SignedDyadic.of(-Double.MIN_VALUE)))
+                    throw new AssertionError("Exact energy reduction lost subnormal after large cancellation");
+            }
+        }
+        System.out.println("Exact signed energy reduction: cross-block cancellation and subnormal remainder passed");
     }
     private static ByteBuffer read(VulkanRegionStorage storage,VulkanRegionStorage.Capture capture,long offset,int bytes) {
         var result=ByteBuffer.allocate(bytes).order(ByteOrder.LITTLE_ENDIAN);storage.read(capture,offset,result);return result;

@@ -485,7 +485,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 设备常驻液体入口由 `VulkanLiquidRegion` 持有同代库存与 MAC，当前依次记录库存派生几何、重力、真实七点 CSR、压力、格面投影与 PLIC 面扫掠偏好。几何工作区采用 float32，解析尺度为 4e-5 体积；精确库存、int64 数量、动力学与压力保持原精度。`VulkanLiquidGeometry.recordTransportPreferences` 在投影后，根据真实共享开放端口与源侧 PLIC 薄片计算格面有符号体积 `(Qt,Ql)`，写入 binding 13 的 `faceFlux`。接收容量接受、材料体积分份与后续联合输运接入仍在实施，当前入口用于阶段成本测量。
 
-已接受路线的设备处理按数量分份→库存归并→MAC 搬运、未解析格面合并与壁面处理→耗散热写入组织。`VulkanLiquidRouteQuantities` 根据实际路线体积派发整数质量、物种和参考能，源内能分配差 `ΣrouteU−sourceU` 由每源8项浮点展开保存。`VulkanLiquidGather` 合并同材料到达库存，重建单元、物种与 dyadic CSR，保存每目标7项 `ΣrouteU−outU` 展开。`VulkanLiquidMomentum.recordTransport/recordResolve` 沿整数质量通量搬运 MAC 动量，生成单元耗散热与墙面冲量；`recordHeatPosting` 按目标质量分配热量、更新库存内能，并保留每库存和单元的舍入展开。以上接口在固定已接受路线的分项入口运行，容量接受、材料体积路线、有限气腔和完整后端调用仍待接入。
+已接受路线的设备处理按数量分份→库存归并→MAC 搬运、未解析格面合并与壁面处理→耗散热写入组织。`VulkanLiquidRouteQuantities` 根据实际路线体积派发整数质量、物种和参考能，源内能分配差 `ΣrouteU−sourceU` 由每源8项浮点展开保存。`VulkanLiquidGather` 合并同材料到达库存，重建单元、物种与 dyadic CSR，保存每目标7项 `ΣrouteU−outU` 展开。`VulkanLiquidMomentum.recordTransport/recordResolve` 沿整数质量通量搬运 MAC 动量，生成单元耗散热与墙面冲量；`recordHeatPosting` 按目标质量分配热量、更新库存内能，并保留每库存和单元的舍入展开。`VulkanEnergyLedger` 将数量分份、归并与热写入的有符号浮点展开精确归总为设备 dyadic 项；机械热总量独立归总，用于共同热账交接。以上接口在固定已接受路线的分项入口运行，容量接受、材料体积路线、有限气腔和完整后端调用仍待接入。
 
 `VulkanLiquidStateLayout` 将分配容量与设备逻辑计数分开，导入和导出按有效前缀处理；`VulkanGasStateLayout` 登记气体库存、拓扑、收支与节点内能列。`VulkanRegionStorage` 支持候选扩容、按列复制及同一私有代次的多批执行，最终批完成后才接管。`VulkanPressureMultigrid` 为结构网格压力提供多重网格预条件；`VulkanPrefixScan` 记录分层 uint32 exclusive scan，供动态 CSR 建表使用，已用于设备精确二进制加减的变长 limb 分配；通量容量、材料体积路线与完整后端调用待接入。
 
@@ -678,6 +678,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [VulkanLiquidRouteQuantities](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidRouteQuantities.java)：实际体积分份、物种 CSR 分配、参考能与8项内能误差展开
     - [VulkanLiquidGather](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidGather.java)：同材料到达归并、动态库存 CSR、精确体积和7项内能误差展开
     - [VulkanLiquidMomentum](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidMomentum.java)：`recordTransport/recordResolve/recordHeatPosting`，MAC 搬运、耗散热与墙面冲量、库存内能和舍入交接
+    - [VulkanEnergyLedger](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanEnergyLedger.java)：`record` 按二进制位归总有符号能量项，输出精确 dyadic 热量与舍入账；中间累计采用设备整数列
     - [GpuLiquidGatherBenchmark](../../gpu-kernel/src/main/java/mmm/gpuprobe/GpuLiquidGatherBenchmark.java)：固定已接受路线的数量分配、库存归并、MAC 与热写入分项成本及少量 checkpoint
     - [VulkanDyadicSum](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanDyadicSum.java)、[liquid-dyadic.glsl](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/liquid-dyadic.glsl)、[liquid-dyadic-sum.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/liquid-dyadic-sum.comp)：设备七项精确加减，测量输出长度、前缀扫描分配变长 limb、写入结果；用于库存归并的精确体积合计
     - [VulkanPrefixScan](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanPrefixScan.java)、[prefix-scan.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/prefix-scan.comp)：设备分层前缀和、CSR 偏移与数量溢出状态
