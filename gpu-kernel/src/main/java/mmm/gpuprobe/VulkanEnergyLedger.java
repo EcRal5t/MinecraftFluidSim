@@ -25,14 +25,19 @@ final class VulkanEnergyLedger implements AutoCloseable {
         int headerWordOffset(){return word(header);}
         /** Result: sign, exponent, limb count, reserved, then canonical uint32 limbs. */
         void initializeHeader(ByteBuffer destination) {
-            var target=destination.duplicate().order(ByteOrder.LITTLE_ENDIAN);
-            int at=Math.toIntExact(header.offset());target.putInt(at,streams.size());int first=0;
+            destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());
+        }
+        ByteBuffer headerBytes() {
+            var target=ByteBuffer.allocateDirect(Math.toIntExact(header.bytes())).order(ByteOrder.LITTLE_ENDIAN);
+            int at=Math.toIntExact(0);target.putInt(at,streams.size());int first=0;
             for(int i=0;i<streams.size();i++) {
                 var stream=streams.get(i);int base=at+4*(1+6*i);
                 target.putInt(base,first).putInt(base+4,stream.count()).putInt(base+8,stream.bank())
                         .putInt(base+12,stream.wordOffset()).putInt(base+16,stream.strideWords()).putInt(base+20,stream.coefficient());
                 first=Math.addExact(first,stream.count());
             }
+        
+            return target;
         }
     }
     static Layout layout(List<Stream> streams,long scratchBase,long alignment) {

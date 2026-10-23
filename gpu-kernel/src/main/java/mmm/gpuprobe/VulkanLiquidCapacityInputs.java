@@ -16,7 +16,10 @@ final class VulkanLiquidCapacityInputs implements AutoCloseable {
                   VulkanLiquidStateLayout.Column header, long endOffset) {
         int headerWordOffset() { return Math.toIntExact(header.offset() / 4); }
         void initializeHeader(ByteBuffer destination) {
-            var bytes = destination.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+            destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());
+        }
+        ByteBuffer headerBytes() {
+            var bytes = ByteBuffer.allocateDirect(Math.toIntExact(header.bytes())).order(ByteOrder.LITTLE_ENDIAN);
             int[] data = new int[32];
             var source = volumes.source();
             data[0] = source.sizeX(); data[1] = source.sizeY(); data[2] = source.sizeZ();
@@ -31,7 +34,9 @@ final class VulkanLiquidCapacityInputs implements AutoCloseable {
             data[19] = capacity.word(VulkanLiquidCapacityLayout.Field.GROUP_ID);
             data[20] = capacity.word(VulkanLiquidCapacityLayout.Field.PREFERRED);
             data[21] = capacity.word(VulkanLiquidCapacityLayout.Field.OPEN_NEIGHBORS);
-            for (int i = 0; i < data.length; i++) bytes.putInt(Math.toIntExact(header.offset() + 4L*i), data[i]);
+            for (int i = 0; i < data.length; i++) bytes.putInt(Math.toIntExact(0 + 4L*i), data[i]);
+        
+            return bytes;
         }
     }
     static Layout layout(VulkanLiquidCellVolumes.Layout volumes, VulkanLiquidCapacityLayout capacity,

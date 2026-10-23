@@ -76,13 +76,18 @@ final class VulkanLiquidCapacityLayout {
 
     /** Header and input columns are uploaded once or populated by earlier device kernels. */
     void initializeHeader(ByteBuffer arena) {
-        var output = arena.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+        arena.duplicate().position(Math.toIntExact(column(Field.HEADER).offset())).put(headerBytes());
+    }
+    ByteBuffer headerBytes() {
+        var output = ByteBuffer.allocateDirect(Math.toIntExact(column(Field.HEADER).bytes())).order(ByteOrder.LITTLE_ENDIAN);
         int[] header = new int[HEADER_WORDS];
         header[0] = sx; header[1] = sy; header[2] = sz; header[3] = cells;
         header[4] = gasGroups; header[5] = groups; header[6] = vertices; header[7] = edges;
         for (Field field : Field.values()) header[8 + field.ordinal()] = word(field);
         for (int i = 0; i < header.length; i++)
-            output.putInt(Math.toIntExact(column(Field.HEADER).offset() + 4L * i), header[i]);
+            output.putInt(Math.toIntExact(0 + 4L * i), header[i]);
+    
+        return output;
     }
 
     private static long align(long value, long alignment) { return Math.addExact(value, alignment - 1) & -alignment; }

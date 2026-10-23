@@ -24,14 +24,20 @@ final class VulkanLiquidRouteQuantities implements AutoCloseable {
 
         /** Reference tables contain double J/kg and material-major double J/species quantum. */
         void initializeHeader(ByteBuffer destination) {
-            var target = destination.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+            destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());
+        }
+        ByteBuffer headerBytes() { return headerBytes(source); }
+        ByteBuffer headerBytes(VulkanLiquidStateLayout source) {
+            var target = ByteBuffer.allocateDirect(Math.toIntExact(header.bytes())).order(ByteOrder.LITTLE_ENDIAN);
             int[] values = new int[48];
             values[0] = source.stockCapacity(); values[1] = routes.routeCapacity(); values[2] = routes.speciesCapacity();
             values[3] = materialReferenceWordOffset; values[4] = speciesReferenceWordOffset; values[5] = speciesStride;
             values[6] = word(speciesCounts); values[7] = word(energyRemainders);
             for (var field : VulkanLiquidStateLayout.Field.values()) values[16 + field.ordinal()] = word(source.column(field));
             for (var field : VulkanLiquidRouteLayout.Field.values()) values[35 + field.ordinal()] = word(routes.column(field));
-            for (int i = 0; i < values.length; i++) target.putInt(Math.toIntExact(header.offset() + 4L * i), values[i]);
+            for (int i = 0; i < values.length; i++) target.putInt(Math.toIntExact(0 + 4L * i), values[i]);
+        
+            return target;
         }
     }
 

@@ -28,7 +28,11 @@ final class VulkanLiquidGather implements AutoCloseable {
 
         /** Writes immutable descriptors into the candidate arena without changing its buffer position. */
         void initializeHeader(ByteBuffer destination) {
-            var target = destination.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+            destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());
+        }
+        ByteBuffer headerBytes() { return headerBytes(source); }
+        ByteBuffer headerBytes(VulkanLiquidStateLayout source) {
+            var target = ByteBuffer.allocateDirect(Math.toIntExact(header.bytes())).order(ByteOrder.LITTLE_ENDIAN);
             int[] values = new int[HEADER_WORDS];
             values[0] = output.sizeX(); values[1] = output.sizeY(); values[2] = output.sizeZ();
             values[3] = output.cellCount(); values[4] = output.stockCapacity();
@@ -41,7 +45,9 @@ final class VulkanLiquidGather implements AutoCloseable {
                 values[35 + field.ordinal()] = word(output.column(field));
             }
             for (var field : VulkanLiquidRouteLayout.Field.values()) values[54 + field.ordinal()] = word(routes.column(field));
-            for (int i = 0; i < values.length; i++) target.putInt(Math.toIntExact(header.offset() + 4L * i), values[i]);
+            for (int i = 0; i < values.length; i++) target.putInt(Math.toIntExact(0 + 4L * i), values[i]);
+        
+            return target;
         }
 
         VulkanDyadicSum.Layout sums() {

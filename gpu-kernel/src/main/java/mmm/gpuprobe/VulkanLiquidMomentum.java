@@ -24,6 +24,10 @@ final class VulkanLiquidMomentum implements AutoCloseable {
         int faces() { return primalFlux.count(); }
         int headerWordOffset() { return word(header); }
         void initializeHeader(ByteBuffer destination) {
+            destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());
+        }
+        ByteBuffer headerBytes() { return headerBytes(source); }
+        ByteBuffer headerBytes(VulkanLiquidStateLayout source) {
             int[] values=new int[64];
             values[0]=output.sizeX();values[1]=output.sizeY();values[2]=output.sizeZ();
             values[3]=output.cellCount();values[4]=faces();
@@ -38,8 +42,10 @@ final class VulkanLiquidMomentum implements AutoCloseable {
             values[58]=word(routes.column(VulkanLiquidRouteLayout.Field.MASS_UNITS));
             values[59]=word(heatPostingRemainders);values[60]=word(heatAllocationRemainders);
             values[61]=output.stockCapacity();
-            var target=destination.duplicate().order(ByteOrder.LITTLE_ENDIAN);
-            for(int i=0;i<values.length;i++)target.putInt(Math.toIntExact(header.offset()+4L*i),values[i]);
+            var target=ByteBuffer.allocateDirect(Math.toIntExact(header.bytes())).order(ByteOrder.LITTLE_ENDIAN);
+            for(int i=0;i<values.length;i++)target.putInt(Math.toIntExact(0+4L*i),values[i]);
+        
+            return target;
         }
     }
 

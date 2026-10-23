@@ -216,15 +216,19 @@ final class VulkanRegionStorage implements AutoCloseable {
         }
 
         BatchResult beginBatch(ComputeCommands commands, long feedbackOffset, int feedbackBytes) {
-            return submit(0, commands, true, false, feedbackOffset, feedbackBytes);
+            return beginBatch(0,commands,feedbackOffset,feedbackBytes);
+        }
+        BatchResult beginBatch(long uploadedBytes,ComputeCommands commands,long feedbackOffset,int feedbackBytes) {
+            return submit(uploadedBytes,commands,true,false,feedbackOffset,feedbackBytes);
         }
 
         BatchResult continueBatch(ComputeCommands commands, long feedbackOffset, int feedbackBytes) {
             return submit(0, commands, false, false, feedbackOffset, feedbackBytes);
         }
 
-        int finishBatch(ComputeCommands commands) {
-            return submit(0, commands, false, true, 0, 0).error();
+        int finishBatch(ComputeCommands commands) { return finishBatch(0,commands); }
+        int finishBatch(long uploadedBytes,ComputeCommands commands) {
+            return submit(uploadedBytes,commands,false,true,0,0).error();
         }
 
         /** Batches retain the same private generation; only a completed final batch can be adopted. */
@@ -299,6 +303,26 @@ final class VulkanRegionStorage implements AutoCloseable {
                 if (released || !submitted) throw new IllegalStateException("Candidate is not available for inspection");
                 try (var capture = new Capture(new Version(slot, generation, logicalBytes))) {
                     VulkanRegionStorage.this.read(capture, offset, output);
+                }
+            }
+        }
+
+        /** Packs sparse uint32 capacity requirements into one small diagnostic readback. */
+        void readWords(long[] offsets,ByteBuffer output) {
+            synchronized(VulkanRegionStorage.this) {
+                requireOpen();int bytes=Math.multiplyExact(offsets.length,4);
+                if(released||!submitted||output.remaining()!=bytes||bytes>stagingBytes)
+                    throw new IllegalArgumentException("Candidate word read differs from its storage");
+                for(long offset:offsets)if(offset<0||offset>logicalBytes-4||(offset&3)!=0)
+                    throw new IllegalArgumentException("Candidate word offset exceeds its storage");
+                try(var stack=stackPush()) {
+                    var submission=scheduler.acquire();var command=scheduler.begin(submission,"region-capacity-requirements");
+                    barrier(command,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_ACCESS_MEMORY_WRITE_BIT,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT,stack);
+                    for(int word=0;word<offsets.length;word++)copy(command,slot.buffer,offsets[word],submission.stagingBuffer(),4L*word,4,stack);
+                    barrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_HOST_BIT,VK_ACCESS_HOST_READ_BIT,stack);
+                    scheduler.submitAndWait(stack,submission,"region-capacity-requirements");
+                    output.put(submission.stagingBuffer().bytes().slice(0,bytes));submissions++;readbackBytes+=bytes;
                 }
             }
         }

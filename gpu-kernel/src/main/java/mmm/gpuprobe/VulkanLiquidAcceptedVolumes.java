@@ -24,7 +24,10 @@ final class VulkanLiquidAcceptedVolumes implements AutoCloseable {
         long bytes() { return endOffset - header.offset(); }
         /** Descriptors are {bank=1, absolute candidate word offset, limb count, exponent, sign}. */
         void initializeHeader(ByteBuffer destination) {
-            var target = destination.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+            destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());
+        }
+        ByteBuffer headerBytes() {
+            var target = ByteBuffer.allocateDirect(Math.toIntExact(header.bytes())).order(ByteOrder.LITTLE_ENDIAN);
             int[] data = new int[32];
             data[0] = cells(); data[1] = acceptedWordOffset; data[2] = sourceCellVolumes.quantumExponent();
             data[3] = word(sourceCellVolumes.quantized()); data[4] = word(sourceCellVolumes.totalOffsets());
@@ -32,7 +35,9 @@ final class VulkanLiquidAcceptedVolumes implements AutoCloseable {
             data[7] = word(sourceCellVolumes.totalLimbs()); data[8] = word(volumeOffsets); data[9] = word(volumeSigns);
             data[10] = word(volumeExponents); data[11] = word(volumeLimbs); data[12] = word(descriptors);
             data[13] = word(counts); data[14] = word(measurements); data[15] = limbCapacity;
-            for (int i = 0; i < data.length; i++) target.putInt(Math.toIntExact(header.offset() + 4L * i), data[i]);
+            for (int i = 0; i < data.length; i++) target.putInt(Math.toIntExact(0 + 4L * i), data[i]);
+        
+            return target;
         }
     }
     static Layout layout(VulkanLiquidCellVolumes.Layout sourceCellVolumes, int acceptedWordOffset,

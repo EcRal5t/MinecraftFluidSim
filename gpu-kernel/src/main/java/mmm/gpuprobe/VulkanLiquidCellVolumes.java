@@ -21,7 +21,11 @@ final class VulkanLiquidCellVolumes implements AutoCloseable {
         int headerWordOffset() { return word(header); }
         long bytes() { return endOffset - header.offset(); }
         void initializeHeader(ByteBuffer destination) {
-            var target = destination.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+            destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());
+        }
+        ByteBuffer headerBytes() { return headerBytes(source); }
+        ByteBuffer headerBytes(VulkanLiquidStateLayout source) {
+            var target = ByteBuffer.allocateDirect(Math.toIntExact(header.bytes())).order(ByteOrder.LITTLE_ENDIAN);
             int[] data = new int[32];
             data[0] = source.cellCount(); data[1] = limbCapacity; data[2] = quantumExponent;
             data[3] = word(totalOffsets); data[4] = word(totalSigns); data[5] = word(totalExponents);
@@ -31,7 +35,9 @@ final class VulkanLiquidCellVolumes implements AutoCloseable {
             data[18] = word(source.column(VulkanLiquidStateLayout.Field.VOLUME_SIGNS));
             data[19] = word(source.column(VulkanLiquidStateLayout.Field.VOLUME_EXPONENTS));
             data[20] = word(source.column(VulkanLiquidStateLayout.Field.VOLUME_LIMBS));
-            for (int i = 0; i < data.length; i++) target.putInt(Math.toIntExact(header.offset() + 4L * i), data[i]);
+            for (int i = 0; i < data.length; i++) target.putInt(Math.toIntExact(0 + 4L * i), data[i]);
+        
+            return target;
         }
     }
     /** quantumExponent=-40 gives floor(totalVolume * 2^40). */

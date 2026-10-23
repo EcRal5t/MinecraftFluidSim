@@ -25,7 +25,11 @@ final class VulkanLiquidMaterialRoutes implements AutoCloseable {
         long bytes() { return endOffset - header.offset(); }
         /** Accepted descriptors are 7 per cell, each {bank, absolute word offset, count, exponent, sign}. */
         void initializeHeader(ByteBuffer destination) {
-            var target = destination.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+            destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());
+        }
+        ByteBuffer headerBytes() { return headerBytes(source); }
+        ByteBuffer headerBytes(VulkanLiquidStateLayout source) {
+            var target = ByteBuffer.allocateDirect(Math.toIntExact(header.bytes())).order(ByteOrder.LITTLE_ENDIAN);
             int[] data = new int[64];
             data[0] = source.cellCount(); data[1] = source.stockCapacity(); data[2] = routes.routeCapacity();
             data[3] = acceptedDescriptorsWordOffset; data[4] = materialPhaseWordOffset; data[5] = gravitySign;
@@ -36,7 +40,9 @@ final class VulkanLiquidMaterialRoutes implements AutoCloseable {
             for (var field : VulkanLiquidStateLayout.Field.values()) data[16 + field.ordinal()] = word(source.column(field));
             for (var field : VulkanLiquidRouteLayout.Field.values()) data[35 + field.ordinal()] = word(routes.column(field));
             data[45] = windowCount();
-            for (int i = 0; i < data.length; i++) target.putInt(Math.toIntExact(header.offset() + 4L * i), data[i]);
+            for (int i = 0; i < data.length; i++) target.putInt(Math.toIntExact(0 + 4L * i), data[i]);
+        
+            return target;
         }
     }
 
