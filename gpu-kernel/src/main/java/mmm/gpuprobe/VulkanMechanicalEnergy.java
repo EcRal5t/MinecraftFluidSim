@@ -115,7 +115,7 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
         scan.record(command,layout.bodies().vertices(),word(layout.blockCounts()),word(layout.blockOffsets()),word(layout.scanWorkspace()));
         stage(command,layout,3,layout.bodies().vertices(),cellSize,gravity,false);
         stage(command,layout,4,layout.bodies().vertices(),cellSize,gravity,true);
-        stage(command,layout,5,layout.bodies().vertices(),cellSize,gravity,false);
+        stage(command,layout,5,layout.bodies().vertices(),cellSize,gravity,true);
         stage(command,layout,6,layout.thermal().liquid().stockCapacity(),cellSize,gravity,false);
         stage(command,layout,7,layout.thermal().liquid().cellCount(),cellSize,gravity,false);
         if(layout.granular()!=null)stage(command,layout,9,layout.bodies().granular().state().particleCapacity(),cellSize,gravity,false);

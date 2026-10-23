@@ -7,6 +7,7 @@ layout(binding=1,std430) buffer Candidate { uint words[]; };
 layout(binding=2,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header; int stage; double cellSize; double gravity; } p;
 shared dvec4 partial[128];
+shared dvec2 weightErrors[128];
 int h(int i){return int(words[p.header+i]);}
 int src(int i){return h(40+i);}int dst(int i){return h(64+i);}
 double value(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
@@ -93,15 +94,31 @@ void reduceBlock(int block,int lane){
     for(int stride=64;stride>0;stride/=2){if(lane<stride)partial[lane]=combine(partial[lane],partial[lane+stride]);barrier();}
     if(lane==0&&block<blocks)storeData(h(26),block,partial[0]);
 }
-void reduceBody(int root){
+void reduceBody(int block,int lane){
+    int blocks=int(words[h(24)+h(4)]);if(block>=blocks)return;
+    int root=int(words[h(25)+block]);
+    // One workgroup owns each nonempty body. The existing block dispatch also covers isolated cells.
+    if(block!=int(words[h(24)+root]))return;
     dvec4 total=dvec4(0.0);dvec2 weights=dvec2(0.0),residual=dvec2(0.0);
-    for(int block=int(words[h(24)+root]);block<int(words[h(24)+root+1]);block++){
-        dvec4 part=data(h(26),block);total.xy=add(total.xy,part.xy);
+    for(int cursor=block+lane;cursor<int(words[h(24)+root+1]);cursor+=128){
+        dvec4 part=data(h(26),cursor);total.xy=add(total.xy,part.xy);
         dvec2 next=weights+part.zw,delta=next-weights;residual+=(weights-(next-delta))+(part.zw-delta);weights=next;
     }
-    total.zw=weights+residual;storeData(h(27),root,total);
-    double work=total.x+total.y;
-    if((work!=0.0&&total.z<=0.0)||-work>total.w)atomicOr(errors,65536u);
+    partial[lane]=dvec4(total.xy,weights);weightErrors[lane]=residual;barrier();
+    for(int stride=64;stride>0;stride/=2){
+        if(lane<stride){
+            partial[lane].xy=add(partial[lane].xy,partial[lane+stride].xy);
+            dvec2 capacity=add(dvec2(partial[lane].z,weightErrors[lane].x),dvec2(partial[lane+stride].z,weightErrors[lane+stride].x));
+            dvec2 available=add(dvec2(partial[lane].w,weightErrors[lane].y),dvec2(partial[lane+stride].w,weightErrors[lane+stride].y));
+            partial[lane].zw=dvec2(capacity.x,available.x);weightErrors[lane]=dvec2(capacity.y,available.y);
+        }
+        barrier();
+    }
+    if(lane==0){
+        total=partial[0];total.zw+=weightErrors[0];storeData(h(27),root,total);
+        double work=total.x+total.y;
+        if((work!=0.0&&total.z<=0.0)||-work>total.w)atomicOr(errors,65536u);
+    }
 }
 void postCell(int index){
     int root=int(words[h(12)+index]);dvec4 body=data(h(27),root);double work=body.x+body.y;
@@ -128,12 +145,12 @@ void postParticle(int particle){
 void main(){
     int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),item=block*128+lane;
     if(p.stage==4){reduceBlock(block,lane);return;}
+    if(p.stage==5){reduceBody(block,lane);return;}
     if(errors!=0u)return;
     if(p.stage==0){if(item<h(5))faceTerms(item);}
     else if(p.stage==1){if(item<h(6))potentialTerms(item);}
     else if(p.stage==2){if(item<h(4))vertex(item);}
     else if(p.stage==3){if(item<h(4))mapBlocks(item);}
-    else if(p.stage==5){if(item<h(4))reduceBody(item);}
     else if(p.stage==6){if(item<h(7)){store(h(28)+4*item,0.0);store(h(28)+4*item+2,0.0);}}
     else if(p.stage==7){if(item<h(3))postCell(item);}
     else if(p.stage==8){if(item<h(84))particleTerms(item);}
