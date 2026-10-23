@@ -148,6 +148,9 @@ public final class PlayerContainerTransferAdapter {
 			message(player, "创造 source descriptor 损坏；未修改区域");
 			return InteractionResult.FAIL;
 		}
+		if (mmm.transfer.CreativeGasSource.isGas(descriptor)) {
+			return handleCreativeGas(player, hand, descriptorStack, descriptor);
+		}
 		CreativeSourceCatalog.Resolved resolved;
 		try {
 			resolved = CreativeSourceCatalog.resolve(world, descriptor);
@@ -190,6 +193,69 @@ public final class PlayerContainerTransferAdapter {
 		snapshots.sendTo(player, region);
 		level.playSound(null, player.getX(), player.getY() + 1.0, player.getZ(),
 				SoundEvents.BUCKET_EMPTY, SoundSource.BLOCKS, 1.0F, 1.0F);
+		return InteractionResult.SUCCESS;
+	}
+
+	private InteractionResult handleCreativeGas(
+			ServerPlayer player, InteractionHand hand, ItemStack source,
+			mmm.transfer.CreativeSourceDescriptor descriptor
+	) {
+		CreativeSourceCatalog.GasResolved gas;
+		try {
+			gas = CreativeSourceCatalog.gas(world, descriptor);
+		} catch (RuntimeException invalid) {
+			message(player, "当前世界拒绝该气体来源：" + invalid.getMessage());
+			return InteractionResult.FAIL;
+		}
+		BlockHitResult hit = playerBlockHit(player);
+		ServerLevel level = player.level();
+		if (hit == null || !MmmBlocks.isBoundary(level.getBlockState(hit.getBlockPos()))) {
+			message(player, "请对准密闭气腔的真实外壳表面");
+			return InteractionResult.FAIL;
+		}
+		var target = targets.transferTargetAtBlock(level, hit.getBlockPos(), null);
+		if (target == null || !target.region().controllerManaged()) {
+			message(player, "该外壳表面没有唯一的内侧气腔");
+			return InteractionResult.FAIL;
+		}
+		FluidRegion region = target.region();
+		if (!ensureAvailableFor(player, region) || !region.domain().hasThermalState()) return InteractionResult.FAIL;
+		// Retain the actual hit's transverse position and cross only the selected shell thickness.
+		BlockPos shell = hit.getBlockPos(), interior = target.interiorBlock();
+		int dx = interior.getX() - shell.getX(), dy = interior.getY() - shell.getY(), dz = interior.getZ() - shell.getZ();
+		double epsilon = region.solverConfig().cellSize() * 1.0e-6;
+		double x = dx == 0 ? hit.getLocation().x : shell.getX() + (dx > 0 ? 1.0 + epsilon : -epsilon);
+		double y = dy == 0 ? hit.getLocation().y : shell.getY() + (dy > 0 ? 1.0 + epsilon : -epsilon);
+		double z = dz == 0 ? hit.getLocation().z : shell.getZ() + (dz > 0 ? 1.0 + epsilon : -epsilon);
+		double localX = x - region.origin().getX(), localY = y - region.origin().getY(), localZ = z - region.origin().getZ();
+		if (!phaseWorkBarrier.settle(level, region)) return InteractionResult.FAIL;
+		if (region.domain().gasNodeAt(localX, localY, localZ) <= 0) {
+			message(player, "外壳内侧接触处没有有限气腔，请对准气体空间");
+			return InteractionResult.FAIL;
+		}
+		boolean extract = player.isShiftKeyDown();
+		var actor = ContainerTransferActor.player(player.getUUID(), actorHand(hand));
+		var transaction = transactions.executeGasSource(region, level, actor, source, extract,
+				gas.standardVolumeNanos(), (candidate, requested, ignored) -> {
+					int node = candidate.domain().gasNodeAt(localX, localY, localZ);
+					if (node <= 0) return new MinecraftContainerTransferOperations.TransferOutcome(
+							false, !extract, source.copy(), "目标气腔已变化，请重新对准外壳");
+					var edit = candidate.domain().editGas(node, gas.componentId(), requested, gas.temperatureK(), extract);
+					long moved = edit.moved().standardVolumeNanos();
+					double energy = edit.internalEnergy().toDouble();
+					return new MinecraftContainerTransferOperations.TransferOutcome(moved > 0, !extract, source.copy(),
+							moved == 0 ? "所选气体没有可抽取库存" :
+							(extract ? "已抽取" : "已注入") + mmm.units.UnitFormat.volumeNanos(moved)
+									+ "（标准体积），携带内能 " + mmm.units.UnitFormat.energy(energy),
+							moved, energy);
+				});
+		var outcome = transaction.outcome();
+		if (!outcome.message().isEmpty()) message(player, outcome.message());
+		if (!outcome.transferred()) return InteractionResult.FAIL;
+		player.setItemInHand(hand, outcome.stack());
+		player.getInventory().setChanged();
+		transactions.completeCommitted(transaction.transactionId());
+		snapshots.sendToLevel(level, region);
 		return InteractionResult.SUCCESS;
 	}
 

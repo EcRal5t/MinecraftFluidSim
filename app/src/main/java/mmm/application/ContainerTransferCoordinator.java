@@ -106,7 +106,7 @@ public final class ContainerTransferCoordinator {
 					"容器转移 after-item 真值无效；在线区域保持不变：" + invalidAfter.getMessage(),
 					ContainerTransferUseCase.Status.REJECTED);
 		}
-		boolean thermalTransfer = command.resourceKind() == ContainerTransferJournal.ResourceKind.FLUID_NANOS
+		boolean thermalTransfer = command.resourceKind() != ContainerTransferJournal.ResourceKind.GRANULAR_SVQ
 				&& command.regionHasThermalState();
 		if (thermalTransfer != (execution.thermalEnergy() != null)) {
 			return discardPrivateCandidate(command, transactionId,
@@ -233,6 +233,13 @@ public final class ContainerTransferCoordinator {
 			long checksum,
 			ContainerTransferJournal.Phase phase
 	) {
+		if (command.resourceKind() == ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS) {
+			return new ContainerTransferJournal(transactionId, command.regionId(), command.dimensionId(),
+					command.baseGeneration(), targetGeneration, command.operation(), command.resourceKind(),
+					amount, -1L, new ContainerTransferJournal.ThermalTransfer(command.thermalRegistryFingerprint(),
+					Objects.requireNonNull(thermalEnergy)), command.actor(), command.beforeItem(), after, checksum, phase);
+		}
+
 		if (command.resourceKind() == ContainerTransferJournal.ResourceKind.GRANULAR_SVQ) {
 			return ContainerTransferJournal.granular(transactionId, command.regionId(), command.dimensionId(),
 					command.baseGeneration(), targetGeneration, command.operation(), amount, command.actor(),

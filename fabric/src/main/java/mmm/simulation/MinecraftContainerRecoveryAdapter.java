@@ -125,6 +125,7 @@ final class MinecraftContainerRecoveryAdapter implements ContainerRecoveryCoordi
 		TransferQuantity quantity = switch (journal.resourceKind()) {
 			case FLUID_NANOS -> new TransferQuantity.Liquid(journal.volumeNanos(), energy);
 			case GRANULAR_SVQ -> new TransferQuantity.Granular(journal.solidVolumeSvq());
+			case GAS_STANDARD_NANOS -> new TransferQuantity.Gas(journal.volumeNanos(), energy.orElseThrow());
 		};
 		committedEvents.publish(new ContainerTransferCommittedEvent(
 				journal.transactionId(), journal.dimensionId(), journal.regionId(), journal.targetGeneration(),

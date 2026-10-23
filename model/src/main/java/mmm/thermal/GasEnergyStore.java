@@ -204,6 +204,10 @@ public final class GasEnergyStore {
 		if (gasModel == null) throw new IllegalStateException("Gas thermal model is not bound");
 		return gasModel.internalEnergyAtTemperature(inventory, insertionTemperatureK);
 	}
+	public double energyAtTemperature(GasInventory inventory, double temperatureK) {
+		if (gasModel == null) throw new IllegalStateException("Gas thermal model is not bound");
+		return gasModel.internalEnergyAtTemperature(inventory, temperatureK);
+	}
 
 	GasRemapPlan planRemap(
 			AirNetwork oldNetwork, List<GasInventory> inventories, double[] availableVolumes,
@@ -409,13 +413,20 @@ public final class GasEnergyStore {
 	private InventoryEnergyPlan planInventoryEnergy(AirNetwork network, List<Integer> ids,
 			List<GasInventory> inventories, double[] energies, SignedDyadic externalSource,
 			SignedDyadic externalSink, SignedDyadic internalEnergyTransfer, boolean checkVolume) {
-		if (!ids.equals(network.nodeIds()) || inventories.size() != ids.size() || energies.length != nodeEnergy.length)
-			throw new IllegalArgumentException("Gas energy batch must cover the current nodes");
-		double[] result = energies.clone();
-		ThermalStateFunction.State[] finalStates = new ThermalStateFunction.State[result.length];
-		GasInventory[] finalInventories = new GasInventory[result.length];
+		if (inventories.size() != ids.size() || energies.length != ids.size())
+			throw new IllegalArgumentException("Gas energy batch dimensions differ");
+		double[] result = nodeEnergy.clone();
+		ThermalStateFunction.State[] finalStates = java.util.Arrays.copyOf(state, result.length);
+		GasInventory[] finalInventories = java.util.Arrays.copyOf(stateInventory, result.length);
+		SignedDyadic delta = SignedDyadic.ZERO;
+		int previous = 0;
 		for (int i = 0; i < ids.size(); i++) {
-			int id = ids.get(i); var inventory = inventories.get(i); finalInventories[id - 1] = inventory;
+			int id = ids.get(i);
+			if (id <= previous) throw new IllegalArgumentException("Gas energy nodes must be unique and ordered");
+			requireGasNode(id, network); previous = id;
+			delta = delta.add(SignedDyadic.of(energies[i]).subtract(SignedDyadic.of(nodeEnergy[id - 1])));
+			result[id - 1] = energies[i];
+			var inventory = inventories.get(i); finalInventories[id - 1] = inventory;
 			if (inventory.isEmpty()) {
 				if (result[id - 1] != 0) throw new IllegalArgumentException("Vacuum phase inventory carries energy");
 				if (checkVolume) gasModel.absolutePressure(inventory, network.availableVolume(id), result[id - 1]);
@@ -425,7 +436,7 @@ public final class GasEnergyStore {
 				if (checkVolume) gasModel.absolutePressure(inventory, network.availableVolume(id), thermal);
 			}
 		}
-		SignedDyadic roundoff = SignedDyadic.sum(result).subtract(SignedDyadic.sum(nodeEnergy))
+		SignedDyadic roundoff = delta
 				.subtract(internalEnergyTransfer).subtract(externalSource).add(externalSink);
 		var before = audit.ledger();
 		var after = before.withExternalSourceEnergy(externalSource).withExternalSinkEnergy(externalSink).withRoundoff(roundoff);

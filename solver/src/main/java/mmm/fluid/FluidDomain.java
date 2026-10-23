@@ -398,6 +398,13 @@ public final class FluidDomain {
 	public FluidDomain.CarrierViscosityStats carrierViscosityStats() { return domainPhaseInventory.carrierViscosityStats(); }
 	public Double carrierViscosityPascalSeconds(int cell) { return domainPhaseInventory.carrierViscosityPascalSeconds(cell); }
 	public GasPressureBoundary gasBoundary() { return domainPhaseInventory.gasBoundary(); }
+	/** Read-only local-metre query on the committed finite gas geometry; -1 means no editable chamber. */
+	public int gasNodeAt(double x, double y, double z) { return domainPhaseInventory.gasNodeAt(x, y, z); }
+	/** Null component selects the ambient insertion recipe or the existing extraction mixture. */
+	public GasEdit editGas(int node, String componentId, long nanos, double temperatureK, boolean extract) {
+		return domainPhaseInventory.editGas(node, componentId, nanos, temperatureK, extract);
+	}
+	public record GasEdit(int node, mmm.fluid.air.GasInventory moved, SignedDyadic internalEnergy) { }
 	public void setGasNodeStandardVolume(int nodeId, double standardVolume) { domainPhaseInventory.setGasNodeStandardVolume(nodeId, standardVolume); }
 	public void sealDomainBoundary() { domainPhaseInventory.sealDomainBoundary(); }
 	public void bindGasRegistry(GasRegistry registry) { domainPhaseInventory.bindGasRegistry(registry); }

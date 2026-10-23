@@ -37,6 +37,17 @@ final class CreativeSourceCatalog {
 		throw new IllegalArgumentException("creative source template is not in the committed server whitelist");
 	}
 
+	static GasResolved gas(CommittedWorldRegistries world, CreativeSourceDescriptor descriptor) {
+		requireCapability(world, WorldCapability.THERMAL);
+		String component = mmm.transfer.CreativeGasSource.componentId(descriptor);
+		if (component != null) world.gasRegistry().component(component);
+		double temperature = temperature(descriptor);
+		world.thermalRegistry(); // Source energy follows the committed thermal definitions.
+		return new GasResolved(component, descriptor.requestedTypedAmount(), temperature);
+	}
+
+	record GasResolved(String componentId, long standardVolumeNanos, double temperatureK) { }
+
 	private static Resolved material(CommittedWorldRegistries world, CreativeSourceDescriptor descriptor) {
 		require(descriptor, LIQUID_AMOUNT);
 		requireCapability(world, WorldCapability.MATERIALS);

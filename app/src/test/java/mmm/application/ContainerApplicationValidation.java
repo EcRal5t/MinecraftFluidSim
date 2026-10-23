@@ -21,6 +21,7 @@ public final class ContainerApplicationValidation {
 
 	public static void main(String[] args) {
 		run("fault matrix preserves WAL and HEAD boundaries", ContainerApplicationValidation::faultMatrix);
+		run("creative gas fault recovery uses ordered HEAD and unchanged source", ContainerApplicationValidation::gasFaultRecovery);
 		run("foreign profile is rejected before PREPARED WAL", ContainerApplicationValidation::profileMismatch);
 		run("response loss converges actor and publishes only after WAL deletion",
 				ContainerApplicationValidation::responseLossRecovery);
@@ -30,6 +31,60 @@ public final class ContainerApplicationValidation {
 				ContainerApplicationValidation::publishedWalStaysPending);
 		run("I/O recovery backs off and retains semantic locks", ContainerApplicationValidation::ioRetry);
 		System.out.println("ContainerApplicationValidation passed " + passed + " scenarios");
+	}
+
+	private static void gasFaultRecovery() {
+		for (var operation : ContainerTransferJournal.Operation.values()) {
+			for (var fault : ContainerTransferCoordinator.FaultPoint.values()) {
+				var source = new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.CREATIVE_SOURCE,
+						-1L, -1L, new mmm.transfer.CreativeSourceDescriptor("mmm:source/gas/co2",
+						1_000_000_000L, 293.15).encode(), -1L, null, null);
+				var command = new ContainerTransferUseCase.Command(UUID.randomUUID(), "minecraft:overworld", 4,
+						true, PROFILE, PROFILE, ContainerTransferActor.player(UUID.randomUUID(),
+						ContainerTransferActor.Hand.MAIN), source, source, operation,
+						ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS, 1_000_000_000L, 0);
+				FakeJournals journals = new FakeJournals();
+				FakeRegionPort region = new FakeRegionPort();
+				region.execution = new ContainerTransferCoordinator.Execution(true, source, "gas", 500_000_000L, 130.25);
+				var coordinator = new ContainerTransferCoordinator(journals, region);
+				coordinator.setFaultPoint(fault);
+				var result = new ContainerTransferUseCase(coordinator).execute(command);
+				if (fault == ContainerTransferCoordinator.FaultPoint.NONE) {
+					check(result.committed() && result.actualAmount() == 500_000_000L
+							&& result.thermalEnergy() == 130.25, "gas lost its actual settlement");
+				}
+				if (journals.current == null) {
+					check(region.commitCount == 0, "gas changed HEAD without WAL");
+					continue;
+				}
+				var journal = journals.current;
+				check(journal.beforeItem().equals(journal.afterItem()) && journal.operation() == operation,
+						"gas lost unchanged source or transfer direction");
+				var store = new FakeStore(journal);
+				boolean committed = region.commitCount == 1;
+				var port = new FakeRecoveryPort(committed ? 5 : 4, committed ? 0x7788 : 0,
+						CrossDomainRecovery.ExternalTruth.BEFORE);
+				port.store = store;
+				var recovery = new ContainerRecoveryCoordinator(store, port,
+						Map.of(journal.transactionId(), journal), Set.of());
+				recovery.retryTransaction(journal.transactionId());
+				recovery.retryTransaction(journal.transactionId());
+				check(store.journals.isEmpty() && port.publishCount == (committed ? 1 : 0)
+						&& port.adoptCount == (committed ? 1 : 0),
+						"gas recovery repeated an edit or ignored committed HEAD at " + fault);
+				if (fault == ContainerTransferCoordinator.FaultPoint.NONE) {
+					var rejectedJournals = new FakeJournals();
+					var rejectedRegion = new FakeRegionPort();
+					rejectedRegion.execution = new ContainerTransferCoordinator.Execution(false, source,
+							"no finite gas capacity", 0, null);
+					var rejected = new ContainerTransferUseCase(new ContainerTransferCoordinator(
+							rejectedJournals, rejectedRegion)).execute(command);
+					check(!rejected.committed() && rejectedRegion.commitCount == 0
+							&& rejectedRegion.stageCount == 0 && rejectedJournals.current == null,
+							"rejected gas candidate changed HEAD or retained a prepared request");
+				}
+			}
+		}
 	}
 
 	private static void faultMatrix() {

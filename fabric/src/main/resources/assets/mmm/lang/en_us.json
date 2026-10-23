@@ -1,4 +1,12 @@
 {
+  "item.mmm.creative_source.source.gas.nitrogen": "Creative Nitrogen Source",
+  "item.mmm.creative_source.source.gas.oxygen": "Creative Oxygen Source",
+  "item.mmm.creative_source.source.gas.co2": "Creative Carbon Dioxide Source",
+  "item.mmm.creative_source.source.gas.water_vapor": "Creative Water Vapor Source",
+  "item.mmm.creative_source.source.gas.air": "Creative Air Source",
+  "item.mmm.creative_source.gas_amount": "Standard volume per use: %s (101325 Pa, 293.15 K)",
+  "item.mmm.creative_source.gas_use": "Use on a chamber shell to inject; sneak-use to extract selected gas",
+  "item.mmm.creative_source.gas_temperature": "Injection temperature: %s K",
   "block.mmm.fluid_boundary": "Matter, Motion & Mechanics Boundary",
   "block.mmm.fluid_controller": "Matter, Motion & Mechanics Controller",
   "block.mmm.thermal_reservoir": "Matter, Motion & Mechanics Thermal Reservoir",
@@ -215,7 +223,7 @@
   "screen.mmm.quick_start.step.3": "3. Leave empty headspace when you need a sealed gas volume; ordinary boundary blocks are insulating.",
   "screen.mmm.quick_start.step.4": "4. Empty-hand use the controller to create/select and run. Sneak empty-hand use toggles persistent pause.",
   "screen.mmm.quick_start.step.5": "5. Use source templates and actual empty containers on a shell face whose inward side reaches the region.",
-  "screen.mmm.quick_start.step.6": "6. A source template is creative intent, not stored inventory. A filled container carries actual typed truth.",
+  "screen.mmm.quick_start.step.6": "6. Use a creative gas source on the shell beside a gas space to inject; sneak-use to extract. Inspect pressure and composition with the probe.",
   "screen.mmm.quick_start.step.7": "7. Use the field probe on the controller, reservoir, or shell; sneak-use scans inward for condensed matter.",
   "screen.mmm.quick_start.step.8": "8. To dismantle safely: empty condensed matter, vent sealed gas, release ownership, then remove the region.",
   "jade.mmm.inventory": "Sampled cell fluid: %s, %s kg",
@@ -239,3 +247,6 @@
   "screen.mmm.display.no_data": "Gray: not applicable / no data",
   "screen.mmm.display.local": "Changes this client only; temperature represents cell condensed matter."
 }
+
+
+

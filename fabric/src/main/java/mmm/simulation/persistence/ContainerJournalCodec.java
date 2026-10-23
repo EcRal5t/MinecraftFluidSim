@@ -35,6 +35,7 @@ root.putString("Operation", operationName(journal.operation()));
 root.putString("ResourceKind", resourceKindName(journal.resourceKind()));
 switch (journal.resourceKind()) {
 case FLUID_NANOS -> root.putLong("VolumeNanos", journal.volumeNanos());
+case GAS_STANDARD_NANOS -> root.putLong("GasStandardVolumeNanos", journal.volumeNanos());
 case GRANULAR_SVQ -> root.putLong("SolidVolumeSvq", journal.solidVolumeSvq());
 }
 if (layout == Layout.THERMAL) {
@@ -102,6 +103,9 @@ if (resourceKind == ContainerTransferJournal.ResourceKind.FLUID_NANOS) {
 requireType(root, "VolumeNanos", Tag.TAG_LONG);
 if (root.get("SolidVolumeSvq") != null) throw new IOException("Fluid WAL must not carry solid-volume truth");
 volumeNanos = root.getLongOr("VolumeNanos", -1L);
+} else if (resourceKind == ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS) {
+requireType(root, "GasStandardVolumeNanos", Tag.TAG_LONG);
+volumeNanos = root.getLongOr("GasStandardVolumeNanos", -1L);
 } else {
 requireType(root, "SolidVolumeSvq", Tag.TAG_LONG);
 if (root.get("VolumeNanos") != null) throw new IOException("Granular WAL must not carry liquid-volume truth");
@@ -283,6 +287,7 @@ Set<String> allowed = new HashSet<>(List.of(
 ));
 switch (journal.resourceKind()) {
 case FLUID_NANOS -> allowed.add("VolumeNanos");
+case GAS_STANDARD_NANOS -> allowed.add("GasStandardVolumeNanos");
 case GRANULAR_SVQ -> allowed.add("SolidVolumeSvq");
 }
 if (layout == Layout.THERMAL) {
@@ -341,6 +346,26 @@ if (journal.phase() == ContainerTransferJournal.Phase.PREPARED) {
 if (journal.targetManifestChecksum() != -1L) throw new IOException("Prepared container transfer cannot bind a target checksum");
 } else if (requireTargetChecksum && journal.targetManifestChecksum() < 0L) {
 throw new IOException("Committed container-transfer WAL must bind the staged manifest checksum");
+}
+
+if (journal.resourceKind() == ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS) {
+try {
+if (journal.actor().kind() != ContainerTransferActor.Kind.PLAYER_HAND
+|| journal.beforeItem().kind() != ContainerTransferJournal.ItemKind.CREATIVE_SOURCE
+|| !journal.beforeItem().equals(journal.afterItem())
+|| journal.solidVolumeSvq() != -1L || journal.thermalTransfer() == null
+|| journal.beforeItem().thermalContents() != null) throw new IllegalArgumentException("Invalid gas source actor or inventory");
+var descriptor = mmm.transfer.CreativeSourceDescriptor.decode(journal.beforeItem().contents());
+mmm.transfer.CreativeGasSource.componentId(descriptor);
+if (journal.volumeNanos() <= 0 || journal.volumeNanos() > descriptor.requestedTypedAmount()
+|| journal.phase() == ContainerTransferJournal.Phase.PREPARED
+&& (journal.volumeNanos() != descriptor.requestedTypedAmount()
+|| journal.thermalTransfer().internalEnergy() != 0.0)) throw new IllegalArgumentException("Invalid gas source settlement");
+journal.validateThermalRegistry(journal.thermalTransfer().registryFingerprint());
+} catch (RuntimeException invalid) {
+throw new IOException("Gas source WAL is invalid", invalid);
+}
+return;
 }
 
 if (journal.resourceKind() == ContainerTransferJournal.ResourceKind.GRANULAR_SVQ) {
@@ -508,6 +533,7 @@ private static String resourceKindName(ContainerTransferJournal.ResourceKind kin
 return switch (kind) {
 case FLUID_NANOS -> "FLUID_NANOS";
 case GRANULAR_SVQ -> "GRANULAR_SVQ";
+case GAS_STANDARD_NANOS -> "GAS_STANDARD_NANOS";
 };
 }
 
@@ -515,6 +541,7 @@ private static ContainerTransferJournal.ResourceKind parseResourceKind(String na
 return switch (name) {
 case "FLUID_NANOS" -> ContainerTransferJournal.ResourceKind.FLUID_NANOS;
 case "GRANULAR_SVQ" -> ContainerTransferJournal.ResourceKind.GRANULAR_SVQ;
+case "GAS_STANDARD_NANOS" -> ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS;
 default -> throw new IOException("Unknown container transfer resource kind: " + name);
 };
 }

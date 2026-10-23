@@ -90,6 +90,17 @@ final class MinecraftContainerTransactionAdapter {
 				executor, finalItemResolver);
 	}
 
+	/** Creative gas has no item inventory; operation UUID, actual settlement and HEAD identify the edit. */
+	Result executeGasSource(
+			FluidRegion region, ServerLevel level, ContainerTransferActor actor, ItemStack descriptorStack,
+			boolean extract, long requestedAmount, TransferExecutor executor
+	) {
+		return execute(region, level, actor, descriptorStack, descriptorStack,
+				extract ? ContainerTransferJournal.Operation.EXTRACT : ContainerTransferJournal.Operation.INSERT,
+				ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS, requestedAmount, 0L,
+				executor, (result, before) -> before.copy());
+	}
+
 	private Result execute(
 			FluidRegion region,
 			ServerLevel level,
@@ -258,6 +269,7 @@ final class MinecraftContainerTransactionAdapter {
 				}
 			}
 			region.adoptContainerCandidateDomain(candidateDomain, published, candidateOperatorPaused);
+			region.wakeForActivity();
 			candidateDomain = null;
 			return published;
 		}

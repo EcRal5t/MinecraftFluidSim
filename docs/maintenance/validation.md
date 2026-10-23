@@ -479,5 +479,13 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 ## 当前验证证据
 
+### B08 创造气体操作
+
+2026-10-23：`:fabric:runCpuValidation -PcpuValidation=containers :fabric:assemble --offline --no-daemon` 成功；containers 用时 286.7 秒，包含气体标准体积 WAL 保存恢复和全部现有故障提交时点的重试检查。日志：`build/gas-source/validation.log`。
+
+复用构建 classpath 执行 `mmm.thermal.GasTransferValidation --external` 通过，覆盖当前 PLIC 的湿／干位置、指定温度组分注入、非法输入原子拒绝、指定组分抽取、混合气抽空及环境配方再注入，核对库存与内能源汇。日志：`build/gas-source/external.log`。此项使用修正后的 0.5 m 生产单元夹具；未追加游戏内操作观察。
+
+
 **99% 的所谓“验收证据”根本不需要做。本节留空即可**
+
 

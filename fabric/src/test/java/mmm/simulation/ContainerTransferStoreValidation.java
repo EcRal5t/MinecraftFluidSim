@@ -69,6 +69,7 @@ public final class ContainerTransferStoreValidation {
 		try {
 			run("round-trip and atomic replace", ContainerTransferStoreValidation::testRoundTrip);
 			run("thermal WAL couples item and region energy", ContainerTransferStoreValidation::testThermalWal);
+			run("creative gas WAL preserves direction and actual settlement", ContainerTransferStoreValidation::testGasWal);
 			run("player and dispenser actor codecs", ContainerTransferStoreValidation::testActorCodecs);
 			run("invalid generations and dimensions are rejected", ContainerTransferStoreValidation::testValidation);
 			run("delete removes the transaction", ContainerTransferStoreValidation::testDelete);
@@ -96,6 +97,32 @@ public final class ContainerTransferStoreValidation {
 					Files.deleteIfExists(path);
 				}
 			}
+		}
+	}
+
+	private static void testGasWal() throws Exception {
+		Path directory = Files.createTempDirectory("mmm-gas-wal");
+		ContainerJournalFileStore store = new ContainerJournalFileStore(directory);
+		var actor = ContainerTransferActor.player(UUID.randomUUID(), ContainerTransferActor.Hand.MAIN);
+		var source = new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.CREATIVE_SOURCE,
+				-1L, -1L, new CreativeSourceDescriptor("mmm:source/gas/co2", 1_000_000_000L, 310.0).encode(), -1L, null, null);
+		for (var operation : ContainerTransferJournal.Operation.values()) {
+			UUID tx = UUID.randomUUID(), region = UUID.randomUUID();
+			var prepared = new ContainerTransferJournal(tx, region, "minecraft:overworld", 3, 4,
+					operation, ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS, 1_000_000_000L, -1,
+					new ContainerTransferJournal.ThermalTransfer(PROFILE, 0.0), actor, source, source, -1,
+					ContainerTransferJournal.Phase.PREPARED);
+			store.write(prepared);
+			check(store.read(tx).equals(prepared), "gas PREPARED identity did not round-trip");
+			var committed = new ContainerTransferJournal(tx, region, "minecraft:overworld", 3, 4,
+					operation, ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS, 400_000_000L, -1,
+					new ContainerTransferJournal.ThermalTransfer(PROFILE, 1234.5), actor, source, source, 0x1188,
+					ContainerTransferJournal.Phase.REGION_COMMITTED);
+			store.write(committed);
+			check(store.read(tx).equals(committed), "gas actual direction/volume/energy did not round-trip");
+			check(store.read(tx).beforeItem().equals(store.read(tx).afterItem()),
+					"creative gas invented item-side inventory");
+			store.delete(tx);
 		}
 	}
 

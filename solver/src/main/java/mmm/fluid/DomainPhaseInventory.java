@@ -52,6 +52,10 @@ final class DomainPhaseInventory {
 		return properties.hasLiquid(cell) ? properties.viscosityPascalSeconds(cell) : null;
 	}
 	public GasPressureBoundary gasBoundary() { return domain.gasBoundary; }
+	public int gasNodeAt(double x, double y, double z) { return DomainGasInventory.nodeAt(domain, x, y, z); }
+	public FluidDomain.GasEdit editGas(int node, String componentId, long nanos, double temperatureK, boolean extract) {
+		return DomainGasInventory.edit(domain, node, componentId, nanos, temperatureK, extract);
+	}
 	public void setGasNodeStandardVolume(int nodeId, double standardVolume) {
 		domain.gasState.network.setStandardVolume(nodeId, standardVolume);
 	}

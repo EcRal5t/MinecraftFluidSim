@@ -3,7 +3,7 @@ package mmm.api.transfer;
 import java.util.OptionalDouble;
 
 /** A positive, explicitly unit-bearing amount transferred across a committed boundary. */
-public sealed interface TransferQuantity permits TransferQuantity.Liquid, TransferQuantity.Granular {
+public sealed interface TransferQuantity permits TransferQuantity.Liquid, TransferQuantity.Granular, TransferQuantity.Gas {
 	/** Liquid volume in 10^-9 cubic metres, with raw total internal energy when thermal truth moved. */
 	record Liquid(long volumeNanos, OptionalDouble internalEnergyJoules) implements TransferQuantity {
 		public Liquid {
@@ -11,6 +11,15 @@ public sealed interface TransferQuantity permits TransferQuantity.Liquid, Transf
 					|| (internalEnergyJoules.isPresent()
 					&& !Double.isFinite(internalEnergyJoules.getAsDouble()))) {
 				throw new IllegalArgumentException("Liquid transfer quantity is invalid");
+			}
+		}
+	}
+
+	/** Gas volume at the registry standard state, with total carried internal energy in joules. */
+	record Gas(long standardVolumeNanos, double internalEnergyJoules) implements TransferQuantity {
+		public Gas {
+			if (standardVolumeNanos <= 0L || !Double.isFinite(internalEnergyJoules)) {
+				throw new IllegalArgumentException("Gas transfer quantity is invalid");
 			}
 		}
 	}

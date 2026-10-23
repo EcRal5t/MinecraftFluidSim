@@ -390,6 +390,18 @@ public final class ThermalDomainState {
 	}
 
 	public double ambientGasEnergy(GasInventory inventory) { return gasState.ambientGasEnergy(inventory); }
+	public double gasEnergyAtTemperature(GasInventory inventory, double temperatureK) {
+		return gasState.energyAtTemperature(inventory, temperatureK);
+	}
+	/** External fixed-volume gas edits prepare inventory, energy and source/sink audit together. */
+	public GasEnergyStore.InventoryEnergyPlan planExternalGasInventoryEnergy(AirNetwork network,
+			List<Integer> nodes, List<GasInventory> inventories, double[] energies,
+			SignedDyadic source, SignedDyadic sink) {
+		return gasState.planInventoryEnergy(network, nodes, inventories, energies, source, sink, SignedDyadic.ZERO);
+	}
+	public void commitExternalGasInventoryEnergy(GasEnergyStore.InventoryEnergyPlan plan) {
+		gasState.commitInventoryEnergy(plan);
+	}
 
 	public GasEnergyStore.GasRemapPlan planGasRemap(
 			AirNetwork oldNetwork, List<GasInventory> inventories, double[] availableVolumes,
@@ -814,6 +826,18 @@ public final class ThermalDomainState {
 	public PhaseBatchEnergyPlan planPhaseBatchEnergy(List<PhaseCellTrial> trials, int[] liquidCounts,
 	                                               SignedDyadic gasRoundoff, SignedDyadic mechanicalHeat, ThermalCarrierContext markers) {
 		return planPhaseBatchEnergy(trials,liquidCounts,gasRoundoff,mechanicalHeat,markers,null);
+	}
+	/** Environmental mass transfer carries signed reference energy through the shared batch audit. */
+	public PhaseBatchEnergyPlan planMassTransferBatchEnergy(List<PhaseCellTrial> trials, int[] liquidCounts,
+			SignedDyadic gasRoundoff, SignedDyadic mechanicalHeat, SignedDyadic externalSource,
+			SignedDyadic externalSink, ThermalCarrierContext markers) {
+		var plan = planPhaseBatchEnergy(trials, liquidCounts, gasRoundoff, mechanicalHeat, markers);
+		var a = plan.assignment;
+		var after = a.afterAudit().withExternalSourceEnergy(externalSource).withExternalSinkEnergy(externalSink);
+		after.expectedInventory();
+		var assignment = new ThermalCellOperations.PhaseBatchAssignment(a.cells(), a.liquidCounts(),
+				a.beforeAudit(), after, a.coherent(), a.callerPublishesAll(), a.solidEnergies());
+		return new PhaseBatchEnergyPlan(this, plan.revision, assignment);
 	}
 	public PhaseBatchEnergyPlan planCondensedBatchEnergy(List<PhaseCellTrial> trials,int[] liquidCounts,
 	                                                   SignedDyadic mechanicalHeat,ThermalCarrierContext markers,

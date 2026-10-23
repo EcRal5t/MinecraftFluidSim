@@ -116,7 +116,7 @@ public record ContainerTransferJournal(
 
 	public enum Operation { INSERT, EXTRACT }
 
-	public enum ResourceKind { FLUID_NANOS, GRANULAR_SVQ }
+	public enum ResourceKind { FLUID_NANOS, GRANULAR_SVQ, GAS_STANDARD_NANOS }
 
 	public enum Phase { PREPARED, REGION_COMMITTED }
 

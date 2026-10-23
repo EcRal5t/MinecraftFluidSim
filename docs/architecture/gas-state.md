@@ -47,6 +47,14 @@
 
 执行方式见 [验证指南](../maintenance/validation.md#cpu)。
 
+## 创造气体操作
+
+`FluidDomain.gasNodeAt` 从已提交干区和 PLIC 判断外壳内侧命中点的有限气腔。`DomainGasInventory.edit` 按指定组分或环境配方生成实际标准体积、整数质量、物种和温度对应内能；抽取纯组分按该组分现存量执行，空气模板抽取当前混合物。抽取携带当前气腔温度下的组分内能，剩余气体在实际固定容量内重新派生温压。
+
+气体库存计划与热学外部源汇计划先共同预检，再一次提交。只有参与气腔进入状态函数求值，其他气腔保持。待相变几何先完成力学同步；提交后唤醒区域并保留玩家暂停意图。真实创造玩家通过壳面操作，环境节点和无气容位置拒绝。
+
+创造来源物品保存模板和请求量，服务端按已提交世界定义解析。`GAS_STANDARD_NANOS` 在既有容器 WAL 中保存操作方向、实际标准体积、携带内能、事务身份及目标 HEAD；物品前后描述相同，恢复沿区域代次和清单校验和判定。物品操作与气体库存的详细提交规则见[容器事务](world-ownership-and-containers.md)。
+
 ## 本文内容
 
 - [模型边界](#模型边界)
@@ -305,3 +313,4 @@ p = EOS(continuous_inventory(q_standard), U(q_standard), actual_capacity)
 气体默认物种组成使用 `concentrationMolPerStandardCubicMeter`，以标准态 mol/m³ 表示，生成库存时转换为整数 μmol。
 注册表快照以 `StandardDensityKgPerM3Bits`、`ConcentrationMolPerStandardM3`、`MassUnitsPerQuantum` 保存标准态密度、物种浓度与每物种量子的整数质量；世界定义组检查该质量与化学注册表一致。来源按实际生成物种的质量从组分总质量扣出有符号余量。标准条件使用 `StandardPressurePaBits`、`StandardTemperatureKBits`。
 标准体积按 nanos 编码取最近整数，低于半个 nanos 的环境截留量产生零库存；误差为每次不足 0.5×10⁻⁹ 标准 m³。
+

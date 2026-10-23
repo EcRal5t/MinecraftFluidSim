@@ -559,6 +559,9 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 - **材料与试剂创造来源**
   - 主要文件：
     - [CreativeSourceCatalog](../../fabric/src/main/java/mmm/simulation/CreativeSourceCatalog.java)
+    - [CreativeGasSource](../../model/src/main/java/mmm/transfer/CreativeGasSource.java)：气体创造模板及标准体积
+    - [DomainGasInventory](../../solver/src/main/java/mmm/fluid/DomainGasInventory.java)：有限气腔点定位、局部气体库存与内能源汇联合提交
+    - [PlayerContainerTransferAdapter](../../fabric/src/main/java/mmm/simulation/PlayerContainerTransferAdapter.java)：真实壳面注气／抽气，复用容器 WAL 和区域 HEAD
   - 验证选择器 / 参考：`containers,chemistry`
 
 - **恒温热源与快速入门界面**
@@ -630,4 +633,5 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 | 温度、反应或相变无进展 | 实际组成、U、批次及候选不可执行原因 | `ThermalCaloricInversion`、`GasLiquidPhaseModel`、`GasLiquidPhaseChangeStage`、未来气腔与热账计划 |
 | 颗粒占容、压力或沉积异常 | `GranularCouplingFields`、碰撞预览及整数分配 | `GranularPressureCoupling`、`GranularSettlementGeometryPlan`、`GranularBedShear` |
 | 容器／区域锁定 | HEAD、WAL 与外部已存盘状态的分类 | `ContainerRecoveryCoordinator`、`OwnershipCoordinator`；[恢复决策](world-ownership-and-containers.md#恢复决策表) |
+
 

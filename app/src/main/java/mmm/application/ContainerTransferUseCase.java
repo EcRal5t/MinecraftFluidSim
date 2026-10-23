@@ -26,6 +26,24 @@ public final class ContainerTransferUseCase {
 			return Result.rejected(command, "颗粒容器不能携带液体 ThermalContents");
 		}
 
+		if (command.resourceKind() == ContainerTransferJournal.ResourceKind.GAS_STANDARD_NANOS) {
+			if (!command.regionHasThermalState() || command.actor().kind() != mmm.transfer.ContainerTransferActor.Kind.PLAYER_HAND
+					|| command.beforeItem().kind() != ContainerTransferJournal.ItemKind.CREATIVE_SOURCE
+					|| !command.beforeItem().equals(command.sourceItem())) {
+				return Result.rejected(command, "气体创造操作需要热区域与玩家创造来源");
+			}
+			try {
+				var descriptor = mmm.transfer.CreativeSourceDescriptor.decode(command.beforeItem().contents());
+				mmm.transfer.CreativeGasSource.componentId(descriptor);
+				if (command.requestedAmount() != descriptor.requestedTypedAmount()) {
+					return Result.rejected(command, "气体来源请求量不一致");
+				}
+			} catch (RuntimeException invalidGas) {
+				return Result.rejected(command, "气体来源描述无效：" + invalidGas.getMessage());
+			}
+			return coordinator.execute(new Plan(command, 0.0));
+		}
+
 		Double preparedEnergy = null;
 		if (command.resourceKind() == ContainerTransferJournal.ResourceKind.FLUID_NANOS
 				&& command.regionHasThermalState()) {

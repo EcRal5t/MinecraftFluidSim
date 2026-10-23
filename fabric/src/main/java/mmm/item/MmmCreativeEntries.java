@@ -42,6 +42,10 @@ public final class MmmCreativeEntries {
 				"mmm:source/granular/fine_sand", "mmm:source/granular/light_beads")) {
 			entries.accept(CreativeSourceItem.stack(new CreativeSourceDescriptor(id, SolidVolume.SVQ_PER_CUBIC_METER, null)));
 		}
+		for (String gas : java.util.List.of("nitrogen", "oxygen", "co2", "water_vapor", "air")) {
+			entries.accept(CreativeSourceItem.stack(new CreativeSourceDescriptor(
+					"mmm:source/gas/" + gas, mmm.transfer.CreativeGasSource.AMOUNT_NANOS, 293.15)));
+		}
 		entries.accept(MmmBlocks.THERMAL_RESERVOIR);
 	}
 }

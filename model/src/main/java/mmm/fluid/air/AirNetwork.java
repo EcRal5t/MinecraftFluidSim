@@ -534,9 +534,12 @@ public final class AirNetwork {
 	}
 	public InventoryBatchPlan planInventoryBatch(List<Integer> ids, List<GasInventory> inventories,
 	                                            GasAuditLedger source, GasAuditLedger sink) {
-		if (!ids.equals(nodeIds()) || inventories.size() != ids.size()) throw new IllegalArgumentException("Gas inventory batch must cover the current nodes in order");
-		ArrayList<GasInventory> before = new ArrayList<>(); TreeMap<Integer, AirNode> replacement = new TreeMap<>();
+		if (inventories.size() != ids.size()) throw new IllegalArgumentException("Gas inventory batch dimensions differ");
+		ArrayList<GasInventory> before = new ArrayList<>(); TreeMap<Integer, AirNode> replacement = new TreeMap<>(nodes);
+		int previous = 0;
 		for (int i = 0; i < ids.size(); i++) {
+			if (ids.get(i) <= previous) throw new IllegalArgumentException("Gas inventory nodes must be unique and ordered");
+			previous = ids.get(i);
 			AirNode old = sealed(ids.get(i)); before.add(old.inventory()); registry.requireCompatible(inventories.get(i));
 			replacement.put(ids.get(i), new AirNode(old.availableVolume(), inventories.get(i)));
 		}

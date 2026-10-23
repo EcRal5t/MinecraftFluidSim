@@ -9,10 +9,13 @@ import java.util.List;
 public final class GasTransferValidation {
 	private GasTransferValidation() { }
 	public static void main(String[] args) {
+		if (args.length == 1 && args[0].equals("--external")) {
+			localExternalGasEdits(); System.out.println("Local external gas editing validation passed"); return;
+		}
 		if (args.length == 1 && args[0].equals("--eos")) {
 			pressureVolumeIsentropes(); System.out.println("Gas pressure-volume EOS validation passed"); return;
 		}
-		if (args.length != 0) throw new IllegalArgumentException("Expected no arguments or --eos");
+		if (args.length != 0) throw new IllegalArgumentException("Expected no arguments, --eos or --external");
 		validate(); System.out.println("Global gas flow validation passed");
 	}
 	public static void validate() {
@@ -26,6 +29,56 @@ public final class GasTransferValidation {
 		ambientAndLiquidSeal();
 		productionMixturesExchangeHeatAndSpecies();
 		localPortPreparationAndFailure();
+		localExternalGasEdits();
+	}
+
+	/** Player gas edits retain all integer columns and share the thermal source/sink transaction. */
+	private static void localExternalGasEdits() {
+		mmm.simulation.FullCapabilityTestFixture.Registries registries;
+		try { registries = mmm.simulation.FullCapabilityTestFixture.load(); }
+		catch (Exception failure) { throw new IllegalStateException("Cannot load gas edit fixture", failure); }
+		var domain = new mmm.fluid.FluidDomain(4, 4, 4,
+				new mmm.fluid.FluidSolverConfig(.5F, 1000, 0, .025F, 200, 1e-5F, .002F));
+		domain.sealDomainBoundary();
+		mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(domain, registries.liquids());
+		domain.setVolume(1, 1, 1, .5F);
+		mmm.simulation.FullCapabilityTestFixture.bindFull(domain, registries, 293.15, 8);
+		domain.bootstrapGasState(registries.chemical().fingerprint());
+		int node = domain.gasNodeAt(.625, .875, .625);
+		require(node > 0 && domain.gasNodeAt(.625, .55, .625) == -1,
+				"Local gas editing did not distinguish the dry and wet PLIC sides");
+		long before = domain.gasBoundary().standardVolumeNanos(node);
+		var sourceBefore = domain.thermalAudit().externalSource();
+		var inserted = domain.editGas(node, BuiltinGasDefinitions.OXYGEN, 123_456_789, 500, false);
+		require(inserted.moved().standardVolumeNanos() == 123_456_789
+				&& domain.gasBoundary().standardVolumeNanos(node) == before + 123_456_789
+				&& domain.thermalAudit().externalSource().subtract(sourceBefore).equals(inserted.internalEnergy()),
+				"Gas insertion lost quantity or source energy");
+		var inventory = domain.gasBoundary().inventory(node);
+		var energy = domain.exactInternalEnergy();
+		var audit = domain.thermalAudit();
+		boolean rejected = false;
+		try { domain.editGas(node, BuiltinGasDefinitions.OXYGEN, 100, Double.NaN, false); }
+		catch (IllegalArgumentException expected) { rejected = true; }
+		require(rejected && inventory.equals(domain.gasBoundary().inventory(node))
+				&& domain.exactInternalEnergy().equals(energy) && domain.thermalAudit().equals(audit),
+				"Rejected gas insertion published inventory or energy");
+		var oxygen = inventory.component(BuiltinGasDefinitions.OXYGEN);
+		var sinkBefore = audit.externalSink();
+		var removed = domain.editGas(node, BuiltinGasDefinitions.OXYGEN, Long.MAX_VALUE, 293.15, true);
+		require(removed.moved().components().equals(List.of(oxygen))
+				&& domain.gasBoundary().inventory(node).component(BuiltinGasDefinitions.OXYGEN) == null
+				&& domain.thermalAudit().externalSink().subtract(sinkBefore).equals(removed.internalEnergy()),
+				"Component extraction exceeded its inventory or changed carried columns");
+		var mixed = domain.gasBoundary().inventory(node);
+		var emptied = domain.editGas(node, null, Long.MAX_VALUE, 293.15, true);
+		require(emptied.moved().equals(mixed) && domain.gasBoundary().inventory(node).isEmpty()
+				&& domain.exactGasInternalEnergy().equals(SignedDyadic.ZERO),
+				"Complete mixture extraction did not leave a zero-energy vacuum");
+		domain.editGas(node, null, 1_000_000_000, 293.15, false);
+		require(domain.gasBoundary().auditClosed()
+				&& domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),
+				"Local gas source/sink and thermal audit do not close");
 	}
 
 	/** Disconnected cavities stay outside each port transaction; failed preparation publishes nothing. */

@@ -41,10 +41,18 @@ public final class CreativeSourceItem extends Item {
 			tooltip.accept(Component.translatable("item.mmm.creative_source.malformed").withStyle(ChatFormatting.RED));
 			return;
 		}
-		tooltip.accept(Component.translatable("item.mmm.creative_source.template").withStyle(ChatFormatting.AQUA));
-		tooltip.accept(Component.translatable("item.mmm.creative_source.amount",
-				descriptor.templateStableId().startsWith("mmm:source/granular/")
-						? mmm.units.UnitFormat.solidVolume(descriptor.requestedTypedAmount())
-						: mmm.units.UnitFormat.volumeNanos(descriptor.requestedTypedAmount())).withStyle(ChatFormatting.GRAY));
-	}
+        if (mmm.transfer.CreativeGasSource.isGas(descriptor)) {
+            tooltip.accept(Component.translatable("item.mmm.creative_source.gas_use").withStyle(ChatFormatting.GRAY));
+            tooltip.accept(Component.translatable("item.mmm.creative_source.gas_amount",
+                    mmm.units.UnitFormat.volumeNanos(descriptor.requestedTypedAmount())).withStyle(ChatFormatting.GRAY));
+            tooltip.accept(Component.translatable("item.mmm.creative_source.gas_temperature",
+                    descriptor.temperatureKelvin() == null ? 293.15 : descriptor.temperatureKelvin()).withStyle(ChatFormatting.GRAY));
+            return;
+        }
+        tooltip.accept(Component.translatable("item.mmm.creative_source.template").withStyle(ChatFormatting.AQUA));
+        tooltip.accept(Component.translatable("item.mmm.creative_source.amount",
+                descriptor.templateStableId().startsWith("mmm:source/granular/")
+                        ? mmm.units.UnitFormat.solidVolume(descriptor.requestedTypedAmount())
+                        : mmm.units.UnitFormat.volumeNanos(descriptor.requestedTypedAmount())).withStyle(ChatFormatting.GRAY));
+    }
 }
