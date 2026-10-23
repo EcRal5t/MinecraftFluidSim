@@ -1,0 +1,89 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) buffer Arena { uint words[]; };
+layout(binding=1,std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Params { int header; int stage; int count; int argument; } p;
+const int CONTROL=0,FIRST=1,SECOND=2,NORMAL=3,WALL=4,E=5,MUS=6,MUD=7,LABEL=8,COUNT=9,OFFSET=10,CURSOR=11,ENTRY=12,
+ SOURCE=13,VELOCITY=14,COMPRESSED=15,LAMBDA=16,TANGENT=17,COMP_LAMBDA=18,CC=19,CO=20,CUR=21,MEMBERS=22,
+ ENERGY=23,SCALE=24,REACTION=25,WORK=26,PARTICLE_WORK=28;
+int h(int i){return int(words[p.header+i]);}int at(int f){return h(16+f);}
+int get(int f,int i){return int(words[at(f)+i]);}void put(int f,int i,int x){words[at(f)+i]=uint(x);}
+double number(int a){return packDouble2x32(uvec2(words[a],words[a+1]));}
+void writeNumber(int a,double x){uvec2 bits=unpackDouble2x32(x);words[a]=bits.x;words[a+1]=bits.y;}
+double read(int f,int i){return number(at(f)+2*i);}void write(int f,int i,double x){writeNumber(at(f)+2*i,x);}
+dvec3 vector(int f,int i){return dvec3(read(f,3*i),read(f,3*i+1),read(f,3*i+2));}
+void writeVector(int f,int i,dvec3 x){for(int a=0;a<3;a++)write(f,3*i+a,x[a]);}
+int actual(){return int(words[h(2)]);}int contacts(){return get(CONTROL,0);}
+double mass(int i){int a=h(4)+2*i;return double(int64_t(uint64_t(words[a])|(uint64_t(words[a+1])<<32)))*1e-10;}
+void invalid(){atomicOr(errors,2097152u);}bool finite(double x){return !isnan(x)&&!isinf(x);}
+uint root(uint id){for(int pass=0;pass<h(0);pass++){uint next=atomicAdd(words[at(LABEL)+id],0u);if(next==id)return id;id=next;}invalid();return id;}
+void join(int first,int second){for(int pass=0;pass<h(0);pass++){uint a=root(uint(first)),b=root(uint(second));if(a==b)return;
+ uint high=max(a,b),low=min(a,b),previous=atomicMin(words[at(LABEL)+high],low);if(previous==high)return;}invalid();}
+void initialize(int i){
+ write(PARTICLE_WORK,i,0.0);put(LABEL,i,i);put(COUNT,i,0);put(CURSOR,i,0);put(CC,i,0);put(CUR,i,0);write(SCALE,i,1.0);
+ dvec3 v=i<actual()?dvec3(number(h(3)+6*i),number(h(3)+6*i+2),number(h(3)+6*i+4)):dvec3(0.0);
+ writeVector(SOURCE,i,v);writeVector(VELOCITY,i,v);writeVector(COMPRESSED,i,v);
+}
+bool validContact(int c){int a=get(FIRST,c),b=get(SECOND,c);return a>=0&&a<actual()&&b>=-1&&b<actual()&&a!=b;}
+void prepareContact(int c){write(WORK,c,0.0);writeVector(REACTION,c,dvec3(0.0));if(c>=contacts())return;if(!validContact(c)){invalid();return;}
+ int a=get(FIRST,c),b=get(SECOND,c);dvec3 n=vector(NORMAL,c);double norm=dot(n,n);
+ if(!(norm>.999999&&norm<1.000001&&mass(a)>0.0&&(b<0||mass(b)>0.0)&&read(E,c)>=0.0&&read(E,c)<=1.0
+      &&read(MUS,c)>=read(MUD,c)&&read(MUD,c)>=0.0)){invalid();return;}
+ atomicAdd(words[at(COUNT)+a],1u);if(b>=0){atomicAdd(words[at(COUNT)+b],1u);join(a,b);}
+ write(LAMBDA,c,0.0);write(COMP_LAMBDA,c,0.0);writeVector(TANGENT,c,dvec3(0.0));write(WORK,c,0.0);writeVector(REACTION,c,dvec3(0.0));
+}
+void scatter(int c){if(c>=contacts()||!validContact(c))return;int a=get(FIRST,c),b=get(SECOND,c);
+ int first=int(atomicAdd(words[at(CURSOR)+a],1u));put(ENTRY,get(OFFSET,a)+first,c);
+ if(b>=0){int second=int(atomicAdd(words[at(CURSOR)+b],1u));put(ENTRY,get(OFFSET,b)+second,c);}
+}
+void componentCount(int i){if(i>=actual())return;int label=int(root(uint(i)));atomicExchange(words[at(LABEL)+i],uint(label));atomicAdd(words[at(CC)+label],1u);}
+void componentScatter(int i){if(i>=actual())return;int label=get(LABEL,i),slot=int(atomicAdd(words[at(CUR)+label],1u));put(MEMBERS,get(CO,label)+slot,i);}
+dvec3 relative(int field,int c){int a=get(FIRST,c),b=get(SECOND,c);return b<0?vector(field,a)-vector(WALL,c):vector(field,b)-vector(field,a);}
+void proposal(int c){if(c>=contacts()||!validContact(c))return;
+ int a=get(FIRST,c),b=get(SECOND,c);dvec3 n=vector(NORMAL,c),v=relative(VELOCITY,c);double inverse=1.0/mass(a)+(b<0?0.0:1.0/mass(b));
+ double relaxation=1.0/double(max(get(COUNT,a),b<0?1:get(COUNT,b)));
+ double target=p.argument==0?0.0:-read(E,c)*min(0.0,dot(n,relative(SOURCE,c)));
+ double old=read(LAMBDA,c),next=max(0.0,old+(target-dot(n,v))/inverse);write(LAMBDA,c,old+relaxation*(next-old));
+ if(p.argument==1&&b<0){
+  dvec3 tangent=vector(TANGENT,c),trial=tangent-(v-n*dot(n,v))/inverse;double magnitude=length(trial),load=read(LAMBDA,c);
+  double scale=magnitude==0.0||magnitude<=read(MUS,c)*load?1.0:min(1.0,read(MUD,c)*load/magnitude);
+  writeVector(TANGENT,c,tangent+relaxation*(scale*trial-tangent));
+ }
+}
+void reconstruct(int i){if(i>=actual())return;dvec3 impulse=dvec3(0.0);double externalWork=0.0;
+ for(int j=get(OFFSET,i);j<get(OFFSET,i+1);j++){int c=get(ENTRY,j),b=get(SECOND,c);double sign=b<0||b==i?1.0:-1.0;
+  impulse+=sign*(read(LAMBDA,c)*vector(NORMAL,c)+vector(TANGENT,c));if(b<0)externalWork+=read(WORK,c);}
+ dvec3 v=vector(SOURCE,i)+impulse/mass(i);writeVector(VELOCITY,i,v);
+ if(p.argument==1){write(PARTICLE_WORK,i,externalWork);for(int a=0;a<3;a++)writeNumber(h(3)+6*i+2*a,v[a]);writeNumber(h(5)+2*i,.5*mass(i)*dot(v,v));}
+ if(any(isnan(v))||any(isinf(v)))invalid();
+}
+void captureCompression(int id){if(id<h(0))writeVector(COMPRESSED,id,vector(VELOCITY,id));if(id<contacts())write(COMP_LAMBDA,id,read(LAMBDA,id));}
+void energyTerms(int i){if(i>=actual())return;
+ dvec3 source=vector(SOURCE,i),compressed=vector(COMPRESSED,i),delta=vector(VELOCITY,i)-compressed;double m=mass(i);
+ double available=.5*m*dot(source-compressed,source+compressed),linear=m*dot(compressed,delta),quadratic=.5*m*dot(delta,delta);
+ for(int j=get(OFFSET,i);j<get(OFFSET,i+1);j++){int c=get(ENTRY,j);if(get(SECOND,c)>=0)continue;
+  dvec3 wall=vector(WALL,c),n=vector(NORMAL,c);available+=read(COMP_LAMBDA,c)*dot(wall,n);
+  linear-=dot(wall,(read(LAMBDA,c)-read(COMP_LAMBDA,c))*n+vector(TANGENT,c));
+ }writeVector(ENERGY,i,dvec3(available,linear,quadratic));
+}
+void budget(int label){if(get(CC,label)==0)return;dvec3 terms=dvec3(0.0);
+ for(int j=get(CO,label);j<get(CO,label+1);j++)terms+=vector(ENERGY,get(MEMBERS,j));
+ double available=max(0.0,terms.x),linear=terms.y,quadratic=terms.z,scale=1.0;
+ if(linear+quadratic>available&&quadratic>0.0){double rootValue=sqrt(linear*linear+4.0*quadratic*available);
+  scale=clamp(linear>=0.0?(available<=0.0?0.0:2.0*available/(linear+rootValue)):(rootValue-linear)/(2.0*quadratic),0.0,1.0);}
+ if(!finite(scale))invalid();write(SCALE,label,scale);
+}
+void limitRebound(int c){if(c>=contacts()||!validContact(c))return;double scale=read(SCALE,get(LABEL,get(FIRST,c)));
+ double normal=mix(read(COMP_LAMBDA,c),read(LAMBDA,c),scale);dvec3 tangent=scale*vector(TANGENT,c);
+ write(LAMBDA,c,normal);writeVector(TANGENT,c,tangent);
+ if(get(SECOND,c)<0){dvec3 impulse=normal*vector(NORMAL,c)+tangent;writeVector(REACTION,c,-impulse);write(WORK,c,dot(impulse,vector(WALL,c)));}
+}
+void main(){int id=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128+gl_LocalInvocationID.x);if(id>=p.count||errors!=0u)return;
+ if(contacts()<0||contacts()>h(1)||actual()<0||actual()>h(0)){invalid();return;}
+ if(p.stage==0)initialize(id);else if(p.stage==1)prepareContact(id);else if(p.stage==2)scatter(id);
+ else if(p.stage==3)componentCount(id);else if(p.stage==4)componentScatter(id);else if(p.stage==5)proposal(id);
+ else if(p.stage==6)reconstruct(id);else if(p.stage==7)captureCompression(id);else if(p.stage==8)energyTerms(id);
+ else if(p.stage==9)budget(id);else if(p.stage==10)limitRebound(id);
+}

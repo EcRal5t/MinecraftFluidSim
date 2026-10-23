@@ -14,7 +14,7 @@ import static org.lwjgl.vulkan.VK10.*;
 final class VulkanGranularPressure implements AutoCloseable {
     enum Field { FACE_IDS(4),FACE_SHARES(8),DRAG_WEIGHTS(8),FACE_COUNTS(4),FACE_OFFSETS(4),FACE_CURSORS(4),FACE_ENTRIES(4),
         FACE_SOLID_VOLUME(8),FIXED_PORE(8),SOURCE_VELOCITY(8),SOURCE_K(8),SOURCE_Y(8),PROJECTED_K(8),
-        DRAG_RESISTANCE(8),DRAG_IMPULSE(8),DRAG_HEAT(8),DIAMETERS(8),SCAN(4);
+        DRAG_RESISTANCE(8),DRAG_IMPULSE(8),DRAG_HEAT(8),DIAMETERS(8),SCAN(4),FINAL_K(8),FINAL_Y(8);
         final int width;Field(int width){this.width=width;}}
     static final class Layout {
         private final VulkanGranularGeometry.Layout geometry;
