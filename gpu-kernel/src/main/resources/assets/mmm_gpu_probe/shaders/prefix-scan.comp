@@ -6,6 +6,7 @@ layout(std430,binding=2) buffer Workspace { uint work[]; };
 layout(std430,binding=3) buffer Errors { uint errors; };
 layout(push_constant) uniform Metadata {
     uint stage; uint count; uint base; uint parent; uint root; uint totalIndex;
+    uint inputBase; uint outputBase; uint workspaceBase;
 } pc;
 shared uint values[256];
 
@@ -20,14 +21,14 @@ void main() {
     uint lane=gl_LocalInvocationID.x, i=block*256u+lane;
     if(pc.stage==1u) {
         if(i<pc.count) {
-            uint addend=work[pc.parent+block];
-            if(pc.root!=0u)offsets[i]=checkedAdd(offsets[i],addend);
-            else work[pc.base+i]=checkedAdd(work[pc.base+i],addend);
+            uint addend=work[pc.workspaceBase+pc.parent+block];
+            if(pc.root!=0u)offsets[pc.outputBase+i]=checkedAdd(offsets[pc.outputBase+i],addend);
+            else work[pc.workspaceBase+pc.base+i]=checkedAdd(work[pc.workspaceBase+pc.base+i],addend);
         }
         return;
     }
     uint value=0u;
-    if(i<pc.count)value=pc.root!=0u?counts[i]:work[pc.base+i];
+    if(i<pc.count)value=pc.root!=0u?counts[pc.inputBase+i]:work[pc.workspaceBase+pc.base+i];
     if(value>0x7fffffffu)atomicOr(errors,16u);
     values[lane]=value;
     barrier();
@@ -38,8 +39,8 @@ void main() {
     }
     if(lane==0u) {
         uint total=values[255];
-        if(pc.parent==0xffffffffu)offsets[pc.totalIndex]=total;
-        else work[pc.parent+block]=total;
+        if(pc.parent==0xffffffffu)offsets[pc.outputBase+pc.totalIndex]=total;
+        else work[pc.workspaceBase+pc.parent+block]=total;
         values[255]=0u;
     }
     barrier();
@@ -53,7 +54,7 @@ void main() {
         barrier();
     }
     if(i<pc.count) {
-        if(pc.root!=0u)offsets[i]=values[lane];
-        else work[pc.base+i]=values[lane];
+        if(pc.root!=0u)offsets[pc.outputBase+i]=values[lane];
+        else work[pc.workspaceBase+pc.base+i]=values[lane];
     }
 }

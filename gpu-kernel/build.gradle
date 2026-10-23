@@ -199,3 +199,14 @@ registerGpuProbe(
         providers.gradleProperty('gpuGeometryGrids').getOrElse('16,32,64')
     probeTask.jvmArgs '-Xmx1g'
 }
+
+registerGpuProbe(
+    'runGpuDyadicSumBenchmark',
+    'Measures resident exact inventory remainders and GPU limb allocation.',
+    'mmm.gpuprobe.GpuDyadicSumBenchmark',
+    'gpu-dyadic-sum-work'
+) { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        providers.gradleProperty('gpuDyadicSamples').getOrElse('10')
+    probeTask.jvmArgs '-Xmx1g'
+}

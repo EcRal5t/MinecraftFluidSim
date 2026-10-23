@@ -438,6 +438,7 @@ D01 进入前性能验收采用热运行：同一 JVM 已完成生产物理场�
 ./gradlew.bat :gpu-kernel:runGpuRegionStorageBenchmark --offline --no-daemon
 ./gradlew.bat :gpu-kernel:runGpuResidentPressureBenchmark -PgpuResidentPressureGrid=64 -PgpuPressureSamples=10 --offline --no-daemon
 ./gradlew.bat :gpu-kernel:runGpuLiquidGeometryBenchmark -PgpuProbeDevice=0 -PgpuGeometrySamples=10 -PgpuGeometryProjection=true -PgpuGeometryGrids=64 --offline --no-daemon
+./gradlew.bat :gpu-kernel:runGpuDyadicSumBenchmark -PgpuProbeDevice=0 -PgpuDyadicSamples=10 --offline --no-daemon
 ```
 
 `runGpuLiquidGeometryBenchmark` 的 `gpuGeometryProjection=false` 测库存派生几何；设为 `true` 追加重力、物理 CSR、压力、格面投影与 PLIC 面扫掠偏好。`gpuGeometryGrids` 接受逗号分隔格数，`gpuGeometrySamples` 控制采样次数，固定先预热5次。投影模式每次从零压力开始，并计入代次复制、命令录制、各批执行、状态回读和接管。
@@ -653,4 +654,14 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 首次 Jacobi-PCG 的 `build/gpu-resident-liquid-pressure-failure.log` 达到200次上限后 RMS 仍为2.6125e-5，该次失败。多重网格在相同容差和上限下26次收敛；零初始压力的完整录制成本中位22.470 ms（`gpu-resident-liquid-multigrid-zero-cost.log`），分批每8次迭代执行后为10.105 ms（`gpu-resident-liquid-pressure-batches-cost.log`），最终含面扫掠偏好的成本见上表。几何计算按4e-5体积分辨率处理，精确库存、int64数量、动力学和压力保留原精度。
 
-本次成本覆盖常驻库存→几何→重力→真实七点 CSR→压力→格面投影→PLIC 面扫掠偏好。末阶段根据真实共享开放端口和源侧 PLIC 薄片生成有符号格面体积 `(Qt,Ql)`；接收容量接受及库存和 MAC 输运尚未完成，有限气腔、热化学、完整区域应用层接管与完整步成本待完成；集中物理检查尚未开始。动态容量布局、逻辑计数头和多批存储代码已落地，分层前缀扫描尚未执行实际 dispatch。完整64³流体步20 Hz及原场景十倍提速继续按完整链交付后判定。
+本次成本覆盖常驻库存→几何→重力→真实七点 CSR→压力→格面投影→PLIC 面扫掠偏好。末阶段根据真实共享开放端口和源侧 PLIC 薄片生成有符号格面体积 `(Qt,Ql)`；接收容量接受及库存和 MAC 输运尚未完成，有限气腔、热化学、完整区域应用层接管与完整步成本待完成；集中物理检查尚未开始。动态容量布局、逻辑计数头和多批存储代码已落地，分层前缀扫描已用于下列精确二进制加减的变长 limb 分配。完整64³流体步20 Hz及原场景十倍提速继续按完整链交付后判定。
+
+
+`build/gpu-resident-dyadic-sum-cost.log` 的设备精确二进制七项加减分项完成长度测量→`VulkanPrefixScan` 变长 limb 分配→结果写入。`runGpuDyadicSumBenchmark` 由 `gpuProbeDevice` 选择设备、`gpuDyadicSamples` 指定采样次数；本次均预热5次、采样10次，每步上传0 B、回读4 B。
+
+| 场景 | 操作数 | 中位 / 最大 ms | 设备平均 ms | 逻辑设备存储 MiB |
+|---|---:|---:|---:|---:|
+| compact-remainders | 524,288 | 1.679 / 2.966 | 1.323 | 216.0 |
+| wide-tails（1−2^-1074） | 8,192 | 0.265 / 1.943 | 0.057 | 5.4 |
+
+每场计时后抽取3项结果，精确值检查通过。该记录覆盖库存余量加减和变长索引分配，通量容量接受、材料实际结算与完整库存输运仍待实现，完整物理检查尚未开展。

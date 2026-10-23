@@ -1,0 +1,61 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) readonly buffer Source { uint sourceWords[]; };
+layout(binding=1,std430) buffer Candidate { uint candidateWords[]; };
+layout(binding=2,std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Params {
+    int operations; int termsWordOffset; int resultWordOffset; int countsWordOffset;
+    int offsetsWordOffset; int limbsWordOffset; int limbCapacity; int stage;
+} p;
+
+// DYADIC_LIBRARY
+
+uint dyadicWord(int bank,int index) { return bank==0?sourceWords[index]:candidateWords[index]; }
+void dyadicWrite(int index,uint word) { candidateWords[index]=word; }
+
+void loadTerms(int operation,out DyadicTerm items[7]) {
+    int base=p.termsWordOffset+35*operation;
+    for(int i=0;i<7;i++) {
+        int at=base+5*i;
+        items[i]=DyadicTerm(int(candidateWords[at]),int(candidateWords[at+1]),int(candidateWords[at+2]),
+                int(candidateWords[at+3]),int(candidateWords[at+4]));
+    }
+}
+
+void measureOperation(int operation) {
+    DyadicTerm items[7];loadTerms(operation,items);
+    DyadicMeasure result=dyadicMeasure(items,7);
+    int at=p.resultWordOffset+8*operation;
+    candidateWords[at]=uint(result.status);
+    candidateWords[at+1]=uint(result.words);
+    candidateWords[at+2]=uint(result.exponent);
+    candidateWords[at+3]=uint(result.minimumExponent);
+    candidateWords[at+4]=uint(result.firstWord);
+    candidateWords[at+5]=uint(result.lastWord);
+    candidateWords[at+6]=uint(result.trailingBits);
+    candidateWords[at+7]=0u;
+    candidateWords[p.countsWordOffset+operation]=result.status==DYADIC_POSITIVE?uint(result.words):0u;
+    if(result.status!=DYADIC_ZERO&&result.status!=DYADIC_POSITIVE)atomicOr(errors,32u);
+}
+
+void writeOperation(int operation) {
+    // Every invocation observes the same completed scan before any limb writes start.
+    uint required=candidateWords[p.offsetsWordOffset+p.operations];
+    if(required>uint(p.limbCapacity)){atomicOr(errors,64u);return;}
+    if((errors&16u)!=0u)return;
+    int at=p.resultWordOffset+8*operation;
+    if(int(candidateWords[at])!=DYADIC_POSITIVE)return;
+    DyadicMeasure result=DyadicMeasure(int(candidateWords[at]),int(candidateWords[at+1]),
+            int(candidateWords[at+2]),int(candidateWords[at+3]),int(candidateWords[at+4]),
+            int(candidateWords[at+5]),int(candidateWords[at+6]));
+    DyadicTerm items[7];loadTerms(operation,items);
+    int outputOffset=p.limbsWordOffset+int(candidateWords[p.offsetsWordOffset+operation]);
+    dyadicWriteSum(items,7,result,outputOffset);
+}
+
+void main() {
+    int operation=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
+    if(operation>=p.operations)return;
+    if(p.stage==0)measureOperation(operation);else writeOperation(operation);
+}

@@ -485,7 +485,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 设备常驻液体入口由 `VulkanLiquidRegion` 持有同代库存与 MAC，当前依次记录库存派生几何、重力、真实七点 CSR、压力、格面投影与 PLIC 面扫掠偏好。几何工作区采用 float32，解析尺度为 4e-5 体积；精确库存、int64 数量、动力学与压力保持原精度。`VulkanLiquidGeometry.recordTransportPreferences` 在投影后，根据真实共享开放端口与源侧 PLIC 薄片计算格面有符号体积 `(Qt,Ql)`，写入 binding 13 的 `faceFlux`。接收容量接受、液体库存与 MAC 输运、有限气腔和热化学接入仍在实施，当前入口用于阶段成本测量。
 
-`VulkanLiquidStateLayout` 将分配容量与设备逻辑计数分开，导入和导出按有效前缀处理；`VulkanGasStateLayout` 登记气体库存、拓扑、收支与节点内能列。`VulkanRegionStorage` 支持候选扩容、按列复制及同一私有代次的多批执行，最终批完成后才接管。`VulkanPressureMultigrid` 为结构网格压力提供多重网格预条件；`VulkanPrefixScan` 记录分层 uint32 exclusive scan，供动态 CSR 建表使用，实际 dispatch 尚待测量。
+`VulkanLiquidStateLayout` 将分配容量与设备逻辑计数分开，导入和导出按有效前缀处理；`VulkanGasStateLayout` 登记气体库存、拓扑、收支与节点内能列。`VulkanRegionStorage` 支持候选扩容、按列复制及同一私有代次的多批执行，最终批完成后才接管。`VulkanPressureMultigrid` 为结构网格压力提供多重网格预条件；`VulkanPrefixScan` 记录分层 uint32 exclusive scan，供动态 CSR 建表使用，已用于设备精确二进制加减的变长 limb 分配；通量容量与材料实际结算待接入。
 
 设备计算服务由服务器运行时创建，并通过单一 `ComputeExecution` 作用域绑定。明确的设备丢失会释放服务、丢弃候选，从原始请求在 CPU 重算后沿普通提交链接管；后续请求继续 CPU 并记录恢复原因。其他计算异常保留原区域。启动选择见[运行时](runtime-and-lifecycle.md#startup)。完整设备常驻区域状态、各物相输运及 checkpoint 恢复继续按[实施计划](../roadmap/solver-consolidation-plan.md)推进。
 
@@ -672,6 +672,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [VulkanLiquidRegion](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidRegion.java)：常驻液体代次、`rebuildGeometry/prepareMechanicalFields` 与阶段成本入口
     - [VulkanLiquidGeometry](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidGeometry.java)、[VulkanLiquidProjection](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidProjection.java)：库存派生 PLIC、切格与 MAC 几何，重力、物理 CSR 和格面压力响应；`recordTransportPreferences` 生成 PLIC 面扫掠偏好
     - [VulkanPressureMultigrid](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanPressureMultigrid.java)：结构网格多重网格预条件与分批压力推进
+    - [VulkanDyadicSum](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanDyadicSum.java)、[liquid-dyadic.glsl](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/liquid-dyadic.glsl)、[liquid-dyadic-sum.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/liquid-dyadic-sum.comp)：设备七项精确加减，测量输出长度、前缀扫描分配变长 limb、写入结果；库存余量结算的实际调用待接入
     - [VulkanPrefixScan](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanPrefixScan.java)、[prefix-scan.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/prefix-scan.comp)：设备分层前缀和、CSR 偏移与数量溢出状态
     - [GpuLiquidGeometryBenchmark](../../gpu-kernel/src/main/java/mmm/gpuprobe/GpuLiquidGeometryBenchmark.java)：常驻几何与液体投影阶段成本；调用命令和已测范围见验证指南
     - [VulkanPressureKernel](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanPressureKernel.java)：`record` 录入共同 CSR 的完整压力迭代，调用方提供常驻数据切片与提交批次；[pressure.comp](../../gpu-kernel/src/main/resources/assets/mmm_gpu_probe/shaders/pressure.comp) 执行并行归约与收敛状态输出
