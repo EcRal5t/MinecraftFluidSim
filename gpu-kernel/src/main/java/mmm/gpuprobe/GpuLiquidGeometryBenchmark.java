@@ -68,6 +68,9 @@ public final class GpuLiquidGeometryBenchmark {
                    FixedGeometrySnapshot fixed, long[] occupied) { }
 
     static Fixture fixture(int size, boolean cut) {
+        return fixture(size,cut,.25);
+    }
+    static Fixture fixture(int size,boolean cut,double cellSize){
         int cells = size * size * size;
         byte[] masks = new byte[cells];
         long[] occupied = new long[cells];
@@ -91,7 +94,7 @@ public final class GpuLiquidGeometryBenchmark {
                 materials[row] = material; supports[row] = ~masks[c] & 255;
                 volumeOffsets[row] = row; signs[row] = 1;
                 exponents[row] = -7 + trailing; limbs[row] = numerator >> trailing;
-                double kilograms = numerator / 128.0 * (material == 0 ? 1000 : 800) * .25 * .25 * .25;
+                double kilograms = numerator / 128.0 * (material == 0 ? 1000 : 800) * cellSize * cellSize * cellSize;
                 mass[row] = Mass.fromKilograms(kilograms);
                 energy[row] = Double.doubleToRawLongBits(kilograms * 4200 * 293.15);
             }
