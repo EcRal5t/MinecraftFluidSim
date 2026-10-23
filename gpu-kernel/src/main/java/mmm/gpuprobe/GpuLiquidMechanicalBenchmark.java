@@ -16,7 +16,7 @@ public final class GpuLiquidMechanicalBenchmark {
             var projection=new VulkanLiquidProjection(context);var pressure=new VulkanPressureKernel(context,4096);
             var multigrid=new VulkanPressureMultigrid(context)) {
             System.out.println("Device: "+context.deviceName());
-            System.out.println("Continuous ambient liquid: geometry/gravity/pressure -> capacity -> exact accepted cell volumes -> material routes -> quantities/gather -> MAC -> future geometry -> heat/exact ledgers -> commit.");
+            System.out.println("Continuous ambient liquid: geometry/gravity/pressure -> capacity -> exact accepted cell volumes -> material routes -> quantities/gather -> MAC -> future geometry -> mixing heat -> connected-body source K minus projected K and actual route PE -> common thermal allocation/exact ledgers -> commit.");
             System.out.println("Consecutive commits; explicit fixture reference tables, q=2^-40. Excludes finite gas, thermochemistry, runtime/backend adoption, world and presentation costs.");
             System.out.println("warmup_steps="+warm+" measured_steps="+samples);
             System.out.println("grid,steps,median_ms,max_ms,gpu_mean_ms,upload_B_per_step,readback_B_per_step,device_MiB,staging_MiB");
@@ -27,9 +27,13 @@ public final class GpuLiquidMechanicalBenchmark {
                                 VulkanPressureKernel pressure,VulkanPressureMultigrid multigrid,int grid,int warm,int samples) {
         var fixture=GpuLiquidGeometryBenchmark.fixture(grid,false);
         int cells=grid*grid*grid,stocks=2*cells;
-        // This fixture explicitly uses no species and a zero reference for its caloric energy model.
+        // Explicit fixture caloric model: U=m*4200*T, anchored at the declared reference temperature.
+        var caloric=new java.util.ArrayList<mmm.thermal.ThermalMaterialDefinition>();
+        for(String id:new String[]{"bench:water","bench:oil"})caloric.add(new mmm.thermal.ThermalMaterialDefinition(id,
+                mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID,id,293.15,4200*293.15,0,
+                java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(mmm.thermal.ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K,10000,4200))));
         var definitions=new VulkanLiquidRegion.MechanicalDefinitions(stocks,0,4*stocks,4,-40,
-                new int[]{0,1},new long[]{0},new double[]{0,0},new double[]{0,0},1);
+                new int[]{0,1},new long[]{0},new double[]{4200*293.15,4200*293.15},new double[]{0,0},1,VulkanLiquidThermodynamics.tables(caloric));
         var parameters=new VulkanLiquidProjection.Parameters(.25f,.05f,9.81f,1e-5f,200);
         try(var region=new VulkanLiquidRegion(context,geometry,projection,pressure,multigrid,fixture.inventory(),fixture.momentum(),
                 fixture.fixed(),fixture.occupied(),definitions)) {

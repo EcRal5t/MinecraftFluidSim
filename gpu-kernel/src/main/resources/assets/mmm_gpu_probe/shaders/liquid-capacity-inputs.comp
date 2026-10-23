@@ -4,7 +4,7 @@
 layout(local_size_x=128) in;
 layout(binding=0,std430) buffer Arena { uint words[]; };
 layout(binding=1,std430) buffer Errors { uint errors; };
-layout(push_constant) uniform Params { int header; } p;
+layout(push_constant) uniform Params { int header; int stage; } p;
 int h(int index) { return int(words[p.header+index]); }
 int64_t integerAt(int at) { return int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32)); }
 void putInteger(int at,int64_t value) { words[at]=uint(value);words[at+1]=uint(uint64_t(value)>>32); }
@@ -15,9 +15,10 @@ int faceIndex(ivec3 pos,int axis,bool positive) {
     if(axis==2)base+=h(0)*(h(1)+1)*h(2);
     return base+(pos.z*dims.y+pos.y)*dims.x+pos.x;
 }
-void main() {
+void cellInputs() {
     int cell=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
     if(cell>=h(3)||errors!=0u)return;
+    if(cell<h(22))putInteger(h(29)+2*cell,int64_t(0));
     int64_t k=integerAt(h(5)+2*cell);
     int64_t solid=integerAt(h(9)+2*cell);
     int64_t pore=(int64_t(bitCount((~words[h(8)+cell])&255u))<<21)-solid;
@@ -51,5 +52,48 @@ void main() {
     bool full=!tail&&k==upper;
     int64_t lower=full?k-int64_t(min(double(k),floor(incomingGas*scale))):int64_t(0);
     putInteger(h(16)+2*cell,k);putInteger(h(17)+2*cell,lower);putInteger(h(18)+2*cell,upper);
-    words[h(19)+cell]=uint(-1);words[h(21)+cell]=open;
+    int node=h(22)>0?int(words[h(23)+cell]):0;
+    if(node>h(22)){atomicOr(errors,64u);return;}
+    words[h(19)+cell]=uint(node>0?node-1:-1);words[h(21)+cell]=open;
+}
+
+const int64_t MAX_TOTAL=int64_t(0x3fffffffffffffffUL);
+int64_t addUpper(int64_t a,int64_t b){return a>MAX_TOTAL-b?MAX_TOTAL:a+b;}
+int64_t addSource(int64_t a,int64_t b){if(b<int64_t(0)||a>MAX_TOTAL-b){atomicOr(errors,4096u);return a;}return a+b;}
+shared uint stopped;
+shared int64_t groupUpper[128];
+shared int64_t groupSource[128];
+shared uint groupTail[128];
+void groupInputs() {
+    int group=int(gl_WorkGroupID.x+gl_WorkGroupID.y*65535u),lane=int(gl_LocalInvocationID.x);
+    if(group>=h(22)||group>=int(words[h(26)]))return;
+    int first=int(words[h(24)+group+1]),end=int(words[h(24)+group+2]);
+    int64_t upper=int64_t(0),source=int64_t(0);uint tail=0u;
+    for(int member=first+lane;member<end;member+=128) {
+        int c=int(words[h(25)+member]);upper=addUpper(upper,integerAt(h(18)+2*c));source=addSource(source,integerAt(h(16)+2*c));
+        if(words[h(6)+c]!=0u&&int(words[h(7)+c])<h(4))tail=1u;
+    }
+    groupUpper[lane]=upper;groupSource[lane]=source;groupTail[lane]=tail;barrier();
+    for(int stride=64;stride>0;stride/=2) {
+        if(lane<stride){groupUpper[lane]=addUpper(groupUpper[lane],groupUpper[lane+stride]);groupSource[lane]=addSource(groupSource[lane],groupSource[lane+stride]);groupTail[lane]|=groupTail[lane+stride];}
+        barrier();
+    }
+    if(lane==0) {
+        bool nonempty=false;
+        if(group<int(words[h(26)]))for(int component=int(words[h(27)+group]);component<int(words[h(27)+group+1]);component++)
+            if(integerAt(h(28)+2*component)>int64_t(0))nonempty=true;
+        int64_t limit=groupUpper[0]-(nonempty&&groupTail[0]==0u&&groupUpper[0]<MAX_TOTAL?int64_t(1):int64_t(0));
+        if(limit<groupSource[0]||limit<int64_t(0)){atomicOr(errors,4096u);return;}
+        putInteger(h(29)+2*group,limit);
+    }
+}
+void main(){
+    if(p.stage==2){
+        if(gl_GlobalInvocationID.x==0u){uint nodes=words[h(26)];if(nodes>uint(h(22)))atomicOr(errors,64u);
+            uint activeNodes=errors==0u?nodes:0u;words[h(30)]=min(activeNodes,65535u);words[h(30)+1]=max(1u,(activeNodes+65534u)/65535u);words[h(30)+2]=1u;}
+        return;
+    }
+    if(p.stage==0){if(errors==0u)cellInputs();return;}
+    if(gl_LocalInvocationID.x==0u)stopped=errors;barrier();
+    if(stopped==0u)groupInputs();
 }

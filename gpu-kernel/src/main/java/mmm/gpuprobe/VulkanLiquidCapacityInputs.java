@@ -13,7 +13,8 @@ import static org.lwjgl.vulkan.VK10.*;
 final class VulkanLiquidCapacityInputs implements AutoCloseable {
     record Layout(VulkanLiquidCellVolumes.Layout volumes, VulkanLiquidCapacityLayout capacity,
                   int masksWordOffset, int occupiedWordOffset, int facesWordOffset, int fluxesWordOffset,
-                  VulkanLiquidStateLayout.Column header, long endOffset) {
+                  VulkanGasGeometry.Layout gasGeometry,VulkanGasStateLayout gas,
+                  VulkanLiquidStateLayout.Column header,VulkanLiquidStateLayout.Column groupDispatch,long endOffset) {
         int headerWordOffset() { return Math.toIntExact(header.offset() / 4); }
         void initializeHeader(ByteBuffer destination) {
             destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());
@@ -34,6 +35,15 @@ final class VulkanLiquidCapacityInputs implements AutoCloseable {
             data[19] = capacity.word(VulkanLiquidCapacityLayout.Field.GROUP_ID);
             data[20] = capacity.word(VulkanLiquidCapacityLayout.Field.PREFERRED);
             data[21] = capacity.word(VulkanLiquidCapacityLayout.Field.OPEN_NEIGHBORS);
+            data[22]=capacity.gasGroups();
+            if(gas!=null) {
+                data[23]=word(gasGeometry.cellNodes());data[24]=word(gasGeometry.componentOffsets());data[25]=word(gasGeometry.componentMembers());
+                data[26]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.COUNTS).offset()/4);
+                data[27]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.ROW_COMPONENT_OFFSETS).offset()/4);
+                data[28]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.STANDARD_VOLUME_NANOS).offset()/4);
+                data[29]=capacity.word(VulkanLiquidCapacityLayout.Field.GROUP_CAPACITY);
+                data[30]=word(groupDispatch);
+            }
             for (int i = 0; i < data.length; i++) bytes.putInt(Math.toIntExact(0 + 4L*i), data[i]);
         
             return bytes;
@@ -42,24 +52,46 @@ final class VulkanLiquidCapacityInputs implements AutoCloseable {
     static Layout layout(VulkanLiquidCellVolumes.Layout volumes, VulkanLiquidCapacityLayout capacity,
                          int masksWordOffset, int occupiedWordOffset, int facesWordOffset, int fluxesWordOffset,
                          long scratchBase, long alignment) {
-        if (capacity.gasGroups() != 0 || capacity.cells() != volumes.source().cellCount())
-            throw new IllegalArgumentException("Ambient capacity inputs require matching cells and no finite gas groups");
+        return layout(volumes,capacity,masksWordOffset,occupiedWordOffset,facesWordOffset,fluxesWordOffset,null,null,scratchBase,alignment);
+    }
+    static Layout layout(VulkanLiquidCellVolumes.Layout volumes,VulkanLiquidCapacityLayout capacity,int masksWordOffset,
+                         int occupiedWordOffset,int facesWordOffset,int fluxesWordOffset,VulkanGasGeometry.Layout gasGeometry,
+                         VulkanGasStateLayout gas,long scratchBase,long alignment) {
+        if(capacity.cells()!=volumes.source().cellCount()||(gas==null?capacity.gasGroups()!=0:
+                gasGeometry==null||capacity.gasGroups()!=gas.nodeCapacity()||gasGeometry.cells()!=capacity.cells()))
+            throw new IllegalArgumentException("Capacity inputs differ from their liquid/gas layout");
         if (volumes.quantumExponent() > -24 || volumes.quantumExponent() < -50)
             throw new IllegalArgumentException("Capacity quantum must resolve solid volume and fit integer cell capacity");
         long base = Math.addExact(scratchBase, alignment-1) & -alignment;
-        return new Layout(volumes, capacity, masksWordOffset, occupiedWordOffset, facesWordOffset, fluxesWordOffset,
-                new VulkanLiquidStateLayout.Column(base, 32, 4), Math.addExact(base, Math.max(128, alignment)));
+        return new Layout(volumes, capacity, masksWordOffset, occupiedWordOffset, facesWordOffset, fluxesWordOffset,gasGeometry,gas,
+                new VulkanLiquidStateLayout.Column(base,32,4),new VulkanLiquidStateLayout.Column(base+Math.max(128,alignment),3,4),
+                Math.addExact(base,Math.max(128,alignment)+Math.max(12,alignment)));
     }
     private final FlipKernelBindings bindings;
-    VulkanLiquidCapacityInputs(VulkanDeviceContext context) { bindings = new FlipKernelBindings(context, 2, shader(), 4); }
+    private FlipKernelBindings.BufferRange arena;
+    VulkanLiquidCapacityInputs(VulkanDeviceContext context) { bindings = new FlipKernelBindings(context, 2, shader(), 8); }
     void rebindRanges(FlipKernelBindings.BufferRange arena, FlipKernelBindings.BufferRange errors) {
-        bindings.rebindRanges(List.of(arena, errors));
+        this.arena=arena;bindings.rebindRanges(List.of(arena, errors));
     }
     void record(VkCommandBuffer command, Layout layout) {
-        int groups = (layout.capacity().cells()+127)/128;
+        stage(command,layout,0,(layout.capacity().cells()+127)/128);
+        if(layout.capacity().gasGroups()>0) {
+            stage(command,layout,2,1);
+            try(var stack=stackPush()) {
+                VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
+                        VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
+                bindings.bind(command,stack);
+                vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,stack.ints(layout.headerWordOffset(),1));
+                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+layout.groupDispatch().offset());
+                VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
+            }
+        }
+    }
+    private void stage(VkCommandBuffer command,Layout layout,int stage,int groups) {
         try (var stack = stackPush()) {
             bindings.bind(command, stack);
-            vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, stack.ints(layout.headerWordOffset()));
+            vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0, stack.ints(layout.headerWordOffset(),stage));
             vkCmdDispatch(command, Math.min(groups,65535), (groups+65534)/65535, 1);
             VulkanRegionStorage.barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT, stack);

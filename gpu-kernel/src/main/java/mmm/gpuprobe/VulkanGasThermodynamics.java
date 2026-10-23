@@ -69,19 +69,46 @@ final class VulkanGasThermodynamics implements AutoCloseable {
             return states.offset() + 8L * (STATE_WIDTH * (long) node + quantity.ordinal());
         }
         void initializeHeaderAndTables(ByteBuffer destination) {
-            var target = destination.duplicate().order(ByteOrder.LITTLE_ENDIAN);int[] data = new int[64];
+            destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());
+            for (var chunk : tableChunks()) destination.duplicate().position(Math.toIntExact(chunk.offset())).put(chunk.bytes().duplicate());
+        }
+        ByteBuffer headerBytes() {
+            var target = ByteBuffer.allocateDirect(Math.toIntExact(header.bytes())).order(ByteOrder.LITTLE_ENDIAN);int[] data = new int[64];
             data[0] = gas.nodeCapacity(); data[1] = tables.specificAnchorEnergy().length;
             data[2] = tables.definitions().speciesIds().size(); data[3] = nodeVolumesWordOffset;
             data[4] = word(segmentOffsets); data[5] = word(segmentUpper); data[6] = word(segmentHeatCapacity);
             data[7] = word(specificAnchorEnergy); data[8] = word(speciesReference); data[9] = word(states);
             for (var field : VulkanGasStateLayout.Field.values()) data[16 + field.ordinal()] = Math.toIntExact(gas.column(field).offset() / 4);
-            for (int i = 0; i < data.length; i++) target.putInt(Math.toIntExact(header.offset() + 4L * i), data[i]);
-            target.putDouble(Math.toIntExact(header.offset() + 4L * 32), GasRegistry.STANDARD_TEMPERATURE_K);
-            target.putDouble(Math.toIntExact(header.offset() + 4L * 34), ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
-            target.putDouble(Math.toIntExact(header.offset() + 4L * 36), GasRegistry.STANDARD_PRESSURE_PA * 1e-9 / GasRegistry.STANDARD_TEMPERATURE_K);
-            for (int i = 0; i < tables.segmentOffsets().length; i++) target.putInt(Math.toIntExact(segmentOffsets.offset() + 4L * i), tables.segmentOffsets()[i]);
-            write(target, segmentUpper, tables.segmentUpper());write(target, segmentHeatCapacity, tables.segmentHeatCapacity());
-            write(target, specificAnchorEnergy, tables.specificAnchorEnergy());write(target, speciesReference, tables.speciesReference());
+            for (int i = 0; i < data.length; i++) target.putInt(4 * i, data[i]);
+            target.putDouble(4 * 32, GasRegistry.STANDARD_TEMPERATURE_K);
+            target.putDouble(4 * 34, ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
+            target.putDouble(4 * 36, GasRegistry.STANDARD_PRESSURE_PA * 1e-9 / GasRegistry.STANDARD_TEMPERATURE_K);
+            return target;
+        }
+        /** Direct, at-most-64 KiB table chunks for vkCmdUpdateBuffer during device arena growth. */
+        List<TableChunk> tableChunks() {
+            var result = new ArrayList<TableChunk>();
+            for (int first = 0; first < tables.segmentOffsets().length; first += 16384) {
+                int count = Math.min(16384, tables.segmentOffsets().length - first);
+                var data = ByteBuffer.allocateDirect(4 * count).order(ByteOrder.LITTLE_ENDIAN);
+                for (int i = 0; i < count; i++) data.putInt(4 * i, tables.segmentOffsets()[first + i]);
+                result.add(new TableChunk(segmentOffsets.offset() + 4L * first, data));
+            }
+            appendChunks(result, segmentUpper, tables.segmentUpper());
+            appendChunks(result, segmentHeatCapacity, tables.segmentHeatCapacity());
+            appendChunks(result, specificAnchorEnergy, tables.specificAnchorEnergy());
+            appendChunks(result, speciesReference, tables.speciesReference());
+            return List.copyOf(result);
+        }
+
+    }
+    record TableChunk(long offset, ByteBuffer bytes) { }
+    private static void appendChunks(List<TableChunk> result, VulkanLiquidStateLayout.Column column, double[] values) {
+        for (int first = 0; first < values.length; first += 8192) {
+            int count = Math.min(8192, values.length - first);
+            var data = ByteBuffer.allocateDirect(8 * count).order(ByteOrder.LITTLE_ENDIAN);
+            for (int i = 0; i < count; i++) data.putDouble(8 * i, values[first + i]);
+            result.add(new TableChunk(column.offset() + 8L * first, data));
         }
     }
     static Layout layout(VulkanGasStateLayout gas, Tables tables, int nodeVolumesWordOffset, long scratchBase, long alignment) {
@@ -130,9 +157,6 @@ final class VulkanGasThermodynamics implements AutoCloseable {
     private static VulkanLiquidStateLayout.Column column(long[] cursor, int count, int width, long alignment) {
         var result = new VulkanLiquidStateLayout.Column(align(cursor[0], alignment), count, width);
         cursor[0] = Math.addExact(result.offset(), result.bindingBytes());return result;
-    }
-    private static void write(ByteBuffer destination, VulkanLiquidStateLayout.Column column, double[] values) {
-        for (int i = 0; i < values.length; i++) destination.putDouble(Math.toIntExact(column.offset() + 8L * i), values[i]);
     }
     private static String shader() {
         try (var input = VulkanGasThermodynamics.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/gas-thermodynamics.comp")) {

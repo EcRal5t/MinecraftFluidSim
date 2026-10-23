@@ -35,7 +35,10 @@ final class VulkanGasGeometry implements AutoCloseable {
          * topology key is 8*(r-1)+numberOfTrailingZeros(dryMasks[r-1]). Members are unsorted.
          */
         void initializeHeader(ByteBuffer destination) {
-            var target = destination.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+            destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());
+        }
+        ByteBuffer headerBytes() {
+            var target = ByteBuffer.allocateDirect(Math.toIntExact(header.bytes())).order(ByteOrder.LITTLE_ENDIAN);
             int[] data = new int[64];
             data[0] = totals.source().sizeX(); data[1] = totals.source().sizeY(); data[2] = totals.source().sizeZ();
             data[3] = cells(); data[4] = faces(); data[5] = sealedExterior ? 1 : 0;
@@ -48,8 +51,8 @@ final class VulkanGasGeometry implements AutoCloseable {
             data[23] = word(exteriorReachable); data[24] = word(cellNodes); data[25] = word(changed); data[26] = word(componentCount);
             data[27] = word(rootFlags); data[28] = word(rootOffsets); data[29] = word(componentCounts);
             data[30] = word(componentOffsets); data[31] = word(componentCursors); data[32] = word(componentMembers);
-            for (int i = 0; i < data.length; i++) target.putInt(Math.toIntExact(header.offset() + 4L * i), data[i]);
-            target.putDouble(Math.toIntExact(header.offset() + 4L * 34), cellSize);
+            for (int i = 0; i < data.length; i++) target.putInt(4 * i, data[i]);
+            target.putDouble(4 * 34, cellSize);return target;
         }
     }
     static Layout layout(VulkanLiquidCellVolumes.Layout totals, int masksWordOffset, int occupiedWordOffset,
