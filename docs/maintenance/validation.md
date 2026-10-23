@@ -573,3 +573,5 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 2026-10-23：ShellFluidQueryValidation 通过，覆盖六向正面、背面／侧面／缺方向拒绝、跨维度、多区域归属、角落和未加载区域拒绝；目标查询保持库存及生命周期不变。日志 uild/gas-source/port-targets.log。首次编译发现Minecraft 26.2朝向属性类型已采用 EnumProperty<Direction>，修正后统一编译、打包与架构检查通过，540个生产源码文件完成扫描，日志 uild/gas-source/port-package-final.log。
 
 原生游戏待观察：在已启用双格内腔侧壁安装蓝框朝外的容器接口，玩家从正面倒入并取回一桶，再用朝向接口的发射器完成相同操作。预期容器和区域库存对应增减，背面与普通围墙不转移；/mmm status 显示实际库存变化。模型显示和游戏交互尚未实测。
+
+活动组气体慢流补充：PhysicalActivityGroupsValidation 同产物通过，日志 uild/gas-source/activity-gas-wake.log。双舱中的微量通气口单步尚未产生库存变化时，有可表示平衡迁移量的有限气腔所属组持续运行，另一舱休眠；关闭通气口后允许两组休眠，库存与物质审计保持。最终统一编译、打包和架构检查通过，日志 uild/gas-source/port-and-gas-package.log，包含更新后的快速入门资源。

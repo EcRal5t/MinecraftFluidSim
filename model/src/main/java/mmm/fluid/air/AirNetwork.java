@@ -9,21 +9,9 @@ import java.util.List;
 import java.util.Objects;
 import java.util.TreeMap;
 
-/**
- * Conservative gas region network with an isothermal equation of state and
- * finite-rate orifice transport. Thermal state may supply non-isothermal pressure, density and
- * a jointly validated energy-transfer commit without moving thermal truth into this owner.
- *
- * <p>Inventories are stable component groups with independent standard-state volume,
- * mass and optional species columns. Every quantum originates from the ambient reservoir,
- * so the total identity {@code sealed + vented == drawnFromAmbient} and the
- * per-component volume/species identities hold exactly
- * across node creation, injection, orifice transport, merging, splitting and
- * venting. Pressures are derived gauge pressures in solver units (pascal) with
- * ambient at exactly zero; ambient is id {@link #AMBIENT_NODE} with unbounded
- * inventory and never stores state. Persistence captures this runtime owner through the
- * thermal region payload; this type itself is not a wire format.</p>
- */
+/** Conservative gas inventories and finite-rate orifice transport. Thermal owners supply actual
+ * pressure, density and joint energy plans; ambient node zero has unbounded external inventory.
+ * Component volume, mass and species close against explicit source and sink ledgers. */
 public final class AirNetwork {
 	public interface NodeThermodynamics {
 		double gaugePressure(int nodeId);
@@ -135,33 +123,44 @@ public final class AirNetwork {
 
 	/** Uses the transport's integer equilibrium limit; slow openings remain active until that limit is zero. */
 	public boolean hasPressureDrivenFlow(java.util.function.IntToDoubleFunction pressure) {
-		return hasPressureDrivenFlow(pressure, null);
+		return hasPressureDrivenFlow(pressure, null, null);
 	}
 
 	public boolean hasPressureDrivenFlow(NodeThermodynamics thermodynamics) {
 		Objects.requireNonNull(thermodynamics, "thermodynamics");
-		return hasPressureDrivenFlow(thermodynamics::gaugePressure, thermodynamics);
+		return hasPressureDrivenFlow(thermodynamics::gaugePressure, thermodynamics, null);
 	}
 
-	private boolean hasPressureDrivenFlow(java.util.function.IntToDoubleFunction pressure, NodeThermodynamics thermodynamics) {
+	/** Visits finite endpoints with a representable equilibrium transfer; null thermodynamics uses the isothermal EOS. */
+	public void forEachPressureDrivenNode(NodeThermodynamics thermodynamics,java.util.function.IntConsumer node) {
+		hasPressureDrivenFlow(thermodynamics==null?this::gaugePressure:thermodynamics::gaugePressure,
+				thermodynamics,Objects.requireNonNull(node,"Pressure-driven node observer"));
+	}
+	private boolean hasPressureDrivenFlow(java.util.function.IntToDoubleFunction pressure, NodeThermodynamics thermodynamics,
+			java.util.function.IntConsumer observer) {
 		Objects.requireNonNull(pressure, "pressure");
 		var values = new java.util.HashMap<Integer, Double>();
 		values.put(AMBIENT_NODE, 0.0);
 		for (int id : nodes.keySet()) values.put(id, pressure.applyAsDouble(id));
+		boolean found=false;
 		for (AirEdge edge : edges) {
 			double first = values.get(edge.firstNode()), second = values.get(edge.secondNode());
-			if (!Double.isFinite(first) || !Double.isFinite(second)) return true;
-			if (first == second) continue;
+			boolean invalid=!Double.isFinite(first)||!Double.isFinite(second); if (!invalid && first == second) continue;
 			int source = first > second ? edge.firstNode() : edge.secondNode();
 			int target = first > second ? edge.secondNode() : edge.firstNode();
-			double sourceStorage = source == 0 ? Double.POSITIVE_INFINITY : flowStorage(source, thermodynamics, values.get(source));
-			double targetStorage = target == 0 ? Double.POSITIVE_INFINITY : flowStorage(target, thermodynamics, values.get(target));
+			double sourceStorage = invalid || source == 0 ? Double.POSITIVE_INFINITY : flowStorage(source, thermodynamics, values.get(source));
+			double targetStorage = invalid || target == 0 ? Double.POSITIVE_INFINITY : flowStorage(target, thermodynamics, values.get(target));
 			double equilibriumVolume = Math.abs(first - second) / (1 / sourceStorage + 1 / targetStorage);
 			double quantum = source == 0 ? AirNode.NANO_VOLUME : minimumTransportVolume(inventory(source));
-			if (thermodynamics != null && source != 0 && thermodynamics.maximumOutflowFraction(source) <= 0) continue;
-			if (equilibriumVolume >= quantum) return true;
+			if (!invalid && thermodynamics != null && source != 0 && thermodynamics.maximumOutflowFraction(source) <= 0) continue;
+			if (invalid || equilibriumVolume >= quantum) {
+				if(observer==null) return true;
+				if(edge.firstNode()!=0) observer.accept(edge.firstNode());
+				if(edge.secondNode()!=0) observer.accept(edge.secondNode());
+				found=true;
+			}
 		}
-		return false;
+		return found;
 	}
 
 	public double availableVolume(int nodeId) { return sealed(nodeId).availableVolume(); }

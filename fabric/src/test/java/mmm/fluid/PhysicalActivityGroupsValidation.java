@@ -7,6 +7,7 @@ public final class PhysicalActivityGroupsValidation {
 	private PhysicalActivityGroupsValidation() { }
 
 	public static void main(String[] args) {
+		validateSlowGasPort();
 		FluidDomain domain = compartments();
 		for (int step = 0; step < 210; step++) domain = advance(domain, step);
 		var asleep = domain.activityStats();
@@ -45,6 +46,30 @@ public final class PhysicalActivityGroupsValidation {
 		domain = advance(domain, 231);
 		require(domain.activityStats().groupCount() == 1, "An opened wall retained disconnected activity groups");
 		System.out.println("Independent physical activity, local wake, shared device and geometry merge passed");
+	}
+	private static void validateSlowGasPort() {
+		var domain=compartments(); var network=domain.gasState.network;
+		int left=domain.gasState.frame.nodeOfPiece(8*cell(1,2,1));
+		int right=domain.gasState.frame.nodeOfPiece(8*cell(6,2,1));
+		require(left>0 && right>0 && left!=right,"Slow-port fixture did not preserve separate finite chambers");
+		network.setStandardVolume(left,network.standardVolume(left)+.001);
+		network.addOrMergeEdge(left,0,1e-30,.65);
+		var before=network.inventory(left); var other=network.inventory(right);
+		var source=network.externalSource(); var sink=network.escapedSink();
+		for(int step=0;step<210;step++) {
+			domain.activityGroups.beginStep();
+			require(domain.activityGroups.mechanicsActive(cell(1,2,1)) && domain.activityGroups.thermalActive(cell(1,2,1)),
+					"Finite gas pressure drive slept before its representable equilibrium transfer ended");
+			network.stepEdges(.025,domain.activityGroups::gasNodeIsActive);
+			domain.activityGroups.finishStep(true,true);
+		}
+		require(domain.activityStats().sleepingGroups()==1,"A slow ambient gas port woke an unrelated compartment");
+		require(network.inventory(left).equals(before) && network.inventory(right).equals(other)
+				&& network.externalSource().equals(source) && network.escapedSink().equals(sink),
+				"Subquantum port fixture changed inventory or material audits");
+		network.removeEdge(left,0);
+		for(int step=0;step<210;step++) { domain.activityGroups.beginStep(); domain.activityGroups.finishStep(true,true); }
+		require(domain.activityStats().sleepingGroups()==2,"Closing the last pressure port did not permit finite gas sleep");
 	}
 
 	private static FluidDomain compartments() {

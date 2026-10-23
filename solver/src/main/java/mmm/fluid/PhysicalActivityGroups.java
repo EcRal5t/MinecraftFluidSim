@@ -106,6 +106,10 @@ final class PhysicalActivityGroups {
 		if(previous.geometry!=geometry)thermalConnections=List.of();
 		for(var cells:connections)joinCells(cells,false);
 		for(var cells:thermalConnections)joinCells(cells,false);
+		if(domain.gasState.pressureActive) domain.gasState.network.forEachPressureDrivenNode(
+				domain.thermalState!=null && domain.thermalState.gasModelBound()
+						?domain.thermalState.gasThermodynamics(domain.gasState.network):null,
+				node->{ if(node<gasCells.length) {keepMechanicsAwake(gasCells[node]);keepThermalAwake(gasCells[node]);} });
 		for(var body:domain.entityBodies.bodies()) {
 			var cells=bodyCells(body.bounds());joinCells(cells,false);
 			for(int cell:cells)keepMechanicsAwake(cell);

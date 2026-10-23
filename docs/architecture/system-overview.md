@@ -149,7 +149,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 <a id="runtime"></a>
 ## 物理活动组
 
-[PhysicalActivityGroups](../../solver/src/main/java/mmm/fluid/PhysicalActivityGroups.java) 按固定开放通路、有限气腔、颗粒支撑、实体与热接触组织同域活动组。力学和热化学分别休眠，局部输入唤醒相关组；共享设备的端口单元随 tick 输入建立关联。压力、黏性、体力、输运与热化学阶段共用组的活动状态，休眠库存与 MAC 原量保留。所有组仍沿完整区域候选和一个 HEAD 提交。
+[PhysicalActivityGroups](../../solver/src/main/java/mmm/fluid/PhysicalActivityGroups.java) 按固定开放通路、有限气腔、颗粒支撑、实体与热接触组织同域活动组。力学和热化学分别休眠，局部输入唤醒相关组；共享设备的端口单元随 tick 输入建立关联。压力、黏性、体力、输运与热化学阶段共用组的活动状态，休眠库存与 MAC 原量保留。通气口按整数平衡迁移量识别持续压差驱动，相关有限气腔组保持运行。所有组仍沿完整区域候选和一个 HEAD 提交。
 
 `FluidDomainStateMapper` 保存进程内候选调度状态，冷恢复重新观察物理状态；`RegionDiagnosticsReport` 只读展示组数及活动／休眠单元。验证入口为 `activity-groups`，稳定契约见[运行时与生命周期](runtime-and-lifecycle.md#物理活动组)。
 
