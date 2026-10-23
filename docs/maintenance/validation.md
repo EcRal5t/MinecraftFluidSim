@@ -697,9 +697,9 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 旧范围保留：`gpu-resident-liquid-capacity-cost.log` 的局部推送四场均达到512轮上限；`gpu-resident-liquid-capacity-bfs-64.log` 的 full 成功而 dam 超限；`gpu-resident-liquid-capacity-prune-64.log` 的比例削减 dam 超限；`gpu-resident-liquid-capacity-saturate-64.log` 虽满足容量却删除全部 dam 运输，由非零运动检查拒绝。这些记录均不构成有效推进性能结果。
 
-容量阶段约束从可行的原地保留出发；颗粒位移、冻结膨胀与精确完全排空尚未覆盖。`VulkanLiquidCapacityInputs`、`VulkanLiquidAcceptedVolumes` 和各材料输运阶段已进入连续机械步成本入口，连续整链证据见下文；`VulkanGasGeometry` 当前只有着色器编译证据。当前分项结果继续服务于完整64³步50 ms及原完整场景十倍提速，有限气腔、其他物相、应用层交接和集中物理检查均按完整职责链完成后判定。
+容量阶段约束从可行的原地保留出发；颗粒位移、冻结膨胀与精确完全排空尚未覆盖。`VulkanLiquidCapacityInputs`、`VulkanLiquidAcceptedVolumes` 和各材料输运阶段已进入连续机械步成本入口，连续整链证据见下文；`VulkanGasGeometry` 的固定源气体阶段成本见文末。当前分项结果继续服务于完整64³步50 ms及原完整场景十倍提速，有限气腔、其他物相、应用层交接和集中物理检查均按完整职责链完成后判定。
 
-2026-10-24：常驻普通环境液体连续机械正式成本通过，日志 `build/gpu-resident-liquid-mechanical-cost.log`。每场5步预热、10步采样，逐步实际提交并从上一代继续推进。范围为几何／重力／压力→容量→精确七路体积→材料与数量分配／归并→MAC→未来几何→热量与精确账→设备代次提交；输入采用显式夹具参考能表和 q=2^-40。压力每批8次迭代，容量每批32波，达到可行状态后同批剩余命令保持库存。有限气腔、热化学、其他物相、生产后端接管、世界和展示成本尚未包含。
+2026-10-24：常驻普通环境液体连续机械正式成本通过，日志 `build/gpu-resident-liquid-mechanical-cost.log`。每场5步预热、10步采样，逐步实际提交并从上一代继续推进。范围为几何／重力／压力→容量→精确七路体积→材料与数量分配／归并→MAC→未来几何→混合及墙面耗散热与精确账→设备代次提交；输入采用显式夹具参考能表和 q=2^-40。压力每批8次迭代，容量每批32波，达到可行状态后同批剩余命令保持库存。有限气腔、热化学、其他物相、生产后端接管、世界和展示成本尚未包含。
 
 ```powershell
 ./gradlew.bat :gpu-kernel:runGpuLiquidMechanicalBenchmark '-PgpuMechanicalGrids=32,64' -PgpuMechanicalWarmup=5 -PgpuMechanicalSamples=10 --offline --no-daemon
@@ -713,3 +713,18 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 32³实际库存行由24,576增至28,707，64³由196,608增至211,606，连续流动改变了库存分布。末步容量分别39／82波可行，压力分别19／24次收敛，RMS分别4.6105394e-6／7.3679684e-6。64³全部10个采样步低于50 ms；该结果尚未覆盖完整物理模型或原完整场景十倍提速，集中物理检查继续后置。
 
 此前 `build/gpu-resident-liquid-mechanical-short.log`、`build/gpu-resident-liquid-mechanical-64-short.log` 各保留1步预热、3步连续提交的短跑范围，终态成本以上表为准。
+
+2026-10-24：固定源气体几何与状态方程成本见 `build/gpu-resident-gas-geometry-cost.log`（RTX 5070 Ti）。复用液体几何夹具，初始化时生成同代气体库存；每场5次预热、10次采样。计时范围为精确正干容和共享干口→真实连接与气腔 CSR→节点体积归约→混合气分段热容反演及状态派生。分段材料采用不同参考温度与物种参考能；液体几何、初始库存上传和管线构造在计时前完成。
+
+```powershell
+./gradlew.bat :gpu-kernel:runGpuGasGeometryBenchmark -PgpuProbeDevice=0 -PgpuGasSamples=10 --console=plain
+```
+
+| 场景 | 规模 | 有限气腔数 | 中位 / 最大 ms | 设备平均 ms | 逻辑设备存储 MiB |
+|---|---:|---:|---:|---:|---:|
+| 坝体混合气 | 32³ | 1 | 1.031 / 1.425 | 0.468 | 46.2 |
+| 切割混合气 | 32³ | 8,212 | 1.100 / 1.283 | 0.647 | 51.2 |
+| 坝体混合气 | 64³ | 1 | 3.848 / 3.997 | 3.411 | 367.6 |
+| 切割混合气 | 64³ | 65,576 | 5.337 / 5.685 | 4.759 | 407.6 |
+
+四场连通阶段均在首批4轮后收敛，计时期间每步上传0 B、回读12 B，主机 staging 为3 MiB。每次从同一设备源准备候选，计时后单独提交并读取首个节点的派生状态。这组结果测量固定源气体阶段的附加成本，有限气腔压力耦合、气体做功、拓扑变更后的库存转移与连续完整步仍待接入；集中物理检查继续后置。

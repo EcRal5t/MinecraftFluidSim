@@ -681,7 +681,8 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [VulkanLiquidCapacityInputs](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidCapacityInputs.java)：固定几何、占容与投影偏好生成普通环境液体步的整数容量输入
     - [VulkanLiquidCapacity](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidCapacity.java)、[VulkanLiquidCapacityLayout](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidCapacityLayout.java)：实际六邻面限流、单元绝对容量与有限组跨组净流预算；`recordInitialize/recordIterations/recordFinish` 组织私有候选中的分批推进
     - [VulkanLiquidAcceptedVolumes](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidAcceptedVolumes.java)：已接受整数流量转为精确 dyadic 七路体积，原格完整保留亚量子尾数
-    - [VulkanGasGeometry](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanGasGeometry.java)：设备气体几何与通路准备；当前完成着色器编译，联合输运待接入
+    - [VulkanGasGeometry](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanGasGeometry.java)：设备气体几何、真实干口、气腔连通与成员 CSR；已具备固定源成本入口，联合输运待接入
+    - [GpuGasGeometryBenchmark](../../gpu-kernel/src/main/java/mmm/gpuprobe/GpuGasGeometryBenchmark.java)：固定源坝体与切割场景的气体几何、气腔连通、体积归约和分段热容状态方程成本
     - [VulkanGasThermodynamics](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanGasThermodynamics.java)：同代气腔体积归约、真实注册表的分段热容与参考能、从节点内能派生温度和压力；联合压力与输运待接入
     - [VulkanLiquidMaterialRoutes](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidMaterialRoutes.java)：已接受单元体积→分材料七路 dyadic 库存，临时 limb 分配与精确原地余量
     - [VulkanLiquidRouteQuantities](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidRouteQuantities.java)：实际体积分份、物种 CSR 分配、参考能与8项内能误差展开

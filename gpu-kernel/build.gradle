@@ -251,3 +251,14 @@ registerGpuProbe(
         providers.gradleProperty('gpuMechanicalWarmup').getOrElse('5')
     probeTask.jvmArgs '-Xmx3g'
 }
+
+registerGpuProbe(
+    'runGpuGasGeometryBenchmark',
+    'Measures resident dry geometry, finite chamber topology, member volumes and segmented gas EOS.',
+    'mmm.gpuprobe.GpuGasGeometryBenchmark',
+    'gpu-gas-geometry-work'
+) { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        providers.gradleProperty('gpuGasSamples').getOrElse('10')
+    probeTask.jvmArgs '-Xmx3g'
+}
