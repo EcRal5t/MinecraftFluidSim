@@ -493,6 +493,8 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 设备共同机械能由 `VulkanMechanicalBodies` 根据压力湿面、实际质量路线和有限气腔归属建立连通体，`VulkanLiquidThermodynamics` 从后继库存及真实热容分段派生温度、热容和最低温度内能。`VulkanMechanicalEnergy` 汇总源动能与投影动能之差、实际垂向质量输运的势能变化和气体做功，按连通体向后继热载体分配能量；加热按热容分配，冷却按可释放显热分配。实际内能端点差与物理做功之间的舍入量交给同一个精确能量账。规约根据设备成员表生成实际计算块数。上述内核的连续机械步调用正在接入。
 
+`VulkanGasPressure` 把液体单元与有限气腔放入同一个压力系统，气体压缩响应由同代库存和状态方程提供；液体块使用多重网格，气体行使用同一 PCG 中的气体预条件。气体矩阵乘积按真实关联面计算，小气腔直接求和、大气腔分块规约，设备根据实际气腔数量间接派发。压力阶段输出预测体积响应和面动能，权威气体内能仍由实际接受的体积变化决定。`VulkanGasAdiabaticWork` 读取旧源实际控制体积、未来控制体积与同一套分段热容函数，生成候选内能及精确端点做功展开，供气体库存搬运与共同机械能结算使用。
+
 设备计算服务由服务器运行时创建，并通过单一 `ComputeExecution` 作用域绑定。明确的设备丢失会释放服务、丢弃候选，从原始请求在 CPU 重算后沿普通提交链接管；后续请求继续 CPU 并记录恢复原因。其他计算异常保留原区域。启动选择见[运行时](runtime-and-lifecycle.md#startup)。完整设备常驻区域状态、各物相输运及 checkpoint 恢复继续按[实施计划](../roadmap/solver-consolidation-plan.md)推进。
 
 存盘以 `cell-mac` 格式保存单元液体记录、微盒相占据、规范分区的三轴格面动量、碰撞掩码和非液体库存。
@@ -686,6 +688,8 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [VulkanGasGeometry](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanGasGeometry.java)：设备气体几何、真实干口、气腔连通与成员 CSR；已具备固定源成本入口，联合输运待接入
     - [GpuGasGeometryBenchmark](../../gpu-kernel/src/main/java/mmm/gpuprobe/GpuGasGeometryBenchmark.java)：固定源坝体与切割场景的气体几何、气腔连通、体积归约和分段热容状态方程成本
     - [VulkanGasThermodynamics](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanGasThermodynamics.java)：同代气腔体积归约、真实注册表的分段热容与参考能、从节点内能派生温度和压力；联合压力与输运待接入
+    - [VulkanGasPressure](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanGasPressure.java)：共同液气压力装配、真实气腔关联面的矩阵乘积、绝对压力下限与格面响应；[GpuGasPressureBenchmark](../../gpu-kernel/src/main/java/mmm/gpuprobe/GpuGasPressureBenchmark.java) 测量固定源完整压力阶段成本
+    - [VulkanGasAdiabaticWork](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanGasAdiabaticWork.java)：实际源控制体积的分段热容绝热做功、候选内能和精确端点差；库存搬运前调用
     - [VulkanLiquidMaterialRoutes](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidMaterialRoutes.java)：已接受单元体积→分材料七路 dyadic 库存，临时 limb 分配与精确原地余量
     - [VulkanLiquidRouteQuantities](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidRouteQuantities.java)：实际体积分份、物种 CSR 分配、参考能与8项内能误差展开
     - [VulkanLiquidGather](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidGather.java)：同材料到达归并、动态库存 CSR、精确体积和7项内能误差展开

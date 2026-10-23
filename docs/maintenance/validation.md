@@ -730,3 +730,16 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 四场连通阶段均在首批4轮后收敛，计时期间每步上传0 B、回读12 B，主机 staging 为3 MiB。每次从同一设备源准备候选，计时后单独提交并读取首个节点的派生状态。这组结果测量固定源气体阶段的附加成本，有限气腔压力耦合、气体做功、拓扑变更后的库存转移与连续完整步仍待接入；集中物理检查继续后置。
 
 2026-10-24：工作区整体扩容实现通过 `:gpu-kernel:compileJava`，日志 `build/gpu-resident-liquid-workspace-compile.log`。本次未人为构造容量溢出或运行额外 GPU 场景，正常路径继续使用既有预留；实际扩容恢复的运行证据待补充。共同机械能三项着色器 `mechanical-bodies.comp`、`liquid-thermodynamics.comp`、`mechanical-energy.comp` 已通过 shaderc 编译，连续调用、附加成本和物理核对仍待接入后测量。
+
+2026-10-24：固定源有限气腔共同压力短成本见 `build/gpu-resident-gas-pressure-64-dam.log` 和 `build/gpu-resident-gas-pressure-64-cut-degree.log`（RTX 5070 Ti，各1次预热、3次采样）。同代液体几何、气体拓扑与 EOS 在计时前准备；每次从零压力开始，计时包括候选准备、重力、共同压力装配、PCG／多重网格／气体关联面矩阵乘积和速度响应。真实气腔分别为1和65,576，预留容量均为262,144。
+
+```powershell
+./gradlew.bat :gpu-kernel:runGpuGasPressureBenchmark -PgpuProbeDevice=0 -PgpuGasPressureGrid=64 -PgpuGasPressureScene=cut -PgpuGasPressureWarmup=1 -PgpuGasPressureSamples=3 --offline --no-daemon
+```
+
+| 64³ 场景 | 中位 / 最大 ms | 设备平均 ms | 迭代 / RMS | 每步上传 / 回读 B | 设备 MiB |
+|---|---:|---:|---:|---:|---:|
+| 单气腔坝体 | 22.230 / 23.110 | 12.995 | 32 / 3.47309172e-6 | 0 / 52 | 656.7 |
+| 65,576 个切割气腔 | 16.449 / 17.579 | 12.304 | 20 / 5.88960171e-6 | 0 / 40 | 698.7 |
+
+两场求解均成功。多气腔分项已消除小行空工作组成本；同输入原成本保存在 `build/gpu-resident-gas-pressure-64-cut.log`，设备35.911 ms、中位40.266 ms，求解迭代和残差相同。上述结果覆盖压力阶段；气体库存搬运、实际压缩功、共同机械能和连续完整步需合并测量。Java 及压力着色器编译通过，集中物理验证继续后置。
