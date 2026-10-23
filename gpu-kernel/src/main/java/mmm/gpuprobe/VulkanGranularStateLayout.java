@@ -136,7 +136,7 @@ final class VulkanGranularStateLayout {
     void importState(ByteBuffer destination,State state){
         if(!definitions.equals(state.definitions())||state.particles().size()>particles||state.deposits().size()>deposits)
             throw new IllegalArgumentException("Granular input exceeds layout or changes definitions");
-        var b=destination.duplicate().order(ByteOrder.LITTLE_ENDIAN);int[] speciesCursor={0};
+        var b=view(destination);int[] speciesCursor={0};
         putInt(b,Field.COUNTS,0,state.particles().size());putInt(b,Field.COUNTS,1,state.deposits().size());
         for(int row=0;row<rows;row++){
             Row inventory=null;
@@ -155,7 +155,7 @@ final class VulkanGranularStateLayout {
         for(int i=0;i<state.deposits().size();i++){var d=state.deposits().get(i);putInt(b,Field.DEPOSIT_CELL,i,d.cell());putInt(b,Field.DEPOSIT_POROSITY,i,Float.floatToRawIntBits(d.porosity()));}
     }
     State exportState(ByteBuffer source){
-        var b=source.duplicate().order(ByteOrder.LITTLE_ENDIAN);int active=getInt(b,Field.COUNTS,0),beds=getInt(b,Field.COUNTS,1);
+        var b=view(source);int active=getInt(b,Field.COUNTS,0),beds=getInt(b,Field.COUNTS,1);
         if(active<0||active>particles||beds<0||beds>deposits)throw new IllegalStateException("Granular logical count exceeds layout");
         var ps=new ArrayList<Particle>();var ds=new ArrayList<Deposit>();var external=new ArrayList<Row>();var escaped=new ArrayList<Row>();
         for(int i=0;i<active;i++){int[] cells=new int[8];long[] quota=new long[8];for(int k=0;k<8;k++){cells[k]=getInt(b,Field.SUPPORT_CELLS,8*i+k);quota[k]=getLong(b,Field.SUPPORT_QUOTAS,8*i+k);}
@@ -184,7 +184,12 @@ final class VulkanGranularStateLayout {
         for(int k=start;k<end;k++){ids[k-start]=getInt(b,Field.SPECIES_HANDLES,k);amounts[k-start]=getLong(b,Field.SPECIES_AMOUNTS,k);}
         return new Row(getInt(b,Field.MATERIAL,row),getLong(b,Field.SOLID_VOLUME_SVQ,row),getLong(b,Field.MASS_UNITS,row),getInt(b,Field.MIXTURE_PRESENT,row)!=0,getLong(b,Field.MASS_RESIDUAL_UNITS,row),ids,amounts,number(b,Field.INTERNAL_ENERGY,row));}
     private void vector(ByteBuffer b,Field f,int i,double[] v){for(int a=0;a<3;a++)putLong(b,f,3*i+a,Double.doubleToRawLongBits(v[a]));}
-    private int address(Field f,int i){return Math.toIntExact(column(f).offset()+(long)i*column(f).elementBytes());}
+    private ByteBuffer view(ByteBuffer buffer){
+        if(buffer.remaining()>=endOffset)return buffer.slice(Math.toIntExact(baseOffset),Math.toIntExact(bytes())).order(ByteOrder.LITTLE_ENDIAN);
+        if(buffer.remaining()==bytes())return buffer.slice().order(ByteOrder.LITTLE_ENDIAN);
+        throw new IllegalArgumentException("Granular checkpoint buffer differs from its layout");
+    }
+    private int address(Field f,int i){return Math.toIntExact(column(f).offset()-baseOffset+(long)i*column(f).elementBytes());}
     private void putInt(ByteBuffer b,Field f,int i,int v){b.putInt(address(f,i),v);}private int getInt(ByteBuffer b,Field f,int i){return b.getInt(address(f,i));}
     private void putLong(ByteBuffer b,Field f,int i,long v){b.putLong(address(f,i),v);}private long getLong(ByteBuffer b,Field f,int i){return b.getLong(address(f,i));}
     private double number(ByteBuffer b,Field f,int i){return Double.longBitsToDouble(getLong(b,f,i));}

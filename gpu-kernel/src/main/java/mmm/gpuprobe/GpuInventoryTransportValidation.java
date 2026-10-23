@@ -9,6 +9,7 @@ public final class GpuInventoryTransportValidation {
     private GpuInventoryTransportValidation() { }
     public static void main(String[] args) {
         int device=args.length==0?0:Integer.parseInt(args[0]);
+        privateSubsteps(device);
         try(var gpu=new VulkanInventoryTransport(device,5,12)) {
             long[] initial={Long.MAX_VALUE-100,70,30,0,0};
             gpu.initialize(initial);
@@ -85,6 +86,43 @@ public final class GpuInventoryTransportValidation {
             }
             System.out.println("GPU inventory multi-workgroup PASS device="+gpu.deviceName()+" metrics="+gpu.metrics());
         }
+    }
+
+    /** A later failed substep must leave the request's original committed generation untouched. */
+    private static void privateSubsteps(int device){
+        try(var context=new VulkanDeviceContext(device,true,true);var storage=new VulkanRegionStorage(context,4,4)){
+            storage.initialize(java.nio.ByteBuffer.allocate(4).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(0,10),5);
+            try(var original=storage.capture()){
+                try(var first=storage.prepare(original)){
+                    expect(first.execute(0,(cmd,input,output,errors,staging,stack)->fill(cmd,output,20,stack))==0,"Private first substep failed");
+                    try(var intermediate=first.captureCompleted();var second=storage.prepare(intermediate)){
+                        expect(intermediate.generation()==6,"Private logical generation drifted");
+                        expect(second.execute(0,(cmd,input,output,errors,staging,stack)->fill(cmd,errors,32,stack))==32,"Injected substep rejection disappeared");
+                    }
+                }
+                try(var current=storage.capture()){
+                    var value=java.nio.ByteBuffer.allocate(4).order(java.nio.ByteOrder.LITTLE_ENDIAN);storage.read(current,0,value);
+                    expect(current.generation()==5&&value.getInt(0)==10,"Failed private chain published a partial request");
+                }
+                try(var first=storage.prepare(original)){
+                    expect(first.execute(0,(cmd,input,output,errors,staging,stack)->fill(cmd,output,20,stack))==0,"Private retry first substep failed");
+                    try(var intermediate=first.captureCompleted();var second=storage.prepare(intermediate)){
+                        expect(second.execute(0,(cmd,input,output,errors,staging,stack)->fill(cmd,output,30,stack))==0,"Private retry second substep failed");
+                        expect(second.commit(original)==6,"Private chain advanced more than one logical generation");
+                    }
+                }
+            }
+            try(var current=storage.capture()){
+                var value=java.nio.ByteBuffer.allocate(4).order(java.nio.ByteOrder.LITTLE_ENDIAN);storage.read(current,0,value);
+                expect(current.generation()==6&&value.getInt(0)==30,"Private chain final state differs");
+            }
+            System.out.println("GPU private substeps PASS rollback, retry and one logical commit");
+        }
+    }
+    private static void fill(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer target,int value,org.lwjgl.system.MemoryStack stack){
+        VulkanRegionStorage.barrier(command,org.lwjgl.vulkan.VK10.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,org.lwjgl.vulkan.VK10.VK_ACCESS_MEMORY_WRITE_BIT,
+                org.lwjgl.vulkan.VK10.VK_PIPELINE_STAGE_TRANSFER_BIT,org.lwjgl.vulkan.VK10.VK_ACCESS_TRANSFER_WRITE_BIT,stack);
+        org.lwjgl.vulkan.VK10.vkCmdFillBuffer(command,target.handle(),0,4,value);
     }
     private static void reject(VulkanInventoryTransport gpu,Edge[] edges,long[] saved) {
         var result=gpu.transport(edges);

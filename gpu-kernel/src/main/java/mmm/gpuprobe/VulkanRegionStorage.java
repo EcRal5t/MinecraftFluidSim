@@ -110,10 +110,10 @@ final class VulkanRegionStorage implements AutoCloseable {
     private Candidate prepareCandidate(Capture source, long candidateBytes, boolean copySource) {
         requireCapture(source);
         requireStorageSize(candidateBytes);
-        long next = Math.addExact(source.version.generation, 1);
+        long next = Math.addExact(source.origin.generation, 1);
         Slot target = reserve(candidateBytes);
         source.version.slot.references++;
-        return new Candidate(source.version, target, next, candidateBytes, copySource);
+        return new Candidate(source.version, source.origin, target, next, candidateBytes, copySource);
     }
 
     /** Explicit range read for queries/checkpoints; normal candidate submission reads one status word. */
@@ -176,8 +176,10 @@ final class VulkanRegionStorage implements AutoCloseable {
 
     final class Capture implements AutoCloseable {
         private final Version version;
+        private final Version origin;
         private boolean released;
-        private Capture(Version version) { this.version = version; version.slot.references++; }
+        private Capture(Version version) { this(version,version); }
+        private Capture(Version version,Version origin) { this.version = version;this.origin=origin;version.slot.references++; }
         private VulkanRegionStorage owner() { return VulkanRegionStorage.this; }
         long generation() { synchronized (VulkanRegionStorage.this) { requireCapture(this); return version.generation; } }
         long logicalBytes() { synchronized (VulkanRegionStorage.this) { requireCapture(this); return version.logicalBytes; } }
@@ -190,13 +192,14 @@ final class VulkanRegionStorage implements AutoCloseable {
 
     final class Candidate implements AutoCloseable {
         private final Version base;
+        private final Version origin;
         private final Slot slot;
         private final long generation, logicalBytes;
         private final boolean copySource;
         private boolean attempted, submitted, finished, released;
         private int error;
-        private Candidate(Version base, Slot slot, long generation, long logicalBytes, boolean copySource) {
-            this.base = base; this.slot = slot; this.generation = generation;
+        private Candidate(Version base,Version origin, Slot slot, long generation, long logicalBytes, boolean copySource) {
+            this.base = base;this.origin=origin;this.slot = slot; this.generation = generation;
             this.logicalBytes = logicalBytes; this.copySource = copySource;
         }
 
@@ -291,12 +294,29 @@ final class VulkanRegionStorage implements AutoCloseable {
                 requireOpen();
                 if (released || !submitted || !finished || error != 0 || committed != base)
                     throw new IllegalStateException("Candidate cannot replace this committed region generation");
-                release(committed.slot);
-                committed = new Version(slot, generation, logicalBytes);
-                release(base.slot);
-                released = true;
-                return generation;
+                return adopt();
             }
+        }
+
+        /** Pins a successful private substep as input to the next substep without publishing it. */
+        Capture captureCompleted(){
+            synchronized(VulkanRegionStorage.this){
+                requireOpen();if(released||!submitted||!finished||error!=0)throw new IllegalStateException("Candidate substep is incomplete");
+                return new Capture(new Version(slot,generation,logicalBytes),origin);
+            }
+        }
+
+        /** Publishes an entire private substep chain once, against the original request capture. */
+        long commit(Capture original){
+            synchronized(VulkanRegionStorage.this){
+                requireCapture(original);
+                if(released||!submitted||!finished||error!=0||original.version!=origin||original.origin!=origin||committed!=origin)
+                    throw new IllegalStateException("Private substeps cannot replace this original region generation");
+                return adopt();
+            }
+        }
+        private long adopt(){
+            release(committed.slot);committed=new Version(slot,generation,logicalBytes);release(base.slot);released=true;return generation;
         }
 
         /** Small explicit diagnostics may inspect a completed, uncommitted candidate. */
