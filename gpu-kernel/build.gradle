@@ -210,3 +210,14 @@ registerGpuProbe(
         providers.gradleProperty('gpuDyadicSamples').getOrElse('10')
     probeTask.jvmArgs '-Xmx1g'
 }
+
+registerGpuProbe(
+    'runGpuLiquidGatherBenchmark',
+    'Measures resident accepted-volume quantity partition, gather, MAC momentum and heat posting.',
+    'mmm.gpuprobe.GpuLiquidGatherBenchmark',
+    'gpu-liquid-gather-work'
+) { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        providers.gradleProperty('gpuGatherSamples').getOrElse('10')
+    probeTask.jvmArgs '-Xmx2g'
+}

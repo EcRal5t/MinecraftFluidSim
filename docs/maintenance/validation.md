@@ -439,7 +439,10 @@ D01 进入前性能验收采用热运行：同一 JVM 已完成生产物理场�
 ./gradlew.bat :gpu-kernel:runGpuResidentPressureBenchmark -PgpuResidentPressureGrid=64 -PgpuPressureSamples=10 --offline --no-daemon
 ./gradlew.bat :gpu-kernel:runGpuLiquidGeometryBenchmark -PgpuProbeDevice=0 -PgpuGeometrySamples=10 -PgpuGeometryProjection=true -PgpuGeometryGrids=64 --offline --no-daemon
 ./gradlew.bat :gpu-kernel:runGpuDyadicSumBenchmark -PgpuProbeDevice=0 -PgpuDyadicSamples=10 --offline --no-daemon
+./gradlew.bat :gpu-kernel:runGpuLiquidGatherBenchmark -PgpuProbeDevice=0 -PgpuGatherSamples=10 --offline --no-daemon
 ```
+
+`runGpuLiquidGatherBenchmark` 用 `gpuGatherSamples` 设置采样次数，固定运行32³和64³。设备预置已接受体积路线，计时期间每次从同一捕获准备候选，执行数量分配、库存归并、MAC 搬运与耗散热写入后释放候选；最后单独提交一次并抽查 checkpoint。它测量固定路线的阶段组合。
 
 `runGpuLiquidGeometryBenchmark` 的 `gpuGeometryProjection=false` 测库存派生几何；设为 `true` 追加重力、物理 CSR、压力、格面投影与 PLIC 面扫掠偏好。`gpuGeometryGrids` 接受逗号分隔格数，`gpuGeometrySamples` 控制采样次数，固定先预热5次。投影模式每次从零压力开始，并计入代次复制、命令录制、各批执行、状态回读和接管。
 
@@ -654,7 +657,7 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 首次 Jacobi-PCG 的 `build/gpu-resident-liquid-pressure-failure.log` 达到200次上限后 RMS 仍为2.6125e-5，该次失败。多重网格在相同容差和上限下26次收敛；零初始压力的完整录制成本中位22.470 ms（`gpu-resident-liquid-multigrid-zero-cost.log`），分批每8次迭代执行后为10.105 ms（`gpu-resident-liquid-pressure-batches-cost.log`），最终含面扫掠偏好的成本见上表。几何计算按4e-5体积分辨率处理，精确库存、int64数量、动力学和压力保留原精度。
 
-本次成本覆盖常驻库存→几何→重力→真实七点 CSR→压力→格面投影→PLIC 面扫掠偏好。末阶段根据真实共享开放端口和源侧 PLIC 薄片生成有符号格面体积 `(Qt,Ql)`；接收容量接受及库存和 MAC 输运尚未完成，有限气腔、热化学、完整区域应用层接管与完整步成本待完成；集中物理检查尚未开始。动态容量布局、逻辑计数头和多批存储代码已落地，分层前缀扫描已用于下列精确二进制加减的变长 limb 分配。完整64³流体步20 Hz及原场景十倍提速继续按完整链交付后判定。
+本次成本覆盖常驻库存→几何→重力→真实七点 CSR→压力→格面投影→PLIC 面扫掠偏好。末阶段根据真实共享开放端口和源侧 PLIC 薄片生成有符号格面体积 `(Qt,Ql)`；该成本记录止于路线偏好；后续已接受路线的数量、库存与 MAC 分项见下文。真实接收容量、材料体积路线、有限气腔、热化学、完整区域应用层接管与完整步成本待完成；集中物理检查尚未开始。动态容量布局、逻辑计数头和多批存储代码已落地，分层前缀扫描已用于下列精确二进制加减的变长 limb 分配。完整64³流体步20 Hz及原场景十倍提速继续按完整链交付后判定。
 
 
 `build/gpu-resident-dyadic-sum-cost.log` 的设备精确二进制七项加减分项完成长度测量→`VulkanPrefixScan` 变长 limb 分配→结果写入。`runGpuDyadicSumBenchmark` 由 `gpuProbeDevice` 选择设备、`gpuDyadicSamples` 指定采样次数；本次均预热5次、采样10次，每步上传0 B、回读4 B。
@@ -664,4 +667,16 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 | compact-remainders | 524,288 | 1.679 / 2.966 | 1.323 | 216.0 |
 | wide-tails（1−2^-1074） | 8,192 | 0.265 / 1.943 | 0.057 | 5.4 |
 
-每场计时后抽取3项结果，精确值检查通过。该记录覆盖库存余量加减和变长索引分配，通量容量接受、材料实际结算与完整库存输运仍待实现，完整物理检查尚未开展。
+每场计时后抽取3项结果，精确值检查通过。该记录覆盖库存余量加减和变长索引分配，通量容量接受、材料体积路线与完整后端输运接入仍待实现，完整物理检查尚未开展。
+
+
+2026-10-24：固定已接受路线的终态组合成本见 `build/gpu-resident-liquid-quantity-gather-mac-heat-cost.log`。RTX 5070 Ti，5次预热、10次采样；每单元两种材料和对应物种，相邻单元各保留一半并交换一半，源质量、物种量和内能不同。实际整数数量分配→同材料归并及动态 CSR→MAC 搬运、未解析格面合并与壁面处理→耗散热写入在同一设备候选中执行。每次上传0 B、回读4 B，主机 staging 为3 MiB。
+
+| 规模 | 库存行数 | 中位 / 最大 ms | 设备平均 ms | 逻辑设备存储 MiB |
+|---|---:|---:|---:|---:|
+| 32³ | 65,536 | 1.272 / 2.374 | 0.724 | 115.9 |
+| 64³ | 524,288 | 6.989 / 8.742 | 6.604 | 924.6 |
+
+计时不接管候选，固定源输入始终保留。计时后单独提交一次，检查逻辑计数和三个单元的材料、整数质量、物种、质量余量及精确体积；内能按分配到库存的实际单元热量检查，采用4 ulp存储精度。少量格面与单元的动量、热量和热写入舍入展开检查通过。输入使用零参考能表，格面采用静态开放面积与规定速度；这些结果覆盖已接受路线的数量、库存、MAC 和热写入，容量接受、材料体积路线、压力、有限气腔和完整区域后端接入继续待完成，集中物理检查尚未开展。
+
+`build/gpu-resident-liquid-quantities-gather-cost.log` 保存此前数量分配与库存归并的范围，`build/gpu-resident-liquid-quantity-gather-mac-cost.log` 保存加入MAC、尚未写入耗散热的范围；最终组合以上表为准。这些固定源分项与前述几何／投影分项分别计时，完整流体步预算按实际连续后端接入后评价。

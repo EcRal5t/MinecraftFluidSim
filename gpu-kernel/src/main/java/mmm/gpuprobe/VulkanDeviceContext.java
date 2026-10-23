@@ -32,6 +32,7 @@ final class VulkanDeviceContext implements AutoCloseable {
 	private int queueFamily;
 	private String deviceName;
 	private long storageOffsetAlignment;
+	private long maxStorageBufferRange;
 	private float timestampPeriodNanos;
 	private int timestampValidBits;
 
@@ -58,6 +59,7 @@ final class VulkanDeviceContext implements AutoCloseable {
 	int queueFamily() { return queueFamily; }
 	String deviceName() { return deviceName; }
 	long storageOffsetAlignment() { return storageOffsetAlignment; }
+	long maxStorageBufferRange() { return maxStorageBufferRange; }
 	float timestampPeriodNanos() { return timestampPeriodNanos; }
 	int timestampValidBits() { return timestampValidBits; }
 	boolean hasTimestampQueries() { return timestampPeriodNanos > 0.0F && timestampValidBits > 0; }
@@ -95,6 +97,7 @@ final class VulkanDeviceContext implements AutoCloseable {
 			vkGetPhysicalDeviceProperties(physicalDevice, properties);
 			deviceName = properties.deviceNameString();
 			storageOffsetAlignment = properties.limits().minStorageBufferOffsetAlignment();
+			maxStorageBufferRange = Integer.toUnsignedLong(properties.limits().maxStorageBufferRange());
 			queueFamily = findComputeQueue(physicalDevice, stack);
 			timestampPeriodNanos = properties.limits().timestampPeriod();
 			timestampValidBits = timestampValidBits(physicalDevice, queueFamily, stack);

@@ -1,0 +1,204 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) readonly buffer Source { uint sourceWords[]; };
+layout(binding=1,std430) buffer Candidate { uint candidateWords[]; };
+layout(binding=2,std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Params { int header; int stage; int count; } p;
+
+const int COUNTS=0,CELL_OFFSETS=1,MATERIALS=2,SUPPORT_MASKS=3,VOLUME_OFFSETS=4,VOLUME_SIGNS=5,VOLUME_EXPONENTS=6,
+          VOLUME_LIMBS=7,MASS_UNITS=8,ENERGY_BITS=9,MIXTURE_PRESENT=10,SPECIES_OFFSETS=11,SPECIES_HANDLES=12,
+          SPECIES_AMOUNTS=13,MASS_RESIDUAL=14,NUMERIC_VOLUMES=15;
+const int ROUTE_VOLUME_OFFSETS=0,ROUTE_VOLUME_SIGNS=1,ROUTE_VOLUME_EXPONENTS=2,ROUTE_VOLUME_LIMBS=3,
+          ROUTE_MASS=4,ROUTE_ENERGY=5,ROUTE_MIXTURE=6,ROUTE_SPECIES_OFFSETS=7,ROUTE_SPECIES_HANDLES=8,ROUTE_SPECIES_AMOUNTS=9;
+const int64_t MAX_LONG=int64_t(0x7fffffffffffffffUL);
+int h(int field) { return int(candidateWords[p.header+field]); }
+int src(int field) { return h(16+field); }
+int dst(int field) { return h(35+field); }
+int route(int field) { return h(54+field); }
+int64_t longAt(int word) { return int64_t(uint64_t(candidateWords[word])|(uint64_t(candidateWords[word+1])<<32)); }
+void putLong(int word,int64_t value) { candidateWords[word]=uint(value);candidateWords[word+1]=uint(uint64_t(value)>>32); }
+double doubleAt(int word) { return packDouble2x32(uvec2(candidateWords[word],candidateWords[word+1])); }
+void putDouble(int word,double value) { uvec2 bits=unpackDouble2x32(value);candidateWords[word]=bits.x;candidateWords[word+1]=bits.y; }
+int64_t addQuantity(int64_t sum,int64_t value) {
+    if(value<int64_t(0)||sum>MAX_LONG-value){atomicOr(errors,32u);return sum;}
+    return sum+value;
+}
+
+void clearStock(int stock) {
+    candidateWords[h(11)+stock]=0u;
+    for(int i=0;i<35;i++)candidateWords[h(12)+35*stock+i]=0u;
+    for(int i=0;i<7;i++){candidateWords[h(10)+7*stock+i]=uint(-1);putDouble(h(14)+14*stock+2*i,0.0);}
+}
+
+int seekRoute(int stock,int end,int slot) {
+    while(stock<end) {
+        int sign=int(candidateWords[route(ROUTE_VOLUME_SIGNS)+7*stock+slot]);
+        if(sign>0)break;
+        if(sign<0)atomicOr(errors,32u);
+        stock++;
+    }
+    return stock;
+}
+
+void cellInputs(int cell,out int cursors[7],out int ends[7],out int slots[7]) {
+    ivec3 shape=ivec3(h(0),h(1),h(2));
+    ivec3 at=ivec3(cell%shape.x,cell/shape.x%shape.y,cell/(shape.x*shape.y));
+    for(int i=0;i<7;i++) {
+        ivec3 other=at;slots[i]=0;
+        if(i>0){int side=i-1;other[side/2]+=(side&1)==0?-1:1;slots[i]=(side^1)+1;}
+        bool valid=all(greaterThanEqual(other,ivec3(0)))&&all(lessThan(other,shape));
+        int donor=(other.z*shape.y+other.y)*shape.x+other.x;
+        cursors[i]=valid?int(sourceWords[src(CELL_OFFSETS)+donor]):0;
+        ends[i]=valid?int(sourceWords[src(CELL_OFFSETS)+donor+1]):0;
+        cursors[i]=seekRoute(cursors[i],ends[i],slots[i]);
+    }
+}
+
+int seekSpecies(int entry,int end) {
+    while(entry<end) {
+        int64_t amount=longAt(route(ROUTE_SPECIES_AMOUNTS)+2*entry);
+        if(amount>int64_t(0))break;
+        if(amount<int64_t(0))atomicOr(errors,32u);
+        entry++;
+    }
+    return entry;
+}
+
+// Each accepted route has sorted, unique species handles. Seven-way merge preserves that order.
+int mergeSpecies(int members[7],int outputStart,bool writing,out int64_t representedMass) {
+    int cursors[7],ends[7];representedMass=int64_t(0);
+    for(int i=0;i<7;i++) {
+        cursors[i]=members[i]<0?0:int(candidateWords[route(ROUTE_SPECIES_OFFSETS)+members[i]]);
+        ends[i]=members[i]<0?0:int(candidateWords[route(ROUTE_SPECIES_OFFSETS)+members[i]+1]);
+        cursors[i]=seekSpecies(cursors[i],ends[i]);
+    }
+    int count=0;
+    while(true) {
+        int handle=2147483647;bool found=false;
+        for(int i=0;i<7;i++)if(cursors[i]<ends[i]){handle=min(handle,int(candidateWords[route(ROUTE_SPECIES_HANDLES)+cursors[i]]));found=true;}
+        if(!found)break;
+        int64_t amount=int64_t(0);
+        for(int i=0;i<7;i++)if(cursors[i]<ends[i]&&int(candidateWords[route(ROUTE_SPECIES_HANDLES)+cursors[i]])==handle) {
+            amount=addQuantity(amount,longAt(route(ROUTE_SPECIES_AMOUNTS)+2*cursors[i]));
+            cursors[i]=seekSpecies(cursors[i]+1,ends[i]);
+        }
+        if(writing) {
+            candidateWords[dst(SPECIES_HANDLES)+outputStart+count]=uint(handle);
+            putLong(dst(SPECIES_AMOUNTS)+2*(outputStart+count),amount);
+            int64_t quantum=longAt(h(8)+2*handle);
+            if(quantum<int64_t(0)||(quantum>int64_t(0)&&amount>MAX_LONG/quantum))atomicOr(errors,32u);
+            else representedMass=addQuantity(representedMass,amount*quantum);
+        }
+        count++;
+    }
+    return count;
+}
+
+void gatherStock(int stock,int cell,int material,int members[7]) {
+    candidateWords[dst(MATERIALS)+stock]=uint(material);
+    candidateWords[dst(SUPPORT_MASKS)+stock]=(~candidateWords[h(7)+cell])&255u;
+    int64_t mass=int64_t(0);uint mixture=0u;precise double energy=0.0;
+    for(int i=0;i<7;i++) {
+        int member=members[i];candidateWords[h(10)+7*stock+i]=uint(member);
+        if(member<0)continue;
+        mass=addQuantity(mass,longAt(route(ROUTE_MASS)+2*member));
+        mixture|=candidateWords[route(ROUTE_MIXTURE)+member];
+        precise double value=doubleAt(route(ROUTE_ENERGY)+2*member);
+        precise double next=energy+value;
+        precise double virtualValue=next-energy;
+        precise double remainder=(energy-(next-virtualValue))+(value-virtualValue);
+        putDouble(h(14)+14*stock+2*i,remainder);energy=next;
+        if(isnan(value)||isinf(value)||isnan(next)||isinf(next))atomicOr(errors,32u);
+        int begin=int(candidateWords[route(ROUTE_VOLUME_OFFSETS)+member]);
+        int end=int(candidateWords[route(ROUTE_VOLUME_OFFSETS)+member+1]);
+        int term=h(12)+35*stock+5*i;
+        candidateWords[term]=1u;
+        candidateWords[term+1]=uint(route(ROUTE_VOLUME_LIMBS)+begin);
+        candidateWords[term+2]=uint(end-begin);
+        candidateWords[term+3]=candidateWords[route(ROUTE_VOLUME_EXPONENTS)+member];
+        candidateWords[term+4]=1u;
+    }
+    putLong(dst(MASS_UNITS)+2*stock,mass);putDouble(dst(ENERGY_BITS)+2*stock,energy);
+    candidateWords[dst(MIXTURE_PRESENT)+stock]=mixture;
+    int64_t unused;
+    candidateWords[h(11)+stock]=uint(mergeSpecies(members,0,false,unused));
+}
+
+void mergeCell(int cell,bool writing) {
+    if(writing&&candidateWords[dst(CELL_OFFSETS)+h(3)]>uint(h(4))){atomicOr(errors,64u);return;}
+    int cursors[7],ends[7],slots[7];cellInputs(cell,cursors,ends,slots);
+    int count=0,outputStart=writing?int(candidateWords[dst(CELL_OFFSETS)+cell]):0;
+    while(true) {
+        int material=2147483647;bool found=false;
+        for(int i=0;i<7;i++)if(cursors[i]<ends[i]){material=min(material,int(sourceWords[src(MATERIALS)+cursors[i]]));found=true;}
+        if(!found)break;
+        int members[7];
+        for(int i=0;i<7;i++) {
+            members[i]=-1;
+            if(cursors[i]<ends[i]&&int(sourceWords[src(MATERIALS)+cursors[i]])==material) {
+                members[i]=7*cursors[i]+slots[i];cursors[i]=seekRoute(cursors[i]+1,ends[i],slots[i]);
+            }
+        }
+        if(writing)gatherStock(outputStart+count,cell,material,members);
+        count++;
+    }
+    if(!writing)candidateWords[h(9)+cell]=uint(count);
+}
+
+uint volumeWord(int begin,int count,int index) {
+    return index>=0&&index<count?candidateWords[dst(VOLUME_LIMBS)+begin+index]:0u;
+}
+
+// One ties-to-even conversion of the exact canonical significand, including subnormal doubles.
+// Canonical odd significands provide the sticky bit without scanning all discarded low limbs.
+double numericVolume(int begin,int count,int exponent) {
+    if(count==0)return 0.0;
+    int bits=32*(count-1)+findMSB(volumeWord(begin,count,count-1))+1;
+    int64_t highest=int64_t(exponent)+int64_t(bits-1);
+    if(highest>int64_t(1023)){atomicOr(errors,32u);return 0.0;}
+    if(highest<int64_t(-1075))return 0.0;
+    int unit=int(max(int64_t(-1074),highest-int64_t(52)));
+    int64_t discarded=int64_t(unit)-int64_t(exponent);
+    if(discarded<=int64_t(0)) {
+        uint64_t value=uint64_t(volumeWord(begin,count,0))|(uint64_t(volumeWord(begin,count,1))<<32);
+        return ldexp(double(value),exponent);
+    }
+    int at=int(discarded>>5),shift=int(discarded&int64_t(31));
+    uint low=volumeWord(begin,count,at)>>shift,high=volumeWord(begin,count,at+1)>>shift;
+    if(shift!=0){low|=volumeWord(begin,count,at+1)<<(32-shift);high|=volumeWord(begin,count,at+2)<<(32-shift);}
+    uint64_t rounded=uint64_t(low)|(uint64_t(high)<<32);
+    int guard=int(discarded-int64_t(1));
+    bool halfway=(volumeWord(begin,count,guard/32)&(1u<<(guard&31)))!=0u;
+    if(halfway&&(discarded>int64_t(1)||(rounded&uint64_t(1))!=uint64_t(0)))rounded++;
+    double value=ldexp(double(rounded),unit);
+    if(isnan(value)||isinf(value))atomicOr(errors,32u);
+    return value;
+}
+
+void finishStock(int stock) {
+    uint actual=candidateWords[dst(CELL_OFFSETS)+h(3)];
+    uint species=candidateWords[dst(SPECIES_OFFSETS)+h(4)],limbs=candidateWords[dst(VOLUME_OFFSETS)+h(4)];
+    if(actual>uint(h(4))||species>uint(h(5))||limbs>uint(h(6))){atomicOr(errors,64u);return;}
+    if((errors&(16u|32u))!=0u)return;
+    if(stock==0){candidateWords[dst(COUNTS)]=actual;candidateWords[dst(COUNTS)+1]=species;candidateWords[dst(COUNTS)+2]=limbs;}
+    if(uint(stock)>=actual)return;
+    int result=h(13)+8*stock;
+    if(candidateWords[result]!=1u){atomicOr(errors,32u);return;}
+    candidateWords[dst(VOLUME_SIGNS)+stock]=1u;
+    int exponent=int(candidateWords[result+2]);candidateWords[dst(VOLUME_EXPONENTS)+stock]=uint(exponent);
+    int begin=int(candidateWords[dst(VOLUME_OFFSETS)+stock]),end=int(candidateWords[dst(VOLUME_OFFSETS)+stock+1]);
+    putDouble(dst(NUMERIC_VOLUMES)+2*stock,numericVolume(begin,end-begin,exponent));
+    int members[7];for(int i=0;i<7;i++)members[i]=int(candidateWords[h(10)+7*stock+i]);
+    int64_t represented;mergeSpecies(members,int(candidateWords[dst(SPECIES_OFFSETS)+stock]),true,represented);
+    int64_t mass=longAt(dst(MASS_UNITS)+2*stock);
+    putLong(dst(MASS_RESIDUAL)+2*stock,candidateWords[dst(MIXTURE_PRESENT)+stock]!=0u?mass-represented:int64_t(0));
+}
+
+void main() {
+    int index=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
+    if(index>=p.count)return;
+    if(p.stage==0)clearStock(index);else if(p.stage==1)mergeCell(index,false);
+    else if(p.stage==2)mergeCell(index,true);else finishStock(index);
+}

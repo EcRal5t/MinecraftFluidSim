@@ -1,0 +1,181 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) readonly buffer Source { uint sourceWords[]; };
+layout(binding=1,std430) buffer Candidate { uint words[]; };
+layout(binding=2,std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Params { int header;int stage;int count;int parity; } p;
+const int64_t MAX_LONG=int64_t(0x7fffffffffffffffUL);
+int h(int i){return int(words[p.header+i]);}
+int src(int i){return h(20+i);}int dst(int i){return h(39+i);}
+int64_t getLong(int at){return int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32));}
+int64_t sourceLong(int at){return int64_t(uint64_t(sourceWords[at])|(uint64_t(sourceWords[at+1])<<32));}
+void putLong(int at,int64_t v){words[at]=uint(v);words[at+1]=uint(uint64_t(v)>>32);}
+double getDouble(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
+double sourceDouble(int at){return packDouble2x32(uvec2(sourceWords[at],sourceWords[at+1]));}
+void putDouble(int at,double v){if(isnan(v)||isinf(v))atomicOr(errors,32u);uvec2 b=unpackDouble2x32(v);words[at]=b.x;words[at+1]=b.y;}
+int64_t addPositive(int64_t a,int64_t b){if(b<int64_t(0)||a>MAX_LONG-b){atomicOr(errors,32u);return a;}return a+b;}
+int64_t addSigned(int64_t a,int64_t b){if((b>int64_t(0)&&a>MAX_LONG-b)||(b<int64_t(0)&&a<(-MAX_LONG-int64_t(1))-b)){atomicOr(errors,32u);return a;}return a+b;}
+ivec3 shape(){return ivec3(h(0),h(1),h(2));}
+ivec3 unit(int axis){ivec3 e=ivec3(0);e[axis]=1;return e;}
+bool inside(ivec3 q,ivec3 size){return all(greaterThanEqual(q,ivec3(0)))&&all(lessThan(q,size));}
+int cell(ivec3 q){ivec3 size=shape();return inside(q,size)?(q.z*size.y+q.y)*size.x+q.x:-1;}
+int base(int axis){ivec3 s=shape();return axis==0?0:(s.x+1)*s.y*s.z+(axis==2?s.x*(s.y+1)*s.z:0);}
+int face(ivec3 q,int axis){ivec3 s=shape()+unit(axis);return inside(q,s)?base(axis)+(q.z*s.y+q.y)*s.x+q.x:-1;}
+void coordinates(int id,out int axis,out ivec3 q){axis=id<base(1)?0:id<base(2)?1:2;ivec3 s=shape()+unit(axis);int n=id-base(axis);q=ivec3(n%s.x,n/s.x%s.y,n/(s.x*s.y));}
+int flags(int id){return h(7)<0?1:int(words[h(7)+id]);}
+int64_t mass(int c,bool after){return c<0?int64_t(0):getLong(h(8)+4*c+(after?2:0));}
+int64_t dual(int id){return getLong(h(11)+2*id);}
+int64_t primal(ivec3 q,int axis){int f=face(q,axis);return f<0?int64_t(0):getLong(h(10)+2*f);}
+// A dual interface sums both primal fluxes before selecting its donor.
+int64_t interfaceFlux(ivec3 q,int axis,int component){ivec3 e=unit(axis);return addSigned(primal(q+e,axis),primal(q+e-unit(component),axis));}
+double projectedVelocity(int id){return getDouble(h(5)+8*id+2);}
+bool openFace(int id,ivec3 q,int axis){return q[axis]>0&&q[axis]<shape()[axis]&&getDouble(h(6)+8*id+4)>0;}
+void cellTotals(int c){
+    int64_t before=int64_t(0),after=int64_t(0);double volume=0;
+    for(int j=int(sourceWords[src(1)+c]);j<int(sourceWords[src(1)+c+1]);j++)before=addPositive(before,sourceLong(src(8)+2*j));
+    for(int j=int(words[dst(1)+c]);j<int(words[dst(1)+c+1]);j++){after=addPositive(after,getLong(dst(8)+2*j));volume+=getDouble(dst(15)+2*j);}
+    putLong(h(8)+4*c,before);putLong(h(8)+4*c+2,after);putDouble(h(9)+2*c,volume);
+}
+void faceFlux(int id){
+    int axis;ivec3 q;coordinates(id,axis,q);int a=cell(q-unit(axis)),b=cell(q);int64_t forward=int64_t(0),reverse=int64_t(0);
+    if(a>=0&&b>=0){
+        for(int j=int(sourceWords[src(1)+a]);j<int(sourceWords[src(1)+a+1]);j++)forward=addPositive(forward,getLong(h(58)+2*(7*j+2+2*axis)));
+        for(int j=int(sourceWords[src(1)+b]);j<int(sourceWords[src(1)+b+1]);j++)reverse=addPositive(reverse,getLong(h(58)+2*(7*j+1+2*axis)));
+    }
+    putLong(h(10)+2*id,forward-reverse);
+}
+void transport(int id){
+    int component;ivec3 q;coordinates(id,component,q);ivec3 size=shape()+unit(component);
+    int a=cell(q-unit(component)),b=cell(q);int64_t initial=addPositive(mass(a,false),mass(b,false)),future=addPositive(mass(a,true),mass(b,true));
+    putLong(h(11)+2*id,future);putDouble(h(13)+2*id,0.0);
+    if((flags(id)&1)==0){putDouble(h(12)+2*id,sourceDouble(src(16+component)+2*(id-base(component))));return;}
+    int64_t outgoing=int64_t(0),incoming=int64_t(0);double incomingMomentum=0;
+    int neighbor[6];int64_t amounts[6];
+    for(int axis=0;axis<3;axis++)for(int side=0;side<2;side++){
+        int k=2*axis+side;ivec3 r=q+unit(axis)*(side==0?-1:1);neighbor[k]=face(r,component);amounts[k]=int64_t(0);
+        if(!inside(r,size))continue;
+        int64_t f=interfaceFlux(side==0?r:q,axis,component);int64_t outflow=side==0?-f:f;
+        if(outflow>int64_t(0))outgoing=addPositive(outgoing,outflow);
+        else if(outflow<int64_t(0)){int64_t amount=-outflow;amounts[k]=amount;incoming=addPositive(incoming,amount);incomingMomentum+=double(amount)*projectedVelocity(neighbor[k]);}
+    }
+    if(outgoing>initial){atomicOr(errors,32u);return;}
+    int64_t remaining=initial-outgoing;
+    if(addPositive(remaining,incoming)!=future){atomicOr(errors,32u);return;}
+    double oldVelocity=projectedVelocity(id),momentum=double(remaining)*oldVelocity+incomingMomentum;
+    double velocity=future>int64_t(0)?momentum/double(future):0,difference=oldVelocity-velocity;
+    double heat=2.5e-11*double(remaining)*difference*difference;
+    for(int k=0;k<6;k++)if(amounts[k]>int64_t(0)){difference=projectedVelocity(neighbor[k])-velocity;heat+=2.5e-11*double(amounts[k])*difference*difference;}
+    putDouble(h(12)+2*id,momentum*5e-11);putDouble(h(13)+2*id,heat);
+}
+void chooseRoot(int id){
+    int axis;ivec3 q;coordinates(id,axis,q);int a=cell(q-unit(axis)),b=cell(q),target=id;int64_t largest=dual(id);
+    bool moving=(flags(id)&3)==1&&largest>int64_t(0)&&openFace(id,q,axis);
+    bool tiny=a>=0&&b>=0&&getDouble(h(9)+2*a)<=4e-5&&getDouble(h(9)+2*b)<=4e-5;
+    bool dry=tiny||getDouble(h(6)+8*id+6)<=4e-5;
+    if(moving&&dry)for(int side=0;side<2;side++){
+        int c=side==0?a:b;if(c<0||mass(c,true)<=int64_t(0))continue;
+        ivec3 r=q+unit(axis)*(side==0?-1:1);int f=face(r,axis);
+        if(f<0||(flags(f)&3)!=1||!openFace(f,r,axis))continue;
+        int64_t m=dual(f);if(m>largest||(m==largest&&f<target)){target=f;largest=m;}
+    }
+    words[h(14)+id]=uint(target);putDouble(h(16)+2*id,0.0);putDouble(h(17)+2*id,0.0);putDouble(h(18)+2*id,0.0);
+}
+void jumpRoot(int id){int from=h(14+p.parity),to=h(15-p.parity);words[to+id]=words[from+int(words[from+id])];}
+void accumulateLine(int line){
+    ivec3 s=shape(),q;int axis;
+    if(line<s.y*s.z){axis=0;q=ivec3(0,line%s.y,line/s.y);}
+    else if((line-=s.y*s.z)<s.x*s.z){axis=1;q=ivec3(line%s.x,0,line/s.x);}
+    else {line-=s.x*s.z;axis=2;q=ivec3(line%s.x,line/s.x,0);}
+    int roots=h(14+p.parity);
+    // Each invocation owns one complete parallel-face line; root accumulation needs no floating atomics.
+    for(int i=0;i<=s[axis];i++){q[axis]=i;int id=face(q,axis),root=int(words[roots+id]);
+        putDouble(h(16)+2*root,getDouble(h(16)+2*root)+5e-11*double(dual(id)));
+        putDouble(h(17)+2*root,getDouble(h(17)+2*root)+getDouble(h(12)+2*id));
+    }
+}
+void finalizeFace(int id){
+    int axis;ivec3 q;coordinates(id,axis,q);int destination=dst(16+axis)+2*(id-base(axis));
+    double momentum=getDouble(h(12)+2*id),heat=getDouble(h(13)+2*id),massKg=5e-11*double(dual(id));
+    if((flags(id)&1)==0){putDouble(destination,momentum);return;}
+    int root=int(words[h(14+p.parity)+id]);double mergedMass=getDouble(h(16)+2*root);
+    if(massKg>0&&mergedMass>massKg){
+        double speed=getDouble(h(17)+2*root)/mergedMass,difference=momentum/massKg-speed;
+        heat+=.5*massKg*difference*difference;momentum=massKg*speed;
+    }
+    if(!openFace(id,q,axis)){if(massKg>0)heat+=.5*momentum*(momentum/massKg);putDouble(h(18)+2*id,-momentum);momentum=0;}
+    putDouble(destination,momentum);putDouble(h(13)+2*id,heat);
+}
+void gatherHeat(int c){
+    ivec3 s=shape(),q=ivec3(c%s.x,c/s.x%s.y,c/(s.x*s.y));double heat=0;
+    for(int axis=0;axis<3;axis++)for(int side=0;side<2;side++){
+        int id=face(q+(side==0?ivec3(0):unit(axis)),axis);int64_t total=dual(id);if(total<=int64_t(0))continue;
+        double faceEnergy=getDouble(h(13)+2*id);
+        int left=cell(q+(side==0?-unit(axis):ivec3(0)));
+        double first=faceEnergy*(double(mass(left,true))/double(total));heat+=side==0?faceEnergy-first:first;
+    }
+    putDouble(h(19)+2*c,heat);
+}
+
+void heatTwoSum(double a,double b,out double sum,out double remainder) {
+    precise double next=a+b;
+    precise double virtualValue=next-a;
+    precise double error=(a-(next-virtualValue))+(b-virtualValue);
+    sum=next;remainder=error;
+}
+
+void clearHeatPosting(int stock) {
+    putDouble(h(59)+4*stock,0.0);putDouble(h(59)+4*stock+2,0.0);
+}
+
+void postStockHeat(int stock,double share) {
+    double before=getDouble(dst(9)+2*stock),after,error;
+    heatTwoSum(before,share,after,error);
+    putDouble(dst(9)+2*stock,after);
+    // before + share = after + error: the stored term describes the actual endpoint change.
+    putDouble(h(59)+4*stock,-error);
+}
+
+void postCellHeat(int c) {
+    int begin=int(words[dst(1)+c]),end=int(words[dst(1)+c+1]),owner=-1;
+    int64_t largest=int64_t(0),total=mass(c,true);
+    double heat=getDouble(h(19)+2*c);
+    for(int i=0;i<3;i++)putDouble(h(60)+6*c+2*i,0.0);
+    for(int stock=begin;stock<end;stock++) {
+        int64_t value=getLong(dst(8)+2*stock);
+        if(value>largest){largest=value;owner=stock;}
+        if(value==int64_t(0)) {
+            putDouble(h(59)+4*stock,-getDouble(dst(9)+2*stock));
+            putDouble(dst(9)+2*stock,0.0);
+        }
+    }
+    if(owner<0) { if(heat!=0.0)atomicOr(errors,32u);return; }
+    precise double ordinary=0.0,compensated=0.0,compensation=0.0;
+    for(int stock=begin;stock<end;stock++) {
+        int64_t value=getLong(dst(8)+2*stock);
+        if(stock==owner||value<=int64_t(0))continue;
+        precise double share=heat*(double(value)/double(total));
+        double next,remainder;heatTwoSum(ordinary,share,next,remainder);ordinary=next;
+        putDouble(h(59)+4*stock+2,remainder);
+        precise double corrected=share-compensation;
+        precise double nextCompensated=compensated+corrected;
+        compensation=(nextCompensated-compensated)-corrected;compensated=nextCompensated;
+        postStockHeat(stock,share);
+    }
+    double ownerShare,ownerRemainder,closure,closureRemainder;
+    heatTwoSum(heat,-compensated,ownerShare,ownerRemainder);
+    heatTwoSum(ordinary,-compensated,closure,closureRemainder);
+    postStockHeat(owner,ownerShare);
+    // Across arbitrary stock counts, these three terms plus the per-stock terms sum exactly to
+    // sum(final U) - sum(previous U) - cellHeat. cellHeat itself remains the mechanical heat ledger.
+    putDouble(h(60)+6*c,closure);
+    putDouble(h(60)+6*c+2,closureRemainder);
+    putDouble(h(60)+6*c+4,-ownerRemainder);
+}
+void main(){int id=int(gl_GlobalInvocationID.x+gl_GlobalInvocationID.y*65535u*128u);if(id>=p.count||errors!=0u)return;
+    if(p.stage==0)cellTotals(id);else if(p.stage==1)faceFlux(id);else if(p.stage==2)transport(id);
+    else if(p.stage==3)chooseRoot(id);else if(p.stage==4)jumpRoot(id);else if(p.stage==5)accumulateLine(id);
+    else if(p.stage==6)finalizeFace(id);else if(p.stage==7)gatherHeat(id);
+    else if(p.stage==8)clearHeatPosting(id);else postCellHeat(id);
+}
