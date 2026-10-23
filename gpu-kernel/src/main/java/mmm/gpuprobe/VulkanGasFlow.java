@@ -1,0 +1,118 @@
+package mmm.gpuprobe;
+
+import org.lwjgl.vulkan.VkCommandBuffer;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
+import java.util.EnumMap;
+import java.util.List;
+import static mmm.gpuprobe.VulkanRegionStorage.barrier;
+import static org.lwjgl.system.MemoryStack.stackPush;
+import static org.lwjgl.vulkan.VK10.*;
+
+/** Synchronous finite-aperture network. Parallel openings are combined before the shared PCG solve.
+ * Flow preferences use SI standard cubic metres. Frozen caloric storage/conductance give a first-order
+ * semi-implicit response; integer inventory settlement and actual retained-gas cooling follow the solve.
+ */
+final class VulkanGasFlow implements AutoCloseable {
+    enum Field {
+        FACE_A(4),FACE_B(4),FACE_PAIR(4),HASH(4),HASH_FLAGS(4),HASH_OFFSETS(4),
+        PAIR_A(4),PAIR_B(4),PAIR_COUNTS(4),PAIR_OFFSETS(4),PAIR_CURSORS(4),PAIR_FACES(4),PAIR_G(8),PAIR_FLOW(8),
+        NODE_COUNTS(4),NODE_OFFSETS(4),NODE_CURSORS(4),NODE_PAIRS(4),STORAGE(8),DIAGONAL_ROOT(8),OUT_SCALE(8),
+        START_COUNTS(4),STARTS(4),COLUMNS(4),VALUES(8),ROWS(4),PRESSURE(8),WORK(8),META(4),PROBLEM(8),CONTROL(8),PARTIALS(8),
+        ROUTE_COUNT(4),ROUTE_SOURCE(4),ROUTE_TARGET(4),ROUTE_WEIGHT(8),AMBIENT_VOLUME(8),
+        SOURCE_COUNTS(4),SOURCE_OFFSETS(4),SOURCE_CURSORS(4),SOURCE_ROUTES(4),TARGET_COUNTS(4),TARGET_OFFSETS(4),TARGET_CURSORS(4),TARGET_ROUTES(4),
+        RETAINED_VOLUME(8),MODES(4),STEP(8),DISPATCH(4),SCAN(4);
+        final int width;Field(int width){this.width=width;}
+    }
+    /** Ambient density is the actual kg/m³ at ambientPressure and ambientTemperature; step is a committed-step ordinal, reused on retries. */
+    record Parameters(double duration,double dischargeCoefficient,double ambientPressure,double ambientTemperature,double ambientDensity,long step){
+        Parameters{if(!(Double.isFinite(duration)&&duration>0&&Double.isFinite(dischargeCoefficient)&&dischargeCoefficient>=0
+                &&Double.isFinite(ambientPressure)&&ambientPressure>0&&Double.isFinite(ambientTemperature)&&ambientTemperature>0
+                &&Double.isFinite(ambientDensity)&&ambientDensity>0))throw new IllegalArgumentException("Invalid gas-flow parameters");}
+    }
+    static Parameters parameters(double duration,double dischargeCoefficient,VulkanGasRemap.AmbientTables ambient,long step){
+        double standardDensity=0.0;
+        for(int c=0;c<ambient.handles().length;c++)standardDensity+=(double)ambient.weights()[c]/ambient.totalWeight()
+                *((double)ambient.massNumerators()[c]/ambient.massDenominators()[c])*.1;
+        return new Parameters(duration,dischargeCoefficient,mmm.fluid.air.GasRegistry.STANDARD_PRESSURE_PA,ambient.temperature(),
+                standardDensity*mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K/ambient.temperature(),step);
+    }
+    static final class Layout {
+        final VulkanGasThermodynamics.Layout eos;final VulkanGasGeometry.Layout geometry;final int pairs,hashes,faces,nodes,routes;
+        final VulkanLiquidStateLayout.Column header;final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);final long endOffset;
+        Layout(VulkanGasThermodynamics.Layout eos,VulkanGasGeometry.Layout geometry,int pairCapacity,long base,long alignment){
+            this.eos=eos;this.geometry=geometry;pairs=pairCapacity;faces=geometry.faces();nodes=eos.gas().nodeCapacity();routes=Math.addExact(nodes,pairs);
+            if(pairCapacity<1||nodes<1||base<Math.max(eos.endOffset(),geometry.endOffset())||alignment<8||(alignment&(alignment-1))!=0)throw new IllegalArgumentException("Invalid gas-flow layout");
+            int hash=1;while(hash<Math.multiplyExact(faces,2))hash=Math.multiplyExact(hash,2);hashes=hash;
+            long[] cursor={base};header=allocate(cursor,160,4,alignment);
+            for(Field field:Field.values()){
+                int n=switch(field){
+                    case FACE_A,FACE_B,FACE_PAIR,PAIR_FACES->faces;
+                    case HASH,HASH_FLAGS->hashes;case HASH_OFFSETS->hashes+1;
+                    case PAIR_A,PAIR_B,PAIR_COUNTS,PAIR_CURSORS,PAIR_G,PAIR_FLOW->pairs;case PAIR_OFFSETS->pairs+1;
+                    case NODE_COUNTS,NODE_CURSORS,STORAGE,DIAGONAL_ROOT,OUT_SCALE,START_COUNTS,ROWS,PRESSURE,RETAINED_VOLUME,MODES->nodes;
+                    case NODE_OFFSETS,STARTS->nodes+1;case NODE_PAIRS->Math.multiplyExact(pairs,2);
+                    case COLUMNS,VALUES->Math.addExact(nodes,Math.multiplyExact(pairs,2));
+                    case WORK->Math.multiplyExact(nodes,5);case META->Math.multiplyExact(nodes,2);case PROBLEM->Math.addExact(Math.multiplyExact(nodes,3),1);
+                    case CONTROL->16;case PARTIALS->Math.multiplyExact((nodes+255)/256,4);
+                    case ROUTE_COUNT,STEP->1;case ROUTE_SOURCE,ROUTE_TARGET,ROUTE_WEIGHT,AMBIENT_VOLUME,SOURCE_ROUTES,TARGET_ROUTES->routes;
+                    case SOURCE_COUNTS,SOURCE_CURSORS->nodes+2;case SOURCE_OFFSETS->nodes+3;
+                    case TARGET_COUNTS,TARGET_CURSORS->nodes+1;case TARGET_OFFSETS->nodes+2;case DISPATCH->18;
+                    case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(hashes,Math.max(routes,nodes+2)))/4);
+                };columns.put(field,allocate(cursor,n,field.width,alignment));
+            }endOffset=align(cursor[0],alignment);Math.toIntExact(endOffset/4);
+        }
+        VulkanLiquidStateLayout.Column column(Field field){return columns.get(field);}int word(Field field){return Math.toIntExact(column(field).offset()/4);}
+        int headerWordOffset(){return Math.toIntExact(header.offset()/4);}long endOffset(){return endOffset;}
+        long requiredPairsOffset(){return column(Field.HASH_OFFSETS).offset()+4L*hashes;}
+        VulkanGasRoutes routes(){return new VulkanGasRoutes(eos.gas(),geometry,routes,word(Field.ROUTE_COUNT),word(Field.ROUTE_SOURCE),word(Field.ROUTE_TARGET),word(Field.ROUTE_WEIGHT),word(Field.SOURCE_OFFSETS),word(Field.SOURCE_ROUTES),word(Field.TARGET_OFFSETS),word(Field.TARGET_ROUTES),word(Field.AMBIENT_VOLUME),endOffset);}
+        ByteBuffer headerBytes(){
+            var b=ByteBuffer.allocateDirect(640).order(ByteOrder.LITTLE_ENDIAN);int[] data=new int[160];
+            var liquid=geometry.totals().source();data[0]=eos.headerWordOffset();data[1]=geometry.headerWordOffset();data[2]=nodes;data[3]=pairs;data[4]=hashes;data[5]=faces;data[6]=routes;
+            data[7]=liquid.sizeX();data[8]=liquid.sizeY();data[9]=liquid.sizeZ();
+            for(Field f:Field.values())data[16+f.ordinal()]=word(f);for(int i=0;i<data.length;i++)b.putInt(4*i,data[i]);return b;
+        }
+        void initializeHeader(ByteBuffer target){target.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());}
+        List<FlipKernelBindings.BufferRange> pressureRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){
+            return List.of(range(arena,Field.STARTS),range(arena,Field.COLUMNS),range(arena,Field.VALUES),range(arena,Field.ROWS),range(arena,Field.PRESSURE),range(arena,Field.PRESSURE),range(arena,Field.WORK),range(arena,Field.META),range(arena,Field.PROBLEM),range(arena,Field.CONTROL),range(arena,Field.PARTIALS),errors);
+        }
+        private FlipKernelBindings.BufferRange range(FlipKernelBindings.BufferRange arena,Field f){var c=column(f);return new FlipKernelBindings.BufferRange(arena.buffer(),arena.offset()+c.offset(),c.bindingBytes());}
+    }
+    static Layout layout(VulkanGasThermodynamics.Layout eos,VulkanGasGeometry.Layout geometry,int pairCapacity,long scratchBase,long alignment){return new Layout(eos,geometry,pairCapacity,scratchBase,alignment);}
+    private final FlipKernelBindings bindings;private final VulkanPrefixScan scan;private FlipKernelBindings.BufferRange arena;
+    VulkanGasFlow(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,2,shader(),64);try{scan=new VulkanPrefixScan(context);}catch(RuntimeException|LinkageError failure){bindings.close();throw failure;}}
+    void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){this.arena=arena;bindings.rebindRanges(List.of(arena,errors));scan.rebindRanges(arena,arena,arena,errors);}
+    void recordAssemble(VkCommandBuffer command,Layout l,Parameters parameters){
+        stage(command,l,parameters,0,Math.max(l.hashes,Math.max(l.pairs,l.nodes+2)));
+        stage(command,l,parameters,1,l.faces);stage(command,l,parameters,2,l.faces);
+        prefix(command,l,l.hashes,Field.HASH_FLAGS,Field.HASH_OFFSETS);stage(command,l,parameters,3,l.hashes);stage(command,l,parameters,4,l.faces);
+        prefix(command,l,l.pairs,Field.PAIR_COUNTS,Field.PAIR_OFFSETS);prefix(command,l,l.nodes,Field.NODE_COUNTS,Field.NODE_OFFSETS);
+        prefix(command,l,l.nodes,Field.START_COUNTS,Field.STARTS);stage(command,l,parameters,5,l.faces);stage(command,l,parameters,6,l.pairs);
+        stage(command,l,parameters,7,l.pairs);stage(command,l,parameters,8,l.nodes);stage(command,l,parameters,9,l.nodes);
+    }
+    /** Call after the shared PCG has finished successfully; pressure uses the columns from pressureRanges. */
+    void recordRoutes(VkCommandBuffer command,Layout l,Parameters parameters){
+        stage(command,l,parameters,10,l.pairs);stage(command,l,parameters,11,l.nodes);stage(command,l,parameters,12,l.routes);
+        prefix(command,l,l.nodes+2,Field.SOURCE_COUNTS,Field.SOURCE_OFFSETS);prefix(command,l,l.nodes+1,Field.TARGET_COUNTS,Field.TARGET_OFFSETS);
+        stage(command,l,parameters,13,l.routes);
+    }
+    private void prefix(VkCommandBuffer command,Layout l,int n,Field input,Field output){scan.record(command,n,l.word(input),l.word(output),l.word(Field.SCAN));}
+    private void stage(VkCommandBuffer cmd,Layout l,Parameters q,int stage,int count){
+        if(count==0)return;int groups=(count+127)/128;try(var stack=stackPush()){
+            bindings.bind(cmd,stack);var push=stack.malloc(64).putInt(l.headerWordOffset()).putInt(stage).putInt(count).putInt(0)
+                    .putDouble(q.duration()).putDouble(q.dischargeCoefficient()).putDouble(q.ambientPressure()).putDouble(q.ambientTemperature()).putDouble(q.ambientDensity()).putLong(q.step()).flip();
+            vkCmdPushConstants(cmd,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,push);
+            int indirect=switch(stage){case 6->0;case 7,10->1;case 8,9,11->2;case 12,13->4;default->-1;};
+            if(indirect>=0){barrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
+                vkCmdDispatchIndirect(cmd,arena.buffer().handle(),arena.offset()+l.column(Field.DISPATCH).offset()+12L*indirect);
+            }else vkCmdDispatch(cmd,Math.min(groups,65535),(groups+65534)/65535,1);
+            barrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
+        }
+    }
+    private static long align(long n,long a){return Math.addExact(n,a-1)&-a;}
+    private static VulkanLiquidStateLayout.Column allocate(long[] cursor,int count,int width,long a){var c=new VulkanLiquidStateLayout.Column(align(cursor[0],a),count,width);cursor[0]=Math.addExact(c.offset(),c.bindingBytes());return c;}
+    private static String shader(){try(var input=VulkanGasFlow.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/gas-flow.comp")){if(input==null)throw new IllegalStateException("Gas flow shader missing");return new String(input.readAllBytes(),StandardCharsets.UTF_8);}catch(IOException failure){throw new IllegalStateException("Gas flow shader unavailable",failure);}}
+    @Override public void close(){try{scan.close();}finally{bindings.close();}}
+}

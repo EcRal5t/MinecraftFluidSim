@@ -3,7 +3,7 @@ package mmm.gpuprobe;
 /** Resident gas routing graph shared by topology changes and finite-aperture flow.
  * Source ids are 0 vacuum, 1 ambient, 2+i inventory row; targets are 0 ambient, 1+i finite row.
  * The source and target CSR columns contain route ids. All offsets are absolute candidate-arena words.
- * Ambient volumes are actual cubic metres at the configured reservoir temperature.
+ * Ambient volumes are equivalent cubic metres at standard pressure and the configured reservoir temperature.
  */
 record VulkanGasRoutes(VulkanGasStateLayout gas,VulkanGasGeometry.Layout futureGeometry,int capacity,
                        int countWordOffset,int sourcesWordOffset,int targetsWordOffset,int weightsWordOffset,

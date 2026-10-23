@@ -129,10 +129,12 @@ void groupEnergy(int g,bool afterWork){
   double mass=double(u64(f(PM)+2*part))*1e-10LF;energy+=mass*specific;capacity+=mass*cv;
   for(int at=int(words[f(SO)+part]);at<int(words[f(SO)+part+1]);at++){uint64_t amount=u64(f(SA)+2*at);if(amount==uint64_t(0))continue;int species=int(words[f(SH)+at]);double reference=number(th(8)+2*(handle*th(2)+species));if(!finite(reference)){invalid();return;}energy+=double(amount)*reference;}
  }
+ if(h(12)!=0&&s==1){uint64_t nanos=uint64_t(0);for(int part=partBegin(g);part<partEnd(g);part++)nanos=plus(nanos,u64(f(PN)+2*part));energy+=double(nanos)*number(h(1)+36)*number(p.header+114);}
  if(!finite(energy)||!finite(capacity)){invalid();return;}put(f(GE)+2*g,energy);put(f(GC)+2*g,capacity);
 }
 void closeSourceEnergy(int node,bool afterWork){
  if(node>=nodeCount())return;int begin=sourceBegin(node),end=sourceEnd(node),pivot=-1;double largest=0.0;
+ if(h(12)!=0&&!afterWork){int self=int(words[f(PIVOT)+node]);put(dst(ENERGY,false)+2*node,self>=0?number(f(GE)+2*self):0.0);return;}
  for(int at=begin;at<end;at++){int g=sourceGroup(at);if(afterWork&&target(g)==0)continue;double cv=number(f(GC)+2*g);if(cv>largest){largest=cv;pivot=g;}}
  double energy=afterWork?number(p.workEnergy+2*node):number(old(ENERGY)+2*node),sum=0.0;
  if(pivot>=0){
@@ -151,7 +153,7 @@ int actualRows(bool future){return (future?futureCount():nodeCount())+2;}
 int memberBegin(int row,bool future){int n=future?futureCount():nodeCount();if(!future)return row<n?sourceBegin(row):0;int index=row<n?row+1:row==n?1:0;return int(words[(row==n?rh(4):rh(6))+index]);}
 int memberEnd(int row,bool future){int n=future?futureCount():nodeCount();if(!future)return row<n?sourceEnd(row):0;int index=row<n?row+1:row==n?1:0;return int(words[(row==n?rh(4):rh(6))+index+1]);}
 int memberGroup(int row,int at,bool future){return int(words[(!future||row==futureCount()?rh(5):rh(7))+at]);}
-bool memberAllowed(int row,int g,bool future){if(!future)return target(g)>0;int n=futureCount();return row<n||row==n?target(g)>0:source(g)>=2;}
+bool memberAllowed(int row,int g,bool future){if(!future)return h(12)!=0?target(g)==row+1:target(g)>0;int n=futureCount();return row<n||row==n?target(g)>0:source(g)>=2;}
 int auditBegin(int row,bool future){return future&&row>=futureCount()?int(words[old(ROWS)+nodeCount()+row-futureCount()]):0;}
 int auditEnd(int row,bool future){return future&&row>=futureCount()?int(words[old(ROWS)+nodeCount()+row-futureCount()+1]):0;}
 int oldPart(int row,int handle,bool future){int begin=auditBegin(row,future),end=auditEnd(row,future);for(int c=begin;c<end;c++)if(int(words[old(HANDLES)+c])==handle)return c;return -1;}
@@ -173,6 +175,112 @@ int64_t sumResidual(int lane,int64_t value){
  residuals[lane]=value;barrier();
  for(int width=64;width>0;width>>=1){if(lane<width)residuals[lane]=signedPlus(residuals[lane],residuals[lane+width]);barrier();}
  int64_t result=residuals[0];barrier();return result;
+}
+shared uint64_t prefixValues[128];shared double transportVolumes[128];
+uint64_t exclusivePrefix(int lane,uint64_t value){
+ prefixValues[lane]=value;barrier();
+ for(int shift=1;shift<128;shift<<=1){uint64_t addend=lane>=shift?prefixValues[lane-shift]:uint64_t(0);barrier();prefixValues[lane]=plus(prefixValues[lane],addend);barrier();}
+ uint64_t result=prefixValues[lane]-value;barrier();return result;
+}
+uint64_t mixPhase(uint64_t x){x=(x^(x>>30))*uint64_t(0xbf58476d1ce4e5b9UL);x=(x^(x>>27))*uint64_t(0x94d049bb133111ebUL);return x^(x>>31);}
+uint64_t phaseOffset(uint64_t denominator,uint64_t phase){return portion(denominator,phase>>11,uint64_t(0x20000000000000UL));}
+uint64_t endpoint(uint64_t total,uint64_t cumulative,uint64_t denominator,uint64_t offset){uint64_t remainder,q=divide(total,cumulative,denominator,remainder);return q+(remainder>=denominator-offset&&offset!=uint64_t(0)?uint64_t(1):uint64_t(0));}
+void transportColumn(int node,int local,uint64_t sourceN,uint64_t magnitude,bool negative,int speciesLocal,int speciesHandle,int lane,uint64_t phase){
+ int begin=sourceBegin(node),end=sourceEnd(node);uint64_t carry=uint64_t(0),offset=phaseOffset(sourceN,phase);
+ for(int block=begin;block<end;block+=128){
+  int at=block+lane,g=at<end?sourceGroup(at):-1,part=g>=0?partBegin(g)+local:-1;uint64_t n=part>=0?u64(f(PN)+2*part):uint64_t(0);
+  uint64_t cumulative=carry+exclusivePrefix(lane,n),nextCarry=carry+prefixValues[127];barrier();
+  if(part>=0){uint64_t share=endpoint(magnitude,cumulative+n,sourceN,offset)-endpoint(magnitude,cumulative,sourceN,offset);
+   if(speciesLocal<0)put64(f(PR)+2*part,negative?uint64_t(0)-share:share);
+   else{int entry=int(words[f(SO)+part])+speciesLocal;words[f(SH)+entry]=uint(speciesHandle);put64(f(SA)+2*entry,share);}}
+  carry=nextCarry;barrier();
+ }
+}
+void splitTransport(int node,int lane){
+ int begin=sourceBegin(node),end=sourceEnd(node);double localVolume=0.0;int self=2147483647;
+ for(int at=begin+lane;at<end;at+=128){int g=sourceGroup(at);localVolume+=number(rh(3)+2*g);if(target(g)==node+1)self=g;}
+ transportVolumes[lane]=localVolume;barrier();for(int k=64;k>0;k>>=1){if(lane<k)transportVolumes[lane]+=transportVolumes[lane+k];barrier();}
+ double total=transportVolumes[0];self=minimumHandle(lane,self);
+ if(lane==0)words[f(PIVOT)+node]=uint(self);if(begin==end)return;
+ if(self<0||!(finite(total)&&total>0.0)){if(lane==0)invalid();return;}
+ uint64_t allocated=uint64_t(0);
+ for(int at=begin+lane;at<end;at+=128){int g=sourceGroup(at);if(g==self)continue;uint64_t w=uint64_t(max(0.0LF,number(rh(3)+2*g)/total*double(SCALE)));put64(f(W)+2*g,w);allocated=plus(allocated,w);}
+ allocated=sumQuantity(lane,allocated);if(allocated>=SCALE){if(lane==0)invalid();return;}if(lane==0)put64(f(W)+2*self,SCALE-allocated);memoryBarrierBuffer();barrier();
+ uint64_t phase=mixPhase(u64(h(13))^uint64_t(words[old(KEYS)+node]));
+ int first=int(words[old(ROWS)+node]),last=int(words[old(ROWS)+node+1]);
+ for(int c=first;c<last;c++){
+  int local=c-first;uint64_t nanos=u64(old(NANOS)+2*c),mass=u64(old(MASS)+2*c),carry=uint64_t(0),offset=phaseOffset(SCALE,phase),usedN=uint64_t(0);
+  for(int block=begin;block<end;block+=128){int at=block+lane,g=at<end?sourceGroup(at):-1;uint64_t w=g>=0?u64(f(W)+2*g):uint64_t(0),cumulative=carry+exclusivePrefix(lane,w),nextCarry=carry+prefixValues[127];barrier();
+   if(g>=0){uint64_t n=endpoint(nanos-uint64_t(1),cumulative+w,SCALE,offset)-endpoint(nanos-uint64_t(1),cumulative,SCALE,offset);if(g==self)n++;else if(n>uint64_t(0)&&portion(mass,n,nanos)==uint64_t(0))n=uint64_t(0);put64(f(PN)+2*(partBegin(g)+local),n);if(g!=self)usedN=plus(usedN,n);}
+   carry=nextCarry;barrier();
+  }
+  usedN=sumQuantity(lane,usedN);if(lane==0)put64(f(PN)+2*(partBegin(self)+local),nanos-usedN);memoryBarrierBuffer();barrier();
+  uint64_t usedMass=uint64_t(0);for(int at=begin+lane;at<end;at+=128){int g=sourceGroup(at);if(g==self)continue;int part=partBegin(g)+local;uint64_t m=portion(mass,u64(f(PN)+2*part),nanos);put64(f(PM)+2*part,m);usedMass=plus(usedMass,m);}
+  usedMass=sumQuantity(lane,usedMass);if(lane==0)put64(f(PM)+2*(partBegin(self)+local),mass-usedMass);
+  int64_t residual=i64(old(RESIDUAL)+2*c);bool negative=residual<int64_t(0);uint64_t magnitude=negative?uint64_t(0)-uint64_t(residual):uint64_t(residual);
+  transportColumn(node,local,nanos,magnitude,negative,-1,0,lane,phase);
+  int sb=int(words[old(SPO)+c]),se=int(words[old(SPO)+c+1]);
+  for(int entry=sb;entry<se;entry++)transportColumn(node,local,nanos,u64(old(SPA)+2*entry),false,entry-sb,int(words[old(SPH)+entry]),lane,phase);
+ }
+}
+void retainedVolumes(int node,int lane){
+ uint64_t sourceN=uint64_t(0),retainedN=uint64_t(0);int self=int(words[f(PIVOT)+node]);
+ for(int c=int(words[old(ROWS)+node])+lane;c<int(words[old(ROWS)+node+1]);c+=128)sourceN=plus(sourceN,u64(old(NANOS)+2*c));
+ if(self>=0)for(int c=partBegin(self)+lane;c<partEnd(self);c+=128)retainedN=plus(retainedN,u64(f(PN)+2*c));
+ sourceN=sumQuantity(lane,sourceN);retainedN=sumQuantity(lane,retainedN);
+ if(lane==0){double volume=number(th(3)+2*node),fraction=sourceN>uint64_t(0)?double(retainedN)/double(sourceN):1.0LF;
+  if(sourceN>uint64_t(0)&&retainedN==uint64_t(0))invalid();put(p.workEnergy+2*node,volume*fraction);words[p.workTemperature+node]=sourceN>uint64_t(0)?1u:0u;}
+}
+// Rank the candidate component's k-th Jefferson seat. The initial proportional
+// floors leave fewer than componentCount seats, so the search range is small.
+uint64_t ambientShare(uint64_t total,int component){
+ uint64_t weight=u64(f(AW)+2*component),den=u64(p.header+112),lo=portion(total,weight,den),hi=min(total,lo+uint64_t(h(11)));
+ while(lo<hi){uint64_t seat=lo+(hi-lo+uint64_t(1))/uint64_t(2),rank=uint64_t(0);bool beyond=false;
+  for(int other=0;other<h(11);other++){
+   uint64_t otherWeight=u64(f(AW)+2*other);if(productGreater(seat,otherWeight,total,weight)){beyond=true;break;}
+   uint64_t remainder,n=divide(seat,otherWeight,weight,remainder);if(remainder==uint64_t(0)&&other>component&&n>uint64_t(0))n--;
+   if(n>total-rank){beyond=true;break;}rank+=n;
+  }
+  if(!beyond&&rank<=total)lo=seat;else hi=seat-uint64_t(1);
+ }return lo;
+}
+void captureAmbientParallel(int lane){
+ int oldNodes=nodeCount(),a=int(words[old(ROWS)+oldNodes]),b=int(words[old(ROWS)+oldNodes+1]);uint64_t cumulative=uint64_t(0);
+ for(int c=a+lane;c<b;c+=128)cumulative=plus(cumulative,u64(old(NANOS)+2*c));cumulative=sumQuantity(lane,cumulative);
+ int begin=int(words[rh(4)+1]),end=int(words[rh(4)+2]);
+ for(int block=begin;block<end;block+=128){
+  int at=block+lane,g=at<end?int(words[rh(5)+at]):-1;double requested=g>=0&&target(g)>0?number(rh(8)+2*g)*1e9LF*293.15LF/number(p.header+114):0.0LF;
+  uint64_t n=uint64_t(0);if(!(finite(requested)&&requested>=0.0&&requested<double(LIMIT))){invalid();}else n=uint64_t(floor(requested+0.5LF));
+  uint64_t beforeTotal=plus(cumulative,exclusivePrefix(lane,n)),afterTotal=plus(beforeTotal,n),nextCumulative=plus(cumulative,prefixValues[127]);barrier();
+  if(g>=0&&target(g)>0)for(int c=0;c<h(11);c++){
+   int part=partBegin(g)+c;uint64_t before=ambientShare(beforeTotal,c),after=ambientShare(afterTotal,c),nanos=after-before,mass=sourceMass(after,c)-sourceMass(before,c),chemical=uint64_t(0);
+   put64(f(PN)+2*part,nanos);put64(f(PM)+2*part,mass);
+   int sb=int(words[f(ASO)+c]),se=int(words[f(ASO)+c+1]);
+   for(int entry=sb;entry<se;entry++){int outAt=int(words[f(SO)+part])+entry-sb;uint64_t numerator=u64(f(ASN)+2*entry),den=u64(f(ASD)+2*entry),q=portion(after,numerator,den)-portion(before,numerator,den),massUnit=u64(f(ASM)+2*entry);
+    words[f(SH)+outAt]=words[f(ASH)+entry];put64(f(SA)+2*outAt,q);if(massUnit!=uint64_t(0)&&q>LIMIT/massUnit)invalid();else chemical=plus(chemical,q*massUnit);
+   }
+   if(nanos>uint64_t(0)&&mass==uint64_t(0))invalid();if(nanos==uint64_t(0)&&(mass!=uint64_t(0)||chemical!=uint64_t(0)))invalid();put64(f(PR)+2*part,uint64_t(int64_t(mass)-int64_t(chemical)));
+  }
+  cumulative=nextCumulative;barrier();
+ }
+}
+uint64_t groupNanos(int group){uint64_t n=uint64_t(0);for(int part=partBegin(group);part<partEnd(group);part++)n=plus(n,u64(f(PN)+2*part));return n;}
+void transportEnergy(int node,int lane){
+ int begin=sourceBegin(node),end=sourceEnd(node),self=int(words[f(PIVOT)+node]),pivot=-1;uint64_t totalOut=uint64_t(0),largest=uint64_t(0);
+ for(int at=begin+lane;at<end;at+=128){int g=sourceGroup(at);if(g==self)continue;uint64_t n=groupNanos(g);totalOut=plus(totalOut,n);if(n>largest||(n==largest&&n>uint64_t(0)&&(pivot<0||g<pivot))){largest=n;pivot=g;}}
+ totalOut=sumQuantity(lane,totalOut);quantities[lane]=largest;choices[lane]=pivot;barrier();
+ for(int width=64;width>0;width>>=1){if(lane<width&&(quantities[lane+width]>quantities[lane]||(quantities[lane+width]==quantities[lane]&&choices[lane+width]>=0&&(choices[lane]<0||choices[lane+width]<choices[lane])))){quantities[lane]=quantities[lane+width];choices[lane]=choices[lane+width];}barrier();}
+ pivot=choices[0];barrier();double original=number(old(ENERGY)+2*node);
+ if(totalOut==uint64_t(0)){if(lane==0&&self>=0)put(f(GE)+2*self,original);return;}
+ if(self<0||pivot<0){if(lane==0)invalid();return;}
+ double retained=number(p.workEnergy+2*node),carried,firstError;twoSum(original,-retained,carried,firstError);
+ double local=0.0;int representative=-1;
+ for(int at=begin+lane;at<end;at+=128){int g=sourceGroup(at);if(g==self||g==pivot)continue;double share=carried*(double(groupNanos(g))/double(totalOut)),next,error;
+  put(f(GE)+2*g,share);twoSum(local,share,next,error);local=next;put(f(ER)+4*g+2,error);if(representative<0)representative=g;
+ }
+ energies[lane]=local;representatives[lane]=representative;barrier();
+ for(int width=64;width>0;width>>=1){if(lane<width&&representatives[lane+width]>=0){if(representatives[lane]<0){energies[lane]=energies[lane+width];representatives[lane]=representatives[lane+width];}else{double next,error;twoSum(energies[lane],energies[lane+width],next,error);energies[lane]=next;put(f(ER)+4*representatives[lane+width]+2,error);}}barrier();}
+ if(lane==0){double remainder,error;twoSum(carried,-energies[0],remainder,error);if(!finite(remainder)||!finite(retained))invalid();put(f(GE)+2*self,retained);put(f(GE)+2*pivot,remainder);put(f(RR)+4*node,-firstError);put(f(SR)+4*node+2,-error);}
 }
 int nextHandleParallel(int row,int previous,bool future,int lane){
  int result=2147483647;
@@ -306,16 +414,21 @@ void measureTotal(int lane){
  if(lane==0&&futureCount()>h(6))atomicOr(errors,64u);
 }
 void prepareDispatch(){
- int sizes[4]=int[4](groups(),nodeCount(),nodeCount()+2,futureCount()+2);
- for(int i=0;i<4;i++){int total=errors==0u?(i<2?(sizes[i]+127)/128:sizes[i]):0,at=f(35)+3*i;words[at]=uint(min(total,65535));words[at+1]=uint(max(1,(total+65534)/65535));words[at+2]=1u;}
+ int sizes[5]=int[5](groups(),nodeCount(),nodeCount()+2,futureCount()+2,nodeCount());
+ for(int i=0;i<5;i++){int total=errors==0u?(i<2?(sizes[i]+127)/128:sizes[i]):0,at=f(35)+3*i;words[at]=uint(min(total,65535));words[at+1]=uint(max(1,(total+65534)/65535));words[at+2]=1u;}
 }
 void main(){
  int row=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*row+lane;
  if(p.stage==18){
-  if(id==0){for(int i=0;i<9;i++)words[f(REQ)+i]=0u;
+  if(id==0){for(int i=0;i<9;i++)words[f(REQ)+i]=0u;for(int i=0;i<6;i++){words[f(35)+3*i]=0u;words[f(35)+3*i+1]=1u;words[f(35)+3*i+2]=1u;}
    if(errors==0u){words[f(REQ)+6]=uint(futureCount());words[f(REQ)+7]=uint(groups());words[f(REQ)+8]=1u;prepareDispatch();}}
   return;
  }
+ if((p.stage==2&&h(12)!=0)||p.stage==23||p.stage==24){
+  if(lane==0)rowValid=errors==0u&&row<nodeCount()?1:0;barrier();if(rowValid==0)return;
+  if(p.stage==2)splitTransport(row,lane);else if(p.stage==23)retainedVolumes(row,lane);else transportEnergy(row,lane);return;
+ }
+ if(p.stage==3&&h(12)!=0){if(lane==0)rowValid=errors==0u?1:0;barrier();if(rowValid!=0)captureAmbientParallel(lane);return;}
  if(p.stage==21||p.stage==22){
   if(lane==0)rowValid=words[f(REQ)+8]!=0u&&(p.stage==22||row<futureCount()+2)?1:0;
   barrier();if(rowValid==0)return;if(p.stage==21)measureFuture(row,lane);else measureTotal(lane);return;

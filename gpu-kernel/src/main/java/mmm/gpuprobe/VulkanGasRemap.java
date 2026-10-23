@@ -57,12 +57,12 @@ final class VulkanGasRemap implements AutoCloseable {
     }
     static final class Layout {
         final VulkanGasRoutes routes;final VulkanGasThermodynamics.Layout sourceEOS;
-        final VulkanGasStateLayout retained,future;final AmbientTables ambient;final int partCapacity,speciesCapacity;
+        final VulkanGasStateLayout retained,future;final AmbientTables ambient;final int partCapacity,speciesCapacity;final boolean transport;final int phaseWordOffset;
         final VulkanLiquidStateLayout.Column header;final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);final long endOffset;
         Layout(VulkanGasRoutes routes,VulkanGasThermodynamics.Layout sourceEOS,VulkanGasStateLayout retained,
-               VulkanGasStateLayout future,AmbientTables ambient,int partCapacity,int speciesCapacity,long scratchBase,long alignment) {
+               VulkanGasStateLayout future,AmbientTables ambient,int partCapacity,int speciesCapacity,long scratchBase,long alignment,boolean transport,int phaseWordOffset) {
             this.routes=routes;this.sourceEOS=sourceEOS;this.retained=retained;this.future=future;this.ambient=ambient;
-            this.partCapacity=partCapacity;this.speciesCapacity=speciesCapacity;
+            this.partCapacity=partCapacity;this.speciesCapacity=speciesCapacity;this.transport=transport;this.phaseWordOffset=phaseWordOffset;
             if(retained.nodeCapacity()!=routes.gas().nodeCapacity()||!retained.definitions().equals(routes.gas().definitions())
                     ||!future.definitions().equals(routes.gas().definitions())||partCapacity<0||speciesCapacity<0
                     ||scratchBase<Math.max(Math.max(routes.endOffset(),sourceEOS.endOffset()),Math.max(retained.endOffset(),future.endOffset()))
@@ -108,7 +108,7 @@ final class VulkanGasRemap implements AutoCloseable {
             var b=ByteBuffer.allocateDirect(640).order(ByteOrder.LITTLE_ENDIAN);int[] data=new int[160];
             data[0]=0;data[1]=sourceEOS.headerWordOffset();data[2]=routes.capacity();data[3]=partCapacity;data[4]=speciesCapacity;
             data[5]=retained.nodeCapacity();data[6]=future.nodeCapacity();data[7]=retained.componentCapacity();data[8]=retained.speciesCapacity();
-            data[9]=future.componentCapacity();data[10]=future.speciesCapacity();data[11]=ambient.handles().length;
+            data[9]=future.componentCapacity();data[10]=future.speciesCapacity();data[11]=ambient.handles().length;data[12]=transport?1:0;data[13]=phaseWordOffset;
             for(var field:VulkanGasStateLayout.Field.values()){
                 data[16+field.ordinal()]=Math.toIntExact(routes.gas().column(field).offset()/4);
                 data[32+field.ordinal()]=Math.toIntExact(retained.column(field).offset()/4);
@@ -121,6 +121,7 @@ final class VulkanGasRemap implements AutoCloseable {
             for(int i=0;i<data.length;i++)b.putInt(4*i,data[i]);b.putLong(4*112,ambient.totalWeight());b.putDouble(4*114,ambient.temperature());return b;
         }
         /** Signed terms whose exact sum is Ufuture + escapedDelta - Uold - capturedDelta - gasWork.
+         * For transport layouts, gasWork is absent: donor cooling and carried enthalpy settle internally.
          * Pre-work partition diagnostics occupy the even ENERGY_ROUNDOFF/SOURCE_ROUNDOFF lanes;
          * the endpoint ledger uses only the post-work odd lanes plus retained and gather corrections.
          */
@@ -159,7 +160,19 @@ final class VulkanGasRemap implements AutoCloseable {
     }
     static Layout layout(VulkanGasRoutes routes,VulkanGasThermodynamics.Layout sourceEOS,VulkanGasStateLayout retained,
                          VulkanGasStateLayout future,AmbientTables ambient,int partCapacity,int speciesCapacity,long scratchBase,long alignment){
-        return new Layout(routes,sourceEOS,retained,future,ambient,partCapacity,speciesCapacity,scratchBase,alignment);
+        return new Layout(routes,sourceEOS,retained,future,ambient,partCapacity,speciesCapacity,scratchBase,alignment,false,0);
+    }
+    /** Transport retains each source's self route, then expands that actual retained inventory
+     * from V * retainedN / sourceN back into the unchanged chamber volume. */
+    static Layout transportLayout(VulkanGasRoutes routes,VulkanGasThermodynamics.Layout sourceEOS,VulkanGasStateLayout retained,
+                                  VulkanGasStateLayout future,AmbientTables ambient,int phaseWordOffset,int partCapacity,int speciesCapacity,long scratchBase,long alignment){
+        if(phaseWordOffset<0)throw new IllegalArgumentException("Negative transport phase offset");
+        return new Layout(routes,sourceEOS,retained,future,ambient,partCapacity,speciesCapacity,scratchBase,alignment,true,phaseWordOffset);
+    }
+    /** After prepare, before retained EOS/work. Work's future volumes are sourceEOS.nodeVolumes. */
+    void recordTransportVolumes(VkCommandBuffer command,Layout l,VulkanGasFlow.Layout flow){
+        if(!l.transport)throw new IllegalArgumentException("Transport layout required");
+        stage(command,l,23,l.retained.nodeCapacity(),null,flow.word(VulkanGasFlow.Field.RETAINED_VOLUME),flow.word(VulkanGasFlow.Field.MODES));
     }
     private final FlipKernelBindings bindings;private final VulkanPrefixScan scan;private FlipKernelBindings.BufferRange arena;
     VulkanGasRemap(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,2,shader(),20);try{scan=new VulkanPrefixScan(context);}catch(RuntimeException|LinkageError failure){bindings.close();throw failure;}}
@@ -187,8 +200,9 @@ final class VulkanGasRemap implements AutoCloseable {
         recordFinish(command,l,work,null);
     }
     void recordFinish(VkCommandBuffer command,Layout l,VulkanGasAdiabaticWork.Layout work,VulkanStageTimings timings){
-        timed(timings,command,"remap-group-energy",()->stage(command,l,9,l.routes.capacity(),work));
-        timed(timings,command,"remap-source-energy",()->stage(command,l,10,l.retained.nodeCapacity(),work));
+        if(l.transport)timed(timings,command,"gas-flow-energy",()->stage(command,l,24,l.retained.nodeCapacity(),work));
+        else{timed(timings,command,"remap-group-energy",()->stage(command,l,9,l.routes.capacity(),work));
+            timed(timings,command,"remap-source-energy",()->stage(command,l,10,l.retained.nodeCapacity(),work));}
         gather(command,l,true,work,timings);
         timed(timings,command,"remap-topology",()->stage(command,l,15,l.routes.futureGeometry().cells(),work));
     }
@@ -208,10 +222,14 @@ final class VulkanGasRemap implements AutoCloseable {
         if(timings==null)action.run();else timings.record(command,label,action);
     }
     private void stage(VkCommandBuffer cmd,Layout l,int stage,int count,VulkanGasAdiabaticWork.Layout work){
+        stage(cmd,l,stage,count,work,work==null?0:Math.toIntExact(work.candidateEnergy().offset()/4),work==null?0:Math.toIntExact(work.candidateTemperature().offset()/4));
+    }
+    private void stage(VkCommandBuffer cmd,Layout l,int stage,int count,VulkanGasAdiabaticWork.Layout work,int first,int second){
         if(count==0)return;int groups=(int)(((long)count+127)/128);try(var stack=stackPush()){
             bindings.bind(cmd,stack);vkCmdPushConstants(cmd,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,stack.ints(l.headerWordOffset(),stage,count,
-                    work==null?0:Math.toIntExact(work.candidateEnergy().offset()/4),work==null?0:Math.toIntExact(work.candidateTemperature().offset()/4)));
-            int indirect=switch(stage){case 1,4,9,19->0;case 2,5,10,20->1;case 6,7,8->2;case 11,12,13,21->3;default->-1;};
+                    first,second));
+            int indirect=switch(stage){case 1,4,9,19->0;case 2,5,10,20->1;case 6,7,8->2;case 11,12,13,21->3;case 23,24->4;default->-1;};
+            if(stage==2&&l.transport)indirect=4;
             if(indirect>=0){barrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
                 vkCmdDispatchIndirect(cmd,arena.buffer().handle(),arena.offset()+l.column(Field.DISPATCH).offset()+12L*indirect);
