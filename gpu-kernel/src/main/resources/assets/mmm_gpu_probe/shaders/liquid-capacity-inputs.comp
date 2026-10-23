@@ -24,7 +24,7 @@ void cellInputs() {
     int64_t pore=(int64_t(bitCount((~words[h(8)+cell])&255u))<<21)-solid;
     bool tail=words[h(6)+cell]!=0u&&int(words[h(7)+cell])<h(4);
     int64_t upper=(pore<<(-24-h(4)))-(tail?int64_t(1):int64_t(0));
-    if(k<int64_t(0)||pore<int64_t(0)||upper<k){atomicOr(errors,4096u);return;}
+    if(k<int64_t(0)||pore<int64_t(0)||(p.stage!=3&&upper<k)){atomicOr(errors,4096u);return;}
     ivec3 pos=ivec3(cell%h(0),cell/h(0)%h(1),cell/(h(0)*h(1)));
     double desired[6];double sum=0.0,incomingGas=0.0;uint open=0u;
     for(int side=0;side<6;side++) {
@@ -49,8 +49,9 @@ void cellInputs() {
     }
     putInteger(h(20)+14*cell,remaining);
     // Exact full cells need actual incoming dry-space transport before creating new dry volume.
-    bool full=!tail&&k==upper;
-    int64_t lower=full?k-int64_t(min(double(k),floor(incomingGas*scale))):int64_t(0);
+    bool full=!tail&&k>=upper;
+    int64_t filled=min(k,upper);
+    int64_t lower=full?filled-int64_t(min(double(filled),floor(incomingGas*scale))):int64_t(0);
     putInteger(h(16)+2*cell,k);putInteger(h(17)+2*cell,lower);putInteger(h(18)+2*cell,upper);
     int node=h(22)>0?int(words[h(23)+cell]):0;
     if(node>h(22)){atomicOr(errors,64u);return;}
@@ -83,7 +84,7 @@ void groupInputs() {
         if(group<int(words[h(26)]))for(int component=int(words[h(27)+group]);component<int(words[h(27)+group+1]);component++)
             if(integerAt(h(28)+2*component)>int64_t(0))nonempty=true;
         int64_t limit=groupUpper[0]-(nonempty&&groupTail[0]==0u&&groupUpper[0]<MAX_TOTAL?int64_t(1):int64_t(0));
-        if(limit<groupSource[0]||limit<int64_t(0)){atomicOr(errors,4096u);return;}
+        if((p.stage!=4&&limit<groupSource[0])||limit<int64_t(0)){atomicOr(errors,4096u);return;}
         putInteger(h(29)+2*group,limit);
     }
 }
@@ -93,7 +94,7 @@ void main(){
             uint activeNodes=errors==0u?nodes:0u;words[h(30)]=min(activeNodes,65535u);words[h(30)+1]=max(1u,(activeNodes+65534u)/65535u);words[h(30)+2]=1u;}
         return;
     }
-    if(p.stage==0){if(errors==0u)cellInputs();return;}
+    if(p.stage==0||p.stage==3){if(errors==0u)cellInputs();return;}
     if(gl_LocalInvocationID.x==0u)stopped=errors;barrier();
     if(stopped==0u)groupInputs();
 }

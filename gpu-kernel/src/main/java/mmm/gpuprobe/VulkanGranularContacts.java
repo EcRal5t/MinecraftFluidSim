@@ -25,14 +25,19 @@ final class VulkanGranularContacts implements AutoCloseable {
     }
     static final class Layout {
         private final VulkanGranularStateLayout state;
-        private final VulkanGranularPressure.Layout pressure;
+        private final VulkanLiquidStateLayout.Column finalK;
         private final int contacts;private final long endOffset;
         private final VulkanLiquidStateLayout.Column header;
         private final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);
         Layout(VulkanGranularStateLayout state,VulkanGranularPressure.Layout pressure,int contactCapacity,long scratchBase,long alignment){
-            if(contactCapacity<0||scratchBase<pressure.endOffset()||alignment<8||(alignment&(alignment-1))!=0)
+            this(state,pressure.column(VulkanGranularPressure.Field.FINAL_K),contactCapacity,scratchBase,alignment);
+            if(scratchBase<pressure.endOffset())throw new IllegalArgumentException("Contact scratch overlaps pressure");
+        }
+        Layout(VulkanGranularStateLayout state,VulkanLiquidStateLayout.Column finalK,int contactCapacity,long scratchBase,long alignment){
+            if(contactCapacity<0||scratchBase<state.endOffset()||scratchBase<finalK.offset()+finalK.bytes()
+                    ||finalK.count()!=state.particleCapacity()||finalK.elementBytes()!=8||alignment<8||(alignment&(alignment-1))!=0)
                 throw new IllegalArgumentException("Invalid granular contact layout");
-            this.state=state;this.pressure=pressure;contacts=contactCapacity;
+            this.state=state;this.finalK=finalK;contacts=contactCapacity;
             header=new VulkanLiquidStateLayout.Column(align(scratchBase,alignment),64,4);long cursor=header.offset()+header.bytes();
             for(Field field:Field.values()){
                 int count=switch(field){
@@ -60,7 +65,7 @@ final class VulkanGranularContacts implements AutoCloseable {
             var result=ByteBuffer.allocateDirect(256).order(ByteOrder.LITTLE_ENDIAN);
             result.putInt(0,state.particleCapacity()).putInt(4,contacts).putInt(8,state.word(VulkanGranularStateLayout.Field.COUNTS))
                     .putInt(12,state.word(VulkanGranularStateLayout.Field.VELOCITY)).putInt(16,state.word(VulkanGranularStateLayout.Field.MASS_UNITS))
-                    .putInt(20,Math.toIntExact(pressure.column(VulkanGranularPressure.Field.FINAL_K).offset()/4));
+                    .putInt(20,Math.toIntExact(finalK.offset()/4));
             for(var field:Field.values())result.putInt(4*(16+field.ordinal()),word(field));return result;
         }
         void initializeHeader(ByteBuffer arena){arena.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());}

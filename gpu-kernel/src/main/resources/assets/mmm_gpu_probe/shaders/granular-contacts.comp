@@ -46,7 +46,7 @@ void proposal(int c){if(c>=contacts()||!validContact(c))return;
  double relaxation=1.0/double(max(get(COUNT,a),b<0?1:get(COUNT,b)));
  double target=p.argument==0?0.0:-read(E,c)*min(0.0,dot(n,relative(SOURCE,c)));
  double old=read(LAMBDA,c),next=max(0.0,old+(target-dot(n,v))/inverse);write(LAMBDA,c,old+relaxation*(next-old));
- if(p.argument==1&&b<0){
+ if(p.argument==1){
   dvec3 tangent=vector(TANGENT,c),trial=tangent-(v-n*dot(n,v))/inverse;double magnitude=length(trial),load=read(LAMBDA,c);
   double scale=magnitude==0.0||magnitude<=read(MUS,c)*load?1.0:min(1.0,read(MUD,c)*load/magnitude);
   writeVector(TANGENT,c,tangent+relaxation*(scale*trial-tangent));

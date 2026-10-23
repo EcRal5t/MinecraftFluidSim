@@ -74,14 +74,19 @@ final class VulkanLiquidCapacityInputs implements AutoCloseable {
         this.arena=arena;bindings.rebindRanges(List.of(arena, errors));
     }
     void record(VkCommandBuffer command, Layout layout) {
-        stage(command,layout,0,(layout.capacity().cells()+127)/128);
+        record(command,layout,false);
+    }
+    /** Future occupied SVQ may displace the source K. The lower-bounded solver accepts all routes together. */
+    void recordDisplacement(VkCommandBuffer command,Layout layout){record(command,layout,true);}
+    private void record(VkCommandBuffer command,Layout layout,boolean displacement){
+        stage(command,layout,displacement?3:0,(layout.capacity().cells()+127)/128);
         if(layout.capacity().gasGroups()>0) {
             stage(command,layout,2,1);
             try(var stack=stackPush()) {
                 VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
                 bindings.bind(command,stack);
-                vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,stack.ints(layout.headerWordOffset(),1));
+                vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,stack.ints(layout.headerWordOffset(),displacement?4:1));
                 vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+layout.groupDispatch().offset());
                 VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
