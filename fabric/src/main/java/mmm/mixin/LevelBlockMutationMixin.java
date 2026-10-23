@@ -18,7 +18,8 @@ public abstract class LevelBlockMutationMixin {
 			CallbackInfoReturnable<Boolean> callback) {
 		if((Object)this instanceof ServerLevel level) {
 			var runtime=MmmRuntimeRegistry.find(level.getServer());
-			if(runtime!=null && !runtime.farmlandMoisture().allowsBlockChange(level,position,state)) callback.setReturnValue(false);
+			if(runtime!=null && (!runtime.farmlandMoisture().allowsBlockChange(level,position,state)
+					|| !runtime.pools().allowsBlockChange(level,position,state))) callback.setReturnValue(false);
 		}
 	}
 }

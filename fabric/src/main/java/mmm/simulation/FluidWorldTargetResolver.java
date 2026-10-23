@@ -175,7 +175,7 @@ final class FluidWorldTargetResolver {
 		int x = Mth.floor((position.getX() + 0.5 - origin.getX()) / cellSize);
 		int y = Mth.floor((position.getY() + 0.5 - origin.getY()) / cellSize);
 		int z = Mth.floor((position.getZ() + 0.5 - origin.getZ()) / cellSize);
-		if (!inBounds(domain, x, y, z)) return null;
+		if (!inBounds(domain, x, y, z) || !domain.groupAvailable((z*domain.sizeY()+y)*domain.sizeX()+x)) return null;
 		return new int[] {x, y, z};
 	}
 
@@ -304,7 +304,7 @@ final class FluidWorldTargetResolver {
 		int x = Mth.floor((point.x - origin.getX()) / cellSize);
 		int y = Mth.floor((point.y - origin.getY()) / cellSize);
 		int z = Mth.floor((point.z - origin.getZ()) / cellSize);
-		return inBounds(domain, x, y, z) ? new CellTarget(x, y, z) : null;
+		return inBounds(domain, x, y, z) && domain.groupAvailable((z*domain.sizeY()+y)*domain.sizeX()+x) ? new CellTarget(x, y, z) : null;
 	}
 
 	private static boolean inBounds(FluidDomain domain, int x, int y, int z) {

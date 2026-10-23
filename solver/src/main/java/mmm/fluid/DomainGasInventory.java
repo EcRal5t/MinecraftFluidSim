@@ -52,6 +52,9 @@ final class DomainGasInventory {
         || !(network.availableVolume(node) > 0))
       throw new IllegalArgumentException(
           "Gas transfer requires a finite chamber with positive capacity");
+    for(var chamber:domain.gasState.frame.topology().chambers())if(chamber.minimumPiece()/8>=0
+        && domain.gasState.frame.nodeOfPiece(chamber.minimumPiece())==node
+        && !domain.groupAvailable(chamber.minimumPiece()/8))throw new IllegalStateException("Gas physical group is unavailable");
     var thermal = domain.thermalState;
     if (thermal == null || !thermal.gasModelBound())
       throw new IllegalStateException("Gas transfer requires a bound gas thermal model");

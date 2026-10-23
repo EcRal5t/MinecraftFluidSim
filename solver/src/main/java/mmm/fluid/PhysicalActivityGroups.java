@@ -20,6 +20,7 @@ final class PhysicalActivityGroups {
 	private LiquidCellInventory.Snapshot startLiquid;
 	private long[] startAuxiliary;
 	private boolean enabled;
+	private boolean[] worldAvailable, blocked = new boolean[0];
 
 	static final class Snapshot {
 		static final Snapshot EMPTY = new Snapshot(null, null, new int[0], new int[0], new int[0], List.of(), List.of(), null, null);
@@ -29,13 +30,20 @@ final class PhysicalActivityGroups {
 		final List<int[]> connections, thermalConnections;
 		final long[] auxiliary;
 		final boolean[] requestedWake;
+		final boolean[] worldAvailable;
 		Snapshot(LiquidCellInventory.Snapshot liquid, FixedGeometrySnapshot geometry, int[] roots,
 		         int[] mechanicalQuiet, int[] thermalQuiet, List<int[]> connections, List<int[]> thermalConnections,
 		         long[] auxiliary, boolean[] requestedWake) {
+            this(liquid,geometry,roots,mechanicalQuiet,thermalQuiet,connections,thermalConnections,auxiliary,requestedWake,null);
+        }
+        Snapshot(LiquidCellInventory.Snapshot liquid, FixedGeometrySnapshot geometry, int[] roots,
+                 int[] mechanicalQuiet, int[] thermalQuiet, List<int[]> connections, List<int[]> thermalConnections,
+                 long[] auxiliary, boolean[] requestedWake, boolean[] worldAvailable) {
 			this.liquid=liquid; this.geometry=geometry; this.roots=roots;
 			this.mechanicalQuiet=mechanicalQuiet; this.thermalQuiet=thermalQuiet;
 			this.connections=connections; this.thermalConnections=thermalConnections;
 			this.auxiliary=auxiliary; this.requestedWake=requestedWake;
+            this.worldAvailable=worldAvailable==null?null:worldAvailable.clone();
 		}
 	}
 
@@ -43,19 +51,44 @@ final class PhysicalActivityGroups {
 
 	void restore(Snapshot state) {
 		previous=state; connections=state.connections; thermalConnections=state.thermalConnections;
+        worldAvailable=state.worldAvailable==null?null:state.worldAvailable.clone();
 		requestedWake=state.requestedWake==null?null:state.requestedWake.clone();
 		parent=state.roots.clone();mechanicalQuiet=state.mechanicalQuiet.clone();thermalQuiet=state.thermalQuiet.clone();
 		mechanical=new boolean[parent.length];thermal=new boolean[parent.length];
-		keepMechanical=new boolean[parent.length];keepThermal=new boolean[parent.length];
+		keepMechanical=new boolean[parent.length];keepThermal=new boolean[parent.length];blocked=new boolean[parent.length];
 		for(int cell=0;cell<parent.length;cell++)if(parent[cell]>=0) {
 			mechanical[cell]=mechanicalQuiet[cell]<QUIET_STEPS;thermal[cell]=thermalQuiet[cell]<QUIET_STEPS;
 		}
+        for(int cell=0;cell<parent.length;cell++)if(parent[cell]>=0&&!worldCellAvailable(cell))blocked[root(cell)]=true;
 	}
 
 	Snapshot capture() {
 		return new Snapshot(previous.liquid,previous.geometry,previous.roots,previous.mechanicalQuiet,previous.thermalQuiet,
-				connections,thermalConnections,previous.auxiliary,requestedWake==null?null:requestedWake.clone());
+				connections,thermalConnections,previous.auxiliary,requestedWake==null?null:requestedWake.clone(),worldAvailable);
 	}
+
+    void prepareAvailability(boolean[] available) {
+        if(enabled)throw new IllegalStateException("Cannot replace world availability during a physical step");
+        if(available==null||available.length!=domain.cellCount)throw new IllegalArgumentException("World availability has the wrong cell layout");
+        var before=worldAvailable;
+        boolean all=true;for(boolean value:available)all&=value;
+        if(all&&before==null)return;
+        worldAvailable=all?null:available.clone();
+        if(before!=null)for(int cell=0;cell<available.length;cell++)if(available[cell]&&!before[cell]) {
+            if(requestedWake==null)requestedWake=new boolean[domain.cellCount];requestedWake[cell]=true;
+        }
+        // Availability observation preserves quiet ages and accepted inventory comparisons.
+        var wake=requestedWake==null?null:requestedWake.clone();
+        beginStep();enabled=false;requestedWake=wake;
+        int[] mq=new int[parent.length],tq=new int[parent.length];
+        for(int cell=0;cell<parent.length;cell++){int r=root(cell);if(r>=0){mq[cell]=mechanicalQuiet[r];tq[cell]=thermalQuiet[r];}}
+        previous=new Snapshot(previous.liquid,previous.geometry,parent.clone(),mq,tq,connections,thermalConnections,previous.auxiliary,wake,worldAvailable);
+    }
+    boolean worldCellAvailable(int cell) {return cell>=0&&cell<domain.cellCount&&(worldAvailable==null||worldAvailable[cell]);}
+    boolean groupAvailable(int cell) {int r=root(cell);return worldCellAvailable(cell)&&(r<0||!blocked[r]);}
+    boolean hasAvailableGroups(){if(worldAvailable==null)return true;for(int cell=0;cell<domain.cellCount;cell++)if(root(cell)>=0&&groupAvailable(cell))return true;return false;}
+    boolean parcelAvailable(int index){return groupAvailable(domain.domainStep.granularParcelCell(domain.granularState.parcels.parcel(index)));}
+    boolean bodyAvailable(mmm.world.MovingBodyFluidCoupling.Bounds bounds){for(int cell:bodyCells(bounds))if(!groupAvailable(cell))return false;return true;}
 
 	void replaceConnections(List<int[]> groups) {
 		var copy=new ArrayList<int[]>();
@@ -79,11 +112,12 @@ final class PhysicalActivityGroups {
 		domain.domainFlowFields.preparePhysicalState();
 		int count=domain.cellCount;
 		parent=new int[count]; mechanicalQuiet=new int[count]; thermalQuiet=new int[count];
-		mechanical=new boolean[count]; thermal=new boolean[count];keepMechanical=new boolean[count];keepThermal=new boolean[count];
+		mechanical=new boolean[count]; thermal=new boolean[count];keepMechanical=new boolean[count];keepThermal=new boolean[count];blocked=new boolean[count];
 		var geometry=domain.geometry.cutCells.snapshot();
 		boolean continued=previous.liquid!=null&&previous.roots.length==count;
 		for(int cell=0;cell<count;cell++) {
 			parent[cell]=geometry.openCellVolume(cell)>0?cell:-1;
+            blocked[cell]=!worldCellAvailable(cell);
 			mechanicalQuiet[cell]=continued?previous.mechanicalQuiet[cell]:0;
 			thermalQuiet[cell]=continued?previous.thermalQuiet[cell]:0;
 			mechanical[cell]=mechanicalQuiet[cell]<QUIET_STEPS;
@@ -106,6 +140,11 @@ final class PhysicalActivityGroups {
 		if(previous.geometry!=geometry)thermalConnections=List.of();
 		for(var cells:connections)joinCells(cells,false);
 		for(var cells:thermalConnections)joinCells(cells,false);
+        // Conducting carriers can connect otherwise separate pores; observe before mechanics.
+        if(worldAvailable!=null&&domain.thermalState!=null) {
+            var carriers=mmm.thermal.ThermalCarrierTransport.prepare(domain.thermalState.exchangeCarrierAccess(domain.domainCapabilities.thermalMarkerContext()));
+            CarrierThermalConduction.contacts(domain,carriers);
+        }
 		if(domain.gasState.pressureActive) domain.gasState.network.forEachPressureDrivenNode(
 				domain.thermalState!=null && domain.thermalState.gasModelBound()
 						?domain.thermalState.gasThermodynamics(domain.gasState.network):null,
@@ -151,7 +190,7 @@ final class PhysicalActivityGroups {
 				}
 				if(domain.pendingPhaseMotion.isPending(cell))keepMechanical[root]=keepThermal[root]=true;
 			}
-			for(int cell=0;cell<domain.cellCount;cell++)if(parent[cell]==cell) {
+			for(int cell=0;cell<domain.cellCount;cell++)if(parent[cell]==cell&&!blocked[cell]) {
 				if(mechanicalRan&&mechanical[cell])mechanicalQuiet[cell]=keepMechanical[cell]?0:Math.min(QUIET_STEPS,mechanicalQuiet[cell]+1);
 				if(thermalRan&&thermal[cell])thermalQuiet[cell]=keepThermal[cell]?0:Math.min(QUIET_STEPS,thermalQuiet[cell]+1);
 				mechanical[cell]=mechanicalQuiet[cell]<QUIET_STEPS;thermal[cell]=thermalQuiet[cell]<QUIET_STEPS;
@@ -161,19 +200,19 @@ final class PhysicalActivityGroups {
 				int root=root(cell);roots[cell]=root;
 				if(root>=0){mq[cell]=mechanicalQuiet[root];tq[cell]=thermalQuiet[root];}
 			}
-			previous=new Snapshot(current,domain.geometry.cutCells.snapshot(),roots,mq,tq,connections,thermalConnections,auxiliary,null);
+			previous=new Snapshot(current,domain.geometry.cutCells.snapshot(),roots,mq,tq,connections,thermalConnections,auxiliary,null,worldAvailable);
 		} finally {enabled=false;}
 	}
 
 	void abortStep() { enabled=false; }
 
-	boolean mechanicsActive(int cell) {return cell>=0&&(!enabled||root(cell)>=0&&mechanical[root(cell)]);}
-	boolean thermalActive(int cell) {return cell>=0&&(!enabled||root(cell)>=0&&thermal[root(cell)]);}
+	boolean mechanicsActive(int cell) {return groupAvailable(cell)&&(!enabled||root(cell)>=0&&mechanical[root(cell)]);}
+	boolean thermalActive(int cell) {return groupAvailable(cell)&&(!enabled||root(cell)>=0&&thermal[root(cell)]);}
 	boolean mechanicsFaceActive(int first,int second) {return mechanicsActive(first)||mechanicsActive(second);}
 	boolean thermalSleeping(int cell) {int r=root(cell);return r>=0&&!thermal[r];}
 	boolean mechanicsSleeping(int cell) {int r=root(cell);return r>=0&&!mechanical[r];}
 	boolean gasNodeIsActive(int node) {
-		if(!enabled)return true;
+		if(!enabled&&worldAvailable==null)return true;
 		int cell=gasCell(node);
 		return mechanicsActive(cell)||thermalActive(cell);
 	}
@@ -190,7 +229,7 @@ final class PhysicalActivityGroups {
 	void coupleCells(int first,int second) {
 		int a=root(first),b=root(second);if(a<0||b<0||a==b)return;
 		if(a>b){int swap=a;a=b;b=swap;}
-		parent[b]=a;
+		parent[b]=a;blocked[a]|=blocked[b];
 		mechanical[a]|=mechanical[b];thermal[a]|=thermal[b];
 		keepMechanical[a]|=keepMechanical[b];keepThermal[a]|=keepThermal[b];
 		mechanicalQuiet[a]=Math.min(mechanicalQuiet[a],mechanicalQuiet[b]);thermalQuiet[a]=Math.min(thermalQuiet[a],thermalQuiet[b]);
@@ -276,12 +315,14 @@ final class PhysicalActivityGroups {
 
 	FluidDomain.ActivityStats stats() {
 		if(parent.length==0)return new FluidDomain.ActivityStats(0,0,0,domain.cellCount);
-		int groups=0,sleeping=0,sleepingCells=0,active=0;
+		int groups=0,sleeping=0,sleepingCells=0,active=0,blockedGroups=0,blockedCells=0;
 		for(int cell=0;cell<parent.length;cell++)if(parent[cell]>=0) {
-			int r=root(cell);boolean asleep=!mechanical[r]&&!thermal[r];
+			int r=root(cell);
+            if(blocked[r]){if(r==cell){groups++;blockedGroups++;}blockedCells++;continue;}
+            boolean asleep=!mechanical[r]&&!thermal[r];
 			if(r==cell){groups++;if(asleep)sleeping++;}
 			if(asleep)sleepingCells++;else active++;
 		}
-		return new FluidDomain.ActivityStats(groups,sleeping,sleepingCells,active);
+		return new FluidDomain.ActivityStats(groups,sleeping,sleepingCells,active,blockedGroups,blockedCells);
 	}
 }

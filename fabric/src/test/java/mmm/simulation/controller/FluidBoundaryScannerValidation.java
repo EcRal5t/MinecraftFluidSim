@@ -19,6 +19,7 @@ public final class FluidBoundaryScannerValidation {
 		validateRuntimeAvailabilityGuard();
 		validateAmbiguousControllerIsRejected();
 		validateScanBudget();
+		validateNativePool();
 		System.out.println("Fluid boundary scanner validation passed");
 	}
 
@@ -128,6 +129,40 @@ public final class FluidBoundaryScannerValidation {
 		require(result.status() == FluidBoundaryScanner.Status.BUDGET_EXCEEDED,
 				"oversized interior did not stop at the hard scan budget: " + result.status());
 	}
+
+    private static void validateNativePool() {
+        Set<Long> water = new HashSet<>(), solid = new HashSet<>();
+        for(int x=1;x<=2;x++) water.add(new BlockPos(x,1,1).asLong());
+        for(long packed:water) for(Direction direction:Direction.values()) {
+            BlockPos next=BlockPos.of(packed).relative(direction);
+            if(direction!=Direction.UP && !water.contains(next.asLong())) solid.add(next.asLong());
+        }
+        Set<Long> loaded=new HashSet<>(Set.of(ChunkPos.pack(0,0)));
+        NativePoolScanner.PoolWorld world=new NativePoolScanner.PoolWorld() {
+            public boolean isInsideBuildHeight(BlockPos pos) { return pos.getY()>=-64 && pos.getY()<320; }
+            public boolean isChunkLoaded(int x,int z) { return loaded.contains(ChunkPos.pack(x,z)); }
+            public NativePoolScanner.BlockKind blockKind(BlockPos pos) {
+                require(isChunkLoaded(pos.getX()>>4,pos.getZ()>>4),"Pool read an unloaded chunk");
+                return water.contains(pos.asLong()) ? NativePoolScanner.BlockKind.SOURCE_WATER
+                        : solid.contains(pos.asLong()) ? NativePoolScanner.BlockKind.FULL_SOLID : NativePoolScanner.BlockKind.AIR;
+            }
+        };
+        BlockPos seed=new BlockPos(1,1,1);
+        var scan=NativePoolScanner.scan(seed,world,32);
+        require(scan.succeeded(),"Natural source pool scan failed: "+scan.failure());
+        require(scan.footprint().interiorBlocks().size()==4 && !scan.footprint().atmosphereBlocks().isEmpty(),
+                "Pool lost its water or atmosphere layer");
+        require(NativePoolScanner.validateAvailability(scan.footprint(),world).ready(),"New pool was unavailable");
+        var returned=scan.footprint().withReturnedBlocks(Set.of(seed.asLong()));
+        require(!returned.containsInterior(seed),"Returned world water retained solver ownership");
+        loaded.clear();
+        require(NativePoolScanner.scan(seed,world,32).status()==NativePoolScanner.Status.INCOMPLETE_CHUNKS,
+                "Pool scan crossed an unloaded chunk");
+        loaded.add(ChunkPos.pack(0,0));
+        solid.remove(seed.below().asLong());
+        require(!NativePoolScanner.scan(seed,world,32).succeeded(),"Pool with an open floor was accepted");
+        require(!NativePoolScanner.validateAvailability(scan.footprint(),world).ready(),"Pool floor breach stayed available");
+    }
 
 	private static void require(boolean condition, String message) {
 		if (!condition) throw new AssertionError(message);

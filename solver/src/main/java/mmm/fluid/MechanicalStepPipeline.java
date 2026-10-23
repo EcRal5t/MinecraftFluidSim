@@ -160,7 +160,7 @@ final class MechanicalStepPipeline {
 		if (phaseGeometryPending) {
 			// Phase inventories already share a conservative fixed-volume energy update.
 			// Their internal displacement is not external work on the whole thermal system.
-			domain.pendingPhaseMotion.clear();
+			domain.pendingPhaseMotion.clear(domain.activityGroups::mechanicsActive);
 		}
 		bodyForceStage.enforceSolidFaceVelocities();
 		if (captureAudit) {

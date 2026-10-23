@@ -8,6 +8,7 @@ public final class PhysicalActivityGroupsValidation {
 
 	public static void main(String[] args) {
 		validateSlowGasPort();
+        validateUnavailableGroup();
 		FluidDomain domain = compartments();
 		for (int step = 0; step < 210; step++) domain = advance(domain, step);
 		var asleep = domain.activityStats();
@@ -47,6 +48,40 @@ public final class PhysicalActivityGroupsValidation {
 		require(domain.activityStats().groupCount() == 1, "An opened wall retained disconnected activity groups");
 		System.out.println("Independent physical activity, local wake, shared device and geometry merge passed");
 	}
+    private static void validateUnavailableGroup() {
+        var domain=compartments(.5F);
+        var registry=mmm.granular.BuiltinGranularDefinitions.createRegistry();
+        domain.bindGranular(registry,new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER)),BuiltinFluidMaterials.createRegistry());
+        int sand=registry.materialHandle(mmm.granular.BuiltinGranularDefinitions.FINE_SAND);
+        long svq=registry.material(sand).maximumActiveParcelSvq();
+        long mass=mmm.units.Mass.fromKilograms(registry.material(sand).referenceDensity()*svq/mmm.granular.SolidVolume.SVQ_PER_CUBIC_METER);
+        domain.granularState.parcels.add(new mmm.granular.GranularParcelStore.Parcel(3.25F,1.25F,.75F,.03F,.02F,0,svq,mass,sand,0,9,(byte)0));
+        domain.granularCoupling.rebuild(domain.granularState.parcels,domain.granularState.deposits);
+        domain.domainPhaseInventory.markGranularExternalChange(cell(6,2,1));
+        domain.domainFlowFields.preparePhysicalState();
+        for(int face=0;face<domain.mac.velocityX.length;face++)if(face%10>0&&face%10<4)domain.mac.velocityX[face]=.1F;
+        domain.cellMacStage.publishMomentum();
+
+        boolean[] available=new boolean[domain.cellCount];java.util.Arrays.fill(available,true);available[cell(6,3,1)]=false;
+        domain.prepareGroupAvailability(available);
+        require(domain.groupAvailable(cell(1,1,1))&&!domain.groupAvailable(cell(6,1,1)),"Missing world input did not pause exactly its connected group");
+        require(domain.activityStats().blockedGroups()==1&&domain.activityStats().blockedCells()>0,"Unavailable groups were reported as sleep");
+        var right=rightStocks(domain);var parcel=domain.granularState.parcels.parcel(0);var momentum=domain.mac.captureMomentum();
+        int node=domain.gasState.frame.nodeOfPiece(8*cell(6,3,1));var gas=domain.gasState.network.inventory(node);
+        double before=leftCentre(domain);
+        for(int step=0;step<3;step++)domain=advance(domain,300+step);
+        require(leftCentre(domain)>before,"Available group failed to advance while its neighbour lacked world input");
+        require(rightStocks(domain).equals(right)&&domain.granularState.parcels.parcel(0).equals(parcel),"Unavailable liquid or granular state changed");
+        require(domain.gasState.network.inventory(node).equals(gas),"Unavailable gas inventory changed");
+
+        assertRightMomentum(momentum,domain.mac.captureMomentum());
+        require(!domain.groupAvailable(cell(6,1,1)),"Candidate handoff lost unavailable groups");
+        var rejected=domain.tryInsertExactVolume(6,1,1,.1F,8);
+        require(!rejected.transferred(),"An unavailable edit target searched into an available group");
+        java.util.Arrays.fill(available,true);domain.prepareGroupAvailability(available);
+        require(domain.groupAvailable(cell(6,1,1))&&domain.activityStats().blockedGroups()==0,"Reloaded world input retained a paused group");
+    }
+
 	private static void validateSlowGasPort() {
 		var domain=compartments(); var network=domain.gasState.network;
 		int left=domain.gasState.frame.nodeOfPiece(8*cell(1,2,1));
@@ -73,7 +108,10 @@ public final class PhysicalActivityGroupsValidation {
 	}
 
 	private static FluidDomain compartments() {
-		var domain = new FluidDomain(9, 4, 4, new FluidSolverConfig(1, 1000, 0, .025F, 120, 1e-5F, .002F));
+		return compartments(1);
+	}
+	private static FluidDomain compartments(float cellSize) {
+		var domain = new FluidDomain(9, 4, 4, new FluidSolverConfig(cellSize, 1000, 0, .025F, 120, 1e-5F, .002F));
 		domain.sealDomainBoundary();
 		for (int z = 0; z < 4; z++) for (int y = 0; y < 4; y++) domain.setSolid(4, y, z, true);
 		domain.setVolume(1, 1, 1, .5F); domain.setVolume(6, 1, 1, .5F);

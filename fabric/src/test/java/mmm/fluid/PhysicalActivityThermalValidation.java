@@ -11,6 +11,7 @@ public final class PhysicalActivityThermalValidation {
 	private PhysicalActivityThermalValidation() { }
 
 	public static void main(String[] args) throws Exception {
+		validateUnavailableThermalGroup();
 		FluidDomain domain = compartments();
 		for (int step = 0; step < 210; step++) domain = new CpuFluidSolverBackend().evaluate(
 				new FluidStepRequest(step, domain.captureAuthoritativeState(), java.util.List.of(), false, 0)).claimPreparedCpuDomain();
@@ -51,6 +52,24 @@ public final class PhysicalActivityThermalValidation {
 				"Thermal backend successor opened the energy audit");
 		System.out.println("Independent thermal sleep, local heat exchange and backend handoff passed");
 	}
+
+    private static void validateUnavailableThermalGroup() throws Exception {
+        var domain=compartments();
+        boolean[] available=new boolean[domain.cellCount];java.util.Arrays.fill(available,true);available[6+9*(1+4)]=false;
+        domain.prepareGroupAvailability(available);
+        domain.setThermalTemperatureInCell(1,1,1,303.15);
+        domain.pendingPhaseMotion.mark(6+9*(1+4));
+        var right=rightEnergyBits(domain);var stocks=domain.liquidCells.stocks().stream().filter(stock->stock.key().cell()%9>4).toList();
+        var before=domain.thermalTemperatureInCell(1,1,1);
+        domain=advance(domain,400).domain();
+        require(domain.thermalTemperatureInCell(1,1,1)<before,"Available group did not conduct while another group lacked world input");
+        require(rightEnergyBits(domain).equals(right),"Unavailable group internal energy changed during conduction");
+        domain=new CpuFluidSolverBackend().evaluate(new FluidStepRequest(401,domain.captureAuthoritativeState(),java.util.List.of(),false,0)).claimPreparedCpuDomain();
+        require(domain.pendingPhaseMotion.isPending(6+9*(1+4)),"Available mechanics cleared paused phase work");
+        require(rightEnergyBits(domain).equals(right)&&domain.liquidCells.stocks().stream().filter(stock->stock.key().cell()%9>4).toList().equals(stocks),
+                "Unavailable thermal inventory changed during another group's mechanical step");
+        require(domain.activityStats().blockedGroups()==1,"Thermal candidate handoff lost unavailable group identity");
+    }
 
 	private static FluidDomain compartments() throws Exception {
 		var production = FullCapabilityTestFixture.load();

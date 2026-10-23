@@ -66,6 +66,7 @@ final class GranularPressureCoupling {
                 inverseMass[contact] = cellVolume / parcel.mass();
                 affine[contact] = 0;
                 referenceAffine[contact] = 0;
+                if(!domain.activityGroups.parcelAvailable(p)){inverseMass[contact]=0;continue;}
                 for (int slot = 0; slot < solid.parcelFaceCount(p, axis); slot++) {
                     int face = solid.parcelFace(p, axis, slot);
                     double area = solid.solidArea(face) * solid.parcelPressureShare(p, axis, slot);
@@ -109,6 +110,7 @@ final class GranularPressureCoupling {
     void publishVelocity(double[] velocity,int offset){
         int count=domain.granularState==null?0:domain.granularState.parcels.count();
         for(int p=0;p<count;p++){
+            if(!domain.activityGroups.parcelAvailable(p))continue;
             var parcel=domain.granularState.parcels.parcel(p);int index=offset+3*p;
             write(p,parcel,velocity[index],velocity[index+1],velocity[index+2]);
         }

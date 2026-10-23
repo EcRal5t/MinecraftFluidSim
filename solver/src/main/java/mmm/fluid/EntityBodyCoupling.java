@@ -219,7 +219,13 @@ final class EntityBodyCoupling {
   }
 
   void replace(List<MovingBodyFluidCoupling.Request> requests) {
-    var target = new EntityBodyState(requests);
+    var accepted = new ArrayList<MovingBodyFluidCoupling.Request>();
+    var retained = new java.util.HashSet<java.util.UUID>();
+    for(var old:domain.entityBodies.bodies())if(!domain.activityGroups.bodyAvailable(old.bounds())) {
+      accepted.add(old);retained.add(old.bodyId());
+    }
+    for(var request:requests)if(!retained.contains(request.bodyId())&&domain.activityGroups.bodyAvailable(request.bounds()))accepted.add(request);
+    var target = new EntityBodyState(accepted);
     result = MovingBodyFluidCoupling.Result.NONE;
     if (target.equals(domain.entityBodies)) return;
     domain.domainFlowFields.preparePhysicalState();
@@ -288,6 +294,7 @@ final class EntityBodyCoupling {
     double h = domain.config.cellSize();
     for (int b = 0; b < source.bodies().size(); b++) {
       var body = source.bodies().get(b);
+      if(!domain.activityGroups.bodyAvailable(body.bounds()))continue;
       var wet = MovingBodyWetGeometry.capture(domain, body.bounds());
       if (!(wet.sample().wetSurfaceAreaSquareMetres() > 0)) continue;
       double[] target = {
@@ -377,6 +384,8 @@ final class EntityBodyCoupling {
       for (int axis = 0; axis < 3; axis++) {
         int contact = 3 * b + axis;
         starts[contact] = entries;
+        affine[contact]=0;
+        if(!domain.activityGroups.bodyAvailable(source.bodies().get(b).bounds()))continue;
         for (int face = graph.offsets[axis];
             face < (axis == 2 ? graph.faceCount : graph.offsets[axis + 1]);
             face++) {
@@ -420,6 +429,7 @@ final class EntityBodyCoupling {
   void addDivergence(double[] rhs, double factor) {
     for (int b = 0; b < source.bodies().size(); b++) {
       var body = source.bodies().get(b);
+      if(!domain.activityGroups.bodyAvailable(body.bounds()))continue;
       double[] velocity = {
         body.velocityXMetresPerSecond(),
         body.velocityYMetresPerSecond(),
@@ -445,6 +455,7 @@ final class EntityBodyCoupling {
     double work = 0, h = domain.config.cellSize(), h3 = h * h * h;
     for (int b = 0; b < source.bodies().size(); b++) {
       var body = source.bodies().get(b);
+      if(!domain.activityGroups.bodyAvailable(body.bounds()))continue;
       double[] bodyImpulse = new double[3];
       double bodyWork = 0;
       double[] velocity = {
@@ -478,7 +489,7 @@ final class EntityBodyCoupling {
     result =
         result.plus(
             new MovingBodyFluidCoupling.Result(
-                source.bodies().size(), 0, impulse[0], impulse[1], impulse[2], work, reactions));
+                reactions.size(), 0, impulse[0], impulse[1], impulse[2], work, reactions));
   }
 
   MovingBodyFluidCoupling.Result result() {

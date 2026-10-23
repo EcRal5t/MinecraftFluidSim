@@ -383,6 +383,7 @@ final class RegionStateCodec {
 		CompoundTag tag = new CompoundTag();
 		tag.putLong("Controller", footprint.controllerPosition().asLong()); tag.putLong("Minimum", footprint.minimumInterior().asLong());
 		tag.putLong("Maximum", footprint.maximumInterior().asLong()); tag.putLongArray("Interior", longs(footprint.interiorBlocks()));
+		tag.putLongArray("Returned", longs(footprint.returnedBlocks())); tag.putString("Kind", footprint.kind().name()); tag.putLongArray("Atmosphere", longs(footprint.atmosphereBlocks()));
 		tag.putLongArray("Boundary", longs(footprint.boundaryBlocks())); tag.putLongArray("Chunks", longs(footprint.requiredChunks()));
 		return tag;
 	}
@@ -394,7 +395,8 @@ final class RegionStateCodec {
 				RegionGeometry.BlockPosition.fromPacked(tag.getLongOr("Controller", 0L)),
 				RegionGeometry.BlockPosition.fromPacked(tag.getLongOr("Minimum", 0L)),
 				RegionGeometry.BlockPosition.fromPacked(tag.getLongOr("Maximum", 0L)), set(tag.getLongArray("Interior").orElseThrow()),
-				set(tag.getLongArray("Boundary").orElseThrow()), set(tag.getLongArray("Chunks").orElseThrow()));
+				set(tag.getLongArray("Boundary").orElseThrow()), set(tag.getLongArray("Chunks").orElseThrow()),
+				RegionGeometry.RegionKind.valueOf(tag.getStringOr("Kind", "CLOSED")), set(tag.getLongArray("Atmosphere").orElse(new long[0])), set(tag.getLongArray("Returned").orElse(new long[0])));
 	}
 
 	private static ListTag encodeExtensions(List<RegionExtension> extensions) {

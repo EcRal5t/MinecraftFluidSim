@@ -94,7 +94,7 @@
 
 存档记录玩家运行意图、恢复状态、执行间隔和 tick。连续过载、恢复计数属于本次进程的调度记录。性能重试清除这次耗时记录；数值失败仍按其具体原因处理。
 
-新控制器首次成功提交后开始运行。缺少区块或外壳破损造成的暂停保留玩家意图，条件恢复后按该意图继续。
+新控制器首次成功提交后开始运行。外壳破损造成的暂停保留玩家意图，条件恢复后按该意图继续。缺少世界区块时暂停受影响的物理活动组；全部组等待时设置 `CHUNK_MISSING` 并保留内存求解域。
 
 <a id="candidate"></a>
 ## 后端计算与提交
@@ -119,7 +119,9 @@ CPU 可以把已算好的私有 `FluidDomain` 交给区域，省去正常帧的�
 
 新区域在首次 HEAD 提交成功后登记。恢复时，已经提交的元数据先登记，再检查当前预算和运行条件。暂时超出预算的区域仍保留身份与预留量，等待以后恢复求解器。
 
-[FluidRegionOperations](../../fabric/src/main/java/mmm/simulation/FluidRegionOperations.java) 依次检查区域自身的数值失败、世界方块归属与政策、目录预算、外壳和区块。数值或归属问题在原处阻止运行；政策、预算或外壳造成的卸载需要先成功保存完整 checkpoint。
+[FluidRegionOperations](../../fabric/src/main/java/mmm/simulation/FluidRegionOperations.java) 依次检查区域自身的数值失败、世界方块归属与政策、目录预算、外壳和区块。数值或归属问题在原处阻止运行；政策、预算或外壳造成的卸载需要先成功保存完整 checkpoint。世界区块缺失时继续检查已加载外壳，将单元可用性交给活动组；其他独立组保持运行。
+
+冷恢复通过 `RegionRepositoryAdapter.restoreIncrementally` 分批读取同一 HEAD 的 section。完整区域磁盘库存到齐后才建立完整 CPU 求解域，再检查各活动组所需的世界区块。世界区块缺失期间保留读取进度；缺失或损坏的磁盘分片保留具体恢复错误。
 
 [RegionAvailabilityReason](../../api/src/main/java/mmm/api/RegionAvailabilityReason.java) 给出具体不可用原因。
 控制器扫描在 [controller 包](../../fabric/src/main/java/mmm/simulation/controller/)：它检查已经加载的世界，要求唯一封闭内腔、完整所需区块、无重叠且预算足够。
@@ -165,7 +167,7 @@ CPU 可以把已算好的私有 `FluidDomain` 交给区域，省去正常帧的�
 ## 实体与碰撞输入
 
 `MinecraftRegionInputs` 按五 tick 节拍刷新到期的世界碰撞输入。[MinecraftCollisionWorldPort](../../fabric/src/main/java/mmm/simulation/MinecraftCollisionWorldPort.java)
-把 `VoxelShape` 采样为纯 Java [CollisionField](../../model/src/main/java/mmm/world/CollisionField.java)，变化的网格单元同时唤醒力学与热计算。
+把 `VoxelShape` 采样为纯 Java [CollisionField](../../model/src/main/java/mmm/world/CollisionField.java)，变化的网格单元同时唤醒力学与热计算。暂停组保留已有固定碰撞；所需世界区块重新加载后立即请求重新采样。
 
 [FluidRegionWorldInteraction](../../fabric/src/main/java/mmm/simulation/FluidRegionWorldInteraction.java) 先比较采样结果与当前几何。
 存在变化时，从完整状态快照重建私有流体域，在副本上完成碰撞编辑、颗粒处理及液体排出和回填。`FluidRegion.adoptCollisionCandidate` 核对原对象、求解器代次和功能布局，再通过完整状态捕获同步并校验气体拓扑；
@@ -191,4 +193,12 @@ CPU 可以把已算好的私有 `FluidDomain` 交给区域，省去正常帧的�
 
 力学与热化学分别维护活动状态。安静组进入休眠后，压力、黏性、体力、输运及热化学阶段跳过对应工作，原库存、MAC 动量、压力与内能保留。局部物质、温度或运动输入唤醒关联组，几何及设备连接改变时重建关联关系。只读观察返回已维护的活动统计。
 
-所有组共用区域的权威库存与收支账。后端在完整私有候选中计算活动组，同一候选提交其全部后继；跨 section 面继续按现有唯一归属结算。进程内候选交接保存调度状态；冷恢复从完整物理库存重新建立活动状态。外壳和必需世界区块的可用性仍由区域生命周期检查。
+所有组共用区域的权威库存与收支账。后端在完整私有候选中计算活动组，同一候选提交其全部后继；跨 section 面继续按现有唯一归属结算。进程内候选交接保存调度状态；冷恢复从完整物理库存重新建立活动状态。
+
+[MinecraftGroupAvailability](../../fabric/src/main/java/mmm/simulation/MinecraftGroupAvailability.java) 的 `prepare` 采样每个求解单元及其邻接方块的世界区块，交给 `PhysicalActivityGroups.prepareAvailability`。一个组含有不可用单元时，力学与热化学共同暂停，库存、MAC 动量和内能保留；其他独立组沿同一区域候选继续推进。实体及外部交换也按组可用性捕获输入。全部组等待区块时区域保留完整内存求解域。区块恢复后，相关组唤醒，碰撞输入刷新。
+
+## 原版静水池操作
+
+[NativePoolScanner](../../fabric/src/main/java/mmm/simulation/controller/NativePoolScanner.java) 识别预算内、已加载、底壁完整实心、水面水平且顶部敞开的有限静水池。[MinecraftPoolOperations](../../fabric/src/main/java/mmm/simulation/MinecraftPoolOperations.java) 的 `probe` 提供管理员预览与10秒内潜行确认，接管沿区域激活与世界归属事务执行，每个原版水源记为1 m³水。池壁破损或大气开口被填堵时暂停。
+
+探针对池底或池壁确认归还时，`returnWater` 先同步待处理相变几何并暂停池体，再由 `FluidRegionOperations.returnPoolWater` 将完整、静止、常温纯水方块交还世界。混合物、额外内能、运动及零头保持在模拟库存中，可通过容器取走；全部内容交接后由生命周期操作移除空池。归还按确认时实际库存执行。`allowsBlockChange` 与世界写入钩子统一管理已接管池体内的原版水写入，持久事务重放通过 `withWorldWrite` 执行。

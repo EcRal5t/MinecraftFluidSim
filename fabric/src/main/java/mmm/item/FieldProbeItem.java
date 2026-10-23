@@ -38,11 +38,29 @@ public final class FieldProbeItem extends Item {
 	public FieldProbeItem(Properties properties) { super(properties); }
 
 	@Override
+	public InteractionResult use(net.minecraft.world.level.Level level, net.minecraft.world.entity.player.Player player,
+			net.minecraft.world.InteractionHand hand) {
+		if(level.isClientSide()) return InteractionResult.SUCCESS;
+		if(!(player instanceof ServerPlayer serverPlayer)) return InteractionResult.PASS;
+		var hit=getPlayerPOVHitResult(level,player,net.minecraft.world.level.ClipContext.Fluid.SOURCE_ONLY);
+		if(hit.getType()!=net.minecraft.world.phys.HitResult.Type.BLOCK) return InteractionResult.PASS;
+		var result=MmmRuntimeRegistry.require(serverPlayer.level().getServer()).pools().probe(serverPlayer,hit.getBlockPos());
+		return result==null?InteractionResult.PASS:result;
+	}
+
+	@Override
 	public InteractionResult useOn(UseOnContext context) {
 		if (context.getLevel().isClientSide()) return InteractionResult.SUCCESS;
 		if (!(context.getLevel() instanceof ServerLevel level)
 				|| !(context.getPlayer() instanceof ServerPlayer player)) return InteractionResult.PASS;
-		MinecraftControllerConsole console = MmmRuntimeRegistry.require(level.getServer()).controllerConsole();
+		var runtime=MmmRuntimeRegistry.require(level.getServer());
+		var waterHit=getPlayerPOVHitResult(level,player,net.minecraft.world.level.ClipContext.Fluid.SOURCE_ONLY);
+		var poolHit=waterHit.getType()==net.minecraft.world.phys.HitResult.Type.BLOCK
+				&& level.getBlockState(waterHit.getBlockPos()).is(net.minecraft.world.level.block.Blocks.WATER)
+				? waterHit.getBlockPos():context.getClickedPos();
+		var poolResult=runtime.pools().probe(player,poolHit);
+		if(poolResult!=null) return poolResult;
+		MinecraftControllerConsole console = runtime.controllerConsole();
 		if (level.getBlockState(context.getClickedPos()).is(MmmBlocks.THERMAL_RESERVOIR)) {
 			var summary = console.thermalReservoirSummary(player, context.getClickedPos());
 			if (summary == null || !FluidProtocolServer.send(player, new ThermalReservoirSummaryPayload(summary))) {

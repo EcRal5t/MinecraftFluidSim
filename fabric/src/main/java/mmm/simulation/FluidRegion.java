@@ -29,7 +29,7 @@ public final class FluidRegion {
 	private final int sizeY;
 	private final int sizeZ;
 	private final FluidSolverConfig solverConfig;
-	private final FluidRegionFootprint footprint;
+	private FluidRegionFootprint footprint;
 	private final long networkGeneration;
 	private final FluidRegionLifecycle lifecycle = new FluidRegionLifecycle();
 	private FluidDomain domain;
@@ -102,7 +102,7 @@ public final class FluidRegion {
 		this.footprint = footprint;
 		this.networkGeneration = networkGeneration;
 		this.domain = domain;
-		if (domain != null && footprint != null) domain.sealDomainBoundary();
+		if (domain != null && footprint != null && footprint.kind() == mmm.model.region.RegionGeometry.RegionKind.CLOSED) domain.sealDomainBoundary();
 		if (footprint != null && !origin.equals(footprint.minimumInterior())) {
 			throw new IllegalArgumentException("A controller region origin must equal its minimum interior block");
 		}
@@ -282,6 +282,7 @@ public final class FluidRegion {
 	void setLastCollisionStats(CollisionStats value) { lastCollisionStats = Objects.requireNonNull(value, "value"); }
 	public boolean collisionRefreshRequired() { return collisionRefreshRequired; }
 	void markCollisionRefreshed() { collisionRefreshRequired = false; }
+	void requireCollisionRefresh() { collisionRefreshRequired = true; }
 	boolean entityPhysicsEnabled() { return entityPhysicsEnabled; }
 	void setEntityPhysicsEnabled(boolean enabled) {
 		entityPhysicsEnabled = enabled;
@@ -351,6 +352,8 @@ public final class FluidRegion {
 	}
 
 	/** Returns immutable region-owned device truth, binding a new empty inventory to this layout. */
+	boolean hasFiniteThermalDevices() { return finiteThermalDevices != null && !finiteThermalDevices.devices().isEmpty(); }
+
 	public FiniteThermalDeviceInventory finiteThermalDevices(String thermalRegistryFingerprint) {
 		FiniteThermalDeviceInventory current = finiteThermalDevices;
 		if (current == null) return FiniteThermalDeviceInventory.empty(thermalRegistryFingerprint);
@@ -392,6 +395,7 @@ public final class FluidRegion {
 		if (!id.equals(candidate.id)) throw new IllegalArgumentException("Finite device candidate belongs to another region");
 		adoptPublishedPrivateDomain(candidate.domain, publishedGeneration, candidate.paused());
 		finiteThermalDevices = candidate.finiteThermalDevices;
+		footprint = candidate.footprint;
 		wakeForActivity();
 	}
 
@@ -487,6 +491,17 @@ public final class FluidRegion {
 		candidate.finiteThermalDevices = finiteThermalDevices;
 		candidate.lifecycle.initializeLoaded(runtime.resumeState(), operatorPaused, runtime.stepIntervalTicks());
 		return candidate;
+	}
+
+	FluidRegion ownershipCandidate(FluidDomain domain, FluidRegionFootprint footprint) {
+		FluidRegion candidate = lifecycleCandidate(domain, true);
+		candidate.footprint = footprint;
+		return candidate;
+	}
+
+	void adoptOwnershipCandidate(FluidRegion candidate, long generation) {
+		adoptPublishedPrivateDomain(candidate.domain(), generation, true);
+		footprint = candidate.footprint;
 	}
 
 	/** Adopts the exact solver which was already encoded and published as the lifecycle HEAD. */

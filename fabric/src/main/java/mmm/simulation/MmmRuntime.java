@@ -18,6 +18,7 @@ public final class MmmRuntime {
 	private final MinecraftContainerTransactionAdapter containerTransactions;
 	private final MinecraftControllerConsole controllerConsole;
 	private final MinecraftRegionActivation regionActivation;
+	private final MinecraftPoolOperations pools;
 	private final MinecraftDebugFixtures debugFixtures;
 	private final MinecraftRegionAdministration regionAdministration;
 	private final RegionDiagnosticsReport regionDiagnostics;
@@ -42,6 +43,7 @@ public final class MmmRuntime {
 			MinecraftContainerTransactionAdapter containerTransactions,
 			MinecraftControllerConsole controllerConsole,
 			MinecraftRegionActivation regionActivation,
+			MinecraftPoolOperations pools,
 			MinecraftDebugFixtures debugFixtures,
 			MinecraftRegionAdministration regionAdministration,
 			RegionDiagnosticsReport regionDiagnostics,
@@ -63,6 +65,7 @@ public final class MmmRuntime {
 		this.containerTransactions = Objects.requireNonNull(containerTransactions, "Container transactions");
 		this.controllerConsole = Objects.requireNonNull(controllerConsole, "Controller console");
 		this.regionActivation = Objects.requireNonNull(regionActivation, "Region activation");
+		this.pools=Objects.requireNonNull(pools);
 		this.debugFixtures = Objects.requireNonNull(debugFixtures, "Debug fixtures");
 		this.regionAdministration = Objects.requireNonNull(regionAdministration, "Region administration");
 		this.regionDiagnostics = Objects.requireNonNull(regionDiagnostics, "Region diagnostics");
@@ -82,6 +85,7 @@ public final class MmmRuntime {
 	public MinecraftRegionOperatorActions operatorActions() { return operatorActions; }
 	public MinecraftControllerConsole controllerConsole() { return controllerConsole; }
 	public MinecraftRegionActivation regionActivation() { return regionActivation; }
+	public MinecraftPoolOperations pools() { return pools; }
 	public MinecraftDebugFixtures debugFixtures() { return debugFixtures; }
 	public MinecraftRegionAdministration regionAdministration() { return regionAdministration; }
 	public RegionDiagnosticsReport regionDiagnostics() { return regionDiagnostics; }

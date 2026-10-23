@@ -42,6 +42,7 @@ final class GranularTransferPlanner {
 		GranularDomainState granular = domain.granularState;
 		if (granular == null) return FluidDomain.GranularInsertion.rejected("Granular state is not bound");
 		int cell = domain.domainFlowFields.cellIndexChecked(cellX, cellY, cellZ);
+        if(!domain.groupAvailable(cell))return FluidDomain.GranularInsertion.rejected("Target physical group is unavailable");
 		if (solidVolumeSvq <= 0L || massUnits <= 0L) {
 			throw new IllegalArgumentException("Granular insertion inventory is invalid");
 		}
@@ -156,7 +157,7 @@ final class GranularTransferPlanner {
 				|| reactiveDrafts > 0 && !granular.compositions.hasCapacity(reactiveDrafts)) {
 			return FluidDomain.GranularInsertion.rejected("Active granular parcel/composition budget exceeded");
 		}
-		List<FluidDomain.CellCandidate> insertionCells = domain.domainFlowFields.nearbyCells(cellX, cellY, cellZ, maxRadius);
+		List<FluidDomain.CellCandidate> insertionCells = domain.domainFlowFields.editableNearbyCells(cellX, cellY, cellZ, maxRadius);
 		// A dry pour is a loose release envelope, not a vertical stack of mutually blocking
 		// numerical parcels. Prefer nearby horizontal cells; vertical cells remain bounded
 		// fallbacks when the port neighborhood or exact occupancy requires them.
@@ -284,6 +285,7 @@ final class GranularTransferPlanner {
 	private GranularCouplingFields.Position planInsertionPosition(GranularCouplingFields.Position position,
 	                                                            long quantity, long[] planned) {
 		insertionKernel.capture(position.x(), position.y(), position.z(), quantity);
+        for(int slot=0;slot<insertionKernel.size();slot++)if(!domain.groupAvailable(insertionKernel.cell(slot)))return null;
 		var canonical = new GranularCouplingFields.Position(position.x(), position.y(), position.z(), insertionKernel.canonicalMask());
 		if (domain.granularCoupling.tryPlanParcel(planned, canonical, quantity, this::solidInsertionCapacity)) return canonical;
 		int[] masks = GranularIntegerAllocation.admissibleMasks(insertionKernel,
@@ -364,7 +366,7 @@ final class GranularTransferPlanner {
 		}
 		if (maxRadius < 0) throw new IllegalArgumentException("Granular extraction radius is invalid");
 		domain.domainFlowFields.cellIndexChecked(cellX, cellY, cellZ); long remaining = maximumSolidVolumeSvq;
-		List<FluidDomain.CellCandidate> extractionCells = domain.domainFlowFields.nearbyCells(cellX, cellY, cellZ, maxRadius);
+		List<FluidDomain.CellCandidate> extractionCells = domain.domainFlowFields.editableNearbyCells(cellX, cellY, cellZ, maxRadius);
 		boolean[] near = new boolean[domain.cellCount]; for (FluidDomain.CellCandidate candidate : extractionCells) near[candidate.index()] = true;
 		ArrayList<GranularRemoval> removals = new ArrayList<>();
 		GranularLedgerBuilder ledger = new GranularLedgerBuilder();

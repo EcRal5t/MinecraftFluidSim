@@ -382,6 +382,7 @@ public final class FiniteHeatExchangerOperations {
 							|| !region.id().equals(locator.regionId()) || !device.objectId().equals(locator.objectId()))
 						throw new IllegalStateException("Installed finite body has no matching world locator");
 					var ports=ports(region,position,registry.finiteDevice(device.deviceTypeId()),registry);
+					if(ports.stream().anyMatch(port -> !region.domain().groupAvailable((port.cellZ()*region.sizeY()+port.cellY())*region.sizeX()+port.cellX()))) continue;
 					var contacts=region.domain().finiteThermalPortContacts(ports);
 					if(contacts.isEmpty()) continue;
 					var exchange=FiniteThermalExchange.plan(registry,device.body(),contacts,region.solverConfig().timeStep(),ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);

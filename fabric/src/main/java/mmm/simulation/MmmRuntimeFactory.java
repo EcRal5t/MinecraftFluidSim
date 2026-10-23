@@ -112,6 +112,8 @@ public final class MmmRuntimeFactory {
 				scaffolding, containerRecovery, policy::controllerEnabled, policy::defaultEntityPhysicsEnabled,
 				policy::defaultDebugOverlays, ownership::current, availability,
 				policy.liveWorldBridgeEnabled(), policy.maximumThermalSubstepsPerStep());
+		MinecraftPoolOperations pools = new MinecraftPoolOperations(regionManager, regionOperations, regionActivation,
+				availability, phaseWorkBarrier, regionLifecycle, snapshots, startup);
 		MinecraftDebugFixtures debugFixtures = new MinecraftDebugFixtures(
 				regionManager, snapshots, takeover, scaffolding, new MinecraftDebugFixtures.Runtime() {
 					@Override public FluidRegion.CollisionStats refreshCollisions(net.minecraft.server.level.ServerLevel level) {
@@ -158,7 +160,7 @@ public final class MmmRuntimeFactory {
 				regionManager, regionOperations, snapshots, containerRecovery, takeover,
 				availability, regionTick, ownership::replace);
 		return new MmmRuntime(simulationLoop, finiteDevices, farmland, operatorActions, containerTransactions, controllerConsole,
-				regionActivation, debugFixtures, regionAdministration, regionDiagnostics,
+				regionActivation, pools, debugFixtures, regionAdministration, regionDiagnostics,
 				playerContainerTransfers, dispenserContainerTransfers,
 				new MinecraftRegionObservation(regionManager, snapshots, comparatorSignals), containerRecovery,
 				new FabricFluidQueryApi(server, regionManager, startup.profileProven()), new ProtocolSessions(),

@@ -22,12 +22,14 @@ final class GranularMechanicalStage {
 		int submerged = 0;
 		for (int index = 0; index < granular.parcels.count(); index++) {
 			var p = granular.parcels.parcel(index);
+            if(!domain.activityGroups.parcelAvailable(index))continue;
 			var fluid = sample(p.x(), p.y(), p.z());
 			if (fluid.hasLiquid()) submerged++;
 		}
 		double maximum = 0, roundingY = 0;
 		for (int index = 0; index < granular.parcels.count(); index++) {
 			var p = granular.parcels.parcel(index);
+            if(!domain.activityGroups.parcelAvailable(index))continue;
 			double predictedY = p.velocityY() - domain.config.gravity() * (double) dt;
 			float vy = (float) predictedY;
 			roundingY += p.mass() * (predictedY - vy);
@@ -46,6 +48,7 @@ final class GranularMechanicalStage {
 		var granular = domain.granularState;
 		for (int index = 0; index < granular.parcels.count(); index++) {
 			var p = granular.parcels.parcel(index);
+            if(!domain.activityGroups.parcelAvailable(index))continue;
 			GranularMechanics.validateCarrierRange(p, granular.registry.material(p.materialHandle()),
 					sample(p.x(), p.y(), p.z()));
 		}
@@ -56,7 +59,7 @@ final class GranularMechanicalStage {
 		if (!domain.domainPhaseInventory.hasGranularInventory()) return;
 		GranularDomainState state = domain.granularState;
 		// Both phases have received the same pressure projection before this drift.
-		domain.granularCollision.preview(state.parcels, state.registry, dt);
+		domain.granularCollision.preview(state.parcels, state.registry, dt, domain.activityGroups::parcelAvailable);
 		domain.granularNextCoupling.rebuild(state.parcels, state.deposits,
 				domain.granularCollision::previewPosition);
 		if (!domain.domainStep.granularOccupancyFitsGeometry(domain.granularNextCoupling)) {

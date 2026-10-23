@@ -23,6 +23,7 @@ final class CarrierThermalConduction {
 		var phase = domain.gasState.frame.phase();
 		for (var request : requests) {
 			int cell = domain.domainFlowFields.cellIndexChecked(request.cellX(), request.cellY(), request.cellZ());
+            if(!domain.groupAvailable(cell))continue;
 			if (!seen.add(6L * cell + request.direction())) throw new IllegalArgumentException("Repeated thermal port face");
 			var owners = byCell.get(cell);
 			if (owners == null) continue;

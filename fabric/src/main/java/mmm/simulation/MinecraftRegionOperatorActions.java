@@ -230,7 +230,8 @@ public final class MinecraftRegionOperatorActions {
 		if (level == null || position == null || !level.getServer().isSameThread()) return false;
 		long packed = position.asLong();
 		for (FluidRegion region : regions.regions()) if (region.dimension().equals(level.dimension())
-				&& region.footprint() != null && region.footprint().boundaryBlocks().contains(packed)) return true;
+				&& region.footprint() != null && region.footprint().kind() == mmm.model.region.RegionGeometry.RegionKind.CLOSED
+				&& region.footprint().boundaryBlocks().contains(packed)) return true;
 		return false;
 	}
 

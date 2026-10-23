@@ -1,5 +1,7 @@
 package mmm.simulation.controller;
 
+import mmm.model.region.RegionGeometry;
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.ChunkPos;
@@ -14,8 +16,21 @@ public record FluidRegionFootprint(
 		BlockPos maximumInterior,
 		Set<Long> interiorBlocks,
 		Set<Long> boundaryBlocks,
-		Set<Long> requiredChunks
+		Set<Long> requiredChunks,
+		RegionGeometry.RegionKind kind,
+		Set<Long> atmosphereBlocks,
+		Set<Long> returnedBlocks
 ) {
+	public FluidRegionFootprint(BlockPos controllerPosition, BlockPos minimumInterior, BlockPos maximumInterior,
+			Set<Long> interiorBlocks, Set<Long> boundaryBlocks, Set<Long> requiredChunks) {
+		this(controllerPosition, minimumInterior, maximumInterior, interiorBlocks, boundaryBlocks, requiredChunks, RegionGeometry.RegionKind.CLOSED, Set.of(), Set.of());
+	}
+
+	public FluidRegionFootprint(BlockPos controllerPosition, BlockPos minimumInterior, BlockPos maximumInterior,
+			Set<Long> interiorBlocks, Set<Long> boundaryBlocks, Set<Long> requiredChunks, RegionGeometry.RegionKind kind, Set<Long> atmosphereBlocks) {
+		this(controllerPosition, minimumInterior, maximumInterior, interiorBlocks, boundaryBlocks, requiredChunks, kind, atmosphereBlocks, Set.of());
+	}
+
 	public FluidRegionFootprint {
 		controllerPosition = Objects.requireNonNull(controllerPosition, "controllerPosition").immutable();
 		minimumInterior = Objects.requireNonNull(minimumInterior, "minimumInterior").immutable();
@@ -23,8 +38,12 @@ public record FluidRegionFootprint(
 		interiorBlocks = Set.copyOf(interiorBlocks);
 		boundaryBlocks = Set.copyOf(boundaryBlocks);
 		requiredChunks = Set.copyOf(requiredChunks);
+		Objects.requireNonNull(kind, "kind");
+		atmosphereBlocks = Set.copyOf(atmosphereBlocks);
+		returnedBlocks = Set.copyOf(returnedBlocks);
+		if (!interiorBlocks.containsAll(returnedBlocks)) throw new IllegalArgumentException("Returned blocks must belong to the region");
 		if (interiorBlocks.isEmpty()) throw new IllegalArgumentException("A controller region needs at least one interior block");
-		if (!boundaryBlocks.contains(controllerPosition.asLong())) {
+		if (kind == RegionGeometry.RegionKind.CLOSED && !boundaryBlocks.contains(controllerPosition.asLong())) {
 			throw new IllegalArgumentException("The controller must be part of the visible region boundary");
 		}
 		if (requiredChunks.isEmpty()) throw new IllegalArgumentException("A controller region needs loaded chunks");
@@ -42,8 +61,12 @@ public record FluidRegionFootprint(
 		}
 	}
 
+	public FluidRegionFootprint withReturnedBlocks(Set<Long> returned) {
+		return new FluidRegionFootprint(controllerPosition, minimumInterior, maximumInterior, interiorBlocks, boundaryBlocks, requiredChunks, kind, atmosphereBlocks, returned);
+	}
+
 	public boolean containsInterior(BlockPos position) {
-		return interiorBlocks.contains(position.asLong());
+		return interiorBlocks.contains(position.asLong()) && !returnedBlocks.contains(position.asLong());
 	}
 
 	/**

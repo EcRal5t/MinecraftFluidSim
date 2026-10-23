@@ -121,7 +121,20 @@ public final class MinecraftRegionActivation {
 				level, controllerPosition, (int) Math.max(1L, Math.min(Integer.MAX_VALUE,
 						regions.limits().maximumCellsPerRegion() / FluidRegionFactory.CELL_VOLUMES_PER_BLOCK)));
 		if (!scan.succeeded()) return Result.failed(scan.failure());
-		FluidRegionFootprint footprint = scan.footprint();
+		return createRegion(player, scan.footprint());
+	}
+
+	Result activatePool(ServerPlayer player, FluidRegionFootprint footprint) {
+		if (!controllerFeatureEnabled.getAsBoolean() || !worldBridgeFeatureEnabled) return Result.failed("请先启用区域和原版水接管功能");
+		if (!startup.authoritativeWritesReady()) return Result.failed(authoritativeWriteFailure("接管池水"));
+		if (containerRecovery.hasStoreIssues() || operations.creationLocked() || !ownershipIssues.get().isEmpty())
+			return Result.failed("现有存档有未完成的恢复，请先处理日志中的问题");
+		if (footprint.kind() != mmm.model.region.RegionGeometry.RegionKind.POOL) return Result.failed("目标不是池体");
+		return createRegion(player, footprint);
+	}
+
+	private Result createRegion(ServerPlayer player, FluidRegionFootprint footprint) {
+		ServerLevel level=player.level();
 		List<OwnershipJournal.BlockEntry> ownershipPreimage;
 		try {
 			ownershipPreimage = operations.scanOwnershipPreimage(level, footprint);

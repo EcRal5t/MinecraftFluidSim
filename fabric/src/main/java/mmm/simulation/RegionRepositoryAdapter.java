@@ -119,7 +119,6 @@ final class RegionRepositoryAdapter {
 		for (var issue : discovery.issues().entrySet()) issues.add(issue.getKey().getFileName() + " 已锁定：" + issue.getValue());
 		for (RegionManifest manifest : discovery.manifests()) {
 			try {
-				validateFeatureShape(manifest);
 				if (manifest.hasChemicalState()) {
 					if (!profile.hasCapability(WorldCapability.CHEMISTRY) || chemicalRegistry == null) {
 						throw new IOException("chemical region-state requires the committed chemistry capability and registry snapshot");
@@ -134,6 +133,7 @@ final class RegionRepositoryAdapter {
 				if (manifest.hasThermalState() && (!profile.hasCapability(WorldCapability.THERMAL) || thermalRegistry == null || gasRegistry == null)) {
 					throw new IOException("thermal region-state requires the committed thermal capability and thermal/gas registry snapshots");
 				}
+				validateFeatureShape(manifest);
 				validateControllerGeometry(manifest);
 				Identifier dimensionId = Identifier.tryParse(manifest.dimensionId());
 				if (dimensionId == null) throw new IOException("invalid dimension");
@@ -422,7 +422,8 @@ final class RegionRepositoryAdapter {
 		if (manifest.checkpointGeneration() != region.checkpointGeneration() || manifest.networkGeneration() != region.networkGeneration()
 				|| !manifest.dimensionId().equals(region.dimension().identifier().toString())
 				|| !manifest.origin().equals(MinecraftRegionCheckpointSource.position(region.origin())) || manifest.sizeX() != region.sizeX()
-				|| manifest.sizeY() != region.sizeY() || manifest.sizeZ() != region.sizeZ()) {
+				|| manifest.sizeY() != region.sizeY() || manifest.sizeZ() != region.sizeZ()
+				|| !manifest.footprint().equals(MinecraftRegionCheckpointSource.footprint(region.footprint()))) {
 			throw new IOException("Committed checkpoint no longer matches admitted region metadata");
 		}
 		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
@@ -523,12 +524,22 @@ final class RegionRepositoryAdapter {
 	}
 
 	private static void validateRecoveryIdentity(FluidRegion region, RegionManifest manifest) throws IOException {
+		var expectedFootprint = MinecraftRegionCheckpointSource.footprint(region.footprint());
+		var actualFootprint = manifest.footprint();
+		if (expectedFootprint.kind() == mmm.model.region.RegionGeometry.RegionKind.POOL
+				&& actualFootprint.kind() == expectedFootprint.kind()
+				&& actualFootprint.returnedBlocks().containsAll(expectedFootprint.returnedBlocks())) {
+			expectedFootprint = new mmm.model.region.RegionGeometry.ControllerFootprint(expectedFootprint.controllerPosition(),
+					expectedFootprint.minimumInterior(), expectedFootprint.maximumInterior(), expectedFootprint.interiorBlocks(),
+					expectedFootprint.boundaryBlocks(), expectedFootprint.requiredChunks(), expectedFootprint.kind(),
+					expectedFootprint.atmosphereBlocks(), actualFootprint.returnedBlocks());
+		}
 		if (manifest.networkGeneration() != region.networkGeneration()
 				|| !manifest.dimensionId().equals(region.dimension().identifier().toString())
 				|| !manifest.origin().equals(MinecraftRegionCheckpointSource.position(region.origin())) || manifest.sizeX() != region.sizeX()
 				|| manifest.sizeY() != region.sizeY() || manifest.sizeZ() != region.sizeZ()
 				|| !manifest.solverConfig().equals(region.solverConfig())
-				|| !manifest.footprint().equals(MinecraftRegionCheckpointSource.footprint(region.footprint()))) {
+				|| !manifest.footprint().equals(expectedFootprint)) {
 			throw new IOException("Previous checkpoint does not match the admitted controller identity");
 		}
 	}
@@ -623,6 +634,8 @@ final class RegionRepositoryAdapter {
 		var restorer=new RegionCheckpointRestorer(state.checkpoint());long generation=state.manifest().checkpointGeneration();
 		try {
 			var authoritative=restorer.reconstructAuthoritativeState(chemicalRegistry,granularRegistry,thermalRegistry,gasRegistry,materialDefinitions);
+			if (authoritative.sealedDomainBoundary() != (region.footprint().kind() == mmm.model.region.RegionGeometry.RegionKind.CLOSED))
+				throw new IOException("Saved gas exterior does not match the region kind");
 			if (readView != null) files.verifyReadView(readView);
 			region.restoreAuthoritativeSolver(authoritative,generation);
 			if(authoritative.thermalOwner()!=null)region.restoreFiniteThermalDevices(restorer.reconstructFiniteThermalDevices(thermalRegistry),thermalRegistry,generation);

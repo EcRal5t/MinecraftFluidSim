@@ -266,6 +266,28 @@ public final class OwnershipStore {
 		}
 
 		@Override
+		public OwnershipCoordinator.InspectOutcome inspectReturn(String dimensionId, OwnershipJournal.BlockEntry block) throws IOException {
+			ServerLevel level = requireLevel(dimensionId); BlockPos pos = BlockPos.of(block.packedPosition());
+			if (!level.hasChunkAt(pos)) throw new IOException("Native water output chunk is unavailable");
+			BlockState state = level.getBlockState(pos);
+			if (state.isAir()) return OwnershipCoordinator.InspectOutcome.OWNED_AIR;
+			return state.equals(originalState(block)) ? OwnershipCoordinator.InspectOutcome.PREIMAGE_PRESENT : OwnershipCoordinator.InspectOutcome.OCCUPIED;
+		}
+
+		@Override
+		public OwnershipCoordinator.RestoreOutcome returnWater(String dimensionId, OwnershipJournal.BlockEntry block) throws IOException {
+			var truth = inspectReturn(dimensionId, block);
+			if (truth == OwnershipCoordinator.InspectOutcome.PREIMAGE_PRESENT) return OwnershipCoordinator.RestoreOutcome.ALREADY_RESTORED;
+			if (truth != OwnershipCoordinator.InspectOutcome.OWNED_AIR) return OwnershipCoordinator.RestoreOutcome.SKIPPED_OCCUPIED;
+			ServerLevel level = requireLevel(dimensionId); BlockPos pos = BlockPos.of(block.packedPosition());
+			BlockState output = originalState(block);
+			mmm.simulation.MinecraftPoolOperations.withWorldWrite(() -> level.setBlock(pos, output,
+					Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE | Block.UPDATE_SUPPRESS_DROPS));
+			if (inspectReturn(dimensionId, block) != OwnershipCoordinator.InspectOutcome.PREIMAGE_PRESENT) throw new IOException("Native water output readback differs");
+			return OwnershipCoordinator.RestoreOutcome.RESTORED;
+		}
+
+		@Override
 		public OwnershipCoordinator.InspectOutcome inspect(
 				String dimensionId,
 				OwnershipJournal.BlockEntry block

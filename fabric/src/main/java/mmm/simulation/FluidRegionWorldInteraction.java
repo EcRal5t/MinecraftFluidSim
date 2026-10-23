@@ -38,7 +38,7 @@ final class FluidRegionWorldInteraction {
 		CollisionRegion captureRegion = new CollisionRegion(region.dimension().identifier().toString(),
 				origin.getX(), origin.getY(), origin.getZ(), blockSizeX, blockSizeY, blockSizeZ,
 				cellsPerBlock, interiorBlocks);
-		CollisionField collisionField = new MinecraftCollisionWorldPort(level).capture(captureRegion);
+		CollisionField collisionField = new MinecraftCollisionWorldPort(level, domain).capture(captureRegion);
 		return applyCapturedCollisions(region, collisionField, cellsPerBlock);
 	}
 

@@ -19,24 +19,32 @@ public record OwnershipJournal(
 		long targetGeneration,
 		Operation operation,
 		List<BlockEntry> blocks,
+		List<BlockEntry> retainedBlocks,
 		UUID operationId,
 		long targetManifestChecksum,
 		mmm.recovery.CrossDomainRecovery.JournalPhase phase
 ) {
 	public OwnershipJournal(UUID regionId, String dimensionId, long baseGeneration, long targetGeneration,
 			Operation operation, List<BlockEntry> blocks) {
-		this(regionId, dimensionId, baseGeneration, targetGeneration, operation, blocks, UUID.randomUUID(), -1,
+		this(regionId, dimensionId, baseGeneration, targetGeneration, operation, blocks, List.of(), UUID.randomUUID(), -1,
 				mmm.recovery.CrossDomainRecovery.JournalPhase.PREPARED);
 	}
 
+	public OwnershipJournal(UUID regionId, String dimensionId, long baseGeneration, long targetGeneration,
+			Operation operation, List<BlockEntry> blocks, UUID operationId, long checksum,
+			mmm.recovery.CrossDomainRecovery.JournalPhase phase) {
+		this(regionId, dimensionId, baseGeneration, targetGeneration, operation, blocks, List.of(), operationId, checksum, phase);
+	}
+
 	public OwnershipJournal committed() {
-		return new OwnershipJournal(regionId, dimensionId, baseGeneration, targetGeneration, operation, blocks,
+		return new OwnershipJournal(regionId, dimensionId, baseGeneration, targetGeneration, operation, blocks, retainedBlocks,
 				operationId, targetManifestChecksum, mmm.recovery.CrossDomainRecovery.JournalPhase.REGION_COMMITTED);
 	}
 
 	public enum Operation {
 		ACQUIRE,
-		RELEASE
+		RELEASE,
+		RETURN_WATER
 	}
 
 	public OwnershipJournal {
@@ -51,6 +59,7 @@ public record OwnershipJournal(
 			throw new IllegalArgumentException("target generation must be base generation + 1");
 		}
 		blocks = List.copyOf(blocks);
+		retainedBlocks = List.copyOf(retainedBlocks);
 	}
 
 	public record BlockEntry(long packedPosition, CompoundTag state) {

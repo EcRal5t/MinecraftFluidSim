@@ -127,8 +127,8 @@ public final class RegionDiagnosticsReport {
 		String thermal = world.hasCapability(WorldCapability.THERMAL) ? thermalSummary(region, domain) : "";
 		var activity = domain.activityStats();
 		String carrierViscosity = carrierViscositySummary(lastStats) + viscousStressSummary(lastStats)
-				+ String.format(" | activity groups %d, sleeping %d, active/sleeping cells %d/%d",
-						activity.groupCount(), activity.sleepingGroups(), activity.activeCells(), activity.sleepingCells());
+				+ String.format(" | activity groups %d, sleeping %d, active/sleeping cells %d/%d, waiting groups/cells %d/%d",
+						activity.groupCount(), activity.sleepingGroups(), activity.activeCells(), activity.sleepingCells(), activity.blockedGroups(), activity.blockedCells());
 		return String.format(
 				"%s%s | selected %s | regions %d/%d, reserved %d/%d cells | %s | %s | origin %s | grid %dx%dx%d | Minecraft interval %d ticks, sim step %.6g s | liquid %s (%.2f normalized cells) | liquid stocks %d in %d cells | visible %d, dense %d | takeover %d, lock %s | bridge %s | entities %s/%d, liquid impulse [%.3g,%.3g,%.3g] kg·m/s | maxP(gauge) %s | collision partial/full %d/%d, last Δ%d, escaped %s%s | %s%s%s",
 				region.lifecycle().state(), region.paused() ? "/PAUSED" : "",

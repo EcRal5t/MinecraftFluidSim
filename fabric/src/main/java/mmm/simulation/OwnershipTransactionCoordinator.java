@@ -132,6 +132,9 @@ final class OwnershipTransactionCoordinator {
 	}
 
 	ReleaseAttempt release(MinecraftServer server, FluidRegion region) {
+		if (region.footprint() != null
+				&& region.footprint().kind() == mmm.model.region.RegionGeometry.RegionKind.POOL)
+			return returnPoolWater(server, region);
 		OwnershipFiles ownershipFiles = ownershipStore.files(region.id());
 		long targetGeneration = -1L;
 		try {
@@ -195,6 +198,80 @@ final class OwnershipTransactionCoordinator {
 			}
 			MmmMod.LOGGER.error("World ownership release failed for region {}", region.id(), failure);
 			return ReleaseAttempt.refused("区域 " + region.id() + " ownership 解除失败：" + failure.getMessage());
+		}
+	}
+
+	private record PoolReturnPlan(FluidRegion candidate, List<OwnershipJournal.BlockEntry> returned, boolean relinquishAll) { }
+
+	int previewPoolWater(FluidRegion region) throws IOException {
+		return planPoolReturn(region).returned().size();
+	}
+
+	private PoolReturnPlan planPoolReturn(FluidRegion region) throws IOException {
+		if (!region.solverLoaded() || region.footprint() == null
+				|| region.footprint().kind() != mmm.model.region.RegionGeometry.RegionKind.POOL) throw new IOException("需要已加载的原版水池区域");
+		OwnershipFiles files = ownershipStore.files(region.id()); files.assertUnlockedForTransition();
+		if (!files.hasCommitted()) throw new IOException("水池缺少世界归属记录");
+		OwnershipCommitted owned = files.readCommitted();
+		if (!owned.regionId().equals(region.id()) || !owned.dimensionId().equals(region.dimension().identifier().toString())
+				|| owned.generation() > region.checkpointGeneration()) throw new IOException("水池世界归属与区域不一致");
+		var domain = mmm.fluid.FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
+		int cellsPerBlock = (int) Math.round(1.0 / domain.config().cellSize());
+		if (cellsPerBlock * (double) domain.config().cellSize() != 1.0) throw new IOException("当前网格无法表示完整原版水方块");
+		var returned = new ArrayList<OwnershipJournal.BlockEntry>();
+		var returnedPositions = new java.util.HashSet<>(region.footprint().returnedBlocks());
+		for (var block : owned.ownedBlocks()) {
+			BlockPos pos = BlockPos.of(block.packedPosition());
+			int x0 = (pos.getX() - region.origin().getX()) * cellsPerBlock;
+			int y0 = (pos.getY() - region.origin().getY()) * cellsPerBlock;
+			int z0 = (pos.getZ() - region.origin().getZ()) * cellsPerBlock;
+			var cells = new ArrayList<Integer>();
+			for (int z = z0; z < z0 + cellsPerBlock; z++) for (int y = y0; y < y0 + cellsPerBlock; y++)
+				for (int x = x0; x < x0 + cellsPerBlock; x++) cells.add(x + domain.sizeX() * (y + domain.sizeY() * z));
+			if (domain.returnNativeWaterCells(cells)) {
+				returned.add(new OwnershipJournal.BlockEntry(block.packedPosition(), NbtUtils.writeBlockState(Blocks.WATER.defaultBlockState())));
+				returnedPositions.add(block.packedPosition());
+			}
+		}
+		boolean empty = domain.totalVolumeExact() == 0 && domain.totalGranularSolidVolumeSvq() == 0
+				&& domain.totalCoherentSolidVolumeSvq() == 0 && domain.gasBoundary().nodeCount() == 0
+				&& domain.gasBoundary().sealedInventory().isEmpty() && domain.exactGasInternalEnergy().signum() == 0
+				&& domain.exactInternalEnergy().signum() == 0 && !region.hasFiniteThermalDevices();
+		if (empty) for (var block : owned.ownedBlocks()) returnedPositions.add(block.packedPosition());
+		return new PoolReturnPlan(region.ownershipCandidate(domain, region.footprint().withReturnedBlocks(returnedPositions)), List.copyOf(returned), empty);
+	}
+
+	ReleaseAttempt returnPoolWater(MinecraftServer server, FluidRegion region) {
+		OwnershipFiles files = ownershipStore.files(region.id());
+		long base = -1, target = -1;
+		try {
+			files.assertUnlockedForTransition();
+			if (files.hasCommitted() && files.readCommitted().ownedBlocks().isEmpty())
+				return ReleaseAttempt.NOT_OWNED;
+			PoolReturnPlan plan = planPoolReturn(region);
+			if (plan.returned().isEmpty() && !plan.relinquishAll()) return ReleaseAttempt.refused("当前没有可归还的完整常温静止纯水方块；剩余库存保留，可继续装取");
+			var access = OwnershipStore.worldAccess(server);
+			String dimension = region.dimension().identifier().toString();
+			for (var block : plan.returned()) if (access.inspectReturn(dimension, block) != OwnershipCoordinator.InspectOutcome.OWNED_AIR)
+				throw new IOException("归还位置已有世界方块");
+			base = generations.committedGeneration(region.id()); target = GenerationSequence.next(base, "Pool water return");
+			if (!GenerationSequence.isNext(region.checkpointGeneration(), target)) throw new IOException("水池区域与HEAD代次不同步");
+			RegionState state = repository.capture(plan.candidate(), target);
+			String warning = OwnershipStore.warningText(ownershipStore.worldRoot(), region.id(), dimension,
+					OwnershipJournal.Operation.RETURN_WATER, base, target, plan.returned().size());
+			var result = OwnershipCoordinator.returnWater(generations, files, state, plan.returned(), plan.relinquishAll(), warning, access, OwnershipCoordinator.FailureInjector.NONE);
+			region.adoptOwnershipCandidate(plan.candidate(), result.generation());
+			return new ReleaseAttempt(null, result.restoredBlocks() + result.alreadyRestoredBlocks(), 0);
+		} catch (IOException | RuntimeException failure) {
+			try {
+				var recovery = OwnershipCoordinator.recover(generations, files, OwnershipStore.worldAccess(server), OwnershipCoordinator.FailureInjector.NONE);
+				if (target > 0 && generations.committedGeneration(region.id()) == target) {
+					repository.adoptCommittedContainerCheckpoint(region, base, target);
+					return new ReleaseAttempt(null, recovery.restored() + recovery.alreadyRestored(), 0);
+				}
+			} catch (IOException | RuntimeException recoveryFailure) { failure.addSuppressed(recoveryFailure); }
+			MmmMod.LOGGER.error("Native pool water return stopped for {}", region.id(), failure);
+			return ReleaseAttempt.refused("水池归还暂停：" + failure.getMessage());
 		}
 	}
 

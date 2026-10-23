@@ -245,9 +245,19 @@ public final class FluidDomain {
 	public void synchronizeGasTopologyForPersistence() { domainStep.synchronizeGasTopologyForPersistence(); }
 	static GranularCouplingFields.Position parcelPosition(GranularParcelStore.Parcel parcel) { return DomainStep.parcelPosition(parcel); }
 	static float trilinearWeight(int ox, int oy, int oz, float fx, float fy, float fz) { return DomainStep.trilinearWeight(ox, oy, oz, fx, fy, fz); }
-	public record ActivityStats(int groupCount, int sleepingGroups, int sleepingCells, int activeCells) { }
+	public record ActivityStats(int groupCount, int sleepingGroups, int sleepingCells, int activeCells,
+                                int blockedGroups, int blockedCells) {
+        public ActivityStats(int groups,int sleeping,int sleepingCells,int activeCells){this(groups,sleeping,sleepingCells,activeCells,0,0);}
+    }
 	public ActivityStats activityStats() { return activityGroups.stats(); }
 	public void replaceActivityConnections(List<int[]> cellGroups) { activityGroups.replaceConnections(cellGroups); }
+    /** Refreshes execution eligibility over the complete resident state. */
+    public void prepareGroupAvailability(boolean[] worldCellAvailable) { activityGroups.prepareAvailability(worldCellAvailable); }
+    public boolean worldCellAvailable(int cell) { return activityGroups.worldCellAvailable(cell); }
+    public boolean groupAvailable(int cell) { return activityGroups.groupAvailable(cell); }
+    public boolean hasAvailableGroups() { return activityGroups.hasAvailableGroups(); }
+    public double[] thermalBoundaryTemperatures() { return thermalBoundaryTemperatureK==null?null:thermalBoundaryTemperatureK.clone(); }
+
 
 	public EntityBodyState entityBodyState() { return entityBodies; }
 	/** Restores accepted bodies before deriving capacity, pressure or gas geometry. */
@@ -567,6 +577,8 @@ public final class FluidDomain {
 	}
 
 	/** Full-dose contact-only extraction on the current domain, suitable for a private world-edit candidate. */
+	public boolean returnNativeWaterCells(List<Integer> cells) { return transferPlanner.returnNativeWaterCells(List.copyOf(cells)); }
+
 	public ContactWaterTransfer extractContactWater(List<WaterContactFace> faces, long requestedNanos) {
 		return transferPlanner.extractContactWater(faces, requestedNanos);
 	}

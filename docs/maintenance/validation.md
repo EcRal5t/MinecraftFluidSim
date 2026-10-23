@@ -564,7 +564,7 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 
 `controller-gas-lineage,production-live-budget` 同 JVM 通过，日志 `build/gas-source/activity-production-budget-final.log`。小控制器20步均低于40 ms；溃坝20步最大223.639 ms，连续超过200 ms为1步，低于3步暂停条件。首次预算回归的旧断言遗漏 CO₂ 传质导致的液体质量变化，已保留无传质时的质量不变要求并区分真实跨相交换；原失败记录在 `activity-production-budget.log`。复用 classpath 的构建元数据仍显示先前源码标识，日志中的实际 artifactSHA256 对应运行产物。
 
-活动组尚未进行原生游戏观察。当前缺区块仍暂停整个区域，独立组的部分冷加载未纳入本次完成范围。
+活动组尚未进行原生游戏观察。世界区块缺失时的组级暂停与恢复证据见下节；CPU 冷恢复仍读取同代完整区域库存。
 
 活动组统一编译、打包与架构检查通过，日志 `build/gas-source/activity-package.log`；539个生产源码文件完成架构扫描。
 
@@ -575,3 +575,15 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 原生游戏待观察：在已启用双格内腔侧壁安装蓝框朝外的容器接口，玩家从正面倒入并取回一桶，再用朝向接口的发射器完成相同操作。预期容器和区域库存对应增减，背面与普通围墙不转移；/mmm status 显示实际库存变化。模型显示和游戏交互尚未实测。
 
 活动组气体慢流补充：PhysicalActivityGroupsValidation 同产物通过，日志 uild/gas-source/activity-gas-wake.log。双舱中的微量通气口单步尚未产生库存变化时，有可表示平衡迁移量的有限气腔所属组持续运行，另一舱休眠；关闭通气口后允许两组休眠，库存与物质审计保持。最终统一编译、打包和架构检查通过，日志 uild/gas-source/port-and-gas-package.log，包含更新后的快速入门资源。
+
+### 原版静水池与活动组区块暂停
+
+2026-10-23：统一 `:fabric:compileTestJava :fabric:assemble verifyArchitecture --offline --no-daemon` 通过，543个生产源码完成架构扫描，日志 `build/gas-source/pool-delivery-build.log`。产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
+
+`pool-functional-fixed.log` 中 `activity-groups,boundary,ownership` 通过。覆盖缺世界输入时独立舱继续流动，等待舱液体、颗粒、气体、MAC 动量与原始内能保持，候选交接和重新加载；池体扫描覆盖天然完整底壁、水平静水、敞口及尺寸预算；归还覆盖实际水量、余量、热水保留、HEAD 前后和部分世界输出中断恢复，以及空池解除归属时保持空气。
+
+最终 `region-state,ownership` 组合通过，日志 `build/gas-source/pool-persistence-final.log`，归属事务共27项场景。存档包含池体几何与已归还位置、完整区域分片恢复和能力关闭后的保留锁定。首次活动组测试夹具用了1 m格长，修正为颗粒要求的0.5 m，原记录为 `pool-functional.log`；首次存档组合因通用布局错误遮住具体热能力锁定原因失败，调整检查顺序后通过。编译中发现的归还操作受检异常处理已修正，最终交付构建通过。
+
+相同求解器产物的原负载热预算 `controller-gas-lineage,production-live-budget` 通过，日志 `build/gas-source/pool-production-budget.log`。小控制器20步最大7.283 ms，低于40 ms；最大溃坝20步最大271.535 ms，连续超过200 ms为2步，低于3步暂停条件。世界可用性输入与磁盘恢复未计入此纯生产计算场景的实测范围。
+
+原生池体交互、画面及跨游戏重启尚未实测。单一场景：建一池由完整实心方块围住、顶部敞开的2×2静水，管理员用探针正常右击预览并潜行确认；用容器取走少量水，再对池底预览、确认归还，退出并重进。预期完整常温静止纯水回到原版，零头仍可装取，取空后再次确认结束接管，水量不恢复为初始装量。用 `/mmm status` 对照剩余库存；异常日志检索 `ownership`、`Native water`、`Pool water return`。GPU 化尚未启动。

@@ -24,8 +24,28 @@ public final class FluidControllerRegions {
 	public static FluidBoundaryScanner.AvailabilityResult availability(
 			ServerLevel level, FluidRegionFootprint footprint
 	) {
-		return FluidBoundaryScanner.validateAvailability(footprint, worldView(level));
+		return footprint.kind() == mmm.model.region.RegionGeometry.RegionKind.POOL
+				? NativePoolScanner.validateAvailability(footprint, poolWorld(level))
+				: FluidBoundaryScanner.validateAvailability(footprint, worldView(level));
 	}
+
+	public static NativePoolScanner.ScanResult scanPool(ServerLevel level, BlockPos seed, int maximumInteriorBlocks) {
+        return NativePoolScanner.scan(seed, poolWorld(level), maximumInteriorBlocks);
+    }
+
+    private static NativePoolScanner.PoolWorld poolWorld(ServerLevel level) {
+        return new NativePoolScanner.PoolWorld() {
+            public boolean isInsideBuildHeight(BlockPos pos) { return level.isInWorldBounds(pos) && level.isInsideBuildHeight(pos); }
+            public boolean isChunkLoaded(int x, int z) { return level.getChunkSource().getChunkNow(x,z) != null; }
+            public NativePoolScanner.BlockKind blockKind(BlockPos pos) {
+                var state=level.getBlockState(pos);
+                if (state.is(net.minecraft.world.level.block.Blocks.WATER) && state.getFluidState().isSource()) return NativePoolScanner.BlockKind.SOURCE_WATER;
+                if (state.isAir()) return NativePoolScanner.BlockKind.AIR;
+                if (state.isCollisionShapeFullBlock(level,pos)) return NativePoolScanner.BlockKind.FULL_SOLID;
+                return NativePoolScanner.BlockKind.OTHER;
+            }
+        };
+    }
 
 	private static FluidBoundaryScanner.ScanWorld worldView(ServerLevel level) {
 		return new FluidBoundaryScanner.ScanWorld() {

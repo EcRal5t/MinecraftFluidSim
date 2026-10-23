@@ -70,8 +70,10 @@ final class MinecraftRegionTick {
 	void tickAvailable(ServerLevel level, FluidRegion region) {
 		inputs.discardEntityResponse(region);
 		long tick = region.incrementTick();
+		activityConnections.accept(region);
+		MinecraftGroupAvailability.prepare(level,region);
 		boolean collisionsChanged = false;
-		if (inputs.boundariesDue(tick)) {
+		if (region.collisionRefreshRequired() || inputs.boundariesDue(tick)) {
 			try { collisionsChanged = refreshRegionInputs(level, region).changedCells() > 0; }
 			catch (FluidDomain.CollisionEditBlockedException blocked) {
 				blockCollisionEdit(level, region, blocked);

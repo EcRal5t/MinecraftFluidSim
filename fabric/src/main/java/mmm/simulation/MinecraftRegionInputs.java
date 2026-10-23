@@ -56,6 +56,7 @@ final class MinecraftRegionInputs {
 	}
 
 	TickInputs captureTick(ServerLevel level, FluidRegion region, long tick, boolean thermalEnabled) {
+		MinecraftGroupAvailability.prepare(level, region);
 		EntityInputs entities = region.entityPhysicsEnabled() ? captureEntities(level, region) : EntityInputs.EMPTY;
 		int affectedEntities = entities.affectedEntities();
 		region.setLastEntityCoupling(new FluidRegion.EntityCouplingStats(affectedEntities, 0.0, 0.0, 0.0));
@@ -111,6 +112,7 @@ final class MinecraftRegionInputs {
 		List<Interaction> interactions = new ArrayList<>();
 		for (Entity entity : level.getEntities((Entity) null, regionBounds(region),
 				entity -> canAffect(entity) || entity.isAlive() && !entity.isRemoved() && entity.isOnFire())) {
+			if (!MinecraftGroupAvailability.boxAvailable(region, entity.getBoundingBox())) continue;
 			motion.observe(entity.getUUID(), entity.position());
 			Contact contact = sampleContact(region, entity);
 

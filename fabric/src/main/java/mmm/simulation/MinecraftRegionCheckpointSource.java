@@ -70,12 +70,12 @@ public final class MinecraftRegionCheckpointSource implements RegionCheckpointSo
 		Objects.requireNonNull(value, "value");
 		return new RegionGeometry.ControllerFootprint(position(value.controllerPosition()),
 				position(value.minimumInterior()), position(value.maximumInterior()), value.interiorBlocks(),
-				value.boundaryBlocks(), value.requiredChunks());
+				value.boundaryBlocks(), value.requiredChunks(), value.kind(), value.atmosphereBlocks(), value.returnedBlocks());
 	}
 
 	public static FluidRegionFootprint minecraftFootprint(RegionGeometry.ControllerFootprint value) {
 		return new FluidRegionFootprint(blockPosition(value.controllerPosition()), blockPosition(value.minimumInterior()),
-				blockPosition(value.maximumInterior()), value.interiorBlocks(), value.boundaryBlocks(), value.requiredChunks());
+				blockPosition(value.maximumInterior()), value.interiorBlocks(), value.boundaryBlocks(), value.requiredChunks(), value.kind(), value.atmosphereBlocks(), value.returnedBlocks());
 	}
 
 	public static RegionRuntimeIntent runtimeIntent(FluidRegion.PersistedRuntime value) {

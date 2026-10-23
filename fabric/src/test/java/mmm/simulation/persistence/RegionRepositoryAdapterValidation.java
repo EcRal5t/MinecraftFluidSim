@@ -10,6 +10,7 @@ public final class RegionRepositoryAdapterValidation {
 			System.out.println("Manifest discovery and incremental section loading validation passed");
 			return;
 		}
+		RegionGenerationValidationScenarios.validatePoolFootprint();
 		RegionCodecValidationScenarios.validateFarmlandJournal();
 		if(java.util.Arrays.asList(args).contains("--farmland")){System.out.println("Farmland water transaction persistence validation passed");return;}
 		RegionCodecValidationScenarios.validateCellMacCodec();

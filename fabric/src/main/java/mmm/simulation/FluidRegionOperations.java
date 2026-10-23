@@ -152,6 +152,11 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 		return ownershipTransactions.summary(server, region);
 	}
 
+	int previewPoolWater(FluidRegion region) throws IOException { return ownershipTransactions.previewPoolWater(region); }
+	OwnershipTransactionCoordinator.ReleaseAttempt returnPoolWater(MinecraftServer server, FluidRegion region) {
+		return ownershipTransactions.returnPoolWater(server, region);
+	}
+
 	OwnershipTransactionCoordinator.ReleaseAttempt releaseOwnership(MinecraftServer server, FluidRegion region) {
 		return ownershipTransactions.release(server, region);
 	}
@@ -216,12 +221,17 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			return false;
 		}
 		FluidBoundaryScanner.AvailabilityResult availability = FluidControllerRegions.availability(level, region.footprint());
-		if (!availability.ready()) {
-			RegionAvailabilityReason reason = availability.status() == FluidBoundaryScanner.AvailabilityStatus.INCOMPLETE_CHUNKS
-					? RegionAvailabilityReason.CHUNK_MISSING : RegionAvailabilityReason.BOUNDARY_OPEN;
-			unloadForFailure(level.getServer(), region, reason, availability.failure(), removalSender);
-			return false;
-		}
+        boolean missingWorldChunks=availability.status()==FluidBoundaryScanner.AvailabilityStatus.INCOMPLETE_CHUNKS;
+        if(missingWorldChunks) {
+            String shellFailure=MinecraftGroupAvailability.loadedShellFailure(level,region);
+            if(shellFailure!=null) {
+                region.setAvailabilityFailure(RegionAvailabilityReason.BOUNDARY_OPEN,shellFailure);
+                return false;
+            }
+        } else if (!availability.ready()) {
+            unloadForFailure(level.getServer(),region,RegionAvailabilityReason.BOUNDARY_OPEN,availability.failure(),removalSender);
+            return false;
+        }
 		if (!region.solverLoaded()) {
 			String lockedFailure = checkpointFailures.get(region.id());
 			if (lockedFailure != null) {
@@ -236,6 +246,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 							"正在加载已提交 section：" + progress.loadedSections() + "/" + progress.totalSections());
 					return false;
 				}
+				MinecraftGroupAvailability.prepare(level, region);
 				collisionRefresher.refresh(level, region);
 				region.markCollisionRefreshed();
 				retryAt.remove(region.id());
@@ -256,6 +267,11 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 				return false;
 			}
 		}
+        boolean anyAvailable=MinecraftGroupAvailability.prepare(level, region);
+        if(!anyAvailable) {
+            region.setAvailabilityFailure(RegionAvailabilityReason.CHUNK_MISSING,"All physical groups are waiting for world chunks");
+            return false;
+        }
 		if (region.checkpointGeneration() == 0L) {
 			if (serviceTick < retryAt.getOrDefault(region.id(), 0L)) return false;
 			try {

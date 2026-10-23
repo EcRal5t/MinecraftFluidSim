@@ -37,7 +37,7 @@ final class MaterialTransferPlanner {
 			if (!seen.add(portion.materialHandle())) throw new IllegalArgumentException("Repeated insertion material");
 			inputs.add(defaultInput(portion.materialHandle(), SignedDyadic.of(portion.volume()), portion.massUnits()));
 		}
-		boolean inserted = insert(inputs, domain.domainFlowFields.nearbyCells(x, y, z, radius), externalSource, energy);
+		boolean inserted = insert(inputs, domain.domainFlowFields.editableNearbyCells(x, y, z, radius), externalSource, energy);
 		return new FluidDomain.ExactMixtureTransfer(inserted, inserted ? List.copyOf(portions) : List.of(), inserted ? suppliedEnergy(inputs, energy) : 0);
 	}
 	FluidDomain.ExactChemicalTransfer insertChemical(int x, int y, int z, ChemicalTransferLedger ledger,
@@ -54,13 +54,13 @@ final class MaterialTransferPlanner {
 			domain.chemistry.requireCompatible(mixture, group.materialId());
 			inputs.add(new Input(material, SignedDyadic.of(group.normalizedVolume()), group.massUnits(), mixture));
 		}
-		boolean inserted = insert(inputs, domain.domainFlowFields.nearbyCells(x, y, z, radius), externalSource, energy);
+		boolean inserted = insert(inputs, domain.domainFlowFields.editableNearbyCells(x, y, z, radius), externalSource, energy);
 		return new FluidDomain.ExactChemicalTransfer(inserted, inserted ? ledger : ChemicalTransferLedger.EMPTY, inserted ? suppliedEnergy(inputs, energy) : 0);
 	}
 	FluidDomain.VolumeAddition insertVolumeAtMost(int x, int y, int z, float amount, int radius) {
 		domain.domainFlowFields.validateVolumeEdit(amount, radius);
 		if (amount <= 0 || domain.hasPendingPhaseMotionWork()) return new FluidDomain.VolumeAddition(0, false);
-		var nearby = domain.domainFlowFields.nearbyCells(x, y, z, radius); var room = SignedDyadic.ZERO;
+		var nearby = domain.domainFlowFields.editableNearbyCells(x, y, z, radius); var room = SignedDyadic.ZERO;
 		for (var candidate : nearby) room = room.add(available(candidate.index()));
 		var requested = SignedDyadic.of(amount); var accepted = minimum(room, requested);
 		float represented = (float) accepted.toDouble();
@@ -165,7 +165,7 @@ final class MaterialTransferPlanner {
 	}
 	float removeVolumeNear(int x, int y, int z, float amount, int radius) {
 		domain.domainFlowFields.validateVolumeEdit(amount, radius); if (amount <= 0) return 0;
-		var nearby = domain.domainFlowFields.nearbyCells(x, y, z, radius); var available = SignedDyadic.ZERO;
+		var nearby = domain.domainFlowFields.editableNearbyCells(x, y, z, radius); var available = SignedDyadic.ZERO;
 		for (var cell : nearby) available = available.add(domain.liquidCells.exactCellVolume(cell.index()));
 		var extraction = extract(nearby, minimum(available, SignedDyadic.of(amount)), -1, false);
 		if (extraction == null) return 0;
@@ -174,7 +174,7 @@ final class MaterialTransferPlanner {
 	}
 	FluidDomain.ExactMixtureTransfer extractMixture(int x, int y, int z, float amount, int radius, int material) {
 		domain.domainFlowFields.validateVolumeEdit(amount, radius);
-		var extraction = extract(domain.domainFlowFields.nearbyCells(x, y, z, radius), SignedDyadic.of(amount), material, true);
+		var extraction = extract(domain.domainFlowFields.editableNearbyCells(x, y, z, radius), SignedDyadic.of(amount), material, true);
 		if (extraction == null) return new FluidDomain.ExactMixtureTransfer(false, List.of());
 		prepare(extraction.inventory(), ChemicalTransferLedger.EMPTY, extraction.ledger(), SignedDyadic.ZERO, SignedDyadic.of(extraction.energy())).commit();
 		return new FluidDomain.ExactMixtureTransfer(true, extraction.portions(), extraction.energy());
@@ -184,7 +184,7 @@ final class MaterialTransferPlanner {
 		if (domain.chemistry == null) throw new IllegalStateException("Chemical extraction requires chemistry");
 		if (accepts == null) throw new IllegalArgumentException("Chemical extraction validator is missing");
 		domain.domainFlowFields.validateVolumeEdit(amount, radius);
-		var extraction = extract(domain.domainFlowFields.nearbyCells(x, y, z, radius), SignedDyadic.of(amount), -1, false);
+		var extraction = extract(domain.domainFlowFields.editableNearbyCells(x, y, z, radius), SignedDyadic.of(amount), -1, false);
 		if (extraction == null || extraction.ledger().groups().stream().anyMatch(group -> group.massUnits() == 0)
 				|| !accepts.test(extraction.ledger())) return new FluidDomain.ExactChemicalTransfer(false, ChemicalTransferLedger.EMPTY);
 		prepare(extraction.inventory(), ChemicalTransferLedger.EMPTY, extraction.ledger(), SignedDyadic.ZERO, SignedDyadic.of(extraction.energy())).commit();
@@ -213,6 +213,45 @@ final class MaterialTransferPlanner {
 		return new FluidDomain.ContactWaterTransfer(true, actualNanos, extraction.portions(), extraction.ledger(), extraction.energy());
 	}
 
+	/** Whole source blocks can represent reference water at rest; all other stocks stay in MMM. */
+	boolean returnNativeWaterCells(List<Integer> cells) {
+		if (cells.isEmpty() || domain.hasPendingPhaseMotionWork()) return false;
+		domain.domainFlowFields.ensureVelocityGrid();
+		long[] solids = domain.occupiedSolidSvq();
+		var actualEnergy = SignedDyadic.ZERO; var referenceEnergy = SignedDyadic.ZERO;
+		for (int cell : cells) {
+			if (cell < 0 || cell >= domain.cellCount || solids[cell] != 0 || domain.geometry.cutCells.mask(cell) != 0) return false;
+			var stocks = domain.liquidCells.stocksInCell(cell);
+			if (stocks.size() != 1) return false;
+			var stock = stocks.getFirst();
+			if (!materialId(stock.key().material()).equals("mmm:water") || !stock.volume().equals(SignedDyadic.of(1.0))
+					|| stock.massUnits() != domain.unitScale.massUnitsForNormalized(1000.0)) return false;
+			var amounts = stable(stock.mixture());
+			if (stock.mixture() != null && (amounts.size() != 1 || !amounts.containsKey("mmm:h2o"))) return false;
+			if (domain.thermalState != null) {
+				if (domain.thermalState.coherentPhases().snapshot().stream().anyMatch(group -> group.cell() == cell)) return false;
+				double reference = modeledEnergy(stock.key().material(), stock.massUnits(), stock.mixture(), 293.15);
+				actualEnergy = actualEnergy.add(SignedDyadic.of(stock.internalEnergy()));
+				referenceEnergy = referenceEnergy.add(SignedDyadic.of(reference));
+			} else if (stock.internalEnergy() != 0) return false;
+			int x = cell % domain.sizeX, y = cell / domain.sizeX % domain.sizeY, z = cell / domain.sizeX / domain.sizeY;
+			if (domain.mac.momentumX[x + (domain.sizeX + 1) * (y + domain.sizeY * z)] != 0
+					|| domain.mac.momentumX[x + 1 + (domain.sizeX + 1) * (y + domain.sizeY * z)] != 0
+					|| domain.mac.momentumY[x + domain.sizeX * (y + (domain.sizeY + 1) * z)] != 0
+					|| domain.mac.momentumY[x + domain.sizeX * (y + 1 + (domain.sizeY + 1) * z)] != 0
+					|| domain.mac.momentumZ[x + domain.sizeX * (y + domain.sizeY * z)] != 0
+					|| domain.mac.momentumZ[x + domain.sizeX * (y + domain.sizeY * (z + 1))] != 0) return false;
+		}
+		if (!actualEnergy.equals(referenceEnergy)) return false;
+		var nearby = cells.stream().distinct().map(cell -> new FluidDomain.CellCandidate(cell, 0)).toList();
+		var extraction = extract(nearby, SignedDyadic.of((double) nearby.size()), -1, false);
+		if (extraction == null) return false;
+		prepare(extraction.inventory(), ChemicalTransferLedger.EMPTY, extraction.ledger(), SignedDyadic.ZERO,
+				SignedDyadic.of(extraction.energy())).commit();
+		for (int cell : cells) domain.setSolid(cell % domain.sizeX, cell / domain.sizeX % domain.sizeY, cell / domain.sizeX / domain.sizeY, true);
+		return true;
+	}
+
 	private Extraction extract(List<FluidDomain.CellCandidate> nearby, SignedDyadic requested, int material, boolean canonical) {
 		return extract(nearby, requested, material, canonical, stock -> true);
 	}
@@ -223,7 +262,7 @@ final class MaterialTransferPlanner {
 		domain.domainFlowFields.ensureInventoryGrid();
 		var remaining = requested; var edits = new ArrayList<LiquidCellInventory.Edit>(); var removed = new LinkedHashMap<Integer, Removed>();
 		var removedEnergy = SignedDyadic.ZERO;
-		for (var cell : nearby) for (var stock : domain.liquidCells.stocksInCell(cell.index())) {
+		for (var cell : nearby) if(domain.groupAvailable(cell.index())) for (var stock : domain.liquidCells.stocksInCell(cell.index())) {
 			if (remaining.signum() == 0) break;
 			if (!selected.test(stock) || material >= 0 && stock.key().material() != material || canonical && !canonical(stock)) continue;
 			var taken = minimum(remaining, stock.volume()); var kept = stock.volume().subtract(taken);

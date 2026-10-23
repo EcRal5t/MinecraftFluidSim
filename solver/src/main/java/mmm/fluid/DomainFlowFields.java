@@ -147,6 +147,10 @@ final class DomainFlowFields {
 		result.sort(Comparator.comparingInt(CellCandidate::distanceSquared));
 		return result;
 	}
+    List<CellCandidate> editableNearbyCells(int x,int y,int z,int radius) {
+        if(!domain.groupAvailable(cellIndexChecked(x,y,z)))return new ArrayList<>();
+        var cells=nearbyCells(x,y,z,radius);cells.removeIf(cell->!domain.groupAvailable(cell.index()));return cells;
+    }
 	void preparePhysicalState() {
 		domain.pressureSystem.prepareGeometry();
 		ensureVelocityGrid();

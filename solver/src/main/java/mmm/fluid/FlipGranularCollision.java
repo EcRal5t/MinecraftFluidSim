@@ -34,6 +34,7 @@ final class FlipGranularCollision {
 	private GranularParcelStore previewSource;
 	private boolean previewReady,velocitiesPublished;
 	private int lastCapacityHeld;
+    private java.util.function.IntPredicate executable = index -> true;
 
 	FlipGranularCollision(int sizeX, int sizeY, int sizeZ, float cellSize,
 	                      FlipCutCellGeometry cutCells, GranularDepositStore deposits, int capacity) {
@@ -45,6 +46,10 @@ final class FlipGranularCollision {
 	}
 
 	void preview(GranularParcelStore parcels, GranularRegistry registry, float dt) {
+        preview(parcels,registry,dt,index->true);
+    }
+    void preview(GranularParcelStore parcels, GranularRegistry registry, float dt, java.util.function.IntPredicate executable) {
+        this.executable=executable;
 		previewReady = false;velocitiesPublished=false;
 		activeContacts = null;
 		if (!(Float.isFinite(dt) && dt > 0.0F)) throw new IllegalArgumentException("Granular preview dt is invalid");
@@ -54,7 +59,7 @@ final class FlipGranularCollision {
 		previewSource = parcels;
 		lastCapacityHeld = 0;
 		if (previewCount > 1) {
-			var contacts = new GranularActiveContacts(parcels, registry, sphereCollision, cellSize, dt);
+			var contacts = new GranularActiveContacts(parcels, registry, sphereCollision, cellSize, dt, executable);
 			activeContacts = contacts;
 			contacts.preview(nextX, nextY, nextZ, nextVelocityX, nextVelocityY, nextVelocityZ, nextSupported);
 			for (int index = 0; index < previewCount; index++) {
@@ -72,6 +77,7 @@ final class FlipGranularCollision {
 		for (int index = 0; index < previewCount; index++) {
 			nextContactComponent[index] = index;
 			GranularParcelStore.Parcel parcel = parcels.parcel(index);
+            if(!executable.test(index)){retainParcel(parcel,index);continue;}
 			ParticulateMaterial material = registry.material(parcel.materialHandle());
 			float radius = collisionRadius(parcel.solidVolumeSvq());
 			float[] position = {parcel.x(), parcel.y(), parcel.z()};
@@ -100,6 +106,7 @@ final class FlipGranularCollision {
 	private void prepareMasks(GranularParcelStore parcels) {
 		for (int index = 0; index < previewCount; index++) {
 			var parcel = parcels.parcel(index);
+            if(!executable.test(index)){retainParcel(parcel,index);continue;}
 			kernel.capture(nextX[index], nextY[index], nextZ[index], parcel.solidVolumeSvq());
 			nextCeilMask[index] = parcel.ceilMask() >= 0 && parcel.x() == nextX[index] && parcel.y() == nextY[index]
 					&& parcel.z() == nextZ[index] ? parcel.ceilMask() : kernel.canonicalMask();
@@ -231,7 +238,8 @@ final class FlipGranularCollision {
 			}
 		}
 		Arrays.fill(capacityPending, 0, previewCount, true);
-		int pending = previewCount;
+		int pending = 0;
+        for(int index=0;index<previewCount;index++){capacityPending[index]=executable.test(index);if(capacityPending[index])pending++;}
 		int dimensionPasses = Math.max(sizeX, Math.max(sizeY, sizeZ));
 		int operationPasses = Math.max(1, GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP / previewCount);
 		int maximumPasses = Math.min(dimensionPasses, operationPasses);
@@ -240,7 +248,7 @@ final class FlipGranularCollision {
 			boolean reverse = (pass & 1) != 0;
 			for (int ordinal = 0; ordinal < previewCount; ordinal++) {
 				int index = reverse ? previewCount - 1 - ordinal : ordinal;
-				if (!capacityPending[index]) continue;
+				if (!capacityPending[index]||!executable.test(index)) continue;
 				GranularParcelStore.Parcel parcel = parcels.parcel(index);
 				GranularCouplingFields.Position currentPosition = new GranularCouplingFields.Position(
 						parcel.x(), parcel.y(), parcel.z(), parcel.ceilMask());
@@ -273,6 +281,7 @@ final class FlipGranularCollision {
 	BoundaryImpulse publishVelocities(GranularParcelStore parcels){
 		requireSourceRevision(parcels);double x=0,y=0,z=0;
 		for(int i=0;i<previewCount;i++){
+            if(!executable.test(i))continue;
 			var p=parcels.parcel(i);x+=p.mass()*(p.velocityX()-(double)nextVelocityX[i]);
 			y+=p.mass()*(p.velocityY()-(double)nextVelocityY[i]);z+=p.mass()*(p.velocityZ()-(double)nextVelocityZ[i]);
 			parcels.overwrite(i,new GranularParcelStore.Parcel(p.x(),p.y(),p.z(),nextVelocityX[i],nextVelocityY[i],nextVelocityZ[i],p.solidVolumeSvq(),p.massUnits(),p.materialHandle(),p.solidCompositionHandle(),p.contactAge(),p.flags(),p.ceilMask()));
@@ -284,6 +293,7 @@ final class FlipGranularCollision {
 		if(!velocitiesPublished)requireSourceRevision(parcels);
 		double x=0,y=0,z=0;
 		for(int i=0;i<previewCount;i++){
+            if(!executable.test(i))continue;
 			var p=parcels.parcel(i);float vx=velocitiesPublished?p.velocityX():nextVelocityX[i],vy=velocitiesPublished?p.velocityY():nextVelocityY[i],vz=velocitiesPublished?p.velocityZ():nextVelocityZ[i];
 			x+=p.mass()*(p.velocityX()-(double)vx);y+=p.mass()*(p.velocityY()-(double)vy);z+=p.mass()*(p.velocityZ()-(double)vz);
 			parcels.overwrite(i,new GranularParcelStore.Parcel(nextX[i],nextY[i],nextZ[i],vx,vy,vz,p.solidVolumeSvq(),p.massUnits(),p.materialHandle(),p.solidCompositionHandle(),nextContactAge[i],nextFlags[i],nextCeilMask[i]));
@@ -296,8 +306,14 @@ final class FlipGranularCollision {
 			throw new IllegalStateException("Granular source changed during occupancy preview");
 	}
 
-	private void holdParcel(GranularParcelStore parcels, int index) {
+	private void retainParcel(GranularParcelStore.Parcel parcel,int index) {
+        nextX[index]=parcel.x();nextY[index]=parcel.y();nextZ[index]=parcel.z();
+        nextVelocityX[index]=parcel.velocityX();nextVelocityY[index]=parcel.velocityY();nextVelocityZ[index]=parcel.velocityZ();
+        nextContactAge[index]=parcel.contactAge();nextFlags[index]=parcel.flags();nextCeilMask[index]=parcel.ceilMask();nextContactComponent[index]=index;
+    }
+    private void holdParcel(GranularParcelStore parcels, int index) {
 		GranularParcelStore.Parcel parcel = parcels.parcel(index);
+        if(!executable.test(index)){retainParcel(parcel,index);return;}
 		nextX[index] = parcel.x(); nextY[index] = parcel.y(); nextZ[index] = parcel.z();
 		if (parcel.ceilMask() >= 0) nextCeilMask[index] = parcel.ceilMask();
 		else { kernel.capture(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq()); nextCeilMask[index] = kernel.canonicalMask(); }
@@ -311,6 +327,7 @@ final class FlipGranularCollision {
 		double restingSpeedSquared = cellSize * .05 * cellSize * .05;
 		for (int i = 0; i < previewCount; i++) {
 			var parcel = parcels.parcel(i);
+            if(!executable.test(i)){retainParcel(parcel,i);continue;}
 			double speedSquared = nextVelocityX[i] * (double) nextVelocityX[i]
 					+ nextVelocityY[i] * (double) nextVelocityY[i] + nextVelocityZ[i] * (double) nextVelocityZ[i];
 			boolean resting = nextSupported[i] && speedSquared <= restingSpeedSquared;

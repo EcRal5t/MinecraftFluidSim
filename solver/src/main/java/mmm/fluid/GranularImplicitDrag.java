@@ -57,6 +57,7 @@ final class GranularImplicitDrag {
 		prepareFaces();
 		for (int index = 0; index < parcels; index++) {
 			var p = domain.granularState.parcels.parcel(index);
+            if(!domain.activityGroups.parcelAvailable(index))continue;
 			for (int axis = 0; axis < 3; axis++) mass[faceCount + 3 * index + axis] = p.mass();
 			var fluid = domain.granularMechanicalStage.sample(p.x(), p.y(), p.z());
 			if (!fluid.hasLiquid()) continue;

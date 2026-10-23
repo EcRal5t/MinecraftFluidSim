@@ -107,6 +107,8 @@ final class FabricTransferApi implements MmmTransferApi {
 			if(region.footprint()==null || !region.footprint().containsInterior(position)) return result(TransferStatus.NO_REGION,"Point is outside the region interior");
 			double h=region.solverConfig().cellSize();
 			int[] cell={(int)Math.floor((request.worldXMetres()-region.origin().getX())/h),(int)Math.floor((request.worldYMetres()-region.origin().getY())/h),(int)Math.floor((request.worldZMetres()-region.origin().getZ())/h)};
+			if(!region.domain().groupAvailable((cell[2]*region.sizeY()+cell[1])*region.sizeX()+cell[0]))
+				return result(TransferStatus.UNAVAILABLE,"Target activity group awaits loaded world chunks");
 			var resolution=MinecraftContainerTransferPlan.resolve(transactions,world,region,cell,actor.item().copy(),false);
 			if(!resolution.resolved()) return result(TransferStatus.NOT_TRANSFERRED,resolution.diagnostic());
 			var operation=resolution.plan();
@@ -212,7 +214,7 @@ final class FabricTransferApi implements MmmTransferApi {
 		var port=source.relative(facing);
 		if(!actor.level().hasChunkAt(port)||!actor.level().getBlockState(port).is(mmm.block.MmmBlocks.FLUID_PORT))return false;
 		var target=targets.transferTargetAtBlock(actor.level(),port,facing);
-		return target!=null&&target.region()==region&&target.interiorBlock().equals(
+		return target!=null&&target.region()==region&&targets.cellAtBlock(actor.level(),region,target.interiorBlock())!=null&&target.interiorBlock().equals(
 				BlockPos.containing(request.worldXMetres(),request.worldYMetres(),request.worldZMetres()));
 	}
 

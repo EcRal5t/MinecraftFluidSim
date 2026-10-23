@@ -48,6 +48,13 @@ final class OwnershipJournalCodec {
 			entries.add(block);
 		}
 		root.put("Blocks", entries);
+		ListTag retained = new ListTag();
+		for (var entry : journal.retainedBlocks()) {
+			validateState(entry.state(), entry.packedPosition());
+			if (!positions.add(entry.packedPosition())) throw new IOException("Ownership retained block overlaps transition");
+			var block = new CompoundTag(); block.putLong("Pos", entry.packedPosition()); block.put("State", entry.state()); retained.add(block);
+		}
+		root.put("RetainedBlocks", retained);
 		return root;
 	}
 
@@ -95,12 +102,24 @@ final class OwnershipJournalCodec {
 			validateState(state, position);
 			blocks.add(new OwnershipJournal.BlockEntry(position, state));
 		}
+		var retained = new ArrayList<OwnershipJournal.BlockEntry>();
+		if (operation == OwnershipJournal.Operation.RETURN_WATER) {
+			requireType(root, "RetainedBlocks", Tag.TAG_LIST);
+			for (var raw : root.getListOrEmpty("RetainedBlocks")) {
+				if (!(raw instanceof CompoundTag block)) throw new IOException("Invalid retained ownership block");
+				requireType(block, "Pos", Tag.TAG_LONG); requireType(block, "State", Tag.TAG_COMPOUND);
+				long pos = block.getLongOr("Pos", 0); var state = block.getCompoundOrEmpty("State"); validateState(state, pos);
+				if (!positions.add(pos)) throw new IOException("Duplicate retained ownership block");
+				retained.add(new OwnershipJournal.BlockEntry(pos, state));
+			}
+			validateBlockCount(blocks.size() + retained.size());
+		}
 		requireType(root, "OperationUuidMost", Tag.TAG_LONG);
 		requireType(root, "OperationUuidLeast", Tag.TAG_LONG);
 		requireType(root, "TargetManifestChecksum", Tag.TAG_LONG);
 		requireType(root, "Phase", Tag.TAG_STRING);
 		try {
-			return new OwnershipJournal(regionId, dimensionId, baseGeneration, targetGeneration, operation, blocks,
+			return new OwnershipJournal(regionId, dimensionId, baseGeneration, targetGeneration, operation, blocks, retained,
 					new UUID(root.getLongOr("OperationUuidMost", 0), root.getLongOr("OperationUuidLeast", 0)),
 					root.getLongOr("TargetManifestChecksum", -1),
 					mmm.recovery.CrossDomainRecovery.JournalPhase.valueOf(root.getStringOr("Phase", "")));
@@ -108,13 +127,14 @@ final class OwnershipJournalCodec {
 	}
 
 	private static String operationName(OwnershipJournal.Operation operation) {
-		return operation == OwnershipJournal.Operation.ACQUIRE ? "ACQUIRE" : "RELEASE";
+		return operation.name();
 	}
 
 	private static OwnershipJournal.Operation parseOperation(String name) throws IOException {
 		return switch (name) {
 			case "ACQUIRE" -> OwnershipJournal.Operation.ACQUIRE;
 			case "RELEASE" -> OwnershipJournal.Operation.RELEASE;
+			case "RETURN_WATER" -> OwnershipJournal.Operation.RETURN_WATER;
 			default -> throw new IOException("Unknown ownership WAL operation: " + name);
 		};
 	}

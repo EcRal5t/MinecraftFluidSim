@@ -46,6 +46,8 @@ public record RegionGeometry(
 		}
 	}
 
+	public enum RegionKind { CLOSED, POOL }
+
 	/** Immutable block-space topology represented only by stable coordinates and packed membership. */
 	public record ControllerFootprint(
 			BlockPosition controllerPosition,
@@ -53,8 +55,21 @@ public record RegionGeometry(
 			BlockPosition maximumInterior,
 			Set<Long> interiorBlocks,
 			Set<Long> boundaryBlocks,
-			Set<Long> requiredChunks
+			Set<Long> requiredChunks,
+			RegionKind kind,
+			Set<Long> atmosphereBlocks,
+			Set<Long> returnedBlocks
 	) {
+		public ControllerFootprint(BlockPosition controllerPosition, BlockPosition minimumInterior, BlockPosition maximumInterior,
+				Set<Long> interiorBlocks, Set<Long> boundaryBlocks, Set<Long> requiredChunks) {
+			this(controllerPosition, minimumInterior, maximumInterior, interiorBlocks, boundaryBlocks, requiredChunks, RegionKind.CLOSED, Set.of(), Set.of());
+		}
+
+		public ControllerFootprint(BlockPosition controllerPosition, BlockPosition minimumInterior, BlockPosition maximumInterior,
+				Set<Long> interiorBlocks, Set<Long> boundaryBlocks, Set<Long> requiredChunks, RegionKind kind, Set<Long> atmosphereBlocks) {
+			this(controllerPosition, minimumInterior, maximumInterior, interiorBlocks, boundaryBlocks, requiredChunks, kind, atmosphereBlocks, Set.of());
+		}
+
 		public ControllerFootprint {
 			Objects.requireNonNull(controllerPosition, "controllerPosition");
 			Objects.requireNonNull(minimumInterior, "minimumInterior");
@@ -62,7 +77,11 @@ public record RegionGeometry(
 			interiorBlocks = Set.copyOf(interiorBlocks);
 			boundaryBlocks = Set.copyOf(boundaryBlocks);
 			requiredChunks = Set.copyOf(requiredChunks);
-			if (interiorBlocks.isEmpty() || !boundaryBlocks.contains(controllerPosition.packed())
+			Objects.requireNonNull(kind, "kind");
+			atmosphereBlocks = Set.copyOf(atmosphereBlocks);
+			returnedBlocks = Set.copyOf(returnedBlocks);
+			if (!interiorBlocks.containsAll(returnedBlocks)) throw new IllegalArgumentException("Returned blocks must belong to the region");
+			if (interiorBlocks.isEmpty() || kind == RegionKind.CLOSED && !boundaryBlocks.contains(controllerPosition.packed())
 					|| requiredChunks.isEmpty() || minimumInterior.x() > maximumInterior.x()
 					|| minimumInterior.y() > maximumInterior.y() || minimumInterior.z() > maximumInterior.z()) {
 				throw new IllegalArgumentException("Invalid controller footprint");

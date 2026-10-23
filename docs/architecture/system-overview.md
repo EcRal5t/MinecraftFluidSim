@@ -5,7 +5,7 @@
 
 固定碰撞在每个求解单元内保留一个连通开放空间；隔墙以求解网格解析。固定几何编辑和恢复统一执行此限制，库存、压力和格面惯性使用同一空间归属。
 
-当前运行范围为最多四个闭壳控制器区域，CPU `FluidDomain` 为物理聚合根。默认格长为 0.5 m，气体采用有限气腔与局部孔流，颗粒采用活动代表粒子与床层。玩法范围和后续能力的目标由[产品路线](../roadmap/product-roadmap.md)维护。
+当前运行范围为最多四个闭壳控制器或有界静水池区域，CPU `FluidDomain` 为物理聚合根。默认格长为 0.5 m，气体采用有限气腔与局部孔流，颗粒采用活动代表粒子与床层。玩法范围和后续能力的目标由[产品路线](../roadmap/product-roadmap.md)维护。
 
 ## 导航
 
@@ -151,7 +151,9 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 [PhysicalActivityGroups](../../solver/src/main/java/mmm/fluid/PhysicalActivityGroups.java) 按固定开放通路、有限气腔、颗粒支撑、实体与热接触组织同域活动组。力学和热化学分别休眠，局部输入唤醒相关组；共享设备的端口单元随 tick 输入建立关联。压力、黏性、体力、输运与热化学阶段共用组的活动状态，休眠库存与 MAC 原量保留。通气口按整数平衡迁移量识别持续压差驱动，相关有限气腔组保持运行。所有组仍沿完整区域候选和一个 HEAD 提交。
 
-`FluidDomainStateMapper` 保存进程内候选调度状态，冷恢复重新观察物理状态；`RegionDiagnosticsReport` 只读展示组数及活动／休眠单元。验证入口为 `activity-groups`，稳定契约见[运行时与生命周期](runtime-and-lifecycle.md#物理活动组)。
+世界输入由 [MinecraftGroupAvailability](../../fabric/src/main/java/mmm/simulation/MinecraftGroupAvailability.java) 的 `prepare` 按求解单元及其邻接方块采样已加载区块，`PhysicalActivityGroups.prepareAvailability` 将缺失条件传播到物理关联的整个组。受影响组保留库存、动量与内能，其他独立组继续；全部组等待时区域保留完整内存求解域。区块恢复时请求刷新碰撞并唤醒相关组。冷恢复分批读取同代完整区域磁盘库存，全部到齐后建立完整 CPU `FluidDomain`，世界缺区块按组暂停。
+
+`FluidDomainStateMapper` 保存进程内候选调度状态与世界单元可用性，冷恢复重新观察物理状态；`RegionDiagnosticsReport` 只读展示组数及活动／休眠单元。验证入口为 `activity-groups`，稳定契约见[运行时与生命周期](runtime-and-lifecycle.md#物理活动组)。
 
 ## 从游戏操作到计算结果
 
@@ -167,7 +169,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 启动时先发布或恢复世界能力包，绑定该世界的材料定义和功能布局，再恢复区域与未完成事务。已提交包解释已有库存，数据包漂移通过诊断报告。定义、格式或身份错误保留原文件并锁定相应持久域。
 
-服务器 tick 依次刷新碰撞、热交换与实体输入，调度器选择 `NONE`、`MOTION` 或 `THERMAL`。力学优先于独立热轴；暂停、pacing 跳过和热轴均保留运动输入的一次使用规则。静水可继续导热、反应或相变；热量变化又可唤醒力学。玩家运行意图与外壳破损、区块卸载等可用性原因分别保存。
+服务器 tick 依次刷新碰撞、热交换与实体输入，调度器选择 `NONE`、`MOTION` 或 `THERMAL`。力学优先于独立热轴；暂停、pacing 跳过和热轴均保留运动输入的一次使用规则。静水可继续导热、反应或相变；热量变化又可唤醒力学。玩家运行意图与外壳破损等区域可用性原因分别保存；世界区块卸载按物理活动组暂停。
 
 - **启动与依赖组装**
   - 主要文件：
@@ -178,6 +180,8 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - **tick、调度、实体和碰撞输入**
   - 主要文件：
     - [MinecraftSimulationLoop](../../fabric/src/main/java/mmm/simulation/MinecraftSimulationLoop.java)
+    - [MinecraftGroupAvailability](../../fabric/src/main/java/mmm/simulation/MinecraftGroupAvailability.java)：`prepare` 组织世界区块可用性，`loadedShellFailure` 检查已加载池壁与外壳，`boxAvailable` 筛选实体输入。
+    - [MinecraftCollisionWorldPort](../../fabric/src/main/java/mmm/simulation/MinecraftCollisionWorldPort.java)：`capture` 保留暂停组的固定碰撞，恢复后重新采样世界。
     - [MinecraftRegionInputs](../../fabric/src/main/java/mmm/simulation/MinecraftRegionInputs.java)：捕获机械及燃烧实体的已提交湿接触，`commitEntityResponse` 在成功提交后施加冲量与水接触灭火。
     - [RegionTickUseCase](../../app/src/main/java/mmm/application/RegionTickUseCase.java)
   - 几何入口：[MovingBodyWetGeometry](../../solver/src/main/java/mmm/fluid/MovingBodyWetGeometry.java) 的 `capture` 共用物理材料层，返回独立水接触体积；[MovingBodyCouplingValidation](../../fabric/src/test/java/mmm/fluid/MovingBodyCouplingValidation.java) 覆盖干身、水和水油交界。
@@ -497,12 +501,14 @@ MAC 动量输运读取同次结算的实际整数质量通量。
     - [RegionCheckpointAssembler](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointAssembler.java)：`sectionKey` 共用 `RegionGeometry.worldBlockPosition` 的整数世界原点与局部偏移换算，保存、校验和恢复使用同一分区规则。
     - [RegionCheckpointRestorer](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointRestorer.java)
     - [RegionGenerationStore](../../fabric/src/main/java/mmm/simulation/persistence/RegionGenerationStore.java)：绑定 HEAD 的分片读取与完整共同提交。
-    - [RegionRepositoryAdapter](../../fabric/src/main/java/mmm/simulation/RegionRepositoryAdapter.java)：分批驻留同代 section，完整后恢复活动组；资格失效时取消加载。
+    - [RegionRepositoryAdapter](../../fabric/src/main/java/mmm/simulation/RegionRepositoryAdapter.java)：`restoreIncrementally` 分批驻留同代 section，完整后恢复整个 CPU 求解域；世界缺区块保持磁盘读取进度。
     - [RegionDiscovery](../../fabric/src/main/java/mmm/simulation/persistence/RegionDiscovery.java)：启动只读取清单，保留尚未加载的库存汇总。
   - 验证选择器 / 参考：`region-state`；[存档参考](region-state.md)
 
 - **玩家、发射器及世界事务**
   - 主要文件：
+    - [MinecraftPoolOperations](../../fabric/src/main/java/mmm/simulation/MinecraftPoolOperations.java)：`probe` 完成管理员探针预览确认，`returnWater` 暂停并归还可表示水块，余量取走后移除；`allowsBlockChange` 隔离池内原版水写入。
+    - [NativePoolScanner](../../fabric/src/main/java/mmm/simulation/controller/NativePoolScanner.java)：已加载静水、天然底壁、大气开口与尺寸预算。
     - [FluidPortBlock](../../fabric/src/main/java/mmm/block/FluidPortBlock.java)：六向 `FACING` 朝外的显式容器口，保持外壳碰撞。
     - [FluidWorldTargetResolver](../../fabric/src/main/java/mmm/simulation/FluidWorldTargetResolver.java)：`transferTargetAtBlock` / `resolvePortTarget` 统一正面端口与唯一已加载内侧目标；`gasShellTargetAtBlock` 定位创造气体源的真实壳面。
     - [PlayerContainerTransferAdapter](../../fabric/src/main/java/mmm/simulation/PlayerContainerTransferAdapter.java) / [DispenserContainerTransferAdapter](../../fabric/src/main/java/mmm/simulation/DispenserContainerTransferAdapter.java)：玩家命中面、发射器朝向和真实容器槽位适配。

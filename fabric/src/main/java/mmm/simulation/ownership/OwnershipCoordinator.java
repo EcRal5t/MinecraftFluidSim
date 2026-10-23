@@ -164,6 +164,90 @@ public final class OwnershipCoordinator {
 		}
 	}
 
+	/** Publishes actual reference-water transfer and the retained ownership in one HEAD transaction. */
+	public static ReleaseResult returnWater(
+			RegionGenerationStore regionFiles,
+			OwnershipFiles ownershipFiles,
+			RegionState target,
+			List<OwnershipJournal.BlockEntry> returned,
+			boolean relinquishAll,
+			String warning,
+			WorldAccess world,
+			FailureInjector failures
+	) throws IOException {
+		Objects.requireNonNull(target, "target");
+		ownershipFiles.assertUnlockedForTransition();
+		if (!ownershipFiles.hasCommitted()) throw new IOException("No committed ownership to release");
+		OwnershipCommitted committed = ownershipFiles.readCommitted();
+		UUID regionId = committed.regionId();
+		if (!regionId.equals(target.manifest().regionId())) {
+			throw new IOException("Ownership registry belongs to region " + regionId
+					+ ", not " + target.manifest().regionId());
+		}
+		if (committed.ownedBlocks().isEmpty()) throw new IOException("Ownership registry holds no owned positions");
+		if (returned.isEmpty() && !relinquishAll) throw new IOException("Native water return is empty");
+		var positions = new java.util.HashSet<Long>();
+		for (var block : returned) {
+			if (!positions.add(block.packedPosition()) || committed.ownedBlocks().stream().noneMatch(owned -> owned.packedPosition() == block.packedPosition()))
+				throw new IOException("Native water return positions disagree with committed ownership");
+			if (world.inspectReturn(committed.dimensionId(), block) != InspectOutcome.OWNED_AIR) throw new IOException("Native water output must begin in owned air");
+		}
+
+		RegionGenerationStore.PreparedGeneration prepared = regionFiles.prepare(target, (point, path) -> { });
+		try {
+			long baseGeneration = prepared.baseGeneration() == null ? 0L : prepared.baseGeneration();
+			if (!GenerationSequence.isNext(baseGeneration, target.manifest().checkpointGeneration())) {
+				throw new IOException("Release target generation must be one past the committed region HEAD "
+						+ baseGeneration + ", got " + target.manifest().checkpointGeneration());
+			}
+			failures.hit(FailurePoint.AFTER_REGION_PREPARE, 0);
+			OwnershipJournal wal = new OwnershipJournal(regionId, committed.dimensionId(), baseGeneration,
+					target.manifest().checkpointGeneration(), OwnershipJournal.Operation.RETURN_WATER, returned,
+					relinquishAll ? List.of() : committed.ownedBlocks().stream().filter(block -> returned.stream().noneMatch(out -> out.packedPosition() == block.packedPosition())).toList(),
+					UUID.randomUUID(), prepared.manifestChecksum(), CrossDomainRecovery.JournalPhase.PREPARED);
+			ownershipFiles.publishWAL(wal);
+			failures.hit(FailurePoint.AFTER_WAL_PUBLISH, 0);
+			ownershipFiles.publishWarning(warning);
+			failures.hit(FailurePoint.AFTER_WARNING_PUBLISH, 0);
+
+			ownershipFiles.publishCommitReady(wal);
+			failures.hit(FailurePoint.BEFORE_HEAD_PUBLISH, 0);
+			long published = regionFiles.commit(prepared, (point, path) -> { });
+			failures.hit(FailurePoint.AFTER_HEAD_PUBLISH, 0);
+
+			int restored = 0;
+			int alreadyRestored = 0;
+			int skipped = 0;
+			int processed = 0;
+			for (OwnershipJournal.BlockEntry entry : wal.blocks()) {
+				if (world.inspectReturn(committed.dimensionId(), entry) == InspectOutcome.OCCUPIED) throw new IOException("Native water output position changed");
+				switch (world.returnWater(committed.dimensionId(), entry)) {
+					case RESTORED -> restored++;
+					case ALREADY_RESTORED -> alreadyRestored++;
+					case SKIPPED_OCCUPIED -> throw new IOException("Native water output is occupied");
+				}
+				processed++;
+				failures.hit(FailurePoint.AFTER_RESTORE_BLOCK, processed);
+			}
+
+			ownershipFiles.publishCommitted(new OwnershipCommitted(regionId, committed.dimensionId(), published, wal.retainedBlocks()));
+			failures.hit(FailurePoint.AFTER_COMMITTED_WRITE, 0);
+			failures.hit(FailurePoint.BEFORE_CLEANUP, 0);
+			world.persist(committed.dimensionId());
+			ownershipFiles.deleteTransaction();
+			return new ReleaseResult(published, restored, alreadyRestored, skipped);
+		} catch (IOException | RuntimeException failure) {
+			if (!ownershipFiles.hasWAL()) {
+				try {
+					regionFiles.abort(prepared);
+				} catch (IOException abortFailure) {
+					failure.addSuppressed(abortFailure);
+				}
+			}
+			throw failure;
+		}
+	}
+
 	public static RecoveryResult recover(
 			RegionGenerationStore regionFiles,
 			OwnershipFiles ownershipFiles,
@@ -184,9 +268,10 @@ public final class OwnershipCoordinator {
 		if (!world.isDimensionLoaded(wal.dimensionId())) {
 			members.add(CrossDomainRecovery.ExternalTruth.UNAVAILABLE);
 		} else for (var block : wal.blocks()) {
-			var state = world.inspect(wal.dimensionId(), block);
+			var state = wal.operation() == OwnershipJournal.Operation.RETURN_WATER
+					? world.inspectReturn(wal.dimensionId(), block) : world.inspect(wal.dimensionId(), block);
 			// Restore preserves an occupied player block; that position already needs no write.
-			boolean preserved = state == InspectOutcome.OCCUPIED;
+			boolean preserved = state == InspectOutcome.OCCUPIED && wal.operation() != OwnershipJournal.Operation.RETURN_WATER;
 			boolean before = wal.operation() == OwnershipJournal.Operation.ACQUIRE
 					? state == InspectOutcome.PREIMAGE_PRESENT : state == InspectOutcome.OWNED_AIR;
 			boolean after = wal.operation() == OwnershipJournal.Operation.ACQUIRE
@@ -196,6 +281,7 @@ public final class OwnershipCoordinator {
 			} else after |= preserved;
 			members.add(CrossDomainRecovery.classify(true, before, after, false));
 		}
+		if (members.isEmpty()) members.add(CrossDomainRecovery.ExternalTruth.BEFORE);
 		var boundary = new CrossDomainRecovery.Boundary(head, checksum, wal.baseGeneration(), wal.targetGeneration(),
 				wal.targetManifestChecksum() >= 0, wal.targetManifestChecksum(), wal.phase(), false);
 		var decision = CrossDomainRecovery.decide(boundary, members,
@@ -281,7 +367,7 @@ public final class OwnershipCoordinator {
 			OwnershipJournal wal
 	) throws IOException {
 		List<OwnershipJournal.BlockEntry> expected =
-				wal.operation() == OwnershipJournal.Operation.ACQUIRE ? wal.blocks() : List.of();
+				wal.operation() == OwnershipJournal.Operation.ACQUIRE ? wal.blocks() : wal.retainedBlocks();
 		OwnershipCommitted current = ownershipFiles.hasCommitted() ? ownershipFiles.readCommitted() : null;
 		if (current != null && !current.regionId().equals(wal.regionId())) {
 			throw new IOException("Ownership is LOCKED: committed registry region " + current.regionId()
@@ -299,13 +385,17 @@ public final class OwnershipCoordinator {
 		int releaseRestored = 0;
 		int releaseAlreadyRestored = 0;
 		int releaseSkipped = 0;
-		if (wal.operation() == OwnershipJournal.Operation.RELEASE) {
+		if (wal.operation() != OwnershipJournal.Operation.ACQUIRE) {
 			int processed = 0;
 			for (OwnershipJournal.BlockEntry entry : wal.blocks()) {
-				switch (world.restore(wal.dimensionId(), entry)) {
+				switch (wal.operation() == OwnershipJournal.Operation.RETURN_WATER
+						? world.returnWater(wal.dimensionId(), entry) : world.restore(wal.dimensionId(), entry)) {
 					case RESTORED -> releaseRestored++;
 					case ALREADY_RESTORED -> releaseAlreadyRestored++;
-					case SKIPPED_OCCUPIED -> releaseSkipped++;
+					case SKIPPED_OCCUPIED -> {
+						if (wal.operation() == OwnershipJournal.Operation.RETURN_WATER) throw new IOException("Native water output is occupied");
+						releaseSkipped++;
+					}
 				}
 				failures.hit(FailurePoint.AFTER_RESTORE_BLOCK, ++processed);
 			}
@@ -332,7 +422,7 @@ public final class OwnershipCoordinator {
 		failures.hit(FailurePoint.BEFORE_CLEANUP, 0);
 		world.persist(wal.dimensionId());
 		ownershipFiles.deleteTransaction();
-		if (wal.operation() == OwnershipJournal.Operation.RELEASE) {
+		if (wal.operation() != OwnershipJournal.Operation.ACQUIRE) {
 			return RecoveryResult.completed(releaseRestored, releaseAlreadyRestored, releaseSkipped);
 		}
 		return RecoveryResult.completed(ownedAir, playerConflicts, waterConflicts);
@@ -367,6 +457,14 @@ public final class OwnershipCoordinator {
 		RestoreOutcome restore(String dimensionId, OwnershipJournal.BlockEntry block) throws IOException;
 
 		InspectOutcome inspect(String dimensionId, OwnershipJournal.BlockEntry block) throws IOException;
+
+		default InspectOutcome inspectReturn(String dimensionId, OwnershipJournal.BlockEntry block) throws IOException {
+			return inspect(dimensionId, block);
+		}
+
+		default RestoreOutcome returnWater(String dimensionId, OwnershipJournal.BlockEntry block) throws IOException {
+			return restore(dimensionId, block);
+		}
 	}
 
 	public enum RemoveOutcome {

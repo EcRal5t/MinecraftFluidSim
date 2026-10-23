@@ -150,6 +150,9 @@ final class RegionStateIntegrity {
 		writeLongSet(out, footprint.interiorBlocks());
 		writeLongSet(out, footprint.boundaryBlocks());
 		writeLongSet(out, footprint.requiredChunks());
+		out.writeUTF(footprint.kind().name());
+		writeLongSet(out, footprint.atmosphereBlocks());
+		writeLongSet(out, footprint.returnedBlocks());
 	}
 
 	private static void writeBlockPos(DataOutputStream out, RegionGeometry.BlockPosition pos) throws IOException {

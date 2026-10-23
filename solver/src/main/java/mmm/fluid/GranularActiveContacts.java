@@ -32,9 +32,15 @@ final class GranularActiveContacts {
 	private final ArrayList<Constraint> constraints = new ArrayList<>();
 	private final HashSet<Long> pairs = new HashSet<>();
 	private int operations, nodeCount, heapSize;
+    private final java.util.function.IntPredicate executable;
 
 	GranularActiveContacts(GranularParcelStore parcels, GranularRegistry registry, GranularSphereCollision fixed,
 	                      float h, float duration) {
+        this(parcels,registry,fixed,h,duration,index->true);
+    }
+    GranularActiveContacts(GranularParcelStore parcels, GranularRegistry registry, GranularSphereCollision fixed,
+                          float h,float duration,java.util.function.IntPredicate executable) {
+        this.executable=executable;
 		this.parcels = parcels; this.fixed = fixed; this.h = h;
 		int count = parcels.count();
 		int treeCapacity = 2 * count;
@@ -53,6 +59,9 @@ final class GranularActiveContacts {
 			initial[i] = new double[]{p.x(), p.y(), p.z()}; mass[i] = p.mass();
 			radius[i] = GranularMechanics.representativeRadius(p.solidVolumeSvq(), h);
 			materials[i] = registry.material(p.materialHandle());
+            if(!executable.test(i)) {
+                predicted[i]=initial[i].clone();velocity[i]=new double[]{p.velocityX(),p.velocityY(),p.velocityZ()};continue;
+            }
 			var motion = fixed.preview(new float[]{p.x(), p.y(), p.z()},
 					new float[]{p.velocityX(), p.velocityY(), p.velocityZ()}, radius[i], duration,
 					materials[i], GranularLimits.MAX_OPERATIONS_PER_LOGICAL_STEP - operations);
@@ -78,6 +87,7 @@ final class GranularActiveContacts {
 				}
 			}
 			for (int i = 0; i < points.length; i++) {
+                if(!executable.test(i))continue;
 				for (var plane : fixed.projectPosition(points[i], radius[i]))
 					addFixedPlane(i, plane.normal(), plane.minimum());
 			}
@@ -93,7 +103,10 @@ final class GranularActiveContacts {
 			for (int i = 0; i < input.length; i++) outgoing[component.members()[i]] = response.values()[i];
 		}
 		for (int i = 0; i < points.length; i++) {
-			float[] p = fixed.roundContactPoint(points[i], radius[i]);
+			if(!executable.test(i)) {
+                var p=parcels.parcel(i);x[i]=p.x();y[i]=p.y();z[i]=p.z();vx[i]=p.velocityX();vy[i]=p.velocityY();vz[i]=p.velocityZ();continue;
+            }
+            float[] p = fixed.roundContactPoint(points[i], radius[i]);
 			x[i] = p[0]; y[i] = p[1]; z[i] = p[2];
 			vx[i] = (float) outgoing[i][0]; vy[i] = (float) outgoing[i][1]; vz[i] = (float) outgoing[i][2];
 		}
@@ -328,6 +341,7 @@ final class GranularActiveContacts {
 	}
 
 	private Constraint candidate(int i, int j, double[][] points) {
+        if(!executable.test(i)||!executable.test(j))return null;
 		double rx = initial[j][0] - initial[i][0], ry = initial[j][1] - initial[i][1], rz = initial[j][2] - initial[i][2];
 		double dx = (points[j][0] - initial[j][0]) - (points[i][0] - initial[i][0]);
 		double dy = (points[j][1] - initial[j][1]) - (points[i][1] - initial[i][1]);
@@ -367,6 +381,7 @@ final class GranularActiveContacts {
 			int quota = Math.min(LOCAL_CANDIDATES, (budget + remaining - 1) / remaining);
 			// Reverse visits between passes so a coarse work allocation does not favour one end of the tree.
 			int i = order[(pass & 1) == 0 ? visit : order.length - 1 - visit];
+            if(!executable.test(i))continue;
 			budget -= queryContacts(i, points, quota);
 		}
 	}

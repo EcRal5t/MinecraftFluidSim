@@ -110,9 +110,21 @@ release 只有在凝聚相、密闭气体、gas `U` 和有限设备库存全部�
 
 committed registry 记录 region、dimension、generation 和确切 owned block/preimage 集。日常 reconcile 只分类 `OWNED_AIR`、`PREIMAGE_PRESENT` 和 `OCCUPIED`，不自动把冲突方块改回空气或水。
 
+## 原版小池接管与归还
+
+`MinecraftPoolOperations` 由探针提供玩家操作：正常右击预览，限时潜行右击同池确认。服务器保存玩家、维度、选择范围及原水方块状态，确认重新扫描。`NativePoolScanner` 在已加载世界中寻找连通水源块，要求水平敞开水面和完整实心池底、池壁；范围包含一层顶部空气，按稠密网格预算接纳。
+
+`RegionGeometry.ControllerFootprint` 与 Fabric 范围描述保存 `CLOSED` / `POOL`、大气开口和已归还位置。池体使用环境气体，普通控制器使用密闭外壳。完整描述随 manifest 编码、校验和与恢复传递。水源块按每块1 m³初始化，完整能力候选沿既有 ACQUIRE 事务发布后才登记。
+
+归还从当前库存准备私有候选。只有完整方块体积、对应质量、纯水组成、参考温度内能和零格面动量的水才生成原版水源。热水、混合物、零头、颗粒和运动中的水保持原库存；没有通过原版水表示的内容继续由区域保存。归还操作暂停区域，玩家可以继续提取余量。
+
+`RETURN_WATER` 使用区域先提交：目标 HEAD 同时保存实际库存扣除和已归还位置，WAL保存原版水后态及继续接管的位置；随后生成世界水源、耐久保存世界并清理事务。已归还位置从模拟空间排除，方块修改钩子阻止原版水进入仍受接管的空间。恢复按共同判定器完成后态，遇到占据位置保留事务。全部库存和设备为空时解除剩余归属，沿原移除事务结束区域。接管时保存的历史水方块只参与接管失败回滚。
+
+主要入口：`MinecraftPoolOperations.probe`、`MinecraftRegionActivation.activatePool`、`NativePoolScanner.scan`、`OwnershipTransactionCoordinator.returnPoolWater`、`OwnershipCoordinator.returnWater`、`MaterialTransferPlanner.returnNativeWaterCells`。验证沿 `boundary`、`ownership` 和区域存档入口组织。
+
 ## 区域生命周期
 
-- controller 必须有完整闭壳和全部已加载 chunk。
+- 控制器检查闭壳，池体检查天然底壁与大气开口；世界区块是否加载决定关联物理组的运行资格。
 - UNLOADED 区域不持 solver，但仍占 catalog 的 cell/marker reservation。
 - 已提交 manifest 的 metadata 先登记、再按本次启动的总预算和 peer overlap 做 runtime admission；临时超预算或重叠只阻止 solver restore，不得让 committed region 从 owner 索引消失。
 - checkpoint 成功后才能释放 solver；恢复成功后先刷新 collision，再发送 snapshot。

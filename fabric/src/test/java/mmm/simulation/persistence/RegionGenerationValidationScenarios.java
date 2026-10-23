@@ -32,6 +32,31 @@ import java.util.Set;
 import java.util.UUID;
 
 abstract class RegionGenerationValidationScenarios extends RegionPersistenceValidationSupport {
+    static void validatePoolFootprint() throws Exception {
+        var origin=new net.minecraft.core.BlockPos(1,1,1);
+        var returned=origin.asLong();
+        var interior=Set.of(returned,origin.east().asLong());
+        var footprint=new mmm.simulation.controller.FluidRegionFootprint(origin,origin,origin.east(),interior,
+                Set.of(origin.below().asLong()),Set.of(net.minecraft.world.level.ChunkPos.pack(0,0)),
+                mmm.model.region.RegionGeometry.RegionKind.POOL,Set.of(origin.above().asLong()),Set.of(returned));
+        var domain=new mmm.fluid.FluidDomain(4,2,2,CONFIG);
+        for(int z=0;z<2;z++) for(int y=0;y<2;y++) for(int x=0;x<2;x++) domain.setSolid(x,y,z,true);
+        domain.setVolume(2,0,0,.5F);
+        var region=new FluidRegion(new UUID(571,577),DIMENSION,origin,domain,footprint);
+        var state=RegionCheckpointFixtures.capture(region,1);
+        var files=new RegionGenerationStore(Files.createTempDirectory(Path.of("."),"pool-roundtrip-"));
+        files.publish(state);
+        var restored=files.read(region.id());
+        require(restored.manifest().footprint().equals(MinecraftRegionCheckpointSource.footprint(footprint)),
+                "Pool kind, atmosphere or returned ownership changed during persistence");
+        var restoredDomain=restorer(restored).reconstructAuthoritativeState(null,null,null,BuiltinGasDefinitions.createRegistry(),null);
+        require(!restoredDomain.sealedDomainBoundary(),"Pool atmosphere was sealed during restore");
+        FluidDomainStateAssertions.assertSameDurableState(domain.captureAuthoritativeState(),restoredDomain,"Pool returned-cell restore");
+        require(!MinecraftRegionCheckpointSource.minecraftFootprint(restored.manifest().footprint()).containsInterior(origin),
+                "Returned pool cell regained ownership during restore");
+        RegionCheckpointFixtures.validateWorldChunkMask();
+    }
+
 	static void validateSectionLoading() throws Exception {
 		Path root = Files.createTempDirectory(Path.of("."), "section-read-");
 		FluidRegion region = populatedRegion(new UUID(541, 547));

@@ -63,6 +63,10 @@ public final class M6OwnershipValidation {
 		run("crash after HEAD completes ownership and never restores", M6OwnershipValidation::testCrashAfterHead);
 		run("crash before cleanup completes idempotently", M6OwnershipValidation::testCrashBeforeCleanup);
 		run("normal release restores water and clears ownership", M6OwnershipValidation::testNormalRelease);
+		run("native return transfers actual water and retains withdrawal tails", M6OwnershipValidation::testNativeReturn);
+		run("native thermal return retains hot and fractional inventory", M6OwnershipValidation::testThermalNativeReturn);
+		run("native return HEAD interruptions recover once", M6OwnershipValidation::testNativeReturnFaults);
+		run("empty pool relinquishes ownership without restoring preimage", M6OwnershipValidation::testEmptyNativeReturn);
 		run("release crash before HEAD never touches matching water", M6OwnershipValidation::testReleaseCrashBeforeHead);
 		run("release crash after HEAD completes restoration", M6OwnershipValidation::testReleaseCrash);
 		run("corrupt WAL locks and is never overwritten", M6OwnershipValidation::testCorruptWalLock);
@@ -316,6 +320,84 @@ public final class M6OwnershipValidation {
 					&& recovery.restored() == 2 && fixture.world().airCount() == 2
 					&& !fixture.ownershipFiles().isLocked(), "pre-cleanup recovery did not complete idempotently");
 		});
+	}
+
+	private static void testThermalNativeReturn() throws Exception {
+		var registries = mmm.simulation.FullCapabilityTestFixture.load();
+		var domain = new FluidDomain(6, 4, 4, CONFIG);
+		domain.bindMaterialRegistry(registries.liquids());
+		domain.bindChemistry(registries.chemical());
+		var cells = new ArrayList<Integer>();
+		for (int z = 1; z < 3; z++) for (int y = 1; y < 3; y++) for (int x = 1; x < 3; x++) {
+			domain.setVolume(x, y, z, 1); cells.add(x + domain.sizeX() * (y + domain.sizeY() * z));
+		}
+		domain.setVolume(4, 1, 1, 0.25F);
+		domain.bindThermal(registries.thermal(), registries.liquids(), 293.15);
+		var original = domain.captureAuthoritativeState();
+		var energy = domain.exactInternalEnergy();
+		var source = domain.exportLiquidCellState().rows().get(4 + 6 * (1 + 4)).getFirst();
+		check(domain.returnNativeWaterCells(cells), "normal reference-temperature pure water did not return");
+		check(domain.totalVolumeExact() == 0.25 && domain.exportLiquidCellState().stocks().equals(List.of(source)), "native return changed thermal tail inventory");
+		check(domain.exactInternalEnergy().add(domain.thermalAudit().externalSink()).equals(energy), "native return lost reference internal energy");
+		var hot = FluidDomain.restoreAuthoritativeState(original);
+		hot.setThermalTemperatureInCell(1, 1, 1, 320);
+		var hotBefore = hot.exportLiquidCellState();
+		check(!hot.returnNativeWaterCells(cells) && hot.exportLiquidCellState().stocks().equals(hotBefore.stocks()), "hot water was erased by native return");
+		var partial = FluidDomain.restoreAuthoritativeState(original);
+		partial.tryExtractExactChemical(1, 1, 1, 0.25F, 0);
+		var partialBefore = partial.exportLiquidCellState();
+		check(!partial.returnNativeWaterCells(cells) && partial.exportLiquidCellState().stocks().equals(partialBefore.stocks()), "partial water block was rounded into a source");
+	}
+
+	private static void testNativeReturn() throws Exception {
+		withTemporaryWorld(root -> {
+			Fixture f = new Fixture(root, 3); acquire(f, FailureInjector.NONE);
+			var state = nativeReturnState(f.regionId());
+			var returned = f.world().originalEntries().subList(0, 1);
+			var result = OwnershipCoordinator.returnWater(f.regionFiles(), f.ownershipFiles(), state, returned, false,
+					"native", f.world(), FailureInjector.NONE);
+			check(result.restoredBlocks() == 1 && f.world().waterCount() == 1 && f.world().airCount() == 2, "native return recreated withdrawn water");
+			check(f.ownershipFiles().readCommitted().ownedBlocks().size() == 2, "native return lost retained ownership");
+			check(!f.ownershipFiles().hasWAL(), "native return kept its completed WAL");
+		});
+	}
+
+	private static void testNativeReturnFaults() throws Exception {
+		for (var point : List.of(FailurePoint.BEFORE_HEAD_PUBLISH, FailurePoint.AFTER_HEAD_PUBLISH, FailurePoint.AFTER_RESTORE_BLOCK)) {
+			withTemporaryWorld(root -> {
+				Fixture f = new Fixture(root, 3); acquire(f, FailureInjector.NONE);
+				var returned = f.world().originalEntries().subList(0, 1);
+				expectIOException(() -> OwnershipCoordinator.returnWater(f.regionFiles(), f.ownershipFiles(), nativeReturnState(f.regionId()),
+						returned, false, "native", f.world(), failAt(point, point == FailurePoint.AFTER_RESTORE_BLOCK ? 1 : 0)));
+				recover(f, FailureInjector.NONE); recover(f, FailureInjector.NONE);
+				boolean committed = point != FailurePoint.BEFORE_HEAD_PUBLISH;
+				check(f.world().waterCount() == (committed ? 1 : 0), "native return fault duplicated output");
+				check(f.ownershipFiles().readCommitted().ownedBlocks().size() == (committed ? 2 : 3), "native return recovery lost retained positions");
+			});
+		}
+	}
+
+	private static void testEmptyNativeReturn() throws Exception {
+		withTemporaryWorld(root -> {
+			Fixture f = new Fixture(root, 3); acquire(f, FailureInjector.NONE);
+			OwnershipCoordinator.returnWater(f.regionFiles(), f.ownershipFiles(), nativeReturnState(f.regionId()), List.of(), true,
+					"empty", f.world(), FailureInjector.NONE);
+			check(f.world().airCount() == 3 && f.ownershipFiles().readCommitted().ownedBlocks().isEmpty(), "empty pool restored its withdrawn preimage");
+		});
+	}
+
+	private static RegionState nativeReturnState(UUID id) throws IOException {
+		var region = populatedRegion(id); var domain = region.domain();
+		// Replace the fixture liquid with one full physical block plus an unrelated fractional remainder.
+		domain.removeAllWaterExact();
+		var cells = new ArrayList<Integer>();
+		for (int z = 2; z < 4; z++) for (int y = 1; y < 3; y++) for (int x = 2; x < 4; x++) {
+			domain.setVolume(x, y, z, 1); cells.add(x + domain.sizeX() * (y + domain.sizeY() * z));
+		}
+		domain.setVolume(4, 1, 4, 0.25F);
+		check(domain.returnNativeWaterCells(cells), "reference water block could not return");
+		check(domain.totalVolumeExact() == 0.25 && domain.totalMassUnits() == mmm.units.Mass.fromKilograms(31.25), "native return changed the retained tail");
+		return RegionCheckpointFixtures.capture(region, 2L);
 	}
 
 	private static void testNormalRelease() throws Exception {

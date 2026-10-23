@@ -34,7 +34,8 @@ final class GranularTransitionStage {
 			compaction = granular.inventory.compactActive(
 					index -> domain.domainStep.granularParcelCell(granular.parcels.parcel(index)),
 					(firstIndex, secondIndex, first, second, merged) -> {
-						if (!mergeFitsActiveSpheres(future, firstIndex, secondIndex, merged)
+						if (!domain.activityGroups.parcelAvailable(firstIndex)||!domain.activityGroups.parcelAvailable(secondIndex)
+                                ||!mergeFitsActiveSpheres(future, firstIndex, secondIndex, merged)
 								|| !domain.domainStep.planGranularMerge(compactedSolid, first, second, merged)) return false;
 						future[firstIndex] = merged; future[secondIndex] = null;
 						return true;

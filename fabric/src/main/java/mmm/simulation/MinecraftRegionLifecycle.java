@@ -215,6 +215,14 @@ public final class MinecraftRegionLifecycle {
 				release.restoredBlocks(), release.skippedBlocks());
 	}
 
+	CommitResult removeEmptyPool(ServerPlayer player, FluidRegion region) {
+		var facts=lifecycleFacts(player,region,LifecycleOperation.REMOVE_EMPTY_REGION);
+		if (!facts.blockers().isEmpty()) return CommitResult.failedDetail("池中仍有物质、热量或未完成事务，已保留区域");
+		if (!region.domain().exactInternalEnergy().equals(mmm.units.SignedDyadic.ZERO))
+			return CommitResult.failedDetail("池中仍有热量，已保留区域");
+		return commitRemoval(player.level().getServer(),region);
+	}
+
 	private CommitResult commitRemoval(MinecraftServer server, FluidRegion region) {
 		long maximumQuarantineEntries = startup.config().maximumQuarantineEntries();
 		long maximumQuarantineBytes = startup.config().maximumQuarantineBytes();

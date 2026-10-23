@@ -90,7 +90,9 @@ final class FluidRegionFactory {
 					if (region.controllerManaged() && !state.is(net.minecraft.world.level.block.Blocks.WATER)) continue;
 					FluidState fluid = state.getFluidState();
 					if (!fluid.is(FluidTags.WATER)) continue;
-					float waterHeight = fluid.getHeight(level, blockPosition);
+					float waterHeight = region.footprint() != null
+							&& region.footprint().kind() == mmm.model.region.RegionGeometry.RegionKind.POOL
+							&& fluid.isSource() ? 1.0F : fluid.getHeight(level, blockPosition);
 					double cellBottom = origin.getY() + y * cellSize;
 					double localBottom = cellBottom - Math.floor(cellBottom);
 					float fraction = Mth.clamp((float) ((waterHeight - localBottom) / cellSize), 0.0F, 1.0F);

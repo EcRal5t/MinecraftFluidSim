@@ -12,6 +12,7 @@ final class PendingPhaseMotionWork {
     boolean isPending(int cell){return cells.get(cell);}
     PendingPhaseMotionState capture(){return new PendingPhaseMotionState(cellCount,cells.stream().mapToObj(PendingPhaseMotionState.Entry::new).toList());}
     void clear(){cells.clear();}
+    void clear(java.util.function.IntPredicate advanced){for(int cell=cells.nextSetBit(0);cell>=0;cell=cells.nextSetBit(cell+1))if(advanced.test(cell))cells.clear(cell);}
     void restore(PendingPhaseMotionState state){
         if(state==null||state.cellCount()!=cellCount||hasWork())throw new IllegalArgumentException("Pending phase motion restore is incompatible");
         for(var entry:state.entries())cells.set(entry.cell());
