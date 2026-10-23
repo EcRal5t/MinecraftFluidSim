@@ -66,6 +66,7 @@ final class VulkanLiquidViscosity implements AutoCloseable {
             endOffset=align(cursor[0],alignment);
         }
         VulkanLiquidStateLayout source(){return source;}
+        VulkanLiquidStateLayout.Column header(){return header;}
         VulkanLiquidStateLayout.Column column(Field field){return columns.get(field);}
         int faces(){return faces;}long endOffset(){return endOffset;}
         List<VulkanEnergyLedger.Stream> externalWorkRoundoffStreams(){

@@ -17,7 +17,7 @@ public final class GpuLiquidMechanicalBenchmark {
             var projection=new VulkanLiquidProjection(context);var pressure=new VulkanPressureKernel(context,4096);
             var multigrid=new VulkanPressureMultigrid(context)) {
             System.out.println("Device: "+context.deviceName());
-            System.out.println("Continuous resident liquid: geometry/gravity/pressure -> capacity -> exact accepted cell volumes -> material routes -> quantities/gather -> MAC -> future geometry -> mixing heat -> connected-body source K minus projected K and actual route PE -> common thermal allocation/exact ledgers -> commit.");
+            System.out.println("Continuous resident liquid: geometry/thermal/viscosity/buoyancy/surface/gravity/pressure -> capacity -> exact accepted cell volumes -> material routes -> quantities/gather/viscous heat transport -> MAC -> future geometry -> mixing heat -> connected-body source K minus projected K and actual route PE -> common thermal allocation/exact ledgers -> commit.");
             System.out.println(gas?"Finite gas enabled: explicit N2/O2 .7/.3 fixture reservoir; old/future chamber geometry, EOS/common pressure, finite capacity groups, gas lineage/remap and actual control-volume work included.":"Ambient gas reservoir.");
             System.out.println("Consecutive commits; explicit fixture reference tables, q=2^-40. Excludes thermochemistry, runtime/backend adoption, world and presentation costs.");
             System.out.println("warmup_steps="+warm+" measured_steps="+samples);
@@ -31,15 +31,19 @@ public final class GpuLiquidMechanicalBenchmark {
         int cells=grid*grid*grid,stocks=2*cells;
         // Explicit fixture caloric model: U=m*4200*T, anchored at the declared reference temperature.
         var caloric=new java.util.ArrayList<mmm.thermal.ThermalMaterialDefinition>();
-        for(String id:new String[]{"bench:water","bench:oil"})caloric.add(new mmm.thermal.ThermalMaterialDefinition(id,
+        for(String id:new String[]{"mmm:water","mmm:oil"})caloric.add(new mmm.thermal.ThermalMaterialDefinition(id,
                 mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID,id,293.15,4200*293.15,0,
                 java.util.List.of(new mmm.thermal.ThermalMaterialDefinition.CaloricSegment(mmm.thermal.ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K,10000,4200))));
+        var fluidDefinitions=new mmm.fluid.FluidMaterialRegistry(java.util.List.of(mmm.fluid.BuiltinFluidMaterials.WATER,mmm.fluid.BuiltinFluidMaterials.OIL));
+        var constitutive=mmm.fluid.BuiltinFluidMaterials.createRegistry();
         var definitions=new VulkanLiquidRegion.MechanicalDefinitions(stocks,0,4*stocks,4,-40,
-                new int[]{0,1},new long[]{0},new double[]{4200*293.15,4200*293.15},new double[]{0,0},1,VulkanLiquidThermodynamics.tables(caloric));
+                new int[]{0,1},new long[]{0},new double[]{4200*293.15,4200*293.15},new double[]{0,0},1,VulkanLiquidThermodynamics.tables(caloric),VulkanLiquidViscosity.tables(fluidDefinitions,constitutive),
+                VulkanLiquidForces.tables(fluidDefinitions,constitutive),VulkanSurfaceTension.tables(fluidDefinitions),true);
         var parameters=new VulkanLiquidProjection.Parameters(.25f,.05f,9.81f,1e-5f,200);
         var gasConfig=gas?seedGas(context,fixture):null;
         try(var region=new VulkanLiquidRegion(context,geometry,projection,pressure,multigrid,fixture.inventory(),fixture.momentum(),
                 fixture.fixed(),fixture.occupied(),definitions,gasConfig)) {
+            System.out.println("Constitutive inputs: builtin water/oil viscosity and expansion; original sigma=0, pair tension=0, neutral contact angle; static no-slip walls, no prescribed body contacts.");
             for(int step=0;step<warm;step++)region.advanceMechanical(parameters,512);
             var before=region.metrics();long[] times=new long[samples],gpuTimes=new long[samples],uploads=new long[samples],reads=new long[samples];
             for(int step=0;step<samples;step++) {
