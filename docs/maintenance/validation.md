@@ -728,3 +728,5 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 | 切割混合气 | 64³ | 65,576 | 5.337 / 5.685 | 4.759 | 407.6 |
 
 四场连通阶段均在首批4轮后收敛，计时期间每步上传0 B、回读12 B，主机 staging 为3 MiB。每次从同一设备源准备候选，计时后单独提交并读取首个节点的派生状态。这组结果测量固定源气体阶段的附加成本，有限气腔压力耦合、气体做功、拓扑变更后的库存转移与连续完整步仍待接入；集中物理检查继续后置。
+
+2026-10-24：工作区整体扩容实现通过 `:gpu-kernel:compileJava`，日志 `build/gpu-resident-liquid-workspace-compile.log`。本次未人为构造容量溢出或运行额外 GPU 场景，正常路径继续使用既有预留；实际扩容恢复的运行证据待补充。共同机械能三项着色器 `mechanical-bodies.comp`、`liquid-thermodynamics.comp`、`mechanical-energy.comp` 已通过 shaderc 编译，连续调用、附加成本和物理核对仍待接入后测量。
