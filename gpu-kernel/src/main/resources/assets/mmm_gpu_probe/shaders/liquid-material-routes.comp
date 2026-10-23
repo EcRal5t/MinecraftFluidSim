@@ -71,6 +71,9 @@ DyadicTerm copyTo(DyadicTerm value,int window) {
     return DyadicTerm(1,at,value.count,value.exponent,1);
 }
 DyadicTerm combine(DyadicTerm a,DyadicTerm b,int coefficient,int window) {
+    if(!dyadicPresent(b))return copyTo(a,window);
+    if(!dyadicPresent(a)){if(coefficient<0){fail();return zero();}return copyTo(b,window);}
+    if(coefficient<0&&a.bank==b.bank&&a.offset==b.offset&&a.count==b.count&&a.exponent==b.exponent)return zero();
     DyadicTerm items[7];items[0]=a;items[1]=b;items[1].sign*=coefficient;
     DyadicMeasure measure=dyadicMeasure(items,2);
     if(measure.status==DYADIC_ZERO)return zero();
@@ -79,7 +82,16 @@ DyadicTerm combine(DyadicTerm a,DyadicTerm b,int coefficient,int window) {
     dyadicWriteSum(items,2,measure,windowOffset(window));
     return DyadicTerm(1,windowOffset(window),measure.words,measure.exponent,1);
 }
-DyadicTerm smaller(DyadicTerm a,DyadicTerm b) { return dyadicCompare(a,b)<=0?a:b; }
+// Positive canonical volumes can be ordered from their leading bit without constructing a difference.
+int compareVolume(DyadicTerm a,DyadicTerm b) {
+    if(!dyadicPresent(a))return dyadicPresent(b)?-1:0;
+    if(!dyadicPresent(b))return 1;
+    int64_t ah=highBit(a),bh=highBit(b);if(ah!=bh)return ah<bh?-1:1;
+    int minimum=min(a.exponent,b.exponent),last=int((ah-int64_t(minimum))>>5);
+    for(int i=last;i>=0;i--){uint av=dyadicAlignedWord(a,i,minimum),bv=dyadicAlignedWord(b,i,minimum);if(av!=bv)return av<bv?-1:1;}
+    return 0;
+}
+DyadicTerm smaller(DyadicTerm a,DyadicTerm b) { return compareVolume(a,b)<=0?a:b; }
 
 int phase(int stock) { return int(candidateWords[h(4)+int(sourceWords[src(MATERIALS)+stock])]); }
 bool densityEqual(int a,int b) {
@@ -131,6 +143,9 @@ void transfer(int stock,int slot,DyadicTerm part,inout DyadicTerm budget,inout i
 }
 
 void partitionLayer(int cell,int first,int last,int slot,int layer,inout DyadicTerm budget,inout int budgetWindow) {
+    int sole=-1;
+    for(int stock=first;stock<last;stock++)if(selected(stock,layer)&&dyadicPresent(routed(7*stock))){if(sole>=0){sole=-2;break;}sole=stock;}
+    if(sole>=0){transfer(sole,slot,smaller(routed(7*sole),budget),budget,budgetWindow,cell);return;}
     int64_t maximum=int64_t(-9223372036854775807L);
     for(int stock=first;stock<last;stock++)if(selected(stock,layer)) {
         DyadicTerm value=routed(7*stock);if(dyadicPresent(value))maximum=max(maximum,highBit(value));
@@ -205,6 +220,8 @@ void reserve(int cell) {
 void splitCell(int cell) {
     if(candidateWords[h(9)+h(45)]>uint(h(6))){atomicOr(errors,64u);return;}
     int first=int(sourceWords[src(CELL_OFFSETS)+cell]),last=int(sourceWords[src(CELL_OFFSETS)+cell+1]);
+    // Capacity already partitions this cell's exact total. One material inherits those seven pieces directly.
+    if(last==first+1){for(int slot=0;slot<7;slot++)saveRoute(7*first+slot,copyTo(accepted(cell,slot),7*first+slot));return;}
     for(int stock=first;stock<last;stock++)saveRoute(7*stock,copyTo(sourceVolume(stock),7*stock));
     if(failed)return;
     bool vertical=p.gravitySign!=0&&(dyadicPresent(accepted(cell,3))||dyadicPresent(accepted(cell,4)));
@@ -219,7 +236,7 @@ void splitCell(int cell) {
         int next=current==base?base+1:base;
         retained=combine(retained,routed(7*stock),1,next);current=next;
     }
-    if(!failed&&dyadicCompare(retained,accepted(cell,0))!=0)fail();
+    if(!failed&&compareVolume(retained,accepted(cell,0))!=0)fail();
 }
 void compact(int entry) {
     if(candidateWords[route(R_OFFSETS)+h(2)]>uint(h(7))){atomicOr(errors,64u);return;}

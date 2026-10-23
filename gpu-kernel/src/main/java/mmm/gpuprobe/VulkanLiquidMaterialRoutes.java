@@ -91,15 +91,18 @@ final class VulkanLiquidMaterialRoutes implements AutoCloseable {
     }
     void record(VkCommandBuffer command, Layout layout) { record(command, layout, layout.gravitySign()); }
     void record(VkCommandBuffer command, Layout layout, int gravitySign) {
-        if (gravitySign < -1 || gravitySign > 1) throw new IllegalArgumentException("Invalid gravity direction");
-        stage(command, layout, 0, layout.windowCount(), gravitySign);
-        stage(command, layout, 1, layout.source().cellCount(), gravitySign);
-        scan.record(command, layout.windowCount(), word(layout.reserveCounts()), word(layout.reserveOffsets()), word(layout.scanWorkspace()));
-        stage(command, layout, 2, layout.source().cellCount(), gravitySign);
-        scan.record(command, layout.routes().routeCapacity(), word(layout.routeCounts()),
-                word(layout.routes().column(VulkanLiquidRouteLayout.Field.VOLUME_OFFSETS)), word(layout.scanWorkspace()));
-        stage(command, layout, 3, layout.routes().routeCapacity(), gravitySign);
+        record(command,layout,gravitySign,null);
     }
+    void record(VkCommandBuffer command, Layout layout, int gravitySign,VulkanStageTimings timings) {
+        if (gravitySign < -1 || gravitySign > 1) throw new IllegalArgumentException("Invalid gravity direction");
+        timed(command,timings,"material-reserve",()->{stage(command, layout, 0, layout.windowCount(), gravitySign);stage(command, layout, 1, layout.source().cellCount(), gravitySign);});
+        timed(command,timings,"material-scratch-scan",()->scan.record(command, layout.windowCount(), word(layout.reserveCounts()), word(layout.reserveOffsets()), word(layout.scanWorkspace())));
+        timed(command,timings,"material-split",()->stage(command, layout, 2, layout.source().cellCount(), gravitySign));
+        timed(command,timings,"material-output-scan",()->scan.record(command, layout.routes().routeCapacity(), word(layout.routeCounts()),
+                word(layout.routes().column(VulkanLiquidRouteLayout.Field.VOLUME_OFFSETS)), word(layout.scanWorkspace())));
+        timed(command,timings,"material-compact",()->stage(command, layout, 3, layout.routes().routeCapacity(), gravitySign));
+    }
+    private static void timed(VkCommandBuffer command,VulkanStageTimings timings,String label,Runnable action){if(timings==null)action.run();else timings.record(command,label,action);}
     private void stage(VkCommandBuffer command, Layout layout, int stage, int count, int gravitySign) {
         if (count == 0) return;
         int groups = (int) (((long) count + 127) / 128);
