@@ -39,17 +39,16 @@ public final class GpuGranularMotionBenchmark {
         contact.initializeHeader(initial);initial.duplicate().position(Math.toIntExact(movement.header.offset())).put(movement.headerBytes());occupancy.initializeHeader(initial);
         int material=movement.word(VulkanGranularMotion.Field.MATERIAL)*4;
         initial.putDouble(material,.3).putDouble(material+8,.6).putDouble(material+16,.4);
-        initial.putInt(Math.toIntExact(state.column(VulkanGranularStateLayout.Field.COUNTS).offset()),count);
+        var particles=new java.util.ArrayList<VulkanGranularStateLayout.Particle>();
         double h=.5,dt=.01;int width=Math.min(grid-4,(int)Math.ceil(Math.sqrt(count)));
         for(int i=0;i<count;i++){
             // Touching finite-mass spheres form an actual horizontal contact network on the bottom wall.
             double x=1.0+(i%width)*.125,y=.0625,z=1.0+(i/width)*.125;
             if(z>=grid*h-.25||x>=grid*h-.25)throw new IllegalArgumentException("Particle fixture exceeds region");
-            int a=state.word(VulkanGranularStateLayout.Field.POSITION)*4+24*i;initial.putDouble(a,x).putDouble(a+8,y).putDouble(a+16,z);
-            a=state.word(VulkanGranularStateLayout.Field.VELOCITY)*4+24*i;initial.putDouble(a,(i%2==0?.05:-.05)).putDouble(a+8,-.1).putDouble(a+16,.03);
-            initial.putLong(state.word(VulkanGranularStateLayout.Field.SOLID_VOLUME_SVQ)*4+8*i,137258L);
-            initial.putLong(state.word(VulkanGranularStateLayout.Field.MASS_UNITS)*4+8*i,272500000000L);
+            var row=new VulkanGranularStateLayout.Row(0,137258L,27100000000L,false,0,new int[0],new long[0],0);
+            particles.add(new VulkanGranularStateLayout.Particle(row,x,y,z,i%2==0?.05:-.05,-.1,.03,0,0,new int[8],new long[8]));
         }
+        state.importState(initial,new VulkanGranularStateLayout.State(state.definitions(),particles,List.of(),List.of(),List.of()));
         try(var storage=new VulkanRegionStorage(context,occupancy.endOffset(),1024*1024)){
             storage.initialize(initial,0);long[] elapsed=new long[samples];long gpu=0,upload=0,readback=0;int actualContacts=0;
             try(var source=storage.capture()){
