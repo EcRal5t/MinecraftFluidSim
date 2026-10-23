@@ -5,6 +5,18 @@ import mmm.api.query.FluidCellObservation;
 import mmm.api.query.FluidQueryResult;
 import mmm.api.query.FluidQueryStatus;
 
+import mmm.fluid.FluidDomain;
+import mmm.fluid.FluidDomainStateAssertions;
+import mmm.fluid.FluidSolverConfig;
+import mmm.simulation.controller.FluidRegionFootprint;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.Registry;
+import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.level.Level;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.OptionalDouble;
 import java.util.UUID;
@@ -14,6 +26,7 @@ public final class ShellFluidQueryValidation {
 	private ShellFluidQueryValidation() { }
 
 	public static void main(String[] args) {
+		validateDirectionalContainerPorts();
 		FluidQueryResult outside = FluidQueryResult.absent(FluidQueryStatus.NO_REGION, "outside");
 		FluidQueryResult empty = FluidQueryResult.absent(FluidQueryStatus.EMPTY, "empty interior");
 		FluidQueryResult liquid = FluidQueryResult.ok(new FluidCellObservation(
@@ -54,6 +67,78 @@ public final class ShellFluidQueryValidation {
 				0.5, 0.5, 0.5, 0.0, -0.0, 0.0, 2, 2, 2, (x, y, z) -> true) == null,
 				"zero-length probe ray was accepted");
 		System.out.println("Shell fluid query validation passed");
+	}
+
+	private static void validateDirectionalContainerPorts() {
+		ResourceKey<Registry<Level>> registry =
+				ResourceKey.createRegistryKey(Identifier.fromNamespaceAndPath("mmm", "port_validation_registry"));
+		var dimension = ResourceKey.create(registry,
+				Identifier.fromNamespaceAndPath("mmm", "ports"));
+		var otherDimension = ResourceKey.create(registry,
+				Identifier.fromNamespaceAndPath("mmm", "other_ports"));
+		var source = portRegion(new UUID(631, 641), dimension);
+		var initial = source.domain().captureAuthoritativeState();
+		var lifecycle = source.lifecycle().state();
+		for (var outward : Direction.values()) {
+			var port = portPosition(outward);
+			var inward = outward.getOpposite();
+			for (var requested : Direction.values()) {
+				var target = FluidWorldTargetResolver.resolvePortTarget(List.of(source), dimension, port, outward, requested);
+				if (requested == inward) require(target != null && target.region() == source
+						&& target.interiorBlock().equals(port.relative(inward)), "Port front did not select its immediate interior: " + outward);
+				else require(target == null, "Back or side approach crossed a directional port: " + outward + "/" + requested);
+			}
+			require(FluidWorldTargetResolver.resolvePortTarget(List.of(source), dimension, port, null, inward) == null,
+					"Ordinary wall without a port facing admitted a container");
+			require(FluidWorldTargetResolver.resolvePortTarget(List.of(source), dimension, port, outward, null) == null,
+					"Container with no approach direction crossed a port");
+			require(FluidWorldTargetResolver.resolvePortTarget(List.of(source), otherDimension, port, outward, inward) == null,
+					"Port selected an owner in another dimension");
+		}
+		require(FluidWorldTargetResolver.resolvePortTarget(List.of(source), dimension,
+				new BlockPos(-1, -1, -1), Direction.WEST, Direction.EAST) == null,
+				"Corner port guessed a diagonal interior");
+		var overlapping = portRegion(new UUID(643, 647), dimension);
+		require(FluidWorldTargetResolver.resolvePortTarget(List.of(source, overlapping), dimension,
+				portPosition(Direction.WEST), Direction.WEST, Direction.EAST) == null,
+				"Ambiguous port selected one of two owners");
+		FluidDomainStateAssertions.assertSameState(initial, source.domain().captureAuthoritativeState(), "Read-only port resolution");
+		require(source.lifecycle().state() == lifecycle, "Port lookup changed the region lifecycle");
+		require(source.recordPublishedCheckpoint(1) && source.releaseSolverAfterCheckpoint(1), "Port metadata fixture could not unload");
+		require(FluidWorldTargetResolver.resolvePortTarget(List.of(source), dimension,
+				portPosition(Direction.WEST), Direction.WEST, Direction.EAST) == null
+				&& !source.solverLoaded() && source.checkpointGeneration() == 1,
+				"Container port loaded or admitted an unloaded solver");
+	}
+
+	private static FluidRegion portRegion(UUID id, ResourceKey<Level> dimension) {
+		var origin = BlockPos.ZERO;
+		var controller = new BlockPos(-1, 0, 0);
+		var interior = new HashSet<Long>();
+		var boundary = new HashSet<Long>();
+		for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++)
+			interior.add(new BlockPos(x, y, z).asLong());
+		for (long position : interior) for (var direction : Direction.values()) {
+			var adjacent = BlockPos.of(position).relative(direction);
+			if (!interior.contains(adjacent.asLong())) boundary.add(adjacent.asLong());
+		}
+		var footprint = new FluidRegionFootprint(controller, origin,
+				new BlockPos(1, 1, 1), interior, boundary, Set.of(0L));
+		var domain = new FluidDomain(4, 4, 4, new FluidSolverConfig(.5F, 1000, 0, .025F, 120, 1e-5F, .002F));
+		domain.sealDomainBoundary();
+		domain.setVolume(1, 1, 1, .5F);
+		return new FluidRegion(id, dimension, origin, domain, footprint);
+	}
+
+	private static BlockPos portPosition(Direction outward) {
+		return switch (outward) {
+			case WEST -> new BlockPos(-1, 1, 1);
+			case EAST -> new BlockPos(2, 1, 1);
+			case DOWN -> new BlockPos(1, -1, 1);
+			case UP -> new BlockPos(1, 2, 1);
+			case NORTH -> new BlockPos(1, 1, -1);
+			case SOUTH -> new BlockPos(1, 1, 2);
+		};
 	}
 
 	private static void require(boolean condition, String message) {

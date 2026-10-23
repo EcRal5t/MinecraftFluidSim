@@ -503,6 +503,9 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 - **玩家、发射器及世界事务**
   - 主要文件：
+    - [FluidPortBlock](../../fabric/src/main/java/mmm/block/FluidPortBlock.java)：六向 `FACING` 朝外的显式容器口，保持外壳碰撞。
+    - [FluidWorldTargetResolver](../../fabric/src/main/java/mmm/simulation/FluidWorldTargetResolver.java)：`transferTargetAtBlock` / `resolvePortTarget` 统一正面端口与唯一已加载内侧目标；`gasShellTargetAtBlock` 定位创造气体源的真实壳面。
+    - [PlayerContainerTransferAdapter](../../fabric/src/main/java/mmm/simulation/PlayerContainerTransferAdapter.java) / [DispenserContainerTransferAdapter](../../fabric/src/main/java/mmm/simulation/DispenserContainerTransferAdapter.java)：玩家命中面、发射器朝向和真实容器槽位适配。
     - [MinecraftContainerTransferPlan](../../fabric/src/main/java/mmm/simulation/MinecraftContainerTransferPlan.java)
     - [ContainerTransferCoordinator](../../app/src/main/java/mmm/application/ContainerTransferCoordinator.java)
     - [ContainerRecoveryCoordinator](../../app/src/main/java/mmm/application/ContainerRecoveryCoordinator.java)
@@ -556,7 +559,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
   - 主要文件：
     - [MmmFabricApi](../../fabric/src/main/java/mmm/api/fabric/MmmFabricApi.java)
     - [FabricFluidQueryApi](../../fabric/src/main/java/mmm/simulation/FabricFluidQueryApi.java)
-    - [MmmTransferApi](../../api/src/main/java/mmm/api/transfer/MmmTransferApi.java) / [FabricTransferApi](../../fabric/src/main/java/mmm/simulation/FabricTransferApi.java)：`registerActor`、`plan`、`commit` 与实际数量／组成／内能清单
+    - [MmmTransferApi](../../api/src/main/java/mmm/api/transfer/MmmTransferApi.java) / [FabricTransferApi](../../fabric/src/main/java/mmm/simulation/FabricTransferApi.java)：`registerActor`、`plan`、`commit` 与实际数量／组成／内能清单；预览与提交重验真实发射器正面端口及紧邻内部目标
     - [PublicTransferReceiptStore](../../fabric/src/main/java/mmm/simulation/persistence/PublicTransferReceiptStore.java)：持久实例绑定、未完成操作与最近终态回执；物品恢复沿共同容器 WAL
     - [ContainerTransferManifests](../../model/src/main/java/mmm/transfer/ContainerTransferManifests.java)：从实际容器前后态生成物质与热量交接清单
     - [CommittedEventHub](../../fabric/src/main/java/mmm/simulation/CommittedEventHub.java)

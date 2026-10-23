@@ -50,6 +50,7 @@
 - [内置探针与控制界面](#内置探针与控制界面)
 - [Jade 观察适配](#jade-观察适配)
 - [Committed event](#committed-event)
+- [受控转移](#受控转移)
 
 ## 当前稳定范围
 
@@ -172,8 +173,12 @@ Fabric 只负责 NBT 持久编码、Minecraft actor 收敛，以及由 `Containe
 
 `TransferRequest` 携带调用方生成的操作 UUID、actor 及预期代次、区域与维度身份、世界坐标、方向和数量。方向相对于区域库存：`INSERT` 注入区域，`EXTRACT` 提取到容器。液体使用 `TransferQuantity.Liquid` 的 nanos（10⁻⁹ m³），颗粒使用 `TransferQuantity.Granular` 的 SVQ（2⁻²⁷ m³）。请求的液体 U 字段为空；实际组成、质量和内能由来源库存计算。
 
+公共转移使用真实发射器正对的显式 `mmm:fluid_port`。端口 `FACING` 朝外，发射器位于该正面相邻格并朝向端口；请求世界坐标所在方块必须是端口反方向紧邻的内部格，且属于请求指定的唯一已加载区域。该限制同时适用于注入和提取。登记 actor 只建立持久身份，实际操作时再核对端口路径；区域与 chunk 均由现有驻留状态提供，接口不启动加载或恢复。
+
+`plan` 在执行私有预览前检查路径，无效路径返回 `INVALID_REQUEST`。`commit` 再次读取实际发射器朝向、端口和区域目标；路径改变使计划返回 `STALE_PLAN`。端口保持外壳碰撞，库存交接沿共同容器事务执行；支持范围与玩家路由见[玩家与发射器路由](world-ownership-and-containers.md#玩家与发射器路由)。
+
 `plan` 返回有会话身份和有效期的临时 token，以及实际可转移的 `TransferManifest`。清单按材料列出实际数量、整数质量、质量余量和物种微摩尔量，并携带 raw U 与注册表指纹。质量及余量单位为 10⁻¹⁰ kg。计划保留实际 actor 前态和区域代次；`commit(planId)` 重新核对后沿共同容器事务提交。区域或容器变化、计划过期及服务器重启均要求重新计划。
 
 每个 actor 保存最近一次终态回执和当前未完成操作。重试仍在保留范围内的同一请求返回原操作结果；请求内容与已保存身份冲突时返回 `CONFLICT`。`receipt(operationId)` 可在重启后读取回执，尚在恢复中的操作返回 `PENDING`；未知或超出保留范围返回 `RECEIPT_UNAVAILABLE`。旧成功请求携带的旧 actor 代次会被拒绝。区域 HEAD、物品后态及 actor 下一代完成持久保存与回读，回执发布后才删除 WAL 并发送提交事件。事件可能漏收，回执和查询提供补偿读取。
 
-新请求需要已注册的 provider 和已加载的发射器；暂不可用时返回 `UNAVAILABLE`。已发布 WAL 通过保存的具体位置、实例 UUID 和代次恢复，未完成操作保持 `PENDING`。调用方重试时沿原操作身份继续。已过期计划返回 `STALE_PLAN`，容器实例或代次变化返回 `STALE_ACTOR`。状态使用封闭枚举，`detail` 用于向人说明原因。
+新请求需要已注册的 provider 和已加载的发射器；暂不可用时返回 `UNAVAILABLE`。已发布 WAL 通过保存的具体位置、实例 UUID、代次和区域 HEAD 恢复；端口路径后续改变不撤销已发布事务，未完成操作保持 `PENDING`。调用方重试时沿原操作身份继续。已过期计划返回 `STALE_PLAN`，容器实例或代次变化返回 `STALE_ACTOR`。状态使用封闭枚举，`detail` 用于向人说明原因。

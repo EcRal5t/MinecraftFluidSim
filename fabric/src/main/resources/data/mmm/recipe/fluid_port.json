@@ -1,0 +1,7 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "building",
+  "key": { "B": "mmm:fluid_boundary", "I": "minecraft:iron_ingot", "L": "minecraft:lapis_lazuli" },
+  "pattern": [ " I ", "LBL", " I " ],
+  "result": { "id": "mmm:fluid_port", "count": 1 }
+}

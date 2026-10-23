@@ -7,7 +7,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.level.block.Block;
 
-/** Shared discoverability text for the three formal controller-shell blocks. */
+/** Shared placement and interaction instructions for controller-shell blocks. */
 final class MmmBlockItem extends BlockItem {
 	MmmBlockItem(Block block, Properties properties) { super(block, properties); }
 

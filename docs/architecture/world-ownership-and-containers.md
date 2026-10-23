@@ -16,6 +16,8 @@
 
 - **容器操作入口**
   - 代码入口：
+    - [FluidPortBlock](../../fabric/src/main/java/mmm/block/FluidPortBlock.java)：六向容器口与外壳方块。
+    - [FluidWorldTargetResolver](../../fabric/src/main/java/mmm/simulation/FluidWorldTargetResolver.java)：集中解析正面端口与直接内部目标。
     - [PlayerContainerTransferAdapter](../../fabric/src/main/java/mmm/simulation/PlayerContainerTransferAdapter.java)
     - [DispenserContainerTransferAdapter](../../fabric/src/main/java/mmm/simulation/DispenserContainerTransferAdapter.java)
     - [MinecraftContainerTransferPlan](../../fabric/src/main/java/mmm/simulation/MinecraftContainerTransferPlan.java)
@@ -167,15 +169,21 @@ descriptor item 在事务前后保持相同；对热区域，coordinator 用独�
 
 ## 玩家与发射器路由
 
-- 玩家只按准星命中的 controller 壳面和其正后方实际内部格选择区域。
-- 发射器只按发射方向正对的壳面中心路由；壳边、壳角、多个候选和未加载目标拒绝。
-- 插入/抽取原语 all-or-nothing。insert 先规划 marker/parcel 和容量，extract 先做双精度预检，再按整 marker 与尾拆分结算。
-- 创造模式放出是 external source；创造模式装取仍从 solver 删除实际库存，不能制造隐藏 sink。
+`mmm:fluid_port` 是控制器外壳上的显式容器 I/O 口。六向 `FACING` 指向外侧正面，反方向紧邻的一个方块是转移目标。端口保持完整方块碰撞与固定固体几何；容器事务按该目标格执行库存交接。端口没有自主流动，也不连接两个区域。
 
-typed actual container 与 creative source 的 controller-region 转移只依赖世界能力包和区域写入可用，不依赖 world-bridge 政策；
-world bridge 只决定是否接管或恢复壳内原版世界流体。关闭 bridge 不能把已经由 controller/WAL 持有的 typed inventory 变成不可转移状态。
+- 玩家从端口正面命中时，装入和装取均使用端口内侧目标。侧面、背面、壳边、壳角及多个区域归属均拒绝。命中普通围墙或无效端口直接结束本次操作。
+- 发射器必须紧邻端口正面并朝向端口，其发射方向与端口 `FACING` 相反。液体与颗粒共用这一路由。
+- 无外壳遮挡时，直接命中区域内部液体的桶操作和既有内部目标路由保持可用。
+- 端口所在 chunk 及目标区域 solver 已驻留才可解析；目标选择只读，不加载 chunk、不恢复区域。后续写入仍需通过区域可用性和事务检查。
+- 创造气体源沿独立的真实壳面命中规则定位有限气腔，继续使用原气体库存与内能源汇事务。
 
-目标解析发生在事务准备之前。玩家命中壳的外侧、内部格、区域 UUID 和 dimension 必须唯一；dispenser 朝向只参与最初的目标解析，其 dimension、整数 block coordinates 和 slot 构成持久 actor identity。
+插入和抽取先在私有候选上规划实际份额，再共同提交区域与容器后态。请求数量是上限，返回实际转移量；容量、来源库存或可结算精度可能使实际量更小，未选库存完整保留。创造模式放出记为 external source，创造模式装取仍从区域删除实际库存。
+
+typed actual container 与 creative source 的 controller-region 转移依赖世界能力包和区域写入可用；world bridge 决定是否接管或恢复壳内原版世界流体。关闭 bridge 后，已有 typed inventory 仍可沿容器事务转移。
+
+`FluidWorldTargetResolver.transferTargetAtBlock` 集中执行目标选择，`resolvePortTarget` 要求朝向匹配、同维度、唯一已加载区域及其紧邻内部格。玩家与发射器适配将结果交给共同容器计划；公共 Transfer API 在预览和提交前同时核对真实发射器朝向、端口及请求内部格，见[受控转移](external-api.md#受控转移)。
+
+目标解析发生在事务准备之前。发射器的 dimension、整数 block coordinates 和 slot 构成持久 actor 定位；已发布 WAL 按保存的区域 HEAD、物品前后态及 actor 身份恢复。端口后续改变不改变已发布事务的恢复方向。
 
 actor identity 与 journal 位于 core，是不引用 `BlockPos`、`ItemStack` 或 loader 类型的封闭数据；各 actor kind 只能携带自己的完整字段，不能用 null 填充无关字段。
 

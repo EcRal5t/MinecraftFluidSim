@@ -75,13 +75,13 @@ public final class PlayerContainerTransferAdapter {
 		BlockPos targetBlock = pouring ? playerPourTargetBlock(player, hit) : null;
 		if (pouring && targetBlock == null) return null;
 		FluidWorldTargetResolver.TransferTarget target = pouring
-				? targets.transferTargetAtBlock(level, targetBlock, null)
+				? targets.transferTargetAtBlock(level, targetBlock, hit.getDirection().getOpposite())
 				: hit != null && MmmBlocks.isBoundary(level.getBlockState(hit.getBlockPos()))
-						? targets.transferTargetAtBlock(level, hit.getBlockPos(), null) : null;
-		FluidRegion region = pouring
-				? target == null ? null : target.region()
-				: targets.aimedRegion(player);
-		if (region == null) return null;
+						? targets.transferTargetAtBlock(level, hit.getBlockPos(), hit.getDirection().getOpposite()) : null;
+		boolean shellHit = hit != null && MmmBlocks.isBoundary(level.getBlockState(hit.getBlockPos()));
+		if (shellHit && target == null) return InteractionResult.FAIL;
+		FluidRegion region = target != null ? target.region() : pouring ? null : targets.aimedRegion(player);
+		if (region == null || !region.solverLoaded()) return null;
 		if (held.getCount() != 1) {
 			message(player, "物质、运动与力学转移一次只接受 1 个桶；堆叠保持不变");
 			return InteractionResult.FAIL;
@@ -162,7 +162,7 @@ public final class PlayerContainerTransferAdapter {
 		BlockHitResult hit = playerBlockHit(player);
 		BlockPos targetBlock = playerPourTargetBlock(player, hit);
 		if (targetBlock == null) return InteractionResult.FAIL;
-		FluidWorldTargetResolver.TransferTarget target = targets.transferTargetAtBlock(level, targetBlock, null);
+		FluidWorldTargetResolver.TransferTarget target = targets.transferTargetAtBlock(level, targetBlock, hit.getDirection().getOpposite());
 		FluidRegion region = target == null ? null : target.region();
 		if (region == null || !region.controllerManaged()
 				|| !ensureAvailableFor(player, region)) return InteractionResult.FAIL;
@@ -213,7 +213,7 @@ public final class PlayerContainerTransferAdapter {
 			message(player, "请对准密闭气腔的真实外壳表面");
 			return InteractionResult.FAIL;
 		}
-		var target = targets.transferTargetAtBlock(level, hit.getBlockPos(), null);
+		var target = targets.gasShellTargetAtBlock(level, hit.getBlockPos(), null);
 		if (target == null || !target.region().controllerManaged()) {
 			message(player, "该外壳表面没有唯一的内侧气腔");
 			return InteractionResult.FAIL;

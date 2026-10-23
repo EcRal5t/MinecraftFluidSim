@@ -31,6 +31,7 @@ final class FabricTransferApi implements MmmTransferApi {
 			long solverGeneration,MinecraftContainerTransferPlan operations) { }
 	private final MinecraftServer server;
 	private final FluidRegionManager regions;
+	private final FluidWorldTargetResolver targets;
 	private final WorldStartupCoordinator.Result startup;
 	private final CommittedWorldRegistries world;
 	private final MinecraftRegionAvailability availability;
@@ -46,7 +47,7 @@ final class FabricTransferApi implements MmmTransferApi {
 			CommittedWorldRegistries world,MinecraftRegionAvailability availability,MinecraftPendingPhaseWorkBarrier phaseWork,
 			MinecraftContainerTransactionAdapter transactions,ContainerRecoveryCoordinator recovery,
 			PublicTransferReceiptStore store,FluidSnapshotPublisher snapshots) {
-		this.server=server;this.regions=regions;this.startup=startup;this.world=world;this.availability=availability;
+		this.server=server;this.regions=regions;this.targets=new FluidWorldTargetResolver(regions);this.startup=startup;this.world=world;this.availability=availability;
 		this.phaseWork=phaseWork;this.transactions=transactions;this.recovery=recovery;this.store=store;this.snapshots=snapshots;
 		providers.put("mmm:dispenser",DispenserAddress::fromObjectId);
 		try {
@@ -100,6 +101,8 @@ final class FabricTransferApi implements MmmTransferApi {
 			if(!region.controllerManaged() || !region.solverLoaded() || region.availabilityFailure()!=null || availability.hasPending(region.id())
 					|| region.domain().hasPendingPhaseMotionWork()) return result(TransferStatus.UNAVAILABLE,"Region is unloaded, locked, or has pending mechanical work");
 			if(!actor.binding().address().dimensionId().equals(request.dimensionId())) return result(TransferStatus.INVALID_REQUEST,"Actor and region dimensions differ");
+			if(!portMatches(actor,region,request)) return result(TransferStatus.INVALID_REQUEST,
+					"Dispenser must face the outward side of a fluid port and target its adjacent interior");
 			BlockPos position=BlockPos.containing(request.worldXMetres(),request.worldYMetres(),request.worldZMetres());
 			if(region.footprint()==null || !region.footprint().containsInterior(position)) return result(TransferStatus.NO_REGION,"Point is outside the region interior");
 			double h=region.solverConfig().cellSize();
@@ -144,6 +147,8 @@ final class FabricTransferApi implements MmmTransferApi {
 				return result(TransferStatus.UNAVAILABLE,"Region is currently unavailable");
 			if(region.checkpointGeneration()!=prepared.view().regionCheckpointGeneration() || region.solverGeneration()!=prepared.solverGeneration())
 				return result(TransferStatus.STALE_PLAN,"Region changed after planning");
+			if(!portMatches(actor,region,request)) return result(TransferStatus.STALE_PLAN,
+					"Dispenser or directed fluid port changed after planning");
 			var durableActor=(ContainerTransferActor.Dispenser)prepared.settlement().actor();
 			if(recovery.hasPending(region.id(),durableActor)) return result(TransferStatus.PENDING,"Region or actor has a pending transaction");
 			new MinecraftContainerActorAdapter().persistAfterItem(server,durableActor);
@@ -198,6 +203,19 @@ final class FabricTransferApi implements MmmTransferApi {
 		if(address==null) throw new IllegalStateException("Transfer actor provider is unavailable");
 		return address;
 	}
+	private boolean portMatches(Actor actor,FluidRegion region,TransferRequest request) {
+		var address=actor.binding().address();
+		var source=new BlockPos(address.blockX(),address.blockY(),address.blockZ());
+		var state=actor.level().getBlockState(source);
+		if(!state.hasProperty(net.minecraft.world.level.block.DispenserBlock.FACING))return false;
+		var facing=state.getValue(net.minecraft.world.level.block.DispenserBlock.FACING);
+		var port=source.relative(facing);
+		if(!actor.level().hasChunkAt(port)||!actor.level().getBlockState(port).is(mmm.block.MmmBlocks.FLUID_PORT))return false;
+		var target=targets.transferTargetAtBlock(actor.level(),port,facing);
+		return target!=null&&target.region()==region&&target.interiorBlock().equals(
+				BlockPos.containing(request.worldXMetres(),request.worldYMetres(),request.worldZMetres()));
+	}
+
 	private Actor actor(ActorRef ref) throws IOException {
 		var binding=store.binding(ref);if(binding==null) throw new IllegalStateException("Transfer actor is not registered");
 		var address=resolve(ref);if(!address.equals(binding.address())) throw new StaleActor("Persistent actor address cannot be rebound");

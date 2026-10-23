@@ -2,6 +2,7 @@
   "replace": false,
   "values": [
     "mmm:fluid_boundary",
+    "mmm:fluid_port",
     "mmm:fluid_controller",
     "mmm:thermal_reservoir"
   ]

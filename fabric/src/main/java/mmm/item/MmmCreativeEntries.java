@@ -26,6 +26,7 @@ public final class MmmCreativeEntries {
 	private static void addEntries(CreativeModeTab.Output entries) {
 		entries.accept(MmmItems.QUICK_START_GUIDE);
 		entries.accept(MmmBlocks.FLUID_BOUNDARY);
+		entries.accept(MmmBlocks.FLUID_PORT);
 		entries.accept(MmmBlocks.FLUID_CONTROLLER);
 		entries.accept(MmmItems.FIELD_PROBE);
 		entries.accept(MmmItems.MATERIAL_BUCKET);

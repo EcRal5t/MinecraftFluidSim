@@ -20,6 +20,7 @@ import java.util.function.Function;
 /** Visible controller shell blocks. Registration does not enable controller activation. */
 public final class MmmBlocks {
 	public static final Block FLUID_BOUNDARY = register("fluid_boundary", Block::new);
+	public static final Block FLUID_PORT = register("fluid_port", FluidPortBlock::new);
 	public static final Block FLUID_CONTROLLER = register("fluid_controller", FluidControllerBlock::new);
 	public static final Block THERMAL_RESERVOIR = register("thermal_reservoir", ThermalReservoirBlock::new);
 	public static final Block FINITE_HEAT_EXCHANGER = register("finite_heat_exchanger", FiniteHeatExchangerBlock::new);
@@ -39,7 +40,7 @@ public final class MmmBlocks {
 	}
 
 	public static boolean isBoundary(BlockState state) {
-		return state.is(FLUID_BOUNDARY) || state.is(FLUID_CONTROLLER) || state.is(THERMAL_RESERVOIR) || state.is(FINITE_HEAT_EXCHANGER);
+		return state.is(FLUID_BOUNDARY) || state.is(FLUID_PORT) || state.is(FLUID_CONTROLLER) || state.is(THERMAL_RESERVOIR) || state.is(FINITE_HEAT_EXCHANGER);
 	}
 
 	private static Block register(String path, Function<BlockBehaviour.Properties, Block> factory) {

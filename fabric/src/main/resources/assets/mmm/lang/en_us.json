@@ -1,4 +1,6 @@
 {
+  "block.mmm.fluid_port": "Container Port",
+  "block.mmm.fluid_port.tooltip": "Use in a controller shell with the blue frame facing out. Use containers on its front, or point a dispenser into the front.",
   "item.mmm.creative_source.source.gas.nitrogen": "Creative Nitrogen Source",
   "item.mmm.creative_source.source.gas.oxygen": "Creative Oxygen Source",
   "item.mmm.creative_source.source.gas.co2": "Creative Carbon Dioxide Source",
@@ -225,7 +227,7 @@
   "screen.mmm.quick_start.step.2": "2. Replace exactly one shell block with a controller. It discovers the unique adjacent closed interior.",
   "screen.mmm.quick_start.step.3": "3. Leave empty headspace when you need a sealed gas volume; ordinary boundary blocks are insulating.",
   "screen.mmm.quick_start.step.4": "4. Empty-hand use the controller to create/select and run. Sneak empty-hand use toggles persistent pause.",
-  "screen.mmm.quick_start.step.5": "5. Use source templates and actual empty containers on a shell face whose inward side reaches the region.",
+  "screen.mmm.quick_start.step.5": "5. Use liquid or granular sources and containers on the blue front of a Container Port; aim creative gas sources at the gas cavity shell.",
   "screen.mmm.quick_start.step.6": "6. Use a creative gas source on the shell beside a gas space to inject; sneak-use to extract. Inspect pressure and composition with the probe.",
   "screen.mmm.quick_start.step.7": "7. Use the field probe on the controller, reservoir, or shell; sneak-use scans inward for condensed matter.",
   "screen.mmm.quick_start.step.8": "8. To dismantle safely: empty condensed matter, vent sealed gas, release ownership, then remove the region.",

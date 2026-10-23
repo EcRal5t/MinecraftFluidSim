@@ -1,0 +1,10 @@
+{
+  "variants": {
+    "facing=north": { "model": "mmm:block/fluid_port" },
+    "facing=south": { "model": "mmm:block/fluid_port", "y": 180 },
+    "facing=west": { "model": "mmm:block/fluid_port", "y": 270 },
+    "facing=east": { "model": "mmm:block/fluid_port", "y": 90 },
+    "facing=up": { "model": "mmm:block/fluid_port", "x": 270 },
+    "facing=down": { "model": "mmm:block/fluid_port", "x": 90 }
+  }
+}

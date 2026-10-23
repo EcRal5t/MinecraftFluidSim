@@ -1,6 +1,7 @@
 package mmm.simulation;
 
 import mmm.block.MmmBlocks;
+import mmm.block.FluidPortBlock;
 import mmm.fluid.FluidDomain;
 import mmm.simulation.controller.FluidRegionFootprint;
 import net.minecraft.core.BlockPos;
@@ -57,11 +58,35 @@ final class FluidWorldTargetResolver {
 		return null;
 	}
 
-	/**
-	 * Resolves an interior or visible controller shell block. A shell is a port only when it
-	 * identifies one face-adjacent interior in one region; shared, edge and corner shells fail closed.
-	 */
-	TransferTarget transferTargetAtBlock(
+	/** Containers cross a shell only through the outward face of an explicit I/O port. */
+	TransferTarget transferTargetAtBlock(ServerLevel level, BlockPos position, Direction inwardDirection) {
+		if (position == null || !level.hasChunkAt(position)) return null;
+		var state = level.getBlockState(position);
+		if (state.is(MmmBlocks.FLUID_PORT)) return resolvePortTarget(regionManager.regions(), level.dimension(), position,
+				state.getValue(FluidPortBlock.FACING), inwardDirection);
+		if (MmmBlocks.isBoundary(state)) return null;
+		FluidRegion direct = regionAtBlock(level, position);
+		return direct != null && direct.solverLoaded() ? new TransferTarget(direct, position.immutable()) : null;
+	}
+
+	static TransferTarget resolvePortTarget(java.util.List<FluidRegion> regions,
+			net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension,
+			BlockPos position, Direction outward, Direction inward) {
+		if (position == null || outward == null || inward == null || inward != outward.getOpposite()) return null;
+		TransferTarget resolved = null;
+		for (FluidRegion region : regions) {
+			var footprint = region.footprint();
+			if (footprint == null || !region.solverLoaded() || !region.dimension().equals(dimension)) continue;
+			BlockPos interior = footprint.adjacentInteriorAlong(position, inward);
+			if (interior == null) continue;
+			if (resolved != null) return null;
+			resolved = new TransferTarget(region, interior);
+		}
+		return resolved;
+	}
+
+	/** Creative gas sources retain their independent, real shell-face interaction. */
+	TransferTarget gasShellTargetAtBlock(
 			ServerLevel level, BlockPos position, Direction boundaryInteriorDirection
 	) {
 		if (position == null) return null;
