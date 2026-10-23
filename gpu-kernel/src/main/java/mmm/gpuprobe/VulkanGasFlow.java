@@ -98,13 +98,24 @@ final class VulkanGasFlow implements AutoCloseable {
         prefix(command,l,l.nodes+2,Field.SOURCE_COUNTS,Field.SOURCE_OFFSETS);prefix(command,l,l.nodes+1,Field.TARGET_COUNTS,Field.TARGET_OFFSETS);
         stage(command,l,parameters,13,l.routes);
     }
+    /** Shares the standard PCG while reducing long chamber rows across a workgroup. */
+    VulkanPressureKernel.PressureOperator pressureOperator(Layout l,Parameters q){
+        return new VulkanPressureKernel.PressureOperator(){
+            public int liquidCount(){return l.nodes;}
+            public int matrixFreeFromRow(){return 0;}
+            public void recordProduct(VkCommandBuffer command,boolean direction){
+                stage(command,l,q,direction?17:16,l.nodes);
+                stage(command,l,q,direction?15:14,l.nodes);
+            }
+        };
+    }
     private void prefix(VkCommandBuffer command,Layout l,int n,Field input,Field output){scan.record(command,n,l.word(input),l.word(output),l.word(Field.SCAN));}
     private void stage(VkCommandBuffer cmd,Layout l,Parameters q,int stage,int count){
         if(count==0)return;int groups=(count+127)/128;try(var stack=stackPush()){
             bindings.bind(cmd,stack);var push=stack.malloc(64).putInt(l.headerWordOffset()).putInt(stage).putInt(count).putInt(0)
                     .putDouble(q.duration()).putDouble(q.dischargeCoefficient()).putDouble(q.ambientPressure()).putDouble(q.ambientTemperature()).putDouble(q.ambientDensity()).putLong(q.step()).flip();
             vkCmdPushConstants(cmd,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,push);
-            int indirect=switch(stage){case 6->0;case 7,10->1;case 8,9,11->2;case 12,13->4;default->-1;};
+            int indirect=switch(stage){case 6->0;case 7,10->1;case 8,9,11,14,15->2;case 12,13->4;default->-1;};
             if(indirect>=0){barrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
                 vkCmdDispatchIndirect(cmd,arena.buffer().handle(),arena.offset()+l.column(Field.DISPATCH).offset()+12L*indirect);
             }else vkCmdDispatch(cmd,Math.min(groups,65535),(groups+65534)/65535,1);

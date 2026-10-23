@@ -269,6 +269,19 @@ registerGpuProbe(
 }
 
 registerGpuProbe(
+    'runGpuGranularMotionBenchmark',
+    'Measures resident granular spatial contacts, response, swept positions and integer support.',
+    'mmm.gpuprobe.GpuGranularMotionBenchmark',
+    'gpu-granular-motion-work'
+) { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        providers.gradleProperty('gpuGranularGrid').getOrElse('64'),
+        providers.gradleProperty('gpuGranularCounts').getOrElse('256,1536'),
+        providers.gradleProperty('gpuGranularWarmup').getOrElse('5'),
+        providers.gradleProperty('gpuGranularSamples').getOrElse('10')
+}
+
+registerGpuProbe(
     'runGpuGasPressureBenchmark',
     'Measures common resident liquid and finite gas pressure with real inventory EOS.',
     'mmm.gpuprobe.GpuGasPressureBenchmark',
@@ -279,5 +292,18 @@ registerGpuProbe(
         providers.gradleProperty('gpuGasPressureScene').getOrElse('dam'),
         providers.gradleProperty('gpuGasPressureSamples').getOrElse('3'),
         providers.gradleProperty('gpuGasPressureWarmup').getOrElse('1')
+    probeTask.jvmArgs '-Xmx3g'
+}
+
+registerGpuProbe(
+    'runGpuGasFlowBenchmark',
+    'Measures continuous finite-aperture gas pressure, inventory transport and donor cooling.',
+    'mmm.gpuprobe.GpuGasFlowBenchmark',
+    'gpu-gas-flow-work'
+) { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        providers.gradleProperty('gpuGasFlowGrid').getOrElse('64'),
+        providers.gradleProperty('gpuGasFlowWarmup').getOrElse('5'),
+        providers.gradleProperty('gpuGasFlowSamples').getOrElse('10')
     probeTask.jvmArgs '-Xmx3g'
 }

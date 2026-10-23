@@ -186,15 +186,20 @@ final class VulkanGasRemap implements AutoCloseable {
         stage(command,l,22,128,null);
     }
     void recordPrepare(VkCommandBuffer command,Layout l){
-        recordMeasure(command,l);
-        stage(command,l,17,1,null);
-        stage(command,l,0,Math.max(l.routes.capacity(),Math.max(l.partCapacity,Math.max(Math.max(l.retained.componentCapacity(),l.future.componentCapacity()),Math.max(l.retained.nodeCapacity(),l.future.nodeCapacity())+2))),null);
-        scan.record(command,l.routes.capacity(),l.word(Field.PART_COUNTS),l.word(Field.PART_OFFSETS),l.word(Field.SCAN));
-        stage(command,l,1,l.routes.capacity(),null);
-        scan.record(command,l.partCapacity,l.word(Field.SPECIES_COUNTS),l.word(Field.SPECIES_OFFSETS),l.word(Field.SCAN));
-        stage(command,l,2,l.retained.nodeCapacity(),null);stage(command,l,3,1,null);
-        stage(command,l,4,l.routes.capacity(),null);stage(command,l,5,l.retained.nodeCapacity(),null);
-        gather(command,l,false,null);stage(command,l,16,l.routes.futureGeometry().cells(),null);
+        recordPrepare(command,l,null);
+    }
+    void recordPrepare(VkCommandBuffer command,Layout l,VulkanStageTimings timings){
+        timed(timings,command,"remap-measure",()->{
+            recordMeasure(command,l);
+            stage(command,l,17,1,null);
+            stage(command,l,0,Math.max(l.routes.capacity(),Math.max(l.partCapacity,Math.max(Math.max(l.retained.componentCapacity(),l.future.componentCapacity()),Math.max(l.retained.nodeCapacity(),l.future.nodeCapacity())+2))),null);
+            scan.record(command,l.routes.capacity(),l.word(Field.PART_COUNTS),l.word(Field.PART_OFFSETS),l.word(Field.SCAN));
+            stage(command,l,1,l.routes.capacity(),null);
+            scan.record(command,l.partCapacity,l.word(Field.SPECIES_COUNTS),l.word(Field.SPECIES_OFFSETS),l.word(Field.SCAN));
+        });
+        timed(timings,command,"remap-split",()->{stage(command,l,2,l.retained.nodeCapacity(),null);stage(command,l,3,1,null);});
+        timed(timings,command,"remap-partition-energy",()->{stage(command,l,4,l.routes.capacity(),null);stage(command,l,5,l.retained.nodeCapacity(),null);});
+        gather(command,l,false,null,timings);stage(command,l,16,l.routes.futureGeometry().cells(),null);
     }
     void recordFinish(VkCommandBuffer command,Layout l,VulkanGasAdiabaticWork.Layout work){
         recordFinish(command,l,work,null);
