@@ -15,11 +15,12 @@ public final class FluidProtocol {
 	public static final long CAP_CHEMICAL_SNAPSHOT = 1L << 5;
 	public static final long CAP_GRANULAR_SNAPSHOT = 1L << 6;
 	public static final long CAP_THERMAL_SNAPSHOT = 1L << 7;
+	public static final long CAP_SNAPSHOT_PARTS = 1L << 8;
 	public static final long SUPPORTED_CAPABILITIES = CAP_REGION_IDENTITY
 			| CAP_GENERATION_SEQUENCE | CAP_OPTIONAL_SECTIONS | CAP_MULTI_REGION_RENDER
-			| CAP_MATERIAL_SNAPSHOT | CAP_CHEMICAL_SNAPSHOT | CAP_GRANULAR_SNAPSHOT | CAP_THERMAL_SNAPSHOT;
+			| CAP_MATERIAL_SNAPSHOT | CAP_CHEMICAL_SNAPSHOT | CAP_GRANULAR_SNAPSHOT | CAP_THERMAL_SNAPSHOT | CAP_SNAPSHOT_PARTS;
 	public static final long REQUIRED_CAPABILITIES = CAP_REGION_IDENTITY
-			| CAP_GENERATION_SEQUENCE | CAP_OPTIONAL_SECTIONS | CAP_MULTI_REGION_RENDER;
+			| CAP_GENERATION_SEQUENCE | CAP_OPTIONAL_SECTIONS | CAP_MULTI_REGION_RENDER | CAP_SNAPSHOT_PARTS;
 
 	private FluidProtocol() { }
 
@@ -33,14 +34,14 @@ public final class FluidProtocol {
 	public static Offer serverOffer(WorldCapabilityProfile profile) {
 		Objects.requireNonNull(profile, "profile");
 		Layout layout = switch (profile.regionLayoutId()) {
-			case "pure" -> Layout.PURE;
+			case "pure" -> Layout.MATERIAL;
 			case "material" -> Layout.MATERIAL;
 			case "chemical" -> Layout.CHEMICAL;
 			case "granular" -> Layout.GRANULAR;
 			case "thermal" -> Layout.THERMAL;
 			default -> throw new IllegalArgumentException("Unknown region layout " + profile.regionLayoutId());
 		};
-		long capabilities = REQUIRED_CAPABILITIES;
+		long capabilities = REQUIRED_CAPABILITIES | CAP_MATERIAL_SNAPSHOT;
 		if (profile.hasCapability(WorldCapability.MATERIALS)) capabilities |= CAP_MATERIAL_SNAPSHOT;
 		if (profile.hasCapability(WorldCapability.CHEMISTRY)) capabilities |= CAP_CHEMICAL_SNAPSHOT;
 		if (profile.hasCapability(WorldCapability.GRANULAR)) capabilities |= CAP_GRANULAR_SNAPSHOT;

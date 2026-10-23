@@ -38,6 +38,14 @@ public final class MmmModClient implements ClientModInitializer {
 		});
 		ClientFluidVolumeRenderer renderer = new ClientFluidVolumeRenderer();
 		AtomicReference<FluidProtocol.Negotiation> negotiated = new AtomicReference<>();
+        var snapshotParts = new mmm.network.FluidSnapshotPartPayload.Assembler();
+        ClientPlayNetworking.registerGlobalReceiver(mmm.network.FluidSnapshotPartPayload.TYPE, (part, context) -> {
+            var complete = snapshotParts.accept(part);
+            if (complete instanceof FluidMaterialSnapshotPayload payload) renderer.accept(payload, negotiated.get());
+            else if (complete instanceof FluidChemicalSnapshotPayload payload) renderer.accept(payload, negotiated.get());
+            else if (complete instanceof FluidGranularSnapshotPayload payload) renderer.accept(payload, negotiated.get());
+            else if (complete instanceof FluidThermalSnapshotPayload payload) renderer.accept(payload, negotiated.get());
+        });
 		ClientConfigurationNetworking.registerGlobalReceiver(FluidProtocolOfferPayload.TYPE, (payload, context) -> {
 			FluidProtocol.Negotiation negotiation = FluidProtocol.negotiate(payload.offer());
 			negotiated.set(negotiation.accepted() ? negotiation : null);
@@ -65,15 +73,15 @@ public final class MmmModClient implements ClientModInitializer {
 				context.client().execute(() -> context.client().setScreenAndShow(
 						new ThermalReservoirScreen(payload.summary()))));
 		ClientConfigurationConnectionEvents.START.register((listener, client) -> {
-			negotiated.set(null);
+			negotiated.set(null); snapshotParts.clear();
 			renderer.clear();
 		});
 		ClientConfigurationConnectionEvents.DISCONNECT.register((listener, client) -> {
-			negotiated.set(null);
+			negotiated.set(null); snapshotParts.clear();
 			renderer.clear();
 		});
 		ClientPlayConnectionEvents.DISCONNECT.register((listener, client) -> {
-			negotiated.set(null);
+			negotiated.set(null); snapshotParts.clear();
 			renderer.clear();
 		});
 		LevelExtractionEvents.END_EXTRACTION.register(renderer::extract);
@@ -81,3 +89,4 @@ public final class MmmModClient implements ClientModInitializer {
 		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> renderer.close());
 	}
 }
+

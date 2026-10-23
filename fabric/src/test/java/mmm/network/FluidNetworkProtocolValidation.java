@@ -15,6 +15,7 @@ import mmm.chemistry.BuiltinChemicalDefinitions;
 import mmm.granular.BuiltinGranularDefinitions;
 import mmm.simulation.TestProfiles;
 import mmm.fluid.FluidMaterialRenderSnapshot;
+import mmm.fluid.FluidSurfaceInput;
 import mmm.fluid.FluidMaterialSurfaceMesher;
 import mmm.granular.GranularDisplaySnapshot;
 import mmm.thermal.ThermalReservoirSummary;
@@ -25,6 +26,7 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.resources.Identifier;
 
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -238,7 +240,7 @@ public final class FluidNetworkProtocolValidation {
 
 	private static void validateNegotiationMatrix() {
 		FluidProtocol.Offer offer = FluidProtocol.serverOffer();
-		require(FluidProtocol.serverOffer(TestProfiles.pure()).equals(offer)
+		require(FluidProtocol.serverOffer(TestProfiles.pure()).equals(FluidProtocol.materialServerOffer())
 				&& FluidProtocol.serverOffer(TestProfiles.materials()).equals(FluidProtocol.materialServerOffer())
 				&& FluidProtocol.serverOffer(TestProfiles.chemical(BuiltinChemicalDefinitions.REGISTRY))
 						.equals(FluidProtocol.chemicalServerOffer())
@@ -597,7 +599,11 @@ public final class FluidNetworkProtocolValidation {
 		FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
 		FluidMaterialSnapshotPayload decoded;
 		try {
+			long encodeStart = System.nanoTime();
 			FluidMaterialSnapshotPayload.CODEC.encode(buffer, payload);
+			long encodeNanos = System.nanoTime() - encodeStart;
+			System.out.printf("Local material snapshot: pieces=%d bytes=%d encode_us=%.3f%n",
+					payload.geometry().pieces().size(), buffer.writerIndex(), encodeNanos / 1_000.0);
 			decoded = FluidMaterialSnapshotPayload.CODEC.decode(buffer);
 		} finally {
 			buffer.release();
@@ -605,7 +611,7 @@ public final class FluidNetworkProtocolValidation {
 		require(decoded.layout() == FluidProtocol.Layout.MATERIAL && decoded.generation() == 4L && decoded.sequence() == 9L
 				&& decoded.materials().equals(payload.materials()) && decoded.phaseGroups().equals(payload.phaseGroups()),
 				"material identity/palette did not round-trip");
-		require(Arrays.equals(decoded.totalVolume(), payload.totalVolume())
+		require(decoded.geometry().equals(payload.geometry())
 				&& Arrays.deepEquals(decoded.materialFractions(), payload.materialFractions())
 				&& Arrays.deepEquals(decoded.phaseFractions(), payload.phaseFractions()),
 				"material reconstruction fields did not round-trip");
@@ -614,18 +620,58 @@ public final class FluidNetworkProtocolValidation {
 				"material unknown optional section was not length-delimited");
 		FluidMaterialRenderSnapshot renderSnapshot = decoded.toRenderSnapshot();
 		require(renderSnapshot.materials().size() == decoded.materials().size()
-				&& Arrays.equals(renderSnapshot.copyTotalVolume(), decoded.totalVolume()),
+				&& renderSnapshot.geometry().equals(decoded.geometry()),
 				"material payload did not rebuild CPU mesher fields");
 		FluidMaterialSurfaceMesher.Mesh mesh = FluidMaterialSurfaceMesher.build(renderSnapshot);
-		require(!mesh.outerTriangles().isEmpty() && !mesh.interfaceTriangles().isEmpty()
-				&& mesh.overlappingCategoryTriangles() == 0,
-				"material payload lost its partitioned outer/internal surfaces");
+		require(!mesh.outerTriangles().isEmpty() && mesh.overlappingCategoryTriangles() == 0,
+				"material payload lost its local clipped surfaces");
+		FluidSurfaceInput.Plane thin = decoded.geometry().pieces().stream().filter(piece -> piece.cell() == 1).findFirst().orElseThrow().clips().getFirst();
+		require(Double.doubleToRawLongBits(thin.offset()) == Double.doubleToRawLongBits(1.0e-10),
+				"material codec rounded an unresolved thin layer");
+		FluidSurfaceInput changed = new FluidSurfaceInput(2, 2, 2, 0.5F, List.of());
+		FluidMaterialSnapshotPayload changedGeometry = new FluidMaterialSnapshotPayload(payload.layout(), payload.kind(),
+				payload.dimension(), payload.regionId(), payload.generation(), payload.sequence(), payload.origin(),
+				payload.cellSize(), payload.sizeX(), payload.sizeY(), payload.sizeZ(), payload.materials(),
+				payload.phaseGroups(), changed, payload.materialFractions(), payload.phaseFractions(),
+				payload.debugOverlays(), payload.extensions());
+		require(!payload.sameSurface(changedGeometry), "material cache ignored changed local geometry");
 		FluidMaterialSnapshotPayload generated = FluidMaterialSnapshotPayload.snapshot(
 				DIMENSION, REGION, 5L, 1L, decoded.origin(), renderSnapshot, false);
-		require(Arrays.equals(generated.totalVolume(), decoded.totalVolume())
+		require(generated.geometry().equals(decoded.geometry())
 				&& Arrays.deepEquals(generated.materialFractions(), decoded.materialFractions())
 				&& Arrays.deepEquals(generated.phaseFractions(), decoded.phaseFractions()),
 				"server material snapshot factory changed quantized reconstruction fields");
+
+		FluidMaterialSnapshotPayload base = defaultSizedChemicalSnapshot().material();
+		List<FluidSurfaceInput.Piece> pieces = new ArrayList<>();
+		for (int cell = 0; cell < 9_216; cell++) for (int micro = 0; micro < 8; micro++) {
+			pieces.add(new FluidSurfaceInput.Piece(cell, micro, 0, 0,
+					List.of(new FluidSurfaceInput.Plane(0.2, 1, 0.1, 0.9))));
+		}
+		FluidMaterialSnapshotPayload large = new FluidMaterialSnapshotPayload(base.layout(), base.kind(),
+				base.dimension(), base.regionId(), base.generation(), base.sequence(), base.origin(),
+				base.cellSize(), base.sizeX(), base.sizeY(), base.sizeZ(), base.materials(), base.phaseGroups(),
+				new FluidSurfaceInput(24, 16, 24, 0.5F, pieces),
+				base.materialFractions(), base.phaseFractions(), false, List.of());
+		long encodeStart = System.nanoTime();
+		var parts = FluidSnapshotPartPayload.split(large);
+		long encodeNanos = System.nanoTime() - encodeStart;
+		int bytes = parts.getFirst().totalBytes();
+		require(bytes > 1 << 20 && parts.size() > 1, "large surface did not exercise snapshot transport splitting");
+		var assembler = new FluidSnapshotPartPayload.Assembler();
+		for (int partIndex = 0; partIndex < parts.size(); partIndex++) {
+			buffer = new FriendlyByteBuf(Unpooled.buffer());
+			try {
+				FluidSnapshotPartPayload.CODEC.encode(buffer, parts.get(partIndex));
+				require(buffer.writerIndex() < 1 << 20, "snapshot transport part exceeds Minecraft payload limit");
+				var assembled = assembler.accept(FluidSnapshotPartPayload.CODEC.decode(buffer));
+				if (partIndex + 1 < parts.size()) require(assembled == null, "partial surface changed the displayed frame");
+				else require(assembled instanceof FluidMaterialSnapshotPayload complete && complete.sameSurface(large),
+						"large local geometry did not survive transport assembly");
+			} finally { buffer.release(); }
+		}
+		System.out.printf("Large local material snapshot: cells=9216 pieces=%d bytes=%d parts=%d encode_us=%.3f%n",
+				pieces.size(), bytes, parts.size(), encodeNanos / 1_000.0);
 
 		FluidMaterialSnapshotLedger ledger = new FluidMaterialSnapshotLedger();
 		require(ledger.evaluate(materialSnapshot(1L, 1L), negotiation)
@@ -661,7 +707,6 @@ public final class FluidNetworkProtocolValidation {
 	}
 
 	private static FluidMaterialSnapshotPayload materialSnapshot(long generation, long sequence) {
-		byte[] markers = {1, 1, 1, 1, 1, 1, 1, 1};
 		byte[][] fractions = {
 				{(byte) 255, (byte) 200, (byte) 128, 0, (byte) 255, (byte) 100, 10, 1},
 				{0, 55, 127, (byte) 255, 0, (byte) 155, (byte) 245, (byte) 254}
@@ -673,10 +718,19 @@ public final class FluidNetworkProtocolValidation {
 						new FluidMaterialSnapshotPayload.MaterialEntry("mmm:water", 1_000.0, "mmm:aqueous", 0xff197ae8),
 						new FluidMaterialSnapshotPayload.MaterialEntry("mmm:oil", 800.0, "mmm:oil", 0xffc89a32)),
 				List.of("mmm:aqueous", "mmm:oil"),
-				new byte[] {(byte) 255, (byte) 255, (byte) 255, (byte) 255, (byte) 220, (byte) 220, (byte) 180, (byte) 120},
-				markers, new byte[] {0, 0, 0, 1, 0, 0, 0, 0}, fractions, fractions, false,
+				materialGeometry(), fractions, fractions, false,
 				List.of(new FluidMaterialSnapshotPayload.Extension(91, new byte[] {4, 5, 6}))
 		);
+	}
+
+	private static FluidSurfaceInput materialGeometry() {
+		return new FluidSurfaceInput(2, 2, 2, 0.5F, List.of(
+				new FluidSurfaceInput.Piece(0, 0, 0, 0,
+						List.of(new FluidSurfaceInput.Plane(0.2, 1, 0.1, 0.35))),
+				new FluidSurfaceInput.Piece(1, 0, 0, 0,
+						List.of(new FluidSurfaceInput.Plane(0, 1, 0, 1.0e-10))),
+				new FluidSurfaceInput.Piece(0, 1, 1, 1,
+						List.of(new FluidSurfaceInput.Plane(0, 1, 0, 0.4)))));
 	}
 
 	private static FluidChemicalSnapshotPayload chemicalSnapshot(long generation, long sequence, String fingerprint) {
@@ -713,7 +767,7 @@ public final class FluidNetworkProtocolValidation {
 				FluidMaterialSnapshotPayload.Kind.SNAPSHOT, DIMENSION, REGION, 1L, 1L, BlockPos.ZERO,
 				0.5F, 24, 16, 24, List.of(new FluidMaterialSnapshotPayload.MaterialEntry(
 				"mmm:water", 1_000.0, "mmm:aqueous", 0xff197ae8)),
-				List.of("mmm:aqueous"), full, markers, new byte[cells],
+				List.of("mmm:aqueous"), new FluidSurfaceInput(24, 16, 24, 0.5F, List.of()),
 				new byte[][] {full}, new byte[][] {full}, false, List.of());
 		short[] top = new short[cells * 4]; Arrays.fill(top, (short) -1);
 		byte[] weights = new byte[cells * 4];
@@ -756,3 +810,4 @@ public final class FluidNetworkProtocolValidation {
 		if (!condition) throw new AssertionError(message);
 	}
 }
+

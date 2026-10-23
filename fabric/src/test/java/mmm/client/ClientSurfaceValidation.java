@@ -58,7 +58,7 @@ public final class ClientSurfaceValidation {
 				Identifier.fromNamespaceAndPath("minecraft", "overworld"), new UUID(1, 1), 1, sequence,
 				BlockPos.ZERO, 0.5F, 2, 2, 2,
 				List.of(new FluidMaterialSnapshotPayload.MaterialEntry("mmm:water", 1000, "mmm:aqueous", 0xff197ae8)),
-				List.of("mmm:aqueous"), volumes, markers, new byte[8], new byte[][] {fractions},
+				List.of("mmm:aqueous"), new mmm.fluid.FluidSurfaceInput(2, 2, 2, 0.5F, List.of(new mmm.fluid.FluidSurfaceInput.Piece(0, 0, 0, 0, List.of(new mmm.fluid.FluidSurfaceInput.Plane(0, 1, 0, Byte.toUnsignedInt(volume) / 510.0))))), new byte[][] {fractions},
 				new byte[][] {fractions}, false, List.of());
 	}
 
@@ -84,3 +84,4 @@ public final class ClientSurfaceValidation {
 		if (!condition) throw new AssertionError(message);
 	}
 }
+

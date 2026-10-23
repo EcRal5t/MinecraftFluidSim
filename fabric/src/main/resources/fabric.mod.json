@@ -11,7 +11,8 @@
 	"icon": "assets/mmm/icon.png",
 	"environment": "*",
 	"mixins": [
-		"mmm.mixins.json"
+		"mmm.mixins.json",
+		{"config": "mmm.client.mixins.json", "environment": "client"}
 	],
 	"entrypoints": {
 		"main": [
@@ -28,6 +29,7 @@
 		"fabric-api": "*"
 	},
 	"suggests": {
-		"jade": "*"
+		"jade": "*",
+		"iris": "1.11.x"
 	}
 }

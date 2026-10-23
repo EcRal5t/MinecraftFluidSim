@@ -3,103 +3,86 @@ package mmm.client;
 import mmm.fluid.FluidMaterialSurfaceMesher;
 import mmm.fluid.FluidMaterialRenderSnapshot;
 import mmm.network.FluidMaterialSnapshotPayload;
-import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.phys.Vec3;
-import org.joml.Matrix4fc;
-
 import java.util.ArrayList;
 import java.util.List;
 
-import static mmm.client.QuadGeometry.vertex;
-
-/** Stateless material-interface and chemical-colour geometry. */
+/** Material surfaces retain their source cell, both materials and outward orientation. */
 final class MaterialSurfaceGeometry {
-	private MaterialSurfaceGeometry() { }
+    private MaterialSurfaceGeometry() { }
 
-	static void buildGeometry(
-			LevelRenderContext context, VertexConsumer vertices,
-			ClientRegionSnapshotStore.MaterialFrame frame
-	) {
-		FluidMaterialSnapshotPayload state = frame.payload();
-		PoseStack poses = context.poseStack();
-		Vec3 camera = context.levelState().cameraRenderState.pos;
-		poses.pushPose();
-		poses.translate(-camera.x, -camera.y, -camera.z);
-		Matrix4fc matrix = poses.last().pose();
-		for (ColoredTriangle triangle : frame.triangles()) {
-			emitMaterialTriangle(matrix, vertices, state, triangle.triangle(), triangle.argb(), triangle.alpha());
-		}
-		poses.popPose();
-	}
+    static void buildGeometry(Vec3 camera, VertexConsumer vertices,
+            ClientRegionSnapshotStore.MaterialFrame frame, boolean shadow) {
+        var state = frame.payload();
+        double ox = state.origin().getX() - camera.x;
+        double oy = state.origin().getY() - camera.y;
+        double oz = state.origin().getZ() - camera.z;
+        for (var colored : frame.triangles()) {
+            var triangle = colored.triangle();
+            var center = triangle.centroid();
+            var normal = triangle.normal();
+            boolean back = normal.x() * (camera.x - state.origin().getX() - center.x())
+                    + normal.y() * (camera.y - state.origin().getY() - center.y())
+                    + normal.z() * (camera.z - state.origin().getZ() - center.z()) < 0;
+            int material = back && colored.secondMaterial() >= 0 ? colored.secondMaterial() : colored.firstMaterial();
+            String id = state.materials().get(material).id();
+            boolean composition = shadow || frame.view().mode() == FluidDisplaySettings.Mode.COMPOSITION;
 
-	static List<ColoredTriangle> prepare(FluidMaterialSnapshotPayload state, FluidMaterialRenderSnapshot snapshot,
-			FluidMaterialSurfaceMesher.Mesh mesh, ClientRegionSnapshotStore.ChemicalFrame chemical,
-			short[] temperatures, FluidDisplaySettings.View view) {
-		ArrayList<ColoredTriangle> triangles = new ArrayList<>(mesh.outerTriangles().size() + mesh.interfaceTriangles().size());
-		for (FluidMaterialSurfaceMesher.Triangle triangle : mesh.outerTriangles()) {
-			int material = FluidMaterialSurfaceMesher.dominantMaterialAt(snapshot, triangle.centroid());
-			if (material < 0) continue;
-			var entry = state.materials().get(material);
-			int color = color(view, chemical, temperatures, state, triangle.centroid(),
-					state.phaseGroups().indexOf(entry.phaseGroup()), entry.argb());
-			triangles.add(new ColoredTriangle(triangle, color, 0.62F));
-		}
-		for (FluidMaterialSurfaceMesher.InterfaceTriangle owned : mesh.interfaceTriangles()) {
-			int first = color(view, chemical, temperatures, state, owned.triangle().centroid(),
-					owned.firstPhase(), phaseArgb(state, owned.firstPhase()));
-			int second = color(view, chemical, temperatures, state, owned.triangle().centroid(),
-					owned.secondPhase(), phaseArgb(state, owned.secondPhase()));
-			int color = FluidColorMapping.blend(first, second, 0.5);
-			triangles.add(new ColoredTriangle(owned.triangle(), color, 0.48F));
-		}
-		return List.copyOf(triangles);
-	}
+            int argb = shadow ? state.materials().get(material).argb() : back && colored.secondMaterial() >= 0 ? colored.secondArgb() : colored.argb();
+            float alpha = composition ? opacity(id) : 0.92F;
+            var position = state.origin().offset((int) Math.floor(center.x()), (int) Math.floor(center.y()), (int) Math.floor(center.z()));
+            int light = light(position);
+            FluidRenderBackend.beginMaterial(vertices, composition ? id : "", position.getX(), position.getY(), position.getZ());
+            var sprite = FluidRenderBackend.sprite(composition ? id : "");
+            double length = Math.sqrt(normal.x()*normal.x()+normal.y()*normal.y()+normal.z()*normal.z());
+            float sign = back ? -1 : 1;
+            float nx = (float)(normal.x()/length)*sign, ny = (float)(normal.y()/length)*sign, nz = (float)(normal.z()/length)*sign;
+            // Coordinates within the source block keep atlas sampling bounded across arbitrary PLIC slopes.
+            double uBase = Math.floor(Math.abs(ny) >= Math.abs(nx) ? center.x() : center.z());
+            double vBase = Math.floor(Math.abs(ny) >= Math.abs(nx) && Math.abs(ny) >= Math.abs(nz) ? center.z() : center.y());
+            var points = back ? new FluidMaterialSurfaceMesher.Point[] {triangle.c(),triangle.b(),triangle.a(),triangle.a()}
+                    : new FluidMaterialSurfaceMesher.Point[] {triangle.a(),triangle.b(),triangle.c(),triangle.c()};
+            for (var point : points) {
+                double u = (Math.abs(ny) >= Math.abs(nx) ? point.x() : point.z()) - uBase;
+                double v = (Math.abs(ny) >= Math.abs(nx) && Math.abs(ny) >= Math.abs(nz) ? point.z() : point.y()) - vBase;
+                vertices.addVertex((float)(ox+point.x()),(float)(oy+point.y()),(float)(oz+point.z()))
+                        .setColor(((argb>>>16)&255)/255f,((argb>>>8)&255)/255f,(argb&255)/255f,alpha)
+                        .setUv(sprite.getU((float)Math.clamp(u,0,1)),sprite.getV((float)Math.clamp(v,0,1)))
+                        .setUv2(light & 0xffff,light >>> 16).setNormal(nx,ny,nz);
+            }
+        }
+    }
 
-	record ColoredTriangle(FluidMaterialSurfaceMesher.Triangle triangle, int argb, float alpha) { }
+    private static int light(BlockPos position) {
+        var level = Minecraft.getInstance().level;
+        return level == null ? 0 : level.getBrightness(LightLayer.BLOCK, position) << 4
+                | level.getBrightness(LightLayer.SKY, position) << 20;
+    }
 
-	private static int color(FluidDisplaySettings.View view,
-			ClientRegionSnapshotStore.ChemicalFrame chemical, short[] temperatures,
-			FluidMaterialSnapshotPayload state, FluidMaterialSurfaceMesher.Point point, int phase, int materialArgb) {
-		int x = Math.clamp((int) Math.floor(point.x() / state.cellSize()), 0, state.sizeX() - 1);
-		int y = Math.clamp((int) Math.floor(point.y() / state.cellSize()), 0, state.sizeY() - 1);
-		int z = Math.clamp((int) Math.floor(point.z() / state.cellSize()), 0, state.sizeZ() - 1);
-		return FluidColorMapping.color(view, chemical, temperatures, state,
-				(z * state.sizeY() + y) * state.sizeX() + x, phase, materialArgb);
-	}
+    private static float opacity(String material) {
+        return switch (material) { case "mmm:water" -> 0.58F; case "mmm:oil" -> 0.80F; case "mmm:mercury" -> 0.98F; default -> 0.82F; };
+    }
 
-	private static int phaseArgb(FluidMaterialSnapshotPayload state, int phase) {
-		String group = state.phaseGroups().get(phase);
-		for (FluidMaterialSnapshotPayload.MaterialEntry material : state.materials()) {
-			if (material.phaseGroup().equals(group)) return material.argb();
-		}
-		return 0xffff00ff;
-	}
+    static List<ColoredTriangle> prepare(FluidMaterialSnapshotPayload state, FluidMaterialRenderSnapshot snapshot,
+            FluidMaterialSurfaceMesher.Mesh mesh, ClientRegionSnapshotStore.ChemicalFrame chemical,
+            short[] temperatures, FluidDisplaySettings.View view) {
+        ArrayList<ColoredTriangle> triangles = new ArrayList<>(mesh.surfaces().size());
+        for (var surface : mesh.surfaces()) {
+            int first = FluidColorMapping.color(view, chemical, temperatures, state, surface.cell(), surface.firstPhase(),
+                    state.materials().get(surface.firstMaterial()).argb());
+            int second = surface.secondMaterial() < 0 ? first : FluidColorMapping.color(view, chemical, temperatures,
+                    state, surface.cell(), surface.secondPhase(), state.materials().get(surface.secondMaterial()).argb());
+            triangles.add(new ColoredTriangle(surface.triangle(), first, second, surface.firstMaterial(), surface.secondMaterial()));
+        }
+        return List.copyOf(triangles);
+    }
 
-	private static void emitMaterialTriangle(
-			Matrix4fc matrix, VertexConsumer vertices, FluidMaterialSnapshotPayload state,
-			FluidMaterialSurfaceMesher.Triangle triangle, int argb, float alpha
-	) {
-		FluidMaterialSurfaceMesher.Point normal = triangle.normal();
-		double length = Math.sqrt(normal.x() * normal.x() + normal.y() * normal.y() + normal.z() * normal.z());
-		float vertical = length <= 1.0E-9 ? 0.0F : (float) Math.abs(normal.y() / length);
-		float light = 0.78F + 0.22F * vertical;
-		float red = ((argb >>> 16) & 0xff) / 255.0F * light;
-		float green = ((argb >>> 8) & 0xff) / 255.0F * light;
-		float blue = (argb & 0xff) / 255.0F * light;
-		emitMaterialVertex(matrix, vertices, state, triangle.a(), red, green, blue, alpha);
-		emitMaterialVertex(matrix, vertices, state, triangle.b(), red, green, blue, alpha);
-		emitMaterialVertex(matrix, vertices, state, triangle.c(), red, green, blue, alpha);
-		emitMaterialVertex(matrix, vertices, state, triangle.c(), red, green, blue, alpha);
-	}
-
-	private static void emitMaterialVertex(
-			Matrix4fc matrix, VertexConsumer vertices, FluidMaterialSnapshotPayload state,
-			FluidMaterialSurfaceMesher.Point point, float red, float green, float blue, float alpha
-	) {
-		vertex(vertices, matrix,
-				state.origin().getX() + (float) point.x(), state.origin().getY() + (float) point.y(),
-				state.origin().getZ() + (float) point.z(), red, green, blue, alpha);
-	}
+    record ColoredTriangle(FluidMaterialSurfaceMesher.Triangle triangle, int argb, int secondArgb,
+            int firstMaterial, int secondMaterial) { }
 }
+
+

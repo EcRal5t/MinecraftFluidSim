@@ -37,6 +37,7 @@ public final class FluidProtocolServer {
 				FluidProtocolResponsePayload.TYPE, FluidProtocolResponsePayload.CODEC
 		);
 		PayloadTypeRegistry.clientboundPlay().register(FluidSnapshotPayload.TYPE, FluidSnapshotPayload.CODEC);
+		PayloadTypeRegistry.clientboundPlay().register(FluidSnapshotPartPayload.TYPE, FluidSnapshotPartPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(FluidMaterialSnapshotPayload.TYPE, FluidMaterialSnapshotPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(FluidChemicalSnapshotPayload.TYPE, FluidChemicalSnapshotPayload.CODEC);
 		PayloadTypeRegistry.clientboundPlay().register(FluidGranularSnapshotPayload.TYPE, FluidGranularSnapshotPayload.CODEC);
@@ -94,29 +95,29 @@ public final class FluidProtocolServer {
 
 	public static boolean send(ServerPlayer player, FluidMaterialSnapshotPayload payload) {
 		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.Layout.MATERIAL)
-				|| !ServerPlayNetworking.canSend(player, FluidMaterialSnapshotPayload.TYPE)) return false;
-		ServerPlayNetworking.send(player, payload);
+				|| !ServerPlayNetworking.canSend(player, FluidSnapshotPartPayload.TYPE)) return false;
+		for (FluidSnapshotPartPayload part : FluidSnapshotPartPayload.split(payload)) ServerPlayNetworking.send(player, part);
 		return true;
 	}
 
 	public static boolean send(ServerPlayer player, FluidChemicalSnapshotPayload payload) {
 		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.Layout.CHEMICAL)
-				|| !ServerPlayNetworking.canSend(player, FluidChemicalSnapshotPayload.TYPE)) return false;
-		ServerPlayNetworking.send(player, payload);
+				|| !ServerPlayNetworking.canSend(player, FluidSnapshotPartPayload.TYPE)) return false;
+		for (FluidSnapshotPartPayload part : FluidSnapshotPartPayload.split(payload)) ServerPlayNetworking.send(player, part);
 		return true;
 	}
 
 	public static boolean send(ServerPlayer player, FluidGranularSnapshotPayload payload) {
 		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.Layout.GRANULAR)
-				|| !ServerPlayNetworking.canSend(player, FluidGranularSnapshotPayload.TYPE)) return false;
-		ServerPlayNetworking.send(player, payload);
+				|| !ServerPlayNetworking.canSend(player, FluidSnapshotPartPayload.TYPE)) return false;
+		for (FluidSnapshotPartPayload part : FluidSnapshotPartPayload.split(payload)) ServerPlayNetworking.send(player, part);
 		return true;
 	}
 
 	public static boolean send(ServerPlayer player, FluidThermalSnapshotPayload payload) {
 		if (!isNegotiated(player.level().getServer(), player.getUUID(), FluidProtocol.Layout.THERMAL)
-				|| !ServerPlayNetworking.canSend(player, FluidThermalSnapshotPayload.TYPE)) return false;
-		ServerPlayNetworking.send(player, payload);
+				|| !ServerPlayNetworking.canSend(player, FluidSnapshotPartPayload.TYPE)) return false;
+		for (FluidSnapshotPartPayload part : FluidSnapshotPartPayload.split(payload)) ServerPlayNetworking.send(player, part);
 		return true;
 	}
 

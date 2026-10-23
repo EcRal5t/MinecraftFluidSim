@@ -1,7 +1,6 @@
 package mmm.simulation;
 
 import mmm.chemistry.ChemicalRegistry;
-import mmm.fluid.FluidDomain;
 import mmm.fluid.FluidMaterialRenderSnapshot;
 import mmm.network.FluidChemicalSnapshotPayload;
 import mmm.network.FluidGranularSnapshotPayload;
@@ -16,7 +15,6 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
-import java.util.List;
 import mmm.granular.GranularRegistry;
 import mmm.worldprofile.WorldCapability;
 import mmm.worldprofile.WorldCapabilityProfile;
@@ -25,7 +23,6 @@ import java.util.Objects;
 
 /** Builds and publishes read-only client projections without owning region lifecycle or world state. */
 final class FluidSnapshotPublisher {
-	private final boolean materials;
 	private final boolean chemistry;
 	private final boolean granular;
 	private final boolean thermal;
@@ -38,7 +35,6 @@ final class FluidSnapshotPublisher {
 			GranularRegistry granularRegistry, ThermalRegistry thermalRegistry
 	) {
 		Objects.requireNonNull(profile, "profile");
-		boolean materials = profile.hasCapability(WorldCapability.MATERIALS);
 		boolean chemistry = profile.hasCapability(WorldCapability.CHEMISTRY);
 		boolean granular = profile.hasCapability(WorldCapability.GRANULAR);
 		boolean thermal = profile.hasCapability(WorldCapability.THERMAL);
@@ -46,7 +42,6 @@ final class FluidSnapshotPublisher {
 				|| thermal && thermalRegistry == null) {
 			throw new IllegalArgumentException("Snapshot capabilities are inconsistent");
 		}
-		this.materials = materials;
 		this.chemistry = chemistry;
 		this.granular = granular;
 		this.thermal = thermal;
@@ -116,27 +111,8 @@ final class FluidSnapshotPublisher {
 			FluidChemicalSnapshotPayload payload = createChemicalSnapshot(region);
 			return player -> FluidProtocolServer.send(player, payload);
 		}
-		if (materials) {
-			FluidMaterialSnapshotPayload payload = createMaterialSnapshot(region);
-			return player -> FluidProtocolServer.send(player, payload);
-		}
-		FluidSnapshotPayload payload = createPureSnapshot(region);
+		FluidMaterialSnapshotPayload payload = createMaterialSnapshot(region);
 		return player -> FluidProtocolServer.send(player, payload);
-	}
-
-	private static FluidSnapshotPayload createPureSnapshot(FluidRegion region) {
-		FluidDomain domain = region.domain();
-		List<FluidSnapshotPayload.Extension> extensions = List.of();
-		long cellCount = (long) domain.sizeX() * domain.sizeY() * domain.sizeZ();
-		if (domain.gasPressureActive() && cellCount <= FluidSnapshotPayload.MAX_EXTENSION_BYTES) {
-			extensions = List.of(new FluidSnapshotPayload.Extension(
-					FluidSnapshotPayload.EXTENSION_GAS_NODES, domain.copyGasNodeMask()));
-		}
-		return FluidSnapshotPayload.snapshot(
-				region.dimension().identifier(), region.id(), region.networkGeneration(), region.nextSnapshotSequence(),
-				region.origin(), domain.config().cellSize(), domain.sizeX(), domain.sizeY(), domain.sizeZ(),
-				domain.copyQuantizedVolume(), domain.copyMarkerMask(), domain.copyBinarySolidMask(), region.debugOverlays(),
-				extensions);
 	}
 
 	private static FluidMaterialSnapshotPayload createMaterialSnapshot(FluidRegion region) {

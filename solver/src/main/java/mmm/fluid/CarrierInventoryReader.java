@@ -134,13 +134,23 @@ final class CarrierInventoryReader {
 	/** Read-only material rendering reconstruction; it contains no exact inventory and is not a wire format. */
 	FluidMaterialRenderSnapshot copyMaterialRenderSnapshot() {
 		domain.domainFlowFields.ensureInventoryGrid();
-		if (domain.materialRegistry == null) {
-			throw new IllegalStateException("Material render snapshot requires a bound registry");
+		var registry = domain.materialRegistry == null ? new FluidMaterialRegistry(java.util.List.of(
+				new FluidMaterial("mmm:water", domain.config.density(), "mmm:aqueous", 0, Math.PI / 2))) : domain.materialRegistry;
+		PhaseOccupancyTransport.ensure(domain);
+		var inventory = domain.liquidCells.snapshot();
+		var frame = domain.gasState.frame;
+		FlipPressurePhaseGeometry phase;
+		long[] occupied = domain.granularCoupling == null ? new long[domain.cellCount] : domain.granularCoupling.copySolidSvq();
+		if (frame != null && frame.matchesCarrierInventory(domain, occupied)) phase = frame.phase();
+		else {
+			phase = new FlipPressurePhaseGeometry(domain.sizeX, domain.sizeY, domain.sizeZ);
+			phase.rebuildOccupancy(domain.phaseOccupancy, domain.geometry.cutCells,
+					PhaseOccupancyTransport.poreVolumes(domain, occupied, null), frame == null ? null : frame.phase());
 		}
-		var view = points();
-		return FluidMaterialRenderSnapshot.capture(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.materialRegistry,
-				copyQuantizedVolume(), copyMarkerMask(), copyBinarySolidMask(), view.x, view.y, view.z, view.volume,
-				view.material, view.mass.length, domain.liquidGrid.cellStockVolume);
+		var geometry = FluidSurfaceProjection.capture(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),
+				registry, inventory, domain.geometry.cutCells.snapshot(), phase);
+		return FluidMaterialRenderSnapshot.capture(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(),
+				registry, inventory, geometry);
 	}
 
 	byte[] copyQuantizedVolume() {

@@ -1,0 +1,8 @@
+{
+	"required": true,
+	"package": "mmm.mixin.client",
+	"compatibilityLevel": "JAVA_25",
+	"minVersion": "0.8",
+	"client": ["FluidCameraMixin", "IrisFluidShadowMixin"],
+	"injectors": {"defaultRequire": 1}
+}

@@ -2,42 +2,52 @@
 
 修改入口为 `FluidSnapshotPublisher`、`ClientRegionSnapshotStore`、`MaterialSurfaceGeometry` 和 `FluidRenderBackend`。
 当前完整职责链与代码索引见[设计书](system-overview.md#client)，待实施要求集中在[实施计划](../roadmap/solver-consolidation-plan.md#下一轮交付d01-展示几何输入)。
-本文维护已落地的数据归属、当前渲染行为和适配所依据的外部接口；D01–D03 实现后随代码更新相应契约。
+本文维护已落地的数据归属、当前渲染行为和适配所依据的外部接口。
 
 ## 输入与显色归属
 
 服务端按已提交状态发布有界展示快照，客户端按区域身份、网络代次和序号接收。移除游标使旧消息失效。
 库存、物种、质量及内能由物理模块保存，展示量化和客户端颜色设置由展示链处理。
+`CarrierInventoryReader.copyMaterialRenderSnapshot` 从单元库存、同代 PLIC 与 `FixedGeometrySnapshot` 生成 `FluidSurfaceInput`。每片隐含一个开放微盒，附带 PLIC 和材料高度裁剪平面；同单元材料按密度顺序分配实际库存份额，采用格内分层近似。共享面由客户端凸片求交确定，接触界面只保留一次，法向指向第二侧。正液量沿实际 PLIC 薄层显示，开放微盒约束形状。
+
+坐标以单元局部 double 平面传输，整数世界原点独立保存；每片最多三条裁剪平面，总片数上限 262144。材料几何与显色列合计上限 16 MiB，组合快照上限 32 MiB。完整快照按最多 512 KiB 分片发送，连接内连续组装，全部接齐后交给区域代次与序号规则；断线丢弃未完成组装。材料分区高度求解到约 6×10⁻⁸ 单元，显色份额采用 byte；库存数量保持原始表示。
+
+几何与材料份额参加 `sameSurface`；相同几何复用网格，温度、pH 和本地模式变化只刷新颜色。更新帧采用已提交几何直接切换，表面及相机介质始终对应同一帧。
 `MaterialFrame` 将已接受的材料几何、逐相 pH 和凝聚相温度关联，显色模式及温度范围由 `FluidDisplaySettings` 保存。
 组分、pH、温度的数值定义见[化学与显色](chemistry-state.md#ph-与显色)，单位见设计书。
 
 ## 当前几何与绘制
 
 `ClientFluidVolumeRenderer` 协调快照、几何生成与 GPU 提交；`FluidSurfaceGeometry`、`MaterialSurfaceGeometry` 和 `GranularSurfaceGeometry` 提供各类几何。
-当前生产表面使用 `FluidRenderBackend` 的 `DEBUG_FILLED_BOX` 管线，顶点提交位置和颜色；材料表面按朝向调整明暗，使用固定透明度。
-绘制注册于 `AFTER_TRANSLUCENT_TERRAIN`，后端创建渲染 pass 并提交到主画面目标。
-现有输出和旧几何启发式的替换由 D01–D03 组织，完成后在本节登记实际网格、材质、透明与资源生命周期契约。
+材料表面从已接受的 `FluidSurfaceInput` 重建，网格保留两侧材料、来源单元与朝向；相机位置决定当前可见一侧的材质。
+生产表面使用 `BLOCK` 顶点格式，提交位置、颜色、方块图集 UV、实际世界光照和法线。水采用 `water_still`，汞采用 `iron_block`，其他材料采用 `white_concrete` 乘材料颜色。pH 与温度模式共用几何，通过位置／颜色管线保留色带，执行正常深度测试和深度写入。
+材料表面双面绘制，同一批全部材料按相机距离排序并一次提交透明四边形；每个三角形以重复末顶点编码为四边形。水、油、汞各有固定基础透明度，光影包可进一步计算水的光学效果。
+绘制注册于 `AFTER_TRANSLUCENT_TERRAIN`。`FluidRenderBackend` 持有可复用的 `StagedVertexBuffer`，逐次构建、上传和提交，关闭客户端时释放；纹理和光照读取当前资源管理器，资源重载后自然使用新图集。区域移除与断线清理已接受帧和网格。
+颗粒保留沉积层外露面与活动代表粒子的方盒形状，沿材质管线提交图集纹理、实际世界光照与逐面法线；Iris 读取沙方块的分类。固定方向明暗已由正常照明替换。调试外壳沿 `renderDebug` 使用 `DEBUG_FILLED_BOX`。
 
 ## Iris 26.2 接口依据
 
 本地 `Iris` 仓库的 `origin/26.2` 提供 `IrisApi.assignPipeline(RenderPipeline, IrisProgram)`。
 `IrisProgram.TRANSLUCENT` 经 `ProgramId.fromAPI` 映射到 `gbuffers_water`；匹配还涉及管线顶点格式。
-当前分支的公开 API 未提供阴影注册和阴影回调方法，阴影绘制需沿实际内部渲染流程适配。
-版本专用调用应集中到客户端兼容实现，具体类和注入位置随实现登记。
+当前实现依据本地 `origin/26.2` 提交 `8f3a7a35d`：Minecraft 26.2、Iris 1.11.2、Sodium 0.9.1。该分支的阴影集成使用内部接口，版本调用集中在 `IrisFluidCompatibility` 和 `IrisFluidShadowMixin`。
+兼容实现通过反射读取已安装 Iris，依赖仍为可选；接口不匹配时保留具体调用与异常原因。`IrisPipelines.copyPipeline(TRANSLUCENT_TERRAIN, materialPipeline)` 同时复制主画面和阴影程序映射，使水与其他材料沿 `gbuffers_water`／`shadow_water` 的材质分支执行。诊断管线通过公开 `assignPipeline(..., BASIC)` 注册。
+
+`IrisFluidShadowMixin` 在 `ShadowRenderer.renderShadows` 的透明区块组绘制之后，使用同一材料网格与主相机坐标提交。调用位于包允许的透明阴影流程中。Iris 的 `MixinGlCommandEncoder` 在阴影阶段保持阴影 viewport 和 framebuffer，实际目标由阴影程序接管；后端通过标准 Blaze3D pass 提交顶点。
 
 `WorldRenderingSettings.getBlockStateIds()` 提供当前包的方块状态分类映射，`BlockSensitiveBufferBuilder` 提供顶点材料上下文。
-这些属于内部接口。不同包使用不同水编号，适配读取当前加载映射，并在光影切换后更新对应资源和分类。
+这些属于内部接口。兼容实现每次从当前映射读取分类，水使用原版水状态，汞使用铁块状态，油及其他材料使用白色染色玻璃状态；表面颜色与纹理仍由各自材料决定。光影切换后下一次绘制读取新映射。`BLOCK` 顶点由 Iris 自动扩展，补充材质、纹理中心、切线与方块中心属性；每个表面通过 `beginBlock` 设置材料上下文。
 `CommonUniforms.isEyeInWater` 从相机 `getFluidInCamera()` 读取浸没状态；动态液面绘制与相机介质查询需要共同接入。
-水下分类是全局介质信号，油、汞的外观及浸没处理须沿各自材料能力明确表达。
+`FluidCameraMixin` 通过已接受几何的 `materialAt` 查询，将水内相机设为 `FogType.WATER`，同时供原版雾效与 Iris 使用。原版熔岩、细雪及水的已有判定优先；油、汞当前采用空气介质信号和各自表面外观。
 
 ## 光影包的几何与材质假设
 
 主要接入对象为 Photon v1.4 与 Complementary Unbound r5.9.3。静态检查发现两包均使用水材质分类、纹理与光照坐标、法线及切线信息，并提供额外水面顶点位移。
-Complementary 的部分波动判断依赖方块内高度。模拟表面位置与光影附加位移的处理要求集中在 D02。
+保留模拟液面位置时，Photon 在 Water → Water Waves 中关闭 `WATER_DISPLACEMENT`，保留 `WATER_WAVES` 提供法线波纹；Complementary 在 Water Settings 或 Waving Settings 中关闭 `WAVING_WATER_VERTEX`（Waving Water Height），法线波纹沿包的 Water Wave 设置保留。
+Complementary 的附加高度位移按 `fract(worldPos.y + 0.005)` 判断顶点，任意 PLIC 斜面和格内液滴均可能触发。上述设置使主画面与阴影使用同一模拟几何，也使水内相机判定与可见液面对应。
 
-水材质可能重新计算顶点颜色、透明度和吸收，pH／温度的色带可读性需要专门着色策略。
+水材质可重新计算顶点颜色、透明度和吸收；pH／温度改走基础颜色程序，色带经包的后处理和曝光输出。汞以铁材质分类、油以染色玻璃分类使用包现有能力，具体金属感和透射效果依包设置决定。
 两包的相关透明流程用屏幕前后深度估计厚度，多层独立液体的逐段传播信息超出该深度表示。
-阶段 3 的光学近似范围见[产品路线](../roadmap/product-roadmap.md#阶段-3展示几何契约与重建)，实际设置和观察结果见验证指南。
+阶段 3 的光学近似范围见[产品路线](../roadmap/product-roadmap.md#阶段-3展示几何材质与光影接入)，实际设置和观察结果见验证指南。
 
 本地源码定位如下；编号用于解释当前源码，运行适配读取 Iris 映射。
 
@@ -51,3 +61,5 @@ Complementary 的部分波动判断依赖方块内高度。模拟表面位置与
 
 协议与几何沿 `protocol,materials`，离线展示成本沿 `presentation`；画面、光影生命周期和实际兼容组合见[展示验证](../maintenance/validation.md#fluid-presentation)。
 源码接口检查只能说明接入依据，游戏加载、渲染效果及成本分别记录实际证据。
+运行时每十秒记录有绘制的 CPU 均值：顶点构建、上传、提交耗时、每次索引数量和绘制次数；此计时包含主画面与阴影提交。GPU 实际执行耗时需要单独测量。
+

@@ -497,7 +497,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 展示输入、当前绘制行为及 Iris 接口依据见[流体展示参考](fluid-presentation.md)。D01–D03 的待实施范围与完成条件由实施计划维护。
 
-服务端按已提交状态生成有界快照，客户端按区域身份、网络代次和 sequence 接收并插值。移除消息使旧包失效。显示温度、压力、颜色与网格采用各自量化，库存、状态方程和物理计算读取原始数据。
+服务端从已提交单元库存、同代 PLIC 与固定开放微盒生成局部凸片；材料按库存份额在单元内沿重力方向分区，界面位置采用单元尺度近似。客户端裁剪共享面并生成一份带双侧材料及法向的网格，相机介质读取同一凸片。完整几何经过有界分片传输，接齐后按区域身份、网络代次和 sequence 接收；移除消息使旧包失效。显示温度、压力、颜色与网格采用各自量化，库存、状态方程和物理计算读取原始数据。
 
 客户端显色由 `FluidDisplaySettings` 保存当前玩家的组分、pH 或温度模式及固定温度色带范围，控制器界面的显色入口打开 `FluidDisplayScreen`。
 `FluidColorMapping` 集中映射颜色，`MaterialFrame` 持有同一已接受快照的几何、逐相 pH 与凝聚相温度。展示值改变复用网格并刷新颜色；模式与范围变化在下一显示帧生效，暂停区域保持相同物理状态。
@@ -508,6 +508,9 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 - **快照、网络和接收顺序**
   - 主要文件：
     - [FluidSnapshotPublisher](../../fabric/src/main/java/mmm/simulation/FluidSnapshotPublisher.java)
+    - [FluidSurfaceInput](../../solver/src/main/java/mmm/fluid/FluidSurfaceInput.java)：局部裁剪片及相机点归属
+    - [FluidSurfaceProjection](../../solver/src/main/java/mmm/fluid/FluidSurfaceProjection.java)：库存、PLIC 与开放微盒的同代投影
+    - [FluidSnapshotPartPayload](../../fabric/src/main/java/mmm/network/FluidSnapshotPartPayload.java)：完整快照分片和接齐发布
     - [FluidProtocol](../../fabric/src/main/java/mmm/network/FluidProtocol.java)
     - [ClientRegionSnapshotStore](../../fabric/src/client/java/mmm/client/ClientRegionSnapshotStore.java)
   - 验证选择器 / 参考：`protocol`
@@ -515,9 +518,11 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 - **液面、材料界面与颗粒渲染**
   - 主要文件：
     - [ClientFluidVolumeRenderer](../../fabric/src/client/java/mmm/client/ClientFluidVolumeRenderer.java)：协调快照、几何与绘制
-    - [FluidRenderBackend](../../fabric/src/client/java/mmm/client/FluidRenderBackend.java)：当前调试表面管线、GPU 缓冲与渲染 pass 提交
+    - [FluidRenderBackend](../../fabric/src/client/java/mmm/client/FluidRenderBackend.java)：材质和诊断管线、GPU 缓冲与渲染 pass 提交
     - [FluidSurfaceGeometry](../../fabric/src/client/java/mmm/client/FluidSurfaceGeometry.java)
     - [MaterialSurfaceGeometry](../../fabric/src/client/java/mmm/client/MaterialSurfaceGeometry.java)：复用表面网格并准备已着色三角形
+    - [FluidMaterialSurfaceMesher](../../solver/src/main/java/mmm/fluid/FluidMaterialSurfaceMesher.java)：共享面裁剪、双侧材料与一致朝向；[SurfacePolyhedron](../../solver/src/main/java/mmm/fluid/SurfacePolyhedron.java) 执行凸体裁剪
+    - [IrisFluidCompatibility](../../fabric/src/client/java/mmm/client/IrisFluidCompatibility.java)：可选管线、当前光影材料映射及版本接口；客户端 mixin 提供阴影提交和相机介质
     - [FluidColorMapping](../../fabric/src/client/java/mmm/client/FluidColorMapping.java)：组分、逐相 pH、凝聚相温度与无数据颜色
     - [FluidDisplaySettings](../../fabric/src/client/java/mmm/client/FluidDisplaySettings.java) / [FluidDisplayScreen](../../fabric/src/client/java/mmm/client/FluidDisplayScreen.java)：本机设置、模式选择、图例与温度范围
     - [CarrierInventoryReader](../../solver/src/main/java/mmm/fluid/CarrierInventoryReader.java)：`copyChemicalDisplaySnapshot` 汇总水相 pH；`copyThermalDisplaySnapshot` 导出凝聚相温度
@@ -625,3 +630,4 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 | 温度、反应或相变无进展 | 实际组成、U、批次及候选不可执行原因 | `ThermalCaloricInversion`、`GasLiquidPhaseModel`、`GasLiquidPhaseChangeStage`、未来气腔与热账计划 |
 | 颗粒占容、压力或沉积异常 | `GranularCouplingFields`、碰撞预览及整数分配 | `GranularPressureCoupling`、`GranularSettlementGeometryPlan`、`GranularBedShear` |
 | 容器／区域锁定 | HEAD、WAL 与外部已存盘状态的分类 | `ContainerRecoveryCoordinator`、`OwnershipCoordinator`；[恢复决策](world-ownership-and-containers.md#恢复决策表) |
+
