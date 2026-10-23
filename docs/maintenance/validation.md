@@ -549,3 +549,11 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 `farmland-water-contact.log` 的 `MovingBodyCouplingValidation --water-contact` 通过实际水相足额提取、油层排除、重复接触面去重、剂量不足原子拒绝及质量／物种／内能账。`farmland-recovery.log` 的 `RegionRepositoryAdapterValidation --farmland` 通过批成员的持久往返、提交前后恢复、第三态与不可读等待。`farmland-delivery-build.log` 的 `:fabric:compileTestJava :fabric:assemble verifyArchitecture --offline --no-daemon` 通过，538个生产源文件完成架构扫描。
 
 原生游戏灌溉与跨重启尚待观察。单一场景：在运行中的控制器内部放一块干耕地，让一侧接触MMM水相，保持周围无原版水块且无降雨；观察湿度上升与区域水量对应减少（每档1 L），暂停后停止补水，退出重进后保持已交接状态。对照同场景的油侧接触应保持干燥。异常日志入口为 `Farmland transfer`／`Farmland WAL`；自动化证据仅覆盖上述核心与恢复短流程。
+
+### 分片渐进加载
+
+2026-10-23：`RegionRepositoryAdapterValidation --section-loading` 通过。复用跨 section 区域，覆盖 HEAD 绑定读取、混代与槽复用拒绝、缺片保留 metadata、同 tick 读取额度、取消后重新加载、全片齐备才采用以及文件修复后恢复原库存。日志 `build/gas-source/section-loading-validation.log`。
+
+统一 `:fabric:compileTestJava :fabric:assemble verifyArchitecture` 通过，日志 `build/gas-source/section-loading-build.log`。求解主干与跨片通量未改；本轮未重复物理预算。最终完整组装仍集中执行，独立活动组休眠与大区域恢复成本尚未交付。
+
+同产物完整 `RegionRepositoryAdapterValidation` 通过，包含上述分片专项、各布局编解码、发布故障、删除与隔离、上一代显式恢复和损坏文件拒绝。日志 `build/gas-source/section-persistence-validation.log`。首次运行发现化学缺片的旧发现断言，已迁移为保留元数据、严格读取拒绝；未完成删除事务继续沿原完整恢复屏障处理。

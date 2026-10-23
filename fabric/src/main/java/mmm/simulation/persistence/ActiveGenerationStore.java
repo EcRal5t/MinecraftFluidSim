@@ -12,14 +12,12 @@ import net.minecraft.nbt.NbtAccounter;
 import net.minecraft.nbt.NbtIo;
 
 import java.io.IOException;
-import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Map;
+import java.util.List;
 import java.util.Set;
 
 /** ACTIVE slot serialization, strict readback and immutable solver reconstruction validation. */
@@ -83,36 +81,37 @@ final class ActiveGenerationStore {
 	RegionManifest readManifest(Path region, RegionHeadStore.Head head) throws IOException {
 		RegionManifest manifest = codec.decodeManifest(readNbt(region.resolve(head.slot()).resolve(MANIFEST)));
 		RegionHeadStore.validateBinding(head, manifest);
-		if (RegionStateIntegrity.manifestChecksum(manifest) != manifest.checksum()) {
-			throw new IOException("Manifest checksum mismatch");
-		}
+		RegionCheckpointValidator.validateManifest(manifest);
 		return manifest;
 	}
 
 	RegionState readSlot(Path slot) throws IOException {
 		if (!Files.isDirectory(slot)) throw new IOException("Missing committed region slot " + slot);
 		RegionManifest manifest = codec.decodeManifest(readNbt(slot.resolve(MANIFEST)));
-		Map<RegionSectionState.SectionKey, RegionSectionState> sections = new HashMap<>();
-		Set<String> expectedFiles = new HashSet<>();
-		for (RegionManifest.SectionDescriptor descriptor : manifest.sections()) {
-			String file = sectionFile(descriptor.key());
-			if (!expectedFiles.add(file)) throw new IOException("Duplicate section filename in manifest");
-			RegionSectionState section = codec.decodeSection(readNbt(slot.resolve(file)));
-			if (sections.put(section.key(), section) != null) throw new IOException("Duplicate section coordinate");
+		RegionCheckpointValidator.validateManifest(manifest);
+		validateSectionFiles(slot,manifest);
+		var sections=new ArrayList<RegionSectionState>(manifest.sections().size());
+		for(var descriptor:manifest.sections()) sections.add(readSection(slot,manifest,descriptor.key()));
+		return new RegionState(manifest,sections);
+	}
+
+	RegionSectionState readSection(Path slot,RegionManifest manifest,RegionSectionState.SectionKey key) throws IOException {
+		if(manifest.sections().stream().noneMatch(descriptor->descriptor.key().equals(key)))
+			throw new IOException("Section is absent from the bound manifest: "+key);
+		var section=codec.decodeSection(readNbt(slot.resolve(sectionFile(key))));
+		if(!section.key().equals(key)) throw new IOException("Section file coordinate differs from requested key: "+key);
+		new RegionCheckpointValidator(new mmm.model.region.RegionCheckpoint(manifest,List.of(section))).validateSection(section);
+		return section;
+	}
+
+	void validateSectionFiles(Path slot,RegionManifest manifest) throws IOException {
+		Set<String> expected=new HashSet<>(); expected.add(MANIFEST);
+		for(var descriptor:manifest.sections()) expected.add(sectionFile(descriptor.key()));
+		try(var files=Files.newDirectoryStream(slot)) {
+			for(var file:files) if(!Files.isRegularFile(file) || !expected.remove(file.getFileName().toString()))
+				throw new IOException("Unexpected committed section content: "+file);
 		}
-		try (DirectoryStream<Path> files = Files.newDirectoryStream(slot)) {
-			int actual = 0;
-			for (Path file : files) {
-				if (!Files.isRegularFile(file)) throw new IOException("Unexpected non-file content " + file);
-				if (file.getFileName().toString().equals(MANIFEST)) continue;
-				actual++;
-				if (!expectedFiles.contains(file.getFileName().toString())) {
-					throw new IOException("Unexpected section file " + file);
-				}
-			}
-			if (actual != expectedFiles.size()) throw new IOException("Missing or extra section files");
-		}
-		return new RegionState(manifest, new ArrayList<>(sections.values()));
+		if(!expected.isEmpty()) throw new IOException("Missing committed section files: "+expected);
 	}
 
 	void validateReconstruction(RegionState state) throws IOException {

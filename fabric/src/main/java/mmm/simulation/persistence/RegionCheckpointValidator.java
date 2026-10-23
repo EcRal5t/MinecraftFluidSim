@@ -36,32 +36,13 @@ final class RegionCheckpointValidator {
 	}
 
 	public void validate() throws IOException {
-		if (RegionStateIntegrity.manifestChecksum(manifest) != manifest.checksum()) throw new IOException("Manifest checksum mismatch");
+		validateManifest(manifest);
 		if (sections.size() != manifest.sections().size()) throw new IOException("Section count mismatch");
-		Map<RegionSectionState.SectionKey, RegionManifest.SectionDescriptor> expected = new HashMap<>();
-		RegionManifest.SectionDescriptor previous = null;
-		for (RegionManifest.SectionDescriptor descriptor : manifest.sections()) {
-			if (previous != null && previous.compareTo(descriptor) >= 0) throw new IOException("Section descriptors are not strictly sorted");
-			if (expected.put(descriptor.key(), descriptor) != null) throw new IOException("Duplicate section descriptor");
-			previous = descriptor;
-		}
 		Set<RegionSectionState.SectionKey> actual = new HashSet<>();
 		int markerCount = 0;
 		for (RegionSectionState section : sections) {
 			if (!actual.add(section.key())) throw new IOException("Duplicate section payload");
-			if (!section.regionId().equals(manifest.regionId()) || !section.dimensionId().equals(manifest.dimensionId())
-					|| section.checkpointGeneration() != manifest.checkpointGeneration()
-					|| section.layout() != manifest.layout()) throw new IOException("Mixed section ownership or layout");
-			if (RegionStateIntegrity.sectionChecksum(section) != section.checksum()) throw new IOException("Section checksum mismatch");
-			validateSectionOwnership(section);
-			RegionManifest.SectionDescriptor descriptor = expected.get(section.key());
-			long volumeBits = Double.doubleToRawLongBits(section.exactVolume().toDouble());
-			long massUnits = section.massUnits();
-			if (descriptor == null || descriptor.markerCount() != section.markerCount()
-					|| descriptor.volumeBits() != volumeBits || descriptor.massUnits() != massUnits
-					|| descriptor.checksum() != section.checksum()) {
-				throw new IOException("Section does not match its manifest descriptor");
-			}
+			validateSection(section);
 			markerCount = Math.addExact(markerCount, section.markerCount());
 		}
 		if (markerCount != manifest.totalMarkerCount()) {
@@ -73,15 +54,30 @@ final class RegionCheckpointValidator {
 		boolean gasPayload = hasExtension(manifest.extensions(), GasRegionStateCodec.MANIFEST_EXTENSION);
 		boolean pendingPhaseMotionPayload = hasExtension(manifest.extensions(),
 				PendingPhaseMotionCodec.MANIFEST_EXTENSION);
-		boolean thermalBuoyancyPayload = hasExtension(manifest.extensions(),
-				ThermalBuoyancyCodec.MANIFEST_EXTENSION);
-		boolean finiteDevicePayload = hasExtension(manifest.extensions(),
-				FiniteThermalDeviceCodec.MANIFEST_EXTENSION);
 		for (RegionSectionState section : sections) if (hasExtension(section.extensions(),
 				PendingPhaseMotionCodec.MANIFEST_EXTENSION)) {
 			throw new IOException("Pending-volume evidence is manifest-only");
 		}
 		if (pendingPhaseMotionPayload) validatePendingPhaseMotionCells();
+		if (gasPayload) validateGasLedgers();
+		if (hasExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION)) validateGranularLedgers();
+		if (manifest.hasThermalState()) validateThermalLedgers();
+	}
+
+	/** Checks the independently admitted manifest without allocating or reading section payloads. */
+	static void validateManifest(RegionManifest manifest) throws IOException {
+		if(RegionStateIntegrity.manifestChecksum(manifest)!=manifest.checksum()) throw new IOException("Manifest checksum mismatch");
+		if(manifest.sections().isEmpty() || manifest.sections().size()>RegionStateCodec.MAX_SECTIONS)
+			throw new IOException("Invalid manifest section count");
+		RegionManifest.SectionDescriptor previous=null; long count=0;
+		for(var descriptor:manifest.sections()) {
+			if(previous!=null && previous.compareTo(descriptor)>=0) throw new IOException("Section descriptors are not strictly sorted");
+			count+=descriptor.markerCount(); previous=descriptor;
+		}
+		if(count!=manifest.totalMarkerCount()) throw new IOException("Manifest marker count/budget mismatch");
+		boolean gasPayload=hasExtension(manifest.extensions(),GasRegionStateCodec.MANIFEST_EXTENSION);
+		boolean thermalBuoyancyPayload=hasExtension(manifest.extensions(),ThermalBuoyancyCodec.MANIFEST_EXTENSION);
+		boolean finiteDevicePayload=hasExtension(manifest.extensions(),FiniteThermalDeviceCodec.MANIFEST_EXTENSION);
 		if (finiteDevicePayload) {
 			if (manifest.layout() != RegionStateLayout.THERMAL) {
 				throw new IOException("Finite thermal devices are only valid in thermal region-state");
@@ -100,9 +96,20 @@ final class RegionCheckpointValidator {
 				|| !hasExtension(manifest.extensions(), ThermalRegionStateCodec.MANIFEST_EXTENSION))) {
 			throw new IOException("Complete thermal region-state requires gas and thermal payloads");
 		}
-		if (gasPayload) validateGasLedgers();
-		if (hasExtension(manifest.extensions(), GranularRegionStateCodec.MANIFEST_EXTENSION)) validateGranularLedgers();
-		if (manifest.hasThermalState()) validateThermalLedgers();
+	}
+
+	/** The same ownership and descriptor rules apply before a partial read enters resident memory. */
+	void validateSection(RegionSectionState section) throws IOException {
+		if (!section.regionId().equals(manifest.regionId()) || !section.dimensionId().equals(manifest.dimensionId())
+				|| section.checkpointGeneration()!=manifest.checkpointGeneration() || section.layout()!=manifest.layout())
+			throw new IOException("Mixed section ownership or layout");
+		if (RegionStateIntegrity.sectionChecksum(section)!=section.checksum()) throw new IOException("Section checksum mismatch");
+		validateSectionOwnership(section);
+		var descriptor=manifest.sections().stream().filter(value->value.key().equals(section.key())).findFirst().orElse(null);
+		if (descriptor==null || descriptor.markerCount()!=section.markerCount()
+				|| descriptor.volumeBits()!=Double.doubleToRawLongBits(section.exactVolume().toDouble())
+				|| descriptor.massUnits()!=section.massUnits() || descriptor.checksum()!=section.checksum())
+			throw new IOException("Section does not match its manifest descriptor");
 	}
 
 	private void validatePendingPhaseMotionCells() throws IOException {

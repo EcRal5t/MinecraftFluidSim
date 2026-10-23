@@ -32,6 +32,61 @@ import java.util.Set;
 import java.util.UUID;
 
 abstract class RegionGenerationValidationScenarios extends RegionPersistenceValidationSupport {
+	static void validateSectionLoading() throws Exception {
+		Path root = Files.createTempDirectory(Path.of("."), "section-read-");
+		FluidRegion region = populatedRegion(new UUID(541, 547));
+		var files = new RegionGenerationStore(root);
+		var original = RegionCheckpointFixtures.capture(region, 1);
+		files.publish(original);
+		var first = files.openRead(region.id());
+		require(first.generation() == 1 && first.manifestChecksum() == original.manifest().checksum(),
+				"Read view lost its committed HEAD identity");
+		var payloads = new ArrayList<RegionSectionState>();
+		for (var descriptor : first.manifest().sections()) payloads.add(files.readSection(first, descriptor.key()));
+		var complete = files.completeRead(first, payloads);
+		FluidDomainStateAssertions.assertSameDurableState(region.domain().captureAuthoritativeState(),
+				restorer(complete).reconstructAuthoritativeState(null, null, null, BuiltinGasDefinitions.createRegistry(), null),
+				"Incremental section read");
+		expectIOException(() -> files.completeRead(first, payloads.subList(0, payloads.size() - 1)),
+				"Incomplete section collection became a complete generation");
+		require(region.recordPublishedCheckpoint(1), "Section fixture did not accept its first checkpoint");
+		region.domain().setVolume(3, 2, 3, .5F);
+		var secondState = RegionCheckpointFixtures.capture(region, 2);
+		files.publish(secondState);
+		try { files.verifyReadView(first); throw new AssertionError("Changed HEAD kept an old read view valid"); }
+		catch (RegionGenerationStore.StaleReadViewException expected) { }
+		var second = files.openRead(region.id());
+		var mixed = new ArrayList<RegionSectionState>();
+		for (var descriptor : second.manifest().sections()) mixed.add(files.readSection(second, descriptor.key()));
+		mixed.set(0, payloads.getFirst());
+		expectIOException(() -> files.completeRead(second, mixed), "Mixed section generations were adopted");
+		require(region.recordPublishedCheckpoint(2), "Section fixture did not accept its second checkpoint");
+		files.publish(RegionCheckpointFixtures.capture(region, 3));
+		try { files.readSection(first, first.manifest().sections().getFirst().key());
+			throw new AssertionError("Reused slot satisfied a stale read view"); }
+		catch (RegionGenerationStore.StaleReadViewException expected) { }
+		var current = files.openRead(region.id());
+		var key = current.manifest().sections().getFirst().key();
+		Path regionPath = root.resolve("mmm/region-state").resolve(region.id().toString());
+		var head = NbtIo.readCompressed(regionPath.resolve("HEAD.nbt"), NbtAccounter.unlimitedHeap());
+		Path section = regionPath.resolve(head.getStringOr("Slot", ""))
+				.resolve("section_" + key.x() + "_" + key.y() + "_" + key.z() + ".nbt");
+		byte[] saved = Files.readAllBytes(section);
+		NbtIo.writeCompressed(new RegionStateCodec().encodeSection(payloads.getFirst()), section);
+		expectIOException(() -> files.readSection(current, key), "Read accepted a prior-generation section in the active slot");
+		Files.delete(section);
+		var discovery = files.discover();
+		require(discovery.manifests().size() == 1 && discovery.manifests().getFirst().checkpointGeneration() == 3,
+				"Missing section erased the committed manifest owner");
+		require(files.discoverValidated().manifests().isEmpty(), "Strict discovery accepted a missing payload");
+		expectIOException(() -> files.readSection(current, key), "Missing section became an empty payload");
+		Files.write(section, saved);
+		files.verifyReadView(current);
+		require(files.readSection(current, key).checkpointGeneration() == 3, "Repaired payload did not resume the pinned generation");
+		mmm.simulation.SectionLoadingRuntimeValidation.validate(
+				Files.createTempDirectory(Path.of("."), "section-runtime-"), populatedRegion(new UUID(557, 563)));
+	}
+
 	static void validateExactRoundTripAndMetadataUnload() throws Exception {
 		Path root = Files.createTempDirectory(Path.of("."), "roundtrip-");
 		FluidRegion region = populatedRegion(new UUID(11L, 12L));
@@ -167,8 +222,9 @@ abstract class RegionGenerationValidationScenarios extends RegionPersistenceVali
 		Files.delete(section);
 		expectIOException(() -> files.read(region.id()), "missing section was accepted");
 		RegionGenerationStore.Discovery missingSection = files.discover();
-		require(missingSection.manifests().isEmpty() && missingSection.issues().containsKey(regionDir),
-				"discovery admitted a manifest whose committed section was missing");
+		require(missingSection.manifests().size() == 1
+				&& missingSection.manifests().getFirst().equals(original.manifest()),
+				"Missing section discarded the committed metadata owner during manifest-only discovery");
 
 		Path headRoot = Files.createTempDirectory(Path.of("."), "head-corrupt-");
 		FluidRegion headRegion = populatedRegion(UUID.randomUUID());

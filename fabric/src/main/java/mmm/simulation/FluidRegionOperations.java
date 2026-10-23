@@ -42,6 +42,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 	private final Map<UUID, String> checkpointFailures = new HashMap<>();
 	private boolean creationLocked;
 	private long serviceTick;
+	private static final int SECTIONS_PER_REGION_TICK = 2;
 
 	FluidRegionOperations(
 			Path worldRoot, FluidRegionManager manager, boolean configurationLocked, boolean worldProfileProven,
@@ -64,7 +65,8 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 		}
 	}
 
-	void advanceTick() { serviceTick++; }
+	void advanceTick() { serviceTick++; persistence.retainRestores(manager); }
+	void cancelRestore(FluidRegion region) { persistence.cancelRestore(region.id()); }
 	boolean creationLocked() { return creationLocked; }
 	List<String> issues() { return List.copyOf(issues); }
 	void recordIssue(String issue) {
@@ -176,16 +178,19 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 		boolean numericalPaused = numericalFailure != null;
 		if (numericalPaused && !(inventoryDecrease && MinecraftRegionAvailability.inventoryDecreaseMayBypass(
 				RegionAvailabilityReason.NUMERICAL_PAUSE))) {
+			cancelRestore(region);
 			region.setAvailabilityFailure(RegionAvailabilityReason.NUMERICAL_PAUSE, numericalFailure);
 			return false;
 		}
 		boolean performancePaused = region.performanceBlockFailure() != null;
 		if (performancePaused && !(inventoryDecrease && MinecraftRegionAvailability.inventoryDecreaseMayBypass(
 				RegionAvailabilityReason.PERFORMANCE_PAUSE))) {
+			cancelRestore(region);
 			region.setAvailabilityFailure(RegionAvailabilityReason.PERFORMANCE_PAUSE, region.performanceBlockFailure());
 			return false;
 		}
 		if (!region.controllerManaged()) {
+			cancelRestore(region);
 			if (numericalPaused) region.setAvailabilityFailure(
 					RegionAvailabilityReason.NUMERICAL_PAUSE, numericalFailure);
 			else if (performancePaused) region.setAvailabilityFailure(
@@ -195,6 +200,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 		}
 		String ownershipLock = persistence.ownershipLockDescription(region);
 		if (ownershipLock != null) {
+			cancelRestore(region);
 			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
 					"存在未解决 ownership 状态；恢复完成前不能运行或 checkpoint：" + ownershipLock);
 			return false;
@@ -224,7 +230,12 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			}
 			if (serviceTick < retryAt.getOrDefault(region.id(), 0L)) return false;
 			try {
-				persistence.restore(region);
+				var progress = persistence.restoreIncrementally(region, serviceTick, SECTIONS_PER_REGION_TICK);
+				if (!progress.restored()) {
+					region.setAvailabilityFailure(RegionAvailabilityReason.SECTION_LOADING,
+							"正在加载已提交 section：" + progress.loadedSections() + "/" + progress.totalSections());
+					return false;
+				}
 				collisionRefresher.refresh(level, region);
 				region.markCollisionRefreshed();
 				retryAt.remove(region.id());
@@ -232,6 +243,10 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 				MmmMod.LOGGER.info("Restored controller region {} from checkpoint {} with {} markers",
 						region.id(), region.checkpointGeneration(), region.domain().particleCount());
 				snapshotSender.send(level, region);
+			} catch (mmm.simulation.persistence.RegionGenerationStore.StaleReadViewException changed) {
+				region.setAvailabilityFailure(RegionAvailabilityReason.SECTION_LOADING,
+						"加载期间 HEAD 已改变，下一 tick 重新读取：" + changed.getMessage());
+				return false;
 			} catch (IOException | RuntimeException exception) {
 				String message = "checkpoint restore failed: " + exception.getMessage();
 				region.setAvailabilityFailure(RegionAvailabilityReason.HEAD_INVALID, message);
@@ -276,6 +291,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			region.setAvailabilityFailure(reason, failure);
 			return;
 		}
+		cancelRestore(region);
 		String checkpointFailure = checkpointFailures.get(region.id());
 		String displayedFailure = checkpointFailure == null ? failure : failure + "; " + checkpointFailure;
 		if (!displayedFailure.equals(region.availabilityFailure())) MmmMod.LOGGER.warn("Pausing controller region {}: {}", region.id(), failure);
@@ -382,6 +398,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 	}
 
 	void checkpointForShutdown(Predicate<FluidRegion> shouldCheckpoint) {
+		persistence.cancelAllRestores();
 		for (FluidRegion region : manager.regions()) {
 			if (!region.controllerManaged() || !region.solverLoaded()) continue;
 			if (!shouldCheckpoint.test(region)) {

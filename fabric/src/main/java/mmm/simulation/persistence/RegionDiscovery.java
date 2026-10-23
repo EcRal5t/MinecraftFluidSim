@@ -61,6 +61,12 @@ final class RegionDiscovery {
 	}
 
 	RegionGenerationStore.Discovery discover(boolean reconstruct) throws IOException {
+		return discover(reconstruct,false);
+	}
+
+	RegionGenerationStore.Discovery discoverMetadata() throws IOException { return discover(false,true); }
+
+	private RegionGenerationStore.Discovery discover(boolean reconstruct,boolean metadataOnly) throws IOException {
 		if (!Files.exists(root)) return new RegionGenerationStore.Discovery(List.of(), List.of(), Map.of());
 		if (!Files.isDirectory(root)) throw new IOException("Region-state root is not a directory: " + root);
 		List<RegionManifest> manifests = new ArrayList<>();
@@ -80,9 +86,12 @@ final class RegionDiscovery {
 					if (head.kind() == RegionHeadStore.HeadKind.REMOVED) {
 						removed.add(removedStore.readGeneration(entry, head));
 					} else {
-						RegionState committed = activeStore.readGeneration(entry, head);
-						if (reconstruct) activeStore.validateReconstruction(committed);
-						manifests.add(committed.manifest());
+						if(metadataOnly) manifests.add(activeStore.readManifest(entry,head));
+						else {
+							RegionState committed = activeStore.readGeneration(entry, head);
+							if (reconstruct) activeStore.validateReconstruction(committed);
+							manifests.add(committed.manifest());
+						}
 					}
 				} catch (IllegalArgumentException | IOException exception) {
 					issues.put(entry, exception.getMessage());

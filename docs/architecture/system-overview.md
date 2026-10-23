@@ -490,7 +490,9 @@ MAC 动量输运读取同次结算的实际整数质量通量。
   - 主要文件：
     - [RegionCheckpointAssembler](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointAssembler.java)：`sectionKey` 共用 `RegionGeometry.worldBlockPosition` 的整数世界原点与局部偏移换算，保存、校验和恢复使用同一分区规则。
     - [RegionCheckpointRestorer](../../fabric/src/main/java/mmm/simulation/persistence/RegionCheckpointRestorer.java)
-    - [RegionGenerationStore](../../fabric/src/main/java/mmm/simulation/persistence/RegionGenerationStore.java)
+    - [RegionGenerationStore](../../fabric/src/main/java/mmm/simulation/persistence/RegionGenerationStore.java)：绑定 HEAD 的分片读取与完整共同提交。
+    - [RegionRepositoryAdapter](../../fabric/src/main/java/mmm/simulation/RegionRepositoryAdapter.java)：分批驻留同代 section，完整后恢复活动组；资格失效时取消加载。
+    - [RegionDiscovery](../../fabric/src/main/java/mmm/simulation/persistence/RegionDiscovery.java)：启动只读取清单，保留尚未加载的库存汇总。
   - 验证选择器 / 参考：`region-state`；[存档参考](region-state.md)
 
 - **玩家、发射器及世界事务**

@@ -7,6 +7,7 @@ public enum RegionAvailabilityReason {
 	HEAD_INVALID,
 	BOUNDARY_OPEN,
 	CHUNK_MISSING,
+	SECTION_LOADING,
 	OVERLAP,
 	BODY_OVERLAP,
 	BUDGET,

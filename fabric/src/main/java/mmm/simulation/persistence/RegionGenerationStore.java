@@ -8,6 +8,7 @@ import static mmm.simulation.persistence.RegionHeadStore.SLOT_A;
 import static mmm.simulation.persistence.RegionHeadStore.SLOT_B;
 
 import mmm.model.region.RegionManifest;
+import mmm.model.region.RegionSectionState;
 
 import mmm.chemistry.ChemicalRegistry;
 import mmm.fluid.air.GasRegistry;
@@ -314,6 +315,43 @@ public final class RegionGenerationStore {
 		return activeStore.readGeneration(region, headStore.read(region, id));
 	}
 
+	/** Immutable identity of one committed snapshot; no slot or file handle remains locked. */
+	public static final class ReadView {
+		private final Head head;
+		private final RegionManifest manifest;
+		private ReadView(Head head,RegionManifest manifest) { this.head=head; this.manifest=manifest; }
+		public RegionManifest manifest() { return manifest; }
+		public long generation() { return head.generation(); }
+		public long manifestChecksum() { return head.manifestChecksum(); }
+	}
+	/** A changed HEAD cancels incremental loading; its newly committed generation can be opened afresh. */
+	public static final class StaleReadViewException extends IOException {
+		private StaleReadViewException(UUID id) { super("Region HEAD changed during section loading: "+id); }
+	}
+	public ReadView openRead(UUID id) throws IOException {
+		Path region=regionPath(id); Head head=headStore.read(region,id);
+		if(head.kind()!=HeadKind.ACTIVE) throw new IOException("Region HEAD is a REMOVED tombstone");
+		var view=new ReadView(head,activeStore.readManifest(region,head));
+		verifyReadView(view); return view;
+	}
+	public void verifyReadView(ReadView view) throws IOException {
+		if(view==null) throw new IllegalArgumentException("Region read view is missing");
+		if(!headStore.read(regionPath(view.head.id()),view.head.id()).equals(view.head))
+			throw new StaleReadViewException(view.head.id());
+	}
+	public RegionSectionState readSection(ReadView view,RegionSectionState.SectionKey key) throws IOException {
+		verifyReadView(view);
+		var section=activeStore.readSection(regionPath(view.head.id()).resolve(view.head.slot()),view.manifest,key);
+		verifyReadView(view); return section;
+	}
+	/** Verifies complete section ownership and inventories without rereading the resident payloads. */
+	public RegionState completeRead(ReadView view,List<RegionSectionState> sections) throws IOException {
+		verifyReadView(view);
+		activeStore.validateSectionFiles(regionPath(view.head.id()).resolve(view.head.slot()),view.manifest);
+		var state=new RegionState(view.manifest,sections); state.validate();
+		verifyReadView(view); return state;
+	}
+
 	/**
 	 * Reads the inactive slot only when it is the immediately preceding complete generation.
 	 * This is an operator-recovery probe; ordinary discovery and restore continue to follow HEAD
@@ -401,15 +439,18 @@ public final class RegionGenerationStore {
 		discovery.recoverKnownFirstPublicationStaging();
 	}
 
-	/** Fully validates committed generations during discovery. Locked paths are retained as issues. */
+	/** Startup admits durable metadata even while a section payload is unavailable. */
 	public Discovery discover() throws IOException {
-		return discovery.discover(true);
+		return discovery.discoverMetadata();
 	}
+	/** Explicit complete integrity and reconstruction inspection of committed generations. */
+	public Discovery discoverValidated() throws IOException { return discovery.discover(true); }
 
 	/**
 	 * Validates HEAD, every committed file, CRC and format-local ledgers without resolving stable
 	 * registry ids. This is used only while deciding whether a missing world registry may be first
-	 * published; ordinary admission must use {@link #discover()}.
+	 * published. Startup metadata discovery uses {@link #discover()}; payload loading performs the
+	 * complete validation before adopting a runtime domain.
 	 */
 	public Discovery discoverCommittedStructure() throws IOException {
 		return discovery.discover(false);

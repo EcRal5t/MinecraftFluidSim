@@ -724,9 +724,14 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 				.findFirst().orElseThrow();
 		Files.delete(section);
 		RegionGenerationStore.Discovery discovery = files.discover();
-		require(discovery.manifests().stream().noneMatch(value -> value.regionId().equals(region.id()))
-				&& discovery.issues().containsKey(regionDir),
-				"discovery admitted a chemical manifest whose committed section was missing");
+		require(discovery.manifests().stream().anyMatch(value -> value.regionId().equals(region.id())
+				&& value.checkpointGeneration() == state.manifest().checkpointGeneration()),
+				"Missing chemical payload erased the committed metadata owner");
+		RegionGenerationStore.Discovery validated = files.discoverValidated();
+		require(validated.manifests().stream().noneMatch(value -> value.regionId().equals(region.id()))
+				&& validated.issues().containsKey(regionDir),
+				"Strict discovery accepted a chemical generation with a missing section");
+		expectIOException(() -> files.read(region.id()), "Complete chemical recovery accepted a missing section");
 	}
 
 	private static FlipMaterialParticleState materialCodecParticles(FlipParticleState pure, List<FluidMaterial> palette) {

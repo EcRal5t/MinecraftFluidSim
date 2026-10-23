@@ -47,6 +47,7 @@ final class MinecraftRegionAvailability {
 
 	private boolean ensure(ServerLevel level, FluidRegion region, boolean inventoryDecrease) {
 		if (hasPending(region.id())) {
+			operations.cancelRestore(region);
 			region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
 					"存在未完成的跨域事务 WAL；恢复完成后才能继续");
 			return false;

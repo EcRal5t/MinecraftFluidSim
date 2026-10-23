@@ -287,6 +287,10 @@ section、palette、deposit group、gas node 和 ledger 均采用规范排序，
 扫描遇到非 UUID 条目、非目录、损坏 HEAD、未知必需布局或 checksum/identity 失败时保留原路径为 issue。
 若无法从路径安全识别 region，禁止创建所有新区；若能识别，则只锁对应 region。
 
+普通启动发现仅读取 HEAD 与 manifest，登记库存汇总及配额。若存在未完成删除事务，先沿原恢复规则核对其完整状态与隔离目录，再决定是否接纳区域。section 载荷由运行恢复逐批读取；清单可证明而片缺失时，区域元数据继续保留，恢复报告具体片错误。
+
+逐片读取视图绑定区域、HEAD 槽位、代次和清单校验和，每次读取及最终采用均复核绑定。未完成加载保留不可变片对象；世界区块或运行资格失效时释放这些对象，下次从当前 HEAD 重新读取。当前一个控制器构成一个共同求解活动组，全片到齐后才恢复其压力、气腔与热学状态。跨片通量继续通过唯一 MAC 面及完整候选一次提交。
+
 完整恢复按以下顺序：
 
 1. 由 HEAD kind 选择唯一 ACTIVE slot 或 REMOVED 删除标记，并验证 HEAD 中 UUID、generation 和 manifest checksum 的绑定；REMOVED 只做 quarantine 收敛，不进入 solver 重建。

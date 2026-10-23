@@ -3,6 +3,7 @@ package mmm.simulation;
 import mmm.MmmMod;
 import mmm.model.region.RegionManifest;
 import mmm.model.region.RegionStateLayout;
+import mmm.model.region.RegionSectionState;
 
 import mmm.application.RegionCatalog;
 import mmm.chemistry.ChemicalRegistry;
@@ -48,6 +49,8 @@ final class RegionRepositoryAdapter {
 	/** World material properties from the committed capability bundle; required for material-bound liquid domains. */
 	private final MaterialRegistry materialDefinitions;
 	private final int maximumThermalSubsteps;
+	private final java.util.Map<UUID, PendingRestore> pendingRestores = new java.util.HashMap<>();
+	private final java.util.Map<UUID, Long> sectionReadTicks = new java.util.HashMap<>();
 
 	RegionRepositoryAdapter(
 			Path worldRoot, WorldCapabilityProfile profile, ChemicalRegistry chemicalRegistry,
@@ -337,10 +340,84 @@ final class RegionRepositoryAdapter {
 		if (!region.releaseSolverAfterCheckpoint(generation)) throw new IOException("Published checkpoint did not release region solver");
 	}
 
+	/** Explicit transactions finish the same pinned read synchronously. */
 	void restore(FluidRegion region) throws IOException {
-		if (region.solverLoaded() || region.lifecycle().state() != FluidRegionLifecycle.State.UNLOADED) return;
-		RegionState state = files.read(region.id());
-		RegionManifest manifest = state.manifest();
+		advanceRestore(region, Integer.MAX_VALUE);
+	}
+
+	record RestoreProgress(int loadedSections, int totalSections, boolean restored) { }
+
+	RestoreProgress restoreIncrementally(FluidRegion region, long serviceTick, int sectionBudget) throws IOException {
+		if (sectionBudget <= 0) throw new IllegalArgumentException("Section read budget must be positive");
+		Long previousTick = sectionReadTicks.put(region.id(), serviceTick);
+		return advanceRestore(region, previousTick != null && previousTick == serviceTick ? 0 : sectionBudget);
+	}
+
+	void cancelRestore(UUID regionId) { pendingRestores.remove(regionId); }
+	void cancelAllRestores() { pendingRestores.clear(); sectionReadTicks.clear(); }
+
+	void retainRestores(FluidRegionManager manager) {
+		pendingRestores.entrySet().removeIf(entry -> manager.region(entry.getKey()) != entry.getValue().region
+				|| entry.getValue().region.solverLoaded());
+		sectionReadTicks.keySet().removeIf(id -> manager.region(id) == null);
+	}
+
+	private RestoreProgress advanceRestore(FluidRegion region, int budget) throws IOException {
+		if (region.solverLoaded() || region.lifecycle().state() != FluidRegionLifecycle.State.UNLOADED) {
+			cancelRestore(region.id());
+			return new RestoreProgress(0, 0, region.solverLoaded());
+		}
+		try {
+			var pending = pendingRestores.get(region.id());
+			if (pending == null || pending.region != region) {
+				pending = new PendingRestore(region, new SectionRead(region.id()));
+				validateRestoreManifest(region, pending.read.view.manifest());
+				pendingRestores.put(region.id(), pending);
+			}
+			pending.read.advance(budget);
+			int loaded = pending.read.sections.size(), total = pending.read.view.manifest().sections().size();
+			if (loaded != total) return new RestoreProgress(loaded, total, false);
+			RegionState state = pending.read.complete();
+			validateRestoreManifest(region, state.manifest());
+			files.verifyReadView(pending.read.view);
+			restoreFeatureGeneration(region, state, pending.read.view);
+			cancelRestore(region.id());
+			return new RestoreProgress(loaded, total, true);
+		} catch (IOException | RuntimeException failure) {
+			cancelRestore(region.id());
+			throw failure;
+		}
+	}
+
+	private static final class PendingRestore {
+		final FluidRegion region;
+		final SectionRead read;
+		PendingRestore(FluidRegion region, SectionRead read) { this.region = region; this.read = read; }
+	}
+
+	private final class SectionRead {
+		final RegionGenerationStore.ReadView view;
+		final ArrayList<RegionSectionState> sections = new ArrayList<>();
+		SectionRead(UUID regionId) throws IOException { view = files.openRead(regionId); }
+		void advance(int budget) throws IOException {
+			var descriptors = view.manifest().sections();
+			int count = Math.min(budget, descriptors.size() - sections.size());
+			for (int i = 0; i < count; i++) {
+				var descriptor = descriptors.get(sections.size());
+				sections.add(files.readSection(view, new RegionSectionState.SectionKey(
+						descriptor.sectionX(), descriptor.sectionY(), descriptor.sectionZ())));
+			}
+		}
+		RegionState complete() throws IOException { return files.completeRead(view, sections); }
+	}
+
+	private RegionState readComplete(UUID regionId) throws IOException {
+		var read = new SectionRead(regionId);
+		read.advance(Integer.MAX_VALUE);
+		return read.complete();
+	}
+
+	private void validateRestoreManifest(FluidRegion region, RegionManifest manifest) throws IOException {
 		validateFeatureShape(manifest);
 		if (manifest.checkpointGeneration() != region.checkpointGeneration() || manifest.networkGeneration() != region.networkGeneration()
 				|| !manifest.dimensionId().equals(region.dimension().identifier().toString())
@@ -360,7 +437,6 @@ final class RegionRepositoryAdapter {
 				throw new IOException("Committed world ownership does not match the region checkpoint");
 			}
 		}
-		restoreFeatureGeneration(region, state);
 	}
 
 	/** Replaces an in-process base solver with the exact already-committed container target. */
@@ -375,7 +451,7 @@ final class RegionRepositoryAdapter {
 		if (region.checkpointGeneration() != baseGeneration) {
 			throw new IOException("Live region is neither the container base nor target generation");
 		}
-		RegionState state = files.read(region.id());
+		RegionState state = readComplete(region.id());
 		RegionManifest manifest = state.manifest();
 		validateFeatureShape(manifest);
 		validateRecoveryIdentity(region, manifest);
@@ -540,9 +616,14 @@ final class RegionRepositoryAdapter {
 	}
 
 	private void restoreFeatureGeneration(FluidRegion region,RegionState state)throws IOException {
+		restoreFeatureGeneration(region, state, null);
+	}
+
+	private void restoreFeatureGeneration(FluidRegion region, RegionState state, RegionGenerationStore.ReadView readView) throws IOException {
 		var restorer=new RegionCheckpointRestorer(state.checkpoint());long generation=state.manifest().checkpointGeneration();
 		try {
 			var authoritative=restorer.reconstructAuthoritativeState(chemicalRegistry,granularRegistry,thermalRegistry,gasRegistry,materialDefinitions);
+			if (readView != null) files.verifyReadView(readView);
 			region.restoreAuthoritativeSolver(authoritative,generation);
 			if(authoritative.thermalOwner()!=null)region.restoreFiniteThermalDevices(restorer.reconstructFiniteThermalDevices(thermalRegistry),thermalRegistry,generation);
 			enablePrecipitationIfConfigured(region);
