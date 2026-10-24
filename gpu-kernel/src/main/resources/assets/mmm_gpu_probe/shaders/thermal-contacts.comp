@@ -6,7 +6,7 @@ layout(binding=0,std430)buffer Arena{uint words[];};
 layout(binding=1,std430)buffer Errors{uint errors;};
 layout(push_constant)uniform Push{int header;int stage;int count;int unused;}p;
 const int OF=0,OP=1,OK=2,OI=3,KC=4,TERMS=5,SF=6,SP=7,SO=8,SC=9,SM=10,SV=11,
- CC=12,CO=13,CU=14,CS=15,COVER=16,EC=17,EO=18,LM=19,GM=20,PM=21,K=22,REQ=23;
+ CC=12,CO=13,CU=14,CS=15,COVER=16,EC=17,EO=18,LM=19,GM=20,PM=21,K=22,REQ=23,CM=25;
 int h(int n){return int(words[p.header+n]);}int f(int n){return h(48+n);}
 double number(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
 void put(int at,double value){uvec2 b=unpackDouble2x32(value);words[at]=b.x;words[at+1]=b.y;}
@@ -15,16 +15,18 @@ bool finite(double v){return !isnan(v)&&!isinf(v);}void invalid(){atomicOr(error
 double cellSize(){return number(p.header+128);}
 int liveLiquid(){return int(words[h(14)]);}int liveGas(){return h(15)<0?0:int(words[h(15)]);}
 int liveParticle(){return h(16)<0?0:int(words[h(16)]);}int liveDeposit(){return h(16)<0?0:int(words[h(16)+1]);}
+int liveCoherent(){return h(46)<0?0:int(words[h(46)]);}
 int liveOwners(){return int(words[f(OP)+h(9)]);}int liveSamples(){return int(words[f(SP)+h(8)]);}
 int openMask(int cell){return int((~words[h(11)+cell])&255u);}
-int material(int kind,int handle){int count=kind==0?h(41):kind==1?h(42):h(43),map=kind==0?f(LM):kind==1?f(GM):f(PM);
+int material(int kind,int handle){int count=kind==0?h(41):kind==1?h(42):kind==2?h(43):h(44),map=kind==0?f(LM):kind==1?f(GM):kind==2?f(PM):f(CM);
  if(handle<0||handle>=count){invalid();return 0;}return int(words[map+handle]);}
 void ownerAddress(int candidate,out int kind,out int row,out bool exists){
  kind=0;row=candidate;exists=row<liveLiquid();
  if(candidate>=h(0)){kind=1;row=candidate-h(0);exists=row<liveGas();}
  if(candidate>=h(0)+h(1)){kind=2;row=candidate-h(0)-h(1);exists=row<h(2)?row<liveParticle():row-h(2)<liveDeposit();}
+ if(candidate>=h(0)+h(1)+h(2)+h(3)){kind=3;row=candidate-h(0)-h(1)-h(2)-h(3);exists=row<liveCoherent();}
 }
-bool hasMass(int kind,int row){if(kind==0)return quantity(h(21)+2*row)>uint64_t(0);if(kind==2)return quantity(h(35)+2*row)>uint64_t(0);
+bool hasMass(int kind,int row){if(kind==0)return quantity(h(21)+2*row)>uint64_t(0);if(kind==2)return quantity(h(35)+2*row)>uint64_t(0);if(kind==3)return quantity(h(112)+2*row)>uint64_t(0);
  for(int c=int(words[h(24)+row]);c<int(words[h(24)+row+1]);c++)if(quantity(h(27)+2*c)>uint64_t(0))return true;return false;}
 int ownerFor(int candidate){return candidate>=0&&candidate<h(9)&&words[f(OF)+candidate]!=0u?int(words[f(OP)+candidate]):-1;}
 void clear(int id){
@@ -33,7 +35,7 @@ void clear(int id){
  if(id<h(8)){words[f(EC)+id]=0u;words[f(SF)+id]=0u;}
  if(id<h(4)){words[f(CC)+id]=0u;words[f(CU)+id]=0u;}
  if(id==0){for(int i=0;i<4;i++)words[f(REQ)+i]=0u;for(int i=0;i<3;i++)words[h(96)+i]=0u;
-  if(liveLiquid()<0||liveLiquid()>h(0)||liveGas()<0||liveGas()>h(1)||liveParticle()<0||liveParticle()>h(2)||liveDeposit()<0||liveDeposit()>h(3))invalid();}
+  if(liveLiquid()<0||liveLiquid()>h(0)||liveGas()<0||liveGas()>h(1)||liveParticle()<0||liveParticle()>h(2)||liveDeposit()<0||liveDeposit()>h(3)||liveCoherent()<0||liveCoherent()>h(45))invalid();}
 }
 void flagOwner(int id){int kind,row;bool exists;ownerAddress(id,kind,row,exists);words[f(OF)+id]=exists&&hasMass(kind,row)?1u:0u;}
 void prepareOwner(int candidate){
@@ -43,6 +45,7 @@ void prepareOwner(int candidate){
  double energy=0.0,temperature=0.0,k=0.0;int terms=1;
  if(kind==0){energy=number(h(22)+2*row);temperature=number(h(23)+2*row);k=number(f(K)+2*material(kind,int(words[h(18)+row])));}
  else if(kind==2){energy=number(h(36)+2*row);temperature=number(h(37)+2*row);k=number(f(K)+2*material(kind,int(words[h(33)+row])));}
+ else if(kind==3){energy=number(h(113)+2*row);temperature=number(h(114)+2*row);k=number(f(K)+2*material(kind,int(words[h(110)+row])));}
  else{energy=number(h(28)+2*row);temperature=number(h(29)+18*row);terms=0;double total=0.0;
   for(int c=int(words[h(24)+row]);c<int(words[h(24)+row+1]);c++){double n=double(quantity(h(26)+2*c));k+=n*number(f(K)+2*material(kind,int(words[h(25)+c])));total+=n;if(quantity(h(27)+2*c)>uint64_t(0))terms++;}k/=total;}
  if(!(finite(energy)&&finite(temperature)&&temperature>0.0&&finite(k)&&k>=0.0&&terms>0)){invalid();return;}
@@ -52,7 +55,7 @@ void prepareTerms(int candidate){
  if(candidate==0){uint total=words[h(99)+h(106)];words[f(REQ)+1]=total;words[h(96)+1]=total;if(total>uint(h(107)))atomicOr(errors,64u);}
  if(errors!=0u||words[h(99)+h(106)]>uint(h(107))||words[f(OF)+candidate]==0u)return;int owner=int(words[f(OP)+candidate]);if(owner>=h(106))return;
  int kind,row;bool exists;ownerAddress(candidate,kind,row,exists);int outAt=int(words[h(99)+owner]);
- if(kind!=1){int handle=int(words[(kind==0?h(18):h(33))+row]);words[h(100)+outAt]=uint(material(kind,handle));put(h(101)+2*outAt,double(quantity((kind==0?h(21):h(35))+2*row))*1e-10LF);}
+ if(kind!=1){int handle=int(words[(kind==0?h(18):kind==2?h(33):h(110))+row]);words[h(100)+outAt]=uint(material(kind,handle));put(h(101)+2*outAt,double(quantity((kind==0?h(21):kind==2?h(35):h(112))+2*row))*1e-10LF);}
  else for(int c=int(words[h(24)+row]);c<int(words[h(24)+row+1]);c++)if(quantity(h(27)+2*c)>uint64_t(0)){
   words[h(100)+outAt]=uint(material(kind,int(words[h(25)+c])));put(h(101)+2*outAt,double(quantity(h(27)+2*c))*1e-10LF);outAt++;}
 }
@@ -64,7 +67,8 @@ void sampleAddress(int id,out int owner,out int cell,out int mask,out double vol
  if(id<gasSamples){cell=id;int node=int(words[h(30)+cell]);if(node<=0)return;owner=ownerFor(h(0)+node-1);mask=int(words[h(32)+cell]);double h3=cellSize()*cellSize()*cellSize();volume=number(h(31)+2*cell)/h3;return;}
  id-=gasSamples;
  if(id<8*h(2)){int particle=id/8,slot=id%8;owner=ownerFor(h(0)+h(1)+particle);if(owner<0)return;cell=int(words[h(38)+8*particle+slot]);uint64_t q=quantity(h(39)+2*(8*particle+slot));if(q==uint64_t(0)){owner=-1;return;}if(cell<0||cell>=h(4)){invalid();owner=-1;return;}mask=openMask(cell);volume=double(q)/16777216.0LF;return;}
- id-=8*h(2);if(id<h(3)){owner=ownerFor(h(0)+h(1)+h(2)+id);if(owner<0)return;cell=int(words[h(40)+id]);if(cell<0||cell>=h(4)){invalid();owner=-1;return;}mask=openMask(cell);volume=double(quantity(h(34)+2*(h(2)+id)))/16777216.0LF;}
+ id-=8*h(2);if(id<h(3)){owner=ownerFor(h(0)+h(1)+h(2)+id);if(owner<0)return;cell=int(words[h(40)+id]);if(cell<0||cell>=h(4)){invalid();owner=-1;return;}mask=openMask(cell);volume=double(quantity(h(34)+2*(h(2)+id)))/16777216.0LF;return;}
+ id-=h(3);if(id<h(45)){owner=ownerFor(h(0)+h(1)+h(2)+h(3)+id);if(owner<0)return;cell=int(words[h(109)+id]);if(cell<0||cell>=h(4)){invalid();owner=-1;return;}mask=openMask(cell);volume=double(quantity(h(111)+2*id))/16777216.0LF;}
 }
 void flagSample(int id){int owner,cell,mask;double volume;sampleAddress(id,owner,cell,mask,volume);
  bool exists=owner>=0&&volume>0.0&&mask!=0;if(owner>=0&&(!finite(volume)||volume<0.0||(volume>0.0&&mask==0)))invalid();words[f(SF)+id]=exists?1u:0u;}
@@ -109,7 +113,7 @@ void contacts(int point,bool writing){
 }
 void writeContacts(int id){if(id==0){uint count=words[f(EO)+h(8)];words[f(REQ)+3]=count;words[h(96)+2]=count;if(count>uint(h(108)))atomicOr(errors,64u);}
  if(errors!=0u||words[f(EO)+h(8)]>uint(h(108)))return;contacts(id,true);}
-void publish(int owner){if(owner>=liveOwners())return;int kind=int(words[f(OK)+owner]),row=int(words[f(OI)+owner]);put((kind==0?h(22):kind==1?h(28):h(36))+2*row,number(h(97)+2*owner));}
+void publish(int owner){if(owner>=liveOwners())return;int kind=int(words[f(OK)+owner]),row=int(words[f(OI)+owner]);put((kind==0?h(22):kind==1?h(28):kind==2?h(36):h(113))+2*row,number(h(97)+2*owner));}
 void main(){int id=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);if(id>=p.count)return;
  if(p.stage==0){clear(id);return;}if(p.stage==2){prepareOwner(id);return;}if(p.stage==3){prepareTerms(id);return;}if(p.stage==9){writeContacts(id);return;}if(errors!=0u)return;
  if(p.stage==1)flagOwner(id);else if(p.stage==4)flagSample(id);else if(p.stage==5)prepareSample(id);else if(p.stage==6)scatterSample(id);else if(p.stage==7)coverage(id);else if(p.stage==8)contacts(id,false);else if(p.stage==10)publish(id);
