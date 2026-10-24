@@ -706,6 +706,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [VulkanLiquidDisplacementCapacity](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidDisplacementCapacity.java)：新固体占容下的整数液体强制排水，共用已接受七路流量；失败保留整份来源候选，规模成本待测
     - [VulkanMechanicalBodies](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanMechanicalBodies.java)：压力湿面、实际质量路线、有限气腔、颗粒压力／阻力联系与实际支撑构成的机械连通体和成员 CSR
     - [VulkanLiquidThermodynamics](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidThermodynamics.java)：液体与颗粒库存共享真实注册表的分段热容反演，派生温度、热容与最低温度内能
+    - [VulkanThermalConduction](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanThermalConduction.java)：唯一库存热载体的有限体积导热，稳定显式子步与刚性分段热容隐式求解共用实际接触 CSR；隐式雅可比复用共同 PCG，最终按接触热流写回内能并输出精确账的端点与热库通量项。[GpuThermalConductionBenchmark](../../gpu-kernel/src/main/java/mmm/gpuprobe/GpuThermalConductionBenchmark.java) 测量连续导热内核成本
     - [VulkanLiquidForces](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidForces.java)：从材料热膨胀律与单元共同温度派生热浮力，按 MAC 对偶质量向格面施加动量变化
     - [VulkanSurfaceTension](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanSurfaceTension.java)：高度函数与接触角曲率、液气界面平衡压力及不混溶液相对的表面张力；已与热浮力进入连续步，非零毛细场景成本待测
     - [VulkanLiquidViscosity](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidViscosity.java)、[VulkanMechanicalHeatTransport](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanMechanicalHeatTransport.java)：材料温度黏性、壁面与规定运动接触的隐式耗散、局部热量随实际整数质量路线搬运；已进入连续液气机械候选

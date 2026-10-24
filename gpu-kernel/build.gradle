@@ -309,3 +309,17 @@ registerGpuProbe(
         providers.gradleProperty('gpuGasFlowSamples').getOrElse('10')
     probeTask.jvmArgs '-Xmx3g'
 }
+
+registerGpuProbe(
+    'runGpuThermalConductionBenchmark',
+    'Measures continuous segmented-caloric conduction with explicit and implicit finite-volume transport.',
+    'mmm.gpuprobe.GpuThermalConductionBenchmark',
+    'gpu-thermal-conduction-work'
+) { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        providers.gradleProperty('gpuThermalGrid').getOrElse('64'),
+        providers.gradleProperty('gpuThermalWarmup').getOrElse('5'),
+        providers.gradleProperty('gpuThermalSamples').getOrElse('10'),
+        providers.gradleProperty('gpuThermalScene').getOrElse('normal')
+    probeTask.jvmArgs '-Xmx3g'
+}

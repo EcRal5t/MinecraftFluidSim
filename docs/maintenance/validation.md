@@ -783,3 +783,9 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 `build/gpu-resident-liquid-aperture-cost64.log` 使用同次产物完成原64³坝体5步预热／10步采样，包含孔流入口及零孔直接完成路径。中位63.746 ms、最大172.379 ms、设备平均55.287 ms，平均上传1699.2 B／回读154.8 B，设备2947.2 MiB。第8号采样实际增长份额物种容量并重算，15步全部提交；末态孔流对数为0。此记录评价原坝体机械回归及追加入口成本；实际非零孔流的区域范围由前述32³切格连续结果覆盖，独立64³大气腔网络成本沿用其单独记录。
 
 `build/gpu-resident-liquid-aperture-cut-cost64.log` 的原64³切格5／10请求在预热期间因液体容量状态3、512轮停止，未形成完整步性能结果。真实初始拓扑为65,576腔，初始化交接已完成；`GasStateSnapshot` 采用真实piece成员、规范minimum-key和完整归属约束，交接节点数量由实际成员决定。此失败保留原输入、dt=.05和容量轮数，后续沿同一容量算法定位结构原因。该次构建含正在评估的对称气体块预条件，原double算子对照及容量失败的独立定位继续由压力／容量性能工作维护。集中物理验收尚未开展。
+
+2026-10-24：设备导热内核的连续成本见 `build/gpu-resident-conduction-normal64.log`（RTX 5070 Ti，5步预热、10步采样）。262,144个库存热载体、782,336条三维有限体积接触，采用声明于夹具的分段水热容、两侧恒温热库和 .05 s 步长，实际从上一代内能与温度继续推进。普通场景 h=.5 m，包含设备候选复制、接触邻接、热容、稳定显式导热、精确端点／热库能量归约和提交。中位2.234 ms、最大3.633 ms、设备平均1.160 ms，每步上传0 B、回读12 B，设备269.2 MiB。当前输入直接给定有限体积接触，真实液气颗粒空间接触采样及完整区域流程继续接入。
+
+`build/gpu-resident-conduction-normal32.log` 的1步预热／3步采样中位1.772 ms、最大8.201 ms、设备.290 ms。相同导热入口的刚性场景采用 h=1e-5 m，按实际质量和面积缩放有限体积参数，进入分段热容隐式导热与共同 PCG；32³与64³均连续提交4步，分别见 `build/gpu-resident-conduction-stiff32.log`、`build/gpu-resident-conduction-stiff64.log`。32³中位20.767 ms、最大27.329 ms、设备10.735 ms；64³中位94.472 ms、最大103.676 ms、设备58.794 ms。刚性64³尚不满足完整步预算；这组极细网格数据用于识别刚性求解成本。以上均为导热内核范围，完整模型20 Hz、原场景十倍提速与集中物理验证尚未完成。
+
+导热成本入口：`./gradlew :gpu-kernel:runGpuThermalConductionBenchmark -PgpuThermalGrid=64 -PgpuThermalWarmup=5 -PgpuThermalSamples=10 -PgpuThermalScene=normal`。`gpuThermalScene=stiff` 使用同一求解链的刚性输入；固定材料定义与夹具参数由对应入口维护。
