@@ -789,3 +789,13 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 `build/gpu-resident-conduction-normal32.log` 的1步预热／3步采样中位1.772 ms、最大8.201 ms、设备.290 ms。相同导热入口的刚性场景采用 h=1e-5 m，按实际质量和面积缩放有限体积参数，进入分段热容隐式导热与共同 PCG；32³与64³均连续提交4步，分别见 `build/gpu-resident-conduction-stiff32.log`、`build/gpu-resident-conduction-stiff64.log`。32³中位20.767 ms、最大27.329 ms、设备10.735 ms；64³中位94.472 ms、最大103.676 ms、设备58.794 ms。刚性64³尚不满足完整步预算；这组极细网格数据用于识别刚性求解成本。以上均为导热内核范围，完整模型20 Hz、原场景十倍提速与集中物理验证尚未完成。
 
 导热成本入口：`./gradlew :gpu-kernel:runGpuThermalConductionBenchmark -PgpuThermalGrid=64 -PgpuThermalWarmup=5 -PgpuThermalSamples=10 -PgpuThermalScene=normal`。`gpuThermalScene=stiff` 使用同一求解链的刚性输入；固定材料定义与夹具参数由对应入口维护。
+
+2026-10-24：真实库存接触与导热短链见 `build/gpu-resident-thermal-contacts-short.log`（RTX 5070 Ti）。8³切格混合液体／气体夹具使用 h=.5 m，并按实际体积调整既有 h=.25 夹具的液体质量与内能；声明水／油／砂热导率为 .6／.15／1.2 W/(m K)，混合气组分使用 .026 W/(m K)，保留原异质分段热容与物种参考能。一个活动颗粒按整数SVQ配额实际跨两格，一个沉积组具有独立库存与内能；左侧热库为330 K。
+
+```powershell
+./gradlew.bat :gpu-kernel:runGpuThermalContactsBenchmark --offline --no-daemon --console=plain
+```
+
+1步预热／3步采样共4次连续提交完成，133个真实气腔对应1159个唯一热载体、1292份材料热容分项、1539个空间样本及12,085条实际接触。气腔各格样本与活动颗粒各支撑共用对应库存的唯一内能；唯一载体数量与实际库存一致，样本数量大于载体数量的检查通过。接触容量从1按实际需求增长一次，失败候选从同一原捕获重算，增长发生在预热。中位2.685 ms、最大4.023 ms、设备平均1.250 ms，采样每步上传0 B／回读32 B，设备6.7 MiB。活动颗粒内能由14282.2266 J变为14282.1198 J；末态读取在计时后进行。
+
+本次覆盖真实液体／混合气／活动颗粒／沉积库存的同代热反演、空间接触建图、共享导热求解和唯一内能写回，使用共同 `solveImplicit` 编排。连续固相、有限热设备、区域调度接入及集中物理验收继续按完整职责链推进；该短链成本保留8³输入范围。

@@ -250,7 +250,9 @@ registerGpuProbe(
         providers.gradleProperty('gpuMechanicalSamples').getOrElse('10'),
         providers.gradleProperty('gpuMechanicalWarmup').getOrElse('5'),
         providers.gradleProperty('gpuMechanicalGas').getOrElse('false'),
-        providers.gradleProperty('gpuMechanicalScene').getOrElse('dam')
+        providers.gradleProperty('gpuMechanicalScene').getOrElse('dam'),
+        rootProject.layout.buildDirectory.file('gpu-liquid-capacity-failure.bin').get().asFile.absolutePath,
+        providers.gradleProperty('gpuMechanicalGranular').getOrElse('0')
     probeTask.jvmArgs '-Xmx3g'
     probeTask.systemProperty 'mmm.gpuMechanicalStages', providers.gradleProperty('gpuMechanicalStages').getOrElse('false')
     if (providers.gradleProperty('gpuMechanicalJfr').getOrElse('false').toBoolean()) {
@@ -307,6 +309,19 @@ registerGpuProbe(
         providers.gradleProperty('gpuGasFlowGrid').getOrElse('64'),
         providers.gradleProperty('gpuGasFlowWarmup').getOrElse('5'),
         providers.gradleProperty('gpuGasFlowSamples').getOrElse('10')
+    probeTask.jvmArgs '-Xmx3g'
+}
+
+registerGpuProbe(
+    'runGpuThermalContactsBenchmark',
+    'Measures continuous real inventory caloric inversion, spatial contacts, conduction and owner publication.',
+    'mmm.gpuprobe.GpuThermalContactsBenchmark',
+    'gpu-thermal-contacts-work'
+) { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        providers.gradleProperty('gpuThermalContactsGrid').getOrElse('8'),
+        providers.gradleProperty('gpuThermalContactsWarmup').getOrElse('1'),
+        providers.gradleProperty('gpuThermalContactsSamples').getOrElse('3')
     probeTask.jvmArgs '-Xmx3g'
 }
 
