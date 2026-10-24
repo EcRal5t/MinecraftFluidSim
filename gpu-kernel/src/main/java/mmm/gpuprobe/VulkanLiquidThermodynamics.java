@@ -29,6 +29,14 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
                 layout.word(VulkanGranularStateLayout.Field.MATERIAL),layout.word(VulkanGranularStateLayout.Field.MASS_UNITS),
                 layout.word(VulkanGranularStateLayout.Field.INTERNAL_ENERGY),layout.word(VulkanGranularStateLayout.Field.SPECIES_OFFSETS),
                 layout.word(VulkanGranularStateLayout.Field.SPECIES_HANDLES),layout.word(VulkanGranularStateLayout.Field.SPECIES_AMOUNTS));}
+        static Inventory coherent(VulkanCoherentStateLayout layout){return new Inventory(layout.groupCapacity(),layout.word(VulkanCoherentStateLayout.Field.COUNTS),
+                layout.groupCapacity(),-1,0,-1,layout.word(VulkanCoherentStateLayout.Field.MATERIAL),layout.word(VulkanCoherentStateLayout.Field.MASS_UNITS),
+                layout.word(VulkanCoherentStateLayout.Field.INTERNAL_ENERGY),layout.word(VulkanCoherentStateLayout.Field.SPECIES_OFFSETS),
+                layout.word(VulkanCoherentStateLayout.Field.SPECIES_HANDLES),layout.word(VulkanCoherentStateLayout.Field.SPECIES_AMOUNTS));}
+        static Inventory device(VulkanThermalDeviceLayout layout){return new Inventory(layout.deviceCapacity(),layout.word(VulkanThermalDeviceLayout.Field.COUNTS),
+                layout.deviceCapacity(),-1,0,-1,layout.word(VulkanThermalDeviceLayout.Field.MATERIAL),layout.word(VulkanThermalDeviceLayout.Field.MASS_UNITS),
+                layout.word(VulkanThermalDeviceLayout.Field.INTERNAL_ENERGY),layout.word(VulkanThermalDeviceLayout.Field.SPECIES_OFFSETS),
+                layout.word(VulkanThermalDeviceLayout.Field.SPECIES_HANDLES),layout.word(VulkanThermalDeviceLayout.Field.SPECIES_AMOUNTS));}
     }
     record Tables(int[] offsets,double[] upper,double[] capacity,double[] referenceTemperature,double[] coldSensible) { }
     static Tables tables(FluidMaterialRegistry fluid,ThermalRegistry thermal) {
@@ -91,6 +99,16 @@ final class VulkanLiquidThermodynamics implements AutoCloseable {
                          int speciesStride,long scratchBase,long alignment){
         if(scratchBase<granular.endOffset())throw new IllegalArgumentException("Caloric workspace overlaps granular inventory");
         return layout(null,Inventory.granular(granular),tables,materialReferenceWordOffset,speciesReferenceWordOffset,speciesStride,scratchBase,alignment);
+    }
+    static Layout layout(VulkanCoherentStateLayout coherent,Tables tables,int materialReferenceWordOffset,int speciesReferenceWordOffset,
+                         int speciesStride,long scratchBase,long alignment){
+        if(scratchBase<coherent.endOffset())throw new IllegalArgumentException("Caloric workspace overlaps continuous solid inventory");
+        return layout(null,Inventory.coherent(coherent),tables,materialReferenceWordOffset,speciesReferenceWordOffset,speciesStride,scratchBase,alignment);
+    }
+    static Layout layout(VulkanThermalDeviceLayout device,Tables tables,int materialReferenceWordOffset,int speciesReferenceWordOffset,
+                         int speciesStride,long scratchBase,long alignment){
+        if(scratchBase<device.endOffset())throw new IllegalArgumentException("Caloric workspace overlaps finite device inventory");
+        return layout(null,Inventory.device(device),tables,materialReferenceWordOffset,speciesReferenceWordOffset,speciesStride,scratchBase,alignment);
     }
     private static Layout layout(VulkanLiquidStateLayout liquid,Inventory inventory,Tables tables,int materialReferenceWordOffset,int speciesReferenceWordOffset,
                          int speciesStride,long scratchBase,long alignment) {

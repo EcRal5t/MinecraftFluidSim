@@ -801,3 +801,7 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 本次覆盖真实液体／混合气／活动颗粒／沉积库存的同代热反演、空间接触建图、共享导热求解和唯一内能写回，使用共同 `solveImplicit` 编排。有限热设备、区域调度接入及集中物理验收继续按完整职责链推进；该短链成本保留8³输入范围。
 
 2026-10-24：同一接触短链加入129组真实连续固相库存，原夹具固体占容与独立正SVQ固相均由 `VulkanCoherentGeometry` 生成逐格占容，再经 `VulkanGranularGeometry` 合并活动颗粒与沉积占容，液体和气体几何读取同一结果。日志 `build/gpu-resident-thermal-coherent-contacts-short.log`：8³、133气腔、1288唯一载体／1421热容分项／1668空间样本／13,849接触，1步预热加3步采样连续4提交成功，接触容量实际增长一次。中位2.460 ms、最大4.566 ms、GPU平均1.286 ms，0 B上传／32 B回读，7.6 MiB。选定连续固相内能16603.0884→16603.0779 J，活动颗粒14282.2266→14282.1197 J。此证据覆盖五类实际库存的共同接触链与连续固相设备几何构造。
+
+2026-10-24：导热已进入 `VulkanLiquidRegion` 的机械／有限气体候选，实际在孔流后刷新温度、生成接触、写回内能，并归总热库和整步舍入账。`build/gpu-resident-region-thermal-short8.log` 使用8³坝体、1步预热／3步采样，连续4步提交成功，预热包含气腔库存容量增长重算。该次包含开发中的统一容量求解器，中位78.063 ms、最大79.325 ms、GPU平均33.482 ms，每步上传0 B／回读92 B，设备7.7 MiB。成本不满足目标；本结果用于确认实际调用链及定位成本，尚未进入集中物理验收。
+
+对应命令：`./gradlew :gpu-kernel:runGpuLiquidMechanicalBenchmark -PgpuMechanicalGrids=8 -PgpuMechanicalGas=true -PgpuMechanicalThermal=true -PgpuMechanicalWarmup=1 -PgpuMechanicalSamples=3`。随后 `build/gpu-resident-region-thermal-profile8.log` 的同场景1步预热／1步分项采样显示，投影与容量阶段GPU31.674 ms，共同压力3.465 ms，物质输运／未来几何／机械体.728 ms，气体重映射／共同能量／实际导热／精确账合计1.449 ms。容量接受末态14轮成功；主要成本集中在统一容量的残量推进，继续处理其并行算法及无工作派发。分项采样的墙钟含计时输出开销。
