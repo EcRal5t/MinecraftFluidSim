@@ -20,7 +20,7 @@ final class VulkanGasLineage implements AutoCloseable {
         GROUP_COUNTS(4), GROUP_OFFSETS(4), GROUP_CURSORS(4), GROUP_EDGES(4),
         SOURCE_COUNTS(4), SOURCE_OFFSETS(4), SOURCE_CURSORS(4), SOURCE_GROUPS(4),
         TARGET_COUNTS(4), TARGET_OFFSETS(4), TARGET_CURSORS(4), TARGET_GROUPS(4),
-        RETAINED_OLD_VOLUMES(8), FUTURE_CONTROL_VOLUMES(8), ESCAPED_FRACTIONS(8), SCAN(4), DISPATCH(4);
+        RETAINED_OLD_VOLUMES(8), FUTURE_CONTROL_VOLUMES(8), ESCAPED_FRACTIONS(8), SCAN(4), DISPATCH(4), LONG_ROWS(4);
         final int width;Field(int width){this.width=width;}
     }
     /** Sources are encoded as 0 explicit vacuum, 1 ambient, 2+i old GasState row i.
@@ -53,14 +53,15 @@ final class VulkanGasLineage implements AutoCloseable {
                 int count=switch(field) {
                     case CELL_ROUTES,EDGE_SOURCE,EDGE_TARGET,EDGE_WEIGHT,EDGE_GROUP,GROUP_EDGES->edges;
                     case HASH,HASH_GROUPS->hashCapacity;
-                    case LIVE_COUNTS->2;
+                    case LIVE_COUNTS->4;
+                    case LONG_ROWS->Math.addExact(gas.nodeCapacity()+2,oldGeometry.cells()+1);
                     case SOURCE_COUNTS,SOURCE_CURSORS->Math.addExact(gas.nodeCapacity(),2);
                     case SOURCE_OFFSETS->Math.addExact(gas.nodeCapacity(),3);
                     case TARGET_COUNTS,TARGET_CURSORS->Math.addExact(oldGeometry.cells(),1);
                     case TARGET_OFFSETS->Math.addExact(oldGeometry.cells(),2);
                     case GROUP_OFFSETS->Math.addExact(groupCapacity,1);
                     case RETAINED_OLD_VOLUMES,FUTURE_CONTROL_VOLUMES,ESCAPED_FRACTIONS->gas.nodeCapacity();
-                    case DISPATCH->15;
+                    case DISPATCH->21;
                     case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(oldGeometry.cells()+1,Math.max(gas.nodeCapacity()+2,groupCapacity)))/4);
                     default->groupCapacity;
                 };
@@ -122,8 +123,13 @@ final class VulkanGasLineage implements AutoCloseable {
         prefix(command,layout,layout.gas.nodeCapacity()+2,Field.SOURCE_COUNTS,Field.SOURCE_OFFSETS);
         prefix(command,layout,layout.oldGeometry.cells()+1,Field.TARGET_COUNTS,Field.TARGET_OFFSETS);
         stage(command,layout,8,layout.groupCapacity,false);
+        stage(command,layout,17,Math.max(layout.gas.nodeCapacity()+2,layout.oldGeometry.cells()+1),false);
+        stage(command,layout,12,1,false);
+        stage(command,layout,14,layout.gas.nodeCapacity()+2,false);
         stage(command,layout,9,layout.gas.nodeCapacity()+2,true);
+        stage(command,layout,15,layout.oldGeometry.cells()+1,false);
         stage(command,layout,10,layout.oldGeometry.cells()+1,true);
+        stage(command,layout,16,layout.gas.nodeCapacity(),false);
         stage(command,layout,11,layout.gas.nodeCapacity(),true);
     }
     private void prefix(VkCommandBuffer command,Layout layout,int count,Field input,Field output){
@@ -134,10 +140,11 @@ final class VulkanGasLineage implements AutoCloseable {
         try(var stack=stackPush()){
             bindings.bind(command,stack);vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,
                     stack.ints(layout.headerWordOffset(),stage,count));
-            if(stage>=7&&stage<=11){
+            if((stage>=7&&stage<=11)||(stage>=14&&stage<=16)){
                 barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
-                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+layout.column(Field.DISPATCH).offset()+12L*(stage-7));
+                int slot=stage>=14?(stage==15?6:5):stage-7;
+                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+layout.column(Field.DISPATCH).offset()+12L*slot);
             }else vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
             barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);

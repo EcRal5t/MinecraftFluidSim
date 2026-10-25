@@ -50,7 +50,7 @@ final class VulkanThermalContacts implements AutoCloseable {
     enum Field{OWNER_FLAGS(4),OWNER_PREFIX(4),OWNER_KIND(4),OWNER_INDEX(4),OWNER_K(8),TERM_COUNTS(4),
         SAMPLE_FLAGS(4),SAMPLE_PREFIX(4),SAMPLE_OWNER(4),SAMPLE_CELL(4),SAMPLE_MASK(4),SAMPLE_FRACTION(8),
         CELL_COUNTS(4),CELL_OFFSETS(4),CELL_CURSORS(4),CELL_SAMPLES(4),COVERAGE(8),CONTACT_COUNTS(4),CONTACT_OFFSETS(4),
-        LIQUID_MATERIAL(4),GAS_MATERIAL(4),GRANULAR_MATERIAL(4),CONDUCTIVITY(8),REQUIREMENTS(4),SCAN(4),COHERENT_MATERIAL(4),DEVICE_MATERIAL(4),PORT_COUNTS(4),PORT_OFFSETS(4),PORT_CURSORS(4),PORT_ROWS(4);
+        LIQUID_MATERIAL(4),GAS_MATERIAL(4),GRANULAR_MATERIAL(4),CONDUCTIVITY(8),REQUIREMENTS(4),SCAN(4),COHERENT_MATERIAL(4),DEVICE_MATERIAL(4),PORT_COUNTS(4),PORT_OFFSETS(4),PORT_CURSORS(4),PORT_ROWS(4),MF_DATA(8),MF_POW(4),BATH_COUNTS(4),BATH_OFFSETS(4),BATH_G(8),BATH_T(8),MF_DISPATCH(4);
         final int width;Field(int width){this.width=width;}}
     static final class Layout{
         final Inputs input;final Materials materials;final VulkanThermalConduction.Layout conduction;
@@ -60,7 +60,9 @@ final class VulkanThermalContacts implements AutoCloseable {
             if(base<Math.max(input.endOffset(),conduction.endOffset())||a<8||(a&(a-1))!=0||materials.conductivity().length!=conduction.tables.materials())throw new IllegalArgumentException("Invalid thermal contacts layout");
             long[] cursor={base};header=allocate(cursor,160,4,a);
             for(Field f:Field.values()){
-                int n=switch(f){case OWNER_FLAGS->owners;case OWNER_PREFIX->owners+1;
+                int n=switch(f){case MF_DISPATCH->3;case MF_DATA->Math.multiplyExact(4,samples+(input.device()==null?0:input.device().portCapacity()));
+                    case MF_POW,BATH_COUNTS->samples;case BATH_OFFSETS->samples+1;case BATH_G,BATH_T->conduction.baths;
+                    case OWNER_FLAGS->owners;case OWNER_PREFIX->owners+1;
                     case OWNER_KIND,OWNER_INDEX,OWNER_K,TERM_COUNTS->conduction.owners;
                     case SAMPLE_FLAGS,SAMPLE_OWNER,SAMPLE_CELL,SAMPLE_MASK,SAMPLE_FRACTION,CELL_SAMPLES,CONTACT_COUNTS->samples;
                     case SAMPLE_PREFIX,CONTACT_OFFSETS->samples+1;case PORT_COUNTS,PORT_CURSORS,CELL_COUNTS,CELL_CURSORS->cells;case PORT_OFFSETS->cells+1;case PORT_ROWS->input.device()==null?0:input.device().portCapacity();case CELL_OFFSETS->cells+1;case COVERAGE->Math.addExact(8*cells,input.device()==null?0:24*input.device().portCapacity());
@@ -103,25 +105,48 @@ final class VulkanThermalContacts implements AutoCloseable {
         private void ints(List<VulkanGasThermodynamics.TableChunk> out,Field f,int[] values){if(values.length==0)return;var b=ByteBuffer.allocateDirect(4*values.length).order(ByteOrder.LITTLE_ENDIAN);for(int x:values)b.putInt(x);b.flip();out.add(new VulkanGasThermodynamics.TableChunk(column(f).offset(),b));}
     }
     static Layout layout(Inputs input,Materials materials,VulkanThermalConduction.Layout conduction,long base,long alignment){return new Layout(input,materials,conduction,base,alignment);}
-    private final FlipKernelBindings bindings;private final VulkanPrefixScan scan;
-    VulkanThermalContacts(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,2,shader(),16);try{scan=new VulkanPrefixScan(context);}catch(RuntimeException|LinkageError failure){bindings.close();throw failure;}}
-    void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){bindings.rebindRanges(List.of(arena,errors));scan.rebindRanges(arena,arena,arena,errors);}
-    void recordPrepare(VkCommandBuffer command,Layout l){
-        stage(command,l,0,Math.max(l.owners,Math.max(l.samples,Math.max(l.cells,l.conduction.owners))));
+    private final FlipKernelBindings bindings;private final VulkanPrefixScan scan;private FlipKernelBindings.BufferRange arena;
+    VulkanThermalContacts(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,2,shader(),32);try{scan=new VulkanPrefixScan(context);}catch(RuntimeException|LinkageError failure){bindings.close();throw failure;}}
+    void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){this.arena=arena;bindings.rebindRanges(List.of(arena,errors));scan.rebindRanges(arena,arena,arena,errors);}
+    void recordPrepare(VkCommandBuffer command,Layout l){recordSource(command,l,false);recordGraphEdges(command,l);stage(command,l,13,1);}
+    private void recordSource(VkCommandBuffer command,Layout l,boolean matrixFree){
+        stage(command,l,0,Math.max(l.owners,Math.max(l.samples,Math.max(l.cells,l.conduction.owners))),matrixFree?2:1,0);
         stage(command,l,1,l.owners);prefix(command,l,l.owners,Field.OWNER_FLAGS,Field.OWNER_PREFIX);
         stage(command,l,2,l.owners);scan.record(command,l.conduction.owners,l.word(Field.TERM_COUNTS),l.conduction.word(VulkanThermalConduction.Field.TERM_OFFSETS),l.word(Field.SCAN));
         stage(command,l,3,l.owners);stage(command,l,4,l.samples);prefix(command,l,l.samples,Field.SAMPLE_FLAGS,Field.SAMPLE_PREFIX);
         stage(command,l,5,l.samples);prefix(command,l,l.cells,Field.CELL_COUNTS,Field.CELL_OFFSETS);stage(command,l,6,l.samples);
         if(l.input.device()!=null){stage(command,l,11,l.input.device().portCapacity());prefix(command,l,l.cells,Field.PORT_COUNTS,Field.PORT_OFFSETS);stage(command,l,12,l.input.device().portCapacity());}
-        stage(command,l,7,l.cells);stage(command,l,8,l.samples);prefix(command,l,l.samples,Field.CONTACT_COUNTS,Field.CONTACT_OFFSETS);stage(command,l,9,l.samples);stage(command,l,13,1);
+        stage(command,l,7,l.cells);
     }
+    void recordSpatial(VkCommandBuffer command,Layout l){
+        recordSource(command,l,true);
+        scan.record(command,l.conduction.owners,l.conduction.word(VulkanThermalConduction.Field.DEGREE_COUNTS),l.conduction.word(VulkanThermalConduction.Field.DEGREE_OFFSETS),l.word(Field.SCAN));
+        stage(command,l,15,spatialCapacity(l));stage(command,l,16,l.samples);
+        scan.record(command,l.samples,l.word(Field.BATH_COUNTS),l.word(Field.BATH_OFFSETS),l.word(Field.SCAN),l.word(Field.SAMPLE_PREFIX)+l.samples);
+        stage(command,l,17,Math.max(1,l.samples));
+    }
+    void recordFullTrial(VkCommandBuffer command,Layout l,double duration){
+        stage(command,l,24,1,-1,duration);stage(command,l,18,spatialCapacity(l),0,duration);stage(command,l,19,Math.max(1,l.conduction.baths),0,duration);
+    }
+    void recordSpatialFlux(VkCommandBuffer command,Layout l,double duration,int step){stage(command,l,24,1,step,duration);stage(command,l,20,spatialCapacity(l),step,duration);}
+    void recordGraphEdges(VkCommandBuffer command,Layout l){
+        stage(command,l,21,l.conduction.owners);stage(command,l,8,l.samples);
+        prefix(command,l,l.samples,Field.CONTACT_COUNTS,Field.CONTACT_OFFSETS);stage(command,l,9,Math.max(1,l.samples));stage(command,l,22,1);
+    }
+    private static int spatialCapacity(Layout l){return Math.addExact(l.samples,l.input.device()==null?0:l.input.device().portCapacity());}
     void recordConductionState(VkCommandBuffer command,Layout l){stage(command,l,14,1);}
     /** The solver has already combined every spatial sample at its unique owner. */
     void recordPublish(VkCommandBuffer command,Layout l){stage(command,l,10,l.conduction.owners);}
     private void prefix(VkCommandBuffer command,Layout l,int n,Field input,Field output){scan.record(command,n,l.word(input),l.word(output),l.word(Field.SCAN));}
-    private void stage(VkCommandBuffer command,Layout l,int stage,int count){if(count==0)return;try(var stack=stackPush()){
-        bindings.bind(command,stack);vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,stack.ints(l.headerWord(),stage,count,0));
-        int groups=(count+127)/128;vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
+    private void stage(VkCommandBuffer command,Layout l,int stage,int count){stage(command,l,stage,count,0,0);}
+    private void stage(VkCommandBuffer command,Layout l,int stage,int count,int step,double dt){if(count==0)return;try(var stack=stackPush()){
+        bindings.bind(command,stack);var push=stack.malloc(32).putInt(l.headerWord()).putInt(stage).putInt(count).putInt(step).putDouble(dt).putDouble(0).flip();
+        vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,push);
+        int groups=(count+127)/128;
+        if(stage==18||stage==20){
+            barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
+            vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+l.column(Field.MF_DISPATCH).offset());
+        }else vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
         barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
     }}
     private static int lw(VulkanLiquidStateLayout l,VulkanLiquidStateLayout.Field f){return columnWord(l.column(f));}

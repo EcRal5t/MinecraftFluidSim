@@ -57,7 +57,8 @@ final class VulkanRegionThermal implements AutoCloseable {
                 stream(conduction,VulkanThermalConduction.Field.RESERVOIR_CHANGE,-1));}
     }
     static Layout layout(VulkanThermalContacts.Inputs input,Configuration config,int contacts,int baths,long base,long alignment){
-        var conduction=VulkanThermalConduction.layout(input.owners(),input.terms(),contacts,config.tables(),base,alignment,baths);
+        int sampleCapacity=Math.addExact(input.samples(),input.device()==null?0:input.device().portCapacity());
+        var conduction=VulkanThermalConduction.spatialLayout(input.owners(),input.terms(),contacts,sampleCapacity,config.tables(),base,alignment,baths);
         var sampling=VulkanThermalContacts.layout(input,config.materials(),conduction,conduction.endOffset(),alignment);
         var reservoir=VulkanEnergyLedger.layout(List.of(stream(conduction,VulkanThermalConduction.Field.RESERVOIR_CHANGE,1)),sampling.endOffset(),alignment);
         var roundoff=VulkanEnergyLedger.layout(List.of(stream(conduction,VulkanThermalConduction.Field.ENERGY_CHANGE,1),stream(conduction,VulkanThermalConduction.Field.RESERVOIR_CHANGE,-1)),reservoir.endOffset(),alignment);
@@ -104,15 +105,33 @@ final class VulkanRegionThermal implements AutoCloseable {
                 if(l.input().device()!=null)caloric.record(command,l.input().deviceThermal());
                 if(l.input().gas()!=null){gasEOS.recordVolumes(command,l.input().gasThermal(),l.input().gasGeometry());gasEOS.record(command,l.input().gasThermal());}
             });
-            timed(command,"thermal-contacts",()->contacts.recordPrepare(command,l.contacts()));
-            conduction.recordPrepare(command,l.conduction(),duration,timings);
-            timed(command,"thermal-explicit",()->conduction.recordExplicit(command,l.conduction(),duration));
+            timed(command,"thermal-samples",()->contacts.recordSpatial(command,l.contacts()));
+            conduction.recordSpatialInitialize(command,l.conduction(),duration);
+            timed(command,"thermal-sample-operator",()->contacts.recordFullTrial(command,l.contacts(),duration));
+            conduction.recordSpatialPrepare(command,l.conduction(),duration,timings);
+            timed(command,"thermal-explicit",()->{
+                for(int step=0;step<mmm.thermal.ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS;step++){
+                    contacts.recordSpatialFlux(command,l.contacts(),duration,step);
+                    conduction.recordSpatialUpdate(command,l.conduction(),duration,step);
+                }
+            });
             contacts.recordConductionState(command,l.contacts());
         },l.contacts().column(VulkanThermalContacts.Field.REQUIREMENTS).offset(),28);
         if(status.error()==64){int required=status.feedback().getInt(12),baths=status.feedback().getInt(16);if(required>l.conduction().contacts||baths>l.conduction().baths)throw new ContactCapacityGrowth(required,baths);}
         if(status.error()!=0)return status.error();
         int bathCount=status.feedback().getInt(24);
-        if(status.feedback().getInt(20)==VulkanThermalConduction.IMPLICIT)conduction.solveImplicit(candidate,l.conduction(),pressure,duration,timings);
+        if(status.feedback().getInt(20)==VulkanThermalConduction.IMPLICIT){
+            // The first operator pass only captured a trial flux. Stiff steps instantiate the
+            // same canonical contacts now, leaving U unchanged until their accepted solve.
+            status=candidate.continueBatch((command,in,out,errors,staging,stack)->contacts.recordGraphEdges(command,l.contacts()),l.contacts().column(VulkanThermalContacts.Field.REQUIREMENTS).offset(),28);
+            if(status.error()==64){int required=status.feedback().getInt(12),baths=status.feedback().getInt(16);if(required>l.conduction().contacts||baths>l.conduction().baths)throw new ContactCapacityGrowth(required,baths);}
+            if(status.error()!=0)return status.error();
+            status=candidate.continueBatch((command,in,out,errors,staging,stack)->{
+                conduction.recordPrepare(command,l.conduction(),duration,timings);conduction.recordExplicit(command,l.conduction(),duration);contacts.recordConductionState(command,l.contacts());
+            },l.contacts().column(VulkanThermalContacts.Field.REQUIREMENTS).offset(),28);
+            if(status.error()!=0)return status.error();
+            if(status.feedback().getInt(20)==VulkanThermalConduction.IMPLICIT)conduction.solveImplicit(candidate,l.conduction(),pressure,duration,timings);
+        }
         status=candidate.continueBatch((command,in,out,errors,staging,stack)->{
             timed(command,"thermal-finish",()->conduction.recordFinish(command,l.conduction(),duration));
             timed(command,"thermal-publish",()->contacts.recordPublish(command,l.contacts()));

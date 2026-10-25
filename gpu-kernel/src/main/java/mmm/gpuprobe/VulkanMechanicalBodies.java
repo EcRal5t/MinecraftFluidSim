@@ -69,7 +69,8 @@ final class VulkanMechanicalBodies implements AutoCloseable {
         if(granular!=null&&(granular.state().cells()!=source.cellCount()||scratchBase<granular.pressure().endOffset()))throw new IllegalArgumentException("Granular mechanical links differ");
         int vertices=Math.addExact(Math.addExact(source.cellCount(),gasNodeCapacity),granular==null?0:granular.state().particleCapacity());long[] cursor={scratchBase};
         var header=column(cursor,32,alignment);var parents=column(cursor,vertices,alignment);
-        var changed=column(cursor,1,alignment);var counts=column(cursor,vertices,alignment);
+        // The adjacent word carries future gas connectivity feedback in the same submission.
+        var changed=column(cursor,2,alignment);var counts=column(cursor,vertices,alignment);
         var offsets=column(cursor,Math.addExact(vertices,1),alignment);var cursors=column(cursor,vertices,alignment);
         var members=column(cursor,vertices,alignment);
         var scan=column(cursor,Math.toIntExact(VulkanPrefixScan.workspaceBytes(vertices)/4),alignment);

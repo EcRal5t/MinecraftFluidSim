@@ -53,12 +53,13 @@ final class VulkanThermalConduction implements AutoCloseable {
         final int owners,terms,contacts,tiles,baths;final Tables tables;
         final VulkanLiquidStateLayout.Column header;final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);
         final long endOffset;
-        Layout(int owners,int terms,int contacts,Tables tables,long base,long alignment,int baths){
+        Layout(int owners,int terms,int contacts,Tables tables,long base,long alignment,int baths){this(owners,terms,contacts,tables,base,alignment,baths,0);}
+        Layout(int owners,int terms,int contacts,Tables tables,long base,long alignment,int baths,int spatialSamples){
             if(owners<1||terms<1||contacts<0||baths<0||tables.materials()<1||base<0||alignment<8||(alignment&(alignment-1))!=0)
                 throw new IllegalArgumentException("Invalid thermal conduction layout");
             this.owners=owners;this.terms=terms;this.contacts=contacts;this.tables=tables;this.baths=baths;
             // Each long row has d>128 incidents, so ceil(d/128)<=d/64; all rows have at most 2*contacts incidents.
-            tiles=Math.toIntExact((contacts+31L)/32);
+            tiles=Math.max(Math.toIntExact((contacts+31L)/32),Math.toIntExact((spatialSamples+63L)/64));
             long[] cursor={base};header=allocate(cursor,80,4,alignment);
             for(Field field:Field.values()){
                 int n=switch(field){
@@ -68,10 +69,10 @@ final class VulkanThermalConduction implements AutoCloseable {
                     case CONTACT_A,CONTACT_B,CONTACT_G,CONTACT_BATH_T,FLUX,BATH_INDEX->contacts;
                     case KNOTS->tables.knots().length;case MATERIAL_CP->tables.heatCapacity().length;
                     case MATERIAL_MIN_CP->tables.materials();
-                    case INCIDENT->Math.multiplyExact(contacts,2);
+                    case INCIDENT->Math.max(Math.multiplyExact(contacts,2),spatialSamples);
                     case ENERGY_CHANGE->Math.multiplyExact(owners,2);case RESERVOIR_CHANGE->Math.multiplyExact(baths,ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
                     case MODE->2;case ACCEPTED->1;case SUMMARY->8;
-                    case PARTIALS->Math.multiplyExact((owners+127)/128,4);case BATH_PARTIALS->Math.multiplyExact(Math.max(1,(contacts+127)/128),4);
+                    case PARTIALS->Math.multiplyExact((owners+127)/128,4);case BATH_PARTIALS->Math.multiplyExact(Math.max(1,(Math.max(contacts,baths)+127)/128),4);
                     case BATH_EDGES->baths;case DISPATCH->15;case TILE_OWNERS->tiles;case TILE_PARTIALS->2*tiles;case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(owners)/4);
                     case WORK->Math.multiplyExact(owners,5);case META->Math.multiplyExact(owners,2);
                     case PROBLEM->Math.addExact(Math.multiplyExact(owners,3),1);case CONTROL->16;
@@ -114,6 +115,9 @@ final class VulkanThermalConduction implements AutoCloseable {
     static Layout layout(int ownerCapacity,int termCapacity,int contactCapacity,Tables tables,long scratchBase,long alignment,int bathCapacity){
         return new Layout(ownerCapacity,termCapacity,contactCapacity,tables,scratchBase,alignment,bathCapacity);
     }
+    static Layout spatialLayout(int owners,int terms,int contacts,int samples,Tables tables,long base,long alignment,int baths){
+        return new Layout(owners,terms,contacts,tables,base,alignment,baths,samples);
+    }
     private final FlipKernelBindings bindings;private final VulkanPrefixScan scan;private FlipKernelBindings.BufferRange arena;
     VulkanThermalConduction(VulkanDeviceContext context){
         bindings=new FlipKernelBindings(context,2,shader(),32);
@@ -135,6 +139,16 @@ final class VulkanThermalConduction implements AutoCloseable {
             scan.record(command,l.owners,l.word(Field.DEGREE_COUNTS),l.word(Field.DEGREE_OFFSETS),l.word(Field.SCAN));
             stage(command,l,dt,2,0,0,l.contacts,false);
         });
+        recordOwnerSetup(command,l,dt,timings);
+    }
+    void recordSpatialInitialize(VkCommandBuffer command,Layout l,double dt){
+        stage(command,l,dt,0,0,0,l.owners,false);stage(command,l,dt,30,0,0,l.baths,false);
+    }
+    void recordSpatialPrepare(VkCommandBuffer command,Layout l,double dt,VulkanStageTimings timings){recordOwnerSetup(command,l,dt,timings);stage(command,l,dt,32,0,0,l.baths,false);}
+    void recordSpatialUpdate(VkCommandBuffer command,Layout l,double dt,int step){
+        stage(command,l,dt,5,step,0,128,false);stage(command,l,dt,23,step,0,l.tiles,true);stage(command,l,dt,7,step,0,l.owners,true);
+    }
+    private void recordOwnerSetup(VkCommandBuffer command,Layout l,double dt,VulkanStageTimings timings){
         timed(timings,command,"thermal-owner-tiles",()->{
             stage(command,l,dt,21,0,0,l.owners,false);
             scan.record(command,l.owners,l.word(Field.TILE_COUNTS),l.word(Field.TILE_OFFSETS),l.word(Field.SCAN));

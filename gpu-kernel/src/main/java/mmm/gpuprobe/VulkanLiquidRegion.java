@@ -457,7 +457,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             this(liquid,definitions,gasReserves,granularConfiguration==null?0:granularConfiguration.contactCapacity());
         }
         Workspace(VulkanLiquidStateLayout liquid,MechanicalDefinitions definitions,GasReserves gasReserves,int contactCapacity) {
-            this(liquid,definitions,gasReserves,contactCapacity,thermalConfiguration==null?0:thermalConfiguration.contactCapacity());
+            this(liquid,definitions,gasReserves,contactCapacity,0);
         }
         Workspace(VulkanLiquidStateLayout liquid,MechanicalDefinitions definitions,GasReserves gasReserves,int contactCapacity,int thermalContactCapacity) {
             this(liquid,definitions,gasReserves,contactCapacity,thermalContactCapacity,0);
@@ -734,8 +734,14 @@ final class VulkanLiquidRegion implements AutoCloseable {
                         }
                         if(error==0) {
                             capacityStage="accepted volumes/material routes/gather/future gas geometry";
-                            var body=candidate.continueBatch((command,input,output,errors,staging,stack)->
-                                    transport.recordFinish(command,parameters.gravity()>0?-1:parameters.gravity()<0?1:0),transport.bodies.changed().offset(),4);
+                            var body=candidate.continueBatch((command,input,output,errors,staging,stack)->{
+                                transport.recordFinish(command,parameters.gravity()>0?-1:parameters.gravity()<0?1:0);
+                                if(transport.successor!=null){
+                                    VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT,stack);
+                                    VulkanRegionStorage.copy(command,output,transport.successor.geometry.changed().offset(),output,transport.bodies.changed().offset()+4,4,stack);
+                                }
+                            },transport.bodies.changed().offset(),transport.successor==null?4:8);
+                            int futureChanged=transport.successor==null?0:body.feedback().getInt(4);
                             int bodyRounds=4;
                             while(body.error()==0&&body.feedback().order(ByteOrder.LITTLE_ENDIAN).getInt(0)!=0) {
                                 if(bodyRounds>=transport.bodies.vertices())throw new IllegalStateException("Mechanical connectivity did not converge");
@@ -743,12 +749,12 @@ final class VulkanLiquidRegion implements AutoCloseable {
                             }
                             error=body.error();
                             if(error==0&&transport.successor!=null) {
-                                var successor=transport.successor;var changed=ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);candidate.read(successor.geometry.changed().offset(),changed);
+                                var successor=transport.successor;
                                 int roundsFuture=4;
-                                while(changed.getInt(0)!=0&&error==0) {
+                                while(futureChanged!=0&&error==0) {
                                     if(roundsFuture>=liquid.cellCount())throw new IllegalStateException("Future gas connectivity did not converge");
                                     var next=candidate.continueBatch((command,input,output,errors,staging,stack)->kernels.futureGasGeometry.recordConnectivity(command,successor.geometry,4),successor.geometry.changed().offset(),4);
-                                    error=next.error();changed=next.feedback().order(ByteOrder.LITTLE_ENDIAN);roundsFuture+=4;
+                                    error=next.error();futureChanged=next.feedback().getInt(0);roundsFuture+=4;
                                 }
                             }
                             traceStage("transport-momentum-future-geometry-bodies",stageMark);if(error==0)capacityStage="gas lineage/remap/common energy";
@@ -1343,16 +1349,17 @@ final class VulkanLiquidRegion implements AutoCloseable {
             },flow.requiredPairsOffset(),4);
             if(batch.error()!=0)return batch.error();if(batch.feedback().getInt(0)==0)return 0;
             capacityStage="gas aperture Schur assembly";
-            batch=candidate.continueBatch((command,input,output,errors,staging,stack)->kernels.timed(command,"aperture-schur-prepare",()->kernels.flowSchurPressure.recordPrepare(command,schurPressure,q)),schurPressure.feedbackOffset(),4);
-            if(batch.error()!=0)return batch.error();int coreCount=batch.feedback().getInt(0);
-            if(Boolean.getBoolean("mmm.gpuMechanicalStages"))System.out.printf(java.util.Locale.ROOT,"gas_schur core=%d solver=%s%n",coreCount,coreCount<=VulkanGasFlowSchurPressure.DENSE_ROWS?"dense":"pcg");
+            batch=candidate.continueBatch((command,input,output,errors,staging,stack)->kernels.timed(command,"aperture-schur-prepare",()->kernels.flowSchurPressure.recordPrepare(command,schurPressure,q,(label,body)->kernels.timed(command,label,body))),schurPressure.feedbackOffset(),8);
+            if(batch.error()!=0)return batch.error();int coreCount=batch.feedback().getInt(0),groupCount=batch.feedback().getInt(4);
+            if(Boolean.getBoolean("mmm.gpuMechanicalStages"))System.out.printf(java.util.Locale.ROOT,"gas_schur core=%d edges=%d solver=%s%n",coreCount,groupCount,coreCount<=VulkanGasFlowSchurPressure.DENSE_ROWS?"dense":"pcg");
             if(coreCount>VulkanGasFlowSchurPressure.DENSE_ROWS){
-                batch=candidate.continueBatch((command,input,output,errors,staging,stack)->{kernels.flowSchurPressure.recordCoreInitialize(command,schurPressure,coreCount);kernels.flowSchurPressure.recordCoreIterations(command,schurPressure,q,coreCount,8);},flow.column(VulkanGasFlow.Field.CONTROL).offset()+24,8);
+                batch=candidate.continueBatch((command,input,output,errors,staging,stack)->{kernels.timed(command,"aperture-schur-csr",()->kernels.flowSchurPressure.recordComplete(command,schurPressure,q,groupCount));kernels.flowSchurPressure.recordCoreInitialize(command,schurPressure,coreCount);kernels.flowSchurPressure.recordCoreIterations(command,schurPressure,q,coreCount,8);},flow.column(VulkanGasFlow.Field.CONTROL).offset()+24,8);
                 int scheduled=8;while(batch.error()==0&&batch.feedback().getDouble(0)!=0&&scheduled<200){int count=Math.min(8,200-scheduled);batch=candidate.continueBatch((command,input,output,errors,staging,stack)->kernels.flowSchurPressure.recordCoreIterations(command,schurPressure,q,coreCount,count),flow.column(VulkanGasFlow.Field.CONTROL).offset()+24,8);scheduled+=count;}
                 if(batch.error()!=0)return batch.error();
             }
             capacityStage="gas aperture core solve/back substitution";
             batch=candidate.continueBatch((command,input,output,errors,staging,stack)->{
+                if(coreCount<=VulkanGasFlowSchurPressure.DENSE_ROWS)kernels.timed(command,"aperture-schur-csr",()->kernels.flowSchurPressure.recordComplete(command,schurPressure,q,groupCount));
                 if(coreCount>0&&coreCount<=VulkanGasFlowSchurPressure.DENSE_ROWS)kernels.timed(command,"aperture-schur-factor-solve",()->kernels.flowSchurPressure.recordDense(command,schurPressure,q));
                 else if(coreCount>0)kernels.flowSchurPressure.recordCoreFinish(command,schurPressure,coreCount);
                 kernels.timed(command,"aperture-schur-backsub-residual",()->kernels.flowSchurPressure.recordFinish(command,schurPressure,q));

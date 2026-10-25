@@ -9,7 +9,7 @@ layout(binding=1,std430) buffer Errors{uint errors;};
 layout(push_constant) uniform Params{int header;int stage;int count;}p;
 const int ROUTES=0,ES=1,ET=2,EW=3,EG=4,HASH=5,LIVE=6,HG=7,GS=8,GT=9,GW=10,GO=11,GF=12,
  GC=13,GOFF=14,GCU=15,GE=16,SC=17,SO=18,SCU=19,SG=20,TC=21,TO=22,TCU=23,TG=24,
- RETAINED=25,FUTURE=26,ESCAPED=27,DISPATCH=29;
+ RETAINED=25,FUTURE=26,ESCAPED=27,DISPATCH=29,LONG_ROWS=30;
 shared double partial[128],maximum[128];shared int owners[128];shared int groupValid;
 int h(int n){return int(words[p.header+n]);}int f(int n){return h(32+n);}
 double number(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
@@ -31,7 +31,7 @@ bool fullFixed(int a,int b,int axis){
 double liquidRoute(int c,int slot){return ldexp(double(integer(h(14)+2*(7*c+slot))),h(15))*number(p.header+80);}
 void initialize(int id){
  if(id<h(6))words[f(HASH)+id]=0u;
- if(id==0){words[f(LIVE)]=0u;words[f(LIVE)+1]=0u;}
+ if(id==0)for(int i=0;i<4;i++)words[f(LIVE)+i]=0u;
  if(id<h(5)){words[f(GC)+id]=0u;words[f(GCU)+id]=0u;}
  if(id<h(4)+2){words[f(SC)+id]=0u;words[f(SCU)+id]=0u;}
  if(id<h(3)+1){words[f(TC)+id]=0u;words[f(TCU)+id]=0u;}
@@ -127,55 +127,66 @@ void scatterGroups(int group){
  uint a=words[f(SO)+source]+atomicAdd(words[f(SCU)+source],1u),b=words[f(TO)+target]+atomicAdd(words[f(TCU)+target],1u);
  words[f(SG)+int(a)]=uint(group);words[f(TG)+int(b)]=uint(group);
 }
-void inheritedControls(int source,int lane){
+double rowSum(int lane,double value,int rowStride){if(rowStride==1)return value;reduceSum(lane,value);double answer=partial[0];barrier();return answer;}
+void inheritedControls(int source,int lane,int rowStride){
  int begin=int(words[f(SO)+source]),end=int(words[f(SO)+source+1]);
  double sum=0.0,correction=0.0,largest=-1.0;int pivot=2147483647;
- for(int at=begin+lane;at<end;at+=128){int g=int(words[f(SG)+at]);double weight=number(f(GW)+2*g);add(sum,correction,weight);if(weight>largest||(weight==largest&&g<pivot)){largest=weight;pivot=g;}}
- reduceSum(lane,sum);double total=partial[0];reduceOwner(lane,largest,pivot);pivot=owners[0];
+ for(int at=begin+lane;at<end;at+=rowStride){int g=int(words[f(SG)+at]);double weight=number(f(GW)+2*g);add(sum,correction,weight);if(weight>largest||(weight==largest&&g<pivot)){largest=weight;pivot=g;}}
+ double total=rowSum(lane,sum,rowStride);if(rowStride>1){reduceOwner(lane,largest,pivot);pivot=owners[0];barrier();}
  double original=source<2?total:number(h(16)+2*(source-2));
  if(end==begin){if(lane==0&&source>=2&&source-2<int(words[h(17)])&&words[h(18)+source-1]>words[h(18)+source-2])invalid();return;}
  sum=0.0;correction=0.0;
- for(int at=begin+lane;at<end;at+=128){int g=int(words[f(SG)+at]);if(g==pivot)continue;double value=original*(number(f(GW)+2*g)/total);put(f(GO)+2*g,value);add(sum,correction,value);}
- reduceSum(lane,sum);if(lane==0){double rest=original-partial[0];if(!(finite(rest)&&rest>0.0))invalid();put(f(GO)+2*pivot,rest);}
+ for(int at=begin+lane;at<end;at+=rowStride){int g=int(words[f(SG)+at]);if(g==pivot)continue;double value=original*(number(f(GW)+2*g)/total);put(f(GO)+2*g,value);add(sum,correction,value);}
+ double assigned=rowSum(lane,sum,rowStride);if(lane==0){double rest=original-assigned;if(!(finite(rest)&&rest>0.0))invalid();put(f(GO)+2*pivot,rest);}
 }
-void futureControls(int target,int lane){
+void futureControls(int target,int lane,int rowStride){
  int begin=int(words[f(TO)+target]),end=int(words[f(TO)+target+1]);
- if(target==0){for(int at=begin+lane;at<end;at+=128){int g=int(words[f(TG)+at]);put(f(GF)+2*g,number(f(GO)+2*g));}return;}
+ if(target==0){for(int at=begin+lane;at<end;at+=rowStride){int g=int(words[f(TG)+at]);put(f(GF)+2*g,number(f(GO)+2*g));}return;}
  double sum=0.0,correction=0.0,largest=-1.0;int pivot=2147483647;
- for(int at=begin+lane;at<end;at+=128){int g=int(words[f(TG)+at]);double value=number(f(GO)+2*g);add(sum,correction,value);if(value>largest||(value==largest&&g<pivot)){largest=value;pivot=g;}}
- reduceSum(lane,sum);double total=partial[0];reduceOwner(lane,largest,pivot);pivot=owners[0];
+ for(int at=begin+lane;at<end;at+=rowStride){int g=int(words[f(TG)+at]);double value=number(f(GO)+2*g);add(sum,correction,value);if(value>largest||(value==largest&&g<pivot)){largest=value;pivot=g;}}
+ double total=rowSum(lane,sum,rowStride);if(rowStride>1){reduceOwner(lane,largest,pivot);pivot=owners[0];barrier();}
  sum=0.0;correction=0.0;int first=int(words[h(19)+target]),last=int(words[h(19)+target+1]);
- for(int at=first+lane;at<last;at+=128)add(sum,correction,number(h(11)+2*int(words[h(20)+at])));
- reduceSum(lane,sum);double volume=partial[0];barrier();
+ for(int at=first+lane;at<last;at+=rowStride)add(sum,correction,number(h(11)+2*int(words[h(20)+at])));
+ double volume=rowSum(lane,sum,rowStride);
  if(end==begin){if(lane==0&&volume>0.0)invalid();return;}
  sum=0.0;correction=0.0;
- for(int at=begin+lane;at<end;at+=128){int g=int(words[f(TG)+at]);if(g==pivot)continue;double value=volume*(number(f(GO)+2*g)/total);put(f(GF)+2*g,value);add(sum,correction,value);}
- reduceSum(lane,sum);if(lane==0){double rest=volume-partial[0];if(!(finite(rest)&&rest>0.0))invalid();put(f(GF)+2*pivot,rest);}
+ for(int at=begin+lane;at<end;at+=rowStride){int g=int(words[f(TG)+at]);if(g==pivot)continue;double value=volume*(number(f(GO)+2*g)/total);put(f(GF)+2*g,value);add(sum,correction,value);}
+ double assigned=rowSum(lane,sum,rowStride);if(lane==0){double rest=volume-assigned;if(!(finite(rest)&&rest>0.0))invalid();put(f(GF)+2*pivot,rest);}
 }
-void sourceVolumes(int node,int lane){
+void sourceVolumes(int node,int lane,int rowStride){
  int begin=int(words[f(SO)+node+2]),end=int(words[f(SO)+node+3]);double oldVolume=0.0,newVolume=0.0,escaped=0.0;
- for(int at=begin+lane;at<end;at+=128){int g=int(words[f(SG)+at]);double old=number(f(GO)+2*g);if(words[f(GT)+g]==0u)escaped+=old;else{oldVolume+=old;newVolume+=number(f(GF)+2*g);}}
- reduceSum(lane,oldVolume);if(lane==0)put(f(RETAINED)+2*node,partial[0]);
- reduceSum(lane,newVolume);if(lane==0)put(f(FUTURE)+2*node,partial[0]);
- reduceSum(lane,escaped);if(lane==0){double initial=number(h(16)+2*node);put(f(ESCAPED)+2*node,initial>0.0?clamp(partial[0]/initial,0.0LF,1.0LF):0.0LF);}
+ for(int at=begin+lane;at<end;at+=rowStride){int g=int(words[f(SG)+at]);double old=number(f(GO)+2*g);if(words[f(GT)+g]==0u)escaped+=old;else{oldVolume+=old;newVolume+=number(f(GF)+2*g);}}
+ oldVolume=rowSum(lane,oldVolume,rowStride);if(lane==0)put(f(RETAINED)+2*node,oldVolume);
+ newVolume=rowSum(lane,newVolume,rowStride);if(lane==0)put(f(FUTURE)+2*node,newVolume);
+ escaped=rowSum(lane,escaped,rowStride);if(lane==0){double initial=number(h(16)+2*node);put(f(ESCAPED)+2*node,initial>0.0?clamp(escaped/initial,0.0LF,1.0LF):0.0LF);}
+}
+bool longSource(int source){return words[f(SO)+source+1]-words[f(SO)+source]>16u;}
+bool longTarget(int target){return words[f(TO)+target+1]-words[f(TO)+target]>16u||(target>0&&words[h(19)+target+1]-words[h(19)+target]>16u);}
+void classifyControls(int id){
+ if(id<int(words[h(17)])+2&&longSource(id)){uint slot=atomicAdd(words[f(LIVE)+2],1u);words[f(LONG_ROWS)+slot]=uint(id);}
+ if(id<=int(words[h(21)])&&longTarget(id)){uint slot=atomicAdd(words[f(LIVE)+3],1u);words[f(LONG_ROWS)+h(4)+2+int(slot)]=uint(id);}
 }
 void prepareDispatch(){
  int n=groupCount(),oldNodes=int(words[h(17)]),newNodes=int(words[h(21)]);
- int sizes[5]=int[5](int(words[f(LIVE)+1]),(n+127)/128,oldNodes+2,newNodes+1,oldNodes);
- for(int i=0;i<5;i++){int total=errors==0u?sizes[i]:0,at=f(DISPATCH)+3*i;words[at]=uint(min(total,65535));words[at+1]=uint(max(1,(total+65534)/65535));words[at+2]=1u;}
+ int sizes[7]=int[7](int(words[f(LIVE)+1]),(n+127)/128,int(words[f(LIVE)+2]),int(words[f(LIVE)+3]),int(words[f(LIVE)+2]),(oldNodes+2+127)/128,(newNodes+1+127)/128);
+ for(int i=0;i<7;i++){int total=errors==0u?sizes[i]:0,at=f(DISPATCH)+3*i;words[at]=uint(min(total,65535));words[at+1]=uint(max(1,(total+65534)/65535));words[at+2]=1u;}
 }
 void main(){
  int group=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*group+lane;
  if(p.stage==12){if(id==0)prepareDispatch();return;}
  if(p.stage==4){if(id==0&&groupCount()>h(5))atomicOr(errors,64u);return;}
  if(p.stage==7||(p.stage>=9&&p.stage<=11)){
-  if(lane==0)groupValid=errors==0u&&group<p.count&&(p.stage!=7||group<groupCount())&&(p.stage!=10||group<=int(words[h(21)]))&&(p.stage!=9||group<int(words[h(17)])+2)&&(p.stage!=11||group<int(words[h(17)]))?1:0;
+  if(lane==0)groupValid=errors==0u&&group<int(words[f(LIVE)+(p.stage==7?1:p.stage==10?3:2)])?1:0;
   barrier();if(groupValid==0)return;
-  if(p.stage==7)weights(int(words[f(HASH)+group]),lane);else if(p.stage==9)inheritedControls(group,lane);else if(p.stage==10)futureControls(group,lane);else sourceVolumes(group,lane);
+  if(p.stage==7)weights(int(words[f(HASH)+group]),lane);else if(p.stage==10)futureControls(int(words[f(LONG_ROWS)+h(4)+2+group]),lane,128);else{int source=int(words[f(LONG_ROWS)+group]);if(p.stage==9)inheritedControls(source,lane,128);else if(source>=2)sourceVolumes(source-2,lane,128);}
   return;
  }
  if(id>=p.count)return;
  if(p.stage==0){initialize(id);return;}if(errors!=0u)return;
+ if(p.stage==14){if(id<int(words[h(17)])+2&&!longSource(id))inheritedControls(id,0,1);return;}
+ if(p.stage==15){if(id<=int(words[h(21)])&&!longTarget(id))futureControls(id,0,1);return;}
+ if(p.stage==16){if(id<int(words[h(17)])&&!longSource(id+2))sourceVolumes(id,0,1);return;}
+ if(p.stage==17){classifyControls(id);return;}
  if(p.stage==1)transport(id);else if(p.stage==2)makeEdges(id);else if(p.stage==3)insertEdge(id);
  else if(p.stage==13)shortWeights(id);else if(p.stage==5)countEdges(id);else if(p.stage==6)scatterEdges(id);else scatterGroups(id);
 }

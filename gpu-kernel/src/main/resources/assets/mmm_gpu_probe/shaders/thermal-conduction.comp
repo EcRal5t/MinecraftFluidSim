@@ -152,10 +152,12 @@ void prepareTile(int tile){
     while(lo<hi){int mid=(lo+hi)/2;if(get(TILE_OFFSETS,mid+1)<=tile)lo=mid+1;else hi=mid;}
     put(TILE_OWNERS,tile,lo);
 }
+dvec2 sampleData(int point,bool fluxValue){int header=h(76),data=int(words[header+48+31])+8*point+(fluxValue?4:0);return dvec2(raw(data),raw(data+2));}
 void reduceTile(int tile,int lane,int operation){
     int row=get(TILE_OWNERS,tile),entry=get(DEGREE_OFFSETS,row)+128*(tile-get(TILE_OFFSETS,row))+lane;
-    double value=0.0;
-    if(entry<get(DEGREE_OFFSETS,row+1)){
+    double value=0.0;dvec2 sampled=dvec2(0.0);
+    if(h(7)==2){if(entry<get(DEGREE_OFFSETS,row+1))sampled=sampleData(get(INCIDENT,entry),operation==23);}
+    else if(entry<get(DEGREE_OFFSETS,row+1)){
         int edge=get(INCIDENT,entry),a=get(CONTACT_A,edge),b=get(CONTACT_B,edge),other=a==row?b:a;
         double g=num(CONTACT_G,edge);
         if(operation==22)value=g;
@@ -168,7 +170,7 @@ void reduceTile(int tile,int lane,int operation){
             value=-p.dt*g*num(field,offset+other)/(num(ROOT_CP,row)*num(ROOT_CP,other));
         }
     }
-    scratch[lane]=dvec4(value,0.0,0.0,0.0);barrier();
+    scratch[lane]=h(7)==2?dvec4(sampled,0.0,0.0):dvec4(value,0.0,0.0,0.0);barrier();
     for(int width=64;width>0;width/=2){
         if(lane<width){dvec2 a=scratch[lane].xy,b=scratch[lane+width].xy;a=add(a,b.x);a=add(a,b.y);scratch[lane]=dvec4(a,0.0,0.0);}barrier();
     }
@@ -185,7 +187,10 @@ dvec4 prepareOwner(int row){
     double minimum=sum.x+sum.y;if(!(minimum>0.0)||!finite(minimum))invalid();
     dvec2 g=dvec2(0.0);
     if(get(DEGREE_COUNTS,row)>128)g=tileSum(row);
-    else for(int i=get(DEGREE_OFFSETS,row);i<get(DEGREE_OFFSETS,row+1);i++)g=add(g,num(CONTACT_G,get(INCIDENT,i)));
+    else for(int i=get(DEGREE_OFFSETS,row);i<get(DEGREE_OFFSETS,row+1);i++){
+        if(h(7)==2){dvec2 x=sampleData(get(INCIDENT,i),false);g=add(g,x.x);g=add(g,x.y);}
+        else g=add(g,num(CONTACT_G,get(INCIDENT,i)));
+    }
     double degree=g.x+g.y;store(DEGREE,row,degree);store(MIN_CP,row,minimum);store(ROOT_CP,row,sqrt(minimum));
     v=dvec4(num(INITIAL_T,row),num(INITIAL_T,row),minimum,2.0*p.dt*degree/minimum);return v;
 }
@@ -195,7 +200,7 @@ void chooseMode(int lane){
     for(int block=lane;block<max(1,((h(7)!=0?get(MODE,1):contacts())+127)/128);block+=128){dvec4 b=loadPartial(BATH_PARTIALS,block);v.x=min(v.x,b.x);v.y=max(v.y,b.y);}
     v=reduce(v,0);if(lane!=0)return;
     store(SUMMARY,0,v.x);store(SUMMARY,1,v.y);store(SUMMARY,2,v.z);
-    int mode=owners()==0||contacts()==0||v.y-v.x<=resolution()?0:v.w>double(h(5))?9:max(1,int(ceil(v.w)));
+    int mode=owners()==0||(h(7)==2?v.w==0.0:contacts()==0)||v.y-v.x<=resolution()?0:v.w>double(h(5))?9:max(1,int(ceil(v.w)));
     put(MODE,0,mode);
 }
 void explicitDispatch(int lane){
@@ -207,13 +212,14 @@ void explicitDispatch(int lane){
 }
 void flux(int edge,double dt,int slot){
     if(edge>=contacts())return;int a=get(CONTACT_A,edge),b=get(CONTACT_B,edge);
-    double other=b<0?num(BATH_T,edge):num(TEMP,b),q=num(CONTACT_G,edge)*(other-num(TEMP,a))*dt;
+    double other=b<0?num(BATH_T,edge):num(TEMP,b);precise double q=num(CONTACT_G,edge)*(other-num(TEMP,a))*dt;
     store(FLUX,edge,q);if(b<0)store(RESERVOIR,get(BATH_INDEX,edge)*h(5)+slot,q);
 }
 double ownerFlux(int row){
     if(get(DEGREE_COUNTS,row)>128){dvec2 value=tileSum(row);return value.x+value.y;}
     dvec2 delta=dvec2(0.0);for(int i=get(DEGREE_OFFSETS,row);i<get(DEGREE_OFFSETS,row+1);i++){
-        int edge=get(INCIDENT,i);delta=add(delta,(get(CONTACT_A,edge)==row?1.0:-1.0)*num(FLUX,edge));}
+        int edge=get(INCIDENT,i);if(h(7)==2){dvec2 x=sampleData(edge,true);delta=add(delta,x.x);delta=add(delta,x.y);}
+        else delta=add(delta,(get(CONTACT_A,edge)==row?1.0:-1.0)*num(FLUX,edge));}
     return delta.x+delta.y;
 }
 void explicitUpdate(int row){
@@ -311,6 +317,7 @@ void main(){
     else if(p.stage==16||p.stage==17){if(num(CONTROL,p.stage==17?3:7)!=0.0)product(id,p.stage==17);}
     else if(p.stage==20){if(id<p.count)prepareTile(id);}
     else if(p.stage==21){if(id<h(0))put(TILE_COUNTS,id,id<owners()&&get(DEGREE_COUNTS,id)>128?(get(DEGREE_COUNTS,id)+127)/128:0);}
+    else if(p.stage==32){if(id<h(6)&&(get(MODE,0)==0||get(MODE,0)>h(5)))for(int slot=0;slot<h(5);slot++)store(RESERVOIR,id*h(5)+slot,0.0);}
     else if(p.stage==30){if(id<h(6))for(int slot=0;slot<h(5);slot++)store(RESERVOIR,id*h(5)+slot,0.0);}
     else if(p.stage==27||p.stage==28){if(num(CONTROL,p.stage==28?3:7)!=0.0)finishLongProduct(id,p.stage==28);}
 
