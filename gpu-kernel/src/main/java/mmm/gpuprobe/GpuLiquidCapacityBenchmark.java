@@ -23,7 +23,7 @@ public final class GpuLiquidCapacityBenchmark {
         try(var context=new VulkanDeviceContext(device,true,true);var solver=new VulkanLiquidCapacity(context)) {
             System.out.println("Device: "+context.deviceName());
             System.out.println("Integer capacity repair only, quantum=2^-40, divergent preferred inputs; excludes material routes, inventory/MAC and full steps.");
-            System.out.println("One solve per scene/grid, no warmup; uploads occur once before timing. Feedback reads status+rounds only; finish validates global feasibility.");
+            System.out.println("One solve per scene/grid, no warmup; uploads occur once before timing. Feedback reads status, rounds and phase; all final quotas are checked after timing.");
             System.out.println("scene,grid,status,rounds,wall_ms,gpu_ms,upload_B,readback_B,device_MiB");
             for(int grid:grids)for(boolean dam:new boolean[]{false,true}) {
                 if(!scene.equals("all")&&!scene.equals(dam?"dam":"full"))continue;
@@ -114,45 +114,20 @@ public final class GpuLiquidCapacityBenchmark {
                 candidate.commit();
             }
             try(var result=storage.capture()) {
-                if(flowRatio) {
-                    var column=layout.column(VulkanLiquidCapacityLayout.Field.ACCEPTED);
-                    var accepted=ByteBuffer.allocate(Math.toIntExact(column.bytes())).order(ByteOrder.LITTLE_ENDIAN);
-                    storage.read(result,column.offset(),accepted);long preferredOut=0,acceptedOut=0;
-                    for(int c=0;c<layout.cells();c++)for(int slot=1;slot<7;slot++) {
-                        preferredOut=Math.addExact(preferredOut,getLong(initial,layout,VulkanLiquidCapacityLayout.Field.PREFERRED,7*c+slot));
-                        acceptedOut=Math.addExact(acceptedOut,accepted.getLong(Math.toIntExact(8L*(7*c+slot))));
-                    }
-                    System.out.println("transport preferred_quanta="+preferredOut+" accepted_quanta="+acceptedOut+" ratio="+(preferredOut==0?1.0:(double)acceptedOut/preferredOut));
+                var column=layout.column(VulkanLiquidCapacityLayout.Field.ACCEPTED);
+                var accepted=ByteBuffer.allocate(Math.toIntExact(column.bytes())).order(ByteOrder.LITTLE_ENDIAN);
+                storage.read(result,column.offset(),accepted);
+                long moved=GpuLiquidCapacityReplay.verify(layout,initial,accepted,grid,grid,grid);
+                if(flowRatio){long preferred=0;
+                    for(int cell=0;cell<layout.cells();cell++)for(int slot=1;slot<7;slot++)preferred+=getLong(initial,layout,VulkanLiquidCapacityLayout.Field.PREFERRED,7*cell+slot);
+                    System.out.println("transport preferred_quanta="+preferred+" accepted_quanta="+moved+" ratio="+(preferred==0?1.0:(double)moved/preferred));
                 }
-                long sampledMoved=0;
-                for(int cell:new int[]{0,(grid/2-1)*grid+grid/2-1,layout.cells()-1})sampledMoved+=checkCell(storage,result,layout,grid,dam,cell);
-                System.out.println("checkpoint sampled_outgoing_quanta="+sampledMoved);
-                if(sampledMoved==0)throw new AssertionError("Capacity repair removed all sampled motion");
+                System.out.println("All source quotas, receiver bounds and finite-group capacities passed; moved_quanta="+moved);
             }
-            System.out.println("checkpoint quotas and receiver bounds passed; global feasibility checked by device finish");
             return true;
         }
     }
 
-    private static long checkCell(VulkanRegionStorage storage,VulkanRegionStorage.Capture capture,VulkanLiquidCapacityLayout layout,int grid,boolean dam,int c) {
-        var own=shares(storage,capture,layout,c);long sum=0;for(long value:own){if(value<0)throw new AssertionError("Negative accepted share");sum=Math.addExact(sum,value);}
-        int x=c%grid,y=c/grid%grid,z=c/(grid*grid);
-        if(sum!=quantity(grid,dam,x,y))throw new AssertionError("Accepted source quota differs at "+c);
-        long received=own[0];
-        for(int slot=1;slot<=6;slot++) {
-            int axis=(slot-1)/2,side=(slot&1)==1?-1:1;
-            int nx=x+(axis==0?side:0),ny=y+(axis==1?side:0),nz=z+(axis==2?side:0);
-            if(nx<0||ny<0||nz<0||nx>=grid||ny>=grid||nz>=grid)continue;
-            received+=shares(storage,capture,layout,(nz*grid+ny)*grid+nx)[((slot-1)^1)+1];
-        }
-        if(received<lower(grid,dam,x,y)||received>Q)throw new AssertionError("Accepted receiver bounds differ at "+c);
-        return sum-own[0];
-    }
-    private static long[] shares(VulkanRegionStorage storage,VulkanRegionStorage.Capture capture,VulkanLiquidCapacityLayout layout,int cell) {
-        var bytes=ByteBuffer.allocate(56).order(ByteOrder.LITTLE_ENDIAN);
-        storage.read(capture,layout.column(VulkanLiquidCapacityLayout.Field.ACCEPTED).offset()+56L*cell,bytes);
-        long[] values=new long[7];for(int i=0;i<7;i++)values[i]=bytes.getLong(8*i);return values;
-    }
     private static long quantity(int grid,boolean dam,int x,int y) {return !dam?Q:x>=grid/2||y>=grid/2?0:y==grid/2-1?Q/2:Q;}
     private static long lower(int grid,boolean dam,int x,int y) {return !dam?Q:x<grid/2&&y<grid/2-1?Q:0;}
     private static void putInt(ByteBuffer out,VulkanLiquidCapacityLayout layout,VulkanLiquidCapacityLayout.Field field,int index,int value) {out.putInt(Math.toIntExact(layout.column(field).offset()+4L*index),value);}

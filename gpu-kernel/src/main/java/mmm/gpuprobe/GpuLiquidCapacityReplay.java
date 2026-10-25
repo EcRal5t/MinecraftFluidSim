@@ -49,26 +49,31 @@ public final class GpuLiquidCapacityReplay {
                 }
                 var accepted=ByteBuffer.allocate(Math.toIntExact(layout.column(VulkanLiquidCapacityLayout.Field.ACCEPTED).bytes())).order(ByteOrder.LITTLE_ENDIAN);
                 try(var capture=storage.capture()){storage.read(capture,layout.column(VulkanLiquidCapacityLayout.Field.ACCEPTED).offset(),accepted);}
-                long[] received=new long[layout.cells()],groupTotals=new long[groups];long moved=0;
-                for(int c=0;c<layout.cells();c++){
-                    long sum=0;for(int slot=0;slot<7;slot++){
-                        long amount=accepted.getLong(8*(7*c+slot));if(amount<0)throw new AssertionError("Negative route at "+c);
-                        sum=Math.addExact(sum,amount);int target=slot==0?c:neighbor(c,slot-1,sx,sy,sz);
-                        if(amount>0&&target<0)throw new AssertionError("Route outside domain");
-                        if(target>=0)received[target]=Math.addExact(received[target],amount);if(slot>0)moved=Math.addExact(moved,amount);
-                    }
-                    if(sum!=value(initial,layout,VulkanLiquidCapacityLayout.Field.K,c))throw new AssertionError("Source quota at "+c);
-                }
-                for(int c=0;c<layout.cells();c++){
-                    if(received[c]<value(initial,layout,VulkanLiquidCapacityLayout.Field.LOWER,c)||received[c]>value(initial,layout,VulkanLiquidCapacityLayout.Field.UPPER,c))throw new AssertionError("Receiver bounds at "+c);
-                    int group=initial.getInt(Math.toIntExact(layout.column(VulkanLiquidCapacityLayout.Field.GROUP_ID).offset()+4L*c));
-                    if(group>=0)groupTotals[group]=Math.addExact(groupTotals[group],received[c]);
-                }
-                for(int g=0;g<groups;g++)if(groupTotals[g]>value(initial,layout,VulkanLiquidCapacityLayout.Field.GROUP_CAPACITY,g))throw new AssertionError("Finite group capacity at "+g);
-                if(moved==0)throw new AssertionError("Replay removed all transport");
+                long moved=verify(layout,initial,accepted,sx,sy,sz);
                 System.out.println("All source quotas, receiver bounds and finite-group capacities passed; moved_quanta="+moved);
             }
         }
+    }
+    static long verify(VulkanLiquidCapacityLayout layout,ByteBuffer initial,ByteBuffer accepted,int sx,int sy,int sz){
+        int groups=layout.gasGroups();
+        long[] received=new long[layout.cells()],groupTotals=new long[groups];long moved=0;
+        for(int c=0;c<layout.cells();c++){
+            long sum=0;for(int slot=0;slot<7;slot++){
+                long amount=accepted.getLong(8*(7*c+slot));if(amount<0)throw new AssertionError("Negative route at "+c);
+                sum=Math.addExact(sum,amount);int target=slot==0?c:neighbor(c,slot-1,sx,sy,sz);
+                if(amount>0&&target<0)throw new AssertionError("Route outside domain");
+                if(target>=0)received[target]=Math.addExact(received[target],amount);if(slot>0)moved=Math.addExact(moved,amount);
+            }
+            if(sum!=value(initial,layout,VulkanLiquidCapacityLayout.Field.K,c))throw new AssertionError("Source quota at "+c);
+        }
+        for(int c=0;c<layout.cells();c++){
+            if(received[c]<value(initial,layout,VulkanLiquidCapacityLayout.Field.LOWER,c)||received[c]>value(initial,layout,VulkanLiquidCapacityLayout.Field.UPPER,c))throw new AssertionError("Receiver bounds at "+c);
+            int group=initial.getInt(Math.toIntExact(layout.column(VulkanLiquidCapacityLayout.Field.GROUP_ID).offset()+4L*c));
+            if(group>=0)groupTotals[group]=Math.addExact(groupTotals[group],received[c]);
+        }
+        for(int g=0;g<groups;g++)if(groupTotals[g]>value(initial,layout,VulkanLiquidCapacityLayout.Field.GROUP_CAPACITY,g))throw new AssertionError("Finite group capacity at "+g);
+        if(moved==0)throw new AssertionError("Replay removed all transport");
+        return moved;
     }
     private static long value(ByteBuffer bytes,VulkanLiquidCapacityLayout layout,VulkanLiquidCapacityLayout.Field field,int index){return bytes.getLong(Math.toIntExact(layout.column(field).offset()+8L*index));}
     private static int neighbor(int c,int side,int sx,int sy,int sz){int[] xyz={c%sx,c/sx%sy,c/(sx*sy)},shape={sx,sy,sz};int axis=side/2;xyz[axis]+=(side&1)==0?-1:1;
