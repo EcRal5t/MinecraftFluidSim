@@ -22,7 +22,7 @@ public final class GpuThermalConductionBenchmark {
         try(var context=new VulkanDeviceContext(device,true,true);var conduction=new VulkanThermalConduction(context);
             var pressure=new VulkanPressureKernel(context,4096);var ledger=new VulkanEnergyLedger(context)){
             int owners=grid*grid*grid,edges=3*(grid-1)*grid*grid+2*grid*grid;long alignment=Math.max(8,context.storageOffsetAlignment());
-            var l=VulkanThermalConduction.layout(owners,owners,edges,VulkanThermalConduction.Tables.fromMaterials(List.of(material)),0,alignment);
+            var l=VulkanThermalConduction.layout(owners,owners,edges,VulkanThermalConduction.Tables.fromMaterials(List.of(material)),0,alignment,2*grid*grid);
             var accounting=VulkanEnergyLedger.layout(List.of(
                     new VulkanEnergyLedger.Stream(1,l.word(ENERGY_CHANGE),l.column(ENERGY_CHANGE).count(),2,1),
                     new VulkanEnergyLedger.Stream(1,l.word(RESERVOIR_CHANGE),l.column(RESERVOIR_CHANGE).count(),2,-1)),l.endOffset(),alignment);

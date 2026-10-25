@@ -26,7 +26,7 @@ final class VulkanThermalConduction implements AutoCloseable {
         DEGREE_COUNTS(4),DEGREE_OFFSETS(4),DEGREE_CURSORS(4),INCIDENT(4),DEGREE(8),FLUX(8),
         ENERGY_CHANGE(8),RESERVOIR_CHANGE(8),MODE(4),ACCEPTED(4),SUMMARY(8),PARTIALS(8),BATH_PARTIALS(8),DISPATCH(4),SCAN(4),
         STARTS(4),COLUMNS(4),VALUES(8),ROWS(4),PRESSURE(8),WORK(8),META(4),PROBLEM(8),CONTROL(8),PCG_PARTIALS(8),
-        LONG_FLAGS(4),LONG_OFFSETS(4),LONG_ROWS(4);
+        TILE_COUNTS(4),TILE_OFFSETS(4),TILE_OWNERS(4),TILE_PARTIALS(8),BATH_INDEX(4);
         final int width;Field(int width){this.width=width;}
     }
     /** Common knots retain every registered caloric break. Cp includes endpoint extension intervals. */
@@ -50,27 +50,29 @@ final class VulkanThermalConduction implements AutoCloseable {
         }
     }
     static final class Layout {
-        final int owners,terms,contacts;final Tables tables;
+        final int owners,terms,contacts,tiles,baths;final Tables tables;
         final VulkanLiquidStateLayout.Column header;final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);
         final long endOffset;
-        Layout(int owners,int terms,int contacts,Tables tables,long base,long alignment){
-            if(owners<1||terms<1||contacts<0||tables.materials()<1||base<0||alignment<8||(alignment&(alignment-1))!=0)
+        Layout(int owners,int terms,int contacts,Tables tables,long base,long alignment,int baths){
+            if(owners<1||terms<1||contacts<0||baths<0||tables.materials()<1||base<0||alignment<8||(alignment&(alignment-1))!=0)
                 throw new IllegalArgumentException("Invalid thermal conduction layout");
-            this.owners=owners;this.terms=terms;this.contacts=contacts;this.tables=tables;
+            this.owners=owners;this.terms=terms;this.contacts=contacts;this.tables=tables;this.baths=baths;
+            // Each long row has d>128 incidents, so ceil(d/128)<=d/64; all rows have at most 2*contacts incidents.
+            tiles=Math.toIntExact((contacts+31L)/32);
             long[] cursor={base};header=allocate(cursor,80,4,alignment);
             for(Field field:Field.values()){
                 int n=switch(field){
                     case COUNTS->3;
-                    case TERM_OFFSETS,DEGREE_OFFSETS,STARTS,LONG_OFFSETS->Math.addExact(owners,1);
+                    case TERM_OFFSETS,DEGREE_OFFSETS,STARTS,TILE_OFFSETS->Math.addExact(owners,1);
                     case TERM_MATERIAL,TERM_MASS->terms;
-                    case CONTACT_A,CONTACT_B,CONTACT_G,CONTACT_BATH_T,FLUX->contacts;
+                    case CONTACT_A,CONTACT_B,CONTACT_G,CONTACT_BATH_T,FLUX,BATH_INDEX->contacts;
                     case KNOTS->tables.knots().length;case MATERIAL_CP->tables.heatCapacity().length;
                     case MATERIAL_MIN_CP->tables.materials();
                     case INCIDENT->Math.multiplyExact(contacts,2);
-                    case ENERGY_CHANGE->Math.multiplyExact(owners,2);case RESERVOIR_CHANGE->Math.multiplyExact(contacts,ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
-                    case MODE,ACCEPTED->1;case SUMMARY->8;
+                    case ENERGY_CHANGE->Math.multiplyExact(owners,2);case RESERVOIR_CHANGE->Math.multiplyExact(baths,ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+                    case MODE->2;case ACCEPTED->1;case SUMMARY->8;
                     case PARTIALS->Math.multiplyExact((owners+127)/128,4);case BATH_PARTIALS->Math.multiplyExact(Math.max(1,(contacts+127)/128),4);
-                    case DISPATCH->9;case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(owners)/4);
+                    case DISPATCH->12;case TILE_OWNERS->tiles;case TILE_PARTIALS->2*tiles;case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(owners)/4);
                     case WORK->Math.multiplyExact(owners,5);case META->Math.multiplyExact(owners,2);
                     case PROBLEM->Math.addExact(Math.multiplyExact(owners,3),1);case CONTROL->16;
                     case PCG_PARTIALS->Math.multiplyExact((owners+255)/256,4);
@@ -86,7 +88,7 @@ final class VulkanThermalConduction implements AutoCloseable {
         ByteBuffer headerBytes(){
             var bytes=ByteBuffer.allocateDirect(320).order(ByteOrder.LITTLE_ENDIAN);
             bytes.putInt(0,owners).putInt(4,terms).putInt(8,contacts).putInt(12,tables.materials()).putInt(16,tables.segments());
-            bytes.putInt(20,ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+            bytes.putInt(20,ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS).putInt(24,baths);
             for(Field f:Field.values())bytes.putInt(4*(8+f.ordinal()),word(f));
             bytes.putDouble(288,ThermalTransport.CONDUCTION_RESOLUTION_K).putDouble(296,TEMPERATURE_TOLERANCE);
             return bytes;
@@ -109,8 +111,8 @@ final class VulkanThermalConduction implements AutoCloseable {
             var c=column(f);return new FlipKernelBindings.BufferRange(arena.buffer(),arena.offset()+c.offset(),c.bindingBytes());
         }
     }
-    static Layout layout(int ownerCapacity,int termCapacity,int contactCapacity,Tables tables,long scratchBase,long alignment){
-        return new Layout(ownerCapacity,termCapacity,contactCapacity,tables,scratchBase,alignment);
+    static Layout layout(int ownerCapacity,int termCapacity,int contactCapacity,Tables tables,long scratchBase,long alignment,int bathCapacity){
+        return new Layout(ownerCapacity,termCapacity,contactCapacity,tables,scratchBase,alignment,bathCapacity);
     }
     private final FlipKernelBindings bindings;private final VulkanPrefixScan scan;private FlipKernelBindings.BufferRange arena;
     VulkanThermalConduction(VulkanDeviceContext context){
@@ -122,77 +124,102 @@ final class VulkanThermalConduction implements AutoCloseable {
     }
     /** Actual contacts and live counts are supplied by the spatial sampler; no state leaves the arena. */
     void recordPrepare(VkCommandBuffer command,Layout l,double dt){
+        recordPrepare(command,l,dt,null);
+    }
+    void recordPrepare(VkCommandBuffer command,Layout l,double dt,VulkanStageTimings timings){
         if(!(Double.isFinite(dt)&&dt>0))throw new IllegalArgumentException("Invalid conduction duration");
-        stage(command,l,dt,0,0,0,l.owners,false);
-        stage(command,l,dt,1,0,0,Math.max(1,l.contacts),false);
-        scan.record(command,l.owners,l.word(Field.DEGREE_COUNTS),l.word(Field.DEGREE_OFFSETS),l.word(Field.SCAN));
-        stage(command,l,dt,2,0,0,l.contacts,false);
-        stage(command,l,dt,3,0,0,l.owners,false);
-        stage(command,l,dt,4,0,0,128,false);
-        scan.record(command,l.owners,l.word(Field.LONG_FLAGS),l.word(Field.LONG_OFFSETS),l.word(Field.SCAN));
-        stage(command,l,dt,20,0,0,l.owners,false);
+        timed(timings,command,"thermal-clear",()->stage(command,l,dt,0,0,0,l.owners,false));
+        timed(timings,command,"thermal-contact-count-bath-compact",()->stage(command,l,dt,1,0,0,Math.max(1,l.contacts),false));
+        timed(timings,command,"thermal-bath-clear",()->stage(command,l,dt,30,0,0,l.baths,false));
+        timed(timings,command,"thermal-adjacency",()->{
+            scan.record(command,l.owners,l.word(Field.DEGREE_COUNTS),l.word(Field.DEGREE_OFFSETS),l.word(Field.SCAN));
+            stage(command,l,dt,2,0,0,l.contacts,false);
+        });
+        timed(timings,command,"thermal-owner-tiles",()->{
+            stage(command,l,dt,21,0,0,l.owners,false);
+            scan.record(command,l.owners,l.word(Field.TILE_COUNTS),l.word(Field.TILE_OFFSETS),l.word(Field.SCAN));
+            stage(command,l,dt,20,0,0,Math.max(1,l.tiles),false);
+        });
+        timed(timings,command,"thermal-owner-degrees",()->{
+            stage(command,l,dt,22,0,0,l.tiles,true);
+            stage(command,l,dt,3,0,0,l.owners,false);
+        });
+        timed(timings,command,"thermal-mode",()->{
+            stage(command,l,dt,4,0,0,128,false);
+        });
     }
     /** Up to the CPU model's stable explicit-substep budget, with zero-group dispatch after completion. */
     void recordExplicit(VkCommandBuffer command,Layout l,double dt){
         for(int step=0;step<ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS;step++){
             stage(command,l,dt,5,step,0,128,false);
             stage(command,l,dt,6,step,0,l.contacts,true);
+            stage(command,l,dt,23,step,0,l.tiles,true);
             stage(command,l,dt,7,step,0,l.owners,true);
         }
     }
     /** Assemble the nonlinear residual and positive caloric Jacobian; read MODE before invoking PCG. */
     void recordLinearize(VkCommandBuffer command,Layout l,double dt){
+        stage(command,l,dt,24,0,0,l.tiles,true);
         stage(command,l,dt,8,0,0,l.owners,false);stage(command,l,dt,9,0,0,128,false);
     }
     /** One damped Newton trial. ACCEPTED is one iff residual improves or reaches caloric resolution. */
     void recordTrial(VkCommandBuffer command,Layout l,double dt,double fraction){
         if(!(Double.isFinite(fraction)&&fraction>0&&fraction<=1))throw new IllegalArgumentException("Invalid thermal Newton fraction");
         stage(command,l,dt,10,0,fraction,l.owners,false);
+        stage(command,l,dt,25,0,0,l.tiles,true);
         stage(command,l,dt,11,0,0,l.owners,false);stage(command,l,dt,12,0,0,128,false);
         stage(command,l,dt,13,0,0,l.owners,false);
     }
     /** Publishes converged implicit contact fluxes; explicit energy is already present. */
     void recordFinish(VkCommandBuffer command,Layout l,double dt){
-        stage(command,l,dt,14,0,0,l.contacts,false);stage(command,l,dt,15,0,0,l.owners,false);
+        stage(command,l,dt,14,0,0,l.contacts,false);
+        stage(command,l,dt,26,0,0,l.tiles,true);stage(command,l,dt,15,0,0,l.owners,false);
     }
     VulkanPressureKernel.PressureOperator pressureOperator(Layout l,double dt){
         return new VulkanPressureKernel.PressureOperator(){
             public int liquidCount(){return l.owners;}public int matrixFreeFromRow(){return 0;}
             public void recordProduct(VkCommandBuffer command,boolean direction){
                 stage(command,l,dt,direction?17:16,0,0,l.owners,false);
-                stage(command,l,dt,direction?19:18,0,0,l.owners,true);
+                stage(command,l,dt,direction?19:18,0,0,l.tiles,true);
+                stage(command,l,dt,direction?28:27,0,0,l.owners,false);
             }
         };
     }
     /** Completes a stiff conduction solve inside the caller's private candidate. Failure leaves publication to the caller. */
     int solveImplicit(VulkanRegionStorage.Candidate candidate,Layout l,VulkanPressureKernel pressure,double dt){
+        return solveImplicit(candidate,l,pressure,dt,null);
+    }
+    int solveImplicit(VulkanRegionStorage.Candidate candidate,Layout l,VulkanPressureKernel pressure,double dt,VulkanStageTimings timings){
         var operator=this.pressureOperator(l,dt);
         for(int iteration=0;iteration<8;iteration++){
-            var status=candidate.continueBatch((command,input,output,errors,staging,stack)->this.recordLinearize(command,l,dt),l.column(MODE).offset(),4);
+            var status=candidate.continueBatch((command,input,output,errors,staging,stack)->timed(timings,command,"thermal-linearize",()->this.recordLinearize(command,l,dt)),l.column(MODE).offset(),4);
             require(status,"linearize");if(status.feedback().getInt(0)==VulkanThermalConduction.COMPLETE)return iteration;
             status=candidate.continueBatch((command,input,output,errors,staging,stack)->{
-                pressure.recordInitialize(command,l.owners,l.owners,200,null,null,operator);
-                pressure.recordIterations(command,l.owners,l.owners,200,null,null,8,operator);
+                timed(timings,command,"thermal-pcg-initialize",()->pressure.recordInitialize(command,l.owners,l.owners,200,null,null,operator));
+                timed(timings,command,"thermal-pcg-iterations",()->pressure.recordIterations(command,l.owners,l.owners,200,null,null,8,operator));
             },l.column(CONTROL).offset()+24,8);
             int recorded=8;require(status,"PCG");
             while(status.feedback().getDouble(0)!=0){
                 if(recorded>=200)throw new IllegalStateException("Conduction PCG exhausted its work budget");
-                status=candidate.continueBatch((command,input,output,errors,staging,stack)->pressure.recordIterations(command,l.owners,l.owners,200,null,null,8,operator),l.column(CONTROL).offset()+24,8);
+                status=candidate.continueBatch((command,input,output,errors,staging,stack)->timed(timings,command,"thermal-pcg-iterations",()->pressure.recordIterations(command,l.owners,l.owners,200,null,null,8,operator)),l.column(CONTROL).offset()+24,8);
                 recorded+=8;require(status,"PCG");
             }
-            status=candidate.continueBatch((command,input,output,errors,staging,stack)->pressure.recordFinish(command,l.owners,l.owners,200,null,null,operator),l.column(CONTROL).offset()+16,8);
+            status=candidate.continueBatch((command,input,output,errors,staging,stack)->timed(timings,command,"thermal-pcg-finish",()->pressure.recordFinish(command,l.owners,l.owners,200,null,null,operator)),l.column(CONTROL).offset()+16,8);
             require(status,"PCG finish");
             boolean accepted=false;
             for(int backtrack=0;backtrack<8;backtrack++){
                 double fraction=Math.scalb(1.0,-backtrack);
-                status=candidate.continueBatch((command,input,output,errors,staging,stack)->this.recordTrial(command,l,dt,fraction),l.column(ACCEPTED).offset(),4);
+                status=candidate.continueBatch((command,input,output,errors,staging,stack)->timed(timings,command,"thermal-caloric-trial",()->this.recordTrial(command,l,dt,fraction)),l.column(ACCEPTED).offset(),4);
                 require(status,"caloric trial");if(status.feedback().getInt(0)!=0){accepted=true;break;}
             }
             if(!accepted)throw new IllegalStateException("Conduction caloric Newton trial did not reduce the residual");
         }
-        var status=candidate.continueBatch((command,input,output,errors,staging,stack)->this.recordLinearize(command,l,dt),l.column(MODE).offset(),4);
+        var status=candidate.continueBatch((command,input,output,errors,staging,stack)->timed(timings,command,"thermal-linearize",()->this.recordLinearize(command,l,dt)),l.column(MODE).offset(),4);
         require(status,"final residual");if(status.feedback().getInt(0)!=VulkanThermalConduction.COMPLETE)throw new IllegalStateException("Conduction caloric work budget exhausted");
         return 8;
+    }
+    private static void timed(VulkanStageTimings timings,VkCommandBuffer command,String label,Runnable commands){
+        if(timings==null)commands.run();else timings.record(command,label,commands);
     }
     private static void require(VulkanRegionStorage.Candidate.BatchResult result,String stage){
         if(result.error()!=0)throw new IllegalStateException("Conduction "+stage+" error="+result.error());
@@ -206,7 +233,7 @@ final class VulkanThermalConduction implements AutoCloseable {
             if(indirect){
                 VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
-                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+l.column(Field.DISPATCH).offset()+(stage>=18?24:stage==6?0:12));
+                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+l.column(Field.DISPATCH).offset()+(stage==6?0:stage==7?12:stage==23?24:36));
             }else vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);

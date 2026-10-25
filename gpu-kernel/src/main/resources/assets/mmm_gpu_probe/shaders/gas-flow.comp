@@ -6,7 +6,8 @@ layout(binding=0,std430)buffer Candidate{uint words[];};layout(binding=1,std430)
 layout(push_constant)uniform Params{int header;int stage;int count;int unused;double dt;double cd;double ambientP;double ambientT;double ambientRho;uint64_t step;}p;
 const int FA=0,FB=1,FP=2,HASH=3,HF=4,HO=5,PA=6,PB=7,PC=8,PO=9,PCU=10,PF=11,PG=12,PQ=13,
  NC=14,NO=15,NCU=16,NP=17,STORAGE=18,ROOT=19,SCALE=20,STARTCOUNT=21,START=22,COLS=23,VALUES=24,ROWS=25,PRESSURE=26,WORK=27,META=28,PROBLEM=29,CONTROL=30,PARTIALS=31,
- RC=32,RS=33,RT=34,RW=35,AV=36,SC=37,SO=38,SCU=39,SR=40,TC=41,TO=42,TCU=43,TR=44,RV=45,MODE=46,STEP=47,DISPATCH=48;
+ RC=32,RS=33,RT=34,RW=35,AV=36,SC=37,SO=38,SCU=39,SR=40,TC=41,TO=42,TCU=43,TR=44,RV=45,MODE=46,STEP=47,DISPATCH=48,
+ LONG_ROWS=50,LONG_STARTS=51,TILE_OWNER=52,TILE_SUMS=53,LONG_COUNTS=54;
 shared double partial[128];shared int valid;
 int h(int i){return int(words[p.header+i]);}int f(int i){return h(16+i);}int eh(int i){return int(words[h(0)+i]);}int gh(int i){return int(words[h(1)+i]);}
 int gas(int i){return eh(16+i);}int nodes(){return int(words[gas(0)]);}int pairs(){return int(words[f(HO)+h(4)]);}
@@ -23,7 +24,7 @@ void initialize(int id){
  if(id<h(3)){words[f(PC)+id]=0u;words[f(PCU)+id]=0u;}
  if(id<h(2)){words[f(NC)+id]=0u;words[f(NCU)+id]=0u;words[f(STARTCOUNT)+id]=1u;words[f(ROWS)+id]=uint(-1);words[f(META)+id]=0u;}
  if(id<h(2)+2){words[f(SC)+id]=0u;words[f(SCU)+id]=0u;}if(id<h(2)+1){words[f(TC)+id]=0u;words[f(TCU)+id]=0u;}
- if(id==0){for(int i=0;i<6;i++){words[f(DISPATCH)+3*i]=0u;words[f(DISPATCH)+3*i+1]=1u;words[f(DISPATCH)+3*i+2]=1u;}if(nodes()!=int(words[gh(26)])||nodes()>h(2))invalid();words[f(STEP)]=uint(p.step);words[f(STEP)+1]=uint(p.step>>32);put(f(PROBLEM)+6*h(2),1e-8LF);}
+ if(id==0){words[f(LONG_COUNTS)]=0u;words[f(LONG_COUNTS)+1]=0u;for(int i=0;i<7;i++){words[f(DISPATCH)+3*i]=0u;words[f(DISPATCH)+3*i+1]=1u;words[f(DISPATCH)+3*i+2]=1u;}if(nodes()!=int(words[gh(26)])||nodes()>h(2))invalid();words[f(STEP)]=uint(p.step);words[f(STEP)+1]=uint(p.step>>32);put(f(PROBLEM)+6*h(2),1e-8LF);}
 }
 void faceKeys(int face){
  words[f(FA)+face]=uint(-1);words[f(FB)+face]=uint(-1);words[f(FP)+face]=0u;
@@ -100,16 +101,36 @@ void productSmall(int node,bool direction){
  double result=0.0;for(int at=begin;at<end;at++)result+=number(f(VALUES)+2*at)*vector(int(words[f(COLS)+at]),direction);
  put(f(WORK)+2*(2*h(2)+node),result);
 }
-void productLarge(int node,int lane,bool direction){
- int begin=int(words[f(START)+node]),end=int(words[f(START)+node+1]);if(end-begin<=128)return;
- double result=0.0;for(int at=begin+lane;at<end;at+=128)result+=number(f(VALUES)+2*at)*vector(int(words[f(COLS)+at]),direction);
- reduce(lane,result);if(lane==0)put(f(WORK)+2*(2*h(2)+node),partial[0]);
+void classifyLongRow(int node){
+ if(node>=nodes())return;int begin=int(words[f(START)+node]),end=int(words[f(START)+node+1]),length=end-begin;if(length<=128)return;
+ int row=int(atomicAdd(words[f(LONG_COUNTS)],1u)),count=(length+127)/128,first=int(atomicAdd(words[f(LONG_COUNTS)+1],uint(count)));
+ words[f(LONG_ROWS)+row]=uint(node);words[f(LONG_STARTS)+node]=uint(first);
+ for(int tile=0;tile<count;tile++)words[f(TILE_OWNER)+first+tile]=uint(node);
+}
+void longDispatch(){
+ for(int slot=5;slot<=6;slot++){int count=int(words[f(LONG_COUNTS)+(slot==5?1:0)]),at=f(DISPATCH)+3*slot;
+  words[at]=uint(min(count,65535));words[at+1]=uint(max(1,(count+65534)/65535));words[at+2]=1u;}
+}
+void productTile(int tile,int lane,bool direction){
+ if(tile>=int(words[f(LONG_COUNTS)+1]))return;int node=int(words[f(TILE_OWNER)+tile]);
+ int at=int(words[f(START)+node])+128*(tile-int(words[f(LONG_STARTS)+node]))+lane,end=int(words[f(START)+node+1]);
+ double result=at<end?number(f(VALUES)+2*at)*vector(int(words[f(COLS)+at]),direction):0.0LF;
+ reduce(lane,result);if(lane==0)put(f(TILE_SUMS)+2*tile,partial[0]);
+}
+void finishLongProduct(int row,int lane){
+ if(row>=int(words[f(LONG_COUNTS)]))return;int node=int(words[f(LONG_ROWS)+row]),first=int(words[f(LONG_STARTS)+node]);
+ int length=int(words[f(START)+node+1])-int(words[f(START)+node]),count=(length+127)/128;double sum=0.0;
+ for(int tile=lane;tile<count;tile+=128)sum+=number(f(TILE_SUMS)+2*(first+tile));
+ reduce(lane,sum);if(lane==0)put(f(WORK)+2*(2*h(2)+node),partial[0]);
 }
 void main(){int group=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*group+lane;
- if(p.stage==14||p.stage==15){if(group<nodes())productLarge(group,lane,p.stage==15);return;}
+ if(p.stage==14||p.stage==15||p.stage==20){if(lane==0)valid=errors==0u?1:0;barrier();if(valid==0)return;
+  if(p.stage==20)finishLongProduct(group,lane);else productTile(group,lane,p.stage==15);return;}
  if(p.stage==16||p.stage==17){if(id<p.count&&errors==0u)productSmall(id,p.stage==17);return;}
  if(p.stage==6||p.stage==8||p.stage==9||p.stage==11){if(lane==0)valid=errors==0u&&group<(p.stage==6?pairs():nodes())?1:0;barrier();if(valid==0)return;if(p.stage==6)pairConductance(group,lane);else if(p.stage==8)diagonal(group,lane);else if(p.stage==9)matrix(group,lane);else supply(group,lane);return;}
  if(id>=p.count)return;if(p.stage==0){initialize(id);return;}if(errors!=0u)return;
  if(p.stage==1)faceKeys(id);else if(p.stage==2)insertFace(id);else if(p.stage==3)makePair(id);else if(p.stage==4)countFace(id);else if(p.stage==5)scatterFace(id);
- else if(p.stage==7){if(id<pairs())adjacency(id);}else if(p.stage==10){if(id<pairs())flowPreference(id);}else if(id<int(words[f(RC)])){if(p.stage==12)route(id);else scatterRoute(id);}
+ else if(p.stage==7){if(id<pairs())adjacency(id);}else if(p.stage==10){if(id<pairs())flowPreference(id);}
+ else if(p.stage==18)classifyLongRow(id);else if(p.stage==19)longDispatch();
+ else if(id<int(words[f(RC)])){if(p.stage==12)route(id);else scatterRoute(id);}
 }

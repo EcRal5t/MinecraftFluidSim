@@ -52,9 +52,11 @@ void store(int field,int i,double x){if(!finite(x))invalid();uvec2 b=unpackDoubl
 #define META 39
 #define PROBLEM 40
 #define CONTROL 41
-#define LONG_FLAGS 43
-#define LONG_OFFSETS 44
-#define LONG_ROWS 45
+#define TILE_COUNTS 43
+#define TILE_OFFSETS 44
+#define TILE_OWNERS 45
+#define TILE_PARTIALS 46
+#define BATH_INDEX 47
 const double HUGE=1.7976931348623157e308LF;
 int owners(){return get(COUNTS,0);}int contacts(){return get(COUNTS,2);}
 double resolution(){return raw(p.header+72);}double tolerance(){return raw(p.header+74);}
@@ -105,25 +107,62 @@ void savePartial(int field,int block,dvec4 value){for(int i=0;i<4;i++)store(fiel
 dvec4 loadPartial(int field,int block){return dvec4(num(field,4*block),num(field,4*block+1),num(field,4*block+2),num(field,4*block+3));}
 void initialize(int row){
     put(DEGREE_COUNTS,row,0);put(CURSORS,row,0);store(CHANGE,2*row,0.0);store(CHANGE,2*row+1,0.0);
-    if(row==0){put(MODE,0,0);put(ACCEPTED,0,0);}
+    if(row==0){put(MODE,0,0);put(MODE,1,0);put(ACCEPTED,0,0);}
     if(row>=owners())return;
     double u=num(ENERGY,row),t=num(INITIAL_T,row);if(!finite(u)||!finite(t)||t<=0.0)invalid();
     store(BEFORE,row,u);store(TEMP,row,t);store(TRIAL_T,row,t);
 }
 dvec4 countContact(int edge){
     dvec4 v=dvec4(HUGE,-HUGE,HUGE,0.0);if(edge>=h(2))return v;
-    store(FLUX,edge,0.0);for(int s=0;s<h(5);s++)store(RESERVOIR,edge*h(5)+s,0.0);
+    store(FLUX,edge,0.0);
     if(!validContact(edge))return v;int a=get(CONTACT_A,edge),b=get(CONTACT_B,edge);
     atomicAdd(words[at(DEGREE_COUNTS)+a],1u);if(b>=0)atomicAdd(words[at(DEGREE_COUNTS)+b],1u);
-    else{v.x=num(BATH_T,edge);v.y=v.x;}return v;
+    else{
+        int bath=int(atomicAdd(words[at(MODE)+1],1u));put(BATH_INDEX,edge,bath);
+        if(bath>=h(6))atomicOr(errors,64u);
+        v.x=num(BATH_T,edge);v.y=v.x;
+    }return v;
 }
 void scatter(int edge){
     if(!validContact(edge))return;int a=get(CONTACT_A,edge),b=get(CONTACT_B,edge);
     int slot=int(atomicAdd(words[at(CURSORS)+a],1u));put(INCIDENT,get(DEGREE_OFFSETS,a)+slot,edge);
     if(b>=0){slot=int(atomicAdd(words[at(CURSORS)+b],1u));put(INCIDENT,get(DEGREE_OFFSETS,b)+slot,edge);}
 }
+dvec2 tileSum(int row){
+    dvec2 value=dvec2(0.0);for(int tile=get(TILE_OFFSETS,row);tile<get(TILE_OFFSETS,row+1);tile++){
+        value=add(value,num(TILE_PARTIALS,2*tile));value=add(value,num(TILE_PARTIALS,2*tile+1));
+    }return value;
+}
+void prepareTile(int tile){
+    int count=get(TILE_OFFSETS,h(0));
+    if(tile==0){put(DISPATCH,9,min(count,65535));put(DISPATCH,10,count==0?1:(count+65534)/65535);put(DISPATCH,11,1);}
+    if(tile>=count)return;int lo=0,hi=owners();
+    while(lo<hi){int mid=(lo+hi)/2;if(get(TILE_OFFSETS,mid+1)<=tile)lo=mid+1;else hi=mid;}
+    put(TILE_OWNERS,tile,lo);
+}
+void reduceTile(int tile,int lane,int operation){
+    int row=get(TILE_OWNERS,tile),entry=get(DEGREE_OFFSETS,row)+128*(tile-get(TILE_OFFSETS,row))+lane;
+    double value=0.0;
+    if(entry<get(DEGREE_OFFSETS,row+1)){
+        int edge=get(INCIDENT,entry),a=get(CONTACT_A,edge),b=get(CONTACT_B,edge),other=a==row?b:a;
+        double g=num(CONTACT_G,edge);
+        if(operation==22)value=g;
+        else if(operation==23||operation==26)value=(a==row?1.0:-1.0)*num(FLUX,edge);
+        else if(operation==24||operation==25){
+            int field=operation==24?TEMP:TRIAL_T;double otherT=other<0?num(BATH_T,edge):num(field,other);
+            value=g*(num(field,row)-otherT);
+        }else if(other>=0){
+            int field=operation==19?WORK:PRESSURE,offset=operation==19?h(0):0;
+            value=-p.dt*g*num(field,offset+other)/(num(ROOT_CP,row)*num(ROOT_CP,other));
+        }
+    }
+    scratch[lane]=dvec4(value,0.0,0.0,0.0);barrier();
+    for(int width=64;width>0;width/=2){
+        if(lane<width){dvec2 a=scratch[lane].xy,b=scratch[lane+width].xy;a=add(a,b.x);a=add(a,b.y);scratch[lane]=dvec4(a,0.0,0.0);}barrier();
+    }
+    if(lane==0){store(TILE_PARTIALS,2*tile,scratch[0].x);store(TILE_PARTIALS,2*tile+1,scratch[0].y);}
+}
 dvec4 prepareOwner(int row){
-    if(row<h(0))put(LONG_FLAGS,row,row<owners()&&get(DEGREE_COUNTS,row)>128?1:0);
     dvec4 v=dvec4(HUGE,-HUGE,HUGE,0.0);if(row>=owners())return v;
     int first=get(TERM_OFFSETS,row),last=get(TERM_OFFSETS,row+1);
     if(first<0||last<=first||last>get(COUNTS,1)){invalid();return v;}
@@ -132,7 +171,9 @@ dvec4 prepareOwner(int row){
         if(material<0||material>=h(3)||!(mass>0.0)||!finite(mass)){invalid();continue;}
         sum=add(sum,mass*num(MATERIAL_MIN_CP,material));}
     double minimum=sum.x+sum.y;if(!(minimum>0.0)||!finite(minimum))invalid();
-    dvec2 g=dvec2(0.0);for(int i=get(DEGREE_OFFSETS,row);i<get(DEGREE_OFFSETS,row+1);i++)g=add(g,num(CONTACT_G,get(INCIDENT,i)));
+    dvec2 g=dvec2(0.0);
+    if(get(DEGREE_COUNTS,row)>128)g=tileSum(row);
+    else for(int i=get(DEGREE_OFFSETS,row);i<get(DEGREE_OFFSETS,row+1);i++)g=add(g,num(CONTACT_G,get(INCIDENT,i)));
     double degree=g.x+g.y;store(DEGREE,row,degree);store(MIN_CP,row,minimum);store(ROOT_CP,row,sqrt(minimum));
     v=dvec4(num(INITIAL_T,row),num(INITIAL_T,row),minimum,2.0*p.dt*degree/minimum);return v;
 }
@@ -150,13 +191,15 @@ void explicitDispatch(int lane){
     int e=run?(contacts()+127)/128:0,n=run?(owners()+127)/128:0;
     put(DISPATCH,0,min(e,65535));put(DISPATCH,1,e==0?1:(e+65534)/65535);put(DISPATCH,2,1);
     put(DISPATCH,3,min(n,65535));put(DISPATCH,4,n==0?1:(n+65534)/65535);put(DISPATCH,5,1);
+    int tiles=run?get(TILE_OFFSETS,h(0)):0;put(DISPATCH,6,min(tiles,65535));put(DISPATCH,7,tiles==0?1:(tiles+65534)/65535);put(DISPATCH,8,1);
 }
 void flux(int edge,double dt,int slot){
     if(edge>=contacts())return;int a=get(CONTACT_A,edge),b=get(CONTACT_B,edge);
     double other=b<0?num(BATH_T,edge):num(TEMP,b),q=num(CONTACT_G,edge)*(other-num(TEMP,a))*dt;
-    store(FLUX,edge,q);if(b<0)store(RESERVOIR,edge*h(5)+slot,q);
+    store(FLUX,edge,q);if(b<0)store(RESERVOIR,get(BATH_INDEX,edge)*h(5)+slot,q);
 }
 double ownerFlux(int row){
+    if(get(DEGREE_COUNTS,row)>128){dvec2 value=tileSum(row);return value.x+value.y;}
     dvec2 delta=dvec2(0.0);for(int i=get(DEGREE_OFFSETS,row);i<get(DEGREE_OFFSETS,row+1);i++){
         int edge=get(INCIDENT,i);delta=add(delta,(get(CONTACT_A,edge)==row?1.0:-1.0)*num(FLUX,edge));}
     return delta.x+delta.y;
@@ -167,7 +210,8 @@ void explicitUpdate(int row){
 }
 double residual(int row,int temperatureField){
     double t=num(temperatureField,row);dvec2 loss=dvec2(0.0);
-    for(int i=get(DEGREE_OFFSETS,row);i<get(DEGREE_OFFSETS,row+1);i++){
+    if(get(DEGREE_COUNTS,row)>128)loss=tileSum(row);
+    else for(int i=get(DEGREE_OFFSETS,row);i<get(DEGREE_OFFSETS,row+1);i++){
         int edge=get(INCIDENT,i),a=get(CONTACT_A,edge),b=get(CONTACT_B,edge),other=a==row?b:a;
         double otherT=other<0?num(BATH_T,edge):num(temperatureField,other);
         loss=add(loss,num(CONTACT_G,edge)*(t-otherT));}
@@ -218,14 +262,21 @@ void product(int row,bool direction){
     if(row>=owners()||get(DEGREE_COUNTS,row)>128)return;
     double result=num(VALUES,row)*inputVector(row,direction)+matrixPart(row,0,1,direction);store(WORK,2*h(0)+row,result);
 }
-void longProduct(int row,int lane,bool direction){
+void finishLongProduct(int row,bool direction){
     if(row>=owners()||get(DEGREE_COUNTS,row)<=128)return;
-    double v=matrixPart(row,lane,128,direction);if(lane==0)v+=num(VALUES,row)*inputVector(row,direction);
-    dvec4 sum=reduce(dvec4(v,0.0,0.0,0.0),1);if(lane==0)store(WORK,2*h(0)+row,sum.x);
+    dvec2 sum=tileSum(row);sum=add(sum,num(VALUES,row)*inputVector(row,direction));store(WORK,2*h(0)+row,sum.x+sum.y);
 }
 void main(){
     int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*block+lane;
     if(owners()<0||owners()>h(0)||get(COUNTS,1)<0||get(COUNTS,1)>h(1)||contacts()<0||contacts()>h(2)){if(id==0)invalid();return;}
+    // All bath demand is counted even when a private candidate needs a larger bath column.
+    if((errors&64u)!=0u&&p.stage!=0&&p.stage!=1)return;
+    if(p.stage==18||p.stage==19||(p.stage>=22&&p.stage<=26)){
+        if(block>=get(TILE_OFFSETS,h(0)))return;
+        if(p.stage==18||p.stage==19){if(num(CONTROL,p.stage==19?3:7)==0.0)return;}
+        if(p.stage==26&&get(MODE,0)!=10)return;
+        reduceTile(block,lane,p.stage);return;
+    }
     if(p.stage==0){if(id<h(0))initialize(id);}
     else if(p.stage==1){dvec4 v=reduce(countContact(id),0);if(lane==0)savePartial(BATH_PARTIALS,block,v);}
     else if(p.stage==2){if(id<h(2))scatter(id);}
@@ -243,9 +294,9 @@ void main(){
     else if(p.stage==14){if(get(MODE,0)==10)flux(id,p.dt,0);}
     else if(p.stage==15)finishOwner(id);
     else if(p.stage==16||p.stage==17){if(num(CONTROL,p.stage==17?3:7)!=0.0)product(id,p.stage==17);}
-    else if(p.stage==18||p.stage==19){if(block<get(LONG_OFFSETS,h(0))&&num(CONTROL,p.stage==19?3:7)!=0.0)longProduct(get(LONG_ROWS,block),lane,p.stage==19);}
-    else if(p.stage==20){
-        if(id<h(0)&&get(LONG_FLAGS,id)!=0)put(LONG_ROWS,get(LONG_OFFSETS,id),id);
-        if(id==0){int count=get(LONG_OFFSETS,h(0));put(DISPATCH,6,min(count,65535));put(DISPATCH,7,count==0?1:(count+65534)/65535);put(DISPATCH,8,1);}
-    }
+    else if(p.stage==20){if(id<p.count)prepareTile(id);}
+    else if(p.stage==21){if(id<h(0))put(TILE_COUNTS,id,id<owners()&&get(DEGREE_COUNTS,id)>128?(get(DEGREE_COUNTS,id)+127)/128:0);}
+    else if(p.stage==30){if(id<h(6))for(int slot=0;slot<h(5);slot++)store(RESERVOIR,id*h(5)+slot,0.0);}
+    else if(p.stage==27||p.stage==28){if(num(CONTROL,p.stage==28?3:7)!=0.0)finishLongProduct(id,p.stage==28);}
+
 }

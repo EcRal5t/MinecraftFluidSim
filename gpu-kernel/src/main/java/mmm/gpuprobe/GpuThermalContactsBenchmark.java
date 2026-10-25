@@ -67,7 +67,7 @@ public final class GpuThermalContactsBenchmark {
             cursor[0]=settlement.endOffset();var bath=column(cursor,6*cells,8,a);long sourceEnd=cursor[0];
             var input=new VulkanThermalContacts.Inputs(liquid,liquidThermal,gas,gasThermal,gasGeometry,solid,solidThermal,coherent,coherentThermal,devices,deviceThermal,word(geometry.masks()),word(bath),-1,h);
             var mapping=new VulkanThermalContacts.Materials(new int[]{0,1},new int[]{2,3},new int[]{4},new int[]{5},new int[]{6},materials.stream().mapToDouble(ThermalMaterialDefinition::conductivityWPerMeterK).toArray());
-            var tables=VulkanThermalConduction.Tables.fromMaterials(materials);Tail tail=tail(input,mapping,tables,1,sourceEnd,a);
+            var tables=VulkanThermalConduction.Tables.fromMaterials(materials);Tail tail=tail(input,mapping,tables,1,0,sourceEnd,a);
             var initial=ByteBuffer.allocate(Math.toIntExact(tail.bytes())).order(ByteOrder.LITTLE_ENDIAN);liquid.importState(initial,inventory,fixture.momentum());totals.initializeHeader(initial);gasGeometry.initializeHeader(initial);gasThermal.initializeHeaderAndTables(initial);
             liquidThermal.initializeHeaderAndTables(initial);solidThermal.initializeHeaderAndTables(initial);coherentThermal.initializeHeaderAndTables(initial);deviceThermal.initializeHeaderAndTables(initial);settlement.initializeHeaders(initial);devices.importState(initial,deviceInitial);initial.putDouble(Math.toIntExact(dr.offset()),385*293.15);
             initial.putDouble(Math.toIntExact(lr.offset()),4200*293.15).putDouble(Math.toIntExact(lr.offset()+8),4200*293.15).putDouble(Math.toIntExact(sr.offset()),800*293.15).putDouble(Math.toIntExact(cr.offset()),450*293.15);
@@ -91,13 +91,15 @@ public final class GpuThermalContactsBenchmark {
                     if(step==warm)before=storage.metrics();long start=System.nanoTime();try(var source=storage.capture()){
                         while(true){int[] required=advance(storage,source,contacts,conduction,pressure,caloric,gasEOS,ledger,settlement,input,tail,sourceEnd,upload);
                             if(required[0]==0){counts=Arrays.copyOfRange(required,1,5);break;}
-                            if(required[4]<=tail.conduction().contacts)throw new IllegalStateException("Thermal contact requirement did not grow");
-                            tail=tail(input,mapping,tables,Math.multiplyExact(required[4],2),sourceEnd,a);upload=true;growth++;
+                            if(required[4]<=tail.conduction().contacts&&required[5]<=tail.conduction().baths)throw new IllegalStateException("Thermal capacity requirement did not grow");
+                            int edges=required[4]>tail.conduction().contacts?Math.multiplyExact(required[4],2):tail.conduction().contacts;
+                            int baths=required[5]>tail.conduction().baths?Math.multiplyExact(required[5],2):tail.conduction().baths;
+                            tail=tail(input,mapping,tables,edges,baths,sourceEnd,a);upload=true;growth++;
                         }
                     }upload=false;if(step>=warm)elapsed[step-warm]=System.nanoTime()-start;
                 }
                 var after=storage.metrics();Arrays.sort(elapsed);System.out.println("Device: "+context.deviceName());
-                System.out.printf("grid=%d gas_nodes=%d owners_terms_samples_contacts=%s growths=%d median_ms=%.3f max_ms=%.3f gpu_ms=%.3f upload_B=%d readback_B=%d device_MiB=%.1f%n",grid,nodes,Arrays.toString(counts),growth,elapsed[samples/2]*1e-6,elapsed[samples-1]*1e-6,(after.gpuNanos()-before.gpuNanos())*1e-6/samples,(after.uploadBytes()-before.uploadBytes())/samples,(after.readbackBytes()-before.readbackBytes())/samples,after.deviceBytes()/1048576.);
+                System.out.printf("grid=%d gas_nodes=%d owners_terms_samples_contacts=%s growths=%d bath_capacity=%d median_ms=%.3f max_ms=%.3f gpu_ms=%.3f upload_B=%d readback_B=%d device_MiB=%.1f%n",grid,nodes,Arrays.toString(counts),growth,tail.conduction().baths,elapsed[samples/2]*1e-6,elapsed[samples-1]*1e-6,(after.gpuNanos()-before.gpuNanos())*1e-6/samples,(after.uploadBytes()-before.uploadBytes())/samples,(after.readbackBytes()-before.readbackBytes())/samples,after.deviceBytes()/1048576.);
                 if(counts[0]!=inventory.stockCount()+nodes+3+coherentGroups.size()||counts[2]<=counts[0])throw new AssertionError("Spatial samples did not share unique inventory owners");
                 try(var result=storage.capture()){var out=ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);storage.read(result,solid.column(VulkanGranularStateLayout.Field.INTERNAL_ENERGY).offset(),out);System.out.printf("active_U_before=%.9g after=%.9g committed_steps=%d%n",activeRow.internalEnergy(),out.getDouble(0),warm+samples);
                     out.clear();storage.read(result,coherent.column(VulkanCoherentStateLayout.Field.INTERNAL_ENERGY).offset()+8L*coherentIndex,out);System.out.printf("coherent_groups=%d coherent_U_before=%.9g after=%.9g%n",coherentGroups.size(),coherentEnergy,out.getDouble(0));
@@ -131,13 +133,14 @@ public final class GpuThermalContactsBenchmark {
                 var arena=new FlipKernelBindings.BufferRange(out);var err=new FlipKernelBindings.BufferRange(errors);ledger.rebindRanges(new FlipKernelBindings.BufferRange(in),arena,err);caloric.rebindRanges(arena,err);gasEOS.rebindRanges(arena,err);contacts.rebindRanges(arena,err);conduction.rebindRanges(arena,err);pressure.rebindRanges(t.conduction().pressureRanges(arena,err));
                 caloric.record(command,input.liquidThermal());caloric.record(command,input.granularThermal());caloric.record(command,input.coherentThermal());caloric.record(command,input.deviceThermal());gasEOS.record(command,input.gasThermal());contacts.recordPrepare(command,t.contacts());
             },t.contacts().column(VulkanThermalContacts.Field.REQUIREMENTS).offset(),16);
-            int[] required=new int[5];required[0]=status.error();for(int i=0;i<4;i++)required[i+1]=status.feedback().getInt(4*i);if(status.error()==64)return required;if(status.error()!=0)throw new IllegalStateException("Thermal sampling error="+status.error());
-            status=candidate.continueBatch((command,in,out,errors,staging,stack)->{conduction.recordPrepare(command,t.conduction(),dt);conduction.recordExplicit(command,t.conduction(),dt);},t.conduction().column(VulkanThermalConduction.Field.MODE).offset(),4);
+            int[] required=new int[6];required[0]=status.error();for(int i=0;i<4;i++)required[i+1]=status.feedback().getInt(4*i);if(status.error()==64)return required;if(status.error()!=0)throw new IllegalStateException("Thermal sampling error="+status.error());
+            status=candidate.continueBatch((command,in,out,errors,staging,stack)->{conduction.recordPrepare(command,t.conduction(),dt);conduction.recordExplicit(command,t.conduction(),dt);},t.conduction().column(VulkanThermalConduction.Field.MODE).offset(),8);
+            required[5]=status.feedback().getInt(4);if(status.error()==64){required[0]=64;return required;}
             if(status.error()!=0)throw new IllegalStateException("Thermal explicit error="+status.error());if(status.feedback().getInt(0)==VulkanThermalConduction.IMPLICIT)conduction.solveImplicit(candidate,t.conduction(),pressure,dt);
             int error=candidate.finishBatch((command,in,out,errors,staging,stack)->{conduction.recordFinish(command,t.conduction(),dt);contacts.recordPublish(command,t.contacts());input.device().recordSettle(command,input.device(),settlement,ledger,out);});if(error!=0)throw new IllegalStateException("Thermal finish error="+error);candidate.commit();return required;
         }
     }
-    private static Tail tail(VulkanThermalContacts.Inputs input,VulkanThermalContacts.Materials materials,VulkanThermalConduction.Tables tables,int edges,long base,long a){var c=VulkanThermalConduction.layout(input.owners(),input.terms(),edges,tables,base,a);var s=VulkanThermalContacts.layout(input,materials,c,c.endOffset(),a);return new Tail(c,s,s.endOffset());}
+    private static Tail tail(VulkanThermalContacts.Inputs input,VulkanThermalContacts.Materials materials,VulkanThermalConduction.Tables tables,int edges,int baths,long base,long a){var c=VulkanThermalConduction.layout(input.owners(),input.terms(),edges,tables,base,a,baths);var s=VulkanThermalContacts.layout(input,materials,c,c.endOffset(),a);return new Tail(c,s,s.endOffset());}
     private static ThermalMaterialDefinition material(String id,ThermalMaterialDefinition.CarrierKind kind,String carrier,double cp,double k){return new ThermalMaterialDefinition("mmm:contacts_"+id,kind,carrier,293.15,cp*293.15,k,List.of(new ThermalMaterialDefinition.CaloricSegment(100,1500,cp)));}
     private static int word(VulkanLiquidStateLayout.Column c){return Math.toIntExact(c.offset()/4);}
     private static VulkanLiquidStateLayout.Column column(long[] cursor,int count,int width,long a){long start=(cursor[0]+a-1)&-a;var c=new VulkanLiquidStateLayout.Column(start,count,width);cursor[0]=start+c.bindingBytes();return c;}
