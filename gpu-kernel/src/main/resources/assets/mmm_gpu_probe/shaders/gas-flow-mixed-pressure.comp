@@ -12,8 +12,8 @@ double control(int i){return number(f(30)+2*i);}void setControl(int i,double v){
 float vector(int column,int row){return fp(h(2)+column*h(1)+row);}void setVector(int column,int row,float v){putf(h(2)+column*h(1)+row,v);}
 float inverseRoot(int row){return fp(h(4)+row);}
 void args(int slot,int count){int at=f(30)+32+4*slot;words[at]=uint(min(count,65535));words[at+1]=uint(max(1,(count+65534)/65535));words[at+2]=1u;words[at+3]=0u;}
-void publish(){bool run=errors==0u&&control(3)!=0.0,refresh=errors==0u&&control(7)!=0.0;int groups=(actual()+127)/128;
- args(0,run?groups:0);args(1,run?1:0);args(2,refresh?groups:0);args(3,refresh?1:0);args(10,run&&control(6)!=0.0?groups:0);args(11,run&&control(6)!=0.0?1:0);
+void publish(){bool run=errors==0u&&control(3)!=0.0&&control(7)==0.0,refresh=errors==0u&&control(7)!=0.0;int groups=(actual()+127)/128;
+ args(0,run?groups:0);args(1,run?1:0);args(2,refresh?groups:0);args(3,refresh?1:0);args(10,run&&control(6)!=0.0?groups:0);args(11,run?h(25):0);words[h(7)+4]=uint(control(0));words[h(7)+5]=(control(3)!=0.0?1u:0u)|(control(7)!=0.0?2u:0u);
  for(int i=0;i<3;i++){int count=int(control(40+i));args(4+i,run?count:0);args(7+i,refresh?count:0);}}
 double hypotStable(double a,double b){double high=max(abs(a),abs(b)),low=min(abs(a),abs(b));if(high==0.0)return 0.0;double q=low/high;return high*sqrt(1.0+q*q);}
 dvec4 reduceAccurate(int lane,dvec4 v){accurate[lane]=v;barrier();for(int k=64;k>0;k/=2){if(lane<k){dvec4 a=accurate[lane],b=accurate[lane+k];accurate[lane]=dvec4(a.x+b.x,hypotStable(a.y,b.y),max(a.z,b.z),max(a.w,b.w));}barrier();}dvec4 outValue=accurate[0];barrier();return outValue;}
@@ -35,6 +35,8 @@ void main(){int lane=int(gl_LocalInvocationID.x),group=int(gl_WorkGroupID.y*gl_N
  if(p.stage==1){dvec4 sum=collectAccurate(lane);if(lane==0){for(int i=0;i<16;i++)setControl(i,0.0);setControl(3,1.0);setControl(6,1.0);setControl(7,1.0);setControl(11,sum.w);publish();}return;}
  if(p.stage==15){if(lane==0){setControl(3,0.0);setControl(7,1.0);publish();}return;}
  if(errors!=0u)return;
+ if(p.stage==23){vec4 v=vec4(0.0);if(id<n){float r=vector(0,id),z=vector(3,id)+fp(h(12)+int(words[h(11)+id]));setVector(3,id,z);v=vec4(r*r,abs(r),r*z,0.0);}vec4 sum=reduceFast(lane,v);if(lane==0)save(group,dvec4(sum));return;}
+ if(p.stage==24){vec4 sum=collectFast(lane);if(lane==0){setControl(4,double(sum.z));setControl(9,0.0);setControl(6,0.0);setControl(8,1.0);setControl(7,0.0);put(h(7)+2,1.0);publish();}return;}
  if(p.stage==19){int row=int(words[f(50)+group]);for(int at=int(words[f(22)+row])+lane;at<int(words[f(22)+row+1]);at+=128)compileEdge(row,at);return;}
  if(p.stage==17){double maximum=id<n?abs(number(f(26)+2*id)):0.0;dvec4 sum=reduceAccurate(lane,dvec4(0.0,0.0,0.0,maximum));if(lane==0)save(group,sum);return;}
  if(p.stage==18){dvec4 sum=collectAccurate(lane);if(lane==0)setControl(11,sum.w);return;}
@@ -44,15 +46,12 @@ void main(){int lane=int(gl_LocalInvocationID.x),group=int(gl_WorkGroupID.y*gl_N
   setControl(1,rms);setControl(10,tolerance);setControl(11,sum.w);
   if(p.stage==16){bool success=!isnan(rms)&&!isinf(rms)&&rms<=tolerance;setControl(2,success?1.0:0.0);setControl(3,0.0);setControl(7,0.0);if(!success)atomicOr(errors,4u);publish();return;}
   if(rms<=tolerance){setControl(2,1.0);setControl(3,0.0);}else{put(h(7),sum.z);put(h(7)+2,1.0);setControl(6,1.0);}setControl(7,0.0);publish();return;}
- if(p.stage==4){float value=0.0;if(id<n){setVector(0,id,float(number(h(3)+2*id)/number(h(7))));put(h(3)+2*id,number(h(7))*number(f(19)+2*id));float r=vector(0,id),inv=inverseRoot(id),z=r*inv*inv;setVector(3,id,z);value=r*z;}
-  vec4 sum=reduceFast(lane,vec4(value,0.0,0.0,0.0));if(lane==0)save(group,dvec4(sum));return;}
- if(p.stage==6){vec4 sum=collectFast(lane);if(lane==0){setControl(9,control(6)!=0.0?0.0:double(sum.x)/control(4));setControl(4,double(sum.x));}return;}
- if(p.stage==7){if(id<n)setVector(1,id,control(6)!=0.0?vector(3,id):vector(3,id)+float(control(9))*vector(1,id));return;}
+ if(p.stage==4){if(id<n){setVector(0,id,float(number(h(3)+2*id)/number(h(7))));put(h(3)+2*id,number(h(7))*number(f(19)+2*id));float r=vector(0,id),inv=inverseRoot(id);setVector(3,id,r*inv*inv);}return;}
+ if(p.stage==7){if(id<n)setVector(1,id,(control(6)!=0.0||control(8)!=0.0)?vector(3,id):vector(3,id)+float(control(9))*vector(1,id));return;}
  if(p.stage==8){float dotValue=0.0;if(id<n){int first=int(words[f(22)+id]),last=int(words[f(22)+id+1]);if(last-first<=128){float sum=0.0;for(int e=first;e<last;e++)sum+=matrixEntry(id,e);setVector(2,id,sum);dotValue=vector(1,id)*sum;}}vec4 stats=reduceFast(lane,vec4(dotValue,0.0,0.0,0.0));if(lane==0)save(group,dvec4(stats));return;}
  if(p.stage==9){int row=int(words[f(52)+group]),at=int(words[f(22)+row])+128*(group-int(words[f(51)+row]))+lane;tiles[lane]=at<int(words[f(22)+row+1])?matrixEntry(row,at):0.0;barrier();for(int k=64;k>0;k/=2){if(lane<k)tiles[lane]+=tiles[lane+k];barrier();}if(lane==0)putf(h(5)+group,tiles[0]);return;}
  if(p.stage==10){int row=int(words[f(50)+group]),first=int(words[f(51)+row]),count=(int(words[f(22)+row+1])-int(words[f(22)+row])+127)/128;float sum=0.0;for(int i=lane;i<count;i+=128)sum+=fp(h(5)+first+i);tiles[lane]=sum;barrier();for(int k=64;k>0;k/=2){if(lane<k)tiles[lane]+=tiles[lane+k];barrier();}if(lane==0){setVector(2,row,tiles[0]);setVector(3,row,vector(1,row)*tiles[0]);}return;}
  if(p.stage==12){vec4 sum=collectProduct(lane);if(lane==0){double rz=control(4);if(!(sum.x>0.0&&rz>0.0)){setControl(5,0.0);setControl(7,1.0);}else setControl(5,rz/double(sum.x));}return;}
- if(p.stage==13){vec4 v=vec4(0.0);if(id<n){float alpha=float(control(5)),r=vector(0,id)-alpha*vector(2,id);setVector(0,id,r);float inv=inverseRoot(id),z=r*inv*inv;setVector(3,id,z);double pressure=number(f(26)+2*id)+number(h(3)+2*id)*double(alpha*vector(1,id));put(f(26)+2*id,pressure);v=vec4(r*r,abs(r),r*z,0.0);}
-  vec4 sum=reduceFast(lane,v);if(lane==0)save(group,dvec4(sum));return;}
- if(p.stage==14){vec4 sum=collectFast(lane);if(lane==0){setControl(0,control(0)+1.0);setControl(9,double(sum.z)/control(4));setControl(4,double(sum.z));setControl(6,0.0);double maximum=max(number(h(7)+2),double(sum.y));put(h(7)+2,maximum);bool refresh=control(7)!=0.0||double(sum.y)<=0.00034526698300124393*maximum||isnan(sum.y)||isinf(sum.y);setControl(7,refresh?1.0:0.0);if(control(0)>=double(p.maximumIterations))setControl(3,0.0);publish();}return;}
+ if(p.stage==13){if(id<n){float alpha=float(control(5)),r=vector(0,id)-alpha*vector(2,id);setVector(0,id,r);float inv=inverseRoot(id);setVector(3,id,r*inv*inv);put(f(26)+2*id,number(f(26)+2*id)+number(h(3)+2*id)*double(alpha*vector(1,id)));}return;}
+ if(p.stage==14){vec4 sum=collectFast(lane);if(lane==0){setControl(0,control(0)+1.0);setControl(9,double(sum.z)/control(4));setControl(4,double(sum.z));setControl(6,0.0);setControl(8,0.0);double maximum=max(number(h(7)+2),double(sum.y));put(h(7)+2,maximum);bool refresh=control(7)!=0.0||double(sum.y)<=0.00034526698300124393*maximum||isnan(sum.y)||isinf(sum.y);setControl(7,refresh?1.0:0.0);if(control(0)>=double(p.maximumIterations))setControl(3,0.0);publish();}return;}
 }

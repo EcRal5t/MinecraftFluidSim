@@ -190,12 +190,15 @@ final class FlipKernelBindings implements AutoCloseable {
 		long compiler = org.lwjgl.util.shaderc.Shaderc.shaderc_compiler_initialize();
 		if (compiler == NULL) throw new IllegalStateException("Shaderc compiler unavailable");
 		long result = NULL;
+		long options = org.lwjgl.util.shaderc.Shaderc.shaderc_compile_options_initialize();
 		ByteBuffer sourceBytes = MemoryUtil.memUTF8(source, false);
 		ByteBuffer fileName = MemoryUtil.memUTF8("mmm-compute.comp");
 		ByteBuffer entryPoint = MemoryUtil.memUTF8("main");
 		try {
+			org.lwjgl.util.shaderc.Shaderc.shaderc_compile_options_set_target_env(options,
+					org.lwjgl.util.shaderc.Shaderc.shaderc_target_env_vulkan, org.lwjgl.util.shaderc.Shaderc.shaderc_env_version_vulkan_1_1);
 			result = org.lwjgl.util.shaderc.Shaderc.shaderc_compile_into_spv(compiler, sourceBytes,
-					org.lwjgl.util.shaderc.Shaderc.shaderc_compute_shader, fileName, entryPoint, NULL);
+					org.lwjgl.util.shaderc.Shaderc.shaderc_compute_shader, fileName, entryPoint, options);
 			if (result == NULL) throw new IllegalStateException("Shaderc returned NULL");
 			if (org.lwjgl.util.shaderc.Shaderc.shaderc_result_get_compilation_status(result)
 					!= org.lwjgl.util.shaderc.Shaderc.shaderc_compilation_status_success) {
@@ -208,6 +211,7 @@ final class FlipKernelBindings implements AutoCloseable {
 			copy.put(bytes).flip();
 			return copy;
 		} finally {
+			org.lwjgl.util.shaderc.Shaderc.shaderc_compile_options_release(options);
 			if (result != NULL) org.lwjgl.util.shaderc.Shaderc.shaderc_result_release(result);
 			org.lwjgl.util.shaderc.Shaderc.shaderc_compiler_release(compiler);
 			MemoryUtil.memFree(entryPoint);

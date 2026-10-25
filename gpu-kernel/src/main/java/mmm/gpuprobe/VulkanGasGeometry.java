@@ -13,7 +13,7 @@ import static org.lwjgl.vulkan.VK10.*;
 /** Exact dry presence, PLIC dry ports, and chamber membership for one resident generation. */
 final class VulkanGasGeometry implements AutoCloseable {
     record Layout(VulkanLiquidCellVolumes.Layout totals, int masksWordOffset, int occupiedWordOffset,
-                  int cellsWordOffset, int planesWordOffset, int microWordOffset, boolean sealedExterior, double cellSize,
+                  int cellsWordOffset, int planesWordOffset, int microWordOffset, boolean sealedExterior, double cellSize, int liquidFacesWordOffset,
                   VulkanLiquidStateLayout.Column header, VulkanLiquidStateLayout.Column presence,
                   VulkanLiquidStateLayout.Column dryVolumes, VulkanLiquidStateLayout.Column dryMasks,
                   VulkanLiquidStateLayout.Column compact, VulkanLiquidStateLayout.Column faceAreas,
@@ -23,7 +23,13 @@ final class VulkanGasGeometry implements AutoCloseable {
                   VulkanLiquidStateLayout.Column rootFlags, VulkanLiquidStateLayout.Column rootOffsets,
                   VulkanLiquidStateLayout.Column componentCounts, VulkanLiquidStateLayout.Column componentOffsets,
                   VulkanLiquidStateLayout.Column componentCursors, VulkanLiquidStateLayout.Column componentMembers,
-                  VulkanLiquidStateLayout.Column scanWorkspace, long endOffset) {
+                  VulkanLiquidStateLayout.Column scanWorkspace, VulkanLiquidStateLayout.Column microFractions, long endOffset) {
+        /** Shares PLIC port clipping with the liquid MAC face construction, without another workspace. */
+        Layout withLiquidFaces(int wordOffset){
+            return new Layout(totals,masksWordOffset,occupiedWordOffset,cellsWordOffset,planesWordOffset,microWordOffset,sealedExterior,cellSize,wordOffset,
+                    header,presence,dryVolumes,dryMasks,compact,faceAreas,fullConnections,parents,exteriorReachable,cellNodes,changed,componentCount,
+                    rootFlags,rootOffsets,componentCounts,componentOffsets,componentCursors,componentMembers,scanWorkspace,microFractions,endOffset);
+        }
         int headerWordOffset() { return word(header); }
         int cells() { return totals.source().cellCount(); }
         int faces() { return faceAreas.count(); }
@@ -62,6 +68,10 @@ final class VulkanGasGeometry implements AutoCloseable {
             data[23] = word(exteriorReachable); data[24] = word(cellNodes); data[25] = word(changed); data[26] = word(componentCount);
             data[27] = word(rootFlags); data[28] = word(rootOffsets); data[29] = word(componentCounts);
             data[30] = word(componentOffsets); data[31] = word(componentCursors); data[32] = word(componentMembers);
+            data[33] = word(microFractions);data[36]=liquidFacesWordOffset;
+            data[37]=word(totals.source().column(VulkanLiquidStateLayout.Field.MOMENTUM_X));
+            data[38]=word(totals.source().column(VulkanLiquidStateLayout.Field.MOMENTUM_Y));
+            data[39]=word(totals.source().column(VulkanLiquidStateLayout.Field.MOMENTUM_Z));
             for (int i = 0; i < data.length; i++) target.putInt(4 * i, data[i]);
             target.putDouble(4 * 34, cellSize);return target;
         }
@@ -96,10 +106,11 @@ final class VulkanGasGeometry implements AutoCloseable {
         var cursors = column(cursor, roots, 4, alignment);
         var members = column(cursor, cells, 4, alignment);
         var scan = column(cursor, Math.toIntExact(VulkanPrefixScan.workspaceBytes(roots) / 4), 4, alignment);
+        var fractions = column(cursor, Math.multiplyExact(cells,8), 4, alignment);
         return new Layout(totals, masksWordOffset, occupiedWordOffset, cellsWordOffset, planesWordOffset, microWordOffset,
-                sealedExterior, cellSize, header, presence, volumes, masks, compact, areas, connections, parents,
+                sealedExterior, cellSize, -1, header, presence, volumes, masks, compact, areas, connections, parents,
                 exterior, nodes, changed, count, flags, rootOffsets, componentCounts, offsets, cursors, members,
-                scan, align(cursor[0], alignment));
+                scan, fractions, align(cursor[0], alignment));
     }
     private final FlipKernelBindings bindings;
     private final VulkanPrefixScan scan;

@@ -58,6 +58,10 @@ void captureCell(int cell) {
     if(!finite(volume)){atomicOr(errors,8192u);return;}
     words[h(16)+cell]=1u;putNumber(h(17)+2*cell,volume);words[h(22)+cell+1]=uint(cell+1);
     double microPore=double(pore)/16777216.0/double(bitCount(open));uint dryMask=0u;
+    double numericPore=number(h(8)+8*cell+4),fill=number(h(8)+8*cell+6);
+    double numericMicro=numericPore/double(bitCount(open));
+    bool bypass=fill>0.0&&fill<1.0&&fill<=0.015625&&numericPore>0.0;
+    for(int micro=0;micro<8;micro++)words[h(33)+8*cell+micro]=floatBitsToUint(bypass?0.0:numericMicro>0.0?float(clamp(number(h(10)+2*(8*cell+micro))/numericMicro,0.0LF,1.0LF)):1.0);
     for(int micro=0;micro<8;micro++)if((open&(1u<<micro))!=0u)
         if(number(h(10)+2*(8*cell+micro))<microPore)dryMask|=1u<<micro;
     if(dryMask==0u){dryMask=1u<<findLSB(open);words[h(19)+cell]=1u;}
@@ -71,11 +75,7 @@ ivec3 faceEndpoints(int face) {
     return ivec3(inside(position-step)?indexOf(position-step):-1,inside(position)?indexOf(position):-1,axis);
 }
 float fraction(int cell,int micro) {
-    double pore=number(h(8)+8*cell+4),fill=number(h(8)+8*cell+6);
-    // GasFaceIntersection permits bypass across unresolved liquid films at 1/64 fill.
-    if(fill>0.0&&fill<1.0&&fill<=0.015625&&pore>0.0)return 0.0;
-    double microPore=pore/double(bitCount(support(cell)));
-    return microPore>0.0?float(clamp(number(h(10)+2*(8*cell+micro))/microPore,0.0LF,1.0LF)):1.0;
+    return uintBitsToFloat(words[h(33)+8*cell+micro]);
 }
 int clipDry(inout vec2 polygon[8],int count,vec3 plane) {
     if(count==0)return 0;
@@ -117,6 +117,61 @@ void captureFace(int face) {
     bool full=(left<0||(support(left)&positive)==positive)&&(right<0||(support(right)&(positive^255u))==(positive^255u));
     double scale=cellSize();putNumber(h(20)+2*face,double(area)*scale*scale);words[h(21)+face]=full?1u:0u;
 }
+float polygonArea(vec2 polygon[8],int count){
+    float twice=0.0;for(int i=1;i+1<count;i++){vec2 x=polygon[i]-polygon[0],y=polygon[i+1]-polygon[0];twice+=x.x*y.y-x.y*y.x;}
+    return clamp(abs(twice)*.5,0.0,.25);
+}
+int clipPort(inout vec2 polygon[8],int count,vec4 plane,int axis,int side,int a,int b){
+    int tangent=(axis+1)%3,other=(axis+2)%3;
+    float offset=plane.w-plane[axis]*float(side)-plane[tangent]*(.5*float(a))-plane[other]*(.5*float(b));
+    return clipDry(polygon,count,vec3(plane[tangent],plane[other],offset));
+}
+// Gas may ignore a thin-film plane or a numerically empty microcell. Clip its subset first,
+// then finish the physical dry intersection used by the liquid wet union. Each plane is clipped once.
+vec2 sharedMicroAreas(float leftFill,float rightFill,vec4 leftPlane,vec4 rightPlane,
+                      float leftFraction,float rightFraction,bool gasEnabled,int axis,int a,int b){
+    vec2 polygon[8];polygon[0]=vec2(0);polygon[1]=vec2(.5,0);polygon[2]=vec2(.5);polygon[3]=vec2(0,.5);
+    bool gasClosed=!gasEnabled||leftFraction>=1.0||rightFraction>=1.0;
+    bool gasLeft=!gasClosed&&leftFraction>0.0,gasRight=!gasClosed&&rightFraction>0.0;
+    int count=4;
+    if(gasLeft)count=clipPort(polygon,count,leftPlane,axis,1,a,b);
+    if(gasRight)count=clipPort(polygon,count,rightPlane,axis,0,a,b);
+    float gasArea=gasClosed?0.0:polygonArea(polygon,count),physicalDry=0.0;
+    if(leftFill<1.0&&rightFill<1.0){
+        if(leftFill>0.0&&!gasLeft)count=clipPort(polygon,count,leftPlane,axis,1,a,b);
+        if(rightFill>0.0&&!gasRight)count=clipPort(polygon,count,rightPlane,axis,0,a,b);
+        physicalDry=polygonArea(polygon,count);
+    }
+    return vec2(physicalDry,gasArea);
+}
+void captureSharedFace(int face){
+    putNumber(h(20)+2*face,0.0);words[h(21)+face]=0u;if(errors!=0u)return;
+    ivec3 ends=faceEndpoints(face);int left=ends.x,right=ends.y,axis=ends.z,tangent=(axis+1)%3,other=(axis+2)%3;
+    bool internal=left>=0&&right>=0,gasEnabled=(left<0||present(left))&&(right<0||present(right));
+    uint leftSupport=left<0?255u:support(left),rightSupport=right<0?255u:support(right);
+    float leftFill=left<0?0.0:float(number(h(8)+8*left+6)),rightFill=right<0?0.0:float(number(h(8)+8*right+6));
+    vec4 leftPlane=left<0?vec4(0):vec4(number(h(9)+8*left),number(h(9)+8*left+2),number(h(9)+8*left+4),number(h(9)+8*left+6));
+    vec4 rightPlane=right<0?vec4(0):vec4(number(h(9)+8*right),number(h(9)+8*right+2),number(h(9)+8*right+4),number(h(9)+8*right+6));
+    float open=0.0,wet=0.0,dry=0.0;
+    for(int a=0;a<2;a++)for(int b=0;b<2;b++){
+        int low=(a<<tangent)|(b<<other),high=low|(1<<axis);
+        if((leftSupport&(1u<<high))==0u||(rightSupport&(1u<<low))==0u)continue;
+        open+=.25;
+        float l=gasEnabled&&left>=0?fraction(left,high):0.0,r=gasEnabled&&right>=0?fraction(right,low):0.0;
+        vec2 areas=sharedMicroAreas(leftFill,rightFill,leftPlane,rightPlane,l,r,gasEnabled,axis,a,b);
+        // The wet union is the complement of the same physical dry intersection, then uses
+        // the existing fill-based wet-area limit at the PLIC geometry's float resolution.
+        wet+=min(clamp(.25-areas.x,0.0,.25),.25*(leftFill+rightFill));dry+=areas.y;
+    }
+    double mass=.5*((left<0?0.0:number(h(8)+8*left+2))+(right<0?0.0:number(h(8)+8*right+2))),speed=0.0;
+    if(internal&&open>0.0&&mass>0.0){
+        int xFaces=(h(0)+1)*h(1)*h(2),yFaces=h(0)*(h(1)+1)*h(2),local=face-(axis==0?0:axis==1?xFaces:xFaces+yFaces);
+        speed=number(h(37+axis)+2*local)/mass;
+    }
+    int target=h(36)+8*face;putNumber(target,mass);putNumber(target+2,speed);putNumber(target+4,internal?double(open):0.0);putNumber(target+6,internal?double(wet):0.0);
+    if(dry>0.0){double scale=cellSize();putNumber(h(20)+2*face,double(dry)*scale*scale);words[h(21)+face]=open==1.0?1u:0u;}
+}
+
 uint root(uint node) {
     uint parent=atomicAdd(words[h(22)+int(node)],0u);
     while(parent!=node){node=parent;parent=atomicAdd(words[h(22)+int(node)],0u);}return node;
@@ -156,7 +211,7 @@ void main() {
         words[h(27)+item]=0u;words[h(29)+item]=0u;words[h(31)+item]=0u;
         if(item==0){words[h(22)]=0u;words[h(25)]=1u;words[h(26)]=0u;}
     } else if(p.stage==1)captureCell(item);
-    else if(p.stage==2)captureFace(item);
+    else if(p.stage==2){if(h(36)>=0)captureSharedFace(item);else captureFace(item);}
     else if(p.stage==3)words[h(25)]=0u;
     else if(p.stage==4)joinFace(item);
     else if(p.stage==5)compress(item);

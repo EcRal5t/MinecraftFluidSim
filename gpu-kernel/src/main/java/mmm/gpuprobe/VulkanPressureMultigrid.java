@@ -35,7 +35,7 @@ final class VulkanPressureMultigrid implements AutoCloseable {
     void beginTimings(VkCommandBuffer command){if(timings!=null)timings.reset(command);}
     List<VulkanStageTimings.Sample> stageTimings(){return timings==null?List.of():timings.read();}
 
-    /** Each level stores seven matrix entries, the residual, correction and smoothing scratch. */
+    /** Seven FP64 matrix entries and three packed FP32 application vectors per cell. */
     static Layout layout(int sx, int sy, int sz) {
         return layout(sx, sy, sz, Math.multiplyExact(Math.multiplyExact(sx, sy), sz));
     }
@@ -49,12 +49,13 @@ final class VulkanPressureMultigrid implements AutoCloseable {
         while (true) {
             var level = new Level(sx, sy, sz, cursor);
             levels.add(level);
-            cursor = Math.addExact(cursor, Math.multiplyExact(10, level.cells()));
+            cursor = Math.addExact(cursor,Math.addExact(Math.multiplyExact(7,level.cells()),Math.toIntExact((3L*level.cells()+1)/2)));
             if (Math.max(sx, Math.max(sy, sz)) <= 4) break;
             sx = (sx + 1) / 2; sy = (sy + 1) / 2; sz = (sz + 1) / 2;
         }
         int factor=cursor,coarse=levels.getLast().cells();
-        cursor=Math.addExact(cursor,Math.multiplyExact(2,Math.multiplyExact(coarse,coarse)));
+        int dense=Math.multiplyExact(coarse,coarse);
+        cursor=Math.addExact(cursor,Math.addExact(dense,(dense+1)/2));
         int dispatch=cursor;cursor=Math.addExact(cursor,Math.multiplyExact(4,levels.size()+1));
         return new Layout(levels, cursor, pressureStride,factor,dispatch);
     }

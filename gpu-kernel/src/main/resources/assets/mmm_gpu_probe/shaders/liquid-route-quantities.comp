@@ -8,8 +8,8 @@ layout(binding=2,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header; int stage; int count; } p;
 const int COUNTS=0,MATERIALS=2,VOLUME_OFFSETS=4,VOLUME_SIGNS=5,VOLUME_EXPONENTS=6,VOLUME_LIMBS=7,
           MASS_UNITS=8,ENERGY_BITS=9,MIXTURE_PRESENT=10,SPECIES_OFFSETS=11,SPECIES_HANDLES=12,SPECIES_AMOUNTS=13;
-const int R_OFFSETS=0,R_SIGNS=1,R_EXPONENTS=2,R_LIMBS=3,R_MASS=4,R_ENERGY=5,R_MIXTURE=6,
-          R_SPECIES_OFFSETS=7,R_SPECIES_HANDLES=8,R_SPECIES_AMOUNTS=9,R_SOURCE_OFFSETS=10,R_SLOTS=11;
+const int R_DESCRIPTORS=0,R_MASS=1,R_ENERGY=2,R_MIXTURE=3,
+          R_SPECIES_OFFSETS=4,R_SPECIES_HANDLES=5,R_SPECIES_AMOUNTS=6,R_SOURCE_OFFSETS=7;
 int h(int index) { return int(candidateWords[p.header+index]); }
 int src(int field) { return h(16+field); }
 int route(int field) { return h(35+field); }
@@ -27,8 +27,8 @@ Volume sourceVolume(int stock) {
     return Volume(0,src(VOLUME_LIMBS)+first,last-first,int(sourceWords[src(VOLUME_EXPONENTS)+stock]));
 }
 Volume routeVolume(int entry) {
-    int first=int(candidateWords[route(R_OFFSETS)+entry]),last=int(candidateWords[route(R_OFFSETS)+entry+1]);
-    return Volume(1,route(R_LIMBS)+first,last-first,int(candidateWords[route(R_EXPONENTS)+entry]));
+    int at=route(R_DESCRIPTORS)+5*entry;
+    return Volume(int(candidateWords[at]),int(candidateWords[at+1]),int(candidateWords[at+2]),int(candidateWords[at+3]));
 }
 int64_t highest(Volume value) { return int64_t(value.exponent)+int64_t(32*(value.count-1)+findMSB(limb(value,value.count-1))); }
 uint aligned(Volume value,int index,int minimum) {
@@ -62,7 +62,7 @@ double volumeFraction(Volume part,Volume whole) {
 int volumeFractions(int stock,out double fractions[7],out bool enabled[7]) {
     Volume whole=sourceVolume(stock);int owner=-1;
     for(int i=0;i<7;i++) {
-        int entry=routeIndex(stock,i),sign=entry<0?0:int(candidateWords[route(R_SIGNS)+entry]);
+        int entry=routeIndex(stock,i),sign=entry<0?0:int(candidateWords[route(R_DESCRIPTORS)+5*entry+4]);
         enabled[i]=sign>0;fractions[i]=0.0;
         if(sign<0)atomicOr(errors,32u);
         if(enabled[i]) {
@@ -87,23 +87,19 @@ void distribute(int64_t total,double fractions[7],int owner,out int64_t amounts[
 }
 
 void clearRoute(int index) {
-    if(index<h(1)) {
-        candidateWords[h(6)+index]=0u;
-    }
-    if(index<8*h(0))putDouble(h(7)+2*index,0.0);
+    putDouble(h(7)+2*index,0.0);
 }
 
 int massFractions(int stock,int volumeOwner,double volumeShares[7],bool enabled[7],
-                  out int64_t masses[7],out double fractions[7],bool writingMass) {
+                  out int64_t masses[7],out double fractions[7]) {
     int64_t total=readLong(0,src(MASS_UNITS)+2*stock);
     if(total<int64_t(0)){atomicOr(errors,32u);return -1;}
-    if(writingMass)distribute(total,volumeShares,volumeOwner,masses);
-    else for(int i=0;i<7;i++){int r=routeIndex(stock,i);masses[i]=r<0?int64_t(0):readLong(1,route(R_MASS)+2*r);}
+    distribute(total,volumeShares,volumeOwner,masses);
     int owner=volumeOwner;
     if(total>int64_t(0))for(int i=0;i<7;i++)if(masses[i]>masses[owner])owner=i;
     for(int i=0;i<7;i++) {
         fractions[i]=total==int64_t(0)?volumeShares[i]:double(masses[i])/double(total);
-        if(writingMass&&enabled[i]) {
+        if(routeIndex(stock,i)>=0) {
             putLong(route(R_MASS)+2*(routeIndex(stock,i)),masses[i]);
             candidateWords[route(R_MIXTURE)+routeIndex(stock,i)]=enabled[i]?sourceWords[src(MIXTURE_PRESENT)+stock]:0u;
         }
@@ -114,7 +110,8 @@ int massFractions(int stock,int volumeOwner,double volumeShares[7],bool enabled[
 void countSpecies(int stock) {
     double volumeShares[7],fractions[7];bool enabled[7];int64_t masses[7];
     int volumeOwner=volumeFractions(stock,volumeShares,enabled);if(volumeOwner<0)return;
-    int owner=massFractions(stock,volumeOwner,volumeShares,enabled,masses,fractions,true);if(owner<0)return;
+    int owner=massFractions(stock,volumeOwner,volumeShares,enabled,masses,fractions);if(owner<0)return;
+    candidateWords[h(8)+stock]=uint(owner);
     int counts[7];for(int i=0;i<7;i++)counts[i]=0;
     int begin=int(sourceWords[src(SPECIES_OFFSETS)+stock]),end=int(sourceWords[src(SPECIES_OFFSETS)+stock+1]);
     for(int entry=begin;entry<end;entry++) {
@@ -123,7 +120,7 @@ void countSpecies(int stock) {
         int64_t amounts[7];distribute(total,fractions,owner,amounts);
         for(int i=0;i<7;i++)if(amounts[i]>int64_t(0))counts[i]++;
     }
-    for(int i=0;i<7;i++)if(enabled[i])candidateWords[h(6)+routeIndex(stock,i)]=uint(counts[i]);
+    for(int i=0;i<7;i++)if(routeIndex(stock,i)>=0)candidateWords[h(6)+routeIndex(stock,i)]=uint(counts[i]);
 }
 
 // Grow an ascending, nonoverlapping expansion using error-free TwoSum; at most eight inputs are added.
@@ -144,11 +141,21 @@ void writeQuantities(int stock) {
     if(candidateWords[route(R_SPECIES_OFFSETS)+h(1)]>uint(h(2))){atomicOr(errors,64u);return;}
     if((errors&(16u|32u))!=0u)return;
     double volumeShares[7],fractions[7];bool enabled[7];int64_t masses[7];
-    int volumeOwner=volumeFractions(stock,volumeShares,enabled);if(volumeOwner<0)return;
-    int owner=massFractions(stock,volumeOwner,volumeShares,enabled,masses,fractions,false);if(owner<0)return;
+    int owner=int(candidateWords[h(8)+stock]);
+    int64_t totalMass=readLong(0,src(MASS_UNITS)+2*stock);
+    // The first pass has already selected the exact remainder owner and partitioned mass.
+    // Positive-mass fractions depend only on those integers, so no volume comparison repeats.
+    for(int i=0;i<7;i++){
+        int entry=routeIndex(stock,i);enabled[i]=entry>=0&&int(candidateWords[route(R_DESCRIPTORS)+5*entry+4])>0;
+        masses[i]=entry<0?int64_t(0):readLong(1,route(R_MASS)+2*entry);
+        fractions[i]=totalMass>int64_t(0)?double(masses[i])/double(totalMass):0.0;
+    }
+    if(totalMass==int64_t(0)){
+        if(volumeFractions(stock,volumeShares,enabled)<0)return;
+        for(int i=0;i<7;i++)fractions[i]=volumeShares[i];
+    }
     int material=int(sourceWords[src(MATERIALS)+stock]);
     double materialReference=readDouble(1,h(3)+2*material);
-    int64_t totalMass=readLong(0,src(MASS_UNITS)+2*stock);
     precise double sourceReference=double(totalMass)*1e-10LF*materialReference;
     precise double references[7];int cursors[7];
     for(int i=0;i<7;i++) {
@@ -182,7 +189,7 @@ void writeQuantities(int stock) {
     }
     bool valid=finite(sourceEnergy)&&finite(sourceReference);
     for(int i=0;i<7;i++) {
-        valid=valid&&finite(energies[i]);if(enabled[i])putDouble(route(R_ENERGY)+2*routeIndex(stock,i),energies[i]);
+        valid=valid&&finite(energies[i]);if(routeIndex(stock,i)>=0)putDouble(route(R_ENERGY)+2*routeIndex(stock,i),energies[i]);
     }
     if(!valid){atomicOr(errors,32u);return;}
     precise double remainders[8];int count=0;

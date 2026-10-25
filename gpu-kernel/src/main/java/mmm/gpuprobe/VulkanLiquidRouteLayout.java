@@ -3,46 +3,46 @@ package mmm.gpuprobe;
 import java.util.EnumMap;
 import java.util.List;
 
-/** Compact accepted routes grouped by source stock. SOURCE_OFFSETS addresses actual
- * route rows, SLOTS identifies retain(0) or one of six neighbours(1..6).
- * Capacity reserves the seven possible destinations; only live rows carry inventory.
+/** Accepted-direction candidates grouped by source stock. SOURCE_OFFSETS and SOURCE_MASKS
+ * address the shared material scratch and quantity rows. VOLUME_DESCRIPTORS borrows
+ * immutable source/accepted limbs or references the candidate's own material workspace.
+ * Zero-volume candidates carry zero quantities and are skipped by destination gathering.
  */
 public final class VulkanLiquidRouteLayout {
     public static final int ROUTES_PER_STOCK = 7;
 
     public enum Field {
-        VOLUME_OFFSETS(4), VOLUME_SIGNS(4), VOLUME_EXPONENTS(4), VOLUME_LIMBS(4),
+        VOLUME_DESCRIPTORS(4),
         MASS_UNITS(8), ENERGY_BITS(8), MIXTURE_PRESENT(4),
         SPECIES_OFFSETS(4), SPECIES_HANDLES(4), SPECIES_AMOUNTS(8),
-        SOURCE_OFFSETS(4), SLOTS(4), SOURCE_STOCKS(4), COUNTS(4), SOURCE_MASKS(4), DISPATCH(4);
+        SOURCE_OFFSETS(4), SLOTS(4), COUNTS(4), SOURCE_MASKS(4);
         private final int elementBytes;
         Field(int elementBytes) { this.elementBytes = elementBytes; }
         public int elementBytes() { return elementBytes; }
     }
 
-    private final int sourceStockCapacity, routeCapacity, speciesCapacity, limbCapacity;
+    private final int sourceStockCapacity, routeCapacity, speciesCapacity;
     private final long baseOffset, alignment, endOffset;
     private final EnumMap<Field, VulkanLiquidStateLayout.Column> columns = new EnumMap<>(Field.class);
 
-    public VulkanLiquidRouteLayout(int sourceStockCapacity, int speciesCapacity, int limbCapacity,
+    public VulkanLiquidRouteLayout(int sourceStockCapacity, int speciesCapacity,
                                    long baseOffset, long storageAlignment) {
-        if (sourceStockCapacity < 0 || speciesCapacity < 0 || limbCapacity < 0 || baseOffset < 0
+        if (sourceStockCapacity < 0 || speciesCapacity < 0 || baseOffset < 0
                 || storageAlignment <= 0 || (storageAlignment & (storageAlignment - 1)) != 0)
             throw new IllegalArgumentException("Invalid liquid route capacity or storage alignment");
         this.sourceStockCapacity = sourceStockCapacity;
-        this.speciesCapacity = speciesCapacity; this.limbCapacity = limbCapacity;
+        this.speciesCapacity = speciesCapacity;
         routeCapacity = Math.multiplyExact(sourceStockCapacity, ROUTES_PER_STOCK);
         alignment = Math.max(8, storageAlignment);
         this.baseOffset = align(baseOffset);
         long cursor = this.baseOffset;
         for (Field field : Field.values()) {
             int count = switch (field) {
-                case VOLUME_OFFSETS, SPECIES_OFFSETS -> Math.addExact(routeCapacity, 1);
+                case SPECIES_OFFSETS -> Math.addExact(routeCapacity, 1);
                 case SOURCE_OFFSETS -> Math.addExact(sourceStockCapacity,1);
-                case COUNTS -> 1;
-                case DISPATCH -> 3;
+                case COUNTS -> 2;
+                case VOLUME_DESCRIPTORS -> Math.multiplyExact(routeCapacity,5);
                 case SOURCE_MASKS -> sourceStockCapacity;
-                case VOLUME_LIMBS -> limbCapacity;
                 case SPECIES_HANDLES, SPECIES_AMOUNTS -> speciesCapacity;
                 default -> routeCapacity;
             };
@@ -57,7 +57,6 @@ public final class VulkanLiquidRouteLayout {
     public int sourceStockCapacity() { return sourceStockCapacity; }
     public int routeCapacity() { return routeCapacity; }
     public int speciesCapacity() { return speciesCapacity; }
-    public int limbCapacity() { return limbCapacity; }
     public long baseOffset() { return baseOffset; }
     public long bytes() { return endOffset - baseOffset; }
     public long endOffset() { return endOffset; }

@@ -1,4 +1,6 @@
 #version 450
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_ARB_gpu_shader_fp64 : require
 layout(local_size_x=128) in;
 layout(binding=0,std430) buffer Arena { uint words[]; };
@@ -7,6 +9,14 @@ layout(push_constant) uniform Params { int header;int stage;int count;int step;d
 shared dvec4 scratch[128];
 int h(int i){return int(words[p.header+i]);}int at(int field){return h(8+field);}
 int get(int field,int i){return int(words[at(field)+i]);}void put(int field,int i,int x){words[at(field)+i]=uint(x);}
+// Reserve the first lane's shared destination once for the participating subgroup.
+uint reserveIncident(int address){
+ uvec4 participants=subgroupBallot(true);uint first=subgroupBallotFindLSB(participants);
+ int sharedAddress=subgroupBroadcastFirst(address);uvec4 peers=subgroupBallot(address==sharedAddress);uint base=0u;
+ if(gl_SubgroupInvocationID==first)base=atomicAdd(words[address],subgroupBallotBitCount(peers));
+ base=subgroupBroadcastFirst(base);
+ return address==sharedAddress?base+subgroupBallotExclusiveBitCount(peers):atomicAdd(words[address],1u);
+}
 double raw(int address){return packDouble2x32(uvec2(words[address],words[address+1]));}
 double num(int field,int i){return raw(at(field)+2*i);}
 bool finite(double x){return !isnan(x)&&!isinf(x);}void invalid(){atomicOr(errors,16384u);}
@@ -127,8 +137,8 @@ dvec4 countContact(int edge){
 }
 void scatter(int edge){
     if(!validContact(edge))return;int a=get(CONTACT_A,edge),b=get(CONTACT_B,edge);
-    int slot=int(atomicAdd(words[at(CURSORS)+a],1u));put(INCIDENT,get(DEGREE_OFFSETS,a)+slot,edge);
-    if(b>=0){slot=int(atomicAdd(words[at(CURSORS)+b],1u));put(INCIDENT,get(DEGREE_OFFSETS,b)+slot,edge);}
+    int slot=int(reserveIncident(at(CURSORS)+a));put(INCIDENT,get(DEGREE_OFFSETS,a)+slot,edge);
+    if(b>=0){slot=int(reserveIncident(at(CURSORS)+b));put(INCIDENT,get(DEGREE_OFFSETS,b)+slot,edge);}
 }
 dvec2 tileSum(int row){
     dvec2 value=dvec2(0.0);for(int tile=get(TILE_OFFSETS,row);tile<get(TILE_OFFSETS,row+1);tile++){
@@ -270,6 +280,8 @@ void finishLongProduct(int row,bool direction){
 }
 void main(){
     int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*block+lane;
+    if(p.stage==31){if(id==0){int count=errors==0u?max(1,((h(7)!=0?get(MODE,1):contacts())+127)/128):0;put(DISPATCH,12,min(count,65535));put(DISPATCH,13,max(1,(count+65534)/65535));put(DISPATCH,14,1);}return;}
+    if(errors!=0u&&h(7)!=0)return;
     if(owners()<0||owners()>h(0)||get(COUNTS,1)<0||get(COUNTS,1)>h(1)||contacts()<0||contacts()>h(2)){if(id==0)invalid();return;}
     // All bath demand is counted even when a private candidate needs a larger bath column.
     if((errors&64u)!=0u&&p.stage!=0&&p.stage!=1&&p.stage!=31)return;
@@ -279,7 +291,7 @@ void main(){
         if(p.stage==26&&get(MODE,0)!=10)return;
         reduceTile(block,lane,p.stage);return;
     }
-    if(p.stage==31){if(id==0){int count=errors==0u?max(1,((h(7)!=0?get(MODE,1):contacts())+127)/128):0;put(DISPATCH,12,min(count,65535));put(DISPATCH,13,max(1,(count+65534)/65535));put(DISPATCH,14,1);}return;}
+    
     if(p.stage==0){if(id<h(0))initialize(id);}
     else if(p.stage==1){dvec4 v=reduce(countContact(id),0);if(lane==0)savePartial(BATH_PARTIALS,block,v);}
     else if(p.stage==2){if(id<h(2))scatter(id);}

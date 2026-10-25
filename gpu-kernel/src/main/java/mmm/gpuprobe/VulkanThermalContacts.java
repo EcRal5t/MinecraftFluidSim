@@ -48,7 +48,7 @@ final class VulkanThermalContacts implements AutoCloseable {
             for(int[] map:new int[][]{liquid,gas,granular,coherent,device})for(int i:map)if(i<0||i>=conductivity.length)throw new IllegalArgumentException("Thermal material mapping out of range");}
     }
     enum Field{OWNER_FLAGS(4),OWNER_PREFIX(4),OWNER_KIND(4),OWNER_INDEX(4),OWNER_K(8),TERM_COUNTS(4),
-        SAMPLE_FLAGS(4),SAMPLE_PREFIX(4),SAMPLE_OWNER(4),SAMPLE_CELL(4),SAMPLE_MASK(4),SAMPLE_VOLUME(8),
+        SAMPLE_FLAGS(4),SAMPLE_PREFIX(4),SAMPLE_OWNER(4),SAMPLE_CELL(4),SAMPLE_MASK(4),SAMPLE_FRACTION(8),
         CELL_COUNTS(4),CELL_OFFSETS(4),CELL_CURSORS(4),CELL_SAMPLES(4),COVERAGE(8),CONTACT_COUNTS(4),CONTACT_OFFSETS(4),
         LIQUID_MATERIAL(4),GAS_MATERIAL(4),GRANULAR_MATERIAL(4),CONDUCTIVITY(8),REQUIREMENTS(4),SCAN(4),COHERENT_MATERIAL(4),DEVICE_MATERIAL(4),PORT_COUNTS(4),PORT_OFFSETS(4),PORT_CURSORS(4),PORT_ROWS(4);
         final int width;Field(int width){this.width=width;}}
@@ -62,10 +62,10 @@ final class VulkanThermalContacts implements AutoCloseable {
             for(Field f:Field.values()){
                 int n=switch(f){case OWNER_FLAGS->owners;case OWNER_PREFIX->owners+1;
                     case OWNER_KIND,OWNER_INDEX,OWNER_K,TERM_COUNTS->conduction.owners;
-                    case SAMPLE_FLAGS,SAMPLE_OWNER,SAMPLE_CELL,SAMPLE_MASK,SAMPLE_VOLUME,CELL_SAMPLES,CONTACT_COUNTS->samples;
+                    case SAMPLE_FLAGS,SAMPLE_OWNER,SAMPLE_CELL,SAMPLE_MASK,SAMPLE_FRACTION,CELL_SAMPLES,CONTACT_COUNTS->samples;
                     case SAMPLE_PREFIX,CONTACT_OFFSETS->samples+1;case PORT_COUNTS,PORT_CURSORS,CELL_COUNTS,CELL_CURSORS->cells;case PORT_OFFSETS->cells+1;case PORT_ROWS->input.device()==null?0:input.device().portCapacity();case CELL_OFFSETS->cells+1;case COVERAGE->Math.addExact(8*cells,input.device()==null?0:24*input.device().portCapacity());
                     case LIQUID_MATERIAL->materials.liquid().length;case GAS_MATERIAL->materials.gas().length;case GRANULAR_MATERIAL->materials.granular().length;case COHERENT_MATERIAL->materials.coherent().length;case DEVICE_MATERIAL->materials.device().length;case CONDUCTIVITY->materials.conductivity().length;
-                    case REQUIREMENTS->5;case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(samples,Math.max(owners,Math.max(cells,conduction.owners))))/4);};
+                    case REQUIREMENTS->7;case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(samples,Math.max(owners,Math.max(cells,conduction.owners))))/4);};
                 columns.put(f,allocate(cursor,n,f.width,a));
             }endOffset=align(cursor[0],a);Math.toIntExact(endOffset/4);
         }
@@ -115,6 +115,7 @@ final class VulkanThermalContacts implements AutoCloseable {
         if(l.input.device()!=null){stage(command,l,11,l.input.device().portCapacity());prefix(command,l,l.cells,Field.PORT_COUNTS,Field.PORT_OFFSETS);stage(command,l,12,l.input.device().portCapacity());}
         stage(command,l,7,l.cells);stage(command,l,8,l.samples);prefix(command,l,l.samples,Field.CONTACT_COUNTS,Field.CONTACT_OFFSETS);stage(command,l,9,l.samples);stage(command,l,13,1);
     }
+    void recordConductionState(VkCommandBuffer command,Layout l){stage(command,l,14,1);}
     /** The solver has already combined every spatial sample at its unique owner. */
     void recordPublish(VkCommandBuffer command,Layout l){stage(command,l,10,l.conduction.owners);}
     private void prefix(VkCommandBuffer command,Layout l,int n,Field input,Field output){scan.record(command,n,l.word(input),l.word(output),l.word(Field.SCAN));}

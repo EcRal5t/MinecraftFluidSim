@@ -85,6 +85,8 @@ public final class GpuLiquidMechanicalBenchmark {
             System.out.println("final inventory_counts="+Arrays.toString(region.inventoryCounts())+" capacity_status_rounds="+Arrays.toString(region.capacityDiagnostics())
                     +" pressure_iterations_rms_status="+Arrays.toString(region.pressureDiagnostics()));
             if(gas)System.out.println("final gas_counts="+Arrays.toString(region.gasInventoryCounts())+" old_future_gas_nodes_groups="+Arrays.toString(region.gasTopologyDiagnostics())+" aperture_pairs_iterations_rms_status_capture_escape="+Arrays.toString(region.gasFlowDiagnostics()));
+            String graphDump=System.getProperty("mmm.gpuMechanicalPressureDump","");
+            if(gas&&!graphDump.isBlank())region.dumpGasFlowGraph(java.nio.file.Path.of(graphDump),parameters.duration());
             if(granularCount>0){var finalGranular=region.checkpointGranular();double sourceY=granularConfig.initial().particles().stream().mapToDouble(VulkanGranularStateLayout.Particle::y).sum();
                 double finalY=finalGranular.particles().stream().mapToDouble(VulkanGranularStateLayout.Particle::y).sum();
                 System.out.println("final granular_active="+finalGranular.particles().size()+" deposits="+finalGranular.deposits().size()+" summed_vertical_displacement="+(finalY-sourceY));}

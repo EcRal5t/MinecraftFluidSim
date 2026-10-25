@@ -105,18 +105,14 @@ final class VulkanRegionThermal implements AutoCloseable {
                 if(l.input().gas()!=null){gasEOS.recordVolumes(command,l.input().gasThermal(),l.input().gasGeometry());gasEOS.record(command,l.input().gasThermal());}
             });
             timed(command,"thermal-contacts",()->contacts.recordPrepare(command,l.contacts()));
-        },l.contacts().column(VulkanThermalContacts.Field.REQUIREMENTS).offset(),20);
-        if(status.error()==64){int required=status.feedback().getInt(12),baths=status.feedback().getInt(16);if(required>l.conduction().contacts||baths>l.conduction().baths)throw new ContactCapacityGrowth(required,baths);}
-        if(status.error()!=0)return status.error();
-        status=candidate.continueBatch((command,in,out,errors,staging,stack)->{
             conduction.recordPrepare(command,l.conduction(),duration,timings);
             timed(command,"thermal-explicit",()->conduction.recordExplicit(command,l.conduction(),duration));
-        },l.conduction().column(VulkanThermalConduction.Field.MODE).offset(),8);
-        if(status.error()==64&&status.feedback().getInt(4)>l.conduction().baths)
-            throw new ContactCapacityGrowth(l.conduction().contacts,status.feedback().getInt(4));
+            contacts.recordConductionState(command,l.contacts());
+        },l.contacts().column(VulkanThermalContacts.Field.REQUIREMENTS).offset(),28);
+        if(status.error()==64){int required=status.feedback().getInt(12),baths=status.feedback().getInt(16);if(required>l.conduction().contacts||baths>l.conduction().baths)throw new ContactCapacityGrowth(required,baths);}
         if(status.error()!=0)return status.error();
-        int bathCount=status.feedback().getInt(4);
-        if(status.feedback().getInt(0)==VulkanThermalConduction.IMPLICIT)conduction.solveImplicit(candidate,l.conduction(),pressure,duration,timings);
+        int bathCount=status.feedback().getInt(24);
+        if(status.feedback().getInt(20)==VulkanThermalConduction.IMPLICIT)conduction.solveImplicit(candidate,l.conduction(),pressure,duration,timings);
         status=candidate.continueBatch((command,in,out,errors,staging,stack)->{
             timed(command,"thermal-finish",()->conduction.recordFinish(command,l.conduction(),duration));
             timed(command,"thermal-publish",()->contacts.recordPublish(command,l.contacts()));

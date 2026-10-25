@@ -17,7 +17,7 @@ final class VulkanLiquidRouteQuantities implements AutoCloseable {
     record Layout(VulkanLiquidStateLayout source, VulkanLiquidRouteLayout routes,
                   int materialReferenceWordOffset, int speciesReferenceWordOffset, int speciesStride,
                   VulkanLiquidStateLayout.Column header, VulkanLiquidStateLayout.Column speciesCounts,
-                  VulkanLiquidStateLayout.Column energyRemainders, VulkanLiquidStateLayout.Column scanWorkspace,
+                  VulkanLiquidStateLayout.Column energyRemainders, VulkanLiquidStateLayout.Column owners, VulkanLiquidStateLayout.Column scanWorkspace,
                   long endOffset) {
         int headerWordOffset() { return word(header); }
         long bytes() { return endOffset - header.offset(); }
@@ -32,7 +32,7 @@ final class VulkanLiquidRouteQuantities implements AutoCloseable {
             int[] values = new int[64];
             values[0] = source.stockCapacity(); values[1] = routes.routeCapacity(); values[2] = routes.speciesCapacity();
             values[3] = materialReferenceWordOffset; values[4] = speciesReferenceWordOffset; values[5] = speciesStride;
-            values[6] = word(speciesCounts); values[7] = word(energyRemainders);
+            values[6] = word(speciesCounts); values[7] = word(energyRemainders);values[8]=word(owners);
             for (var field : VulkanLiquidStateLayout.Field.values()) values[16 + field.ordinal()] = word(source.column(field));
             for (var field : VulkanLiquidRouteLayout.Field.values()) values[35 + field.ordinal()] = word(routes.column(field));
             for (int i = 0; i < values.length; i++) target.putInt(Math.toIntExact(0 + 4L * i), values[i]);
@@ -51,9 +51,10 @@ final class VulkanLiquidRouteQuantities implements AutoCloseable {
         var header = column(cursor, 64, 4, alignment);
         var counts = column(cursor, routes.routeCapacity(), 4, alignment);
         var remainders = column(cursor, Math.multiplyExact(source.stockCapacity(), 8), 8, alignment);
+        var owners=column(cursor,source.stockCapacity(),4,alignment);
         var workspace = column(cursor, Math.toIntExact(VulkanPrefixScan.workspaceBytes(routes.routeCapacity()) / 4), 4, alignment);
         return new Layout(source, routes, materialReferenceWordOffset, speciesReferenceWordOffset, speciesStride,
-                header, counts, remainders, workspace, align(cursor[0], alignment));
+                header, counts, remainders, owners, workspace, align(cursor[0], alignment));
     }
 
     private final FlipKernelBindings bindings;
@@ -75,10 +76,10 @@ final class VulkanLiquidRouteQuantities implements AutoCloseable {
     }
 
     void record(VkCommandBuffer command, Layout layout) {
-        stage(command, layout, 0, Math.max(layout.routes().routeCapacity(), layout.energyRemainders().count()));
+        stage(command, layout, 0, layout.energyRemainders().count());
         stage(command, layout, 1, layout.source().stockCapacity());
         scan.record(command, layout.routes().routeCapacity(), word(layout.speciesCounts()),
-                word(layout.routes().column(VulkanLiquidRouteLayout.Field.SPECIES_OFFSETS)), word(layout.scanWorkspace()));
+                word(layout.routes().column(VulkanLiquidRouteLayout.Field.SPECIES_OFFSETS)), word(layout.scanWorkspace()),word(layout.routes().column(VulkanLiquidRouteLayout.Field.COUNTS)));
         stage(command, layout, 2, layout.source().stockCapacity());
     }
 

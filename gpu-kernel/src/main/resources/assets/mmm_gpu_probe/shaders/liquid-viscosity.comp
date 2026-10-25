@@ -9,7 +9,7 @@ layout(push_constant) uniform Params {int header;int stage;int colour;int count;
 const int MU=0,CARRIER=1,EXTRAP=2,WALL_CONDUCTANCE=3,STRESS_HEAT=4,WALL_HEAT=5,CONTACT_HEAT=6,CONTACT_WORK=7,
  CELL_HEAT=8,CELL_WORK=9,SOURCE_V=10,SOURCE_K=11,FINAL_K=12,FIXED_IMPULSE=13,WALL_IMPULSE=14,
  BODY_IMPULSE=15,BODY_WORK=16,MAT_OFFSETS=17,SEGMENTS=18,STRAIN_COUNTS=19,STRAIN_DISPATCH=20,
- STRAIN_ROWS=21,STRAIN_BLEND=22,FACE_INVERSE_MASS=23;
+ STRAIN_ROWS=21,STRAIN_CONDUCTANCE=22,FACE_INVERSE_MASS=23,FACE_EXPLICIT=24;
 int h(int i){return int(words[p.header+i]);}int at(int field){return h(48+field);}int stockField(int f){return h(24+f);}
 int n(){return h(3);}ivec3 shape(){return ivec3(h(0),h(1),h(2));}
 double num(int a){return packDouble2x32(uvec2(words[a],words[a+1]));}
@@ -64,12 +64,10 @@ void prepareFace(int f){double v=face(f,1);write(SOURCE_V,f,v);write(SOURCE_K,f,
  write(FACE_INVERSE_MASS,f,enabled(f)?1.0/face(f,0):0.0);
  write(WALL_HEAT,f,0.0);write(WALL_IMPULSE,f,0.0);write(CONTACT_HEAT,f,0.0);write(CONTACT_WORK,f,0.0);}
 int colourStart(int colour){return h(80+colour);}
-void compileStrain(int row,int colour,ivec4 ids,double conductance){
- if(!(conductance>0.0))return;double inverse=0.0;
- for(int i=0;i<4;i++)if(ids[i]>=0)inverse+=read(FACE_INVERSE_MASS,ids[i]);
- if(inverse==0.0)return;
- int slot=colourStart(colour)+int(atomicAdd(words[at(STRAIN_COUNTS)+colour],1u));
- put(STRAIN_ROWS,slot,row);write(STRAIN_BLEND,slot,blend(p.dt*conductance*inverse));
+void compileStrain(int row,ivec4 ids,double conductance){
+ if(!(conductance>0.0))return;bool present=false;double rate=0.0;
+ for(int i=0;i<4;i++)if(ids[i]>=0&&read(FACE_INVERSE_MASS,ids[i])>0.0){present=true;rate+=(i%2==0?1.0:-1.0)*read(SOURCE_V,ids[i]);}
+ if(!present)return;write(STRAIN_CONDUCTANCE,row,conductance);write(STRESS_HEAT,row,rate);
 }
 ivec2 shearAxes(int pair){return pair==0?ivec2(0,1):pair==1?ivec2(0,2):ivec2(1,2);}
 ivec4 strainFaces(int row){bool normal=row<3*n();int local=normal?row:row-3*n(),kind=local%3;ivec3 pos=position(local/3);
@@ -77,34 +75,44 @@ ivec4 strainFaces(int row){bool normal=row<3*n();int local=normal?row:row-3*n(),
  ivec2 ab=shearAxes(kind);ivec3 ea=ivec3(0),eb=ivec3(0);ea[ab.x]=1;eb[ab.y]=1;
  return ivec4(faceAt(pos,ab.x),faceAt(pos-eb,ab.x),faceAt(pos,ab.y),faceAt(pos-ea,ab.y));
 }
+bool explicitStrain(int row){
+ ivec4 ids=strainFaces(row);for(int i=0;i<4;i++)if(ids[i]>=0&&read(FACE_INVERSE_MASS,ids[i])>0.0&&get(FACE_EXPLICIT,ids[i])==0)return false;
+ return true;
+}
 void applyStrain(int id){
  if(id>=get(STRAIN_COUNTS,p.colour))return;int slot=colourStart(p.colour)+id,row=get(STRAIN_ROWS,slot),owner=(row<3*n()?row:row-3*n())/3;
  ivec4 ids=strainFaces(row);dvec4 response=dvec4(0.0);dvec3 fixedCoefficients=dvec3(0.0);double inverse=0.0,rate=0.0;
  for(int i=0;i<4;i++){int f=ids[i];double inv=f<0?0.0:read(FACE_INVERSE_MASS,f);if(inv==0.0){ids[i]=-1;continue;}
   double sign=(i%2==0?1.0:-1.0);response[i]=sign*inv;inverse+=inv;rate+=sign*face(f,1);fixedCoefficients[axisOf(f)]+=sign;}
- if(rate==0.0)return;double impulse=read(STRAIN_BLEND,slot)*rate/inverse;
+ if(rate==0.0)return;double impulse=blend(p.dt*read(STRAIN_CONDUCTANCE,row)*inverse)*rate/inverse;
  add(STRESS_HEAT,row,max(0.0,impulse*(rate-.5*impulse*inverse)));
  for(int i=0;i<4;i++){int f=ids[i];if(f>=0)velocity(f,face(f,1)-impulse*response[i]);}
  for(int a=0;a<3;a++)add(FIXED_IMPULSE,3*owner+a,impulse*fixedCoefficients[a]);
 }
-void compileCellStrain(int id){int c=id/6,kind=id%6;if(!wet(c))return;ivec3 pos=position(c);
+void compileCellStrain(int id){int c=id/6,kind=id%6,row=kind<3?3*c+kind:3*n()+3*c+kind-3;write(STRAIN_CONDUCTANCE,row,0.0);if(!wet(c))return;ivec3 pos=position(c);
  if(kind<3){int axis=kind;ivec3 e=ivec3(0);e[axis]=1;
- compileStrain(3*c+axis,2*axis+(pos[axis]&1),ivec4(faceAt(pos+e,axis),faceAt(pos,axis),-1,-1),2.0*read(MU,c)*p.h*min(cell(c,0),cell(c,2)));return;}
+ compileStrain(3*c+axis,ivec4(faceAt(pos+e,axis),faceAt(pos,axis),-1,-1),2.0*read(MU,c)*p.h*min(cell(c,0),cell(c,2)));return;}
  int pair=kind-3;ivec2 ab=shearAxes(pair);ivec3 ea=ivec3(0),eb=ivec3(0);ea[ab.x]=1;eb[ab.y]=1;
  ivec4 cells=ivec4(index(pos-ea-eb),index(pos-ea),index(pos-eb),c);for(int i=0;i<4;i++)if(!wet(cells[i]))return;
  ivec4 ids=ivec4(faceAt(pos,ab.x),faceAt(pos-eb,ab.x),faceAt(pos,ab.y),faceAt(pos-ea,ab.y));double area=1.0;
  for(int i=0;i<4;i++)area=min(area,enabled(ids[i])?face(ids[i],2):0.0);if(area==0.0)return;
  double mu=harmonic(harmonic(read(MU,cells.x),read(MU,cells.y)),harmonic(read(MU,cells.z),read(MU,cells.w)));
- compileStrain(3*n()+3*c+pair,6+4*pair+(pos[ab.x]&1)+2*(pos[ab.y]&1),ids,mu*p.h*area);
+ compileStrain(3*n()+3*c+pair,ids,mu*p.h*area);
+}
+void prepareImplicitStrain(int row){
+ if(read(STRAIN_CONDUCTANCE,row)==0.0||explicitStrain(row))return;
+ bool normal=row<3*n();int local=normal?row:row-3*n(),kind=local%3;ivec3 pos=position(local/3);int colour;
+ if(normal)colour=2*kind+(pos[kind]&1);else{ivec2 ab=shearAxes(kind);colour=6+4*kind+(pos[ab.x]&1)+2*(pos[ab.y]&1);}
+ int slot=colourStart(colour)+int(atomicAdd(words[at(STRAIN_COUNTS)+colour],1u));put(STRAIN_ROWS,slot,row);
 }
 void strainDispatch(int colour){int groups=(get(STRAIN_COUNTS,colour)+127)/128;put(STRAIN_DISPATCH,3*colour,min(groups,65535));put(STRAIN_DISPATCH,3*colour+1,(groups+65534)/65535);put(STRAIN_DISPATCH,3*colour+2,1);}
 double wallConductance(int c,int tangent){return c<0?0.0:read(WALL_CONDUCTANCE,3*c+tangent);}
-void wall(int f){if(!enabled(f))return;ivec2 cells=faceCells(f);int axis=axisOf(f);double conductance=wallConductance(cells.x,axis)+wallConductance(cells.y,axis),v=face(f,1),mass=face(f,0);
+void wall(int f){if(!enabled(f)||get(FACE_EXPLICIT,f)!=0)return;ivec2 cells=faceCells(f);int axis=axisOf(f);double conductance=wallConductance(cells.x,axis)+wallConductance(cells.y,axis),v=face(f,1),mass=face(f,0);
  if(conductance==0.0||v==0.0)return;double impulse=mass*blend(p.dt*conductance/mass)*v;
  velocity(f,v-impulse/mass);add(WALL_HEAT,f,max(0.0,impulse*(v-.5*impulse/mass)));add(WALL_IMPULSE,f,impulse);
 }
 void prescribed(int f){
- if(h(12)>=0){int first=int(words[h(12)+f]),last=int(words[h(12)+f+1]);
+ if(h(12)>=0&&get(FACE_EXPLICIT,f)==0){int first=int(words[h(12)+f]),last=int(words[h(12)+f+1]);
   if(first<0||last<first||last>h(16)){atomicOr(errors,32768u);return;}
   ivec2 cells=faceCells(f);double mu=0.0,samples=0.0;for(int i=0;i<2;i++)if(wet(cells[i])){mu+=read(MU,cells[i]);samples++;}
   for(int contact=first;contact<last;contact++){
@@ -131,8 +139,86 @@ void gather(int c){if(!wet(c))return;double heat=0.0,work=0.0;ivec3 pos=position
  }
  write(CELL_HEAT,c,heat);write(CELL_WORK,c,work);
 }
-void main(){int id=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);if(id>=p.count||errors!=0u)return;
+
+// Each MAC face meets two normal strains and two shear strains per transverse axis.
+// Incidence is implicit in the grid; source rates remain immutable during the face update.
+void faceStrains(int f,out int rows[6],out double signs[6]){
+ int axis=axisOf(f),local=f-(axis==0?0:axis==1?xFaces():xFaces()+yFaces());ivec3 dims=shape();dims[axis]++;
+ ivec3 pos=ivec3(local%dims.x,local/dims.x%dims.y,local/(dims.x*dims.y)),left=pos;left[axis]--;
+ int a=index(left),b=index(pos);rows[0]=a<0?-1:3*a+axis;rows[1]=b<0?-1:3*b+axis;signs[0]=1.0;signs[1]=-1.0;
+ int at=2;for(int other=0;other<3;other++)if(other!=axis){int pair=min(axis,other)==0?(max(axis,other)==1?0:1):2;
+  ivec3 far=pos;far[other]++;int first=index(pos),second=index(far);
+  rows[at]=first<0?-1:3*n()+3*first+pair;rows[at+1]=second<0?-1:3*n()+3*second+pair;
+  signs[at]=1.0;signs[at+1]=-1.0;at+=2;}
+}
+int strainSize(int row){
+ if(row>=3*n())return 4;ivec4 ids=strainFaces(row);int count=0;
+ for(int i=0;i<2;i++)if(read(FACE_INVERSE_MASS,ids[i])>0.0)count++;return count;
+}
+ivec2 prescribedRange(int f){
+ if(h(12)<0)return ivec2(0);int first=int(words[h(12)+f]),last=int(words[h(12)+f+1]);
+ if(first<0||last<first||last>h(16)){atomicOr(errors,32768u);return ivec2(0);}return ivec2(first,last);
+}
+double contactMu(ivec2 cells){
+ double mu=0.0,samples=0.0;for(int i=0;i<2;i++)if(wet(cells[i])){mu+=read(MU,cells[i]);samples++;}
+ return samples>0.0?mu/samples:0.0;
+}
+double contactConductance(int contact,double mu){
+ int body=int(words[h(13)+contact]);double distance=num(h(14)+2*contact);
+ if(body<0||body>=h(17)||distance<0.0){atomicOr(errors,32768u);return 0.0;}return mu*distance;
+}
+double contactVelocity(int contact,int axis){return num(h(15)+2*(3*int(words[h(13)+contact])+axis));}
+bool explicitCondition(int f){
+ if(!enabled(f))return false;int rows[6];double signs[6];faceStrains(f,rows,signs);precise double assigned=0.0;
+ for(int i=0;i<6;i++)if(rows[i]>=0){double g=read(STRAIN_CONDUCTANCE,rows[i]);if(g>0.0)assigned+=p.dt*g*double(strainSize(rows[i]));}
+ ivec2 cells=faceCells(f);int axis=axisOf(f);assigned+=p.dt*(wallConductance(cells.x,axis)+wallConductance(cells.y,axis));
+ ivec2 contacts=prescribedRange(f);double mu=contacts.x<contacts.y?contactMu(cells):0.0;
+ for(int contact=contacts.x;contact<contacts.y;contact++)assigned+=p.dt*contactConductance(contact,mu);
+ return assigned<=face(f,0);
+}
+void explicitFace(int f){
+ double before=read(SOURCE_V,f),mass=face(f,0);if(get(FACE_EXPLICIT,f)==0){write(FINAL_K,f,read(SOURCE_K,f));return;}
+ int rows[6],sizes[6];double signs[6],weights[6],rates[6];faceStrains(f,rows,signs);
+ precise double assigned=0.0;double impulse=0.0;
+ for(int i=0;i<6;i++){
+  double g=rows[i]<0?0.0:read(STRAIN_CONDUCTANCE,rows[i]);if(g>0.0&&!explicitStrain(rows[i]))g=0.0;sizes[i]=g>0.0?strainSize(rows[i]):1;
+  rates[i]=g>0.0?read(STRESS_HEAT,rows[i]):0.0;weights[i]=p.dt*g*double(sizes[i]);
+  assigned+=weights[i];impulse-=signs[i]*p.dt*g*rates[i];
+ }
+ ivec2 cells=faceCells(f);int axis=axisOf(f);double wallG=wallConductance(cells.x,axis)+wallConductance(cells.y,axis),wallWeight=p.dt*wallG;
+ assigned+=wallWeight;impulse-=wallWeight*before;
+ ivec2 contacts=prescribedRange(f);double mu=contacts.x<contacts.y?contactMu(cells):0.0,work=0.0,contactHeat=0.0;
+ for(int contact=contacts.x;contact<contacts.y;contact++){
+  double g=contactConductance(contact,mu);if(g==0.0)continue;double target=contactVelocity(contact,axis),rate=before-target,j=-p.dt*g*rate,w=target*j;
+  assigned+=p.dt*g;impulse+=j;work+=w;contactHeat+=.5*p.dt*g*rate*rate;
+  write(BODY_IMPULSE,contact,-j);write(BODY_WORK,contact,w);
+ }
+ double after=before+impulse/mass,difference=before-after;
+ // The CFL test guarantees nonnegative weights, so this is an actual kinetic mixing loss.
+ double mixing=.5*(mass-assigned)*difference*difference;
+ for(int i=0;i<6;i++)if(weights[i]>0.0){double d=before-signs[i]*rates[i]/double(sizes[i])-after;mixing+=.5*weights[i]*d*d;}
+ mixing+=.5*wallWeight*after*after;
+ for(int contact=contacts.x;contact<contacts.y;contact++){
+  double g=contactConductance(contact,mu);if(g==0.0)continue;double d=contactVelocity(contact,axis)-after;mixing+=.5*p.dt*g*d*d;
+ }
+ velocity(f,after);write(FINAL_K,f,.5*mass*after*after);write(WALL_IMPULSE,f,wallWeight*before);
+ write(WALL_HEAT,f,.5*wallWeight*before*before);write(CONTACT_WORK,f,work);write(CONTACT_HEAT,f,contactHeat+mixing);
+}
+void explicitCellHeat(int c){
+ dvec3 fixedImpulse=dvec3(0.0);
+ for(int kind=0;kind<6;kind++){
+  int row=kind<3?3*c+kind:3*n()+3*c+kind-3;double g=read(STRAIN_CONDUCTANCE,row);if(g>0.0&&!explicitStrain(row))g=0.0;
+  double rate=read(STRESS_HEAT,row),impulse=p.dt*g*rate;
+  write(STRESS_HEAT,row,.5*impulse*rate);if(g==0.0)continue;ivec4 ids=strainFaces(row);ivec3 coefficient=ivec3(0);
+  for(int i=0;i<4;i++)if(ids[i]>=0&&read(FACE_INVERSE_MASS,ids[i])>0.0)coefficient[axisOf(ids[i])]+=i%2==0?1:-1;
+  fixedImpulse+=impulse*dvec3(coefficient);
+ }
+ for(int axis=0;axis<3;axis++)write(FIXED_IMPULSE,3*c+axis,fixedImpulse[axis]);
+}
+void main(){int id=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
+ if(id>=p.count||errors!=0u)return;
  if(p.stage==0)prepareCell(id);else if(p.stage==1)prepareFace(id);else if(p.stage==2){if(p.colour<18)applyStrain(id);else wall(id);}
  else if(p.stage==3)prescribed(id);else if(p.stage==4)gather(id);else if(p.stage==5){write(BODY_IMPULSE,id,0.0);write(BODY_WORK,id,0.0);}
  else if(p.stage==6)compileCellStrain(id);else if(p.stage==7)strainDispatch(id);
+ else if(p.stage==8)prepareImplicitStrain(id);else if(p.stage==9)put(FACE_EXPLICIT,id,explicitCondition(id)?1:0);else if(p.stage==10)explicitFace(id);else if(p.stage==11)explicitCellHeat(id);
 }

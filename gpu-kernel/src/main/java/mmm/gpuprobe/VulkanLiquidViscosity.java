@@ -36,7 +36,7 @@ final class VulkanLiquidViscosity implements AutoCloseable {
         CONTACT_FACE_WORK(8), SOURCE_CELL_HEAT(8), SOURCE_CELL_WORK(8), SOURCE_FACE_VELOCITY(8), SOURCE_FACE_K(8),
         FINAL_FACE_K(8), CELL_FIXED_IMPULSE(8), WALL_FACE_IMPULSE(8), CONTACT_IMPULSE(8), CONTACT_WORK(8),
         MATERIAL_OFFSETS(4), VISCOSITY_SEGMENTS(8), STRAIN_COUNTS(4), STRAIN_DISPATCH(4),
-        STRAIN_ROWS(4), STRAIN_BLEND(8), FACE_INVERSE_MASS(8);
+        STRAIN_ROWS(4), STRAIN_CONDUCTANCE(8), FACE_INVERSE_MASS(8), FACE_EXPLICIT(4);
         final int width;Field(int width){this.width=width;}
     }
     static final class Layout {
@@ -60,9 +60,9 @@ final class VulkanLiquidViscosity implements AutoCloseable {
             for(Field field:Field.values()) {
                 int count=switch(field){
                     case WALL_CONDUCTANCE,CELL_FIXED_IMPULSE->3*n;case STRESS_HEAT->6*n;
-                    case WALL_HEAT,CONTACT_FACE_HEAT,CONTACT_FACE_WORK,SOURCE_FACE_VELOCITY,SOURCE_FACE_K,FINAL_FACE_K,WALL_FACE_IMPULSE,FACE_INVERSE_MASS->this.faces;
+                    case WALL_HEAT,CONTACT_FACE_HEAT,CONTACT_FACE_WORK,SOURCE_FACE_VELOCITY,SOURCE_FACE_K,FINAL_FACE_K,WALL_FACE_IMPULSE,FACE_INVERSE_MASS,FACE_EXPLICIT->this.faces;
                     case CONTACT_IMPULSE,CONTACT_WORK->contacts==null?0:contacts.capacity();
-                    case STRAIN_COUNTS->18;case STRAIN_DISPATCH->54;case STRAIN_ROWS,STRAIN_BLEND->6*n;
+                    case STRAIN_COUNTS->18;case STRAIN_DISPATCH->54;case STRAIN_ROWS,STRAIN_CONDUCTANCE->6*n;
                     case MATERIAL_OFFSETS->tables.offsets().length;case VISCOSITY_SEGMENTS->tables.segments().length;default->n;
                 };
                 columns.put(field,VulkanLiquidViscosity.column(cursor,count,field.width,alignment));
@@ -101,22 +101,29 @@ final class VulkanLiquidViscosity implements AutoCloseable {
     private FlipKernelBindings.BufferRange candidate;
     VulkanLiquidViscosity(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,3,shader(),32);}
     void rebindRanges(FlipKernelBindings.BufferRange source,FlipKernelBindings.BufferRange candidate,FlipKernelBindings.BufferRange errors){this.candidate=candidate;bindings.rebindRanges(List.of(source,candidate,errors));}
-    void recordMaterial(VkCommandBuffer command,Layout layout,double cellSize){stage(command,layout,0,0,layout.source.cellCount(),cellSize,0);}
+    private void bind(VkCommandBuffer command){try(var stack=stackPush()){bindings.bind(command,stack);}}
+    void recordMaterial(VkCommandBuffer command,Layout layout,double cellSize){bind(command);stage(command,layout,0,0,layout.source.cellCount(),cellSize,0);}
+    /** Nonstiff strains advance together; only their stiff neighbours enter symmetric local sweeps. */
     void record(VkCommandBuffer command,Layout layout,double cellSize,double duration){
-        if(!(cellSize>0&&Double.isFinite(cellSize)&&duration>0&&Double.isFinite(duration)))throw new IllegalArgumentException("Invalid viscous step");
-        try(var stack=stackPush()){bindings.bind(command,stack);}
-        stage(command,layout,0,0,layout.source.cellCount(),cellSize,duration);
-        stage(command,layout,1,0,layout.faces,cellSize,duration);
-        if(layout.contacts!=null)stage(command,layout,5,0,layout.contacts.capacity(),cellSize,duration);
-        // Compile each physical strain once; both symmetric sweeps reuse its active entry.
-        stage(command,layout,6,0,Math.multiplyExact(6,layout.source.cellCount()),cellSize,.5*duration);
+        prepareFields(command,layout,cellSize,duration);
+        stage(command,layout,9,0,layout.faces,cellSize,duration);
+        stage(command,layout,10,0,layout.faces,cellSize,duration);
+        stage(command,layout,11,0,layout.source.cellCount(),cellSize,duration);
+        stage(command,layout,8,0,Math.multiplyExact(6,layout.source.cellCount()),cellSize,duration);
         stage(command,layout,7,0,18,cellSize,duration);
-        // Every colour owns disjoint MAC faces. The middle wall group receives one full step.
         for(int colour=0;colour<18;colour++)stage(command,layout,2,colour,colourCells(layout,colour),cellSize,.5*duration);
         stage(command,layout,2,18,layout.faces,cellSize,duration);
         for(int colour=17;colour>=0;colour--)stage(command,layout,2,colour,colourCells(layout,colour),cellSize,.5*duration);
         stage(command,layout,3,0,layout.faces,cellSize,duration);
         stage(command,layout,4,0,layout.source.cellCount(),cellSize,duration);
+    }
+    private void prepareFields(VkCommandBuffer command,Layout layout,double cellSize,double duration){
+        if(!(cellSize>0&&Double.isFinite(cellSize)&&duration>0&&Double.isFinite(duration)))throw new IllegalArgumentException("Invalid viscous step");
+        bind(command);
+        stage(command,layout,0,0,layout.source.cellCount(),cellSize,duration);
+        stage(command,layout,1,0,layout.faces,cellSize,duration);
+        if(layout.contacts!=null)stage(command,layout,5,0,layout.contacts.capacity(),cellSize,duration);
+        stage(command,layout,6,0,Math.multiplyExact(6,layout.source.cellCount()),cellSize,duration);
     }
     private static int colourCells(Layout layout,int colour) {return layout.colourOffsets[colour+1]-layout.colourOffsets[colour];}
     private static int colourCells(VulkanLiquidStateLayout source,int colour) {

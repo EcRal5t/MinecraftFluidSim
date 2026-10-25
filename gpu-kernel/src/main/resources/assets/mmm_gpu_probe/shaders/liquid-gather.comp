@@ -10,8 +10,9 @@ layout(push_constant) uniform Params { int header; int stage; int count; } p;
 const int COUNTS=0,CELL_OFFSETS=1,MATERIALS=2,SUPPORT_MASKS=3,VOLUME_OFFSETS=4,VOLUME_SIGNS=5,VOLUME_EXPONENTS=6,
           VOLUME_LIMBS=7,MASS_UNITS=8,ENERGY_BITS=9,MIXTURE_PRESENT=10,SPECIES_OFFSETS=11,SPECIES_HANDLES=12,
           SPECIES_AMOUNTS=13,MASS_RESIDUAL=14,NUMERIC_VOLUMES=15;
-const int ROUTE_VOLUME_OFFSETS=0,ROUTE_VOLUME_SIGNS=1,ROUTE_VOLUME_EXPONENTS=2,ROUTE_VOLUME_LIMBS=3,
-          ROUTE_MASS=4,ROUTE_ENERGY=5,ROUTE_MIXTURE=6,ROUTE_SPECIES_OFFSETS=7,ROUTE_SPECIES_HANDLES=8,ROUTE_SPECIES_AMOUNTS=9,ROUTE_SOURCE_OFFSETS=10,ROUTE_SLOTS=11,ROUTE_SOURCE_MASKS=14;
+const int ROUTE_DESCRIPTORS=0,ROUTE_MASS=1,ROUTE_ENERGY=2,ROUTE_MIXTURE=3,
+          ROUTE_SPECIES_OFFSETS=4,ROUTE_SPECIES_HANDLES=5,ROUTE_SPECIES_AMOUNTS=6,
+          ROUTE_SOURCE_OFFSETS=7,ROUTE_SLOTS=8,ROUTE_SOURCE_MASKS=10;
 const int64_t MAX_LONG=int64_t(0x7fffffffffffffffUL);
 int h(int field) { return int(candidateWords[p.header+field]); }
 int src(int field) { return h(16+field); }
@@ -35,7 +36,7 @@ void clearStock(int stock) {
 
 int seekRoute(int stock,int end,int slot) {
     while(stock<end) {
-        int r=routeIndex(stock,slot);int sign=r<0?0:int(candidateWords[route(ROUTE_VOLUME_SIGNS)+r]);
+        int r=routeIndex(stock,slot);int sign=r<0?0:int(candidateWords[route(ROUTE_DESCRIPTORS)+5*r+4]);
         if(sign>0)break;
         if(sign<0)atomicOr(errors,32u);
         stock++;
@@ -112,14 +113,8 @@ void gatherStock(int stock,int cell,int material,int members[7]) {
         precise double remainder=(energy-(next-virtualValue))+(value-virtualValue);
         putDouble(h(14)+14*stock+2*i,remainder);energy=next;
         if(isnan(value)||isinf(value)||isnan(next)||isinf(next))atomicOr(errors,32u);
-        int begin=int(candidateWords[route(ROUTE_VOLUME_OFFSETS)+member]);
-        int end=int(candidateWords[route(ROUTE_VOLUME_OFFSETS)+member+1]);
-        int term=h(12)+35*stock+5*i;
-        candidateWords[term]=1u;
-        candidateWords[term+1]=uint(route(ROUTE_VOLUME_LIMBS)+begin);
-        candidateWords[term+2]=uint(end-begin);
-        candidateWords[term+3]=candidateWords[route(ROUTE_VOLUME_EXPONENTS)+member];
-        candidateWords[term+4]=1u;
+        int descriptor=route(ROUTE_DESCRIPTORS)+5*member,term=h(12)+35*stock+5*i;
+        for(int field=0;field<5;field++)candidateWords[term+field]=candidateWords[descriptor+field];
     }
     putLong(dst(MASS_UNITS)+2*stock,mass);putDouble(dst(ENERGY_BITS)+2*stock,energy);
     candidateWords[dst(MIXTURE_PRESENT)+stock]=mixture;

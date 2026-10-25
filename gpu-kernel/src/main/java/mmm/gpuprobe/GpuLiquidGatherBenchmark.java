@@ -30,13 +30,13 @@ public final class GpuLiquidGatherBenchmark {
         int cells=grid*grid*grid,stocks=2*cells;
         long alignment=Math.max(8,context.storageOffsetAlignment());
         var state=new VulkanLiquidStateLayout(grid,grid,grid,stocks,stocks,stocks,alignment);
-        var routes=new VulkanLiquidRouteLayout(stocks,2*stocks,14*stocks,state.bytes(),alignment);
+        var routes=new VulkanLiquidRouteLayout(stocks,2*stocks,state.bytes(),alignment);
         long fixed=routes.endOffset(),mass=fixed+4L*cells,materialReference=mass+16,speciesReference=materialReference+16;
         long acceptedBase=speciesReference+32,phaseBase=acceptedBase+140L*cells,acceptedLimb=phaseBase+8;
         int scratchLimbs=Math.multiplyExact(7*stocks+3*cells,4);
         var materialLayout=VulkanLiquidMaterialRoutes.layout(state,routes,Math.toIntExact(acceptedBase/4),
                 Math.toIntExact(phaseBase/4),-1,scratchLimbs,acceptedLimb+8,alignment);
-        System.out.println("material_route_capacity grid="+grid+" scratch_limbs="+scratchLimbs+" final_route_limbs="+routes.limbCapacity());
+        System.out.println("material_route_capacity grid="+grid+" scratch_limbs="+scratchLimbs);
         var quantityLayout=VulkanLiquidRouteQuantities.layout(state,routes,Math.toIntExact(materialReference/4),
                 Math.toIntExact(speciesReference/4),2,materialLayout.endOffset(),alignment);
         var layout=VulkanLiquidGather.layout(state,state,routes,Math.toIntExact(fixed/4),
@@ -125,8 +125,8 @@ public final class GpuLiquidGatherBenchmark {
             }
             try(var result=storage.capture()) {
                 int requiredScratch=read(storage,result,materialLayout.reserveOffsets().offset()+4L*materialLayout.windowCount(),4).getInt(0);
-                int requiredRoute=read(storage,result,routes.column(VulkanLiquidRouteLayout.Field.VOLUME_OFFSETS).offset()+4L*routes.routeCapacity(),4).getInt(0);
-                System.out.println("material_route_required grid="+grid+" scratch_limbs="+requiredScratch+" final_route_limbs="+requiredRoute);
+                int candidates=read(storage,result,routes.column(VulkanLiquidRouteLayout.Field.COUNTS).offset(),4).getInt(0);
+                System.out.println("material_route_required grid="+grid+" scratch_limbs="+requiredScratch+" candidates="+candidates);
                 var roundoff=readDyadic(storage,result,roundoffLayout.result().offset());
                 var endpoint=readDyadic(storage,result,endpointLayout.result().offset());
                 if(!roundoff.equals(endpoint))throw new AssertionError("Exact device energy ledger differs from endpoints: "+roundoff+" != "+endpoint);

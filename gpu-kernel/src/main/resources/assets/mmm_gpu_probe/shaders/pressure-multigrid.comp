@@ -16,7 +16,8 @@ layout(push_constant) uniform Params {
     int buildDispatch;
 } p;
 shared double coarseCorrection[64];
-const double OMEGA=0.66666666666666666667LF;
+shared float coarseProjected[64];
+const float OMEGA=0.66666666666666666667;
 
 int count(ivec3 shape) { return shape.x*shape.y*shape.z; }
 int indexOf(ivec3 at,ivec3 shape) { return (at.z*shape.y+at.y)*shape.x+at.x; }
@@ -24,19 +25,21 @@ ivec3 coordinate(int row,ivec3 shape) { return ivec3(row%shape.x,row/shape.x%sha
 bool inside(ivec3 at,ivec3 shape) { return all(greaterThanEqual(at,ivec3(0)))&&all(lessThan(at,shape)); }
 ivec3 adjacent(ivec3 at,int side) { at[side/2]+=(side&1)==0?-1:1;return at; }
 int aIndex(int base,int row,int entry) { return base+7*row+entry; }
-int rIndex(int base,int n,int row) { return base+7*n+row; }
-int uIndex(int base,int n,int row) { return base+8*n+row; }
-int tIndex(int base,int n,int row) { return base+9*n+row; }
+int rIndex(int base,int n,int row) { return 2*base+14*n+row; }
+int uIndex(int base,int n,int row) { return 2*base+15*n+row; }
+int tIndex(int base,int n,int row) { return 2*base+16*n+row; }
+float vectorValue(int at){return uintBitsToFloat(dispatchWords[at]);}
+void writeVector(int at,float value){dispatchWords[at]=floatBitsToUint(value);}
 double diagonal(int base,int row) { return hierarchy[aIndex(base,row,0)]; }
-double scaled(int base,int row,double rhs) {
-    double d=diagonal(base,row);return d>0.0?OMEGA*rhs/d:0.0;
+float scaled(int base,int row,float rhs) {
+    float d=float(diagonal(base,row));return d>0.0?OMEGA*rhs/d:0.0;
 }
-double product(int base,ivec3 shape,int row,int vectorOffset) {
-    double result=diagonal(base,row)*hierarchy[vectorOffset+row];
+float product(int base,ivec3 shape,int row,int vectorOffset) {
+    precise float result=float(diagonal(base,row))*vectorValue(vectorOffset+row);
     ivec3 at=coordinate(row,shape);
     for(int side=0;side<6;side++) {
         ivec3 next=adjacent(at,side);
-        if(inside(next,shape))result+=hierarchy[aIndex(base,row,side+1)]*hierarchy[vectorOffset+indexOf(next,shape)];
+        if(inside(next,shape))result+=float(hierarchy[aIndex(base,row,side+1)])*vectorValue(vectorOffset+indexOf(next,shape));
     }
     return result;
 }
@@ -78,22 +81,22 @@ void buildCoarse(int row) {
 }
 
 void loadFine(int row,int n) {
-    double rhs=meta[p.pressureStride+row]!=0?work[row]:0.0;
-    hierarchy[rIndex(p.base,n,row)]=rhs;
-    hierarchy[tIndex(p.base,n,row)]=scaled(p.base,row,rhs);
+    float rhs=meta[p.pressureStride+row]!=0?float(work[row]):0.0;
+    writeVector(rIndex(p.base,n,row),rhs);
+    writeVector(tIndex(p.base,n,row),scaled(p.base,row,rhs));
 }
 
 void restrictResidual(int row,int n) {
     ivec3 origin=2*coordinate(row,ivec3(p.sx,p.sy,p.sz));int fineN=count(ivec3(p.psx,p.psy,p.psz));
-    double rhs=0.0;
+    precise float rhs=0.0;
     for(int child=0;child<8;child++) {
         ivec3 fine=origin+ivec3(child&1,(child>>1)&1,(child>>2)&1);
         if(!inside(fine,ivec3(p.psx,p.psy,p.psz)))continue;
         int fineRow=indexOf(fine,ivec3(p.psx,p.psy,p.psz));
-        rhs+=hierarchy[rIndex(p.peerBase,fineN,fineRow)]-product(p.peerBase,ivec3(p.psx,p.psy,p.psz),fineRow,p.peerBase+9*fineN);
+        rhs+=vectorValue(rIndex(p.peerBase,fineN,fineRow))-product(p.peerBase,ivec3(p.psx,p.psy,p.psz),fineRow,tIndex(p.peerBase,fineN,0));
     }
-    hierarchy[rIndex(p.base,n,row)]=rhs;
-    hierarchy[tIndex(p.base,n,row)]=scaled(p.base,row,rhs);
+    writeVector(rIndex(p.base,n,row),rhs);
+    writeVector(tIndex(p.base,n,row),scaled(p.base,row,rhs));
 }
 
 // Factor the small Galerkin operator once per active-set restart. The diagonal floor scales
@@ -123,27 +126,24 @@ void factorCoarse(int row,int n){
         memoryBarrierBuffer();barrier();
     }
 }
-// Build each inverse column once. Subsequent V-cycles apply the small dense operator without
-// serial triangular-solve barriers; both construction and application retain double precision.
+// Build F=L^-1 in FP64, then retain its FP32 entries. Applying F^T F preserves the
+// positive factorization and needs one shared-vector barrier per V-cycle.
 void invertCoarse(int row,int columnIndex,int n){
     if(row<n)coarseCorrection[row]=row==columnIndex?1.0:0.0;barrier();
     for(int column=0;column<n;column++){
         if(row==column)coarseCorrection[row]/=hierarchy[p.factor+row*n+row];barrier();
         if(row<n&&row>column)coarseCorrection[row]-=hierarchy[p.factor+row*n+column]*coarseCorrection[column];barrier();
     }
-    for(int column=n-1;column>=0;column--){
-        if(row==column)coarseCorrection[row]/=hierarchy[p.factor+row*n+row];barrier();
-        if(row<column)coarseCorrection[row]-=hierarchy[p.factor+column*n+row]*coarseCorrection[column];barrier();
-    }
-    if(row<n)hierarchy[p.factor+n*n+row*n+columnIndex]=coarseCorrection[row];
+    if(row<n)writeVector(2*(p.factor+n*n)+row*n+columnIndex,float(coarseCorrection[row]));
 }
 void solveCoarse(int row,int n){
-    if(row>=n)return;double result=0.0;
-    for(int column=0;column<n;column++){
-        double coefficient=.5*(hierarchy[p.factor+n*n+row*n+column]+hierarchy[p.factor+n*n+column*n+row]);
-        result+=coefficient*hierarchy[rIndex(p.base,n,column)];
-    }
-    hierarchy[uIndex(p.base,n,row)]=result;
+    int inverseBase=2*(p.factor+n*n);precise float projected=0.0;
+    if(row<n)for(int column=0;column<=row;column++)
+        projected+=vectorValue(inverseBase+row*n+column)*vectorValue(rIndex(p.base,n,column));
+    if(row<n)coarseProjected[row]=projected;barrier();
+    if(row>=n)return;precise float result=0.0;
+    for(int column=row;column<n;column++)result+=vectorValue(inverseBase+column*n+row)*coarseProjected[column];
+    writeVector(uIndex(p.base,n,row),result);
 }
 void buildDispatches(){
     bool rebuild=control[3]!=0.0&&control[6]!=0.0;ivec3 shape=ivec3(p.sx,p.sy,p.sz);int command=0,n;
@@ -180,10 +180,10 @@ void main() {
     else if(p.stage==3)restrictResidual(row,n);
     else if(p.stage==5) {
         int coarseRow=indexOf(coordinate(row,ivec3(p.sx,p.sy,p.sz))/2,ivec3(p.psx,p.psy,p.psz));
-        hierarchy[tIndex(p.base,n,row)]+=hierarchy[uIndex(p.peerBase,count(ivec3(p.psx,p.psy,p.psz)),coarseRow)];
+        writeVector(tIndex(p.base,n,row),vectorValue(tIndex(p.base,n,row))+vectorValue(uIndex(p.peerBase,count(ivec3(p.psx,p.psy,p.psz)),coarseRow)));
     } else if(p.stage==6) {
-        double current=hierarchy[tIndex(p.base,n,row)];
-        hierarchy[uIndex(p.base,n,row)]=current+scaled(p.base,row,
-            hierarchy[rIndex(p.base,n,row)]-product(p.base,ivec3(p.sx,p.sy,p.sz),row,p.base+9*n));
-    } else if(p.stage==7)work[3*p.pressureStride+row]=meta[p.pressureStride+row]!=0?hierarchy[uIndex(p.base,n,row)]:0.0;
+        float current=vectorValue(tIndex(p.base,n,row));
+        writeVector(uIndex(p.base,n,row),current+scaled(p.base,row,
+            vectorValue(rIndex(p.base,n,row))-product(p.base,ivec3(p.sx,p.sy,p.sz),row,tIndex(p.base,n,0))));
+    } else if(p.stage==7)work[3*p.pressureStride+row]=meta[p.pressureStride+row]!=0?double(vectorValue(uIndex(p.base,n,row))):0.0;
 }

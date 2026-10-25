@@ -1,0 +1,41 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+layout(local_size_x=128)in;
+layout(binding=0,std430)buffer Arena{uint words[];};layout(binding=1,std430)buffer Errors{uint errors;};
+layout(push_constant)uniform Params{int header;int stage;int count;}p;
+#ifdef COARSE_BUILD
+#define REAL double
+shared double partial[128],matrix[4096];shared int valid;
+#else
+#define REAL float
+shared float partial[128],factor[4160],rhs[64],intermediate[64];
+#endif
+int h(int i){return int(words[p.header+i]);}int f(int i){return int(words[h(0)+16+i]);}int gh(int i){return int(words[h(0)+i]);}
+double number(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}void put(int at,double v){uvec2 b=unpackDouble2x32(v);words[at]=b.x;words[at+1]=b.y;}
+float fp(int at){return uintBitsToFloat(words[at]);}void putf(int at,float v){words[at]=floatBitsToUint(v);}
+int actual(){int eos=gh(0),counts=int(words[eos+16]);return int(words[counts]);}
+void addFloat(int at,float value){uint old=atomicAdd(words[at],0u);for(;;){uint next=floatBitsToUint(uintBitsToFloat(old)+value),seen=atomicCompSwap(words[at],old,next);if(seen==old)return;old=seen;}}
+void reduce(int lane,REAL v){partial[lane]=v;barrier();for(int k=64;k>0;k/=2){if(lane<k)partial[lane]+=partial[lane+k];barrier();}}
+void aggregateEdge(int row,int edge){float g=fp(h(10)+edge);if(g==0.0)return;int a=int(words[h(11)+row]),peer=int(words[h(9)+edge]),b=peer>=0?int(words[h(11)+peer]):h(25);if(a!=b)addFloat(h(17)+a*(h(25)+1)+b,g);}
+void main(){int lane=int(gl_LocalInvocationID.x),group=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),id=128*group+lane,rows=h(25),n=actual();
+ #ifdef COARSE_BUILD
+ if(p.stage==0){if(id<rows*(rows+1))words[h(17)+id]=0u;if(id<rows){words[h(13)+id]=0u;words[h(16)+id]=0u;}return;}
+ if(errors!=0u)return;
+ if(p.stage==1){if(id<n){int eos=gh(0),keys=int(words[eos+17]),cell=int(words[keys+id])/8,sx=gh(7),sy=gh(8),x=(cell%sx)>>h(24),y=(cell/sx%sy)>>h(24),z=(cell/(sx*sy))>>h(24),parent=(z*h(22)+y)*h(21)+x;words[h(11)+id]=uint(parent);atomicAdd(words[h(13)+parent],1u);}return;}
+ if(p.stage==2){if(id<n){int parent=int(words[h(11)+id]),slot=int(words[h(14)+parent]+atomicAdd(words[h(16)+parent],1u));words[h(15)+slot]=uint(id);}return;}
+ if(p.stage==3){double sum=0.0;for(int at=int(words[h(14)+group])+lane;at<int(words[h(14)+group+1]);at+=128)sum+=double(fp(h(4)+h(1)+int(words[h(15)+at])));reduce(lane,sum);if(lane==0)put(h(18)+2*group,partial[0]);return;}
+ if(p.stage==4){if(id<n){int first=int(words[f(22)+id]),last=int(words[f(22)+id+1]);if(last-first<=128)for(int at=first;at<last;at++)aggregateEdge(id,at);}return;}
+ if(p.stage==5){int row=int(words[f(50)+group]);for(int at=int(words[f(22)+row])+lane;at<int(words[f(22)+row+1]);at+=128)aggregateEdge(row,at);return;}
+ if(p.stage==6){for(int i=lane;i<4096;i+=128)matrix[i]=0.0;barrier();
+  if(lane<rows){double diagonal=number(h(18)+2*lane)+double(fp(h(17)+lane*(rows+1)+rows));for(int col=0;col<rows;col++)if(col!=lane){double g=0.5*(double(fp(h(17)+lane*(rows+1)+col))+double(fp(h(17)+col*(rows+1)+lane)));matrix[64*lane+col]=-g;diagonal+=g;}matrix[64*lane+lane]=words[h(13)+lane]==0u?1.0:diagonal;}barrier();
+  if(lane==0){valid=1;for(int i=0;i<rows&&valid!=0;i++)for(int j=0;j<=i;j++){double value=matrix[64*i+j];for(int k=0;k<j;k++)value-=matrix[64*i+k]*matrix[64*j+k];if(i==j){if(!(value>0.0)){valid=0;atomicOr(errors,262144u);break;}matrix[64*i+j]=sqrt(value);}else matrix[64*i+j]=value/matrix[64*j+j];}}
+  barrier();if(valid==0)return;
+  if(lane<rows){double column[64];for(int i=0;i<rows;i++){double value=i==lane?1.0:0.0;for(int j=0;j<i;j++)value-=matrix[64*i+j]*column[j];column[i]=value/matrix[64*i+i];putf(h(19)+64*i+lane,float(column[i]));}}return;}
+ #else
+ if(errors!=0u||number(f(30)+6)==0.0||number(f(30)+14)!=0.0)return;
+ if(p.stage==7){float sum=0.0;for(int at=int(words[h(14)+group])+lane;at<int(words[h(14)+group+1]);at+=128)sum+=fp(h(2)+int(words[h(15)+at]));reduce(lane,sum);if(lane==0)putf(h(20)+group,partial[0]);return;}
+ if(p.stage==8){for(int i=lane;i<4096;i+=128)factor[(i/64)*65+i%64]=fp(h(19)+i);if(lane<rows)rhs[lane]=fp(h(20)+lane);barrier();
+  if(lane<rows){float value=0.0;for(int j=0;j<rows;j++)value+=factor[65*lane+j]*rhs[j];intermediate[lane]=value;}barrier();
+  if(lane<rows){float value=0.0;for(int j=0;j<rows;j++)value+=factor[65*j+lane]*intermediate[j];putf(h(12)+lane,value);}return;}
+ #endif
+}

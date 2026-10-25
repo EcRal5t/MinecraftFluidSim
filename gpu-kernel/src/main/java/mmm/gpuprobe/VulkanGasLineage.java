@@ -15,7 +15,7 @@ import static org.lwjgl.vulkan.VK10.*;
 final class VulkanGasLineage implements AutoCloseable {
     enum Field {
         CELL_ROUTES(8), EDGE_SOURCE(4), EDGE_TARGET(4), EDGE_WEIGHT(8), EDGE_GROUP(4),
-        HASH(4), HASH_FLAGS(4), HASH_OFFSETS(4), GROUP_SOURCE(4), GROUP_TARGET(4),
+        HASH(4), LIVE_COUNTS(4), HASH_GROUPS(4), GROUP_SOURCE(4), GROUP_TARGET(4),
         GROUP_WEIGHT(8), GROUP_OLD_CONTROL(8), GROUP_FUTURE_CONTROL(8),
         GROUP_COUNTS(4), GROUP_OFFSETS(4), GROUP_CURSORS(4), GROUP_EDGES(4),
         SOURCE_COUNTS(4), SOURCE_OFFSETS(4), SOURCE_CURSORS(4), SOURCE_GROUPS(4),
@@ -52,8 +52,8 @@ final class VulkanGasLineage implements AutoCloseable {
             for(Field field:Field.values()) {
                 int count=switch(field) {
                     case CELL_ROUTES,EDGE_SOURCE,EDGE_TARGET,EDGE_WEIGHT,EDGE_GROUP,GROUP_EDGES->edges;
-                    case HASH,HASH_FLAGS->hashCapacity;
-                    case HASH_OFFSETS->Math.addExact(hashCapacity,1);
+                    case HASH,HASH_GROUPS->hashCapacity;
+                    case LIVE_COUNTS->2;
                     case SOURCE_COUNTS,SOURCE_CURSORS->Math.addExact(gas.nodeCapacity(),2);
                     case SOURCE_OFFSETS->Math.addExact(gas.nodeCapacity(),3);
                     case TARGET_COUNTS,TARGET_CURSORS->Math.addExact(oldGeometry.cells(),1);
@@ -61,7 +61,7 @@ final class VulkanGasLineage implements AutoCloseable {
                     case GROUP_OFFSETS->Math.addExact(groupCapacity,1);
                     case RETAINED_OLD_VOLUMES,FUTURE_CONTROL_VOLUMES,ESCAPED_FRACTIONS->gas.nodeCapacity();
                     case DISPATCH->15;
-                    case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(hashCapacity,groupCapacity))/4);
+                    case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(oldGeometry.cells()+1,Math.max(gas.nodeCapacity()+2,groupCapacity)))/4);
                     default->groupCapacity;
                 };
                 columns.put(field,VulkanGasLineage.column(cursor,count,field.width,alignment));
@@ -73,7 +73,7 @@ final class VulkanGasLineage implements AutoCloseable {
         int headerWordOffset(){return VulkanGasLineage.word(header);}
         long endOffset(){return endOffset;}
         /** Actual unique group count, also valid after capacity error 64. */
-        long requiredGroupsOffset(){return column(Field.HASH_OFFSETS).offset()+4L*hashCapacity;}
+        long requiredGroupsOffset(){return column(Field.LIVE_COUNTS).offset();}
         ByteBuffer headerBytes(){
             var out=ByteBuffer.allocateDirect(384).order(ByteOrder.LITTLE_ENDIAN);int[] data=new int[96];
             var liquid=oldGeometry.totals().source();data[0]=liquid.sizeX();data[1]=liquid.sizeY();data[2]=liquid.sizeZ();
@@ -112,12 +112,12 @@ final class VulkanGasLineage implements AutoCloseable {
         stage(command,layout,1,layout.oldGeometry.cells(),false);
         stage(command,layout,2,layout.oldGeometry.cells(),false);
         stage(command,layout,3,layout.edges,false);
-        prefix(command,layout,layout.hashCapacity,Field.HASH_FLAGS,Field.HASH_OFFSETS);
-        stage(command,layout,4,layout.hashCapacity,false);
-        stage(command,layout,12,1,false);
+        stage(command,layout,4,1,false);
         stage(command,layout,5,layout.edges,false);
         prefix(command,layout,layout.groupCapacity,Field.GROUP_COUNTS,Field.GROUP_OFFSETS);
         stage(command,layout,6,layout.edges,false);
+        stage(command,layout,13,layout.groupCapacity,false);
+        stage(command,layout,12,1,false);
         stage(command,layout,7,layout.groupCapacity,true);
         prefix(command,layout,layout.gas.nodeCapacity()+2,Field.SOURCE_COUNTS,Field.SOURCE_OFFSETS);
         prefix(command,layout,layout.oldGeometry.cells()+1,Field.TARGET_COUNTS,Field.TARGET_OFFSETS);

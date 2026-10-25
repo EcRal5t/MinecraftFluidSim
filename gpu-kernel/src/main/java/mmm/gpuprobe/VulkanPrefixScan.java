@@ -15,7 +15,7 @@ final class VulkanPrefixScan implements AutoCloseable {
     private final FlipKernelBindings bindings;
 
     VulkanPrefixScan(VulkanDeviceContext context) {
-        bindings = new FlipKernelBindings(context, 4, shader(), 36);
+        bindings = new FlipKernelBindings(context, 4, shader(), 40);
     }
 
     /** Rebind only after commands using the previous descriptors have completed. The addressed input, output and workspace windows must be disjoint. */
@@ -37,6 +37,11 @@ final class VulkanPrefixScan implements AutoCloseable {
 
     /** Word offsets allow several scans of disjoint columns without updating recorded descriptors. */
     void record(VkCommandBuffer command, int n, int inputWordOffset, int outputWordOffset, int workspaceWordOffset) {
+        record(command,n,inputWordOffset,outputWordOffset,workspaceWordOffset,-1);
+    }
+
+    /** A device live count masks unused input capacity; output[n] still contains the total. */
+    void record(VkCommandBuffer command,int n,int inputWordOffset,int outputWordOffset,int workspaceWordOffset,int liveCountWordOffset) {
         if (n < 0 || inputWordOffset < 0 || outputWordOffset < 0 || workspaceWordOffset < 0)
             throw new IllegalArgumentException("Negative scan length or offset");
         var lengths = new ArrayList<Integer>();
@@ -53,7 +58,7 @@ final class VulkanPrefixScan implements AutoCloseable {
                 int count = lengths.get(level), groups = Math.max(1, blocks(count));
                 vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                         stack.ints(0, count, bases.get(level), level + 1 < lengths.size() ? bases.get(level + 1) : -1,
-                                level == 0 ? 1 : 0, n, inputWordOffset, outputWordOffset, workspaceWordOffset));
+                                level == 0 ? 1 : 0, n, inputWordOffset, outputWordOffset, workspaceWordOffset,liveCountWordOffset));
                 vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);
                 barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, stack);
@@ -61,7 +66,7 @@ final class VulkanPrefixScan implements AutoCloseable {
             for (int level = lengths.size() - 2; level >= 0; level--) {
                 int count = lengths.get(level), groups = blocks(count);
                 vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                        stack.ints(1, count, bases.get(level), bases.get(level + 1), level == 0 ? 1 : 0, n, inputWordOffset, outputWordOffset, workspaceWordOffset));
+                        stack.ints(1, count, bases.get(level), bases.get(level + 1), level == 0 ? 1 : 0, n, inputWordOffset, outputWordOffset, workspaceWordOffset,liveCountWordOffset));
                 vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);
                 barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, stack);
