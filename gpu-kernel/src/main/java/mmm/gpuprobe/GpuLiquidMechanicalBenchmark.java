@@ -8,6 +8,7 @@ public final class GpuLiquidMechanicalBenchmark {
     private GpuLiquidMechanicalBenchmark() { }
     public static void main(String[] args) {
         Locale.setDefault(Locale.ROOT);System.setProperty("mmm.gpuMechanicalGrowths","true");
+        System.setProperty("mmm.gpuMechanicalPressureDiagnostics","true");
         if(args.length>6)System.setProperty("mmm.gpuCapacityFailureDump",args[6]);
         int device=args.length>0?Integer.parseInt(args[0]):0;
         int[] grids=Arrays.stream((args.length>1?args[1]:"32").split(",")).mapToInt(Integer::parseInt).toArray();
@@ -66,20 +67,23 @@ public final class GpuLiquidMechanicalBenchmark {
         try(var region=new VulkanLiquidRegion(context,geometry,projection,pressure,multigrid,fixture.inventory(),fixture.momentum(),
                 fixture.fixed(),fixture.occupied(),definitions,gasConfig,granularConfig,thermalConfig)) {
             System.out.println("Constitutive inputs: builtin water/oil viscosity and expansion; original sigma=0, pair tension=0, neutral contact angle; static no-slip walls, no prescribed body contacts.");
-            for(int step=0;step<warm;step++)try{region.advanceMechanical(parameters,512);}
+            for(int step=0;step<warm;step++)try{region.advanceMechanical(parameters,512);printPressureProgress("warmup",step,region.pressureProgress());}
                 catch(IllegalStateException failure){throw new IllegalStateException("Mechanical warmup step="+step+" failed",failure);}
             var before=region.metrics();long[] times=new long[samples],gpuTimes=new long[samples],uploads=new long[samples],reads=new long[samples],recordings=new long[samples],waits=new long[samples],submissions=new long[samples];
+            var pressureProgress=new VulkanPressureKernel.Progress[samples];
             for(int step=0;step<samples;step++) {
                 var stepBefore=region.metrics();long start=System.nanoTime();
                 try{region.advanceMechanical(parameters,512);}catch(IllegalStateException failure){throw new IllegalStateException("Mechanical sample step="+step+" failed",failure);}
                 times[step]=System.nanoTime()-start;
                 var stepAfter=region.metrics();gpuTimes[step]=stepAfter.gpuNanos()-stepBefore.gpuNanos();uploads[step]=stepAfter.uploadBytes()-stepBefore.uploadBytes();reads[step]=stepAfter.readbackBytes()-stepBefore.readbackBytes();recordings[step]=stepAfter.recordingNanos()-stepBefore.recordingNanos();waits[step]=stepAfter.waitingNanos()-stepBefore.waitingNanos();submissions[step]=stepAfter.submissions()-stepBefore.submissions();
+                pressureProgress[step]=region.pressureProgress();
             }
             var after=region.metrics();long[] sorted=times.clone();Arrays.sort(sorted);
             System.out.printf("%d,%d,%.3f,%.3f,%.3f,%.1f,%.1f,%.1f,%.1f%n",grid,samples,sorted[samples/2]*1e-6,sorted[samples-1]*1e-6,
                     (after.gpuNanos()-before.gpuNanos())*1e-6/samples,(double)(after.uploadBytes()-before.uploadBytes())/samples,
                     (double)(after.readbackBytes()-before.readbackBytes())/samples,after.deviceBytes()/1048576.0,after.stagingBytes()/1048576.0);
             for(int step=0;step<samples;step++)System.out.printf("sample=%d wall_ms=%.3f gpu_ms=%.3f upload_B=%d readback_B=%d record_ms=%.3f wait_ms=%.3f submissions=%d%n",step,times[step]*1e-6,gpuTimes[step]*1e-6,uploads[step],reads[step],recordings[step]*1e-6,waits[step]*1e-6,submissions[step]);
+            for(int step=0;step<samples;step++)printPressureProgress("sample",step,pressureProgress[step]);
             if(!region.growthDiagnostics().isEmpty())System.out.println("growth capacity_order=liquidStocks,liquidSpecies,liquidLimbs,windowLimbs,gasNodes,gasComponents,gasSpecies,parts,partSpecies,groups,pairs; required_order=cellLimbs,acceptedLimbs,materialLimbs,routeLimbs,routeSpecies,stocks,species,limbs,oldNodes,futureNodes,futureComponents,futureSpecies,retainedComponents,retainedSpecies,parts,partSpecies,futureCellLimbs,groups[,pairs,flowParts,flowPartSpecies,flowRetainedComponents,flowRetainedSpecies,flowFutureComponents,flowFutureSpecies,flowNodes,flowGroups]");
             for(var growth:region.growthDiagnostics())System.out.printf("growth generation=%d stage=%s before=%s after=%s required=%s%n",growth.generation(),growth.stage(),Arrays.toString(growth.before()),Arrays.toString(growth.after()),Arrays.toString(growth.required()));
             System.out.println("final inventory_counts="+Arrays.toString(region.inventoryCounts())+" capacity_status_rounds="+Arrays.toString(region.capacityDiagnostics())
@@ -87,10 +91,16 @@ public final class GpuLiquidMechanicalBenchmark {
             if(gas)System.out.println("final gas_counts="+Arrays.toString(region.gasInventoryCounts())+" old_future_gas_nodes_groups="+Arrays.toString(region.gasTopologyDiagnostics())+" aperture_pairs_iterations_rms_status_capture_escape="+Arrays.toString(region.gasFlowDiagnostics()));
             String graphDump=System.getProperty("mmm.gpuMechanicalPressureDump","");
             if(gas&&!graphDump.isBlank())region.dumpGasFlowGraph(java.nio.file.Path.of(graphDump),parameters.duration());
+            String commonDump=System.getProperty("mmm.gpuMechanicalCommonPressureDump","");
+            if(gas&&!commonDump.isBlank())region.dumpCommonPressureGraph(java.nio.file.Path.of(commonDump),parameters.duration(),h);
             if(granularCount>0){var finalGranular=region.checkpointGranular();double sourceY=granularConfig.initial().particles().stream().mapToDouble(VulkanGranularStateLayout.Particle::y).sum();
                 double finalY=finalGranular.particles().stream().mapToDouble(VulkanGranularStateLayout.Particle::y).sum();
                 System.out.println("final granular_active="+finalGranular.particles().size()+" deposits="+finalGranular.deposits().size()+" summed_vertical_displacement="+(finalY-sourceY));}
         }
+    }
+    private static void printPressureProgress(String phase,int step,VulkanPressureKernel.Progress progress){
+        System.out.printf("common_pressure phase=%s step=%d iterations=%d residual_rms=%.9g constraint_trials=%d active_set_updates=%d residual_refreshes_before_final=%d%n",
+                phase,step,progress.iterations(),progress.residualRms(),progress.constraintTrials(),progress.activeSetUpdates(),progress.residualRefreshes());
     }
     private static mmm.thermal.ThermalMaterialDefinition withConductivity(mmm.thermal.ThermalMaterialDefinition source,double conductivity){
         return new mmm.thermal.ThermalMaterialDefinition(source.id(),source.carrierKind(),source.carrierId(),source.referenceTemperatureK(),

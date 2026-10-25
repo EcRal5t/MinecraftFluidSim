@@ -28,6 +28,8 @@ int aIndex(int base,int row,int entry) { return base+7*row+entry; }
 int rIndex(int base,int n,int row) { return 2*base+14*n+row; }
 int uIndex(int base,int n,int row) { return 2*base+15*n+row; }
 int tIndex(int base,int n,int row) { return 2*base+16*n+row; }
+int activeBase(int base,int n){return 2*base+14*n+2*((3*n+1)/2);}
+int levelDoubles(int n){return 7*n+(3*n+1)/2+(n+2)/2;}
 float vectorValue(int at){return uintBitsToFloat(dispatchWords[at]);}
 void writeVector(int at,float value){dispatchWords[at]=floatBitsToUint(value);}
 double diagonal(int base,int row) { return hierarchy[aIndex(base,row,0)]; }
@@ -147,11 +149,11 @@ void solveCoarse(int row,int n){
     writeVector(uIndex(p.base,n,row),result);
 }
 void scheduleApply(){
-    ivec3 shape=ivec3(p.sx,p.sy,p.sz);int command=0;
+    ivec3 shape=ivec3(p.sx,p.sy,p.sz);int command=0,base=p.base;
     for(;;){
         int at=p.applyDispatch+4*command++,n=count(shape);
-        dispatchWords[at]=control[3]!=0.0?uint((n+127)/128):0u;dispatchWords[at+1]=1u;dispatchWords[at+2]=1u;dispatchWords[at+3]=0u;
-        if(max(shape.x,max(shape.y,shape.z))<=4)break;shape=(shape+1)/2;
+        dispatchWords[at]=control[3]!=0.0&&control[12]<3.0?uint((dispatchWords[activeBase(base,n)]+127u)/128u):0u;dispatchWords[at+1]=1u;dispatchWords[at+2]=1u;dispatchWords[at+3]=0u;
+        if(max(shape.x,max(shape.y,shape.z))<=4)break;base+=levelDoubles(n);shape=(shape+1)/2;
     }
 }
 float lifted(int row,int n){
@@ -170,6 +172,7 @@ void prolongAndSmooth(int row,int n){
 }
 
 void main() {
+    if(p.stage==11){if(gl_GlobalInvocationID.x==0u)dispatchWords[activeBase(p.base,count(ivec3(p.sx,p.sy,p.sz)))]=0u;return;}
     if(p.stage==10){if(gl_GlobalInvocationID.x==0u)scheduleApply();return;}
     // These values are uniform over every workgroup, including the barrier-bearing coarse solve.
     if(control[3]==0.0)return;
@@ -177,9 +180,13 @@ void main() {
     if(p.stage==4){solveCoarse(row,n);return;}
     if(p.stage==8){factorCoarse(row,n);return;}
     if(p.stage==9){invertCoarse(int(gl_LocalInvocationID.x),int(gl_WorkGroupID.x),n);return;}
+    if(p.stage==2||p.stage==3||p.stage==6||p.stage==7){int activeList=activeBase(p.base,n);if(row>=int(dispatchWords[activeList]))return;row=int(dispatchWords[activeList+1+row]);}
     if(row>=n)return;
-    if(p.stage==0)buildFine(row);
-    else if(p.stage==1)buildCoarse(row);
+    if(p.stage==0||p.stage==1){
+        writeVector(rIndex(p.base,n,row),0.0);writeVector(tIndex(p.base,n,row),0.0);writeVector(uIndex(p.base,n,row),0.0);
+        if(p.stage==0){work[3*p.pressureStride+row]=0.0;buildFine(row);}else buildCoarse(row);
+        if(diagonal(p.base,row)>0.0){int activeList=activeBase(p.base,n);uint slot=atomicAdd(dispatchWords[activeList],1u);dispatchWords[activeList+1+int(slot)]=uint(row);}
+    }
     else if(p.stage==2)loadFine(row,n);
     else if(p.stage==3)restrictResidual(row,n);
     else if(p.stage==6)prolongAndSmooth(row,n);

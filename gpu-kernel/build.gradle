@@ -259,6 +259,7 @@ registerGpuProbe(
     probeTask.jvmArgs '-Xmx3g'
     probeTask.systemProperty 'mmm.gpuMechanicalStages', providers.gradleProperty('gpuMechanicalStages').getOrElse('false')
     probeTask.systemProperty 'mmm.gpuMechanicalPressureDump', providers.gradleProperty('gpuMechanicalPressureDump').getOrElse('')
+    probeTask.systemProperty 'mmm.gpuMechanicalCommonPressureDump', providers.gradleProperty('gpuMechanicalCommonPressureDump').getOrElse('')
     if (providers.gradleProperty('gpuMechanicalJfr').getOrElse('false').toBoolean()) {
         probeTask.jvmArgs "-XX:StartFlightRecording=filename=${rootProject.layout.buildDirectory.file('gpu-liquid-mechanical.jfr').get().asFile.absolutePath},settings=profile,dumponexit=true"
     }

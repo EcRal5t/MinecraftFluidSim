@@ -22,7 +22,7 @@ public final class GpuResidentPressureBenchmark {
         var fixture = GpuPressureScaleBenchmark.manufacture(dimension, config.pressureTolerance(), config.maxPressureIterations());
         int n = fixture.size(), edges = fixture.values().length;
         long[] lengths = {4L * (n + 1), 4L * edges, 8L * edges, 4L * n, 8L * n, 8L * n,
-                40L * n, 8L * n, 24L * n + 8, 128, 32L * ((n + 255) / 256)};
+                56L * n, 8L * n, 24L * n + 8, 128, 32L * ((n + 255) / 256)};
         try (var context = new VulkanDeviceContext(device, true, true);
              var pressure = new VulkanPressureKernel(context, 4096)) {
             long[] offsets = new long[lengths.length];

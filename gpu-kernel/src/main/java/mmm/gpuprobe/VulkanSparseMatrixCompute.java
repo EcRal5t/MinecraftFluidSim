@@ -192,7 +192,7 @@ public final class VulkanSparseMatrixCompute implements SparseMatrixCompute, Aut
             resources.addDeviceStorage(4L*(rows+1));resources.addDeviceStorage(4L*edges);
             resources.addDeviceStorage(8L*edges);resources.addDeviceStorage(4L*rows);
             resources.addDeviceStorage(8L*rows);resources.addDeviceStorage(8L*rows);
-            resources.addDeviceStorage(40L*rows);
+            resources.addDeviceStorage(56L*rows);
             resources.addDeviceStorage(8L*rows);
             resources.addDeviceStorage(8L*(3L*rows+1));resources.addDeviceStorage(128);
             resources.addDeviceStorage(32L*((rows+255)/256));

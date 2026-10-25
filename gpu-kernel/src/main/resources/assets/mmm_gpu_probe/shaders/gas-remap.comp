@@ -5,7 +5,7 @@ layout(local_size_x=128)in;
 layout(binding=0,std430)buffer Candidate{uint words[];};layout(binding=1,std430)buffer Errors{uint errors;};
 layout(push_constant)uniform Params{int header;int stage;int count;int workEnergy;int workTemperature;}p;
 const int PC=0,PO=1,PH=2,PN=3,PM=4,PR=5,SC=6,SO=7,SH=8,SA=9,GE=10,GC=11,W=12,PIVOT=13,ESC=14,
- RC=15,FC=16,OSC=17,ER=18,SR=19,RR=20,MR=21,AE=22,AH=23,AW=24,AMN=25,AMD=26,ASO=27,ASH=28,ASN=29,ASD=30,ASM=31,AB=32,AA=33,MRAW=36,MRC=37,MRS=38,MFC=39,MFS=40,REQ=41,LONG_ROWS=42;
+ RC=15,FC=16,OSC=17,ER=18,SR=19,RR=20,MR=21,AE=22,AH=23,AW=24,AMN=25,AMD=26,ASO=27,ASH=28,ASN=29,ASD=30,ASM=31,AB=32,AA=33,MRAW=36,MRC=37,MRS=38,MFC=39,MFS=40,REQ=41,LONG_ROWS=42,TP=43;
 const int COUNTS=0,KEYS=1,PIECES=2,ROWS=3,HANDLES=4,NANOS=5,MASS=6,RESIDUAL=7,SPO=8,SPH=9,SPA=10,EP=11,ENERGY=12;
 const uint64_t LIMIT=uint64_t(0x7fffffffffffffffUL),SCALE=uint64_t(0x10000000000000UL);
 bool shortRow(){return p.stage>=100;}
@@ -202,16 +202,15 @@ uint64_t exclusivePrefix(int lane,uint64_t value){
 uint64_t mixPhase(uint64_t x){x=(x^(x>>30))*uint64_t(0xbf58476d1ce4e5b9UL);x=(x^(x>>27))*uint64_t(0x94d049bb133111ebUL);return x^(x>>31);}
 uint64_t phaseOffset(uint64_t denominator,uint64_t phase){return portion(denominator,phase>>11,uint64_t(0x20000000000000UL));}
 uint64_t endpoint(uint64_t total,uint64_t cumulative,uint64_t denominator,uint64_t offset){uint64_t remainder,q=divide(total,cumulative,denominator,remainder);return q+(remainder>=denominator-offset&&offset!=uint64_t(0)?uint64_t(1):uint64_t(0));}
-void transportColumn(int node,int local,uint64_t sourceN,uint64_t magnitude,bool negative,int speciesLocal,int speciesHandle,int lane,uint64_t phase){
- int begin=sourceBegin(node),end=sourceEnd(node);uint64_t carry=uint64_t(0),offset=phaseOffset(sourceN,phase);
- for(int block=begin;block<end;block+=rowStride()){
-  int at=block+lane,g=at<end?sourceGroup(at):-1,part=g>=0?partBegin(g)+local:-1;uint64_t n=part>=0?u64(f(PN)+2*part):uint64_t(0);
-  uint64_t cumulative=carry+exclusivePrefix(lane,n),nextCarry=carry+(shortRow()?n:prefixValues[127]);rowBarrier();
-  if(part>=0){uint64_t share=endpoint(magnitude,cumulative+n,sourceN,offset)-endpoint(magnitude,cumulative,sourceN,offset);
-   if(speciesLocal<0)put64(f(PR)+2*part,negative?uint64_t(0)-share:share);
-   else{int entry=int(words[f(SO)+part])+speciesLocal;words[f(SH)+entry]=uint(speciesHandle);put64(f(SA)+2*entry,share);}}
-  carry=nextCarry;rowBarrier();
+void transportColumn(int node,int local,uint64_t sourceN,uint64_t magnitude,bool negative,int speciesLocal,int speciesHandle,int lane,uint64_t offset){
+ int begin=sourceBegin(node),end=sourceEnd(node);uint64_t previous=uint64_t(0);
+ for(int at=begin+lane;at<end;at+=rowStride()){
+  int g=sourceGroup(at),part=partBegin(g)+local;uint64_t n=u64(f(PN)+2*part),cumulative=u64(f(TP)+2*part);
+  uint64_t upper=endpoint(magnitude,cumulative+n,sourceN,offset),lower=shortRow()?previous:endpoint(magnitude,cumulative,sourceN,offset),share=upper-lower;previous=upper;
+  if(speciesLocal<0)put64(f(PR)+2*part,negative?uint64_t(0)-share:share);
+  else{int entry=int(words[f(SO)+part])+speciesLocal;words[f(SH)+entry]=uint(speciesHandle);put64(f(SA)+2*entry,share);}
  }
+
 }
 void splitTransport(int node,int lane){
  int begin=sourceBegin(node),end=sourceEnd(node);double localVolume=0.0;int self=2147483647;
@@ -235,10 +234,14 @@ void splitTransport(int node,int lane){
   usedN=sumQuantity(lane,usedN);if(lane==0)put64(f(PN)+2*(partBegin(self)+local),nanos-usedN);memoryBarrierBuffer();rowBarrier();
   uint64_t usedMass=uint64_t(0);for(int at=begin+lane;at<end;at+=rowStride()){int g=sourceGroup(at);if(g==self)continue;int part=partBegin(g)+local;uint64_t m=portion(mass,u64(f(PN)+2*part),nanos);put64(f(PM)+2*part,m);usedMass=plus(usedMass,m);}
   usedMass=sumQuantity(lane,usedMass);if(lane==0)put64(f(PM)+2*(partBegin(self)+local),mass-usedMass);
+  carry=uint64_t(0);
+  for(int block=begin;block<end;block+=rowStride()){int at=block+lane,g=at<end?sourceGroup(at):-1,part=g>=0?partBegin(g)+local:-1;uint64_t n=part>=0?u64(f(PN)+2*part):uint64_t(0),cumulative=carry+exclusivePrefix(lane,n),nextCarry=carry+(shortRow()?n:prefixValues[127]);rowBarrier();if(part>=0)put64(f(TP)+2*part,cumulative);carry=nextCarry;rowBarrier();}
+  memoryBarrierBuffer();rowBarrier();
+  uint64_t sourceOffset=phaseOffset(nanos,phase);
   int64_t residual=i64(old(RESIDUAL)+2*c);bool negative=residual<int64_t(0);uint64_t magnitude=negative?uint64_t(0)-uint64_t(residual):uint64_t(residual);
-  transportColumn(node,local,nanos,magnitude,negative,-1,0,lane,phase);
+  transportColumn(node,local,nanos,magnitude,negative,-1,0,lane,sourceOffset);
   int sb=int(words[old(SPO)+c]),se=int(words[old(SPO)+c+1]);
-  for(int entry=sb;entry<se;entry++)transportColumn(node,local,nanos,u64(old(SPA)+2*entry),false,entry-sb,int(words[old(SPH)+entry]),lane,phase);
+  for(int entry=sb;entry<se;entry++)transportColumn(node,local,nanos,u64(old(SPA)+2*entry),false,entry-sb,int(words[old(SPH)+entry]),lane,sourceOffset);
  }
 }
 void retainedVolumes(int node,int lane){
@@ -382,6 +385,18 @@ void gatherSpeciesAndEnergy(int row,bool future,int lane){
   if(!future&&row<nodeCount())words[dst(KEYS,false)+row]=words[old(KEYS)+row];
  }
 }
+// Transport retains exactly its self route; this output has no multi-source union.
+void retainedDirect(int row,int stage){
+ int n=nodeCount();if(stage==27){if(row<h(5)+2)words[f(RC)+row]=row<n?uint(partEnd(int(words[f(PIVOT)+row]))-partBegin(int(words[f(PIVOT)+row]))):0u;return;}
+ if(stage==29){int components=int(words[dst(ROWS,false)+n+2]),species=int(words[dst(SPO,false)+components]);if(species>h(8)){atomicOr(errors,64u);return;}if(row==0){words[dst(COUNTS,false)]=uint(n);words[dst(COUNTS,false)+1]=uint(components);words[dst(COUNTS,false)+2]=uint(species);words[dst(EP,false)]=words[old(EP)];}}
+ if(row>=n)return;int self=int(words[f(PIVOT)+row]),begin=partBegin(self),end=partEnd(self),outAt=int(words[dst(ROWS,false)+row]);
+ if(int(words[dst(ROWS,false)+n+2])>h(7)){atomicOr(errors,64u);return;}
+ for(int part=begin;part<end;part++,outAt++){
+  if(stage==28){words[dst(HANDLES,false)+outAt]=words[f(PH)+part];put64(dst(NANOS,false)+2*outAt,u64(f(PN)+2*part));put64(dst(MASS,false)+2*outAt,u64(f(PM)+2*part));put64(dst(RESIDUAL,false)+2*outAt,u64(f(PR)+2*part));uint count=0u;for(int e=int(words[f(SO)+part]);e<int(words[f(SO)+part+1]);e++)if(u64(f(SA)+2*e)!=uint64_t(0))count++;words[f(OSC)+outAt]=count;}
+  else{int destination=int(words[dst(SPO,false)+outAt]);for(int e=int(words[f(SO)+part]);e<int(words[f(SO)+part+1]);e++)if(u64(f(SA)+2*e)!=uint64_t(0)){words[dst(SPH,false)+destination]=words[f(SH)+e];put64(dst(SPA,false)+2*destination,u64(f(SA)+2*e));destination++;}}
+ }
+ if(stage==29)words[dst(KEYS,false)+row]=words[old(KEYS)+row];
+}
 void topology(int cell,bool future){
  if(!future){for(int m=0;m<8;m++)words[dst(PIECES,false)+8*cell+m]=words[old(PIECES)+8*cell+m];return;}
  int node=int(words[h(138)+cell]),mask=int(words[h(137)+cell]);
@@ -492,6 +507,7 @@ void main(){
   return;
  }
  if(id>=p.count||errors!=0u)return;
+ if(p.stage>=27&&p.stage<=29){retainedDirect(id,p.stage);return;}
  if(p.stage==19){measureParts(id);return;}if(p.stage==20){measureRetained(id);return;}
  if(p.stage==0)clearAndCount(id);else if(p.stage==1)prepareParts(id);else if(p.stage==2)splitSource(id);else if(p.stage==3)captureAmbient();
  else if(p.stage==4||p.stage==9)groupEnergy(id,p.stage==9);else if(p.stage==5||p.stage==10)closeSourceEnergy(id,p.stage==10);

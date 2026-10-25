@@ -19,7 +19,7 @@ public final class GpuEntityBodyCouplingBenchmark {
             var definitions=GpuGasGeometryBenchmark.gasDefinitions();var gas=new VulkanGasStateLayout(grid,grid,grid,n,2*n,2*n,definitions.definitions(),gasGeometry.endOffset(),a);
             var thermal=VulkanGasThermodynamics.layout(gas,VulkanGasThermodynamics.tables(gas.definitions(),definitions.gas(),definitions.thermal(),mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY),Math.toIntExact(gas.endOffset()/4),gas.endOffset()+8L*n,a);
             int size=n+gas.nodeCapacity();long[] cursor={thermal.endOffset()};var starts=column(cursor,size+1,4,a);var columns=column(cursor,7*n+gas.nodeCapacity(),4,a);var values=column(cursor,columns.count(),8,a);var rows=column(cursor,size,4,a);
-            var solution=column(cursor,size,8,a);var work=column(cursor,5*size,8,a);var meta=column(cursor,2*size,4,a);var problem=column(cursor,3*size+1,8,a);var control=column(cursor,16,8,a);
+            var solution=column(cursor,size,8,a);var work=column(cursor,7*size,8,a);var meta=column(cursor,2*size,4,a);var problem=column(cursor,3*size+1,8,a);var control=column(cursor,16,8,a);
             var pressure=new VulkanGasPressure.Layout(thermal,gasGeometry,geometry.cells(),geometry.faces(),new VulkanGasPressure.PressureBuffers(starts,columns,values,rows,solution,work,meta,problem,control),cursor[0],a);
             cursor[0]=pressure.endOffset();var temperatures=column(cursor,n,8,a);
             var first=new mmm.world.MovingBodyFluidCoupling.Request(new java.util.UUID(0,1),new mmm.world.MovingBodyFluidCoupling.Bounds(.5,.75,.75,1.25,1.25,1.5),.4,.2,0);

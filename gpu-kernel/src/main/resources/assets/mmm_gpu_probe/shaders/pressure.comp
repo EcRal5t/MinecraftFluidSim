@@ -21,6 +21,8 @@ int lane,n,gid,stride,group;
 #define Q(row) work[2*n+(row)]
 #define Z(row) work[3*n+(row)]
 #define DIAG(row) work[4*n+(row)]
+#define ANCHOR_X(row) work[5*n+(row)]
+#define ANCHOR_R(row) work[6*n+(row)]
 #define BOUNDED(row) meta[row]
 #define FREE(row) meta[n+(row)]
 #define RHS(row) problem[row]
@@ -34,11 +36,19 @@ int lane,n,gid,stride,group;
 #define ALPHA control[5]
 #define RESTART control[6]
 #define REFRESH control[7]
+#define CONSTRAINT_TRIALS control[8]
 #define BETA control[9]
 #define TOLERANCE control[10]
 #define PMAX control[11]
 #define PHASE control[12]
-#define BLOCKED control[14]
+#define ACTIVE_SET_UPDATES control[13]
+#define RESIDUAL_REFRESHES control[15]
+// 0/1/2 are inner/init/final residuals. Higher phases suspend the MG application.
+// Inner CG locks FREE and permits infeasible iterates. Only converged subproblems
+// enter the outer policy update. RZ/BETA/ALPHA then hold trial norm/length/kind.
+const double OUTER_PREP=3.0, TRIAL_PENDING=4.0, TRIAL_REFRESH=5.0,
+             GRADIENT_PREP=6.0, POLICY_PREP=7.0, POLICY_PENDING=8.0,
+             POLICY_REFRESH=9.0, DONE=10.0;
 void syncAll() { memoryBarrierBuffer(); barrier(); }
 bool finite(double value) { return !isnan(value) && !isinf(value); }
 double hypotStable(double a,double b) {
@@ -81,47 +91,96 @@ dvec4 collectStats(int operationB,int operationC) {
 void initializeRows() {
     for(int row=gid;row<n;row+=stride) {
         pressure[row]=BOUNDED(row)!=0?max(LOWER(row),problem[2*n+row]):problem[2*n+row];
-        FREE(row)=0;R(row)=0.0;D(row)=0.0;Q(row)=0.0;Z(row)=0.0;
+        FREE(row)=1;R(row)=0.0;D(row)=0.0;Q(row)=0.0;Z(row)=0.0;
+        ANCHOR_X(row)=pressure[row];ANCHOR_R(row)=0.0;
         double diagonal=0.0;for(int edge=starts[row];edge<starts[row+1];edge++)if(columns[edge]==row)diagonal+=values[edge];DIAG(row)=diagonal;
     }
-    double maximum=0.0;for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(row<0)continue;double value=BOUNDED(row)!=0?max(LOWER(row),problem[2*n+row]):problem[2*n+row];maximum=max(maximum,abs(value));}
+    double maximum=0.0;for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(row>=0)maximum=max(maximum,abs(pressure[row]));}
     saveStats(0.0,0.0,0.0,maximum,0,0);
 }
 void initializeControl() {
-    dvec4 stats=collectStats(0,0);
-    if(gid!=0)return;
+    dvec4 stats=collectStats(0,0);if(gid!=0)return;
     ITER=0.0;SUCCESS=0.0;RUN=1.0;RZ=0.0;ALPHA=0.0;RESTART=1.0;REFRESH=1.0;BETA=0.0;
-    PMAX=stats.w;PHASE=1.0;BLOCKED=0.0;
+    TOLERANCE=TARGET;PMAX=stats.w;PHASE=1.0;
+    CONSTRAINT_TRIALS=0.0;ACTIVE_SET_UPDATES=0.0;RESIDUAL_REFRESHES=0.0;
 }
 void refreshResidual() {
     if(REFRESH==0.0)return;
-    precise double sum=0.0;double equations=0.0,bounds=0.0,maximum=0.0;
+    bool trial=PHASE==TRIAL_REFRESH,finalResidual=PHASE==2.0;
+    precise double sum=0.0;double equations=0.0,extra=0.0,kkt=0.0;
     for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
         int row=rows[ordinal];if(row<0)continue;precise double product=row>=p.matrixFreeFromRow?Q(row):0.0;
         if(row<p.matrixFreeFromRow)for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*pressure[columns[edge]];
-        R(row)=RHS(row)-product;double value=R(row);maximum=max(maximum,abs(pressure[row]));
-        FREE(row)=(BOUNDED(row)==0 || pressure[row]>LOWER(row) || value>TARGET)?1:0;
-        if(BOUNDED(row)!=0 && pressure[row]<=LOWER(row) && value<=0.0)continue;
+        R(row)=RHS(row)-product;double value=R(row);
+        if(PHASE==1.0)ANCHOR_R(row)=value;
+        if(finalResidual)FREE(row)=(BOUNDED(row)==0||pressure[row]+value/DIAG(row)>LOWER(row))?1:0;
+        // The maximum reduction carries either an active dual violation or a
+        // primal-infeasibility marker; both prevent accepting the inner solution.
+        if(BOUNDED(row)!=0&&pressure[row]<LOWER(row))kkt=1.7976931348623157e308LF;
+        if(trial)extra-=0.5*(pressure[row]-ANCHOR_X(row))*(ANCHOR_R(row)+value);
+        else if(!finalResidual&&FREE(row)==0)kkt=max(kkt,value);
+        bool included=trial||finalResidual?(BOUNDED(row)==0||pressure[row]>LOWER(row)||value>0.0):FREE(row)!=0;
+        if(!included)continue;
         equations+=1.0;sum+=value*value;
-        precise double bound=abs(RHS(row))+2.0*DIAG(row)*PMAX;bounds=hypotStable(bounds,bound);
+        if(!trial){precise double bound=abs(RHS(row))+2.0*DIAG(row)*PMAX;extra=hypotStable(extra,bound);}
     }
-    saveStats(sum,equations,bounds,maximum,0,3);
+    saveStats(sum,equations,extra,kkt,0,trial?0:3);
 }
 void finishRefresh() {
     if(REFRESH==0.0)return;
-    dvec4 stats=collectStats(0,3);
-    if(gid!=0)return;
-    double equations=stats.y,scale=stats.z;RMS=sqrt(stats.x/max(1.0,equations));
-    precise double floorValue=(equations+8.0)*2.220446049250313e-16*0.5*scale/sqrt(max(1.0,equations));
-    TOLERANCE=finite(floorValue)?max(TARGET,floorValue):TARGET;
-    PMAX=stats.w;RESTART=1.0;REFRESH=0.0;
-    if(PHASE==2.0){SUCCESS=(finite(RMS)&&RMS<=TOLERANCE)?1.0:0.0;RUN=0.0;}
-    else if((PHASE==1.0 && !(RMS>TARGET)) || (PHASE==0.0 && RMS<=TOLERANCE))RUN=0.0;
+    bool trial=PHASE==TRIAL_REFRESH,finalResidual=PHASE==2.0;
+    dvec4 stats=collectStats(0,trial?0:3);if(gid!=0)return;
+    RESIDUAL_REFRESHES+=1.0;RMS=sqrt(stats.x/max(1.0,stats.y));RESTART=1.0;REFRESH=0.0;
+    if(!trial){
+        precise double floorValue=(stats.y+8.0)*2.220446049250313e-16*0.5*stats.z/sqrt(max(1.0,stats.y));
+        TOLERANCE=finite(floorValue)?max(TARGET,floorValue):TARGET;
+    }
+    if(finalResidual){SUCCESS=(stats.w<=0.0&&finite(RMS)&&RMS<=TOLERANCE)?1.0:0.0;RUN=0.0;return;}
+    if(trial){
+        bool accepted=finite(stats.z)&&stats.z<=-0.25*RZ/BETA;
+        if(accepted){if(RUN==0.0||(stats.w<=0.0&&RMS<=TARGET)){PHASE=DONE;RUN=0.0;}else PHASE=POLICY_PREP;}
+        else{BETA=ALPHA==0.0?0.5:0.5*BETA;PHASE=GRADIENT_PREP;}
+        return;
+    }
+    // One true residual certifies both a solved free subproblem and, when feasible,
+    // the full KKT conditions. No outer matrix product is needed in that common case.
+    if(RMS<=TOLERANCE){
+        if(stats.w<=TOLERANCE){PHASE=DONE;RUN=0.0;}
+        else PHASE=OUTER_PREP;
+    }else PHASE=0.0;
 }
 void precondition() {
-    if(RUN==0.0)return;
+    if(RUN==0.0){
+        if(PHASE!=DONE){
+            double maximum=0.0;
+            for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(row<0)continue;
+                pressure[row]=ANCHOR_X(row);R(row)=ANCHOR_R(row);maximum=max(maximum,abs(pressure[row]));
+                FREE(row)=(BOUNDED(row)==0||pressure[row]+R(row)/DIAG(row)>LOWER(row))?1:0;}
+            saveStats(0.0,0.0,0.0,maximum,0,0);
+        }
+        return;
+    }
+    if(PHASE==OUTER_PREP||PHASE==GRADIENT_PREP||PHASE==POLICY_PREP){
+        precise double norm=0.0;double changed=0.0,maximum=0.0;
+        for(int ordinal=gid;ordinal<p.count;ordinal+=stride){
+            int row=rows[ordinal];if(row<0)continue;
+            if(PHASE==POLICY_PREP){
+                ANCHOR_X(row)=pressure[row];ANCHOR_R(row)=R(row);
+                int enabled=(BOUNDED(row)==0||pressure[row]+R(row)/DIAG(row)>LOWER(row))?1:0;
+                if(enabled!=FREE(row))changed=1.0;FREE(row)=enabled;
+                if(enabled==0)pressure[row]=LOWER(row);
+            }else{
+                double origin=ANCHOR_X(row),gradient=origin+(PHASE==OUTER_PREP?0.5:BETA)*ANCHOR_R(row)/DIAG(row);
+                if(BOUNDED(row)!=0)gradient=max(LOWER(row),gradient);
+                double displacement=gradient-origin;norm+=DIAG(row)*displacement*displacement;
+                pressure[row]=PHASE==OUTER_PREP?(BOUNDED(row)!=0?max(LOWER(row),pressure[row]):pressure[row]):gradient;
+            }
+            maximum=max(maximum,abs(pressure[row]));
+        }
+        saveStats(norm,0.0,changed,maximum,0,1);return;
+    }
     precise double sum=0.0;
-    for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){
         int row=rows[ordinal];if(row<0)continue;
         if(p.externalPreconditioner==0||row>=p.liquidCount)Z(row)=FREE(row)!=0?R(row)/DIAG(row):0.0;
         if(RESTART!=0.0)D(row)=Z(row);
@@ -130,72 +189,71 @@ void precondition() {
     saveStats(sum,0.0,0.0,0.0,0,0);
 }
 void finishPrecondition() {
-    if(RUN==0.0)return;
-    dvec4 stats=collectStats(0,0);
-    if(gid!=0)return;
+    if(RUN==0.0){if(PHASE!=DONE){dvec4 restored=collectStats(0,0);if(gid==0)PMAX=restored.w;}return;}
+    bool outer=PHASE>=3.0;dvec4 stats=collectStats(0,outer?1:0);if(gid!=0)return;
+    if(outer){
+        PMAX=stats.w;
+        if(PHASE==POLICY_PREP){if(stats.z!=0.0)ACTIVE_SET_UPDATES+=1.0;PHASE=POLICY_PENDING;}
+        else{RZ=stats.x;if(PHASE==OUTER_PREP){BETA=0.5;ALPHA=0.0;}else ALPHA=1.0;PHASE=TRIAL_PENDING;}
+        return;
+    }
     double nextRz=stats.x;BETA=RESTART!=0.0?0.0:nextRz/RZ;RZ=nextRz;
 }
 void updateDirection() {
-    if(RUN==0.0 || RESTART!=0.0)return;
+    if(RUN==0.0||PHASE>=3.0||RESTART!=0.0)return;
     for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(row<0)continue;if(FREE(row)!=0)D(row)=Z(row)+BETA*D(row);else D(row)=0.0;}
 }
 void directionProduct() {
-    if(RUN==0.0)return;
-    precise double sum=0.0;double distance=1.7976931348623157e308LF;
-    for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
+    if(RUN==0.0||PHASE>=3.0)return;
+    precise double sum=0.0;
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){
         int row=rows[ordinal];if(row<0)continue;precise double product=row>=p.matrixFreeFromRow?Q(row):0.0;
         if(row<p.matrixFreeFromRow)for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*D(columns[edge]);Q(row)=product;
-        if(FREE(row)!=0){sum+=D(row)*product;if(BOUNDED(row)!=0 && D(row)<0.0)distance=min(distance,(pressure[row]-LOWER(row))/-D(row));}
+        if(FREE(row)!=0)sum+=D(row)*product;
     }
-    saveStats(sum,distance,0.0,0.0,2,0);
+    saveStats(sum,0.0,0.0,0.0,0,0);
 }
 void finishProduct() {
-    if(RUN==0.0)return;
-    dvec4 stats=collectStats(2,0);
-    if(gid!=0)return;
+    if(RUN==0.0||PHASE>=3.0)return;
+    dvec4 stats=collectStats(0,0);if(gid!=0)return;
     double denominator=stats.x;
-    if(!(denominator>0.0 && finite(denominator) && RZ>0.0 && finite(RZ))){RUN=0.0;return;}
-    ALPHA=RZ/denominator;double distance=stats.y;BLOCKED=distance<=ALPHA?1.0:0.0;ALPHA=min(ALPHA,distance);
+    if(!(denominator>0.0&&finite(denominator)&&RZ>0.0&&finite(RZ))){RUN=0.0;return;}
+    ALPHA=RZ/denominator;
 }
 void updateSolution() {
-    if(RUN==0.0)return;
-    precise double sum=0.0;double equations=0.0,changed=0.0,maximum=0.0;
-    for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
-        int row=rows[ordinal];if(row<0)continue;bool hits=BOUNDED(row)!=0 && D(row)<0.0 && (pressure[row]-LOWER(row))/-D(row)<=ALPHA;
-        pressure[row]=hits?LOWER(row):pressure[row]+ALPHA*D(row);R(row)-=ALPHA*Q(row);
-        if(BOUNDED(row)!=0 && pressure[row]<LOWER(row))pressure[row]=LOWER(row);
-        if(BLOCKED==0.0) {
-            int enabled=(BOUNDED(row)==0 || pressure[row]>LOWER(row) || R(row)>TARGET)?1:0;
-            if(enabled!=FREE(row))changed=1.0;FREE(row)=enabled;
-        }
-        double value=R(row);maximum=max(maximum,abs(pressure[row]));
-        if(BOUNDED(row)!=0 && pressure[row]<=LOWER(row) && value<=0.0)continue;
-        equations+=1.0;sum+=value*value;
+    if(RUN==0.0||PHASE>=3.0)return;
+    precise double sum=0.0;double equations=0.0,maximum=0.0;
+    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){
+        int row=rows[ordinal];if(row<0)continue;
+        if(FREE(row)!=0)pressure[row]+=ALPHA*D(row);
+        R(row)-=ALPHA*Q(row);maximum=max(maximum,abs(pressure[row]));
+        if(FREE(row)!=0){equations+=1.0;sum+=R(row)*R(row);}
     }
-    saveStats(sum,equations,changed,maximum,0,1);
+    saveStats(sum,equations,0.0,maximum,0,0);
 }
 void finishUpdate() {
     if(RUN==0.0)return;
-    dvec4 stats=collectStats(0,1);
-    if(gid!=0)return;
-    RMS=sqrt(stats.x/max(1.0,stats.y));PMAX=stats.w;ITER+=1.0;PHASE=0.0;
-    RESTART=(BLOCKED!=0.0 || stats.z!=0.0)?1.0:0.0;REFRESH=(RESTART!=0.0 || RMS<=TARGET)?1.0:0.0;
-    if(ITER>=double(p.maximumIterations))RUN=0.0;
+    dvec4 stats=collectStats(0,0);if(gid!=0)return;
+    ITER+=1.0;
+    if(PHASE==TRIAL_PENDING){PHASE=TRIAL_REFRESH;REFRESH=1.0;RESTART=1.0;CONSTRAINT_TRIALS+=1.0;}
+    else if(PHASE==POLICY_PENDING){PHASE=POLICY_REFRESH;REFRESH=1.0;RESTART=1.0;}
+    else{RMS=sqrt(stats.x/max(1.0,stats.y));PMAX=stats.w;PHASE=0.0;RESTART=0.0;REFRESH=RMS<=TARGET?1.0:0.0;}
+    if(ITER>=double(p.maximumIterations)){RUN=0.0;REFRESH=1.0;}
 }
-void finalizeControl() {if(gid==0){REFRESH=1.0;PHASE=2.0;}}
+void finalizeControl(){if(gid==0){REFRESH=1.0;PHASE=2.0;}}
 void executeStage(int stage) {
     if(stage==0)initializeRows();else if(stage==1)initializeControl();else if(stage==2)refreshResidual();
     else if(stage==3)finishRefresh();else if(stage==4)precondition();else if(stage==5)finishPrecondition();
     else if(stage==6)updateDirection();else if(stage==7)directionProduct();else if(stage==8)finishProduct();
     else if(stage==9)updateSolution();else if(stage==10)finishUpdate();else if(stage==11)finalizeControl();
-    else if(stage==12 && gid==0 && SUCCESS==0.0)atomicOr(errors,4u);
+    else if(stage==12&&gid==0&&SUCCESS==0.0)atomicOr(errors,4u);
 }
 void singleStage(int stage){executeStage(stage);syncAll();}
 void main() {
     lane=int(gl_LocalInvocationID.x);n=p.size;group=int(gl_WorkGroupID.x);gid=group*256+lane;stride=p.groups*256;
     if(p.stage>=0){executeStage(p.stage);return;}
     for(int stage=0;stage<=6;stage++)singleStage(stage);
-    while(RUN!=0.0 && ITER<double(p.maximumIterations)) {
+    while(RUN!=0.0&&ITER<double(p.maximumIterations)){
         for(int stage=7;stage<=10;stage++)singleStage(stage);
         for(int stage=2;stage<=6;stage++)singleStage(stage);
     }

@@ -104,6 +104,7 @@ final class FlipGpuResources implements AutoCloseable {
 
 	void destroy(GpuBuffer buffer) {
 		if (buffer == null) return;
+		buffers.remove(buffer);
 		if (buffer.mappedAddress() != NULL) vkUnmapMemory(context.device(), buffer.memory());
 		vkDestroyBuffer(context.device(), buffer.handle(), null);
 		vkFreeMemory(context.device(), buffer.memory(), null);

@@ -65,7 +65,8 @@ final class VulkanGasThermodynamics implements AutoCloseable {
                   VulkanLiquidStateLayout.Column header, VulkanLiquidStateLayout.Column segmentOffsets,
                   VulkanLiquidStateLayout.Column segmentUpper, VulkanLiquidStateLayout.Column segmentHeatCapacity,
                   VulkanLiquidStateLayout.Column specificAnchorEnergy, VulkanLiquidStateLayout.Column speciesReference,
-                  VulkanLiquidStateLayout.Column states, long endOffset) {
+                  VulkanLiquidStateLayout.Column states, VulkanLiquidStateLayout.Column longVolumes,
+                  VulkanLiquidStateLayout.Column volumeDispatch, long endOffset) {
         int headerWordOffset() { return word(header); }
         long bytes() { return endOffset - header.offset(); }
         long stateOffset(int node, Quantity quantity) {
@@ -82,6 +83,7 @@ final class VulkanGasThermodynamics implements AutoCloseable {
             data[2] = tables.definitions().speciesIds().size(); data[3] = nodeVolumesWordOffset;
             data[4] = word(segmentOffsets); data[5] = word(segmentUpper); data[6] = word(segmentHeatCapacity);
             data[7] = word(specificAnchorEnergy); data[8] = word(speciesReference); data[9] = word(states);
+            data[10]=word(longVolumes);data[11]=word(volumeDispatch);
             for (var field : VulkanGasStateLayout.Field.values()) data[16 + field.ordinal()] = Math.toIntExact(gas.column(field).offset() / 4);
             for (int i = 0; i < data.length; i++) target.putInt(4 * i, data[i]);
             target.putDouble(4 * 32, GasRegistry.STANDARD_TEMPERATURE_K);
@@ -127,23 +129,28 @@ final class VulkanGasThermodynamics implements AutoCloseable {
         var anchor = column(cursor, tables.specificAnchorEnergy().length, 8, alignment);
         var species = column(cursor, tables.speciesReference().length, 8, alignment);
         var states = column(cursor, Math.multiplyExact(gas.nodeCapacity(), STATE_WIDTH), 8, alignment);
-        return new Layout(gas, tables, nodeVolumesWordOffset, header, offsets, upper, capacity, anchor, species, states, align(cursor[0], alignment));
+        var longVolumes=column(cursor,gas.nodeCapacity(),4,alignment);var dispatch=column(cursor,4,4,alignment);
+        return new Layout(gas, tables, nodeVolumesWordOffset, header, offsets, upper, capacity, anchor, species, states,longVolumes,dispatch, align(cursor[0], alignment));
     }
     private final FlipKernelBindings bindings;
+    private FlipKernelBindings.BufferRange arena;
     VulkanGasThermodynamics(VulkanDeviceContext context) { bindings = new FlipKernelBindings(context, 2, shader(), 32); }
     void rebindRanges(FlipKernelBindings.BufferRange candidate, FlipKernelBindings.BufferRange errors) {
-        bindings.rebindRanges(List.of(candidate, errors));
+        arena=candidate;bindings.rebindRanges(List.of(candidate, errors));
     }
     void record(VkCommandBuffer command, Layout layout) { stage(command, layout, 1, null); }
     /** Inventory topology keys and geometry must describe the same generation. This only sums volumes;
      * changing chamber membership requires gas inventory remapping and new topology keys first.
      */
     void recordVolumes(VkCommandBuffer command, Layout layout, VulkanGasGeometry.Layout geometry) {
+        stage(command,layout,2,geometry);
+        stage(command,layout,3,geometry);
+        stage(command,layout,4,geometry);
         stage(command, layout, 0, geometry);
     }
     private void stage(VkCommandBuffer command, Layout layout, int stage, VulkanGasGeometry.Layout geometry) {
         int count = layout.gas().nodeCapacity();if (count == 0) return;
-        int groups = stage == 0 ? count : (int) (((long) count + 127) / 128);
+        int groups = stage==2||stage==4?1:(int) (((long) count + 127) / 128);
         try (var stack = stackPush()) {
             bindings.bind(command, stack);
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
@@ -151,7 +158,10 @@ final class VulkanGasThermodynamics implements AutoCloseable {
                             geometry == null ? 0 : word(geometry.componentOffsets()), geometry == null ? 0 : word(geometry.componentMembers()),
                             geometry == null ? 0 : word(geometry.dryVolumes()), geometry == null ? 0 : word(geometry.cellNodes()),
                             geometry == null ? 0 : geometry.cells()));
-            vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);
+            if(stage==0){
+                barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
+                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+layout.volumeDispatch().offset());
+            }else vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);
             barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, stack);
         }

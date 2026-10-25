@@ -199,7 +199,8 @@ void chooseMode(int lane){
     for(int block=lane;block<(h(0)+127)/128;block+=128){dvec4 b=loadPartial(PARTIALS,block);v=dvec4(min(v.x,b.x),max(v.y,b.y),min(v.z,b.z),max(v.w,b.w));}
     for(int block=lane;block<max(1,((h(7)!=0?get(MODE,1):contacts())+127)/128);block+=128){dvec4 b=loadPartial(BATH_PARTIALS,block);v.x=min(v.x,b.x);v.y=max(v.y,b.y);}
     v=reduce(v,0);if(lane!=0)return;
-    store(SUMMARY,0,v.x);store(SUMMARY,1,v.y);store(SUMMARY,2,v.z);
+    for(int i=0;i<6;i++)put(50,i,0);
+    store(SUMMARY,0,v.x);store(SUMMARY,1,v.y);store(SUMMARY,2,v.z);store(SUMMARY,6,v.w);store(SUMMARY,7,ceil(v.w));
     int mode=owners()==0||(h(7)==2?v.w==0.0:contacts()==0)||v.y-v.x<=resolution()?0:v.w>double(h(5))?9:max(1,int(ceil(v.w)));
     put(MODE,0,mode);
 }
@@ -215,19 +216,22 @@ void flux(int edge,double dt,int slot){
     double other=b<0?num(BATH_T,edge):num(TEMP,b);precise double q=num(CONTACT_G,edge)*(other-num(TEMP,a))*dt;
     store(FLUX,edge,q);if(b<0)store(RESERVOIR,get(BATH_INDEX,edge)*h(5)+slot,q);
 }
-double ownerFlux(int row){
-    if(get(DEGREE_COUNTS,row)>128){dvec2 value=tileSum(row);return value.x+value.y;}
+dvec2 ownerFluxPair(int row){
+    if(get(DEGREE_COUNTS,row)>128)return tileSum(row);
     dvec2 delta=dvec2(0.0);for(int i=get(DEGREE_OFFSETS,row);i<get(DEGREE_OFFSETS,row+1);i++){
         int edge=get(INCIDENT,i);if(h(7)==2){dvec2 x=sampleData(edge,true);delta=add(delta,x.x);delta=add(delta,x.y);}
         else delta=add(delta,(get(CONTACT_A,edge)==row?1.0:-1.0)*num(FLUX,edge));}
-    return delta.x+delta.y;
+    return delta;
 }
+double ownerFlux(int row){dvec2 delta=ownerFluxPair(row);return delta.x+delta.y;}
 void explicitUpdate(int row){
     if(row>=owners())return;double u=num(ENERGY,row)+ownerFlux(row);store(ENERGY,row,u);
     double t=invert(row,u-num(BEFORE,row));if(!(t>0.0))invalid();store(TEMP,row,t);
 }
 double residual(int row,int temperatureField){
-    double t=num(temperatureField,row);dvec2 loss=dvec2(0.0);
+    double t=num(temperatureField,row);
+    if(h(7)==2){dvec2 result=add(-ownerFluxPair(row),integral(row,num(INITIAL_T,row),t));return result.x+result.y;}
+    dvec2 loss=dvec2(0.0);
     if(get(DEGREE_COUNTS,row)>128)loss=tileSum(row);
     else for(int i=get(DEGREE_OFFSETS,row);i<get(DEGREE_OFFSETS,row+1);i++){
         int edge=get(INCIDENT,i),a=get(CONTACT_A,edge),b=get(CONTACT_B,edge),other=a==row?b:a;
@@ -284,13 +288,28 @@ void finishLongProduct(int row,bool direction){
     if(row>=owners()||get(DEGREE_COUNTS,row)<=128)return;
     dvec2 sum=tileSum(row);sum=add(sum,num(VALUES,row)*inputVector(row,direction));store(WORK,2*h(0)+row,sum.x+sum.y);
 }
+void spatialGatherDispatch(){
+ bool run=p.step==0||num(CONTROL,p.step==1?3:7)!=0.0;int tiles=run?get(TILE_OFFSETS,h(0)):0,n=run?(owners()+127)/128:0;
+ put(DISPATCH,15,min(tiles,65535));put(DISPATCH,16,max(1,(tiles+65534)/65535));put(DISPATCH,17,1);
+ put(DISPATCH,3,min(n,65535));put(DISPATCH,4,max(1,(n+65534)/65535));put(DISPATCH,5,1);
+}
+void spatialProduct(int row,bool direction){
+ if(row>=owners()||num(CONTROL,direction?3:7)==0.0)return;
+ dvec2 sum=add(ownerFluxPair(row),num(VALUES,row)*inputVector(row,direction));store(WORK,2*h(0)+row,sum.x+sum.y);
+}
 void main(){
     int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*block+lane;
+    if(p.stage==37){if(id==0){
+        double values[20]=double[20](num(CONTROL,0),num(CONTROL,1),num(CONTROL,2),num(CONTROL,3),num(PROBLEM,3*h(0)),num(CONTROL,10),num(CONTROL,11),num(SUMMARY,3),num(SUMMARY,5),num(SUMMARY,2),num(SUMMARY,6),num(SUMMARY,7),double(get(MODE,0)),double(get(ACCEPTED,0)),double(get(50,0)),double(get(50,1)),double(get(50,2)),double(get(50,3)),double(get(50,4)),double(get(50,5)));
+        for(int i=0;i<20;i++){uvec2 bits=unpackDouble2x32(values[i]);words[at(49)+2*i]=bits.x;words[at(49)+2*i+1]=bits.y;}
+    }return;}
+    if(p.stage==36){if(id==0)spatialGatherDispatch();return;}
     if(p.stage==31){if(id==0){int count=errors==0u?max(1,((h(7)!=0?get(MODE,1):contacts())+127)/128):0;put(DISPATCH,12,min(count,65535));put(DISPATCH,13,max(1,(count+65534)/65535));put(DISPATCH,14,1);}return;}
     if(errors!=0u&&h(7)!=0)return;
     if(owners()<0||owners()>h(0)||get(COUNTS,1)<0||get(COUNTS,1)>h(1)||contacts()<0||contacts()>h(2)){if(id==0)invalid();return;}
     // All bath demand is counted even when a private candidate needs a larger bath column.
     if((errors&64u)!=0u&&p.stage!=0&&p.stage!=1&&p.stage!=31)return;
+    if(p.stage==33){if(block<get(TILE_OFFSETS,h(0)))reduceTile(block,lane,23);return;}
     if(p.stage==18||p.stage==19||(p.stage>=22&&p.stage<=26)){
         if(block>=get(TILE_OFFSETS,h(0)))return;
         if(p.stage==18||p.stage==19){if(num(CONTROL,p.stage==19?3:7)==0.0)return;}
@@ -317,6 +336,7 @@ void main(){
     else if(p.stage==16||p.stage==17){if(num(CONTROL,p.stage==17?3:7)!=0.0)product(id,p.stage==17);}
     else if(p.stage==20){if(id<p.count)prepareTile(id);}
     else if(p.stage==21){if(id<h(0))put(TILE_COUNTS,id,id<owners()&&get(DEGREE_COUNTS,id)>128?(get(DEGREE_COUNTS,id)+127)/128:0);}
+    else if(p.stage==34||p.stage==35)spatialProduct(id,p.stage==35);
     else if(p.stage==32){if(id<h(6)&&(get(MODE,0)==0||get(MODE,0)>h(5)))for(int slot=0;slot<h(5);slot++)store(RESERVOIR,id*h(5)+slot,0.0);}
     else if(p.stage==30){if(id<h(6))for(int slot=0;slot<h(5);slot++)store(RESERVOIR,id*h(5)+slot,0.0);}
     else if(p.stage==27||p.stage==28){if(num(CONTROL,p.stage==28?3:7)!=0.0)finishLongProduct(id,p.stage==28);}

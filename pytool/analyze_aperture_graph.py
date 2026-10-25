@@ -67,6 +67,51 @@ def peel(adjacency, threshold):
                      "maximum_round": int(level.max(initial=-1)), "round_counts": counts.tolist()}
 
 
+def independent_schur_round(nodes, a, b):
+    adjacency = coo_matrix((np.ones(2 * len(a), dtype=np.int8),
+                            (np.r_[a, b], np.r_[b, a])), shape=(nodes, nodes)).tocsr()
+    degree = np.diff(adjacency.indptr)
+    eliminated = degree <= 2
+    adjacent_low = (degree[a] <= 2) & (degree[b] <= 2)
+    eliminated[np.maximum(a[adjacent_low], b[adjacent_low])] = False
+    retained = np.flatnonzero(~eliminated)
+    mapping = np.full(nodes, -1, dtype=np.int64)
+    mapping[retained] = np.arange(len(retained))
+    direct = (~eliminated[a]) & (~eliminated[b])
+    channels = np.flatnonzero(eliminated & (degree == 2))
+    first = adjacency.indices[adjacency.indptr[channels]]
+    second = adjacency.indices[adjacency.indptr[channels] + 1]
+    pairs = np.r_[np.c_[mapping[a[direct]], mapping[b[direct]]],
+                  np.c_[mapping[first], mapping[second]]]
+    pairs.sort(axis=1)
+    pairs = np.unique(pairs[pairs[:, 0] != pairs[:, 1]], axis=0)
+    return len(retained), pairs[:, 0], pairs[:, 1], int(eliminated.sum())
+
+
+def schur_structure(nodes, a, b, maximum_rounds=12):
+    rounds = []
+    for number in range(maximum_rounds):
+        next_nodes, next_a, next_b, eliminated = independent_schur_round(nodes, a, b)
+        adjacency = coo_matrix((np.ones(2 * len(next_a), dtype=np.int8),
+                                (np.r_[next_a, next_b], np.r_[next_b, next_a])),
+                               shape=(next_nodes, next_nodes)).tocsr()
+        components, labels = connected_components(adjacency, directed=False)
+        sizes = np.bincount(labels)
+        degrees = np.diff(adjacency.indptr)
+        rounds.append({"round": number + 1, "input_nodes": nodes, "eliminated": eliminated,
+                       "core_nodes": next_nodes, "core_edges": len(next_a),
+                       "connected_components": int(components),
+                       "largest_components": np.sort(sizes)[-15:][::-1].tolist(),
+                       "components_over_256": int(np.count_nonzero(sizes > 256)),
+                       "nodes_in_components_over_256": int(sizes[sizes > 256].sum()),
+                       "cycle_rank": int(len(next_a) - next_nodes + components),
+                       "degree_histogram": {str(int(d)): int(c) for d, c in zip(*np.unique(degrees, return_counts=True))}})
+        if next_nodes == 0 or eliminated == 0:
+            break
+        nodes, a, b = next_nodes, next_a, next_b
+    return rounds
+
+
 def analyze(graph, top):
     n = graph["nodes"]
     weight = graph["duration"] * graph["g"]
@@ -157,7 +202,8 @@ def analyze(graph, top):
             "strong_edge_counts": {str(threshold): int(np.count_nonzero(strength >= threshold)) for threshold in [.1, .25, .5, .75, .9]},
             "mutual_strongest_pairs": len(mutual), "mutual_strongest_node_fraction": 2 * len(mutual) / max(1, n),
             "connected_components": int(component_count), "largest_components": np.sort(sizes)[-10:][::-1].tolist(),
-            "cycle_rank": int(len(w) - n + component_count), "low_degree_components": low_description, "leaf_peeling": leaf, "degree_two_peeling": degree_two,
+            "cycle_rank": int(len(w) - n + component_count), "low_degree_components": low_description,
+            "independent_schur_rounds": schur_structure(n, a, b), "leaf_peeling": leaf, "degree_two_peeling": degree_two,
             "top_hubs": hubs, "top_hub_edge_coverage": hub_coverage,
             "initial_physical_pressure": quantiles(graph["initial"] / graph["root"])}
 

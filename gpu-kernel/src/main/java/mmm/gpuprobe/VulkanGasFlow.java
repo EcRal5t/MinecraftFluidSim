@@ -55,7 +55,7 @@ final class VulkanGasFlow implements AutoCloseable {
                     case NODE_COUNTS,NODE_CURSORS,STORAGE,DIAGONAL_ROOT,OUT_SCALE,START_COUNTS,ROWS,PRESSURE,RETAINED_VOLUME,MODES->nodes;
                     case NODE_OFFSETS,STARTS->nodes+1;case NODE_PAIRS->Math.multiplyExact(pairs,2);
                     case COLUMNS,VALUES->Math.addExact(nodes,Math.multiplyExact(pairs,2));
-                    case WORK->Math.multiplyExact(nodes,5);case META->Math.multiplyExact(nodes,2);case PROBLEM->Math.addExact(Math.multiplyExact(nodes,3),1);
+                    case WORK->Math.multiplyExact(nodes,7);case META->Math.multiplyExact(nodes,2);case PROBLEM->Math.addExact(Math.multiplyExact(nodes,3),1);
                     case CONTROL->48;case PARTIALS->Math.multiplyExact((nodes+255)/256,4);
                     case ROUTE_COUNT,STEP->1;case ROUTE_SOURCE,ROUTE_TARGET,ROUTE_WEIGHT,AMBIENT_VOLUME,SOURCE_ROUTES,TARGET_ROUTES->routes;
                     case SOURCE_COUNTS,SOURCE_CURSORS->nodes+2;case SOURCE_OFFSETS->nodes+3;

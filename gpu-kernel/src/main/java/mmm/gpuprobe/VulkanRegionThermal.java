@@ -120,20 +120,18 @@ final class VulkanRegionThermal implements AutoCloseable {
         if(status.error()==64){int required=status.feedback().getInt(12),baths=status.feedback().getInt(16);if(required>l.conduction().contacts||baths>l.conduction().baths)throw new ContactCapacityGrowth(required,baths);}
         if(status.error()!=0)return status.error();
         int bathCount=status.feedback().getInt(24);
-        if(status.feedback().getInt(20)==VulkanThermalConduction.IMPLICIT){
-            // The first operator pass only captured a trial flux. Stiff steps instantiate the
-            // same canonical contacts now, leaving U unchanged until their accepted solve.
-            status=candidate.continueBatch((command,in,out,errors,staging,stack)->contacts.recordGraphEdges(command,l.contacts()),l.contacts().column(VulkanThermalContacts.Field.REQUIREMENTS).offset(),28);
-            if(status.error()==64){int required=status.feedback().getInt(12),baths=status.feedback().getInt(16);if(required>l.conduction().contacts||baths>l.conduction().baths)throw new ContactCapacityGrowth(required,baths);}
+        final VulkanThermalConduction.SpatialOperator spatial=status.feedback().getInt(20)==VulkanThermalConduction.IMPLICIT?contacts.frozenOperator(l.contacts(),duration):null;
+        if(spatial!=null){
+            var offsets=l.contacts().column(VulkanThermalContacts.Field.CACHE_OFFSETS);
+            status=candidate.continueBatch((command,in,out,errors,staging,stack)->timed(command,"thermal-cache-index",()->contacts.recordFrozenCounts(command,l.contacts())),offsets.offset()+4L*(offsets.count()-1),4);
             if(status.error()!=0)return status.error();
-            status=candidate.continueBatch((command,in,out,errors,staging,stack)->{
-                conduction.recordPrepare(command,l.conduction(),duration,timings);conduction.recordExplicit(command,l.conduction(),duration);contacts.recordConductionState(command,l.contacts());
-            },l.contacts().column(VulkanThermalContacts.Field.REQUIREMENTS).offset(),28);
+            contacts.ensureFrozenCapacity(status.feedback().getInt(0));
+            status=candidate.continueBatch((command,in,out,errors,staging,stack)->timed(command,"thermal-freeze-conductance",()->contacts.recordFreeze(command,l.contacts(),duration,timings!=null)),0,0);
             if(status.error()!=0)return status.error();
-            if(status.feedback().getInt(20)==VulkanThermalConduction.IMPLICIT)conduction.solveImplicit(candidate,l.conduction(),pressure,duration,timings);
+            conduction.solveImplicit(candidate,l.conduction(),pressure,duration,timings,spatial);
         }
         status=candidate.continueBatch((command,in,out,errors,staging,stack)->{
-            timed(command,"thermal-finish",()->conduction.recordFinish(command,l.conduction(),duration));
+            timed(command,"thermal-finish",()->conduction.recordFinish(command,l.conduction(),duration,spatial));
             timed(command,"thermal-publish",()->contacts.recordPublish(command,l.contacts()));
             if(l.input().device()!=null)l.input().device().recordSettle(command,sourceDevices,settlement,deviceLedger,out,continuation);
             caloric.record(command,l.input().liquidThermal());
@@ -146,9 +144,11 @@ final class VulkanRegionThermal implements AutoCloseable {
             for(var sample:timings.read())System.out.printf("mechanical_kernel=%s gpu_ms=%.3f%n",sample.stage(),sample.milliseconds());
             System.out.printf("thermal_layout owner_capacity=%d term_capacity=%d contact_capacity=%d bath_count=%d bath_capacity=%d reservoir_MiB=%.3f%n",
                     l.conduction().owners,l.conduction().terms,l.conduction().contacts,bathCount,l.conduction().baths,l.conduction().column(VulkanThermalConduction.Field.RESERVOIR_CHANGE).bytes()/1048576.0);
+            if(spatial!=null)System.out.printf("thermal_frozen_G_MiB=%.3f%n",contacts.frozenBytes()/1048576.0);
         }
         return status.error();
     }
+    long deviceBytes(){return contacts.frozenBytes();}
     private void timed(org.lwjgl.vulkan.VkCommandBuffer command,String label,Runnable commands){
         if(timings==null)commands.run();else timings.record(command,label,commands);
     }

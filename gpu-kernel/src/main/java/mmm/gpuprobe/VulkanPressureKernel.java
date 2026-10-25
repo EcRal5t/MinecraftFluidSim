@@ -12,6 +12,13 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Records the whole pressure solve into its caller's submission using resident buffer ranges. */
 final class VulkanPressureKernel implements AutoCloseable {
+    /** Counts are sampled before the final certification refresh; initialization is included. */
+    record Progress(int iterations,double residualRms,int constraintTrials,int activeSetUpdates,int residualRefreshes) {
+        static Progress read(java.nio.ByteBuffer control) {
+            return new Progress((int)control.getDouble(0),control.getDouble(8),(int)control.getDouble(64),
+                    (int)control.getDouble(104),(int)control.getDouble(120));
+        }
+    }
     /** One matrix product for the common PCG; the multigrid liquid block is shared by every model. */
     interface PressureOperator {
         int liquidCount();

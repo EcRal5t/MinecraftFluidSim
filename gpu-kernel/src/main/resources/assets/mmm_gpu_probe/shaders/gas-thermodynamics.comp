@@ -53,6 +53,18 @@ void reduceVolume(int node,int lane) {
         putNumber(h(3)+2*node,volumeValid!=0?volume:0.0);
     }
 }
+void shortVolume(int node){
+ if(node>=p.count)return;int actual=int(words[gas(COUNTS)]);
+ putNumber(h(3)+2*node,0.0);
+ if(actual<0||actual>h(0)){invalid();return;}if(node>=actual||errors!=0u)return;
+ int key=int(words[gas(KEYS)+node]),cell=key/8;if(key<0||cell>=p.cells){invalid();return;}
+ int row=int(words[p.cellNodes+cell]);if(row<=0||row>p.cells){invalid();return;}
+ int first=int(words[p.memberOffsets+row]),last=int(words[p.memberOffsets+row+1]);
+ if(last-first>16){uint slot=atomicAdd(words[h(11)+3],1u);words[h(10)+slot]=uint(node);return;}
+ double sum=0.0,correction=0.0;
+ for(int at=first;at<last;at++)addCompensated(sum,correction,number(p.dryVolumes+2*int(words[p.members+at])));
+ if(!finite(sum)||sum<=0.0)invalid();else putNumber(h(3)+2*node,sum);
+}
 bool inventory(int node,out int first,out int last,out double anchor,out double mass,out double r) {
     first=int(words[gas(ROW_OFFSETS)+node]);last=int(words[gas(ROW_OFFSETS)+node+1]);
     int components=int(words[gas(COUNTS)+1]),species=int(words[gas(COUNTS)+2]);
@@ -147,5 +159,8 @@ void derive(int node) {
 }
 void main() {
     int group=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x);
-    if(p.stage==0)reduceVolume(group,lane);else derive(group*128+lane);
+    if(p.stage==2){if(group==0&&lane==0)words[h(11)+3]=0u;return;}
+    if(p.stage==3){shortVolume(group*128+lane);return;}
+    if(p.stage==4){if(group==0&&lane==0){int count=errors==0u?int(words[h(11)+3]):0;words[h(11)]=uint(min(count,65535));words[h(11)+1]=uint(max(1,(count+65534)/65535));words[h(11)+2]=1u;}return;}
+    if(p.stage==0){if(group<int(words[h(11)+3]))reduceVolume(int(words[h(10)+group]),lane);}else derive(group*128+lane);
 }

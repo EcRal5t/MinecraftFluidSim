@@ -34,7 +34,7 @@ public final class GpuGasPressureBenchmark {
             int size=n+gas.nodeCapacity();long[] cursor={thermal.endOffset()};
             var starts=column(cursor,size+1,4,alignment);var columns=column(cursor,7*n+gas.nodeCapacity(),4,alignment);
             var values=column(cursor,columns.count(),8,alignment);var rows=column(cursor,size,4,alignment);
-            var solution=column(cursor,size,8,alignment);var work=column(cursor,5*size,8,alignment);
+            var solution=column(cursor,size,8,alignment);var work=column(cursor,7*size,8,alignment);
             var meta=column(cursor,2*size,4,alignment);var problem=column(cursor,3*size+1,8,alignment);
             var control=column(cursor,16,8,alignment);var partials=column(cursor,4*((size+255)/256),8,alignment);
             var hierarchy=VulkanPressureMultigrid.layout(grid,grid,grid,size);

@@ -35,7 +35,7 @@ final class VulkanPressureMultigrid implements AutoCloseable {
     void beginTimings(VkCommandBuffer command){if(timings!=null)timings.reset(command);}
     List<VulkanStageTimings.Sample> stageTimings(){return timings==null?List.of():timings.read();}
 
-    /** Seven FP64 matrix entries and three packed FP32 application vectors per cell. */
+    /** Seven FP64 entries, three FP32 vectors, and compact positive-diagonal application rows per level. */
     static Layout layout(int sx, int sy, int sz) {
         return layout(sx, sy, sz, Math.multiplyExact(Math.multiplyExact(sx, sy), sz));
     }
@@ -49,7 +49,7 @@ final class VulkanPressureMultigrid implements AutoCloseable {
         while (true) {
             var level = new Level(sx, sy, sz, cursor);
             levels.add(level);
-            cursor = Math.addExact(cursor,Math.addExact(Math.multiplyExact(7,level.cells()),Math.toIntExact((3L*level.cells()+1)/2)));
+            cursor = Math.addExact(cursor,Math.addExact(Math.multiplyExact(7,level.cells()),Math.addExact(Math.toIntExact((3L*level.cells()+1)/2),Math.toIntExact((level.cells()+2L)/2))));
             if (Math.max(sx, Math.max(sy, sz)) <= 4) break;
             sx = (sx + 1) / 2; sy = (sy + 1) / 2; sz = (sz + 1) / 2;
         }
@@ -73,6 +73,7 @@ final class VulkanPressureMultigrid implements AutoCloseable {
     private void recordBuildCommands(VkCommandBuffer command, Layout layout) {
         bind(command);
         var levels = layout.levels();
+        for(var level:levels)stage(command,layout,level,level,11);
         stage(command, layout, levels.getFirst(), levels.getFirst(), 0);
         for (int i = 1; i < levels.size(); i++) stage(command, layout, levels.get(i), levels.get(i - 1), 1);
         stage(command,layout,levels.getLast(),levels.getLast(),8);
@@ -110,7 +111,7 @@ final class VulkanPressureMultigrid implements AutoCloseable {
                             level.offset(), peer.offset(), peer.sizeX(), peer.sizeY(), peer.sizeZ(),
                             layout.levels().getFirst().cells(), layout.pressureStride(), layout.coarseFactorOffset(),2*layout.applyDispatchOffset()));
             if(dispatchIndex>=0)vkCmdDispatchIndirect(command,workspace.buffer().handle(),workspace.offset()+8L*layout.applyDispatchOffset()+16L*dispatchIndex);
-            else vkCmdDispatch(command, stage==9?level.cells():stage==4||stage==8||stage==10?1:(level.cells()+127)/128,1,1);
+            else vkCmdDispatch(command, stage==9?level.cells():stage==4||stage==8||stage==10||stage==11?1:(level.cells()+127)/128,1,1);
             barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | (stage==10?VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT:0),
                     VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | (stage==10?VK_ACCESS_INDIRECT_COMMAND_READ_BIT:0), stack);

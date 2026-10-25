@@ -50,7 +50,7 @@ final class VulkanGasPressure implements AutoCloseable {
                     ||cells.count()<4L*liquidCount||faces.count()<4L*faceCount
                     ||pressure.starts().count()<pressureSize+1||pressure.columns().count()<7L*liquidCount+gasCapacity+additionalRows
                     ||pressure.values().count()<7L*liquidCount+gasCapacity+additionalRows||pressure.rows().count()<pressureSize
-                    ||pressure.pressure().count()<pressureSize||pressure.work().count()<5L*pressureSize
+                    ||pressure.pressure().count()<pressureSize||pressure.work().count()<7L*pressureSize
                     ||pressure.meta().count()<2L*pressureSize||pressure.problem().count()<3L*pressureSize+1)
                 throw new IllegalArgumentException("Finite gas pressure layout differs from its resident buffers");
             long cursor=align(scratchBase,alignment);header=new VulkanLiquidStateLayout.Column(cursor,96,4);cursor+=header.bytes();

@@ -34,7 +34,7 @@ final class VulkanCoupledPressure implements AutoCloseable {
             if(liquidCount<0||rows<liquidCount||velocities<0||terms<0||scratchBase<0||alignment<8||(alignment&(alignment-1))!=0)
                 throw new IllegalArgumentException("Invalid coupled pressure dimensions");
             if(pressure.starts().count()<rows+1||pressure.rows().count()<rows||pressure.pressure().count()<rows
-                    ||pressure.work().count()<5L*rows||pressure.meta().count()<2L*rows||pressure.problem().count()<3L*rows+1)
+                    ||pressure.work().count()<7L*rows||pressure.meta().count()<2L*rows||pressure.problem().count()<3L*rows+1)
                 throw new IllegalArgumentException("Coupled pressure buffers have a different row stride");
             this.liquidCount=liquidCount;this.rows=rows;this.velocities=velocities;this.terms=terms;this.pressure=pressure;
             owners=Math.addExact(rows,velocities);blocks=Math.addExact(owners,Math.multiplyExact(2,terms)/128);
