@@ -10,7 +10,7 @@ import static mmm.gpuprobe.VulkanRegionStorage.*;
 import static mmm.gpuprobe.VulkanThermalConduction.Field.*;
 import static org.lwjgl.vulkan.VK10.*;
 
-/** Continuous caloric transport cost. Spatial owner sampling is measured by the region integration. */
+/** Single-step IMEX caloric transport on a supplied owner graph. */
 public final class GpuThermalConductionBenchmark {
     private GpuThermalConductionBenchmark() { }
     public static void main(String[] args){
@@ -43,13 +43,13 @@ public final class GpuThermalConductionBenchmark {
                             }
                             var dst=new FlipKernelBindings.BufferRange(output);var err=new FlipKernelBindings.BufferRange(errors);
                             conduction.rebindRanges(dst,err);pressure.rebindRanges(l.pressureRanges(dst,err));ledger.rebindRanges(new FlipKernelBindings.BufferRange(input),dst,err);
-                            conduction.recordPrepare(command,l,dt);conduction.recordExplicit(command,l,dt);
-                        },l.column(MODE).offset(),4);
-                        if(status.error()!=0)throw new IllegalStateException("Conduction prepare error="+status.error());int mode=status.feedback().getInt(0);
-                        iterations=mode==VulkanThermalConduction.IMPLICIT?conduction.solveImplicit(candidate,l,pressure,dt):0;
-                        if(mode==VulkanThermalConduction.IMPLICIT)implicitSteps++;
+                            conduction.recordGraphPrepare(command,l,dt);
+                        },l.column(IMEX_COUNTS).offset(),16);
+                        if(status.error()!=0)throw new IllegalStateException("Conduction prepare error="+status.error());int fastOwners=status.feedback().getInt(0),fastContacts=status.feedback().getInt(12);
+                        iterations=conduction.solveGraphImex(candidate,l,pressure,dt,fastOwners,fastContacts);
+                        if(fastOwners>0)implicitSteps++;
                         int error=candidate.finishBatch((command,input,output,errors,staging,stack)->{
-                            conduction.recordFinish(command,l,dt);ledger.record(command,accounting);
+                            conduction.recordGraphFinish(command,l,dt);ledger.record(command,accounting);
                         });
                         if(error!=0)throw new IllegalStateException("Conduction publication error="+error);candidate.commit();
                     }

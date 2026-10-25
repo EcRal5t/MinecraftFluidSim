@@ -108,30 +108,33 @@ final class VulkanRegionThermal implements AutoCloseable {
             timed(command,"thermal-samples",()->contacts.recordSpatial(command,l.contacts()));
             conduction.recordSpatialInitialize(command,l.conduction(),duration);
             timed(command,"thermal-sample-operator",()->contacts.recordFullTrial(command,l.contacts(),duration));
-            conduction.recordSpatialPrepare(command,l.conduction(),duration,timings);
-            timed(command,"thermal-explicit",()->{
-                for(int step=0;step<mmm.thermal.ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS;step++){
-                    contacts.recordSpatialFlux(command,l.contacts(),duration,step);
-                    conduction.recordSpatialUpdate(command,l.conduction(),duration,step);
-                }
+            conduction.recordImexPrepare(command,l.conduction(),duration,timings);
+            timed(command,"thermal-imex-classify",()->{
+                conduction.recordImexClassify(command,l.conduction(),duration);
+                contacts.recordImexSamples(command,l.contacts(),duration);
             });
             contacts.recordConductionState(command,l.contacts());
-        },l.contacts().column(VulkanThermalContacts.Field.REQUIREMENTS).offset(),28);
+        },l.contacts().column(VulkanThermalContacts.Field.REQUIREMENTS).offset(),44);
         if(status.error()==64){int required=status.feedback().getInt(12),baths=status.feedback().getInt(16);if(required>l.conduction().contacts||baths>l.conduction().baths)throw new ContactCapacityGrowth(required,baths);}
         if(status.error()!=0)return status.error();
         int bathCount=status.feedback().getInt(24);
-        final VulkanThermalConduction.SpatialOperator spatial=status.feedback().getInt(20)==VulkanThermalConduction.IMPLICIT?contacts.frozenOperator(l.contacts(),duration):null;
-        if(spatial!=null){
+        int fastOwners=status.feedback().getInt(28),fastSamples=status.feedback().getInt(32);
+        if(fastOwners>0){
             var offsets=l.contacts().column(VulkanThermalContacts.Field.CACHE_OFFSETS);
-            status=candidate.continueBatch((command,in,out,errors,staging,stack)->timed(command,"thermal-cache-index",()->contacts.recordFrozenCounts(command,l.contacts())),offsets.offset()+4L*(offsets.count()-1),4);
-            if(status.error()!=0)return status.error();
-            contacts.ensureFrozenCapacity(status.feedback().getInt(0));
-            status=candidate.continueBatch((command,in,out,errors,staging,stack)->timed(command,"thermal-freeze-conductance",()->contacts.recordFreeze(command,l.contacts(),duration,timings!=null)),0,0);
-            if(status.error()!=0)return status.error();
-            conduction.solveImplicit(candidate,l.conduction(),pressure,duration,timings,spatial);
+            status=candidate.continueBatch((command,in,out,errors,staging,stack)->{
+                timed(command,"thermal-imex-fast-contacts",()->contacts.recordImexContacts(command,l.contacts(),duration,fastSamples));
+                timed(command,"thermal-imex-isolated",()->conduction.recordImexIsolated(command,l.conduction(),duration,fastOwners));
+            },offsets.offset()+4L*fastSamples,4);
+            if(status.error()!=0)return status.error();int directedFastContacts=status.feedback().getInt(0);
+            if(directedFastContacts>0){
+                contacts.ensureFrozenCapacity(Math.multiplyExact(2,directedFastContacts));
+                status=candidate.continueBatch((command,in,out,errors,staging,stack)->timed(command,"thermal-imex-cache",()->contacts.recordImexCache(command,l.contacts(),duration,fastSamples)),0,0);
+                if(status.error()!=0)return status.error();
+                conduction.solveImex(candidate,l.conduction(),pressure,duration,fastOwners,contacts.imexOperator(l.contacts(),duration,fastSamples),timings);
+            }
         }
         status=candidate.continueBatch((command,in,out,errors,staging,stack)->{
-            timed(command,"thermal-finish",()->conduction.recordFinish(command,l.conduction(),duration,spatial));
+            timed(command,"thermal-finish",()->{if(fastOwners>0)contacts.recordImexCorrection(command,l.contacts(),duration);conduction.recordImexFinish(command,l.conduction(),duration);});
             timed(command,"thermal-publish",()->contacts.recordPublish(command,l.contacts()));
             if(l.input().device()!=null)l.input().device().recordSettle(command,sourceDevices,settlement,deviceLedger,out,continuation);
             caloric.record(command,l.input().liquidThermal());
@@ -144,7 +147,7 @@ final class VulkanRegionThermal implements AutoCloseable {
             for(var sample:timings.read())System.out.printf("mechanical_kernel=%s gpu_ms=%.3f%n",sample.stage(),sample.milliseconds());
             System.out.printf("thermal_layout owner_capacity=%d term_capacity=%d contact_capacity=%d bath_count=%d bath_capacity=%d reservoir_MiB=%.3f%n",
                     l.conduction().owners,l.conduction().terms,l.conduction().contacts,bathCount,l.conduction().baths,l.conduction().column(VulkanThermalConduction.Field.RESERVOIR_CHANGE).bytes()/1048576.0);
-            if(spatial!=null)System.out.printf("thermal_frozen_G_MiB=%.3f%n",contacts.frozenBytes()/1048576.0);
+            System.out.printf("thermal_imex fast_owners=%d fast_samples=%d frozen_SS_MiB=%.3f%n",fastOwners,fastSamples,contacts.frozenBytes()/1048576.0);
         }
         return status.error();
     }

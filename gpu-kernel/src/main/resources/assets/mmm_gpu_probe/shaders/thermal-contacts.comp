@@ -9,7 +9,7 @@ layout(binding=1,std430)buffer Errors{uint errors;};
 layout(binding=2,std430)buffer FrozenConductance{double frozenG[];};
 layout(push_constant)uniform Push{int header;int stage;int count;int step;double dt;double unused;}p;
 const int OF=0,OP=1,OK=2,OI=3,KC=4,TERMS=5,SF=6,SP=7,SO=8,SC=9,SM=10,SFR=11,
- CC=12,CO=13,CU=14,CS=15,COVER=16,EC=17,EO=18,LM=19,GM=20,PM=21,K=22,REQ=23,CM=25,DM=26,PC=27,PO=28,PU=29,PR=30,MF_DATA=31,MF_POW=32,BC=33,BO=34,BG=35,BT=36,MF_DISPATCH=37,FAC=38,CACHE_COUNTS=39,CACHE_OFFSETS=40,SAMPLE_LOCAL=41;
+ CC=12,CO=13,CU=14,CS=15,COVER=16,EC=17,EO=18,LM=19,GM=20,PM=21,K=22,REQ=23,CM=25,DM=26,PC=27,PO=28,PU=29,PR=30,MF_DATA=31,MF_POW=32,BC=33,BO=34,BG=35,BT=36,MF_DISPATCH=37,FAC=38,CACHE_COUNTS=39,CACHE_OFFSETS=40,IMEX_SAMPLES=41,IMEX_FLAGS=42,IMEX_AFFECTED=43,IMEX_BASE=44;
 shared dvec4 mfBounds[128];
 int h(int n){return int(words[p.header+n]);}int f(int n){return h(48+n);}
 int ch(int i){return int(words[h(151)+i]);}int cf(int field){return ch(8+field);}
@@ -97,7 +97,7 @@ void prepareSample(int id){
  words[f(MF_POW)+outAt]=floatBitsToUint(pow(float(volume/(.125LF*double(bitCount(uint(mask))))),2.0/3.0));
  if(ch(7)==2)reserveIncident(cf(18)+owner);
 }
-void scatterSample(int id){if(id>=liveSamples())return;int cell=int(words[f(SC)+id]),slot=int(atomicAdd(words[f(CU)+cell],1u)),at=int(words[f(CO)+cell])+slot;words[f(CS)+at]=uint(id);words[f(SAMPLE_LOCAL)+id]=uint(slot);}
+void scatterSample(int id){if(id>=liveSamples())return;int cell=int(words[f(SC)+id]),slot=int(atomicAdd(words[f(CU)+cell],1u)),at=int(words[f(CO)+cell])+slot;words[f(CS)+at]=uint(id);}
 double fraction(int point){return number(f(SFR)+2*point);}
 int family(int owner){int kind=int(words[f(OK)+owner]);return kind<2?kind:2;}
 void coverage(int cell){double sums[32];for(int i=0;i<32;i++)sums[i]=0.0;
@@ -130,19 +130,13 @@ double dryPort(int cell,int bit,int axis,int side){
  vec2 polygon[8];polygon[0]=vec2(0);polygon[1]=vec2(.5,0);polygon[2]=vec2(.5);polygon[3]=vec2(0,.5);int n=clipPort(polygon,4,vec3(plane[tangent],plane[other],offset));float twice=0.0;
  for(int i=1;i+1<n;i++){vec2 x=polygon[i]-polygon[0],y=polygon[i+1]-polygon[0];twice+=x.x*y.y-x.y*y.x;}return double(clamp(abs(twice)*.5,0.0,.25));
 }
-int triangleIndex(int cell,int point,int q){
- int n=int(words[f(CC)+cell]),i=min(int(words[f(SAMPLE_LOCAL)+point]),int(words[f(SAMPLE_LOCAL)+q])),j=max(int(words[f(SAMPLE_LOCAL)+point]),int(words[f(SAMPLE_LOCAL)+q]));
- return int(words[f(CACHE_OFFSETS)+4*cell])+int(int64_t(i)*int64_t(2*n-i-1)/int64_t(2))+j-i-1;
-}
 double sameConductance(int point,int q){
- if(p.stage>=30)return frozenG[triangleIndex(int(words[f(SC)+point]),point,q)];
  int owner=int(words[f(SO)+point]),other=int(words[f(SO)+q]);int overlap=bitCount(words[f(SM)+point]&words[f(SM)+q]);
  if(owner==other||overlap==0)return 0.0;double fp=fraction(point),fq=fraction(q);
  float radius=uintBitsToFloat(words[f(MF_POW)+(fp<=fq?point:q)]);
  precise double g=2.0LF*harmonic(number(f(KC)+2*owner),number(f(KC)+2*other))*cellSize()*(.125LF*double(overlap)*double(radius));return g;
 }
 double crossConductance(int point,int q,int axis){
- if(p.stage>=30){int cell=int(words[f(SC)+point]),other=int(words[f(SC)+q]);return frozenG[int(words[f(CACHE_OFFSETS)+4*cell+1+axis])+int(words[f(SAMPLE_LOCAL)+point])*int(words[f(CC)+other])+int(words[f(SAMPLE_LOCAL)+q])];}
  int owner=int(words[f(SO)+point]),otherOwner=int(words[f(SO)+q]);if(owner==otherOwner)return 0.0;
  int cell=int(words[f(SC)+point]),faceMask=axis==0?170:axis==1?204:240;
  int overlap=int(words[f(SM)+point])&faceMask&(int(words[f(SM)+q])<<(1<<axis));if(overlap==0)return 0.0;
@@ -161,7 +155,6 @@ double bathConductance(int point,int axis,int side){
  precise double g=2.0LF*number(f(KC)+2*int(words[f(SO)+point]))*cellSize()*.25LF*double(pieces)*fraction(point)*blocked(cell,axis,side);return g;
 }
 double deviceConductance(int point,int port){
- if(p.stage>=30)return frozenG[int(words[f(CACHE_OFFSETS)+4*h(4)+port])+int(words[f(SAMPLE_LOCAL)+point])];
  int mask=int(words[f(SM)+point]),owner=int(words[f(SO)+point]),fam=family(owner);
  double k=number(f(KC)+2*owner);if(k==0.0)return 0.0;
  int direction=int(words[h(143)+port]),axis=direction/2,side=direction&1;double area=0.0,fp=fraction(point);
@@ -255,29 +248,7 @@ void contacts(int point,bool writing){
 }
 void writeContacts(int id){if(id==0){uint count=words[f(EO)+h(8)];words[f(REQ)+3]=count;words[h(96)+2]=count;if(count>uint(h(108)))atomicOr(errors,64u);}
  if((errors&~64u)!=0u||words[f(EO)+h(8)]>uint(h(108)))return;contacts(id,true);}
-void countCacheRegion(int region){
- int n=0,m=0;uint64_t count=uint64_t(0);
- if(region<4*h(4)){int cell=region/4,kind=region%4;n=int(words[f(CC)+cell]);if(kind==0)count=uint64_t(n)*uint64_t(max(0,n-1))/uint64_t(2);
- else{int other=neighbor(cell,kind-1,1);m=other<0?0:int(words[f(CC)+other]);count=uint64_t(n)*uint64_t(m);}}
- else{int port=region-4*h(4);if(port<livePorts())count=uint64_t(words[f(CC)+int(words[h(142)+port])]);}
- if(count>uint64_t(0x7fffffff)){atomicOr(errors,16u);count=uint64_t(0);}words[f(CACHE_COUNTS)+region]=uint(count);
-}
 bool imexFast(int owner){return 2.0*p.dt*number(cf(22)+2*owner)>number(cf(13)+2*owner);}
-void imexPair(int a,int b,double g){if(p.step==0||a==b||g<=0.0)return;bool x=imexFast(a),y=imexFast(b);atomicAdd(words[cf(50)+(x&&y?2:x||y?3:4)],1u);}
-void freezeCoefficients(int point){
- if(p.step!=0){
-  if(point<int(words[cf(0)])&&imexFast(point))atomicAdd(words[cf(50)],1u);
-  if(point<livePorts()){int owner=ownerFor(deviceBase()+int(words[h(141)+point]));if(owner>=0&&imexFast(owner))atomicAdd(words[cf(50)+1],1u);}
- }
- if(point>=liveSamples())return;int owner=int(words[f(SO)+point]);
- if(p.step!=0&&imexFast(owner)){atomicAdd(words[cf(50)+1],1u);for(int bath=int(words[f(BO)+point]);bath<int(words[f(BO)+point+1]);bath++)atomicAdd(words[cf(50)+5],1u);}
- int cell=int(words[f(SC)+point]),local=int(words[f(SAMPLE_LOCAL)+point]),n=int(words[f(CC)+cell]),base=int(words[f(CO)+cell]);
- for(int j=local+1;j<n;j++){int q=int(words[f(CS)+base+j]);double g=sameConductance(point,q);frozenG[triangleIndex(cell,point,q)]=g;imexPair(owner,int(words[f(SO)+q]),g);}
- for(int axis=0;axis<3;axis++){int other=neighbor(cell,axis,1);if(other<0)continue;int m=int(words[f(CC)+other]),first=int(words[f(CO)+other]);
-  for(int j=0;j<m;j++){int q=int(words[f(CS)+first+j]),slot=int(words[f(CACHE_OFFSETS)+4*cell+1+axis])+local*m+j;double g=crossConductance(point,q,axis);frozenG[slot]=g;imexPair(owner,int(words[f(SO)+q]),g);}
- }
- if(h(133)>=0)for(int at=int(words[f(PO)+cell]);at<int(words[f(PO)+cell+1]);at++){int port=int(words[f(PR)+at]);double g=deviceConductance(point,port);frozenG[int(words[f(CACHE_OFFSETS)+4*h(4)+port])+local]=g;int other=ownerFor(deviceBase()+int(words[h(141)+port]));if(other>=0)imexPair(owner,other,g);}
-}
 // Spatial explicit conduction keeps one U/T/Cp owner and only one incident per sample.
 void scatterOwnerSample(int id){
  int owner=-1;
@@ -305,54 +276,61 @@ void writeBaths(int point){
  }
 }
 dvec2 mfAdd(dvec2 a,double b){precise double next=a.x+b,v=next-a.x,error=(a.x-(next-v))+(b-v);precise double lo=error+a.y,sum=next+lo,virtualLo=sum-next;return dvec2(sum,(next-(sum-virtualLo))+(lo-virtualLo));}
-void pairFlux(int owner,int other,double g,double dt,inout dvec2 degree,inout dvec2 delta){
+int imexPoint,imexCursor;
+void pairFlux(int owner,int other,int otherPoint,double g,double dt,inout dvec2 degree,inout dvec2 delta){
  if(owner==other||g==0.0)return;if(!(finite(g)&&g>0.0)){invalid();return;}
- int a=min(owner,other),b=max(owner,other);
- if(p.stage==32||p.stage==33){
-  int field=p.stage==33?38:37,offset=p.stage==33?ch(0):0;
-  precise double weight=-dt*g/(number(cf(14)+2*a)*number(cf(14)+2*b));
-  delta=mfAdd(delta,weight*number(cf(field)+2*(offset+other)));return;
+ if(p.stage==41||p.stage==42){
+  if(p.stage==41){atomicOr(words[f(IMEX_FLAGS)+otherPoint],1u);if(imexFast(other)){atomicOr(words[cf(53)+owner],1u);degree.x+=1.0;}}
+  else if(imexFast(other)){frozenG[2*imexCursor]=g;frozenG[2*imexCursor+1]=double(other);imexCursor++;}
+  return;
  }
- int temperature=p.stage==31?17:16;
+ if(p.stage==43){
+  int a=min(owner,other),b=max(owner,other);double oldA=number(cf(2)+2*a),oldB=number(cf(2)+2*b);
+  double newA=imexFast(a)?number(cf(16)+2*a):oldA,newB=imexFast(b)?number(cf(16)+2*b):oldB;
+  precise double oldQ=g*(oldB-oldA)*dt,newQ=g*(newB-newA)*dt;
+  delta=mfAdd(delta,owner==a?newQ-oldQ:oldQ-newQ);return;
+ }
+ int a=min(owner,other),b=max(owner,other);
+ int temperature=16;
  precise double difference=number(cf(temperature)+2*b)-number(cf(temperature)+2*a);
  precise double q=g*difference*dt;
  degree=mfAdd(degree,g);delta=mfAdd(delta,owner==a?q:-q);
 }
 void spatialFlux(int id,bool preparing){
- int mode=int(words[cf(26)]);
- bool cached=p.stage>=30&&p.stage<=34;
- if(!preparing&&!cached&&!(mode>0&&mode<=ch(5)&&p.step<mode&&!(mode==1&&p.step==0)))return;
- double dt=preparing||cached?p.dt:p.dt/double(mode);dvec2 degree=dvec2(0.0),delta=dvec2(0.0);
+ double dt=p.dt;dvec2 degree=dvec2(0.0),delta=dvec2(0.0);
  if(id<h(8)){
   if(id>=liveSamples())return;int owner=int(words[f(SO)+id]),cell=int(words[f(SC)+id]);
   if(number(f(KC)+2*owner)>0.0){
    for(int at=int(words[f(CO)+cell]);at<int(words[f(CO)+cell+1]);at++){
     int q=int(words[f(CS)+at]);if(q==id||int(words[f(SO)+q])==owner)continue;
-    pairFlux(owner,int(words[f(SO)+q]),sameConductance(min(id,q),max(id,q)),dt,degree,delta);
+    pairFlux(owner,int(words[f(SO)+q]),q,sameConductance(min(id,q),max(id,q)),dt,degree,delta);
    }
    for(int axis=0;axis<3;axis++)for(int side=0;side<2;side++){
     int other=neighbor(cell,axis,side);if(other<0)continue;
     for(int at=int(words[f(CO)+other]);at<int(words[f(CO)+other+1]);at++){
      int q=int(words[f(CS)+at]),b=int(words[f(SO)+q]);if(b==owner)continue;
-     double g=side==1?crossConductance(id,q,axis):crossConductance(q,id,axis);pairFlux(owner,b,g,dt,degree,delta);
+     double g=side==1?crossConductance(id,q,axis):crossConductance(q,id,axis);pairFlux(owner,b,q,g,dt,degree,delta);
     }
    }
    if(h(133)>=0)for(int at=int(words[f(PO)+cell]);at<int(words[f(PO)+cell+1]);at++){
     int port=int(words[f(PR)+at]),b=ownerFor(deviceBase()+int(words[h(141)+port]));if(b<0){invalid();continue;}
-    pairFlux(owner,b,deviceConductance(id,port),dt,degree,delta);
+    pairFlux(owner,b,h(8)+port,deviceConductance(id,port),dt,degree,delta);
    }
   }
-  if(p.stage!=32&&p.stage!=33)for(int bath=int(words[f(BO)+id]);bath<int(words[f(BO)+id+1]);bath++){
-   double g=number(f(BG)+2*bath);precise double q=g*(number(f(BT)+2*bath)-number(cf(p.stage==31?17:16)+2*owner))*dt;
-   degree=mfAdd(degree,g);delta=mfAdd(delta,q);if(preparing||p.stage==20||p.stage==34)put(cf(25)+2*(bath*ch(5)+(preparing||p.stage==34?0:p.step)),q);
+  if(p.stage!=41&&p.stage!=42)for(int bath=int(words[f(BO)+id]);bath<int(words[f(BO)+id+1]);bath++){
+   double g=number(f(BG)+2*bath);precise double q=g*(number(f(BT)+2*bath)-number(cf(16)+2*owner))*dt;
+   if(p.stage==43){double oldQ=number(cf(25)+2*bath*ch(5));delta=mfAdd(delta,q-oldQ);put(cf(25)+2*bath*ch(5),q);}else{degree=mfAdd(degree,g);delta=mfAdd(delta,q);}if(preparing)put(cf(25)+2*bath*ch(5),q);
   }
  }else{
   int port=id-h(8);if(port>=livePorts())return;int owner=ownerFor(deviceBase()+int(words[h(141)+port]));if(owner<0)return;
   int cell=int(words[h(142)+port]);
   for(int at=int(words[f(CO)+cell]);at<int(words[f(CO)+cell+1]);at++){
-   int point=int(words[f(CS)+at]);pairFlux(owner,int(words[f(SO)+point]),deviceConductance(point,port),dt,degree,delta);
+   int point=int(words[f(CS)+at]);pairFlux(owner,int(words[f(SO)+point]),point,deviceConductance(point,port),dt,degree,delta);
   }
  }
+ if(p.stage==41){words[f(CACHE_COUNTS)+imexPoint]=uint(degree.x);return;}
+ if(p.stage==42)return;
+ if(p.stage==43){delta=mfAdd(delta,number(f(IMEX_BASE)+4*id));delta=mfAdd(delta,number(f(IMEX_BASE)+4*id+2));}
  int target=f(MF_DATA)+8*id;if(preparing){put(target,degree.x);put(target+2,degree.y);}put(target+4,delta.x);put(target+6,delta.y);
 }
 void bathSummary(int block,int lane){
@@ -362,24 +340,49 @@ void bathSummary(int block,int lane){
  if(lane==0)for(int i=0;i<4;i++)put(cf(30)+2*(4*block+i),mfBounds[0][i]);
 }
 void spatialDispatch(){
- int mode=int(words[cf(26)]);bool run=errors==0u&&(p.step<0||(mode>0&&mode<=ch(5)&&p.step<mode&&!(mode==1&&p.step==0)));
+ bool run=errors==0u;
  int groups=run?(liveSamples()+livePorts()+127)/128:0;
  words[f(MF_DISPATCH)]=uint(min(groups,65535));words[f(MF_DISPATCH)+1]=uint(max(1,(groups+65534)/65535));words[f(MF_DISPATCH)+2]=1u;
 }
-void cachedDispatch(){bool run=errors==0u;if(p.step==32||p.step==33)run=run&&number(cf(41)+2*(p.step==33?3:7))!=0.0;
- int groups=run?(liveSamples()+livePorts()+127)/128:0;words[f(MF_DISPATCH)]=uint(min(groups,65535));words[f(MF_DISPATCH)+1]=uint(max(1,(groups+65534)/65535));words[f(MF_DISPATCH)+2]=1u;}
 void graphInitialize(int row){if(row<h(106)){words[cf(18)+row]=0u;words[cf(20)+row]=0u;}if(row==0){words[h(151)+7]=1u;words[cf(26)+1]=0u;words[h(96)+2]=0u;}}
 void publish(int owner){if(owner>=liveOwners())return;int kind=int(words[f(OK)+owner]),row=int(words[f(OI)+owner]);double value=number(h(97)+2*owner);
  int address=(kind==0?h(22):kind==1?h(28):kind==2?h(36):kind==3?h(113):h(134))+2*row;
  if(kind==4){double old=number(address);put(h(140)+4*row,value);put(h(140)+4*row+2,-old);if(quantity(address)!=quantity(h(97)+2*owner)){uint64_t generation=quantity(h(139)+2*row)+uint64_t(1);words[h(138)+2*row]=uint(generation);words[h(138)+2*row+1]=uint(generation>>32);}}
  put(address,value);
 }
+void imexCompact(int id){
+ if(id>=p.count)return;words[f(IMEX_FLAGS)+id]=0u;
+ bool live=id<h(8)?id<liveSamples():id-h(8)<livePorts();if(!live)return;
+ int owner=id<h(8)?int(words[f(SO)+id]):ownerFor(deviceBase()+int(words[h(141)+id-h(8)]));if(owner<0)return;
+ put(f(IMEX_BASE)+4*id,number(f(MF_DATA)+8*id+4));put(f(IMEX_BASE)+4*id+2,number(f(MF_DATA)+8*id+6));
+ if(imexFast(owner)){uint slot=atomicAdd(words[cf(49)+1],1u);words[f(IMEX_SAMPLES)+slot]=uint(id);}
+}
+void imexCacheValue(int ordinal,bool product){
+ int id=int(words[f(IMEX_SAMPLES)+ordinal]);dvec2 sum=dvec2(0.0);int n=int(words[cf(49)]);
+ for(int edge=int(words[f(CACHE_OFFSETS)+ordinal]);edge<int(words[f(CACHE_OFFSETS)+ordinal+1]);edge++){
+  double g=frozenG[2*edge];int other=int(frozenG[2*edge+1]),index=int(words[cf(51)+other]);double value;
+  if(product)value=(p.step==1?number(cf(38)+2*(n+index)):number(cf(37)+2*index))/number(cf(14)+2*other);
+  else value=number(cf(p.step==1?17:16)+2*other)-number(cf(2)+2*other);
+  sum=mfAdd(sum,p.dt*g*value);
+ }
+ put(f(MF_DATA)+8*id+4,sum.x);put(f(MF_DATA)+8*id+6,sum.y);
+}
 void main(){int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*block+lane;
  if(p.stage==19){if(errors==0u)bathSummary(block,lane);return;}if(id>=p.count)return;
- if(p.stage==24){if(id==0)spatialDispatch();return;}if(p.stage==35){if(id==0)cachedDispatch();return;}
- if(p.stage==18||p.stage==20||(p.stage>=30&&p.stage<=34)){if(errors!=0u||id>=liveSamples()+livePorts())return;int point=id<liveSamples()?id:h(8)+id-liveSamples();spatialFlux(point,p.stage==18);return;}
+ if(p.stage>=40){
+  if(errors!=0u)return;
+  if(p.stage==40){if(int(words[cf(26)])!=0)imexCompact(id);return;}
+  if(p.stage==41||p.stage==42){if(id>=p.count)return;imexPoint=id;int point=int(words[f(IMEX_SAMPLES)+id]);imexCursor=int(words[f(CACHE_OFFSETS)+id]);if(p.stage==41)atomicOr(words[f(IMEX_FLAGS)+point],1u);spatialFlux(point,false);return;}
+  if(p.stage==44){if(id<p.count&&words[f(IMEX_FLAGS)+id]!=0u){uint slot=atomicAdd(words[cf(49)+2],1u);words[f(IMEX_AFFECTED)+slot]=uint(id);}return;}
+  if(p.stage==45){if(id==0){int groups=(int(words[cf(49)+2])+127)/128;words[f(MF_DISPATCH)]=uint(min(groups,65535));words[f(MF_DISPATCH)+1]=uint(max(1,(groups+65534)/65535));words[f(MF_DISPATCH)+2]=1u;}return;}
+  if(p.stage==43){if(id<int(words[cf(49)+2]))spatialFlux(int(words[f(IMEX_AFFECTED)+id]),false);return;}
+  if((p.stage==46||p.stage==47)&&id<p.count)imexCacheValue(id,p.stage==47);
+  return;
+ }
+ if(p.stage==24){if(id==0)spatialDispatch();return;}
+ if(p.stage==18){if(errors!=0u||id>=liveSamples()+livePorts())return;int point=id<liveSamples()?id:h(8)+id-liveSamples();spatialFlux(point,p.stage==18);return;}
  if(p.stage==17){writeBaths(id);return;}if(p.stage==21){graphInitialize(id);return;}
  if(p.stage==22){if(id==0)words[f(REQ)+4]=max(words[f(REQ)+4],words[cf(26)+1]);return;}
- if(p.stage==14){if(id==0){words[f(REQ)+5]=words[cf(26)];words[f(REQ)+6]=words[cf(26)+1];}return;}if(p.stage==13){if(id==0)words[f(REQ)+4]=words[cf(26)+1];return;}if(p.stage==0){clear(id);return;}if(p.stage==2){prepareOwner(id);return;}if(p.stage==3){prepareTerms(id);return;}if(p.stage==9){writeContacts(id);return;}if(errors!=0u)return;
- if(p.stage==1)flagOwner(id);else if(p.stage==4)flagSample(id);else if(p.stage==5)prepareSample(id);else if(p.stage==6)scatterSample(id);else if(p.stage==7)coverage(id);else if(p.stage==8)contacts(id,false);else if(p.stage==10)publish(id);else if(p.stage==11)portCount(id);else if(p.stage==12)portScatter(id);else if(p.stage==15)scatterOwnerSample(id);else if(p.stage==16)countBaths(id);else if(p.stage==25)projectContactGeometry(id);else if(p.stage==26)countCacheRegion(id);else if(p.stage==29)freezeCoefficients(id);
+ if(p.stage==14){if(id==0){words[f(REQ)+5]=words[cf(26)];words[f(REQ)+6]=words[cf(26)+1];for(int i=0;i<4;i++)words[f(REQ)+7+i]=words[cf(49)+i];}return;}if(p.stage==13){if(id==0)words[f(REQ)+4]=words[cf(26)+1];return;}if(p.stage==0){clear(id);return;}if(p.stage==2){prepareOwner(id);return;}if(p.stage==3){prepareTerms(id);return;}if(p.stage==9){writeContacts(id);return;}if(errors!=0u)return;
+ if(p.stage==1)flagOwner(id);else if(p.stage==4)flagSample(id);else if(p.stage==5)prepareSample(id);else if(p.stage==6)scatterSample(id);else if(p.stage==7)coverage(id);else if(p.stage==8)contacts(id,false);else if(p.stage==10)publish(id);else if(p.stage==11)portCount(id);else if(p.stage==12)portScatter(id);else if(p.stage==15)scatterOwnerSample(id);else if(p.stage==16)countBaths(id);else if(p.stage==25)projectContactGeometry(id);
 }
