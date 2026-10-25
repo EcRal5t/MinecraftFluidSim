@@ -13,7 +13,7 @@ layout(binding=8,std430) buffer Dispatch { uint dispatchWords[]; };
 layout(push_constant) uniform Params {
     int sx; int sy; int sz; int stage;
     int base; int peerBase; int psx; int psy; int psz; int fineCount; int pressureStride; int factor;
-    int buildDispatch;
+    int applyDispatch;
 } p;
 shared double coarseCorrection[64];
 shared float coarseProjected[64];
@@ -46,12 +46,12 @@ float product(int base,ivec3 shape,int row,int vectorOffset) {
 
 void buildFine(int row) {
     for(int entry=0;entry<7;entry++)hierarchy[aIndex(p.base,row,entry)]=0.0;
-    if(meta[p.pressureStride+row]==0)return;
+    if(rows[row]<0)return;
     ivec3 at=coordinate(row,ivec3(p.sx,p.sy,p.sz));
     for(int edge=starts[row];edge<starts[row+1];edge++) {
         int column=columns[edge];double value=values[edge];
         if(column==row)hierarchy[aIndex(p.base,row,0)]+=value;
-        else if(column<p.fineCount&&meta[p.pressureStride+column]!=0) {
+        else if(column<p.fineCount&&rows[column]>=0) {
             ivec3 difference=coordinate(column,ivec3(p.sx,p.sy,p.sz))-at;
             int axis=difference.x!=0?0:difference.y!=0?1:2;
             int side=2*axis+(difference[axis]>0?1:0);
@@ -81,6 +81,7 @@ void buildCoarse(int row) {
 }
 
 void loadFine(int row,int n) {
+    // The fixed SPD hierarchy is projected onto the current free space at both ends.
     float rhs=meta[p.pressureStride+row]!=0?float(work[row]):0.0;
     writeVector(rIndex(p.base,n,row),rhs);
     writeVector(tIndex(p.base,n,row),scaled(p.base,row,rhs));
@@ -99,7 +100,7 @@ void restrictResidual(int row,int n) {
     writeVector(tIndex(p.base,n,row),scaled(p.base,row,rhs));
 }
 
-// Factor the small Galerkin operator once per active-set restart. The diagonal floor scales
+// Factor the small Galerkin operator once per assembled physical matrix. The diagonal floor scales
 // with the dot-product roundoff bound; it regularizes only this preconditioner, never the solve.
 void factorCoarse(int row,int n){
     if(row<n){
@@ -145,30 +146,33 @@ void solveCoarse(int row,int n){
     for(int column=row;column<n;column++)result+=vectorValue(inverseBase+column*n+row)*coarseProjected[column];
     writeVector(uIndex(p.base,n,row),result);
 }
-void buildDispatches(){
-    bool rebuild=control[3]!=0.0&&control[6]!=0.0;ivec3 shape=ivec3(p.sx,p.sy,p.sz);int command=0,n;
+void scheduleApply(){
+    ivec3 shape=ivec3(p.sx,p.sy,p.sz);int command=0;
     for(;;){
-        n=count(shape);int at=p.buildDispatch+4*command++;
-        dispatchWords[at]=rebuild?uint((n+127)/128):0u;dispatchWords[at+1]=1u;dispatchWords[at+2]=1u;dispatchWords[at+3]=0u;
-        if(max(shape.x,max(shape.y,shape.z))<=4)break;shape=(shape+1)/2;
-    }
-    for(int operation=0;operation<2;operation++){
-        int at=p.buildDispatch+4*command++;
-        dispatchWords[at]=rebuild?uint(operation==0?1:n):0u;dispatchWords[at+1]=1u;dispatchWords[at+2]=1u;dispatchWords[at+3]=0u;
-    }
-    shape=ivec3(p.sx,p.sy,p.sz);
-    for(;;){
-        int at=p.buildDispatch+4*command++;n=count(shape);
+        int at=p.applyDispatch+4*command++,n=count(shape);
         dispatchWords[at]=control[3]!=0.0?uint((n+127)/128):0u;dispatchWords[at+1]=1u;dispatchWords[at+2]=1u;dispatchWords[at+3]=0u;
         if(max(shape.x,max(shape.y,shape.z))<=4)break;shape=(shape+1)/2;
     }
 }
+float lifted(int row,int n){
+    int coarseRow=indexOf(coordinate(row,ivec3(p.sx,p.sy,p.sz))/2,ivec3(p.psx,p.psy,p.psz));
+    precise float value=vectorValue(tIndex(p.base,n,row))+vectorValue(uIndex(p.peerBase,count(ivec3(p.psx,p.psy,p.psz)),coarseRow));
+    return value;
+}
+void prolongAndSmooth(int row,int n){
+    precise float current=lifted(row,n),productValue=float(diagonal(p.base,row))*current;
+    ivec3 pos=coordinate(row,ivec3(p.sx,p.sy,p.sz));
+    for(int side=0;side<6;side++){
+        ivec3 next=adjacent(pos,side);if(inside(next,ivec3(p.sx,p.sy,p.sz)))
+            productValue+=float(hierarchy[aIndex(p.base,row,side+1)])*lifted(indexOf(next,ivec3(p.sx,p.sy,p.sz)),n);
+    }
+    writeVector(uIndex(p.base,n,row),current+scaled(p.base,row,vectorValue(rIndex(p.base,n,row))-productValue));
+}
 
 void main() {
-    if(p.stage==10){if(gl_GlobalInvocationID.x==0u)buildDispatches();return;}
+    if(p.stage==10){if(gl_GlobalInvocationID.x==0u)scheduleApply();return;}
     // These values are uniform over every workgroup, including the barrier-bearing coarse solve.
     if(control[3]==0.0)return;
-    if((p.stage<=1||p.stage>=8)&&control[6]==0.0)return;
     int row=int(gl_GlobalInvocationID.x),n=count(ivec3(p.sx,p.sy,p.sz));
     if(p.stage==4){solveCoarse(row,n);return;}
     if(p.stage==8){factorCoarse(row,n);return;}
@@ -178,12 +182,6 @@ void main() {
     else if(p.stage==1)buildCoarse(row);
     else if(p.stage==2)loadFine(row,n);
     else if(p.stage==3)restrictResidual(row,n);
-    else if(p.stage==5) {
-        int coarseRow=indexOf(coordinate(row,ivec3(p.sx,p.sy,p.sz))/2,ivec3(p.psx,p.psy,p.psz));
-        writeVector(tIndex(p.base,n,row),vectorValue(tIndex(p.base,n,row))+vectorValue(uIndex(p.peerBase,count(ivec3(p.psx,p.psy,p.psz)),coarseRow)));
-    } else if(p.stage==6) {
-        float current=vectorValue(tIndex(p.base,n,row));
-        writeVector(uIndex(p.base,n,row),current+scaled(p.base,row,
-            vectorValue(rIndex(p.base,n,row))-product(p.base,ivec3(p.sx,p.sy,p.sz),row,tIndex(p.base,n,0))));
-    } else if(p.stage==7)work[3*p.pressureStride+row]=meta[p.pressureStride+row]!=0?double(vectorValue(uIndex(p.base,n,row))):0.0;
+    else if(p.stage==6)prolongAndSmooth(row,n);
+    else if(p.stage==7)work[3*p.pressureStride+row]=meta[p.pressureStride+row]!=0?double(vectorValue(uIndex(p.base,n,row))):0.0;
 }

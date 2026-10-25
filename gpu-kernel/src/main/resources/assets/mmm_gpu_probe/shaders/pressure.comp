@@ -100,6 +100,7 @@ void refreshResidual() {
         int row=rows[ordinal];if(row<0)continue;precise double product=row>=p.matrixFreeFromRow?Q(row):0.0;
         if(row<p.matrixFreeFromRow)for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*pressure[columns[edge]];
         R(row)=RHS(row)-product;double value=R(row);maximum=max(maximum,abs(pressure[row]));
+        FREE(row)=(BOUNDED(row)==0 || pressure[row]>LOWER(row) || value>TARGET)?1:0;
         if(BOUNDED(row)!=0 && pressure[row]<=LOWER(row) && value<=0.0)continue;
         equations+=1.0;sum+=value*value;
         precise double bound=abs(RHS(row))+2.0*DIAG(row)*PMAX;bounds=hypotStable(bounds,bound);
@@ -122,19 +123,11 @@ void precondition() {
     precise double sum=0.0;
     for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
         int row=rows[ordinal];if(row<0)continue;
-        if(RESTART!=0.0)FREE(row)=(BOUNDED(row)==0 || pressure[row]>LOWER(row) || R(row)>TARGET)?1:0;
         if(p.externalPreconditioner==0||row>=p.liquidCount)Z(row)=FREE(row)!=0?R(row)/DIAG(row):0.0;
         if(RESTART!=0.0)D(row)=Z(row);
         if(FREE(row)!=0)sum+=R(row)*Z(row);
     }
     saveStats(sum,0.0,0.0,0.0,0,0);
-}
-void prepareFreeSet() {
-    if(RUN==0.0 || RESTART==0.0)return;
-    for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
-        int row=rows[ordinal];if(row<0)continue;
-        FREE(row)=(BOUNDED(row)==0 || pressure[row]>LOWER(row) || R(row)>TARGET)?1:0;
-    }
 }
 void finishPrecondition() {
     if(RUN==0.0)return;
@@ -196,7 +189,6 @@ void executeStage(int stage) {
     else if(stage==6)updateDirection();else if(stage==7)directionProduct();else if(stage==8)finishProduct();
     else if(stage==9)updateSolution();else if(stage==10)finishUpdate();else if(stage==11)finalizeControl();
     else if(stage==12 && gid==0 && SUCCESS==0.0)atomicOr(errors,4u);
-    else if(stage==13)prepareFreeSet();
 }
 void singleStage(int stage){executeStage(stage);syncAll();}
 void main() {

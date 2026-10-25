@@ -78,6 +78,7 @@ final class VulkanPressureKernel implements AutoCloseable {
         int groups = groups(size, multigrid);
         for (int stage = 0; stage <= 3; stage++)
             stage(command, size, count, maximumIterations, stage, groups, multigrid != null, gas);
+        if(multigrid!=null){multigrid.recordBuild(command,hierarchy);bind(command);}
         precondition(command, size, count, maximumIterations, groups, multigrid, hierarchy, gas);
     }
 
@@ -129,8 +130,6 @@ final class VulkanPressureKernel implements AutoCloseable {
     private void precondition(VkCommandBuffer command, int size, int count, int maximumIterations, int groups,
                               VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, PressureOperator gas) {
         if (multigrid != null) {
-            stage(command, size, count, maximumIterations, 13, groups, true, gas);
-            multigrid.recordBuild(command, hierarchy);
             multigrid.recordApply(command, hierarchy);
             bind(command);
         }
@@ -146,7 +145,7 @@ final class VulkanPressureKernel implements AutoCloseable {
         try (var stack = stackPush()) {
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                     stack.ints(count, size, maximumIterations, stage, groups, external ? 1 : 0, gas == null ? size : gas.liquidCount(), gas == null ? size : gas.matrixFreeFromRow()));
-            boolean parallel = stage == 0 || stage == 2 || stage == 4 || stage == 6 || stage == 7 || stage == 9 || stage == 13;
+            boolean parallel = stage == 0 || stage == 2 || stage == 4 || stage == 6 || stage == 7 || stage == 9;
             vkCmdDispatch(command, parallel ? groups : 1, 1, 1);
             barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, stack);

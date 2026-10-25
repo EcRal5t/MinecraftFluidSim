@@ -23,7 +23,7 @@ final class VulkanGasFlow implements AutoCloseable {
         START_COUNTS(4),STARTS(4),COLUMNS(4),VALUES(8),ROWS(4),PRESSURE(8),WORK(8),META(4),PROBLEM(8),CONTROL(8),PARTIALS(8),
         ROUTE_COUNT(4),ROUTE_SOURCE(4),ROUTE_TARGET(4),ROUTE_WEIGHT(8),AMBIENT_VOLUME(8),
         SOURCE_COUNTS(4),SOURCE_OFFSETS(4),SOURCE_CURSORS(4),SOURCE_ROUTES(4),TARGET_COUNTS(4),TARGET_OFFSETS(4),TARGET_CURSORS(4),TARGET_ROUTES(4),
-        RETAINED_VOLUME(8),MODES(4),STEP(8),DISPATCH(4),SCAN(4),LONG_ROWS(4),LONG_STARTS(4),TILE_OWNER(4),TILE_SUMS(8),LONG_COUNTS(4);
+        RETAINED_VOLUME(8),MODES(4),STEP(8),DISPATCH(4),SCAN(4),LONG_ROWS(4),LONG_STARTS(4),TILE_OWNER(4),TILE_SUMS(8),LONG_COUNTS(4),LONG_PAIRS(4);
         final int width;Field(int width){this.width=width;}
     }
     /** Ambient density is the actual kg/m³ at ambientPressure and ambientTemperature; step is a committed-step ordinal, reused on retries. */
@@ -59,10 +59,10 @@ final class VulkanGasFlow implements AutoCloseable {
                     case CONTROL->48;case PARTIALS->Math.multiplyExact((nodes+255)/256,4);
                     case ROUTE_COUNT,STEP->1;case ROUTE_SOURCE,ROUTE_TARGET,ROUTE_WEIGHT,AMBIENT_VOLUME,SOURCE_ROUTES,TARGET_ROUTES->routes;
                     case SOURCE_COUNTS,SOURCE_CURSORS->nodes+2;case SOURCE_OFFSETS->nodes+3;
-                    case TARGET_COUNTS,TARGET_CURSORS->nodes+1;case TARGET_OFFSETS->nodes+2;case DISPATCH->21;
+                    case TARGET_COUNTS,TARGET_CURSORS->nodes+1;case TARGET_OFFSETS->nodes+2;case DISPATCH->24;
                     case LONG_ROWS,LONG_STARTS->nodes;
                     case TILE_OWNER,TILE_SUMS->Math.toIntExact(2L*(nodes+2L*pairs)/129);
-                    case LONG_COUNTS->2;
+                    case LONG_COUNTS->3;case LONG_PAIRS->Math.min(pairs,faces/129);
                     case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(hashes,Math.max(routes,nodes+2)))/4);
                 };columns.put(field,allocate(cursor,n,field.width,alignment));
             }endOffset=align(cursor[0],alignment);Math.toIntExact(endOffset/4);
@@ -92,13 +92,15 @@ final class VulkanGasFlow implements AutoCloseable {
         stage(command,l,parameters,1,l.faces);stage(command,l,parameters,2,l.faces);
         prefix(command,l,l.hashes,Field.HASH_FLAGS,Field.HASH_OFFSETS);stage(command,l,parameters,3,l.hashes);stage(command,l,parameters,4,l.faces);
         prefix(command,l,l.pairs,Field.PAIR_COUNTS,Field.PAIR_OFFSETS);prefix(command,l,l.nodes,Field.NODE_COUNTS,Field.NODE_OFFSETS);
-        prefix(command,l,l.nodes,Field.START_COUNTS,Field.STARTS);stage(command,l,parameters,5,l.faces);stage(command,l,parameters,6,l.pairs);
-        stage(command,l,parameters,7,l.pairs);stage(command,l,parameters,8,l.nodes);stage(command,l,parameters,9,l.nodes);
-        stage(command,l,parameters,18,l.nodes);stage(command,l,parameters,19,1);
+        prefix(command,l,l.nodes,Field.START_COUNTS,Field.STARTS);stage(command,l,parameters,5,l.faces);
+        stage(command,l,parameters,18,l.nodes);stage(command,l,parameters,22,l.pairs);stage(command,l,parameters,19,1);
+        stage(command,l,parameters,6,l.pairs);stage(command,l,parameters,23,l.pairs);
+        stage(command,l,parameters,7,l.pairs);stage(command,l,parameters,8,l.nodes);stage(command,l,parameters,24,l.nodes);
+        stage(command,l,parameters,9,l.nodes);stage(command,l,parameters,25,l.nodes);
     }
     /** Call after the shared PCG has finished successfully; pressure uses the columns from pressureRanges. */
     void recordRoutes(VkCommandBuffer command,Layout l,Parameters parameters){
-        stage(command,l,parameters,10,l.pairs);stage(command,l,parameters,11,l.nodes);stage(command,l,parameters,12,l.routes);
+        stage(command,l,parameters,10,l.pairs);stage(command,l,parameters,11,l.nodes);stage(command,l,parameters,26,l.nodes);stage(command,l,parameters,12,l.routes);
         prefix(command,l,l.nodes+2,Field.SOURCE_COUNTS,Field.SOURCE_OFFSETS);prefix(command,l,l.nodes+1,Field.TARGET_COUNTS,Field.TARGET_OFFSETS);
         stage(command,l,parameters,13,l.routes);
     }
@@ -129,7 +131,7 @@ final class VulkanGasFlow implements AutoCloseable {
             bindings.bind(cmd,stack);var push=stack.malloc(64).putInt(l.headerWordOffset()).putInt(stage).putInt(count).putInt(0)
                     .putDouble(q.duration()).putDouble(q.dischargeCoefficient()).putDouble(q.ambientPressure()).putDouble(q.ambientTemperature()).putDouble(q.ambientDensity()).putLong(q.step()).flip();
             vkCmdPushConstants(cmd,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,push);
-            int indirect=switch(stage){case 6->0;case 7,10->1;case 8,9,11->2;case 12,13->4;case 14,15->5;case 20,21->6;default->-1;};
+            int indirect=switch(stage){case 6,7,10,22->1;case 8,9,11->3;case 23->7;case 24,25,26->6;case 12,13->4;case 14,15->5;case 20,21->6;default->-1;};
             if(conditional!=null)conditional.record(cmd,slot);
             else if(indirect>=0){barrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
                 vkCmdDispatchIndirect(cmd,arena.buffer().handle(),arena.offset()+l.column(Field.DISPATCH).offset()+12L*indirect);

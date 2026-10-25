@@ -17,7 +17,7 @@ final class VulkanPressureMultigrid implements AutoCloseable {
         int cells() { return Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ); }
     }
 
-    record Layout(List<Level> levels, int workspaceDoubles, int pressureStride, int coarseFactorOffset, int buildDispatchOffset) {
+    record Layout(List<Level> levels, int workspaceDoubles, int pressureStride, int coarseFactorOffset, int applyDispatchOffset) {
         Layout { levels = List.copyOf(levels); }
         long workspaceBytes() { return Math.multiplyExact(8L, workspaceDoubles); }
     }
@@ -56,7 +56,7 @@ final class VulkanPressureMultigrid implements AutoCloseable {
         int factor=cursor,coarse=levels.getLast().cells();
         int dense=Math.multiplyExact(coarse,coarse);
         cursor=Math.addExact(cursor,Math.addExact(dense,(dense+1)/2));
-        int dispatch=cursor;cursor=Math.addExact(cursor,Math.multiplyExact(4,levels.size()+1));
+        int dispatch=cursor;cursor=Math.addExact(cursor,Math.multiplyExact(2,levels.size()));
         return new Layout(levels, cursor, pressureStride,factor,dispatch);
     }
 
@@ -66,18 +66,17 @@ final class VulkanPressureMultigrid implements AutoCloseable {
         ranges.add(workspace);bindings.rebindRanges(ranges);
     }
 
-    /** Call after FREE has been prepared; the device rebuilds only when PCG restarts. */
+    /** The full physical liquid block is fixed for one pressure solve, independently of FREE. */
     void recordBuild(VkCommandBuffer command, Layout layout) {
         if(timings==null)recordBuildCommands(command,layout);else timings.record(command,"mg-build",()->recordBuildCommands(command,layout));
     }
     private void recordBuildCommands(VkCommandBuffer command, Layout layout) {
         bind(command);
         var levels = layout.levels();
-        stage(command,layout,levels.getFirst(),levels.getFirst(),10);
-        stage(command, layout, levels.getFirst(), levels.getFirst(), 0,0);
-        for (int i = 1; i < levels.size(); i++) stage(command, layout, levels.get(i), levels.get(i - 1), 1,i);
-        stage(command,layout,levels.getLast(),levels.getLast(),8,levels.size());
-        stage(command,layout,levels.getLast(),levels.getLast(),9,levels.size()+1);
+        stage(command, layout, levels.getFirst(), levels.getFirst(), 0);
+        for (int i = 1; i < levels.size(); i++) stage(command, layout, levels.get(i), levels.get(i - 1), 1);
+        stage(command,layout,levels.getLast(),levels.getLast(),8);
+        stage(command,layout,levels.getLast(),levels.getLast(),9);
     }
 
     /** A zero-start, fixed linear V-cycle; all work stays inside the caller's submission. */
@@ -87,15 +86,14 @@ final class VulkanPressureMultigrid implements AutoCloseable {
     private void recordApplyCommands(VkCommandBuffer command, Layout layout) {
         bind(command);
         var levels = layout.levels();
-        int dispatch=levels.size()+2;
-        stage(command, layout, levels.getFirst(), levels.getFirst(), 2,dispatch);
-        for (int i = 1; i < levels.size(); i++) stage(command, layout, levels.get(i), levels.get(i - 1), 3,dispatch+i);
-        stage(command, layout, levels.getLast(), levels.getLast(), 4,dispatch+levels.size()-1);
+        stage(command,layout,levels.getFirst(),levels.getFirst(),10);
+        stage(command, layout, levels.getFirst(), levels.getFirst(), 2,0);
+        for (int i = 1; i < levels.size(); i++) stage(command, layout, levels.get(i), levels.get(i - 1), 3,i);
+        stage(command, layout, levels.getLast(), levels.getLast(), 4,levels.size()-1);
         for (int i = levels.size() - 2; i >= 0; i--) {
-            stage(command, layout, levels.get(i), levels.get(i + 1), 5,dispatch+i);
-            stage(command, layout, levels.get(i), levels.get(i), 6,dispatch+i);
+            stage(command, layout, levels.get(i), levels.get(i + 1), 6,i);
         }
-        stage(command, layout, levels.getFirst(), levels.getFirst(), 7,dispatch);
+        stage(command, layout, levels.getFirst(), levels.getFirst(), 7,0);
     }
 
     private void bind(VkCommandBuffer command) {
@@ -110,9 +108,9 @@ final class VulkanPressureMultigrid implements AutoCloseable {
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                     stack.ints(level.sizeX(), level.sizeY(), level.sizeZ(), stage,
                             level.offset(), peer.offset(), peer.sizeX(), peer.sizeY(), peer.sizeZ(),
-                            layout.levels().getFirst().cells(), layout.pressureStride(), layout.coarseFactorOffset(),2*layout.buildDispatchOffset()));
-            if(dispatchIndex>=0)vkCmdDispatchIndirect(command,workspace.buffer().handle(),workspace.offset()+8L*layout.buildDispatchOffset()+16L*dispatchIndex);
-            else vkCmdDispatch(command, stage == 4 || stage == 10 ? 1 : (level.cells() + 127) / 128, 1, 1);
+                            layout.levels().getFirst().cells(), layout.pressureStride(), layout.coarseFactorOffset(),2*layout.applyDispatchOffset()));
+            if(dispatchIndex>=0)vkCmdDispatchIndirect(command,workspace.buffer().handle(),workspace.offset()+8L*layout.applyDispatchOffset()+16L*dispatchIndex);
+            else vkCmdDispatch(command, stage==9?level.cells():stage==4||stage==8||stage==10?1:(level.cells()+127)/128,1,1);
             barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | (stage==10?VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT:0),
                     VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | (stage==10?VK_ACCESS_INDIRECT_COMMAND_READ_BIT:0), stack);

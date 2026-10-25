@@ -689,7 +689,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [VulkanLiquidReactions](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidReactions.java)、[VulkanSolidLiquidReactions](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanSolidLiquidReactions.java)：精确化学计量、物种CSR增长、固液SVQ转移和动量／热量结算；实际短链入口分别为 `GpuLiquidReactionsValidation`、`GpuSolidLiquidReactionsValidation`。
     - [VulkanCommandTemplates](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanCommandTemplates.java)、[FlipKernelBindings](../../gpu-kernel/src/main/java/mmm/gpuprobe/FlipKernelBindings.java)：工作区持有可复用的压力／容量二级命令，缓冲区对象身份与切片对应不可变描述符；工作区增长或关闭时释放旧模板
     - [VulkanLiquidGeometry](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidGeometry.java)、[VulkanLiquidProjection](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidProjection.java)：库存派生 PLIC、切格与 MAC 几何，重力、物理 CSR 和格面压力响应；`recordTransportPreferences` 生成 PLIC 面扫掠偏好
-    - [VulkanPressureMultigrid](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanPressureMultigrid.java)：结构网格多重网格预条件；活动集改变时构建最粗层逆算子，迭代内复用矩阵向量乘积，设备控制实际构建派发
+    - [VulkanPressureMultigrid](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanPressureMultigrid.java)：每次压力组装构建完整液体多重网格，活动集通过输入和输出投影处理；延拓与后平滑合并，最粗层复用因子矩阵向量乘积
     - [VulkanLiquidRouteLayout](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidRouteLayout.java)：实际候选路线的源 CSR、方向掩码、带 arena 身份的共享精确体积引用、整数数量、物种与内能列
     - [VulkanLiquidCellVolumes](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidCellVolumes.java)：精确单元体积合计、dyadic CSR 与整数容量供给
     - [VulkanLiquidCapacityInputs](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidCapacityInputs.java)：固定几何、占容与投影偏好生成普通环境液体步的整数容量输入

@@ -853,3 +853,5 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 `build/gpu-compact-surface-protocol.log` 覆盖紧凑展示的网络往返、相机点查询与客户端小网格网格化。64³原尺寸生成2097152个按需凸片的字段，编码9961598 B；该CPU参考投影加往返总耗时383.950 ms，生产投影已改由GPU直接生成材料分层。这个数字不能作为GPU展示成本，生产展示完整成本须另测。
 
 2026-10-25：`build/gpu-resident-cut64-graph-performance.log` 在相同 RTX 5070 Ti、原64³切格、3预热／3采样下连续6次提交，中位82.437 ms、最大83.014 ms、GPU平均72.808 ms，上传0 B、回读252 B／步、逻辑设备5127.4 MiB。使用共享体积描述符、局部显隐黏性、共用液气面裁剪和真实空间粗校正；末步共同压力32轮、容量2轮、孔流81轮，既有残差条件成功。50 ms尚未达成，功能扩展和集中物理验证保持暂停。计时后通过 `-PgpuMechanicalPressureDump=<绝对路径>` 导出 `build/gpu-cut64-aperture-graph.bin`，用于分析实际强连接及求解复杂度，导出不计入上述成本。
+
+2026-10-26：`build/gpu-resident-cut64-once-mg-performance.log` 沿用上述设备、原场景及连续6步。完整液体多重网格每次组装只构建一次，延拓与后平滑合并后，中位78.509 ms、最大78.941 ms、GPU平均68.376 ms。`build/gpu-resident-cut64-short-assembly-performance.log` 进一步把孔流短行组装直接分配到线程、长行保留工作组归约，中位80.781 ms、GPU平均69.668 ms；末步孔流组装由2.295 ms降至0.616 ms，整步仍未达到50 ms。两次均零上传、连续提交成功；耗时优先，其他验证继续暂停。
