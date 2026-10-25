@@ -46,6 +46,10 @@ public final class ChemicalDisplaySnapshot {
 		}
 	}
 
+    public static ChemicalDisplaySnapshot fromDisplayFields(ChemicalRegistry registry,short[] species,byte[] weights,byte[] residual,byte[] ph){
+        return new ChemicalDisplaySnapshot(registry.species().stream().map(s->new SpeciesDisplay(s.id(),s.baseArgb())).toList(),species,weights,residual,ph);
+    }
+
 	public static ChemicalDisplaySnapshot fromTotals(ChemicalRegistry registry, long[][] totals, byte[] ph) {
 		int cells = totals.length;
 		List<SpeciesDisplay> palette = registry.species().stream()

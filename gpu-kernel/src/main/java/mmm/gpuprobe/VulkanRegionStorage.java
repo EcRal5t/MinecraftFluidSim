@@ -213,6 +213,10 @@ final class VulkanRegionStorage implements AutoCloseable {
         private VulkanRegionStorage owner() { return VulkanRegionStorage.this; }
         long generation() { synchronized (VulkanRegionStorage.this) { requireCapture(this); return version.generation; } }
         long logicalBytes() { synchronized (VulkanRegionStorage.this) { requireCapture(this); return version.logicalBytes; } }
+        Capture retain(){synchronized(VulkanRegionStorage.this){requireCapture(this);return sameCommitted()?new Capture(committed):new Capture(version,origin);}}
+        GpuBuffer buffer(){synchronized(VulkanRegionStorage.this){requireCapture(this);return version.slot.buffer;}}
+        boolean isCurrent(){synchronized(VulkanRegionStorage.this){requireCapture(this);return sameCommitted();}}
+        private boolean sameCommitted(){return committed!=null&&committed.slot==version.slot&&committed.generation==version.generation&&committed.logicalBytes==version.logicalBytes;}
         @Override public void close() {
             synchronized (VulkanRegionStorage.this) {
                 if (!released) { release(version.slot); released = true; }

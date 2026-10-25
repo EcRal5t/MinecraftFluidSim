@@ -38,10 +38,20 @@ dependencies {
 	implementation project(':model')
 	implementation project(':solver')
 	implementation project(':app')
+	implementation project(':gpu-kernel')
 	include project(':api')
 	include project(':model')
 	include project(':solver')
 	include project(':app')
+	include project(':gpu-kernel')
+	include('org.lwjgl:lwjgl:3.4.1:unsafe') { transitive = false }
+	include('org.lwjgl:lwjgl:3.4.1:natives-windows') { transitive = false }
+	['lwjgl-vulkan', 'lwjgl-shaderc', 'lwjgl-vma'].each { module ->
+		include("org.lwjgl:${module}:3.4.1") { transitive = false }
+	}
+	['lwjgl-shaderc', 'lwjgl-vma'].each { module ->
+		include("org.lwjgl:${module}:3.4.1:natives-windows") { transitive = false }
+	}
 	['ejml-core', 'ejml-ddense', 'ejml-dsparse'].each { module ->
 		include implementation("org.ejml:${module}:${project.ejml_version}")
 	}

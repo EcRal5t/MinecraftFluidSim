@@ -9,19 +9,18 @@ final class MinecraftGroupAvailability {
     private MinecraftGroupAvailability() { }
 
     static boolean prepare(ServerLevel level, FluidRegion region) {
-        var domain=region.domain();
-        int sx=domain.sizeX(),sy=domain.sizeY(),sz=domain.sizeZ();
-        boolean[] available=sampleWorldCells(region.origin(),sx,sy,sz,domain.config().cellSize(),
+        int sx=region.sizeX(),sy=region.sizeY(),sz=region.sizeZ();
+        boolean[] available=sampleWorldCells(region.origin(),sx,sy,sz,region.solverConfig().cellSize(),
                 (x,z)->level.getChunkSource().getChunkNow(x,z)!=null);
         boolean restored=false;
-        for(int cell=0;cell<available.length;cell++) restored |= available[cell] && !domain.worldCellAvailable(cell);
-        domain.prepareGroupAvailability(available);
+        for(int cell=0;cell<available.length;cell++) restored |= available[cell] && !region.worldCellAvailable(cell);
+        boolean active=region.prepareGroupAvailability(available);
         if(restored) {
             region.requireCollisionRefresh();
             region.wakeForActivity();
             region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
         }
-        return domain.hasAvailableGroups();
+        return active;
     }
 
     static boolean[] sampleWorldCells(BlockPos origin,int sx,int sy,int sz,double h,
@@ -62,15 +61,15 @@ final class MinecraftGroupAvailability {
     }
 
     static boolean boxAvailable(FluidRegion region, net.minecraft.world.phys.AABB box) {
-        var domain=region.domain(); double h=domain.config().cellSize(); BlockPos origin=region.origin();
+        double h=region.solverConfig().cellSize(); BlockPos origin=region.origin();
         int minX=Math.max(0,(int)Math.floor((box.minX-origin.getX())/h));
         int minY=Math.max(0,(int)Math.floor((box.minY-origin.getY())/h));
         int minZ=Math.max(0,(int)Math.floor((box.minZ-origin.getZ())/h));
-        int maxX=Math.min(domain.sizeX()-1,(int)Math.floor((box.maxX-origin.getX())/h));
-        int maxY=Math.min(domain.sizeY()-1,(int)Math.floor((box.maxY-origin.getY())/h));
-        int maxZ=Math.min(domain.sizeZ()-1,(int)Math.floor((box.maxZ-origin.getZ())/h));
+        int maxX=Math.min(region.sizeX()-1,(int)Math.floor((box.maxX-origin.getX())/h));
+        int maxY=Math.min(region.sizeY()-1,(int)Math.floor((box.maxY-origin.getY())/h));
+        int maxZ=Math.min(region.sizeZ()-1,(int)Math.floor((box.maxZ-origin.getZ())/h));
         for(int z=minZ;z<=maxZ;z++) for(int y=minY;y<=maxY;y++) for(int x=minX;x<=maxX;x++)
-            if(!domain.groupAvailable((z*domain.sizeY()+y)*domain.sizeX()+x)) return false;
+            if(!region.groupAvailable((z*region.sizeY()+y)*region.sizeX()+x)) return false;
         return true;
     }
 }

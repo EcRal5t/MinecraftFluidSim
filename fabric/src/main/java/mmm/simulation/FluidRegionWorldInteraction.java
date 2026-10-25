@@ -19,12 +19,11 @@ final class FluidRegionWorldInteraction {
 	private FluidRegionWorldInteraction() { }
 
 	static FluidRegion.CollisionStats refreshCollisions(ServerLevel level, FluidRegion region, int cellsPerBlock) {
-		FluidDomain domain = region.domain();
 		BlockPos origin = region.origin();
 		FluidRegionFootprint footprint = region.footprint();
-		int blockSizeX = domain.sizeX() / cellsPerBlock;
-		int blockSizeY = domain.sizeY() / cellsPerBlock;
-		int blockSizeZ = domain.sizeZ() / cellsPerBlock;
+		int blockSizeX = region.sizeX() / cellsPerBlock;
+		int blockSizeY = region.sizeY() / cellsPerBlock;
+		int blockSizeZ = region.sizeZ() / cellsPerBlock;
 		boolean[] interiorBlocks = new boolean[blockSizeX * blockSizeY * blockSizeZ];
 		for (int blockZ = 0; blockZ < blockSizeZ; blockZ++) {
 			for (int blockY = 0; blockY < blockSizeY; blockY++) {
@@ -38,7 +37,7 @@ final class FluidRegionWorldInteraction {
 		CollisionRegion captureRegion = new CollisionRegion(region.dimension().identifier().toString(),
 				origin.getX(), origin.getY(), origin.getZ(), blockSizeX, blockSizeY, blockSizeZ,
 				cellsPerBlock, interiorBlocks);
-		CollisionField collisionField = new MinecraftCollisionWorldPort(level, domain).capture(captureRegion);
+		CollisionField collisionField = new MinecraftCollisionWorldPort(level, region).capture(captureRegion);
 		return applyCapturedCollisions(region, collisionField, cellsPerBlock);
 	}
 
@@ -46,16 +45,15 @@ final class FluidRegionWorldInteraction {
 	static FluidRegion.CollisionStats applyCapturedCollisions(
 			FluidRegion region, CollisionField collisionField, int cellsPerBlock
 	) {
-		FluidDomain domain = region.domain();
-		if (cellsPerBlock <= 0 || domain.sizeX() % cellsPerBlock != 0
-				|| domain.sizeY() % cellsPerBlock != 0 || domain.sizeZ() % cellsPerBlock != 0
-				|| collisionField.sizeX() != domain.sizeX() || collisionField.sizeY() != domain.sizeY()
-				|| collisionField.sizeZ() != domain.sizeZ()) {
+		if (cellsPerBlock <= 0 || region.sizeX() % cellsPerBlock != 0
+				|| region.sizeY() % cellsPerBlock != 0 || region.sizeZ() % cellsPerBlock != 0
+				|| collisionField.sizeX() != region.sizeX() || collisionField.sizeY() != region.sizeY()
+				|| collisionField.sizeZ() != region.sizeZ()) {
 			throw new IllegalArgumentException("Collision capture does not match the region layout");
 		}
-		int blockSizeX = domain.sizeX() / cellsPerBlock;
-		int blockSizeY = domain.sizeY() / cellsPerBlock;
-		int blockSizeZ = domain.sizeZ() / cellsPerBlock;
+		int blockSizeX = region.sizeX() / cellsPerBlock;
+		int blockSizeY = region.sizeY() / cellsPerBlock;
+		int blockSizeZ = region.sizeZ() / cellsPerBlock;
 		List<PlannedBlock> plannedBlocks = new ArrayList<>();
 		List<FluidDomain.CollisionEdit> allEdits = new ArrayList<>();
 
@@ -71,7 +69,7 @@ final class FluidRegionWorldInteraction {
 								int cellY = blockY * cellsPerBlock + localY;
 								int cellZ = blockZ * cellsPerBlock + localZ;
 								int desired = collisionField.microMask(cellX, cellY, cellZ);
-								if (domain.solidMicroMask(cellX, cellY, cellZ) == desired) continue;
+								if (region.solidMicroMask(cellX, cellY, cellZ) == desired) continue;
 								FluidDomain.CollisionEdit edit = new FluidDomain.CollisionEdit(
 										cellX, cellY, cellZ, desired);
 								blockEdits.add(edit);
@@ -89,10 +87,10 @@ final class FluidRegionWorldInteraction {
 		}
 		if (allEdits.isEmpty()) return FluidRegion.CollisionStats.EMPTY;
 
-		FluidDomain original = domain;
+		FluidDomain original = region.domain();
 		long baseGeneration = region.solverGeneration();
 		try {
-			domain = FluidDomain.restoreAuthoritativeState(original.captureAuthoritativeState());
+			FluidDomain domain = FluidDomain.restoreAuthoritativeState(original.captureAuthoritativeState());
 			FluidRegion.CollisionStats stats = applyEdits(domain, allEdits, plannedBlocks);
 			region.adoptCollisionCandidate(original, baseGeneration, domain);
 			return stats;

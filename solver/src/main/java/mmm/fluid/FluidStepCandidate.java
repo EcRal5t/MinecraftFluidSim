@@ -11,7 +11,7 @@ import java.util.Objects;
  * serialize and reconstruct the same generation again. Its immutable state is materialized only when a
  * checkpoint, replay or diagnostic actually asks for it. Other backends provide the immutable state eagerly.
  */
-public final class FluidStepCandidate {
+public final class FluidStepCandidate implements AutoCloseable {
 	/** Budget reservations include rejected attempts; zero denotes an unreported backend. */
 	public record MechanicalResolution(int timeRefinements, long reservedSubsteps, String lastRefinementReason) {
 		public MechanicalResolution {
@@ -34,6 +34,7 @@ public final class FluidStepCandidate {
 	private FluidDomain preparedCpuDomain;
 	private boolean preparedCpuDomainClaimed;
 	private volatile FluidDomainState state;
+	private PreparedFluidState preparedDeviceState;
 
 	public FluidStepCandidate(
 			String backendId, long baseGeneration, long candidateGeneration, FluidDomainState state,
@@ -78,6 +79,23 @@ public final class FluidStepCandidate {
 		}
 	}
 
+	public static FluidStepCandidate preparedDevice(String backendId,long baseGeneration,PreparedFluidState state,
+            FluidDomain.StepStats stats,MovingBodyFluidCoupling.Result coupling,MechanicalResolution resolution) {
+        Objects.requireNonNull(state,"state");
+        var result=new FluidStepCandidate(backendId,baseGeneration,Math.addExact(baseGeneration,1),null,
+                state.layout(),stats,coupling,null,resolution);
+        result.preparedDeviceState=state;return result;
+    }
+    public synchronized PreparedFluidState claimPreparedDeviceState() {
+        if(preparedCpuDomainClaimed)throw new IllegalStateException("Candidate was already adopted");
+        var result=preparedDeviceState;
+        if(result!=null){preparedDeviceState=null;preparedCpuDomainClaimed=true;}
+        return result;
+    }
+    @Override public synchronized void close() {
+        if(preparedDeviceState!=null){preparedDeviceState.close();preparedDeviceState=null;preparedCpuDomainClaimed=true;}
+    }
+
 	public String backendId() { return backendId; }
 	public long baseGeneration() { return baseGeneration; }
 	public long candidateGeneration() { return candidateGeneration; }
@@ -112,7 +130,7 @@ public final class FluidStepCandidate {
 				if (preparedCpuDomainClaimed) {
 					throw new IllegalStateException("Adopted CPU candidate no longer owns an immutable state source");
 				}
-				state = current = preparedCpuDomain.captureAuthoritativeState();
+				state = current = preparedDeviceState!=null?preparedDeviceState.exportState():preparedCpuDomain.captureAuthoritativeState();
 			}
 			return current;
 		}

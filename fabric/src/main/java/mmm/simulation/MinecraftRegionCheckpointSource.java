@@ -21,6 +21,7 @@ import java.util.Objects;
 /** Minecraft/runtime adapter for one server-thread checkpoint capture. */
 public final class MinecraftRegionCheckpointSource implements RegionCheckpointSource {
 	private final FluidRegion region;
+	private mmm.fluid.FluidDomainState state;
 
 	public MinecraftRegionCheckpointSource(FluidRegion region) {
 		this.region = Objects.requireNonNull(region, "region");
@@ -45,7 +46,10 @@ public final class MinecraftRegionCheckpointSource implements RegionCheckpointSo
 	}
 
 	@Override public RegionRuntimeIntent runtimeIntent() { return runtimeIntent(region.persistedRuntime()); }
-	@Override public mmm.fluid.FluidDomainState authoritativeState() { return region.domain().captureAuthoritativeState(); }
+	@Override public mmm.fluid.FluidDomainState authoritativeState() {
+		if(state==null)try(var capture=region.captureSolverState()){state=capture.exportState();}
+		return state;
+	}
 	@Override public GranularStateSnapshot granularState() { return region.domain().exportGranularState(); }
 	@Override public GasStateSnapshot gasState(String fingerprint) { return region.domain().exportGasState(fingerprint); }
 	@Override public FlipThermalParticleState thermalState() { return region.domain().exportThermalParticleState(); }

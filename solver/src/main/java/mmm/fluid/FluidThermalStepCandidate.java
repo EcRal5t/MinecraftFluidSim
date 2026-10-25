@@ -3,7 +3,7 @@ package mmm.fluid;
 import java.util.Objects;
 
 /** Complete uncommitted thermal-only successor, with the same lazy CPU adoption path as motion. */
-public final class FluidThermalStepCandidate {
+public final class FluidThermalStepCandidate implements AutoCloseable {
 	private final String backendId;
 	private final long baseGeneration;
 	private final long candidateGeneration;
@@ -12,6 +12,7 @@ public final class FluidThermalStepCandidate {
 	private FluidDomain preparedCpuDomain;
 	private boolean preparedCpuDomainClaimed;
 	private volatile FluidDomainState state;
+	private PreparedFluidState preparedDeviceState;
 
 	public FluidThermalStepCandidate(
 			String backendId, long baseGeneration, long candidateGeneration,
@@ -50,6 +51,23 @@ public final class FluidThermalStepCandidate {
 		}
 	}
 
+	public static FluidThermalStepCandidate preparedDevice(String backendId,long baseGeneration,PreparedFluidState state,
+            FluidDomain.ThermalAxisStats stats) {
+        Objects.requireNonNull(state,"state");
+        var result=new FluidThermalStepCandidate(backendId,baseGeneration,Math.addExact(baseGeneration,1),null,
+                state.layout(),stats,null);
+        result.preparedDeviceState=state;return result;
+    }
+    public synchronized PreparedFluidState claimPreparedDeviceState() {
+        if(preparedCpuDomainClaimed)throw new IllegalStateException("Candidate was already adopted");
+        var result=preparedDeviceState;
+        if(result!=null){preparedDeviceState=null;preparedCpuDomainClaimed=true;}
+        return result;
+    }
+    @Override public synchronized void close() {
+        if(preparedDeviceState!=null){preparedDeviceState.close();preparedDeviceState=null;preparedCpuDomainClaimed=true;}
+    }
+
 	public String backendId() { return backendId; }
 	public long baseGeneration() { return baseGeneration; }
 	public long candidateGeneration() { return candidateGeneration; }
@@ -75,7 +93,7 @@ public final class FluidThermalStepCandidate {
 				if (preparedCpuDomainClaimed) {
 					throw new IllegalStateException("Adopted CPU thermal candidate no longer owns an immutable state source");
 				}
-				state = current = preparedCpuDomain.captureAuthoritativeState();
+				state = current = preparedDeviceState!=null?preparedDeviceState.exportState():preparedCpuDomain.captureAuthoritativeState();
 			}
 			return current;
 		}

@@ -47,6 +47,7 @@ public final class FluidNetworkProtocolValidation {
 		validateSnapshotCodecAndOptionalSections();
 		validateGenerationAndSequenceOrdering();
 		validateMaterialSnapshot();
+		validateCompactSurface();
 		validateChemicalSnapshot();
 		validateGranularSnapshot();
 		validateThermalSnapshot();
@@ -582,6 +583,24 @@ public final class FluidNetworkProtocolValidation {
 				"snapshot bypassed negotiated layout");
 		require(ledger.evaluate(FluidSnapshotPayload.clearAll(), FluidProtocol.Layout.PURE) == FluidSnapshotLedger.Decision.CLEAR_ALL,
 				"clear-all control was rejected");
+	}
+
+	private static void validateCompactSurface() {
+		for(int grid:new int[]{2,64}) {
+			int cells=grid*grid*grid;var fluids=new mmm.fluid.FluidMaterialRegistry(List.of(mmm.fluid.BuiltinFluidMaterials.WATER));
+			float[][] volume={new float[cells]};Arrays.fill(volume[0],.75f);float[] planes=new float[4*cells],micro=new float[8*cells];
+			for(int c=0;c<cells;c++){planes[4*c+1]=1;planes[4*c+3]=.75f;for(int m=0;m<8;m++)micro[8*c+m]=(m&2)==0?.125f:.0625f;}
+			long start=System.nanoTime();var snapshot=mmm.fluid.FluidSurfaceProjection.fromDeviceFields(grid,grid,grid,.5f,fluids,volume,planes,micro,new byte[cells]);
+			var payload=FluidMaterialSnapshotPayload.snapshot(DIMENSION,REGION,1,1,BlockPos.ZERO,snapshot,false);
+			var buffer=new FriendlyByteBuf(Unpooled.buffer());
+			try{
+				FluidMaterialSnapshotPayload.CODEC.encode(buffer,payload);int bytes=buffer.writerIndex();var decoded=FluidMaterialSnapshotPayload.CODEC.decode(buffer);
+				require(decoded.geometry().equals(snapshot.geometry()),"Compact geometry did not round-trip");
+				require(decoded.geometry().materialAt(.1,.3,.1)==0&&decoded.geometry().materialAt(.1,.4,.1)==-1,"Compact surface point query differs");
+				if(grid==2)require(!FluidMaterialSurfaceMesher.build(decoded.toRenderSnapshot()).outerTriangles().isEmpty(),"Compact client mesh is empty");
+				System.out.printf("Compact surface grid=%d virtual_pieces=%d bytes=%d projection_codec_ms=%.3f%n",grid,snapshot.geometry().pieces().size(),bytes,(System.nanoTime()-start)*1e-6);
+			}finally{buffer.release();}
+		}
 	}
 
 	private static void validateMaterialSnapshot() {

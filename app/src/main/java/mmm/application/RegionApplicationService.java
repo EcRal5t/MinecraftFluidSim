@@ -48,8 +48,11 @@ public final class RegionApplicationService implements RegionTickUseCase.StepExe
 				command.pendingPhaseSettlementOnly()));
 		RegionStepStatus invalid = validateCandidate(capture, candidate.backendId(), candidate.baseGeneration(),
 				candidate.candidateGeneration(), candidate.layout());
-		if (invalid != null) return MotionStepResult.rejected(invalid);
-		RegionStepStatus adoption = regions.adoptMotion(command.regionId(), candidate, solverBackend.id());
+		if (invalid != null) { candidate.close(); return MotionStepResult.rejected(invalid); }
+		RegionStepStatus adoption;
+        try { adoption = regions.adoptMotion(command.regionId(), candidate, solverBackend.id()); }
+        catch (RuntimeException | Error failure) { candidate.close(); throw failure; }
+        if (adoption != RegionStepStatus.ACCEPTED) candidate.close();
 		return adoption == RegionStepStatus.ACCEPTED
 				? MotionStepResult.accepted(candidate) : MotionStepResult.rejected(adoption);
 		}
@@ -69,8 +72,11 @@ public final class RegionApplicationService implements RegionTickUseCase.StepExe
 				command.maximumPhaseOperations()));
 		RegionStepStatus invalid = validateCandidate(capture, candidate.backendId(), candidate.baseGeneration(),
 				candidate.candidateGeneration(), candidate.layout());
-		if (invalid != null) return ThermalStepResult.rejected(invalid);
-		RegionStepStatus adoption = regions.adoptThermal(command.regionId(), candidate, solverBackend.id());
+		if (invalid != null) { candidate.close(); return ThermalStepResult.rejected(invalid); }
+		RegionStepStatus adoption;
+        try { adoption = regions.adoptThermal(command.regionId(), candidate, solverBackend.id()); }
+        catch (RuntimeException | Error failure) { candidate.close(); throw failure; }
+        if (adoption != RegionStepStatus.ACCEPTED) candidate.close();
 		return adoption == RegionStepStatus.ACCEPTED
 				? ThermalStepResult.accepted(candidate) : ThermalStepResult.rejected(adoption);
 		}

@@ -8,7 +8,7 @@ import mmm.fluid.FluidSurfaceInput.Plane;
 import mmm.inventory.LiquidCellInventory;
 
 /** Projects one committed inventory and its matching PLIC onto bounded display pieces. */
-final class FluidSurfaceProjection {
+public final class FluidSurfaceProjection {
   static FluidSurfaceInput capture(
       int sx,
       int sy,
@@ -101,6 +101,54 @@ final class FluidSurfaceProjection {
       }
     }
     return new FluidSurfaceInput(sx, sy, sz, h, pieces);
+  }
+
+  /** Display-only projection of float device fields; these values never become inventory. */
+  public static FluidMaterialRenderSnapshot fromDeviceFields(int sx,int sy,int sz,float h,
+      FluidMaterialRegistry registry,float[][] materialVolume,float[] planes,float[] microVolume,byte[] masks) {
+    int cells=sx*sy*sz;
+    if(planes.length!=4*cells||microVolume.length!=8*cells||masks.length!=cells||materialVolume.length!=registry.size())
+      throw new IllegalArgumentException("Device display dimensions differ");
+    byte[][] materialFractions=new byte[registry.size()][cells],phaseFractions=new byte[registry.phaseCount()][cells];
+    var order=new ArrayList<Integer>();for(int m=0;m<registry.size();m++)order.add(m);
+    order.sort(Comparator.<Integer>comparingDouble(m->-registry.material(m).referenceDensity()).thenComparingInt(Integer::intValue));
+    int layers=0;for(int c=0;c<cells;c++)for(int m=0;m<registry.size();m++)if(materialVolume[m][c]>0)layers++;
+    var data=java.nio.ByteBuffer.allocate(8+20*cells+16*layers).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+    data.putInt(cells).putInt(layers);int row=0;
+    for(int cell=0;cell<cells;cell++) {
+      double total=0;double[] amounts=new double[registry.size()],phaseAmounts=new double[registry.phaseCount()];
+      for(int m=0;m<amounts.length;m++){amounts[m]=materialVolume[m][cell];total+=amounts[m];phaseAmounts[registry.phaseHandle(m)]+=amounts[m];}
+      for(int k=0;k<4;k++)data.putFloat(8+20*cell+4*k,planes[4*cell+k]);
+      if(total>0) {
+        quantize(amounts,total,materialFractions,cell);quantize(phaseAmounts,total,phaseFractions,cell);
+        int open=0;double geometricVolume=0;
+        for(int micro=0;micro<8;micro++)if((Byte.toUnsignedInt(masks[cell])&(1<<micro))==0&&microVolume[8*cell+micro]>0){open|=1<<micro;geometricVolume+=slabVolume(planes,cell,micro,0,1);}
+        double lower=0,cumulative=0;
+        for(int material:order){if(amounts[material]<=0)continue;cumulative+=amounts[material];
+          double upper=1;
+          if(cumulative<total){double lo=lower,hi=1,target=geometricVolume*cumulative/total;
+            for(int iteration=0;iteration<24;iteration++){double mid=.5*(lo+hi),volume=0;for(int micro=0;micro<8;micro++)if((open&(1<<micro))!=0)volume+=slabVolume(planes,cell,micro,0,mid);if(volume<target)lo=mid;else hi=mid;}upper=.5*(lo+hi);}
+          int mask=0;for(int micro=0;micro<8;micro++)if((open&(1<<micro))!=0&&slabVolume(planes,cell,micro,lower,upper)>0)mask|=1<<micro;
+          if(mask!=0){int at=8+20*cells+16*row++;data.putShort(at,(short)material).putShort(at+2,(short)registry.phaseHandle(material)).putFloat(at+4,(float)lower).putFloat(at+8,(float)upper).putInt(at+12,mask);}
+          lower=upper;
+        }
+      }
+      data.putInt(8+20*cell+16,row);
+    }
+    data.putInt(4,row);byte[] encoded=java.util.Arrays.copyOf(data.array(),8+20*cells+16*row);
+    return FluidMaterialRenderSnapshot.fromDisplayFields(sx,sy,sz,h,registry.materials(),registry.phaseGroups(),
+        materialFractions,phaseFractions,new FluidSurfaceInput(sx,sy,sz,h,new CompactFluidSurface(encoded)));
+  }
+  private static double slabVolume(float[] plane,int cell,int micro,double lo,double hi){
+    double y=.5*(micro>>1&1),low=Math.max(y,lo),high=Math.min(y+.5,hi);if(high<=low)return 0;
+    double nx=plane[4*cell],ny=plane[4*cell+1],nz=plane[4*cell+2];
+    double offset=plane[4*cell+3]-nx*.5*(micro&1)-ny*low-nz*.5*(micro>>2&1);
+    return MicroBoxPlaneVolume.box(new double[]{nx*.5,ny*(high-low),nz*.5},offset,0,1)*.25*(high-low);
+  }
+  private static void quantize(double[] values,double total,byte[][] target,int cell){
+    int assigned=0;double[] remainder=new double[values.length];
+    for(int i=0;i<values.length;i++){double scaled=255*values[i]/total;int floor=(int)Math.floor(scaled);target[i][cell]=(byte)floor;assigned+=floor;remainder[i]=scaled-floor;}
+    while(assigned<255){int best=0;for(int i=1;i<values.length;i++)if(remainder[i]>remainder[best])best=i;target[best][cell]++;remainder[best]=-1;assigned++;}
   }
 
   private static double height(List<List<SurfacePolyhedron.Face>> polyhedra, double target) {

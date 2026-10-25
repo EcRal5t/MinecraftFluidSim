@@ -100,24 +100,25 @@ final class FluidSnapshotPublisher {
 	}
 
 	private SnapshotDispatch createDispatch(FluidRegion region) {
+		var display = region.display();
 		if (thermal) {
-			FluidThermalSnapshotPayload payload = createThermalSnapshot(region);
+			FluidThermalSnapshotPayload payload = createThermalSnapshot(region, display);
 			return player -> FluidProtocolServer.send(player, payload);
 		}
 		if (granular) {
-			FluidGranularSnapshotPayload payload = createGranularSnapshot(region);
+			FluidGranularSnapshotPayload payload = createGranularSnapshot(region, display);
 			return player -> FluidProtocolServer.send(player, payload);
 		}
 		if (chemistry) {
-			FluidChemicalSnapshotPayload payload = createChemicalSnapshot(region);
+			FluidChemicalSnapshotPayload payload = createChemicalSnapshot(region, display);
 			return player -> FluidProtocolServer.send(player, payload);
 		}
-		FluidMaterialSnapshotPayload payload = createMaterialSnapshot(region);
+		FluidMaterialSnapshotPayload payload = createMaterialSnapshot(region, display);
 		return player -> FluidProtocolServer.send(player, payload);
 	}
 
-	private static FluidMaterialSnapshotPayload createMaterialSnapshot(FluidRegion region) {
-		return createMaterialBase(region, region.domain().copyMaterialRenderSnapshot());
+	private static FluidMaterialSnapshotPayload createMaterialSnapshot(FluidRegion region, mmm.fluid.ResidentFluidState.Display display) {
+		return createMaterialBase(region, display.material());
 	}
 
 	private static FluidMaterialSnapshotPayload createMaterialBase(
@@ -128,41 +129,41 @@ final class FluidSnapshotPublisher {
 				region.origin(), snapshot, region.debugOverlays());
 	}
 
-	private static FluidChemicalSnapshotPayload createChemicalSnapshot(FluidRegion region) {
-		if (!region.domain().hasChemistryState()) throw new IllegalStateException("Chemical region is missing parcel state");
-		return createChemicalLayer(region, createMaterialBase(region, region.domain().copyMaterialRenderSnapshot()));
+	private static FluidChemicalSnapshotPayload createChemicalSnapshot(FluidRegion region, mmm.fluid.ResidentFluidState.Display display) {
+		if (display.chemical() == null) throw new IllegalStateException("Chemical region is missing parcel state");
+		return createChemicalLayer(region, createMaterialBase(region, display.material()), display);
 	}
 
 	private static FluidChemicalSnapshotPayload createChemicalLayer(
-			FluidRegion region, FluidMaterialSnapshotPayload base
+			FluidRegion region, FluidMaterialSnapshotPayload base, mmm.fluid.ResidentFluidState.Display display
 	) {
 		return FluidChemicalSnapshotPayload.snapshot(base,
-				region.domain().chemistry().registry().fingerprint(),
-				region.domain().copyChemicalDisplaySnapshot());
+				region.solverLayout().chemicalRegistryFingerprint(),
+				display.chemical());
 	}
 
-	private FluidGranularSnapshotPayload createGranularSnapshot(FluidRegion region) {
-		if (!region.domain().hasGranularState()) throw new IllegalStateException("Granular region is missing parcel state");
-		return createGranularLayer(region, createMaterialBase(region, region.domain().copyMaterialRenderSnapshot()));
+	private FluidGranularSnapshotPayload createGranularSnapshot(FluidRegion region, mmm.fluid.ResidentFluidState.Display display) {
+		if (display.granular() == null) throw new IllegalStateException("Granular region is missing parcel state");
+		return createGranularLayer(region, createMaterialBase(region, display.material()), display);
 	}
 
 	private FluidGranularSnapshotPayload createGranularLayer(
-			FluidRegion region, FluidMaterialSnapshotPayload base
+			FluidRegion region, FluidMaterialSnapshotPayload base, mmm.fluid.ResidentFluidState.Display display
 	) {
-		return FluidGranularSnapshotPayload.snapshot(base, region.domain().copyGranularDisplaySnapshot(),
+		return FluidGranularSnapshotPayload.snapshot(base, display.granular(),
 				chemistry ? chemicalRegistry.fingerprint() : null,
-				chemistry ? region.domain().copyChemicalDisplaySnapshot() : null);
+				chemistry ? display.chemical() : null);
 	}
 
-	private FluidThermalSnapshotPayload createThermalSnapshot(FluidRegion region) {
-		if (!region.domain().hasThermalState()) throw new IllegalStateException("Thermal region is missing energy state");
-		FluidMaterialSnapshotPayload base = createMaterialBase(region, region.domain().copyMaterialRenderSnapshot());
-		FluidChemicalSnapshotPayload chemicalLayer = chemistry && !granular ? createChemicalLayer(region, base) : null;
-		FluidGranularSnapshotPayload granularLayer = granular ? createGranularLayer(region, base) : null;
-		ThermalDisplaySnapshot display = region.domain().copyThermalDisplaySnapshot();
+	private FluidThermalSnapshotPayload createThermalSnapshot(FluidRegion region, mmm.fluid.ResidentFluidState.Display display) {
+		if (display.thermal() == null) throw new IllegalStateException("Thermal region is missing energy state");
+		FluidMaterialSnapshotPayload base = createMaterialBase(region, display.material());
+		FluidChemicalSnapshotPayload chemicalLayer = chemistry && !granular ? createChemicalLayer(region, base, display) : null;
+		FluidGranularSnapshotPayload granularLayer = granular ? createGranularLayer(region, base, display) : null;
+		ThermalDisplaySnapshot heat = display.thermal();
 		return new FluidThermalSnapshotPayload(FluidProtocol.Layout.THERMAL, base,
-				thermalRegistry.fingerprint(), display.cellTemperatureQ(), display.coherentFraction(), display.debugFlags(),
-				display.gasNodes().stream().map(node -> new FluidThermalSnapshotPayload.GasNodeDisplay(
+				thermalRegistry.fingerprint(), heat.cellTemperatureQ(), heat.coherentFraction(), heat.debugFlags(),
+				heat.gasNodes().stream().map(node -> new FluidThermalSnapshotPayload.GasNodeDisplay(
 						node.nodeId(), node.temperatureQ(), node.gaugePressureDecaPa())).toList(),
 				chemicalLayer, granularLayer);
 	}

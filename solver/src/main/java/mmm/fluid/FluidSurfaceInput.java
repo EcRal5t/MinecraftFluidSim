@@ -17,6 +17,9 @@ public record FluidSurfaceInput(
         || !Float.isFinite(cellSize))
       throw new IllegalArgumentException("Invalid surface dimensions");
     int cells = Math.multiplyExact(Math.multiplyExact(sizeX, sizeY), sizeZ);
+    if (pieces instanceof CompactFluidSurface compact) {
+      if(compact.cells()!=cells)throw new IllegalArgumentException("Compact surface dimensions differ");
+    } else {
     pieces =
         pieces.stream()
             .sorted(
@@ -29,6 +32,7 @@ public record FluidSurfaceInput(
       throw new IllegalArgumentException("Surface piece limit exceeded");
     for (var piece : pieces)
       if (piece.cell() >= cells) throw new IllegalArgumentException("Surface cell exceeds region");
+    }
   }
 
   /** Material containing the camera point, in region-local metres; -1 denotes gas or exterior. */

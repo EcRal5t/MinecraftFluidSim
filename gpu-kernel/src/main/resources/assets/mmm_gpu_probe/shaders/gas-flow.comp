@@ -85,7 +85,7 @@ void supply(int node,int lane){double outgoing=0.0;
  for(int at=int(words[f(NO)+node])+lane;at<int(words[f(NO)+node+1]);at+=128){int pair=int(words[f(NP)+at]);double q=number(f(PQ)+2*pair);outgoing+=max(0.0LF,int(words[f(PA)+pair])==node+1?q:-q);}reduce(lane,outgoing);
  if(lane==0){double total=standardVolume(node),sensible=sensibleEnergy(node),pressureEnergy=state(node,4)*state(node,0),margin=32.0LF*2.220446049250313e-16LF*abs(number(gas(12)+2*node));
   double fraction=sensible+pressureEnergy>0.0?max(0.0LF,(sensible-margin)/(sensible+pressureEnergy)):0.0LF;
-  fraction=min(fraction,1.0LF-2.220446049250313e-16LF);double scale=partial[0]>0.0?min(1.0LF,total*fraction/partial[0]):1.0LF;put(f(SCALE)+2*node,scale);put(f(RW)+2*node,max(0.0LF,total-scale*partial[0]));
+  fraction=eh(38)!=0?1.0LF:min(fraction,1.0LF-2.220446049250313e-16LF);double scale=partial[0]>0.0?min(1.0LF,total*fraction/partial[0]):1.0LF;put(f(SCALE)+2*node,scale);put(f(RW)+2*node,max(0.0LF,total-scale*partial[0]));
  }
 }
 void route(int id){int source=0,target=0;double weight=0.0,ambientVolume=0.0;

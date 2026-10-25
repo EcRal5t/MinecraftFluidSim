@@ -60,7 +60,7 @@ final class MinecraftRegionInputs {
 		EntityInputs entities = region.entityPhysicsEnabled() ? captureEntities(level, region) : EntityInputs.EMPTY;
 		int affectedEntities = entities.affectedEntities();
 		region.setLastEntityCoupling(new FluidRegion.EntityCouplingStats(affectedEntities, 0.0, 0.0, 0.0));
-		if (affectedEntities > 0 || !new mmm.fluid.EntityBodyState(entities.movingBodies()).equals(region.domain().entityBodyState())) {
+		if (affectedEntities > 0 || !new mmm.fluid.EntityBodyState(entities.movingBodies()).equals(region.entityBodyState())) {
 			region.wakeForActivity();
 			region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
 		}
@@ -162,12 +162,12 @@ final class MinecraftRegionInputs {
 
 	private static AABB regionBounds(FluidRegion region) {
 		BlockPos origin = region.origin();
-		float cellSize = region.domain().config().cellSize();
+		float cellSize = region.solverConfig().cellSize();
 		return new AABB(
 				origin.getX(), origin.getY(), origin.getZ(),
-				origin.getX() + region.domain().sizeX() * cellSize,
-				origin.getY() + region.domain().sizeY() * cellSize,
-				origin.getZ() + region.domain().sizeZ() * cellSize
+				origin.getX() + region.sizeX() * cellSize,
+				origin.getY() + region.sizeY() * cellSize,
+				origin.getZ() + region.sizeZ() * cellSize
 		);
 	}
 
@@ -181,7 +181,7 @@ final class MinecraftRegionInputs {
 	private static Contact sampleContact(FluidRegion region, Entity entity) {
 		BlockPos origin = region.origin();
 		AABB box = entity.getBoundingBox();
-		var sample = region.domain().sampleAxisAlignedBody(
+		var sample = region.sampleBody(
 				box.minX - origin.getX(), box.minY - origin.getY(), box.minZ - origin.getZ(),
 				box.maxX - origin.getX(), box.maxY - origin.getY(), box.maxZ - origin.getZ());
 		double displacedVolume = sample.displacedVolumeCubicMetres();
@@ -195,7 +195,7 @@ final class MinecraftRegionInputs {
 		return new Contact(submergedFraction, displacedVolume, sample.waterContactVolumeCubicMetres(),
 				new MovingBodyFluidCoupling.Bounds(box.minX - origin.getX(), box.minY - origin.getY(),
 						box.minZ - origin.getZ(), box.maxX - origin.getX(), box.maxY - origin.getY(), box.maxZ - origin.getZ()),
-				effectiveBodyMass(bodyVolume, region.domain().config().gravity(), entity.getGravity()));
+				effectiveBodyMass(bodyVolume, region.solverConfig().gravity(), entity.getGravity()));
 	}
 
 	/** Host gravity calibrates the effective mass of an externally controlled body. */

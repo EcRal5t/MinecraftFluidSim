@@ -13,9 +13,10 @@ import static org.lwjgl.vulkan.VK10.*;
 final class VulkanEnergyLedger implements AutoCloseable {
     // All finite binary64 values, with room for the sum of up to Integer.MAX_VALUE terms.
     private static final int WORDS=68;
-    record Stream(int bank,int wordOffset,int count,int strideWords,int coefficient) {
+    record Stream(int bank,int wordOffset,int count,int strideWords,int coefficient,int liveCountWord) {
+        Stream(int bank,int wordOffset,int count,int strideWords,int coefficient){this(bank,wordOffset,count,strideWords,coefficient,-1);}
         Stream {
-            if((bank!=0&&bank!=1)||wordOffset<0||count<0||strideWords<2||Math.abs(coefficient)!=1)
+            if((bank!=0&&bank!=1)||wordOffset<0||count<0||strideWords<2||Math.abs(coefficient)!=1||liveCountWord< -1)
                 throw new IllegalArgumentException("Invalid device energy stream");
         }
     }
@@ -31,9 +32,9 @@ final class VulkanEnergyLedger implements AutoCloseable {
             var target=ByteBuffer.allocateDirect(Math.toIntExact(header.bytes())).order(ByteOrder.LITTLE_ENDIAN);
             int at=Math.toIntExact(0);target.putInt(at,streams.size());int first=0;
             for(int i=0;i<streams.size();i++) {
-                var stream=streams.get(i);int base=at+4*(1+6*i);
+                var stream=streams.get(i);int base=at+4*(1+7*i);
                 target.putInt(base,first).putInt(base+4,stream.count()).putInt(base+8,stream.bank())
-                        .putInt(base+12,stream.wordOffset()).putInt(base+16,stream.strideWords()).putInt(base+20,stream.coefficient());
+                        .putInt(base+12,stream.wordOffset()).putInt(base+16,stream.strideWords()).putInt(base+20,stream.coefficient()).putInt(base+24,stream.liveCountWord());
                 first=Math.addExact(first,stream.count());
             }
         
@@ -45,7 +46,7 @@ final class VulkanEnergyLedger implements AutoCloseable {
         var inputs=List.copyOf(streams);int terms=0;
         for(var stream:inputs)terms=Math.addExact(terms,stream.count());
         int blocks=Math.max(1,(int)(((long)terms+1023)/1024));long[] cursor={scratchBase};
-        var header=column(cursor,Math.addExact(1,Math.multiplyExact(inputs.size(),6)),alignment);
+        var header=column(cursor,Math.addExact(1,Math.multiplyExact(inputs.size(),7)),alignment);
         var a=column(cursor,Math.multiplyExact(blocks,WORDS),alignment);
         var b=column(cursor,Math.multiplyExact(Math.max(1,(blocks+63)/64),WORDS),alignment);
         var result=column(cursor,WORDS+4,alignment);

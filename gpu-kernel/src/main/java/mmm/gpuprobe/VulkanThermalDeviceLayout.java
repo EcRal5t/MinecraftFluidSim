@@ -138,8 +138,13 @@ final class VulkanThermalDeviceLayout {
      * The ledger must be bound to immutable source and completed candidate arenas. */
     void recordSettle(VkCommandBuffer command,VulkanThermalDeviceLayout source,Settlement settlement,
                       VulkanEnergyLedger ledger,GpuBuffer candidate){
+        recordSettle(command,source,settlement,ledger,candidate,false);
+    }
+    void recordSettle(VkCommandBuffer command,VulkanThermalDeviceLayout source,Settlement settlement,VulkanEnergyLedger ledger,GpuBuffer candidate,boolean continuation){
         if(!definitions.equals(source.definitions))throw new IllegalArgumentException("Finite device settlement changes identities");
-        ledger.record(command,settlement.exchange());ledger.record(command,settlement.cumulative());
+        ledger.record(command,settlement.exchange());
+        if(continuation)ledger.recordAccumulate(command,settlement.exchange(),source.word(Field.FLUID_EXCHANGE));
+        ledger.record(command,settlement.cumulative());
         ledger.recordAccumulate(command,settlement.cumulative(),Math.toIntExact(source.audit(Audit.SOLVER_EXCHANGE).offset()/4));
         try(var stack=MemoryStack.stackPush()){
             VulkanRegionStorage.barrier(command,org.lwjgl.vulkan.VK10.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,org.lwjgl.vulkan.VK10.VK_ACCESS_SHADER_WRITE_BIT,

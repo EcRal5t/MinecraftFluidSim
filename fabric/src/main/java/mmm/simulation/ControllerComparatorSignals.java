@@ -34,7 +34,7 @@ final class ControllerComparatorSignals {
 
 	static int signalFor(FluidRegion region) {
 		if (!region.controllerManaged() || !region.solverLoaded() || region.availabilityFailure() != null) return 0;
-		return strength(region.domain().totalVolumeExact(), region.domain().fixedOpenVolumeExact());
+		return strength(region.liquidVolume(), region.fixedOpenVolume());
 	}
 
 	/** Vanilla container ratio: zero empty, 1..14 partial, 15 full. Both arguments use the same volume unit. */

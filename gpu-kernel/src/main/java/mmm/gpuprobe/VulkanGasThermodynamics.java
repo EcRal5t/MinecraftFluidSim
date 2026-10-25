@@ -23,7 +23,11 @@ final class VulkanGasThermodynamics implements AutoCloseable {
     static final int STATE_WIDTH = 9;
     enum Quantity { TEMPERATURE, PRESSURE, DENSITY, HEAT_CAPACITY, GAS_CONSTANT, GAMMA, BULK_MODULUS, SOUND_SPEED, COMPLIANCE }
     record Tables(VulkanGasStateLayout.Definitions definitions, int[] segmentOffsets, double[] segmentUpper,
-                  double[] segmentHeatCapacity, double[] specificAnchorEnergy, double[] speciesReference) { }
+                  double[] segmentHeatCapacity, double[] specificAnchorEnergy, double[] speciesReference,boolean isothermal) {
+        Tables(VulkanGasStateLayout.Definitions definitions,int[] offsets,double[] upper,double[] capacity,double[] anchor,double[] reference){this(definitions,offsets,upper,capacity,anchor,reference,false);}
+        static Tables isothermal(VulkanGasStateLayout.Definitions definitions){int n=definitions.componentIds().size();int[] offsets=new int[n+1];double[] upper=new double[n],capacity=new double[n];for(int i=0;i<n;i++){offsets[i+1]=i+1;upper[i]=1e100;capacity[i]=1000;}
+            return new Tables(definitions,offsets,upper,capacity,new double[n],new double[n*definitions.speciesIds().size()],true);}
+    }
 
     /** Coefficients retain registry component/species identities; absent declarations become errors only when used. */
     static Tables tables(VulkanGasStateLayout.Definitions definitions, GasRegistry gas,
@@ -82,7 +86,7 @@ final class VulkanGasThermodynamics implements AutoCloseable {
             for (int i = 0; i < data.length; i++) target.putInt(4 * i, data[i]);
             target.putDouble(4 * 32, GasRegistry.STANDARD_TEMPERATURE_K);
             target.putDouble(4 * 34, ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
-            target.putDouble(4 * 36, GasRegistry.STANDARD_PRESSURE_PA * 1e-9 / GasRegistry.STANDARD_TEMPERATURE_K);
+            target.putDouble(4 * 36, GasRegistry.STANDARD_PRESSURE_PA * 1e-9 / GasRegistry.STANDARD_TEMPERATURE_K);target.putInt(4*38,tables.isothermal()?1:0);
             return target;
         }
         /** Direct, at-most-64 KiB table chunks for vkCmdUpdateBuffer during device arena growth. */

@@ -6,6 +6,7 @@ import mmm.application.ControllerQueryUseCase;
 import mmm.application.RegionApplicationService;
 import mmm.application.ThermalReservoirUseCase;
 import mmm.fluid.CpuFluidSolverBackend;
+import mmm.fluid.FluidSolverBackend;
 import mmm.fluid.FluidDomain;
 import mmm.fluid.SparseMatrixCompute;
 import mmm.network.ProtocolSessions;
@@ -75,9 +76,7 @@ public final class MmmRuntimeFactory {
 		MinecraftOwnershipIssues ownership = new MinecraftOwnershipIssues(ownershipIssues);
 		MinecraftRuntimePolicy policy = new MinecraftRuntimePolicy(startup, regionManager);
 		FluidWorldTargetResolver targets = new FluidWorldTargetResolver(regionManager);
-		SparseMatrixCompute pressureCompute = createPressureCompute();
-		CpuFluidSolverBackend solverBackend = pressureCompute == null ? new CpuFluidSolverBackend()
-				: new CpuFluidSolverBackend(pressureCompute, message -> MmmMod.LOGGER.warn("{}", message));
+		FluidSolverBackend solverBackend = createSolverBackend();
 		try {
 		MmmMod.LOGGER.info("Matter, Motion & Mechanics numerical execution: {}", solverBackend.executionDescription());
 		RegionApplicationService regionApplication = new RegionApplicationService(solverBackend,
@@ -177,6 +176,19 @@ public final class MmmRuntimeFactory {
 			catch (RuntimeException | Error closeFailure) { failure.addSuppressed(closeFailure); }
 			throw failure;
 		}
+	}
+
+	private static FluidSolverBackend createSolverBackend() {
+		String selected = System.getProperty("mmm.solverBackend", "cpu").trim();
+		if (selected.equals("cpu")) {
+			var pressureCompute = createPressureCompute();
+			return pressureCompute == null ? new CpuFluidSolverBackend()
+					: new CpuFluidSolverBackend(pressureCompute, message -> MmmMod.LOGGER.warn("{}", message));
+		}
+		int device = Integer.parseInt(System.getProperty("mmm.gpuDevice", "0"));
+		for (var provider : ServiceLoader.load(FluidSolverBackend.Provider.class))
+			if (provider.id().equals(selected)) return Objects.requireNonNull(provider.create(device));
+		throw new IllegalStateException("Fluid solver provider is unavailable: " + selected);
 	}
 
 	private static SparseMatrixCompute createPressureCompute() {

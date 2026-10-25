@@ -22,7 +22,9 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
                   VulkanLiquidStateLayout.Column blockRoots,VulkanLiquidStateLayout.Column partials,
                   VulkanLiquidStateLayout.Column bodyData,VulkanLiquidStateLayout.Column energyChanges,
                   VulkanLiquidStateLayout.Column dispatch,VulkanLiquidStateLayout.Column scanWorkspace,
-                  VulkanLiquidStateLayout.Column granularTerms,VulkanLiquidStateLayout.Column granularChanges,long endOffset) {
+                  VulkanLiquidStateLayout.Column granularTerms,VulkanLiquidStateLayout.Column granularChanges,int sourceFaceKWordOffset,int gasExternalWorkWordOffset,long endOffset) {
+        Layout withSourceFaceK(int word){return new Layout(bodies,momentum,thermal,gasWorkWordOffset,sourceHeatWordOffset,externalWorkWordOffset,granular,header,faceTerms,potentialTerms,vertexData,blockCounts,blockOffsets,blockRoots,partials,bodyData,energyChanges,dispatch,scanWorkspace,granularTerms,granularChanges,word,gasExternalWorkWordOffset,endOffset);}
+        Layout withGasExternalWork(int word){return new Layout(bodies,momentum,thermal,gasWorkWordOffset,sourceHeatWordOffset,externalWorkWordOffset,granular,header,faceTerms,potentialTerms,vertexData,blockCounts,blockOffsets,blockRoots,partials,bodyData,energyChanges,dispatch,scanWorkspace,granularTerms,granularChanges,sourceFaceKWordOffset,word,endOffset);}
         ByteBuffer headerBytes(){return headerBytes(momentum.source());}
         ByteBuffer headerBytes(VulkanLiquidStateLayout source) {
             var out=ByteBuffer.allocateDirect(512).order(ByteOrder.LITTLE_ENDIAN);int[] data=new int[128];
@@ -50,6 +52,8 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
                 data[100]=granular.geometry().word(VulkanGranularGeometry.Field.ENTRIES);
                 data[101]=state.word(VulkanGranularStateLayout.Field.DEPOSIT_CELL);
             }
+            data[102]=sourceFaceKWordOffset;
+            data[103]=gasExternalWorkWordOffset;
             for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);return out;
         }
         void initializeHeader(ByteBuffer destination){destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());}
@@ -60,6 +64,7 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
             if(gasWorkWordOffset>=0)streams.add(new VulkanEnergyLedger.Stream(1,gasWorkWordOffset,2*bodies.gasNodeCapacity(),2,1));
             if(sourceHeatWordOffset>=0)streams.add(new VulkanEnergyLedger.Stream(1,sourceHeatWordOffset,bodies.source().cellCount(),2,1));
             if(externalWorkWordOffset>=0)streams.add(new VulkanEnergyLedger.Stream(1,externalWorkWordOffset,bodies.source().cellCount(),2,-1));
+            if(gasExternalWorkWordOffset>=0)streams.add(new VulkanEnergyLedger.Stream(1,gasExternalWorkWordOffset,bodies.gasNodeCapacity(),2,-1));
             if(granular!=null){
                 streams.add(stream(granularTerms,-1));streams.add(stream(granularChanges,1));int count=bodies.granular().state().particleCapacity();
                 if(granular.sourceHeatWordOffset()>=0)streams.add(new VulkanEnergyLedger.Stream(1,granular.sourceHeatWordOffset(),count,2,1));
@@ -100,7 +105,7 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
         int particles=granular==null?0:bodies.granular().state().particleCapacity();
         int granularRows=granular==null?0:Math.addExact(particles,bodies.granular().state().depositCapacity());
         var granularTerms=column(cursor,Math.multiplyExact(particles,4),8,alignment);var granularChanges=column(cursor,Math.multiplyExact(granularRows,2),8,alignment);
-        return new Layout(bodies,momentum,thermal,gasWorkWordOffset,sourceHeatWordOffset,externalWorkWordOffset,granular,header,faces,potential,vertex,counts,offsets,roots,partials,result,changes,dispatch,scan,granularTerms,granularChanges,align(cursor[0],alignment));
+        return new Layout(bodies,momentum,thermal,gasWorkWordOffset,sourceHeatWordOffset,externalWorkWordOffset,granular,header,faces,potential,vertex,counts,offsets,roots,partials,result,changes,dispatch,scan,granularTerms,granularChanges,-1,-1,align(cursor[0],alignment));
     }
     private final FlipKernelBindings bindings;
     private final VulkanPrefixScan scan;

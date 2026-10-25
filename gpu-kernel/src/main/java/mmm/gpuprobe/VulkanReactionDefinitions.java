@@ -35,6 +35,8 @@ final class VulkanReactionDefinitions {
             endOffset=Math.addExact(start+data.bindingBytes(),alignment-1)&-alignment;Math.toIntExact(endOffset/4);
         }
         Identity identity(){return tables.identity();}VulkanLiquidStateLayout.Column data(){return data;}
+        int speciesCount(){return tables.identity().species().size();}
+        boolean hasChemicalRules(){int[] data=tables.words;for(int i=0;i<data[4];i++)if(data[data[5]+2*i]==Kind.CHEMICAL.ordinal())return true;return false;}
         int word(){return Math.toIntExact(data.offset()/4);}long endOffset(){return endOffset;}
         ByteBuffer bytes(){var out=ByteBuffer.allocateDirect(Math.toIntExact(data.bytes())).order(ByteOrder.LITTLE_ENDIAN);out.asIntBuffer().put(tables.words);return out;}
         void initialize(ByteBuffer arena){arena.duplicate().position(Math.toIntExact(data.offset())).put(bytes());}

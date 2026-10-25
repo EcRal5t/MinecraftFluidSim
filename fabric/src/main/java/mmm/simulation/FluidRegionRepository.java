@@ -20,7 +20,7 @@ final class FluidRegionRepository implements RegionRepository {
 		FluidRegion region = regions.region(regionId);
 		if (region == null) return Capture.unavailable(CaptureStatus.REGION_NOT_FOUND);
 		if (!region.solverLoaded()) return Capture.unavailable(CaptureStatus.REGION_NOT_LOADED);
-		return Capture.ready(region.solverGeneration(), region.domain().captureAuthoritativeState());
+		return Capture.ready(region.solverGeneration(), region.captureSolverState());
 	}
 
 	@Override public RegionStepStatus adoptMotion(
@@ -56,7 +56,7 @@ final class FluidRegionRepository implements RegionRepository {
 				|| candidateGeneration != Math.addExact(region.solverGeneration(), 1L)) {
 			return RegionStepStatus.STALE_GENERATION;
 		}
-		return candidateLayout.equals(region.domain().authoritativeLayout())
+		return candidateLayout.equals(region.solverLayout())
 				? null : RegionStepStatus.LAYOUT_MISMATCH;
 	}
 }

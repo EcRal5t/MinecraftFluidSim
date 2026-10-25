@@ -20,10 +20,15 @@ final class VulkanRegionThermal implements AutoCloseable {
         static Configuration fromMaterials(List<ThermalMaterialDefinition> liquid,List<ThermalMaterialDefinition> gas,
                 List<ThermalMaterialDefinition> granular,List<ThermalMaterialDefinition> coherent,
                 double cellSize,double[] bathTemperatures,int contactCapacity) {
+            return fromMaterials(liquid,gas,granular,coherent,List.of(),cellSize,bathTemperatures,contactCapacity);
+        }
+        static Configuration fromMaterials(List<ThermalMaterialDefinition> liquid,List<ThermalMaterialDefinition> gas,
+                List<ThermalMaterialDefinition> granular,List<ThermalMaterialDefinition> coherent,List<ThermalMaterialDefinition> devices,
+                double cellSize,double[] bathTemperatures,int contactCapacity) {
             var all=new ArrayList<ThermalMaterialDefinition>();
-            int[] l=append(all,liquid),g=append(all,gas),p=append(all,granular),c=append(all,coherent);
+            int[] l=append(all,liquid),g=append(all,gas),p=append(all,granular),c=append(all,coherent),d=append(all,devices);
             return new Configuration(VulkanThermalConduction.Tables.fromMaterials(all),
-                    new VulkanThermalContacts.Materials(l,g,p,c,all.stream().mapToDouble(ThermalMaterialDefinition::conductivityWPerMeterK).toArray()),
+                    new VulkanThermalContacts.Materials(l,g,p,c,d,all.stream().mapToDouble(ThermalMaterialDefinition::conductivityWPerMeterK).toArray()),
                     cellSize,bathTemperatures,contactCapacity);
         }
         private static int[] append(List<ThermalMaterialDefinition> all,List<ThermalMaterialDefinition> values){
@@ -35,12 +40,12 @@ final class VulkanRegionThermal implements AutoCloseable {
         ContactCapacityGrowth(int required,int baths){super("Thermal contacts require "+required+" entries and "+baths+" bath entries");this.required=required;this.baths=baths;}
     }
     record Layout(VulkanThermalContacts.Inputs input,VulkanThermalConduction.Layout conduction,
-                  VulkanThermalContacts.Layout contacts,VulkanEnergyLedger.Layout reservoir,long endOffset) {
-        void initialize(ByteBuffer arena){conduction.initializeHeaderAndTables(arena);contacts.initializeHeaderAndTables(arena);reservoir.initializeHeader(arena);}
+                  VulkanThermalContacts.Layout contacts,VulkanEnergyLedger.Layout reservoir,VulkanEnergyLedger.Layout roundoff,long endOffset) {
+        void initialize(ByteBuffer arena){conduction.initializeHeaderAndTables(arena);contacts.initializeHeaderAndTables(arena);reservoir.initializeHeader(arena);roundoff.initializeHeader(arena);}
         List<VulkanGasThermodynamics.TableChunk> headers(){return List.of(
                 new VulkanGasThermodynamics.TableChunk(conduction.header.offset(),conduction.headerBytes()),
                 new VulkanGasThermodynamics.TableChunk(contacts.header.offset(),contacts.headerBytes()),
-                new VulkanGasThermodynamics.TableChunk(reservoir.header().offset(),reservoir.headerBytes()));}
+                new VulkanGasThermodynamics.TableChunk(reservoir.header().offset(),reservoir.headerBytes()),new VulkanGasThermodynamics.TableChunk(roundoff.header().offset(),roundoff.headerBytes()));}
         List<VulkanGasThermodynamics.TableChunk> tables(){var chunks=new ArrayList<>(conduction.tableChunks());chunks.addAll(contacts.tableChunks());return chunks;}
         List<VulkanLiquidStateLayout.Column> persistentColumns(){
             var columns=new ArrayList<VulkanLiquidStateLayout.Column>();
@@ -55,7 +60,14 @@ final class VulkanRegionThermal implements AutoCloseable {
         var conduction=VulkanThermalConduction.layout(input.owners(),input.terms(),contacts,config.tables(),base,alignment,baths);
         var sampling=VulkanThermalContacts.layout(input,config.materials(),conduction,conduction.endOffset(),alignment);
         var reservoir=VulkanEnergyLedger.layout(List.of(stream(conduction,VulkanThermalConduction.Field.RESERVOIR_CHANGE,1)),sampling.endOffset(),alignment);
-        return new Layout(input,conduction,sampling,reservoir,reservoir.endOffset());
+        var roundoff=VulkanEnergyLedger.layout(List.of(stream(conduction,VulkanThermalConduction.Field.ENERGY_CHANGE,1),stream(conduction,VulkanThermalConduction.Field.RESERVOIR_CHANGE,-1)),reservoir.endOffset(),alignment);
+        return new Layout(input,conduction,sampling,reservoir,roundoff,roundoff.endOffset());
+    }
+    static Layout currentGas(Layout layout,VulkanGasThermodynamics.Layout eos,VulkanGasGeometry.Layout geometry,long alignment){
+        var i=layout.input();var input=new VulkanThermalContacts.Inputs(i.liquid(),i.liquidThermal(),i.gas(),eos,geometry,i.granular(),i.granularThermal(),
+                i.coherent(),i.coherentThermal(),i.device(),i.deviceThermal(),i.fixedMasksWord(),i.bathTemperaturesWord(),i.openFaceFractionsWord(),i.cellSize());
+        var contacts=VulkanThermalContacts.layout(input,layout.contacts().materials,layout.conduction(),layout.contacts().header.offset(),alignment);
+        return new Layout(input,layout.conduction(),contacts,layout.reservoir(),layout.roundoff(),layout.endOffset());
     }
     private static VulkanEnergyLedger.Stream stream(VulkanThermalConduction.Layout l,VulkanThermalConduction.Field field,int sign){
         return new VulkanEnergyLedger.Stream(1,l.word(field),l.column(field).count(),2,sign);
@@ -66,19 +78,22 @@ final class VulkanRegionThermal implements AutoCloseable {
     private final VulkanThermalContacts contacts;
     private final VulkanThermalConduction conduction;
     private final VulkanPressureKernel pressure;
+    private final VulkanEnergyLedger deviceLedger;
     private VulkanStageTimings timings;
     VulkanRegionThermal(VulkanDeviceContext context){
         try{caloric=own(new VulkanLiquidThermodynamics(context));gasEOS=own(new VulkanGasThermodynamics(context));
-            contacts=own(new VulkanThermalContacts(context));conduction=own(new VulkanThermalConduction(context));pressure=own(new VulkanPressureKernel(context,4096));
+            contacts=own(new VulkanThermalContacts(context));conduction=own(new VulkanThermalConduction(context));pressure=own(new VulkanPressureKernel(context,4096));deviceLedger=own(new VulkanEnergyLedger(context));
             if(Boolean.getBoolean("mmm.gpuMechanicalStages")&&context.hasTimestampQueries())timings=own(new VulkanStageTimings(context,384));
         }catch(RuntimeException|Error failure){try{close();}catch(RuntimeException closing){failure.addSuppressed(closing);}throw failure;}
     }
     private <T extends AutoCloseable>T own(T resource){owned.add(resource);return resource;}
     /** Leaves the candidate open for its remaining phases and the single request commit. */
-    int execute(VulkanRegionStorage.Candidate candidate,Layout l,double duration){
+    int execute(VulkanRegionStorage.Candidate candidate,Layout l,double duration){return execute(candidate,l,duration,null,null,false);}
+    int execute(VulkanRegionStorage.Candidate candidate,Layout l,double duration,VulkanThermalDeviceLayout sourceDevices,VulkanThermalDeviceLayout.Settlement settlement,boolean continuation){
         var status=candidate.continueBatch((command,in,out,errors,staging,stack)->{
             var arena=new FlipKernelBindings.BufferRange(out);var err=new FlipKernelBindings.BufferRange(errors);
             caloric.rebindRanges(arena,err);gasEOS.rebindRanges(arena,err);contacts.rebindRanges(arena,err);
+            deviceLedger.rebindRanges(new FlipKernelBindings.BufferRange(in),arena,err);
             conduction.rebindRanges(arena,err);pressure.rebindRanges(l.conduction().pressureRanges(arena,err));
             if(timings!=null)timings.reset(command);
             timed(command,"thermal-caloric",()->{
@@ -86,6 +101,7 @@ final class VulkanRegionThermal implements AutoCloseable {
                 caloric.record(command,l.input().liquidThermal());
                 if(l.input().granular()!=null)caloric.record(command,l.input().granularThermal());
                 if(l.input().coherent()!=null)caloric.record(command,l.input().coherentThermal());
+                if(l.input().device()!=null)caloric.record(command,l.input().deviceThermal());
                 if(l.input().gas()!=null){gasEOS.recordVolumes(command,l.input().gasThermal(),l.input().gasGeometry());gasEOS.record(command,l.input().gasThermal());}
             });
             timed(command,"thermal-contacts",()->contacts.recordPrepare(command,l.contacts()));
@@ -104,6 +120,12 @@ final class VulkanRegionThermal implements AutoCloseable {
         status=candidate.continueBatch((command,in,out,errors,staging,stack)->{
             timed(command,"thermal-finish",()->conduction.recordFinish(command,l.conduction(),duration));
             timed(command,"thermal-publish",()->contacts.recordPublish(command,l.contacts()));
+            if(l.input().device()!=null)l.input().device().recordSettle(command,sourceDevices,settlement,deviceLedger,out,continuation);
+            caloric.record(command,l.input().liquidThermal());
+            if(l.input().granular()!=null)caloric.record(command,l.input().granularThermal());
+            if(l.input().coherent()!=null)caloric.record(command,l.input().coherentThermal());
+            if(l.input().device()!=null)caloric.record(command,l.input().deviceThermal());
+            if(l.input().gas()!=null){gasEOS.recordVolumes(command,l.input().gasThermal(),l.input().gasGeometry());gasEOS.record(command,l.input().gasThermal());}
         },0,0);
         if(timings!=null){
             for(var sample:timings.read())System.out.printf("mechanical_kernel=%s gpu_ms=%.3f%n",sample.stage(),sample.milliseconds());

@@ -14,15 +14,23 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 final class MinecraftCollisionWorldPort implements CollisionWorldPort {
 	private static final double SAMPLE_INSET = 1.0E-5;
 	private final ServerLevel level;
-	private final mmm.fluid.FluidDomain previous;
+	private final java.util.function.IntPredicate availableCell;
+	private final java.util.function.IntUnaryOperator previousMask;
 
 	MinecraftCollisionWorldPort(ServerLevel level) {
-		this(level, null);
+		this(level, (mmm.fluid.FluidDomain)null);
 	}
 
 	MinecraftCollisionWorldPort(ServerLevel level, mmm.fluid.FluidDomain previous) {
 		this.level = java.util.Objects.requireNonNull(level, "level");
-		this.previous = previous;
+		this.availableCell = previous==null?null:previous::groupAvailable;
+		this.previousMask = previous==null?null:cell->previous.solidMicroMask(cell%previous.sizeX(),cell/previous.sizeX()%previous.sizeY(),cell/(previous.sizeX()*previous.sizeY()));
+	}
+
+	MinecraftCollisionWorldPort(ServerLevel level, FluidRegion region) {
+		this.level = java.util.Objects.requireNonNull(level);
+		this.availableCell = region::groupAvailable;
+		this.previousMask = cell->region.solidMicroMask(cell%region.sizeX(),cell/region.sizeX()%region.sizeY(),cell/(region.sizeX()*region.sizeY()));
 	}
 
 	@Override public CollisionField capture(CollisionRegion region) {
@@ -51,8 +59,8 @@ final class MinecraftCollisionWorldPort implements CollisionWorldPort {
 								int cellY = blockY * region.cellsPerBlock() + localY;
 								int cellZ = blockZ * region.cellsPerBlock() + localZ;
 								masks[(cellZ * region.cellsY() + cellY) * region.cellsX() + cellX] =
-										previous != null && (!available || !previous.groupAvailable((cellZ * region.cellsY() + cellY) * region.cellsX() + cellX))
-                                        ? (byte) previous.solidMicroMask(cellX, cellY, cellZ)
+										previousMask != null && (!available || !availableCell.test((cellZ * region.cellsY() + cellY) * region.cellsX() + cellX))
+                                        ? (byte) previousMask.applyAsInt((cellZ * region.cellsY() + cellY) * region.cellsX() + cellX)
                                         : full ? (byte) 0xff : blockMasks[(localZ * region.cellsPerBlock() + localY)
 												* region.cellsPerBlock() + localX];
 							}

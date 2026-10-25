@@ -74,7 +74,7 @@ final class FabricFluidQueryApi implements MmmQueryApi {
 		int cellZ = (int) Math.floor((request.worldZMetres() - owner.origin().getZ()) / h);
 		FluidCellInventoryView view;
 		try {
-			view = owner.domain().observeCellInventory(cellX, cellY, cellZ);
+			view = owner.observeCellInventory(cellX, cellY, cellZ);
 		} catch (IllegalArgumentException | IllegalStateException unavailable) {
 			return absent(FluidQueryStatus.STATE_NOT_READY, "authoritative cell state is not observable: "
 					+ unavailable.getMessage());

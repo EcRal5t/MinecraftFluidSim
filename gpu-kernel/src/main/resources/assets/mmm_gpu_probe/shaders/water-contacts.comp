@@ -1,0 +1,56 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) readonly buffer Source { uint words[]; };
+layout(binding=1,std430) buffer Projection { uint outWords[]; };
+layout(push_constant) uniform Params { int stage;int count;int unused;int unused2; } p;
+int h(int i){return int(outWords[i]);}double num(int a){return packDouble2x32(uvec2(words[a],words[a+1]));}
+double derived(int a){return packDouble2x32(uvec2(outWords[a],outWords[a+1]));}void store(int a,double x){uvec2 bits=unpackDouble2x32(x);outWords[a]=bits.x;outWords[a+1]=bits.y;}
+int64_t integer(int a){return int64_t(uint64_t(words[a])|(uint64_t(words[a+1])<<32));}
+ivec3 coord(int c){return ivec3(c%h(0),c/h(0)%h(1),c/(h(0)*h(1)));}
+dvec4 plane(int c){return dvec4(num(h(12)+8*c),num(h(12)+8*c+2),num(h(12)+8*c+4),num(h(12)+8*c+6));}
+double liquid(int c,int k){return num(h(13)+2*(4*c+k));}
+double fraction(dvec3 n,double offset){
+ double scale=max(abs(n.x),max(abs(n.y),abs(n.z)));if(scale==0.0)return offset>=0.0?1.0:0.0;
+ dvec3 q=n/scale,w=abs(q);double t=offset/scale-dot(min(q,dvec3(0.0)),dvec3(1.0));
+ if(w.x>w.y){double v=w.x;w.x=w.y;w.y=v;}if(w.y>w.z){double v=w.y;w.y=w.z;w.z=v;}if(w.x>w.y){double v=w.x;w.x=w.y;w.y=v;}
+ double total=w.x+w.y+w.z;if(t<=0.0)return 0.0;if(t>=total)return 1.0;bool complement=t>.5*total;if(complement)t=total-t;
+ double a=w.x,b=w.y,c=w.z,f;if(b==0.0)f=t/c;else if(a==0.0)f=t<=b?(t/b)*(t/c)*.5:(t-.5*b)/c;
+ else if(t<=a)f=(t/a)*(t/b)*(t/c)/6.0;else if(t<=b)f=(3.0*t*(t-a)+a*a)/(6.0*b*c);else if(t>=a+b)f=(t-.5*(a+b))/c;
+ else{double u=t-b,v=max(0.0,t-c);f=(3.0*t*(t-a)+a*a-(u*u*u+v*v*v)/a)/(6.0*b*c);}return clamp(complement?1.0-f:f,0.0,1.0);
+}
+double below(int c,double y,dvec4 plic,double pore){double volume=0.0;uint mask=words[h(11)+c];for(int bit=0;bit<8;bit++)if((mask&(1u<<bit))==0u){
+ dvec3 lo=.5*dvec3(bit&1,(bit>>1)&1,(bit>>2)&1),extent=dvec3(.5);extent.y=clamp(y-lo.y,0.0,.5);volume+=extent.x*extent.y*extent.z*fraction(plic.xyz*extent,plic.w-dot(plic.xyz,lo))*pore;
+ }return volume;}
+double layer(int c,double v,dvec4 plic,double pore){if(v<=0.0)return 0.0;if(v>=liquid(c,0))return 1.0;double low=0.0,high=1.0;
+ for(int i=0;i<16;i++){double mid=.5*(low+high);if(below(c,mid,plic,pore)<v)low=mid;else high=mid;}return .5*(low+high);}
+void ranges(int index){int c=int(outWords[h(15)+index]);double water=0.0,mass=0.0,denser=0.0;int first=int(words[h(6)+c]),last=int(words[h(6)+c+1]);
+ for(int row=first;row<last;row++)if(int(words[h(7)+row])==h(3)){water+=num(h(9)+2*row);mass+=double(integer(h(10)+2*row))*1e-10;}
+ if(water==0.0){store(h(16)+4*index,0.0);store(h(16)+4*index+2,0.0);return;}double density=mass/water;
+ for(int row=first;row<last;row++)if(int(words[h(7)+row])!=h(3)){double v=num(h(9)+2*row);if(v>0.0&&double(integer(h(10)+2*row))*1e-10/v>density)denser+=v;}
+ double open=double(bitCount((~words[h(11)+c])&255u))*.125,pore=open>0.0?liquid(c,2)/open:0.0;dvec4 plic=plane(c);
+ store(h(16)+4*index,layer(c,denser,plic,pore));store(h(16)+4*index+2,layer(c,denser+water,plic,pore));
+}
+int clip(inout dvec2 polygon[12],int count,dvec3 plic){if(count==0)return 0;dvec2 result[12],previous=polygon[count-1];double previousDistance=dot(plic.xy,previous)-plic.z;int next=0;
+ for(int i=0;i<count;i++){dvec2 current=polygon[i];double distance=dot(plic.xy,current)-plic.z;if((distance<=0.0)!=(previousDistance<=0.0))result[next++]=mix(previous,current,previousDistance/(previousDistance-distance));if(distance<=0.0)result[next++]=current;previous=current;previousDistance=distance;}
+ for(int i=0;i<next;i++)polygon[i]=result[i];return next;}
+void contact(int id){int index=id/255,support=id%255+1,c=int(outWords[h(15)+index]),stock=-1;
+ double lower=derived(h(16)+4*index),upper=derived(h(16)+4*index+2);if(upper<=lower)return;
+ for(int row=int(words[h(6)+c]);row<int(words[h(6)+c+1]);row++)if(int(words[h(7)+row])==h(3)&&int(words[h(8)+row])==support){stock=row;break;}if(stock<0)return;
+ ivec3 q=coord(c);dvec4 plic=plane(c);double open=double(bitCount((~words[h(11)+c])&255u))*.125,pore=open>0.0?liquid(c,2)/open:0.0,area=0.0;
+ for(int face=0;face<h(4);face++){
+  int at=h(14)+12*face,axis=int(outWords[at]),side=int(outWords[at+1]),a=(axis+1)%3,b=(axis+2)%3;double position=derived(at+2);int normal=side>0?int(floor(position)):int(ceil(position))-1;
+  if(q[axis]!=normal)continue;double local=position-double(normal);int normalMicro=side>0?int(floor(2.0*local)):int(ceil(2.0*local))-1;
+  double minA=derived(at+4)-double(q[a]),maxA=derived(at+6)-double(q[a]),minB=derived(at+8)-double(q[b]),maxB=derived(at+10)-double(q[b]);
+  for(int bit=0;bit<8;bit++)if((support&(1<<bit))!=0&&((bit>>axis)&1)==normalMicro&&(words[h(11)+c]&(1u<<bit))==0u){
+   dvec3 origin=.5*dvec3(bit&1,(bit>>1)&1,(bit>>2)&1);double loA=max(origin[a],minA),hiA=min(origin[a]+.5,maxA),loB=max(origin[b],minB),hiB=min(origin[b]+.5,maxB);if(hiA<=loA||hiB<=loB)continue;
+   dvec2 polygon[12];polygon[0]=dvec2(loA,loB);polygon[1]=dvec2(hiA,loB);polygon[2]=dvec2(hiA,hiB);polygon[3]=dvec2(loA,hiB);int count=clip(polygon,4,dvec3(plic[a],plic[b],plic.w-plic[axis]*local));
+   dvec3 unit=dvec3(0.0);unit.y=1.0;count=clip(polygon,count,dvec3(unit[a],unit[b],upper-unit[axis]*local));count=clip(polygon,count,dvec3(-unit[a],-unit[b],-lower+unit[axis]*local));
+   double selected=0.0;for(int k=1;k+1<count;k++){dvec2 u=polygon[k]-polygon[0],v=polygon[k+1]-polygon[0];selected+=u.x*v.y-u.y*v.x;}area+=abs(selected)*.5*pore;
+  }
+ }
+ if(area<=0.0)return;int slot=int(atomicAdd(outWords[h(18)],1u)),at=h(17)+8*slot;outWords[at]=uint(c);outWords[at+1]=uint(support);outWords[at+2]=uint(h(3));outWords[at+3]=0u;
+ double size=derived(32);store(at+4,area*size*size);store(at+6,num(h(9)+2*stock)*derived(34));
+}
+void main(){int id=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128+gl_LocalInvocationID.x);if(id>=p.count)return;if(p.stage==0)ranges(id);else contact(id);}

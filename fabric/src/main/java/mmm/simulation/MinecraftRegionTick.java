@@ -102,7 +102,7 @@ final class MinecraftRegionTick {
 		}
 		boolean motionStepDue = tickPlan.axis() == RegionTickUseCase.Axis.MOTION;
 		ThermalAuditLedger thermalBefore = profile.hasCapability(WorldCapability.THERMAL)
-				? region.domain().thermalAudit() : null;
+				? region.thermalAudit() : null;
 		FluidDomain.ThermalAxisStats completedThermalAxis = null;
 		GranularDepositDynamics.Stats completedGranularTransition = NO_GRANULAR_TRANSITION;
 		FluidDomain.StepStats completedMotion = null;
@@ -155,16 +155,16 @@ final class MinecraftRegionTick {
 		applyRuntime(region, tickRuntime, pacing.runtime(), elapsedMilliseconds);
 		boolean autoPause = pacing.autoPause();
 		FluidDomain.StepStats stats = region.lastStats();
-		float residualLimit = Math.max(1.0E-5F, region.domain().config().pressureTolerance() * 4.0F);
+		float residualLimit = Math.max(1.0E-5F, region.solverConfig().pressureTolerance() * 4.0F);
 		boolean hydrostaticCandidate = !collisionsChanged && affectedEntities == 0 && !thermalRequiresMotion
-				&& !region.domain().gasBoundary().hasPressureDrivenFlow()
-				&& region.domain().maximumParticleSpeed() <= HYDROSTATIC_MAX_MARKER_SPEED
-				&& region.domain().granularReadyForHydrostaticSleep()
+				&& !region.gasPressureFlow()
+				&& region.maximumSpeed() <= HYDROSTATIC_MAX_MARKER_SPEED
+				&& region.granularQuiet()
 				&& stats != null && stats.pressureResidual() <= residualLimit;
 		if (motionStepDue && region.lifecycle().observeCompletedStep(hydrostaticCandidate, HYDROSTATIC_QUIET_STEPS)) {
-			float exactVolume = region.domain().totalVolume();
-			int markerCount = region.domain().particleCount();
-			MmmMod.LOGGER.info("Region {} entered hydrostatic sleep with {} markers and {} exact cell volume",
+			double exactVolume = region.liquidVolume();
+			int markerCount = region.liquidRowCount();
+			MmmMod.LOGGER.info("Region {} entered hydrostatic sleep with {} liquid stocks and {} exact cell volume",
 					region.id(), markerCount, exactVolume);
 		}
 		if (autoPause) {
@@ -345,8 +345,7 @@ final class MinecraftRegionTick {
 			FluidDomain.ThermalAxisStats thermalAxis,
 			GranularDepositDynamics.Stats granularTransition
 	) {
-		FluidDomain domain = region.domain();
-		ThermalAuditLedger after = domain.thermalAudit();
+		ThermalAuditLedger after = region.thermalAudit();
 		boolean gasActivity = !after.externalSource().equals(before.externalSource())
 				|| !after.externalSink().equals(before.externalSink())
 				|| !after.mechanicalWork().equals(before.mechanicalWork())
@@ -359,8 +358,8 @@ final class MinecraftRegionTick {
 				|| granularTransition.dirtyColumns() != 0);
 		boolean phaseDirty = thermalAxis.condensedPhase().operations() != 0
 				|| thermalAxis.gasPhase().operations() != 0;
-		boolean auditClosed = domain.exactInternalEnergy().equals(after.expectedInventory());
-		boolean pendingVolumeOrWork = domain.hasPendingPhaseMotionWork();
+		boolean auditClosed = region.thermalAuditClosed();
+		boolean pendingVolumeOrWork = region.hasPendingPhaseMotionWork();
 		ThermalActivity.Observation observation = new ThermalActivity.Observation(thermalAxis.transport(),
 				chemistryDirty, granularDirty, phaseDirty, thermalAxis.massTransfer().active(), gasActivity, carrierMotion,
 				pendingVolumeOrWork, auditClosed);

@@ -107,6 +107,38 @@ public final class GpuThermalContactsBenchmark {
                     var finalBody=exported.inventory().devices().getFirst().body();if(finalBody.generation()!=warm+samples)throw new AssertionError("Device generation did not advance once per request");
                     System.out.printf("device_U_before=%.9g after=%.9g generation=%d exact_audit_closed=true%n",deviceInitialU,finalBody.internalEnergyJ(),finalBody.generation());}
             }
+            var fluids=new mmm.fluid.FluidMaterialRegistry(List.of(mmm.fluid.BuiltinFluidMaterials.WATER,mmm.fluid.BuiltinFluidMaterials.OIL));
+            var constitutive=mmm.fluid.BuiltinFluidMaterials.createRegistry();
+            var mechanical=new VulkanLiquidRegion.MechanicalDefinitions(2*cells,0,8*cells,8,-40,new int[]{0,1},new long[]{0},
+                    new double[]{4200*293.15,4200*293.15},new double[]{0,0},1,liquidThermal.tables(),VulkanLiquidViscosity.tables(fluids,constitutive),
+                    VulkanLiquidForces.tables(fluids,constitutive),VulkanSurfaceTension.tables(fluids),true);
+            var ambient=new mmm.fluid.air.GasRegistry(definitions.gas().components(),List.of(
+                    new mmm.fluid.air.GasRegistry.AmbientFraction(mmm.fluid.air.BuiltinGasDefinitions.NITROGEN,mmm.chemistry.ExactRational.parse(".7")),
+                    new mmm.fluid.air.GasRegistry.AmbientFraction(mmm.fluid.air.BuiltinGasDefinitions.OXYGEN,mmm.chemistry.ExactRational.parse(".3"))));
+            var gasConfig=VulkanLiquidRegion.GasConfiguration.forState(gas.exportState(initial),gasTables,h,true,VulkanGasRemap.ambientTables(ambient,gas.definitions(),293.15));
+            var granularConfig=new VulkanGranularStateLayout.Configuration(solid.exportState(initial),mmm.granular.BuiltinGranularDefinitions.createRegistry(),solidThermal.tables(),new double[]{800*293.15},new double[]{0},1,8);
+            var coherentConfig=new VulkanCoherentStateLayout.Configuration(coherent.definitions(),coherentGroups,coherentThermal.tables(),new double[]{450*293.15},new double[]{0},1);
+            var deviceConfig=new VulkanThermalDeviceLayout.Configuration(devices.definitions(),deviceInitial,deviceThermal.tables(),new double[]{385*293.15});
+            double[] baths=new double[6*cells];for(int i=0;i<baths.length;i++)baths[i]=initial.getDouble(Math.toIntExact(bath.offset()+8L*i));
+            var thermalConfig=new VulkanRegionThermal.Configuration(tables,mapping,h,baths,1);
+            try(var projection=new VulkanLiquidProjection(context);var multigrid=new VulkanPressureMultigrid(context);
+                var region=new VulkanLiquidRegion(context,liquidGeometry,projection,pressure,multigrid,inventory,fixture.momentum(),fixture.fixed(),fixture.occupied(),mechanical,gasConfig,granularConfig,thermalConfig,coherentConfig,deviceConfig)){
+                var audit=mmm.thermal.ThermalAuditLedger.initialized(mmm.units.SignedDyadic.sum(Arrays.stream(inventory.energyBits()).mapToDouble(Double::longBitsToDouble).toArray())
+                        .add(mmm.units.SignedDyadic.sum(gasConfig.initial().nodeEnergy())).add(mmm.units.SignedDyadic.sum(granularConfig.initial().particles().stream().mapToDouble(p->p.inventory().internalEnergy()).toArray()))
+                        .add(mmm.units.SignedDyadic.sum(granularConfig.initial().deposits().stream().mapToDouble(d->d.inventory().internalEnergy()).toArray())).add(mmm.units.SignedDyadic.sum(coherentGroups.stream().mapToDouble(mmm.thermal.CoherentPhaseStore.Group::internalEnergy).toArray())));
+                for(int step=0;step<warm+samples;step++)try(var source=region.captureState();var prepared=region.prepareThermal(source,.05);var after=prepared.captureState()){
+                    if(source.generation()!=step||after.generation()!=step+1)throw new AssertionError("Private thermal generation differs from its request");
+                    audit=after.thermalPosting().apply(audit);prepared.commit();
+                    // The candidate view remains the next committed source without materializing CPU inventory.
+                    if(after.generation()!=step+1)throw new AssertionError("Committed thermal capture changed generation");
+                }
+                var deviceResult=region.checkpointDevices().inventory().devices().getFirst().body();var solidResult=region.checkpointCoherent();
+                try(var result=region.captureState()){var liquids=result.liquid().inventory();var grains=result.granular();var gases=result.gas();
+                    var owners=new mmm.thermal.ThermalOwnerSnapshot("0".repeat(64),293.15,grains.particles().stream().mapToDouble(p->p.inventory().internalEnergy()).toArray(),grains.depositEnergy(),gases.nodeEnergy(),solidResult,audit);
+                    owners.requireClosed(mmm.units.SignedDyadic.sum(Arrays.stream(liquids.energyBits()).mapToDouble(Double::longBitsToDouble).toArray()),cells);}
+                if(deviceResult.generation()!=warm+samples)throw new AssertionError("Region device request generation differs");
+                System.out.printf("region_thermal_steps=%d device_U=%.9g device_generation=%d coherent_groups=%d exact_audit_closed=true%n",warm+samples,deviceResult.internalEnergyJ(),deviceResult.generation(),solidResult.size());
+            }
         }
     }
     private static void prepareSolids(VulkanRegionStorage storage,VulkanCoherentGeometry coherentKernel,VulkanGranularGeometry granularKernel,

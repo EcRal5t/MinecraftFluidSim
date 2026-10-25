@@ -37,7 +37,8 @@ public final class FluidMaterialRenderSnapshot {
     int cells = Math.multiplyExact(Math.multiplyExact(sx, sy), sz);
     this.materialFractions = copyFields(materialFractions, materials.size(), cells);
     this.phaseFractions = copyFields(phaseFractions, phases.size(), cells);
-    for (var piece : geometry.pieces())
+    if(geometry.pieces() instanceof CompactFluidSurface compact)compact.validatePalette(materials.size(),phases.size(),null);
+    else for (var piece : geometry.pieces())
       if (piece.material() >= materials.size() || piece.phase() >= phases.size())
         throw new IllegalArgumentException("Display geometry palette differs");
   }

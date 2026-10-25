@@ -29,7 +29,7 @@ double oldMass(int c){return c<0?0.0:double(mass(h(9)+4*c));}
 void faceTerms(int index){
     int axis=index<base(1)?0:index<base(2)?1:2,local=index-base(axis);
     double m=value(h(8)+8*index),u=value(h(8)+8*index+2),momentum=oldValue(src(16+axis)+2*local);
-    store(h(20)+4*index,m>0.0?.5*momentum*(momentum/m):0.0);
+    store(h(20)+4*index,h(102)>=0?value(h(102)+2*index):m>0.0?.5*momentum*(momentum/m):0.0);
     store(h(20)+4*index+2,-.5*m*u*u);
 }
 void potentialTerms(int stock){
@@ -71,7 +71,11 @@ void vertex(int index){
         }
         if(h(18)>=0)exchange=add(exchange,-value(h(18)+2*index));
         if(h(19)>=0)exchange=add(exchange,value(h(19)+2*index));
-    }else if(index<h(3)+h(83)){if(h(11)>=0){int gas=index-h(3);exchange=-dvec2(value(h(11)+4*gas),value(h(11)+4*gas+2));}}
+    }else if(index<h(3)+h(83)){
+        int gas=index-h(3);
+        if(h(11)>=0)exchange=-dvec2(value(h(11)+4*gas),value(h(11)+4*gas+2));
+        if(h(103)>=0)exchange=add(exchange,value(h(103)+2*gas));
+    }
     else{
         int particle=index-h(3)-h(83);
         if(particle<int(words[h(85)])){

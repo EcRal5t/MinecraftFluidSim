@@ -349,3 +349,40 @@ registerGpuProbe(
         providers.gradleProperty('gpuCapacityRounds').getOrElse('512')
     probeTask.jvmArgs '-Xmx1g'
 }
+
+registerGpuProbe(
+    'runGpuLiquidReactionsValidation',
+    'Runs continuous resident liquid reaction commits with exact species and energy inventory.',
+    'mmm.gpuprobe.GpuLiquidReactionsValidation',
+    'gpu-liquid-reactions-work'
+) { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+}
+
+registerGpuProbe(
+    'runGpuGranularTransitionsBenchmark',
+    'Runs continuous resident settlement, slope relaxation, shear wake and canonical stock reconstruction.',
+    'mmm.gpuprobe.GpuGranularTransitionsBenchmark',
+    'gpu-granular-transitions-work'
+) { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+}
+
+registerGpuProbe(
+    'runGpuEntityBodyCouplingBenchmark',
+    'Runs prescribed overlapping body geometry, analytic pressure load, viscous shear, reaction and external work.',
+    'mmm.gpuprobe.GpuEntityBodyCouplingBenchmark',
+    'gpu-entity-body-work'
+) { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+}
+
+registerGpuProbe('runGpuResidentStateValidation', 'Runs production state cold import, private adoption and exact checkpoint.',
+    'mmm.gpuprobe.GpuResidentStateValidation', 'gpu-resident-state-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+}
+
+registerGpuProbe('runGpuSolidLiquidReactionsValidation', 'Executes conservative GPU solid/liquid chemistry with momentum and energy settlement.',
+    'mmm.gpuprobe.GpuSolidLiquidReactionsValidation', 'gpu-solid-liquid-reactions-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+}

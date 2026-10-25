@@ -50,14 +50,14 @@ final class ThermalBoundaryResolver {
 
 	boolean refresh(ServerLevel level, FluidRegion region, int cellsPerBlock) {
 		if (level == null || region == null || cellsPerBlock <= 0
-				|| !region.solverLoaded() || !region.domain().hasThermalState()) return false;
-		int sizeX = region.domain().sizeX(), sizeY = region.domain().sizeY(), sizeZ = region.domain().sizeZ();
+				|| !region.solverLoaded() || !region.hasThermalState()) return false;
+		int sizeX = region.sizeX(), sizeY = region.sizeY(), sizeZ = region.sizeZ();
         double[] temperatures=sampleField(region.origin(), sizeX, sizeY, sizeZ, cellsPerBlock,
                 position -> MinecraftGroupAvailability.loaded(level,position) ? surfaceTemperature(level,position) : Double.NaN);
-        double[] previous=region.domain().thermalBoundaryTemperatures();
-        for(int cell=0;cell<sizeX*sizeY*sizeZ;cell++) if(!region.domain().groupAvailable(cell))
+        double[] previous=region.thermalBoundaryTemperatures();
+        for(int cell=0;cell<sizeX*sizeY*sizeZ;cell++) if(!region.groupAvailable(cell))
             for(int direction=0;direction<6;direction++) temperatures[cell*6+direction]=previous==null ? Double.NaN : previous[cell*6+direction];
-        return region.domain().replaceThermalBoundaryTemperatures(temperatures);
+        return region.replaceThermalBoundaryTemperatures(temperatures);
 	}
 
 	static double[] sampleField(BlockPos origin, int sizeX, int sizeY, int sizeZ, int cellsPerBlock,

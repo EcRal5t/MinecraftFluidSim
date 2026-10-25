@@ -10,9 +10,10 @@ uint readWord(int bank,int at){return bank==0?sourceWords[at]:words[at];}
 void addDouble(int index){
     int streamCount=int(words[p.header]);int at=0,coefficient=1,bank=0;
     for(int stream=0;stream<streamCount;stream++) {
-        int descriptor=p.header+1+6*stream,first=int(words[descriptor]),count=int(words[descriptor+1]);
+        int descriptor=p.header+1+7*stream,first=int(words[descriptor]),count=int(words[descriptor+1]);
         if(index<first||index>=first+count)continue;
-        bank=int(words[descriptor+2]);at=int(words[descriptor+3])+(index-first)*int(words[descriptor+4]);
+        bank=int(words[descriptor+2]);int live=int(words[descriptor+6]);if(live>=0&&index-first>=int(readWord(bank,live)))return;
+        at=int(words[descriptor+3])+(index-first)*int(words[descriptor+4]);
         coefficient=int(words[descriptor+5]);break;
     }
     uint low=readWord(bank,at),high=readWord(bank,at+1);int exponent=int((high>>20)&2047u);

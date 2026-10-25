@@ -92,7 +92,7 @@ public final class FarmlandMoistureOperations {
 			if(!level.hasChunkAt(position) || !MinecraftGroupAvailability.boxAvailable(region,new net.minecraft.world.phys.AABB(position).inflate(1))) continue;
 			var state=level.getBlockState(position);
 			if(state.is(Blocks.FARMLAND) && state.getValue(FarmlandBlock.MOISTURE)<7
-					&& !region.domain().waterContacts(faces(region,position)).isEmpty()) plots.add(position);
+					&& !region.waterContacts(faces(region,position)).isEmpty()) plots.add(position);
 		}
 		if(plots.isEmpty()) return true;
 		try {

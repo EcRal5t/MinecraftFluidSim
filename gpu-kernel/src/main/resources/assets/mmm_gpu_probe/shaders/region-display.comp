@@ -1,0 +1,36 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x=128)in;
+layout(binding=0,std430)readonly buffer Arena{uint w[];};
+layout(binding=1,std430)buffer Display{uint o[];};
+layout(push_constant)uniform Params{int count;int unused;double cellVolume;}p;
+int h(int i){return int(o[i]);}
+int64_t integer(int a){return int64_t(uint64_t(w[a])|(uint64_t(w[a+1])<<32));}
+double number(int a){return packDouble2x32(uvec2(w[a],w[a+1]));}
+uint temperature(double t){return uint(clamp(floor(t*16.0+.5),1.0,65534.0));}
+void main(){int c=int(gl_GlobalInvocationID.x);
+ if(c<h(0)){
+  int first=int(w[h(5)+c]),end=int(w[h(5)+c+1]);
+  if(h(1)>0){double top[4];int ids[4];for(int i=0;i<4;i++){top[i]=0.0;ids[i]=-1;}double total=0.0;
+   for(int s=0;s<h(1);s++){double amount=0.0;for(int r=first;r<end;r++)for(int e=int(w[h(8)+r]);e<int(w[h(8)+r+1]);e++)if(int(w[h(9)+e])==s)amount+=double(integer(h(10)+2*e));
+    total+=amount;if(amount<=0.0)continue;for(int i=0;i<4;i++)if(amount>top[i]){for(int j=3;j>i;j--){top[j]=top[j-1];ids[j]=ids[j-1];}top[i]=amount;ids[i]=s;break;}}
+   double buckets[5],rem[5];int q[5];double rest=total;for(int i=0;i<4;i++){buckets[i]=top[i];rest-=top[i];}buckets[4]=max(0.0,rest);int assigned=0;
+   for(int i=0;i<5;i++){double f=total>0.0?255.0*buckets[i]/total:0.0;q[i]=int(floor(f));assigned+=q[i];rem[i]=f-double(q[i]);}
+   for(int k=assigned;k<255&&total>0.0;k++){int best=0;for(int i=1;i<5;i++)if(rem[i]>rem[best])best=i;q[best]++;rem[best]=-1.0;}
+   int at=h(50)+4*c;o[at]=(uint(ids[0])&65535u)|(uint(ids[1])<<16);o[at+1]=(uint(ids[2])&65535u)|(uint(ids[3])<<16);
+   o[at+2]=uint(q[0])|(uint(q[1])<<8)|(uint(q[2])<<16)|(uint(q[3])<<24);o[at+3]=uint(q[4]);
+   for(int phase=0;phase<h(3);phase++){double volume=0.0,acid=0.0,base=0.0;
+    for(int r=first;r<end;r++){int table=int(o[h(54)+int(w[h(6)+r])]);if((table&65535)!=phase||(table&65536)==0)continue;volume+=number(h(7)+2*r)*p.cellVolume;
+     for(int e=int(w[h(8)+r]);e<int(w[h(8)+r+1]);e++){int species=int(w[h(9)+e]);if(species==h(11))acid+=double(integer(h(10)+2*e));if(species==h(12))base+=double(integer(h(10)+2*e));}}
+    uint ph=255u;if(volume>0.0){double strength=min(7.0,double(log(float(1.0+abs(acid-base)/(1e6*1e-3*volume))))/log(10.0));ph=uint(floor(10.0*(acid>=base?7.0-strength:7.0+strength)+.5));}o[h(51)+phase*h(0)+c]=ph;
+   }
+  }
+  if(h(20)>=0){double cv=number(h(21)+2*c),weighted=cv*number(h(20)+2*c),solid=0.0;
+   if(h(22)>=0)for(int e=int(w[h(22)+c]);e<int(w[h(22)+c+1]);e++){int r=int(w[h(23)+e]);double cap=number(h(25)+2*r);cv+=cap;weighted+=cap*number(h(24)+2*r);solid+=double(integer(h(26)+2*r));}
+   if(h(30)>=0)for(int e=int(w[h(30)+c]);e<int(w[h(30)+c+1]);e++){int entry=int(w[h(31)+e]);bool parcel=entry<8*h(32);int row=parcel?entry/8:h(32)+entry-8*h(32);double fraction=parcel?double(integer(h(34)+2*entry))/double(integer(h(33)+2*row)):1.0;double cap=number(h(36)+2*row)*fraction;cv+=cap;weighted+=cap*number(h(35)+2*row);}
+   uint flags=(cv>0.0?1u:0u)|(solid>0.0?2u:0u);o[h(52)+c]=(cv>0.0?temperature(weighted/cv):65535u)|(uint(clamp(floor(255.0*solid/16777216.0+.5),0.0,255.0))<<16)|(flags<<24);
+  }
+ }
+ if(h(40)>=0&&c<h(43)){int at=h(53)+3*c;if(c<int(w[h(40)])){o[at]=w[h(41)+c];o[at+1]=temperature(number(h(42)+18*c));o[at+2]=uint(int(clamp(floor((number(h(42)+18*c+2)-101325.0)/10.0+.5),-2147483648.0,2147483647.0)));}else{o[at]=0u;o[at+1]=0u;o[at+2]=0u;}}
+}

@@ -1,0 +1,253 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_shader_atomic_int64 : require
+layout(local_size_x=128)in;
+layout(binding=0,std430)buffer Arena{uint words[];};
+layout(binding=1,std430)buffer Errors{uint errors;};
+layout(binding=2,std430)buffer AtomicArena{int64_t integers[];};
+layout(push_constant)uniform Params{int header;int stage;int count;}p;
+const int PHASES=1,POROSITIES=2,HEAD=3,NEXT=4,CELL=5,LDENSE=6,GDENSE=7,LMASS=8,LU=9,LDELTA=10,LOLD=11,GOLD=12,GNEW=13,
+ LC=14,LO=15,LH=16,LA=17,GC=18,GO=19,GH=20,GA=21,TERMS=22,RESULTS=23,VC=24,VO=25,VL=26,DL=27,CONTROL=29,
+ OLD_MASS=30,NEW_MASS=31,PWORK=32,PHEAD=33,PNEXT=34,FACE_P=35,FACE_HEAT=36,WALL=37,FACE_K0=38,FACE_K1=39,GK0=40,GK1=41,PE0=42,PE1=43,GSOURCE_MASS=44,GWITHDRAWN=45;
+const int64_t LIMIT=int64_t(0x7fffffffffffffffUL);
+int h(int i){return int(words[p.header+i]);}int f(int i){return h(16+i);}int l(int i){return h(64+i);}int g(int i){return h(88+i);}int progress(int i){return h(120+i);}
+int d(int i){return int(words[h(4)+i]);}int th(int kind,int i){return int(words[h(kind==0?5:6)+i]);}
+int64_t integer(int a){return int64_t(uint64_t(words[a])|(uint64_t(words[a+1])<<32));}
+void integerAt(int a,int64_t q){words[a]=uint(q);words[a+1]=uint(uint64_t(q)>>32);}
+double number(int a){return packDouble2x32(uvec2(words[a],words[a+1]));}
+void numberAt(int a,double q){uvec2 b=unpackDouble2x32(q);words[a]=b.x;words[a+1]=b.y;}
+void invalid(){atomicOr(errors,33554432u);}
+int64_t add(int64_t a,int64_t b){if((b>0l&&a>LIMIT-b)||(b<0l&&a<-LIMIT-b)){invalid();return 0l;}return a+b;}
+int64_t mass(int kind,int row){return integer((kind==0?f(LMASS):g(5))+2*row);}
+int material(int kind,int row){return int(words[(kind==0?l(2):g(3))+row]);}
+int64_t species(int kind,int row,int s){return integer(f(kind==0?LDENSE:GDENSE)+2*(row*h(3)+s));}
+void speciesAt(int kind,int row,int s,int64_t q){integerAt(f(kind==0?LDENSE:GDENSE)+2*(row*h(3)+s),q);}
+bool same(int a,int b){return words[l(3)+a]==words[l(3)+b]&&words[f(PHASES)+int(words[l(2)+a])]==words[f(PHASES)+int(words[l(2)+b])];}
+u64vec2 product(uint64_t a,uint64_t b){uint64_t mask=uint64_t(0xffffffffu),a0=a&mask,a1=a>>32,b0=b&mask,b1=b>>32;
+ uint64_t low=a0*b0,t=a1*b0+(low>>32),middle=(t&mask)+a0*b1;return u64vec2((middle<<32)|(low&mask),a1*b1+(t>>32)+(middle>>32));}
+bool le(u64vec2 a,u64vec2 b){return a.y<b.y||(a.y==b.y&&a.x<=b.x);}
+int64_t portion(int64_t a,int64_t b,int64_t total){if(a==0l||b==0l)return 0l;if(b==total)return a;uint64_t q=min(uint64_t(a),uint64_t(floor(double(a)*(double(b)/double(total)))));u64vec2 target=product(uint64_t(a),uint64_t(b));
+ while(!le(product(q,uint64_t(total)),target))q--;while(q<uint64_t(a)&&le(product(q+1UL,uint64_t(total)),target))q++;return int64_t(q);}
+double rational(int at){int ns=d(at+1);if(ns==0)return 0.0LF;int dp=at+2+ns,ds=d(dp+1);double a=0.0,b=0.0;
+ for(int i=max(0,ns-2);i<ns;i++)a+=ldexp(double(uint(words[h(4)+at+2+i])),32*(i-max(0,ns-2)));
+ for(int i=max(0,ds-2);i<ds;i++)b+=ldexp(double(uint(words[h(4)+dp+2+i])),32*(i-max(0,ds-2)));
+ return ldexp(a/b,32*(max(0,ns-2)-max(0,ds-2)));}
+double specificCold(int kind,int row){int m=material(kind,row);return number(th(kind,3)+2*m)+number(th(kind,9)+2*m);}
+double reference(int kind,int row,int s){return number(th(kind,4)+2*(material(kind,row)*th(kind,2)+s));}
+double cold(int kind,int row){double result=double(mass(kind,row))*1e-10*specificCold(kind,row);
+ for(int s=0;s<h(3);s++){int64_t q=species(kind,row,s);if(q!=0l)result+=double(q)*reference(kind,row,s);}return result;}
+double capacity(int kind,int row,double t){int m=material(kind,row),at=int(words[th(kind,5)+m]),last=int(words[th(kind,5)+m+1])-1;
+ while(at<last&&t>=number(th(kind,6)+2*at))at++;return double(mass(kind,row))*1e-10*number(th(kind,7)+2*at);}
+double sensible(int kind,int row,double t){int m=material(kind,row),at=int(words[th(kind,5)+m]),last=int(words[th(kind,5)+m+1])-1;double lower=number(h(kind==0?5:6)+44),result=0.0;
+ for(;at<=last&&lower<t;at++){double upper=at==last?t:min(t,number(th(kind,6)+2*at));if(upper>lower){result+=(upper-lower)*number(th(kind,7)+2*at);lower=upper;}}
+ return double(mass(kind,row))*1e-10*result;}
+// DYADIC_LIBRARY
+uint dyadicWord(int bank,int at){return words[at];}void dyadicWrite(int at,uint x){words[at]=x;}
+void volumeTerms(int row,int64_t delta,out DyadicTerm items[7]){for(int i=0;i<7;i++)items[i]=DyadicTerm(1,0,0,0,0);
+ int begin=int(words[l(4)+row]),end=int(words[l(4)+row+1]);items[0]=DyadicTerm(1,l(7)+begin,end-begin,int(words[l(6)+row]),int(words[l(5)+row]));
+ if(delta!=0l){u64vec2 q=product(uint64_t(abs(delta)),uint64_t(integer(p.header+160)));int at=f(DL)+4*row;
+  words[at]=uint(q.x);words[at+1]=uint(q.x>>32);words[at+2]=uint(q.y);words[at+3]=uint(q.y>>32);int count=q.y!=0UL?(q.y>>32!=0UL?4:3):(q.x>>32!=0UL?2:1);
+  items[1]=DyadicTerm(1,at,count,h(162),delta>0l?1:-1);}}
+bool volumeFits(int row,int64_t delta){DyadicTerm items[7];volumeTerms(row,delta,items);DyadicMeasure m=dyadicMeasure(items,7);return m.status==DYADIC_POSITIVE||m.status==DYADIC_ZERO;}
+void initialize(int id){if(id<h(0)){words[f(HEAD)+id]=uint(-1);words[f(PHEAD)+id]=uint(-1);numberAt(f(PWORK)+2*id,0.0LF);}
+ if(id<h(1)){integerAt(f(LDELTA)+2*id,0l);numberAt(f(LOLD)+2*id,0.0LF);numberAt(f(LU)+2*id,0.0LF);words[f(LC)+id]=0u;}
+ if(id<h(2)){words[f(NEXT)+id]=uint(-1);words[f(CELL)+id]=uint(-1);numberAt(f(GOLD)+2*id,0.0LF);numberAt(f(GNEW)+2*id,0.0LF);numberAt(f(GK0)+2*id,0.0LF);numberAt(f(GK1)+2*id,0.0LF);words[f(GC)+id]=0u;integerAt(f(GSOURCE_MASS)+2*id,0l);integerAt(f(GWITHDRAWN)+2*id,0l);}
+ if(id==0)for(int i=0;i<12;i++)words[f(CONTROL)+i]=0u;
+}
+void importRows(int row){
+ if(row<h(1)){for(int s=0;s<h(3);s++)speciesAt(0,row,s,0l);if(row<int(words[l(0)])){
+  integerAt(f(LMASS)+2*row,integer(l(8)+2*row));numberAt(f(LU)+2*row,number(l(9)+2*row));numberAt(f(LOLD)+2*row,number(l(9)+2*row));
+  for(int at=int(words[l(11)+row]);at<int(words[l(11)+row+1]);at++)speciesAt(0,row,int(words[l(12)+at]),integer(l(13)+2*at));}}
+ if(row<h(2)){for(int s=0;s<h(3);s++)speciesAt(1,row,s,0l);
+  for(int at=int(words[g(8)+row]);at<int(words[g(8)+row+1]);at++)speciesAt(1,row,int(words[g(9)+at]),integer(g(10)+2*at));
+  bool liveParticle=row<int(words[g(0)]),deposit=row>=h(7)&&row-h(7)<int(words[g(0)+1]),audit=row>=h(7)+h(8);
+  if(liveParticle||deposit||audit){numberAt(f(GOLD)+2*row,number(g(11)+2*row));numberAt(f(GNEW)+2*row,number(g(11)+2*row));integerAt(f(GSOURCE_MASS)+2*row,mass(1,row));}
+  if(!liveParticle&&!deposit)return;int cell;
+  if(liveParticle){double size=number(p.header+164);ivec3 q=ivec3(floor(number(g(1)+6*row)/size),floor(number(g(1)+6*row+2)/size),floor(number(g(1)+6*row+4)/size));
+   q=clamp(q,ivec3(0),ivec3(h(9)-1,h(10)-1,h(11)-1));cell=(q.z*h(10)+q.y)*h(9)+q.x;}
+  else cell=int(words[g(16)+row-h(7)]);
+  words[f(CELL)+row]=uint(cell);words[f(NEXT)+row]=atomicExchange(words[f(HEAD)+cell],uint(row));
+  if(liveParticle){double v2=0.0;for(int axis=0;axis<3;axis++){double v=number(g(2)+6*row+2*axis);v2+=v*v;}numberAt(f(GK0)+2*row,.5LF*double(mass(1,row))*1e-10*v2);}
+ }
+}
+int64_t solidExtent(int row,int rule){int64_t result=LIMIT;int start=d(rule+12),count=d(rule+13);
+ for(int at=0;at<count;at++)result=min(result,species(1,row,d(start+2*at))/int64_t(d(start+2*at+1)));return result==LIMIT?0l:result;}
+int selectedSolid(int c,int material,bool depositOnly){int result=-1;for(int row=int(words[f(HEAD)+c]);row>=0;row=int(words[f(NEXT)+row]))
+ if((!depositOnly||row>=h(7))&&int(words[g(3)+row])==material&&integer(g(4)+2*row)>0l&&(result<0||row<result))result=row;return result;}
+double transferCold(int first,int end,int solid,int rule,int64_t batches,bool precip,int64_t totalMass){
+ int64_t extent=batches*integer(h(4)+rule+3),moved=batches*integer(h(4)+d(rule+14)),prefix=0l;int sm=d(rule+1);
+ double result=double(moved)*1e-10*(number(th(1,3)+2*sm)+number(th(1,9)+2*sm));
+ for(int row=first;row<end;row++)if(same(first,row)){int64_t next=add(prefix,mass(0,row)),part=portion(moved,next,totalMass)-portion(moved,prefix,totalMass);result-=double(part)*1e-10*specificCold(0,row);prefix=next;}
+ int side=d(rule+10),terms=d(rule+11);for(int t=0;t<terms;t++){int s=d(side+2*t),coefficient=d(side+2*t+1);int64_t q=extent*int64_t(coefficient),weight=0l;
+  if(precip){for(int row=first;row<end;row++)if(same(first,row))weight+=species(0,row,s);}else weight=totalMass;
+  prefix=0l;for(int row=first;row<end;row++)if(same(first,row)){int64_t next=prefix+(precip?species(0,row,s):mass(0,row)),part=portion(q,next,weight)-portion(q,prefix,weight);
+   if(part>0l)result-=double(part)*reference(0,row,s);prefix=next;}}
+ side=d(rule+12);terms=d(rule+13);for(int t=0;t<terms;t++)result+=double(extent*int64_t(d(side+2*t+1)))*number(th(1,4)+2*(sm*th(1,2)+d(side+2*t)));
+ return precip?result:-result;
+}
+int newDeposit(int c,int material){int ordinal=int(atomicAdd(words[g(0)+1],1u));atomicMax(words[f(CONTROL)+1],uint(ordinal+1));
+ if(ordinal>=h(8)){atomicMax(words[f(CONTROL)],1u);return -1;}int row=h(7)+ordinal;
+ words[g(3)+row]=uint(material);integerAt(g(4)+2*row,0l);integerAt(g(5)+2*row,0l);integerAt(g(7)+2*row,0l);numberAt(g(11)+2*row,0.0LF);
+ words[g(6)+row]=1u;words[g(16)+ordinal]=uint(c);words[g(17)+ordinal]=words[f(POROSITIES)+material];
+ words[f(CELL)+row]=uint(c);words[f(NEXT)+row]=words[f(HEAD)+c];words[f(HEAD)+c]=uint(row);return row;
+}
+double centerY(int c){return (double(c/h(9)%h(10))+.5LF)*number(p.header+164);}
+dvec2 bed(int c){double m=0.0,bulk=0.0;for(int row=int(words[f(HEAD)+c]);row>=0;row=int(words[f(NEXT)+row]))if(row>=h(7)){
+ m+=double(mass(1,row))*1e-10;bulk+=double(integer(g(4)+2*row))/(1.0LF-double(uintBitsToFloat(words[g(17)+row-h(7)])));}return dvec2(m,bulk);}
+double bedY(int c,double bulk){return (double(c/h(9)%h(10))+.5LF*bulk*ldexp(double(integer(p.header+160)),h(162)))*number(p.header+164);}
+double potential(int c,double liquidMass){dvec2 b=bed(c);double value=liquidMass*centerY(c)+b.x*bedY(c,b.y);
+ for(int row=int(words[f(HEAD)+c]);row>=0;row=int(words[f(NEXT)+row]))if(row<h(7))value+=double(mass(1,row))*1e-10*number(g(1)+6*row+2);
+ return value*number(p.header+166);}
+double potentialWork(int c,int solid,int rule,int64_t batches,bool precip){double moved=double(batches*integer(h(4)+d(rule+14)))*1e-10,gravity=number(p.header+166);
+ if(!precip&&solid<h(7))return moved*gravity*(number(g(1)+6*solid+2)-centerY(c));
+ dvec2 before=bed(c);double porosity=solid<0?double(uintBitsToFloat(words[f(POROSITIES)+d(rule+1)])):double(uintBitsToFloat(words[g(17)+solid-h(7)]));
+ double change=double(batches*integer(h(4)+rule+5))/(1.0LF-porosity);dvec2 after=before+dvec2(precip?moved:-moved,precip?change:-change);
+ return gravity*(before.x*bedY(c,before.y)-after.x*bedY(c,after.y)+(precip?moved:-moved)*centerY(c));}
+void postLTE(int c,double energy){int begin=int(words[l(1)+c]),end=int(words[l(1)+c+1]);double baselineCold=0.0;
+ for(int row=begin;row<end;row++)baselineCold+=cold(0,row);for(int row=int(words[f(HEAD)+c]);row>=0;row=int(words[f(NEXT)+row]))baselineCold+=cold(1,row);
+ double t=number(h(5)+44),remaining=energy-baselineCold;if(remaining<0.0LF){invalid();return;}
+ for(;;){double cv=0.0,next=1.7976931348623157e308;
+  for(int kind=0;kind<2;kind++){int row=kind==0?begin:int(words[f(HEAD)+c]);for(;kind==0?row<end:row>=0;row=kind==0?row+1:int(words[f(NEXT)+row]))if(mass(kind,row)>0l){
+   cv+=capacity(kind,row,t);int m=material(kind,row),at=int(words[th(kind,5)+m]),last=int(words[th(kind,5)+m+1])-1;while(at<last&&t>=number(th(kind,6)+2*at))at++;if(at<last)next=min(next,number(th(kind,6)+2*at));}}
+  if(cv<=0.0)break;double cost=(next-t)*cv;if(next==1.7976931348623157e308||remaining<cost){t+=remaining/cv;break;}remaining-=cost;t=next;
+ }
+ for(int row=begin;row<end;row++)numberAt(f(LU)+2*row,mass(0,row)>0l?cold(0,row)+sensible(0,row,t):0.0LF);
+ for(int row=int(words[f(HEAD)+c]);row>=0;row=int(words[f(NEXT)+row]))numberAt(g(11)+2*row,mass(1,row)>0l?cold(1,row)+sensible(1,row,t):0.0LF);
+}
+void cell(int c){int begin=int(words[l(1)+c]),end=int(words[l(1)+c+1]);int64_t oldMass=0l;for(int row=begin;row<end;row++)oldMass=add(oldMass,integer(l(8)+2*row));
+ integerAt(f(OLD_MASS)+2*c,oldMass);integerAt(f(NEW_MASS)+2*c,oldMass);double pe=potential(c,double(oldMass)*1e-10);numberAt(f(PE0)+2*c,pe);numberAt(f(PE1)+2*c,pe);
+ if(begin==end)return;bool changed=false;double totalEnergy=0.0;int64_t withdrawnMass=0l;
+ for(int row=begin;row<end;row++)totalEnergy+=number(f(LU)+2*row);for(int row=int(words[f(HEAD)+c]);row>=0;row=int(words[f(NEXT)+row]))totalEnergy+=number(g(11)+2*row);
+ for(int first=begin;first<end;first++){
+  bool representative=true;for(int row=begin;row<first;row++)if(same(first,row)){representative=false;break;}if(!representative)continue;
+  int phase=int(words[f(PHASES)+int(words[l(2)+first])]);if(phase<0)continue;
+  for(int directory=0;directory<d(4);directory++){int entry=d(5)+2*directory;if(d(entry)!=1)continue;int rule=d(entry+1);if(d(rule)!=phase)continue;atomicAdd(words[f(CONTROL)+4],1u);
+   int64_t totalMass=0l,aqueous=LIMIT;double volume=0.0;for(int row=first;row<end;row++)if(same(first,row)){
+    totalMass=add(totalMass,mass(0,row));volume+=number(l(15)+2*row)+double(integer(f(LDELTA)+2*row))*ldexp(double(integer(p.header+160)),h(162));}
+   if(totalMass<=0l||volume<=0.0)continue;int terms=d(rule+10),count=d(rule+11);
+   for(int t=0;t<count;t++){int s=d(terms+2*t);int64_t amount=0l;for(int row=first;row<end;row++)if(same(first,row))amount=add(amount,species(0,row,s));aqueous=min(aqueous,amount/int64_t(d(terms+2*t+1)));}
+   double size=number(p.header+164),capacity=rational(d(rule+9))*volume*size*size*size*1e6LF;
+   int64_t saturation=capacity>=double(LIMIT)?LIMIT:max(0l,int64_t(floor(capacity))),desired=aqueous-saturation;bool precip=desired>0l;
+   if(desired==0l||(!precip&&d(rule+2)==0))continue;int sm=d(rule+1),solid=selectedSolid(c,sm,precip);if(!precip&&solid<0)continue;
+   int64_t batchExtent=integer(h(4)+rule+3),batchVolume=integer(h(4)+rule+5),batchMass=integer(h(4)+d(rule+14));
+   int64_t batches=min(abs(desired)/batchExtent,integer(h(4)+rule+7)/batchVolume);
+   if(precip){batches=min(batches,min((totalMass-1l)/batchMass,(oldMass-withdrawnMass)/batchMass));double svq=volume/ldexp(double(integer(p.header+160)),h(162));batches=min(batches,max(0l,int64_t(ceil(svq))-1l)/batchVolume);}
+   else batches=min(batches,min(min(solidExtent(solid,rule)/batchExtent,integer(g(4)+2*solid)/batchVolume),(integer(f(GSOURCE_MASS)+2*solid)-integer(f(GWITHDRAWN)+2*solid))/batchMass));
+   if(batches<=0l){words[progress(3)+c]=1u;continue;}
+   double baselineCold=0.0;for(int row=begin;row<end;row++)baselineCold+=cold(0,row);for(int row=int(words[f(HEAD)+c]);row>=0;row=int(words[f(NEXT)+row]))baselineCold+=cold(1,row);
+   if(baselineCold+transferCold(first,end,solid,rule,batches,precip,totalMass)>totalEnergy+potentialWork(c,solid,rule,batches,precip)){int64_t low=0l,high=batches;
+    while(low<high){int64_t middle=low+(high-low+1l)/2l;if(baselineCold+transferCold(first,end,solid,rule,middle,precip,totalMass)<=totalEnergy+potentialWork(c,solid,rule,middle,precip))low=middle;else high=middle-1l;}batches=low;}
+   if(batches==0l){words[progress(3)+c]=1u;continue;}int64_t movedMass=batches*batchMass,movedVolume=batches*batchVolume,extent=batches*batchExtent,prefix=0l;
+   // Exact volume feasibility is checked before touching any source in this group.
+   for(int row=first;row<end;row++)if(same(first,row)){int64_t next=prefix+mass(0,row),part=portion(movedVolume,next,totalMass)-portion(movedVolume,prefix,totalMass);
+    if(!volumeFits(row,integer(f(LDELTA)+2*row)+(precip?-part:part))){batches=0l;break;}prefix=next;}
+   if(batches==0l){words[progress(3)+c]=1u;continue;}double physicalWork=potentialWork(c,solid,rule,batches,precip);if(solid<0){solid=newDeposit(c,sm);if(solid<0)return;}
+   int proposal=int(atomicAdd(words[f(CONTROL)+7],1u));if(proposal>=h(15)){atomicMax(words[f(CONTROL)],1u);return;}
+   words[f(PNEXT)+proposal]=words[f(PHEAD)+c];words[f(PHEAD)+c]=uint(proposal);
+   double carried=0.0;if(precip){prefix=0l;for(int row=first;row<end;row++)if(same(first,row)){int64_t next=prefix+mass(0,row),part=portion(movedMass,next,totalMass)-portion(movedMass,prefix,totalMass);
+    if(mass(0,row)>0l)carried+=number(f(LU)+2*row)*(double(part)/double(mass(0,row)));prefix=next;}}
+   else if(mass(1,solid)>0l)carried=number(g(11)+2*solid)*(double(movedMass)/double(mass(1,solid)));
+   terms=d(rule+10);count=d(rule+11);for(int t=0;t<count;t++){int s=d(terms+2*t);int64_t amount=extent*int64_t(d(terms+2*t+1)),weight=precip?0l:totalMass;
+    if(precip)for(int row=first;row<end;row++)if(same(first,row))weight+=species(0,row,s);prefix=0l;
+    for(int row=first;row<end;row++)if(same(first,row)){int64_t next=prefix+(precip?species(0,row,s):mass(0,row)),part=portion(amount,next,weight)-portion(amount,prefix,weight);
+     speciesAt(0,row,s,species(0,row,s)+(precip?-part:part));prefix=next;}}
+   terms=d(rule+12);count=d(rule+13);for(int t=0;t<count;t++){int s=d(terms+2*t);speciesAt(1,solid,s,species(1,solid,s)+(precip?1l:-1l)*extent*int64_t(d(terms+2*t+1)));}
+   prefix=0l;for(int row=first;row<end;row++)if(same(first,row)){int64_t old=mass(0,row),next=prefix+old,part=portion(movedMass,next,totalMass)-portion(movedMass,prefix,totalMass),v=portion(movedVolume,next,totalMass)-portion(movedVolume,prefix,totalMass);
+    integerAt(f(LMASS)+2*row,old+(precip?-part:part));integerAt(f(LDELTA)+2*row,integer(f(LDELTA)+2*row)+(precip?-v:v));prefix=next;}
+   integerAt(g(5)+2*solid,mass(1,solid)+(precip?movedMass:-movedMass));integerAt(g(4)+2*solid,integer(g(4)+2*solid)+(precip?movedVolume:-movedVolume));
+   if(precip)withdrawnMass+=movedMass;else integerAt(f(GWITHDRAWN)+2*solid,integer(f(GWITHDRAWN)+2*solid)+movedMass);
+   words[progress(5)+proposal]=uint(c);words[progress(6)+proposal]=uint(sm);words[progress(7)+proposal]=words[l(3)+first];words[progress(8)+proposal]=uint(phase);words[progress(9)+proposal]=uint(directory);
+   words[progress(10)+proposal]=uint(precip?0:solid<h(7)?2:3);words[progress(11)+proposal]=uint(precip?first:solid);
+   words[progress(12)+proposal]=uint(precip?3:0);words[progress(13)+proposal]=uint(precip?solid:first);
+   integerAt(progress(14)+2*proposal,precip?extent:-extent);integerAt(progress(15)+2*proposal,precip?extent:-extent);
+   integerAt(progress(18)+2*proposal,precip?movedMass:-movedMass);integerAt(progress(19)+2*proposal,-movedVolume);integerAt(progress(20)+2*proposal,movedVolume);words[progress(29)+proposal]=3u;
+   numberAt(progress(26)+2*proposal,carried);numberAt(progress(27)+2*proposal,physicalWork);numberAt(progress(28)+4*proposal,0.0LF);numberAt(progress(28)+4*proposal+2,0.0LF);
+   totalEnergy+=physicalWork;numberAt(f(PWORK)+2*c,number(f(PWORK)+2*c)+physicalWork);
+   atomicAdd(words[f(CONTROL)+6],uint(batches));changed=true;words[progress(3)+c]=1u;words[progress(35)+c]=1u;atomicOr(words[progress(36)],1u);
+  }
+ }
+ int64_t finalMass=0l;for(int row=begin;row<end;row++)finalMass=add(finalMass,mass(0,row));integerAt(f(NEW_MASS)+2*c,finalMass);numberAt(f(PE1)+2*c,potential(c,double(finalMass)*1e-10));
+ if(!changed)return;atomicAdd(words[f(CONTROL)+5],1u);postLTE(c,totalEnergy);
+}
+void measure(int row){
+ for(int kind=0;kind<2;kind++){if(row>=h(kind==0?1:2))continue;if(kind==0&&row>=int(words[l(0)]))continue;int count=0;
+  for(int s=0;s<h(3);s++)if(species(kind,row,s)>0l)count++;words[f(kind==0?LC:GC)+row]=uint(count);}
+ if(row<h(1)){DyadicTerm items[7];if(row<int(words[l(0)]))volumeTerms(row,integer(f(LDELTA)+2*row),items);else for(int i=0;i<7;i++)items[i]=DyadicTerm(1,0,0,0,0);
+  for(int i=0;i<7;i++){int at=f(TERMS)+35*row+5*i;words[at]=uint(items[i].bank);words[at+1]=uint(items[i].offset);words[at+2]=uint(items[i].count);words[at+3]=uint(items[i].exponent);words[at+4]=uint(items[i].sign);}
+  DyadicMeasure m=dyadicMeasure(items,7);int at=f(RESULTS)+8*row;words[at]=uint(m.status);words[at+1]=uint(m.words);words[at+2]=uint(m.exponent);words[at+3]=uint(m.minimumExponent);words[at+4]=uint(m.firstWord);words[at+5]=uint(m.lastWord);words[at+6]=uint(m.trailingBits);
+  words[f(VC)+row]=m.status==DYADIC_POSITIVE?uint(m.words):0u;if(m.status!=DYADIC_ZERO&&m.status!=DYADIC_POSITIVE)invalid();}
+ if(row<h(2)&&(row<int(words[g(0)])||row>=h(7)&&row-h(7)<min(h(8),int(words[g(0)+1]))||row>=h(7)+h(8)))numberAt(f(GNEW)+2*row,number(g(11)+2*row));
+}
+void capacityStatus(){int lneed=int(words[f(LO)+h(1)]),gneed=int(words[f(GO)+h(2)]);words[f(CONTROL)+2]=uint(lneed);words[f(CONTROL)+3]=uint(gneed);
+ int limbs=int(words[f(VO)+h(1)]);words[f(CONTROL)+8]=uint(limbs);
+ if(lneed>h(12)||gneed>h(13)||limbs>h(14))atomicMax(words[f(CONTROL)],1u);if(words[f(CONTROL)]==0u)words[f(CONTROL)]=2u;}
+void scatter(int row){if(words[f(CONTROL)]!=2u)return;
+ for(int kind=0;kind<2;kind++){if(row>=h(kind==0?1:2))continue;if(kind==0&&row>=int(words[l(0)]))continue;int at=int(words[f(kind==0?LO:GO)+row]);
+  for(int s=0;s<h(3);s++){int64_t q=species(kind,row,s);if(q<=0l)continue;words[f(kind==0?LH:GH)+at]=uint(s);integerAt(f(kind==0?LA:GA)+2*at,q);at++;}}
+ if(row<h(1)&&words[f(RESULTS)+8*row]==uint(DYADIC_POSITIVE)){DyadicTerm items[7];for(int i=0;i<7;i++){int at=f(TERMS)+35*row+5*i;items[i]=DyadicTerm(int(words[at]),int(words[at+1]),int(words[at+2]),int(words[at+3]),int(words[at+4]));}
+  int at=f(RESULTS)+8*row;DyadicMeasure m=DyadicMeasure(int(words[at]),int(words[at+1]),int(words[at+2]),int(words[at+3]),int(words[at+4]),int(words[at+5]),int(words[at+6]));dyadicWriteSum(items,7,m,f(VL)+int(words[f(VO)+row]));}
+}
+void validate(int row){if(row<h(1)&&row<int(words[l(0)])){int status=int(words[f(RESULTS)+8*row]);
+ if(status!=DYADIC_ZERO&&status!=DYADIC_POSITIVE)invalid();if(status==DYADIC_ZERO&&mass(0,row)!=0l)invalid();}
+}
+ivec3 shape(){return ivec3(h(9),h(10),h(11));}
+ivec3 axisUnit(int axis){ivec3 q=ivec3(0);q[axis]=1;return q;}
+int faceBase(int axis){ivec3 s=shape();return axis==0?0:(s.x+1)*s.y*s.z+(axis==2?s.x*(s.y+1)*s.z:0);}
+int cellId(ivec3 q){ivec3 s=shape();return any(lessThan(q,ivec3(0)))||any(greaterThanEqual(q,s))?-1:(q.z*s.y+q.y)*s.x+q.x;}
+void faceCells(int id,out int axis,out int a,out int b){axis=id<faceBase(1)?0:id<faceBase(2)?1:2;int local=id-faceBase(axis);ivec3 s=shape()+axisUnit(axis),q=ivec3(local%s.x,local/s.x%s.y,local/(s.x*s.y));a=cellId(q-axisUnit(axis));b=cellId(q);}
+int cellFace(int c,int axis,int side){ivec3 s=shape(),q=ivec3(c%s.x,c/s.x%s.y,c/(s.x*s.y));q[axis]+=side;s[axis]++;return faceBase(axis)+(q.z*s.y+q.y)*s.x+q.x;}
+double oldMass(int c){return c<0?0.0LF:double(integer(f(OLD_MASS)+2*c))*1e-10;}
+double newMass(int c){return c<0?0.0LF:double(integer(f(NEW_MASS)+2*c))*1e-10;}
+double faceVelocity(int id,int axis,int a,int b){double m=.5LF*(oldMass(a)+oldMass(b));return m>0.0?number(l(16+axis)+2*(id-faceBase(axis)))/m:0.0LF;}
+bool openFace(int id,int a,int b){return a>=0&&b>=0&&(h(163)<0||number(h(163)+8*id+4)>0.0);}
+double incomingVelocity(int proposal,int axis){int kind=int(words[progress(10)+proposal]),row=int(words[progress(11)+proposal]);return kind==2?number(g(2)+6*row+2*axis):0.0LF;}
+void phaseFace(int id){if(words[f(CONTROL)]!=2u)return;int axis,a,b;faceCells(id,axis,a,b);int cells[2]=int[2](a,b);double removed[2]=double[2](0.0LF,0.0LF),incomingP=0.0;
+ double beforeMass=.5LF*(oldMass(a)+oldMass(b)),afterMass=.5LF*(newMass(a)+newMass(b)),before=faceVelocity(id,axis,a,b);
+ for(int side=0;side<2;side++)if(cells[side]>=0)for(int q=int(words[f(PHEAD)+cells[side]]);q>=0;q=int(words[f(PNEXT)+q])){
+  int64_t change=integer(progress(18)+2*q);double part=.5LF*double(abs(change))*1e-10;
+  if(change>0l)removed[side]+=part;else incomingP+=part*incomingVelocity(q,axis);
+ }
+ double remaining=max(0.0LF,beforeMass-removed[0]-removed[1]),momentum=remaining*before+incomingP;
+ bool opened=openFace(id,a,b);double velocity=opened&&afterMass>0.0?momentum/afterMass:0.0LF;if(!opened||afterMass==0.0)momentum=0.0LF;
+ numberAt(f(FACE_P)+2*id,momentum);numberAt(f(FACE_K0)+2*id,.5LF*beforeMass*before*before);numberAt(f(FACE_K1)+2*id,.5LF*afterMass*velocity*velocity);
+ for(int side=0;side<2;side++){int c=cells[side];double heat=0.0;
+  if(c>=0){double kept=max(0.0LF,.5LF*oldMass(c)-removed[side]),difference=before-velocity;
+   heat=.5LF*kept*difference*difference+.5LF*removed[side]*before*before;
+   for(int q=int(words[f(PHEAD)+c]);q>=0;q=int(words[f(PNEXT)+q])){int64_t change=integer(progress(18)+2*q);if(change<0l){difference=incomingVelocity(q,axis)-velocity;heat+=.25LF*double(-change)*1e-10*difference*difference;}}
+  }numberAt(f(FACE_HEAT)+4*id+2*side,heat);
+ }
+}
+void postMechanical(int c){if(words[f(CONTROL)]!=2u)return;double heat=0.0;dvec3 impulse=dvec3(0);
+ for(int axis=0;axis<3;axis++)for(int side=0;side<2;side++){int id=cellFace(c,axis,side),component,a,b;faceCells(id,component,a,b);
+  heat+=number(f(FACE_HEAT)+4*id+2*(side==0?1:0));double before=faceVelocity(id,axis,a,b),removed=0.0,incomingP=0.0;
+  for(int q=int(words[f(PHEAD)+c]);q>=0;q=int(words[f(PNEXT)+q])){int64_t change=integer(progress(18)+2*q);
+   if(change>0l)removed+=.5LF*double(change)*1e-10;else incomingP+=.5LF*double(-change)*1e-10*incomingVelocity(q,axis);}
+  impulse[axis]+=removed*before;if(!openFace(id,a,b))impulse[axis]+=max(0.0LF,.5LF*oldMass(c)-removed)*before+incomingP;
+ }
+ for(int axis=0;axis<3;axis++)numberAt(f(WALL)+6*c+2*axis,impulse[axis]);
+ if(heat>0.0){double energy=heat;for(int r=int(words[l(1)+c]);r<int(words[l(1)+c+1]);r++)energy+=number(f(LU)+2*r);
+  for(int r=int(words[f(HEAD)+c]);r>=0;r=int(words[f(NEXT)+r]))energy+=number(g(11)+2*r);postLTE(c,energy);}
+}
+void snapshotSolid(int row){if(words[f(CONTROL)]!=2u)return;bool liveParticle=row<int(words[g(0)]),deposit=row>=h(7)&&row-h(7)<min(h(8),int(words[g(0)+1])),audit=row>=h(7)+h(8);
+ if(liveParticle||deposit||audit)numberAt(f(GNEW)+2*row,number(g(11)+2*row));if(liveParticle){double v2=0.0;for(int axis=0;axis<3;axis++){double v=number(g(2)+6*row+2*axis);v2+=v*v;}numberAt(f(GK1)+2*row,.5LF*double(mass(1,row))*1e-10*v2);}
+}
+void publish(int id){if(words[f(CONTROL)]!=2u)return;
+ if(id<h(168)){int axis=id<faceBase(1)?0:id<faceBase(2)?1:2;numberAt(l(16+axis)+2*(id-faceBase(axis)),number(f(FACE_P)+2*id));}
+ if(id<=h(1)){words[l(11)+id]=words[f(LO)+id];words[l(4)+id]=words[f(VO)+id];}
+ if(id<=h(2))words[g(8)+id]=words[f(GO)+id];
+ if(id<int(words[f(LO)+h(1)])){words[l(12)+id]=words[f(LH)+id];integerAt(l(13)+2*id,integer(f(LA)+2*id));}
+ if(id<int(words[f(GO)+h(2)])){words[g(9)+id]=words[f(GH)+id];integerAt(g(10)+2*id,integer(f(GA)+2*id));}
+ if(id<int(words[f(VO)+h(1)]))words[l(7)+id]=words[f(VL)+id];
+ for(int kind=0;kind<2;kind++){if(id>=h(kind==0?1:2))continue;if(kind==0&&id>=int(words[l(0)]))continue;int64_t sm=0l;
+  for(int s=0;s<h(3);s++){int64_t q=species(kind,id,s);if(q>0l){int64_t unit=integer(h(4)+d(1)+5*s+1);if(unit>0l&&q>LIMIT/unit){invalid();return;}sm=add(sm,q*unit);}}
+  if(kind==0){integerAt(l(8)+2*id,mass(0,id));numberAt(l(9)+2*id,number(f(LU)+2*id));integerAt(l(14)+2*id,mass(0,id)-sm);
+   words[l(5)+id]=words[f(RESULTS)+8*id]==uint(DYADIC_POSITIVE)?1u:0u;words[l(6)+id]=words[f(RESULTS)+8*id+2];
+   double unit=ldexp(double(integer(p.header+160)),h(162));numberAt(l(15)+2*id,number(l(15)+2*id)+double(integer(f(LDELTA)+2*id))*unit);words[l(10)+id]=1u;}
+  else{integerAt(g(7)+2*id,mass(1,id)-sm);if(words[f(GC)+id]>0u)words[g(6)+id]=1u;}}
+ if(id==0){words[l(0)+1]=words[f(LO)+h(1)];words[l(0)+2]=words[f(VO)+h(1)];words[g(0)+2]=words[f(GO)+h(2)];}
+}
+void main(){int id=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);if(id>=p.count)return;if(p.stage==0){initialize(id);return;}if(errors!=0u)return;
+ if(p.stage==1)importRows(id);else if(p.stage==2)cell(id);else if(p.stage==3)measure(id);else if(p.stage==4)capacityStatus();else if(p.stage==5)scatter(id);else if(p.stage==6)validate(id);else if(p.stage==7)publish(id);
+ else if(p.stage==8)phaseFace(id);else if(p.stage==9)postMechanical(id);else if(p.stage==10)snapshotSolid(id);
+}

@@ -103,7 +103,11 @@ public record FluidMaterialSnapshotPayload(
 			validateFieldLengths(materialFractions, cells);
 			validateFieldLengths(phaseFractions, cells);
 			validateNormalizedFractions(materialFractions, phaseFractions, cells);
-			for (FluidSurfaceInput.Piece piece : geometry.pieces()) {
+			if(geometry.pieces() instanceof mmm.fluid.CompactFluidSurface compact){
+				var palette=materials;var phases=phaseGroups;
+				compact.validatePalette(materials.size(),phaseGroups.size(),m->phases.indexOf(palette.get(m).phaseGroup()));
+			}
+			else for (FluidSurfaceInput.Piece piece : geometry.pieces()) {
 				if (piece.material() >= materials.size() || piece.phase() >= phaseGroups.size()
 						|| !materials.get(piece.material()).phaseGroup().equals(phaseGroups.get(piece.phase()))) {
 					throw new IllegalArgumentException("Surface piece palette identity is invalid");
@@ -310,12 +314,14 @@ public record FluidMaterialSnapshotPayload(
 	}
 
 	private static long geometryBytes(FluidSurfaceInput geometry) {
+		if(geometry.pieces() instanceof mmm.fluid.CompactFluidSurface compact)return 9L+compact.encodedBytes();
 		long bytes = 4;
 		for (FluidSurfaceInput.Piece piece : geometry.pieces()) bytes += 17L + 32L * piece.clips().size();
 		return bytes;
 	}
 
 	private static void writeGeometry(FriendlyByteBuf buffer, FluidSurfaceInput geometry) {
+		if(geometry.pieces() instanceof mmm.fluid.CompactFluidSurface compact){buffer.writeVarInt(-1);buffer.writeByteArray(compact.encoded());return;}
 		buffer.writeVarInt(geometry.pieces().size());
 		for (FluidSurfaceInput.Piece piece : geometry.pieces()) {
 			buffer.writeVarInt(piece.cell());
@@ -335,7 +341,13 @@ public record FluidMaterialSnapshotPayload(
 	private static FluidSurfaceInput readGeometry(
 			FriendlyByteBuf buffer, int sizeX, int sizeY, int sizeZ, float cellSize, long fieldBytes
 	) {
-		int count = readBoundedCount(buffer, FluidSurfaceInput.MAX_PIECES, "surface pieces");
+		int count = buffer.readVarInt();
+		if(count==-1){
+			if(fieldBytes<0||fieldBytes+9>MAX_TOTAL_FIELD_BYTES)throw new IllegalArgumentException("Material snapshot fields are too large");
+			var compact=new mmm.fluid.CompactFluidSurface(buffer.readByteArray((int)(MAX_TOTAL_FIELD_BYTES-fieldBytes-9)));
+			return new FluidSurfaceInput(sizeX,sizeY,sizeZ,cellSize,compact);
+		}
+		if(count<0||count>FluidSurfaceInput.MAX_PIECES)throw new IllegalArgumentException("Invalid surface pieces count");
 		long bytes = 4L + fieldBytes;
 		if (fieldBytes < 0 || bytes + 17L * count > MAX_TOTAL_FIELD_BYTES) {
 			throw new IllegalArgumentException("Material snapshot fields are too large");

@@ -1,7 +1,13 @@
 package mmm.fluid;
 
 /** Loader-neutral evaluator. Commit authority remains with the region owner, never with a backend. */
-public interface FluidSolverBackend {
+public interface FluidSolverBackend extends AutoCloseable {
+	interface Provider {
+		String id();
+		FluidSolverBackend create(int deviceIndex);
+	}
+	default String executionDescription() { return id(); }
+	@Override default void close() { }
 	String id();
 	FluidStepCandidate evaluate(FluidStepRequest request);
 	FluidThermalStepCandidate evaluateThermal(FluidThermalStepRequest request);

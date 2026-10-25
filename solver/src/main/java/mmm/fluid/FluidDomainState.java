@@ -48,7 +48,7 @@ public final class FluidDomainState implements FluidStateAccess {
 	private final CondensedPhasePressureField condensedPhasePressure;
 	private final MaterialRegistry materialDefinitions;
 	private final PhysicalActivityGroups.Snapshot activityState;
-	PhysicalActivityGroups.Snapshot activityState() { return activityState; }
+	public PhysicalActivityGroups.Snapshot activityState() { return activityState; }
 	/** Exactly one captured gas representation; the persistence projection is derived lazily. */
 	public static final class GasContinuation {
 		private final GasRuntimeGeometry geometry;

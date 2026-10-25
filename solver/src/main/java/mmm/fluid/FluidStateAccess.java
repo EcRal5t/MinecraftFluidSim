@@ -8,5 +8,10 @@ package mmm.fluid;
 public interface FluidStateAccess extends AutoCloseable {
     FluidDomainState.Layout layout();
     FluidDomainState exportState();
+    record DevicePort(String providerId, String objectId, FluidDomain.ThermalPortRequest contact) { }
+    default mmm.thermal.FiniteThermalDeviceInventory finiteThermalDevices() { return null; }
+    default java.util.List<DevicePort> finiteThermalPorts() { return java.util.List.of(); }
+    /** Retains this immutable generation independently of the caller's lifetime. */
+    default FluidStateAccess retain() { return this; }
     @Override default void close() { }
 }

@@ -52,14 +52,15 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
 		if (region == null || region.footprint() == null) return Optional.empty();
 		FluidRegionFootprint footprint = region.footprint();
 		boolean live = region.solverLoaded();
-		FluidDomain domain = live ? region.domain() : null;
+		var device = live ? region.inventorySummary() : null;
+		FluidDomain domain = live && device == null ? region.domain() : null;
 		long depositLimit = Math.min(GranularLimits.MAX_DEPOSIT_GROUPS_PER_REGION,
 				Math.multiplyExact(region.reservedCellCapacity(), GranularLimits.MAX_DEPOSIT_GROUPS_PER_CELL));
 		ControllerSummary.Inventory inventory = live
-				? liveInventory(region, domain) : ControllerSummary.Inventory.unavailable();
+				? device == null ? liveInventory(region, domain) : deviceInventory(device) : ControllerSummary.Inventory.unavailable();
 		String ownershipLock = operations.ownershipLockDescription(region);
 		boolean containerWalPending = hasPendingContainerWal.test(region.id());
-		boolean phaseWorkPending = live && domain.hasPendingPhaseMotionWork();
+		boolean phaseWorkPending = live && region.hasPendingPhaseMotionWork();
 		boolean checkpointAllowed = authoritativeWritesReady.getAsBoolean() && live
 				&& region.availabilityFailure() == null && ownershipLock == null && !containerWalPending;
 		FluidDomain.StepStats stats = region.lastStats();
@@ -81,15 +82,15 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
 				new ControllerSummary.Availability(region.availabilityReason(), availabilityFailure),
 				new ControllerSummary.Usage(
 						capacity(region.reservedCellCapacity(), regions.limits().maximumCellsPerRegion()),
-						live ? capacity(domain.granularParcelCount(), GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION)
+						live ? capacity(device==null?domain.granularParcelCount():device.granularParcelCount(), GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION)
 								: unavailable(GranularLimits.MAX_ACTIVE_PARCELS_PER_REGION),
-						live ? capacity(domain.granularDepositGroupCount(), depositLimit) : unavailable(depositLimit),
-						live ? capacity(domain.coherentPhaseGroupCount(), ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION)
+						live ? capacity(device==null?domain.granularDepositGroupCount():device.granularDepositCount(), depositLimit) : unavailable(depositLimit),
+						live ? capacity(device==null?domain.coherentPhaseGroupCount():device.coherentGroupCount(), ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION)
 								: unavailable(ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION),
-						live ? capacity(domain.gasBoundary().nodeCount(), GasLimits.MAX_NODES_PER_REGION)
+						live ? capacity(device==null?domain.gasBoundary().nodeCount():device.gasNodeCount(), GasLimits.MAX_NODES_PER_REGION)
 								: unavailable(GasLimits.MAX_NODES_PER_REGION),
 						live ? capacity(thermalRegistry == null ? 0L
-								: region.finiteThermalDevices(thermalRegistry.fingerprint()).devices().size(),
+								: device==null?region.finiteThermalDevices(thermalRegistry.fingerprint()).devices().size():device.finiteDeviceCount(),
 								ThermalLimits.MAX_FINITE_DEVICES_PER_REGION)
 								: unavailable(ThermalLimits.MAX_FINITE_DEVICES_PER_REGION)),
 				inventory,
@@ -99,6 +100,13 @@ final class ControllerSummaryAdapter implements ControllerSummaryPort {
 						stats == null ? 0 : stats.pressureIterations(),
 						stats == null ? 0.0 : stats.pressureResidual(), numericalFailure)));
 	}
+
+    private static ControllerSummary.Inventory deviceInventory(mmm.fluid.ResidentFluidState.InventorySummary device){
+        var range=Double.isFinite(device.minimumTemperatureK())?ControllerSummary.TemperatureRange.available(device.minimumTemperatureK(),device.maximumTemperatureK()):ControllerSummary.TemperatureRange.unavailable();
+        return new ControllerSummary.Inventory(true,device.liquidVolumeCubicMetres(),mmm.units.Mass.kilograms(device.liquidMassUnits()),device.chemicalTotalQuanta(),
+            device.granularSolidVolumeSvq(),mmm.units.Mass.kilograms(device.granularMassUnits()),device.coherentSolidVolumeSvq(),mmm.units.Mass.kilograms(device.coherentMassUnits()),
+            device.gasStandardVolumeNanos(),mmm.units.Mass.kilograms(device.gasMassUnits()),device.thermalBound(),device.totalInternalEnergyJoules(),range);
+    }
 
 	private ControllerSummary.Inventory liveInventory(FluidRegion region, FluidDomain domain) {
 		long gasNanos = 0L;

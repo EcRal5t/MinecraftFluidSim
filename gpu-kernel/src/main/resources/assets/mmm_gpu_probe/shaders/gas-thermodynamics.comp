@@ -121,6 +121,7 @@ void derive(int node) {
         putNumber(outputOffset,temperature);putNumber(outputOffset+10,1.0);return;
     }
     if(words[gas(ENERGY_PRESENT)]==0u||volume<=0.0){invalid();return;}
+    if(h(38)!=0){energy=anchor;putNumber(gas(ENERGY)+2*node,anchor);}
     double residual=energy-anchor;if(!finite(residual)){invalid();return;}
     bool heating=residual>=0.0;double remaining=abs(residual),capacity,boundary;
     while(true) {
@@ -135,7 +136,7 @@ void derive(int node) {
     if(!finite(temperature)||temperature<number(p.header+34)){invalid();return;}
     // At a caloric endpoint, the reported derivative uses the upper-temperature segment.
     capacity=capacityAndBoundary(first,last,temperature,true,boundary);
-    double pressure=r*temperature/volume,density=mass/volume,gamma=1.0+r/capacity;
+    double pressure=r*temperature/volume,density=mass/volume,gamma=h(38)!=0?1.0:1.0+r/capacity;
     double bulk=gamma*pressure,sound=sqrt(bulk/density),compliance=1.0/bulk;
     if(!(finite(pressure)&&pressure>0.0&&finite(density)&&density>0.0&&finite(capacity)&&capacity>0.0
             &&finite(r)&&r>0.0&&finite(gamma)&&gamma>=1.0&&finite(bulk)&&bulk>0.0

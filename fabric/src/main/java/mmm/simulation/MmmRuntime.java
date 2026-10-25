@@ -32,7 +32,7 @@ public final class MmmRuntime {
 	private final CommittedEventHub committedEvents;
 	private final WorldStartupCoordinator.Result startup;
 	private final mmm.api.transfer.MmmTransferApi transfers;
-	private final mmm.fluid.CpuFluidSolverBackend solverBackend;
+	private final mmm.fluid.FluidSolverBackend solverBackend;
 	private boolean worldRecoveryCompleted;
 	private boolean closed;
 
@@ -58,7 +58,7 @@ public final class MmmRuntime {
 			CommittedEventHub committedEvents,
 			WorldStartupCoordinator.Result startup,
 			mmm.api.transfer.MmmTransferApi transfers,
-			mmm.fluid.CpuFluidSolverBackend solverBackend
+			mmm.fluid.FluidSolverBackend solverBackend
 	) {
 		this.simulationLoop = Objects.requireNonNull(simulationLoop, "Simulation loop");
 		this.finiteHeatExchangers = Objects.requireNonNull(finiteHeatExchangers);

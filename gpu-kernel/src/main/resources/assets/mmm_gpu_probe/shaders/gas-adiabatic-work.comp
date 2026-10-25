@@ -72,7 +72,8 @@ void solve(int node) {
     if(!inventory(node,first,last,anchor,mass,r))return;
     if(first==last) {if(initialEnergy!=0.0)invalid();return;}
     if(words[gas(ENERGY_PRESENT)]==0u){invalid();return;}
-    if(mode==0)return;
+    // The fixed-temperature reservoir carries compression heat in the isothermal profile.
+    if(mode==0||h(38)!=0)return;
     double oldVolume=number(h(3)+2*node),futureVolume=number(wh(0)+2*node);
     if(!(finite(oldVolume)&&oldVolume>0.0&&finite(futureVolume)&&futureVolume>0.0)){invalid();return;}
     if(oldVolume==futureVolume)return;

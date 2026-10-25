@@ -95,6 +95,7 @@ final class VulkanLiquidViscosity implements AutoCloseable {
     private final FlipKernelBindings bindings;
     VulkanLiquidViscosity(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,3,shader(),32);}
     void rebindRanges(FlipKernelBindings.BufferRange source,FlipKernelBindings.BufferRange candidate,FlipKernelBindings.BufferRange errors){bindings.rebindRanges(List.of(source,candidate,errors));}
+    void recordMaterial(VkCommandBuffer command,Layout layout,double cellSize){stage(command,layout,0,0,layout.source.cellCount(),cellSize,0);}
     void record(VkCommandBuffer command,Layout layout,double cellSize,double duration){
         if(!(cellSize>0&&Double.isFinite(cellSize)&&duration>0&&Double.isFinite(duration)))throw new IllegalArgumentException("Invalid viscous step");
         try(var stack=stackPush()){bindings.bind(command,stack);}
