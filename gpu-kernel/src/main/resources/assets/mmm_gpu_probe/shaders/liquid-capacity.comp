@@ -1,11 +1,13 @@
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_shader_atomic_int64 : require
 layout(local_size_x=128) in;
 layout(binding=0,std430) buffer Arena { uint words[]; };
 layout(binding=1,std430) buffer Errors { uint errors; };
+layout(binding=2,std430) buffer AtomicArena { int64_t integers[]; };
 layout(push_constant) uniform Params { int header; int stage; int count; int argument; int mode; } p;
 const int STATE=1,TAIL=2,EXCESS=3,DISTANCE=4,COUNT=5,OFFSET=6,CURSOR=7,ENTRY=8,BC=9,BO=10,OWNER=11,
- PART=12,PREFIX=13,PROPOSAL=14,GRANT=15,TOTAL_PART=16,TOTAL=17,CUT=18,DISPATCH=20,EPOCH=21,ACTIVE_EDGES=22,TOUCHED=23,ACTIVE_VERTICES=24,RECEIVERS=25,CHANGED_VERTICES=26,LABEL_A=27,LABEL_B=28,LABEL_CHANGED=29,TREE_DISTANCE=30,TREE_PARENT=31,TREE_SUM=32;
+ PART=12,PREFIX=13,PROPOSAL=14,REMAINING=15,TOTAL_PART=16,TOTAL=17,CUT=18,DISPATCH=20,ACTIVE_EDGES=21,TOUCHED=22,ACTIVE_VERTICES=23,RECEIVERS=24,CHANGED_VERTICES=25,LABEL_A=26,LABEL_B=27,LABEL_CHANGED=28,TREE_DISTANCE=29,TREE_PARENT=30,TREE_SUM=31;
 const int CK=0,CL=1,CU=2,CG=3,CCAP=4,CPREF=5,COPEN=6,CACCEPTED=7,CONTROL=8,CFLOW=10;
 const int INFINITY=0x3fffffff;const int64_t INF=int64_t(0x3fffffffffffffffUL),MAX_VALUE=int64_t(0x7fffffffffffffffUL);
 shared int64_t reduction[128];
@@ -38,7 +40,7 @@ void writeFlow(int e,int64_t x){if(e<7*n())writeNumber(ca(CFLOW)+2*e,x);else wri
 int distance(int vertex){return int(atomicAdd(words[at(DISTANCE)+vertex],0u));}
 void initialize(int id){
  if(id<h(3)){put(COUNT,id,0);put(CURSOR,id,0);put(TOUCHED,id,0);put(LABEL_A,id,0);put(LABEL_B,id,0);put(LABEL_CHANGED,id,0);write(EXCESS,id,0l);put(DISTANCE,id,INFINITY);}
- if(id<h(4)){writeFlow(id,0l);write(PROPOSAL,id,0l);write(GRANT,id,0l);put(EPOCH,id,0);}
+ if(id<h(4)){writeFlow(id,0l);write(PROPOSAL,id,0l);}
  if(id<n())put(CUT,id,0);
  if(id==0){for(int i=0;i<12;i++)putControl(i,0);putControl(5,p.argument);for(int i=0;i<17;i++)put(STATE,i,0);put(STATE,8,INFINITY);put(STATE,0,-1);put(STATE,16,1);}
 }
@@ -76,24 +78,20 @@ int64_t contribution(int vertex,int e){
   if(read(EXCESS,vertex)<=0l||distance(vertex)==INFINITY||distance(vertex)==0||distance(peer)!=distance(vertex)-1)return 0l;
   return ends.x==vertex?upper(e)-flow(e):flow(e)-lower(e);
  }
- if(get(EPOCH,e)!=control(1)+1)return 0l;
- int64_t proposal=read(PROPOSAL,e);bool receiving=proposal>0l?ends.y==vertex:proposal<0l&&ends.x==vertex;
- return receiving?abs(proposal):0l;
+ return 0l;
 }
-int64_t budget(int vertex){return p.mode==0?max(0l,read(EXCESS,vertex)):(read(EXCESS,vertex)<0l?-read(EXCESS,vertex):MAX_VALUE);}
 int labelQueue(){return (control(1)&1)==0?LABEL_A:LABEL_B;}
 void touch(int vertex){atomicOr(words[at(labelQueue())+vertex],1u);if(atomicExchange(words[at(TOUCHED)+vertex],uint(control(1)+1))!=uint(control(1)+1)){
  int index=int(atomicAdd(words[at(STATE)+12],1u));put(CHANGED_VERTICES,index,vertex);}}
 void allocate(int vertex,int e,int64_t prefix,int64_t amount){
- if(amount==0l)return;int64_t available=budget(vertex),keep=prefix<available?min(amount,available-prefix):0l;
- if(p.mode==0&&keep>0l){ivec2 ends=endpoints(e);write(PROPOSAL,e,ends.x==vertex?keep:-keep);
-  put(EPOCH,e,control(1)+1);int index=int(atomicAdd(words[at(STATE)+9],1u));put(ACTIVE_EDGES,index,e);
+ if(amount==0l)return;int64_t available=max(0l,read(EXCESS,vertex)),keep=prefix<available?min(amount,available-prefix):0l;
+ if(keep>0l){ivec2 ends=endpoints(e);write(PROPOSAL,e,ends.x==vertex?keep:-keep);
+  int index=int(atomicAdd(words[at(STATE)+9],1u));put(ACTIVE_EDGES,index,e);
   int receiver=ends.x==vertex?ends.y:ends.x;
   if(atomicExchange(words[at(CURSOR)+receiver],uint(control(1)+1))!=uint(control(1)+1)){
    int slot=int(atomicAdd(words[at(STATE)+11],1u));put(RECEIVERS,slot,receiver);}
   touch(receiver);
  }
- else if(p.mode==1){int64_t proposed=read(PROPOSAL,e);write(GRANT,e,proposed>0l?keep:-keep);}
 }
 void countPositive(int vertex){if(read(EXCESS,vertex)>0l){int index=int(atomicAdd(words[at(STATE)+4],1u));put(ACTIVE_VERTICES,index,vertex);}}
 void finishBalance(int vertex,int64_t sum){
@@ -104,8 +102,6 @@ bool idle(int vertex){
  if(get(STATE,0)<0)return false;
  if(p.mode==4)return get(STATE,0)!=5;
  if(p.mode==0)return read(EXCESS,vertex)<=0l;
- if(p.mode==1)return get(CURSOR,vertex)!=control(1)+1;
- if(p.mode==2)return get(TOUCHED,vertex)!=control(1)+1;
  return get(labelQueue(),vertex)==0||read(EXCESS,vertex)<0l||distance(vertex)==INFINITY;
 }
 void blockSum(int block,int lane){
@@ -117,15 +113,13 @@ void notifyPredecessor(int vertex,int e){ivec2 ends=endpoints(e);bool forward=en
  if((forward?upper(e)-flow(e):flow(e)-lower(e))>0l){int peer=forward?ends.x:ends.y;
   atomicOr(words[at(labelQueue()==LABEL_A?LABEL_B:LABEL_A)+peer],1u);}}
 void ownerSum(int vertex){
- if(get(STATE,0)>=0&&p.mode<3){
-  int size=p.mode==0?get(STATE,10):p.mode==1?get(STATE,11):get(STATE,12);if(vertex>=size)return;
-  vertex=get(p.mode==0?ACTIVE_VERTICES:p.mode==1?RECEIVERS:CHANGED_VERTICES,vertex);
-  if(p.mode==0)touch(vertex);
+ if(get(STATE,0)>=0&&p.mode==0){
+  if(vertex>=get(STATE,10))return;vertex=get(ACTIVE_VERTICES,vertex);touch(vertex);
  }
  bool skip=idle(vertex);
  if(p.mode==3){put(LABEL_CHANGED,vertex,0);put(labelQueue(),vertex,0);
   if(read(EXCESS,vertex)>0l&&distance(vertex)==INFINITY)atomicExchange(words[ca(CONTROL)],2u);}
- if(skip){if(p.mode==2)countPositive(vertex);return;}
+ if(skip)return;
  int64_t prefix=p.mode==3?int64_t(INFINITY):0l;
  if(get(COUNT,vertex)<=128){for(int i=get(OFFSET,vertex);i<get(OFFSET,vertex+1);i++){
    int e=get(ENTRY,i);int64_t value=contribution(vertex,e);if(p.mode<2)allocate(vertex,e,prefix,value);prefix=p.mode==3?min(prefix,value):add(prefix,value);
@@ -168,11 +162,20 @@ void finishBfs(){if(get(STATE,0)!=1)return;put(STATE,6,get(STATE,6)+1);
  if(get(STATE,2)!=0){put(STATE,1,get(STATE,1)+1);put(STATE,2,0);}else put(STATE,0,2);}
 void clearProposal(int e){if(get(STATE,0)!=2)return;
  put(STATE,10,get(STATE,4));put(STATE,3,0);put(STATE,4,0);put(STATE,5,0);put(STATE,8,INFINITY);put(STATE,9,0);put(STATE,11,0);put(STATE,12,0);}
-void apply(int index){if(get(STATE,0)!=2||index>=get(STATE,9))return;int e=get(ACTIVE_EDGES,index);
- int64_t grant=read(GRANT,e);if(grant!=0l){int64_t next=add(flow(e),grant);
- if(next<lower(e)||next>upper(e)){invalid();return;}writeFlow(e,next);
- }
+// Freeze each receiver's quota before any parallel edge changes its balance.
+void prepareReceiver(int index){if(index>=get(STATE,11))return;int vertex=get(RECEIVERS,index);
+ int64_t old=read(EXCESS,vertex);write(REMAINING,vertex,old<0l?-old:-1l);
 }
+void apply(int index){if(index>=get(STATE,9))return;int e=get(ACTIVE_EDGES,index);ivec2 ends=endpoints(e);
+ int64_t proposed=read(PROPOSAL,e),amount=abs(proposed);int receiver=proposed>0l?ends.y:ends.x;
+ int address=at(REMAINING)/2+receiver;int64_t available=atomicAdd(integers[address],0l),grant=amount;
+ if(available>=0l){for(;;){grant=min(amount,available);if(grant==0l)break;
+   int64_t prior=atomicCompSwap(integers[address],available,available-grant);if(prior==available)break;available=prior;
+ }}
+ if(grant==0l)return;int64_t signedGrant=proposed>0l?grant:-grant;writeFlow(e,flow(e)+signedGrant);
+ atomicAdd(integers[at(EXCESS)/2+ends.x],-signedGrant);atomicAdd(integers[at(EXCESS)/2+ends.y],signedGrant);
+}
+void updatePositive(int index){if(index<get(STATE,12))countPositive(get(CHANGED_VERTICES,index));}
 // Signed subtree imbalance removes full-cell divergence while retaining the projected routes.
 void seedTree(int cell){put(TREE_DISTANCE,cell,capacityValue(CL,cell)==0l&&flow(7*n()+cell)<capacityValue(CU,cell)?0:INFINITY);put(TREE_PARENT,cell,-1);write(TREE_SUM,cell,0l);}
 int treeDistance(int cell){return int(atomicAdd(words[at(TREE_DISTANCE)+cell],0u));}
@@ -227,6 +230,7 @@ void main(){
  else if(p.stage==24)seedTree(id);else if(p.stage==25)treeWave(id);else if(p.stage==26)treeGather(id);
  else if(p.stage==27)treePropose(id);else if(p.stage==28)treeApply(id);else if(p.stage==29)treeReceiver(id);
  else if(p.stage==30)treeReset();else if(p.stage==31){if(get(STATE,0)==5)seedGroup(id);}
+ else if(p.stage==33)prepareReceiver(id);else if(p.stage==34)updatePositive(id);
  else if(p.stage==19)apply(id);else if(p.stage==20)finishRound();else if(p.stage==23){bool moving=get(STATE,0)==2;dispatchSize(2,moving?get(STATE,9):0);
  dispatchSize(7,moving?get(STATE,11):0);dispatchSize(8,moving?get(STATE,12):0);}
  if(p.stage==10||p.stage==12||p.stage==14||p.stage==20)updateDispatch();

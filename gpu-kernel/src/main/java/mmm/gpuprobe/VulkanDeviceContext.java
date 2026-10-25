@@ -13,6 +13,7 @@ import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
 import org.lwjgl.vulkan.VkPhysicalDeviceMemoryProperties;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
 import org.lwjgl.vulkan.VkPhysicalDeviceShaderAtomicFloatFeaturesEXT;
+import org.lwjgl.vulkan.VkPhysicalDeviceShaderAtomicInt64Features;
 import org.lwjgl.vulkan.VkQueue;
 import org.lwjgl.vulkan.VkQueueFamilyProperties;
 
@@ -21,6 +22,7 @@ import java.nio.IntBuffer;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.EXTShaderAtomicFloat.VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME;
 import static org.lwjgl.vulkan.VK10.*;
+import static org.lwjgl.vulkan.KHRShaderAtomicInt64.VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME;
 import static org.lwjgl.vulkan.VK11.vkGetPhysicalDeviceFeatures2;
 
 /** Owns the Vulkan instance, selected physical device, logical device and compute queue. */
@@ -104,12 +106,16 @@ final class VulkanDeviceContext implements AutoCloseable {
 
 			VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomicFeatures =
 					VkPhysicalDeviceShaderAtomicFloatFeaturesEXT.calloc(stack).sType$Default();
+			VkPhysicalDeviceShaderAtomicInt64Features integerAtomics =
+					VkPhysicalDeviceShaderAtomicInt64Features.calloc(stack).sType$Default();
+			atomicFeatures.pNext(integerAtomics.address());
 			VkPhysicalDeviceFeatures2 features = VkPhysicalDeviceFeatures2.calloc(stack).sType$Default()
 					.pNext(atomicFeatures.address());
 			vkGetPhysicalDeviceFeatures2(physicalDevice, features);
 			if (!inventoryInt64 && !computeFloat64 && !atomicFeatures.shaderBufferFloat32AtomicAdd()) {
 				throw new IllegalStateException(deviceName + " lacks shaderBufferFloat32AtomicAdd");
 			}
+			atomicFeatures.pNext(0L);
 			atomicFeatures.shaderBufferFloat32AtomicAdd(true).shaderBufferFloat32Atomics(true);
 			VkDeviceQueueCreateInfo.Buffer queueInfo = VkDeviceQueueCreateInfo.calloc(1, stack);
 			queueInfo.get(0).sType$Default().queueFamilyIndex(queueFamily).pQueuePriorities(stack.floats(1.0F));
@@ -118,8 +124,11 @@ final class VulkanDeviceContext implements AutoCloseable {
 					.ppEnabledExtensionNames(stack.pointers(stack.UTF8(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME)));
 			if (inventoryInt64 || computeFloat64) {
 				if (inventoryInt64 && !features.features().shaderInt64()) throw new IllegalStateException(deviceName + " lacks shaderInt64");
+				if (inventoryInt64 && !integerAtomics.shaderBufferInt64Atomics()) throw new IllegalStateException(deviceName + " lacks shaderBufferInt64Atomics");
 				if (computeFloat64 && !features.features().shaderFloat64()) throw new IllegalStateException(deviceName + " lacks shaderFloat64");
-				deviceInfo.pNext(0L).ppEnabledExtensionNames(null)
+				integerAtomics.shaderBufferInt64Atomics(inventoryInt64).shaderSharedInt64Atomics(false);
+				deviceInfo.pNext(inventoryInt64 ? integerAtomics.address() : 0L)
+						.ppEnabledExtensionNames(inventoryInt64 ? stack.pointers(stack.UTF8(VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME)) : null)
 						.pEnabledFeatures(org.lwjgl.vulkan.VkPhysicalDeviceFeatures.calloc(stack)
 								.shaderInt64(inventoryInt64).shaderFloat64(computeFloat64));
 			}
