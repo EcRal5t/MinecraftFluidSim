@@ -19,7 +19,8 @@ final class VulkanLiquidMaterialRoutes implements AutoCloseable {
                   VulkanLiquidStateLayout.Column scratchLimbs, VulkanLiquidStateLayout.Column routeCounts,
                   VulkanLiquidStateLayout.Column minimumExponents, VulkanLiquidStateLayout.Column weights,
                   VulkanLiquidStateLayout.Column densities, VulkanLiquidStateLayout.Column densityExponents,
-                  VulkanLiquidStateLayout.Column scanWorkspace, long endOffset) {
+                  VulkanLiquidStateLayout.Column scanWorkspace, VulkanLiquidStateLayout.Column descriptors,
+                  VulkanLiquidStateLayout.Column activeCounts, long endOffset) {
         int headerWordOffset() { return word(header); }
         int windowCount() { return reserveCounts.count(); }
         long bytes() { return endOffset - header.offset(); }
@@ -39,7 +40,7 @@ final class VulkanLiquidMaterialRoutes implements AutoCloseable {
             data[14] = word(densities); data[15] = word(densityExponents);
             for (var field : VulkanLiquidStateLayout.Field.values()) data[16 + field.ordinal()] = word(source.column(field));
             for (var field : VulkanLiquidRouteLayout.Field.values()) data[35 + field.ordinal()] = word(routes.column(field));
-            data[45] = windowCount();
+            data[60] = windowCount();data[61]=word(descriptors);data[62]=word(activeCounts);
             for (int i = 0; i < data.length; i++) target.putInt(Math.toIntExact(0 + 4L * i), data[i]);
         
             return target;
@@ -67,17 +68,20 @@ final class VulkanLiquidMaterialRoutes implements AutoCloseable {
         var weights = column(cursor, source.stockCapacity(), 8, alignment);
         var densities = column(cursor, source.stockCapacity(), 8, alignment);
         var densityExponents = column(cursor, source.stockCapacity(), 8, alignment);
+        var descriptors=column(cursor,Math.multiplyExact(2,routes.routeCapacity()),4,alignment);
+        var activeCounts=column(cursor,source.stockCapacity(),4,alignment);
         var scan = column(cursor, Math.toIntExact(VulkanPrefixScan.workspaceBytes(windows) / 4), 4, alignment);
         return new Layout(source, routes, acceptedDescriptorsWordOffset, materialPhaseWordOffset, gravitySign,
                 scratchLimbCapacity, header, counts, offsets, limbs, routeCounts, minimum, weights,
-                densities, densityExponents, scan, align(cursor[0], alignment));
+                densities, densityExponents, scan, descriptors, activeCounts, align(cursor[0], alignment));
     }
 
     private final FlipKernelBindings bindings;
+    private FlipKernelBindings.BufferRange candidate;
     private final VulkanPrefixScan scan;
     VulkanLiquidMaterialRoutes(VulkanDeviceContext context) {
         bindings = new FlipKernelBindings(context, 3,
-                resource("liquid-material-routes.comp").replace("// DYADIC_LIBRARY", resource("liquid-dyadic.glsl")), 16);
+                resource("liquid-material-routes.comp").replace("// DYADIC_LIBRARY", resource("liquid-dyadic.glsl").replaceAll("\\b(for|while)\\s*\\(", "[[dont_unroll]] $1(")), 16);
         try { scan = new VulkanPrefixScan(context); }
         catch (RuntimeException | LinkageError failure) {
             try { bindings.close(); } catch (RuntimeException | LinkageError closing) { failure.addSuppressed(closing); }
@@ -86,7 +90,7 @@ final class VulkanLiquidMaterialRoutes implements AutoCloseable {
     }
     void rebindRanges(FlipKernelBindings.BufferRange source, FlipKernelBindings.BufferRange candidate,
                       FlipKernelBindings.BufferRange errors) {
-        bindings.rebindRanges(List.of(source, candidate, errors));
+        this.candidate=candidate;bindings.rebindRanges(List.of(source, candidate, errors));
         scan.rebindRanges(candidate, candidate, candidate, errors);
     }
     void record(VkCommandBuffer command, Layout layout) { record(command, layout, layout.gravitySign()); }
@@ -98,7 +102,10 @@ final class VulkanLiquidMaterialRoutes implements AutoCloseable {
         timed(command,timings,"material-reserve",()->{stage(command, layout, 0, layout.windowCount(), gravitySign);stage(command, layout, 1, layout.source().cellCount(), gravitySign);});
         timed(command,timings,"material-scratch-scan",()->scan.record(command, layout.windowCount(), word(layout.reserveCounts()), word(layout.reserveOffsets()), word(layout.scanWorkspace())));
         timed(command,timings,"material-split",()->stage(command, layout, 2, layout.source().cellCount(), gravitySign));
-        timed(command,timings,"material-output-scan",()->scan.record(command, layout.routes().routeCapacity(), word(layout.routeCounts()),
+        stage(command,layout,4,layout.source().stockCapacity(),gravitySign);
+        scan.record(command,layout.source().stockCapacity(),word(layout.activeCounts()),word(layout.routes().column(VulkanLiquidRouteLayout.Field.SOURCE_OFFSETS)),word(layout.scanWorkspace()));
+        stage(command,layout,5,Math.max(1,layout.source().stockCapacity()),gravitySign);
+        timed(command,timings,"material-output-scan",()->scan.record(command, layout.routes().routeCapacity(), word(layout.reserveCounts()),
                 word(layout.routes().column(VulkanLiquidRouteLayout.Field.VOLUME_OFFSETS)), word(layout.scanWorkspace())));
         timed(command,timings,"material-compact",()->stage(command, layout, 3, layout.routes().routeCapacity(), gravitySign));
     }
@@ -110,7 +117,10 @@ final class VulkanLiquidMaterialRoutes implements AutoCloseable {
             bindings.bind(command, stack);
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                     stack.ints(layout.headerWordOffset(), stage, count, gravitySign));
-            vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);
+            if(stage==3){
+                barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
+                vkCmdDispatchIndirect(command,candidate.buffer().handle(),candidate.offset()+layout.routes().column(VulkanLiquidRouteLayout.Field.DISPATCH).offset());
+            }else vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);
             barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, stack);
         }

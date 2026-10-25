@@ -5,11 +5,11 @@ layout(binding=0,std430) buffer Arena { uint words[]; };
 layout(binding=1,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header; int stage; int count; int argument; float cellSize; float duration; float gravity; float tolerance; } p;
 const int SOURCE_K=0,PRE_K=1,POST_K=2,REFERENCE=3,STORAGE=4,DIAGONAL=5,MODE=6,CELL_P=7,NODE_P=8,NODE_DV=9,
- FACE_ROWS=10,FC=11,FO=12,CURSOR=13,NODE_FACES=14,BC=15,BO=16,BN=17,PARTS=18,DATUM=19,DISPATCH=21,LARGE_NODES=22;
+ FACE_ROWS=10,FC=11,FO=12,CURSOR=13,NODE_FACES=14,BC=15,BO=16,BN=17,PARTS=18,DATUM=19,DISPATCH=21,LARGE_NODES=22,PRODUCT_PEERS=23,PRODUCT_WEIGHTS=24;
 shared double part[128],otherPart[128],loadPart[128];
 shared int nodePart[128];
 int h(int i){return int(words[p.header+i]);}
-int at(int field){return h(32+field);}
+int at(int field){return h(64+field);}
 int n(){return h(0);}int g(){return h(1);}int nf(){return h(2);}int size(){return h(3);}
 int get(int f,int i){return int(words[at(f)+i]);}void put(int f,int i,int v){words[at(f)+i]=uint(v);}
 double number(int address){return packDouble2x32(uvec2(words[address],words[address+1]));}
@@ -84,7 +84,7 @@ void prepareFace(int f){
  for(int side=0;side<2;side++)if(r[side]>=n())atomicAdd(words[at(FC)+r[side]-n()],1u);
 }
 void scatter(int f){ivec2 r=rowsOf(f);for(int side=0;side<2;side++)if(r[side]>=n()){
- int node=r[side]-n(),slot=int(atomicAdd(words[at(CURSOR)+node],1u));put(NODE_FACES,get(FO,node)+slot,f);
+ int node=r[side]-n(),slot=int(atomicAdd(words[at(CURSOR)+node],1u));int entry=get(FO,node)+slot;put(NODE_FACES,entry,f);put(PRODUCT_PEERS,entry,r[1-side]);write(PRODUCT_WEIGHTS,entry,weight(f));
 }}
 void gasRow(int node,int lane){
  int row=n()+node,start=get(FO,node),end=get(FO,node+1);double diag=0.0,rhs=0.0,load=0.0;
@@ -122,7 +122,7 @@ void mapBlocks(int node){if(node==0){dispatchCount(3,get(BO,g()));dispatchCount(
 double vector(int row){return row<0?0.0:p.argument==0?pressure(row):number(h(21)+2*(size()+row));}
 void productBlock(int block,int lane){
  if(block>=get(BO,g()))return;int node=get(BN,block),row=n()+node,index=get(FO,node)+128*(block-get(BO,node))+lane;
- double result=0.0;if(index<get(FO,node+1)){int f=get(NODE_FACES,index);result=weight(f)*(vector(row)-vector(peerRow(f,row)));}
+ double result=0.0;if(index<get(FO,node+1)){result=read(PRODUCT_WEIGHTS,index)*(vector(row)-vector(get(PRODUCT_PEERS,index)));}
  part[lane]=result;otherPart[lane]=0.0;loadPart[lane]=0.0;reduce(lane);if(lane==0)write(PARTS,block,part[0]);
 }
 void productNode(int node,int lane){
@@ -134,7 +134,7 @@ void productNode(int node,int lane){
 void productSmall(int node){
  if(node>=int(words[h(9)])||get(FC,node)>128)return;
  int row=n()+node;double own=vector(row),result=read(STORAGE,node)*own;
- for(int i=get(FO,node);i<get(FO,node+1);i++){int f=get(NODE_FACES,i);result+=weight(f)*(own-vector(peerRow(f,row)));}
+ for(int i=get(FO,node);i<get(FO,node+1);i++){result+=read(PRODUCT_WEIGHTS,i)*(own-vector(get(PRODUCT_PEERS,i)));}
  writeNumber(h(21)+2*(2*size()+row),result);
 }
 void project(int f){

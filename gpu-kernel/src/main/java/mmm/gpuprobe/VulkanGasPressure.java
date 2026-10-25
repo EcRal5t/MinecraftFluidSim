@@ -21,7 +21,7 @@ final class VulkanGasPressure implements AutoCloseable {
         SOURCE_FACE_K(8), PRE_PRESSURE_FACE_K(8), POST_PRESSURE_FACE_K(8), REFERENCE(8), STORAGE(8),
         DIAGONAL(8), MECHANICAL_MODE(4), CELL_PHYSICAL_PRESSURE(8), NODE_ABSOLUTE_PRESSURE(8),
         NODE_PREDICTED_VOLUME_CHANGE(8), FACE_ROWS(4), FACE_COUNTS(4), FACE_OFFSETS(4), FACE_CURSORS(4),
-        NODE_FACES(4), BLOCK_COUNTS(4), BLOCK_OFFSETS(4), BLOCK_NODES(4), PRODUCT_PARTS(8), DATUM(8), SCAN(4), DISPATCH(4), LARGE_NODES(4);
+        NODE_FACES(4), BLOCK_COUNTS(4), BLOCK_OFFSETS(4), BLOCK_NODES(4), PRODUCT_PARTS(8), DATUM(8), SCAN(4), DISPATCH(4), LARGE_NODES(4), PRODUCT_PEERS(4), PRODUCT_WEIGHTS(8);
         final int width; Field(int width) { this.width = width; }
     }
     static final class Layout {
@@ -53,13 +53,13 @@ final class VulkanGasPressure implements AutoCloseable {
                     ||pressure.pressure().count()<pressureSize||pressure.work().count()<5L*pressureSize
                     ||pressure.meta().count()<2L*pressureSize||pressure.problem().count()<3L*pressureSize+1)
                 throw new IllegalArgumentException("Finite gas pressure layout differs from its resident buffers");
-            long cursor=align(scratchBase,alignment);header=new VulkanLiquidStateLayout.Column(cursor,64,4);cursor+=header.bytes();
+            long cursor=align(scratchBase,alignment);header=new VulkanLiquidStateLayout.Column(cursor,96,4);cursor+=header.bytes();
             for(Field field:Field.values()) {
                 int count=switch(field) {
                     case SOURCE_FACE_K,PRE_PRESSURE_FACE_K,POST_PRESSURE_FACE_K->faceCount;
                     case REFERENCE->pressureSize;
                     case CELL_PHYSICAL_PRESSURE->liquidCount;
-                    case FACE_ROWS,NODE_FACES->Math.multiplyExact(2,faceCount);
+                    case FACE_ROWS,NODE_FACES,PRODUCT_PEERS,PRODUCT_WEIGHTS->Math.multiplyExact(2,faceCount);
                     case FACE_OFFSETS,BLOCK_OFFSETS->gasCapacity+1;
                     case BLOCK_NODES,PRODUCT_PARTS->blockCapacity;
                     case DATUM->1;
@@ -86,8 +86,8 @@ final class VulkanGasPressure implements AutoCloseable {
         long endOffset(){return endOffset;}
         long bytes(){return endOffset-header.offset();}
         ByteBuffer headerBytes() {
-            var out=ByteBuffer.allocateDirect(256).order(ByteOrder.LITTLE_ENDIAN);var gas=thermodynamics.gas();
-            int[] data=new int[64];
+            var out=ByteBuffer.allocateDirect(384).order(ByteOrder.LITTLE_ENDIAN);var gas=thermodynamics.gas();
+            int[] data=new int[96];
             data[0]=liquidCount;data[1]=gasCapacity;data[2]=faceCount;data[3]=pressureSize;
             data[4]=VulkanGasPressure.word(cells);data[5]=VulkanGasPressure.word(faces);data[6]=VulkanGasPressure.word(geometry.cellNodes());
             data[7]=thermodynamics.nodeVolumesWordOffset();data[8]=VulkanGasPressure.word(thermodynamics.states());
@@ -97,7 +97,7 @@ final class VulkanGasPressure implements AutoCloseable {
             var buffers=List.of(pressure.starts(),pressure.columns(),pressure.values(),pressure.rows(),pressure.pressure(),
                     pressure.work(),pressure.meta(),pressure.problem(),pressure.control());
             for(int i=0;i<buffers.size();i++)data[16+i]=VulkanGasPressure.word(buffers.get(i));
-            for(Field field:Field.values())data[32+field.ordinal()]=word(field);
+            for(Field field:Field.values())data[64+field.ordinal()]=word(field);
             for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);
             out.putDouble(224,101325.0);return out;
         }

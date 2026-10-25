@@ -36,6 +36,8 @@ final class VulkanMechanicalBodies implements AutoCloseable {
                     word(routes.column(VulkanLiquidRouteLayout.Field.MASS_UNITS)),projectedFacesWordOffset,
                     gasCellNodesWordOffset,gasNodeCapacity,word(parents),word(changed),word(counts),word(offsets),word(cursors),word(members),gasCountsWordOffset};
             for(int i=0;i<values.length;i++)target.putInt(4*i,values[i]);
+            target.putInt(108,word(routes.column(VulkanLiquidRouteLayout.Field.SOURCE_OFFSETS)));
+            target.putInt(112,word(routes.column(VulkanLiquidRouteLayout.Field.SOURCE_MASKS)));
             target.putInt(72,granular==null?0:granular.state().particleCapacity());
             if(granular!=null){var state=granular.state();var pressure=granular.pressure();
                 target.putInt(76,state.word(VulkanGranularStateLayout.Field.COUNTS));

@@ -8,6 +8,7 @@ layout(push_constant)uniform Push{int header;int stage;int count;int unused;}p;
 const int OF=0,OP=1,OK=2,OI=3,KC=4,TERMS=5,SF=6,SP=7,SO=8,SC=9,SM=10,SV=11,
  CC=12,CO=13,CU=14,CS=15,COVER=16,EC=17,EO=18,LM=19,GM=20,PM=21,K=22,REQ=23,CM=25,DM=26,PC=27,PO=28,PU=29,PR=30;
 int h(int n){return int(words[p.header+n]);}int f(int n){return h(48+n);}
+int ch(int i){return int(words[h(151)+i]);}int cf(int field){return ch(8+field);}
 double number(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
 void put(int at,double value){uvec2 b=unpackDouble2x32(value);words[at]=b.x;words[at+1]=b.y;}
 uint64_t quantity(int at){return uint64_t(words[at])|(uint64_t(words[at+1])<<32);}
@@ -36,10 +37,10 @@ int ownerFor(int candidate){return candidate>=0&&candidate<h(9)&&words[f(OF)+can
 void clear(int id){
  if(id<h(9))words[f(OF)+id]=0u;
  if(id<h(132)){put(h(140)+4*id,0.0);put(h(140)+4*id+2,0.0);}
- if(id<h(106))words[f(TERMS)+id]=0u;
+ if(id<h(106)){words[f(TERMS)+id]=0u;words[cf(18)+id]=0u;}
  if(id<h(8)){words[f(EC)+id]=0u;words[f(SF)+id]=0u;}
  if(id<h(4)){words[f(CC)+id]=0u;words[f(CU)+id]=0u;words[f(PC)+id]=0u;words[f(PU)+id]=0u;}
- if(id==0){for(int i=0;i<4;i++)words[f(REQ)+i]=0u;for(int i=0;i<3;i++)words[h(96)+i]=0u;
+ if(id==0){words[h(151)+7]=1u;words[cf(26)+1]=0u;for(int i=0;i<5;i++)words[f(REQ)+i]=0u;for(int i=0;i<3;i++)words[h(96)+i]=0u;
   if(liveLiquid()<0||liveLiquid()>h(0)||liveGas()<0||liveGas()>h(1)||liveParticle()<0||liveParticle()>h(2)||liveDeposit()<0||liveDeposit()>h(3)||liveCoherent()<0||liveCoherent()>h(45)||liveDevice()<0||liveDevice()>h(132)||livePorts()<0||livePorts()>h(147))invalid();}
 }
 void flagOwner(int id){int kind,row;bool exists;ownerAddress(id,kind,row,exists);words[f(OF)+id]=exists&&hasMass(kind,row)?1u:0u;}
@@ -115,6 +116,13 @@ double dryPort(int cell,int bit,int axis,int side){
  vec2 polygon[8];polygon[0]=vec2(0);polygon[1]=vec2(.5,0);polygon[2]=vec2(.5);polygon[3]=vec2(0,.5);int n=clipPort(polygon,4,vec3(plane[tangent],plane[other],offset));float twice=0.0;
  for(int i=1;i+1<n;i++){vec2 x=polygon[i]-polygon[0],y=polygon[i+1]-polygon[0];twice+=x.x*y.y-x.y*y.x;}return double(clamp(abs(twice)*.5,0.0,.25));
 }
+// The spatial producer emits adjacency degrees and the bath index alongside
+// each contact, so conduction need not traverse the complete edge set to count it.
+void writeContact(int at,int a,int b,double g,double bath){
+ words[h(102)+at]=uint(a);words[h(103)+at]=uint(b);put(h(104)+2*at,g);put(h(105)+2*at,bath);put(cf(23)+2*at,0.0);
+ atomicAdd(words[cf(18)+a],1u);if(b>=0)atomicAdd(words[cf(18)+b],1u);
+ else{uint index=atomicAdd(words[cf(26)+1],1u);words[cf(47)+at]=index;if(index>=uint(ch(6)))atomicOr(errors,64u);else words[cf(48)+index]=uint(at);}
+}
 void deviceEdges(int point,bool writing,inout int count){
  int cell=int(words[f(SC)+point]),mask=int(words[f(SM)+point]),a=int(words[f(SO)+point]),fam=family(a);double k=number(f(KC)+2*a),v=fraction(point)*.125LF;
  for(int at=int(words[f(PO)+cell]);at<int(words[f(PO)+cell+1]);at++){
@@ -128,27 +136,36 @@ void deviceEdges(int point,bool writing,inout int count){
   }
   double g=cellSize()*cellSize()*area/(number(h(144)+2*port)/number(h(145)+2*port)+number(h(146)+2*port)/k);
   if(!(finite(g)&&g>=0.0)){invalid();continue;}if(g==0.0)continue;
-  if(writing){int outAt=int(words[f(EO)+point])+count;if(outAt>=h(108)){atomicOr(errors,64u);return;}words[h(102)+outAt]=uint(min(a,b));words[h(103)+outAt]=uint(max(a,b));put(h(104)+2*outAt,g);put(h(105)+2*outAt,0.0);}count++;
+  if(writing){int outAt=int(words[f(EO)+point])+count;if(outAt>=h(108)){atomicOr(errors,64u);return;}writeContact(outAt,min(a,b),max(a,b),g,0.0);}count++;
  }
 }
 void portCount(int id){if(id>=livePorts())return;int cell=int(words[h(142)+id]),device=int(words[h(141)+id]),dir=int(words[h(143)+id]);if(cell<0||cell>=h(4)||device<0||device>=liveDevice()||dir<0||dir>5){invalid();return;}atomicAdd(words[f(PC)+cell],1u);}
 void portScatter(int id){if(id>=livePorts())return;int cell=int(words[h(142)+id]);words[f(PR)+words[f(PO)+cell]+atomicAdd(words[f(PU)+cell],1u)]=uint(id);}
 void edge(int point,int other,double g,double bath,bool writing,inout int count){
  if(!(finite(g)&&g>=0.0)){invalid();return;}if(g==0.0)return;int a=int(words[f(SO)+point]),b=other<0?-1:int(words[f(SO)+other]);if(a==b)return;
- if(writing){int at=int(words[f(EO)+point])+count;if(at>=h(108)){atomicOr(errors,64u);return;}words[h(102)+at]=uint(b>=0?min(a,b):a);words[h(103)+at]=uint(b>=0?max(a,b):-1);put(h(104)+2*at,g);put(h(105)+2*at,bath);}count++;
+ if(writing){int at=int(words[f(EO)+point])+count;if(at>=h(108)){atomicOr(errors,64u);return;}writeContact(at,b>=0?min(a,b):a,b>=0?max(a,b):-1,g,bath);}count++;
 }
 void contacts(int point,bool writing){
  if(point>=liveSamples())return;int cell=int(words[f(SC)+point]),mask=int(words[f(SM)+point]),owner=int(words[f(SO)+point]),count=0;double fp=fraction(point),kp=number(f(KC)+2*owner),hcell=cellSize();
  if(kp==0.0){if(!writing)words[f(EC)+point]=0u;return;}
  for(int at=int(words[f(CO)+cell]);at<int(words[f(CO)+cell+1]);at++){
   int q=int(words[f(CS)+at]);if(q<=point||words[f(SO)+q]==uint(owner))continue;double kq=number(f(KC)+2*int(words[f(SO)+q]));
-  double area=.125LF*double(bitCount(uint(mask)&words[f(SM)+q]))*double(pow(float(min(fp,fraction(q))),2.0/3.0));edge(point,q,2.0LF*harmonic(kp,kq)*hcell*area,0.0,writing,count);
+  int overlap=bitCount(uint(mask)&words[f(SM)+q]);if(overlap==0||kq==0.0)continue;
+  // Reservation only needs positive geometric incidence. Evaluate the physical
+  // conductance once when the contact is written.
+  double g=1.0;if(writing){double area=.125LF*double(overlap)*double(pow(float(min(fp,fraction(q))),2.0/3.0));g=2.0LF*harmonic(kp,kq)*hcell*area;}
+  edge(point,q,g,0.0,writing,count);
  }
  for(int axis=0;axis<3;axis++){
   int other=neighbor(cell,axis,1);if(other>=0)for(int at=int(words[f(CO)+other]);at<int(words[f(CO)+other+1]);at++){
-   int q=int(words[f(CS)+at]);if(words[f(SO)+q]==uint(owner))continue;double fq=fraction(q),area=0.0;
-   for(int bit=0;bit<8;bit++)if(((bit>>axis)&1)!=0&&(mask&(1<<bit))!=0&&(words[f(SM)+q]&(1u<<(bit^(1<<axis))))!=0u){double total=max(number(f(COVER)+2*(8*cell+bit)),number(f(COVER)+2*(8*other+(bit^(1<<axis)))));if(total>0.0)area+=.25LF*fp*fq/total;}
-   edge(point,q,harmonic(kp,number(f(KC)+2*int(words[f(SO)+q])))*hcell*area,0.0,writing,count);
+   int q=int(words[f(CS)+at]);if(words[f(SO)+q]==uint(owner))continue;
+   int faceMask=axis==0?170:axis==1?204:240,overlap=mask&faceMask&(int(words[f(SM)+q])<<(1<<axis));
+   double kq=number(f(KC)+2*int(words[f(SO)+q]));if(overlap==0||kq==0.0)continue;
+   double g=1.0;if(writing){double fq=fraction(q),area=0.0;
+    for(int bit=0;bit<8;bit++)if((overlap&(1<<bit))!=0){double total=max(number(f(COVER)+2*(8*cell+bit)),number(f(COVER)+2*(8*other+(bit^(1<<axis)))));if(total>0.0)area+=.25LF*fp*fq/total;}
+    g=harmonic(kp,kq)*hcell*area;
+   }
+   edge(point,q,g,0.0,writing,count);
   }
   if(h(12)>=0)for(int side=0;side<2;side++){
    double temperature=number(h(12)+2*(6*cell+2*axis+side));if(isnan(temperature))continue;if(!(finite(temperature)&&temperature>0.0)){invalid();continue;}
@@ -160,13 +177,13 @@ void contacts(int point,bool writing){
  if(!writing)words[f(EC)+point]=uint(count);
 }
 void writeContacts(int id){if(id==0){uint count=words[f(EO)+h(8)];words[f(REQ)+3]=count;words[h(96)+2]=count;if(count>uint(h(108)))atomicOr(errors,64u);}
- if(errors!=0u||words[f(EO)+h(8)]>uint(h(108)))return;contacts(id,true);}
+ if((errors&~64u)!=0u||words[f(EO)+h(8)]>uint(h(108)))return;contacts(id,true);}
 void publish(int owner){if(owner>=liveOwners())return;int kind=int(words[f(OK)+owner]),row=int(words[f(OI)+owner]);double value=number(h(97)+2*owner);
  int address=(kind==0?h(22):kind==1?h(28):kind==2?h(36):kind==3?h(113):h(134))+2*row;
  if(kind==4){double old=number(address);put(h(140)+4*row,value);put(h(140)+4*row+2,-old);if(quantity(address)!=quantity(h(97)+2*owner)){uint64_t generation=quantity(h(139)+2*row)+uint64_t(1);words[h(138)+2*row]=uint(generation);words[h(138)+2*row+1]=uint(generation>>32);}}
  put(address,value);
 }
 void main(){int id=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);if(id>=p.count)return;
- if(p.stage==0){clear(id);return;}if(p.stage==2){prepareOwner(id);return;}if(p.stage==3){prepareTerms(id);return;}if(p.stage==9){writeContacts(id);return;}if(errors!=0u)return;
+ if(p.stage==13){if(id==0)words[f(REQ)+4]=words[cf(26)+1];return;}if(p.stage==0){clear(id);return;}if(p.stage==2){prepareOwner(id);return;}if(p.stage==3){prepareTerms(id);return;}if(p.stage==9){writeContacts(id);return;}if(errors!=0u)return;
  if(p.stage==1)flagOwner(id);else if(p.stage==4)flagSample(id);else if(p.stage==5)prepareSample(id);else if(p.stage==6)scatterSample(id);else if(p.stage==7)coverage(id);else if(p.stage==8)contacts(id,false);else if(p.stage==10)publish(id);else if(p.stage==11)portCount(id);else if(p.stage==12)portScatter(id);
 }

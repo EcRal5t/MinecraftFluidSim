@@ -23,6 +23,7 @@ bool inside(ivec3 q,ivec3 size){return all(greaterThanEqual(q,ivec3(0)))&&all(le
 int cell(ivec3 q){ivec3 size=shape();return inside(q,size)?(q.z*size.y+q.y)*size.x+q.x:-1;}
 int base(int axis){ivec3 s=shape();return axis==0?0:(s.x+1)*s.y*s.z+(axis==2?s.x*(s.y+1)*s.z:0);}
 int face(ivec3 q,int axis){ivec3 s=shape()+unit(axis);return inside(q,s)?base(axis)+(q.z*s.y+q.y)*s.x+q.x:-1;}
+int64_t routeMass(int stock,int slot){uint mask=words[h(63)+stock];if((mask&(1u<<slot))==0u)return int64_t(0);int r=int(words[h(62)+stock])+bitCount(mask&((1u<<slot)-1u));return getLong(h(58)+2*r);}
 void coordinates(int id,out int axis,out ivec3 q){axis=id<base(1)?0:id<base(2)?1:2;ivec3 s=shape()+unit(axis);int n=id-base(axis);q=ivec3(n%s.x,n/s.x%s.y,n/(s.x*s.y));}
 int flags(int id){return h(7)<0?1:int(words[h(7)+id]);}
 int64_t mass(int c,bool after){return c<0?int64_t(0):getLong(h(8)+4*c+(after?2:0));}
@@ -41,8 +42,8 @@ void cellTotals(int c){
 void faceFlux(int id){
     int axis;ivec3 q;coordinates(id,axis,q);int a=cell(q-unit(axis)),b=cell(q);int64_t forward=int64_t(0),reverse=int64_t(0);
     if(a>=0&&b>=0){
-        for(int j=int(sourceWords[src(1)+a]);j<int(sourceWords[src(1)+a+1]);j++)forward=addPositive(forward,getLong(h(58)+2*(7*j+2+2*axis)));
-        for(int j=int(sourceWords[src(1)+b]);j<int(sourceWords[src(1)+b+1]);j++)reverse=addPositive(reverse,getLong(h(58)+2*(7*j+1+2*axis)));
+        for(int j=int(sourceWords[src(1)+a]);j<int(sourceWords[src(1)+a+1]);j++)forward=addPositive(forward,routeMass(j,2+2*axis));
+        for(int j=int(sourceWords[src(1)+b]);j<int(sourceWords[src(1)+b+1]);j++)reverse=addPositive(reverse,routeMass(j,1+2*axis));
     }
     putLong(h(10)+2*id,forward-reverse);
 }

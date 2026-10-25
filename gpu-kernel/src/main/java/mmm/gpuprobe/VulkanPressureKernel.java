@@ -17,6 +17,14 @@ final class VulkanPressureKernel implements AutoCloseable {
         int liquidCount();
         int matrixFreeFromRow();
         void recordProduct(VkCommandBuffer command, boolean direction);
+        default void recordProductIndirect(VkCommandBuffer command,boolean direction,Dispatch dispatch){recordProduct(command,direction);}
+    }
+    /** Conditional compute streams publish packed dispatches in the pore-flow control column. */
+    record Dispatch(GpuBuffer buffer,long controlOffset){
+        void record(VkCommandBuffer command,int slot){try(var stack=stackPush()){
+            barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
+            vkCmdDispatchIndirect(command,buffer.handle(),controlOffset+128L+16L*slot);
+        }}
     }
     record GasOperator(VulkanGasPressure kernel, VulkanGasPressure.Layout layout) implements PressureOperator {
         @Override public int liquidCount() { return layout.liquidCount(); }

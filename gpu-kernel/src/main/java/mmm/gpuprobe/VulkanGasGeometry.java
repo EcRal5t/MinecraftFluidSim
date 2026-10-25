@@ -28,6 +28,17 @@ final class VulkanGasGeometry implements AutoCloseable {
         int cells() { return totals.source().cellCount(); }
         int faces() { return faceAreas.count(); }
         long bytes() { return endOffset - header.offset(); }
+        /** Carries a completed chamber geometry into the next source layout. Headers stay local. */
+        void copyDerived(VulkanBufferCopyPlan.Builder plan, Layout source) {
+            if(cells()!=source.cells()||faces()!=source.faces()||sealedExterior!=source.sealedExterior||Double.compare(cellSize,source.cellSize)!=0)
+                throw new IllegalArgumentException("Chamber geometry transfer changes the grid");
+            var from=List.of(source.presence,source.dryVolumes,source.dryMasks,source.compact,source.faceAreas,
+                    source.fullConnections,source.parents,source.exteriorReachable,source.cellNodes,source.changed,
+                    source.componentCount,source.rootFlags,source.rootOffsets,source.componentCounts,source.componentOffsets,source.componentMembers);
+            var to=List.of(presence,dryVolumes,dryMasks,compact,faceAreas,fullConnections,parents,exteriorReachable,cellNodes,changed,
+                    componentCount,rootFlags,rootOffsets,componentCounts,componentOffsets,componentMembers);
+            for(int i=0;i<from.size();i++)plan.copy(from.get(i),to.get(i));
+        }
         /** cellNodes: -1 no gas, 0 ambient, 1..componentCount finite chambers.
          * Component CSR includes ambient row 0; unused rows after componentCount are empty.
          * dryVolumes and faceAreas use SI units. Exact dry capacity remains pore minus totals.

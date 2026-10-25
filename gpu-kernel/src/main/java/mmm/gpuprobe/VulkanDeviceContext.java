@@ -88,11 +88,24 @@ final class VulkanDeviceContext implements AutoCloseable {
 
 			IntBuffer count = stack.ints(0);
 			check(vkEnumeratePhysicalDevices(instance, count, null), "vkEnumeratePhysicalDevices(count)");
-			if (deviceIndex < 0 || deviceIndex >= count.get(0)) {
-				throw new IllegalArgumentException("GPU index " + deviceIndex + " not in [0," + count.get(0) + ")");
-			}
 			PointerBuffer physicalPointers = stack.mallocPointer(count.get(0));
 			check(vkEnumeratePhysicalDevices(instance, count, physicalPointers), "vkEnumeratePhysicalDevices(list)");
+			String requestedName=System.getProperty("mmm.gpuDeviceName", "").strip();
+			if(!requestedName.isEmpty()) {
+				int selected=-1;var names=new java.util.ArrayList<String>();
+				var candidateProperties=VkPhysicalDeviceProperties.calloc(stack);
+				for(int i=0;i<count.get(0);i++) {
+					vkGetPhysicalDeviceProperties(new VkPhysicalDevice(physicalPointers.get(i),instance),candidateProperties);
+					String name=candidateProperties.deviceNameString();names.add(i+":"+name);
+					if(name.toLowerCase(java.util.Locale.ROOT).contains(requestedName.toLowerCase(java.util.Locale.ROOT))) {
+						if(selected>=0)throw new IllegalArgumentException("GPU name matches multiple devices: "+requestedName+"; "+names);
+						selected=i;
+					}
+				}
+				if(selected<0)throw new IllegalArgumentException("GPU name is absent: "+requestedName+"; available="+names);
+				deviceIndex=selected;
+			}
+			if(deviceIndex<0||deviceIndex>=count.get(0))throw new IllegalArgumentException("GPU index "+deviceIndex+" not in [0,"+count.get(0)+")");
 			physicalDevice = new VkPhysicalDevice(physicalPointers.get(deviceIndex), instance);
 
 			VkPhysicalDeviceProperties properties = VkPhysicalDeviceProperties.calloc(stack);

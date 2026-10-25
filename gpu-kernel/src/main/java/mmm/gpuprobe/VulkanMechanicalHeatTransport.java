@@ -19,6 +19,7 @@ final class VulkanMechanicalHeatTransport implements AutoCloseable {
             var out=ByteBuffer.allocateDirect(256).order(ByteOrder.LITTLE_ENDIAN);int[] data=new int[64];
             data[0]=sourceLayout.sizeX();data[1]=sourceLayout.sizeY();data[2]=sourceLayout.sizeZ();data[3]=sourceLayout.cellCount();
             data[4]=target.stockCapacity();data[5]=sourceHeatWord;data[6]=word(routes.column(VulkanLiquidRouteLayout.Field.MASS_UNITS));
+            data[10]=word(routes.column(VulkanLiquidRouteLayout.Field.SOURCE_OFFSETS));data[11]=word(routes.column(VulkanLiquidRouteLayout.Field.SOURCE_MASKS));data[12]=word(routes.column(VulkanLiquidRouteLayout.Field.SLOTS));
             data[7]=word(routeHeat);data[8]=word(targetCellHeat);data[9]=word(energyChanges);
             for(var field:VulkanLiquidStateLayout.Field.values()){data[16+field.ordinal()]=word(sourceLayout.column(field));data[40+field.ordinal()]=word(target.column(field));}
             for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);return out;

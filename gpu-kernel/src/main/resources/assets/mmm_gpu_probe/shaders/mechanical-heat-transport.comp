@@ -16,17 +16,17 @@ int incomingSource(int c,int slot){if(slot==0)return c;ivec3 at=ivec3(c%h(0),c/h
  at[axis]+=(slot&1)!=0?1:-1;if(at[axis]<0||at[axis]>=ivec3(h(0),h(1),h(2))[axis])return -1;return (at.z*h(1)+at.y)*h(0)+at.x;}
 void split(int cell){
  int first=int(source[src(1)+cell]),last=int(source[src(1)+cell+1]);int64_t total=int64_t(0),accepted=int64_t(0);int finalRoute=-1;
- for(int stock=first;stock<last;stock++){total=addMass(total,oldQuantity(src(8)+2*stock));for(int slot=0;slot<7;slot++){
-  int route=7*stock+slot;int64_t mass=quantity(h(6)+2*route);accepted=addMass(accepted,mass);if(mass>int64_t(0))finalRoute=route;store(h(7)+2*route,0.0);}}
+ for(int stock=first;stock<last;stock++){total=addMass(total,oldQuantity(src(8)+2*stock));for(int route=int(words[h(10)+stock]);route<int(words[h(10)+stock+1]);route++){
+  int64_t mass=quantity(h(6)+2*route);accepted=addMass(accepted,mass);if(mass>int64_t(0))finalRoute=route;store(h(7)+2*route,0.0);}}
  double heat=value(h(5)+2*cell);if(accepted!=total||heat<0.0||(heat>0.0&&total==int64_t(0))){atomicOr(errors,65536u);return;}if(heat==0.0)return;
  double remaining=heat;
- for(int stock=first;stock<last;stock++)for(int slot=0;slot<7;slot++){int route=7*stock+slot;int64_t mass=quantity(h(6)+2*route);if(mass==int64_t(0))continue;
+ for(int stock=first;stock<last;stock++)for(int route=int(words[h(10)+stock]);route<int(words[h(10)+stock+1]);route++){int64_t mass=quantity(h(6)+2*route);if(mass==int64_t(0))continue;
   double part=route==finalRoute?remaining:heat*(double(mass)/double(total));store(h(7)+2*route,part);remaining-=part;}
 }
 void gatherAndPost(int cell){
  double heat=0.0;
  for(int slot=0;slot<7;slot++){int from=incomingSource(cell,slot);if(from<0)continue;
-  for(int stock=int(source[src(1)+from]);stock<int(source[src(1)+from+1]);stock++)heat+=value(h(7)+2*(7*stock+slot));}
+  for(int stock=int(source[src(1)+from]);stock<int(source[src(1)+from+1]);stock++)for(int route=int(words[h(10)+stock]);route<int(words[h(10)+stock+1]);route++)if(int(words[h(12)+route])==slot)heat+=value(h(7)+2*route);}
  store(h(8)+2*cell,heat);
  int first=int(words[dst(1)+cell]),last=int(words[dst(1)+cell+1]),lastStock=-1;int64_t total=int64_t(0);
  for(int stock=first;stock<last;stock++){int64_t mass=quantity(dst(8)+2*stock);total=addMass(total,mass);if(mass>int64_t(0))lastStock=stock;}

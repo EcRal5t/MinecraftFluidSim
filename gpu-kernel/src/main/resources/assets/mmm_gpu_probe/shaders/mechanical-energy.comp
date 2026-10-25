@@ -32,11 +32,12 @@ void faceTerms(int index){
     store(h(20)+4*index,h(102)>=0?value(h(102)+2*index):m>0.0?.5*momentum*(momentum/m):0.0);
     store(h(20)+4*index+2,-.5*m*u*u);
 }
+int64_t routeMass(int stock,int slot){uint mask=words[h(110)+stock];if((mask&(1u<<slot))==0u)return int64_t(0);int r=int(words[h(109)+stock])+bitCount(mask&((1u<<slot)-1u));return mass(h(10)+2*r);}
 void potentialTerms(int stock){
     store(h(21)+4*stock,0.0);store(h(21)+4*stock+2,0.0);
     if(stock>=int(sourceWords[src(0)]))return;
-    store(h(21)+4*stock,double(mass(h(10)+2*(7*stock+3)))*1e-10*p.gravity*p.cellSize);
-    store(h(21)+4*stock+2,-double(mass(h(10)+2*(7*stock+4)))*1e-10*p.gravity*p.cellSize);
+    store(h(21)+4*stock,double(routeMass(stock,3))*1e-10*p.gravity*p.cellSize);
+    store(h(21)+4*stock+2,-double(routeMass(stock,4))*1e-10*p.gravity*p.cellSize);
 }
 void particleTerms(int index){
     store(h(95)+4*index,0.0);store(h(95)+4*index+2,0.0);
@@ -75,6 +76,9 @@ void vertex(int index){
         int gas=index-h(3);
         if(h(11)>=0)exchange=-dvec2(value(h(11)+4*gas),value(h(11)+4*gas+2));
         if(h(103)>=0)exchange=add(exchange,value(h(103)+2*gas));
+        if(h(104)>=0&&gas<int(words[h(108)])){
+            capacity=value(h(105)+2*gas);available=max(0.0,value(h(104)+2*gas)-value(h(106)+2*gas));
+        }
     }
     else{
         int particle=index-h(3)-h(83);
@@ -154,6 +158,11 @@ void postGranular(int row){
     dvec2 change=twoSum(after,-before);store(h(88)+2*row,after);
     store(h(95)+4*row,change.x);store(h(95)+4*row+2,change.y);
 }
+void postGas(int gas){
+    if(gas>=int(words[h(108)]))return;int root=int(words[h(12)+h(3)+gas]);dvec4 body=data(h(27),root);double work=body.x+body.y;
+    if(work==0.0)return;double before=value(h(104)+2*gas),cold=value(h(106)+2*gas),weight=work<0.0?max(0.0,before-cold):value(h(105)+2*gas),total=work<0.0?body.w:body.z;
+    if(weight==0.0)return;double after=max(cold,before+work*(weight/total));dvec2 change=twoSum(after,-before);store(h(104)+2*gas,after);store(h(107)+4*gas,change.x);store(h(107)+4*gas+2,change.y);
+}
 void main(){
     int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),item=block*128+lane;
     if(p.stage==4){reduceBlock(block,lane);return;}
@@ -166,5 +175,6 @@ void main(){
     else if(p.stage==6){if(item<h(7)){store(h(28)+4*item,0.0);store(h(28)+4*item+2,0.0);}}
     else if(p.stage==7){if(item<h(3))postCell(item);}
     else if(p.stage==8){if(item<h(84)+h(98))particleTerms(item);}
-    else if(item<h(84)+h(98))postGranular(item);
+    else if(p.stage==9){if(item<h(84)+h(98))postGranular(item);}
+    else if(p.stage==10){if(item<h(83))postGas(item);}
 }

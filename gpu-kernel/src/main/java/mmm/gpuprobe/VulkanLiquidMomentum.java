@@ -42,6 +42,7 @@ final class VulkanLiquidMomentum implements AutoCloseable {
             values[58]=word(routes.column(VulkanLiquidRouteLayout.Field.MASS_UNITS));
             values[59]=word(heatPostingRemainders);values[60]=word(heatAllocationRemainders);
             values[61]=output.stockCapacity();
+            values[62]=word(routes.column(VulkanLiquidRouteLayout.Field.SOURCE_OFFSETS));values[63]=word(routes.column(VulkanLiquidRouteLayout.Field.SOURCE_MASKS));
             var target=ByteBuffer.allocateDirect(Math.toIntExact(header.bytes())).order(ByteOrder.LITTLE_ENDIAN);
             for(int i=0;i<values.length;i++)target.putInt(Math.toIntExact(0+4L*i),values[i]);
         

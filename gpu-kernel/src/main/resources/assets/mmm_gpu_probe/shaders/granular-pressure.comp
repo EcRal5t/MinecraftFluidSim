@@ -7,7 +7,7 @@ layout(binding=1,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header; int stage; double cellSize; double duration; double gravity; } p;
 const int FI=0,FS=1,DW=2,FC=3,FO=4,CURSOR=5,FE=6,FVOL=7,FPORE=8,SV=9,SK=10,SY=11,PK=12,K=13,IMPULSE=14,HEAT=15,DIAMETER=16,FINAL_K=18,FINAL_Y=19;
 int h(int i){return int(words[p.header+i]);}int sh(int f){return h(16+f);}int at(int f){return h(40+f);}
-int gh(int i){return int(words[h(7)+i]);}int ga(int f){return gh(32+f);}int jh(int i){return int(words[h(8)+i]);}int ja(int f){return jh(24+f);}
+int gh(int i){return int(words[h(7)+i]);}int ga(int f){return gh(64+f);}int jh(int i){return int(words[h(8)+i]);}int ja(int f){return jh(24+f);}
 int get(int f,int i){return int(words[at(f)+i]);}void put(int f,int i,int v){words[at(f)+i]=uint(v);}
 double number(int a){return packDouble2x32(uvec2(words[a],words[a+1]));}
 void writeNumber(int a,double x){uvec2 v=unpackDouble2x32(x);words[a]=v.x;words[a+1]=v.y;}

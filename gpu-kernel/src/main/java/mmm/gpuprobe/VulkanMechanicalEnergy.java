@@ -22,9 +22,12 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
                   VulkanLiquidStateLayout.Column blockRoots,VulkanLiquidStateLayout.Column partials,
                   VulkanLiquidStateLayout.Column bodyData,VulkanLiquidStateLayout.Column energyChanges,
                   VulkanLiquidStateLayout.Column dispatch,VulkanLiquidStateLayout.Column scanWorkspace,
-                  VulkanLiquidStateLayout.Column granularTerms,VulkanLiquidStateLayout.Column granularChanges,int sourceFaceKWordOffset,int gasExternalWorkWordOffset,long endOffset) {
-        Layout withSourceFaceK(int word){return new Layout(bodies,momentum,thermal,gasWorkWordOffset,sourceHeatWordOffset,externalWorkWordOffset,granular,header,faceTerms,potentialTerms,vertexData,blockCounts,blockOffsets,blockRoots,partials,bodyData,energyChanges,dispatch,scanWorkspace,granularTerms,granularChanges,word,gasExternalWorkWordOffset,endOffset);}
-        Layout withGasExternalWork(int word){return new Layout(bodies,momentum,thermal,gasWorkWordOffset,sourceHeatWordOffset,externalWorkWordOffset,granular,header,faceTerms,potentialTerms,vertexData,blockCounts,blockOffsets,blockRoots,partials,bodyData,energyChanges,dispatch,scanWorkspace,granularTerms,granularChanges,sourceFaceKWordOffset,word,endOffset);}
+                  VulkanLiquidStateLayout.Column granularTerms,VulkanLiquidStateLayout.Column granularChanges,int sourceFaceKWordOffset,int gasExternalWorkWordOffset,VulkanGasMechanicalHeat.Layout gasEnergy,long endOffset) {
+        Layout withSourceFaceK(int word){return new Layout(bodies,momentum,thermal,gasWorkWordOffset,sourceHeatWordOffset,externalWorkWordOffset,granular,header,faceTerms,potentialTerms,vertexData,blockCounts,blockOffsets,blockRoots,partials,bodyData,energyChanges,dispatch,scanWorkspace,granularTerms,granularChanges,word,gasExternalWorkWordOffset,gasEnergy,endOffset);}
+        Layout withGasExternalWork(int word){return new Layout(bodies,momentum,thermal,gasWorkWordOffset,sourceHeatWordOffset,externalWorkWordOffset,granular,header,faceTerms,potentialTerms,vertexData,blockCounts,blockOffsets,blockRoots,partials,bodyData,energyChanges,dispatch,scanWorkspace,granularTerms,granularChanges,sourceFaceKWordOffset,word,gasEnergy,endOffset);}
+        Layout withGasEnergy(VulkanGasMechanicalHeat.Layout gas){
+            if(gas.work().thermodynamics().gas().nodeCapacity()!=bodies.gasNodeCapacity()||gas.work().thermodynamics().tables().isothermal())throw new IllegalArgumentException("Mechanical gas heat requires the same finite caloric source nodes");
+            return new Layout(bodies,momentum,thermal,gasWorkWordOffset,sourceHeatWordOffset,externalWorkWordOffset,granular,header,faceTerms,potentialTerms,vertexData,blockCounts,blockOffsets,blockRoots,partials,bodyData,energyChanges,dispatch,scanWorkspace,granularTerms,granularChanges,sourceFaceKWordOffset,gasExternalWorkWordOffset,gas,endOffset);}
         ByteBuffer headerBytes(){return headerBytes(momentum.source());}
         ByteBuffer headerBytes(VulkanLiquidStateLayout source) {
             var out=ByteBuffer.allocateDirect(512).order(ByteOrder.LITTLE_ENDIAN);int[] data=new int[128];
@@ -54,6 +57,9 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
             }
             data[102]=sourceFaceKWordOffset;
             data[103]=gasExternalWorkWordOffset;
+            data[104]=gasEnergy==null?-1:word(gasEnergy.work().candidateEnergy());
+            if(gasEnergy!=null){data[105]=word(gasEnergy.capacity());data[106]=word(gasEnergy.coldEnergy());data[107]=word(gasEnergy.energyChanges());data[108]=Math.toIntExact(gasEnergy.work().thermodynamics().gas().column(VulkanGasStateLayout.Field.COUNTS).offset()/4);}
+            data[109]=word(momentum.routes().column(VulkanLiquidRouteLayout.Field.SOURCE_OFFSETS));data[110]=word(momentum.routes().column(VulkanLiquidRouteLayout.Field.SOURCE_MASKS));
             for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);return out;
         }
         void initializeHeader(ByteBuffer destination){destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());}
@@ -65,6 +71,7 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
             if(sourceHeatWordOffset>=0)streams.add(new VulkanEnergyLedger.Stream(1,sourceHeatWordOffset,bodies.source().cellCount(),2,1));
             if(externalWorkWordOffset>=0)streams.add(new VulkanEnergyLedger.Stream(1,externalWorkWordOffset,bodies.source().cellCount(),2,-1));
             if(gasExternalWorkWordOffset>=0)streams.add(new VulkanEnergyLedger.Stream(1,gasExternalWorkWordOffset,bodies.gasNodeCapacity(),2,-1));
+            if(gasEnergy!=null)streams.add(stream(gasEnergy.energyChanges(),1));
             if(granular!=null){
                 streams.add(stream(granularTerms,-1));streams.add(stream(granularChanges,1));int count=bodies.granular().state().particleCapacity();
                 if(granular.sourceHeatWordOffset()>=0)streams.add(new VulkanEnergyLedger.Stream(1,granular.sourceHeatWordOffset(),count,2,1));
@@ -105,7 +112,7 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
         int particles=granular==null?0:bodies.granular().state().particleCapacity();
         int granularRows=granular==null?0:Math.addExact(particles,bodies.granular().state().depositCapacity());
         var granularTerms=column(cursor,Math.multiplyExact(particles,4),8,alignment);var granularChanges=column(cursor,Math.multiplyExact(granularRows,2),8,alignment);
-        return new Layout(bodies,momentum,thermal,gasWorkWordOffset,sourceHeatWordOffset,externalWorkWordOffset,granular,header,faces,potential,vertex,counts,offsets,roots,partials,result,changes,dispatch,scan,granularTerms,granularChanges,-1,-1,align(cursor[0],alignment));
+        return new Layout(bodies,momentum,thermal,gasWorkWordOffset,sourceHeatWordOffset,externalWorkWordOffset,granular,header,faces,potential,vertex,counts,offsets,roots,partials,result,changes,dispatch,scan,granularTerms,granularChanges,-1,-1,null,align(cursor[0],alignment));
     }
     private final FlipKernelBindings bindings;
     private final VulkanPrefixScan scan;
@@ -130,6 +137,7 @@ final class VulkanMechanicalEnergy implements AutoCloseable {
         stage(command,layout,6,layout.thermal().liquid().stockCapacity(),cellSize,gravity,false);
         stage(command,layout,7,layout.thermal().liquid().cellCount(),cellSize,gravity,false);
         if(layout.granular()!=null)stage(command,layout,9,layout.granularChanges().count()/2,cellSize,gravity,false);
+        if(layout.gasEnergy()!=null)stage(command,layout,10,layout.bodies().gasNodeCapacity(),cellSize,gravity,false);
     }
     private void stage(VkCommandBuffer command,Layout layout,int stage,int count,double cellSize,double gravity,boolean indirect){
         if(count==0)return;int groups=(count+127)/128;

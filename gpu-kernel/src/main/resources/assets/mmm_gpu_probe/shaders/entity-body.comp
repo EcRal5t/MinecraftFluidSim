@@ -89,7 +89,7 @@ void bodyTotals(int body){for(int i=0;i<7;i++)write(TOTALS,7*body+i,0.0);if(body
  }
  for(int axis=0;axis<3;axis++){write(TOTALS,7*body+axis,areas[axis]);write(TOTALS,7*body+3+axis,weights[axis]);}write(TOTALS,7*body+6,wetVolume);
 }
-int gh(int i){return int(words[h(13)+i]);}int ga(int f){return gh(32+f);}int jh(int i){return int(words[h(14)+i]);}int ja(int f){return jh(24+f);}
+int gh(int i){return int(words[h(13)+i]);}int ga(int f){return gh(64+f);}int jh(int i){return int(words[h(14)+i]);}int ja(int f){return jh(24+f);}
 bool full(int c){return liquid(c,1)>0.0&&liquid(c,2)>0.0&&liquid(c,2)-liquid(c,0)<=4e-5;}
 int pressureRow(int c){if(c<0)return -1;if(full(c))return c;int node=int(words[gh(6)+c]);return node>0?h(3)+node-1:-1;}
 double datum(){return num(ga(19));}

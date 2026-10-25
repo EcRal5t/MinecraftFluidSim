@@ -12,6 +12,7 @@ int particleCount(){return h(18)==0?0:int(words[h(19)]);}
 bool liveVertex(int index){if(index<h(3))return true;if(index<h(3)+h(10))return index<h(3)+gasCount();return index<h(3)+h(10)+particleCount();}
 double value(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
 int64_t mass(int at){return int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32));}
+int64_t routeMass(int stock,int slot){uint mask=words[h(28)+stock];if((mask&(1u<<slot))==0u)return int64_t(0);int r=int(words[h(27)+stock])+bitCount(mask&((1u<<slot)-1u));return mass(h(7)+2*r);}
 int root(int vertex){int next=int(words[h(11)+vertex]);while(next!=vertex){vertex=next;next=int(words[h(11)+vertex]);}return vertex;}
 void join(int first,int second){
     int a=root(first),b=root(second);if(a==b)return;
@@ -35,7 +36,7 @@ void cell(int index){
     int first=int(sourceWords[h(6)+index]),last=int(sourceWords[h(6)+index+1]);
     for(int side=0;side<6;side++){
         bool moving=false;
-        for(int stock=first;stock<last;stock++)if(mass(h(7)+2*(7*stock+side+1))>int64_t(0)){moving=true;break;}
+        for(int stock=first;stock<last;stock++)if(routeMass(stock,side+1)>int64_t(0)){moving=true;break;}
         if(!moving)continue;
         ivec3 target=pos;target[side/2]+=(side&1)==0?-1:1;
         if(any(lessThan(target,ivec3(0)))||any(greaterThanEqual(target,ivec3(h(0),h(1),h(2))))){atomicOr(errors,32u);return;}

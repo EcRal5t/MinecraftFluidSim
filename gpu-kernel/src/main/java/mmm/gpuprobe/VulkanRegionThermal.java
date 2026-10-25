@@ -105,8 +105,8 @@ final class VulkanRegionThermal implements AutoCloseable {
                 if(l.input().gas()!=null){gasEOS.recordVolumes(command,l.input().gasThermal(),l.input().gasGeometry());gasEOS.record(command,l.input().gasThermal());}
             });
             timed(command,"thermal-contacts",()->contacts.recordPrepare(command,l.contacts()));
-        },l.contacts().column(VulkanThermalContacts.Field.REQUIREMENTS).offset(),16);
-        if(status.error()==64){int required=status.feedback().getInt(12);if(required>l.conduction().contacts)throw new ContactCapacityGrowth(required,l.conduction().baths);}
+        },l.contacts().column(VulkanThermalContacts.Field.REQUIREMENTS).offset(),20);
+        if(status.error()==64){int required=status.feedback().getInt(12),baths=status.feedback().getInt(16);if(required>l.conduction().contacts||baths>l.conduction().baths)throw new ContactCapacityGrowth(required,baths);}
         if(status.error()!=0)return status.error();
         status=candidate.continueBatch((command,in,out,errors,staging,stack)->{
             conduction.recordPrepare(command,l.conduction(),duration,timings);

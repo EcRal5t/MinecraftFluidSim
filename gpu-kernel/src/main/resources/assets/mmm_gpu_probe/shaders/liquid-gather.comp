@@ -11,12 +11,13 @@ const int COUNTS=0,CELL_OFFSETS=1,MATERIALS=2,SUPPORT_MASKS=3,VOLUME_OFFSETS=4,V
           VOLUME_LIMBS=7,MASS_UNITS=8,ENERGY_BITS=9,MIXTURE_PRESENT=10,SPECIES_OFFSETS=11,SPECIES_HANDLES=12,
           SPECIES_AMOUNTS=13,MASS_RESIDUAL=14,NUMERIC_VOLUMES=15;
 const int ROUTE_VOLUME_OFFSETS=0,ROUTE_VOLUME_SIGNS=1,ROUTE_VOLUME_EXPONENTS=2,ROUTE_VOLUME_LIMBS=3,
-          ROUTE_MASS=4,ROUTE_ENERGY=5,ROUTE_MIXTURE=6,ROUTE_SPECIES_OFFSETS=7,ROUTE_SPECIES_HANDLES=8,ROUTE_SPECIES_AMOUNTS=9;
+          ROUTE_MASS=4,ROUTE_ENERGY=5,ROUTE_MIXTURE=6,ROUTE_SPECIES_OFFSETS=7,ROUTE_SPECIES_HANDLES=8,ROUTE_SPECIES_AMOUNTS=9,ROUTE_SOURCE_OFFSETS=10,ROUTE_SLOTS=11,ROUTE_SOURCE_MASKS=14;
 const int64_t MAX_LONG=int64_t(0x7fffffffffffffffUL);
 int h(int field) { return int(candidateWords[p.header+field]); }
 int src(int field) { return h(16+field); }
 int dst(int field) { return h(35+field); }
 int route(int field) { return h(54+field); }
+int routeIndex(int stock,int slot){uint mask=candidateWords[route(ROUTE_SOURCE_MASKS)+stock];return (mask&(1u<<slot))==0u?-1:int(candidateWords[route(ROUTE_SOURCE_OFFSETS)+stock])+bitCount(mask&((1u<<slot)-1u));}
 int64_t longAt(int word) { return int64_t(uint64_t(candidateWords[word])|(uint64_t(candidateWords[word+1])<<32)); }
 void putLong(int word,int64_t value) { candidateWords[word]=uint(value);candidateWords[word+1]=uint(uint64_t(value)>>32); }
 double doubleAt(int word) { return packDouble2x32(uvec2(candidateWords[word],candidateWords[word+1])); }
@@ -28,13 +29,13 @@ int64_t addQuantity(int64_t sum,int64_t value) {
 
 void clearStock(int stock) {
     candidateWords[h(11)+stock]=0u;
-    for(int i=0;i<35;i++)candidateWords[h(12)+35*stock+i]=0u;
-    for(int i=0;i<7;i++){candidateWords[h(10)+7*stock+i]=uint(-1);putDouble(h(14)+14*stock+2*i,0.0);}
+    for(int i=0;i<7;i++)candidateWords[h(12)+35*stock+5*i+2]=0u;
+    for(int i=0;i<7;i++){putDouble(h(14)+14*stock+2*i,0.0);}
 }
 
 int seekRoute(int stock,int end,int slot) {
     while(stock<end) {
-        int sign=int(candidateWords[route(ROUTE_VOLUME_SIGNS)+7*stock+slot]);
+        int r=routeIndex(stock,slot);int sign=r<0?0:int(candidateWords[route(ROUTE_VOLUME_SIGNS)+r]);
         if(sign>0)break;
         if(sign<0)atomicOr(errors,32u);
         stock++;
@@ -138,7 +139,7 @@ void mergeCell(int cell,bool writing) {
         for(int i=0;i<7;i++) {
             members[i]=-1;
             if(cursors[i]<ends[i]&&int(sourceWords[src(MATERIALS)+cursors[i]])==material) {
-                members[i]=7*cursors[i]+slots[i];cursors[i]=seekRoute(cursors[i]+1,ends[i],slots[i]);
+                members[i]=routeIndex(cursors[i],slots[i]);cursors[i]=seekRoute(cursors[i]+1,ends[i],slots[i]);
             }
         }
         if(writing)gatherStock(outputStart+count,cell,material,members);

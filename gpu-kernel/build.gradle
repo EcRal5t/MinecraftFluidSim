@@ -42,6 +42,10 @@ def registerGpuProbe = { String taskName, String descriptionText, String mainCla
 		classpath = sourceSets.main.runtimeClasspath
 		mainClass = mainClassName
 		jvmArgs '--enable-native-access=ALL-UNNAMED'
+		def requestedDeviceName = providers.gradleProperty('gpuProbeDeviceName').orNull
+		if (requestedDeviceName != null && !requestedDeviceName.isBlank()) {
+			systemProperty 'mmm.gpuDeviceName', requestedDeviceName
+		}
 		def probeWorkDir = layout.buildDirectory.dir(workDirectoryName).get().asFile
 		workingDir probeWorkDir
 		doFirst {

@@ -29,7 +29,7 @@ final class VulkanLiquidRouteQuantities implements AutoCloseable {
         ByteBuffer headerBytes() { return headerBytes(source); }
         ByteBuffer headerBytes(VulkanLiquidStateLayout source) {
             var target = ByteBuffer.allocateDirect(Math.toIntExact(header.bytes())).order(ByteOrder.LITTLE_ENDIAN);
-            int[] values = new int[48];
+            int[] values = new int[64];
             values[0] = source.stockCapacity(); values[1] = routes.routeCapacity(); values[2] = routes.speciesCapacity();
             values[3] = materialReferenceWordOffset; values[4] = speciesReferenceWordOffset; values[5] = speciesStride;
             values[6] = word(speciesCounts); values[7] = word(energyRemainders);
@@ -48,7 +48,7 @@ final class VulkanLiquidRouteQuantities implements AutoCloseable {
                 || alignment < 8 || (alignment & (alignment - 1)) != 0 || speciesStride < 0)
             throw new IllegalArgumentException("Invalid liquid quantity route layout");
         long[] cursor = {scratchBase};
-        var header = column(cursor, 48, 4, alignment);
+        var header = column(cursor, 64, 4, alignment);
         var counts = column(cursor, routes.routeCapacity(), 4, alignment);
         var remainders = column(cursor, Math.multiplyExact(source.stockCapacity(), 8), 8, alignment);
         var workspace = column(cursor, Math.toIntExact(VulkanPrefixScan.workspaceBytes(routes.routeCapacity()) / 4), 4, alignment);

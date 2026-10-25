@@ -96,8 +96,9 @@ void route(int id){int source=0,target=0;double weight=0.0,ambientVolume=0.0;
 }
 void scatterRoute(int id){int source=int(words[f(RS)+id]),target=int(words[f(RT)+id]);int a=int(words[f(SO)+source]+atomicAdd(words[f(SCU)+source],1u)),b=int(words[f(TO)+target]+atomicAdd(words[f(TCU)+target],1u));words[f(SR)+a]=uint(id);words[f(TR)+b]=uint(id);}
 double vector(int row,bool direction){return number((direction?f(WORK)+2*h(2):f(PRESSURE))+2*row);}
+bool productNeeded(bool direction){return number(f(CONTROL)+2*(direction?3:7))!=0.0LF;}
 void productSmall(int node,bool direction){
- if(node>=nodes())return;int begin=int(words[f(START)+node]),end=int(words[f(START)+node+1]);if(end-begin>128)return;
+ if(!productNeeded(direction)||node>=nodes())return;int begin=int(words[f(START)+node]),end=int(words[f(START)+node+1]);if(end-begin>128)return;
  double result=0.0;for(int at=begin;at<end;at++)result+=number(f(VALUES)+2*at)*vector(int(words[f(COLS)+at]),direction);
  put(f(WORK)+2*(2*h(2)+node),result);
 }
@@ -110,6 +111,9 @@ void classifyLongRow(int node){
 void longDispatch(){
  for(int slot=5;slot<=6;slot++){int count=int(words[f(LONG_COUNTS)+(slot==5?1:0)]),at=f(DISPATCH)+3*slot;
   words[at]=uint(min(count,65535));words[at+1]=uint(max(1,(count+65534)/65535));words[at+2]=1u;}
+ put(f(CONTROL)+80,double((nodes()+127)/128));
+ put(f(CONTROL)+82,double(words[f(LONG_COUNTS)+1]));
+ put(f(CONTROL)+84,double(words[f(LONG_COUNTS)]));
 }
 void productTile(int tile,int lane,bool direction){
  if(tile>=int(words[f(LONG_COUNTS)+1]))return;int node=int(words[f(TILE_OWNER)+tile]);
@@ -124,8 +128,8 @@ void finishLongProduct(int row,int lane){
  reduce(lane,sum);if(lane==0)put(f(WORK)+2*(2*h(2)+node),partial[0]);
 }
 void main(){int group=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*group+lane;
- if(p.stage==14||p.stage==15||p.stage==20){if(lane==0)valid=errors==0u?1:0;barrier();if(valid==0)return;
-  if(p.stage==20)finishLongProduct(group,lane);else productTile(group,lane,p.stage==15);return;}
+ if(p.stage==14||p.stage==15||p.stage==20||p.stage==21){if(lane==0)valid=errors==0u&&productNeeded(p.stage==15||p.stage==21)?1:0;barrier();if(valid==0)return;
+  if(p.stage==20||p.stage==21)finishLongProduct(group,lane);else productTile(group,lane,p.stage==15);return;}
  if(p.stage==16||p.stage==17){if(id<p.count&&errors==0u)productSmall(id,p.stage==17);return;}
  if(p.stage==6||p.stage==8||p.stage==9||p.stage==11){if(lane==0)valid=errors==0u&&group<(p.stage==6?pairs():nodes())?1:0;barrier();if(valid==0)return;if(p.stage==6)pairConductance(group,lane);else if(p.stage==8)diagonal(group,lane);else if(p.stage==9)matrix(group,lane);else supply(group,lane);return;}
  if(id>=p.count)return;if(p.stage==0){initialize(id);return;}if(errors!=0u)return;

@@ -56,7 +56,7 @@ final class VulkanGasFlow implements AutoCloseable {
                     case NODE_OFFSETS,STARTS->nodes+1;case NODE_PAIRS->Math.multiplyExact(pairs,2);
                     case COLUMNS,VALUES->Math.addExact(nodes,Math.multiplyExact(pairs,2));
                     case WORK->Math.multiplyExact(nodes,5);case META->Math.multiplyExact(nodes,2);case PROBLEM->Math.addExact(Math.multiplyExact(nodes,3),1);
-                    case CONTROL->16;case PARTIALS->Math.multiplyExact((nodes+255)/256,4);
+                    case CONTROL->48;case PARTIALS->Math.multiplyExact((nodes+255)/256,4);
                     case ROUTE_COUNT,STEP->1;case ROUTE_SOURCE,ROUTE_TARGET,ROUTE_WEIGHT,AMBIENT_VOLUME,SOURCE_ROUTES,TARGET_ROUTES->routes;
                     case SOURCE_COUNTS,SOURCE_CURSORS->nodes+2;case SOURCE_OFFSETS->nodes+3;
                     case TARGET_COUNTS,TARGET_CURSORS->nodes+1;case TARGET_OFFSETS->nodes+2;case DISPATCH->21;
@@ -110,18 +110,28 @@ final class VulkanGasFlow implements AutoCloseable {
             public void recordProduct(VkCommandBuffer command,boolean direction){
                 stage(command,l,q,direction?17:16,l.nodes);
                 stage(command,l,q,direction?15:14,1);
-                stage(command,l,q,20,1);
+                stage(command,l,q,direction?21:20,1);
+            }
+            public void recordProductIndirect(VkCommandBuffer command,boolean direction,VulkanPressureKernel.Dispatch dispatch){
+                int first=direction?4:7;
+                stage(command,l,q,direction?17:16,l.nodes,dispatch,first);
+                stage(command,l,q,direction?15:14,1,dispatch,first+1);
+                stage(command,l,q,direction?21:20,1,dispatch,first+2);
             }
         };
     }
     private void prefix(VkCommandBuffer command,Layout l,int n,Field input,Field output){scan.record(command,n,l.word(input),l.word(output),l.word(Field.SCAN));}
     private void stage(VkCommandBuffer cmd,Layout l,Parameters q,int stage,int count){
+        stage(cmd,l,q,stage,count,null,0);
+    }
+    private void stage(VkCommandBuffer cmd,Layout l,Parameters q,int stage,int count,VulkanPressureKernel.Dispatch conditional,int slot){
         if(count==0)return;int groups=(count+127)/128;try(var stack=stackPush()){
             bindings.bind(cmd,stack);var push=stack.malloc(64).putInt(l.headerWordOffset()).putInt(stage).putInt(count).putInt(0)
                     .putDouble(q.duration()).putDouble(q.dischargeCoefficient()).putDouble(q.ambientPressure()).putDouble(q.ambientTemperature()).putDouble(q.ambientDensity()).putLong(q.step()).flip();
             vkCmdPushConstants(cmd,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,push);
-            int indirect=switch(stage){case 6->0;case 7,10->1;case 8,9,11->2;case 12,13->4;case 14,15->5;case 20->6;default->-1;};
-            if(indirect>=0){barrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
+            int indirect=switch(stage){case 6->0;case 7,10->1;case 8,9,11->2;case 12,13->4;case 14,15->5;case 20,21->6;default->-1;};
+            if(conditional!=null)conditional.record(cmd,slot);
+            else if(indirect>=0){barrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
                 vkCmdDispatchIndirect(cmd,arena.buffer().handle(),arena.offset()+l.column(Field.DISPATCH).offset()+12L*indirect);
             }else vkCmdDispatch(cmd,Math.min(groups,65535),(groups+65534)/65535,1);
             barrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);

@@ -26,7 +26,7 @@ final class VulkanThermalConduction implements AutoCloseable {
         DEGREE_COUNTS(4),DEGREE_OFFSETS(4),DEGREE_CURSORS(4),INCIDENT(4),DEGREE(8),FLUX(8),
         ENERGY_CHANGE(8),RESERVOIR_CHANGE(8),MODE(4),ACCEPTED(4),SUMMARY(8),PARTIALS(8),BATH_PARTIALS(8),DISPATCH(4),SCAN(4),
         STARTS(4),COLUMNS(4),VALUES(8),ROWS(4),PRESSURE(8),WORK(8),META(4),PROBLEM(8),CONTROL(8),PCG_PARTIALS(8),
-        TILE_COUNTS(4),TILE_OFFSETS(4),TILE_OWNERS(4),TILE_PARTIALS(8),BATH_INDEX(4);
+        TILE_COUNTS(4),TILE_OFFSETS(4),TILE_OWNERS(4),TILE_PARTIALS(8),BATH_INDEX(4),BATH_EDGES(4);
         final int width;Field(int width){this.width=width;}
     }
     /** Common knots retain every registered caloric break. Cp includes endpoint extension intervals. */
@@ -72,7 +72,7 @@ final class VulkanThermalConduction implements AutoCloseable {
                     case ENERGY_CHANGE->Math.multiplyExact(owners,2);case RESERVOIR_CHANGE->Math.multiplyExact(baths,ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
                     case MODE->2;case ACCEPTED->1;case SUMMARY->8;
                     case PARTIALS->Math.multiplyExact((owners+127)/128,4);case BATH_PARTIALS->Math.multiplyExact(Math.max(1,(contacts+127)/128),4);
-                    case DISPATCH->12;case TILE_OWNERS->tiles;case TILE_PARTIALS->2*tiles;case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(owners)/4);
+                    case BATH_EDGES->baths;case DISPATCH->15;case TILE_OWNERS->tiles;case TILE_PARTIALS->2*tiles;case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(owners)/4);
                     case WORK->Math.multiplyExact(owners,5);case META->Math.multiplyExact(owners,2);
                     case PROBLEM->Math.addExact(Math.multiplyExact(owners,3),1);case CONTROL->16;
                     case PCG_PARTIALS->Math.multiplyExact((owners+255)/256,4);
@@ -129,7 +129,7 @@ final class VulkanThermalConduction implements AutoCloseable {
     void recordPrepare(VkCommandBuffer command,Layout l,double dt,VulkanStageTimings timings){
         if(!(Double.isFinite(dt)&&dt>0))throw new IllegalArgumentException("Invalid conduction duration");
         timed(timings,command,"thermal-clear",()->stage(command,l,dt,0,0,0,l.owners,false));
-        timed(timings,command,"thermal-contact-count-bath-compact",()->stage(command,l,dt,1,0,0,Math.max(1,l.contacts),false));
+        timed(timings,command,"thermal-contact-count-bath-compact",()->{stage(command,l,dt,31,0,0,128,false);stage(command,l,dt,1,0,0,Math.max(1,l.contacts),true);});
         timed(timings,command,"thermal-bath-clear",()->stage(command,l,dt,30,0,0,l.baths,false));
         timed(timings,command,"thermal-adjacency",()->{
             scan.record(command,l.owners,l.word(Field.DEGREE_COUNTS),l.word(Field.DEGREE_OFFSETS),l.word(Field.SCAN));
@@ -233,7 +233,7 @@ final class VulkanThermalConduction implements AutoCloseable {
             if(indirect){
                 VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
-                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+l.column(Field.DISPATCH).offset()+(stage==6?0:stage==7?12:stage==23?24:36));
+                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+l.column(Field.DISPATCH).offset()+(stage==1?48:stage==6?0:stage==7?12:stage==23?24:36));
             }else vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);

@@ -3,10 +3,9 @@ package mmm.gpuprobe;
 import java.util.EnumMap;
 import java.util.List;
 
-/** Device route columns, addressed by 7 * sourceStock + slot. Slot 0 retains the
- * source; slots 1..6 target -x, +x, -y, +y, -z, +z. Active source stocks come from
- * the source generation's COUNTS. Column offsets are absolute arena byte offsets;
- * CSR offsets count species or unsigned uint32 dyadic limbs, least significant first.
+/** Compact accepted routes grouped by source stock. SOURCE_OFFSETS addresses actual
+ * route rows, SLOTS identifies retain(0) or one of six neighbours(1..6).
+ * Capacity reserves the seven possible destinations; only live rows carry inventory.
  */
 public final class VulkanLiquidRouteLayout {
     public static final int ROUTES_PER_STOCK = 7;
@@ -14,7 +13,8 @@ public final class VulkanLiquidRouteLayout {
     public enum Field {
         VOLUME_OFFSETS(4), VOLUME_SIGNS(4), VOLUME_EXPONENTS(4), VOLUME_LIMBS(4),
         MASS_UNITS(8), ENERGY_BITS(8), MIXTURE_PRESENT(4),
-        SPECIES_OFFSETS(4), SPECIES_HANDLES(4), SPECIES_AMOUNTS(8);
+        SPECIES_OFFSETS(4), SPECIES_HANDLES(4), SPECIES_AMOUNTS(8),
+        SOURCE_OFFSETS(4), SLOTS(4), SOURCE_STOCKS(4), COUNTS(4), SOURCE_MASKS(4), DISPATCH(4);
         private final int elementBytes;
         Field(int elementBytes) { this.elementBytes = elementBytes; }
         public int elementBytes() { return elementBytes; }
@@ -38,6 +38,10 @@ public final class VulkanLiquidRouteLayout {
         for (Field field : Field.values()) {
             int count = switch (field) {
                 case VOLUME_OFFSETS, SPECIES_OFFSETS -> Math.addExact(routeCapacity, 1);
+                case SOURCE_OFFSETS -> Math.addExact(sourceStockCapacity,1);
+                case COUNTS -> 1;
+                case DISPATCH -> 3;
+                case SOURCE_MASKS -> sourceStockCapacity;
                 case VOLUME_LIMBS -> limbCapacity;
                 case SPECIES_HANDLES, SPECIES_AMOUNTS -> speciesCapacity;
                 default -> routeCapacity;

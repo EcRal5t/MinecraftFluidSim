@@ -19,6 +19,11 @@ final class VulkanLiquidGeometry implements AutoCloseable {
         for (int stage = 0; stage < 3; stage++) recordStage(command, sizeX, sizeY, sizeZ, stage, 0, 0);
     }
 
+    /** Reuses reconstructed cell geometry and refreshes velocities from current MAC momentum. */
+    void recordFaces(VkCommandBuffer command, int sizeX, int sizeY, int sizeZ) {
+        recordStage(command, sizeX, sizeY, sizeZ, 2, 0, 0);
+    }
+
     /** Integrates donor PLIC slabs from projected face velocities; inventory settlement follows separately. */
     void recordTransportPreferences(VkCommandBuffer command, int sizeX, int sizeY, int sizeZ, float h, float dt) {
         recordStage(command, sizeX, sizeY, sizeZ, 3, h, dt);

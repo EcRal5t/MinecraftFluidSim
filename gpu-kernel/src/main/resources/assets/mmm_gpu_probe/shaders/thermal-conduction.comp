@@ -106,14 +106,16 @@ dvec4 reduce(dvec4 v,int kind){
 void savePartial(int field,int block,dvec4 value){for(int i=0;i<4;i++)store(field,4*block+i,value[i]);}
 dvec4 loadPartial(int field,int block){return dvec4(num(field,4*block),num(field,4*block+1),num(field,4*block+2),num(field,4*block+3));}
 void initialize(int row){
-    put(DEGREE_COUNTS,row,0);put(CURSORS,row,0);store(CHANGE,2*row,0.0);store(CHANGE,2*row+1,0.0);
-    if(row==0){put(MODE,0,0);put(MODE,1,0);put(ACCEPTED,0,0);}
+    if(h(7)==0)put(DEGREE_COUNTS,row,0);put(CURSORS,row,0);store(CHANGE,2*row,0.0);store(CHANGE,2*row+1,0.0);
+    if(row==0){put(MODE,0,0);if(h(7)==0)put(MODE,1,0);put(ACCEPTED,0,0);}
     if(row>=owners())return;
     double u=num(ENERGY,row),t=num(INITIAL_T,row);if(!finite(u)||!finite(t)||t<=0.0)invalid();
     store(BEFORE,row,u);store(TEMP,row,t);store(TRIAL_T,row,t);
 }
 dvec4 countContact(int edge){
-    dvec4 v=dvec4(HUGE,-HUGE,HUGE,0.0);if(edge>=h(2))return v;
+    dvec4 v=dvec4(HUGE,-HUGE,HUGE,0.0);
+    if(h(7)!=0){if(edge>=get(MODE,1))return v;int contact=get(48,edge);v.x=num(BATH_T,contact);v.y=v.x;return v;}
+    if(edge>=h(2))return v;
     store(FLUX,edge,0.0);
     if(!validContact(edge))return v;int a=get(CONTACT_A,edge),b=get(CONTACT_B,edge);
     atomicAdd(words[at(DEGREE_COUNTS)+a],1u);if(b>=0)atomicAdd(words[at(DEGREE_COUNTS)+b],1u);
@@ -180,7 +182,7 @@ dvec4 prepareOwner(int row){
 void chooseMode(int lane){
     dvec4 v=dvec4(HUGE,-HUGE,HUGE,0.0);
     for(int block=lane;block<(h(0)+127)/128;block+=128){dvec4 b=loadPartial(PARTIALS,block);v=dvec4(min(v.x,b.x),max(v.y,b.y),min(v.z,b.z),max(v.w,b.w));}
-    for(int block=lane;block<max(1,(h(2)+127)/128);block+=128){dvec4 b=loadPartial(BATH_PARTIALS,block);v.x=min(v.x,b.x);v.y=max(v.y,b.y);}
+    for(int block=lane;block<max(1,((h(7)!=0?get(MODE,1):contacts())+127)/128);block+=128){dvec4 b=loadPartial(BATH_PARTIALS,block);v.x=min(v.x,b.x);v.y=max(v.y,b.y);}
     v=reduce(v,0);if(lane!=0)return;
     store(SUMMARY,0,v.x);store(SUMMARY,1,v.y);store(SUMMARY,2,v.z);
     int mode=owners()==0||contacts()==0||v.y-v.x<=resolution()?0:v.w>double(h(5))?9:max(1,int(ceil(v.w)));
@@ -270,13 +272,14 @@ void main(){
     int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*block+lane;
     if(owners()<0||owners()>h(0)||get(COUNTS,1)<0||get(COUNTS,1)>h(1)||contacts()<0||contacts()>h(2)){if(id==0)invalid();return;}
     // All bath demand is counted even when a private candidate needs a larger bath column.
-    if((errors&64u)!=0u&&p.stage!=0&&p.stage!=1)return;
+    if((errors&64u)!=0u&&p.stage!=0&&p.stage!=1&&p.stage!=31)return;
     if(p.stage==18||p.stage==19||(p.stage>=22&&p.stage<=26)){
         if(block>=get(TILE_OFFSETS,h(0)))return;
         if(p.stage==18||p.stage==19){if(num(CONTROL,p.stage==19?3:7)==0.0)return;}
         if(p.stage==26&&get(MODE,0)!=10)return;
         reduceTile(block,lane,p.stage);return;
     }
+    if(p.stage==31){if(id==0){int count=errors==0u?max(1,((h(7)!=0?get(MODE,1):contacts())+127)/128):0;put(DISPATCH,12,min(count,65535));put(DISPATCH,13,max(1,(count+65534)/65535));put(DISPATCH,14,1);}return;}
     if(p.stage==0){if(id<h(0))initialize(id);}
     else if(p.stage==1){dvec4 v=reduce(countContact(id),0);if(lane==0)savePartial(BATH_PARTIALS,block,v);}
     else if(p.stage==2){if(id<h(2))scatter(id);}

@@ -14,7 +14,7 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Gathers already accepted stock routes into a canonical resident liquid inventory. */
 final class VulkanLiquidGather implements AutoCloseable {
-    private static final int HEADER_WORDS = 64;
+    private static final int HEADER_WORDS = 80;
 
     record Layout(VulkanLiquidStateLayout source, VulkanLiquidStateLayout output,
                   VulkanLiquidRouteLayout routes, int fixedMaskWordOffset, int speciesMassWordOffset,
