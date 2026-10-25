@@ -6,7 +6,7 @@ layout(binding=0,std430)buffer Arena{uint words[];};
 layout(binding=1,std430)buffer Errors{uint errors;};
 layout(push_constant)uniform Push{int header;int stage;int count;int unused;}p;
 const int OF=0,OP=1,OK=2,OI=3,KC=4,TERMS=5,SF=6,SP=7,SO=8,SC=9,SM=10,SV=11,
- CC=12,CO=13,CU=14,CS=15,COVER=16,EC=17,EO=18,LM=19,GM=20,PM=21,K=22,REQ=23,CM=25;
+ CC=12,CO=13,CU=14,CS=15,COVER=16,EC=17,EO=18,LM=19,GM=20,PM=21,K=22,REQ=23,CM=25,DM=26,PC=27,PO=28,PU=29,PR=30;
 int h(int n){return int(words[p.header+n]);}int f(int n){return h(48+n);}
 double number(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
 void put(int at,double value){uvec2 b=unpackDouble2x32(value);words[at]=b.x;words[at+1]=b.y;}
@@ -16,26 +16,31 @@ double cellSize(){return number(p.header+128);}
 int liveLiquid(){return int(words[h(14)]);}int liveGas(){return h(15)<0?0:int(words[h(15)]);}
 int liveParticle(){return h(16)<0?0:int(words[h(16)]);}int liveDeposit(){return h(16)<0?0:int(words[h(16)+1]);}
 int liveCoherent(){return h(46)<0?0:int(words[h(46)]);}
+int liveDevice(){return h(133)<0?0:int(words[h(133)]);}
+int livePorts(){return h(133)<0?0:int(words[h(133)+1]);}
+int deviceBase(){return h(0)+h(1)+h(2)+h(3)+h(45);}
 int liveOwners(){return int(words[f(OP)+h(9)]);}int liveSamples(){return int(words[f(SP)+h(8)]);}
 int openMask(int cell){return int((~words[h(11)+cell])&255u);}
-int material(int kind,int handle){int count=kind==0?h(41):kind==1?h(42):kind==2?h(43):h(44),map=kind==0?f(LM):kind==1?f(GM):kind==2?f(PM):f(CM);
+int material(int kind,int handle){int count=kind==0?h(41):kind==1?h(42):kind==2?h(43):kind==3?h(44):h(47),map=kind==0?f(LM):kind==1?f(GM):kind==2?f(PM):kind==3?f(CM):f(DM);
  if(handle<0||handle>=count){invalid();return 0;}return int(words[map+handle]);}
 void ownerAddress(int candidate,out int kind,out int row,out bool exists){
  kind=0;row=candidate;exists=row<liveLiquid();
  if(candidate>=h(0)){kind=1;row=candidate-h(0);exists=row<liveGas();}
  if(candidate>=h(0)+h(1)){kind=2;row=candidate-h(0)-h(1);exists=row<h(2)?row<liveParticle():row-h(2)<liveDeposit();}
  if(candidate>=h(0)+h(1)+h(2)+h(3)){kind=3;row=candidate-h(0)-h(1)-h(2)-h(3);exists=row<liveCoherent();}
+ if(candidate>=deviceBase()){kind=4;row=candidate-deviceBase();exists=row<liveDevice();}
 }
-bool hasMass(int kind,int row){if(kind==0)return quantity(h(21)+2*row)>uint64_t(0);if(kind==2)return quantity(h(35)+2*row)>uint64_t(0);if(kind==3)return quantity(h(112)+2*row)>uint64_t(0);
+bool hasMass(int kind,int row){if(kind==4)return quantity(h(135)+2*row)>uint64_t(0);if(kind==0)return quantity(h(21)+2*row)>uint64_t(0);if(kind==2)return quantity(h(35)+2*row)>uint64_t(0);if(kind==3)return quantity(h(112)+2*row)>uint64_t(0);
  for(int c=int(words[h(24)+row]);c<int(words[h(24)+row+1]);c++)if(quantity(h(27)+2*c)>uint64_t(0))return true;return false;}
 int ownerFor(int candidate){return candidate>=0&&candidate<h(9)&&words[f(OF)+candidate]!=0u?int(words[f(OP)+candidate]):-1;}
 void clear(int id){
  if(id<h(9))words[f(OF)+id]=0u;
+ if(id<h(132)){put(h(140)+4*id,0.0);put(h(140)+4*id+2,0.0);}
  if(id<h(106))words[f(TERMS)+id]=0u;
  if(id<h(8)){words[f(EC)+id]=0u;words[f(SF)+id]=0u;}
- if(id<h(4)){words[f(CC)+id]=0u;words[f(CU)+id]=0u;}
+ if(id<h(4)){words[f(CC)+id]=0u;words[f(CU)+id]=0u;words[f(PC)+id]=0u;words[f(PU)+id]=0u;}
  if(id==0){for(int i=0;i<4;i++)words[f(REQ)+i]=0u;for(int i=0;i<3;i++)words[h(96)+i]=0u;
-  if(liveLiquid()<0||liveLiquid()>h(0)||liveGas()<0||liveGas()>h(1)||liveParticle()<0||liveParticle()>h(2)||liveDeposit()<0||liveDeposit()>h(3)||liveCoherent()<0||liveCoherent()>h(45))invalid();}
+  if(liveLiquid()<0||liveLiquid()>h(0)||liveGas()<0||liveGas()>h(1)||liveParticle()<0||liveParticle()>h(2)||liveDeposit()<0||liveDeposit()>h(3)||liveCoherent()<0||liveCoherent()>h(45)||liveDevice()<0||liveDevice()>h(132)||livePorts()<0||livePorts()>h(147))invalid();}
 }
 void flagOwner(int id){int kind,row;bool exists;ownerAddress(id,kind,row,exists);words[f(OF)+id]=exists&&hasMass(kind,row)?1u:0u;}
 void prepareOwner(int candidate){
@@ -45,6 +50,7 @@ void prepareOwner(int candidate){
  double energy=0.0,temperature=0.0,k=0.0;int terms=1;
  if(kind==0){energy=number(h(22)+2*row);temperature=number(h(23)+2*row);k=number(f(K)+2*material(kind,int(words[h(18)+row])));}
  else if(kind==2){energy=number(h(36)+2*row);temperature=number(h(37)+2*row);k=number(f(K)+2*material(kind,int(words[h(33)+row])));}
+ else if(kind==4){energy=number(h(134)+2*row);temperature=number(h(137)+2*row);k=number(f(K)+2*material(kind,int(words[h(136)+row])));}
  else if(kind==3){energy=number(h(113)+2*row);temperature=number(h(114)+2*row);k=number(f(K)+2*material(kind,int(words[h(110)+row])));}
  else{energy=number(h(28)+2*row);temperature=number(h(29)+18*row);terms=0;double total=0.0;
   for(int c=int(words[h(24)+row]);c<int(words[h(24)+row+1]);c++){double n=double(quantity(h(26)+2*c));k+=n*number(f(K)+2*material(kind,int(words[h(25)+c])));total+=n;if(quantity(h(27)+2*c)>uint64_t(0))terms++;}k/=total;}
@@ -55,7 +61,7 @@ void prepareTerms(int candidate){
  if(candidate==0){uint total=words[h(99)+h(106)];words[f(REQ)+1]=total;words[h(96)+1]=total;if(total>uint(h(107)))atomicOr(errors,64u);}
  if(errors!=0u||words[h(99)+h(106)]>uint(h(107))||words[f(OF)+candidate]==0u)return;int owner=int(words[f(OP)+candidate]);if(owner>=h(106))return;
  int kind,row;bool exists;ownerAddress(candidate,kind,row,exists);int outAt=int(words[h(99)+owner]);
- if(kind!=1){int handle=int(words[(kind==0?h(18):kind==2?h(33):h(110))+row]);words[h(100)+outAt]=uint(material(kind,handle));put(h(101)+2*outAt,double(quantity((kind==0?h(21):kind==2?h(35):h(112))+2*row))*1e-10LF);}
+ if(kind!=1){int handle=int(words[(kind==0?h(18):kind==2?h(33):kind==3?h(110):h(136))+row]);words[h(100)+outAt]=uint(material(kind,handle));put(h(101)+2*outAt,double(quantity((kind==0?h(21):kind==2?h(35):kind==3?h(112):h(135))+2*row))*1e-10LF);}
  else for(int c=int(words[h(24)+row]);c<int(words[h(24)+row+1]);c++)if(quantity(h(27)+2*c)>uint64_t(0)){
   words[h(100)+outAt]=uint(material(kind,int(words[h(25)+c])));put(h(101)+2*outAt,double(quantity(h(27)+2*c))*1e-10LF);outAt++;}
 }
@@ -78,14 +84,55 @@ void prepareSample(int id){
 }
 void scatterSample(int id){if(id>=liveSamples())return;int cell=int(words[f(SC)+id]),at=int(words[f(CO)+cell]+atomicAdd(words[f(CU)+cell],1u));words[f(CS)+at]=uint(id);}
 double fraction(int point){return number(f(SV)+2*point)/(.125LF*double(bitCount(words[f(SM)+point])));}
-void coverage(int cell){double sums[8];for(int bit=0;bit<8;bit++)sums[bit]=0.0;
- for(int at=int(words[f(CO)+cell]);at<int(words[f(CO)+cell+1]);at++){int point=int(words[f(CS)+at]),mask=int(words[f(SM)+point]);double portion=fraction(point);for(int bit=0;bit<8;bit++)if((mask&(1<<bit))!=0)sums[bit]+=portion;}
- for(int bit=0;bit<8;bit++)put(f(COVER)+2*(8*cell+bit),sums[bit]);}
+int family(int owner){int kind=int(words[f(OK)+owner]);return kind<2?kind:2;}
+void coverage(int cell){double sums[32];for(int i=0;i<32;i++)sums[i]=0.0;
+ for(int at=int(words[f(CO)+cell]);at<int(words[f(CO)+cell+1]);at++){
+  int point=int(words[f(CS)+at]),mask=int(words[f(SM)+point]),fam=family(int(words[f(SO)+point]));double portion=fraction(point);
+  for(int bit=0;bit<8;bit++)if((mask&(1<<bit))!=0){sums[bit]+=portion;if(h(133)>=0&&words[f(PC)+cell]>0u)sums[8+8*fam+bit]+=portion*.125LF;}
+ }
+ for(int bit=0;bit<8;bit++)put(f(COVER)+2*(8*cell+bit),sums[bit]);
+ if(h(133)>=0)for(int at=int(words[f(PO)+cell]);at<int(words[f(PO)+cell+1]);at++){
+  int port=int(words[f(PR)+at]);for(int i=0;i<24;i++)put(f(COVER)+2*(8*h(4)+24*port+i),sums[8+i]);
+ }
+}
 double harmonic(double a,double b){if(a==0.0||b==0.0)return 0.0;double lo=min(a,b),hi=max(a,b);return lo*(2.0LF/(1.0LF+lo/hi));}
 ivec3 shape(){return ivec3(h(5),h(6),h(7));}ivec3 xyz(int cell){ivec3 s=shape();return ivec3(cell%s.x,cell/s.x%s.y,cell/(s.x*s.y));}
 int neighbor(int cell,int axis,int side){ivec3 q=xyz(cell),s=shape();q[axis]+=side==0?-1:1;if(any(lessThan(q,ivec3(0)))||any(greaterThanEqual(q,s)))return -1;return (q.z*s.y+q.y)*s.x+q.x;}
 double blocked(int cell,int axis,int side){if(h(13)>=0)return 1.0LF-number(h(13)+2*(6*cell+2*axis+side));int other=neighbor(cell,axis,side);if(other<0)return 1.0;
  int a=openMask(cell),b=openMask(other),ports=0;for(int bit=0;bit<8;bit++)if(((bit>>axis)&1)==side&&(a&(1<<bit))!=0&&(b&(1<<(bit^(1<<axis))))!=0)ports++;return 1.0LF-double(ports)*.25LF;}
+int clipPort(inout vec2 polygon[8],int count,vec3 plane){
+ vec2 next[8],previous=polygon[count-1];float before=dot(plane.xy,previous)-plane.z;int n=0;
+ for(int i=0;i<count;i++){vec2 point=polygon[i];float d=dot(plane.xy,point)-plane.z;if((d>=0)!=(before>=0))next[n++]=mix(previous,point,before/(before-d));if(d>=0)next[n++]=point;previous=point;before=d;}
+ for(int i=0;i<n;i++)polygon[i]=next[i];return n;
+}
+double dryPort(int cell,int bit,int axis,int side){
+ if(h(148)<0)return 0.0;double pore=number(h(149)+8*cell+4),fill=number(h(149)+8*cell+6);
+ if(fill>0.0&&fill<1.0&&fill<=.015625&&pore>0.0)return .25;
+ double microPore=pore/double(bitCount(uint(openMask(cell)))),fraction=microPore>0.0?number(h(150)+2*(8*cell+bit))/microPore:1.0;
+ if(fraction<=0.0)return .25;if(fraction>=1.0)return 0.0;
+ int tangent=(axis+1)%3,other=(axis+2)%3;vec4 plane=vec4(number(h(148)+8*cell),number(h(148)+8*cell+2),number(h(148)+8*cell+4),number(h(148)+8*cell+6));
+ float offset=plane.w-plane[axis]*float(side)-plane[tangent]*(.5*float((bit>>tangent)&1))-plane[other]*(.5*float((bit>>other)&1));
+ vec2 polygon[8];polygon[0]=vec2(0);polygon[1]=vec2(.5,0);polygon[2]=vec2(.5);polygon[3]=vec2(0,.5);int n=clipPort(polygon,4,vec3(plane[tangent],plane[other],offset));float twice=0.0;
+ for(int i=1;i+1<n;i++){vec2 x=polygon[i]-polygon[0],y=polygon[i+1]-polygon[0];twice+=x.x*y.y-x.y*y.x;}return double(clamp(abs(twice)*.5,0.0,.25));
+}
+void deviceEdges(int point,bool writing,inout int count){
+ int cell=int(words[f(SC)+point]),mask=int(words[f(SM)+point]),a=int(words[f(SO)+point]),fam=family(a);double k=number(f(KC)+2*a),v=fraction(point)*.125LF;
+ for(int at=int(words[f(PO)+cell]);at<int(words[f(PO)+cell+1]);at++){
+  int port=int(words[f(PR)+at]),device=int(words[h(141)+port]),b=ownerFor(deviceBase()+device);if(b<0){invalid();continue;}
+  int direction=int(words[h(143)+port]),axis=direction/2,side=direction&1;double area=0.0;
+  for(int bit=0;bit<8;bit++)if(((bit>>axis)&1)==side&&(mask&(1<<bit))!=0){
+   double covered=number(f(COVER)+2*(8*h(4)+24*port+8*fam+bit)),solidCovered=number(f(COVER)+2*(8*h(4)+24*port+16+bit));
+   if(covered<=0.0)continue;double dry=dryPort(cell,bit,axis,side),pore=h(149)<0?.125LF*double(bitCount(uint(openMask(cell)))):number(h(149)+8*cell+4);
+   double porosity=pore/(.125LF*double(bitCount(uint(openMask(cell)))));
+   double physical=fam==0?(.25LF-dry)*porosity:fam==1?dry*porosity:.25LF*min(1.0LF,solidCovered/.125LF);area+=physical*v/covered;
+  }
+  double g=cellSize()*cellSize()*area/(number(h(144)+2*port)/number(h(145)+2*port)+number(h(146)+2*port)/k);
+  if(!(finite(g)&&g>=0.0)){invalid();continue;}if(g==0.0)continue;
+  if(writing){int outAt=int(words[f(EO)+point])+count;if(outAt>=h(108)){atomicOr(errors,64u);return;}words[h(102)+outAt]=uint(min(a,b));words[h(103)+outAt]=uint(max(a,b));put(h(104)+2*outAt,g);put(h(105)+2*outAt,0.0);}count++;
+ }
+}
+void portCount(int id){if(id>=livePorts())return;int cell=int(words[h(142)+id]),device=int(words[h(141)+id]),dir=int(words[h(143)+id]);if(cell<0||cell>=h(4)||device<0||device>=liveDevice()||dir<0||dir>5){invalid();return;}atomicAdd(words[f(PC)+cell],1u);}
+void portScatter(int id){if(id>=livePorts())return;int cell=int(words[h(142)+id]);words[f(PR)+words[f(PO)+cell]+atomicAdd(words[f(PU)+cell],1u)]=uint(id);}
 void edge(int point,int other,double g,double bath,bool writing,inout int count){
  if(!(finite(g)&&g>=0.0)){invalid();return;}if(g==0.0)return;int a=int(words[f(SO)+point]),b=other<0?-1:int(words[f(SO)+other]);if(a==b)return;
  if(writing){int at=int(words[f(EO)+point])+count;if(at>=h(108)){atomicOr(errors,64u);return;}words[h(102)+at]=uint(b>=0?min(a,b):a);words[h(103)+at]=uint(b>=0?max(a,b):-1);put(h(104)+2*at,g);put(h(105)+2*at,bath);}count++;
@@ -109,12 +156,17 @@ void contacts(int point,bool writing){
    edge(point,-1,2.0LF*kp*hcell*.25LF*double(pieces)*fp*blocked(cell,axis,side),temperature,writing,count);
   }
  }
+ if(h(133)>=0)deviceEdges(point,writing,count);
  if(!writing)words[f(EC)+point]=uint(count);
 }
 void writeContacts(int id){if(id==0){uint count=words[f(EO)+h(8)];words[f(REQ)+3]=count;words[h(96)+2]=count;if(count>uint(h(108)))atomicOr(errors,64u);}
  if(errors!=0u||words[f(EO)+h(8)]>uint(h(108)))return;contacts(id,true);}
-void publish(int owner){if(owner>=liveOwners())return;int kind=int(words[f(OK)+owner]),row=int(words[f(OI)+owner]);put((kind==0?h(22):kind==1?h(28):kind==2?h(36):h(113))+2*row,number(h(97)+2*owner));}
+void publish(int owner){if(owner>=liveOwners())return;int kind=int(words[f(OK)+owner]),row=int(words[f(OI)+owner]);double value=number(h(97)+2*owner);
+ int address=(kind==0?h(22):kind==1?h(28):kind==2?h(36):kind==3?h(113):h(134))+2*row;
+ if(kind==4){double old=number(address);put(h(140)+4*row,value);put(h(140)+4*row+2,-old);if(quantity(address)!=quantity(h(97)+2*owner)){uint64_t generation=quantity(h(139)+2*row)+uint64_t(1);words[h(138)+2*row]=uint(generation);words[h(138)+2*row+1]=uint(generation>>32);}}
+ put(address,value);
+}
 void main(){int id=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);if(id>=p.count)return;
  if(p.stage==0){clear(id);return;}if(p.stage==2){prepareOwner(id);return;}if(p.stage==3){prepareTerms(id);return;}if(p.stage==9){writeContacts(id);return;}if(errors!=0u)return;
- if(p.stage==1)flagOwner(id);else if(p.stage==4)flagSample(id);else if(p.stage==5)prepareSample(id);else if(p.stage==6)scatterSample(id);else if(p.stage==7)coverage(id);else if(p.stage==8)contacts(id,false);else if(p.stage==10)publish(id);
+ if(p.stage==1)flagOwner(id);else if(p.stage==4)flagSample(id);else if(p.stage==5)prepareSample(id);else if(p.stage==6)scatterSample(id);else if(p.stage==7)coverage(id);else if(p.stage==8)contacts(id,false);else if(p.stage==10)publish(id);else if(p.stage==11)portCount(id);else if(p.stage==12)portScatter(id);
 }

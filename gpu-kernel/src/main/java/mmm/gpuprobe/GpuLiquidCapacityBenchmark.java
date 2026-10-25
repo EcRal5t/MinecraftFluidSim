@@ -3,10 +3,6 @@ package mmm.gpuprobe;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Locale;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.io.IOException;
-import java.io.UncheckedIOException;
 
 /** Capacity repair cost on deliberately divergent preferred routes, with fixed resident inputs. */
 public final class GpuLiquidCapacityBenchmark {
@@ -20,32 +16,29 @@ public final class GpuLiquidCapacityBenchmark {
         int[] grids=args.length>1?java.util.Arrays.stream(args[1].split(",")).mapToInt(Integer::parseInt).toArray():new int[]{32,64};
         String scene=args.length>2?args[2]:"all";
         int maxRounds=args.length>3?Integer.parseInt(args[3]):512;
-        boolean diagnostic=false;
-        if(args.length>4&&Boolean.parseBoolean(args[4]))throw new IllegalArgumentException("Archived full-array diagnostics belong to the replaced solver");
-        Path diagnosticRoot=Path.of(args.length>5?args[5]:"build/gpu-capacity-diagnostics").toAbsolutePath();
         if(maxRounds<1||maxRounds>512)throw new IllegalArgumentException("Round limit must be within 1..512");
-        boolean finalControl=args.length>6&&Boolean.parseBoolean(args[6]);
-        boolean flowRatio=args.length>7&&Boolean.parseBoolean(args[7]);
+        boolean finalControl=args.length>4&&Boolean.parseBoolean(args[4]);
+        boolean flowRatio=args.length>5&&Boolean.parseBoolean(args[5]);
         boolean failed=false;
         try(var context=new VulkanDeviceContext(device,true,true);var solver=new VulkanLiquidCapacity(context)) {
             System.out.println("Device: "+context.deviceName());
             System.out.println("Integer capacity repair only, quantum=2^-40, divergent preferred inputs; excludes material routes, inventory/MAC and full steps.");
             System.out.println("One solve per scene/grid, no warmup; uploads occur once before timing. Feedback reads status+rounds only; finish validates global feasibility.");
             System.out.println("scene,grid,status,rounds,wall_ms,gpu_ms,upload_B,readback_B,device_MiB");
-            if(diagnostic)System.out.println("DIAGNOSTIC full arrays at rounds 0/8/32/128/512; wall time and transfers include inspection and file writes, not performance evidence.");
             for(int grid:grids)for(boolean dam:new boolean[]{false,true}) {
                 if(!scene.equals("all")&&!scene.equals(dam?"dam":"full"))continue;
-                failed|=!measure(context,solver,grid,dam,maxRounds,null,finalControl,flowRatio);
+                failed|=!measure(context,solver,grid,dam,maxRounds,finalControl,flowRatio);
             }
         }
         if(failed)throw new IllegalStateException("Capacity benchmark contains failed solves; inspect reported statuses");
     }
 
-    private static boolean measure(VulkanDeviceContext context,VulkanLiquidCapacity solver,int grid,boolean dam,int maxRounds,Path diagnosticRoot,boolean finalControl,boolean flowRatio) {
+    private static boolean measure(VulkanDeviceContext context,VulkanLiquidCapacity solver,int grid,boolean dam,int maxRounds,boolean finalControl,boolean flowRatio) {
         var layout=new VulkanLiquidCapacityLayout(grid,grid,grid,dam?2:0,0,Math.max(8,context.storageOffsetAlignment()));
-        if(layout.endOffset()>context.maxStorageBufferRange())throw new IllegalArgumentException("Capacity arena exceeds device descriptor range");
-        var initial=ByteBuffer.allocate(Math.toIntExact(layout.endOffset())).order(ByteOrder.LITTLE_ENDIAN);
-        layout.initializeHeader(initial);
+        var solveLayout=new VulkanLiquidCapacity.Layout(layout,layout.endOffset(),Math.max(8,context.storageOffsetAlignment()));
+        if(solveLayout.endOffset()>context.maxStorageBufferRange())throw new IllegalArgumentException("Capacity arena exceeds device descriptor range");
+        var initial=ByteBuffer.allocate(Math.toIntExact(solveLayout.endOffset())).order(ByteOrder.LITTLE_ENDIAN);
+        layout.initializeHeader(initial);solveLayout.initializeHeader(initial);
         long preferredViolations=0;
         for(int z=0;z<grid;z++)for(int y=0;y<grid;y++)for(int x=0;x<grid;x++) {
             int c=(z*grid+y)*grid+x;
@@ -83,25 +76,25 @@ public final class GpuLiquidCapacityBenchmark {
         }
         if(preferredViolations==0)throw new AssertionError("Capacity fixture has no preferred receiver violation");
         System.out.println("input scene="+(dam?"dam-gas-groups":"full-circulation")+" grid="+grid+" violated_receivers="+preferredViolations);
-        try(var storage=new VulkanRegionStorage(context,layout.endOffset(),1024*1024)) {
+        try(var storage=new VulkanRegionStorage(context,solveLayout.endOffset(),1024*1024)) {
             storage.initialize(initial,0);
             try(var source=storage.capture();var candidate=storage.prepare(source)) {
                 var before=storage.metrics();long start=System.nanoTime();
                 var feedback=candidate.beginBatch((cmd,input,output,errors,staging,stack)-> {
                     solver.rebindRanges(new FlipKernelBindings.BufferRange(output),new FlipKernelBindings.BufferRange(errors));
-                    solver.recordInitialize(cmd,layout,maxRounds);
-                    if(diagnosticRoot==null)solver.recordIterations(cmd,layout,Math.min(BATCH_ROUNDS,maxRounds));
-                },layout.column(VulkanLiquidCapacityLayout.Field.CONTROL).offset(),8);
+                    solver.recordInitialize(cmd,solveLayout,maxRounds);
+                    solver.recordIterations(cmd,solveLayout,Math.min(BATCH_ROUNDS,maxRounds),3);
+                },layout.column(VulkanLiquidCapacityLayout.Field.CONTROL).offset(),12);
                 int status=feedback.feedback().order(ByteOrder.LITTLE_ENDIAN).getInt(0),rounds=feedback.feedback().getInt(4);
                 int error=feedback.error();
                 while(error==0&&status==VulkanLiquidCapacity.RUNNING&&rounds<maxRounds) {
-                    int count=Math.min(BATCH_ROUNDS,maxRounds-rounds);
-                    feedback=candidate.continueBatch((cmd,input,output,errors,staging,stack)->solver.recordIterations(cmd,layout,count),
-                            layout.column(VulkanLiquidCapacityLayout.Field.CONTROL).offset(),8);
+                    int count=Math.min(BATCH_ROUNDS,maxRounds-rounds),phase=feedback.feedback().getInt(8);
+                    feedback=candidate.continueBatch((cmd,input,output,errors,staging,stack)->solver.recordIterations(cmd,solveLayout,count,phase),
+                            layout.column(VulkanLiquidCapacityLayout.Field.CONTROL).offset(),12);
                     error=feedback.error();status=feedback.feedback().order(ByteOrder.LITTLE_ENDIAN).getInt(0);rounds=feedback.feedback().getInt(4);
                 }
                 if(error==0&&status==VulkanLiquidCapacity.FEASIBLE)
-                    error=candidate.finishBatch((cmd,input,output,errors,staging,stack)->solver.recordFinish(cmd,layout));
+                    error=candidate.finishBatch((cmd,input,output,errors,staging,stack)->solver.recordFinish(cmd,solveLayout));
                 long elapsed=System.nanoTime()-start;var after=storage.metrics();
                 System.out.printf("%s,%d,%d,%d,%.3f,%.3f,%d,%d,%.1f%n",dam?"dam-gas-groups":"full-circulation",grid,status,rounds,
                         elapsed*1e-6,(after.gpuNanos()-before.gpuNanos())*1e-6,after.uploadBytes()-before.uploadBytes(),

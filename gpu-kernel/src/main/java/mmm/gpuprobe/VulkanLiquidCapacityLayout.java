@@ -11,16 +11,11 @@ import java.util.EnumMap;
 final class VulkanLiquidCapacityLayout {
     enum Field {
         K(8), LOWER(8), UPPER(8), GROUP_ID(4), GROUP_CAPACITY(8), PREFERRED(8), OPEN_NEIGHBORS(4),
-        ACCEPTED(8), CONTROL(4), HEADER(4), GROUP_COUNTS(4), GROUP_OFFSETS(4), GROUP_CURSOR(4),
-        MEMBERS(4), BLOCK_COUNTS(4), BLOCK_OFFSETS(4), BLOCK_GROUP(4), BLOCK_IN(8), BLOCK_OUT(8),
-        BLOCK_BASE(8), BLOCK_PREFIX(8), GROUP_IN(8), GROUP_LIMIT(8), CROSS_MASK(4),
-        FLOW(8), SOURCE_LIMIT(8), TARGET_LIMIT(8), ACTIVE(4), AFFECTED(4), ACTIVE_EDGES(4),
-        MARK(4), EDGE_MARK(4), COUNTERS(4), SCAN_WORKSPACE(4), DISPATCH(4);
-        final int width;
-        Field(int width) { this.width = width; }
+        ACCEPTED(8), CONTROL(4), HEADER(4), FLOW(8);
+        final int width;Field(int width){this.width=width;}
     }
-    static final int HEADER_WORDS = 64, CONTROL_WORDS = 12;
-    private final int sx, sy, sz, cells, gasGroups, groups, vertices, edges, blockCapacity;
+    static final int HEADER_WORDS = 32, CONTROL_WORDS = 12;
+    private final int sx, sy, sz, cells, gasGroups, groups, vertices, edges;
     private final long baseOffset, endOffset;
     private final EnumMap<Field, VulkanLiquidStateLayout.Column> columns = new EnumMap<>(Field.class);
 
@@ -34,23 +29,14 @@ final class VulkanLiquidCapacityLayout {
         groups = Math.addExact(gasGroups, 1);
         vertices = cells;
         edges = Math.multiplyExact(7, cells);
-        blockCapacity = Math.addExact(cells / 128, gasGroups);
         this.baseOffset = align(baseOffset, alignment);
         long cursor = this.baseOffset;
         for (Field field : Field.values()) {
             int count = switch (field) {
                 case GROUP_CAPACITY -> gasGroups;
-                case PREFERRED, ACCEPTED -> Math.multiplyExact(7, cells);
+                case PREFERRED, ACCEPTED, FLOW -> Math.multiplyExact(7,cells);
                 case CONTROL -> CONTROL_WORDS;
                 case HEADER -> HEADER_WORDS;
-                case GROUP_COUNTS, GROUP_CURSOR, BLOCK_COUNTS, GROUP_IN, GROUP_LIMIT -> groups;
-                case GROUP_OFFSETS, BLOCK_OFFSETS -> groups + 1;
-                case BLOCK_GROUP, BLOCK_IN, BLOCK_OUT, BLOCK_BASE, BLOCK_PREFIX -> blockCapacity;
-                case FLOW, SOURCE_LIMIT, TARGET_LIMIT, ACTIVE_EDGES, EDGE_MARK -> edges;
-                case COUNTERS -> 4;
-                case DISPATCH -> 12;
-                case ACTIVE, AFFECTED, MARK -> vertices;
-                case SCAN_WORKSPACE -> Math.toIntExact(VulkanPrefixScan.workspaceBytes(groups) / 4);
                 default -> cells;
             };
             cursor = align(cursor, alignment);
@@ -69,7 +55,6 @@ final class VulkanLiquidCapacityLayout {
     int gasGroups() { return gasGroups; }
     int vertices() { return vertices; }
     int edges() { return edges; }
-    int blockCapacity() { return blockCapacity; }
     long baseOffset() { return baseOffset; }
     long bytes() { return endOffset - baseOffset; }
     long endOffset() { return endOffset; }

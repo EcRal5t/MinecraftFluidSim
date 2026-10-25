@@ -1,171 +1,234 @@
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
-#extension GL_ARB_gpu_shader_fp64 : require
 layout(local_size_x=128) in;
 layout(binding=0,std430) buffer Arena { uint words[]; };
 layout(binding=1,std430) buffer Errors { uint errors; };
-layout(push_constant) uniform Params { int header; int stage; int count; int argument; int reserved; } p;
-const int K=0,LOWER=1,UPPER=2,GROUP_ID=3,GROUP_CAPACITY=4,PREFERRED=5,OPEN=6,ACCEPTED=7,
- CONTROL=8,HEADER=9,GC=10,GO=11,CURSOR=12,MEMBERS=13,BC=14,BO=15,BG=16,
- BI=17,BOUT=18,BASE=19,BPREFIX=20,GI=21,GLIMIT=22,CROSS=23,FLOW=24,
- SOURCE_LIMIT=25,TARGET_LIMIT=26,ACTIVE=27,AFFECTED=28,ACTIVE_EDGES=29,MARK=30,EDGE_MARK=31,COUNTERS=32,DISPATCH=34;
-const int RUNNING=0,FEASIBLE=1,LIMIT=3,INVALID=4;
-const int64_t INF=int64_t(0x3fffffffffffffffUL);
-shared int64_t a[128],b[128],c[128];
-shared int groupStatus;
-int h(int i){return int(words[p.header+i]);}
-int at(int f){return h(8+f);}
-int n(){return h(3);}
-int groups(){return h(5);}
-int get(int f,int i){return int(words[at(f)+i]);}
-void put(int f,int i,int v){words[at(f)+i]=uint(v);}
-int64_t wide(int f,int i){int q=at(f)+2*i;return int64_t(uint64_t(words[q])|(uint64_t(words[q+1])<<32));}
-void putWide(int f,int i,int64_t v){int q=at(f)+2*i;words[q]=uint(v);words[q+1]=uint(uint64_t(v)>>32);}
-void invalid(){atomicExchange(words[at(CONTROL)],uint(INVALID));atomicOr(errors,4096u);}
-int64_t add(int64_t x,int64_t y){if(x<0||y<0||x>INF-y){invalid();return int64_t(0);}return x+y;}
-int neighbor(int cell,int side){
- int x=cell%h(0),y=cell/h(0)%h(1),z=cell/(h(0)*h(1));
- if(side==0)return x>0?cell-1:-1;if(side==1)return x+1<h(0)?cell+1:-1;
- if(side==2)return y>0?cell-h(0):-1;if(side==3)return y+1<h(1)?cell+h(0):-1;
- if(side==4)return z>0?cell-h(0)*h(1):-1;return z+1<h(2)?cell+h(0)*h(1):-1;
+layout(push_constant) uniform Params { int header; int stage; int count; int argument; int mode; } p;
+const int STATE=1,TAIL=2,EXCESS=3,DISTANCE=4,COUNT=5,OFFSET=6,CURSOR=7,ENTRY=8,BC=9,BO=10,OWNER=11,
+ PART=12,PREFIX=13,PROPOSAL=14,GRANT=15,TOTAL_PART=16,TOTAL=17,CUT=18,DISPATCH=20,EPOCH=21,ACTIVE_EDGES=22,TOUCHED=23,ACTIVE_VERTICES=24,RECEIVERS=25,CHANGED_VERTICES=26,LABEL_A=27,LABEL_B=28,LABEL_CHANGED=29,TREE_DISTANCE=30,TREE_PARENT=31,TREE_SUM=32;
+const int CK=0,CL=1,CU=2,CG=3,CCAP=4,CPREF=5,COPEN=6,CACCEPTED=7,CONTROL=8,CFLOW=10;
+const int INFINITY=0x3fffffff;const int64_t INF=int64_t(0x3fffffffffffffffUL),MAX_VALUE=int64_t(0x7fffffffffffffffUL);
+shared int64_t reduction[128];
+int h(int i){return int(words[p.header+i]);}int at(int f){return h(16+f);}int ch(int i){return int(words[h(0)+i]);}int ca(int f){return ch(8+f);}
+int n(){return h(1);}int groups(){return h(2);}int sink(){return h(3)-1;}
+int get(int f,int i){return int(words[at(f)+i]);}void put(int f,int i,int x){words[at(f)+i]=uint(x);}
+int control(int i){return int(atomicAdd(words[ca(CONTROL)+i],0u));}void putControl(int i,int x){words[ca(CONTROL)+i]=uint(x);}
+int64_t number(int a){return int64_t(uint64_t(words[a])|(uint64_t(words[a+1])<<32));}
+void writeNumber(int a,int64_t x){words[a]=uint(x);words[a+1]=uint(uint64_t(x)>>32);}
+int64_t read(int f,int i){return number(at(f)+2*i);}void write(int f,int i,int64_t x){writeNumber(at(f)+2*i,x);}
+int64_t capacityValue(int f,int i){return number(ca(f)+2*i);}int groupOf(int cell){int g=int(words[ca(CG)+cell]);return g<0?groups()-1:g;}
+void invalid(){atomicExchange(words[ca(CONTROL)],4u);atomicOr(errors,4096u);}
+int64_t add(int64_t a,int64_t b){if((b>0l&&a>MAX_VALUE-b)||(b<0l&&a<-MAX_VALUE-b)){invalid();return 0l;}return a+b;}
+int neighbor(int cell,int side){int x=cell%ch(0),y=cell/ch(0)%ch(1),z=cell/(ch(0)*ch(1));
+ if(side==0)return x>0?cell-1:-1;if(side==1)return x+1<ch(0)?cell+1:-1;
+ if(side==2)return y>0?cell-ch(0):-1;if(side==3)return y+1<ch(1)?cell+ch(0):-1;
+ if(side==4)return z>0?cell-ch(0)*ch(1):-1;return z+1<ch(2)?cell+ch(0)*ch(1):-1;}
+ivec2 endpoints(int e){
+ if(e<7*n()){int donor=e/7,slot=e%7;return ivec2(donor,n()+(slot==0?donor:neighbor(donor,slot-1)));}
+ if(e<8*n()){int cell=e-7*n();return ivec2(n()+cell,2*n()+groupOf(cell));}
+ return ivec2(2*n()+e-8*n(),sink());
 }
-int incomingEdge(int cell,int side){int from=neighbor(cell,side);return from<0?-1:7*from+1+(side^1);}
-int cellGroup(int cell){int g=get(GROUP_ID,cell);return g<0?h(4):g;}
-int64_t incoming(int cell){int64_t v=int64_t(0);for(int s=0;s<6;s++){int e=incomingEdge(cell,s);if(e>=0)v=add(v,wide(FLOW,e));}return v;}
-int64_t outgoing(int cell){int64_t v=int64_t(0);for(int s=1;s<7;s++)v=add(v,wide(FLOW,7*cell+s));return v;}
-bool violates(int cell){int64_t v=wide(K,cell)+incoming(cell)-outgoing(cell);return v<wide(LOWER,cell)||v>wide(UPPER,cell);}
+int64_t lower(int e){return e>=7*n()&&e<8*n()?capacityValue(CL,e-7*n()):0l;}
+int64_t upper(int e){
+ if(e<7*n()){int cell=e/7,slot=e%7;return slot==0||(int(words[ca(COPEN)+cell])&(1<<(slot-1)))!=0?capacityValue(CK,cell):0l;}
+ if(e<8*n())return capacityValue(CU,e-7*n());int group=e-8*n();return group==groups()-1?INF:capacityValue(CCAP,group);
+}
+int64_t flow(int e){return e<7*n()?capacityValue(CFLOW,e):read(TAIL,e-7*n());}
+void writeFlow(int e,int64_t x){if(e<7*n())writeNumber(ca(CFLOW)+2*e,x);else write(TAIL,e-7*n(),x);}
+int distance(int vertex){return int(atomicAdd(words[at(DISTANCE)+vertex],0u));}
 void initialize(int id){
- if(id<7*n()){putWide(FLOW,id,int64_t(0));putWide(SOURCE_LIMIT,id,INF);putWide(TARGET_LIMIT,id,INF);put(EDGE_MARK,id,0);}
- if(id<n()){put(MARK,id,1);put(ACTIVE,id,id);}
- if(id<groups()){put(GC,id,0);put(CURSOR,id,0);}
- if(id==0){for(int i=0;i<12;i++)put(CONTROL,i,0);for(int i=0;i<4;i++)put(COUNTERS,i,0);put(CONTROL,3,n());put(CONTROL,5,p.argument);put(CONTROL,7,h(4)>0?1:0);for(int i=0;i<3;i++){put(DISPATCH,3*i,0);put(DISPATCH,3*i+1,1);put(DISPATCH,3*i+2,1);}put(DISPATCH,9,min((n()+127)/128,256));put(DISPATCH,10,1);put(DISPATCH,11,1);}
+ if(id<h(3)){put(COUNT,id,0);put(CURSOR,id,0);put(TOUCHED,id,0);put(LABEL_A,id,0);put(LABEL_B,id,0);put(LABEL_CHANGED,id,0);write(EXCESS,id,0l);put(DISTANCE,id,INFINITY);}
+ if(id<h(4)){writeFlow(id,0l);write(PROPOSAL,id,0l);write(GRANT,id,0l);put(EPOCH,id,0);}
+ if(id<n())put(CUT,id,0);
+ if(id==0){for(int i=0;i<12;i++)putControl(i,0);putControl(5,p.argument);for(int i=0;i<17;i++)put(STATE,i,0);put(STATE,8,INFINITY);put(STATE,0,-1);put(STATE,16,1);}
 }
-void countGroup(int cell){
- int g=get(GROUP_ID,cell);int64_t k=wide(K,cell),lo=wide(LOWER,cell),hi=wide(UPPER,cell);
- if(g< -1||g>=h(4)||k<0||k>INF/int64_t(n())||lo<0||lo>k||hi<k||hi>INF/int64_t(n())||(get(OPEN,cell)&~63)!=0){invalid();return;}
- if(g>=0&&(wide(GROUP_CAPACITY,g)<0||wide(GROUP_CAPACITY,g)>INF)){invalid();return;}
- int cross=0;
- for(int s=0;s<6;s++){
-  int other=neighbor(cell,s);if(other<0&&(get(OPEN,cell)&(1<<s))!=0){invalid();return;}
-  if(other>=0&&get(GROUP_ID,other)!=g)cross|=1<<s;
+void seedDonor(int cell){
+ int group=int(words[ca(CG)+cell]),open=int(words[ca(COPEN)+cell]);int64_t k=capacityValue(CK,cell),lo=capacityValue(CL,cell),hi=capacityValue(CU,cell);
+ if(group< -1||group>=groups()-1||k<0l||k>INF/(8l*int64_t(n()))||lo<0l||hi<lo||hi>INF/int64_t(n())||(open&~63)!=0){invalid();return;}
+ if(group>=0&&(capacityValue(CCAP,group)<0l||capacityValue(CCAP,group)>INF)){invalid();return;}
+ int64_t remaining=k;
+ for(int slot=1;slot<7;slot++){
+  int other=neighbor(cell,slot-1);if(other<0&&(open&(1<<(slot-1)))!=0){invalid();return;}
+  int64_t preferred=capacityValue(CPREF,7*cell+slot);if(preferred<0l){invalid();return;}
+  int64_t amount=(open&(1<<(slot-1)))!=0?min(remaining,preferred):0l;writeFlow(7*cell+slot,amount);remaining-=amount;
+ }writeFlow(7*cell,remaining);
+}
+void seedReceiver(int cell){
+ int64_t incoming=flow(7*cell);
+ for(int side=0;side<6;side++){int source=neighbor(cell,side);if(source>=0)incoming=add(incoming,flow(7*source+1+(side^1)));}
+ writeFlow(7*n()+cell,clamp(incoming,capacityValue(CL,cell),capacityValue(CU,cell)));
+}
+void countEdge(int e){if(upper(e)==0l)return;ivec2 v=endpoints(e);if(v.x<0||v.y<0||v.x>=h(3)||v.y>=h(3)){invalid();return;}
+ atomicAdd(words[at(COUNT)+v.x],1u);atomicAdd(words[at(COUNT)+v.y],1u);}
+void scatterEdge(int e){if(upper(e)==0l)return;ivec2 v=endpoints(e);
+ int a=int(atomicAdd(words[at(CURSOR)+v.x],1u)),b=int(atomicAdd(words[at(CURSOR)+v.y],1u));
+ put(ENTRY,get(OFFSET,v.x)+a,e);put(ENTRY,get(OFFSET,v.y)+b,e);}
+void countBlocks(int vertex){int degree=get(COUNT,vertex);put(BC,vertex,degree>128?(degree+127)/128:0);}
+void mapBlocks(int vertex){for(int block=get(BO,vertex);block<get(BO,vertex+1);block++)put(OWNER,block,vertex);}
+void reduce(int lane){for(int step=64;step>0;step>>=1){barrier();if(lane<step)reduction[lane]=p.mode==3?min(reduction[lane],reduction[lane+step]):add(reduction[lane],reduction[lane+step]);}barrier();}
+void totalBlock(int block,int lane){int cell=128*block+lane;reduction[lane]=cell<n()?capacityValue(CK,cell):0l;reduce(lane);if(lane==0)write(TOTAL_PART,block,reduction[0]);}
+void total(){int64_t result=0l;for(int block=0;block<h(6);block++)result=add(result,read(TOTAL_PART,block));write(TOTAL,0,result);}
+int64_t contribution(int vertex,int e){
+ ivec2 ends=endpoints(e);int peer=ends.x==vertex?ends.y:ends.x;
+ if(p.mode==2||p.mode==4)return ends.x==vertex?-flow(e):flow(e);
+ if(p.mode==3)return (ends.x==vertex?upper(e)-flow(e):flow(e)-lower(e))>0l?int64_t(distance(peer)):int64_t(INFINITY);
+ if(p.mode==0){
+  if(read(EXCESS,vertex)<=0l||distance(vertex)==INFINITY||distance(vertex)==0||distance(peer)!=distance(vertex)-1)return 0l;
+  return ends.x==vertex?upper(e)-flow(e):flow(e)-lower(e);
  }
- put(CROSS,cell,cross);
- for(int s=0;s<7;s++)if(wide(PREFERRED,7*cell+s)<0){invalid();return;}
- atomicAdd(words[at(GC)+cellGroup(cell)],1u);
+ if(get(EPOCH,e)!=control(1)+1)return 0l;
+ int64_t proposal=read(PROPOSAL,e);bool receiving=proposal>0l?ends.y==vertex:proposal<0l&&ends.x==vertex;
+ return receiving?abs(proposal):0l;
 }
-void scatter(int cell){
- int g=cellGroup(cell),rank=int(atomicAdd(words[at(CURSOR)+g],1u));put(MEMBERS,get(GO,g)+rank,cell);
- int64_t left=wide(K,cell);
- for(int s=1;s<7;s++){int64_t v=(get(OPEN,cell)&(1<<(s-1)))!=0?min(left,wide(PREFERRED,7*cell+s)):int64_t(0);putWide(FLOW,7*cell+s,v);left-=v;}
- putWide(FLOW,7*cell,left);
-}
-void countBlocks(int g){put(BC,g,g<h(4)?(get(GC,g)+127)/128:0);}
-void mapBlocks(int g){for(int i=get(BO,g);i<get(BO,g+1);i++)put(BG,i,g);}
-void reduceShared(int lane){
- for(int step=64;step>0;step>>=1){barrier();if(lane<step){a[lane]=add(a[lane],a[lane+step]);b[lane]=add(b[lane],b[lane+step]);c[lane]=add(c[lane],c[lane+step]);}}
- barrier();
-}
-void blockStats(int block,int lane){
- if(block>=get(BO,groups()))return;
- int g=get(BG,block),rank=128*(block-get(BO,g))+lane;
- int64_t iv=int64_t(0),ov=int64_t(0),kv=int64_t(0);
- if(rank<get(GC,g)){
-  int cell=get(MEMBERS,get(GO,g)+rank),mask=get(CROSS,cell);kv=wide(K,cell);
-  for(int s=0;s<6;s++)if((mask&(1<<s))!=0){iv=add(iv,wide(FLOW,incomingEdge(cell,s)));ov=add(ov,wide(FLOW,7*cell+1+s));}
+int64_t budget(int vertex){return p.mode==0?max(0l,read(EXCESS,vertex)):(read(EXCESS,vertex)<0l?-read(EXCESS,vertex):MAX_VALUE);}
+int labelQueue(){return (control(1)&1)==0?LABEL_A:LABEL_B;}
+void touch(int vertex){atomicOr(words[at(labelQueue())+vertex],1u);if(atomicExchange(words[at(TOUCHED)+vertex],uint(control(1)+1))!=uint(control(1)+1)){
+ int index=int(atomicAdd(words[at(STATE)+12],1u));put(CHANGED_VERTICES,index,vertex);}}
+void allocate(int vertex,int e,int64_t prefix,int64_t amount){
+ if(amount==0l)return;int64_t available=budget(vertex),keep=prefix<available?min(amount,available-prefix):0l;
+ if(p.mode==0&&keep>0l){ivec2 ends=endpoints(e);write(PROPOSAL,e,ends.x==vertex?keep:-keep);
+  put(EPOCH,e,control(1)+1);int index=int(atomicAdd(words[at(STATE)+9],1u));put(ACTIVE_EDGES,index,e);
+  int receiver=ends.x==vertex?ends.y:ends.x;
+  if(atomicExchange(words[at(CURSOR)+receiver],uint(control(1)+1))!=uint(control(1)+1)){
+   int slot=int(atomicAdd(words[at(STATE)+11],1u));put(RECEIVERS,slot,receiver);}
+  touch(receiver);
  }
- a[lane]=iv;b[lane]=ov;c[lane]=kv;reduceShared(lane);
- if(lane==0){putWide(BI,block,a[0]);putWide(BOUT,block,b[0]);putWide(BASE,block,c[0]);}
+ else if(p.mode==1){int64_t proposed=read(PROPOSAL,e);write(GRANT,e,proposed>0l?keep:-keep);}
 }
-void groupBudget(int g,int lane){
- int start=get(BO,g),end=get(BO,g+1);a[lane]=int64_t(0);b[lane]=int64_t(0);c[lane]=int64_t(0);
- for(int block=start+lane;block<end;block+=128){a[lane]=add(a[lane],wide(BI,block));b[lane]=add(b[lane],wide(BOUT,block));c[lane]=add(c[lane],wide(BASE,block));}
- reduceShared(lane);
- if(lane==0){
-  int64_t cap=wide(GROUP_CAPACITY,g);if(c[0]>cap){invalid();return;}
-  putWide(GI,g,a[0]);putWide(GLIMIT,g,min(a[0],add(cap-c[0],b[0])));
-  int64_t prefix=int64_t(0);for(int block=start;block<end;block++){putWide(BPREFIX,block,prefix);prefix=add(prefix,wide(BI,block));}
-  if(g==0)put(CONTROL,7,0);
+void countPositive(int vertex){if(read(EXCESS,vertex)>0l){int index=int(atomicAdd(words[at(STATE)+4],1u));put(ACTIVE_VERTICES,index,vertex);}}
+void finishBalance(int vertex,int64_t sum){
+ int64_t supply=vertex<n()?capacityValue(CK,vertex):vertex==sink()?-read(TOTAL,0):0l;int64_t excess=add(supply,sum);write(EXCESS,vertex,excess);
+ countPositive(vertex);
+}
+bool idle(int vertex){
+ if(get(STATE,0)<0)return false;
+ if(p.mode==4)return get(STATE,0)!=5;
+ if(p.mode==0)return read(EXCESS,vertex)<=0l;
+ if(p.mode==1)return get(CURSOR,vertex)!=control(1)+1;
+ if(p.mode==2)return get(TOUCHED,vertex)!=control(1)+1;
+ return get(labelQueue(),vertex)==0||read(EXCESS,vertex)<0l||distance(vertex)==INFINITY;
+}
+void blockSum(int block,int lane){
+ if(block>=get(BO,h(3)))return;int vertex=get(OWNER,block),index=get(OFFSET,vertex)+128*(block-get(BO,vertex))+lane;
+ if(idle(vertex))return;
+ reduction[lane]=index<get(OFFSET,vertex+1)?contribution(vertex,get(ENTRY,index)):(p.mode==3?int64_t(INFINITY):0l);reduce(lane);if(lane==0)write(PART,block,reduction[0]);
+}
+void notifyPredecessor(int vertex,int e){ivec2 ends=endpoints(e);bool forward=ends.y==vertex;
+ if((forward?upper(e)-flow(e):flow(e)-lower(e))>0l){int peer=forward?ends.x:ends.y;
+  atomicOr(words[at(labelQueue()==LABEL_A?LABEL_B:LABEL_A)+peer],1u);}}
+void ownerSum(int vertex){
+ if(get(STATE,0)>=0&&p.mode<3){
+  int size=p.mode==0?get(STATE,10):p.mode==1?get(STATE,11):get(STATE,12);if(vertex>=size)return;
+  vertex=get(p.mode==0?ACTIVE_VERTICES:p.mode==1?RECEIVERS:CHANGED_VERTICES,vertex);
+  if(p.mode==0)touch(vertex);
+ }
+ bool skip=idle(vertex);
+ if(p.mode==3){put(LABEL_CHANGED,vertex,0);put(labelQueue(),vertex,0);
+  if(read(EXCESS,vertex)>0l&&distance(vertex)==INFINITY)atomicExchange(words[ca(CONTROL)],2u);}
+ if(skip){if(p.mode==2)countPositive(vertex);return;}
+ int64_t prefix=p.mode==3?int64_t(INFINITY):0l;
+ if(get(COUNT,vertex)<=128){for(int i=get(OFFSET,vertex);i<get(OFFSET,vertex+1);i++){
+   int e=get(ENTRY,i);int64_t value=contribution(vertex,e);if(p.mode<2)allocate(vertex,e,prefix,value);prefix=p.mode==3?min(prefix,value):add(prefix,value);
+   if(p.mode==3&&prefix<int64_t(distance(vertex)))return;
+  }}else for(int b=get(BO,vertex);b<get(BO,vertex+1);b++){write(PREFIX,b,prefix);prefix=p.mode==3?min(prefix,read(PART,b)):add(prefix,read(PART,b));}
+ if(p.mode==2||p.mode==4)finishBalance(vertex,prefix);
+ if(p.mode==3){int next=prefix>=h(3)?INFINITY:int(prefix)+1;
+  if(next==INFINITY&&read(EXCESS,vertex)>0l)atomicExchange(words[ca(CONTROL)],2u);
+  int old=int(atomicMax(words[at(DISTANCE)+vertex],uint(next)));
+  if(next>old){put(LABEL_CHANGED,vertex,1);if(get(COUNT,vertex)<=128)
+   for(int i=get(OFFSET,vertex);i<get(OFFSET,vertex+1);i++)notifyPredecessor(vertex,get(ENTRY,i));}}
+}
+void blockAllocate(int block,int lane){
+ if(block>=get(BO,h(3)))return;int vertex=get(OWNER,block),index=get(OFFSET,vertex)+128*(block-get(BO,vertex))+lane;
+ if(p.mode==3){if(get(LABEL_CHANGED,vertex)!=0&&index<get(OFFSET,vertex+1))notifyPredecessor(vertex,get(ENTRY,index));return;}
+ if(idle(vertex))return;
+ int e=index<get(OFFSET,vertex+1)?get(ENTRY,index):-1;int64_t amount=e<0?0l:contribution(vertex,e);reduction[lane]=amount;barrier();
+ for(int step=1;step<128;step<<=1){int64_t extra=lane>=step?reduction[lane-step]:0l;barrier();reduction[lane]=add(reduction[lane],extra);barrier();}
+ if(e>=0)allocate(vertex,e,add(read(PREFIX,block),reduction[lane]-amount),amount);
+}
+void seedGroup(int group){writeFlow(8*n()+group,clamp(read(EXCESS,2*n()+group),0l,upper(8*n()+group)));if(group==0){put(STATE,4,0);put(STATE,8,INFINITY);}}
+void dispatchSize(int slot,int size){int workgroups=(size+127)/128;
+ put(DISPATCH,3*slot,min(workgroups,65535));put(DISPATCH,3*slot+1,max(1,(workgroups+65534)/65535));put(DISPATCH,3*slot+2,1);}
+void updateDispatch(){bool running=control(0)==0&&get(STATE,16)!=0;int state=get(STATE,0);putControl(2,state);
+ dispatchSize(0,running&&state==0?h(3):0);dispatchSize(1,running&&state==1?h(4):0);
+ dispatchSize(2,running&&state==2?h(4):0);dispatchSize(3,running&&state==2?h(3):0);
+ dispatchSize(4,running&&state==2?128*get(BO,h(3)):0);dispatchSize(5,running?1:0);
+ dispatchSize(6,running&&state==2?get(STATE,4):0);
+ dispatchSize(9,running&&state==3?n():0);dispatchSize(13,running&&state==4?n():0);dispatchSize(14,running&&state==5?n():0);dispatchSize(15,running&&state==5?1:0);dispatchSize(10,running&&state==5?groups():0);
+ dispatchSize(11,running&&state==5?h(3):0);dispatchSize(12,running&&state==5?128*get(BO,h(3)):0);}
+void start(){if(get(STATE,4)==0)putControl(0,1);else put(STATE,0,3);}
+void seedDistance(int vertex){if(get(STATE,0)!=0)return;put(CURSOR,vertex,0);put(LABEL_A,vertex,0);put(LABEL_B,vertex,0);put(DISTANCE,vertex,read(EXCESS,vertex)<0l?0:INFINITY);}
+void beginBfs(){if(get(STATE,0)==0){put(STATE,0,1);put(STATE,1,0);put(STATE,2,0);put(STATE,5,0);}}
+void discover(int vertex,int value){if(atomicCompSwap(words[at(DISTANCE)+vertex],uint(INFINITY),uint(value))==uint(INFINITY)){atomicOr(words[at(STATE)+2],1u);if(read(EXCESS,vertex)>0l)atomicOr(words[at(STATE)+5],1u);}}
+void bfsEdge(int e){if(get(STATE,0)!=1||upper(e)==0l)return;ivec2 v=endpoints(e);int wave=get(STATE,1);
+ if(flow(e)<upper(e)&&distance(v.y)==wave)discover(v.x,wave+1);
+ if(flow(e)>lower(e)&&distance(v.x)==wave)discover(v.y,wave+1);
+}
+void finishBfs(){if(get(STATE,0)!=1)return;put(STATE,6,get(STATE,6)+1);
+ if(get(STATE,2)!=0){put(STATE,1,get(STATE,1)+1);put(STATE,2,0);}else put(STATE,0,2);}
+void clearProposal(int e){if(get(STATE,0)!=2)return;
+ put(STATE,10,get(STATE,4));put(STATE,3,0);put(STATE,4,0);put(STATE,5,0);put(STATE,8,INFINITY);put(STATE,9,0);put(STATE,11,0);put(STATE,12,0);}
+void apply(int index){if(get(STATE,0)!=2||index>=get(STATE,9))return;int e=get(ACTIVE_EDGES,index);
+ int64_t grant=read(GRANT,e);if(grant!=0l){int64_t next=add(flow(e),grant);
+ if(next<lower(e)||next>upper(e)){invalid();return;}writeFlow(e,next);
  }
 }
-void activate(int cell){
- uint stamp=uint(2*get(CONTROL,1)+1);
- if(atomicExchange(words[at(MARK)+cell],stamp)!=stamp){int i=int(atomicAdd(words[at(CONTROL)+3],1u));put(ACTIVE,i,cell);}
+// Signed subtree imbalance removes full-cell divergence while retaining the projected routes.
+void seedTree(int cell){put(TREE_DISTANCE,cell,capacityValue(CL,cell)==0l&&flow(7*n()+cell)<capacityValue(CU,cell)?0:INFINITY);put(TREE_PARENT,cell,-1);write(TREE_SUM,cell,0l);}
+int treeDistance(int cell){return int(atomicAdd(words[at(TREE_DISTANCE)+cell],0u));}
+void treeWave(int cell){if(get(STATE,0)!=3||treeDistance(cell)!=INFINITY)return;
+ int open=int(words[ca(COPEN)+cell]);for(int side=0;side<6;side++)if((open&(1<<side))!=0){int peer=neighbor(cell,side);
+  if(peer>=0&&(int(words[ca(COPEN)+peer])&(1<<(side^1)))!=0&&treeDistance(peer)==get(STATE,14)){atomicExchange(words[at(TREE_DISTANCE)+cell],uint(get(STATE,14)+1));put(TREE_PARENT,cell,side);atomicOr(words[at(STATE)+15],1u);break;}}
 }
-void markGroupChange(int edge){
- int from=edge/7,to=neighbor(from,edge%7-1),g=get(GROUP_ID,from);
- if(g>=0&&g!=get(GROUP_ID,to))atomicOr(words[at(CONTROL)+7],1u);
+void treeGather(int cell){if(get(STATE,0)!=4||get(TREE_DISTANCE,cell)!=get(STATE,14))return;
+ int64_t amount=read(EXCESS,n()+cell);for(int side=0;side<6;side++){int peer=neighbor(cell,side);
+  if(peer>=0&&get(TREE_PARENT,peer)==(side^1))amount=add(amount,read(TREE_SUM,peer));}write(TREE_SUM,cell,amount);
 }
-int64_t budgetPrefix(int64_t prefix,int64_t total,int64_t allowed){
- if(prefix==total)return allowed;
- return clamp(int64_t(double(prefix)*(double(allowed)/double(total))),int64_t(0),allowed);
+int64_t treeDelta(int cell,int side){int peer=neighbor(cell,side);if(peer<0)return 0l;
+ if(get(TREE_PARENT,cell)==side)return read(TREE_SUM,cell);
+ return get(TREE_PARENT,peer)==(side^1)?-read(TREE_SUM,peer):0l;
 }
-void clipGroup(int block,int lane){
- if(block>=get(BO,groups()))return;
- int g=get(BG,block);int64_t total=wide(GI,g),allowed=wide(GLIMIT,g);if(allowed>=total)return;
- int rank=128*(block-get(BO,g))+lane,cell=rank<get(GC,g)?get(MEMBERS,get(GO,g)+rank):-1;
- int64_t iv=int64_t(0);int mask=cell<0?0:get(CROSS,cell);
- for(int s=0;s<6;s++)if((mask&(1<<s))!=0)iv=add(iv,wide(FLOW,incomingEdge(cell,s)));
- a[lane]=iv;barrier();
- for(int step=1;step<128;step<<=1){int64_t extra=lane>=step?a[lane-step]:int64_t(0);barrier();a[lane]=add(a[lane],extra);barrier();}
- int64_t prefix=wide(BPREFIX,block)+a[lane]-iv;
- for(int s=0;s<6;s++)if((mask&(1<<s))!=0){
-  int edge=incomingEdge(cell,s);int64_t amount=wide(FLOW,edge),end=prefix+amount;
-  int64_t keep=min(amount,budgetPrefix(end,total,allowed)-budgetPrefix(prefix,total,allowed));prefix=end;
-  if(keep<amount){putWide(FLOW,edge,keep);activate(cell);activate(edge/7);markGroupChange(edge);}
- }
+void treePropose(int cell){if(get(STATE,0)!=5)return;int64_t retained=flow(7*cell);
+ for(int side=0;side<6;side++){int64_t delta=treeDelta(cell,side),old=flow(7*cell+side+1),removed=delta<0l?min(old,-delta):0l;
+  retained=add(retained,removed);writeNumber(ca(CACCEPTED)+2*(7*cell+side+1),old-removed);}
+ for(int side=0;side<6;side++){int64_t delta=treeDelta(cell,side);if(delta<=0l)continue;
+  int peer=neighbor(cell,side);int64_t needed=max(0l,delta-flow(7*peer+(side^1)+1)),amount=min(needed,retained);
+  int a=ca(CACCEPTED)+2*(7*cell+side+1);writeNumber(a,number(a)+amount);retained-=amount;}
+ writeNumber(ca(CACCEPTED)+14*cell,retained);
 }
-void limitEdge(int edge,bool source,int64_t keep){
- putWide(source?SOURCE_LIMIT:TARGET_LIMIT,edge,keep);
- uint stamp=uint(get(CONTROL,1)+1);
- if(atomicExchange(words[at(EDGE_MARK)+edge],stamp)!=stamp){int i=int(atomicAdd(words[at(COUNTERS)+1],1u));put(ACTIVE_EDGES,i,edge);}
-}
-void propose(int cell){
- int64_t iv=incoming(cell),ov=outgoing(cell),k=wide(K,cell),v=k+iv-ov;
- bool trimOut=v<wide(LOWER,cell);if(!trimOut&&v<=wide(UPPER,cell))return;
- int64_t left=trimOut?k+iv-wide(LOWER,cell):ov+wide(UPPER,cell)-k;
- for(int s=0;s<6;s++){
-  int edge=trimOut?7*cell+1+s:incomingEdge(cell,s);if(edge<0)continue;
-  int64_t amount=wide(FLOW,edge),keep=min(amount,left);left-=keep;if(keep<amount)limitEdge(edge,trimOut,keep);
- }
-}
-void affect(int cell){
- uint stamp=uint(2*get(CONTROL,1)+2);
- if(atomicExchange(words[at(MARK)+cell],stamp)!=stamp){int i=int(atomicAdd(words[at(COUNTERS)],1u));put(AFFECTED,i,cell);}
-}
-void applyLimits(int index){
- int edge=get(ACTIVE_EDGES,index);int64_t amount=wide(FLOW,edge),keep=min(amount,min(wide(SOURCE_LIMIT,edge),wide(TARGET_LIMIT,edge)));
- if(keep<amount){putWide(FLOW,edge,keep);affect(edge/7);affect(neighbor(edge/7,edge%7-1));markGroupChange(edge);}
- putWide(SOURCE_LIMIT,edge,INF);putWide(TARGET_LIMIT,edge,INF);
-}
-void collect(int index){
- int cell=get(AFFECTED,index);if(violates(cell)){int i=int(atomicAdd(words[at(CONTROL)+2],1u));put(ACTIVE,i,cell);put(MARK,cell,2*get(CONTROL,1)+3);}
-}
+void treeApply(int cell){if(get(STATE,0)!=5)return;for(int slot=0;slot<7;slot++)writeFlow(7*cell+slot,capacityValue(CACCEPTED,7*cell+slot));}
+void treeReceiver(int cell){if(get(STATE,0)==5){seedReceiver(cell);if(cell<groups())writeFlow(8*n()+cell,0l);}}
+void treeReset(){if(get(STATE,0)==5){put(STATE,4,0);if(groups()>n())writeFlow(8*n()+groups()-1,0l);}}
 void finishRound(){
- int round=get(CONTROL,1)+1,count=get(CONTROL,2);put(CONTROL,1,round);put(CONTROL,3,count);put(CONTROL,6,count);put(CONTROL,2,0);put(COUNTERS,0,0);put(COUNTERS,1,0);
- if(count==0&&get(CONTROL,7)==0)put(CONTROL,0,FEASIBLE);
- else {put(CONTROL,8,count==0?1:0);if(round>=get(CONTROL,5))put(CONTROL,0,LIMIT);}
- bool groupPhase=get(CONTROL,0)==RUNNING&&get(CONTROL,8)!=0;
- for(int i=0;i<3;i++){int blocks=groupPhase?(i==1?h(4):get(BO,groups())):0;
-  put(DISPATCH,3*i,min(blocks,65535));put(DISPATCH,3*i+1,blocks==0?1:(blocks+65534)/65535);put(DISPATCH,3*i+2,1);}
- put(DISPATCH,9,get(CONTROL,0)!=RUNNING?0:groupPhase?256:min((count+127)/128,256));put(DISPATCH,10,1);put(DISPATCH,11,1);
+ int round=control(1)+1;putControl(1,round);
+ if(get(STATE,0)==3){if(get(STATE,15)!=0){put(STATE,14,get(STATE,14)+1);put(STATE,15,0);}else put(STATE,0,4);}
+ else if(get(STATE,0)==4){if(get(STATE,14)>0)put(STATE,14,get(STATE,14)-1);else put(STATE,0,5);}
+ else if(get(STATE,0)==5){if(get(STATE,4)==0)putControl(0,1);else put(STATE,0,0);}if(get(STATE,0)==2)put(STATE,7,get(STATE,7)+1);
+ if(get(STATE,0)==2&&get(STATE,4)==0){putControl(0,1);return;}
+ if(round>=control(5)&&control(0)==0)putControl(0,3);
 }
-void finish(int id){
- if(get(CONTROL,0)!=FEASIBLE){if(id==0)atomicOr(errors,8192u);return;}
- putWide(ACCEPTED,id,id%7==0?wide(K,id/7)-outgoing(id/7):wide(FLOW,id));
+void finish(int e){
+ if(control(0)==1)writeNumber(ca(CACCEPTED)+2*e,flow(e));
+ else if(control(0)==2){if(e<n())put(CUT,e,distance(n()+e)==INFINITY||distance(2*n()+groupOf(e))==INFINITY?1:0);}
+ else if(e==0)atomicOr(errors,8192u);
 }
 void main(){
  int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*block+lane;
- if(p.stage>=5&&p.stage<=7){
-  if(block>=p.count/128)return;
-  if(get(CONTROL,8)==0)return;
-  if(lane==0)groupStatus=get(CONTROL,0);barrier();if(groupStatus!=RUNNING)return;
-  if(p.stage==5)blockStats(block,lane);else if(p.stage==6)groupBudget(block,lane);else clipGroup(block,lane);return;
- }
- if(id>=p.count)return;
- if(p.stage==0){initialize(id);return;}if(p.stage==14){finish(id);return;}if(get(CONTROL,0)!=RUNNING)return;
- if(p.stage==1)countGroup(id);else if(p.stage==2)scatter(id);else if(p.stage==3)countBlocks(id);else if(p.stage==4)mapBlocks(id);
- else if(p.stage>=10&&p.stage<=12){
-  int count=p.stage==10?get(CONTROL,3):p.stage==11?get(COUNTERS,1):get(COUNTERS,0),stride=int(gl_NumWorkGroups.x*gl_NumWorkGroups.y*128);
-  for(int i=id;i<count;i+=stride){if(p.stage==10)propose(get(ACTIVE,i));else if(p.stage==11)applyLimits(i);else collect(i);}
- }else if(p.stage==13)finishRound();
+ if(p.stage==0){if(id<p.count)initialize(id);return;}if(p.stage==21){if(id<p.count)finish(id);return;}if(control(0)!=0)return;
+ if(p.stage==32){if(id==0){int state=get(STATE,0);put(STATE,16,(p.argument<=1?state<=1:state==p.argument)?1:0);updateDispatch();}return;}
+ if(p.stage>=11&&p.stage!=24&&get(STATE,16)==0)return;
+ if(p.stage>=16&&p.stage<=18){if(get(STATE,0)>=0&&get(STATE,0)!=(p.mode==4?5:2))return;
+  if(p.stage==16){blockSum(block,lane);return;}if(p.stage==18){blockAllocate(block,lane);return;}}
+ if(p.stage==7){if(block<h(6))totalBlock(block,lane);return;}if(id>=p.count)return;
+ if(p.stage==1)seedDonor(id);else if(p.stage==2)seedReceiver(id);else if(p.stage==3)countEdge(id);else if(p.stage==4)scatterEdge(id);
+ else if(p.stage==5)countBlocks(id);else if(p.stage==6)mapBlocks(id);else if(p.stage==8)total();else if(p.stage==9)seedGroup(id);
+ else if(p.stage==10)start();else if(p.stage==11)seedDistance(id);else if(p.stage==12)beginBfs();else if(p.stage==13)bfsEdge(id);
+ else if(p.stage==14)finishBfs();else if(p.stage==15)clearProposal(id);else if(p.stage==17)ownerSum(id);
+ else if(p.stage==24)seedTree(id);else if(p.stage==25)treeWave(id);else if(p.stage==26)treeGather(id);
+ else if(p.stage==27)treePropose(id);else if(p.stage==28)treeApply(id);else if(p.stage==29)treeReceiver(id);
+ else if(p.stage==30)treeReset();else if(p.stage==31){if(get(STATE,0)==5)seedGroup(id);}
+ else if(p.stage==19)apply(id);else if(p.stage==20)finishRound();else if(p.stage==23){bool moving=get(STATE,0)==2;dispatchSize(2,moving?get(STATE,9):0);
+ dispatchSize(7,moving?get(STATE,11):0);dispatchSize(8,moving?get(STATE,12):0);}
+ if(p.stage==10||p.stage==12||p.stage==14||p.stage==20)updateDispatch();
 }
+

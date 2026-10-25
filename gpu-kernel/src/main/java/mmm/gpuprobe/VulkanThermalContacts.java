@@ -18,31 +18,39 @@ final class VulkanThermalContacts implements AutoCloseable {
                   VulkanGasStateLayout gas,VulkanGasThermodynamics.Layout gasThermal,VulkanGasGeometry.Layout gasGeometry,
                   VulkanGranularStateLayout granular,VulkanLiquidThermodynamics.Layout granularThermal,
                   VulkanCoherentStateLayout coherent,VulkanLiquidThermodynamics.Layout coherentThermal,
+                  VulkanThermalDeviceLayout device,VulkanLiquidThermodynamics.Layout deviceThermal,
                   int fixedMasksWord,int bathTemperaturesWord,int openFaceFractionsWord,double cellSize){
         Inputs(VulkanLiquidStateLayout liquid,VulkanLiquidThermodynamics.Layout liquidThermal,VulkanGasStateLayout gas,
                VulkanGasThermodynamics.Layout gasThermal,VulkanGasGeometry.Layout gasGeometry,VulkanGranularStateLayout granular,
+               VulkanLiquidThermodynamics.Layout granularThermal,VulkanCoherentStateLayout coherent,VulkanLiquidThermodynamics.Layout coherentThermal,
+               int fixedMasksWord,int bathTemperaturesWord,int openFaceFractionsWord,double cellSize){
+            this(liquid,liquidThermal,gas,gasThermal,gasGeometry,granular,granularThermal,coherent,coherentThermal,null,null,fixedMasksWord,bathTemperaturesWord,openFaceFractionsWord,cellSize);
+        }
+        Inputs(VulkanLiquidStateLayout liquid,VulkanLiquidThermodynamics.Layout liquidThermal,VulkanGasStateLayout gas,
+               VulkanGasThermodynamics.Layout gasThermal,VulkanGasGeometry.Layout gasGeometry,VulkanGranularStateLayout granular,
                VulkanLiquidThermodynamics.Layout granularThermal,int fixedMasksWord,int bathTemperaturesWord,int openFaceFractionsWord,double cellSize){
-            this(liquid,liquidThermal,gas,gasThermal,gasGeometry,granular,granularThermal,null,null,fixedMasksWord,bathTemperaturesWord,openFaceFractionsWord,cellSize);
+            this(liquid,liquidThermal,gas,gasThermal,gasGeometry,granular,granularThermal,null,null,null,null,fixedMasksWord,bathTemperaturesWord,openFaceFractionsWord,cellSize);
         }
         Inputs{if(liquid==null||liquidThermal==null||fixedMasksWord<0||!(Double.isFinite(cellSize)&&cellSize>0)
-                ||(gas==null)!=(gasThermal==null)||(gas==null)!=(gasGeometry==null)||(granular==null)!=(granularThermal==null)||(coherent==null)!=(coherentThermal==null))
+                ||(gas==null)!=(gasThermal==null)||(gas==null)!=(gasGeometry==null)||(granular==null)!=(granularThermal==null)||(coherent==null)!=(coherentThermal==null)||(device==null)!=(deviceThermal==null))
             throw new IllegalArgumentException("Invalid thermal inventory inputs");}
-        int owners(){return Math.addExact(coherent==null?0:coherent.groupCapacity(),Math.addExact(liquid.stockCapacity(),Math.addExact(gas==null?0:gas.nodeCapacity(),granular==null?0:Math.addExact(granular.particleCapacity(),granular.depositCapacity()))));}
+        int owners(){return Math.addExact((coherent==null?0:coherent.groupCapacity())+(device==null?0:device.deviceCapacity()),Math.addExact(liquid.stockCapacity(),Math.addExact(gas==null?0:gas.nodeCapacity(),granular==null?0:Math.addExact(granular.particleCapacity(),granular.depositCapacity()))));}
         int samples(){return Math.addExact(coherent==null?0:coherent.groupCapacity(),Math.addExact(liquid.stockCapacity(),Math.addExact(gas==null?0:liquid.cellCount(),granular==null?0:Math.addExact(8*granular.particleCapacity(),granular.depositCapacity()))));}
-        int terms(){return Math.addExact(coherent==null?0:coherent.groupCapacity(),Math.addExact(liquid.stockCapacity(),Math.addExact(gas==null?0:gas.componentCapacity(),granular==null?0:Math.addExact(granular.particleCapacity(),granular.depositCapacity()))));}
-        long endOffset(){return Math.max(coherent==null?0:Math.max(coherent.endOffset(),coherentThermal.endOffset()),Math.max(liquidThermal.endOffset(),Math.max(gasThermal==null?0:Math.max(gasThermal.endOffset(),gasGeometry.endOffset()),granularThermal==null?0:Math.max(granular.endOffset(),granularThermal.endOffset()))));}
+        int terms(){return Math.addExact((coherent==null?0:coherent.groupCapacity())+(device==null?0:device.deviceCapacity()),Math.addExact(liquid.stockCapacity(),Math.addExact(gas==null?0:gas.componentCapacity(),granular==null?0:Math.addExact(granular.particleCapacity(),granular.depositCapacity()))));}
+        long endOffset(){return Math.max(device==null?0:Math.max(device.endOffset(),deviceThermal.endOffset()),Math.max(coherent==null?0:Math.max(coherent.endOffset(),coherentThermal.endOffset()),Math.max(liquidThermal.endOffset(),Math.max(gasThermal==null?0:Math.max(gasThermal.endOffset(),gasGeometry.endOffset()),granularThermal==null?0:Math.max(granular.endOffset(),granularThermal.endOffset())))));}
     }
     /** Indices refer to the conduction solver's common material table; conductivity remains SI W/(m K). */
-    record Materials(int[] liquid,int[] gas,int[] granular,int[] coherent,double[] conductivity){
-        Materials(int[] liquid,int[] gas,int[] granular,double[] conductivity){this(liquid,gas,granular,new int[0],conductivity);}
-        Materials{liquid=liquid.clone();gas=gas.clone();granular=granular.clone();coherent=coherent.clone();conductivity=conductivity.clone();
+    record Materials(int[] liquid,int[] gas,int[] granular,int[] coherent,int[] device,double[] conductivity){
+        Materials(int[] liquid,int[] gas,int[] granular,double[] conductivity){this(liquid,gas,granular,new int[0],new int[0],conductivity);}
+        Materials(int[] liquid,int[] gas,int[] granular,int[] coherent,double[] conductivity){this(liquid,gas,granular,coherent,new int[0],conductivity);}
+        Materials{liquid=liquid.clone();gas=gas.clone();granular=granular.clone();coherent=coherent.clone();device=device.clone();conductivity=conductivity.clone();
             for(double k:conductivity)if(!(Double.isFinite(k)&&k>=0))throw new IllegalArgumentException("Invalid thermal conductivity");
-            for(int[] map:new int[][]{liquid,gas,granular,coherent})for(int i:map)if(i<0||i>=conductivity.length)throw new IllegalArgumentException("Thermal material mapping out of range");}
+            for(int[] map:new int[][]{liquid,gas,granular,coherent,device})for(int i:map)if(i<0||i>=conductivity.length)throw new IllegalArgumentException("Thermal material mapping out of range");}
     }
     enum Field{OWNER_FLAGS(4),OWNER_PREFIX(4),OWNER_KIND(4),OWNER_INDEX(4),OWNER_K(8),TERM_COUNTS(4),
         SAMPLE_FLAGS(4),SAMPLE_PREFIX(4),SAMPLE_OWNER(4),SAMPLE_CELL(4),SAMPLE_MASK(4),SAMPLE_VOLUME(8),
         CELL_COUNTS(4),CELL_OFFSETS(4),CELL_CURSORS(4),CELL_SAMPLES(4),COVERAGE(8),CONTACT_COUNTS(4),CONTACT_OFFSETS(4),
-        LIQUID_MATERIAL(4),GAS_MATERIAL(4),GRANULAR_MATERIAL(4),CONDUCTIVITY(8),REQUIREMENTS(4),SCAN(4),COHERENT_MATERIAL(4);
+        LIQUID_MATERIAL(4),GAS_MATERIAL(4),GRANULAR_MATERIAL(4),CONDUCTIVITY(8),REQUIREMENTS(4),SCAN(4),COHERENT_MATERIAL(4),DEVICE_MATERIAL(4),PORT_COUNTS(4),PORT_OFFSETS(4),PORT_CURSORS(4),PORT_ROWS(4);
         final int width;Field(int width){this.width=width;}}
     static final class Layout{
         final Inputs input;final Materials materials;final VulkanThermalConduction.Layout conduction;
@@ -55,8 +63,8 @@ final class VulkanThermalContacts implements AutoCloseable {
                 int n=switch(f){case OWNER_FLAGS->owners;case OWNER_PREFIX->owners+1;
                     case OWNER_KIND,OWNER_INDEX,OWNER_K,TERM_COUNTS->conduction.owners;
                     case SAMPLE_FLAGS,SAMPLE_OWNER,SAMPLE_CELL,SAMPLE_MASK,SAMPLE_VOLUME,CELL_SAMPLES,CONTACT_COUNTS->samples;
-                    case SAMPLE_PREFIX,CONTACT_OFFSETS->samples+1;case CELL_COUNTS,CELL_CURSORS->cells;case CELL_OFFSETS->cells+1;case COVERAGE->8*cells;
-                    case LIQUID_MATERIAL->materials.liquid().length;case GAS_MATERIAL->materials.gas().length;case GRANULAR_MATERIAL->materials.granular().length;case COHERENT_MATERIAL->materials.coherent().length;case CONDUCTIVITY->materials.conductivity().length;
+                    case SAMPLE_PREFIX,CONTACT_OFFSETS->samples+1;case PORT_COUNTS,PORT_CURSORS,CELL_COUNTS,CELL_CURSORS->cells;case PORT_OFFSETS->cells+1;case PORT_ROWS->input.device()==null?0:input.device().portCapacity();case CELL_OFFSETS->cells+1;case COVERAGE->Math.addExact(8*cells,input.device()==null?0:24*input.device().portCapacity());
+                    case LIQUID_MATERIAL->materials.liquid().length;case GAS_MATERIAL->materials.gas().length;case GRANULAR_MATERIAL->materials.granular().length;case COHERENT_MATERIAL->materials.coherent().length;case DEVICE_MATERIAL->materials.device().length;case CONDUCTIVITY->materials.conductivity().length;
                     case REQUIREMENTS->4;case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(samples,Math.max(owners,Math.max(cells,conduction.owners))))/4);};
                 columns.put(f,allocate(cursor,n,f.width,a));
             }endOffset=align(cursor[0],a);Math.toIntExact(endOffset/4);
@@ -75,6 +83,12 @@ final class VulkanThermalContacts implements AutoCloseable {
             d[41]=materials.liquid().length;d[42]=materials.gas().length;d[43]=materials.granular().length;
             d[44]=materials.coherent().length;var c=input.coherent();d[45]=c==null?0:c.groupCapacity();d[46]=c==null?-1:c.word(VulkanCoherentStateLayout.Field.COUNTS);
             if(c!=null){d[109]=c.word(VulkanCoherentStateLayout.Field.CELL);d[110]=c.word(VulkanCoherentStateLayout.Field.MATERIAL);d[111]=c.word(VulkanCoherentStateLayout.Field.OCCUPIED_VOLUME_SVQ);d[112]=c.word(VulkanCoherentStateLayout.Field.MASS_UNITS);d[113]=c.word(VulkanCoherentStateLayout.Field.INTERNAL_ENERGY);d[114]=VulkanThermalContacts.columnWord(input.coherentThermal().temperatures());}
+            var v=input.device();d[47]=materials.device().length;d[132]=v==null?0:v.deviceCapacity();d[133]=v==null?-1:v.word(VulkanThermalDeviceLayout.Field.COUNTS);
+            if(v!=null){var fields=new VulkanThermalDeviceLayout.Field[]{VulkanThermalDeviceLayout.Field.INTERNAL_ENERGY,VulkanThermalDeviceLayout.Field.MASS_UNITS,VulkanThermalDeviceLayout.Field.MATERIAL};
+                for(int i=0;i<fields.length;i++)d[134+i]=v.word(fields[i]);d[137]=columnWord(input.deviceThermal().temperatures());
+                var more=new VulkanThermalDeviceLayout.Field[]{VulkanThermalDeviceLayout.Field.GENERATION,VulkanThermalDeviceLayout.Field.REQUEST_GENERATION,VulkanThermalDeviceLayout.Field.DEVICE_ENERGY_CHANGE,VulkanThermalDeviceLayout.Field.PORT_DEVICE,VulkanThermalDeviceLayout.Field.PORT_CELL,VulkanThermalDeviceLayout.Field.PORT_DIRECTION,VulkanThermalDeviceLayout.Field.PORT_WALL_THICKNESS,VulkanThermalDeviceLayout.Field.PORT_WALL_K,VulkanThermalDeviceLayout.Field.PORT_FILM_THICKNESS};
+                for(int i=0;i<more.length;i++)d[138+i]=v.word(more[i]);d[147]=v.portCapacity();}
+            if(g!=null){d[148]=input.gasGeometry().planesWordOffset();d[149]=input.gasGeometry().cellsWordOffset();d[150]=input.gasGeometry().microWordOffset();}else{d[148]=-1;d[149]=-1;d[150]=-1;}
             for(Field f:Field.values())d[48+f.ordinal()]=word(f);
             var fields=new VulkanThermalConduction.Field[]{VulkanThermalConduction.Field.COUNTS,VulkanThermalConduction.Field.OWNER_ENERGY,VulkanThermalConduction.Field.OWNER_INITIAL_T,VulkanThermalConduction.Field.TERM_OFFSETS,VulkanThermalConduction.Field.TERM_MATERIAL,VulkanThermalConduction.Field.TERM_MASS,VulkanThermalConduction.Field.CONTACT_A,VulkanThermalConduction.Field.CONTACT_B,VulkanThermalConduction.Field.CONTACT_G,VulkanThermalConduction.Field.CONTACT_BATH_T};
             for(int i=0;i<fields.length;i++)d[96+i]=conduction.word(fields[i]);d[106]=conduction.owners;d[107]=conduction.terms;d[108]=conduction.contacts;
@@ -82,7 +96,7 @@ final class VulkanThermalContacts implements AutoCloseable {
         }
         void initializeHeaderAndTables(ByteBuffer out){out.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());for(var chunk:tableChunks())out.duplicate().position(Math.toIntExact(chunk.offset())).put(chunk.bytes().duplicate());}
         List<VulkanGasThermodynamics.TableChunk> tableChunks(){
-            var out=new ArrayList<VulkanGasThermodynamics.TableChunk>();ints(out,Field.LIQUID_MATERIAL,materials.liquid());ints(out,Field.GAS_MATERIAL,materials.gas());ints(out,Field.GRANULAR_MATERIAL,materials.granular());ints(out,Field.COHERENT_MATERIAL,materials.coherent());
+            var out=new ArrayList<VulkanGasThermodynamics.TableChunk>();ints(out,Field.LIQUID_MATERIAL,materials.liquid());ints(out,Field.GAS_MATERIAL,materials.gas());ints(out,Field.GRANULAR_MATERIAL,materials.granular());ints(out,Field.COHERENT_MATERIAL,materials.coherent());ints(out,Field.DEVICE_MATERIAL,materials.device());
             var b=ByteBuffer.allocateDirect(8*materials.conductivity().length).order(ByteOrder.LITTLE_ENDIAN);for(double x:materials.conductivity())b.putDouble(x);b.flip();if(b.hasRemaining())out.add(new VulkanGasThermodynamics.TableChunk(column(Field.CONDUCTIVITY).offset(),b));return List.copyOf(out);
         }
         private void ints(List<VulkanGasThermodynamics.TableChunk> out,Field f,int[] values){if(values.length==0)return;var b=ByteBuffer.allocateDirect(4*values.length).order(ByteOrder.LITTLE_ENDIAN);for(int x:values)b.putInt(x);b.flip();out.add(new VulkanGasThermodynamics.TableChunk(column(f).offset(),b));}
@@ -97,6 +111,7 @@ final class VulkanThermalContacts implements AutoCloseable {
         stage(command,l,2,l.owners);scan.record(command,l.conduction.owners,l.word(Field.TERM_COUNTS),l.conduction.word(VulkanThermalConduction.Field.TERM_OFFSETS),l.word(Field.SCAN));
         stage(command,l,3,l.owners);stage(command,l,4,l.samples);prefix(command,l,l.samples,Field.SAMPLE_FLAGS,Field.SAMPLE_PREFIX);
         stage(command,l,5,l.samples);prefix(command,l,l.cells,Field.CELL_COUNTS,Field.CELL_OFFSETS);stage(command,l,6,l.samples);
+        if(l.input.device()!=null){stage(command,l,11,l.input.device().portCapacity());prefix(command,l,l.cells,Field.PORT_COUNTS,Field.PORT_OFFSETS);stage(command,l,12,l.input.device().portCapacity());}
         stage(command,l,7,l.cells);stage(command,l,8,l.samples);prefix(command,l,l.samples,Field.CONTACT_COUNTS,Field.CONTACT_OFFSETS);stage(command,l,9,l.samples);
     }
     /** The solver has already combined every spatial sample at its unique owner. */

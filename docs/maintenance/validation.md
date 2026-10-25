@@ -805,3 +805,16 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 2026-10-24：导热已进入 `VulkanLiquidRegion` 的机械／有限气体候选，实际在孔流后刷新温度、生成接触、写回内能，并归总热库和整步舍入账。`build/gpu-resident-region-thermal-short8.log` 使用8³坝体、1步预热／3步采样，连续4步提交成功，预热包含气腔库存容量增长重算。该次包含开发中的统一容量求解器，中位78.063 ms、最大79.325 ms、GPU平均33.482 ms，每步上传0 B／回读92 B，设备7.7 MiB。成本不满足目标；本结果用于确认实际调用链及定位成本，尚未进入集中物理验收。
 
 对应命令：`./gradlew :gpu-kernel:runGpuLiquidMechanicalBenchmark -PgpuMechanicalGrids=8 -PgpuMechanicalGas=true -PgpuMechanicalThermal=true -PgpuMechanicalWarmup=1 -PgpuMechanicalSamples=3`。随后 `build/gpu-resident-region-thermal-profile8.log` 的同场景1步预热／1步分项采样显示，投影与容量阶段GPU31.674 ms，共同压力3.465 ms，物质输运／未来几何／机械体.728 ms，气体重映射／共同能量／实际导热／精确账合计1.449 ms。容量接受末态14轮成功；主要成本集中在统一容量的残量推进，继续处理其并行算法及无工作派发。分项采样的墙钟含计时输出开销。
+
+
+2026-10-25：统一容量器已删除逐根串行BFS增广，普通流动与颗粒排液共用满液散度树、并行残量标签、活动提案和受影响顶点配额。阶段由设备反馈选择独立命令批次，无工作阶段间接派发零工作组。保持原七路偏好、输入规模和512轮上限。原失败输入重放逐项检查全部供体数量、接收上下限和有限组容量，且实际跨格运输量为正。
+
+本机本轮Vulkan枚举的0号设备是RTX 4060 Ti，1号设备是RTX 5070 Ti；性能记录明确区分硬件。`build/gpu-capacity-surface-tree-granular-replay.log` 在4060 Ti上以35轮完成原32³颗粒输入，GPU 2.226 ms；`build/gpu-capacity-surface-tree-cut-replay.log` 在同设备上完成原64³切格输入，GPU 36.370 ms。随后5070 Ti的 `build/gpu-capacity-cut64-5070-replay.log` 以91轮完成，GPU 43.174 ms，冷重放墙钟69.189 ms；这份记录包含冷命令录制与读回，作为容量阶段成本。
+
+5070 Ti上同一8³坝体、液气与真实导热的1步预热／1步分项采样见 `build/gpu-resident-region-thermal-capacity-profile8-5070.log`：采样步墙钟20.361 ms、GPU 8.669 ms，上传0 B、回读128 B。投影／容量2.940 ms、压力3.491 ms、输运／未来几何.612 ms，气体后继／共同能量／导热／精确账1.490 ms。与先前同设备8³分项中容量31.674 ms的记录相比，容量调度成本明显降低；该短记录仍保留当前功能范围。
+
+原64³切格加导热首次运行 `build/gpu-resident-region-capacity-cut64-short.log` 在冷导入创建整个工作区ByteBuffer时超过2 GiB，未开始推进。冷导入改为设备清零与按长整型偏移分块上传库存、静态表和布局头后，`build/gpu-resident-region-capacity-cut64-streamed.log` 在5070 Ti上完成1步预热／3步采样，连续4步成功提交。中位332.806 ms、最大442.453 ms、GPU平均303.746 ms，平均上传6440 B／回读266.7 B，逻辑设备6001.8 MiB、staging 3 MiB。预热中实际增长热接触容量，采样首步增长材料limb窗口并从原捕获重算；后两采样零上传，末步容量直接接受、压力24次、实际孔流109601对。该完整候选范围显著超过50 ms，尚无完整模型20 Hz或十倍提速结论。
+
+有限设备实际接触短链见 `build/gpu-resident-finite-device-contacts-complete8.log`：5070 Ti、8³切格、133气腔，1289唯一载体、1422热容分项、1668空间样本和13857接触；1步预热／3步采样连续4提交，接触容量实际增长一次。中位2.755 ms、最大3.871 ms、GPU平均1.343 ms，正常步上传0 B／回读32 B，逻辑设备7.6 MiB。设备内能308000→307779.297 J、代次4，显式导出和精确交换审计通过。首次记录 `build/gpu-resident-finite-device-contacts-short8.log` 已完成4次提交，但末态导出遗漏ByteBuffer翻转；修复后复用原输入完成以上短链。该范围覆盖液气、活动颗粒、沉积、连续固相与有限设备的共同接触和导热；设备在生产区域请求中的接入继续按实施计划推进。
+
+2026-10-25：稳定64³完整步分项见 `build/gpu-resident-region-cut64-complete-profile.log`：5070 Ti、原切格、液气与真实导热，3步预热／1步采样；采样墙钟291.922 ms、GPU279.190 ms，上传0 B／回读220 B。源气腔4.616 ms、压力17.274 ms、投影／容量4.231 ms、物质输运／未来几何14.963 ms，气体后继／共同能量／导热／精确账238.106 ms。末步容量零修正轮接受；完整步仍约为50 ms预算的5.8倍，继续按完整职责链改造主要算法。

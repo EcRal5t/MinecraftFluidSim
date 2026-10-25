@@ -232,8 +232,6 @@ registerGpuProbe(
         providers.gradleProperty('gpuCapacityGrids').getOrElse('32,64'),
         providers.gradleProperty('gpuCapacityScene').getOrElse('all'),
         providers.gradleProperty('gpuCapacityRounds').getOrElse('512'),
-        providers.gradleProperty('gpuCapacityDiagnostics').getOrElse('false'),
-        rootProject.layout.buildDirectory.dir('gpu-capacity-diagnostics').get().asFile.absolutePath,
         providers.gradleProperty('gpuCapacityControl').getOrElse('false'),
         providers.gradleProperty('gpuCapacityFlowRatio').getOrElse('false')
     probeTask.jvmArgs '-Xmx2g'
@@ -252,7 +250,8 @@ registerGpuProbe(
         providers.gradleProperty('gpuMechanicalGas').getOrElse('false'),
         providers.gradleProperty('gpuMechanicalScene').getOrElse('dam'),
         rootProject.layout.buildDirectory.file('gpu-liquid-capacity-failure.bin').get().asFile.absolutePath,
-        providers.gradleProperty('gpuMechanicalGranular').getOrElse('0')
+        providers.gradleProperty('gpuMechanicalGranular').getOrElse('0'),
+        providers.gradleProperty('gpuMechanicalThermal').getOrElse('false')
     probeTask.jvmArgs '-Xmx3g'
     probeTask.systemProperty 'mmm.gpuMechanicalStages', providers.gradleProperty('gpuMechanicalStages').getOrElse('false')
     if (providers.gradleProperty('gpuMechanicalJfr').getOrElse('false').toBoolean()) {
@@ -337,4 +336,16 @@ registerGpuProbe(
         providers.gradleProperty('gpuThermalSamples').getOrElse('10'),
         providers.gradleProperty('gpuThermalScene').getOrElse('normal')
     probeTask.jvmArgs '-Xmx3g'
+}
+
+registerGpuProbe(
+    'runGpuLiquidCapacityReplay',
+    'Replays exact captured capacity inputs with complete integer quota and bound checks.',
+    'mmm.gpuprobe.GpuLiquidCapacityReplay',
+    'gpu-liquid-capacity-replay-work'
+) { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        providers.gradleProperty('gpuCapacityReplayFile').getOrElse(rootProject.layout.buildDirectory.file('gpu-liquid-capacity-cut64-original-failure.bin').get().asFile.absolutePath),
+        providers.gradleProperty('gpuCapacityRounds').getOrElse('512')
+    probeTask.jvmArgs '-Xmx1g'
 }

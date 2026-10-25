@@ -57,34 +57,64 @@ final class VulkanRegionStorage implements AutoCloseable {
                 slots.size(), deviceBytes, (long) stagingBytes * GpuStepScheduler.RING_SIZE);
     }
 
-    /** Imports the complete input as a new logical layout; pinned old generations retain their own sizes. */
+    /** Imports a complete contiguous checkpoint through the same sparse cold-import path. */
     synchronized void initialize(ByteBuffer input, long generation) {
-        requireOpen();
-        long bytes = input.remaining();
-        requireStorageSize(bytes);
-        if (generation < 0) throw new IllegalArgumentException("Region generation must be nonnegative");
-        Slot target = reserve(bytes);
+        initialize(input.remaining(),generation,target->target.put(0,input));
+    }
+
+    /** Zeroes device storage, uploads authoritative ranges, then publishes the complete generation. */
+    synchronized void initialize(long bytes,long generation,java.util.function.Consumer<Import> initialize) {
+        requireOpen();requireStorageSize(bytes);
+        if(generation<0)throw new IllegalArgumentException("Region generation must be nonnegative");
+        Slot target=reserve(bytes);
         try {
-            for (long offset = 0; offset < bytes;) {
-                int length = (int) Math.min(stagingBytes, bytes - offset);
-                try (MemoryStack stack = stackPush()) {
-                    var submission = scheduler.acquire();
-                    submission.stagingBuffer().bytes().put(0, input, input.position() + (int) offset, length);
-                    var command = scheduler.begin(submission, "region-import");
-                    barrier(command, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_ACCESS_MEMORY_WRITE_BIT,
-                            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, stack);
-                    copy(command, submission.stagingBuffer(), 0, target.buffer, offset, length, stack);
-                    scheduler.submitAndWait(stack, submission, "region-import");
-                    submissions++;
-                    uploadBytes += length;
-                }
-                offset += length;
+            try(var stack=stackPush()) {
+                var submission=scheduler.acquire();var command=scheduler.begin(submission,"region-import-clear");
+                barrier(command,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_ACCESS_MEMORY_WRITE_BIT,
+                        VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,stack);
+                vkCmdFillBuffer(command,target.buffer.handle(),0,bytes,0);
+                scheduler.submitAndWait(stack,submission,"region-import-clear");submissions++;
             }
-            if (committed != null) release(committed.slot);
-            committed = new Version(target, generation, bytes);
-        } catch (RuntimeException | LinkageError failure) {
-            release(target);
-            throw failure;
+            var writer=new Import(target,bytes);
+            try{initialize.accept(writer);}finally{writer.active=false;}
+            if(committed!=null)release(committed.slot);
+            committed=new Version(target,generation,bytes);
+        } catch(RuntimeException|Error failure){release(target);throw failure;}
+    }
+
+    /** Bounded staging uploads retain long device offsets; no host arena mirror is allocated. */
+    final class Import {
+        private final Slot target;private final long bytes;private boolean active=true;
+        private Import(Slot target,long bytes){this.target=target;this.bytes=bytes;}
+        void put(long offset,ByteBuffer input) {
+            if(!active)throw new IllegalStateException("Region import has completed");
+            int length=input.remaining();
+            if(offset<0||offset>bytes-length||((offset|length)&3)!=0)
+                throw new IllegalArgumentException("Region import range differs from storage");
+            for(int position=0;position<length;) {
+                int count=Math.min(stagingBytes,length-position);
+                try(var stack=stackPush()) {
+                    var submission=scheduler.acquire();
+                    submission.stagingBuffer().bytes().put(0,input,input.position()+position,count);
+                    var command=scheduler.begin(submission,"region-import");
+                    barrier(command,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_ACCESS_MEMORY_WRITE_BIT,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,stack);
+                    copy(command,submission.stagingBuffer(),0,target.buffer,offset+position,count,stack);
+                    scheduler.submitAndWait(stack,submission,"region-import");submissions++;uploadBytes+=count;
+                }
+                position+=count;
+            }
+        }
+        void put(VulkanLiquidStateLayout.Column column,int[] values){write(column.offset(),values.length,4,(b,i)->b.putInt(values[i]));}
+        void put(VulkanLiquidStateLayout.Column column,long[] values){write(column.offset(),values.length,8,(b,i)->b.putLong(values[i]));}
+        void put(VulkanLiquidStateLayout.Column column,double[] values){write(column.offset(),values.length,8,(b,i)->b.putDouble(values[i]));}
+        private void write(long offset,int count,int width,java.util.function.ObjIntConsumer<ByteBuffer> value) {
+            var buffer=ByteBuffer.allocate(Math.min(stagingBytes,Math.max(width,Math.min(count,stagingBytes/width)*width))).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+            for(int begin=0;begin<count;) {
+                int end=begin+Math.min(buffer.capacity()/width,count-begin);buffer.clear();
+                for(int i=begin;i<end;i++)value.accept(buffer,i);
+                buffer.flip();put(offset+(long)begin*width,buffer);begin=end;
+            }
         }
     }
 
