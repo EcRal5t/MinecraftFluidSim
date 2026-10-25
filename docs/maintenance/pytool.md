@@ -36,3 +36,7 @@
   - 用途：从 NIST Shomate 积分和 JANAF 气态水焓表生成 N₂、O₂、H₂O、CO₂ 的 100–1700 K 区间平均 Cv；统一采用模型摩尔质量 0.028/0.032/0.018/0.044 kg/mol。
   - 运行方式：`uv run pytool/gas_caloric_materials.py`
   - 导热率采用 NIST Huber 300 K 常数近似；CO₂ 在 298 K 以下沿用 298 K 的 Cp。同一生成过程按模型摩尔质量与相图参考点推导水蒸气批次体积，参考能保持常压潜焓 2256700 J/kg，CO₂ 参考能及原物种偏移保持。
+
+- **[analyze_aperture_graph.py](../../pytool/analyze_aperture_graph.py)**
+  - 用途：读取性能入口显式导出的 `MMMGAS01` 孔流图，统计实际度数、强连接、大气腔及叶节点剥除后的核心，用于选择压力图算法。
+  - 运行方式：`uv run pytool/analyze_aperture_graph.py build/gpu-cut64-aperture-graph.bin --json build/gpu-cut64-aperture-graph-analysis.json`

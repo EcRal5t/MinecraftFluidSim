@@ -1300,7 +1300,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
         final GasSuccessor successor;
         final VulkanGasThermodynamics.Layout eos,retainedEOS;
         final VulkanGasFlow.Layout flow;
-        final VulkanGasFlowMixedPressure.Layout mixedPressure;
+        final VulkanGasFlowSchurPressure.Layout schurPressure;
         final VulkanGasRemap.Layout remap;
         final VulkanGasAdiabaticWork.Layout work;
         final long endOffset;
@@ -1309,17 +1309,17 @@ final class VulkanLiquidRegion implements AutoCloseable {
             var volumes=new VulkanLiquidStateLayout.Column(align(base),gasReserves.nodes(),8);
             eos=VulkanGasThermodynamics.layout(gas.state,gasConfiguration.tables(),word(volumes),volumes.offset()+volumes.bindingBytes(),a);
             flow=VulkanGasFlow.layout(eos,successor.geometry,gasReserves.pairs(),eos.endOffset(),a);
-            mixedPressure=VulkanGasFlowMixedPressure.layout(flow,flow.endOffset(),a);
+            schurPressure=VulkanGasFlowSchurPressure.layout(flow,flow.endOffset(),a);
             remap=VulkanGasRemap.transportLayout(flow.routes(),eos,successor.retained,successor.future,gasConfiguration.ambient(),flow.word(VulkanGasFlow.Field.STEP),
-                    gasReserves.parts(),gasReserves.partSpecies(),mixedPressure.endOffset(),a);
+                    gasReserves.parts(),gasReserves.partSpecies(),schurPressure.endOffset(),a);
             retainedEOS=VulkanGasThermodynamics.layout(successor.retained,gasConfiguration.tables(),flow.word(VulkanGasFlow.Field.RETAINED_VOLUME),remap.endOffset(),a);
             work=VulkanGasAdiabaticWork.layout(retainedEOS,eos.nodeVolumesWordOffset(),flow.word(VulkanGasFlow.Field.MODES),retainedEOS.endOffset(),a);endOffset=work.endOffset();
         }
-        List<HeaderWrite> headers(){return List.of(new HeaderWrite(eos.header().offset(),eos.headerBytes()),new HeaderWrite(flow.header.offset(),flow.headerBytes()),new HeaderWrite(mixedPressure.header().offset(),mixedPressure.headerBytes()),
+        List<HeaderWrite> headers(){return List.of(new HeaderWrite(eos.header().offset(),eos.headerBytes()),new HeaderWrite(flow.header.offset(),flow.headerBytes()),new HeaderWrite(schurPressure.header().offset(),schurPressure.headerBytes()),
                 new HeaderWrite(remap.header.offset(),remap.headerBytes()),new HeaderWrite(retainedEOS.header().offset(),retainedEOS.headerBytes()),new HeaderWrite(work.header().offset(),work.headerBytes()));}
         List<VulkanLiquidStateLayout.Column> persistentColumns(){
             var columns=new ArrayList<VulkanLiquidStateLayout.Column>();transport.addGasTables(columns,eos);transport.addGasTables(columns,retainedEOS);
-            columns.add(flow.header);columns.add(mixedPressure.header());columns.add(remap.header);columns.add(work.header());
+            columns.add(flow.header);columns.add(schurPressure.header());columns.add(remap.header);columns.add(work.header());
             for(var field:VulkanGasRemap.Field.values())if(field.name().startsWith("AMBIENT_")&&field!=VulkanGasRemap.Field.AMBIENT_BEFORE&&field!=VulkanGasRemap.Field.AMBIENT_AFTER)columns.add(remap.column(field));return columns;
         }
         void migrate(org.lwjgl.vulkan.VkCommandBuffer command,GasAperture old,GpuBuffer input,GpuBuffer output,org.lwjgl.system.MemoryStack stack){
@@ -1332,7 +1332,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             var batch=candidate.continueBatch((command,input,output,errors,staging,stack)->{
                 var dst=new FlipKernelBindings.BufferRange(output);var err=new FlipKernelBindings.BufferRange(errors);
                 kernels.flowKernel.rebindRanges(dst,err);kernels.flowEOS.rebindRanges(dst,err);kernels.flowRemap.rebindRanges(dst,err);kernels.flowRetainedEOS.rebindRanges(dst,err);kernels.flowWork.rebindRanges(dst,err);
-                kernels.flowMixedPressure.rebindRanges(dst,err);
+                kernels.flowSchurPressure.rebindRanges(dst,err,schurPressure);
                 VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,stack);
                 for(var field:new VulkanGasRemap.Field[]{VulkanGasRemap.Field.ENERGY_ROUNDOFF,VulkanGasRemap.Field.SOURCE_ROUNDOFF,VulkanGasRemap.Field.RETAINED_ROUNDOFF,VulkanGasRemap.Field.MERGE_ROUNDOFF,VulkanGasRemap.Field.AUDIT_ENERGY}){
                     var c=remap.column(field);vkCmdFillBuffer(command,output.handle(),c.offset(),c.bindingBytes(),0);
@@ -1342,15 +1342,20 @@ final class VulkanLiquidRegion implements AutoCloseable {
                 kernels.timed(command,"aperture-assemble",()->kernels.flowKernel.recordAssemble(command,flow,q));
             },flow.requiredPairsOffset(),4);
             if(batch.error()!=0)return batch.error();if(batch.feedback().getInt(0)==0)return 0;
-            capacityStage="gas aperture pressure";
+            capacityStage="gas aperture Schur assembly";
+            batch=candidate.continueBatch((command,input,output,errors,staging,stack)->kernels.timed(command,"aperture-schur-prepare",()->kernels.flowSchurPressure.recordPrepare(command,schurPressure,q)),schurPressure.feedbackOffset(),4);
+            if(batch.error()!=0)return batch.error();int coreCount=batch.feedback().getInt(0);
+            if(Boolean.getBoolean("mmm.gpuMechanicalStages"))System.out.printf(java.util.Locale.ROOT,"gas_schur core=%d solver=%s%n",coreCount,coreCount<=VulkanGasFlowSchurPressure.DENSE_ROWS?"dense":"pcg");
+            if(coreCount>VulkanGasFlowSchurPressure.DENSE_ROWS){
+                batch=candidate.continueBatch((command,input,output,errors,staging,stack)->{kernels.flowSchurPressure.recordCoreInitialize(command,schurPressure,coreCount);kernels.flowSchurPressure.recordCoreIterations(command,schurPressure,q,coreCount,8);},flow.column(VulkanGasFlow.Field.CONTROL).offset()+24,8);
+                int scheduled=8;while(batch.error()==0&&batch.feedback().getDouble(0)!=0&&scheduled<200){int count=Math.min(8,200-scheduled);batch=candidate.continueBatch((command,input,output,errors,staging,stack)->kernels.flowSchurPressure.recordCoreIterations(command,schurPressure,q,coreCount,count),flow.column(VulkanGasFlow.Field.CONTROL).offset()+24,8);scheduled+=count;}
+                if(batch.error()!=0)return batch.error();
+            }
+            capacityStage="gas aperture core solve/back substitution";
             batch=candidate.continueBatch((command,input,output,errors,staging,stack)->{
-                kernels.flowMixedPressure.recordInitialize(command,mixedPressure,q,200);kernels.flowMixedPressure.recordRefresh(command,mixedPressure,q,200);kernels.flowMixedPressure.recordIterations(command,mixedPressure,q,200,8);
-            },mixedPressure.feedbackOffset(),8);
-            while(batch.error()==0&&(batch.feedback().getInt(4)&1)!=0&&batch.feedback().getInt(0)<200){int count=Math.min(8,200-batch.feedback().getInt(0));boolean refresh=(batch.feedback().getInt(4)&2)!=0;
-                batch=candidate.continueBatch((command,input,output,errors,staging,stack)->{if(refresh)kernels.flowMixedPressure.recordRefresh(command,mixedPressure,q,200);kernels.flowMixedPressure.recordIterations(command,mixedPressure,q,200,count);},mixedPressure.feedbackOffset(),8);}
-            if(batch.error()!=0)return batch.error();
-            batch=candidate.continueBatch((command,input,output,errors,staging,stack)->{
-                kernels.flowMixedPressure.recordFinish(command,mixedPressure,q,200);
+                if(coreCount>0&&coreCount<=VulkanGasFlowSchurPressure.DENSE_ROWS)kernels.timed(command,"aperture-schur-factor-solve",()->kernels.flowSchurPressure.recordDense(command,schurPressure,q));
+                else if(coreCount>0)kernels.flowSchurPressure.recordCoreFinish(command,schurPressure,coreCount);
+                kernels.timed(command,"aperture-schur-backsub-residual",()->kernels.flowSchurPressure.recordFinish(command,schurPressure,q));
                 kernels.flowKernel.recordRoutes(command,flow,q);
                 kernels.timed(command,"aperture-integer-transport",()->kernels.flowRemap.recordPrepare(command,remap));
                 kernels.flowRemap.recordTransportVolumes(command,remap,flow);kernels.flowRetainedEOS.record(command,retainedEOS);kernels.flowWork.record(command,work);
@@ -1472,7 +1477,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
         VulkanGasAdiabaticWork gasWork;
         VulkanGasMechanicalHeat gasHeatKernel;
         VulkanGasFlow flowKernel;
-        VulkanGasFlowMixedPressure flowMixedPressure;
+        VulkanGasFlowSchurPressure flowSchurPressure;
         VulkanGasThermodynamics flowEOS,flowRetainedEOS;
         VulkanGasRemap flowRemap;
         VulkanGasAdiabaticWork flowWork;
@@ -1504,7 +1509,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
                 gasGeometry=own(new VulkanGasGeometry(context));gasThermo=own(new VulkanGasThermodynamics(context));gasPressure=own(new VulkanGasPressure(context));
                 if(gasEnabled){futureVolumeKernel=own(new VulkanLiquidCellVolumes(context));futureGasGeometry=own(new VulkanGasGeometry(context));lineageKernel=own(new VulkanGasLineage(context));
                     remapKernel=own(new VulkanGasRemap(context));retainedEOS=own(new VulkanGasThermodynamics(context));gasWork=own(new VulkanGasAdiabaticWork(context));gasHeatKernel=own(new VulkanGasMechanicalHeat(context));
-                    flowKernel=own(new VulkanGasFlow(context));flowMixedPressure=own(new VulkanGasFlowMixedPressure(context));flowEOS=own(new VulkanGasThermodynamics(context));
+                    flowKernel=own(new VulkanGasFlow(context));flowSchurPressure=own(new VulkanGasFlowSchurPressure(context));flowEOS=own(new VulkanGasThermodynamics(context));
                     flowRetainedEOS=own(new VulkanGasThermodynamics(context));flowRemap=own(new VulkanGasRemap(context));flowWork=own(new VulkanGasAdiabaticWork(context));}
                 if(granularEnabled){granularGeometryKernel=own(new VulkanGranularGeometry(context));granularPressureKernel=own(new VulkanGranularPressure(context));coupledKernel=own(new VulkanCoupledPressure(context));
                     contactKernel=own(new VulkanGranularContacts(context));motionKernel=own(new VulkanGranularMotion(context));transitionKernel=own(new VulkanGranularTransitions(context));granularThermalKernel=own(new VulkanLiquidThermodynamics(context));}

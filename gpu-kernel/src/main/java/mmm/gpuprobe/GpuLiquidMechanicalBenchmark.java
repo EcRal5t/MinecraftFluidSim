@@ -68,18 +68,18 @@ public final class GpuLiquidMechanicalBenchmark {
             System.out.println("Constitutive inputs: builtin water/oil viscosity and expansion; original sigma=0, pair tension=0, neutral contact angle; static no-slip walls, no prescribed body contacts.");
             for(int step=0;step<warm;step++)try{region.advanceMechanical(parameters,512);}
                 catch(IllegalStateException failure){throw new IllegalStateException("Mechanical warmup step="+step+" failed",failure);}
-            var before=region.metrics();long[] times=new long[samples],gpuTimes=new long[samples],uploads=new long[samples],reads=new long[samples],recordings=new long[samples],waits=new long[samples];
+            var before=region.metrics();long[] times=new long[samples],gpuTimes=new long[samples],uploads=new long[samples],reads=new long[samples],recordings=new long[samples],waits=new long[samples],submissions=new long[samples];
             for(int step=0;step<samples;step++) {
                 var stepBefore=region.metrics();long start=System.nanoTime();
                 try{region.advanceMechanical(parameters,512);}catch(IllegalStateException failure){throw new IllegalStateException("Mechanical sample step="+step+" failed",failure);}
                 times[step]=System.nanoTime()-start;
-                var stepAfter=region.metrics();gpuTimes[step]=stepAfter.gpuNanos()-stepBefore.gpuNanos();uploads[step]=stepAfter.uploadBytes()-stepBefore.uploadBytes();reads[step]=stepAfter.readbackBytes()-stepBefore.readbackBytes();recordings[step]=stepAfter.recordingNanos()-stepBefore.recordingNanos();waits[step]=stepAfter.waitingNanos()-stepBefore.waitingNanos();
+                var stepAfter=region.metrics();gpuTimes[step]=stepAfter.gpuNanos()-stepBefore.gpuNanos();uploads[step]=stepAfter.uploadBytes()-stepBefore.uploadBytes();reads[step]=stepAfter.readbackBytes()-stepBefore.readbackBytes();recordings[step]=stepAfter.recordingNanos()-stepBefore.recordingNanos();waits[step]=stepAfter.waitingNanos()-stepBefore.waitingNanos();submissions[step]=stepAfter.submissions()-stepBefore.submissions();
             }
             var after=region.metrics();long[] sorted=times.clone();Arrays.sort(sorted);
             System.out.printf("%d,%d,%.3f,%.3f,%.3f,%.1f,%.1f,%.1f,%.1f%n",grid,samples,sorted[samples/2]*1e-6,sorted[samples-1]*1e-6,
                     (after.gpuNanos()-before.gpuNanos())*1e-6/samples,(double)(after.uploadBytes()-before.uploadBytes())/samples,
                     (double)(after.readbackBytes()-before.readbackBytes())/samples,after.deviceBytes()/1048576.0,after.stagingBytes()/1048576.0);
-            for(int step=0;step<samples;step++)System.out.printf("sample=%d wall_ms=%.3f gpu_ms=%.3f upload_B=%d readback_B=%d record_ms=%.3f wait_ms=%.3f%n",step,times[step]*1e-6,gpuTimes[step]*1e-6,uploads[step],reads[step],recordings[step]*1e-6,waits[step]*1e-6);
+            for(int step=0;step<samples;step++)System.out.printf("sample=%d wall_ms=%.3f gpu_ms=%.3f upload_B=%d readback_B=%d record_ms=%.3f wait_ms=%.3f submissions=%d%n",step,times[step]*1e-6,gpuTimes[step]*1e-6,uploads[step],reads[step],recordings[step]*1e-6,waits[step]*1e-6,submissions[step]);
             if(!region.growthDiagnostics().isEmpty())System.out.println("growth capacity_order=liquidStocks,liquidSpecies,liquidLimbs,windowLimbs,gasNodes,gasComponents,gasSpecies,parts,partSpecies,groups,pairs; required_order=cellLimbs,acceptedLimbs,materialLimbs,routeLimbs,routeSpecies,stocks,species,limbs,oldNodes,futureNodes,futureComponents,futureSpecies,retainedComponents,retainedSpecies,parts,partSpecies,futureCellLimbs,groups[,pairs,flowParts,flowPartSpecies,flowRetainedComponents,flowRetainedSpecies,flowFutureComponents,flowFutureSpecies,flowNodes,flowGroups]");
             for(var growth:region.growthDiagnostics())System.out.printf("growth generation=%d stage=%s before=%s after=%s required=%s%n",growth.generation(),growth.stage(),Arrays.toString(growth.before()),Arrays.toString(growth.after()),Arrays.toString(growth.required()));
             System.out.println("final inventory_counts="+Arrays.toString(region.inventoryCounts())+" capacity_status_rounds="+Arrays.toString(region.capacityDiagnostics())
