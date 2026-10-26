@@ -86,7 +86,7 @@ final class VulkanFluidStateCodec {
         if(thermal!=null){
             coherent=VulkanCoherentStateLayout.Configuration.fromRegistries(owner.coherentGroups(),species,thermal,gasChemistry);
             for(var group:owner.coherentGroups())occupied[group.cell()]=Math.addExact(occupied[group.cell()],group.occupiedVolumeSvq());
-            for(String id:coherent.definitions().phaseIds())coherentMaterials.add(thermal.material(thermal.materialHandle(ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID,id)));
+            for(String id:coherent.definitions().phaseIds())coherentMaterials.add(thermal.material(thermal.materialHandle(id)));
             if(devices!=null){device=VulkanThermalDeviceLayout.Configuration.fromRegistries(new VulkanThermalDeviceLayout.State(devices,ports),thermal);for(String id:device.definitions().materialIds())deviceMaterials.add(thermal.material(thermal.materialHandle(id)));}
             var bath=template.copyThermalBoundaryTemperaturesK();heat=VulkanRegionThermal.Configuration.fromMaterials(liquidMaterials,gasMaterials,granularMaterials,coherentMaterials,deviceMaterials,template.config().cellSize(),bath==null?new double[0]:bath,1);
         }
@@ -94,7 +94,7 @@ final class VulkanFluidStateCodec {
         if(reactionDefinitions!=null){
             var pending=template.chemicalMassTransferPending().stream().map(p->{int rule=reactionDefinitions.identity().rules().indexOf(p.definitionId());if(rule<0)throw new IllegalArgumentException("Pending transfer is absent from GPU rules");return new VulkanReactionProgressLayout.Pending(p.cell(),p.material(),p.supportMask(),rule,p.pendingSeconds(),p.residualMoles());}).toList();
             var dirty=template.copyChemicalDirtyCells();var phase=template.pendingPhaseMotion()==null?new int[0]:template.pendingPhaseMotion().entries().stream().mapToInt(mmm.fluid.PendingPhaseMotionState.Entry::cell).toArray();
-            var progress=new VulkanReactionProgressLayout.State(template.chemicalReactionCursor(),0,pending,dirty==null?new int[0]:dirty,phase);reactions=new VulkanRegionReactions.Configuration(reactionDefinitions,fluids,chemistry,progress);
+            var progress=new VulkanReactionProgressLayout.State(template.chemicalReactionCursor(),0,pending,dirty==null?new int[0]:dirty,phase);reactions=new VulkanRegionReactions.Configuration(reactionDefinitions,fluids,chemistry,progress,template.config().gravity(),template.precipitationEnabled(),thermal,template.gasRegistry());
         }
         var region=new VulkanLiquidRegion(context,geometry,projection,pressure,multigrid,inventory,template.momentum(),template.fixedGeometry(),occupied,definitions,gas,granular,heat,coherent,device,reactions,null);region.initializeInputs(template.entityBodyState());return region;
     }

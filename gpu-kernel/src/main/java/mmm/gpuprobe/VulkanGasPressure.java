@@ -129,7 +129,8 @@ final class VulkanGasPressure implements AutoCloseable {
         this.arena=arena;bindings.rebindRanges(List.of(arena,errors));scan.rebindRanges(arena,arena,arena,errors);
     }
     void recordCaptureFaces(VkCommandBuffer command,Layout layout,VulkanLiquidProjection.Parameters parameters){stage(command,layout,parameters,0,layout.faceCount,0);}
-    void recordPrepare(VkCommandBuffer command,Layout layout,VulkanLiquidProjection.Parameters parameters){
+    void recordPrepare(VkCommandBuffer command,Layout layout,VulkanLiquidProjection.Parameters parameters){recordPrepare(command,layout,parameters,null);}
+    void recordPrepare(VkCommandBuffer command,Layout layout,VulkanLiquidProjection.Parameters parameters,Runnable afterRows){
         stage(command,layout,parameters,1,layout.pressureSize,0);
         stage(command,layout,parameters,2,128,0);
         stage(command,layout,parameters,3,layout.faceCount,0);
@@ -137,6 +138,7 @@ final class VulkanGasPressure implements AutoCloseable {
         stage(command,layout,parameters,4,layout.faceCount,0);
         stage(command,layout,parameters,5,Math.multiplyExact(128,layout.gasCapacity),0);
         stage(command,layout,parameters,6,layout.liquidCount,0);
+        if(afterRows!=null)afterRows.run();
         if(layout.pressureSize==layout.liquidCount+layout.gasCapacity){
             stage(command,layout,null,17,1,0);
             stage(command,layout,null,18,layout.gasCapacity,0);

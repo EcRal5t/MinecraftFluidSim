@@ -4,6 +4,16 @@
 有 95% 把握的改动跳过额外验证、校验和测试；物理主干改动按范围选择完整步生产预算，展示改动分别记录快照与客户端成本。
 有具体未知风险时，从下列入口选择能回答该问题的最小场景，复用同一次构建产物。
 
+## GPU 生产接入的最新短链
+
+2026-10-27，本轮停止性能优化，完成已有实现接入与新增热相变的正常流程检查。
+
+- `:gpu-kernel:runGpuSolidLiquidReactionsValidation` 通过：实际析出、精确质量／物种／SVQ、非零动量及 U/K/PE 结算；容量不足的私有候选保留原库存，足够容量下完成发布。日志 `build/gpu-completion-solid.log`。
+- `:gpu-kernel:runGpuResidentStateValidation` 通过：ServiceLoader 发现生产后端，连续机械／热步采用设备状态，拒绝候选保留来源，常规查询、展示和显式 checkpoint 导出成功。规定运动实体完成插入、移动、具名反力结果与 checkpoint 恢复后继续推进。
+- `:gpu-kernel:runGpuThermalPhaseValidation` 通过：冻结、熔化、汽化、凝结各执行两次热步，随后机械结算、展示及 checkpoint 恢复；总质量与精确内能账闭合。两项集成结果共用日志 `build/gpu-completion-integration.log`。
+
+上述验证覆盖实际设备执行与生产接口。游戏画面、复杂 VoxelShape 和跨游戏重启观察仍沿各自人工场景；性能结论沿用下方原场景证据。
+
 ## CPU 测试怎么运行
 
 完整工程入口为根项目 `runValidation`，统一执行 CPU 领域、架构和 GPU 命令适配器验证。默认使用 `fast`，指定 `-PcpuValidation=full` 运行全部 CPU 领域；根项目 `check` 接入相同入口。模块的独立 main 验证任务继续供定位使用。
@@ -965,4 +975,4 @@ phase3恢复32轮设备合批后的 `build/gpu-resident-cut64-batched-retraction
 
 2026-10-27 收尾：容量初始化进入一般残量求解时，清空原地撤回阶段遗留的间接派发。`build/gpu-capacity-forced-displacement64.log` 记录原64³派生强制排水输入的短重放：原512轮预算，87轮完成，墙钟59.875 ms、GPU28.595 ms、设备182.1 MiB；源额度、接收上下限和有限组容量检查全部通过，Gradle构建成功。输入为 `build/gpu-capacity-forced-displacement64.bin`，由原切格失败输入改变一个单元容量上限生成，强制沿有剩余容量的开放通路排出1量子。使用既有 `:gpu-kernel:runGpuLiquidCapacityReplay` 入口和 `gpuCapacityReplayFile` 属性。此次完成派发故障修复，容量成本仍高。
 
-GPU 工作结束时，保留的连续性能证据为 `build/gpu-resident-cut64-core-row-contract.log`：RTX 5070 Ti，原64³切格液气与导热，3预热／12采样，中位49.865 ms、最大66.170 ms、GPU平均44.473 ms、设备4810.3 MiB。完整生产职责尚有缺项，现有职责35 ms、全功能20 Hz及同场景十倍提速目标均未达成。输入和测量日志保存在本地 `build/`。
+停止性能优化时，保留的连续性能证据为 `build/gpu-resident-cut64-core-row-contract.log`：RTX 5070 Ti，原64³切格液气与导热，3预热／12采样，中位49.865 ms、最大66.170 ms、GPU平均44.473 ms、设备4810.3 MiB。完整生产职责尚有缺项，现有职责35 ms、全功能20 Hz及同场景十倍提速目标均未达成。输入和测量日志保存在本地 `build/`。

@@ -62,7 +62,11 @@ public final class GpuResidentStateValidation {
     }
     private static void validateBackend(int device,FluidDomainState initial,long expectedMass){
         FluidStateAccess current=initial;
-        try(var backend=new VulkanFluidSolverBackend(device)){
+        var providers=java.util.ServiceLoader.load(FluidSolverBackend.Provider.class).stream()
+                .map(java.util.ServiceLoader.Provider::get).filter(provider->provider.id().equals("vulkan")).toList();
+        if(providers.size()!=1)throw new AssertionError("Expected one discoverable Vulkan backend provider: "+providers.size());
+        try(var backend=providers.getFirst().create(device)){
+            if(!backend.id().equals(VulkanFluidSolverBackend.ID))throw new AssertionError("Discovered backend identity differs");
             // Rejecting a prepared successor releases it without publication.
             try(var abandoned=backend.evaluate(new FluidStepRequest(0,current,List.of(),false,0,false,false))){
                 if(!abandoned.layout().equals(initial.layout()))throw new AssertionError("Abandoned backend successor changed layout");
@@ -81,10 +85,43 @@ public final class GpuResidentStateValidation {
                     if(!before.equals(resident.inventorySummary()))throw new AssertionError("Rejected resident candidate changed its pinned source summary");}
                 System.out.println("backend_committed="+(step+1)+" resident=true summary_mass_units="+summary.liquidMassUnits()+" body_water_contact=true");
             }
-            if(!current.exportState().layout().equals(initial.layout()))throw new AssertionError("Backend final explicit checkpoint changed layout");
+            var bodyId=java.util.UUID.fromString("a7184c41-7a9c-4c56-8b2a-e7d7b474ca22");
+            for(int step=3;step<5;step++){
+                // First insertion displaces liquid; the next pose changes per-cell occupied volume.
+                double shift=(step-3)*.005;
+                var body=new mmm.world.MovingBodyFluidCoupling.Request(bodyId,
+                        new mmm.world.MovingBodyFluidCoupling.Bounds(1.42+shift,.15,1.42,1.58+shift,.35,1.58),.1,0,0);
+                try(var candidate=backend.evaluate(new FluidStepRequest(step,current,List.of(body),false,0,false,false));
+                    var prepared=candidate.claimPreparedDeviceState()){
+                    requireBodyResult(candidate.movingBodyCoupling(),bodyId);
+                    var next=prepared.commit();current.close();current=next;
+                }
+                requireResidentInventory(current,expectedMass);
+            }
+            var checkpoint=current.exportState();
+            if(!checkpoint.layout().equals(initial.layout()))throw new AssertionError("Backend final explicit checkpoint changed layout");
+            var restored=FluidDomain.restoreAuthoritativeState(checkpoint).captureAuthoritativeState();
+            current.close();current=restored;
+            var retainedBody=new mmm.world.MovingBodyFluidCoupling.Request(bodyId,
+                    new mmm.world.MovingBodyFluidCoupling.Bounds(1.425,.15,1.42,1.585,.35,1.58),0,0,0);
+            try(var candidate=backend.evaluate(new FluidStepRequest(5,current,List.of(retainedBody),false,0,false,false));
+                var prepared=candidate.claimPreparedDeviceState()){
+                requireBodyResult(candidate.movingBodyCoupling(),bodyId);
+                var next=prepared.commit();current.close();current=next;
+            }
+            requireResidentInventory(current,expectedMass);
+            System.out.println("backend_prescribed_body=true occupied_pose_changed=true named_result=true checkpoint_continuation=true");
             current.close();current=initial;
         }finally{current.close();}
         System.out.println("Backend evaluate, rejection, device claim/adoption, mechanical/thermal continuation, constant readouts and explicit checkpoint passed");
+    }
+    private static void requireBodyResult(mmm.world.MovingBodyFluidCoupling.Result result,java.util.UUID id){
+        if(!(result.coupledVolumeCubicMetres()>0)||result.bodyImpulses().size()!=1||!result.bodyImpulses().getFirst().bodyId().equals(id))
+            throw new AssertionError("Prescribed-body request did not return its wet interaction result");
+    }
+    private static void requireResidentInventory(FluidStateAccess state,long expectedMass){
+        if(!(state instanceof ResidentFluidState resident)||resident.inventorySummary().liquidMassUnits()!=expectedMass||!resident.observation().thermalAuditClosed())
+            throw new AssertionError("Prescribed-body continuation changed liquid inventory or thermal accounting");
     }
     private static void requireWetSample(FluidDomain.BodyFluidSample sample){
         if(!(sample.displacedVolumeCubicMetres()>0&&sample.displacedMassKilograms()>0&&sample.wetSurfaceAreaSquareMetres()>0)

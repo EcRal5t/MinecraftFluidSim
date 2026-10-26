@@ -67,11 +67,11 @@
 [FluidProtocolServer](../../fabric/src/main/java/mmm/network/FluidProtocolServer.java) 保存配置协商期间的短期任务。
 可选 GPU probe 使用自己的生命周期实例，通过 [MmmGpuProbeHostIntegration](../../gpu-probe/src/main/java/mmm/gpuprobe/MmmGpuProbeHostIntegration.java) 接入主模组。
 
-压力计算默认使用 CPU。安装包含 kernel provider 的可选 `gpu-probe` jar 后，在 Java 启动参数中加入 `-Dmmm.pressureCompute=vulkan -Dmmm.gpuDevice=0`，由 `MmmRuntimeFactory` 经 `ServiceLoader` 创建 Vulkan 计算服务；设备编号从 0 开始。停服时释放对应设备资源，指定 Vulkan 却缺少 provider 或设备能力时报告具体启动错误。
+区域求解默认使用 CPU。主模组已打包 Vulkan kernel 与运行库；在 Java 启动参数中加入 `-Dmmm.solverBackend=vulkan -Dmmm.gpuDevice=0`，由 `MmmRuntimeFactory` 经 `ServiceLoader` 创建设备常驻区域后端。设备编号从0开始，停服时释放设备资源。指定 Vulkan 时，缺少 provider 或设备能力会报告具体启动错误。
 
-该实验混合入口在设备执行共同压力 CSR 的完整双精度迭代，包括主动集和预条件；液体输运按批次在设备分配实际整数质量与物种，保留同一余量承接规则。CPU 准备共同几何、矩阵和精确 dyadic 体积路线，完成各载体后继、内能结算及其他物理阶段。活动颗粒的隐式阻力联合响应继续由 CPU 求解。设备服务初始化时准备计算管线，工作区扩容复用管线并更新缓冲区绑定。
+Vulkan 后端沿现有 `RegionApplicationService` 请求、私有候选和区域原子提交执行机械步与热步。日常观察、显示、单元库存查询和实体采样读取已提交设备代；存档、世界碰撞编辑与容器操作通过显式冷导出交接，后续求解重新导入设备。CPU 与 Vulkan 共用区域存档格式。
 
-数值计算沿完整私有候选推进。明确的 Vulkan 设备丢失会隔离并释放设备服务，丢弃当前候选，从原始完整请求在 CPU 重算，随后沿普通提交链接管成功后继；后续请求继续使用 CPU，并记录恢复原因。其他设备异常保留原区域并报告具体错误。完整设备常驻状态的 checkpoint 恢复随 GPU 后端继续开发。
+设备请求失败时保留已提交区域，私有候选失败沿区域数值暂停流程报告。`-Dmmm.pressureCompute=vulkan` 只影响 CPU 后端的压力计算服务，完整设备常驻执行使用 `mmm.solverBackend=vulkan`。独立 `/mmmgpu` probe 保留自己的生命周期。
 
 <a id="tick"></a>
 ## 一次区域计算

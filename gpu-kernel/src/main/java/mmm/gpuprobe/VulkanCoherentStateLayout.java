@@ -30,7 +30,7 @@ final class VulkanCoherentStateLayout {
         Configuration{initial=List.copyOf(initial);materialReferences=materialReferences.clone();speciesReferences=speciesReferences.clone();}
         static Configuration fromRegistries(List<CoherentPhaseStore.Group> groups,List<String> speciesIds,ThermalRegistry thermal,ChemicalRegistry chemistry){
             var materials=thermal.materials().stream().filter(m->m.carrierKind()==ThermalMaterialDefinition.CarrierKind.COHERENT_SOLID).toList();
-            var phases=materials.stream().map(ThermalMaterialDefinition::carrierId).toList();int stride=Math.max(1,speciesIds.size());
+            var phases=materials.stream().map(ThermalMaterialDefinition::id).toList();int stride=Math.max(1,speciesIds.size());
             double[] reference=new double[phases.size()],species=new double[Math.multiplyExact(phases.size(),stride)];java.util.Arrays.fill(species,Double.NaN);
             for(int m=0;m<materials.size();m++){
                 var material=materials.get(m);reference[m]=material.referenceSpecificEnergyJPerKg();int handle=thermal.materialHandle(material.id());
@@ -96,7 +96,7 @@ final class VulkanCoherentStateLayout {
             if(material<0||material>=definitions.phaseIds().size()||cell<0||cell>=cells||begin<0||end<begin||end>components)
                 throw new IllegalStateException("Continuous solid checkpoint row exceeds layout");
             CoherentPhaseStore.Composition composition=null;
-            if(getInt(b,Field.MIXTURE_PRESENT,row)!=0){
+            if(getInt(b,Field.MIXTURE_PRESENT,row)!=0&&begin<end){
                 var values=new ArrayList<CoherentPhaseStore.Component>(end-begin);
                 for(int i=begin;i<end;i++)values.add(new CoherentPhaseStore.Component(definitions.speciesIds().get(getInt(b,Field.SPECIES_HANDLES,i)),getLong(b,Field.SPECIES_AMOUNTS,i)));
                 values.sort(Comparator.comparing(CoherentPhaseStore.Component::speciesId));composition=new CoherentPhaseStore.Composition(values,getLong(b,Field.MASS_RESIDUAL_UNITS,row));

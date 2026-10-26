@@ -33,19 +33,25 @@ final class VulkanGasLineage implements AutoCloseable {
         final VulkanGasStateLayout gas;
         final VulkanGasGeometry.Layout oldGeometry,futureGeometry;
         final VulkanLiquidAcceptedVolumes.Layout accepted;
-        final int faceFluxWordOffset,oldNodeVolumesWordOffset,groupCapacity,hashCapacity,edges;
+        final int faceFluxWordOffset,oldNodeVolumesWordOffset,groupCapacity,hashCapacity,edges,birthNodeWordOffset;final boolean geometryOnly;
         final VulkanLiquidStateLayout.Column header;
         final EnumMap<Field,VulkanLiquidStateLayout.Column> columns=new EnumMap<>(Field.class);
         final long endOffset;
         Layout(VulkanGasStateLayout gas,VulkanGasGeometry.Layout oldGeometry,VulkanGasGeometry.Layout futureGeometry,
                VulkanLiquidAcceptedVolumes.Layout accepted,int faceFluxWordOffset,int oldNodeVolumesWordOffset,
                int groupCapacity,long scratchBase,long alignment) {
+            this(gas,oldGeometry,futureGeometry,accepted,faceFluxWordOffset,oldNodeVolumesWordOffset,groupCapacity,-1,false,scratchBase,alignment);
+        }
+        Layout(VulkanGasStateLayout gas,VulkanGasGeometry.Layout oldGeometry,VulkanGasGeometry.Layout futureGeometry,
+               VulkanLiquidAcceptedVolumes.Layout accepted,int faceFluxWordOffset,int oldNodeVolumesWordOffset,
+               int groupCapacity,int birthNodeWordOffset,boolean geometryOnly,long scratchBase,long alignment){
+            this.geometryOnly=geometryOnly;this.birthNodeWordOffset=birthNodeWordOffset;
             this.gas=gas;this.oldGeometry=oldGeometry;this.futureGeometry=futureGeometry;this.accepted=accepted;
             this.faceFluxWordOffset=faceFluxWordOffset;this.oldNodeVolumesWordOffset=oldNodeVolumesWordOffset;
-            this.groupCapacity=groupCapacity;edges=Math.multiplyExact(oldGeometry.cells(),7);
-            if(oldGeometry.cells()!=futureGeometry.cells()||oldGeometry.cells()!=accepted.cells()||groupCapacity<1
-                    ||faceFluxWordOffset<0||oldNodeVolumesWordOffset<0||alignment<8||(alignment&(alignment-1))!=0
-                    ||scratchBase<Math.max(Math.max(oldGeometry.endOffset(),futureGeometry.endOffset()),Math.max(gas.endOffset(),accepted.endOffset())))
+            this.groupCapacity=groupCapacity;edges=Math.multiplyExact(oldGeometry.cells(),geometryOnly?2:7);
+            if(oldGeometry.cells()!=futureGeometry.cells()||(!geometryOnly&&(accepted==null||oldGeometry.cells()!=accepted.cells()))||groupCapacity<1
+                    ||(!geometryOnly&&faceFluxWordOffset<0)||oldNodeVolumesWordOffset<0||geometryOnly&&birthNodeWordOffset<0||alignment<8||(alignment&(alignment-1))!=0
+                    ||scratchBase<Math.max(Math.max(oldGeometry.endOffset(),futureGeometry.endOffset()),Math.max(gas.endOffset(),accepted==null?0:accepted.endOffset())))
                 throw new IllegalArgumentException("Invalid gas lineage layout");
             int required=Math.multiplyExact(edges,2),hash=1;while(hash<required)hash=Math.multiplyExact(hash,2);hashCapacity=hash;
             long[] cursor={scratchBase};header=VulkanGasLineage.column(cursor,96,4,alignment);
@@ -81,12 +87,14 @@ final class VulkanGasLineage implements AutoCloseable {
             data[3]=oldGeometry.cells();data[4]=gas.nodeCapacity();data[5]=groupCapacity;data[6]=hashCapacity;data[7]=edges;
             data[8]=VulkanGasLineage.word(oldGeometry.cellNodes());data[9]=VulkanGasLineage.word(futureGeometry.cellNodes());
             data[10]=VulkanGasLineage.word(oldGeometry.dryVolumes());data[11]=VulkanGasLineage.word(futureGeometry.dryVolumes());
-            data[12]=oldGeometry.masksWordOffset();data[13]=faceFluxWordOffset;data[14]=accepted.acceptedWordOffset();
-            data[15]=accepted.sourceCellVolumes().quantumExponent();data[16]=oldNodeVolumesWordOffset;
+            data[12]=oldGeometry.masksWordOffset();data[13]=faceFluxWordOffset;data[14]=accepted==null?0:accepted.acceptedWordOffset();
+            data[15]=accepted==null?0:accepted.sourceCellVolumes().quantumExponent();data[16]=oldNodeVolumesWordOffset;
             data[17]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.COUNTS).offset()/4);
             data[18]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.ROW_COMPONENT_OFFSETS).offset()/4);
             data[19]=VulkanGasLineage.word(futureGeometry.componentOffsets());data[20]=VulkanGasLineage.word(futureGeometry.componentMembers());
             data[21]=VulkanGasLineage.word(futureGeometry.componentCount());data[22]=VulkanGasLineage.word(oldGeometry.componentCount());data[23]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.STANDARD_VOLUME_NANOS).offset()/4);
+            data[24]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.MASS_UNITS).offset()/4);data[25]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.INTERNAL_ENERGY).offset()/4);
+            data[26]=geometryOnly?1:0;data[27]=birthNodeWordOffset;
             for(Field field:Field.values())data[32+field.ordinal()]=word(field);
             for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);
             double size=oldGeometry.cellSize();out.putDouble(4*80,size*size*size);return out;
@@ -97,6 +105,10 @@ final class VulkanGasLineage implements AutoCloseable {
                          VulkanLiquidAcceptedVolumes.Layout accepted,int faceFluxWordOffset,int oldNodeVolumesWordOffset,
                          int groupCapacity,long scratchBase,long alignment) {
         return new Layout(gas,oldGeometry,futureGeometry,accepted,faceFluxWordOffset,oldNodeVolumesWordOffset,groupCapacity,scratchBase,alignment);
+    }
+    static Layout geometryLayout(VulkanGasStateLayout gas,VulkanGasGeometry.Layout oldGeometry,VulkanGasGeometry.Layout futureGeometry,
+                                 int oldNodeVolumesWordOffset,int birthNodeWordOffset,int groupCapacity,long base,long alignment){
+        return new Layout(gas,oldGeometry,futureGeometry,null,-1,oldNodeVolumesWordOffset,groupCapacity,birthNodeWordOffset,true,base,alignment);
     }
     private final FlipKernelBindings bindings;
     private final VulkanPrefixScan scan;
@@ -110,8 +122,8 @@ final class VulkanGasLineage implements AutoCloseable {
     }
     void record(VkCommandBuffer command,Layout layout){
         stage(command,layout,0,Math.max(layout.hashCapacity,Math.max(layout.groupCapacity,layout.oldGeometry.cells()+1)),false);
-        stage(command,layout,1,layout.oldGeometry.cells(),false);
-        stage(command,layout,2,layout.oldGeometry.cells(),false);
+        if(layout.geometryOnly)stage(command,layout,18,layout.oldGeometry.cells(),false);
+        else{stage(command,layout,1,layout.oldGeometry.cells(),false);stage(command,layout,2,layout.oldGeometry.cells(),false);}
         stage(command,layout,3,layout.edges,false);
         stage(command,layout,4,1,false);
         stage(command,layout,5,layout.edges,false);
@@ -123,6 +135,7 @@ final class VulkanGasLineage implements AutoCloseable {
         prefix(command,layout,layout.gas.nodeCapacity()+2,Field.SOURCE_COUNTS,Field.SOURCE_OFFSETS);
         prefix(command,layout,layout.oldGeometry.cells()+1,Field.TARGET_COUNTS,Field.TARGET_OFFSETS);
         stage(command,layout,8,layout.groupCapacity,false);
+        if(layout.geometryOnly)stage(command,layout,19,layout.gas.nodeCapacity(),false);
         stage(command,layout,17,Math.max(layout.gas.nodeCapacity()+2,layout.oldGeometry.cells()+1),false);
         stage(command,layout,12,1,false);
         stage(command,layout,14,layout.gas.nodeCapacity()+2,false);
@@ -131,6 +144,16 @@ final class VulkanGasLineage implements AutoCloseable {
         stage(command,layout,10,layout.oldGeometry.cells()+1,true);
         stage(command,layout,16,layout.gas.nodeCapacity(),false);
         stage(command,layout,11,layout.gas.nodeCapacity(),true);
+    }
+    void record(VkCommandBuffer command,Layout layout,VulkanGasGeometry.Layout previous){
+        if(!layout.geometryOnly)throw new IllegalArgumentException("Phase overlap route required");
+        try(var stack=stackPush()){
+            barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,stack);
+            vkCmdUpdateBuffer(command,arena.buffer().handle(),arena.offset()+layout.header.offset()+4L*8,stack.ints(word(previous.cellNodes())));
+            vkCmdUpdateBuffer(command,arena.buffer().handle(),arena.offset()+layout.header.offset()+4L*10,stack.ints(word(previous.dryVolumes())));
+            vkCmdUpdateBuffer(command,arena.buffer().handle(),arena.offset()+layout.header.offset()+4L*22,stack.ints(word(previous.componentCount())));
+            barrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
+        }record(command,layout);
     }
     private void prefix(VkCommandBuffer command,Layout layout,int count,Field input,Field output){
         scan.record(command,count,layout.word(input),layout.word(output),layout.word(Field.SCAN));

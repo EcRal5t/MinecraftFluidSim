@@ -40,8 +40,7 @@ void enumerate(int entry){
   }
  }
  if(volume<=0.0)return;put(ENTRY_CELL,entry,c);put(ENTRY_BODY,entry,body);write(ENTRY_VOLUME,entry,volume);
- double fraction=liquid(c,2)>0.0?clamp(liquid(c,0)/liquid(c,2),0.0,1.0):0.0;
- for(int axis=0;axis<3;axis++)write(WET_AREA,3*entry+axis,wet[axis]*p.cellSize*p.cellSize*fraction);
+ for(int axis=0;axis<3;axis++)write(WET_AREA,3*entry+axis,wet[axis]*p.cellSize*p.cellSize);
  atomicAdd(words[at(CC)+c],1u);
 }
 // Exact clipped box union through sorted coordinate slabs. The local lists contain only
@@ -89,11 +88,11 @@ void bodyTotals(int body){for(int i=0;i<7;i++)write(TOTALS,7*body+i,0.0);if(body
  }
  for(int axis=0;axis<3;axis++){write(TOTALS,7*body+axis,areas[axis]);write(TOTALS,7*body+3+axis,weights[axis]);}write(TOTALS,7*body+6,wetVolume);
 }
-int gh(int i){return int(words[h(13)+i]);}int ga(int f){return gh(64+f);}int jh(int i){return int(words[h(14)+i]);}int ja(int f){return jh(24+f);}
+int gh(int i){if(h(13)>=0)return int(words[h(13)+i]);return i==16?h(18):i==18?h(19):i==19?h(20):i==20?h(21):i==22?h(22):i==23?h(23):0;}int ga(int f){return gh(64+f);}int jh(int i){return int(words[h(14)+i]);}int ja(int f){return jh(24+f);}
 bool full(int c){return liquid(c,1)>0.0&&liquid(c,2)>0.0&&liquid(c,2)-liquid(c,0)<=4e-5;}
-int pressureRow(int c){if(c<0)return -1;if(full(c))return c;int node=int(words[gh(6)+c]);return node>0?h(3)+node-1:-1;}
-double datum(){return num(ga(19));}
-double rowPressure(int row){return row<0?0.0:num(ga(3)+2*row)+num(gh(20)+2*row)+datum();}
+int pressureRow(int c){if(c<0)return -1;if(full(c))return c;if(h(13)<0)return -1;int node=int(words[gh(6)+c]);return node>0?h(3)+node-1:-1;}
+double datum(){return h(13)<0?0.0:num(ga(19));}
+double rowPressure(int row){return row<0?0.0:(h(13)<0?0.0:num(ga(3)+2*row))+num(gh(20)+2*row)+datum();}
 void pressureContacts(int contact){for(int side=0;side<2;side++){put(PR,2*contact+side,-1);write(PC,2*contact+side,0.0);}if(contact>=contacts())return;
  int f=get(CFACE,contact);ivec2 c=faceCells(f);if(c.x<0)return;ivec2 r=ivec2(pressureRow(c.x),pressureRow(c.y));if(r.x==r.y)return;
  for(int side=0;side<2;side++){int index=2*contact+side;double coefficient=(side==0?1.0:-1.0)*read(SHARE,contact)/p.cellSize;
@@ -105,6 +104,7 @@ void rowSource(int row){double rate=0.0;for(int e=get(RO,row);e<get(RO,row+1);e+
  if(row>=h(3)&&row<h(3)+gh(1)){int node=row-h(3);double pressure=num(gh(8)+2*(9*node+1));if(pressure<=0.0)return;
   double storage=num(ga(4)+2*node);if(storage<=0.0){storage=num(gh(7)+2*node)*num(gh(8)+2*(9*node+8))/(p.duration*p.duration*p.cellSize*p.cellSize*p.cellSize);
    if(!(storage>0.0&&finite(storage))){invalid();return;}outnum(ga(4)+2*node,storage);words[ga(6)+node]=1u;
+   outnum(ga(5)+2*node,storage);
    if(h(14)>=0)outnum(ja(7)+2*row,storage);
    else{int diagonal=int(words[gh(16)+row]);outnum(gh(18)+2*diagonal,storage);words[gh(22)+row]=1u;}
   }
@@ -132,6 +132,8 @@ void main(){int id=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*12
  if(p.stage==1){enumerate(id);return;}if(p.stage==2){int c=get(ENTRY_CELL,id);if(c>=0){int slot=get(CO,c)+int(atomicAdd(words[at(CU)+c],1u));put(CE,slot,id);}return;}
  if(p.stage==3){gatherCell(id);return;}if(p.stage==4){entryFaces(id,false);return;}if(p.stage==5){entryFaces(id,true);return;}if(p.stage==6){gatherFace(id);return;}
  if(p.stage==7){bodyTotals(id);return;}
+ if(p.stage==18){outint(at(COMBINED)+2*id,(h(12)<0?0l:integer(h(12)+2*id))+integer(at(OCCUPIED)+2*id));return;}
+ if(p.stage==17){int c=get(ENTRY_CELL,id);if(c>=0){double fraction=liquid(c,2)>0.0?clamp(liquid(c,0)/liquid(c,2),0.0,1.0):0.0;for(int axis=0;axis<3;axis++)write(WET_AREA,3*id+axis,read(WET_AREA,3*id+axis)*fraction);}return;}
  if(p.stage==8){if(id>=contacts())return;int body=get(CB,id),axis=faceAxis(get(CFACE,id));double area=read(TOTALS,7*body)+read(TOTALS,7*body+1)+read(TOTALS,7*body+2)-read(TOTALS,7*body+axis);
   double total=read(TOTALS,7*body+3+axis);write(DISTANCE,id,total>0.0?area/p.cellSize*read(SHARE,id)/total:0.0);return;}
  if(p.stage==9){double area=max(0.0,face(id,2)-read(FACE_AREA,id));outnum(h(11)+2*(4*id+2),area);outnum(h(11)+2*(4*id+3),min(face(id,3),area));return;}

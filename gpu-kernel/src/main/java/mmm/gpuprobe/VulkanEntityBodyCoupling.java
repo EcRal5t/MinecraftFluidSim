@@ -77,6 +77,11 @@ final class VulkanEntityBodyCoupling implements AutoCloseable {
             inputs[15]=word(viscosity.column(VulkanLiquidViscosity.Field.CONTACT_IMPULSE));inputs[16]=word(viscosity.column(VulkanLiquidViscosity.Field.CONTACT_WORK));
             inputs[17]=word(viscosity.column(VulkanLiquidViscosity.Field.SOURCE_CELL_WORK));
         }
+        void bindBaseSolid(VulkanLiquidStateLayout.Column base){inputs[12]=word(base);}
+        void bindPressure(VulkanGasPressure.PressureBuffers pressure){
+            inputs[18]=word(pressure.starts());inputs[19]=word(pressure.values());inputs[20]=word(pressure.rows());
+            inputs[21]=word(pressure.pressure());inputs[22]=word(pressure.meta());inputs[23]=word(pressure.problem());
+        }
         ByteBuffer headerBytes(){var b=ByteBuffer.allocateDirect(384).order(ByteOrder.LITTLE_ENDIAN);for(int i=0;i<inputs.length;i++)b.putInt(4*i,inputs[i]);
             for(var f:Field.values())b.putInt(4*(32+f.ordinal()),word(f));return b;}
         ByteBuffer bodiesBytes(Configuration c){if(c.bodies().bodies().size()>bodyCapacity||c.cellEntries()>entryCapacity||c.sizeX()!=sizeX||c.sizeY()!=sizeY||c.sizeZ()!=sizeZ)throw new IllegalArgumentException("Body request exceeds device capacity");
@@ -117,12 +122,19 @@ final class VulkanEntityBodyCoupling implements AutoCloseable {
         VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);
     }}
     void recordGeometry(VkCommandBuffer command,Layout l,double h){
+        recordOccupancy(command,l,h);recordContacts(command,l,h);
+    }
+    void recordOccupancy(VkCommandBuffer command,Layout l,double h){
         stage(command,l,0,Math.max(l.cells,Math.max(l.faces,l.pressureRows)),h,1);
         stage(command,l,1,l.entryCapacity,h,1);scan.record(command,l.cells,l.word(Field.CELL_COUNTS),l.word(Field.CELL_OFFSETS),l.word(Field.SCAN));
-        stage(command,l,2,l.entryCapacity,h,1);stage(command,l,3,l.cells,h,1);stage(command,l,4,l.entryCapacity,h,1);
+        stage(command,l,2,l.entryCapacity,h,1);stage(command,l,3,l.cells,h,1);
+    }
+    void recordContacts(VkCommandBuffer command,Layout l,double h){
+        stage(command,l,17,l.entryCapacity,h,1);stage(command,l,4,l.entryCapacity,h,1);
         scan.record(command,l.faces,l.word(Field.FACE_COUNTS),l.word(Field.FACE_OFFSETS),l.word(Field.SCAN));
         stage(command,l,5,l.entryCapacity,h,1);stage(command,l,6,l.faces,h,1);stage(command,l,7,l.bodyCapacity,h,1);stage(command,l,8,l.contactCapacity,h,1);
     }
+    void recordCombinedOccupancy(VkCommandBuffer command,Layout l,double h){stage(command,l,18,l.cells,h,1);}
     /** For the pure-fluid path. GranularPressure can instead read FACE_AREA directly. */
     void recordApertures(VkCommandBuffer command,Layout l,double h){stage(command,l,9,l.faces,h,1);}
     /** After source pressure preparation and any granular incidence, before the shared solve. */

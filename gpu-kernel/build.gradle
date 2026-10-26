@@ -414,3 +414,12 @@ registerGpuProbe('runGpuGasFlowReplay', 'Replays a captured aperture graph throu
         providers.gradleProperty('gpuGasFlowReplayFile').getOrElse(rootProject.layout.buildDirectory.file('gpu-aperture-failure.bin').get().asFile.absolutePath)
     probeTask.jvmArgs '-Xmx1g'
 }
+
+registerGpuProbe(
+    'runGpuThermalPhaseValidation',
+    'Runs thermal conversion, mechanical continuation and checkpoint through the resident backend.',
+    'mmm.gpuprobe.GpuThermalPhaseValidation',
+    'gpu-thermal-phase-work'
+) { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'), rootProject.file('fabric/src/main/resources/data/mmm/mmm').absolutePath, providers.gradleProperty('gpuPhaseCases').getOrElse('freeze,melt,boil,condense')
+}

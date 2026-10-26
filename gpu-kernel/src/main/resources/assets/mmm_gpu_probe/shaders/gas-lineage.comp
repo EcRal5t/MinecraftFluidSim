@@ -68,6 +68,20 @@ void makeEdges(int c){
   if(weight>0.0&&(target<0||origin[slot]>int(words[h(17)])))invalid();
  }
 }
+// Phase topology uses geometric overlap and explicit evaporation birth, never old face flux.
+void geometryEdges(int c){double oldVolume=number(h(10)+2*c),future=number(h(11)+2*c),overlap=min(oldVolume,future);
+ int old=int(words[h(8)+c]),target=int(words[h(9)+c]),birth=int(words[h(27)+c]);
+ if(birth<0||birth>int(words[h(17)])){invalid();return;}
+ for(int slot=0;slot<2;slot++){int edge=2*c+slot;double weight=slot==0?overlap:max(0.0LF,future-overlap);
+  int source=slot==0?old+1:birth>0?birth+1:0;
+  if(weight>0.0&&(target<0||source<0||source>int(words[h(17)])+1)){invalid();return;}
+  words[f(ES)+edge]=uint(source);words[f(ET)+edge]=uint(target);put(f(EW)+2*edge,weight);words[f(EG)+edge]=0u;
+ }
+}
+void checkVanished(int node){if(node>=int(words[h(17)])||words[f(SC)+node+2]!=0u)return;
+ for(int component=int(words[h(18)+node]);component<int(words[h(18)+node+1]);component++)if(integer(h(23)+2*component)!=int64_t(0)||integer(h(24)+2*component)!=int64_t(0)){invalid();return;}
+ if(number(h(25)+2*node)!=0.0)invalid();
+}
 uint hashPair(uint a,uint b){uint v=a*0x9e3779b9u+b*0x85ebca6bu;v^=v>>16;v*=0x7feb352du;v^=v>>15;return v;}
 uint insertPair(int edge,uint source,uint target){
  uint slot=hashPair(source,target)&uint(h(6)-1);
@@ -187,6 +201,7 @@ void main(){
  if(p.stage==15){if(id<=int(words[h(21)])&&!longTarget(id))futureControls(id,0,1);return;}
  if(p.stage==16){if(id<int(words[h(17)])&&!longSource(id+2))sourceVolumes(id,0,1);return;}
  if(p.stage==17){classifyControls(id);return;}
+ if(p.stage==18){geometryEdges(id);return;}if(p.stage==19){checkVanished(id);return;}
  if(p.stage==1)transport(id);else if(p.stage==2)makeEdges(id);else if(p.stage==3)insertEdge(id);
  else if(p.stage==13)shortWeights(id);else if(p.stage==5)countEdges(id);else if(p.stage==6)scatterEdges(id);else scatterGroups(id);
 }

@@ -207,6 +207,12 @@ final class VulkanGasRemap implements AutoCloseable {
         gather(command,l,true,work,timings);
         timed(timings,command,"remap-topology",()->stage(command,l,15,l.routes.futureGeometry().cells(),work));
     }
+    /** Preserve the already partitioned source U while rebuilding only inventory topology. */
+    void recordFinishFixedEnergy(VkCommandBuffer command,Layout l){
+        if(l.transport)throw new IllegalArgumentException("Geometry remap required for fixed energy");
+        stage(command,l,27,Math.max(l.routes.capacity(),l.retained.nodeCapacity()),null);
+        gather(command,l,true,null,null);stage(command,l,15,l.routes.futureGeometry().cells(),null);
+    }
     private void gather(VkCommandBuffer command,Layout l,boolean future,VulkanGasAdiabaticWork.Layout work){
         gather(command,l,future,work,null);
     }

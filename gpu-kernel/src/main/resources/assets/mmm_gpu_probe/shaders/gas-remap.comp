@@ -416,6 +416,11 @@ void main(){
   gatherComponents(id,future,0);gatherSpeciesAndEnergy(id,future,0);
   return;
  }
+ if(p.stage==27){if(id>=p.count||errors!=0u)return;
+  if(id<groups())put(f(ER)+4*id+2,number(f(ER)+4*id));
+  if(id<nodeCount()){put(f(SR)+4*id+2,number(f(SR)+4*id));put(f(RR)+4*id,0.0);}
+  return;
+ }
  if(p.stage==18){
   if(id==0){for(int i=0;i<9;i++)words[f(REQ)+i]=0u;for(int i=0;i<8;i++){words[f(DISPATCH)+3*i]=0u;words[f(DISPATCH)+3*i+1]=1u;words[f(DISPATCH)+3*i+2]=1u;}
    if(errors==0u){words[f(REQ)+6]=uint(futureCount());words[f(REQ)+7]=uint(groups());words[f(REQ)+8]=1u;prepareDispatch();}}
