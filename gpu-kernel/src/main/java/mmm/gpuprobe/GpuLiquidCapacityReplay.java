@@ -39,6 +39,8 @@ public final class GpuLiquidCapacityReplay {
                         status=result.feedback().order(ByteOrder.LITTLE_ENDIAN).getInt(0);rounds=result.feedback().getInt(4);
                     }
                     if(result.error()!=0||status!=VulkanLiquidCapacity.FEASIBLE){
+                        var failed=storage.metrics();
+                        System.out.printf("failed_wall_ms=%.3f failed_gpu_ms=%.3f%n",(System.nanoTime()-begin)*1e-6,(failed.gpuNanos()-before.gpuNanos())*1e-6);
                         var debug=ByteBuffer.allocate(36).order(ByteOrder.LITTLE_ENDIAN);candidate.read(solve.column(VulkanLiquidCapacity.Field.STATE).offset(),debug);
                         System.out.println("solver_state="+java.util.Arrays.toString(java.util.stream.IntStream.range(0,9).map(i->debug.getInt(4*i)).toArray()));
                         int vertices=2*layout.cells()+layout.groups()+1;

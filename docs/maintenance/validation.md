@@ -899,3 +899,7 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 2026-10-27：固定 cell×material 槽已贯通冷导入／导出、输运和发布路径，gather删除材料发现与单元行计数扫描，保留精确体积及物种分配。`build/gpu-resident-cut64-material-slots.log` 原64³连续15步完成：中位78.396 ms、最大178.534 ms、GPU平均63.479 ms；仍包含第11代长值存储增长，未取得完整步性能资格。`build/gpu-resident-cut64-material-slots-profile.log` 的 gather 平均1.740 ms（此前2.194 ms），整链收益不足。
 
 压力分项计时已补齐所有后续批次，原先日志仅记录前两批，不能将约6 ms作为全部内层成本。`build/gpu-resident-cut64-all-pressure-batches.log` 的15个成功步包含15次首批与32次后续批，内层平均10.108 ms，装配1.587 ms、初始化.778 ms。有限体积模量替代硬容量约束尚无统一实际通量／压力功／压缩能离散，不据此宣称可直接删除残量图；继续比较可实施的完整执行链。
+
+2026-10-27：容量算法结构试验仍使用原输入和512轮预算。4³工作组局部推送在 `build/gpu-capacity-cut64-block-discharge.log` 为109轮、GPU15.343 ms，颗粒输入仍超限；周期性全域重标记在 `build/gpu-capacity-granular32-relabel.log` 为459轮、GPU49.815 ms，两者已撤回。单父边残量森林也未取得资格：`build/gpu-capacity-granular32-forest.log` 和 `build/gpu-capacity-cut64-forest.log` 均512轮超限，分别含484／462轮BFS及28／50轮森林结算。按最近正余额层提前结束搜索的 `build/gpu-capacity-granular32-nearest-forest.log` 仍超限，含432轮BFS及80轮结算。此结果否定当前森林方案的成本与推进效率，不能推导完整GPU后端不可实现；暂不进入完整步或其他物理验证。
+
+三阶段同步边推送在 `build/gpu-capacity-granular32-edge-wave.log` 仍512轮超限（5轮初始BFS、507轮推送），GPU69.239 ms，剩25个正余额顶点。森林与同步边试验均已删除，恢复已通过原输入的两色实现；不增加预算继续试跑。后续须从容量约束与实际通量共同生成入手，降低全局重新分配量。
