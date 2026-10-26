@@ -22,7 +22,10 @@ final class VulkanGasPressure implements AutoCloseable {
         DIAGONAL(8), MECHANICAL_MODE(4), CELL_PHYSICAL_PRESSURE(8), NODE_ABSOLUTE_PRESSURE(8),
         NODE_PREDICTED_VOLUME_CHANGE(8), FACE_ROWS(4), FACE_COUNTS(4), FACE_OFFSETS(4), FACE_CURSORS(4),
         NODE_FACES(4), BLOCK_COUNTS(4), BLOCK_OFFSETS(4), BLOCK_NODES(4), PRODUCT_PARTS(8), DATUM(8), SCAN(4), DISPATCH(4), LARGE_NODES(4), PRODUCT_PEERS(4), PRODUCT_WEIGHTS(8), SOLVE_ROWS(4), SHORT_NODES(4), SCHUR_CANDIDATE(4), SCHUR_ELIMINATED(4),
-        SCHUR_PEER_A(4), SCHUR_PEER_B(4), SCHUR_WEIGHT_A(8), SCHUR_WEIGHT_B(8), SOURCE_RHS(8), SCHUR_DIAGONAL(8);
+        SCHUR_PEER_A(4), SCHUR_PEER_B(4), SCHUR_WEIGHT_A(8), SCHUR_WEIGHT_B(8), SOURCE_RHS(8), SCHUR_DIAGONAL(8),
+        PROPOSAL_A(4),PROPOSAL_B(4),PROPOSAL_WEIGHT(8),PROPOSAL_SLOT(4),PAIR_HASH(4),HASH_GROUP(4),PAIR_LIVE(4),
+        GROUP_COUNTS(4),GROUP_OFFSETS(4),GROUP_CURSORS(4),GROUP_PROPOSALS(4),GROUP_A(4),GROUP_B(4),GROUP_WEIGHT(8),
+        CORE_COUNTS(4),CORE_OFFSETS(4),CORE_CURSORS(4),CORE_PEERS(4),CORE_WEIGHTS(8);
         final int width; Field(int width) { this.width = width; }
     }
     static final class Layout {
@@ -31,7 +34,7 @@ final class VulkanGasPressure implements AutoCloseable {
         private final PressureBuffers pressure;
         private final VulkanLiquidStateLayout.Column cells, faces, header;
         private final EnumMap<Field,VulkanLiquidStateLayout.Column> columns = new EnumMap<>(Field.class);
-        private final int liquidCount, gasCapacity, faceCount, pressureSize, blockCapacity;
+        private final int liquidCount, gasCapacity, faceCount, pressureSize, blockCapacity,proposalCapacity,hashCapacity;
         private final long endOffset;
 
         Layout(VulkanGasThermodynamics.Layout thermodynamics, VulkanGasGeometry.Layout geometry,
@@ -46,7 +49,9 @@ final class VulkanGasPressure implements AutoCloseable {
             this.thermodynamics=thermodynamics;this.geometry=geometry;this.cells=cells;this.faces=faces;this.pressure=pressure;
             liquidCount=geometry.cells();gasCapacity=thermodynamics.gas().nodeCapacity();faceCount=geometry.faces();
             pressureSize=Math.addExact(Math.addExact(liquidCount,gasCapacity),additionalRows);
-            blockCapacity=Math.addExact(Math.multiplyExact(2,faceCount)/128,gasCapacity);
+            proposalCapacity=additionalRows==0?Math.addExact(faceCount,gasCapacity):0;
+            int hashes=1;while(hashes<2L*proposalCapacity)hashes=Math.multiplyExact(hashes,2);hashCapacity=proposalCapacity==0?0:hashes;
+            blockCapacity=Math.addExact(Math.toIntExact((2L*(proposalCapacity==0?faceCount:proposalCapacity)+127)/128),gasCapacity);
             if(alignment<8||(alignment&(alignment-1))!=0||scratchBase<Math.max(thermodynamics.endOffset(),geometry.endOffset())
                     ||cells.count()<4L*liquidCount||faces.count()<4L*faceCount
                     ||pressure.starts().count()<pressureSize+1||pressure.columns().count()<7L*liquidCount+gasCapacity+additionalRows
@@ -64,9 +69,15 @@ final class VulkanGasPressure implements AutoCloseable {
                     case FACE_OFFSETS,BLOCK_OFFSETS->gasCapacity+1;
                     case BLOCK_NODES,PRODUCT_PARTS->blockCapacity;
                     case DATUM->1;
-                    case DISPATCH->33;
+                    case DISPATCH->42;
+                    case PROPOSAL_A,PROPOSAL_B,PROPOSAL_WEIGHT,PROPOSAL_SLOT,GROUP_COUNTS,GROUP_CURSORS,GROUP_PROPOSALS,GROUP_A,GROUP_B,GROUP_WEIGHT->proposalCapacity;
+                    case PAIR_HASH,HASH_GROUP->hashCapacity;case PAIR_LIVE->2;
+                    case GROUP_OFFSETS->proposalCapacity==0?0:proposalCapacity+1;
+                    case CORE_COUNTS,CORE_CURSORS->proposalCapacity==0?0:gasCapacity;
+                    case CORE_OFFSETS->proposalCapacity==0?0:gasCapacity+1;
+                    case CORE_PEERS,CORE_WEIGHTS->Math.multiplyExact(2,proposalCapacity);
                     case SOLVE_ROWS->pressureSize;
-                    case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(gasCapacity)/4);
+                    case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(gasCapacity,proposalCapacity))/4);
                     default->gasCapacity;
                 };
                 var column=new VulkanLiquidStateLayout.Column(align(cursor,alignment),count,field.width);
@@ -91,6 +102,7 @@ final class VulkanGasPressure implements AutoCloseable {
         ByteBuffer headerBytes() {
             var out=ByteBuffer.allocateDirect(512).order(ByteOrder.LITTLE_ENDIAN);var gas=thermodynamics.gas();
             int[] data=new int[128];
+            data[31]=proposalCapacity;data[30]=hashCapacity;
             data[0]=liquidCount;data[1]=gasCapacity;data[2]=faceCount;data[3]=pressureSize;
             data[4]=VulkanGasPressure.word(cells);data[5]=VulkanGasPressure.word(faces);data[6]=VulkanGasPressure.word(geometry.cellNodes());
             data[7]=thermodynamics.nodeVolumesWordOffset();data[8]=VulkanGasPressure.word(thermodynamics.states());
@@ -131,11 +143,24 @@ final class VulkanGasPressure implements AutoCloseable {
             stage(command,layout,null,19,layout.gasCapacity,0);
             stage(command,layout,null,20,Math.multiplyExact(128,layout.gasCapacity),0);
             stage(command,layout,null,21,layout.liquidCount,0);
+            recordReducedAdjacency(command,layout);
         }
         stage(command,layout,parameters,7,layout.gasCapacity,0);
         scan.record(command,layout.gasCapacity,layout.word(Field.BLOCK_COUNTS),layout.word(Field.BLOCK_OFFSETS),layout.word(Field.SCAN));
         stage(command,layout,parameters,8,layout.gasCapacity,0);
         stage(command,layout,parameters,16,1,0);
+    }
+    /** Coalesces each physical core peer pair once; the original face graph remains available for final certification. */
+    private void recordReducedAdjacency(VkCommandBuffer command,Layout layout){
+        stage(command,layout,null,25,Math.max(layout.hashCapacity,Math.max(layout.proposalCapacity,layout.gasCapacity)),0);
+        stage(command,layout,null,26,layout.faceCount,0);stage(command,layout,null,27,layout.gasCapacity,0);
+        stage(command,layout,null,28,1,0);
+        stage(command,layout,null,29,layout.proposalCapacity,0);stage(command,layout,null,30,layout.proposalCapacity,0);
+        scan.record(command,layout.proposalCapacity,layout.word(Field.GROUP_COUNTS),layout.word(Field.GROUP_OFFSETS),layout.word(Field.SCAN));
+        stage(command,layout,null,31,1,0);stage(command,layout,null,32,layout.proposalCapacity,0);
+        stage(command,layout,null,33,Math.multiplyExact(128,layout.proposalCapacity),0);
+        scan.record(command,layout.gasCapacity,layout.word(Field.CORE_COUNTS),layout.word(Field.CORE_OFFSETS),layout.word(Field.SCAN));
+        stage(command,layout,null,34,layout.proposalCapacity,0);
     }
     /** Restores the original KKT operator after exact independent-gas back substitution. */
     void recordRecoverOriginal(VkCommandBuffer command,Layout layout){
@@ -179,10 +204,10 @@ final class VulkanGasPressure implements AutoCloseable {
                     .putFloat(parameters==null?1:parameters.cellSize()).putFloat(parameters==null?1:parameters.duration())
                     .putFloat(parameters==null?0:parameters.gravity()).putFloat(parameters==null?0:parameters.tolerance()).flip();
             vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,push);
-            if(stage==5||stage==9||stage==10||stage==12||stage==14||stage==20) {
+            if(stage==5||stage==9||stage==10||stage==12||stage==14||stage==20||stage==29||stage==30||stage==32||stage==33||stage==34) {
                 VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
-                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+layout.column(Field.DISPATCH).offset()+12L*(stage==9?(argument==1?4:7):stage==10?(argument==1?5:8):stage==14?(argument==1?6:9):0));
+                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+layout.column(Field.DISPATCH).offset()+12L*(stage==9?(argument==1?4:7):stage==10?(argument==1?5:8):stage==14?(argument==1?6:9):stage==29||stage==30||stage==32?11:stage==33?12:stage==34?13:0));
             } else vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);

@@ -25,6 +25,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
     private final long maximumRange;
     private Workspace workspace;
     private VulkanPressureKernel.Progress pressureProgress;
+    private int capacityIterationCount;
     private boolean currentGasThermal;
     private mmm.units.SignedDyadic importRoundoff=mmm.units.SignedDyadic.ZERO;
     mmm.units.SignedDyadic importRoundoff(){return importRoundoff;}
@@ -445,6 +446,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
                 m.deviceBytes()+heatBytes+(schur==null?0:schur.scratchBytes())+(graph==null?0:graph.deviceBytes()),m.stagingBytes());
     }
     synchronized VulkanPressureKernel.Progress pressureProgress(){return pressureProgress;}
+    synchronized int capacityIterations(){return capacityIterationCount;}
     synchronized double[] pressureDiagnostics() {
         try(var capture=storage.capture()) {
             var output=ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN);storage.read(capture,workspace.pressureColumns.get(PressureField.CONTROL).offset(),output);
@@ -794,7 +796,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
                                     recordCapacityIterations(command,output,errors,count,phase),control,12);
                             status=capacityResult.feedback().order(ByteOrder.LITTLE_ENDIAN).getInt(0);rounds=capacityResult.feedback().getInt(4);
                         }
-                        error=capacityResult.error();traceStage("project-capacity",stageMark);
+                        capacityIterationCount=rounds;error=capacityResult.error();traceStage("project-capacity",stageMark);
                         if(transport.dynamics!=null&&error==4096)throw new MotionTimeRefinement("Moved granular support exceeds available fixed capacity");
                         if(transport.dynamics!=null&&error==0&&status==2)throw new MotionTimeRefinement("Joint granular displacement capacity has no feasible transport");
                         if(error==0&&status!=VulkanLiquidCapacity.FEASIBLE) {
