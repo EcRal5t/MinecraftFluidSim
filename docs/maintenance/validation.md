@@ -883,3 +883,8 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 多工作组长行版的 `build/gpu-capacity-parallel-long-replay.log` 对同一新输入以91轮完成，GPU26.687 ms、设备182.1 MiB。短行活动队列在 `build/gpu-capacity-frontier-replay.log`／`build/gpu-capacity-frontier-profile.log` 分别为39.104／31.342 ms，没有形成收益，已删除。恢复稠密短行后，原64³失败输入 `build/gpu-capacity-original-parallel-long.log` 为25轮、GPU7.700 ms；32³颗粒失败输入 `build/gpu-capacity-granular-parallel-long.log` 为277轮、GPU40.676 ms。均保留原输入与512轮预算，重放内置源额度、接收上下限及有限组检查通过。
 
 `build/gpu-resident-cut64-unified-parallel-long.log` 原64³、3预热／12采样连续15步完成：中位86.843 ms、最大96.381 ms、GPU平均71.306 ms，设备4855.2 MiB；末步压力92轮、容量103轮。原容量短重放提速不能替代完整步性能资格，当前整步结果仍失败。共享面通量之后的逐供体限流仍会破坏连续压力解，主要容量约束需前移到共同连续求解，精确残量修正应缩至量化范围；集中物理验证与剩余功能验收继续后置。
+
+
+2026-10-27：恢复上风 PLIC 薄片扫掠输运。此前共享两侧接液面积被误用为实际液体输运面积，空供体可产生虚假 Ql 并抹掉 incomingDry；86.843 ms 结果不作为当前方案资格。原64³第13个连续步暴露孔流压力残差失败，捕获 `build/gpu-aperture-failure.bin`（65,992节点、118,860对）。新增 `runGpuGasFlowReplay`，用 `-PgpuGasFlowReplayFile=...` 复用实际 Schur 路径。失败原因是全图减去首节点约1.13e20 Pa再加回，普通节点丢失精度；基准改为环境压力，方程和容差保持。`build/gpu-aperture-fixed-replay.log` 原图 RMS 4.037e-8，满足现有浮点舍入界；图中极小储容的高气压来源仍待后续物理审查。
+
+`build/gpu-resident-cut64-upwind-fixed.log`：原64³切格、液气＋导热、3预热／12采样连续15步完成，中位70.705 ms、最大93.528 ms、GPU平均59.329 ms，设备4854.5 MiB。末步压力76轮、容量33轮，孔流原图RMS3.940e-8。完整步仍超预算，集中物理验证保持后置；该链也尚未覆盖全部生产职责。

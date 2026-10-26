@@ -29,7 +29,7 @@ uint reserveIncident(int address){uvec4 participants=subgroupBallot(true);uint f
  if(gl_SubgroupInvocationID==first)base=atomicAdd(words[address],subgroupBallotBitCount(peers));base=subgroupBroadcastFirst(base);return address==sharedAddress?base+subgroupBallotExclusiveBitCount(peers):atomicAdd(words[address],1u);}
 void main(){int lane=int(gl_LocalInvocationID.x),group=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),id=128*group+lane,n=actual();
  if(p.stage==0){if(id<h(4)){words[f(HASH)+id]=0u;}if(id<h(3)){words[f(GC)+id]=0u;words[f(GCU)+id]=0u;words[f(QA)+id]=0xffffffffu;put(f(QG)+2*id,0.0);}if(id<h(1)){words[f(CF)+id]=0u;words[f(RC)+id]=0u;words[f(RCU)+id]=0u;words[f(ROWS)+id]=0xffffffffu;words[f(META)+id]=0u;words[f(META)+h(1)+id]=0u;put(f(PROBLEM)+2*id,0.0);put(f(PROBLEM)+2*(h(1)+id),0.0);put(f(PROBLEM)+2*(2*h(1)+id),0.0);}
-  if(id==0){words[f(LIVE)]=0u;put(f(STATE),h(6)!=0?0.0:n>0?sourcePressure(0):p.ambient);for(int i=0;i<16;i++)put(f(CONTROL)+2*i,0.0);put(f(PROBLEM)+6*h(1),h(6)!=0?number(h(11)):number(ff(29)+6*h(1)));}return;}
+  if(id==0){words[f(LIVE)]=0u;put(f(STATE),h(6)!=0?0.0:p.ambient);for(int i=0;i<16;i++)put(f(CONTROL)+2*i,0.0);put(f(PROBLEM)+6*h(1),h(6)!=0?number(h(11)):number(ff(29)+6*h(1)));}return;}
  if(errors!=0u)return;
  if(p.stage==22){if(id<h(1)){words[ff(14)+id]=0u;words[ff(16)+id]=0u;}if(id<3)words[ff(54)+id]=0u;return;}
  if(p.stage==23){if(id>=pairs()||number(ff(12)+2*id)<=0.0)return;atomicAdd(words[ff(14)+int(words[ff(6)+id])],1u);atomicAdd(words[ff(14)+int(words[ff(7)+id])],1u);return;}

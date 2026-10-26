@@ -269,6 +269,7 @@ registerGpuProbe(
         providers.gradleProperty('gpuMechanicalGranular').getOrElse('0'),
         providers.gradleProperty('gpuMechanicalThermal').getOrElse('false')
     probeTask.jvmArgs '-Xmx3g'
+    probeTask.systemProperty 'mmm.gpuApertureFailureDump', rootProject.layout.buildDirectory.file('gpu-aperture-failure.bin').get().asFile.absolutePath
     probeTask.systemProperty 'mmm.gpuMechanicalStages', providers.gradleProperty('gpuMechanicalStages').getOrElse('false')
     probeTask.systemProperty 'mmm.gpuMechanicalPressureDump', providers.gradleProperty('gpuMechanicalPressureDump').getOrElse('')
     probeTask.systemProperty 'mmm.gpuMechanicalCommonPressureDump', providers.gradleProperty('gpuMechanicalCommonPressureDump').getOrElse('')
@@ -404,4 +405,11 @@ registerGpuProbe('runGpuResidentStateValidation', 'Runs production state cold im
 registerGpuProbe('runGpuSolidLiquidReactionsValidation', 'Executes conservative GPU solid/liquid chemistry with momentum and energy settlement.',
     'mmm.gpuprobe.GpuSolidLiquidReactionsValidation', 'gpu-solid-liquid-reactions-work') { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+}
+
+registerGpuProbe('runGpuGasFlowReplay', 'Replays a captured aperture graph through the production Schur solver.',
+    'mmm.gpuprobe.GpuGasFlowReplay', 'gpu-gas-flow-replay-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        providers.gradleProperty('gpuGasFlowReplayFile').getOrElse(rootProject.layout.buildDirectory.file('gpu-aperture-failure.bin').get().asFile.absolutePath)
+    probeTask.jvmArgs '-Xmx1g'
 }

@@ -222,15 +222,21 @@ final class VulkanLiquidRegion implements AutoCloseable {
             var aperture=source.layout.transport.aperture;
             if(aperture==null)throw new IllegalStateException("No finite aperture graph");
             var flow=aperture.flow;
-            int n=source.read(aperture.eos.gas().column(VulkanGasStateLayout.Field.COUNTS).offset(),4).getInt(0);
-            int pairs=source.read(flow.requiredPairsOffset(),4).getInt(0);
+            dumpGasFlowGraph(path,duration,flow,aperture.eos.gas(),source::read);
+        }
+    }
+    private static void dumpGasFlowGraph(java.nio.file.Path path,double duration,VulkanGasFlow.Layout flow,
+            VulkanGasStateLayout gas,java.util.function.BiFunction<Long,Long,ByteBuffer> read){
+        try{
+            int n=read.apply(gas.column(VulkanGasStateLayout.Field.COUNTS).offset(),4L).getInt(0);
+            int pairs=read.apply(flow.requiredPairsOffset(),4L).getInt(0);
             var bytes=ByteBuffer.allocate(Math.toIntExact(24L+36L*n+16L*pairs)).order(ByteOrder.LITTLE_ENDIAN);
             bytes.put("MMMGAS01".getBytes(java.nio.charset.StandardCharsets.US_ASCII)).putInt(n).putInt(pairs).putDouble(duration);
-            for(var field:new VulkanGasFlow.Field[]{VulkanGasFlow.Field.STORAGE,VulkanGasFlow.Field.DIAGONAL_ROOT})bytes.put(source.read(flow.column(field).offset(),8L*n));
-            bytes.put(source.read(flow.column(VulkanGasFlow.Field.PROBLEM).offset(),8L*n));
-            bytes.put(source.read(flow.column(VulkanGasFlow.Field.PROBLEM).offset()+16L*flow.nodes,8L*n));
-            bytes.put(source.read(aperture.eos.gas().column(VulkanGasStateLayout.Field.TOPOLOGY_KEYS).offset(),4L*n));
-            for(var field:new VulkanGasFlow.Field[]{VulkanGasFlow.Field.PAIR_A,VulkanGasFlow.Field.PAIR_B,VulkanGasFlow.Field.PAIR_G})bytes.put(source.read(flow.column(field).offset(),field.width*(long)pairs));
+            for(var field:new VulkanGasFlow.Field[]{VulkanGasFlow.Field.STORAGE,VulkanGasFlow.Field.DIAGONAL_ROOT})bytes.put(read.apply(flow.column(field).offset(),8L*n));
+            bytes.put(read.apply(flow.column(VulkanGasFlow.Field.PROBLEM).offset(),8L*n));
+            bytes.put(read.apply(flow.column(VulkanGasFlow.Field.PROBLEM).offset()+16L*flow.nodes,8L*n));
+            bytes.put(read.apply(gas.column(VulkanGasStateLayout.Field.TOPOLOGY_KEYS).offset(),4L*n));
+            for(var field:new VulkanGasFlow.Field[]{VulkanGasFlow.Field.PAIR_A,VulkanGasFlow.Field.PAIR_B,VulkanGasFlow.Field.PAIR_G})bytes.put(read.apply(flow.column(field).offset(),field.width*(long)pairs));
             bytes.flip();try(var file=java.nio.channels.FileChannel.open(path,java.nio.file.StandardOpenOption.CREATE,java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,java.nio.file.StandardOpenOption.WRITE)){while(bytes.hasRemaining())file.write(bytes);}
         }catch(java.io.IOException failure){throw new IllegalStateException("Writing aperture performance graph failed",failure);}
     }
@@ -840,8 +846,14 @@ final class VulkanLiquidRegion implements AutoCloseable {
             if((error&4)!=0&&parameters!=null) {
                 boolean aperture=capacityStage.startsWith("gas aperture");long offset=aperture?transport.aperture.flow.column(VulkanGasFlow.Field.CONTROL).offset():pressureColumns.get(PressureField.CONTROL).offset();
                 var diagnostics=ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN);candidate.read(offset,diagnostics);
-                return new IllegalStateException("Resident "+(aperture?"gas aperture":"liquid")+" pressure failed: iterations="+(int)diagnostics.getDouble(0)+", residualRms="+diagnostics.getDouble(8)
+                var failure=new IllegalStateException("Resident "+(aperture?"gas aperture":"liquid")+" pressure failed: iterations="+(int)diagnostics.getDouble(0)+", residualRms="+diagnostics.getDouble(8)
                         +", target="+(aperture?1e-8:parameters.tolerance())+", status="+error);
+                String dump=System.getProperty("mmm.gpuApertureFailureDump", "");
+                if(aperture&&!dump.isBlank())try{
+                    dumpGasFlowGraph(java.nio.file.Path.of(dump),parameters.duration(),transport.aperture.flow,
+                            transport.aperture.eos.gas(),(at,length)->{var data=ByteBuffer.allocate(Math.toIntExact(length)).order(ByteOrder.LITTLE_ENDIAN);candidate.read(at,data);return data.flip();});
+                }catch(RuntimeException captureFailure){failure.addSuppressed(captureFailure);}
+                return failure;
             }
             return new IllegalStateException("Resident liquid candidate failed during "+capacityStage+": status="+error);
         }
