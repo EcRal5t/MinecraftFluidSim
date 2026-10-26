@@ -441,10 +441,9 @@ final class VulkanLiquidRegion implements AutoCloseable {
     VulkanRegionStorage.Metrics metrics(){
         var m=storage.metrics();var schur=kernels==null?null:kernels.flowSchurPressure;
         long heatBytes=kernels==null||kernels.thermalKernel==null?0:kernels.thermalKernel.deviceBytes();
-        var graph=kernels==null?null:kernels.pressureGraph;
-        return new VulkanRegionStorage.Metrics(m.submissions(),m.uploadBytes()+(schur==null?0:schur.headerUploadBytes())+(graph==null?0:graph.uploadBytes()),m.readbackBytes(),
-                m.copiedBytes()+(schur==null?0:schur.graphCopyBytes())+(graph==null?0:graph.copyBytes()),m.gpuNanos(),m.recordingNanos(),m.waitingNanos(),m.allocatedGenerations(),
-                m.deviceBytes()+heatBytes+(schur==null?0:schur.scratchBytes())+(graph==null?0:graph.deviceBytes()),m.stagingBytes());
+        return new VulkanRegionStorage.Metrics(m.submissions(),m.uploadBytes()+(schur==null?0:schur.headerUploadBytes()),m.readbackBytes(),
+                m.copiedBytes()+(schur==null?0:schur.graphCopyBytes()),m.gpuNanos(),m.recordingNanos(),m.waitingNanos(),m.allocatedGenerations(),
+                m.deviceBytes()+heatBytes+(schur==null?0:schur.scratchBytes()),m.stagingBytes());
     }
     synchronized VulkanPressureKernel.Progress pressureProgress(){return pressureProgress;}
     synchronized int capacityIterations(){return capacityIterationCount;}
@@ -623,13 +622,6 @@ final class VulkanLiquidRegion implements AutoCloseable {
             int pressureRows=pressureColumns.get(PressureField.ROWS).count();
             VulkanPressureKernel.PressureOperator baseOperator=transport!=null&&transport.dynamics!=null?
                     new VulkanCoupledPressure.Operator(kernels.coupledKernel,transport.dynamics.coupled):gas==null?null:new VulkanPressureKernel.GasOperator(kernels.gasPressure,gas.operator);
-            boolean graphPressure=parameters!=null&&kernels!=null&&kernels.pressureGraph!=null&&gas!=null;
-            var graphSource=graphPressure?new VulkanPressureGraphPreconditioner.Source(pressureRows,
-                    pressureColumns.get(PressureField.STARTS),pressureColumns.get(PressureField.COLUMNS),pressureColumns.get(PressureField.VALUES),
-                    pressureColumns.get(PressureField.ROWS),pressureColumns.get(PressureField.WORK),pressureColumns.get(PressureField.META),
-                    pressureColumns.get(PressureField.CONTROL),pressureColumns.get(PressureField.INPUT),
-                    new VulkanPressureGraphPreconditioner.Common(liquid.cellCount(),gas.operator.column(VulkanGasPressure.Field.FACE_OFFSETS),
-                            gas.operator.column(VulkanGasPressure.Field.PRODUCT_PEERS),gas.operator.column(VulkanGasPressure.Field.PRODUCT_WEIGHTS),gas.operator.column(VulkanGasPressure.Field.DIAGONAL),baseOperator instanceof VulkanPressureKernel.GasOperator)):null;
             VulkanRegionStorage.ComputeCommands prepare = (command, input, output, errors, staging, stack) -> {
                 int sx=liquid.sizeX(),sy=liquid.sizeY(),sz=liquid.sizeZ();
                 if((gas==null||reuseGeometry)&&kernels!=null&&kernels.timings!=null)kernels.timings.reset(command);
@@ -685,7 +677,6 @@ final class VulkanLiquidRegion implements AutoCloseable {
                     for(PressureField field:PressureField.values())solve.add(range(output,field));
                     solve.add(new FlipKernelBindings.BufferRange(errors));
                     pressure.rebindRanges(solve);
-                    if(graphPressure){kernels.timed(command,"common-graph-count",()->kernels.pressureGraph.recordCount(command,output,errors,graphSource));return;}
                     var coarse = new ArrayList<FlipKernelBindings.BufferRange>(8);
                     for(PressureField field : new PressureField[]{PressureField.STARTS,PressureField.COLUMNS,PressureField.VALUES,
                             PressureField.ROWS,PressureField.META,PressureField.WORK,PressureField.CONTROL})
@@ -737,20 +728,8 @@ final class VulkanLiquidRegion implements AutoCloseable {
                 long controlOffset=pressureColumns.get(PressureField.CONTROL).offset();
                 long runOffset = controlOffset;
                 int feedbackBytes=pressureDiagnostics?128:32,runFeedbackOffset=24;
-                if(graphPressure){
-                    long graphFeedback=graphSource.feedback().offset();
-                    var counted=gas==null||reuseGeometry?candidate.beginBatch(uploadedBytes,prepare,graphFeedback,8):candidate.continueBatch(prepare,graphFeedback,8);
-                    if(counted.error()!=0)return counted.error();
-                    int graphError=kernels.pressureGraph.build(candidate,counted.feedback().getInt(0),counted.feedback().getInt(4));
-                    if(graphError!=0)return graphError;
-                }
-                var gasOperator=graphPressure?kernels.pressureGraph.operator(baseOperator):baseOperator;
-                VulkanRegionStorage.Candidate.BatchResult result;
-                if(graphPressure)result=candidate.continueBatch((command,input,output,errors,staging,stack)->{
-                    kernels.timed(command,"common-pressure-initialize",()->pressure.recordInitialize(command,pressureRows,pressureRows,parameters.iterations(),multigrid,hierarchy,gasOperator));
-                    kernels.timed(command,"common-pressure-first-batch",()->recordPressureIterations(command,output,errors,parameters.iterations(),firstPressureBatch,gasOperator));
-                },runOffset,feedbackBytes);
-                else result=gas==null||reuseGeometry?candidate.beginBatch(uploadedBytes,prepare,runOffset,feedbackBytes):candidate.continueBatch(prepare,runOffset,feedbackBytes);
+                var gasOperator=baseOperator;
+                var result=gas==null||reuseGeometry?candidate.beginBatch(uploadedBytes,prepare,runOffset,feedbackBytes):candidate.continueBatch(prepare,runOffset,feedbackBytes);
                 int scheduled = firstPressureBatch;
                 while (result.error() == 0 && result.feedback().getDouble(runFeedbackOffset) != 0.0 && scheduled < parameters.iterations()) {
                     int batch = Math.min(16, parameters.iterations() - scheduled);
@@ -1547,7 +1526,6 @@ final class VulkanLiquidRegion implements AutoCloseable {
         VulkanGasMechanicalHeat gasHeatKernel;
         VulkanGasFlow flowKernel;
         VulkanGasFlowSchurPressure flowSchurPressure;
-        VulkanPressureGraphPreconditioner pressureGraph;
         VulkanGasThermodynamics flowEOS,flowRetainedEOS;
         VulkanGasRemap flowRemap;
         VulkanGasAdiabaticWork flowWork;
