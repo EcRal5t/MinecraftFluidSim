@@ -230,7 +230,7 @@ void notifyLongBlock(int block,int lane){
  if(ordinal<incidentCount(vertex)){int edge=incidentEdge(vertex,ordinal);if(edge>=0)notifyHeight(vertex,edge);}
 }
 // Returning a preferred route to its donor keeps all integer supply quotas exact.
-// A feasible stationary allocation permits one local withdrawal before residual balancing.
+// A feasible stationary allocation permits monotone withdrawal of conflicting preferences.
 void checkStationaryGroup(int group){if(read(GROUP_BASE,group)>upper(8*n()+group))atomicOr(words[at(STATE)+13],1u);}
 void startCorrection(){put(STATE,0,get(STATE,13)==0?3:6);}
 void clearRetractions(int id){if(id<7*n())write(PROPOSAL,id,0l);
@@ -263,7 +263,6 @@ void finishRound(){
  int round=control(1)+1;putControl(1,round);
  if(get(STATE,0)==3){
   if(get(STATE,15)==0)putControl(0,1);
-  else put(STATE,0,6);
  }
  if(p.argument==2&&get(STATE,0)==2)put(STATE,7,get(STATE,7)+1);
  if(p.argument==2&&get(STATE,0)==2){

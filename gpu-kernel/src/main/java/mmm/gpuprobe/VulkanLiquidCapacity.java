@@ -88,8 +88,8 @@ final class VulkanLiquidCapacity implements AutoCloseable {
         if(rounds<0)throw new IllegalArgumentException("Negative capacity round count");
         if(timings!=null)timingPhase=phase;
         try(var stack=stackPush()){bindings.bind(command,stack);}
-        // Local withdrawal is one initialization pass. Remaining constraints use the common residual graph.
-        if(phase==3||phase==6)rounds=Math.min(rounds,1);
+        // Residual topology is built once; withdrawal stays on device for the whole batch.
+        if(phase==6)rounds=Math.min(rounds,1);
         for(int i=0;i<rounds;i++){
             stage(command,l,32,1,phase,0);
             switch(phase){

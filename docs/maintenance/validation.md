@@ -903,3 +903,7 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 2026-10-27：容量算法结构试验仍使用原输入和512轮预算。4³工作组局部推送在 `build/gpu-capacity-cut64-block-discharge.log` 为109轮、GPU15.343 ms，颗粒输入仍超限；周期性全域重标记在 `build/gpu-capacity-granular32-relabel.log` 为459轮、GPU49.815 ms，两者已撤回。单父边残量森林也未取得资格：`build/gpu-capacity-granular32-forest.log` 和 `build/gpu-capacity-cut64-forest.log` 均512轮超限，分别含484／462轮BFS及28／50轮森林结算。按最近正余额层提前结束搜索的 `build/gpu-capacity-granular32-nearest-forest.log` 仍超限，含432轮BFS及80轮结算。此结果否定当前森林方案的成本与推进效率，不能推导完整GPU后端不可实现；暂不进入完整步或其他物理验证。
 
 三阶段同步边推送在 `build/gpu-capacity-granular32-edge-wave.log` 仍512轮超限（5轮初始BFS、507轮推送），GPU69.239 ms，剩25个正余额顶点。森林与同步边试验均已删除，恢复已通过原输入的两色实现；不增加预算继续试跑。后续须从容量约束与实际通量共同生成入手，降低全局重新分配量。
+
+原输入统计显示颗粒违例约为偏好跨格运输的1.37e-7，11,758个有液体格满足K=L=U；原地库存满足全部单元与组约束，且该输入没有触发供体限流。此前限制迭代撤回的失败来自已纠正的shared-flux映射，因此恢复真实PLIC下的迭代偏好撤回，保留原地库存不可行时的统一残量图。`build/gpu-capacity-granular32-restored-retraction.log` 为39轮／GPU4.296 ms，`build/gpu-capacity-cut64-restored-retraction.log` 为12轮／GPU3.887 ms，均通过内置整数约束检查；颗粒保留99.9999787%的偏好搬运量。
+
+phase3恢复32轮设备合批后的 `build/gpu-resident-cut64-batched-retraction.log` 原64³液气＋导热连续15步完成：中位73.161 ms、最大170.380 ms、GPU平均61.767 ms，末步容量14轮。包含第11代实际长值存储增长；普通采样8至14次提交。容量短重放提速没有使整步达标，完整GPU化与50 ms目标仍未完成，集中物理验证继续后置。
