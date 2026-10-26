@@ -203,7 +203,7 @@ A_pressure = rho_reference * h^3 * H R H^T + A_gas_storage
 
 实际位置的整数 SVQ 分配保持总量精确和逐格真实容量，并随位置保存和恢复。
 液体、气腔和颗粒的联合提交使用同一固体终点。
-容量与连续推进要求见[计划 M06](../roadmap/solver-consolidation-plan.md#m06-联合占容与整数可表示性)。
+容量与连续推进要求见[精度与物理取舍](../roadmap/solver-consolidation-plan.md#精度与物理取舍)。
 
 ### Deposit 松弛与局部唤醒
 

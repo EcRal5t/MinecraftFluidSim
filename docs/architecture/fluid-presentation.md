@@ -1,7 +1,7 @@
 # 流体展示参考
 
 修改入口为 `FluidSnapshotPublisher`、`ClientRegionSnapshotStore`、`MaterialSurfaceGeometry` 和 `FluidRenderBackend`。
-当前完整职责链与代码索引见[设计书](system-overview.md#client)，待实施要求集中在[实施计划](../roadmap/solver-consolidation-plan.md#下一轮交付d01-展示几何输入)。
+当前完整职责链与代码索引见[设计书](system-overview.md#client)，待实施要求集中在[实施计划](../roadmap/solver-consolidation-plan.md#其他未完成事项)。
 本文维护已落地的数据归属、当前渲染行为和适配所依据的外部接口。
 
 ## 输入与显色归属
