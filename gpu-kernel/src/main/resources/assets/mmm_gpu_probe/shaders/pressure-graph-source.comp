@@ -54,7 +54,7 @@ void main(){
     if(p.stage==1){if(row==0){
         uint count=pre[ph(P_PREFIX)+sourceRows()];pre[ph(P_ACTUAL)]=count;pre[ph(P_ACTUAL)+1]=pre[ph(P_EDGE_OFFSETS)+sourceRows()];
         int at=ph(P_PRESSURE_DISPATCH);pre[at]=max(1u,(count+255u)/256u);pre[at+1]=1u;pre[at+2]=1u;
-        uvec2 value=unpackDouble2x32(double(count));int control=int(pre[8])+28;arena[control]=value.x;arena[control+1]=value.y;
+        if(pre[14]==0u){uvec2 value=unpackDouble2x32(double(count));int control=int(pre[8])+28;arena[control]=value.x;arena[control+1]=value.y;}
     }return;}
     if(p.stage==3||p.stage==4){row=int(pre[ph(P_LONG_ROWS)+int(gl_WorkGroupID.x)]);longRow(row,lane);return;}
     if(row>=sourceRows())return;bool enabled=live(row);

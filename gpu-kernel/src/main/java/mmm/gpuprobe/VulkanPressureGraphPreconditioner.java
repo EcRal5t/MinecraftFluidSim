@@ -14,7 +14,7 @@ import static org.lwjgl.vulkan.VK10.*;
 /** A fixed symmetric hierarchy over the complete physical pressure graph. */
 final class VulkanPressureGraphPreconditioner implements AutoCloseable {
     record Common(int liquidCount,VulkanLiquidStateLayout.Column offsets,VulkanLiquidStateLayout.Column peers,
-                  VulkanLiquidStateLayout.Column weights,VulkanLiquidStateLayout.Column diagonal) { }
+                  VulkanLiquidStateLayout.Column weights,VulkanLiquidStateLayout.Column diagonal,boolean physicalRows) { }
     record Source(int rows,VulkanLiquidStateLayout.Column starts,VulkanLiquidStateLayout.Column columns,
                   VulkanLiquidStateLayout.Column values,VulkanLiquidStateLayout.Column identities,
                   VulkanLiquidStateLayout.Column work,VulkanLiquidStateLayout.Column meta,
@@ -135,6 +135,7 @@ final class VulkanPressureGraphPreconditioner implements AutoCloseable {
         pre.header[0]=input.rows;pre.header[1]=input.common==null?-1:input.common.liquidCount;
         pre.header[2]=word(input.starts);pre.header[3]=word(input.columns);pre.header[4]=word(input.values);pre.header[5]=word(input.identities);
         pre.header[6]=word(input.work);pre.header[7]=word(input.meta);pre.header[8]=word(input.control);pre.header[9]=word(input.feedback);
+        pre.header[14]=input.common!=null&&input.common.physicalRows?1:0;
         if(input.common!=null){pre.header[10]=word(input.common.offsets);pre.header[11]=word(input.common.peers);pre.header[12]=word(input.common.weights);pre.header[13]=word(input.common.diagonal);}
         vkCmdFillBuffer(command,pre.buffer.handle(),pre.column(P.LONG_COUNT).offset(),4,0);
         header(command,pre);sourceStage(command,pre,0,input.rows);

@@ -629,7 +629,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
                     pressureColumns.get(PressureField.ROWS),pressureColumns.get(PressureField.WORK),pressureColumns.get(PressureField.META),
                     pressureColumns.get(PressureField.CONTROL),pressureColumns.get(PressureField.INPUT),
                     new VulkanPressureGraphPreconditioner.Common(liquid.cellCount(),gas.operator.column(VulkanGasPressure.Field.FACE_OFFSETS),
-                            gas.operator.column(VulkanGasPressure.Field.PRODUCT_PEERS),gas.operator.column(VulkanGasPressure.Field.PRODUCT_WEIGHTS),gas.operator.column(VulkanGasPressure.Field.DIAGONAL))):null;
+                            gas.operator.column(VulkanGasPressure.Field.PRODUCT_PEERS),gas.operator.column(VulkanGasPressure.Field.PRODUCT_WEIGHTS),gas.operator.column(VulkanGasPressure.Field.DIAGONAL),baseOperator instanceof VulkanPressureKernel.GasOperator)):null;
             VulkanRegionStorage.ComputeCommands prepare = (command, input, output, errors, staging, stack) -> {
                 int sx=liquid.sizeX(),sy=liquid.sizeY(),sz=liquid.sizeZ();
                 if((gas==null||reuseGeometry)&&kernels!=null&&kernels.timings!=null)kernels.timings.reset(command);
