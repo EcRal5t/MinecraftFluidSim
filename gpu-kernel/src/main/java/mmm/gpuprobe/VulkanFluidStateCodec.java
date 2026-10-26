@@ -64,7 +64,7 @@ final class VulkanFluidStateCodec {
         var gasMaterials=new ArrayList<ThermalMaterialDefinition>();
         if(template.hasGas()){
             var snapshot=template.gas();var registry=template.gasRegistry();
-            var gasDefinitions=new VulkanGasStateLayout.Definitions(registry.fingerprint(),snapshot.chemicalRegistryFingerprint(),registry.components().stream().map(mmm.fluid.air.GasComponentDefinition::id).toList(),species);
+            var gasDefinitions=new VulkanGasStateLayout.Definitions(registry.fingerprint(),snapshot.chemicalRegistryFingerprint(),registry.components().stream().map(mmm.fluid.air.GasComponentDefinition::id).toList(),species,registry.components().stream().map(mmm.fluid.air.GasComponentDefinition::allowedSpecies).toList());
             var tables=thermal==null?VulkanGasThermodynamics.Tables.isothermal(gasDefinitions):VulkanGasThermodynamics.tables(gasDefinitions,registry,thermal,gasChemistry);
             gas=VulkanLiquidRegion.GasConfiguration.forState(new VulkanGasStateLayout.State(snapshot,owner==null?new double[snapshot.nodes().size()]:owner.copyGasNodeEnergy()),tables,template.config().cellSize(),template.sealedDomainBoundary(),VulkanGasRemap.ambientTables(registry,gasDefinitions,owner==null?mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K:owner.insertionTemperatureK()));
             if(thermal!=null)for(String id:gasDefinitions.componentIds())gasMaterials.add(thermal.material(thermal.materialHandle(ThermalMaterialDefinition.CarrierKind.GAS,id)));

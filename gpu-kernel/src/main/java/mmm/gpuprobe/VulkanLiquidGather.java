@@ -20,7 +20,6 @@ final class VulkanLiquidGather implements AutoCloseable {
                   VulkanLiquidRouteLayout routes, int fixedMaskWordOffset, int speciesMassWordOffset,
                   VulkanLiquidStateLayout.Column header,
                   VulkanLiquidStateLayout.Column members, VulkanLiquidStateLayout.Column speciesCounts,
-                  VulkanLiquidStateLayout.Column dyadicTerms, VulkanLiquidStateLayout.Column dyadicResults,
                   VulkanLiquidStateLayout.Column energyRemainders,
                   VulkanLiquidStateLayout.Column scanWorkspace, long endOffset) {
         int headerWordOffset() { return word(header); }
@@ -39,7 +38,7 @@ final class VulkanLiquidGather implements AutoCloseable {
             values[5] = output.speciesCapacity(); values[6] = output.limbCapacity();
             values[7] = fixedMaskWordOffset; values[8] = speciesMassWordOffset;
             values[9] = output.materialCount(); values[10] = word(members); values[11] = word(speciesCounts);
-            values[12] = word(dyadicTerms); values[13] = word(dyadicResults); values[14] = word(energyRemainders);
+            values[14] = word(energyRemainders);
             values[15] = Math.multiplyExact(output.cellCount(),output.materialCount());
             for (var field : VulkanLiquidStateLayout.Field.values()) {
                 values[16 + field.ordinal()] = word(source.column(field));
@@ -51,11 +50,7 @@ final class VulkanLiquidGather implements AutoCloseable {
             return target;
         }
 
-        VulkanDyadicSum.Layout sums() {
-            return new VulkanDyadicSum.Layout(output.stockCapacity(), word(dyadicTerms), word(dyadicResults),
-                    word(output.column(VulkanLiquidStateLayout.Field.VOLUME_COUNTS)), word(output.column(VulkanLiquidStateLayout.Field.VOLUME_OFFSETS)),
-                    word(output.column(VulkanLiquidStateLayout.Field.VOLUME_LIMBS)), output.limbCapacity(), word(scanWorkspace));
-        }
+
     }
 
     static Layout layout(VulkanLiquidStateLayout source, VulkanLiquidStateLayout output, VulkanLiquidRouteLayout routes,
@@ -70,28 +65,20 @@ final class VulkanLiquidGather implements AutoCloseable {
         var header = column(cursor, HEADER_WORDS, 4, alignment);
         var members = column(cursor, Math.multiplyExact(stocks, 7), 4, alignment);
         var speciesCounts = column(cursor, stocks, 4, alignment);
-        var terms = column(cursor, Math.multiplyExact(stocks, 35), 4, alignment);
-        var results = column(cursor, Math.multiplyExact(stocks, 8), 4, alignment);
         var remainders = column(cursor, Math.multiplyExact(stocks, 7), 8, alignment);
         long scanBytes = VulkanPrefixScan.workspaceBytes(stocks);
         var workspace = column(cursor, Math.toIntExact(scanBytes / 4), 4, alignment);
         return new Layout(source, output, routes, fixedMaskWordOffset, speciesMassWordOffset, header,
-                members, speciesCounts, terms, results, remainders, workspace, align(cursor[0], alignment));
+                members, speciesCounts, remainders, workspace, align(cursor[0], alignment));
     }
 
     private final FlipKernelBindings bindings;
     private final VulkanPrefixScan scan;
-    private final VulkanDyadicSum sums;
 
     VulkanLiquidGather(VulkanDeviceContext context) {
         bindings = new FlipKernelBindings(context, 3, shader(), 12);
-        VulkanPrefixScan createdScan = null;
-        try {
-            createdScan = new VulkanPrefixScan(context);
-            sums = new VulkanDyadicSum(context);
-            scan = createdScan;
-        } catch (RuntimeException | LinkageError failure) {
-            if (createdScan != null) try { createdScan.close(); } catch (RuntimeException | LinkageError closing) { failure.addSuppressed(closing); }
+        try { scan=new VulkanPrefixScan(context); }
+        catch (RuntimeException | LinkageError failure) {
             try { bindings.close(); } catch (RuntimeException | LinkageError closing) { failure.addSuppressed(closing); }
             throw failure;
         }
@@ -101,7 +88,6 @@ final class VulkanLiquidGather implements AutoCloseable {
                       FlipKernelBindings.BufferRange errors) {
         bindings.rebindRanges(List.of(source, candidate, errors));
         scan.rebindRanges(candidate, candidate, candidate, errors);
-        sums.rebindRanges(source, candidate, errors);
     }
 
     /** Capacity acceptance precedes this pass. Momentum and the retained energy remainders have separate owners. */
@@ -111,7 +97,6 @@ final class VulkanLiquidGather implements AutoCloseable {
         stage(command, layout, 1, slots);
         scan.record(command, stocks, word(layout.speciesCounts()), word(layout.output().column(VulkanLiquidStateLayout.Field.SPECIES_OFFSETS)),
                 word(layout.scanWorkspace()));
-        sums.recordSlots(command, layout.sums());
         stage(command, layout, 3, Math.max(1, stocks));
     }
 
@@ -138,10 +123,14 @@ final class VulkanLiquidGather implements AutoCloseable {
     private static String shader() {
         try (var input = VulkanLiquidGather.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/liquid-gather.comp")) {
             if (input == null) throw new IllegalStateException("Liquid gather shader missing");
-            return new String(input.readAllBytes(), StandardCharsets.UTF_8);
+            try(var library=VulkanLiquidGather.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/liquid-dyadic.glsl")){
+                if(library==null)throw new IllegalStateException("Liquid dyadic shader missing");
+                return new String(input.readAllBytes(),StandardCharsets.UTF_8)
+                        .replace("// DYADIC_LIBRARY",new String(library.readAllBytes(),StandardCharsets.UTF_8));
+            }
         } catch (IOException failure) { throw new IllegalStateException("Liquid gather shader unavailable", failure); }
     }
     @Override public void close() {
-        try { sums.close(); } finally { try { scan.close(); } finally { bindings.close(); } }
+        try { scan.close(); } finally { bindings.close(); }
     }
 }

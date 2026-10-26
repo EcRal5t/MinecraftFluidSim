@@ -23,44 +23,15 @@ void loadTerms(int operation,out DyadicTerm items[7]) {
     }
 }
 
-// The four-word register sum is exact when the aligned span plus carry headroom fits.
-// Cache canonical limbs in the existing result fields; the write pass then reads no terms.
+// Cache canonical limbs in the result row; the write pass then reads no source terms.
 bool cachePositiveSum(int operation,DyadicTerm items[7]) {
-    int minimum=2147483647,present=0;int64_t maximum=int64_t(-9223372036854775807L);
-    for(int i=0;i<7;i++)if(dyadicPresent(items[i])){
-        if(items[i].sign<0)return false;
-        minimum=min(minimum,items[i].exponent);present++;
-        int top=items[i].count-1;
-        maximum=max(maximum,int64_t(items[i].exponent)+int64_t(32)*int64_t(top)+int64_t(findMSB(dyadicWord(items[i].bank,items[i].offset+top))));
-    }
+    int count,exponent;uvec4 limbs;
+    if(!dyadicPositiveSum(items,7,count,exponent,limbs))return false;
     int at=p.resultWordOffset+8*operation;
-    if(present==0){
-        candidateWords[at]=uint(DYADIC_ZERO);candidateWords[at+1]=0u;candidateWords[at+2]=0u;
-        candidateWords[at+7]=1u;candidateWords[p.countsWordOffset+operation]=0u;return true;
-    }
-    int headroom=present==1?0:findMSB(present-1)+1;
-    if(maximum-int64_t(minimum)>=int64_t(128-headroom))return false;
-    uvec4 sum=uvec4(0u);
-    for(int term=0;term<7;term++)if(dyadicPresent(items[term])){
-        uint64_t carry=uint64_t(0);
-        for(int word=0;word<4;word++){
-            uint64_t value=uint64_t(sum[word])+uint64_t(dyadicAlignedWord(items[term],word,minimum))+carry;
-            sum[word]=uint(value);carry=value>>32;
-        }
-    }
-    int first=0;while(first<4&&sum[first]==0u)first++;
-    if(first==4)return false;
-    int last=3;while(sum[last]==0u)last--;
-    int trailing=findLSB(sum[first]),bits=32*(last-first)+findMSB(sum[last])-trailing+1,words=(bits+31)/32;
-    int64_t exponent=int64_t(minimum)+int64_t(32*first+trailing);
-    if(exponent>int64_t(2147483647)||exponent<int64_t(-2147483647)-int64_t(1))return false;
-    candidateWords[at]=uint(DYADIC_POSITIVE);candidateWords[at+1]=uint(words);candidateWords[at+2]=uint(exponent);
-    for(int word=0;word<4;word++){
-        uint value=0u;
-        if(word<words){int index=first+word;value=sum[index]>>trailing;if(trailing!=0&&index<3)value|=sum[index+1]<<(32-trailing);}
-        candidateWords[at+3+word]=value;
-    }
-    candidateWords[at+7]=1u;candidateWords[p.countsWordOffset+operation]=uint(words);return true;
+    candidateWords[at]=uint(count==0?DYADIC_ZERO:DYADIC_POSITIVE);
+    candidateWords[at+1]=uint(count);candidateWords[at+2]=uint(exponent);
+    for(int word=0;word<4;word++)candidateWords[at+3+word]=limbs[word];
+    candidateWords[at+7]=1u;candidateWords[p.countsWordOffset+operation]=uint(count);return true;
 }
 
 void measureOperation(int operation) {
@@ -103,14 +74,6 @@ void writeOperation(int operation) {
 void main() {
     int operation=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
     if(operation>=p.operations)return;
-    if(p.stage==2){
-        if((errors&~64u)!=0u)return;
-        measureOperation(operation);
-        uint count=candidateWords[p.countsWordOffset+operation];
-        uint offset=count<=4u?4u*uint(operation):atomicAdd(candidateWords[p.offsetsWordOffset+p.operations],count);
-        candidateWords[p.offsetsWordOffset+operation]=offset;
-        return;
-    }
     if(errors!=0u)return;
     if(p.stage==0)measureOperation(operation);else writeOperation(operation);
 }

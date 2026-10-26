@@ -12,7 +12,6 @@ import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
-import java.util.TreeSet;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VkBufferCopy;
 import org.lwjgl.vulkan.VkCommandBuffer;
@@ -21,7 +20,7 @@ import static org.lwjgl.vulkan.VK10.vkCmdCopyBuffer;
 /** Device-addressable gas inventory, topology, audit ownership and node internal energy.
  * COUNTS holds the actual node, component and species counts within reserved capacities.
  * Inventory rows [0,actualNodes) belong to nodes, followed by externalSource and escapedSink.
- * Each row has one slot per registered component; zero slots are absent inventory. Species use CSR.
+ * Each row has one slot per registered component and its declared allowed species. Zero slots are absent inventory.
  * Column addresses are absolute arena offsets.
  * String identities and registry fingerprints belong to immutable Definitions.
  */
@@ -40,13 +39,22 @@ public final class VulkanGasStateLayout {
         public long bindingBytes() { return Math.max(elementBytes, bytes()); }
     }
     public record Definitions(String registryFingerprint, String chemicalRegistryFingerprint,
-                              List<String> componentIds, List<String> speciesIds) {
-        public Definitions { componentIds = List.copyOf(componentIds); speciesIds = List.copyOf(speciesIds); }
+                              List<String> componentIds, List<String> speciesIds, List<List<String>> allowedSpecies) {
+        public Definitions {
+            componentIds=List.copyOf(componentIds);speciesIds=List.copyOf(speciesIds);
+            allowedSpecies=allowedSpecies.stream().map(List::copyOf).toList();
+            if(allowedSpecies.size()!=componentIds.size())throw new IllegalArgumentException("Gas allowed-species declarations differ from components");
+            for(var row:allowedSpecies)for(String id:row)if(!speciesIds.contains(id))throw new IllegalArgumentException("Undeclared gas species "+id);
+        }
+        int[] speciesOffsets(){int[] result=new int[componentIds.size()+1];for(int i=0;i<componentIds.size();i++)result[i+1]=Math.addExact(result[i],allowedSpecies.get(i).size());return result;}
+        int speciesStride(){return allowedSpecies.stream().mapToInt(List::size).sum();}
+        int[] speciesHandles(){return allowedSpecies.stream().flatMap(List::stream).mapToInt(speciesIds::indexOf).toArray();}
         /** Registers every declared identity so later reactions can create previously absent components. */
         public static Definitions fromRegistries(GasRegistry gas, ChemicalRegistry chemistry) {
             return new Definitions(gas.fingerprint(),chemistry.fingerprint(),
                     gas.components().stream().map(mmm.fluid.air.GasComponentDefinition::id).toList(),
-                    chemistry.species().stream().map(mmm.chemistry.ChemicalSpecies::id).toList());
+                    chemistry.species().stream().map(mmm.chemistry.ChemicalSpecies::id).toList(),
+                    gas.components().stream().map(mmm.fluid.air.GasComponentDefinition::allowedSpecies).toList());
         }
     }
     /** Energy is indexed by the same canonical node ordinal as snapshot.nodes(). */
@@ -58,17 +66,17 @@ public final class VulkanGasStateLayout {
     private final EnumMap<Field, Column> columns = new EnumMap<>(Field.class);
 
     public VulkanGasStateLayout(int sizeX, int sizeY, int sizeZ, int nodeCount,
-                                int speciesCount, Definitions definitions, long storageAlignment) {
-        this(sizeX,sizeY,sizeZ,nodeCount,speciesCount,definitions,0,storageAlignment);
+                                Definitions definitions, long storageAlignment) {
+        this(sizeX,sizeY,sizeZ,nodeCount,definitions,0,storageAlignment);
     }
 
     public VulkanGasStateLayout(int sizeX, int sizeY, int sizeZ, int nodeCount,
-                                int speciesCount, Definitions definitions, long baseOffset, long storageAlignment) {
-        if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || nodeCount < 0 || speciesCount < 0
+                                Definitions definitions, long baseOffset, long storageAlignment) {
+        if (sizeX <= 0 || sizeY <= 0 || sizeZ <= 0 || nodeCount < 0
                 || definitions == null || baseOffset < 0 || storageAlignment <= 0 || (storageAlignment & (storageAlignment - 1)) != 0)
             throw new IllegalArgumentException("Invalid resident gas layout");
         this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
-        nodes = nodeCount; components = Math.multiplyExact(Math.addExact(nodeCount,2),definitions.componentIds().size()); species = speciesCount; this.definitions = definitions;
+        nodes = nodeCount; components = Math.multiplyExact(Math.addExact(nodeCount,2),definitions.componentIds().size()); species = Math.multiplyExact(Math.addExact(nodeCount,2),definitions.speciesStride()); this.definitions = definitions;
         alignment = Math.max(8, storageAlignment);
         this.baseOffset = align(baseOffset);
         long cursor = this.baseOffset;
@@ -88,19 +96,6 @@ public final class VulkanGasStateLayout {
             cursor = Math.addExact(cursor, column.bindingBytes());
         }
         endOffset = align(cursor); bytes = endOffset - this.baseOffset;
-    }
-
-    public static VulkanGasStateLayout forState(GasStateSnapshot snapshot, long storageAlignment) {
-        var componentIds = new TreeSet<String>(); var speciesIds = new TreeSet<String>();
-        int species = 0;
-        for (var row : rows(snapshot)) for (var entry : row) {
-            componentIds.add(entry.componentId());
-            species = Math.addExact(species, entry.species().size());
-            for (var amount : entry.species()) speciesIds.add(amount.speciesId());
-        }
-        var definitions = new Definitions(snapshot.registryFingerprint(), snapshot.chemicalRegistryFingerprint(),
-                List.copyOf(componentIds), List.copyOf(speciesIds));
-        return new VulkanGasStateLayout(snapshot.sizeX(), snapshot.sizeY(), snapshot.sizeZ(), snapshot.nodes().size(), species, definitions, storageAlignment);
     }
 
     public long bytes() { return bytes; }
@@ -131,22 +126,27 @@ public final class VulkanGasStateLayout {
             throw new IllegalArgumentException("Gas identity or dimensions differ from resident layout");
         int actualNodes=snapshot.nodes().size();
         if(nodeEnergy!=null && nodeEnergy.length!=actualNodes)throw new IllegalArgumentException("Gas energy count differs from nodes");
-        var rows = rows(snapshot);int stride=definitions.componentIds().size(),actualComponents=Math.multiplyExact(actualNodes+2,stride),actualSpecies=0;
-        for(var row:rows)for(var entry:row)actualSpecies=Math.addExact(actualSpecies,entry.species().size());
-        if(actualComponents>components||actualSpecies>species)throw new IllegalArgumentException("Gas inventory exceeds resident capacity");
-        int[] offsets=new int[actualNodes+3],handles=new int[actualComponents],speciesOffsets=new int[actualComponents+1];
-        int[] speciesHandles=new int[actualSpecies];long[] nanos=new long[actualComponents],mass=new long[actualComponents],residual=new long[actualComponents],amounts=new long[actualSpecies];int s=0;
+        var rows=rows(snapshot);int stride=definitions.componentIds().size(),speciesStride=definitions.speciesStride();
+        int actualComponents=Math.multiplyExact(actualNodes+2,stride),actualSpecies=Math.multiplyExact(actualNodes+2,speciesStride);
+        int[] declaration=definitions.speciesOffsets(),declaredHandles=definitions.speciesHandles();
+        int[] offsets=new int[actualNodes+3],handles=new int[actualComponents],speciesOffsets=new int[actualComponents+1],speciesHandles=new int[actualSpecies];
+        long[] nanos=new long[actualComponents],mass=new long[actualComponents],residual=new long[actualComponents],amounts=new long[actualSpecies];
         for(int r=0;r<rows.size();r++){
             offsets[r]=r*stride;var row=rows.get(r);
             for(int material=0;material<stride;material++){
-                int c=r*stride+material;handles[c]=material;speciesOffsets[c]=s;
+                int c=r*stride+material;handles[c]=material;speciesOffsets[c]=r*speciesStride+declaration[material];
+                for(int local=declaration[material];local<declaration[material+1];local++)speciesHandles[r*speciesStride+local]=declaredHandles[local];
                 for(var entry:row)if(handle(definitions.componentIds(),entry.componentId())==material){
                     nanos[c]=entry.standardVolumeNanos();mass[c]=entry.massUnits();residual[c]=entry.massResidualUnits();
-                    for(var amount:entry.species()){speciesHandles[s]=handle(definitions.speciesIds(),amount.speciesId());amounts[s++]=amount.amountQuanta();}break;
+                    for(var amount:entry.species()){
+                        int local=definitions.allowedSpecies().get(material).indexOf(amount.speciesId());
+                        if(local<0)throw new IllegalArgumentException("Gas inventory species is not allowed by component");
+                        amounts[speciesOffsets[c]+local]=amount.amountQuanta();
+                    }break;
                 }
             }
         }
-        offsets[actualNodes+2]=actualComponents;speciesOffsets[actualComponents]=s;
+        offsets[actualNodes+2]=actualComponents;speciesOffsets[actualComponents]=actualSpecies;
         ByteBuffer out=view(destination);
         put(out,Field.COUNTS,new int[]{actualNodes,actualComponents,actualSpecies});
         put(out,Field.TOPOLOGY_KEYS,snapshot.nodes().stream().mapToInt(GasStateSnapshot.Node::topologyKey).toArray());
@@ -171,9 +171,9 @@ public final class VulkanGasStateLayout {
         for(int r=0;r<actualNodes+2;r++) {
             var row=new ArrayList<GasAuditLedger.Entry>();
             for(int c=offsets[r];c<offsets[r+1];c++) {
-                if(nanos[c]==0&&mass[c]==0){if(residual[c]!=0||speciesOffsets[c]!=speciesOffsets[c+1])throw new IllegalArgumentException("Empty gas component carries quantities");continue;}
+                if(nanos[c]==0&&mass[c]==0){if(residual[c]!=0)throw new IllegalArgumentException("Empty gas component carries mass residual");for(int e=speciesOffsets[c];e<speciesOffsets[c+1];e++)if(amounts[e]!=0)throw new IllegalArgumentException("Empty gas component carries species");continue;}
                 var composition=new ArrayList<GasComponentAmount.SpeciesAmount>();
-                for(int s=speciesOffsets[c];s<speciesOffsets[c+1];s++) composition.add(new GasComponentAmount.SpeciesAmount(
+                for(int s=speciesOffsets[c];s<speciesOffsets[c+1];s++) if(amounts[s]!=0)composition.add(new GasComponentAmount.SpeciesAmount(
                         definitions.speciesIds().get(speciesHandles[s]),amounts[s]));
                 row.add(new GasAuditLedger.Entry(definitions.componentIds().get(handles[c]),nanos[c],mass[c],composition,residual[c]));
             }

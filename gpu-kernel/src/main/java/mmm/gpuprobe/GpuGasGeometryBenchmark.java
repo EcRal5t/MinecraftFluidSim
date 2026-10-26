@@ -54,7 +54,7 @@ public final class GpuGasGeometryBenchmark {
         var totals=VulkanLiquidCellVolumes.layout(liquid,2*cells,-40,geometry.endOffset(),alignment);
         var gasGeometry=VulkanGasGeometry.layout(totals,word(geometry.masks()),word(geometry.occupied()),word(geometry.cells()),
                 word(geometry.planes()),word(geometry.micro()),true,.25,totals.endOffset(),alignment);
-        var gas=new VulkanGasStateLayout(grid,grid,grid,cells,2*cells,definitions.definitions(),gasGeometry.endOffset(),alignment);
+        var gas=new VulkanGasStateLayout(grid,grid,grid,cells,definitions.definitions(),gasGeometry.endOffset(),alignment);
         long volumeBase=gas.endOffset();
         var tables=VulkanGasThermodynamics.tables(gas.definitions(),definitions.gas(),definitions.thermal(),BuiltinChemicalDefinitions.REGISTRY);
         var thermal=VulkanGasThermodynamics.layout(gas,tables,Math.toIntExact(volumeBase/4),volumeBase+8L*cells,alignment);
@@ -145,16 +145,18 @@ public final class GpuGasGeometryBenchmark {
             for(int handle=0;handle<stride;handle++){
                 putInt(target,gas,COMPONENT_HANDLES,component,handle);putInt(target,gas,COMPONENT_SPECIES_OFFSETS,component,species);
                 putLong(target,gas,STANDARD_VOLUME_NANOS,component,0);putLong(target,gas,MASS_UNITS,component,0);putLong(target,gas,MASS_RESIDUAL_UNITS,component,0);
+                var allowed=gas.definitions().allowedSpecies().get(handle);int firstSpecies=species;
+                for(String id:allowed){putInt(target,gas,SPECIES_HANDLES,species,gas.definitions().speciesIds().indexOf(id));putLong(target,gas,SPECIES_AMOUNTS,species++,0);}
                 for(var part:seed.inventory().components())if(gas.definitions().componentIds().indexOf(part.componentId())==handle){
                     putLong(target,gas,STANDARD_VOLUME_NANOS,component,part.standardVolumeNanos());putLong(target,gas,MASS_UNITS,component,part.massUnits());putLong(target,gas,MASS_RESIDUAL_UNITS,component,part.massResidualUnits());
-                    for(var amount:part.species()){putInt(target,gas,SPECIES_HANDLES,species,gas.definitions().speciesIds().indexOf(amount.speciesId()));putLong(target,gas,SPECIES_AMOUNTS,species++,amount.amountQuanta());}break;
+                    for(var amount:part.species()){int slot=firstSpecies+allowed.indexOf(amount.speciesId());putLong(target,gas,SPECIES_AMOUNTS,slot,amount.amountQuanta());}break;
                 }
                 component++;
             }
         }
         for(int row=nodes;row<nodes+2;row++){
             putInt(target,gas,ROW_COMPONENT_OFFSETS,row,component);
-            for(int handle=0;handle<stride;handle++){putInt(target,gas,COMPONENT_HANDLES,component,handle);putInt(target,gas,COMPONENT_SPECIES_OFFSETS,component,species);putLong(target,gas,STANDARD_VOLUME_NANOS,component,0);putLong(target,gas,MASS_UNITS,component,0);putLong(target,gas,MASS_RESIDUAL_UNITS,component,0);component++;}
+            for(int handle=0;handle<stride;handle++){putInt(target,gas,COMPONENT_HANDLES,component,handle);putInt(target,gas,COMPONENT_SPECIES_OFFSETS,component,species);putLong(target,gas,STANDARD_VOLUME_NANOS,component,0);putLong(target,gas,MASS_UNITS,component,0);putLong(target,gas,MASS_RESIDUAL_UNITS,component,0);for(String id:gas.definitions().allowedSpecies().get(handle)){putInt(target,gas,SPECIES_HANDLES,species,gas.definitions().speciesIds().indexOf(id));putLong(target,gas,SPECIES_AMOUNTS,species++,0);}component++;}
         }
         putInt(target,gas,ROW_COMPONENT_OFFSETS,nodes+2,component);putInt(target,gas,COMPONENT_SPECIES_OFFSETS,component,species);
         putInt(target,gas,COUNTS,0,nodes);putInt(target,gas,COUNTS,1,component);putInt(target,gas,COUNTS,2,species);
@@ -172,7 +174,7 @@ public final class GpuGasGeometryBenchmark {
                 new ThermalSpeciesOffset("mmm:bench_oxygen_o2",BuiltinChemicalDefinitions.O2,oxygen.id(),ExactRational.parse("-400"))),
                 List.of(),List.of(),chemistry.fingerprint(),"",gas.fingerprint());
         return new FixtureGas(gas,thermal,new VulkanGasStateLayout.Definitions(gas.fingerprint(),chemistry.fingerprint(),
-                List.of(BuiltinGasDefinitions.NITROGEN,BuiltinGasDefinitions.OXYGEN),List.of(BuiltinChemicalDefinitions.N2,BuiltinChemicalDefinitions.O2)));
+                List.of(BuiltinGasDefinitions.NITROGEN,BuiltinGasDefinitions.OXYGEN),List.of(BuiltinChemicalDefinitions.N2,BuiltinChemicalDefinitions.O2),List.of(BuiltinGasDefinitions.NITROGEN,BuiltinGasDefinitions.OXYGEN).stream().map(id->gas.component(id).allowedSpecies()).toList()));
     }
     static Geometry geometry(VulkanLiquidStateLayout state,long alignment) {
         int cells=state.cellCount(),faces=state.column(VulkanLiquidStateLayout.Field.MOMENTUM_X).count()+state.column(VulkanLiquidStateLayout.Field.MOMENTUM_Y).count()+state.column(VulkanLiquidStateLayout.Field.MOMENTUM_Z).count();

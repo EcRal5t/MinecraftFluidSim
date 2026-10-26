@@ -939,3 +939,10 @@ phase3恢复32轮设备合批后的 `build/gpu-resident-cut64-batched-retraction
 必要的新尾数短链 `build/gpu-liquid-integer-material-tail-short.log` 通过两材各0.75q跨格1q及0.75q＋0.25q完全排空；原32³／64³分份夹具使用机械量子2^-40，保持各材料半份、质量／物种、残余质量及精确能量账检查，单样本GPU为0.835／6.199 ms，动态材料scratch需求均为0。首次新增夹具用了状态布局不支持的2×1×1，已改为2×2×2，仍只两个格子参与尾束交接；未扩大集中物理验证。
 
 2026-10-27：共同压力按上轮实际迭代量安排首批，重复调用已有16轮缓存块，总预算与收敛条件保持。`build/gpu-resident-cut64-predicted-pressure-batch-valid.log` 原64³连续15步成功，中位56.393 ms、最大62.955 ms、GPU平均48.289 ms，普通步7–10次提交，平均回读276.3 B／步；此前8–13次提交、485.7 B／步。墙钟中位未明显下降，尾部与设备成本有所下降，仍未取得完整步性能资格。重复录入同一secondary命令块需设置SIMULTANEOUS_USE，已按[Khronos规则](https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdExecuteCommands.html)启用；此前缺少该标志的predicted-pressure-batch.log不作为性能依据。
+
+
+2026-10-27：容量撤回改用活动单元／组／供体队列，余额增量更新，保留原512轮预算与真实七路偏好。`build/gpu-capacity-active-cut64.log` 原切格12轮、GPU3.209 ms；`build/gpu-capacity-active-upwind49.log` 同一长尾49轮、GPU6.030 ms（此前12.098），跨格量33,474,839,335,252,751 quanta；`build/gpu-capacity-active-granular32.log` 原颗粒39轮、GPU4.190 ms。三者供给、单元与有限组容量检查通过。初始化两次scan后须重新绑定容量管线，首轮错误执行已修复，相关异常耗时不用于算法判断。
+
+气体允许物种采用注册声明的固定槽，删除动态并集／扫描及独立species扩容；液体汇集直接写入精确体积，删除terms/results与独立measure/write。`build/gpu-resident-cut64-active-fixed-inventory.log` 原64³切格液气导热、3预热／12采样连续15步成功，中位54.761 ms、最大79.215 ms、GPU平均46.617 ms，逻辑设备4814.5 MiB、平均回读273.0 B。采样通常7–9次提交，末步19次；末步真实孔流求解40轮及增长上传计入成本。分项日志 `build/gpu-resident-cut64-active-fixed-inventory-profile.log` 中gather平均0.632 ms、gas-remap-prepare 0.438 ms、aperture-energy-gather 0.401 ms；队列竞争顺序使连续轨迹及迭代数有变化，不能将墙钟差全部归因单个内核。整体仍未达到50 ms，现有职责35 ms与十倍提速也未取得资格。
+
+`build/gpu-liquid-fused-gather-short.log` 复用尾束及完全排空短链，32³／64³汇集GPU0.734／5.910 ms，精确体积、质量、物种与能量检查通过；仅覆盖本次汇集合并风险，集中物理验证继续后置。

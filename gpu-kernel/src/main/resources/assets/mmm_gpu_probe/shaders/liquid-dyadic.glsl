@@ -146,4 +146,41 @@ int dyadicCompare(DyadicTerm left,DyadicTerm right) {
     return result.status==DYADIC_ZERO?0:result.status==DYADIC_NEGATIVE?-1:1;
 }
 
+// Exact canonical four-word sum for positive inputs. Wider aligned spans use dyadicMeasure.
+// Both the standalone sum pass and direct inventory publication share this register arithmetic.
+bool dyadicPositiveSum(DyadicTerm items[7],int itemCount,out int count,out int exponent,out uvec4 limbs) {
+    count=0;exponent=0;limbs=uvec4(0u);
+    int minimum=2147483647,present=0;int64_t maximum=int64_t(-9223372036854775807L);
+    for(int i=0;i<itemCount;i++)if(dyadicPresent(items[i])){
+        if(items[i].sign<0)return false;
+        minimum=min(minimum,items[i].exponent);present++;
+        int top=items[i].count-1;
+        maximum=max(maximum,int64_t(items[i].exponent)+int64_t(32)*int64_t(top)+int64_t(findMSB(dyadicWord(items[i].bank,items[i].offset+top))));
+    }
+    if(present==0)return true;
+    int headroom=present==1?0:findMSB(present-1)+1;
+    if(maximum-int64_t(minimum)>=int64_t(128-headroom))return false;
+    uvec4 sum=uvec4(0u);
+    for(int term=0;term<itemCount;term++)if(dyadicPresent(items[term])){
+        uint64_t carry=uint64_t(0);
+        for(int word=0;word<4;word++){
+            uint64_t value=uint64_t(sum[word])+uint64_t(dyadicAlignedWord(items[term],word,minimum))+carry;
+            sum[word]=uint(value);carry=value>>32;
+        }
+    }
+    int first=0;while(first<4&&sum[first]==0u)first++;
+    if(first==4)return false;
+    int last=3;while(sum[last]==0u)last--;
+    int trailing=findLSB(sum[first]),bits=32*(last-first)+findMSB(sum[last])-trailing+1;count=(bits+31)/32;
+    int64_t power=int64_t(minimum)+int64_t(32*first+trailing);
+    if(power>int64_t(2147483647)||power<int64_t(-2147483647)-int64_t(1))return false;
+    exponent=int(power);
+    for(int word=0;word<count;word++){
+        int index=first+word;uint value=sum[index]>>trailing;
+        if(trailing!=0&&index<3)value|=sum[index+1]<<(32-trailing);
+        limbs[word]=value;
+    }
+    return true;
+}
+
 #endif

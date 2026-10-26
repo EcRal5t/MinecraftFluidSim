@@ -16,7 +16,7 @@ public final class GpuEntityBodyCouplingBenchmark {
             var fixture=GpuLiquidGeometryBenchmark.fixture(grid,false,h);var liquid=VulkanLiquidStateLayout.forState(fixture.inventory(),fixture.momentum(),a);
             var geometry=GpuGasGeometryBenchmark.geometry(liquid,a);var totals=VulkanLiquidCellVolumes.layout(liquid,2*n,-40,geometry.endOffset(),a);
             var gasGeometry=VulkanGasGeometry.layout(totals,word(geometry.masks()),word(geometry.occupied()),word(geometry.cells()),word(geometry.planes()),word(geometry.micro()),true,h,totals.endOffset(),a);
-            var definitions=GpuGasGeometryBenchmark.gasDefinitions();var gas=new VulkanGasStateLayout(grid,grid,grid,n,2*n,definitions.definitions(),gasGeometry.endOffset(),a);
+            var definitions=GpuGasGeometryBenchmark.gasDefinitions();var gas=new VulkanGasStateLayout(grid,grid,grid,n,definitions.definitions(),gasGeometry.endOffset(),a);
             var thermal=VulkanGasThermodynamics.layout(gas,VulkanGasThermodynamics.tables(gas.definitions(),definitions.gas(),definitions.thermal(),mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY),Math.toIntExact(gas.endOffset()/4),gas.endOffset()+8L*n,a);
             int size=n+gas.nodeCapacity();long[] cursor={thermal.endOffset()};var starts=column(cursor,size+1,4,a);var columns=column(cursor,7*n+gas.nodeCapacity(),4,a);var values=column(cursor,columns.count(),8,a);var rows=column(cursor,size,4,a);
             var solution=column(cursor,size,8,a);var work=column(cursor,7*size,8,a);var meta=column(cursor,2*size,4,a);var problem=column(cursor,3*size+1,8,a);var control=column(cursor,16,8,a);

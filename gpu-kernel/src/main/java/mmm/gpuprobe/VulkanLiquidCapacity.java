@@ -70,6 +70,13 @@ final class VulkanLiquidCapacity implements AutoCloseable {
         stage(command,l,0,l.vertices,maximumRounds,0);
         stage(command,l,1,l.capacity.cells(),0,0);
         stage(command,l,24,l.capacity.groups(),0,0);stage(command,l,25,1,0,0);
+        stage(command,l,40,l.capacity.groups()+1,0,0);
+        stage(command,l,43,7*l.capacity.cells(),0,0);
+        stage(command,l,41,l.capacity.cells(),0,0);
+        recordGroupScan(command,l);stage(command,l,47,l.capacity.cells(),0,0);
+        stage(command,l,42,l.capacity.groups(),0,0);
+        scan.record(command,l.capacity.groups()+1,l.word(Field.LONG_BLOCK_COUNTS),l.word(Field.LONG_BLOCK_OFFSETS),l.word(Field.SCAN));
+        stage(command,l,44,l.capacity.groups(),0,0);stage(command,l,46,1,0,0);
     }
     private void buildResidualGraph(VkCommandBuffer command,Layout l){
         stage(command,l,30,l.capacity.groups(),0,0);
@@ -103,8 +110,9 @@ final class VulkanLiquidCapacity implements AutoCloseable {
                         stage(command,l,38,Math.multiplyExact(128,l.capacity.groups()+1),0,color);
                         stage(command,l,39,Math.multiplyExact(128,l.longBlocks),0,color);
                     }}
-                case 3->{stage(command,l,26,l.capacity.groups(),0,0);stage(command,l,27,l.capacity.cells(),0,0);
-                    stage(command,l,29,l.capacity.cells(),0,0);}
+                case 3->{stage(command,l,26,1,0,0);stage(command,l,27,l.capacity.cells(),0,0);
+                    stage(command,l,28,l.capacity.groups(),0,0);stage(command,l,45,128*l.longBlocks,0,0);
+                    stage(command,l,46,1,0,0);stage(command,l,29,l.capacity.cells(),0,0);}
                 case 6->buildResidualGraph(command,l);
                 default->throw new IllegalArgumentException("Unknown capacity phase "+phase);
             }
@@ -137,10 +145,10 @@ final class VulkanLiquidCapacity implements AutoCloseable {
     }
     private void recordStage(VkCommandBuffer command,Layout l,int stage,int count,int argument,int mode){
         try(var stack=stackPush()){
-            if(stage<=10||stage==21)bindings.bind(command,stack);vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,
+            if(stage<=10||stage==21||stage==44||stage==47)bindings.bind(command,stack);vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,
                     stack.ints(l.word(Field.HEADER),stage,count,argument,mode));int groups=(count+127)/128;
-            if(stage>=11&&stage<=15||stage==20||stage>=26&&stage<=29||stage>=35&&stage<=39){
-                int dispatch=switch(stage){case 11->0;case 13->1;case 35->2;case 36->3;case 37,39->6;case 38->4;case 26->13;case 27,29->9;default->5;};
+            if(stage>=11&&stage<=15||stage==20||stage>=27&&stage<=29||stage==45||stage>=35&&stage<=39){
+                int dispatch=switch(stage){case 11->0;case 13->1;case 35->2;case 36->3;case 37,39->6;case 38->4;case 27->9;case 28->10;case 29->11;case 45->12;default->5;};
                 vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+l.column(Field.DISPATCH).offset()+12L*dispatch);
             }else vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,

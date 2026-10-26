@@ -70,7 +70,7 @@ void balanceReceiver(int cell){
  int group=groupOf(cell);atomicAdd(integers[at(GROUP_INCOMING)/2+group],tail);
  if(capacityValue(CU,cell)>0l)atomicAdd(words[at(GROUP_COUNTS)+group],1u);
 }
-void scatterMember(int cell){if(capacityValue(CU,cell)<=0l)return;int group=groupOf(cell);
+void scatterMember(int cell){if(get(STATE,0)!=3&&capacityValue(CU,cell)<=0l)return;int group=groupOf(cell);
  int index=int(atomicAdd(words[at(GROUP_CURSORS)+group],1u));put(GROUP_MEMBERS,get(GROUP_OFFSETS,group)+index,cell);
 }
 void reduce(int lane){for(int step=64;step>0;step>>=1){barrier();if(lane<step)reduction[lane]=add(reduction[lane],reduction[lane+step]);}barrier();}
@@ -107,13 +107,15 @@ void balanceSink(){if(read(EXCESS,sink())>0l)atomicAdd(words[at(STATE)+4],1u);cl
 int vertexColor(int vertex){return vertex<n()||(vertex>=2*n()&&vertex<sink())?0:1;}
 void dispatchSize(int slot,int size){int workgroups=(size+127)/128;
  put(DISPATCH,3*slot,min(workgroups,65535));put(DISPATCH,3*slot+1,max(1,(workgroups+65534)/65535));put(DISPATCH,3*slot+2,1);}
+int queueCounter(int kind);
+int currentCellQueue();
 void updateDispatch(){bool running=control(0)==0&&get(STATE,16)!=0;int state=get(STATE,0);putControl(2,state);
  dispatchSize(0,running&&state==0?h(3):0);dispatchSize(1,running&&state==1?h(4):0);
  dispatchSize(2,running&&state==2?h(3):0);dispatchSize(3,running&&state==2?get(STATE,17):0);
  dispatchSize(4,running&&state==2?128*get(STATE,17):0);
  dispatchSize(6,running&&state==2?128*get(LONG_BLOCK_OFFSETS,get(STATE,17)):0);
  dispatchSize(5,running?1:0);
- dispatchSize(9,running&&state==3?n():0);dispatchSize(13,running&&state==3?groups():0);}
+ dispatchSize(9,running&&state==3?get(STATE,queueCounter(currentCellQueue())):0);}
 void start(){if(get(STATE,4)==0)putControl(0,1);else put(STATE,0,0);}
 void seedDistance(int vertex){if(get(STATE,0)!=0)return;put(LABEL_CHANGED,vertex,0);put(DISTANCE,vertex,read(EXCESS,vertex)<0l?0:INFINITY);}
 void beginBfs(){if(get(STATE,0)==0){put(STATE,0,1);put(STATE,1,0);put(STATE,2,0);put(STATE,5,0);}}
@@ -233,32 +235,64 @@ void notifyLongBlock(int block,int lane){
 // A feasible stationary allocation permits monotone withdrawal of conflicting preferences.
 void checkStationaryGroup(int group){if(read(GROUP_BASE,group)>upper(8*n()+group))atomicOr(words[at(STATE)+13],1u);}
 void startCorrection(){put(STATE,0,get(STATE,13)==0?3:6);}
-void clearRetractions(int id){
- if(id<groups()){write(GROUP_INCOMING,id,0l);write(GROUP_WITHDRAW,id,0l);}if(id==0)put(STATE,15,0);
+// Queue words reuse EXCESS while the stationary phase has no residual balances.
+// Three cell queues and two group queues fit its (2N+G+1) int64 slots.
+int queueAddress(int kind,int index){int base=kind==0?0:kind==1?n():kind==2?2*n():kind==3?3*n():3*n()+groups();return at(EXCESS)+base+index;}
+int queueCounter(int kind){return kind==0?9:kind==1?10:kind==2?11:kind==3?12:14;}
+int currentCellQueue(){return control(1)&1;}int currentGroupQueue(){return 3+(control(1)&1);}
+int epoch(){return control(1)+1;}
+void enqueue(int kind,int vertex,int stamp,int generation){
+ if(atomicExchange(words[at(DISTANCE)+stamp],uint(generation))==uint(generation))return;
+ uint index=atomicAdd(words[at(STATE)+queueCounter(kind)],1u);words[queueAddress(kind,int(index))]=uint(vertex);
 }
-// Each receiving cell owns the six incoming requests. The source combines them
-// with its lower bound and finite-group request during the only flow write pass.
-void actualIncoming(int cell){int64_t incoming=flow(7*cell);
+void enqueueCell(int cell,bool next){enqueue(next?1-currentCellQueue():currentCellQueue(),cell,cell,epoch()+(next?1:0));}
+void enqueueGroup(int group,bool next){if(group==groups()-1)return;enqueue(next?7-currentGroupQueue():currentGroupQueue(),group,2*n()+group,epoch()+(next?1:0));}
+void stationaryGroups(int group){
+ if(group<groups()){put(GROUP_COUNTS,group,0);put(GROUP_CURSORS,group,0);write(GROUP_INCOMING,group,0l);write(GROUP_WITHDRAW,group,0l);}put(LONG_BLOCK_COUNTS,group,0);
+}
+void stationaryIncoming(int cell){if(get(STATE,0)!=3)return;int64_t incoming=flow(7*cell);
  for(int side=0;side<6;side++){int donor=neighbor(cell,side);if(donor>=0)incoming=add(incoming,flow(7*donor+1+(side^1)));}
- write(CELL_INCOMING,cell,incoming);atomicAdd(integers[at(GROUP_INCOMING)/2+groupOf(cell)],incoming);
- int64_t excess=max(0l,incoming-capacityValue(CU,cell));
- for(int side=0;side<6;side++){int donor=neighbor(cell,side);if(donor<0)continue;
-  int e=7*donor+1+(side^1);int64_t take=min(excess,flow(e));write(PROPOSAL,e,take);excess-=take;
+ write(CELL_INCOMING,cell,incoming);int group=groupOf(cell);atomicAdd(integers[at(GROUP_INCOMING)/2+group],incoming);atomicAdd(words[at(GROUP_COUNTS)+group],1u);
+ if(incoming<capacityValue(CL,cell)||incoming>capacityValue(CU,cell))enqueueCell(cell,false);
+}
+void stationaryGroupQueue(int group){if(get(STATE,0)!=3)return;int count=get(GROUP_COUNTS,group);
+ put(LONG_BLOCK_COUNTS,group,group!=groups()-1&&count>16?(count+127)/128:0);
+ if(read(GROUP_INCOMING,group)>upper(8*n()+group))enqueueGroup(group,false);
+}
+void stationaryMap(int group){if(get(STATE,0)!=3)return;for(int block=get(LONG_BLOCK_OFFSETS,group);block<get(LONG_BLOCK_OFFSETS,group+1);block++)put(LONG_BLOCK_OWNER,block,group);}
+void clearRetractions(){if(get(STATE,0)!=3)return;
+ put(STATE,queueCounter(1-currentCellQueue()),0);put(STATE,queueCounter(7-currentGroupQueue()),0);put(STATE,11,0);put(STATE,15,0);
+ dispatchSize(9,get(STATE,queueCounter(currentCellQueue())));dispatchSize(10,get(STATE,queueCounter(currentGroupQueue())));
+ dispatchSize(12,get(STATE,queueCounter(currentGroupQueue()))>0?128*get(LONG_BLOCK_OFFSETS,groups()):0);
+}
+void retract(int edge,int64_t amount){if(amount<=0l)return;atomicMax(integers[at(PROPOSAL)/2+edge],amount);int donor=edge/7;enqueue(2,donor,n()+donor,epoch());}
+void requestCell(int index){if(index>=get(STATE,queueCounter(currentCellQueue())))return;int cell=int(words[queueAddress(currentCellQueue(),index)]);
+ int64_t incoming=read(CELL_INCOMING,cell),excess=max(0l,incoming-capacityValue(CU,cell)),deficit=max(0l,capacityValue(CL,cell)-incoming);
+ for(int side=0;side<6;side++){
+  int donor=neighbor(cell,side);if(donor>=0&&excess>0l){int edge=7*donor+1+(side^1);int64_t take=min(excess,flow(edge));retract(edge,take);excess-=take;}
+  int edge=7*cell+side+1;int64_t take=min(deficit,flow(edge));retract(edge,take);deficit-=take;
  }
 }
-void applyRetractions(int cell){
- int64_t returned=0l,deficit=max(0l,capacityValue(CL,cell)-read(CELL_INCOMING,cell));int sourceGroup=groupOf(cell);
- for(int side=0;side<6;side++){
-  int e=7*cell+side+1,receiver=neighbor(cell,side);int64_t amount=flow(e),take=min(deficit,amount);deficit-=take;
-  if(receiver>=0){take=max(take,read(PROPOSAL,e));int targetGroup=groupOf(receiver);
-   if(targetGroup!=sourceGroup&&targetGroup!=groups()-1){
-    int64_t over=max(0l,read(GROUP_INCOMING,targetGroup)-upper(8*n()+targetGroup));
-    if(amount>0l&&over>0l){int64_t ticket=atomicAdd(integers[at(GROUP_WITHDRAW)/2+targetGroup],amount);take=max(take,ticket<over?min(amount,over-ticket):0l);}
-   }
-  }
-  writeFlow(e,amount-take);returned+=take;
+void requestGroupCell(int group,int cell){int64_t over=max(0l,read(GROUP_INCOMING,group)-upper(8*n()+group));if(over==0l)return;
+ for(int side=0;side<6;side++){int donor=neighbor(cell,side);if(donor<0||groupOf(donor)==group)continue;int edge=7*donor+1+(side^1);int64_t amount=flow(edge);if(amount<=0l)continue;
+  int64_t ticket=atomicAdd(integers[at(GROUP_WITHDRAW)/2+group],amount);retract(edge,ticket<over?min(amount,over-ticket):0l);
  }
- if(returned>0l){writeFlow(7*cell,flow(7*cell)+returned);atomicOr(words[at(STATE)+15],1u);}
+}
+void requestGroup(int index){if(index>=get(STATE,queueCounter(currentGroupQueue())))return;int group=int(words[queueAddress(currentGroupQueue(),index)]);write(GROUP_WITHDRAW,group,0l);
+ if(get(LONG_BLOCK_COUNTS,group)==0)for(int at=get(GROUP_OFFSETS,group);at<get(GROUP_OFFSETS,group+1);at++)requestGroupCell(group,get(GROUP_MEMBERS,at));
+}
+void requestGroupBlock(int block,int lane){if(block>=get(LONG_BLOCK_OFFSETS,groups()))return;int group=get(LONG_BLOCK_OWNER,block);
+ if(get(DISTANCE,2*n()+group)!=epoch())return;
+ int index=get(GROUP_OFFSETS,group)+128*(block-get(LONG_BLOCK_OFFSETS,group))+lane;if(index<get(GROUP_OFFSETS,group+1))requestGroupCell(group,get(GROUP_MEMBERS,index));
+}
+void publishApply(){if(get(STATE,0)==3)dispatchSize(11,get(STATE,11));}
+void applyRetractions(int index){if(index>=get(STATE,11))return;int cell=int(words[queueAddress(2,index)]),sourceGroup=groupOf(cell);int64_t returned=0l;
+ for(int side=1;side<7;side++){int edge=7*cell+side;int64_t amount=read(PROPOSAL,edge);write(PROPOSAL,edge,0l);if(amount<=0l)continue;
+  writeFlow(edge,flow(edge)-amount);returned+=amount;int receiver=neighbor(cell,side-1),targetGroup=groupOf(receiver);
+  atomicAdd(integers[at(CELL_INCOMING)/2+receiver],-amount);enqueueCell(receiver,true);
+  if(targetGroup!=sourceGroup){atomicAdd(integers[at(GROUP_INCOMING)/2+targetGroup],-amount);atomicAdd(integers[at(GROUP_INCOMING)/2+sourceGroup],amount);enqueueGroup(targetGroup,true);enqueueGroup(sourceGroup,true);}
+ }
+ if(returned>0l){writeFlow(7*cell,flow(7*cell)+returned);atomicAdd(integers[at(CELL_INCOMING)/2+cell],returned);enqueueCell(cell,true);atomicOr(words[at(STATE)+15],1u);}
 }
 void finishRound(){
  int round=control(1)+1;putControl(1,round);
@@ -283,6 +317,7 @@ void main(){
  if(p.stage==0){if(id<p.count)initialize(id);return;}if(p.stage==21){if(id<p.count)finish(id);return;}if(control(0)!=0)return;
  if(p.stage==32){if(id==0){int state=get(STATE,0);put(STATE,16,(p.argument<=1?state<=1:state==p.argument)?1:0);updateDispatch();}return;}
  if(p.stage>=11&&p.stage!=24&&get(STATE,16)==0)return;
+ if(p.stage==45){requestGroupBlock(block,lane);return;}
  if(p.stage==37){pushLongBlock(block,lane);return;}
  if(p.stage==38){finishLong(block,lane);return;}
  if(p.stage==39){notifyLongBlock(block,lane);return;}
@@ -292,8 +327,11 @@ void main(){
  else if(p.stage==10)start();else if(p.stage==11)seedDistance(id);else if(p.stage==12)beginBfs();else if(p.stage==13)bfsEdge(id);
  else if(p.stage==14)finishBfs();else if(p.stage==15)beginDischarge(id);
  else if(p.stage==24)checkStationaryGroup(id);else if(p.stage==25)startCorrection();
- else if(p.stage==26)clearRetractions(id);else if(p.stage==27)actualIncoming(id);
+ else if(p.stage==26)clearRetractions();else if(p.stage==27)requestCell(id);else if(p.stage==28)requestGroup(id);
  else if(p.stage==29)applyRetractions(id);else if(p.stage==30)prepareGroups(id);
+ else if(p.stage==40)stationaryGroups(id);else if(p.stage==41)stationaryIncoming(id);else if(p.stage==42)stationaryGroupQueue(id);
+ else if(p.stage==47){if(get(STATE,0)==3)scatterMember(id);}
+ else if(p.stage==43){if(get(STATE,0)==3)write(PROPOSAL,id,0l);}else if(p.stage==44)stationaryMap(id);else if(p.stage==46)publishApply();
  else if(p.stage==35)dischargeShort(id);else if(p.stage==36)prepareLong(id);else if(p.stage==20)finishRound();
  if(p.stage==25||p.stage==10||p.stage==12||p.stage==14||p.stage==20)updateDispatch();
 }
