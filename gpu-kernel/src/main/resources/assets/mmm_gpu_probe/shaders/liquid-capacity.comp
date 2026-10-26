@@ -263,7 +263,9 @@ void stationaryGroupQueue(int group){if(get(STATE,0)!=3)return;int count=get(GRO
  if(read(GROUP_INCOMING,group)>upper(8*n()+group))enqueueGroup(group,false);
 }
 void stationaryMap(int group){if(get(STATE,0)!=3)return;for(int block=get(LONG_BLOCK_OFFSETS,group);block<get(LONG_BLOCK_OFFSETS,group+1);block++)put(LONG_BLOCK_OWNER,block,group);}
-void prepareStationaryRound(){if(get(STATE,0)!=3)return;
+void prepareStationaryRound(){if(get(STATE,0)!=3){
+ dispatchSize(9,0);dispatchSize(11,0);dispatchSize(12,0);dispatchSize(5,0);return;
+ }
  put(STATE,queueCounter(1-currentCellQueue()),0);put(STATE,queueCounter(7-currentGroupQueue()),0);put(STATE,11,0);put(STATE,15,0);
  bool running=control(0)==0;
  dispatchSize(9,running?get(STATE,queueCounter(currentCellQueue()))+get(STATE,queueCounter(currentGroupQueue())):0);

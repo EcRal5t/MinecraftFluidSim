@@ -961,3 +961,8 @@ phase3恢复32轮设备合批后的 `build/gpu-resident-cut64-batched-retraction
 
 
 混合精度接入实际GasOperator与结构多重网格后，`build/gpu-resident-cut64-mixed-pressure-active.log` 设备确认enabled=1、末步45次方向乘积。原64³连续15步完成，中位49.061 ms、最大86.819 ms、GPU平均45.139 ms，未优于原路径；采样后段真实残差升至0.019／2.012／4.166，最终原图RMS2.251，容量撤回216轮。现有完成判据允许PMAX相关roundoff floor增大，故status=1不能证明达到TARGET。统一缩放、正ground与成对FP32边权仍未解决大公共分量叠加小压力差的表示误差；未发现可直接修复的单位或索引错误，全部混合精度试验代码已删除，未增加预算或叠加稳定化。此结果只淘汰该路线，不证明完整GPU后端不可实现。
+
+
+2026-10-27 收尾：容量初始化进入一般残量求解时，清空原地撤回阶段遗留的间接派发。`build/gpu-capacity-forced-displacement64.log` 记录原64³派生强制排水输入的短重放：原512轮预算，87轮完成，墙钟59.875 ms、GPU28.595 ms、设备182.1 MiB；源额度、接收上下限和有限组容量检查全部通过，Gradle构建成功。输入为 `build/gpu-capacity-forced-displacement64.bin`，由原切格失败输入改变一个单元容量上限生成，强制沿有剩余容量的开放通路排出1量子。使用既有 `:gpu-kernel:runGpuLiquidCapacityReplay` 入口和 `gpuCapacityReplayFile` 属性。此次完成派发故障修复，容量成本仍高。
+
+GPU 工作结束时，保留的连续性能证据为 `build/gpu-resident-cut64-core-row-contract.log`：RTX 5070 Ti，原64³切格液气与导热，3预热／12采样，中位49.865 ms、最大66.170 ms、GPU平均44.473 ms、设备4810.3 MiB。完整生产职责尚有缺项，现有职责35 ms、全功能20 Hz及同场景十倍提速目标均未达成。输入和测量日志保存在本地 `build/`。

@@ -49,7 +49,7 @@ Minecraft Java 26.2 / Fabric 流体模组。玩家用外壳方块和控制器围
 
 主模组产物位于 `fabric/build/libs/`，可选 GPU probe 产物位于 `gpu-probe/build/libs/`。部署步骤见 [验收与发布](docs/roadmap/acceptance-and-release.md#release)。
 
-默认采用 CPU 计算。安装可选 GPU probe 后，可启用实验性 Vulkan 混合计算，将压力迭代和液体质量、物种分份交给设备；启动属性和当前计算范围见[运行时说明](docs/architecture/runtime-and-lifecycle.md#startup)。完整生产 GPU 后端正在开发。
+默认采用 CPU 计算。安装可选 GPU probe 后，可启用实验性 Vulkan 混合计算，将压力迭代和液体质量、物种分份交给设备；启动属性和当前计算范围见[运行时说明](docs/architecture/runtime-and-lifecycle.md#startup)。GPU 化工作已结束，当前保留实验实现；完整生产后端尚未完成，交付范围见[实施状态](docs/roadmap/solver-consolidation-plan.md)。
 
 构建缓存、实验输出与本地研究归档的保存位置和清理方式见 [构建输出管理](docs/maintenance/build-outputs.md)。
 
