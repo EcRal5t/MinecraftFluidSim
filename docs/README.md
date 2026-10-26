@@ -29,6 +29,7 @@
 | 后续玩家能力、产品阶段与范围 | [长期产品路线](roadmap/product-roadmap.md) |
 | 范围扩张与完整 GPU 后端要求 | [后端扩展参考](roadmap/performance-and-backends.md) |
 | GPU 重设计的固定方法原则、调研依据与换轨条件 | [GPU 完整步重设计只读备忘录](architecture/gpu-execution-principles.md) |
+| GPU 气体降维、整数可行性、切格稳态与热压力耦合的研究条件 | [深入调研补充（只读）](architecture/gpu-execution-research.md) |
 | 发布检查与部署 | [验收与发布](roadmap/acceptance-and-release.md) |
 | 随机操作与短重放 | [Fuzzer](maintenance/fuzz-harness.md) |
 | 游戏命令、Python 工具及输出清理 | [命令](maintenance/commands.md)、[pytool](maintenance/pytool.md)、[构建输出](maintenance/build-outputs.md) |
