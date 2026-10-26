@@ -14,6 +14,7 @@ layout(binding=9,std430) buffer Control { double control[]; };
 layout(binding=10,std430) buffer Partials { double partials[]; };
 layout(binding=11,std430) buffer Completion { uint errors; };
 layout(binding=12,std430) buffer StageDispatch { uvec4 stageDispatch[]; };
+layout(binding=13,std430) buffer GasProductDispatch { uint gasProductDispatch[]; };
 layout(push_constant) uniform Params { int count; int size; int maximumIterations; int stage; int groups; int externalPreconditioner; int liquidCount; int matrixFreeFromRow; } p;
 shared dvec4 scratch[256];
 int lane,n,gid,stride,group,ordinalCount,groupCount;
@@ -255,6 +256,18 @@ void executeStage(int stage) {
 void singleStage(int stage){executeStage(stage);syncAll();}
 void publishDispatches() {
     if(gid!=0)return;
+    if((p.externalPreconditioner&8)!=0){
+        bool direction=RUN!=0.0&&PHASE<3.0,refresh=REFRESH!=0.0;
+        for(int i=0;i<3;i++){
+            int source=i==0?3:i==1?6:30;
+            for(int mode=0;mode<2;mode++){
+                int target=3*((mode==0?4:7)+i);bool enabled=mode==0?direction:refresh;
+                gasProductDispatch[target]=enabled?gasProductDispatch[source]:0u;
+                gasProductDispatch[target+1]=enabled?gasProductDispatch[source+1]:1u;
+                gasProductDispatch[target+2]=1u;
+            }
+        }
+    }
     uint groups=uint(groupCount);
     stageDispatch[2]=uvec4(REFRESH!=0.0?groups:0u,1u,1u,0u);
     stageDispatch[4]=uvec4(RUN!=0.0||PHASE!=DONE?groups:0u,1u,1u,0u);

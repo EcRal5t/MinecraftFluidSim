@@ -29,6 +29,7 @@ final class VulkanPressureKernel implements AutoCloseable {
         default void recordPreconditioner(VkCommandBuffer command){ }
         default Object preconditionerKey(){return null;}
         default ParallelRows parallelRows(){return null;}
+        default FlipKernelBindings.BufferRange productDispatch(){return null;}
     }
     /** Compact physical row keys and the device-resident VkDispatchIndirectCommand for parallel stages. */
     record ParallelRows(FlipKernelBindings.BufferRange rows,GpuBuffer buffer,long offset) { }
@@ -43,6 +44,7 @@ final class VulkanPressureKernel implements AutoCloseable {
         @Override public int liquidCount() { return layout.liquidCount(); }
         @Override public int matrixFreeFromRow() { return layout.liquidCount(); }
         @Override public ParallelRows parallelRows() { return kernel.parallelRows(layout); }
+        @Override public FlipKernelBindings.BufferRange productDispatch(){return kernel.productDispatch(layout);}
         @Override public void recordProduct(VkCommandBuffer command, boolean direction) {
             kernel.recordProduct(command, layout, direction);
         }
@@ -59,19 +61,22 @@ final class VulkanPressureKernel implements AutoCloseable {
         dispatchResources = new FlipGpuResources(context);
         try {
             stageDispatch = dispatchResources.addDeviceStorage(16L * 10);
-            bindings = new FlipKernelBindings(context, 13, shader(), 32);
+            bindings = new FlipKernelBindings(context, 14, shader(), 32);
         } catch (RuntimeException | Error failure) { dispatchResources.close(); throw failure; }
     }
 
     void rebind(FlipGpuResources resources) { rebindRanges(java.util.stream.IntStream.range(0,resources.size()).mapToObj(i->new FlipKernelBindings.BufferRange(resources.buffer(i))).toList()); }
     void rebindRanges(List<FlipKernelBindings.BufferRange> buffers) {
-        var ranges=new java.util.ArrayList<>(buffers);ranges.add(new FlipKernelBindings.BufferRange(stageDispatch));
+        var ranges=new java.util.ArrayList<>(buffers);ranges.add(new FlipKernelBindings.BufferRange(stageDispatch));ranges.add(new FlipKernelBindings.BufferRange(stageDispatch));
         baseRanges=List.copyOf(ranges);parallelRows=null;bindings.rebindRanges(baseRanges);
     }
     private void selectRows(PressureOperator operator){
         parallelRows=operator==null?null:operator.parallelRows();
-        if(parallelRows==null)bindings.rebindRanges(baseRanges);
-        else{var ranges=new java.util.ArrayList<>(baseRanges);ranges.set(3,parallelRows.rows());bindings.rebindRanges(ranges);}
+        var ranges=new java.util.ArrayList<>(baseRanges);
+        if(parallelRows!=null)ranges.set(3,parallelRows.rows());
+        var products=operator==null?null:operator.productDispatch();
+        if(products!=null)ranges.set(13,products);
+        bindings.rebindRanges(ranges);
     }
 
     void record(VkCommandBuffer command, int size, int count, int maximumIterations) {
@@ -177,7 +182,7 @@ final class VulkanPressureKernel implements AutoCloseable {
         }
         try (var stack = stackPush()) {
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                    stack.ints(count, size, maximumIterations, stage, groups,(gas!=null&&gas.hasPreconditioner()?2:external?1:0)|(parallelRows!=null?4:0), gas == null ? size : gas.liquidCount(), gas == null ? size : gas.matrixFreeFromRow()));
+                    stack.ints(count, size, maximumIterations, stage, groups,(gas!=null&&gas.hasPreconditioner()?2:external?1:0)|(parallelRows!=null?4:0)|(gas!=null&&gas.productDispatch()!=null?8:0), gas == null ? size : gas.liquidCount(), gas == null ? size : gas.matrixFreeFromRow()));
             boolean parallel = stage == 0 || stage == 2 || stage == 4 || stage == 6 || stage == 7 || stage == 9;
             if(parallel&&stage!=0){
                 barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);

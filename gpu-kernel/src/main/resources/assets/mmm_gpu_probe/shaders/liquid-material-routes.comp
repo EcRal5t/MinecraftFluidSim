@@ -193,7 +193,7 @@ void partitionLayer(int cell,int first,int last,int slot,int layer,inout DyadicT
         // Recreate a normalized three-word-free descriptor through the local proposal bank.
         double amount=initialHead*ratio;int power=0;double mantissa=frexp(amount,power);
         uint64_t bits=uint64_t(ldexp(mantissa,53));
-        int64_t exponent=initialPower+int64_t(power)-int64_t(53),minimum=int64_t(int(candidateWords[h(12)+cell]));
+        int64_t exponent=initialPower+int64_t(power)-int64_t(53),minimum=int64_t(h(63));
         if(exponent<minimum) { int64_t shift=minimum-exponent;bits=shift>=int64_t(64)?uint64_t(0):bits>>int(shift);exponent=minimum; }
         DyadicTerm wanted=zero();
         if(bits!=uint64_t(0)) {
@@ -234,6 +234,9 @@ void prepareCandidates(int cell){
  [[dont_unroll]] for(int stock=first;stock<last;stock++){uint selected=dyadicPresent(sourceVolume(stock))?mask:0u;
   candidateWords[h(62)+stock]=uint(bitCount(selected));candidateWords[route(R_SOURCE_MASKS)+stock]=selected;}
 }
+// Candidate masks already encode exact source presence, including fixed empty material slots.
+int soleSource(int first,int last){int sole=-1;for(int stock=first;stock<last;stock++)if(candidateWords[route(R_SOURCE_MASKS)+stock]!=0u){if(sole>=0)return -2;sole=stock;}return sole;}
+bool hasCrossRoute(int first,int last){for(int stock=first;stock<last;stock++)if((candidateWords[route(R_SOURCE_MASKS)+stock]&~1u)!=0u)return true;return false;}
 void reserve(int cell) {
     int count=candidateCount(),base=count+3*cell;
     if(cell==0){candidateWords[route(R_COUNTS)]=uint(count);candidateWords[route(R_COUNTS)+1]=uint(count+3*h(0));}
@@ -243,7 +246,7 @@ void reserve(int cell) {
         int entry=routeIndex(stock,slot);if(entry<0)continue;
         candidateWords[h(8)+entry]=0u;candidateWords[route(R_SLOTS)+entry]=uint(slot);saveRoute(entry,zero());
     }
-    if(errors!=0u||last<=first+1||(first<last&&candidateWords[route(R_SOURCE_MASKS)+first]==1u))return;
+    if(errors!=0u||soleSource(first,last)!=-2||!hasCrossRoute(first,last))return;
     int minimum=2147483647;int64_t maximum=int64_t(-9223372036854775807L);
     [[dont_unroll]] for(int stock=first;stock<last;stock++) {
         DyadicTerm value=sourceVolume(stock);if(!dyadicPresent(value))continue;
@@ -254,8 +257,9 @@ void reserve(int cell) {
         if(dyadicPresent(value)){minimum=min(minimum,value.exponent);maximum=max(maximum,highBit(value));}
     }
     if(minimum==2147483647&&maximum==int64_t(-9223372036854775807L))return;
-    if(minimum<(-2147483647+53)){fail();return;}
-    minimum-=53;candidateWords[h(12)+cell]=uint(minimum);
+    // Workspace spans existing exact tails and a fixed proportional-allocation lattice.
+    // New proportional targets use the same precision on every step.
+    minimum=min(minimum,h(63));
     [[dont_unroll]] for(int stock=first;stock<last;stock++) {
         DyadicTerm value=sourceVolume(stock);int width=dyadicPresent(value)?reserveWidth(highBit(value),minimum):1;
         for(int slot=0;slot<7;slot++){int entry=routeIndex(stock,slot);if(entry>=0)candidateWords[h(8)+entry]=uint(width);}
@@ -266,9 +270,11 @@ void splitCell(int cell) {
     if(candidateWords[h(9)+h(60)]>uint(h(6))){atomicOr(errors,64u);return;}
     int first=int(sourceWords[src(CELL_OFFSETS)+cell]),last=int(sourceWords[src(CELL_OFFSETS)+cell+1]);
     // Capacity already partitions this cell's exact total. One material inherits those seven pieces directly.
-    if(last==first+1){for(int slot=0;slot<7;slot++){int entry=routeIndex(first,slot);if(entry>=0)saveRoute(entry,accepted(cell,slot));}return;}
+    int sole=soleSource(first,last);
+    if(sole>=0){for(int slot=0;slot<7;slot++){int entry=routeIndex(sole,slot);if(entry>=0)saveRoute(entry,accepted(cell,slot));}return;}
+    if(sole==-1)return;
     [[dont_unroll]] for(int stock=first;stock<last;stock++){int entry=routeIndex(stock,0);if(entry>=0)saveRoute(entry,sourceVolume(stock));}
-    if(failed||first==last||(candidateWords[route(R_SOURCE_MASKS)+first]==1u))return;
+    if(failed||!hasCrossRoute(first,last))return;
     bool vertical=p.gravitySign!=0&&(dyadicPresent(accepted(cell,3))||dyadicPresent(accepted(cell,4)));
     if(vertical)prepareDensity(first,last);
     int down=p.gravitySign>0?4:3,up=down==3?4:3;

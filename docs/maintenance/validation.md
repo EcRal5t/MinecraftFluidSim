@@ -907,3 +907,9 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 原输入统计显示颗粒违例约为偏好跨格运输的1.37e-7，11,758个有液体格满足K=L=U；原地库存满足全部单元与组约束，且该输入没有触发供体限流。此前限制迭代撤回的失败来自已纠正的shared-flux映射，因此恢复真实PLIC下的迭代偏好撤回，保留原地库存不可行时的统一残量图。`build/gpu-capacity-granular32-restored-retraction.log` 为39轮／GPU4.296 ms，`build/gpu-capacity-cut64-restored-retraction.log` 为12轮／GPU3.887 ms，均通过内置整数约束检查；颗粒保留99.9999787%的偏好搬运量。
 
 phase3恢复32轮设备合批后的 `build/gpu-resident-cut64-batched-retraction.log` 原64³液气＋导热连续15步完成：中位73.161 ms、最大170.380 ms、GPU平均61.767 ms，末步容量14轮。包含第11代实际长值存储增长；普通采样8至14次提交。容量短重放提速没有使整步达标，完整GPU化与50 ms目标仍未完成，集中物理验证继续后置。
+
+2026-10-27：材料比例分份采用固定容量量子以下53位的精度，保留既有精确尾数并恢复固定槽下的实际单材料／无跨格流快速路径；黏性面与热结算复用应变分类，压力气体乘积使用紧凑短行与无工作零组派发。`build/gpu-resident-cut64-bounded-material-profile.log` 原64³连续15步完成，中位66.356 ms、最大118.074 ms、GPU平均60.963 ms，设备4859.4 MiB；第11代库存扩容已消失。末步材料split由此前4.367降至2.165 ms；黏性多数步约3.2至3.6 ms，但末步4.737 ms。末步容量151轮、project-capacity46.781 ms，说明真实PLIC下仍有撤回长尾，整步仍超预算。
+
+后续无分项运行 `build/gpu-resident-cut64-bounded-material.log` 完成15步、中位61.197 ms，随后因诊断导出使用相对路径而失败；该日志不作为完整退出成功证据。新增 `-PgpuMechanicalCapacityDump=<绝对路径>` 保存采样期间轮数最多的实际容量输入，复用原短重放格式；开启时汇总指标含诊断回读，性能资格使用关闭导出的运行。
+
+`build/gpu-resident-cut64-capacity-capture.log` 的诊断运行连续完成15步，保存 `build/gpu-liquid-capacity-upwind-current.bin`；该次最多15轮，未重现前一次151轮长尾。关闭分项与不同调度下存在轨迹差异，当前文件只能称为当前真实输入，不能称为已捕获151轮状态。

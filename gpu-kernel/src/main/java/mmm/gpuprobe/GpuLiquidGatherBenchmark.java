@@ -35,7 +35,7 @@ public final class GpuLiquidGatherBenchmark {
         long acceptedBase=speciesReference+32,phaseBase=acceptedBase+140L*cells,acceptedLimb=phaseBase+8;
         int scratchLimbs=Math.multiplyExact(7*stocks+3*cells,4);
         var materialLayout=VulkanLiquidMaterialRoutes.layout(state,routes,Math.toIntExact(acceptedBase/4),
-                Math.toIntExact(phaseBase/4),-1,scratchLimbs,acceptedLimb+8,alignment);
+                Math.toIntExact(phaseBase/4),-1,-3,scratchLimbs,acceptedLimb+8,alignment);
         System.out.println("material_route_capacity grid="+grid+" scratch_limbs="+scratchLimbs);
         var quantityLayout=VulkanLiquidRouteQuantities.layout(state,routes,Math.toIntExact(materialReference/4),
                 Math.toIntExact(speciesReference/4),2,materialLayout.endOffset(),alignment);

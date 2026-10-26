@@ -352,6 +352,7 @@ final class VulkanPressureGraphPreconditioner implements AutoCloseable {
             public int liquidCount(){return physical==null?source.rows:physical.liquidCount();}
             public int matrixFreeFromRow(){return physical==null?source.rows:physical.matrixFreeFromRow();}
             public void recordProduct(VkCommandBuffer command,boolean direction){if(physical!=null)physical.recordProduct(command,direction);}
+            public FlipKernelBindings.BufferRange productDispatch(){return physical==null?null:physical.productDispatch();}
             public boolean hasPreconditioner(){return true;}
             public VulkanPressureKernel.ParallelRows parallelRows(){
                 var root=levels.getFirst().memory;var keys=root.column(L.ROW_KEY);

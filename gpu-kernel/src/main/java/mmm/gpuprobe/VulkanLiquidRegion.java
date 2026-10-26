@@ -220,6 +220,12 @@ final class VulkanLiquidRegion implements AutoCloseable {
     }
     synchronized void initializeInputs(mmm.fluid.EntityBodyState bodies){currentInputs=new RequestInputs(bodies,false,0);}
     synchronized Capture captureState(){return new Capture(storage.capture(),workspace,currentGasThermal,currentGeometryValid,currentInputs);}
+    void dumpCapacityInput(String path){
+        try(var source=captureState()){
+            var capacity=source.layout.transport.capacity;
+            VulkanLiquidCapacity.dump(capacity,source.read(capacity.baseOffset(),capacity.bytes()),path);
+        }
+    }
     /** Explicit performance diagnostics, called outside continuous-step timing. */
     void dumpGasFlowGraph(java.nio.file.Path path,double duration){
         try(var source=captureState()){
@@ -1039,7 +1045,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             capacitySolve=new VulkanLiquidCapacity.Layout(capacity,capacityInputs.endOffset(),liquid.alignment());
             accepted=VulkanLiquidAcceptedVolumes.layout(volumes,capacity.word(VulkanLiquidCapacityLayout.Field.ACCEPTED),
                     capacitySolve.endOffset(),liquid.alignment(),Math.addExact(volumes.limbCapacity(),Math.multiplyExact(cells,14)));
-            materials=VulkanLiquidMaterialRoutes.layout(liquid,routes,word(accepted.descriptors()),word(phaseTable),-1,
+            materials=VulkanLiquidMaterialRoutes.layout(liquid,routes,word(accepted.descriptors()),word(phaseTable),-1,accepted.sourceCellVolumes().quantumExponent(),
                     Math.multiplyExact(7*stocks+3*cells,definitions.scratchLimbsPerWindow()),accepted.endOffset(),liquid.alignment());
             quantities=VulkanLiquidRouteQuantities.layout(liquid,routes,word(materialReference),word(speciesReference),definitions.speciesStride(),materials.endOffset(),liquid.alignment());
             gather=VulkanLiquidGather.layout(liquid,liquid,routes,word(geometry.get(GeometryField.FIXED_MASKS)),word(massTable),quantities.endOffset(),liquid.alignment());

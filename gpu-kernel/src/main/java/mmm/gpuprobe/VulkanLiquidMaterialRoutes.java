@@ -10,14 +10,14 @@ import static mmm.gpuprobe.VulkanRegionStorage.barrier;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
 
-/** Splits accepted exact cell volumes among materials, preserving every stock's exact remainder. */
+/** Fixed-precision proportional targets split accepted volumes; every stock remainder stays exact. */
 final class VulkanLiquidMaterialRoutes implements AutoCloseable {
     record Layout(VulkanLiquidStateLayout source, VulkanLiquidRouteLayout routes,
                   int acceptedDescriptorsWordOffset, int materialPhaseWordOffset, int gravitySign,
-                  int scratchLimbCapacity, VulkanLiquidStateLayout.Column header,
+                  int proposalFloorExponent, int scratchLimbCapacity, VulkanLiquidStateLayout.Column header,
                   VulkanLiquidStateLayout.Column reserveCounts, VulkanLiquidStateLayout.Column reserveOffsets,
                   VulkanLiquidStateLayout.Column scratchLimbs,
-                  VulkanLiquidStateLayout.Column minimumExponents, VulkanLiquidStateLayout.Column weights,
+                  VulkanLiquidStateLayout.Column weights,
                   VulkanLiquidStateLayout.Column densities, VulkanLiquidStateLayout.Column densityExponents,
                   VulkanLiquidStateLayout.Column scanWorkspace,
                   VulkanLiquidStateLayout.Column activeCounts, long endOffset) {
@@ -36,11 +36,11 @@ final class VulkanLiquidMaterialRoutes implements AutoCloseable {
             data[3] = acceptedDescriptorsWordOffset; data[4] = materialPhaseWordOffset; data[5] = gravitySign;
             data[6] = scratchLimbCapacity;
             data[8] = word(reserveCounts); data[9] = word(reserveOffsets); data[10] = word(scratchLimbs);
-            data[12] = word(minimumExponents); data[13] = word(weights);
+            data[13] = word(weights);
             data[14] = word(densities); data[15] = word(densityExponents);
             for (var field : VulkanLiquidStateLayout.Field.values()) data[16 + field.ordinal()] = word(source.column(field));
             for (var field : VulkanLiquidRouteLayout.Field.values()) data[35 + field.ordinal()] = word(routes.column(field));
-            data[60] = windowCount();data[62]=word(activeCounts);
+            data[60] = windowCount();data[62]=word(activeCounts);data[63]=proposalFloorExponent;
             for (int i = 0; i < data.length; i++) target.putInt(Math.toIntExact(0 + 4L * i), data[i]);
         
             return target;
@@ -52,7 +52,7 @@ final class VulkanLiquidMaterialRoutes implements AutoCloseable {
      */
     static Layout layout(VulkanLiquidStateLayout source, VulkanLiquidRouteLayout routes,
                          int acceptedDescriptorsWordOffset, int materialPhaseWordOffset, int gravitySign,
-                         int scratchLimbCapacity, long scratchBase, long alignment) {
+                         int capacityQuantumExponent, int scratchLimbCapacity, long scratchBase, long alignment) {
         if (routes.sourceStockCapacity() < source.stockCapacity() || scratchBase < routes.endOffset()
                 || alignment < 8 || (alignment & (alignment - 1)) != 0 || scratchLimbCapacity < 0
                 || Math.abs(gravitySign) > 1)
@@ -63,14 +63,13 @@ final class VulkanLiquidMaterialRoutes implements AutoCloseable {
         var counts = column(cursor, windows, 4, alignment);
         var offsets = column(cursor, Math.addExact(windows, 1), 4, alignment);
         var limbs = column(cursor, scratchLimbCapacity, 4, alignment);
-        var minimum = column(cursor, source.cellCount(), 4, alignment);
         var weights = column(cursor, source.stockCapacity(), 8, alignment);
         var densities = column(cursor, source.stockCapacity(), 8, alignment);
         var densityExponents = column(cursor, source.stockCapacity(), 8, alignment);
         var activeCounts=column(cursor,source.stockCapacity(),4,alignment);
         var scan = column(cursor, Math.toIntExact(VulkanPrefixScan.workspaceBytes(windows) / 4), 4, alignment);
         return new Layout(source, routes, acceptedDescriptorsWordOffset, materialPhaseWordOffset, gravitySign,
-                scratchLimbCapacity, header, counts, offsets, limbs, minimum, weights,
+                Math.subtractExact(capacityQuantumExponent,53),scratchLimbCapacity, header, counts, offsets, limbs, weights,
                 densities, densityExponents, scan, activeCounts, align(cursor[0], alignment));
     }
 

@@ -272,6 +272,7 @@ registerGpuProbe(
     probeTask.systemProperty 'mmm.gpuApertureFailureDump', rootProject.layout.buildDirectory.file('gpu-aperture-failure.bin').get().asFile.absolutePath
     probeTask.systemProperty 'mmm.gpuMechanicalStages', providers.gradleProperty('gpuMechanicalStages').getOrElse('false')
     probeTask.systemProperty 'mmm.gpuMechanicalPressureDump', providers.gradleProperty('gpuMechanicalPressureDump').getOrElse('')
+    probeTask.systemProperty 'mmm.gpuMechanicalCapacityDump', providers.gradleProperty('gpuMechanicalCapacityDump').getOrElse('')
     probeTask.systemProperty 'mmm.gpuMechanicalCommonPressureDump', providers.gradleProperty('gpuMechanicalCommonPressureDump').getOrElse('')
     if (providers.gradleProperty('gpuMechanicalJfr').getOrElse('false').toBoolean()) {
         probeTask.jvmArgs "-XX:StartFlightRecording=filename=${rootProject.layout.buildDirectory.file('gpu-liquid-mechanical.jfr').get().asFile.absolutePath},settings=profile,dumponexit=true"

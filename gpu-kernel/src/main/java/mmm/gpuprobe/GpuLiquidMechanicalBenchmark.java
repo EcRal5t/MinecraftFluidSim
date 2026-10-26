@@ -71,12 +71,19 @@ public final class GpuLiquidMechanicalBenchmark {
                 catch(IllegalStateException failure){throw new IllegalStateException("Mechanical warmup step="+step+" failed",failure);}
             var before=region.metrics();long[] times=new long[samples],gpuTimes=new long[samples],uploads=new long[samples],reads=new long[samples],recordings=new long[samples],waits=new long[samples],submissions=new long[samples];
             var pressureProgress=new VulkanPressureKernel.Progress[samples];
+            String capacityDump=System.getProperty("mmm.gpuMechanicalCapacityDump","");int capturedCapacityRounds=-1;
+            if(!capacityDump.isBlank())System.out.println("capacity_capture enabled; aggregate metrics include diagnostic readbacks");
             for(int step=0;step<samples;step++) {
                 var stepBefore=region.metrics();long start=System.nanoTime();
                 try{region.advanceMechanical(parameters,512);}catch(IllegalStateException failure){throw new IllegalStateException("Mechanical sample step="+step+" failed",failure);}
                 times[step]=System.nanoTime()-start;
                 var stepAfter=region.metrics();gpuTimes[step]=stepAfter.gpuNanos()-stepBefore.gpuNanos();uploads[step]=stepAfter.uploadBytes()-stepBefore.uploadBytes();reads[step]=stepAfter.readbackBytes()-stepBefore.readbackBytes();recordings[step]=stepAfter.recordingNanos()-stepBefore.recordingNanos();waits[step]=stepAfter.waitingNanos()-stepBefore.waitingNanos();submissions[step]=stepAfter.submissions()-stepBefore.submissions();
                 pressureProgress[step]=region.pressureProgress();
+                if(!capacityDump.isBlank()){
+                    int rounds=region.capacityDiagnostics()[1];
+                    if(rounds>capturedCapacityRounds){region.dumpCapacityInput(capacityDump);capturedCapacityRounds=rounds;
+                        System.out.printf("capacity_capture sample=%d rounds=%d path=%s%n",step,rounds,capacityDump);}
+                }
             }
             var after=region.metrics();long[] sorted=times.clone();Arrays.sort(sorted);
             System.out.printf("%d,%d,%.3f,%.3f,%.3f,%.1f,%.1f,%.1f,%.1f%n",grid,samples,sorted[samples/2]*1e-6,sorted[samples-1]*1e-6,

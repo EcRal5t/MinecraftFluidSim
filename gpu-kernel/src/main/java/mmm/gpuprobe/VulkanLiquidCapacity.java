@@ -152,10 +152,14 @@ final class VulkanLiquidCapacity implements AutoCloseable {
         if(path==null||path.isBlank())return "";
         var data=java.nio.ByteBuffer.allocate(Math.toIntExact(layout.bytes())).order(java.nio.ByteOrder.LITTLE_ENDIAN);
         candidate.read(layout.baseOffset(),data);
+        data.flip();return dump(layout,data,path);
+    }
+    static String dump(VulkanLiquidCapacityLayout layout,ByteBuffer data,String path){
         var header=java.nio.ByteBuffer.allocate(32).order(java.nio.ByteOrder.LITTLE_ENDIAN);
         header.putLong(0x4d4d4d4341503031L).putLong(layout.baseOffset()).putLong(layout.bytes()).putLong(layout.column(VulkanLiquidCapacityLayout.Field.HEADER).offset());
         var target=java.nio.file.Path.of(path);
-        try(var output=java.nio.file.Files.newOutputStream(target)){output.write(header.array());output.write(data.array());}
+        byte[] bytes=new byte[data.remaining()];data.get(bytes);
+        try(var output=java.nio.file.Files.newOutputStream(target)){output.write(header.array());output.write(bytes);}
         catch(java.io.IOException failure){throw new IllegalStateException("Cannot preserve capacity failure at "+target,failure);}
         return target.toAbsolutePath().toString();
     }
