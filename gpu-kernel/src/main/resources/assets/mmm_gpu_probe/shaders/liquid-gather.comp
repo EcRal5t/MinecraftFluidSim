@@ -11,8 +11,7 @@ const int COUNTS=0,CELL_OFFSETS=1,MATERIALS=2,SUPPORT_MASKS=3,VOLUME_OFFSETS=4,V
           VOLUME_LIMBS=7,MASS_UNITS=8,ENERGY_BITS=9,MIXTURE_PRESENT=10,SPECIES_OFFSETS=11,SPECIES_HANDLES=12,
           SPECIES_AMOUNTS=13,MASS_RESIDUAL=14,NUMERIC_VOLUMES=15;
 const int ROUTE_DESCRIPTORS=0,ROUTE_MASS=1,ROUTE_ENERGY=2,ROUTE_MIXTURE=3,
-          ROUTE_SPECIES_OFFSETS=4,ROUTE_SPECIES_HANDLES=5,ROUTE_SPECIES_AMOUNTS=6,
-          ROUTE_SOURCE_OFFSETS=7,ROUTE_SLOTS=8,ROUTE_SOURCE_MASKS=10;
+          ROUTE_SPECIES_AMOUNTS=4,ROUTE_SOURCE_OFFSETS=5,ROUTE_SLOTS=6,ROUTE_SOURCE_MASKS=8;
 const int64_t MAX_LONG=int64_t(0x7fffffffffffffffUL);
 int h(int field) { return int(candidateWords[p.header+field]); }
 int src(int field) { return h(16+field); }
@@ -42,9 +41,19 @@ void clearStock(int stock) {
     for(int i=0;i<7;i++){putDouble(h(14)+14*stock+2*i,0.0);}
 }
 
-int seekSpecies(int entry,int end) {
+void sourceNeighbors(int stock,out int sources[7],out int directions[7]) {
+    int material=stock%h(9),cell=stock/h(9);
+    ivec3 shape=ivec3(h(0),h(1),h(2)),at=ivec3(cell%shape.x,cell/shape.x%shape.y,cell/(shape.x*shape.y));
+    for(int i=0;i<7;i++){
+        sources[i]=-1;directions[i]=0;ivec3 other=at;
+        if(i>0){int side=i-1;other[side/2]+=(side&1)==0?-1:1;directions[i]=(side^1)+1;}
+        if(any(lessThan(other,ivec3(0)))||any(greaterThanEqual(other,shape)))continue;
+        sources[i]=((other.z*shape.y+other.y)*shape.x+other.x)*h(9)+material;
+    }
+}
+int seekSpecies(int entry,int end,int direction) {
     while(entry<end) {
-        int64_t amount=longAt(route(ROUTE_SPECIES_AMOUNTS)+2*entry);
+        int64_t amount=longAt(route(ROUTE_SPECIES_AMOUNTS)+2*(7*entry+direction));
         if(amount>int64_t(0))break;
         if(amount<int64_t(0))atomicOr(errors,32u);
         entry++;
@@ -53,22 +62,24 @@ int seekSpecies(int entry,int end) {
 }
 
 // Each accepted route has sorted, unique species handles. Seven-way merge preserves that order.
-int mergeSpecies(int members[7],int outputStart,bool writing,out int64_t representedMass) {
-    int cursors[7],ends[7];representedMass=int64_t(0);
+int mergeSpecies(int stock,int members[7],int outputStart,bool writing,out int64_t representedMass) {
+    int cursors[7],ends[7],sources[7],directions[7];representedMass=int64_t(0);
+    if(sourceWords[src(COUNTS)+1]==0u)return 0;
+    sourceNeighbors(stock,sources,directions);
     for(int i=0;i<7;i++) {
-        cursors[i]=members[i]<0?0:int(candidateWords[route(ROUTE_SPECIES_OFFSETS)+members[i]]);
-        ends[i]=members[i]<0?0:int(candidateWords[route(ROUTE_SPECIES_OFFSETS)+members[i]+1]);
-        cursors[i]=seekSpecies(cursors[i],ends[i]);
+        cursors[i]=members[i]<0?0:int(sourceWords[src(SPECIES_OFFSETS)+sources[i]]);
+        ends[i]=members[i]<0?0:int(sourceWords[src(SPECIES_OFFSETS)+sources[i]+1]);
+        cursors[i]=seekSpecies(cursors[i],ends[i],directions[i]);
     }
     int count=0;
     while(true) {
         int handle=2147483647;bool found=false;
-        for(int i=0;i<7;i++)if(cursors[i]<ends[i]){handle=min(handle,int(candidateWords[route(ROUTE_SPECIES_HANDLES)+cursors[i]]));found=true;}
+        for(int i=0;i<7;i++)if(cursors[i]<ends[i]){handle=min(handle,int(sourceWords[src(SPECIES_HANDLES)+cursors[i]]));found=true;}
         if(!found)break;
         int64_t amount=int64_t(0);
-        for(int i=0;i<7;i++)if(cursors[i]<ends[i]&&int(candidateWords[route(ROUTE_SPECIES_HANDLES)+cursors[i]])==handle) {
-            amount=addQuantity(amount,longAt(route(ROUTE_SPECIES_AMOUNTS)+2*cursors[i]));
-            cursors[i]=seekSpecies(cursors[i]+1,ends[i]);
+        for(int i=0;i<7;i++)if(cursors[i]<ends[i]&&int(sourceWords[src(SPECIES_HANDLES)+cursors[i]])==handle) {
+            amount=addQuantity(amount,longAt(route(ROUTE_SPECIES_AMOUNTS)+2*(7*cursors[i]+directions[i])));
+            cursors[i]=seekSpecies(cursors[i]+1,ends[i],directions[i]);
         }
         if(writing) {
             candidateWords[dst(SPECIES_HANDLES)+outputStart+count]=uint(handle);
@@ -102,22 +113,18 @@ void gatherStock(int stock,int cell,int members[7]) {
     putLong(dst(MASS_UNITS)+2*stock,mass);putDouble(dst(ENERGY_BITS)+2*stock,energy);
     candidateWords[dst(MIXTURE_PRESENT)+stock]=mixture;
     int64_t unused;
-    candidateWords[h(11)+stock]=uint(mergeSpecies(members,0,false,unused));
+    candidateWords[h(11)+stock]=uint(mergeSpecies(stock,members,0,false,unused));
 }
 
 // Fixed slots gather the same material from the retained route and six actual neighbors.
 void gatherSlot(int stock) {
-    int material=stock%h(9),cell=stock/h(9),members[7];
-    ivec3 shape=ivec3(h(0),h(1),h(2)),at=ivec3(cell%shape.x,cell/shape.x%shape.y,cell/(shape.x*shape.y));
+    int members[7],sources[7],directions[7];sourceNeighbors(stock,sources,directions);
     for(int i=0;i<7;i++) {
-        members[i]=-1;ivec3 other=at;int slot=0;
-        if(i>0){int side=i-1;other[side/2]+=(side&1)==0?-1:1;slot=(side^1)+1;}
-        if(any(lessThan(other,ivec3(0)))||any(greaterThanEqual(other,shape)))continue;
-        int donor=(other.z*shape.y+other.y)*shape.x+other.x,entry=routeIndex(donor*h(9)+material,slot);
+        members[i]=-1;if(sources[i]<0)continue;int entry=routeIndex(sources[i],directions[i]);
         if(entry<0)continue;int sign=int(candidateWords[route(ROUTE_DESCRIPTORS)+5*entry+4]);
         if(sign<0){atomicOr(errors,32u);return;}if(sign>0)members[i]=entry;
     }
-    gatherStock(stock,cell,members);
+    gatherStock(stock,stock/h(9),members);
 }
 uint volumeWord(int begin,int count,int index) {
     return index>=0&&index<count?candidateWords[dst(VOLUME_LIMBS)+begin+index]:0u;
@@ -168,7 +175,7 @@ void finishStock(int stock) {
     int begin=int(candidateWords[dst(VOLUME_OFFSETS)+stock]),end=begin+int(candidateWords[dst(VOLUME_COUNTS)+stock]);
     putDouble(dst(NUMERIC_VOLUMES)+2*stock,numericVolume(begin,end-begin,exponent));
     int members[7];for(int i=0;i<7;i++)members[i]=int(candidateWords[h(10)+7*stock+i]);
-    int64_t represented;mergeSpecies(members,int(candidateWords[dst(SPECIES_OFFSETS)+stock]),true,represented);
+    int64_t represented;mergeSpecies(stock,members,int(candidateWords[dst(SPECIES_OFFSETS)+stock]),true,represented);
     int64_t mass=longAt(dst(MASS_UNITS)+2*stock);
     putLong(dst(MASS_RESIDUAL)+2*stock,candidateWords[dst(MIXTURE_PRESENT)+stock]!=0u?mass-represented:int64_t(0));
 }

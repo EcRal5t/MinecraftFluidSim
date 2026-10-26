@@ -10,7 +10,7 @@ layout(push_constant) uniform Params { int header; int stage; int count; int gra
 // DYADIC_LIBRARY
 const int COUNTS=0,CELL_OFFSETS=1,MATERIALS=2,VOLUME_OFFSETS=4,VOLUME_COUNTS=5,
           VOLUME_EXPONENTS=6,VOLUME_LIMBS=7,MASS_UNITS=8;
-const int R_DESCRIPTORS=0,R_SOURCE_OFFSETS=7,R_SLOTS=8,R_COUNTS=9,R_SOURCE_MASKS=10;
+const int R_DESCRIPTORS=0,R_SOURCE_OFFSETS=5,R_SLOTS=6,R_COUNTS=7,R_SOURCE_MASKS=8;
 uvec2 proposalWords;
 bool failed=false;
 int h(int index) { return int(candidateWords[p.header+index]); }

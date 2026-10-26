@@ -919,3 +919,7 @@ phase3恢复32轮设备合批后的 `build/gpu-resident-cut64-batched-retraction
 2026-10-27：共同压力核心原面与消元替代边每步合并为唯一端点 CSR，迭代删除两跳访问。原64³连续15步 `build/gpu-resident-cut64-coalesced-core-profile.log` 中位56.330 ms、最大67.015 ms、GPU平均49.499 ms；无分项 `build/gpu-resident-cut64-coalesced-core.log` 中位55.377 ms、最大67.953 ms、GPU平均49.165 ms，设备5041.3 MiB。末步有效行74,833→19,875、压力55轮、容量15轮，原图最终RMS3.826e-6。新增建表10阶段及两次prefix；单arena最坏预留约85 MiB，双代实际总显存增加约170 MiB。分项平均压力15.858→14.864 ms，建表1.968→2.261 ms，收益有限；原场景、步长和预算保持，完整步仍超50 ms及现有职责35 ms目标。后续优先审视输运与热学重复表示，暂停扩展压力求解层次。
 
 2026-10-27：液体材料分份、数量分派和汇集试用同SPIRV阶段特化管线，共享布局与描述符，不改变派发数。`build/gpu-resident-cut64-stage-specialized-profile.log` 原64³连续15步中位58.011 ms、GPU平均50.737 ms；材料链2.575 ms、数量1.405 ms、汇集1.852 ms，未优于原2.485／1.359／1.767 ms。该执行层方案没有显示收益，已删除试验代码，不扩大到其他模块。
+
+2026-10-27：液体路线物种改为源条目×真实方向固定金额，删除中间CSR与重复数量分份。`build/gpu-resident-cut64-direct-species-paired-thermal-profile.log` 同时评价过首遍导热的格内＋六色成对遍历：末12样本数量1.387→0.945 ms，汇集1.795→1.724 ms；热算子2.548→3.077 ms，后者已删除。该次整步64.314 ms、GPU53.128 ms，末容量80轮，不能把总变化归因于热学。仅保留物种改造的 `build/gpu-resident-cut64-direct-species.log` 连续15步完成，中位65.413 ms、最大100.048 ms、GPU平均50.359 ms，设备4981.2 MiB，末压力56／容量16轮。此次CPU记录成本也高于前次；分项减少约0.5 ms及显存减少约60 MiB成立，完整步未显示提速资格。
+
+物种迁移的必要短链：`build/gpu-liquid-direct-species-short.log`，`runGpuLiquidGatherBenchmark -PgpuGatherSamples=1` 的原32³／64³两材料、非零物种场景通过精确体积、质量、物种、残余质量及端点能量账；64³该输运短链GPU7.529 ms。删除了旧夹具要求每库存恰占一个体积limb的过时断言，继续检查真实体积。该结果仅覆盖索引迁移，不能代替完整步性能。

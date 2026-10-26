@@ -9,7 +9,7 @@ layout(push_constant) uniform Params { int header; int stage; int count; } p;
 const int COUNTS=0,MATERIALS=2,VOLUME_OFFSETS=4,VOLUME_COUNTS=5,VOLUME_EXPONENTS=6,VOLUME_LIMBS=7,
           MASS_UNITS=8,ENERGY_BITS=9,MIXTURE_PRESENT=10,SPECIES_OFFSETS=11,SPECIES_HANDLES=12,SPECIES_AMOUNTS=13;
 const int R_DESCRIPTORS=0,R_MASS=1,R_ENERGY=2,R_MIXTURE=3,
-          R_SPECIES_OFFSETS=4,R_SPECIES_HANDLES=5,R_SPECIES_AMOUNTS=6,R_SOURCE_OFFSETS=7;
+          R_SPECIES_AMOUNTS=4,R_SOURCE_OFFSETS=5,R_SLOTS=6,R_SOURCE_MASKS=8;
 int h(int index) { return int(candidateWords[p.header+index]); }
 int src(int field) { return h(16+field); }
 int route(int field) { return h(35+field); }
@@ -87,10 +87,6 @@ void distribute(int64_t total,double fractions[7],int owner,out int64_t amounts[
     amounts[owner]=remaining;
 }
 
-void clearRoute(int index) {
-    putDouble(h(7)+2*index,0.0);
-}
-
 int massFractions(int stock,int volumeOwner,double volumeShares[7],bool enabled[7],
                   out int64_t masses[7],out double fractions[7]) {
     int64_t total=readLong(0,src(MASS_UNITS)+2*stock);
@@ -108,23 +104,6 @@ int massFractions(int stock,int volumeOwner,double volumeShares[7],bool enabled[
     return owner;
 }
 
-void countSpecies(int stock) {
-    candidateWords[h(8)+stock]=uint(-1);
-    double volumeShares[7],fractions[7];bool enabled[7];int64_t masses[7];
-    int volumeOwner=volumeFractions(stock,volumeShares,enabled);if(volumeOwner<0)return;
-    int owner=massFractions(stock,volumeOwner,volumeShares,enabled,masses,fractions);if(owner<0)return;
-    candidateWords[h(8)+stock]=uint(owner);
-    int counts[7];for(int i=0;i<7;i++)counts[i]=0;
-    int begin=int(sourceWords[src(SPECIES_OFFSETS)+stock]),end=int(sourceWords[src(SPECIES_OFFSETS)+stock+1]);
-    for(int entry=begin;entry<end;entry++) {
-        int64_t total=readLong(0,src(SPECIES_AMOUNTS)+2*entry);
-        if(total<int64_t(0)){atomicOr(errors,32u);return;}
-        int64_t amounts[7];distribute(total,fractions,owner,amounts);
-        for(int i=0;i<7;i++)if(amounts[i]>int64_t(0))counts[i]++;
-    }
-    for(int i=0;i<7;i++)if(routeIndex(stock,i)>=0)candidateWords[h(6)+routeIndex(stock,i)]=uint(counts[i]);
-}
-
 // Grow an ascending, nonoverlapping expansion using error-free TwoSum; at most eight inputs are added.
 void expand(inout double terms[8],inout int count,double value) {
     precise double current=value;int nextCount=0;
@@ -140,42 +119,37 @@ void expand(inout double terms[8],inout int count,double value) {
 }
 
 void writeQuantities(int stock) {
-    if(candidateWords[route(R_SPECIES_OFFSETS)+h(1)]>uint(h(2))){atomicOr(errors,64u);return;}
-    if((errors&(16u|32u))!=0u)return;
+    for(int i=0;i<8;i++)putDouble(h(7)+16*stock+2*i,0.0);
+    uint required=7u*sourceWords[src(COUNTS)+1];if(stock==0)candidateWords[h(6)]=required;
+    if(required>uint(h(2))){atomicOr(errors,64u);return;}
+    if(uint(stock)>=sourceWords[src(COUNTS)])return;
     double volumeShares[7],fractions[7];bool enabled[7];int64_t masses[7];
-    int owner=int(candidateWords[h(8)+stock]);
-    if(owner<0)return;
+    int volumeOwner=volumeFractions(stock,volumeShares,enabled);if(volumeOwner<0)return;
+    int owner=massFractions(stock,volumeOwner,volumeShares,enabled,masses,fractions);if(owner<0)return;
     int64_t totalMass=readLong(0,src(MASS_UNITS)+2*stock);
-    // The first pass has already selected the exact remainder owner and partitioned mass.
-    // Positive-mass fractions depend only on those integers, so no volume comparison repeats.
-    for(int i=0;i<7;i++){
-        int entry=routeIndex(stock,i);enabled[i]=entry>=0&&int(candidateWords[route(R_DESCRIPTORS)+5*entry+4])>0;
-        masses[i]=entry<0?int64_t(0):readLong(1,route(R_MASS)+2*entry);
-        fractions[i]=totalMass>int64_t(0)?double(masses[i])/double(totalMass):0.0;
-    }
-    if(totalMass==int64_t(0)){
-        if(volumeFractions(stock,volumeShares,enabled)<0)return;
-        for(int i=0;i<7;i++)fractions[i]=volumeShares[i];
-    }
     int material=int(sourceWords[src(MATERIALS)+stock]);
     double materialReference=readDouble(1,h(3)+2*material);
     precise double sourceReference=double(totalMass)*1e-10LF*materialReference;
-    precise double references[7];int cursors[7];
+    precise double references[7];
     for(int i=0;i<7;i++) {
         references[i]=double(masses[i])*1e-10LF*materialReference;
-        cursors[i]=enabled[i]?int(candidateWords[route(R_SPECIES_OFFSETS)+routeIndex(stock,i)]):0;
+
     }
     int begin=int(sourceWords[src(SPECIES_OFFSETS)+stock]),end=int(sourceWords[src(SPECIES_OFFSETS)+stock+1]);
     for(int entry=begin;entry<end;entry++) {
         int handle=int(sourceWords[src(SPECIES_HANDLES)+entry]);
         int64_t total=readLong(0,src(SPECIES_AMOUNTS)+2*entry);
+        if(total<int64_t(0)){atomicOr(errors,32u);return;}
         int64_t amounts[7];distribute(total,fractions,owner,amounts);
         double reference=readDouble(1,h(4)+2*(material*h(5)+handle));
         sourceReference+=double(total)*reference;
-        for(int i=0;i<7;i++)if(amounts[i]>int64_t(0)) {
-            candidateWords[route(R_SPECIES_HANDLES)+cursors[i]]=uint(handle);
-            putLong(route(R_SPECIES_AMOUNTS)+2*cursors[i],amounts[i]);cursors[i]++;
-            references[i]+=double(amounts[i])*reference;
+        uint mask=candidateWords[route(R_SOURCE_MASKS)+stock];
+        for(int dir=0;dir<7;dir++)if((mask&(1u<<dir))==0u)putLong(route(R_SPECIES_AMOUNTS)+2*(7*entry+dir),0l);
+        // i is a compact volume part; fixed species amounts are indexed by its real spatial direction.
+        for(int i=0;i<7;i++){
+            int part=routeIndex(stock,i);if(part<0)continue;int dir=int(candidateWords[route(R_SLOTS)+part]);
+            putLong(route(R_SPECIES_AMOUNTS)+2*(7*entry+dir),amounts[i]);
+            if(amounts[i]>int64_t(0))references[i]+=double(amounts[i])*reference;
         }
     }
     double sourceEnergy=readDouble(0,src(ENERGY_BITS)+2*stock);
@@ -204,7 +178,5 @@ void writeQuantities(int stock) {
 void main() {
     int index=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
     if(index>=p.count||errors!=0u)return;
-    if(p.stage==0){clearRoute(index);return;}
-    if(uint(index)>=sourceWords[src(COUNTS)])return;
-    if(p.stage==1)countSpecies(index);else writeQuantities(index);
+    writeQuantities(index);
 }

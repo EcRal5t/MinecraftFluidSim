@@ -6,6 +6,8 @@ import java.util.List;
 /** Accepted-direction candidates grouped by source stock. SOURCE_OFFSETS and SOURCE_MASKS
  * address the shared material scratch and quantity rows. VOLUME_DESCRIPTORS borrows
  * immutable source/accepted limbs or references the candidate's own material workspace.
+ * Species amounts use seven real direction slots per immutable source species entry;
+ * their handles and CSR ranges remain in the source inventory.
  * Zero-volume candidates carry zero quantities and are skipped by destination gathering.
  */
 public final class VulkanLiquidRouteLayout {
@@ -14,8 +16,7 @@ public final class VulkanLiquidRouteLayout {
     public enum Field {
         VOLUME_DESCRIPTORS(4),
         MASS_UNITS(8), ENERGY_BITS(8), MIXTURE_PRESENT(4),
-        SPECIES_OFFSETS(4), SPECIES_HANDLES(4), SPECIES_AMOUNTS(8),
-        SOURCE_OFFSETS(4), SLOTS(4), COUNTS(4), SOURCE_MASKS(4);
+        SPECIES_AMOUNTS(8), SOURCE_OFFSETS(4), SLOTS(4), COUNTS(4), SOURCE_MASKS(4), SPECIES_REQUIRED(4);
         private final int elementBytes;
         Field(int elementBytes) { this.elementBytes = elementBytes; }
         public int elementBytes() { return elementBytes; }
@@ -38,12 +39,12 @@ public final class VulkanLiquidRouteLayout {
         long cursor = this.baseOffset;
         for (Field field : Field.values()) {
             int count = switch (field) {
-                case SPECIES_OFFSETS -> Math.addExact(routeCapacity, 1);
                 case SOURCE_OFFSETS -> Math.addExact(sourceStockCapacity,1);
                 case COUNTS -> 2;
+                case SPECIES_REQUIRED -> 1;
                 case VOLUME_DESCRIPTORS -> Math.multiplyExact(routeCapacity,5);
                 case SOURCE_MASKS -> sourceStockCapacity;
-                case SPECIES_HANDLES, SPECIES_AMOUNTS -> speciesCapacity;
+                case SPECIES_AMOUNTS -> speciesCapacity;
                 default -> routeCapacity;
             };
             cursor = align(cursor);

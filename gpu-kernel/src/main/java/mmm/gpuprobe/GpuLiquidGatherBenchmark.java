@@ -30,7 +30,7 @@ public final class GpuLiquidGatherBenchmark {
         int cells=grid*grid*grid,stocks=2*cells;
         long alignment=Math.max(8,context.storageOffsetAlignment());
         var state=new VulkanLiquidStateLayout(grid,grid,grid,stocks,stocks,stocks,alignment,2);
-        var routes=new VulkanLiquidRouteLayout(stocks,2*stocks,state.bytes(),alignment);
+        var routes=new VulkanLiquidRouteLayout(stocks,7*stocks,state.bytes(),alignment);
         long fixed=routes.endOffset(),mass=fixed+4L*cells,materialReference=mass+16,speciesReference=materialReference+16;
         long acceptedBase=speciesReference+32,phaseBase=acceptedBase+140L*cells,acceptedLimb=phaseBase+8;
         int scratchLimbs=Math.multiplyExact(7*stocks+3*cells,4);
@@ -132,7 +132,7 @@ public final class GpuLiquidGatherBenchmark {
                 if(!roundoff.equals(endpoint))throw new AssertionError("Exact device energy ledger differs from endpoints: "+roundoff+" != "+endpoint);
                 if(readDyadic(storage,result,heatLayout.result().offset()).signum()<0)throw new AssertionError("Negative mechanical heat ledger");
                 var counts=read(storage,result,state.column(VulkanLiquidStateLayout.Field.COUNTS).offset(),12);
-                if(counts.getInt(0)!=stocks||counts.getInt(4)!=stocks||counts.getInt(8)!=stocks)
+                if(counts.getInt(0)!=stocks||counts.getInt(4)!=stocks)
                     throw new AssertionError("Gather logical counts differ: "+counts.getInt(0)+","+counts.getInt(4)+","+counts.getInt(8));
                 for(int cell:new int[]{0,grid+1,cells-1}) {
                     double heat=read(storage,result,momentumLayout.cellHeat().offset()+8L*cell,8).getDouble(0);
