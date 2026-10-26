@@ -52,7 +52,7 @@ final class VulkanGasRemap implements AutoCloseable {
         WEIGHTS(8),SOURCE_PIVOT(4),ESCAPE_GROUP(4),RETAINED_COUNTS(4),FUTURE_COUNTS(4),OUTPUT_SPECIES_COUNTS(4),
         ENERGY_ROUNDOFF(8),SOURCE_ROUNDOFF(8),RETAINED_ROUNDOFF(8),MERGE_ROUNDOFF(8),AUDIT_ENERGY(8),
         AMBIENT_HANDLES(4),AMBIENT_WEIGHTS(8),AMBIENT_MASS_NUM(8),AMBIENT_MASS_DEN(8),AMBIENT_SPECIES_OFFSETS(4),
-        AMBIENT_SPECIES_HANDLES(4),AMBIENT_SPECIES_NUM(8),AMBIENT_SPECIES_DEN(8),AMBIENT_SPECIES_MASS(8),AMBIENT_BEFORE(8),AMBIENT_AFTER(8),SCAN(4),DISPATCH(4),MEASURE_RAW_SPECIES(4),MEASURE_RETAINED_COMPONENTS(4),MEASURE_RETAINED_SPECIES(4),MEASURE_FUTURE_COMPONENTS(4),MEASURE_FUTURE_SPECIES(4),REQUIREMENTS(4),LONG_ROWS(4),TRANSPORT_PREFIX(8);
+        AMBIENT_SPECIES_HANDLES(4),AMBIENT_SPECIES_NUM(8),AMBIENT_SPECIES_DEN(8),AMBIENT_SPECIES_MASS(8),AMBIENT_BEFORE(8),AMBIENT_AFTER(8),SCAN(4),DISPATCH(4),MEASURE_RAW_SPECIES(4),MEASURE_RETAINED_COMPONENTS(4),MEASURE_RETAINED_SPECIES(4),MEASURE_FUTURE_COMPONENTS(4),MEASURE_FUTURE_SPECIES(4),REQUIREMENTS(4),LONG_ROWS(4),TRANSPORT_PREFIX(8),TRANSPORT_RETAINED_ENERGY(8);
         final int width;Field(int width){this.width=width;}
     }
     static final class Layout {
@@ -78,7 +78,8 @@ final class VulkanGasRemap implements AutoCloseable {
                     case TRANSPORT_PREFIX->transport?partCapacity:0;
                     case GROUP_ENERGY,GROUP_CAPACITY,WEIGHTS->routes.capacity();
                     case SOURCE_PIVOT,ESCAPE_GROUP->retained.nodeCapacity();
-                    case RETAINED_COUNTS->retained.nodeCapacity()+2;
+                    case RETAINED_COUNTS->transport?0:retained.nodeCapacity()+2;
+                    case TRANSPORT_RETAINED_ENERGY->transport?retained.nodeCapacity():0;
                     case FUTURE_COUNTS->future.nodeCapacity()+2;
                     case OUTPUT_SPECIES_COUNTS->Math.max(retained.componentCapacity(),future.componentCapacity());
                     case ENERGY_ROUNDOFF,MERGE_ROUNDOFF->Math.multiplyExact(routes.capacity(),2);
@@ -90,7 +91,7 @@ final class VulkanGasRemap implements AutoCloseable {
                     case DISPATCH->27;
                     case LONG_ROWS->Math.addExact(2*Math.addExact(retained.nodeCapacity(),2),Math.addExact(routes.futureGeometry().cells(),2));
                     case MEASURE_RAW_SPECIES->routes.capacity();
-                    case MEASURE_RETAINED_COMPONENTS,MEASURE_RETAINED_SPECIES->retained.nodeCapacity()+2;
+                    case MEASURE_RETAINED_COMPONENTS,MEASURE_RETAINED_SPECIES->transport?0:retained.nodeCapacity()+2;
                     case MEASURE_FUTURE_COMPONENTS,MEASURE_FUTURE_SPECIES->routes.futureGeometry().cells()+2;
                     case REQUIREMENTS->9;
                     case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(Math.max(partCapacity,routes.capacity()),Math.max(retained.nodeCapacity()+2,Math.max(future.nodeCapacity()+2,Math.max(retained.componentCapacity(),future.componentCapacity())))))/4);
@@ -117,6 +118,7 @@ final class VulkanGasRemap implements AutoCloseable {
                 data[48+field.ordinal()]=Math.toIntExact(future.column(field).offset()/4);
             }
             for(Field field:Field.values())data[64+field.ordinal()]=word(field);
+            if(transport)data[32+VulkanGasStateLayout.Field.INTERNAL_ENERGY.ordinal()]=word(Field.TRANSPORT_RETAINED_ENERGY);
             data[136]=Math.toIntExact(routes.futureGeometry().parents().offset()/4);data[137]=Math.toIntExact(routes.futureGeometry().dryMasks().offset()/4);
             data[138]=Math.toIntExact(routes.futureGeometry().cellNodes().offset()/4);data[139]=routes.futureGeometry().cells();
             int[] graph=routes.words();System.arraycopy(graph,0,data,120,graph.length);
@@ -185,7 +187,7 @@ final class VulkanGasRemap implements AutoCloseable {
         stage(command,l,25,Math.max(l.retained.nodeCapacity()+2,l.routes.futureGeometry().cells()+2),null);
         stage(command,l,26,1,null);
         stage(command,l,19,l.routes.capacity(),null);
-        stage(command,l,20,l.retained.nodeCapacity(),null);
+        if(!l.transport)stage(command,l,20,l.retained.nodeCapacity(),null);
         stage(command,l,21,l.routes.futureGeometry().cells()+2,null);
         stage(command,l,22,128,null);
     }
@@ -202,7 +204,7 @@ final class VulkanGasRemap implements AutoCloseable {
         });
         timed(timings,command,"remap-split",()->{stage(command,l,2,l.retained.nodeCapacity(),null);stage(command,l,3,1,null);});
         timed(timings,command,"remap-partition-energy",()->{stage(command,l,4,l.routes.capacity(),null);stage(command,l,5,l.retained.nodeCapacity(),null);});
-        gather(command,l,false,null,timings);stage(command,l,16,l.routes.futureGeometry().cells(),null);
+        if(!l.transport){gather(command,l,false,null,timings);stage(command,l,16,l.routes.futureGeometry().cells(),null);}
     }
     void recordFinish(VkCommandBuffer command,Layout l,VulkanGasAdiabaticWork.Layout work){
         recordFinish(command,l,work,null);
@@ -218,13 +220,6 @@ final class VulkanGasRemap implements AutoCloseable {
         gather(command,l,future,work,null);
     }
     private void gather(VkCommandBuffer command,Layout l,boolean future,VulkanGasAdiabaticWork.Layout work,VulkanStageTimings timings){
-        if(l.transport&&!future){
-            timed(timings,command,"transport-retained-count",()->{stage(command,l,14,Math.max(l.retained.componentCapacity(),l.future.componentCapacity()),work);stage(command,l,27,l.retained.nodeCapacity()+2,work);});
-            scan.record(command,l.retained.nodeCapacity()+2,l.word(Field.RETAINED_COUNTS),Math.toIntExact(l.retained.column(VulkanGasStateLayout.Field.ROW_COMPONENT_OFFSETS).offset()/4),l.word(Field.SCAN));
-            timed(timings,command,"transport-retained-components",()->stage(command,l,28,l.retained.nodeCapacity(),work));
-            scan.record(command,l.retained.componentCapacity(),l.word(Field.OUTPUT_SPECIES_COUNTS),Math.toIntExact(l.retained.column(VulkanGasStateLayout.Field.COMPONENT_SPECIES_OFFSETS).offset()/4),l.word(Field.SCAN));
-            timed(timings,command,"transport-retained-species",()->stage(command,l,29,l.retained.nodeCapacity()+2,work));return;
-        }
         var output=future?l.future:l.retained;int base=future?11:6;Field counts=future?Field.FUTURE_COUNTS:Field.RETAINED_COUNTS;
         timed(timings,command,"remap-clear-species",()->stage(command,l,14,Math.max(l.retained.componentCapacity(),l.future.componentCapacity()),work));
         timed(timings,command,"remap-count-components",()->stage(command,l,base,output.nodeCapacity()+2,work));

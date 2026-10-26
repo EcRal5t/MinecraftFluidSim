@@ -83,7 +83,7 @@ public final class GpuGasFlowBenchmark {
         var retained=new VulkanGasStateLayout(gas.sizeX(),gas.sizeY(),gas.sizeZ(),gas.nodeCapacity(),gas.componentCapacity(),gas.speciesCapacity(),gas.definitions(),flow.endOffset(),a);
         var future=new VulkanGasStateLayout(gas.sizeX(),gas.sizeY(),gas.sizeZ(),gas.nodeCapacity(),gas.componentCapacity(),gas.speciesCapacity(),gas.definitions(),retained.endOffset(),a);
         var remap=VulkanGasRemap.transportLayout(flow.routes(),source,retained,future,ambient,flow.word(VulkanGasFlow.Field.STEP),2*flow.routes,2*flow.routes,future.endOffset(),a);
-        var retainedEOS=VulkanGasThermodynamics.layout(retained,tables,flow.word(VulkanGasFlow.Field.RETAINED_VOLUME),remap.endOffset(),a);
+        var retainedEOS=VulkanGasThermodynamics.selfPartsLayout(remap,tables,flow.word(VulkanGasFlow.Field.RETAINED_VOLUME),remap.endOffset(),a);
         var work=VulkanGasAdiabaticWork.layout(retainedEOS,source.nodeVolumesWordOffset(),flow.word(VulkanGasFlow.Field.MODES),retainedEOS.endOffset(),a);
         return new Tail(flow,retained,future,remap,retainedEOS,work,work.endOffset());
     }

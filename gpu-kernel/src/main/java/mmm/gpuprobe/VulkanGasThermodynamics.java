@@ -66,7 +66,7 @@ final class VulkanGasThermodynamics implements AutoCloseable {
                   VulkanLiquidStateLayout.Column segmentUpper, VulkanLiquidStateLayout.Column segmentHeatCapacity,
                   VulkanLiquidStateLayout.Column specificAnchorEnergy, VulkanLiquidStateLayout.Column speciesReference,
                   VulkanLiquidStateLayout.Column states, VulkanLiquidStateLayout.Column longVolumes,
-                  VulkanLiquidStateLayout.Column volumeDispatch, long endOffset) {
+                  VulkanLiquidStateLayout.Column volumeDispatch, long endOffset, VulkanGasRemap.Layout selfParts) {
         int headerWordOffset() { return word(header); }
         long bytes() { return endOffset - header.offset(); }
         long stateOffset(int node, Quantity quantity) {
@@ -83,8 +83,25 @@ final class VulkanGasThermodynamics implements AutoCloseable {
             data[2] = tables.definitions().speciesIds().size(); data[3] = nodeVolumesWordOffset;
             data[4] = word(segmentOffsets); data[5] = word(segmentUpper); data[6] = word(segmentHeatCapacity);
             data[7] = word(specificAnchorEnergy); data[8] = word(speciesReference); data[9] = word(states);
-            data[10]=word(longVolumes);data[11]=word(volumeDispatch);
+            data[10]=word(longVolumes);data[11]=word(volumeDispatch);data[39]=-1;
             for (var field : VulkanGasStateLayout.Field.values()) data[16 + field.ordinal()] = Math.toIntExact(gas.column(field).offset() / 4);
+            if(selfParts!=null){
+                var source=selfParts.routes.gas();
+                data[16]=Math.toIntExact(source.column(VulkanGasStateLayout.Field.COUNTS).offset()/4);
+                data[17]=Math.toIntExact(source.column(VulkanGasStateLayout.Field.TOPOLOGY_KEYS).offset()/4);
+                data[19]=Math.toIntExact(source.column(VulkanGasStateLayout.Field.ROW_COMPONENT_OFFSETS).offset()/4);
+                data[20]=selfParts.word(VulkanGasRemap.Field.PART_HANDLES);
+                data[21]=selfParts.word(VulkanGasRemap.Field.PART_NANOS);
+                data[22]=selfParts.word(VulkanGasRemap.Field.PART_MASS);
+                data[24]=selfParts.word(VulkanGasRemap.Field.SPECIES_OFFSETS);
+                data[25]=selfParts.word(VulkanGasRemap.Field.SPECIES_HANDLES);
+                data[26]=selfParts.word(VulkanGasRemap.Field.SPECIES_AMOUNTS);
+                data[27]=Math.toIntExact(source.column(VulkanGasStateLayout.Field.ENERGY_PRESENT).offset()/4);
+                data[28]=selfParts.word(VulkanGasRemap.Field.TRANSPORT_RETAINED_ENERGY);
+                data[39]=selfParts.word(VulkanGasRemap.Field.SOURCE_PIVOT);
+                data[40]=selfParts.word(VulkanGasRemap.Field.PART_OFFSETS);
+                data[41]=selfParts.partCapacity;data[42]=selfParts.speciesCapacity;
+            }
             for (int i = 0; i < data.length; i++) target.putInt(4 * i, data[i]);
             target.putDouble(4 * 32, GasRegistry.STANDARD_TEMPERATURE_K);
             target.putDouble(4 * 34, ThermalLimits.MIN_ABSOLUTE_TEMPERATURE_K);
@@ -130,7 +147,14 @@ final class VulkanGasThermodynamics implements AutoCloseable {
         var species = column(cursor, tables.speciesReference().length, 8, alignment);
         var states = column(cursor, Math.multiplyExact(gas.nodeCapacity(), STATE_WIDTH), 8, alignment);
         var longVolumes=column(cursor,gas.nodeCapacity(),4,alignment);var dispatch=column(cursor,4,4,alignment);
-        return new Layout(gas, tables, nodeVolumesWordOffset, header, offsets, upper, capacity, anchor, species, states,longVolumes,dispatch, align(cursor[0], alignment));
+        return new Layout(gas, tables, nodeVolumesWordOffset, header, offsets, upper, capacity, anchor, species, states,longVolumes,dispatch, align(cursor[0], alignment),null);
+    }
+    /** Exact self-route parts provide the retained caloric inventory without canonical CSR copies. */
+    static Layout selfPartsLayout(VulkanGasRemap.Layout remap,Tables tables,int volumes,long base,long alignment){
+        if(!remap.transport)throw new IllegalArgumentException("Self parts require gas transport");
+        var l=layout(remap.retained,tables,volumes,base,alignment);
+        return new Layout(l.gas,l.tables,l.nodeVolumesWordOffset,l.header,l.segmentOffsets,l.segmentUpper,l.segmentHeatCapacity,
+                l.specificAnchorEnergy,l.speciesReference,l.states,l.longVolumes,l.volumeDispatch,l.endOffset,remap);
     }
     private final FlipKernelBindings bindings;
     private FlipKernelBindings.BufferRange arena;

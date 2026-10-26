@@ -50,7 +50,7 @@ int partBegin(int g){return int(words[f(PO)+g]);}int partEnd(int g){return int(w
 void clearAndCount(int id){
  if(id<h(2)){words[f(PC)+id]=0u;put(f(GE)+2*id,0.0);put(f(ER)+4*id,0.0);put(f(ER)+4*id+2,0.0);put(f(MR)+4*id,0.0);put(f(MR)+4*id+2,0.0);}
  if(id<h(3))words[f(SC)+id]=0u;
- if(id<h(5)+2)words[f(RC)+id]=0u;
+ if(h(12)==0&&id<h(5)+2)words[f(RC)+id]=0u;
  if(id<h(6)+2)words[f(FC)+id]=0u;
  if(id<h(6))put(dst(ENERGY,true)+2*id,0.0);
  if(id<h(5))put(dst(ENERGY,false)+2*id,0.0);
@@ -385,18 +385,6 @@ void gatherSpeciesAndEnergy(int row,bool future,int lane){
   if(!future&&row<nodeCount())words[dst(KEYS,false)+row]=words[old(KEYS)+row];
  }
 }
-// Transport retains exactly its self route; this output has no multi-source union.
-void retainedDirect(int row,int stage){
- int n=nodeCount();if(stage==27){if(row<h(5)+2)words[f(RC)+row]=row<n?uint(partEnd(int(words[f(PIVOT)+row]))-partBegin(int(words[f(PIVOT)+row]))):0u;return;}
- if(stage==29){int components=int(words[dst(ROWS,false)+n+2]),species=int(words[dst(SPO,false)+components]);if(species>h(8)){atomicOr(errors,64u);return;}if(row==0){words[dst(COUNTS,false)]=uint(n);words[dst(COUNTS,false)+1]=uint(components);words[dst(COUNTS,false)+2]=uint(species);words[dst(EP,false)]=words[old(EP)];}}
- if(row>=n)return;int self=int(words[f(PIVOT)+row]),begin=partBegin(self),end=partEnd(self),outAt=int(words[dst(ROWS,false)+row]);
- if(int(words[dst(ROWS,false)+n+2])>h(7)){atomicOr(errors,64u);return;}
- for(int part=begin;part<end;part++,outAt++){
-  if(stage==28){words[dst(HANDLES,false)+outAt]=words[f(PH)+part];put64(dst(NANOS,false)+2*outAt,u64(f(PN)+2*part));put64(dst(MASS,false)+2*outAt,u64(f(PM)+2*part));put64(dst(RESIDUAL,false)+2*outAt,u64(f(PR)+2*part));uint count=0u;for(int e=int(words[f(SO)+part]);e<int(words[f(SO)+part+1]);e++)if(u64(f(SA)+2*e)!=uint64_t(0))count++;words[f(OSC)+outAt]=count;}
-  else{int destination=int(words[dst(SPO,false)+outAt]);for(int e=int(words[f(SO)+part]);e<int(words[f(SO)+part+1]);e++)if(u64(f(SA)+2*e)!=uint64_t(0)){words[dst(SPH,false)+destination]=words[f(SH)+e];put64(dst(SPA,false)+2*destination,u64(f(SA)+2*e));destination++;}}
- }
- if(stage==29)words[dst(KEYS,false)+row]=words[old(KEYS)+row];
-}
 void topology(int cell,bool future){
  if(!future){for(int m=0;m<8;m++)words[dst(PIECES,false)+8*cell+m]=words[old(PIECES)+8*cell+m];return;}
  int node=int(words[h(138)+cell]),mask=int(words[h(137)+cell]);
@@ -439,7 +427,7 @@ void measureFuture(int row,int lane){uint64_t components=uint64_t(0),species=uin
  if(lane==0){if(components>uint64_t(0x7fffffffu)||species>uint64_t(0x7fffffffu))atomicOr(errors,16u);words[f(MFC)+row]=uint(min(components,uint64_t(0x7fffffffu)));words[f(MFS)+row]=uint(min(species,uint64_t(0x7fffffffu)));}
 }
 void measureTotal(int lane){
- int lengths[6]=int[6](groups(),groups(),nodeCount(),nodeCount(),futureCount()+2,futureCount()+2);
+ int lengths[6]=int[6](groups(),groups(),h(12)==0?nodeCount():0,h(12)==0?nodeCount():0,futureCount()+2,futureCount()+2);
  int columns[6]=int[6](PC,MRAW,MRC,MRS,MFC,MFS);int capacities[6]=int[6](h(3),h(4),h(7),h(8),h(9),h(10));
  for(int column=0;column<6;column++){
   uint64_t local=uint64_t(0);for(int i=lane;i<lengths[column];i+=128)local+=uint64_t(words[f(columns[column])+i]);
@@ -507,7 +495,6 @@ void main(){
   return;
  }
  if(id>=p.count||errors!=0u)return;
- if(p.stage>=27&&p.stage<=29){retainedDirect(id,p.stage);return;}
  if(p.stage==19){measureParts(id);return;}if(p.stage==20){measureRetained(id);return;}
  if(p.stage==0)clearAndCount(id);else if(p.stage==1)prepareParts(id);else if(p.stage==2)splitSource(id);else if(p.stage==3)captureAmbient();
  else if(p.stage==4||p.stage==9)groupEnergy(id,p.stage==9);else if(p.stage==5||p.stage==10)closeSourceEnergy(id,p.stage==10);

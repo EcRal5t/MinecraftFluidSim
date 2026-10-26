@@ -1365,7 +1365,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             schurPressure=VulkanGasFlowSchurPressure.layout(flow,flow.endOffset(),a);
             remap=VulkanGasRemap.transportLayout(flow.routes(),eos,successor.retained,successor.future,gasConfiguration.ambient(),flow.word(VulkanGasFlow.Field.STEP),
                     gasReserves.parts(),gasReserves.partSpecies(),schurPressure.endOffset(),a);
-            retainedEOS=VulkanGasThermodynamics.layout(successor.retained,gasConfiguration.tables(),flow.word(VulkanGasFlow.Field.RETAINED_VOLUME),remap.endOffset(),a);
+            retainedEOS=VulkanGasThermodynamics.selfPartsLayout(remap,gasConfiguration.tables(),flow.word(VulkanGasFlow.Field.RETAINED_VOLUME),remap.endOffset(),a);
             work=VulkanGasAdiabaticWork.layout(retainedEOS,eos.nodeVolumesWordOffset(),flow.word(VulkanGasFlow.Field.MODES),retainedEOS.endOffset(),a);endOffset=work.endOffset();
         }
         List<HeaderWrite> headers(){return List.of(new HeaderWrite(eos.header().offset(),eos.headerBytes()),new HeaderWrite(flow.header.offset(),flow.headerBytes()),new HeaderWrite(schurPressure.header().offset(),schurPressure.headerBytes()),

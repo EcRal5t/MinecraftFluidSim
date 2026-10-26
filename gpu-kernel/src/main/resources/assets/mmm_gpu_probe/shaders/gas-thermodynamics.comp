@@ -66,16 +66,25 @@ void shortVolume(int node){
  if(!finite(sum)||sum<=0.0)invalid();else putNumber(h(3)+2*node,sum);
 }
 bool inventory(int node,out int first,out int last,out double anchor,out double mass,out double r) {
-    first=int(words[gas(ROW_OFFSETS)+node]);last=int(words[gas(ROW_OFFSETS)+node+1]);
-    int components=int(words[gas(COUNTS)+1]),species=int(words[gas(COUNTS)+2]);
+    if(h(39)>=0){
+        int sourceFirst=int(words[gas(ROW_OFFSETS)+node]),sourceLast=int(words[gas(ROW_OFFSETS)+node+1]);
+        if(sourceFirst==sourceLast){first=0;last=0;}
+        else{
+            int self=int(words[h(39)+node]);
+            if(self<0){invalid();return false;}
+            first=int(words[h(40)+self]);last=int(words[h(40)+self+1]);
+        }
+    }else{first=int(words[gas(ROW_OFFSETS)+node]);last=int(words[gas(ROW_OFFSETS)+node+1]);}
+    int components=h(39)>=0?h(41):int(words[gas(COUNTS)+1]),species=h(39)>=0?h(42):int(words[gas(COUNTS)+2]);
     if(first<0||last<first||last>components){invalid();return false;}
     anchor=0.0;double correction=0.0;int64_t totalMass=int64_t(0),totalNanos=int64_t(0);
     for(int component=first;component<last;component++) {
+        int64_t componentMass=integer(gas(MASS)+2*component),nanos=integer(gas(NANOS)+2*component);
+        if(h(39)>=0&&componentMass==int64_t(0)&&nanos==int64_t(0))continue;
         int handle=int(words[gas(COMPONENTS)+component]);
         if(handle<0||handle>=h(1)){invalid();return false;}
         int begin=int(words[h(4)+handle]),end=int(words[h(4)+handle+1]);
         double reference=number(h(7)+2*handle);
-        int64_t componentMass=integer(gas(MASS)+2*component),nanos=integer(gas(NANOS)+2*component);
         if(begin==end||!finite(reference)||componentMass<=int64_t(0)||nanos<=int64_t(0)
                 ||componentMass>int64_t(0x7fffffffffffffffUL)-totalMass||nanos>int64_t(0x7fffffffffffffffUL)-totalNanos) {
             invalid();return false;
@@ -93,6 +102,7 @@ bool inventory(int node,out int first,out int last,out double anchor,out double 
             addCompensated(anchor,correction,double(amount)*offset);
         }
     }
+    if(totalMass==int64_t(0)&&totalNanos==int64_t(0))first=last;
     mass=double(totalMass)*1e-10LF;r=double(totalNanos)*number(p.header+36);
     if(!finite(anchor)||!finite(mass)||!finite(r)){invalid();return false;}return true;
 }
@@ -102,6 +112,7 @@ double capacityAndBoundary(int first,int last,double temperature,bool heating,ou
     boundary=heating?packDouble2x32(uvec2(0u,0x7ff00000u)):number(p.header+34);
     double capacity=0.0,correction=0.0;
     for(int component=first;component<last;component++) {
+        if(h(39)>=0&&integer(gas(NANOS)+2*component)==int64_t(0))continue;
         int handle=int(words[gas(COMPONENTS)+component]);
         int begin=int(words[h(4)+handle]),end=int(words[h(4)+handle+1]),segment=begin;
         while(segment+1<end) {
