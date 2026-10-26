@@ -955,3 +955,9 @@ phase3恢复32轮设备合批后的 `build/gpu-resident-cut64-batched-retraction
 
 
 2026-10-27：实际压力行列表与CONTROL[14]计数配套修复后，普通Gas算子保留Schur core计数；Graph只发布自己的内部全图规模，Coupled／通用Graph仍发布其实际全图计数。`build/gpu-resident-cut64-core-row-contract.log` 原64³、3预热／12采样连续15步成功，中位49.865 ms、最大66.170 ms、GPU平均44.473 ms，设备4810.3 MiB、平均回读275.3 B；末步核心26,799／原74,525行、71次迭代，回代后原系统残差4.779e-6。虽采样中位低于50 ms，尾部及剩余生产职责仍无余量，现有职责35 ms和完整GPU目标均未达成。
+
+
+执行路径更正：进一步检查确认`VulkanLiquidRegion.Kernels.pressureGraph`当前从未实例化，普通机械场景使用结构多重网格与GasOperator。上述physical-pressure-rows／core-row-contract运行虽然完成，其Graph包装器行表和CONTROL[14]改动未实际参与，不能将墙钟变化归因于这些修改；当前生产GasOperator本来就使用核心行。首次`build/gpu-resident-cut64-mixed-pressure.log`同样未启用接在Graph包装器上的混合精度（中位49.519 ms、最大72.437 ms、GPU43.257 ms仅为该次运行记录），不作为FP32有效性或收益证据。后续混合精度必须接入实际GasOperator与结构多重网格，并通过设备执行计数确认。
+
+
+混合精度接入实际GasOperator与结构多重网格后，`build/gpu-resident-cut64-mixed-pressure-active.log` 设备确认enabled=1、末步45次方向乘积。原64³连续15步完成，中位49.061 ms、最大86.819 ms、GPU平均45.139 ms，未优于原路径；采样后段真实残差升至0.019／2.012／4.166，最终原图RMS2.251，容量撤回216轮。现有完成判据允许PMAX相关roundoff floor增大，故status=1不能证明达到TARGET。统一缩放、正ground与成对FP32边权仍未解决大公共分量叠加小压力差的表示误差；未发现可直接修复的单位或索引错误，全部混合精度试验代码已删除，未增加预算或叠加稳定化。此结果只淘汰该路线，不证明完整GPU后端不可实现。
