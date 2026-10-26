@@ -421,5 +421,5 @@ registerGpuProbe(
     'mmm.gpuprobe.GpuThermalPhaseValidation',
     'gpu-thermal-phase-work'
 ) { probeTask ->
-    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'), rootProject.file('fabric/src/main/resources/data/mmm/mmm').absolutePath, providers.gradleProperty('gpuPhaseCases').getOrElse('freeze,melt,boil,condense')
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'), rootProject.file('fabric/src/main/resources/data/mmm/mmm').absolutePath, providers.gradleProperty('gpuPhaseCases').getOrElse('freeze,melt,boil,condense,dissolve,outgas,ambient-outgas')
 }

@@ -102,8 +102,9 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
         var totals=state.totals();var counters=state.capture.chemistryCounters();var p=state.posting;
         return new FluidDomain.ThermalAxisStats(new ThermalTransport.Stats(totals.thermalSubsteps(),totals.thermalContacts(),totals.temperatureChange(),totals.maximumHeat(),p==null?SignedDyadic.ZERO:p.roundoff(),p==null?SignedDyadic.ZERO:p.reservoir()),
             new mmm.chemistry.RegionChemistry.ReactionStats(counters[3],counters[4],counters[5]),new FluidDomain.PhaseTransferStats(0,0,0,0),
-            condensedStats(state),gasPhaseStats(state),new FluidDomain.GasLiquidMassTransferStats(false,false));
+            condensedStats(state),gasPhaseStats(state),massTransferStats(state));
     }
+    private FluidDomain.GasLiquidMassTransferStats massTransferStats(State state){var c=state.capture.massTransferCounters();return new FluidDomain.GasLiquidMassTransferStats(c[0]!=0,c[1]!=0);}
     private FluidDomain.ThermalPhaseStats condensedStats(State state){var c=state.capture.thermalPhaseCounters();return new FluidDomain.ThermalPhaseStats(c[8],c[6],c[7],c[9]);}
     private FluidDomain.GasThermalPhaseStats gasPhaseStats(State state){var c=state.capture.gasPhaseCounters();return new FluidDomain.GasThermalPhaseStats(c[0],c[1],c[2]);}
     private final class Region {
@@ -131,7 +132,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
         @Override public FiniteThermalDeviceInventory finiteThermalDevices(){synchronized(owner()){ensure();if(devices==null)devices=region.codec.exportDevices(capture);return devices;}}
         @Override public List<FluidStateAccess.DevicePort> finiteThermalPorts(){return region.ports;}
         @Override public InventorySummary inventorySummary(){synchronized(owner()){ensure();if(summary==null)summary=inventorySummary.capture(capture,region.codec.template().config().cellSize(),audit!=null);return summary;}}
-        @Override public Observation observation(){synchronized(owner()){ensure();if(observed==null){var t=totals();observed=new Observation(t.volume(),t.stocks(),(float)t.maximumSpeed(),capture.gasFlowActive(),t.particles()==0&&t.dirtyGranularColumns()==0&&capture.chemistryCounters()[5]==0,capture.hasPendingPhaseMotion(),audit==null||capture.exactThermalInventory().equals(audit.expectedInventory()));}return observed;}}
+        @Override public Observation observation(){synchronized(owner()){ensure();if(observed==null){var t=totals();observed=new Observation(t.volume(),t.stocks(),(float)t.maximumSpeed(),capture.gasFlowActive(),t.particles()==0&&t.dirtyGranularColumns()==0&&capture.chemistryCounters()[5]==0&&capture.massTransferCounters()[0]==0,capture.hasPendingPhaseMotion(),audit==null||capture.exactThermalInventory().equals(audit.expectedInventory()));}return observed;}}
         @Override public Display display(){synchronized(owner()){ensure();if(display==null){var fields=fieldsDisplay.capture(capture,region.codec);display=new Display(liquidDisplay.capture(capture,region.codec.fluids(),region.codec.template().config().cellSize()),fields.chemical(),
             granularDisplay.capture(capture,region.codec.template().granularRegistry(),region.codec.template().config().cellSize()),fields.thermal());}return display;}}
         @Override public FluidCellInventoryView observeCellInventory(int x,int y,int z){synchronized(owner()){ensure();return cellObservation.capture(capture,region.codec,x,y,z);}}

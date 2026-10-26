@@ -6,11 +6,15 @@
 
 ## GPU 生产接入的最新短链
 
-2026-10-27，本轮停止性能优化，完成已有实现接入与新增热相变的正常流程检查。
+2026-10-27，本轮停止性能优化，完成已有实现、热相变与气液膜传质接入。
 
 - `:gpu-kernel:runGpuSolidLiquidReactionsValidation` 通过：实际析出、精确质量／物种／SVQ、非零动量及 U/K/PE 结算；容量不足的私有候选保留原库存，足够容量下完成发布。日志 `build/gpu-completion-solid.log`。
 - `:gpu-kernel:runGpuResidentStateValidation` 通过：ServiceLoader 发现生产后端，连续机械／热步采用设备状态，拒绝候选保留来源，常规查询、展示和显式 checkpoint 导出成功。规定运动实体完成插入、移动、具名反力结果与 checkpoint 恢复后继续推进。
 - `:gpu-kernel:runGpuThermalPhaseValidation` 通过：冻结、熔化、汽化、凝结各执行两次热步，随后机械结算、展示及 checkpoint 恢复；总质量与精确内能账闭合。两项集成结果共用日志 `build/gpu-completion-integration.log`。
+
+- `:gpu-kernel:runGpuThermalPhaseValidation` 的七场景运行通过：四种热相变、有限气腔 CO₂ 溶解／析气和外界析气。膜传质检查整数质量与物种守恒、内能账、机械接续、checkpoint 导出与恢复续算；外界源汇恢复后无重复记账。日志 `build/gpu-film-completion.log`。机械状态复制与扩容同时保留气体物种声明表。
+
+主模组默认启用 Vulkan。`build/gpu-final-delivery.log` 记录生产设备状态短链与 `:fabric:assemble` 成功；产物 `fabric/build/libs/mmm-fabric-0.17.0.jar` 内嵌 GPU provider、膜传质 shader 和 Windows x64 运行库。
 
 上述验证覆盖实际设备执行与生产接口。游戏画面、复杂 VoxelShape 和跨游戏重启观察仍沿各自人工场景；性能结论沿用下方原场景证据。
 

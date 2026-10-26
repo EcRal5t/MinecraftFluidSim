@@ -326,6 +326,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
                 t==null||t.devices==null?null:t.devices.state,t==null||t.devices==null?null:t.devices.thermal,t==null||t.coherent==null?null:t.coherent.geometry,t==null?null:t.thermal,t==null?null:t.viscosity,t==null?null:t.momentum,g==null?null:g.operator,t==null?null:t.energy);}
         int[] chemistryCounters(){var t=layout.transport;if(t==null||t.reactions==null)return new int[8];return ints(t.reactions.progress().column(VulkanReactionProgressLayout.Field.CONTROL),8);}
         int[] thermalPhaseCounters(){var t=layout.transport;if(inputs==null||!inputs.phaseChangeEnabled()||inputs.pendingPhaseSettlementOnly()||t==null||t.reactions==null||t.reactions.condensedPhase()==null)return new int[10];return ints(t.reactions.condensedPhase().column(VulkanCondensedPhaseChange.Field.CONTROL),10);}
+        int[] massTransferCounters(){var t=layout.transport;if(inputs!=null&&inputs.pendingPhaseSettlementOnly()||t==null||t.reactions==null||t.reactions.massTransfer()==null)return new int[4];return ints(t.reactions.massTransfer().column(VulkanGasLiquidMassTransfer.Field.CONTROL),4);}
         int[] gasPhaseCounters(){var t=layout.transport;if(inputs==null||!inputs.phaseChangeEnabled()||inputs.pendingPhaseSettlementOnly()||t==null||t.reactions==null||t.reactions.gasPhase()==null)return new int[8];return ints(t.reactions.gasPhase().column(VulkanGasPhaseChange.Field.CONTROL),8);}
         int[] granularCounters(){var t=layout.transport;if(currentGas||t==null||t.dynamics==null)return new int[6];return ints(t.dynamics.transitions.column(VulkanGranularTransitions.Field.CONTROL),6);}
         private int[] ints(VulkanLiquidStateLayout.Column column,int count){var b=read(column.offset(),4L*count);int[] values=new int[count];b.asIntBuffer().get(values);return values;}
@@ -344,6 +345,21 @@ final class VulkanLiquidRegion implements AutoCloseable {
         }
         mmm.fluid.EntityBodyState entityBodies(){return inputs.bodies();}
         RequestInputs requestInputs(){return inputs;}
+        mmm.chemistry.ChemicalTransferLedger filmExternalExchange(boolean incoming){
+            var t=layout.transport;if(t==null||t.reactions==null||t.reactions.massTransfer()==null)return mmm.chemistry.ChemicalTransferLedger.EMPTY;
+            var film=t.reactions.massTransfer();var speciesColumn=film.column(incoming?VulkanGasLiquidMassTransfer.Field.AMBIENT_SOURCE_SPECIES:VulkanGasLiquidMassTransfer.Field.AMBIENT_SINK_SPECIES);
+            var massColumn=film.column(incoming?VulkanGasLiquidMassTransfer.Field.SOURCE_MASS:VulkanGasLiquidMassTransfer.Field.SINK_MASS);
+            var species=read(speciesColumn.offset(),speciesColumn.bytes());var mass=read(massColumn.offset(),massColumn.bytes());
+            var groups=new ArrayList<mmm.chemistry.ChemicalTransferLedger.Group>();var chemistry=reactionConfiguration.chemistry();int count=chemistry.species().size();
+            for(int material=0;material<layout.liquid.materialCount();material++){
+                var amounts=new java.util.TreeMap<String,Long>();long resolved=0;
+                for(int sp=0;sp<count;sp++){long q=species.getLong(8*(material*count+sp));if(q==0)continue;amounts.put(chemistry.species(sp).id(),q);
+                    var unit=chemistry.species(sp).molarMassKgPerMol().divide(mmm.chemistry.ChemicalLimits.QUANTA_PER_MOL);
+                    resolved=Math.addExact(resolved,Math.multiplyExact(q,mmm.units.Mass.exactUnits(unit.numerator(),unit.denominator())));}
+                long total=mass.getLong(8*material);if(total!=0||!amounts.isEmpty())groups.add(new mmm.chemistry.ChemicalTransferLedger.Group(reactionConfiguration.fluids().material(material).id(),0,total,total-resolved,amounts));
+            }
+            return new mmm.chemistry.ChemicalTransferLedger(groups);
+        }
         VulkanReactionProgressLayout.State reactionProgress(){var t=layout.transport;return t==null||t.reactions==null?VulkanReactionProgressLayout.State.empty():t.reactions.progress().export(c->read(c.offset(),c.bytes()));}
         boolean hasPendingPhaseMotion(){var t=layout.transport;return t!=null&&t.reactions!=null&&read(t.reactions.progress().column(VulkanReactionProgressLayout.Field.PHASE_PENDING_SUMMARY).offset(),4).getInt(0)!=0;}
         mmm.fluid.PendingPhaseMotionState pendingPhaseMotion(){return new mmm.fluid.PendingPhaseMotionState(layout.liquid.cellCount(),java.util.Arrays.stream(reactionProgress().phaseMotionCells()).mapToObj(mmm.fluid.PendingPhaseMotionState.Entry::new).toList());}
@@ -618,8 +634,8 @@ final class VulkanLiquidRegion implements AutoCloseable {
 
         }
 
-        int executeReactions(VulkanRegionStorage.Candidate candidate,VulkanGasThermodynamics.Layout sourceEOS,VulkanGasGeometry.Layout previousGeometry){
-            int error=kernels.reactionKernel.execute(candidate,transport.reactions,activeInputs!=null&&activeInputs.phaseChangeEnabled(),activeInputs==null?0:activeInputs.maximumPhaseOperations(),sourceEOS,previousGeometry);
+        int executeReactions(VulkanRegionStorage.Candidate candidate,VulkanGasThermodynamics.Layout sourceEOS,VulkanGasGeometry.Layout previousGeometry,double duration){
+            int error=kernels.reactionKernel.execute(candidate,transport.reactions,activeInputs!=null&&activeInputs.phaseChangeEnabled(),activeInputs==null?0:activeInputs.maximumPhaseOperations(),sourceEOS,previousGeometry,duration);
             if(error!=0)return error;
             if(transport.phaseGasTopology==null)return candidate.continueBatch((command,input,output,errors,staging,stack)->{
                 transport.recordSolidGeometry(command,output,errors,stack);kernel.rebindRanges(geometryRanges(output,errors,geometry.get(GeometryField.FACES),transport.entity==null?occupied():transport.entity.column(VulkanEntityBodyCoupling.Field.COMBINED_SVQ)));kernel.recordCells(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ());
@@ -661,7 +677,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             if(status.error()!=0)return status.error();
             int error=kernels.thermalKernel.execute(candidate,thermal,duration,source.transport.devices==null?null:source.transport.devices.state,transport.devices==null?null:transport.devices.settlement,false);
             if(error!=0)return error;
-            if(transport.reactions!=null&&(activeInputs==null||!activeInputs.pendingPhaseSettlementOnly())){error=executeReactions(candidate,transport.gas==null?null:transport.gas.thermo,transport.gas==null?null:transport.gas.geometry);if(error!=0)return error;}
+            if(transport.reactions!=null&&(activeInputs==null||!activeInputs.pendingPhaseSettlementOnly())){error=executeReactions(candidate,transport.gas==null?null:transport.gas.thermo,transport.gas==null?null:transport.gas.geometry,duration);if(error!=0)return error;}
             var stableHeader=new HeaderWrite(transport.thermal.contacts().header.offset(),transport.thermal.contacts().headerBytes());
             return candidate.finishBatch(stableHeader.bytes().remaining(),(command,input,output,errors,staging,stack)->{
                 kernels.ledger.record(command,thermal.reservoir());kernels.ledger.record(command,transport.thermalOnlyRoundoff);kernels.ledger.record(command,transport.thermalOnlyMechanical);kernels.ledger.record(command,transport.inventoryPosting);kernels.ledger.record(command,transport.sourcePosting);kernels.ledger.record(command,transport.sinkPosting);
@@ -894,7 +910,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
                                             thermalFinishes?(migrating?headerBytes(stableHeaders):0):-1);
                                 }
                                 traceStage("thermal-contacts-conduction",stageMark);
-                                if(error==0&&react){capacityStage="liquid reactions";error=executeReactions(candidate,transport.gas==null?null:transport.aperture==null?transport.gas.thermo:transport.aperture.eos,transport.successor==null?null:transport.successor.geometry);}
+                                if(error==0&&react){capacityStage="liquid reactions";error=executeReactions(candidate,transport.gas==null?null:transport.aperture==null?transport.gas.thermo:transport.aperture.eos,transport.successor==null?null:transport.successor.geometry,parameters.duration());}
                                 if(error==0&&!thermalFinishes)error=candidate.finishBatch(migrating?headerBytes(stableHeaders):0,finishLedgers);
                             }
                         }
@@ -1202,6 +1218,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             if(successor!=null){incoming.add(new VulkanEnergyLedger.Stream(1,successor.remap.word(VulkanGasRemap.Field.AUDIT_ENERGY),1,2,1));outgoing.add(new VulkanEnergyLedger.Stream(1,successor.remap.word(VulkanGasRemap.Field.AUDIT_ENERGY)+2,1,2,1));}
             if(aperture!=null){incoming.add(new VulkanEnergyLedger.Stream(1,aperture.remap.word(VulkanGasRemap.Field.AUDIT_ENERGY),1,2,1));outgoing.add(new VulkanEnergyLedger.Stream(1,aperture.remap.word(VulkanGasRemap.Field.AUDIT_ENERGY)+2,1,2,1));}
             if(phaseGasTopology!=null){incoming.add(new VulkanEnergyLedger.Stream(1,phaseGasTopology.remap().word(VulkanGasRemap.Field.AUDIT_ENERGY),1,2,1));outgoing.add(new VulkanEnergyLedger.Stream(1,phaseGasTopology.remap().word(VulkanGasRemap.Field.AUDIT_ENERGY)+2,1,2,1));}
+            if(reactions!=null){incoming.addAll(reactions.sourceStreams());outgoing.addAll(reactions.sinkStreams());}
             sourcePosting=VulkanEnergyLedger.layout(incoming,mechanicalPosting.endOffset(),liquid.alignment());sinkPosting=VulkanEnergyLedger.layout(outgoing,sourcePosting.endOffset(),liquid.alignment());
             var inventory=new ArrayList<VulkanEnergyLedger.Stream>();inventory.add(new VulkanEnergyLedger.Stream(1,word(liquid.column(ENERGY_BITS)),liquid.stockCapacity(),2,1,word(liquid.column(COUNTS))));
             if(gas!=null)inventory.add(new VulkanEnergyLedger.Stream(1,Math.toIntExact(gas.state.column(VulkanGasStateLayout.Field.INTERNAL_ENERGY).offset()/4),gas.state.nodeCapacity(),2,1,Math.toIntExact(gas.state.column(VulkanGasStateLayout.Field.COUNTS).offset()/4)));
@@ -1360,7 +1377,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             if(successor!=null) {
                 result.addAll(List.of(successor.totals.header(),successor.geometry.header(),successor.lineage.header,successor.remap.header,successor.work.header()));
                 addGasTables(result,successor.retainedEOS);
-                for(var field:VulkanGasRemap.Field.values())if(field.name().startsWith("AMBIENT_")&&field!=VulkanGasRemap.Field.AMBIENT_BEFORE&&field!=VulkanGasRemap.Field.AMBIENT_AFTER)result.add(successor.remap.column(field));
+                for(var field:VulkanGasRemap.Field.values())if((field.name().startsWith("AMBIENT_")&&field!=VulkanGasRemap.Field.AMBIENT_BEFORE&&field!=VulkanGasRemap.Field.AMBIENT_AFTER||field==VulkanGasRemap.Field.DECLARED_SPECIES_OFFSETS||field==VulkanGasRemap.Field.DECLARED_SPECIES_HANDLES))result.add(successor.remap.column(field));
             }
             if(aperture!=null)result.addAll(aperture.persistentColumns());
             if(gasHeat!=null)result.add(gasHeat.header());
@@ -1516,7 +1533,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
         List<VulkanLiquidStateLayout.Column> persistentColumns(){
             var columns=new ArrayList<VulkanLiquidStateLayout.Column>();transport.addGasTables(columns,eos);transport.addGasTables(columns,retainedEOS);
             columns.add(flow.header);columns.add(schurPressure.header());columns.add(remap.header);columns.add(work.header());
-            for(var field:VulkanGasRemap.Field.values())if(field.name().startsWith("AMBIENT_")&&field!=VulkanGasRemap.Field.AMBIENT_BEFORE&&field!=VulkanGasRemap.Field.AMBIENT_AFTER)columns.add(remap.column(field));return columns;
+            for(var field:VulkanGasRemap.Field.values())if((field.name().startsWith("AMBIENT_")&&field!=VulkanGasRemap.Field.AMBIENT_BEFORE&&field!=VulkanGasRemap.Field.AMBIENT_AFTER||field==VulkanGasRemap.Field.DECLARED_SPECIES_OFFSETS||field==VulkanGasRemap.Field.DECLARED_SPECIES_HANDLES))columns.add(remap.column(field));return columns;
         }
         void migrate(org.lwjgl.vulkan.VkCommandBuffer command,GasAperture old,GpuBuffer input,GpuBuffer output,org.lwjgl.system.MemoryStack stack){
             var from=old.persistentColumns();var to=persistentColumns();var headerOffsets=headers().stream().map(HeaderWrite::offset).toList();
@@ -1588,7 +1605,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             var from=new VulkanLiquidStateLayout.Column[]{previous.retainedEOS.segmentOffsets(),previous.retainedEOS.segmentUpper(),previous.retainedEOS.segmentHeatCapacity(),previous.retainedEOS.specificAnchorEnergy(),previous.retainedEOS.speciesReference()};
             var to=new VulkanLiquidStateLayout.Column[]{retainedEOS.segmentOffsets(),retainedEOS.segmentUpper(),retainedEOS.segmentHeatCapacity(),retainedEOS.specificAnchorEnergy(),retainedEOS.speciesReference()};
             for(int i=0;i<from.length;i++)copyColumn(command,input,from[i],output,to[i],stack);
-            for(var field:VulkanGasRemap.Field.values())if(field.name().startsWith("AMBIENT_")&&field!=VulkanGasRemap.Field.AMBIENT_BEFORE&&field!=VulkanGasRemap.Field.AMBIENT_AFTER)
+            for(var field:VulkanGasRemap.Field.values())if((field.name().startsWith("AMBIENT_")&&field!=VulkanGasRemap.Field.AMBIENT_BEFORE&&field!=VulkanGasRemap.Field.AMBIENT_AFTER||field==VulkanGasRemap.Field.DECLARED_SPECIES_OFFSETS||field==VulkanGasRemap.Field.DECLARED_SPECIES_HANDLES))
                 copyColumn(command,input,previous.remap.column(field),output,remap.column(field),stack);
         }
     }

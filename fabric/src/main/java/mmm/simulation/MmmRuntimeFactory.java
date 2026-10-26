@@ -179,13 +179,14 @@ public final class MmmRuntimeFactory {
 	}
 
 	private static FluidSolverBackend createSolverBackend() {
-		String selected = System.getProperty("mmm.solverBackend", "cpu").trim();
+		String selected = System.getProperty("mmm.solverBackend", "vulkan").trim();
 		if (selected.equals("cpu")) {
 			var pressureCompute = createPressureCompute();
 			return pressureCompute == null ? new CpuFluidSolverBackend()
 					: new CpuFluidSolverBackend(pressureCompute, message -> MmmMod.LOGGER.warn("{}", message));
 		}
 		int device = Integer.parseInt(System.getProperty("mmm.gpuDevice", "0"));
+		if (device < 0) throw new IllegalArgumentException("mmm.gpuDevice must be nonnegative");
 		for (var provider : ServiceLoader.load(FluidSolverBackend.Provider.class))
 			if (provider.id().equals(selected)) return Objects.requireNonNull(provider.create(device));
 		throw new IllegalStateException("Fluid solver provider is unavailable: " + selected);

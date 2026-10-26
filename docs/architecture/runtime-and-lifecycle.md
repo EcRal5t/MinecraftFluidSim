@@ -67,11 +67,11 @@
 [FluidProtocolServer](../../fabric/src/main/java/mmm/network/FluidProtocolServer.java) 保存配置协商期间的短期任务。
 可选 GPU probe 使用自己的生命周期实例，通过 [MmmGpuProbeHostIntegration](../../gpu-probe/src/main/java/mmm/gpuprobe/MmmGpuProbeHostIntegration.java) 接入主模组。
 
-区域求解默认使用 CPU。主模组已打包 Vulkan kernel 与运行库；在 Java 启动参数中加入 `-Dmmm.solverBackend=vulkan -Dmmm.gpuDevice=0`，由 `MmmRuntimeFactory` 经 `ServiceLoader` 创建设备常驻区域后端。设备编号从0开始，停服时释放设备资源。指定 Vulkan 时，缺少 provider 或设备能力会报告具体启动错误。
+区域求解默认使用 Vulkan。主模组已打包 GPU kernel、provider 服务声明以及 Windows x64 运行库；将主模组与 Fabric API 放入 Minecraft 26.2 / Fabric 的 `mods` 目录即可使用。`MmmRuntimeFactory` 经 `ServiceLoader` 创建设备常驻区域后端，默认设备编号为0，停服时释放设备资源。多显卡环境可用 Java 参数 `-Dmmm.gpuDevice=1` 选择其他设备，也可用 `-Dmmm.gpuDeviceName=显卡名称片段` 按名称选择。设备须支持当前内核所需的 Vulkan、FP64 与64位整数原子操作；缺少运行库或设备能力会报告具体启动错误。
 
 Vulkan 后端沿现有 `RegionApplicationService` 请求、私有候选和区域原子提交执行机械步与热步。日常观察、显示、单元库存查询和实体采样读取已提交设备代；存档、世界碰撞编辑与容器操作通过显式冷导出交接，后续求解重新导入设备。CPU 与 Vulkan 共用区域存档格式。
 
-设备请求失败时保留已提交区域，私有候选失败沿区域数值暂停流程报告。`-Dmmm.pressureCompute=vulkan` 只影响 CPU 后端的压力计算服务，完整设备常驻执行使用 `mmm.solverBackend=vulkan`。独立 `/mmmgpu` probe 保留自己的生命周期。
+设备请求失败时保留已提交区域，私有候选失败沿区域数值暂停流程报告。Java 参数 `-Dmmm.solverBackend=cpu` 显式选择 CPU 后端；此时 `-Dmmm.pressureCompute=vulkan` 可选择 GPU 压力计算服务。独立 `/mmmgpu` probe 保留自己的生命周期，主模组的正常 GPU 执行由主模组内嵌 kernel 提供。
 
 <a id="tick"></a>
 ## 一次区域计算

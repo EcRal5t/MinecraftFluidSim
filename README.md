@@ -1,6 +1,6 @@
 # Matter, Motion & Mechanics
 
-Minecraft Java 26.2 / Fabric 流体模组。玩家用外壳方块和控制器围出封闭空间，模拟其中的液体、气体、颗粒、化学反应、传热与相变。当前最多支持四个独立区域，物理计算使用 CPU 单元有限体积液体输运与持久 MAC 动量。
+Minecraft Java 26.2 / Fabric 流体模组。玩家用外壳方块和控制器围出封闭空间，模拟其中的液体、气体、颗粒、化学反应、传热与相变。当前最多支持四个独立区域，物理计算默认使用 Vulkan GPU 常驻后端，采用单元有限体积液体输运与持久 MAC 动量。
 
 ## 开发入口
 
@@ -49,7 +49,7 @@ Minecraft Java 26.2 / Fabric 流体模组。玩家用外壳方块和控制器围
 
 主模组产物位于 `fabric/build/libs/`，可选 GPU probe 产物位于 `gpu-probe/build/libs/`。部署步骤见 [验收与发布](docs/roadmap/acceptance-and-release.md#release)。
 
-默认采用 CPU 计算。主模组已包含 Vulkan 常驻区域后端，启动参数 `-Dmmm.solverBackend=vulkan -Dmmm.gpuDevice=0` 选择设备执行；正常请求、观察显示、编辑与存档交接沿生产区域流程推进，启动说明见[运行时说明](docs/architecture/runtime-and-lifecycle.md#startup)。已有 GPU 实现与热相变已接入生产流程，性能优化已停止；当前实现范围及限制见[实施状态](docs/roadmap/solver-consolidation-plan.md)。
+将主模组 JAR（排除 `sources`）与 Fabric API 放入 Minecraft 26.2 / Fabric 的 `mods` 目录即可运行，使用 Java 25 或更新版本。当前发布内嵌 Windows x64 的 GPU 运行库，默认使用 Vulkan 设备0，无需安装 GPU probe 或添加启动参数。需要切换显卡时添加 Java 参数 `-Dmmm.gpuDevice=1`，需要 CPU 计算时添加 `-Dmmm.solverBackend=cpu`。正常请求、观察显示、编辑与存档交接沿生产区域流程推进，启动说明见[运行时说明](docs/architecture/runtime-and-lifecycle.md#startup)，当前实现范围见[实施状态](docs/roadmap/solver-consolidation-plan.md)。
 
 构建缓存、实验输出与本地研究归档的保存位置和清理方式见 [构建输出管理](docs/maintenance/build-outputs.md)。
 

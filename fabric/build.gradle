@@ -124,6 +124,7 @@ tasks.register('runCpuValidation', JavaExec) {
 	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
 	mainClass = 'mmm.validation.CpuValidationSuite'
 	enableAssertions = true
+	systemProperty 'mmm.solverBackend', 'cpu'
 	maxHeapSize = providers.gradleProperty('cpuValidationHeap').getOrElse('512m')
 	args providers.gradleProperty('cpuValidation').getOrElse('fast')
 	systemProperty 'mmm.validation.keepGoing', providers.gradleProperty('cpuValidationKeepGoing').getOrElse('false')
