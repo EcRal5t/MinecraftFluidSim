@@ -192,6 +192,18 @@ registerGpuProbe(
 }
 
 registerGpuProbe(
+    'runGpuCommonPressureReplay',
+    'Measures a captured liquid/gas pressure graph without repeating preceding simulation steps.',
+    'mmm.gpuprobe.GpuCommonPressureReplay',
+    'gpu-common-pressure-replay-work'
+) { probeTask ->
+    probeTask.systemProperty 'mmm.gpuPressureGraphProfile', providers.gradleProperty('gpuPressureGraphProfile').getOrElse('false')
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
+        rootProject.file(providers.gradleProperty('gpuCommonPressureReplayFile').getOrElse('build/gpu-cut64-common-pressure.bin')).absolutePath,
+        providers.gradleProperty('gpuPressureSamples').getOrElse('3')
+}
+
+registerGpuProbe(
     'runGpuLiquidGeometryBenchmark',
     'Measures resident mixed-liquid PLIC, cut-cell and MAC geometry reconstruction.',
     'mmm.gpuprobe.GpuLiquidGeometryBenchmark',

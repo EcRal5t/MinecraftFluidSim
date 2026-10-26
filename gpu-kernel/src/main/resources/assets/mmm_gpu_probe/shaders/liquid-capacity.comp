@@ -176,7 +176,7 @@ void apply(int index){if(index>=get(STATE,9))return;int e=get(ACTIVE_EDGES,index
 }
 void updatePositive(int index){if(index<get(STATE,12))countPositive(get(CHANGED_VERTICES,index));}
 // Returning a preferred route to its donor keeps all integer supply quotas exact.
-// A feasible stationary allocation makes each violated cell/group retractable without creating new routes.
+// A feasible stationary allocation permits one local withdrawal before residual balancing.
 void checkStationaryGroup(int group){if(read(GROUP_BASE,group)>upper(8*n()+group))atomicOr(words[at(STATE)+13],1u);}
 void startCorrection(){put(STATE,0,get(STATE,13)==0?3:6);}
 void clearRetractions(int id){if(id<7*n())write(PROPOSAL,id,0l);
@@ -207,7 +207,10 @@ void applyRetractions(int cell){int64_t returned=0l;for(int side=1;side<7;side++
 }
 void finishRound(){
  int round=control(1)+1;putControl(1,round);
- if(get(STATE,0)==3&&get(STATE,15)==0)putControl(0,1);
+ if(get(STATE,0)==3){
+  if(get(STATE,15)==0)putControl(0,1);
+  else put(STATE,0,6);
+ }
  if(get(STATE,0)==2)put(STATE,7,get(STATE,7)+1);
  if(get(STATE,0)==2&&get(STATE,4)==0){putControl(0,1);return;}
  if(round>=control(5)&&control(0)==0)putControl(0,3);

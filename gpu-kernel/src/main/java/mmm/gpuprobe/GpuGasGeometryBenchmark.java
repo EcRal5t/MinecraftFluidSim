@@ -37,8 +37,8 @@ public final class GpuGasGeometryBenchmark {
             var thermodynamics=new VulkanGasThermodynamics(context)) {
             System.out.println("Device: "+context.deviceName());
             System.out.println("Gas-only additional cost: exact dry presence, shared PLIC dry ports, sealed finite chambers, connectivity, membership CSR, parallel node volumes and heterogeneous segmented EOS.");
-            System.out.println("Liquid geometry/totals remain resident. One initialization checkpoint seeds same-generation gas rows; timed candidates use no uploads and only status/connectivity feedback. No gas transport or pressure coupling included.");
-            System.out.println("scene,grid,finite_nodes,median_ms,max_ms,gpu_mean_ms,connectivity_rounds_mean,upload_B_per_step,readback_B_per_step,device_MiB,staging_MiB");
+            System.out.println("Liquid geometry/totals remain resident. One initialization checkpoint seeds same-generation gas rows; timed candidates use no uploads and only final status feedback. No gas transport or pressure coupling included.");
+            System.out.println("scene,grid,finite_nodes,median_ms,max_ms,gpu_mean_ms,upload_B_per_step,readback_B_per_step,device_MiB,staging_MiB");
             var definitions=gasDefinitions();
             for(int grid:new int[]{32,64})for(boolean cut:new boolean[]{false,true})
                 measure(context,liquidGeometry,totals,geometry,thermodynamics,definitions,grid,cut,samples);
@@ -76,15 +76,15 @@ public final class GpuGasGeometryBenchmark {
             try(var source=storage.capture()) {advance(storage,source,liquidKernel,totalKernel,geometryKernel,thermalKernel,liquid,geometry,totals,gasGeometry,thermal,true,true,true);}
             try(var source=storage.capture()) {
                 for(int warm=0;warm<5;warm++)advance(storage,source,liquidKernel,totalKernel,geometryKernel,thermalKernel,liquid,geometry,totals,gasGeometry,thermal,false,true,false);
-                var before=storage.metrics();long[] times=new long[samples];long rounds=0;
+                var before=storage.metrics();long[] times=new long[samples];
                 for(int sample=0;sample<samples;sample++) {
                     long start=System.nanoTime();
-                    rounds+=advance(storage,source,liquidKernel,totalKernel,geometryKernel,thermalKernel,liquid,geometry,totals,gasGeometry,thermal,false,true,false);
+                    advance(storage,source,liquidKernel,totalKernel,geometryKernel,thermalKernel,liquid,geometry,totals,gasGeometry,thermal,false,true,false);
                     times[sample]=System.nanoTime()-start;
                 }
                 var after=storage.metrics();Arrays.sort(times);
-                System.out.printf("%s,%d,%d,%.3f,%.3f,%.3f,%.1f,%d,%d,%.1f,%.1f%n",cut?"cut-partial-mixture":"dam-mixture",grid,nodes,
-                        times[samples/2]*1e-6,times[samples-1]*1e-6,(after.gpuNanos()-before.gpuNanos())*1e-6/samples,(double)rounds/samples,
+                System.out.printf("%s,%d,%d,%.3f,%.3f,%.3f,%d,%d,%.1f,%.1f%n",cut?"cut-partial-mixture":"dam-mixture",grid,nodes,
+                        times[samples/2]*1e-6,times[samples-1]*1e-6,(after.gpuNanos()-before.gpuNanos())*1e-6/samples,
                         (after.uploadBytes()-before.uploadBytes())/samples,(after.readbackBytes()-before.readbackBytes())/samples,
                         after.deviceBytes()/1048576.0,after.stagingBytes()/1048576.0);
                 advance(storage,source,liquidKernel,totalKernel,geometryKernel,thermalKernel,liquid,geometry,totals,gasGeometry,thermal,false,true,true);
@@ -98,34 +98,25 @@ public final class GpuGasGeometryBenchmark {
             }
         }
     }
-    static int advance(VulkanRegionStorage storage,VulkanRegionStorage.Capture source,VulkanLiquidGeometry liquidKernel,
+    static void advance(VulkanRegionStorage storage,VulkanRegionStorage.Capture source,VulkanLiquidGeometry liquidKernel,
                                VulkanLiquidCellVolumes totalKernel,VulkanGasGeometry geometryKernel,VulkanGasThermodynamics thermalKernel,
                                VulkanLiquidStateLayout liquid,Geometry geometry,VulkanLiquidCellVolumes.Layout totals,
                                VulkanGasGeometry.Layout gasGeometry,VulkanGasThermodynamics.Layout thermal,
                                boolean rebuildLiquid,boolean eos,boolean commit) {
         try(var candidate=storage.prepare(source)) {
-            var batch=candidate.beginBatch((command,input,output,errors,staging,stack)->{
+            int error=candidate.execute(0,(command,input,output,errors,staging,stack)->{
                 var src=new FlipKernelBindings.BufferRange(input);var dst=new FlipKernelBindings.BufferRange(output);var err=new FlipKernelBindings.BufferRange(errors);
                 if(rebuildLiquid) {
                     liquidKernel.rebindRanges(geometryRanges(liquid,geometry,output,errors));liquidKernel.record(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ());
                     totalKernel.rebindRanges(src,dst,err);totalKernel.record(command,totals);
                 }
                 geometryKernel.rebindRanges(dst,err);thermalKernel.rebindRanges(dst,err);
-                geometryKernel.recordGeometry(command,gasGeometry);geometryKernel.recordConnectivity(command,gasGeometry,4);
-            },gasGeometry.changed().offset(),4);
-            int rounds=4;
-            if(batch.error()!=0)throw new AssertionError("Gas geometry status="+batch.error());
-            while(batch.feedback().getInt(0)!=0) {
-                if(rounds>=512)throw new AssertionError("Gas connectivity exceeded benchmark rounds");
-                batch=candidate.continueBatch((command,input,output,errors,staging,stack)->geometryKernel.recordConnectivity(command,gasGeometry,4),gasGeometry.changed().offset(),4);
-                rounds+=4;if(batch.error()!=0)throw new AssertionError("Gas connectivity status="+batch.error());
-            }
-            int error=candidate.finishBatch((command,input,output,errors,staging,stack)->{
+                geometryKernel.recordGeometry(command,gasGeometry);geometryKernel.recordConnectivity(command,gasGeometry);
                 geometryKernel.recordComponents(command,gasGeometry);
                 if(eos){thermalKernel.recordVolumes(command,thermal,gasGeometry);thermalKernel.record(command,thermal);}
             });
             if(error!=0)throw new AssertionError("Gas component/EOS status="+error);
-            if(commit)candidate.commit();return rounds;
+            if(commit)candidate.commit();
         }
     }
     static int seed(VulkanRegionStorage storage,VulkanRegionStorage.Capture source,ByteBuffer target,

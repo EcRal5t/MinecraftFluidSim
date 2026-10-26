@@ -13,11 +13,21 @@ bool liveVertex(int index){if(index<h(3))return true;if(index<h(3)+h(10))return 
 double value(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
 int64_t mass(int at){return int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32));}
 int64_t routeMass(int stock,int slot){uint mask=words[h(28)+stock];if((mask&(1u<<slot))==0u)return int64_t(0);int r=int(words[h(27)+stock])+bitCount(mask&((1u<<slot)-1u));return mass(h(7)+2*r);}
-int root(int vertex){int next=int(words[h(11)+vertex]);while(next!=vertex){vertex=next;next=int(words[h(11)+vertex]);}return vertex;}
+int root(int vertex){
+    int next=int(atomicAdd(words[h(11)+vertex],0u));
+    while(next!=vertex){
+        int parent=int(atomicAdd(words[h(11)+next],0u));
+        atomicCompSwap(words[h(11)+vertex],uint(next),uint(parent));
+        vertex=next;next=parent;
+    }return vertex;
+}
 void join(int first,int second){
-    int a=root(first),b=root(second);if(a==b)return;
-    uint old=atomicMin(words[h(11)+max(a,b)],uint(min(a,b)));
-    if(old>uint(min(a,b)))atomicOr(words[h(12)],1u);
+    for(;;){
+        int a=root(first),b=root(second);if(a==b)return;
+        int high=max(a,b),low=min(a,b);
+        // Only roots are linked; every successful link strictly decreases the parent.
+        if(atomicCompSwap(words[h(11)+high],uint(high),uint(low))==uint(high))return;
+    }
 }
 int cellIndex(ivec3 pos){return (pos.z*h(1)+pos.y)*h(0)+pos.x;}
 void face(int index){
@@ -67,7 +77,7 @@ void main(){
     else if(p.stage==3)cell(item);
     else if(p.stage==7)particle(item);
     else if(!liveVertex(item))return;
-    else if(p.stage==4){int parent=root(item);uint old=atomicMin(words[h(11)+item],uint(parent));if(old!=uint(parent))atomicOr(words[h(12)],1u);}
+    else if(p.stage==4){int parent=root(item);atomicExchange(words[h(11)+item],uint(parent));}
     else if(p.stage==5){if(words[h(12)]!=0u){atomicOr(errors,8192u);return;}atomicAdd(words[h(13)+int(words[h(11)+item])],1u);}
     else {int parent=int(words[h(11)+item]);uint offset=atomicAdd(words[h(15)+parent],1u);words[h(16)+int(words[h(14)+parent]+offset)]=uint(item);}
 }

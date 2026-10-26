@@ -5,6 +5,8 @@ import org.lwjgl.vulkan.VkQueryPoolCreateInfo;
 import java.util.ArrayList;
 import java.util.List;
 import static org.lwjgl.system.MemoryStack.stackPush;
+import static org.lwjgl.system.MemoryUtil.memAllocLong;
+import static org.lwjgl.system.MemoryUtil.memFree;
 import static org.lwjgl.vulkan.VK10.*;
 
 /** Optional benchmark-only timestamp pairs, recorded around stages without splitting submissions. */
@@ -34,8 +36,8 @@ final class VulkanStageTimings implements AutoCloseable {
     /** Call only after the final containing submission has completed. Pair intervals omit CPU submission gaps. */
     List<Sample> read(){
         if(labels.isEmpty())return List.of();
-        try(var stack=stackPush()){
-            var timestamps=stack.mallocLong(2*labels.size());
+        var timestamps=memAllocLong(2*labels.size());
+        try{
             VulkanDeviceContext.check(vkGetQueryPoolResults(context.device(),pool,0,2*labels.size(),timestamps,Long.BYTES,
                     VK_QUERY_RESULT_64_BIT|VK_QUERY_RESULT_WAIT_BIT),"vkGetQueryPoolResults(stages)");
             var result=new ArrayList<Sample>(labels.size());
@@ -45,7 +47,7 @@ final class VulkanStageTimings implements AutoCloseable {
                 result.add(new Sample(labels.get(i),Math.max(0,Math.round(ticks*(double)context.timestampPeriodNanos()))));
             }
             return List.copyOf(result);
-        }
+        }finally{memFree(timestamps);}
     }
     @Override public void close(){vkDestroyQueryPool(context.device(),pool,null);}
 }

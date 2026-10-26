@@ -23,12 +23,14 @@ final class VulkanGasGeometry implements AutoCloseable {
                   VulkanLiquidStateLayout.Column rootFlags, VulkanLiquidStateLayout.Column rootOffsets,
                   VulkanLiquidStateLayout.Column componentCounts, VulkanLiquidStateLayout.Column componentOffsets,
                   VulkanLiquidStateLayout.Column componentCursors, VulkanLiquidStateLayout.Column componentMembers,
-                  VulkanLiquidStateLayout.Column scanWorkspace, VulkanLiquidStateLayout.Column microFractions, long endOffset) {
+                  VulkanLiquidStateLayout.Column scanWorkspace, VulkanLiquidStateLayout.Column microFractions,
+                  VulkanLiquidStateLayout.Column cutFaces,VulkanLiquidStateLayout.Column connectedFaces,
+                  VulkanLiquidStateLayout.Column presentCells,VulkanLiquidStateLayout.Column dispatch,long endOffset) {
         /** Shares PLIC port clipping with the liquid MAC face construction, without another workspace. */
         Layout withLiquidFaces(int wordOffset){
             return new Layout(totals,masksWordOffset,occupiedWordOffset,cellsWordOffset,planesWordOffset,microWordOffset,sealedExterior,cellSize,wordOffset,
                     header,presence,dryVolumes,dryMasks,compact,faceAreas,fullConnections,parents,exteriorReachable,cellNodes,changed,componentCount,
-                    rootFlags,rootOffsets,componentCounts,componentOffsets,componentCursors,componentMembers,scanWorkspace,microFractions,endOffset);
+                    rootFlags,rootOffsets,componentCounts,componentOffsets,componentCursors,componentMembers,scanWorkspace,microFractions,cutFaces,connectedFaces,presentCells,dispatch,endOffset);
         }
         int headerWordOffset() { return word(header); }
         int cells() { return totals.source().cellCount(); }
@@ -40,9 +42,10 @@ final class VulkanGasGeometry implements AutoCloseable {
                 throw new IllegalArgumentException("Chamber geometry transfer changes the grid");
             var from=List.of(source.presence,source.dryVolumes,source.dryMasks,source.compact,source.faceAreas,
                     source.fullConnections,source.parents,source.exteriorReachable,source.cellNodes,source.changed,
-                    source.componentCount,source.rootFlags,source.rootOffsets,source.componentCounts,source.componentOffsets,source.componentMembers);
+                    source.componentCount,source.rootFlags,source.rootOffsets,source.componentCounts,source.componentOffsets,source.componentMembers,
+                    source.cutFaces,source.connectedFaces,source.presentCells,source.dispatch);
             var to=List.of(presence,dryVolumes,dryMasks,compact,faceAreas,fullConnections,parents,exteriorReachable,cellNodes,changed,
-                    componentCount,rootFlags,rootOffsets,componentCounts,componentOffsets,componentMembers);
+                    componentCount,rootFlags,rootOffsets,componentCounts,componentOffsets,componentMembers,cutFaces,connectedFaces,presentCells,dispatch);
             for(int i=0;i<from.size();i++)plan.copy(from.get(i),to.get(i));
         }
         /** cellNodes: -1 no gas, 0 ambient, 1..componentCount finite chambers.
@@ -68,6 +71,7 @@ final class VulkanGasGeometry implements AutoCloseable {
             data[23] = word(exteriorReachable); data[24] = word(cellNodes); data[25] = word(changed); data[26] = word(componentCount);
             data[27] = word(rootFlags); data[28] = word(rootOffsets); data[29] = word(componentCounts);
             data[30] = word(componentOffsets); data[31] = word(componentCursors); data[32] = word(componentMembers);
+            data[40]=word(cutFaces);data[41]=word(connectedFaces);data[42]=word(presentCells);data[43]=word(dispatch);
             data[33] = word(microFractions);data[36]=liquidFacesWordOffset;
             data[37]=word(totals.source().column(VulkanLiquidStateLayout.Field.MOMENTUM_X));
             data[38]=word(totals.source().column(VulkanLiquidStateLayout.Field.MOMENTUM_Y));
@@ -107,13 +111,16 @@ final class VulkanGasGeometry implements AutoCloseable {
         var members = column(cursor, cells, 4, alignment);
         var scan = column(cursor, Math.toIntExact(VulkanPrefixScan.workspaceBytes(roots) / 4), 4, alignment);
         var fractions = column(cursor, Math.multiplyExact(cells,8), 4, alignment);
+        var cutFaces=column(cursor,faces,4,alignment);var connectedFaces=column(cursor,faces,4,alignment);
+        var presentCells=column(cursor,cells,4,alignment);var dispatch=column(cursor,12,4,alignment);
         return new Layout(totals, masksWordOffset, occupiedWordOffset, cellsWordOffset, planesWordOffset, microWordOffset,
                 sealedExterior, cellSize, -1, header, presence, volumes, masks, compact, areas, connections, parents,
                 exterior, nodes, changed, count, flags, rootOffsets, componentCounts, offsets, cursors, members,
-                scan, fractions, align(cursor[0], alignment));
+                scan, fractions,cutFaces,connectedFaces,presentCells,dispatch,align(cursor[0], alignment));
     }
     private final FlipKernelBindings bindings;
     private final VulkanPrefixScan scan;
+    private FlipKernelBindings.BufferRange arena;
     VulkanGasGeometry(VulkanDeviceContext context) {
         bindings = new FlipKernelBindings(context, 2,
                 resource("gas-geometry.comp").replace("// DYADIC_LIBRARY", resource("liquid-dyadic.glsl")), 12);
@@ -124,21 +131,19 @@ final class VulkanGasGeometry implements AutoCloseable {
         }
     }
     void rebindRanges(FlipKernelBindings.BufferRange candidate, FlipKernelBindings.BufferRange errors) {
-        bindings.rebindRanges(List.of(candidate, errors));scan.rebindRanges(candidate, candidate, candidate, errors);
+        arena=candidate;bindings.rebindRanges(List.of(candidate, errors));scan.rebindRanges(candidate, candidate, candidate, errors);
     }
     void recordGeometry(VkCommandBuffer command, Layout layout) {
         stage(command, layout, 0, layout.cells() + 1);
         stage(command, layout, 1, layout.cells());
         stage(command, layout, 2, layout.faces());
+        stage(command,layout,9,1);stage(command,layout,10,layout.faces());stage(command,layout,11,1);
     }
-    /** Read only the four-byte changed column after each caller-chosen batch; zero confirms convergence. */
-    void recordConnectivity(VkCommandBuffer command, Layout layout, int iterations) {
-        if (iterations < 1) throw new IllegalArgumentException("Connectivity batch must be positive");
-        for (int i = 0; i < iterations; i++) {
-            stage(command, layout, 3, 1);
-            stage(command, layout, 4, layout.faces());
-            stage(command, layout, 5, layout.cells());
-        }
+    /** Root-CAS closes every edge before the stage barrier; one compression publishes final roots. */
+    void recordConnectivity(VkCommandBuffer command, Layout layout) {
+        stage(command, layout, 3, 1);
+        stage(command, layout, 4, layout.faces());
+        stage(command, layout, 5, layout.cells());
     }
     /** Requires a completed connectivity batch whose changed value is zero; otherwise reports error 8192. */
     void recordComponents(VkCommandBuffer command, Layout layout) {
@@ -154,9 +159,11 @@ final class VulkanGasGeometry implements AutoCloseable {
             bindings.bind(command, stack);
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                     stack.ints(layout.headerWordOffset(), stage, count));
-            vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);
+            if(stage==4||stage==5||stage==10){int slot=stage==10?0:stage==4?1:2;
+                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+layout.dispatch().offset()+12L+12L*slot);
+            }else vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);
             barrier(command, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT, stack);
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT|VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT|VK_ACCESS_INDIRECT_COMMAND_READ_BIT, stack);
         }
     }
     private static int word(VulkanLiquidStateLayout.Column column) { return Math.toIntExact(column.offset() / 4); }

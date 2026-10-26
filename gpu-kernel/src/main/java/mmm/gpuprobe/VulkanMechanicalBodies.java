@@ -87,15 +87,12 @@ final class VulkanMechanicalBodies implements AutoCloseable {
         bindings.rebindRanges(List.of(source,candidate,errors));scan.rebindRanges(candidate,candidate,candidate,errors);
     }
     void recordInitialize(VkCommandBuffer command,Layout layout){stage(command,layout,0,layout.vertices());}
-    /** Read changed after a batch; zero permits recordMembers. All links come from the same accepted step. */
-    void recordConnectivity(VkCommandBuffer command,Layout layout,int iterations) {
-        if(iterations<1)throw new IllegalArgumentException("Mechanical connectivity needs a positive batch");
-        for(int i=0;i<iterations;i++){
-            stage(command,layout,1,1);stage(command,layout,2,layout.faces());
-            stage(command,layout,3,layout.source().cellCount());
-            if(layout.granular()!=null)stage(command,layout,7,layout.granular().state().particleCapacity());
-            stage(command,layout,4,layout.vertices());
-        }
+    /** Root-CAS closes accepted-step links; the final stage compresses every live vertex once. */
+    void recordConnectivity(VkCommandBuffer command,Layout layout) {
+        stage(command,layout,1,1);stage(command,layout,2,layout.faces());
+        stage(command,layout,3,layout.source().cellCount());
+        if(layout.granular()!=null)stage(command,layout,7,layout.granular().state().particleCapacity());
+        stage(command,layout,4,layout.vertices());
     }
     void recordMembers(VkCommandBuffer command,Layout layout) {
         stage(command,layout,5,layout.vertices());

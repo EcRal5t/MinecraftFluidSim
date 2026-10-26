@@ -5,7 +5,7 @@ layout(binding=0,std430) buffer Arena { uint words[]; };
 layout(binding=1,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header; int stage; int count; int argument; float cellSize; float duration; float gravity; float tolerance; } p;
 const int SOURCE_K=0,PRE_K=1,POST_K=2,REFERENCE=3,STORAGE=4,DIAGONAL=5,MODE=6,CELL_P=7,NODE_P=8,NODE_DV=9,
- FACE_ROWS=10,FC=11,FO=12,CURSOR=13,NODE_FACES=14,BC=15,BO=16,BN=17,PARTS=18,DATUM=19,DISPATCH=21,LARGE_NODES=22,PRODUCT_PEERS=23,PRODUCT_WEIGHTS=24;
+ FACE_ROWS=10,FC=11,FO=12,CURSOR=13,NODE_FACES=14,BC=15,BO=16,BN=17,PARTS=18,DATUM=19,DISPATCH=21,LARGE_NODES=22,PRODUCT_PEERS=23,PRODUCT_WEIGHTS=24,SOLVE_ROWS=25;
 shared double part[128],otherPart[128],loadPart[128];
 shared int nodePart[128];
 int h(int i){return int(words[p.header+i]);}
@@ -68,8 +68,9 @@ void initialize(int row){
  if(row>=n()){int entry=7*n()+row-n();words[h(16)+row]=uint(entry);words[h(17)+entry]=uint(row);writeNumber(h(18)+2*entry,1.0);}
  if(row==size()-1)words[h(16)+size()]=uint(7*n()+size()-n());
  if(row==0){writeNumber(h(23)+6*size(),double(p.tolerance));writeNumber(p.header+58,double(p.cellSize));
-  writeNumber(p.header+60,double(p.duration));writeNumber(p.header+62,double(p.gravity));dispatchCount(0,clamp(int(words[h(9)]),0,g()));words[p.header+14]=0u;}
+  writeNumber(p.header+60,double(p.duration));writeNumber(p.header+62,double(p.gravity));dispatchCount(0,clamp(int(words[h(9)]),0,g()));words[p.header+14]=0u;words[p.header+15]=0u;}
 }
+void appendSolveRow(int row){uint slot=atomicAdd(words[p.header+15],1u);put(SOLVE_ROWS,int(slot),row);}
 void datum(int lane){
  double largest=-1.0;int selected=-1,actual=int(words[h(9)]);if(actual<0||actual>g()){if(lane==0)invalid();actual=0;}
  for(int node=lane;node<actual;node+=128)if(populated(node)&&volume(node)>largest){largest=volume(node);selected=node;}
@@ -102,6 +103,7 @@ void gasRow(int node,int lane){
   int entry=7*n()+node;words[h(16)+row]=uint(entry);words[h(17)+entry]=uint(row);writeNumber(h(18)+2*entry,enabledRow?part[0]+storage:1.0);
   words[h(19)+row]=enabledRow?uint(row):uint(-1);words[h(22)+row]=enabledRow?1u:0u;
   writeNumber(h(23)+2*row,enabledRow?r:0.0);writeNumber(h(23)+2*(size()+row),-old);
+  if(enabledRow)appendSolveRow(row);
   if(node==g()-1)words[h(16)+n()+g()]=uint(entry+1);
  }
 }
@@ -114,6 +116,7 @@ void liquidRow(int row){
  }
  bool enabledRow=enabled&&diagonal>0.0;words[h(19)+row]=enabledRow?uint(row):uint(-1);writeNumber(h(18)+2*start,enabledRow?diagonal:1.0);writeNumber(h(23)+2*row,enabledRow?rhs:0.0);
  writeNumber(h(23)+2*(2*size()+row),enabledRow?read(CELL_P,row)-read(DATUM,0):0.0);
+ if(enabledRow)appendSolveRow(row);
  if(row==0)words[h(16)+n()]=uint(7*n());
 }
 void countBlocks(int node){int count=get(FC,node);put(BC,node,count>128?(count+127)/128:0);
@@ -157,6 +160,7 @@ void main(){
   if(p.stage==5)gasRow(block,lane);else if(p.stage==9)productBlock(block,lane);else if(p.stage==10)productNode(get(LARGE_NODES,block),lane);else observeGas(block,lane);return;
  }
  if(id>=p.count)return;
+ if(p.stage==16){if(id==0){int count=int(words[p.header+15]);writeNumber(h(24)+28,double(count));dispatchCount(9,max(1,(count+255)/256));}return;}
  if(p.stage==0)capture(id);else if(p.stage==1)initialize(id);else if(p.stage==3)prepareFace(id);else if(p.stage==4)scatter(id);
  else if(p.stage==6)liquidRow(id);else if(p.stage==7)countBlocks(id);else if(p.stage==8)mapBlocks(id);else if(p.stage==11)project(id);
  else if(p.stage==15)write(POST_K,id,.5*face(id,0)*face(id,1)*face(id,1));

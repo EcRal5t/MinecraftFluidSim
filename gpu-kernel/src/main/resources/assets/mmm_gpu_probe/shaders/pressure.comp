@@ -13,9 +13,10 @@ layout(binding=8,std430) readonly buffer Problem { double problem[]; };
 layout(binding=9,std430) buffer Control { double control[]; };
 layout(binding=10,std430) buffer Partials { double partials[]; };
 layout(binding=11,std430) buffer Completion { uint errors; };
+layout(binding=12,std430) buffer StageDispatch { uvec4 stageDispatch[]; };
 layout(push_constant) uniform Params { int count; int size; int maximumIterations; int stage; int groups; int externalPreconditioner; int liquidCount; int matrixFreeFromRow; } p;
 shared dvec4 scratch[256];
-int lane,n,gid,stride,group;
+int lane,n,gid,stride,group,ordinalCount,groupCount;
 #define R(row) work[row]
 #define D(row) work[n+(row)]
 #define Q(row) work[2*n+(row)]
@@ -79,23 +80,25 @@ void saveStats(double a,double b,double c,double d,int operationB,int operationC
 }
 // The final workgroup reduces block results in parallel; no single lane walks the full grid.
 dvec4 collectStats(int operationB,int operationC) {
-    if(p.groups==1)return dvec4(partials[0],partials[1],partials[2],partials[3]);
+    if(groupCount==1)return dvec4(partials[0],partials[1],partials[2],partials[3]);
     precise dvec4 value=dvec4(0.0,operationB==2?1.7976931348623157e308LF:0.0,
                             operationC==2?1.7976931348623157e308LF:0.0,0.0);
-    for(int block=lane;block<p.groups;block+=256) {
+    for(int block=lane;block<groupCount;block+=256) {
         dvec4 next=dvec4(partials[4*block],partials[4*block+1],partials[4*block+2],partials[4*block+3]);
         value=dvec4(value.x+next.x,combine(value.y,next.y,operationB),combine(value.z,next.z,operationC),max(value.w,next.w));
     }
     return reduceStats(value,operationB,operationC);
 }
 void initializeRows() {
+    // Initialize every physical slot once: MG and matrix products can read inactive columns.
+    // Later vector stages visit only the compact enabled row list.
     for(int row=gid;row<n;row+=stride) {
         pressure[row]=BOUNDED(row)!=0?max(LOWER(row),problem[2*n+row]):problem[2*n+row];
         FREE(row)=1;R(row)=0.0;D(row)=0.0;Q(row)=0.0;Z(row)=0.0;
         ANCHOR_X(row)=pressure[row];ANCHOR_R(row)=0.0;
         double diagonal=0.0;for(int edge=starts[row];edge<starts[row+1];edge++)if(columns[edge]==row)diagonal+=values[edge];DIAG(row)=diagonal;
     }
-    double maximum=0.0;for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(row>=0)maximum=max(maximum,abs(pressure[row]));}
+    double maximum=0.0;for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride){int row=rows[ordinal];if(row>=0)maximum=max(maximum,abs(pressure[row]));}
     saveStats(0.0,0.0,0.0,maximum,0,0);
 }
 void initializeControl() {
@@ -108,7 +111,7 @@ void refreshResidual() {
     if(REFRESH==0.0)return;
     bool trial=PHASE==TRIAL_REFRESH,finalResidual=PHASE==2.0;
     precise double sum=0.0;double equations=0.0,extra=0.0,kkt=0.0;
-    for(int ordinal=gid;ordinal<p.count;ordinal+=stride) {
+    for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride) {
         int row=rows[ordinal];if(row<0)continue;precise double product=row>=p.matrixFreeFromRow?Q(row):0.0;
         if(row<p.matrixFreeFromRow)for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*pressure[columns[edge]];
         R(row)=RHS(row)-product;double value=R(row);
@@ -153,7 +156,7 @@ void precondition() {
     if(RUN==0.0){
         if(PHASE!=DONE){
             double maximum=0.0;
-            for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(row<0)continue;
+            for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride){int row=rows[ordinal];if(row<0)continue;
                 pressure[row]=ANCHOR_X(row);R(row)=ANCHOR_R(row);maximum=max(maximum,abs(pressure[row]));
                 FREE(row)=(BOUNDED(row)==0||pressure[row]+R(row)/DIAG(row)>LOWER(row))?1:0;}
             saveStats(0.0,0.0,0.0,maximum,0,0);
@@ -162,7 +165,7 @@ void precondition() {
     }
     if(PHASE==OUTER_PREP||PHASE==GRADIENT_PREP||PHASE==POLICY_PREP){
         precise double norm=0.0;double changed=0.0,maximum=0.0;
-        for(int ordinal=gid;ordinal<p.count;ordinal+=stride){
+        for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride){
             int row=rows[ordinal];if(row<0)continue;
             if(PHASE==POLICY_PREP){
                 ANCHOR_X(row)=pressure[row];ANCHOR_R(row)=R(row);
@@ -180,9 +183,10 @@ void precondition() {
         saveStats(norm,0.0,changed,maximum,0,1);return;
     }
     precise double sum=0.0;
-    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){
+    for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride){
         int row=rows[ordinal];if(row<0)continue;
-        if(p.externalPreconditioner==0||row>=p.liquidCount)Z(row)=FREE(row)!=0?R(row)/DIAG(row):0.0;
+        int preconditioner=p.externalPreconditioner&3;
+        if(preconditioner==0||(preconditioner==1&&row>=p.liquidCount))Z(row)=FREE(row)!=0?R(row)/DIAG(row):0.0;
         if(RESTART!=0.0)D(row)=Z(row);
         if(FREE(row)!=0)sum+=R(row)*Z(row);
     }
@@ -201,12 +205,12 @@ void finishPrecondition() {
 }
 void updateDirection() {
     if(RUN==0.0||PHASE>=3.0||RESTART!=0.0)return;
-    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){int row=rows[ordinal];if(row<0)continue;if(FREE(row)!=0)D(row)=Z(row)+BETA*D(row);else D(row)=0.0;}
+    for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride){int row=rows[ordinal];if(row<0)continue;if(FREE(row)!=0)D(row)=Z(row)+BETA*D(row);else D(row)=0.0;}
 }
 void directionProduct() {
     if(RUN==0.0||PHASE>=3.0)return;
     precise double sum=0.0;
-    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){
+    for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride){
         int row=rows[ordinal];if(row<0)continue;precise double product=row>=p.matrixFreeFromRow?Q(row):0.0;
         if(row<p.matrixFreeFromRow)for(int edge=starts[row];edge<starts[row+1];edge++)product+=values[edge]*D(columns[edge]);Q(row)=product;
         if(FREE(row)!=0)sum+=D(row)*product;
@@ -223,7 +227,7 @@ void finishProduct() {
 void updateSolution() {
     if(RUN==0.0||PHASE>=3.0)return;
     precise double sum=0.0;double equations=0.0,maximum=0.0;
-    for(int ordinal=gid;ordinal<p.count;ordinal+=stride){
+    for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride){
         int row=rows[ordinal];if(row<0)continue;
         if(FREE(row)!=0)pressure[row]+=ALPHA*D(row);
         R(row)-=ALPHA*Q(row);maximum=max(maximum,abs(pressure[row]));
@@ -249,9 +253,22 @@ void executeStage(int stage) {
     else if(stage==12&&gid==0&&SUCCESS==0.0)atomicOr(errors,4u);
 }
 void singleStage(int stage){executeStage(stage);syncAll();}
+void publishDispatches() {
+    if(gid!=0)return;
+    uint groups=uint(groupCount);
+    stageDispatch[2]=uvec4(REFRESH!=0.0?groups:0u,1u,1u,0u);
+    stageDispatch[4]=uvec4(RUN!=0.0||PHASE!=DONE?groups:0u,1u,1u,0u);
+    stageDispatch[6]=uvec4(RUN!=0.0&&PHASE<3.0&&RESTART==0.0?groups:0u,1u,1u,0u);
+    stageDispatch[7]=uvec4(RUN!=0.0&&PHASE<3.0?groups:0u,1u,1u,0u);
+    stageDispatch[9]=uvec4(RUN!=0.0&&PHASE<3.0?groups:0u,1u,1u,0u);
+}
 void main() {
-    lane=int(gl_LocalInvocationID.x);n=p.size;group=int(gl_WorkGroupID.x);gid=group*256+lane;stride=p.groups*256;
-    if(p.stage>=0){executeStage(p.stage);return;}
+    // Compact row selection is independent of the preconditioner; physical strides stay fixed.
+    bool compact=(p.externalPreconditioner&4)!=0;
+    ordinalCount=compact?int(control[14]):p.count;
+    groupCount=compact?max(1,(ordinalCount+255)/256):p.groups;
+    lane=int(gl_LocalInvocationID.x);n=p.size;group=int(gl_WorkGroupID.x);gid=group*256+lane;stride=(p.stage==0?p.groups:groupCount)*256;
+    if(p.stage>=0){executeStage(p.stage);if(p.stage==1||p.stage==3||p.stage==5||p.stage==8||p.stage==10||p.stage==11)publishDispatches();return;}
     for(int stage=0;stage<=6;stage++)singleStage(stage);
     while(RUN!=0.0&&ITER<double(p.maximumIterations)){
         for(int stage=7;stage<=10;stage++)singleStage(stage);

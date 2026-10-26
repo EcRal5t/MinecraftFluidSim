@@ -867,3 +867,13 @@ GPU 粒子合并使用原始 float 的精确二进制值判断体积能否守恒
 `build/gpu-resident-cut64-stiff-scale-performance.log` 在相同15步中补充既有空间接触遍历的刚性计数，中位65.737 ms、最大112.000 ms、GPU平均57.654 ms。末步按 `2 dt ΣG / Cmin > 1` 分类，只有1个刚性热载体及1个样本，刚性内部接触0条、刚性与非刚性之间4条、非刚性之间5,738,183条；最小热容4.2e-7 J/K，最大刚性指标284.648。该结果支持按唯一热载体局部隐式求解，避免单个极小热容触发全区重复热算子。
 
 局部显隐分区导热进入原场景后，`build/gpu-resident-cut64-imex-performance.log` 完成同样的3预热／12采样和15次提交，中位64.897 ms、最大78.983 ms、GPU平均54.430 ms。末步3个刚性载体均无刚性邻接，直接按分段热容求根，导热4.909 ms；压力28.027 ms、容量7.927 ms、输运及未来几何12.764 ms、气体重映射与共同能量5.541 ms、孔流8.846 ms。热流仍按实际接触成对结算，非刚性试算复用，刚性接触只修正受影响样本；本轮仅检验连续执行与成本，集中物理观察继续后置。整步50 ms仍未达成。首次合批运行 `build/gpu-resident-cut64-local-thermal-performance.log` 在末步漏做受影响样本压紧，导致修正未执行并返回16384；压紧已移至接触计数批次，本次原15步成功。
+
+2026-10-26：共同压力捕获状态新增独立性能重放 `:gpu-kernel:runGpuCommonPressureReplay`，输入 `build/gpu-cut64-common-pressure.bin`，保留原右端、热启动、下界、1e-5 残差目标与200轮预算。冷端仅转换实际液气 CSR，未执行 CPU 参考求解。`build/gpu-common-pressure-graph-replay.log` 中全图预条件以28轮收敛，但建图约64 ms、求解约700 ms，GPU平均753.757 ms，性能失败。`build/gpu-common-pressure-graph-profile.log` 的原状态时间戳定位到粗层构建和限制阶段的串行嵌套邻接循环：首层粗对角约12 ms，首层限制在整次求解累计约245 ms。该实现继续改为长行分块与并行成员归约；未以此恢复完整场景或集中物理验证。
+
+同一捕获状态改用短行线程、长行分块及成员归约后，`build/gpu-common-pressure-parallel-graph-replay.log` 的三次采样均以27轮收敛，中位58.348 ms、GPU平均43.296 ms；末次建图10.842 ms、求解46.007 ms（两者为墙钟）。`build/gpu-common-pressure-parallel-graph-profile.log` 显示源图压紧约.24 ms，原串行长行成本已消除；当前12层聚合及逐层派发仍使压力单项超过整步分配预算，继续改造聚合降维。重放已采用与生产相同原则的长行分块乘积，完整区域测量继续等待压力成本合格。
+
+同一捕获状态的强聚合分项记录见 `build/gpu-common-pressure-aggregate-profile.log`：74743个实际行、614811项，六层规模为74743／9582／3844／2320／293／15；33轮达到原残差目标。单次分项采样墙钟53.764 ms，建图8.163 ms、求解38.149 ms（墙钟），GPU30.004 ms。分项打印包含在总墙钟中，不能作为无诊断的稳态完整步结果；压力单项成本仍不合格。后续加性预条件与紧凑压力派发改动尚无运行证据。
+
+2026-10-26：删除气体与机械连通体的主机反馈重试，连通边使用并行根链接与路径压缩；共同压力压紧有效行，并合并输运／孔流准备和导热／最终账。原64³、3预热／12采样的 `build/gpu-resident-cut64-fused-chain.log` 完成15步，中位57.459 ms、最大72.785 ms、GPU平均52.361 ms。共享面面积同时用于压力与实际输运后，`build/gpu-resident-cut64-shared-flux.log` 同样完成15步，中位61.834 ms、最大89.132 ms、GPU平均55.937 ms；该表示统一尚未获得性能资格。
+
+共同压力无工作向量阶段改用零组间接派发后，`build/gpu-resident-cut64-pressure-dispatch.log` 在第15步暴露容量撤回循环，未形成完整性能结果。保存输入为 `build/gpu-liquid-capacity-shared-flux-failure.bin`；`build/gpu-capacity-shared-flux-replay.log` 稳定复现512轮耗尽，停在撤回阶段3。常规本地撤回现限制为一次初始化，剩余需求直接进入同一并行残量图，保留实际七路流量和原512轮总预算。`build/gpu-capacity-shared-flux-fixed-replay.log` 以185轮完成，GPU84.977 ms；`build/gpu-capacity-original-unified-replay.log` 的原64³失败输入以166轮完成，GPU57.294 ms。源额度、接收上下限与有限组容量均通过重放内置检查，但容量单项严重超支，完整场景和其他验证继续暂停。`build/gpu-capacity-shared-flux-phases.log` 确认185轮中初始BFS6轮、余额推送／重标记178轮，下一步须缩短该执行链并处理主要连续容量约束。

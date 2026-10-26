@@ -91,7 +91,18 @@ final class VulkanRegionThermal implements AutoCloseable {
     /** Leaves the candidate open for its remaining phases and the single request commit. */
     int execute(VulkanRegionStorage.Candidate candidate,Layout l,double duration){return execute(candidate,l,duration,null,null,false);}
     int execute(VulkanRegionStorage.Candidate candidate,Layout l,double duration,VulkanThermalDeviceLayout sourceDevices,VulkanThermalDeviceLayout.Settlement settlement,boolean continuation){
+        return execute(candidate,l,duration,sourceDevices,settlement,continuation,null,null,-1);
+    }
+    /** Hooks share the first preparation and final publication submissions; failed candidates remain private. */
+    int execute(VulkanRegionStorage.Candidate candidate,Layout l,double duration,VulkanThermalDeviceLayout sourceDevices,VulkanThermalDeviceLayout.Settlement settlement,boolean continuation,
+                VulkanRegionStorage.ComputeCommands prefix,VulkanRegionStorage.ComputeCommands suffix){
+        return execute(candidate,l,duration,sourceDevices,settlement,continuation,prefix,suffix,-1);
+    }
+    int execute(VulkanRegionStorage.Candidate candidate,Layout l,double duration,VulkanThermalDeviceLayout sourceDevices,VulkanThermalDeviceLayout.Settlement settlement,boolean continuation,
+                VulkanRegionStorage.ComputeCommands prefix,VulkanRegionStorage.ComputeCommands suffix,long finalUploadedBytes){
+        if(finalUploadedBytes < -1)throw new IllegalArgumentException("Final thermal upload bytes must be nonnegative or -1 for continuation");
         var status=candidate.continueBatch((command,in,out,errors,staging,stack)->{
+            if(prefix!=null)prefix.record(command,in,out,errors,staging,stack);
             var arena=new FlipKernelBindings.BufferRange(out);var err=new FlipKernelBindings.BufferRange(errors);
             caloric.rebindRanges(arena,err);gasEOS.rebindRanges(arena,err);contacts.rebindRanges(arena,err);
             deviceLedger.rebindRanges(new FlipKernelBindings.BufferRange(in),arena,err);
@@ -133,7 +144,7 @@ final class VulkanRegionThermal implements AutoCloseable {
                 conduction.solveImex(candidate,l.conduction(),pressure,duration,fastOwners,contacts.imexOperator(l.contacts(),duration,fastSamples),timings);
             }
         }
-        status=candidate.continueBatch((command,in,out,errors,staging,stack)->{
+        VulkanRegionStorage.ComputeCommands publish=(command,in,out,errors,staging,stack)->{
             timed(command,"thermal-finish",()->{if(fastOwners>0)contacts.recordImexCorrection(command,l.contacts(),duration);conduction.recordImexFinish(command,l.conduction(),duration);});
             timed(command,"thermal-publish",()->contacts.recordPublish(command,l.contacts()));
             if(l.input().device()!=null)l.input().device().recordSettle(command,sourceDevices,settlement,deviceLedger,out,continuation);
@@ -142,14 +153,16 @@ final class VulkanRegionThermal implements AutoCloseable {
             if(l.input().coherent()!=null)caloric.record(command,l.input().coherentThermal());
             if(l.input().device()!=null)caloric.record(command,l.input().deviceThermal());
             if(l.input().gas()!=null){gasEOS.recordVolumes(command,l.input().gasThermal(),l.input().gasGeometry());gasEOS.record(command,l.input().gasThermal());}
-        },0,0);
+            if(suffix!=null)suffix.record(command,in,out,errors,staging,stack);
+        };
+        int finalError=finalUploadedBytes<0?candidate.continueBatch(publish,0,0).error():candidate.finishBatch(finalUploadedBytes,publish);
         if(timings!=null){
             for(var sample:timings.read())System.out.printf("mechanical_kernel=%s gpu_ms=%.3f%n",sample.stage(),sample.milliseconds());
             System.out.printf("thermal_layout owner_capacity=%d term_capacity=%d contact_capacity=%d bath_count=%d bath_capacity=%d reservoir_MiB=%.3f%n",
                     l.conduction().owners,l.conduction().terms,l.conduction().contacts,bathCount,l.conduction().baths,l.conduction().column(VulkanThermalConduction.Field.RESERVOIR_CHANGE).bytes()/1048576.0);
             System.out.printf("thermal_imex fast_owners=%d fast_samples=%d frozen_SS_MiB=%.3f%n",fastOwners,fastSamples,contacts.frozenBytes()/1048576.0);
         }
-        return status.error();
+        return finalError;
     }
     long deviceBytes(){return contacts.frozenBytes();}
     private void timed(org.lwjgl.vulkan.VkCommandBuffer command,String label,Runnable commands){

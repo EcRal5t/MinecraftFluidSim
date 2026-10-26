@@ -9,9 +9,12 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Immutable secondary recordings for one resident workspace. All submissions finish before disposal. */
 final class VulkanCommandTemplates implements AutoCloseable {
-    record Key(int stage,FlipKernelBindings.BufferIdentity candidate,FlipKernelBindings.BufferIdentity errors,int count,int maximum) {
+    record Key(int stage,FlipKernelBindings.BufferIdentity candidate,FlipKernelBindings.BufferIdentity errors,int count,int maximum,Object operator) {
         Key(int stage,GpuBuffer candidate,GpuBuffer errors,int count,int maximum){
-            this(stage,new FlipKernelBindings.BufferIdentity(candidate),new FlipKernelBindings.BufferIdentity(errors),count,maximum);
+            this(stage,new FlipKernelBindings.BufferIdentity(candidate),new FlipKernelBindings.BufferIdentity(errors),count,maximum,null);
+        }
+        Key(int stage,GpuBuffer candidate,GpuBuffer errors,int count,int maximum,Object operator){
+            this(stage,new FlipKernelBindings.BufferIdentity(candidate),new FlipKernelBindings.BufferIdentity(errors),count,maximum,operator);
         }
     }
     private final VulkanDeviceContext context;

@@ -1,0 +1,78 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_ballot : require
+layout(local_size_x=128) in;
+layout(binding=0,std430) buffer Arena { uint arena[]; };
+layout(binding=1,std430) buffer Prelude { uint pre[]; };
+layout(binding=2,std430) buffer Graph { uint graph[]; };
+layout(binding=3,std430) buffer Errors { uint errors; };
+layout(push_constant) uniform Params { int stage; int count; } p;
+/*FIELDS*/
+shared uint counts[128];shared uint cursor;
+shared double diagonals[128],magnitudes[128];
+int ph(int f){return int(pre[32+f]);}int gh(int f){return int(graph[16+f]);}
+double number(int at){return packDouble2x32(uvec2(arena[at],arena[at+1]));}
+void putDouble(int at,double v){uvec2 w=unpackDouble2x32(v);graph[at]=w.x;graph[at+1]=w.y;}
+int sourceRows(){return int(pre[0]);}int liquid(){return int(pre[1]);}
+bool live(int i){return i>=0&&i<sourceRows()&&int(arena[int(pre[5])+i])>=0;}
+bool gas(int row){return liquid()>=0&&row>=liquid();}
+int start(int row){return gas(row)?int(arena[int(pre[10])+row-liquid()]):int(arena[int(pre[2])+row]);}
+int end(int row){return gas(row)?int(arena[int(pre[10])+row-liquid()+1]):int(arena[int(pre[2])+row+1]);}
+int peerAt(int e,bool isGas){return int(arena[int(pre[isGas?11:3])+e]);}
+double valueAt(int e,bool isGas){return (isGas?-1.0:1.0)*number(int(pre[isGas?12:4])+2*e);}
+void finishDiagonal(int row,double diagonal,double total){
+    int compact=int(pre[ph(P_PREFIX)+row]);putDouble(gh(L_DIAGONAL)+2*compact,diagonal);
+    if(!(diagonal>0.0)||isnan(diagonal)||isinf(diagonal)){atomicOr(errors,1048576u);return;}
+    atomicMax(graph[4],floatBitsToUint(float((diagonal+total)/diagonal))+1u);
+}
+void longRow(int row,int lane){
+    bool isGas=gas(row);int first=start(row),last=end(row);
+    if(p.stage==3){
+        uint count=0u;for(int e=first+lane;e<last;e+=128){int peer=peerAt(e,isGas);if(peer!=row&&live(peer)&&valueAt(e,isGas)!=0.0)count++;}
+        counts[lane]=count;barrier();for(int stride=64;stride>0;stride/=2){if(lane<stride)counts[lane]+=counts[lane+stride];barrier();}
+        if(lane==0)pre[ph(P_DEGREE)+row]=counts[0];return;
+    }
+    if(lane==0)cursor=pre[ph(P_EDGE_OFFSETS)+row];barrier();
+    double diagonal=lane==0&&isGas?number(int(pre[13])+2*(row-liquid())):0.0,total=0.0;
+    for(int base=first;base<last;base+=128){
+        int e=base+lane,peer=-1;double v=0.0;if(e<last){peer=peerAt(e,isGas);v=valueAt(e,isGas);}
+        bool valid=peer!=row&&live(peer)&&v!=0.0;
+        uvec4 ballot=subgroupBallot(valid);uint baseSlot=0u;
+        if(subgroupElect())baseSlot=atomicAdd(cursor,subgroupBallotBitCount(ballot));
+        baseSlot=subgroupBroadcastFirst(baseSlot);
+        if(valid){int slot=int(baseSlot+subgroupBallotExclusiveBitCount(ballot));graph[gh(L_COLUMNS)+slot]=pre[ph(P_PREFIX)+peer];putDouble(gh(L_VALUES)+2*slot,v);total+=abs(v);}
+        if(peer==row)diagonal+=v;
+    }
+    diagonals[lane]=diagonal;magnitudes[lane]=total;barrier();
+    for(int stride=64;stride>0;stride/=2){if(lane<stride){diagonals[lane]+=diagonals[lane+stride];magnitudes[lane]+=magnitudes[lane+stride];}barrier();}
+    if(lane==0)finishDiagonal(row,diagonals[0],magnitudes[0]);
+}
+void main(){
+    int row=int(gl_GlobalInvocationID.x),lane=int(gl_LocalInvocationID.x);
+    if(p.stage==5){if(row==0){int at=ph(P_DISPATCH);pre[at]=pre[ph(P_LONG_COUNT)];pre[at+1]=1u;pre[at+2]=1u;}return;}
+    if(p.stage==1){if(row==0){
+        uint count=pre[ph(P_PREFIX)+sourceRows()];pre[ph(P_ACTUAL)]=count;pre[ph(P_ACTUAL)+1]=pre[ph(P_EDGE_OFFSETS)+sourceRows()];
+        int at=ph(P_PRESSURE_DISPATCH);pre[at]=max(1u,(count+255u)/256u);pre[at+1]=1u;pre[at+2]=1u;
+        uvec2 value=unpackDouble2x32(double(count));int control=int(pre[8])+28;arena[control]=value.x;arena[control+1]=value.y;
+    }return;}
+    if(p.stage==3||p.stage==4){row=int(pre[ph(P_LONG_ROWS)+int(gl_WorkGroupID.x)]);longRow(row,lane);return;}
+    if(row>=sourceRows())return;bool enabled=live(row);
+    if(p.stage==0){
+        int degree=0;if(enabled){bool isGas=gas(row);int first=start(row),last=end(row);
+            if(last-first>32){uint slot=atomicAdd(pre[ph(P_LONG_COUNT)],1u);pre[ph(P_LONG_ROWS)+int(slot)]=uint(row);}
+            else for(int e=first;e<last;e++){int peer=peerAt(e,isGas);if(peer!=row&&live(peer)&&valueAt(e,isGas)!=0.0)degree++;}
+        }
+        pre[ph(P_FLAGS)+row]=enabled?1u:0u;pre[ph(P_DEGREE)+row]=uint(degree);return;
+    }
+    if(!enabled)return;
+    int compact=int(pre[ph(P_PREFIX)+row]),slot=int(pre[ph(P_EDGE_OFFSETS)+row]);
+    graph[gh(L_ROW_KEY)+compact]=uint(row);graph[gh(L_STARTS)+compact]=uint(slot);
+    if(compact==int(pre[ph(P_ACTUAL)])-1)graph[gh(L_STARTS)+compact+1]=pre[ph(P_ACTUAL)+1];
+    bool isGas=gas(row);int first=start(row),last=end(row);if(last-first>32)return;
+    double diagonal=isGas?number(int(pre[13])+2*(row-liquid())):0.0,total=0.0;
+    for(int e=first;e<last;e++){int peer=peerAt(e,isGas);double value=valueAt(e,isGas);
+        if(peer==row)diagonal+=value;else if(live(peer)&&value!=0.0){graph[gh(L_COLUMNS)+slot]=pre[ph(P_PREFIX)+peer];putDouble(gh(L_VALUES)+2*slot,value);total+=abs(value);slot++;}
+    }
+    finishDiagonal(row,diagonal,total);
+}

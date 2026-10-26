@@ -43,6 +43,9 @@ public final class GpuLiquidCapacityReplay {
                         System.out.println("solver_state="+java.util.Arrays.toString(java.util.stream.IntStream.range(0,9).map(i->debug.getInt(4*i)).toArray()));
                     }
                     if(result.error()!=0||status!=VulkanLiquidCapacity.FEASIBLE)throw new IllegalStateException("Capacity replay failed status="+status+", rounds="+rounds+", error="+result.error());
+                    var solveState=ByteBuffer.allocate(36).order(ByteOrder.LITTLE_ENDIAN);
+                    candidate.read(solve.column(VulkanLiquidCapacity.Field.STATE).offset(),solveState);
+                    System.out.printf("residual_bfs_rounds=%d blocking_flow_rounds=%d%n",solveState.getInt(24),solveState.getInt(28));
                     int error=candidate.finishBatch((command,input,output,errors,staging,stack)->solver.recordFinish(command,solve));
                     if(error!=0)throw new IllegalStateException("Capacity replay finish error="+error);candidate.commit();
                     var after=storage.metrics();System.out.printf("capture=%s cells=%d rounds=%d wall_ms=%.3f gpu_ms=%.3f device_MiB=%.1f%n",file,layout.cells(),rounds,(System.nanoTime()-begin)*1e-6,(after.gpuNanos()-before.gpuNanos())*1e-6,after.deviceBytes()/1048576.0);

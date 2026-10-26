@@ -101,23 +101,10 @@ void faceGeometry(int f) {
     faces[f]=dvec4(mass,speed,open,wet);
 }
 
-// Integrates one donor microcell slab in its local unit box, scaled by its actual pore volume.
-double slabLiquid(int source,int micro,int axis,bool positive,double portion,double pore) {
-    if(pore<=0.0)return 0.0;
-    float wet=float(microVolume[8*source+micro]/pore);
-    if(wet<=0.0)return 0.0;
-    if(wet>=1.0)return portion;
-    float width=float(clamp(portion/pore,0.0LF,1.0LF));
-    vec3 low=vec3(0),extent=vec3(1);extent[axis]=width;
-    if(positive)low[axis]=1.0-width;
-    vec4 plane=vec4(planes[source]);vec3 n=.5*plane.xyz;
-    vec3 microOrigin=vec3(micro&1,(micro>>1)&1,(micro>>2)&1);
-    float offset=plane.w-dot(n,microOrigin)-dot(n,low);
-    float fraction=boxVolume(n*extent,offset,0,1.0);
-    return clamp(pore*double(width)*double(fraction),0.0LF,portion);
-}
-
-// Signed total and liquid volume preferences. Capacity, materials and gas allocation decide accepted transfers.
+// Open/wet areas are normalized by h^2, velocity is m/s, and dt/h gives cell-volume fractions.
+// The liquid flux uses the same shared wet area as the common pressure divergence.
+// faceFlux stores signed total/liquid volumes; their difference is the signed dry volume.
+// Exact capacity acceptance still determines the material transfers.
 void transportPreference(int f) {
     faceFlux[f]=dvec2(0);
     int xCount=(pc.sx+1)*pc.sy*pc.sz,yCount=pc.sx*(pc.sy+1)*pc.sz;
@@ -126,21 +113,8 @@ void transportPreference(int f) {
     ivec3 right=ivec3(local%dims.x,local/dims.x%dims.y,local/(dims.x*dims.y)),left=right;left[axis]--;
     if(!inside(left)||!inside(right))return;
     double qt=faces[f].z*faces[f].y*double(pc.dt)/double(pc.h);
-    if(qt==0.0)return;
-    int l=cellIndex(left),r=cellIndex(right),t=(axis+1)%3,o=(axis+2)%3,openPorts=0;
-    for(int port=0;port<4;port++) {
-        int bit=((port&1)<<t)|((port>>1)<<o);
-        if((masks[l]&(1u<<(bit|(1<<axis))))==0u&&(masks[r]&(1u<<bit))==0u)openPorts|=1<<port;
-    }
-    if(openPorts==0)return;
-    bool positive=qt>0.0;int source=positive?l:r;
-    double portion=abs(qt)/double(bitCount(openPorts));
-    double pore=cells[source].z/double(bitCount((~masks[source])&255u)),liquid=0.0;
-    for(int port=0;port<4;port++)if((openPorts&(1<<port))!=0) {
-        int micro=((port&1)<<t)|((port>>1)<<o)|(positive?1<<axis:0);
-        liquid+=slabLiquid(source,micro,axis,positive,portion,pore);
-    }
-    faceFlux[f]=dvec2(qt,positive?liquid:-liquid);
+    double ql=faces[f].w*faces[f].y*double(pc.dt)/double(pc.h);
+    faceFlux[f]=dvec2(qt,ql);
 }
 
 void main(){if(errors!=0u)return;int i=int(gl_GlobalInvocationID.x);int count=pc.sx*pc.sy*pc.sz;if(pc.stage==0){if(i<count)totals(i);}else if(pc.stage==1){if(i<count)reconstruct(i);}else{int countFaces=(pc.sx+1)*pc.sy*pc.sz+pc.sx*(pc.sy+1)*pc.sz+pc.sx*pc.sy*(pc.sz+1);if(i<countFaces){if(pc.stage==2)faceGeometry(i);else transportPreference(i);}}}

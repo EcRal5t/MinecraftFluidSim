@@ -264,6 +264,9 @@ final class VulkanRegionStorage implements AutoCloseable {
         }
 
         int finishBatch(ComputeCommands commands) { return finishBatch(0,commands); }
+        BatchResult finishBatch(ComputeCommands commands,long feedbackOffset,int feedbackBytes) {
+            return submit(0,commands,false,true,feedbackOffset,feedbackBytes);
+        }
         int finishBatch(long uploadedBytes,ComputeCommands commands) {
             return submit(uploadedBytes,commands,false,true,0,0).error();
         }

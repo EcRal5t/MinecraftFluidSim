@@ -21,7 +21,7 @@ final class VulkanGasPressure implements AutoCloseable {
         SOURCE_FACE_K(8), PRE_PRESSURE_FACE_K(8), POST_PRESSURE_FACE_K(8), REFERENCE(8), STORAGE(8),
         DIAGONAL(8), MECHANICAL_MODE(4), CELL_PHYSICAL_PRESSURE(8), NODE_ABSOLUTE_PRESSURE(8),
         NODE_PREDICTED_VOLUME_CHANGE(8), FACE_ROWS(4), FACE_COUNTS(4), FACE_OFFSETS(4), FACE_CURSORS(4),
-        NODE_FACES(4), BLOCK_COUNTS(4), BLOCK_OFFSETS(4), BLOCK_NODES(4), PRODUCT_PARTS(8), DATUM(8), SCAN(4), DISPATCH(4), LARGE_NODES(4), PRODUCT_PEERS(4), PRODUCT_WEIGHTS(8);
+        NODE_FACES(4), BLOCK_COUNTS(4), BLOCK_OFFSETS(4), BLOCK_NODES(4), PRODUCT_PARTS(8), DATUM(8), SCAN(4), DISPATCH(4), LARGE_NODES(4), PRODUCT_PEERS(4), PRODUCT_WEIGHTS(8), SOLVE_ROWS(4);
         final int width; Field(int width) { this.width = width; }
     }
     static final class Layout {
@@ -63,7 +63,8 @@ final class VulkanGasPressure implements AutoCloseable {
                     case FACE_OFFSETS,BLOCK_OFFSETS->gasCapacity+1;
                     case BLOCK_NODES,PRODUCT_PARTS->blockCapacity;
                     case DATUM->1;
-                    case DISPATCH->9;
+                    case DISPATCH->12;
+                    case SOLVE_ROWS->pressureSize;
                     case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(gasCapacity)/4);
                     default->gasCapacity;
                 };
@@ -125,6 +126,12 @@ final class VulkanGasPressure implements AutoCloseable {
         stage(command,layout,parameters,7,layout.gasCapacity,0);
         scan.record(command,layout.gasCapacity,layout.word(Field.BLOCK_COUNTS),layout.word(Field.BLOCK_OFFSETS),layout.word(Field.SCAN));
         stage(command,layout,parameters,8,layout.gasCapacity,0);
+        stage(command,layout,parameters,16,1,0);
+    }
+    VulkanPressureKernel.ParallelRows parallelRows(Layout layout){
+        var rows=layout.column(Field.SOLVE_ROWS);
+        return new VulkanPressureKernel.ParallelRows(new FlipKernelBindings.BufferRange(arena.buffer(),arena.offset()+rows.offset(),rows.bindingBytes()),
+                arena.buffer(),arena.offset()+layout.column(Field.DISPATCH).offset()+36);
     }
     /** Writes gas matrix-vector products into the common pressure Q column. */
     void recordProduct(VkCommandBuffer command,Layout layout,boolean direction){
