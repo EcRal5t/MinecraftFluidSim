@@ -26,6 +26,8 @@ final class VulkanLiquidRegion implements AutoCloseable {
     private Workspace workspace;
     private VulkanPressureKernel.Progress pressureProgress;
     private boolean currentGasThermal;
+    private mmm.units.SignedDyadic importRoundoff=mmm.units.SignedDyadic.ZERO;
+    mmm.units.SignedDyadic importRoundoff(){return importRoundoff;}
     private boolean currentGeometryValid;
     private RequestInputs currentInputs=new RequestInputs(new mmm.fluid.EntityBodyState(List.of()),false,0);
     private RequestInputs activeInputs;
@@ -146,7 +148,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
         maximumRange=context.maxStorageBufferRange();
         var liquid=definitions==null?VulkanLiquidStateLayout.forState(inventory,momentum,context.storageOffsetAlignment())
                 :new VulkanLiquidStateLayout(momentum.sizeX(),momentum.sizeY(),momentum.sizeZ(),definitions.stockCapacity(),
-                        definitions.speciesCapacity(),Math.max(definitions.limbCapacity(),VulkanLiquidStateLayout.requiredVolumeCapacity(inventory,definitions.stockCapacity())),context.storageOffsetAlignment());
+                        definitions.speciesCapacity(),Math.max(definitions.limbCapacity(),VulkanLiquidStateLayout.requiredVolumeCapacity(inventory,Math.max(definitions.stockCapacity(),Math.multiplyExact(inventory.cellCount(),definitions.materialPhases().length)),definitions.materialPhases().length)),context.storageOffsetAlignment(),definitions.materialPhases().length);
         if(!fixed.matchesShape(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ())||occupiedSolid.length!=liquid.cellCount())
             throw new IllegalArgumentException("Resident liquid geometry differs from its grid");
         workspace=new Workspace(liquid,definitions);
@@ -164,7 +166,9 @@ final class VulkanLiquidRegion implements AutoCloseable {
     }
     private void initialize(VulkanRegionStorage.Import writer,DeviceLiquidInventory inventory,MacMomentumState momentum,
                             FixedGeometrySnapshot fixed,long[] occupiedSolid) {
-        var l=workspace.liquid;
+        var l=workspace.liquid;var originalEnergy=mmm.units.SignedDyadic.sum(energies(inventory.energyBits()));
+        inventory=l.slotInventory(inventory);
+        importRoundoff=mmm.units.SignedDyadic.sum(energies(inventory.energyBits())).subtract(originalEnergy);
         if(inventory.cellCount()!=l.cellCount()||inventory.stockCount()>l.stockCapacity()||inventory.speciesHandles().length>l.speciesCapacity()||inventory.volumes().limbs().length>l.limbCapacity())
             throw new IllegalArgumentException("Liquid import exceeds resident capacity");
         var v=inventory.volumes();var encoded=l.encodeVolumes(inventory);
@@ -733,10 +737,9 @@ final class VulkanLiquidRegion implements AutoCloseable {
                 int scheduled = Math.min(16, parameters.iterations());
                 while (result.error() == 0 && result.feedback().getDouble(runFeedbackOffset) != 0.0 && scheduled < parameters.iterations()) {
                     int batch = Math.min(16, parameters.iterations() - scheduled);
-                    boolean profileContinuation=scheduled==Math.min(16,parameters.iterations());
                     result = candidate.continueBatch((command, input, output, errors, staging, stack) ->
                             {Runnable continuation=()->recordPressureIterations(command,output,errors,parameters.iterations(),batch,gasOperator);
-                                if(profileContinuation&&kernels!=null)kernels.timed(command,"common-pressure-next-batch",continuation);else continuation.run();}, runOffset, feedbackBytes);
+                                if(kernels!=null)kernels.timed(command,"common-pressure-next-batch",continuation);else continuation.run();}, runOffset, feedbackBytes);
                     scheduled += batch;
                 }
                 if(pressureDiagnostics)pressureProgress=VulkanPressureKernel.Progress.read(result.feedback());
@@ -880,7 +883,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             }
             if(stocks==liquid.stockCapacity()&&species==liquid.speciesCapacity()&&limbs==liquid.limbCapacity()&&windowLimbs==definitions.scratchLimbsPerWindow()&&java.util.Objects.equals(nextGas,gasReserves))
                 throw new IllegalStateException("Device capacity error 64 after "+capacityStage+" reported no larger CSR requirement: "+java.util.Arrays.toString(required));
-            return new Workspace(new VulkanLiquidStateLayout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),stocks,species,limbs,liquid.alignment()),
+            return new Workspace(new VulkanLiquidStateLayout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),stocks,species,limbs,liquid.alignment(),liquid.materialCount()),
                     definitions.capacities(stocks,species,limbs,windowLimbs),nextGas,contactCapacity,thermalContactCapacity,thermalBathCapacity,granularReserves);
         }
         Workspace growContacts(int required){return new Workspace(liquid,transport.definitions,gasReserves,growCount(contactCapacity,required),thermalContactCapacity,thermalBathCapacity,granularReserves);}
@@ -888,7 +891,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             if(required<=thermalContactCapacity&&requiredBaths<=thermalBathCapacity)throw new IllegalStateException("Thermal capacity feedback did not grow either column");
             return new Workspace(liquid,transport.definitions,gasReserves,contactCapacity,growCount(thermalContactCapacity,required),growCount(thermalBathCapacity,requiredBaths),granularReserves);
         }
-        Workspace growReactionSpecies(int required){if(required<=liquid.speciesCapacity())throw new IllegalStateException("Reaction feedback did not grow species capacity");int species=growCount(liquid.speciesCapacity(),required);return new Workspace(new VulkanLiquidStateLayout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),liquid.stockCapacity(),species,liquid.limbCapacity(),liquid.alignment()),transport.definitions.capacities(liquid.stockCapacity(),species,liquid.limbCapacity(),transport.definitions.scratchLimbsPerWindow()),gasReserves,contactCapacity,thermalContactCapacity,thermalBathCapacity,granularReserves);}
+        Workspace growReactionSpecies(int required){if(required<=liquid.speciesCapacity())throw new IllegalStateException("Reaction feedback did not grow species capacity");int species=growCount(liquid.speciesCapacity(),required);return new Workspace(new VulkanLiquidStateLayout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),liquid.stockCapacity(),species,liquid.limbCapacity(),liquid.alignment(),liquid.materialCount()),transport.definitions.capacities(liquid.stockCapacity(),species,liquid.limbCapacity(),transport.definitions.scratchLimbsPerWindow()),gasReserves,contactCapacity,thermalContactCapacity,thermalBathCapacity,granularReserves);}
         Workspace growGranular(int[] required){var r=granularReserves;var next=new GranularReserves(growCount(r.particles(),required[0]),growCount(r.deposits(),required[1]),growCount(r.species(),required[2]));
             if(next.equals(r))throw new IllegalStateException("Granular lifecycle feedback did not grow inventory");return new Workspace(liquid,transport.definitions,gasReserves,contactCapacity,thermalContactCapacity,thermalBathCapacity,next);}
         /** Candidate scratch is produced by its kernels. Persist inventory, constitutive tables, headers and warm caches only. */
@@ -1538,7 +1541,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
 
         Kernels(VulkanDeviceContext context,boolean gasEnabled,boolean granularEnabled,boolean thermalEnabled,boolean coherentEnabled,boolean reactionEnabled) {
             try {
-                if(Boolean.getBoolean("mmm.gpuMechanicalStages"))timings=own(new VulkanStageTimings(context,96));
+                if(Boolean.getBoolean("mmm.gpuMechanicalStages"))timings=own(new VulkanStageTimings(context,128));
                 futureGeometry=own(new VulkanLiquidGeometry(context));volumeKernel=own(new VulkanLiquidCellVolumes(context));
                 inputKernel=own(new VulkanLiquidCapacityInputs(context));capacityKernel=own(new VulkanLiquidCapacity(context));
                 acceptedKernel=own(new VulkanLiquidAcceptedVolumes(context));materialKernel=own(new VulkanLiquidMaterialRoutes(context));

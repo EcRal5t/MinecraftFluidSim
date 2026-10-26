@@ -231,7 +231,8 @@ void prepareCandidates(int cell){
  if(errors!=0u)return;uint mask=1u;
  for(int slot=1;slot<7;slot++)if(dyadicPresent(accepted(cell,slot)))mask|=1u<<slot;
  int first=int(sourceWords[src(CELL_OFFSETS)+cell]),last=int(sourceWords[src(CELL_OFFSETS)+cell+1]);
- [[dont_unroll]] for(int stock=first;stock<last;stock++){candidateWords[h(62)+stock]=uint(bitCount(mask));candidateWords[route(R_SOURCE_MASKS)+stock]=mask;}
+ [[dont_unroll]] for(int stock=first;stock<last;stock++){uint selected=dyadicPresent(sourceVolume(stock))?mask:0u;
+  candidateWords[h(62)+stock]=uint(bitCount(selected));candidateWords[route(R_SOURCE_MASKS)+stock]=selected;}
 }
 void reserve(int cell) {
     int count=candidateCount(),base=count+3*cell;
@@ -266,7 +267,7 @@ void splitCell(int cell) {
     int first=int(sourceWords[src(CELL_OFFSETS)+cell]),last=int(sourceWords[src(CELL_OFFSETS)+cell+1]);
     // Capacity already partitions this cell's exact total. One material inherits those seven pieces directly.
     if(last==first+1){for(int slot=0;slot<7;slot++){int entry=routeIndex(first,slot);if(entry>=0)saveRoute(entry,accepted(cell,slot));}return;}
-    [[dont_unroll]] for(int stock=first;stock<last;stock++)saveRoute(routeIndex(stock,0),sourceVolume(stock));
+    [[dont_unroll]] for(int stock=first;stock<last;stock++){int entry=routeIndex(stock,0);if(entry>=0)saveRoute(entry,sourceVolume(stock));}
     if(failed||first==last||(candidateWords[route(R_SOURCE_MASKS)+first]==1u))return;
     bool vertical=p.gravitySign!=0&&(dyadicPresent(accepted(cell,3))||dyadicPresent(accepted(cell,4)));
     if(vertical)prepareDensity(first,last);

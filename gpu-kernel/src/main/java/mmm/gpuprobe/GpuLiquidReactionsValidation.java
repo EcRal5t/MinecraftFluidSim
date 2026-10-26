@@ -28,7 +28,7 @@ public final class GpuLiquidReactionsValidation {
                 new int[]{0,2},handles,new long[]{100,100},new long[]{10_000_000_000L-76_000});
         var momentum=new MacMomentumState(2,2,2,new double[12],new double[12],new double[12]);
         try(var context=new VulkanDeviceContext(args.length>0?Integer.parseInt(args[0]):0,true,true);var reactions=new VulkanLiquidReactions(context)){
-            long a=Math.max(8,context.storageOffsetAlignment());var liquid=new VulkanLiquidStateLayout(2,2,2,1,8,inventory.volumes().limbs().length,a);
+            long a=Math.max(8,context.storageOffsetAlignment());var liquid=new VulkanLiquidStateLayout(2,2,2,1,8,inventory.volumes().limbs().length,a,1);
             var definitions=VulkanReactionDefinitions.fromRegistries(chemistry,granular,thermal,gas).layout(liquid.bytes(),a);
             long reference=(definitions.endOffset()+a-1)&-a,speciesReference=(reference+8+a-1)&-a;
             var caloric=VulkanLiquidThermodynamics.layout(liquid,VulkanLiquidThermodynamics.tables(fluid,thermal),Math.toIntExact(reference/4),

@@ -61,6 +61,7 @@ double volumeFraction(Volume part,Volume whole) {
 
 int volumeFractions(int stock,out double fractions[7],out bool enabled[7]) {
     Volume whole=sourceVolume(stock);int owner=-1;
+    if(whole.count==0)return -1;
     for(int i=0;i<7;i++) {
         int entry=routeIndex(stock,i),sign=entry<0?0:int(candidateWords[route(R_DESCRIPTORS)+5*entry+4]);
         enabled[i]=sign>0;fractions[i]=0.0;
@@ -108,6 +109,7 @@ int massFractions(int stock,int volumeOwner,double volumeShares[7],bool enabled[
 }
 
 void countSpecies(int stock) {
+    candidateWords[h(8)+stock]=uint(-1);
     double volumeShares[7],fractions[7];bool enabled[7];int64_t masses[7];
     int volumeOwner=volumeFractions(stock,volumeShares,enabled);if(volumeOwner<0)return;
     int owner=massFractions(stock,volumeOwner,volumeShares,enabled,masses,fractions);if(owner<0)return;
@@ -142,6 +144,7 @@ void writeQuantities(int stock) {
     if((errors&(16u|32u))!=0u)return;
     double volumeShares[7],fractions[7];bool enabled[7];int64_t masses[7];
     int owner=int(candidateWords[h(8)+stock]);
+    if(owner<0)return;
     int64_t totalMass=readLong(0,src(MASS_UNITS)+2*stock);
     // The first pass has already selected the exact remainder owner and partitioned mass.
     // Positive-mass fractions depend only on those integers, so no volume comparison repeats.

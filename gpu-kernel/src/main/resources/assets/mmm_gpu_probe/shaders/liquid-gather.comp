@@ -31,33 +31,15 @@ int64_t addQuantity(int64_t sum,int64_t value) {
 void clearStock(int stock) {
     if(stock==0)candidateWords[dst(VOLUME_OFFSETS)+h(4)]=uint(4*h(4));
     candidateWords[dst(VOLUME_COUNTS)+stock]=0u;
+    candidateWords[dst(VOLUME_EXPONENTS)+stock]=0u;
+    putLong(dst(MASS_UNITS)+2*stock,0l);putDouble(dst(ENERGY_BITS)+2*stock,0.0);
+    putLong(dst(MASS_RESIDUAL)+2*stock,0l);putDouble(dst(NUMERIC_VOLUMES)+2*stock,0.0);
+    candidateWords[dst(MIXTURE_PRESENT)+stock]=0u;
+    if(stock>=h(15)){candidateWords[dst(MATERIALS)+stock]=0u;candidateWords[dst(SUPPORT_MASKS)+stock]=0u;}
     candidateWords[h(11)+stock]=0u;
-    for(int i=0;i<7;i++)candidateWords[h(12)+35*stock+5*i+2]=0u;
+    for(int i=0;i<35;i++)candidateWords[h(12)+35*stock+i]=0u;
+    for(int i=0;i<7;i++)candidateWords[h(10)+7*stock+i]=uint(-1);
     for(int i=0;i<7;i++){putDouble(h(14)+14*stock+2*i,0.0);}
-}
-
-int seekRoute(int stock,int end,int slot) {
-    while(stock<end) {
-        int r=routeIndex(stock,slot);int sign=r<0?0:int(candidateWords[route(ROUTE_DESCRIPTORS)+5*r+4]);
-        if(sign>0)break;
-        if(sign<0)atomicOr(errors,32u);
-        stock++;
-    }
-    return stock;
-}
-
-void cellInputs(int cell,out int cursors[7],out int ends[7],out int slots[7]) {
-    ivec3 shape=ivec3(h(0),h(1),h(2));
-    ivec3 at=ivec3(cell%shape.x,cell/shape.x%shape.y,cell/(shape.x*shape.y));
-    for(int i=0;i<7;i++) {
-        ivec3 other=at;slots[i]=0;
-        if(i>0){int side=i-1;other[side/2]+=(side&1)==0?-1:1;slots[i]=(side^1)+1;}
-        bool valid=all(greaterThanEqual(other,ivec3(0)))&&all(lessThan(other,shape));
-        int donor=(other.z*shape.y+other.y)*shape.x+other.x;
-        cursors[i]=valid?int(sourceWords[src(CELL_OFFSETS)+donor]):0;
-        ends[i]=valid?int(sourceWords[src(CELL_OFFSETS)+donor+1]):0;
-        cursors[i]=seekRoute(cursors[i],ends[i],slots[i]);
-    }
 }
 
 int seekSpecies(int entry,int end) {
@@ -100,8 +82,7 @@ int mergeSpecies(int members[7],int outputStart,bool writing,out int64_t represe
     return count;
 }
 
-void gatherStock(int stock,int cell,int material,int members[7]) {
-    candidateWords[dst(MATERIALS)+stock]=uint(material);
+void gatherStock(int stock,int cell,int members[7]) {
     candidateWords[dst(SUPPORT_MASKS)+stock]=(~candidateWords[h(7)+cell])&255u;
     int64_t mass=int64_t(0);uint mixture=0u;precise double energy=0.0;
     for(int i=0;i<7;i++) {
@@ -124,27 +105,20 @@ void gatherStock(int stock,int cell,int material,int members[7]) {
     candidateWords[h(11)+stock]=uint(mergeSpecies(members,0,false,unused));
 }
 
-void mergeCell(int cell,bool writing) {
-    if(writing&&candidateWords[dst(CELL_OFFSETS)+h(3)]>uint(h(4))){atomicOr(errors,64u);return;}
-    int cursors[7],ends[7],slots[7];cellInputs(cell,cursors,ends,slots);
-    int count=0,outputStart=writing?int(candidateWords[dst(CELL_OFFSETS)+cell]):0;
-    while(true) {
-        int material=2147483647;bool found=false;
-        for(int i=0;i<7;i++)if(cursors[i]<ends[i]){material=min(material,int(sourceWords[src(MATERIALS)+cursors[i]]));found=true;}
-        if(!found)break;
-        int members[7];
-        for(int i=0;i<7;i++) {
-            members[i]=-1;
-            if(cursors[i]<ends[i]&&int(sourceWords[src(MATERIALS)+cursors[i]])==material) {
-                members[i]=routeIndex(cursors[i],slots[i]);cursors[i]=seekRoute(cursors[i]+1,ends[i],slots[i]);
-            }
-        }
-        if(writing)gatherStock(outputStart+count,cell,material,members);
-        count++;
+// Fixed slots gather the same material from the retained route and six actual neighbors.
+void gatherSlot(int stock) {
+    int material=stock%h(9),cell=stock/h(9),members[7];
+    ivec3 shape=ivec3(h(0),h(1),h(2)),at=ivec3(cell%shape.x,cell/shape.x%shape.y,cell/(shape.x*shape.y));
+    for(int i=0;i<7;i++) {
+        members[i]=-1;ivec3 other=at;int slot=0;
+        if(i>0){int side=i-1;other[side/2]+=(side&1)==0?-1:1;slot=(side^1)+1;}
+        if(any(lessThan(other,ivec3(0)))||any(greaterThanEqual(other,shape)))continue;
+        int donor=(other.z*shape.y+other.y)*shape.x+other.x,entry=routeIndex(donor*h(9)+material,slot);
+        if(entry<0)continue;int sign=int(candidateWords[route(ROUTE_DESCRIPTORS)+5*entry+4]);
+        if(sign<0){atomicOr(errors,32u);return;}if(sign>0)members[i]=entry;
     }
-    if(!writing)candidateWords[h(9)+cell]=uint(count);
+    gatherStock(stock,cell,members);
 }
-
 uint volumeWord(int begin,int count,int index) {
     return index>=0&&index<count?candidateWords[dst(VOLUME_LIMBS)+begin+index]:0u;
 }
@@ -176,14 +150,20 @@ double numericVolume(int begin,int count,int exponent) {
 }
 
 void finishStock(int stock) {
-    uint actual=candidateWords[dst(CELL_OFFSETS)+h(3)];
+    uint actual=uint(h(15));
     uint species=candidateWords[dst(SPECIES_OFFSETS)+h(4)],limbs=candidateWords[dst(VOLUME_OFFSETS)+h(4)];
     if(stock==0){candidateWords[dst(COUNTS)]=actual;candidateWords[dst(COUNTS)+1]=species;candidateWords[dst(COUNTS)+2]=limbs;}
     if(actual>uint(h(4))||species>uint(h(5))||limbs>uint(h(6))){atomicOr(errors,64u);return;}
     if((errors&(16u|32u))!=0u)return;
     if(uint(stock)>=actual)return;
     int result=h(13)+8*stock;
-    if(candidateWords[result]!=1u){atomicOr(errors,32u);return;}
+    uint status=candidateWords[result];
+    if(status==0u){
+        if(longAt(dst(MASS_UNITS)+2*stock)!=0l||candidateWords[h(11)+stock]!=0u||doubleAt(dst(ENERGY_BITS)+2*stock)!=0.0){atomicOr(errors,32u);return;}
+        candidateWords[dst(VOLUME_COUNTS)+stock]=0u;candidateWords[dst(VOLUME_EXPONENTS)+stock]=0u;candidateWords[dst(SUPPORT_MASKS)+stock]=0u;
+        candidateWords[dst(MIXTURE_PRESENT)+stock]=0u;putLong(dst(MASS_RESIDUAL)+2*stock,0l);putDouble(dst(NUMERIC_VOLUMES)+2*stock,0.0);return;
+    }
+    if(status!=1u){atomicOr(errors,32u);return;}
     int exponent=int(candidateWords[result+2]);candidateWords[dst(VOLUME_EXPONENTS)+stock]=uint(exponent);
     int begin=int(candidateWords[dst(VOLUME_OFFSETS)+stock]),end=begin+int(candidateWords[dst(VOLUME_COUNTS)+stock]);
     putDouble(dst(NUMERIC_VOLUMES)+2*stock,numericVolume(begin,end-begin,exponent));
@@ -196,6 +176,5 @@ void finishStock(int stock) {
 void main() {
     int index=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
     if(index>=p.count||(errors!=0u&&p.stage!=3))return;
-    if(p.stage==0)clearStock(index);else if(p.stage==1)mergeCell(index,false);
-    else if(p.stage==2)mergeCell(index,true);else finishStock(index);
+    if(p.stage==0)clearStock(index);else if(p.stage==1)gatherSlot(index);else finishStock(index);
 }

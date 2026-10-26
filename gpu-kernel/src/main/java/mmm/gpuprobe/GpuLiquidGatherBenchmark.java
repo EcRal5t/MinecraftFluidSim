@@ -29,7 +29,7 @@ public final class GpuLiquidGatherBenchmark {
     private static void measure(VulkanDeviceContext context,VulkanLiquidMaterialRoutes materialRoutes,VulkanLiquidRouteQuantities quantities,VulkanLiquidGather gather,VulkanLiquidMomentum momentum,VulkanEnergyLedger ledger,int grid,int samples) {
         int cells=grid*grid*grid,stocks=2*cells;
         long alignment=Math.max(8,context.storageOffsetAlignment());
-        var state=new VulkanLiquidStateLayout(grid,grid,grid,stocks,stocks,stocks,alignment);
+        var state=new VulkanLiquidStateLayout(grid,grid,grid,stocks,stocks,stocks,alignment,2);
         var routes=new VulkanLiquidRouteLayout(stocks,2*stocks,state.bytes(),alignment);
         long fixed=routes.endOffset(),mass=fixed+4L*cells,materialReference=mass+16,speciesReference=materialReference+16;
         long acceptedBase=speciesReference+32,phaseBase=acceptedBase+140L*cells,acceptedLimb=phaseBase+8;

@@ -33,7 +33,7 @@ public final class GpuSolidLiquidReactionsValidation {
             int sx=grid+(axis==0?1:0),sy=grid+(axis==1?1:0),face=(z*sy+y)*sx+x;(axis==0?px:axis==1?py:pz)[face]=.5*velocity[axis];}
         var momentum=new MacMomentumState(grid,grid,grid,px,py,pz);
         try(var context=new VulkanDeviceContext(args.length>0?Integer.parseInt(args[0]):0,true,true);var kernel=new VulkanSolidLiquidReactions(context);var ledgerKernel=new VulkanEnergyLedger(context)){
-            long a=Math.max(8,context.storageOffsetAlignment());var liquid=new VulkanLiquidStateLayout(grid,grid,grid,1,64,16,a);
+            long a=Math.max(8,context.storageOffsetAlignment());var liquid=new VulkanLiquidStateLayout(grid,grid,grid,1,64,16,a,1);
             var definition=new VulkanGranularStateLayout.Definitions(granular.fingerprint(),chemical.fingerprint(),granular.materials().stream().map(ParticulateMaterial::id).toList(),chemical.species().stream().map(ChemicalSpecies::id).toList());
             var solid=new VulkanGranularStateLayout(grid,grid,grid,0,8,128,definition,liquid.bytes(),a);
             var tables=VulkanReactionDefinitions.fromRegistries(chemical,granular,thermal,gas).layout(solid.endOffset(),a);

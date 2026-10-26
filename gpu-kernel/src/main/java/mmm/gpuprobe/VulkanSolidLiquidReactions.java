@@ -49,27 +49,27 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
                 case HEADER->192;case PHASES->phases.length;case POROSITIES->porosities.length;case HEAD,CELL_OLD_MASS,CELL_NEW_MASS,POTENTIAL_WORK,PROPOSAL_HEAD,CELL_OLD_PE,CELL_NEW_PE->liquid.cellCount();
                 case NEXT,CELL,SOLID_OLD_ENERGY,SOLID_NEW_ENERGY,SOLID_COUNTS,SOLID_OLD_K,SOLID_NEW_K,SOLID_SOURCE_MASS,SOLID_WITHDRAWN_MASS->solid.rowCapacity();
                 case PROPOSAL_NEXT->progress.proposalCapacity();case FACE_MOMENTUM,FACE_OLD_K,FACE_NEW_K->faces;case FACE_HEAT->Math.multiplyExact(2,faces);case WALL_IMPULSE->Math.multiplyExact(3,liquid.cellCount());
-                case LIQUID_SPECIES->Math.multiplyExact(liquid.stockCapacity(),species);case SOLID_SPECIES->Math.multiplyExact(solid.rowCapacity(),species);
-                case LIQUID_OFFSETS,VOLUME_OFFSETS->liquid.stockCapacity()+1;case SOLID_OFFSETS->solid.rowCapacity()+1;
+                case LIQUID_SPECIES->Math.multiplyExact(liquid.slotCount(),species);case SOLID_SPECIES->Math.multiplyExact(solid.rowCapacity(),species);
+                case LIQUID_OFFSETS,VOLUME_OFFSETS->liquid.slotCount()+1;case SOLID_OFFSETS->solid.rowCapacity()+1;
                 case LIQUID_HANDLES,LIQUID_AMOUNTS->liquid.speciesCapacity();case SOLID_HANDLES,SOLID_AMOUNTS->solid.speciesCapacity();
-                case VOLUME_TERMS->Math.multiplyExact(liquid.stockCapacity(),35);case VOLUME_RESULTS->Math.multiplyExact(liquid.stockCapacity(),8);
-                case VOLUME_LIMBS->liquid.limbCapacity();case DELTA_LIMBS->Math.multiplyExact(liquid.stockCapacity(),4);
-                case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(liquid.stockCapacity(),solid.rowCapacity()))/4);case CONTROL->12;
-                default->liquid.stockCapacity();};
+                case VOLUME_TERMS->Math.multiplyExact(liquid.slotCount(),35);case VOLUME_RESULTS->Math.multiplyExact(liquid.slotCount(),8);
+                case VOLUME_LIMBS->liquid.limbCapacity();case DELTA_LIMBS->Math.multiplyExact(liquid.slotCount(),4);
+                case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(liquid.slotCount(),solid.rowCapacity()))/4);case CONTROL->12;
+                default->liquid.slotCount();};
                 long start=align(cursor,alignment);var c=new VulkanLiquidStateLayout.Column(start,count,f.width);columns.put(f,c);cursor=start+c.bindingBytes();
             }endOffset=align(cursor,alignment);
         }
         VulkanLiquidStateLayout.Column column(Field f){return columns.get(f);}int word(Field f){return Math.toIntExact(column(f).offset()/4);}
         long feedbackOffset(){return column(Field.CONTROL).offset();}
         ByteBuffer headerBytes(){var out=ByteBuffer.allocateDirect(768).order(ByteOrder.LITTLE_ENDIAN);int[] h=new int[192];
-            h[0]=liquid.cellCount();h[1]=liquid.stockCapacity();h[2]=solid.rowCapacity();h[3]=species;h[4]=definitions.word();
+            h[0]=liquid.cellCount();h[1]=liquid.slotCount();h[2]=solid.rowCapacity();h[3]=species;h[4]=definitions.word();
             h[5]=Math.toIntExact(liquidCaloric.header().offset()/4);h[6]=Math.toIntExact(solidCaloric.header().offset()/4);h[7]=solid.particleCapacity();h[8]=solid.depositCapacity();
             h[9]=liquid.sizeX();h[10]=liquid.sizeY();h[11]=liquid.sizeZ();h[12]=liquid.speciesCapacity();h[13]=solid.speciesCapacity();h[14]=liquid.limbCapacity();
             h[15]=progress.proposalCapacity();for(var f:Field.values())h[16+f.ordinal()]=word(f);
             for(var f:VulkanLiquidStateLayout.Field.values())h[64+f.ordinal()]=Math.toIntExact(liquid.column(f).offset()/4);
             for(var f:VulkanGranularStateLayout.Field.values())h[88+f.ordinal()]=solid.word(f);
             for(var f:VulkanReactionProgressLayout.Field.values())h[120+f.ordinal()]=progress.word(f);
-            h[163]=faceGeometryWord;h[168]=faces;for(int i=0;i<h.length;i++)out.putInt(4*i,h[i]);
+            h[169]=liquid.materialCount();h[170]=liquid.stockCapacity();h[163]=faceGeometryWord;h[168]=faces;for(int i=0;i<h.length;i++)out.putInt(4*i,h[i]);
             out.putLong(4*160,volumeUnit.significand().longValueExact()).putInt(4*162,volumeUnit.exponent()).putDouble(4*164,cellSize).putDouble(4*166,gravity);return out;}
         List<VulkanGasThermodynamics.TableChunk> tableChunks(){var a=ByteBuffer.allocateDirect(4*phases.length).order(ByteOrder.LITTLE_ENDIAN);
             var b=ByteBuffer.allocateDirect(4*porosities.length).order(ByteOrder.LITTLE_ENDIAN);
@@ -88,13 +88,13 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
     void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){bindings.rebindRanges(List.of(arena,errors,arena));scan.rebindRanges(arena,arena,arena,errors);}
     /** The caller first copies granular owners to its transition layout's private source. */
     void recordPrepare(VkCommandBuffer command,Layout l){
-        stage(command,l,0,Math.max(l.progress.proposalCapacity(),Math.max(1,Math.max(l.liquid.cellCount(),Math.max(l.liquid.stockCapacity(),l.solid.rowCapacity())))));
-        stage(command,l,1,Math.max(l.liquid.stockCapacity(),l.solid.rowCapacity()));stage(command,l,2,l.liquid.cellCount());
-        stage(command,l,3,Math.max(l.liquid.stockCapacity(),l.solid.rowCapacity()));
-        scan.record(command,l.liquid.stockCapacity(),l.word(Field.LIQUID_COUNTS),l.word(Field.LIQUID_OFFSETS),l.word(Field.SCAN));
+        stage(command,l,0,Math.max(l.progress.proposalCapacity(),Math.max(1,Math.max(l.liquid.cellCount(),Math.max(l.liquid.slotCount(),l.solid.rowCapacity())))));
+        stage(command,l,1,Math.max(l.liquid.slotCount(),l.solid.rowCapacity()));stage(command,l,2,l.liquid.cellCount());
+        stage(command,l,3,Math.max(l.liquid.slotCount(),l.solid.rowCapacity()));
+        scan.record(command,l.liquid.slotCount(),l.word(Field.LIQUID_COUNTS),l.word(Field.LIQUID_OFFSETS),l.word(Field.SCAN));
         scan.record(command,l.solid.rowCapacity(),l.word(Field.SOLID_COUNTS),l.word(Field.SOLID_OFFSETS),l.word(Field.SCAN));
 
-        stage(command,l,4,1);stage(command,l,5,Math.max(l.liquid.stockCapacity(),l.solid.rowCapacity()));stage(command,l,6,Math.max(l.liquid.stockCapacity(),l.solid.rowCapacity()));
+        stage(command,l,4,1);stage(command,l,5,Math.max(l.liquid.slotCount(),l.solid.rowCapacity()));stage(command,l,6,Math.max(l.liquid.slotCount(),l.solid.rowCapacity()));
         stage(command,l,8,l.faces);stage(command,l,9,l.liquid.cellCount());stage(command,l,10,l.solid.rowCapacity());
     }
     /** Publishes liquid columns and the private solid composition, then the caller reassembles solid owners. */

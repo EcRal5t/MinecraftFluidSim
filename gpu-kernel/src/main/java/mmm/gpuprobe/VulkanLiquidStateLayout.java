@@ -39,16 +39,18 @@ public final class VulkanLiquidStateLayout {
 
     public record State(DeviceLiquidInventory inventory, MacMomentumState momentum) { }
 
-    private final int sizeX, sizeY, sizeZ, stockCapacity, speciesCapacity, limbCapacity;
+    private final int sizeX, sizeY, sizeZ, stockCapacity, speciesCapacity, limbCapacity, materialCount;
     private final long alignment, bytes;
     private final EnumMap<Field, Column> columns = new EnumMap<>(Field.class);
 
     public VulkanLiquidStateLayout(int sizeX, int sizeY, int sizeZ, int stockCapacity,
-                                   int speciesCapacity, int limbCapacity, long storageAlignment) {
+                                   int speciesCapacity, int limbCapacity, long storageAlignment, int materialCount) {
         if (sizeX < 2 || sizeY < 2 || sizeZ < 2 || stockCapacity < 0 || speciesCapacity < 0
-                || limbCapacity < 0 || storageAlignment <= 0 || (storageAlignment & (storageAlignment - 1)) != 0)
+                || materialCount < 1 || limbCapacity < 0 || storageAlignment <= 0 || (storageAlignment & (storageAlignment - 1)) != 0)
             throw new IllegalArgumentException("Invalid resident liquid shape or storage alignment");
         this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
+        this.materialCount=materialCount;
+        stockCapacity=Math.max(stockCapacity,Math.multiplyExact(cellCount(),materialCount));
         this.stockCapacity = stockCapacity; this.speciesCapacity = speciesCapacity; this.limbCapacity = Math.max(limbCapacity, Math.multiplyExact(4, stockCapacity));
         alignment = Math.max(8, storageAlignment);
         long cursor = 0;
@@ -74,10 +76,20 @@ public final class VulkanLiquidStateLayout {
 
     public static VulkanLiquidStateLayout forState(DeviceLiquidInventory inventory,
                                                    MacMomentumState momentum, long storageAlignment) {
-        return new VulkanLiquidStateLayout(momentum.sizeX(), momentum.sizeY(), momentum.sizeZ(),
-                inventory.stockCount(), inventory.speciesHandles().length, requiredVolumeCapacity(inventory,inventory.stockCount()),
-                storageAlignment);
+        int materials=1;for(int material:inventory.materials())materials=Math.max(materials,material+1);
+        return forState(inventory,momentum,storageAlignment,materials);
     }
+    public static VulkanLiquidStateLayout forState(DeviceLiquidInventory inventory,
+                                                   MacMomentumState momentum,long storageAlignment,int materialCount) {
+        int slots=Math.multiplyExact(inventory.cellCount(),materialCount);
+        var provisional=new VulkanLiquidStateLayout(momentum.sizeX(),momentum.sizeY(),momentum.sizeZ(),slots,
+                inventory.speciesHandles().length,Math.multiplyExact(4,slots),storageAlignment,materialCount);
+        var slotted=provisional.slotInventory(inventory);
+        return new VulkanLiquidStateLayout(momentum.sizeX(),momentum.sizeY(),momentum.sizeZ(),slots,
+                slotted.speciesHandles().length,requiredVolumeCapacity(slotted,slots),storageAlignment,materialCount);
+    }
+    public int materialCount(){return materialCount;}
+    public int slotCount(){return Math.multiplyExact(cellCount(),materialCount);}
 
     public int sizeX() { return sizeX; }
     public int sizeY() { return sizeY; }
@@ -99,6 +111,7 @@ public final class VulkanLiquidStateLayout {
 
     /** Writes one-time initialization/checkpoint data; destination position is preserved. */
     public void importState(ByteBuffer destination, DeviceLiquidInventory inventory, MacMomentumState momentum) {
+        inventory=slotInventory(inventory);
         if (inventory.cellCount() != cellCount() || inventory.stockCount() > stockCapacity
                 || inventory.speciesHandles().length > speciesCapacity || inventory.volumes().limbs().length > limbCapacity
                 || momentum.sizeX() != sizeX || momentum.sizeY() != sizeY || momentum.sizeZ() != sizeZ)
@@ -129,14 +142,85 @@ public final class VulkanLiquidStateLayout {
         put(out, Field.MOMENTUM_Z, momentum.copyZ());
     }
 
+    /** Expands the cold transfer inventory into permanent cell/material slots. */
+    public DeviceLiquidInventory slotInventory(DeviceLiquidInventory inventory) {
+        if(inventory.cellCount()!=cellCount())throw new IllegalArgumentException("Liquid slot grid differs");
+        int slots=slotCount();
+        int[] oldCells=inventory.cellOffsets(),oldMaterials=inventory.materials();
+        if(inventory.stockCount()==slots){
+            boolean fixed=true;
+            for(int c=0;c<=cellCount();c++)if(oldCells[c]!=c*materialCount){fixed=false;break;}
+            for(int row=0;fixed&&row<slots;row++)if(oldMaterials[row]!=row%materialCount)fixed=false;
+            if(fixed)return inventory;
+        }
+        int[] cells=new int[cellCount()+1],materials=new int[slots],supports=new int[slots],present=new int[slots],speciesOffsets=new int[slots+1];
+        long[] mass=new long[slots],energy=new long[slots],residual=new long[slots];
+        var volumes=new java.util.ArrayList<mmm.units.SignedDyadic>(java.util.Collections.nCopies(slots,mmm.units.SignedDyadic.ZERO));
+        var mixtures=new java.util.HashMap<Integer,java.util.TreeMap<Integer,Long>>();
+        int[] oldSupports=inventory.supportMasks(),oldPresent=inventory.mixturePresent(),oldOffsets=inventory.speciesOffsets(),oldHandles=inventory.speciesHandles();
+        long[] oldMass=inventory.massUnits(),oldEnergy=inventory.energyBits(),oldResidual=inventory.massResidualUnits(),oldAmounts=inventory.speciesAmounts();var oldVolumes=inventory.volumes();
+        for(int c=0;c<cellCount();c++){
+            cells[c+1]=(c+1)*materialCount;
+            for(int m=0;m<materialCount;m++)materials[c*materialCount+m]=m;
+            for(int row=oldCells[c];row<oldCells[c+1];row++){
+                int material=oldMaterials[row];if(material<0||material>=materialCount)throw new IllegalArgumentException("Liquid material exceeds bound palette");
+                int slot=c*materialCount+material;
+                volumes.set(slot,volumes.get(slot).add(oldVolumes.valueAt(row)));supports[slot]|=oldSupports[row];
+                mass[slot]=Math.addExact(mass[slot],oldMass[row]);residual[slot]=Math.addExact(residual[slot],oldPresent[row]!=0?oldResidual[row]:oldMass[row]);present[slot]|=oldPresent[row];
+                energy[slot]=Double.doubleToRawLongBits(Double.longBitsToDouble(energy[slot])+Double.longBitsToDouble(oldEnergy[row]));
+                for(int item=oldOffsets[row];item<oldOffsets[row+1];item++)if(oldAmounts[item]!=0){
+                    var mix=mixtures.computeIfAbsent(slot,ignored->new java.util.TreeMap<>());
+                    mix.merge(oldHandles[item],oldAmounts[item],Math::addExact);
+                }
+            }
+        }
+        for(int slot=0;slot<slots;slot++){
+            if(present[slot]==0)residual[slot]=0;
+            var mix=mixtures.get(slot);speciesOffsets[slot+1]=speciesOffsets[slot]+(mix==null?0:mix.size());
+        }
+        int[] handles=new int[speciesOffsets[slots]];long[] amounts=new long[handles.length];
+        for(var entry:mixtures.entrySet()){int at=speciesOffsets[entry.getKey()];for(var item:entry.getValue().entrySet()){handles[at]=item.getKey();amounts[at++]=item.getValue();}}
+        return new DeviceLiquidInventory(cells,materials,supports,DeviceDyadicArray.encode(volumes),mass,energy,present,speciesOffsets,handles,amounts,residual);
+    }
+
+    /** CPU inventories contain positive-volume stocks and positive species entries. */
+    private DeviceLiquidInventory compactInventory(DeviceLiquidInventory inventory) {
+        int[] oldCells=inventory.cellOffsets(),oldMaterials=inventory.materials(),oldSupports=inventory.supportMasks(),oldPresent=inventory.mixturePresent(),oldSpecies=inventory.speciesOffsets(),oldHandles=inventory.speciesHandles();
+        long[] oldMass=inventory.massUnits(),oldEnergy=inventory.energyBits(),oldResidual=inventory.massResidualUnits(),oldAmounts=inventory.speciesAmounts();var oldVolumes=inventory.volumes();
+        int[] signs=oldVolumes.signs();int live=0,entries=0;for(int row=0;row<inventory.stockCount();row++)if(signs[row]>0){live++;for(int at=oldSpecies[row];at<oldSpecies[row+1];at++)if(oldAmounts[at]>0)entries++;}
+        int[] cells=new int[cellCount()+1],materials=new int[live],supports=new int[live],present=new int[live],offsets=new int[live+1],handles=new int[entries];
+        long[] mass=new long[live],energy=new long[live],residual=new long[live],amounts=new long[entries];var volumes=new java.util.ArrayList<mmm.units.SignedDyadic>(live);
+        int output=0,item=0;for(int c=0;c<cellCount();c++){
+            for(int row=oldCells[c];row<oldCells[c+1];row++)if(oldVolumes.valueAt(row).signum()>0){
+                materials[output]=oldMaterials[row];supports[output]=oldSupports[row];present[output]=oldPresent[row];mass[output]=oldMass[row];energy[output]=oldEnergy[row];residual[output]=oldResidual[row];volumes.add(oldVolumes.valueAt(row));
+                for(int at=oldSpecies[row];at<oldSpecies[row+1];at++)if(oldAmounts[at]>0){handles[item]=oldHandles[at];amounts[item++]=oldAmounts[at];}
+                offsets[++output]=item;
+            }cells[c+1]=output;
+        }
+        return new DeviceLiquidInventory(cells,materials,supports,DeviceDyadicArray.encode(volumes),mass,energy,present,offsets,handles,amounts,residual);
+    }
+
     public record VolumeColumns(int[] offsets,int[] counts,int[] exponents,int[] limbs,int used) { }
     public static int requiredVolumeCapacity(DeviceLiquidInventory inventory,int stockCapacity) {
         int used=Math.multiplyExact(4,stockCapacity);int[] offsets=inventory.volumes().offsets();
         for(int i=0;i<inventory.stockCount();i++){int count=offsets[i+1]-offsets[i];if(count>4)used=Math.addExact(used,count);}
         return used;
     }
+    /** Includes exact same-material cold merging before measuring overflow storage. */
+    public static int requiredVolumeCapacity(DeviceLiquidInventory inventory,int stockCapacity,int materialCount) {
+        int used=Math.multiplyExact(4,Math.max(stockCapacity,Math.multiplyExact(inventory.cellCount(),materialCount)));
+        var merged=new java.util.HashMap<Integer,mmm.units.SignedDyadic>();
+        int[] cells=inventory.cellOffsets(),materials=inventory.materials();var volumes=inventory.volumes();
+        for(int c=0;c<inventory.cellCount();c++)for(int row=cells[c];row<cells[c+1];row++){
+            int material=materials[row];if(material<0||material>=materialCount)throw new IllegalArgumentException("Liquid material exceeds bound palette");
+            merged.merge(c*materialCount+material,volumes.valueAt(row),mmm.units.SignedDyadic::add);
+        }
+        for(var volume:merged.values()){int count=(volume.significand().bitLength()+31)/32;if(count>4)used=Math.addExact(used,count);}
+        return used;
+    }
     /** Four inline words per slot and a shared overflow tail; offsets are independent addresses. */
     public VolumeColumns encodeVolumes(DeviceLiquidInventory inventory) {
+        inventory=slotInventory(inventory);
         var v=inventory.volumes();int n=inventory.stockCount(),used=Math.multiplyExact(4,stockCapacity);
         int[] offsets=new int[stockCapacity+1],counts=new int[n],starts=v.offsets(),raw=v.limbs();
         for(int i=0;i<n;i++){counts[i]=starts[i+1]-starts[i];offsets[i]=counts[i]<=4?4*i:used;if(counts[i]>4)used=Math.addExact(used,counts[i]);}
@@ -158,12 +242,14 @@ public final class VulkanLiquidStateLayout {
         int[] packed=new int[packedOffsets[stocks]];
         int[] rawLimbs=ints(in,Field.VOLUME_LIMBS,limbs);
         for(int i=0;i<stocks;i++)System.arraycopy(rawLimbs,addresses[i],packed,packedOffsets[i],lengths[i]);
-        var volumes = new DeviceDyadicArray(packedOffsets,signs,ints(in,Field.VOLUME_EXPONENTS,stocks),packed);
+        int[] exponents=ints(in,Field.VOLUME_EXPONENTS,stocks);
+        for(int i=0;i<stocks;i++)if(lengths[i]==0)exponents[i]=0;
+        var volumes = new DeviceDyadicArray(packedOffsets,signs,exponents,packed);
         var inventory = new DeviceLiquidInventory(ints(in, Field.CELL_OFFSETS, cellCount() + 1), ints(in, Field.MATERIALS, stocks),
                 ints(in, Field.SUPPORT_MASKS, stocks), volumes, longs(in, Field.MASS_UNITS, stocks), longs(in, Field.ENERGY_BITS, stocks),
                 ints(in, Field.MIXTURE_PRESENT, stocks), ints(in, Field.SPECIES_OFFSETS, stocks + 1), ints(in, Field.SPECIES_HANDLES, species),
                 longs(in, Field.SPECIES_AMOUNTS, species), longs(in, Field.MASS_RESIDUAL_UNITS, stocks));
-        return new State(inventory, new MacMomentumState(sizeX, sizeY, sizeZ,
+        return new State(compactInventory(inventory), new MacMomentumState(sizeX, sizeY, sizeZ,
                 doubles(in, Field.MOMENTUM_X), doubles(in, Field.MOMENTUM_Y), doubles(in, Field.MOMENTUM_Z)));
     }
 
@@ -171,7 +257,7 @@ public final class VulkanLiquidStateLayout {
     void copyColumns(VkCommandBuffer command, VulkanLiquidStateLayout oldLayout, GpuBuffer source,
                      GpuBuffer output, MemoryStack stack) {
         if (sizeX != oldLayout.sizeX || sizeY != oldLayout.sizeY || sizeZ != oldLayout.sizeZ
-                || stockCapacity < oldLayout.stockCapacity || speciesCapacity < oldLayout.speciesCapacity
+                || materialCount != oldLayout.materialCount || stockCapacity < oldLayout.stockCapacity || speciesCapacity < oldLayout.speciesCapacity
                 || limbCapacity < oldLayout.limbCapacity)
             throw new IllegalArgumentException("Liquid growth must retain the source grid and column capacities");
         var copies = VkBufferCopy.calloc(Field.values().length, stack);

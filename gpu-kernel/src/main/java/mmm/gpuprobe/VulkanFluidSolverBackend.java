@@ -52,7 +52,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
         var encoded=ports.stream().map(port->{var c=port.contact();return new VulkanThermalDeviceLayout.Port(port.providerId(),port.objectId(),c.cellX()+template.sizeX()*(c.cellY()+template.sizeY()*c.cellZ()),c.direction(),c.wallThicknessMetres(),c.wallConductivityWPerMetreK(),c.filmThicknessMetres());}).toList();
         var codec=new VulkanFluidStateCodec(template,input.finiteThermalDevices(),encoded);
         var region=new Region(codec,codec.importRegion(context,geometry,projection,pressure,multigrid),ports);regions.add(region);
-        return new State(region,region.device.captureState(),template.thermalOwner()==null?null:template.thermalOwner().audit());
+        return new State(region,region.device.captureState(),template.thermalOwner()==null?null:template.thermalOwner().audit().withRoundoff(region.device.importRoundoff()));
     }
     @Override public synchronized FluidStepCandidate evaluate(FluidStepRequest request){
         State source=acquire(request.stateAccess());VulkanLiquidRegion.Prepared prepared=null;

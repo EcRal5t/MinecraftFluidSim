@@ -18,7 +18,7 @@ final class VulkanLiquidGather implements AutoCloseable {
 
     record Layout(VulkanLiquidStateLayout source, VulkanLiquidStateLayout output,
                   VulkanLiquidRouteLayout routes, int fixedMaskWordOffset, int speciesMassWordOffset,
-                  VulkanLiquidStateLayout.Column header, VulkanLiquidStateLayout.Column cellCounts,
+                  VulkanLiquidStateLayout.Column header,
                   VulkanLiquidStateLayout.Column members, VulkanLiquidStateLayout.Column speciesCounts,
                   VulkanLiquidStateLayout.Column dyadicTerms, VulkanLiquidStateLayout.Column dyadicResults,
                   VulkanLiquidStateLayout.Column energyRemainders,
@@ -38,8 +38,9 @@ final class VulkanLiquidGather implements AutoCloseable {
             values[3] = output.cellCount(); values[4] = output.stockCapacity();
             values[5] = output.speciesCapacity(); values[6] = output.limbCapacity();
             values[7] = fixedMaskWordOffset; values[8] = speciesMassWordOffset;
-            values[9] = word(cellCounts); values[10] = word(members); values[11] = word(speciesCounts);
+            values[9] = output.materialCount(); values[10] = word(members); values[11] = word(speciesCounts);
             values[12] = word(dyadicTerms); values[13] = word(dyadicResults); values[14] = word(energyRemainders);
+            values[15] = Math.multiplyExact(output.cellCount(),output.materialCount());
             for (var field : VulkanLiquidStateLayout.Field.values()) {
                 values[16 + field.ordinal()] = word(source.column(field));
                 values[35 + field.ordinal()] = word(output.column(field));
@@ -60,21 +61,21 @@ final class VulkanLiquidGather implements AutoCloseable {
     static Layout layout(VulkanLiquidStateLayout source, VulkanLiquidStateLayout output, VulkanLiquidRouteLayout routes,
                          int fixedMaskWordOffset, int speciesMassWordOffset, long scratchBase, long alignment) {
         if (source.sizeX() != output.sizeX() || source.sizeY() != output.sizeY() || source.sizeZ() != output.sizeZ()
+                || output.materialCount()<1 || source.materialCount()!=output.materialCount()
                 || routes.sourceStockCapacity() < source.stockCapacity() || scratchBase < output.bytes()
                 || scratchBase < routes.endOffset() || alignment < 8 || (alignment & (alignment - 1)) != 0)
             throw new IllegalArgumentException("Liquid gather layouts overlap or differ in grid/capacity");
         int stocks = output.stockCapacity();
         long[] cursor = {scratchBase};
         var header = column(cursor, HEADER_WORDS, 4, alignment);
-        var cellCounts = column(cursor, output.cellCount(), 4, alignment);
         var members = column(cursor, Math.multiplyExact(stocks, 7), 4, alignment);
         var speciesCounts = column(cursor, stocks, 4, alignment);
         var terms = column(cursor, Math.multiplyExact(stocks, 35), 4, alignment);
         var results = column(cursor, Math.multiplyExact(stocks, 8), 4, alignment);
         var remainders = column(cursor, Math.multiplyExact(stocks, 7), 8, alignment);
-        long scanBytes = Math.max(VulkanPrefixScan.workspaceBytes(output.cellCount()), VulkanPrefixScan.workspaceBytes(stocks));
+        long scanBytes = VulkanPrefixScan.workspaceBytes(stocks);
         var workspace = column(cursor, Math.toIntExact(scanBytes / 4), 4, alignment);
-        return new Layout(source, output, routes, fixedMaskWordOffset, speciesMassWordOffset, header, cellCounts,
+        return new Layout(source, output, routes, fixedMaskWordOffset, speciesMassWordOffset, header,
                 members, speciesCounts, terms, results, remainders, workspace, align(cursor[0], alignment));
     }
 
@@ -105,12 +106,9 @@ final class VulkanLiquidGather implements AutoCloseable {
 
     /** Capacity acceptance precedes this pass. Momentum and the retained energy remainders have separate owners. */
     void record(VkCommandBuffer command, Layout layout) {
-        int stocks = layout.output().stockCapacity(), cells = layout.output().cellCount();
+        int stocks = layout.output().stockCapacity(), slots=Math.multiplyExact(layout.output().cellCount(),layout.output().materialCount());
         stage(command, layout, 0, stocks);
-        stage(command, layout, 1, cells);
-        scan.record(command, cells, word(layout.cellCounts()), word(layout.output().column(VulkanLiquidStateLayout.Field.CELL_OFFSETS)),
-                word(layout.scanWorkspace()));
-        stage(command, layout, 2, cells);
+        stage(command, layout, 1, slots);
         scan.record(command, stocks, word(layout.speciesCounts()), word(layout.output().column(VulkanLiquidStateLayout.Field.SPECIES_OFFSETS)),
                 word(layout.scanWorkspace()));
         sums.recordSlots(command, layout.sums());
