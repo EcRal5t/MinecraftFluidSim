@@ -30,7 +30,7 @@ public final class GpuThermalContactsBenchmark {
             var liquid=VulkanLiquidStateLayout.forState(inventory,fixture.momentum(),a);var geometry=GpuGasGeometryBenchmark.geometry(liquid,a);
             var totals=VulkanLiquidCellVolumes.layout(liquid,2*cells,-40,geometry.endOffset(),a);
             var gasGeometry=VulkanGasGeometry.layout(totals,word(geometry.masks()),word(geometry.occupied()),word(geometry.cells()),word(geometry.planes()),word(geometry.micro()),true,h,totals.endOffset(),a);
-            var definitions=GpuGasGeometryBenchmark.gasDefinitions();var gas=new VulkanGasStateLayout(grid,grid,grid,cells,2*cells,2*cells,definitions.definitions(),gasGeometry.endOffset(),a);
+            var definitions=GpuGasGeometryBenchmark.gasDefinitions();var gas=new VulkanGasStateLayout(grid,grid,grid,cells,2*cells,definitions.definitions(),gasGeometry.endOffset(),a);
             var gasTables=VulkanGasThermodynamics.tables(gas.definitions(),definitions.gas(),definitions.thermal(),mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY);
             var gasThermal=VulkanGasThermodynamics.layout(gas,gasTables,Math.toIntExact(gas.endOffset()/4),gas.endOffset()+8L*cells,a);
             var materials=new java.util.ArrayList<ThermalMaterialDefinition>();

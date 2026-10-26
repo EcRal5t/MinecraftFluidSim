@@ -28,7 +28,7 @@ public final class GpuGasFlowBenchmark {
             var geometry=VulkanGasGeometry.layout(totals,word(g.masks()),word(g.occupied()),word(g.cells()),word(g.planes()),word(g.micro()),true,.5,totals.endOffset(),a);
             int leaves=(grid/2)*(grid/2)*(grid/2),nodes=leaves+1;
             var definitions=GpuGasGeometryBenchmark.gasDefinitions();
-            var gas=new VulkanGasStateLayout(grid,grid,grid,nodes,2*(nodes+2),2*(nodes+2),definitions.definitions(),geometry.endOffset(),a);
+            var gas=new VulkanGasStateLayout(grid,grid,grid,nodes,2*(nodes+2),definitions.definitions(),geometry.endOffset(),a);
             var tables=VulkanGasThermodynamics.tables(gas.definitions(),definitions.gas(),definitions.thermal(),mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY);
             var sourceEOS=VulkanGasThermodynamics.layout(gas,tables,Math.toIntExact(gas.endOffset()/4),gas.endOffset()+8L*nodes,a);
             var ambientRegistry=new mmm.fluid.air.GasRegistry(definitions.gas().components(),List.of(
@@ -80,8 +80,8 @@ public final class GpuGasFlowBenchmark {
     private static Tail tail(VulkanGasThermodynamics.Layout source,VulkanGasGeometry.Layout geometry,VulkanGasThermodynamics.Tables tables,
                              VulkanGasRemap.AmbientTables ambient,int pairs,long a) {
         var flow=VulkanGasFlow.layout(source,geometry,pairs,source.endOffset(),a);var gas=source.gas();
-        var retained=new VulkanGasStateLayout(gas.sizeX(),gas.sizeY(),gas.sizeZ(),gas.nodeCapacity(),gas.componentCapacity(),gas.speciesCapacity(),gas.definitions(),flow.endOffset(),a);
-        var future=new VulkanGasStateLayout(gas.sizeX(),gas.sizeY(),gas.sizeZ(),gas.nodeCapacity(),gas.componentCapacity(),gas.speciesCapacity(),gas.definitions(),retained.endOffset(),a);
+        var retained=new VulkanGasStateLayout(gas.sizeX(),gas.sizeY(),gas.sizeZ(),gas.nodeCapacity(),gas.speciesCapacity(),gas.definitions(),flow.endOffset(),a);
+        var future=new VulkanGasStateLayout(gas.sizeX(),gas.sizeY(),gas.sizeZ(),gas.nodeCapacity(),gas.speciesCapacity(),gas.definitions(),retained.endOffset(),a);
         var remap=VulkanGasRemap.transportLayout(flow.routes(),source,retained,future,ambient,flow.word(VulkanGasFlow.Field.STEP),2*flow.routes,2*flow.routes,future.endOffset(),a);
         var retainedEOS=VulkanGasThermodynamics.selfPartsLayout(remap,tables,flow.word(VulkanGasFlow.Field.RETAINED_VOLUME),remap.endOffset(),a);
         var work=VulkanGasAdiabaticWork.layout(retainedEOS,source.nodeVolumesWordOffset(),flow.word(VulkanGasFlow.Field.MODES),retainedEOS.endOffset(),a);

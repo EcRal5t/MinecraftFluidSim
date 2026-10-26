@@ -16,7 +16,7 @@ public final class VulkanLiquidRouteLayout {
     public enum Field {
         VOLUME_DESCRIPTORS(4),
         MASS_UNITS(8), ENERGY_BITS(8), MIXTURE_PRESENT(4),
-        SPECIES_AMOUNTS(8), SOURCE_OFFSETS(4), SLOTS(4), COUNTS(4), SOURCE_MASKS(4), SPECIES_REQUIRED(4);
+        SPECIES_AMOUNTS(8), SOURCE_OFFSETS(4), SLOTS(4), COUNTS(4), SOURCE_MASKS(4), SPECIES_REQUIRED(4), INTEGER_VOLUMES(8);
         private final int elementBytes;
         Field(int elementBytes) { this.elementBytes = elementBytes; }
         public int elementBytes() { return elementBytes; }

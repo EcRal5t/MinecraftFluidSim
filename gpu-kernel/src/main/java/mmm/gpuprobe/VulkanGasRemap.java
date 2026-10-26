@@ -49,10 +49,10 @@ final class VulkanGasRemap implements AutoCloseable {
     enum Field {
         PART_COUNTS(4),PART_OFFSETS(4),PART_HANDLES(4),PART_NANOS(8),PART_MASS(8),PART_RESIDUAL(8),
         SPECIES_COUNTS(4),SPECIES_OFFSETS(4),SPECIES_HANDLES(4),SPECIES_AMOUNTS(8),GROUP_ENERGY(8),GROUP_CAPACITY(8),
-        WEIGHTS(8),SOURCE_PIVOT(4),ESCAPE_GROUP(4),RETAINED_COUNTS(4),FUTURE_COUNTS(4),OUTPUT_SPECIES_COUNTS(4),
+        WEIGHTS(8),SOURCE_PIVOT(4),ESCAPE_GROUP(4),OUTPUT_SPECIES_COUNTS(4),
         ENERGY_ROUNDOFF(8),SOURCE_ROUNDOFF(8),RETAINED_ROUNDOFF(8),MERGE_ROUNDOFF(8),AUDIT_ENERGY(8),
         AMBIENT_HANDLES(4),AMBIENT_WEIGHTS(8),AMBIENT_MASS_NUM(8),AMBIENT_MASS_DEN(8),AMBIENT_SPECIES_OFFSETS(4),
-        AMBIENT_SPECIES_HANDLES(4),AMBIENT_SPECIES_NUM(8),AMBIENT_SPECIES_DEN(8),AMBIENT_SPECIES_MASS(8),AMBIENT_BEFORE(8),AMBIENT_AFTER(8),SCAN(4),DISPATCH(4),MEASURE_RAW_SPECIES(4),MEASURE_RETAINED_COMPONENTS(4),MEASURE_RETAINED_SPECIES(4),MEASURE_FUTURE_COMPONENTS(4),MEASURE_FUTURE_SPECIES(4),REQUIREMENTS(4),LONG_ROWS(4),TRANSPORT_PREFIX(8),TRANSPORT_RETAINED_ENERGY(8);
+        AMBIENT_SPECIES_HANDLES(4),AMBIENT_SPECIES_NUM(8),AMBIENT_SPECIES_DEN(8),AMBIENT_SPECIES_MASS(8),AMBIENT_BEFORE(8),AMBIENT_AFTER(8),SCAN(4),DISPATCH(4),MEASURE_RAW_SPECIES(4),MEASURE_RETAINED_SPECIES(4),MEASURE_FUTURE_SPECIES(4),REQUIREMENTS(4),LONG_ROWS(4),TRANSPORT_PREFIX(8),TRANSPORT_RETAINED_ENERGY(8);
         final int width;Field(int width){this.width=width;}
     }
     static final class Layout {
@@ -78,9 +78,7 @@ final class VulkanGasRemap implements AutoCloseable {
                     case TRANSPORT_PREFIX->transport?partCapacity:0;
                     case GROUP_ENERGY,GROUP_CAPACITY,WEIGHTS->routes.capacity();
                     case SOURCE_PIVOT,ESCAPE_GROUP->retained.nodeCapacity();
-                    case RETAINED_COUNTS->transport?0:retained.nodeCapacity()+2;
                     case TRANSPORT_RETAINED_ENERGY->transport?retained.nodeCapacity():0;
-                    case FUTURE_COUNTS->future.nodeCapacity()+2;
                     case OUTPUT_SPECIES_COUNTS->Math.max(retained.componentCapacity(),future.componentCapacity());
                     case ENERGY_ROUNDOFF,MERGE_ROUNDOFF->Math.multiplyExact(routes.capacity(),2);
                     case SOURCE_ROUNDOFF,RETAINED_ROUNDOFF->Math.multiplyExact(retained.nodeCapacity(),2);
@@ -91,8 +89,8 @@ final class VulkanGasRemap implements AutoCloseable {
                     case DISPATCH->27;
                     case LONG_ROWS->Math.addExact(2*Math.addExact(retained.nodeCapacity(),2),Math.addExact(routes.futureGeometry().cells(),2));
                     case MEASURE_RAW_SPECIES->routes.capacity();
-                    case MEASURE_RETAINED_COMPONENTS,MEASURE_RETAINED_SPECIES->transport?0:retained.nodeCapacity()+2;
-                    case MEASURE_FUTURE_COMPONENTS,MEASURE_FUTURE_SPECIES->routes.futureGeometry().cells()+2;
+                    case MEASURE_RETAINED_SPECIES->transport?0:retained.nodeCapacity()+2;
+                    case MEASURE_FUTURE_SPECIES->routes.futureGeometry().cells()+2;
                     case REQUIREMENTS->9;
                     case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(Math.max(partCapacity,routes.capacity()),Math.max(retained.nodeCapacity()+2,Math.max(future.nodeCapacity()+2,Math.max(retained.componentCapacity(),future.componentCapacity())))))/4);
                 };
@@ -109,7 +107,7 @@ final class VulkanGasRemap implements AutoCloseable {
         long requiredSpeciesOffset(){return column(Field.SPECIES_OFFSETS).offset()+4L*partCapacity;}
         ByteBuffer headerBytes(){
             var b=ByteBuffer.allocateDirect(640).order(ByteOrder.LITTLE_ENDIAN);int[] data=new int[160];
-            data[0]=0;data[1]=sourceEOS.headerWordOffset();data[2]=routes.capacity();data[3]=partCapacity;data[4]=speciesCapacity;
+            data[0]=routes.gas().definitions().componentIds().size();data[1]=sourceEOS.headerWordOffset();data[2]=routes.capacity();data[3]=partCapacity;data[4]=speciesCapacity;
             data[5]=retained.nodeCapacity();data[6]=future.nodeCapacity();data[7]=retained.componentCapacity();data[8]=retained.speciesCapacity();
             data[9]=future.componentCapacity();data[10]=future.speciesCapacity();data[11]=ambient.handles().length;data[12]=transport?1:0;data[13]=phaseWordOffset;data[14]=retained.nodeCapacity()+2;data[15]=routes.futureGeometry().cells()+2;
             for(var field:VulkanGasStateLayout.Field.values()){
@@ -220,10 +218,8 @@ final class VulkanGasRemap implements AutoCloseable {
         gather(command,l,future,work,null);
     }
     private void gather(VkCommandBuffer command,Layout l,boolean future,VulkanGasAdiabaticWork.Layout work,VulkanStageTimings timings){
-        var output=future?l.future:l.retained;int base=future?11:6;Field counts=future?Field.FUTURE_COUNTS:Field.RETAINED_COUNTS;
+        var output=future?l.future:l.retained;int base=future?11:6;
         timed(timings,command,"remap-clear-species",()->stage(command,l,14,Math.max(l.retained.componentCapacity(),l.future.componentCapacity()),work));
-        timed(timings,command,"remap-count-components",()->stage(command,l,base,output.nodeCapacity()+2,work));
-        timed(timings,command,"remap-scan-components",()->scan.record(command,output.nodeCapacity()+2,l.word(counts),Math.toIntExact(output.column(VulkanGasStateLayout.Field.ROW_COMPONENT_OFFSETS).offset()/4),l.word(Field.SCAN)));
         timed(timings,command,"remap-gather-components",()->stage(command,l,base+1,output.nodeCapacity()+2,work));
         timed(timings,command,"remap-scan-species",()->scan.record(command,output.componentCapacity(),l.word(Field.OUTPUT_SPECIES_COUNTS),Math.toIntExact(output.column(VulkanGasStateLayout.Field.COMPONENT_SPECIES_OFFSETS).offset()/4),l.word(Field.SCAN)));
         timed(timings,command,"remap-gather-species-energy",()->stage(command,l,base+2,output.nodeCapacity()+2,work));
@@ -236,12 +232,12 @@ final class VulkanGasRemap implements AutoCloseable {
     }
     private void stage(VkCommandBuffer cmd,Layout l,int stage,int count,VulkanGasAdiabaticWork.Layout work,int first,int second){
         if(count==0)return;
-        if(stage==21||(stage>=6&&stage<=8)||(stage>=11&&stage<=13)||stage==23||stage==24||stage==2&&l.transport)
+        if(stage==21||(stage>=7&&stage<=8)||(stage>=12&&stage<=13)||stage==23||stage==24||stage==2&&l.transport)
             stage(cmd,l,stage+100,count,work,first,second);
         int groups=(int)(((long)count+127)/128);try(var stack=stackPush()){
             bindings.bind(cmd,stack);vkCmdPushConstants(cmd,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,stack.ints(l.headerWordOffset(),stage,count,
                     first,second));
-            int indirect=switch(stage){case 1,4,9,19->0;case 2,5,10,20->1;case 6,7,8->2;case 11,12,13,21->3;case 23,24->4;case 106,107,108->5;case 111,112,113,121->6;case 102,123,124->7;default->-1;};
+            int indirect=switch(stage){case 1,4,9,19->0;case 2,5,10,20->1;case 7,8->2;case 12,13,21->3;case 23,24->4;case 107,108->5;case 112,113,121->6;case 102,123,124->7;default->-1;};
             if(stage==2&&l.transport)indirect=4;
             if(indirect>=0){barrier(cmd,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);

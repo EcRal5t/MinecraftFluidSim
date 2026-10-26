@@ -86,7 +86,7 @@ final class VulkanGasLineage implements AutoCloseable {
             data[17]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.COUNTS).offset()/4);
             data[18]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.ROW_COMPONENT_OFFSETS).offset()/4);
             data[19]=VulkanGasLineage.word(futureGeometry.componentOffsets());data[20]=VulkanGasLineage.word(futureGeometry.componentMembers());
-            data[21]=VulkanGasLineage.word(futureGeometry.componentCount());data[22]=VulkanGasLineage.word(oldGeometry.componentCount());
+            data[21]=VulkanGasLineage.word(futureGeometry.componentCount());data[22]=VulkanGasLineage.word(oldGeometry.componentCount());data[23]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.STANDARD_VOLUME_NANOS).offset()/4);
             for(Field field:Field.values())data[32+field.ordinal()]=word(field);
             for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);
             double size=oldGeometry.cellSize();out.putDouble(4*80,size*size*size);return out;

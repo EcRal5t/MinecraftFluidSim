@@ -4,8 +4,7 @@
 layout(local_size_x=128)in;
 layout(binding=0,std430)buffer Candidate{uint words[];};layout(binding=1,std430)buffer Errors{uint errors;};
 layout(push_constant)uniform Params{int header;int stage;int count;int workEnergy;int workTemperature;}p;
-const int PC=0,PO=1,PH=2,PN=3,PM=4,PR=5,SC=6,SO=7,SH=8,SA=9,GE=10,GC=11,W=12,PIVOT=13,ESC=14,
- RC=15,FC=16,OSC=17,ER=18,SR=19,RR=20,MR=21,AE=22,AH=23,AW=24,AMN=25,AMD=26,ASO=27,ASH=28,ASN=29,ASD=30,ASM=31,AB=32,AA=33,MRAW=36,MRC=37,MRS=38,MFC=39,MFS=40,REQ=41,LONG_ROWS=42,TP=43;
+const int PC=0,PO=1,PH=2,PN=3,PM=4,PR=5,SC=6,SO=7,SH=8,SA=9,GE=10,GC=11,W=12,PIVOT=13,ESC=14,OSC=15,ER=16,SR=17,RR=18,MR=19,AE=20,AH=21,AW=22,AMN=23,AMD=24,ASO=25,ASH=26,ASN=27,ASD=28,ASM=29,AB=30,AA=31,MRAW=34,MRS=35,MFS=36,REQ=37,LONG_ROWS=38,TP=39,DISPATCH=33;
 const int COUNTS=0,KEYS=1,PIECES=2,ROWS=3,HANDLES=4,NANOS=5,MASS=6,RESIDUAL=7,SPO=8,SPH=9,SPA=10,EP=11,ENERGY=12;
 const uint64_t LIMIT=uint64_t(0x7fffffffffffffffUL),SCALE=uint64_t(0x10000000000000UL);
 bool shortRow(){return p.stage>=100;}
@@ -43,6 +42,7 @@ uint64_t divide(uint64_t a,uint64_t b,uint64_t d,out uint64_t remainder){
 }
 uint64_t portion(uint64_t amount,uint64_t n,uint64_t total){uint64_t remainder;return divide(amount,n,total,remainder);}
 int64_t signedPortion(int64_t amount,uint64_t n,uint64_t total){bool negative=amount<int64_t(0);uint64_t magnitude=negative?uint64_t(0)-uint64_t(amount):uint64_t(amount);uint64_t result=portion(magnitude,n,total);return negative?int64_t(uint64_t(0)-result):int64_t(result);}
+int materials(){return h(0);}
 int groups(){return int(words[rh(0)]);}int source(int g){return int(words[rh(1)+g]);}int target(int g){return int(words[rh(2)+g]);}
 int nodeCount(){return int(words[old(COUNTS)]);}int futureCount(){return int(words[rh(9)]);}
 int sourceBegin(int node){return int(words[rh(4)+node+2]);}int sourceEnd(int node){return int(words[rh(4)+node+3]);}int sourceGroup(int at){return int(words[rh(5)+at]);}
@@ -50,22 +50,21 @@ int partBegin(int g){return int(words[f(PO)+g]);}int partEnd(int g){return int(w
 void clearAndCount(int id){
  if(id<h(2)){words[f(PC)+id]=0u;put(f(GE)+2*id,0.0);put(f(ER)+4*id,0.0);put(f(ER)+4*id+2,0.0);put(f(MR)+4*id,0.0);put(f(MR)+4*id+2,0.0);}
  if(id<h(3))words[f(SC)+id]=0u;
- if(h(12)==0&&id<h(5)+2)words[f(RC)+id]=0u;
- if(id<h(6)+2)words[f(FC)+id]=0u;
  if(id<h(6))put(dst(ENERGY,true)+2*id,0.0);
  if(id<h(5))put(dst(ENERGY,false)+2*id,0.0);
  if(id<h(5)){words[f(PIVOT)+id]=uint(-1);words[f(ESC)+id]=uint(-1);put(f(SR)+4*id,0.0);put(f(SR)+4*id+2,0.0);put(f(RR)+4*id,0.0);put(f(RR)+4*id+2,0.0);}
  if(id==0){put(f(AE),0.0);put(f(AE)+2,0.0);if(futureCount()>h(6))atomicOr(errors,64u);}
- if(id>=groups())return;int s=source(id);int count=s>=2?int(words[old(ROWS)+s-1])-int(words[old(ROWS)+s-2]):s==1&&target(id)>0?h(11):0;
+ if(id>=groups())return;int s=source(id);int count=s>=2||s==1&&target(id)>0?materials():0;
  words[f(PC)+id]=uint(count);
 }
+int ambientComponent(int handle){for(int i=0;i<h(11);i++)if(int(words[f(AH)+i])==handle)return i;return -1;}
 void prepareParts(int g){
  if(int(words[f(PO)+h(2)])>h(3)){atomicOr(errors,64u);return;}if(g>=groups())return;
  int s=source(g),begin=partBegin(g),end=partEnd(g);
  for(int part=begin;part<end;part++){
-  int local=part-begin,component=s>=2?int(words[old(ROWS)+s-2])+local:local;
-  words[f(PH)+part]=s>=2?words[old(HANDLES)+component]:words[f(AH)+component];
-  words[f(SC)+part]=s>=2?words[old(SPO)+component+1]-words[old(SPO)+component]:words[f(ASO)+component+1]-words[f(ASO)+component];
+  int handle=part-begin,component=s>=2?int(words[old(ROWS)+s-2])+handle:ambientComponent(handle);
+  words[f(PH)+part]=uint(handle);
+  words[f(SC)+part]=component<0?0u:s>=2?words[old(SPO)+component+1]-words[old(SPO)+component]:words[f(ASO)+component+1]-words[f(ASO)+component];
   put64(f(PN)+2*part,uint64_t(0));put64(f(PM)+2*part,uint64_t(0));put64(f(PR)+2*part,uint64_t(0));
  }
 }
@@ -78,6 +77,7 @@ void splitSource(int node){
  if(assigned>=SCALE){invalid();return;}put64(f(W)+2*pivot,SCALE-assigned);
  int first=int(words[old(ROWS)+node]),last=int(words[old(ROWS)+node+1]);
  for(int c=first;c<last;c++){
+  if(u64(old(NANOS)+2*c)==uint64_t(0))continue;
   int local=c-first;uint64_t nanos=u64(old(NANOS)+2*c),mass=u64(old(MASS)+2*c),usedN=uint64_t(0),usedM=uint64_t(0);int64_t residual=i64(old(RESIDUAL)+2*c),usedR=int64_t(0);
   for(int at=begin;at<end;at++){int g=sourceGroup(at);if(g==pivot)continue;int part=partBegin(g)+local;uint64_t n=portion(nanos,u64(f(W)+2*g),SCALE),m=portion(mass,n,nanos);if(m==uint64_t(0))n=uint64_t(0);int64_t r=n==uint64_t(0)?int64_t(0):signedPortion(residual,n,nanos);usedN=plus(usedN,n);usedM=plus(usedM,m);usedR=signedPlus(usedR,r);put64(f(PN)+2*part,n);put64(f(PM)+2*part,m);put64(f(PR)+2*part,uint64_t(r));}
   int owner=partBegin(pivot)+local;put64(f(PN)+2*owner,nanos-usedN);put64(f(PM)+2*owner,mass-usedM);put64(f(PR)+2*owner,uint64_t(residual-usedR));
@@ -107,7 +107,7 @@ void captureAmbient(){
   if(!(finite(requested)&&requested>=0.0&&requested<double(LIMIT-cumulative))){invalid();return;}
   uint64_t n=uint64_t(floor(requested+0.5LF));ambientShares(cumulative,AB);ambientShares(cumulative+n,AA);
   for(int c=0;c<h(11);c++){
-   int part=partBegin(g)+c;uint64_t before=u64(f(AB)+2*c),after=u64(f(AA)+2*c),nanos=after-before,mass=sourceMass(after,c)-sourceMass(before,c),chemical=uint64_t(0);
+   int part=partBegin(g)+int(words[f(AH)+c]);uint64_t before=u64(f(AB)+2*c),after=u64(f(AA)+2*c),nanos=after-before,mass=sourceMass(after,c)-sourceMass(before,c),chemical=uint64_t(0);
    put64(f(PN)+2*part,nanos);put64(f(PM)+2*part,mass);
    int sb=int(words[f(ASO)+c]),se=int(words[f(ASO)+c+1]);
    for(int s=sb;s<se;s++){int entry=int(words[f(SO)+part])+s-sb;uint64_t numerator=u64(f(ASN)+2*s),den=u64(f(ASD)+2*s),q=portion(after,numerator,den)-portion(before,numerator,den);
@@ -159,7 +159,7 @@ void closeSourceEnergy(int node,bool afterWork){
   twoSum(energy,-escaped,retained,error);if(!finite(retained)||!finite(error)){invalid();return;}put(dst(ENERGY,false)+2*node,retained);put(f(RR)+4*node,-error);
  }
 }
-int findPart(int g,int handle){int lo=partBegin(g),hi=partEnd(g);while(lo<hi){int mid=(lo+hi)/2;if(int(words[f(PH)+mid])<handle)lo=mid+1;else hi=mid;}return lo<partEnd(g)&&int(words[f(PH)+lo])==handle?lo:-1;}
+int routePart(int g,int handle){int part=partBegin(g)+handle;return handle>=0&&handle<materials()&&part<partEnd(g)?part:-1;}
 int findSpecies(int part,int handle){int lo=int(words[f(SO)+part]),end=int(words[f(SO)+part+1]),hi=end;while(lo<hi){int mid=(lo+hi)/2;if(int(words[f(SH)+mid])<handle)lo=mid+1;else hi=mid;}return lo<end&&int(words[f(SH)+lo])==handle?lo:-1;}
 // Row iteration adds old audit rows separately; intermediate retained rows have no audit additions.
 int actualRows(bool future){return (future?futureCount():nodeCount())+2;}
@@ -169,7 +169,7 @@ int memberGroup(int row,int at,bool future){return int(words[(!future||row==futu
 bool memberAllowed(int row,int g,bool future){if(!future)return h(12)!=0?target(g)==row+1:target(g)>0;int n=futureCount();return row<n||row==n?target(g)>0:source(g)>=2;}
 int auditBegin(int row,bool future){return future&&row>=futureCount()?int(words[old(ROWS)+nodeCount()+row-futureCount()]):0;}
 int auditEnd(int row,bool future){return future&&row>=futureCount()?int(words[old(ROWS)+nodeCount()+row-futureCount()+1]):0;}
-int oldPart(int row,int handle,bool future){int begin=auditBegin(row,future),end=auditEnd(row,future);for(int c=begin;c<end;c++)if(int(words[old(HANDLES)+c])==handle)return c;return -1;}
+int oldPart(int row,int handle,bool future){int begin=auditBegin(row,future),end=auditEnd(row,future),part=begin+handle;return handle>=0&&handle<materials()&&part<end?part:-1;}
 // One workgroup owns an output row. Source groups are traversed in parallel even when
 // hundreds of old chambers merge into one future chamber.
 shared int choices[128],representatives[128],rowValid;
@@ -226,6 +226,7 @@ void splitTransport(int node,int lane){
  uint64_t phase=mixPhase(u64(h(13))^uint64_t(words[old(KEYS)+node]));
  int first=int(words[old(ROWS)+node]),last=int(words[old(ROWS)+node+1]);
  for(int c=first;c<last;c++){
+  if(u64(old(NANOS)+2*c)==uint64_t(0))continue;
   int local=c-first;uint64_t nanos=u64(old(NANOS)+2*c),mass=u64(old(MASS)+2*c),carry=uint64_t(0),offset=phaseOffset(SCALE,phase),usedN=uint64_t(0);
   for(int block=begin;block<end;block+=rowStride()){int at=block+lane,g=at<end?sourceGroup(at):-1;uint64_t w=g>=0?u64(f(W)+2*g):uint64_t(0),cumulative=carry+exclusivePrefix(lane,w),nextCarry=carry+(shortRow()?w:prefixValues[127]);rowBarrier();
    if(g>=0){uint64_t n=endpoint(nanos-uint64_t(1),cumulative+w,SCALE,offset)-endpoint(nanos-uint64_t(1),cumulative,SCALE,offset);if(g==self)n++;else if(n>uint64_t(0)&&portion(mass,n,nanos)==uint64_t(0))n=uint64_t(0);put64(f(PN)+2*(partBegin(g)+local),n);if(g!=self)usedN=plus(usedN,n);}
@@ -274,7 +275,7 @@ void captureAmbientParallel(int lane){
   uint64_t n=uint64_t(0);if(!(finite(requested)&&requested>=0.0&&requested<double(LIMIT))){invalid();}else n=uint64_t(floor(requested+0.5LF));
   uint64_t beforeTotal=plus(cumulative,exclusivePrefix(lane,n)),afterTotal=plus(beforeTotal,n),nextCumulative=plus(cumulative,prefixValues[127]);barrier();
   if(g>=0&&target(g)>0)for(int c=0;c<h(11);c++){
-   int part=partBegin(g)+c;uint64_t before=ambientShare(beforeTotal,c),after=ambientShare(afterTotal,c),nanos=after-before,mass=sourceMass(after,c)-sourceMass(before,c),chemical=uint64_t(0);
+   int part=partBegin(g)+int(words[f(AH)+c]);uint64_t before=ambientShare(beforeTotal,c),after=ambientShare(afterTotal,c),nanos=after-before,mass=sourceMass(after,c)-sourceMass(before,c),chemical=uint64_t(0);
    put64(f(PN)+2*part,nanos);put64(f(PM)+2*part,mass);
    int sb=int(words[f(ASO)+c]),se=int(words[f(ASO)+c+1]);
    for(int entry=sb;entry<se;entry++){int outAt=int(words[f(SO)+part])+entry-sb;uint64_t numerator=u64(f(ASN)+2*entry),den=u64(f(ASD)+2*entry),q=portion(after,numerator,den)-portion(before,numerator,den),massUnit=u64(f(ASM)+2*entry);
@@ -304,40 +305,26 @@ void transportEnergy(int node,int lane){
  local=energies[0];}
  if(lane==0){double remainder,error;twoSum(carried,-local,remainder,error);if(!finite(remainder)||!finite(retained))invalid();put(f(GE)+2*self,retained);put(f(GE)+2*pivot,remainder);put(f(RR)+4*node,-firstError);put(f(SR)+4*node+2,-error);}
 }
-int nextHandleParallel(int row,int previous,bool future,int lane){
- int result=2147483647;
- for(int at=memberBegin(row,future)+lane;at<memberEnd(row,future);at+=rowStride()){
-  int g=memberGroup(row,at,future);if(!memberAllowed(row,g,future))continue;
-  for(int c=partBegin(g);c<partEnd(g);c++){int handle=int(words[f(PH)+c]);if(handle>previous&&u64(f(PN)+2*c)>uint64_t(0)){result=min(result,handle);break;}}
- }
- if(lane==0)for(int c=auditBegin(row,future);c<auditEnd(row,future);c++){int handle=int(words[old(HANDLES)+c]);if(handle>previous){result=min(result,handle);break;}}
- return minimumHandle(lane,result);
-}
 int nextSpeciesParallel(int row,int component,int previous,bool future,int lane){
  int result=2147483647;
  for(int at=memberBegin(row,future)+lane;at<memberEnd(row,future);at+=rowStride()){
-  int g=memberGroup(row,at,future);if(!memberAllowed(row,g,future))continue;int part=findPart(g,component);if(part<0||u64(f(PN)+2*part)==uint64_t(0))continue;
+  int g=memberGroup(row,at,future);if(!memberAllowed(row,g,future))continue;int part=routePart(g,component);if(part<0||u64(f(PN)+2*part)==uint64_t(0))continue;
   for(int e=int(words[f(SO)+part]);e<int(words[f(SO)+part+1]);e++){int handle=int(words[f(SH)+e]);if(handle>previous&&u64(f(SA)+2*e)>uint64_t(0)){result=min(result,handle);break;}}
  }
  if(lane==0){int c=oldPart(row,component,future);if(c>=0)for(int e=int(words[old(SPO)+c]);e<int(words[old(SPO)+c+1]);e++){int handle=int(words[old(SPH)+e]);if(handle>previous){result=min(result,handle);break;}}}
  return minimumHandle(lane,result);
 }
-void gatherCount(int row,bool future,int lane){
- int count=0,handle=-1;
- while((handle=nextHandleParallel(row,handle,future,lane))>=0)count++;
- if(lane==0)words[f(future?FC:RC)+row]=uint(count);
-}
 void gatherComponents(int row,bool future,int lane){
- int rows=actualRows(future),capacity=future?h(9):h(7),required=int(words[dst(ROWS,future)+rows]);
+ int rows=actualRows(future),capacity=future?h(9):h(7),required=rows*materials();
  if(required>capacity){if(lane==0)atomicOr(errors,64u);return;}
- int destination=int(words[dst(ROWS,future)+row]),handle=-1;
- while((handle=nextHandleParallel(row,handle,future,lane))>=0){
+ int destination=row*materials();if(lane==0){words[dst(ROWS,future)+row]=uint(destination);if(row==rows-1)words[dst(ROWS,future)+rows]=uint(rows*materials());}
+ for(int handle=0;handle<materials();handle++){
   uint64_t nanos=uint64_t(0),mass=uint64_t(0);int64_t residual=int64_t(0);
-  for(int at=memberBegin(row,future)+lane;at<memberEnd(row,future);at+=rowStride()){int g=memberGroup(row,at,future);if(!memberAllowed(row,g,future))continue;int c=findPart(g,handle);if(c<0||u64(f(PN)+2*c)==uint64_t(0))continue;nanos=plus(nanos,u64(f(PN)+2*c));mass=plus(mass,u64(f(PM)+2*c));residual=signedPlus(residual,i64(f(PR)+2*c));}
+  for(int at=memberBegin(row,future)+lane;at<memberEnd(row,future);at+=rowStride()){int g=memberGroup(row,at,future);if(!memberAllowed(row,g,future))continue;int c=routePart(g,handle);if(c<0||u64(f(PN)+2*c)==uint64_t(0))continue;nanos=plus(nanos,u64(f(PN)+2*c));mass=plus(mass,u64(f(PM)+2*c));residual=signedPlus(residual,i64(f(PR)+2*c));}
   if(lane==0){int existing=oldPart(row,handle,future);if(existing>=0){nanos=plus(nanos,u64(old(NANOS)+2*existing));mass=plus(mass,u64(old(MASS)+2*existing));residual=signedPlus(residual,i64(old(RESIDUAL)+2*existing));}}
   nanos=sumQuantity(lane,nanos);mass=sumQuantity(lane,mass);residual=sumResidual(lane,residual);
   if(lane==0){
-   if(nanos==uint64_t(0)||mass==uint64_t(0))invalid();
+   if((nanos==uint64_t(0))!=(mass==uint64_t(0))||(nanos==uint64_t(0)&&residual!=int64_t(0)))invalid();
    words[dst(HANDLES,future)+destination]=uint(handle);put64(dst(NANOS,future)+2*destination,nanos);put64(dst(MASS,future)+2*destination,mass);put64(dst(RESIDUAL,future)+2*destination,uint64_t(residual));
   }
   int count=0,species=-1;while((species=nextSpeciesParallel(row,handle,species,future,lane))>=0)count++;
@@ -374,7 +361,7 @@ void gatherSpeciesAndEnergy(int row,bool future,int lane){
  for(int c=int(words[dst(ROWS,future)+row]);c<int(words[dst(ROWS,future)+row+1]);c++){
   int component=int(words[dst(HANDLES,future)+c]),outAt=int(words[dst(SPO,future)+c]),species=-1;
   while((species=nextSpeciesParallel(row,component,species,future,lane))>=0){uint64_t sum=uint64_t(0);
-   for(int at=memberBegin(row,future)+lane;at<memberEnd(row,future);at+=rowStride()){int g=memberGroup(row,at,future);if(!memberAllowed(row,g,future))continue;int part=findPart(g,component);if(part<0||u64(f(PN)+2*part)==uint64_t(0))continue;int e=findSpecies(part,species);if(e>=0)sum=plus(sum,u64(f(SA)+2*e));}
+   for(int at=memberBegin(row,future)+lane;at<memberEnd(row,future);at+=rowStride()){int g=memberGroup(row,at,future);if(!memberAllowed(row,g,future))continue;int part=routePart(g,component);if(part<0||u64(f(PN)+2*part)==uint64_t(0))continue;int e=findSpecies(part,species);if(e>=0)sum=plus(sum,u64(f(SA)+2*e));}
    if(lane==0){int existing=oldPart(row,component,future);if(existing>=0)for(int e=int(words[old(SPO)+existing]);e<int(words[old(SPO)+existing+1]);e++)if(int(words[old(SPH)+e])==species)sum=plus(sum,u64(old(SPA)+2*e));}
    sum=sumQuantity(lane,sum);if(lane==0){words[dst(SPH,future)+outAt]=uint(species);put64(dst(SPA,future)+2*outAt,sum);}outAt++;
   }
@@ -395,10 +382,9 @@ void topology(int cell,bool future){
 // part and species pools are too small. Output unions deliberately include shares
 // which later integer rounding may remove; these are safe capacity upper bounds.
 int originalBegin(int group){int s=source(group);return s>=2?int(words[old(ROWS)+s-2]):0;}
-int originalEnd(int group){int s=source(group);return s>=2?int(words[old(ROWS)+s-1]):s==1&&target(group)>0?h(11):0;}
-int originalHandle(int group,int component){return int(words[(source(group)>=2?old(HANDLES):f(AH))+component]);}
-int originalSpeciesBegin(int group,int component){return int(words[(source(group)>=2?old(SPO):f(ASO))+component]);}
-int originalSpeciesEnd(int group,int component){return int(words[(source(group)>=2?old(SPO):f(ASO))+component+1]);}
+int originalEnd(int group){int s=source(group);return s>=2?int(words[old(ROWS)+s-1]):s==1&&target(group)>0?materials():0;}
+int originalSpeciesBegin(int group,int component){if(source(group)>=2)return int(words[old(SPO)+component]);int c=ambientComponent(component);return c<0?0:int(words[f(ASO)+c]);}
+int originalSpeciesEnd(int group,int component){if(source(group)>=2)return int(words[old(SPO)+component+1]);int c=ambientComponent(component);return c<0?0:int(words[f(ASO)+c+1]);}
 int originalSpeciesHandle(int group,int entry){return int(words[(source(group)>=2?old(SPH):f(ASH))+entry]);}
 void measureParts(int g){
  if(g>=groups())return;int begin=originalBegin(g),end=originalEnd(g);uint species=0u;
@@ -408,53 +394,47 @@ void measureParts(int g){
 void measureRetained(int node){
  if(node>=nodeCount())return;bool retained=false;for(int at=sourceBegin(node);at<sourceEnd(node);at++)if(target(sourceGroup(at))>0){retained=true;break;}
  int begin=int(words[old(ROWS)+node]),end=int(words[old(ROWS)+node+1]);
- words[f(MRC)+node]=retained?uint(end-begin):0u;words[f(MRS)+node]=retained?words[old(SPO)+end]-words[old(SPO)+begin]:0u;
-}
-int measureHandle(int row,int previous,int lane){int result=2147483647;
- for(int at=memberBegin(row,true)+lane;at<memberEnd(row,true);at+=rowStride()){int g=memberGroup(row,at,true);if(!memberAllowed(row,g,true))continue;
-  for(int c=originalBegin(g);c<originalEnd(g);c++){int handle=originalHandle(g,c);if(handle>previous)result=min(result,handle);}}
- if(lane==0)for(int c=auditBegin(row,true);c<auditEnd(row,true);c++){int handle=int(words[old(HANDLES)+c]);if(handle>previous)result=min(result,handle);}
- return minimumHandle(lane,result);
+ words[f(MRS)+node]=retained?words[old(SPO)+end]-words[old(SPO)+begin]:0u;
 }
 int measureSpecies(int row,int component,int previous,int lane){int result=2147483647;
  for(int at=memberBegin(row,true)+lane;at<memberEnd(row,true);at+=rowStride()){int g=memberGroup(row,at,true);if(!memberAllowed(row,g,true))continue;
-  for(int c=originalBegin(g);c<originalEnd(g);c++){if(originalHandle(g,c)!=component)continue;for(int e=originalSpeciesBegin(g,c);e<originalSpeciesEnd(g,c);e++){int handle=originalSpeciesHandle(g,e);if(handle>previous)result=min(result,handle);}}}
+  int c=originalBegin(g)+component;if(c>=originalEnd(g))continue;for(int e=originalSpeciesBegin(g,c);e<originalSpeciesEnd(g,c);e++){int handle=originalSpeciesHandle(g,e);if(handle>previous)result=min(result,handle);}}
  if(lane==0){int c=oldPart(row,component,true);if(c>=0)for(int e=int(words[old(SPO)+c]);e<int(words[old(SPO)+c+1]);e++){int handle=int(words[old(SPH)+e]);if(handle>previous)result=min(result,handle);}}
  return minimumHandle(lane,result);
 }
-void measureFuture(int row,int lane){uint64_t components=uint64_t(0),species=uint64_t(0);int handle=-1;
- while((handle=measureHandle(row,handle,lane))>=0){components++;int previous=-1;while((previous=measureSpecies(row,handle,previous,lane))>=0)species++;}
- if(lane==0){if(components>uint64_t(0x7fffffffu)||species>uint64_t(0x7fffffffu))atomicOr(errors,16u);words[f(MFC)+row]=uint(min(components,uint64_t(0x7fffffffu)));words[f(MFS)+row]=uint(min(species,uint64_t(0x7fffffffu)));}
+void measureFuture(int row,int lane){uint64_t species=uint64_t(0);
+ for(int handle=0;handle<materials();handle++){int previous=-1;while((previous=measureSpecies(row,handle,previous,lane))>=0)species++;}
+ if(lane==0){if(species>uint64_t(0x7fffffffu))atomicOr(errors,16u);words[f(MFS)+row]=uint(min(species,uint64_t(0x7fffffffu)));}
 }
 void measureTotal(int lane){
- int lengths[6]=int[6](groups(),groups(),h(12)==0?nodeCount():0,h(12)==0?nodeCount():0,futureCount()+2,futureCount()+2);
- int columns[6]=int[6](PC,MRAW,MRC,MRS,MFC,MFS);int capacities[6]=int[6](h(3),h(4),h(7),h(8),h(9),h(10));
+ int lengths[6]=int[6](groups(),groups(),0,h(12)==0?nodeCount():0,0,futureCount()+2);
+ int columns[6]=int[6](PC,MRAW,MRS,MRS,MFS,MFS);int capacities[6]=int[6](h(3),h(4),h(7),h(8),h(9),h(10));
  for(int column=0;column<6;column++){
   uint64_t local=uint64_t(0);for(int i=lane;i<lengths[column];i+=128)local+=uint64_t(words[f(columns[column])+i]);
-  uint64_t total=sumQuantity(lane,local);
+  uint64_t total=sumQuantity(lane,local);if(column==2)total=h(12)==0?uint64_t(nodeCount()+2)*uint64_t(materials()):uint64_t(0);if(column==4)total=uint64_t(futureCount()+2)*uint64_t(materials());
   if(lane==0){if(total>uint64_t(0x7fffffffu))atomicOr(errors,16u);else{words[f(REQ)+column]=uint(total);if(total>uint64_t(capacities[column]))atomicOr(errors,64u);}}
  }
  if(lane==0&&futureCount()>h(6))atomicOr(errors,64u);
 }
 void prepareDispatch(){
- for(int i=0;i<3;i++)words[f(35)+24+i]=0u;
+ for(int i=0;i<3;i++)words[f(DISPATCH)+24+i]=0u;
  int sizes[8]=int[8](groups(),nodeCount(),nodeCount()+2,futureCount()+2,nodeCount(),nodeCount()+2,futureCount()+2,nodeCount());
- for(int i=0;i<8;i++){int total=errors==0u&&!(i>=2&&i<=4)?(i<2||i>=5?(sizes[i]+127)/128:sizes[i]):0,at=f(35)+3*i;words[at]=uint(min(total,65535));words[at+1]=uint(max(1,(total+65534)/65535));words[at+2]=1u;}
+ for(int i=0;i<8;i++){int total=errors==0u&&!(i>=2&&i<=4)?(i<2||i>=5?(sizes[i]+127)/128:sizes[i]):0,at=f(DISPATCH)+3*i;words[at]=uint(min(total,65535));words[at+1]=uint(max(1,(total+65534)/65535));words[at+2]=1u;}
 }
 int longBase(int kind){return f(LONG_ROWS)+(kind==0?0:kind==1?h(14):h(14)+h(15));}
 void classifyRows(int row){
- if(row<nodeCount()+2&&memberEnd(row,false)-memberBegin(row,false)>16){uint slot=atomicAdd(words[f(35)+24],1u);words[longBase(0)+slot]=uint(row);}
- if(row<futureCount()+2&&memberEnd(row,true)-memberBegin(row,true)>16){uint slot=atomicAdd(words[f(35)+25],1u);words[longBase(1)+slot]=uint(row);}
- if(row<nodeCount()&&sourceEnd(row)-sourceBegin(row)>16){uint slot=atomicAdd(words[f(35)+26],1u);words[longBase(2)+slot]=uint(row);}
+ if(row<nodeCount()+2&&memberEnd(row,false)-memberBegin(row,false)>16){uint slot=atomicAdd(words[f(DISPATCH)+24],1u);words[longBase(0)+slot]=uint(row);}
+ if(row<futureCount()+2&&memberEnd(row,true)-memberBegin(row,true)>16){uint slot=atomicAdd(words[f(DISPATCH)+25],1u);words[longBase(1)+slot]=uint(row);}
+ if(row<nodeCount()&&sourceEnd(row)-sourceBegin(row)>16){uint slot=atomicAdd(words[f(DISPATCH)+26],1u);words[longBase(2)+slot]=uint(row);}
 }
 void main(){
  int row=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*row+lane;
 
  if(p.stage==25){if(errors==0u&&id<p.count)classifyRows(id);return;}
- if(p.stage==26){if(id==0)for(int i=0;i<3;i++){int total=int(words[f(35)+24+i]),at=f(35)+3*(i+2);words[at]=uint(min(total,65535));words[at+1]=uint(max(1,(total+65534)/65535));words[at+2]=1u;}return;}
+ if(p.stage==26){if(id==0)for(int i=0;i<3;i++){int total=int(words[f(DISPATCH)+24+i]),at=f(DISPATCH)+3*(i+2);words[at]=uint(min(total,65535));words[at+1]=uint(max(1,(total+65534)/65535));words[at+2]=1u;}return;}
  if(!shortRow()){
-  int kind=(p.stage>=6&&p.stage<=8)?0:((p.stage>=11&&p.stage<=13)||p.stage==21)?1:((p.stage==2&&h(12)!=0)||p.stage==23||p.stage==24)?2:-1;
-  if(kind>=0){if(row>=int(words[f(35)+24+kind]))return;row=int(words[longBase(kind)+row]);}
+  int kind=(p.stage>=7&&p.stage<=8)?0:((p.stage>=12&&p.stage<=13)||p.stage==21)?1:((p.stage==2&&h(12)!=0)||p.stage==23||p.stage==24)?2:-1;
+  if(kind>=0){if(row>=int(words[f(DISPATCH)+24+kind]))return;row=int(words[longBase(kind)+row]);}
  }
  if(shortRow()){
   int stage=p.stage-100;
@@ -466,13 +446,12 @@ void main(){
   if(id>=actualRows(future)||id>=p.count||memberEnd(id,future)-memberBegin(id,future)>16)return;
   if(stage==21){if(words[f(REQ)+8]!=0u)measureFuture(id,0);return;}
   if(errors!=0u)return;
-  if(stage==6||stage==11)gatherCount(id,future,0);
-  else if(stage==7||stage==12)gatherComponents(id,future,0);
+  if(stage==7||stage==12)gatherComponents(id,future,0);
   else gatherSpeciesAndEnergy(id,future,0);
   return;
  }
  if(p.stage==18){
-  if(id==0){for(int i=0;i<9;i++)words[f(REQ)+i]=0u;for(int i=0;i<8;i++){words[f(35)+3*i]=0u;words[f(35)+3*i+1]=1u;words[f(35)+3*i+2]=1u;}
+  if(id==0){for(int i=0;i<9;i++)words[f(REQ)+i]=0u;for(int i=0;i<8;i++){words[f(DISPATCH)+3*i]=0u;words[f(DISPATCH)+3*i+1]=1u;words[f(DISPATCH)+3*i+2]=1u;}
    if(errors==0u){words[f(REQ)+6]=uint(futureCount());words[f(REQ)+7]=uint(groups());words[f(REQ)+8]=1u;prepareDispatch();}}
   return;
  }
@@ -485,12 +464,11 @@ void main(){
   if(lane==0)rowValid=words[f(REQ)+8]!=0u&&(p.stage==22||row<futureCount()+2)?1:0;
   barrier();if(rowValid==0)return;if(p.stage==21){if(memberEnd(row,true)-memberBegin(row,true)>16)measureFuture(row,lane);}else measureTotal(lane);return;
  }
- if((p.stage>=6&&p.stage<=8)||(p.stage>=11&&p.stage<=13)){
+ if((p.stage>=7&&p.stage<=8)||(p.stage>=12&&p.stage<=13)){
   bool future=p.stage>=11;
   if(lane==0)rowValid=errors==0u&&row<actualRows(future)&&row<p.count?1:0;
   barrier();if(rowValid==0)return;if(memberEnd(row,future)-memberBegin(row,future)<=16)return;
-  if(p.stage==6||p.stage==11)gatherCount(row,future,lane);
-  else if(p.stage==7||p.stage==12)gatherComponents(row,future,lane);
+  if(p.stage==7||p.stage==12)gatherComponents(row,future,lane);
   else gatherSpeciesAndEnergy(row,future,lane);
   return;
  }

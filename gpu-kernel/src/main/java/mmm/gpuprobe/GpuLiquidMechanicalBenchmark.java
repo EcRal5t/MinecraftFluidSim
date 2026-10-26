@@ -124,7 +124,7 @@ public final class GpuLiquidMechanicalBenchmark {
         var totals=VulkanLiquidCellVolumes.layout(liquid,2*n,-40,geometry.endOffset(),a);
         var gasGeometry=VulkanGasGeometry.layout(totals,word(geometry.masks()),word(geometry.occupied()),word(geometry.cells()),word(geometry.planes()),word(geometry.micro()),true,cellSize,totals.endOffset(),a);
         var definitions=GpuGasGeometryBenchmark.gasDefinitions();
-        var gas=new VulkanGasStateLayout(grid,grid,grid,n,2*n,2*n,definitions.definitions(),gasGeometry.endOffset(),a);
+        var gas=new VulkanGasStateLayout(grid,grid,grid,n,2*n,definitions.definitions(),gasGeometry.endOffset(),a);
         var tables=VulkanGasThermodynamics.tables(definitions.definitions(),definitions.gas(),definitions.thermal(),mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY);
         var thermal=VulkanGasThermodynamics.layout(gas,tables,Math.toIntExact(gas.endOffset()/4),gas.endOffset()+8L*n,a);
         var initial=java.nio.ByteBuffer.allocate(Math.toIntExact(thermal.endOffset())).order(java.nio.ByteOrder.LITTLE_ENDIAN);

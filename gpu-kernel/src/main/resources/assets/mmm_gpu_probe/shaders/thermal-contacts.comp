@@ -66,7 +66,7 @@ void prepareOwner(int candidate){
  else if(kind==4){energy=number(h(134)+2*row);temperature=number(h(137)+2*row);k=number(f(K)+2*material(kind,int(words[h(136)+row])));}
  else if(kind==3){energy=number(h(113)+2*row);temperature=number(h(114)+2*row);k=number(f(K)+2*material(kind,int(words[h(110)+row])));}
  else{energy=number(h(28)+2*row);temperature=number(h(29)+18*row);terms=0;double total=0.0;
-  for(int c=int(words[h(24)+row]);c<int(words[h(24)+row+1]);c++){double n=double(quantity(h(26)+2*c));k+=n*number(f(K)+2*material(kind,int(words[h(25)+c])));total+=n;if(quantity(h(27)+2*c)>uint64_t(0))terms++;}k/=total;}
+  for(int c=int(words[h(24)+row]);c<int(words[h(24)+row+1]);c++){double n=double(quantity(h(26)+2*c));if(n==0.0)continue;k+=n*number(f(K)+2*material(kind,int(words[h(25)+c])));total+=n;if(quantity(h(27)+2*c)>uint64_t(0))terms++;}k/=total;}
  if(!(finite(energy)&&finite(temperature)&&temperature>0.0&&finite(k)&&k>=0.0&&terms>0)){invalid();return;}
  put(h(97)+2*owner,energy);put(h(98)+2*owner,temperature);put(f(KC)+2*owner,k);words[f(TERMS)+owner]=uint(terms);
 }

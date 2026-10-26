@@ -54,7 +54,7 @@ public final class GpuGasGeometryBenchmark {
         var totals=VulkanLiquidCellVolumes.layout(liquid,2*cells,-40,geometry.endOffset(),alignment);
         var gasGeometry=VulkanGasGeometry.layout(totals,word(geometry.masks()),word(geometry.occupied()),word(geometry.cells()),
                 word(geometry.planes()),word(geometry.micro()),true,.25,totals.endOffset(),alignment);
-        var gas=new VulkanGasStateLayout(grid,grid,grid,cells,2*cells,2*cells,definitions.definitions(),gasGeometry.endOffset(),alignment);
+        var gas=new VulkanGasStateLayout(grid,grid,grid,cells,2*cells,definitions.definitions(),gasGeometry.endOffset(),alignment);
         long volumeBase=gas.endOffset();
         var tables=VulkanGasThermodynamics.tables(gas.definitions(),definitions.gas(),definitions.thermal(),BuiltinChemicalDefinitions.REGISTRY);
         var thermal=VulkanGasThermodynamics.layout(gas,tables,Math.toIntExact(volumeBase/4),volumeBase+8L*cells,alignment);
@@ -134,7 +134,7 @@ public final class GpuGasGeometryBenchmark {
         var model=new GasThermalModel(definitions.thermal(),definitions.gas());var cache=new HashMap<SeedRequest,Seed>();
         List<GasRegistry.AmbientFraction> recipe=List.of(new GasRegistry.AmbientFraction(BuiltinGasDefinitions.NITROGEN,ExactRational.parse(".7")),
                 new GasRegistry.AmbientFraction(BuiltinGasDefinitions.OXYGEN,ExactRational.parse(".3")));
-        int component=0,species=0;
+        int component=0,species=0,stride=gas.definitions().componentIds().size();
         for(int node=0;node<nodes;node++) {
             double temperature=switch(node%3){case 0->260;case 1->380;default->720;};
             var request=new SeedRequest(volumes[node],temperature);
@@ -142,17 +142,21 @@ public final class GpuGasGeometryBenchmark {
                 return new Seed(inventory,model.internalEnergyAtTemperature(inventory,r.temperature()));});
             putInt(target,gas,TOPOLOGY_KEYS,node,keys[node]);putInt(target,gas,ROW_COMPONENT_OFFSETS,node,component);
             putDouble(target,gas,INTERNAL_ENERGY,node,seed.energy());
-            for(var part:seed.inventory().components()) {
-                putInt(target,gas,COMPONENT_HANDLES,component,gas.definitions().componentIds().indexOf(part.componentId()));
-                putLong(target,gas,STANDARD_VOLUME_NANOS,component,part.standardVolumeNanos());putLong(target,gas,MASS_UNITS,component,part.massUnits());
-                putLong(target,gas,MASS_RESIDUAL_UNITS,component,part.massResidualUnits());putInt(target,gas,COMPONENT_SPECIES_OFFSETS,component,species);
-                for(var amount:part.species()) {putInt(target,gas,SPECIES_HANDLES,species,gas.definitions().speciesIds().indexOf(amount.speciesId()));
-                    putLong(target,gas,SPECIES_AMOUNTS,species++,amount.amountQuanta());}
+            for(int handle=0;handle<stride;handle++){
+                putInt(target,gas,COMPONENT_HANDLES,component,handle);putInt(target,gas,COMPONENT_SPECIES_OFFSETS,component,species);
+                putLong(target,gas,STANDARD_VOLUME_NANOS,component,0);putLong(target,gas,MASS_UNITS,component,0);putLong(target,gas,MASS_RESIDUAL_UNITS,component,0);
+                for(var part:seed.inventory().components())if(gas.definitions().componentIds().indexOf(part.componentId())==handle){
+                    putLong(target,gas,STANDARD_VOLUME_NANOS,component,part.standardVolumeNanos());putLong(target,gas,MASS_UNITS,component,part.massUnits());putLong(target,gas,MASS_RESIDUAL_UNITS,component,part.massResidualUnits());
+                    for(var amount:part.species()){putInt(target,gas,SPECIES_HANDLES,species,gas.definitions().speciesIds().indexOf(amount.speciesId()));putLong(target,gas,SPECIES_AMOUNTS,species++,amount.amountQuanta());}break;
+                }
                 component++;
             }
         }
-        for(int row=nodes;row<=nodes+2;row++)putInt(target,gas,ROW_COMPONENT_OFFSETS,row,component);
-        putInt(target,gas,COMPONENT_SPECIES_OFFSETS,component,species);
+        for(int row=nodes;row<nodes+2;row++){
+            putInt(target,gas,ROW_COMPONENT_OFFSETS,row,component);
+            for(int handle=0;handle<stride;handle++){putInt(target,gas,COMPONENT_HANDLES,component,handle);putInt(target,gas,COMPONENT_SPECIES_OFFSETS,component,species);putLong(target,gas,STANDARD_VOLUME_NANOS,component,0);putLong(target,gas,MASS_UNITS,component,0);putLong(target,gas,MASS_RESIDUAL_UNITS,component,0);component++;}
+        }
+        putInt(target,gas,ROW_COMPONENT_OFFSETS,nodes+2,component);putInt(target,gas,COMPONENT_SPECIES_OFFSETS,component,species);
         putInt(target,gas,COUNTS,0,nodes);putInt(target,gas,COUNTS,1,component);putInt(target,gas,COUNTS,2,species);
         putInt(target,gas,ENERGY_PRESENT,0,1);
         System.out.printf("gas_seed cells=%d nodes=%d components=%d species=%d distinct_states=%d%n",cells,nodes,component,species,cache.size());return nodes;

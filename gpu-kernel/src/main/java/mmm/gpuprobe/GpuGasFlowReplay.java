@@ -28,7 +28,7 @@ public final class GpuGasFlowReplay {
             var totals=VulkanLiquidCellVolumes.layout(liquid,16,-40,g.endOffset(),a);
             var geometry=VulkanGasGeometry.layout(totals,word(g.masks()),word(g.occupied()),word(g.cells()),word(g.planes()),word(g.micro()),true,.5,totals.endOffset(),a);
             var definitions=GpuGasGeometryBenchmark.gasDefinitions();
-            var gas=new VulkanGasStateLayout(2,2,2,n,1,1,definitions.definitions(),geometry.endOffset(),a);
+            var gas=new VulkanGasStateLayout(2,2,2,n,1,definitions.definitions(),geometry.endOffset(),a);
             var tables=VulkanGasThermodynamics.tables(gas.definitions(),definitions.gas(),definitions.thermal(),mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY);
             var eos=VulkanGasThermodynamics.layout(gas,tables,Math.toIntExact(gas.endOffset()/4),gas.endOffset()+8L*n,a);
             var flow=VulkanGasFlow.layout(eos,geometry,Math.max(1,pairs),eos.endOffset(),a);

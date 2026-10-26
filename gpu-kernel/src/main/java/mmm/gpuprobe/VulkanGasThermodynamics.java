@@ -100,7 +100,7 @@ final class VulkanGasThermodynamics implements AutoCloseable {
                 data[28]=selfParts.word(VulkanGasRemap.Field.TRANSPORT_RETAINED_ENERGY);
                 data[39]=selfParts.word(VulkanGasRemap.Field.SOURCE_PIVOT);
                 data[40]=selfParts.word(VulkanGasRemap.Field.PART_OFFSETS);
-                data[41]=selfParts.partCapacity;data[42]=selfParts.speciesCapacity;
+                data[41]=selfParts.partCapacity;data[42]=selfParts.speciesCapacity;data[43]=Math.toIntExact(source.column(VulkanGasStateLayout.Field.STANDARD_VOLUME_NANOS).offset()/4);data[44]=Math.toIntExact(source.column(VulkanGasStateLayout.Field.MASS_UNITS).offset()/4);
             }
             for (int i = 0; i < data.length; i++) target.putInt(4 * i, data[i]);
             target.putDouble(4 * 32, GasRegistry.STANDARD_TEMPERATURE_K);

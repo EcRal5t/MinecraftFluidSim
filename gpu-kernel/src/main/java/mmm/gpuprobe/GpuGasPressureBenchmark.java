@@ -28,7 +28,7 @@ public final class GpuGasPressureBenchmark {
             var gasGeometry=VulkanGasGeometry.layout(totals,word(geometry.masks()),word(geometry.occupied()),word(geometry.cells()),
                     word(geometry.planes()),word(geometry.micro()),true,.25,totals.endOffset(),alignment);
             var definitions=GpuGasGeometryBenchmark.gasDefinitions();
-            var gas=new VulkanGasStateLayout(grid,grid,grid,n,2*n,2*n,definitions.definitions(),gasGeometry.endOffset(),alignment);
+            var gas=new VulkanGasStateLayout(grid,grid,grid,n,2*n,definitions.definitions(),gasGeometry.endOffset(),alignment);
             var tables=VulkanGasThermodynamics.tables(gas.definitions(),definitions.gas(),definitions.thermal(),mmm.chemistry.BuiltinChemicalDefinitions.REGISTRY);
             var thermal=VulkanGasThermodynamics.layout(gas,tables,Math.toIntExact(gas.endOffset()/4),gas.endOffset()+8L*n,alignment);
             int size=n+gas.nodeCapacity();long[] cursor={thermal.endOffset()};

@@ -134,7 +134,7 @@ void inheritedControls(int source,int lane,int rowStride){
  for(int at=begin+lane;at<end;at+=rowStride){int g=int(words[f(SG)+at]);double weight=number(f(GW)+2*g);add(sum,correction,weight);if(weight>largest||(weight==largest&&g<pivot)){largest=weight;pivot=g;}}
  double total=rowSum(lane,sum,rowStride);if(rowStride>1){reduceOwner(lane,largest,pivot);pivot=owners[0];barrier();}
  double original=source<2?total:number(h(16)+2*(source-2));
- if(end==begin){if(lane==0&&source>=2&&source-2<int(words[h(17)])&&words[h(18)+source-1]>words[h(18)+source-2])invalid();return;}
+ if(end==begin){if(lane==0&&source>=2&&source-2<int(words[h(17)]))for(int c=int(words[h(18)+source-2]);c<int(words[h(18)+source-1]);c++)if(words[h(23)+2*c]!=0u||words[h(23)+2*c+1]!=0u)invalid();return;}
  sum=0.0;correction=0.0;
  for(int at=begin+lane;at<end;at+=rowStride){int g=int(words[f(SG)+at]);if(g==pivot)continue;double value=original*(number(f(GW)+2*g)/total);put(f(GO)+2*g,value);add(sum,correction,value);}
  double assigned=rowSum(lane,sum,rowStride);if(lane==0){double rest=original-assigned;if(!(finite(rest)&&rest>0.0))invalid();put(f(GO)+2*pivot,rest);}

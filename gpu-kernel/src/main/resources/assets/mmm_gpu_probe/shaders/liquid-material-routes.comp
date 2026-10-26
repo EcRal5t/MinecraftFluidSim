@@ -10,7 +10,7 @@ layout(push_constant) uniform Params { int header; int stage; int count; int gra
 // DYADIC_LIBRARY
 const int COUNTS=0,CELL_OFFSETS=1,MATERIALS=2,VOLUME_OFFSETS=4,VOLUME_COUNTS=5,
           VOLUME_EXPONENTS=6,VOLUME_LIMBS=7,MASS_UNITS=8;
-const int R_DESCRIPTORS=0,R_SOURCE_OFFSETS=5,R_SLOTS=6,R_COUNTS=7,R_SOURCE_MASKS=8;
+const int R_DESCRIPTORS=0,R_SOURCE_OFFSETS=5,R_SLOTS=6,R_COUNTS=7,R_SOURCE_MASKS=8,R_INTEGER=10;
 uvec2 proposalWords;
 bool failed=false;
 int h(int index) { return int(candidateWords[p.header+index]); }
@@ -153,8 +153,27 @@ void prepareDensity(int first,int last) {
     }
 }
 
-// Narrow sums load both operands into registers before writing their destination.
-// Wide sums retain a disjoint temporary so arbitrary exact descriptors cannot alias.
+// Normal routes carry exact integer multiples of the capacity lattice.
+// The retained descriptor is a lazy source snapshot; INTEGER[retained] records its cached integer part.
+int integerAddress(int entry){return route(R_INTEGER)+2*entry;}
+int64_t remainingQuanta(int stock){return getLong(h(7)+2*stock);}
+void remainingQuanta(int stock,int64_t value){putLong(h(7)+2*stock,value);}
+int64_t floorQuanta(DyadicTerm value){
+    if(!dyadicPresent(value))return int64_t(0);
+    return int64_t(uint64_t(dyadicAlignedWord(value,0,h(63)))|(uint64_t(dyadicAlignedWord(value,1,h(63)))<<32));
+}
+DyadicTerm integerTerm(int64_t count){
+    if(count<=int64_t(0))return zero();uint64_t bits=uint64_t(count);
+    int trailing=uint(bits)==0u?32+findLSB(uint(bits>>32)):findLSB(uint(bits));bits>>=trailing;
+    proposalWords=uvec2(uint(bits),uint(bits>>32));
+    return DyadicTerm(2,0,proposalWords.y==0u?1:2,h(63)+trailing,1);
+}
+void publishInteger(int entry,int64_t count){
+    DyadicTerm value=integerTerm(count);if(!dyadicPresent(value)){saveRoute(entry,zero());return;}
+    int address=integerAddress(entry);candidateWords[address]=proposalWords.x;candidateWords[address+1]=proposalWords.y;
+    saveRoute(entry,DyadicTerm(1,address,value.count,value.exponent,1));
+}
+// Narrow sums load operands before their destination; wide tails use a separate cell temporary.
 DyadicTerm storeCombined(DyadicTerm a,DyadicTerm b,int coefficient,int destination,int temporary){
  if(!dyadicPresent(b))return copyTo(a,destination);
  if(!dyadicPresent(a)){if(coefficient<0){fail();return zero();}return copyTo(b,destination);}
@@ -162,65 +181,94 @@ DyadicTerm storeCombined(DyadicTerm a,DyadicTerm b,int coefficient,int destinati
  if(max(highBit(a),highBit(b))-int64_t(minimum)<int64_t(coefficient>0?127:128))return combineNarrow(a,b,coefficient,minimum,destination);
  return copyTo(combineWide(a,b,coefficient,temporary),destination);
 }
-void transfer(int stock,int slot,DyadicTerm part,inout DyadicTerm budget,inout int budgetWindow,int cell) {
- if(!dyadicPresent(part)||failed)return;
- int base=candidateCount()+3*cell,temp=base+2,other=budgetWindow==base?base+1:base,entry=routeIndex(stock,slot);
- // Preserve the old part until both subtraction results have been computed.
- DyadicTerm nextBudget=combine(budget,part,-1,other);if(failed)return;
- DyadicTerm piece=storeCombined(routed(entry),part,1,entry,temp);if(failed)return;saveRoute(entry,piece);
- DyadicTerm remaining=storeCombined(routed(routeIndex(stock,0)),part,-1,routeIndex(stock,0),temp);if(failed)return;saveRoute(routeIndex(stock,0),remaining);
- budget=nextBudget;budgetWindow=other;
+bool remainingPresent(int stock){
+    if(remainingQuanta(stock)>int64_t(0))return true;
+    DyadicTerm value=routed(routeIndex(stock,0));return dyadicPresent(value)&&value.exponent<h(63);
 }
-
-void partitionLayer(int cell,int first,int last,int slot,int layer,inout DyadicTerm budget,inout int budgetWindow) {
-    int sole=-1;
-    [[dont_unroll]] for(int stock=first;stock<last;stock++)if(selected(stock,layer)&&dyadicPresent(routed(routeIndex(stock,0)))){if(sole>=0){sole=-2;break;}sole=stock;}
-    if(sole>=0){transfer(sole,slot,smaller(routed(routeIndex(sole,0)),budget),budget,budgetWindow,cell);return;}
-    int64_t maximum=int64_t(-9223372036854775807L);
-    [[dont_unroll]] for(int stock=first;stock<last;stock++)if(selected(stock,layer)) {
-        DyadicTerm value=routed(routeIndex(stock,0));if(dyadicPresent(value))maximum=max(maximum,highBit(value));
+double remainingWeight(int stock){
+    int entry=routeIndex(stock,0);DyadicTerm value=routed(entry);
+    return max(0.0LF,scaled(value,int64_t(h(63)))-double(getLong(integerAddress(entry))-remainingQuanta(stock)));
+}
+DyadicTerm exactRemaining(int stock,int cell){
+    int entry=routeIndex(stock,0);DyadicTerm value=routed(entry);
+    int64_t pending=getLong(integerAddress(entry))-remainingQuanta(stock);
+    if(pending>int64_t(0)){
+        value=storeCombined(value,integerTerm(pending),-1,entry,candidateCount()+3*cell+2);
+        saveRoute(entry,value);putLong(integerAddress(entry),remainingQuanta(stock));
     }
-    double total=0.0;
-    [[dont_unroll]] for(int stock=first;stock<last;stock++)if(selected(stock,layer)) {
-        double weight=scaled(routed(routeIndex(stock,0)),maximum);putDouble(h(13)+2*stock,weight);total+=weight;
+    return value;
+}
+void takeInteger(int stock,int slot,int64_t count){
+    if(count<=int64_t(0))return;int entry=routeIndex(stock,slot);
+    putLong(integerAddress(entry),getLong(integerAddress(entry))+count);
+    remainingQuanta(stock,remainingQuanta(stock)-count);
+}
+int64_t partitionIntegers(int first,int last,int slot,int layer,int64_t budget){
+    int64_t available=int64_t(0);double total=0.0;
+    [[dont_unroll]] for(int stock=first;stock<last;stock++)if(selected(stock,layer)&&routeIndex(stock,0)>=0){
+        available+=remainingQuanta(stock);double weight=remainingWeight(stock);putDouble(h(13)+2*stock,weight);total+=weight;
     }
-    // Keep this face's original target immutable while the working budget alternates.
-    // Its leading three words suffice for preferences; exponent/significand copies are local.
-    DyadicTerm initial=budget;
-    double initialHead=head(initial);int64_t initialPower=int64_t(initial.exponent)+int64_t(32)*int64_t(initial.count-1);
-    [[dont_unroll]] for(int stock=first;stock<last&&dyadicPresent(budget)&&!failed;stock++)if(selected(stock,layer)) {
+    int64_t target=min(budget,available),left=target;if(target==int64_t(0))return int64_t(0);
+    [[dont_unroll]] for(int stock=first;stock<last&&left>int64_t(0);stock++)if(selected(stock,layer)&&routeIndex(stock,0)>=0){
         double ratio=total>0.0?getDouble(h(13)+2*stock)/total:0.0;
-        // Recreate a normalized three-word-free descriptor through the local proposal bank.
-        double amount=initialHead*ratio;int power=0;double mantissa=frexp(amount,power);
-        uint64_t bits=uint64_t(ldexp(mantissa,53));
-        int64_t exponent=initialPower+int64_t(power)-int64_t(53),minimum=int64_t(h(63));
-        if(exponent<minimum) { int64_t shift=minimum-exponent;bits=shift>=int64_t(64)?uint64_t(0):bits>>int(shift);exponent=minimum; }
-        DyadicTerm wanted=zero();
-        if(bits!=uint64_t(0)) {
-            int trailing=uint(bits)==0u?32+findLSB(uint(bits>>32)):findLSB(uint(bits));bits>>=trailing;exponent+=int64_t(trailing);
-            if(exponent<int64_t(-2147483647)-int64_t(1)||exponent>int64_t(2147483647)){fail();return;}
-            proposalWords=uvec2(uint(bits),uint(bits>>32));wanted=DyadicTerm(2,0,proposalWords.y==0u?1:2,int(exponent),1);
-        }
-        transfer(stock,slot,smaller(smaller(wanted,routed(routeIndex(stock,0))),budget),budget,budgetWindow,cell);
+        int64_t count=min(min(remainingQuanta(stock),left),int64_t(max(0.0LF,double(target)*ratio)));
+        takeInteger(stock,slot,count);left-=count;
     }
-    // At most one linear pass closes the exact remainder, including subnormal or wider inputs.
-    [[dont_unroll]] for(int stock=first;stock<last&&dyadicPresent(budget)&&!failed;stock++)if(selected(stock,layer))
-        transfer(stock,slot,smaller(routed(routeIndex(stock,0)),budget),budget,budgetWindow,cell);
+    // Close the lattice remainder in the original stock order, with exact donor limits.
+    [[dont_unroll]] for(int stock=first;stock<last&&left>int64_t(0);stock++)if(selected(stock,layer)&&routeIndex(stock,0)>=0){
+        int64_t count=min(remainingQuanta(stock),left);takeInteger(stock,slot,count);left-=count;
+    }
+    return target-left;
 }
-
-void distributeFace(int cell,int first,int last,int slot,bool layered,bool heavyFirst) {
-    DyadicTerm targetVolume=accepted(cell,slot);if(!dyadicPresent(targetVolume))return;
-    int budgetWindow=candidateCount()+3*cell;
-    DyadicTerm budget=copyTo(targetVolume,budgetWindow);
-    [[dont_unroll]] while(dyadicPresent(budget)&&!failed) {
-        int layer=-1;
-        if(layered) {
-            [[dont_unroll]] for(int stock=first;stock<last;stock++)if(dyadicPresent(routed(routeIndex(stock,0))))
-                if(layer<0||(heavyFirst?denser(stock,layer):denser(layer,stock)))layer=stock;
-            if(layer<0){fail();return;}
+int nextLayer(int first,int last,bool layered,bool heavyFirst){
+    int layer=-1;if(!layered)return layer;
+    [[dont_unroll]] for(int stock=first;stock<last;stock++)if(routeIndex(stock,0)>=0&&remainingPresent(stock))
+        if(layer<0||(heavyFirst?denser(stock,layer):denser(layer,stock)))layer=stock;
+    return layer;
+}
+void transferTail(int stock,int slot,DyadicTerm part,inout DyadicTerm budget,inout int budgetWindow,int cell){
+    if(!dyadicPresent(part)||failed)return;
+    int base=candidateCount()+3*cell,other=budgetWindow==base?base+1:base,temp=base+2,entry=routeIndex(stock,slot),retained=routeIndex(stock,0);
+    DyadicTerm nextBudget=combine(budget,part,-1,other);if(failed)return;
+    DyadicTerm previous=routed(entry);if(!dyadicPresent(previous))previous=integerTerm(getLong(integerAddress(entry)));
+    DyadicTerm piece=storeCombined(previous,part,1,entry,temp);if(failed)return;saveRoute(entry,piece);putLong(integerAddress(entry),int64_t(0));
+    DyadicTerm left=storeCombined(routed(retained),part,-1,retained,temp);if(failed)return;saveRoute(retained,left);
+    int64_t count=floorQuanta(left);remainingQuanta(stock,count);putLong(integerAddress(retained),count);
+    budget=nextBudget;budgetWindow=other;
+}
+// A subquantum budget is shared only at actual source/layer exhaustion. Its exact pieces
+// telescope against source snapshots and the accepted face; no negative material borrowing occurs.
+void distributeTailFace(int cell,int first,int last,int slot,bool layered,bool heavyFirst,DyadicTerm initial){
+    int budgetWindow=candidateCount()+3*cell;DyadicTerm budget=copyTo(initial,budgetWindow);
+    [[dont_unroll]] while(dyadicPresent(budget)&&!failed){
+        int layer=nextLayer(first,last,layered,heavyFirst);if(layered&&layer<0){fail();return;}
+        int64_t assigned=partitionIntegers(first,last,slot,layer,floorQuanta(budget));
+        if(assigned>int64_t(0)){
+            int other=budgetWindow==candidateCount()+3*cell?budgetWindow+1:budgetWindow-1;
+            budget=combine(budget,integerTerm(assigned),-1,other);budgetWindow=other;
         }
-        partitionLayer(cell,first,last,slot,layer,budget,budgetWindow);
+        [[dont_unroll]] for(int stock=first;stock<last&&dyadicPresent(budget)&&!failed;stock++)if(selected(stock,layer)&&routeIndex(stock,0)>=0&&remainingPresent(stock)){
+            DyadicTerm value=exactRemaining(stock,cell);
+            transferTail(stock,slot,smaller(value,budget),budget,budgetWindow,cell);
+        }
         if(!layered&&dyadicPresent(budget)){fail();return;}
+    }
+}
+void distributeFace(int cell,int first,int last,int slot,bool layered,bool heavyFirst){
+    DyadicTerm target=accepted(cell,slot);if(!dyadicPresent(target))return;
+    int64_t budget=floorQuanta(target);
+    if(target.exponent<h(63)){distributeTailFace(cell,first,last,slot,layered,heavyFirst,target);return;}
+    [[dont_unroll]] while(budget>int64_t(0)&&!failed){
+        int layer=nextLayer(first,last,layered,heavyFirst);if(layered&&layer<0){fail();return;}
+        int64_t assigned=partitionIntegers(first,last,slot,layer,budget);budget-=assigned;
+        if(budget==int64_t(0))return;
+        bool tails=false;
+        [[dont_unroll]] for(int stock=first;stock<last;stock++)if(selected(stock,layer)&&routeIndex(stock,0)>=0&&remainingPresent(stock))tails=true;
+        if(tails){
+            DyadicTerm rest=integerTerm(budget);
+            distributeTailFace(cell,first,last,slot,layered,heavyFirst,rest);return;
+        }
+        if(!layered){fail();return;}
     }
 }
 
@@ -244,21 +292,20 @@ void reserve(int cell) {
     int first=int(sourceWords[src(CELL_OFFSETS)+cell]),last=int(sourceWords[src(CELL_OFFSETS)+cell+1]);
     [[dont_unroll]] for(int stock=first;stock<last;stock++)for(int slot=0;slot<7;slot++){
         int entry=routeIndex(stock,slot);if(entry<0)continue;
-        candidateWords[h(8)+entry]=0u;candidateWords[route(R_SLOTS)+entry]=uint(slot);saveRoute(entry,zero());
+        candidateWords[h(8)+entry]=0u;candidateWords[route(R_SLOTS)+entry]=uint(slot);saveRoute(entry,zero());putLong(integerAddress(entry),int64_t(0));
     }
     if(errors!=0u||soleSource(first,last)!=-2||!hasCrossRoute(first,last))return;
-    int minimum=2147483647;int64_t maximum=int64_t(-9223372036854775807L);
+    int minimum=2147483647;int64_t maximum=int64_t(-9223372036854775807L);bool tails=false;
     [[dont_unroll]] for(int stock=first;stock<last;stock++) {
         DyadicTerm value=sourceVolume(stock);if(!dyadicPresent(value))continue;
-        minimum=min(minimum,value.exponent);maximum=max(maximum,highBit(value));
+        minimum=min(minimum,value.exponent);maximum=max(maximum,highBit(value));tails=tails||value.exponent<h(63);
     }
     for(int slot=0;slot<7;slot++) {
         DyadicTerm value=accepted(cell,slot);if(value.sign<0){fail();return;}
-        if(dyadicPresent(value)){minimum=min(minimum,value.exponent);maximum=max(maximum,highBit(value));}
+        if(dyadicPresent(value)){minimum=min(minimum,value.exponent);maximum=max(maximum,highBit(value));tails=tails||value.exponent<h(63);}
     }
-    if(minimum==2147483647&&maximum==int64_t(-9223372036854775807L))return;
-    // Workspace spans existing exact tails and a fixed proportional-allocation lattice.
-    // New proportional targets use the same precision on every step.
+    if(!tails)return;
+    // Only preexisting subquantum tails or exact nonlattice accepted volumes need variable limbs.
     minimum=min(minimum,h(63));
     [[dont_unroll]] for(int stock=first;stock<last;stock++) {
         DyadicTerm value=sourceVolume(stock);int width=dyadicPresent(value)?reserveWidth(highBit(value),minimum):1;
@@ -273,7 +320,10 @@ void splitCell(int cell) {
     int sole=soleSource(first,last);
     if(sole>=0){for(int slot=0;slot<7;slot++){int entry=routeIndex(sole,slot);if(entry>=0)saveRoute(entry,accepted(cell,slot));}return;}
     if(sole==-1)return;
-    [[dont_unroll]] for(int stock=first;stock<last;stock++){int entry=routeIndex(stock,0);if(entry>=0)saveRoute(entry,sourceVolume(stock));}
+    [[dont_unroll]] for(int stock=first;stock<last;stock++){int entry=routeIndex(stock,0);if(entry>=0){
+        DyadicTerm value=sourceVolume(stock);saveRoute(entry,value);int64_t count=floorQuanta(value);
+        remainingQuanta(stock,count);putLong(integerAddress(entry),count);
+    }}
     if(failed||!hasCrossRoute(first,last))return;
     bool vertical=p.gravitySign!=0&&(dyadicPresent(accepted(cell,3))||dyadicPresent(accepted(cell,4)));
     if(vertical)prepareDensity(first,last);
@@ -283,13 +333,17 @@ void splitCell(int cell) {
         int slot=face<2?face+1:face<4?face+3:face==4?down:up;
         distributeFace(cell,first,last,slot,face>=4&&vertical,face==4);
     }
-    // Exact retained total also detects caller budgets inconsistent with source inventory.
-    int base=candidateCount()+3*cell,current=base;DyadicTerm retained=zero();
-    [[dont_unroll]] for(int stock=first;stock<last&&!failed;stock++) {
-        int next=current==base?base+1:base;
-        retained=combine(retained,routed(routeIndex(stock,0)),1,next);current=next;
+    // Ordinary routes publish two inline integer words. Only source tails perform one
+    // final exact subtraction; exceptional tail pieces already own exact descriptors.
+    [[dont_unroll]] for(int stock=first;stock<last&&!failed;stock++){
+        int retained=routeIndex(stock,0);if(retained<0)continue;
+        DyadicTerm value=routed(retained);
+        if(dyadicPresent(value)&&value.exponent<h(63))exactRemaining(stock,cell);
+        else publishInteger(retained,remainingQuanta(stock));
+        for(int slot=1;slot<7;slot++){
+            int entry=routeIndex(stock,slot);if(entry>=0&&!dyadicPresent(routed(entry)))publishInteger(entry,getLong(integerAddress(entry)));
+        }
     }
-    if(!failed&&compareVolume(retained,accepted(cell,0))!=0)fail();
 }
 void main() {
     uint id=(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x;

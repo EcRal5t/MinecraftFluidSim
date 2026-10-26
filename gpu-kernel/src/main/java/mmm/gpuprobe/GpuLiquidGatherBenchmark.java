@@ -22,8 +22,98 @@ public final class GpuLiquidGatherBenchmark {
             System.out.println("Timed candidates are discarded; one separate candidate is committed and sampled after timing. Excludes capacity acceptance, pressure, gas coupling and full steps. Zero reference-energy tables select the no-reference-energy fixture.");
             System.out.println("grid,source_stocks,output_stocks,median_ms,max_ms,gpu_mean_ms,upload_B_per_step,readback_B_per_step,device_MiB,staging_MiB");
             checkSignedReduction(context,ledger);
+            checkTailBundle(context,materialRoutes,quantities,gather,ledger,false);
+            checkTailBundle(context,materialRoutes,quantities,gather,ledger,true);
             for(int grid:new int[]{32,64})measure(context,materialRoutes,quantities,gather,momentum,ledger,grid,samples);
         }
+    }
+
+    /** Two subquantum materials share one real accepted quantum; the second case drains both. */
+    private static void checkTailBundle(VulkanDeviceContext context,VulkanLiquidMaterialRoutes materials,
+                                       VulkanLiquidRouteQuantities quantities,VulkanLiquidGather gather,
+                                       VulkanEnergyLedger ledger,boolean drain){
+        int cells=8,stocks=16;long alignment=Math.max(8,context.storageOffsetAlignment());
+        var state=new VulkanLiquidStateLayout(2,2,2,stocks,stocks,4*stocks,alignment,2);
+        var routes=new VulkanLiquidRouteLayout(stocks,7*stocks,state.bytes(),alignment);
+        long fixed=routes.endOffset(),mass=fixed+4L*cells,materialReference=mass+16,speciesReference=materialReference+16;
+        long accepted=speciesReference+32,phases=accepted+140L*cells,limb=phases+8;
+        var material=VulkanLiquidMaterialRoutes.layout(state,routes,Math.toIntExact(accepted/4),Math.toIntExact(phases/4),0,-3,256,limb+8,alignment);
+        var quantity=VulkanLiquidRouteQuantities.layout(state,routes,Math.toIntExact(materialReference/4),Math.toIntExact(speciesReference/4),2,material.endOffset(),alignment);
+        var output=VulkanLiquidGather.layout(state,state,routes,Math.toIntExact(fixed/4),Math.toIntExact(mass/4),quantity.endOffset(),alignment);
+        var roundoff=VulkanEnergyLedger.layout(java.util.List.of(stream(quantity.energyRemainders(),1),stream(output.energyRemainders(),-1)),output.endOffset(),alignment);
+        var endpoint=VulkanEnergyLedger.layout(java.util.List.of(
+                new VulkanEnergyLedger.Stream(0,Math.toIntExact(state.column(VulkanLiquidStateLayout.Field.ENERGY_BITS).offset()/4),stocks,2,-1),
+                stream(state.column(VulkanLiquidStateLayout.Field.ENERGY_BITS),1)),roundoff.endOffset(),alignment);
+        var initial=ByteBuffer.allocate(Math.toIntExact(endpoint.endOffset())).order(ByteOrder.LITTLE_ENDIAN);
+        material.initializeHeader(initial);quantity.initializeHeader(initial);output.initializeHeader(initial);roundoff.initializeHeader(initial);endpoint.initializeHeader(initial);
+        initial.putLong(Math.toIntExact(mass),1).putLong(Math.toIntExact(mass+8),1);
+        initial.putInt(Math.toIntExact(phases),0).putInt(Math.toIntExact(phases+4),1).putInt(Math.toIntExact(limb),1);
+        for(int cell=0;cell<cells;cell++)for(int slot=0;slot<7;slot++){
+            int at=Math.toIntExact(accepted+20L*(7*cell+slot));boolean positive=cell==0&&(slot==2||slot==0&&!drain);
+            initial.putInt(at,1).putInt(at+4,Math.toIntExact(limb/4)).putInt(at+8,positive?1:0)
+                    .putInt(at+12,slot==0?-4:-3).putInt(at+16,positive?1:0);
+        }
+        put(initial,state,VulkanLiquidStateLayout.Field.COUNTS,0,stocks);put(initial,state,VulkanLiquidStateLayout.Field.COUNTS,1,2);put(initial,state,VulkanLiquidStateLayout.Field.COUNTS,2,4*stocks);
+        for(int cell=0;cell<=cells;cell++)put(initial,state,VulkanLiquidStateLayout.Field.CELL_OFFSETS,cell,2*cell);
+        for(int stock=0;stock<stocks;stock++){
+            boolean present=stock<2;int numerator=stock==0?3:drain?1:3;long amount=present?4L*numerator:0;
+            put(initial,state,VulkanLiquidStateLayout.Field.MATERIALS,stock,stock%2);
+            put(initial,state,VulkanLiquidStateLayout.Field.SUPPORT_MASKS,stock,present?255:0);
+            put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_OFFSETS,stock,4*stock);
+            put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_COUNTS,stock,present?1:0);
+            put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_EXPONENTS,stock,present?-5:0);
+            put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_LIMBS,4*stock,present?numerator:0);
+            putLong(initial,state.column(VulkanLiquidStateLayout.Field.MASS_UNITS),stock,amount);
+            putLong(initial,state.column(VulkanLiquidStateLayout.Field.ENERGY_BITS),stock,Double.doubleToRawLongBits((double)amount));
+            put(initial,state,VulkanLiquidStateLayout.Field.MIXTURE_PRESENT,stock,present?1:0);
+            put(initial,state,VulkanLiquidStateLayout.Field.SPECIES_OFFSETS,stock,Math.min(stock,2));
+            if(present){put(initial,state,VulkanLiquidStateLayout.Field.SPECIES_HANDLES,stock,stock);putLong(initial,state.column(VulkanLiquidStateLayout.Field.SPECIES_AMOUNTS),stock,amount);}
+            putLong(initial,state.column(VulkanLiquidStateLayout.Field.NUMERIC_VOLUMES),stock,Double.doubleToRawLongBits(present?numerator/32.0:0.0));
+        }
+        put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_OFFSETS,stocks,4*stocks);put(initial,state,VulkanLiquidStateLayout.Field.SPECIES_OFFSETS,stocks,2);
+        try(var storage=new VulkanRegionStorage(context,initial.capacity(),1024*1024)){
+            storage.initialize(initial,0);
+            try(var source=storage.capture();var candidate=storage.prepare(source)){
+                int error=candidate.execute(0,(command,input,result,errors,staging,stack)->{
+                    var src=new FlipKernelBindings.BufferRange(input);var dst=new FlipKernelBindings.BufferRange(result);var err=new FlipKernelBindings.BufferRange(errors);
+                    materials.rebindRanges(src,dst,err);materials.record(command,material);
+                    quantities.rebindRanges(src,dst,err);quantities.record(command,quantity);
+                    gather.rebindRanges(src,dst,err);gather.record(command,output);
+                    ledger.rebindRanges(src,dst,err);ledger.record(command,roundoff);ledger.record(command,endpoint);
+                });
+                if(error!=0)throw new AssertionError("Material tail bundle status="+error+" drain="+drain);candidate.commit();
+            }
+            try(var result=storage.capture()){
+                SignedDyadic[] expected={SignedDyadic.ZERO,drain?SignedDyadic.ZERO:SignedDyadic.of(1,-4),SignedDyadic.of(3,-5),SignedDyadic.of(1,-5)};
+                long totalMass=0,totalSpecies=0;double totalEnergy=0;
+                for(int stock=0;stock<stocks;stock++){
+                    if(!readStockVolume(storage,result,state,stock).equals(stock<expected.length?expected[stock]:SignedDyadic.ZERO))throw new AssertionError("Material tail volume stock="+stock+" drain="+drain);
+                    long massValue=read(storage,result,state.column(VulkanLiquidStateLayout.Field.MASS_UNITS).offset()+8L*stock,8).getLong(0);
+                    double energyValue=read(storage,result,state.column(VulkanLiquidStateLayout.Field.ENERGY_BITS).offset()+8L*stock,8).getDouble(0);
+                    if(massValue<0||!Double.isFinite(energyValue)||energyValue<0||stock>=4&&(massValue!=0||energyValue!=0))throw new AssertionError("Material tail empty/negative stock="+stock);
+                    totalMass+=massValue;totalEnergy+=energyValue;
+                }
+                var offsets=read(storage,result,state.column(VulkanLiquidStateLayout.Field.SPECIES_OFFSETS).offset(),4*(stocks+1));int species=offsets.getInt(4*stocks);
+                for(int stock=4;stock<stocks;stock++)if(offsets.getInt(4*stock)!=offsets.getInt(4*(stock+1)))throw new AssertionError("Material tail empty species stock="+stock);
+                for(int entry=0;entry<species;entry++){
+                    long amount=read(storage,result,state.column(VulkanLiquidStateLayout.Field.SPECIES_AMOUNTS).offset()+8L*entry,8).getLong(0);
+                    if(amount<0)throw new AssertionError("Material tail negative species");totalSpecies+=amount;
+                }
+                long expectedMass=drain?16:24;
+                if(totalMass!=expectedMass||totalSpecies!=expectedMass||totalEnergy!=expectedMass||!readDyadic(storage,result,roundoff.result().offset()).equals(readDyadic(storage,result,endpoint.result().offset())))
+                    throw new AssertionError("Material tail inventory/energy differs drain="+drain);
+            }
+        }
+        System.out.println("Material tail bundle: "+(drain?"complete drain":"two 0.75q sources -> one q transfer")+" passed");
+    }
+    private static SignedDyadic readStockVolume(VulkanRegionStorage storage,VulkanRegionStorage.Capture capture,VulkanLiquidStateLayout layout,int stock){
+        int begin=read(storage,capture,layout.column(VulkanLiquidStateLayout.Field.VOLUME_OFFSETS).offset()+4L*stock,4).getInt(0);
+        int count=read(storage,capture,layout.column(VulkanLiquidStateLayout.Field.VOLUME_COUNTS).offset()+4L*stock,4).getInt(0);
+        int exponent=read(storage,capture,layout.column(VulkanLiquidStateLayout.Field.VOLUME_EXPONENTS).offset()+4L*stock,4).getInt(0);
+        if(count==0)return SignedDyadic.ZERO;
+        var limbs=read(storage,capture,layout.column(VulkanLiquidStateLayout.Field.VOLUME_LIMBS).offset()+4L*begin,4*count);BigInteger magnitude=BigInteger.ZERO;
+        for(int i=count-1;i>=0;i--)magnitude=magnitude.shiftLeft(32).add(BigInteger.valueOf(Integer.toUnsignedLong(limbs.getInt(4*i))));
+        return new SignedDyadic(magnitude,exponent);
     }
 
     private static void measure(VulkanDeviceContext context,VulkanLiquidMaterialRoutes materialRoutes,VulkanLiquidRouteQuantities quantities,VulkanLiquidGather gather,VulkanLiquidMomentum momentum,VulkanEnergyLedger ledger,int grid,int samples) {
@@ -35,7 +125,7 @@ public final class GpuLiquidGatherBenchmark {
         long acceptedBase=speciesReference+32,phaseBase=acceptedBase+140L*cells,acceptedLimb=phaseBase+8;
         int scratchLimbs=Math.multiplyExact(7*stocks+3*cells,4);
         var materialLayout=VulkanLiquidMaterialRoutes.layout(state,routes,Math.toIntExact(acceptedBase/4),
-                Math.toIntExact(phaseBase/4),-1,-3,scratchLimbs,acceptedLimb+8,alignment);
+                Math.toIntExact(phaseBase/4),-1,-40,scratchLimbs,acceptedLimb+8,alignment);
         System.out.println("material_route_capacity grid="+grid+" scratch_limbs="+scratchLimbs);
         var quantityLayout=VulkanLiquidRouteQuantities.layout(state,routes,Math.toIntExact(materialReference/4),
                 Math.toIntExact(speciesReference/4),2,materialLayout.endOffset(),alignment);

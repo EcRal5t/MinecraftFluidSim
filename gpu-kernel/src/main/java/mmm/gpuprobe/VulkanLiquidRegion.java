@@ -82,17 +82,18 @@ final class VulkanLiquidRegion implements AutoCloseable {
         }
     }
     record GasConfiguration(VulkanGasStateLayout.State initial,VulkanGasThermodynamics.Tables tables,
-                            int nodeCapacity,int componentCapacity,int speciesCapacity,double cellSize,boolean sealedExterior,
+                            int nodeCapacity,int speciesCapacity,double cellSize,boolean sealedExterior,
                             VulkanGasRemap.AmbientTables ambient) {
         static GasConfiguration forState(VulkanGasStateLayout.State initial,VulkanGasThermodynamics.Tables tables,double cellSize,
                                          boolean sealedExterior,VulkanGasRemap.AmbientTables ambient) {
             var exact=VulkanGasStateLayout.forState(initial.snapshot(),8);
-            return new GasConfiguration(initial,tables,reserve(exact.nodeCapacity()),reserve(exact.componentCapacity()),reserve(exact.speciesCapacity()),cellSize,sealedExterior,ambient);
+            return new GasConfiguration(initial,tables,reserve(exact.nodeCapacity()),reserve(exact.speciesCapacity()),cellSize,sealedExterior,ambient);
         }
+        int componentCapacity(){return Math.multiplyExact(nodeCapacity+2,tables.definitions().componentIds().size());}
         private static int reserve(int actual){return Math.multiplyExact(Math.max(1,actual),2);}
         GasConfiguration {
             java.util.Objects.requireNonNull(initial);java.util.Objects.requireNonNull(tables);java.util.Objects.requireNonNull(ambient);
-            if(nodeCapacity<1||nodeCapacity<initial.snapshot().nodes().size()||componentCapacity<0||speciesCapacity<0
+            if(nodeCapacity<1||nodeCapacity<initial.snapshot().nodes().size()||speciesCapacity<0
                     ||!(cellSize>0&&Double.isFinite(cellSize)))throw new IllegalArgumentException("Invalid resident gas reserves");
         }
     }
@@ -320,7 +321,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
         List<mmm.thermal.CoherentPhaseStore.Group> coherent(){var s=layout.transport.coherent.state;return s.exportState(read(s.baseOffset(),s.bytes()));}
         VulkanThermalDeviceLayout.State devices(){var s=layout.transport.devices.state;return s.exportState(read(s.baseOffset(),s.bytes()));}
         VulkanGasStateLayout.State gas(){
-            var s=layout.transport.gas.state;var local=new VulkanGasStateLayout(s.sizeX(),s.sizeY(),s.sizeZ(),s.nodeCapacity(),s.componentCapacity(),s.speciesCapacity(),s.definitions(),8);
+            var s=layout.transport.gas.state;var local=new VulkanGasStateLayout(s.sizeX(),s.sizeY(),s.sizeZ(),s.nodeCapacity(),s.speciesCapacity(),s.definitions(),8);
             var b=ByteBuffer.allocate(Math.toIntExact(local.bytes())).order(ByteOrder.LITTLE_ENDIAN);
             for(var f:VulkanGasStateLayout.Field.values()){var c=s.column(f);if(c.bytes()>0)storage.read(capture,c.offset(),b.slice(Math.toIntExact(local.column(f).offset()),Math.toIntExact(c.bytes())));}
             return local.exportState(b);
@@ -495,7 +496,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
     }
     synchronized VulkanLiquidStateLayout layout(){return workspace.liquid;}
     record GranularReserves(int particles,int deposits,int species){}
-    private record GasReserves(int nodes,int components,int species,int parts,int partSpecies,int groups,int pairs) { }
+    private record GasReserves(int nodes,int species,int parts,int partSpecies,int groups,int pairs) { }
     private record HeaderWrite(long offset,ByteBuffer bytes) { }
     private static long headerBytes(List<HeaderWrite> headers){return headers.stream().mapToLong(h->h.bytes().remaining()).sum();}
 
@@ -514,7 +515,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
         final GranularReserves granularReserves;
         String capacityStage="source geometry";
         Workspace(VulkanLiquidStateLayout liquid,MechanicalDefinitions definitions) {
-            this(liquid,definitions,gasConfiguration==null?null:new GasReserves(gasConfiguration.nodeCapacity(),gasConfiguration.componentCapacity(),gasConfiguration.speciesCapacity(),
+            this(liquid,definitions,gasConfiguration==null?null:new GasReserves(gasConfiguration.nodeCapacity(),gasConfiguration.speciesCapacity(),
                     Math.multiplyExact(gasConfiguration.componentCapacity(),7),Math.multiplyExact(gasConfiguration.speciesCapacity(),7),Math.min(Math.multiplyExact(liquid.cellCount(),7),Math.multiplyExact(Math.addExact(gasConfiguration.nodeCapacity(),2),7)),Math.max(1,gasConfiguration.nodeCapacity())));
         }
         Workspace(VulkanLiquidStateLayout liquid,MechanicalDefinitions definitions,GasReserves gasReserves) {
@@ -876,7 +877,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             return new IllegalStateException("Resident liquid candidate failed during "+capacityStage+": status="+error);
         }
         int[] capacities(){return new int[]{liquid.stockCapacity(),liquid.speciesCapacity(),liquid.limbCapacity(),transport.definitions.scratchLimbsPerWindow(),
-                gasReserves==null?0:gasReserves.nodes(),gasReserves==null?0:gasReserves.components(),gasReserves==null?0:gasReserves.species(),
+                gasReserves==null?0:gasReserves.nodes(),gasReserves==null?0:transport.gas.state.componentCapacity(),gasReserves==null?0:gasReserves.species(),
                 gasReserves==null?0:gasReserves.parts(),gasReserves==null?0:gasReserves.partSpecies(),gasReserves==null?0:gasReserves.groups(),gasReserves==null?0:gasReserves.pairs()};}
         Workspace grow(int[] required) {
             var definitions=transport.definitions;int cells=liquid.cellCount();
@@ -889,9 +890,8 @@ final class VulkanLiquidRegion implements AutoCloseable {
             if(required[2]>transport.materials.scratchLimbCapacity())windowLimbs=growCount(windowLimbs,ceil(required[2],windows));
             GasReserves nextGas=gasReserves;
             if(gasReserves!=null) {
-                int flowComponents=required.length>19?Math.max(required[21],required[23]):0,flowSpecies=required.length>19?Math.max(required[22],required[24]):0;
-                nextGas=new GasReserves(growGas(gasReserves.nodes(),Math.max(required[8],required[9])),
-                        growGas(gasReserves.components(),Math.max(flowComponents,Math.max(required[10],required[12]))),growGas(gasReserves.species(),Math.max(flowSpecies,Math.max(required[11],required[13]))),
+                int flowSpecies=required.length>19?Math.max(required[22],required[24]):0;
+                nextGas=new GasReserves(growGas(gasReserves.nodes(),Math.max(required[8],required[9])),growGas(gasReserves.species(),Math.max(flowSpecies,Math.max(required[11],required[13]))),
                         growGas(gasReserves.parts(),Math.max(required[14],required.length>19?required[19]:0)),growGas(gasReserves.partSpecies(),Math.max(required[15],required.length>19?required[20]:0)),growGas(gasReserves.groups(),required[17]),
                         growGas(gasReserves.pairs(),required.length>18?required[18]:0));
                 limbs=growCount(limbs,Math.max(0,required[16]-cells));
@@ -1123,7 +1123,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             if(gas!=null) {
                 gasTables(writer,gas.thermo);
                 var source=gasConfiguration.initial();var counts=VulkanGasStateLayout.forState(source.snapshot(),8);
-                var local=new VulkanGasStateLayout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),counts.nodeCapacity(),counts.componentCapacity(),counts.speciesCapacity(),gas.state.definitions(),8);
+                var local=new VulkanGasStateLayout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),counts.nodeCapacity(),counts.speciesCapacity(),gas.state.definitions(),8);
                 var data=ByteBuffer.allocate(Math.toIntExact(local.bytes())).order(ByteOrder.LITTLE_ENDIAN);local.importState(data,source.snapshot(),source.nodeEnergy());
                 for(var field:VulkanGasStateLayout.Field.values()){var c=local.column(field);if(c.bytes()>0)writer.put(gas.state.column(field).offset(),data.slice(Math.toIntExact(c.offset()),Math.toIntExact(c.bytes())));}
             }
@@ -1442,8 +1442,8 @@ final class VulkanLiquidRegion implements AutoCloseable {
             totals=VulkanLiquidCellVolumes.layout(liquid,Math.addExact(liquid.limbCapacity(),liquid.cellCount()),accepted.sourceCellVolumes().quantumExponent(),base,a);
             geometry=VulkanGasGeometry.layout(totals,word(Workspace.this.geometry.get(GeometryField.FIXED_MASKS)),old.geometry.occupiedWordOffset(),
                     word(Workspace.this.geometry.get(GeometryField.CELLS)),word(Workspace.this.geometry.get(GeometryField.PLANES)),word(Workspace.this.geometry.get(GeometryField.LIQUID_MICRO)),config.sealedExterior(),config.cellSize(),totals.endOffset(),a).withLiquidFaces(liquidFacesWordOffset);
-            retained=new VulkanGasStateLayout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),gasReserves.nodes(),gasReserves.components(),gasReserves.species(),config.tables().definitions(),geometry.endOffset(),a);
-            future=new VulkanGasStateLayout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),gasReserves.nodes(),gasReserves.components(),gasReserves.species(),config.tables().definitions(),retained.endOffset(),a);
+            retained=new VulkanGasStateLayout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),gasReserves.nodes(),gasReserves.species(),config.tables().definitions(),geometry.endOffset(),a);
+            future=new VulkanGasStateLayout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),gasReserves.nodes(),gasReserves.species(),config.tables().definitions(),retained.endOffset(),a);
             lineage=VulkanGasLineage.layout(old.state,old.geometry,geometry,accepted,word(Workspace.this.geometry.get(GeometryField.FLUXES)),word(old.volumes),gasReserves.groups(),future.endOffset(),a);
             remap=VulkanGasRemap.layout(lineage,old.thermo,retained,future,config.ambient(),gasReserves.parts(),gasReserves.partSpecies(),lineage.endOffset(),a);
             retainedEOS=VulkanGasThermodynamics.layout(retained,config.tables(),lineage.word(VulkanGasLineage.Field.RETAINED_OLD_VOLUMES),remap.endOffset(),a);
@@ -1479,7 +1479,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
             geometry=VulkanGasGeometry.layout(totals,word(Workspace.this.geometry.get(GeometryField.FIXED_MASKS)),occupiedWord,
                     word(Workspace.this.geometry.get(GeometryField.CELLS)),word(Workspace.this.geometry.get(GeometryField.PLANES)),word(Workspace.this.geometry.get(GeometryField.LIQUID_MICRO)),
                     config.sealedExterior(),config.cellSize(),base,alignment);
-            state=new VulkanGasStateLayout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),gasReserves.nodes(),gasReserves.components(),gasReserves.species(),config.tables().definitions(),geometry.endOffset(),alignment);
+            state=new VulkanGasStateLayout(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ(),gasReserves.nodes(),gasReserves.species(),config.tables().definitions(),geometry.endOffset(),alignment);
             volumes=new VulkanLiquidStateLayout.Column(align(state.endOffset()),gasReserves.nodes(),8);
             thermo=VulkanGasThermodynamics.layout(state,config.tables(),word(volumes),volumes.offset()+volumes.bindingBytes(),alignment);
             operator=new VulkanGasPressure.Layout(thermo,geometry,Workspace.this.geometry.get(GeometryField.CELLS),Workspace.this.geometry.get(GeometryField.FACES),
