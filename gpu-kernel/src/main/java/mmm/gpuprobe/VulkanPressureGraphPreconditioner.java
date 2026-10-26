@@ -356,6 +356,8 @@ final class VulkanPressureGraphPreconditioner implements AutoCloseable {
             public boolean recordRecoverOriginal(VkCommandBuffer command){return physical!=null&&physical.recordRecoverOriginal(command);}
             public boolean hasPreconditioner(){return true;}
             public VulkanPressureKernel.ParallelRows parallelRows(){
+                // The physical operator owns the Schur core and restores its full row list at completion.
+                if(physical!=null&&physical.parallelRows()!=null)return physical.parallelRows();
                 var root=levels.getFirst().memory;var keys=root.column(L.ROW_KEY);
                 return new VulkanPressureKernel.ParallelRows(new FlipKernelBindings.BufferRange(root.buffer,keys.offset(),keys.bindingBytes()),
                         prelude.buffer,prelude.column(P.PRESSURE_DISPATCH).offset());
