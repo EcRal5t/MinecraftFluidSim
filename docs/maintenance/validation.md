@@ -923,3 +923,7 @@ phase3恢复32轮设备合批后的 `build/gpu-resident-cut64-batched-retraction
 2026-10-27：液体路线物种改为源条目×真实方向固定金额，删除中间CSR与重复数量分份。`build/gpu-resident-cut64-direct-species-paired-thermal-profile.log` 同时评价过首遍导热的格内＋六色成对遍历：末12样本数量1.387→0.945 ms，汇集1.795→1.724 ms；热算子2.548→3.077 ms，后者已删除。该次整步64.314 ms、GPU53.128 ms，末容量80轮，不能把总变化归因于热学。仅保留物种改造的 `build/gpu-resident-cut64-direct-species.log` 连续15步完成，中位65.413 ms、最大100.048 ms、GPU平均50.359 ms，设备4981.2 MiB，末压力56／容量16轮。此次CPU记录成本也高于前次；分项减少约0.5 ms及显存减少约60 MiB成立，完整步未显示提速资格。
 
 物种迁移的必要短链：`build/gpu-liquid-direct-species-short.log`，`runGpuLiquidGatherBenchmark -PgpuGatherSamples=1` 的原32³／64³两材料、非零物种场景通过精确体积、质量、物种、残余质量及端点能量账；64³该输运短链GPU7.529 ms。删除了旧夹具要求每库存恰占一个体积limb的过时断言，继续检查真实体积。该结果仅覆盖索引迁移，不能代替完整步性能。
+
+2026-10-27：真实上风PLIC容量长尾重新捕获为 `build/gpu-liquid-capacity-upwind-current.bin`；捕获日志 `build/gpu-resident-cut64-upwind-capacity-capture.log` 最大49轮，含额外诊断回读，不作为性能资格。独立 `build/gpu-capacity-upwind-current-baseline.log` 49轮、GPU15.151 ms，全部库存和容量检查通过。原始偏好跨格量34,883,393,348,258,009 quanta，单元上限超出888,576,877,849,635（约2.55%跨格量）、下限不足29,362,417,929,234，供体限额未触发；这属于主要流量修正，不能归因于纯整数舍入。该输入与原cut64、granular32输入共同保留。
+
+2026-10-27：容量试验将stationary的供体／接收节点消元成cell图，真实seed为cross上界，统一3／4色残量推进并删除撤回阶段。真实49轮输入 `build/gpu-capacity-cell-upwind-replay.log` 6轮BFS＋63轮推进、GPU28.428 ms；原cut64 `build/gpu-capacity-cell-original-cut64-replay.log` 6＋106轮、GPU41.426 ms。均满足精确容量且保留实际输运，但远慢于原撤回15.151／3.887 ms，试验代码已删除，未再跑颗粒或完整步。供体消元不足以解决全域残量传播成本；后续应审视共同压力缺少partial cell局部容量约束与真实PLIC非线性的结构原因。
