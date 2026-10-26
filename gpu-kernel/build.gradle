@@ -362,6 +362,7 @@ registerGpuProbe(
     'mmm.gpuprobe.GpuLiquidCapacityReplay',
     'gpu-liquid-capacity-replay-work'
 ) { probeTask ->
+    probeTask.systemProperty 'mmm.gpuCapacityStages', providers.gradleProperty('gpuCapacityStages').getOrElse('false')
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'),
         providers.gradleProperty('gpuCapacityReplayFile').getOrElse(rootProject.layout.buildDirectory.file('gpu-liquid-capacity-cut64-original-failure.bin').get().asFile.absolutePath),
         providers.gradleProperty('gpuCapacityRounds').getOrElse('512')

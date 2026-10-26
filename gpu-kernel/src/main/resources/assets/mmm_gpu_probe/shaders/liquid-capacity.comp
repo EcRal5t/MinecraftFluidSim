@@ -6,8 +6,10 @@ layout(binding=0,std430) buffer Arena { uint words[]; };
 layout(binding=1,std430) buffer Errors { uint errors; };
 layout(binding=2,std430) buffer AtomicArena { int64_t integers[]; };
 layout(push_constant) uniform Params { int header; int stage; int count; int argument; int mode; } p;
-const int STATE=1,TAIL=2,EXCESS=3,DISTANCE=4,COUNT=5,OFFSET=6,CURSOR=7,ENTRY=8,BC=9,BO=10,OWNER=11,
- PART=12,PREFIX=13,PROPOSAL=14,REMAINING=15,TOTAL_PART=16,TOTAL=17,CUT=18,DISPATCH=20,ACTIVE_EDGES=21,TOUCHED=22,ACTIVE_VERTICES=23,RECEIVERS=24,CHANGED_VERTICES=25,LABEL_A=26,LABEL_B=27,LABEL_CHANGED=28,CELL_INCOMING=29,GROUP_INCOMING=30,GROUP_WITHDRAW=31,GROUP_BASE=32;
+const int STATE=1,TAIL=2,EXCESS=3,DISTANCE=4,GROUP_COUNTS=5,GROUP_OFFSETS=6,GROUP_CURSORS=7,GROUP_MEMBERS=8,
+ PROPOSAL=9,LONG_BLOCK_COUNTS=10,TOTAL_PART=11,TOTAL=12,CUT=13,DISPATCH=15,LONG_VERTICES=16,LABEL_CHANGED=17,
+ CELL_INCOMING=18,GROUP_INCOMING=19,GROUP_WITHDRAW=20,GROUP_BASE=21,SINK_EDGES=22,
+ LONG_BLOCK_OFFSETS=23,LONG_BLOCK_OWNER=24,LONG_PARTIAL=25,LONG_WORK=26;
 const int CK=0,CL=1,CU=2,CG=3,CCAP=4,CPREF=5,COPEN=6,CACCEPTED=7,CONTROL=8,CFLOW=10;
 const int INFINITY=0x3fffffff;const int64_t INF=int64_t(0x3fffffffffffffffUL),MAX_VALUE=int64_t(0x7fffffffffffffffUL);
 shared int64_t reduction[128];
@@ -39,10 +41,9 @@ int64_t flow(int e){return e<7*n()?capacityValue(CFLOW,e):read(TAIL,e-7*n());}
 void writeFlow(int e,int64_t x){if(e<7*n())writeNumber(ca(CFLOW)+2*e,x);else write(TAIL,e-7*n(),x);}
 int distance(int vertex){return int(atomicAdd(words[at(DISTANCE)+vertex],0u));}
 void initialize(int id){
- if(id<h(3)){put(COUNT,id,0);put(CURSOR,id,0);put(TOUCHED,id,0);put(LABEL_A,id,0);put(LABEL_B,id,0);put(LABEL_CHANGED,id,0);write(EXCESS,id,0l);put(DISTANCE,id,INFINITY);}
- if(id<h(4)){writeFlow(id,0l);write(PROPOSAL,id,0l);}
+ if(id<h(3)){put(LABEL_CHANGED,id,0);write(EXCESS,id,0l);put(DISTANCE,id,INFINITY);}
  if(id<n())put(CUT,id,0);if(id<groups())write(GROUP_BASE,id,0l);
- if(id==0){for(int i=0;i<12;i++)putControl(i,0);putControl(5,p.argument);for(int i=0;i<17;i++)put(STATE,i,0);put(STATE,8,INFINITY);put(STATE,0,-1);put(STATE,16,1);}
+ if(id==0){for(int i=0;i<12;i++)putControl(i,0);putControl(5,p.argument);for(int i=0;i<20;i++)put(STATE,i,0);put(STATE,8,INFINITY);put(STATE,0,-1);put(STATE,16,1);}
 }
 void seedDonor(int cell){
  int group=int(words[ca(CG)+cell]),open=int(words[ca(COPEN)+cell]);int64_t k=capacityValue(CK,cell),lo=capacityValue(CL,cell),hi=capacityValue(CU,cell);
@@ -56,101 +57,65 @@ void seedDonor(int cell){
   int64_t amount=(open&(1<<(slot-1)))!=0?min(remaining,preferred):0l;writeFlow(7*cell+slot,amount);remaining-=amount;
  }writeFlow(7*cell,remaining);
 }
-void seedReceiver(int cell){
+void prepareGroups(int group){
+ put(GROUP_COUNTS,group,0);put(GROUP_CURSORS,group,0);write(GROUP_INCOMING,group,0l);
+ put(LONG_BLOCK_COUNTS,group,0);if(group==0)put(LONG_BLOCK_COUNTS,groups(),0);
+ if(group==0){put(STATE,0,-1);put(STATE,4,0);put(STATE,17,0);put(STATE,19,0);}
+}
+void balanceReceiver(int cell){
  int64_t incoming=flow(7*cell);
- for(int side=0;side<6;side++){int source=neighbor(cell,side);if(source>=0)incoming=add(incoming,flow(7*source+1+(side^1)));}
- writeFlow(7*n()+cell,clamp(incoming,capacityValue(CL,cell),capacityValue(CU,cell)));
+ for(int side=0;side<6;side++){int donor=neighbor(cell,side);if(donor>=0)incoming=add(incoming,flow(7*donor+1+(side^1)));}
+ int64_t tail=clamp(incoming,capacityValue(CL,cell),capacityValue(CU,cell));writeFlow(7*n()+cell,tail);
+ int64_t excess=incoming-tail;write(EXCESS,n()+cell,excess);if(excess>0l)atomicAdd(words[at(STATE)+4],1u);
+ int group=groupOf(cell);atomicAdd(integers[at(GROUP_INCOMING)/2+group],tail);
+ if(capacityValue(CU,cell)>0l)atomicAdd(words[at(GROUP_COUNTS)+group],1u);
 }
-void countEdge(int e){if(upper(e)==0l)return;ivec2 v=endpoints(e);if(v.x<0||v.y<0||v.x>=h(3)||v.y>=h(3)){invalid();return;}
- atomicAdd(words[at(COUNT)+v.x],1u);atomicAdd(words[at(COUNT)+v.y],1u);}
-void scatterEdge(int e){if(upper(e)==0l)return;ivec2 v=endpoints(e);
- int a=int(atomicAdd(words[at(CURSOR)+v.x],1u)),b=int(atomicAdd(words[at(CURSOR)+v.y],1u));
- put(ENTRY,get(OFFSET,v.x)+a,e);put(ENTRY,get(OFFSET,v.y)+b,e);}
-void countBlocks(int vertex){int degree=get(COUNT,vertex);put(BC,vertex,degree>128?(degree+127)/128:0);}
-void mapBlocks(int vertex){for(int block=get(BO,vertex);block<get(BO,vertex+1);block++)put(OWNER,block,vertex);}
-void reduce(int lane){for(int step=64;step>0;step>>=1){barrier();if(lane<step)reduction[lane]=p.mode==3?min(reduction[lane],reduction[lane+step]):add(reduction[lane],reduction[lane+step]);}barrier();}
+void scatterMember(int cell){if(capacityValue(CU,cell)<=0l)return;int group=groupOf(cell);
+ int index=int(atomicAdd(words[at(GROUP_CURSORS)+group],1u));put(GROUP_MEMBERS,get(GROUP_OFFSETS,group)+index,cell);
+}
+void reduce(int lane){for(int step=64;step>0;step>>=1){barrier();if(lane<step)reduction[lane]=add(reduction[lane],reduction[lane+step]);}barrier();}
 void totalBlock(int block,int lane){int cell=128*block+lane;reduction[lane]=cell<n()?capacityValue(CK,cell):0l;reduce(lane);if(lane==0)write(TOTAL_PART,block,reduction[0]);}
-void total(){int64_t result=0l;for(int block=0;block<h(6);block++)result=add(result,read(TOTAL_PART,block));write(TOTAL,0,result);}
-int64_t contribution(int vertex,int e){
- ivec2 ends=endpoints(e);int peer=ends.x==vertex?ends.y:ends.x;
- if(p.mode==2)return ends.x==vertex?-flow(e):flow(e);
- if(p.mode==3)return (ends.x==vertex?upper(e)-flow(e):flow(e)-lower(e))>0l?int64_t(distance(peer)):int64_t(INFINITY);
- if(p.mode==0){
-  if(read(EXCESS,vertex)<=0l||distance(vertex)==INFINITY||distance(vertex)==0||distance(peer)!=distance(vertex)-1)return 0l;
-  return ends.x==vertex?upper(e)-flow(e):flow(e)-lower(e);
- }
- return 0l;
+void total(){int64_t result=0l;for(int block=0;block<h(6);block++)result=add(result,read(TOTAL_PART,block));write(TOTAL,0,result);write(EXCESS,sink(),-result);}
+int incidentCount(int vertex){
+ if(vertex<n())return 7;if(vertex<2*n())return 8;
+ if(vertex==sink())return get(STATE,19);
+ int group=vertex-2*n();return get(GROUP_OFFSETS,group+1)-get(GROUP_OFFSETS,group)+1;
 }
-int labelQueue(){return (control(1)&1)==0?LABEL_A:LABEL_B;}
-void touch(int vertex){atomicOr(words[at(labelQueue())+vertex],1u);if(atomicExchange(words[at(TOUCHED)+vertex],uint(control(1)+1))!=uint(control(1)+1)){
- int index=int(atomicAdd(words[at(STATE)+12],1u));put(CHANGED_VERTICES,index,vertex);}}
-void allocate(int vertex,int e,int64_t prefix,int64_t amount){
- if(amount==0l)return;int64_t available=max(0l,read(EXCESS,vertex)),keep=prefix<available?min(amount,available-prefix):0l;
- if(keep>0l){ivec2 ends=endpoints(e);write(PROPOSAL,e,ends.x==vertex?keep:-keep);
-  int index=int(atomicAdd(words[at(STATE)+9],1u));put(ACTIVE_EDGES,index,e);
-  int receiver=ends.x==vertex?ends.y:ends.x;
-  if(atomicExchange(words[at(CURSOR)+receiver],uint(control(1)+1))!=uint(control(1)+1)){
-   int slot=int(atomicAdd(words[at(STATE)+11],1u));put(RECEIVERS,slot,receiver);}
-  touch(receiver);
- }
+int incidentEdge(int vertex,int index){
+ int edge;
+ if(vertex<n())edge=7*vertex+index;
+ else if(vertex<2*n()){
+  int cell=vertex-n();
+  if(index==0)edge=7*cell;else if(index==7)edge=7*n()+cell;
+  else{int side=index-1,donor=neighbor(cell,side);if(donor<0)return -1;edge=7*donor+1+(side^1);}
+ }else if(vertex==sink())edge=get(SINK_EDGES,index);
+ else{int group=vertex-2*n(),first=get(GROUP_OFFSETS,group),count=get(GROUP_OFFSETS,group+1)-first;
+  edge=index<count?7*n()+get(GROUP_MEMBERS,first+index):8*n()+group;}
+ return upper(edge)>0l?edge:-1;
 }
-void countPositive(int vertex){if(read(EXCESS,vertex)>0l){int index=int(atomicAdd(words[at(STATE)+4],1u));put(ACTIVE_VERTICES,index,vertex);}}
-void finishBalance(int vertex,int64_t sum){
- int64_t supply=vertex<n()?capacityValue(CK,vertex):vertex==sink()?-read(TOTAL,0):0l;int64_t excess=add(supply,sum);write(EXCESS,vertex,excess);
- countPositive(vertex);
+void classifyLong(int vertex){int count=incidentCount(vertex);if(count>128){int slot=int(atomicAdd(words[at(STATE)+17],1u));put(LONG_VERTICES,slot,vertex);put(LONG_BLOCK_COUNTS,slot,(count+127)/128);}}
+void mapLongBlocks(int index){if(index>=get(STATE,17))return;
+ for(int block=get(LONG_BLOCK_OFFSETS,index);block<get(LONG_BLOCK_OFFSETS,index+1);block++)put(LONG_BLOCK_OWNER,block,index);}
+void seedGroup(int group){
+ int64_t incoming=read(GROUP_INCOMING,group),tail=clamp(incoming,0l,upper(8*n()+group));writeFlow(8*n()+group,tail);
+ atomicAdd(integers[at(EXCESS)/2+sink()],tail);
+ int64_t excess=incoming-tail;write(EXCESS,2*n()+group,excess);if(excess>0l)atomicAdd(words[at(STATE)+4],1u);
+ if(upper(8*n()+group)>0l){int index=int(atomicAdd(words[at(STATE)+19],1u));put(SINK_EDGES,index,8*n()+group);}
+ classifyLong(2*n()+group);
 }
-bool idle(int vertex){
- if(get(STATE,0)<0)return false;
- if(p.mode==0)return read(EXCESS,vertex)<=0l;
- return get(labelQueue(),vertex)==0||read(EXCESS,vertex)<0l||distance(vertex)==INFINITY;
-}
-void blockSum(int block,int lane){
- if(block>=get(BO,h(3)))return;int vertex=get(OWNER,block),index=get(OFFSET,vertex)+128*(block-get(BO,vertex))+lane;
- if(idle(vertex))return;
- reduction[lane]=index<get(OFFSET,vertex+1)?contribution(vertex,get(ENTRY,index)):(p.mode==3?int64_t(INFINITY):0l);reduce(lane);if(lane==0)write(PART,block,reduction[0]);
-}
-void notifyPredecessor(int vertex,int e){ivec2 ends=endpoints(e);bool forward=ends.y==vertex;
- if((forward?upper(e)-flow(e):flow(e)-lower(e))>0l){int peer=forward?ends.x:ends.y;
-  atomicOr(words[at(labelQueue()==LABEL_A?LABEL_B:LABEL_A)+peer],1u);}}
-void ownerSum(int vertex){
- if(get(STATE,0)>=0&&p.mode==0){
-  if(vertex>=get(STATE,10))return;vertex=get(ACTIVE_VERTICES,vertex);touch(vertex);
- }
- bool skip=idle(vertex);
- if(p.mode==3){put(LABEL_CHANGED,vertex,0);put(labelQueue(),vertex,0);
-  if(read(EXCESS,vertex)>0l&&distance(vertex)==INFINITY)atomicExchange(words[ca(CONTROL)],2u);}
- if(skip)return;
- int64_t prefix=p.mode==3?int64_t(INFINITY):0l;
- if(get(COUNT,vertex)<=128){for(int i=get(OFFSET,vertex);i<get(OFFSET,vertex+1);i++){
-   int e=get(ENTRY,i);int64_t value=contribution(vertex,e);if(p.mode<2)allocate(vertex,e,prefix,value);prefix=p.mode==3?min(prefix,value):add(prefix,value);
-   if(p.mode==3&&prefix<int64_t(distance(vertex)))return;
-  }}else for(int b=get(BO,vertex);b<get(BO,vertex+1);b++){write(PREFIX,b,prefix);prefix=p.mode==3?min(prefix,read(PART,b)):add(prefix,read(PART,b));}
- if(p.mode==2)finishBalance(vertex,prefix);
- if(p.mode==3){int next=prefix>=h(3)?INFINITY:int(prefix)+1;
-  if(next==INFINITY&&read(EXCESS,vertex)>0l)atomicExchange(words[ca(CONTROL)],2u);
-  int old=int(atomicMax(words[at(DISTANCE)+vertex],uint(next)));
-  if(next>old){put(LABEL_CHANGED,vertex,1);if(get(COUNT,vertex)<=128)
-   for(int i=get(OFFSET,vertex);i<get(OFFSET,vertex+1);i++)notifyPredecessor(vertex,get(ENTRY,i));}}
-}
-void blockAllocate(int block,int lane){
- if(block>=get(BO,h(3)))return;int vertex=get(OWNER,block),index=get(OFFSET,vertex)+128*(block-get(BO,vertex))+lane;
- if(p.mode==3){if(get(LABEL_CHANGED,vertex)!=0&&index<get(OFFSET,vertex+1))notifyPredecessor(vertex,get(ENTRY,index));return;}
- if(idle(vertex))return;
- int e=index<get(OFFSET,vertex+1)?get(ENTRY,index):-1;int64_t amount=e<0?0l:contribution(vertex,e);reduction[lane]=amount;barrier();
- for(int step=1;step<128;step<<=1){int64_t extra=lane>=step?reduction[lane-step]:0l;barrier();reduction[lane]=add(reduction[lane],extra);barrier();}
- if(e>=0)allocate(vertex,e,add(read(PREFIX,block),reduction[lane]-amount),amount);
-}
-void seedGroup(int group){writeFlow(8*n()+group,clamp(read(EXCESS,2*n()+group),0l,upper(8*n()+group)));if(group==0){put(STATE,4,0);put(STATE,8,INFINITY);}}
+void balanceSink(){if(read(EXCESS,sink())>0l)atomicAdd(words[at(STATE)+4],1u);classifyLong(sink());}
+int vertexColor(int vertex){return vertex<n()||(vertex>=2*n()&&vertex<sink())?0:1;}
 void dispatchSize(int slot,int size){int workgroups=(size+127)/128;
  put(DISPATCH,3*slot,min(workgroups,65535));put(DISPATCH,3*slot+1,max(1,(workgroups+65534)/65535));put(DISPATCH,3*slot+2,1);}
 void updateDispatch(){bool running=control(0)==0&&get(STATE,16)!=0;int state=get(STATE,0);putControl(2,state);
  dispatchSize(0,running&&state==0?h(3):0);dispatchSize(1,running&&state==1?h(4):0);
- dispatchSize(2,running&&state==2?h(4):0);dispatchSize(3,running&&state==2?h(3):0);
- dispatchSize(4,running&&state==2?128*get(BO,h(3)):0);dispatchSize(5,running?1:0);
- dispatchSize(6,running&&state==2?get(STATE,4):0);
+ dispatchSize(2,running&&state==2?h(3):0);dispatchSize(3,running&&state==2?get(STATE,17):0);
+ dispatchSize(4,running&&state==2?128*get(STATE,17):0);
+ dispatchSize(6,running&&state==2?128*get(LONG_BLOCK_OFFSETS,get(STATE,17)):0);
+ dispatchSize(5,running?1:0);
  dispatchSize(9,running&&state==3?n():0);dispatchSize(13,running&&state==3?7*n():0);}
 void start(){if(get(STATE,4)==0)putControl(0,1);else put(STATE,0,0);}
-void seedDistance(int vertex){if(get(STATE,0)!=0)return;put(CURSOR,vertex,0);put(LABEL_A,vertex,0);put(LABEL_B,vertex,0);put(DISTANCE,vertex,read(EXCESS,vertex)<0l?0:INFINITY);}
+void seedDistance(int vertex){if(get(STATE,0)!=0)return;put(LABEL_CHANGED,vertex,0);put(DISTANCE,vertex,read(EXCESS,vertex)<0l?0:INFINITY);}
 void beginBfs(){if(get(STATE,0)==0){put(STATE,0,1);put(STATE,1,0);put(STATE,2,0);put(STATE,5,0);}}
 void discover(int vertex,int value){if(atomicCompSwap(words[at(DISTANCE)+vertex],uint(INFINITY),uint(value))==uint(INFINITY)){atomicOr(words[at(STATE)+2],1u);if(read(EXCESS,vertex)>0l)atomicOr(words[at(STATE)+5],1u);}}
 void bfsEdge(int e){if(get(STATE,0)!=1||upper(e)==0l)return;ivec2 v=endpoints(e);int wave=get(STATE,1);
@@ -159,22 +124,111 @@ void bfsEdge(int e){if(get(STATE,0)!=1||upper(e)==0l)return;ivec2 v=endpoints(e)
 }
 void finishBfs(){if(get(STATE,0)!=1)return;put(STATE,6,get(STATE,6)+1);
  if(get(STATE,2)!=0){put(STATE,1,get(STATE,1)+1);put(STATE,2,0);}else put(STATE,0,2);}
-void clearProposal(int e){if(get(STATE,0)!=2)return;
- put(STATE,10,get(STATE,4));put(STATE,3,0);put(STATE,4,0);put(STATE,5,0);put(STATE,8,INFINITY);put(STATE,9,0);put(STATE,11,0);put(STATE,12,0);}
-// Freeze each receiver's quota before any parallel edge changes its balance.
-void prepareReceiver(int index){if(index>=get(STATE,11))return;int vertex=get(RECEIVERS,index);
- int64_t old=read(EXCESS,vertex);write(REMAINING,vertex,old<0l?-old:-1l);
+void beginDischarge(int e){if(get(STATE,0)!=2)return;put(STATE,18,0);}
+int64_t residualFrom(int vertex,int edge){ivec2 v=endpoints(edge);return v.x==vertex?upper(edge)-flow(edge):flow(edge)-lower(edge);}
+int peerOf(int vertex,int edge){ivec2 v=endpoints(edge);return v.x==vertex?v.y:v.x;}
+int64_t pushDirect(int vertex,int edge,int64_t amount){
+ if(amount<=0l)return 0l;ivec2 v=endpoints(edge);bool forward=v.x==vertex;int peer=forward?v.y:v.x;
+ int address=at(EXCESS)/2+peer;int64_t old;
+ if(distance(peer)==0){
+  old=atomicAdd(integers[address],0l);
+  for(;;){
+   if(old>=0l){atomicOr(words[at(LABEL_CHANGED)+peer],1u);return 0l;}
+   int64_t grant=min(amount,-old),prior=atomicCompSwap(integers[address],old,old+grant);
+   if(prior==old){amount=grant;break;}old=prior;
+  }
+  if(old+amount==0l)atomicOr(words[at(LABEL_CHANGED)+peer],1u);
+ }else old=atomicAdd(integers[address],amount);
+ writeFlow(edge,flow(edge)+(forward?amount:-amount));
+ if(old+amount>0l)atomicOr(words[at(STATE)+18],1u);
+ return amount;
 }
-void apply(int index){if(index>=get(STATE,9))return;int e=get(ACTIVE_EDGES,index);ivec2 ends=endpoints(e);
- int64_t proposed=read(PROPOSAL,e),amount=abs(proposed);int receiver=proposed>0l?ends.y:ends.x;
- int address=at(REMAINING)/2+receiver;int64_t available=atomicAdd(integers[address],0l),grant=amount;
- if(available>=0l){for(;;){grant=min(amount,available);if(grant==0l)break;
-   int64_t prior=atomicCompSwap(integers[address],available,available-grant);if(prior==available)break;available=prior;
- }}
- if(grant==0l)return;int64_t signedGrant=proposed>0l?grant:-grant;writeFlow(e,flow(e)+signedGrant);
- atomicAdd(integers[at(EXCESS)/2+ends.x],-signedGrant);atomicAdd(integers[at(EXCESS)/2+ends.y],signedGrant);
+void notifyHeight(int vertex,int edge){ivec2 v=endpoints(edge);bool incoming=v.y==vertex;
+ if((incoming?upper(edge)-flow(edge):flow(edge)-lower(edge))>0l){int peer=incoming?v.x:v.y;atomicOr(words[at(LABEL_CHANGED)+peer],1u);}}
+void finishDischarge(int vertex,int64_t remaining,int nearest){
+ write(EXCESS,vertex,remaining);
+ if(remaining<=0l)return;
+ atomicOr(words[at(STATE)+18],1u);
+ if(nearest>=h(3)-1){put(DISTANCE,vertex,INFINITY);atomicOr(words[at(STATE)+18],2u);return;}
+ put(DISTANCE,vertex,max(distance(vertex),nearest+1));
 }
-void updatePositive(int index){if(index<get(STATE,12))countPositive(get(CHANGED_VERTICES,index));}
+void dischargeShort(int vertex){
+ if(vertexColor(vertex)!=p.mode||incidentCount(vertex)>128)return;
+ bool dirty=get(LABEL_CHANGED,vertex)!=0;if(dirty)put(LABEL_CHANGED,vertex,0);
+ int64_t remaining=read(EXCESS,vertex);if(remaining<0l||(remaining==0l&&!dirty))return;
+ int height=distance(vertex);
+ if(height==INFINITY&&remaining>0l){finishDischarge(vertex,remaining,INFINITY);return;}
+ while(true){
+  int nearest=INFINITY;
+  for(int i=0;i<incidentCount(vertex);i++){
+   int edge=incidentEdge(vertex,i);if(edge<0)continue;int peer=peerOf(vertex,edge);int64_t residual=residualFrom(vertex,edge);
+   if(remaining>0l&&residual>0l&&height==distance(peer)+1){int64_t amount=pushDirect(vertex,edge,min(remaining,residual));remaining-=amount;residual-=amount;}
+   if(residual>0l)nearest=min(nearest,distance(peer));
+  }
+  int next=nearest>=h(3)-1?INFINITY:max(height,nearest+1);
+  if(remaining==0l&&!dirty)break;
+  if(next>height){height=next;put(DISTANCE,vertex,height);
+   for(int i=0;i<incidentCount(vertex);i++){int edge=incidentEdge(vertex,i);if(edge>=0)notifyHeight(vertex,edge);}}
+  else if(remaining>0l){write(EXCESS,vertex,remaining);atomicOr(words[at(STATE)+18],1u);return;}
+  if(remaining==0l)break;
+  if(height==INFINITY){finishDischarge(vertex,remaining,nearest);return;}
+  dirty=false;
+ }
+ write(EXCESS,vertex,0l);
+}
+int64_t claimLong(int vertex,int64_t wanted){
+ int address=at(EXCESS)/2+vertex;int64_t available=atomicAdd(integers[address],0l);
+ while(available>0l){int64_t amount=min(wanted,available);if(amount<=0l)return 0l;
+  int64_t prior=atomicCompSwap(integers[address],available,available-amount);if(prior==available)return amount;available=prior;
+ }return 0l;
+}
+void pushLong(int vertex,int edge){
+ if(edge<0||distance(vertex)!=distance(peerOf(vertex,edge))+1)return;
+ int64_t amount=claimLong(vertex,residualFrom(vertex,edge)),grant=pushDirect(vertex,edge,amount);
+ if(amount>grant)atomicAdd(integers[at(EXCESS)/2+vertex],amount-grant);
+}
+void prepareLong(int index){
+ if(index>=get(STATE,17))return;int vertex=get(LONG_VERTICES,index);put(LONG_WORK,index,0);
+ if(vertexColor(vertex)!=p.mode)return;
+ bool dirty=get(LABEL_CHANGED,vertex)!=0;if(dirty)put(LABEL_CHANGED,vertex,0);
+ int64_t balance=read(EXCESS,vertex);if(balance<0l||(balance==0l&&!dirty))return;
+ if(balance>0l&&distance(vertex)==INFINITY){finishDischarge(vertex,balance,INFINITY);return;}
+ // Settle the direct chamber tail before launching its member blocks.
+ if(balance>0l&&vertex>=2*n()&&vertex<sink())pushLong(vertex,8*n()+vertex-2*n());
+ if(read(EXCESS,vertex)==0l&&!dirty)return;
+ put(LONG_WORK,index,1|(dirty?2:0));
+}
+void pushLongBlock(int block,int lane){
+ if(block>=get(LONG_BLOCK_OFFSETS,get(STATE,17)))return;
+ int index=get(LONG_BLOCK_OWNER,block),work=get(LONG_WORK,index);
+ if((work&1)==0)return;
+ int vertex=get(LONG_VERTICES,index),ordinal=128*(block-get(LONG_BLOCK_OFFSETS,index))+lane;
+ int edge=ordinal<incidentCount(vertex)?incidentEdge(vertex,ordinal):-1;
+ if(edge>=0)pushLong(vertex,edge);
+ // Other blocks never write this edge; its post-push residual is ready locally.
+ int nearest=edge>=0&&residualFrom(vertex,edge)>0l?distance(peerOf(vertex,edge)):INFINITY;
+ reduction[lane]=int64_t(nearest);barrier();
+ for(int step=64;step>0;step>>=1){if(lane<step)reduction[lane]=min(reduction[lane],reduction[lane+step]);barrier();}
+ if(lane==0)put(LONG_PARTIAL,block,int(reduction[0]));
+}
+void finishLong(int index,int lane){
+ if(index>=get(STATE,17))return;int work=get(LONG_WORK,index);if((work&1)==0)return;
+ int vertex=get(LONG_VERTICES,index);int64_t remaining=read(EXCESS,vertex);
+ if(remaining==0l&&(work&2)==0)return;
+ int nearest=INFINITY;
+ for(int block=get(LONG_BLOCK_OFFSETS,index)+lane;block<get(LONG_BLOCK_OFFSETS,index+1);block+=128)nearest=min(nearest,get(LONG_PARTIAL,block));
+ reduction[lane]=int64_t(nearest);barrier();
+ for(int step=64;step>0;step>>=1){if(lane<step)reduction[lane]=min(reduction[lane],reduction[lane+step]);barrier();}
+ if(lane!=0)return;nearest=int(reduction[0]);int height=distance(vertex),next=nearest>=h(3)-1?INFINITY:max(height,nearest+1);
+ if(next>height){put(DISTANCE,vertex,next);put(LONG_WORK,index,work|4);}
+ if(remaining>0l){atomicOr(words[at(STATE)+18],1u);if(next==INFINITY)atomicOr(words[at(STATE)+18],2u);}
+}
+void notifyLongBlock(int block,int lane){
+ if(block>=get(LONG_BLOCK_OFFSETS,get(STATE,17)))return;int index=get(LONG_BLOCK_OWNER,block);
+ if((get(LONG_WORK,index)&4)==0)return;
+ int vertex=get(LONG_VERTICES,index),ordinal=128*(block-get(LONG_BLOCK_OFFSETS,index))+lane;
+ if(ordinal<incidentCount(vertex)){int edge=incidentEdge(vertex,ordinal);if(edge>=0)notifyHeight(vertex,edge);}
+}
 // Returning a preferred route to its donor keeps all integer supply quotas exact.
 // A feasible stationary allocation permits one local withdrawal before residual balancing.
 void checkStationaryGroup(int group){if(read(GROUP_BASE,group)>upper(8*n()+group))atomicOr(words[at(STATE)+13],1u);}
@@ -211,8 +265,12 @@ void finishRound(){
   if(get(STATE,15)==0)putControl(0,1);
   else put(STATE,0,6);
  }
- if(get(STATE,0)==2)put(STATE,7,get(STATE,7)+1);
- if(get(STATE,0)==2&&get(STATE,4)==0){putControl(0,1);return;}
+ if(p.argument==2&&get(STATE,0)==2)put(STATE,7,get(STATE,7)+1);
+ if(p.argument==2&&get(STATE,0)==2){
+  // All remaining positive balances have yielded or found no residual path.
+  if(get(STATE,18)==0){putControl(0,1);return;}
+  if((get(STATE,18)&2)!=0){putControl(0,2);return;}
+ }
  if(round>=control(5)&&control(0)==0)putControl(0,3);
 }
 void finish(int e){
@@ -225,19 +283,17 @@ void main(){
  if(p.stage==0){if(id<p.count)initialize(id);return;}if(p.stage==21){if(id<p.count)finish(id);return;}if(control(0)!=0)return;
  if(p.stage==32){if(id==0){int state=get(STATE,0);put(STATE,16,(p.argument<=1?state<=1:state==p.argument)?1:0);updateDispatch();}return;}
  if(p.stage>=11&&p.stage!=24&&get(STATE,16)==0)return;
- if(p.stage>=16&&p.stage<=18){if(get(STATE,0)>=0&&get(STATE,0)!=2)return;
-  if(p.stage==16){blockSum(block,lane);return;}if(p.stage==18){blockAllocate(block,lane);return;}}
+ if(p.stage==37){pushLongBlock(block,lane);return;}
+ if(p.stage==38){finishLong(block,lane);return;}
+ if(p.stage==39){notifyLongBlock(block,lane);return;}
  if(p.stage==7){if(block<h(6))totalBlock(block,lane);return;}if(id>=p.count)return;
- if(p.stage==1)seedDonor(id);else if(p.stage==2)seedReceiver(id);else if(p.stage==3)countEdge(id);else if(p.stage==4)scatterEdge(id);
- else if(p.stage==5)countBlocks(id);else if(p.stage==6)mapBlocks(id);else if(p.stage==8)total();else if(p.stage==9)seedGroup(id);
+ if(p.stage==1)seedDonor(id);else if(p.stage==3)balanceReceiver(id);else if(p.stage==4)scatterMember(id);else if(p.stage==5)mapLongBlocks(id);
+ else if(p.stage==6)balanceSink();else if(p.stage==8)total();else if(p.stage==9)seedGroup(id);
  else if(p.stage==10)start();else if(p.stage==11)seedDistance(id);else if(p.stage==12)beginBfs();else if(p.stage==13)bfsEdge(id);
- else if(p.stage==14)finishBfs();else if(p.stage==15)clearProposal(id);else if(p.stage==17)ownerSum(id);
+ else if(p.stage==14)finishBfs();else if(p.stage==15)beginDischarge(id);
  else if(p.stage==24)checkStationaryGroup(id);else if(p.stage==25)startCorrection();
  else if(p.stage==26)clearRetractions(id);else if(p.stage==27)actualIncoming(id);
- else if(p.stage==28)requestRetractions(id);else if(p.stage==29)applyRetractions(id);else if(p.stage==30)put(STATE,0,-1);
- else if(p.stage==33)prepareReceiver(id);else if(p.stage==34)updatePositive(id);
- else if(p.stage==19)apply(id);else if(p.stage==20)finishRound();else if(p.stage==23){bool moving=get(STATE,0)==2;dispatchSize(2,moving?get(STATE,9):0);
- dispatchSize(7,moving?get(STATE,11):0);dispatchSize(8,moving?get(STATE,12):0);}
+ else if(p.stage==28)requestRetractions(id);else if(p.stage==29)applyRetractions(id);else if(p.stage==30)prepareGroups(id);
+ else if(p.stage==35)dischargeShort(id);else if(p.stage==36)prepareLong(id);else if(p.stage==20)finishRound();
  if(p.stage==25||p.stage==10||p.stage==12||p.stage==14||p.stage==20)updateDispatch();
 }
-

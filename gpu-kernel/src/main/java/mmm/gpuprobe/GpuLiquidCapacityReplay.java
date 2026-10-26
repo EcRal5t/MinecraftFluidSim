@@ -41,6 +41,14 @@ public final class GpuLiquidCapacityReplay {
                     if(result.error()!=0||status!=VulkanLiquidCapacity.FEASIBLE){
                         var debug=ByteBuffer.allocate(36).order(ByteOrder.LITTLE_ENDIAN);candidate.read(solve.column(VulkanLiquidCapacity.Field.STATE).offset(),debug);
                         System.out.println("solver_state="+java.util.Arrays.toString(java.util.stream.IntStream.range(0,9).map(i->debug.getInt(4*i)).toArray()));
+                        int vertices=2*layout.cells()+layout.groups()+1;
+                        var balances=ByteBuffer.allocate(8*vertices).order(ByteOrder.LITTLE_ENDIAN);
+                        var labels=ByteBuffer.allocate(4*vertices).order(ByteOrder.LITTLE_ENDIAN);
+                        candidate.read(solve.column(VulkanLiquidCapacity.Field.EXCESS).offset(),balances);
+                        candidate.read(solve.column(VulkanLiquidCapacity.Field.DISTANCE).offset(),labels);
+                        long positive=0;int count=0,maximumHeight=0;int[] kinds=new int[4];
+                        for(int v=0;v<vertices;v++)if(balances.getLong(8*v)>0){positive=Math.addExact(positive,balances.getLong(8*v));count++;maximumHeight=Math.max(maximumHeight,labels.getInt(4*v));kinds[v<layout.cells()?0:v<2*layout.cells()?1:v==vertices-1?3:2]++;}
+                        System.out.printf("positive_vertices=%d positive_quanta=%d maximum_height=%d donor_receiver_group_sink=%s%n",count,positive,maximumHeight,java.util.Arrays.toString(kinds));
                     }
                     if(result.error()!=0||status!=VulkanLiquidCapacity.FEASIBLE)throw new IllegalStateException("Capacity replay failed status="+status+", rounds="+rounds+", error="+result.error());
                     var solveState=ByteBuffer.allocate(36).order(ByteOrder.LITTLE_ENDIAN);
@@ -49,7 +57,7 @@ public final class GpuLiquidCapacityReplay {
                     int error=candidate.finishBatch((command,input,output,errors,staging,stack)->solver.recordFinish(command,solve));
                     if(error!=0)throw new IllegalStateException("Capacity replay finish error="+error);candidate.commit();
                     var after=storage.metrics();System.out.printf("capture=%s cells=%d rounds=%d wall_ms=%.3f gpu_ms=%.3f device_MiB=%.1f%n",file,layout.cells(),rounds,(System.nanoTime()-begin)*1e-6,(after.gpuNanos()-before.gpuNanos())*1e-6,after.deviceBytes()/1048576.0);
-                }
+                } finally { solver.printStageTimings(); }
                 var accepted=ByteBuffer.allocate(Math.toIntExact(layout.column(VulkanLiquidCapacityLayout.Field.ACCEPTED).bytes())).order(ByteOrder.LITTLE_ENDIAN);
                 try(var capture=storage.capture()){storage.read(capture,layout.column(VulkanLiquidCapacityLayout.Field.ACCEPTED).offset(),accepted);}
                 long moved=verify(layout,initial,accepted,sx,sy,sz);
