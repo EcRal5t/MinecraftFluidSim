@@ -25,6 +25,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
     private final long maximumRange;
     private Workspace workspace;
     private VulkanPressureKernel.Progress pressureProgress;
+    private int previousPressureIterations=16;
     private int capacityIterationCount;
     private boolean currentGasThermal;
     private mmm.units.SignedDyadic importRoundoff=mmm.units.SignedDyadic.ZERO;
@@ -611,6 +612,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
         int execute(Workspace source,boolean sourceCurrentGas,boolean sourceGeometryValid,VulkanRegionStorage.Candidate candidate,VulkanLiquidProjection.Parameters parameters,
                     boolean zeroInitialPressure,int capacityRounds,long step,boolean accumulateLedger) {
             boolean migrating=source!=this;
+            int firstPressureBatch=parameters==null?0:Math.min(parameters.iterations(),Math.max(16,((previousPressureIterations+15)/16)*16));
             // A completed successor already contains the next source PLIC and chamber CSR.
             // Inventory-writing stages and moving solids rebuild these fields below.
             boolean reuseGeometry=sourceGeometryValid&&(transport==null||transport.dynamics==null)
@@ -692,7 +694,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
                     coarse.add(new FlipKernelBindings.BufferRange(output,multigridColumn.offset(),multigridColumn.bindingBytes()));
                     multigrid.rebindRanges(coarse);
                     Runnable initialize=()->pressure.recordInitialize(command,pressureRows,pressureRows,parameters.iterations(),multigrid,hierarchy,baseOperator);
-                    Runnable firstBatch=()->recordPressureIterations(command,output,errors,parameters.iterations(),Math.min(16,parameters.iterations()),baseOperator);
+                    Runnable firstBatch=()->recordPressureIterations(command,output,errors,parameters.iterations(),firstPressureBatch,baseOperator);
                     if(kernels==null){initialize.run();firstBatch.run();}else{
                         kernels.timed(command,"common-pressure-initialize",initialize);
                         kernels.timed(command,"common-pressure-first-batch",firstBatch);
@@ -734,8 +736,8 @@ final class VulkanLiquidRegion implements AutoCloseable {
                 capacityStage="common pressure";
                 boolean pressureDiagnostics=Boolean.getBoolean("mmm.gpuMechanicalPressureDiagnostics");
                 long controlOffset=pressureColumns.get(PressureField.CONTROL).offset();
-                long runOffset = controlOffset+(pressureDiagnostics?0:24);
-                int feedbackBytes=pressureDiagnostics?128:8,runFeedbackOffset=pressureDiagnostics?24:0;
+                long runOffset = controlOffset;
+                int feedbackBytes=pressureDiagnostics?128:32,runFeedbackOffset=24;
                 if(graphPressure){
                     long graphFeedback=graphSource.feedback().offset();
                     var counted=gas==null||reuseGeometry?candidate.beginBatch(uploadedBytes,prepare,graphFeedback,8):candidate.continueBatch(prepare,graphFeedback,8);
@@ -747,10 +749,10 @@ final class VulkanLiquidRegion implements AutoCloseable {
                 VulkanRegionStorage.Candidate.BatchResult result;
                 if(graphPressure)result=candidate.continueBatch((command,input,output,errors,staging,stack)->{
                     kernels.timed(command,"common-pressure-initialize",()->pressure.recordInitialize(command,pressureRows,pressureRows,parameters.iterations(),multigrid,hierarchy,gasOperator));
-                    kernels.timed(command,"common-pressure-first-batch",()->recordPressureIterations(command,output,errors,parameters.iterations(),Math.min(16,parameters.iterations()),gasOperator));
+                    kernels.timed(command,"common-pressure-first-batch",()->recordPressureIterations(command,output,errors,parameters.iterations(),firstPressureBatch,gasOperator));
                 },runOffset,feedbackBytes);
                 else result=gas==null||reuseGeometry?candidate.beginBatch(uploadedBytes,prepare,runOffset,feedbackBytes):candidate.continueBatch(prepare,runOffset,feedbackBytes);
-                int scheduled = Math.min(16, parameters.iterations());
+                int scheduled = firstPressureBatch;
                 while (result.error() == 0 && result.feedback().getDouble(runFeedbackOffset) != 0.0 && scheduled < parameters.iterations()) {
                     int batch = Math.min(16, parameters.iterations() - scheduled);
                     result = candidate.continueBatch((command, input, output, errors, staging, stack) ->
@@ -758,6 +760,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
                                 if(kernels!=null)kernels.timed(command,"common-pressure-next-batch",continuation);else continuation.run();}, runOffset, feedbackBytes);
                     scheduled += batch;
                 }
+                if(result.error()==0&&result.feedback().getDouble(runFeedbackOffset)==0.0)previousPressureIterations=(int)result.feedback().getDouble(0);
                 if(pressureDiagnostics)pressureProgress=VulkanPressureKernel.Progress.read(result.feedback());
                 error = result.error();traceStage("pressure",stageMark);
                 if(error==0) {
@@ -852,9 +855,15 @@ final class VulkanLiquidRegion implements AutoCloseable {
         }
         void recordPressureIterations(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,int maximum,int count,VulkanPressureKernel.PressureOperator gasOperator) {
             int rows=pressureColumns.get(PressureField.ROWS).count();
-            templates.record(command,new VulkanCommandTemplates.Key(0,output,errors,count,maximum,gasOperator==null?null:gasOperator.preconditionerKey()),
-                    secondary->pressure.recordIterations(secondary,rows,rows,maximum,multigrid,hierarchy,count,gasOperator));
+            // Reuse the same compiled command blocks when batching predicted work.
+            // Converged stages retain the device's zero-work dispatches.
+            for(int remaining=count;remaining>0;){
+                int block=Math.min(16,remaining);remaining-=block;
+                templates.record(command,new VulkanCommandTemplates.Key(0,output,errors,block,maximum,gasOperator==null?null:gasOperator.preconditionerKey()),
+                        secondary->pressure.recordIterations(secondary,rows,rows,maximum,multigrid,hierarchy,block,gasOperator));
+            }
         }
+
         void recordCapacityIterations(org.lwjgl.vulkan.VkCommandBuffer command,GpuBuffer output,GpuBuffer errors,int count,int phase) {
             templates.record(command,new VulkanCommandTemplates.Key(1,output,errors,count,phase),
                     secondary->{kernels.capacityKernel.recordIterations(secondary,transport.capacitySolve,count,phase);});

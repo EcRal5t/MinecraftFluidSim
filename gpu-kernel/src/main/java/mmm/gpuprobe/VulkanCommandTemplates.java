@@ -33,7 +33,9 @@ final class VulkanCommandTemplates implements AutoCloseable {
                 var out=stack.mallocPointer(1);VulkanDeviceContext.check(vkAllocateCommandBuffers(context.device(),info,out),"vkAllocateCommandBuffers(template)");
                 command=new VkCommandBuffer(out.get(0),context.device());
                 var inheritance=VkCommandBufferInheritanceInfo.calloc(stack).sType$Default();
-                var begin=VkCommandBufferBeginInfo.calloc(stack).sType$Default().pInheritanceInfo(inheritance);
+                // A predicted batch may execute the same immutable block repeatedly.
+                var begin=VkCommandBufferBeginInfo.calloc(stack).sType$Default()
+                        .flags(VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT).pInheritanceInfo(inheritance);
                 VulkanDeviceContext.check(vkBeginCommandBuffer(command,begin),"vkBeginCommandBuffer(template)");
                 recorder.accept(command);VulkanDeviceContext.check(vkEndCommandBuffer(command),"vkEndCommandBuffer(template)");
                 commands.put(key,command);
