@@ -913,3 +913,5 @@ phase3恢复32轮设备合批后的 `build/gpu-resident-cut64-batched-retraction
 后续无分项运行 `build/gpu-resident-cut64-bounded-material.log` 完成15步、中位61.197 ms，随后因诊断导出使用相对路径而失败；该日志不作为完整退出成功证据。新增 `-PgpuMechanicalCapacityDump=<绝对路径>` 保存采样期间轮数最多的实际容量输入，复用原短重放格式；开启时汇总指标含诊断回读，性能资格使用关闭导出的运行。
 
 `build/gpu-resident-cut64-capacity-capture.log` 的诊断运行连续完成15步，保存 `build/gpu-liquid-capacity-upwind-current.bin`；该次最多15轮，未重现前一次151轮长尾。关闭分项与不同调度下存在轨迹差异，当前文件只能称为当前真实输入，不能称为已捕获151轮状态。
+
+2026-10-27：普通共同压力采用精确独立低度气体消元，核心保留原压力下限和200轮预算；最终恢复完整物理系统检查残差／KKT。候选头部复制已改用布局实际长度，消除新增字段地址漏复制。`build/gpu-resident-cut64-schur-core-fixed-profile.log` 原64³连续15步完成：中位58.443 ms、GPU平均50.576 ms；无分项的 `build/gpu-resident-cut64-schur-core.log` 中位57.155 ms、最大77.661 ms、GPU平均51.372 ms，设备4871.4 MiB，末步有效行74,953→20,743、压力60轮、容量15轮。原图最终RMS3.108e-6，原误差与KKT条件通过。当前两跳乘积仍遍历原关联面，下一步按建表加迭代总成本评价核心连接合并；50 ms及完整GPU后端仍未完成。

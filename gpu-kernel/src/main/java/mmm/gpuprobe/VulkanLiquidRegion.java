@@ -220,6 +220,13 @@ final class VulkanLiquidRegion implements AutoCloseable {
     }
     synchronized void initializeInputs(mmm.fluid.EntityBodyState bodies){currentInputs=new RequestInputs(bodies,false,0);}
     synchronized Capture captureState(){return new Capture(storage.capture(),workspace,currentGasThermal,currentGeometryValid,currentInputs);}
+    int[] pressureReductionCounts(){
+        try(var source=captureState()){
+            if(source.layout.transport.gas==null)return new int[]{0,0};
+            var data=source.read(4L*(source.layout.transport.gas.operator.headerWordOffset()+28),8);
+            return new int[]{data.getInt(0),data.getInt(4)};
+        }
+    }
     void dumpCapacityInput(String path){
         try(var source=captureState()){
             var capacity=source.layout.transport.capacity;
@@ -856,7 +863,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
                 boolean aperture=capacityStage.startsWith("gas aperture");long offset=aperture?transport.aperture.flow.column(VulkanGasFlow.Field.CONTROL).offset():pressureColumns.get(PressureField.CONTROL).offset();
                 var diagnostics=ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN);candidate.read(offset,diagnostics);
                 var failure=new IllegalStateException("Resident "+(aperture?"gas aperture":"liquid")+" pressure failed: iterations="+(int)diagnostics.getDouble(0)+", residualRms="+diagnostics.getDouble(8)
-                        +", target="+(aperture?1e-8:parameters.tolerance())+", status="+error);
+                        +", target="+(aperture?1e-8:parameters.tolerance())+", status="+error+", inner="+pressureProgress);
                 String dump=System.getProperty("mmm.gpuApertureFailureDump", "");
                 if(aperture&&!dump.isBlank())try{
                     dumpGasFlowGraph(java.nio.file.Path.of(dump),parameters.duration(),transport.aperture.flow,
@@ -1225,7 +1232,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
                     bodies.header(),energy.header(),roundoff.header(),heat.header(),mechanicalPosting.header(),sourcePosting.header(),sinkPosting.header(),inventoryPosting.header()));
             result.addAll(forceColumns());
             if(gas!=null) {
-                result.add(gas.geometry.header());result.add(new VulkanLiquidStateLayout.Column(4L*gas.operator.headerWordOffset(),96,4));
+                result.add(gas.geometry.header());result.add(gas.operator.header());
                 result.add(gas.operator.column(VulkanGasPressure.Field.CELL_PHYSICAL_PRESSURE));addGasTables(result,gas.thermo);
             }
             if(successor!=null) {

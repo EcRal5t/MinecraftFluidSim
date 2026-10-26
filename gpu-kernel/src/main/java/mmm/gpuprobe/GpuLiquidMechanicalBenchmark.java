@@ -96,6 +96,7 @@ public final class GpuLiquidMechanicalBenchmark {
             System.out.println("final inventory_counts="+Arrays.toString(region.inventoryCounts())+" capacity_status_rounds="+Arrays.toString(region.capacityDiagnostics())
                     +" pressure_iterations_rms_status="+Arrays.toString(region.pressureDiagnostics()));
             if(gas)System.out.println("final gas_counts="+Arrays.toString(region.gasInventoryCounts())+" old_future_gas_nodes_groups="+Arrays.toString(region.gasTopologyDiagnostics())+" aperture_pairs_iterations_rms_status_capture_escape="+Arrays.toString(region.gasFlowDiagnostics()));
+            if(gas)System.out.println("final common_pressure_original_core_rows="+Arrays.toString(region.pressureReductionCounts()));
             String graphDump=System.getProperty("mmm.gpuMechanicalPressureDump","");
             if(gas&&!graphDump.isBlank())region.dumpGasFlowGraph(java.nio.file.Path.of(graphDump),parameters.duration());
             String commonDump=System.getProperty("mmm.gpuMechanicalCommonPressureDump","");

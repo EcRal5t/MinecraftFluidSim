@@ -5,7 +5,8 @@ layout(binding=0,std430) buffer Arena { uint words[]; };
 layout(binding=1,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header; int stage; int count; int argument; float cellSize; float duration; float gravity; float tolerance; } p;
 const int SOURCE_K=0,PRE_K=1,POST_K=2,REFERENCE=3,STORAGE=4,DIAGONAL=5,MODE=6,CELL_P=7,NODE_P=8,NODE_DV=9,
- FACE_ROWS=10,FC=11,FO=12,CURSOR=13,NODE_FACES=14,BC=15,BO=16,BN=17,PARTS=18,DATUM=19,DISPATCH=21,LARGE_NODES=22,PRODUCT_PEERS=23,PRODUCT_WEIGHTS=24,SOLVE_ROWS=25,SHORT_NODES=26;
+ FACE_ROWS=10,FC=11,FO=12,CURSOR=13,NODE_FACES=14,BC=15,BO=16,BN=17,PARTS=18,DATUM=19,DISPATCH=21,LARGE_NODES=22,PRODUCT_PEERS=23,PRODUCT_WEIGHTS=24,SOLVE_ROWS=25,SHORT_NODES=26,SCHUR_CANDIDATE=27,SCHUR_ELIMINATED=28,SCHUR_PEER_A=29,SCHUR_PEER_B=30,
+ SCHUR_WEIGHT_A=31,SCHUR_WEIGHT_B=32,SOURCE_RHS=33,SCHUR_DIAGONAL=34;
 shared double part[128],otherPart[128],loadPart[128];
 shared int nodePart[128];
 int h(int i){return int(words[p.header+i]);}
@@ -68,7 +69,7 @@ void initialize(int row){
  if(row>=n()){int entry=7*n()+row-n();words[h(16)+row]=uint(entry);words[h(17)+entry]=uint(row);writeNumber(h(18)+2*entry,1.0);}
  if(row==size()-1)words[h(16)+size()]=uint(7*n()+size()-n());
  if(row==0){writeNumber(h(23)+6*size(),double(p.tolerance));writeNumber(p.header+58,double(p.cellSize));
-  writeNumber(p.header+60,double(p.duration));writeNumber(p.header+62,double(p.gravity));dispatchCount(0,clamp(int(words[h(9)]),0,g()));dispatchCount(3,0);dispatchCount(6,0);dispatchCount(30,0);words[p.header+14]=0u;words[p.header+15]=0u;words[p.header+25]=0u;}
+  writeNumber(p.header+60,double(p.duration));writeNumber(p.header+62,double(p.gravity));dispatchCount(0,clamp(int(words[h(9)]),0,g()));dispatchCount(3,0);dispatchCount(6,0);dispatchCount(30,0);words[p.header+14]=0u;words[p.header+15]=0u;words[p.header+25]=0u;words[p.header+27]=0u;}
 }
 void appendSolveRow(int row){uint slot=atomicAdd(words[p.header+15],1u);put(SOLVE_ROWS,int(slot),row);}
 void datum(int lane){
@@ -119,26 +120,94 @@ void liquidRow(int row){
  if(enabledRow)appendSolveRow(row);
  if(row==0)words[h(16)+n()]=uint(7*n());
 }
-void countBlocks(int node){int count=get(FC,node);put(BC,node,count>128?(count+127)/128:0);
+void countBlocks(int node){if(h(27)!=0&&get(SCHUR_ELIMINATED,node)!=0){put(BC,node,0);return;}int count=get(FC,node);put(BC,node,count>128?(count+127)/128:0);
  if(count>128){int slot=int(atomicAdd(words[p.header+14],1u));put(LARGE_NODES,slot,node);}
  else if(node<int(words[h(9)])&&read(DIAGONAL,node)>0.0){int slot=int(atomicAdd(words[p.header+25],1u));put(SHORT_NODES,slot,node);}}
 void mapBlocks(int node){if(node==0){dispatchCount(3,get(BO,g()));dispatchCount(6,h(14));dispatchCount(30,(h(25)+127)/128);}for(int block=get(BO,node);block<get(BO,node+1);block++)put(BN,block,node);}
+// Only certified rows enter the independent elimination set; liquid peers remain explicit.
+void schurCandidate(int node){
+ put(SCHUR_CANDIDATE,node,0);put(SCHUR_ELIMINATED,node,0);
+ int row=n()+node;write(SOURCE_RHS,node,number(h(23)+2*row));
+ if(node>=int(words[h(9)])||get(MODE,node)==0||!(read(DIAGONAL,node)>0.0))return;
+ int a=-1,b=-1;double wa=0.0,wb=0.0;
+ for(int at=get(FO,node);at<get(FO,node+1);at++){
+  int peer=get(PRODUCT_PEERS,at);double w=read(PRODUCT_WEIGHTS,at);if(w==0.0||peer<0)continue;
+  if(!(finite(w)&&w>0.0)||peer<n()||words[h(22)+peer]==0u)return;
+  if(peer==a)wa+=w;else if(peer==b)wb+=w;else if(a<0){a=peer;wa=w;}else if(b<0){b=peer;wb=w;}else return;
+ }
+ double margin=fma(-read(DIAGONAL,node),number(h(23)+2*(size()+row)),read(SOURCE_RHS,node));
+ if(a>=0)margin=fma(wa,number(h(23)+2*(size()+a)),margin);
+ if(b>=0)margin=fma(wb,number(h(23)+2*(size()+b)),margin);
+ if(!finite(margin)||margin<0.0)return;
+ put(SCHUR_PEER_A,node,a);put(SCHUR_PEER_B,node,b);write(SCHUR_WEIGHT_A,node,wa);write(SCHUR_WEIGHT_B,node,wb);
+ put(SCHUR_CANDIDATE,node,1);
+}
+void schurSelect(int node){
+ if(get(SCHUR_CANDIDATE,node)==0)return;
+ int a=get(SCHUR_PEER_A,node),b=get(SCHUR_PEER_B,node),row=n()+node;
+ if(a>=n()&&a<row&&get(SCHUR_CANDIDATE,a-n())!=0)return;
+ if(b>=n()&&b<row&&get(SCHUR_CANDIDATE,b-n())!=0)return;
+ put(SCHUR_ELIMINATED,node,1);
+}
+void schurAssemble(int node,int lane){
+ if(node>=int(words[h(9)])||get(MODE,node)==0||get(SCHUR_ELIMINATED,node)!=0)return;
+ int row=n()+node;double diagonalChange=0.0,rhsChange=0.0;
+ for(int at=get(FO,node)+lane;at<get(FO,node+1);at+=128){
+  int peer=get(PRODUCT_PEERS,at);if(peer<n()||get(SCHUR_ELIMINATED,peer-n())==0)continue;
+  int e=peer-n();double w=read(PRODUCT_WEIGHTS,at),d=read(DIAGONAL,e);
+  double own=get(SCHUR_PEER_A,e)==row?read(SCHUR_WEIGHT_A,e):get(SCHUR_PEER_B,e)==row?read(SCHUR_WEIGHT_B,e):0.0;
+  diagonalChange+=w*own/d;rhsChange+=w*read(SOURCE_RHS,e)/d;
+ }
+ part[lane]=diagonalChange;otherPart[lane]=rhsChange;loadPart[lane]=0.0;reduce(lane);
+ if(lane==0){
+  double diagonal=read(DIAGONAL,node)-part[0],rhs=read(SOURCE_RHS,node)+otherPart[0];
+  if(!(finite(diagonal)&&diagonal>0.0&&finite(rhs))){invalid();return;}
+  write(SCHUR_DIAGONAL,node,diagonal);writeNumber(h(18)+2*(7*n()+node),diagonal);writeNumber(h(23)+2*row,rhs);appendSolveRow(row);
+ }
+}
+void schurBackSubstitute(int node){
+ if(h(27)==0||get(SCHUR_ELIMINATED,node)==0)return;
+ int a=get(SCHUR_PEER_A,node),b=get(SCHUR_PEER_B,node);double rhs=read(SOURCE_RHS,node);
+ if(a>=0)rhs=fma(read(SCHUR_WEIGHT_A,node),pressure(a),rhs);
+ if(b>=0)rhs=fma(read(SCHUR_WEIGHT_B,node),pressure(b),rhs);
+ double value=rhs/read(DIAGONAL,node);if(!finite(value)){invalid();return;}writeNumber(h(20)+2*(n()+node),value);
+}
+void restoreRow(int row){
+ if(row>=n()&&row<n()+g()){
+  int node=row-n();writeNumber(h(23)+2*row,read(SOURCE_RHS,node));
+  double diagonal=get(MODE,node)!=0?read(DIAGONAL,node):1.0;
+  writeNumber(h(18)+2*(7*n()+node),diagonal);writeNumber(h(21)+2*(4*size()+row),diagonal);
+ }
+ if(int(words[h(19)+row])>=0)appendSolveRow(row);
+}
 double vector(int row){return row<0?0.0:p.argument==0?pressure(row):number(h(21)+2*(size()+row));}
+double edgeProduct(int row,int at){
+ int peer=get(PRODUCT_PEERS,at);double w=read(PRODUCT_WEIGHTS,at);
+ if(h(27)==0)return w*(vector(row)-vector(peer));
+ double other=0.0;
+ if(peer>=n()&&get(SCHUR_ELIMINATED,peer-n())!=0){
+  int e=peer-n(),a=get(SCHUR_PEER_A,e),b=get(SCHUR_PEER_B,e);
+  if(a>=0&&a!=row)other+=read(SCHUR_WEIGHT_A,e)*vector(a);
+  if(b>=0&&b!=row)other+=read(SCHUR_WEIGHT_B,e)*vector(b);
+  other/=read(DIAGONAL,e);
+ }else other=vector(peer);
+ return -w*other;
+}
 void productBlock(int block,int lane){
  if(block>=get(BO,g()))return;int node=get(BN,block),row=n()+node,index=get(FO,node)+128*(block-get(BO,node))+lane;
- double result=0.0;if(index<get(FO,node+1)){result=read(PRODUCT_WEIGHTS,index)*(vector(row)-vector(get(PRODUCT_PEERS,index)));}
+ double result=0.0;if(index<get(FO,node+1)){result=edgeProduct(row,index);}
  part[lane]=result;otherPart[lane]=0.0;loadPart[lane]=0.0;reduce(lane);if(lane==0)write(PARTS,block,part[0]);
 }
 void productNode(int node,int lane){
  double result=0.0;for(int block=get(BO,node)+lane;block<get(BO,node+1);block+=128)result+=read(PARTS,block);
  part[lane]=result;otherPart[lane]=0.0;loadPart[lane]=0.0;reduce(lane);
- if(lane==0)writeNumber(h(21)+2*(2*size()+n()+node),part[0]+read(STORAGE,node)*vector(n()+node));
+ if(lane==0)writeNumber(h(21)+2*(2*size()+n()+node),part[0]+read(h(27)!=0?SCHUR_DIAGONAL:STORAGE,node)*vector(n()+node));
 }
 // Small rows use a single invocation; only large chambers pay for block reductions.
 void productSmall(int node){
  if(node>=int(words[h(9)])||get(FC,node)>128)return;
- int row=n()+node;double own=vector(row),result=read(STORAGE,node)*own;
- for(int i=get(FO,node);i<get(FO,node+1);i++){result+=read(PRODUCT_WEIGHTS,i)*(own-vector(get(PRODUCT_PEERS,i)));}
+ int row=n()+node;double own=vector(row),result=read(h(27)!=0?SCHUR_DIAGONAL:STORAGE,node)*own;
+ for(int i=get(FO,node);i<get(FO,node+1);i++){result+=edgeProduct(row,i);}
  writeNumber(h(21)+2*(2*size()+row),result);
 }
 void project(int f){
@@ -155,12 +224,19 @@ void observeGas(int node,int lane){
 void main(){
  int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*block+lane;
  if(p.stage==2){datum(lane);return;}
- if(p.stage==5||p.stage==9||p.stage==10||p.stage==12){
+ if(p.stage==5||p.stage==9||p.stage==10||p.stage==12||p.stage==20){
   if(block>=(p.stage==9?get(BO,g()):p.stage==10?h(14):int(words[h(9)])))return;
-  if(p.stage==5)gasRow(block,lane);else if(p.stage==9)productBlock(block,lane);else if(p.stage==10)productNode(get(LARGE_NODES,block),lane);else observeGas(block,lane);return;
+  if(p.stage==20)schurAssemble(block,lane);else if(p.stage==5)gasRow(block,lane);else if(p.stage==9)productBlock(block,lane);else if(p.stage==10)productNode(get(LARGE_NODES,block),lane);else observeGas(block,lane);return;
  }
  if(id>=p.count)return;
- if(p.stage==16){if(id==0){int count=int(words[p.header+15]);writeNumber(h(24)+28,double(count));dispatchCount(9,max(1,(count+255)/256));}return;}
+ if(p.stage==17){if(id==0){words[p.header+28]=words[p.header+15];words[p.header+15]=0u;words[p.header+14]=0u;words[p.header+25]=0u;words[p.header+27]=1u;}return;}
+ if(p.stage==18){schurCandidate(id);return;}
+ if(p.stage==19){schurSelect(id);return;}
+ if(p.stage==21){if(int(words[h(19)+id])>=0)appendSolveRow(id);return;}
+ if(p.stage==22){schurBackSubstitute(id);return;}
+ if(p.stage==23){restoreRow(id);return;}
+ if(p.stage==24){if(id==0){words[p.header+15]=0u;words[p.header+14]=0u;words[p.header+25]=0u;words[p.header+27]=0u;}return;}
+ if(p.stage==16){if(id==0){int count=int(words[p.header+15]);if(h(27)!=0)words[p.header+29]=uint(count);writeNumber(h(24)+28,double(count));dispatchCount(9,max(1,(count+255)/256));}return;}
  if(p.stage==0)capture(id);else if(p.stage==1)initialize(id);else if(p.stage==3)prepareFace(id);else if(p.stage==4)scatter(id);
  else if(p.stage==6)liquidRow(id);else if(p.stage==7)countBlocks(id);else if(p.stage==8)mapBlocks(id);else if(p.stage==11)project(id);
  else if(p.stage==15)write(POST_K,id,.5*face(id,0)*face(id,1)*face(id,1));

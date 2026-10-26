@@ -30,6 +30,8 @@ final class VulkanPressureKernel implements AutoCloseable {
         default Object preconditionerKey(){return null;}
         default ParallelRows parallelRows(){return null;}
         default FlipKernelBindings.BufferRange productDispatch(){return null;}
+        /** Restore physical unknowns and rows before the original-system completion check. */
+        default boolean recordRecoverOriginal(VkCommandBuffer command){return false;}
     }
     /** Compact physical row keys and the device-resident VkDispatchIndirectCommand for parallel stages. */
     record ParallelRows(FlipKernelBindings.BufferRange rows,GpuBuffer buffer,long offset) { }
@@ -45,6 +47,7 @@ final class VulkanPressureKernel implements AutoCloseable {
         @Override public int matrixFreeFromRow() { return layout.liquidCount(); }
         @Override public ParallelRows parallelRows() { return kernel.parallelRows(layout); }
         @Override public FlipKernelBindings.BufferRange productDispatch(){return kernel.productDispatch(layout);}
+        @Override public boolean recordRecoverOriginal(VkCommandBuffer command){kernel.recordRecoverOriginal(command,layout);return true;}
         @Override public void recordProduct(VkCommandBuffer command, boolean direction) {
             kernel.recordProduct(command, layout, direction);
         }
@@ -147,8 +150,14 @@ final class VulkanPressureKernel implements AutoCloseable {
 
     void recordFinish(VkCommandBuffer command, int size, int count, int maximumIterations,
                           VulkanPressureMultigrid multigrid, VulkanPressureMultigrid.Layout hierarchy, PressureOperator gas) {
+        boolean recovered=gas!=null&&gas.recordRecoverOriginal(command);
+        selectRows(gas);
         bind(command);
         int groups = groups(size, multigrid);
+        if(recovered){
+            stage(command,size,count,maximumIterations,13,groups,multigrid!=null,gas);
+            stage(command,size,count,maximumIterations,14,groups,multigrid!=null,gas);
+        }
         stage(command, size, count, maximumIterations, 11, groups, multigrid != null, gas);
         stage(command, size, count, maximumIterations, 2, groups, multigrid != null, gas);
         stage(command, size, count, maximumIterations, 3, groups, multigrid != null, gas);
@@ -183,8 +192,8 @@ final class VulkanPressureKernel implements AutoCloseable {
         try (var stack = stackPush()) {
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                     stack.ints(count, size, maximumIterations, stage, groups,(gas!=null&&gas.hasPreconditioner()?2:external?1:0)|(parallelRows!=null?4:0)|(gas!=null&&gas.productDispatch()!=null?8:0), gas == null ? size : gas.liquidCount(), gas == null ? size : gas.matrixFreeFromRow()));
-            boolean parallel = stage == 0 || stage == 2 || stage == 4 || stage == 6 || stage == 7 || stage == 9;
-            if(parallel&&stage!=0){
+            boolean parallel = stage == 0 || stage == 2 || stage == 4 || stage == 6 || stage == 7 || stage == 9 || stage==13;
+            if(parallel&&stage!=0&&stage!=13){
                 barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
                 vkCmdDispatchIndirect(command,stageDispatch.handle(),16L*stage);
             }else vkCmdDispatch(command, parallel ? groups : 1, 1, 1);

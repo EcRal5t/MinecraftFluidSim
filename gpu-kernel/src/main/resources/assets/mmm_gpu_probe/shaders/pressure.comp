@@ -246,12 +246,19 @@ void finishUpdate() {
     if(ITER>=double(p.maximumIterations)){RUN=0.0;REFRESH=1.0;}
 }
 void finalizeControl(){if(gid==0){REFRESH=1.0;PHASE=2.0;}}
+void originalMaximum(){
+    double maximum=0.0;
+    for(int ordinal=gid;ordinal<ordinalCount;ordinal+=stride){int row=rows[ordinal];if(row>=0)maximum=max(maximum,abs(pressure[row]));}
+    saveStats(0.0,0.0,0.0,maximum,0,0);
+}
 void executeStage(int stage) {
     if(stage==0)initializeRows();else if(stage==1)initializeControl();else if(stage==2)refreshResidual();
     else if(stage==3)finishRefresh();else if(stage==4)precondition();else if(stage==5)finishPrecondition();
     else if(stage==6)updateDirection();else if(stage==7)directionProduct();else if(stage==8)finishProduct();
     else if(stage==9)updateSolution();else if(stage==10)finishUpdate();else if(stage==11)finalizeControl();
     else if(stage==12&&gid==0&&SUCCESS==0.0)atomicOr(errors,4u);
+    else if(stage==13)originalMaximum();
+    else if(stage==14){dvec4 stats=collectStats(0,0);if(gid==0)PMAX=stats.w;}
 }
 void singleStage(int stage){executeStage(stage);syncAll();}
 void publishDispatches() {

@@ -21,7 +21,8 @@ final class VulkanGasPressure implements AutoCloseable {
         SOURCE_FACE_K(8), PRE_PRESSURE_FACE_K(8), POST_PRESSURE_FACE_K(8), REFERENCE(8), STORAGE(8),
         DIAGONAL(8), MECHANICAL_MODE(4), CELL_PHYSICAL_PRESSURE(8), NODE_ABSOLUTE_PRESSURE(8),
         NODE_PREDICTED_VOLUME_CHANGE(8), FACE_ROWS(4), FACE_COUNTS(4), FACE_OFFSETS(4), FACE_CURSORS(4),
-        NODE_FACES(4), BLOCK_COUNTS(4), BLOCK_OFFSETS(4), BLOCK_NODES(4), PRODUCT_PARTS(8), DATUM(8), SCAN(4), DISPATCH(4), LARGE_NODES(4), PRODUCT_PEERS(4), PRODUCT_WEIGHTS(8), SOLVE_ROWS(4), SHORT_NODES(4);
+        NODE_FACES(4), BLOCK_COUNTS(4), BLOCK_OFFSETS(4), BLOCK_NODES(4), PRODUCT_PARTS(8), DATUM(8), SCAN(4), DISPATCH(4), LARGE_NODES(4), PRODUCT_PEERS(4), PRODUCT_WEIGHTS(8), SOLVE_ROWS(4), SHORT_NODES(4), SCHUR_CANDIDATE(4), SCHUR_ELIMINATED(4),
+        SCHUR_PEER_A(4), SCHUR_PEER_B(4), SCHUR_WEIGHT_A(8), SCHUR_WEIGHT_B(8), SOURCE_RHS(8), SCHUR_DIAGONAL(8);
         final int width; Field(int width) { this.width = width; }
     }
     static final class Layout {
@@ -53,7 +54,7 @@ final class VulkanGasPressure implements AutoCloseable {
                     ||pressure.pressure().count()<pressureSize||pressure.work().count()<7L*pressureSize
                     ||pressure.meta().count()<2L*pressureSize||pressure.problem().count()<3L*pressureSize+1)
                 throw new IllegalArgumentException("Finite gas pressure layout differs from its resident buffers");
-            long cursor=align(scratchBase,alignment);header=new VulkanLiquidStateLayout.Column(cursor,96,4);cursor+=header.bytes();
+            long cursor=align(scratchBase,alignment);header=new VulkanLiquidStateLayout.Column(cursor,128,4);cursor+=header.bytes();
             for(Field field:Field.values()) {
                 int count=switch(field) {
                     case SOURCE_FACE_K,PRE_PRESSURE_FACE_K,POST_PRESSURE_FACE_K->faceCount;
@@ -76,6 +77,7 @@ final class VulkanGasPressure implements AutoCloseable {
         VulkanLiquidStateLayout.Column column(Field field){return columns.get(field);}
         int word(Field field){return Math.toIntExact(column(field).offset()/4);}
         int headerWordOffset(){return Math.toIntExact(header.offset()/4);}
+        VulkanLiquidStateLayout.Column header(){return header;}
         PressureBuffers pressureBuffers(){return pressure;}
         VulkanGasThermodynamics.Layout thermodynamics(){return thermodynamics;}
         VulkanGasGeometry.Layout geometry(){return geometry;}
@@ -87,8 +89,8 @@ final class VulkanGasPressure implements AutoCloseable {
         long endOffset(){return endOffset;}
         long bytes(){return endOffset-header.offset();}
         ByteBuffer headerBytes() {
-            var out=ByteBuffer.allocateDirect(384).order(ByteOrder.LITTLE_ENDIAN);var gas=thermodynamics.gas();
-            int[] data=new int[96];
+            var out=ByteBuffer.allocateDirect(512).order(ByteOrder.LITTLE_ENDIAN);var gas=thermodynamics.gas();
+            int[] data=new int[128];
             data[0]=liquidCount;data[1]=gasCapacity;data[2]=faceCount;data[3]=pressureSize;
             data[4]=VulkanGasPressure.word(cells);data[5]=VulkanGasPressure.word(faces);data[6]=VulkanGasPressure.word(geometry.cellNodes());
             data[7]=thermodynamics.nodeVolumesWordOffset();data[8]=VulkanGasPressure.word(thermodynamics.states());
@@ -123,10 +125,28 @@ final class VulkanGasPressure implements AutoCloseable {
         stage(command,layout,parameters,4,layout.faceCount,0);
         stage(command,layout,parameters,5,Math.multiplyExact(128,layout.gasCapacity),0);
         stage(command,layout,parameters,6,layout.liquidCount,0);
+        if(layout.pressureSize==layout.liquidCount+layout.gasCapacity){
+            stage(command,layout,null,17,1,0);
+            stage(command,layout,null,18,layout.gasCapacity,0);
+            stage(command,layout,null,19,layout.gasCapacity,0);
+            stage(command,layout,null,20,Math.multiplyExact(128,layout.gasCapacity),0);
+            stage(command,layout,null,21,layout.liquidCount,0);
+        }
         stage(command,layout,parameters,7,layout.gasCapacity,0);
         scan.record(command,layout.gasCapacity,layout.word(Field.BLOCK_COUNTS),layout.word(Field.BLOCK_OFFSETS),layout.word(Field.SCAN));
         stage(command,layout,parameters,8,layout.gasCapacity,0);
         stage(command,layout,parameters,16,1,0);
+    }
+    /** Restores the original KKT operator after exact independent-gas back substitution. */
+    void recordRecoverOriginal(VkCommandBuffer command,Layout layout){
+        if(layout.pressureSize!=layout.liquidCount+layout.gasCapacity)return;
+        stage(command,layout,null,22,layout.gasCapacity,0);
+        stage(command,layout,null,24,1,0);
+        stage(command,layout,null,23,layout.pressureSize,0);
+        stage(command,layout,null,7,layout.gasCapacity,0);
+        scan.record(command,layout.gasCapacity,layout.word(Field.BLOCK_COUNTS),layout.word(Field.BLOCK_OFFSETS),layout.word(Field.SCAN));
+        stage(command,layout,null,8,layout.gasCapacity,0);
+        stage(command,layout,null,16,1,0);
     }
     VulkanPressureKernel.ParallelRows parallelRows(Layout layout){
         var rows=layout.column(Field.SOLVE_ROWS);
@@ -159,7 +179,7 @@ final class VulkanGasPressure implements AutoCloseable {
                     .putFloat(parameters==null?1:parameters.cellSize()).putFloat(parameters==null?1:parameters.duration())
                     .putFloat(parameters==null?0:parameters.gravity()).putFloat(parameters==null?0:parameters.tolerance()).flip();
             vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,push);
-            if(stage==5||stage==9||stage==10||stage==12||stage==14) {
+            if(stage==5||stage==9||stage==10||stage==12||stage==14||stage==20) {
                 VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
                 vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+layout.column(Field.DISPATCH).offset()+12L*(stage==9?(argument==1?4:7):stage==10?(argument==1?5:8):stage==14?(argument==1?6:9):0));
