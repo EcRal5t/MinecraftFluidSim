@@ -86,17 +86,17 @@ public final class GpuLiquidGatherBenchmark {
         initial.putLong(Math.toIntExact(mass),1).putLong(Math.toIntExact(mass+8),1);
         put(initial,state,VulkanLiquidStateLayout.Field.COUNTS,0,stocks);
         put(initial,state,VulkanLiquidStateLayout.Field.COUNTS,1,stocks);
-        put(initial,state,VulkanLiquidStateLayout.Field.COUNTS,2,stocks);
+        put(initial,state,VulkanLiquidStateLayout.Field.COUNTS,2,4*stocks);
         for(int cell=0;cell<=cells;cell++)put(initial,state,VulkanLiquidStateLayout.Field.CELL_OFFSETS,cell,2*cell);
         for(int stock=0;stock<stocks;stock++) {
             int material=stock%2,cell=stock/2;
             boolean even=(cell%grid)%2==0;
             put(initial,state,VulkanLiquidStateLayout.Field.MATERIALS,stock,material);
             put(initial,state,VulkanLiquidStateLayout.Field.SUPPORT_MASKS,stock,255);
-            put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_OFFSETS,stock,stock);
-            put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_SIGNS,stock,1);
+            put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_OFFSETS,stock,4*stock);
+            put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_COUNTS,stock,1);
             put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_EXPONENTS,stock,-3);
-            put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_LIMBS,stock,1);
+            put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_LIMBS,4*stock,1);
             putLong(initial,state.column(VulkanLiquidStateLayout.Field.MASS_UNITS),stock,even?100:200);
             putLong(initial,state.column(VulkanLiquidStateLayout.Field.ENERGY_BITS),stock,Double.doubleToRawLongBits(even?8:24));
             put(initial,state,VulkanLiquidStateLayout.Field.MIXTURE_PRESENT,stock,1);
@@ -106,7 +106,7 @@ public final class GpuLiquidGatherBenchmark {
             putLong(initial,state.column(VulkanLiquidStateLayout.Field.MASS_RESIDUAL_UNITS),stock,even?20:40);
             putLong(initial,state.column(VulkanLiquidStateLayout.Field.NUMERIC_VOLUMES),stock,Double.doubleToRawLongBits(.125));
         }
-        put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_OFFSETS,stocks,stocks);
+        put(initial,state,VulkanLiquidStateLayout.Field.VOLUME_OFFSETS,stocks,4*stocks);
         put(initial,state,VulkanLiquidStateLayout.Field.SPECIES_OFFSETS,stocks,stocks);
         try(var storage=new VulkanRegionStorage(context,bytes,1024*1024)) {
             storage.initialize(initial,0);
@@ -196,9 +196,10 @@ public final class GpuLiquidGatherBenchmark {
         var handle=read(storage,capture,layout.column(VulkanLiquidStateLayout.Field.SPECIES_HANDLES).offset()+4L*first,4);
         var amount=read(storage,capture,layout.column(VulkanLiquidStateLayout.Field.SPECIES_AMOUNTS).offset()+8L*first,8);
         var offsets=read(storage,capture,layout.column(VulkanLiquidStateLayout.Field.VOLUME_OFFSETS).offset()+4L*stock,8);
-        int begin=offsets.getInt(0),end=offsets.getInt(4);
+        int begin=offsets.getInt(0);
+        int count=read(storage,capture,layout.column(VulkanLiquidStateLayout.Field.VOLUME_COUNTS).offset()+4L*stock,4).getInt(0),end=begin+count;
         var limbs=read(storage,capture,layout.column(VulkanLiquidStateLayout.Field.VOLUME_LIMBS).offset()+4L*begin,4*(end-begin));
-        var sign=read(storage,capture,layout.column(VulkanLiquidStateLayout.Field.VOLUME_SIGNS).offset()+4L*stock,4);
+        var sign=read(storage,capture,layout.column(VulkanLiquidStateLayout.Field.VOLUME_COUNTS).offset()+4L*stock,4);
         var exponent=read(storage,capture,layout.column(VulkanLiquidStateLayout.Field.VOLUME_EXPONENTS).offset()+4L*stock,4);
         BigInteger magnitude=BigInteger.ZERO;
         for(int i=end-begin-1;i>=0;i--)magnitude=magnitude.shiftLeft(32).add(BigInteger.valueOf(Integer.toUnsignedLong(limbs.getInt(4*i))));

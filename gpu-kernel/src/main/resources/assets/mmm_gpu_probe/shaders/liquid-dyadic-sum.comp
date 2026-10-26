@@ -102,6 +102,15 @@ void writeOperation(int operation) {
 
 void main() {
     int operation=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
-    if(operation>=p.operations||errors!=0u)return;
+    if(operation>=p.operations)return;
+    if(p.stage==2){
+        if((errors&~64u)!=0u)return;
+        measureOperation(operation);
+        uint count=candidateWords[p.countsWordOffset+operation];
+        uint offset=count<=4u?4u*uint(operation):atomicAdd(candidateWords[p.offsetsWordOffset+p.operations],count);
+        candidateWords[p.offsetsWordOffset+operation]=offset;
+        return;
+    }
+    if(errors!=0u)return;
     if(p.stage==0)measureOperation(operation);else writeOperation(operation);
 }

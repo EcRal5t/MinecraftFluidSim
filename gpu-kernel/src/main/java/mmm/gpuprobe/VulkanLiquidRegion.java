@@ -146,7 +146,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
         maximumRange=context.maxStorageBufferRange();
         var liquid=definitions==null?VulkanLiquidStateLayout.forState(inventory,momentum,context.storageOffsetAlignment())
                 :new VulkanLiquidStateLayout(momentum.sizeX(),momentum.sizeY(),momentum.sizeZ(),definitions.stockCapacity(),
-                        definitions.speciesCapacity(),definitions.limbCapacity(),context.storageOffsetAlignment());
+                        definitions.speciesCapacity(),Math.max(definitions.limbCapacity(),VulkanLiquidStateLayout.requiredVolumeCapacity(inventory,definitions.stockCapacity())),context.storageOffsetAlignment());
         if(!fixed.matchesShape(liquid.sizeX(),liquid.sizeY(),liquid.sizeZ())||occupiedSolid.length!=liquid.cellCount())
             throw new IllegalArgumentException("Resident liquid geometry differs from its grid");
         workspace=new Workspace(liquid,definitions);
@@ -167,10 +167,10 @@ final class VulkanLiquidRegion implements AutoCloseable {
         var l=workspace.liquid;
         if(inventory.cellCount()!=l.cellCount()||inventory.stockCount()>l.stockCapacity()||inventory.speciesHandles().length>l.speciesCapacity()||inventory.volumes().limbs().length>l.limbCapacity())
             throw new IllegalArgumentException("Liquid import exceeds resident capacity");
-        var v=inventory.volumes();
-        writer.put(l.column(COUNTS),new int[]{inventory.stockCount(),inventory.speciesHandles().length,v.limbs().length});
+        var v=inventory.volumes();var encoded=l.encodeVolumes(inventory);
+        writer.put(l.column(COUNTS),new int[]{inventory.stockCount(),inventory.speciesHandles().length,encoded.used()});
         writer.put(l.column(CELL_OFFSETS),inventory.cellOffsets());writer.put(l.column(MATERIALS),inventory.materials());writer.put(l.column(SUPPORT_MASKS),inventory.supportMasks());
-        writer.put(l.column(VOLUME_OFFSETS),v.offsets());writer.put(l.column(VOLUME_SIGNS),v.signs());writer.put(l.column(VOLUME_EXPONENTS),v.exponents());writer.put(l.column(VOLUME_LIMBS),v.limbs());
+        writer.put(l.column(VOLUME_OFFSETS),encoded.offsets());writer.put(l.column(VOLUME_COUNTS),encoded.counts());writer.put(l.column(VOLUME_EXPONENTS),encoded.exponents());writer.put(l.column(VOLUME_LIMBS),encoded.limbs());
         writer.put(l.column(MASS_UNITS),inventory.massUnits());writer.put(l.column(ENERGY_BITS),inventory.energyBits());writer.put(l.column(MIXTURE_PRESENT),inventory.mixturePresent());
         writer.put(l.column(SPECIES_OFFSETS),inventory.speciesOffsets());writer.put(l.column(SPECIES_HANDLES),inventory.speciesHandles());writer.put(l.column(SPECIES_AMOUNTS),inventory.speciesAmounts());
         writer.put(l.column(MASS_RESIDUAL_UNITS),inventory.massResidualUnits());

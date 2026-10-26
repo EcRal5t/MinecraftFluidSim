@@ -93,7 +93,7 @@ final class VulkanSolidLiquidReactions implements AutoCloseable {
         stage(command,l,3,Math.max(l.liquid.stockCapacity(),l.solid.rowCapacity()));
         scan.record(command,l.liquid.stockCapacity(),l.word(Field.LIQUID_COUNTS),l.word(Field.LIQUID_OFFSETS),l.word(Field.SCAN));
         scan.record(command,l.solid.rowCapacity(),l.word(Field.SOLID_COUNTS),l.word(Field.SOLID_OFFSETS),l.word(Field.SCAN));
-        scan.record(command,l.liquid.stockCapacity(),l.word(Field.VOLUME_COUNTS),l.word(Field.VOLUME_OFFSETS),l.word(Field.SCAN));
+
         stage(command,l,4,1);stage(command,l,5,Math.max(l.liquid.stockCapacity(),l.solid.rowCapacity()));stage(command,l,6,Math.max(l.liquid.stockCapacity(),l.solid.rowCapacity()));
         stage(command,l,8,l.faces);stage(command,l,9,l.liquid.cellCount());stage(command,l,10,l.solid.rowCapacity());
     }

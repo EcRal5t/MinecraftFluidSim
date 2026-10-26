@@ -32,7 +32,7 @@ final class VulkanLiquidCellVolumes implements AutoCloseable {
             data[6] = word(totalLimbs); data[7] = word(quantized); data[8] = word(measurements); data[9] = word(counts);
             data[16] = word(source.column(VulkanLiquidStateLayout.Field.CELL_OFFSETS));
             data[17] = word(source.column(VulkanLiquidStateLayout.Field.VOLUME_OFFSETS));
-            data[18] = word(source.column(VulkanLiquidStateLayout.Field.VOLUME_SIGNS));
+            data[18] = word(source.column(VulkanLiquidStateLayout.Field.VOLUME_COUNTS));
             data[19] = word(source.column(VulkanLiquidStateLayout.Field.VOLUME_EXPONENTS));
             data[20] = word(source.column(VulkanLiquidStateLayout.Field.VOLUME_LIMBS));
             for (int i = 0; i < data.length; i++) target.putInt(Math.toIntExact(0 + 4L * i), data[i]);

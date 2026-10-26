@@ -21,7 +21,7 @@ final class VulkanLiquidGather implements AutoCloseable {
                   VulkanLiquidStateLayout.Column header, VulkanLiquidStateLayout.Column cellCounts,
                   VulkanLiquidStateLayout.Column members, VulkanLiquidStateLayout.Column speciesCounts,
                   VulkanLiquidStateLayout.Column dyadicTerms, VulkanLiquidStateLayout.Column dyadicResults,
-                  VulkanLiquidStateLayout.Column dyadicCounts, VulkanLiquidStateLayout.Column energyRemainders,
+                  VulkanLiquidStateLayout.Column energyRemainders,
                   VulkanLiquidStateLayout.Column scanWorkspace, long endOffset) {
         int headerWordOffset() { return word(header); }
         long bytes() { return endOffset - header.offset(); }
@@ -52,7 +52,7 @@ final class VulkanLiquidGather implements AutoCloseable {
 
         VulkanDyadicSum.Layout sums() {
             return new VulkanDyadicSum.Layout(output.stockCapacity(), word(dyadicTerms), word(dyadicResults),
-                    word(dyadicCounts), word(output.column(VulkanLiquidStateLayout.Field.VOLUME_OFFSETS)),
+                    word(output.column(VulkanLiquidStateLayout.Field.VOLUME_COUNTS)), word(output.column(VulkanLiquidStateLayout.Field.VOLUME_OFFSETS)),
                     word(output.column(VulkanLiquidStateLayout.Field.VOLUME_LIMBS)), output.limbCapacity(), word(scanWorkspace));
         }
     }
@@ -71,12 +71,11 @@ final class VulkanLiquidGather implements AutoCloseable {
         var speciesCounts = column(cursor, stocks, 4, alignment);
         var terms = column(cursor, Math.multiplyExact(stocks, 35), 4, alignment);
         var results = column(cursor, Math.multiplyExact(stocks, 8), 4, alignment);
-        var dyadicCounts = column(cursor, stocks, 4, alignment);
         var remainders = column(cursor, Math.multiplyExact(stocks, 7), 8, alignment);
         long scanBytes = Math.max(VulkanPrefixScan.workspaceBytes(output.cellCount()), VulkanPrefixScan.workspaceBytes(stocks));
         var workspace = column(cursor, Math.toIntExact(scanBytes / 4), 4, alignment);
         return new Layout(source, output, routes, fixedMaskWordOffset, speciesMassWordOffset, header, cellCounts,
-                members, speciesCounts, terms, results, dyadicCounts, remainders, workspace, align(cursor[0], alignment));
+                members, speciesCounts, terms, results, remainders, workspace, align(cursor[0], alignment));
     }
 
     private final FlipKernelBindings bindings;
@@ -114,7 +113,7 @@ final class VulkanLiquidGather implements AutoCloseable {
         stage(command, layout, 2, cells);
         scan.record(command, stocks, word(layout.speciesCounts()), word(layout.output().column(VulkanLiquidStateLayout.Field.SPECIES_OFFSETS)),
                 word(layout.scanWorkspace()));
-        sums.record(command, layout.sums());
+        sums.recordSlots(command, layout.sums());
         stage(command, layout, 3, Math.max(1, stocks));
     }
 

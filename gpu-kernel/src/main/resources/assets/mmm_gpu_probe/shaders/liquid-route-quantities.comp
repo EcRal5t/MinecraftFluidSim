@@ -6,7 +6,7 @@ layout(binding=0,std430) readonly buffer Source { uint sourceWords[]; };
 layout(binding=1,std430) buffer Candidate { uint candidateWords[]; };
 layout(binding=2,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header; int stage; int count; } p;
-const int COUNTS=0,MATERIALS=2,VOLUME_OFFSETS=4,VOLUME_SIGNS=5,VOLUME_EXPONENTS=6,VOLUME_LIMBS=7,
+const int COUNTS=0,MATERIALS=2,VOLUME_OFFSETS=4,VOLUME_COUNTS=5,VOLUME_EXPONENTS=6,VOLUME_LIMBS=7,
           MASS_UNITS=8,ENERGY_BITS=9,MIXTURE_PRESENT=10,SPECIES_OFFSETS=11,SPECIES_HANDLES=12,SPECIES_AMOUNTS=13;
 const int R_DESCRIPTORS=0,R_MASS=1,R_ENERGY=2,R_MIXTURE=3,
           R_SPECIES_OFFSETS=4,R_SPECIES_HANDLES=5,R_SPECIES_AMOUNTS=6,R_SOURCE_OFFSETS=7;
@@ -23,8 +23,8 @@ bool finite(double value) { return !isnan(value)&&!isinf(value); }
 struct Volume { int bank; int begin; int count; int exponent; };
 uint limb(Volume value,int index) { return index<0||index>=value.count?0u:readWord(value.bank,value.begin+index); }
 Volume sourceVolume(int stock) {
-    int first=int(sourceWords[src(VOLUME_OFFSETS)+stock]),last=int(sourceWords[src(VOLUME_OFFSETS)+stock+1]);
-    return Volume(0,src(VOLUME_LIMBS)+first,last-first,int(sourceWords[src(VOLUME_EXPONENTS)+stock]));
+    int first=int(sourceWords[src(VOLUME_OFFSETS)+stock]),count=int(sourceWords[src(VOLUME_COUNTS)+stock]);
+    return Volume(0,src(VOLUME_LIMBS)+first,count,int(sourceWords[src(VOLUME_EXPONENTS)+stock]));
 }
 Volume routeVolume(int entry) {
     int at=route(R_DESCRIPTORS)+5*entry;

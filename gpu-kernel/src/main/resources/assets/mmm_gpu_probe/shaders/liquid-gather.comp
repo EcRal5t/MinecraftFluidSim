@@ -7,7 +7,7 @@ layout(binding=1,std430) buffer Candidate { uint candidateWords[]; };
 layout(binding=2,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header; int stage; int count; } p;
 
-const int COUNTS=0,CELL_OFFSETS=1,MATERIALS=2,SUPPORT_MASKS=3,VOLUME_OFFSETS=4,VOLUME_SIGNS=5,VOLUME_EXPONENTS=6,
+const int COUNTS=0,CELL_OFFSETS=1,MATERIALS=2,SUPPORT_MASKS=3,VOLUME_OFFSETS=4,VOLUME_COUNTS=5,VOLUME_EXPONENTS=6,
           VOLUME_LIMBS=7,MASS_UNITS=8,ENERGY_BITS=9,MIXTURE_PRESENT=10,SPECIES_OFFSETS=11,SPECIES_HANDLES=12,
           SPECIES_AMOUNTS=13,MASS_RESIDUAL=14,NUMERIC_VOLUMES=15;
 const int ROUTE_DESCRIPTORS=0,ROUTE_MASS=1,ROUTE_ENERGY=2,ROUTE_MIXTURE=3,
@@ -29,6 +29,8 @@ int64_t addQuantity(int64_t sum,int64_t value) {
 }
 
 void clearStock(int stock) {
+    if(stock==0)candidateWords[dst(VOLUME_OFFSETS)+h(4)]=uint(4*h(4));
+    candidateWords[dst(VOLUME_COUNTS)+stock]=0u;
     candidateWords[h(11)+stock]=0u;
     for(int i=0;i<7;i++)candidateWords[h(12)+35*stock+5*i+2]=0u;
     for(int i=0;i<7;i++){putDouble(h(14)+14*stock+2*i,0.0);}
@@ -176,15 +178,14 @@ double numericVolume(int begin,int count,int exponent) {
 void finishStock(int stock) {
     uint actual=candidateWords[dst(CELL_OFFSETS)+h(3)];
     uint species=candidateWords[dst(SPECIES_OFFSETS)+h(4)],limbs=candidateWords[dst(VOLUME_OFFSETS)+h(4)];
+    if(stock==0){candidateWords[dst(COUNTS)]=actual;candidateWords[dst(COUNTS)+1]=species;candidateWords[dst(COUNTS)+2]=limbs;}
     if(actual>uint(h(4))||species>uint(h(5))||limbs>uint(h(6))){atomicOr(errors,64u);return;}
     if((errors&(16u|32u))!=0u)return;
-    if(stock==0){candidateWords[dst(COUNTS)]=actual;candidateWords[dst(COUNTS)+1]=species;candidateWords[dst(COUNTS)+2]=limbs;}
     if(uint(stock)>=actual)return;
     int result=h(13)+8*stock;
     if(candidateWords[result]!=1u){atomicOr(errors,32u);return;}
-    candidateWords[dst(VOLUME_SIGNS)+stock]=1u;
     int exponent=int(candidateWords[result+2]);candidateWords[dst(VOLUME_EXPONENTS)+stock]=uint(exponent);
-    int begin=int(candidateWords[dst(VOLUME_OFFSETS)+stock]),end=int(candidateWords[dst(VOLUME_OFFSETS)+stock+1]);
+    int begin=int(candidateWords[dst(VOLUME_OFFSETS)+stock]),end=begin+int(candidateWords[dst(VOLUME_COUNTS)+stock]);
     putDouble(dst(NUMERIC_VOLUMES)+2*stock,numericVolume(begin,end-begin,exponent));
     int members[7];for(int i=0;i<7;i++)members[i]=int(candidateWords[h(10)+7*stock+i]);
     int64_t represented;mergeSpecies(members,int(candidateWords[dst(SPECIES_OFFSETS)+stock]),true,represented);
@@ -194,7 +195,7 @@ void finishStock(int stock) {
 
 void main() {
     int index=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
-    if(index>=p.count||errors!=0u)return;
+    if(index>=p.count||(errors!=0u&&p.stage!=3))return;
     if(p.stage==0)clearStock(index);else if(p.stage==1)mergeCell(index,false);
     else if(p.stage==2)mergeCell(index,true);else finishStock(index);
 }

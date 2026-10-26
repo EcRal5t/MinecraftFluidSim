@@ -8,7 +8,7 @@ layout(binding=1,std430) buffer Candidate { uint candidateWords[]; };
 layout(binding=2,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header; int stage; int count; int gravitySign; } p;
 // DYADIC_LIBRARY
-const int COUNTS=0,CELL_OFFSETS=1,MATERIALS=2,VOLUME_OFFSETS=4,VOLUME_SIGNS=5,
+const int COUNTS=0,CELL_OFFSETS=1,MATERIALS=2,VOLUME_OFFSETS=4,VOLUME_COUNTS=5,
           VOLUME_EXPONENTS=6,VOLUME_LIMBS=7,MASS_UNITS=8;
 const int R_DESCRIPTORS=0,R_SOURCE_OFFSETS=7,R_SLOTS=8,R_COUNTS=9,R_SOURCE_MASKS=10;
 uvec2 proposalWords;
@@ -33,8 +33,8 @@ DyadicTerm accepted(int cell,int slot) {
 }
 DyadicTerm sourceVolume(int stock) {
     int first=int(sourceWords[src(VOLUME_OFFSETS)+stock]);
-    return DyadicTerm(0,src(VOLUME_LIMBS)+first,int(sourceWords[src(VOLUME_OFFSETS)+stock+1])-first,
-                      int(sourceWords[src(VOLUME_EXPONENTS)+stock]),int(sourceWords[src(VOLUME_SIGNS)+stock]));
+    return DyadicTerm(0,src(VOLUME_LIMBS)+first,int(sourceWords[src(VOLUME_COUNTS)+stock]),
+                      int(sourceWords[src(VOLUME_EXPONENTS)+stock]),sourceWords[src(VOLUME_COUNTS)+stock]>0u?1:0);
 }
 int windowOffset(int window) { return h(10)+int(candidateWords[h(9)+window]); }
 int windowCapacity(int window) { return int(candidateWords[h(8)+window]); }

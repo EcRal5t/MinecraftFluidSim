@@ -9,7 +9,7 @@ int h(int index) { return int(candidateWords[p.header+index]); }
 struct Volume { int offset; int count; int exponent; };
 Volume volume(int stock) {
     int first=int(sourceWords[h(17)+stock]);
-    return Volume(h(20)+first,int(sourceWords[h(17)+stock+1])-first,int(sourceWords[h(19)+stock]));
+    return Volume(h(20)+first,int(sourceWords[h(18)+stock]),int(sourceWords[h(19)+stock]));
 }
 uint aligned(Volume item,int position,int minimum) {
     int64_t shift=int64_t(item.exponent)-int64_t(minimum);

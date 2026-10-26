@@ -24,7 +24,7 @@ void initialize(int id){
  if(id<h(3)){words[f(PC)+id]=0u;words[f(PCU)+id]=0u;}
  if(id<h(2)){words[f(NC)+id]=0u;words[f(NCU)+id]=0u;words[f(STARTCOUNT)+id]=1u;words[f(ROWS)+id]=uint(-1);words[f(META)+id]=0u;}
  if(id<h(2)+2){words[f(SC)+id]=0u;words[f(SCU)+id]=0u;}if(id<h(2)+1){words[f(TC)+id]=0u;words[f(TCU)+id]=0u;}
- if(id==0){words[f(LONG_COUNTS)]=0u;words[f(LONG_COUNTS)+1]=0u;words[f(LONG_COUNTS)+2]=0u;for(int i=0;i<8;i++){words[f(DISPATCH)+3*i]=0u;words[f(DISPATCH)+3*i+1]=1u;words[f(DISPATCH)+3*i+2]=1u;}if(nodes()!=int(words[gh(26)])||nodes()>h(2))invalid();words[f(STEP)]=uint(p.step);words[f(STEP)+1]=uint(p.step>>32);put(f(PROBLEM)+6*h(2),1e-8LF);}
+ if(id==0){words[f(LONG_COUNTS)]=0u;words[f(LONG_COUNTS)+1]=0u;words[f(LONG_COUNTS)+2]=0u;for(int i=0;i<8;i++){words[f(DISPATCH)+3*i]=0u;words[f(DISPATCH)+3*i+1]=1u;words[f(DISPATCH)+3*i+2]=1u;}if(errors==0u&&(nodes()!=int(words[gh(26)])||nodes()>h(2)))invalid();words[f(STEP)]=uint(p.step);words[f(STEP)+1]=uint(p.step>>32);put(f(PROBLEM)+6*h(2),1e-8LF);}
 }
 void faceKeys(int face){
  words[f(FA)+face]=uint(-1);words[f(FB)+face]=uint(-1);words[f(FP)+face]=0u;

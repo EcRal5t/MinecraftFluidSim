@@ -16,12 +16,13 @@ import static org.lwjgl.vulkan.VK10.vkCmdCopyBuffer;
 /** Aligned structure-of-arrays schema for a device-resident liquid generation.
  * Integers use little endian words; double columns use IEEE binary64. Dyadic limbs
  * are unsigned uint32, least significant first, with signed int32 exponents/signs.
- * Offsets in both CSR tables and the limb table count elements, not bytes.
+ * Cell/species offsets use CSR. Volume offsets and counts independently address
+ * four-word inline slots or the shared overflow tail; offsets[stockCapacity] holds total demand.
  */
 public final class VulkanLiquidStateLayout {
     public enum Field {
         COUNTS(4), CELL_OFFSETS(4), MATERIALS(4), SUPPORT_MASKS(4),
-        VOLUME_OFFSETS(4), VOLUME_SIGNS(4), VOLUME_EXPONENTS(4), VOLUME_LIMBS(4),
+        VOLUME_OFFSETS(4), VOLUME_COUNTS(4), VOLUME_EXPONENTS(4), VOLUME_LIMBS(4),
         MASS_UNITS(8), ENERGY_BITS(8), MIXTURE_PRESENT(4),
         SPECIES_OFFSETS(4), SPECIES_HANDLES(4), SPECIES_AMOUNTS(8), MASS_RESIDUAL_UNITS(8),
         NUMERIC_VOLUMES(8), MOMENTUM_X(8), MOMENTUM_Y(8), MOMENTUM_Z(8);
@@ -48,7 +49,7 @@ public final class VulkanLiquidStateLayout {
                 || limbCapacity < 0 || storageAlignment <= 0 || (storageAlignment & (storageAlignment - 1)) != 0)
             throw new IllegalArgumentException("Invalid resident liquid shape or storage alignment");
         this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ;
-        this.stockCapacity = stockCapacity; this.speciesCapacity = speciesCapacity; this.limbCapacity = limbCapacity;
+        this.stockCapacity = stockCapacity; this.speciesCapacity = speciesCapacity; this.limbCapacity = Math.max(limbCapacity, Math.multiplyExact(4, stockCapacity));
         alignment = Math.max(8, storageAlignment);
         long cursor = 0;
         for (Field field : Field.values()) {
@@ -56,7 +57,7 @@ public final class VulkanLiquidStateLayout {
                 case COUNTS -> 3;
                 case CELL_OFFSETS -> Math.addExact(cellCount(), 1);
                 case VOLUME_OFFSETS, SPECIES_OFFSETS -> Math.addExact(stockCapacity, 1);
-                case VOLUME_LIMBS -> limbCapacity;
+                case VOLUME_LIMBS -> this.limbCapacity;
                 case SPECIES_HANDLES, SPECIES_AMOUNTS -> speciesCapacity;
                 case MOMENTUM_X -> product(sizeX + 1, sizeY, sizeZ);
                 case MOMENTUM_Y -> product(sizeX, sizeY + 1, sizeZ);
@@ -74,7 +75,7 @@ public final class VulkanLiquidStateLayout {
     public static VulkanLiquidStateLayout forState(DeviceLiquidInventory inventory,
                                                    MacMomentumState momentum, long storageAlignment) {
         return new VulkanLiquidStateLayout(momentum.sizeX(), momentum.sizeY(), momentum.sizeZ(),
-                inventory.stockCount(), inventory.speciesHandles().length, inventory.volumes().limbs().length,
+                inventory.stockCount(), inventory.speciesHandles().length, requiredVolumeCapacity(inventory,inventory.stockCount()),
                 storageAlignment);
     }
 
@@ -104,14 +105,15 @@ public final class VulkanLiquidStateLayout {
             throw new IllegalArgumentException("Liquid import shape differs from resident layout");
         ByteBuffer out = view(destination);
         var dyadic = inventory.volumes();
-        put(out, Field.COUNTS, new int[]{inventory.stockCount(), inventory.speciesHandles().length, dyadic.limbs().length});
+        var encoded = encodeVolumes(inventory);
+        put(out, Field.COUNTS, new int[]{inventory.stockCount(), inventory.speciesHandles().length, encoded.used()});
         put(out, Field.CELL_OFFSETS, inventory.cellOffsets());
         put(out, Field.MATERIALS, inventory.materials());
         put(out, Field.SUPPORT_MASKS, inventory.supportMasks());
-        put(out, Field.VOLUME_OFFSETS, dyadic.offsets());
-        put(out, Field.VOLUME_SIGNS, dyadic.signs());
+        put(out, Field.VOLUME_OFFSETS, encoded.offsets());
+        put(out, Field.VOLUME_COUNTS, encoded.counts());
         put(out, Field.VOLUME_EXPONENTS, dyadic.exponents());
-        put(out, Field.VOLUME_LIMBS, dyadic.limbs());
+        put(out, Field.VOLUME_LIMBS, encoded.limbs());
         put(out, Field.MASS_UNITS, inventory.massUnits());
         put(out, Field.ENERGY_BITS, inventory.energyBits());
         put(out, Field.MIXTURE_PRESENT, inventory.mixturePresent());
@@ -127,6 +129,22 @@ public final class VulkanLiquidStateLayout {
         put(out, Field.MOMENTUM_Z, momentum.copyZ());
     }
 
+    public record VolumeColumns(int[] offsets,int[] counts,int[] exponents,int[] limbs,int used) { }
+    public static int requiredVolumeCapacity(DeviceLiquidInventory inventory,int stockCapacity) {
+        int used=Math.multiplyExact(4,stockCapacity);int[] offsets=inventory.volumes().offsets();
+        for(int i=0;i<inventory.stockCount();i++){int count=offsets[i+1]-offsets[i];if(count>4)used=Math.addExact(used,count);}
+        return used;
+    }
+    /** Four inline words per slot and a shared overflow tail; offsets are independent addresses. */
+    public VolumeColumns encodeVolumes(DeviceLiquidInventory inventory) {
+        var v=inventory.volumes();int n=inventory.stockCount(),used=Math.multiplyExact(4,stockCapacity);
+        int[] offsets=new int[stockCapacity+1],counts=new int[n],starts=v.offsets(),raw=v.limbs();
+        for(int i=0;i<n;i++){counts[i]=starts[i+1]-starts[i];offsets[i]=counts[i]<=4?4*i:used;if(counts[i]>4)used=Math.addExact(used,counts[i]);}
+        if(used>limbCapacity)throw new IllegalArgumentException("Liquid inline/overflow volume capacity exceeded: "+used);
+        int[] limbs=new int[used];for(int i=0;i<n;i++)System.arraycopy(raw,starts[i],limbs,offsets[i],counts[i]);
+        offsets[stockCapacity]=used;return new VolumeColumns(offsets,counts,v.exponents(),limbs,used);
+    }
+
     /** Reconstructs exact authoritative columns after an explicit device checkpoint read. */
     public State exportState(ByteBuffer source) {
         ByteBuffer in = view(source);
@@ -135,8 +153,12 @@ public final class VulkanLiquidStateLayout {
         if (stocks < 0 || stocks > stockCapacity || species < 0 || species > speciesCapacity
                 || limbs < 0 || limbs > limbCapacity)
             throw new IllegalArgumentException("Device liquid counts exceed resident capacity");
-        var volumes = new DeviceDyadicArray(ints(in, Field.VOLUME_OFFSETS, stocks + 1), ints(in, Field.VOLUME_SIGNS, stocks),
-                ints(in, Field.VOLUME_EXPONENTS, stocks), ints(in, Field.VOLUME_LIMBS, limbs));
+        int[] addresses=ints(in,Field.VOLUME_OFFSETS,stocks),lengths=ints(in,Field.VOLUME_COUNTS,stocks),packedOffsets=new int[stocks+1],signs=new int[stocks];
+        for(int i=0;i<stocks;i++){packedOffsets[i+1]=Math.addExact(packedOffsets[i],lengths[i]);signs[i]=lengths[i]>0?1:0;}
+        int[] packed=new int[packedOffsets[stocks]];
+        int[] rawLimbs=ints(in,Field.VOLUME_LIMBS,limbs);
+        for(int i=0;i<stocks;i++)System.arraycopy(rawLimbs,addresses[i],packed,packedOffsets[i],lengths[i]);
+        var volumes = new DeviceDyadicArray(packedOffsets,signs,ints(in,Field.VOLUME_EXPONENTS,stocks),packed);
         var inventory = new DeviceLiquidInventory(ints(in, Field.CELL_OFFSETS, cellCount() + 1), ints(in, Field.MATERIALS, stocks),
                 ints(in, Field.SUPPORT_MASKS, stocks), volumes, longs(in, Field.MASS_UNITS, stocks), longs(in, Field.ENERGY_BITS, stocks),
                 ints(in, Field.MIXTURE_PRESENT, stocks), ints(in, Field.SPECIES_OFFSETS, stocks + 1), ints(in, Field.SPECIES_HANDLES, species),

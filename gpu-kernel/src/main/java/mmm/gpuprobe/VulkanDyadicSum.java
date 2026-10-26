@@ -44,6 +44,12 @@ final class VulkanDyadicSum implements AutoCloseable {
         stage(command, layout, 1);
     }
 
+    /** Slot output uses four inline words; offsets[operations] is the initialized overflow allocator. */
+    void recordSlots(VkCommandBuffer command, Layout layout) {
+        stage(command,layout,2);
+        stage(command,layout,3);
+    }
+
     private void stage(VkCommandBuffer command, Layout layout, int stage) {
         if (layout.operations() == 0) return;
         int groups = (int) (((long) layout.operations() + 127) / 128);

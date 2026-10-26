@@ -45,12 +45,12 @@ double sensible(int kind,int row,double t){int m=material(kind,row),at=int(words
 // DYADIC_LIBRARY
 uint dyadicWord(int bank,int at){return words[at];}void dyadicWrite(int at,uint x){words[at]=x;}
 void volumeTerms(int row,int64_t delta,out DyadicTerm items[7]){for(int i=0;i<7;i++)items[i]=DyadicTerm(1,0,0,0,0);
- int begin=int(words[l(4)+row]),end=int(words[l(4)+row+1]);items[0]=DyadicTerm(1,l(7)+begin,end-begin,int(words[l(6)+row]),int(words[l(5)+row]));
+ int begin=int(words[l(4)+row]),count=int(words[l(5)+row]);items[0]=DyadicTerm(1,l(7)+begin,count,int(words[l(6)+row]),count>0?1:0);
  if(delta!=0l){u64vec2 q=product(uint64_t(abs(delta)),uint64_t(integer(p.header+160)));int at=f(DL)+4*row;
   words[at]=uint(q.x);words[at+1]=uint(q.x>>32);words[at+2]=uint(q.y);words[at+3]=uint(q.y>>32);int count=q.y!=0UL?(q.y>>32!=0UL?4:3):(q.x>>32!=0UL?2:1);
   items[1]=DyadicTerm(1,at,count,h(162),delta>0l?1:-1);}}
 bool volumeFits(int row,int64_t delta){DyadicTerm items[7];volumeTerms(row,delta,items);DyadicMeasure m=dyadicMeasure(items,7);return m.status==DYADIC_POSITIVE||m.status==DYADIC_ZERO;}
-void initialize(int id){if(id<h(0)){words[f(HEAD)+id]=uint(-1);words[f(PHEAD)+id]=uint(-1);numberAt(f(PWORK)+2*id,0.0LF);}
+void initialize(int id){if(id==0)words[f(VO)+h(1)]=uint(4*h(1));if(id<h(0)){words[f(HEAD)+id]=uint(-1);words[f(PHEAD)+id]=uint(-1);numberAt(f(PWORK)+2*id,0.0LF);}
  if(id<h(1)){integerAt(f(LDELTA)+2*id,0l);numberAt(f(LOLD)+2*id,0.0LF);numberAt(f(LU)+2*id,0.0LF);words[f(LC)+id]=0u;}
  if(id<h(2)){words[f(NEXT)+id]=uint(-1);words[f(CELL)+id]=uint(-1);numberAt(f(GOLD)+2*id,0.0LF);numberAt(f(GNEW)+2*id,0.0LF);numberAt(f(GK0)+2*id,0.0LF);numberAt(f(GK1)+2*id,0.0LF);words[f(GC)+id]=0u;integerAt(f(GSOURCE_MASS)+2*id,0l);integerAt(f(GWITHDRAWN)+2*id,0l);}
  if(id==0)for(int i=0;i<12;i++)words[f(CONTROL)+i]=0u;
@@ -176,7 +176,7 @@ void measure(int row){
  if(row<h(1)){DyadicTerm items[7];if(row<int(words[l(0)]))volumeTerms(row,integer(f(LDELTA)+2*row),items);else for(int i=0;i<7;i++)items[i]=DyadicTerm(1,0,0,0,0);
   for(int i=0;i<7;i++){int at=f(TERMS)+35*row+5*i;words[at]=uint(items[i].bank);words[at+1]=uint(items[i].offset);words[at+2]=uint(items[i].count);words[at+3]=uint(items[i].exponent);words[at+4]=uint(items[i].sign);}
   DyadicMeasure m=dyadicMeasure(items,7);int at=f(RESULTS)+8*row;words[at]=uint(m.status);words[at+1]=uint(m.words);words[at+2]=uint(m.exponent);words[at+3]=uint(m.minimumExponent);words[at+4]=uint(m.firstWord);words[at+5]=uint(m.lastWord);words[at+6]=uint(m.trailingBits);
-  words[f(VC)+row]=m.status==DYADIC_POSITIVE?uint(m.words):0u;if(m.status!=DYADIC_ZERO&&m.status!=DYADIC_POSITIVE)invalid();}
+  uint count=m.status==DYADIC_POSITIVE?uint(m.words):0u;words[f(VC)+row]=count;words[f(VO)+row]=count<=4u?4u*uint(row):atomicAdd(words[f(VO)+h(1)],count);if(m.status!=DYADIC_ZERO&&m.status!=DYADIC_POSITIVE)invalid();}
  if(row<h(2)&&(row<int(words[g(0)])||row>=h(7)&&row-h(7)<min(h(8),int(words[g(0)+1]))||row>=h(7)+h(8)))numberAt(f(GNEW)+2*row,number(g(11)+2*row));
 }
 void capacityStatus(){int lneed=int(words[f(LO)+h(1)]),gneed=int(words[f(GO)+h(2)]);words[f(CONTROL)+2]=uint(lneed);words[f(CONTROL)+3]=uint(gneed);
@@ -242,7 +242,7 @@ void publish(int id){if(words[f(CONTROL)]!=2u)return;
  for(int kind=0;kind<2;kind++){if(id>=h(kind==0?1:2))continue;if(kind==0&&id>=int(words[l(0)]))continue;int64_t sm=0l;
   for(int s=0;s<h(3);s++){int64_t q=species(kind,id,s);if(q>0l){int64_t unit=integer(h(4)+d(1)+5*s+1);if(unit>0l&&q>LIMIT/unit){invalid();return;}sm=add(sm,q*unit);}}
   if(kind==0){integerAt(l(8)+2*id,mass(0,id));numberAt(l(9)+2*id,number(f(LU)+2*id));integerAt(l(14)+2*id,mass(0,id)-sm);
-   words[l(5)+id]=words[f(RESULTS)+8*id]==uint(DYADIC_POSITIVE)?1u:0u;words[l(6)+id]=words[f(RESULTS)+8*id+2];
+   words[l(5)+id]=words[f(VC)+id];words[l(6)+id]=words[f(RESULTS)+8*id+2];
    double unit=ldexp(double(integer(p.header+160)),h(162));numberAt(l(15)+2*id,number(l(15)+2*id)+double(integer(f(LDELTA)+2*id))*unit);words[l(10)+id]=1u;}
   else{integerAt(g(7)+2*id,mass(1,id)-sm);if(words[f(GC)+id]>0u)words[g(6)+id]=1u;}}
  if(id==0){words[l(0)+1]=words[f(LO)+h(1)];words[l(0)+2]=words[f(VO)+h(1)];words[g(0)+2]=words[f(GO)+h(2)];}
