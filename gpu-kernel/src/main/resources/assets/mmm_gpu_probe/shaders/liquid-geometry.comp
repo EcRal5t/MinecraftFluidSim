@@ -142,4 +142,16 @@ void transportPreference(int f) {
     faceFlux[f]=dvec2(qt,positive?liquid:-liquid);
 }
 
-void main(){if(errors!=0u)return;int i=int(gl_GlobalInvocationID.x);int count=pc.sx*pc.sy*pc.sz;if(pc.stage==0){if(i<count)totals(i);}else if(pc.stage==1){if(i<count)reconstruct(i);}else{int countFaces=(pc.sx+1)*pc.sy*pc.sz+pc.sx*(pc.sy+1)*pc.sz+pc.sx*pc.sy*(pc.sz+1);if(i<countFaces){if(pc.stage==2)faceGeometry(i);else transportPreference(i);}}}
+// Face mass and openings belong to the completed geometry; MAC momentum is current.
+void refreshVelocity(int face) {
+    int xCount=(pc.sx+1)*pc.sy*pc.sz,yCount=pc.sx*(pc.sy+1)*pc.sz;
+    int axis=face<xCount?0:face<xCount+yCount?1:2,local=face-(axis==0?0:axis==1?xCount:xCount+yCount);
+    ivec3 dims=ivec3(pc.sx,pc.sy,pc.sz);dims[axis]++;
+    ivec3 at=ivec3(local%dims.x,local/dims.x%dims.y,local/(dims.x*dims.y));
+    bool internal=at[axis]>0&&at[axis]<ivec3(pc.sx,pc.sy,pc.sz)[axis];
+    double mass=faces[face].x;
+    faces[face].y=internal&&faces[face].z>0.0&&mass>0.0
+            ?(axis==0?momentumX[local]:axis==1?momentumY[local]:momentumZ[local])/mass:0.0;
+}
+
+void main(){if(errors!=0u)return;int i=int(gl_GlobalInvocationID.x);int count=pc.sx*pc.sy*pc.sz;if(pc.stage==0){if(i<count)totals(i);}else if(pc.stage==1){if(i<count)reconstruct(i);}else{int countFaces=(pc.sx+1)*pc.sy*pc.sz+pc.sx*(pc.sy+1)*pc.sz+pc.sx*pc.sy*(pc.sz+1);if(i<countFaces){if(pc.stage==2)faceGeometry(i);else if(pc.stage==4)refreshVelocity(i);else transportPreference(i);}}}

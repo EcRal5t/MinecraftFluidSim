@@ -98,7 +98,7 @@ final class VulkanLiquidCapacity implements AutoCloseable {
         // Residual topology is built once; withdrawal stays on device for the whole batch.
         if(phase==6)rounds=Math.min(rounds,1);
         for(int i=0;i<rounds;i++){
-            stage(command,l,32,1,phase,0);
+            if(phase!=3)stage(command,l,32,1,phase,0);
             switch(phase){
                 case 0,1->{stage(command,l,11,l.vertices,0,0);stage(command,l,12,1,0,0);
                     stage(command,l,13,l.edges,0,0);stage(command,l,14,1,0,0);}
@@ -110,9 +110,8 @@ final class VulkanLiquidCapacity implements AutoCloseable {
                         stage(command,l,38,Math.multiplyExact(128,l.capacity.groups()+1),0,color);
                         stage(command,l,39,Math.multiplyExact(128,l.longBlocks),0,color);
                     }}
-                case 3->{stage(command,l,26,1,0,0);stage(command,l,27,l.capacity.cells(),0,0);
-                    stage(command,l,28,l.capacity.groups(),0,0);stage(command,l,45,128*l.longBlocks,0,0);
-                    stage(command,l,46,1,0,0);stage(command,l,29,l.capacity.cells(),0,0);}
+                case 3->{stage(command,l,27,Math.addExact(l.capacity.cells(),l.capacity.groups()),0,0);
+                    stage(command,l,45,Math.multiplyExact(128,l.longBlocks),0,0);stage(command,l,29,l.capacity.cells(),0,0);}
                 case 6->buildResidualGraph(command,l);
                 default->throw new IllegalArgumentException("Unknown capacity phase "+phase);
             }
@@ -145,10 +144,10 @@ final class VulkanLiquidCapacity implements AutoCloseable {
     }
     private void recordStage(VkCommandBuffer command,Layout l,int stage,int count,int argument,int mode){
         try(var stack=stackPush()){
-            if(stage<=10||stage==21||stage==44||stage==47)bindings.bind(command,stack);vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,
+            if(stage<=10||stage==21||stage==44||stage==46||stage==47)bindings.bind(command,stack);vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,
                     stack.ints(l.word(Field.HEADER),stage,count,argument,mode));int groups=(count+127)/128;
-            if(stage>=11&&stage<=15||stage==20||stage>=27&&stage<=29||stage==45||stage>=35&&stage<=39){
-                int dispatch=switch(stage){case 11->0;case 13->1;case 35->2;case 36->3;case 37,39->6;case 38->4;case 27->9;case 28->10;case 29->11;case 45->12;default->5;};
+            if(stage>=11&&stage<=15||stage==20||stage==27||stage==29||stage==45||stage>=35&&stage<=39){
+                int dispatch=switch(stage){case 11->0;case 13->1;case 35->2;case 36->3;case 37,39->6;case 38->4;case 27->9;case 29->11;case 45->12;default->5;};
                 vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+l.column(Field.DISPATCH).offset()+12L*dispatch);
             }else vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,

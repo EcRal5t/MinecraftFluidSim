@@ -107,15 +107,13 @@ void balanceSink(){if(read(EXCESS,sink())>0l)atomicAdd(words[at(STATE)+4],1u);cl
 int vertexColor(int vertex){return vertex<n()||(vertex>=2*n()&&vertex<sink())?0:1;}
 void dispatchSize(int slot,int size){int workgroups=(size+127)/128;
  put(DISPATCH,3*slot,min(workgroups,65535));put(DISPATCH,3*slot+1,max(1,(workgroups+65534)/65535));put(DISPATCH,3*slot+2,1);}
-int queueCounter(int kind);
-int currentCellQueue();
 void updateDispatch(){bool running=control(0)==0&&get(STATE,16)!=0;int state=get(STATE,0);putControl(2,state);
  dispatchSize(0,running&&state==0?h(3):0);dispatchSize(1,running&&state==1?h(4):0);
  dispatchSize(2,running&&state==2?h(3):0);dispatchSize(3,running&&state==2?get(STATE,17):0);
  dispatchSize(4,running&&state==2?128*get(STATE,17):0);
  dispatchSize(6,running&&state==2?128*get(LONG_BLOCK_OFFSETS,get(STATE,17)):0);
  dispatchSize(5,running?1:0);
- dispatchSize(9,running&&state==3?get(STATE,queueCounter(currentCellQueue())):0);}
+}
 void start(){if(get(STATE,4)==0)putControl(0,1);else put(STATE,0,0);}
 void seedDistance(int vertex){if(get(STATE,0)!=0)return;put(LABEL_CHANGED,vertex,0);put(DISTANCE,vertex,read(EXCESS,vertex)<0l?0:INFINITY);}
 void beginBfs(){if(get(STATE,0)==0){put(STATE,0,1);put(STATE,1,0);put(STATE,2,0);put(STATE,5,0);}}
@@ -244,6 +242,11 @@ int epoch(){return control(1)+1;}
 void enqueue(int kind,int vertex,int stamp,int generation){
  if(atomicExchange(words[at(DISTANCE)+stamp],uint(generation))==uint(generation))return;
  uint index=atomicAdd(words[at(STATE)+queueCounter(kind)],1u);words[queueAddress(kind,int(index))]=uint(vertex);
+ if(kind==2){
+  // Monotone command dimensions cover the flattened queue, including a second grid dimension.
+  uint count=(index+128u)/128u;
+  atomicMax(words[at(DISPATCH)+33],min(count,65535u));atomicMax(words[at(DISPATCH)+34],(count+65534u)/65535u);
+ }
 }
 void enqueueCell(int cell,bool next){enqueue(next?1-currentCellQueue():currentCellQueue(),cell,cell,epoch()+(next?1:0));}
 void enqueueGroup(int group,bool next){if(group==groups()-1)return;enqueue(next?7-currentGroupQueue():currentGroupQueue(),group,2*n()+group,epoch()+(next?1:0));}
@@ -260,10 +263,13 @@ void stationaryGroupQueue(int group){if(get(STATE,0)!=3)return;int count=get(GRO
  if(read(GROUP_INCOMING,group)>upper(8*n()+group))enqueueGroup(group,false);
 }
 void stationaryMap(int group){if(get(STATE,0)!=3)return;for(int block=get(LONG_BLOCK_OFFSETS,group);block<get(LONG_BLOCK_OFFSETS,group+1);block++)put(LONG_BLOCK_OWNER,block,group);}
-void clearRetractions(){if(get(STATE,0)!=3)return;
+void prepareStationaryRound(){if(get(STATE,0)!=3)return;
  put(STATE,queueCounter(1-currentCellQueue()),0);put(STATE,queueCounter(7-currentGroupQueue()),0);put(STATE,11,0);put(STATE,15,0);
- dispatchSize(9,get(STATE,queueCounter(currentCellQueue())));dispatchSize(10,get(STATE,queueCounter(currentGroupQueue())));
- dispatchSize(12,get(STATE,queueCounter(currentGroupQueue()))>0?128*get(LONG_BLOCK_OFFSETS,groups()):0);
+ bool running=control(0)==0;
+ dispatchSize(9,running?get(STATE,queueCounter(currentCellQueue()))+get(STATE,queueCounter(currentGroupQueue())):0);
+ dispatchSize(11,0);
+ dispatchSize(12,running&&get(STATE,queueCounter(currentGroupQueue()))>0?128*get(LONG_BLOCK_OFFSETS,groups()):0);
+ dispatchSize(5,running?1:0);
 }
 void retract(int edge,int64_t amount){if(amount<=0l)return;atomicMax(integers[at(PROPOSAL)/2+edge],amount);int donor=edge/7;enqueue(2,donor,n()+donor,epoch());}
 void requestCell(int index){if(index>=get(STATE,queueCounter(currentCellQueue())))return;int cell=int(words[queueAddress(currentCellQueue(),index)]);
@@ -285,7 +291,7 @@ void requestGroupBlock(int block,int lane){if(block>=get(LONG_BLOCK_OFFSETS,grou
  if(get(DISTANCE,2*n()+group)!=epoch())return;
  int index=get(GROUP_OFFSETS,group)+128*(block-get(LONG_BLOCK_OFFSETS,group))+lane;if(index<get(GROUP_OFFSETS,group+1))requestGroupCell(group,get(GROUP_MEMBERS,index));
 }
-void publishApply(){if(get(STATE,0)==3)dispatchSize(11,get(STATE,11));}
+void requestStationary(int index){int cells=get(STATE,queueCounter(currentCellQueue()));if(index<cells)requestCell(index);else requestGroup(index-cells);}
 void applyRetractions(int index){if(index>=get(STATE,11))return;int cell=int(words[queueAddress(2,index)]),sourceGroup=groupOf(cell);int64_t returned=0l;
  for(int side=1;side<7;side++){int edge=7*cell+side;int64_t amount=read(PROPOSAL,edge);write(PROPOSAL,edge,0l);if(amount<=0l)continue;
   writeFlow(edge,flow(edge)-amount);returned+=amount;int receiver=neighbor(cell,side-1),targetGroup=groupOf(receiver);
@@ -306,6 +312,7 @@ void finishRound(){
   if((get(STATE,18)&2)!=0){putControl(0,2);return;}
  }
  if(round>=control(5)&&control(0)==0)putControl(0,3);
+ if(get(STATE,0)==3)prepareStationaryRound();
 }
 void finish(int e){
  if(control(0)==1)writeNumber(ca(CACCEPTED)+2*e,flow(e));
@@ -327,11 +334,11 @@ void main(){
  else if(p.stage==10)start();else if(p.stage==11)seedDistance(id);else if(p.stage==12)beginBfs();else if(p.stage==13)bfsEdge(id);
  else if(p.stage==14)finishBfs();else if(p.stage==15)beginDischarge(id);
  else if(p.stage==24)checkStationaryGroup(id);else if(p.stage==25)startCorrection();
- else if(p.stage==26)clearRetractions();else if(p.stage==27)requestCell(id);else if(p.stage==28)requestGroup(id);
+ else if(p.stage==27)requestStationary(id);
  else if(p.stage==29)applyRetractions(id);else if(p.stage==30)prepareGroups(id);
  else if(p.stage==40)stationaryGroups(id);else if(p.stage==41)stationaryIncoming(id);else if(p.stage==42)stationaryGroupQueue(id);
  else if(p.stage==47){if(get(STATE,0)==3)scatterMember(id);}
- else if(p.stage==43){if(get(STATE,0)==3)write(PROPOSAL,id,0l);}else if(p.stage==44)stationaryMap(id);else if(p.stage==46)publishApply();
+ else if(p.stage==43){if(get(STATE,0)==3)write(PROPOSAL,id,0l);}else if(p.stage==44)stationaryMap(id);else if(p.stage==46)prepareStationaryRound();
  else if(p.stage==35)dischargeShort(id);else if(p.stage==36)prepareLong(id);else if(p.stage==20)finishRound();
  if(p.stage==25||p.stage==10||p.stage==12||p.stage==14||p.stage==20)updateDispatch();
 }

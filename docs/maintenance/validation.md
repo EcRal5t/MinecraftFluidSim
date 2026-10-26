@@ -946,3 +946,6 @@ phase3恢复32轮设备合批后的 `build/gpu-resident-cut64-batched-retraction
 气体允许物种采用注册声明的固定槽，删除动态并集／扫描及独立species扩容；液体汇集直接写入精确体积，删除terms/results与独立measure/write。`build/gpu-resident-cut64-active-fixed-inventory.log` 原64³切格液气导热、3预热／12采样连续15步成功，中位54.761 ms、最大79.215 ms、GPU平均46.617 ms，逻辑设备4814.5 MiB、平均回读273.0 B。采样通常7–9次提交，末步19次；末步真实孔流求解40轮及增长上传计入成本。分项日志 `build/gpu-resident-cut64-active-fixed-inventory-profile.log` 中gather平均0.632 ms、gas-remap-prepare 0.438 ms、aperture-energy-gather 0.401 ms；队列竞争顺序使连续轨迹及迭代数有变化，不能将墙钟差全部归因单个内核。整体仍未达到50 ms，现有职责35 ms与十倍提速也未取得资格。
 
 `build/gpu-liquid-fused-gather-short.log` 复用尾束及完全排空短链，32³／64³汇集GPU0.734／5.910 ms，精确体积、质量、物种与能量检查通过；仅覆盖本次汇集合并风险，集中物理验证继续后置。
+
+
+2026-10-27：容量活动队列缩为统一请求、大组请求、结算、完成四阶段；完成阶段准备下一轮，donor入队直接发布间接派发。`build/gpu-capacity-four-stage-upwind49.log` 原49轮输入GPU5.902 ms，通过既有整数检查，收益相对6.030 ms有限。复用几何的连续步复制已提交的物理面开度／质量，仅刷新当前MAC速度，删除重复PLIC面裁剪。`build/gpu-resident-cut64-reused-faces-four-stage.log` 原64³、3预热／12采样连续15步成功，中位52.754 ms、最大77.450 ms、GPU平均44.309 ms、设备4812.8 MiB，平均回读281.0 B；末步压力66轮、容量27轮、孔流37轮。必要扩容及孔流后续迭代均计入，完整步与现有职责预算仍未合格。

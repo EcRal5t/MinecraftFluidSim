@@ -589,7 +589,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
                 transport.beginDeviceRequest(command,source.transport,input,output,stack,false);transport.recordSolidGeometry(command,output,errors,stack);
                 if(reuseGeometry)copySourceGeometry(command,source,sourceCurrentGas,input,output,stack);
                 kernel.rebindRanges(geometryRanges(output,errors,geometry.get(GeometryField.FACES)));
-                if(reuseGeometry)kernel.recordFaces(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ());else kernel.record(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ());
+                if(reuseGeometry)kernel.recordVelocities(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ());else kernel.record(command,liquid.sizeX(),liquid.sizeY(),liquid.sizeZ());
                 var dst=new FlipKernelBindings.BufferRange(output);var err=new FlipKernelBindings.BufferRange(errors);
                 kernels.ledger.rebindRanges(new FlipKernelBindings.BufferRange(input),dst,err);
                 if(transport.gas!=null&&!reuseGeometry){kernels.volumeKernel.rebindRanges(new FlipKernelBindings.BufferRange(input),dst,err);kernels.volumeKernel.record(command,transport.volumes);
@@ -640,7 +640,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
                     if(reuseGeometry)kernels.timed(command,"source-derived-copy",()->copySourceGeometry(command,source,sourceCurrentGas,input,output,stack));
                 }
                 kernel.rebindRanges(geometryRanges(output,errors,geometry.get(GeometryField.FACES)));
-                if(reuseGeometry)kernel.recordFaces(command,sx,sy,sz);
+                if(reuseGeometry)kernel.recordVelocities(command,sx,sy,sz);
                 else if(gas==null)kernel.record(command, sx, sy, sz);
                 if(gas!=null) {
                     var dst=new FlipKernelBindings.BufferRange(output);var err=new FlipKernelBindings.BufferRange(errors);
@@ -939,6 +939,8 @@ final class VulkanLiquidRegion implements AutoCloseable {
         void copySourceGeometry(org.lwjgl.vulkan.VkCommandBuffer command,Workspace source,boolean sourceCurrentGas,GpuBuffer input,GpuBuffer output,org.lwjgl.system.MemoryStack stack){
             var plan=new VulkanBufferCopyPlan.Builder();
             for(var f:new GeometryField[]{GeometryField.CELLS,GeometryField.PLANES,GeometryField.LIQUID_MICRO})plan.copy(source.geometry.get(f),geometry.get(f));
+            var completedFaces=sourceCurrentGas?source.geometry.get(GeometryField.FACES):source.transport.futureFaces;
+            plan.copy(completedFaces,geometry.get(GeometryField.FACES));
             if(transport!=null&&transport.gas!=null){var old=source.transport;transport.gas.geometry.copyDerived(plan,sourceCurrentGas?old.gas.geometry:old.successor.geometry);}
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT|VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_SHADER_WRITE_BIT|VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,stack);
             plan.build().record(command,input,output,stack);
