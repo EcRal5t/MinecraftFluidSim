@@ -13,15 +13,15 @@ import static org.lwjgl.vulkan.VK10.*;
 final class VulkanLiquidCapacityInputs implements AutoCloseable {
     record Layout(VulkanLiquidCellVolumes.Layout volumes, VulkanLiquidCapacityLayout capacity,
                   int masksWordOffset, int occupiedWordOffset, int facesWordOffset, int fluxesWordOffset,
-                  VulkanGasGeometry.Layout gasGeometry,VulkanGasStateLayout gas,
-                  VulkanLiquidStateLayout.Column header,VulkanLiquidStateLayout.Column groupDispatch,long endOffset) {
+                  VulkanGasGeometry.Layout gasGeometry,VulkanGasStateLayout gas,VulkanGasThermodynamics.Layout gasThermodynamics,
+                  VulkanGasPressure.Layout gasPressure,VulkanLiquidStateLayout.Column header,VulkanLiquidStateLayout.Column groupDispatch,long endOffset) {
         int headerWordOffset() { return Math.toIntExact(header.offset() / 4); }
         void initializeHeader(ByteBuffer destination) {
             destination.duplicate().position(Math.toIntExact(header.offset())).put(headerBytes());
         }
         ByteBuffer headerBytes() {
             var bytes = ByteBuffer.allocateDirect(Math.toIntExact(header.bytes())).order(ByteOrder.LITTLE_ENDIAN);
-            int[] data = new int[32];
+            int[] data = new int[40];
             var source = volumes.source();
             data[0] = source.sizeX(); data[1] = source.sizeY(); data[2] = source.sizeZ();
             data[3] = source.cellCount(); data[4] = volumes.quantumExponent();
@@ -43,8 +43,12 @@ final class VulkanLiquidCapacityInputs implements AutoCloseable {
                 data[28]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.STANDARD_VOLUME_NANOS).offset()/4);
                 data[29]=capacity.word(VulkanLiquidCapacityLayout.Field.GROUP_CAPACITY);
                 data[30]=word(groupDispatch);
+                data[12]=gasThermodynamics.nodeVolumesWordOffset();data[13]=word(gasThermodynamics.states());
+                data[14]=word(gasPressure.column(VulkanGasPressure.Field.NODE_ABSOLUTE_PRESSURE));
+                data[15]=word(gasPressure.column(VulkanGasPressure.Field.MECHANICAL_MODE));
             }
             for (int i = 0; i < data.length; i++) bytes.putInt(Math.toIntExact(0 + 4L*i), data[i]);
+            if(gasGeometry!=null){double size=gasGeometry.cellSize();bytes.putDouble(4*32,size*size*size);}
         
             return bytes;
         }
@@ -52,20 +56,22 @@ final class VulkanLiquidCapacityInputs implements AutoCloseable {
     static Layout layout(VulkanLiquidCellVolumes.Layout volumes, VulkanLiquidCapacityLayout capacity,
                          int masksWordOffset, int occupiedWordOffset, int facesWordOffset, int fluxesWordOffset,
                          long scratchBase, long alignment) {
-        return layout(volumes,capacity,masksWordOffset,occupiedWordOffset,facesWordOffset,fluxesWordOffset,null,null,scratchBase,alignment);
+        return layout(volumes,capacity,masksWordOffset,occupiedWordOffset,facesWordOffset,fluxesWordOffset,null,null,null,null,scratchBase,alignment);
     }
     static Layout layout(VulkanLiquidCellVolumes.Layout volumes,VulkanLiquidCapacityLayout capacity,int masksWordOffset,
                          int occupiedWordOffset,int facesWordOffset,int fluxesWordOffset,VulkanGasGeometry.Layout gasGeometry,
-                         VulkanGasStateLayout gas,long scratchBase,long alignment) {
+                         VulkanGasStateLayout gas,VulkanGasThermodynamics.Layout gasThermodynamics,
+                         VulkanGasPressure.Layout gasPressure,long scratchBase,long alignment) {
         if(capacity.cells()!=volumes.source().cellCount()||(gas==null?capacity.gasGroups()!=0:
-                gasGeometry==null||capacity.gasGroups()!=gas.nodeCapacity()||gasGeometry.cells()!=capacity.cells()))
+                gasGeometry==null||gasThermodynamics==null||gasPressure==null||capacity.gasGroups()!=gas.nodeCapacity()||gasGeometry.cells()!=capacity.cells()))
             throw new IllegalArgumentException("Capacity inputs differ from their liquid/gas layout");
         if (volumes.quantumExponent() > -24 || volumes.quantumExponent() < -50)
             throw new IllegalArgumentException("Capacity quantum must resolve solid volume and fit integer cell capacity");
         long base = Math.addExact(scratchBase, alignment-1) & -alignment;
-        return new Layout(volumes, capacity, masksWordOffset, occupiedWordOffset, facesWordOffset, fluxesWordOffset,gasGeometry,gas,
-                new VulkanLiquidStateLayout.Column(base,32,4),new VulkanLiquidStateLayout.Column(base+Math.max(128,alignment),3,4),
-                Math.addExact(base,Math.max(128,alignment)+Math.max(12,alignment)));
+        long dispatch=Math.addExact(base,Math.addExact(160,alignment-1)&-alignment);
+        return new Layout(volumes, capacity, masksWordOffset, occupiedWordOffset, facesWordOffset, fluxesWordOffset,gasGeometry,gas,gasThermodynamics,gasPressure,
+                new VulkanLiquidStateLayout.Column(base,40,4),new VulkanLiquidStateLayout.Column(dispatch,3,4),
+                Math.addExact(dispatch,Math.max(12,alignment)));
     }
     private final FlipKernelBindings bindings;
     private FlipKernelBindings.BufferRange arena;

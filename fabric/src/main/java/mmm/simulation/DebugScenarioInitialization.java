@@ -81,9 +81,9 @@ public final class DebugScenarioInitialization {
 		for (int bz = 1; bz <= MinecraftDebugFixtures.BLOCK_SIZE_Z - 2; bz++) {
 			for (int bx = 1; bx <= MinecraftDebugFixtures.BLOCK_SIZE_X - 2; bx++) {
 				for (int by = 1; by <= 3; by++) {
-					float fraction = by <= 2 ? 1.0F : 0.5F;
 					for (int localZ = 0; localZ < cellsPerBlock; localZ++) {
 						for (int localY = 0; localY < cellsPerBlock; localY++) {
+							float fraction = by <= 2 ? 1.0F : Math.clamp(0.5F * cellsPerBlock - localY, 0.0F, 1.0F);
 							for (int localX = 0; localX < cellsPerBlock; localX++) {
 								int x = bx * cellsPerBlock + localX;
 								int y = by * cellsPerBlock + localY;

@@ -22,6 +22,8 @@ public final class GpuProductionDemoValidation {
 	private GpuProductionDemoValidation() { }
 	private static PhysicalObservation lastOutcome;
 	private static MassBaseline massBaseline;
+	private static double bulkWaterTemperatureK;
+	private static long reactionWaterQuanta;
 	private static List<mmm.inventory.LiquidCellInventory.Stock> firstTensionStocks;
 
 	public static void main(String[] args) throws Exception {
@@ -411,8 +413,8 @@ public final class GpuProductionDemoValidation {
 		snapshots.createDispatch(region);
 		String status = RegionDiagnosticsReport.residentStatus(region);
 		require(!status.isBlank() && region.deviceResident(), stage + ": status lost the device state");
-		System.out.printf("stage=%s generation=%d liquid_mass=%d total_mass_delta=%d max_speed=%.6g resident=%s validation_scope_ms=%.3f%n",
-				stage, region.solverGeneration(), summary.liquidMassUnits(), massDelta, region.maximumSpeed(),
+		System.out.printf("stage=%s generation=%d liquid_mass=%d total_mass_delta=%d water_temperature_k=%.6f max_speed=%.6g resident=%s validation_scope_ms=%.3f%n",
+				stage, region.solverGeneration(), summary.liquidMassUnits(), massDelta, bulkWaterTemperatureK, region.maximumSpeed(),
 				region.deviceResident(), (System.nanoTime() - validationStarted) / 1e6);
 	}
 
@@ -484,6 +486,7 @@ public final class GpuProductionDemoValidation {
 					stage, liquidDelta, gasDelta, granularDelta, coherentDelta);
 			throw failure;
 		}
+		checkBulkWaterTemperature(state, stage);
 		var afterGas = state.gas();
 		var beforeGas = before.gasState();
 		long totalDelta = Math.addExact(Math.addExact(liquidDelta, gasDelta), Math.addExact(granularDelta, coherentDelta));
@@ -515,6 +518,7 @@ public final class GpuProductionDemoValidation {
 		var expectedSpecies = new java.util.TreeMap<>(before.species());
 		changes.forEach((id, amount) -> expectedSpecies.merge(id, amount, Math::addExact));
 		expectedSpecies.values().removeIf(amount -> amount == 0);
+		reactionWaterQuanta = Math.subtractExact(afterSpecies.getOrDefault("mmm:h2o", 0L), expectedSpecies.getOrDefault("mmm:h2o", 0L));
 		boolean speciesReconciled = expectedSpecies.equals(afterSpecies) || elementTotals(state.chemicalRegistry(), expectedSpecies)
 						.equals(elementTotals(state.chemicalRegistry(), afterSpecies));
 		long expectedMass = Math.addExact(Math.addExact(chemicalExchange, gasExternalExchange), granularExchange);
@@ -533,6 +537,26 @@ public final class GpuProductionDemoValidation {
 			throw new AssertionError(stage + ": cannot reconcile cross-phase mass and external exchanges from the available gas ledger");
 		}
 		return totalDelta;
+	}
+
+	/** These room-temperature demos have no imposed heater or refrigerator. */
+	private static void checkBulkWaterTemperature(mmm.fluid.FluidDomainState state, String stage) {
+		var function = new mmm.thermal.ThermalStateFunction(state.thermalRegistry());
+		int thermal = state.thermalRegistry().materialHandle(mmm.thermal.ThermalMaterialDefinition.CarrierKind.LIQUID, "mmm:water");
+		double waterMass = 0, temperatureMoment = 0;
+		for (var stock : state.liquid().physicalStocks()) {
+			if (stock.massUnits() == 0 || !state.materialPalette().get(stock.key().material()).id().equals("mmm:water")) continue;
+			double mass = stock.massKilograms();
+			double temperature = function.stateForInternalEnergy(thermal, mass,
+					stock.mixture() == null ? java.util.Map.of() : stock.mixture().stableAmounts(state.chemicalRegistry()),
+					stock.internalEnergy()).temperatureK();
+			waterMass += mass;
+			temperatureMoment += mass * temperature;
+		}
+		bulkWaterTemperatureK = waterMass == 0 ? 0 : temperatureMoment / waterMass;
+		// Trace residue after emptying a container does not define a bulk temperature.
+		if (waterMass >= 1.0) require(bulkWaterTemperatureK >= 270 && bulkWaterTemperatureK <= 350,
+				stage + ": room-temperature water underwent unforced bulk heating/cooling: " + bulkWaterTemperatureK + " K");
 	}
 
 	private static java.util.Map<String, Long> elementTotals(mmm.chemistry.ChemicalRegistry registry,
@@ -688,9 +712,9 @@ public final class GpuProductionDemoValidation {
 					&& end.oilY() > end.waterY(), "Both layers must move while lighter oil remains above water");
 			case "chemistry" -> {
 				long acidConsumed = initial.acid() - end.acid(), baseConsumed = initial.base() - end.base();
-				System.out.printf("stage=neutralization acid_quanta=%d base_quanta=%d water_change=%d%n",
-						acidConsumed, baseConsumed, end.waterQuanta() - initial.waterQuanta());
-				require(end.waterX() > initial.waterX() && acidConsumed > 0 && acidConsumed == baseConsumed,
+				System.out.printf("stage=neutralization acid_quanta=%d base_quanta=%d reaction_water_quanta=%d liquid_water_change=%d%n",
+						acidConsumed, baseConsumed, reactionWaterQuanta, end.waterQuanta() - initial.waterQuanta());
+				require(end.waterX() > initial.waterX() && acidConsumed > 0 && acidConsumed == baseConsumed && reactionWaterQuanta == acidConsumed,
 						"Mixed acid and base did not undergo balanced neutralization");
 			}
 			case "tension30", "tension120" -> require(end.wetArea() > 0, "Water no longer contacts the wetting floor");

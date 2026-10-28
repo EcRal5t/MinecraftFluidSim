@@ -486,7 +486,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 设备常驻液体入口由 `VulkanLiquidRegion` 持有同代库存与 MAC，依次记录库存派生几何、重力、真实七点 CSR、压力、格面投影与上风 PLIC 面扫掠通量，再准备容量、材料路线与库存后继。几何工作区采用 float32，解析尺度为 4e-5 体积；精确库存、int64 数量、动力学与压力保持原精度。`VulkanLiquidGeometry.recordTransportPreferences` 在投影后，以共享开放面积计算总体积通量 Qt，以源侧 PLIC 薄片扫掠计算实际液体体积 Ql，写入 binding 13 的 `faceFlux`。压力使用两侧接液面积描述机械响应，物质输运使用上风液体占比；两者通过接受通量与未来几何耦合。供体额度与真实接收容量继续由精确容量求解处理。`advanceMechanical` 在同一候选中完成容量、精确体积、材料与数量输运、MAC、未来几何、机械热和精确账，再连续提交设备代次。源与未来几何采用独立绑定，保留投影后的源速度。`MechanicalDefinitions` 显式提供材料相序、物种质量、参考能和容量预留，`fromRegistries` 从真实流体、化学与热注册表组装这些列；缺失的物种偏移保留为未声明状态。生产区域其他物相的完整迁移仍待完成，当前交付范围见实施计划。
 
-液体库存以 cell×material 固定槽寻址，精确体积、整数质量、物种和内能沿同一批已接受路线搬运。GPU 容量求解保留一份七路流量：原位库存可行时先做有界的局部撤回，再从剩余冲突建立统一残量图；实体排水直接参加相同的单元和有限气腔容量约束。残量推送停滞时重新计算距离，成功分配后才发布库存。`VulkanLiquidCellVolumes` 与 `VulkanLiquidCapacityInputs` 准备真实供给和空间约束，`VulkanLiquidCapacity` 完成分配，`VulkanLiquidAcceptedVolumes` 将接受量交给精确库存输运。失败候选保留原状态，迭代参数与临时工作区由代码维护。
+液体库存以 cell×material 固定槽寻址，精确体积、整数质量、物种和内能沿同一批已接受路线搬运。GPU 容量求解保留一份七路流量：原位库存可行时先做有界的局部撤回，再从剩余冲突建立统一残量图；实体排水直接参加相同的单元和有限气腔容量约束。有限气腔按当前绝对压力、热容比和共同压力解预留可压缩空间，无压力作用面的气腔保留原有空间；实际接受的容积随后参与绝热功结算。残量推送停滞时重新计算距离，成功分配后才发布库存。`VulkanLiquidCellVolumes` 与 `VulkanLiquidCapacityInputs` 准备真实供给和空间约束，`VulkanLiquidCapacity` 完成分配，`VulkanLiquidAcceptedVolumes` 将接受量交给精确库存输运。失败候选保留原状态，迭代参数与临时工作区由代码维护。
 
 已接受单元体积的设备处理按材料路线→数量分份→库存归并→MAC 搬运、未解析格面合并与壁面处理→耗散热写入组织。`VulkanLiquidMaterialRoutes` 将已接受单元 dyadic 体积按材料相序与源库存分配，从固定材料槽保存实际非零方向及精确原地余量。普通比例分份采用同一容量量子的整数份额，路线直接保存两字内联整数体积；每源只在结尾精确扣除总出量。既有亚量子尾数、重力分层耗尽和排空由同一模块精确分配，源与目标体积保持守恒；单个实际材料直接继承接受体积，无跨格流时直接保留源库存。`VulkanLiquidCellVolumes` 负责精确单元体积合计与整数容量供给，已接入连续机械阶段入口。`VulkanLiquidRouteQuantities` 根据实际路线体积在同一遍分派整数质量、物种和参考能；物种金额按源物种条目与真实七路方向固定寻址，直接复用源物种编号和行表，源内能分配差 `ΣrouteU−sourceU` 由每源8项浮点展开保存。`VulkanLiquidGather` 直接汇集七邻域同材料到固定槽，重建物种CSR，并在同一遍读取路线时直接生成精确体积及其描述符，保存每目标7项 `ΣrouteU−outU` 展开。`VulkanLiquidMomentum.recordTransport/recordResolve` 沿整数质量通量搬运 MAC 动量，生成单元耗散热与墙面冲量；`recordHeatPosting` 按目标质量分配热量、更新库存内能，并保留每库存和单元的舍入展开。`VulkanEnergyLedger` 将数量分份、归并与热写入的有符号浮点展开精确归总为设备 dyadic 项；机械热总量独立归总，用于共同热账交接。以上接口已用于固定源的材料输运分项，并与容量接受组合进入连续机械步；有限气腔库存后继已共同提交，完整生产后端仍待接入。
 
@@ -677,7 +677,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 
 - **GPU 设备、资源、提交与回读**
   - 入口：
-    - [VulkanDeviceContext](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanDeviceContext.java)
+    - [VulkanDeviceContext](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanDeviceContext.java)：标准驱动发现、设备与管线缓存生命周期；`MmmRuntimeFactory.prepareSolverBackend` 在世界启动阶段准备实际设备工作区
     - [DeviceLiquidInventory](../../model/src/main/java/mmm/inventory/DeviceLiquidInventory.java)：`encode/decode` 交接液体与物种 CSR、整数质量和原始内能
     - [DeviceDyadicArray](../../model/src/main/java/mmm/units/DeviceDyadicArray.java)：无损体积的变长 limb、符号和指数列
     - [VulkanInventoryTransport](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanInventoryTransport.java)：int64 设备常驻库存输运与 checkpoint，候选存储交由 `VulkanRegionStorage`；完整区域输运接入待完成
@@ -695,7 +695,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [VulkanCondensedPhaseChange](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanCondensedPhaseChange.java)、[VulkanGasPhaseChange](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanGasPhaseChange.java)：局部整数批次的凝固／熔化和有限气腔汽化／凝结；热驱动力与相界面采用局部近似，库存和能量按实际批次结算。
     - [VulkanGasLiquidMassTransfer](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanGasLiquidMassTransfer.java)：局部 Henry 双膜传质，在保持液体体积的同时结算溶解／析气的整数物种、质量与携带能量；有限气腔共享供体库存，外界交换写入化学源汇，未满量子的进度随 checkpoint 保存。
     - [VulkanPhaseGasTopology](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanPhaseGasTopology.java)：相变后的气腔几何、拆分合并及固定能量重映射；正常生产交接验证入口 `GpuThermalPhaseValidation`。
-    - [VulkanCommandTemplates](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanCommandTemplates.java)、[FlipKernelBindings](../../gpu-kernel/src/main/java/mmm/gpuprobe/FlipKernelBindings.java)：工作区持有可复用的压力／容量二级命令，缓冲区对象身份与切片对应不可变描述符；工作区增长或关闭时释放旧模板
+    - [VulkanCommandTemplates](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanCommandTemplates.java)、[FlipKernelBindings](../../gpu-kernel/src/main/java/mmm/gpuprobe/FlipKernelBindings.java)：复用进程内着色器编译结果；工作区持有可复用的压力／容量二级命令，缓冲区对象身份与切片对应不可变描述符；工作区增长或关闭时释放旧模板
     - [VulkanLiquidGeometry](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidGeometry.java)、[VulkanLiquidProjection](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidProjection.java)：库存派生 PLIC、切格与 MAC 几何，重力、物理 CSR 和格面压力响应；`recordTransportPreferences` 生成 PLIC 面扫掠偏好
     - [VulkanPressureMultigrid](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanPressureMultigrid.java)：每次压力组装构建完整液体多重网格，活动集通过输入和输出投影处理；各层按实际正对角行间接派发，延拓与后平滑合并，最粗层复用因子矩阵向量乘积
     - [VulkanLiquidRouteLayout](../../gpu-kernel/src/main/java/mmm/gpuprobe/VulkanLiquidRouteLayout.java)：实际候选路线的源 CSR、方向掩码、带 arena 身份的共享精确体积引用、整数数量、物种与内能列

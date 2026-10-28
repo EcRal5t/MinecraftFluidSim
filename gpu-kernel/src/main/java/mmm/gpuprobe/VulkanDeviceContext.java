@@ -92,7 +92,12 @@ final class VulkanDeviceContext implements AutoCloseable {
 					.apiVersion(VK_MAKE_API_VERSION(0, 1, 1, 0));
 			VkInstanceCreateInfo instanceInfo = VkInstanceCreateInfo.calloc(stack).sType$Default().pApplicationInfo(app);
 			PointerBuffer instancePointer = stack.mallocPointer(1);
-			check(vkCreateInstance(instanceInfo, null, instancePointer), "vkCreateInstance");
+			int instanceResult = vkCreateInstance(instanceInfo, null, instancePointer);
+			if (instanceResult == VK_ERROR_INCOMPATIBLE_DRIVER)
+				throw new IllegalStateException("Vulkan loader could not find a compatible driver (VkResult -9). "
+						+ "Check the installed GPU driver with vulkaninfo; repair the GPU driver installation "
+						+ "if that command also fails to discover a device.");
+			check(instanceResult, "vkCreateInstance");
 			instance = new VkInstance(instancePointer.get(0), instanceInfo);
 
 			IntBuffer count = stack.ints(0);

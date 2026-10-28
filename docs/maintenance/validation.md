@@ -16,9 +16,31 @@
 
 每个接受步检查四相整数质量与元素收支、热账、设备驻留及展示快照。环境交换单独记账，日志的 `total_mass_delta` 是包含真实环境收支的库存变化；断言比较的是扣除这些收支后的质量差。默认溃坝保留原 24×16×24 全能力场景和 324 m³ 初始水量，并执行真人尺寸实体的进入、移动和离开。
 
+2026-10-28，RTX 5070 Ti 上的完整流程结果如下。步数为调度推进次数，随后另有暂停、手动步进、导出恢复、编辑及续算。常温水场景逐步检查质量加权水温，捕获账本闭合但整体异常冷却的失真。
+
+| 场景 | 完整结果 | 本地日志 |
+|---|---|---|
+| `demo` | 500 步，实体进入／移动／离开；水向空侧扩散、重心下降，水温 293.154 K | `build/gpu-demo-build17.log` |
+| `material` | 120 步，油水均流动，油层保持在水层上方 | `build/gpu-material-final17.log` |
+| `chemistry` | 120 步，酸、碱消耗与生成水各为 754005632 物种量子，水温 292.980 K | `build/gpu-chemistry-final18.log` |
+| `air` | 120 步，加压侧液位下降，对侧上升 | `build/gpu-air-build18.log` |
+| `vacuum` | 120 步，低压侧液位上升，对侧下降 | `build/gpu-vacuum-final18.log` |
+| `tension` | 两种接触角各 200 步；30°／120° 的接触面积分别为 93.517／77.408 m²，低接触角更铺展 | `build/gpu-tension-final17.log` |
+| `controller` | 20 步及真实水桶注入、暂停手动推进、舀出、持久事务与续算 | `build/gpu-controller-final17.log` |
+| `capture` | 40 步，采样水体并保留世界水块，完成后续状态操作 | `build/gpu-capture-final17.log` |
+| `takeover` | 40 步，接管 32 个水源方块、恢复原坐标并释放接管 | `build/gpu-takeover-final17.log` |
+
+主水池 499 个热运行完整应用步的中位耗时为 64.662 ms，P95 为 88.447 ms，最大 146.017 ms；未触发耗时暂停。启动准备与首步导入单独记录。
+
+同次最终构建的设备驻留与七种热相变／膜传质验证通过，记录在 `build/gpu-air-build18.log`，`:fabric:assemble` 成功。容器参考能量与化学抽取聚焦回归分别见 `build/demo-container-temperature.log`、`build/demo-chemical-transfer.log`。静态架构检查仍有一项既有失败：`VulkanLiquidRegion` 1745 行超过 1000 行限制，见 `build/demo-architecture-final.log`。
+
 日志分别记录世界启动时的求解器准备、完整应用步 `offline_scope_ms` 与额外验收导出 `validation_scope_ms`。调度沿用连续三步超过 200 ms 暂停的生产规则。离线耗时未包含真实玩家网络投递、渲染和 Minecraft 世界采样成本；64³／50 ms 保留为待评估目标，本轮以完整流程及演示效果交付。
 
-构建后可复用 `fabric/build/gpu-production-demo-work/classpath.txt` 直接执行 `mmm.simulation.GpuProductionDemoValidation <场景> <步数> complete`。本机窗口外 Vulkan 执行需显式设置 `VK_DRIVER_FILES` 为已安装 NVIDIA 驱动的 ICD JSON；路径由本机驱动安装确定。
+构建后可复用 `fabric/build/gpu-production-demo-work/classpath.txt` 直接执行 `mmm.simulation.GpuProductionDemoValidation <场景> <步数> complete`。
+
+本机 NVIDIA 驱动缺少安装 INF 声明的 `VulkanDriverName`／`VulkanDriverNameWoW` 注册项，独立 `vulkaninfo` 同样无法发现设备。经用户授权补回两张卡的缺失项后，默认加载器可发现 RTX 5070 Ti 和 RTX 4060 Ti，记录在 `build/vulkan-driver-repair.log`；无需设置驱动路径环境变量。Mod 使用标准 Vulkan 驱动发现，启动失败时提示检查系统驱动。最终构建日志为 `build/gpu-final-assemble.log`。
+
+最终产物在未设置驱动覆盖变量的新进程中通过 `demo 20 complete`，包含实体进出、暂停手动步进、恢复与编辑后续算，日志为 `build/gpu-default-driver-final.log`。
 
 ## GPU 生产接入的最新短链
 
