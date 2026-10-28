@@ -77,7 +77,9 @@ public final class MmmModClient implements ClientModInitializer {
 							&& screen.inDimension(dimension) && screen.awaiting(payload.regionId(), payload.requestGeneration());
 					matches |= client.gui.screen() instanceof LifecycleConfirmationScreen screen
 							&& screen.inDimension(dimension) && screen.awaiting(payload.regionId(), payload.requestGeneration());
-					if (matches) client.setScreenAndShow(payload.summary() == null ? null : new ControllerConsoleScreen(payload.summary()));
+					if (matches) client.setScreenAndShow(payload.summary() == null ? null
+							: client.gui.screen() instanceof ControllerConsoleScreen screen
+									? screen.updated(payload.summary(), payload.failure()) : new ControllerConsoleScreen(payload.summary(), payload.failure()));
 				}));
 		ClientPlayNetworking.registerGlobalReceiver(LifecycleOperationPreviewPayload.TYPE, (payload, context) ->
 				context.client().execute(() -> {

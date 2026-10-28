@@ -58,6 +58,12 @@ public final class FluidRegionManager {
 	public RegionCatalog.AdmissionResult previewReplacement(long requiredCells) {
 		return catalog.previewReplacement(requiredCells);
 	}
+	RegionCatalog.AdmissionResult previewReplacement(net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> dimension,
+			net.minecraft.core.BlockPos origin, int sizeX, int sizeY, int sizeZ, long requiredCells) {
+		return catalog.previewReplacement(new RegionCatalog.Descriptor(UUID.randomUUID(), dimension.identifier().toString(),
+				origin.getX(), origin.getY(), origin.getZ(), origin.getX() + sizeX, origin.getY() + sizeY,
+				origin.getZ() + sizeZ, requiredCells));
+	}
 
 	public boolean select(UUID id) { return catalog.select(id); }
 	public FluidRegion remove(UUID id) {

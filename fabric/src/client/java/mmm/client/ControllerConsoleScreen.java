@@ -22,24 +22,40 @@ import java.util.Locale;
 /** Controller status, server actions and player-local fluid display controls. */
 public final class ControllerConsoleScreen extends Screen {
 	private final ControllerSummary summary;
+	private final String failure;
 	private final BlockPos controllerPosition;
 	private List<Component> rows = List.of();
 	private final List<Button> serverActions = new ArrayList<>();
 	private int scroll;
-	private boolean requestPending;
+	private final Request request;
+	static final class Request {
+		private final java.util.UUID region;
+		private final long generation;
+		private boolean pending;
+		Request(ControllerSummary summary) { region = summary.regionId(); generation = summary.summaryGeneration(); }
+		void begin() { pending = true; }
+		boolean awaiting(java.util.UUID regionId, long generation) {
+			return pending && region.equals(regionId) && this.generation == generation;
+		}
+	}
 
 	public ControllerConsoleScreen(ControllerSummary summary) {
+		this(summary, null);
+	}
+	ControllerConsoleScreen(ControllerSummary summary, String failure) {
 		super(Component.translatable("screen.mmm.controller.title"));
 		this.summary = summary;
+		this.failure = failure;
+		this.request = new Request(summary);
 		ControllerSummary.Footprint footprint = summary.footprint();
 		controllerPosition = new BlockPos(footprint.controllerX(), footprint.controllerY(), footprint.controllerZ());
 	}
 
 	@Override
 	protected void init() {
-		rows = rows(summary);
+		rows = rows(summary, failure);
 		serverActions.clear();
-		int buttonWidth = 92;
+		int buttonWidth = Math.min(92, Math.max(1, (width - 36) / 3));
 		int gap = 6;
 		int total = buttonWidth * 3 + gap * 2;
 		int left = (width - total) / 2;
@@ -61,9 +77,10 @@ public final class ControllerConsoleScreen extends Screen {
 		int lifecycleTotal = lifecycleWidth * 4 + gap * 3;
 		int lifecycleLeft = (width - lifecycleTotal) / 2;
 		int lifecycleY = height - 54;
+		int displayWidth = Math.min(200, Math.max(1, width - 24));
 		addServerAction(Button.builder(Component.translatable("screen.mmm.display.open"),
 				button -> minecraft.setScreenAndShow(new FluidDisplayScreen(this)))
-				.bounds(width / 2 - 100, height - 78, 200, 20).build());
+				.bounds((width - displayWidth) / 2, height - 78, displayWidth, 20).build());
 		addLifecycleButton(lifecycleLeft, lifecycleY, lifecycleWidth, "empty", LifecycleOperation.EMPTY_CONDENSED);
 		addLifecycleButton(lifecycleLeft + lifecycleWidth + gap, lifecycleY, lifecycleWidth,
 				"vent", LifecycleOperation.VENT_SEALED_GAS);
@@ -84,16 +101,21 @@ public final class ControllerConsoleScreen extends Screen {
 	}
 
 	private void addServerAction(Button button) {
-		if (requestPending) button.active = false;
+		if (request.pending) button.active = false;
 		serverActions.add(button);
 		addRenderableWidget(button);
 	}
 
-	private void disableServerActions() { requestPending = true; serverActions.forEach(button -> button.active = false); }
+	void disableServerActions() { request.begin(); serverActions.forEach(button -> button.active = false); }
 	boolean awaiting(java.util.UUID regionId, long generation) {
-		return requestPending && summary.regionId().equals(regionId) && summary.summaryGeneration() == generation;
+		return request.awaiting(regionId, generation);
 	}
 	boolean inDimension(String dimension) { return summary.dimensionId().equals(dimension); }
+	ControllerConsoleScreen updated(ControllerSummary next, String failure) {
+		var screen = new ControllerConsoleScreen(next, failure);
+		screen.scroll = failure == null ? scroll : 0;
+		return screen;
+	}
 
 	private void send(ControllerConsoleAction action) {
 		disableServerActions();
@@ -127,8 +149,9 @@ public final class ControllerConsoleScreen extends Screen {
 		return true;
 	}
 
-	private static List<Component> rows(ControllerSummary value) {
+	private static List<Component> rows(ControllerSummary value, String failure) {
 		ArrayList<Component> result = new ArrayList<>();
+		if (failure != null) result.add(Component.literal(failure).withStyle(net.minecraft.ChatFormatting.RED));
 		result.add(Component.translatable("screen.mmm.controller.identity",
 				value.regionId().toString().substring(0, 8), value.dimensionId(),
 				value.profileFingerprint().substring(0, 12)));

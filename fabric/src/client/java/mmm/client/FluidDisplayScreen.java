@@ -21,24 +21,27 @@ final class FluidDisplayScreen extends Screen {
 	}
 
 	@Override protected void init() {
-		int left = width / 2 - 150;
 		FluidDisplaySettings.View view = FluidDisplaySettings.INSTANCE.view();
+		String minimumText = minimum == null ? Double.toString(view.minimumK()) : minimum.getValue();
+		String maximumText = maximum == null ? Double.toString(view.maximumK()) : maximum.getValue();
+		int column = Math.min(96, Math.max(1, (width - 36) / 3));
+		int left = (width - (3 * column + 12)) / 2;
 		for (FluidDisplaySettings.Mode mode : FluidDisplaySettings.Mode.values()) {
 			addRenderableWidget(Button.builder(modeName(mode), button -> {
 				FluidDisplaySettings.INSTANCE.setMode(mode);
-			}).bounds(left + mode.ordinal() * 102, 46, 96, 20).build());
+			}).bounds(left + mode.ordinal() * (column + 6), 46, column, 20).build());
 		}
-		minimum = new EditBox(font, width / 2 - 150, 104, 96, 20, Component.translatable("screen.mmm.display.minimum"));
-		maximum = new EditBox(font, width / 2 - 48, 104, 96, 20, Component.translatable("screen.mmm.display.maximum"));
-		minimum.setValue(Double.toString(view.minimumK()));
-		maximum.setValue(Double.toString(view.maximumK()));
+		minimum = new EditBox(font, left, 104, column, 20, Component.translatable("screen.mmm.display.minimum"));
+		maximum = new EditBox(font, left + column + 6, 104, column, 20, Component.translatable("screen.mmm.display.maximum"));
+		minimum.setValue(minimumText);
+		maximum.setValue(maximumText);
 		minimum.setResponder(ignored -> updateApply());
 		maximum.setResponder(ignored -> updateApply());
 		addRenderableWidget(minimum);
 		addRenderableWidget(maximum);
 		apply = addRenderableWidget(Button.builder(Component.translatable("screen.mmm.display.apply"), button ->
 				FluidDisplaySettings.INSTANCE.setTemperatureRange(number(minimum), number(maximum)))
-				.bounds(width / 2 + 54, 104, 96, 20).build());
+				.bounds(left + 2 * (column + 6), 104, column, 20).build());
 		addRenderableWidget(Button.builder(Component.translatable("gui.done"), button -> onClose())
 				.bounds(width / 2 - 50, height - 30, 100, 20).build());
 		updateApply();
@@ -70,16 +73,18 @@ final class FluidDisplayScreen extends Screen {
 		};
 		graphics.centeredText(font, legend, width / 2, 138, 0xd8d8d8);
 		if (view.mode() != FluidDisplaySettings.Mode.COMPOSITION) {
-			int left = width / 2 - 112;
-			for (int i = 0; i < 224; i++) {
+			int gradientWidth = Math.min(224, Math.max(1, width - 32));
+			int left = (width - gradientWidth) / 2;
+			for (int i = 0; i < gradientWidth; i++) {
+				double fraction = gradientWidth == 1 ? 0 : i / (double) (gradientWidth - 1);
 				int argb = view.mode() == FluidDisplaySettings.Mode.PH
-						? FluidColorMapping.phColor(i * 14.0 / 223.0) : FluidColorMapping.temperatureColor(i / 223.0);
+						? FluidColorMapping.phColor(fraction * 14.0) : FluidColorMapping.temperatureColor(fraction);
 				graphics.fill(left + i, 154, left + i + 1, 164, argb);
 			}
 			graphics.centeredText(font, Component.translatable("screen.mmm.display.no_data"), width / 2, 174, FluidColorMapping.NO_DATA);
 		}
 		int noteY = height - 58;
-		for (var line : font.split(Component.translatable("screen.mmm.display.local"), width - 32)) {
+		for (var line : font.split(Component.translatable("screen.mmm.display.local"), Math.max(1, width - 32))) {
 			graphics.text(font, line, 16, noteY, 0xa0a0a0, false);
 			noteY += 11;
 		}

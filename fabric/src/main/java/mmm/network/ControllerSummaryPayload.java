@@ -8,7 +8,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 
 /** Clientbound bounded controller summary. The client receives no authority-bearing world object. */
-public record ControllerSummaryPayload(java.util.UUID regionId, long requestGeneration, ControllerSummary summary) implements CustomPacketPayload {
+public record ControllerSummaryPayload(java.util.UUID regionId, long requestGeneration, ControllerSummary summary, String failure) implements CustomPacketPayload {
 	public static final Type<ControllerSummaryPayload> TYPE = new Type<>(MmmMod.id("controller_summary"));
 	public static final StreamCodec<FriendlyByteBuf, ControllerSummaryPayload> CODEC = StreamCodec.of(
 			ControllerSummaryPayload::encode, ControllerSummaryPayload::decode);
@@ -17,8 +17,10 @@ public record ControllerSummaryPayload(java.util.UUID regionId, long requestGene
 		if (regionId == null || requestGeneration < 0 || (summary == null && requestGeneration == 0)
 				|| (summary != null && !regionId.equals(summary.regionId())))
 			throw new IllegalArgumentException("Controller summary response identity is invalid");
+		if (failure != null && failure.length() > 1024) failure = failure.substring(0, 1024);
 	}
-	public ControllerSummaryPayload(ControllerSummary summary) { this(summary.regionId(), 0, summary); }
+	public ControllerSummaryPayload(java.util.UUID regionId, long requestGeneration, ControllerSummary summary) { this(regionId, requestGeneration, summary, null); }
+	public ControllerSummaryPayload(ControllerSummary summary) { this(summary.regionId(), 0, summary, null); }
 
 	@Override public Type<ControllerSummaryPayload> type() { return TYPE; }
 
@@ -27,6 +29,8 @@ public record ControllerSummaryPayload(java.util.UUID regionId, long requestGene
 		buffer.writeVarLong(payload.requestGeneration);
 		buffer.writeBoolean(payload.summary != null);
 		if (payload.summary != null) writeSummary(buffer, payload.summary);
+		buffer.writeBoolean(payload.failure != null);
+		if (payload.failure != null) buffer.writeUtf(payload.failure, 1024);
 	}
 
 	static void writeSummary(FriendlyByteBuf buffer, ControllerSummary value) {
@@ -72,8 +76,9 @@ public record ControllerSummaryPayload(java.util.UUID regionId, long requestGene
 	}
 
 	private static ControllerSummaryPayload decode(FriendlyByteBuf buffer) {
-		return new ControllerSummaryPayload(buffer.readUUID(), buffer.readVarLong(),
-				buffer.readBoolean() ? readSummary(buffer) : null);
+		var region = buffer.readUUID(); long generation = buffer.readVarLong();
+		var summary = buffer.readBoolean() ? readSummary(buffer) : null;
+		return new ControllerSummaryPayload(region, generation, summary, buffer.readBoolean() ? buffer.readUtf(1024) : null);
 	}
 
 	static ControllerSummary readSummary(FriendlyByteBuf buffer) {

@@ -121,7 +121,7 @@ tasks.register('runCpuValidation', JavaExec) {
 	group = 'verification'
 	description = 'Runs selected CPU validation gates in one JVM (default: fast; use -PcpuValidation=list).'
 	dependsOn tasks.named('testClasses')
-	classpath = sourceSets.test.output + sourceSets.main.output + configurations.testCompileClasspath
+	classpath = sourceSets.test.runtimeClasspath
 	mainClass = 'mmm.validation.CpuValidationSuite'
 	enableAssertions = true
 	systemProperty 'mmm.solverBackend', 'cpu'
@@ -137,6 +137,7 @@ tasks.register('runCpuValidation', JavaExec) {
 }
 
 ['runMarkerPressureValidation': 'mmm.fluid.MarkerPressureValidation',
+ 'runDemoInteractionValidation': 'mmm.simulation.DemoInteractionValidation',
  'runGranularCarrierValidation': 'mmm.fluid.GranularCarrierValidation',
  'runGranularBedValidation': 'mmm.fluid.GranularBedWakeValidation',
  'runThermalValidation': 'mmm.fluid.M9ThermalValidation',

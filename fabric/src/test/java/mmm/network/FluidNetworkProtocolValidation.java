@@ -237,6 +237,7 @@ public final class FluidNetworkProtocolValidation {
 				"initial controller opening acquired a request token or lost its identity");
 		for (ControllerSummaryPayload response : List.of(
 				new ControllerSummaryPayload(REGION, 7L, current.summary()),
+				new ControllerSummaryPayload(REGION, 7L, current.summary(), "request failed"),
 				new ControllerSummaryPayload(REGION, 7L, null))) {
 			buffer = new FriendlyByteBuf(Unpooled.buffer());
 			try {
@@ -331,6 +332,10 @@ public final class FluidNetworkProtocolValidation {
 				&& !FluidProtocol.validateResponse(offer, new FluidProtocolResponsePayload(true, FluidProtocol.Layout.PURE,
 						FluidProtocol.REQUIRED_CAPABILITIES & ~FluidProtocol.CAP_DEMO_WORKBENCH, "")).accepted(),
 				"demo workbench protocol must reject a client that lacks its capability");
+		require((offer.requiredCapabilities() & FluidProtocol.CAP_CONTROLLER_FAILURES) != 0
+				&& !FluidProtocol.validateResponse(offer, new FluidProtocolResponsePayload(true, FluidProtocol.Layout.PURE,
+						FluidProtocol.REQUIRED_CAPABILITIES & ~FluidProtocol.CAP_CONTROLLER_FAILURES, "")).accepted(),
+				"controller failure responses require a compatible client");
 		require(accepted.accepted() && accepted.selectedLayout() == FluidProtocol.Layout.PURE
 				&& accepted.capabilities() == FluidProtocol.REQUIRED_CAPABILITIES,
 				"matching layout/capability offer was not selected exactly");

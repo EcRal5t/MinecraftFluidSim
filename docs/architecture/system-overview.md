@@ -557,6 +557,7 @@ GPU 颗粒链在共同压力之后推进接触与轨迹，再执行沉积、床�
 服务端从已提交单元库存、同代 PLIC 与固定开放微盒生成局部凸片；材料按库存份额在单元内沿重力方向分区，界面位置采用单元尺度近似。客户端裁剪共享面并生成一份带双侧材料及法向的网格，相机介质读取同一凸片。完整几何经过有界分片传输，接齐后按区域身份、网络代次和 sequence 接收；移除消息使旧包失效。显示温度、压力、颜色与网格采用各自量化，库存、状态方程和物理计算读取原始数据。
 
 客户端显色由 `FluidDisplaySettings` 保存当前玩家的组分、pH 或温度模式及固定温度色带范围，控制器界面的显色入口打开 `FluidDisplayScreen`。
+材质管线和顶点格式读取同一已提取帧的显色模式。方块 sprite 用 `AtlasIds.BLOCKS` 查找图集，绘制按纹理 ID 绑定；空颗粒及诊断显色无需 sprite，资源重载后在下一帧取得新图集对象。
 `FluidColorMapping` 集中映射颜色，`MaterialFrame` 持有同一已接受快照的几何、逐相 pH 与凝聚相温度。展示值改变复用网格并刷新颜色；模式与范围变化在下一显示帧生效，暂停区域保持相同物理状态。
 pH 从适用水相的 H⁺/OH⁻ 与水相体积派生，油等物相显示无数据；中性和无数据分别编码。温度直接读取服务端单元凝聚相展示值，色带以 K 标注。具体近似及编码见[化学参考](chemistry-state.md#ph-与显色)。
 
@@ -584,7 +585,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [FluidDisplaySettings](../../fabric/src/client/java/mmm/client/FluidDisplaySettings.java) / [FluidDisplayScreen](../../fabric/src/client/java/mmm/client/FluidDisplayScreen.java)：本机设置、模式选择、图例与温度范围
     - [CarrierInventoryReader](../../solver/src/main/java/mmm/fluid/CarrierInventoryReader.java)：`copyChemicalDisplaySnapshot` 汇总水相 pH；`copyThermalDisplaySnapshot` 导出凝聚相温度
     - [GranularSurfaceGeometry](../../fabric/src/client/java/mmm/client/GranularSurfaceGeometry.java)
-  - 验证选择器 / 参考：`protocol,materials`；展示目标见[产品路线](../roadmap/product-roadmap.md#阶段-3展示几何契约与重建)
+  - 验证选择器 / 参考：`protocol,materials`；[ClientSurfaceValidation](../../fabric/src/test/java/mmm/client/ClientSurfaceValidation.java) 覆盖快照复用与实际材料／颗粒顶点发射；展示目标见[产品路线](../roadmap/product-roadmap.md#阶段-3展示几何契约与重建)
 
 - **外部查询、转移、Jade 与事件**
   - 主要文件：
@@ -644,11 +645,13 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
 
 - **命令、开发场景与诊断报告**
   - 演示面板按玩家及维度保存场景身份和固定位置；每次操作核对会话、请求代次及区域身份。水箱配方通过私有候选和现有库存提交发布，清理复用区域生命周期；临时池与气压管通过脚手架事务替换并恢复世界方块。
+  - 首次成功创建后保存位置；创建失败可在新位置重试。跨类型切换在移除旧场景前检查目标空间、能力及目录预算与重叠，方块检查仅放行当前演示将恢复为空气的原样壳体。暂态替换失败保留原会话。控制器回复携带关联请求的失败原因，界面结束等待并显示原因；请求状态与界面布局分开保存，窗口重建保留输入和滚动位置。
   - 主要文件：
     - [MmmCommands](../../fabric/src/main/java/mmm/MmmCommands.java)
     - [MmmCommandHandlers](../../fabric/src/main/java/mmm/MmmCommandHandlers.java)
     - [MinecraftDebugFixtures](../../fabric/src/main/java/mmm/simulation/MinecraftDebugFixtures.java)
     - [DemoWorkbench](../../fabric/src/main/java/mmm/simulation/DemoWorkbench.java)：创建、暂停、单步、原位重置和移除的服务端流程；[DemoWorkbenchStore](../../fabric/src/main/java/mmm/simulation/DemoWorkbenchStore.java) 保存持久水箱身份
+    - [DemoInteractionValidation](../../fabric/src/test/java/mmm/simulation/DemoInteractionValidation.java)：通过 `DemoWorkbench.Host` 替代世界读写，驱动生产请求状态机、区域目录、壳体扫描与存档，覆盖全部预设和失败重试
     - [DemoTankOperations](../../fabric/src/main/java/mmm/simulation/DemoTankOperations.java)：控制器水箱配方、室温常压复位及生命周期清理
     - [DemoSceneLayout](../../fabric/src/main/java/mmm/simulation/DemoSceneLayout.java)、[DemoSceneInitialization](../../fabric/src/main/java/mmm/simulation/DemoSceneInitialization.java)：游戏与离线回放共用水流池几何、障碍和初态
     - [DemoWorkbenchScreen](../../fabric/src/client/java/mmm/client/DemoWorkbenchScreen.java)、[DemoActionPayload](../../fabric/src/main/java/mmm/network/DemoActionPayload.java)、[DemoWorkbenchPayload](../../fabric/src/main/java/mmm/network/DemoWorkbenchPayload.java)：场景选择、操作和关联回复

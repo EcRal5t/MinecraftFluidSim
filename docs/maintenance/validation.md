@@ -55,10 +55,24 @@
 控制器交互覆盖空手激活、潜行切换、探针交互、运行与暂停、生命周期预览／取消／确认、温度源输入、清空／排气／释放／移除以及比较器关联。
 
 - 自动化验证：
-  - `:fabric:compileClientJava` 校验客户端界面、协议代次匹配与请求响应生命周期。
+  - `:fabric:compileClientJava` 编译客户端；`runCpuValidation -PcpuValidation=protocol` 执行协议编解码、请求代次与客户端几何验证。
   - `:fabric:runGpuProductionDemoValidation -PgpuDemo=controller -PgpuDemoSteps=20` 覆盖生产注液、GPU 推进、手动步进、装取与 WAL/checkpoint 持久化。
   - `ContainerTransferStoreValidation --rapid-pour` 覆盖 24 次连续注液后的持久清空、排气、恢复与重注液。
 - 实机观察：执行 `/mmm controllerdemo`，使用探针打开控制器，滚动摘要面板，测试暂停／继续与刷新，依次预览、取消及确认清空、排气与移除。操作回复与生命周期状态保持同步，关闭后不重新弹窗。
+
+### 演示与客户端交互自动化
+
+2026-10-29，以下命令通过。客户端渲染修复使用 Minecraft 26.2 的图集定义 ID，保留纹理绑定 ID；测试执行实际几何发射，不创建 Minecraft 窗口或图形设备。
+
+```powershell
+./gradlew.bat :fabric:compileClientJava :fabric:runCpuValidation '-PcpuValidation=protocol,lifecycle,boundary,region-manager' :fabric:runDemoInteractionValidation :fabric:assemble --console=plain --max-workers=1
+```
+
+`DemoInteractionValidation` 驱动生产工作台请求，世界读写通过测试适配器提供，区域目录、外壳扫描、会话及演示存档使用正式实现。全部七个预设依次执行重置、开始、暂停、单步、原位重置、移除和异位重建；覆盖权限／世界未就绪、首次放置失败后换位置、旧请求与跨维请求、远离场景、单步失败、配方失败、临时场景替换失败、目标空间及区域重叠拒绝，以及水箱被外部删除后的恢复。失败用例检查原区域、壳体与会话保留，并继续执行成功流程。
+
+`ClientSurfaceValidation` 覆盖材料与颗粒的空帧、诊断显色、组分与阴影顶点字段，及界面共用请求状态的失败后续操作、旧回复拒绝。`protocol` 同时验证控制器错误回复编解码与所需能力协商；`lifecycle,boundary,region-manager` 覆盖区域操作、壳体扫描和目录规则。物理推进沿上述 GPU 场景入口单独验证。
+
+真实方块写入、鼠标命中、字体排版、图集加载／重载和 Iris 绘制仍需图形客户端。单一观察入口为 `/mmm demo`：空箱开始后切到油水，切换组分／pH／温度显色，再暂停、单步、重置、移除；预期每个操作都有结果，空颗粒和切换显色均不崩溃。无头结果不替代这一绘制范围。
 
 ### GPU 短链与单元验收
 

@@ -30,7 +30,8 @@ public final class LifecycleConfirmationScreen extends Screen {
 
 	@Override protected void init() {
 		rows = rows(payload.preview());
-		int width = 112, gap = 8, left = (this.width - width * 2 - gap) / 2, y = height - 32;
+		int width = Math.min(112, Math.max(1, (this.width - 32) / 2));
+		int gap = 8, left = (this.width - width * 2 - gap) / 2, y = height - 32;
 		Button confirm = Button.builder(Component.translatable("screen.mmm.lifecycle.confirm"), button -> {
 			requestPending = true;
 			button.active = false;

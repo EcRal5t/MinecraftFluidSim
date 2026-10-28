@@ -96,6 +96,16 @@ public final class RegionCatalog<T> {
 		Objects.requireNonNull(value, "value");
 		Objects.requireNonNull(descriptor, "descriptor");
 		Entry<T> selected = selectedId == null ? null : entries.get(selectedId);
+		AdmissionResult admission = previewReplacement(descriptor);
+		if (!admission.accepted()) return admission;
+		if (selected != null) entries.remove(selected.descriptor().regionId());
+		entries.put(descriptor.regionId(), new Entry<>(value, descriptor));
+		selectedId = descriptor.regionId();
+		return admission;
+	}
+	public AdmissionResult previewReplacement(Descriptor descriptor) {
+		Objects.requireNonNull(descriptor, "descriptor");
+		Entry<T> selected = selectedId == null ? null : entries.get(selectedId);
 		Entry<T> duplicate = entries.get(descriptor.regionId());
 		if (duplicate != null && duplicate != selected) return duplicate(descriptor.regionId());
 		BudgetUsage current = usage();
@@ -104,13 +114,7 @@ public final class RegionCatalog<T> {
 				- (selected == null ? 0L : selected.descriptor().reservedCells());
 		AdmissionResult admission = evaluate(descriptor.reservedCells(),
 				regionCount, baseCells);
-		if (!admission.accepted()) return admission;
-		AdmissionResult placement = evaluatePlacement(descriptor, selected == null ? null : selected.value());
-		if (!placement.accepted()) return placement;
-		if (selected != null) entries.remove(selected.descriptor().regionId());
-		entries.put(descriptor.regionId(), new Entry<>(value, descriptor));
-		selectedId = descriptor.regionId();
-		return admission;
+		return admission.accepted() ? evaluatePlacement(descriptor, selected == null ? null : selected.value()) : admission;
 	}
 
 	public AdmissionResult previewReplacement(long requiredCells) {

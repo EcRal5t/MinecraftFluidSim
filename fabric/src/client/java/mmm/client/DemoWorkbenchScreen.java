@@ -17,7 +17,7 @@ final class DemoWorkbenchScreen extends Screen {
 	private final DemoWorkbenchPayload state;
 	private final List<Button> buttons = new ArrayList<>();
 	private DemoPreset selected;
-	private DemoAction pending;
+	private final Request request;
 	private int failureOffset;
 
 	DemoWorkbenchScreen(DemoWorkbenchPayload state) {
@@ -28,6 +28,18 @@ final class DemoWorkbenchScreen extends Screen {
 		super(Component.translatable("screen.mmm.demos.title"));
 		this.state = state;
 		this.selected = selected;
+		this.request = new Request(state);
+	}
+	static final class Request {
+		private final DemoWorkbenchPayload state;
+		private DemoAction pending;
+		Request(DemoWorkbenchPayload state) { this.state = state; }
+		void begin(DemoAction action) { pending = action; }
+		boolean awaiting(DemoWorkbenchPayload response, String dimension) {
+			return pending != null && state.sessionId().equals(response.sessionId())
+					&& state.generation() == response.requestGeneration() && state.dimensionId().equals(dimension)
+					&& response.dimensionId().equals(dimension);
+		}
 	}
 
 	@Override protected void init() {
@@ -78,22 +90,23 @@ final class DemoWorkbenchScreen extends Screen {
 				button -> send(action)).bounds(x, y, width, 20).build(), enabled);
 	}
 	private void add(Button button, boolean enabled) {
-		button.active = enabled && pending == null;
+		button.active = enabled && request.pending == null;
 		buttons.add(button);
 		addRenderableWidget(button);
 	}
 	private void send(DemoAction action) {
-		pending = action;
-		buttons.forEach(button -> button.active = false);
+		begin(action);
 		ClientPlayNetworking.send(new DemoActionPayload(state.sessionId(), state.generation(), state.regionId(), selected, action));
 	}
+	void begin(DemoAction action) {
+		request.begin(action);
+		buttons.forEach(button -> button.active = false);
+	}
 	boolean awaiting(DemoWorkbenchPayload response, String dimension) {
-		return pending != null && state.sessionId().equals(response.sessionId())
-				&& state.generation() == response.requestGeneration() && state.dimensionId().equals(dimension)
-				&& response.dimensionId().equals(dimension);
+		return request.awaiting(response, dimension);
 	}
 	DemoWorkbenchScreen accept(DemoWorkbenchPayload response) {
-		if (response.failure() == null && (pending == DemoAction.START || pending == DemoAction.RESET)
+		if (response.failure() == null && (request.pending == DemoAction.START || request.pending == DemoAction.RESET)
 				&& (state.regionId() == null || response.preset() != state.preset())) {
 			selectDisplay(response.preset());
 		}

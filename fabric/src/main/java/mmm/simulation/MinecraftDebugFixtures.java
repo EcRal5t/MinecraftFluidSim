@@ -4,6 +4,7 @@ import mmm.application.RegionCatalog;
 import mmm.block.MmmBlocks;
 import mmm.block.FluidPortBlock;
 import mmm.fluid.FluidDomain;
+import mmm.network.DemoPreset;
 import mmm.worldprofile.WorldCapability;
 import mmm.worldprofile.WorldCapabilityProfile;
 import net.minecraft.core.BlockPos;
@@ -95,20 +96,8 @@ public final class MinecraftDebugFixtures {
 	BlockPos createControllerDemo(ServerPlayer player, BlockPos anchor, net.minecraft.core.Direction facing) {
 		ServerLevel level = player.level();
 		ControllerDemoLayout layout = ControllerDemoLayout.at(anchor, facing);
-		for (BlockPos position : layout.occupied()) {
-			if (!level.isInWorldBounds(position) || !level.isInsideBuildHeight(position)) {
-				lastFailure = "快速控制器超出世界高度/边界：" + position.toShortString();
-				return null;
-			}
-			if (level.getChunkSource().getChunkNow(position.getX() >> 4, position.getZ() >> 4) == null) {
-				lastFailure = "快速控制器需要已加载区块：" + (position.getX() >> 4) + "," + (position.getZ() >> 4);
-				return null;
-			}
-			if (!level.getBlockState(position).isAir()) {
-				lastFailure = "快速控制器只替换空气；请清空 " + position.toShortString() + " 后重试";
-				return null;
-			}
-		}
+		try { for (BlockPos position : layout.occupied()) scaffolding.requireAir(level, position, ignored -> false); }
+		catch (IllegalStateException failure) { lastFailure = failure.getMessage(); return null; }
 
 		List<BlockPos> placed = new ArrayList<>();
 		try {
@@ -147,6 +136,40 @@ public final class MinecraftDebugFixtures {
 		}
 		lastFailure = null;
 		return layout.controller();
+	}
+
+	/** Checks the destination while the old demo and its inventory still exist. */
+	void preflightReplacement(ServerPlayer player, FluidRegion previous, ControllerDemoLayout oldTank,
+			BlockPos anchor, net.minecraft.core.Direction facing, DemoPreset preset) {
+		ServerLevel level = player.level();
+		var oldShell = new java.util.HashSet<BlockPos>();
+		if (oldTank != null) oldShell.addAll(oldTank.shell());
+		java.util.function.Predicate<BlockPos> willClear = position ->
+				oldTank != null && oldShell.contains(position)
+						&& level.getBlockState(position).equals(DemoWorkbench.shellState(oldTank, position))
+				|| previous.id().equals(scaffoldRegionId) && scaffolding.restoresAir(level, position);
+		var target = preflightSpace(anchor, facing, preset, position -> scaffolding.requireAir(level, position, willClear));
+		var preview = regions.previewReplacement(level.dimension(), target.origin(), target.sizeX(), target.sizeY(), target.sizeZ(), target.cells());
+		if (!preview.accepted()) throw new IllegalStateException(preview.failure());
+	}
+	record ReplacementTarget(BlockPos origin, int sizeX, int sizeY, int sizeZ, long cells) { }
+	static ReplacementTarget preflightSpace(BlockPos anchor, net.minecraft.core.Direction facing, DemoPreset preset,
+			java.util.function.Consumer<BlockPos> check) {
+		if (preset.tank()) {
+			var layout = ControllerDemoLayout.at(anchor, facing);
+			for (BlockPos position : layout.occupied()) check.accept(position);
+			return new ReplacementTarget(layout.minimum().offset(1, 1, 1), 2, 2, 2, 4L * 4 * 4);
+		}
+		boolean flow = preset == DemoPreset.FLOW;
+		int x = flow ? DemoSceneLayout.FLOW_SIZE_X : BLOCK_SIZE_X;
+		int y = flow ? DemoSceneLayout.FLOW_SIZE_Y : BLOCK_SIZE_Y;
+		int z = flow ? DemoSceneLayout.FLOW_SIZE_Z : BLOCK_SIZE_Z;
+		BlockPos origin = DemoWorkbench.transientOrigin(anchor, facing, preset);
+		for (int bz = 0; bz < z; bz++) for (int by = 0; by < y; by++) for (int bx = 0; bx < x; bx++)
+			check.accept(origin.offset(bx, by, bz));
+		if (flow) for (BlockPos step : DemoSceneLayout.entrySteps()) check.accept(origin.offset(step));
+		return new ReplacementTarget(origin, x, y, z,
+				(long) x * y * z * FluidRegionFactory.CELL_VOLUMES_PER_BLOCK);
 	}
 
 	private static void rollbackControllerDemoBlocks(ServerLevel level, List<BlockPos> placed) {

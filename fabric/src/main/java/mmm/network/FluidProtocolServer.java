@@ -196,7 +196,8 @@ public final class FluidProtocolServer {
 				"message.mmm.controller.console_action_failed", failure), true);
 		var summary = console.controllerSummary(player, payload.controllerPosition());
 		send(player, new ControllerSummaryPayload(payload.regionId(), payload.summaryGeneration(),
-				summary != null && summary.regionId().equals(payload.regionId()) ? summary : null));
+				summary != null && summary.regionId().equals(payload.regionId()) ? summary : null,
+				failure == null ? null : failure.getString()));
 	}
 
 	private static void receiveLifecycleOperation(
@@ -211,15 +212,20 @@ public final class FluidProtocolServer {
 						"message.mmm.controller.lifecycle_failed", result.failure()), true);
 				var summary = console.controllerSummary(player, payload.controllerPosition());
 				send(player, new ControllerSummaryPayload(payload.regionId(), payload.summaryGeneration(),
-						summary != null && summary.regionId().equals(payload.regionId()) ? summary : null));
+						summary != null && summary.regionId().equals(payload.regionId()) ? summary : null,
+						result.failure().getString()));
 				return;
 			}
 			var refreshed = console.controllerSummary(player, payload.controllerPosition());
-			if (refreshed == null || !send(player, new LifecycleOperationPreviewPayload(
+			if (refreshed == null || !refreshed.regionId().equals(payload.regionId())
+					|| !send(player, new LifecycleOperationPreviewPayload(
 					payload.controllerPosition(), payload.summaryGeneration(), result.preview(), refreshed))) {
 				player.sendSystemMessage(Component.translatable(
 						"message.mmm.controller.lifecycle_failed",
 						Component.translatable("message.mmm.lifecycle.client_unsupported")), true);
+				send(player, new ControllerSummaryPayload(payload.regionId(), payload.summaryGeneration(),
+						refreshed != null && refreshed.regionId().equals(payload.regionId()) ? refreshed : null,
+						Component.translatable("message.mmm.lifecycle.client_unsupported").getString()));
 			}
 			return;
 		}
@@ -234,7 +240,8 @@ public final class FluidProtocolServer {
 				result.message()), true);
 		var summary = console.controllerSummary(player, payload.controllerPosition());
 		send(player, new ControllerSummaryPayload(payload.regionId(), payload.summaryGeneration(),
-				summary != null && summary.regionId().equals(payload.regionId()) ? summary : null));
+				summary != null && summary.regionId().equals(payload.regionId()) ? summary : null,
+				result.committed() ? null : result.message().getString()));
 	}
 
 	private static void receiveThermalReservoirSetpoint(

@@ -20,6 +20,7 @@ import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.client.renderer.BindGroupLayouts;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.data.AtlasIds;
 import net.minecraft.resources.Identifier;
 import net.minecraft.client.renderer.StagedVertexBuffer;
 import net.minecraft.client.renderer.rendertype.RenderType;
@@ -55,9 +56,8 @@ final class FluidRenderBackend implements AutoCloseable {
 	private long buildNanos, uploadNanos, submitNanos, draws, indices;
 	private long nextCostReport = System.nanoTime() + 10_000_000_000L;
 
-	void render(Consumer<VertexConsumer> geometry) {
-		boolean diagnostic = FluidDisplaySettings.INSTANCE.view().mode() != FluidDisplaySettings.Mode.COMPOSITION;
-		render(diagnostic ? DIAGNOSTIC : SURFACE, geometry);
+	void render(boolean textured, Consumer<VertexConsumer> geometry) {
+		render(textured ? SURFACE : DIAGNOSTIC, geometry);
 	}
 
 	void renderShadow(Consumer<VertexConsumer> geometry) {
@@ -75,7 +75,7 @@ final class FluidRenderBackend implements AutoCloseable {
 	static TextureAtlasSprite sprite(String materialId) {
 		String texture = materialId.equals("mmm:water") ? "water_still"
 				: materialId.equals("mmm:mercury") ? "iron_block" : "white_concrete";
-		return Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(TextureAtlas.LOCATION_BLOCKS)
+		return Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(AtlasIds.BLOCKS)
 				.getSprite(Identifier.withDefaultNamespace("block/" + texture));
 	}
 

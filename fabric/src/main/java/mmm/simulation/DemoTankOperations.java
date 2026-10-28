@@ -53,8 +53,8 @@ final class DemoTankOperations {
         if (recipe == null) return "演示配方缺失";
         String error = check(level, region);
         if (error != null) return error;
-        if (recipe != Recipe.WATER && !world.hasCapability(WorldCapability.MATERIALS)) return "演示需要材料功能";
-        if (recipe == Recipe.ACID_BASE && !world.hasCapability(WorldCapability.CHEMISTRY)) return "酸碱演示需要化学功能";
+        error = recipeCapabilityFailure(recipe);
+        if (error != null) return error;
         if (!availability.ensureForInventoryDecrease(level, region)) return region.availabilityFailure();
         int[] port = recipe == Recipe.WATER ? null : portCell(level, region);
         if (recipe != Recipe.WATER && port == null) return "演示接口未连接到当前区域";
@@ -69,6 +69,20 @@ final class DemoTankOperations {
         } catch (RuntimeException failure) {
             return "演示配方未完成：" + failure.getMessage();
         }
+    }
+
+    String recipeCapabilityFailure(mmm.network.DemoPreset preset) {
+        return recipeCapabilityFailure(switch (preset) {
+            case WATER -> Recipe.WATER;
+            case MATERIAL -> Recipe.OIL_WATER;
+            case CHEMISTRY -> Recipe.ACID_BASE;
+            default -> throw new IllegalArgumentException("Unknown tank recipe");
+        });
+    }
+    private String recipeCapabilityFailure(Recipe recipe) {
+        if (recipe != Recipe.WATER && !world.hasCapability(WorldCapability.MATERIALS)) return "演示需要材料功能";
+        if (recipe == Recipe.ACID_BASE && !world.hasCapability(WorldCapability.CHEMISTRY)) return "酸碱演示需要化学功能";
+        return null;
     }
 
     /** Builds a complete private replacement before publishing any inventory changes. */

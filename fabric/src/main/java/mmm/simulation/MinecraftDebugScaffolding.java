@@ -73,15 +73,26 @@ final class MinecraftDebugScaffolding {
 	}
 
 	void requireAir(ServerLevel level, BlockPos origin, int sx, int sy, int sz) {
+		requireAir(level, origin, sx, sy, sz, position -> false);
+	}
+	void requireAir(ServerLevel level, BlockPos origin, int sx, int sy, int sz, java.util.function.Predicate<BlockPos> willClear) {
 		for (int z = 0; z < sz; z++) for (int y = 0; y < sy; y++) for (int x = 0; x < sx; x++)
-			requireAir(level, origin.offset(x, y, z));
+			requireAir(level, origin.offset(x, y, z), willClear);
 	}
 	private void requireAir(ServerLevel level, BlockPos position) {
+		requireAir(level, position, ignored -> false);
+	}
+	void requireAir(ServerLevel level, BlockPos position, java.util.function.Predicate<BlockPos> willClear) {
 		if (!level.isInWorldBounds(position) || !level.isInsideBuildHeight(position)
 				|| level.getChunkSource().getChunkNow(position.getX() >> 4, position.getZ() >> 4) == null)
 			throw new IllegalStateException("演示需要已加载的空地：" + position.toShortString());
-		if (!level.getBlockState(position).isAir())
+		if (!level.getBlockState(position).isAir() && !willClear.test(position))
 			throw new IllegalStateException("演示位置被占用：" + position.toShortString());
+	}
+	boolean restoresAir(ServerLevel level, BlockPos position) {
+		BlockState original = replacedBlocks.get(position);
+		return dimension != null && dimension.equals(level.dimension()) && original != null && original.isAir()
+				&& level.getBlockState(position).is(Blocks.GLASS);
 	}
 
 	void placeFlowDemo(ServerLevel level, BlockPos origin) {

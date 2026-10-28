@@ -16,7 +16,13 @@ final class MaterialSurfaceGeometry {
     private MaterialSurfaceGeometry() { }
 
     static void buildGeometry(Vec3 camera, VertexConsumer vertices,
-            ClientRegionSnapshotStore.MaterialFrame frame, boolean shadow) {
+            ClientRegionSnapshotStore.MaterialFrame frame, boolean shadow, boolean textured) {
+        buildGeometry(camera, vertices, frame, shadow, textured, FluidRenderBackend::sprite);
+    }
+
+    static void buildGeometry(Vec3 camera, VertexConsumer vertices,
+            ClientRegionSnapshotStore.MaterialFrame frame, boolean shadow, boolean textured,
+            java.util.function.Function<String, net.minecraft.client.renderer.texture.TextureAtlasSprite> sprites) {
         var state = frame.payload();
         double ox = state.origin().getX() - camera.x;
         double oy = state.origin().getY() - camera.y;
@@ -30,14 +36,14 @@ final class MaterialSurfaceGeometry {
                     + normal.z() * (camera.z - state.origin().getZ() - center.z()) < 0;
             int material = back && colored.secondMaterial() >= 0 ? colored.secondMaterial() : colored.firstMaterial();
             String id = state.materials().get(material).id();
-            boolean composition = shadow || frame.view().mode() == FluidDisplaySettings.Mode.COMPOSITION;
+            boolean composition = textured;
 
             int argb = shadow ? state.materials().get(material).argb() : back && colored.secondMaterial() >= 0 ? colored.secondArgb() : colored.argb();
             float alpha = composition ? opacity(id) : 0.92F;
             var position = state.origin().offset((int) Math.floor(center.x()), (int) Math.floor(center.y()), (int) Math.floor(center.z()));
             int light = light(position);
             FluidRenderBackend.beginMaterial(vertices, composition ? id : "", position.getX(), position.getY(), position.getZ());
-            var sprite = FluidRenderBackend.sprite(composition ? id : "");
+            var sprite = composition ? sprites.apply(id) : null;
             double length = Math.sqrt(normal.x()*normal.x()+normal.y()*normal.y()+normal.z()*normal.z());
             float sign = back ? -1 : 1;
             float nx = (float)(normal.x()/length)*sign, ny = (float)(normal.y()/length)*sign, nz = (float)(normal.z()/length)*sign;
@@ -49,16 +55,17 @@ final class MaterialSurfaceGeometry {
             for (var point : points) {
                 double u = (Math.abs(ny) >= Math.abs(nx) ? point.x() : point.z()) - uBase;
                 double v = (Math.abs(ny) >= Math.abs(nx) && Math.abs(ny) >= Math.abs(nz) ? point.z() : point.y()) - vBase;
-                vertices.addVertex((float)(ox+point.x()),(float)(oy+point.y()),(float)(oz+point.z()))
-                        .setColor(((argb>>>16)&255)/255f,((argb>>>8)&255)/255f,(argb&255)/255f,alpha)
-                        .setUv(sprite.getU((float)Math.clamp(u,0,1)),sprite.getV((float)Math.clamp(v,0,1)))
+                var vertex = vertices.addVertex((float)(ox+point.x()),(float)(oy+point.y()),(float)(oz+point.z()))
+                        .setColor(((argb>>>16)&255)/255f,((argb>>>8)&255)/255f,(argb&255)/255f,alpha);
+                if (composition) vertex.setUv(sprite.getU((float)Math.clamp(u,0,1)),sprite.getV((float)Math.clamp(v,0,1)))
                         .setUv2(light & 0xffff,light >>> 16).setNormal(nx,ny,nz);
             }
         }
     }
 
     private static int light(BlockPos position) {
-        var level = Minecraft.getInstance().level;
+        var client = Minecraft.getInstance();
+        var level = client == null ? null : client.level;
         return level == null ? 0 : level.getBrightness(LightLayer.BLOCK, position) << 4
                 | level.getBrightness(LightLayer.SKY, position) << 20;
     }

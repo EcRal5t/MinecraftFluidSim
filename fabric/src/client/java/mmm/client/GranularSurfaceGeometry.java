@@ -15,11 +15,17 @@ final class GranularSurfaceGeometry {
 
 	static void buildGeometry(
 			Vec3 camera, VertexConsumer vertices,
-			ClientRegionSnapshotStore.GranularFrame frame, boolean shadow
+			ClientRegionSnapshotStore.GranularFrame frame, boolean textured
 	) {
+		buildGeometry(camera, vertices, frame, textured, FluidRenderBackend::sprite);
+	}
+
+	static void buildGeometry(Vec3 camera, VertexConsumer vertices,
+			ClientRegionSnapshotStore.GranularFrame frame, boolean textured,
+			java.util.function.Function<String, TextureAtlasSprite> sprites) {
 		FluidGranularSnapshotPayload payload = frame.payload();
 		FluidMaterialSnapshotPayload state = payload.material();
-		Emitter emitter = new Emitter(vertices, camera, state);
+		Emitter emitter = new Emitter(vertices, camera, state, textured, sprites);
 		float h = state.cellSize();
 		for (int z = 0; z < state.sizeZ(); z++) for (int y = 0; y < state.sizeY(); y++) {
 			for (int x = 0; x < state.sizeX(); x++) {
@@ -120,12 +126,17 @@ final class GranularSurfaceGeometry {
     private static final class Emitter {
         final VertexConsumer vertices;
         final FluidMaterialSnapshotPayload state;
-        final TextureAtlasSprite sprite = FluidRenderBackend.sprite("mmm:granular");
+        final boolean textured;
+        final java.util.function.Function<String, TextureAtlasSprite> sprites;
+        TextureAtlasSprite sprite;
         final double ox,oy,oz;
 
-        Emitter(VertexConsumer vertices, Vec3 camera, FluidMaterialSnapshotPayload state) {
+        Emitter(VertexConsumer vertices, Vec3 camera, FluidMaterialSnapshotPayload state, boolean textured,
+                java.util.function.Function<String, TextureAtlasSprite> sprites) {
             this.vertices=vertices;
             this.state=state;
+            this.textured=textured;
+            this.sprites=sprites;
             ox=state.origin().getX()-camera.x;
             oy=state.origin().getY()-camera.y;
             oz=state.origin().getZ()-camera.z;
@@ -133,11 +144,13 @@ final class GranularSurfaceGeometry {
 
         void face(int axis,float plane,float minU,float maxU,float minV,float maxV,boolean positive,
                 float r,float g,float b,float alpha) {
+            if (textured && sprite == null) sprite = sprites.apply("mmm:granular");
             float centerU=(minU+maxU)*0.5F, centerV=(minV+maxV)*0.5F;
             BlockPos position=BlockPos.containing(state.origin().getX()+(axis==0 ? plane : axis==1 ? centerV : centerU),
                     state.origin().getY()+(axis==0 ? centerU : axis==1 ? plane : centerV),
                     state.origin().getZ()+(axis==0 ? centerV : axis==1 ? centerU : plane));
-            var level=Minecraft.getInstance().level;
+            var client=Minecraft.getInstance();
+            var level=client==null ? null : client.level;
             int light=level==null ? 0 : level.getBrightness(LightLayer.BLOCK,position)<<4
                     | level.getBrightness(LightLayer.SKY,position)<<20;
             FluidRenderBackend.beginMaterial(vertices,"mmm:granular",position.getX(),position.getY(),position.getZ());
@@ -149,9 +162,9 @@ final class GranularSurfaceGeometry {
                 float y=axis==0 ? u : axis==1 ? plane : v;
                 float z=axis==0 ? v : axis==1 ? u : plane;
                 float normal=positive ? 1 : -1;
-                vertices.addVertex((float)(ox+x),(float)(oy+y),(float)(oz+z))
-                        .setColor(r,g,b,alpha)
-                        .setUv(sprite.getU(upperU ? 1 : 0),sprite.getV(upperV ? 1 : 0))
+                var vertex = vertices.addVertex((float)(ox+x),(float)(oy+y),(float)(oz+z))
+                        .setColor(r,g,b,alpha);
+                if (textured) vertex.setUv(sprite.getU(upperU ? 1 : 0),sprite.getV(upperV ? 1 : 0))
                         .setUv2(light&0xffff,light>>>16)
                         .setNormal(axis==0 ? normal : 0,axis==1 ? normal : 0,axis==2 ? normal : 0);
             }
