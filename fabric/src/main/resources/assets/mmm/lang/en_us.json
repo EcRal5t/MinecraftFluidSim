@@ -252,7 +252,25 @@
   "screen.mmm.display.legend.temperature": "%s K (cold) — %s K (hot)",
   "screen.mmm.display.no_data": "Gray: not applicable / no data",
   "screen.mmm.display.local": "Changes this client only; temperature represents cell condensed matter.",
-  "message.mmm.finite_heat_exchanger.state": "Finite heat exchanger: %s K, %s kg, internal energy %s, generation %s"
+  "message.mmm.finite_heat_exchanger.state": "Finite heat exchanger: %s K, %s kg, internal energy %s, generation %s",
+  "screen.mmm.quick_start.demos": "Demos",
+  "screen.mmm.demos.title": "Demos",
+  "screen.mmm.demos.tank": "Tank",
+  "screen.mmm.demos.flow": "Flow",
+  "screen.mmm.demos.air": "Pressure",
+  "screen.mmm.demos.water": "Empty",
+  "screen.mmm.demos.material": "Oil & water",
+  "screen.mmm.demos.chemistry": "Acid & base",
+  "screen.mmm.demos.ambient": "Ambient",
+  "screen.mmm.demos.pressure": "Pressurize",
+  "screen.mmm.demos.vacuum": "Low pressure",
+  "screen.mmm.demos.start": "Start",
+  "screen.mmm.demos.pause": "Pause",
+  "screen.mmm.demos.step": "Step",
+  "screen.mmm.demos.reset": "Reset",
+  "screen.mmm.demos.remove": "Remove",
+  "screen.mmm.demos.paused": "Paused",
+  "screen.mmm.demos.running": "Running"
 }
 
 

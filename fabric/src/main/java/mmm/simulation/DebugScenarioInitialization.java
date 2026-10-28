@@ -67,11 +67,21 @@ public final class DebugScenarioInitialization {
 
 	/** Presets the closed chamber above the water in the U-tube scaffold. */
 	public static int presetAirPressure(FluidDomain domain, boolean vacuum) {
+		return presetAirPressure(domain, vacuum ? AirPressure.VACUUM : AirPressure.PRESSURE);
+	}
+
+	public enum AirPressure { PRESSURE, AMBIENT, VACUUM }
+
+	public static int presetAirPressure(FluidDomain domain, AirPressure pressure) {
 		int node = domain.airNodeAt(4, 12, 4);
 		if (node <= 0) return -1;
 		var gas = domain.gasBoundary();
-		domain.setGasNodeStandardVolume(node, vacuum ? gas.availableVolume(node) * 0.78
-				: gas.availableVolume(node) / 0.70);
+		double factor = switch (pressure) {
+			case PRESSURE -> 1.0 / 0.70;
+			case AMBIENT -> 1.0;
+			case VACUUM -> 0.78;
+		};
+		domain.setGasNodeStandardVolume(node, gas.availableVolume(node) * factor);
 		return node;
 	}
 

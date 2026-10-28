@@ -12,7 +12,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import java.util.HashMap;
 import java.util.Map;
 
-/** Owns the reversible world blocks used only by the sealed-gas debug fixture. */
+/** Owns the reversible glass blocks of transient demonstration scenes. */
 final class MinecraftDebugScaffolding {
 	private final Map<BlockPos, BlockState> replacedBlocks = new HashMap<>();
 	private ResourceKey<Level> dimension;
@@ -70,6 +70,35 @@ final class MinecraftDebugScaffolding {
 				}
 			}
 		}
+	}
+
+	void requireAir(ServerLevel level, BlockPos origin, int sx, int sy, int sz) {
+		for (int z = 0; z < sz; z++) for (int y = 0; y < sy; y++) for (int x = 0; x < sx; x++)
+			requireAir(level, origin.offset(x, y, z));
+	}
+	private void requireAir(ServerLevel level, BlockPos position) {
+		if (!level.isInWorldBounds(position) || !level.isInsideBuildHeight(position)
+				|| level.getChunkSource().getChunkNow(position.getX() >> 4, position.getZ() >> 4) == null)
+			throw new IllegalStateException("演示需要已加载的空地：" + position.toShortString());
+		if (!level.getBlockState(position).isAir())
+			throw new IllegalStateException("演示位置被占用：" + position.toShortString());
+	}
+
+	void placeFlowDemo(ServerLevel level, BlockPos origin) {
+		if (dimension != null) throw new IllegalStateException("上一个演示尚未移除");
+		requireAir(level, origin, DemoSceneLayout.FLOW_SIZE_X, DemoSceneLayout.FLOW_SIZE_Y, DemoSceneLayout.FLOW_SIZE_Z);
+		for (BlockPos step : DemoSceneLayout.entrySteps()) requireAir(level, origin.offset(step));
+		dimension = level.dimension();
+		for (int z = 0; z < DemoSceneLayout.FLOW_SIZE_Z; z++) for (int y = 0; y < DemoSceneLayout.FLOW_SIZE_Y; y++)
+			for (int x = 0; x < DemoSceneLayout.FLOW_SIZE_X; x++)
+				if (DemoSceneLayout.isFlowBlock(x, y, z)) placeGlass(level, origin.offset(x, y, z));
+		for (BlockPos step : DemoSceneLayout.entrySteps()) placeGlass(level, origin.offset(step));
+	}
+	private void placeGlass(ServerLevel level, BlockPos position) {
+		BlockState previous = level.getBlockState(position);
+		if (!level.setBlock(position, Blocks.GLASS.defaultBlockState(), Block.UPDATE_ALL))
+			throw new IllegalStateException("无法放置演示池壁：" + position.toShortString());
+		replacedBlocks.put(position.immutable(), previous);
 	}
 
 	/** Places a real floor so later world collision refreshes preserve the liquid contact surface. */

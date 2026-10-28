@@ -20,18 +20,11 @@ import java.util.List;
 import java.util.UUID;
 import java.util.function.BooleanSupplier;
 
-/**
- * Development-only `/mmm` scenarios: dam break, layered materials, acid/base, surface tension,
- * sealed gas and vanilla-water capture. They build a transient region that is never admitted as a
- * controller region and never writes region-state. The gas-demo glass scaffold replaces only air
- * blocks and is restored on demand, so a fixture never destroys a player-built block.
- */
+/** Creates persistent controller tanks and transient flow, pressure, wetting and capture scenes. */
 public final class MinecraftDebugFixtures {
 	static final int BLOCK_SIZE_X = 12;
 	static final int BLOCK_SIZE_Y = 8;
 	static final int BLOCK_SIZE_Z = 12;
-	private static final long COMPATIBILITY_REGION_CELLS = (long) BLOCK_SIZE_X * BLOCK_SIZE_Y * BLOCK_SIZE_Z
-			* FluidRegionFactory.CELL_VOLUMES_PER_BLOCK;
 
 	/** Region-runtime operations the scenarios need; owned here so the surface stays narrow. */
 	interface Runtime {
@@ -96,12 +89,12 @@ public final class MinecraftDebugFixtures {
 
 	/**
 	 * Safely builds and activates the small persistent controller fixture used by container and
-	 * chemistry smoke tests. The complete 6x6x6 occupied volume must already be loaded and air;
+	 * chemistry demonstrations. The complete occupied volume must already be loaded and air;
 	 * failed placement or activation restores every block written by this method.
 	 */
-	public BlockPos createControllerDemo(ServerPlayer player) {
+	BlockPos createControllerDemo(ServerPlayer player, BlockPos anchor, net.minecraft.core.Direction facing) {
 		ServerLevel level = player.level();
-		ControllerDemoLayout layout = ControllerDemoLayout.at(player.blockPosition(), player.getDirection());
+		ControllerDemoLayout layout = ControllerDemoLayout.at(anchor, facing);
 		for (BlockPos position : layout.occupied()) {
 			if (!level.isInWorldBounds(position) || !level.isInsideBuildHeight(position)) {
 				lastFailure = "快速控制器超出世界高度/边界：" + position.toShortString();
@@ -165,27 +158,6 @@ public final class MinecraftDebugFixtures {
 		}
 	}
 
-	public boolean createDemo(ServerPlayer player) {
-		return createDemo(player, false);
-	}
-
-	public boolean createMaterialDemo(ServerPlayer player) {
-		if (!profile.hasCapability(WorldCapability.MATERIALS)) {
-			lastFailure = "材料功能门未在本次启动启用；先保存配置并重启";
-			return false;
-		}
-		return createDemo(player, true);
-	}
-
-	/** Creates a paused acid/base fixture without changing the mechanical demo geometry. */
-	public boolean createChemistryDemo(ServerPlayer player) {
-		if (!profile.hasCapability(WorldCapability.CHEMISTRY)) {
-			lastFailure = "化学功能未在本次启动启用；先启用材料和化学并重启";
-			return false;
-		}
-		return createDemo(player, false, true);
-	}
-
 	public boolean createTensionDemo(ServerPlayer player, int angleDegrees) {
 		if (!profile.hasCapability(WorldCapability.MATERIALS)) {
 			lastFailure = "材料功能未在本次启动启用；先保存配置并重启";
@@ -207,10 +179,10 @@ public final class MinecraftDebugFixtures {
 		});
 	}
 
-	public boolean createAirDemo(ServerPlayer player, boolean vacuum) {
+	boolean createAirDemo(ServerPlayer player, BlockPos origin, DebugScenarioInitialization.AirPressure pressure) {
 		ServerLevel level = player.level();
-		BlockPos origin = aimedOrigin(player);
 		return runTransient(level, origin, TransientKind.AIR, context -> {
+			scaffolding.requireAir(level, origin, BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z);
 			scaffolding.placeAirDemo(level, origin);
 			runtime.refreshCollisions(level);
 			FluidDomain domain = regions.selected().domain();
@@ -218,8 +190,20 @@ public final class MinecraftDebugFixtures {
 			runtime.bindCapabilityState(domain);
 			runtime.stepMotion(regions.selected());
 			domain = regions.selected().domain();
-			if (DebugScenarioInitialization.presetAirPressure(domain, vacuum) < 0)
+			if (DebugScenarioInitialization.presetAirPressure(domain, pressure) < 0)
 				reject("左侧气腔未密闭；请清理模拟区域后重试");
+		});
+	}
+
+	boolean createFlowDemo(ServerPlayer player, BlockPos origin) {
+		ServerLevel level = player.level();
+		return runTransient(level, origin, TransientKind.FLOW, context -> {
+			scaffolding.placeFlowDemo(level, origin);
+			runtime.refreshCollisions(level);
+			FluidDomain domain = regions.selected().domain();
+			DemoSceneInitialization.fillFlow(domain);
+			runtime.bindCapabilityState(domain);
+			regions.selected().setEntityPhysicsEnabled(true);
 		});
 	}
 
@@ -229,20 +213,15 @@ public final class MinecraftDebugFixtures {
 		return center.offset(-BLOCK_SIZE_X / 2, 0, -BLOCK_SIZE_Z / 2);
 	}
 
-	private boolean createDemo(ServerPlayer player, boolean layeredMaterials) {
-		return createDemo(player, layeredMaterials, false);
-	}
-
-	private boolean createDemo(ServerPlayer player, boolean layeredMaterials, boolean chemistry) {
+	public boolean createDemo(ServerPlayer player) {
 		ServerLevel level = player.level();
 		return runTransient(level, aimedOrigin(player), TransientKind.NORMAL, context -> {
 			runtime.refreshCollisions(level);
 			FluidDomain domain = regions.selected().domain();
-			if (profile.hasCapability(WorldCapability.MATERIALS) || layeredMaterials) FluidRegionFactory.bindDefaultMaterialState(domain);
-			DebugScenarioInitialization.fillDam(domain, layeredMaterials);
+			if (profile.hasCapability(WorldCapability.MATERIALS)) FluidRegionFactory.bindDefaultMaterialState(domain);
+			DebugScenarioInitialization.fillDam(domain, false);
 			if (domain.totalVolume() <= 0.0F) reject("溃坝区域没有可装水的开放空间；请在空旷处重试");
 			runtime.bindCapabilityState(domain);
-			if (chemistry) DebugScenarioInitialization.assignChemistry(domain);
 		});
 	}
 
@@ -265,7 +244,7 @@ public final class MinecraftDebugFixtures {
 		return new CaptureResult(counts[0], counts[1], created ? null : lastFailure);
 	}
 
-	private enum TransientKind { NORMAL, AIR, TENSION }
+	private enum TransientKind { NORMAL, AIR, TENSION, FLOW }
 	@FunctionalInterface
 	private interface TransientWork { void initialize(TransientContext context); }
 	private static final class TransientContext { boolean takeoverStarted; }
@@ -291,6 +270,7 @@ public final class MinecraftDebugFixtures {
 			return false;
 		}
 		FluidDomain domain = switch (kind) {
+			case FLOW -> FluidRegionFactory.createDomain(DemoSceneLayout.FLOW_SIZE_X, DemoSceneLayout.FLOW_SIZE_Y, DemoSceneLayout.FLOW_SIZE_Z);
 			case AIR -> FluidRegionFactory.createDebugDomain();
 			case TENSION -> FluidRegionFactory.createTensionDomain();
 			case NORMAL -> FluidRegionFactory.createDomain(BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z);
@@ -299,7 +279,7 @@ public final class MinecraftDebugFixtures {
 		candidate.setEntityPhysicsEnabled(defaultEntityPhysics.getAsBoolean());
 		candidate.setDebugOverlays(defaultDebugOverlays.getAsBoolean());
 		if (replacing) regions.select(replaced.id());
-		RegionCatalog.AdmissionResult preview = replacing ? regions.previewReplacement(COMPATIBILITY_REGION_CELLS)
+		RegionCatalog.AdmissionResult preview = replacing ? regions.previewReplacement((long)domain.sizeX() * domain.sizeY() * domain.sizeZ())
 				: regions.previewAdd(candidate);
 		if (!preview.accepted()) {
 			if (previous != null) regions.select(previous.id());

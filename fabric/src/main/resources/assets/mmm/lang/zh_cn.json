@@ -252,7 +252,25 @@
   "screen.mmm.display.legend.temperature": "%s K（冷）— %s K（热）",
   "screen.mmm.display.no_data": "灰色：不适用 / 无数据",
   "screen.mmm.display.local": "仅修改本机显示；温度为单元凝聚相展示值。",
-  "message.mmm.finite_heat_exchanger.state": "有限换热器：%s K，%s kg，内能 %s，代次 %s"
+  "message.mmm.finite_heat_exchanger.state": "有限换热器：%s K，%s kg，内能 %s，代次 %s",
+  "screen.mmm.quick_start.demos": "演示",
+  "screen.mmm.demos.title": "演示",
+  "screen.mmm.demos.tank": "水箱",
+  "screen.mmm.demos.flow": "水流",
+  "screen.mmm.demos.air": "气压",
+  "screen.mmm.demos.water": "空箱",
+  "screen.mmm.demos.material": "油水",
+  "screen.mmm.demos.chemistry": "酸碱",
+  "screen.mmm.demos.ambient": "常压",
+  "screen.mmm.demos.pressure": "加压",
+  "screen.mmm.demos.vacuum": "低压",
+  "screen.mmm.demos.start": "开始",
+  "screen.mmm.demos.pause": "暂停",
+  "screen.mmm.demos.step": "单步",
+  "screen.mmm.demos.reset": "重置",
+  "screen.mmm.demos.remove": "移除",
+  "screen.mmm.demos.paused": "已暂停",
+  "screen.mmm.demos.running": "运行中"
 }
 
 

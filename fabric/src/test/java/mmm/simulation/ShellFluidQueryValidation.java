@@ -98,9 +98,20 @@ public final class ShellFluidQueryValidation {
 			var scan = mmm.simulation.controller.FluidBoundaryScanner.scan(layout.controller(), world, 512);
 			require(scan.succeeded(), "Controller demo scan failed: " + facing + " " + scan.failure());
 			var footprint = scan.footprint();
-			require(footprint.interiorBlocks().size() == 64, "Controller demo interior changed: " + facing);
-			var domain = new FluidDomain(8, 8, 8, new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 240, 1e-4F, .002F));
+			require(footprint.interiorBlocks().size() == 8, "Controller demo interior changed: " + facing);
+			var domain = new FluidDomain(4, 4, 4, new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 240, 1e-4F, .002F));
 			var region = new FluidRegion(UUID.randomUUID(), dimension, footprint.minimumInterior(), domain, footprint);
+			require(DemoWorkbench.matchesTank(region, layout, dimension.identifier().toString()),
+					"Restored demo footprint did not match its layout: " + facing);
+			require(!DemoWorkbench.matchesTank(region, layout, "mmm:other"), "Demo matched a different dimension");
+			var interior = new java.util.HashSet<>(footprint.interiorBlocks());
+			interior.remove(interior.iterator().next());
+			var changedFootprint = new mmm.simulation.controller.FluidRegionFootprint(footprint.controllerPosition(),
+					footprint.minimumInterior(), footprint.maximumInterior(), interior, footprint.boundaryBlocks(), footprint.requiredChunks());
+			var changed = new FluidRegion(UUID.randomUUID(), dimension, footprint.minimumInterior(),
+					new FluidDomain(4, 4, 4, new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 240, 1e-4F, .002F)), changedFootprint);
+			require(!DemoWorkbench.matchesTank(changed, layout, dimension.identifier().toString()),
+					"Demo accepted an altered interior footprint");
 			var inward = layout.portOutward().getOpposite();
 			var target = FluidWorldTargetResolver.resolvePortTarget(List.of(region), dimension,
 					layout.port(), layout.portOutward(), inward);

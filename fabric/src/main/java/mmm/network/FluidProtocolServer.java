@@ -30,6 +30,11 @@ public final class FluidProtocolServer {
 	private FluidProtocolServer() { }
 
 	public static void register() {
+		PayloadTypeRegistry.clientboundPlay().register(DemoWorkbenchPayload.TYPE, DemoWorkbenchPayload.CODEC);
+		PayloadTypeRegistry.serverboundPlay().register(DemoActionPayload.TYPE, DemoActionPayload.CODEC);
+		ServerPlayNetworking.registerGlobalReceiver(DemoActionPayload.TYPE, (payload, context) ->
+				context.server().execute(() -> send(context.player(), MmmRuntimeRegistry.require(context.server())
+						.demos().execute(context.player(), payload))));
 		PayloadTypeRegistry.clientboundConfiguration().register(
 				FluidProtocolOfferPayload.TYPE, FluidProtocolOfferPayload.CODEC
 		);
@@ -124,6 +129,13 @@ public final class FluidProtocolServer {
 	public static boolean send(ServerPlayer player, ControllerSummaryPayload payload) {
 		if (!isNegotiated(player.level().getServer(), player.getUUID())
 				|| !ServerPlayNetworking.canSend(player, ControllerSummaryPayload.TYPE)) return false;
+		ServerPlayNetworking.send(player, payload);
+		return true;
+	}
+
+	public static boolean send(ServerPlayer player, DemoWorkbenchPayload payload) {
+		if (!isNegotiated(player.level().getServer(), player.getUUID())
+				|| !ServerPlayNetworking.canSend(player, DemoWorkbenchPayload.TYPE)) return false;
 		ServerPlayNetworking.send(player, payload);
 		return true;
 	}

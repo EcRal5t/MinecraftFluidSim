@@ -8,6 +8,7 @@ import mmm.application.ThermalReservoirUseCase;
 import mmm.application.command.ControllerSummaryCommand;
 import mmm.application.port.ControllerSummaryPort;
 import mmm.controller.ControllerConsoleAction;
+import mmm.controller.ControllerConsoleSessions;
 import mmm.controller.ControllerSummary;
 import mmm.controller.LifecycleOperation;
 import mmm.controller.LifecycleOperationPreview;
@@ -43,6 +44,7 @@ public final class FluidNetworkProtocolValidation {
 		validateQueryAvailabilityReason();
 		validateConfigurationCodecs();
 		validateControllerConsoleCodecs();
+		validateDemoWorkbenchCodecs();
 		validateThermalReservoirCodecs();
 		validateSnapshotCodecAndOptionalSections();
 		validateGenerationAndSequenceOrdering();
@@ -52,6 +54,51 @@ public final class FluidNetworkProtocolValidation {
 		validateGranularSnapshot();
 		validateThermalSnapshot();
 		System.out.println("Fluid network protocol validation passed");
+	}
+
+	private static void validateDemoWorkbenchCodecs() {
+		UUID player = new UUID(97, 101), session = new UUID(103, 107), otherPlayer = new UUID(109, 113);
+		var tokens = new ControllerConsoleSessions();
+		long stale = tokens.issue(player, session), generation = tokens.issue(player, session);
+		require(!tokens.consume(player, session, stale) && !tokens.consume(otherPlayer, session, generation)
+				&& tokens.consume(player, session, generation) && !tokens.consume(player, session, generation),
+				"demo session token must reject stale, other-player and replay requests");
+		for (DemoPreset preset : DemoPreset.values()) for (DemoAction action : DemoAction.values()) {
+			for (UUID region : new UUID[] { null, REGION }) {
+				var request = new DemoActionPayload(session, generation, region, preset, action);
+				var buffer = new FriendlyByteBuf(Unpooled.buffer());
+				try {
+					DemoActionPayload.CODEC.encode(buffer, request);
+					require(DemoActionPayload.CODEC.decode(buffer).equals(request), "demo action lost identity or selection");
+				} finally { buffer.release(); }
+			}
+		}
+		for (DemoPreset preset : DemoPreset.values()) for (boolean paused : new boolean[] { false, true }) {
+			for (String failure : new String[] { null, "演示已改变，请重试" }) {
+				var response = new DemoWorkbenchPayload(session, generation, generation + 1, DIMENSION.toString(),
+						preset, REGION, paused, failure);
+				var buffer = new FriendlyByteBuf(Unpooled.buffer());
+				try {
+					DemoWorkbenchPayload.CODEC.encode(buffer, response);
+					var decoded = DemoWorkbenchPayload.CODEC.decode(buffer);
+					require(decoded.equals(response) && decoded.requestGeneration() == generation,
+							"demo response lost the originating request generation or state");
+				} finally { buffer.release(); }
+			}
+		}
+		var opening = new DemoWorkbenchPayload(session, 0, generation, DIMENSION.toString(), DemoPreset.WATER, null, true, null);
+		var buffer = new FriendlyByteBuf(Unpooled.buffer());
+		try {
+			DemoWorkbenchPayload.CODEC.encode(buffer, opening);
+			require(DemoWorkbenchPayload.CODEC.decode(buffer).equals(opening), "empty demo opening did not round-trip");
+		} finally { buffer.release(); }
+		var launch = new DemoWorkbenchPayload(session, 0, generation, DIMENSION.toString(), DemoPreset.CHEMISTRY,
+				REGION, true, "performance pause", true, true);
+		buffer = new FriendlyByteBuf(Unpooled.buffer());
+		try {
+			DemoWorkbenchPayload.CODEC.encode(buffer, launch);
+			require(DemoWorkbenchPayload.CODEC.decode(buffer).equals(launch), "demo launch lost display initialization");
+		} finally { buffer.release(); }
 	}
 
 	private static void validateThermalReservoirCodecs() {
@@ -280,6 +327,10 @@ public final class FluidNetworkProtocolValidation {
 						BuiltinGranularDefinitions.createRegistry())).equals(FluidProtocol.granularServerOffer(true)),
 				"world capability profiles did not select exact semantic server layouts");
 		FluidProtocol.Negotiation accepted = FluidProtocol.negotiate(offer);
+		require((offer.requiredCapabilities() & FluidProtocol.CAP_DEMO_WORKBENCH) != 0
+				&& !FluidProtocol.validateResponse(offer, new FluidProtocolResponsePayload(true, FluidProtocol.Layout.PURE,
+						FluidProtocol.REQUIRED_CAPABILITIES & ~FluidProtocol.CAP_DEMO_WORKBENCH, "")).accepted(),
+				"demo workbench protocol must reject a client that lacks its capability");
 		require(accepted.accepted() && accepted.selectedLayout() == FluidProtocol.Layout.PURE
 				&& accepted.capabilities() == FluidProtocol.REQUIRED_CAPABILITIES,
 				"matching layout/capability offer was not selected exactly");

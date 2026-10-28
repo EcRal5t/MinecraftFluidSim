@@ -22,9 +22,16 @@ public final class MmmCommands {
 	public static void register() {
 		CommandRegistrationCallback.EVENT.register((dispatcher, buildContext, selection) -> dispatcher.register(
 				Commands.literal("mmm")
-						.then(Commands.literal("demo").executes(context -> audit(context, () -> createDemo(context.getSource()))))
-						.then(Commands.literal("materialdemo").executes(context -> audit(context, () -> createMaterialDemo(context.getSource()))))
-						.then(Commands.literal("chemistrydemo").executes(context -> audit(context, () -> createChemistryDemo(context.getSource()))))
+						.then(Commands.literal("demos")
+								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
+								.executes(context -> audit(context, () -> openDemos(context.getSource()))))
+						.then(Commands.literal("demo").requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
+								.executes(context -> audit(context, () -> openDemos(context.getSource()))))
+						.then(Commands.literal("damdemo").executes(context -> audit(context, () -> createDemo(context.getSource()))))
+						.then(Commands.literal("materialdemo").requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
+								.executes(context -> audit(context, () -> createMaterialDemo(context.getSource()))))
+						.then(Commands.literal("chemistrydemo").requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
+								.executes(context -> audit(context, () -> createChemistryDemo(context.getSource()))))
 						.then(Commands.literal("controllerdemo")
 								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
 								.executes(context -> audit(context, () -> createControllerDemo(context.getSource()))))
@@ -72,10 +79,12 @@ public final class MmmCommands {
 										.executes(context -> audit(context, () -> createTensionDemo(
 												context.getSource(), IntegerArgumentType.getInteger(context, "angle"))))))
 						.then(Commands.literal("airdemo")
+								.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_ADMIN))
 								.executes(context -> audit(context, () -> createAirDemo(context.getSource(), "pressure")))
 								.then(Commands.argument("mode", StringArgumentType.word())
 										.suggests((context, builder) -> {
 											builder.suggest("pressure");
+											builder.suggest("ambient");
 											builder.suggest("vacuum");
 											return builder.buildFuture();
 										})

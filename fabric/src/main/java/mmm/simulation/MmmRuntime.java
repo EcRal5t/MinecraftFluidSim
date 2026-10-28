@@ -20,6 +20,7 @@ public final class MmmRuntime {
 	private final MinecraftRegionActivation regionActivation;
 	private final MinecraftPoolOperations pools;
 	private final MinecraftDebugFixtures debugFixtures;
+	private final DemoWorkbench demos;
 	private final MinecraftRegionAdministration regionAdministration;
 	private final RegionDiagnosticsReport regionDiagnostics;
 	private final PlayerContainerTransferAdapter playerContainerTransfers;
@@ -46,6 +47,7 @@ public final class MmmRuntime {
 			MinecraftRegionActivation regionActivation,
 			MinecraftPoolOperations pools,
 			MinecraftDebugFixtures debugFixtures,
+			DemoWorkbench demos,
 			MinecraftRegionAdministration regionAdministration,
 			RegionDiagnosticsReport regionDiagnostics,
 			PlayerContainerTransferAdapter playerContainerTransfers,
@@ -69,6 +71,7 @@ public final class MmmRuntime {
 		this.regionActivation = Objects.requireNonNull(regionActivation, "Region activation");
 		this.pools=Objects.requireNonNull(pools);
 		this.debugFixtures = Objects.requireNonNull(debugFixtures, "Debug fixtures");
+		this.demos = Objects.requireNonNull(demos);
 		this.regionAdministration = Objects.requireNonNull(regionAdministration, "Region administration");
 		this.regionDiagnostics = Objects.requireNonNull(regionDiagnostics, "Region diagnostics");
 		this.playerContainerTransfers = Objects.requireNonNull(playerContainerTransfers, "Player container transfers");
@@ -90,6 +93,7 @@ public final class MmmRuntime {
 	public MinecraftRegionActivation regionActivation() { return regionActivation; }
 	public MinecraftPoolOperations pools() { return pools; }
 	public MinecraftDebugFixtures debugFixtures() { return debugFixtures; }
+	public DemoWorkbench demos() { return demos; }
 	public MinecraftRegionAdministration regionAdministration() { return regionAdministration; }
 	public RegionDiagnosticsReport regionDiagnostics() { return regionDiagnostics; }
 	PlayerContainerTransferAdapter playerContainerTransfers() { return playerContainerTransfers; }

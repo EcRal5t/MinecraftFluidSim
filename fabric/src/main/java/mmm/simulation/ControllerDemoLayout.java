@@ -10,17 +10,17 @@ public record ControllerDemoLayout(BlockPos minimum, BlockPos controller, BlockP
                                    Direction portOutward, List<BlockPos> occupied, List<BlockPos> shell) {
     public static ControllerDemoLayout at(BlockPos player, Direction facing) {
         if (facing.getAxis() == Direction.Axis.Y) throw new IllegalArgumentException("Controller direction must be horizontal");
-        int outer = 6;
-        BlockPos near = player.relative(facing, 4).above(2);
+        int outer = 4;
+        BlockPos near = player.relative(facing, 4).above(1);
         BlockPos minimum, controller;
         if (facing.getAxis() == Direction.Axis.X) {
             int x = facing == Direction.EAST ? near.getX() : near.getX() - outer + 1;
-            minimum = new BlockPos(x, player.getY(), near.getZ() - 2);
-            controller = new BlockPos(near.getX(), minimum.getY() + 2, minimum.getZ() + 2);
+            minimum = new BlockPos(x, player.getY(), near.getZ() - (facing == Direction.EAST ? 1 : 2));
+            controller = new BlockPos(near.getX(), minimum.getY() + 1, near.getZ());
         } else {
             int z = facing == Direction.SOUTH ? near.getZ() : near.getZ() - outer + 1;
-            minimum = new BlockPos(near.getX() - 2, player.getY(), z);
-            controller = new BlockPos(minimum.getX() + 2, minimum.getY() + 2, near.getZ());
+            minimum = new BlockPos(near.getX() - (facing == Direction.SOUTH ? 2 : 1), player.getY(), z);
+            controller = new BlockPos(near.getX(), minimum.getY() + 1, near.getZ());
         }
         BlockPos port = controller.relative(facing.getClockWise());
         List<BlockPos> occupied = new ArrayList<>(), shell = new ArrayList<>();

@@ -12,6 +12,7 @@ import mmm.network.FluidSnapshotPayload;
 import mmm.network.ControllerSummaryPayload;
 import mmm.network.LifecycleOperationPreviewPayload;
 import mmm.network.ThermalReservoirSummaryPayload;
+import mmm.network.DemoWorkbenchPayload;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientConfigurationConnectionEvents;
@@ -98,6 +99,17 @@ public final class MmmModClient implements ClientModInitializer {
 					if (client.gui.screen() instanceof ThermalReservoirScreen screen && screen.inDimension(dimension)
 							&& screen.awaiting(payload.position(), payload.requestGeneration()))
 						client.setScreenAndShow(payload.summary() == null ? null : new ThermalReservoirScreen(payload.summary()));
+				}));
+		ClientPlayNetworking.registerGlobalReceiver(DemoWorkbenchPayload.TYPE, (payload, context) ->
+				context.client().execute(() -> {
+					var client = context.client();
+					if (client.level == null) return;
+					String dimension = client.level.dimension().identifier().toString();
+					if (payload.requestGeneration() == 0) {
+						if (payload.dimensionId().equals(dimension)) client.setScreenAndShow(new DemoWorkbenchScreen(payload));
+					} else if (client.gui.screen() instanceof DemoWorkbenchScreen screen && screen.awaiting(payload, dimension)) {
+						client.setScreenAndShow(screen.accept(payload));
+					}
 				}));
 		ClientConfigurationConnectionEvents.START.register((listener, client) -> {
 			negotiated.set(null); snapshotParts.clear();

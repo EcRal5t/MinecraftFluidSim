@@ -140,7 +140,7 @@ public final class MinecraftRegionLifecycle {
 		}
 	}
 
-	private CommitResult commitInventory(ServerLevel level, FluidRegion region, LifecycleOperation operation) {
+	CommitResult commitInventory(ServerLevel level, FluidRegion region, LifecycleOperation operation) {
 		FluidDomain candidate;
 		try {
 			candidate = FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
@@ -153,6 +153,11 @@ public final class MinecraftRegionLifecycle {
 			return CommitResult.failed("message.mmm.lifecycle.candidate_failed", failure.getMessage());
 		}
 
+		return commitCandidate(level, region, candidate, operation);
+	}
+
+	/** Commits the same private candidate/checkpoint path used by lifecycle operations. */
+	CommitResult commitCandidate(ServerLevel level, FluidRegion region, FluidDomain candidate, LifecycleOperation operation) {
 		RegionRepositoryAdapter.StagedCheckpoint staged = null;
 		long published;
 		try {
@@ -206,6 +211,7 @@ public final class MinecraftRegionLifecycle {
 					published, region.id(), failure);
 			return CommitResult.committed("message.mmm.lifecycle.snapshot_pending", published);
 		}
+		if (operation == null) return new CommitResult(true, Component.literal("演示水箱已更新"));
 		return CommitResult.committed(operation == LifecycleOperation.EMPTY_CONDENSED
 				? "message.mmm.lifecycle.empty_committed" : "message.mmm.lifecycle.vent_committed", published);
 	}
@@ -216,6 +222,19 @@ public final class MinecraftRegionLifecycle {
 		if (release.failure() != null) return CommitResult.failedDetail(release.failure());
 		return CommitResult.committed("message.mmm.lifecycle.release_committed",
 				release.restoredBlocks(), release.skippedBlocks());
+	}
+
+	/** Demo removal uses the same inventory, ownership and tombstone checks as the console. */
+	CommitResult removeDemo(ServerPlayer player, FluidRegion region) {
+		var releaseFacts = lifecycleFacts(player, region, LifecycleOperation.RELEASE_OWNERSHIP);
+		if (!releaseFacts.blockers().isEmpty()) return CommitResult.failed("message.mmm.lifecycle.blocked_confirm",
+				lifecycleBlockers(releaseFacts.blockers()));
+		var released = commitOwnershipRelease(player.level().getServer(), region);
+		if (!released.committed()) return released;
+		var removeFacts = lifecycleFacts(player, region, LifecycleOperation.REMOVE_EMPTY_REGION);
+		if (!removeFacts.blockers().isEmpty()) return CommitResult.failed("message.mmm.lifecycle.blocked_confirm",
+				lifecycleBlockers(removeFacts.blockers()));
+		return commitRemoval(player.level().getServer(), region);
 	}
 
 	CommitResult removeEmptyPool(ServerPlayer player, FluidRegion region) {

@@ -37,6 +37,12 @@ import java.util.List;
 final class MmmCommandHandlers {
 	private MmmCommandHandlers() { }
 
+	static int openDemos(CommandSourceStack source) throws CommandSyntaxException {
+		ServerPlayer player = source.getPlayerOrException();
+		return mmm.network.FluidProtocolServer.send(player, MmmRuntimeRegistry.require(source.getServer()).demos().open(player))
+				? 1 : fail(source, "客户端无法打开演示面板");
+	}
+
 	static int createDemo(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
 		var fixtures = MmmRuntimeRegistry.require(source.getServer()).debugFixtures();
@@ -47,32 +53,21 @@ final class MmmCommandHandlers {
 	}
 
 	static int createMaterialDemo(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
-		ServerPlayer player = source.getPlayerOrException();
-		var fixtures = MmmRuntimeRegistry.require(source.getServer()).debugFixtures();
-		if (!fixtures.createMaterialDemo(player)) {
-			return fail(source, "无法创建多材料测试域：" + fixtures.lastFailure());
-		}
-		return succeed(source, "已创建暂停的上油下水溃坝测试域（瞬态，不写 region-state）；使用 /mmm step 或 /mmm run", 1);
+		return launchDemo(source, mmm.network.DemoPreset.MATERIAL);
 	}
 
 	static int createChemistryDemo(CommandSourceStack source) throws CommandSyntaxException {
-		ServerPlayer player = source.getPlayerOrException();
-		var fixtures = MmmRuntimeRegistry.require(source.getServer()).debugFixtures();
-		if (!fixtures.createChemistryDemo(player)) {
-			return fail(source, "无法创建酸碱化学测试域：" + fixtures.lastFailure());
-		}
-		return succeed(source, "已创建暂停的 HCl/NaOH 对半化学域；使用 /mmm step 或 /mmm run 观察混合中和", 1);
+		return launchDemo(source, mmm.network.DemoPreset.CHEMISTRY);
 	}
 
 	static int createControllerDemo(CommandSourceStack source) throws CommandSyntaxException {
+		return launchDemo(source, mmm.network.DemoPreset.WATER);
+	}
+	private static int launchDemo(CommandSourceStack source, mmm.network.DemoPreset preset) throws CommandSyntaxException {
 		ServerPlayer player = source.getPlayerOrException();
-		var fixtures = MmmRuntimeRegistry.require(source.getServer()).debugFixtures();
-		net.minecraft.core.BlockPos controller = fixtures.createControllerDemo(player);
-		if (controller == null) {
-			return fail(source, "无法创建快速控制器域：" + fixtures.lastFailure());
-		}
-		return succeed(source, "已在 " + controller.toShortString()
-				+ " 创建并启动内部 4×4×4 的空闭壳；对控制器旁蓝框接口的外侧使用桶", 1);
+		var response = MmmRuntimeRegistry.require(source.getServer()).demos().launch(player, preset);
+		mmm.network.FluidProtocolServer.send(player, response);
+		return response.failure() == null ? 1 : fail(source, response.failure());
 	}
 
 	/** Explicit debug/creative source for exercising material controller transfers and mixtures. */
@@ -202,20 +197,13 @@ final class MmmCommandHandlers {
 
 	static int createAirDemo(CommandSourceStack source, String mode)
 			throws com.mojang.brigadier.exceptions.CommandSyntaxException {
-		boolean vacuum = "vacuum".equals(mode);
-		if (!vacuum && !"pressure".equals(mode)) {
-			return fail(source, "airdemo 模式必须是 pressure 或 vacuum");
-		}
-		ServerPlayer player = source.getPlayerOrException();
-		var fixtures = MmmRuntimeRegistry.require(source.getServer()).debugFixtures();
-		if (!fixtures.createAirDemo(player, vacuum)) {
-			return fail(source, "无法创建气压测试域：" + fixtures.lastFailure());
-		}
-		return succeed(source, "已在准星方向搭好玻璃 U 型管并创建暂停的气压演示域（"
-				+ (vacuum ? "封顶侧气腔预置负压，运行后封顶侧液面升高"
-						: "封顶侧气腔预置正压，运行后封顶侧液面降低")
-				+ "；玻璃只替换空气，remove 时恢复；瞬态不写 region-state）；"
-				+ "用 /mmm run 观察，/mmm status 查看气压，/mmm debug true 以灰色显示密闭气体", 1);
+		var preset = switch (mode) {
+			case "ambient" -> mmm.network.DemoPreset.AMBIENT;
+			case "pressure" -> mmm.network.DemoPreset.PRESSURE;
+			case "vacuum" -> mmm.network.DemoPreset.VACUUM;
+			default -> null;
+		};
+		return preset == null ? fail(source, "airdemo：ambient / pressure / vacuum") : launchDemo(source, preset);
 	}
 
 	static int capture(CommandSourceStack source, boolean takeover) throws com.mojang.brigadier.exceptions.CommandSyntaxException {

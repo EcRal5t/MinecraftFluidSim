@@ -54,10 +54,10 @@ public final class GpuProductionDemoValidation {
 		String scenario = args.length == 0 ? "demo" : args[0];
 		int steps = args.length < 2 ? 1 : Integer.parseInt(args[1]);
 		String stop = args.length < 3 ? "complete" : args[2];
-		if (!Set.of("demo", "material", "chemistry", "tension30", "tension120", "air", "vacuum", "controller", "capture", "takeover").contains(scenario)
+		if (!Set.of("demo", "flow", "tank", "material", "chemistry", "tension30", "tension120", "air", "ambient", "vacuum", "controller", "capture", "takeover").contains(scenario)
 				|| !Set.of("initial", "motion", "scheduled", "complete").contains(stop) || steps < 1 || args.length > 3)
 			throw new IllegalArgumentException("Expected demo/material/chemistry/tension/air/vacuum, positive step count, and initial/motion/scheduled/complete");
-		if (scenario.equals("demo") && stop.equals("complete") && steps < 13)
+		if (Set.of("demo", "flow").contains(scenario) && stop.equals("complete") && steps < 13)
 			throw new IllegalArgumentException("Complete demo requires at least 13 scheduled steps for player entry, movement and exit");
 		System.out.println("stage=startup scenario=" + scenario + " scheduled_steps=" + steps);
 		var definitions = ProductionRegistries.load();
@@ -71,12 +71,18 @@ public final class GpuProductionDemoValidation {
 			runController(startup, world, manager, steps, stop);
 			return;
 		}
+		if (scenario.equals("tank")) {
+			runTank(startup, world, manager, steps);
+			return;
+		}
 		if (scenario.equals("capture") || scenario.equals("takeover")) {
 			runCapture(startup, world, manager, steps, stop, scenario.equals("takeover"));
 			return;
 		}
 		var domain = scenario.startsWith("tension") ? FluidRegionFactory.createTensionDomain()
-				: Set.of("air", "vacuum").contains(scenario) ? FluidRegionFactory.createDebugDomain()
+				: isAirScenario(scenario) ? FluidRegionFactory.createDebugDomain()
+				: scenario.equals("flow") ? FluidRegionFactory.createDomain(DemoSceneLayout.FLOW_SIZE_X,
+						DemoSceneLayout.FLOW_SIZE_Y, DemoSceneLayout.FLOW_SIZE_Z)
 				: FluidRegionFactory.createDomain(MinecraftDebugFixtures.BLOCK_SIZE_X,
 						MinecraftDebugFixtures.BLOCK_SIZE_Y, MinecraftDebugFixtures.BLOCK_SIZE_Z);
 		var region = new FluidRegion(UUID.randomUUID(), ResourceKey.create(Registries.DIMENSION,
@@ -93,7 +99,8 @@ public final class GpuProductionDemoValidation {
 			world.bindConfiguredState(domain, startup.config().maximumThermalSubstepsPerStep(), material);
 		} else {
 			FluidRegionFactory.bindDefaultMaterialState(domain);
-			if (scenario.equals("air") || scenario.equals("vacuum")) DebugScenarioInitialization.fillAirWater(domain);
+			if (isAirScenario(scenario)) DebugScenarioInitialization.fillAirWater(domain);
+			else if (scenario.equals("flow")) DemoSceneInitialization.fillFlow(domain);
 			else DebugScenarioInitialization.fillDam(domain, scenario.equals("material"));
 			world.bindConfiguredState(domain, startup.config().maximumThermalSubstepsPerStep());
 			if (scenario.equals("chemistry")) DebugScenarioInitialization.assignChemistry(domain);
@@ -114,7 +121,7 @@ public final class GpuProductionDemoValidation {
 			System.out.println("stage=backend " + backend.executionDescription());
 			var application = new RegionApplicationService(backend, new FluidRegionRepository(manager), operations);
 			var motion = new MinecraftMotionExecutor(application, world, new MinecraftRuntimePolicy(startup, manager));
-			if (scenario.equals("air") || scenario.equals("vacuum")) {
+			if (isAirScenario(scenario)) {
 				System.out.println("stage=air-prime-motion");
 				long coldStart = System.nanoTime();
 				prepareAvailability(region);
@@ -123,10 +130,16 @@ public final class GpuProductionDemoValidation {
 				var editable = region.domain();
 				var gas = editable.gasBoundary();
 				require(gas.nodeCount() > 0, "Air scaffold did not create a sealed gas chamber");
-				int node = DebugScenarioInitialization.presetAirPressure(editable, scenario.equals("vacuum"));
+				var pressurePreset = switch (scenario) {
+					case "air" -> DebugScenarioInitialization.AirPressure.PRESSURE;
+					case "ambient" -> DebugScenarioInitialization.AirPressure.AMBIENT;
+					default -> DebugScenarioInitialization.AirPressure.VACUUM;
+				};
+				int node = DebugScenarioInitialization.presetAirPressure(editable, pressurePreset);
 				require(node > 0, "Air scaffold does not have a sealed left chamber");
 				double pressure = gas.nodeGaugePressurePa(node);
-				require(scenario.equals("vacuum") ? pressure < 0 : pressure > 0, "Gas preset has wrong pressure direction");
+				require(scenario.equals("vacuum") ? pressure < 0 : scenario.equals("air") ? pressure > 0
+						: Math.abs(pressure) < 5000, "Gas preset has wrong pressure direction");
 				initialMass = editable.totalMassUnits();
 				System.out.println("stage=air-preset pressure_pa=" + pressure);
 			}
@@ -263,6 +276,109 @@ public final class GpuProductionDemoValidation {
 		System.out.println("stage=complete scenario=controller");
 	}
 
+	/** Replays the production recipes on a real scanned controller and durable region. */
+	private static void runTank(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
+			FluidRegionManager manager, int steps) throws Exception {
+		var registries = startup.registries();
+		var operations = new FluidRegionOperations(startup.worldRoot(), manager, startup.creationLocked(),
+				startup.profileProven(), startup.profile(), registries.chemical(), registries.granular(),
+				registries.thermal(), registries.gas(), startup.config().maximumThermalSubstepsPerStep(), registries.material());
+		var fixture = GpuControllerFixture.create(startup, world, manager, operations);
+		var region = fixture.region;
+		long reagentQuanta = Long.getLong("mmm.demoValidationReagentQuanta", 1_000_000L);
+		require(reagentQuanta > 0, "Tank reagent amount must be positive");
+		UUID id = region.id();
+		require(region.sizeX() == 4 && region.sizeY() == 4 && region.sizeZ() == 4,
+				"Demo tank must have a two-block interior");
+		var snapshots = new FluidSnapshotPublisher(world.profile(), world.chemicalRegistry(), world.granularRegistry(), world.thermalRegistry());
+		try (var backend = MmmRuntimeFactory.createSolverBackend()) {
+			MmmRuntimeFactory.prepareSolverBackend(backend, startup, world);
+			var application = new RegionApplicationService(backend, new FluidRegionRepository(manager), operations);
+			var motion = new MinecraftMotionExecutor(application, world, new MinecraftRuntimePolicy(startup, manager));
+			var ticks = new RegionTickUseCase(application, RegionTickUseCase.Policy.production());
+			for (var recipe : DemoTankOperations.Recipe.values()) {
+				region.setPaused(true);
+				if (region.domain().hasPendingPhaseMotionWork()) motion.settlePendingPhaseWork(region);
+				if (recipe == DemoTankOperations.Recipe.ACID_BASE) {
+					long priorMass = region.domain().totalMassUnits(), priorGeneration = region.checkpointGeneration();
+					var priorEnergy = region.domain().exactInternalEnergy();
+					var priorGas = region.domain().gasBoundary().sealedInventory();
+					try {
+						DemoTankOperations.prepareCandidate(world, region, recipe, null);
+						throw new AssertionError("Invalid tank port was accepted");
+					} catch (IllegalArgumentException expected) {
+						require(priorMass > 0 && region.domain().totalMassUnits() == priorMass
+								&& region.domain().exactInternalEnergy().equals(priorEnergy)
+								&& region.domain().gasBoundary().sealedInventory().equals(priorGas)
+								&& region.checkpointGeneration() == priorGeneration,
+								"Failed private recipe changed the live inventory or checkpoint");
+					}
+				}
+				var candidate = DemoTankOperations.prepareCandidate(world, region, recipe, fixture.portCell, reagentQuanta);
+				long target = commitTankCandidate(operations, region, candidate);
+				require(region.id().equals(id) && region.checkpointGeneration() == target,
+						"Tank recipe replaced the region or failed to advance its checkpoint");
+				var current = region.domain().captureAuthoritativeState();
+				long mass = region.domain().totalMassUnits();
+				if (recipe == DemoTankOperations.Recipe.WATER) {
+					require(mass == 0, "Empty tank recipe retained liquid");
+					var gas = region.domain().gasBoundary();
+					require(!gas.nodeIds().isEmpty(), "Empty tank lost its finite air chamber");
+					for (int node : gas.nodeIds()) require(Math.abs(gas.nodeGaugePressurePa(node)) < 5000
+							&& Math.abs(region.domain().gasNodeTemperatureK(node) - 293.15) < 1.0,
+							"Empty tank did not restore ambient air");
+				} else {
+					double expectedVolume = recipe == DemoTankOperations.Recipe.OIL_WATER ? 4.0 : 2.0;
+					require(Math.abs(region.domain().unitScale().cubicMeters(region.domain().totalVolumeExact()) - expectedVolume) < 1e-6,
+							"Tank recipe did not insert the full buckets");
+					if (recipe == DemoTankOperations.Recipe.OIL_WATER) {
+						var stocks = current.liquid().physicalStocks();
+						require(stocks.stream().anyMatch(s -> s.key().material() == region.domain().materialRegistry().handle("mmm:water"))
+								&& stocks.stream().anyMatch(s -> s.key().material() == region.domain().materialRegistry().handle("mmm:oil")),
+								"Tank recipe lost water or oil");
+						require(mass == Math.multiplyExact(2L, Math.addExact(mmm.units.Mass.fromKilograms(1000),
+								mmm.units.Mass.fromKilograms(world.resolveMaterial("mmm:oil").referenceDensity()))),
+								"Oil and water buckets lost mass");
+					} else {
+						var physical = measure(current, "chemistry");
+						require(mass == mmm.units.Mass.fromKilograms(2000)
+								&& physical.acid() == reagentQuanta && physical.base() == reagentQuanta,
+								"Tank recipe lost acid, base or bucket mass");
+					}
+				}
+				massBaseline = baselineMass(current);
+				var before = measure(current, "chemistry");
+				verifyPauseRun(region, ticks);
+				scheduledAdvance(startup, region, snapshots, ticks, steps, mass, "tank");
+				try (var capture = region.captureSolverState()) {
+					var after = measure(capture.exportState(), "chemistry");
+					System.out.printf("stage=tank-physical recipe=%s before=%s after=%s reaction_water=%d water_temperature_k=%.6f%n",
+							recipe, before, after, reactionWaterQuanta, bulkWaterTemperatureK);
+					if (steps >= 12 && recipe == DemoTankOperations.Recipe.OIL_WATER)
+						require(after.oilY() > after.waterY() && after.waterY() < before.waterY(),
+								"Oil and water did not settle into visible layers");
+					if (steps >= 12 && recipe == DemoTankOperations.Recipe.ACID_BASE) {
+						long acid = before.acid() - after.acid(), base = before.base() - after.base();
+						require(acid > 0 && acid == base && reactionWaterQuanta == acid,
+								"Tank acid/base did not produce balanced reaction water");
+					}
+				}
+				System.out.println("stage=tank-recipe recipe=" + recipe + " checkpoint=" + target);
+			}
+			region.domain();
+		}
+		System.out.println("stage=complete scenario=tank");
+	}
+
+	private static long commitTankCandidate(FluidRegionOperations operations, FluidRegion region,
+			FluidDomain candidate) throws Exception {
+		long base = region.checkpointGeneration(), target = base + 1;
+		var staged = operations.stageLifecycleCheckpoint(region, candidate, target);
+		require(operations.commitStagedLifecycleCheckpoint(staged) == target, "Tank candidate checkpoint failed");
+		operations.adoptCommittedContainerCheckpoint(region, base, target);
+		return target;
+	}
+
 	private static void verifyPauseRun(FluidRegion region, RegionTickUseCase ticks) {
 		prepareAvailability(region);
 		require(MinecraftRegionOperatorActions.setPaused(region, true, () -> true), "Pause rejected");
@@ -296,7 +412,7 @@ public final class GpuProductionDemoValidation {
 			}
 			require(plan.axis() == RegionTickUseCase.Axis.MOTION, "Unexpected scheduled axis " + plan.axis());
 			int step = completed + 1;
-			boolean playerPresent = scenario.equals("demo") && step >= 5 && step <= 12;
+			boolean playerPresent = Set.of("demo", "flow").contains(scenario) && step >= 5 && step <= 12;
 			List<mmm.world.MovingBodyFluidCoupling.Request> bodies = List.of();
 			if (playerPresent) {
 				if (step == 5) entryTick = tick;
@@ -319,7 +435,7 @@ public final class GpuProductionDemoValidation {
 				System.out.printf("stage=player-body step=%d x=%.4f velocity=%.4f wet_m3=%.6g%n",
 						step, bodies.getFirst().bounds().minimumX(), bodies.getFirst().velocityXMetresPerSecond(),
 						coupling.coupledVolumeCubicMetres());
-			} else if (scenario.equals("demo") && step == 13) {
+			} else if (Set.of("demo", "flow").contains(scenario) && step == 13) {
 				require(result.result().movingBodyCoupling().bodyImpulses().stream()
 						.noneMatch(impulse -> impulse.bodyId().equals(playerId)), "Player impulse remained after exit");
 				try (var capture = region.captureSolverState()) {
@@ -606,7 +722,8 @@ public final class GpuProductionDemoValidation {
 		int solid = 0;
 		for (int z = 0; z < sz; z++) for (int y = 0; y < sy; y++) for (int x = 0; x < sx; x++) {
 			boolean glass = switch (scenario) {
-				case "air", "vacuum" -> MinecraftDebugScaffolding.isScaffoldBlock(x / cellsPerBlock, y / cellsPerBlock, z / cellsPerBlock);
+				case "air", "ambient", "vacuum" -> MinecraftDebugScaffolding.isScaffoldBlock(x / cellsPerBlock, y / cellsPerBlock, z / cellsPerBlock);
+				case "flow" -> DemoSceneLayout.isFlowBlock(x / cellsPerBlock, y / cellsPerBlock, z / cellsPerBlock);
 				case "tension", "tension30", "tension120" -> y / cellsPerBlock == 0;
 				default -> false;
 			};
@@ -628,9 +745,9 @@ public final class GpuProductionDemoValidation {
 	}
 
 	private static void checkScenario(FluidRegion region, String scenario, boolean initial) {
-		int x = scenario.startsWith("tension") ? 11 : scenario.equals("air") || scenario.equals("vacuum") ? 4 : 1;
-		int y = scenario.startsWith("tension") || scenario.equals("air") || scenario.equals("vacuum") ? 2 : 1;
-		int z = scenario.startsWith("tension") ? 11 : scenario.equals("air") || scenario.equals("vacuum") ? 4 : 1;
+		int x = scenario.startsWith("tension") ? 11 : isAirScenario(scenario) ? 4 : scenario.equals("flow") ? 2 : 1;
+		int y = scenario.startsWith("tension") || isAirScenario(scenario) || scenario.equals("flow") ? 2 : 1;
+		int z = scenario.startsWith("tension") ? 11 : isAirScenario(scenario) ? 4 : scenario.equals("flow") ? 2 : 1;
 		var first = region.observeCellInventory(x, y, z);
 		if (initial) require(first != null && first.liquidVolumeCubicMetres() > 0, "Scenario liquid observation is empty");
 		if (initial && scenario.equals("material")) {
@@ -645,11 +762,12 @@ public final class GpuProductionDemoValidation {
 		} else if (initial && scenario.startsWith("tension")) {
 			require(hasMaterial(first, "mmm:water") && region.solidMicroMask(x, 1, z) == 255,
 					"Wetting demo lost its water or glass contact floor");
-		} else if (scenario.equals("air") || scenario.equals("vacuum")) {
+		} else if (isAirScenario(scenario)) {
 			var nodes = region.display().thermal().gasNodes();
 			require(!nodes.isEmpty(), "Air demo lost the sealed chamber display");
 			if (initial) require(nodes.stream().anyMatch(node -> scenario.equals("vacuum")
-					? node.gaugePressureDecaPa() < 0 : node.gaugePressureDecaPa() > 0),
+					? node.gaugePressureDecaPa() < 0 : scenario.equals("air") ? node.gaugePressureDecaPa() > 0
+					: Math.abs(node.gaugePressureDecaPa()) < 500),
 					"Air demo lost the preset pressure direction");
 		}
 		if (initial) System.out.println("stage=scenario-observation initial=true scenario=" + scenario);
@@ -672,7 +790,7 @@ public final class GpuProductionDemoValidation {
 	private static PhysicalObservation measure(mmm.fluid.FluidDomainState state, String scenario) {
 		int sx = state.sizeX(), sy = state.sizeY(), sz = state.sizeZ();
 		double[] volume = new double[2], xmoment = new double[2], ymoment = new double[2], side = new double[2], columns = new double[2];
-		if (scenario.equals("air") || scenario.equals("vacuum"))
+		if (isAirScenario(scenario))
 			for (int z = 0; z < sz; z++) for (int x = 0; x < sx; x++)
 				if (state.fixedGeometry().mask((z * sy + 2) * sx + x) == 0) columns[x < sx / 2 ? 0 : 1]++;
 		long acid = 0, base = 0, waterQuanta = 0;
@@ -707,7 +825,7 @@ public final class GpuProductionDemoValidation {
 	private static void checkOutcome(String scenario, PhysicalObservation initial, PhysicalObservation end) {
 		System.out.println("stage=physical-observation initial=" + initial + " final=" + end);
 		switch (scenario) {
-			case "demo" -> require(end.waterX() > initial.waterX(), "Dam-break did not transport water outwards");
+			case "demo", "flow" -> require(end.waterX() > initial.waterX(), "Dam-break did not transport water outwards");
 			case "material" -> require(end.waterX() > initial.waterX() && end.oilX() > initial.oilX()
 					&& end.oilY() > end.waterY(), "Both layers must move while lighter oil remains above water");
 			case "chemistry" -> {
@@ -723,8 +841,14 @@ public final class GpuProductionDemoValidation {
 				require(scenario.equals("vacuum") ? change < 0 : change > 0,
 						"Gas pressure did not move the liquid levels in the expected direction");
 			}
+			case "ambient" -> require(Math.abs(end.rightHeight() - end.leftHeight()) < 1.0,
+					"Ambient chamber did not keep the two water levels close");
 			default -> throw new IllegalArgumentException("Unknown scenario " + scenario);
 		}
+	}
+
+	private static boolean isAirScenario(String scenario) {
+		return Set.of("air", "ambient", "vacuum").contains(scenario);
 	}
 
 	private static void require(boolean condition, String message) {

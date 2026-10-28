@@ -177,8 +177,11 @@ public final class MmmRuntimeFactory {
 		MinecraftSimulationLoop simulationLoop = new MinecraftSimulationLoop(
 				regionManager, regionOperations, snapshots, containerRecovery, takeover,
 				availability, regionTick, ownership::replace);
+		DemoWorkbench demos = new DemoWorkbench(regionManager, debugFixtures, operatorActions,
+				new DemoTankOperations(startup, worldRegistries, regionManager, regionOperations,
+						regionLifecycle, availability, phaseWorkBarrier), startup, regionOperations);
 		return new MmmRuntime(simulationLoop, finiteDevices, farmland, operatorActions, containerTransactions, controllerConsole,
-				regionActivation, pools, debugFixtures, regionAdministration, regionDiagnostics,
+				regionActivation, pools, debugFixtures, demos, regionAdministration, regionDiagnostics,
 				playerContainerTransfers, dispenserContainerTransfers,
 				new MinecraftRegionObservation(regionManager, snapshots, comparatorSignals), containerRecovery,
 				new FabricFluidQueryApi(server, regionManager, startup.profileProven()), new ProtocolSessions(),

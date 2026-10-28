@@ -639,10 +639,15 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
   - 验证选择器 / 参考：`thermal,protocol`
 
 - **命令、开发场景与诊断报告**
+  - 演示面板按玩家及维度保存场景身份和固定位置；每次操作核对会话、请求代次及区域身份。水箱配方通过私有候选和现有库存提交发布，清理复用区域生命周期；临时池与气压管通过脚手架事务替换并恢复世界方块。
   - 主要文件：
     - [MmmCommands](../../fabric/src/main/java/mmm/MmmCommands.java)
     - [MmmCommandHandlers](../../fabric/src/main/java/mmm/MmmCommandHandlers.java)
     - [MinecraftDebugFixtures](../../fabric/src/main/java/mmm/simulation/MinecraftDebugFixtures.java)
+    - [DemoWorkbench](../../fabric/src/main/java/mmm/simulation/DemoWorkbench.java)：创建、暂停、单步、原位重置和移除的服务端流程；[DemoWorkbenchStore](../../fabric/src/main/java/mmm/simulation/DemoWorkbenchStore.java) 保存持久水箱身份
+    - [DemoTankOperations](../../fabric/src/main/java/mmm/simulation/DemoTankOperations.java)：控制器水箱配方、室温常压复位及生命周期清理
+    - [DemoSceneLayout](../../fabric/src/main/java/mmm/simulation/DemoSceneLayout.java)、[DemoSceneInitialization](../../fabric/src/main/java/mmm/simulation/DemoSceneInitialization.java)：游戏与离线回放共用水流池几何、障碍和初态
+    - [DemoWorkbenchScreen](../../fabric/src/client/java/mmm/client/DemoWorkbenchScreen.java)、[DemoActionPayload](../../fabric/src/main/java/mmm/network/DemoActionPayload.java)、[DemoWorkbenchPayload](../../fabric/src/main/java/mmm/network/DemoWorkbenchPayload.java)：场景选择、操作和关联回复
     - [DebugScenarioInitialization](../../fabric/src/main/java/mmm/simulation/DebugScenarioInitialization.java)：生产命令与离线 GPU 重放共用的初始库存、化学配比、气压及液滴几何
     - [ControllerDemoLayout](../../fabric/src/main/java/mmm/simulation/ControllerDemoLayout.java)、[ControllerRegionCreation](../../fabric/src/main/java/mmm/simulation/ControllerRegionCreation.java)：控制器外壳与端口布局、全能力初始化及首个检查点发布
     - [RegionDiagnosticsReport](../../fabric/src/main/java/mmm/simulation/RegionDiagnosticsReport.java)

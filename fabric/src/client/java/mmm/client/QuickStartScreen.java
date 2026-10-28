@@ -19,7 +19,8 @@ final class QuickStartScreen extends Screen {
 
 	@Override
 	protected void init() {
-		int buttonWidth = 88, gap = 6, left = (width - buttonWidth * 3 - gap * 2) / 2;
+		int buttonWidth = Math.min(70, Math.max(1, (width - 30) / 4));
+		int gap = 6, left = (width - buttonWidth * 4 - gap * 3) / 2;
 		Button previous = Button.builder(Component.translatable("screen.mmm.quick_start.previous"), button -> {
 			page--;
 			scroll = 0;
@@ -30,11 +31,17 @@ final class QuickStartScreen extends Screen {
 		addRenderableWidget(Button.builder(Component.translatable("screen.mmm.quick_start.close"), button -> {
 			if (minecraft != null) minecraft.setScreenAndShow(null);
 		}).bounds(left + buttonWidth + gap, height - 30, buttonWidth, 20).build());
+		addRenderableWidget(Button.builder(Component.translatable("screen.mmm.quick_start.demos"), button -> {
+			if (minecraft == null || minecraft.getConnection() == null) return;
+			var connection = minecraft.getConnection();
+			minecraft.setScreenAndShow(null);
+			connection.sendCommand("mmm demos");
+		}).bounds(left + (buttonWidth + gap) * 2, height - 30, buttonWidth, 20).build());
 		Button next = Button.builder(Component.translatable("screen.mmm.quick_start.next"), button -> {
 			page++;
 			scroll = 0;
 			rebuildWidgets();
-		}).bounds(left + (buttonWidth + gap) * 2, height - 30, buttonWidth, 20).build();
+		}).bounds(left + (buttonWidth + gap) * 3, height - 30, buttonWidth, 20).build();
 		next.active = page < STEP_COUNT / STEPS_PER_PAGE - 1;
 		addRenderableWidget(next);
 	}

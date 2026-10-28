@@ -7,8 +7,9 @@
 
 | 用途 | 命令或操作 |
 |---|---|
-| 创建开发区域 | `demo`、`capture`、`takeover` |
-| 创建控制器测试场景 | `controllerdemo` |
+| 打开演示面板 | `demo`、`demos`；快速入门手册中的“演示” |
+| 创建空演示水箱 | `controllerdemo` |
+| 大型溃坝与世界采样诊断 | `damdemo`、`capture`、`takeover` |
 | 列出、选择和保存区域 | `regions list`、`regions select <uuid>`、`regions checkpoint` |
 | 恢复上一完整存档 | `regions recoverprevious <expectedCheckpoint>`；成功后退出并重新进入世界 |
 | 增减库存或刷新碰撞 | `pour [1-16]`、`drain [1-16]`、`refresh` |
@@ -16,15 +17,24 @@
 | 运行与诊断 | `run`、`pause`、`step [1-20]`、`status` |
 | 控制器接入配置 | `controllers [true/false]`；关闭后现有控制器区域暂停 |
 | 世界交互配置 | `worldbridge`；重启后生效 |
-| 材料和界面场景 | `materialdemo`、`materialbucket ...`、`tensiondemo [angle]` |
-| 化学场景与状态 | `chemistrydemo`、`reagent ...`、`chemstatus` |
+| 油水配方与材料物品 | `materialdemo`、`materialbucket ...` |
+| 酸碱配方与化学状态 | `chemistrydemo`、`reagent ...`、`chemstatus` |
+| 放大毛细效应的进阶实验 | `tensiondemo [angle]` |
 | 颗粒物品与状态 | `granularcontainer ...`、`granstatus` |
-| 气压场景 | `airdemo [pressure/vacuum]` |
+| 气压场景 | `airdemo [ambient/pressure/vacuum]` |
 | 世界方块归属检查 | `ownership` |
 | 调试显示、实体与日志 | `debug`、`entities`、`logpath` |
 | 容器事务故障注入 | `transferwal [fault <point>]`；在事务恢复测试场景中使用 |
 
 `run` 与手动 `step` 可以重试性能暂停。其他不可用状态先按 `status` 的具体原因排查，入口见 [故障定位](../architecture/system-overview.md#diagnosis)。
+
+## 演示面板
+
+管理员在空旷、区块已加载的位置打开面板，选择水箱、水流或气压。水箱的空箱、油水和酸碱共用同一个真实控制器区域；水流池带池壁、障碍和入池台阶；气压管在同一几何中切换常压、加压和低压。
+
+“开始”创建并运行所选场景，“暂停”和“单步”操作当前场景，“重置”在原位置恢复所选初态并暂停，“移除”清理演示区域及仍保持原样的演示外壳。材料、化学、控制器和气压快捷命令均打开这个面板，并准备相应的暂停场景。创建水箱时发放缺少的水桶、空桶、材料桶和探针；水箱通过实际接口交接库存。重置会清空原配方，恢复室温常压后投料。
+
+每位玩家在每个维度维护一个演示；水箱身份随世界保存，重新进入可继续重置。临时水流／气压场景共用一个名额，创建前需移除其他玩家或命令留下的临时场景。操作需在演示附近进行。演示仍使用世界能力、Vulkan 求解和正常超时暂停规则。
 
 ## 清理控制器区域
 

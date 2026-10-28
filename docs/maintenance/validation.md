@@ -4,6 +4,27 @@
 有 95% 把握的改动跳过额外验证、校验和测试；物理主干改动按范围选择完整步生产预算，展示改动分别记录快照与客户端成本。
 有具体未知风险时，从下列入口选择能回答该问题的最小场景，复用同一次构建产物。
 
+## 演示面板与小场景
+
+2026-10-28，`/mmm demo`／`demos` 和快速入门手册统一进入演示面板。当前面板为水箱三配方、水流池、气压三预设。最终构建保留生产 Vulkan 后端；本轮未启动 Minecraft。
+
+`build/demo-workbench-final-build.log` 记录客户端编译、`protocol,lifecycle,boundary` 和组装成功。覆盖演示请求／回复、会话及代次、维度、实际不可用状态、持久水箱记录、四朝向壳体扫描与接口定位，以及现有生命周期清理流程。`build/demo-workbench-tank-final.log` 记录最终 GPU 产物重建、三配方连续回放和组装成功，其余回放复用该次 classpath。
+
+| 场景 | 自动化结果 | 本地日志 |
+|---|---|---|
+| 水箱 `tank` | 同一控制器区域依次重置为空箱、油水、稀酸碱，各 120 步；室温常压复位、真实桶量、失败候选保留旧库存、checkpoint 连续推进。油质心 0.891 格高于水的 0.134 格；酸碱各消耗 398487 量子并生成等量水 | `build/demo-workbench-tank-final.log` |
+| 水流 `flow` | 120 步，池壁／障碍使用共享布局；玩家进入、移动、离开，水向空侧扩散；暂停、手动两步、恢复、编辑及再次推进 | `build/demo-workbench-flow-final.log` |
+| 常压 `ambient` | 120 步，两侧液位保持接近，完成状态操作及编辑后续算 | `build/demo-workbench-ambient-final.log` |
+| 加压 `air` | 120 步，加压侧下降、对侧上升，完成状态操作及编辑后续算 | `build/demo-workbench-air-final.log` |
+| 低压 `vacuum` | 120 步，低压侧上升、对侧下降，完成状态操作及编辑后续算 | `build/demo-workbench-vacuum-final.log` |
+| 小控制器 `controller` | 20 步，真实水桶注液、暂停、手动两步、舀出、WAL／checkpoint 和 GPU 续算 | `build/demo-workbench-controller-final.log` |
+
+所有回放逐步检查整数质量／元素收支、热账和展示快照。热运行完整应用步中位耗时：水箱 18.464 ms、水流 23.716 ms、常压 36.132 ms、加压 35.023 ms、低压 34.813 ms、控制器 18.307 ms；均未触发连续三步超 200 ms 暂停。这些是上述小场景的离线测量，64³／50 ms 仍按原性能输入单独评价。
+
+无游戏自动化调用生产场景初始化、调度和库存事务；实际屏幕绘制、鼠标命中、网络往返、世界脚手架清理及跨游戏重启仍需实机观察。必要时只用 `/mmm demo` 一处入口，依次选择场景、开始、暂停、单步、重置和移除；预期保持位置、按真实状态启用按钮、清除原样外壳，并在失败时显示具体原因。原控制台删除水箱后，工作台依靠持久删除记录重新建立场景。
+
+当前限制：高浓度酸碱在现有放大析盐规则下会生成大量沉淀，小水箱的颗粒占容、液体位移和气腔交接仍可能中止。失败证据为 `build/demo-workbench-tank.log`；可在下述直接 Java 入口前加 `-Dmmm.demoValidationReagentQuanta=1000000000` 并运行 `tank 120 complete` 复现。基础演示使用稀溶液观察中和，不据其通过宣称连续析盐问题已解决。未成立的颗粒顺序与额外气腔重映射试验均已撤回。
+
 ## GPU 演示完整流程
 
 2026-10-28，演示重放入口为 `:fabric:runGpuProductionDemoValidation`。使用生产 Vulkan provider、世界注册表、场景初始化、应用服务、调度策略、状态查询、快照、恢复和库存编辑。未启动 Minecraft 客户端或服务器；世界方块与区块可用性由离线端口提供。控制器使用实际壳体扫描、端口解析、ItemStack、容器事务、WAL 和 checkpoint；capture/takeover 使用真实采样与接管事务。
@@ -12,11 +33,11 @@
 ./gradlew :fabric:runGpuProductionDemoValidation -PgpuDemo=chemistry -PgpuDemoSteps=120 --console=plain
 ```
 
-`gpuDemo` 接受 `demo`、`material`、`chemistry`、`air`、`vacuum`、`tension`、`controller`、`capture`、`takeover`。`tension` 顺序运行相同初态的 30° 和 120° 液滴。默认 `gpuDemoStage=complete` 才包含物理结果、暂停／运行、手动步进、恢复和编辑后的续算；`initial`、`motion`、`scheduled` 供失败定位，分别仅覆盖对应前缀。
+`gpuDemo` 接受 `flow`、`tank`、`ambient`、`demo`、`material`、`chemistry`、`air`、`vacuum`、`tension`、`controller`、`capture`、`takeover`。`tank` 依次重置并运行三种生产水箱配方；`tension` 顺序运行相同初态的 30° 和 120° 液滴。其余场景的默认 `gpuDemoStage=complete` 包含物理结果、暂停／运行、手动步进、恢复和编辑后的续算；`initial`、`motion`、`scheduled` 供失败定位，分别仅覆盖对应前缀。`demo` 验证选择器保留原大型溃坝，对应游戏命令 `damdemo`；`material`／`chemistry` 保留原初始化的基线重放。
 
-每个接受步检查四相整数质量与元素收支、热账、设备驻留及展示快照。环境交换单独记账，日志的 `total_mass_delta` 是包含真实环境收支的库存变化；断言比较的是扣除这些收支后的质量差。默认溃坝保留原 24×16×24 全能力场景和 324 m³ 初始水量，并执行真人尺寸实体的进入、移动和离开。
+每个接受步检查四相整数质量与元素收支、热账、设备驻留及展示快照。环境交换单独记账，日志的 `total_mass_delta` 是包含真实环境收支的库存变化；断言比较的是扣除这些收支后的质量差。大型溃坝保留原 24×16×24 全能力场景和 324 m³ 初始水量，并执行真人尺寸实体的进入、移动和离开。
 
-2026-10-28，RTX 5070 Ti 上的完整流程结果如下。步数为调度推进次数，随后另有暂停、手动步进、导出恢复、编辑及续算。常温水场景逐步检查质量加权水温，捕获账本闭合但整体异常冷却的失真。
+2026-10-28，RTX 5070 Ti 上的原场景基线结果如下。步数为调度推进次数，随后另有暂停、手动步进、导出恢复、编辑及续算。常温水场景逐步检查质量加权水温，捕获账本闭合但整体异常冷却的失真。
 
 | 场景 | 完整结果 | 本地日志 |
 |---|---|---|

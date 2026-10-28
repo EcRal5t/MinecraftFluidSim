@@ -57,6 +57,7 @@ public final class FluidRegionLifecycleValidation {
 	private FluidRegionLifecycleValidation() { }
 
 	public static void main(String[] args) throws Exception {
+		validateDemoWorkbenchStore();
 		validateControllerComparatorObservation();
 		validatePacingAndOperatorPause();
 		validateRegionTickPlanningAndPacing();
@@ -73,6 +74,25 @@ public final class FluidRegionLifecycleValidation {
 		validateControllerSummaryTracksRunAndRecovery();
 		validateLifecyclePreviewTokensBindEveryCommitGate();
 		System.out.println("FluidRegionLifecycle validation passed");
+	}
+
+	private static void validateDemoWorkbenchStore() throws Exception {
+		var root = java.nio.file.Files.createTempDirectory("mmm-demo-workbench-");
+		var store = new DemoWorkbenchStore(root);
+		var player = UUID.randomUUID();
+		var water = new DemoWorkbenchStore.Entry(player, "minecraft:overworld", UUID.randomUUID(),
+				new BlockPos(-12, 65, 37), net.minecraft.core.Direction.WEST, mmm.network.DemoPreset.WATER, false);
+		var other = new DemoWorkbenchStore.Entry(player, "minecraft:the_nether", UUID.randomUUID(),
+				new BlockPos(6, 70, -8), net.minecraft.core.Direction.SOUTH, mmm.network.DemoPreset.CHEMISTRY, true);
+		require(store.loadAll().isEmpty(), "New demo metadata was not empty");
+		store.save(List.of(water, other));
+		require(new DemoWorkbenchStore(root).loadAll().equals(List.of(water, other)), "Demo metadata did not survive reload");
+		var ready = new DemoWorkbenchStore.Entry(player, water.dimension(), water.region(), water.anchor(), water.facing(),
+				mmm.network.DemoPreset.MATERIAL, true);
+		store.save(List.of(ready));
+		require(new DemoWorkbenchStore(root).loadAll().equals(List.of(ready)), "Demo metadata replacement or removal failed");
+		store.save(List.of());
+		require(new DemoWorkbenchStore(root).loadAll().isEmpty(), "Demo metadata removal did not survive reload");
 	}
 
 	private static void validateControllerComparatorObservation() {
