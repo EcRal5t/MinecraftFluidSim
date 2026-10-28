@@ -201,6 +201,7 @@
   "screen.mmm.permission.builtin_admin_denied": "需要管理员权限",
   "screen.mmm.blocker.permission_denied": "权限不足",
   "screen.mmm.blocker.startup_not_ready": "世界启动状态未就绪",
+  "screen.mmm.blocker.region_running": "请先暂停区域，再预览此操作",
   "screen.mmm.blocker.region_unavailable": "区域不可用",
   "screen.mmm.blocker.region_unloaded": "区域 solver 已卸载",
   "screen.mmm.blocker.pending_wal": "存在未决或不可读 WAL",

@@ -8,19 +8,25 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 
 /** Clientbound bounded controller summary. The client receives no authority-bearing world object. */
-public record ControllerSummaryPayload(ControllerSummary summary) implements CustomPacketPayload {
+public record ControllerSummaryPayload(java.util.UUID regionId, long requestGeneration, ControllerSummary summary) implements CustomPacketPayload {
 	public static final Type<ControllerSummaryPayload> TYPE = new Type<>(MmmMod.id("controller_summary"));
 	public static final StreamCodec<FriendlyByteBuf, ControllerSummaryPayload> CODEC = StreamCodec.of(
 			ControllerSummaryPayload::encode, ControllerSummaryPayload::decode);
 
 	public ControllerSummaryPayload {
-		if (summary == null) throw new IllegalArgumentException("Controller summary payload is missing");
+		if (regionId == null || requestGeneration < 0 || (summary == null && requestGeneration == 0)
+				|| (summary != null && !regionId.equals(summary.regionId())))
+			throw new IllegalArgumentException("Controller summary response identity is invalid");
 	}
+	public ControllerSummaryPayload(ControllerSummary summary) { this(summary.regionId(), 0, summary); }
 
 	@Override public Type<ControllerSummaryPayload> type() { return TYPE; }
 
 	private static void encode(FriendlyByteBuf buffer, ControllerSummaryPayload payload) {
-		writeSummary(buffer, payload.summary);
+		buffer.writeUUID(payload.regionId);
+		buffer.writeVarLong(payload.requestGeneration);
+		buffer.writeBoolean(payload.summary != null);
+		if (payload.summary != null) writeSummary(buffer, payload.summary);
 	}
 
 	static void writeSummary(FriendlyByteBuf buffer, ControllerSummary value) {
@@ -66,7 +72,8 @@ public record ControllerSummaryPayload(ControllerSummary summary) implements Cus
 	}
 
 	private static ControllerSummaryPayload decode(FriendlyByteBuf buffer) {
-		return new ControllerSummaryPayload(readSummary(buffer));
+		return new ControllerSummaryPayload(buffer.readUUID(), buffer.readVarLong(),
+				buffer.readBoolean() ? readSummary(buffer) : null);
 	}
 
 	static ControllerSummary readSummary(FriendlyByteBuf buffer) {

@@ -191,6 +191,11 @@ final class MinecraftRegionTick {
 		return collisions;
 	}
 
+	/** Initializes a private region candidate before its first checkpoint and publication. */
+	void initializeThermalBoundary(ServerLevel level, FluidRegion region) {
+		if (inputs.refreshThermalBoundary(level, region)) region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
+	}
+
 	boolean refreshThermalBoundary(ServerLevel level, FluidRegion region) {
 		try {
 			boolean changed = inputs.refreshThermalBoundary(level, region);

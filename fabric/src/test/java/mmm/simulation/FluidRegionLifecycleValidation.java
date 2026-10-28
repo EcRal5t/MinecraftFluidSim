@@ -70,6 +70,7 @@ public final class FluidRegionLifecycleValidation {
 		validateApplicationCheckpointResults();
 		validateUnloadRequiresPublishedCheckpointAndReleasedSolver();
 		validateMetadataOnlySummaryCannotInventInventory();
+		validateControllerSummaryTracksRunAndRecovery();
 		validateLifecyclePreviewTokensBindEveryCommitGate();
 		System.out.println("FluidRegionLifecycle validation passed");
 	}
@@ -166,6 +167,72 @@ public final class FluidRegionLifecycleValidation {
 		require(blockedAuthorization.decision() == RegionLifecycleUseCase.CommitDecision.BLOCKED
 				&& blockedAuthorization.blockers().equals(List.of(LifecycleOperationPreview.Blocker.PENDING_WAL)),
 				"current lifecycle blockers did not prevent commit after token consumption");
+
+		var running = lifecycleContext(player, region, 7L, LifecycleOperation.EMPTY_CONDENSED,
+				false, "READY|paused=false", 102L);
+		var paused = lifecycleContext(player, region, 7L, LifecycleOperation.EMPTY_CONDENSED,
+				false, "READY|paused=true", 103L);
+		var runningPreview = lifecycle.preview(previewFacts(running, List.of(LifecycleOperationPreview.Blocker.REGION_RUNNING)));
+		require(!runningPreview.ready() && runningPreview.blockers().contains(LifecycleOperationPreview.Blocker.REGION_RUNNING),
+				"running region did not present the pause requirement");
+		var pausedPreview = lifecycle.preview(previewFacts(paused, List.of()));
+		require(pausedPreview.ready() && lifecycle.authorizeCommit(pausedPreview.nonce(),
+				previewFacts(running, List.of(LifecycleOperationPreview.Blocker.REGION_RUNNING))).decision()
+				== RegionLifecycleUseCase.CommitDecision.TOKEN_INVALID,
+				"resuming the region did not invalidate the paused preview");
+		var fresh = lifecycle.preview(previewFacts(paused, List.of()));
+		require(lifecycle.authorizeCommit(fresh.nonce(), previewFacts(paused, List.of())).decision()
+				== RegionLifecycleUseCase.CommitDecision.AUTHORIZED,
+				"fresh paused preview could not be confirmed");
+	}
+
+	/** Real summary projection follows the same run state and retry action used by the console. */
+	private static void validateControllerSummaryTracksRunAndRecovery() throws Exception {
+		var root = java.nio.file.Files.createTempDirectory("mmm-controller-summary-flow-");
+		var manager = new FluidRegionManager(new RegionCatalog.Limits(4, 4096, 16384));
+		var controller = new BlockPos(-1, 0, 0);
+		var footprint = new mmm.simulation.controller.FluidRegionFootprint(controller, BlockPos.ZERO, BlockPos.ZERO,
+				java.util.Set.of(BlockPos.ZERO.asLong()), java.util.Set.of(controller.asLong()),
+				java.util.Set.of(net.minecraft.world.level.ChunkPos.pack(0, 0)));
+		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .05F, 48, 1e-5F, 1e-4F));
+		domain.setVolume(0, 0, 0, .5F);
+		var region = new FluidRegion(new UUID(83L, 89L), DIMENSION, BlockPos.ZERO, domain, footprint);
+		require(manager.addAndSelect(region).accepted(), "controller summary fixture was not admitted");
+		var profile = TestProfiles.pure();
+		var operations = new FluidRegionOperations(root, manager, false, true, profile, null, null, null, null,
+				ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS, TestProfiles.materialRegistry());
+		require(operations.checkpoint(region) == 1L, "controller summary fixture did not publish its initial state");
+		var queries = new ControllerQueryUseCase(new ControllerSummaryAdapter(manager, operations, profile, null,
+				id -> false, () -> true, false));
+		var player = new UUID(97L, 101L);
+		var first = queries.query(new ControllerSummaryCommand(player, region.id())).summary();
+		require(first.operatorIntent() == ControllerSummary.OperatorIntent.PAUSED && first.inventory().live(),
+				"new controller did not report paused live inventory");
+		require(queries.consumeActionToken(player, region.id(), first.summaryGeneration())
+				&& MinecraftRegionOperatorActions.setPaused(region, false, () -> true), "controller run action failed");
+		var running = queries.query(new ControllerSummaryCommand(player, region.id())).summary();
+		require(running.operatorIntent() == ControllerSummary.OperatorIntent.RUNNING && running.availability().ready()
+				&& !queries.consumeActionToken(player, region.id(), first.summaryGeneration()),
+				"running summary or stale-token rejection did not follow the accepted action");
+		region.blockPerformance("test performance block");
+		var blocked = queries.query(new ControllerSummaryCommand(player, region.id())).summary();
+		require(blocked.operatorIntent() == ControllerSummary.OperatorIntent.RUNNING
+				&& blocked.availability().reason() == RegionAvailabilityReason.PERFORMANCE_PAUSE,
+				"performance pause changed the operator intent or was not visible");
+		require(queries.consumeActionToken(player, region.id(), blocked.summaryGeneration()), "retry token was rejected");
+		MinecraftRegionOperatorActions.clearPerformancePauseForExplicitRetry(region);
+		var recovered = queries.query(new ControllerSummaryCommand(player, region.id())).summary();
+		require(recovered.operatorIntent() == ControllerSummary.OperatorIntent.RUNNING && recovered.availability().ready()
+				&& recovered.inventory().liquidMassKilograms() == first.inventory().liquidMassKilograms(),
+				"retry failed to restore the visible run state or changed liquid inventory");
+		region.blockNumerical("test numerical block");
+		MinecraftRegionOperatorActions.clearPerformancePauseForExplicitRetry(region);
+		var numerical = queries.query(new ControllerSummaryCommand(player, region.id())).summary();
+		require(numerical.availability().reason() == RegionAvailabilityReason.NUMERICAL_PAUSE,
+				"performance retry cleared a distinct numerical failure");
+		try (var paths = java.nio.file.Files.walk(root)) {
+			for (var path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) java.nio.file.Files.deleteIfExists(path);
+		}
 	}
 
 	private static LifecycleOperationSessions.Context lifecycleContext(

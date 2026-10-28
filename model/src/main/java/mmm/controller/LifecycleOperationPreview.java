@@ -52,7 +52,8 @@ public record LifecycleOperationPreview(
 		GAS_NOT_EMPTY,
 		FINITE_DEVICE_NOT_EMPTY,
 		OWNERSHIP_NOT_RELEASED,
-		QUARANTINE_UNAVAILABLE
+		QUARANTINE_UNAVAILABLE,
+		REGION_RUNNING
 	}
 
 	/** Actual authoritative quantities affected if the displayed operation commits. */

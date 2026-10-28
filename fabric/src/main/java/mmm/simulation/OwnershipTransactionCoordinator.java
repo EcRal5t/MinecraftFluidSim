@@ -234,8 +234,7 @@ final class OwnershipTransactionCoordinator {
 			}
 		}
 		boolean empty = domain.totalVolumeExact() == 0 && domain.totalGranularSolidVolumeSvq() == 0
-				&& domain.totalCoherentSolidVolumeSvq() == 0 && domain.gasBoundary().nodeCount() == 0
-				&& domain.gasBoundary().sealedInventory().isEmpty() && domain.exactGasInternalEnergy().signum() == 0
+				&& domain.totalCoherentSolidVolumeSvq() == 0 && MinecraftRegionLifecycle.gasInventoryEmpty(domain)
 				&& domain.exactInternalEnergy().signum() == 0 && !region.hasFiniteThermalDevices();
 		if (empty) for (var block : owned.ownedBlocks()) returnedPositions.add(block.packedPosition());
 		return new PoolReturnPlan(region.ownershipCandidate(domain, region.footprint().withReturnedBlocks(returnedPositions)), List.copyOf(returned), empty);

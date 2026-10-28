@@ -42,6 +42,16 @@
 
 最终产物在未设置驱动覆盖变量的新进程中通过 `demo 20 complete`，包含实体进出、暂停手动步进、恢复与编辑后续算，日志为 `build/gpu-default-driver-final.log`。
 
+## 控制器界面与交互
+
+2026-10-28，审查覆盖空手激活／潜行切换、探针打开、选择、暂停／继续、刷新、显示设置、生命周期预览／取消／确认、温度源输入，以及容器和比较器关联入口。客户端按请求身份处理回复，实际 Minecraft 窗口未启动。
+
+- `:fabric:compileClientJava`、`protocol,lifecycle` 和 GPU `controller 20 complete` 通过，日志 `build/controller-interaction-validation.log`。覆盖生产摘要及令牌、运行／暂停、性能重试与数值故障保留，以及注液、GPU 推进、手动步进、装取、WAL 与 checkpoint。
+- 最终 `protocol,lifecycle` 和 `:fabric:assemble` 通过，日志 `build/controller-interaction-final.log`。响应协议检查主动打开、原请求代次、目标消失与预览关联；生命周期检查运行时阻止破坏操作、暂停后预览和恢复运行使旧预览失效。
+- 同次产物运行 `ContainerTransferStoreValidation --rapid-pour` 通过，日志 `build/controller-clear-vent-remove.log`。24 次全能力注液后执行持久清空、排气、恢复、重新注液及最终删除记录，确认保留的空气腔几何不会被误判为有气体库存。实际世界方块释放沿既有归属事务，此测试未执行真实世界释放。
+
+界面源代码已检查换行、滚动、重复提交、窗口缩放后的温度输入保留，以及关闭或切换页面后的迟到回复。实际字体绘制、鼠标命中和玩家网络往返仍需实机观察。单一观察场景为 `/mmm controllerdemo`：探针打开控制器，在较小窗口滚动摘要，暂停／继续，发出刷新后立即关闭；再暂停并依次预览、取消及确认清空／排气／释放／移除。预期摘要完整可读，关闭后操作回复不会重新弹窗，最终移除关闭控制器页面；服务端异常查 `logs/latest.log`，自动化依据为上述三份日志。
+
 ## GPU 生产接入的最新短链
 
 2026-10-27，本轮停止性能优化，完成已有实现、热相变与气液膜传质接入。

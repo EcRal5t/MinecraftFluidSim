@@ -92,6 +92,18 @@ public final class FluidNetworkProtocolValidation {
 			buffer.release();
 		}
 		require(decoded.summary().equals(summary), "thermal reservoir summary did not round-trip exactly");
+		require(decoded.requestGeneration() == 0 && decoded.position().equals(new BlockPos(2, 3, 4)),
+				"initial reservoir opening acquired a request token or lost its position");
+		for (ThermalReservoirSummaryPayload response : List.of(
+				new ThermalReservoirSummaryPayload(new BlockPos(2, 3, 4), 3L, summary),
+				new ThermalReservoirSummaryPayload(new BlockPos(2, 3, 4), 3L, null))) {
+			buffer = new FriendlyByteBuf(Unpooled.buffer());
+			try {
+				ThermalReservoirSummaryPayload.CODEC.encode(buffer, response);
+				require(ThermalReservoirSummaryPayload.CODEC.decode(buffer).equals(response),
+						"reservoir response lost its request token or disappeared-target state");
+			} finally { buffer.release(); }
+		}
 
 		ThermalReservoirSetpointPayload setpoint = new ThermalReservoirSetpointPayload(
 				new BlockPos(2, 3, 4), 5L, 310.0);
@@ -174,6 +186,18 @@ public final class FluidNetworkProtocolValidation {
 			decoded = ControllerSummaryPayload.CODEC.decode(buffer);
 		} finally { buffer.release(); }
 		require(decoded.summary().equals(summary), "controller summary payload did not round-trip exactly");
+		require(decoded.requestGeneration() == 0 && decoded.regionId().equals(REGION),
+				"initial controller opening acquired a request token or lost its identity");
+		for (ControllerSummaryPayload response : List.of(
+				new ControllerSummaryPayload(REGION, 7L, current.summary()),
+				new ControllerSummaryPayload(REGION, 7L, null))) {
+			buffer = new FriendlyByteBuf(Unpooled.buffer());
+			try {
+				ControllerSummaryPayload.CODEC.encode(buffer, response);
+				require(ControllerSummaryPayload.CODEC.decode(buffer).equals(response),
+						"controller response lost its original token or disappeared-target state");
+			} finally { buffer.release(); }
+		}
 
 		ControllerActionPayload action = new ControllerActionPayload(REGION, new BlockPos(2, 3, 4), 7L,
 				ControllerConsoleAction.PAUSE);
@@ -201,9 +225,10 @@ public final class FluidNetworkProtocolValidation {
 				new LifecycleOperationPreview.Removal(0L, 0.0, 0L, 0L, 0.0, 0L, 0.0,
 						321L, 0.42, 99L, true, 12_345.0),
 				new LifecycleOperationPreview.GasState(321L, 0.42, 99L, 2, true), 17,
-				List.of(LifecycleOperationPreview.Blocker.FINITE_DEVICE_NOT_EMPTY));
+				List.of(LifecycleOperationPreview.Blocker.FINITE_DEVICE_NOT_EMPTY,
+						LifecycleOperationPreview.Blocker.REGION_RUNNING));
 		LifecycleOperationPreviewPayload previewPayload = new LifecycleOperationPreviewPayload(
-				new BlockPos(2, 3, 4), preview, summary);
+				new BlockPos(2, 3, 4), 7L, preview, current.summary());
 		buffer = new FriendlyByteBuf(Unpooled.buffer());
 		LifecycleOperationPreviewPayload decodedPreview;
 		try {
@@ -211,6 +236,10 @@ public final class FluidNetworkProtocolValidation {
 			decodedPreview = LifecycleOperationPreviewPayload.CODEC.decode(buffer);
 		} finally { buffer.release(); }
 		require(decodedPreview.equals(previewPayload), "lifecycle preview quantities/blockers did not round-trip exactly");
+		require(decodedPreview.requestGeneration() == 7L
+				&& decodedPreview.refreshedSummary().summaryGeneration() == current.summary().summaryGeneration()
+				&& decodedPreview.requestGeneration() != decodedPreview.refreshedSummary().summaryGeneration(),
+				"lifecycle response confused the request token with the next action token");
 		LifecycleOperationRequestPayload confirm = LifecycleOperationRequestPayload.confirm(REGION,
 				new BlockPos(2, 3, 4), 19L, preview.operation(), preview.nonce());
 		buffer = new FriendlyByteBuf(Unpooled.buffer());

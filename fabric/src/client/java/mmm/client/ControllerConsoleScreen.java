@@ -13,6 +13,7 @@ import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.FormattedCharSequence;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -23,6 +24,9 @@ public final class ControllerConsoleScreen extends Screen {
 	private final ControllerSummary summary;
 	private final BlockPos controllerPosition;
 	private List<Component> rows = List.of();
+	private final List<Button> serverActions = new ArrayList<>();
+	private int scroll;
+	private boolean requestPending;
 
 	public ControllerConsoleScreen(ControllerSummary summary) {
 		super(Component.translatable("screen.mmm.controller.title"));
@@ -34,12 +38,13 @@ public final class ControllerConsoleScreen extends Screen {
 	@Override
 	protected void init() {
 		rows = rows(summary);
+		serverActions.clear();
 		int buttonWidth = 92;
 		int gap = 6;
 		int total = buttonWidth * 3 + gap * 2;
 		int left = (width - total) / 2;
 		int y = height - 30;
-		addRenderableWidget(Button.builder(Component.translatable("screen.mmm.controller.select"),
+		addServerAction(Button.builder(Component.translatable("screen.mmm.controller.select"),
 				button -> send(ControllerConsoleAction.SELECT)).bounds(left, y, buttonWidth, 20).build());
 		Component runAction = Component.translatable(summary.operatorIntent() == ControllerSummary.OperatorIntent.PAUSED
 				? "screen.mmm.controller.resume" : "screen.mmm.controller.pause");
@@ -47,17 +52,16 @@ public final class ControllerConsoleScreen extends Screen {
 				summary.operatorIntent() == ControllerSummary.OperatorIntent.PAUSED
 						? ControllerConsoleAction.RESUME : ControllerConsoleAction.PAUSE))
 				.bounds(left + buttonWidth + gap, y, buttonWidth, 20).build();
-		pause.active = minecraft != null && minecraft.player != null && minecraft.player.isCreative();
-		addRenderableWidget(pause);
-		addRenderableWidget(Button.builder(Component.translatable("screen.mmm.controller.refresh"),
+		addServerAction(pause);
+		addServerAction(Button.builder(Component.translatable("screen.mmm.controller.refresh"),
 				button -> send(ControllerConsoleAction.REFRESH_AVAILABILITY))
 				.bounds(left + (buttonWidth + gap) * 2, y, buttonWidth, 20).build());
 
-		int lifecycleWidth = 76;
+		int lifecycleWidth = Math.min(76, Math.max(1, (width - 24) / 4));
 		int lifecycleTotal = lifecycleWidth * 4 + gap * 3;
 		int lifecycleLeft = (width - lifecycleTotal) / 2;
 		int lifecycleY = height - 54;
-		addRenderableWidget(Button.builder(Component.translatable("screen.mmm.display.open"),
+		addServerAction(Button.builder(Component.translatable("screen.mmm.display.open"),
 				button -> minecraft.setScreenAndShow(new FluidDisplayScreen(this)))
 				.bounds(width / 2 - 100, height - 78, 200, 20).build());
 		addLifecycleButton(lifecycleLeft, lifecycleY, lifecycleWidth, "empty", LifecycleOperation.EMPTY_CONDENSED);
@@ -70,28 +74,57 @@ public final class ControllerConsoleScreen extends Screen {
 	}
 
 	private void addLifecycleButton(int x, int y, int width, String label, LifecycleOperation operation) {
-		addRenderableWidget(Button.builder(Component.translatable("screen.mmm.controller." + label),
-				button -> ClientPlayNetworking.send(LifecycleOperationRequestPayload.preview(
-						summary.regionId(), controllerPosition, summary.summaryGeneration(), operation)))
+		addServerAction(Button.builder(Component.translatable("screen.mmm.controller." + label),
+				button -> {
+					disableServerActions();
+					ClientPlayNetworking.send(LifecycleOperationRequestPayload.preview(
+							summary.regionId(), controllerPosition, summary.summaryGeneration(), operation));
+				})
 				.bounds(x, y, width, 20).build());
 	}
 
+	private void addServerAction(Button button) {
+		if (requestPending) button.active = false;
+		serverActions.add(button);
+		addRenderableWidget(button);
+	}
+
+	private void disableServerActions() { requestPending = true; serverActions.forEach(button -> button.active = false); }
+	boolean awaiting(java.util.UUID regionId, long generation) {
+		return requestPending && summary.regionId().equals(regionId) && summary.summaryGeneration() == generation;
+	}
+	boolean inDimension(String dimension) { return summary.dimensionId().equals(dimension); }
+
 	private void send(ControllerConsoleAction action) {
+		disableServerActions();
 		ClientPlayNetworking.send(new ControllerActionPayload(summary.regionId(), controllerPosition,
 				summary.summaryGeneration(), action));
 	}
+	@Override public boolean isPauseScreen() { return false; }
 
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
 		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
 		graphics.centeredText(font, title, width / 2, 14, 0xffffff);
-		int y = 36;
-		for (Component row : rows) {
-			String clipped = font.plainSubstrByWidth(row.getString(), Math.max(80, width - 32));
-			graphics.text(font, clipped, 16, y, 0xd8d8d8, false);
-			y += 12;
-			if (y >= height - 92) break;
+		List<FormattedCharSequence> lines = wrappedRows();
+		int visible = visibleLines();
+		scroll = Math.min(scroll, Math.max(0, lines.size() - visible));
+		for (int i = scroll; i < Math.min(lines.size(), scroll + visible); i++) {
+			graphics.text(font, lines.get(i), 16, 36 + (i - scroll) * 12, 0xd8d8d8, false);
 		}
+		if (scroll + visible < lines.size()) graphics.text(font, "↓", width - 18, height - 100, 0xa0a0a0, false);
+	}
+
+	private List<FormattedCharSequence> wrappedRows() {
+		List<FormattedCharSequence> lines = new ArrayList<>();
+		for (Component row : rows) lines.addAll(font.split(row, Math.max(1, width - 32)));
+		return lines;
+	}
+	private int visibleLines() { return Math.max(1, (height - 128) / 12); }
+	@Override public boolean mouseScrolled(double x, double y, double horizontal, double vertical) {
+		int maximum = Math.max(0, wrappedRows().size() - visibleLines());
+		scroll = Math.max(0, Math.min(maximum, scroll - (int) Math.signum(vertical) * 3));
+		return true;
 	}
 
 	private static List<Component> rows(ControllerSummary value) {

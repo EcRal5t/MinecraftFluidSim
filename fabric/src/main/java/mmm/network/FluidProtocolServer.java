@@ -183,7 +183,8 @@ public final class FluidProtocolServer {
 		if (failure != null) player.sendSystemMessage(Component.translatable(
 				"message.mmm.controller.console_action_failed", failure), true);
 		var summary = console.controllerSummary(player, payload.controllerPosition());
-		if (summary != null) send(player, new ControllerSummaryPayload(summary));
+		send(player, new ControllerSummaryPayload(payload.regionId(), payload.summaryGeneration(),
+				summary != null && summary.regionId().equals(payload.regionId()) ? summary : null));
 	}
 
 	private static void receiveLifecycleOperation(
@@ -197,12 +198,13 @@ public final class FluidProtocolServer {
 				player.sendSystemMessage(Component.translatable(
 						"message.mmm.controller.lifecycle_failed", result.failure()), true);
 				var summary = console.controllerSummary(player, payload.controllerPosition());
-				if (summary != null) send(player, new ControllerSummaryPayload(summary));
+				send(player, new ControllerSummaryPayload(payload.regionId(), payload.summaryGeneration(),
+						summary != null && summary.regionId().equals(payload.regionId()) ? summary : null));
 				return;
 			}
 			var refreshed = console.controllerSummary(player, payload.controllerPosition());
 			if (refreshed == null || !send(player, new LifecycleOperationPreviewPayload(
-					payload.controllerPosition(), result.preview(), refreshed))) {
+					payload.controllerPosition(), payload.summaryGeneration(), result.preview(), refreshed))) {
 				player.sendSystemMessage(Component.translatable(
 						"message.mmm.controller.lifecycle_failed",
 						Component.translatable("message.mmm.lifecycle.client_unsupported")), true);
@@ -219,7 +221,8 @@ public final class FluidProtocolServer {
 				? "message.mmm.controller.lifecycle_committed" : "message.mmm.controller.lifecycle_failed",
 				result.message()), true);
 		var summary = console.controllerSummary(player, payload.controllerPosition());
-		if (summary != null) send(player, new ControllerSummaryPayload(summary));
+		send(player, new ControllerSummaryPayload(payload.regionId(), payload.summaryGeneration(),
+				summary != null && summary.regionId().equals(payload.regionId()) ? summary : null));
 	}
 
 	private static void receiveThermalReservoirSetpoint(
@@ -231,7 +234,7 @@ public final class FluidProtocolServer {
 		if (failure != null) player.sendSystemMessage(Component.translatable(
 				"message.mmm.thermal_reservoir.action_failed", failure), true);
 		var summary = console.thermalReservoirSummary(player, payload.position());
-		if (summary != null) send(player, new ThermalReservoirSummaryPayload(summary));
+		send(player, new ThermalReservoirSummaryPayload(payload.position(), payload.summaryGeneration(), summary));
 	}
 
 	private static boolean isNegotiated(MinecraftServer server, UUID playerId) {

@@ -66,7 +66,7 @@ public final class MinecraftRegionLifecycle {
 
 	Component changeRunIntent(ServerPlayer player, FluidRegion region, boolean pause) {
 		RegionLifecycleUseCase.RunIntentDecision decision = useCase.decideRunIntent(
-				new RegionLifecycleUseCase.RunIntentFacts(pause, player.isCreative(), startup.authoritativeWritesReady(),
+				new RegionLifecycleUseCase.RunIntentFacts(pause, true, startup.authoritativeWritesReady(),
 						region.paused()));
 		if (decision != RegionLifecycleUseCase.RunIntentDecision.ACCEPTED) return switch (decision) {
 			case PERMISSION_DENIED -> Component.translatable("message.mmm.controller.creative_required");
@@ -75,6 +75,7 @@ public final class MinecraftRegionLifecycle {
 			case UNCHANGED -> Component.translatable("message.mmm.controller.intent_changed");
 			case ACCEPTED -> throw new IllegalStateException("Accepted run intent entered failure mapping");
 		};
+		if (!pause) MinecraftRegionOperatorActions.clearPerformancePauseForExplicitRetry(region);
 		region.setPaused(pause);
 		if (!pause && region.solverLoaded()) region.wakeForActivity();
 		if (region.solverLoaded()) snapshots.sendToLevel(player.level(), region);
@@ -92,7 +93,10 @@ public final class MinecraftRegionLifecycle {
 		if (!controllerQueries.consumeActionToken(player.getUUID(), region.id(), summaryGeneration)) {
 			return PreviewResult.failed(Component.translatable("message.mmm.controller.summary_expired"));
 		}
-		prepareInventoryDecrease(player.level(), region);
+		if (player.createCommandSourceStack().permissions().hasPermission(Permissions.COMMANDS_ADMIN)
+				&& startup.authoritativeWritesReady() && region.paused() && !pendingContainerTransfer.test(region.id())) {
+			prepareInventoryDecrease(player.level(), region);
+		}
 		LifecycleOperationPreview preview = useCase.preview(lifecycleFacts(player, region, operation));
 		return new PreviewResult(preview, null);
 	}
@@ -105,7 +109,6 @@ public final class MinecraftRegionLifecycle {
 		ResolvedController resolved = resolveInteractiveController(player, requestedRegionId, controllerPosition);
 		if (resolved.failure() != null) return CommitResult.failedDetail(resolved.failure());
 		FluidRegion region = resolved.region();
-		prepareInventoryDecrease(player.level(), region);
 		RegionLifecycleUseCase.CommitAuthorization authorization = useCase.authorizeCommit(
 				nonce, lifecycleFacts(player, region, operation));
 		if (authorization.decision() == RegionLifecycleUseCase.CommitDecision.TOKEN_INVALID) {
@@ -310,7 +313,7 @@ public final class MinecraftRegionLifecycle {
 				: region.finiteThermalDevices(thermalRegistry.fingerprint()).toString();
 		String availabilityIdentity = (startup.authoritativeWritesReady() ? "STARTUP_READY" : "STARTUP_LOCKED")
 				+ "|" + region.availabilityDescription() + "|loaded=" + region.solverLoaded()
-				+ "|solver=" + region.solverGeneration() + "|devices=" + deviceIdentity;
+				+ "|paused=" + region.paused() + "|solver=" + region.solverGeneration() + "|devices=" + deviceIdentity;
 		LifecycleOperationSessions.Context context = new LifecycleOperationSessions.Context(player.getUUID(), region.id(),
 				region.checkpointGeneration(), operation, permission, pendingWal, availabilityIdentity, serverTick);
 		ArrayList<LifecycleOperationPreview.Blocker> blockers = new ArrayList<>();
@@ -318,6 +321,7 @@ public final class MinecraftRegionLifecycle {
 			blockers.add(LifecycleOperationPreview.Blocker.PERMISSION_DENIED);
 		}
 		if (!startup.authoritativeWritesReady()) blockers.add(LifecycleOperationPreview.Blocker.STARTUP_NOT_READY);
+		if (!region.paused()) blockers.add(LifecycleOperationPreview.Blocker.REGION_RUNNING);
 		if (region.availabilityFailure() != null
 				&& !MinecraftRegionAvailability.inventoryDecreaseMayBypass(region.availabilityReason())) {
 			blockers.add(LifecycleOperationPreview.Blocker.REGION_UNAVAILABLE);
@@ -337,7 +341,10 @@ public final class MinecraftRegionLifecycle {
 				context, LifecycleOperationPreview.Removal.none(),
 				LifecycleOperationPreview.GasState.none(), ownershipBlocks, List.copyOf(blockers));
 
-		FluidDomain domain = region.domain();
+		FluidDomain domain;
+		try (var capture = region.captureSolverState()) {
+			domain = FluidDomain.restoreAuthoritativeState(capture.exportState());
+		}
 		if (domain.hasPendingPhaseMotionWork()) blockers.add(LifecycleOperationPreview.Blocker.PENDING_PHASE_WORK);
 		boolean auditClosed = domain.gasBoundary().auditClosed()
 				&& (!domain.hasThermalState()
@@ -355,8 +362,7 @@ public final class MinecraftRegionLifecycle {
 		boolean condensedEmpty = domain.particleCount() == 0
 				&& domain.totalGranularSolidVolumeSvq() == 0L
 				&& domain.totalCoherentSolidVolumeSvq() == 0L;
-		boolean gasEmpty = domain.gasBoundary().nodeCount() == 0 && domain.gasBoundary().sealedInventory().isEmpty()
-				&& domain.exactGasInternalEnergy().equals(mmm.units.SignedDyadic.ZERO);
+		boolean gasEmpty = gasInventoryEmpty(domain);
 		boolean devicesEmpty = thermalRegistry == null
 				|| region.finiteThermalDevices(thermalRegistry.fingerprint()).devices().isEmpty();
 		if ((operation == LifecycleOperation.RELEASE_OWNERSHIP || operation == LifecycleOperation.REMOVE_EMPTY_REGION)
@@ -396,6 +402,12 @@ public final class MinecraftRegionLifecycle {
 		};
 		return new RegionLifecycleUseCase.PreviewFacts(
 				context, removal, gasState, ownershipBlocks, List.copyOf(blockers));
+	}
+
+	/** Empty cavities retain topology; only their actual inventory and energy constrain release. */
+	static boolean gasInventoryEmpty(FluidDomain domain) {
+		return domain.gasBoundary().sealedInventory().isEmpty()
+				&& domain.exactGasInternalEnergy().signum() == 0;
 	}
 
 	private static GasSummary lifecycleGasSummary(FluidDomain domain) {

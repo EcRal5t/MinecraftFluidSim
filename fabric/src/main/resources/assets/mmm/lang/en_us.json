@@ -201,6 +201,7 @@
   "screen.mmm.permission.builtin_admin_denied": "Administrator required",
   "screen.mmm.blocker.permission_denied": "Permission denied",
   "screen.mmm.blocker.startup_not_ready": "World startup not ready",
+  "screen.mmm.blocker.region_running": "Pause the region before previewing this operation",
   "screen.mmm.blocker.region_unavailable": "Region unavailable",
   "screen.mmm.blocker.region_unloaded": "Region solver unloaded",
   "screen.mmm.blocker.pending_wal": "Pending or unreadable WAL",

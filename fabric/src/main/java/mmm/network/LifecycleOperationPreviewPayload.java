@@ -14,14 +14,14 @@ import java.util.UUID;
 
 /** Clientbound bounded preview plus a fresh ordinary-console token for cancellation. */
 public record LifecycleOperationPreviewPayload(
-		BlockPos controllerPosition, LifecycleOperationPreview preview, ControllerSummary refreshedSummary
+		BlockPos controllerPosition, long requestGeneration, LifecycleOperationPreview preview, ControllerSummary refreshedSummary
 ) implements CustomPacketPayload {
 	public static final Type<LifecycleOperationPreviewPayload> TYPE = new Type<>(MmmMod.id("lifecycle_preview"));
 	public static final StreamCodec<FriendlyByteBuf, LifecycleOperationPreviewPayload> CODEC = StreamCodec.of(
 			LifecycleOperationPreviewPayload::encode, LifecycleOperationPreviewPayload::decode);
 
 	public LifecycleOperationPreviewPayload {
-		if (controllerPosition == null || preview == null || refreshedSummary == null
+		if (controllerPosition == null || requestGeneration <= 0 || preview == null || refreshedSummary == null
 				|| !preview.regionId().equals(refreshedSummary.regionId())) {
 			throw new IllegalArgumentException("Lifecycle preview payload identity is invalid");
 		}
@@ -32,6 +32,7 @@ public record LifecycleOperationPreviewPayload(
 
 	private static void encode(FriendlyByteBuf buffer, LifecycleOperationPreviewPayload payload) {
 		buffer.writeBlockPos(payload.controllerPosition);
+		buffer.writeVarLong(payload.requestGeneration);
 		LifecycleOperationPreview value = payload.preview;
 		buffer.writeUUID(value.nonce()); buffer.writeUUID(value.playerId()); buffer.writeUUID(value.regionId());
 		buffer.writeVarLong(value.regionGeneration()); buffer.writeEnum(value.operation());
@@ -47,7 +48,8 @@ public record LifecycleOperationPreviewPayload(
 	}
 
 	private static LifecycleOperationPreviewPayload decode(FriendlyByteBuf buffer) {
-		BlockPos position = buffer.readBlockPos(); UUID nonce = buffer.readUUID(); UUID player = buffer.readUUID();
+		BlockPos position = buffer.readBlockPos(); long requestGeneration = buffer.readVarLong();
+		UUID nonce = buffer.readUUID(); UUID player = buffer.readUUID();
 		UUID region = buffer.readUUID(); long generation = buffer.readVarLong();
 		LifecycleOperation operation = buffer.readEnum(LifecycleOperation.class);
 		LifecycleOperationPreview.PermissionDecision permission = buffer.readEnum(
@@ -63,7 +65,7 @@ public record LifecycleOperationPreviewPayload(
 		for (int index = 0; index < blockerCount; index++) blockers.add(buffer.readEnum(LifecycleOperationPreview.Blocker.class));
 		LifecycleOperationPreview preview = new LifecycleOperationPreview(nonce, player, region, generation,
 				operation, permission, expiry, removal, gas, ownership, blockers);
-		return new LifecycleOperationPreviewPayload(position, preview, ControllerSummaryPayload.readSummary(buffer));
+		return new LifecycleOperationPreviewPayload(position, requestGeneration, preview, ControllerSummaryPayload.readSummary(buffer));
 	}
 
 	private static void writeRemoval(FriendlyByteBuf buffer, LifecycleOperationPreview.Removal value) {

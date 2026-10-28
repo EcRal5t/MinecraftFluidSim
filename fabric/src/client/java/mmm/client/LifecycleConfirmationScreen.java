@@ -10,6 +10,7 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.FormattedCharSequence;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -19,6 +20,8 @@ import java.util.Locale;
 public final class LifecycleConfirmationScreen extends Screen {
 	private final LifecycleOperationPreviewPayload payload;
 	private List<Component> rows = List.of();
+	private int scroll;
+	private boolean requestPending;
 
 	public LifecycleConfirmationScreen(LifecycleOperationPreviewPayload payload) {
 		super(Component.translatable("screen.mmm.lifecycle.title"));
@@ -29,29 +32,51 @@ public final class LifecycleConfirmationScreen extends Screen {
 		rows = rows(payload.preview());
 		int width = 112, gap = 8, left = (this.width - width * 2 - gap) / 2, y = height - 32;
 		Button confirm = Button.builder(Component.translatable("screen.mmm.lifecycle.confirm"), button -> {
+			requestPending = true;
 			button.active = false;
 			var preview = payload.preview();
 			ClientPlayNetworking.send(LifecycleOperationRequestPayload.confirm(preview.regionId(),
 					payload.controllerPosition(), payload.refreshedSummary().summaryGeneration(),
 					preview.operation(), preview.nonce()));
 		}).bounds(left, y, width, 20).build();
-		confirm.active = payload.preview().ready();
+		confirm.active = payload.preview().ready() && !requestPending;
 		addRenderableWidget(confirm);
 		addRenderableWidget(Button.builder(Component.translatable("screen.mmm.lifecycle.cancel"), button -> {
-			if (minecraft != null) minecraft.setScreenAndShow(new ControllerConsoleScreen(payload.refreshedSummary()));
+			onClose();
 		}).bounds(left + width + gap, y, width, 20).build());
 	}
 
 	@Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
 		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
 		graphics.centeredText(font, title, width / 2, 14, 0xffffff);
-		int y = 38;
-		for (Component row : rows) {
-			String clipped = font.plainSubstrByWidth(row.getString(), Math.max(80, width - 32));
-			graphics.text(font, clipped, 16, y, 0xd8d8d8, false);
-			y += 14;
-			if (y >= height - 48) break;
+		List<FormattedCharSequence> lines = wrappedRows();
+		int visible = visibleLines();
+		scroll = Math.min(scroll, Math.max(0, lines.size() - visible));
+		for (int i = scroll; i < Math.min(lines.size(), scroll + visible); i++) {
+			graphics.text(font, lines.get(i), 16, 38 + (i - scroll) * 14, 0xd8d8d8, false);
 		}
+		if (scroll + visible < lines.size()) graphics.text(font, "↓", width - 18, height - 48, 0xa0a0a0, false);
+	}
+
+	private List<FormattedCharSequence> wrappedRows() {
+		List<FormattedCharSequence> lines = new ArrayList<>();
+		for (Component row : rows) lines.addAll(font.split(row, Math.max(1, width - 32)));
+		return lines;
+	}
+	private int visibleLines() { return Math.max(1, (height - 86) / 14); }
+	@Override public boolean mouseScrolled(double x, double y, double horizontal, double vertical) {
+		int maximum = Math.max(0, wrappedRows().size() - visibleLines());
+		scroll = Math.max(0, Math.min(maximum, scroll - (int) Math.signum(vertical) * 3));
+		return true;
+	}
+	@Override public boolean isPauseScreen() { return false; }
+	boolean awaiting(java.util.UUID regionId, long generation) {
+		return requestPending && payload.refreshedSummary().regionId().equals(regionId)
+				&& payload.refreshedSummary().summaryGeneration() == generation;
+	}
+	boolean inDimension(String dimension) { return payload.refreshedSummary().dimensionId().equals(dimension); }
+	@Override public void onClose() {
+		if (minecraft != null) minecraft.setScreenAndShow(requestPending ? null : new ControllerConsoleScreen(payload.refreshedSummary()));
 	}
 
 	private static List<Component> rows(LifecycleOperationPreview preview) {

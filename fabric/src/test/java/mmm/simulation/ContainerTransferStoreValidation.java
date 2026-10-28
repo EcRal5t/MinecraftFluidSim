@@ -1126,6 +1126,8 @@ public final class ContainerTransferStoreValidation {
 			persistence.adoptCommittedContainerCheckpoint(region, clearBase, clearTarget);
 			check(region.domain().totalVolumeExact() == 0.0 && region.domain().totalGranularSolidVolumeSvq() == 0L,
 					"full-profile condensed clear did not survive committed reconstruction");
+			check(!MinecraftRegionLifecycle.gasInventoryEmpty(region.domain()),
+					"sealed gas inventory disappeared before the vent operation");
 
 			long ventBase = region.checkpointGeneration();
 			FluidDomain vented = FluidDomain.restoreAuthoritativeState(region.domain().captureAuthoritativeState());
@@ -1137,7 +1139,8 @@ public final class ContainerTransferStoreValidation {
 					"full-profile gas vent did not publish its target HEAD");
 			persistence.adoptCommittedContainerCheckpoint(region, ventBase, ventTarget);
 			check(region.domain().gasBoundary().nodeCount() > 0
-					&& region.domain().gasBoundary().sealedInventory().isEmpty(),
+					&& region.domain().gasBoundary().sealedInventory().isEmpty()
+					&& MinecraftRegionLifecycle.gasInventoryEmpty(region.domain()),
 					"full-profile gas vent did not survive committed reconstruction");
 
 			long reinsertBase = region.checkpointGeneration();
@@ -1154,6 +1157,20 @@ public final class ContainerTransferStoreValidation {
 			persistence.restore(region);
 			check(region.solverLoaded() && region.domain().totalVolumeExact() == 8.0,
 					"post-vent water insert did not survive restart");
+
+			region.domain().commitOperatorClear(region.domain().planOperatorClear());
+			persistence.checkpoint(region);
+			check(region.domain().totalVolumeExact() == 0.0
+					&& region.domain().gasBoundary().nodeCount() > 0
+					&& MinecraftRegionLifecycle.gasInventoryEmpty(region.domain()),
+					"empty region with gas geometry was blocked from release and removal");
+			long removalBase = region.checkpointGeneration();
+			var prepared = persistence.prepareRemoval(region, removalBase + 1L, UUID.randomUUID(),
+					10_000L, 64L * 1024L * 1024L);
+			var removed = persistence.commitRemoval(prepared);
+			check(removed.baseGeneration() == removalBase && removed.targetGeneration() == removalBase + 1L
+					&& persistence.readRemoved(region.id()).equals(removed),
+					"empty region removal did not persist its terminal HEAD");
 		} finally {
 			try (var paths = Files.walk(root)) {
 				for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);

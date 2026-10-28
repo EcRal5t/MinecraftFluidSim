@@ -17,6 +17,7 @@ public final class ThermalReservoirScreen extends Screen {
 	private final ThermalReservoirSummary summary;
 	private EditBox temperature;
 	private Button apply;
+	private boolean requestPending;
 
 	public ThermalReservoirScreen(ThermalReservoirSummary summary) {
 		super(Component.translatable("screen.mmm.thermal_reservoir.title"));
@@ -26,10 +27,11 @@ public final class ThermalReservoirScreen extends Screen {
 	@Override
 	protected void init() {
 		int center = width / 2;
+		String previous = temperature == null ? null : temperature.getValue();
 		temperature = new EditBox(font, center - 80, 86, 160, 20,
 				Component.translatable("screen.mmm.thermal_reservoir.temperature"));
 		temperature.setMaxLength(32);
-		temperature.setValue(summary.temperatureValid() ? Double.toString(summary.temperatureK()) : "");
+		temperature.setValue(previous != null ? previous : summary.temperatureValid() ? Double.toString(summary.temperatureK()) : "");
 		temperature.setHint(Component.translatable("screen.mmm.thermal_reservoir.temperature"));
 		temperature.setResponder(ignored -> updateApplyState());
 		addRenderableWidget(temperature);
@@ -43,7 +45,7 @@ public final class ThermalReservoirScreen extends Screen {
 	private void updateApplyState() {
 		if (apply == null) return;
 		double candidate = parsedTemperature();
-		apply.active = minecraft.player != null && minecraft.player.isCreative()
+		apply.active = !requestPending && minecraft.player != null && minecraft.player.isCreative()
 				&& Double.isFinite(candidate) && candidate >= summary.minimumTemperatureK()
 				&& candidate <= summary.maximumTemperatureK();
 	}
@@ -51,6 +53,8 @@ public final class ThermalReservoirScreen extends Screen {
 	private void submit() {
 		double candidate = parsedTemperature();
 		if (!Double.isFinite(candidate)) return;
+		requestPending = true;
+		apply.active = false;
 		ClientPlayNetworking.send(new ThermalReservoirSetpointPayload(
 				new BlockPos(summary.blockX(), summary.blockY(), summary.blockZ()),
 				summary.summaryGeneration(), candidate));
@@ -63,6 +67,12 @@ public final class ThermalReservoirScreen extends Screen {
 			return Double.NaN;
 		}
 	}
+	@Override public boolean isPauseScreen() { return false; }
+	boolean awaiting(BlockPos position, long generation) {
+		return requestPending && summary.summaryGeneration() == generation
+				&& position.equals(new BlockPos(summary.blockX(), summary.blockY(), summary.blockZ()));
+	}
+	boolean inDimension(String dimension) { return summary.dimensionId().equals(dimension); }
 
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {

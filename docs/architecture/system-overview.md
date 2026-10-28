@@ -610,7 +610,9 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [MinecraftRegionActivation](../../fabric/src/main/java/mmm/simulation/MinecraftRegionActivation.java)
     - [MinecraftControllerConsole](../../fabric/src/main/java/mmm/simulation/MinecraftControllerConsole.java)
     - [MinecraftRegionLifecycle](../../fabric/src/main/java/mmm/simulation/MinecraftRegionLifecycle.java)
-  - 验证选择器 / 参考：`boundary,lifecycle,region-manager`；[授权与操作](runtime-and-lifecycle.md#console)
+    - [ControllerConsoleScreen](../../fabric/src/client/java/mmm/client/ControllerConsoleScreen.java)、[LifecycleConfirmationScreen](../../fabric/src/client/java/mmm/client/LifecycleConfirmationScreen.java)：摘要浏览、请求等待与预览确认；[MmmModClient](../../fabric/src/client/java/mmm/client/MmmModClient.java) 按当前界面身份及请求代次接收回复
+    - [ControllerSummaryPayload](../../fabric/src/main/java/mmm/network/ControllerSummaryPayload.java)、[FluidProtocolServer](../../fabric/src/main/java/mmm/network/FluidProtocolServer.java)：主动打开、动作响应和目标移除通知；温度源沿相同请求关联方式交互
+  - 验证选择器 / 参考：`protocol,boundary,lifecycle,region-manager`，`ContainerTransferStoreValidation --rapid-pour`；[授权与操作](runtime-and-lifecycle.md#console)
 
 - **耕地湿润与外部土壤汇**
   - 主要文件：

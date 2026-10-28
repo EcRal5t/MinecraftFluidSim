@@ -64,14 +64,41 @@ public final class MmmModClient implements ClientModInitializer {
 		ClientPlayNetworking.registerGlobalReceiver(FluidThermalSnapshotPayload.TYPE,
 				(payload, context) -> renderer.accept(payload, negotiated.get()));
 		ClientPlayNetworking.registerGlobalReceiver(ControllerSummaryPayload.TYPE, (payload, context) ->
-				context.client().execute(() -> context.client().setScreenAndShow(
-						new ControllerConsoleScreen(payload.summary()))));
+				context.client().execute(() -> {
+					var client = context.client();
+					if (client.level == null) return;
+					String dimension = client.level.dimension().identifier().toString();
+					if (payload.requestGeneration() == 0) {
+						if (payload.summary().dimensionId().equals(dimension)) client.setScreenAndShow(new ControllerConsoleScreen(payload.summary()));
+						return;
+					}
+					boolean matches = client.gui.screen() instanceof ControllerConsoleScreen screen
+							&& screen.inDimension(dimension) && screen.awaiting(payload.regionId(), payload.requestGeneration());
+					matches |= client.gui.screen() instanceof LifecycleConfirmationScreen screen
+							&& screen.inDimension(dimension) && screen.awaiting(payload.regionId(), payload.requestGeneration());
+					if (matches) client.setScreenAndShow(payload.summary() == null ? null : new ControllerConsoleScreen(payload.summary()));
+				}));
 		ClientPlayNetworking.registerGlobalReceiver(LifecycleOperationPreviewPayload.TYPE, (payload, context) ->
-				context.client().execute(() -> context.client().setScreenAndShow(
-						new LifecycleConfirmationScreen(payload))));
+				context.client().execute(() -> {
+					var client = context.client();
+					if (client.level != null && client.gui.screen() instanceof ControllerConsoleScreen screen
+							&& screen.inDimension(client.level.dimension().identifier().toString())
+							&& screen.awaiting(payload.preview().regionId(), payload.requestGeneration()))
+						client.setScreenAndShow(new LifecycleConfirmationScreen(payload));
+				}));
 		ClientPlayNetworking.registerGlobalReceiver(ThermalReservoirSummaryPayload.TYPE, (payload, context) ->
-				context.client().execute(() -> context.client().setScreenAndShow(
-						new ThermalReservoirScreen(payload.summary()))));
+				context.client().execute(() -> {
+					var client = context.client();
+					if (client.level == null) return;
+					String dimension = client.level.dimension().identifier().toString();
+					if (payload.requestGeneration() == 0) {
+						if (payload.summary().dimensionId().equals(dimension)) client.setScreenAndShow(new ThermalReservoirScreen(payload.summary()));
+						return;
+					}
+					if (client.gui.screen() instanceof ThermalReservoirScreen screen && screen.inDimension(dimension)
+							&& screen.awaiting(payload.position(), payload.requestGeneration()))
+						client.setScreenAndShow(payload.summary() == null ? null : new ThermalReservoirScreen(payload.summary()));
+				}));
 		ClientConfigurationConnectionEvents.START.register((listener, client) -> {
 			negotiated.set(null); snapshotParts.clear();
 			renderer.clear();

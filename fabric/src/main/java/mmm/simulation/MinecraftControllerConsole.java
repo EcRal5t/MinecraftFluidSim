@@ -135,9 +135,12 @@ public final class MinecraftControllerConsole {
 		return switch (action) {
 			case SELECT -> regions.select(region.id())
 					? null : Component.translatable("message.mmm.controller.region_gone");
-			case REFRESH_AVAILABILITY -> ensureRegionAvailable.apply(level, region)
-					? null : Component.translatable("message.mmm.controller.availability_still_blocked",
-							region.availabilityFailure());
+			case REFRESH_AVAILABILITY -> {
+				if (authoritativeWritesReady.getAsBoolean())
+					MinecraftRegionOperatorActions.clearPerformancePauseForExplicitRetry(region);
+				yield ensureRegionAvailable.apply(level, region) ? null
+						: Component.translatable("message.mmm.controller.availability_still_blocked", region.availabilityFailure());
+			}
 			case PAUSE -> regionLifecycle.changeRunIntent(player, region, true);
 			case RESUME -> regionLifecycle.changeRunIntent(player, region, false);
 		};
@@ -231,7 +234,7 @@ public final class MinecraftControllerConsole {
 			FluidRegionFootprint footprint = region.footprint();
 			if (footprint == null || !region.dimension().equals(level.dimension())
 					|| !footprint.boundaryBlocks().contains(position.asLong())
-					|| !region.solverLoaded() || !region.domain().hasThermalState()) continue;
+					|| !region.solverLoaded() || !region.hasThermalState()) continue;
 			regionTick.refreshThermalBoundary(level, region);
 		}
 	}

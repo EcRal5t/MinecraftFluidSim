@@ -78,16 +78,23 @@ public final class MinecraftRegionActivation {
 			FluidRegionFootprint existingFootprint = existing.footprint();
 			if (existingFootprint == null || !existing.dimension().equals(level.dimension())
 					|| !existingFootprint.controllerPosition().equals(controllerPosition)) continue;
+			if (toggleRunning && !startup.authoritativeWritesReady())
+				return Result.failed(authoritativeWriteFailure("修改控制器运行意图"));
+			boolean retryPerformance = toggleRunning && !existing.paused()
+					&& existing.availabilityReason() == mmm.api.RegionAvailabilityReason.PERFORMANCE_PAUSE;
+			if (toggleRunning && existing.availabilityReason() == mmm.api.RegionAvailabilityReason.PERFORMANCE_PAUSE)
+				MinecraftRegionOperatorActions.clearPerformancePauseForExplicitRetry(existing);
 			regions.select(existing.id());
 			if (!availability.ensure(level, existing)) {
 				return Result.failed("控制器区域当前不可用：" + existing.availabilityFailure());
 			}
 			Action action;
 			if (toggleRunning) {
-				if (!startup.authoritativeWritesReady()) {
-					return Result.failed(authoritativeWriteFailure("修改控制器运行意图"));
-				}
-				if (existing.paused()) {
+				if (retryPerformance) {
+					existing.wakeForActivity();
+					action = Action.RESUMED;
+				} else if (existing.paused()) {
+					MinecraftRegionOperatorActions.clearPerformancePauseForExplicitRetry(existing);
 					existing.setPaused(false);
 					existing.wakeForActivity();
 					action = Action.RESUMED;
@@ -151,6 +158,7 @@ public final class MinecraftRegionActivation {
 					regionTick.refreshRegionInputs(level, candidate);
 					if (worldBridgeFeatureEnabled) FluidRegionFactory.captureVanillaWater(level, candidate);
 					world.bindConfiguredState(candidate.domain(), maximumThermalSubstepsPerStep);
+					regionTick.initializeThermalBoundary(level, candidate);
 				}, candidate -> {
 					if (!creationPlan.profileFingerprint().equals(world.profile().profileFingerprint())
 							|| !creationPlan.footprint().equals(candidate.footprint())) {
