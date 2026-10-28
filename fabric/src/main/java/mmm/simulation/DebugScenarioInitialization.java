@@ -77,9 +77,9 @@ public final class DebugScenarioInitialization {
 		if (node <= 0) return -1;
 		var gas = domain.gasBoundary();
 		double factor = switch (pressure) {
-			case PRESSURE -> 1.04;
+			case PRESSURE -> 1.12;
 			case AMBIENT -> 1.0;
-			case VACUUM -> 0.96;
+			case VACUUM -> 0.88;
 		};
 		domain.setGasNodeStandardVolume(node, gas.availableVolume(node) * factor);
 		return node;
