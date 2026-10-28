@@ -150,6 +150,11 @@ public final class DemoWorkbench {
 			failure = "演示状态记录失败：" + error.getMessage();
 			mmm.MmmMod.LOGGER.error(failure, error);
 		}
+		if (failure == null) {
+			FluidRegion region = current(session);
+			mmm.MmmMod.LOGGER.info("Demo {} {} committed: region={}, paused={}", request.preset(), request.action(),
+					session.region, region == null || region.paused());
+		}
 		return response(host, session, request.generation(), failure);
 	}
 	private void prepare(Host host, Session session, DemoPreset preset) {
@@ -240,8 +245,8 @@ public final class DemoWorkbench {
 	static BlockPos transientOrigin(BlockPos anchor, Direction facing, DemoPreset preset) {
 		boolean flow = preset == DemoPreset.FLOW;
 		BlockPos center = anchor.relative(facing, 9);
-		return center.offset(-(flow ? DemoSceneLayout.FLOW_SIZE_X : MinecraftDebugFixtures.BLOCK_SIZE_X) / 2,
-				0, -(flow ? DemoSceneLayout.FLOW_SIZE_Z : MinecraftDebugFixtures.BLOCK_SIZE_Z) / 2);
+		return center.offset(-(flow ? DemoSceneLayout.FLOW_SIZE_X : DemoSceneLayout.AIR_SIZE_X) / 2,
+				0, -(flow ? DemoSceneLayout.FLOW_SIZE_Z : DemoSceneLayout.AIR_SIZE_Z) / 2);
 	}
 
 	static boolean matchesTank(FluidRegion region, ControllerDemoLayout layout, String dimensionId) {

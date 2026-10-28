@@ -44,6 +44,16 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 	private long serviceTick;
 	private static final int SECTIONS_PER_REGION_TICK = 2;
 
+	FluidRegionOperations(Path worldRoot, FluidRegionManager manager, WorldStartupCoordinator.Result startup) {
+		this(worldRoot, manager, startup.creationLocked(), startup.profileProven(), startup.profile(),
+				startup.registries() == null ? null : startup.registries().chemical(),
+				startup.registries() == null ? null : startup.registries().granular(),
+				startup.registries() == null ? null : startup.registries().thermal(),
+				startup.registries() == null ? null : startup.registries().gas(),
+				startup.config().maximumThermalSubstepsPerStep(),
+				startup.registries() == null ? null : startup.registries().material());
+	}
+
 	FluidRegionOperations(
 			Path worldRoot, FluidRegionManager manager, boolean configurationLocked, boolean worldProfileProven,
 			WorldCapabilityProfile profile, ChemicalRegistry chemicalRegistry,

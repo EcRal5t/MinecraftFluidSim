@@ -73,13 +73,13 @@ public final class DebugScenarioInitialization {
 	public enum AirPressure { PRESSURE, AMBIENT, VACUUM }
 
 	public static int presetAirPressure(FluidDomain domain, AirPressure pressure) {
-		int node = domain.airNodeAt(4, 12, 4);
+		int node = domain.airNodeAt(2, 6, 2);
 		if (node <= 0) return -1;
 		var gas = domain.gasBoundary();
 		double factor = switch (pressure) {
-			case PRESSURE -> 1.0 / 0.70;
+			case PRESSURE -> 1.04;
 			case AMBIENT -> 1.0;
-			case VACUUM -> 0.78;
+			case VACUUM -> 0.96;
 		};
 		domain.setGasNodeStandardVolume(node, gas.availableVolume(node) * factor);
 		return node;
@@ -88,23 +88,9 @@ public final class DebugScenarioInitialization {
 	public static void fillAirWater(FluidDomain domain) {
 		float[] volumes=new float[domain.sizeX()*domain.sizeY()*domain.sizeZ()];
 		int cellsPerBlock = FluidRegionFactory.CELLS_PER_BLOCK;
-		for (int bz = 1; bz <= MinecraftDebugFixtures.BLOCK_SIZE_Z - 2; bz++) {
-			for (int bx = 1; bx <= MinecraftDebugFixtures.BLOCK_SIZE_X - 2; bx++) {
-				for (int by = 1; by <= 3; by++) {
-					for (int localZ = 0; localZ < cellsPerBlock; localZ++) {
-						for (int localY = 0; localY < cellsPerBlock; localY++) {
-							float fraction = by <= 2 ? 1.0F : Math.clamp(0.5F * cellsPerBlock - localY, 0.0F, 1.0F);
-							for (int localX = 0; localX < cellsPerBlock; localX++) {
-								int x = bx * cellsPerBlock + localX;
-								int y = by * cellsPerBlock + localY;
-								int z = bz * cellsPerBlock + localZ;
-								if (!domain.isSolid(x, y, z)) volumes[(z*domain.sizeY()+y)*domain.sizeX()+x] = fraction;
-							}
-						}
-					}
-				}
-			}
-		}
+		for (int z = 0; z < domain.sizeZ(); z++) for (int y = cellsPerBlock; y < 5 * cellsPerBlock / 2; y++)
+			for (int x = 0; x < domain.sizeX(); x++) if (!domain.isSolid(x,y,z))
+				volumes[(z*domain.sizeY()+y)*domain.sizeX()+x] = 1.0F;
 		domain.setVolumes(volumes);
 	}
 

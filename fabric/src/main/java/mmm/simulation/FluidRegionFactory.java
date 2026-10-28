@@ -63,11 +63,11 @@ final class FluidRegionFactory {
 				config);
 	}
 
-	/** Shared production configuration for the transient air and wetting demonstrations. */
-	static FluidDomain createDebugDomain() {
-		return new FluidDomain(MinecraftDebugFixtures.BLOCK_SIZE_X * CELLS_PER_BLOCK,
-				MinecraftDebugFixtures.BLOCK_SIZE_Y * CELLS_PER_BLOCK,
-				MinecraftDebugFixtures.BLOCK_SIZE_Z * CELLS_PER_BLOCK,
+	/** Shared production configuration for the transient air demonstration. */
+	static FluidDomain createAirDomain() {
+		return new FluidDomain(DemoSceneLayout.AIR_SIZE_X * CELLS_PER_BLOCK,
+				DemoSceneLayout.AIR_SIZE_Y * CELLS_PER_BLOCK,
+				DemoSceneLayout.AIR_SIZE_Z * CELLS_PER_BLOCK,
 				new FluidSolverConfig(0.5F, 1000.0F, 9.81F, 1.0F / 40.0F, 300, 1.0E-5F, 2.0E-3F));
 	}
 

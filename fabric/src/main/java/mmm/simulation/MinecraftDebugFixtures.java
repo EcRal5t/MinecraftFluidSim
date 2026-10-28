@@ -161,9 +161,9 @@ public final class MinecraftDebugFixtures {
 			return new ReplacementTarget(layout.minimum().offset(1, 1, 1), 2, 2, 2, 4L * 4 * 4);
 		}
 		boolean flow = preset == DemoPreset.FLOW;
-		int x = flow ? DemoSceneLayout.FLOW_SIZE_X : BLOCK_SIZE_X;
-		int y = flow ? DemoSceneLayout.FLOW_SIZE_Y : BLOCK_SIZE_Y;
-		int z = flow ? DemoSceneLayout.FLOW_SIZE_Z : BLOCK_SIZE_Z;
+		int x = flow ? DemoSceneLayout.FLOW_SIZE_X : DemoSceneLayout.AIR_SIZE_X;
+		int y = flow ? DemoSceneLayout.FLOW_SIZE_Y : DemoSceneLayout.AIR_SIZE_Y;
+		int z = flow ? DemoSceneLayout.FLOW_SIZE_Z : DemoSceneLayout.AIR_SIZE_Z;
 		BlockPos origin = DemoWorkbench.transientOrigin(anchor, facing, preset);
 		for (int bz = 0; bz < z; bz++) for (int by = 0; by < y; by++) for (int bx = 0; bx < x; bx++)
 			check.accept(origin.offset(bx, by, bz));
@@ -205,7 +205,7 @@ public final class MinecraftDebugFixtures {
 	boolean createAirDemo(ServerPlayer player, BlockPos origin, DebugScenarioInitialization.AirPressure pressure) {
 		ServerLevel level = player.level();
 		return runTransient(level, origin, TransientKind.AIR, context -> {
-			scaffolding.requireAir(level, origin, BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z);
+			scaffolding.requireAir(level, origin, DemoSceneLayout.AIR_SIZE_X, DemoSceneLayout.AIR_SIZE_Y, DemoSceneLayout.AIR_SIZE_Z);
 			scaffolding.placeAirDemo(level, origin);
 			runtime.refreshCollisions(level);
 			FluidDomain domain = regions.selected().domain();
@@ -294,12 +294,12 @@ public final class MinecraftDebugFixtures {
 		}
 		FluidDomain domain = switch (kind) {
 			case FLOW -> FluidRegionFactory.createDomain(DemoSceneLayout.FLOW_SIZE_X, DemoSceneLayout.FLOW_SIZE_Y, DemoSceneLayout.FLOW_SIZE_Z);
-			case AIR -> FluidRegionFactory.createDebugDomain();
+			case AIR -> FluidRegionFactory.createAirDomain();
 			case TENSION -> FluidRegionFactory.createTensionDomain();
 			case NORMAL -> FluidRegionFactory.createDomain(BLOCK_SIZE_X, BLOCK_SIZE_Y, BLOCK_SIZE_Z);
 		};
 		FluidRegion candidate = new FluidRegion(UUID.randomUUID(), level.dimension(), origin, domain);
-		candidate.setEntityPhysicsEnabled(defaultEntityPhysics.getAsBoolean());
+		candidate.setEntityPhysicsEnabled(kind != TransientKind.AIR && defaultEntityPhysics.getAsBoolean());
 		candidate.setDebugOverlays(defaultDebugOverlays.getAsBoolean());
 		if (replacing) regions.select(replaced.id());
 		RegionCatalog.AdmissionResult preview = replacing ? regions.previewReplacement((long)domain.sizeX() * domain.sizeY() * domain.sizeZ())

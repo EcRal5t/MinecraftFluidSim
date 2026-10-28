@@ -489,7 +489,7 @@ final class MinecraftContainerTransferOperations {
 		}
 		boolean sourceRequired = kind == TransferKind.POUR || kind == TransferKind.MATERIAL_POUR || kind == TransferKind.GRANULAR_POUR
 				|| kind == TransferKind.SCOOP && heldBaseVolumeNanos(stack) > 0L;
-		if (sourceRequired && contents == null) {
+		if (sourceRequired && contents == null && !stack.is(Items.WATER_BUCKET)) {
 			return "热区域只接受携带 ThermalContents 的液体容器；拒绝猜测初始温度";
 		}
 		if (contents != null) try {

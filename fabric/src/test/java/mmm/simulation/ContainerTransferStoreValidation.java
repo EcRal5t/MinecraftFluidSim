@@ -62,6 +62,10 @@ public final class ContainerTransferStoreValidation {
 	private ContainerTransferStoreValidation() { }
 
 	public static void main(String[] args) throws Exception {
+		if (args.length == 1 && args[0].equals("--journal-thermal")) {
+			testRoundTrip(); testThermalWal(); testPublicTransfers(); testActorCodecs();
+			System.out.println("Thermal container WAL and public transfer validation passed"); return;
+		}
 		if(args.length==1 && args[0].equals("--cold-acid-base")) {
 			ControllerInventoryDurabilityValidation.runColdAcidBase();
 			System.out.println("Cold acid-base precipitation 40-step replay passed");return;
@@ -252,6 +256,20 @@ public final class ContainerTransferStoreValidation {
 				prepared.actor(), before, after, 0x7711L, ContainerTransferJournal.Phase.REGION_COMMITTED);
 		store.write(committed);
 		check(store.read(transaction).equals(committed), "committed thermal WAL did not round-trip");
+		var vanilla = new ContainerTransferJournal.ItemFingerprint(ContainerTransferJournal.ItemKind.WATER_BUCKET, -1L, null);
+		UUID vanillaTransaction = UUID.randomUUID();
+		var vanillaPrepared = new ContainerTransferJournal(vanillaTransaction, region, "minecraft:overworld", 7L, 8L,
+				ContainerTransferJournal.Operation.INSERT, ContainerTransferJournal.ResourceKind.FLUID_NANOS,
+				ContainerFluidLedger.NANOS_PER_BLOCK, -1L, transfer, prepared.actor(), vanilla, vanilla, -1L,
+				ContainerTransferJournal.Phase.PREPARED, before);
+		store.write(vanillaPrepared);
+		check(store.read(vanillaTransaction).equals(vanillaPrepared), "Vanilla bucket PREPARED lost its room-temperature source");
+		var vanillaCommitted = new ContainerTransferJournal(vanillaTransaction, region, "minecraft:overworld", 7L, 8L,
+				ContainerTransferJournal.Operation.INSERT, ContainerTransferJournal.ResourceKind.FLUID_NANOS,
+				ContainerFluidLedger.NANOS_PER_BLOCK, -1L, transfer, prepared.actor(), vanilla, after, 0x7711L,
+				ContainerTransferJournal.Phase.REGION_COMMITTED, before);
+		store.write(vanillaCommitted);
+		check(store.read(vanillaTransaction).equals(vanillaCommitted), "Vanilla bucket COMMITTED lost its source or actor identity");
 			ThermalContents.EnergySplit creativeSplit = contents.splitHomogeneousEnergy(500_000_000L,
 				ContainerFluidLedger.NANOS_PER_BLOCK);
 		double creativeEnergy = creativeSplit.coupledEnergy(contents.internalEnergy());

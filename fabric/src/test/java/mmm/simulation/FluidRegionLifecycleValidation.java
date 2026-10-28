@@ -58,6 +58,7 @@ public final class FluidRegionLifecycleValidation {
 
 	public static void main(String[] args) throws Exception {
 		validateDemoWorkbenchStore();
+		validateDemoWorldRestart();
 		validateControllerComparatorObservation();
 		validatePacingAndOperatorPause();
 		validateRegionTickPlanningAndPacing();
@@ -93,6 +94,32 @@ public final class FluidRegionLifecycleValidation {
 		require(new DemoWorkbenchStore(root).loadAll().equals(List.of(ready)), "Demo metadata replacement or removal failed");
 		store.save(List.of());
 		require(new DemoWorkbenchStore(root).loadAll().isEmpty(), "Demo metadata removal did not survive reload");
+	}
+
+	private static void validateDemoWorldRestart() throws Exception {
+		var production=ProductionRegistries.load();
+		var definitions=new mmm.simulation.persistence.WorldCapabilityBundleStore.Definitions(
+				java.util.EnumSet.allOf(mmm.worldprofile.WorldCapability.class),production.material(),production.chemical(),
+				production.granular(),production.gas(),production.thermal());
+		var root=java.nio.file.Files.createTempDirectory("mmm-demo-world-restart-");
+		var initial=WorldStartupCoordinator.start(root,()->definitions);
+		require(initial.authoritativeWritesReady(),"New demo world did not admit its capability bundle");
+		var entry=new DemoWorkbenchStore.Entry(UUID.randomUUID(),"minecraft:overworld",UUID.randomUUID(),
+				new BlockPos(1,64,2),net.minecraft.core.Direction.NORTH,mmm.network.DemoPreset.CHEMISTRY,true);
+		new DemoWorkbenchStore(root).save(List.of(entry));
+		java.nio.file.Files.copy(root.resolve("mmm/demo-workbench.nbt"),root.resolve("mmm/demo-workbench.nbt.tmp"));
+		var reopened=WorldStartupCoordinator.start(root,()->definitions);
+		require(reopened.authoritativeWritesReady()&&new DemoWorkbenchStore(root).loadAll().equals(List.of(entry)),
+				"Existing demo metadata blocked the committed world on restart: " + reopened);
+		var manager=new FluidRegionManager(reopened.config().limits());
+		var operations=new FluidRegionOperations(root,manager,reopened);
+		require(!operations.creationLocked(),"Reopened demo world was unexpectedly locked");
+		var lockedRoot=java.nio.file.Files.createTempDirectory("mmm-locked-world-start-");
+		java.nio.file.Files.createDirectories(lockedRoot.resolve("mmm").resolve("unknown-durable-root"));
+		var locked=WorldStartupCoordinator.start(lockedRoot,()->definitions);
+		require(!locked.profileProven()&&locked.creationLocked(),"Unknown authority did not lock world startup");
+		var lockedOperations=new FluidRegionOperations(lockedRoot,new FluidRegionManager(locked.config().limits()),locked);
+		require(lockedOperations.creationLocked(),"Unproven world did not retain its creation lock");
 	}
 
 	private static void validateControllerComparatorObservation() {

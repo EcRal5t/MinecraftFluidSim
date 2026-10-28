@@ -127,14 +127,14 @@ public final class ControllerConsoleScreen extends Screen {
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
 		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
-		graphics.centeredText(font, title, width / 2, 14, 0xffffff);
+		graphics.centeredText(font, title, width / 2, 14, 0xffffffff);
 		List<FormattedCharSequence> lines = wrappedRows();
 		int visible = visibleLines();
 		scroll = Math.min(scroll, Math.max(0, lines.size() - visible));
 		for (int i = scroll; i < Math.min(lines.size(), scroll + visible); i++) {
-			graphics.text(font, lines.get(i), 16, 36 + (i - scroll) * 12, 0xd8d8d8, false);
+			graphics.text(font, lines.get(i), 16, 36 + (i - scroll) * 12, 0xffd8d8d8, false);
 		}
-		if (scroll + visible < lines.size()) graphics.text(font, "↓", width - 18, height - 100, 0xa0a0a0, false);
+		if (scroll + visible < lines.size()) graphics.text(font, "↓", width - 18, height - 100, 0xffa0a0a0, false);
 	}
 
 	private List<FormattedCharSequence> wrappedRows() {

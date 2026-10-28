@@ -66,6 +66,7 @@ root.putLong("ActorGeneration",dispenser.generation());
 }
 
 putFingerprint(root, "Before", journal.beforeItem(), layout);
+putFingerprint(root, "Source", journal.sourceItem(), layout);
 putFingerprint(root, "After", journal.afterItem(), layout);
 root.putString("Phase", phaseName(journal.phase()));
 root.putLong("TargetManifestChecksum", journal.targetManifestChecksum());
@@ -160,6 +161,7 @@ default -> throw new IOException("Unknown actor type " + actorType);
 }
 
 ContainerTransferJournal.ItemFingerprint beforeItem = getFingerprint(root, "Before", layout);
+ContainerTransferJournal.ItemFingerprint sourceItem = getFingerprint(root, "Source", layout);
 ContainerTransferJournal.ItemFingerprint afterItem = getFingerprint(root, "After", layout);
 
 requireType(root, "Phase", Tag.TAG_STRING);
@@ -170,7 +172,7 @@ long targetManifestChecksum = root.getLongOr("TargetManifestChecksum", -1L);
 ContainerTransferJournal journal = new ContainerTransferJournal(
 transactionId, regionId, dimensionId, baseGeneration, targetGeneration,
 operation, resourceKind, volumeNanos, solidVolumeSvq, thermalTransfer,
-actor, beforeItem, afterItem, targetManifestChecksum, phase);
+actor, beforeItem, afterItem, targetManifestChecksum, phase, sourceItem);
 validateTransferShape(journal, true);
 validateKnownFields(root, journal, layout);
 return journal;
@@ -318,6 +320,7 @@ allowed.add("InventoryId"); allowed.add("ActorGeneration");
 }
 }
 addFingerprintFields(allowed, "Before", journal.beforeItem(), layout);
+addFingerprintFields(allowed, "Source", journal.sourceItem(), layout);
 addFingerprintFields(allowed, "After", journal.afterItem(), layout);
 TreeSet<String> unknown = new TreeSet<>(root.keySet());
 unknown.removeAll(allowed);
@@ -339,8 +342,19 @@ if (layout == Layout.THERMAL && item.thermalContents() != null) allowed.add(pref
 /** Rejects syntactically valid WALs whose item delta cannot settle the declared solver delta. */
 private static void validateTransferShape(ContainerTransferJournal journal, boolean requireTargetChecksum) throws IOException {
 if (journal.operation() == null || journal.phase() == null
-|| journal.actor() == null || journal.beforeItem() == null || journal.afterItem() == null) {
+|| journal.actor() == null || journal.beforeItem() == null || journal.sourceItem() == null || journal.afterItem() == null) {
 throw new IOException("Container transfer WAL is incomplete");
+}
+if (!journal.sourceItem().equals(journal.beforeItem())
+        && journal.beforeItem().kind() != ContainerTransferJournal.ItemKind.CREATIVE_SOURCE) {
+var before = journal.beforeItem(); var source = journal.sourceItem();
+if (journal.operation() != ContainerTransferJournal.Operation.INSERT
+        || before.kind() != ContainerTransferJournal.ItemKind.WATER_BUCKET
+        || source.kind() != before.kind() || before.thermalContents() != null || source.thermalContents() == null
+        || before.nanos() != source.nanos() || before.solidVolumeSvq() != source.solidVolumeSvq()
+        || before.massUnits() != source.massUnits() || !java.util.Objects.equals(before.contents(), source.contents())
+        || !java.util.Objects.equals(before.profileFingerprint(), source.profileFingerprint()))
+throw new IOException("Container transfer source does not match its actor inventory");
 }
 if (journal.actor() instanceof ContainerTransferActor.Dispenser dispenser
 && !journal.dimensionId().equals(dispenser.dimensionId())) {
@@ -418,9 +432,10 @@ throw new IOException("Container transfer item delta does not match " + journal.
 private static void validateThermalTransferShape(ContainerTransferJournal journal) throws IOException {
 ContainerTransferJournal.ThermalTransfer transfer = journal.thermalTransfer();
 boolean beforeThermal = journal.beforeItem().thermalContents() != null;
+boolean sourceThermal = journal.sourceItem().thermalContents() != null;
 boolean afterThermal = journal.afterItem().thermalContents() != null;
 if (transfer == null) {
-if (beforeThermal || afterThermal) throw new IOException("Material-only WAL item cannot carry thermal contents");
+if (beforeThermal || sourceThermal || afterThermal) throw new IOException("Material-only WAL item cannot carry thermal contents");
 return;
 }
 try {
@@ -430,26 +445,27 @@ throw new IOException("Container transfer thermal identity is invalid", invalidT
 }
 if (creativeSourceInsertion(journal, journal.resourceKind()==ContainerTransferJournal.ResourceKind.GRANULAR_SVQ)) return;
 if (journal.phase() == ContainerTransferJournal.Phase.PREPARED) {
-if (journal.operation() == ContainerTransferJournal.Operation.INSERT && !beforeThermal) {
+if (journal.operation() == ContainerTransferJournal.Operation.INSERT && !sourceThermal) {
 throw new IOException("Prepared thermal insertion has no source item energy");
 }
 return;
 }
-if (journal.operation() == ContainerTransferJournal.Operation.INSERT && !beforeThermal
+if (journal.operation() == ContainerTransferJournal.Operation.INSERT && !sourceThermal
 || journal.operation() == ContainerTransferJournal.Operation.EXTRACT && !afterThermal) {
 throw new IOException("Committed thermal transfer is missing the item-side energy owner");
 }
-double before = beforeThermal
-? mmm.transfer.ThermalContents.decode(journal.beforeItem().thermalContents()).internalEnergy() : 0.0;
+double before = sourceThermal && journal.operation() == ContainerTransferJournal.Operation.INSERT
+? mmm.transfer.ThermalContents.decode(journal.sourceItem().thermalContents()).internalEnergy()
+: beforeThermal ? mmm.transfer.ThermalContents.decode(journal.beforeItem().thermalContents()).internalEnergy() : 0.0;
 double after = afterThermal
 ? mmm.transfer.ThermalContents.decode(journal.afterItem().thermalContents()).internalEnergy() : 0.0;
 double moved;
 if (journal.operation() == ContainerTransferJournal.Operation.INSERT
 && journal.beforeItem().equals(journal.afterItem())) {
-long total = Math.max(pureVolume(journal.beforeItem()), materialVolume(journal.beforeItem()));
+long total = Math.max(pureVolume(journal.sourceItem()), materialVolume(journal.sourceItem()));
 if (total <= 0L) throw new IOException("Unchanged thermal source item has no liquid volume");
 mmm.transfer.ThermalContents source = mmm.transfer.ThermalContents.decode(
-journal.beforeItem().thermalContents());
+journal.sourceItem().thermalContents());
 mmm.transfer.ThermalContents.EnergySplit split = source.splitHomogeneousEnergy(
 		journal.volumeNanos(), total);
 moved = split.coupledEnergy(source.internalEnergy());

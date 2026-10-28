@@ -99,7 +99,8 @@ public final class PublicTransferReceiptStore {
 		if(!expected.actor().equals(journal.actor()) || !expected.regionId().equals(journal.regionId())
 				|| !expected.dimensionId().equals(journal.dimensionId()) || expected.operation()!=journal.operation()
 				|| expected.baseGeneration()!=journal.baseGeneration() || expected.targetGeneration()!=journal.targetGeneration()
-				|| expected.resourceKind()!=journal.resourceKind() || !expected.beforeItem().equals(journal.beforeItem()))
+				|| expected.resourceKind()!=journal.resourceKind() || !expected.beforeItem().equals(journal.beforeItem())
+				|| !expected.sourceItem().equals(journal.sourceItem()))
 			throw new IOException("Public operation WAL differs from its durable actor/request binding");
 		if(journal.phase()==ContainerTransferJournal.Phase.REGION_COMMITTED
 				&& (!expected.afterItem().equals(journal.afterItem()) || expected.volumeNanos()!=journal.volumeNanos()

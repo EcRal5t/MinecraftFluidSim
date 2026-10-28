@@ -236,24 +236,24 @@ public final class ContainerTransferCoordinator {
 			return new ContainerTransferJournal(transactionId, command.regionId(), command.dimensionId(),
 					command.baseGeneration(), targetGeneration, command.operation(), command.resourceKind(),
 					amount, -1L, new ContainerTransferJournal.ThermalTransfer(command.thermalRegistryFingerprint(),
-					Objects.requireNonNull(thermalEnergy)), command.actor(), command.beforeItem(), after, checksum, phase);
+					Objects.requireNonNull(thermalEnergy)), command.actor(), command.beforeItem(), after, checksum, phase, command.sourceItem());
 		}
 
 		if (command.resourceKind() == ContainerTransferJournal.ResourceKind.GRANULAR_SVQ) {
 			return new ContainerTransferJournal(transactionId,command.regionId(),command.dimensionId(),
 					command.baseGeneration(),targetGeneration,command.operation(),command.resourceKind(),-1,amount,
 					thermalEnergy==null?null:new ContainerTransferJournal.ThermalTransfer(command.thermalRegistryFingerprint(),thermalEnergy),
-					command.actor(),command.beforeItem(),after,checksum,phase);
+					command.actor(),command.beforeItem(),after,checksum,phase,command.sourceItem());
 		}
 		if (thermalEnergy != null) {
-			return ContainerTransferJournal.thermalFluid(transactionId, command.regionId(), command.dimensionId(),
-					command.baseGeneration(), targetGeneration, command.operation(), amount,
+			return new ContainerTransferJournal(transactionId, command.regionId(), command.dimensionId(),
+					command.baseGeneration(), targetGeneration, command.operation(), command.resourceKind(), amount, -1L,
 					new ContainerTransferJournal.ThermalTransfer(command.thermalRegistryFingerprint(), thermalEnergy),
-					command.actor(), command.beforeItem(), after, checksum, phase);
+					command.actor(), command.beforeItem(), after, checksum, phase, command.sourceItem());
 		}
 		return new ContainerTransferJournal(transactionId, command.regionId(), command.dimensionId(),
-				command.baseGeneration(), targetGeneration, command.operation(), amount, command.actor(),
-				command.beforeItem(), after, checksum, phase);
+				command.baseGeneration(), targetGeneration, command.operation(), command.resourceKind(), amount, -1L, null, command.actor(),
+				command.beforeItem(), after, checksum, phase, command.sourceItem());
 	}
 
 	public void setFaultPoint(FaultPoint faultPoint) {

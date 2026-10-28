@@ -89,6 +89,15 @@ final class MinecraftContainerTransferPlan {
 		String thermalFailure = MinecraftContainerTransferOperations.thermalTransferFailure(
 				world, region, sourceStack, kind);
 		if (thermalFailure != null) return new Resolution(null, thermalFailure);
+		// Vanilla water has no temperature component; its initial source temperature is room temperature.
+		// Keep the actor's actual stack unchanged and use this source copy for the energy ledger.
+		if (kind == MinecraftContainerTransferOperations.TransferKind.POUR
+				&& sourceStack.is(net.minecraft.world.item.Items.WATER_BUCKET) && region.domain().hasThermalState()
+				&& MinecraftContainerTransferOperations.thermalContents(sourceStack) == null) {
+			sourceStack = sourceStack.copy();
+			try { world.attachLiquidThermalContents(sourceStack, mmm.fluid.air.GasRegistry.STANDARD_TEMPERATURE_K); }
+			catch (RuntimeException invalid) { return new Resolution(null, "无法建立标准温度水桶热状态：" + invalid.getMessage()); }
+		}
 
 		ContainerTransferJournal.Operation operation = switch (kind) {
 			case POUR, MATERIAL_POUR, GRANULAR_POUR -> ContainerTransferJournal.Operation.INSERT;
@@ -115,7 +124,7 @@ final class MinecraftContainerTransferPlan {
 				case SCOOP -> {
 					base = MinecraftContainerTransferOperations.heldBaseVolumeNanos(sourceStack);
 					requested = MinecraftContainerTransferOperations.extractableNanos(region.domain(), cell,
-							MinecraftContainerTransferOperations.heldFreeNanos(sourceStack), 6, 0);
+							MinecraftContainerTransferOperations.heldFreeNanos(sourceStack), 6, waterMaterial(region));
 					if (requested <= 0L) return new Resolution(null, "准星处没有可装入的水体");
 				}
 				case MATERIAL_POUR -> {
@@ -185,9 +194,9 @@ final class MinecraftContainerTransferPlan {
 		return switch (kind) {
 			case POUR -> MinecraftContainerTransferOperations.pourIntoCell(
 					world, targetRegion, cell, MinecraftContainerTransferOperations.heldVolumeNanos(sourceStack),
-						requested, 6, 0, externalSource, thermal);
+						requested, 6, waterMaterial(targetRegion), externalSource, thermal);
 			case SCOOP -> MinecraftContainerTransferOperations.scoopFromCell(
-					world, targetRegion, cell, requested, base, 6, 0, thermal);
+					world, targetRegion, cell, requested, base, 6, waterMaterial(targetRegion), thermal);
 			case MATERIAL_POUR -> chemical == null
 					? MinecraftContainerTransferOperations.pourMaterialIntoCell(
 							world, targetRegion, cell, mixture, requested, 6, externalSource, thermal)
@@ -221,21 +230,25 @@ final class MinecraftContainerTransferPlan {
 					actorBefore, sourceStack, resourceKind, requestedAmount,
 					this::executeExact, (rawAfter, before) -> before.copy());
 		}
-		return transactions.execute(region, level, actor, actorBefore,
+		return transactions.executeResolvedSource(region, level, actor, actorBefore, sourceStack,
 				operation, resourceKind, requestedAmount, baseAmount, this::executeExact,
-				(rawAfter, before) -> externalSource ? before.copy() : rawAfter);
+				(rawAfter, before) -> externalSource && operation == ContainerTransferJournal.Operation.INSERT ? before.copy() : rawAfter);
 	}
 
 	/** Uses the same durable transaction as the world adapter after the region target is resolved. */
 	MinecraftContainerTransactionAdapter.Result executeManagedForRegion(ContainerTransferActor actor, ItemStack actorBefore) {
 		return transactions.executeForRegion(region, actor, actorBefore, sourceStack, operation, resourceKind,
 				requestedAmount, baseAmount, this::executeExact,
-				(rawAfter, before) -> externalSource ? before.copy() : rawAfter, null);
+				(rawAfter, before) -> externalSource && operation == ContainerTransferJournal.Operation.INSERT ? before.copy() : rawAfter, null);
 	}
 
 	boolean filled() { return operation == ContainerTransferJournal.Operation.INSERT; }
+	private static int waterMaterial(FluidRegion region) {
+		return region.domain().hasMaterialState() ? region.domain().materialRegistry().handle("mmm:water") : 0;
+	}
 	long requestedAmount() { return requestedAmount; }
 	long baseAmount() { return baseAmount; }
+	ItemStack sourceStack() { return sourceStack.copy(); }
 	ContainerTransferJournal.ResourceKind resourceKind() { return resourceKind; }
 
 	private boolean chemistryEnabled() {

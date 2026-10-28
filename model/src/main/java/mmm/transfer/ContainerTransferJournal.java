@@ -24,8 +24,16 @@ public record ContainerTransferJournal(
 		ItemFingerprint beforeItem,
 		ItemFingerprint afterItem,
 		long targetManifestChecksum,
-		Phase phase
+		Phase phase,
+		ItemFingerprint sourceItem
 ) {
+	public ContainerTransferJournal(UUID transactionId, UUID regionId, String dimensionId, long baseGeneration,
+			long targetGeneration, Operation operation, ResourceKind resourceKind, long volumeNanos, long solidVolumeSvq,
+			ThermalTransfer thermalTransfer, ContainerTransferActor actor, ItemFingerprint beforeItem,
+			ItemFingerprint afterItem, long targetManifestChecksum, Phase phase) {
+		this(transactionId, regionId, dimensionId, baseGeneration, targetGeneration, operation, resourceKind,
+				volumeNanos, solidVolumeSvq, thermalTransfer, actor, beforeItem, afterItem, targetManifestChecksum, phase, beforeItem);
+	}
 	public ContainerTransferJournal(
 			UUID transactionId, UUID regionId, String dimensionId, long baseGeneration, long targetGeneration,
 			Operation operation, long volumeNanos, ContainerTransferActor actor,
@@ -66,14 +74,14 @@ public record ContainerTransferJournal(
 	}
 
 	public boolean requiresChemicalRegistry() {
-		return beforeItem.requiresChemicalRegistry() || afterItem.requiresChemicalRegistry();
+		return beforeItem.requiresChemicalRegistry() || afterItem.requiresChemicalRegistry() || sourceItem.requiresChemicalRegistry();
 	}
 
 	public void validateProfileFingerprint(String expected) {
 		if (expected == null || !expected.matches("[0-9a-f]{64}")) {
 			throw new IllegalArgumentException("Authoritative world profile is unavailable");
 		}
-		for (ItemFingerprint item : java.util.List.of(beforeItem, afterItem)) {
+		for (ItemFingerprint item : java.util.List.of(beforeItem, sourceItem, afterItem)) {
 			if (item.profileFingerprint() != null && !item.profileFingerprint().equals(expected)) {
 				throw new IllegalArgumentException("Typed container belongs to a foreign world profile");
 			}
@@ -84,12 +92,14 @@ public record ContainerTransferJournal(
 		if (!requiresChemicalRegistry()) return;
 		if (registry == null) throw new IllegalArgumentException("Authoritative chemical registry is unavailable");
 		beforeItem.validateChemicalRegistry(registry);
+		sourceItem.validateChemicalRegistry(registry);
 		afterItem.validateChemicalRegistry(registry);
 	}
 
 	public boolean requiresGranularRegistry() {
 		return resourceKind == ResourceKind.GRANULAR_SVQ
 				|| beforeItem.kind() == ItemKind.GRANULAR_CONTAINER
+				|| sourceItem.kind() == ItemKind.GRANULAR_CONTAINER
 				|| afterItem.kind() == ItemKind.GRANULAR_CONTAINER;
 	}
 
@@ -97,11 +107,12 @@ public record ContainerTransferJournal(
 		if (!requiresGranularRegistry()) return;
 		if (registry == null) throw new IllegalArgumentException("Authoritative granular registry is unavailable");
 		beforeItem.validateGranularRegistry(registry, chemistry);
+		sourceItem.validateGranularRegistry(registry, chemistry);
 		afterItem.validateGranularRegistry(registry, chemistry);
 	}
 
 	public boolean requiresThermalRegistry() {
-		return thermalTransfer != null || beforeItem.requiresThermalRegistry() || afterItem.requiresThermalRegistry();
+		return thermalTransfer != null || beforeItem.requiresThermalRegistry() || sourceItem.requiresThermalRegistry() || afterItem.requiresThermalRegistry();
 	}
 
 	public void validateThermalRegistry(String fingerprint) {
@@ -111,6 +122,7 @@ public record ContainerTransferJournal(
 			throw new IllegalArgumentException("Authoritative thermal registry is unavailable or differs from the WAL");
 		}
 		beforeItem.validateThermalRegistry(fingerprint);
+		sourceItem.validateThermalRegistry(fingerprint);
 		afterItem.validateThermalRegistry(fingerprint);
 	}
 

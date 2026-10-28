@@ -167,7 +167,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
   → 发布查询、快照与适用的提交通知
 ```
 
-启动时先发布或恢复世界能力包，绑定该世界的材料定义和功能布局，再恢复区域与未完成事务。已提交包解释已有库存，数据包漂移通过诊断报告。定义、格式或身份错误保留原文件并锁定相应持久域。
+启动时先发布或恢复世界能力包，绑定该世界的材料定义和功能布局，再恢复区域与未完成事务。已提交包解释已有库存，数据包漂移通过诊断报告。演示工作台记录及其临时文件属于已知持久目录内容，与区域库存共同要求已有能力包。能力包无法确认时保留原文件并锁定写入，区域仓库以未绑定注册表的锁定状态组装。
 
 服务器 tick 依次刷新碰撞、热交换与实体输入，调度器选择 `NONE`、`MOTION` 或 `THERMAL`。力学优先于独立热轴；暂停、pacing 跳过和热轴均保留运动输入的一次使用规则。静水可继续导热、反应或相变；热量变化又可唤醒力学。玩家运行意图与外壳破损等区域可用性原因分别保存；世界区块卸载按物理活动组暂停。
 
@@ -531,6 +531,7 @@ GPU 颗粒链在共同压力之后推进接触与轨迹，再执行沉积、床�
   - 验证选择器 / 参考：`region-state`；[存档参考](region-state.md)
 
 - **玩家、发射器及世界事务**
+  - 原版水桶没有携带热数据时，向启用热学的区域注水使用标准温度生成源库存；已有热数据的容器沿自身内能交接。玩家物品原态与计算用源库存分别进入共同容器事务。
   - 主要文件：
     - [MinecraftPoolOperations](../../fabric/src/main/java/mmm/simulation/MinecraftPoolOperations.java)：`probe` 完成管理员探针预览确认，`returnWater` 暂停并归还可表示水块，余量取走后移除；`allowsBlockChange` 隔离池内原版水写入。
     - [NativePoolScanner](../../fabric/src/main/java/mmm/simulation/controller/NativePoolScanner.java)：已加载静水、天然底壁、大气开口与尺寸预算。
@@ -556,7 +557,7 @@ GPU 颗粒链在共同压力之后推进接触与轨迹，再执行沉积、床�
 
 服务端从已提交单元库存、同代 PLIC 与固定开放微盒生成局部凸片；材料按库存份额在单元内沿重力方向分区，界面位置采用单元尺度近似。客户端裁剪共享面并生成一份带双侧材料及法向的网格，相机介质读取同一凸片。完整几何经过有界分片传输，接齐后按区域身份、网络代次和 sequence 接收；移除消息使旧包失效。显示温度、压力、颜色与网格采用各自量化，库存、状态方程和物理计算读取原始数据。
 
-客户端显色由 `FluidDisplaySettings` 保存当前玩家的组分、pH 或温度模式及固定温度色带范围，控制器界面的显色入口打开 `FluidDisplayScreen`。
+客户端显色由 `FluidDisplaySettings` 保存当前玩家的组分、pH 或温度模式及固定温度色带范围，控制器界面的显色入口打开 `FluidDisplayScreen`。温度范围仅在温度模式显示；自定义界面文本统一使用带不透明 alpha 的 ARGB 颜色。
 材质管线和顶点格式读取同一已提取帧的显色模式。方块 sprite 用 `AtlasIds.BLOCKS` 查找图集，绘制按纹理 ID 绑定；空颗粒及诊断显色无需 sprite，资源重载后在下一帧取得新图集对象。
 `FluidColorMapping` 集中映射颜色，`MaterialFrame` 持有同一已接受快照的几何、逐相 pH 与凝聚相温度。展示值改变复用网格并刷新颜色；模式与范围变化在下一显示帧生效，暂停区域保持相同物理状态。
 pH 从适用水相的 H⁺/OH⁻ 与水相体积派生，油等物相显示无数据；中性和无数据分别编码。温度直接读取服务端单元凝聚相展示值，色带以 K 标注。具体近似及编码见[化学参考](chemistry-state.md#ph-与显色)。
@@ -644,7 +645,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
   - 验证选择器 / 参考：`thermal,protocol`
 
 - **命令、开发场景与诊断报告**
-  - 演示面板按玩家及维度保存场景身份和固定位置；每次操作核对会话、请求代次及区域身份。水箱配方通过私有候选和现有库存提交发布，清理复用区域生命周期；临时池与气压管通过脚手架事务替换并恢复世界方块。
+  - 演示面板按玩家及维度保存场景身份和固定位置；每次操作核对会话、请求代次及区域身份。默认清水配方注入两桶水，水箱配方通过私有候选和现有库存提交发布，清理复用区域生命周期；临时池与气压管通过脚手架事务替换并恢复世界方块。开始成功后返回游戏画面，失败时保留面板和原因。
   - 首次成功创建后保存位置；创建失败可在新位置重试。跨类型切换在移除旧场景前检查目标空间、能力及目录预算与重叠，方块检查仅放行当前演示将恢复为空气的原样壳体。暂态替换失败保留原会话。控制器回复携带关联请求的失败原因，界面结束等待并显示原因；请求状态与界面布局分开保存，窗口重建保留输入和滚动位置。
   - 主要文件：
     - [MmmCommands](../../fabric/src/main/java/mmm/MmmCommands.java)
@@ -653,7 +654,7 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [DemoWorkbench](../../fabric/src/main/java/mmm/simulation/DemoWorkbench.java)：创建、暂停、单步、原位重置和移除的服务端流程；[DemoWorkbenchStore](../../fabric/src/main/java/mmm/simulation/DemoWorkbenchStore.java) 保存持久水箱身份
     - [DemoInteractionValidation](../../fabric/src/test/java/mmm/simulation/DemoInteractionValidation.java)：通过 `DemoWorkbench.Host` 替代世界读写，驱动生产请求状态机、区域目录、壳体扫描与存档，覆盖全部预设和失败重试
     - [DemoTankOperations](../../fabric/src/main/java/mmm/simulation/DemoTankOperations.java)：控制器水箱配方、室温常压复位及生命周期清理
-    - [DemoSceneLayout](../../fabric/src/main/java/mmm/simulation/DemoSceneLayout.java)、[DemoSceneInitialization](../../fabric/src/main/java/mmm/simulation/DemoSceneInitialization.java)：游戏与离线回放共用水流池几何、障碍和初态
+    - [DemoSceneLayout](../../fabric/src/main/java/mmm/simulation/DemoSceneLayout.java)、[DemoSceneInitialization](../../fabric/src/main/java/mmm/simulation/DemoSceneInitialization.java)、[DebugScenarioInitialization](../../fabric/src/main/java/mmm/simulation/DebugScenarioInitialization.java)：游戏与离线回放共用水流池和 U 形管几何、初始液位与气腔预设
     - [DemoWorkbenchScreen](../../fabric/src/client/java/mmm/client/DemoWorkbenchScreen.java)、[DemoActionPayload](../../fabric/src/main/java/mmm/network/DemoActionPayload.java)、[DemoWorkbenchPayload](../../fabric/src/main/java/mmm/network/DemoWorkbenchPayload.java)：场景选择、操作和关联回复
     - [DebugScenarioInitialization](../../fabric/src/main/java/mmm/simulation/DebugScenarioInitialization.java)：生产命令与离线 GPU 重放共用的初始库存、化学配比、气压及液滴几何
     - [ControllerDemoLayout](../../fabric/src/main/java/mmm/simulation/ControllerDemoLayout.java)、[ControllerRegionCreation](../../fabric/src/main/java/mmm/simulation/ControllerRegionCreation.java)：控制器外壳与端口布局、全能力初始化及首个检查点发布

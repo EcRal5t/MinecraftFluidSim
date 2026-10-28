@@ -105,11 +105,13 @@ final class DemoWorkbenchScreen extends Screen {
 	boolean awaiting(DemoWorkbenchPayload response, String dimension) {
 		return request.awaiting(response, dimension);
 	}
-	DemoWorkbenchScreen accept(DemoWorkbenchPayload response) {
+	Screen accept(DemoWorkbenchPayload response) {
 		if (response.failure() == null && (request.pending == DemoAction.START || request.pending == DemoAction.RESET)
 				&& (state.regionId() == null || response.preset() != state.preset())) {
 			selectDisplay(response.preset());
 		}
+		if (request.pending == DemoAction.START && response.failure() == null && !response.paused() && !response.blocked())
+			return null;
 		return new DemoWorkbenchScreen(response, response.failure() == null ? response.preset() : selected);
 	}
 	private static void selectDisplay(DemoPreset preset) {
@@ -126,21 +128,21 @@ final class DemoWorkbenchScreen extends Screen {
 	}
 	@Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
 		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
-		graphics.centeredText(font, title, width / 2, 14, 0xffffff);
+		graphics.centeredText(font, title, width / 2, 14, 0xffffffff);
 		if (state.regionId() != null) {
 			Component status = Component.translatable(state.paused() || state.blocked() ? "screen.mmm.demos.paused" : "screen.mmm.demos.running");
 			if (state.preset() != selected) status = Component.translatable(
 					"screen.mmm.demos." + state.preset().name().toLowerCase(java.util.Locale.ROOT))
 					.append(Component.literal(" · ")).append(status);
-			graphics.centeredText(font, status, width / 2, 80, 0xa0a0a0);
+			graphics.centeredText(font, status, width / 2, 80, 0xffa0a0a0);
 		}
 		if (state.failure() != null) {
 			var lines = font.split(Component.literal(state.failure()), Math.max(1, width - 32));
 			int visible = Math.max(1, (height - 158) / 11);
 			failureOffset = Math.min(failureOffset, Math.max(0, lines.size() - visible));
 			for (int i = failureOffset; i < Math.min(lines.size(), failureOffset + visible); i++)
-				graphics.text(font, lines.get(i), 16, 92 + (i - failureOffset) * 11, 0xff7777, false);
-			if (failureOffset + visible < lines.size()) graphics.text(font, "↓", width - 18, height - 68, 0xff7777, false);
+				graphics.text(font, lines.get(i), 16, 92 + (i - failureOffset) * 11, 0xffff7777, false);
+			if (failureOffset + visible < lines.size()) graphics.text(font, "↓", width - 18, height - 68, 0xffff7777, false);
 		}
 	}
 }

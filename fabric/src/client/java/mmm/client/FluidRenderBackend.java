@@ -18,6 +18,7 @@ import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.client.renderer.BindGroupLayouts;
+import net.minecraft.client.renderer.chunk.ChunkSectionLayerGroup;
 import net.minecraft.client.renderer.texture.TextureAtlas;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.data.AtlasIds;
@@ -132,7 +133,7 @@ final class FluidRenderBackend implements AutoCloseable {
 		GpuBufferSlice transforms = RenderSystem.getDynamicUniforms().writeTransform(
 				RenderSystem.getModelViewMatrixCopy(), COLOR_MODULATOR, MODEL_OFFSET, TEXTURE_MATRIX
 		);
-		RenderTarget target = client.gameRenderer.mainRenderTarget();
+		RenderTarget target = ChunkSectionLayerGroup.TRANSLUCENT.outputTarget();
 		GpuTextureView color = target.getColorTextureView();
 		if (color == null) return;
 		try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(

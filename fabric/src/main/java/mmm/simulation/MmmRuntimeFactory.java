@@ -47,13 +47,7 @@ public final class MmmRuntimeFactory {
 			if (level != null && level.hasChunkAt(position))
 				level.updateNeighbourForOutputSignal(position, level.getBlockState(position).getBlock());
 		});
-		FluidRegionOperations regionOperations = new FluidRegionOperations(worldRoot, regionManager,
-				startup.creationLocked(), startup.profileProven(), startup.profile(),
-				registries == null ? null : registries.chemical(),
-				registries == null ? null : registries.granular(),
-				registries == null ? null : registries.thermal(),
-				registries == null ? null : registries.gas(), config.maximumThermalSubstepsPerStep(),
-				registries == null ? null : registries.material());
+		FluidRegionOperations regionOperations = new FluidRegionOperations(worldRoot, regionManager, startup);
 		regionOperations.recoverRemovedQuarantines();
 		for (WorldStartupCoordinator.Issue issue : startup.issues()) if (issue.blocksCreation()) {
 			regionOperations.recordIssue("startup " + issue.stage() + "/" + issue.code() + ": " + issue.detail());

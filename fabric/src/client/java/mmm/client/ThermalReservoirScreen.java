@@ -77,16 +77,16 @@ public final class ThermalReservoirScreen extends Screen {
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
 		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
-		graphics.centeredText(font, title, width / 2, 20, 0xffffff);
+		graphics.centeredText(font, title, width / 2, 20, 0xffffffff);
 		graphics.centeredText(font, Component.translatable("screen.mmm.thermal_reservoir.position",
-				summary.blockX(), summary.blockY(), summary.blockZ()), width / 2, 42, 0xd8d8d8);
+				summary.blockX(), summary.blockY(), summary.blockZ()), width / 2, 42, 0xffd8d8d8);
 		graphics.centeredText(font, Component.translatable("screen.mmm.thermal_reservoir.current",
-				summary.temperatureValid() ? decimal(summary.temperatureK()) : "INVALID"), width / 2, 56, 0xd8d8d8);
+				summary.temperatureValid() ? decimal(summary.temperatureK()) : "INVALID"), width / 2, 56, 0xffd8d8d8);
 		graphics.centeredText(font, Component.translatable("screen.mmm.thermal_reservoir.range",
 				decimal(summary.minimumTemperatureK()), decimal(summary.maximumTemperatureK())),
-				width / 2, 70, 0xa0a0a0);
+				width / 2, 70, 0xffa0a0a0);
 		graphics.centeredText(font, Component.translatable("screen.mmm.thermal_reservoir.note"),
-				width / 2, 148, 0x909090);
+				width / 2, 148, 0xff909090);
 	}
 
 	private static String decimal(double value) {

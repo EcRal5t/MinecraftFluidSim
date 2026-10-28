@@ -58,10 +58,10 @@ final class MinecraftDebugScaffolding {
 		if (dimension != null) throw new IllegalStateException("上一个演示脚手架尚未恢复");
 		dimension = level.dimension();
 		BlockState glass = Blocks.GLASS.defaultBlockState();
-		for (int by = 0; by < MinecraftDebugFixtures.BLOCK_SIZE_Y; by++) {
-			for (int bz = 0; bz < MinecraftDebugFixtures.BLOCK_SIZE_Z; bz++) {
-				for (int bx = 0; bx < MinecraftDebugFixtures.BLOCK_SIZE_X; bx++) {
-					if (!isScaffoldBlock(bx, by, bz)) continue;
+		for (int by = 0; by < DemoSceneLayout.AIR_SIZE_Y; by++) {
+			for (int bz = 0; bz < DemoSceneLayout.AIR_SIZE_Z; bz++) {
+				for (int bx = 0; bx < DemoSceneLayout.AIR_SIZE_X; bx++) {
+					if (!DemoSceneLayout.isAirBlock(bx, by, bz)) continue;
 					BlockPos position = origin.offset(bx, by, bz);
 					BlockState previous = level.getBlockState(position);
 					if (previous.isAir() && level.setBlock(position, glass, Block.UPDATE_ALL)) {
@@ -128,11 +128,4 @@ final class MinecraftDebugScaffolding {
 		}
 	}
 
-	static boolean isScaffoldBlock(int bx, int by, int bz) {
-		boolean shell = bx == 0 || bx == MinecraftDebugFixtures.BLOCK_SIZE_X - 1
-				|| bz == 0 || bz == MinecraftDebugFixtures.BLOCK_SIZE_Z - 1 || by == 0;
-		boolean roof = by == MinecraftDebugFixtures.BLOCK_SIZE_Y - 1 && bx <= 6;
-		boolean divider = bx == 6 && by >= 3;
-		return shell || roof || divider;
-	}
 }

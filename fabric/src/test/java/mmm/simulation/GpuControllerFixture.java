@@ -156,8 +156,8 @@ final class GpuControllerFixture {
 
     void pour() throws IOException {
         ItemStack water = new ItemStack(Items.WATER_BUCKET);
-        world.attachDebugLiquidThermalContents(water);
         transfer(water);
+        if (!actor.current.is(Items.BUCKET)) throw new IllegalStateException("vanilla water bucket did not become an empty bucket");
         if (region.domain().unitScale().cubicMeters(region.domain().totalVolumeExact()) <= 0)
             throw new IllegalStateException("controller pour did not publish liquid inventory");
         var function = new ThermalStateFunction(world.thermalRegistry());
@@ -171,9 +171,17 @@ final class GpuControllerFixture {
         }
     }
 
-    void scoop() throws IOException { transfer(new ItemStack(Items.BUCKET)); }
+    void scoop() throws IOException {
+        transfer(new ItemStack(Items.BUCKET), true);
+        if (ContainerItemStacks.thermalContents(actor.current) == null)
+            throw new IllegalStateException("scooped water did not retain its temperature");
+    }
 
     private void transfer(ItemStack before) throws IOException {
+        transfer(before, false);
+    }
+
+    private void transfer(ItemStack before, boolean creative) throws IOException {
         var domain = region.domain();
         System.out.printf("stage=controller-container-input kind=%s cell=%d,%d,%d pending_phase=%s near_water=%.9g eligible_water=%.9g total_liquid=%.9g%n",
                 before.getItem(), portCell[0], portCell[1], portCell[2], domain.hasPendingPhaseMotionWork(),
@@ -181,13 +189,19 @@ final class GpuControllerFixture {
                 domain.containerExtractableVolumeNear(portCell[0], portCell[1], portCell[2], 6, 0), domain.totalVolumeExact());
         actor.current = before.copy();
         actor.persist();
-        var resolution = MinecraftContainerTransferPlan.resolve(transactions, world, region, portCell, before, false);
+        var resolution = MinecraftContainerTransferPlan.resolve(transactions, world, region, portCell, before, creative);
         if (!resolution.resolved()) throw new IllegalStateException("controller container plan: " + resolution.diagnostic());
         var result = resolution.plan().executeManagedForRegion(actor.identity, before);
         if (result.outcome() == null || !result.outcome().transferred())
             throw new IllegalStateException("controller container commit: " + (result.outcome() == null ? "no outcome" : result.outcome().message()));
         if (result.transactionId() == null || !journal.discover().transactions().contains(result.transactionId()))
             throw new IllegalStateException("controller container WAL was not retained until actor persistence");
+        if (before.is(Items.WATER_BUCKET) && ContainerItemStacks.thermalContents(before) == null) {
+            var saved = journal.read(result.transactionId());
+            if (!saved.beforeItem().equals(ContainerItemMapper.fingerprint(before)) || saved.thermalTransfer() == null
+                    || saved.sourceItem().thermalContents() == null || saved.beforeItem().thermalContents() != null)
+                throw new IllegalStateException("vanilla bucket WAL lost its actual item or initial thermal energy");
+        }
         actor.current = result.outcome().stack().copy();
         transactions.completeCommitted(result.transactionId());
         if (recovery.hasPending(region.id()) || journal.discover().transactions().contains(result.transactionId()))

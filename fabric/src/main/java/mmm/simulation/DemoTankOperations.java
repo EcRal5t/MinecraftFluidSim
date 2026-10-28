@@ -56,8 +56,8 @@ final class DemoTankOperations {
         error = recipeCapabilityFailure(recipe);
         if (error != null) return error;
         if (!availability.ensureForInventoryDecrease(level, region)) return region.availabilityFailure();
-        int[] port = recipe == Recipe.WATER ? null : portCell(level, region);
-        if (recipe != Recipe.WATER && port == null) return "演示接口未连接到当前区域";
+        int[] port = portCell(level, region);
+        if (port == null) return "演示接口未连接到当前区域";
         try {
             region.setPaused(true);
             if (!phaseWork.settle(level, region)) return "无法结算待处理的相变运动";
@@ -107,11 +107,16 @@ final class DemoTankOperations {
 
     private static void populate(CommittedWorldRegistries world, FluidRegion candidate, Recipe recipe, int[] port,
             long reagentQuanta) {
-        if (recipe == null || recipe != Recipe.WATER && (port == null || port.length != 3))
+        if (recipe == null || port == null || port.length != 3)
             throw new IllegalArgumentException("演示配方或接口缺失");
         FluidDomain domain = candidate.domain();
         restoreAmbientGas(world, domain);
-        if (recipe == Recipe.WATER) return;
+        if (recipe == Recipe.WATER) {
+            int material = domain.hasMaterialState() ? domain.materialRegistry().handle("mmm:water") : 0;
+            for (int bucket = 0; bucket < 2; bucket++) requireFull(MinecraftContainerTransferOperations.pourIntoCell(
+                    world, candidate, port, ContainerFluidLedger.NANOS_PER_BLOCK, 6, material, true, null));
+            return;
+        }
         int[] far = {candidate.sizeX() - 1 - port[0], port[1], candidate.sizeZ() - 1 - port[2]};
         if (recipe == Recipe.OIL_WATER) {
             var oil = new FluidMixture(List.of(new FluidMixture.Component("mmm:oil",

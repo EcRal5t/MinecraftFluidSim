@@ -23,6 +23,7 @@ public final class GpuProductionDemoValidation {
 	private static PhysicalObservation lastOutcome;
 	private static MassBaseline massBaseline;
 	private static double bulkWaterTemperatureK;
+	private static double bulkGasTemperatureK, hottestGasTemperatureK, hottestGasMassFraction;
 	private static long reactionWaterQuanta;
 	private static FluidRegionOperations phaseRestoreOperations;
 	private static FluidDomain phaseRestoreCandidate;
@@ -84,13 +85,14 @@ public final class GpuProductionDemoValidation {
 			return;
 		}
 		var domain = scenario.startsWith("tension") ? FluidRegionFactory.createTensionDomain()
-				: isAirScenario(scenario) ? FluidRegionFactory.createDebugDomain()
+				: isAirScenario(scenario) ? FluidRegionFactory.createAirDomain()
 				: scenario.equals("flow") ? FluidRegionFactory.createDomain(DemoSceneLayout.FLOW_SIZE_X,
 						DemoSceneLayout.FLOW_SIZE_Y, DemoSceneLayout.FLOW_SIZE_Z)
 				: FluidRegionFactory.createDomain(MinecraftDebugFixtures.BLOCK_SIZE_X,
 						MinecraftDebugFixtures.BLOCK_SIZE_Y, MinecraftDebugFixtures.BLOCK_SIZE_Z);
 		var region = new FluidRegion(UUID.randomUUID(), ResourceKey.create(Registries.DIMENSION,
 				Identifier.fromNamespaceAndPath("mmm", "gpu_demo_validation")), BlockPos.ZERO, domain);
+		if (isAirScenario(scenario)) region.setEntityPhysicsEnabled(false);
 		require(manager.addAndSelect(region).accepted(), "Demo region admission failed");
 		System.out.println("stage=collision-input scenario=" + scenario);
 		captureCollisions(region, scenario);
@@ -110,6 +112,8 @@ public final class GpuProductionDemoValidation {
 			if (scenario.equals("chemistry")) DebugScenarioInitialization.assignChemistry(domain);
 		}
 		require(domain.totalVolumeExact() > 0, "Scenario contains no liquid");
+		if (isAirScenario(scenario)) require(domain.totalVolumeExact() == 56.0,
+				"U-tube initial liquid inventory differs from its shared scaffold");
 		if (Set.of("demo", "material", "chemistry").contains(scenario))
 			require(domain.totalVolumeExact() == 2592.0, "Dam-break inventory differs from empty-world command");
 		long initialMass = domain.totalMassUnits();
@@ -141,6 +145,9 @@ public final class GpuProductionDemoValidation {
 				};
 				int node = DebugScenarioInitialization.presetAirPressure(editable, pressurePreset);
 				require(node > 0, "Air scaffold does not have a sealed left chamber");
+				var initialLevel = measure(editable.captureAuthoritativeState(), scenario);
+				require(Math.abs(initialLevel.leftHeight() - initialLevel.rightHeight()) < 0.05,
+						"U-tube initial liquid levels differ");
 				double pressure = gas.nodeGaugePressurePa(node);
 				require(scenario.equals("vacuum") ? pressure < 0 : scenario.equals("air") ? pressure > 0
 						: Math.abs(pressure) < 5000, "Gas preset has wrong pressure direction");
@@ -327,12 +334,13 @@ public final class GpuProductionDemoValidation {
 				var current = region.domain().captureAuthoritativeState();
 				long mass = region.domain().totalMassUnits();
 				if (recipe == DemoTankOperations.Recipe.WATER) {
-					require(mass == 0, "Empty tank recipe retained liquid");
+					require(mass == mmm.units.Mass.fromKilograms(2000)
+							&& Math.abs(region.domain().unitScale().cubicMeters(region.domain().totalVolumeExact()) - 2.0) < 1e-6,
+							"Water demo did not insert two buckets");
 					var gas = region.domain().gasBoundary();
-					require(!gas.nodeIds().isEmpty(), "Empty tank lost its finite air chamber");
-					for (int node : gas.nodeIds()) require(Math.abs(gas.nodeGaugePressurePa(node)) < 5000
-							&& Math.abs(region.domain().gasNodeTemperatureK(node) - 293.15) < 1.0,
-							"Empty tank did not restore ambient air");
+					require(!gas.nodeIds().isEmpty(), "Water demo lost its finite air chamber");
+					require(gas.nodeIds().stream().anyMatch(node -> gas.standardVolumeNanos(node) > 0),
+							"Water demo lost its air inventory");
 				} else {
 					double expectedVolume = recipe == DemoTankOperations.Recipe.OIL_WATER ? 4.0 : 2.0;
 					require(Math.abs(region.domain().unitScale().cubicMeters(region.domain().totalVolumeExact()) - expectedVolume) < 1e-6,
@@ -360,6 +368,8 @@ public final class GpuProductionDemoValidation {
 					var after = measure(capture.exportState(), "chemistry");
 					System.out.printf("stage=tank-physical recipe=%s before=%s after=%s reaction_water=%d water_temperature_k=%.6f%n",
 							recipe, before, after, reactionWaterQuanta, bulkWaterTemperatureK);
+					if (steps >= 12 && recipe == DemoTankOperations.Recipe.WATER)
+						require(after.waterY() < before.waterY(), "Water demo did not flow from its initial elevated state");
 					if (steps >= 12 && recipe == DemoTankOperations.Recipe.OIL_WATER)
 						require(after.oilY() > after.waterY() && after.waterY() < before.waterY(),
 								"Oil and water did not settle into visible layers");
@@ -386,14 +396,14 @@ public final class GpuProductionDemoValidation {
 						"Phase restoration replay never reached pending phase motion");
 				motion.settlePendingPhaseWork(region);
 				commitTankCandidate(operations, region, DemoTankOperations.prepareCandidate(
-						world, region, DemoTankOperations.Recipe.WATER, null));
+						world, region, DemoTankOperations.Recipe.WATER, fixture.portCell));
 				var cleared = baselineMass(region.domain().captureAuthoritativeState());
-				require(cleared.liquid() == 0 && cleared.granular() == 0 && cleared.coherent() == 0,
-						"Reset left liquid or precipitate in the tank");
+				require(cleared.liquid() == mmm.units.Mass.fromKilograms(2000) && cleared.granular() == 0 && cleared.coherent() == 0,
+						"Water reset lost its buckets or retained precipitate");
 				massBaseline = cleared;
 				prepareAvailability(region);
-				require(motion.step(region, List.of()).accepted(), "Empty reset after precipitation rejected");
-				checkResident(region, snapshots, 0, "tank", "precipitate-reset-motion");
+				require(motion.step(region, List.of()).accepted(), "Water reset after precipitation rejected");
+				checkResident(region, snapshots, mmm.units.Mass.fromKilograms(2000), "tank", "precipitate-reset-motion");
 			}
 			region.domain();
 		}
@@ -562,7 +572,7 @@ public final class GpuProductionDemoValidation {
 		long validationStarted = System.nanoTime();
 		require(region.deviceResident(), stage + ": adopted state is not resident on the GPU");
 		var summary = region.inventorySummary();
-		long massDelta = checkChangedMass(region, summary, stage);
+		long massDelta = checkChangedMass(region, summary, scenario, stage);
 		require(region.thermalAuditClosed(), stage + ": thermal audit did not close");
 		checkScenario(region, scenario, false);
 		snapshots.createDispatch(region);
@@ -571,6 +581,8 @@ public final class GpuProductionDemoValidation {
 		System.out.printf("stage=%s generation=%d liquid_mass=%d total_mass_delta=%d water_temperature_k=%.6f max_speed=%.6g resident=%s validation_scope_ms=%.3f%n",
 				stage, region.solverGeneration(), summary.liquidMassUnits(), massDelta, bulkWaterTemperatureK, region.maximumSpeed(),
 				region.deviceResident(), (System.nanoTime() - validationStarted) / 1e6);
+		if (isAirScenario(scenario)) System.out.printf("stage=gas-temperature bulk_k=%.6f hottest_k=%.6f hottest_mass_fraction=%.9g%n",
+				bulkGasTemperatureK, hottestGasTemperatureK, hottestGasMassFraction);
 	}
 
 	private record MassBaseline(long liquid, long gas, long granular, long coherent,
@@ -653,7 +665,7 @@ public final class GpuProductionDemoValidation {
 		System.out.printf("stage=pending-phase-capture maximum_excess=%.12g%n", maximumExcess);
 	}
 
-	private static long checkChangedMass(FluidRegion region, mmm.fluid.ResidentFluidState.InventorySummary current, String stage) {
+	private static long checkChangedMass(FluidRegion region, mmm.fluid.ResidentFluidState.InventorySummary current, String scenario, String stage) {
 		var before = massBaseline;
 		long liquidDelta = current.liquidMassUnits() - before.liquid();
 		long gasDelta = current.gasMassUnits() - before.gas();
@@ -667,6 +679,7 @@ public final class GpuProductionDemoValidation {
 			throw failure;
 		}
 		checkBulkWaterTemperature(state, stage);
+		if (isAirScenario(scenario)) checkBulkGasTemperature(state, stage);
 		preparePhaseRestoreReplay(state);
 		var afterGas = state.gas();
 		var beforeGas = before.gasState();
@@ -740,6 +753,25 @@ public final class GpuProductionDemoValidation {
 				stage + ": room-temperature water underwent unforced bulk heating/cooling: " + bulkWaterTemperatureK + " K");
 	}
 
+	private static void checkBulkGasTemperature(mmm.fluid.FluidDomainState state, String stage) {
+		var nodes=state.gas().nodes();
+		var energies=state.thermalOwner().copyGasNodeEnergy();
+		require(nodes.size()==energies.length, stage+": gas inventory and thermal nodes differ");
+		var model=new mmm.thermal.GasThermalModel(state.thermalRegistry(),state.gasRegistry());
+		double total=0, moment=0, hottest=0, hottestMass=0;
+		for(int i=0;i<nodes.size();i++) {
+			var inventory=nodes.get(i).inventory();double mass=inventory.totalMass();
+			if(mass<=0)continue;
+			double temperature=model.state(inventory,energies[i]).temperatureK();
+			total+=mass;moment+=mass*temperature;
+			if(temperature>hottest){hottest=temperature;hottestMass=mass;}
+		}
+		require(total>0,stage+": U-tube has no finite gas inventory");
+		bulkGasTemperatureK=moment/total;hottestGasTemperatureK=hottest;hottestGasMassFraction=hottestMass/total;
+		require(bulkGasTemperatureK>=270&&bulkGasTemperatureK<=350,
+				stage+": room-temperature U-tube gas underwent bulk heating/cooling: "+bulkGasTemperatureK+" K");
+	}
+
 	private static java.util.Map<String, Long> elementTotals(mmm.chemistry.ChemicalRegistry registry,
 			java.util.Map<String, Long> species) {
 		if (registry == null) throw new IllegalStateException("Element audit requires the chemical registry");
@@ -787,7 +819,7 @@ public final class GpuProductionDemoValidation {
 		int solid = 0;
 		for (int z = 0; z < sz; z++) for (int y = 0; y < sy; y++) for (int x = 0; x < sx; x++) {
 			boolean glass = switch (scenario) {
-				case "air", "ambient", "vacuum" -> MinecraftDebugScaffolding.isScaffoldBlock(x / cellsPerBlock, y / cellsPerBlock, z / cellsPerBlock);
+				case "air", "ambient", "vacuum" -> DemoSceneLayout.isAirBlock(x / cellsPerBlock, y / cellsPerBlock, z / cellsPerBlock);
 				case "flow" -> DemoSceneLayout.isFlowBlock(x / cellsPerBlock, y / cellsPerBlock, z / cellsPerBlock);
 				case "tension", "tension30", "tension120" -> y / cellsPerBlock == 0;
 				default -> false;
@@ -812,7 +844,7 @@ public final class GpuProductionDemoValidation {
 	private static void checkScenario(FluidRegion region, String scenario, boolean initial) {
 		int x = scenario.startsWith("tension") ? 11 : isAirScenario(scenario) ? 4 : scenario.equals("flow") ? 2 : 1;
 		int y = scenario.startsWith("tension") || isAirScenario(scenario) || scenario.equals("flow") ? 2 : 1;
-		int z = scenario.startsWith("tension") ? 11 : isAirScenario(scenario) ? 4 : scenario.equals("flow") ? 2 : 1;
+		int z = scenario.startsWith("tension") ? 11 : isAirScenario(scenario) ? 2 : scenario.equals("flow") ? 2 : 1;
 		var first = region.observeCellInventory(x, y, z);
 		if (initial) require(first != null && first.liquidVolumeCubicMetres() > 0, "Scenario liquid observation is empty");
 		if (initial && scenario.equals("material")) {
@@ -903,10 +935,10 @@ public final class GpuProductionDemoValidation {
 			case "tension30", "tension120" -> require(end.wetArea() > 0, "Water no longer contacts the wetting floor");
 			case "air", "vacuum" -> {
 				double change = (end.rightHeight() - end.leftHeight()) - (initial.rightHeight() - initial.leftHeight());
-				require(scenario.equals("vacuum") ? change < 0 : change > 0,
+				require(scenario.equals("vacuum") ? change < -0.1 : change > 0.1,
 						"Gas pressure did not move the liquid levels in the expected direction");
 			}
-			case "ambient" -> require(Math.abs(end.rightHeight() - end.leftHeight()) < 1.0,
+			case "ambient" -> require(Math.abs(end.rightHeight() - end.leftHeight()) < 0.3,
 					"Ambient chamber did not keep the two water levels close");
 			default -> throw new IllegalArgumentException("Unknown scenario " + scenario);
 		}

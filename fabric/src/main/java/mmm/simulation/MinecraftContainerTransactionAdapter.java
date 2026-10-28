@@ -119,10 +119,16 @@ final class MinecraftContainerTransactionAdapter {
 	}
 
 	Result executePublic(UUID operationId,FluidRegion region,ServerLevel level,ContainerTransferActor actor,
-			ItemStack beforeStack,ContainerTransferJournal.Operation operation,
+			ItemStack beforeStack,ItemStack sourceStack,ContainerTransferJournal.Operation operation,
 			ContainerTransferJournal.ResourceKind kind,long requested,long base,TransferExecutor executor) {
-		return execute(region,level,actor,beforeStack,beforeStack,operation,kind,requested,base,executor,
+		return execute(region,level,actor,beforeStack,sourceStack,operation,kind,requested,base,executor,
 				(raw,before)->raw,operationId);
+	}
+	Result executeResolvedSource(FluidRegion region, ServerLevel level, ContainerTransferActor actor,
+			ItemStack beforeStack, ItemStack sourceStack, ContainerTransferJournal.Operation operation,
+			ContainerTransferJournal.ResourceKind kind, long requested, long base, TransferExecutor executor,
+			FinalItemResolver finalItemResolver) {
+		return execute(region, level, actor, beforeStack, sourceStack, operation, kind, requested, base, executor, finalItemResolver);
 	}
 	private Result execute(FluidRegion region,ServerLevel level,ContainerTransferActor actor,
 			ItemStack beforeStack,ItemStack sourceStack,ContainerTransferJournal.Operation operation,

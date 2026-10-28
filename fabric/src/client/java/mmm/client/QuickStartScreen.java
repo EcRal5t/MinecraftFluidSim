@@ -49,15 +49,15 @@ final class QuickStartScreen extends Screen {
 	@Override
 	public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
 		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
-		graphics.centeredText(font, title, width / 2, 14, 0xffffff);
+		graphics.centeredText(font, title, width / 2, 14, 0xffffffff);
 		graphics.centeredText(font, Component.translatable("screen.mmm.quick_start.page", page + 1,
-				STEP_COUNT / STEPS_PER_PAGE), width / 2, 27, 0x9a9a9a);
+				STEP_COUNT / STEPS_PER_PAGE), width / 2, 27, 0xff9a9a9a);
 		List<FormattedCharSequence> lines = lines();
 		int visible = visibleLines();
 		scroll = Math.min(scroll, Math.max(0, lines.size() - visible));
 		for (int i = scroll; i < Math.min(lines.size(), scroll + visible); i++)
-			graphics.text(font, lines.get(i), 16, 44 + (i - scroll) * 11, 0xd8d8d8, false);
-		if (scroll + visible < lines.size()) graphics.text(font, "↓", width - 18, height - 44, 0xa0a0a0, false);
+			graphics.text(font, lines.get(i), 16, 44 + (i - scroll) * 11, 0xffd8d8d8, false);
+		if (scroll + visible < lines.size()) graphics.text(font, "↓", width - 18, height - 44, 0xffa0a0a0, false);
 	}
 
 	private List<FormattedCharSequence> lines() {

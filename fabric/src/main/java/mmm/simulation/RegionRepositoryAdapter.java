@@ -67,9 +67,8 @@ final class RegionRepositoryAdapter {
 			int maximumThermalSubsteps, MaterialRegistry materialDefinitions
 	) {
 		Objects.requireNonNull(profile, "profile");
-		Objects.requireNonNull(materialDefinitions, "materialDefinitions");
 		if (profile.hasCapability(WorldCapability.MATERIALS)
-				&& !profile.registryFingerprints().material().equals(materialDefinitions.fingerprint())) {
+				&& (materialDefinitions == null || !profile.registryFingerprints().material().equals(materialDefinitions.fingerprint()))) {
 			throw new IllegalArgumentException("Material definitions differ from the committed world profile");
 		}
 		requireRegistry(profile, WorldCapability.CHEMISTRY, chemicalRegistry);
@@ -95,7 +94,7 @@ final class RegionRepositoryAdapter {
 		this.granularRegistry = granularRegistry;
 		this.thermalRegistry = thermalRegistry;
 		this.gasRegistry = gasRegistry;
-		this.materialDefinitions = Objects.requireNonNull(materialDefinitions, "materialDefinitions");
+		this.materialDefinitions = materialDefinitions;
 		if (maximumThermalSubsteps <= 0
 				|| maximumThermalSubsteps > ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS) {
 			throw new IllegalArgumentException("Thermal transport substep budget is invalid");

@@ -27,8 +27,10 @@ final class FluidDisplayScreen extends Screen {
 		int column = Math.min(96, Math.max(1, (width - 36) / 3));
 		int left = (width - (3 * column + 12)) / 2;
 		for (FluidDisplaySettings.Mode mode : FluidDisplaySettings.Mode.values()) {
-			addRenderableWidget(Button.builder(modeName(mode), button -> {
+			Component name = mode == view.mode() ? Component.literal("• ").append(modeName(mode)) : modeName(mode);
+			addRenderableWidget(Button.builder(name, button -> {
 				FluidDisplaySettings.INSTANCE.setMode(mode);
+				rebuildWidgets();
 			}).bounds(left + mode.ordinal() * (column + 6), 46, column, 20).build());
 		}
 		minimum = new EditBox(font, left, 104, column, 20, Component.translatable("screen.mmm.display.minimum"));
@@ -48,7 +50,12 @@ final class FluidDisplayScreen extends Screen {
 	}
 
 	private void updateApply() {
-		if (apply != null) apply.active = FluidDisplaySettings.validRange(number(minimum), number(maximum));
+		if (apply == null) return;
+		boolean temperature = FluidDisplaySettings.INSTANCE.view().mode() == FluidDisplaySettings.Mode.TEMPERATURE;
+		minimum.visible = maximum.visible = apply.visible = temperature;
+		minimum.active = maximum.active = temperature;
+		apply.active = temperature && FluidDisplaySettings.validRange(number(minimum), number(maximum));
+		if (!temperature && (getFocused() == minimum || getFocused() == maximum)) setFocused(null);
 	}
 	private static double number(EditBox field) {
 		try { return Double.parseDouble(field.getValue()); }
@@ -63,15 +70,16 @@ final class FluidDisplayScreen extends Screen {
 	@Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
 		super.extractRenderState(graphics, mouseX, mouseY, partialTick);
 		FluidDisplaySettings.View view = FluidDisplaySettings.INSTANCE.view();
-		graphics.centeredText(font, title, width / 2, 12, 0xffffff);
-		graphics.centeredText(font, Component.translatable("screen.mmm.display.current", modeName(view.mode())), width / 2, 30, 0xffffff);
-		graphics.centeredText(font, Component.translatable("screen.mmm.display.range"), width / 2, 90, 0xd8d8d8);
+		graphics.centeredText(font, title, width / 2, 12, 0xffffffff);
+		if (view.mode() == FluidDisplaySettings.Mode.TEMPERATURE)
+			graphics.centeredText(font, Component.translatable("screen.mmm.display.range"), width / 2, 90, 0xffd8d8d8);
 		Component legend = switch (view.mode()) {
 			case COMPOSITION -> Component.translatable("screen.mmm.display.legend.composition");
 			case PH -> Component.translatable("screen.mmm.display.legend.ph");
 			case TEMPERATURE -> Component.translatable("screen.mmm.display.legend.temperature", view.minimumK(), view.maximumK());
 		};
-		graphics.centeredText(font, legend, width / 2, 138, 0xd8d8d8);
+		int legendY = view.mode() == FluidDisplaySettings.Mode.TEMPERATURE ? 138 : 90;
+		graphics.centeredText(font, legend, width / 2, legendY, 0xffd8d8d8);
 		if (view.mode() != FluidDisplaySettings.Mode.COMPOSITION) {
 			int gradientWidth = Math.min(224, Math.max(1, width - 32));
 			int left = (width - gradientWidth) / 2;
@@ -79,14 +87,9 @@ final class FluidDisplayScreen extends Screen {
 				double fraction = gradientWidth == 1 ? 0 : i / (double) (gradientWidth - 1);
 				int argb = view.mode() == FluidDisplaySettings.Mode.PH
 						? FluidColorMapping.phColor(fraction * 14.0) : FluidColorMapping.temperatureColor(fraction);
-				graphics.fill(left + i, 154, left + i + 1, 164, argb);
+				graphics.fill(left + i, legendY + 16, left + i + 1, legendY + 26, argb);
 			}
-			graphics.centeredText(font, Component.translatable("screen.mmm.display.no_data"), width / 2, 174, FluidColorMapping.NO_DATA);
-		}
-		int noteY = height - 58;
-		for (var line : font.split(Component.translatable("screen.mmm.display.local"), Math.max(1, width - 32))) {
-			graphics.text(font, line, 16, noteY, 0xa0a0a0, false);
-			noteY += 11;
+			graphics.centeredText(font, Component.translatable("screen.mmm.display.no_data"), width / 2, legendY + 36, FluidColorMapping.NO_DATA);
 		}
 	}
 }

@@ -225,8 +225,8 @@ public final class DemoInteractionValidation {
 		}
 		public void createTransient(BlockPos origin, DemoPreset preset) {
 			if (failTransient) throw new IllegalStateException("world occupied");
-			int sx = preset == DemoPreset.FLOW ? DemoSceneLayout.FLOW_SIZE_X : MinecraftDebugFixtures.BLOCK_SIZE_X;
-			int sz = preset == DemoPreset.FLOW ? DemoSceneLayout.FLOW_SIZE_Z : MinecraftDebugFixtures.BLOCK_SIZE_Z;
+			int sx = preset == DemoPreset.FLOW ? DemoSceneLayout.FLOW_SIZE_X : DemoSceneLayout.AIR_SIZE_X;
+			int sz = preset == DemoPreset.FLOW ? DemoSceneLayout.FLOW_SIZE_Z : DemoSceneLayout.AIR_SIZE_Z;
 			lastAnchor = origin.offset(sx / 2, 0, sz / 2).relative(facing().getOpposite(), 9);
 			var selected = manager.selected();
 			var region = new FluidRegion(UUID.randomUUID(), key(), origin, domain());

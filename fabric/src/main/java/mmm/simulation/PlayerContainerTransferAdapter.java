@@ -79,7 +79,10 @@ public final class PlayerContainerTransferAdapter {
 				: hit != null && MmmBlocks.isBoundary(level.getBlockState(hit.getBlockPos()))
 						? targets.transferTargetAtBlock(level, hit.getBlockPos(), hit.getDirection().getOpposite()) : null;
 		boolean shellHit = hit != null && MmmBlocks.isBoundary(level.getBlockState(hit.getBlockPos()));
-		if (shellHit && target == null) return InteractionResult.FAIL;
+		if (shellHit && target == null) {
+			message(player, "请对准蓝色接口的外侧面使用桶");
+			return InteractionResult.FAIL;
+		}
 		FluidRegion region = target != null ? target.region() : pouring ? null : targets.aimedRegion(player);
 		if (region == null || !region.solverLoaded()) return null;
 		if (held.getCount() != 1) {
@@ -115,7 +118,7 @@ public final class PlayerContainerTransferAdapter {
 			attempt = new Attempt(transaction.outcome(), transaction.transactionId());
 		} else {
 			MinecraftContainerTransferOperations.TransferOutcome outcome = plan.executeUnmanaged();
-			if (outcome != null && outcome.transferred() && player.hasInfiniteMaterials()) {
+			if (outcome != null && outcome.transferred() && player.hasInfiniteMaterials() && pouring) {
 				outcome = new MinecraftContainerTransferOperations.TransferOutcome(
 						true, plan.filled(), held.copy(), outcome.message(), outcome.resourceAmount(),
 						outcome.thermalEnergy());

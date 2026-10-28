@@ -62,7 +62,7 @@ public final class WorldCapabilityBundleStore {
 	 * an unknown entry and locks the world rather than being adopted or migrated.
 	 */
 	private static final Set<String> AUTHORITY_ROOTS = Set.of(
-			"container-transfer", "ownership", "region-state");
+			"container-transfer", "ownership", "region-state", "demo-workbench.nbt", "demo-workbench.nbt.tmp");
 	/** Domains this store may create or read without proving authority. */
 	private static final Set<String> NON_AUTHORITY_ROOTS = Set.of(
 			"quarantine", POLICY_FILE, "world-capabilities");
@@ -161,7 +161,8 @@ public final class WorldCapabilityBundleStore {
 		}
 		for (String name : entries) {
 			Path entry = mmmDirectory.resolve(name);
-			if (name.equals(POLICY_FILE)) requireRegularFile(entry, "MMM policy configuration");
+			if (name.equals(POLICY_FILE) || name.equals("demo-workbench.nbt") || name.equals("demo-workbench.nbt.tmp"))
+				requireRegularFile(entry, "MMM persistence file " + name);
 			else requireDirectory(entry, "MMM persistence domain " + name);
 		}
 	}

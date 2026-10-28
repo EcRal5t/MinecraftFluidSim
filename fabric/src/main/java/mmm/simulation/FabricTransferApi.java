@@ -122,7 +122,7 @@ final class FabricTransferApi implements MmmTransferApi {
 			if(outcome.resourceAmount()>maximum) return result(TransferStatus.NOT_TRANSFERRED,"Container cannot settle the requested bounded amount");
 			var before=ContainerItemMapper.fingerprint(actor.item());
 			var after=ContainerItemMapper.fingerprint(world.bindActualContainerProfile(outcome.stack()));
-			var settlement=journal(request,actor,region,before,after,outcome);
+			var settlement=journal(request,actor,region,before,after,ContainerItemMapper.fingerprint(operation.sourceStack()),outcome);
 			var manifest=ContainerTransferManifests.from(settlement);
 			long tick=tick();plans.values().removeIf(value->value.view().expiresAtServerTick()<tick);
 			if(plans.size()>=128) return result(TransferStatus.UNAVAILABLE,"Public transfer plan budget is full");
@@ -155,7 +155,7 @@ final class FabricTransferApi implements MmmTransferApi {
 			if(recovery.hasPending(region.id(),durableActor)) return result(TransferStatus.PENDING,"Region or actor has a pending transaction");
 			new MinecraftContainerActorAdapter().persistAfterItem(server,durableActor);
 			store.prepare(request,actor.binding(),prepared.settlement());
-			var transaction=transactions.executePublic(request.operationId(),region,actor.level(),durableActor,actor.item().copy(),
+			var transaction=transactions.executePublic(request.operationId(),region,actor.level(),durableActor,actor.item().copy(),prepared.operations().sourceStack(),
 					prepared.settlement().operation(),prepared.settlement().resourceKind(),Math.min(amount(request.quantity()),prepared.operations().requestedAmount()),
 					prepared.operations().baseAmount(),(candidate,maximum,base)-> {
 						var actual=prepared.operations().executeExact(candidate,maximum,base);
@@ -248,6 +248,7 @@ final class FabricTransferApi implements MmmTransferApi {
 	}
 	private ContainerTransferJournal journal(TransferRequest request,Actor actor,FluidRegion region,
 			ContainerTransferJournal.ItemFingerprint before,ContainerTransferJournal.ItemFingerprint after,
+			ContainerTransferJournal.ItemFingerprint source,
 			MinecraftContainerTransferOperations.TransferOutcome outcome) {
 		var address=actor.binding().address();var kind=request.quantity() instanceof TransferQuantity.Granular?
 				ContainerTransferJournal.ResourceKind.GRANULAR_SVQ:ContainerTransferJournal.ResourceKind.FLUID_NANOS;
@@ -256,7 +257,7 @@ final class FabricTransferApi implements MmmTransferApi {
 				request.direction()==TransferRequest.Direction.INSERT?ContainerTransferJournal.Operation.INSERT:ContainerTransferJournal.Operation.EXTRACT,
 				kind,kind==ContainerTransferJournal.ResourceKind.FLUID_NANOS?outcome.resourceAmount():-1,kind==ContainerTransferJournal.ResourceKind.GRANULAR_SVQ?outcome.resourceAmount():-1,
 				outcome.thermalEnergy()==null?null:new ContainerTransferJournal.ThermalTransfer(world.thermalRegistryFingerprint(),outcome.thermalEnergy()),
-				external,before,after,0,ContainerTransferJournal.Phase.REGION_COMMITTED);
+				external,before,after,0,ContainerTransferJournal.Phase.REGION_COMMITTED,source);
 	}
 	private long tick() { return Integer.toUnsignedLong(server.getTickCount()); }
 	private static TransferResult result(TransferStatus status,String detail) { return new TransferResult(status,null,null,-1,detail==null||detail.isBlank()?status.name():detail); }
