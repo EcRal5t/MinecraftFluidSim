@@ -1,107 +1,72 @@
-# 修改后的验证
+# 验证指南
 
 先明确当前需要回答的问题与成本预期。
 有 95% 把握的改动跳过额外验证、校验和测试；物理主干改动按范围选择完整步生产预算，展示改动分别记录快照与客户端成本。
 有具体未知风险时，从下列入口选择能回答该问题的最小场景，复用同一次构建产物。
 
-## 演示面板与小场景
+<a id="gpu-演示完整流程"></a>
+## GPU 演示与场景验证
 
-2026-10-28，`/mmm demo`／`demos` 和快速入门手册统一进入演示面板。当前面板为水箱三配方、水流池、气压三预设。最终构建保留生产 Vulkan 后端；本轮未启动 Minecraft。
+演示重放入口为 Gradle 任务 `:fabric:runGpuProductionDemoValidation`，使用生产 Vulkan 后端、场景初始化、调度策略、快照恢复与库存事务。游戏内对应工作台交互命令 `/mmm demo` 与控制器命令 `/mmm controllerdemo`。
 
-`build/demo-workbench-final-build.log` 记录客户端编译、`protocol,lifecycle,boundary` 和组装成功。覆盖演示请求／回复、会话及代次、维度、实际不可用状态、持久水箱记录、四朝向壳体扫描与接口定位，以及现有生命周期清理流程。`build/demo-workbench-tank-final.log` 记录最终 GPU 产物重建、三配方连续回放和组装成功，其余回放复用该次 classpath。
+```powershell
+./gradlew.bat :fabric:runGpuProductionDemoValidation -PgpuDemo=<场景> -PgpuDemoSteps=<步数> --console=plain
+```
 
-| 场景 | 自动化结果 | 本地日志 |
-|---|---|---|
-| 水箱 `tank` | 同一控制器区域依次重置为空箱、油水、稀酸碱，各 120 步；室温常压复位、真实桶量、失败候选保留旧库存、checkpoint 连续推进。油质心 0.891 格高于水的 0.134 格；酸碱各消耗 398487 量子并生成等量水 | `build/demo-workbench-tank-final.log` |
-| 水流 `flow` | 120 步，池壁／障碍使用共享布局；玩家进入、移动、离开，水向空侧扩散；暂停、手动两步、恢复、编辑及再次推进 | `build/demo-workbench-flow-final.log` |
-| 常压 `ambient` | 120 步，两侧液位保持接近，完成状态操作及编辑后续算 | `build/demo-workbench-ambient-final.log` |
-| 加压 `air` | 120 步，加压侧下降、对侧上升，完成状态操作及编辑后续算 | `build/demo-workbench-air-final.log` |
-| 低压 `vacuum` | 120 步，低压侧上升、对侧下降，完成状态操作及编辑后续算 | `build/demo-workbench-vacuum-final.log` |
-| 小控制器 `controller` | 20 步，真实水桶注液、暂停、手动两步、舀出、WAL／checkpoint 和 GPU 续算 | `build/demo-workbench-controller-final.log` |
+### 演示选择器与场景参数
 
-所有回放逐步检查整数质量／元素收支、热账和展示快照。热运行完整应用步中位耗时：水箱 18.464 ms、水流 23.716 ms、常压 36.132 ms、加压 35.023 ms、低压 34.813 ms、控制器 18.307 ms；均未触发连续三步超 200 ms 暂停。这些是上述小场景的离线测量，64³／50 ms 仍按原性能输入单独评价。
+- `-PgpuDemo`：指定场景，支持 `tank`、`flow`、`ambient`、`air`、`vacuum`、`controller`、`precipitation`、`tension`、`demo`、`material`、`chemistry`、`capture`、`takeover`。
+- `-PgpuDemoSteps`：推进步数（省略时使用场景默认步数）。
+- `-PgpuDemoStage`：阶段选择器，默认 `complete`（包含物理推进、暂停、手动步进、导出恢复与编辑后续算）；可选 `initial`、`motion`、`scheduled` 用于故障分段定位。
 
-无游戏自动化调用生产场景初始化、调度和库存事务；实际屏幕绘制、鼠标命中、网络往返、世界脚手架清理及跨游戏重启仍需实机观察。必要时只用 `/mmm demo` 一处入口，依次选择场景、开始、暂停、单步、重置和移除；预期保持位置、按真实状态启用按钮、清除原样外壳，并在失败时显示具体原因。原控制台删除水箱后，工作台依靠持久删除记录重新建立场景。
+| 场景 (`gpuDemo`) | 步数 | 物理过程与验证要点 | 验收指标 |
+|---|---|---|---|
+| `tank` | 120 | 依次重置为空箱、油水、稀酸碱三种生产配方；室温常压复位与真实桶量事务 | 油水按密度分层，酸碱中和并生成水，质量守恒闭合 |
+| `flow` | 120 | 水向空侧扩散；实体进入、移动、离开及交互扰动 | 自由面平稳推进，实体受力反馈正确 |
+| `ambient` | 120 | 双侧连通水柱常压平衡 | 两侧液位保持接近，无自发单侧堆积 |
+| `air` | 120 | 气腔加压流动 | 加压侧液位下降、对侧上升，气液力平衡收敛 |
+| `vacuum` | 120 | 气腔抽真空流动 | 低压侧液位上升、对侧下降 |
+| `controller` | 20 | 真实水桶注液、舀出、WAL 与 checkpoint 导出及恢复 | 事务前后库存严格守恒，GPU 状态无损续算 |
+| `precipitation` | 500 | 高浓度酸碱中和反应、结晶析出、沉淀清空及待位移恢复 | 固液相变严格守恒，颗粒占容与排水正确，清空后连续续算 |
+| `tension` | 200 | 相同初态对比 30° 与 120° 润湿接触角液滴 | 30° 充分铺展，120° 保持收缩，接触面积符合预期 |
+| `demo` | 500 | 大型溃坝（24×16×24 空间，324 m³ 水量），实体进出扰动 | 水体坍塌铺展平稳，质心单调下降，水温保持稳定 |
+| `material` | 120 | 油水双相分层流动 | 密度差驱动自然分层，轻相稳定保持在重相上方 |
+| `chemistry` | 120 | 酸碱连续中和输运与反应热结算 | 反应物等摩尔消耗并生成水，反应热平稳扩散 |
+| `capture` | 40 | 采样世界水体并保留原方块 | 采样边界解析正确，支持后续状态操作 |
+| `takeover` | 40 | 接管 32 个水源方块并在完成后归还 | 动态世界方块状态无损接管与释放 |
+
+每个接受步检查四相整数质量与元素收支、热账、设备驻留及展示快照。环境交换单独记账，扣除环境交换后的系统质量差为零。调度沿用连续三步超过 200 ms 暂停的生产规则。
 
 <a id="高浓度析盐"></a>
 ### 高浓度析盐
 
-2026-10-28，`precipitation` 复用真实水箱和桶投料流程，酸碱各投入 1000 mol，检查实际生成固体。最终产物的 `build/precipitation-final-assembly500.log` 记录空箱、油水、高浓度酸碱各 500 步成功，随后完成暂停手动两步、checkpoint 恢复续算、清空沉淀及空箱续算，`assemble` 成功。每个接受步检查整数质量、元素、热账和设备驻留。酸碱各消耗 999111710 物种量子，并生成等量水，末态水温 300.505 K；整个流程质量差为零。
-
-1497 个热运行应用步的中位为 15.063 ms，P95 为 21.450 ms，最大 458.832 ms；有一次超过 200 ms，随后恢复，未触发连续三步超限的生产暂停。该成本属于小水箱，64³ 的性能结论继续使用原输入。
+高浓度析盐复用真实水箱与桶投料流程，酸碱各投料 1000 mol，验证固体颗粒析出与沉淀清空。
 
 ```powershell
 ./gradlew.bat :fabric:runGpuProductionDemoValidation -PgpuDemo=precipitation -PgpuDemoSteps=500 --console=plain --max-workers=1
 ```
 
-相变中间状态的专项恢复可复用同次构建的 classpath，额外加 Java 参数 `-Dmmm.demoPhaseRestore=true`，执行 `mmm.simulation.GpuProductionDemoValidation precipitation 120 complete`。测试捕捉实际 GPU 待位移状态，恢复到宿主、提交 checkpoint，再继续生产调度；未捕捉到该状态时直接报告未覆盖。解析尺度以内的体积余量由 `CarrierMutationValidation` 的明确输入覆盖，检查库存原量恢复及后续排水；真实场景按当次实际轨迹报告余量。基础面板酸碱配方继续使用稀溶液观察中和与 pH。
+- 核心流程：空箱、油水、高浓度酸碱各运行 500 步，包含暂停、手动单步、checkpoint 恢复续算、清空沉淀及后续空箱续算。
+- 相变待位移状态恢复：附加 Java 参数 `-Dmmm.demoPhaseRestore=true` 执行 `mmm.simulation.GpuProductionDemoValidation precipitation 120 complete`。在生成颗粒时捕捉 GPU 待位移状态并恢复至宿主，校验精确体积余量与接触约束。
+- 验收指标：每个接受步检查四相整数质量、物种摩尔数、元素收支及内能账闭合；沉淀析出与溶解体积交接正确，全程质量差为零。
 
-`build/precipitation-final-pending120.log` 在高浓度酸碱已经生成颗粒时捕捉待位移状态，完成 checkpoint 恢复和其后 120 步流程；本次捕捉时最大超容为零。`build/precipitation-pending-cpu-final.log` 的 `CarrierMutationValidation` 与 `GranularCarrierValidation` 覆盖精确体积余量、接触分辨率及 pending 床格的恢复约束。
+### 控制器交互与界面
 
-同次生产源码的 `build/precipitation-final-gpu-regressions.log` 通过固液反应、七种热相变／膜传质、常驻状态与实体 checkpoint 回归；`build/precipitation-final-flow120.log`、`build/precipitation-final-controller20.log` 分别通过水流池 120 步和控制器 20 步及真实桶事务。临时逐步诊断已删除。本轮继续采用无头执行，未启动 Minecraft。
+控制器交互覆盖空手激活、潜行切换、探针交互、运行与暂停、生命周期预览／取消／确认、温度源输入、清空／排气／释放／移除以及比较器关联。
 
-## GPU 演示完整流程
+- 自动化验证：
+  - `:fabric:compileClientJava` 校验客户端界面、协议代次匹配与请求响应生命周期。
+  - `:fabric:runGpuProductionDemoValidation -PgpuDemo=controller -PgpuDemoSteps=20` 覆盖生产注液、GPU 推进、手动步进、装取与 WAL/checkpoint 持久化。
+  - `ContainerTransferStoreValidation --rapid-pour` 覆盖 24 次连续注液后的持久清空、排气、恢复与重注液。
+- 实机观察：执行 `/mmm controllerdemo`，使用探针打开控制器，滚动摘要面板，测试暂停／继续与刷新，依次预览、取消及确认清空、排气与移除。操作回复与生命周期状态保持同步，关闭后不重新弹窗。
 
-2026-10-28，演示重放入口为 `:fabric:runGpuProductionDemoValidation`。使用生产 Vulkan provider、世界注册表、场景初始化、应用服务、调度策略、状态查询、快照、恢复和库存编辑。未启动 Minecraft 客户端或服务器；世界方块与区块可用性由离线端口提供。控制器使用实际壳体扫描、端口解析、ItemStack、容器事务、WAL 和 checkpoint；capture/takeover 使用真实采样与接管事务。
+### GPU 短链与单元验收
 
-```powershell
-./gradlew :fabric:runGpuProductionDemoValidation -PgpuDemo=chemistry -PgpuDemoSteps=120 --console=plain
-```
+生产 Vulkan 后端接入的短链单元验证任务：
 
-`gpuDemo` 接受 `flow`、`tank`、`precipitation`、`ambient`、`demo`、`material`、`chemistry`、`air`、`vacuum`、`tension`、`controller`、`capture`、`takeover`。`tank` 依次重置并运行三种生产水箱配方；`precipitation` 使用同一流程的高浓度析盐输入，追加固体生成、恢复和清空检查；`tension` 顺序运行相同初态的 30° 和 120° 液滴。其余场景的默认 `gpuDemoStage=complete` 包含物理结果、暂停／运行、手动步进、恢复和编辑后的续算；`initial`、`motion`、`scheduled` 供失败定位，分别仅覆盖对应前缀。`demo` 验证选择器保留原大型溃坝，对应游戏命令 `damdemo`；`material`／`chemistry` 保留原初始化的基线重放。
-
-每个接受步检查四相整数质量与元素收支、热账、设备驻留及展示快照。环境交换单独记账，日志的 `total_mass_delta` 是包含真实环境收支的库存变化；断言比较的是扣除这些收支后的质量差。大型溃坝保留原 24×16×24 全能力场景和 324 m³ 初始水量，并执行真人尺寸实体的进入、移动和离开。
-
-2026-10-28，RTX 5070 Ti 上的原场景基线结果如下。步数为调度推进次数，随后另有暂停、手动步进、导出恢复、编辑及续算。常温水场景逐步检查质量加权水温，捕获账本闭合但整体异常冷却的失真。
-
-| 场景 | 完整结果 | 本地日志 |
-|---|---|---|
-| `demo` | 500 步，实体进入／移动／离开；水向空侧扩散、重心下降，水温 293.154 K | `build/gpu-demo-build17.log` |
-| `material` | 120 步，油水均流动，油层保持在水层上方 | `build/gpu-material-final17.log` |
-| `chemistry` | 120 步，酸、碱消耗与生成水各为 754005632 物种量子，水温 292.980 K | `build/gpu-chemistry-final18.log` |
-| `air` | 120 步，加压侧液位下降，对侧上升 | `build/gpu-air-build18.log` |
-| `vacuum` | 120 步，低压侧液位上升，对侧下降 | `build/gpu-vacuum-final18.log` |
-| `tension` | 两种接触角各 200 步；30°／120° 的接触面积分别为 93.517／77.408 m²，低接触角更铺展 | `build/gpu-tension-final17.log` |
-| `controller` | 20 步及真实水桶注入、暂停手动推进、舀出、持久事务与续算 | `build/gpu-controller-final17.log` |
-| `capture` | 40 步，采样水体并保留世界水块，完成后续状态操作 | `build/gpu-capture-final17.log` |
-| `takeover` | 40 步，接管 32 个水源方块、恢复原坐标并释放接管 | `build/gpu-takeover-final17.log` |
-
-主水池 499 个热运行完整应用步的中位耗时为 64.662 ms，P95 为 88.447 ms，最大 146.017 ms；未触发耗时暂停。启动准备与首步导入单独记录。
-
-同次最终构建的设备驻留与七种热相变／膜传质验证通过，记录在 `build/gpu-air-build18.log`，`:fabric:assemble` 成功。容器参考能量与化学抽取聚焦回归分别见 `build/demo-container-temperature.log`、`build/demo-chemical-transfer.log`。静态架构检查仍有一项既有失败：`VulkanLiquidRegion` 1745 行超过 1000 行限制，见 `build/demo-architecture-final.log`。
-
-日志分别记录世界启动时的求解器准备、完整应用步 `offline_scope_ms` 与额外验收导出 `validation_scope_ms`。调度沿用连续三步超过 200 ms 暂停的生产规则。离线耗时未包含真实玩家网络投递、渲染和 Minecraft 世界采样成本；64³／50 ms 保留为待评估目标，本轮以完整流程及演示效果交付。
-
-构建后可复用 `fabric/build/gpu-production-demo-work/classpath.txt` 直接执行 `mmm.simulation.GpuProductionDemoValidation <场景> <步数> complete`。
-
-本机 NVIDIA 驱动缺少安装 INF 声明的 `VulkanDriverName`／`VulkanDriverNameWoW` 注册项，独立 `vulkaninfo` 同样无法发现设备。经用户授权补回两张卡的缺失项后，默认加载器可发现 RTX 5070 Ti 和 RTX 4060 Ti，记录在 `build/vulkan-driver-repair.log`；无需设置驱动路径环境变量。Mod 使用标准 Vulkan 驱动发现，启动失败时提示检查系统驱动。最终构建日志为 `build/gpu-final-assemble.log`。
-
-最终产物在未设置驱动覆盖变量的新进程中通过 `demo 20 complete`，包含实体进出、暂停手动步进、恢复与编辑后续算，日志为 `build/gpu-default-driver-final.log`。
-
-## 控制器界面与交互
-
-2026-10-28，审查覆盖空手激活／潜行切换、探针打开、选择、暂停／继续、刷新、显示设置、生命周期预览／取消／确认、温度源输入，以及容器和比较器关联入口。客户端按请求身份处理回复，实际 Minecraft 窗口未启动。
-
-- `:fabric:compileClientJava`、`protocol,lifecycle` 和 GPU `controller 20 complete` 通过，日志 `build/controller-interaction-validation.log`。覆盖生产摘要及令牌、运行／暂停、性能重试与数值故障保留，以及注液、GPU 推进、手动步进、装取、WAL 与 checkpoint。
-- 最终 `protocol,lifecycle` 和 `:fabric:assemble` 通过，日志 `build/controller-interaction-final.log`。响应协议检查主动打开、原请求代次、目标消失与预览关联；生命周期检查运行时阻止破坏操作、暂停后预览和恢复运行使旧预览失效。
-- 同次产物运行 `ContainerTransferStoreValidation --rapid-pour` 通过，日志 `build/controller-clear-vent-remove.log`。24 次全能力注液后执行持久清空、排气、恢复、重新注液及最终删除记录，确认保留的空气腔几何不会被误判为有气体库存。实际世界方块释放沿既有归属事务，此测试未执行真实世界释放。
-
-界面源代码已检查换行、滚动、重复提交、窗口缩放后的温度输入保留，以及关闭或切换页面后的迟到回复。实际字体绘制、鼠标命中和玩家网络往返仍需实机观察。单一观察场景为 `/mmm controllerdemo`：探针打开控制器，在较小窗口滚动摘要，暂停／继续，发出刷新后立即关闭；再暂停并依次预览、取消及确认清空／排气／释放／移除。预期摘要完整可读，关闭后操作回复不会重新弹窗，最终移除关闭控制器页面；服务端异常查 `logs/latest.log`，自动化依据为上述三份日志。
-
-<a id="gpu-演示完整流程"></a>
-## GPU 生产接入的最新短链
-
-2026-10-27，本轮停止性能优化，完成已有实现、热相变与气液膜传质接入。
-
-- `:gpu-kernel:runGpuSolidLiquidReactionsValidation` 通过：实际析出、精确质量／物种／SVQ、非零动量及 U/K/PE 结算；容量不足的私有候选保留原库存，足够容量下完成发布。日志 `build/gpu-completion-solid.log`。
-- `:gpu-kernel:runGpuResidentStateValidation` 通过：ServiceLoader 发现生产后端，连续机械／热步采用设备状态，拒绝候选保留来源，常规查询、展示和显式 checkpoint 导出成功。规定运动实体完成插入、移动、具名反力结果与 checkpoint 恢复后继续推进。
-- `:gpu-kernel:runGpuThermalPhaseValidation` 通过：冻结、熔化、汽化、凝结各执行两次热步，随后机械结算、展示及 checkpoint 恢复；总质量与精确内能账闭合。两项集成结果共用日志 `build/gpu-completion-integration.log`。
-
-- `:gpu-kernel:runGpuThermalPhaseValidation` 的七场景运行通过：四种热相变、有限气腔 CO₂ 溶解／析气和外界析气。膜传质检查整数质量与物种守恒、内能账、机械接续、checkpoint 导出与恢复续算；外界源汇恢复后无重复记账。日志 `build/gpu-film-completion.log`。机械状态复制与扩容同时保留气体物种声明表。
-
-主模组默认启用 Vulkan。`build/gpu-final-delivery.log` 记录生产设备状态短链与 `:fabric:assemble` 成功；产物 `fabric/build/libs/mmm-fabric-0.17.0.jar` 内嵌 GPU provider、膜传质 shader 和 Windows x64 运行库。
-
-上述验证覆盖实际设备执行与生产接口。游戏画面、复杂 VoxelShape 和跨游戏重启观察仍沿各自人工场景；性能结论沿用下方原场景证据。
+- `:gpu-kernel:runGpuSolidLiquidReactionsValidation`：固液析出、精确质量与物种 SVQ、非零动量及内能结算；容量不足时保留候选库存。
+- `:gpu-kernel:runGpuResidentStateValidation`：生产 ServiceLoader 发现、设备状态连续推进、实体运动插入与 checkpoint 导出恢复。
+- `:gpu-kernel:runGpuThermalPhaseValidation`：冻结、熔化、汽化、凝结热相变，有限气腔 CO₂ 溶解与外界析气膜传质；检查整数质量、物种与内能账闭合。
 
 ## CPU 测试怎么运行
 
@@ -134,7 +99,7 @@
 
 同一领域同时选择短模式和完整模式时，完整模式优先。基线测量可加 `-PcpuValidationKeepGoing=true`，记录当前领域的首个失败后继续下一领域，最后仍以失败退出；默认在首个失败处停止。输出区分断言、参数配置与执行失败，并记录每个领域的耗时。超时或主动中止的进程须另行登记，已开始的场景不计作通过。
 
-`CpuValidationSuite` 与直接启动的 `ProductionFluidReplayValidation` 在日志开头记录构建时的 `revision`、`sourceSHA256`，以及本次实际 classpath 产物的 `artifactSHA256`、JVM 参数和选择器。构建元数据随测试资源生成；直接 CLI 的长重放和预算沿用同一记录入口。最终全量、长跑及预算分别保存日志，并核对产物摘要；预算注明独立冷启动或同一 JVM 已运行物理场景后的热运行。某次全量失败后，在另一构建补跑失败领域得到的记录分别保留各自范围。
+`CpuValidationSuite` 在运行开头输出构建版本、源码摘要、JVM 参数与选择器清单。全量、长重放及预算测试以实际退出码与断言结果为准，并区分独立冷启动与 JVM 预热后的热运行。
 
 `cut-cell:short` 保留参数、黏性、微盒几何、CCD、容量及恢复对照，省略 600 步障碍物流动。长场景单独运行：
 
@@ -168,7 +133,7 @@
 - **表面张力和润湿**
   - 选择器：`surface-tension`
   - 测试源码入口：[M4SurfaceTensionValidation](../../fabric/src/test/java/mmm/fluid/M4SurfaceTensionValidation.java)
-  - 同一构建的聚焦入口：`M4SurfaceTensionValidation --wetting` 复用润湿 1,200 步及液液界面后继，`--liquid-pair` 单独运行该后继，`--curvature` 保留共同曲率场景。直接启动时使用 `fabric/build/cpu-validation-work/classpath.txt`、相同工作目录与 `-ea -Xmx512m`，记录对应构建摘要。
+  - 同一构建的聚焦入口：`M4SurfaceTensionValidation --wetting` 复用润湿 1,200 步及液液界面后继，`--liquid-pair` 单独运行该后继，`--curvature` 保留共同曲率场景。直接运行测试类时附加 JVM 参数 `-ea -Xmx512m`。
 
 - **气体库存、状态方程与孔流**
   - 选择器：`air-network`
