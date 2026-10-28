@@ -164,6 +164,7 @@ void wakeColumn(int col){
  int64_t take=int64_t(proposed);if(words[src(6)+row]!=0u&&take!=volume(row))return;
  int64_t takenMass=portion(integer(src(5)+2*row),take,volume(row));if(takenMass<=0l||take<volume(row)&&takenMass==integer(src(5)+2*row))return;
  double m=double(takenMass)*1e-10,radius=sphereRadius(take);dvec3 position=dvec3((double(q.x)+.5)*p.cellSize,bed+radius+p.cellSize*1e-5,(double(q.z)+.5)*p.cellSize);
+ position=dvec3(vec3(position));
  if(!sphereFits(position,radius,-1))return;
  double oldBulk=read(BULK,c),newBulk=max(0.0,oldBulk-bulkPortion(row,take)),oldMass=read(BM,c);
  double work=p.gravity*((oldMass-m)*bedCenter(c,newBulk)+m*position.y-oldMass*bedCenter(c,oldBulk));

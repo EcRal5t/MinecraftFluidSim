@@ -16,10 +16,12 @@ final class PlicComponentGeometry {
 		var result = new PlicComponentGeometry();
 		for (int i = 0; i < capacities.length; i++) {
 			var stock = edit.components().get(i); SignedDyadic capacity = capacities[i];
-			if (capacity.signum() < 0 || stock.volume().compareTo(capacity) > 0)
+			if (capacity.signum() < 0 || stock.volume().subtract(capacity)
+					.compareTo(SignedDyadic.of(mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION)) > 0)
 				throw new MechanicalTimeRefinement(2,"Liquid inventory exceeds its connected pore capacity");
 			SignedDyadic gas = capacity.subtract(stock.volume());
-			double fraction = capacity.signum() == 0 ? 0 : ratio(stock.volume(),capacity);
+			if (gas.signum() < 0) gas = SignedDyadic.ZERO;
+			double fraction = capacity.signum() == 0 ? 0 : Math.clamp(ratio(stock.volume(),capacity),0,1);
 			if (stock.volume().signum() > 0 && gas.signum() > 0)
 				fraction = Math.clamp(fraction, Double.MIN_VALUE, Math.nextDown(1.0));
 			float[] normal = {0,0,0}; PlicPlaneOffset.Result bracket = null;

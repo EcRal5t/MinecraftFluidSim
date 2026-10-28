@@ -15,6 +15,7 @@ public final class CarrierMutationValidation {
 		defaultInsertionsConserveThermalInventory();
 		explicitInsertionsRequirePositiveTemperature();
 		restoreRequiresConnectedOpenCapacity();
+		pendingPhaseCapacitySurvivesRestore();
 		readOnlyCellQueriesFollowCarrierEdits();
 		volumeObservationRoundsTheExactInventoryOnce();
 		insertionNeverRoundsCapacityUp();insertionNeverRoundsTheRequestUp();
@@ -91,6 +92,47 @@ public final class CarrierMutationValidation {
 		require(captured.liquid().stocks().equals(restored.exportLiquidCellState().stocks())&&java.util.Arrays.equals(captured.momentum().copyY(),restored.exportMacMomentum().copyY()),"Mutation recovery changed cell inventory or momentum");
 		domain.setVolume(1,1,1,0);domain.setVolume(2,2,2,0);
 		require(domain.totalMassUnits()==0&&domain.liquidCells.exactVolume().signum()==0&&domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()),"Removing final liquid retained mass or lost carried energy");
+	}
+
+	private static void pendingPhaseCapacitySurvivesRestore() throws Exception {
+		var registries=FullCapabilityTestFixture.load();
+		var domain=fullCapabilityDomain(registries);
+		int cell=domain.domainFlowFields.cellIndex(1,1,1);
+		domain.setVolume(1,1,1,.5F);
+		int sand=registries.granular().materialHandle(mmm.granular.BuiltinGranularDefinitions.FINE_SAND);
+		long volume=4096;
+		long mass=mmm.units.Mass.fromKilograms(volume/(double)mmm.granular.SolidVolume.SVQ_PER_CUBIC_METER
+				*registries.granular().material(sand).referenceDensity());
+		require(domain.tryInsertExactGranular(1,1,1,sand,0,volume,mass).inserted(),"Pending capacity fixture could not insert sand");
+		domain.domainFlowFields.preparePhysicalState();
+		int node=domain.gasState.frame.commonCellNode(cell);
+		if(node>0)domain.setGasNodeStandardVolume(node,0);
+		var stock=domain.liquidCells.stocksInCell(cell).getFirst();
+		var pore=mmm.units.SignedDyadic.of(domain.geometry.cutCells.openCellVolume(cell))
+				.subtract(mmm.units.SignedDyadic.of(domain.occupiedSolidSvq()[cell],-24));
+		var exact=pore.add(mmm.units.SignedDyadic.of(7,-24));
+		var replacement=new mmm.inventory.LiquidCellInventory.Stock(stock.key(),exact,stock.massUnits(),stock.mixture(),stock.internalEnergy());
+		domain.liquidCells.planEdits(List.of(new mmm.inventory.LiquidCellInventory.Edit(stock.key(),replacement))).commit();
+		domain.pendingPhaseMotion.mark(cell);domain.markCellInventoryChanged();
+		domain.gasTopologyCoordinator.refresh();
+		var state=domain.captureAuthoritativeState();var energy=domain.exactInternalEnergy();
+		var restored=FluidDomain.restoreAuthoritativeState(state);
+		require(restored.liquidCells.exactCellVolume(cell).equals(exact)&&restored.exactInternalEnergy().equals(energy)
+				&&restored.pendingPhaseMotion.isPending(cell),"Pending phase restore changed inventory, energy or displacement work");
+		var volumes=new mmm.units.SignedDyadic[restored.cellCount];
+		for(int i=0;i<volumes.length;i++)volumes[i]=restored.liquidCells.exactCellVolume(i);
+		var occupied=restored.occupiedSolidSvq();restored.pendingPhaseMotion.clear();
+		boolean rejected=false;
+		try{DomainPhaseInventory.requireJointCapacity(restored,volumes,occupied);}catch(IllegalArgumentException expected){rejected=true;}
+		require(rejected,"Unmarked excess was accepted during restoration");
+		restored.pendingPhaseMotion.mark(cell);volumes[cell]=pore.add(mmm.units.SignedDyadic.of(1,-12));rejected=false;
+		try{DomainPhaseInventory.requireJointCapacity(restored,volumes,occupied);}catch(IllegalArgumentException expected){rejected=true;}
+		require(rejected,"Resolved excess was accepted during restoration");
+		restored.stepWithMechanicalAudit(false,0);
+		require(!restored.hasPendingPhaseMotionWork()&&restored.liquidCells.exactCellVolume(cell)
+				.add(mmm.units.SignedDyadic.of(restored.occupiedSolidSvq()[cell],-24))
+				.compareTo(mmm.units.SignedDyadic.of(restored.geometry.cutCells.openCellVolume(cell)))<=0,
+				"Mechanical step did not settle restored phase work");
 	}
 
 	private static void externalInsertionsRouteAroundLiquidSealedGas() throws Exception {

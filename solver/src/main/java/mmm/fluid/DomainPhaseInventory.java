@@ -377,22 +377,28 @@ final class DomainPhaseInventory {
 		});
 		for (int index = 0; index < state.parcels.count(); index++) {
 			var parcel = state.parcels.parcel(index);
-			if (!prepared.collision().positionValid(parcel.x(), parcel.y(), parcel.z(), parcel.solidVolumeSvq())) {
+			float radius = mmm.granular.GranularMechanics.representativeRadius(parcel.solidVolumeSvq(), domain.config.cellSize());
+			if (!collisionGeometry.positionValid(parcel.x(), parcel.y(), parcel.z(), radius, domain.pendingPhaseMotion::isPending)) {
 				throw new IllegalArgumentException("Granular snapshot sphere has invalid geometry at parcel " + index);
 			}
 		}
 		prepared.coupling().rebuild(state.parcels, state.deposits);
 		var liquid = new SignedDyadic[domain.cellCount];
 		for (int cell = 0; cell < domain.cellCount; cell++) liquid[cell] = domain.liquidCells.exactCellVolume(cell);
-		for (int cell = 0; cell < domain.cellCount; cell++) {
-			if (liquid[cell].add(SignedDyadic.of(prepared.coupling().solidSvq(cell), -24))
-					.compareTo(SignedDyadic.of(domain.geometry.cutCells.openCellVolume(cell))) > 0) {
-				throw new IllegalArgumentException("Granular snapshot exceeds joint phase capacity at cell " + cell);
-			}
-		}
+		requireJointCapacity(domain, liquid, prepared.coupling().copySolidSvq());
 		state.externalSource = snapshot.externalSource(); state.escapedSink = snapshot.escapedSink();
 		state.deposits.forEachCell((cell, ignoredVolume, ignoredPorosity) -> prepared.deposits().disturbCell(cell));
 		installGranularBinding(prepared, liquidRegistry, materialDefinitions);
+	}
+	static void requireJointCapacity(FluidDomain domain, SignedDyadic[] liquid, long[] occupied) {
+		for (int cell = 0; cell < domain.cellCount; cell++) {
+			var excess = liquid[cell].add(SignedDyadic.of(occupied[cell], -24))
+					.subtract(SignedDyadic.of(domain.geometry.cutCells.openCellVolume(cell)));
+			if (excess.signum() > 0 && (!domain.pendingPhaseMotion.isPending(cell)
+					|| excess.compareTo(SignedDyadic.of(mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION)) > 0)) {
+				throw new IllegalArgumentException("Granular snapshot exceeds joint phase capacity at cell " + cell);
+			}
+		}
 	}
 	public GranularInsertion tryInsertExactGranular(
 			int cellX, int cellY, int cellZ, int materialHandle, int compositionHandle,

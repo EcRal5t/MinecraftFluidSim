@@ -20,7 +20,8 @@ final class VulkanGranularContacts implements AutoCloseable {
         CONTROL(4),FIRST(4),SECOND(4),NORMAL(8),WALL_VELOCITY(8),RESTITUTION(8),STATIC_FRICTION(8),DYNAMIC_FRICTION(8),
         CONTACT_COMPONENT(4),COUNTS(4),OFFSETS(4),CURSORS(4),ENTRIES(4),SOURCE_VELOCITY(8),VELOCITY(8),COMPRESSED_VELOCITY(8),
         NORMAL_IMPULSE(8),TANGENT_IMPULSE(8),COMPRESSED_IMPULSE(8),COMPONENT_COUNTS(4),COMPONENT_OFFSETS(4),COMPONENT_CURSORS(4),
-        COMPONENT_MEMBERS(4),ENERGY_TERMS(8),REBOUND_SCALE(8),FIXED_REACTION(8),FIXED_WORK(8),SCAN(4),PARTICLE_EXTERNAL_WORK(8);
+        COMPONENT_MEMBERS(4),ENERGY_TERMS(8),REBOUND_SCALE(8),FIXED_REACTION(8),FIXED_WORK(8),SCAN(4),PARTICLE_EXTERNAL_WORK(8),
+        INTERVAL_COMPONENT(4),INTERVAL_PARTICLE_WORK(8),INTERVAL_FIXED_WORK(8);
         final int width;Field(int width){this.width=width;}
     }
     static final class Layout {
@@ -42,7 +43,7 @@ final class VulkanGranularContacts implements AutoCloseable {
             for(Field field:Field.values()){
                 int count=switch(field){
                     case CONTROL->4;
-                    case FIRST,SECOND,RESTITUTION,STATIC_FRICTION,DYNAMIC_FRICTION,NORMAL_IMPULSE,COMPRESSED_IMPULSE,FIXED_WORK->contacts;
+                    case FIRST,SECOND,RESTITUTION,STATIC_FRICTION,DYNAMIC_FRICTION,NORMAL_IMPULSE,COMPRESSED_IMPULSE,FIXED_WORK,INTERVAL_FIXED_WORK->contacts;
                     case NORMAL,WALL_VELOCITY,TANGENT_IMPULSE,FIXED_REACTION->Math.multiplyExact(3,contacts);
                     case SOURCE_VELOCITY,VELOCITY,COMPRESSED_VELOCITY,ENERGY_TERMS->Math.multiplyExact(3,state.particleCapacity());
                     case OFFSETS,COMPONENT_OFFSETS->state.particleCapacity()+1;
@@ -58,8 +59,8 @@ final class VulkanGranularContacts implements AutoCloseable {
         int word(Field field){return Math.toIntExact(column(field).offset()/4);}int headerWordOffset(){return Math.toIntExact(header.offset()/4);}
         int contactCapacity(){return contacts;}long endOffset(){return endOffset;}
         List<VulkanEnergyLedger.Stream> externalWorkRoundoffStreams(){
-            return List.of(new VulkanEnergyLedger.Stream(1,word(Field.PARTICLE_EXTERNAL_WORK),state.particleCapacity(),2,1),
-                    new VulkanEnergyLedger.Stream(1,word(Field.FIXED_WORK),contacts,2,-1));
+            return List.of(new VulkanEnergyLedger.Stream(1,word(Field.INTERVAL_PARTICLE_WORK),state.particleCapacity(),2,1),
+                    new VulkanEnergyLedger.Stream(1,word(Field.INTERVAL_FIXED_WORK),contacts,2,-1));
         }
         ByteBuffer headerBytes(){
             var result=ByteBuffer.allocateDirect(256).order(ByteOrder.LITTLE_ENDIAN);
@@ -96,6 +97,17 @@ final class VulkanGranularContacts implements AutoCloseable {
         stage(command,l,8,l.state.particleCapacity(),0);stage(command,l,9,l.state.particleCapacity(),0);
         stage(command,l,10,l.contacts,0);stage(command,l,6,l.state.particleCapacity(),1);
     }
+    /** Initialize once before the first motion segment of a mechanical interval. */
+    void recordBeginInterval(VkCommandBuffer command,Layout l){
+        stage(command,l,11,Math.max(l.state.particleCapacity(),l.contacts),0);
+    }
+    /** A rejected trial has not published positions; restore its pre-contact velocity and kinetic energy. */
+    void recordRestoreTrial(VkCommandBuffer command,Layout l){stage(command,l,12,l.state.particleCapacity(),0);}
+    /** Accumulate only accepted segments; the final component array links every contact in the interval. */
+    void recordAcceptTrial(VkCommandBuffer command,Layout l){
+        stage(command,l,13,Math.max(l.state.particleCapacity(),l.contacts),0);
+    }
+    void recordFinishInterval(VkCommandBuffer command,Layout l){stage(command,l,14,l.state.particleCapacity(),0);}
     private void stage(VkCommandBuffer command,Layout l,int stage,int count,int argument){
         if(count==0)return;try(var stack=stackPush()){
             bindings.bind(command,stack);vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,

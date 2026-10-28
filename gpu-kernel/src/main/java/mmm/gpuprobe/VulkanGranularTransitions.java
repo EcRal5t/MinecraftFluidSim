@@ -129,6 +129,10 @@ final class VulkanGranularTransitions implements AutoCloseable {
     void recordReassemble(VkCommandBuffer command,Layout l,double h){
         prepareRows(command,l,h,0,0);recordGather(command,l,h,0,0);
     }
+    /** Reapply the already selected transfers after mechanical energy updates their source rows. */
+    void recordRefreshAfterEnergy(VkCommandBuffer command,Layout l,double h,double dt,double gravity){
+        stage(command,l,13,l.state.rowCapacity(),0,h,dt,gravity);
+    }
     private void prepareRows(VkCommandBuffer command,Layout l,double h,double dt,double gravity){
         stage(command,l,0,Math.max(12,Math.max(l.hashSize,Math.max(l.state.rowCapacity(),l.state.cells()))),0,h,dt,gravity);
         stage(command,l,1,l.inputRows,0,h,dt,gravity);

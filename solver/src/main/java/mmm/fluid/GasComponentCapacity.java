@@ -70,7 +70,11 @@ final class GasComponentCapacity {
         var liquid=SignedDyadic.ZERO;
         for(var stock:row)if(stock.key().supportMask()==support)liquid=liquid.add(stock.volume());
         var available=capacity.subtract(liquid);
-        if(available.signum()<0)throw blocked("Liquid inventory exceeds its open component capacity",cell);
+        if(available.signum()<0){
+            if(available.negate().compareTo(SignedDyadic.of(mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION))>0)
+                throw blocked("Liquid inventory exceeds its open component capacity",cell);
+            return SignedDyadic.ZERO;
+        }
         return available;
     }
     private static boolean sameVolumes(List<LiquidCellInventory.Stock> first,List<LiquidCellInventory.Stock> second){

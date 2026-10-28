@@ -346,6 +346,28 @@ public final class GranularCarrierValidation {
 				"capacity- and potential-valid relaxation must reach an upper receiver without passing through its lower bed");
 		var cuts = new FlipCutCellGeometry(3, 3, 3); cuts.replaceMask(13, 1);
 		var geometry = new GranularCollisionGeometry(3, 3, 3, .5F, cuts, null);
+		require(geometry.positionValid(.8125F, .625F, .625F, .0625F)
+				&& geometry.positionValid(.8124975F, .625F, .625F, .0625F)
+				&& !geometry.positionValid(.81249F, .625F, .625F, .0625F),
+				"snapshot contact must accept tangency and sub-resolution penetration, but reject real overlap");
+		require(geometry.positionValid(.0624975F, .25F, .25F, .0625F)
+				&& !geometry.positionValid(.06249F, .25F, .25F, .0625F),
+				"outer wall contact must use the same geometric resolution");
+		var registry = BuiltinGranularDefinitions.createRegistry();
+		var beds = new mmm.granular.GranularDepositStore(registry, 27, 4);
+		int bedCell = 13, material = registry.materialHandle(BuiltinGranularDefinitions.FINE_SAND);
+		long pendingVolume = SolidVolume.SVQ_PER_CELL / 4;
+		require(beds.tryAdd(bedCell, new mmm.granular.GranularDepositStore.SolidPortion(material, 0, pendingVolume,
+				mmm.units.Mass.fromKilograms(10)), SolidVolume.SVQ_PER_CELL), "pending-bed test deposit must fit");
+		var bedGeometry = new GranularCollisionGeometry(3, 3, 3, .5F, new FlipCutCellGeometry(3, 3, 3), beds);
+		float pendingRadius = .05F, pendingTop = (float) (.5 + .5 * beds.cellBulkVolumeSvq(bedCell) / SolidVolume.SVQ_PER_CELL);
+		float smallOverlap = pendingTop + pendingRadius - .0001F;
+		require(!bedGeometry.positionValid(.625F, smallOverlap, .625F, pendingRadius)
+				&& !bedGeometry.positionValid(.625F, smallOverlap, .625F, pendingRadius, cell -> cell == bedCell + 1)
+				&& bedGeometry.positionValid(.625F, smallOverlap, .625F, pendingRadius, cell -> cell == bedCell)
+				&& bedGeometry.positionValid(.625F, pendingTop + pendingRadius - .001F, .625F, pendingRadius, cell -> cell == bedCell)
+				&& !geometry.positionValid(.80F, .625F, .625F, .0625F, cell -> cell == bedCell),
+				"only the exact pending bed may overlap; unrelated beds and fixed geometry remain checked");
 		require(!geometry.verticalSpherePathTouchesSolid(.625F, .8125F, .625F, 1.0F, .0625F)
 				&& geometry.verticalSpherePathTouchesSolid(.625F, .8125F, .625F, .7F, .0625F),
 				"exact source support tangency must allow departure and reject passage into a micro box");

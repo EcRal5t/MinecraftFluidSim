@@ -17,6 +17,11 @@ final class GranularCollisionGeometry {
 	}
 
 	void forEachBox(double[] minimum, double[] maximum, BiConsumer<double[], double[]> action) {
+		forEachBox(minimum, maximum, cell -> false, action);
+	}
+
+	private void forEachBox(double[] minimum, double[] maximum, java.util.function.IntPredicate skipBed,
+			BiConsumer<double[], double[]> action) {
 		double micro = h / 2; int[] lo = lower(minimum, micro), hi = upper(maximum, micro, 2);
 		for (int z = lo[2]; z <= hi[2]; z++) for (int y = lo[1]; y <= hi[1]; y++) for (int x = lo[0]; x <= hi[0]; x++) {
 			int mask = cutCells.mask(((z / 2) * sizes[1] + y / 2) * sizes[0] + x / 2);
@@ -26,7 +31,9 @@ final class GranularCollisionGeometry {
 		if (deposits == null) return;
 		lo = lower(minimum, h); hi = upper(maximum, h, 1);
 		for (int z = lo[2]; z <= hi[2]; z++) for (int y = lo[1]; y <= hi[1]; y++) for (int x = lo[0]; x <= hi[0]; x++) {
-			long bulk = deposits.cellBulkVolumeSvq((z * sizes[1] + y) * sizes[0] + x);
+			int cell = (z * sizes[1] + y) * sizes[0] + x;
+			if (skipBed.test(cell)) continue;
+			long bulk = deposits.cellBulkVolumeSvq(cell);
 			if (bulk > 0) action.accept(new double[]{x * h, y * h, z * h},
 					new double[]{(x + 1) * h, (y + bulk / (double) SolidVolume.SVQ_PER_CELL) * h, (z + 1) * h});
 		}
@@ -43,10 +50,31 @@ final class GranularCollisionGeometry {
 	}
 
 	boolean positionValid(float x, float y, float z, float radius) {
-		return x >= radius && x <= sizes[0] * h - radius
-				&& y >= radius && y <= sizes[1] * h - radius
-				&& z >= radius && z <= sizes[2] * h - radius
-				&& !sphereTouchesSolid(x, y, z, radius);
+		return positionValid(x, y, z, radius, cell -> false);
+	}
+
+	/** Pending phase geometry is reconciled by the next mechanical step. */
+	boolean positionValid(float x, float y, float z, float radius, java.util.function.IntPredicate pendingBed) {
+		double tolerance = 1e-5 * h, resolvedRadius = Math.max(0.0, radius - tolerance);
+		if (x < resolvedRadius || x > sizes[0] * h - resolvedRadius
+				|| y < resolvedRadius || y > sizes[1] * h - resolvedRadius
+				|| z < resolvedRadius || z > sizes[2] * h - resolvedRadius) return false;
+		double[] point = {x, y, z}, lo = new double[3], hi = new double[3];
+		for (int axis = 0; axis < 3; axis++) { lo[axis] = point[axis] - resolvedRadius; hi[axis] = point[axis] + resolvedRadius; }
+		boolean[] intersects = {false};
+		forEachBox(lo, hi, pendingBed, (minimum, maximum) -> {
+			if (intersects(point, resolvedRadius, minimum, maximum)) intersects[0] = true;
+		});
+		return !intersects[0];
+	}
+
+	private static boolean intersects(double[] point, double radius, double[] minimum, double[] maximum) {
+		double squared = 0.0;
+		for (int axis = 0; axis < 3; axis++) {
+			double distance = point[axis] - Math.clamp(point[axis], minimum[axis], maximum[axis]);
+			squared += distance * distance;
+		}
+		return squared < radius * radius;
 	}
 
 	/** Candidate full-footprint bed versus its eight fixed micro boxes, with pure tangency allowed. */

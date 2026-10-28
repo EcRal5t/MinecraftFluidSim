@@ -109,13 +109,16 @@ final class VulkanGranularStateLayout {
             for(int i=0;i<particles.size();i++){
                 var p=particles.get(i);var row=p.inventory();float x=(float)p.x(),y=(float)p.y(),z=(float)p.z();
                 kernel.capture(x,y,z,row.solidVolumeSvq());int mask=0;
-                boolean exact=x==p.x()&&y==p.y()&&z==p.z();
                 for(int k=0;k<kernel.size();k++){
                     long selected=-1;for(int q=0;q<8;q++)if(p.supportCells()[q]==kernel.cell(k))selected=p.supportQuotas()[q];
                     long delta=selected-kernel.floor(k);
-                    if(!exact||delta<0||delta>1){mask=-1;break;}if(delta==1)mask|=1<<k;
+                    if(delta<0||delta>1)throw new IllegalStateException("Device granular support cannot be represented at parcel "+i+" cell "+kernel.cell(k)+": device="+selected+", hostFloor="+kernel.floor(k));
+                    if(delta==1)mask|=1<<k;
                 }
-                if(mask<0)mask=kernel.canonicalMask();
+                for(int q=0;q<8;q++)if(p.supportQuotas()[q]>0){boolean found=false;
+                    for(int k=0;k<kernel.size();k++)if(p.supportCells()[q]==kernel.cell(k)){found=true;break;}
+                    if(!found)throw new IllegalStateException("Device granular support lies outside host support at parcel "+i+" cell "+p.supportCells()[q]);}
+                try{kernel.requireMask(mask);}catch(IllegalArgumentException failure){throw new IllegalStateException("Device granular support is invalid at parcel "+i,failure);}
                 active.add(new mmm.granular.GranularStateSnapshot.ActiveParcel(x,y,z,(float)p.vx(),(float)p.vy(),(float)p.vz(),
                         row.solidVolumeSvq(),row.massUnits(),row.material(),activeComposition.get(i)==null?0:compositions.indexOf(activeComposition.get(i))+1,
                         p.contactAge(),(byte)p.flags(),mask));

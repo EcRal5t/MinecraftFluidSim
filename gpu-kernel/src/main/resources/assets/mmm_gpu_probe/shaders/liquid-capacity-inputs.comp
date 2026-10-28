@@ -51,7 +51,7 @@ void cellInputs() {
     // Exact full cells need actual incoming dry-space transport before creating new dry volume.
     bool full=!tail&&k>=upper;
     int64_t filled=min(k,upper);
-    int64_t lower=full?filled-int64_t(min(double(filled),floor(incomingGas*scale))):int64_t(0);
+    int64_t lower=full&&p.stage!=3?filled-int64_t(min(double(filled),floor(incomingGas*scale))):int64_t(0);
     putInteger(h(16)+2*cell,k);putInteger(h(17)+2*cell,lower);putInteger(h(18)+2*cell,upper);
     int node=h(22)>0?int(words[h(23)+cell]):0;
     if(node>h(22)){atomicOr(errors,64u);return;}
@@ -103,6 +103,9 @@ void groupInputs() {
             double quantized=ceil(ldexp(normal,-h(4)));
             if(isnan(quantized)||isinf(quantized)||quantized<0.0){atomicOr(errors,4096u);return;}
             reserve=min(groupUpper[0],int64_t(min(double(MAX_TOTAL),quantized)));
+            // Prescribed solid motion may consume an unresolved fraction of a gas cell.
+            // The later chamber remap keeps its inventory and evaluates the actual volume.
+            if(p.stage==4)reserve=max(0l,reserve-int64_t(ceil(ldexp(4e-5,-h(4)))));
             // Ordinary transport starts from an admissible state; only prescribed solids may displace it.
             if(p.stage!=4)reserve=min(reserve,max(0l,groupUpper[0]-groupSource[0]));
             if(reserve==0l&&groupTail[0]==0u)reserve=1l;

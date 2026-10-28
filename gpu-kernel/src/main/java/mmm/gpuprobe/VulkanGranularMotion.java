@@ -12,7 +12,7 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Spatial buckets, sphere contacts and private trial positions over the resident eight-box geometry. */
 final class VulkanGranularMotion implements AutoCloseable {
-    enum Field { COUNTS,OFFSETS,CURSORS,ENTRIES,CONTACT_COUNTS,CONTACT_OFFSETS,SCAN,POSITION,RADIUS,MATERIAL,NEXT_POSITION,BED_HEIGHT }
+    enum Field { COUNTS,OFFSETS,CURSORS,ENTRIES,CONTACT_COUNTS,CONTACT_OFFSETS,SCAN,POSITION,RADIUS,MATERIAL,NEXT_POSITION,BED_HEIGHT,MAX_SPEED }
     static final class Layout {
         final VulkanGranularStateLayout state;
         final VulkanGranularContacts.Layout contacts;
@@ -33,6 +33,7 @@ final class VulkanGranularMotion implements AutoCloseable {
                     case CONTACT_COUNTS,RADIUS->state.particleCapacity();case CONTACT_OFFSETS->state.particleCapacity()+1;
                     case ENTRIES->state.particleCapacity();case POSITION,NEXT_POSITION->3*state.particleCapacity();
                     case MATERIAL->3*state.definitions().materialIds().size();
+                    case MAX_SPEED->1;
                     case SCAN->Math.toIntExact(VulkanPrefixScan.workspaceBytes(Math.max(state.cells(),state.particleCapacity()))/4);};
                 var c=new VulkanLiquidStateLayout.Column(align(cursor,alignment),count,f==Field.POSITION||f==Field.NEXT_POSITION||f==Field.RADIUS||f==Field.MATERIAL||f==Field.BED_HEIGHT?8:4);
                 columns.put(f,c);cursor=c.offset()+c.bindingBytes();
@@ -65,6 +66,17 @@ final class VulkanGranularMotion implements AutoCloseable {
     VulkanGranularMotion(VulkanDeviceContext context){bindings=new FlipKernelBindings(context,2,shader(),32);
         try{scan=new VulkanPrefixScan(context);}catch(RuntimeException|LinkageError e){bindings.close();throw e;}}
     void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){bindings.rebindRanges(List.of(arena,errors));scan.rebindRanges(arena,arena,arena,errors);}
+    /** Record the pressure-corrected maximum particle speed without advancing the candidate. */
+    void recordSpeed(VkCommandBuffer command,Layout l,double h){
+        stage(command,l,0,Math.max(l.state.cells(),l.state.particleCapacity()),h,0);
+        stage(command,l,1,l.state.particleCapacity(),h,0);
+    }
+    static double maximumSpeed(VulkanRegionStorage.Candidate candidate,Layout layout){
+        var data=ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN);
+        candidate.read(layout.columns.get(Field.MAX_SPEED).offset(),data);
+        float speed=Float.intBitsToFloat(data.getInt(0));
+        return speed==0.0f ? 0.0 : Math.nextUp(speed);
+    }
     /** Builds actual contacts from current positions. CONTROL[1] reports the required contact capacity. */
     void recordContacts(VkCommandBuffer command,Layout l,double h,double duration){
         stage(command,l,11,l.state.cells(),h,duration);
@@ -79,6 +91,12 @@ final class VulkanGranularMotion implements AutoCloseable {
     /** Integrates the contact-corrected velocity and stops at the first fixed-box impact. */
     void recordTrialPositions(VkCommandBuffer command,Layout l,double h,double duration){
         stage(command,l,6,l.state.particleCapacity(),h,duration);
+        for(int i=0;i<8;i++){stage(command,l,8,l.state.particleCapacity(),h,duration);stage(command,l,9,l.state.particleCapacity(),h,duration);}
+        stage(command,l,10,l.state.particleCapacity(),h,duration);
+    }
+    /** Continue projection on the same private trial, retaining its already solved contact velocities. */
+    void recordRelaxTrial(VkCommandBuffer command,Layout l,double h,double duration){
+        stage(command,l,12,1,h,duration);
         for(int i=0;i<8;i++){stage(command,l,8,l.state.particleCapacity(),h,duration);stage(command,l,9,l.state.particleCapacity(),h,duration);}
         stage(command,l,10,l.state.particleCapacity(),h,duration);
     }

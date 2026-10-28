@@ -73,6 +73,7 @@ final class FluidDomainStateMapper {
 		domain.liquidCells = LiquidCellInventory.fromValidatedSnapshot(state.liquid(),state.chemicalRegistry());
 		domain.markCellInventoryChanged();
 		domain.mac.restoreMomentum(state.momentum());
+		if (state.pendingPhaseMotion() != null) domain.restorePendingPhaseMotionState(state.pendingPhaseMotion());
 
 		if (state.materialDefinitions() != null) domain.bindMaterialDefinitions(state.materialDefinitions());
 		if (state.granular() != null) {
@@ -80,6 +81,9 @@ final class FluidDomainStateMapper {
 					state.materialDefinitions());
 			domain.granularDepositDynamics.restoreState(state.granularDynamics());
 		}
+		var liquidVolumes = new mmm.units.SignedDyadic[domain.cellCount];
+		for (int cell = 0; cell < domain.cellCount; cell++) liquidVolumes[cell] = domain.liquidCells.exactCellVolume(cell);
+		DomainPhaseInventory.requireJointCapacity(domain, liquidVolumes, domain.occupiedSolidSvq());
 		if (state.gasRuntimeGeometry() != null) PhaseOccupancyTransport.publish(domain,state.phaseOccupancy());
 		else domain.restorePhaseOccupancyState(state.phaseOccupancy());
 		if (!state.hasGas()) domain.bindGasRegistry(state.gasRegistry());
@@ -88,7 +92,6 @@ final class FluidDomainStateMapper {
 		if (state.thermalOwner() != null) {
 			domain.restoreThermalOwnerState(state.thermalOwner(), state.thermalRegistry(),
 					state.maximumThermalTransportSubsteps());
-			domain.restorePendingPhaseMotionState(state.pendingPhaseMotion());
 			double[] thermalBoundary = state.copyThermalBoundaryTemperaturesK();
 			if (thermalBoundary != null) domain.replaceThermalBoundaryTemperatures(thermalBoundary);
 		}

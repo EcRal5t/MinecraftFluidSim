@@ -23,7 +23,21 @@
 
 无游戏自动化调用生产场景初始化、调度和库存事务；实际屏幕绘制、鼠标命中、网络往返、世界脚手架清理及跨游戏重启仍需实机观察。必要时只用 `/mmm demo` 一处入口，依次选择场景、开始、暂停、单步、重置和移除；预期保持位置、按真实状态启用按钮、清除原样外壳，并在失败时显示具体原因。原控制台删除水箱后，工作台依靠持久删除记录重新建立场景。
 
-当前限制：高浓度酸碱在现有放大析盐规则下会生成大量沉淀，小水箱的颗粒占容、液体位移和气腔交接仍可能中止。失败证据为 `build/demo-workbench-tank.log`；可在下述直接 Java 入口前加 `-Dmmm.demoValidationReagentQuanta=1000000000` 并运行 `tank 120 complete` 复现。基础演示使用稀溶液观察中和，不据其通过宣称连续析盐问题已解决。未成立的颗粒顺序与额外气腔重映射试验均已撤回。
+### 高浓度析盐
+
+2026-10-28，`precipitation` 复用真实水箱和桶投料流程，酸碱各投入 1000 mol，检查实际生成固体。最终产物的 `build/precipitation-final-assembly500.log` 记录空箱、油水、高浓度酸碱各 500 步成功，随后完成暂停手动两步、checkpoint 恢复续算、清空沉淀及空箱续算，`assemble` 成功。每个接受步检查整数质量、元素、热账和设备驻留。酸碱各消耗 999111710 物种量子，并生成等量水，末态水温 300.505 K；整个流程质量差为零。
+
+1497 个热运行应用步的中位为 15.063 ms，P95 为 21.450 ms，最大 458.832 ms；有一次超过 200 ms，随后恢复，未触发连续三步超限的生产暂停。该成本属于小水箱，64³ 的性能结论继续使用原输入。
+
+```powershell
+./gradlew.bat :fabric:runGpuProductionDemoValidation -PgpuDemo=precipitation -PgpuDemoSteps=500 --console=plain --max-workers=1
+```
+
+相变中间状态的专项恢复可复用同次构建的 classpath，额外加 Java 参数 `-Dmmm.demoPhaseRestore=true`，执行 `mmm.simulation.GpuProductionDemoValidation precipitation 120 complete`。测试捕捉实际 GPU 待位移状态，恢复到宿主、提交 checkpoint，再继续生产调度；未捕捉到该状态时直接报告未覆盖。解析尺度以内的体积余量由 `CarrierMutationValidation` 的明确输入覆盖，检查库存原量恢复及后续排水；真实场景按当次实际轨迹报告余量。基础面板酸碱配方继续使用稀溶液观察中和与 pH。
+
+`build/precipitation-final-pending120.log` 在高浓度酸碱已经生成颗粒时捕捉待位移状态，完成 checkpoint 恢复和其后 120 步流程；本次捕捉时最大超容为零。`build/precipitation-pending-cpu-final.log` 的 `CarrierMutationValidation` 与 `GranularCarrierValidation` 覆盖精确体积余量、接触分辨率及 pending 床格的恢复约束。
+
+同次生产源码的 `build/precipitation-final-gpu-regressions.log` 通过固液反应、七种热相变／膜传质、常驻状态与实体 checkpoint 回归；`build/precipitation-final-flow120.log`、`build/precipitation-final-controller20.log` 分别通过水流池 120 步和控制器 20 步及真实桶事务。临时逐步诊断已删除。本轮继续采用无头执行，未启动 Minecraft。
 
 ## GPU 演示完整流程
 
@@ -33,7 +47,7 @@
 ./gradlew :fabric:runGpuProductionDemoValidation -PgpuDemo=chemistry -PgpuDemoSteps=120 --console=plain
 ```
 
-`gpuDemo` 接受 `flow`、`tank`、`ambient`、`demo`、`material`、`chemistry`、`air`、`vacuum`、`tension`、`controller`、`capture`、`takeover`。`tank` 依次重置并运行三种生产水箱配方；`tension` 顺序运行相同初态的 30° 和 120° 液滴。其余场景的默认 `gpuDemoStage=complete` 包含物理结果、暂停／运行、手动步进、恢复和编辑后的续算；`initial`、`motion`、`scheduled` 供失败定位，分别仅覆盖对应前缀。`demo` 验证选择器保留原大型溃坝，对应游戏命令 `damdemo`；`material`／`chemistry` 保留原初始化的基线重放。
+`gpuDemo` 接受 `flow`、`tank`、`precipitation`、`ambient`、`demo`、`material`、`chemistry`、`air`、`vacuum`、`tension`、`controller`、`capture`、`takeover`。`tank` 依次重置并运行三种生产水箱配方；`precipitation` 使用同一流程的高浓度析盐输入，追加固体生成、恢复和清空检查；`tension` 顺序运行相同初态的 30° 和 120° 液滴。其余场景的默认 `gpuDemoStage=complete` 包含物理结果、暂停／运行、手动步进、恢复和编辑后的续算；`initial`、`motion`、`scheduled` 供失败定位，分别仅覆盖对应前缀。`demo` 验证选择器保留原大型溃坝，对应游戏命令 `damdemo`；`material`／`chemistry` 保留原初始化的基线重放。
 
 每个接受步检查四相整数质量与元素收支、热账、设备驻留及展示快照。环境交换单独记账，日志的 `total_mass_delta` 是包含真实环境收支的库存变化；断言比较的是扣除这些收支后的质量差。大型溃坝保留原 24×16×24 全能力场景和 324 m³ 初始水量，并执行真人尺寸实体的进入、移动和离开。
 

@@ -56,6 +56,9 @@ void captureCell(int cell) {
     items[1]=liquidTotal(cell);items[1].sign=-items[1].sign;
     DyadicMeasure dry=dyadicMeasure(items,2);
     if(dry.status==DYADIC_ZERO)return;
+    // The shared PLIC geometry cannot resolve sub-resolution phase displacement.
+    // Keep the exact inventory and let the next capacity solve transport the excess.
+    if(dry.status==DYADIC_NEGATIVE&&number(h(8)+8*cell)-number(h(8)+8*cell+4)<=4e-5)return;
     if(dry.status!=DYADIC_POSITIVE||open==0u){atomicOr(errors,8192u);return;}
     double volume=exactDryNumber(items,dry);
     if(!finite(volume)){atomicOr(errors,8192u);return;}

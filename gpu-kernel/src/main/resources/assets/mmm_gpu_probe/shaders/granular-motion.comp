@@ -76,7 +76,7 @@ void trial(int i){
    dvec3 lo,hi;if(!box(c,bit,lo,hi))continue;
    double t;dvec3 n;if(hit(x,delta,lo-r,hi+r,t,n)&&dot(delta,n)<0.0)fraction=min(fraction,t);
   }
- }outvec(at(7),i,x+fraction*delta);
+ }outvec(at(7),i,dvec3(vec3(x+fraction*delta)));
 }
 double mass(int i){int a=ch(4)+2*i;return double(uint64_t(words[a])|(uint64_t(words[a+1])<<32))*1e-10;}
 dvec3 fixedCorrection(dvec3 x,double r){
@@ -100,11 +100,17 @@ dvec3 fixedCorrection(dvec3 x,double r){
 }
 void separate(int i){
  dvec3 x=vec(at(7),i),correction=dvec3(0.0);int degree=0;
- for(int e=int(words[ca(10)+i]);e<int(words[ca(10)+i+1]);e++){
-  int c=int(words[ca(12)+e]),first=int(words[ca(1)+c]),second=int(words[ca(2)+c]);if(second<0)continue;int other=first==i?second:first;
-  dvec3 d=x-vec(at(7),other);double distance=length(d),depth=radius(i)+radius(other)-distance;if(depth<=0.0)continue;
-  dvec3 n=distance>0.0?d/distance:dvec3(i<other?-1.0:1.0,0.0,0.0);
-  correction+=n*depth*mass(other)/(mass(i)+mass(other));degree++;
+ // Contact impulses can redirect particles into pairs absent from the original swept-contact graph.
+ // Source buckets cover every possible pair while final displacement is bounded to .25 cell below.
+ ivec3 center=location(vec(h(7),i));
+ for(int z=-2;z<=2;z++)for(int y=-2;y<=2;y++)for(int a=-2;a<=2;a++){
+  ivec3 c=center+ivec3(a,y,z);if(any(lessThan(c,ivec3(0)))||any(greaterThanEqual(c,dims())))continue;
+  int q=cell(c);for(int e=int(words[at(1)+q]);e<int(words[at(1)+q+1]);e++){
+   int other=int(words[at(3)+e]);if(other==i)continue;
+   dvec3 d=x-vec(at(7),other);double distance=length(d),depth=radius(i)+radius(other)-distance;if(depth<=0.0)continue;
+   dvec3 n=distance>0.0?d/distance:dvec3(i<other?-1.0:1.0,0.0,0.0);
+   correction+=n*depth*mass(other)/(mass(i)+mass(other));degree++;
+  }
  }
  x+=correction/double(max(1,degree));x+=fixedCorrection(x,radius(i));outvec(at(10),i,x);
 }
@@ -119,13 +125,15 @@ void main(){int id=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*12
   double height=volume<=low?(low>0.0?.5*volume/low:0.0):.5+(high>0.0?.5*(volume-low)/high:0.0);
   if(volume>low+high+1e-7){invalid();return;}outnum(at(11)+2*id,(double(id/h(0)%h(1))+clamp(height,0.0,1.0))*p.cellSize);return;
  }
- if(p.stage==0){if(id==0){words[ca(0)]=0u;words[ca(0)+1]=0u;words[ca(0)+2]=0u;}if(id<h(4)){words[at(0)+id]=0u;words[at(2)+id]=0u;}if(id<h(3)){
+ if(p.stage==0){if(id==0){words[ca(0)]=0u;words[ca(0)+1]=0u;words[ca(0)+2]=0u;words[at(12)]=0u;}if(id<h(4)){words[at(0)+id]=0u;words[at(2)+id]=0u;}if(id<h(3)){
   words[at(4)+id]=0u;double volume=double(uint64_t(words[h(9)+2*id])|(uint64_t(words[h(9)+2*id+1])<<32));
   // cbrt is evaluated in float; collision footprints follow the CPU float geometry.
   outnum(at(8)+2*id,p.cellSize*clamp(double(pow(float(3.0*volume/16777216.0/(4.0*3.141592653589793)),1.0/3.0)),.02,.20));}return;}
  if(p.stage==5){int required=int(words[at(5)+h(3)]);words[ca(0)+1]=uint(required);words[ca(0)]=uint(required<=ch(1)?required:0);return;}
+ if(p.stage==12){if(id==0)atomicAnd(words[ca(0)+2],~2u);return;}
  if(id>=actual())return;
  if(p.stage==1){dvec3 x=vec(h(7),id),v=vec(h(8),id);if(any(isnan(x))||any(isinf(x))||any(isnan(v))||any(isinf(v))){invalid();return;}
+  atomicMax(words[at(12)],floatBitsToUint(float(length(v))));
   if(length(v)*p.duration>.25*p.cellSize)atomicOr(words[ca(0)+2],1u);
   atomicAdd(words[at(0)+cell(location(x))],1u);}
  else if(p.stage==2){int c=cell(location(vec(h(7),id))),slot=int(atomicAdd(words[at(2)+c],1u));words[at(3)+int(words[at(1)+c])+slot]=uint(id);}
@@ -134,13 +142,20 @@ void main(){int id=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*12
  else if(p.stage==6)trial(id);
  else if(p.stage==7){dvec3 x=vec(at(7),id);outvec(h(7),id,x);outnum(h(12)+2*id,x.y);}
  else if(p.stage==8)separate(id);
- else if(p.stage==9)outvec(at(7),id,vec(at(10),id));
+ else if(p.stage==9)outvec(at(7),id,dvec3(vec3(vec(at(10),id))));
  else if(p.stage==10){
   dvec3 x=vec(at(7),id);double tolerance=1e-5*p.cellSize;
+  if(length(x-vec(h(7),id))>.25*p.cellSize)atomicOr(words[ca(0)+2],4u);
   if(length(fixedCorrection(x,radius(id)))>tolerance)atomicOr(words[ca(0)+2],2u);
-  for(int e=int(words[ca(10)+id]);e<int(words[ca(10)+id+1]);e++){
-   int c=int(words[ca(12)+e]),a=int(words[ca(1)+c]),b=int(words[ca(2)+c]);if(b<0)continue;int other=a==id?b:a;
-   if(radius(id)+radius(other)-length(x-vec(at(7),other))>tolerance)atomicOr(words[ca(0)+2],2u);
+  ivec3 center=location(vec(h(7),id));
+  for(int z=-2;z<=2;z++)for(int y=-2;y<=2;y++)for(int a=-2;a<=2;a++){
+   ivec3 c=center+ivec3(a,y,z);if(any(lessThan(c,ivec3(0)))||any(greaterThanEqual(c,dims())))continue;
+   int q=cell(c);for(int e=int(words[at(1)+q]);e<int(words[at(1)+q+1]);e++){
+    int other=int(words[at(3)+e]);if(other==id)continue;
+    // Representative parcel spheres approximate granular occupancy at sub-cell scale.
+    double pairTolerance=max(tolerance,0.01*min(radius(id),radius(other)));
+    if(radius(id)+radius(other)-length(x-vec(at(7),other))>pairTolerance)atomicOr(words[ca(0)+2],2u);
+   }
   }
  }
 }

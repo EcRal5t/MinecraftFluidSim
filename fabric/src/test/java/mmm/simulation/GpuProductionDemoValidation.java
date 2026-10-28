@@ -24,6 +24,9 @@ public final class GpuProductionDemoValidation {
 	private static MassBaseline massBaseline;
 	private static double bulkWaterTemperatureK;
 	private static long reactionWaterQuanta;
+	private static FluidRegionOperations phaseRestoreOperations;
+	private static FluidDomain phaseRestoreCandidate;
+	private static boolean phaseRestoreCompleted;
 	private static List<mmm.inventory.LiquidCellInventory.Stock> firstTensionStocks;
 
 	public static void main(String[] args) throws Exception {
@@ -51,12 +54,13 @@ public final class GpuProductionDemoValidation {
 
 	private static void run(String[] args) throws Exception {
 		lastOutcome = null;
+		phaseRestoreOperations = null; phaseRestoreCandidate = null; phaseRestoreCompleted = false;
 		String scenario = args.length == 0 ? "demo" : args[0];
 		int steps = args.length < 2 ? 1 : Integer.parseInt(args[1]);
 		String stop = args.length < 3 ? "complete" : args[2];
-		if (!Set.of("demo", "flow", "tank", "material", "chemistry", "tension30", "tension120", "air", "ambient", "vacuum", "controller", "capture", "takeover").contains(scenario)
+		if (!Set.of("demo", "flow", "tank", "precipitation", "material", "chemistry", "tension30", "tension120", "air", "ambient", "vacuum", "controller", "capture", "takeover").contains(scenario)
 				|| !Set.of("initial", "motion", "scheduled", "complete").contains(stop) || steps < 1 || args.length > 3)
-			throw new IllegalArgumentException("Expected demo/material/chemistry/tension/air/vacuum, positive step count, and initial/motion/scheduled/complete");
+			throw new IllegalArgumentException("Expected a supported demo scenario (including tank/precipitation), positive step count, and initial/motion/scheduled/complete");
 		if (Set.of("demo", "flow").contains(scenario) && stop.equals("complete") && steps < 13)
 			throw new IllegalArgumentException("Complete demo requires at least 13 scheduled steps for player entry, movement and exit");
 		System.out.println("stage=startup scenario=" + scenario + " scheduled_steps=" + steps);
@@ -71,8 +75,8 @@ public final class GpuProductionDemoValidation {
 			runController(startup, world, manager, steps, stop);
 			return;
 		}
-		if (scenario.equals("tank")) {
-			runTank(startup, world, manager, steps);
+		if (scenario.equals("tank") || scenario.equals("precipitation")) {
+			runTank(startup, world, manager, steps, scenario.equals("precipitation"));
 			return;
 		}
 		if (scenario.equals("capture") || scenario.equals("takeover")) {
@@ -278,14 +282,14 @@ public final class GpuProductionDemoValidation {
 
 	/** Replays the production recipes on a real scanned controller and durable region. */
 	private static void runTank(WorldStartupCoordinator.Result startup, CommittedWorldRegistries world,
-			FluidRegionManager manager, int steps) throws Exception {
+			FluidRegionManager manager, int steps, boolean precipitation) throws Exception {
 		var registries = startup.registries();
 		var operations = new FluidRegionOperations(startup.worldRoot(), manager, startup.creationLocked(),
 				startup.profileProven(), startup.profile(), registries.chemical(), registries.granular(),
 				registries.thermal(), registries.gas(), startup.config().maximumThermalSubstepsPerStep(), registries.material());
 		var fixture = GpuControllerFixture.create(startup, world, manager, operations);
 		var region = fixture.region;
-		long reagentQuanta = Long.getLong("mmm.demoValidationReagentQuanta", 1_000_000L);
+		long reagentQuanta = Long.getLong("mmm.demoValidationReagentQuanta", precipitation ? 1_000_000_000L : 1_000_000L);
 		require(reagentQuanta > 0, "Tank reagent amount must be positive");
 		UUID id = region.id();
 		require(region.sizeX() == 4 && region.sizeY() == 4 && region.sizeZ() == 4,
@@ -297,6 +301,8 @@ public final class GpuProductionDemoValidation {
 			var motion = new MinecraftMotionExecutor(application, world, new MinecraftRuntimePolicy(startup, manager));
 			var ticks = new RegionTickUseCase(application, RegionTickUseCase.Policy.production());
 			for (var recipe : DemoTankOperations.Recipe.values()) {
+				if (precipitation && recipe == DemoTankOperations.Recipe.ACID_BASE
+						&& Boolean.getBoolean("mmm.demoPhaseRestore")) phaseRestoreOperations = operations;
 				region.setPaused(true);
 				if (region.domain().hasPendingPhaseMotionWork()) motion.settlePendingPhaseWork(region);
 				if (recipe == DemoTankOperations.Recipe.ACID_BASE) {
@@ -361,13 +367,37 @@ public final class GpuProductionDemoValidation {
 						long acid = before.acid() - after.acid(), base = before.base() - after.base();
 						require(acid > 0 && acid == base && reactionWaterQuanta == acid,
 								"Tank acid/base did not produce balanced reaction water");
+						if (precipitation) require(baselineMass(capture.exportState()).granular() > 0,
+								"Concentrated saline mixture did not create solid precipitate");
 					}
+				}
+				if (precipitation && recipe == DemoTankOperations.Recipe.ACID_BASE) {
+					verifyManualSteps(region, ticks, motion, snapshots, mass, "tank");
+					var saved = new MinecraftRegionCheckpointSource(region).authoritativeState();
+					commitTankCandidate(operations, region, FluidDomain.restoreAuthoritativeState(saved));
+					prepareAvailability(region);
+					require(motion.step(region, List.of()).accepted(), "Precipitate checkpoint continuation rejected");
+					checkResident(region, snapshots, mass, "tank", "precipitate-restored-motion");
 				}
 				System.out.println("stage=tank-recipe recipe=" + recipe + " checkpoint=" + target);
 			}
+			if (precipitation) {
+				if (phaseRestoreOperations != null) require(phaseRestoreCompleted,
+						"Phase restoration replay never reached pending phase motion");
+				motion.settlePendingPhaseWork(region);
+				commitTankCandidate(operations, region, DemoTankOperations.prepareCandidate(
+						world, region, DemoTankOperations.Recipe.WATER, null));
+				var cleared = baselineMass(region.domain().captureAuthoritativeState());
+				require(cleared.liquid() == 0 && cleared.granular() == 0 && cleared.coherent() == 0,
+						"Reset left liquid or precipitate in the tank");
+				massBaseline = cleared;
+				prepareAvailability(region);
+				require(motion.step(region, List.of()).accepted(), "Empty reset after precipitation rejected");
+				checkResident(region, snapshots, 0, "tank", "precipitate-reset-motion");
+			}
 			region.domain();
 		}
-		System.out.println("stage=complete scenario=tank");
+		System.out.println("stage=complete scenario=" + (precipitation ? "precipitation" : "tank"));
 	}
 
 	private static long commitTankCandidate(FluidRegionOperations operations, FluidRegion region,
@@ -451,6 +481,15 @@ public final class GpuProductionDemoValidation {
 					scenario, completed, tick, coldImport, elapsed, pacingState.stepIntervalTicks(),
 					pacingState.hardOverrunStreak(), pacingState.recoveryStreak(), pacing.autoPause());
 			checkResident(region, snapshots, mass, scenario, "scheduled-motion");
+			if (phaseRestoreCandidate != null) {
+				try { commitTankCandidate(phaseRestoreOperations, region, phaseRestoreCandidate); }
+				catch (Exception failure) { throw new IllegalStateException("Pending phase checkpoint failed", failure); }
+				require(MinecraftRegionOperatorActions.setPaused(region, false, () -> {
+					prepareAvailability(region); return true;
+				}), "Pending phase checkpoint did not resume");
+				phaseRestoreCandidate = null; phaseRestoreCompleted = true;
+				System.out.println("stage=pending-phase-checkpoint restored=true continuation=next-scheduled-step");
+			}
 			if (completed == 1 && scenario.startsWith("tension"))
 				require(region.maximumSpeed() > 0, "Wetting force did not produce motion from the stationary initial cap");
 			if (pacing.autoPause()) throw new IllegalStateException("Production pacing paused after "
@@ -589,6 +628,31 @@ public final class GpuProductionDemoValidation {
 		return java.util.Map.copyOf(totals);
 	}
 
+	/** Exercises actual GPU phase work through the persistent host handoff. */
+	private static void preparePhaseRestoreReplay(mmm.fluid.FluidDomainState state) {
+		if (phaseRestoreOperations == null || phaseRestoreCompleted || phaseRestoreCandidate != null
+				|| state.pendingPhaseMotion() == null || state.pendingPhaseMotion().isEmpty()
+				|| baselineMass(state).granular() == 0) return;
+		var restored = FluidDomain.restoreAuthoritativeState(state);
+		var volumes = new double[state.sizeX() * state.sizeY() * state.sizeZ()];
+		for (var stock : state.liquid().physicalStocks()) volumes[stock.key().cell()] += stock.volumeFraction();
+		double maximumExcess = 0;
+		for (var entry : state.pendingPhaseMotion().entries()) {
+			int cell = entry.cell(), x = cell % state.sizeX(), y = cell / state.sizeX() % state.sizeY(),
+					z = cell / (state.sizeX() * state.sizeY());
+			double pore = 1 - Integer.bitCount(state.fixedGeometry().mask(cell)) * .125
+					- Math.scalb((double)restored.granularSolidVolumeSvq(x, y, z), -24);
+			double excess = volumes[cell] - pore;
+			require(excess <= mmm.inventory.PhaseOccupancyState.VOLUME_RESOLUTION,
+					"GPU phase remainder exceeds geometry resolution");
+			maximumExcess = Math.max(maximumExcess, excess);
+		}
+		require(restored.captureAuthoritativeState().liquid().physicalStocks().equals(state.liquid().physicalStocks()),
+				"Pending phase restoration changed exact liquid stocks");
+		phaseRestoreCandidate = restored;
+		System.out.printf("stage=pending-phase-capture maximum_excess=%.12g%n", maximumExcess);
+	}
+
 	private static long checkChangedMass(FluidRegion region, mmm.fluid.ResidentFluidState.InventorySummary current, String stage) {
 		var before = massBaseline;
 		long liquidDelta = current.liquidMassUnits() - before.liquid();
@@ -603,6 +667,7 @@ public final class GpuProductionDemoValidation {
 			throw failure;
 		}
 		checkBulkWaterTemperature(state, stage);
+		preparePhaseRestoreReplay(state);
 		var afterGas = state.gas();
 		var beforeGas = before.gasState();
 		long totalDelta = Math.addExact(Math.addExact(liquidDelta, gasDelta), Math.addExact(granularDelta, coherentDelta));
