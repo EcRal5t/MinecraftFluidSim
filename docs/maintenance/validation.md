@@ -15,9 +15,10 @@
 
 ### 演示选择器与场景参数
 
-- `-PgpuDemo`：指定场景，支持 `tank`、`flow`、`ambient`、`air`、`vacuum`、`controller`、`precipitation`、`tension`、`demo`、`material`、`chemistry`、`capture`、`takeover`。
+- `-PgpuDemo`：指定场景，支持 `tank`、`flow`、`ambient`、`air`、`vacuum`、`controller`、`precipitation`、`tension`、`demo`、`material`、`chemistry`、`capture`、`takeover`、`droplet`、`droplet-tail`。
 - `-PgpuDemoSteps`：推进步数（省略时使用场景默认步数）。
 - `-PgpuDemoStage`：阶段选择器，默认 `complete`（包含物理推进、暂停、手动步进、导出恢复与编辑后续算）；可选 `initial`、`motion`、`scheduled` 用于故障分段定位。
+- `-PgpuDemoLiquidDiagnostic=true`：逐步输出单元库存、上下格面速度和液体连通情况，适合追踪空中薄层；默认关闭。连通按有库存单元的六邻接估算，支撑按下方固定碰撞估算；另列无固定碰撞的微量悬空单元数与实际库存体积。每步同时保留实际体积和整数质量，结合前后步变化判断运动，诊断导出不计入推进耗时。
 
 | 场景 (`gpuDemo`) | 步数 | 物理过程与验证要点 | 验收指标 |
 |---|---|---|---|
@@ -36,6 +37,22 @@
 | `takeover` | 40 | 接管 32 个水源方块并在完成后归还 | 动态世界方块状态无损接管与释放 |
 
 每个接受步检查四相整数质量与元素收支、热账、设备驻留及展示快照。环境交换单独记账，扣除环境交换后的系统质量差为零。调度沿用连续三步超过 200 ms 暂停的生产规则。
+
+### 悬空水片与渲染回归
+
+2026-10-29，全程使用源码分析和无头 Vulkan 重放，未启动 Minecraft 或使用 computer-use。
+
+- `materials,protocol`：零体积片不发射表面、不裁掉真实邻面、不触发水下介质；正厚度片保留。客户端材料、颗粒顶点和负坐标相机锚点补偿通过。
+- `:gpu-kernel:runGpuResidentStateValidation`：极小液量与极小气量覆盖全开放单元、固定碰撞与颗粒孔隙率；验证体积及小液量表面积，连同设备提交、恢复通过。
+- `:gpu-kernel:runGpuLiquidQuantityValidation`、`:gpu-kernel:runGpuInventoryTransportValidation`：整数数量与库存输运通过。
+- `droplet`、`droplet-tail` 各 40 步：一个容量量子和半个容量量子的水分别从单元 y=3 落到 y=0，整数质量始终为 1，体积精确不变。调用方式与其他生产场景相同。
+- `tank`、`air`、`flow`、`precipitation` 各 120 步完整流程通过；水箱与析盐各包含三个配方。水箱三配方及加压 U 管结束时悬空库存为零；水箱未出现相同悬空库存连续四步不变。每步质量、元素与能量收支通过，含环境交换的场景按源汇结算。
+
+同一批构建产物在 RTX 5070 Ti 上串行重放，非冷导入完整步的中位数／P95 分别为：水箱 16.01／21.49 ms、气压 16.51／22.30 ms、水流 23.75／35.29 ms、析盐 37.10／102.71 ms。析盐最大单步 243.12 ms，所有场景均未触发连续三步超过 200 ms 的暂停。诊断导出与逐步断言在计时之外。
+
+64³ 几何阶段抽查（`runGpuLiquidGeometryBenchmark -PgpuGeometryGrids=64 -PgpuGeometrySamples=3`）中位数：混合溃坝 1.60 ms、部分切格混合物 15.60 ms；该入口不包含完整物理步。日志为 `build/surface-cpu.log`、`build/surface-droplet.log`、`build/surface-tail.log`、`build/surface-*-fixed.log`、`build/surface-delivery.log`。源码检查确认透明提交时点、Iris 顶点格式及主画面／阴影坐标；实际画面与跨批次透明排序效果尚未验收。
+
+`:fabric:build` 通过，产物已部署到指定游戏版本的 `mods/mmm-fabric-0.17.0.jar`，SHA-256 为 `805C2B33E9981A40B0D8DEDDCFF422D6A7C06FCC3370A4F99FA0CA711D8DA433`。`verifyArchitecture` 仍被未改动的 `VulkanLiquidRegion` 1796 行超过 1000 行限制阻塞。
 
 <a id="高浓度析盐"></a>
 ### 高浓度析盐

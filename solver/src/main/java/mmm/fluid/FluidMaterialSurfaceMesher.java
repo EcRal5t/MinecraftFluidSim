@@ -17,8 +17,18 @@ public final class FluidMaterialSurfaceMesher {
     int[] heads = new int[8 * snapshot.cellCount()];
     java.util.Arrays.fill(heads, -1);
     int[] next = new int[pieces.size()];
+    boolean[] active = new boolean[pieces.size()];
+    var polyhedra = new ArrayList<List<SurfacePolyhedron.Face>>(
+        java.util.Collections.nCopies(pieces.size(), null));
     for (int i = pieces.size() - 1; i >= 0; i--) {
-      int micro = 8 * pieces.get(i).cell() + pieces.get(i).micro();
+      var piece = pieces.get(i);
+      if (!piece.clips().isEmpty()) {
+        var polyhedron = SurfacePolyhedron.build(piece);
+        if (polyhedron.isEmpty()) continue;
+        polyhedra.set(i, polyhedron);
+      }
+      active[i] = true;
+      int micro = 8 * piece.cell() + piece.micro();
       next[i] = heads[micro];
       heads[micro] = i;
     }
@@ -26,13 +36,16 @@ public final class FluidMaterialSurfaceMesher {
     var outer = new ArrayList<Triangle>();
     var interfaces = new ArrayList<InterfaceTriangle>();
     for (int i = 0; i < pieces.size(); i++) {
+      if (!active[i]) continue;
       var piece = pieces.get(i);
       if (simpleBox(input, i, heads, next, surfaces, outer, interfaces)) continue;
       var candidates = candidates(input, piece, heads, next);
       var candidatePlanes = new ArrayList<List<Plane>>(candidates.size());
       for (int otherIndex : candidates)
         candidatePlanes.add(relativePlanes(input, piece, pieces.get(otherIndex)));
-      for (var face : SurfacePolyhedron.build(piece)) {
+      var polyhedron = polyhedra.get(i);
+      if (polyhedron == null) polyhedron = SurfacePolyhedron.build(piece);
+      for (var face : polyhedron) {
         List<List<Point>> fragments = new ArrayList<>();
         fragments.add(face.points());
         for (int candidate = 0; candidate < candidates.size(); candidate++) {

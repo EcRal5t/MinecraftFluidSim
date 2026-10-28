@@ -24,9 +24,10 @@ final class MaterialSurfaceGeometry {
             ClientRegionSnapshotStore.MaterialFrame frame, boolean shadow, boolean textured,
             java.util.function.Function<String, net.minecraft.client.renderer.texture.TextureAtlasSprite> sprites) {
         var state = frame.payload();
-        double ox = state.origin().getX() - camera.x;
-        double oy = state.origin().getY() - camera.y;
-        double oz = state.origin().getZ() - camera.z;
+        var anchor = FluidRenderCoordinates.at(camera).anchor();
+        double ox = state.origin().getX() - anchor.getX();
+        double oy = state.origin().getY() - anchor.getY();
+        double oz = state.origin().getZ() - anchor.getZ();
         for (var colored : frame.triangles()) {
             var triangle = colored.triangle();
             var center = triangle.centroid();
@@ -42,19 +43,22 @@ final class MaterialSurfaceGeometry {
             float alpha = composition ? opacity(id) : 0.92F;
             var position = state.origin().offset((int) Math.floor(center.x()), (int) Math.floor(center.y()), (int) Math.floor(center.z()));
             int light = light(position);
-            FluidRenderBackend.beginMaterial(vertices, composition ? id : "", position.getX(), position.getY(), position.getZ());
+            FluidRenderBackend.beginMaterial(vertices, composition ? id : "", position.getX() - anchor.getX(),
+                    position.getY() - anchor.getY(), position.getZ() - anchor.getZ());
             var sprite = composition ? sprites.apply(id) : null;
             double length = Math.sqrt(normal.x()*normal.x()+normal.y()*normal.y()+normal.z()*normal.z());
             float sign = back ? -1 : 1;
             float nx = (float)(normal.x()/length)*sign, ny = (float)(normal.y()/length)*sign, nz = (float)(normal.z()/length)*sign;
             // Coordinates within the source block keep atlas sampling bounded across arbitrary PLIC slopes.
-            double uBase = Math.floor(Math.abs(ny) >= Math.abs(nx) ? center.x() : center.z());
-            double vBase = Math.floor(Math.abs(ny) >= Math.abs(nx) && Math.abs(ny) >= Math.abs(nz) ? center.z() : center.y());
+            boolean projectX = Math.abs(nx) >= Math.abs(ny) && Math.abs(nx) >= Math.abs(nz);
+            boolean projectY = !projectX && Math.abs(ny) >= Math.abs(nz);
+            double uBase = Math.floor(projectX ? center.z() : center.x());
+            double vBase = Math.floor(projectY ? center.z() : center.y());
             var points = back ? new FluidMaterialSurfaceMesher.Point[] {triangle.c(),triangle.b(),triangle.a(),triangle.a()}
                     : new FluidMaterialSurfaceMesher.Point[] {triangle.a(),triangle.b(),triangle.c(),triangle.c()};
             for (var point : points) {
-                double u = (Math.abs(ny) >= Math.abs(nx) ? point.x() : point.z()) - uBase;
-                double v = (Math.abs(ny) >= Math.abs(nx) && Math.abs(ny) >= Math.abs(nz) ? point.z() : point.y()) - vBase;
+                double u = (projectX ? point.z() : point.x()) - uBase;
+                double v = (projectY ? point.z() : point.y()) - vBase;
                 var vertex = vertices.addVertex((float)(ox+point.x()),(float)(oy+point.y()),(float)(oz+point.z()))
                         .setColor(((argb>>>16)&255)/255f,((argb>>>8)&255)/255f,(argb&255)/255f,alpha);
                 if (composition) vertex.setUv(sprite.getU((float)Math.clamp(u,0,1)),sprite.getV((float)Math.clamp(v,0,1)))

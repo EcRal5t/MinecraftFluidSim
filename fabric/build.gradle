@@ -187,6 +187,7 @@ tasks.register('runGpuProductionDemoValidation', JavaExec) {
 	jvmArgs '-ea', '--enable-native-access=ALL-UNNAMED', '-Xmx1g'
 	systemProperty 'mmm.solverBackend', 'vulkan'
 	systemProperty 'mmm.gpuDevice', providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+	systemProperty 'mmm.demoLiquidDiagnostic', providers.gradleProperty('gpuDemoLiquidDiagnostic').getOrElse('false')
 	args providers.gradleProperty('gpuDemo').getOrElse('demo'), providers.gradleProperty('gpuDemoSteps').getOrElse('1'), providers.gradleProperty('gpuDemoStage').getOrElse('complete')
 	def workDir = layout.buildDirectory.dir('gpu-production-demo-work').get().asFile
 	workingDir workDir

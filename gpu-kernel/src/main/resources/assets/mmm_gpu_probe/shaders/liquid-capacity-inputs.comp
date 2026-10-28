@@ -9,6 +9,13 @@ int h(int index) { return int(words[p.header+index]); }
 int64_t integerAt(int at) { return int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32)); }
 void putInteger(int at,int64_t value) { words[at]=uint(value);words[at+1]=uint(uint64_t(value)>>32); }
 double numberAt(int at) { return packDouble2x32(uvec2(words[at],words[at+1])); }
+double cellVolume(int cell) {
+    int begin=int(words[h(34)+cell]),end=int(words[h(34)+cell+1]);
+    if(begin==end)return 0.0;
+    double head=double(words[h(35)+end-1]);
+    if(end-begin>1)head+=double(words[h(35)+end-2])*2.3283064365386962890625e-10LF;
+    return ldexp(head,int(words[h(7)+cell])+32*(end-begin-1));
+}
 int faceIndex(ivec3 pos,int axis,bool positive) {
     ivec3 dims=ivec3(h(0),h(1),h(2));dims[axis]++;if(positive)pos[axis]++;
     int base=axis==0?0:(h(0)+1)*h(1)*h(2);
@@ -23,7 +30,7 @@ void cellInputs() {
     int64_t solid=integerAt(h(9)+2*cell);
     int64_t pore=(int64_t(bitCount((~words[h(8)+cell])&255u))<<21)-solid;
     bool tail=words[h(6)+cell]!=0u&&int(words[h(7)+cell])<h(4);
-    int64_t upper=(pore<<(-24-h(4)))-(tail?int64_t(1):int64_t(0));
+    int64_t upper=pore<<(-24-h(4));
     if(k<int64_t(0)||pore<int64_t(0)||(p.stage!=3&&upper<k)){atomicOr(errors,4096u);return;}
     ivec3 pos=ivec3(cell%h(0),cell/h(0)%h(1),cell/(h(0)*h(1)));
     double desired[6];double sum=0.0,incomingGas=0.0;uint open=0u;
@@ -41,13 +48,27 @@ void cellInputs() {
         if(connected)incomingGas+=max(0.0,-direction*(qt-ql));
     }
     double scale=ldexp(1.0,-h(4));
-    double factor=sum>0.0?min(1.0,double(k)/(sum*scale)):0.0;
-    int64_t remaining=k;
+    double volume=cellVolume(cell);
+    double factor=sum>0.0&&volume>0.0?min(1.0,volume/sum)*double(k)/(volume*scale):0.0;
+    // Round the total preferred transport once, then allocate its integer quanta
+    // by largest remainder. Independent floors strand a one-quantum stock even
+    // when a face preference is arbitrarily close to transferring it in full.
+    int64_t target=int64_t(min(double(k),floor(sum*scale*factor+0.5)));
+    int64_t amounts[6];double remainders[6];int64_t allocated=0l;
     for(int side=0;side<6;side++) {
-        int64_t amount=int64_t(min(double(remaining),floor(desired[side]*scale*factor)));
-        putInteger(h(20)+2*(7*cell+side+1),amount);remaining-=amount;
+        double scaled=desired[side]*scale*factor;
+        amounts[side]=int64_t(min(double(target-allocated),floor(scaled)));
+        remainders[side]=scaled-floor(scaled);
+        allocated+=amounts[side];
     }
-    putInteger(h(20)+14*cell,remaining);
+    for(int part=0;part<6&&allocated<target;part++) {
+        int best=-1;
+        for(int side=0;side<6;side++)if(remainders[side]>=0.0&&(best<0||remainders[side]>remainders[best]))best=side;
+        if(best<0)break;
+        amounts[best]++;remainders[best]=-1.0;allocated++;
+    }
+    for(int side=0;side<6;side++)putInteger(h(20)+2*(7*cell+side+1),amounts[side]);
+    putInteger(h(20)+14*cell,k-allocated);
     // Exact full cells need actual incoming dry-space transport before creating new dry volume.
     bool full=!tail&&k>=upper;
     int64_t filled=min(k,upper);

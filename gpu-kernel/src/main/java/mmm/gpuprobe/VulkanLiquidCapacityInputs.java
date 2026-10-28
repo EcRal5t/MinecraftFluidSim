@@ -27,6 +27,7 @@ final class VulkanLiquidCapacityInputs implements AutoCloseable {
             data[3] = source.cellCount(); data[4] = volumes.quantumExponent();
             data[5] = word(volumes.quantized()); data[6] = word(volumes.totalSigns());
             data[7] = word(volumes.totalExponents());
+            data[34] = word(volumes.totalOffsets()); data[35] = word(volumes.totalLimbs());
             data[8] = masksWordOffset; data[9] = occupiedWordOffset;
             data[10] = facesWordOffset; data[11] = fluxesWordOffset;
             data[16] = capacity.word(VulkanLiquidCapacityLayout.Field.K);

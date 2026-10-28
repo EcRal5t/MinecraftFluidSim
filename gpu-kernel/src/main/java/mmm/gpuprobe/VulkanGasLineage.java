@@ -87,7 +87,7 @@ final class VulkanGasLineage implements AutoCloseable {
             data[3]=oldGeometry.cells();data[4]=gas.nodeCapacity();data[5]=groupCapacity;data[6]=hashCapacity;data[7]=edges;
             data[8]=VulkanGasLineage.word(oldGeometry.cellNodes());data[9]=VulkanGasLineage.word(futureGeometry.cellNodes());
             data[10]=VulkanGasLineage.word(oldGeometry.dryVolumes());data[11]=VulkanGasLineage.word(futureGeometry.dryVolumes());
-            data[12]=oldGeometry.masksWordOffset();data[13]=faceFluxWordOffset;data[14]=accepted==null?0:accepted.acceptedWordOffset();
+            data[12]=oldGeometry.masksWordOffset();data[13]=faceFluxWordOffset;data[14]=accepted==null?0:VulkanGasLineage.word(accepted.descriptors());
             data[15]=accepted==null?0:accepted.sourceCellVolumes().quantumExponent();data[16]=oldNodeVolumesWordOffset;
             data[17]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.COUNTS).offset()/4);
             data[18]=Math.toIntExact(gas.column(VulkanGasStateLayout.Field.ROW_COMPONENT_OFFSETS).offset()/4);

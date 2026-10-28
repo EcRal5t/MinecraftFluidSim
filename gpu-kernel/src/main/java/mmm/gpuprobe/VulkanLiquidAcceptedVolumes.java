@@ -10,7 +10,7 @@ import static mmm.gpuprobe.VulkanRegionStorage.barrier;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
 
-/** Converts accepted integer cell routes to exact volumes, retaining the entire sub-quantum tail. */
+/** Converts accepted integer routes to exact volumes, carrying the final fractional quantum with the donor. */
 final class VulkanLiquidAcceptedVolumes implements AutoCloseable {
     record Layout(VulkanLiquidCellVolumes.Layout sourceCellVolumes, int acceptedWordOffset, int limbCapacity,
                   VulkanLiquidStateLayout.Column header, VulkanLiquidStateLayout.Column descriptors,

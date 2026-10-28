@@ -74,7 +74,8 @@ uint resultWord(int outputOffset,int count,int relative) {
 }
 void quantize(int cell,int outputOffset,int words,int bits,int exponent) {
     int64_t highest=int64_t(exponent)+int64_t(bits)-int64_t(1),quantum=int64_t(h(2));
-    if(highest<quantum)return;
+    // The final fractional quantum reserves capacity and travels with its stock.
+    if(highest<quantum){candidateWords[h(7)+2*cell]=1u;return;}
     if(highest-quantum>=int64_t(63)){atomicOr(errors,32u);return;}
     int64_t shift=quantum-int64_t(exponent);uint64_t result;
     if(shift<=int64_t(0)) {
@@ -86,6 +87,7 @@ void quantize(int cell,int outputOffset,int words,int bits,int exponent) {
         result=(uint64_t(low)|(uint64_t(middle)<<32))>>offset;
         if(offset!=0)result|=uint64_t(resultWord(outputOffset,words,first+2))<<(64-offset);
     }
+    if(exponent<h(2))result++;
     candidateWords[h(7)+2*cell]=uint(result);candidateWords[h(7)+2*cell+1]=uint(result>>32);
 }
 void writeCell(int cell) {

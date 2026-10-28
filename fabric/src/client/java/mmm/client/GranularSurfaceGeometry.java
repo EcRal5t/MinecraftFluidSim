@@ -129,6 +129,7 @@ final class GranularSurfaceGeometry {
         final boolean textured;
         final java.util.function.Function<String, TextureAtlasSprite> sprites;
         TextureAtlasSprite sprite;
+        final BlockPos anchor;
         final double ox,oy,oz;
 
         Emitter(VertexConsumer vertices, Vec3 camera, FluidMaterialSnapshotPayload state, boolean textured,
@@ -137,9 +138,10 @@ final class GranularSurfaceGeometry {
             this.state=state;
             this.textured=textured;
             this.sprites=sprites;
-            ox=state.origin().getX()-camera.x;
-            oy=state.origin().getY()-camera.y;
-            oz=state.origin().getZ()-camera.z;
+            anchor=FluidRenderCoordinates.at(camera).anchor();
+            ox=state.origin().getX()-anchor.getX();
+            oy=state.origin().getY()-anchor.getY();
+            oz=state.origin().getZ()-anchor.getZ();
         }
 
         void face(int axis,float plane,float minU,float maxU,float minV,float maxV,boolean positive,
@@ -153,7 +155,8 @@ final class GranularSurfaceGeometry {
             var level=client==null ? null : client.level;
             int light=level==null ? 0 : level.getBrightness(LightLayer.BLOCK,position)<<4
                     | level.getBrightness(LightLayer.SKY,position)<<20;
-            FluidRenderBackend.beginMaterial(vertices,"mmm:granular",position.getX(),position.getY(),position.getZ());
+            FluidRenderBackend.beginMaterial(vertices,"mmm:granular",position.getX()-anchor.getX(),
+                    position.getY()-anchor.getY(),position.getZ()-anchor.getZ());
             for (int i=0;i<4;i++) {
                 int corner=positive ? i : 3-i;
                 boolean upperU=corner==1 || corner==2, upperV=corner>=2;

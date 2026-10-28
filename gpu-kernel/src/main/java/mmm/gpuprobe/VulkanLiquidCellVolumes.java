@@ -40,7 +40,7 @@ final class VulkanLiquidCellVolumes implements AutoCloseable {
             return target;
         }
     }
-    /** quantumExponent=-40 gives floor(totalVolume * 2^40). */
+    /** quantumExponent=-40 gives ceil(totalVolume * 2^40) for capacity accounting. */
     static Layout layout(VulkanLiquidStateLayout source, int limbCapacity, int quantumExponent,
                          long scratchBase, long alignment) {
         if (limbCapacity < 0 || scratchBase < 0 || alignment < 8 || (alignment & (alignment - 1)) != 0)

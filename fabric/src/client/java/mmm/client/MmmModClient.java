@@ -126,7 +126,7 @@ public final class MmmModClient implements ClientModInitializer {
 			renderer.clear();
 		});
 		LevelExtractionEvents.END_EXTRACTION.register(renderer::extract);
-		LevelRenderEvents.AFTER_TRANSLUCENT_TERRAIN.register(renderer::render);
+		LevelRenderEvents.BEFORE_TRANSLUCENT_TERRAIN.register(renderer::render);
 		ClientLifecycleEvents.CLIENT_STOPPING.register(client -> renderer.close());
 	}
 }

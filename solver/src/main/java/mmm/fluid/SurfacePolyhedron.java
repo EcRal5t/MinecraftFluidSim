@@ -57,6 +57,16 @@ final class SurfacePolyhedron {
   }
 
   static List<Face> clip(List<Face> faces, Plane plane) {
+    // A plane touching a box only along a face or an edge leaves no volume.
+    // Keeping that contact polygon would render a full-area, zero-thickness sheet.
+    boolean hasInterior = false;
+    for (var face : faces)
+      for (var point : face.points())
+        if (distance(plane, point) < 0) {
+          hasInterior = true;
+          break;
+        }
+    if (!hasInterior) return List.of();
     var result = new ArrayList<Face>();
     var cap = new ArrayList<Point>();
     for (var face : faces) {

@@ -64,6 +64,7 @@ public final class ClientSurfaceValidation {
 	private static void emission(ClientRegionSnapshotStore.MaterialFrame composition, ClientRegionSnapshotStore.MaterialFrame diagnostic) {
 		var empty = granular(composition, false);
 		var nonempty = granular(composition, true);
+		FluidRenderCoordinatesValidation.run(composition, nonempty);
 		var vertices = new RecordingVertices();
 		java.util.function.Function<String, TextureAtlasSprite> unexpected = id -> {
 			throw new AssertionError("Unexpected sprite lookup: " + id);

@@ -60,7 +60,8 @@ public record FluidSurfaceInput(
           inside = false;
           break;
         }
-      if (inside) return piece.material();
+      if (inside && (piece.clips().isEmpty() || !SurfacePolyhedron.build(piece).isEmpty()))
+        return piece.material();
     }
     return -1;
   }

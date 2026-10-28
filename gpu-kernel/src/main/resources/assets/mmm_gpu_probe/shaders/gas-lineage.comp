@@ -28,7 +28,13 @@ bool fullFixed(int a,int b,int axis){
  for(int m=0;m<8;m++)if((m&(1<<axis))!=0)if((ma&(1<<m))!=0||(mb&(1<<(m^(1<<axis))))!=0)return false;
  return true;
 }
-double liquidRoute(int c,int slot){return ldexp(double(integer(h(14)+2*(7*c+slot))),h(15))*number(p.header+80);}
+double liquidRoute(int c,int slot){
+ int descriptor=h(14)+5*(7*c+slot),at=int(words[descriptor+1]),count=int(words[descriptor+2]);
+ if(count==0)return 0.0;
+ double head=double(words[at+count-1]);
+ if(count>1)head+=double(words[at+count-2])*2.3283064365386962890625e-10LF;
+ return ldexp(head,int(words[descriptor+3])+32*(count-1))*number(p.header+80);
+}
 void initialize(int id){
  if(id<h(6))words[f(HASH)+id]=0u;
  if(id==0)for(int i=0;i<4;i++)words[f(LIVE)+i]=0u;

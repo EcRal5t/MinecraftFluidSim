@@ -29,6 +29,7 @@ public final class GpuProductionDemoValidation {
 	private static FluidDomain phaseRestoreCandidate;
 	private static boolean phaseRestoreCompleted;
 	private static List<mmm.inventory.LiquidCellInventory.Stock> firstTensionStocks;
+	private static String liquidDiagnosticRecipe = "";
 
 	public static void main(String[] args) throws Exception {
 		if (args.length > 0 && args[0].equals("tension")) {
@@ -59,11 +60,13 @@ public final class GpuProductionDemoValidation {
 		String scenario = args.length == 0 ? "demo" : args[0];
 		int steps = args.length < 2 ? 1 : Integer.parseInt(args[1]);
 		String stop = args.length < 3 ? "complete" : args[2];
-		if (!Set.of("demo", "flow", "tank", "precipitation", "material", "chemistry", "tension30", "tension120", "air", "ambient", "vacuum", "controller", "capture", "takeover").contains(scenario)
+		if (!Set.of("demo", "flow", "tank", "precipitation", "material", "chemistry", "tension30", "tension120", "air", "ambient", "vacuum", "controller", "capture", "takeover", "droplet", "droplet-tail").contains(scenario)
 				|| !Set.of("initial", "motion", "scheduled", "complete").contains(stop) || steps < 1 || args.length > 3)
 			throw new IllegalArgumentException("Expected a supported demo scenario (including tank/precipitation), positive step count, and initial/motion/scheduled/complete");
 		if (Set.of("demo", "flow").contains(scenario) && stop.equals("complete") && steps < 13)
 			throw new IllegalArgumentException("Complete demo requires at least 13 scheduled steps for player entry, movement and exit");
+		if (scenario.startsWith("droplet") && stop.equals("complete") && steps < 12)
+			throw new IllegalArgumentException("Droplet replay requires at least 12 scheduled steps");
 		System.out.println("stage=startup scenario=" + scenario + " scheduled_steps=" + steps);
 		var definitions = ProductionRegistries.load();
 		var startup = WorldStartupCoordinator.start(Files.createTempDirectory("gpu-demo-world-"), () ->
@@ -84,7 +87,8 @@ public final class GpuProductionDemoValidation {
 			runCapture(startup, world, manager, steps, stop, scenario.equals("takeover"));
 			return;
 		}
-		var domain = scenario.startsWith("tension") ? FluidRegionFactory.createTensionDomain()
+		var domain = scenario.startsWith("droplet") ? FluidRegionFactory.createDomain(2, 2, 2)
+				: scenario.startsWith("tension") ? FluidRegionFactory.createTensionDomain()
 				: isAirScenario(scenario) ? FluidRegionFactory.createAirDomain()
 				: scenario.equals("flow") ? FluidRegionFactory.createDomain(DemoSceneLayout.FLOW_SIZE_X,
 						DemoSceneLayout.FLOW_SIZE_Y, DemoSceneLayout.FLOW_SIZE_Z)
@@ -105,7 +109,11 @@ public final class GpuProductionDemoValidation {
 			world.bindConfiguredState(domain, startup.config().maximumThermalSubstepsPerStep(), material);
 		} else {
 			FluidRegionFactory.bindDefaultMaterialState(domain);
-			if (isAirScenario(scenario)) DebugScenarioInitialization.fillAirWater(domain);
+			if (scenario.startsWith("droplet")) {
+				float[] volumes = new float[domain.sizeX() * domain.sizeY() * domain.sizeZ()];
+				volumes[(1 * domain.sizeY() + 3) * domain.sizeX() + 1] = Math.scalb(1.0f, scenario.equals("droplet-tail") ? -41 : -40);
+				domain.setVolumes(volumes);
+			} else if (isAirScenario(scenario)) DebugScenarioInitialization.fillAirWater(domain);
 			else if (scenario.equals("flow")) DemoSceneInitialization.fillFlow(domain);
 			else DebugScenarioInitialization.fillDam(domain, scenario.equals("material"));
 			world.bindConfiguredState(domain, startup.config().maximumThermalSubstepsPerStep());
@@ -158,6 +166,8 @@ public final class GpuProductionDemoValidation {
 			snapshots.createDispatch(region);
 			checkScenario(region, scenario, true);
 			var initialState = region.domain().captureAuthoritativeState();
+			double initialLiquidVolume = initialState.liquid().physicalStocks().stream().mapToDouble(s -> s.volumeFraction()).sum();
+			if (scenario.startsWith("droplet")) require(initialMass == 1, "Droplet must carry one integer mass unit");
 			if (scenario.startsWith("tension")) {
 				require(region.domain().maximumParticleSpeed() == 0, "Wetting scenario initial liquid must be stationary");
 				var stocks = initialState.liquid().physicalStocks();
@@ -193,6 +203,12 @@ public final class GpuProductionDemoValidation {
 			System.out.println("stage=physical-outcome scenario=" + scenario);
 			lastOutcome = measure(checkpoint.authoritativeState(), scenario);
 			checkOutcome(scenario, baseline, lastOutcome);
+			if (scenario.startsWith("droplet")) {
+				var stocks = checkpoint.authoritativeState().liquid().physicalStocks();
+				require(stocks.stream().mapToLong(s -> s.massUnits()).sum() == initialMass
+						&& stocks.stream().mapToDouble(s -> s.volumeFraction()).sum() == initialLiquidVolume,
+						"Falling droplet changed its exact mass or volume");
+			}
 			verifyManualSteps(region, ticks, motion, snapshots, initialMass, scenario);
 			residentMass = region.inventorySummary().liquidMassUnits();
 			var editable = region.domain();
@@ -308,6 +324,7 @@ public final class GpuProductionDemoValidation {
 			var motion = new MinecraftMotionExecutor(application, world, new MinecraftRuntimePolicy(startup, manager));
 			var ticks = new RegionTickUseCase(application, RegionTickUseCase.Policy.production());
 			for (var recipe : DemoTankOperations.Recipe.values()) {
+				liquidDiagnosticRecipe = recipe.name();
 				if (precipitation && recipe == DemoTankOperations.Recipe.ACID_BASE
 						&& Boolean.getBoolean("mmm.demoPhaseRestore")) phaseRestoreOperations = operations;
 				region.setPaused(true);
@@ -433,6 +450,11 @@ public final class GpuProductionDemoValidation {
 
 	private static void scheduledAdvance(WorldStartupCoordinator.Result startup, FluidRegion region,
 			FluidSnapshotPublisher snapshots, RegionTickUseCase ticks, int steps, long mass, String scenario) {
+		var liquidDiagnostic = Boolean.getBoolean("mmm.demoLiquidDiagnostic") ? new GpuDemoLiquidDiagnostic() : null;
+		String diagnosticScenario = scenario.equals("tank") ? scenario + "/" + liquidDiagnosticRecipe : scenario;
+		if (liquidDiagnostic != null) {
+			try (var capture = region.captureSolverState()) { liquidDiagnostic.print(capture.exportState(), diagnosticScenario, 0); }
+		}
 		var pacingState = new RegionRuntime(0, 1, 0, 0, region.canStep(), region.canStepThermal());
 		int completed = 0;
 		long tick = 0, entryTick = 0;
@@ -491,6 +513,9 @@ public final class GpuProductionDemoValidation {
 					scenario, completed, tick, coldImport, elapsed, pacingState.stepIntervalTicks(),
 					pacingState.hardOverrunStreak(), pacingState.recoveryStreak(), pacing.autoPause());
 			checkResident(region, snapshots, mass, scenario, "scheduled-motion");
+			if (liquidDiagnostic != null) {
+				try (var capture = region.captureSolverState()) { liquidDiagnostic.print(capture.exportState(), diagnosticScenario, completed); }
+			}
 			if (phaseRestoreCandidate != null) {
 				try { commitTankCandidate(phaseRestoreOperations, region, phaseRestoreCandidate); }
 				catch (Exception failure) { throw new IllegalStateException("Pending phase checkpoint failed", failure); }
@@ -843,7 +868,7 @@ public final class GpuProductionDemoValidation {
 
 	private static void checkScenario(FluidRegion region, String scenario, boolean initial) {
 		int x = scenario.startsWith("tension") ? 11 : isAirScenario(scenario) ? 4 : scenario.equals("flow") ? 2 : 1;
-		int y = scenario.startsWith("tension") || isAirScenario(scenario) || scenario.equals("flow") ? 2 : 1;
+		int y = scenario.startsWith("droplet") ? 3 : scenario.startsWith("tension") || isAirScenario(scenario) || scenario.equals("flow") ? 2 : 1;
 		int z = scenario.startsWith("tension") ? 11 : isAirScenario(scenario) ? 2 : scenario.equals("flow") ? 2 : 1;
 		var first = region.observeCellInventory(x, y, z);
 		if (initial) require(first != null && first.liquidVolumeCubicMetres() > 0, "Scenario liquid observation is empty");
@@ -922,6 +947,8 @@ public final class GpuProductionDemoValidation {
 	private static void checkOutcome(String scenario, PhysicalObservation initial, PhysicalObservation end) {
 		System.out.println("stage=physical-observation initial=" + initial + " final=" + end);
 		switch (scenario) {
+			case "droplet", "droplet-tail" -> require(end.waterY() <= initial.waterY() - 1,
+					"Suspended droplet did not fall by a cell: initial=" + initial.waterY() + " final=" + end.waterY());
 			case "demo", "flow" -> require(end.waterX() > initial.waterX(), "Dam-break did not transport water outwards");
 			case "material" -> require(end.waterX() > initial.waterX() && end.oilX() > initial.oilX()
 					&& end.oilY() > end.waterY(), "Both layers must move while lighter oil remains above water");

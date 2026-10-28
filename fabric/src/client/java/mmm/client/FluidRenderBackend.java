@@ -14,6 +14,7 @@ import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.blaze3d.vertex.VertexFormat;
+import com.mojang.blaze3d.vertex.VertexSorting;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.RenderPipelines;
@@ -57,16 +58,16 @@ final class FluidRenderBackend implements AutoCloseable {
 	private long buildNanos, uploadNanos, submitNanos, draws, indices;
 	private long nextCostReport = System.nanoTime() + 10_000_000_000L;
 
-	void render(boolean textured, Consumer<VertexConsumer> geometry) {
-		render(textured ? SURFACE : DIAGNOSTIC, geometry);
+	void render(boolean textured, FluidRenderCoordinates coordinates, Consumer<VertexConsumer> geometry) {
+		render(textured ? SURFACE : DIAGNOSTIC, coordinates, geometry);
 	}
 
-	void renderShadow(Consumer<VertexConsumer> geometry) {
-		render(SURFACE, geometry);
+	void renderShadow(FluidRenderCoordinates coordinates, Consumer<VertexConsumer> geometry) {
+		render(SURFACE, coordinates, geometry);
 	}
 
 	void renderDebug(Consumer<VertexConsumer> geometry) {
-		render(RenderPipelines.DEBUG_FILLED_BOX, geometry);
+		render(RenderPipelines.DEBUG_FILLED_BOX, null, geometry);
 	}
 
 	static void beginMaterial(VertexConsumer vertices, String materialId, int x, int y, int z) {
@@ -94,15 +95,19 @@ final class FluidRenderBackend implements AutoCloseable {
 				.withDepthStencilState(DepthStencilState.DEFAULT).withCull(false).build();
 	}
 
-	private void render(RenderPipeline pipeline, Consumer<VertexConsumer> geometry) {
+	private void render(RenderPipeline pipeline, FluidRenderCoordinates coordinates, Consumer<VertexConsumer> geometry) {
 		long buildStart = System.nanoTime();
 		VertexFormat format = pipeline.getVertexFormatBinding(0);
 		if (format == null) return;
 		PrimitiveTopology primitive = pipeline.getPrimitiveTopology();
+		VertexSorting sorting = RenderSystem.getProjectionType().vertexSorting();
+		if (coordinates != null && sorting == VertexSorting.DISTANCE_TO_ORIGIN) {
+			sorting = VertexSorting.byDistance(coordinates.cameraX(), coordinates.cameraY(), coordinates.cameraZ());
+		}
 		StagedVertexBuffer.Draw draw = stagedBuffer.appendDraw(
 				format,
 				primitive,
-				primitive == PrimitiveTopology.QUADS ? RenderSystem.getProjectionType().vertexSorting() : null
+				primitive == PrimitiveTopology.QUADS ? sorting : null
 		);
 
 		VertexConsumer vertices = stagedBuffer.getVertexBuilder(draw);
@@ -111,7 +116,7 @@ final class FluidRenderBackend implements AutoCloseable {
 		stagedBuffer.upload();
 		long submitStart = System.nanoTime();
 		StagedVertexBuffer.ExecuteInfo info = stagedBuffer.getExecuteInfo(draw);
-		if (info != null) execute(Minecraft.getInstance(), info, pipeline);
+		if (info != null) execute(Minecraft.getInstance(), info, pipeline, coordinates);
 		stagedBuffer.endFrame();
 		long end = System.nanoTime();
 		if (info != null) {
@@ -129,9 +134,12 @@ final class FluidRenderBackend implements AutoCloseable {
 		}
 	}
 
-	private static void execute(Minecraft client, StagedVertexBuffer.ExecuteInfo info, RenderPipeline pipeline) {
+	private static void execute(Minecraft client, StagedVertexBuffer.ExecuteInfo info, RenderPipeline pipeline,
+			FluidRenderCoordinates coordinates) {
+		Matrix4f modelView = RenderSystem.getModelViewMatrixCopy();
+		if (coordinates != null) modelView.translate(-coordinates.cameraX(), -coordinates.cameraY(), -coordinates.cameraZ());
 		GpuBufferSlice transforms = RenderSystem.getDynamicUniforms().writeTransform(
-				RenderSystem.getModelViewMatrixCopy(), COLOR_MODULATOR, MODEL_OFFSET, TEXTURE_MATRIX
+				modelView, COLOR_MODULATOR, MODEL_OFFSET, TEXTURE_MATRIX
 		);
 		RenderTarget target = ChunkSectionLayerGroup.TRANSLUCENT.outputTarget();
 		GpuTextureView color = target.getColorTextureView();

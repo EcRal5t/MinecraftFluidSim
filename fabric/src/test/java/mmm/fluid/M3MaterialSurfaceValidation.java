@@ -120,6 +120,28 @@ final class M3MaterialSurfaceValidation {
   }
 
   private static void validateBoundedPieces(FluidMaterialRegistry registry, int material) {
+    var contactOnly = new FluidSurfaceInput.Piece(
+        0, 2, material, registry.phaseHandle(material),
+        List.of(new FluidSurfaceInput.Plane(0, 1, 0, .5)));
+    check(SurfacePolyhedron.build(contactOnly).isEmpty(),
+        "a plane touching only a microbox face produced a zero-volume surface");
+    var contactInput = new FluidSurfaceInput(1, 1, 1, 1, List.of(contactOnly));
+    check(contactInput.materialAt(.25, .5, .25) == -1,
+        "a zero-volume surface reported a liquid camera medium");
+    var thinPositive = new FluidSurfaceInput.Piece(
+        0, 2, material, registry.phaseHandle(material),
+        List.of(new FluidSurfaceInput.Plane(0, 1, 0, .5 + 1.0E-10)));
+    check(SurfacePolyhedron.volume(SurfacePolyhedron.build(thinPositive)) > 0,
+        "a positive thin layer disappeared from the geometry");
+    var full = new FluidSurfaceInput.Piece(0, 0, material, registry.phaseHandle(material), List.of());
+    var adjoining = FluidMaterialRenderSnapshot.fromDisplayFields(
+        1, 1, 1, 1, registry.materials(), registry.phaseGroups(),
+        new byte[registry.size()][1], new byte[registry.phaseCount()][1],
+        new FluidSurfaceInput(1, 1, 1, 1, List.of(full, contactOnly)));
+    double adjoiningArea = FluidMaterialSurfaceMesher.build(adjoining).outerTriangles().stream()
+        .mapToDouble(triangle -> Math.sqrt(triangle.areaSquared())).sum();
+    check(Math.abs(adjoiningArea - 1.5) < 1.0E-12,
+        "a zero-volume neighbor removed a real liquid face or produced a sheet");
     var domain =
         new FluidDomain(4, 4, 4, new FluidSolverConfig(1, 1_000, 0, .025F, 200, 1.0E-5F, 2.0E-3F));
     domain.setVolume(1, 1, 1, 1.0E-6F);

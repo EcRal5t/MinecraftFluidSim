@@ -61,8 +61,50 @@ public final class GpuResidentStateValidation {
             }
             System.out.println("Production state import, rejected private candidate, mechanical/thermal adoption, device readout and exact checkpoint passed");
         }
+        validateSmallGeometry(device);
         long expectedGasMass=0;for(var node:initial.gas().nodes())expectedGasMass=Math.addExact(expectedGasMass,node.inventory().totalMassUnits());
         validateBackend(device,initial,expectedMass,expectedGasMass);
+    }
+    private static void validateSmallGeometry(int device){
+        var fluids=new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));
+        double small=Math.scalb(1.0,-40);
+        try(var context=new VulkanDeviceContext(device,true,true);var geometry=new VulkanLiquidGeometry(context);
+            var projection=new VulkanLiquidProjection(context);var pressure=new VulkanPressureKernel(context,4096);
+            var mg=new VulkanPressureMultigrid(context);var display=new VulkanLiquidDisplay(context)){
+            for(int mask:new int[]{0,0xaa,1})for(boolean full:new boolean[]{false,true}){
+                long solid=mask!=0?1L<<21:0;
+                double geometricCapacity=Integer.bitCount(~mask&255)*.125;
+                double capacity=geometricCapacity-solid/16777216.0,porosity=capacity/geometricCapacity;
+                double volume=full?capacity-small:small;
+                var stock=new mmm.inventory.DeviceLiquidInventory(new int[]{0,1,1,1,1,1,1,1,1},new int[]{0},new int[]{~mask&255},
+                    mmm.units.DeviceDyadicArray.encode(List.of(mmm.units.SignedDyadic.of(volume))),new long[]{1},new long[]{0},
+                    new int[]{0},new int[]{0,0},new int[0],new long[0],new long[]{0});
+                var momentum=new MacMomentumState(2,2,2,new double[12],new double[12],new double[12]);
+                var masks=new byte[8];masks[0]=(byte)mask;
+                var solids=new long[8];solids[0]=solid;
+                try(var region=new VulkanLiquidRegion(context,geometry,projection,pressure,mg,stock,momentum,
+                        FixedGeometrySnapshot.fromMasks(2,2,2,masks),solids)){
+                    region.rebuildGeometry();
+                    try(var capture=region.captureState()){
+                        double occupied=java.util.Arrays.stream(capture.occupancy().copyLiquidMicroVolumes()).sum();
+                        if(Math.abs(occupied-volume)>Math.max(1e-18,volume*1e-11))
+                            throw new AssertionError("Small-phase occupied volume differs: "+occupied+" vs "+volume);
+                        var rendered=display.capture(capture,fluids,1);
+                        var mesh=FluidMaterialSurfaceMesher.build(rendered);
+                        double signedVolume=0,area=0;
+                        for(var face:mesh.outerTriangles()){
+                            signedVolume+=face.a().dot(face.b().cross(face.c()))/6;
+                            area+=Math.sqrt(face.areaSquared());
+                        }
+                        double geometricVolume=volume/porosity;
+                        if(Math.abs(signedVolume-geometricVolume)>Math.max(3e-14,geometricVolume*1e-5))
+                            throw new AssertionError("Small-phase display volume differs: "+signedVolume+" vs "+geometricVolume);
+                        if(!full&&!(area>0&&area<.001))
+                            throw new AssertionError("Small liquid spread across an entire cell: area="+area);
+                    }
+                }
+            }
+        }
     }
     private static void validateBackend(int device,FluidDomainState initial,long expectedMass,long expectedGasMass){
         FluidStateAccess current=initial;
