@@ -2,7 +2,6 @@ package mmm.simulation;
 
 import mmm.MmmMod;
 import mmm.application.ContainerRecoveryCoordinator;
-import mmm.application.RegionCatalog;
 import mmm.block.MmmBlocks;
 import mmm.simulation.controller.FluidBoundaryScanner;
 import mmm.simulation.controller.FluidControllerRegions;
@@ -27,7 +26,6 @@ public final class MinecraftRegionActivation {
 	private final FluidSnapshotPublisher snapshots;
 	private final MinecraftRegionTick regionTick;
 	private final MinecraftTakeoverAdapter takeover;
-	private final MinecraftDebugScaffolding debugScaffolding;
 	private final ContainerRecoveryCoordinator containerRecovery;
 	private final BooleanSupplier controllerFeatureEnabled;
 	private final BooleanSupplier defaultEntityPhysics;
@@ -45,7 +43,6 @@ public final class MinecraftRegionActivation {
 			FluidSnapshotPublisher snapshots,
 			MinecraftRegionTick regionTick,
 			MinecraftTakeoverAdapter takeover,
-			MinecraftDebugScaffolding debugScaffolding,
 			ContainerRecoveryCoordinator containerRecovery,
 			BooleanSupplier controllerFeatureEnabled,
 			BooleanSupplier defaultEntityPhysics,
@@ -62,7 +59,6 @@ public final class MinecraftRegionActivation {
 		this.snapshots = Objects.requireNonNull(snapshots, "Snapshot publisher");
 		this.regionTick = Objects.requireNonNull(regionTick, "Region tick adapter");
 		this.takeover = Objects.requireNonNull(takeover, "Takeover adapter");
-		this.debugScaffolding = Objects.requireNonNull(debugScaffolding, "Debug scaffolding");
 		this.containerRecovery = Objects.requireNonNull(containerRecovery, "Container recovery coordinator");
 		this.controllerFeatureEnabled = Objects.requireNonNull(controllerFeatureEnabled, "Controller feature gate");
 		this.defaultEntityPhysics = Objects.requireNonNull(defaultEntityPhysics, "Default entity physics");
@@ -75,7 +71,6 @@ public final class MinecraftRegionActivation {
 
 	public Result activate(ServerPlayer player, BlockPos controllerPosition, boolean toggleRunning) {
 		ServerLevel level = player.level();
-		debugScaffolding.restore(level.getServer());
 		if (!level.getBlockState(controllerPosition).is(MmmBlocks.FLUID_CONTROLLER)) {
 			return Result.failed("目标方块不再是 Matter, Motion & Mechanics 控制器");
 		}
@@ -115,6 +110,9 @@ public final class MinecraftRegionActivation {
 			return Result.failed("存在未解决或超预算的 region-state/ownership；已锁住新控制器区域，详见 /mmm regions list、/mmm ownership 与日志");
 		}
 
+		if (takeover.pendingBlockCount() > 0) {
+			return Result.failed("请先选择接管演示区域并使用 /mmm remove 恢复原版水体");
+		}
 		RestorationStats restoration = takeover.restore(level.getServer());
 		if (!restoration.completed()) return Result.failed(restoration.failure());
 		FluidBoundaryScanner.ScanResult scan = FluidControllerRegions.scan(
@@ -146,58 +144,30 @@ public final class MinecraftRegionActivation {
 		}
 		ControllerCreationPlan creationPlan = new ControllerCreationPlan(
 				world.profile().profileFingerprint(), footprint, ownershipPreimage);
-		long requiredCells;
-		try {
-			requiredCells = Math.multiplyExact(
-					footprint.denseBlockCapacity(), FluidRegionFactory.CELL_VOLUMES_PER_BLOCK);
-		} catch (ArithmeticException exception) {
-			return Result.failed("控制器区域尺寸溢出资源计数");
-		}
-		RegionCatalog.AdmissionResult preview = regions.previewAdd(requiredCells);
-		if (!preview.accepted()) return Result.failed(preview.failure());
-		String availabilityFailure = FluidControllerRegions.availabilityFailure(level, footprint);
-		if (availabilityFailure != null) return Result.failed(availabilityFailure);
-
-		FluidRegion candidate;
-		try {
-			candidate = FluidRegionFactory.createControllerRegion(level, footprint);
-		} catch (IllegalArgumentException | ArithmeticException exception) {
-			return Result.failed("无法分配控制器区域：" + exception.getMessage());
-		}
-		candidate.setEntityPhysicsEnabled(defaultEntityPhysics.getAsBoolean());
-		candidate.setDebugOverlays(defaultDebugOverlays.getAsBoolean());
-		RegionCatalog.AdmissionResult exactPreview = regions.previewAdd(candidate);
-		if (!exactPreview.accepted()) return Result.failed(exactPreview.failure());
-		try {
-			regionTick.refreshRegionInputs(level, candidate);
-			if (worldBridgeFeatureEnabled) FluidRegionFactory.captureVanillaWater(level, candidate);
-			world.bindConfiguredState(candidate.domain(), maximumThermalSubstepsPerStep);
-		} catch (RuntimeException invalidCandidate) {
-			return Result.failed("无法构造完整控制器区域候选：" + invalidCandidate.getMessage());
-		}
-		candidate.setPaused(false);
-		candidate.wakeForActivity();
-		try {
-			if (!creationPlan.profileFingerprint().equals(world.profile().profileFingerprint())
-					|| !creationPlan.footprint().equals(candidate.footprint())) {
-				throw new IOException("Controller creation proof changed after preflight");
+		ControllerRegionCreation.Result creation = ControllerRegionCreation.create(
+				regions, level.dimension(), footprint, defaultEntityPhysics.getAsBoolean(),
+				defaultDebugOverlays.getAsBoolean(), () -> FluidControllerRegions.availabilityFailure(level, footprint),
+				candidate -> {
+					regionTick.refreshRegionInputs(level, candidate);
+					if (worldBridgeFeatureEnabled) FluidRegionFactory.captureVanillaWater(level, candidate);
+					world.bindConfiguredState(candidate.domain(), maximumThermalSubstepsPerStep);
+				}, candidate -> {
+					if (!creationPlan.profileFingerprint().equals(world.profile().profileFingerprint())
+							|| !creationPlan.footprint().equals(candidate.footprint())) {
+						throw new IOException("Controller creation proof changed after preflight");
+					}
+					if (worldBridgeFeatureEnabled) operations.acquireOwnership(level, candidate, creationPlan.ownershipPreimage());
+					else operations.checkpoint(candidate);
+				});
+		if (creation.failure() != null) {
+			if (creation.retainShell()) {
+				operations.recordIssue(creation.failure());
+				MmmMod.LOGGER.error("Controller creation requires recovery: {}", creation.failure());
+				return Result.failedAfterPersistence(creation.failure());
 			}
-			if (worldBridgeFeatureEnabled) operations.acquireOwnership(
-					level, candidate, creationPlan.ownershipPreimage());
-			else operations.checkpoint(candidate);
-		} catch (IOException | RuntimeException exception) {
-			MmmMod.LOGGER.error("Controller region {} was rejected after its initial checkpoint failed",
-					candidate.id(), exception);
-			return Result.failed("区域未创建；初始 checkpoint/ownership 事务失败：" + exception.getMessage());
+			return Result.failed(creation.failure());
 		}
-		RegionCatalog.AdmissionResult admission = regions.addAndSelect(candidate);
-		if (!admission.accepted()) {
-			String issue = "首个 region HEAD 已提交，但 live owner 登记违反已通过的 admission 预检：" + admission.failure();
-			operations.recordIssue(issue);
-			MmmMod.LOGGER.error("Controller region {} requires restart after live registration failed: {}",
-					candidate.id(), admission.failure());
-			return Result.failed(issue + "；请重启服务器恢复已提交区域");
-		}
+		FluidRegion candidate = creation.region();
 		snapshots.sendToLevel(level, candidate);
 		return Result.created(footprint);
 	}
@@ -212,13 +182,17 @@ public final class MinecraftRegionActivation {
 
 	public record Result(
 			boolean succeeded, boolean disabled, Action action, String failure,
-			int interiorBlocks, int sizeX, int sizeY, int sizeZ, int requiredChunks
+			int interiorBlocks, int sizeX, int sizeY, int sizeZ, int requiredChunks, boolean retainShell
 	) {
 		private static final Result DISABLED = new Result(
-				false, true, null, "controller feature flag is disabled", 0, 0, 0, 0, 0);
+				false, true, null, "controller feature flag is disabled", 0, 0, 0, 0, 0, false);
 
 		private static Result failed(String failure) {
-			return new Result(false, false, null, failure, 0, 0, 0, 0, 0);
+			return new Result(false, false, null, failure, 0, 0, 0, 0, 0, false);
+		}
+
+		private static Result failedAfterPersistence(String failure) {
+			return new Result(false, false, null, failure, 0, 0, 0, 0, 0, true);
 		}
 
 		private static Result created(FluidRegionFootprint footprint) {
@@ -228,7 +202,7 @@ public final class MinecraftRegionActivation {
 		private static Result succeeded(FluidRegionFootprint footprint, Action action) {
 			return new Result(true, false, action, null, footprint.interiorBlocks().size(),
 					footprint.blockSizeX(), footprint.blockSizeY(), footprint.blockSizeZ(),
-					footprint.requiredChunks().size());
+					footprint.requiredChunks().size(), false);
 		}
 	}
 

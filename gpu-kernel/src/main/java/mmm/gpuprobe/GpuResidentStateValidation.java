@@ -22,8 +22,11 @@ public final class GpuResidentStateValidation {
             materials.add(material(gas.id().substring(4),ThermalMaterialDefinition.CarrierKind.GAS,gas.id(),718,.026));
             for(String species:gas.allowedSpecies())offsets.add(new ThermalSpeciesOffset(host+"/"+species.substring(4),species,host,mmm.chemistry.ExactRational.ZERO));
         }
-        var thermal=new ThermalRegistry(materials,offsets,List.of(),"","");domain.bindThermal(thermal,fluids,300);
+        var thermal=new ThermalRegistry(materials,offsets,List.of(),"","");
+        domain.bindGasRegistry(mmm.fluid.air.BuiltinGasDefinitions.createRegistry());domain.bindThermal(thermal,fluids,300);
+        domain.bootstrapGasState("");
         var initial=domain.captureAuthoritativeState();var codec=new VulkanFluidStateCodec(initial);var audit=domain.thermalAudit();long expectedMass=domain.totalMassUnits();
+        if(!initial.hasGas()||initial.gas().nodes().isEmpty())throw new AssertionError("Resident fixture did not initialize a finite gas chamber");
         try(var context=new VulkanDeviceContext(device,true,true);var geometry=new VulkanLiquidGeometry(context);
             var projection=new VulkanLiquidProjection(context);var pressure=new VulkanPressureKernel(context,4096);
             var mg=new VulkanPressureMultigrid(context);var region=codec.importRegion(context,geometry,projection,pressure,mg);
@@ -40,13 +43,13 @@ public final class GpuResidentStateValidation {
                     var posting=successor.thermalPosting();audit=posting.apply(audit);
                     var exported=codec.export(successor,audit);
                     if(!exported.layout().equals(initial.layout()))throw new AssertionError("Device export changed layout");
-                    if(!successor.exactThermalInventory().equals(audit.expectedInventory()))throw new AssertionError("Device thermal inventory reduction differs from audit");
+                    if(!audit.acceptsInventory(successor.exactThermalInventory()))throw new AssertionError("Device thermal inventory reduction differs from audit");
                     var derived=fields.capture(successor,codec);if(derived.thermal()==null)throw new AssertionError("Thermal display missing");
                     var totals=observation.capture(successor);
                     if(!(totals.volume()>0&&totals.mass()>0))throw new AssertionError("Device observations lost inventory");
                     var summary=inventorySummary.capture(successor,.5,true);
                     if(summary.liquidMassUnits()!=expectedMass||summary.chemicalTotalQuanta()!=0||!(summary.minimumTemperatureK()>0&&summary.maximumTemperatureK()>=summary.minimumTemperatureK())
-                            ||summary.totalInternalEnergyJoules()!=audit.expectedInventory().toDouble())throw new AssertionError("Constant-size inventory/temperature summary differs from committed inventory");
+                            ||!audit.acceptsInventory(mmm.units.SignedDyadic.of(summary.totalInternalEnergyJoules())))throw new AssertionError("Constant-size inventory/temperature summary differs from committed inventory");
                     var bodySample=bodyObservation.capture(successor,.5,.25,.5,1,.75,1,0,.5,9.81);
                     requireWetSample(bodySample);
                     var cell=cellObservation.capture(successor,codec,1,0,1);requireCellAndWater(cell,waterContacts.capture(successor,codec,contactFaces()));
@@ -58,9 +61,10 @@ public final class GpuResidentStateValidation {
             }
             System.out.println("Production state import, rejected private candidate, mechanical/thermal adoption, device readout and exact checkpoint passed");
         }
-        validateBackend(device,initial,expectedMass);
+        long expectedGasMass=0;for(var node:initial.gas().nodes())expectedGasMass=Math.addExact(expectedGasMass,node.inventory().totalMassUnits());
+        validateBackend(device,initial,expectedMass,expectedGasMass);
     }
-    private static void validateBackend(int device,FluidDomainState initial,long expectedMass){
+    private static void validateBackend(int device,FluidDomainState initial,long expectedMass,long expectedGasMass){
         FluidStateAccess current=initial;
         var providers=java.util.ServiceLoader.load(FluidSolverBackend.Provider.class).stream()
                 .map(java.util.ServiceLoader.Provider::get).filter(provider->provider.id().equals("vulkan")).toList();
@@ -78,7 +82,7 @@ public final class GpuResidentStateValidation {
                 else{try(var candidate=backend.evaluate(new FluidStepRequest(step,current,List.of(),false,0,false,false));var prepared=candidate.claimPreparedDeviceState()){
                     if(prepared==null)throw new AssertionError("Mechanical backend did not retain a private device candidate");next=prepared.commit();}}
                 current.close();current=next;if(!(current instanceof ResidentFluidState resident))throw new AssertionError("Backend adoption lost GPU residency");
-                var summary=resident.inventorySummary();if(summary.liquidMassUnits()!=expectedMass||!resident.observation().thermalAuditClosed())throw new AssertionError("Backend adoption changed exact liquid inventory or thermal audit");
+                var summary=resident.inventorySummary();if(summary.liquidMassUnits()!=expectedMass||summary.gasMassUnits()!=expectedGasMass||!resident.observation().thermalAuditClosed())throw new AssertionError("Backend adoption changed liquid/gas inventory or thermal audit");
                 requireWetSample(resident.sampleBody(.5,.25,.5,1,.75,1));if(resident.display().thermal()==null)throw new AssertionError("Backend thermal display unavailable");
                 requireCellAndWater(resident.observeCellInventory(1,0,1),resident.waterContacts(contactFaces()));
                 if(step==0){var before=resident.inventorySummary();try(var abandoned=backend.evaluate(new FluidStepRequest(step+1,current,List.of(),false,0,false,false))){}
@@ -96,7 +100,7 @@ public final class GpuResidentStateValidation {
                     requireBodyResult(candidate.movingBodyCoupling(),bodyId);
                     var next=prepared.commit();current.close();current=next;
                 }
-                requireResidentInventory(current,expectedMass);
+                requireResidentInventory(current,expectedMass,expectedGasMass);
             }
             var checkpoint=current.exportState();
             if(!checkpoint.layout().equals(initial.layout()))throw new AssertionError("Backend final explicit checkpoint changed layout");
@@ -109,7 +113,7 @@ public final class GpuResidentStateValidation {
                 requireBodyResult(candidate.movingBodyCoupling(),bodyId);
                 var next=prepared.commit();current.close();current=next;
             }
-            requireResidentInventory(current,expectedMass);
+            requireResidentInventory(current,expectedMass,expectedGasMass);
             System.out.println("backend_prescribed_body=true occupied_pose_changed=true named_result=true checkpoint_continuation=true");
             current.close();current=initial;
         }finally{current.close();}
@@ -119,9 +123,9 @@ public final class GpuResidentStateValidation {
         if(!(result.coupledVolumeCubicMetres()>0)||result.bodyImpulses().size()!=1||!result.bodyImpulses().getFirst().bodyId().equals(id))
             throw new AssertionError("Prescribed-body request did not return its wet interaction result");
     }
-    private static void requireResidentInventory(FluidStateAccess state,long expectedMass){
-        if(!(state instanceof ResidentFluidState resident)||resident.inventorySummary().liquidMassUnits()!=expectedMass||!resident.observation().thermalAuditClosed())
-            throw new AssertionError("Prescribed-body continuation changed liquid inventory or thermal accounting");
+    private static void requireResidentInventory(FluidStateAccess state,long expectedMass,long expectedGasMass){
+        if(!(state instanceof ResidentFluidState resident)||resident.inventorySummary().liquidMassUnits()!=expectedMass||resident.inventorySummary().gasMassUnits()!=expectedGasMass||!resident.observation().thermalAuditClosed())
+            throw new AssertionError("Prescribed-body continuation changed liquid/gas inventory or thermal accounting");
     }
     private static void requireWetSample(FluidDomain.BodyFluidSample sample){
         if(!(sample.displacedVolumeCubicMetres()>0&&sample.displacedMassKilograms()>0&&sample.wetSurfaceAreaSquareMetres()>0)

@@ -50,6 +50,8 @@ public final class GasPressureBoundary {
 	}
 	public GasAuditLedger externalSource() { return domain.gasState.network.externalSource(); }
 	public GasAuditLedger escapedSink() { return domain.gasState.network.escapedSink(); }
+	public GasAuditLedger phaseSource() { return domain.gasState.network.phaseSource(); }
+	public GasAuditLedger phaseSink() { return domain.gasState.network.phaseSink(); }
 
 	/** Thermal-aware node pressure source; standard-temperature fallback before the gas model binds. */
 	public double nodeGaugePressurePa(int node) {

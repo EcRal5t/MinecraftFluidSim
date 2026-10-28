@@ -49,18 +49,7 @@ final class MinecraftTakeoverAdapter {
 	 * says otherwise, the world was already rolled back.
 	 */
 	BeginResult begin(ServerLevel level, FluidRegion region, int cellsPerBlock) {
-		Map<BlockPos, BlockState> candidates = new HashMap<>();
-		int blocksX = region.sizeX() / cellsPerBlock;
-		int blocksY = region.sizeY() / cellsPerBlock;
-		int blocksZ = region.sizeZ() / cellsPerBlock;
-		for (int blockZ = 0; blockZ < blocksZ; blockZ++) for (int blockY = 0; blockY < blocksY; blockY++) {
-			for (int blockX = 0; blockX < blocksX; blockX++) {
-				BlockPos position = region.origin().offset(blockX, blockY, blockZ);
-				BlockState state = level.getBlockState(position);
-				if (!state.is(Blocks.WATER)) continue;
-				candidates.put(position.immutable(), state);
-			}
-		}
+		Map<BlockPos, BlockState> candidates = collectWater(region, cellsPerBlock, level::getBlockState);
 		if (candidates.isEmpty()) return BeginResult.EMPTY;
 		try {
 			TakeoverBackupStore.BeginResult result =
@@ -71,9 +60,11 @@ final class MinecraftTakeoverAdapter {
 			}
 			maintenanceEnabled = result.removedBlocks() > 0;
 			lastFailure = null;
-			if (result.removedBlocks() == 0) {
+			if (result.removedBlocks() != candidates.size()) {
 				RestorationStats cleanup = restore(level.getServer());
 				if (!cleanup.completed()) return new BeginResult(-1, lastFailure);
+				lastFailure = "接管未能移除全部水方块，已恢复世界水体";
+				return new BeginResult(-1, lastFailure);
 			}
 			return new BeginResult(result.removedBlocks(), null);
 		} catch (IOException | RuntimeException exception) {
@@ -85,6 +76,23 @@ final class MinecraftTakeoverAdapter {
 					: beginFailure + "；自动回滚未完成，journal 已锁定新 takeover：" + rollback.failure();
 			return new BeginResult(-1, lastFailure);
 		}
+	}
+
+	static Map<BlockPos, BlockState> collectWater(FluidRegion region, int cellsPerBlock,
+			java.util.function.Function<BlockPos, BlockState> blockAt) {
+		Map<BlockPos, BlockState> candidates = new HashMap<>();
+		int blocksX = region.sizeX() / cellsPerBlock;
+		int blocksY = region.sizeY() / cellsPerBlock;
+		int blocksZ = region.sizeZ() / cellsPerBlock;
+		for (int blockZ = 0; blockZ < blocksZ; blockZ++) for (int blockY = 0; blockY < blocksY; blockY++) {
+			for (int blockX = 0; blockX < blocksX; blockX++) {
+				BlockPos position = region.origin().offset(blockX, blockY, blockZ);
+				BlockState state = blockAt.apply(position);
+				if (!state.is(Blocks.WATER)) continue;
+				candidates.put(position.immutable(), state);
+			}
+		}
+		return candidates;
 	}
 
 	/** Restores every journaled block; the journal is cleared only after the world pass completes. */

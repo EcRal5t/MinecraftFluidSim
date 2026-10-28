@@ -79,6 +79,7 @@ public final class MmmRuntimeFactory {
 		FluidSolverBackend solverBackend = createSolverBackend();
 		try {
 		MmmMod.LOGGER.info("Matter, Motion & Mechanics numerical execution: {}", solverBackend.executionDescription());
+		prepareSolverBackend(solverBackend, startup, worldRegistries);
 		RegionApplicationService regionApplication = new RegionApplicationService(solverBackend,
 				new FluidRegionRepository(regionManager), regionOperations);
 		MinecraftMotionExecutor motion = new MinecraftMotionExecutor(regionApplication, worldRegistries, policy);
@@ -115,7 +116,7 @@ public final class MmmRuntimeFactory {
 				availability::ensure);
 		MinecraftRegionActivation regionActivation = new MinecraftRegionActivation(
 				startup, worldRegistries, regionManager, regionOperations, snapshots, regionTick, takeover,
-				scaffolding, containerRecovery, policy::controllerEnabled, policy::defaultEntityPhysicsEnabled,
+				containerRecovery, policy::controllerEnabled, policy::defaultEntityPhysicsEnabled,
 				policy::defaultDebugOverlays, ownership::current, availability,
 				policy.liveWorldBridgeEnabled(), policy.maximumThermalSubstepsPerStep());
 		MinecraftPoolOperations pools = new MinecraftPoolOperations(regionManager, regionOperations, regionActivation,
@@ -125,7 +126,9 @@ public final class MmmRuntimeFactory {
 					@Override public FluidRegion.CollisionStats refreshCollisions(net.minecraft.server.level.ServerLevel level) {
 						FluidRegion region = regionManager.selected();
 						if (region == null) return FluidRegion.CollisionStats.EMPTY;
-						if (!availability.ensure(level, region)) return region.lastCollisionStats();
+						if (!availability.ensure(level, region)) {
+							throw new IllegalStateException("演示区域无法读取世界碰撞：" + region.availabilityFailure());
+						}
 						try {
 							return regionTick.refreshRegionInputs(level, region);
 						} catch (FluidDomain.CollisionEditBlockedException blocked) {
@@ -137,11 +140,20 @@ public final class MmmRuntimeFactory {
 					@Override public void bindCapabilityState(FluidDomain domain) {
 						worldRegistries.bindConfiguredState(domain, policy.maximumThermalSubstepsPerStep());
 					}
-					@Override public String activateController(
+					@Override public void bindTensionPalette(FluidDomain domain, int angleDegrees) {
+						DebugScenarioInitialization.bindTensionPalette(domain,
+								DebugScenarioInitialization.tensionDefinitions(worldRegistries.materialRegistry(), angleDegrees));
+					}
+					@Override public void bindTensionCapabilityState(FluidDomain domain, int angleDegrees) {
+						worldRegistries.bindConfiguredState(domain, policy.maximumThermalSubstepsPerStep(),
+								DebugScenarioInitialization.tensionDefinitions(worldRegistries.materialRegistry(), angleDegrees));
+					}
+					@Override public MinecraftDebugFixtures.ControllerActivation activateController(
 							net.minecraft.server.level.ServerPlayer player, net.minecraft.core.BlockPos position
 					) {
 						MinecraftRegionActivation.Result result = regionActivation.activate(player, position, false);
-						return result.succeeded() ? null : result.failure();
+						return new MinecraftDebugFixtures.ControllerActivation(
+								result.succeeded() ? null : result.failure(), result.retainShell());
 					}
 				}, worldRegistries.profile(), policy::defaultEntityPhysicsEnabled, policy::defaultDebugOverlays);
 		MinecraftRegionAdministration regionAdministration = new MinecraftRegionAdministration(
@@ -178,7 +190,19 @@ public final class MmmRuntimeFactory {
 		}
 	}
 
-	private static FluidSolverBackend createSolverBackend() {
+	static void prepareSolverBackend(FluidSolverBackend backend, WorldStartupCoordinator.Result startup,
+			CommittedWorldRegistries worldRegistries) {
+		if (startup.creationLocked() || !startup.profileProven()) return;
+		long started = System.nanoTime();
+		FluidDomain domain = FluidRegionFactory.createDomain(1, 1, 1);
+		worldRegistries.bindConfiguredState(domain, startup.config().maximumThermalSubstepsPerStep());
+		domain.synchronizeGasTopologyForPersistence();
+		backend.prepare(domain.captureAuthoritativeState());
+		MmmMod.LOGGER.info("Matter, Motion & Mechanics solver preparation: {} ms",
+				(System.nanoTime() - started) / 1_000_000);
+	}
+
+	static FluidSolverBackend createSolverBackend() {
 		String selected = System.getProperty("mmm.solverBackend", "vulkan").trim();
 		if (selected.equals("cpu")) {
 			var pressureCompute = createPressureCompute();

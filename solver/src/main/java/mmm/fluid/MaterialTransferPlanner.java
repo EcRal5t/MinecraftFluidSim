@@ -252,6 +252,20 @@ final class MaterialTransferPlanner {
 		return true;
 	}
 
+	/** The same eligible stocks that an actual container extraction can remove. */
+	double extractableVolume(int x, int y, int z, int radius, int material) {
+		if (domain.hasPendingPhaseMotionWork()) return 0.0;
+		var total = SignedDyadic.ZERO;
+		for (var cell : domain.domainFlowFields.editableNearbyCells(x, y, z, radius))
+			for (var stock : domain.liquidCells.stocksInCell(cell.index()))
+				if (eligibleForExtraction(stock, material, material >= 0)) total = total.add(stock.volume());
+		return total.toDouble();
+	}
+
+	private boolean eligibleForExtraction(LiquidCellInventory.Stock stock, int material, boolean canonicalOnly) {
+		return (material < 0 || stock.key().material() == material) && (!canonicalOnly || canonical(stock));
+	}
+
 	private Extraction extract(List<FluidDomain.CellCandidate> nearby, SignedDyadic requested, int material, boolean canonical) {
 		return extract(nearby, requested, material, canonical, stock -> true);
 	}
@@ -264,7 +278,7 @@ final class MaterialTransferPlanner {
 		var removedEnergy = SignedDyadic.ZERO;
 		for (var cell : nearby) if(domain.groupAvailable(cell.index())) for (var stock : domain.liquidCells.stocksInCell(cell.index())) {
 			if (remaining.signum() == 0) break;
-			if (!selected.test(stock) || material >= 0 && stock.key().material() != material || canonical && !canonical(stock)) continue;
+			if (!selected.test(stock) || !eligibleForExtraction(stock, material, canonical)) continue;
 			var taken = minimum(remaining, stock.volume()); var kept = stock.volume().subtract(taken);
 			long keptMass = kept.signum() == 0 ? 0 : Mass.portion(stock.massUnits(), kept, stock.volume());
 			long takenMass = stock.massUnits() - keptMass;

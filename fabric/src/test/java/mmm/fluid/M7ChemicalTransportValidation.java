@@ -39,6 +39,7 @@ public final class M7ChemicalTransportValidation {
 		validateInternalTransferLedgerDiversity();
 		validateMissingPhaseRejectedBeforeBinding();
 		validateExternalSourceBoundary();
+		validatePureBucketExtractionAvailability();
 		validateSameCellReaction();
 		
 		
@@ -124,6 +125,28 @@ private static void validateInternalTransferLedgerDiversity() {
 				0.125F, 0, 0, true);
 		check(creative.transferred() && !domain.chemistry().externalSource().isEmpty(),
 				"explicit external insertion was not recorded atomically");
+	}
+
+	private static void validatePureBucketExtractionAvailability() {
+		var domain = new FluidDomain(4, 4, 4, STATIC_CONFIG);
+		domain.setVolume(1, 1, 1, .25F);
+		domain.setVolume(2, 1, 1, .25F);
+		domain.bindMaterialRegistry(MATERIALS);
+		domain.bindChemistry(CHEMISTRY);
+		domain.setMarkerChemical(stockOrdinalInCell(domain, 2, 1, 1, 0),
+				Map.of(BuiltinChemicalDefinitions.HCL, 10_000L));
+		check(domain.exactVolumeNear(1, 1, 1, 3, 0) == .5,
+				"Fixture did not contain both pure and dissolved water");
+		check(domain.containerExtractableVolumeNear(1, 1, 1, 3, 0) == .25,
+				"Pure bucket estimate counted water carrying a solute");
+		check(domain.containerExtractableVolumeNear(1, 1, 1, 3, -1) == .5,
+				"Material bucket estimate lost chemically mixed water");
+		var extracted = domain.tryExtractExactVolume(1, 1, 1, .25F, 3, 0);
+		check(extracted.transferred() && extracted.volume() == .25,
+				"Estimated pure water could not be extracted");
+		check(domain.containerExtractableVolumeNear(1, 1, 1, 3, 0) == 0.0
+				&& domain.exactVolumeNear(1, 1, 1, 3, 0) == .25,
+				"Pure extraction removed solute-bearing stock or left a false estimate");
 	}
 
 	private static void validateWallSeparatedCellsDoNotReact() {

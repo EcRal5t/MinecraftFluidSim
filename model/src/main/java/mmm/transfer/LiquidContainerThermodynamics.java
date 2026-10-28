@@ -1,5 +1,7 @@
 package mmm.transfer;
 
+import mmm.chemistry.ChemicalRegistry;
+import mmm.chemistry.RegionChemistry;
 import mmm.thermal.ThermalMaterialDefinition;
 import mmm.thermal.ThermalRegistry;
 import mmm.thermal.ThermalStateFunction;
@@ -18,11 +20,22 @@ public final class LiquidContainerThermodynamics {
 	public static double temperatureK(
 			ThermalRegistry registry, ThermalContents thermal, FluidMixture inventory
 	) {
+		return temperatureK(registry, null, thermal, inventory);
+	}
+
+	public static double temperatureK(ThermalRegistry registry, ChemicalRegistry chemistry,
+			ThermalContents thermal, FluidMixture inventory) {
 		requireInputs(registry, thermal);
 		requireBinding(registry, thermal, ThermalContents.forMixture(
 				registry.fingerprint(), inventory, thermal.internalEnergy()));
-		return stateFunction(registry).stateForInventory(materialPortions(registry, inventory),
+		return stateFunction(registry).stateForInventory(materialPortions(registry, chemistry, inventory),
 				thermal.internalEnergy()).temperatureK();
+	}
+
+	/** Energy of material-only inventory with the world's default chemical composition. */
+	public static double materialEnergy(ThermalRegistry registry, ChemicalRegistry chemistry,
+			FluidMixture inventory, double temperatureK) {
+		return inventoryEnergy(stateFunction(registry), materialPortions(registry, chemistry, inventory), temperatureK);
 	}
 
 	public static double temperatureK(
@@ -40,12 +53,17 @@ public final class LiquidContainerThermodynamics {
 			ThermalRegistry registry, ThermalContents thermal, FluidMixture source,
 			FluidMixture selected, FluidMixture remaining
 	) {
+		return split(registry, null, thermal, source, selected, remaining);
+	}
+
+	public static ThermalContents.EnergySplit split(ThermalRegistry registry, ChemicalRegistry chemistry,
+			ThermalContents thermal, FluidMixture source, FluidMixture selected, FluidMixture remaining) {
 		requireInputs(registry, thermal);
 		requireBinding(registry, thermal, ThermalContents.forMixture(
 				registry.fingerprint(), source, thermal.internalEnergy()));
 		validateMaterialPartition(source, selected, remaining);
-		return splitAtSourceTemperature(registry, thermal.internalEnergy(), materialPortions(registry, source),
-				materialPortions(registry, selected), remaining == null ? null : materialPortions(registry, remaining));
+		return splitAtSourceTemperature(registry, thermal.internalEnergy(), materialPortions(registry, chemistry, source),
+				materialPortions(registry, chemistry, selected), remaining == null ? null : materialPortions(registry, chemistry, remaining));
 	}
 
 	public static ThermalContents.EnergySplit split(
@@ -133,12 +151,17 @@ public final class LiquidContainerThermodynamics {
 	}
 
 	private static List<ThermalStateFunction.InventoryPortion> materialPortions(
-			ThermalRegistry registry, FluidMixture inventory
+			ThermalRegistry registry, ChemicalRegistry chemistry, FluidMixture inventory
 	) {
+		if (chemistry != null && !chemistry.fingerprint().equals(registry.chemicalRegistryFingerprint()))
+			throw new IllegalArgumentException("Container default chemistry is not bound to the thermal registry");
+		var defaults = chemistry == null ? null : new RegionChemistry(chemistry, 1);
 		ArrayList<ThermalStateFunction.InventoryPortion> result = new ArrayList<>(inventory.components().size());
 		for (FluidMixture.Component component : inventory.components()) {
+			var species = defaults == null ? Map.<String, Long>of() : defaults.defaultRecord(component.materialId(),
+					component.volumeNanos() / 1_000_000_000.0, 1.0F, component.massUnits()).stableAmounts(chemistry);
 			result.add(new ThermalStateFunction.InventoryPortion(registry.materialHandle(
-					ThermalMaterialDefinition.CarrierKind.LIQUID, component.materialId()), component.mass(), Map.of()));
+					ThermalMaterialDefinition.CarrierKind.LIQUID, component.materialId()), component.mass(), species));
 		}
 		return List.copyOf(result);
 	}

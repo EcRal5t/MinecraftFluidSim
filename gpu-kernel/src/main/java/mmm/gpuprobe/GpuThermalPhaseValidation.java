@@ -75,8 +75,12 @@ public final class GpuThermalPhaseValidation {
             }
             check(current,expectedMass,ambient);
             var checkpoint=current.exportState();var restored=FluidDomain.restoreAuthoritativeState(checkpoint);
+            if((mode.equals("boil")||mode.equals("outgas"))&&checkpoint.gas().phaseSource().isEmpty())
+                throw new AssertionError(mode+" did not publish its finite gas phase source");
+            if((mode.equals("condense")||mode.equals("dissolve"))&&checkpoint.gas().phaseSink().isEmpty())
+                throw new AssertionError(mode+" did not publish its finite gas phase sink");
             if(film&&(!accountedSpecies(checkpoint,ambient).equals(initialSpecies)||!restored.gasBoundary().auditClosed()))throw new AssertionError(mode+" continuation species/gas audit failed: initial="+initialSpecies+", actual="+accountedSpecies(checkpoint,ambient)+", gasClosed="+restored.gasBoundary().auditClosed()+", gas="+checkpoint.gas().nodes());
-            if(!restored.exactInternalEnergy().equals(restored.thermalAudit().expectedInventory()))throw new AssertionError(mode+" checkpoint audit failed");
+            if(!restored.thermalAudit().acceptsInventory(restored.exactInternalEnergy()))throw new AssertionError(mode+" checkpoint audit failed");
             if(ambient){
                 if(checkpoint.chemicalSink().isEmpty())throw new AssertionError("Ambient outgas did not post an external chemical sink");
                 var resumed=restored.captureAuthoritativeState();
@@ -87,7 +91,7 @@ public final class GpuThermalPhaseValidation {
                 var continued=current.exportState();
                 if(!accountedSpecies(continued,true).equals(initialSpecies))throw new AssertionError("Restored ambient transfer repeated or lost chemical postings");
                 var continuedDomain=FluidDomain.restoreAuthoritativeState(continued);
-                if(!continuedDomain.gasBoundary().auditClosed()||!continuedDomain.exactInternalEnergy().equals(continuedDomain.thermalAudit().expectedInventory()))throw new AssertionError("Restored ambient transfer audit failed");
+                if(!continuedDomain.gasBoundary().auditClosed()||!continuedDomain.thermalAudit().acceptsInventory(continuedDomain.exactInternalEnergy()))throw new AssertionError("Restored ambient transfer audit failed");
             }
             ((ResidentFluidState)current).display();
             System.out.println("GPU thermal phase "+mode+": active_cells="+operations+" exact_mass=true audit_closed=true mechanical_continuation=true checkpoint=true");

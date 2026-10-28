@@ -35,7 +35,7 @@ void initialize(int id){
  if(id<h(5)){words[f(GC)+id]=0u;words[f(GCU)+id]=0u;}
  if(id<h(4)+2){words[f(SC)+id]=0u;words[f(SCU)+id]=0u;}
  if(id<h(3)+1){words[f(TC)+id]=0u;words[f(TCU)+id]=0u;}
- if(id==0&&(int(words[h(17)])!=int(words[h(22)])||int(words[h(17)])>h(4)))invalid();
+ if(id==0&&errors==0u&&(int(words[h(17)])!=int(words[h(22)])||int(words[h(17)])>h(4)))invalid();
 }
 void transport(int c){
  double oldDry=number(h(10)+2*c),newDry=number(h(11)+2*c),total=0.0,flow[6];ivec3 q=location(c);

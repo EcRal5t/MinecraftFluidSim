@@ -216,7 +216,7 @@ public final class FluidRegion {
 	boolean hasThermalState() { return solverLoaded() && !solverLayout().thermalRegistryFingerprint().isEmpty(); }
 	mmm.fluid.EntityBodyState entityBodyState() { var device=deviceState(); return device==null?domain().entityBodyState():device.entityBodies(); }
 	mmm.thermal.ThermalAuditLedger thermalAudit() { var device=deviceState(); return device==null?domain().thermalAudit():device.thermalAudit(); }
-	boolean thermalAuditClosed() { var device=deviceState(); return device==null?domain().exactInternalEnergy().equals(domain().thermalAudit().expectedInventory()):device.observation().thermalAuditClosed(); }
+	boolean thermalAuditClosed() { var device=deviceState(); return device==null?domain().thermalAudit().acceptsInventory(domain().exactInternalEnergy()):device.observation().thermalAuditClosed(); }
 	boolean hasPendingPhaseMotionWork() { var device=deviceState(); return device==null?domain().hasPendingPhaseMotionWork():device.observation().pendingPhaseMotion(); }
 	float maximumSpeed() { var device=deviceState(); return device==null?domain().maximumParticleSpeed():device.observation().maximumSpeed(); }
 	boolean gasPressureFlow() { var device=deviceState(); return device==null?domain().gasBoundary().hasPressureDrivenFlow():device.observation().gasPressureFlow(); }
@@ -243,6 +243,13 @@ public final class FluidRegion {
 	public boolean solverLoaded() { return domain != null || residentState != null; }
 	private void releaseResidentState() {
 		if (residentState != null) { residentState.close(); residentState = null; }
+	}
+
+	/** Discards an unregistered transient region after its final removal has been published. */
+	void discardTransient() {
+		if (controllerManaged()) throw new IllegalStateException("Cannot discard a persistent controller solver");
+		releaseResidentState();
+		domain = null;
 	}
 	long solverGeneration() { return solverGeneration; }
 

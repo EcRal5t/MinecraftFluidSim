@@ -20,6 +20,7 @@ public final class ThermalOwnerStoreValidation {
 	}
 
 	public static void validate() {
+		thermalAuditAcceptsFloatingPointResidual();
 		coherentPhaseMergeSplitConservesInventories();
 		granularColumnTransactionsConserveEnergy();
 		condensedTinyPortionsRetainTemperatureAndAudit();
@@ -34,6 +35,24 @@ public final class ThermalOwnerStoreValidation {
 		caloricEndpointsAndPortionsPreserveFiniteStates();
 		coolingInversionRetainsEnergyScale();
 		finiteDevicesRetainActualOwnerTemperatures();
+	}
+
+	private static void thermalAuditAcceptsFloatingPointResidual() {
+		var initial = SignedDyadic.of(1.0e12);
+		var audit = ThermalAuditLedger.initialized(initial);
+		var tiny = initial.add(SignedDyadic.of(1.0e-6));
+		var missing = initial.subtract(SignedDyadic.of(10_000));
+		require(audit.acceptsInventory(tiny), "Thermal audit rejected floating-point roundoff");
+		require(!audit.acceptsInventory(missing), "Thermal audit accepted significant missing energy");
+		var empty = ThermalAuditLedger.initialized(SignedDyadic.ZERO);
+		require(empty.acceptsInventory(SignedDyadic.of(1.0e-10)) && !empty.acceptsInventory(SignedDyadic.of(1.0e-5)),
+				"Near-zero thermal audit has an inappropriate absolute tolerance");
+		require(!audit.acceptsInventory(new SignedDyadic(java.math.BigInteger.ONE, 1100)), "Thermal audit accepted non-finite energy");
+		var snapshot = new ThermalOwnerSnapshot("0".repeat(64), 300, new double[0], new double[0], new double[0], List.of(), audit);
+		snapshot.requireClosed(tiny, 1);
+		require(snapshot.audit().equals(audit) && !tiny.equals(audit.expectedInventory()), "Thermal audit changed an accepted residual");
+		try { snapshot.requireClosed(missing, 1); throw new AssertionError("Thermal owner restoration accepted missing energy"); }
+		catch (IllegalArgumentException expected) { }
 	}
 
 	private static void exactAggregateEnergySurvivesCaloricHandoffs() {

@@ -16,6 +16,7 @@ import java.util.Map;
 final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 	public static void main(String[] args) throws Exception {
 		integerSpeciesCarriesReferenceEnergy();
+		materialContainerDefaultChemistry();
 		if(args.length==1&&args[0].equals("--reference")){System.out.println("Liquid integer reference-energy transport passed");return;}
 		bulkReplacementPublishesThermalInventory();
 		advectedTemperatureRemainsBounded();
@@ -71,6 +72,30 @@ final class LiquidThermalAdvectionValidation extends ThermalValidationSupport {
 		require(tinySpecies==2&&tinyPlan.future().massUnits()==1&&tinyPlan.future().exactVolume().equals(SignedDyadic.of(1))
 				&&tinyPlan.future().exactInternalEnergy().subtract(SignedDyadic.of(tinyEnergy)).equals(tinyPlan.energyRoundoff()),
 				"Sub-mass-quantum outflow changed exact mass, species, volume or U accounting");
+	}
+	private static void materialContainerDefaultChemistry() throws Exception {
+		var r = mmm.simulation.FullCapabilityTestFixture.load();
+		var domain = new FluidDomain(2, 2, 2, new FluidSolverConfig(.5F, 1000, 0, .05F, 100, 1e-5F, .002F));
+		domain.sealDomainBoundary();
+		mmm.simulation.FullCapabilityTestFixture.bindEmptyMaterialState(domain, r.liquids());
+		mmm.simulation.FullCapabilityTestFixture.bindFull(domain, r, 293.15, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);
+		var whole = new mmm.transfer.FluidMixture(List.of(new mmm.transfer.FluidMixture.Component("mmm:water", 1_000_000_000L, mmm.units.Mass.fromKilograms(1000))));
+		var half = new mmm.transfer.FluidMixture(List.of(new mmm.transfer.FluidMixture.Component("mmm:water", 500_000_000L, mmm.units.Mass.fromKilograms(500))));
+		double energy = mmm.transfer.LiquidContainerThermodynamics.materialEnergy(r.thermal(), r.chemical(), whole, 293.15);
+		var contents = mmm.transfer.ThermalContents.forMixture(r.thermal().fingerprint(), whole, energy);
+		var split = mmm.transfer.LiquidContainerThermodynamics.split(r.thermal(), r.chemical(), contents, whole, half, half);
+		double temperature = mmm.transfer.LiquidContainerThermodynamics.temperatureK(r.thermal(), r.chemical(),
+				mmm.transfer.ThermalContents.forMixture(r.thermal().fingerprint(), half, split.selectedEnergy()), half);
+		require(Math.abs(temperature - 293.15) < 1e-4, "Material container split changed temperature: " + temperature);
+		int water = r.liquids().handle("mmm:water");
+		require(domain.tryInsertExactVolume(0, 0, 0, 4, 2, water, true, split.selectedEnergy()).transferred(),
+				"Material container insertion rejected");
+		for (var stock : domain.liquidCells.physicalStocks()) {
+			double inserted = domain.thermalState.stateFunction().stateForInternalEnergy(
+					domain.thermalState.thermalMaterialHandleForFluid(water), stock.massKilograms(),
+					stock.mixture().stableAmounts(r.chemical()), stock.internalEnergy()).temperatureK();
+			require(Math.abs(inserted - 293.15) < 1e-4, "Material container injection changed temperature: " + inserted);
+		}
 	}
 	private static void bulkReplacementPublishesThermalInventory() {
 		var d=pool(3,3,3,0,false,0);

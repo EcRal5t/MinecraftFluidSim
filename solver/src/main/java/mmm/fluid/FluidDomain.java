@@ -367,6 +367,10 @@ public final class FluidDomain {
 	public double totalMass() { return domainCollision.totalMass(); }
 	public int dominantMaterialInCell(int x, int y, int z) { return domainCollision.dominantMaterialInCell(x, y, z); }
 	public double exactVolumeNear(int centerX, int centerY, int centerZ, int maxRadius, int materialHandle) { return domainCollision.exactVolumeNear(centerX, centerY, centerZ, maxRadius, materialHandle); }
+	/** Nearby volume actually eligible for the corresponding container extraction. */
+	public double containerExtractableVolumeNear(int x, int y, int z, int radius, int material) {
+		return transferPlanner.extractableVolume(x, y, z, radius, material);
+	}
 	public void bindMaterialRegistry(FluidMaterialRegistry registry) { domainCollision.bindMaterialRegistry(registry); }
 	public float maximumParticleSpeed() { return domainCollision.maximumParticleSpeed(); }
 	public float maximumPressure() { return domainCollision.maximumPressure(); }

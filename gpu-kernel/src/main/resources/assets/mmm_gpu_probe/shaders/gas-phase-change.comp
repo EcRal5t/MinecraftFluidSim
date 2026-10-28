@@ -83,13 +83,13 @@ void exchange(int node){if(node>=int(words[gas(0)]))return;double energy=value(g
   for(int a=int(words[gas(8)+comp]);a<int(words[gas(8)+comp+1]);a++){int sp=int(words[gas(9)+a]);int64_t q=boiling?lpSpecies(h(2),lr,sp):quantity(gas(10)+2*a),moved=portion(q,mass,available);if(moved==0l)continue;
    double offset=value(eh(8)+2*(m*eh(2)+sp));if(!finite(offset)){invalid();return;}transferred+=double(moved)*offset;movedSpeciesMass=addq(movedSpeciesMass,moved*quantity(def+int(words[def+1])+5*sp+1));
    lpSpeciesAt(h(2),lr,sp,addq(lpSpecies(h(2),lr,sp),boiling?-moved:moved));putq(gas(10)+2*a,addq(quantity(gas(10)+2*a),boiling?moved:-moved));
-   int auditComp=component(int(words[gas(0)])+(boiling?0:1),m),auditEntry=gasSpecies(auditComp,sp);atomicAdd(longs[(gas(10)+2*auditEntry)/2],moved);
+   int auditComp=component(int(words[gas(0)])+(boiling?2:3),m),auditEntry=gasSpecies(auditComp,sp);atomicAdd(longs[(gas(10)+2*auditEntry)/2],moved);
   }
   int64_t remaining=boiling?original-mass:original+mass;double before=lpEnergy(h(2),lr);if(boiling&&remaining==0l)transferred=before;
   if(!boiling)lpCreate(h(2),c,material,(~int(words[gh(6)+c]))&255);
   putq(lpF(h(2),LP_MASS)+2*lr,remaining);putq(lpF(h(2),LP_DELTA)+2*lr,boiling?-delta:delta);put(lpF(h(2),LP_U)+2*lr,before+(boiling?-transferred:transferred));
   putq(gas(6)+2*comp,addq(quantity(gas(6)+2*comp),boiling?mass:-mass));putq(gas(5)+2*comp,addq(quantity(gas(5)+2*comp),boiling?nanos:-nanos));putq(gas(7)+2*comp,addq(quantity(gas(7)+2*comp),boiling?mass-movedSpeciesMass:-(mass-movedSpeciesMass)));
-  int audit=component(int(words[gas(0)])+(boiling?0:1),m);atomicAdd(longs[(gas(6)+2*audit)/2],mass);atomicAdd(longs[(gas(5)+2*audit)/2],nanos);atomicAdd(longs[(gas(7)+2*audit)/2],mass-movedSpeciesMass);
+  int audit=component(int(words[gas(0)])+(boiling?2:3),m);atomicAdd(longs[(gas(6)+2*audit)/2],mass);atomicAdd(longs[(gas(5)+2*audit)/2],nanos);atomicAdd(longs[(gas(7)+2*audit)/2],mass-movedSpeciesMass);
   energy+=boiling?transferred:-transferred;putq(f(NEW_MASS)+2*c,addq(quantity(f(OLD_MASS)+2*c),boiling?-mass:mass));
   put(f(PE_WORK)+2*c,(boiling?1.0LF:-1.0LF)*double(mass)*massUnit()*value(p.header+18)*(double(c/shape().x%shape().y)+.5LF)*value(p.header+16));
   words[f(BIRTH_NODE)+c]=uint(node+1);words[h(6)+c]=1u;atomicOr(words[h(7)],1u);atomicAdd(words[f(CONTROL)],uint(batches));atomicAdd(words[f(CONTROL)+(boiling?1:2)],1u);

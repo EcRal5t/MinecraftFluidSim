@@ -85,7 +85,7 @@ final class VulkanGasRemap implements AutoCloseable {
                     case AMBIENT_SPECIES_OFFSETS->ambient.speciesOffsets().length;
                     case AMBIENT_SPECIES_HANDLES,AMBIENT_SPECIES_NUM,AMBIENT_SPECIES_DEN,AMBIENT_SPECIES_MASS->ambient.speciesHandles().length;
                     case DISPATCH->27;
-                    case LONG_ROWS->Math.addExact(2*Math.addExact(retained.nodeCapacity(),2),Math.addExact(routes.futureGeometry().cells(),2));
+                    case LONG_ROWS->Math.addExact(2*Math.addExact(retained.nodeCapacity(),4),Math.addExact(routes.futureGeometry().cells(),4));
                     case REQUIREMENTS->9;
                     case DECLARED_SPECIES_OFFSETS->routes.gas().definitions().componentIds().size()+1;
                     case DECLARED_SPECIES_HANDLES->routes.gas().definitions().speciesStride();
@@ -105,7 +105,7 @@ final class VulkanGasRemap implements AutoCloseable {
             var b=ByteBuffer.allocateDirect(640).order(ByteOrder.LITTLE_ENDIAN);int[] data=new int[160];
             data[0]=routes.gas().definitions().componentIds().size();data[1]=sourceEOS.headerWordOffset();data[2]=routes.capacity();data[3]=partCapacity;data[4]=speciesCapacity;
             data[5]=retained.nodeCapacity();data[6]=future.nodeCapacity();data[7]=retained.componentCapacity();data[8]=retained.speciesCapacity();
-            data[9]=future.componentCapacity();data[10]=future.speciesCapacity();data[11]=ambient.handles().length;data[12]=transport?1:0;data[13]=phaseWordOffset;data[14]=retained.nodeCapacity()+2;data[15]=routes.futureGeometry().cells()+2;
+            data[9]=future.componentCapacity();data[10]=future.speciesCapacity();data[11]=ambient.handles().length;data[12]=transport?1:0;data[13]=phaseWordOffset;data[14]=retained.nodeCapacity()+4;data[15]=routes.futureGeometry().cells()+4;
             for(var field:VulkanGasStateLayout.Field.values()){
                 data[16+field.ordinal()]=Math.toIntExact(routes.gas().column(field).offset()/4);
                 data[32+field.ordinal()]=Math.toIntExact(retained.column(field).offset()/4);
@@ -180,7 +180,7 @@ final class VulkanGasRemap implements AutoCloseable {
     /** Measures all nested capacities without writing any part/species/output pool. */
     void recordMeasure(VkCommandBuffer command,Layout l){
         stage(command,l,18,1,null);
-        stage(command,l,25,Math.max(l.retained.nodeCapacity()+2,l.routes.futureGeometry().cells()+2),null);
+        stage(command,l,25,Math.max(l.retained.nodeCapacity()+4,l.routes.futureGeometry().cells()+4),null);
         stage(command,l,26,1,null);
         stage(command,l,22,128,null);
     }
@@ -218,7 +218,7 @@ final class VulkanGasRemap implements AutoCloseable {
     }
     private void gather(VkCommandBuffer command,Layout l,boolean future,VulkanGasAdiabaticWork.Layout work,VulkanStageTimings timings){
         var output=future?l.future:l.retained;
-        timed(timings,command,"remap-gather-inventory-energy",()->stage(command,l,future?12:7,output.nodeCapacity()+2,work));
+        timed(timings,command,"remap-gather-inventory-energy",()->stage(command,l,future?12:7,output.nodeCapacity()+4,work));
     }
     private static void timed(VulkanStageTimings timings,VkCommandBuffer command,String label,Runnable action){
         if(timings==null)action.run();else timings.record(command,label,action);

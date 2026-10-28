@@ -167,7 +167,12 @@ final class FluidWorldTargetResolver {
 
 	/** Resolves the solver cell containing the center of an interior block. */
 	int[] cellAtBlock(ServerLevel level, FluidRegion region, BlockPos position) {
-		if (!level.dimension().equals(region.dimension()) || !region.solverLoaded()) return null;
+		if (!level.dimension().equals(region.dimension())) return null;
+		return cellAtInteriorBlock(region, position);
+	}
+
+	static int[] cellAtInteriorBlock(FluidRegion region, BlockPos position) {
+		if (!region.solverLoaded()) return null;
 		if (region.footprint() != null && !region.footprint().containsInterior(position)) return null;
 		FluidDomain domain = region.domain();
 		BlockPos origin = region.origin();

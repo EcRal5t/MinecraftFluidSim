@@ -94,10 +94,11 @@ public final class RegionCheckpointAssembler {
 			SignedDyadic liquidU=SignedDyadic.ZERO;for(var stock:state.liquid().stocks())liquidU=liquidU.add(SignedDyadic.of(stock.internalEnergy()));
 			SignedDyadic coherentU=SignedDyadic.ZERO;for(var group:thermal.coherentGroups())coherentU=coherentU.add(SignedDyadic.of(group.internalEnergy()));
 			var gasU=thermal.copyGasNodeEnergy();
+			var actualU=SignedDyadic.sum(liquidU,SignedDyadic.sum(activeU),SignedDyadic.sum(depositU),coherentU,SignedDyadic.sum(gasU));
 			int cap=ThermalRegionStateCodec.CAP_MATERIALS|ThermalRegionStateCodec.CAP_GAS|ThermalRegionStateCodec.CAP_THERMAL
 					|(state.chemicalRegistry()==null?0:ThermalRegionStateCodec.CAP_CHEMISTRY)|(granular==null?0:ThermalRegionStateCodec.CAP_GRANULAR);
 			var data=new ThermalRegionStateCodec.ManifestData(cap,thermal.registryFingerprint(),thermal.insertionTemperatureK(),state.liquid().size(),activeU.length,depositU.length,
-					thermal.coherentGroups().size(),gasU.length,liquidU,SignedDyadic.sum(activeU),SignedDyadic.sum(depositU),coherentU,SignedDyadic.sum(gasU),thermal.audit().expectedInventory(),thermal.audit(),thermalLedgers,bits(gasU));
+					thermal.coherentGroups().size(),gasU.length,liquidU,SignedDyadic.sum(activeU),SignedDyadic.sum(depositU),coherentU,SignedDyadic.sum(gasU),actualU,thermal.audit(),thermalLedgers,bits(gasU));
 			extensions.add(new RegionExtension(ThermalRegionStateCodec.MANIFEST_EXTENSION,new ThermalRegionStateCodec().encodeManifest(data)));
 			extensions.add(new RegionExtension(ThermalBuoyancyCodec.MANIFEST_EXTENSION,new ThermalBuoyancyCodec().encodeCurrent()));
 			if(!state.pendingPhaseMotion().isEmpty())extensions.add(new RegionExtension(PendingPhaseMotionCodec.MANIFEST_EXTENSION,new PendingPhaseMotionCodec().encode(state.pendingPhaseMotion())));
@@ -157,7 +158,7 @@ public final class RegionCheckpointAssembler {
 		return new GasRegionStateCodec.ManifestData(capabilities, snapshot.registryFingerprint(),
 				snapshot.chemicalRegistryFingerprint(), snapshot.nodes().stream()
 				.map(node -> new GasRegionStateCodec.NodeData(node.topologyKey(), node.inventory())).toList(),
-				snapshot.externalSource(), snapshot.escapedSink(),
+				snapshot.externalSource(), snapshot.escapedSink(), snapshot.phaseSource(), snapshot.phaseSink(),
 				List.copyOf(ledgers));
 	}
 

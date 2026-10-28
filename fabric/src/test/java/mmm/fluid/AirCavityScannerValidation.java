@@ -467,7 +467,8 @@ public final class AirCavityScannerValidation {
 		for(int ordinal=1;ordinal<=topology.nodes().size();ordinal++)nodes.add(new mmm.fluid.air.GasStateSnapshot.Node(
 				topology.nodes().get(ordinal-1).topologyKey(),ordinal==left?a:b));
 		var labelled=new mmm.fluid.air.GasStateSnapshot(length,3,3,gas.fingerprint(),"",nodes,topology.pieceNodeOrdinal(),
-				mmm.fluid.air.GasAuditLedger.of(a.merge(b)),mmm.fluid.air.GasAuditLedger.EMPTY);
+				mmm.fluid.air.GasAuditLedger.of(a.merge(b)),mmm.fluid.air.GasAuditLedger.EMPTY,
+				mmm.fluid.air.GasAuditLedger.EMPTY,mmm.fluid.air.GasAuditLedger.EMPTY);
 		var liquidState=d.exportLiquidCellState();var momentum=d.exportMacMomentum();var phase=d.exportPhaseOccupancyState();
 		var restored=new FluidDomain(length,3,3,config);restored.sealDomainBoundary();
 		restored.geometry.cutCells.restoreMicroMasks(masks);
@@ -596,26 +597,35 @@ public final class AirCavityScannerValidation {
 				&& restored.externalSource().equals(committed.externalSource())
 				&& restored.escapedSink().equals(committed.escapedSink()),
 				"Valid gas restoration changed complete topology or inventory");
-		for (int piece : new int[]{7, 8, 16}) {
-			int[] membership = committed.pieceNodeOrdinal(); membership[piece] = 0;
-			var altered = new mmm.fluid.air.GasStateSnapshot(2, 2, 2, committed.registryFingerprint(), "",
-					committed.nodes(), membership, committed.externalSource(), committed.escapedSink());
-			var rejected = gasRestoreTarget(config, particles);
-			var before = rejected.captureAuthoritativeState();
-			var network = rejected.gasState.network;
-			long gasRevision=network.revision(),carrierRevision=rejected.carrierMutationRevision;
-			var externalSource = network.externalSource(); var escapedSink = network.escapedSink();
-			try {
-				rejected.restoreGasState(altered, mmm.fluid.air.BuiltinGasDefinitions.createRegistry());
-				throw new AssertionError("Gas restoration accepted altered membership at piece " + piece);
-			} catch (IllegalArgumentException expected) { }
-			check(rejected.gasState.network == network && network.revision() == gasRevision && network.nodeCount() == 0
-					&& network.externalSource().equals(externalSource) && network.escapedSink().equals(escapedSink)
-					&& rejected.gasState.frame == null && !rejected.gasState.pressureActive
-					&& rejected.carrierMutationRevision == carrierRevision,
-					"Rejected gas lineage restoration changed authoritative owners");
-			FluidDomainStateAssertions.assertSameState(before,rejected.captureAuthoritativeState(),"Rejected gas lineage restoration");
+		int[] approximate = committed.pieceNodeOrdinal();
+		int changed = -1;
+		for (int piece = 0; piece < approximate.length; piece++) {
+			int node = approximate[piece];
+			if (node <= 0 || committed.nodes().get(node - 1).topologyKey() == piece) continue;
+			for (int other = 0; other < 8; other++) if (8 * (piece / 8) + other != piece
+					&& approximate[8 * (piece / 8) + other] == node) { changed = piece; break; }
+			if (changed >= 0) break;
 		}
+		check(changed >= 0, "Gas restore fixture needs a chamber with multiple dry microboxes in one cell");
+		approximate[changed] = -1;
+		var alternateGeometry = new mmm.fluid.air.GasStateSnapshot(2, 2, 2, committed.registryFingerprint(), "",
+				committed.nodes(), approximate, committed.externalSource(), committed.escapedSink(), committed.phaseSource(), committed.phaseSink());
+		var sameCells = gasRestoreTarget(config, particles);
+		sameCells.restoreGasState(alternateGeometry, mmm.fluid.air.BuiltinGasDefinitions.createRegistry());
+		var recovered = sameCells.exportGasState("");
+		check(recovered.nodes().equals(committed.nodes()) && recovered.externalSource().equals(committed.externalSource())
+				&& recovered.escapedSink().equals(committed.escapedSink()) && sameCells.gasBoundary.auditClosed(),
+				"Restoring approximate microbox geometry changed a chamber's inventory or source accounting");
+		// A reconstructed exterior opening must retain the saved finite gas until actual flow advances.
+		var opened = new FluidDomain(2, 2, 2, config);
+		opened.restoreParticleState(particles);
+		opened.restoreGasState(committed, mmm.fluid.air.BuiltinGasDefinitions.createRegistry());
+		check(opened.gasState.network.nodeCount() == committed.nodes().size()
+				&& opened.gasBoundary.sealedInventory().equals(source.gasBoundary.sealedInventory())
+				&& opened.gasState.network.externalSource().equals(committed.externalSource())
+				&& opened.gasState.network.escapedSink().equals(committed.escapedSink())
+				&& opened.gasBoundary.auditClosed(),
+				"Same-generation gas restore changed inventory when the reconstructed opening reached the exterior");
 	}
 
 	private static FluidDomain gasRestoreTarget(FluidSolverConfig config, FlipParticleState particles) {

@@ -154,11 +154,11 @@ public final class GpuGasGeometryBenchmark {
                 component++;
             }
         }
-        for(int row=nodes;row<nodes+2;row++){
+        for(int row=nodes;row<nodes+4;row++){
             putInt(target,gas,ROW_COMPONENT_OFFSETS,row,component);
             for(int handle=0;handle<stride;handle++){putInt(target,gas,COMPONENT_HANDLES,component,handle);putInt(target,gas,COMPONENT_SPECIES_OFFSETS,component,species);putLong(target,gas,STANDARD_VOLUME_NANOS,component,0);putLong(target,gas,MASS_UNITS,component,0);putLong(target,gas,MASS_RESIDUAL_UNITS,component,0);for(String id:gas.definitions().allowedSpecies().get(handle)){putInt(target,gas,SPECIES_HANDLES,species,gas.definitions().speciesIds().indexOf(id));putLong(target,gas,SPECIES_AMOUNTS,species++,0);}component++;}
         }
-        putInt(target,gas,ROW_COMPONENT_OFFSETS,nodes+2,component);putInt(target,gas,COMPONENT_SPECIES_OFFSETS,component,species);
+        putInt(target,gas,ROW_COMPONENT_OFFSETS,nodes+4,component);putInt(target,gas,COMPONENT_SPECIES_OFFSETS,component,species);
         putInt(target,gas,COUNTS,0,nodes);putInt(target,gas,COUNTS,1,component);putInt(target,gas,COUNTS,2,species);
         putInt(target,gas,ENERGY_PRESENT,0,1);
         System.out.printf("gas_seed cells=%d nodes=%d components=%d species=%d distinct_states=%d%n",cells,nodes,component,species,cache.size());return nodes;

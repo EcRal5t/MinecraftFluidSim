@@ -7,6 +7,8 @@ public interface FluidSolverBackend extends AutoCloseable {
 		FluidSolverBackend create(int deviceIndex);
 	}
 	default String executionDescription() { return id(); }
+	/** Prepare backend resources for the capabilities of a world before its first step. */
+	default void prepare(FluidDomainState state) { }
 	@Override default void close() { }
 	String id();
 	FluidStepCandidate evaluate(FluidStepRequest request);

@@ -65,6 +65,10 @@ public final class PhysicalActivityGroupsValidation {
         boolean[] available=new boolean[domain.cellCount];java.util.Arrays.fill(available,true);available[cell(6,3,1)]=false;
         domain.prepareGroupAvailability(available);
         require(domain.groupAvailable(cell(1,1,1))&&!domain.groupAvailable(cell(6,1,1)),"Missing world input did not pause exactly its connected group");
+        var loadedBody = new mmm.world.MovingBodyFluidCoupling.Bounds(.55, .55, .55, .65, .65, .65);
+        var unloadedBody = new mmm.world.MovingBodyFluidCoupling.Bounds(3.05, .55, .55, 3.15, .65, .65);
+        require(domain.activityGroups.bodyAvailable(loadedBody) && !domain.activityGroups.bodyAvailable(unloadedBody),
+                "Entity occupancy did not follow the loaded physical group");
         require(domain.activityStats().blockedGroups()==1&&domain.activityStats().blockedCells()>0,"Unavailable groups were reported as sleep");
         var right=rightStocks(domain);var parcel=domain.granularState.parcels.parcel(0);var momentum=domain.mac.captureMomentum();
         int node=domain.gasState.frame.nodeOfPiece(8*cell(6,3,1));var gas=domain.gasState.network.inventory(node);
@@ -80,6 +84,7 @@ public final class PhysicalActivityGroupsValidation {
         require(!rejected.transferred(),"An unavailable edit target searched into an available group");
         java.util.Arrays.fill(available,true);domain.prepareGroupAvailability(available);
         require(domain.groupAvailable(cell(6,1,1))&&domain.activityStats().blockedGroups()==0,"Reloaded world input retained a paused group");
+        require(domain.activityGroups.bodyAvailable(unloadedBody), "Entity remained blocked after world input returned");
     }
 
 	private static void validateSlowGasPort() {

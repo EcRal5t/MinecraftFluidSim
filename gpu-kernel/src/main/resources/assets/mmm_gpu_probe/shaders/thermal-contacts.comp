@@ -275,7 +275,7 @@ void writeBaths(int point){
   put(f(BG)+2*outAt,g);put(f(BT)+2*outAt,t);outAt++;
  }
 }
-dvec2 mfAdd(dvec2 a,double b){precise double next=a.x+b,v=next-a.x,error=(a.x-(next-v))+(b-v);precise double lo=error+a.y,sum=next+lo,virtualLo=sum-next;return dvec2(sum,(next-(sum-virtualLo))+(lo-virtualLo));}
+dvec2 mfAdd(dvec2 a,double b){precise double next=a.x+b,v=next-a.x,error=(a.x-(next-v))+(b-v);precise double lo=error+a.y,sum=next+lo,virtualLo=sum-next,remainder=(next-(sum-virtualLo))+(lo-virtualLo);return dvec2(sum,remainder);}
 int imexPoint,imexCursor;
 void pairFlux(int owner,int other,int otherPoint,double g,double dt,inout dvec2 degree,inout dvec2 delta){
  if(owner==other||g==0.0)return;if(!(finite(g)&&g>0.0)){invalid();return;}

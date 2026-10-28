@@ -341,7 +341,7 @@ public final class MinecraftRegionLifecycle {
 		if (domain.hasPendingPhaseMotionWork()) blockers.add(LifecycleOperationPreview.Blocker.PENDING_PHASE_WORK);
 		boolean auditClosed = domain.gasBoundary().auditClosed()
 				&& (!domain.hasThermalState()
-				|| domain.exactInternalEnergy().equals(domain.thermalAudit().expectedInventory()));
+				|| domain.thermalAudit().acceptsInventory(domain.exactInternalEnergy()));
 		try {
 			if (operation == LifecycleOperation.EMPTY_CONDENSED) domain.planOperatorClear();
 			if (operation == LifecycleOperation.VENT_SEALED_GAS) domain.planOperatorVentSealedGas();

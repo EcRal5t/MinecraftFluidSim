@@ -55,12 +55,15 @@ final class MinecraftRegionAvailability {
 		boolean available = operations.ensureAvailable(
 				level, region, controllerFeatureEnabled.getAsBoolean(), regionTick::refreshRegionInputs,
 				snapshots::sendToLevel, snapshots::sendRemoval, inventoryDecrease);
-		if (available && world.hasCapability(WorldCapability.THERMAL)
-				&& region.solverLoaded() && region.domain().hasThermalState()) {
-			region.enableThermalActivity();
-			if (region.domain().hasPendingPhaseMotionWork()) region.wakeForActivity();
-		}
+		if (available && world.hasCapability(WorldCapability.THERMAL)) activateThermalActivity(region);
 		return available;
+	}
+
+	static void activateThermalActivity(FluidRegion region) {
+		if (region.hasThermalState()) {
+			region.enableThermalActivity();
+			if (region.hasPendingPhaseMotionWork()) region.wakeForActivity();
+		}
 	}
 
 	static boolean inventoryDecreaseMayBypass(RegionAvailabilityReason reason) {

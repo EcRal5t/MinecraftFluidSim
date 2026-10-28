@@ -92,7 +92,7 @@ public final class FlipThermalParticleState {
 		SignedDyadic inventory = SignedDyadic.sum(internalEnergy).add(coherentEnergy)
 				.add(SignedDyadic.sum(activeParcelEnergy)).add(SignedDyadic.sum(depositEnergy))
 				.add(SignedDyadic.sum(gasNodeEnergy));
-		if (!inventory.equals(audit.expectedInventory())) {
+		if (!audit.acceptsInventory(inventory)) {
 			throw new IllegalArgumentException("Thermal carrier handoff does not close its audit ledger");
 		}
 		this.sizeX = sizeX; this.sizeY = sizeY; this.sizeZ = sizeZ; this.cellSize = cellSize;

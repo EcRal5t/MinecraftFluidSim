@@ -136,7 +136,7 @@ final class MinecraftContainerTransferOperations {
 		MaterialInsertionSettlement plannedSettlement = settleMaterialInsertion(domain, mixture, portions);
 		long plannedNanos = plannedSettlement.insertedNanos();
 		ThermalContents.EnergySplit thermalSplit = thermalContents == null ? null
-				: LiquidContainerThermodynamics.split(world.thermalRegistry(), thermalContents, mixture,
+				: LiquidContainerThermodynamics.split(world.thermalRegistry(), world.hasCapability(mmm.worldprofile.WorldCapability.CHEMISTRY) ? world.chemicalRegistry() : null, thermalContents, mixture,
 						plannedSettlement.inserted(), plannedSettlement.remaining());
 		Double coupledEnergy = thermalSplit == null ? null
 				: thermalSplit.coupledEnergy(thermalContents.internalEnergy());
@@ -577,7 +577,7 @@ final class MinecraftContainerTransferOperations {
 			FluidDomain domain, int[] cell, long capacityNanos, int maxRadius, int materialHandle
 	) {
 		if (capacityNanos <= 0L) return 0L;
-		double availableCellVolume = domain.exactVolumeNear(
+		double availableCellVolume = domain.containerExtractableVolumeNear(
 				cell[0], cell[1], cell[2], maxRadius, materialHandle);
 		if (!(availableCellVolume > 0.0)) return 0L;
 		long availableNanos = cellVolumeToNanos(domain.unitScale(), availableCellVolume);

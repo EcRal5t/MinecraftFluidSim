@@ -466,7 +466,7 @@ abstract class RegionCodecValidationScenarios extends RegionPersistenceValidatio
 		var manifest = new GasRegionStateCodec.ManifestData(GasRegionStateCodec.CAP_MATERIALS | GasRegionStateCodec.CAP_GAS,
 				snapshot.registryFingerprint(), "", snapshot.nodes().stream()
 				.map(n -> new GasRegionStateCodec.NodeData(n.topologyKey(), n.inventory())).toList(),
-				snapshot.externalSource(), snapshot.escapedSink(),
+				snapshot.externalSource(), snapshot.escapedSink(), snapshot.phaseSource(), snapshot.phaseSink(),
 				List.of(new GasRegionStateCodec.SectionLedger(new RegionSectionState.SectionKey(0, 0, 0), 3)));
 		var decodedManifest = codec.decodeManifest(codec.encodeManifest(manifest));
 		require(decodedManifest.sectionLedgers().getFirst().sealedPieceCount() == 3

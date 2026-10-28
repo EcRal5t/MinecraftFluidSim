@@ -10,8 +10,8 @@ import java.util.List;
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.VK10.*;
 
-/** Common lower-bounded transportation for liquid motion and solid displacement.
- * Donor quantities, seven receiver routes, cell bounds and finite groups share one residual graph. */
+/** Lower-bounded transportation for liquid motion and solid displacement.
+ * A short local withdrawal pass prepares the same flow for the residual graph. */
 final class VulkanLiquidCapacity implements AutoCloseable {
     static final int RUNNING=0,FEASIBLE=1,INFEASIBLE=2,ITERATION_LIMIT=3,INVALID=4;
     static final int ERROR_INVALID=4096,ERROR_UNFINISHED=8192;
@@ -79,6 +79,7 @@ final class VulkanLiquidCapacity implements AutoCloseable {
         stage(command,l,44,l.capacity.groups(),0,0);stage(command,l,46,1,0,0);
     }
     private void buildResidualGraph(VkCommandBuffer command,Layout l){
+        stage(command,l,48,l.vertices,0,0);
         stage(command,l,30,l.capacity.groups(),0,0);
         stage(command,l,3,l.capacity.cells(),0,0);
         if(timings==null)recordGroupScan(command,l);
@@ -95,7 +96,7 @@ final class VulkanLiquidCapacity implements AutoCloseable {
         if(rounds<0)throw new IllegalArgumentException("Negative capacity round count");
         if(timings!=null)timingPhase=phase;
         try(var stack=stackPush()){bindings.bind(command,stack);}
-        // Residual topology is built once; withdrawal stays on device for the whole batch.
+        // Build the residual graph from the flow left by local withdrawal.
         if(phase==6)rounds=Math.min(rounds,1);
         for(int i=0;i<rounds;i++){
             if(phase!=3)stage(command,l,32,1,phase,0);

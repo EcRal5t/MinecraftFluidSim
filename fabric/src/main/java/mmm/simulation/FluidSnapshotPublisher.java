@@ -99,7 +99,7 @@ final class FluidSnapshotPublisher {
 		}
 	}
 
-	private SnapshotDispatch createDispatch(FluidRegion region) {
+	SnapshotDispatch createDispatch(FluidRegion region) {
 		var display = region.display();
 		if (thermal) {
 			FluidThermalSnapshotPayload payload = createThermalSnapshot(region, display);
@@ -169,7 +169,7 @@ final class FluidSnapshotPublisher {
 	}
 
 	@FunctionalInterface
-	private interface SnapshotDispatch {
+	interface SnapshotDispatch {
 		void sendTo(ServerPlayer player);
 	}
 }

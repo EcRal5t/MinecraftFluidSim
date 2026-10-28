@@ -13,6 +13,8 @@ public record ThermalAuditLedger(
 		SignedDyadic finiteDeviceExchange,
 		SignedDyadic roundoffResidual
 ) {
+	private static final double RELATIVE_ENERGY_TOLERANCE = 1.0e-10;
+	private static final double ABSOLUTE_ENERGY_TOLERANCE_JOULES = 1.0e-9;
 	public ThermalAuditLedger {
 		Objects.requireNonNull(initialInventory, "initialInventory");
 		Objects.requireNonNull(externalSource, "externalSource");
@@ -83,5 +85,26 @@ public record ThermalAuditLedger(
 			return SignedDyadic.sum(initialInventory, externalSource, externalSink.negate(),
 					mechanicalWork, finiteDeviceExchange, roundoffResidual);
 		}
+	}
+
+	/** Float energy accounting allows a small residual relative to the observed energy scale. */
+	public boolean acceptsInventory(SignedDyadic actual) {
+		return acceptsInventory(actual, expectedInventory(), initialInventory, externalSource, externalSink, mechanicalWork, finiteDeviceExchange);
+	}
+
+	static boolean acceptsInventory(SignedDyadic actual, SignedDyadic expected, SignedDyadic... scaleTerms) {
+		Objects.requireNonNull(actual, "actual");
+		Objects.requireNonNull(expected, "expected");
+		double current = actual.toDouble(), target = expected.toDouble();
+		if (!Double.isFinite(current) || !Double.isFinite(target)) return false;
+		double scale = Math.max(Math.abs(current), Math.abs(target));
+		for (var entry : scaleTerms) {
+			double amount = entry.toDouble();
+			if (!Double.isFinite(amount)) return false;
+			scale = Math.max(scale, Math.abs(amount));
+		}
+		double residual = actual.subtract(expected).toDouble();
+		return Double.isFinite(residual) && Math.abs(residual) <= Math.max(ABSOLUTE_ENERGY_TOLERANCE_JOULES,
+				RELATIVE_ENERGY_TOLERANCE * scale);
 	}
 }

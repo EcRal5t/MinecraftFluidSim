@@ -128,8 +128,17 @@ final class MinecraftContainerTransactionAdapter {
 			ItemStack beforeStack,ItemStack sourceStack,ContainerTransferJournal.Operation operation,
 			ContainerTransferJournal.ResourceKind resourceKind,long requestedAmount,long baseAmount,
 			TransferExecutor executor,FinalItemResolver finalItemResolver,UUID publicOperationId) {
-		Objects.requireNonNull(region, "region");
 		Objects.requireNonNull(level, "level");
+		if (!region.dimension().equals(level.dimension())) throw new IllegalArgumentException("容器与区域位于不同维度");
+		return executeForRegion(region, actor, beforeStack, sourceStack, operation, resourceKind,
+				requestedAmount, baseAmount, executor, finalItemResolver, publicOperationId);
+	}
+
+	Result executeForRegion(FluidRegion region, ContainerTransferActor actor, ItemStack beforeStack, ItemStack sourceStack,
+			ContainerTransferJournal.Operation operation, ContainerTransferJournal.ResourceKind resourceKind,
+			long requestedAmount, long baseAmount, TransferExecutor executor, FinalItemResolver finalItemResolver,
+			UUID publicOperationId) {
+		Objects.requireNonNull(region, "region");
 		Objects.requireNonNull(executor, "executor");
 		Objects.requireNonNull(finalItemResolver, "finalItemResolver");
 		ContainerTransferJournal.ItemFingerprint before;
@@ -146,7 +155,7 @@ final class MinecraftContainerTransactionAdapter {
 		ContainerTransferCoordinator coordinator = new ContainerTransferCoordinator(recovery, regionPort, faults);
 		ContainerTransferUseCase useCase = new ContainerTransferUseCase(coordinator);
 		ContainerTransferUseCase.Result result = useCase.execute(new ContainerTransferUseCase.Command(
-				region.id(), level.dimension().identifier().toString(), region.checkpointGeneration(),
+				region.id(), region.dimension().identifier().toString(), region.checkpointGeneration(),
 				region.domain().hasThermalState(), profileFingerprint, thermalRegistryFingerprint,
 				actor, before, source, operation, resourceKind, requestedAmount, baseAmount, publicOperationId));
 		ItemStack after;

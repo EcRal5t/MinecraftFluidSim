@@ -50,6 +50,40 @@ final class GasChamberTopology {
         geometry.cacheTopology(sealedExterior,result);return result;
     }
 
+    /** Restores same-generation ownership while using current capacities and actual face ports. */
+    static GasChamberTopology restore(GasComplementGeometry geometry, boolean sealedExterior, int[] savedCells, int savedNodes) {
+        if(savedCells.length!=cellCount(geometry))throw new IllegalArgumentException("Gas restore cell count differs");
+        var reconstructed=capture(geometry,sealedExterior);int hostNodes=reconstructed.chambers.size();
+        int[] inherited=new int[hostNodes+1];Arrays.fill(inherited,-1);inherited[0]=0;
+        for(var component:geometry.components()){
+            int host=reconstructed.cellNodes[component.cell()], saved=savedCells[component.cell()];
+            if(host<=0||saved<0)continue;
+            if(inherited[host]==-1)inherited[host]=saved;
+            else if(inherited[host]!=saved)inherited[host]=-2;
+        }
+        int[] owners=new int[savedNodes+hostNodes+1], provisional=new int[savedCells.length];
+        Arrays.fill(provisional,-1);Arrays.fill(owners,Integer.MAX_VALUE);
+        for(var component:geometry.components()){
+            int cell=component.cell(), saved=savedCells[cell], host=reconstructed.cellNodes[cell], owner;
+            if(saved>=0)owner=saved;
+            else if(host==0)owner=0;
+            else owner=inherited[host]>=0?inherited[host]:savedNodes+host;
+            provisional[cell]=owner;
+            if(owner>0)owners[owner]=Math.min(owners[owner],component.minimumPiece());
+        }
+        long[] roots=new long[owners.length];int nodes=0;
+        for(int owner=1;owner<owners.length;owner++)if(owners[owner]!=Integer.MAX_VALUE)
+            roots[nodes++]=(long)owners[owner]<<32|Integer.toUnsignedLong(owner);
+        if(nodes>GasLimits.MAX_NODES_PER_REGION)throw new GasTopologyBlockedException("Restored gas chamber count exceeds its representation budget");
+        Arrays.sort(roots,0,nodes);int[] canonical=new int[owners.length];
+        for(int i=0;i<nodes;i++)canonical[(int)roots[i]]=i+1;
+        int[] cells=new int[provisional.length];
+        for(int cell=0;cell<cells.length;cell++)cells[cell]=provisional[cell]<0?-1:canonical[provisional[cell]];
+        var chambers=captureChambers(geometry.components(),cells,roots,nodes);
+        var restored=new GasChamberTopology(geometry,cells,chambers,nodes==0?List.of():connections(geometry,cells,sealedExterior),sealedExterior);
+        geometry.cacheTopology(sealedExterior,restored);return restored;
+    }
+
     private static int[] connectedComponents(GasComplementGeometry geometry,boolean sealedExterior,boolean[] ambient) {
         var components=geometry.components();int count=components.size();
         int[] cellComponent=new int[cellCount(geometry)];Arrays.fill(cellComponent,-1);

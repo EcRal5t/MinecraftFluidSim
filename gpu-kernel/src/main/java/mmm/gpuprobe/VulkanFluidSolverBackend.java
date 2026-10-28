@@ -45,6 +45,10 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
     private static <T extends AutoCloseable>T owned(java.util.List<AutoCloseable> resources,T resource){resources.add(resource);return resource;}
     @Override public String id(){return ID;}
     @Override public String executionDescription(){return "Vulkan resident / "+context.deviceName();}
+    @Override public synchronized void prepare(FluidDomainState state){
+        if(closed)throw new IllegalStateException("Vulkan backend is closed");
+        try(var region=new VulkanFluidStateCodec(state).importRegion(context,geometry,projection,pressure,multigrid)) { }
+    }
     private State acquire(FluidStateAccess input){
         if(closed)throw new IllegalStateException("Vulkan backend is closed");
         if(input instanceof State state&&state.owner()==this)return state.retain();
@@ -132,7 +136,7 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
         @Override public FiniteThermalDeviceInventory finiteThermalDevices(){synchronized(owner()){ensure();if(devices==null)devices=region.codec.exportDevices(capture);return devices;}}
         @Override public List<FluidStateAccess.DevicePort> finiteThermalPorts(){return region.ports;}
         @Override public InventorySummary inventorySummary(){synchronized(owner()){ensure();if(summary==null)summary=inventorySummary.capture(capture,region.codec.template().config().cellSize(),audit!=null);return summary;}}
-        @Override public Observation observation(){synchronized(owner()){ensure();if(observed==null){var t=totals();observed=new Observation(t.volume(),t.stocks(),(float)t.maximumSpeed(),capture.gasFlowActive(),t.particles()==0&&t.dirtyGranularColumns()==0&&capture.chemistryCounters()[5]==0&&capture.massTransferCounters()[0]==0,capture.hasPendingPhaseMotion(),audit==null||capture.exactThermalInventory().equals(audit.expectedInventory()));}return observed;}}
+        @Override public Observation observation(){synchronized(owner()){ensure();if(observed==null){var t=totals();observed=new Observation(t.volume(),t.stocks(),(float)t.maximumSpeed(),capture.gasFlowActive(),t.particles()==0&&t.dirtyGranularColumns()==0&&capture.chemistryCounters()[5]==0&&capture.massTransferCounters()[0]==0,capture.hasPendingPhaseMotion(),audit==null||audit.acceptsInventory(capture.exactThermalInventory()));}return observed;}}
         @Override public Display display(){synchronized(owner()){ensure();if(display==null){var fields=fieldsDisplay.capture(capture,region.codec);display=new Display(liquidDisplay.capture(capture,region.codec.fluids(),region.codec.template().config().cellSize()),fields.chemical(),
             granularDisplay.capture(capture,region.codec.template().granularRegistry(),region.codec.template().config().cellSize()),fields.thermal());}return display;}}
         @Override public FluidCellInventoryView observeCellInventory(int x,int y,int z){synchronized(owner()){ensure();return cellObservation.capture(capture,region.codec,x,y,z);}}
@@ -144,7 +148,14 @@ public final class VulkanFluidSolverBackend implements FluidSolverBackend {
         private final State source,successor;private final VulkanLiquidRegion.Prepared prepared;private boolean released,committed;
         Pending(State source,VulkanLiquidRegion.Prepared prepared){
             this.source=source;this.prepared=prepared;var capture=prepared.captureState();
-            try{var posting=source.audit==null?null:capture.thermalPosting();successor=new State(source.region,capture,posting==null?null:posting.apply(source.audit));successor.posting=posting;}
+            try{var posting=source.audit==null?null:capture.thermalPosting();successor=new State(source.region,capture,posting==null?null:posting.apply(source.audit));successor.posting=posting;
+                if(posting!=null&&Boolean.getBoolean("mmm.gpu.handoffDiagnostics")){
+                    var actual=capture.exactThermalInventory();var expected=successor.audit.expectedInventory();
+                    if(!successor.audit.acceptsInventory(actual))System.err.println("GPU thermal audit generation="+capture.generation()+" substeps="+prepared.substeps()
+                            +" sourceInventory="+source.capture.exactThermalInventory()+" sourceExpected="+source.audit.expectedInventory()
+                            +" actual="+actual+" expected="+expected+" residual="+actual.subtract(expected)
+                            +" residualJ="+actual.subtract(expected).toDouble()+" posting="+posting);
+                }}
             catch(RuntimeException|Error failure){capture.close();prepared.close();throw failure;}
         }
         @Override public FluidDomainState.Layout layout(){return successor.layout();}

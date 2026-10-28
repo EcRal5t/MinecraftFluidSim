@@ -111,6 +111,7 @@ public final class RegionDiagnosticsReport {
 					operations.issues().isEmpty() ? "" : " | persistence issues " + operations.issues().size());
 		}
 		FluidDomain.StepStats lastStats = region.lastStats();
+		if (region.deviceResident()) return residentStatus(region);
 		String stats = lastStats == null
 				? "尚未步进"
 				: String.format("compute %.2f ms, substeps %d, PCG %d, residual %.4g, correction %+.5g J (absolute %.5g J), force/liquidPE/gas %+.5g/%+.5g/%+.5g J",
@@ -159,6 +160,35 @@ public final class RegionDiagnosticsReport {
 				collision.markerBudgetLimited() ? " (marker budget)" : "", stats,
 				(gas.isEmpty() ? "" : " | " + gas) + (thermal.isEmpty() ? "" : " | " + thermal),
 				carrierViscosity);
+	}
+
+	/** Operator status reads the adopted device generation without changing its execution owner. */
+	static String residentStatus(FluidRegion region) {
+		var inventory = region.inventorySummary();
+		var stats = region.lastStats();
+		StringBuilder text = new StringBuilder(String.format(
+				"%s%s | selected %s | GPU resident generation %d | origin %s | grid %dx%dx%d | Minecraft interval %d ticks, sim step %.6g s | liquid %s, stocks %d | max speed %.6g m/s | gas %d nodes, %s std | granular %d parcels/%d deposits | entities %s/%d",
+				region.lifecycle().state(), region.paused() ? "/PAUSED" : "", region.id().toString().substring(0, 8),
+				region.solverGeneration(), region.origin().toShortString(), region.sizeX(), region.sizeY(), region.sizeZ(),
+				region.stepIntervalTicks(), region.solverConfig().timeStep(), UnitFormat.volume(inventory.liquidVolumeCubicMetres()),
+				region.liquidRowCount(), region.maximumSpeed(), inventory.gasNodeCount(),
+				UnitFormat.volume(AirNetwork.cubicMeters(inventory.gasStandardVolumeNanos())),
+				inventory.granularParcelCount(), inventory.granularDepositCount(),
+				region.entityPhysicsEnabled() ? "on" : "off", region.lastAffectedEntities()));
+		if (stats != null) text.append(String.format(" | compute %.2f ms, substeps %d, PCG %d, residual %.4g",
+				region.lastStepMilliseconds(), stats.substeps(), stats.pressureIterations(), stats.pressureResidual()));
+		if (inventory.thermalBound()) {
+			text.append(String.format(" | thermal T=%.2f..%.2f K U=%.6g J audit=%s pending-work=%s",
+					inventory.minimumTemperatureK(), inventory.maximumTemperatureK(), inventory.totalInternalEnergyJoules(),
+					region.thermalAuditClosed() ? "closed" : "FAILED", region.hasPendingPhaseMotionWork() ? "yes" : "no"));
+			var heat = region.display().thermal();
+			if (heat != null) for (var node : heat.gasNodes().stream().limit(4).toList()) {
+				text.append(String.format(" | gas node %d p=%+.0f Pa T=%.2f K", node.nodeId(),
+						10.0 * node.gaugePressureDecaPa(), node.temperatureQ() / 16.0));
+			}
+		}
+		if (region.availabilityFailure() != null) text.append(" | ").append(region.availabilityFailure());
+		return text.toString();
 	}
 
 	private static String viscousStressSummary(FluidDomain.StepStats lastStats) {
@@ -279,7 +309,7 @@ public final class RegionDiagnosticsReport {
 				audit.mechanicalWork().toDouble(), audit.finiteDeviceExchange().toDouble(),
 				domain.totalCoherentSolidVolumeSvq(), phase,
 				domain.hasPendingPhaseMotionWork() ? "yes" : "no",
-				domain.exactInternalEnergy().equals(audit.expectedInventory()) ? "closed" : "FAILED");
+					audit.acceptsInventory(domain.exactInternalEnergy()) ? "closed" : "FAILED");
 	}
 
 	private static String gasSummary(FluidDomain domain) {

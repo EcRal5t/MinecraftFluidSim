@@ -166,6 +166,7 @@ final class DomainCapabilities {
 		if (state == null || registry == null) throw new IllegalArgumentException("Thermal restore state/registry is missing");
 		if (domain.materialRegistry == null) throw new IllegalStateException("Thermal restore requires restored material state");
 		state.requireCompatible(domain.sizeX, domain.sizeY, domain.sizeZ, domain.config.cellSize(), domain.liquidCells.physicalSize());
+		state=domain.gasTopologyCoordinator.remapRestoredThermal(state);
 		if (!state.thermalRegistryFingerprint().equals(registry.fingerprint())) {
 			throw new IllegalArgumentException("Thermal handoff registry identity mismatch");
 		}
@@ -182,7 +183,7 @@ final class DomainCapabilities {
 		FluidThermalBinding.restore(candidate, state, thermalMarkerContext(), domain.gasState.network);
 		liquidEnergy.commit();
 		domain.thermalState = candidate;
-		try { finishThermalBinding(); }
+		try { finishThermalBinding(); domain.gasTopologyCoordinator.completeThermalRestore(); }
 		catch (RuntimeException failure) {
 			domain.thermalState = null;
 			try { refreshCoherentOccupancy(); }
@@ -194,6 +195,7 @@ final class DomainCapabilities {
 	public void restoreThermalOwnerState(ThermalOwnerSnapshot state, ThermalRegistry registry, int maximumTransportSubsteps) {
 		if (state == null || registry == null || domain.materialRegistry == null)
 			throw new IllegalArgumentException("Thermal owner restore requires liquid cells and registries");
+		state=domain.gasTopologyCoordinator.remapRestoredThermal(state);
 		if (!state.registryFingerprint().equals(registry.fingerprint()))
 			throw new IllegalArgumentException("Thermal owner registry identity differs");
 		validateCoherentRestoreCapacity(state.coherentGroups());
@@ -205,6 +207,7 @@ final class DomainCapabilities {
 		candidate.restoreOwnerState(state, thermalMarkerContext(), domain.gasState.network);
 		domain.thermalState = candidate;
 		finishThermalBinding();
+		domain.gasTopologyCoordinator.completeThermalRestore();
 	}
 	public void restoreThermalOwnerState(ThermalOwnerSnapshot state, ThermalRegistry registry) {
 		restoreThermalOwnerState(state, registry, ThermalTransport.DEFAULT_MAXIMUM_SUBSTEPS);

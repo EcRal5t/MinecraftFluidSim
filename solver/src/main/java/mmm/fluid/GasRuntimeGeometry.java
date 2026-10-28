@@ -22,7 +22,8 @@ final class GasRuntimeGeometry {
 
 	private GasRuntimeGeometry(FluidDomain domain,LiquidCellInventory future,long[] occupied,boolean sealed,
 	                           byte[] futureMasks,PhaseOccupancyState futureOccupancy,
-                               FlipPressurePhaseGeometry preparedPhase,GasComplementGeometry preparedGeometry,GasComponentCapacity.Prepared preparedCapacity) {
+                               FlipPressurePhaseGeometry preparedPhase,GasComplementGeometry preparedGeometry,GasComponentCapacity.Prepared preparedCapacity,
+                               int[] restoredCells,int restoredNodes) {
 		if(domain==null||future==null||occupied==null||occupied.length!=domain.cellCount||futureOccupancy==null
 				||futureOccupancy.cellCount()!=domain.cellCount)throw new IllegalArgumentException("Incomplete phase geometry candidate");
 		cellSize=domain.config.cellSize();sealedExterior=sealed;sourceCells=domain.liquidCells.snapshot();targetCells=future.snapshot();
@@ -46,7 +47,8 @@ final class GasRuntimeGeometry {
 			geometry=GasComplementGeometry.capture(domain.sizeX,domain.sizeY,domain.sizeZ,cellSize,cut,phase,
 					old==null?null:old.geometry,old==null?null:old.phase,targetCells,preparedCapacity);
 		}else geometry=preparedGeometry;
-		topology=GasChamberTopology.capture(geometry,sealed);
+		topology=restoredCells==null?GasChamberTopology.capture(geometry,sealed)
+				:GasChamberTopology.restore(geometry,sealed,restoredCells,restoredNodes);
 		capacity=GasChamberCapacity.capturePrepared(geometry,topology);
 		openedPoreVolumes=captureOpenedPore(old);
 	}
@@ -138,7 +140,11 @@ final class GasRuntimeGeometry {
 
 	static GasRuntimeGeometry capture(FluidDomain domain,long[] occupied,boolean sealed) {
 		domain.ensurePhaseOccupancy();
-		return new GasRuntimeGeometry(domain,domain.liquidCells,occupied,sealed,null,domain.phaseOccupancy,null,null,null);
+		return new GasRuntimeGeometry(domain,domain.liquidCells,occupied,sealed,null,domain.phaseOccupancy,null,null,null,null,0);
+	}
+	static GasRuntimeGeometry captureRestored(FluidDomain domain,long[] occupied,boolean sealed,int[] savedCells,int savedNodes) {
+		domain.ensurePhaseOccupancy();
+		return new GasRuntimeGeometry(domain,domain.liquidCells,occupied,sealed,null,domain.phaseOccupancy,null,null,null,savedCells,savedNodes);
 	}
 	static GasRuntimeGeometry captureCellFuture(FluidDomain domain,LiquidCellInventory future,long[] occupied,
 	                                           boolean sealed,byte[] masks,PhaseOccupancyState futureOccupancy) {
@@ -147,14 +153,14 @@ final class GasRuntimeGeometry {
 	static GasRuntimeGeometry captureCellFuture(FluidDomain domain,LiquidCellInventory future,long[] occupied,
 	                                           boolean sealed,byte[] masks,PhaseOccupancyState futureOccupancy,
 	                                           FlipPressurePhaseGeometry phase,GasComplementGeometry geometry,GasComponentCapacity.Prepared capacity) {
-		return new GasRuntimeGeometry(domain,future,occupied,sealed,masks,futureOccupancy,phase,geometry,capacity);
+		return new GasRuntimeGeometry(domain,future,occupied,sealed,masks,futureOccupancy,phase,geometry,capacity,null,0);
 	}
 	static GasRuntimeGeometry allDry(FluidDomain domain,boolean sealed) {
 		return allDry(domain,new long[domain.cellCount],sealed);
 	}
 	static GasRuntimeGeometry allDry(FluidDomain domain,long[] occupied,boolean sealed) {
 		var empty=new LiquidCellInventory(domain.cellCount,domain.liquidCells.chemicalRegistry());
-		return new GasRuntimeGeometry(domain,empty,occupied,sealed,null,new PhaseOccupancyState(new double[8*domain.cellCount]),null,null,null);
+		return new GasRuntimeGeometry(domain,empty,occupied,sealed,null,new PhaseOccupancyState(new double[8*domain.cellCount]),null,null,null,null,0);
 	}
 	boolean matchesCarrierGeometry(FluidDomain domain,long[] occupied) {
 		return matchesCarrierInventory(domain,occupied)&&domain.phaseOccupancy!=null

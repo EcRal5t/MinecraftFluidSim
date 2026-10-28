@@ -23,6 +23,7 @@ import java.util.List;
 /** Joint inventory and energy remapping on captured positive PLIC microbox supports. */
 final class GasTopologyCoordinator {
 	private final FluidDomain domain;
+	private int[] restoredGasNodes;
 	private enum VolumeWork { ADIABATIC, MECHANICAL_TRANSPORT, FIXED_ENERGY }
 	private record SourceVolumeWork(int node,SignedDyadic volume,double energy,List<GasInventory> parts,
 	                                int[] targets,SignedDyadic[] controls,double[] partEnergy,boolean mechanicalMode) { }
@@ -76,20 +77,54 @@ final class GasTopologyCoordinator {
 			occupied = domain.entityBodyCoupling.addTo(occupancy.copySolidSvq());
 		}
 		domain.ensurePhaseOccupancy();PhaseOccupancyTransport.requireGeometry(domain,domain.phaseOccupancy,occupied);
-		var frame = GasRuntimeGeometry.capture(domain, occupied, domain.gasState.sealedDomainBoundary);
-		if (!Arrays.equals(state.pieceNodeOrdinal(), frame.pieceNodes()) || state.nodes().size() != frame.nodeCount())
-			throw new IllegalArgumentException("Restored gas microbox membership differs from carrier geometry");
-		for (int node = 1; node <= frame.nodeCount(); node++)
-			if (state.nodes().get(node - 1).topologyKey() != frame.minimumPiece(node))
-				throw new IllegalArgumentException("Restored gas topology key mismatch");
+		int[] savedCells=state.cellNodeOrdinal();
+		var frame=GasRuntimeGeometry.captureRestored(domain,occupied,domain.gasState.sealedDomainBoundary,savedCells,state.nodes().size());
+		int[] pieces=frame.pieceNodes(), mapping=new int[state.nodes().size()];Arrays.fill(mapping,-1);
+		for(int cell=0;cell<savedCells.length;cell++)if(savedCells[cell]>0){
+			int target=-1;for(int slot=0;slot<8;slot++)if(pieces[8*cell+slot]>=0){target=pieces[8*cell+slot];break;}
+			if(target<0)continue;
+			int source=savedCells[cell]-1;
+			if(target==0||mapping[source]>=0&&mapping[source]!=target)
+				throw new IllegalStateException("Restored gas owner has inconsistent geometry: node="+(source+1)+" cell="+cell);
+			mapping[source]=target;
+		}
+		var inventories=new ArrayList<GasInventory>(java.util.Collections.nCopies(frame.nodeCount(),GasInventory.EMPTY));
+		for(int source=0;source<mapping.length;source++){
+			var stock=state.nodes().get(source).inventory();int target=mapping[source];
+			if(target<0){if(!stock.isEmpty())throw new GasTopologyBlockedException("Restored gas owner has no positive geometry: node="+(source+1));continue;}
+			inventories.set(target-1,stock);
+		}
 		AirNetwork restored = new AirNetwork(registry);
-		restored.restoreNodes(volumes(frame), state.nodes().stream().map(GasStateSnapshot.Node::inventory).toList(),
-				state.externalSource(), state.escapedSink());
+		restored.restoreNodes(volumes(frame), inventories, state.externalSource(), state.escapedSink(), state.phaseSource(), state.phaseSink());
 		for (var edge : frame.topology().connections())
 			restored.addOrMergeEdge(edge.firstNode(), edge.secondNode(), edge.area(), 0.65);
-		domain.gasState.network = restored; domain.gasState.frame = frame;
+		domain.gasState.network = restored; domain.gasState.frame = frame;restoredGasNodes=mapping;
 		domain.gasState.pressureActive = frame.nodeCount() > 0;
 	}
+
+	private double[] restoreGasEnergies(double[] source) {
+		if(restoredGasNodes==null)return source;
+		if(source.length!=restoredGasNodes.length)throw new IllegalArgumentException("Restored gas thermal ownership differs from gas inventory");
+		double[] result=new double[domain.gasState.network.nodeCount()];
+		for(int i=0;i<source.length;i++){
+			int target=restoredGasNodes[i];
+			if(target<0){if(source[i]!=0)throw new IllegalArgumentException("Gas without geometry carries thermal energy");}
+			else result[target-1]=source[i];
+		}
+		return result;
+	}
+	mmm.thermal.ThermalOwnerSnapshot remapRestoredThermal(mmm.thermal.ThermalOwnerSnapshot state) {
+		if(restoredGasNodes==null)return state;
+		return new mmm.thermal.ThermalOwnerSnapshot(state.registryFingerprint(),state.insertionTemperatureK(),
+				state.copyActiveParcelEnergy(),state.copyDepositEnergy(),restoreGasEnergies(state.copyGasNodeEnergy()),state.coherentGroups(),state.audit());
+	}
+	FlipThermalParticleState remapRestoredThermal(FlipThermalParticleState state) {
+		if(restoredGasNodes==null)return state;
+		return new FlipThermalParticleState(domain.sizeX,domain.sizeY,domain.sizeZ,domain.config.cellSize(),state.particleCount(),
+				state.thermalRegistryFingerprint(),state.insertionTemperatureK(),state.copyInternalEnergy(),state.copyActiveParcelEnergy(),
+				state.copyDepositEnergy(),state.coherentGroups(),restoreGasEnergies(state.copyGasNodeEnergy()),state.audit());
+	}
+	void completeThermalRestore(){restoredGasNodes=null;}
 
 	/** A private candidate continues immutable geometry and an independently owned network. */
 	void restoreRuntime(GasRuntimeGeometry frame, AirNetwork.RuntimeSnapshot network) {
@@ -291,8 +326,8 @@ final class GasTopologyCoordinator {
 				:domain.thermalState.planGasRemapAfterBatch(domain.gasState.network,edit.gasThermal(),edit.cellThermal(),inventories,available,mixedEnergy,available,sourceEnergy,sinkEnergy);
 		var edges=new ArrayList<AirEdge>(next.topology().connections().size());
 		for(var edge:next.topology().connections())edges.add(new AirEdge(edge.firstNode(),edge.secondNode(),edge.area(),.65));
-		var gasPlan=domain.gasState.network.planRemapNodes(available,inventories,
-				edit==null?sourceDelta:sourceDelta.add(edit.source()),edit==null?sinkDelta:sinkDelta.add(edit.sink()),edges);
+		var gasPlan=domain.gasState.network.planRemapNodes(available,inventories, sourceDelta, sinkDelta,
+				edit==null?GasAuditLedger.EMPTY:edit.source(),edit==null?GasAuditLedger.EMPTY:edit.sink(),edges);
 		return new GasTopologyPlan(next,old,gasPlan,thermalPlan,domain.gasState.network,domain.gasState.network.revision(),
 				workBySource);
 	}

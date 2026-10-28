@@ -123,7 +123,7 @@ final class VulkanGasGeometry implements AutoCloseable {
     private FlipKernelBindings.BufferRange arena;
     VulkanGasGeometry(VulkanDeviceContext context) {
         bindings = new FlipKernelBindings(context, 2,
-                resource("gas-geometry.comp").replace("// DYADIC_LIBRARY", resource("liquid-dyadic.glsl")), 12);
+                resource("gas-geometry.comp").replace("// DYADIC_LIBRARY", resource("liquid-dyadic.glsl")), 20);
         try { scan = new VulkanPrefixScan(context); }
         catch (RuntimeException | LinkageError failure) {
             try { bindings.close(); } catch (RuntimeException | LinkageError closing) { failure.addSuppressed(closing); }
@@ -153,12 +153,22 @@ final class VulkanGasGeometry implements AutoCloseable {
         scan.record(command, layout.cells() + 1, word(layout.componentCounts()), word(layout.componentOffsets()), word(layout.scanWorkspace()));
         stage(command, layout, 8, layout.cells());
     }
+    /** Source ownership comes from the committed inventory, not a fresh PLIC partition. */
+    void recordSourceComponents(VkCommandBuffer command, Layout layout, VulkanGasStateLayout gas) {
+        stage(command,layout,12,layout.cells(),Math.toIntExact(gas.column(VulkanGasStateLayout.Field.PIECE_NODE_ORDINAL).offset()/4),
+                Math.toIntExact(gas.column(VulkanGasStateLayout.Field.COUNTS).offset()/4));
+        scan.record(command,layout.cells()+1,word(layout.componentCounts()),word(layout.componentOffsets()),word(layout.scanWorkspace()));
+        stage(command,layout,8,layout.cells());
+    }
     private void stage(VkCommandBuffer command, Layout layout, int stage, int count) {
+        stage(command,layout,stage,count,0,0);
+    }
+    private void stage(VkCommandBuffer command, Layout layout, int stage, int count,int gasPieces,int gasCounts) {
         int groups = (int) (((long) count + 127) / 128);
         try (var stack = stackPush()) {
             bindings.bind(command, stack);
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                    stack.ints(layout.headerWordOffset(), stage, count));
+                    stack.ints(layout.headerWordOffset(), stage, count,gasPieces,gasCounts));
             if(stage==4||stage==5||stage==10){int slot=stage==10?0:stage==4?1:2;
                 vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+layout.dispatch().offset()+12L+12L*slot);
             }else vkCmdDispatch(command, Math.min(groups, 65535), (groups + 65534) / 65535, 1);

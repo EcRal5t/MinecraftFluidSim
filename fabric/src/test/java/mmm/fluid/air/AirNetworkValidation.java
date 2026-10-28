@@ -149,7 +149,7 @@ public final class AirNetworkValidation {
 		AirNetwork restored = new AirNetwork(network.registry());
 		restored.restoreNodes(new double[]{1.0, 1.0},
 				snapshot.nodes().stream().map(GasStateSnapshot.Node::inventory).toList(),
-				snapshot.externalSource(), snapshot.escapedSink());
+				snapshot.externalSource(), snapshot.escapedSink(), snapshot.phaseSource(), snapshot.phaseSink());
 		check(restored.inventory(2).isEmpty() && restored.auditClosed(),
 				"vacuum node did not survive complete gas handoff");
 		restored.addOrMergeEdge(AirNetwork.AMBIENT_NODE, 2, 0.01, 0.65);
@@ -211,12 +211,12 @@ public final class AirNetworkValidation {
 		expectThrow(() -> pieceSnapshot(state, List.of(state.nodes().getLast(), state.nodes().getFirst()),
 				state.pieceNodeOrdinal()), "noncanonical node key order");
 		expectThrow(() -> new GasStateSnapshot(Integer.MAX_VALUE, 1, 1, state.registryFingerprint(), "",
-				state.nodes(), state.pieceNodeOrdinal(), state.externalSource(), state.escapedSink()), "piece dimension overflow");
+				state.nodes(), state.pieceNodeOrdinal(), state.externalSource(), state.escapedSink(), state.phaseSource(), state.phaseSink()), "piece dimension overflow");
 	}
 
 	private static GasStateSnapshot pieceSnapshot(GasStateSnapshot state, List<GasStateSnapshot.Node> nodes, int[] pieces) {
 		return new GasStateSnapshot(state.sizeX(), state.sizeY(), state.sizeZ(), state.registryFingerprint(), "",
-				nodes, pieces, state.externalSource(), state.escapedSink());
+				nodes, pieces, state.externalSource(), state.escapedSink(), state.phaseSource(), state.phaseSink());
 	}
 
 	private static void validateOrificeEqualization() {
@@ -578,13 +578,13 @@ public final class AirNetworkValidation {
 		double[] volumes = new double[GasLimits.MAX_NODES_PER_REGION];
 		java.util.Arrays.fill(volumes, 1);
 		full.restoreNodes(volumes, java.util.Collections.nCopies(volumes.length, GasInventory.EMPTY),
-				GasAuditLedger.EMPTY, GasAuditLedger.EMPTY);
+				GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, GasAuditLedger.EMPTY);
 		AirNetwork oversized = new AirNetwork();
 		double[] excessVolumes = new double[volumes.length + 1];
 		java.util.Arrays.fill(excessVolumes, 1);
 		checkNodeMutationRejectsUnchanged(oversized, () -> oversized.restoreNodes(excessVolumes,
 				java.util.Collections.nCopies(excessVolumes.length, GasInventory.EMPTY), GasAuditLedger.EMPTY,
-				GasAuditLedger.EMPTY));
+				GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, GasAuditLedger.EMPTY));
 		checkNodeMutationRejectsUnchanged(oversized, () -> oversized.remapNodes(excessVolumes,
 				java.util.Collections.nCopies(excessVolumes.length, GasInventory.EMPTY), GasInventory.EMPTY, GasInventory.EMPTY));
 		full.addOrMergeEdge(1, 2, .01, .65);
@@ -622,7 +622,7 @@ public final class AirNetworkValidation {
 				BuiltinGasDefinitions.NITROGEN, 1_000_000_000L, mmm.units.Mass.fromKilograms(3), List.of(), 0L)));
 		AirNetwork network = new AirNetwork();
 		network.restoreNodes(twoNodes ? new double[] {.5, .5} : new double[] {1},
-				twoNodes ? List.of(inventory, inventory) : List.of(inventory), source, GasAuditLedger.EMPTY);
+				twoNodes ? List.of(inventory, inventory) : List.of(inventory), source, GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, GasAuditLedger.EMPTY);
 		return network;
 	}
 
@@ -704,14 +704,14 @@ public final class AirNetworkValidation {
 		phase.requireRemapAfterPhaseCurrent(successor, first);
 		phase.commitPhaseMutation(second);
 		checkNodeMutationRejectsUnchanged(phase, () -> phase.commitRemapNodes(successor), true);
-		check(phase.standardVolumeNanos(node) == 2 && phase.drawnFromAmbientNanos() == 2,
+		check(phase.standardVolumeNanos(node) == 2 && phase.phaseSource().standardVolumeNanos() == 2,
 				"A different phase successor replaced committed inventory or source");
 		var next = phase.planPhaseSource(node, phase.ambientInventory(1));
 		var correct = phase.planRemapAfterPhase(next, new double[]{1}, List.of(next.inventoryAfter()),
 				GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, List.of());
 		phase.requireRemapAfterPhaseCurrent(correct, next);
 		phase.commitPhaseMutation(next); phase.commitRemapNodes(correct);
-		check(phase.standardVolumeNanos(1) == 3 && phase.drawnFromAmbientNanos() == 3 && phase.auditClosed(),
+		check(phase.standardVolumeNanos(1) == 3 && phase.phaseSource().standardVolumeNanos() == 3 && phase.auditClosed(),
 				"The matching phase successor did not preserve its inventory and audit");
 		checkNodeMutationRejectsUnchanged(phase, () -> phase.commitRemapNodes(correct), true);
 
@@ -866,6 +866,9 @@ public final class AirNetworkValidation {
 				"rejected phase plan changed gas");
 		AirNetwork.PhaseMutationPlan committed = network.planPhaseSource(first, oneNano);
 		network.commitPhaseMutation(committed);
+		check(network.phaseSource().standardVolumeNanos() == 1 && network.externalSource().isEmpty()
+				&& network.phaseSink().isEmpty() && network.escapedSink().isEmpty(),
+				"Phase source was not isolated from atmosphere exchange");
 		expectStateThrow(() -> network.commitPhaseMutation(committed), "reused phase mutation");
 		checkLedger(network, "phase plan ownership and generation");
 
@@ -902,7 +905,7 @@ public final class AirNetworkValidation {
 		var snapshot = GasStateSnapshot.capture(2, 1, 1, pieces, network, "");
 		AirNetwork restored = new AirNetwork(registry);
 		restored.restoreNodes(new double[]{1, 1}, snapshot.nodes().stream().map(GasStateSnapshot.Node::inventory).toList(),
-				snapshot.externalSource(), snapshot.escapedSink());
+				snapshot.externalSource(), snapshot.escapedSink(), snapshot.phaseSource(), snapshot.phaseSink());
 		check(restored.auditClosed() && restored.sealedInventory().equals(network.sealedInventory()), "33-component region failed restore");
 		var identity = restored.planRemapNodes(new double[]{1, 1}, List.of(restored.inventory(1), restored.inventory(2)),
 				GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, List.of());
@@ -917,14 +920,14 @@ public final class AirNetworkValidation {
 		AirNetwork rejected = new AirNetwork(registry);
 		GasAuditLedger source = rejected.externalSource(), sink = rejected.escapedSink();
 		expectThrow(() -> rejected.restoreNodes(new double[]{1, 1}, List.of(network.inventory(a), network.inventory(b)),
-				GasAuditLedger.EMPTY, GasAuditLedger.EMPTY), "nonclosing regional restore");
+				GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, GasAuditLedger.EMPTY), "nonclosing regional restore");
 		check(rejected.nodeCount() == 0 && rejected.revision() == 0 && rejected.externalSource() == source
 				&& rejected.escapedSink() == sink, "failed restore published nodes or ledger");
 		GasInventory hugeFirst = new GasInventory(List.of(new GasComponentAmount("test:regional_0", Long.MAX_VALUE, mmm.units.Mass.fromKilograms(1), List.of(), 0L)));
 		GasInventory hugeSecond = new GasInventory(List.of(new GasComponentAmount("test:regional_1", 1, mmm.units.Mass.fromKilograms(1), List.of(), 0L)));
 		try {
 			rejected.restoreNodes(new double[]{1, 1}, List.of(hugeFirst, hugeSecond), GasAuditLedger.EMPTY,
-					GasAuditLedger.EMPTY);
+					GasAuditLedger.EMPTY, GasAuditLedger.EMPTY, GasAuditLedger.EMPTY);
 			throw new AssertionError("regional nanos overflow was accepted");
 		} catch (ArithmeticException expected) { }
 		check(rejected.nodeCount() == 0 && rejected.revision() == 0 && rejected.externalSource() == source
@@ -941,7 +944,8 @@ public final class AirNetworkValidation {
 
 	private static void checkLedger(AirNetwork network, String context) {
 		long sealed = network.sealedInventoryNanos();
-		if (sealed + network.ventedNanos() != network.drawnFromAmbientNanos()) {
+		if (sealed + network.ventedNanos() + network.phaseSink().standardVolumeNanos()
+				!= network.drawnFromAmbientNanos() + network.phaseSource().standardVolumeNanos()) {
 			throw new AssertionError("gas ledger identity broken after " + context + ": sealed=" + sealed
 					+ " vented=" + network.ventedNanos() + " drawn=" + network.drawnFromAmbientNanos());
 		}

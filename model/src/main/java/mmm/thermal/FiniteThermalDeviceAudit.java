@@ -4,7 +4,7 @@ import mmm.units.SignedDyadic;
 
 import java.util.Objects;
 
-/** Exact audit for device energy; solver exchange is signed energy entering device bodies. */
+/** Device energy audit; solver exchange is signed energy entering device bodies. */
 public record FiniteThermalDeviceAudit(
 		SignedDyadic initialInventory,
 		SignedDyadic externalSource,
@@ -37,5 +37,9 @@ public record FiniteThermalDeviceAudit(
 	public SignedDyadic expectedInventory() {
 		return initialInventory.add(externalSource).subtract(externalSink)
 				.add(solverExchange).add(roundoffResidual);
+	}
+
+	public boolean acceptsInventory(SignedDyadic actual) {
+		return ThermalAuditLedger.acceptsInventory(actual, expectedInventory(), initialInventory, externalSource, externalSink, solverExchange);
 	}
 }

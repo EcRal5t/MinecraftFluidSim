@@ -177,6 +177,24 @@ tasks.register('runStepBenchmark', JavaExec) {
 	doFirst { benchmarkWorkDir.mkdirs() }
 }
 
+tasks.register('runGpuProductionDemoValidation', JavaExec) {
+	group = 'verification'
+	description = 'Runs the offline production demo through the resident Vulkan backend.'
+	dependsOn tasks.named('testClasses')
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'mmm.simulation.GpuProductionDemoValidation'
+	jvmArgs '-ea', '--enable-native-access=ALL-UNNAMED', '-Xmx1g'
+	systemProperty 'mmm.solverBackend', 'vulkan'
+	systemProperty 'mmm.gpuDevice', providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+	args providers.gradleProperty('gpuDemo').getOrElse('demo'), providers.gradleProperty('gpuDemoSteps').getOrElse('1'), providers.gradleProperty('gpuDemoStage').getOrElse('complete')
+	def workDir = layout.buildDirectory.dir('gpu-production-demo-work').get().asFile
+	workingDir workDir
+	doFirst {
+		workDir.mkdirs()
+		new File(workDir, 'classpath.txt').text = classpath.asPath
+	}
+}
+
 tasks.register('runConvectionExperiment', JavaExec) {
 	group = 'verification'
 	description = 'Measures registry-derived Rayleigh growth; --verify-growth checks linear response and mesh convergence.'

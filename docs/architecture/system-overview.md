@@ -5,7 +5,7 @@
 
 固定碰撞在每个求解单元内保留一个连通开放空间；隔墙以求解网格解析。固定几何编辑和恢复统一执行此限制，库存、压力和格面惯性使用同一空间归属。
 
-当前运行范围为最多四个闭壳控制器或有界静水池区域，CPU `FluidDomain` 为物理聚合根。默认格长为 0.5 m，气体采用有限气腔与局部孔流，颗粒采用活动代表粒子与床层。玩法范围和后续能力的目标由[产品路线](../roadmap/product-roadmap.md)维护。
+当前运行范围为最多四个闭壳控制器或有界静水池区域。`FluidRegion` 持有当前已提交的 CPU 域或 GPU 常驻状态；CPU `FluidDomain` 聚合库存编辑与恢复，生产 Vulkan 后端执行设备候选并由应用层提交。默认格长为 0.5 m，气体采用有限气腔与局部孔流，颗粒采用活动代表粒子与床层。玩法范围和后续能力的目标由[产品路线](../roadmap/product-roadmap.md)维护。
 
 ## 导航
 
@@ -419,6 +419,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 各实际载体保存总内能 `U`，温度与热容由现有分段状态函数反演。LTE 工作区用于接触、反应与相变候选；只读观察、属性计算与真实能量重分配有各自入口。导热成对搬运内能，恒温热浴的实际通量记外部 source/sink。反应按精确物种批次改变组成和参考能，相变按实际批次联合修改两相库存与内能。
 温度、接触与载体能量准备按稳定的单元顺序遍历，同代热视图复用已准备的载体列表；库存增量索引提前筛去缺少反应物的区域。
 导热接触与求解共享一次实际载体采集，终态与热账在首次写入前准备完成。
+质量和物种采用精确整数守恒；能量统一通过 `ThermalAuditLedger.acceptsInventory` 按实际能量规模判断浮点误差。库存与账本保留原始差额，存盘汇总实际载体内能，运行、观察和恢复共用该判定。具体契约见[能量审计](thermal-state.md#能量审计)。
 固定库存的热曲线在一次热分配或孔流求根内复用；质量或材料变化后重新准备。相变候选复用同代 LTE 的单元载体索引与参考能，固相能量目标在准备阶段匹配一次，提交直接写入已准备目标；每格存储余差在整批热账汇总一次。凝聚相变先按分段平衡曲线在非负压力上的完整温度范围筛选可能方向，候选再采样一次实际压力；恒定平衡温度直接比较温度。气腔相变共用一次库存、容量与内能派生的压力、温度和热容。
 导热后的实际内能、温度与热容直接供同代相变扫描使用；反应改变库存或内能后按热状态代次重新准备。载体和热壁之间可解析的温差进入共同导热计算，低于导热分辨率时保留原始内能并省去接触图准备。
 载体内能按共同温度一次分配，最大热容载体承接存储余量，实际写入的内能汇总与舍入账保持一致。热浮力读取实际库存温度，温度准备与可选黏性定义分别处理。
@@ -485,7 +486,7 @@ MAC 动量输运读取同次结算的实际整数质量通量。
 
 设备常驻液体入口由 `VulkanLiquidRegion` 持有同代库存与 MAC，依次记录库存派生几何、重力、真实七点 CSR、压力、格面投影与上风 PLIC 面扫掠通量，再准备容量、材料路线与库存后继。几何工作区采用 float32，解析尺度为 4e-5 体积；精确库存、int64 数量、动力学与压力保持原精度。`VulkanLiquidGeometry.recordTransportPreferences` 在投影后，以共享开放面积计算总体积通量 Qt，以源侧 PLIC 薄片扫掠计算实际液体体积 Ql，写入 binding 13 的 `faceFlux`。压力使用两侧接液面积描述机械响应，物质输运使用上风液体占比；两者通过接受通量与未来几何耦合。供体额度与真实接收容量继续由精确容量求解处理。`advanceMechanical` 在同一候选中完成容量、精确体积、材料与数量输运、MAC、未来几何、机械热和精确账，再连续提交设备代次。源与未来几何采用独立绑定，保留投影后的源速度。`MechanicalDefinitions` 显式提供材料相序、物种质量、参考能和容量预留，`fromRegistries` 从真实流体、化学与热注册表组装这些列；缺失的物种偏移保留为未声明状态。生产区域其他物相的完整迁移仍待完成，当前交付范围见实施计划。
 
-液体库存以 cell×material 固定槽寻址，空槽保留规范零值；输运直接拉取自身与六邻同材料路线，冷导出压紧正体积槽。精确体积按每槽独立 offset／count 保存，四 limb 内联，较长值进入可增长存储区；普通输运直接写入目标槽，冷导出才打包为 CPU 数组。`VulkanLiquidCellVolumes` 汇总精确单元体积并给出几何量子供给；`VulkanLiquidCapacityInputs` 将固定开放面、固体占容与投影偏好转换为整数输入，有限气腔通过旧节点的真实支撑提供组容量。`VulkanLiquidCapacity` 将供体、七路接收单元、有限组及总量汇集节点组成带上下界的运输残量图；普通液体流动和新固体占容排液共用同一算法。初始流保留实际七路投影偏好；原地库存可行时并行迭代撤回违规偏好，否则由统一残量求解重新分配。初始一次计算精确余额及组成员，随后用活动队列请求撤回；供体合并各边最大请求，原子更新两端与跨组余额，并将受影响单元和组送入下一轮。长组按成员块并行处理；每轮按统一请求、大组请求、结算、完成四个全域阶段推进，结算队列直接维护间接命令，完成阶段准备下一轮；队列与代次标记复用残量工作区。供体与接收者邻接直接枚举，只为组成员建表；初始余额从实际七路流与单元、组容量直接计算。供体／组与接收者／汇集节点分成两色交替推送，同色关联边单写；负需求通过整数原子额度准确接收，已满足根通过增量标签通知前驱。短行就地处理，长行跨多个工作组推送、归约和通知。无工作阶段由设备派发零工作组。最终接受量使每个供体完整分配原库存、接收单元满足绝对上下限、有限组满足容量；源库存允许超过未来单元上限。无法满足约束的候选保留残量割集供上层缩步，成功后才发布七路整数接受量。`VulkanLiquidAcceptedVolumes` 将整数结果转为七路精确 dyadic 体积，全部小于几何量子的尾数留在原格。普通步的几何量化与精确库存分开；完全排空和强制位移仍需精确余量路线。
+液体库存以 cell×material 固定槽寻址，精确体积、整数质量、物种和内能沿同一批已接受路线搬运。GPU 容量求解保留一份七路流量：原位库存可行时先做有界的局部撤回，再从剩余冲突建立统一残量图；实体排水直接参加相同的单元和有限气腔容量约束。残量推送停滞时重新计算距离，成功分配后才发布库存。`VulkanLiquidCellVolumes` 与 `VulkanLiquidCapacityInputs` 准备真实供给和空间约束，`VulkanLiquidCapacity` 完成分配，`VulkanLiquidAcceptedVolumes` 将接受量交给精确库存输运。失败候选保留原状态，迭代参数与临时工作区由代码维护。
 
 已接受单元体积的设备处理按材料路线→数量分份→库存归并→MAC 搬运、未解析格面合并与壁面处理→耗散热写入组织。`VulkanLiquidMaterialRoutes` 将已接受单元 dyadic 体积按材料相序与源库存分配，从固定材料槽保存实际非零方向及精确原地余量。普通比例分份采用同一容量量子的整数份额，路线直接保存两字内联整数体积；每源只在结尾精确扣除总出量。既有亚量子尾数、重力分层耗尽和排空由同一模块精确分配，源与目标体积保持守恒；单个实际材料直接继承接受体积，无跨格流时直接保留源库存。`VulkanLiquidCellVolumes` 负责精确单元体积合计与整数容量供给，已接入连续机械阶段入口。`VulkanLiquidRouteQuantities` 根据实际路线体积在同一遍分派整数质量、物种和参考能；物种金额按源物种条目与真实七路方向固定寻址，直接复用源物种编号和行表，源内能分配差 `ΣrouteU−sourceU` 由每源8项浮点展开保存。`VulkanLiquidGather` 直接汇集七邻域同材料到固定槽，重建物种CSR，并在同一遍读取路线时直接生成精确体积及其描述符，保存每目标7项 `ΣrouteU−outU` 展开。`VulkanLiquidMomentum.recordTransport/recordResolve` 沿整数质量通量搬运 MAC 动量，生成单元耗散热与墙面冲量；`recordHeatPosting` 按目标质量分配热量、更新库存内能，并保留每库存和单元的舍入展开。`VulkanEnergyLedger` 将数量分份、归并与热写入的有符号浮点展开精确归总为设备 dyadic 项；机械热总量独立归总，用于共同热账交接。以上接口已用于固定源的材料输运分项，并与容量接受组合进入连续机械步；有限气腔库存后继已共同提交，完整生产后端仍待接入。
 
@@ -640,7 +641,10 @@ Query API 在服务器线程读取已加载区域，单格观察保持只读；�
     - [MmmCommands](../../fabric/src/main/java/mmm/MmmCommands.java)
     - [MmmCommandHandlers](../../fabric/src/main/java/mmm/MmmCommandHandlers.java)
     - [MinecraftDebugFixtures](../../fabric/src/main/java/mmm/simulation/MinecraftDebugFixtures.java)
+    - [DebugScenarioInitialization](../../fabric/src/main/java/mmm/simulation/DebugScenarioInitialization.java)：生产命令与离线 GPU 重放共用的初始库存、化学配比、气压及液滴几何
+    - [ControllerDemoLayout](../../fabric/src/main/java/mmm/simulation/ControllerDemoLayout.java)、[ControllerRegionCreation](../../fabric/src/main/java/mmm/simulation/ControllerRegionCreation.java)：控制器外壳与端口布局、全能力初始化及首个检查点发布
     - [RegionDiagnosticsReport](../../fabric/src/main/java/mmm/simulation/RegionDiagnosticsReport.java)
+    - [GpuProductionDemoValidation](../../fabric/src/test/java/mmm/simulation/GpuProductionDemoValidation.java)：生产后端、调度、观察、存盘、编辑接续及演示物理结果的无游戏重放
   - 验证选择器 / 参考：`audit` 及对应业务领域；[命令速查](../maintenance/commands.md)
 
 <a id="performance"></a>

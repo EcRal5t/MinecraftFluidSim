@@ -608,7 +608,8 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 			domain.restoreGasState(new mmm.fluid.air.GasStateSnapshot(8, 4, 4, gas.fingerprint(), "",
 					List.of(new mmm.fluid.air.GasStateSnapshot.Node(topology.nodes().getFirst().topologyKey(), inventory)),
 					topology.pieceNodeOrdinal(),
-					mmm.fluid.air.GasAuditLedger.of(inventory), mmm.fluid.air.GasAuditLedger.EMPTY), gas);
+					mmm.fluid.air.GasAuditLedger.of(inventory), mmm.fluid.air.GasAuditLedger.EMPTY,
+					mmm.fluid.air.GasAuditLedger.EMPTY, mmm.fluid.air.GasAuditLedger.EMPTY), gas);
 			domain.bindThermal(thermal, liquids, 300);
 			domain = FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());
 			var before = domain.captureAuthoritativeState();
@@ -928,7 +929,8 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				nodes.add(new mmm.fluid.air.GasStateSnapshot.Node(cell * 8, inventory)); source = source.add(inventory);
 			}
 			domain.restoreGasState(new mmm.fluid.air.GasStateSnapshot(5, 2, 2, gas.fingerprint(), "", nodes,
-					membership, source, mmm.fluid.air.GasAuditLedger.EMPTY), gas);
+					membership, source, mmm.fluid.air.GasAuditLedger.EMPTY,
+					mmm.fluid.air.GasAuditLedger.EMPTY, mmm.fluid.air.GasAuditLedger.EMPTY), gas);
 			domain.bindThermal(registry, liquids, 300);
 			var initialEnergy = domain.exactInternalEnergy();var initialAudit = domain.thermalAudit();
 			var initialInventory = domain.gasBoundary().sealedInventory();
@@ -1044,7 +1046,8 @@ abstract class ThermalGasValidationScenarios extends ThermalValidationSupport {
 				nodes.add(new mmm.fluid.air.GasStateSnapshot.Node(cell * 8, inventory)); source = source.add(inventory);
 			}
 			domain.restoreGasState(new mmm.fluid.air.GasStateSnapshot(5, 3, 3, gas.fingerprint(), "", nodes,
-					membership, source, mmm.fluid.air.GasAuditLedger.EMPTY), gas);
+					membership, source, mmm.fluid.air.GasAuditLedger.EMPTY,
+					mmm.fluid.air.GasAuditLedger.EMPTY, mmm.fluid.air.GasAuditLedger.EMPTY), gas);
 		}
 		domain.bindThermal(thermal, liquids, 300);
 		return FluidDomain.restoreAuthoritativeState(domain.captureAuthoritativeState());

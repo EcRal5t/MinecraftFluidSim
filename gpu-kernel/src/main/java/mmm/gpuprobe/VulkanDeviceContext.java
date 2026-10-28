@@ -16,8 +16,11 @@ import org.lwjgl.vulkan.VkPhysicalDeviceShaderAtomicFloatFeaturesEXT;
 import org.lwjgl.vulkan.VkPhysicalDeviceShaderAtomicInt64Features;
 import org.lwjgl.vulkan.VkQueue;
 import org.lwjgl.vulkan.VkQueueFamilyProperties;
+import org.lwjgl.vulkan.VkPipelineCacheCreateInfo;
+import org.lwjgl.vulkan.VkComputePipelineCreateInfo;
 
 import java.nio.IntBuffer;
+import java.nio.LongBuffer;
 
 import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.EXTShaderAtomicFloat.VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME;
@@ -31,6 +34,7 @@ final class VulkanDeviceContext implements AutoCloseable {
 	private VkPhysicalDevice physicalDevice;
 	private VkDevice device;
 	private VkQueue queue;
+	private long pipelineCache;
 	private int queueFamily;
 	private String deviceName;
 	private long storageOffsetAlignment;
@@ -65,6 +69,11 @@ final class VulkanDeviceContext implements AutoCloseable {
 	float timestampPeriodNanos() { return timestampPeriodNanos; }
 	int timestampValidBits() { return timestampValidBits; }
 	boolean hasTimestampQueries() { return timestampPeriodNanos > 0.0F && timestampValidBits > 0; }
+
+	/** Vulkan pipeline caches require externally synchronized access. */
+	synchronized void createComputePipeline(VkComputePipelineCreateInfo.Buffer info, LongBuffer result) {
+		check(vkCreateComputePipelines(device, pipelineCache, info, null, result), "vkCreateComputePipelines");
+	}
 
 	int findMemoryType(int bits, int required, MemoryStack stack) {
 		VkPhysicalDeviceMemoryProperties memory = VkPhysicalDeviceMemoryProperties.calloc(stack);
@@ -148,6 +157,10 @@ final class VulkanDeviceContext implements AutoCloseable {
 			PointerBuffer devicePointer = stack.mallocPointer(1);
 			check(vkCreateDevice(physicalDevice, deviceInfo, null, devicePointer), "vkCreateDevice");
 			device = new VkDevice(devicePointer.get(0), physicalDevice, deviceInfo);
+			var cacheInfo = VkPipelineCacheCreateInfo.calloc(stack).sType$Default();
+			var cachePointer = stack.mallocLong(1);
+			check(vkCreatePipelineCache(device, cacheInfo, null, cachePointer), "vkCreatePipelineCache");
+			pipelineCache = cachePointer.get(0);
 			PointerBuffer queuePointer = stack.mallocPointer(1);
 			vkGetDeviceQueue(device, queueFamily, 0, queuePointer);
 			queue = new VkQueue(queuePointer.get(0), device);
@@ -178,12 +191,16 @@ final class VulkanDeviceContext implements AutoCloseable {
 	}
 
 	@Override
-	public void close() {
+	public synchronized void close() {
 		Throwable failure = null;
 		if (device != null) {
 			int idleResult = vkDeviceWaitIdle(device);
 			if (idleResult != VK_SUCCESS && idleResult != VK_ERROR_DEVICE_LOST) {
 				failure = new IllegalStateException("vkDeviceWaitIdle(close-device) failed with VkResult " + idleResult);
+			}
+			if (pipelineCache != VK_NULL_HANDLE) {
+				vkDestroyPipelineCache(device, pipelineCache, null);
+				pipelineCache = VK_NULL_HANDLE;
 			}
 			vkDestroyDevice(device, null);
 			device = null;

@@ -672,7 +672,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
                 var dst=new FlipKernelBindings.BufferRange(output);var err=new FlipKernelBindings.BufferRange(errors);
                 kernels.ledger.rebindRanges(new FlipKernelBindings.BufferRange(input),dst,err);
                 if(transport.gas!=null&&!reuseGeometry){kernels.volumeKernel.rebindRanges(new FlipKernelBindings.BufferRange(input),dst,err);kernels.volumeKernel.record(command,transport.volumes);
-                    kernels.gasGeometry.rebindRanges(dst,err);kernels.gasThermo.rebindRanges(dst,err);kernels.gasGeometry.recordGeometry(command,transport.gas.geometry);kernels.gasGeometry.recordConnectivity(command,transport.gas.geometry);kernels.gasGeometry.recordComponents(command,transport.gas.geometry);}
+                    kernels.gasGeometry.rebindRanges(dst,err);kernels.gasThermo.rebindRanges(dst,err);kernels.gasGeometry.recordGeometry(command,transport.gas.geometry);kernels.gasGeometry.recordSourceComponents(command,transport.gas.geometry,transport.gas.state);}
             },0,0);
             if(status.error()!=0)return status.error();
             int error=kernels.thermalKernel.execute(candidate,thermal,duration,source.transport.devices==null?null:source.transport.devices.state,transport.devices==null?null:transport.devices.settlement,false);
@@ -718,7 +718,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
                 if(gas!=null) {
                     var dst=new FlipKernelBindings.BufferRange(output);var err=new FlipKernelBindings.BufferRange(errors);
                     kernels.gasGeometry.rebindRanges(dst,err);kernels.gasThermo.rebindRanges(dst,err);kernels.gasPressure.rebindRanges(dst,err);
-                    if(!reuseGeometry)kernels.timed(command,"old-gas-components",()->kernels.gasGeometry.recordComponents(command,gas.geometry));
+                    if(!reuseGeometry)kernels.timed(command,"old-gas-components",()->kernels.gasGeometry.recordSourceComponents(command,gas.geometry,gas.state));
                     kernels.timed(command,"old-gas-volumes",()->kernels.gasThermo.recordVolumes(command,gas.thermo,gas.geometry));
                     kernels.timed(command,"old-gas-eos",()->kernels.gasThermo.record(command,gas.thermo));
                 }
@@ -800,7 +800,7 @@ final class VulkanLiquidRegion implements AutoCloseable {
                     }
                     kernels.volumeKernel.rebindRanges(src,dst,err);kernels.volumeKernel.record(command,transport.volumes);
                     kernels.gasGeometry.rebindRanges(dst,err);kernels.gasThermo.rebindRanges(dst,err);kernels.gasPressure.rebindRanges(dst,err);
-                    kernels.timed(command,"old-gas-geometry",()->kernels.gasGeometry.recordGeometry(command,gas.geometry));kernels.gasGeometry.recordConnectivity(command,gas.geometry);
+                    kernels.timed(command,"old-gas-geometry",()->kernels.gasGeometry.recordGeometry(command,gas.geometry));
                 },transport.dynamics!=null&&parameters!=null?transport.dynamics.transitions.column(VulkanGranularTransitions.Field.CONTROL).offset():0,transport.dynamics!=null&&parameters!=null?12:0);
                 if(transport.dynamics!=null&&parameters!=null&&pre.error()==64){
                     int[] required={pre.feedback().getInt(0),pre.feedback().getInt(4),pre.feedback().getInt(8)};

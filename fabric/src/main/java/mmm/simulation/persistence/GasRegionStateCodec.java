@@ -26,7 +26,7 @@ final class GasRegionStateCodec {
 	static final int CAP_CHEMISTRY = 1 << 1;
 	static final int CAP_GAS = 1 << 2;
 	private static final int KNOWN_CAPABILITIES = CAP_MATERIALS | CAP_CHEMISTRY | CAP_GAS;
-	private static final int MANIFEST_MAGIC = 0x4741534d; // GASM
+	private static final int MANIFEST_MAGIC = 0x4741534e; // GASN
 	private static final int SECTION_MAGIC = 0x47534543; // GSEC
 	private static final int MAX_DYADIC_BYTES = 16 * 1_024;
 
@@ -34,7 +34,7 @@ final class GasRegionStateCodec {
 	record SectionLedger(RegionSectionState.SectionKey key, int sealedPieceCount) { }
 	record ManifestData(
 			int capabilities, String registryFingerprint, String chemicalRegistryFingerprint,
-			List<NodeData> nodes, GasAuditLedger externalSource, GasAuditLedger escapedSink,
+			List<NodeData> nodes, GasAuditLedger externalSource, GasAuditLedger escapedSink, GasAuditLedger phaseSource, GasAuditLedger phaseSink,
 			List<SectionLedger> sectionLedgers
 	) {
 		ManifestData { nodes = List.copyOf(nodes); sectionLedgers = List.copyOf(sectionLedgers); }
@@ -61,6 +61,7 @@ final class GasRegionStateCodec {
 			out.writeInt(data.nodes().size());
 			for (NodeData node : data.nodes()) { out.writeInt(node.topologyKey()); writeInventory(out, node.inventory()); }
 			writeAudit(out, data.externalSource()); writeAudit(out, data.escapedSink());
+			writeAudit(out, data.phaseSource()); writeAudit(out, data.phaseSink());
 
 			out.writeInt(data.sectionLedgers().size());
 			for (SectionLedger ledger : data.sectionLedgers()) {
@@ -83,7 +84,7 @@ final class GasRegionStateCodec {
 			int nodeCount = count(input.readInt(), GasLimits.MAX_NODES_PER_REGION, "nodes");
 			ArrayList<NodeData> nodes = new ArrayList<>(nodeCount);
 			for (int node = 0; node < nodeCount; node++) nodes.add(new NodeData(input.readInt(), readInventory(input)));
-			GasAuditLedger source = readAudit(input), sink = readAudit(input);
+			GasAuditLedger source = readAudit(input), sink = readAudit(input), phaseSource = readAudit(input), phaseSink = readAudit(input);
 
 			int sectionCount = count(input.readInt(), RegionStateCodec.MAX_SECTIONS, "section ledgers");
 			if (sectionCount == 0) throw new IOException("Gas manifest has no section ledgers");
@@ -92,7 +93,7 @@ final class GasRegionStateCodec {
 					new RegionSectionState.SectionKey(input.readInt(), input.readInt(), input.readInt()),
 					count(input.readInt(), Integer.MAX_VALUE, "sealed pieces")));
 			requireEnd(input);
-			ManifestData result = new ManifestData(capabilities, registry, chemistry, nodes, source, sink,
+			ManifestData result = new ManifestData(capabilities, registry, chemistry, nodes, source, sink, phaseSource, phaseSink,
 					ledgers);
 			validateManifest(result);
 			return result;
@@ -148,7 +149,7 @@ final class GasRegionStateCodec {
 				|| !(data.chemicalRegistryFingerprint().isEmpty() || data.chemicalRegistryFingerprint().matches("[0-9a-f]{64}"))
 				|| ((data.capabilities() & CAP_CHEMISTRY) != 0) != !data.chemicalRegistryFingerprint().isEmpty()
 				|| data.nodes() == null || data.nodes().size() > GasLimits.MAX_NODES_PER_REGION
-				|| data.externalSource() == null || data.escapedSink() == null
+				|| data.externalSource() == null || data.escapedSink() == null || data.phaseSource() == null || data.phaseSink() == null
 				|| data.sectionLedgers() == null || data.sectionLedgers().isEmpty()
 				|| data.sectionLedgers().size() > RegionStateCodec.MAX_SECTIONS) {
 			throw new IllegalArgumentException("Gas manifest identity/capability is invalid");

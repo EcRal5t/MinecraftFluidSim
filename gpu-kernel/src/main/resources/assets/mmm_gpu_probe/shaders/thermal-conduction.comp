@@ -70,7 +70,7 @@ void store(int field,int i,double x){if(!finite(x))invalid();uvec2 b=unpackDoubl
 const double HUGE=1.7976931348623157e308LF;
 int owners(){return get(COUNTS,0);}int contacts(){return get(COUNTS,2);}
 double resolution(){return raw(p.header+72);}double tolerance(){return raw(p.header+74);}
-dvec2 twoSum(double a,double b){precise double s=a+b,v=s-a;return dvec2(s,(a-(s-v))+(b-v));}
+dvec2 twoSum(double a,double b){precise double s=a+b,v=s-a,error=(a-(s-v))+(b-v);return dvec2(s,error);}
 dvec2 add(dvec2 a,double b){dvec2 x=twoSum(a.x,b);return twoSum(x.x,x.y+a.y);}
 double cp(int row,int segment){
     dvec2 sum=dvec2(0.0);for(int t=get(TERM_OFFSETS,row);t<get(TERM_OFFSETS,row+1);t++)

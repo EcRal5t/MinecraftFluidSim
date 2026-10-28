@@ -70,7 +70,7 @@ void exchange(int node){bool ambient=node==h(8)-1;if(!ambient&&node>=int(words[g
   putq(f(NEW_MASS)+2*c,addq(quantity(f(OLD_MASS)+2*c),dissolve?mass:-mass));putq(f(BATCHES)+2*c,dissolve?q:-q);
   if(ambient){int audit=(dissolve?f(AMBIENT_SOURCE_SPECIES):f(AMBIENT_SINK_SPECIES))+2*(m*h(11)+sp);atomicAdd(longs[audit/2],q);atomicAdd(longs[((dissolve?f(SOURCE_MASS):f(SINK_MASS))+2*m)/2],mass);put((dissolve?f(SOURCE_ENERGY):f(SINK_ENERGY))+2*c,moved);}
   else{putq(gas(10)+2*gs,addq(quantity(gas(10)+2*gs),dissolve?-q:q));putq(gas(6)+2*comp,addq(quantity(gas(6)+2*comp),dissolve?-mass:mass));putq(gas(5)+2*comp,addq(quantity(gas(5)+2*comp),dissolve?-nanos:nanos));energy+=dissolve?-moved:moved;
-   int audit=component(int(words[gas(0)])+(dissolve?1:0),gm),entry=gasSpecies(audit,sp);atomicAdd(longs[(gas(10)+2*entry)/2],q);atomicAdd(longs[(gas(6)+2*audit)/2],mass);atomicAdd(longs[(gas(5)+2*audit)/2],nanos);
+   int audit=component(int(words[gas(0)])+(dissolve?3:2),gm),entry=gasSpecies(audit,sp);atomicAdd(longs[(gas(10)+2*entry)/2],q);atomicAdd(longs[(gas(6)+2*audit)/2],mass);atomicAdd(longs[(gas(5)+2*audit)/2],nanos);
   }
   put(f(PE_WORK)+2*c,(dissolve?-1.0LF:1.0LF)*double(mass)*massUnit()*value(p.header+18)*(double(c/shape().x%shape().y)+.5LF)*value(p.header+16));words[h(6)+c]=1u;atomicOr(words[h(7)],1u);atomicAdd(words[f(CONTROL)+1],1u);atomicAdd(words[f(CONTROL)+(dissolve?2:3)],uint(min(q,2147483647l)));
  }if(!ambient)put(gas(12)+2*node,energy);

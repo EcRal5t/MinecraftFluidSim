@@ -30,16 +30,16 @@ final class MinecraftMotionExecutor {
 		return step(region, movingBodies, phaseChange);
 	}
 
-	/** Advances one authoritative mechanical projection without creating another phase-work lien. */
+	/** Settles pending phase work with one authoritative mechanical projection. */
 	MotionStepResult settlePendingPhaseWork(FluidRegion region) {
-		if (!region.domain().hasPendingPhaseMotionWork()) return null;
+		if (!region.hasPendingPhaseMotionWork()) return null;
 		long start = System.nanoTime();
 		MotionStepResult result = application.stepMotion(MotionStepCommand.pendingPhaseSettlement(
 				region.id(), region.solverGeneration()));
 		if (!result.accepted()) throw new IllegalStateException(
 				"Motion step application rejected synchronous phase settlement: " + result.status());
 		region.recordStep(result.stats(), (System.nanoTime() - start) / 1_000_000.0);
-		if (region.domain().hasPendingPhaseMotionWork()) {
+		if (region.hasPendingPhaseMotionWork()) {
 			throw new mmm.fluid.FluidDomain.ThermalPhaseBlockedException(
 					"Mechanical settlement retained pending phase work");
 		}

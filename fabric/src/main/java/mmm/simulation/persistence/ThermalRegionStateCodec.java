@@ -183,7 +183,7 @@ final class ThermalRegionStateCodec {
 		if (liquid != data.liquidMarkerCount() || active != data.activeParcelCount()
 				|| deposits != data.depositGroupCount() || coherent != data.coherentGroupCount()
 				|| !components.equals(data.totalEnergy()) || !sectionEnergy.add(data.gasEnergy()).equals(data.totalEnergy())
-				|| !data.audit().expectedInventory().equals(data.totalEnergy())) {
+				|| !data.audit().acceptsInventory(data.totalEnergy())) {
 			throw new IllegalArgumentException("Thermal manifest energy/count ledger does not close");
 		}
 		for (long bits : data.gasNodeEnergyBits()) requireFinite(bits, "gas node energy");

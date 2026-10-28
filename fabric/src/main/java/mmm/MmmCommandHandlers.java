@@ -72,7 +72,7 @@ final class MmmCommandHandlers {
 			return fail(source, "无法创建快速控制器域：" + fixtures.lastFailure());
 		}
 		return succeed(source, "已在 " + controller.toShortString()
-				+ " 创建并激活内部 4×4×4 的空闭壳；区域当前暂停，可直接对壳面中心使用桶", 1);
+				+ " 创建并启动内部 4×4×4 的空闭壳；对控制器旁蓝框接口的外侧使用桶", 1);
 	}
 
 	/** Explicit debug/creative source for exercising material controller transfers and mixtures. */
@@ -197,7 +197,7 @@ final class MmmCommandHandlers {
 		if (!fixtures.createTensionDemo(player, angleDegrees)) {
 			return fail(source, "无法创建表面张力测试域：" + fixtures.lastFailure());
 		}
-		return succeed(source, "已创建暂停的表面张力球形冠液滴（σ=100，θ=" + angleDegrees + "°；同体积球冠，瞬态，不写 region-state）；先比较 θ=30° 与 θ=120° 的暂停形状，再用 /mmm step 或 /mmm run", 1);
+		return succeed(source, "已创建暂停的表面张力球形冠液滴（演示用 σ=1000 N/m、g=0.981 m/s²，θ=" + angleDegrees + "°；同体积球冠，瞬态，不写 region-state）；各角度从相同半球开始，用 /mmm step 或 /mmm run 比较接触面的变化", 1);
 	}
 
 	static int createAirDemo(CommandSourceStack source, String mode)
@@ -212,8 +212,8 @@ final class MmmCommandHandlers {
 			return fail(source, "无法创建气压测试域：" + fixtures.lastFailure());
 		}
 		return succeed(source, "已在准星方向搭好玻璃 U 型管并创建暂停的气压演示域（"
-				+ (vacuum ? "封顶侧气腔预置负压，运行后封顶侧液面被吸升约 1.5 格"
-						: "封顶侧气腔预置正压，运行后封顶侧液面被压低约 2 格")
+				+ (vacuum ? "封顶侧气腔预置负压，运行后封顶侧液面升高"
+						: "封顶侧气腔预置正压，运行后封顶侧液面降低")
 				+ "；玻璃只替换空气，remove 时恢复；瞬态不写 region-state）；"
 				+ "用 /mmm run 观察，/mmm status 查看气压，/mmm debug true 以灰色显示密闭气体", 1);
 	}

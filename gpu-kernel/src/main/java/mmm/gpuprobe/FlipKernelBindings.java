@@ -28,6 +28,7 @@ import static org.lwjgl.vulkan.VK10.*;
 /** Owns shader compilation, descriptor bindings and the compute pipeline. */
 final class FlipKernelBindings implements AutoCloseable {
 	static final int PUSH_BYTES = 92;
+	private static final java.util.concurrent.ConcurrentMap<String, byte[]> SPIRV = new java.util.concurrent.ConcurrentHashMap<>();
 
 	private final VulkanDeviceContext context;
 	private final int bindingCount;
@@ -112,8 +113,7 @@ final class FlipKernelBindings implements AutoCloseable {
 			VkComputePipelineCreateInfo.Buffer pipelineInfo = VkComputePipelineCreateInfo.calloc(1, stack);
 			pipelineInfo.get(0).sType$Default().stage(stage).layout(pipelineLayout);
 			LongBuffer pipelinePointer = stack.mallocLong(1);
-			VulkanDeviceContext.check(vkCreateComputePipelines(context.device(), VK_NULL_HANDLE, pipelineInfo, null,
-					pipelinePointer), "vkCreateComputePipelines");
+			context.createComputePipeline(pipelineInfo, pipelinePointer);
 			pipeline = pipelinePointer.get(0);
 
 			VkDescriptorPoolSize.Buffer poolSize = VkDescriptorPoolSize.calloc(1, stack);
@@ -187,6 +187,12 @@ final class FlipKernelBindings implements AutoCloseable {
     }
 
 	static ByteBuffer compileShader(String source) {
+		byte[] code = SPIRV.computeIfAbsent(source, FlipKernelBindings::compileSource);
+		ByteBuffer result = MemoryUtil.memAlloc(code.length);
+		return result.put(code).flip();
+	}
+
+	private static byte[] compileSource(String source) {
 		long compiler = org.lwjgl.util.shaderc.Shaderc.shaderc_compiler_initialize();
 		if (compiler == NULL) throw new IllegalStateException("Shaderc compiler unavailable");
 		long result = NULL;
@@ -207,8 +213,8 @@ final class FlipKernelBindings implements AutoCloseable {
 			}
 			ByteBuffer bytes = org.lwjgl.util.shaderc.Shaderc.shaderc_result_get_bytes(result);
 			if (bytes == null) throw new IllegalStateException("Shaderc returned no SPIR-V");
-			ByteBuffer copy = MemoryUtil.memAlloc(bytes.remaining());
-			copy.put(bytes).flip();
+			byte[] copy = new byte[bytes.remaining()];
+			bytes.get(copy);
 			return copy;
 		} finally {
 			org.lwjgl.util.shaderc.Shaderc.shaderc_compile_options_release(options);

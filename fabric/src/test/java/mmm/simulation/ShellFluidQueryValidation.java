@@ -27,6 +27,8 @@ public final class ShellFluidQueryValidation {
 
 	public static void main(String[] args) {
 		validateDirectionalContainerPorts();
+		validateControllerDemoLayout();
+		validateCapturedWaterSampling();
 		FluidQueryResult outside = FluidQueryResult.absent(FluidQueryStatus.NO_REGION, "outside");
 		FluidQueryResult empty = FluidQueryResult.absent(FluidQueryStatus.EMPTY, "empty interior");
 		FluidQueryResult liquid = FluidQueryResult.ok(new FluidCellObservation(
@@ -67,6 +69,47 @@ public final class ShellFluidQueryValidation {
 				0.5, 0.5, 0.5, 0.0, -0.0, 0.0, 2, 2, 2, (x, y, z) -> true) == null,
 				"zero-length probe ray was accepted");
 		System.out.println("Shell fluid query validation passed");
+	}
+
+	private static void validateCapturedWaterSampling() {
+		var dimension = ResourceKey.create(net.minecraft.core.registries.Registries.DIMENSION,
+				Identifier.fromNamespaceAndPath("mmm", "capture"));
+		var domain = new FluidDomain(4, 4, 4, new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 240, 1e-4F, .002F));
+		var region = new FluidRegion(UUID.randomUUID(), dimension, BlockPos.ZERO, domain);
+		require(FluidRegionFactory.captureWater(region, position -> 0.0F) == 0 && domain.totalVolume() == 0.0F,
+				"Empty world produced captured liquid");
+		require(FluidRegionFactory.captureWater(region, position -> position.equals(BlockPos.ZERO) ? 1.0F : 0.0F) == 8,
+				"A source block did not fill its eight solver cells");
+		require(domain.totalVolume() == 8.0F, "Captured source block did not retain one cubic metre");
+	}
+
+	private static void validateControllerDemoLayout() {
+		var dimension = ResourceKey.create(net.minecraft.core.registries.Registries.DIMENSION,
+				Identifier.fromNamespaceAndPath("mmm", "demo"));
+		for (Direction facing : List.of(Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST)) {
+			var layout = ControllerDemoLayout.at(new BlockPos(16, 64, 16), facing);
+			Set<Long> shell = new HashSet<>();
+			for (var block : layout.shell()) shell.add(block.asLong());
+			var world = new mmm.simulation.controller.FluidBoundaryScanner.ScanWorld() {
+				public boolean isInsideBuildHeight(BlockPos p) { return p.getY() >= -64 && p.getY() < 320; }
+				public boolean isChunkLoaded(int x, int z) { return true; }
+				public boolean isBoundary(BlockPos p) { return shell.contains(p.asLong()); }
+			};
+			var scan = mmm.simulation.controller.FluidBoundaryScanner.scan(layout.controller(), world, 512);
+			require(scan.succeeded(), "Controller demo scan failed: " + facing + " " + scan.failure());
+			var footprint = scan.footprint();
+			require(footprint.interiorBlocks().size() == 64, "Controller demo interior changed: " + facing);
+			var domain = new FluidDomain(8, 8, 8, new FluidSolverConfig(.5F, 1000, 9.81F, .05F, 240, 1e-4F, .002F));
+			var region = new FluidRegion(UUID.randomUUID(), dimension, footprint.minimumInterior(), domain, footprint);
+			var inward = layout.portOutward().getOpposite();
+			var target = FluidWorldTargetResolver.resolvePortTarget(List.of(region), dimension,
+					layout.port(), layout.portOutward(), inward);
+			require(target != null && target.interiorBlock().equals(layout.port().relative(inward)),
+					"Controller demo port did not reach its interior: " + facing);
+			require(FluidWorldTargetResolver.resolvePortTarget(List.of(region), dimension,
+					layout.port(), layout.portOutward(), layout.portOutward()) == null,
+					"Controller demo port accepted the rear face: " + facing);
+		}
 	}
 
 	private static void validateDirectionalContainerPorts() {

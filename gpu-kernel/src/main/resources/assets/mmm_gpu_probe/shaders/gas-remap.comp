@@ -167,9 +167,9 @@ void closeSourceEnergy(int node,bool afterWork){
 int routePart(int g,int handle){int part=partBegin(g)+handle;return handle>=0&&handle<materials()&&part<partEnd(g)?part:-1;}
 
 // Row iteration adds old audit rows separately; intermediate retained rows have no audit additions.
-int actualRows(bool future){return (future?futureCount():nodeCount())+2;}
-int memberBegin(int row,bool future){int n=future?futureCount():nodeCount();if(!future)return row<n?sourceBegin(row):0;int index=row<n?row+1:row==n?1:0;return int(words[(row==n?rh(4):rh(6))+index]);}
-int memberEnd(int row,bool future){int n=future?futureCount():nodeCount();if(!future)return row<n?sourceEnd(row):0;int index=row<n?row+1:row==n?1:0;return int(words[(row==n?rh(4):rh(6))+index+1]);}
+int actualRows(bool future){return (future?futureCount():nodeCount())+4;}
+int memberBegin(int row,bool future){int n=future?futureCount():nodeCount();if(row>=n+2)return 0;if(!future)return row<n?sourceBegin(row):0;int index=row<n?row+1:row==n?1:0;return int(words[(row==n?rh(4):rh(6))+index]);}
+int memberEnd(int row,bool future){int n=future?futureCount():nodeCount();if(row>=n+2)return 0;if(!future)return row<n?sourceEnd(row):0;int index=row<n?row+1:row==n?1:0;return int(words[(row==n?rh(4):rh(6))+index+1]);}
 int memberGroup(int row,int at,bool future){return int(words[(!future||row==futureCount()?rh(5):rh(7))+at]);}
 bool memberAllowed(int row,int g,bool future){if(!future)return h(12)!=0?target(g)==row+1:target(g)>0;int n=futureCount();return row<n||row==n?target(g)>0:source(g)>=2;}
 int auditBegin(int row,bool future){return future&&row>=futureCount()?int(words[old(ROWS)+nodeCount()+row-futureCount()]):0;}
@@ -365,9 +365,9 @@ void gatherSpeciesAndEnergy(int row,bool future,int lane){
    if(lane==0){int outAt=row*speciesStride()+local;words[dst(SPH,future)+outAt]=words[f(DSH)+local];put64(dst(SPA,future)+2*outAt,sum);}
   }
  }
- if(future)gatherEnergy(row,lane);
+ if(future&&row<futureCount()+2)gatherEnergy(row,lane);
  if(lane==0){
-  if(row==0){words[dst(COUNTS,future)]=uint(rows-2);words[dst(COUNTS,future)+1]=uint(components);words[dst(COUNTS,future)+2]=uint(required);words[dst(EP,future)]=words[old(EP)];}
+  if(row==0){words[dst(COUNTS,future)]=uint(rows-4);words[dst(COUNTS,future)+1]=uint(components);words[dst(COUNTS,future)+2]=uint(required);words[dst(EP,future)]=words[old(EP)];}
   if(!future&&row<nodeCount())words[dst(KEYS,false)+row]=words[old(KEYS)+row];
  }
 }
@@ -379,20 +379,20 @@ void topology(int cell,bool future){
 }
 // All component/species slots derive from the immutable registry declarations.
 void measureTotal(){
- int required[6]=int[6](groups()*materials(),groups()*speciesStride(),h(12)==0?(nodeCount()+2)*materials():0,h(12)==0?(nodeCount()+2)*speciesStride():0,(futureCount()+2)*materials(),(futureCount()+2)*speciesStride());
+ int required[6]=int[6](groups()*materials(),groups()*speciesStride(),h(12)==0?(nodeCount()+4)*materials():0,h(12)==0?(nodeCount()+4)*speciesStride():0,(futureCount()+4)*materials(),(futureCount()+4)*speciesStride());
  int capacities[6]=int[6](h(3),h(4),h(7),h(8),h(9),h(10));
  for(int i=0;i<6;i++){words[f(REQ)+i]=uint(required[i]);if(required[i]>capacities[i])atomicOr(errors,64u);}
  if(futureCount()>h(6))atomicOr(errors,64u);
 }
 void prepareDispatch(){
  for(int i=0;i<3;i++)words[f(DISPATCH)+24+i]=0u;
- int sizes[8]=int[8](groups(),nodeCount(),nodeCount()+2,futureCount()+2,nodeCount(),nodeCount()+2,futureCount()+2,nodeCount());
+ int sizes[8]=int[8](groups(),nodeCount(),nodeCount()+4,futureCount()+4,nodeCount(),nodeCount()+4,futureCount()+4,nodeCount());
  for(int i=0;i<8;i++){int total=errors==0u&&!(i>=2&&i<=4)?(i<2||i>=5?(sizes[i]+127)/128:sizes[i]):0,at=f(DISPATCH)+3*i;words[at]=uint(min(total,65535));words[at+1]=uint(max(1,(total+65534)/65535));words[at+2]=1u;}
 }
 int longBase(int kind){return f(LONG_ROWS)+(kind==0?0:kind==1?h(14):h(14)+h(15));}
 void classifyRows(int row){
- if(row<nodeCount()+2&&memberEnd(row,false)-memberBegin(row,false)>16){uint slot=atomicAdd(words[f(DISPATCH)+24],1u);words[longBase(0)+slot]=uint(row);}
- if(row<futureCount()+2&&memberEnd(row,true)-memberBegin(row,true)>16){uint slot=atomicAdd(words[f(DISPATCH)+25],1u);words[longBase(1)+slot]=uint(row);}
+ if(row<nodeCount()+4&&memberEnd(row,false)-memberBegin(row,false)>16){uint slot=atomicAdd(words[f(DISPATCH)+24],1u);words[longBase(0)+slot]=uint(row);}
+ if(row<futureCount()+4&&memberEnd(row,true)-memberBegin(row,true)>16){uint slot=atomicAdd(words[f(DISPATCH)+25],1u);words[longBase(1)+slot]=uint(row);}
  if(row<nodeCount()&&sourceEnd(row)-sourceBegin(row)>16){uint slot=atomicAdd(words[f(DISPATCH)+26],1u);words[longBase(2)+slot]=uint(row);}
 }
 void main(){

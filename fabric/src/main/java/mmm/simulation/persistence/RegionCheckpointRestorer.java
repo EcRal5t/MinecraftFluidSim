@@ -244,12 +244,12 @@ public final class RegionCheckpointRestorer {
 		try {
 			snapshot = new GasStateSnapshot(manifest.sizeX(), manifest.sizeY(), manifest.sizeZ(),
 					data.registryFingerprint(), data.chemicalRegistryFingerprint(), nodes, memberships,
-					data.externalSource(), data.escapedSink());
+					data.externalSource(), data.escapedSink(), data.phaseSource(), data.phaseSink());
 			AirNetwork audit = new AirNetwork(registry == null
 					? mmm.fluid.air.BuiltinGasDefinitions.createRegistry() : registry);
 			double[] available = new double[nodes.size()]; java.util.Arrays.fill(available, 1.0);
 			audit.restoreNodes(available, nodes.stream().map(GasStateSnapshot.Node::inventory).toList(),
-					snapshot.externalSource(), snapshot.escapedSink());
+					snapshot.externalSource(), snapshot.escapedSink(), snapshot.phaseSource(), snapshot.phaseSink());
 		} catch (IllegalArgumentException invalid) {
 			throw new IOException("Invalid gas inventory/topology: " + invalid.getMessage(), invalid);
 		}
@@ -260,6 +260,8 @@ public final class RegionCheckpointRestorer {
 			for (GasStateSnapshot.Node node : snapshot.nodes()) validateGasInventoryRegistry(node.inventory(), registry, chemicalRegistry);
 			validateGasAuditRegistry(snapshot.externalSource(), registry, chemicalRegistry);
 			validateGasAuditRegistry(snapshot.escapedSink(), registry, chemicalRegistry);
+			validateGasAuditRegistry(snapshot.phaseSource(), registry, chemicalRegistry);
+			validateGasAuditRegistry(snapshot.phaseSink(), registry, chemicalRegistry);
 		}
 		if (chemicalCapability) {
 			if (chemicalRegistry == null || !data.chemicalRegistryFingerprint().equals(chemicalRegistry.fingerprint())) {

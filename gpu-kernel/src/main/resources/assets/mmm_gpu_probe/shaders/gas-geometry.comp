@@ -6,7 +6,7 @@
 layout(local_size_x=128) in;
 layout(binding=0,std430) coherent buffer Candidate { uint words[]; };
 layout(binding=1,std430) buffer Errors { uint errors; };
-layout(push_constant) uniform Params { int header; int stage; int count; } p;
+layout(push_constant) uniform Params { int header; int stage; int count; int gasPieces; int gasCounts; } p;
 // DYADIC_LIBRARY
 uvec2 poreWords;
 int h(int index) { return int(words[p.header+index]); }
@@ -239,6 +239,23 @@ void scatterMember(int cell) {
     if(errors!=0u||!present(cell))return;int node=int(words[h(24)+cell]);
     uint local=atomicAdd(words[h(31)+node],1u);words[h(32)+int(words[h(30)+node]+local)]=uint(cell);
 }
+// The committed gas inventory owns its source cell membership. Rebuilt PLIC ports
+// describe geometry; the successor remap settles any changed chamber partition.
+void assignImportedNode(int cell) {
+    if(errors!=0u)return;
+    if(cell==0)words[h(26)]=words[p.gasCounts];
+    int node=-1;
+    for(int micro=0;micro<8;micro++) {
+        int next=int(words[p.gasPieces+8*cell+micro]);
+        if(next<0)continue;
+        if(node>=0&&node!=next){atomicOr(errors,8192u);return;}
+        node=next;
+    }
+    if((node>=0)!=present(cell)||node>int(words[p.gasCounts])){atomicOr(errors,8192u);return;}
+    if(node<0)return;
+    words[h(24)+cell]=uint(node);words[h(23)+cell]=node==0?1u:0u;
+    atomicAdd(words[h(29)+node],1u);
+}
 void main() {
     uint id=(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x;
     if(id>=uint(p.count))return;int item=int(id);
@@ -255,5 +272,6 @@ void main() {
     else if(p.stage==5){if(uint(item)<words[h(43)+2])compress(int(words[h(42)+item]));}
     else if(p.stage==6)rootFlag(item);
     else if(p.stage==7)assignNode(item);
+    else if(p.stage==12)assignImportedNode(item);
     else scatterMember(item);
 }

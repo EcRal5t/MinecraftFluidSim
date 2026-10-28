@@ -514,7 +514,7 @@ final class RegionRepositoryAdapter {
 		FluidRegion probe = unloadedRegion(manifest);
 		restoreFeatureGeneration(probe, previous.state());
 		if (!probe.solverLoaded()
-				|| !probe.domain().exactInternalEnergy().equals(probe.domain().thermalAudit().expectedInventory())) {
+				|| !probe.domain().thermalAudit().acceptsInventory(probe.domain().exactInternalEnergy())) {
 			throw new IOException("Previous checkpoint probe did not restore a closed thermal inventory");
 		}
 		if (!probe.releaseSolverAfterCheckpoint(manifest.checkpointGeneration())) {

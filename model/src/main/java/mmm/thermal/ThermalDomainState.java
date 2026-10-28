@@ -466,7 +466,7 @@ public final class ThermalDomainState {
 
 	/** Prevalidates removal of every sealed-node energy as one external sink against the joint inventory. */
 	public GasEnergyStore.GasVentPlan planGasVent(AirNetwork network, int markerCount) {
-		if (!hasGasEnergy(network.nodeCount()) || !exactEnergy(markerCount).equals(auditState.ledger().expectedInventory())) {
+		if (!hasGasEnergy(network.nodeCount()) || !auditState.ledger().acceptsInventory(exactEnergy(markerCount))) {
 			throw new IllegalStateException("Gas energy is not bound to a closed thermal inventory");
 		}
 		return gasState.planVent();
@@ -990,7 +990,7 @@ public final class ThermalDomainState {
 			restoreGasEnergies(network,snapshot.copyGasNodeEnergy());
 		}
 		restoreAuditLedger(snapshot.audit());
-		if (!snapshot.prepared() && !exactEnergy(owners.markerCount()).equals(snapshot.audit().expectedInventory()))
+		if (!snapshot.prepared() && !snapshot.audit().acceptsInventory(exactEnergy(owners.markerCount())))
 			throw new IllegalArgumentException("Thermal restored owners do not close the shared inventory");
 	}
 

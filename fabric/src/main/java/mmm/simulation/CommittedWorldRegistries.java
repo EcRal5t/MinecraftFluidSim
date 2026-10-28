@@ -13,6 +13,7 @@ import mmm.thermal.ThermalRegistry;
 import mmm.thermal.ThermalStateFunction;
 import mmm.transfer.ChemicalContents;
 import mmm.transfer.FluidMixture;
+import mmm.transfer.LiquidContainerThermodynamics;
 import mmm.worldprofile.WorldCapability;
 import mmm.worldprofile.WorldCapabilityProfile;
 import net.minecraft.world.item.ItemStack;
@@ -126,14 +127,16 @@ public final class CommittedWorldRegistries {
 			}
 		} else {
 			FluidMixture mixture = ContainerItemStacks.fluidMixture(stack);
-			if (mixture == null) throw new IllegalArgumentException("Debug material liquid inventory is malformed");
-			for (FluidMixture.Component component : mixture.components()) {
-				int handle = thermal.materialHandle(
-						ThermalMaterialDefinition.CarrierKind.LIQUID, component.materialId());
-				validateLiquidTemperature(component.materialId(), temperatureKelvin);
-				energy += stateFunction.internalEnergyAtTemperature(
-						handle, component.mass(), Map.of(), temperatureKelvin);
+			if (mixture == null) {
+				Long nanos = MinecraftContainerTransferOperations.heldVolumeNanos(stack);
+				if (nanos == null) throw new IllegalArgumentException("Debug material liquid inventory is malformed");
+				long mass = mmm.units.Mass.fromKilograms(nanos / 1_000_000_000.0
+						* resolveMaterial("mmm:water").referenceDensity());
+				mixture = new FluidMixture(java.util.List.of(new FluidMixture.Component("mmm:water", nanos, mass)));
 			}
+			for (FluidMixture.Component component : mixture.components()) validateLiquidTemperature(component.materialId(), temperatureKelvin);
+			energy = LiquidContainerThermodynamics.materialEnergy(thermal,
+					hasCapability(WorldCapability.CHEMISTRY) ? chemicalRegistry() : null, mixture, temperatureKelvin);
 		}
 		if (!Double.isFinite(energy)) throw new IllegalArgumentException("Liquid internal energy overflow");
 		ContainerItemStacks.attachThermal(stack, thermal.fingerprint(), energy);
@@ -144,15 +147,19 @@ public final class CommittedWorldRegistries {
 	}
 
 	void bindConfiguredState(FluidDomain domain, int maximumThermalSubstepsPerStep) {
+		bindConfiguredState(domain, maximumThermalSubstepsPerStep, material);
+	}
+
+	void bindConfiguredState(FluidDomain domain, int maximumThermalSubstepsPerStep, MaterialRegistry definitions) {
 		if (hasCapability(WorldCapability.MATERIALS)) {
 			FluidRegionFactory.bindDefaultMaterialState(domain);
-			domain.bindMaterialDefinitions(materialRegistry());
+			domain.bindMaterialDefinitions(definitions);
 		}
 		if (hasCapability(WorldCapability.CHEMISTRY) && !domain.hasChemistryState()) {
 			domain.bindChemistry(chemicalRegistry());
 		}
 		if (hasCapability(WorldCapability.GRANULAR) && !domain.hasGranularState()) {
-			domain.bindGranular(granularRegistry(), domain.materialRegistry(), materialRegistry());
+			domain.bindGranular(granularRegistry(), domain.materialRegistry(), definitions);
 		}
 		if (hasCapability(WorldCapability.PRECIPITATION)) domain.setPrecipitationEnabled(true);
 		if (hasCapability(WorldCapability.THERMAL) && !domain.hasThermalState()) {

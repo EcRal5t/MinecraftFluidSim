@@ -226,6 +226,13 @@ final class MinecraftContainerTransferPlan {
 				(rawAfter, before) -> externalSource ? before.copy() : rawAfter);
 	}
 
+	/** Uses the same durable transaction as the world adapter after the region target is resolved. */
+	MinecraftContainerTransactionAdapter.Result executeManagedForRegion(ContainerTransferActor actor, ItemStack actorBefore) {
+		return transactions.executeForRegion(region, actor, actorBefore, sourceStack, operation, resourceKind,
+				requestedAmount, baseAmount, this::executeExact,
+				(rawAfter, before) -> externalSource ? before.copy() : rawAfter, null);
+	}
+
 	boolean filled() { return operation == ContainerTransferJournal.Operation.INSERT; }
 	long requestedAmount() { return requestedAmount; }
 	long baseAmount() { return baseAmount; }

@@ -61,8 +61,12 @@ public final class MinecraftRegionOperatorActions {
 
 	public boolean setPaused(boolean paused, ServerLevel level) {
 		FluidRegion region = activeRegion();
+		return setPaused(region, paused, () -> availability.ensure(level, region));
+	}
+
+	static boolean setPaused(FluidRegion region, boolean paused, java.util.function.BooleanSupplier ensureAvailable) {
 		if (region != null && !paused) clearPerformancePauseForExplicitRetry(region);
-		if (region == null || (!paused && !availability.ensure(level, region))) return false;
+		if (region == null || (!paused && !ensureAvailable.getAsBoolean())) return false;
 		region.setPaused(paused);
 		return true;
 	}
@@ -86,9 +90,8 @@ public final class MinecraftRegionOperatorActions {
 		if (region == null || !level.dimension().equals(region.dimension())) return 0;
 		clearPerformancePauseForExplicitRetry(region);
 		if (!availability.ensure(level, region)) return -1;
-		region.wakeForActivity();
 		try {
-			for (int i = 0; i < count; i++) motion.step(region, List.of());
+			stepRegion(region, count, motion);
 		} catch (FluidDomain.PressureSolveBlockedException blocked) {
 			regionTick.blockNumerical(level, region, blocked);
 			return -1;
@@ -110,6 +113,11 @@ public final class MinecraftRegionOperatorActions {
 		}
 		sendSnapshot(level);
 		return count;
+	}
+
+	static void stepRegion(FluidRegion region, int count, MinecraftMotionExecutor motion) {
+		region.wakeForActivity();
+		for (int i = 0; i < count; i++) motion.step(region, List.of());
 	}
 
 	/** Explicit run/step retries clear only wall-time evidence, never physical or transaction failures. */
@@ -171,9 +179,11 @@ public final class MinecraftRegionOperatorActions {
 	}
 
 	public RestorationStats remove(MinecraftServer server) {
-		if (regions.regions().stream().anyMatch(FluidRegion::controllerManaged)) {
+		FluidRegion selected = activeRegion();
+		if (selected == null) return RestorationStats.failed(false, 0, 0, 0, "没有选中的区域");
+		if (selected.controllerManaged()) {
 			return RestorationStats.failed(false, 0, 0, 0,
-					"controller 区域需手持物质场探针普通右击控制器打开控制台，依次预览并确认：清空凝聚相、排放密闭气体、释放 ownership、移除区域");
+					"控制器区域需使用探针打开控制台，依次清空凝聚相、排气、释放方块归属并移除区域");
 		}
 		if (containerRecovery.hasAnyLock()) return RestorationStats.failed(false, 0, 0, 0,
 				"存在未完成或不可识别的容器转移 WAL；拒绝移除区域，先完成恢复");
@@ -184,8 +194,9 @@ public final class MinecraftRegionOperatorActions {
 			return restoration;
 		}
 		fixtures.restoreAirDemoScaffolding(server);
-		regions.clear();
-		snapshots.clearAll(server);
+		regions.remove(selected.id());
+		try { snapshots.sendRemoval(server, selected); }
+		finally { selected.discardTransient(); }
 		return new RestorationStats(restoration.journalFound(), restoration.restoredBlocks(),
 				restoration.alreadyRestoredBlocks(), restoration.skippedBlocks(), 0, 0, true, null);
 	}

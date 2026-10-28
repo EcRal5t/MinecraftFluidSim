@@ -88,7 +88,11 @@ final class PhysicalActivityGroups {
     boolean groupAvailable(int cell) {int r=root(cell);return worldCellAvailable(cell)&&(r<0||!blocked[r]);}
     boolean hasAvailableGroups(){if(worldAvailable==null)return true;for(int cell=0;cell<domain.cellCount;cell++)if(root(cell)>=0&&groupAvailable(cell))return true;return false;}
     boolean parcelAvailable(int index){return groupAvailable(domain.domainStep.granularParcelCell(domain.granularState.parcels.parcel(index)));}
-    boolean bodyAvailable(mmm.world.MovingBodyFluidCoupling.Bounds bounds){for(int cell:bodyCells(bounds))if(!groupAvailable(cell))return false;return true;}
+    boolean bodyAvailable(mmm.world.MovingBodyFluidCoupling.Bounds bounds) {
+        if (worldAvailable == null) return true;
+        for (int cell : bodyCells(bounds)) if (!groupAvailable(cell)) return false;
+        return true;
+    }
 
 	void replaceConnections(List<int[]> groups) {
 		var copy=new ArrayList<int[]>();

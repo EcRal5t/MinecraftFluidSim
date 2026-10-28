@@ -50,17 +50,17 @@ public final class MinecraftRegionCheckpointSource implements RegionCheckpointSo
 		if(state==null)try(var capture=region.captureSolverState()){state=capture.exportState();}
 		return state;
 	}
-	@Override public GranularStateSnapshot granularState() { return region.domain().exportGranularState(); }
-	@Override public GasStateSnapshot gasState(String fingerprint) { return region.domain().exportGasState(fingerprint); }
-	@Override public FlipThermalParticleState thermalState() { return region.domain().exportThermalParticleState(); }
-	@Override public PendingPhaseMotionState pendingPhaseMotion() { return region.domain().exportPendingPhaseMotionState(); }
+	@Override public GranularStateSnapshot granularState() { return authoritativeState().granular(); }
+	@Override public GasStateSnapshot gasState(String fingerprint) { return authoritativeState().gas(); }
+	@Override public FlipThermalParticleState thermalState() { return authoritativeState().thermal(); }
+	@Override public PendingPhaseMotionState pendingPhaseMotion() { return authoritativeState().pendingPhaseMotion(); }
 	@Override public FiniteThermalDeviceInventory finiteThermalDevices(String fingerprint) {
 		return region.finiteThermalDevices(fingerprint);
 	}
-	@Override public boolean hasMaterialState() { return region.domain().hasMaterialState(); }
-	@Override public boolean hasChemicalState() { return region.domain().hasChemistryState(); }
-	@Override public boolean hasGranularState() { return region.domain().hasGranularState(); }
-	@Override public boolean hasThermalState() { return region.domain().hasThermalState(); }
+	@Override public boolean hasMaterialState() { return !authoritativeState().materialPalette().isEmpty(); }
+	@Override public boolean hasChemicalState() { return authoritativeState().chemicalRegistry() != null; }
+	@Override public boolean hasGranularState() { return authoritativeState().granularRegistry() != null; }
+	@Override public boolean hasThermalState() { return authoritativeState().thermalRegistry() != null; }
 
 	public static RegionGeometry.BlockPosition position(BlockPos value) {
 		return new RegionGeometry.BlockPosition(value.getX(), value.getY(), value.getZ());

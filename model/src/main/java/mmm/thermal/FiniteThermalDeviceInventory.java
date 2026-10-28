@@ -33,7 +33,7 @@ public record FiniteThermalDeviceInventory(
 			}
 		}
 		devices = List.copyOf(canonical);
-		if (audit == null || !exactInternalEnergy(devices).equals(audit.expectedInventory())) {
+		if (audit == null || !audit.acceptsInventory(exactInternalEnergy(devices))) {
 			throw new IllegalArgumentException("Finite thermal device energy audit does not close");
 		}
 	}

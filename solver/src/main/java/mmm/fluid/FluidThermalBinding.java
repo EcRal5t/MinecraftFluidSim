@@ -164,7 +164,7 @@ final class FluidThermalBinding {
 		restoredEnergy = restoredEnergy.add(SignedDyadic.sum(activeEnergy))
 				.add(SignedDyadic.sum(depositEnergy)).add(SignedDyadic.sum(restoredGas));
 		state.restoreAuditLedger(snapshot.audit());
-		if (!restoredEnergy.equals(state.audit().ledger().expectedInventory())) {
+		if (!state.audit().ledger().acceptsInventory(restoredEnergy)) {
 			throw new IllegalArgumentException("Restored thermal audit does not close");
 		}
 	}

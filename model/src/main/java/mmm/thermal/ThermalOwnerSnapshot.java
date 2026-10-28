@@ -42,6 +42,6 @@ public final class ThermalOwnerSnapshot {
 	public void requireClosed(SignedDyadic liquidEnergy, int cellCount) {
 		var total = liquidEnergy.add(SignedDyadic.sum(active)).add(SignedDyadic.sum(deposits)).add(SignedDyadic.sum(gas))
 				.add(CoherentPhaseStore.exactEnergyOfCanonicalSnapshot(cellCount, ThermalLimits.MAX_COHERENT_GROUPS_PER_REGION, coherent));
-		if (!total.equals(audit.expectedInventory())) throw new IllegalArgumentException("Thermal owners and cell inventory do not close their audit");
+		if (!audit.acceptsInventory(total)) throw new IllegalArgumentException("Thermal owners and cell inventory do not close their audit");
 	}
 }

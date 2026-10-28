@@ -4,6 +4,22 @@
 有 95% 把握的改动跳过额外验证、校验和测试；物理主干改动按范围选择完整步生产预算，展示改动分别记录快照与客户端成本。
 有具体未知风险时，从下列入口选择能回答该问题的最小场景，复用同一次构建产物。
 
+## GPU 演示完整流程
+
+2026-10-28，演示重放入口为 `:fabric:runGpuProductionDemoValidation`。使用生产 Vulkan provider、世界注册表、场景初始化、应用服务、调度策略、状态查询、快照、恢复和库存编辑。未启动 Minecraft 客户端或服务器；世界方块与区块可用性由离线端口提供。控制器使用实际壳体扫描、端口解析、ItemStack、容器事务、WAL 和 checkpoint；capture/takeover 使用真实采样与接管事务。
+
+```powershell
+./gradlew :fabric:runGpuProductionDemoValidation -PgpuDemo=chemistry -PgpuDemoSteps=120 --console=plain
+```
+
+`gpuDemo` 接受 `demo`、`material`、`chemistry`、`air`、`vacuum`、`tension`、`controller`、`capture`、`takeover`。`tension` 顺序运行相同初态的 30° 和 120° 液滴。默认 `gpuDemoStage=complete` 才包含物理结果、暂停／运行、手动步进、恢复和编辑后的续算；`initial`、`motion`、`scheduled` 供失败定位，分别仅覆盖对应前缀。
+
+每个接受步检查四相整数质量与元素收支、热账、设备驻留及展示快照。环境交换单独记账，日志的 `total_mass_delta` 是包含真实环境收支的库存变化；断言比较的是扣除这些收支后的质量差。默认溃坝保留原 24×16×24 全能力场景和 324 m³ 初始水量，并执行真人尺寸实体的进入、移动和离开。
+
+日志分别记录世界启动时的求解器准备、完整应用步 `offline_scope_ms` 与额外验收导出 `validation_scope_ms`。调度沿用连续三步超过 200 ms 暂停的生产规则。离线耗时未包含真实玩家网络投递、渲染和 Minecraft 世界采样成本；64³／50 ms 保留为待评估目标，本轮以完整流程及演示效果交付。
+
+构建后可复用 `fabric/build/gpu-production-demo-work/classpath.txt` 直接执行 `mmm.simulation.GpuProductionDemoValidation <场景> <步数> complete`。本机窗口外 Vulkan 执行需显式设置 `VK_DRIVER_FILES` 为已安装 NVIDIA 驱动的 ICD JSON；路径由本机驱动安装确定。
+
 ## GPU 生产接入的最新短链
 
 2026-10-27，本轮停止性能优化，完成已有实现、热相变与气液膜传质接入。
