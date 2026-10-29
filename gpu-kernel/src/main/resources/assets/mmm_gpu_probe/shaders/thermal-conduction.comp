@@ -7,9 +7,11 @@ layout(binding=0,std430) buffer Arena { uint words[]; };
 layout(binding=1,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header;int stage;int count;int step;double dt;double fraction; } p;
 // HOST_LAYOUT
+const uint ERROR_INVALID_CONDUCTION = 16384u;
+const uint ERROR_INSUFFICIENT_CAPACITY = 64u;
 shared dvec4 scratch[128];
-int h(int i){return int(words[p.header+i]);}int at(int field){return h(WORK_FIELDS+field);}
-int get(int field,int i){return int(words[at(field)+i]);}void put(int field,int i,int x){words[at(field)+i]=uint(x);}
+int headerWord(int i){return int(words[p.header+i]);}int fieldAddress(int field){return headerWord(WORK_FIELDS+field);}
+int readInt(int field,int i){return int(words[fieldAddress(field)+i]);}void writeInt(int field,int i,int x){words[fieldAddress(field)+i]=uint(x);}
 // Reserve the first lane's shared destination once for the participating subgroup.
 uint reserveIncident(int address){
  uvec4 participants=subgroupBallot(true);uint first=subgroupBallotFindLSB(participants);
@@ -18,93 +20,48 @@ uint reserveIncident(int address){
  base=subgroupBroadcastFirst(base);
  return address==sharedAddress?base+subgroupBallotExclusiveBitCount(peers):atomicAdd(words[address],1u);
 }
-double raw(int address){return packDouble2x32(uvec2(words[address],words[address+1]));}
-double num(int field,int i){return raw(at(field)+2*i);}
-bool finite(double x){return !isnan(x)&&!isinf(x);}void invalid(){atomicOr(errors,16384u);}
-void store(int field,int i,double x){if(!finite(x))invalid();uvec2 b=unpackDouble2x32(x);words[at(field)+2*i]=b.x;words[at(field)+2*i+1]=b.y;}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+double readDoubleAt(int address){return packDouble2x32(uvec2(words[address],words[address+1]));}
+double readDouble(int field,int i){return readDoubleAt(fieldAddress(field)+2*i);}
+bool finite(double x){return !isnan(x)&&!isinf(x);}void invalid(){atomicOr(errors,ERROR_INVALID_CONDUCTION);}
+void writeDouble(int field,int i,double x){if(!finite(x))invalid();uvec2 b=unpackDouble2x32(x);words[fieldAddress(field)+2*i]=b.x;words[fieldAddress(field)+2*i+1]=b.y;}
 
 const double HUGE=1.7976931348623157e308LF;
-int owners(){return get(FIELD_COUNTS,0);}int contacts(){return get(FIELD_COUNTS,2);}
-double resolution(){return raw(p.header+H_RESOLUTION);}double tolerance(){return raw(p.header+H_TOLERANCE);}
+int owners(){return readInt(FIELD_COUNTS,0);}int contacts(){return readInt(FIELD_COUNTS,2);}
+double resolution(){return readDoubleAt(p.header+H_RESOLUTION);}double tolerance(){return readDoubleAt(p.header+H_TOLERANCE);}
 dvec2 twoSum(double a,double b){precise double s=a+b,v=s-a,error=(a-(s-v))+(b-v);return dvec2(s,error);}
 dvec2 add(dvec2 a,double b){dvec2 x=twoSum(a.x,b);return twoSum(x.x,x.y+a.y);}
 double cp(int row,int segment){
-    dvec2 sum=dvec2(0.0);for(int t=get(FIELD_TERM_OFFSETS,row);t<get(FIELD_TERM_OFFSETS,row+1);t++)
-        sum=add(sum,num(FIELD_TERM_MASS,t)*num(FIELD_MATERIAL_CP,get(FIELD_TERM_MATERIAL,t)*h(H_SEGMENT_COUNT)+segment));return sum.x+sum.y;
+    dvec2 sum=dvec2(0.0);for(int t=readInt(FIELD_TERM_OFFSETS,row);t<readInt(FIELD_TERM_OFFSETS,row+1);t++)
+        sum=add(sum,readDouble(FIELD_TERM_MASS,t)*readDouble(FIELD_MATERIAL_CP,readInt(FIELD_TERM_MATERIAL,t)*headerWord(H_SEGMENT_COUNT)+segment));return sum.x+sum.y;
 }
-int segmentAt(double temperature){int low=0,high=h(H_SEGMENT_COUNT)-1;while(low<high){int middle=(low+high)/2;
-    if(temperature>=num(FIELD_KNOTS,middle))low=middle+1;else high=middle;}return low;}
+int segmentAt(double temperature){int low=0,high=headerWord(H_SEGMENT_COUNT)-1;while(low<high){int middle=(low+high)/2;
+    if(temperature>=readDouble(FIELD_KNOTS,middle))low=middle+1;else high=middle;}return low;}
 double capacity(int row,double temperature){return cp(row,segmentAt(temperature));}
 // Integral relative to the captured temperature. Reference/species energy remains in FIELD_BEFORE_ENERGY.
 double integral(int row,double from,double to){
     double lo=min(from,to),hi=max(from,to);dvec2 sum=dvec2(0.0);
-    for(int s=segmentAt(lo);s<h(H_SEGMENT_COUNT);s++){
-        double a=s==0?lo:max(lo,num(FIELD_KNOTS,s-1)),b=s+1==h(H_SEGMENT_COUNT)?hi:min(hi,num(FIELD_KNOTS,s));
+    for(int s=segmentAt(lo);s<headerWord(H_SEGMENT_COUNT);s++){
+        double a=s==0?lo:max(lo,readDouble(FIELD_KNOTS,s-1)),b=s+1==headerWord(H_SEGMENT_COUNT)?hi:min(hi,readDouble(FIELD_KNOTS,s));
         if(b>a)sum=add(sum,(b-a)*cp(row,s));
         if(b>=hi)break;
     }
     double result=sum.x+sum.y;return to<from?-result:result;
 }
 double invert(int row,double delta){
-    double temperature=num(FIELD_OWNER_INITIAL_T,row);int s=segmentAt(temperature);
+    double temperature=readDouble(FIELD_OWNER_INITIAL_T,row);int s=segmentAt(temperature);
     if(delta>=0.0){
-        while(s+1<h(H_SEGMENT_COUNT)){double end=num(FIELD_KNOTS,s),energy=(end-temperature)*cp(row,s);
+        while(s+1<headerWord(H_SEGMENT_COUNT)){double end=readDouble(FIELD_KNOTS,s),energy=(end-temperature)*cp(row,s);
             if(delta<=energy)return temperature+delta/cp(row,s);delta-=energy;temperature=end;s++;}
     }else{
-        while(s>0){double end=num(FIELD_KNOTS,s-1),energy=(temperature-end)*cp(row,s);
+        while(s>0){double end=readDouble(FIELD_KNOTS,s-1),energy=(temperature-end)*cp(row,s);
             if(-delta<=energy)return temperature+delta/cp(row,s);delta+=energy;temperature=end;s--;}
     }
     return temperature+delta/cp(row,s);
 }
 bool validContact(int edge){
-    if(edge>=contacts())return false;int a=get(FIELD_CONTACT_A,edge),b=get(FIELD_CONTACT_B,edge);double g=num(FIELD_CONTACT_G,edge);
-    bool valid=a>=0&&a<owners()&&b>=-1&&b<owners()&&a!=b&&g>0.0&&finite(g);
-    if(b<0)valid=valid&&num(FIELD_CONTACT_BATH_T,edge)>0.0&&finite(num(FIELD_CONTACT_BATH_T,edge));
+    if(edge>=contacts())return false;int ownerA=readInt(FIELD_CONTACT_A,edge),ownerB=readInt(FIELD_CONTACT_B,edge);double conductance=readDouble(FIELD_CONTACT_G,edge);
+    bool valid=ownerA>=0&&ownerA<owners()&&ownerB>=-1&&ownerB<owners()&&ownerA!=ownerB&&conductance>0.0&&finite(conductance);
+    if(ownerB<0)valid=valid&&readDouble(FIELD_CONTACT_BATH_T,edge)>0.0&&finite(readDouble(FIELD_CONTACT_BATH_T,edge));
     if(!valid)invalid();return valid;
 }
 dvec4 reduce(dvec4 v,int kind){
@@ -114,170 +71,170 @@ dvec4 reduce(dvec4 v,int kind){
                 dvec4(a.x+b.x,max(a.y,b.y),0.0,0.0);}barrier();}
     dvec4 result=scratch[0];barrier();return result;
 }
-void savePartial(int field,int block,dvec4 value){for(int i=0;i<4;i++)store(field,4*block+i,value[i]);}
-dvec4 loadPartial(int field,int block){return dvec4(num(field,4*block),num(field,4*block+1),num(field,4*block+2),num(field,4*block+3));}
+void savePartial(int field,int block,dvec4 value){for(int i=0;i<4;i++)writeDouble(field,4*block+i,value[i]);}
+dvec4 loadPartial(int field,int block){return dvec4(readDouble(field,4*block),readDouble(field,4*block+1),readDouble(field,4*block+2),readDouble(field,4*block+3));}
 void initialize(int row){
-    if(h(7)==0)put(FIELD_DEGREE_COUNTS,row,0);put(FIELD_DEGREE_CURSORS,row,0);store(FIELD_ENERGY_CHANGE,2*row,0.0);store(FIELD_ENERGY_CHANGE,2*row+1,0.0);
-    if(row==0){for(int i=0;i<4;i++)put(49,i,0);put(FIELD_MODE,0,0);if(h(7)==0)put(FIELD_MODE,1,0);put(FIELD_ACCEPTED,0,0);}
+    if(headerWord(H_CONTACT_MODE)==0)writeInt(FIELD_DEGREE_COUNTS,row,0);writeInt(FIELD_DEGREE_CURSORS,row,0);writeDouble(FIELD_ENERGY_CHANGE,2*row,0.0);writeDouble(FIELD_ENERGY_CHANGE,2*row+1,0.0);
+    if(row==0){for(int i=0;i<4;i++)writeInt(FIELD_IMEX_COUNTS,i,0);writeInt(FIELD_MODE,0,0);if(headerWord(H_CONTACT_MODE)==0)writeInt(FIELD_MODE,1,0);writeInt(FIELD_ACCEPTED,0,0);}
     if(row>=owners())return;
-    double u=num(FIELD_OWNER_ENERGY,row),t=num(FIELD_OWNER_INITIAL_T,row);if(!finite(u)||!finite(t)||t<=0.0)invalid();
-    store(FIELD_BEFORE_ENERGY,row,u);store(FIELD_TEMPERATURE,row,t);store(FIELD_TRIAL_T,row,t);
+    double u=readDouble(FIELD_OWNER_ENERGY,row),t=readDouble(FIELD_OWNER_INITIAL_T,row);if(!finite(u)||!finite(t)||t<=0.0)invalid();
+    writeDouble(FIELD_BEFORE_ENERGY,row,u);writeDouble(FIELD_TEMPERATURE,row,t);writeDouble(FIELD_TRIAL_T,row,t);
 }
 dvec4 countContact(int edge){
-    dvec4 v=dvec4(HUGE,-HUGE,HUGE,0.0);
-    if(h(7)!=0){if(edge>=get(FIELD_MODE,1))return v;int contact=get(48,edge);v.x=num(FIELD_CONTACT_BATH_T,contact);v.y=v.x;return v;}
-    if(edge>=h(H_CONTACT_CAPACITY))return v;
-    store(FIELD_FLUX,edge,0.0);
-    if(!validContact(edge))return v;int a=get(FIELD_CONTACT_A,edge),b=get(FIELD_CONTACT_B,edge);
-    atomicAdd(words[at(FIELD_DEGREE_COUNTS)+a],1u);if(b>=0)atomicAdd(words[at(FIELD_DEGREE_COUNTS)+b],1u);
+    dvec4 bounds=dvec4(HUGE,-HUGE,HUGE,0.0);
+    if(headerWord(H_CONTACT_MODE)!=0){if(edge>=readInt(FIELD_MODE,1))return bounds;int contact=readInt(FIELD_BATH_EDGES,edge);bounds.x=readDouble(FIELD_CONTACT_BATH_T,contact);bounds.y=bounds.x;return bounds;}
+    if(edge>=headerWord(H_CONTACT_CAPACITY))return bounds;
+    writeDouble(FIELD_FLUX,edge,0.0);
+    if(!validContact(edge))return bounds;int ownerA=readInt(FIELD_CONTACT_A,edge),ownerB=readInt(FIELD_CONTACT_B,edge);
+    atomicAdd(words[fieldAddress(FIELD_DEGREE_COUNTS)+ownerA],1u);if(ownerB>=0)atomicAdd(words[fieldAddress(FIELD_DEGREE_COUNTS)+ownerB],1u);
     else{
-        int bath=int(atomicAdd(words[at(FIELD_MODE)+1],1u));put(FIELD_BATH_INDEX,edge,bath);
-        if(bath>=h(H_BATH_CAPACITY))atomicOr(errors,64u);
-        v.x=num(FIELD_CONTACT_BATH_T,edge);v.y=v.x;
-    }return v;
+        int bath=int(atomicAdd(words[fieldAddress(FIELD_MODE)+1],1u));writeInt(FIELD_BATH_INDEX,edge,bath);
+        if(bath>=headerWord(H_BATH_CAPACITY))atomicOr(errors,ERROR_INSUFFICIENT_CAPACITY);
+        bounds.x=readDouble(FIELD_CONTACT_BATH_T,edge);bounds.y=bounds.x;
+    }return bounds;
 }
 void scatter(int edge){
-    if(!validContact(edge))return;int a=get(FIELD_CONTACT_A,edge),b=get(FIELD_CONTACT_B,edge);
-    int slot=int(reserveIncident(at(FIELD_DEGREE_CURSORS)+a));put(FIELD_INCIDENT,get(FIELD_DEGREE_OFFSETS,a)+slot,edge);
-    if(b>=0){slot=int(reserveIncident(at(FIELD_DEGREE_CURSORS)+b));put(FIELD_INCIDENT,get(FIELD_DEGREE_OFFSETS,b)+slot,edge);}
+    if(!validContact(edge))return;int ownerA=readInt(FIELD_CONTACT_A,edge),ownerB=readInt(FIELD_CONTACT_B,edge);
+    int slot=int(reserveIncident(fieldAddress(FIELD_DEGREE_CURSORS)+ownerA));writeInt(FIELD_INCIDENT,readInt(FIELD_DEGREE_OFFSETS,ownerA)+slot,edge);
+    if(ownerB>=0){slot=int(reserveIncident(fieldAddress(FIELD_DEGREE_CURSORS)+ownerB));writeInt(FIELD_INCIDENT,readInt(FIELD_DEGREE_OFFSETS,ownerB)+slot,edge);}
 }
 dvec2 tileSum(int row){
-    dvec2 value=dvec2(0.0);for(int tile=get(FIELD_TILE_OFFSETS,row);tile<get(FIELD_TILE_OFFSETS,row+1);tile++){
-        value=add(value,num(FIELD_TILE_PARTIALS,2*tile));value=add(value,num(FIELD_TILE_PARTIALS,2*tile+1));
+    dvec2 value=dvec2(0.0);for(int tile=readInt(FIELD_TILE_OFFSETS,row);tile<readInt(FIELD_TILE_OFFSETS,row+1);tile++){
+        value=add(value,readDouble(FIELD_TILE_PARTIALS,2*tile));value=add(value,readDouble(FIELD_TILE_PARTIALS,2*tile+1));
     }return value;
 }
 void prepareTile(int tile){
-    int count=get(FIELD_TILE_OFFSETS,h(H_OWNER_CAPACITY));
-    if(tile==0){put(FIELD_DISPATCH,9,min(count,65535));put(FIELD_DISPATCH,10,count==0?1:(count+65534)/65535);put(FIELD_DISPATCH,11,1);}
+    int count=readInt(FIELD_TILE_OFFSETS,headerWord(H_OWNER_CAPACITY));
+    if(tile==0){writeInt(FIELD_DISPATCH,9,min(count,65535));writeInt(FIELD_DISPATCH,10,count==0?1:(count+65534)/65535);writeInt(FIELD_DISPATCH,11,1);}
     if(tile>=count)return;int lo=0,hi=owners();
-    while(lo<hi){int mid=(lo+hi)/2;if(get(FIELD_TILE_OFFSETS,mid+1)<=tile)lo=mid+1;else hi=mid;}
-    put(FIELD_TILE_OWNERS,tile,lo);
+    while(lo<hi){int mid=(lo+hi)/2;if(readInt(FIELD_TILE_OFFSETS,mid+1)<=tile)lo=mid+1;else hi=mid;}
+    writeInt(FIELD_TILE_OWNERS,tile,lo);
 }
-dvec2 sampleData(int point,bool fluxValue){int header=h(76),data=int(words[header+48+31])+8*point+(fluxValue?4:0);return dvec2(raw(data),raw(data+2));}
+dvec2 sampleData(int point,bool fluxValue){int header=headerWord(H_CONTACT_HEADER),data=int(words[header+48+31])+8*point+(fluxValue?4:0);return dvec2(readDoubleAt(data),readDoubleAt(data+2));}
 void reduceTile(int tile,int lane,int operation){
-    int row=get(FIELD_TILE_OWNERS,tile),entry=get(FIELD_DEGREE_OFFSETS,row)+128*(tile-get(FIELD_TILE_OFFSETS,row))+lane;
+    int row=readInt(FIELD_TILE_OWNERS,tile),entry=readInt(FIELD_DEGREE_OFFSETS,row)+128*(tile-readInt(FIELD_TILE_OFFSETS,row))+lane;
     double value=0.0;dvec2 sampled=dvec2(0.0);
-    if(h(7)==2){if(entry<get(FIELD_DEGREE_OFFSETS,row+1))sampled=sampleData(get(FIELD_INCIDENT,entry),operation==23);}
-    else if(entry<get(FIELD_DEGREE_OFFSETS,row+1)){
-        int edge=get(FIELD_INCIDENT,entry),a=get(FIELD_CONTACT_A,edge),b=get(FIELD_CONTACT_B,edge),other=a==row?b:a;
-        double g=num(FIELD_CONTACT_G,edge);
-        value=operation==22?g:(a==row?1.0:-1.0)*num(FIELD_FLUX,edge);
+    if(headerWord(H_CONTACT_MODE)==2){if(entry<readInt(FIELD_DEGREE_OFFSETS,row+1))sampled=sampleData(readInt(FIELD_INCIDENT,entry),operation==23);}
+    else if(entry<readInt(FIELD_DEGREE_OFFSETS,row+1)){
+        int edge=readInt(FIELD_INCIDENT,entry),a=readInt(FIELD_CONTACT_A,edge),b=readInt(FIELD_CONTACT_B,edge),other=a==row?b:a;
+        double g=readDouble(FIELD_CONTACT_G,edge);
+        value=operation==22?g:(a==row?1.0:-1.0)*readDouble(FIELD_FLUX,edge);
     }
-    scratch[lane]=h(7)==2?dvec4(sampled,0.0,0.0):dvec4(value,0.0,0.0,0.0);barrier();
+    scratch[lane]=headerWord(H_CONTACT_MODE)==2?dvec4(sampled,0.0,0.0):dvec4(value,0.0,0.0,0.0);barrier();
     for(int width=64;width>0;width/=2){
         if(lane<width){dvec2 a=scratch[lane].xy,b=scratch[lane+width].xy;a=add(a,b.x);a=add(a,b.y);scratch[lane]=dvec4(a,0.0,0.0);}barrier();
     }
-    if(lane==0){store(FIELD_TILE_PARTIALS,2*tile,scratch[0].x);store(FIELD_TILE_PARTIALS,2*tile+1,scratch[0].y);}
+    if(lane==0){writeDouble(FIELD_TILE_PARTIALS,2*tile,scratch[0].x);writeDouble(FIELD_TILE_PARTIALS,2*tile+1,scratch[0].y);}
 }
 dvec4 prepareOwner(int row){
-    dvec4 v=dvec4(HUGE,-HUGE,HUGE,0.0);if(row>=owners())return v;
-    int first=get(FIELD_TERM_OFFSETS,row),last=get(FIELD_TERM_OFFSETS,row+1);
-    if(first<0||last<=first||last>get(FIELD_COUNTS,1)){invalid();return v;}
+    dvec4 bounds=dvec4(HUGE,-HUGE,HUGE,0.0);if(row>=owners())return bounds;
+    int firstTerm=readInt(FIELD_TERM_OFFSETS,row),termEnd=readInt(FIELD_TERM_OFFSETS,row+1);
+    if(firstTerm<0||termEnd<=firstTerm||termEnd>readInt(FIELD_COUNTS,1)){invalid();return bounds;}
     dvec2 sum=dvec2(0.0);
-    for(int t=first;t<last;t++){int material=get(FIELD_TERM_MATERIAL,t);double mass=num(FIELD_TERM_MASS,t);
-        if(material<0||material>=h(H_MATERIAL_COUNT)||!(mass>0.0)||!finite(mass)){invalid();continue;}
-        sum=add(sum,mass*num(FIELD_MATERIAL_MIN_CP,material));}
-    double minimum=sum.x+sum.y;if(!(minimum>0.0)||!finite(minimum))invalid();
-    dvec2 g=dvec2(0.0);
-    if(get(FIELD_DEGREE_COUNTS,row)>128)g=tileSum(row);
-    else for(int i=get(FIELD_DEGREE_OFFSETS,row);i<get(FIELD_DEGREE_OFFSETS,row+1);i++){
-        if(h(7)==2){dvec2 x=sampleData(get(FIELD_INCIDENT,i),false);g=add(g,x.x);g=add(g,x.y);}
-        else g=add(g,num(FIELD_CONTACT_G,get(FIELD_INCIDENT,i)));
+    for(int term=firstTerm;term<termEnd;term++){int material=readInt(FIELD_TERM_MATERIAL,term);double mass=readDouble(FIELD_TERM_MASS,term);
+        if(material<0||material>=headerWord(H_MATERIAL_COUNT)||!(mass>0.0)||!finite(mass)){invalid();continue;}
+        sum=add(sum,mass*readDouble(FIELD_MATERIAL_MIN_CP,material));}
+    double minimumHeatCapacity=sum.x+sum.y;if(!(minimumHeatCapacity>0.0)||!finite(minimumHeatCapacity))invalid();
+    dvec2 conductanceSum=dvec2(0.0);
+    if(readInt(FIELD_DEGREE_COUNTS,row)>128)conductanceSum=tileSum(row);
+    else for(int i=readInt(FIELD_DEGREE_OFFSETS,row);i<readInt(FIELD_DEGREE_OFFSETS,row+1);i++){
+        if(headerWord(H_CONTACT_MODE)==2){dvec2 x=sampleData(readInt(FIELD_INCIDENT,i),false);conductanceSum=add(conductanceSum,x.x);conductanceSum=add(conductanceSum,x.y);}
+        else conductanceSum=add(conductanceSum,readDouble(FIELD_CONTACT_G,readInt(FIELD_INCIDENT,i)));
     }
-    double degree=g.x+g.y;store(FIELD_DEGREE,row,degree);store(FIELD_MIN_CP,row,minimum);store(FIELD_ROOT_CP,row,sqrt(minimum));
-    v=dvec4(num(FIELD_OWNER_INITIAL_T,row),num(FIELD_OWNER_INITIAL_T,row),minimum,2.0*p.dt*degree/minimum);return v;
+    double degree=conductanceSum.x+conductanceSum.y;writeDouble(FIELD_DEGREE,row,degree);writeDouble(FIELD_MIN_CP,row,minimumHeatCapacity);writeDouble(FIELD_ROOT_CP,row,sqrt(minimumHeatCapacity));
+    bounds=dvec4(readDouble(FIELD_OWNER_INITIAL_T,row),readDouble(FIELD_OWNER_INITIAL_T,row),minimumHeatCapacity,2.0*p.dt*degree/minimumHeatCapacity);return bounds;
 }
 void chooseMode(int lane){
     dvec4 v=dvec4(HUGE,-HUGE,HUGE,0.0);
-    for(int block=lane;block<(h(H_OWNER_CAPACITY)+127)/128;block+=128){dvec4 b=loadPartial(FIELD_PARTIALS,block);v=dvec4(min(v.x,b.x),max(v.y,b.y),min(v.z,b.z),max(v.w,b.w));}
-    for(int block=lane;block<max(1,((h(7)!=0?get(FIELD_MODE,1):contacts())+127)/128);block+=128){dvec4 b=loadPartial(FIELD_BATH_PARTIALS,block);v.x=min(v.x,b.x);v.y=max(v.y,b.y);}
+    for(int block=lane;block<(headerWord(H_OWNER_CAPACITY)+127)/128;block+=128){dvec4 b=loadPartial(FIELD_PARTIALS,block);v=dvec4(min(v.x,b.x),max(v.y,b.y),min(v.z,b.z),max(v.w,b.w));}
+    for(int block=lane;block<max(1,((headerWord(H_CONTACT_MODE)!=0?readInt(FIELD_MODE,1):contacts())+127)/128);block+=128){dvec4 b=loadPartial(FIELD_BATH_PARTIALS,block);v.x=min(v.x,b.x);v.y=max(v.y,b.y);}
     v=reduce(v,0);if(lane!=0)return;
-    store(FIELD_SUMMARY,0,v.x);store(FIELD_SUMMARY,1,v.y);store(FIELD_SUMMARY,2,v.z);
-    int mode=owners()==0||(h(7)==2?v.w==0.0:contacts()==0)||v.y-v.x<=resolution()?0:v.w>1.0?9:1;
-    put(FIELD_MODE,0,mode);
+    writeDouble(FIELD_SUMMARY,0,v.x);writeDouble(FIELD_SUMMARY,1,v.y);writeDouble(FIELD_SUMMARY,2,v.z);
+    int mode=owners()==0||(headerWord(H_CONTACT_MODE)==2?v.w==0.0:contacts()==0)||v.y-v.x<=resolution()?0:v.w>1.0?9:1;
+    writeInt(FIELD_MODE,0,mode);
 }
 void flux(int edge,double dt,int slot){
-    if(edge>=contacts())return;int a=get(FIELD_CONTACT_A,edge),b=get(FIELD_CONTACT_B,edge);
-    double other=b<0?num(FIELD_CONTACT_BATH_T,edge):num(FIELD_TEMPERATURE,b);precise double q=num(FIELD_CONTACT_G,edge)*(other-num(FIELD_TEMPERATURE,a))*dt;
-    store(FIELD_FLUX,edge,q);if(b<0)store(FIELD_RESERVOIR_CHANGE,get(FIELD_BATH_INDEX,edge)*h(H_ENABLED)+slot,q);
+    if(edge>=contacts())return;int ownerA=readInt(FIELD_CONTACT_A,edge),ownerB=readInt(FIELD_CONTACT_B,edge);
+    double otherTemperature=ownerB<0?readDouble(FIELD_CONTACT_BATH_T,edge):readDouble(FIELD_TEMPERATURE,ownerB);precise double transferredEnergy=readDouble(FIELD_CONTACT_G,edge)*(otherTemperature-readDouble(FIELD_TEMPERATURE,ownerA))*dt;
+    writeDouble(FIELD_FLUX,edge,transferredEnergy);if(ownerB<0)writeDouble(FIELD_RESERVOIR_CHANGE,readInt(FIELD_BATH_INDEX,edge)*headerWord(H_ENABLED)+slot,transferredEnergy);
 }
 dvec2 ownerFluxPair(int row){
-    if(get(FIELD_DEGREE_COUNTS,row)>128)return tileSum(row);
-    dvec2 delta=dvec2(0.0);for(int i=get(FIELD_DEGREE_OFFSETS,row);i<get(FIELD_DEGREE_OFFSETS,row+1);i++){
-        int edge=get(FIELD_INCIDENT,i);if(h(7)==2){dvec2 x=sampleData(edge,true);delta=add(delta,x.x);delta=add(delta,x.y);}
-        else delta=add(delta,(get(FIELD_CONTACT_A,edge)==row?1.0:-1.0)*num(FIELD_FLUX,edge));}
+    if(readInt(FIELD_DEGREE_COUNTS,row)>128)return tileSum(row);
+    dvec2 delta=dvec2(0.0);for(int i=readInt(FIELD_DEGREE_OFFSETS,row);i<readInt(FIELD_DEGREE_OFFSETS,row+1);i++){
+        int edge=readInt(FIELD_INCIDENT,i);if(headerWord(H_CONTACT_MODE)==2){dvec2 x=sampleData(edge,true);delta=add(delta,x.x);delta=add(delta,x.y);}
+        else delta=add(delta,(readInt(FIELD_CONTACT_A,edge)==row?1.0:-1.0)*readDouble(FIELD_FLUX,edge));}
     return delta;
 }
 double ownerFlux(int row){dvec2 delta=ownerFluxPair(row);return delta.x+delta.y;}
 void spatialGatherDispatch(){
- int tiles=get(FIELD_MODE,0)!=0?get(FIELD_TILE_OFFSETS,h(H_OWNER_CAPACITY)):0;
- put(FIELD_DISPATCH,15,min(tiles,65535));put(FIELD_DISPATCH,16,max(1,(tiles+65534)/65535));put(FIELD_DISPATCH,17,1);
+ int tiles=readInt(FIELD_MODE,0)!=0?readInt(FIELD_TILE_OFFSETS,headerWord(H_OWNER_CAPACITY)):0;
+ writeInt(FIELD_DISPATCH,15,min(tiles,65535));writeInt(FIELD_DISPATCH,16,max(1,(tiles+65534)/65535));writeInt(FIELD_DISPATCH,17,1);
 }
 // Compact fast-owner solve; all pressure columns use nFast rather than arena capacity as stride.
-int fastCount(){return get(49,0);}
-double fastSum(int owner){dvec2 sum=dvec2(0.0);for(int i=get(FIELD_DEGREE_OFFSETS,owner);i<get(FIELD_DEGREE_OFFSETS,owner+1);i++){
- if(h(7)==2){dvec2 x=sampleData(get(FIELD_INCIDENT,i),true);sum=add(sum,x.x);sum=add(sum,x.y);}
- else{int edge=get(FIELD_INCIDENT,i),a=get(FIELD_CONTACT_A,edge),b=get(FIELD_CONTACT_B,edge),other=a==owner?b:a;if(other<0)continue;int index=get(51,other);if(index<0)continue;double value;
-  if(p.stage==47)value=(p.step==1?num(FIELD_WORK,fastCount()+index):num(FIELD_PRESSURE,index))/num(FIELD_ROOT_CP,other);
-  else value=num(p.stage==45?FIELD_TRIAL_T:FIELD_TEMPERATURE,other)-num(FIELD_OWNER_INITIAL_T,other);
-  sum=add(sum,p.dt*num(FIELD_CONTACT_G,edge)*value);
+int fastCount(){return readInt(FIELD_IMEX_COUNTS,0);}
+double fastSum(int owner){dvec2 sum=dvec2(0.0);for(int i=readInt(FIELD_DEGREE_OFFSETS,owner);i<readInt(FIELD_DEGREE_OFFSETS,owner+1);i++){
+ if(headerWord(H_CONTACT_MODE)==2){dvec2 x=sampleData(readInt(FIELD_INCIDENT,i),true);sum=add(sum,x.x);sum=add(sum,x.y);}
+ else{int edge=readInt(FIELD_INCIDENT,i),a=readInt(FIELD_CONTACT_A,edge),b=readInt(FIELD_CONTACT_B,edge),other=a==owner?b:a;if(other<0)continue;int index=readInt(FIELD_IMEX_INDEX,other);if(index<0)continue;double value;
+  if(p.stage==STAGE_FAST_PRODUCT)value=(p.step==1?readDouble(FIELD_WORK,fastCount()+index):readDouble(FIELD_PRESSURE,index))/readDouble(FIELD_ROOT_CP,other);
+  else value=readDouble(p.stage==STAGE_TRIAL_RESIDUAL?FIELD_TRIAL_T:FIELD_TEMPERATURE,other)-readDouble(FIELD_OWNER_INITIAL_T,other);
+  sum=add(sum,p.dt*readDouble(FIELD_CONTACT_G,edge)*value);
  }
  }return sum.x+sum.y;}
-double fastResidual(int owner,int field){double delta=num(field,owner)-num(FIELD_OWNER_INITIAL_T,owner);return integral(owner,num(FIELD_OWNER_INITIAL_T,owner),num(field,owner))+p.dt*num(FIELD_DEGREE,owner)*delta-num(52,owner)-fastSum(owner);}
-void fastClassify(int row){if(row>=owners())return;if(get(FIELD_MODE,0)==0){put(51,row,-1);put(53,row,0);store(52,row,0.0);return;}put(53,row,0);bool fast=2.0*p.dt*num(FIELD_DEGREE,row)>num(FIELD_MIN_CP,row);store(52,row,fast?ownerFlux(row):0.0);int index=fast?int(atomicAdd(words[at(49)],1u)):-1;put(51,row,index);if(fast)put(50,index,row);}
-void fastIsolated(int index){if(index>=fastCount())return;int row=get(50,index);if(get(53,row)!=0)return;
- double t=num(FIELD_OWNER_INITIAL_T,row),q=num(52,row),diagonal=p.dt*num(FIELD_DEGREE,row);int segment=segmentAt(t);
- if(q>=0.0){while(segment+1<h(H_SEGMENT_COUNT)){double end=num(FIELD_KNOTS,segment),cost=(end-t)*(cp(row,segment)+diagonal);if(q<=cost)break;q-=cost;t=end;segment++;}}
- else{while(segment>0){double end=num(FIELD_KNOTS,segment-1),cost=(t-end)*(cp(row,segment)+diagonal);if(-q<=cost)break;q+=cost;t=end;segment--;}}
- t+=q/(cp(row,segment)+diagonal);store(FIELD_TEMPERATURE,row,t);store(FIELD_TRIAL_T,row,t);
+double fastResidual(int owner,int field){double delta=readDouble(field,owner)-readDouble(FIELD_OWNER_INITIAL_T,owner);return integral(owner,readDouble(FIELD_OWNER_INITIAL_T,owner),readDouble(field,owner))+p.dt*readDouble(FIELD_DEGREE,owner)*delta-readDouble(FIELD_IMEX_SOURCE,owner)-fastSum(owner);}
+void fastClassify(int owner){if(owner>=owners())return;if(readInt(FIELD_MODE,0)==0){writeInt(FIELD_IMEX_INDEX,owner,-1);writeInt(FIELD_IMEX_COUPLED,owner,0);writeDouble(FIELD_IMEX_SOURCE,owner,0.0);return;}writeInt(FIELD_IMEX_COUPLED,owner,0);bool fast=2.0*p.dt*readDouble(FIELD_DEGREE,owner)>readDouble(FIELD_MIN_CP,owner);writeDouble(FIELD_IMEX_SOURCE,owner,fast?ownerFlux(owner):0.0);int fastIndex=fast?int(atomicAdd(words[fieldAddress(FIELD_IMEX_COUNTS)],1u)):-1;writeInt(FIELD_IMEX_INDEX,owner,fastIndex);if(fast)writeInt(FIELD_IMEX_OWNERS,fastIndex,owner);}
+void fastIsolated(int fastIndex){if(fastIndex>=fastCount())return;int owner=readInt(FIELD_IMEX_OWNERS,fastIndex);if(readInt(FIELD_IMEX_COUPLED,owner)!=0)return;
+ double temperature=readDouble(FIELD_OWNER_INITIAL_T,owner),energy=readDouble(FIELD_IMEX_SOURCE,owner),diagonal=p.dt*readDouble(FIELD_DEGREE,owner);int segment=segmentAt(temperature);
+ if(energy>=0.0){while(segment+1<headerWord(H_SEGMENT_COUNT)){double end=readDouble(FIELD_KNOTS,segment),segmentEnergy=(end-temperature)*(cp(owner,segment)+diagonal);if(energy<=segmentEnergy)break;energy-=segmentEnergy;temperature=end;segment++;}}
+ else{while(segment>0){double end=readDouble(FIELD_KNOTS,segment-1),segmentEnergy=(temperature-end)*(cp(owner,segment)+diagonal);if(-energy<=segmentEnergy)break;energy+=segmentEnergy;temperature=end;segment--;}}
+ temperature+=energy/(cp(owner,segment)+diagonal);writeDouble(FIELD_TEMPERATURE,owner,temperature);writeDouble(FIELD_TRIAL_T,owner,temperature);
 }
-dvec4 fastLinearize(int index,bool trialValue){if(index>=fastCount())return dvec4(0.0);int row=get(50,index),n=fastCount();double r=fastResidual(row,trialValue?FIELD_TRIAL_T:FIELD_TEMPERATURE),error=r/num(FIELD_MIN_CP,row);
- if(!trialValue){put(FIELD_STARTS,index,index);if(index==0)put(FIELD_STARTS,n,n);put(FIELD_COLUMNS,index,index);put(FIELD_ROWS,index,index);put(FIELD_META,index,0);store(FIELD_PROBLEM,n+index,0.0);store(FIELD_PROBLEM,2*n+index,0.0);store(FIELD_VALUES,index,(capacity(row,num(FIELD_TEMPERATURE,row))+p.dt*num(FIELD_DEGREE,row))/num(FIELD_MIN_CP,row));store(FIELD_PROBLEM,index,-r/num(FIELD_ROOT_CP,row));}
+dvec4 fastLinearize(int fastIndex,bool trialValue){if(fastIndex>=fastCount())return dvec4(0.0);int owner=readInt(FIELD_IMEX_OWNERS,fastIndex),fastOwners=fastCount();double residual=fastResidual(owner,trialValue?FIELD_TRIAL_T:FIELD_TEMPERATURE),error=residual/readDouble(FIELD_MIN_CP,owner);
+ if(!trialValue){writeInt(FIELD_STARTS,fastIndex,fastIndex);if(fastIndex==0)writeInt(FIELD_STARTS,fastOwners,fastOwners);writeInt(FIELD_COLUMNS,fastIndex,fastIndex);writeInt(FIELD_ROWS,fastIndex,fastIndex);writeInt(FIELD_META,fastIndex,0);writeDouble(FIELD_PROBLEM,fastOwners+fastIndex,0.0);writeDouble(FIELD_PROBLEM,2*fastOwners+fastIndex,0.0);writeDouble(FIELD_VALUES,fastIndex,(capacity(owner,readDouble(FIELD_TEMPERATURE,owner))+p.dt*readDouble(FIELD_DEGREE,owner))/readDouble(FIELD_MIN_CP,owner));writeDouble(FIELD_PROBLEM,fastIndex,-residual/readDouble(FIELD_ROOT_CP,owner));}
  return dvec4(error*error,abs(error),0.0,0.0);
 }
 void fastResidualFinish(int lane){dvec4 v=dvec4(0.0);for(int block=lane;block<(fastCount()+127)/128;block+=128){dvec4 b=loadPartial(FIELD_PARTIALS,block);v.x+=b.x;v.y=max(v.y,b.y);}v=reduce(v,1);if(lane!=0)return;double norm=sqrt(v.x/max(1.0,double(fastCount())));
- if(p.step==0){store(FIELD_SUMMARY,3,norm);store(FIELD_SUMMARY,5,v.y);store(FIELD_PROBLEM,3*fastCount(),tolerance()*sqrt(num(FIELD_SUMMARY,2)/max(1.0,double(fastCount()))));put(FIELD_MODE,0,v.y<=tolerance()?10:9);}
- else{bool accepted=v.y<=tolerance()||norm<num(FIELD_SUMMARY,3);put(FIELD_ACCEPTED,0,accepted?1:0);if(accepted){store(FIELD_SUMMARY,3,norm);store(FIELD_SUMMARY,5,v.y);if(v.y<=tolerance())put(FIELD_MODE,0,10);}}
+ if(p.step==0){writeDouble(FIELD_SUMMARY,3,norm);writeDouble(FIELD_SUMMARY,5,v.y);writeDouble(FIELD_PROBLEM,3*fastCount(),tolerance()*sqrt(readDouble(FIELD_SUMMARY,2)/max(1.0,double(fastCount()))));writeInt(FIELD_MODE,0,v.y<=tolerance()?10:9);}
+ else{bool accepted=v.y<=tolerance()||norm<readDouble(FIELD_SUMMARY,3);writeInt(FIELD_ACCEPTED,0,accepted?1:0);if(accepted){writeDouble(FIELD_SUMMARY,3,norm);writeDouble(FIELD_SUMMARY,5,v.y);if(v.y<=tolerance())writeInt(FIELD_MODE,0,10);}}
 }
-void fastProduct(int index){if(index>=fastCount()||num(FIELD_CONTROL,p.step==1?3:7)==0.0)return;int row=get(50,index),n=fastCount();double x=p.step==1?num(FIELD_WORK,n+index):num(FIELD_PRESSURE,index);store(FIELD_WORK,2*n+index,num(FIELD_VALUES,index)*x-fastSum(row)/num(FIELD_ROOT_CP,row));}
+void fastProduct(int fastIndex){if(fastIndex>=fastCount()||readDouble(FIELD_CONTROL,p.step==1?3:7)==0.0)return;int owner=readInt(FIELD_IMEX_OWNERS,fastIndex),fastOwners=fastCount();double pressureValue=p.step==1?readDouble(FIELD_WORK,fastOwners+fastIndex):readDouble(FIELD_PRESSURE,fastIndex);writeDouble(FIELD_WORK,2*fastOwners+fastIndex,readDouble(FIELD_VALUES,fastIndex)*pressureValue-fastSum(owner)/readDouble(FIELD_ROOT_CP,owner));}
 void main(){
     int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),id=128*block+lane;
-    if(p.stage>=40){
-      if(p.stage==50&&id==0)put(49,1,get(FIELD_MODE,1));
+    if(p.stage>=STAGE_CLASSIFY_FAST){
+      if(p.stage==STAGE_CLASSIFY_FAST_CONTACTS&&id==0)writeInt(FIELD_IMEX_COUNTS,1,readInt(FIELD_MODE,1));
       if(errors!=0u)return;
-      if(p.stage==40)fastClassify(id);
-      else if(p.stage==41)fastIsolated(id);
-      else if(p.stage==42||p.stage==45){dvec4 v=reduce(fastLinearize(id,p.stage==45),1);if(lane==0)savePartial(FIELD_PARTIALS,block,v);}
-      else if(p.stage==43)fastResidualFinish(lane);
-      else if(p.stage==44){if(id<fastCount()){int row=get(50,id);store(FIELD_TRIAL_T,row,clamp(num(FIELD_TEMPERATURE,row)+p.fraction*num(FIELD_PRESSURE,id)/num(FIELD_ROOT_CP,row),num(FIELD_SUMMARY,0),num(FIELD_SUMMARY,1)));}}
-      else if(p.stage==46){if(id<fastCount()&&get(FIELD_ACCEPTED,0)!=0){int row=get(50,id);store(FIELD_TEMPERATURE,row,num(FIELD_TRIAL_T,row));}}
-      else if(p.stage==47)fastProduct(id);
-      else if(p.stage==48){if(id<owners()&&get(FIELD_MODE,0)!=0){double u=num(FIELD_BEFORE_ENERGY,id)+ownerFlux(id);store(FIELD_OWNER_ENERGY,id,u);if(h(7)!=2)store(FIELD_TEMPERATURE,id,invert(id,u-num(FIELD_BEFORE_ENERGY,id)));dvec2 change=twoSum(u,-num(FIELD_BEFORE_ENERGY,id));store(FIELD_ENERGY_CHANGE,2*id,change.x);store(FIELD_ENERGY_CHANGE,2*id+1,change.y);}}
-      else if(p.stage==49){if(id<h(H_BATH_CAPACITY)&&get(FIELD_MODE,0)==0)for(int slot=0;slot<h(H_ENABLED);slot++)store(FIELD_RESERVOIR_CHANGE,id*h(H_ENABLED)+slot,0.0);}
-      else if(p.stage==50){
-        if(id<contacts()&&get(FIELD_MODE,0)!=0){int a=get(FIELD_CONTACT_A,id),b=get(FIELD_CONTACT_B,id);if(b>=0&&get(51,a)>=0&&get(51,b)>=0){atomicOr(words[at(53)+a],1u);atomicOr(words[at(53)+b],1u);atomicAdd(words[at(49)+3],1u);}}
+      if(p.stage==STAGE_CLASSIFY_FAST)fastClassify(id);
+      else if(p.stage==STAGE_SOLVE_ISOLATED)fastIsolated(id);
+      else if(p.stage==STAGE_LINEARIZE||p.stage==STAGE_TRIAL_RESIDUAL){dvec4 v=reduce(fastLinearize(id,p.stage==STAGE_TRIAL_RESIDUAL),1);if(lane==0)savePartial(FIELD_PARTIALS,block,v);}
+      else if(p.stage==STAGE_FINISH_RESIDUAL)fastResidualFinish(lane);
+      else if(p.stage==STAGE_TRIAL_TEMPERATURE){if(id<fastCount()){int row=readInt(FIELD_IMEX_OWNERS,id);writeDouble(FIELD_TRIAL_T,row,clamp(readDouble(FIELD_TEMPERATURE,row)+p.fraction*readDouble(FIELD_PRESSURE,id)/readDouble(FIELD_ROOT_CP,row),readDouble(FIELD_SUMMARY,0),readDouble(FIELD_SUMMARY,1)));}}
+      else if(p.stage==STAGE_ACCEPT_TRIAL){if(id<fastCount()&&readInt(FIELD_ACCEPTED,0)!=0){int row=readInt(FIELD_IMEX_OWNERS,id);writeDouble(FIELD_TEMPERATURE,row,readDouble(FIELD_TRIAL_T,row));}}
+      else if(p.stage==STAGE_FAST_PRODUCT)fastProduct(id);
+      else if(p.stage==STAGE_FINISH_ENERGY){if(id<owners()&&readInt(FIELD_MODE,0)!=0){double u=readDouble(FIELD_BEFORE_ENERGY,id)+ownerFlux(id);writeDouble(FIELD_OWNER_ENERGY,id,u);if(headerWord(H_CONTACT_MODE)!=2)writeDouble(FIELD_TEMPERATURE,id,invert(id,u-readDouble(FIELD_BEFORE_ENERGY,id)));dvec2 change=twoSum(u,-readDouble(FIELD_BEFORE_ENERGY,id));writeDouble(FIELD_ENERGY_CHANGE,2*id,change.x);writeDouble(FIELD_ENERGY_CHANGE,2*id+1,change.y);}}
+      else if(p.stage==STAGE_CLEAR_IDLE_RESERVOIRS){if(id<headerWord(H_BATH_CAPACITY)&&readInt(FIELD_MODE,0)==0)for(int slot=0;slot<headerWord(H_ENABLED);slot++)writeDouble(FIELD_RESERVOIR_CHANGE,id*headerWord(H_ENABLED)+slot,0.0);}
+      else if(p.stage==STAGE_CLASSIFY_FAST_CONTACTS){
+        if(id<contacts()&&readInt(FIELD_MODE,0)!=0){int a=readInt(FIELD_CONTACT_A,id),b=readInt(FIELD_CONTACT_B,id);if(b>=0&&readInt(FIELD_IMEX_INDEX,a)>=0&&readInt(FIELD_IMEX_INDEX,b)>=0){atomicOr(words[fieldAddress(FIELD_IMEX_COUPLED)+a],1u);atomicOr(words[fieldAddress(FIELD_IMEX_COUPLED)+b],1u);atomicAdd(words[fieldAddress(FIELD_IMEX_COUNTS)+3],1u);}}
       }
-      else if(p.stage==51){if(get(FIELD_MODE,0)!=0)flux(id,p.dt,0);}
-      else if(p.stage==52){if(id<contacts()&&get(FIELD_MODE,0)!=0){int a=get(FIELD_CONTACT_A,id),b=get(FIELD_CONTACT_B,id);if(get(51,a)>=0||(b>=0&&get(51,b)>=0))flux(id,p.dt,0);}}
-      else if(p.stage==53){if(id==0){int groups=(fastCount()+127)/128;put(FIELD_DISPATCH,3,min(groups,65535));put(FIELD_DISPATCH,4,max(1,(groups+65534)/65535));put(FIELD_DISPATCH,5,1);}}
+      else if(p.stage==STAGE_INITIAL_FLUX){if(readInt(FIELD_MODE,0)!=0)flux(id,p.dt,0);}
+      else if(p.stage==STAGE_FINAL_FAST_FLUX){if(id<contacts()&&readInt(FIELD_MODE,0)!=0){int a=readInt(FIELD_CONTACT_A,id),b=readInt(FIELD_CONTACT_B,id);if(readInt(FIELD_IMEX_INDEX,a)>=0||(b>=0&&readInt(FIELD_IMEX_INDEX,b)>=0))flux(id,p.dt,0);}}
+      else if(p.stage==STAGE_FAST_DISPATCH){if(id==0){int groups=(fastCount()+127)/128;writeInt(FIELD_DISPATCH,3,min(groups,65535));writeInt(FIELD_DISPATCH,4,max(1,(groups+65534)/65535));writeInt(FIELD_DISPATCH,5,1);}}
       return;
     }
-    if(p.stage==36){if(id==0)spatialGatherDispatch();return;}
-    if(p.stage==31){if(id==0){int count=errors==0u?max(1,((h(7)!=0?get(FIELD_MODE,1):contacts())+127)/128):0;put(FIELD_DISPATCH,12,min(count,65535));put(FIELD_DISPATCH,13,max(1,(count+65534)/65535));put(FIELD_DISPATCH,14,1);}return;}
-    if(errors!=0u&&h(7)!=0)return;
-    if(owners()<0||owners()>h(H_OWNER_CAPACITY)||get(FIELD_COUNTS,1)<0||get(FIELD_COUNTS,1)>h(H_TERM_CAPACITY)||contacts()<0||contacts()>h(H_CONTACT_CAPACITY)){if(id==0)invalid();return;}
+    if(p.stage==STAGE_SPATIAL_GATHER_DISPATCH){if(id==0)spatialGatherDispatch();return;}
+    if(p.stage==STAGE_CONTACT_DISPATCH){if(id==0){int count=errors==0u?max(1,((headerWord(H_CONTACT_MODE)!=0?readInt(FIELD_MODE,1):contacts())+127)/128):0;writeInt(FIELD_DISPATCH,12,min(count,65535));writeInt(FIELD_DISPATCH,13,max(1,(count+65534)/65535));writeInt(FIELD_DISPATCH,14,1);}return;}
+    if(errors!=0u&&headerWord(H_CONTACT_MODE)!=0)return;
+    if(owners()<0||owners()>headerWord(H_OWNER_CAPACITY)||readInt(FIELD_COUNTS,1)<0||readInt(FIELD_COUNTS,1)>headerWord(H_TERM_CAPACITY)||contacts()<0||contacts()>headerWord(H_CONTACT_CAPACITY)){if(id==0)invalid();return;}
     // All bath demand is counted even when a private candidate needs a larger bath column.
-    if((errors&64u)!=0u&&p.stage!=0&&p.stage!=1&&p.stage!=31)return;
-    if(p.stage==33){if(block<get(FIELD_TILE_OFFSETS,h(H_OWNER_CAPACITY)))reduceTile(block,lane,23);return;}
-    if(p.stage==22){if(block<get(FIELD_TILE_OFFSETS,h(H_OWNER_CAPACITY)))reduceTile(block,lane,22);return;}
+    if((errors&ERROR_INSUFFICIENT_CAPACITY)!=0u&&p.stage!=STAGE_INITIALIZE&&p.stage!=STAGE_COUNT_CONTACTS&&p.stage!=STAGE_CONTACT_DISPATCH)return;
+    if(p.stage==STAGE_REDUCE_FLUX_TILES){if(block<readInt(FIELD_TILE_OFFSETS,headerWord(H_OWNER_CAPACITY)))reduceTile(block,lane,23);return;}
+    if(p.stage==STAGE_REDUCE_DEGREE_TILES){if(block<readInt(FIELD_TILE_OFFSETS,headerWord(H_OWNER_CAPACITY)))reduceTile(block,lane,22);return;}
 
-    if(p.stage==0){if(id<h(H_OWNER_CAPACITY))initialize(id);}
-    else if(p.stage==1){dvec4 v=reduce(countContact(id),0);if(lane==0)savePartial(FIELD_BATH_PARTIALS,block,v);}
-    else if(p.stage==2){if(id<h(H_CONTACT_CAPACITY))scatter(id);}
-    else if(p.stage==3){dvec4 v=reduce(prepareOwner(id),0);if(lane==0)savePartial(FIELD_PARTIALS,block,v);}
-    else if(p.stage==4)chooseMode(lane);
-    else if(p.stage==20){if(id<p.count)prepareTile(id);}
-    else if(p.stage==21){if(id<h(H_OWNER_CAPACITY))put(FIELD_TILE_COUNTS,id,id<owners()&&get(FIELD_DEGREE_COUNTS,id)>128?(get(FIELD_DEGREE_COUNTS,id)+127)/128:0);}
-    else if(p.stage==30){if(id<h(H_BATH_CAPACITY))for(int slot=0;slot<h(H_ENABLED);slot++)store(FIELD_RESERVOIR_CHANGE,id*h(H_ENABLED)+slot,0.0);}
+    if(p.stage==STAGE_INITIALIZE){if(id<headerWord(H_OWNER_CAPACITY))initialize(id);}
+    else if(p.stage==STAGE_COUNT_CONTACTS){dvec4 v=reduce(countContact(id),0);if(lane==0)savePartial(FIELD_BATH_PARTIALS,block,v);}
+    else if(p.stage==STAGE_SCATTER_CONTACTS){if(id<headerWord(H_CONTACT_CAPACITY))scatter(id);}
+    else if(p.stage==STAGE_PREPARE_OWNERS){dvec4 v=reduce(prepareOwner(id),0);if(lane==0)savePartial(FIELD_PARTIALS,block,v);}
+    else if(p.stage==STAGE_CHOOSE_MODE)chooseMode(lane);
+    else if(p.stage==STAGE_PREPARE_TILES){if(id<p.count)prepareTile(id);}
+    else if(p.stage==STAGE_COUNT_TILES){if(id<headerWord(H_OWNER_CAPACITY))writeInt(FIELD_TILE_COUNTS,id,id<owners()&&readInt(FIELD_DEGREE_COUNTS,id)>128?(readInt(FIELD_DEGREE_COUNTS,id)+127)/128:0);}
+    else if(p.stage==STAGE_CLEAR_RESERVOIRS){if(id<headerWord(H_BATH_CAPACITY))for(int slot=0;slot<headerWord(H_ENABLED);slot++)writeDouble(FIELD_RESERVOIR_CHANGE,id*headerWord(H_ENABLED)+slot,0.0);}
 
 }

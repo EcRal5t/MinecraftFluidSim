@@ -20,25 +20,33 @@ p;
 
 // DYADIC_LIBRARY
 // HOST_LAYOUT
+const uint ERROR_INVALID_INVENTORY = 32u;
+const uint ERROR_INSUFFICIENT_CAPACITY = 64u;
+
+const int DYADIC_DESCRIPTOR_WORDS = 5;
+const int DYADIC_OFFSET = 1;
+const int DYADIC_COUNT = 2;
+const int DYADIC_EXPONENT = 3;
+const int DYADIC_SIGN = 4;
 
 const int64_t MAX_LONG = int64_t(0x7fffffffffffffffUL);
-int h(int field) {
+int headerWord(int field) {
     return int(candidateWords[p.header + field]);
 }
-int src(int field) {
-    return h(SOURCE_FIELDS + field);
+int sourceField(int field) {
+    return headerWord(SOURCE_FIELDS + field);
 }
-int dst(int field) {
-    return h(TARGET_FIELDS + field);
+int targetField(int field) {
+    return headerWord(TARGET_FIELDS + field);
 }
-int route(int field) {
-    return h(ROUTE_FIELDS + field);
+int routeField(int field) {
+    return headerWord(ROUTE_FIELDS + field);
 }
 int routeIndex(int stock, int slot) {
-    uint mask = candidateWords[route(ROUTE_SOURCE_MASKS) + stock];
+    uint mask = candidateWords[routeField(ROUTE_SOURCE_MASKS) + stock];
     return (mask & (1u << slot)) == 0u
                ? -1
-               : int(candidateWords[route(ROUTE_SOURCE_OFFSETS) + stock]) + bitCount(mask & ((1u << slot) - 1u));
+               : int(candidateWords[routeField(ROUTE_SOURCE_OFFSETS) + stock]) + bitCount(mask & ((1u << slot) - 1u));
 }
 uint dyadicWord(int bank, int index) {
     return bank == 0 ? sourceWords[index] : candidateWords[index];
@@ -63,7 +71,7 @@ void putDouble(int word, double value) {
 }
 int64_t addQuantity(int64_t sum, int64_t value) {
     if (value < int64_t(0) || sum > MAX_LONG - value) {
-        atomicOr(errors, 32u);
+        atomicOr(errors, ERROR_INVALID_INVENTORY);
         return sum;
     }
     return sum + value;
@@ -71,95 +79,95 @@ int64_t addQuantity(int64_t sum, int64_t value) {
 
 void clearStock(int stock) {
     if (stock == 0)
-        candidateWords[dst(STOCK_VOLUME_OFFSETS) + h(H_STOCK_CAPACITY)] = uint(4 * h(H_STOCK_CAPACITY));
-    candidateWords[dst(STOCK_VOLUME_OFFSETS) + stock] = uint(4 * stock);
-    candidateWords[dst(STOCK_VOLUME_COUNTS) + stock] = 0u;
-    candidateWords[dst(STOCK_VOLUME_EXPONENTS) + stock] = 0u;
-    putLong(dst(STOCK_MASS_UNITS) + 2 * stock, 0l);
-    putDouble(dst(STOCK_ENERGY_BITS) + 2 * stock, 0.0);
-    putLong(dst(STOCK_MASS_RESIDUAL_UNITS) + 2 * stock, 0l);
-    putDouble(dst(STOCK_NUMERIC_VOLUMES) + 2 * stock, 0.0);
-    candidateWords[dst(STOCK_MIXTURE_PRESENT) + stock] = 0u;
-    if (stock >= h(H_SLOT_COUNT)) {
-        candidateWords[dst(STOCK_MATERIALS) + stock] = 0u;
-        candidateWords[dst(STOCK_SUPPORT_MASKS) + stock] = 0u;
+        candidateWords[targetField(STOCK_VOLUME_OFFSETS) + headerWord(H_STOCK_CAPACITY)] = uint(4 * headerWord(H_STOCK_CAPACITY));
+    candidateWords[targetField(STOCK_VOLUME_OFFSETS) + stock] = uint(4 * stock);
+    candidateWords[targetField(STOCK_VOLUME_COUNTS) + stock] = 0u;
+    candidateWords[targetField(STOCK_VOLUME_EXPONENTS) + stock] = 0u;
+    putLong(targetField(STOCK_MASS_UNITS) + 2 * stock, 0l);
+    putDouble(targetField(STOCK_ENERGY_BITS) + 2 * stock, 0.0);
+    putLong(targetField(STOCK_MASS_RESIDUAL_UNITS) + 2 * stock, 0l);
+    putDouble(targetField(STOCK_NUMERIC_VOLUMES) + 2 * stock, 0.0);
+    candidateWords[targetField(STOCK_MIXTURE_PRESENT) + stock] = 0u;
+    if (stock >= headerWord(H_SLOT_COUNT)) {
+        candidateWords[targetField(STOCK_MATERIALS) + stock] = 0u;
+        candidateWords[targetField(STOCK_SUPPORT_MASKS) + stock] = 0u;
     }
-    candidateWords[h(H_SPECIES_COUNTS) + stock] = 0u;
+    candidateWords[headerWord(H_SPECIES_COUNTS) + stock] = 0u;
     for (int i = 0; i < 7; i++)
-        candidateWords[h(H_MEMBERS) + 7 * stock + i] = uint(-1);
+        candidateWords[headerWord(H_MEMBERS) + 7 * stock + i] = uint(-1);
     for (int i = 0; i < 7; i++) {
-        putDouble(h(H_ENERGY_REMAINDERS) + 14 * stock + 2 * i, 0.0);
+        putDouble(headerWord(H_ENERGY_REMAINDERS) + 14 * stock + 2 * i, 0.0);
     }
 }
 
-void sourceNeighbors(int stock, out int sources[7], out int directions[7]) {
-    int material = stock % h(H_MATERIAL_COUNT), cell = stock / h(H_MATERIAL_COUNT);
-    ivec3 shape = ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z)),
-          at = ivec3(cell % shape.x, cell / shape.x % shape.y, cell / (shape.x * shape.y));
+void sourceNeighbors(int targetSlot, out int sourceSlots[7], out int routeDirections[7]) {
+    int material = targetSlot % headerWord(H_MATERIAL_COUNT), cellId = targetSlot / headerWord(H_MATERIAL_COUNT);
+    ivec3 gridSize = ivec3(headerWord(H_SIZE_X), headerWord(H_SIZE_Y), headerWord(H_SIZE_Z)),
+          coordinates = ivec3(cellId % gridSize.x, cellId / gridSize.x % gridSize.y, cellId / (gridSize.x * gridSize.y));
     for (int i = 0; i < 7; i++) {
-        sources[i] = -1;
-        directions[i] = 0;
-        ivec3 other = at;
+        sourceSlots[i] = -1;
+        routeDirections[i] = 0;
+        ivec3 neighborCoordinates = coordinates;
         if (i > 0) {
             int side = i - 1;
-            other[side / 2] += (side & 1) == 0 ? -1 : 1;
-            directions[i] = (side ^ 1) + 1;
+            neighborCoordinates[side / 2] += (side & 1) == 0 ? -1 : 1;
+            routeDirections[i] = (side ^ 1) + 1;
         }
-        if (any(lessThan(other, ivec3(0))) || any(greaterThanEqual(other, shape)))
+        if (any(lessThan(neighborCoordinates, ivec3(0))) || any(greaterThanEqual(neighborCoordinates, gridSize)))
             continue;
-        sources[i] = ((other.z * shape.y + other.y) * shape.x + other.x) * h(H_MATERIAL_COUNT) + material;
+        sourceSlots[i] = ((neighborCoordinates.z * gridSize.y + neighborCoordinates.y) * gridSize.x + neighborCoordinates.x) * headerWord(H_MATERIAL_COUNT) + material;
     }
 }
-int seekSpecies(int entry, int end, int direction) {
-    while (entry < end) {
-        int64_t amount = longAt(route(ROUTE_SPECIES_AMOUNTS) + 2 * (7 * entry + direction));
+int seekSpecies(int speciesEntry, int speciesEnd, int routeDirection) {
+    while (speciesEntry < speciesEnd) {
+        int64_t amount = longAt(routeField(ROUTE_SPECIES_AMOUNTS) + 2 * (7 * speciesEntry + routeDirection));
         if (amount > int64_t(0))
             break;
         if (amount < int64_t(0))
-            atomicOr(errors, 32u);
-        entry++;
+            atomicOr(errors, ERROR_INVALID_INVENTORY);
+        speciesEntry++;
     }
-    return entry;
+    return speciesEntry;
 }
 
 // Each accepted route has sorted, unique species handles. Seven-way merge preserves that order.
 int mergeSpecies(int stock, int members[7], int outputStart, bool writing, out int64_t representedMass) {
-    int cursors[7], ends[7], sources[7], directions[7];
+    int speciesCursors[7], speciesEnds[7], sourceSlots[7], routeDirections[7];
     representedMass = int64_t(0);
-    if (sourceWords[src(STOCK_COUNTS) + 1] == 0u)
+    if (sourceWords[sourceField(STOCK_COUNTS) + 1] == 0u)
         return 0;
-    sourceNeighbors(stock, sources, directions);
+    sourceNeighbors(stock, sourceSlots, routeDirections);
     for (int i = 0; i < 7; i++) {
-        cursors[i] = members[i] < 0 ? 0 : int(sourceWords[src(STOCK_SPECIES_OFFSETS) + sources[i]]);
-        ends[i] = members[i] < 0 ? 0 : int(sourceWords[src(STOCK_SPECIES_OFFSETS) + sources[i] + 1]);
-        cursors[i] = seekSpecies(cursors[i], ends[i], directions[i]);
+        speciesCursors[i] = members[i] < 0 ? 0 : int(sourceWords[sourceField(STOCK_SPECIES_OFFSETS) + sourceSlots[i]]);
+        speciesEnds[i] = members[i] < 0 ? 0 : int(sourceWords[sourceField(STOCK_SPECIES_OFFSETS) + sourceSlots[i] + 1]);
+        speciesCursors[i] = seekSpecies(speciesCursors[i], speciesEnds[i], routeDirections[i]);
     }
     int count = 0;
     while (true) {
-        int handle = 2147483647;
+        int speciesHandle = 2147483647;
         bool found = false;
         for (int i = 0; i < 7; i++)
-            if (cursors[i] < ends[i]) {
-                handle = min(handle, int(sourceWords[src(STOCK_SPECIES_HANDLES) + cursors[i]]));
+            if (speciesCursors[i] < speciesEnds[i]) {
+                speciesHandle = min(speciesHandle, int(sourceWords[sourceField(STOCK_SPECIES_HANDLES) + speciesCursors[i]]));
                 found = true;
             }
         if (!found)
             break;
         int64_t amount = int64_t(0);
         for (int i = 0; i < 7; i++)
-            if (cursors[i] < ends[i] && int(sourceWords[src(STOCK_SPECIES_HANDLES) + cursors[i]]) == handle) {
+            if (speciesCursors[i] < speciesEnds[i] && int(sourceWords[sourceField(STOCK_SPECIES_HANDLES) + speciesCursors[i]]) == speciesHandle) {
                 amount =
-                    addQuantity(amount, longAt(route(ROUTE_SPECIES_AMOUNTS) + 2 * (7 * cursors[i] + directions[i])));
-                cursors[i] = seekSpecies(cursors[i] + 1, ends[i], directions[i]);
+                    addQuantity(amount, longAt(routeField(ROUTE_SPECIES_AMOUNTS) + 2 * (7 * speciesCursors[i] + routeDirections[i])));
+                speciesCursors[i] = seekSpecies(speciesCursors[i] + 1, speciesEnds[i], routeDirections[i]);
             }
         if (writing) {
-            candidateWords[dst(STOCK_SPECIES_HANDLES) + outputStart + count] = uint(handle);
-            putLong(dst(STOCK_SPECIES_AMOUNTS) + 2 * (outputStart + count), amount);
-            int64_t quantum = longAt(h(H_SPECIES_MASS) + 2 * handle);
-            if (quantum < int64_t(0) || (quantum > int64_t(0) && amount > MAX_LONG / quantum))
-                atomicOr(errors, 32u);
+            candidateWords[targetField(STOCK_SPECIES_HANDLES) + outputStart + count] = uint(speciesHandle);
+            putLong(targetField(STOCK_SPECIES_AMOUNTS) + 2 * (outputStart + count), amount);
+            int64_t massPerQuantum = longAt(headerWord(H_SPECIES_MASS) + 2 * speciesHandle);
+            if (massPerQuantum < int64_t(0) || (massPerQuantum > int64_t(0) && amount > MAX_LONG / massPerQuantum))
+                atomicOr(errors, ERROR_INVALID_INVENTORY);
             else
-                representedMass = addQuantity(representedMass, amount * quantum);
+                representedMass = addQuantity(representedMass, amount * massPerQuantum);
         }
         count++;
     }
@@ -172,91 +180,91 @@ void gatherVolume(int stock, DyadicTerm items[7]) {
     int count, exponent;
     uvec4 limbs;
     if (dyadicPositiveSum(items, 7, count, exponent, limbs)) {
-        candidateWords[dst(STOCK_VOLUME_COUNTS) + stock] = uint(count);
-        candidateWords[dst(STOCK_VOLUME_EXPONENTS) + stock] = uint(exponent);
+        candidateWords[targetField(STOCK_VOLUME_COUNTS) + stock] = uint(count);
+        candidateWords[targetField(STOCK_VOLUME_EXPONENTS) + stock] = uint(exponent);
         for (int word = 0; word < count; word++)
-            candidateWords[dst(STOCK_VOLUME_LIMBS) + 4 * stock + word] = limbs[word];
+            candidateWords[targetField(STOCK_VOLUME_LIMBS) + 4 * stock + word] = limbs[word];
         return;
     }
     DyadicMeasure result = dyadicMeasure(items, 7);
     if (result.status == DYADIC_ZERO)
         return;
     if (result.status != DYADIC_POSITIVE) {
-        atomicOr(errors, 32u);
+        atomicOr(errors, ERROR_INVALID_INVENTORY);
         return;
     }
     uint countWords = uint(result.words),
          offset = countWords <= 4u
                       ? 4u * uint(stock)
-                      : atomicAdd(candidateWords[dst(STOCK_VOLUME_OFFSETS) + h(H_STOCK_CAPACITY)], countWords);
-    candidateWords[dst(STOCK_VOLUME_OFFSETS) + stock] = offset;
-    candidateWords[dst(STOCK_VOLUME_COUNTS) + stock] = countWords;
-    candidateWords[dst(STOCK_VOLUME_EXPONENTS) + stock] = uint(result.exponent);
+                      : atomicAdd(candidateWords[targetField(STOCK_VOLUME_OFFSETS) + headerWord(H_STOCK_CAPACITY)], countWords);
+    candidateWords[targetField(STOCK_VOLUME_OFFSETS) + stock] = offset;
+    candidateWords[targetField(STOCK_VOLUME_COUNTS) + stock] = countWords;
+    candidateWords[targetField(STOCK_VOLUME_EXPONENTS) + stock] = uint(result.exponent);
     // Finish publishes the complete allocator demand and rejects the private candidate.
     // No global error is raised here, so all rows still contribute their true overflow sizes.
-    if (offset > uint(h(H_LIMB_CAPACITY)) || countWords > uint(h(H_LIMB_CAPACITY)) - offset)
+    if (offset > uint(headerWord(H_LIMB_CAPACITY)) || countWords > uint(headerWord(H_LIMB_CAPACITY)) - offset)
         return;
-    dyadicWriteSum(items, 7, result, dst(STOCK_VOLUME_LIMBS) + int(offset));
+    dyadicWriteSum(items, 7, result, targetField(STOCK_VOLUME_LIMBS) + int(offset));
 }
 
-void gatherStock(int stock, int cell, int members[7]) {
-    candidateWords[dst(STOCK_SUPPORT_MASKS) + stock] = (~candidateWords[h(H_FIXED_MASK) + cell]) & 255u;
-    int64_t mass = int64_t(0);
-    uint mixture = 0u;
+void gatherStock(int stock, int cellId, int members[7]) {
+    candidateWords[targetField(STOCK_SUPPORT_MASKS) + stock] = (~candidateWords[headerWord(H_FIXED_MASK) + cellId]) & 255u;
+    int64_t massUnits = int64_t(0);
+    uint mixturePresent = 0u;
     precise double energy = 0.0;
-    DyadicTerm items[7];
+    DyadicTerm volumeTerms[7];
     for (int i = 0; i < 7; i++) {
-        items[i] = DyadicTerm(1, 0, 0, 0, 0);
-        int member = members[i];
-        candidateWords[h(H_MEMBERS) + 7 * stock + i] = uint(member);
-        if (member < 0)
+        volumeTerms[i] = DyadicTerm(1, 0, 0, 0, 0);
+        int routeEntry = members[i];
+        candidateWords[headerWord(H_MEMBERS) + 7 * stock + i] = uint(routeEntry);
+        if (routeEntry < 0)
             continue;
-        mass = addQuantity(mass, longAt(route(ROUTE_MASS_UNITS) + 2 * member));
-        mixture |= candidateWords[route(ROUTE_MIXTURE_PRESENT) + member];
-        precise double value = doubleAt(route(ROUTE_ENERGY_BITS) + 2 * member);
-        precise double next = energy + value;
-        precise double virtualValue = next - energy;
-        precise double remainder = (energy - (next - virtualValue)) + (value - virtualValue);
-        putDouble(h(H_ENERGY_REMAINDERS) + 14 * stock + 2 * i, remainder);
-        energy = next;
-        if (isnan(value) || isinf(value) || isnan(next) || isinf(next))
-            atomicOr(errors, 32u);
-        int descriptor = route(ROUTE_VOLUME_DESCRIPTORS) + 5 * member;
-        items[i] = DyadicTerm(int(candidateWords[descriptor]), int(candidateWords[descriptor + 1]),
-                              int(candidateWords[descriptor + 2]), int(candidateWords[descriptor + 3]),
-                              int(candidateWords[descriptor + 4]));
+        massUnits = addQuantity(massUnits, longAt(routeField(ROUTE_MASS_UNITS) + 2 * routeEntry));
+        mixturePresent |= candidateWords[routeField(ROUTE_MIXTURE_PRESENT) + routeEntry];
+        precise double routeEnergy = doubleAt(routeField(ROUTE_ENERGY_BITS) + 2 * routeEntry);
+        precise double nextEnergy = energy + routeEnergy;
+        precise double virtualValue = nextEnergy - energy;
+        precise double remainder = (energy - (nextEnergy - virtualValue)) + (routeEnergy - virtualValue);
+        putDouble(headerWord(H_ENERGY_REMAINDERS) + 14 * stock + 2 * i, remainder);
+        energy = nextEnergy;
+        if (isnan(routeEnergy) || isinf(routeEnergy) || isnan(nextEnergy) || isinf(nextEnergy))
+            atomicOr(errors, ERROR_INVALID_INVENTORY);
+        int descriptorAddress = routeField(ROUTE_VOLUME_DESCRIPTORS) + DYADIC_DESCRIPTOR_WORDS * routeEntry;
+        volumeTerms[i] = DyadicTerm(int(candidateWords[descriptorAddress]), int(candidateWords[descriptorAddress + DYADIC_OFFSET]),
+                              int(candidateWords[descriptorAddress + DYADIC_COUNT]), int(candidateWords[descriptorAddress + DYADIC_EXPONENT]),
+                              int(candidateWords[descriptorAddress + DYADIC_SIGN]));
     }
-    gatherVolume(stock, items);
-    putLong(dst(STOCK_MASS_UNITS) + 2 * stock, mass);
-    putDouble(dst(STOCK_ENERGY_BITS) + 2 * stock, energy);
-    candidateWords[dst(STOCK_MIXTURE_PRESENT) + stock] = mixture;
+    gatherVolume(stock, volumeTerms);
+    putLong(targetField(STOCK_MASS_UNITS) + 2 * stock, massUnits);
+    putDouble(targetField(STOCK_ENERGY_BITS) + 2 * stock, energy);
+    candidateWords[targetField(STOCK_MIXTURE_PRESENT) + stock] = mixturePresent;
     int64_t unused;
-    candidateWords[h(H_SPECIES_COUNTS) + stock] = uint(mergeSpecies(stock, members, 0, false, unused));
+    candidateWords[headerWord(H_SPECIES_COUNTS) + stock] = uint(mergeSpecies(stock, members, 0, false, unused));
 }
 
 // Fixed slots gather the same material from the retained route and six actual neighbors.
-void gatherSlot(int stock) {
-    int members[7], sources[7], directions[7];
-    sourceNeighbors(stock, sources, directions);
+void gatherSlot(int targetSlot) {
+    int routeEntries[7], sourceSlots[7], routeDirections[7];
+    sourceNeighbors(targetSlot, sourceSlots, routeDirections);
     for (int i = 0; i < 7; i++) {
-        members[i] = -1;
-        if (sources[i] < 0)
+        routeEntries[i] = -1;
+        if (sourceSlots[i] < 0)
             continue;
-        int entry = routeIndex(sources[i], directions[i]);
-        if (entry < 0)
+        int routeEntry = routeIndex(sourceSlots[i], routeDirections[i]);
+        if (routeEntry < 0)
             continue;
-        int sign = int(candidateWords[route(ROUTE_VOLUME_DESCRIPTORS) + 5 * entry + 4]);
-        if (sign < 0) {
-            atomicOr(errors, 32u);
+        int volumeSign = int(candidateWords[routeField(ROUTE_VOLUME_DESCRIPTORS) + DYADIC_DESCRIPTOR_WORDS * routeEntry + DYADIC_SIGN]);
+        if (volumeSign < 0) {
+            atomicOr(errors, ERROR_INVALID_INVENTORY);
             return;
         }
-        if (sign > 0)
-            members[i] = entry;
+        if (volumeSign > 0)
+            routeEntries[i] = routeEntry;
     }
-    gatherStock(stock, stock / h(H_MATERIAL_COUNT), members);
+    gatherStock(targetSlot, targetSlot / headerWord(H_MATERIAL_COUNT), routeEntries);
 }
 uint volumeWord(int begin, int count, int index) {
-    return index >= 0 && index < count ? candidateWords[dst(STOCK_VOLUME_LIMBS) + begin + index] : 0u;
+    return index >= 0 && index < count ? candidateWords[targetField(STOCK_VOLUME_LIMBS) + begin + index] : 0u;
 }
 
 // One ties-to-even conversion of the exact canonical significand, including subnormal doubles.
@@ -267,7 +275,7 @@ double numericVolume(int begin, int count, int exponent) {
     int bits = 32 * (count - 1) + findMSB(volumeWord(begin, count, count - 1)) + 1;
     int64_t highest = int64_t(exponent) + int64_t(bits - 1);
     if (highest > int64_t(1023)) {
-        atomicOr(errors, 32u);
+        atomicOr(errors, ERROR_INVALID_INVENTORY);
         return 0.0;
     }
     if (highest < int64_t(-1075))
@@ -291,63 +299,63 @@ double numericVolume(int begin, int count, int exponent) {
         rounded++;
     double value = ldexp(double(rounded), unit);
     if (isnan(value) || isinf(value))
-        atomicOr(errors, 32u);
+        atomicOr(errors, ERROR_INVALID_INVENTORY);
     return value;
 }
 
 void finishStock(int stock) {
-    uint actual = uint(h(H_SLOT_COUNT));
-    uint species = candidateWords[dst(STOCK_SPECIES_OFFSETS) + h(H_STOCK_CAPACITY)],
-         limbs = candidateWords[dst(STOCK_VOLUME_OFFSETS) + h(H_STOCK_CAPACITY)];
+    uint actual = uint(headerWord(H_SLOT_COUNT));
+    uint species = candidateWords[targetField(STOCK_SPECIES_OFFSETS) + headerWord(H_STOCK_CAPACITY)],
+         limbs = candidateWords[targetField(STOCK_VOLUME_OFFSETS) + headerWord(H_STOCK_CAPACITY)];
     if (stock == 0) {
-        candidateWords[dst(STOCK_COUNTS)] = actual;
-        candidateWords[dst(STOCK_COUNTS) + 1] = species;
-        candidateWords[dst(STOCK_COUNTS) + 2] = limbs;
+        candidateWords[targetField(STOCK_COUNTS)] = actual;
+        candidateWords[targetField(STOCK_COUNTS) + 1] = species;
+        candidateWords[targetField(STOCK_COUNTS) + 2] = limbs;
     }
-    if (actual > uint(h(H_STOCK_CAPACITY)) || species > uint(h(H_SPECIES_CAPACITY)) ||
-        limbs > uint(h(H_LIMB_CAPACITY))) {
-        atomicOr(errors, 64u);
+    if (actual > uint(headerWord(H_STOCK_CAPACITY)) || species > uint(headerWord(H_SPECIES_CAPACITY)) ||
+        limbs > uint(headerWord(H_LIMB_CAPACITY))) {
+        atomicOr(errors, ERROR_INSUFFICIENT_CAPACITY);
         return;
     }
-    if ((errors & (16u | 32u)) != 0u)
+    if ((errors & (16u | ERROR_INVALID_INVENTORY)) != 0u)
         return;
     if (uint(stock) >= actual)
         return;
-    if (candidateWords[dst(STOCK_VOLUME_COUNTS) + stock] == 0u) {
-        if (longAt(dst(STOCK_MASS_UNITS) + 2 * stock) != 0l || candidateWords[h(H_SPECIES_COUNTS) + stock] != 0u ||
-            doubleAt(dst(STOCK_ENERGY_BITS) + 2 * stock) != 0.0) {
-            atomicOr(errors, 32u);
+    if (candidateWords[targetField(STOCK_VOLUME_COUNTS) + stock] == 0u) {
+        if (longAt(targetField(STOCK_MASS_UNITS) + 2 * stock) != 0l || candidateWords[headerWord(H_SPECIES_COUNTS) + stock] != 0u ||
+            doubleAt(targetField(STOCK_ENERGY_BITS) + 2 * stock) != 0.0) {
+            atomicOr(errors, ERROR_INVALID_INVENTORY);
             return;
         }
-        candidateWords[dst(STOCK_VOLUME_COUNTS) + stock] = 0u;
-        candidateWords[dst(STOCK_VOLUME_EXPONENTS) + stock] = 0u;
-        candidateWords[dst(STOCK_SUPPORT_MASKS) + stock] = 0u;
-        candidateWords[dst(STOCK_MIXTURE_PRESENT) + stock] = 0u;
-        putLong(dst(STOCK_MASS_RESIDUAL_UNITS) + 2 * stock, 0l);
-        putDouble(dst(STOCK_NUMERIC_VOLUMES) + 2 * stock, 0.0);
+        candidateWords[targetField(STOCK_VOLUME_COUNTS) + stock] = 0u;
+        candidateWords[targetField(STOCK_VOLUME_EXPONENTS) + stock] = 0u;
+        candidateWords[targetField(STOCK_SUPPORT_MASKS) + stock] = 0u;
+        candidateWords[targetField(STOCK_MIXTURE_PRESENT) + stock] = 0u;
+        putLong(targetField(STOCK_MASS_RESIDUAL_UNITS) + 2 * stock, 0l);
+        putDouble(targetField(STOCK_NUMERIC_VOLUMES) + 2 * stock, 0.0);
         return;
     }
-    int exponent = int(candidateWords[dst(STOCK_VOLUME_EXPONENTS) + stock]);
-    int begin = int(candidateWords[dst(STOCK_VOLUME_OFFSETS) + stock]),
-        end = begin + int(candidateWords[dst(STOCK_VOLUME_COUNTS) + stock]);
-    putDouble(dst(STOCK_NUMERIC_VOLUMES) + 2 * stock, numericVolume(begin, end - begin, exponent));
+    int exponent = int(candidateWords[targetField(STOCK_VOLUME_EXPONENTS) + stock]);
+    int begin = int(candidateWords[targetField(STOCK_VOLUME_OFFSETS) + stock]),
+        end = begin + int(candidateWords[targetField(STOCK_VOLUME_COUNTS) + stock]);
+    putDouble(targetField(STOCK_NUMERIC_VOLUMES) + 2 * stock, numericVolume(begin, end - begin, exponent));
     int members[7];
     for (int i = 0; i < 7; i++)
-        members[i] = int(candidateWords[h(H_MEMBERS) + 7 * stock + i]);
+        members[i] = int(candidateWords[headerWord(H_MEMBERS) + 7 * stock + i]);
     int64_t represented;
-    mergeSpecies(stock, members, int(candidateWords[dst(STOCK_SPECIES_OFFSETS) + stock]), true, represented);
-    int64_t mass = longAt(dst(STOCK_MASS_UNITS) + 2 * stock);
-    putLong(dst(STOCK_MASS_RESIDUAL_UNITS) + 2 * stock,
-            candidateWords[dst(STOCK_MIXTURE_PRESENT) + stock] != 0u ? mass - represented : int64_t(0));
+    mergeSpecies(stock, members, int(candidateWords[targetField(STOCK_SPECIES_OFFSETS) + stock]), true, represented);
+    int64_t mass = longAt(targetField(STOCK_MASS_UNITS) + 2 * stock);
+    putLong(targetField(STOCK_MASS_RESIDUAL_UNITS) + 2 * stock,
+            candidateWords[targetField(STOCK_MIXTURE_PRESENT) + stock] != 0u ? mass - represented : int64_t(0));
 }
 
 void main() {
     int index = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
-    if (index >= p.count || (errors != 0u && p.stage != 3))
+    if (index >= p.count || (errors != 0u && p.stage != STAGE_FINISH_STOCK))
         return;
-    if (p.stage == 0)
+    if (p.stage == STAGE_CLEAR_STOCK)
         clearStock(index);
-    else if (p.stage == 1)
+    else if (p.stage == STAGE_GATHER_SLOT)
         gatherSlot(index);
     else
         finishStock(index);

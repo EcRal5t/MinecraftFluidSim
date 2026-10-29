@@ -17,6 +17,60 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Conservative conduction on unique inventory owners. Spatial contacts may share an owner. */
 final class VulkanThermalConduction implements AutoCloseable {
+    private static final int STAGE_INITIALIZE = 0;
+    private static final int STAGE_COUNT_CONTACTS = 1;
+    private static final int STAGE_SCATTER_CONTACTS = 2;
+    private static final int STAGE_PREPARE_OWNERS = 3;
+    private static final int STAGE_CHOOSE_MODE = 4;
+    private static final int STAGE_PREPARE_TILES = 20;
+    private static final int STAGE_COUNT_TILES = 21;
+    private static final int STAGE_REDUCE_DEGREE_TILES = 22;
+    private static final int STAGE_CLEAR_RESERVOIRS = 30;
+    private static final int STAGE_CONTACT_DISPATCH = 31;
+    private static final int STAGE_REDUCE_FLUX_TILES = 33;
+    private static final int STAGE_SPATIAL_GATHER_DISPATCH = 36;
+    private static final int STAGE_CLASSIFY_FAST = 40;
+    private static final int STAGE_SOLVE_ISOLATED = 41;
+    private static final int STAGE_LINEARIZE = 42;
+    private static final int STAGE_FINISH_RESIDUAL = 43;
+    private static final int STAGE_TRIAL_TEMPERATURE = 44;
+    private static final int STAGE_TRIAL_RESIDUAL = 45;
+    private static final int STAGE_ACCEPT_TRIAL = 46;
+    private static final int STAGE_FAST_PRODUCT = 47;
+    private static final int STAGE_FINISH_ENERGY = 48;
+    private static final int STAGE_CLEAR_IDLE_RESERVOIRS = 49;
+    private static final int STAGE_CLASSIFY_FAST_CONTACTS = 50;
+    private static final int STAGE_INITIAL_FLUX = 51;
+    private static final int STAGE_FINAL_FAST_FLUX = 52;
+    private static final int STAGE_FAST_DISPATCH = 53;
+    private static String stageDefines() {
+        return "#define STAGE_INITIALIZE " + STAGE_INITIALIZE + "\n" +
+                "#define STAGE_COUNT_CONTACTS " + STAGE_COUNT_CONTACTS + "\n" +
+                "#define STAGE_SCATTER_CONTACTS " + STAGE_SCATTER_CONTACTS + "\n" +
+                "#define STAGE_PREPARE_OWNERS " + STAGE_PREPARE_OWNERS + "\n" +
+                "#define STAGE_CHOOSE_MODE " + STAGE_CHOOSE_MODE + "\n" +
+                "#define STAGE_PREPARE_TILES " + STAGE_PREPARE_TILES + "\n" +
+                "#define STAGE_COUNT_TILES " + STAGE_COUNT_TILES + "\n" +
+                "#define STAGE_REDUCE_DEGREE_TILES " + STAGE_REDUCE_DEGREE_TILES + "\n" +
+                "#define STAGE_CLEAR_RESERVOIRS " + STAGE_CLEAR_RESERVOIRS + "\n" +
+                "#define STAGE_CONTACT_DISPATCH " + STAGE_CONTACT_DISPATCH + "\n" +
+                "#define STAGE_REDUCE_FLUX_TILES " + STAGE_REDUCE_FLUX_TILES + "\n" +
+                "#define STAGE_SPATIAL_GATHER_DISPATCH " + STAGE_SPATIAL_GATHER_DISPATCH + "\n" +
+                "#define STAGE_CLASSIFY_FAST " + STAGE_CLASSIFY_FAST + "\n" +
+                "#define STAGE_SOLVE_ISOLATED " + STAGE_SOLVE_ISOLATED + "\n" +
+                "#define STAGE_LINEARIZE " + STAGE_LINEARIZE + "\n" +
+                "#define STAGE_FINISH_RESIDUAL " + STAGE_FINISH_RESIDUAL + "\n" +
+                "#define STAGE_TRIAL_TEMPERATURE " + STAGE_TRIAL_TEMPERATURE + "\n" +
+                "#define STAGE_TRIAL_RESIDUAL " + STAGE_TRIAL_RESIDUAL + "\n" +
+                "#define STAGE_ACCEPT_TRIAL " + STAGE_ACCEPT_TRIAL + "\n" +
+                "#define STAGE_FAST_PRODUCT " + STAGE_FAST_PRODUCT + "\n" +
+                "#define STAGE_FINISH_ENERGY " + STAGE_FINISH_ENERGY + "\n" +
+                "#define STAGE_CLEAR_IDLE_RESERVOIRS " + STAGE_CLEAR_IDLE_RESERVOIRS + "\n" +
+                "#define STAGE_CLASSIFY_FAST_CONTACTS " + STAGE_CLASSIFY_FAST_CONTACTS + "\n" +
+                "#define STAGE_INITIAL_FLUX " + STAGE_INITIAL_FLUX + "\n" +
+                "#define STAGE_FINAL_FAST_FLUX " + STAGE_FINAL_FAST_FLUX + "\n" +
+                "#define STAGE_FAST_DISPATCH " + STAGE_FAST_DISPATCH + "\n";
+    }
     /** Header word positions shared with the shader. */
     private enum Header {
         OWNER_CAPACITY(0),
@@ -26,8 +80,10 @@ final class VulkanThermalConduction implements AutoCloseable {
         SEGMENT_COUNT(4),
         ENABLED(5),
         BATH_CAPACITY(6),
+        CONTACT_MODE(7),
         RESOLUTION(72),
-        TOLERANCE(74);
+        TOLERANCE(74),
+        CONTACT_HEADER(76);
         final int word;
         Header(int word) { this.word = word; }
     }
@@ -40,7 +96,7 @@ final class VulkanThermalConduction implements AutoCloseable {
 
     static final int WORK_FIELDS = 8;
     private static String shaderLayout() {
-        return headerDefines() + "#define WORK_FIELDS " + WORK_FIELDS + "\n" + VulkanShaderLayout.fields("FIELD_", Field.values());
+        return headerDefines() + stageDefines() + "#define WORK_FIELDS " + WORK_FIELDS + "\n" + VulkanShaderLayout.fields("FIELD_", Field.values());
     }
 
     static final int COMPLETE=10;
@@ -155,57 +211,57 @@ final class VulkanThermalConduction implements AutoCloseable {
     /** Supplied owner graphs use the same IMEX partition and compact nonlinear solver as spatial sampling. */
     void recordGraphPrepare(VkCommandBuffer command,Layout l,double dt){
         if(!(Double.isFinite(dt)&&dt>0))throw new IllegalArgumentException("Invalid conduction duration");
-        stage(command,l,dt,0,0,0,l.owners,false);
-        stage(command,l,dt,31,0,0,128,false);stage(command,l,dt,1,0,0,Math.max(1,l.contacts),true);
-        stage(command,l,dt,30,0,0,l.baths,false);
+        stage(command,l,dt,STAGE_INITIALIZE,0,0,l.owners,false);
+        stage(command,l,dt,STAGE_CONTACT_DISPATCH,0,0,128,false);stage(command,l,dt,STAGE_COUNT_CONTACTS,0,0,Math.max(1,l.contacts),true);
+        stage(command,l,dt,STAGE_CLEAR_RESERVOIRS,0,0,l.baths,false);
         scan.record(command,l.owners,l.word(DEGREE_COUNTS),l.word(DEGREE_OFFSETS),l.word(SCAN));
-        stage(command,l,dt,2,0,0,l.contacts,false);recordOwnerSetup(command,l,dt,null);
-        stage(command,l,dt,51,0,0,l.contacts,false);recordImexClassify(command,l,dt);
-        stage(command,l,dt,50,0,0,Math.max(1,l.contacts),false);
-        stage(command,l,dt,53,0,0,1,false);stage(command,l,dt,41,0,0,l.owners,true);
+        stage(command,l,dt,STAGE_SCATTER_CONTACTS,0,0,l.contacts,false);recordOwnerSetup(command,l,dt,null);
+        stage(command,l,dt,STAGE_INITIAL_FLUX,0,0,l.contacts,false);recordImexClassify(command,l,dt);
+        stage(command,l,dt,STAGE_CLASSIFY_FAST_CONTACTS,0,0,Math.max(1,l.contacts),false);
+        stage(command,l,dt,STAGE_FAST_DISPATCH,0,0,1,false);stage(command,l,dt,STAGE_SOLVE_ISOLATED,0,0,l.owners,true);
     }
     int solveGraphImex(VulkanRegionStorage.Candidate candidate,Layout l,VulkanPressureKernel pressure,double dt,int fastOwners,int fastContacts){
         return fastContacts==0?0:solveImex(candidate,l,pressure,dt,fastOwners,new ImexOperator(){
             public void flux(VkCommandBuffer command,boolean trial){}public void product(VkCommandBuffer command,boolean direction){}
         },null);
     }
-    void recordGraphFinish(VkCommandBuffer command,Layout l,double dt){stage(command,l,dt,52,0,0,l.contacts,false);recordImexFinish(command,l,dt);}
+    void recordGraphFinish(VkCommandBuffer command,Layout l,double dt){stage(command,l,dt,STAGE_FINAL_FAST_FLUX,0,0,l.contacts,false);recordImexFinish(command,l,dt);}
     void recordSpatialInitialize(VkCommandBuffer command,Layout l,double dt){
-        stage(command,l,dt,0,0,0,l.owners,false);stage(command,l,dt,30,0,0,l.baths,false);
+        stage(command,l,dt,STAGE_INITIALIZE,0,0,l.owners,false);stage(command,l,dt,STAGE_CLEAR_RESERVOIRS,0,0,l.baths,false);
     }
-    void recordImexPrepare(VkCommandBuffer command,Layout l,double dt,VulkanStageTimings timings){recordOwnerSetup(command,l,dt,timings);stage(command,l,dt,49,0,0,l.baths,false);}
+    void recordImexPrepare(VkCommandBuffer command,Layout l,double dt,VulkanStageTimings timings){recordOwnerSetup(command,l,dt,timings);stage(command,l,dt,STAGE_CLEAR_IDLE_RESERVOIRS,0,0,l.baths,false);}
     private void recordOwnerSetup(VkCommandBuffer command,Layout l,double dt,VulkanStageTimings timings){
         timed(timings,command,"thermal-owner-tiles",()->{
-            stage(command,l,dt,21,0,0,l.owners,false);
+            stage(command,l,dt,STAGE_COUNT_TILES,0,0,l.owners,false);
             scan.record(command,l.owners,l.word(Field.TILE_COUNTS),l.word(Field.TILE_OFFSETS),l.word(Field.SCAN));
-            stage(command,l,dt,20,0,0,Math.max(1,l.tiles),false);
+            stage(command,l,dt,STAGE_PREPARE_TILES,0,0,Math.max(1,l.tiles),false);
         });
         timed(timings,command,"thermal-owner-degrees",()->{
-            stage(command,l,dt,22,0,0,l.tiles,true);
-            stage(command,l,dt,3,0,0,l.owners,false);
+            stage(command,l,dt,STAGE_REDUCE_DEGREE_TILES,0,0,l.tiles,true);
+            stage(command,l,dt,STAGE_PREPARE_OWNERS,0,0,l.owners,false);
         });
         timed(timings,command,"thermal-mode",()->{
-            stage(command,l,dt,4,0,0,128,false);
+            stage(command,l,dt,STAGE_CHOOSE_MODE,0,0,128,false);
         });
     }
     /** Single-step IMEX: slow owners retain their captured temperature in every contact. */
     void recordImexClassify(VkCommandBuffer command,Layout l,double dt){
         gatherSpatial(command,l,dt);
-        stage(command,l,dt,40,0,0,l.owners,false);
+        stage(command,l,dt,STAGE_CLASSIFY_FAST,0,0,l.owners,false);
     }
-    void recordImexIsolated(VkCommandBuffer command,Layout l,double dt,int count){stage(command,l,dt,41,0,0,count,false);}
+    void recordImexIsolated(VkCommandBuffer command,Layout l,double dt,int count){stage(command,l,dt,STAGE_SOLVE_ISOLATED,0,0,count,false);}
     void recordImexFinish(VkCommandBuffer command,Layout l,double dt){
-        gatherSpatial(command,l,dt);stage(command,l,dt,48,0,0,l.owners,false);
+        gatherSpatial(command,l,dt);stage(command,l,dt,STAGE_FINISH_ENERGY,0,0,l.owners,false);
     }
     int solveImex(VulkanRegionStorage.Candidate candidate,Layout l,VulkanPressureKernel pressure,double dt,int count,
                    ImexOperator flux,VulkanStageTimings timings){
         var operator=new VulkanPressureKernel.PressureOperator(){
             public int liquidCount(){return count;}public int matrixFreeFromRow(){return 0;}
-            public void recordProduct(VkCommandBuffer command,boolean direction){flux.product(command,direction);stage(command,l,dt,47,direction?1:0,0,count,false);}
+            public void recordProduct(VkCommandBuffer command,boolean direction){flux.product(command,direction);stage(command,l,dt,STAGE_FAST_PRODUCT,direction?1:0,0,count,false);}
         };
         for(int iteration=0;iteration<8;iteration++){
             var result=candidate.continueBatch((command,in,out,errors,staging,stack)->{
-                timed(timings,command,"thermal-imex-linearize",()->{flux.flux(command,false);stage(command,l,dt,42,0,0,count,false);stage(command,l,dt,43,0,0,128,false);});
+                timed(timings,command,"thermal-imex-linearize",()->{flux.flux(command,false);stage(command,l,dt,STAGE_LINEARIZE,0,0,count,false);stage(command,l,dt,STAGE_FINISH_RESIDUAL,0,0,128,false);});
             },l.column(MODE).offset(),4);require(result,"IMEX linearize");if(result.feedback().getInt(0)==COMPLETE)return iteration;
             result=candidate.continueBatch((command,in,out,errors,staging,stack)->{
                 pressure.recordInitialize(command,count,count,200,null,null,operator);
@@ -220,19 +276,19 @@ final class VulkanThermalConduction implements AutoCloseable {
             for(int backtrack=0;backtrack<8;backtrack++){
                 double fraction=Math.scalb(1.0,-backtrack);
                 result=candidate.continueBatch((command,in,out,errors,staging,stack)->{
-                    stage(command,l,dt,44,0,fraction,count,false);flux.flux(command,true);
-                    stage(command,l,dt,45,0,0,count,false);stage(command,l,dt,43,1,0,128,false);stage(command,l,dt,46,0,0,count,false);
+                    stage(command,l,dt,STAGE_TRIAL_TEMPERATURE,0,fraction,count,false);flux.flux(command,true);
+                    stage(command,l,dt,STAGE_TRIAL_RESIDUAL,0,0,count,false);stage(command,l,dt,STAGE_FINISH_RESIDUAL,1,0,128,false);stage(command,l,dt,STAGE_ACCEPT_TRIAL,0,0,count,false);
                 },l.column(ACCEPTED).offset(),4);require(result,"IMEX caloric trial");
                 if(result.feedback().getInt(0)!=0){accepted=true;break;}
             }
             if(!accepted)throw new IllegalStateException("IMEX caloric trial did not reduce residual");
         }
-        var result=candidate.continueBatch((command,in,out,errors,staging,stack)->{flux.flux(command,false);stage(command,l,dt,42,0,0,count,false);stage(command,l,dt,43,0,0,128,false);},l.column(MODE).offset(),4);
+        var result=candidate.continueBatch((command,in,out,errors,staging,stack)->{flux.flux(command,false);stage(command,l,dt,STAGE_LINEARIZE,0,0,count,false);stage(command,l,dt,STAGE_FINISH_RESIDUAL,0,0,128,false);},l.column(MODE).offset(),4);
         require(result,"IMEX final residual");if(result.feedback().getInt(0)!=COMPLETE)throw new IllegalStateException("IMEX caloric work budget exhausted");return 8;
     }
     interface ImexOperator {void flux(VkCommandBuffer command,boolean trial);void product(VkCommandBuffer command,boolean direction);}
     private void gatherSpatial(VkCommandBuffer command,Layout l,double dt){
-        stage(command,l,dt,36,0,0,128,false);stage(command,l,dt,33,0,0,l.tiles,true);
+        stage(command,l,dt,STAGE_SPATIAL_GATHER_DISPATCH,0,0,128,false);stage(command,l,dt,STAGE_REDUCE_FLUX_TILES,0,0,l.tiles,true);
     }
     private static void timed(VulkanStageTimings timings,VkCommandBuffer command,String label,Runnable commands){
         if(timings==null)commands.run();else timings.record(command,label,commands);
@@ -249,7 +305,7 @@ final class VulkanThermalConduction implements AutoCloseable {
             if(indirect){
                 VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
-                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+l.column(Field.DISPATCH).offset()+(stage==33?60:stage==41?12:stage==1?48:36));
+                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+l.column(Field.DISPATCH).offset()+(stage==STAGE_REDUCE_FLUX_TILES?60:stage==STAGE_SOLVE_ISOLATED?12:stage==STAGE_COUNT_CONTACTS?48:36));
             }else vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);

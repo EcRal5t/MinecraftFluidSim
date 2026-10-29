@@ -25,62 +25,62 @@ const int LOCAL_WITHDRAWAL_ROUNDS = 32;
 const int INFINITY = 0x3fffffff;
 const int64_t INF = int64_t(0x3fffffffffffffffUL), MAX_VALUE = int64_t(0x7fffffffffffffffUL);
 shared int64_t reduction[128];
-int h(int i) {
+int headerWord(int i) {
     return int(words[p.header + i]);
 }
-int at(int f) {
-    return h(WORK_FIELDS + f);
+int fieldOffset(int f) {
+    return headerWord(WORK_FIELDS + f);
 }
-int ch(int i) {
-    return int(words[h(H_CAPACITY_HEADER) + i]);
+int capacityHeaderWord(int i) {
+    return int(words[headerWord(H_CAPACITY_HEADER) + i]);
 }
-int ca(int f) {
-    return ch(CAPACITY_FIELDS + f);
+int capacityOffset(int f) {
+    return capacityHeaderWord(CAPACITY_FIELDS + f);
 }
-int n() {
-    return h(H_CELL_COUNT);
+int cellCount() {
+    return headerWord(H_CELL_COUNT);
 }
 int groups() {
-    return h(H_GROUP_COUNT);
+    return headerWord(H_GROUP_COUNT);
 }
 int sink() {
-    return h(H_VERTEX_COUNT) - 1;
+    return headerWord(H_VERTEX_COUNT) - 1;
 }
-int get(int f, int i) {
-    return int(words[at(f) + i]);
+int readWord(int f, int i) {
+    return int(words[fieldOffset(f) + i]);
 }
-void put(int f, int i, int x) {
-    words[at(f) + i] = uint(x);
+void writeWord(int f, int i, int x) {
+    words[fieldOffset(f) + i] = uint(x);
 }
 int control(int i) {
-    return int(atomicAdd(words[ca(CAPACITY_CONTROL) + i], 0u));
+    return int(atomicAdd(words[capacityOffset(CAPACITY_CONTROL) + i], 0u));
 }
 void putControl(int i, int x) {
-    words[ca(CAPACITY_CONTROL) + i] = uint(x);
+    words[capacityOffset(CAPACITY_CONTROL) + i] = uint(x);
 }
-int64_t number(int a) {
+int64_t integerAt(int a) {
     return int64_t(uint64_t(words[a]) | (uint64_t(words[a + 1]) << 32));
 }
 void writeNumber(int a, int64_t x) {
     words[a] = uint(x);
     words[a + 1] = uint(uint64_t(x) >> 32);
 }
-int64_t read(int f, int i) {
-    return number(at(f) + 2 * i);
+int64_t readInteger(int f, int i) {
+    return integerAt(fieldOffset(f) + 2 * i);
 }
-void write(int f, int i, int64_t x) {
-    writeNumber(at(f) + 2 * i, x);
+void writeInteger(int f, int i, int64_t x) {
+    writeNumber(fieldOffset(f) + 2 * i, x);
 }
 int64_t capacityValue(int f, int i) {
-    return number(ca(f) + 2 * i);
+    return integerAt(capacityOffset(f) + 2 * i);
 }
 int groupOf(int cell) {
-    int g = int(words[ca(CAPACITY_GROUP_ID) + cell]);
+    int g = int(words[capacityOffset(CAPACITY_GROUP_ID) + cell]);
     return g < 0 ? groups() - 1 : g;
 }
 void invalid() {
-    atomicExchange(words[ca(CAPACITY_CONTROL)], 4u);
-    atomicOr(errors, 4096u);
+    atomicExchange(words[capacityOffset(CAPACITY_CONTROL)], uint(STATUS_INVALID));
+    atomicOr(errors, ERROR_INVALID);
 }
 int64_t add(int64_t a, int64_t b) {
     if ((b > 0l && a > MAX_VALUE - b) || (b < 0l && a < -MAX_VALUE - b)) {
@@ -90,84 +90,84 @@ int64_t add(int64_t a, int64_t b) {
     return a + b;
 }
 int neighbor(int cell, int side) {
-    int x = cell % ch(CAP_H_SIZE_X), y = cell / ch(CAP_H_SIZE_X) % ch(CAP_H_SIZE_Y), z = cell / (ch(CAP_H_SIZE_X) * ch(CAP_H_SIZE_Y));
+    int x = cell % capacityHeaderWord(CAP_H_SIZE_X), y = cell / capacityHeaderWord(CAP_H_SIZE_X) % capacityHeaderWord(CAP_H_SIZE_Y), z = cell / (capacityHeaderWord(CAP_H_SIZE_X) * capacityHeaderWord(CAP_H_SIZE_Y));
     if (side == 0)
         return x > 0 ? cell - 1 : -1;
     if (side == 1)
-        return x + 1 < ch(CAP_H_SIZE_X) ? cell + 1 : -1;
+        return x + 1 < capacityHeaderWord(CAP_H_SIZE_X) ? cell + 1 : -1;
     if (side == 2)
-        return y > 0 ? cell - ch(CAP_H_SIZE_X) : -1;
+        return y > 0 ? cell - capacityHeaderWord(CAP_H_SIZE_X) : -1;
     if (side == 3)
-        return y + 1 < ch(CAP_H_SIZE_Y) ? cell + ch(CAP_H_SIZE_X) : -1;
+        return y + 1 < capacityHeaderWord(CAP_H_SIZE_Y) ? cell + capacityHeaderWord(CAP_H_SIZE_X) : -1;
     if (side == 4)
-        return z > 0 ? cell - ch(CAP_H_SIZE_X) * ch(CAP_H_SIZE_Y) : -1;
-    return z + 1 < ch(CAP_H_SIZE_Z) ? cell + ch(CAP_H_SIZE_X) * ch(CAP_H_SIZE_Y) : -1;
+        return z > 0 ? cell - capacityHeaderWord(CAP_H_SIZE_X) * capacityHeaderWord(CAP_H_SIZE_Y) : -1;
+    return z + 1 < capacityHeaderWord(CAP_H_SIZE_Z) ? cell + capacityHeaderWord(CAP_H_SIZE_X) * capacityHeaderWord(CAP_H_SIZE_Y) : -1;
 }
-ivec2 endpoints(int e) {
-    if (e < 7 * n()) {
-        int donor = e / 7, slot = e % 7;
-        return ivec2(donor, n() + (slot == 0 ? donor : neighbor(donor, slot - 1)));
+ivec2 endpoints(int edge) {
+    if (edge < 7 * cellCount()) {
+        int donor = edge / 7, slot = edge % 7;
+        return ivec2(donor, cellCount() + (slot == 0 ? donor : neighbor(donor, slot - 1)));
     }
-    if (e < 8 * n()) {
-        int cell = e - 7 * n();
-        return ivec2(n() + cell, 2 * n() + groupOf(cell));
+    if (edge < 8 * cellCount()) {
+        int cell = edge - 7 * cellCount();
+        return ivec2(cellCount() + cell, 2 * cellCount() + groupOf(cell));
     }
-    return ivec2(2 * n() + e - 8 * n(), sink());
+    return ivec2(2 * cellCount() + edge - 8 * cellCount(), sink());
 }
-int64_t lower(int e) {
-    return e >= 7 * n() && e < 8 * n() ? capacityValue(CAPACITY_LOWER, e - 7 * n()) : 0l;
+int64_t lower(int edge) {
+    return edge >= 7 * cellCount() && edge < 8 * cellCount() ? capacityValue(CAPACITY_LOWER, edge - 7 * cellCount()) : 0l;
 }
-int64_t upper(int e) {
-    if (e < 7 * n()) {
-        int cell = e / 7, slot = e % 7;
-        return slot == 0 || (int(words[ca(CAPACITY_OPEN_NEIGHBORS) + cell]) & (1 << (slot - 1))) != 0
+int64_t upper(int edge) {
+    if (edge < 7 * cellCount()) {
+        int cell = edge / 7, slot = edge % 7;
+        return slot == 0 || (int(words[capacityOffset(CAPACITY_OPEN_NEIGHBORS) + cell]) & (1 << (slot - 1))) != 0
                    ? capacityValue(CAPACITY_K, cell)
                    : 0l;
     }
-    if (e < 8 * n())
-        return capacityValue(CAPACITY_UPPER, e - 7 * n());
-    int group = e - 8 * n();
+    if (edge < 8 * cellCount())
+        return capacityValue(CAPACITY_UPPER, edge - 7 * cellCount());
+    int group = edge - 8 * cellCount();
     return group == groups() - 1 ? INF : capacityValue(CAPACITY_GROUP_CAPACITY, group);
 }
-int64_t flow(int e) {
-    return e < 7 * n() ? capacityValue(CAPACITY_FLOW, e) : read(FIELD_TAIL_FLOW, e - 7 * n());
+int64_t flow(int edge) {
+    return edge < 7 * cellCount() ? capacityValue(CAPACITY_FLOW, edge) : readInteger(FIELD_TAIL_FLOW, edge - 7 * cellCount());
 }
-void writeFlow(int e, int64_t x) {
-    if (e < 7 * n())
-        writeNumber(ca(CAPACITY_FLOW) + 2 * e, x);
+void writeFlow(int edge, int64_t x) {
+    if (edge < 7 * cellCount())
+        writeNumber(capacityOffset(CAPACITY_FLOW) + 2 * edge, x);
     else
-        write(FIELD_TAIL_FLOW, e - 7 * n(), x);
+        writeInteger(FIELD_TAIL_FLOW, edge - 7 * cellCount(), x);
 }
 int distance(int vertex) {
-    return int(atomicAdd(words[at(FIELD_DISTANCE) + vertex], 0u));
+    return int(atomicAdd(words[fieldOffset(FIELD_DISTANCE) + vertex], 0u));
 }
 void initialize(int id) {
-    if (id < h(H_VERTEX_COUNT)) {
-        put(FIELD_LABEL_CHANGED, id, 0);
-        write(FIELD_EXCESS, id, 0l);
-        put(FIELD_DISTANCE, id, INFINITY);
+    if (id < headerWord(H_VERTEX_COUNT)) {
+        writeWord(FIELD_LABEL_CHANGED, id, 0);
+        writeInteger(FIELD_EXCESS, id, 0l);
+        writeWord(FIELD_DISTANCE, id, INFINITY);
     }
-    if (id < n())
-        put(FIELD_CUT_CELLS, id, 0);
+    if (id < cellCount())
+        writeWord(FIELD_CUT_CELLS, id, 0);
     if (id < groups())
-        write(FIELD_GROUP_BASE, id, 0l);
+        writeInteger(FIELD_GROUP_BASE, id, 0l);
     if (id == 0) {
         for (int i = 0; i < 12; i++)
             putControl(i, 0);
-        putControl(5, p.argument);
+        putControl(CONTROL_MAX_ROUNDS, p.argument);
         for (int i = 0; i < 20; i++)
-            put(FIELD_STATE, i, 0);
-        put(FIELD_STATE, 8, INFINITY);
-        put(FIELD_STATE, 0, -1);
-        put(FIELD_STATE, 16, 1);
+            writeWord(FIELD_STATE, i, 0);
+        writeWord(FIELD_STATE, STATE_RESERVED_8, INFINITY);
+        writeWord(FIELD_STATE, STATE_PHASE, -1);
+        writeWord(FIELD_STATE, STATE_PHASE_ENABLED, 1);
     }
 }
 void seedDonor(int cell) {
-    int group = int(words[ca(CAPACITY_GROUP_ID) + cell]), open = int(words[ca(CAPACITY_OPEN_NEIGHBORS) + cell]);
-    int64_t k = capacityValue(CAPACITY_K, cell), lo = capacityValue(CAPACITY_LOWER, cell),
-            hi = capacityValue(CAPACITY_UPPER, cell);
-    if (group < -1 || group >= groups() - 1 || k < 0l || k > INF / (8l * int64_t(n())) || lo < 0l || hi < lo ||
-        hi > INF / int64_t(n()) || (open & ~63) != 0) {
+    int group = int(words[capacityOffset(CAPACITY_GROUP_ID) + cell]), openNeighborMask = int(words[capacityOffset(CAPACITY_OPEN_NEIGHBORS) + cell]);
+    int64_t liquidQuanta = capacityValue(CAPACITY_K, cell), lowerLiquidQuanta = capacityValue(CAPACITY_LOWER, cell),
+            upperLiquidQuanta = capacityValue(CAPACITY_UPPER, cell);
+    if (group < -1 || group >= groups() - 1 || liquidQuanta < 0l || liquidQuanta > INF / (8l * int64_t(cellCount())) || lowerLiquidQuanta < 0l || upperLiquidQuanta < lowerLiquidQuanta ||
+        upperLiquidQuanta > INF / int64_t(cellCount()) || (openNeighborMask & ~63) != 0) {
         invalid();
         return;
     }
@@ -176,39 +176,39 @@ void seedDonor(int cell) {
         invalid();
         return;
     }
-    if (lo > k || hi < k)
-        atomicOr(words[at(FIELD_STATE) + 13], 1u);
-    atomicAdd(integers[at(FIELD_GROUP_BASE) / 2 + groupOf(cell)], k);
-    int64_t remaining = k;
+    if (lowerLiquidQuanta > liquidQuanta || upperLiquidQuanta < liquidQuanta)
+        atomicOr(words[fieldOffset(FIELD_STATE) + STATE_REQUIRES_RESIDUAL], 1u);
+    atomicAdd(integers[fieldOffset(FIELD_GROUP_BASE) / 2 + groupOf(cell)], liquidQuanta);
+    int64_t remainingQuanta = liquidQuanta;
     for (int slot = 1; slot < 7; slot++) {
         int other = neighbor(cell, slot - 1);
-        if (other < 0 && (open & (1 << (slot - 1))) != 0) {
+        if (other < 0 && (openNeighborMask & (1 << (slot - 1))) != 0) {
             invalid();
             return;
         }
-        int64_t preferred = capacityValue(CAPACITY_PREFERRED, 7 * cell + slot);
-        if (preferred < 0l) {
+        int64_t preferredQuanta = capacityValue(CAPACITY_PREFERRED, 7 * cell + slot);
+        if (preferredQuanta < 0l) {
             invalid();
             return;
         }
-        int64_t amount = (open & (1 << (slot - 1))) != 0 ? min(remaining, preferred) : 0l;
-        writeFlow(7 * cell + slot, amount);
-        remaining -= amount;
+        int64_t routedQuanta = (openNeighborMask & (1 << (slot - 1))) != 0 ? min(remainingQuanta, preferredQuanta) : 0l;
+        writeFlow(7 * cell + slot, routedQuanta);
+        remainingQuanta -= routedQuanta;
     }
-    writeFlow(7 * cell, remaining);
+    writeFlow(7 * cell, remainingQuanta);
 }
 void prepareGroups(int group) {
-    put(FIELD_GROUP_COUNTS, group, 0);
-    put(FIELD_GROUP_CURSORS, group, 0);
-    write(FIELD_GROUP_INCOMING, group, 0l);
-    put(FIELD_LONG_BLOCK_COUNTS, group, 0);
+    writeWord(FIELD_GROUP_COUNTS, group, 0);
+    writeWord(FIELD_GROUP_CURSORS, group, 0);
+    writeInteger(FIELD_GROUP_INCOMING, group, 0l);
+    writeWord(FIELD_LONG_BLOCK_COUNTS, group, 0);
     if (group == 0)
-        put(FIELD_LONG_BLOCK_COUNTS, groups(), 0);
+        writeWord(FIELD_LONG_BLOCK_COUNTS, groups(), 0);
     if (group == 0) {
-        put(FIELD_STATE, 0, -1);
-        put(FIELD_STATE, 4, 0);
-        put(FIELD_STATE, 17, 0);
-        put(FIELD_STATE, 19, 0);
+        writeWord(FIELD_STATE, STATE_PHASE, -1);
+        writeWord(FIELD_STATE, STATE_ACTIVE_BALANCES, 0);
+        writeWord(FIELD_STATE, STATE_LONG_VERTEX_COUNT, 0);
+        writeWord(FIELD_STATE, STATE_SINK_EDGE_COUNT, 0);
     }
 }
 void balanceReceiver(int cell) {
@@ -218,23 +218,23 @@ void balanceReceiver(int cell) {
         if (donor >= 0)
             incoming = add(incoming, flow(7 * donor + 1 + (side ^ 1)));
     }
-    int64_t tail = clamp(incoming, capacityValue(CAPACITY_LOWER, cell), capacityValue(CAPACITY_UPPER, cell));
-    writeFlow(7 * n() + cell, tail);
-    int64_t excess = incoming - tail;
-    write(FIELD_EXCESS, n() + cell, excess);
+    int64_t acceptedQuanta = clamp(incoming, capacityValue(CAPACITY_LOWER, cell), capacityValue(CAPACITY_UPPER, cell));
+    writeFlow(7 * cellCount() + cell, acceptedQuanta);
+    int64_t excess = incoming - acceptedQuanta;
+    writeInteger(FIELD_EXCESS, cellCount() + cell, excess);
     if (excess > 0l)
-        atomicAdd(words[at(FIELD_STATE) + 4], 1u);
+        atomicAdd(words[fieldOffset(FIELD_STATE) + STATE_ACTIVE_BALANCES], 1u);
     int group = groupOf(cell);
-    atomicAdd(integers[at(FIELD_GROUP_INCOMING) / 2 + group], tail);
+    atomicAdd(integers[fieldOffset(FIELD_GROUP_INCOMING) / 2 + group], acceptedQuanta);
     if (capacityValue(CAPACITY_UPPER, cell) > 0l)
-        atomicAdd(words[at(FIELD_GROUP_COUNTS) + group], 1u);
+        atomicAdd(words[fieldOffset(FIELD_GROUP_COUNTS) + group], 1u);
 }
 void scatterMember(int cell) {
-    if (get(FIELD_STATE, 0) != 3 && capacityValue(CAPACITY_UPPER, cell) <= 0l)
+    if (readWord(FIELD_STATE, STATE_PHASE) != PHASE_LOCAL_WITHDRAWAL && capacityValue(CAPACITY_UPPER, cell) <= 0l)
         return;
     int group = groupOf(cell);
-    int index = int(atomicAdd(words[at(FIELD_GROUP_CURSORS) + group], 1u));
-    put(FIELD_GROUP_MEMBERS, get(FIELD_GROUP_OFFSETS, group) + index, cell);
+    int index = int(atomicAdd(words[fieldOffset(FIELD_GROUP_CURSORS) + group], 1u));
+    writeWord(FIELD_GROUP_MEMBERS, readWord(FIELD_GROUP_OFFSETS, group) + index, cell);
 }
 void reduce(int lane) {
     for (int step = 64; step > 0; step >>= 1) {
@@ -246,38 +246,38 @@ void reduce(int lane) {
 }
 void totalBlock(int block, int lane) {
     int cell = 128 * block + lane;
-    reduction[lane] = cell < n() ? capacityValue(CAPACITY_K, cell) : 0l;
+    reduction[lane] = cell < cellCount() ? capacityValue(CAPACITY_K, cell) : 0l;
     reduce(lane);
     if (lane == 0)
-        write(FIELD_TOTAL_PARTS, block, reduction[0]);
+        writeInteger(FIELD_TOTAL_PARTS, block, reduction[0]);
 }
 void total() {
     int64_t result = 0l;
-    for (int block = 0; block < h(H_TOTAL_BLOCKS); block++)
-        result = add(result, read(FIELD_TOTAL_PARTS, block));
-    write(FIELD_TOTAL, 0, result);
-    write(FIELD_EXCESS, sink(), -result);
+    for (int block = 0; block < headerWord(H_TOTAL_BLOCKS); block++)
+        result = add(result, readInteger(FIELD_TOTAL_PARTS, block));
+    writeInteger(FIELD_TOTAL, 0, result);
+    writeInteger(FIELD_EXCESS, sink(), -result);
 }
 int incidentCount(int vertex) {
-    if (vertex < n())
+    if (vertex < cellCount())
         return 7;
-    if (vertex < 2 * n())
+    if (vertex < 2 * cellCount())
         return 8;
     if (vertex == sink())
-        return get(FIELD_STATE, 19);
-    int group = vertex - 2 * n();
-    return get(FIELD_GROUP_OFFSETS, group + 1) - get(FIELD_GROUP_OFFSETS, group) + 1;
+        return readWord(FIELD_STATE, STATE_SINK_EDGE_COUNT);
+    int group = vertex - 2 * cellCount();
+    return readWord(FIELD_GROUP_OFFSETS, group + 1) - readWord(FIELD_GROUP_OFFSETS, group) + 1;
 }
 int incidentEdge(int vertex, int index) {
     int edge;
-    if (vertex < n())
+    if (vertex < cellCount())
         edge = 7 * vertex + index;
-    else if (vertex < 2 * n()) {
-        int cell = vertex - n();
+    else if (vertex < 2 * cellCount()) {
+        int cell = vertex - cellCount();
         if (index == 0)
             edge = 7 * cell;
         else if (index == 7)
-            edge = 7 * n() + cell;
+            edge = 7 * cellCount() + cell;
         else {
             int side = index - 1, donor = neighbor(cell, side);
             if (donor < 0)
@@ -285,122 +285,122 @@ int incidentEdge(int vertex, int index) {
             edge = 7 * donor + 1 + (side ^ 1);
         }
     } else if (vertex == sink())
-        edge = get(FIELD_SINK_EDGES, index);
+        edge = readWord(FIELD_SINK_EDGES, index);
     else {
-        int group = vertex - 2 * n(), first = get(FIELD_GROUP_OFFSETS, group),
-            count = get(FIELD_GROUP_OFFSETS, group + 1) - first;
-        edge = index < count ? 7 * n() + get(FIELD_GROUP_MEMBERS, first + index) : 8 * n() + group;
+        int group = vertex - 2 * cellCount(), first = readWord(FIELD_GROUP_OFFSETS, group),
+            count = readWord(FIELD_GROUP_OFFSETS, group + 1) - first;
+        edge = index < count ? 7 * cellCount() + readWord(FIELD_GROUP_MEMBERS, first + index) : 8 * cellCount() + group;
     }
     return upper(edge) > 0l ? edge : -1;
 }
 void classifyLong(int vertex) {
     int count = incidentCount(vertex);
     if (count > 128) {
-        int slot = int(atomicAdd(words[at(FIELD_STATE) + 17], 1u));
-        put(FIELD_LONG_VERTICES, slot, vertex);
-        put(FIELD_LONG_BLOCK_COUNTS, slot, (count + 127) / 128);
+        int slot = int(atomicAdd(words[fieldOffset(FIELD_STATE) + STATE_LONG_VERTEX_COUNT], 1u));
+        writeWord(FIELD_LONG_VERTICES, slot, vertex);
+        writeWord(FIELD_LONG_BLOCK_COUNTS, slot, (count + 127) / 128);
     }
 }
 void mapLongBlocks(int index) {
-    if (index >= get(FIELD_STATE, 17))
+    if (index >= readWord(FIELD_STATE, STATE_LONG_VERTEX_COUNT))
         return;
-    for (int block = get(FIELD_LONG_BLOCK_OFFSETS, index); block < get(FIELD_LONG_BLOCK_OFFSETS, index + 1); block++)
-        put(FIELD_LONG_BLOCK_OWNER, block, index);
+    for (int block = readWord(FIELD_LONG_BLOCK_OFFSETS, index); block < readWord(FIELD_LONG_BLOCK_OFFSETS, index + 1); block++)
+        writeWord(FIELD_LONG_BLOCK_OWNER, block, index);
 }
 void seedGroup(int group) {
-    int64_t incoming = read(FIELD_GROUP_INCOMING, group), tail = clamp(incoming, 0l, upper(8 * n() + group));
-    writeFlow(8 * n() + group, tail);
-    atomicAdd(integers[at(FIELD_EXCESS) / 2 + sink()], tail);
-    int64_t excess = incoming - tail;
-    write(FIELD_EXCESS, 2 * n() + group, excess);
+    int64_t incoming = readInteger(FIELD_GROUP_INCOMING, group), acceptedQuanta = clamp(incoming, 0l, upper(8 * cellCount() + group));
+    writeFlow(8 * cellCount() + group, acceptedQuanta);
+    atomicAdd(integers[fieldOffset(FIELD_EXCESS) / 2 + sink()], acceptedQuanta);
+    int64_t excess = incoming - acceptedQuanta;
+    writeInteger(FIELD_EXCESS, 2 * cellCount() + group, excess);
     if (excess > 0l)
-        atomicAdd(words[at(FIELD_STATE) + 4], 1u);
-    if (upper(8 * n() + group) > 0l) {
-        int index = int(atomicAdd(words[at(FIELD_STATE) + 19], 1u));
-        put(FIELD_SINK_EDGES, index, 8 * n() + group);
+        atomicAdd(words[fieldOffset(FIELD_STATE) + STATE_ACTIVE_BALANCES], 1u);
+    if (upper(8 * cellCount() + group) > 0l) {
+        int index = int(atomicAdd(words[fieldOffset(FIELD_STATE) + STATE_SINK_EDGE_COUNT], 1u));
+        writeWord(FIELD_SINK_EDGES, index, 8 * cellCount() + group);
     }
-    classifyLong(2 * n() + group);
+    classifyLong(2 * cellCount() + group);
 }
 void balanceSink() {
-    if (read(FIELD_EXCESS, sink()) > 0l)
-        atomicAdd(words[at(FIELD_STATE) + 4], 1u);
+    if (readInteger(FIELD_EXCESS, sink()) > 0l)
+        atomicAdd(words[fieldOffset(FIELD_STATE) + STATE_ACTIVE_BALANCES], 1u);
     classifyLong(sink());
 }
 int vertexColor(int vertex) {
-    return vertex < n() || (vertex >= 2 * n() && vertex < sink()) ? 0 : 1;
+    return vertex < cellCount() || (vertex >= 2 * cellCount() && vertex < sink()) ? 0 : 1;
 }
 void dispatchSize(int slot, int size) {
     int workgroups = (size + 127) / 128;
-    put(FIELD_DISPATCH, 3 * slot, min(workgroups, 65535));
-    put(FIELD_DISPATCH, 3 * slot + 1, max(1, (workgroups + 65534) / 65535));
-    put(FIELD_DISPATCH, 3 * slot + 2, 1);
+    writeWord(FIELD_DISPATCH, 3 * slot, min(workgroups, 65535));
+    writeWord(FIELD_DISPATCH, 3 * slot + 1, max(1, (workgroups + 65534) / 65535));
+    writeWord(FIELD_DISPATCH, 3 * slot + 2, 1);
 }
 void updateDispatch() {
-    bool running = control(0) == 0 && get(FIELD_STATE, 16) != 0;
-    int state = get(FIELD_STATE, 0);
-    putControl(2, state);
-    dispatchSize(0, running && state == 0 ? h(H_VERTEX_COUNT) : 0);
-    dispatchSize(1, running && state == 1 ? h(H_EDGE_COUNT) : 0);
-    dispatchSize(2, running && state == 2 ? h(H_VERTEX_COUNT) : 0);
-    dispatchSize(3, running && state == 2 ? get(FIELD_STATE, 17) : 0);
-    dispatchSize(4, running && state == 2 ? 128 * get(FIELD_STATE, 17) : 0);
-    dispatchSize(6, running && state == 2 ? 128 * get(FIELD_LONG_BLOCK_OFFSETS, get(FIELD_STATE, 17)) : 0);
-    dispatchSize(5, running ? 1 : 0);
+    bool running = control(CONTROL_STATUS) == STATUS_RUNNING && readWord(FIELD_STATE, STATE_PHASE_ENABLED) != 0;
+    int state = readWord(FIELD_STATE, STATE_PHASE);
+    putControl(CONTROL_PHASE, state);
+    dispatchSize(DISPATCH_SEED_DISTANCE, running && state == PHASE_SEED_DISTANCE ? headerWord(H_VERTEX_COUNT) : 0);
+    dispatchSize(DISPATCH_BFS_EDGE, running && state == PHASE_BFS ? headerWord(H_EDGE_COUNT) : 0);
+    dispatchSize(DISPATCH_DISCHARGE_SHORT, running && state == PHASE_DISCHARGE ? headerWord(H_VERTEX_COUNT) : 0);
+    dispatchSize(DISPATCH_PREPARE_LONG, running && state == PHASE_DISCHARGE ? readWord(FIELD_STATE, STATE_LONG_VERTEX_COUNT) : 0);
+    dispatchSize(DISPATCH_FINISH_LONG, running && state == PHASE_DISCHARGE ? 128 * readWord(FIELD_STATE, STATE_LONG_VERTEX_COUNT) : 0);
+    dispatchSize(DISPATCH_LONG_BLOCK, running && state == PHASE_DISCHARGE ? 128 * readWord(FIELD_LONG_BLOCK_OFFSETS, readWord(FIELD_STATE, STATE_LONG_VERTEX_COUNT)) : 0);
+    dispatchSize(DISPATCH_SINGLE, running ? 1 : 0);
 }
 void start() {
-    if (get(FIELD_STATE, 4) == 0)
-        putControl(0, 1);
+    if (readWord(FIELD_STATE, STATE_ACTIVE_BALANCES) == 0)
+        putControl(CONTROL_STATUS, STATUS_FEASIBLE);
     else
-        put(FIELD_STATE, 0, 0);
+        writeWord(FIELD_STATE, STATE_PHASE, PHASE_SEED_DISTANCE);
 }
 void seedDistance(int vertex) {
-    if (get(FIELD_STATE, 0) != 0)
+    if (readWord(FIELD_STATE, STATE_PHASE) != PHASE_SEED_DISTANCE)
         return;
-    put(FIELD_LABEL_CHANGED, vertex, 0);
-    put(FIELD_DISTANCE, vertex, read(FIELD_EXCESS, vertex) < 0l ? 0 : INFINITY);
+    writeWord(FIELD_LABEL_CHANGED, vertex, 0);
+    writeWord(FIELD_DISTANCE, vertex, readInteger(FIELD_EXCESS, vertex) < 0l ? 0 : INFINITY);
 }
 void beginBfs() {
-    if (get(FIELD_STATE, 0) == 0) {
-        put(FIELD_STATE, 0, 1);
-        put(FIELD_STATE, 1, 0);
-        put(FIELD_STATE, 2, 0);
-        put(FIELD_STATE, 5, 0);
+    if (readWord(FIELD_STATE, STATE_PHASE) == PHASE_SEED_DISTANCE) {
+        writeWord(FIELD_STATE, STATE_PHASE, PHASE_BFS);
+        writeWord(FIELD_STATE, STATE_BFS_WAVE, 0);
+        writeWord(FIELD_STATE, STATE_BFS_CHANGED, 0);
+        writeWord(FIELD_STATE, STATE_BFS_REACHED_SURPLUS, 0);
     }
 }
 void discover(int vertex, int value) {
-    if (atomicCompSwap(words[at(FIELD_DISTANCE) + vertex], uint(INFINITY), uint(value)) == uint(INFINITY)) {
-        atomicOr(words[at(FIELD_STATE) + 2], 1u);
-        if (read(FIELD_EXCESS, vertex) > 0l)
-            atomicOr(words[at(FIELD_STATE) + 5], 1u);
+    if (atomicCompSwap(words[fieldOffset(FIELD_DISTANCE) + vertex], uint(INFINITY), uint(value)) == uint(INFINITY)) {
+        atomicOr(words[fieldOffset(FIELD_STATE) + STATE_BFS_CHANGED], 1u);
+        if (readInteger(FIELD_EXCESS, vertex) > 0l)
+            atomicOr(words[fieldOffset(FIELD_STATE) + STATE_BFS_REACHED_SURPLUS], 1u);
     }
 }
-void bfsEdge(int e) {
-    if (get(FIELD_STATE, 0) != 1 || upper(e) == 0l)
+void bfsEdge(int edge) {
+    if (readWord(FIELD_STATE, STATE_PHASE) != PHASE_BFS || upper(edge) == 0l)
         return;
-    ivec2 v = endpoints(e);
-    int wave = get(FIELD_STATE, 1);
-    if (flow(e) < upper(e) && distance(v.y) == wave)
+    ivec2 v = endpoints(edge);
+    int wave = readWord(FIELD_STATE, STATE_BFS_WAVE);
+    if (flow(edge) < upper(edge) && distance(v.y) == wave)
         discover(v.x, wave + 1);
-    if (flow(e) > lower(e) && distance(v.x) == wave)
+    if (flow(edge) > lower(edge) && distance(v.x) == wave)
         discover(v.y, wave + 1);
 }
 void finishBfs() {
-    if (get(FIELD_STATE, 0) != 1)
+    if (readWord(FIELD_STATE, STATE_PHASE) != PHASE_BFS)
         return;
-    put(FIELD_STATE, 6, get(FIELD_STATE, 6) + 1);
-    if (get(FIELD_STATE, 2) != 0) {
-        put(FIELD_STATE, 1, get(FIELD_STATE, 1) + 1);
-        put(FIELD_STATE, 2, 0);
-    } else if (get(FIELD_STATE, 5) == 0)
-        putControl(0, 2);
+    writeWord(FIELD_STATE, STATE_BFS_ROUNDS, readWord(FIELD_STATE, STATE_BFS_ROUNDS) + 1);
+    if (readWord(FIELD_STATE, STATE_BFS_CHANGED) != 0) {
+        writeWord(FIELD_STATE, STATE_BFS_WAVE, readWord(FIELD_STATE, STATE_BFS_WAVE) + 1);
+        writeWord(FIELD_STATE, STATE_BFS_CHANGED, 0);
+    } else if (readWord(FIELD_STATE, STATE_BFS_REACHED_SURPLUS) == 0)
+        putControl(CONTROL_STATUS, STATUS_INFEASIBLE);
     else
-        put(FIELD_STATE, 0, 2);
+        writeWord(FIELD_STATE, STATE_PHASE, PHASE_DISCHARGE);
 }
-void beginDischarge(int e) {
-    if (get(FIELD_STATE, 0) != 2)
+void beginDischarge(int edge) {
+    if (readWord(FIELD_STATE, STATE_PHASE) != PHASE_DISCHARGE)
         return;
-    put(FIELD_STATE, 18, 0);
-    put(FIELD_STATE, 15, 0);
+    writeWord(FIELD_STATE, STATE_SURPLUS_FLAGS, 0);
+    writeWord(FIELD_STATE, STATE_FLOW_CHANGED, 0);
 }
 int64_t residualFrom(int vertex, int edge) {
     ivec2 v = endpoints(edge);
@@ -416,13 +416,13 @@ int64_t pushDirect(int vertex, int edge, int64_t amount) {
     ivec2 v = endpoints(edge);
     bool forward = v.x == vertex;
     int peer = forward ? v.y : v.x;
-    int address = at(FIELD_EXCESS) / 2 + peer;
+    int address = fieldOffset(FIELD_EXCESS) / 2 + peer;
     int64_t old;
     if (distance(peer) == 0) {
         old = atomicAdd(integers[address], 0l);
         for (;;) {
             if (old >= 0l) {
-                atomicOr(words[at(FIELD_LABEL_CHANGED) + peer], 1u);
+                atomicOr(words[fieldOffset(FIELD_LABEL_CHANGED) + peer], 1u);
                 return 0l;
             }
             int64_t grant = min(amount, -old), prior = atomicCompSwap(integers[address], old, old + grant);
@@ -433,13 +433,13 @@ int64_t pushDirect(int vertex, int edge, int64_t amount) {
             old = prior;
         }
         if (old + amount == 0l)
-            atomicOr(words[at(FIELD_LABEL_CHANGED) + peer], 1u);
+            atomicOr(words[fieldOffset(FIELD_LABEL_CHANGED) + peer], 1u);
     } else
         old = atomicAdd(integers[address], amount);
-    atomicOr(words[at(FIELD_STATE) + 15], 1u);
+    atomicOr(words[fieldOffset(FIELD_STATE) + STATE_FLOW_CHANGED], 1u);
     writeFlow(edge, flow(edge) + (forward ? amount : -amount));
     if (old + amount > 0l)
-        atomicOr(words[at(FIELD_STATE) + 18], 1u);
+        atomicOr(words[fieldOffset(FIELD_STATE) + STATE_SURPLUS_FLAGS], 1u);
     return amount;
 }
 void notifyHeight(int vertex, int edge) {
@@ -447,28 +447,28 @@ void notifyHeight(int vertex, int edge) {
     bool incoming = v.y == vertex;
     if ((incoming ? upper(edge) - flow(edge) : flow(edge) - lower(edge)) > 0l) {
         int peer = incoming ? v.x : v.y;
-        atomicOr(words[at(FIELD_LABEL_CHANGED) + peer], 1u);
+        atomicOr(words[fieldOffset(FIELD_LABEL_CHANGED) + peer], 1u);
     }
 }
 void finishDischarge(int vertex, int64_t remaining, int nearest) {
-    write(FIELD_EXCESS, vertex, remaining);
+    writeInteger(FIELD_EXCESS, vertex, remaining);
     if (remaining <= 0l)
         return;
-    atomicOr(words[at(FIELD_STATE) + 18], 1u);
-    if (nearest >= h(H_VERTEX_COUNT) - 1) {
-        put(FIELD_DISTANCE, vertex, INFINITY);
-        atomicOr(words[at(FIELD_STATE) + 18], 2u);
+    atomicOr(words[fieldOffset(FIELD_STATE) + STATE_SURPLUS_FLAGS], 1u);
+    if (nearest >= headerWord(H_VERTEX_COUNT) - 1) {
+        writeWord(FIELD_DISTANCE, vertex, INFINITY);
+        atomicOr(words[fieldOffset(FIELD_STATE) + STATE_SURPLUS_FLAGS], 2u);
         return;
     }
-    put(FIELD_DISTANCE, vertex, max(distance(vertex), nearest + 1));
+    writeWord(FIELD_DISTANCE, vertex, max(distance(vertex), nearest + 1));
 }
 void dischargeShort(int vertex) {
     if (vertexColor(vertex) != p.mode || incidentCount(vertex) > 128)
         return;
-    bool dirty = get(FIELD_LABEL_CHANGED, vertex) != 0;
+    bool dirty = readWord(FIELD_LABEL_CHANGED, vertex) != 0;
     if (dirty)
-        put(FIELD_LABEL_CHANGED, vertex, 0);
-    int64_t remaining = read(FIELD_EXCESS, vertex);
+        writeWord(FIELD_LABEL_CHANGED, vertex, 0);
+    int64_t remaining = readInteger(FIELD_EXCESS, vertex);
     if (remaining < 0l || (remaining == 0l && !dirty))
         return;
     int height = distance(vertex);
@@ -492,20 +492,20 @@ void dischargeShort(int vertex) {
             if (residual > 0l)
                 nearest = min(nearest, distance(peer));
         }
-        int next = nearest >= h(H_VERTEX_COUNT) - 1 ? INFINITY : max(height, nearest + 1);
+        int next = nearest >= headerWord(H_VERTEX_COUNT) - 1 ? INFINITY : max(height, nearest + 1);
         if (remaining == 0l && !dirty)
             break;
         if (next > height) {
             height = next;
-            put(FIELD_DISTANCE, vertex, height);
+            writeWord(FIELD_DISTANCE, vertex, height);
             for (int i = 0; i < incidentCount(vertex); i++) {
                 int edge = incidentEdge(vertex, i);
                 if (edge >= 0)
                     notifyHeight(vertex, edge);
             }
         } else if (remaining > 0l) {
-            write(FIELD_EXCESS, vertex, remaining);
-            atomicOr(words[at(FIELD_STATE) + 18], 1u);
+            writeInteger(FIELD_EXCESS, vertex, remaining);
+            atomicOr(words[fieldOffset(FIELD_STATE) + STATE_SURPLUS_FLAGS], 1u);
             return;
         }
         if (remaining == 0l)
@@ -516,10 +516,10 @@ void dischargeShort(int vertex) {
         }
         dirty = false;
     }
-    write(FIELD_EXCESS, vertex, 0l);
+    writeInteger(FIELD_EXCESS, vertex, 0l);
 }
 int64_t claimLong(int vertex, int64_t wanted) {
-    int address = at(FIELD_EXCESS) / 2 + vertex;
+    int address = fieldOffset(FIELD_EXCESS) / 2 + vertex;
     int64_t available = atomicAdd(integers[address], 0l);
     while (available > 0l) {
         int64_t amount = min(wanted, available);
@@ -537,19 +537,19 @@ void pushLong(int vertex, int edge) {
         return;
     int64_t amount = claimLong(vertex, residualFrom(vertex, edge)), grant = pushDirect(vertex, edge, amount);
     if (amount > grant)
-        atomicAdd(integers[at(FIELD_EXCESS) / 2 + vertex], amount - grant);
+        atomicAdd(integers[fieldOffset(FIELD_EXCESS) / 2 + vertex], amount - grant);
 }
 void prepareLong(int index) {
-    if (index >= get(FIELD_STATE, 17))
+    if (index >= readWord(FIELD_STATE, STATE_LONG_VERTEX_COUNT))
         return;
-    int vertex = get(FIELD_LONG_VERTICES, index);
-    put(FIELD_LONG_WORK, index, 0);
+    int vertex = readWord(FIELD_LONG_VERTICES, index);
+    writeWord(FIELD_LONG_WORK, index, 0);
     if (vertexColor(vertex) != p.mode)
         return;
-    bool dirty = get(FIELD_LABEL_CHANGED, vertex) != 0;
+    bool dirty = readWord(FIELD_LABEL_CHANGED, vertex) != 0;
     if (dirty)
-        put(FIELD_LABEL_CHANGED, vertex, 0);
-    int64_t balance = read(FIELD_EXCESS, vertex);
+        writeWord(FIELD_LABEL_CHANGED, vertex, 0);
+    int64_t balance = readInteger(FIELD_EXCESS, vertex);
     if (balance < 0l || (balance == 0l && !dirty))
         return;
     if (balance > 0l && distance(vertex) == INFINITY) {
@@ -557,19 +557,19 @@ void prepareLong(int index) {
         return;
     }
     // Settle the direct chamber tail before launching its member blocks.
-    if (balance > 0l && vertex >= 2 * n() && vertex < sink())
-        pushLong(vertex, 8 * n() + vertex - 2 * n());
-    if (read(FIELD_EXCESS, vertex) == 0l && !dirty)
+    if (balance > 0l && vertex >= 2 * cellCount() && vertex < sink())
+        pushLong(vertex, 8 * cellCount() + vertex - 2 * cellCount());
+    if (readInteger(FIELD_EXCESS, vertex) == 0l && !dirty)
         return;
-    put(FIELD_LONG_WORK, index, 1 | (dirty ? 2 : 0));
+    writeWord(FIELD_LONG_WORK, index, 1 | (dirty ? 2 : 0));
 }
 void pushLongBlock(int block, int lane) {
-    if (block >= get(FIELD_LONG_BLOCK_OFFSETS, get(FIELD_STATE, 17)))
+    if (block >= readWord(FIELD_LONG_BLOCK_OFFSETS, readWord(FIELD_STATE, STATE_LONG_VERTEX_COUNT)))
         return;
-    int index = get(FIELD_LONG_BLOCK_OWNER, block), work = get(FIELD_LONG_WORK, index);
+    int index = readWord(FIELD_LONG_BLOCK_OWNER, block), work = readWord(FIELD_LONG_WORK, index);
     if ((work & 1) == 0)
         return;
-    int vertex = get(FIELD_LONG_VERTICES, index), ordinal = 128 * (block - get(FIELD_LONG_BLOCK_OFFSETS, index)) + lane;
+    int vertex = readWord(FIELD_LONG_VERTICES, index), ordinal = 128 * (block - readWord(FIELD_LONG_BLOCK_OFFSETS, index)) + lane;
     int edge = ordinal < incidentCount(vertex) ? incidentEdge(vertex, ordinal) : -1;
     if (edge >= 0)
         pushLong(vertex, edge);
@@ -583,22 +583,22 @@ void pushLongBlock(int block, int lane) {
         barrier();
     }
     if (lane == 0)
-        put(FIELD_LONG_PARTIAL, block, int(reduction[0]));
+        writeWord(FIELD_LONG_PARTIAL, block, int(reduction[0]));
 }
 void finishLong(int index, int lane) {
-    if (index >= get(FIELD_STATE, 17))
+    if (index >= readWord(FIELD_STATE, STATE_LONG_VERTEX_COUNT))
         return;
-    int work = get(FIELD_LONG_WORK, index);
+    int work = readWord(FIELD_LONG_WORK, index);
     if ((work & 1) == 0)
         return;
-    int vertex = get(FIELD_LONG_VERTICES, index);
-    int64_t remaining = read(FIELD_EXCESS, vertex);
+    int vertex = readWord(FIELD_LONG_VERTICES, index);
+    int64_t remaining = readInteger(FIELD_EXCESS, vertex);
     if (remaining == 0l && (work & 2) == 0)
         return;
     int nearest = INFINITY;
-    for (int block = get(FIELD_LONG_BLOCK_OFFSETS, index) + lane; block < get(FIELD_LONG_BLOCK_OFFSETS, index + 1);
+    for (int block = readWord(FIELD_LONG_BLOCK_OFFSETS, index) + lane; block < readWord(FIELD_LONG_BLOCK_OFFSETS, index + 1);
          block += 128)
-        nearest = min(nearest, get(FIELD_LONG_PARTIAL, block));
+        nearest = min(nearest, readWord(FIELD_LONG_PARTIAL, block));
     reduction[lane] = int64_t(nearest);
     barrier();
     for (int step = 64; step > 0; step >>= 1) {
@@ -609,24 +609,24 @@ void finishLong(int index, int lane) {
     if (lane != 0)
         return;
     nearest = int(reduction[0]);
-    int height = distance(vertex), next = nearest >= h(H_VERTEX_COUNT) - 1 ? INFINITY : max(height, nearest + 1);
+    int height = distance(vertex), next = nearest >= headerWord(H_VERTEX_COUNT) - 1 ? INFINITY : max(height, nearest + 1);
     if (next > height) {
-        put(FIELD_DISTANCE, vertex, next);
-        put(FIELD_LONG_WORK, index, work | 4);
+        writeWord(FIELD_DISTANCE, vertex, next);
+        writeWord(FIELD_LONG_WORK, index, work | 4);
     }
     if (remaining > 0l) {
-        atomicOr(words[at(FIELD_STATE) + 18], 1u);
+        atomicOr(words[fieldOffset(FIELD_STATE) + STATE_SURPLUS_FLAGS], 1u);
         if (next == INFINITY)
-            atomicOr(words[at(FIELD_STATE) + 18], 2u);
+            atomicOr(words[fieldOffset(FIELD_STATE) + STATE_SURPLUS_FLAGS], 2u);
     }
 }
 void notifyLongBlock(int block, int lane) {
-    if (block >= get(FIELD_LONG_BLOCK_OFFSETS, get(FIELD_STATE, 17)))
+    if (block >= readWord(FIELD_LONG_BLOCK_OFFSETS, readWord(FIELD_STATE, STATE_LONG_VERTEX_COUNT)))
         return;
-    int index = get(FIELD_LONG_BLOCK_OWNER, block);
-    if ((get(FIELD_LONG_WORK, index) & 4) == 0)
+    int index = readWord(FIELD_LONG_BLOCK_OWNER, block);
+    if ((readWord(FIELD_LONG_WORK, index) & 4) == 0)
         return;
-    int vertex = get(FIELD_LONG_VERTICES, index), ordinal = 128 * (block - get(FIELD_LONG_BLOCK_OFFSETS, index)) + lane;
+    int vertex = readWord(FIELD_LONG_VERTICES, index), ordinal = 128 * (block - readWord(FIELD_LONG_BLOCK_OFFSETS, index)) + lane;
     if (ordinal < incidentCount(vertex)) {
         int edge = incidentEdge(vertex, ordinal);
         if (edge >= 0)
@@ -636,40 +636,41 @@ void notifyLongBlock(int block, int lane) {
 // Returning a preferred route to its donor keeps all integer supply quotas exact.
 // A feasible stationary allocation permits monotone withdrawal of conflicting preferences.
 void checkStationaryGroup(int group) {
-    if (read(FIELD_GROUP_BASE, group) > upper(8 * n() + group))
-        atomicOr(words[at(FIELD_STATE) + 13], 1u);
+    if (readInteger(FIELD_GROUP_BASE, group) > upper(8 * cellCount() + group))
+        atomicOr(words[fieldOffset(FIELD_STATE) + STATE_REQUIRES_RESIDUAL], 1u);
 }
 void startCorrection() {
-    put(FIELD_STATE, 0, get(FIELD_STATE, 13) == 0 ? 3 : 6);
+    writeWord(FIELD_STATE, STATE_PHASE, readWord(FIELD_STATE, STATE_REQUIRES_RESIDUAL) == 0 ? PHASE_LOCAL_WITHDRAWAL : PHASE_BUILD_RESIDUAL);
 }
 // Queue words reuse FIELD_EXCESS while the stationary phase has no residual balances.
 // Three cell queues and two group queues fit its (2N+G+1) int64 slots.
+const int QUEUE_CELL_A = 0, QUEUE_CELL_B = 1, QUEUE_RETRACTIONS = 2, QUEUE_GROUP_A = 3, QUEUE_GROUP_B = 4;
 int queueAddress(int kind, int index) {
-    int base = kind == 0 ? 0 : kind == 1 ? n() : kind == 2 ? 2 * n() : kind == 3 ? 3 * n() : 3 * n() + groups();
-    return at(FIELD_EXCESS) + base + index;
+    int base = kind == QUEUE_CELL_A ? 0 : kind == QUEUE_CELL_B ? cellCount() : kind == QUEUE_RETRACTIONS ? 2 * cellCount() : kind == QUEUE_GROUP_A ? 3 * cellCount() : 3 * cellCount() + groups();
+    return fieldOffset(FIELD_EXCESS) + base + index;
 }
 int queueCounter(int kind) {
-    return kind == 0 ? 9 : kind == 1 ? 10 : kind == 2 ? 11 : kind == 3 ? 12 : 14;
+    return kind == QUEUE_CELL_A ? STATE_CELL_QUEUE_A_COUNT : kind == QUEUE_CELL_B ? STATE_CELL_QUEUE_B_COUNT : kind == QUEUE_RETRACTIONS ? STATE_RETRACTION_QUEUE_COUNT : kind == QUEUE_GROUP_A ? STATE_GROUP_QUEUE_A_COUNT : STATE_GROUP_QUEUE_B_COUNT;
 }
 int currentCellQueue() {
-    return control(1) & 1;
+    return control(CONTROL_ROUNDS) & 1;
 }
 int currentGroupQueue() {
-    return 3 + (control(1) & 1);
+    return 3 + (control(CONTROL_ROUNDS) & 1);
 }
 int epoch() {
-    return control(1) + 1;
+    return control(CONTROL_ROUNDS) + 1;
 }
 void enqueue(int kind, int vertex, int stamp, int generation) {
-    if (atomicExchange(words[at(FIELD_DISTANCE) + stamp], uint(generation)) == uint(generation))
+    if (atomicExchange(words[fieldOffset(FIELD_DISTANCE) + stamp], uint(generation)) == uint(generation))
         return;
-    uint index = atomicAdd(words[at(FIELD_STATE) + queueCounter(kind)], 1u);
+    uint index = atomicAdd(words[fieldOffset(FIELD_STATE) + queueCounter(kind)], 1u);
     words[queueAddress(kind, int(index))] = uint(vertex);
-    if (kind == 2) {
+    if (kind == QUEUE_RETRACTIONS) {
         // Monotone command dimensions cover the flattened queue, including a second grid dimension.
         uint count = (index + 128u) / 128u;
-        atomicMax(words[at(FIELD_DISPATCH) + 33], min(count, 65535u));
-        atomicMax(words[at(FIELD_DISPATCH) + 34], (count + 65534u) / 65535u);
+        atomicMax(words[fieldOffset(FIELD_DISPATCH) + 3 * DISPATCH_APPLY_RETRACTIONS], min(count, 65535u));
+        atomicMax(words[fieldOffset(FIELD_DISPATCH) + 3 * DISPATCH_APPLY_RETRACTIONS + 1], (count + 65534u) / 65535u);
     }
 }
 void enqueueCell(int cell, bool next) {
@@ -678,19 +679,19 @@ void enqueueCell(int cell, bool next) {
 void enqueueGroup(int group, bool next) {
     if (group == groups() - 1)
         return;
-    enqueue(next ? 7 - currentGroupQueue() : currentGroupQueue(), group, 2 * n() + group, epoch() + (next ? 1 : 0));
+    enqueue(next ? 7 - currentGroupQueue() : currentGroupQueue(), group, 2 * cellCount() + group, epoch() + (next ? 1 : 0));
 }
 void stationaryGroups(int group) {
     if (group < groups()) {
-        put(FIELD_GROUP_COUNTS, group, 0);
-        put(FIELD_GROUP_CURSORS, group, 0);
-        write(FIELD_GROUP_INCOMING, group, 0l);
-        write(FIELD_GROUP_WITHDRAW, group, 0l);
+        writeWord(FIELD_GROUP_COUNTS, group, 0);
+        writeWord(FIELD_GROUP_CURSORS, group, 0);
+        writeInteger(FIELD_GROUP_INCOMING, group, 0l);
+        writeInteger(FIELD_GROUP_WITHDRAW, group, 0l);
     }
-    put(FIELD_LONG_BLOCK_COUNTS, group, 0);
+    writeWord(FIELD_LONG_BLOCK_COUNTS, group, 0);
 }
 void stationaryIncoming(int cell) {
-    if (get(FIELD_STATE, 0) != 3)
+    if (readWord(FIELD_STATE, STATE_PHASE) != PHASE_LOCAL_WITHDRAWAL)
         return;
     int64_t incoming = flow(7 * cell);
     for (int side = 0; side < 6; side++) {
@@ -698,61 +699,61 @@ void stationaryIncoming(int cell) {
         if (donor >= 0)
             incoming = add(incoming, flow(7 * donor + 1 + (side ^ 1)));
     }
-    write(FIELD_CELL_INCOMING, cell, incoming);
+    writeInteger(FIELD_CELL_INCOMING, cell, incoming);
     int group = groupOf(cell);
-    atomicAdd(integers[at(FIELD_GROUP_INCOMING) / 2 + group], incoming);
-    atomicAdd(words[at(FIELD_GROUP_COUNTS) + group], 1u);
+    atomicAdd(integers[fieldOffset(FIELD_GROUP_INCOMING) / 2 + group], incoming);
+    atomicAdd(words[fieldOffset(FIELD_GROUP_COUNTS) + group], 1u);
     if (incoming < capacityValue(CAPACITY_LOWER, cell) || incoming > capacityValue(CAPACITY_UPPER, cell))
         enqueueCell(cell, false);
 }
 void stationaryGroupQueue(int group) {
-    if (get(FIELD_STATE, 0) != 3)
+    if (readWord(FIELD_STATE, STATE_PHASE) != PHASE_LOCAL_WITHDRAWAL)
         return;
-    int count = get(FIELD_GROUP_COUNTS, group);
-    put(FIELD_LONG_BLOCK_COUNTS, group, group != groups() - 1 && count > 16 ? (count + 127) / 128 : 0);
-    if (read(FIELD_GROUP_INCOMING, group) > upper(8 * n() + group))
+    int count = readWord(FIELD_GROUP_COUNTS, group);
+    writeWord(FIELD_LONG_BLOCK_COUNTS, group, group != groups() - 1 && count > 16 ? (count + 127) / 128 : 0);
+    if (readInteger(FIELD_GROUP_INCOMING, group) > upper(8 * cellCount() + group))
         enqueueGroup(group, false);
 }
 void stationaryMap(int group) {
-    if (get(FIELD_STATE, 0) != 3)
+    if (readWord(FIELD_STATE, STATE_PHASE) != PHASE_LOCAL_WITHDRAWAL)
         return;
-    for (int block = get(FIELD_LONG_BLOCK_OFFSETS, group); block < get(FIELD_LONG_BLOCK_OFFSETS, group + 1); block++)
-        put(FIELD_LONG_BLOCK_OWNER, block, group);
+    for (int block = readWord(FIELD_LONG_BLOCK_OFFSETS, group); block < readWord(FIELD_LONG_BLOCK_OFFSETS, group + 1); block++)
+        writeWord(FIELD_LONG_BLOCK_OWNER, block, group);
 }
 void prepareStationaryRound() {
-    if (get(FIELD_STATE, 0) != 3) {
-        dispatchSize(9, 0);
-        dispatchSize(11, 0);
-        dispatchSize(12, 0);
-        dispatchSize(5, 0);
+    if (readWord(FIELD_STATE, STATE_PHASE) != PHASE_LOCAL_WITHDRAWAL) {
+        dispatchSize(DISPATCH_REQUEST_STATIONARY, 0);
+        dispatchSize(DISPATCH_APPLY_RETRACTIONS, 0);
+        dispatchSize(DISPATCH_REQUEST_GROUP_BLOCK, 0);
+        dispatchSize(DISPATCH_SINGLE, 0);
         return;
     }
-    put(FIELD_STATE, queueCounter(1 - currentCellQueue()), 0);
-    put(FIELD_STATE, queueCounter(7 - currentGroupQueue()), 0);
-    put(FIELD_STATE, 11, 0);
-    put(FIELD_STATE, 15, 0);
-    bool running = control(0) == 0;
-    dispatchSize(9, running ? get(FIELD_STATE, queueCounter(currentCellQueue())) +
-                                  get(FIELD_STATE, queueCounter(currentGroupQueue()))
+    writeWord(FIELD_STATE, queueCounter(1 - currentCellQueue()), 0);
+    writeWord(FIELD_STATE, queueCounter(7 - currentGroupQueue()), 0);
+    writeWord(FIELD_STATE, STATE_RETRACTION_QUEUE_COUNT, 0);
+    writeWord(FIELD_STATE, STATE_FLOW_CHANGED, 0);
+    bool running = control(CONTROL_STATUS) == STATUS_RUNNING;
+    dispatchSize(DISPATCH_REQUEST_STATIONARY, running ? readWord(FIELD_STATE, queueCounter(currentCellQueue())) +
+                                  readWord(FIELD_STATE, queueCounter(currentGroupQueue()))
                             : 0);
-    dispatchSize(11, 0);
-    dispatchSize(12, running && get(FIELD_STATE, queueCounter(currentGroupQueue())) > 0
-                         ? 128 * get(FIELD_LONG_BLOCK_OFFSETS, groups())
+    dispatchSize(DISPATCH_APPLY_RETRACTIONS, 0);
+    dispatchSize(DISPATCH_REQUEST_GROUP_BLOCK, running && readWord(FIELD_STATE, queueCounter(currentGroupQueue())) > 0
+                         ? 128 * readWord(FIELD_LONG_BLOCK_OFFSETS, groups())
                          : 0);
-    dispatchSize(5, running ? 1 : 0);
+    dispatchSize(DISPATCH_SINGLE, running ? 1 : 0);
 }
 void retract(int edge, int64_t amount) {
     if (amount <= 0l)
         return;
-    atomicMax(integers[at(FIELD_PROPOSAL) / 2 + edge], amount);
+    atomicMax(integers[fieldOffset(FIELD_PROPOSAL) / 2 + edge], amount);
     int donor = edge / 7;
-    enqueue(2, donor, n() + donor, epoch());
+    enqueue(QUEUE_RETRACTIONS, donor, cellCount() + donor, epoch());
 }
 void requestCell(int index) {
-    if (index >= get(FIELD_STATE, queueCounter(currentCellQueue())))
+    if (index >= readWord(FIELD_STATE, queueCounter(currentCellQueue())))
         return;
     int cell = int(words[queueAddress(currentCellQueue(), index)]);
-    int64_t incoming = read(FIELD_CELL_INCOMING, cell),
+    int64_t incoming = readInteger(FIELD_CELL_INCOMING, cell),
             excess = max(0l, incoming - capacityValue(CAPACITY_UPPER, cell)),
             deficit = max(0l, capacityValue(CAPACITY_LOWER, cell) - incoming);
     for (int side = 0; side < 6; side++) {
@@ -770,7 +771,7 @@ void requestCell(int index) {
     }
 }
 void requestGroupCell(int group, int cell) {
-    int64_t over = max(0l, read(FIELD_GROUP_INCOMING, group) - upper(8 * n() + group));
+    int64_t over = max(0l, readInteger(FIELD_GROUP_INCOMING, group) - upper(8 * cellCount() + group));
     if (over == 0l)
         return;
     for (int side = 0; side < 6; side++) {
@@ -781,222 +782,222 @@ void requestGroupCell(int group, int cell) {
         int64_t amount = flow(edge);
         if (amount <= 0l)
             continue;
-        int64_t ticket = atomicAdd(integers[at(FIELD_GROUP_WITHDRAW) / 2 + group], amount);
+        int64_t ticket = atomicAdd(integers[fieldOffset(FIELD_GROUP_WITHDRAW) / 2 + group], amount);
         retract(edge, ticket < over ? min(amount, over - ticket) : 0l);
     }
 }
 void requestGroup(int index) {
-    if (index >= get(FIELD_STATE, queueCounter(currentGroupQueue())))
+    if (index >= readWord(FIELD_STATE, queueCounter(currentGroupQueue())))
         return;
     int group = int(words[queueAddress(currentGroupQueue(), index)]);
-    write(FIELD_GROUP_WITHDRAW, group, 0l);
-    if (get(FIELD_LONG_BLOCK_COUNTS, group) == 0)
-        for (int at = get(FIELD_GROUP_OFFSETS, group); at < get(FIELD_GROUP_OFFSETS, group + 1); at++)
-            requestGroupCell(group, get(FIELD_GROUP_MEMBERS, at));
+    writeInteger(FIELD_GROUP_WITHDRAW, group, 0l);
+    if (readWord(FIELD_LONG_BLOCK_COUNTS, group) == 0)
+        for (int at = readWord(FIELD_GROUP_OFFSETS, group); at < readWord(FIELD_GROUP_OFFSETS, group + 1); at++)
+            requestGroupCell(group, readWord(FIELD_GROUP_MEMBERS, at));
 }
 void requestGroupBlock(int block, int lane) {
-    if (block >= get(FIELD_LONG_BLOCK_OFFSETS, groups()))
+    if (block >= readWord(FIELD_LONG_BLOCK_OFFSETS, groups()))
         return;
-    int group = get(FIELD_LONG_BLOCK_OWNER, block);
-    if (get(FIELD_DISTANCE, 2 * n() + group) != epoch())
+    int group = readWord(FIELD_LONG_BLOCK_OWNER, block);
+    if (readWord(FIELD_DISTANCE, 2 * cellCount() + group) != epoch())
         return;
-    int index = get(FIELD_GROUP_OFFSETS, group) + 128 * (block - get(FIELD_LONG_BLOCK_OFFSETS, group)) + lane;
-    if (index < get(FIELD_GROUP_OFFSETS, group + 1))
-        requestGroupCell(group, get(FIELD_GROUP_MEMBERS, index));
+    int index = readWord(FIELD_GROUP_OFFSETS, group) + 128 * (block - readWord(FIELD_LONG_BLOCK_OFFSETS, group)) + lane;
+    if (index < readWord(FIELD_GROUP_OFFSETS, group + 1))
+        requestGroupCell(group, readWord(FIELD_GROUP_MEMBERS, index));
 }
 void requestStationary(int index) {
-    int cells = get(FIELD_STATE, queueCounter(currentCellQueue()));
+    int cells = readWord(FIELD_STATE, queueCounter(currentCellQueue()));
     if (index < cells)
         requestCell(index);
     else
         requestGroup(index - cells);
 }
 void applyRetractions(int index) {
-    if (index >= get(FIELD_STATE, 11))
+    if (index >= readWord(FIELD_STATE, STATE_RETRACTION_QUEUE_COUNT))
         return;
-    int cell = int(words[queueAddress(2, index)]), sourceGroup = groupOf(cell);
+    int cell = int(words[queueAddress(QUEUE_RETRACTIONS, index)]), sourceGroup = groupOf(cell);
     int64_t returned = 0l;
     for (int side = 1; side < 7; side++) {
         int edge = 7 * cell + side;
-        int64_t amount = read(FIELD_PROPOSAL, edge);
-        write(FIELD_PROPOSAL, edge, 0l);
+        int64_t amount = readInteger(FIELD_PROPOSAL, edge);
+        writeInteger(FIELD_PROPOSAL, edge, 0l);
         if (amount <= 0l)
             continue;
         writeFlow(edge, flow(edge) - amount);
         returned += amount;
         int receiver = neighbor(cell, side - 1), targetGroup = groupOf(receiver);
-        atomicAdd(integers[at(FIELD_CELL_INCOMING) / 2 + receiver], -amount);
+        atomicAdd(integers[fieldOffset(FIELD_CELL_INCOMING) / 2 + receiver], -amount);
         enqueueCell(receiver, true);
         if (targetGroup != sourceGroup) {
-            atomicAdd(integers[at(FIELD_GROUP_INCOMING) / 2 + targetGroup], -amount);
-            atomicAdd(integers[at(FIELD_GROUP_INCOMING) / 2 + sourceGroup], amount);
+            atomicAdd(integers[fieldOffset(FIELD_GROUP_INCOMING) / 2 + targetGroup], -amount);
+            atomicAdd(integers[fieldOffset(FIELD_GROUP_INCOMING) / 2 + sourceGroup], amount);
             enqueueGroup(targetGroup, true);
             enqueueGroup(sourceGroup, true);
         }
     }
     if (returned > 0l) {
         writeFlow(7 * cell, flow(7 * cell) + returned);
-        atomicAdd(integers[at(FIELD_CELL_INCOMING) / 2 + cell], returned);
+        atomicAdd(integers[fieldOffset(FIELD_CELL_INCOMING) / 2 + cell], returned);
         enqueueCell(cell, true);
-        atomicOr(words[at(FIELD_STATE) + 15], 1u);
+        atomicOr(words[fieldOffset(FIELD_STATE) + STATE_FLOW_CHANGED], 1u);
     }
 }
 void finishRound() {
-    if (get(FIELD_STATE, 0) == 6)
+    if (readWord(FIELD_STATE, STATE_PHASE) == PHASE_BUILD_RESIDUAL)
         return;
-    int round = control(1) + 1;
-    putControl(1, round);
-    if (get(FIELD_STATE, 0) == 3) {
-        if (get(FIELD_STATE, 15) == 0)
-            putControl(0, 1);
+    int round = control(CONTROL_ROUNDS) + 1;
+    putControl(CONTROL_ROUNDS, round);
+    if (readWord(FIELD_STATE, STATE_PHASE) == PHASE_LOCAL_WITHDRAWAL) {
+        if (readWord(FIELD_STATE, STATE_FLOW_CHANGED) == 0)
+            putControl(CONTROL_STATUS, STATUS_FEASIBLE);
         else if (round >= LOCAL_WITHDRAWAL_ROUNDS) {
-            put(FIELD_STATE, 0, 6);
-            dispatchSize(9, 0);
-            dispatchSize(11, 0);
-            dispatchSize(12, 0);
+            writeWord(FIELD_STATE, STATE_PHASE, PHASE_BUILD_RESIDUAL);
+            dispatchSize(DISPATCH_REQUEST_STATIONARY, 0);
+            dispatchSize(DISPATCH_APPLY_RETRACTIONS, 0);
+            dispatchSize(DISPATCH_REQUEST_GROUP_BLOCK, 0);
         }
     }
-    if (p.argument == 2 && get(FIELD_STATE, 0) == 2)
-        put(FIELD_STATE, 7, get(FIELD_STATE, 7) + 1);
-    if (p.argument == 2 && get(FIELD_STATE, 0) == 2) {
+    if (p.argument == PHASE_DISCHARGE && readWord(FIELD_STATE, STATE_PHASE) == PHASE_DISCHARGE)
+        writeWord(FIELD_STATE, STATE_DISCHARGE_ROUNDS, readWord(FIELD_STATE, STATE_DISCHARGE_ROUNDS) + 1);
+    if (p.argument == PHASE_DISCHARGE && readWord(FIELD_STATE, STATE_PHASE) == PHASE_DISCHARGE) {
         // No positive balance remains; otherwise recompute distances if no flow advanced.
-        if (get(FIELD_STATE, 18) == 0) {
-            putControl(0, 1);
+        if (readWord(FIELD_STATE, STATE_SURPLUS_FLAGS) == 0) {
+            putControl(CONTROL_STATUS, STATUS_FEASIBLE);
             return;
         }
-        if (get(FIELD_STATE, 15) == 0)
-            put(FIELD_STATE, 0, 0);
+        if (readWord(FIELD_STATE, STATE_FLOW_CHANGED) == 0)
+            writeWord(FIELD_STATE, STATE_PHASE, PHASE_SEED_DISTANCE);
     }
-    if (round >= control(5) && control(0) == 0)
-        putControl(0, 3);
-    if (get(FIELD_STATE, 0) == 3)
+    if (round >= control(CONTROL_MAX_ROUNDS) && control(CONTROL_STATUS) == STATUS_RUNNING)
+        putControl(CONTROL_STATUS, STATUS_ITERATION_LIMIT);
+    if (readWord(FIELD_STATE, STATE_PHASE) == PHASE_LOCAL_WITHDRAWAL)
         prepareStationaryRound();
 }
-void finish(int e) {
-    if (control(0) == 1)
-        writeNumber(ca(CAPACITY_ACCEPTED) + 2 * e, flow(e));
-    else if (control(0) == 2) {
-        if (e < n())
-            put(FIELD_CUT_CELLS, e,
-                distance(n() + e) == INFINITY || distance(2 * n() + groupOf(e)) == INFINITY ? 1 : 0);
-    } else if (e == 0)
-        atomicOr(errors, 8192u);
+void finish(int edge) {
+    if (control(CONTROL_STATUS) == STATUS_FEASIBLE)
+        writeNumber(capacityOffset(CAPACITY_ACCEPTED) + 2 * edge, flow(edge));
+    else if (control(CONTROL_STATUS) == STATUS_INFEASIBLE) {
+        if (edge < cellCount())
+            writeWord(FIELD_CUT_CELLS, edge,
+                distance(cellCount() + edge) == INFINITY || distance(2 * cellCount() + groupOf(edge)) == INFINITY ? 1 : 0);
+    } else if (edge == 0)
+        atomicOr(errors, ERROR_UNFINISHED);
 }
 void main() {
     int block = int(gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x), lane = int(gl_LocalInvocationID.x),
         id = 128 * block + lane;
-    if (p.stage == 0) {
+    if (p.stage == STAGE_INITIALIZE) {
         if (id < p.count)
             initialize(id);
         return;
     }
     // Withdrawal queues reuse FIELD_EXCESS and FIELD_DISTANCE; reset them before constructing residual balances.
-    if (p.stage == 48) {
+    if (p.stage == STAGE_RESET_RESIDUAL) {
         if (id < p.count) {
-            write(FIELD_EXCESS, id, 0l);
-            put(FIELD_DISTANCE, id, INFINITY);
-            put(FIELD_LABEL_CHANGED, id, 0);
+            writeInteger(FIELD_EXCESS, id, 0l);
+            writeWord(FIELD_DISTANCE, id, INFINITY);
+            writeWord(FIELD_LABEL_CHANGED, id, 0);
         }
         return;
     }
-    if (p.stage == 21) {
+    if (p.stage == STAGE_FINISH) {
         if (id < p.count)
             finish(id);
         return;
     }
-    if (control(0) != 0)
+    if (control(CONTROL_STATUS) != STATUS_RUNNING)
         return;
-    if (p.stage == 32) {
+    if (p.stage == STAGE_SELECT_PHASE) {
         if (id == 0) {
-            int state = get(FIELD_STATE, 0);
-            put(FIELD_STATE, 16, (p.argument <= 1 ? state <= 1 : state == p.argument) ? 1 : 0);
+            int state = readWord(FIELD_STATE, STATE_PHASE);
+            writeWord(FIELD_STATE, STATE_PHASE_ENABLED, (p.argument <= PHASE_BFS ? state <= PHASE_BFS : state == p.argument) ? 1 : 0);
             updateDispatch();
         }
         return;
     }
-    if (p.stage >= 11 && p.stage != 24 && get(FIELD_STATE, 16) == 0)
+    if (p.stage >= STAGE_SEED_DISTANCE && p.stage != STAGE_CHECK_STATIONARY_GROUP && readWord(FIELD_STATE, STATE_PHASE_ENABLED) == 0)
         return;
-    if (p.stage == 45) {
+    if (p.stage == STAGE_REQUEST_GROUP_BLOCK) {
         requestGroupBlock(block, lane);
         return;
     }
-    if (p.stage == 37) {
+    if (p.stage == STAGE_PUSH_LONG_BLOCK) {
         pushLongBlock(block, lane);
         return;
     }
-    if (p.stage == 38) {
+    if (p.stage == STAGE_FINISH_LONG) {
         finishLong(block, lane);
         return;
     }
-    if (p.stage == 39) {
+    if (p.stage == STAGE_NOTIFY_LONG_BLOCK) {
         notifyLongBlock(block, lane);
         return;
     }
-    if (p.stage == 7) {
-        if (block < h(H_TOTAL_BLOCKS))
+    if (p.stage == STAGE_TOTAL_BLOCK) {
+        if (block < headerWord(H_TOTAL_BLOCKS))
             totalBlock(block, lane);
         return;
     }
     if (id >= p.count)
         return;
-    if (p.stage == 1)
+    if (p.stage == STAGE_SEED_DONOR)
         seedDonor(id);
-    else if (p.stage == 3)
+    else if (p.stage == STAGE_BALANCE_RECEIVER)
         balanceReceiver(id);
-    else if (p.stage == 4)
+    else if (p.stage == STAGE_SCATTER_MEMBER)
         scatterMember(id);
-    else if (p.stage == 5)
+    else if (p.stage == STAGE_MAP_LONG_BLOCKS)
         mapLongBlocks(id);
-    else if (p.stage == 6)
+    else if (p.stage == STAGE_BALANCE_SINK)
         balanceSink();
-    else if (p.stage == 8)
+    else if (p.stage == STAGE_TOTAL)
         total();
-    else if (p.stage == 9)
+    else if (p.stage == STAGE_SEED_GROUP)
         seedGroup(id);
-    else if (p.stage == 10)
+    else if (p.stage == STAGE_START)
         start();
-    else if (p.stage == 11)
+    else if (p.stage == STAGE_SEED_DISTANCE)
         seedDistance(id);
-    else if (p.stage == 12)
+    else if (p.stage == STAGE_BEGIN_BFS)
         beginBfs();
-    else if (p.stage == 13)
+    else if (p.stage == STAGE_BFS_EDGE)
         bfsEdge(id);
-    else if (p.stage == 14)
+    else if (p.stage == STAGE_FINISH_BFS)
         finishBfs();
-    else if (p.stage == 15)
+    else if (p.stage == STAGE_BEGIN_DISCHARGE)
         beginDischarge(id);
-    else if (p.stage == 24)
+    else if (p.stage == STAGE_CHECK_STATIONARY_GROUP)
         checkStationaryGroup(id);
-    else if (p.stage == 25)
+    else if (p.stage == STAGE_START_CORRECTION)
         startCorrection();
-    else if (p.stage == 27)
+    else if (p.stage == STAGE_REQUEST_STATIONARY)
         requestStationary(id);
-    else if (p.stage == 29)
+    else if (p.stage == STAGE_APPLY_RETRACTIONS)
         applyRetractions(id);
-    else if (p.stage == 30)
+    else if (p.stage == STAGE_PREPARE_GROUPS)
         prepareGroups(id);
-    else if (p.stage == 40)
+    else if (p.stage == STAGE_STATIONARY_GROUPS)
         stationaryGroups(id);
-    else if (p.stage == 41)
+    else if (p.stage == STAGE_STATIONARY_INCOMING)
         stationaryIncoming(id);
-    else if (p.stage == 42)
+    else if (p.stage == STAGE_STATIONARY_GROUP_QUEUE)
         stationaryGroupQueue(id);
-    else if (p.stage == 47) {
-        if (get(FIELD_STATE, 0) == 3)
+    else if (p.stage == STAGE_SCATTER_STATIONARY_MEMBER) {
+        if (readWord(FIELD_STATE, STATE_PHASE) == PHASE_LOCAL_WITHDRAWAL)
             scatterMember(id);
-    } else if (p.stage == 43) {
-        if (get(FIELD_STATE, 0) == 3)
-            write(FIELD_PROPOSAL, id, 0l);
-    } else if (p.stage == 44)
+    } else if (p.stage == STAGE_CLEAR_PROPOSALS) {
+        if (readWord(FIELD_STATE, STATE_PHASE) == PHASE_LOCAL_WITHDRAWAL)
+            writeInteger(FIELD_PROPOSAL, id, 0l);
+    } else if (p.stage == STAGE_STATIONARY_MAP)
         stationaryMap(id);
-    else if (p.stage == 46)
+    else if (p.stage == STAGE_PREPARE_STATIONARY_ROUND)
         prepareStationaryRound();
-    else if (p.stage == 35)
+    else if (p.stage == STAGE_DISCHARGE_SHORT)
         dischargeShort(id);
-    else if (p.stage == 36)
+    else if (p.stage == STAGE_PREPARE_LONG)
         prepareLong(id);
-    else if (p.stage == 20)
+    else if (p.stage == STAGE_FINISH_ROUND)
         finishRound();
-    if (p.stage == 25 || p.stage == 10 || p.stage == 12 || p.stage == 14 || p.stage == 20)
+    if (p.stage == STAGE_START_CORRECTION || p.stage == STAGE_START || p.stage == STAGE_BEGIN_BFS || p.stage == STAGE_FINISH_BFS || p.stage == STAGE_FINISH_ROUND)
         updateDispatch();
 }

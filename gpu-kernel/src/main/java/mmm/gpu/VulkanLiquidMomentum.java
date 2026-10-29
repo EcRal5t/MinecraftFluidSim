@@ -11,6 +11,28 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Transports MAC momentum with accepted integer material fluxes and records local dissipation. */
 final class VulkanLiquidMomentum implements AutoCloseable {
+    private static final int STAGE_CELL_TOTALS = 0;
+    private static final int STAGE_FACE_FLUX = 1;
+    private static final int STAGE_TRANSPORT = 2;
+    private static final int STAGE_CHOOSE_ROOT = 3;
+    private static final int STAGE_JUMP_ROOT = 4;
+    private static final int STAGE_ACCUMULATE_LINE = 5;
+    private static final int STAGE_FINALIZE_FACE = 6;
+    private static final int STAGE_GATHER_HEAT = 7;
+    private static final int STAGE_CLEAR_HEAT_POSTING = 8;
+    private static final int STAGE_POST_CELL_HEAT = 9;
+    private static String stageDefines() {
+        return "#define STAGE_CELL_TOTALS " + STAGE_CELL_TOTALS + "\n" +
+                "#define STAGE_FACE_FLUX " + STAGE_FACE_FLUX + "\n" +
+                "#define STAGE_TRANSPORT " + STAGE_TRANSPORT + "\n" +
+                "#define STAGE_CHOOSE_ROOT " + STAGE_CHOOSE_ROOT + "\n" +
+                "#define STAGE_JUMP_ROOT " + STAGE_JUMP_ROOT + "\n" +
+                "#define STAGE_ACCUMULATE_LINE " + STAGE_ACCUMULATE_LINE + "\n" +
+                "#define STAGE_FINALIZE_FACE " + STAGE_FINALIZE_FACE + "\n" +
+                "#define STAGE_GATHER_HEAT " + STAGE_GATHER_HEAT + "\n" +
+                "#define STAGE_CLEAR_HEAT_POSTING " + STAGE_CLEAR_HEAT_POSTING + "\n" +
+                "#define STAGE_POST_CELL_HEAT " + STAGE_POST_CELL_HEAT + "\n";
+    }
     /** Word positions shared by the host encoder and shader. */
     private enum Header {
         SIZE_X(0),
@@ -46,7 +68,7 @@ final class VulkanLiquidMomentum implements AutoCloseable {
     }
     private static final int SOURCE_FIELDS = 20, TARGET_FIELDS = 39;
     private static String headerDefines() {
-        var result = new StringBuilder();
+        var result = new StringBuilder(stageDefines());
         for (var field : Header.values())
             result.append("#define H_").append(field.name()).append(' ').append(field.word).append('\n');
         result.append("#define SOURCE_FIELDS ").append(SOURCE_FIELDS).append('\n');
@@ -138,25 +160,25 @@ final class VulkanLiquidMomentum implements AutoCloseable {
     }
     /** Run after inventory gather, before rebuilding target face geometry overwrites projected velocities. */
     void recordTransport(VkCommandBuffer command,Layout layout) {
-        stage(command,layout,0,layout.output().cellCount(),0);
-        stage(command,layout,1,layout.faces(),0);
-        stage(command,layout,2,layout.faces(),0);
+        stage(command,layout,STAGE_CELL_TOTALS,layout.output().cellCount(),0);
+        stage(command,layout,STAGE_FACE_FLUX,layout.faces(),0);
+        stage(command,layout,STAGE_TRANSPORT,layout.faces(),0);
     }
     /** Run after target face geometry is ready; heat and wall impulse remain resident for the shared ledgers. */
     void recordResolve(VkCommandBuffer command,Layout layout) {
-        stage(command,layout,3,layout.faces(),0);
+        stage(command,layout,STAGE_CHOOSE_ROOT,layout.faces(),0);
         int longest=Math.max(layout.output().sizeX(),Math.max(layout.output().sizeY(),layout.output().sizeZ()))+1;
         int parity=0;
-        for(int span=1;span<longest;span*=2) { stage(command,layout,4,layout.faces(),parity);parity^=1; }
+        for(int span=1;span<longest;span*=2) { stage(command,layout,STAGE_JUMP_ROOT,layout.faces(),parity);parity^=1; }
         int x=layout.output().sizeX(),y=layout.output().sizeY(),z=layout.output().sizeZ();
-        stage(command,layout,5,Math.addExact(Math.addExact(x*y,x*z),y*z),parity);
-        stage(command,layout,6,layout.faces(),parity);
-        stage(command,layout,7,layout.output().cellCount(),0);
+        stage(command,layout,STAGE_ACCUMULATE_LINE,Math.addExact(Math.addExact(x*y,x*z),y*z),parity);
+        stage(command,layout,STAGE_FINALIZE_FACE,layout.faces(),parity);
+        stage(command,layout,STAGE_GATHER_HEAT,layout.output().cellCount(),0);
     }
     /** Adds resolved mechanical cell heat to stock energy and retains every allocation/addition roundoff term. */
     void recordHeatPosting(VkCommandBuffer command,Layout layout) {
-        stage(command,layout,8,layout.output().stockCapacity(),0);
-        stage(command,layout,9,layout.output().cellCount(),0);
+        stage(command,layout,STAGE_CLEAR_HEAT_POSTING,layout.output().stockCapacity(),0);
+        stage(command,layout,STAGE_POST_CELL_HEAT,layout.output().cellCount(),0);
     }
     private void stage(VkCommandBuffer command,Layout layout,int stage,int count,int parity) {
         if(count==0)return;

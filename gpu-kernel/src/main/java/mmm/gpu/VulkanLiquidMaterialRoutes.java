@@ -12,6 +12,16 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Capacity-lattice material shares; exact source tails cross only when a layer or source exhausts. */
 final class VulkanLiquidMaterialRoutes implements AutoCloseable {
+    private static final int STAGE_CLEAR_ROUTES = 0;
+    private static final int STAGE_PREPARE_CANDIDATES = 1;
+    private static final int STAGE_RESERVE = 5;
+    private static final int STAGE_SPLIT_CELL = 2;
+    private static String stageDefines() {
+        return "#define STAGE_CLEAR_ROUTES " + STAGE_CLEAR_ROUTES + "\n" +
+                "#define STAGE_PREPARE_CANDIDATES " + STAGE_PREPARE_CANDIDATES + "\n" +
+                "#define STAGE_RESERVE " + STAGE_RESERVE + "\n" +
+                "#define STAGE_SPLIT_CELL " + STAGE_SPLIT_CELL + "\n";
+    }
     /** Header words and shared stock/route columns used by the shader. */
     private enum Header {
         CELL_COUNT(0),
@@ -36,7 +46,7 @@ final class VulkanLiquidMaterialRoutes implements AutoCloseable {
     }
     private static final int SOURCE_FIELDS = 16, ROUTE_FIELDS = 35;
     private static String shaderLayout() {
-        var result = new StringBuilder();
+        var result = new StringBuilder(stageDefines());
         for (var field : Header.values())
             result.append("#define H_").append(field.name()).append(' ').append(field.word).append('\n');
         result.append("#define SOURCE_FIELDS ").append(SOURCE_FIELDS).append('\n');
@@ -130,13 +140,13 @@ final class VulkanLiquidMaterialRoutes implements AutoCloseable {
     void record(VkCommandBuffer command, Layout layout, int gravitySign,VulkanStageTimings timings) {
         if (gravitySign < -1 || gravitySign > 1) throw new IllegalArgumentException("Invalid gravity direction");
         timed(command,timings,"material-candidates",()->{
-            stage(command,layout,0,layout.source().stockCapacity(),gravitySign);
-            stage(command,layout,1,layout.source().cellCount(),gravitySign);
+            stage(command,layout,STAGE_CLEAR_ROUTES,layout.source().stockCapacity(),gravitySign);
+            stage(command,layout,STAGE_PREPARE_CANDIDATES,layout.source().cellCount(),gravitySign);
             scan.record(command,layout.source().stockCapacity(),word(layout.activeCounts()),word(layout.routes().column(VulkanLiquidRouteLayout.Field.SOURCE_OFFSETS)),word(layout.scanWorkspace()));
         });
-        timed(command,timings,"material-reserve",()->stage(command,layout,5,layout.source().cellCount(),gravitySign));
+        timed(command,timings,"material-reserve",()->stage(command,layout,STAGE_RESERVE,layout.source().cellCount(),gravitySign));
         timed(command,timings,"material-scratch-scan",()->scan.record(command,layout.windowCount(),word(layout.reserveCounts()),word(layout.reserveOffsets()),word(layout.scanWorkspace()),word(layout.routes().column(VulkanLiquidRouteLayout.Field.COUNTS))+1));
-        timed(command,timings,"material-split",()->stage(command,layout,2,layout.source().cellCount(),gravitySign));
+        timed(command,timings,"material-split",()->stage(command,layout,STAGE_SPLIT_CELL,layout.source().cellCount(),gravitySign));
     }
     private static void timed(VkCommandBuffer command,VulkanStageTimings timings,String label,Runnable action){if(timings==null)action.run();else timings.record(command,label,action);}
     private void stage(VkCommandBuffer command, Layout layout, int stage, int count, int gravitySign) {

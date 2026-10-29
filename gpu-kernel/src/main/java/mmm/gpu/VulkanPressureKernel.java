@@ -12,11 +12,33 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Records the whole pressure solve into its caller's submission using resident buffer ranges. */
 final class VulkanPressureKernel implements AutoCloseable {
+    private enum Stage {
+        INITIALIZE_ROWS,
+        INITIALIZE_CONTROL,
+        REFRESH_RESIDUAL,
+        FINISH_REFRESH,
+        PRECONDITION,
+        FINISH_PRECONDITION,
+        UPDATE_DIRECTION,
+        DIRECTION_PRODUCT,
+        FINISH_PRODUCT,
+        UPDATE_SOLUTION,
+        FINISH_UPDATE,
+        FINALIZE_CONTROL,
+        CHECK_SUCCESS,
+        ORIGINAL_MAXIMUM,
+        FINISH_ORIGINAL_MAXIMUM
+    }
+
+    private enum Control { ITERATION, RESIDUAL_RMS, SUCCESS, RUN, RESIDUAL_DOT_PRECONDITIONED, STEP_LENGTH, RESTART, REFRESH, CONSTRAINT_TRIALS, DIRECTION_SCALE, TOLERANCE, MAX_PRESSURE, PHASE, ACTIVE_SET_UPDATES, SOLVE_ROW_COUNT, RESIDUAL_REFRESHES }
     /** Counts are sampled before the final certification refresh; initialization is included. */
     record Progress(int iterations,double residualRms,int constraintTrials,int activeSetUpdates,int residualRefreshes) {
         static Progress read(java.nio.ByteBuffer control) {
-            return new Progress((int)control.getDouble(0),control.getDouble(8),(int)control.getDouble(64),
-                    (int)control.getDouble(104),(int)control.getDouble(120));
+            return new Progress((int)control.getDouble(Double.BYTES * Control.ITERATION.ordinal()),
+                    control.getDouble(Double.BYTES * Control.RESIDUAL_RMS.ordinal()),
+                    (int)control.getDouble(Double.BYTES * Control.CONSTRAINT_TRIALS.ordinal()),
+                    (int)control.getDouble(Double.BYTES * Control.ACTIVE_SET_UPDATES.ordinal()),
+                    (int)control.getDouble(Double.BYTES * Control.RESIDUAL_REFRESHES.ordinal()));
         }
     }
     /** One matrix product for the common PCG; the multigrid liquid block is shared by every model. */
@@ -115,7 +137,7 @@ final class VulkanPressureKernel implements AutoCloseable {
         if(multigrid!=null&&(gas==null||!gas.hasPreconditioner()))multigrid.beginTimings(command);
         bind(command);
         int groups = groups(size, multigrid);
-        for (int stage = 0; stage <= 3; stage++)
+        for (int stage = Stage.INITIALIZE_ROWS.ordinal(); stage <= Stage.FINISH_REFRESH.ordinal(); stage++)
             stage(command, size, count, maximumIterations, stage, groups, multigrid != null, gas);
         if(multigrid!=null&&(gas==null||!gas.hasPreconditioner())){multigrid.recordBuild(command,hierarchy);bind(command);}
         precondition(command, size, count, maximumIterations, groups, multigrid, hierarchy, gas);
@@ -134,9 +156,9 @@ final class VulkanPressureKernel implements AutoCloseable {
         bind(command);
         int groups = groups(size, multigrid);
         for (int iteration = 0; iteration < iterations; iteration++) {
-            for (int stage = 7; stage <= 10; stage++)
+            for (int stage = Stage.DIRECTION_PRODUCT.ordinal(); stage <= Stage.FINISH_UPDATE.ordinal(); stage++)
                 stage(command, size, count, maximumIterations, stage, groups, multigrid != null, gas);
-            for (int stage = 2; stage <= 3; stage++)
+            for (int stage = Stage.REFRESH_RESIDUAL.ordinal(); stage <= Stage.FINISH_REFRESH.ordinal(); stage++)
                 stage(command, size, count, maximumIterations, stage, groups, multigrid != null, gas);
             precondition(command, size, count, maximumIterations, groups, multigrid, hierarchy, gas);
         }
@@ -155,13 +177,13 @@ final class VulkanPressureKernel implements AutoCloseable {
         bind(command);
         int groups = groups(size, multigrid);
         if(recovered){
-            stage(command,size,count,maximumIterations,13,groups,multigrid!=null,gas);
-            stage(command,size,count,maximumIterations,14,groups,multigrid!=null,gas);
+            stage(command,size,count,maximumIterations,Stage.ORIGINAL_MAXIMUM.ordinal(),groups,multigrid!=null,gas);
+            stage(command,size,count,maximumIterations,Stage.FINISH_ORIGINAL_MAXIMUM.ordinal(),groups,multigrid!=null,gas);
         }
-        stage(command, size, count, maximumIterations, 11, groups, multigrid != null, gas);
-        stage(command, size, count, maximumIterations, 2, groups, multigrid != null, gas);
-        stage(command, size, count, maximumIterations, 3, groups, multigrid != null, gas);
-        stage(command, size, count, maximumIterations, 12, groups, multigrid != null, gas);
+        stage(command, size, count, maximumIterations, Stage.FINALIZE_CONTROL.ordinal(), groups, multigrid != null, gas);
+        stage(command, size, count, maximumIterations, Stage.REFRESH_RESIDUAL.ordinal(), groups, multigrid != null, gas);
+        stage(command, size, count, maximumIterations, Stage.FINISH_REFRESH.ordinal(), groups, multigrid != null, gas);
+        stage(command, size, count, maximumIterations, Stage.CHECK_SUCCESS.ordinal(), groups, multigrid != null, gas);
     }
 
     private int groups(int size, VulkanPressureMultigrid multigrid) {
@@ -180,20 +202,20 @@ final class VulkanPressureKernel implements AutoCloseable {
             multigrid.recordApply(command, hierarchy);
             bind(command);
         }
-        for (int stage = 4; stage <= 6; stage++)
+        for (int stage = Stage.PRECONDITION.ordinal(); stage <= Stage.UPDATE_DIRECTION.ordinal(); stage++)
             stage(command, size, count, maximumIterations, stage, groups, multigrid != null, gas);
     }
 
     private void stage(VkCommandBuffer command, int size, int count, int maximumIterations, int stage, int groups, boolean external, PressureOperator gas) {
-        if (gas != null && (stage == 2 || stage == 7)) {
-            gas.recordProduct(command, stage == 7);
+        if (gas != null && (stage == Stage.REFRESH_RESIDUAL.ordinal() || stage == Stage.DIRECTION_PRODUCT.ordinal())) {
+            gas.recordProduct(command, stage == Stage.DIRECTION_PRODUCT.ordinal());
             bind(command);
         }
         try (var stack = stackPush()) {
             vkCmdPushConstants(command, bindings.pipelineLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 0,
                     stack.ints(count, size, maximumIterations, stage, groups,(gas!=null&&gas.hasPreconditioner()?2:external?1:0)|(parallelRows!=null?4:0)|(gas!=null&&gas.productDispatch()!=null?8:0), gas == null ? size : gas.liquidCount(), gas == null ? size : gas.matrixFreeFromRow()));
-            boolean parallel = stage == 0 || stage == 2 || stage == 4 || stage == 6 || stage == 7 || stage == 9 || stage==13;
-            if(parallel&&stage!=0&&stage!=13){
+            boolean parallel = stage == Stage.INITIALIZE_ROWS.ordinal() || stage == Stage.REFRESH_RESIDUAL.ordinal() || stage == Stage.PRECONDITION.ordinal() || stage == Stage.UPDATE_DIRECTION.ordinal() || stage == Stage.DIRECTION_PRODUCT.ordinal() || stage == Stage.UPDATE_SOLUTION.ordinal() || stage==Stage.ORIGINAL_MAXIMUM.ordinal();
+            if(parallel&&stage!=Stage.INITIALIZE_ROWS.ordinal()&&stage!=Stage.ORIGINAL_MAXIMUM.ordinal()){
                 barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
                 vkCmdDispatchIndirect(command,stageDispatch.handle(),16L*stage);
             }else vkCmdDispatch(command, parallel ? groups : 1, 1, 1);
@@ -206,7 +228,12 @@ final class VulkanPressureKernel implements AutoCloseable {
     private static String shader() {
         try (var stream = VulkanPressureKernel.class.getResourceAsStream("/assets/mmm_gpu_probe/shaders/pressure.comp")) {
             if (stream == null) throw new IllegalStateException("Pressure shader missing");
-            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+            var definitions = new StringBuilder();
+            for (var stage : Stage.values())
+                definitions.append("#define STAGE_").append(stage.name()).append(' ').append(stage.ordinal()).append('\n');
+            for (var control : Control.values())
+                definitions.append("#define CONTROL_").append(control.name()).append(' ').append(control.ordinal()).append('\n');
+            return new String(stream.readAllBytes(), StandardCharsets.UTF_8).replace("// HOST_LAYOUT", definitions.toString());
         } catch (IOException failure) { throw new IllegalStateException("Pressure shader unavailable", failure); }
     }
 

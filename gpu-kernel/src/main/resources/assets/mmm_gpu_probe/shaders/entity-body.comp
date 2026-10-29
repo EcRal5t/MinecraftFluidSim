@@ -2,179 +2,709 @@
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 // HOST_LAYOUT
-layout(local_size_x=128) in;
-layout(binding=0,std430) buffer Arena { uint words[]; };
-layout(binding=1,std430) buffer Errors { uint errors; };
-layout(push_constant) uniform Params { int header;int stage;int count;int unused;double cellSize;double duration;double unusedDouble; } p;
-#define CONTROL F_CONTROL
-#define BOUNDS F_BOUNDS
-#define VELOCITIES F_VELOCITIES
-#define BODY_OFFSETS F_BODY_OFFSETS
-#define ENTRY_CELL F_ENTRY_CELL
-#define ENTRY_BODY F_ENTRY_BODY
-#define ENTRY_VOLUME F_ENTRY_VOLUME
-#define WET_AREA F_ENTRY_WET_AREA
-#define CC F_CELL_COUNTS
-#define CO F_CELL_OFFSETS
-#define CU F_CELL_CURSORS
-#define CE F_CELL_ENTRIES
-#define OCCUPIED F_OCCUPIED_SVQ
-#define COMBINED F_COMBINED_SVQ
-#define FC F_FACE_COUNTS
-#define FO F_FACE_OFFSETS
-#define FU F_FACE_CURSORS
-#define CB F_CONTACT_BODY
-#define CENTRY F_CONTACT_ENTRY
-#define CFACE F_CONTACT_FACE
-#define SHARE F_CONTACT_SHARE
-#define DISTANCE F_CONTACT_DISTANCE
-#define FACE_AREA F_FACE_AREA
-#define TOTALS F_BODY_TOTALS
-#define PR F_PRESSURE_ROW
-#define PC F_PRESSURE_COEFFICIENT
-#define RC F_ROW_COUNTS
-#define RO F_ROW_OFFSETS
-#define RU F_ROW_CURSORS
-#define RE F_ROW_ENTRIES
-#define RESULT F_BODY_RESULTS
-#define WORK F_SOURCE_WORK
-#define ENTRY_CONTACTS F_ENTRY_CONTACTS
-#define RATE F_ROW_BODY_RATE
-#define GAS_WORK F_GAS_EXTERNAL_WORK
-int h(int i){return int(words[p.header+i]);}int at(int f){return h(H_FIELDS+f);}int get(int f,int i){return int(words[at(f)+i]);}void put(int f,int i,int x){words[at(f)+i]=uint(x);}
-double num(int a){return packDouble2x32(uvec2(words[a],words[a+1]));}void outnum(int a,double x){uvec2 v=unpackDouble2x32(x);words[a]=v.x;words[a+1]=v.y;}
-double read(int f,int i){return num(at(f)+2*i);}void write(int f,int i,double x){outnum(at(f)+2*i,x);}
-int64_t integer(int a){return int64_t(uint64_t(words[a])|(uint64_t(words[a+1])<<32));}void outint(int a,int64_t x){words[a]=uint(x);words[a+1]=uint(uint64_t(x)>>32);}
-ivec3 dims(){return ivec3(h(H_SIZE_X),h(H_SIZE_Y),h(H_SIZE_Z));}bool inside(ivec3 c){return all(greaterThanEqual(c,ivec3(0)))&&all(lessThan(c,dims()));}
-int cell(ivec3 c){return inside(c)?(c.z*h(H_SIZE_Y)+c.y)*h(H_SIZE_X)+c.x:-1;}ivec3 coord(int c){return ivec3(c%h(H_SIZE_X),c/h(H_SIZE_X)%h(H_SIZE_Y),c/(h(H_SIZE_X)*h(H_SIZE_Y)));}
-int bodies(){return get(CONTROL,0);}int entries(){return get(CONTROL,1);}int contacts(){return get(CONTROL,2);}
-bool finite(double x){return !isnan(x)&&!isinf(x);}void invalid(){atomicOr(errors,16777216u);}
-dvec3 low(int b){return dvec3(read(BOUNDS,6*b),read(BOUNDS,6*b+1),read(BOUNDS,6*b+2))/p.cellSize;}
-dvec3 high(int b){return dvec3(read(BOUNDS,6*b+3),read(BOUNDS,6*b+4),read(BOUNDS,6*b+5))/p.cellSize;}
-int nx(){return (h(H_SIZE_X)+1)*h(H_SIZE_Y)*h(H_SIZE_Z);}int ny(){return h(H_SIZE_X)*(h(H_SIZE_Y)+1)*h(H_SIZE_Z);}int faceAxis(int f){return f<nx()?0:f<nx()+ny()?1:2;}
-int faceAt(int axis,ivec3 c){ivec3 d=dims();d[axis]++;return (axis==0?0:axis==1?nx():nx()+ny())+(c.z*d.y+c.y)*d.x+c.x;}
-ivec2 faceCells(int f){int axis=faceAxis(f),local=f-(axis==0?0:axis==1?nx():nx()+ny());ivec3 d=dims();d[axis]++;
- ivec3 q=ivec3(local%d.x,local/d.x%d.y,local/(d.x*d.y)),a=q;a[axis]--;return ivec2(cell(a),cell(q));}
-double liquid(int c,int k){return c<0?0.0:num(h(H_GEOMETRY_CELLS)+2*(4*c+k));}double face(int f,int k){return num(h(H_GEOMETRY_FACES)+2*(4*f+k));}
-bool openMicro(ivec3 q){ivec3 c=q/2;if(any(lessThan(q,ivec3(0)))||!inside(c))return false;int bit=(q.x&1)+2*(q.y&1)+4*(q.z&1);return (words[h(H_MASKS)+cell(c)]&(1u<<bit))==0u;}
-double openFace(int f){ivec2 adjacent=faceCells(f);if(adjacent.x<0||adjacent.y<0)return 0.0;int axis=faceAxis(f),sum=0;ivec3 c=coord(adjacent.y)*2;
- int a=axis==0?1:0,b=axis==2?1:2;for(int i=0;i<4;i++){ivec3 q=c;q[a]+=i&1;q[b]+=(i>>1)&1;ivec3 left=q;left[axis]--;if(openMicro(q)&&openMicro(left))sum++;}return .25*double(sum);}
-void clipped(int body,dvec3 microLow,out dvec3 a,out dvec3 b){a=max(microLow,low(body));b=min(microLow+.5,high(body));}
-void enumerate(int entry){
- put(ENTRY_CELL,entry,-1);write(ENTRY_VOLUME,entry,0.0);for(int a=0;a<3;a++)write(WET_AREA,3*entry+a,0.0);for(int k=0;k<6;k++)put(ENTRY_CONTACTS,6*entry+k,-1);if(entry>=entries())return;
- int lower=0,upper=bodies();while(lower<upper){int middle=(lower+upper)/2;if(get(BODY_OFFSETS,middle+1)<=entry)lower=middle+1;else upper=middle;}
- int body=lower;if(body>=bodies()){invalid();return;}ivec3 first=max(ivec3(0),ivec3(floor(low(body)))),last=min(dims(),ivec3(ceil(high(body)))),extent=last-first;
- int ordinal=entry-get(BODY_OFFSETS,body);ivec3 q=first+ivec3(ordinal%extent.x,ordinal/extent.x%extent.y,ordinal/(extent.x*extent.y));int c=cell(q);double volume=0.0;dvec3 wet=dvec3(0.0);
- for(int bit=0;bit<8;bit++)if((words[h(H_MASKS)+c]&(1u<<bit))==0u){dvec3 micro=dvec3(q)+.5*dvec3(bit&1,(bit>>1)&1,(bit>>2)&1),a,b;clipped(body,micro,a,b);dvec3 d=max(dvec3(0.0),b-a);volume+=d.x*d.y*d.z;
-  for(int axis=0;axis<3;axis++){int s=axis==0?1:0,t=axis==2?1:2;
-   if(d[s]<=0.0||d[t]<=0.0)continue;
-   if(low(body)[axis]>=micro[axis]&&low(body)[axis]<micro[axis]+.5)wet[axis]+=d[s]*d[t];
-   if(high(body)[axis]>micro[axis]&&high(body)[axis]<=micro[axis]+.5)wet[axis]+=d[s]*d[t];
-  }
- }
- if(volume<=0.0)return;put(ENTRY_CELL,entry,c);put(ENTRY_BODY,entry,body);write(ENTRY_VOLUME,entry,volume);
- for(int axis=0;axis<3;axis++)write(WET_AREA,3*entry+axis,wet[axis]*p.cellSize*p.cellSize);
- atomicAdd(words[at(CC)+c],1u);
+
+// Packed record attributes and fixed grid geometry; numeric values preserve the device layout.
+const int GEOMETRY_STRIDE = 4;
+const int CELL_LIQUID_VOLUME = 0, CELL_LIQUID_MASS = 1, CELL_PORE_VOLUME = 2;
+const int FACE_OPEN_AREA = 2, FACE_LIQUID_AREA = 3;
+const int GAS_STATE_STRIDE = 9, GAS_ABSOLUTE_PRESSURE = 1, GAS_COMPRESSIBILITY = 8;
+const int BODY_BOUNDS_STRIDE = 6, BOUNDS_MAXIMUM_OFFSET = 3;
+const int BODY_VECTOR_STRIDE = 3, CELL_SIDE_COUNT = 6;
+const int MICROCELL_COUNT = 8;
+const double MICROCELL_SIZE = .5, MICROFACE_AREA = .25;
+const double SOLID_QUANTA_PER_CELL = 16777216.0;
+const double OCCUPATION_ROUNDOFF_TOLERANCE = 1e-9;
+const double UNRESOLVED_GAS_VOLUME = 4e-5;
+const uint ERROR_INVALID_BODY = 16777216u;
+
+layout(local_size_x = 128) in;
+layout(binding = 0, std430) buffer Arena {
+    uint arenaWords[];
+};
+layout(binding = 1, std430) buffer Errors {
+    uint errorFlags;
+};
+layout(push_constant) uniform Params {
+    int header;
+    int stage;
+    int count;
+    int unused;
+    double cellSize;
+    double duration;
+    double unusedDouble;
+}
+params;
+int headerWord(int headerField) {
+    return int(arenaWords[params.header + headerField]);
+}
+int fieldWordOffset(int field) {
+    return headerWord(H_FIELDS + field);
+}
+int readIntField(int field, int index) {
+    return int(arenaWords[fieldWordOffset(field) + index]);
+}
+void writeIntField(int field, int index, int value) {
+    arenaWords[fieldWordOffset(field) + index] = uint(value);
+}
+double readDoubleAt(int wordOffset) {
+    return packDouble2x32(uvec2(arenaWords[wordOffset], arenaWords[wordOffset + 1]));
+}
+void writeDoubleAt(int wordOffset, double value) {
+    uvec2 bits = unpackDouble2x32(value);
+    arenaWords[wordOffset] = bits.x;
+    arenaWords[wordOffset + 1] = bits.y;
+}
+double readDoubleField(int field, int index) {
+    return readDoubleAt(fieldWordOffset(field) + 2 * index);
+}
+void writeDoubleField(int field, int index, double value) {
+    writeDoubleAt(fieldWordOffset(field) + 2 * index, value);
+}
+int64_t readInt64At(int wordOffset) {
+    return int64_t(uint64_t(arenaWords[wordOffset]) | (uint64_t(arenaWords[wordOffset + 1]) << 32));
+}
+void writeInt64At(int wordOffset, int64_t value) {
+    arenaWords[wordOffset] = uint(value);
+    arenaWords[wordOffset + 1] = uint(uint64_t(value) >> 32);
+}
+ivec3 gridSize() {
+    return ivec3(headerWord(H_SIZE_X), headerWord(H_SIZE_Y), headerWord(H_SIZE_Z));
+}
+bool isInsideGrid(ivec3 coordinates) {
+    return all(greaterThanEqual(coordinates, ivec3(0))) && all(lessThan(coordinates, gridSize()));
+}
+int cellIndexAt(ivec3 coordinates) {
+    return isInsideGrid(coordinates)
+               ? (coordinates.z * headerWord(H_SIZE_Y) + coordinates.y) * headerWord(H_SIZE_X) + coordinates.x
+               : -1;
+}
+ivec3 cellCoordinates(int cellIndex) {
+    return ivec3(cellIndex % headerWord(H_SIZE_X), cellIndex / headerWord(H_SIZE_X) % headerWord(H_SIZE_Y),
+                 cellIndex / (headerWord(H_SIZE_X) * headerWord(H_SIZE_Y)));
+}
+int bodyCount() {
+    return readIntField(F_CONTROL, CONTROL_BODY_COUNT);
+}
+int entryCount() {
+    return readIntField(F_CONTROL, CONTROL_ENTRY_COUNT);
+}
+int contactCount() {
+    return readIntField(F_CONTROL, CONTROL_CONTACT_COUNT);
+}
+bool isFinite(double value) {
+    return !isnan(value) && !isinf(value);
+}
+void reportInvalidBody() {
+    atomicOr(errorFlags, ERROR_INVALID_BODY);
+}
+dvec3 bodyMinimum(int bodyIndex) {
+    return dvec3(readDoubleField(F_BOUNDS, BODY_BOUNDS_STRIDE * bodyIndex),
+                 readDoubleField(F_BOUNDS, BODY_BOUNDS_STRIDE * bodyIndex + 1),
+                 readDoubleField(F_BOUNDS, BODY_BOUNDS_STRIDE * bodyIndex + 2)) /
+           params.cellSize;
+}
+dvec3 bodyMaximum(int bodyIndex) {
+    return dvec3(readDoubleField(F_BOUNDS, BODY_BOUNDS_STRIDE * bodyIndex + BOUNDS_MAXIMUM_OFFSET),
+                 readDoubleField(F_BOUNDS, BODY_BOUNDS_STRIDE * bodyIndex + BOUNDS_MAXIMUM_OFFSET + 1),
+                 readDoubleField(F_BOUNDS, BODY_BOUNDS_STRIDE * bodyIndex + BOUNDS_MAXIMUM_OFFSET + 2)) /
+           params.cellSize;
+}
+int xFaceCount() {
+    return (headerWord(H_SIZE_X) + 1) * headerWord(H_SIZE_Y) * headerWord(H_SIZE_Z);
+}
+int yFaceCount() {
+    return headerWord(H_SIZE_X) * (headerWord(H_SIZE_Y) + 1) * headerWord(H_SIZE_Z);
+}
+int faceAxis(int faceIndex) {
+    return faceIndex < xFaceCount() ? 0 : faceIndex < xFaceCount() + yFaceCount() ? 1 : 2;
+}
+int faceIndexAt(int axis, ivec3 coordinates) {
+    ivec3 faceGridSize = gridSize();
+    faceGridSize[axis]++;
+    return (axis == 0   ? 0
+            : axis == 1 ? xFaceCount()
+                        : xFaceCount() + yFaceCount()) +
+           (coordinates.z * faceGridSize.y + coordinates.y) * faceGridSize.x + coordinates.x;
+}
+ivec2 adjacentCells(int faceIndex) {
+    int axis = faceAxis(faceIndex), axisFaceIndex = faceIndex - (axis == 0   ? 0
+                                                                 : axis == 1 ? xFaceCount()
+                                                                             : xFaceCount() + yFaceCount());
+    ivec3 faceGridSize = gridSize();
+    faceGridSize[axis]++;
+    ivec3 upperCell = ivec3(axisFaceIndex % faceGridSize.x, axisFaceIndex / faceGridSize.x % faceGridSize.y,
+                            axisFaceIndex / (faceGridSize.x * faceGridSize.y)),
+          lowerCell = upperCell;
+    lowerCell[axis]--;
+    return ivec2(cellIndexAt(lowerCell), cellIndexAt(upperCell));
+}
+double cellGeometry(int cellIndex, int component) {
+    return cellIndex < 0 ? 0.0
+                         : readDoubleAt(headerWord(H_GEOMETRY_CELLS) + 2 * (GEOMETRY_STRIDE * cellIndex + component));
+}
+double faceGeometry(int faceIndex, int component) {
+    return readDoubleAt(headerWord(H_GEOMETRY_FACES) + 2 * (GEOMETRY_STRIDE * faceIndex + component));
+}
+bool isMicrocellOpen(ivec3 microCoordinates) {
+    ivec3 cellCoordinatesValue = microCoordinates / 2;
+    if (any(lessThan(microCoordinates, ivec3(0))) || !isInsideGrid(cellCoordinatesValue))
+        return false;
+    int microcellBit = (microCoordinates.x & 1) + 2 * (microCoordinates.y & 1) + 4 * (microCoordinates.z & 1);
+    return (arenaWords[headerWord(H_MASKS) + cellIndexAt(cellCoordinatesValue)] & (1u << microcellBit)) == 0u;
+}
+double openFaceArea(int faceIndex) {
+    ivec2 adjacent = adjacentCells(faceIndex);
+    if (adjacent.x < 0 || adjacent.y < 0)
+        return 0.0;
+    int axis = faceAxis(faceIndex), openMicrofaces = 0;
+    ivec3 faceMicroOrigin = cellCoordinates(adjacent.y) * 2;
+    int tangentAxisA = axis == 0 ? 1 : 0, tangentAxisB = axis == 2 ? 1 : 2;
+    for (int microface = 0; microface < 4; microface++) {
+        ivec3 rightMicrocell = faceMicroOrigin;
+        rightMicrocell[tangentAxisA] += microface & 1;
+        rightMicrocell[tangentAxisB] += (microface >> 1) & 1;
+        ivec3 leftMicrocell = rightMicrocell;
+        leftMicrocell[axis]--;
+        if (isMicrocellOpen(rightMicrocell) && isMicrocellOpen(leftMicrocell))
+            openMicrofaces++;
+    }
+    return MICROFACE_AREA * double(openMicrofaces);
+}
+void clipBodyToMicrocell(int body, dvec3 microLow, out dvec3 clippedMinimum, out dvec3 clippedMaximum) {
+    clippedMinimum = max(microLow, bodyMinimum(body));
+    clippedMaximum = min(microLow + MICROCELL_SIZE, bodyMaximum(body));
+}
+void enumerateBodyEntry(int entry) {
+    writeIntField(F_ENTRY_CELL, entry, -1);
+    writeDoubleField(F_ENTRY_VOLUME, entry, 0.0);
+    for (int axis = 0; axis < 3; axis++)
+        writeDoubleField(F_ENTRY_WET_AREA, BODY_VECTOR_STRIDE * entry + axis, 0.0);
+    for (int side = 0; side < CELL_SIDE_COUNT; side++)
+        writeIntField(F_ENTRY_CONTACTS, CELL_SIDE_COUNT * entry + side, -1);
+    if (entry >= entryCount())
+        return;
+    int lower = 0, upper = bodyCount();
+    while (lower < upper) {
+        int middle = (lower + upper) / 2;
+        if (readIntField(F_BODY_OFFSETS, middle + 1) <= entry)
+            lower = middle + 1;
+        else
+            upper = middle;
+    }
+    int body = lower;
+    if (body >= bodyCount()) {
+        reportInvalidBody();
+        return;
+    }
+    ivec3 first = max(ivec3(0), ivec3(floor(bodyMinimum(body)))),
+          last = min(gridSize(), ivec3(ceil(bodyMaximum(body)))), extent = last - first;
+    int ordinal = entry - readIntField(F_BODY_OFFSETS, body);
+    ivec3 coordinates =
+        first + ivec3(ordinal % extent.x, ordinal / extent.x % extent.y, ordinal / (extent.x * extent.y));
+    int cellIndex = cellIndexAt(coordinates);
+    double volume = 0.0;
+    dvec3 wetAreas = dvec3(0.0);
+    for (int bit = 0; bit < MICROCELL_COUNT; bit++)
+        if ((arenaWords[headerWord(H_MASKS) + cellIndex] & (1u << bit)) == 0u) {
+            dvec3 micro = dvec3(coordinates) + MICROCELL_SIZE * dvec3(bit & 1, (bit >> 1) & 1, (bit >> 2) & 1),
+                  clippedMinimum, clippedMaximum;
+            clipBodyToMicrocell(body, micro, clippedMinimum, clippedMaximum);
+            dvec3 clippedSize = max(dvec3(0.0), clippedMaximum - clippedMinimum);
+            volume += clippedSize.x * clippedSize.y * clippedSize.z;
+            for (int axis = 0; axis < 3; axis++) {
+                int tangentAxisA = axis == 0 ? 1 : 0, tangentAxisB = axis == 2 ? 1 : 2;
+                if (clippedSize[tangentAxisA] <= 0.0 || clippedSize[tangentAxisB] <= 0.0)
+                    continue;
+                if (bodyMinimum(body)[axis] >= micro[axis] && bodyMinimum(body)[axis] < micro[axis] + MICROCELL_SIZE)
+                    wetAreas[axis] += clippedSize[tangentAxisA] * clippedSize[tangentAxisB];
+                if (bodyMaximum(body)[axis] > micro[axis] && bodyMaximum(body)[axis] <= micro[axis] + MICROCELL_SIZE)
+                    wetAreas[axis] += clippedSize[tangentAxisA] * clippedSize[tangentAxisB];
+            }
+        }
+    if (volume <= 0.0)
+        return;
+    writeIntField(F_ENTRY_CELL, entry, cellIndex);
+    writeIntField(F_ENTRY_BODY, entry, body);
+    writeDoubleField(F_ENTRY_VOLUME, entry, volume);
+    for (int axis = 0; axis < 3; axis++)
+        writeDoubleField(F_ENTRY_WET_AREA, BODY_VECTOR_STRIDE * entry + axis,
+                         wetAreas[axis] * params.cellSize * params.cellSize);
+    atomicAdd(arenaWords[fieldWordOffset(F_CELL_COUNTS) + cellIndex], 1u);
 }
 // Exact clipped box union through sorted coordinate slabs. The local lists contain only
 // bodies intersecting this cell; coincident boxes share the same coordinate cuts.
-double unionMicro(int c,dvec3 micro){
- int begin=get(CO,c),end=get(CO,c+1);double result=0.0,x=micro.x;
- while(x<micro.x+.5){double nextX=micro.x+.5;for(int e=begin;e<end;e++){int b=get(ENTRY_BODY,get(CE,e));dvec3 a,z;clipped(b,micro,a,z);if(any(lessThanEqual(z,a)))continue;
-  if(a.x>x)nextX=min(nextX,a.x);if(z.x>x)nextX=min(nextX,z.x);}
-  if(nextX<=x)break;double midX=.5*(x+nextX),y=micro.y;
-  while(y<micro.y+.5){double nextY=micro.y+.5;for(int e=begin;e<end;e++){int b=get(ENTRY_BODY,get(CE,e));dvec3 a,z;clipped(b,micro,a,z);if(any(lessThanEqual(z,a))||midX<a.x||midX>=z.x)continue;
-   if(a.y>y)nextY=min(nextY,a.y);if(z.y>y)nextY=min(nextY,z.y);}
-   if(nextY<=y)break;double midY=.5*(y+nextY),covered=micro.z,length=0.0;
-   while(covered<micro.z+.5){double first=micro.z+.5,last=covered;
-    for(int e=begin;e<end;e++){int b=get(ENTRY_BODY,get(CE,e));dvec3 a,z;clipped(b,micro,a,z);if(any(lessThanEqual(z,a))||midX<a.x||midX>=z.x||midY<a.y||midY>=z.y||z.z<=covered)continue;
-     if(a.z<=covered)last=max(last,z.z);else first=min(first,a.z);}
-    if(last>covered){length+=last-covered;covered=last;}else if(first>covered)covered=first;else break;
-   }
-   result+=(nextX-x)*(nextY-y)*length;y=nextY;
-  }x=nextX;
- }return result;
+double bodyUnionVolumeInMicrocell(int cellIndex, dvec3 micro) {
+    int begin = readIntField(F_CELL_OFFSETS, cellIndex), end = readIntField(F_CELL_OFFSETS, cellIndex + 1);
+    double unionVolume = 0.0, x = micro.x;
+    while (x < micro.x + MICROCELL_SIZE) {
+        double nextX = micro.x + MICROCELL_SIZE;
+        for (int member = begin; member < end; member++) {
+            int bodyIndex = readIntField(F_ENTRY_BODY, readIntField(F_CELL_ENTRIES, member));
+            dvec3 clippedMinimum, clippedMaximum;
+            clipBodyToMicrocell(bodyIndex, micro, clippedMinimum, clippedMaximum);
+            if (any(lessThanEqual(clippedMaximum, clippedMinimum)))
+                continue;
+            if (clippedMinimum.x > x)
+                nextX = min(nextX, clippedMinimum.x);
+            if (clippedMaximum.x > x)
+                nextX = min(nextX, clippedMaximum.x);
+        }
+        if (nextX <= x)
+            break;
+        double midX = .5 * (x + nextX), y = micro.y;
+        while (y < micro.y + MICROCELL_SIZE) {
+            double nextY = micro.y + MICROCELL_SIZE;
+            for (int member = begin; member < end; member++) {
+                int bodyIndex = readIntField(F_ENTRY_BODY, readIntField(F_CELL_ENTRIES, member));
+                dvec3 clippedMinimum, clippedMaximum;
+                clipBodyToMicrocell(bodyIndex, micro, clippedMinimum, clippedMaximum);
+                if (any(lessThanEqual(clippedMaximum, clippedMinimum)) || midX < clippedMinimum.x ||
+                    midX >= clippedMaximum.x)
+                    continue;
+                if (clippedMinimum.y > y)
+                    nextY = min(nextY, clippedMinimum.y);
+                if (clippedMaximum.y > y)
+                    nextY = min(nextY, clippedMaximum.y);
+            }
+            if (nextY <= y)
+                break;
+            double midY = .5 * (y + nextY), coveredZ = micro.z, coveredLengthZ = 0.0;
+            while (coveredZ < micro.z + MICROCELL_SIZE) {
+                double first = micro.z + MICROCELL_SIZE, last = coveredZ;
+                for (int member = begin; member < end; member++) {
+                    int bodyIndex = readIntField(F_ENTRY_BODY, readIntField(F_CELL_ENTRIES, member));
+                    dvec3 clippedMinimum, clippedMaximum;
+                    clipBodyToMicrocell(bodyIndex, micro, clippedMinimum, clippedMaximum);
+                    if (any(lessThanEqual(clippedMaximum, clippedMinimum)) || midX < clippedMinimum.x ||
+                        midX >= clippedMaximum.x || midY < clippedMinimum.y || midY >= clippedMaximum.y ||
+                        clippedMaximum.z <= coveredZ)
+                        continue;
+                    if (clippedMinimum.z <= coveredZ)
+                        last = max(last, clippedMaximum.z);
+                    else
+                        first = min(first, clippedMinimum.z);
+                }
+                if (last > coveredZ) {
+                    coveredLengthZ += last - coveredZ;
+                    coveredZ = last;
+                } else if (first > coveredZ)
+                    coveredZ = first;
+                else
+                    break;
+            }
+            unionVolume += (nextX - x) * (nextY - y) * coveredLengthZ;
+            y = nextY;
+        }
+        x = nextX;
+    }
+    return unionVolume;
 }
-void gatherCell(int c){
- double sum=0.0;int begin=get(CO,c),end=get(CO,c+1);for(int e=begin;e<end;e++)sum+=read(ENTRY_VOLUME,get(CE,e));double united=sum;
- if(end-begin>1){united=0.0;ivec3 q=coord(c);for(int bit=0;bit<8;bit++)if((words[h(H_MASKS)+c]&(1u<<bit))==0u)united+=unionMicro(c,dvec3(q)+.5*dvec3(bit&1,(bit>>1)&1,(bit>>2)&1));}
- if(!finite(united)||united<0.0||united>1.0+1e-9){invalid();return;}
- if(sum>0.0)for(int e=begin;e<end;e++){int entry=get(CE,e);write(ENTRY_VOLUME,entry,read(ENTRY_VOLUME,entry)*united/sum);for(int axis=0;axis<3;axis++)write(WET_AREA,3*entry+axis,read(WET_AREA,3*entry+axis)*united/sum);}
- int64_t svq=int64_t(floor(united*16777216.0+.5)),base=h(H_BASE_SOLID)<0?0l:integer(h(H_BASE_SOLID)+2*c);outint(at(OCCUPIED)+2*c,svq);outint(at(COMBINED)+2*c,base+svq);
+void gatherCellOccupation(int cellIndex) {
+    double summedVolume = 0.0;
+    int begin = readIntField(F_CELL_OFFSETS, cellIndex), end = readIntField(F_CELL_OFFSETS, cellIndex + 1);
+    for (int member = begin; member < end; member++)
+        summedVolume += readDoubleField(F_ENTRY_VOLUME, readIntField(F_CELL_ENTRIES, member));
+    double unionVolume = summedVolume;
+    if (end - begin > 1) {
+        unionVolume = 0.0;
+        ivec3 coordinates = cellCoordinates(cellIndex);
+        for (int bit = 0; bit < MICROCELL_COUNT; bit++)
+            if ((arenaWords[headerWord(H_MASKS) + cellIndex] & (1u << bit)) == 0u)
+                unionVolume += bodyUnionVolumeInMicrocell(
+                    cellIndex, dvec3(coordinates) + MICROCELL_SIZE * dvec3(bit & 1, (bit >> 1) & 1, (bit >> 2) & 1));
+    }
+    if (!isFinite(unionVolume) || unionVolume < 0.0 || unionVolume > 1.0 + OCCUPATION_ROUNDOFF_TOLERANCE) {
+        reportInvalidBody();
+        return;
+    }
+    if (summedVolume > 0.0)
+        for (int member = begin; member < end; member++) {
+            int entry = readIntField(F_CELL_ENTRIES, member);
+            writeDoubleField(F_ENTRY_VOLUME, entry,
+                             readDoubleField(F_ENTRY_VOLUME, entry) * unionVolume / summedVolume);
+            for (int axis = 0; axis < 3; axis++)
+                writeDoubleField(
+                    F_ENTRY_WET_AREA, BODY_VECTOR_STRIDE * entry + axis,
+                    readDoubleField(F_ENTRY_WET_AREA, BODY_VECTOR_STRIDE * entry + axis) * unionVolume / summedVolume);
+        }
+    int64_t occupiedQuanta = int64_t(floor(unionVolume * SOLID_QUANTA_PER_CELL + .5)),
+            baseSolidQuanta = headerWord(H_BASE_SOLID) < 0 ? 0l : readInt64At(headerWord(H_BASE_SOLID) + 2 * cellIndex);
+    writeInt64At(fieldWordOffset(F_OCCUPIED_SVQ) + 2 * cellIndex, occupiedQuanta);
+    writeInt64At(fieldWordOffset(F_COMBINED_SVQ) + 2 * cellIndex, baseSolidQuanta + occupiedQuanta);
 }
-void entryFaces(int entry,bool scatter){int c=get(ENTRY_CELL,entry);if(c<0)return;ivec3 q=coord(c);double v=read(ENTRY_VOLUME,entry);
- for(int axis=0;axis<3;axis++){ivec3 next=q;next[axis]++;int a=faceAt(axis,q),b=faceAt(axis,next);double fa=openFace(a),fb=openFace(b),sum=fa+fb;if(sum==0.0)continue;
-  for(int side=0;side<2;side++){int f=side==0?a:b;double weight=v*(side==0?fa:fb)/sum;if(weight==0.0)continue;
-   if(!scatter)atomicAdd(words[at(FC)+f],1u);
-   else{int slot=get(FO,f)+int(atomicAdd(words[at(FU)+f],1u));put(CB,slot,get(ENTRY_BODY,entry));put(CENTRY,slot,entry);put(CFACE,slot,f);write(SHARE,slot,weight);put(ENTRY_CONTACTS,6*entry+2*axis+side,slot);}
-  }
- }
+void buildEntryFaceContacts(int entry, bool scatter) {
+    int cellIndex = readIntField(F_ENTRY_CELL, entry);
+    if (cellIndex < 0)
+        return;
+    ivec3 coordinates = cellCoordinates(cellIndex);
+    double entryVolume = readDoubleField(F_ENTRY_VOLUME, entry);
+    for (int axis = 0; axis < 3; axis++) {
+        ivec3 next = coordinates;
+        next[axis]++;
+        int negativeFace = faceIndexAt(axis, coordinates), positiveFace = faceIndexAt(axis, next);
+        double negativeOpenArea = openFaceArea(negativeFace), positiveOpenArea = openFaceArea(positiveFace),
+               totalOpenArea = negativeOpenArea + positiveOpenArea;
+        if (totalOpenArea == 0.0)
+            continue;
+        for (int side = 0; side < 2; side++) {
+            int faceIndex = side == 0 ? negativeFace : positiveFace;
+            double weight = entryVolume * (side == 0 ? negativeOpenArea : positiveOpenArea) / totalOpenArea;
+            if (weight == 0.0)
+                continue;
+            if (!scatter)
+                atomicAdd(arenaWords[fieldWordOffset(F_FACE_COUNTS) + faceIndex], 1u);
+            else {
+                int slot = readIntField(F_FACE_OFFSETS, faceIndex) +
+                           int(atomicAdd(arenaWords[fieldWordOffset(F_FACE_CURSORS) + faceIndex], 1u));
+                writeIntField(F_CONTACT_BODY, slot, readIntField(F_ENTRY_BODY, entry));
+                writeIntField(F_CONTACT_ENTRY, slot, entry);
+                writeIntField(F_CONTACT_FACE, slot, faceIndex);
+                writeDoubleField(F_CONTACT_SHARE, slot, weight);
+                writeIntField(F_ENTRY_CONTACTS, CELL_SIDE_COUNT * entry + 2 * axis + side, slot);
+            }
+        }
+    }
 }
-void gatherFace(int f){double total=0.0;for(int e=get(FO,f);e<get(FO,f+1);e++)total+=read(SHARE,e);write(FACE_AREA,f,min(openFace(f),total));
- if(total>0.0)for(int e=get(FO,f);e<get(FO,f+1);e++)write(SHARE,e,read(SHARE,e)*min(openFace(f),total)/total);
- if(f==0)put(CONTROL,2,get(FO,h(H_FACES)));
+void gatherFaceOccupation(int faceIndex) {
+    double totalShare = 0.0;
+    for (int contact = readIntField(F_FACE_OFFSETS, faceIndex); contact < readIntField(F_FACE_OFFSETS, faceIndex + 1);
+         contact++)
+        totalShare += readDoubleField(F_CONTACT_SHARE, contact);
+    writeDoubleField(F_FACE_AREA, faceIndex, min(openFaceArea(faceIndex), totalShare));
+    if (totalShare > 0.0)
+        for (int contact = readIntField(F_FACE_OFFSETS, faceIndex);
+             contact < readIntField(F_FACE_OFFSETS, faceIndex + 1); contact++)
+            writeDoubleField(
+                F_CONTACT_SHARE, contact,
+                readDoubleField(F_CONTACT_SHARE, contact) * min(openFaceArea(faceIndex), totalShare) / totalShare);
+    if (faceIndex == 0)
+        writeIntField(F_CONTROL, CONTROL_CONTACT_COUNT, readIntField(F_FACE_OFFSETS, headerWord(H_FACES)));
 }
-void bodyTotals(int body){for(int i=0;i<7;i++)write(TOTALS,7*body+i,0.0);if(body>=bodies())return;dvec3 areas=dvec3(0.0),weights=dvec3(0.0);double wetVolume=0.0;
- for(int entry=get(BODY_OFFSETS,body);entry<get(BODY_OFFSETS,body+1);entry++){
-  int c=get(ENTRY_CELL,entry);if(c<0)continue;double v=read(ENTRY_VOLUME,entry);ivec3 q=coord(c);if(liquid(c,0)>0.0)wetVolume+=v;
-  for(int axis=0;axis<3;axis++){areas[axis]+=read(WET_AREA,3*entry+axis);ivec3 next=q;next[axis]++;if(openFace(faceAt(axis,q))+openFace(faceAt(axis,next))>0.0)weights[axis]+=v;}
- }
- for(int axis=0;axis<3;axis++){write(TOTALS,7*body+axis,areas[axis]);write(TOTALS,7*body+3+axis,weights[axis]);}write(TOTALS,7*body+6,wetVolume);
+void gatherBodyTotals(int body) {
+    for (int component = 0; component < BODY_TOTAL_STRIDE; component++)
+        writeDoubleField(F_BODY_TOTALS, BODY_TOTAL_STRIDE * body + component, 0.0);
+    if (body >= bodyCount())
+        return;
+    dvec3 wetAreas = dvec3(0.0), contactVolumes = dvec3(0.0);
+    double wetVolume = 0.0;
+    for (int entry = readIntField(F_BODY_OFFSETS, body); entry < readIntField(F_BODY_OFFSETS, body + 1); entry++) {
+        int cellIndex = readIntField(F_ENTRY_CELL, entry);
+        if (cellIndex < 0)
+            continue;
+        double entryVolume = readDoubleField(F_ENTRY_VOLUME, entry);
+        ivec3 coordinates = cellCoordinates(cellIndex);
+        if (cellGeometry(cellIndex, CELL_LIQUID_VOLUME) > 0.0)
+            wetVolume += entryVolume;
+        for (int axis = 0; axis < 3; axis++) {
+            wetAreas[axis] += readDoubleField(F_ENTRY_WET_AREA, BODY_VECTOR_STRIDE * entry + axis);
+            ivec3 next = coordinates;
+            next[axis]++;
+            if (openFaceArea(faceIndexAt(axis, coordinates)) + openFaceArea(faceIndexAt(axis, next)) > 0.0)
+                contactVolumes[axis] += entryVolume;
+        }
+    }
+    for (int axis = 0; axis < 3; axis++) {
+        writeDoubleField(F_BODY_TOTALS, BODY_TOTAL_STRIDE * body + BODY_TOTAL_WET_AREA_X + axis, wetAreas[axis]);
+        writeDoubleField(F_BODY_TOTALS, BODY_TOTAL_STRIDE * body + BODY_TOTAL_CONTACT_VOLUME_X + axis,
+                         contactVolumes[axis]);
+    }
+    writeDoubleField(F_BODY_TOTALS, BODY_TOTAL_STRIDE * body + BODY_TOTAL_WET_VOLUME, wetVolume);
 }
-int gh(int i){if(h(H_GAS_PRESSURE)>=0)return int(words[h(H_GAS_PRESSURE)+i]);return i==GAS_H_STARTS?h(H_PRESSURE_STARTS):i==GAS_H_VALUES?h(H_PRESSURE_VALUES):i==GAS_H_ROWS?h(H_PRESSURE_ROW_META):i==GAS_H_PRESSURE?h(H_PRESSURE_VALUES_OUTPUT):i==GAS_H_META?h(H_PRESSURE_META):i==GAS_H_PROBLEM?h(H_PRESSURE_PROBLEM):0;}int ga(int f){return gh(GAS_WORK_FIELDS+f);}int jh(int i){return int(words[h(H_COUPLED_PRESSURE)+i]);}int ja(int f){return jh(COUPLED_WORK_FIELDS+f);}
-bool full(int c){return liquid(c,1)>0.0&&liquid(c,2)>0.0&&liquid(c,2)-liquid(c,0)<=4e-5;}
-int pressureRow(int c){if(c<0)return -1;if(full(c))return c;if(h(H_GAS_PRESSURE)<0)return -1;int node=int(words[gh(GAS_H_CELL_NODES)+c]);return node>0?h(H_CELLS)+node-1:-1;}
-double datum(){return h(H_GAS_PRESSURE)<0?0.0:num(ga(GAS_F_DATUM));}
-double rowPressure(int row){return row<0?0.0:(h(H_GAS_PRESSURE)<0?0.0:num(ga(GAS_F_REFERENCE)+2*row))+num(gh(GAS_H_PRESSURE)+2*row)+datum();}
-void pressureContacts(int contact){for(int side=0;side<2;side++){put(PR,2*contact+side,-1);write(PC,2*contact+side,0.0);}if(contact>=contacts())return;
- int f=get(CFACE,contact);if(h(H_ACTIVITY_FACES)>=0&&words[h(H_ACTIVITY_FACES)+f]==0u)return;ivec2 c=faceCells(f);if(c.x<0)return;ivec2 r=ivec2(pressureRow(c.x),pressureRow(c.y));if(r.x==r.y)return;
- for(int side=0;side<2;side++){int index=2*contact+side;double coefficient=(side==0?1.0:-1.0)*read(SHARE,contact)/p.cellSize;
-  put(PR,index,r[side]);write(PC,index,coefficient);if(r[side]>=0)atomicAdd(words[at(RC)+r[side]],1u);
- }
+int pressureHeaderWord(int headerField) {
+    if (headerWord(H_GAS_PRESSURE) >= 0)
+        return int(arenaWords[headerWord(H_GAS_PRESSURE) + headerField]);
+    return headerField == GAS_H_STARTS     ? headerWord(H_PRESSURE_STARTS)
+           : headerField == GAS_H_VALUES   ? headerWord(H_PRESSURE_VALUES)
+           : headerField == GAS_H_ROWS     ? headerWord(H_PRESSURE_ROW_META)
+           : headerField == GAS_H_PRESSURE ? headerWord(H_PRESSURE_VALUES_OUTPUT)
+           : headerField == GAS_H_META     ? headerWord(H_PRESSURE_META)
+           : headerField == GAS_H_PROBLEM  ? headerWord(H_PRESSURE_PROBLEM)
+                                           : 0;
 }
-void rowSource(int row){double rate=0.0;for(int e=get(RO,row);e<get(RO,row+1);e++){int term=get(RE,e),contact=term/2,body=get(CB,contact),axis=faceAxis(get(CFACE,contact));rate+=read(PC,term)*read(VELOCITIES,3*body+axis);}
- write(RATE,row,rate);if(rate==0.0)return;
- if(row>=h(H_CELLS)&&row<h(H_CELLS)+gh(GAS_H_GAS_CAPACITY)){int node=row-h(H_CELLS);double pressure=num(gh(GAS_H_THERMODYNAMIC_STATES)+2*(9*node+1));if(pressure<=0.0)return;
-  double storage=num(ga(GAS_F_STORAGE)+2*node);if(storage<=0.0){storage=num(gh(GAS_H_NODE_VOLUMES)+2*node)*num(gh(GAS_H_THERMODYNAMIC_STATES)+2*(9*node+8))/(p.duration*p.duration*p.cellSize*p.cellSize*p.cellSize);
-   if(!(storage>0.0&&finite(storage))){invalid();return;}outnum(ga(GAS_F_STORAGE)+2*node,storage);words[ga(GAS_F_MECHANICAL_MODE)+node]=1u;
-   outnum(ga(GAS_F_DIAGONAL)+2*node,storage);
-   if(h(H_COUPLED_PRESSURE)>=0)outnum(ja(COUPLED_F_STORAGE)+2*row,storage);
-   else{int diagonal=int(words[gh(GAS_H_STARTS)+row]);outnum(gh(GAS_H_VALUES)+2*diagonal,storage);words[gh(GAS_H_META)+row]=1u;}
-  }
- }
- if(h(H_COUPLED_PRESSURE)>=0){outnum(ja(COUPLED_F_ROW_SOURCE)+2*row,num(ja(COUPLED_F_ROW_SOURCE)+2*row)-rate/p.duration);words[ja(COUPLED_F_ROW_ENABLED)+row]=1u;}
- else{outnum(gh(GAS_H_PROBLEM)+2*row,num(gh(GAS_H_PROBLEM)+2*row)-rate/p.duration);words[gh(GAS_H_ROWS)+row]=uint(row);}
+int gasFieldWordOffset(int field) {
+    return pressureHeaderWord(GAS_WORK_FIELDS + field);
 }
-void bodyResult(int body){for(int k=0;k<8;k++)write(RESULT,8*body+k,0.0);if(body>=bodies())return;
- dvec3 pressureImpulse=dvec3(0.0),shearImpulse=dvec3(0.0);double shearWork=0.0,volume=0.0;
- for(int entry=get(BODY_OFFSETS,body);entry<get(BODY_OFFSETS,body+1);entry++)for(int slot=0;slot<6;slot++){
-  int contact=get(ENTRY_CONTACTS,6*entry+slot);if(contact<0)continue;int axis=faceAxis(get(CFACE,contact));double force=0.0;
-  for(int side=0;side<2;side++)force+=read(PC,2*contact+side)*rowPressure(get(PR,2*contact+side));pressureImpulse[axis]-=p.duration*p.cellSize*p.cellSize*p.cellSize*force;
-  if(h(H_CONTACT_IMPULSE)>=0)shearImpulse[axis]-=num(h(H_CONTACT_IMPULSE)+2*contact);if(h(H_CONTACT_WORK)>=0)shearWork+=num(h(H_CONTACT_WORK)+2*contact);
- }
- for(int entry=get(BODY_OFFSETS,body);entry<get(BODY_OFFSETS,body+1);entry++)volume+=read(ENTRY_VOLUME,entry)*p.cellSize*p.cellSize*p.cellSize;
- dvec3 velocity=dvec3(read(VELOCITIES,3*body),read(VELOCITIES,3*body+1),read(VELOCITIES,3*body+2));
- for(int axis=0;axis<3;axis++)write(RESULT,8*body+axis,pressureImpulse[axis]+shearImpulse[axis]);
- write(RESULT,8*body+3,dot(pressureImpulse,velocity));write(RESULT,8*body+4,shearWork);write(RESULT,8*body+5,volume);
+int coupledHeaderWord(int headerField) {
+    return int(arenaWords[headerWord(H_COUPLED_PRESSURE) + headerField]);
 }
-void workAtCell(int c){double work=h(H_SOURCE_CELL_WORK)<0?0.0:num(h(H_SOURCE_CELL_WORK)+2*c);
- work-=p.duration*p.cellSize*p.cellSize*p.cellSize*read(RATE,c)*rowPressure(c);write(WORK,c,work);
+int coupledFieldWordOffset(int field) {
+    return coupledHeaderWord(COUPLED_WORK_FIELDS + field);
 }
-void main(){int id=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128+gl_LocalInvocationID.x);if(id>=p.count||errors!=0u)return;
- if(p.stage==0){if(id<h(H_CELLS)){put(CC,id,0);put(CU,id,0);write(WORK,id,0.0);}if(id<h(H_FACES)){put(FC,id,0);put(FU,id,0);write(FACE_AREA,id,0.0);}if(id==0){put(CONTROL,2,0);put(CONTROL,3,0);}return;}
- if(p.stage==1){enumerate(id);return;}if(p.stage==2){int c=get(ENTRY_CELL,id);if(c>=0){int slot=get(CO,c)+int(atomicAdd(words[at(CU)+c],1u));put(CE,slot,id);}return;}
- if(p.stage==3){gatherCell(id);return;}if(p.stage==4){entryFaces(id,false);return;}if(p.stage==5){entryFaces(id,true);return;}if(p.stage==6){gatherFace(id);return;}
- if(p.stage==7){bodyTotals(id);return;}
- if(p.stage==18){outint(at(COMBINED)+2*id,(h(H_BASE_SOLID)<0?0l:integer(h(H_BASE_SOLID)+2*id))+integer(at(OCCUPIED)+2*id));return;}
- if(p.stage==17){int c=get(ENTRY_CELL,id);if(c>=0){double fraction=liquid(c,2)>0.0?clamp(liquid(c,0)/liquid(c,2),0.0,1.0):0.0;for(int axis=0;axis<3;axis++)write(WET_AREA,3*id+axis,read(WET_AREA,3*id+axis)*fraction);}return;}
- if(p.stage==8){if(id>=contacts())return;int body=get(CB,id),axis=faceAxis(get(CFACE,id));double area=read(TOTALS,7*body)+read(TOTALS,7*body+1)+read(TOTALS,7*body+2)-read(TOTALS,7*body+axis);
-  double total=read(TOTALS,7*body+3+axis);write(DISTANCE,id,total>0.0?area/p.cellSize*read(SHARE,id)/total:0.0);return;}
- if(p.stage==9){double area=max(0.0,face(id,2)-read(FACE_AREA,id));outnum(h(H_GEOMETRY_FACES)+2*(4*id+2),area);outnum(h(H_GEOMETRY_FACES)+2*(4*id+3),min(face(id,3),area));return;}
- if(p.stage==10){put(RC,id,0);put(RU,id,0);return;}if(p.stage==11){pressureContacts(id);return;}
- if(p.stage==12){int row=get(PR,id);if(row>=0){int slot=get(RO,row)+int(atomicAdd(words[at(RU)+row],1u));put(RE,slot,id);}return;}
- if(p.stage==13){rowSource(id);return;}if(p.stage==14){bodyResult(id);return;}if(p.stage==15)workAtCell(id);
- if(p.stage==16){write(GAS_WORK,id,0.0);if(id<gh(GAS_H_GAS_CAPACITY)){
-  double rate=read(RATE,h(H_CELLS)+id);outnum(ga(GAS_F_NODE_PREDICTED_VOLUME_CHANGE)+2*id,num(ga(GAS_F_NODE_PREDICTED_VOLUME_CHANGE)+2*id)+p.duration*p.cellSize*p.cellSize*p.cellSize*rate);
-  write(GAS_WORK,id,-p.duration*p.cellSize*p.cellSize*p.cellSize*rate*rowPressure(h(H_CELLS)+id));
- }}
+bool isLiquidFull(int cellIndex) {
+    return cellGeometry(cellIndex, CELL_LIQUID_MASS) > 0.0 && cellGeometry(cellIndex, CELL_PORE_VOLUME) > 0.0 &&
+           cellGeometry(cellIndex, CELL_PORE_VOLUME) - cellGeometry(cellIndex, CELL_LIQUID_VOLUME) <=
+               UNRESOLVED_GAS_VOLUME;
+}
+int pressureRowForCell(int cellIndex) {
+    if (cellIndex < 0)
+        return -1;
+    if (isLiquidFull(cellIndex))
+        return cellIndex;
+    if (headerWord(H_GAS_PRESSURE) < 0)
+        return -1;
+    int node = int(arenaWords[pressureHeaderWord(GAS_H_CELL_NODES) + cellIndex]);
+    return node > 0 ? headerWord(H_CELLS) + node - 1 : -1;
+}
+double pressureDatum() {
+    return headerWord(H_GAS_PRESSURE) < 0 ? 0.0 : readDoubleAt(gasFieldWordOffset(GAS_F_DATUM));
+}
+double physicalRowPressure(int row) {
+    return row < 0
+               ? 0.0
+               : (headerWord(H_GAS_PRESSURE) < 0 ? 0.0 : readDoubleAt(gasFieldWordOffset(GAS_F_REFERENCE) + 2 * row)) +
+                     readDoubleAt(pressureHeaderWord(GAS_H_PRESSURE) + 2 * row) + pressureDatum();
+}
+void buildPressureContacts(int contact) {
+    for (int side = 0; side < 2; side++) {
+        writeIntField(F_PRESSURE_ROW, 2 * contact + side, -1);
+        writeDoubleField(F_PRESSURE_COEFFICIENT, 2 * contact + side, 0.0);
+    }
+    if (contact >= contactCount())
+        return;
+    int faceIndex = readIntField(F_CONTACT_FACE, contact);
+    if (headerWord(H_ACTIVITY_FACES) >= 0 && arenaWords[headerWord(H_ACTIVITY_FACES) + faceIndex] == 0u)
+        return;
+    ivec2 cells = adjacentCells(faceIndex);
+    if (cells.x < 0)
+        return;
+    ivec2 pressureRows = ivec2(pressureRowForCell(cells.x), pressureRowForCell(cells.y));
+    if (pressureRows.x == pressureRows.y)
+        return;
+    for (int side = 0; side < 2; side++) {
+        int index = 2 * contact + side;
+        double coefficient = (side == 0 ? 1.0 : -1.0) * readDoubleField(F_CONTACT_SHARE, contact) / params.cellSize;
+        writeIntField(F_PRESSURE_ROW, index, pressureRows[side]);
+        writeDoubleField(F_PRESSURE_COEFFICIENT, index, coefficient);
+        if (pressureRows[side] >= 0)
+            atomicAdd(arenaWords[fieldWordOffset(F_ROW_COUNTS) + pressureRows[side]], 1u);
+    }
+}
+void assembleBodyVolumeRate(int row) {
+    double bodyVolumeRate = 0.0;
+    for (int member = readIntField(F_ROW_OFFSETS, row); member < readIntField(F_ROW_OFFSETS, row + 1); member++) {
+        int term = readIntField(F_ROW_ENTRIES, member), contact = term / 2,
+            body = readIntField(F_CONTACT_BODY, contact), axis = faceAxis(readIntField(F_CONTACT_FACE, contact));
+        bodyVolumeRate += readDoubleField(F_PRESSURE_COEFFICIENT, term) *
+                          readDoubleField(F_VELOCITIES, BODY_VECTOR_STRIDE * body + axis);
+    }
+    writeDoubleField(F_ROW_BODY_RATE, row, bodyVolumeRate);
+    if (bodyVolumeRate == 0.0)
+        return;
+    if (row >= headerWord(H_CELLS) && row < headerWord(H_CELLS) + pressureHeaderWord(GAS_H_GAS_CAPACITY)) {
+        int node = row - headerWord(H_CELLS);
+        double pressure = readDoubleAt(pressureHeaderWord(GAS_H_THERMODYNAMIC_STATES) +
+                                       2 * (GAS_STATE_STRIDE * node + GAS_ABSOLUTE_PRESSURE));
+        if (pressure <= 0.0)
+            return;
+        double storage = readDoubleAt(gasFieldWordOffset(GAS_F_STORAGE) + 2 * node);
+        if (storage <= 0.0) {
+            storage = readDoubleAt(pressureHeaderWord(GAS_H_NODE_VOLUMES) + 2 * node) *
+                      readDoubleAt(pressureHeaderWord(GAS_H_THERMODYNAMIC_STATES) +
+                                   2 * (GAS_STATE_STRIDE * node + GAS_COMPRESSIBILITY)) /
+                      (params.duration * params.duration * params.cellSize * params.cellSize * params.cellSize);
+            if (!(storage > 0.0 && isFinite(storage))) {
+                reportInvalidBody();
+                return;
+            }
+            writeDoubleAt(gasFieldWordOffset(GAS_F_STORAGE) + 2 * node, storage);
+            arenaWords[gasFieldWordOffset(GAS_F_MECHANICAL_MODE) + node] = 1u;
+            writeDoubleAt(gasFieldWordOffset(GAS_F_DIAGONAL) + 2 * node, storage);
+            if (headerWord(H_COUPLED_PRESSURE) >= 0)
+                writeDoubleAt(coupledFieldWordOffset(COUPLED_F_STORAGE) + 2 * row, storage);
+            else {
+                int diagonal = int(arenaWords[pressureHeaderWord(GAS_H_STARTS) + row]);
+                writeDoubleAt(pressureHeaderWord(GAS_H_VALUES) + 2 * diagonal, storage);
+                arenaWords[pressureHeaderWord(GAS_H_META) + row] = 1u;
+            }
+        }
+    }
+    if (headerWord(H_COUPLED_PRESSURE) >= 0) {
+        writeDoubleAt(
+            coupledFieldWordOffset(COUPLED_F_ROW_SOURCE) + 2 * row,
+            readDoubleAt(coupledFieldWordOffset(COUPLED_F_ROW_SOURCE) + 2 * row) - bodyVolumeRate / params.duration);
+        arenaWords[coupledFieldWordOffset(COUPLED_F_ROW_ENABLED) + row] = 1u;
+    } else {
+        writeDoubleAt(pressureHeaderWord(GAS_H_PROBLEM) + 2 * row,
+                      readDoubleAt(pressureHeaderWord(GAS_H_PROBLEM) + 2 * row) - bodyVolumeRate / params.duration);
+        arenaWords[pressureHeaderWord(GAS_H_ROWS) + row] = uint(row);
+    }
+}
+void gatherBodyResult(int body) {
+    for (int component = 0; component < BODY_RESULT_STRIDE; component++)
+        writeDoubleField(F_BODY_RESULTS, BODY_RESULT_STRIDE * body + component, 0.0);
+    if (body >= bodyCount())
+        return;
+    dvec3 pressureImpulse = dvec3(0.0), shearImpulse = dvec3(0.0);
+    double shearWork = 0.0, volume = 0.0;
+    for (int entry = readIntField(F_BODY_OFFSETS, body); entry < readIntField(F_BODY_OFFSETS, body + 1); entry++)
+        for (int slot = 0; slot < CELL_SIDE_COUNT; slot++) {
+            int contact = readIntField(F_ENTRY_CONTACTS, CELL_SIDE_COUNT * entry + slot);
+            if (contact < 0)
+                continue;
+            int axis = faceAxis(readIntField(F_CONTACT_FACE, contact));
+            double pressureForceDensity = 0.0;
+            for (int side = 0; side < 2; side++)
+                pressureForceDensity += readDoubleField(F_PRESSURE_COEFFICIENT, 2 * contact + side) *
+                                        physicalRowPressure(readIntField(F_PRESSURE_ROW, 2 * contact + side));
+            pressureImpulse[axis] -=
+                params.duration * params.cellSize * params.cellSize * params.cellSize * pressureForceDensity;
+            if (headerWord(H_CONTACT_IMPULSE) >= 0)
+                shearImpulse[axis] -= readDoubleAt(headerWord(H_CONTACT_IMPULSE) + 2 * contact);
+            if (headerWord(H_CONTACT_WORK) >= 0)
+                shearWork += readDoubleAt(headerWord(H_CONTACT_WORK) + 2 * contact);
+        }
+    for (int entry = readIntField(F_BODY_OFFSETS, body); entry < readIntField(F_BODY_OFFSETS, body + 1); entry++)
+        volume += readDoubleField(F_ENTRY_VOLUME, entry) * params.cellSize * params.cellSize * params.cellSize;
+    dvec3 velocity = dvec3(readDoubleField(F_VELOCITIES, BODY_VECTOR_STRIDE * body),
+                           readDoubleField(F_VELOCITIES, BODY_VECTOR_STRIDE * body + 1),
+                           readDoubleField(F_VELOCITIES, BODY_VECTOR_STRIDE * body + 2));
+    for (int axis = 0; axis < 3; axis++)
+        writeDoubleField(F_BODY_RESULTS, BODY_RESULT_STRIDE * body + BODY_RESULT_IMPULSE_X + axis,
+                         pressureImpulse[axis] + shearImpulse[axis]);
+    writeDoubleField(F_BODY_RESULTS, BODY_RESULT_STRIDE * body + BODY_RESULT_PRESSURE_WORK,
+                     dot(pressureImpulse, velocity));
+    writeDoubleField(F_BODY_RESULTS, BODY_RESULT_STRIDE * body + BODY_RESULT_SHEAR_WORK, shearWork);
+    writeDoubleField(F_BODY_RESULTS, BODY_RESULT_STRIDE * body + BODY_RESULT_COUPLED_VOLUME, volume);
+}
+void settleCellExternalWork(int cellIndex) {
+    double externalWork =
+        headerWord(H_SOURCE_CELL_WORK) < 0 ? 0.0 : readDoubleAt(headerWord(H_SOURCE_CELL_WORK) + 2 * cellIndex);
+    externalWork -= params.duration * params.cellSize * params.cellSize * params.cellSize *
+                    readDoubleField(F_ROW_BODY_RATE, cellIndex) * physicalRowPressure(cellIndex);
+    writeDoubleField(F_SOURCE_WORK, cellIndex, externalWork);
+}
+void main() {
+    int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128 + gl_LocalInvocationID.x);
+    if (id >= params.count || errorFlags != 0u)
+        return;
+    if (params.stage == STAGE_RESET_GEOMETRY) {
+        if (id < headerWord(H_CELLS)) {
+            writeIntField(F_CELL_COUNTS, id, 0);
+            writeIntField(F_CELL_CURSORS, id, 0);
+            writeDoubleField(F_SOURCE_WORK, id, 0.0);
+        }
+        if (id < headerWord(H_FACES)) {
+            writeIntField(F_FACE_COUNTS, id, 0);
+            writeIntField(F_FACE_CURSORS, id, 0);
+            writeDoubleField(F_FACE_AREA, id, 0.0);
+        }
+        if (id == 0) {
+            writeIntField(F_CONTROL, CONTROL_CONTACT_COUNT, 0);
+            writeIntField(F_CONTROL, CONTROL_RESERVED, 0);
+        }
+        return;
+    }
+    if (params.stage == STAGE_ENUMERATE_BODY_ENTRIES) {
+        enumerateBodyEntry(id);
+        return;
+    }
+    if (params.stage == STAGE_SCATTER_CELL_ENTRIES) {
+        int cellIndex = readIntField(F_ENTRY_CELL, id);
+        if (cellIndex >= 0) {
+            int slot = readIntField(F_CELL_OFFSETS, cellIndex) +
+                       int(atomicAdd(arenaWords[fieldWordOffset(F_CELL_CURSORS) + cellIndex], 1u));
+            writeIntField(F_CELL_ENTRIES, slot, id);
+        }
+        return;
+    }
+    if (params.stage == STAGE_GATHER_CELL_OCCUPATION) {
+        gatherCellOccupation(id);
+        return;
+    }
+    if (params.stage == STAGE_COUNT_FACE_CONTACTS) {
+        buildEntryFaceContacts(id, false);
+        return;
+    }
+    if (params.stage == STAGE_SCATTER_FACE_CONTACTS) {
+        buildEntryFaceContacts(id, true);
+        return;
+    }
+    if (params.stage == STAGE_GATHER_FACE_OCCUPATION) {
+        gatherFaceOccupation(id);
+        return;
+    }
+    if (params.stage == STAGE_GATHER_BODY_TOTALS) {
+        gatherBodyTotals(id);
+        return;
+    }
+    if (params.stage == STAGE_COMBINE_SOLID_OCCUPATION) {
+        writeInt64At(fieldWordOffset(F_COMBINED_SVQ) + 2 * id,
+                     (headerWord(H_BASE_SOLID) < 0 ? 0l : readInt64At(headerWord(H_BASE_SOLID) + 2 * id)) +
+                         readInt64At(fieldWordOffset(F_OCCUPIED_SVQ) + 2 * id));
+        return;
+    }
+    if (params.stage == STAGE_APPLY_LIQUID_WET_FRACTION) {
+        int cellIndex = readIntField(F_ENTRY_CELL, id);
+        if (cellIndex >= 0) {
+            double fraction =
+                cellGeometry(cellIndex, CELL_PORE_VOLUME) > 0.0
+                    ? clamp(cellGeometry(cellIndex, CELL_LIQUID_VOLUME) / cellGeometry(cellIndex, CELL_PORE_VOLUME),
+                            0.0, 1.0)
+                    : 0.0;
+            for (int axis = 0; axis < 3; axis++)
+                writeDoubleField(F_ENTRY_WET_AREA, BODY_VECTOR_STRIDE * id + axis,
+                                 readDoubleField(F_ENTRY_WET_AREA, BODY_VECTOR_STRIDE * id + axis) * fraction);
+        }
+        return;
+    }
+    if (params.stage == STAGE_PREPARE_CONTACT_DISTANCES) {
+        if (id >= contactCount())
+            return;
+        int body = readIntField(F_CONTACT_BODY, id), axis = faceAxis(readIntField(F_CONTACT_FACE, id));
+        double area = readDoubleField(F_BODY_TOTALS, BODY_TOTAL_STRIDE * body + BODY_TOTAL_WET_AREA_X) +
+                      readDoubleField(F_BODY_TOTALS, BODY_TOTAL_STRIDE * body + BODY_TOTAL_WET_AREA_Y) +
+                      readDoubleField(F_BODY_TOTALS, BODY_TOTAL_STRIDE * body + BODY_TOTAL_WET_AREA_Z) -
+                      readDoubleField(F_BODY_TOTALS, BODY_TOTAL_STRIDE * body + BODY_TOTAL_WET_AREA_X + axis);
+        double total = readDoubleField(F_BODY_TOTALS, BODY_TOTAL_STRIDE * body + BODY_TOTAL_CONTACT_VOLUME_X + axis);
+        writeDoubleField(F_CONTACT_DISTANCE, id,
+                         total > 0.0 ? area / params.cellSize * readDoubleField(F_CONTACT_SHARE, id) / total : 0.0);
+        return;
+    }
+    if (params.stage == STAGE_APPLY_FACE_APERTURES) {
+        double area = max(0.0, faceGeometry(id, FACE_OPEN_AREA) - readDoubleField(F_FACE_AREA, id));
+        writeDoubleAt(headerWord(H_GEOMETRY_FACES) + 2 * (GEOMETRY_STRIDE * id + FACE_OPEN_AREA), area);
+        writeDoubleAt(headerWord(H_GEOMETRY_FACES) + 2 * (GEOMETRY_STRIDE * id + FACE_LIQUID_AREA),
+                      min(faceGeometry(id, FACE_LIQUID_AREA), area));
+        return;
+    }
+    if (params.stage == STAGE_RESET_PRESSURE_ROWS) {
+        writeIntField(F_ROW_COUNTS, id, 0);
+        writeIntField(F_ROW_CURSORS, id, 0);
+        return;
+    }
+    if (params.stage == STAGE_BUILD_PRESSURE_CONTACTS) {
+        buildPressureContacts(id);
+        return;
+    }
+    if (params.stage == STAGE_SCATTER_PRESSURE_ENTRIES) {
+        int row = readIntField(F_PRESSURE_ROW, id);
+        if (row >= 0) {
+            int slot =
+                readIntField(F_ROW_OFFSETS, row) + int(atomicAdd(arenaWords[fieldWordOffset(F_ROW_CURSORS) + row], 1u));
+            writeIntField(F_ROW_ENTRIES, slot, id);
+        }
+        return;
+    }
+    if (params.stage == STAGE_ASSEMBLE_BODY_VOLUME_RATE) {
+        assembleBodyVolumeRate(id);
+        return;
+    }
+    if (params.stage == STAGE_GATHER_BODY_RESULTS) {
+        gatherBodyResult(id);
+        return;
+    }
+    if (params.stage == STAGE_SETTLE_CELL_WORK)
+        settleCellExternalWork(id);
+    if (params.stage == STAGE_SETTLE_GAS_WORK) {
+        writeDoubleField(F_GAS_EXTERNAL_WORK, id, 0.0);
+        if (id < pressureHeaderWord(GAS_H_GAS_CAPACITY)) {
+            double bodyVolumeRate = readDoubleField(F_ROW_BODY_RATE, headerWord(H_CELLS) + id);
+            writeDoubleAt(gasFieldWordOffset(GAS_F_NODE_PREDICTED_VOLUME_CHANGE) + 2 * id,
+                          readDoubleAt(gasFieldWordOffset(GAS_F_NODE_PREDICTED_VOLUME_CHANGE) + 2 * id) +
+                              params.duration * params.cellSize * params.cellSize * params.cellSize * bodyVolumeRate);
+            writeDoubleField(F_GAS_EXTERNAL_WORK, id,
+                             -params.duration * params.cellSize * params.cellSize * params.cellSize * bodyVolumeRate *
+                                 physicalRowPressure(headerWord(H_CELLS) + id));
+        }
+    }
 }

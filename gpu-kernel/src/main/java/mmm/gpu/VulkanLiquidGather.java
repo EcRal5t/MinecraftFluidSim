@@ -14,6 +14,14 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Gathers already accepted stock routes into a canonical resident liquid inventory. */
 final class VulkanLiquidGather implements AutoCloseable {
+    private static final int STAGE_CLEAR_STOCK = 0;
+    private static final int STAGE_GATHER_SLOT = 1;
+    private static final int STAGE_FINISH_STOCK = 3;
+    private static String stageDefines() {
+        return "#define STAGE_CLEAR_STOCK " + STAGE_CLEAR_STOCK + "\n" +
+                "#define STAGE_GATHER_SLOT " + STAGE_GATHER_SLOT + "\n" +
+                "#define STAGE_FINISH_STOCK " + STAGE_FINISH_STOCK + "\n";
+    }
     /** Header words and shared stock/route columns used by the shader. */
     private enum Header {
         SIZE_X(0),
@@ -35,7 +43,7 @@ final class VulkanLiquidGather implements AutoCloseable {
     }
     private static final int SOURCE_FIELDS = 16, TARGET_FIELDS = 35, ROUTE_FIELDS = 54;
     private static String shaderLayout() {
-        var result = new StringBuilder();
+        var result = new StringBuilder(stageDefines());
         for (var field : Header.values())
             result.append("#define H_").append(field.name()).append(' ').append(field.word).append('\n');
         result.append("#define SOURCE_FIELDS ").append(SOURCE_FIELDS).append('\n');
@@ -124,11 +132,11 @@ final class VulkanLiquidGather implements AutoCloseable {
     /** Capacity acceptance precedes this pass. Momentum and the retained energy remainders have separate owners. */
     void record(VkCommandBuffer command, Layout layout) {
         int stocks = layout.output().stockCapacity(), slots=Math.multiplyExact(layout.output().cellCount(),layout.output().materialCount());
-        stage(command, layout, 0, stocks);
-        stage(command, layout, 1, slots);
+        stage(command, layout, STAGE_CLEAR_STOCK, stocks);
+        stage(command, layout, STAGE_GATHER_SLOT, slots);
         scan.record(command, stocks, word(layout.speciesCounts()), word(layout.output().column(VulkanLiquidStateLayout.Field.SPECIES_OFFSETS)),
                 word(layout.scanWorkspace()));
-        stage(command, layout, 3, Math.max(1, stocks));
+        stage(command, layout, STAGE_FINISH_STOCK, Math.max(1, stocks));
     }
 
     private void stage(VkCommandBuffer command, Layout layout, int stage, int count) {

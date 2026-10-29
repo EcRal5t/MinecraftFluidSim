@@ -12,6 +12,44 @@ import static org.lwjgl.vulkan.VK10.*;
 
 /** Finite gas rows of the common pressure operator, with parallel face-incidence products. */
 final class VulkanGasPressure implements AutoCloseable {
+    private enum Stage {
+        CAPTURE_FACES,
+        INITIALIZE_ROWS,
+        COMPUTE_DATUM,
+        PREPARE_FACES,
+        SCATTER_FACES,
+        ASSEMBLE_GAS_ROWS,
+        ASSEMBLE_LIQUID_ROWS,
+        COUNT_BLOCKS,
+        MAP_BLOCKS,
+        PRODUCT_BLOCKS,
+        PRODUCT_LARGE_NODES,
+        PROJECT_FACES,
+        OBSERVE_GAS,
+        OBSERVE_LIQUID,
+        PRODUCT_SHORT_NODES,
+        OBSERVE_FACE_ENERGY,
+        PUBLISH_SOLVE_DISPATCH,
+        BEGIN_SCHUR,
+        FIND_SCHUR_CANDIDATES,
+        SELECT_SCHUR,
+        ASSEMBLE_SCHUR,
+        APPEND_LIQUID_ROWS,
+        BACK_SUBSTITUTE,
+        RESTORE_ROWS,
+        END_SCHUR,
+        CLEAR_REDUCED_GRAPH,
+        PROPOSE_ORIGINAL_PAIRS,
+        PROPOSE_ELIMINATED_PAIRS,
+        PUBLISH_PROPOSAL_DISPATCH,
+        INSERT_PAIRS,
+        COUNT_PAIRS,
+        PUBLISH_GROUP_DISPATCH,
+        SCATTER_PAIRS,
+        SUM_PAIRS,
+        SCATTER_CORE_PAIRS
+    }
+
     /** Header word positions used by host encoding and the shader. */
     enum Header {
         LIQUID_COUNT(0),
@@ -57,6 +95,8 @@ final class VulkanGasPressure implements AutoCloseable {
     static final int WORK_FIELDS = 64;
     private static String shaderLayout() {
         var result = new StringBuilder();
+        for (var stage : Stage.values())
+            result.append("#define STAGE_").append(stage.name()).append(' ').append(stage.ordinal()).append('\n');
         for (var field : Header.values())
             result.append("#define H_").append(field.name()).append(' ').append(field.word).append('\n');
         result.append("#define WORK_FIELDS ").append(WORK_FIELDS).append('\n');
@@ -172,7 +212,7 @@ final class VulkanGasPressure implements AutoCloseable {
             var liquid=geometry.totals().source();data[Header.SIZE_X.word]=liquid.sizeX();data[Header.SIZE_Y.word]=liquid.sizeY();data[Header.SIZE_Z.word]=liquid.sizeZ();
             var buffers=List.of(pressure.starts(),pressure.columns(),pressure.values(),pressure.rows(),pressure.pressure(),
                     pressure.work(),pressure.meta(),pressure.problem(),pressure.control());
-            for(int i=0;i<buffers.size();i++)data[16+i]=VulkanGasPressure.word(buffers.get(i));
+            for(int i=0;i<buffers.size();i++)data[Header.STARTS.word+i]=VulkanGasPressure.word(buffers.get(i));
             for(Field field:Field.values())data[WORK_FIELDS+field.ordinal()]=word(field);
             for(int i=0;i<data.length;i++)out.putInt(4*i,data[i]);
             out.putDouble(4 * Header.AMBIENT_PRESSURE.word,101325.0);return out;
@@ -189,52 +229,52 @@ final class VulkanGasPressure implements AutoCloseable {
     void rebindRanges(FlipKernelBindings.BufferRange arena,FlipKernelBindings.BufferRange errors){
         this.arena=arena;bindings.rebindRanges(List.of(arena,errors));scan.rebindRanges(arena,arena,arena,errors);
     }
-    void recordCaptureFaces(VkCommandBuffer command,Layout layout,VulkanLiquidProjection.Parameters parameters){stage(command,layout,parameters,0,layout.faceCount,0);}
+    void recordCaptureFaces(VkCommandBuffer command,Layout layout,VulkanLiquidProjection.Parameters parameters){stage(command,layout,parameters,Stage.CAPTURE_FACES.ordinal(),layout.faceCount,0);}
     void recordPrepare(VkCommandBuffer command,Layout layout,VulkanLiquidProjection.Parameters parameters){recordPrepare(command,layout,parameters,null);}
     void recordPrepare(VkCommandBuffer command,Layout layout,VulkanLiquidProjection.Parameters parameters,Runnable afterRows){
-        stage(command,layout,parameters,1,layout.pressureSize,0);
-        stage(command,layout,parameters,2,128,0);
-        stage(command,layout,parameters,3,layout.faceCount,0);
+        stage(command,layout,parameters,Stage.INITIALIZE_ROWS.ordinal(),layout.pressureSize,0);
+        stage(command,layout,parameters,Stage.COMPUTE_DATUM.ordinal(),128,0);
+        stage(command,layout,parameters,Stage.PREPARE_FACES.ordinal(),layout.faceCount,0);
         scan.record(command,layout.gasCapacity,layout.word(Field.FACE_COUNTS),layout.word(Field.FACE_OFFSETS),layout.word(Field.SCAN));
-        stage(command,layout,parameters,4,layout.faceCount,0);
-        stage(command,layout,parameters,5,Math.multiplyExact(128,layout.gasCapacity),0);
-        stage(command,layout,parameters,6,layout.liquidCount,0);
+        stage(command,layout,parameters,Stage.SCATTER_FACES.ordinal(),layout.faceCount,0);
+        stage(command,layout,parameters,Stage.ASSEMBLE_GAS_ROWS.ordinal(),Math.multiplyExact(128,layout.gasCapacity),0);
+        stage(command,layout,parameters,Stage.ASSEMBLE_LIQUID_ROWS.ordinal(),layout.liquidCount,0);
         if(afterRows!=null)afterRows.run();
         if(layout.pressureSize==layout.liquidCount+layout.gasCapacity){
-            stage(command,layout,null,17,1,0);
-            stage(command,layout,null,18,layout.gasCapacity,0);
-            stage(command,layout,null,19,layout.gasCapacity,0);
-            stage(command,layout,null,20,Math.multiplyExact(128,layout.gasCapacity),0);
-            stage(command,layout,null,21,layout.liquidCount,0);
+            stage(command,layout,null,Stage.BEGIN_SCHUR.ordinal(),1,0);
+            stage(command,layout,null,Stage.FIND_SCHUR_CANDIDATES.ordinal(),layout.gasCapacity,0);
+            stage(command,layout,null,Stage.SELECT_SCHUR.ordinal(),layout.gasCapacity,0);
+            stage(command,layout,null,Stage.ASSEMBLE_SCHUR.ordinal(),Math.multiplyExact(128,layout.gasCapacity),0);
+            stage(command,layout,null,Stage.APPEND_LIQUID_ROWS.ordinal(),layout.liquidCount,0);
             recordReducedAdjacency(command,layout);
         }
-        stage(command,layout,parameters,7,layout.gasCapacity,0);
+        stage(command,layout,parameters,Stage.COUNT_BLOCKS.ordinal(),layout.gasCapacity,0);
         scan.record(command,layout.gasCapacity,layout.word(Field.BLOCK_COUNTS),layout.word(Field.BLOCK_OFFSETS),layout.word(Field.SCAN));
-        stage(command,layout,parameters,8,layout.gasCapacity,0);
-        stage(command,layout,parameters,16,1,0);
+        stage(command,layout,parameters,Stage.MAP_BLOCKS.ordinal(),layout.gasCapacity,0);
+        stage(command,layout,parameters,Stage.PUBLISH_SOLVE_DISPATCH.ordinal(),1,0);
     }
     /** Coalesces each physical core peer pair once; the original face graph remains available for final certification. */
     private void recordReducedAdjacency(VkCommandBuffer command,Layout layout){
-        stage(command,layout,null,25,Math.max(layout.hashCapacity,Math.max(layout.proposalCapacity,layout.gasCapacity)),0);
-        stage(command,layout,null,26,layout.faceCount,0);stage(command,layout,null,27,layout.gasCapacity,0);
-        stage(command,layout,null,28,1,0);
-        stage(command,layout,null,29,layout.proposalCapacity,0);stage(command,layout,null,30,layout.proposalCapacity,0);
+        stage(command,layout,null,Stage.CLEAR_REDUCED_GRAPH.ordinal(),Math.max(layout.hashCapacity,Math.max(layout.proposalCapacity,layout.gasCapacity)),0);
+        stage(command,layout,null,Stage.PROPOSE_ORIGINAL_PAIRS.ordinal(),layout.faceCount,0);stage(command,layout,null,Stage.PROPOSE_ELIMINATED_PAIRS.ordinal(),layout.gasCapacity,0);
+        stage(command,layout,null,Stage.PUBLISH_PROPOSAL_DISPATCH.ordinal(),1,0);
+        stage(command,layout,null,Stage.INSERT_PAIRS.ordinal(),layout.proposalCapacity,0);stage(command,layout,null,Stage.COUNT_PAIRS.ordinal(),layout.proposalCapacity,0);
         scan.record(command,layout.proposalCapacity,layout.word(Field.GROUP_COUNTS),layout.word(Field.GROUP_OFFSETS),layout.word(Field.SCAN));
-        stage(command,layout,null,31,1,0);stage(command,layout,null,32,layout.proposalCapacity,0);
-        stage(command,layout,null,33,Math.multiplyExact(128,layout.proposalCapacity),0);
+        stage(command,layout,null,Stage.PUBLISH_GROUP_DISPATCH.ordinal(),1,0);stage(command,layout,null,Stage.SCATTER_PAIRS.ordinal(),layout.proposalCapacity,0);
+        stage(command,layout,null,Stage.SUM_PAIRS.ordinal(),Math.multiplyExact(128,layout.proposalCapacity),0);
         scan.record(command,layout.gasCapacity,layout.word(Field.CORE_COUNTS),layout.word(Field.CORE_OFFSETS),layout.word(Field.SCAN));
-        stage(command,layout,null,34,layout.proposalCapacity,0);
+        stage(command,layout,null,Stage.SCATTER_CORE_PAIRS.ordinal(),layout.proposalCapacity,0);
     }
     /** Restores the original KKT operator after exact independent-gas back substitution. */
     void recordRecoverOriginal(VkCommandBuffer command,Layout layout){
         if(layout.pressureSize!=layout.liquidCount+layout.gasCapacity)return;
-        stage(command,layout,null,22,layout.gasCapacity,0);
-        stage(command,layout,null,24,1,0);
-        stage(command,layout,null,23,layout.pressureSize,0);
-        stage(command,layout,null,7,layout.gasCapacity,0);
+        stage(command,layout,null,Stage.BACK_SUBSTITUTE.ordinal(),layout.gasCapacity,0);
+        stage(command,layout,null,Stage.END_SCHUR.ordinal(),1,0);
+        stage(command,layout,null,Stage.RESTORE_ROWS.ordinal(),layout.pressureSize,0);
+        stage(command,layout,null,Stage.COUNT_BLOCKS.ordinal(),layout.gasCapacity,0);
         scan.record(command,layout.gasCapacity,layout.word(Field.BLOCK_COUNTS),layout.word(Field.BLOCK_OFFSETS),layout.word(Field.SCAN));
-        stage(command,layout,null,8,layout.gasCapacity,0);
-        stage(command,layout,null,16,1,0);
+        stage(command,layout,null,Stage.MAP_BLOCKS.ordinal(),layout.gasCapacity,0);
+        stage(command,layout,null,Stage.PUBLISH_SOLVE_DISPATCH.ordinal(),1,0);
     }
     VulkanPressureKernel.ParallelRows parallelRows(Layout layout){
         var rows=layout.column(Field.SOLVE_ROWS);
@@ -244,19 +284,19 @@ final class VulkanGasPressure implements AutoCloseable {
     FlipKernelBindings.BufferRange productDispatch(Layout layout){var c=layout.column(Field.DISPATCH);return new FlipKernelBindings.BufferRange(arena.buffer(),arena.offset()+c.offset(),c.bindingBytes());}
     /** Writes gas matrix-vector products into the common pressure Q column. */
     void recordProduct(VkCommandBuffer command,Layout layout,boolean direction){
-        stage(command,layout,null,9,Math.multiplyExact(128,layout.blockCapacity),direction?1:0);
-        stage(command,layout,null,10,Math.multiplyExact(128,layout.gasCapacity),direction?1:0);
-        stage(command,layout,null,14,layout.gasCapacity,direction?1:0);
+        stage(command,layout,null,Stage.PRODUCT_BLOCKS.ordinal(),Math.multiplyExact(128,layout.blockCapacity),direction?1:0);
+        stage(command,layout,null,Stage.PRODUCT_LARGE_NODES.ordinal(),Math.multiplyExact(128,layout.gasCapacity),direction?1:0);
+        stage(command,layout,null,Stage.PRODUCT_SHORT_NODES.ordinal(),layout.gasCapacity,direction?1:0);
     }
     void recordProject(VkCommandBuffer command,Layout layout,VulkanLiquidProjection.Parameters parameters){
-        stage(command,layout,parameters,11,layout.faceCount,0);
+        stage(command,layout,parameters,Stage.PROJECT_FACES.ordinal(),layout.faceCount,0);
         recordObserve(command,layout,parameters);
     }
     /** Recomputes gas diagnostics after a joint liquid/particle projection has published face velocities. */
     void recordObserve(VkCommandBuffer command,Layout layout,VulkanLiquidProjection.Parameters parameters){
-        stage(command,layout,parameters,15,layout.faceCount,0);
-        stage(command,layout,parameters,12,Math.multiplyExact(128,layout.gasCapacity),0);
-        stage(command,layout,parameters,13,layout.liquidCount,0);
+        stage(command,layout,parameters,Stage.OBSERVE_FACE_ENERGY.ordinal(),layout.faceCount,0);
+        stage(command,layout,parameters,Stage.OBSERVE_GAS.ordinal(),Math.multiplyExact(128,layout.gasCapacity),0);
+        stage(command,layout,parameters,Stage.OBSERVE_LIQUID.ordinal(),layout.liquidCount,0);
     }
     private void stage(VkCommandBuffer command,Layout layout,VulkanLiquidProjection.Parameters parameters,int stage,int count,int argument){
         if(count==0)return;
@@ -267,10 +307,10 @@ final class VulkanGasPressure implements AutoCloseable {
                     .putFloat(parameters==null?1:parameters.cellSize()).putFloat(parameters==null?1:parameters.duration())
                     .putFloat(parameters==null?0:parameters.gravity()).putFloat(parameters==null?0:parameters.tolerance()).flip();
             vkCmdPushConstants(command,bindings.pipelineLayout(),VK_SHADER_STAGE_COMPUTE_BIT,0,push);
-            if(stage==5||stage==9||stage==10||stage==12||stage==14||stage==20||stage==29||stage==30||stage==32||stage==33||stage==34) {
+            if(stage==Stage.ASSEMBLE_GAS_ROWS.ordinal()||stage==Stage.PRODUCT_BLOCKS.ordinal()||stage==Stage.PRODUCT_LARGE_NODES.ordinal()||stage==Stage.OBSERVE_GAS.ordinal()||stage==Stage.PRODUCT_SHORT_NODES.ordinal()||stage==Stage.ASSEMBLE_SCHUR.ordinal()||stage==Stage.INSERT_PAIRS.ordinal()||stage==Stage.COUNT_PAIRS.ordinal()||stage==Stage.SCATTER_PAIRS.ordinal()||stage==Stage.SUM_PAIRS.ordinal()||stage==Stage.SCATTER_CORE_PAIRS.ordinal()) {
                 VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                         VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,VK_ACCESS_INDIRECT_COMMAND_READ_BIT,stack);
-                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+layout.column(Field.DISPATCH).offset()+12L*(stage==9?(argument==1?4:7):stage==10?(argument==1?5:8):stage==14?(argument==1?6:9):stage==29||stage==30||stage==32?11:stage==33?12:stage==34?13:0));
+                vkCmdDispatchIndirect(command,arena.buffer().handle(),arena.offset()+layout.column(Field.DISPATCH).offset()+12L*(stage==Stage.PRODUCT_BLOCKS.ordinal()?(argument==1?4:7):stage==Stage.PRODUCT_LARGE_NODES.ordinal()?(argument==1?5:8):stage==Stage.PRODUCT_SHORT_NODES.ordinal()?(argument==1?6:9):stage==Stage.INSERT_PAIRS.ordinal()||stage==Stage.COUNT_PAIRS.ordinal()||stage==Stage.SCATTER_PAIRS.ordinal()?11:stage==Stage.SUM_PAIRS.ordinal()?12:stage==Stage.SCATTER_CORE_PAIRS.ordinal()?13:0));
             } else vkCmdDispatch(command,Math.min(groups,65535),(groups+65534)/65535,1);
             VulkanRegionStorage.barrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_WRITE_BIT,
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,stack);

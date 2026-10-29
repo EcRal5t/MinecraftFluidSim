@@ -223,6 +223,8 @@
 <a id="当前验证证据"></a>
 ## 当前验证基线与状态
 
+2026-10-30 核心 shader 命名与常量整理：`runGpuResidentStateValidation`、`runGpuLiquidCapacityInputsValidation`、`runGpuThermalPhaseValidation`、`runGpuInventoryTransportValidation` 通过。覆盖生产 shader 编译、实体与 checkpoint 续算、容量接受与真实不可行拒绝、七类热相变、库存跨工作组输运及候选回滚。记录 `build/shader-naming-integration.log`；本轮复用现有场景，未改变算法及数值预算。`assemble` 通过，记录 `build/shader-naming-delivery.log`，产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
+
 2026-10-29 GPU 主线迁移：`runGpuResidentStateValidation` 通过，覆盖设备提交、导出恢复及同布局导入候选的拒绝和采用；`verifyArchitecture` 扫描 613 个文件通过，区域类 722 行、工作区 980 行。运行记录 `build/gpu-mainline-resident.log`。
 
 同日 `:fabric:runHostValidation -PhostValidation=region-state,containers,ownership,lifecycle` 通过，包含容器存储 19 个场景、世界归属 27 个场景及生命周期和区域存档；记录 `build/gpu-mainline-host.log`。这次构建同时编译 Fabric 测试源码。

@@ -1,5 +1,6 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
+// HOST_LAYOUT
 layout(local_size_x=256) in;
 layout(binding=0,std430) readonly buffer Starts { int starts[]; };
 layout(binding=1,std430) readonly buffer Columns { int columns[]; };
@@ -30,21 +31,21 @@ int lane,n,gid,stride,group,ordinalCount,groupCount;
 #define RHS(row) problem[row]
 #define LOWER(row) problem[n+(row)]
 #define TARGET problem[3*n]
-#define ITER control[0]
-#define RMS control[1]
-#define SUCCESS control[2]
-#define RUN control[3]
-#define RZ control[4]
-#define ALPHA control[5]
-#define RESTART control[6]
-#define REFRESH control[7]
-#define CONSTRAINT_TRIALS control[8]
-#define BETA control[9]
-#define TOLERANCE control[10]
-#define PMAX control[11]
-#define PHASE control[12]
-#define ACTIVE_SET_UPDATES control[13]
-#define RESIDUAL_REFRESHES control[15]
+#define ITER control[CONTROL_ITERATION]
+#define RMS control[CONTROL_RESIDUAL_RMS]
+#define SUCCESS control[CONTROL_SUCCESS]
+#define RUN control[CONTROL_RUN]
+#define RZ control[CONTROL_RESIDUAL_DOT_PRECONDITIONED]
+#define ALPHA control[CONTROL_STEP_LENGTH]
+#define RESTART control[CONTROL_RESTART]
+#define REFRESH control[CONTROL_REFRESH]
+#define CONSTRAINT_TRIALS control[CONTROL_CONSTRAINT_TRIALS]
+#define BETA control[CONTROL_DIRECTION_SCALE]
+#define TOLERANCE control[CONTROL_TOLERANCE]
+#define PMAX control[CONTROL_MAX_PRESSURE]
+#define PHASE control[CONTROL_PHASE]
+#define ACTIVE_SET_UPDATES control[CONTROL_ACTIVE_SET_UPDATES]
+#define RESIDUAL_REFRESHES control[CONTROL_RESIDUAL_REFRESHES]
 // 0/1/2 are inner/init/final residuals. Higher phases suspend the MG application.
 // Inner CG locks FREE and permits infeasible iterates. Only converged subproblems
 // enter the outer policy update. RZ/BETA/ALPHA then hold trial norm/length/kind.
@@ -252,13 +253,13 @@ void originalMaximum(){
     saveStats(0.0,0.0,0.0,maximum,0,0);
 }
 void executeStage(int stage) {
-    if(stage==0)initializeRows();else if(stage==1)initializeControl();else if(stage==2)refreshResidual();
-    else if(stage==3)finishRefresh();else if(stage==4)precondition();else if(stage==5)finishPrecondition();
-    else if(stage==6)updateDirection();else if(stage==7)directionProduct();else if(stage==8)finishProduct();
-    else if(stage==9)updateSolution();else if(stage==10)finishUpdate();else if(stage==11)finalizeControl();
-    else if(stage==12&&gid==0&&SUCCESS==0.0)atomicOr(errors,4u);
-    else if(stage==13)originalMaximum();
-    else if(stage==14){dvec4 stats=collectStats(0,0);if(gid==0)PMAX=stats.w;}
+    if(stage==STAGE_INITIALIZE_ROWS)initializeRows();else if(stage==STAGE_INITIALIZE_CONTROL)initializeControl();else if(stage==STAGE_REFRESH_RESIDUAL)refreshResidual();
+    else if(stage==STAGE_FINISH_REFRESH)finishRefresh();else if(stage==STAGE_PRECONDITION)precondition();else if(stage==STAGE_FINISH_PRECONDITION)finishPrecondition();
+    else if(stage==STAGE_UPDATE_DIRECTION)updateDirection();else if(stage==STAGE_DIRECTION_PRODUCT)directionProduct();else if(stage==STAGE_FINISH_PRODUCT)finishProduct();
+    else if(stage==STAGE_UPDATE_SOLUTION)updateSolution();else if(stage==STAGE_FINISH_UPDATE)finishUpdate();else if(stage==STAGE_FINALIZE_CONTROL)finalizeControl();
+    else if(stage==STAGE_CHECK_SUCCESS&&gid==0&&SUCCESS==0.0)atomicOr(errors,4u);
+    else if(stage==STAGE_ORIGINAL_MAXIMUM)originalMaximum();
+    else if(stage==STAGE_FINISH_ORIGINAL_MAXIMUM){dvec4 stats=collectStats(0,0);if(gid==0)PMAX=stats.w;}
 }
 void singleStage(int stage){executeStage(stage);syncAll();}
 void publishDispatches() {
@@ -276,23 +277,23 @@ void publishDispatches() {
         }
     }
     uint groups=uint(groupCount);
-    stageDispatch[2]=uvec4(REFRESH!=0.0?groups:0u,1u,1u,0u);
-    stageDispatch[4]=uvec4(RUN!=0.0||PHASE!=DONE?groups:0u,1u,1u,0u);
-    stageDispatch[6]=uvec4(RUN!=0.0&&PHASE<3.0&&RESTART==0.0?groups:0u,1u,1u,0u);
-    stageDispatch[7]=uvec4(RUN!=0.0&&PHASE<3.0?groups:0u,1u,1u,0u);
-    stageDispatch[9]=uvec4(RUN!=0.0&&PHASE<3.0?groups:0u,1u,1u,0u);
+    stageDispatch[STAGE_REFRESH_RESIDUAL]=uvec4(REFRESH!=0.0?groups:0u,1u,1u,0u);
+    stageDispatch[STAGE_PRECONDITION]=uvec4(RUN!=0.0||PHASE!=DONE?groups:0u,1u,1u,0u);
+    stageDispatch[STAGE_UPDATE_DIRECTION]=uvec4(RUN!=0.0&&PHASE<3.0&&RESTART==0.0?groups:0u,1u,1u,0u);
+    stageDispatch[STAGE_DIRECTION_PRODUCT]=uvec4(RUN!=0.0&&PHASE<3.0?groups:0u,1u,1u,0u);
+    stageDispatch[STAGE_UPDATE_SOLUTION]=uvec4(RUN!=0.0&&PHASE<3.0?groups:0u,1u,1u,0u);
 }
 void main() {
     // Compact row selection is independent of the preconditioner; physical strides stay fixed.
     bool compact=(p.externalPreconditioner&4)!=0;
-    ordinalCount=compact?int(control[14]):p.count;
+    ordinalCount=compact?int(control[CONTROL_SOLVE_ROW_COUNT]):p.count;
     groupCount=compact?max(1,(ordinalCount+255)/256):p.groups;
-    lane=int(gl_LocalInvocationID.x);n=p.size;group=int(gl_WorkGroupID.x);gid=group*256+lane;stride=(p.stage==0?p.groups:groupCount)*256;
-    if(p.stage>=0){executeStage(p.stage);if(p.stage==1||p.stage==3||p.stage==5||p.stage==8||p.stage==10||p.stage==11)publishDispatches();return;}
-    for(int stage=0;stage<=6;stage++)singleStage(stage);
+    lane=int(gl_LocalInvocationID.x);n=p.size;group=int(gl_WorkGroupID.x);gid=group*256+lane;stride=(p.stage==STAGE_INITIALIZE_ROWS?p.groups:groupCount)*256;
+    if(p.stage>=0){executeStage(p.stage);if(p.stage==STAGE_INITIALIZE_CONTROL||p.stage==STAGE_FINISH_REFRESH||p.stage==STAGE_FINISH_PRECONDITION||p.stage==STAGE_FINISH_PRODUCT||p.stage==STAGE_FINISH_UPDATE||p.stage==STAGE_FINALIZE_CONTROL)publishDispatches();return;}
+    for(int stage=STAGE_INITIALIZE_ROWS;stage<=STAGE_UPDATE_DIRECTION;stage++)singleStage(stage);
     while(RUN!=0.0&&ITER<double(p.maximumIterations)){
-        for(int stage=7;stage<=10;stage++)singleStage(stage);
-        for(int stage=2;stage<=6;stage++)singleStage(stage);
+        for(int stage=STAGE_DIRECTION_PRODUCT;stage<=STAGE_FINISH_UPDATE;stage++)singleStage(stage);
+        for(int stage=STAGE_REFRESH_RESIDUAL;stage<=STAGE_UPDATE_DIRECTION;stage++)singleStage(stage);
     }
-    singleStage(11);singleStage(2);singleStage(3);singleStage(12);
+    singleStage(STAGE_FINALIZE_CONTROL);singleStage(STAGE_REFRESH_RESIDUAL);singleStage(STAGE_FINISH_REFRESH);singleStage(STAGE_CHECK_SUCCESS);
 }
