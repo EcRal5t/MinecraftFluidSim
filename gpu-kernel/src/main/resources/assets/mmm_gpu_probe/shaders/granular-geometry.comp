@@ -1,6 +1,13 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+const int64_t MAX_PARCEL_VOLUME_SVQ = 262144l;
+const int STAGE_BUILD_SUPPORTS = 0;
+const int STAGE_CLEAR_CELL_INDEX = 1;
+const int STAGE_COUNT_ENTRIES = 2;
+const int STAGE_SCATTER_ENTRIES = 3;
+const int STAGE_GATHER_OCCUPANCY = 4;
+const uint ERROR_GRANULAR_GEOMETRY = 524288u;
 layout(local_size_x = 128) in;
 layout(binding = 0, std430) buffer Arena {
     uint words[];
@@ -17,65 +24,65 @@ layout(push_constant) uniform Params {
 }
 p;
 // HOST_LAYOUT
-int h(int i) {
+int headerValue(int i) {
     return int(words[p.header + i]);
 }
-int state(int f) {
-    return h(STATE_FIELDS + f);
+int stateFieldOffset(int f) {
+    return headerValue(STATE_FIELDS + f);
 }
-int at(int f) {
-    return h(WORK_FIELDS + f);
+int fieldOffset(int f) {
+    return headerValue(WORK_FIELDS + f);
 }
-int get(int f, int i) {
-    return int(words[at(f) + i]);
+int readFieldInt(int f, int i) {
+    return int(words[fieldOffset(f) + i]);
 }
-void put(int f, int i, int v) {
-    words[at(f) + i] = uint(v);
+void writeFieldInt(int f, int i, int v) {
+    words[fieldOffset(f) + i] = uint(v);
 }
-int64_t integer(int address) {
+int64_t readInt64(int address) {
     return int64_t(uint64_t(words[address]) | (uint64_t(words[address + 1]) << 32));
 }
 void writeInteger(int address, int64_t v) {
     words[address] = uint(v);
     words[address + 1] = uint(uint64_t(v) >> 32);
 }
-double number(int address) {
+double readDouble(int address) {
     return packDouble2x32(uvec2(words[address], words[address + 1]));
 }
-void invalid() {
-    atomicOr(errors, 524288u);
+void reportInvalidState() {
+    atomicOr(errors, ERROR_GRANULAR_GEOMETRY);
 }
 int64_t add(int64_t a, int64_t b) {
     if (a < 0l || b < 0l || a > 9223372036854775807l - b) {
-        invalid();
+        reportInvalidState();
         return 0l;
     }
     return a + b;
 }
 int activeCount() {
-    return int(words[state(GRANULAR_COUNTS)]);
+    return int(words[stateFieldOffset(GRANULAR_COUNTS)]);
 }
 int depositCount() {
-    return int(words[state(GRANULAR_COUNTS) + 1]);
+    return int(words[stateFieldOffset(GRANULAR_COUNTS) + 1]);
 }
-void supports(int parcel) {
+void buildParticleSupports(int parcel) {
     if (parcel >= activeCount())
         return;
-    int64_t volume = integer(state(GRANULAR_SOLID_VOLUME_SVQ) + 2 * parcel);
-    if (volume <= 0l || volume > 262144l) {
-        invalid();
+    int64_t volume = readInt64(stateFieldOffset(GRANULAR_SOLID_VOLUME_SVQ) + 2 * parcel);
+    if (volume <= 0l || volume > MAX_PARCEL_VOLUME_SVQ) {
+        reportInvalidState();
         return;
     }
     dvec3 position =
-        dvec3(number(state(GRANULAR_POSITION) + 6 * parcel), number(state(GRANULAR_POSITION) + 6 * parcel + 2),
-              number(state(GRANULAR_POSITION) + 6 * parcel + 4)) /
+        dvec3(readDouble(stateFieldOffset(GRANULAR_POSITION) + 6 * parcel), readDouble(stateFieldOffset(GRANULAR_POSITION) + 6 * parcel + 2),
+              readDouble(stateFieldOffset(GRANULAR_POSITION) + 6 * parcel + 4)) /
             p.cellSize -
         .5;
     if (any(isnan(position)) || any(isinf(position))) {
-        invalid();
+        reportInvalidState();
         return;
     }
-    ivec3 base = ivec3(floor(position)), dims = ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z));
+    ivec3 base = ivec3(floor(position)), dims = ivec3(headerValue(H_SIZE_X), headerValue(H_SIZE_Y), headerValue(H_SIZE_Z));
     dvec3 f = position - dvec3(base);
     double weight[8], remainders[8], sum = 0.0;
     int cell[8];
@@ -89,7 +96,7 @@ void supports(int parcel) {
         sum += weight[i];
     }
     if (!(sum > 0.0)) {
-        invalid();
+        reportInvalidState();
         return;
     }
     for (int i = 0; i < 8; i++) {
@@ -100,7 +107,7 @@ void supports(int parcel) {
     }
     int remaining = int(volume - used);
     if (remaining < 0 || remaining > 8) {
-        invalid();
+        reportInvalidState();
         return;
     }
     for (int k = 0; k < remaining; k++) {
@@ -110,74 +117,74 @@ void supports(int parcel) {
                                          (remainders[i] == remainders[best] && cell[i] < cell[best])))
                 best = i;
         if (best < 0) {
-            invalid();
+            reportInvalidState();
             return;
         }
         quota[best]++;
         remainders[best] = -1.0;
     }
     for (int i = 0; i < 8; i++) {
-        words[state(GRANULAR_SUPPORT_CELLS) + 8 * parcel + i] = uint(cell[i]);
-        writeInteger(state(GRANULAR_SUPPORT_QUOTAS) + 2 * (8 * parcel + i), quota[i]);
+        words[stateFieldOffset(GRANULAR_SUPPORT_CELLS) + 8 * parcel + i] = uint(cell[i]);
+        writeInteger(stateFieldOffset(GRANULAR_SUPPORT_QUOTAS) + 2 * (8 * parcel + i), quota[i]);
     }
 }
 int entryCell(int entry) {
-    if (entry < 8 * h(H_PARTICLE_CAPACITY)) {
-        if (entry / 8 >= activeCount() || integer(state(GRANULAR_SUPPORT_QUOTAS) + 2 * entry) == 0l)
+    if (entry < 8 * headerValue(H_PARTICLE_CAPACITY)) {
+        if (entry / 8 >= activeCount() || readInt64(stateFieldOffset(GRANULAR_SUPPORT_QUOTAS) + 2 * entry) == 0l)
             return -1;
-        return int(words[state(GRANULAR_SUPPORT_CELLS) + entry]);
+        return int(words[stateFieldOffset(GRANULAR_SUPPORT_CELLS) + entry]);
     }
-    int deposit = entry - 8 * h(H_PARTICLE_CAPACITY);
-    return deposit < depositCount() ? int(words[state(GRANULAR_DEPOSIT_CELL) + deposit]) : -1;
+    int deposit = entry - 8 * headerValue(H_PARTICLE_CAPACITY);
+    return deposit < depositCount() ? int(words[stateFieldOffset(GRANULAR_DEPOSIT_CELL) + deposit]) : -1;
 }
 void countEntry(int entry) {
     int c = entryCell(entry);
     if (c == -1)
         return;
-    if (c < 0 || c >= h(H_CELL_COUNT)) {
-        invalid();
+    if (c < 0 || c >= headerValue(H_CELL_COUNT)) {
+        reportInvalidState();
         return;
     }
-    atomicAdd(words[at(FIELD_COUNTS) + c], 1u);
+    atomicAdd(words[fieldOffset(FIELD_COUNTS) + c], 1u);
 }
-void scatter(int entry) {
+void scatterCellEntry(int entry) {
     int c = entryCell(entry);
-    if (c < 0 || c >= h(H_CELL_COUNT))
+    if (c < 0 || c >= headerValue(H_CELL_COUNT))
         return;
-    int slot = int(atomicAdd(words[at(FIELD_CURSORS) + c], 1u));
-    put(3, get(1, c) + slot, entry);
+    int slot = int(atomicAdd(words[fieldOffset(FIELD_CURSORS) + c], 1u));
+    writeFieldInt(FIELD_ENTRIES, readFieldInt(FIELD_OFFSETS, c) + slot, entry);
 }
-void gather(int cell) {
-    int64_t fixedVolume = integer(h(H_COHERENT_SVQ) + 2 * cell), activeVolume = 0l;
-    for (int i = get(1, cell); i < get(1, cell + 1); i++) {
-        int entry = get(3, i);
-        if (entry < 8 * h(H_PARTICLE_CAPACITY))
-            activeVolume = add(activeVolume, integer(state(GRANULAR_SUPPORT_QUOTAS) + 2 * entry));
+void gatherCellOccupancy(int cell) {
+    int64_t fixedVolume = readInt64(headerValue(H_COHERENT_SVQ) + 2 * cell), activeVolume = 0l;
+    for (int i = readFieldInt(FIELD_OFFSETS, cell); i < readFieldInt(FIELD_OFFSETS, cell + 1); i++) {
+        int entry = readFieldInt(FIELD_ENTRIES, i);
+        if (entry < 8 * headerValue(H_PARTICLE_CAPACITY))
+            activeVolume = add(activeVolume, readInt64(stateFieldOffset(GRANULAR_SUPPORT_QUOTAS) + 2 * entry));
         else
-            fixedVolume = add(fixedVolume, integer(state(GRANULAR_SOLID_VOLUME_SVQ) +
-                                                   2 * (h(H_PARTICLE_CAPACITY) + entry - 8 * h(H_PARTICLE_CAPACITY))));
+            fixedVolume = add(fixedVolume, readInt64(stateFieldOffset(GRANULAR_SOLID_VOLUME_SVQ) +
+                                                   2 * (headerValue(H_PARTICLE_CAPACITY) + entry - 8 * headerValue(H_PARTICLE_CAPACITY))));
     }
-    writeInteger(at(FIELD_FIXED_SVQ) + 2 * cell, fixedVolume);
-    writeInteger(at(FIELD_OCCUPIED_SVQ) + 2 * cell, add(fixedVolume, activeVolume));
+    writeInteger(fieldOffset(FIELD_FIXED_SVQ) + 2 * cell, fixedVolume);
+    writeInteger(fieldOffset(FIELD_OCCUPIED_SVQ) + 2 * cell, add(fixedVolume, activeVolume));
 }
 void main() {
     int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128 + gl_LocalInvocationID.x);
     if (id >= p.count)
         return;
-    if (activeCount() < 0 || activeCount() > h(H_PARTICLE_CAPACITY) || depositCount() < 0 ||
-        depositCount() > h(H_DEPOSIT_CAPACITY)) {
-        invalid();
+    if (activeCount() < 0 || activeCount() > headerValue(H_PARTICLE_CAPACITY) || depositCount() < 0 ||
+        depositCount() > headerValue(H_DEPOSIT_CAPACITY)) {
+        reportInvalidState();
         return;
     }
-    if (p.stage == 0)
-        supports(id);
-    else if (p.stage == 1) {
-        put(0, id, 0);
-        put(2, id, 0);
-    } else if (p.stage == 2)
+    if (p.stage == STAGE_BUILD_SUPPORTS)
+        buildParticleSupports(id);
+    else if (p.stage == STAGE_CLEAR_CELL_INDEX) {
+        writeFieldInt(FIELD_COUNTS, id, 0);
+        writeFieldInt(FIELD_CURSORS, id, 0);
+    } else if (p.stage == STAGE_COUNT_ENTRIES)
         countEntry(id);
-    else if (p.stage == 3)
-        scatter(id);
-    else if (p.stage == 4)
-        gather(id);
+    else if (p.stage == STAGE_SCATTER_ENTRIES)
+        scatterCellEntry(id);
+    else if (p.stage == STAGE_GATHER_OCCUPANCY)
+        gatherCellOccupancy(id);
 }

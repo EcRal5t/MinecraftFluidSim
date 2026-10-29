@@ -1,5 +1,10 @@
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+const int STAGE_CLEAR_CELL_COUNTS = 0;
+const int STAGE_COUNT_CELL_MEMBERS = 1;
+const int STAGE_SCATTER_CELL_MEMBERS = 2;
+const uint ERROR_COHERENT_GEOMETRY = 524288u;
 layout(local_size_x = 128) in;
 layout(binding = 0, std430) buffer Arena {
     uint words[];
@@ -18,7 +23,7 @@ int h(int i) {
     return int(words[p.header + i]);
 }
 void invalid() {
-    atomicOr(errors, 524288u);
+    atomicOr(errors, ERROR_COHERENT_GEOMETRY);
 }
 int64_t quantity(int address) {
     return int64_t(uint64_t(words[address]) | (uint64_t(words[address + 1]) << 32));
@@ -32,10 +37,10 @@ void main() {
         invalid();
         return;
     }
-    if (p.stage == 0) {
+    if (p.stage == STAGE_CLEAR_CELL_COUNTS) {
         words[h(H_CELL_COUNTS) + id] = 0u;
         words[h(H_CELL_CURSORS) + id] = 0u;
-    } else if (p.stage == 1 || p.stage == 2) {
+    } else if (p.stage == STAGE_COUNT_CELL_MEMBERS || p.stage == STAGE_SCATTER_CELL_MEMBERS) {
         if (id >= count)
             return;
         int cell = int(words[h(H_CELL) + id]);
@@ -43,7 +48,7 @@ void main() {
             invalid();
             return;
         }
-        if (p.stage == 1)
+        if (p.stage == STAGE_COUNT_CELL_MEMBERS)
             atomicAdd(words[h(H_CELL_COUNTS) + cell], 1u);
         else {
             uint cursor = words[h(H_CELL_OFFSETS) + cell] + atomicAdd(words[h(H_CELL_CURSORS) + cell], 1u);

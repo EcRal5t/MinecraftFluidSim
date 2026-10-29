@@ -1,6 +1,21 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+const int ROUTE_DOWN = 3;
+const int ROUTE_UP = 4;
+const double MASS_UNIT_KG = 1e-10;
+const int STAGE_FACE_TERMS = 0;
+const int STAGE_POTENTIAL_TERMS = 1;
+const int STAGE_VERTEX_TERMS = 2;
+const int STAGE_MAP_BLOCKS = 3;
+const int STAGE_REDUCE_BLOCK = 4;
+const int STAGE_REDUCE_BODY = 5;
+const int STAGE_CLEAR_ENERGY_CHANGES = 6;
+const int STAGE_POST_CELL = 7;
+const int STAGE_PARTICLE_TERMS = 8;
+const int STAGE_POST_GRANULAR = 9;
+const int STAGE_POST_GAS = 10;
+const uint ERROR_MECHANICAL_ENERGY = 65536u;
 // HOST_LAYOUT
 layout(local_size_x=128) in;
 layout(binding=0,std430) readonly buffer Source { uint sourceWords[]; };
@@ -9,116 +24,116 @@ layout(binding=2,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header; int stage; double cellSize; double gravity; } p;
 shared dvec4 partial[128];
 shared dvec2 weightErrors[128];
-int h(int i){return int(words[p.header+i]);}
-int src(int i){return h(H_SOURCE_FIELDS+i);}int dst(int i){return h(H_TARGET_FIELDS+i);}
-double value(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
-double oldValue(int at){return packDouble2x32(uvec2(sourceWords[at],sourceWords[at+1]));}
-int64_t mass(int at){return int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32));}
-void store(int at,double x){if(isnan(x)||isinf(x))atomicOr(errors,65536u);uvec2 bits=unpackDouble2x32(x);words[at]=bits.x;words[at+1]=bits.y;}
+int headerValue(int i){return int(words[p.header+i]);}
+int sourceFieldOffset(int i){return headerValue(H_SOURCE_FIELDS+i);}int targetFieldOffset(int i){return headerValue(H_TARGET_FIELDS+i);}
+double readDouble(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
+double readSourceDouble(int at){return packDouble2x32(uvec2(sourceWords[at],sourceWords[at+1]));}
+int64_t readMassUnits(int at){return int64_t(uint64_t(words[at])|(uint64_t(words[at+1])<<32));}
+void writeDouble(int at,double x){if(isnan(x)||isinf(x))atomicOr(errors,ERROR_MECHANICAL_ENERGY);uvec2 bits=unpackDouble2x32(x);words[at]=bits.x;words[at+1]=bits.y;}
 dvec2 twoSum(double a,double b){precise double sum=a+b;precise double virtualB=sum-a;precise double error=(a-(sum-virtualB))+(b-virtualB);return dvec2(sum,error);}
 dvec2 add(dvec2 a,double b){dvec2 s=twoSum(a.x,b);return twoSum(s.x,s.y+a.y);}
 dvec2 add(dvec2 a,dvec2 b){return add(add(a,b.x),b.y);}
 dvec4 combine(dvec4 a,dvec4 b){return dvec4(add(a.xy,b.xy),a.zw+b.zw);}
-dvec4 data(int base,int item){int at=base+8*item;return dvec4(value(at),value(at+2),value(at+4),value(at+6));}
-void storeData(int base,int item,dvec4 x){for(int i=0;i<4;i++)store(base+8*item+2*i,x[i]);}
-ivec3 shape(){return ivec3(h(H_SIZE_X),h(H_SIZE_Y),h(H_SIZE_Z));}
+dvec4 readEnergyTerms(int base,int item){int at=base+8*item;return dvec4(readDouble(at),readDouble(at+2),readDouble(at+4),readDouble(at+6));}
+void writeEnergyTerms(int base,int item,dvec4 x){for(int i=0;i<4;i++)writeDouble(base+8*item+2*i,x[i]);}
+ivec3 shape(){return ivec3(headerValue(H_SIZE_X),headerValue(H_SIZE_Y),headerValue(H_SIZE_Z));}
 ivec3 unit(int axis){ivec3 result=ivec3(0);result[axis]=1;return result;}
-int cell(ivec3 q){return any(lessThan(q,ivec3(0)))||any(greaterThanEqual(q,shape()))?-1:(q.z*h(H_SIZE_Y)+q.y)*h(H_SIZE_X)+q.x;}
-int base(int axis){return axis==0?0:(h(H_SIZE_X)+1)*h(H_SIZE_Y)*h(H_SIZE_Z)+(axis==2?h(H_SIZE_X)*(h(H_SIZE_Y)+1)*h(H_SIZE_Z):0);}
-int face(ivec3 q,int axis){ivec3 s=shape()+unit(axis);return base(axis)+(q.z*s.y+q.y)*s.x+q.x;}
-double oldMass(int c){return c<0?0.0:double(mass(h(H_CELL_MASS)+4*c));}
+int cell(ivec3 q){return any(lessThan(q,ivec3(0)))||any(greaterThanEqual(q,shape()))?-1:(q.z*headerValue(H_SIZE_Y)+q.y)*headerValue(H_SIZE_X)+q.x;}
+int faceAxisOffset(int axis){return axis==0?0:(headerValue(H_SIZE_X)+1)*headerValue(H_SIZE_Y)*headerValue(H_SIZE_Z)+(axis==2?headerValue(H_SIZE_X)*(headerValue(H_SIZE_Y)+1)*headerValue(H_SIZE_Z):0);}
+int faceIndex(ivec3 q,int axis){ivec3 s=shape()+unit(axis);return faceAxisOffset(axis)+(q.z*s.y+q.y)*s.x+q.x;}
+double sourceCellMass(int c){return c<0?0.0:double(readMassUnits(headerValue(H_CELL_MASS)+4*c));}
 void faceTerms(int index){
-    int axis=index<base(1)?0:index<base(2)?1:2,local=index-base(axis);
-    if(h(H_ACTIVITY_FACES)>=0&&words[h(H_ACTIVITY_FACES)+index]==0u){store(h(H_FACE_TERMS)+4*index,0.0);store(h(H_FACE_TERMS)+4*index+2,0.0);return;}
-    double m=value(h(H_PROJECTED_FACES)+8*index),u=value(h(H_PROJECTED_FACES)+8*index+2),momentum=oldValue(src(L_MOMENTUM_X+axis)+2*local);
-    store(h(H_FACE_TERMS)+4*index,h(H_SOURCE_FACE_K)>=0?value(h(H_SOURCE_FACE_K)+2*index):m>0.0?.5*momentum*(momentum/m):0.0);
-    store(h(H_FACE_TERMS)+4*index+2,-.5*m*u*u);
+    int axis=index<faceAxisOffset(1)?0:index<faceAxisOffset(2)?1:2,localFace=index-faceAxisOffset(axis);
+    if(headerValue(H_ACTIVITY_FACES)>=0&&words[headerValue(H_ACTIVITY_FACES)+index]==0u){writeDouble(headerValue(H_FACE_TERMS)+4*index,0.0);writeDouble(headerValue(H_FACE_TERMS)+4*index+2,0.0);return;}
+    double faceMass=readDouble(headerValue(H_PROJECTED_FACES)+8*index),projectedVelocity=readDouble(headerValue(H_PROJECTED_FACES)+8*index+2),momentum=readSourceDouble(sourceFieldOffset(L_MOMENTUM_X+axis)+2*localFace);
+    writeDouble(headerValue(H_FACE_TERMS)+4*index,headerValue(H_SOURCE_FACE_K)>=0?readDouble(headerValue(H_SOURCE_FACE_K)+2*index):faceMass>0.0?.5*momentum*(momentum/faceMass):0.0);
+    writeDouble(headerValue(H_FACE_TERMS)+4*index+2,-.5*faceMass*projectedVelocity*projectedVelocity);
 }
-int64_t routeMass(int stock,int slot){uint mask=words[h(H_ROUTE_MASKS)+stock];if((mask&(1u<<slot))==0u)return int64_t(0);int r=int(words[h(H_ROUTE_OFFSETS)+stock])+bitCount(mask&((1u<<slot)-1u));return mass(h(H_ROUTE_MASS)+2*r);}
+int64_t routeMass(int stock,int slot){uint mask=words[headerValue(H_ROUTE_MASKS)+stock];if((mask&(1u<<slot))==0u)return int64_t(0);int routeIndex=int(words[headerValue(H_ROUTE_OFFSETS)+stock])+bitCount(mask&((1u<<slot)-1u));return readMassUnits(headerValue(H_ROUTE_MASS)+2*routeIndex);}
 void potentialTerms(int stock){
-    store(h(H_POTENTIAL_TERMS)+4*stock,0.0);store(h(H_POTENTIAL_TERMS)+4*stock+2,0.0);
-    if(stock>=int(sourceWords[src(L_COUNTS)]))return;
-    store(h(H_POTENTIAL_TERMS)+4*stock,double(routeMass(stock,3))*1e-10*p.gravity*p.cellSize);
-    store(h(H_POTENTIAL_TERMS)+4*stock+2,-double(routeMass(stock,4))*1e-10*p.gravity*p.cellSize);
+    writeDouble(headerValue(H_POTENTIAL_TERMS)+4*stock,0.0);writeDouble(headerValue(H_POTENTIAL_TERMS)+4*stock+2,0.0);
+    if(stock>=int(sourceWords[sourceFieldOffset(L_COUNTS)]))return;
+    writeDouble(headerValue(H_POTENTIAL_TERMS)+4*stock,double(routeMass(stock,ROUTE_DOWN))*MASS_UNIT_KG*p.gravity*p.cellSize);
+    writeDouble(headerValue(H_POTENTIAL_TERMS)+4*stock+2,-double(routeMass(stock,ROUTE_UP))*MASS_UNIT_KG*p.gravity*p.cellSize);
 }
 void particleTerms(int index){
-    store(h(H_GRAIN_CHANGES)+4*index,0.0);store(h(H_GRAIN_CHANGES)+4*index+2,0.0);
-    if(index>=h(H_PARTICLE_CAPACITY))return;
-    for(int i=0;i<4;i++)store(h(H_GRAIN_TERMS)+8*index+2*i,0.0);
-    if(index>=int(words[h(H_GRAIN_COUNTS)]))return;
-    double weight=double(mass(h(H_GRAIN_MASS)+2*index))*1e-10*p.gravity;
-    store(h(H_GRAIN_TERMS)+8*index,value(h(H_SOURCE_K)+2*index));store(h(H_GRAIN_TERMS)+8*index+2,-value(h(H_FINAL_K)+2*index));
-    store(h(H_GRAIN_TERMS)+8*index+4,weight*value(h(H_SOURCE_Y)+2*index));store(h(H_GRAIN_TERMS)+8*index+6,-weight*value(h(H_FINAL_Y)+2*index));
+    writeDouble(headerValue(H_GRAIN_CHANGES)+4*index,0.0);writeDouble(headerValue(H_GRAIN_CHANGES)+4*index+2,0.0);
+    if(index>=headerValue(H_PARTICLE_CAPACITY))return;
+    for(int i=0;i<4;i++)writeDouble(headerValue(H_GRAIN_TERMS)+8*index+2*i,0.0);
+    if(index>=int(words[headerValue(H_GRAIN_COUNTS)]))return;
+    double gravitationalForce=double(readMassUnits(headerValue(H_GRAIN_MASS)+2*index))*MASS_UNIT_KG*p.gravity;
+    writeDouble(headerValue(H_GRAIN_TERMS)+8*index,readDouble(headerValue(H_SOURCE_K)+2*index));writeDouble(headerValue(H_GRAIN_TERMS)+8*index+2,-readDouble(headerValue(H_FINAL_K)+2*index));
+    writeDouble(headerValue(H_GRAIN_TERMS)+8*index+4,gravitationalForce*readDouble(headerValue(H_SOURCE_Y)+2*index));writeDouble(headerValue(H_GRAIN_TERMS)+8*index+6,-gravitationalForce*readDouble(headerValue(H_FINAL_Y)+2*index));
 }
-void vertex(int index){
-    dvec2 exchange=dvec2(0.0);double capacity=0.0,available=0.0;
-    if(index<h(H_CELLS)){
-        if(h(H_ACTIVITY_CELLS)>=0&&words[h(H_ACTIVITY_CELLS)+index]==0u){storeData(h(H_VERTEX_DATA),index,dvec4(0.0));int count=int(words[h(H_BODY_COUNTS)+index]);words[h(H_BLOCK_COUNTS)+index]=uint((count+127)/128);return;}
-        ivec3 pos=ivec3(index%h(H_SIZE_X),index/h(H_SIZE_X)%h(H_SIZE_Y),index/(h(H_SIZE_X)*h(H_SIZE_Y)));
+void computeVertexTerms(int index){
+    dvec2 exchange=dvec2(0.0);double heatCapacity=0.0,availableThermalEnergy=0.0;
+    if(index<headerValue(H_CELLS)){
+        if(headerValue(H_ACTIVITY_CELLS)>=0&&words[headerValue(H_ACTIVITY_CELLS)+index]==0u){writeEnergyTerms(headerValue(H_VERTEX_DATA),index,dvec4(0.0));int count=int(words[headerValue(H_BODY_COUNTS)+index]);words[headerValue(H_BLOCK_COUNTS)+index]=uint((count+127)/128);return;}
+        ivec3 position=ivec3(index%headerValue(H_SIZE_X),index/headerValue(H_SIZE_X)%headerValue(H_SIZE_Y),index/(headerValue(H_SIZE_X)*headerValue(H_SIZE_Y)));
         for(int axis=0;axis<3;axis++)for(int side=0;side<2;side++){
-            ivec3 at=pos+(side==0?ivec3(0):unit(axis));int f=face(at,axis),a=cell(at-unit(axis)),b=cell(at);
-            double ma=oldMass(a),mb=oldMass(b),total=ma+mb;if(total<=0.0)continue;
-            dvec2 full=twoSum(value(h(H_FACE_TERMS)+4*f),value(h(H_FACE_TERMS)+4*f+2));
-            dvec2 first=full*(ma/total),share=side==0?add(full,-first):first;
-            exchange=add(exchange,share);
+            ivec3 facePosition=position+(side==0?ivec3(0):unit(axis));int face=faceIndex(facePosition,axis),leftCell=cell(facePosition-unit(axis)),rightCell=cell(facePosition);
+            double leftMass=sourceCellMass(leftCell),rightMass=sourceCellMass(rightCell),totalMass=leftMass+rightMass;if(totalMass<=0.0)continue;
+            dvec2 faceExchange=twoSum(readDouble(headerValue(H_FACE_TERMS)+4*face),readDouble(headerValue(H_FACE_TERMS)+4*face+2));
+            dvec2 leftShare=faceExchange*(leftMass/totalMass),cellShare=side==0?add(faceExchange,-leftShare):leftShare;
+            exchange=add(exchange,cellShare);
         }
-        for(int stock=int(sourceWords[src(L_CELL_OFFSETS)+index]);stock<int(sourceWords[src(L_CELL_OFFSETS)+index+1]);stock++){
-            exchange=add(exchange,value(h(H_POTENTIAL_TERMS)+4*stock));exchange=add(exchange,value(h(H_POTENTIAL_TERMS)+4*stock+2));
+        for(int stock=int(sourceWords[sourceFieldOffset(L_CELL_OFFSETS)+index]);stock<int(sourceWords[sourceFieldOffset(L_CELL_OFFSETS)+index+1]);stock++){
+            exchange=add(exchange,readDouble(headerValue(H_POTENTIAL_TERMS)+4*stock));exchange=add(exchange,readDouble(headerValue(H_POTENTIAL_TERMS)+4*stock+2));
         }
-        for(int stock=int(words[dst(L_CELL_OFFSETS)+index]);stock<int(words[dst(L_CELL_OFFSETS)+index+1]);stock++){
-            capacity+=value(h(H_HEAT_CAPACITY)+2*stock);available+=max(0.0,value(dst(L_ENERGY_BITS)+2*stock)-value(h(H_COLD_ENERGY)+2*stock));
+        for(int stock=int(words[targetFieldOffset(L_CELL_OFFSETS)+index]);stock<int(words[targetFieldOffset(L_CELL_OFFSETS)+index+1]);stock++){
+            heatCapacity+=readDouble(headerValue(H_HEAT_CAPACITY)+2*stock);availableThermalEnergy+=max(0.0,readDouble(targetFieldOffset(L_ENERGY_BITS)+2*stock)-readDouble(headerValue(H_COLD_ENERGY)+2*stock));
         }
-        if(h(H_DEPOSIT_CAPACITY)>0)for(int cursor=int(words[h(H_GRAIN_OFFSETS)+index]);cursor<int(words[h(H_GRAIN_OFFSETS)+index+1]);cursor++){
-            int entry=int(words[h(H_GRAIN_ENTRIES)+cursor]);if(entry<8*h(H_PARTICLE_CAPACITY))continue;
-            int row=h(H_PARTICLE_CAPACITY)+entry-8*h(H_PARTICLE_CAPACITY);
-            capacity+=value(h(H_GRAIN_HEAT_CAPACITY)+2*row);available+=max(0.0,value(h(H_GRAIN_ENERGY)+2*row)-value(h(H_GRAIN_COLD_ENERGY)+2*row));
+        if(headerValue(H_DEPOSIT_CAPACITY)>0)for(int cursor=int(words[headerValue(H_GRAIN_OFFSETS)+index]);cursor<int(words[headerValue(H_GRAIN_OFFSETS)+index+1]);cursor++){
+            int entry=int(words[headerValue(H_GRAIN_ENTRIES)+cursor]);if(entry<8*headerValue(H_PARTICLE_CAPACITY))continue;
+            int row=headerValue(H_PARTICLE_CAPACITY)+entry-8*headerValue(H_PARTICLE_CAPACITY);
+            heatCapacity+=readDouble(headerValue(H_GRAIN_HEAT_CAPACITY)+2*row);availableThermalEnergy+=max(0.0,readDouble(headerValue(H_GRAIN_ENERGY)+2*row)-readDouble(headerValue(H_GRAIN_COLD_ENERGY)+2*row));
         }
-        if(h(H_SOURCE_HEAT)>=0)exchange=add(exchange,-value(h(H_SOURCE_HEAT)+2*index));
-        if(h(H_EXTERNAL_WORK)>=0)exchange=add(exchange,value(h(H_EXTERNAL_WORK)+2*index));
-    }else if(index<h(H_CELLS)+h(H_GAS_CAPACITY)){
-        int gas=index-h(H_CELLS);
-        if(h(H_GAS_WORK)>=0)exchange=-dvec2(value(h(H_GAS_WORK)+4*gas),value(h(H_GAS_WORK)+4*gas+2));
-        if(h(H_GAS_EXTERNAL_WORK)>=0)exchange=add(exchange,value(h(H_GAS_EXTERNAL_WORK)+2*gas));
-        if(h(H_GAS_ENERGY)>=0&&gas<int(words[h(H_GAS_COUNTS)])){
-            capacity=value(h(H_GAS_HEAT_CAPACITY)+2*gas);available=max(0.0,value(h(H_GAS_ENERGY)+2*gas)-value(h(H_GAS_COLD_ENERGY)+2*gas));
+        if(headerValue(H_SOURCE_HEAT)>=0)exchange=add(exchange,-readDouble(headerValue(H_SOURCE_HEAT)+2*index));
+        if(headerValue(H_EXTERNAL_WORK)>=0)exchange=add(exchange,readDouble(headerValue(H_EXTERNAL_WORK)+2*index));
+    }else if(index<headerValue(H_CELLS)+headerValue(H_GAS_CAPACITY)){
+        int gas=index-headerValue(H_CELLS);
+        if(headerValue(H_GAS_WORK)>=0)exchange=-dvec2(readDouble(headerValue(H_GAS_WORK)+4*gas),readDouble(headerValue(H_GAS_WORK)+4*gas+2));
+        if(headerValue(H_GAS_EXTERNAL_WORK)>=0)exchange=add(exchange,readDouble(headerValue(H_GAS_EXTERNAL_WORK)+2*gas));
+        if(headerValue(H_GAS_ENERGY)>=0&&gas<int(words[headerValue(H_GAS_COUNTS)])){
+            heatCapacity=readDouble(headerValue(H_GAS_HEAT_CAPACITY)+2*gas);availableThermalEnergy=max(0.0,readDouble(headerValue(H_GAS_ENERGY)+2*gas)-readDouble(headerValue(H_GAS_COLD_ENERGY)+2*gas));
         }
     }
     else{
-        int particle=index-h(H_CELLS)-h(H_GAS_CAPACITY);
-        if(particle<int(words[h(H_GRAIN_COUNTS)])){
-            for(int i=0;i<4;i++)exchange=add(exchange,value(h(H_GRAIN_TERMS)+8*particle+2*i));
-            if(h(H_GRAIN_SOURCE_HEAT)>=0)exchange=add(exchange,-value(h(H_GRAIN_SOURCE_HEAT)+2*particle));
-            if(h(H_GRAIN_EXTERNAL_WORK)>=0)exchange=add(exchange,value(h(H_GRAIN_EXTERNAL_WORK)+2*particle));
-            capacity=value(h(H_GRAIN_HEAT_CAPACITY)+2*particle);available=max(0.0,value(h(H_GRAIN_ENERGY)+2*particle)-value(h(H_GRAIN_COLD_ENERGY)+2*particle));
+        int particle=index-headerValue(H_CELLS)-headerValue(H_GAS_CAPACITY);
+        if(particle<int(words[headerValue(H_GRAIN_COUNTS)])){
+            for(int i=0;i<4;i++)exchange=add(exchange,readDouble(headerValue(H_GRAIN_TERMS)+8*particle+2*i));
+            if(headerValue(H_GRAIN_SOURCE_HEAT)>=0)exchange=add(exchange,-readDouble(headerValue(H_GRAIN_SOURCE_HEAT)+2*particle));
+            if(headerValue(H_GRAIN_EXTERNAL_WORK)>=0)exchange=add(exchange,readDouble(headerValue(H_GRAIN_EXTERNAL_WORK)+2*particle));
+            heatCapacity=readDouble(headerValue(H_GRAIN_HEAT_CAPACITY)+2*particle);availableThermalEnergy=max(0.0,readDouble(headerValue(H_GRAIN_ENERGY)+2*particle)-readDouble(headerValue(H_GRAIN_COLD_ENERGY)+2*particle));
         }
     }
-    storeData(h(H_VERTEX_DATA),index,dvec4(exchange,capacity,available));
-    int count=int(words[h(H_BODY_COUNTS)+index]);words[h(H_BLOCK_COUNTS)+index]=uint((count+127)/128);
+    writeEnergyTerms(headerValue(H_VERTEX_DATA),index,dvec4(exchange,heatCapacity,availableThermalEnergy));
+    int count=int(words[headerValue(H_BODY_COUNTS)+index]);words[headerValue(H_BLOCK_COUNTS)+index]=uint((count+127)/128);
 }
 void mapBlocks(int root){
-    int begin=int(words[h(H_BLOCK_OFFSETS)+root]),end=int(words[h(H_BLOCK_OFFSETS)+root+1]);
-    for(int i=begin;i<end;i++)words[h(H_BLOCK_ROOTS)+i]=uint(root);
-    if(root==0){uint blocks=words[h(H_BLOCK_OFFSETS)+h(H_VERTICES)];words[h(H_DISPATCH)]=min(blocks,65535u);words[h(H_DISPATCH)+1]=(blocks+65534u)/65535u;words[h(H_DISPATCH)+2]=1u;}
+    int begin=int(words[headerValue(H_BLOCK_OFFSETS)+root]),end=int(words[headerValue(H_BLOCK_OFFSETS)+root+1]);
+    for(int i=begin;i<end;i++)words[headerValue(H_BLOCK_ROOTS)+i]=uint(root);
+    if(root==0){uint blocks=words[headerValue(H_BLOCK_OFFSETS)+headerValue(H_VERTICES)];words[headerValue(H_DISPATCH)]=min(blocks,65535u);words[headerValue(H_DISPATCH)+1]=(blocks+65534u)/65535u;words[headerValue(H_DISPATCH)+2]=1u;}
 }
 void reduceBlock(int block,int lane){
-    int blocks=int(words[h(H_BLOCK_OFFSETS)+h(H_VERTICES)]);dvec4 item=dvec4(0.0);
+    int blocks=int(words[headerValue(H_BLOCK_OFFSETS)+headerValue(H_VERTICES)]);dvec4 item=dvec4(0.0);
     if(block<blocks){
-        int root=int(words[h(H_BLOCK_ROOTS)+block]),begin=int(words[h(H_BODY_OFFSETS)+root]),end=int(words[h(H_BODY_OFFSETS)+root+1]);
-        int cursor=begin+128*(block-int(words[h(H_BLOCK_OFFSETS)+root]))+lane;
-        if(cursor<end)item=data(h(H_VERTEX_DATA),int(words[h(H_BODY_MEMBERS)+cursor]));
+        int root=int(words[headerValue(H_BLOCK_ROOTS)+block]),begin=int(words[headerValue(H_BODY_OFFSETS)+root]),end=int(words[headerValue(H_BODY_OFFSETS)+root+1]);
+        int cursor=begin+128*(block-int(words[headerValue(H_BLOCK_OFFSETS)+root]))+lane;
+        if(cursor<end)item=readEnergyTerms(headerValue(H_VERTEX_DATA),int(words[headerValue(H_BODY_MEMBERS)+cursor]));
     }
     partial[lane]=item;barrier();
     for(int stride=64;stride>0;stride/=2){if(lane<stride)partial[lane]=combine(partial[lane],partial[lane+stride]);barrier();}
-    if(lane==0&&block<blocks)storeData(h(H_PARTIALS),block,partial[0]);
+    if(lane==0&&block<blocks)writeEnergyTerms(headerValue(H_PARTIALS),block,partial[0]);
 }
 void reduceBody(int block,int lane){
-    int blocks=int(words[h(H_BLOCK_OFFSETS)+h(H_VERTICES)]);if(block>=blocks)return;
-    int root=int(words[h(H_BLOCK_ROOTS)+block]);
+    int blocks=int(words[headerValue(H_BLOCK_OFFSETS)+headerValue(H_VERTICES)]);if(block>=blocks)return;
+    int root=int(words[headerValue(H_BLOCK_ROOTS)+block]);
     // One workgroup owns each nonempty body. The existing block dispatch also covers isolated cells.
-    if(block!=int(words[h(H_BLOCK_OFFSETS)+root]))return;
+    if(block!=int(words[headerValue(H_BLOCK_OFFSETS)+root]))return;
     dvec4 total=dvec4(0.0);dvec2 weights=dvec2(0.0),residual=dvec2(0.0);
-    for(int cursor=block+lane;cursor<int(words[h(H_BLOCK_OFFSETS)+root+1]);cursor+=128){
-        dvec4 part=data(h(H_PARTIALS),cursor);total.xy=add(total.xy,part.xy);
+    for(int cursor=block+lane;cursor<int(words[headerValue(H_BLOCK_OFFSETS)+root+1]);cursor+=128){
+        dvec4 part=readEnergyTerms(headerValue(H_PARTIALS),cursor);total.xy=add(total.xy,part.xy);
         dvec2 next=weights+part.zw,delta=next-weights;residual+=(weights-(next-delta))+(part.zw-delta);weights=next;
     }
     partial[lane]=dvec4(total.xy,weights);weightErrors[lane]=residual;barrier();
@@ -132,53 +147,53 @@ void reduceBody(int block,int lane){
         barrier();
     }
     if(lane==0){
-        total=partial[0];total.zw+=weightErrors[0];storeData(h(H_BODY_DATA),root,total);
+        total=partial[0];total.zw+=weightErrors[0];writeEnergyTerms(headerValue(H_BODY_DATA),root,total);
         double work=total.x+total.y;
-        if((work!=0.0&&total.z<=0.0)||-work>total.w)atomicOr(errors,65536u);
+        if((work!=0.0&&total.z<=0.0)||-work>total.w)atomicOr(errors,ERROR_MECHANICAL_ENERGY);
     }
 }
 void postCell(int index){
-    if(h(H_ACTIVITY_CELLS)>=0&&words[h(H_ACTIVITY_CELLS)+index]==0u)return;
-    int root=int(words[h(H_BODY_PARENTS)+index]);dvec4 body=data(h(H_BODY_DATA),root);double work=body.x+body.y;
+    if(headerValue(H_ACTIVITY_CELLS)>=0&&words[headerValue(H_ACTIVITY_CELLS)+index]==0u)return;
+    int root=int(words[headerValue(H_BODY_PARENTS)+index]);dvec4 body=readEnergyTerms(headerValue(H_BODY_DATA),root);double work=body.x+body.y;
     if(work==0.0)return;
-    bool cooling=work<0.0;double total=cooling?body.w:body.z;
-    for(int stock=int(words[dst(L_CELL_OFFSETS)+index]);stock<int(words[dst(L_CELL_OFFSETS)+index+1]);stock++){
-        double before=value(dst(L_ENERGY_BITS)+2*stock),cold=value(h(H_COLD_ENERGY)+2*stock);
-        double weight=cooling?max(0.0,before-cold):value(h(H_HEAT_CAPACITY)+2*stock);
-        if(weight==0.0)continue;
-        double share=work*(weight/total),after=max(cold,before+share);
-        dvec2 change=twoSum(after,-before);store(dst(L_ENERGY_BITS)+2*stock,after);
-        store(h(H_ENERGY_CHANGES)+4*stock,change.x);store(h(H_ENERGY_CHANGES)+4*stock+2,change.y);
+    bool cooling=work<0.0;double totalWeight=cooling?body.w:body.z;
+    for(int stock=int(words[targetFieldOffset(L_CELL_OFFSETS)+index]);stock<int(words[targetFieldOffset(L_CELL_OFFSETS)+index+1]);stock++){
+        double initialEnergy=readDouble(targetFieldOffset(L_ENERGY_BITS)+2*stock),minimumEnergy=readDouble(headerValue(H_COLD_ENERGY)+2*stock);
+        double thermalWeight=cooling?max(0.0,initialEnergy-minimumEnergy):readDouble(headerValue(H_HEAT_CAPACITY)+2*stock);
+        if(thermalWeight==0.0)continue;
+        double energyShare=work*(thermalWeight/totalWeight),finalEnergy=max(minimumEnergy,initialEnergy+energyShare);
+        dvec2 change=twoSum(finalEnergy,-initialEnergy);writeDouble(targetFieldOffset(L_ENERGY_BITS)+2*stock,finalEnergy);
+        writeDouble(headerValue(H_ENERGY_CHANGES)+4*stock,change.x);writeDouble(headerValue(H_ENERGY_CHANGES)+4*stock+2,change.y);
     }
 }
 void postGranular(int row){
     int vertex;
-    if(row<h(H_PARTICLE_CAPACITY)){if(row>=int(words[h(H_GRAIN_COUNTS)]))return;vertex=h(H_CELLS)+h(H_GAS_CAPACITY)+row;}
-    else{int deposit=row-h(H_PARTICLE_CAPACITY);if(deposit>=int(words[h(H_GRAIN_COUNTS)+1]))return;vertex=int(words[h(H_DEPOSIT_CELL)+deposit]);}
-    int root=int(words[h(H_BODY_PARENTS)+vertex]);dvec4 body=data(h(H_BODY_DATA),root);double work=body.x+body.y;
-    if(work==0.0)return;double before=value(h(H_GRAIN_ENERGY)+2*row),cold=value(h(H_GRAIN_COLD_ENERGY)+2*row);
-    double weight=work<0.0?max(0.0,before-cold):value(h(H_GRAIN_HEAT_CAPACITY)+2*row),total=work<0.0?body.w:body.z;
-    if(weight==0.0)return;double after=max(cold,before+work*(weight/total));
-    dvec2 change=twoSum(after,-before);store(h(H_GRAIN_ENERGY)+2*row,after);
-    store(h(H_GRAIN_CHANGES)+4*row,change.x);store(h(H_GRAIN_CHANGES)+4*row+2,change.y);
+    if(row<headerValue(H_PARTICLE_CAPACITY)){if(row>=int(words[headerValue(H_GRAIN_COUNTS)]))return;vertex=headerValue(H_CELLS)+headerValue(H_GAS_CAPACITY)+row;}
+    else{int deposit=row-headerValue(H_PARTICLE_CAPACITY);if(deposit>=int(words[headerValue(H_GRAIN_COUNTS)+1]))return;vertex=int(words[headerValue(H_DEPOSIT_CELL)+deposit]);}
+    int root=int(words[headerValue(H_BODY_PARENTS)+vertex]);dvec4 body=readEnergyTerms(headerValue(H_BODY_DATA),root);double work=body.x+body.y;
+    if(work==0.0)return;double initialEnergy=readDouble(headerValue(H_GRAIN_ENERGY)+2*row),minimumEnergy=readDouble(headerValue(H_GRAIN_COLD_ENERGY)+2*row);
+    double thermalWeight=work<0.0?max(0.0,initialEnergy-minimumEnergy):readDouble(headerValue(H_GRAIN_HEAT_CAPACITY)+2*row),totalWeight=work<0.0?body.w:body.z;
+    if(thermalWeight==0.0)return;double finalEnergy=max(minimumEnergy,initialEnergy+work*(thermalWeight/totalWeight));
+    dvec2 change=twoSum(finalEnergy,-initialEnergy);writeDouble(headerValue(H_GRAIN_ENERGY)+2*row,finalEnergy);
+    writeDouble(headerValue(H_GRAIN_CHANGES)+4*row,change.x);writeDouble(headerValue(H_GRAIN_CHANGES)+4*row+2,change.y);
 }
 void postGas(int gas){
-    if(gas>=int(words[h(H_GAS_COUNTS)]))return;int root=int(words[h(H_BODY_PARENTS)+h(H_CELLS)+gas]);dvec4 body=data(h(H_BODY_DATA),root);double work=body.x+body.y;
-    if(work==0.0)return;double before=value(h(H_GAS_ENERGY)+2*gas),cold=value(h(H_GAS_COLD_ENERGY)+2*gas),weight=work<0.0?max(0.0,before-cold):value(h(H_GAS_HEAT_CAPACITY)+2*gas),total=work<0.0?body.w:body.z;
-    if(weight==0.0)return;double after=max(cold,before+work*(weight/total));dvec2 change=twoSum(after,-before);store(h(H_GAS_ENERGY)+2*gas,after);store(h(H_GAS_ENERGY_CHANGES)+4*gas,change.x);store(h(H_GAS_ENERGY_CHANGES)+4*gas+2,change.y);
+    if(gas>=int(words[headerValue(H_GAS_COUNTS)]))return;int root=int(words[headerValue(H_BODY_PARENTS)+headerValue(H_CELLS)+gas]);dvec4 body=readEnergyTerms(headerValue(H_BODY_DATA),root);double work=body.x+body.y;
+    if(work==0.0)return;double initialEnergy=readDouble(headerValue(H_GAS_ENERGY)+2*gas),minimumEnergy=readDouble(headerValue(H_GAS_COLD_ENERGY)+2*gas),thermalWeight=work<0.0?max(0.0,initialEnergy-minimumEnergy):readDouble(headerValue(H_GAS_HEAT_CAPACITY)+2*gas),totalWeight=work<0.0?body.w:body.z;
+    if(thermalWeight==0.0)return;double finalEnergy=max(minimumEnergy,initialEnergy+work*(thermalWeight/totalWeight));dvec2 change=twoSum(finalEnergy,-initialEnergy);writeDouble(headerValue(H_GAS_ENERGY)+2*gas,finalEnergy);writeDouble(headerValue(H_GAS_ENERGY_CHANGES)+4*gas,change.x);writeDouble(headerValue(H_GAS_ENERGY_CHANGES)+4*gas+2,change.y);
 }
 void main(){
     int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x),item=block*128+lane;
-    if(p.stage==4){reduceBlock(block,lane);return;}
-    if(p.stage==5){reduceBody(block,lane);return;}
+    if(p.stage==STAGE_REDUCE_BLOCK){reduceBlock(block,lane);return;}
+    if(p.stage==STAGE_REDUCE_BODY){reduceBody(block,lane);return;}
     if(errors!=0u)return;
-    if(p.stage==0){if(item<h(H_FACES))faceTerms(item);}
-    else if(p.stage==1){if(item<h(H_SOURCE_STOCK_CAPACITY))potentialTerms(item);}
-    else if(p.stage==2){if(item<h(H_VERTICES))vertex(item);}
-    else if(p.stage==3){if(item<h(H_VERTICES))mapBlocks(item);}
-    else if(p.stage==6){if(item<h(H_TARGET_STOCK_CAPACITY)){store(h(H_ENERGY_CHANGES)+4*item,0.0);store(h(H_ENERGY_CHANGES)+4*item+2,0.0);}}
-    else if(p.stage==7){if(item<h(H_CELLS))postCell(item);}
-    else if(p.stage==8){if(item<h(H_PARTICLE_CAPACITY)+h(H_DEPOSIT_CAPACITY))particleTerms(item);}
-    else if(p.stage==9){if(item<h(H_PARTICLE_CAPACITY)+h(H_DEPOSIT_CAPACITY))postGranular(item);}
-    else if(p.stage==10){if(item<h(H_GAS_CAPACITY))postGas(item);}
+    if(p.stage==STAGE_FACE_TERMS){if(item<headerValue(H_FACES))faceTerms(item);}
+    else if(p.stage==STAGE_POTENTIAL_TERMS){if(item<headerValue(H_SOURCE_STOCK_CAPACITY))potentialTerms(item);}
+    else if(p.stage==STAGE_VERTEX_TERMS){if(item<headerValue(H_VERTICES))computeVertexTerms(item);}
+    else if(p.stage==STAGE_MAP_BLOCKS){if(item<headerValue(H_VERTICES))mapBlocks(item);}
+    else if(p.stage==STAGE_CLEAR_ENERGY_CHANGES){if(item<headerValue(H_TARGET_STOCK_CAPACITY)){writeDouble(headerValue(H_ENERGY_CHANGES)+4*item,0.0);writeDouble(headerValue(H_ENERGY_CHANGES)+4*item+2,0.0);}}
+    else if(p.stage==STAGE_POST_CELL){if(item<headerValue(H_CELLS))postCell(item);}
+    else if(p.stage==STAGE_PARTICLE_TERMS){if(item<headerValue(H_PARTICLE_CAPACITY)+headerValue(H_DEPOSIT_CAPACITY))particleTerms(item);}
+    else if(p.stage==STAGE_POST_GRANULAR){if(item<headerValue(H_PARTICLE_CAPACITY)+headerValue(H_DEPOSIT_CAPACITY))postGranular(item);}
+    else if(p.stage==STAGE_POST_GAS){if(item<headerValue(H_GAS_CAPACITY))postGas(item);}
 }

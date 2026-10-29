@@ -20,65 +20,75 @@ layout(push_constant) uniform Params {
 p;
 bool activeCell(int cell);
 // HOST_LAYOUT
+const uint ERROR_INVALID_STATE = 33554432u;
+const double MASS_UNIT_KG = 1e-10;
+const int STAGE_INITIALIZE = 0;
+const int STAGE_REACT_CELL = 1;
+const int STAGE_COUNT_ROW = 2;
+const int STAGE_CAPACITY_STATUS = 3;
+const int STAGE_SCATTER = 4;
+const int STAGE_PUBLISH = 5;
+const int STAGE_CLEAR_CONTROL = 6;
+
 const int64_t LIMIT = int64_t(0x7fffffffffffffffUL), QUANTA_LIMIT = 2000000000000000l;
-int h(int i) {
+int headerWord(int i) {
     return int(words[p.header + i]);
 }
-int liquid(int i) {
-    return h(STOCK_FIELDS + i);
+int liquidStockField(int i) {
+    return headerWord(STOCK_FIELDS + i);
 }
-int th(int i) {
-    return int(words[h(H_CALORIC_HEADER) + i]);
+int caloricHeaderWord(int i) {
+    return int(words[headerWord(H_CALORIC_HEADER) + i]);
 }
-int def(int i) {
-    return int(words[h(H_DEFINITIONS) + i]);
+int definitionWord(int i) {
+    return int(words[headerWord(H_DEFINITIONS) + i]);
 }
-int dword(int i) {
-    return int(words[h(H_DEFINITIONS) + i]);
+int definitionDataWord(int i) {
+    return int(words[headerWord(H_DEFINITIONS) + i]);
 }
-int64_t integer(int a) {
+int64_t readInt64(int a) {
     return int64_t(uint64_t(words[a]) | (uint64_t(words[a + 1]) << 32));
 }
-void integerAt(int a, int64_t q) {
+void writeInt64(int a, int64_t q) {
     words[a] = uint(q);
     words[a + 1] = uint(uint64_t(q) >> 32);
 }
-double number(int a) {
+double readDouble(int a) {
     return packDouble2x32(uvec2(words[a], words[a + 1]));
 }
-void numberAt(int a, double q) {
+void writeDouble(int a, double q) {
     uvec2 b = unpackDouble2x32(q);
     words[a] = b.x;
     words[a + 1] = b.y;
 }
-void invalid() {
-    atomicOr(errors, 33554432u);
-    words[h(H_CONTROL)] = 5u;
+void reportInvalid() {
+    atomicOr(errors, ERROR_INVALID_STATE);
+    words[headerWord(H_CONTROL)] = 5u;
 }
-int rows() {
-    return int(words[liquid(STOCK_COUNTS)]);
+int rowCount() {
+    return int(words[liquidStockField(STOCK_COUNTS)]);
 }
 int material(int r) {
-    return int(words[liquid(STOCK_MATERIALS) + r]);
+    return int(words[liquidStockField(STOCK_MATERIALS) + r]);
 }
 int support(int r) {
-    return int(words[liquid(STOCK_SUPPORT_MASKS) + r]);
+    return int(words[liquidStockField(STOCK_SUPPORT_MASKS) + r]);
 }
 int phase(int r) {
-    return int(words[h(H_PHASE_TABLE) + material(r)]);
+    return int(words[headerWord(H_PHASE_TABLE) + material(r)]);
 }
 int64_t mass(int r) {
-    return integer(liquid(STOCK_MASS_UNITS) + 2 * r);
+    return readInt64(liquidStockField(STOCK_MASS_UNITS) + 2 * r);
 }
 int64_t dense(int r, int s) {
-    return integer(h(H_DENSE) + 2 * (r * h(H_SPECIES_COUNT) + s));
+    return readInt64(headerWord(H_DENSE) + 2 * (r * headerWord(H_SPECIES_COUNT) + s));
 }
 void denseAt(int r, int s, int64_t q) {
-    integerAt(h(H_DENSE) + 2 * (r * h(H_SPECIES_COUNT) + s), q);
+    writeInt64(headerWord(H_DENSE) + 2 * (r * headerWord(H_SPECIES_COUNT) + s), q);
 }
 int64_t add(int64_t a, int64_t b) {
     if ((b > 0l && a > LIMIT - b) || (b < 0l && a < -LIMIT - b)) {
-        invalid();
+        reportInvalid();
         return 0l;
     }
     return a + b;
@@ -110,36 +120,36 @@ bool same(int a, int b) {
 }
 double baseCold(int r) {
     int m = material(r);
-    return double(mass(r)) * 1e-10 * (number(th(CAL_MATERIAL_REFERENCE) + 2 * m) + number(th(CAL_COLD_SENSIBLE) + 2 * m));
+    return double(mass(r)) * MASS_UNIT_KG * (readDouble(caloricHeaderWord(CAL_MATERIAL_REFERENCE) + 2 * m) + readDouble(caloricHeaderWord(CAL_COLD_SENSIBLE) + 2 * m));
 }
 double speciesReference(int r, int s) {
-    return number(th(CAL_SPECIES_REFERENCE) + 2 * (material(r) * th(CAL_SPECIES_STRIDE) + s));
+    return readDouble(caloricHeaderWord(CAL_SPECIES_REFERENCE) + 2 * (material(r) * caloricHeaderWord(CAL_SPECIES_STRIDE) + s));
 }
 double rowCold(int r) {
-    double q = baseCold(r);
-    for (int s = 0; s < h(H_SPECIES_COUNT); s++) {
+    double coldEnergy = baseCold(r);
+    for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++) {
         int64_t amount = dense(r, s);
         if (amount != 0l)
-            q += double(amount) * speciesReference(r, s);
+            coldEnergy += double(amount) * speciesReference(r, s);
     }
-    return q;
+    return coldEnergy;
 }
 double groupCold(int first, int end, int64_t amounts[256], int64_t totalMass) {
-    double q = 0.0;
+    double coldEnergy = 0.0;
     int64_t prefix = 0l;
     for (int r = first; r < end; r++)
         if (same(first, r)) {
             int64_t next = add(prefix, mass(r));
-            q += baseCold(r);
-            for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+            coldEnergy += baseCold(r);
+            for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
                 if (amounts[s] != 0l) {
                     int64_t amount = portion(amounts[s], next, totalMass) - portion(amounts[s], prefix, totalMass);
                     if (amount != 0l)
-                        q += double(amount) * speciesReference(r, s);
+                        coldEnergy += double(amount) * speciesReference(r, s);
                 }
             prefix = next;
         }
-    return q;
+    return coldEnergy;
 }
 bool representable(int first, int end, int64_t amounts[256], int64_t totalMass) {
     int64_t prefix = 0l;
@@ -147,7 +157,7 @@ bool representable(int first, int end, int64_t amounts[256], int64_t totalMass) 
         if (same(first, r)) {
             int64_t next = add(prefix, mass(r));
             int count = 0;
-            for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+            for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
                 if (portion(amounts[s], next, totalMass) > portion(amounts[s], prefix, totalMass))
                     count++;
             if (count > 16)
@@ -158,82 +168,82 @@ bool representable(int first, int end, int64_t amounts[256], int64_t totalMass) 
 }
 bool reserveQuanta(int64_t delta) {
     if (delta <= 0l) {
-        atomicAdd(integers[h(H_TOTAL_QUANTA) / 2], delta);
+        atomicAdd(integers[headerWord(H_TOTAL_QUANTA) / 2], delta);
         return true;
     }
-    int64_t old = atomicAdd(integers[h(H_TOTAL_QUANTA) / 2], 0l);
+    int64_t old = atomicAdd(integers[headerWord(H_TOTAL_QUANTA) / 2], 0l);
     for (;;) {
         if (old > QUANTA_LIMIT - delta)
             return false;
-        int64_t actual = atomicCompSwap(integers[h(H_TOTAL_QUANTA) / 2], old, old + delta);
+        int64_t actual = atomicCompSwap(integers[headerWord(H_TOTAL_QUANTA) / 2], old, old + delta);
         if (actual == old)
             return true;
         old = actual;
     }
 }
 void initialize(int r) {
-    words[h(H_ROW_COUNTS) + r] = 0u;
-    numberAt(h(H_ENERGIES) + 2 * r, 0.0LF);
-    numberAt(h(H_INITIAL_ENERGIES) + 2 * r, 0.0LF);
-    if (r >= rows())
+    words[headerWord(H_ROW_COUNTS) + r] = 0u;
+    writeDouble(headerWord(H_ENERGIES) + 2 * r, 0.0LF);
+    writeDouble(headerWord(H_INITIAL_ENERGIES) + 2 * r, 0.0LF);
+    if (r >= rowCount())
         return;
-    for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+    for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
         denseAt(r, s, 0l);
-    for (int i = int(words[liquid(STOCK_SPECIES_OFFSETS) + r]); i < int(words[liquid(STOCK_SPECIES_OFFSETS) + r + 1]);
+    for (int i = int(words[liquidStockField(STOCK_SPECIES_OFFSETS) + r]); i < int(words[liquidStockField(STOCK_SPECIES_OFFSETS) + r + 1]);
          i++) {
-        int s = int(words[liquid(STOCK_SPECIES_HANDLES) + i]);
-        int64_t q = integer(liquid(STOCK_SPECIES_AMOUNTS) + 2 * i);
-        if (s < 0 || s >= h(H_SPECIES_COUNT) || q < 0l) {
-            invalid();
+        int s = int(words[liquidStockField(STOCK_SPECIES_HANDLES) + i]);
+        int64_t speciesAmount = readInt64(liquidStockField(STOCK_SPECIES_AMOUNTS) + 2 * i);
+        if (s < 0 || s >= headerWord(H_SPECIES_COUNT) || speciesAmount < 0l) {
+            reportInvalid();
             return;
         }
-        denseAt(r, s, q);
-        atomicAdd(integers[h(H_TOTAL_QUANTA) / 2], q);
+        denseAt(r, s, speciesAmount);
+        atomicAdd(integers[headerWord(H_TOTAL_QUANTA) / 2], speciesAmount);
     }
-    numberAt(h(H_ENERGIES) + 2 * r, number(liquid(STOCK_ENERGY_BITS) + 2 * r));
-    numberAt(h(H_INITIAL_ENERGIES) + 2 * r, number(liquid(STOCK_ENERGY_BITS) + 2 * r));
+    writeDouble(headerWord(H_ENERGIES) + 2 * r, readDouble(liquidStockField(STOCK_ENERGY_BITS) + 2 * r));
+    writeDouble(headerWord(H_INITIAL_ENERGIES) + 2 * r, readDouble(liquidStockField(STOCK_ENERGY_BITS) + 2 * r));
 }
 void advance(int64_t before[256], out int64_t after[256], int rule, int64_t extent) {
-    for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+    for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
         after[s] = before[s];
     for (int side = 0; side < 2; side++) {
-        int start = dword(rule + 2 + 2 * side), count = dword(rule + 3 + 2 * side);
+        int start = definitionDataWord(rule + 2 + 2 * side), count = definitionDataWord(rule + 3 + 2 * side);
         for (int t = 0; t < count; t++) {
-            int species = dword(start + 2 * t), coefficient = dword(start + 2 * t + 1);
+            int species = definitionDataWord(start + 2 * t), coefficient = definitionDataWord(start + 2 * t + 1);
             int64_t q = extent * int64_t(coefficient);
             after[species] = add(after[species], side == 0 ? -q : q);
         }
     }
 }
 double capacityAt(int r, double t) {
-    int m = material(r), first = int(words[th(CAL_SEGMENT_OFFSETS) + m]), last = int(words[th(CAL_SEGMENT_OFFSETS) + m + 1]) - 1, segment = first;
-    while (segment < last && t >= number(th(CAL_SEGMENT_UPPER) + 2 * segment))
+    int m = material(r), first = int(words[caloricHeaderWord(CAL_SEGMENT_OFFSETS) + m]), last = int(words[caloricHeaderWord(CAL_SEGMENT_OFFSETS) + m + 1]) - 1, segment = first;
+    while (segment < last && t >= readDouble(caloricHeaderWord(CAL_SEGMENT_UPPER) + 2 * segment))
         segment++;
-    return double(mass(r)) * 1e-10 * number(th(CAL_SEGMENT_CAPACITY) + 2 * segment);
+    return double(mass(r)) * MASS_UNIT_KG * readDouble(caloricHeaderWord(CAL_SEGMENT_CAPACITY) + 2 * segment);
 }
 double sensibleAboveCold(int r, double t) {
-    int m = material(r), first = int(words[th(CAL_SEGMENT_OFFSETS) + m]), last = int(words[th(CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
-    double lower = number(h(H_CALORIC_HEADER) + CAL_MINIMUM_TEMPERATURE), sum = 0.0;
+    int m = material(r), first = int(words[caloricHeaderWord(CAL_SEGMENT_OFFSETS) + m]), last = int(words[caloricHeaderWord(CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
+    double lower = readDouble(headerWord(H_CALORIC_HEADER) + CAL_MINIMUM_TEMPERATURE), sum = 0.0;
     for (int s = first; s <= last && lower < t; s++) {
-        double upper = s == last ? t : min(t, number(th(CAL_SEGMENT_UPPER) + 2 * s));
+        double upper = s == last ? t : min(t, readDouble(caloricHeaderWord(CAL_SEGMENT_UPPER) + 2 * s));
         if (upper > lower) {
-            sum += (upper - lower) * number(th(CAL_SEGMENT_CAPACITY) + 2 * s);
+            sum += (upper - lower) * readDouble(caloricHeaderWord(CAL_SEGMENT_CAPACITY) + 2 * s);
             lower = upper;
         }
     }
-    return double(mass(r)) * 1e-10 * sum;
+    return double(mass(r)) * MASS_UNIT_KG * sum;
 }
 void cell(int c) {
     if (!activeCell(c))
         return;
-    int begin = int(words[liquid(STOCK_CELL_OFFSETS) + c]), end = int(words[liquid(STOCK_CELL_OFFSETS) + c + 1]);
-    words[h(H_DIRTY_CELLS) + c] = 0u;
+    int begin = int(words[liquidStockField(STOCK_CELL_OFFSETS) + c]), end = int(words[liquidStockField(STOCK_CELL_OFFSETS) + c + 1]);
+    words[headerWord(H_DIRTY_CELLS) + c] = 0u;
     if (begin == end)
         return;
-    double energy = 0.0, cold = 0.0;
+    double energy = 0.0, coldEnergy = 0.0;
     for (int r = begin; r < end; r++) {
-        energy += number(liquid(STOCK_ENERGY_BITS) + 2 * r);
-        cold += rowCold(r);
+        energy += readDouble(liquidStockField(STOCK_ENERGY_BITS) + 2 * r);
+        coldEnergy += rowCold(r);
     }
     bool changed = false, pending = false;
     for (int first = begin; first < end; first++) {
@@ -248,37 +258,37 @@ void cell(int c) {
         if (!representative)
             continue;
         int64_t amounts[256], candidate[256];
-        for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+        for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
             amounts[s] = 0l;
         int64_t totalMass = 0l, oldTotal = 0l;
         for (int r = first; r < end; r++)
             if (same(first, r)) {
                 totalMass = add(totalMass, mass(r));
-                for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+                for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
                     amounts[s] = add(amounts[s], dense(r, s));
             }
         if (totalMass <= 0l)
             continue;
-        for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+        for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
             oldTotal = add(oldTotal, amounts[s]);
         double previousCold = 0.0;
         for (int r = first; r < end; r++)
             if (same(first, r))
                 previousCold += rowCold(r);
-        double otherCold = cold - previousCold;
+        double otherCold = coldEnergy - previousCold;
         bool groupChanged = false;
-        for (int i = 0; i < def(4); i++) {
-            int directory = def(5) + 2 * i;
-            if (dword(directory) != 0)
+        for (int i = 0; i < definitionWord(4); i++) {
+            int directory = definitionWord(5) + 2 * i;
+            if (definitionDataWord(directory) != 0)
                 continue;
-            int rule = dword(directory + 1);
-            if (dword(rule) != phase(first))
+            int rule = definitionDataWord(directory + 1);
+            if (definitionDataWord(rule) != phase(first))
                 continue;
-            atomicAdd(words[h(H_CONTROL) + 3], 1u);
+            atomicAdd(words[headerWord(H_CONTROL) + 3], 1u);
             int64_t maximum = LIMIT;
-            int reactants = dword(rule + 2), count = dword(rule + 3);
+            int reactants = definitionDataWord(rule + 2), count = definitionDataWord(rule + 3);
             for (int term = 0; term < count; term++)
-                maximum = min(maximum, amounts[dword(reactants + 2 * term)] / int64_t(dword(reactants + 2 * term + 1)));
+                maximum = min(maximum, amounts[definitionDataWord(reactants + 2 * term)] / int64_t(definitionDataWord(reactants + 2 * term + 1)));
             if (maximum <= 0l || maximum == LIMIT)
                 continue;
             int64_t accepted = maximum;
@@ -299,14 +309,14 @@ void cell(int c) {
             pending = pending || accepted < maximum;
             if (accepted == 0l)
                 continue;
-            for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+            for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
                 amounts[s] = candidate[s];
             groupChanged = true;
         }
         if (!groupChanged)
             continue;
         int64_t newTotal = 0l;
-        for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+        for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
             newTotal = add(newTotal, amounts[s]);
         if (!representable(first, end, amounts, totalMass) || !reserveQuanta(newTotal - oldTotal)) {
             pending = true;
@@ -316,122 +326,122 @@ void cell(int c) {
         for (int r = first; r < end; r++)
             if (same(first, r)) {
                 int64_t next = add(prefix, mass(r));
-                for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+                for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
                     denseAt(r, s, portion(amounts[s], next, totalMass) - portion(amounts[s], prefix, totalMass));
                 prefix = next;
             }
-        cold = otherCold + groupCold(first, end, amounts, totalMass);
+        coldEnergy = otherCold + groupCold(first, end, amounts, totalMass);
         changed = true;
     }
     if (pending) {
-        words[h(H_DIRTY_CELLS) + c] = 1u;
-        atomicAdd(words[h(H_CONTROL) + 5], 1u);
+        words[headerWord(H_DIRTY_CELLS) + c] = 1u;
+        atomicAdd(words[headerWord(H_CONTROL) + 5], 1u);
     }
     if (!changed)
         return;
-    atomicAdd(words[h(H_CONTROL) + 4], 1u);
-    double t = number(h(H_CALORIC_HEADER) + CAL_MINIMUM_TEMPERATURE), remaining = max(0.0LF, energy - cold);
+    atomicAdd(words[headerWord(H_CONTROL) + 4], 1u);
+    double temperature = readDouble(headerWord(H_CALORIC_HEADER) + CAL_MINIMUM_TEMPERATURE), remaining = max(0.0LF, energy - coldEnergy);
     for (;;) {
         double cv = 0.0, next = 1.7976931348623157e308;
         for (int r = begin; r < end; r++)
             if (mass(r) > 0l) {
-                cv += capacityAt(r, t);
-                int m = material(r), s = int(words[th(CAL_SEGMENT_OFFSETS) + m]), last = int(words[th(CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
-                while (s < last && t >= number(th(CAL_SEGMENT_UPPER) + 2 * s))
+                cv += capacityAt(r, temperature);
+                int m = material(r), s = int(words[caloricHeaderWord(CAL_SEGMENT_OFFSETS) + m]), last = int(words[caloricHeaderWord(CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
+                while (s < last && temperature >= readDouble(caloricHeaderWord(CAL_SEGMENT_UPPER) + 2 * s))
                     s++;
                 if (s < last)
-                    next = min(next, number(th(CAL_SEGMENT_UPPER) + 2 * s));
+                    next = min(next, readDouble(caloricHeaderWord(CAL_SEGMENT_UPPER) + 2 * s));
             }
         if (cv <= 0.0)
             break;
-        double cost = (next - t) * cv;
+        double cost = (next - temperature) * cv;
         if (next == 1.7976931348623157e308 || remaining < cost) {
-            t += remaining / cv;
+            temperature += remaining / cv;
             break;
         }
         remaining -= cost;
-        t = next;
+        temperature = next;
     }
     for (int r = begin; r < end; r++)
-        numberAt(h(H_ENERGIES) + 2 * r, mass(r) > 0l ? rowCold(r) + sensibleAboveCold(r, t) : 0.0LF);
+        writeDouble(headerWord(H_ENERGIES) + 2 * r, mass(r) > 0l ? rowCold(r) + sensibleAboveCold(r, temperature) : 0.0LF);
 }
 void countRow(int r) {
-    if (r >= rows())
+    if (r >= rowCount())
         return;
     int count = 0;
     int64_t speciesMass = 0l;
-    for (int s = 0; s < h(H_SPECIES_COUNT); s++) {
-        int64_t q = dense(r, s);
-        if (q > 0l) {
+    for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++) {
+        int64_t speciesAmount = dense(r, s);
+        if (speciesAmount > 0l) {
             count++;
-            int64_t unit = integer(h(H_DEFINITIONS) + def(1) + 5 * s + 1);
-            if (unit > 0l && q > LIMIT / unit) {
-                invalid();
+            int64_t unit = readInt64(headerWord(H_DEFINITIONS) + definitionWord(1) + 5 * s + 1);
+            if (unit > 0l && speciesAmount > LIMIT / unit) {
+                reportInvalid();
                 return;
             }
-            speciesMass = add(speciesMass, q * unit);
+            speciesMass = add(speciesMass, speciesAmount * unit);
         }
     }
-    words[h(H_ROW_COUNTS) + r] = uint(count);
-    integerAt(h(H_RESIDUALS) + 2 * r, mass(r) - speciesMass);
+    words[headerWord(H_ROW_COUNTS) + r] = uint(count);
+    writeInt64(headerWord(H_RESIDUALS) + 2 * r, mass(r) - speciesMass);
 }
 void scatter(int r) {
-    if (r >= rows() || int(words[h(H_CONTROL)]) != 2)
+    if (r >= rowCount() || int(words[headerWord(H_CONTROL)]) != 2)
         return;
-    int at = int(words[h(H_ROW_OFFSETS) + r]);
-    for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+    int at = int(words[headerWord(H_ROW_OFFSETS) + r]);
+    for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
         if (dense(r, s) > 0l) {
-            words[h(H_HANDLES) + at] = uint(s);
-            integerAt(h(H_AMOUNTS) + 2 * at, dense(r, s));
+            words[headerWord(H_HANDLES) + at] = uint(s);
+            writeInt64(headerWord(H_AMOUNTS) + 2 * at, dense(r, s));
             at++;
         }
 }
 void publish(int id) {
-    if (int(words[h(H_CONTROL)]) != 2)
+    if (int(words[headerWord(H_CONTROL)]) != 2)
         return;
-    int required = int(words[h(H_ROW_OFFSETS) + h(H_STOCK_CAPACITY)]);
+    int required = int(words[headerWord(H_ROW_OFFSETS) + headerWord(H_STOCK_CAPACITY)]);
     if (id < required) {
-        words[liquid(STOCK_SPECIES_HANDLES) + id] = words[h(H_HANDLES) + id];
-        integerAt(liquid(STOCK_SPECIES_AMOUNTS) + 2 * id, integer(h(H_AMOUNTS) + 2 * id));
+        words[liquidStockField(STOCK_SPECIES_HANDLES) + id] = words[headerWord(H_HANDLES) + id];
+        writeInt64(liquidStockField(STOCK_SPECIES_AMOUNTS) + 2 * id, readInt64(headerWord(H_AMOUNTS) + 2 * id));
     }
-    if (id <= h(H_STOCK_CAPACITY))
-        words[liquid(STOCK_SPECIES_OFFSETS) + id] = words[h(H_ROW_OFFSETS) + id];
-    if (id < rows()) {
-        integerAt(liquid(STOCK_MASS_RESIDUAL_UNITS) + 2 * id, integer(h(H_RESIDUALS) + 2 * id));
-        numberAt(liquid(STOCK_ENERGY_BITS) + 2 * id, number(h(H_ENERGIES) + 2 * id));
-        words[liquid(STOCK_MIXTURE_PRESENT) + id] =
-            words[h(H_ROW_COUNTS) + id] > 0u ? 1u : words[liquid(STOCK_MIXTURE_PRESENT) + id];
+    if (id <= headerWord(H_STOCK_CAPACITY))
+        words[liquidStockField(STOCK_SPECIES_OFFSETS) + id] = words[headerWord(H_ROW_OFFSETS) + id];
+    if (id < rowCount()) {
+        writeInt64(liquidStockField(STOCK_MASS_RESIDUAL_UNITS) + 2 * id, readInt64(headerWord(H_RESIDUALS) + 2 * id));
+        writeDouble(liquidStockField(STOCK_ENERGY_BITS) + 2 * id, readDouble(headerWord(H_ENERGIES) + 2 * id));
+        words[liquidStockField(STOCK_MIXTURE_PRESENT) + id] =
+            words[headerWord(H_ROW_COUNTS) + id] > 0u ? 1u : words[liquidStockField(STOCK_MIXTURE_PRESENT) + id];
     }
     if (id == 0)
-        words[liquid(STOCK_COUNTS) + 1] = uint(required);
+        words[liquidStockField(STOCK_COUNTS) + 1] = uint(required);
 }
 bool activeCell(int cell) {
-    return h(H_ACTIVITY_CELLS) < 0 || words[h(H_ACTIVITY_CELLS) + cell] != 0u;
+    return headerWord(H_ACTIVITY_CELLS) < 0 || words[headerWord(H_ACTIVITY_CELLS) + cell] != 0u;
 }
 void main() {
     int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
     if (id >= p.count)
         return;
-    if (p.stage == 6) {
+    if (p.stage == STAGE_CLEAR_CONTROL) {
         for (int i = 0; i < 8; i++)
-            words[h(H_CONTROL) + i] = 0u;
-        integerAt(h(H_TOTAL_QUANTA), 0l);
+            words[headerWord(H_CONTROL) + i] = 0u;
+        writeInt64(headerWord(H_TOTAL_QUANTA), 0l);
         return;
     }
     if (errors != 0u)
         return;
-    if (p.stage == 0)
+    if (p.stage == STAGE_INITIALIZE)
         initialize(id);
-    else if (p.stage == 1)
+    else if (p.stage == STAGE_REACT_CELL)
         cell(id);
-    else if (p.stage == 2)
+    else if (p.stage == STAGE_COUNT_ROW)
         countRow(id);
-    else if (p.stage == 3) {
-        int required = int(words[h(H_ROW_OFFSETS) + h(H_STOCK_CAPACITY)]);
-        words[h(H_CONTROL) + 2] = uint(required);
-        words[h(H_CONTROL)] = required > h(H_SPECIES_CAPACITY) ? 1u : 2u;
-    } else if (p.stage == 4)
+    else if (p.stage == STAGE_CAPACITY_STATUS) {
+        int required = int(words[headerWord(H_ROW_OFFSETS) + headerWord(H_STOCK_CAPACITY)]);
+        words[headerWord(H_CONTROL) + 2] = uint(required);
+        words[headerWord(H_CONTROL)] = required > headerWord(H_SPECIES_CAPACITY) ? 1u : 2u;
+    } else if (p.stage == STAGE_SCATTER)
         scatter(id);
-    else if (p.stage == 5)
+    else if (p.stage == STAGE_PUBLISH)
         publish(id);
 }

@@ -15,6 +15,15 @@ layout(push_constant) uniform Params {
 }
 p;
 // PHASE_ROWS_LIBRARY
+const int STAGE_INITIALIZE = 0;
+const int STAGE_IMPORT_CELL = 1;
+const int STAGE_MEASURE = 2;
+const int STAGE_COUNT_CAPACITY = 4;
+const int STAGE_ROW_COUNTS = 6;
+const int STAGE_STORAGE_CAPACITY = 7;
+const int STAGE_WRITE_ROW = 8;
+const int STAGE_PUBLISH = 9;
+
 // DYADIC_LIBRARY
 uint dyadicWord(int bank, int at) {
     return words[at];
@@ -22,14 +31,14 @@ uint dyadicWord(int bank, int at) {
 void dyadicWrite(int at, uint value) {
     words[at] = value;
 }
-int h(int i) {
-    return lpH(p.header, i);
+int headerWord(int i) {
+    return phaseRowHeader(p.header, i);
 }
-int f(int i) {
-    return lpF(p.header, i);
+int workField(int i) {
+    return phaseRowField(p.header, i);
 }
-int src(int i) {
-    return lpS(p.header, i);
+int stockField(int i) {
+    return phaseStockField(p.header, i);
 }
 u64vec2 product(uint64_t a, uint64_t b) {
     uint64_t mask = uint64_t(0xffffffffu), low = (a & mask) * (b & mask), t = (a >> 32) * (b & mask) + (low >> 32),
@@ -39,88 +48,88 @@ u64vec2 product(uint64_t a, uint64_t b) {
 void terms(int row, out DyadicTerm items[7]) {
     for (int i = 0; i < 7; i++)
         items[i] = DyadicTerm(1, 0, 0, 0, 0);
-    if (row < h(LP_H_SLOT_COUNT) && row < int(words[src(LP_STOCK_COUNTS)])) {
-        int begin = int(words[src(LP_STOCK_VOLUME_OFFSETS) + row]),
-            count = int(words[src(LP_STOCK_VOLUME_COUNTS) + row]);
-        items[0] = DyadicTerm(1, src(LP_STOCK_VOLUME_LIMBS) + begin, count,
-                              int(words[src(LP_STOCK_VOLUME_EXPONENTS) + row]), count > 0 ? 1 : 0);
+    if (row < headerWord(LP_H_SLOT_COUNT) && row < int(words[stockField(LP_STOCK_COUNTS)])) {
+        int begin = int(words[stockField(LP_STOCK_VOLUME_OFFSETS) + row]),
+            count = int(words[stockField(LP_STOCK_VOLUME_COUNTS) + row]);
+        items[0] = DyadicTerm(1, stockField(LP_STOCK_VOLUME_LIMBS) + begin, count,
+                              int(words[stockField(LP_STOCK_VOLUME_EXPONENTS) + row]), count > 0 ? 1 : 0);
     }
-    int64_t delta = lpInt(f(LP_FIELD_DELTA_SVQ) + 2 * row);
+    int64_t delta = readPhaseRowInteger(workField(LP_FIELD_DELTA_SVQ) + 2 * row);
     if (delta != 0l) {
         u64vec2 q = product((delta < 0l ? uint64_t(0) - uint64_t(delta) : uint64_t(delta)),
-                            uint64_t(lpInt(p.header + LP_H_VOLUME_SIGNIFICAND)));
-        int at = f(LP_FIELD_DELTA_LIMBS) + 4 * row;
+                            uint64_t(readPhaseRowInteger(p.header + LP_H_VOLUME_SIGNIFICAND)));
+        int at = workField(LP_FIELD_DELTA_LIMBS) + 4 * row;
         words[at] = uint(q.x);
         words[at + 1] = uint(q.x >> 32);
         words[at + 2] = uint(q.y);
         words[at + 3] = uint(q.y >> 32);
         int count = q.y != 0UL ? (q.y >> 32 != 0UL ? 4 : 3) : (q.x >> 32 != 0UL ? 2 : 1);
-        items[1] = DyadicTerm(1, at, count, h(LP_H_VOLUME_EXPONENT), delta > 0l ? 1 : -1);
+        items[1] = DyadicTerm(1, at, count, headerWord(LP_H_VOLUME_EXPONENT), delta > 0l ? 1 : -1);
     }
 }
 void initialize(int id) {
-    if (id < h(LP_H_ROW_COUNT)) {
-        words[f(LP_FIELD_LIVE) + id] = 0u;
-        words[f(LP_FIELD_MIXTURE) + id] = 0u;
-        words[f(LP_FIELD_CELL) + id] = uint(id / h(LP_H_MATERIAL_COUNT));
-        words[f(LP_FIELD_MATERIAL) + id] = uint(id % h(LP_H_MATERIAL_COUNT));
-        words[f(LP_FIELD_SUPPORT) + id] = 0u;
+    if (id < headerWord(LP_H_ROW_COUNT)) {
+        words[workField(LP_FIELD_LIVE) + id] = 0u;
+        words[workField(LP_FIELD_MIXTURE) + id] = 0u;
+        words[workField(LP_FIELD_CELL) + id] = uint(id / headerWord(LP_H_MATERIAL_COUNT));
+        words[workField(LP_FIELD_MATERIAL) + id] = uint(id % headerWord(LP_H_MATERIAL_COUNT));
+        words[workField(LP_FIELD_SUPPORT) + id] = 0u;
         for (int i = 0; i < 8; i++)
-            words[f(LP_FIELD_VOLUME_RESULTS) + 8 * id + i] = 0u;
-        lpIntAt(f(LP_FIELD_MASS) + 2 * id, 0l);
-        lpIntAt(f(LP_FIELD_DELTA_SVQ) + 2 * id, 0l);
-        lpDoubleAt(f(LP_FIELD_ENERGY) + 2 * id, 0.0LF);
-        lpDoubleAt(f(LP_FIELD_BASE_VOLUME) + 2 * id, 0.0LF);
-        for (int s = 0; s < h(LP_H_SPECIES_COUNT); s++)
-            lpSpeciesAt(p.header, id, s, 0l);
+            words[workField(LP_FIELD_VOLUME_RESULTS) + 8 * id + i] = 0u;
+        writePhaseRowInteger(workField(LP_FIELD_MASS) + 2 * id, 0l);
+        writePhaseRowInteger(workField(LP_FIELD_DELTA_SVQ) + 2 * id, 0l);
+        writePhaseRowDouble(workField(LP_FIELD_ENERGY) + 2 * id, 0.0LF);
+        writePhaseRowDouble(workField(LP_FIELD_BASE_VOLUME) + 2 * id, 0.0LF);
+        for (int s = 0; s < headerWord(LP_H_SPECIES_COUNT); s++)
+            writePhaseRowSpecies(p.header, id, s, 0l);
     }
-    if (id < h(LP_H_SLOT_COUNT)) {
-        words[f(LP_FIELD_SPECIES_COUNTS) + id] = 0u;
-        words[f(LP_FIELD_VOLUME_COUNTS) + id] = 0u;
-        lpDoubleAt(f(LP_FIELD_OLD_ENERGY) + 2 * id, 0.0LF);
-        lpDoubleAt(f(LP_FIELD_NEW_ENERGY) + 2 * id, 0.0LF);
+    if (id < headerWord(LP_H_SLOT_COUNT)) {
+        words[workField(LP_FIELD_SPECIES_COUNTS) + id] = 0u;
+        words[workField(LP_FIELD_VOLUME_COUNTS) + id] = 0u;
+        writePhaseRowDouble(workField(LP_FIELD_OLD_ENERGY) + 2 * id, 0.0LF);
+        writePhaseRowDouble(workField(LP_FIELD_NEW_ENERGY) + 2 * id, 0.0LF);
     }
     if (id == 0) {
-        words[f(LP_FIELD_VOLUME_OFFSETS) + h(LP_H_SLOT_COUNT)] = uint(4 * h(LP_H_STOCK_CAPACITY));
+        words[workField(LP_FIELD_VOLUME_OFFSETS) + headerWord(LP_H_SLOT_COUNT)] = uint(4 * headerWord(LP_H_STOCK_CAPACITY));
         for (int i = 0; i < 8; i++)
-            words[f(LP_FIELD_CONTROL) + i] = 0u;
+            words[workField(LP_FIELD_CONTROL) + i] = 0u;
     }
 }
 void importCell(int cell) {
-    int begin = int(words[src(LP_STOCK_CELL_OFFSETS) + cell]), end = int(words[src(LP_STOCK_CELL_OFFSETS) + cell + 1]);
+    int begin = int(words[stockField(LP_STOCK_CELL_OFFSETS) + cell]), end = int(words[stockField(LP_STOCK_CELL_OFFSETS) + cell + 1]);
     for (int row = begin; row < end; row++) {
-        words[f(LP_FIELD_CELL) + row] = uint(cell);
-        words[f(LP_FIELD_MATERIAL) + row] = words[src(LP_STOCK_MATERIALS) + row];
-        words[f(LP_FIELD_SUPPORT) + row] = words[src(LP_STOCK_SUPPORT_MASKS) + row];
-        words[f(LP_FIELD_MIXTURE) + row] = words[src(LP_STOCK_MIXTURE_PRESENT) + row];
-        words[f(LP_FIELD_LIVE) + row] = words[src(LP_STOCK_VOLUME_COUNTS) + row] > 0u ? 1u : 0u;
-        lpIntAt(f(LP_FIELD_MASS) + 2 * row, lpInt(src(LP_STOCK_MASS_UNITS) + 2 * row));
-        double u = lpDouble(src(LP_STOCK_ENERGY_BITS) + 2 * row);
-        lpDoubleAt(f(LP_FIELD_ENERGY) + 2 * row, u);
-        lpDoubleAt(f(LP_FIELD_OLD_ENERGY) + 2 * row, u);
-        lpDoubleAt(f(LP_FIELD_BASE_VOLUME) + 2 * row, lpDouble(src(LP_STOCK_NUMERIC_VOLUMES) + 2 * row));
-        for (int at = int(words[src(LP_STOCK_SPECIES_OFFSETS) + row]);
-             at < int(words[src(LP_STOCK_SPECIES_OFFSETS) + row + 1]); at++)
-            lpSpeciesAt(p.header, row, int(words[src(LP_STOCK_SPECIES_HANDLES) + at]),
-                        lpInt(src(LP_STOCK_SPECIES_AMOUNTS) + 2 * at));
+        words[workField(LP_FIELD_CELL) + row] = uint(cell);
+        words[workField(LP_FIELD_MATERIAL) + row] = words[stockField(LP_STOCK_MATERIALS) + row];
+        words[workField(LP_FIELD_SUPPORT) + row] = words[stockField(LP_STOCK_SUPPORT_MASKS) + row];
+        words[workField(LP_FIELD_MIXTURE) + row] = words[stockField(LP_STOCK_MIXTURE_PRESENT) + row];
+        words[workField(LP_FIELD_LIVE) + row] = words[stockField(LP_STOCK_VOLUME_COUNTS) + row] > 0u ? 1u : 0u;
+        writePhaseRowInteger(workField(LP_FIELD_MASS) + 2 * row, readPhaseRowInteger(stockField(LP_STOCK_MASS_UNITS) + 2 * row));
+        double internalEnergy = readPhaseRowDouble(stockField(LP_STOCK_ENERGY_BITS) + 2 * row);
+        writePhaseRowDouble(workField(LP_FIELD_ENERGY) + 2 * row, internalEnergy);
+        writePhaseRowDouble(workField(LP_FIELD_OLD_ENERGY) + 2 * row, internalEnergy);
+        writePhaseRowDouble(workField(LP_FIELD_BASE_VOLUME) + 2 * row, readPhaseRowDouble(stockField(LP_STOCK_NUMERIC_VOLUMES) + 2 * row));
+        for (int at = int(words[stockField(LP_STOCK_SPECIES_OFFSETS) + row]);
+             at < int(words[stockField(LP_STOCK_SPECIES_OFFSETS) + row + 1]); at++)
+            writePhaseRowSpecies(p.header, row, int(words[stockField(LP_STOCK_SPECIES_HANDLES) + at]),
+                        readPhaseRowInteger(stockField(LP_STOCK_SPECIES_AMOUNTS) + 2 * at));
     }
 }
 void measure(int row) {
-    int64_t mass = lpMass(p.header, row);
-    double energy = lpEnergy(p.header, row);
+    int64_t mass = phaseRowMass(p.header, row);
+    double energy = phaseRowEnergy(p.header, row);
     bool speciesPresent = false;
     if (mass < 0l || isnan(energy) || isinf(energy) || (mass == 0l && energy != 0.0LF))
         atomicOr(errors, 33554432u);
-    for (int s = 0; s < h(LP_H_SPECIES_COUNT); s++) {
-        int64_t q = lpSpecies(p.header, row, s);
-        if (q < 0l)
+    for (int s = 0; s < headerWord(LP_H_SPECIES_COUNT); s++) {
+        int64_t speciesAmount = phaseRowSpecies(p.header, row, s);
+        if (speciesAmount < 0l)
             atomicOr(errors, 33554432u);
-        speciesPresent = speciesPresent || q != 0l;
+        speciesPresent = speciesPresent || speciesAmount != 0l;
     }
     DyadicTerm items[7];
     terms(row, items);
     DyadicMeasure m = dyadicMeasure(items, 7);
-    int at = f(LP_FIELD_VOLUME_RESULTS) + 8 * row;
+    int at = workField(LP_FIELD_VOLUME_RESULTS) + 8 * row;
     words[at] = uint(m.status);
     words[at + 1] = uint(m.words);
     words[at + 2] = uint(m.exponent);
@@ -131,51 +140,51 @@ void measure(int row) {
     if (m.status == DYADIC_ZERO) {
         if (mass != 0l || energy != 0.0LF || speciesPresent)
             atomicOr(errors, 33554432u);
-        words[f(LP_FIELD_LIVE) + row] = 0u;
+        words[workField(LP_FIELD_LIVE) + row] = 0u;
     } else if (m.status == DYADIC_POSITIVE) {
-        uint support = words[f(LP_FIELD_SUPPORT) + row];
+        uint support = words[workField(LP_FIELD_SUPPORT) + row];
         if (support == 0u || support > 255u)
             atomicOr(errors, 33554432u);
-        words[f(LP_FIELD_LIVE) + row] = 1u;
+        words[workField(LP_FIELD_LIVE) + row] = 1u;
     } else
         atomicOr(errors, 33554432u);
 }
 void countCapacity() {
-    words[f(LP_FIELD_CONTROL) + 1] = uint(h(LP_H_SLOT_COUNT));
+    words[workField(LP_FIELD_CONTROL) + 1] = uint(headerWord(LP_H_SLOT_COUNT));
 }
 void rowCounts(int outRow) {
-    if (words[f(LP_FIELD_CONTROL)] != 0u || outRow >= int(words[f(LP_FIELD_CONTROL) + 1]))
+    if (words[workField(LP_FIELD_CONTROL)] != 0u || outRow >= int(words[workField(LP_FIELD_CONTROL) + 1]))
         return;
     int row = outRow, count = 0;
-    if (words[f(LP_FIELD_LIVE) + row] == 0u) {
-        words[f(LP_FIELD_SPECIES_COUNTS) + outRow] = 0u;
-        words[f(LP_FIELD_VOLUME_COUNTS) + outRow] = 0u;
-        words[f(LP_FIELD_VOLUME_OFFSETS) + outRow] = uint(4 * outRow);
+    if (words[workField(LP_FIELD_LIVE) + row] == 0u) {
+        words[workField(LP_FIELD_SPECIES_COUNTS) + outRow] = 0u;
+        words[workField(LP_FIELD_VOLUME_COUNTS) + outRow] = 0u;
+        words[workField(LP_FIELD_VOLUME_OFFSETS) + outRow] = uint(4 * outRow);
         return;
     }
-    for (int s = 0; s < h(LP_H_SPECIES_COUNT); s++)
-        if (lpSpecies(p.header, row, s) > 0l)
+    for (int s = 0; s < headerWord(LP_H_SPECIES_COUNT); s++)
+        if (phaseRowSpecies(p.header, row, s) > 0l)
             count++;
-    words[f(LP_FIELD_SPECIES_COUNTS) + outRow] = uint(count);
-    uint countWords = words[f(LP_FIELD_VOLUME_RESULTS) + 8 * row + 1];
-    words[f(LP_FIELD_VOLUME_COUNTS) + outRow] = countWords;
-    words[f(LP_FIELD_VOLUME_OFFSETS) + outRow] =
+    words[workField(LP_FIELD_SPECIES_COUNTS) + outRow] = uint(count);
+    uint countWords = words[workField(LP_FIELD_VOLUME_RESULTS) + 8 * row + 1];
+    words[workField(LP_FIELD_VOLUME_COUNTS) + outRow] = countWords;
+    words[workField(LP_FIELD_VOLUME_OFFSETS) + outRow] =
         countWords <= 4u ? 4u * uint(outRow)
-                         : atomicAdd(words[f(LP_FIELD_VOLUME_OFFSETS) + h(LP_H_SLOT_COUNT)], countWords);
-    lpDoubleAt(f(LP_FIELD_NEW_ENERGY) + 2 * outRow, lpEnergy(p.header, row));
+                         : atomicAdd(words[workField(LP_FIELD_VOLUME_OFFSETS) + headerWord(LP_H_SLOT_COUNT)], countWords);
+    writePhaseRowDouble(workField(LP_FIELD_NEW_ENERGY) + 2 * outRow, phaseRowEnergy(p.header, row));
 }
 void storageCapacity() {
-    uint species = words[f(LP_FIELD_SPECIES_OFFSETS) + h(LP_H_SLOT_COUNT)],
-         limbs = words[f(LP_FIELD_VOLUME_OFFSETS) + h(LP_H_SLOT_COUNT)];
-    words[f(LP_FIELD_CONTROL) + 2] = species;
-    words[f(LP_FIELD_CONTROL) + 3] = limbs;
-    if (species > uint(h(LP_H_SPECIES_CAPACITY)) || limbs > uint(h(LP_H_LIMB_CAPACITY)))
-        atomicMax(words[f(LP_FIELD_CONTROL)], 1u);
-    if (words[f(LP_FIELD_CONTROL)] == 0u)
-        words[f(LP_FIELD_CONTROL)] = 2u;
+    uint species = words[workField(LP_FIELD_SPECIES_OFFSETS) + headerWord(LP_H_SLOT_COUNT)],
+         limbs = words[workField(LP_FIELD_VOLUME_OFFSETS) + headerWord(LP_H_SLOT_COUNT)];
+    words[workField(LP_FIELD_CONTROL) + 2] = species;
+    words[workField(LP_FIELD_CONTROL) + 3] = limbs;
+    if (species > uint(headerWord(LP_H_SPECIES_CAPACITY)) || limbs > uint(headerWord(LP_H_LIMB_CAPACITY)))
+        atomicMax(words[workField(LP_FIELD_CONTROL)], 1u);
+    if (words[workField(LP_FIELD_CONTROL)] == 0u)
+        words[workField(LP_FIELD_CONTROL)] = 2u;
 }
 uint volumeWord(int begin, int count, int index) {
-    return index >= 0 && index < count ? words[f(LP_FIELD_VOLUME_LIMBS) + begin + index] : 0u;
+    return index >= 0 && index < count ? words[workField(LP_FIELD_VOLUME_LIMBS) + begin + index] : 0u;
 }
 // The numerical view is rounded once from the exact published result, including near-total withdrawal.
 double numericVolume(int begin, int count, int exponent) {
@@ -210,12 +219,12 @@ double numericVolume(int begin, int count, int exponent) {
 }
 int64_t massResidual(int row) {
     uint64_t total = 0UL;
-    for (int s = 0; s < h(LP_H_SPECIES_COUNT); s++) {
-        int64_t amount = lpSpecies(p.header, row, s);
+    for (int s = 0; s < headerWord(LP_H_SPECIES_COUNT); s++) {
+        int64_t amount = phaseRowSpecies(p.header, row, s);
         if (amount == 0l)
             continue;
-        int def = h(LP_H_DEFINITIONS), speciesTable = int(words[def + 1]);
-        int64_t massUnit = lpInt(def + speciesTable + 5 * s + 1);
+        int def = headerWord(LP_H_DEFINITIONS), speciesTable = int(words[def + 1]);
+        int64_t massUnit = readPhaseRowInteger(def + speciesTable + 5 * s + 1);
         if (amount < 0l || massUnit < 0l) {
             atomicOr(errors, 33554432u);
             return 0l;
@@ -227,7 +236,7 @@ int64_t massResidual(int row) {
         }
         total += q.x;
     }
-    uint64_t mass = uint64_t(lpMass(p.header, row));
+    uint64_t mass = uint64_t(phaseRowMass(p.header, row));
     if (total > mass) {
         uint64_t difference = total - mass;
         if (difference > 0x8000000000000000UL) {
@@ -239,107 +248,107 @@ int64_t massResidual(int row) {
     return int64_t(mass - total);
 }
 void writeRow(int outRow) {
-    if (words[f(LP_FIELD_CONTROL)] != 2u || outRow >= int(words[f(LP_FIELD_CONTROL) + 1]))
+    if (words[workField(LP_FIELD_CONTROL)] != 2u || outRow >= int(words[workField(LP_FIELD_CONTROL) + 1]))
         return;
-    int row = outRow, at = int(words[f(LP_FIELD_SPECIES_OFFSETS) + outRow]);
-    if (words[f(LP_FIELD_LIVE) + row] == 0u)
+    int row = outRow, at = int(words[workField(LP_FIELD_SPECIES_OFFSETS) + outRow]);
+    if (words[workField(LP_FIELD_LIVE) + row] == 0u)
         return;
-    for (int s = 0; s < h(LP_H_SPECIES_COUNT); s++) {
-        int64_t q = lpSpecies(p.header, row, s);
-        if (q > 0l) {
-            words[f(LP_FIELD_SPECIES_HANDLES) + at] = uint(s);
-            lpIntAt(f(LP_FIELD_SPECIES_AMOUNTS) + 2 * at, q);
+    for (int s = 0; s < headerWord(LP_H_SPECIES_COUNT); s++) {
+        int64_t speciesAmount = phaseRowSpecies(p.header, row, s);
+        if (speciesAmount > 0l) {
+            words[workField(LP_FIELD_SPECIES_HANDLES) + at] = uint(s);
+            writePhaseRowInteger(workField(LP_FIELD_SPECIES_AMOUNTS) + 2 * at, speciesAmount);
             at++;
         }
     }
-    int a = f(LP_FIELD_VOLUME_RESULTS) + 8 * row;
+    int a = workField(LP_FIELD_VOLUME_RESULTS) + 8 * row;
     DyadicMeasure m = DyadicMeasure(int(words[a]), int(words[a + 1]), int(words[a + 2]), int(words[a + 3]),
                                     int(words[a + 4]), int(words[a + 5]), int(words[a + 6]));
     DyadicTerm items[7];
     terms(row, items);
-    int begin = int(words[f(LP_FIELD_VOLUME_OFFSETS) + outRow]);
-    dyadicWriteSum(items, 7, m, f(LP_FIELD_VOLUME_LIMBS) + begin);
+    int begin = int(words[workField(LP_FIELD_VOLUME_OFFSETS) + outRow]);
+    dyadicWriteSum(items, 7, m, workField(LP_FIELD_VOLUME_LIMBS) + begin);
     double volume = numericVolume(begin, m.words, m.exponent);
     if (!(volume > 0.0LF) || isnan(volume) || isinf(volume))
         atomicOr(errors, 33554432u);
-    lpDoubleAt(f(LP_FIELD_NUMERIC_VOLUME) + 2 * row, volume);
-    lpIntAt(f(LP_FIELD_MASS_RESIDUAL) + 2 * row, massResidual(row));
+    writePhaseRowDouble(workField(LP_FIELD_NUMERIC_VOLUME) + 2 * row, volume);
+    writePhaseRowInteger(workField(LP_FIELD_MASS_RESIDUAL) + 2 * row, massResidual(row));
 }
 void publish(int id) {
-    if (words[f(LP_FIELD_CONTROL)] != 2u)
+    if (words[workField(LP_FIELD_CONTROL)] != 2u)
         return;
-    if (id <= h(LP_H_SLOT_COUNT)) {
-        words[src(LP_STOCK_SPECIES_OFFSETS) + id] = words[f(LP_FIELD_SPECIES_OFFSETS) + id];
-        words[src(LP_STOCK_VOLUME_OFFSETS) + id] = words[f(LP_FIELD_VOLUME_OFFSETS) + id];
+    if (id <= headerWord(LP_H_SLOT_COUNT)) {
+        words[stockField(LP_STOCK_SPECIES_OFFSETS) + id] = words[workField(LP_FIELD_SPECIES_OFFSETS) + id];
+        words[stockField(LP_STOCK_VOLUME_OFFSETS) + id] = words[workField(LP_FIELD_VOLUME_OFFSETS) + id];
     }
-    if (id <= h(LP_H_CELL_COUNT))
-        words[src(LP_STOCK_CELL_OFFSETS) + id] = uint(id * h(LP_H_MATERIAL_COUNT));
-    if (id > h(LP_H_SLOT_COUNT) && id <= h(LP_H_STOCK_CAPACITY)) {
-        words[src(LP_STOCK_SPECIES_OFFSETS) + id] = words[f(LP_FIELD_CONTROL) + 2];
-        words[src(LP_STOCK_VOLUME_OFFSETS) + id] =
-            id == h(LP_H_STOCK_CAPACITY) ? words[f(LP_FIELD_CONTROL) + 3] : uint(4 * id);
+    if (id <= headerWord(LP_H_CELL_COUNT))
+        words[stockField(LP_STOCK_CELL_OFFSETS) + id] = uint(id * headerWord(LP_H_MATERIAL_COUNT));
+    if (id > headerWord(LP_H_SLOT_COUNT) && id <= headerWord(LP_H_STOCK_CAPACITY)) {
+        words[stockField(LP_STOCK_SPECIES_OFFSETS) + id] = words[workField(LP_FIELD_CONTROL) + 2];
+        words[stockField(LP_STOCK_VOLUME_OFFSETS) + id] =
+            id == headerWord(LP_H_STOCK_CAPACITY) ? words[workField(LP_FIELD_CONTROL) + 3] : uint(4 * id);
     }
-    if (id >= h(LP_H_SLOT_COUNT) && id < h(LP_H_STOCK_CAPACITY)) {
-        words[src(LP_STOCK_MATERIALS) + id] = 0u;
-        words[src(LP_STOCK_SUPPORT_MASKS) + id] = 0u;
-        words[src(LP_STOCK_VOLUME_COUNTS) + id] = 0u;
-        words[src(LP_STOCK_VOLUME_EXPONENTS) + id] = 0u;
-        words[src(LP_STOCK_MIXTURE_PRESENT) + id] = 0u;
-        lpIntAt(src(LP_STOCK_MASS_UNITS) + 2 * id, 0l);
-        lpDoubleAt(src(LP_STOCK_ENERGY_BITS) + 2 * id, 0.0LF);
-        lpIntAt(src(LP_STOCK_MASS_RESIDUAL_UNITS) + 2 * id, 0l);
-        lpDoubleAt(src(LP_STOCK_NUMERIC_VOLUMES) + 2 * id, 0.0LF);
+    if (id >= headerWord(LP_H_SLOT_COUNT) && id < headerWord(LP_H_STOCK_CAPACITY)) {
+        words[stockField(LP_STOCK_MATERIALS) + id] = 0u;
+        words[stockField(LP_STOCK_SUPPORT_MASKS) + id] = 0u;
+        words[stockField(LP_STOCK_VOLUME_COUNTS) + id] = 0u;
+        words[stockField(LP_STOCK_VOLUME_EXPONENTS) + id] = 0u;
+        words[stockField(LP_STOCK_MIXTURE_PRESENT) + id] = 0u;
+        writePhaseRowInteger(stockField(LP_STOCK_MASS_UNITS) + 2 * id, 0l);
+        writePhaseRowDouble(stockField(LP_STOCK_ENERGY_BITS) + 2 * id, 0.0LF);
+        writePhaseRowInteger(stockField(LP_STOCK_MASS_RESIDUAL_UNITS) + 2 * id, 0l);
+        writePhaseRowDouble(stockField(LP_STOCK_NUMERIC_VOLUMES) + 2 * id, 0.0LF);
     }
-    if (id < int(words[f(LP_FIELD_CONTROL) + 2])) {
-        words[src(LP_STOCK_SPECIES_HANDLES) + id] = words[f(LP_FIELD_SPECIES_HANDLES) + id];
-        lpIntAt(src(LP_STOCK_SPECIES_AMOUNTS) + 2 * id, lpInt(f(LP_FIELD_SPECIES_AMOUNTS) + 2 * id));
+    if (id < int(words[workField(LP_FIELD_CONTROL) + 2])) {
+        words[stockField(LP_STOCK_SPECIES_HANDLES) + id] = words[workField(LP_FIELD_SPECIES_HANDLES) + id];
+        writePhaseRowInteger(stockField(LP_STOCK_SPECIES_AMOUNTS) + 2 * id, readPhaseRowInteger(workField(LP_FIELD_SPECIES_AMOUNTS) + 2 * id));
     }
-    if (id < int(words[f(LP_FIELD_CONTROL) + 3]))
-        words[src(LP_STOCK_VOLUME_LIMBS) + id] = words[f(LP_FIELD_VOLUME_LIMBS) + id];
-    if (id < int(words[f(LP_FIELD_CONTROL) + 1])) {
+    if (id < int(words[workField(LP_FIELD_CONTROL) + 3]))
+        words[stockField(LP_STOCK_VOLUME_LIMBS) + id] = words[workField(LP_FIELD_VOLUME_LIMBS) + id];
+    if (id < int(words[workField(LP_FIELD_CONTROL) + 1])) {
         int row = id;
-        bool live = words[f(LP_FIELD_LIVE) + row] != 0u;
-        words[src(LP_STOCK_MATERIALS) + id] = words[f(LP_FIELD_MATERIAL) + row];
-        words[src(LP_STOCK_SUPPORT_MASKS) + id] = live ? words[f(LP_FIELD_SUPPORT) + row] : 0u;
-        words[src(LP_STOCK_MIXTURE_PRESENT) + id] =
-            live ? (words[f(LP_FIELD_SPECIES_COUNTS) + id] > 0u ? 1u : words[f(LP_FIELD_MIXTURE) + row]) : 0u;
-        lpIntAt(src(LP_STOCK_MASS_UNITS) + 2 * id, live ? lpMass(p.header, row) : 0l);
-        lpDoubleAt(src(LP_STOCK_ENERGY_BITS) + 2 * id, live ? lpEnergy(p.header, row) : 0.0LF);
-        lpDoubleAt(src(LP_STOCK_NUMERIC_VOLUMES) + 2 * id,
-                   live ? lpDouble(f(LP_FIELD_NUMERIC_VOLUME) + 2 * row) : 0.0LF);
-        words[src(LP_STOCK_VOLUME_COUNTS) + id] = words[f(LP_FIELD_VOLUME_COUNTS) + id];
-        words[src(LP_STOCK_VOLUME_EXPONENTS) + id] = live ? words[f(LP_FIELD_VOLUME_RESULTS) + 8 * row + 2] : 0u;
-        lpIntAt(src(LP_STOCK_MASS_RESIDUAL_UNITS) + 2 * id, live ? lpInt(f(LP_FIELD_MASS_RESIDUAL) + 2 * row) : 0l);
+        bool live = words[workField(LP_FIELD_LIVE) + row] != 0u;
+        words[stockField(LP_STOCK_MATERIALS) + id] = words[workField(LP_FIELD_MATERIAL) + row];
+        words[stockField(LP_STOCK_SUPPORT_MASKS) + id] = live ? words[workField(LP_FIELD_SUPPORT) + row] : 0u;
+        words[stockField(LP_STOCK_MIXTURE_PRESENT) + id] =
+            live ? (words[workField(LP_FIELD_SPECIES_COUNTS) + id] > 0u ? 1u : words[workField(LP_FIELD_MIXTURE) + row]) : 0u;
+        writePhaseRowInteger(stockField(LP_STOCK_MASS_UNITS) + 2 * id, live ? phaseRowMass(p.header, row) : 0l);
+        writePhaseRowDouble(stockField(LP_STOCK_ENERGY_BITS) + 2 * id, live ? phaseRowEnergy(p.header, row) : 0.0LF);
+        writePhaseRowDouble(stockField(LP_STOCK_NUMERIC_VOLUMES) + 2 * id,
+                   live ? readPhaseRowDouble(workField(LP_FIELD_NUMERIC_VOLUME) + 2 * row) : 0.0LF);
+        words[stockField(LP_STOCK_VOLUME_COUNTS) + id] = words[workField(LP_FIELD_VOLUME_COUNTS) + id];
+        words[stockField(LP_STOCK_VOLUME_EXPONENTS) + id] = live ? words[workField(LP_FIELD_VOLUME_RESULTS) + 8 * row + 2] : 0u;
+        writePhaseRowInteger(stockField(LP_STOCK_MASS_RESIDUAL_UNITS) + 2 * id, live ? readPhaseRowInteger(workField(LP_FIELD_MASS_RESIDUAL) + 2 * row) : 0l);
     }
 
     if (id == 0) {
-        words[src(LP_STOCK_COUNTS)] = uint(h(LP_H_SLOT_COUNT));
-        words[src(LP_STOCK_COUNTS) + 1] = words[f(LP_FIELD_CONTROL) + 2];
-        words[src(LP_STOCK_COUNTS) + 2] = words[f(LP_FIELD_CONTROL) + 3];
+        words[stockField(LP_STOCK_COUNTS)] = uint(headerWord(LP_H_SLOT_COUNT));
+        words[stockField(LP_STOCK_COUNTS) + 1] = words[workField(LP_FIELD_CONTROL) + 2];
+        words[stockField(LP_STOCK_COUNTS) + 2] = words[workField(LP_FIELD_CONTROL) + 3];
     }
 }
 void main() {
     int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
     if (id >= p.count)
         return;
-    if (p.stage == 0) {
+    if (p.stage == STAGE_INITIALIZE) {
         initialize(id);
         return;
     }
     if (errors != 0u)
         return;
-    if (p.stage == 1)
+    if (p.stage == STAGE_IMPORT_CELL)
         importCell(id);
-    else if (p.stage == 2)
+    else if (p.stage == STAGE_MEASURE)
         measure(id);
-    else if (p.stage == 4)
+    else if (p.stage == STAGE_COUNT_CAPACITY)
         countCapacity();
-    else if (p.stage == 6)
+    else if (p.stage == STAGE_ROW_COUNTS)
         rowCounts(id);
-    else if (p.stage == 7)
+    else if (p.stage == STAGE_STORAGE_CAPACITY)
         storageCapacity();
-    else if (p.stage == 8)
+    else if (p.stage == STAGE_WRITE_ROW)
         writeRow(id);
-    else if (p.stage == 9)
+    else if (p.stage == STAGE_PUBLISH)
         publish(id);
 }

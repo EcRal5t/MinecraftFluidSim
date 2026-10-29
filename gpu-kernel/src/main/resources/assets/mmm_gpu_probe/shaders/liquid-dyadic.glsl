@@ -36,7 +36,7 @@ struct DyadicChunk { int first; int count; uint word; };
 
 bool dyadicPresent(DyadicTerm item) { return item.sign!=0&&item.count>0; }
 
-DyadicCursor dyadicBegin(DyadicTerm items[7],int itemCount) {
+DyadicCursor dyadicBegin(DyadicTerm items[DYADIC_MAX_TERMS],int itemCount) {
     int minimum=2147483647;bool present=false;
     for(int i=0;i<itemCount;i++)if(dyadicPresent(items[i])) {
         minimum=min(minimum,items[i].exponent);present=true;
@@ -66,7 +66,7 @@ uint dyadicAlignedWord(DyadicTerm item,int position,int minimumExponent) {
 // A zero or all-ones carry crosses an empty exponent interval in one chunk. This permits
 // widely separated inputs to cancel without scanning millions of absent words or rejecting
 // a small final answer merely because its intermediate alignment span is large.
-DyadicChunk dyadicNext(inout DyadicCursor cursor,DyadicTerm items[7],int itemCount) {
+DyadicChunk dyadicNext(inout DyadicCursor cursor,DyadicTerm items[DYADIC_MAX_TERMS],int itemCount) {
     int next=cursor.limit;bool covered=false;
     for(int i=0;i<itemCount;i++)if(dyadicPresent(items[i])) {
         int64_t shift=int64_t(items[i].exponent)-int64_t(cursor.minimumExponent);
@@ -88,7 +88,7 @@ DyadicChunk dyadicNext(inout DyadicCursor cursor,DyadicTerm items[7],int itemCou
     cursor.position++;cursor.carry=value>>32;return chunk;
 }
 
-DyadicMeasure dyadicMeasure(DyadicTerm items[7],int itemCount) {
+DyadicMeasure dyadicMeasure(DyadicTerm items[DYADIC_MAX_TERMS],int itemCount) {
     DyadicCursor cursor=dyadicBegin(items,itemCount);
     DyadicMeasure result=DyadicMeasure(DYADIC_ZERO,0,0,cursor.minimumExponent,-1,-1,0);
     uint last=0u;
@@ -118,7 +118,7 @@ DyadicMeasure dyadicMeasure(DyadicTerm items[7],int itemCount) {
 
 // Emits exactly result.words canonical limbs for a measured positive result. Zero needs no
 // writes; negative and overflow statuses remain explicit and are never truncated into output.
-void dyadicWriteSum(DyadicTerm items[7],int itemCount,DyadicMeasure result,int outputOffset) {
+void dyadicWriteSum(DyadicTerm items[DYADIC_MAX_TERMS],int itemCount,DyadicMeasure result,int outputOffset) {
     if(result.status!=DYADIC_POSITIVE)return;
     DyadicCursor cursor=dyadicBegin(items,itemCount);
     uint previous=0u;
@@ -141,14 +141,14 @@ void dyadicWriteSum(DyadicTerm items[7],int itemCount,DyadicMeasure result,int o
 // Comparison requires only the sign of the exact difference; a wide positive difference still
 // orders correctly even when its magnitude would not fit the inventory storage envelope.
 int dyadicCompare(DyadicTerm left,DyadicTerm right) {
-    DyadicTerm items[7];items[0]=left;items[1]=right;items[1].sign=-items[1].sign;
+    DyadicTerm items[DYADIC_MAX_TERMS];items[0]=left;items[1]=right;items[1].sign=-items[1].sign;
     DyadicMeasure result=dyadicMeasure(items,2);
     return result.status==DYADIC_ZERO?0:result.status==DYADIC_NEGATIVE?-1:1;
 }
 
 // Exact canonical four-word sum for positive inputs. Wider aligned spans use dyadicMeasure.
 // Both the standalone sum pass and direct inventory publication share this register arithmetic.
-bool dyadicPositiveSum(DyadicTerm items[7],int itemCount,out int count,out int exponent,out uvec4 limbs) {
+bool dyadicPositiveSum(DyadicTerm items[DYADIC_MAX_TERMS],int itemCount,out int count,out int exponent,out uvec4 limbs) {
     count=0;exponent=0;limbs=uvec4(0u);
     int minimum=2147483647,present=0;int64_t maximum=int64_t(-9223372036854775807L);
     for(int i=0;i<itemCount;i++)if(dyadicPresent(items[i])){

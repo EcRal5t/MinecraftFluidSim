@@ -2,6 +2,16 @@
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 // HOST_LAYOUT
+const int CARRIER_LIQUID = 0;
+const int CARRIER_GRANULAR = 1;
+const int CARRIER_COHERENT = 2;
+const int CARRIER_KIND_COUNT = 3;
+const int PARTICLE_SUPPORT_COUNT = 8;
+const double KILOGRAMS_PER_MASS_UNIT = 1e-10;
+const double MAXIMUM_FINITE_DOUBLE = 1.7976931348623157e308;
+const double ATMOSPHERIC_PRESSURE_PA = 101325.0LF;
+const double STANDARD_TEMPERATURE_K = 293.15LF;
+const uint ERROR_INVALID_INVENTORY = 1u;
 layout(local_size_x = 128) in;
 layout(binding = 0, std430) readonly buffer Source {
     uint words[];
@@ -15,226 +25,226 @@ layout(push_constant) uniform Params {
     int unused;
     int unused2;
 }
-p;
-int h(int i) {
+params;
+int headerWord(int i) {
     return int(outWords[i]);
 }
-int ch(int a, int i) {
-    return int(words[a + i]);
+int caloricField(int wordOffset, int i) {
+    return int(words[wordOffset + i]);
 }
-double num(int a) {
-    return packDouble2x32(uvec2(words[a], words[a + 1]));
+double readDouble(int wordOffset) {
+    return packDouble2x32(uvec2(words[wordOffset], words[wordOffset + 1]));
 }
-double derived(int a) {
-    return packDouble2x32(uvec2(outWords[a], outWords[a + 1]));
+double readObservationDouble(int wordOffset) {
+    return packDouble2x32(uvec2(outWords[wordOffset], outWords[wordOffset + 1]));
 }
-void store(int a, double x) {
-    uvec2 v = unpackDouble2x32(x);
-    outWords[a] = v.x;
-    outWords[a + 1] = v.y;
+void writeDouble(int wordOffset, double storedValue) {
+    uvec2 packedValue = unpackDouble2x32(storedValue);
+    outWords[wordOffset] = packedValue.x;
+    outWords[wordOffset + 1] = packedValue.y;
 }
-int64_t integer(int a) {
-    return int64_t(uint64_t(words[a]) | (uint64_t(words[a + 1]) << 32));
+int64_t readInteger(int wordOffset) {
+    return int64_t(uint64_t(words[wordOffset]) | (uint64_t(words[wordOffset + 1]) << 32));
 }
-void outint(int a, int64_t x) {
-    outWords[a] = uint(x);
-    outWords[a + 1] = uint(uint64_t(x) >> 32);
+void writeInteger(int wordOffset, int64_t storedValue) {
+    outWords[wordOffset] = uint(storedValue);
+    outWords[wordOffset + 1] = uint(uint64_t(storedValue) >> 32);
 }
-int64_t add(int64_t a, int64_t b) {
-    if (a < 0l || b < 0l || a > 9223372036854775807l - b) {
-        atomicOr(outWords[H_ERROR], 1u);
+int64_t checkedAddInventory(int64_t firstAmount, int64_t secondAmount) {
+    if (firstAmount < 0l || secondAmount < 0l || firstAmount > 9223372036854775807l - secondAmount) {
+        atomicOr(outWords[H_ERROR], ERROR_INVALID_INVENTORY);
         return 0l;
     }
-    return a + b;
+    return firstAmount + secondAmount;
 }
-int begin() {
-    return int(words[h(H_CELL_OFFSETS) + h(H_CELL)]);
+int firstLiquidRow() {
+    return int(words[headerWord(H_CELL_OFFSETS) + headerWord(H_CELL)]);
 }
-int end() {
-    return int(words[h(H_CELL_OFFSETS) + h(H_CELL) + 1]);
+int endLiquidRow() {
+    return int(words[headerWord(H_CELL_OFFSETS) + headerWord(H_CELL) + 1]);
 }
-int thermalHeader(int type) {
-    return type == 0 ? h(H_LIQUID_THERMAL) : type == 1 ? h(H_GRAIN_THERMAL) : h(H_COHERENT_THERMAL);
+int thermalHeader(int carrierKind) {
+    return carrierKind == CARRIER_LIQUID ? headerWord(H_LIQUID_THERMAL) : carrierKind == CARRIER_GRANULAR ? headerWord(H_GRAIN_THERMAL) : headerWord(H_COHERENT_THERMAL);
 }
-int firstRow(int type) {
-    return type == 0 ? begin() : 0;
+int firstRow(int carrierKind) {
+    return carrierKind == CARRIER_LIQUID ? firstLiquidRow() : 0;
 }
-int lastRow(int type) {
-    return type == 0   ? end()
-           : type == 1 ? (h(H_GRAIN_COUNTS) < 0 ? 0 : h(H_GRAIN_CAPACITY) + int(words[h(H_GRAIN_COUNTS) + 1]))
-           : h(H_COHERENT_COUNTS) < 0 ? 0
-                                      : int(words[h(H_COHERENT_COUNTS)]);
+int lastRow(int carrierKind) {
+    return carrierKind == CARRIER_LIQUID   ? endLiquidRow()
+           : carrierKind == CARRIER_GRANULAR ? (headerWord(H_GRAIN_COUNTS) < 0 ? 0 : headerWord(H_GRAIN_CAPACITY) + int(words[headerWord(H_GRAIN_COUNTS) + 1]))
+           : headerWord(H_COHERENT_COUNTS) < 0 ? 0
+                                      : int(words[headerWord(H_COHERENT_COUNTS)]);
 }
-bool selected(int type, int row) {
-    if (type == 0)
+bool rowBelongsToCell(int carrierKind, int row) {
+    if (carrierKind == CARRIER_LIQUID)
         return true;
-    if (type == 2)
-        return int(words[h(H_COHERENT_CELL) + row]) == h(H_CELL);
-    if (row >= h(H_GRAIN_CAPACITY))
-        return int(words[h(H_DEPOSIT_CELL) + row - h(H_GRAIN_CAPACITY)]) == h(H_CELL);
-    if (row >= int(words[h(H_GRAIN_COUNTS)]))
+    if (carrierKind == CARRIER_COHERENT)
+        return int(words[headerWord(H_COHERENT_CELL) + row]) == headerWord(H_CELL);
+    if (row >= headerWord(H_GRAIN_CAPACITY))
+        return int(words[headerWord(H_DEPOSIT_CELL) + row - headerWord(H_GRAIN_CAPACITY)]) == headerWord(H_CELL);
+    if (row >= int(words[headerWord(H_GRAIN_COUNTS)]))
         return false;
-    double size = derived(H_CELL_SIZE_LOW);
-    ivec3 q = clamp(ivec3(floor(dvec3(num(h(H_GRAIN_POSITION) + 6 * row), num(h(H_GRAIN_POSITION) + 6 * row + 2),
-                                      num(h(H_GRAIN_POSITION) + 6 * row + 4)) /
+    double size = readObservationDouble(H_CELL_SIZE_LOW);
+    ivec3 cellCoordinate = clamp(ivec3(floor(dvec3(readDouble(headerWord(H_GRAIN_POSITION) + 6 * row), readDouble(headerWord(H_GRAIN_POSITION) + 6 * row + 2),
+                                      readDouble(headerWord(H_GRAIN_POSITION) + 6 * row + 4)) /
                                 size)),
-                    ivec3(0), ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z)) - 1);
-    return (q.z * h(H_SIZE_Y) + q.y) * h(H_SIZE_X) + q.x == h(H_CELL);
+                    ivec3(0), ivec3(headerWord(H_SIZE_X), headerWord(H_SIZE_Y), headerWord(H_SIZE_Z)) - 1);
+    return (cellCoordinate.z * headerWord(H_SIZE_Y) + cellCoordinate.y) * headerWord(H_SIZE_X) + cellCoordinate.x == headerWord(H_CELL);
 }
-double mass(int header, int row) {
-    return double(integer(ch(header, CAL_MASSES) + 2 * row)) * 1e-10;
+double massKilograms(int header, int row) {
+    return double(readInteger(caloricField(header, CAL_MASSES) + 2 * row)) * KILOGRAMS_PER_MASS_UNIT;
 }
-int material(int header, int row) {
-    return int(words[ch(header, CAL_MATERIALS) + row]);
+int materialHandle(int header, int row) {
+    return int(words[caloricField(header, CAL_MATERIALS) + row]);
 }
-double coldEnergy(int header, int row) {
-    int m = material(header, row);
-    double energy = mass(header, row) * (num(ch(header, CAL_MATERIAL_REFERENCE) + 2 * m) + num(ch(header, CAL_COLD_SENSIBLE) + 2 * m));
-    for (int item = int(words[ch(header, CAL_SPECIES_OFFSETS) + row]); item < int(words[ch(header, CAL_SPECIES_OFFSETS) + row + 1]); item++) {
-        int species = int(words[ch(header, CAL_SPECIES_HANDLES) + item]);
-        energy += double(integer(ch(header, CAL_SPECIES_AMOUNTS) + 2 * item)) * num(ch(header, CAL_SPECIES_REFERENCE) + 2 * (m * ch(header, CAL_SPECIES_STRIDE) + species));
+double minimumTemperatureEnergy(int header, int row) {
+    int m = materialHandle(header, row);
+    double energy = massKilograms(header, row) * (readDouble(caloricField(header, CAL_MATERIAL_REFERENCE) + 2 * m) + readDouble(caloricField(header, CAL_COLD_SENSIBLE) + 2 * m));
+    for (int item = int(words[caloricField(header, CAL_SPECIES_OFFSETS) + row]); item < int(words[caloricField(header, CAL_SPECIES_OFFSETS) + row + 1]); item++) {
+        int species = int(words[caloricField(header, CAL_SPECIES_HANDLES) + item]);
+        energy += double(readInteger(caloricField(header, CAL_SPECIES_AMOUNTS) + 2 * item)) * readDouble(caloricField(header, CAL_SPECIES_REFERENCE) + 2 * (m * caloricField(header, CAL_SPECIES_STRIDE) + species));
     }
     return energy;
 }
-double localTemperature() {
-    double remaining = 0.0;
-    for (int type = 0; type < 3; type++) {
-        int header = thermalHeader(type);
+double cellTemperature() {
+    double remainingSensibleEnergy = 0.0;
+    for (int carrierKind = CARRIER_LIQUID; carrierKind < CARRIER_KIND_COUNT; carrierKind++) {
+        int header = thermalHeader(carrierKind);
         if (header < 0)
             continue;
-        for (int row = firstRow(type); row < lastRow(type); row++)
-            if (selected(type, row) && mass(header, row) > 0.0)
-                remaining += num(ch(header, CAL_ENERGIES) + 2 * row) - coldEnergy(header, row);
+        for (int row = firstRow(carrierKind); row < lastRow(carrierKind); row++)
+            if (rowBelongsToCell(carrierKind, row) && massKilograms(header, row) > 0.0)
+                remainingSensibleEnergy += readDouble(caloricField(header, CAL_ENERGIES) + 2 * row) - minimumTemperatureEnergy(header, row);
     }
-    double t = num(h(H_LIQUID_THERMAL) + CAL_MINIMUM_TEMPERATURE);
-    remaining = max(0.0, remaining);
+    double temperatureK = readDouble(headerWord(H_LIQUID_THERMAL) + CAL_MINIMUM_TEMPERATURE);
+    remainingSensibleEnergy = max(0.0, remainingSensibleEnergy);
     for (;;) {
-        double capacity = 0.0, next = 1.7976931348623157e308;
-        for (int type = 0; type < 3; type++) {
-            int header = thermalHeader(type);
+        double heatCapacity = 0.0, nextSegmentTemperature = MAXIMUM_FINITE_DOUBLE;
+        for (int carrierKind = CARRIER_LIQUID; carrierKind < CARRIER_KIND_COUNT; carrierKind++) {
+            int header = thermalHeader(carrierKind);
             if (header < 0)
                 continue;
-            for (int row = firstRow(type); row < lastRow(type); row++)
-                if (selected(type, row)) {
-                    double m = mass(header, row);
+            for (int row = firstRow(carrierKind); row < lastRow(carrierKind); row++)
+                if (rowBelongsToCell(carrierKind, row)) {
+                    double m = massKilograms(header, row);
                     if (m <= 0.0)
                         continue;
-                    int host = material(header, row), first = int(words[ch(header, CAL_SEGMENT_OFFSETS) + host]),
-                        last = int(words[ch(header, CAL_SEGMENT_OFFSETS) + host + 1]) - 1, segment = first;
-                    while (segment < last && t >= num(ch(header, CAL_SEGMENT_UPPER) + 2 * segment))
+                    int thermalMaterial = materialHandle(header, row), first = int(words[caloricField(header, CAL_SEGMENT_OFFSETS) + thermalMaterial]),
+                        last = int(words[caloricField(header, CAL_SEGMENT_OFFSETS) + thermalMaterial + 1]) - 1, segment = first;
+                    while (segment < last && temperatureK >= readDouble(caloricField(header, CAL_SEGMENT_UPPER) + 2 * segment))
                         segment++;
-                    capacity += m * num(ch(header, CAL_SEGMENT_CAPACITY) + 2 * segment);
+                    heatCapacity += m * readDouble(caloricField(header, CAL_SEGMENT_CAPACITY) + 2 * segment);
                     if (segment < last)
-                        next = min(next, num(ch(header, CAL_SEGMENT_UPPER) + 2 * segment));
+                        nextSegmentTemperature = min(nextSegmentTemperature, readDouble(caloricField(header, CAL_SEGMENT_UPPER) + 2 * segment));
                 }
         }
-        if (capacity <= 0.0)
-            return t;
-        double span = (next - t) * capacity;
-        if (next == 1.7976931348623157e308 || remaining < span)
-            return t + remaining / capacity;
-        remaining -= span;
-        t = next;
+        if (heatCapacity <= 0.0)
+            return temperatureK;
+        double segmentEnergy = (nextSegmentTemperature - temperatureK) * heatCapacity;
+        if (nextSegmentTemperature == MAXIMUM_FINITE_DOUBLE || remainingSensibleEnergy < segmentEnergy)
+            return temperatureK + remainingSensibleEnergy / heatCapacity;
+        remainingSensibleEnergy -= segmentEnergy;
+        temperatureK = nextSegmentTemperature;
     }
 }
 // Rows are accumulated per stable material identity. One compact result contains liquid,
 // active grains, deposits, coherent solids, and the shared gas chamber.
 void main() {
-    int id = int(gl_GlobalInvocationID.x);
-    if (id == 0) {
+    int materialOrSpeciesIndex = int(gl_GlobalInvocationID.x);
+    if (materialOrSpeciesIndex == 0) {
         double volume = 0.0;
         int64_t totalMass = 0l;
-        for (int row = begin(); row < end(); row++) {
-            volume += num(h(H_VOLUMES) + 2 * row);
-            totalMass = add(totalMass, integer(h(H_MASS_UNITS) + 2 * row));
+        for (int row = firstLiquidRow(); row < endLiquidRow(); row++) {
+            volume += readDouble(headerWord(H_VOLUMES) + 2 * row);
+            totalMass = checkedAddInventory(totalMass, readInteger(headerWord(H_MASS_UNITS) + 2 * row));
         }
-        store(O_LIQUID_VOLUME, volume * derived(H_CELL_VOLUME_LOW));
-        outint(O_LIQUID_MASS, totalMass);
-        store(O_LIQUID_TEMPERATURE, h(H_LIQUID_THERMAL) < 0 ? 0.0 : localTemperature());
+        writeDouble(O_LIQUID_VOLUME, volume * readObservationDouble(H_CELL_VOLUME_LOW));
+        writeInteger(O_LIQUID_MASS, totalMass);
+        writeDouble(O_LIQUID_TEMPERATURE, headerWord(H_LIQUID_THERMAL) < 0 ? 0.0 : cellTemperature());
         bool granularOccupied = false;
-        if (h(H_GRAIN_COUNTS) >= 0) {
-            for (int row = 0; row < int(words[h(H_GRAIN_COUNTS)]); row++)
-                for (int slot = 0; slot < 8; slot++)
-                    if (int(words[h(H_GRAIN_SUPPORT_CELLS) + 8 * row + slot]) == h(H_CELL) &&
-                        integer(h(H_GRAIN_SUPPORT_QUOTAS) + 2 * (8 * row + slot)) > 0l)
+        if (headerWord(H_GRAIN_COUNTS) >= 0) {
+            for (int row = 0; row < int(words[headerWord(H_GRAIN_COUNTS)]); row++)
+                for (int slot = 0; slot < PARTICLE_SUPPORT_COUNT; slot++)
+                    if (int(words[headerWord(H_GRAIN_SUPPORT_CELLS) + PARTICLE_SUPPORT_COUNT * row + slot]) == headerWord(H_CELL) &&
+                        readInteger(headerWord(H_GRAIN_SUPPORT_QUOTAS) + 2 * (PARTICLE_SUPPORT_COUNT * row + slot)) > 0l)
                         granularOccupied = true;
-            for (int row = 0; row < int(words[h(H_GRAIN_COUNTS) + 1]); row++)
-                if (int(words[h(H_DEPOSIT_CELL) + row]) == h(H_CELL))
+            for (int row = 0; row < int(words[headerWord(H_GRAIN_COUNTS) + 1]); row++)
+                if (int(words[headerWord(H_DEPOSIT_CELL) + row]) == headerWord(H_CELL))
                     granularOccupied = true;
         }
         outWords[O_GRANULAR_OCCUPIED] = granularOccupied ? 1u : 0u;
-        int node = h(H_GAS_CELL_NODES) < 0 ? -1 : int(words[h(H_GAS_CELL_NODES) + h(H_CELL)]);
+        int node = headerWord(H_GAS_CELL_NODES) < 0 ? -1 : int(words[headerWord(H_GAS_CELL_NODES) + headerWord(H_CELL)]);
         outWords[O_GAS_NODE] = uint(node);
         if (node == 0) {
-            store(O_GAS_PRESSURE, 101325.0LF);
-            store(O_GAS_TEMPERATURE, 293.15LF);
+            writeDouble(O_GAS_PRESSURE, ATMOSPHERIC_PRESSURE_PA);
+            writeDouble(O_GAS_TEMPERATURE, STANDARD_TEMPERATURE_K);
         } else if (node > 0) {
-            store(O_GAS_PRESSURE, num(h(H_GAS_THERMAL) + 2 * (9 * (node - 1) + 1)));
-            store(O_GAS_TEMPERATURE, num(h(H_GAS_THERMAL) + 2 * (9 * (node - 1))));
+            writeDouble(O_GAS_PRESSURE, readDouble(headerWord(H_GAS_THERMAL) + 2 * (9 * (node - 1) + 1)));
+            writeDouble(O_GAS_TEMPERATURE, readDouble(headerWord(H_GAS_THERMAL) + 2 * (9 * (node - 1))));
         }
     }
-    if (id < p.materials) {
+    if (materialOrSpeciesIndex < params.materials) {
         double volume = 0.0;
         int64_t totalMass = 0l;
-        for (int row = begin(); row < end(); row++)
-            if (int(words[h(H_MATERIALS) + row]) == id) {
-                volume += num(h(H_VOLUMES) + 2 * row);
-                totalMass = add(totalMass, integer(h(H_MASS_UNITS) + 2 * row));
+        for (int row = firstLiquidRow(); row < endLiquidRow(); row++)
+            if (int(words[headerWord(H_MATERIALS) + row]) == materialOrSpeciesIndex) {
+                volume += readDouble(headerWord(H_VOLUMES) + 2 * row);
+                totalMass = checkedAddInventory(totalMass, readInteger(headerWord(H_MASS_UNITS) + 2 * row));
             }
-        store(O_MATERIAL_ROWS + 4 * id, volume * derived(H_CELL_VOLUME_LOW));
-        outint(O_MATERIAL_ROWS + 2 + 4 * id, totalMass);
+        writeDouble(O_MATERIAL_ROWS + 4 * materialOrSpeciesIndex, volume * readObservationDouble(H_CELL_VOLUME_LOW));
+        writeInteger(O_MATERIAL_ROWS + 2 + 4 * materialOrSpeciesIndex, totalMass);
     }
-    if (id < p.species) {
+    if (materialOrSpeciesIndex < params.species) {
         int64_t amount = 0l;
-        for (int row = begin(); row < end(); row++)
-            for (int item = int(words[h(H_SPECIES_OFFSETS) + row]); item < int(words[h(H_SPECIES_OFFSETS) + row + 1]);
+        for (int row = firstLiquidRow(); row < endLiquidRow(); row++)
+            for (int item = int(words[headerWord(H_SPECIES_OFFSETS) + row]); item < int(words[headerWord(H_SPECIES_OFFSETS) + row + 1]);
                  item++)
-                if (int(words[h(H_SPECIES_HANDLES) + item]) == id)
-                    amount = add(amount, integer(h(H_SPECIES_AMOUNTS) + 2 * item));
-        outint(O_MATERIAL_ROWS + 4 * p.materials + 2 * id, amount);
+                if (int(words[headerWord(H_SPECIES_HANDLES) + item]) == materialOrSpeciesIndex)
+                    amount = checkedAddInventory(amount, readInteger(headerWord(H_SPECIES_AMOUNTS) + 2 * item));
+        writeInteger(O_MATERIAL_ROWS + 4 * params.materials + 2 * materialOrSpeciesIndex, amount);
     }
-    if (id < h(H_GRAIN_MATERIAL_COUNT)) {
+    if (materialOrSpeciesIndex < headerWord(H_GRAIN_MATERIAL_COUNT)) {
         int64_t activeVolume = 0l, activeMass = 0l, depositVolume = 0l, depositMass = 0l;
-        for (int row = 0; row < lastRow(1); row++)
-            if (selected(1, row) && int(words[h(H_GRAIN_MATERIAL) + row]) == id) {
-                if (row < h(H_GRAIN_CAPACITY)) {
-                    activeVolume = add(activeVolume, integer(h(H_GRAIN_VOLUME) + 2 * row));
-                    activeMass = add(activeMass, integer(h(H_GRAIN_MASS) + 2 * row));
+        for (int row = 0; row < lastRow(CARRIER_GRANULAR); row++)
+            if (rowBelongsToCell(CARRIER_GRANULAR, row) && int(words[headerWord(H_GRAIN_MATERIAL) + row]) == materialOrSpeciesIndex) {
+                if (row < headerWord(H_GRAIN_CAPACITY)) {
+                    activeVolume = checkedAddInventory(activeVolume, readInteger(headerWord(H_GRAIN_VOLUME) + 2 * row));
+                    activeMass = checkedAddInventory(activeMass, readInteger(headerWord(H_GRAIN_MASS) + 2 * row));
                 } else {
-                    depositVolume = add(depositVolume, integer(h(H_GRAIN_VOLUME) + 2 * row));
-                    depositMass = add(depositMass, integer(h(H_GRAIN_MASS) + 2 * row));
+                    depositVolume = checkedAddInventory(depositVolume, readInteger(headerWord(H_GRAIN_VOLUME) + 2 * row));
+                    depositMass = checkedAddInventory(depositMass, readInteger(headerWord(H_GRAIN_MASS) + 2 * row));
                 }
             }
-        int base = h(H_SOLID_OUTPUT) + 4 * id;
-        outint(base, activeVolume);
-        outint(base + 2, activeMass);
-        base = h(H_SOLID_OUTPUT) + 4 * (h(H_GRAIN_MATERIAL_COUNT) + id);
-        outint(base, depositVolume);
-        outint(base + 2, depositMass);
+        int base = headerWord(H_SOLID_OUTPUT) + 4 * materialOrSpeciesIndex;
+        writeInteger(base, activeVolume);
+        writeInteger(base + 2, activeMass);
+        base = headerWord(H_SOLID_OUTPUT) + 4 * (headerWord(H_GRAIN_MATERIAL_COUNT) + materialOrSpeciesIndex);
+        writeInteger(base, depositVolume);
+        writeInteger(base + 2, depositMass);
     }
-    if (id < h(H_COHERENT_MATERIAL_COUNT)) {
+    if (materialOrSpeciesIndex < headerWord(H_COHERENT_MATERIAL_COUNT)) {
         int64_t volume = 0l, massUnits = 0l;
-        for (int row = 0; row < lastRow(2); row++)
-            if (selected(2, row) && int(words[h(H_COHERENT_MATERIAL) + row]) == id) {
-                volume = add(volume, integer(h(H_COHERENT_VOLUME) + 2 * row));
-                massUnits = add(massUnits, integer(h(H_COHERENT_MASS) + 2 * row));
+        for (int row = 0; row < lastRow(CARRIER_COHERENT); row++)
+            if (rowBelongsToCell(CARRIER_COHERENT, row) && int(words[headerWord(H_COHERENT_MATERIAL) + row]) == materialOrSpeciesIndex) {
+                volume = checkedAddInventory(volume, readInteger(headerWord(H_COHERENT_VOLUME) + 2 * row));
+                massUnits = checkedAddInventory(massUnits, readInteger(headerWord(H_COHERENT_MASS) + 2 * row));
             }
-        int base = h(H_SOLID_OUTPUT) + 4 * (2 * h(H_GRAIN_MATERIAL_COUNT) + id);
-        outint(base, volume);
-        outint(base + 2, massUnits);
+        int base = headerWord(H_SOLID_OUTPUT) + 4 * (2 * headerWord(H_GRAIN_MATERIAL_COUNT) + materialOrSpeciesIndex);
+        writeInteger(base, volume);
+        writeInteger(base + 2, massUnits);
     }
-    if (id < h(H_GAS_COMPONENT_COUNT)) {
+    if (materialOrSpeciesIndex < headerWord(H_GAS_COMPONENT_COUNT)) {
         int64_t volume = 0l, massUnits = 0l;
-        int node = h(H_GAS_CELL_NODES) < 0 ? -1 : int(words[h(H_GAS_CELL_NODES) + h(H_CELL)]);
+        int node = headerWord(H_GAS_CELL_NODES) < 0 ? -1 : int(words[headerWord(H_GAS_CELL_NODES) + headerWord(H_CELL)]);
         if (node > 0)
-            for (int row = int(words[h(H_GAS_COMPONENT_OFFSETS) + node - 1]);
-                 row < int(words[h(H_GAS_COMPONENT_OFFSETS) + node]); row++)
-                if (int(words[h(H_GAS_COMPONENT) + row]) == id) {
-                    volume = add(volume, integer(h(H_GAS_VOLUME) + 2 * row));
-                    massUnits = add(massUnits, integer(h(H_GAS_MASS) + 2 * row));
+            for (int row = int(words[headerWord(H_GAS_COMPONENT_OFFSETS) + node - 1]);
+                 row < int(words[headerWord(H_GAS_COMPONENT_OFFSETS) + node]); row++)
+                if (int(words[headerWord(H_GAS_COMPONENT) + row]) == materialOrSpeciesIndex) {
+                    volume = checkedAddInventory(volume, readInteger(headerWord(H_GAS_VOLUME) + 2 * row));
+                    massUnits = checkedAddInventory(massUnits, readInteger(headerWord(H_GAS_MASS) + 2 * row));
                 }
-        int base = h(H_GAS_OUTPUT) + 4 * id;
-        outint(base, volume);
-        outint(base + 2, massUnits);
+        int base = headerWord(H_GAS_OUTPUT) + 4 * materialOrSpeciesIndex;
+        writeInteger(base, volume);
+        writeInteger(base + 2, massUnits);
     }
 }

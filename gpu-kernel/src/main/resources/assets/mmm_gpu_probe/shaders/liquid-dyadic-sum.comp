@@ -1,5 +1,24 @@
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+const int STAGE_MEASURE_SUM = 0;
+const uint ERROR_INVALID_VOLUME = 32u;
+const uint ERROR_INSUFFICIENT_CAPACITY = 64u;
+const int DYADIC_TERM_WORDS = 5;
+const int DYADIC_RESULT_WORDS = 8;
+const int TERM_BANK = 0;
+const int TERM_OFFSET = 1;
+const int TERM_WORD_COUNT = 2;
+const int TERM_EXPONENT = 3;
+const int TERM_SIGN = 4;
+const int RESULT_STATUS = 0;
+const int RESULT_WORD_COUNT = 1;
+const int RESULT_EXPONENT = 2;
+const int RESULT_MINIMUM_EXPONENT = 3;
+const int RESULT_FIRST_WORD = 4;
+const int RESULT_LAST_WORD = 5;
+const int RESULT_TRAILING_BITS = 6;
+const int RESULT_CACHED = 7;
 layout(local_size_x=128) in;
 layout(binding=0,std430) readonly buffer Source { uint sourceWords[]; };
 layout(binding=1,std430) buffer Candidate { uint candidateWords[]; };
@@ -14,66 +33,66 @@ layout(push_constant) uniform Params {
 uint dyadicWord(int bank,int index) { return bank==0?sourceWords[index]:candidateWords[index]; }
 void dyadicWrite(int index,uint word) { candidateWords[index]=word; }
 
-void loadTerms(int operation,out DyadicTerm items[7]) {
-    int base=p.termsWordOffset+35*operation;
-    for(int i=0;i<7;i++) {
-        int at=base+5*i;
-        items[i]=DyadicTerm(int(candidateWords[at]),int(candidateWords[at+1]),int(candidateWords[at+2]),
-                int(candidateWords[at+3]),int(candidateWords[at+4]));
+void loadTerms(int operation,out DyadicTerm items[DYADIC_MAX_TERMS]) {
+    int base=p.termsWordOffset+DYADIC_TERM_WORDS*DYADIC_MAX_TERMS*operation;
+    for(int i=0;i<DYADIC_MAX_TERMS;i++) {
+        int at=base+DYADIC_TERM_WORDS*i;
+        items[i]=DyadicTerm(int(candidateWords[at+TERM_BANK]),int(candidateWords[at+TERM_OFFSET]),int(candidateWords[at+TERM_WORD_COUNT]),
+                int(candidateWords[at+TERM_EXPONENT]),int(candidateWords[at+TERM_SIGN]));
     }
 }
 
 // Cache canonical limbs in the result row; the write pass then reads no source terms.
-bool cachePositiveSum(int operation,DyadicTerm items[7]) {
+bool cachePositiveSum(int operation,DyadicTerm items[DYADIC_MAX_TERMS]) {
     int count,exponent;uvec4 limbs;
-    if(!dyadicPositiveSum(items,7,count,exponent,limbs))return false;
-    int at=p.resultWordOffset+8*operation;
-    candidateWords[at]=uint(count==0?DYADIC_ZERO:DYADIC_POSITIVE);
-    candidateWords[at+1]=uint(count);candidateWords[at+2]=uint(exponent);
+    if(!dyadicPositiveSum(items,DYADIC_MAX_TERMS,count,exponent,limbs))return false;
+    int at=p.resultWordOffset+DYADIC_RESULT_WORDS*operation;
+    candidateWords[at+RESULT_STATUS]=uint(count==0?DYADIC_ZERO:DYADIC_POSITIVE);
+    candidateWords[at+RESULT_WORD_COUNT]=uint(count);candidateWords[at+RESULT_EXPONENT]=uint(exponent);
     for(int word=0;word<4;word++)candidateWords[at+3+word]=limbs[word];
-    candidateWords[at+7]=1u;candidateWords[p.countsWordOffset+operation]=uint(count);return true;
+    candidateWords[at+RESULT_CACHED]=1u;candidateWords[p.countsWordOffset+operation]=uint(count);return true;
 }
 
 void measureOperation(int operation) {
-    DyadicTerm items[7];loadTerms(operation,items);
+    DyadicTerm items[DYADIC_MAX_TERMS];loadTerms(operation,items);
     if(cachePositiveSum(operation,items))return;
-    DyadicMeasure result=dyadicMeasure(items,7);
-    int at=p.resultWordOffset+8*operation;
-    candidateWords[at]=uint(result.status);
-    candidateWords[at+1]=uint(result.words);
-    candidateWords[at+2]=uint(result.exponent);
-    candidateWords[at+3]=uint(result.minimumExponent);
-    candidateWords[at+4]=uint(result.firstWord);
-    candidateWords[at+5]=uint(result.lastWord);
-    candidateWords[at+6]=uint(result.trailingBits);
-    candidateWords[at+7]=0u;
+    DyadicMeasure result=dyadicMeasure(items,DYADIC_MAX_TERMS);
+    int at=p.resultWordOffset+DYADIC_RESULT_WORDS*operation;
+    candidateWords[at+RESULT_STATUS]=uint(result.status);
+    candidateWords[at+RESULT_WORD_COUNT]=uint(result.words);
+    candidateWords[at+RESULT_EXPONENT]=uint(result.exponent);
+    candidateWords[at+RESULT_MINIMUM_EXPONENT]=uint(result.minimumExponent);
+    candidateWords[at+RESULT_FIRST_WORD]=uint(result.firstWord);
+    candidateWords[at+RESULT_LAST_WORD]=uint(result.lastWord);
+    candidateWords[at+RESULT_TRAILING_BITS]=uint(result.trailingBits);
+    candidateWords[at+RESULT_CACHED]=0u;
     candidateWords[p.countsWordOffset+operation]=result.status==DYADIC_POSITIVE?uint(result.words):0u;
-    if(result.status!=DYADIC_ZERO&&result.status!=DYADIC_POSITIVE)atomicOr(errors,32u);
+    if(result.status!=DYADIC_ZERO&&result.status!=DYADIC_POSITIVE)atomicOr(errors,ERROR_INVALID_VOLUME);
 }
 
 void writeOperation(int operation) {
     // Every invocation observes the same completed scan before any limb writes start.
     uint required=candidateWords[p.offsetsWordOffset+p.operations];
-    if(required>uint(p.limbCapacity)){atomicOr(errors,64u);return;}
+    if(required>uint(p.limbCapacity)){atomicOr(errors,ERROR_INSUFFICIENT_CAPACITY);return;}
     if((errors&16u)!=0u)return;
-    int at=p.resultWordOffset+8*operation;
-    if(int(candidateWords[at])!=DYADIC_POSITIVE)return;
-    if(candidateWords[at+7]==1u){
-        int count=int(candidateWords[at+1]),destination=p.limbsWordOffset+int(candidateWords[p.offsetsWordOffset+operation]);
+    int at=p.resultWordOffset+DYADIC_RESULT_WORDS*operation;
+    if(int(candidateWords[at+RESULT_STATUS])!=DYADIC_POSITIVE)return;
+    if(candidateWords[at+RESULT_CACHED]==1u){
+        int count=int(candidateWords[at+RESULT_WORD_COUNT]),destination=p.limbsWordOffset+int(candidateWords[p.offsetsWordOffset+operation]);
         for(int word=0;word<count;word++)candidateWords[destination+word]=candidateWords[at+3+word];
         return;
     }
-    DyadicMeasure result=DyadicMeasure(int(candidateWords[at]),int(candidateWords[at+1]),
-            int(candidateWords[at+2]),int(candidateWords[at+3]),int(candidateWords[at+4]),
-            int(candidateWords[at+5]),int(candidateWords[at+6]));
-    DyadicTerm items[7];loadTerms(operation,items);
+    DyadicMeasure result=DyadicMeasure(int(candidateWords[at+RESULT_STATUS]),int(candidateWords[at+RESULT_WORD_COUNT]),
+            int(candidateWords[at+RESULT_EXPONENT]),int(candidateWords[at+RESULT_MINIMUM_EXPONENT]),int(candidateWords[at+RESULT_FIRST_WORD]),
+            int(candidateWords[at+RESULT_LAST_WORD]),int(candidateWords[at+RESULT_TRAILING_BITS]));
+    DyadicTerm items[DYADIC_MAX_TERMS];loadTerms(operation,items);
     int outputOffset=p.limbsWordOffset+int(candidateWords[p.offsetsWordOffset+operation]);
-    dyadicWriteSum(items,7,result,outputOffset);
+    dyadicWriteSum(items,DYADIC_MAX_TERMS,result,outputOffset);
 }
 
 void main() {
     int operation=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x);
     if(operation>=p.operations)return;
     if(errors!=0u)return;
-    if(p.stage==0)measureOperation(operation);else writeOperation(operation);
+    if(p.stage==STAGE_MEASURE_SUM)measureOperation(operation);else writeOperation(operation);
 }

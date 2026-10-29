@@ -15,16 +15,19 @@ layout(push_constant) uniform Params {
 }
 p;
 // HOST_LAYOUT
-int h(int i) {
+const double MASS_UNIT_KG = 1e-10;
+const int STAGE_STOCK_STATE = 0;
+
+int headerWord(int i) {
     return int(words[p.header + i]);
 }
-double value(int at) {
+double readDouble(int at) {
     return packDouble2x32(uvec2(words[at], words[at + 1]));
 }
-int64_t quantity(int at) {
+int64_t readQuantity(int at) {
     return int64_t(uint64_t(words[at]) | (uint64_t(words[at + 1]) << 32));
 }
-void store(int at, double x) {
+void writeDouble(int at, double x) {
     if (isnan(x) || isinf(x))
         atomicOr(errors, 16384u);
     uvec2 bits = unpackDouble2x32(x);
@@ -32,47 +35,47 @@ void store(int at, double x) {
     words[at + 1] = bits.y;
 }
 void stockState(int stock) {
-    store(h(CAL_TEMPERATURES) + 2 * stock, 0.0);
-    store(h(CAL_HEAT_CAPACITIES) + 2 * stock, 0.0);
-    store(h(CAL_COLD_ENERGIES) + 2 * stock, 0.0);
+    writeDouble(headerWord(CAL_TEMPERATURES) + 2 * stock, 0.0);
+    writeDouble(headerWord(CAL_HEAT_CAPACITIES) + 2 * stock, 0.0);
+    writeDouble(headerWord(CAL_COLD_ENERGIES) + 2 * stock, 0.0);
     bool live =
-        stock < h(CAL_SECONDARY_BEGIN)
-            ? stock < int(words[h(CAL_COUNTS)])
-            : h(CAL_SECONDARY_COUNTS) >= 0 && stock - h(CAL_SECONDARY_BEGIN) < int(words[h(CAL_SECONDARY_COUNTS)]);
+        stock < headerWord(CAL_SECONDARY_BEGIN)
+            ? stock < int(words[headerWord(CAL_COUNTS)])
+            : headerWord(CAL_SECONDARY_COUNTS) >= 0 && stock - headerWord(CAL_SECONDARY_BEGIN) < int(words[headerWord(CAL_SECONDARY_COUNTS)]);
     if (!live)
         return;
-    double mass = double(quantity(h(CAL_MASSES) + 2 * stock)) * 1e-10;
+    double mass = double(readQuantity(headerWord(CAL_MASSES) + 2 * stock)) * MASS_UNIT_KG;
     if (mass == 0.0)
         return;
-    int material = int(words[h(CAL_MATERIALS) + stock]);
-    if (mass < 0.0 || material < 0 || material >= h(CAL_MATERIAL_COUNT)) {
+    int material = int(words[headerWord(CAL_MATERIALS) + stock]);
+    if (mass < 0.0 || material < 0 || material >= headerWord(CAL_MATERIAL_COUNT)) {
         atomicOr(errors, 16384u);
         return;
     }
-    double base = mass * value(h(CAL_MATERIAL_REFERENCE) + 2 * material), energy = value(h(CAL_ENERGIES) + 2 * stock);
-    for (int item = int(words[h(CAL_SPECIES_OFFSETS) + stock]); item < int(words[h(CAL_SPECIES_OFFSETS) + stock + 1]);
+    double base = mass * readDouble(headerWord(CAL_MATERIAL_REFERENCE) + 2 * material), energy = readDouble(headerWord(CAL_ENERGIES) + 2 * stock);
+    for (int item = int(words[headerWord(CAL_SPECIES_OFFSETS) + stock]); item < int(words[headerWord(CAL_SPECIES_OFFSETS) + stock + 1]);
          item++) {
-        int species = int(words[h(CAL_SPECIES_HANDLES) + item]);
-        if (species < 0 || species >= h(CAL_SPECIES_STRIDE)) {
+        int species = int(words[headerWord(CAL_SPECIES_HANDLES) + item]);
+        if (species < 0 || species >= headerWord(CAL_SPECIES_STRIDE)) {
             atomicOr(errors, 16384u);
             return;
         }
-        base += double(quantity(h(CAL_SPECIES_AMOUNTS) + 2 * item)) *
-                value(h(CAL_SPECIES_REFERENCE) + 2 * (material * h(CAL_SPECIES_STRIDE) + species));
+        base += double(readQuantity(headerWord(CAL_SPECIES_AMOUNTS) + 2 * item)) *
+                readDouble(headerWord(CAL_SPECIES_REFERENCE) + 2 * (material * headerWord(CAL_SPECIES_STRIDE) + species));
     }
-    int first = int(words[h(CAL_SEGMENT_OFFSETS) + material]),
-        last = int(words[h(CAL_SEGMENT_OFFSETS) + material + 1]) - 1, segment = first;
+    int first = int(words[headerWord(CAL_SEGMENT_OFFSETS) + material]),
+        last = int(words[headerWord(CAL_SEGMENT_OFFSETS) + material + 1]) - 1, segment = first;
     if (last < first || isnan(base) || isinf(base)) {
         atomicOr(errors, 16384u);
         return;
     }
-    double temperature = value(h(CAL_REFERENCE_TEMPERATURE) + 2 * material), remaining = energy - base, capacity = 0.0;
-    while (segment < last && temperature >= value(h(CAL_SEGMENT_UPPER) + 2 * segment))
+    double temperature = readDouble(headerWord(CAL_REFERENCE_TEMPERATURE) + 2 * material), remaining = energy - base, capacity = 0.0;
+    while (segment < last && temperature >= readDouble(headerWord(CAL_SEGMENT_UPPER) + 2 * segment))
         segment++;
     if (remaining >= 0.0) {
         for (;; segment++) {
-            capacity = mass * value(h(CAL_SEGMENT_CAPACITY) + 2 * segment);
-            double upper = value(h(CAL_SEGMENT_UPPER) + 2 * segment), span = (upper - temperature) * capacity;
+            capacity = mass * readDouble(headerWord(CAL_SEGMENT_CAPACITY) + 2 * segment);
+            double upper = readDouble(headerWord(CAL_SEGMENT_UPPER) + 2 * segment), span = (upper - temperature) * capacity;
             if (segment == last || remaining < span) {
                 temperature += remaining / capacity;
                 break;
@@ -83,8 +86,8 @@ void stockState(int stock) {
     } else {
         remaining = -remaining;
         for (;; segment--) {
-            capacity = mass * value(h(CAL_SEGMENT_CAPACITY) + 2 * segment);
-            double lower = segment == first ? 0.0 : value(h(CAL_SEGMENT_UPPER) + 2 * (segment - 1)),
+            capacity = mass * readDouble(headerWord(CAL_SEGMENT_CAPACITY) + 2 * segment);
+            double lower = segment == first ? 0.0 : readDouble(headerWord(CAL_SEGMENT_UPPER) + 2 * (segment - 1)),
                    span = (temperature - lower) * capacity;
             if (segment == first || remaining <= span) {
                 temperature -= remaining / capacity;
@@ -94,24 +97,24 @@ void stockState(int stock) {
             temperature = lower;
         }
     }
-    double minimum = value(p.header + CAL_MINIMUM_TEMPERATURE);
+    double minimum = readDouble(p.header + CAL_MINIMUM_TEMPERATURE);
     if (temperature < minimum - 1e-7 || capacity <= 0.0) {
         atomicOr(errors, 16384u);
         return;
     }
-    store(h(CAL_TEMPERATURES) + 2 * stock, max(minimum, temperature));
-    store(h(CAL_HEAT_CAPACITIES) + 2 * stock, capacity);
-    store(h(CAL_COLD_ENERGIES) + 2 * stock, min(energy, fma(mass, value(h(CAL_COLD_SENSIBLE) + 2 * material), base)));
+    writeDouble(headerWord(CAL_TEMPERATURES) + 2 * stock, max(minimum, temperature));
+    writeDouble(headerWord(CAL_HEAT_CAPACITIES) + 2 * stock, capacity);
+    writeDouble(headerWord(CAL_COLD_ENERGIES) + 2 * stock, min(energy, fma(mass, readDouble(headerWord(CAL_COLD_SENSIBLE) + 2 * material), base)));
 }
 void cellState(int cell) {
-    int begin = int(words[h(CAL_CELL_OFFSETS) + cell]), end = int(words[h(CAL_CELL_OFFSETS) + cell + 1]);
-    double remaining = 0.0, temperature = value(p.header + CAL_MINIMUM_TEMPERATURE), capacity = 0.0;
+    int begin = int(words[headerWord(CAL_CELL_OFFSETS) + cell]), end = int(words[headerWord(CAL_CELL_OFFSETS) + cell + 1]);
+    double remaining = 0.0, temperature = readDouble(p.header + CAL_MINIMUM_TEMPERATURE), capacity = 0.0;
     for (int stock = begin; stock < end; stock++)
-        if (quantity(h(CAL_MASSES) + 2 * stock) > int64_t(0))
-            remaining += value(h(CAL_ENERGIES) + 2 * stock) - value(h(CAL_COLD_ENERGIES) + 2 * stock);
+        if (readQuantity(headerWord(CAL_MASSES) + 2 * stock) > int64_t(0))
+            remaining += readDouble(headerWord(CAL_ENERGIES) + 2 * stock) - readDouble(headerWord(CAL_COLD_ENERGIES) + 2 * stock);
     if (begin == end) {
-        store(h(CAL_CELL_TEMPERATURES) + 2 * cell, 0.0);
-        store(h(CAL_CELL_HEAT_CAPACITIES) + 2 * cell, 0.0);
+        writeDouble(headerWord(CAL_CELL_TEMPERATURES) + 2 * cell, 0.0);
+        writeDouble(headerWord(CAL_CELL_HEAT_CAPACITIES) + 2 * cell, 0.0);
         return;
     }
     // Each pass crosses one of the actual material knots; terminal segments extend upward.
@@ -119,20 +122,20 @@ void cellState(int cell) {
         capacity = 0.0;
         double next = 1.7976931348623157e308;
         for (int stock = begin; stock < end; stock++) {
-            double mass = double(quantity(h(CAL_MASSES) + 2 * stock)) * 1e-10;
+            double mass = double(readQuantity(headerWord(CAL_MASSES) + 2 * stock)) * MASS_UNIT_KG;
             if (mass <= 0.0)
                 continue;
-            int material = int(words[h(CAL_MATERIALS) + stock]), first = int(words[h(CAL_SEGMENT_OFFSETS) + material]),
-                last = int(words[h(CAL_SEGMENT_OFFSETS) + material + 1]) - 1, segment = first;
-            while (segment < last && temperature >= value(h(CAL_SEGMENT_UPPER) + 2 * segment))
+            int material = int(words[headerWord(CAL_MATERIALS) + stock]), first = int(words[headerWord(CAL_SEGMENT_OFFSETS) + material]),
+                last = int(words[headerWord(CAL_SEGMENT_OFFSETS) + material + 1]) - 1, segment = first;
+            while (segment < last && temperature >= readDouble(headerWord(CAL_SEGMENT_UPPER) + 2 * segment))
                 segment++;
-            capacity += mass * value(h(CAL_SEGMENT_CAPACITY) + 2 * segment);
+            capacity += mass * readDouble(headerWord(CAL_SEGMENT_CAPACITY) + 2 * segment);
             if (segment < last)
-                next = min(next, value(h(CAL_SEGMENT_UPPER) + 2 * segment));
+                next = min(next, readDouble(headerWord(CAL_SEGMENT_UPPER) + 2 * segment));
         }
         if (capacity <= 0.0) {
-            store(h(CAL_CELL_TEMPERATURES) + 2 * cell, 0.0);
-            store(h(CAL_CELL_HEAT_CAPACITIES) + 2 * cell, 0.0);
+            writeDouble(headerWord(CAL_CELL_TEMPERATURES) + 2 * cell, 0.0);
+            writeDouble(headerWord(CAL_CELL_HEAT_CAPACITIES) + 2 * cell, 0.0);
             return;
         }
         double span = (next - temperature) * capacity;
@@ -143,14 +146,14 @@ void cellState(int cell) {
         remaining -= span;
         temperature = next;
     }
-    store(h(CAL_CELL_TEMPERATURES) + 2 * cell, temperature);
-    store(h(CAL_CELL_HEAT_CAPACITIES) + 2 * cell, capacity);
+    writeDouble(headerWord(CAL_CELL_TEMPERATURES) + 2 * cell, temperature);
+    writeDouble(headerWord(CAL_CELL_HEAT_CAPACITIES) + 2 * cell, capacity);
 }
 void main() {
     int item = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
     if (item >= p.count || errors != 0u)
         return;
-    if (p.stage == 0)
+    if (p.stage == STAGE_STOCK_STATE)
         stockState(item);
     else
         cellState(item);

@@ -1,6 +1,28 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+const int CONTACT_COUNT_OFFSET = 0;
+const int CONTACT_REQUIRED_COUNT_OFFSET = 1;
+const int CONTACT_FLAGS_OFFSET = 2;
+const uint FLAG_EXCESS_SPEED = 1u;
+const uint FLAG_UNRESOLVED_OVERLAP = 2u;
+const uint FLAG_EXCESS_DISPLACEMENT = 4u;
+const double MASS_UNIT_KG = 1e-10;
+const double SOLID_VOLUME_QUANTA_PER_CELL = 16777216.0;
+const int STAGE_INITIALIZE = 0;
+const int STAGE_COUNT_PARTICLES = 1;
+const int STAGE_SCATTER_PARTICLES = 2;
+const int STAGE_COUNT_CONTACTS = 3;
+const int STAGE_SCATTER_CONTACTS = 4;
+const int STAGE_PUBLISH_CONTACT_COUNT = 5;
+const int STAGE_TRIAL_MOTION = 6;
+const int STAGE_PUBLISH_POSITION = 7;
+const int STAGE_SEPARATE_PARTICLES = 8;
+const int STAGE_ACCEPT_SEPARATION = 9;
+const int STAGE_CHECK_SEPARATION = 10;
+const int STAGE_BUILD_BED_HEIGHT = 11;
+const int STAGE_CLEAR_SEPARATION_FLAG = 12;
+const uint ERROR_GRANULAR_MOTION = 4194304u;
 layout(local_size_x = 128) in;
 layout(binding = 0, std430) buffer Arena {
     uint words[];
@@ -18,70 +40,70 @@ layout(push_constant) uniform Params {
 }
 p;
 // HOST_LAYOUT
-int h(int i) {
+int headerValue(int i) {
     return int(words[p.header + i]);
 }
-int at(int f) {
-    return h(WORK_FIELDS + f);
+int fieldOffset(int f) {
+    return headerValue(WORK_FIELDS + f);
 }
-int ch(int i) {
-    return int(words[h(H_CONTACTS_HEADER) + i]);
+int contactHeaderValue(int i) {
+    return int(words[headerValue(H_CONTACTS_HEADER) + i]);
 }
-int ca(int f) {
-    return ch(CONTACT_FIELDS + f);
+int contactFieldOffset(int f) {
+    return contactHeaderValue(CONTACT_FIELDS + f);
 }
-double num(int a) {
+double readDouble(int a) {
     return packDouble2x32(uvec2(words[a], words[a + 1]));
 }
-void outnum(int a, double v) {
+void writeDouble(int a, double v) {
     uvec2 b = unpackDouble2x32(v);
     words[a] = b.x;
     words[a + 1] = b.y;
 }
-dvec3 vec(int a, int i) {
-    return dvec3(num(a + 6 * i), num(a + 6 * i + 2), num(a + 6 * i + 4));
+dvec3 readVector(int a, int i) {
+    return dvec3(readDouble(a + 6 * i), readDouble(a + 6 * i + 2), readDouble(a + 6 * i + 4));
 }
-void outvec(int a, int i, dvec3 v) {
+void writeVector(int a, int i, dvec3 v) {
     for (int k = 0; k < 3; k++)
-        outnum(a + 6 * i + 2 * k, v[k]);
+        writeDouble(a + 6 * i + 2 * k, v[k]);
 }
-int actual() {
-    return int(words[h(H_COUNTS)]);
+int particleCount() {
+    return int(words[headerValue(H_COUNTS)]);
 }
-ivec3 dims() {
-    return ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z));
+ivec3 gridDimensions() {
+    return ivec3(headerValue(H_SIZE_X), headerValue(H_SIZE_Y), headerValue(H_SIZE_Z));
 }
-int cell(ivec3 c) {
-    return (c.z * h(H_SIZE_Y) + c.y) * h(H_SIZE_X) + c.x;
+int cellIndex(ivec3 c) {
+    return (c.z * headerValue(H_SIZE_Y) + c.y) * headerValue(H_SIZE_X) + c.x;
 }
-ivec3 location(dvec3 x) {
-    return clamp(ivec3(floor(x / p.cellSize)), ivec3(0), dims() - 1);
+ivec3 cellCoordinates(dvec3 x) {
+    return clamp(ivec3(floor(x / p.cellSize)), ivec3(0), gridDimensions() - 1);
 }
-void invalid() {
-    atomicOr(errors, 4194304u);
+void reportInvalidState() {
+    atomicOr(errors, ERROR_GRANULAR_MOTION);
 }
-double radius(int i) {
-    return num(at(FIELD_RADIUS) + 2 * i);
+double particleRadius(int i) {
+    return readDouble(fieldOffset(FIELD_RADIUS) + 2 * i);
 }
-bool box(ivec3 c, int bit, out dvec3 lo, out dvec3 hi) {
+bool microcellBox(ivec3 c, int bit, out dvec3 lo, out dvec3 hi) {
     lo = (dvec3(c) + .5 * dvec3(bit & 1, (bit >> 1) & 1, (bit >> 2) & 1)) * p.cellSize;
     hi = lo + .5 * p.cellSize;
-    int q = cell(c);
-    if ((words[h(H_MASKS) + q] & (1u << bit)) != 0u)
+    int q = cellIndex(c);
+    if ((words[headerValue(H_MASKS) + q] & (1u << bit)) != 0u)
         return true;
-    double top = num(at(FIELD_BED_HEIGHT) + 2 * q);
+    double top = readDouble(fieldOffset(FIELD_BED_HEIGHT) + 2 * q);
     hi.y = min(hi.y, top);
     return hi.y > lo.y;
 }
 // Box clipping uses the same eight fixed microboxes as liquid geometry.
-bool hit(dvec3 x, dvec3 delta, dvec3 lo, dvec3 hi, out double time, out dvec3 normal) {
+bool intersectSweptBox(dvec3 position, dvec3 displacement, dvec3 boxMin, dvec3 boxMax, out double time, out dvec3 normal) {
     double enter = 0.0, leave = 1.0;
     normal = dvec3(0.0);
-    bool inside = all(greaterThanEqual(x, lo)) && all(lessThanEqual(x, hi));
+    bool inside = all(greaterThanEqual(position, boxMin)) && all(lessThanEqual(position, boxMax));
     if (inside) {
         double best = 1e300;
         for (int a = 0; a < 3; a++) {
-            double low = x[a] - lo[a], high = hi[a] - x[a];
+            double low = position[a] - boxMin[a], high = boxMax[a] - position[a];
             if (low < best) {
                 best = low;
                 normal = dvec3(0.0);
@@ -97,335 +119,335 @@ bool hit(dvec3 x, dvec3 delta, dvec3 lo, dvec3 hi, out double time, out dvec3 no
         return true;
     }
     for (int a = 0; a < 3; a++) {
-        if (delta[a] == 0.0) {
-            if (x[a] < lo[a] || x[a] > hi[a])
+        if (displacement[a] == 0.0) {
+            if (position[a] < boxMin[a] || position[a] > boxMax[a])
                 return false;
             continue;
         }
-        double t0 = (lo[a] - x[a]) / delta[a], t1 = (hi[a] - x[a]) / delta[a];
-        double near = min(t0, t1), far = max(t0, t1);
-        if (near > enter) {
-            enter = near;
+        double firstTime = (boxMin[a] - position[a]) / displacement[a], secondTime = (boxMax[a] - position[a]) / displacement[a];
+        double nearTime = min(firstTime, secondTime), farTime = max(firstTime, secondTime);
+        if (nearTime > enter) {
+            enter = nearTime;
             normal = dvec3(0.0);
-            normal[a] = delta[a] > 0.0 ? -1.0 : 1.0;
+            normal[a] = displacement[a] > 0.0 ? -1.0 : 1.0;
         }
-        leave = min(leave, far);
+        leave = min(leave, farTime);
         if (enter > leave)
             return false;
     }
     time = enter;
     return enter <= 1.0 && leave >= 0.0 && dot(normal, normal) > 0.0;
 }
-void emit(int first, int second, dvec3 n, int slot) {
-    words[ca(CONTACT_FIRST) + slot] = uint(first);
-    words[ca(CONTACT_SECOND) + slot] = uint(second);
-    outvec(ca(CONTACT_NORMAL), slot, n);
-    outvec(ca(CONTACT_WALL_VELOCITY), slot, dvec3(0.0));
-    int a = int(words[h(H_MATERIAL) + first]), b = second < 0 ? a : int(words[h(H_MATERIAL) + second]);
-    outnum(ca(CONTACT_RESTITUTION) + 2 * slot, min(num(at(FIELD_MATERIAL) + 6 * a), num(at(FIELD_MATERIAL) + 6 * b)));
-    outnum(ca(CONTACT_STATIC_FRICTION) + 2 * slot,
-           sqrt(num(at(FIELD_MATERIAL) + 6 * a + 2) * num(at(FIELD_MATERIAL) + 6 * b + 2)));
-    outnum(ca(CONTACT_DYNAMIC_FRICTION) + 2 * slot,
-           sqrt(num(at(FIELD_MATERIAL) + 6 * a + 4) * num(at(FIELD_MATERIAL) + 6 * b + 4)));
+void emitContact(int first, int second, dvec3 contactNormal, int slot) {
+    words[contactFieldOffset(CONTACT_FIRST) + slot] = uint(first);
+    words[contactFieldOffset(CONTACT_SECOND) + slot] = uint(second);
+    writeVector(contactFieldOffset(CONTACT_NORMAL), slot, contactNormal);
+    writeVector(contactFieldOffset(CONTACT_WALL_VELOCITY), slot, dvec3(0.0));
+    int firstMaterial = int(words[headerValue(H_MATERIAL) + first]), secondMaterial = second < 0 ? firstMaterial : int(words[headerValue(H_MATERIAL) + second]);
+    writeDouble(contactFieldOffset(CONTACT_RESTITUTION) + 2 * slot, min(readDouble(fieldOffset(FIELD_MATERIAL) + 6 * firstMaterial), readDouble(fieldOffset(FIELD_MATERIAL) + 6 * secondMaterial)));
+    writeDouble(contactFieldOffset(CONTACT_STATIC_FRICTION) + 2 * slot,
+           sqrt(readDouble(fieldOffset(FIELD_MATERIAL) + 6 * firstMaterial + 2) * readDouble(fieldOffset(FIELD_MATERIAL) + 6 * secondMaterial + 2)));
+    writeDouble(contactFieldOffset(CONTACT_DYNAMIC_FRICTION) + 2 * slot,
+           sqrt(readDouble(fieldOffset(FIELD_MATERIAL) + 6 * firstMaterial + 4) * readDouble(fieldOffset(FIELD_MATERIAL) + 6 * secondMaterial + 4)));
 }
-int enumerate(int i, bool writeContacts) {
-    dvec3 x = vec(h(H_POSITION), i), v = vec(h(H_VELOCITY), i), delta = v * p.duration;
-    double r = radius(i);
-    int count = 0, offset = int(words[at(FIELD_CONTACT_OFFSETS) + i]);
-    ivec3 center = location(x);
+int enumerateContacts(int particle, bool writeContacts) {
+    dvec3 position = readVector(headerValue(H_POSITION), particle), velocity = readVector(headerValue(H_VELOCITY), particle), displacement = velocity * p.duration;
+    double radius = particleRadius(particle);
+    int count = 0, contactOffset = int(words[fieldOffset(FIELD_CONTACT_OFFSETS) + particle]);
+    ivec3 center = cellCoordinates(position);
     // Parcel radius is capped at .2h. The 27 center buckets cover every touching pair.
     for (int z = -1; z <= 1; z++)
         for (int y = -1; y <= 1; y++)
             for (int a = -1; a <= 1; a++) {
                 ivec3 c = center + ivec3(a, y, z);
-                if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, dims())))
+                if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, gridDimensions())))
                     continue;
-                int q = cell(c);
-                for (int e = int(words[at(FIELD_OFFSETS) + q]); e < int(words[at(FIELD_OFFSETS) + q + 1]); e++) {
-                    int j = int(words[at(FIELD_ENTRIES) + e]);
-                    if (j <= i)
+                int q = cellIndex(c);
+                for (int e = int(words[fieldOffset(FIELD_OFFSETS) + q]); e < int(words[fieldOffset(FIELD_OFFSETS) + q + 1]); e++) {
+                    int otherParticle = int(words[fieldOffset(FIELD_ENTRIES) + e]);
+                    if (otherParticle <= particle)
                         continue;
-                    dvec3 difference = vec(h(H_POSITION), j) - x;
-                    double distance = length(difference), reach = r + radius(j);
-                    dvec3 relative = (vec(h(H_VELOCITY), j) - v) * p.duration;
-                    double speed = dot(relative, relative),
-                           t = speed > 0.0 ? clamp(-dot(difference, relative) / speed, 0.0, 1.0) : 0.0;
-                    if (length(difference + t * relative) > reach + 1e-7 * p.cellSize)
+                    dvec3 separation = readVector(headerValue(H_POSITION), otherParticle) - position;
+                    double distance = length(separation), reach = radius + particleRadius(otherParticle);
+                    dvec3 relativeDisplacement = (readVector(headerValue(H_VELOCITY), otherParticle) - velocity) * p.duration;
+                    double relativeDisplacementSquared = dot(relativeDisplacement, relativeDisplacement),
+                           closestTime = relativeDisplacementSquared > 0.0 ? clamp(-dot(separation, relativeDisplacement) / relativeDisplacementSquared, 0.0, 1.0) : 0.0;
+                    if (length(separation + closestTime * relativeDisplacement) > reach + 1e-7 * p.cellSize)
                         continue;
-                    dvec3 n = distance > 0.0 ? difference / distance : dvec3(1.0, 0.0, 0.0);
-                    if (writeContacts && offset + count < ch(CONTACT_H_CONTACT_CAPACITY))
-                        emit(i, j, n, offset + count);
+                    dvec3 contactNormal = distance > 0.0 ? separation / distance : dvec3(1.0, 0.0, 0.0);
+                    if (writeContacts && contactOffset + count < contactHeaderValue(CONTACT_H_CONTACT_CAPACITY))
+                        emitContact(particle, otherParticle, contactNormal, contactOffset + count);
                     count++;
                 }
             }
     for (int a = 0; a < 3; a++)
         for (int side = 0; side < 2; side++) {
-            double wall = side == 0 ? r : double(dims()[a]) * p.cellSize - r;
-            if (side == 0 ? min(x[a], x[a] + delta[a]) > wall + 1e-7 * p.cellSize
-                          : max(x[a], x[a] + delta[a]) < wall - 1e-7 * p.cellSize)
+            double wall = side == 0 ? radius : double(gridDimensions()[a]) * p.cellSize - radius;
+            if (side == 0 ? min(position[a], position[a] + displacement[a]) > wall + 1e-7 * p.cellSize
+                          : max(position[a], position[a] + displacement[a]) < wall - 1e-7 * p.cellSize)
                 continue;
-            dvec3 n = dvec3(0.0);
-            n[a] = side == 0 ? 1.0 : -1.0;
-            if (writeContacts && offset + count < ch(CONTACT_H_CONTACT_CAPACITY))
-                emit(i, -1, n, offset + count);
+            dvec3 contactNormal = dvec3(0.0);
+            contactNormal[a] = side == 0 ? 1.0 : -1.0;
+            if (writeContacts && contactOffset + count < contactHeaderValue(CONTACT_H_CONTACT_CAPACITY))
+                emitContact(particle, -1, contactNormal, contactOffset + count);
             count++;
         }
-    ivec3 low = location(min(x, x + delta) - r), high = location(max(x, x + delta) + r);
+    ivec3 low = cellCoordinates(min(position, position + displacement) - radius), high = cellCoordinates(max(position, position + displacement) + radius);
     for (int z = low.z; z <= high.z; z++)
         for (int y = low.y; y <= high.y; y++)
             for (int a = low.x; a <= high.x; a++) {
                 ivec3 c = ivec3(a, y, z);
-                uint mask = words[h(H_MASKS) + cell(c)];
+                uint mask = words[headerValue(H_MASKS) + cellIndex(c)];
                 for (int bit = 0; bit < 8; bit++) {
                     dvec3 lo, hi;
-                    if (!box(c, bit, lo, hi))
+                    if (!microcellBox(c, bit, lo, hi))
                         continue;
-                    double t;
-                    dvec3 n;
-                    if (!hit(x, delta, lo - r, hi + r, t, n))
+                    double closestTime;
+                    dvec3 contactNormal;
+                    if (!intersectSweptBox(position, displacement, lo - radius, hi + radius, closestTime, contactNormal))
                         continue;
-                    if (writeContacts && offset + count < ch(CONTACT_H_CONTACT_CAPACITY))
-                        emit(i, -1, n, offset + count);
+                    if (writeContacts && contactOffset + count < contactHeaderValue(CONTACT_H_CONTACT_CAPACITY))
+                        emitContact(particle, -1, contactNormal, contactOffset + count);
                     count++;
                 }
             }
     return count;
 }
-void trial(int i) {
-    dvec3 x = vec(h(H_POSITION), i), delta = vec(h(H_VELOCITY), i) * p.duration;
-    double r = radius(i), fraction = 1.0;
+void computeTrialPosition(int particle) {
+    dvec3 position = readVector(headerValue(H_POSITION), particle), displacement = readVector(headerValue(H_VELOCITY), particle) * p.duration;
+    double radius = particleRadius(particle), travelFraction = 1.0;
     for (int a = 0; a < 3; a++)
-        if (delta[a] != 0.0) {
-            double wall = delta[a] > 0.0 ? double(dims()[a]) * p.cellSize - r : r;
-            fraction = min(fraction, max(0.0, (wall - x[a]) / delta[a]));
+        if (displacement[a] != 0.0) {
+            double wall = displacement[a] > 0.0 ? double(gridDimensions()[a]) * p.cellSize - radius : radius;
+            travelFraction = min(travelFraction, max(0.0, (wall - position[a]) / displacement[a]));
         }
-    ivec3 low = location(min(x, x + delta) - r), high = location(max(x, x + delta) + r);
+    ivec3 low = cellCoordinates(min(position, position + displacement) - radius), high = cellCoordinates(max(position, position + displacement) + radius);
     for (int z = low.z; z <= high.z; z++)
         for (int y = low.y; y <= high.y; y++)
             for (int a = low.x; a <= high.x; a++) {
                 ivec3 c = ivec3(a, y, z);
-                uint mask = words[h(H_MASKS) + cell(c)];
+                uint mask = words[headerValue(H_MASKS) + cellIndex(c)];
                 for (int bit = 0; bit < 8; bit++) {
                     dvec3 lo, hi;
-                    if (!box(c, bit, lo, hi))
+                    if (!microcellBox(c, bit, lo, hi))
                         continue;
-                    double t;
-                    dvec3 n;
-                    if (hit(x, delta, lo - r, hi + r, t, n) && dot(delta, n) < 0.0)
-                        fraction = min(fraction, t);
+                    double hitTime;
+                    dvec3 contactNormal;
+                    if (intersectSweptBox(position, displacement, lo - radius, hi + radius, hitTime, contactNormal) && dot(displacement, contactNormal) < 0.0)
+                        travelFraction = min(travelFraction, hitTime);
                 }
             }
-    outvec(at(FIELD_POSITION), i, dvec3(vec3(x + fraction * delta)));
+    writeVector(fieldOffset(FIELD_POSITION), particle, dvec3(vec3(position + travelFraction * displacement)));
 }
-double mass(int i) {
-    int a = ch(CONTACT_H_MASS) + 2 * i;
-    return double(uint64_t(words[a]) | (uint64_t(words[a + 1]) << 32)) * 1e-10;
+double particleMass(int i) {
+    int a = contactHeaderValue(CONTACT_H_MASS) + 2 * i;
+    return double(uint64_t(words[a]) | (uint64_t(words[a + 1]) << 32)) * MASS_UNIT_KG;
 }
-dvec3 fixedCorrection(dvec3 x, double r) {
+dvec3 fixedCorrection(dvec3 position, double radius) {
     dvec3 result = dvec3(0.0);
-    double largest = 0.0;
+    double largestDepth = 0.0;
     for (int a = 0; a < 3; a++) {
-        double c = x[a] < r                                    ? r - x[a]
-                   : x[a] > double(dims()[a]) * p.cellSize - r ? double(dims()[a]) * p.cellSize - r - x[a]
+        double coordinateCorrection = position[a] < radius                                    ? radius - position[a]
+                   : position[a] > double(gridDimensions()[a]) * p.cellSize - radius ? double(gridDimensions()[a]) * p.cellSize - radius - position[a]
                                                                : 0.0;
-        if (abs(c) > largest) {
+        if (abs(coordinateCorrection) > largestDepth) {
             result = dvec3(0.0);
-            result[a] = c;
-            largest = abs(c);
+            result[a] = coordinateCorrection;
+            largestDepth = abs(coordinateCorrection);
         }
     }
-    ivec3 low = location(x - r), high = location(x + r);
+    ivec3 low = cellCoordinates(position - radius), high = cellCoordinates(position + radius);
     for (int z = low.z; z <= high.z; z++)
         for (int y = low.y; y <= high.y; y++)
             for (int a = low.x; a <= high.x; a++) {
-                ivec3 c = ivec3(a, y, z);
-                uint mask = words[h(H_MASKS) + cell(c)];
+                ivec3 coordinateCorrection = ivec3(a, y, z);
+                uint mask = words[headerValue(H_MASKS) + cellIndex(coordinateCorrection)];
                 for (int bit = 0; bit < 8; bit++) {
                     dvec3 lo, hi;
-                    if (!box(c, bit, lo, hi))
+                    if (!microcellBox(coordinateCorrection, bit, lo, hi))
                         continue;
-                    dvec3 difference = x - clamp(x, lo, hi), correction = dvec3(0.0);
+                    dvec3 difference = position - clamp(position, lo, hi), correction = dvec3(0.0);
                     double distance = length(difference);
                     if (distance > 0.0) {
-                        if (distance < r)
-                            correction = difference * ((r - distance) / distance);
+                        if (distance < radius)
+                            correction = difference * ((radius - distance) / distance);
                     } else {
                         double best = 1e300;
                         for (int axis = 0; axis < 3; axis++) {
-                            double q = x[axis] - lo[axis] + r;
-                            if (q < best) {
-                                best = q;
+                            double distanceToFace = position[axis] - lo[axis] + radius;
+                            if (distanceToFace < best) {
+                                best = distanceToFace;
                                 correction = dvec3(0.0);
-                                correction[axis] = -q;
+                                correction[axis] = -distanceToFace;
                             }
-                            q = hi[axis] - x[axis] + r;
-                            if (q < best) {
-                                best = q;
+                            distanceToFace = hi[axis] - position[axis] + radius;
+                            if (distanceToFace < best) {
+                                best = distanceToFace;
                                 correction = dvec3(0.0);
-                                correction[axis] = q;
+                                correction[axis] = distanceToFace;
                             }
                         }
                     }
                     double depth = length(correction);
-                    if (depth > largest) {
-                        largest = depth;
+                    if (depth > largestDepth) {
+                        largestDepth = depth;
                         result = correction;
                     }
                 }
             }
     return result;
 }
-void separate(int i) {
-    dvec3 x = vec(at(FIELD_POSITION), i), correction = dvec3(0.0);
-    int degree = 0;
+void separateParticles(int particle) {
+    dvec3 position = readVector(fieldOffset(FIELD_POSITION), particle), correction = dvec3(0.0);
+    int contactCount = 0;
     // Contact impulses can redirect particles into pairs absent from the original swept-contact graph.
     // Source buckets cover every possible pair while final displacement is bounded to .25 cell below.
-    ivec3 center = location(vec(h(H_POSITION), i));
+    ivec3 center = cellCoordinates(readVector(headerValue(H_POSITION), particle));
     for (int z = -2; z <= 2; z++)
         for (int y = -2; y <= 2; y++)
             for (int a = -2; a <= 2; a++) {
                 ivec3 c = center + ivec3(a, y, z);
-                if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, dims())))
+                if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, gridDimensions())))
                     continue;
-                int q = cell(c);
-                for (int e = int(words[at(FIELD_OFFSETS) + q]); e < int(words[at(FIELD_OFFSETS) + q + 1]); e++) {
-                    int other = int(words[at(FIELD_ENTRIES) + e]);
-                    if (other == i)
+                int q = cellIndex(c);
+                for (int e = int(words[fieldOffset(FIELD_OFFSETS) + q]); e < int(words[fieldOffset(FIELD_OFFSETS) + q + 1]); e++) {
+                    int other = int(words[fieldOffset(FIELD_ENTRIES) + e]);
+                    if (other == particle)
                         continue;
-                    dvec3 d = x - vec(at(FIELD_POSITION), other);
-                    double distance = length(d), depth = radius(i) + radius(other) - distance;
+                    dvec3 separation = position - readVector(fieldOffset(FIELD_POSITION), other);
+                    double distance = length(separation), depth = particleRadius(particle) + particleRadius(other) - distance;
                     if (depth <= 0.0)
                         continue;
-                    dvec3 n = distance > 0.0 ? d / distance : dvec3(i < other ? -1.0 : 1.0, 0.0, 0.0);
-                    correction += n * depth * mass(other) / (mass(i) + mass(other));
-                    degree++;
+                    dvec3 contactNormal = distance > 0.0 ? separation / distance : dvec3(particle < other ? -1.0 : 1.0, 0.0, 0.0);
+                    correction += contactNormal * depth * particleMass(other) / (particleMass(particle) + particleMass(other));
+                    contactCount++;
                 }
             }
-    x += correction / double(max(1, degree));
-    x += fixedCorrection(x, radius(i));
-    outvec(at(FIELD_NEXT_POSITION), i, x);
+    position += correction / double(max(1, contactCount));
+    position += fixedCorrection(position, particleRadius(particle));
+    writeVector(fieldOffset(FIELD_NEXT_POSITION), particle, position);
 }
 void main() {
     int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128 + gl_LocalInvocationID.x);
     if (id >= p.count || errors != 0u)
         return;
-    if (p.stage == 11) {
+    if (p.stage == STAGE_BUILD_BED_HEIGHT) {
         double volume = 0.0;
-        if (h(H_GEOMETRY_OFFSETS) >= 0)
-            for (int e = int(words[h(H_GEOMETRY_OFFSETS) + id]); e < int(words[h(H_GEOMETRY_OFFSETS) + id + 1]); e++) {
-                int entry = int(words[h(H_GEOMETRY_ENTRIES) + e]), deposit = entry - 8 * h(H_PARTICLE_CAPACITY);
+        if (headerValue(H_GEOMETRY_OFFSETS) >= 0)
+            for (int e = int(words[headerValue(H_GEOMETRY_OFFSETS) + id]); e < int(words[headerValue(H_GEOMETRY_OFFSETS) + id + 1]); e++) {
+                int entry = int(words[headerValue(H_GEOMETRY_ENTRIES) + e]), deposit = entry - 8 * headerValue(H_PARTICLE_CAPACITY);
                 if (deposit < 0)
                     continue;
-                int row = h(H_PARTICLE_CAPACITY) + deposit;
-                int a = h(H_VOLUME) + 2 * row;
-                double v = double(uint64_t(words[a]) | (uint64_t(words[a + 1]) << 32)) / 16777216.0;
-                double porosity = double(uintBitsToFloat(words[h(H_DEPOSIT_POROSITY) + deposit]));
+                int row = headerValue(H_PARTICLE_CAPACITY) + deposit;
+                int a = headerValue(H_VOLUME) + 2 * row;
+                double v = double(uint64_t(words[a]) | (uint64_t(words[a + 1]) << 32)) / SOLID_VOLUME_QUANTA_PER_CELL;
+                double porosity = double(uintBitsToFloat(words[headerValue(H_DEPOSIT_POROSITY) + deposit]));
                 if (!(porosity >= 0.0 && porosity < 1.0)) {
-                    invalid();
+                    reportInvalidState();
                     return;
                 }
                 volume += v / (1.0 - porosity);
             }
-        uint mask = (~words[h(H_MASKS) + id]) & 255u;
+        uint mask = (~words[headerValue(H_MASKS) + id]) & 255u;
         double low = double(bitCount(mask & 0x33u)) * .125, high = double(bitCount(mask & 0xccu)) * .125;
         double height = volume <= low ? (low > 0.0 ? .5 * volume / low : 0.0)
                                       : .5 + (high > 0.0 ? .5 * (volume - low) / high : 0.0);
         if (volume > low + high + 1e-7) {
-            invalid();
+            reportInvalidState();
             return;
         }
-        outnum(at(FIELD_BED_HEIGHT) + 2 * id,
-               (double(id / h(H_SIZE_X) % h(H_SIZE_Y)) + clamp(height, 0.0, 1.0)) * p.cellSize);
+        writeDouble(fieldOffset(FIELD_BED_HEIGHT) + 2 * id,
+               (double(id / headerValue(H_SIZE_X) % headerValue(H_SIZE_Y)) + clamp(height, 0.0, 1.0)) * p.cellSize);
         return;
     }
-    if (p.stage == 0) {
+    if (p.stage == STAGE_INITIALIZE) {
         if (id == 0) {
-            words[ca(CONTACT_CONTROL)] = 0u;
-            words[ca(CONTACT_CONTROL) + 1] = 0u;
-            words[ca(CONTACT_CONTROL) + 2] = 0u;
-            words[at(FIELD_MAX_SPEED)] = 0u;
+            words[contactFieldOffset(CONTACT_CONTROL) + CONTACT_COUNT_OFFSET] = 0u;
+            words[contactFieldOffset(CONTACT_CONTROL) + CONTACT_REQUIRED_COUNT_OFFSET] = 0u;
+            words[contactFieldOffset(CONTACT_CONTROL) + CONTACT_FLAGS_OFFSET] = 0u;
+            words[fieldOffset(FIELD_MAX_SPEED)] = 0u;
         }
-        if (id < h(H_CELL_COUNT)) {
-            words[at(FIELD_COUNTS) + id] = 0u;
-            words[at(FIELD_CURSORS) + id] = 0u;
+        if (id < headerValue(H_CELL_COUNT)) {
+            words[fieldOffset(FIELD_COUNTS) + id] = 0u;
+            words[fieldOffset(FIELD_CURSORS) + id] = 0u;
         }
-        if (id < h(H_PARTICLE_CAPACITY)) {
-            words[at(FIELD_CONTACT_COUNTS) + id] = 0u;
+        if (id < headerValue(H_PARTICLE_CAPACITY)) {
+            words[fieldOffset(FIELD_CONTACT_COUNTS) + id] = 0u;
             double volume =
-                double(uint64_t(words[h(H_VOLUME) + 2 * id]) | (uint64_t(words[h(H_VOLUME) + 2 * id + 1]) << 32));
+                double(uint64_t(words[headerValue(H_VOLUME) + 2 * id]) | (uint64_t(words[headerValue(H_VOLUME) + 2 * id + 1]) << 32));
             // cbrt is evaluated in float; collision footprints follow the CPU float geometry.
-            outnum(
-                at(FIELD_RADIUS) + 2 * id,
-                p.cellSize * clamp(double(pow(float(3.0 * volume / 16777216.0 / (4.0 * 3.141592653589793)), 1.0 / 3.0)),
+            writeDouble(
+                fieldOffset(FIELD_RADIUS) + 2 * id,
+                p.cellSize * clamp(double(pow(float(3.0 * volume / SOLID_VOLUME_QUANTA_PER_CELL / (4.0 * 3.141592653589793)), 1.0 / 3.0)),
                                    .02, .20));
         }
         return;
     }
-    if (p.stage == 5) {
-        int required = int(words[at(FIELD_CONTACT_OFFSETS) + h(H_PARTICLE_CAPACITY)]);
-        words[ca(CONTACT_CONTROL) + 1] = uint(required);
-        words[ca(CONTACT_CONTROL)] = uint(required <= ch(CONTACT_H_CONTACT_CAPACITY) ? required : 0);
+    if (p.stage == STAGE_PUBLISH_CONTACT_COUNT) {
+        int required = int(words[fieldOffset(FIELD_CONTACT_OFFSETS) + headerValue(H_PARTICLE_CAPACITY)]);
+        words[contactFieldOffset(CONTACT_CONTROL) + CONTACT_REQUIRED_COUNT_OFFSET] = uint(required);
+        words[contactFieldOffset(CONTACT_CONTROL) + CONTACT_COUNT_OFFSET] = uint(required <= contactHeaderValue(CONTACT_H_CONTACT_CAPACITY) ? required : 0);
         return;
     }
-    if (p.stage == 12) {
+    if (p.stage == STAGE_CLEAR_SEPARATION_FLAG) {
         if (id == 0)
-            atomicAnd(words[ca(CONTACT_CONTROL) + 2], ~2u);
+            atomicAnd(words[contactFieldOffset(CONTACT_CONTROL) + CONTACT_FLAGS_OFFSET], ~FLAG_UNRESOLVED_OVERLAP);
         return;
     }
-    if (id >= actual())
+    if (id >= particleCount())
         return;
-    if (h(H_ACTIVITY_CELLS) >= 0 && words[h(H_ACTIVITY_CELLS) + cell(location(vec(h(H_POSITION), id)))] == 0u)
+    if (headerValue(H_ACTIVITY_CELLS) >= 0 && words[headerValue(H_ACTIVITY_CELLS) + cellIndex(cellCoordinates(readVector(headerValue(H_POSITION), id)))] == 0u)
         return;
-    if (p.stage == 1) {
-        dvec3 x = vec(h(H_POSITION), id), v = vec(h(H_VELOCITY), id);
+    if (p.stage == STAGE_COUNT_PARTICLES) {
+        dvec3 x = readVector(headerValue(H_POSITION), id), v = readVector(headerValue(H_VELOCITY), id);
         if (any(isnan(x)) || any(isinf(x)) || any(isnan(v)) || any(isinf(v))) {
-            invalid();
+            reportInvalidState();
             return;
         }
-        atomicMax(words[at(FIELD_MAX_SPEED)], floatBitsToUint(float(length(v))));
+        atomicMax(words[fieldOffset(FIELD_MAX_SPEED)], floatBitsToUint(float(length(v))));
         if (length(v) * p.duration > .25 * p.cellSize)
-            atomicOr(words[ca(CONTACT_CONTROL) + 2], 1u);
-        atomicAdd(words[at(FIELD_COUNTS) + cell(location(x))], 1u);
-    } else if (p.stage == 2) {
-        int c = cell(location(vec(h(H_POSITION), id))), slot = int(atomicAdd(words[at(FIELD_CURSORS) + c], 1u));
-        words[at(FIELD_ENTRIES) + int(words[at(FIELD_OFFSETS) + c]) + slot] = uint(id);
-    } else if (p.stage == 3)
-        words[at(FIELD_CONTACT_COUNTS) + id] = uint(enumerate(id, false));
-    else if (p.stage == 4)
-        enumerate(id, true);
-    else if (p.stage == 6)
-        trial(id);
-    else if (p.stage == 7) {
-        dvec3 x = vec(at(FIELD_POSITION), id);
-        outvec(h(H_POSITION), id, x);
-        outnum(h(H_FINAL_Y) + 2 * id, x.y);
-    } else if (p.stage == 8)
-        separate(id);
-    else if (p.stage == 9)
-        outvec(at(FIELD_POSITION), id, dvec3(vec3(vec(at(FIELD_NEXT_POSITION), id))));
-    else if (p.stage == 10) {
-        dvec3 x = vec(at(FIELD_POSITION), id);
+            atomicOr(words[contactFieldOffset(CONTACT_CONTROL) + CONTACT_FLAGS_OFFSET], FLAG_EXCESS_SPEED);
+        atomicAdd(words[fieldOffset(FIELD_COUNTS) + cellIndex(cellCoordinates(x))], 1u);
+    } else if (p.stage == STAGE_SCATTER_PARTICLES) {
+        int c = cellIndex(cellCoordinates(readVector(headerValue(H_POSITION), id))), slot = int(atomicAdd(words[fieldOffset(FIELD_CURSORS) + c], 1u));
+        words[fieldOffset(FIELD_ENTRIES) + int(words[fieldOffset(FIELD_OFFSETS) + c]) + slot] = uint(id);
+    } else if (p.stage == STAGE_COUNT_CONTACTS)
+        words[fieldOffset(FIELD_CONTACT_COUNTS) + id] = uint(enumerateContacts(id, false));
+    else if (p.stage == STAGE_SCATTER_CONTACTS)
+        enumerateContacts(id, true);
+    else if (p.stage == STAGE_TRIAL_MOTION)
+        computeTrialPosition(id);
+    else if (p.stage == STAGE_PUBLISH_POSITION) {
+        dvec3 x = readVector(fieldOffset(FIELD_POSITION), id);
+        writeVector(headerValue(H_POSITION), id, x);
+        writeDouble(headerValue(H_FINAL_Y) + 2 * id, x.y);
+    } else if (p.stage == STAGE_SEPARATE_PARTICLES)
+        separateParticles(id);
+    else if (p.stage == STAGE_ACCEPT_SEPARATION)
+        writeVector(fieldOffset(FIELD_POSITION), id, dvec3(vec3(readVector(fieldOffset(FIELD_NEXT_POSITION), id))));
+    else if (p.stage == STAGE_CHECK_SEPARATION) {
+        dvec3 x = readVector(fieldOffset(FIELD_POSITION), id);
         double tolerance = 1e-5 * p.cellSize;
-        if (length(x - vec(h(H_POSITION), id)) > .25 * p.cellSize)
-            atomicOr(words[ca(CONTACT_CONTROL) + 2], 4u);
-        if (length(fixedCorrection(x, radius(id))) > tolerance)
-            atomicOr(words[ca(CONTACT_CONTROL) + 2], 2u);
-        ivec3 center = location(vec(h(H_POSITION), id));
+        if (length(x - readVector(headerValue(H_POSITION), id)) > .25 * p.cellSize)
+            atomicOr(words[contactFieldOffset(CONTACT_CONTROL) + CONTACT_FLAGS_OFFSET], FLAG_EXCESS_DISPLACEMENT);
+        if (length(fixedCorrection(x, particleRadius(id))) > tolerance)
+            atomicOr(words[contactFieldOffset(CONTACT_CONTROL) + CONTACT_FLAGS_OFFSET], FLAG_UNRESOLVED_OVERLAP);
+        ivec3 center = cellCoordinates(readVector(headerValue(H_POSITION), id));
         for (int z = -2; z <= 2; z++)
             for (int y = -2; y <= 2; y++)
                 for (int a = -2; a <= 2; a++) {
                     ivec3 c = center + ivec3(a, y, z);
-                    if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, dims())))
+                    if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, gridDimensions())))
                         continue;
-                    int q = cell(c);
-                    for (int e = int(words[at(FIELD_OFFSETS) + q]); e < int(words[at(FIELD_OFFSETS) + q + 1]); e++) {
-                        int other = int(words[at(FIELD_ENTRIES) + e]);
+                    int q = cellIndex(c);
+                    for (int e = int(words[fieldOffset(FIELD_OFFSETS) + q]); e < int(words[fieldOffset(FIELD_OFFSETS) + q + 1]); e++) {
+                        int other = int(words[fieldOffset(FIELD_ENTRIES) + e]);
                         if (other == id)
                             continue;
                         // Representative parcel spheres approximate granular occupancy at sub-cell scale.
-                        double pairTolerance = max(tolerance, 0.01 * min(radius(id), radius(other)));
-                        if (radius(id) + radius(other) - length(x - vec(at(FIELD_POSITION), other)) > pairTolerance)
-                            atomicOr(words[ca(CONTACT_CONTROL) + 2], 2u);
+                        double pairTolerance = max(tolerance, 0.01 * min(particleRadius(id), particleRadius(other)));
+                        if (particleRadius(id) + particleRadius(other) - length(x - readVector(fieldOffset(FIELD_POSITION), other)) > pairTolerance)
+                            atomicOr(words[contactFieldOffset(CONTACT_CONTROL) + CONTACT_FLAGS_OFFSET], FLAG_UNRESOLVED_OVERLAP);
                     }
                 }
     }

@@ -1,5 +1,11 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
+
+const int STAGE_SHORT_ROWS = 0;
+const int STAGE_BLOCK_PRODUCT = 1;
+const int CONTROL_RUN = 3;
+const int CONTROL_REFRESH = 7;
+const int CONTROL_PHASE = 12;
 layout(local_size_x=128) in;
 layout(binding=0,std430) readonly buffer Starts { int starts[]; };
 layout(binding=1,std430) readonly buffer Columns { int columns[]; };
@@ -16,9 +22,9 @@ layout(push_constant) uniform Params { int rows;int blocks;int longCount;int dir
 shared double sums[128];
 double inputValue(int i){return p.direction!=0?work[p.rows+i]:pressure[i];}
 void main(){
-    if(p.direction!=0?(control[3]==0.0||control[12]>=3.0):control[7]==0.0)return;
+    if(p.direction!=0?(control[CONTROL_RUN]==0.0||control[CONTROL_PHASE]>=3.0):control[CONTROL_REFRESH]==0.0)return;
     int id=int(gl_GlobalInvocationID.x),lane=int(gl_LocalInvocationID.x);
-    if(p.stage==0){if(id>=p.rows||starts[id+1]-starts[id]>32)return;precise double sum=0.0;for(int e=starts[id];e<starts[id+1];e++)sum+=values[e]*inputValue(columns[e]);work[2*p.rows+id]=sum;return;}
-    if(p.stage==1){int block=int(gl_WorkGroupID.x);if(block>=p.blocks)return;int row=blockRows[block],e=blockBegins[block]+lane;precise double sum=e<starts[row+1]?values[e]*inputValue(columns[e]):0.0;sums[lane]=sum;barrier();for(int stride=64;stride>0;stride/=2){if(lane<stride)sums[lane]+=sums[lane+stride];barrier();}if(lane==0)partials[block]=sums[0];return;}
+    if(p.stage==STAGE_SHORT_ROWS){if(id>=p.rows||starts[id+1]-starts[id]>32)return;precise double sum=0.0;for(int e=starts[id];e<starts[id+1];e++)sum+=values[e]*inputValue(columns[e]);work[2*p.rows+id]=sum;return;}
+    if(p.stage==STAGE_BLOCK_PRODUCT){int block=int(gl_WorkGroupID.x);if(block>=p.blocks)return;int row=blockRows[block],e=blockBegins[block]+lane;precise double sum=e<starts[row+1]?values[e]*inputValue(columns[e]):0.0;sums[lane]=sum;barrier();for(int stride=64;stride>0;stride/=2){if(lane<stride)sums[lane]+=sums[lane+stride];barrier();}if(lane==0)partials[block]=sums[0];return;}
     if(id>=p.longCount)return;precise double sum=0.0;for(int i=offsets[id];i<offsets[id+1];i++)sum+=partials[i];work[2*p.rows+longRows[id]]=sum;
 }

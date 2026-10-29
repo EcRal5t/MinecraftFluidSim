@@ -1,5 +1,25 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
+
+const int STAGE_INITIALIZE = 0;
+const int STAGE_COUNT_TERMS = 1;
+const int STAGE_SCATTER_TERMS = 2;
+const int STAGE_COUNT_BLOCKS = 3;
+const int STAGE_MAP_BLOCKS = 4;
+const int STAGE_SMALL_VELOCITY_PRODUCT = 5;
+const int STAGE_VELOCITY_BLOCK_PRODUCT = 6;
+const int STAGE_LARGE_VELOCITY_PRODUCT = 7;
+const int STAGE_SMALL_ROW_PRODUCT = 8;
+const int STAGE_ROW_BLOCK_PRODUCT = 9;
+const int STAGE_LARGE_ROW_PRODUCT = 10;
+const uint ERROR_COUPLED_PRESSURE = 262144u;
+const int MODE_PRESSURE = 0;
+const int MODE_SEARCH_DIRECTION = 1;
+const int MODE_PREPARE = 2;
+const int MODE_PROJECT = 3;
+const int MODE_DIVERGENCE = 4;
+const int CONTROL_RUN = 3;
+const int CONTROL_REFRESH = 7;
 layout(local_size_x = 128) in;
 layout(binding = 0, std430) buffer Arena {
     uint words[];
@@ -17,19 +37,19 @@ layout(push_constant) uniform Params {
 p;
 // HOST_LAYOUT
 shared dvec2 parts[128];
-int h(int i) {
+int headerValue(int i) {
     return int(words[p.header + i]);
 }
-int at(int f) {
-    return h(WORK_FIELDS + f);
+int fieldOffset(int f) {
+    return headerValue(WORK_FIELDS + f);
 }
-int get(int f, int i) {
-    return int(words[at(f) + i]);
+int readIntField(int f, int i) {
+    return int(words[fieldOffset(f) + i]);
 }
-void put(int f, int i, int v) {
-    words[at(f) + i] = uint(v);
+void writeIntField(int f, int i, int v) {
+    words[fieldOffset(f) + i] = uint(v);
 }
-double number(int address) {
+double readDoubleWord(int address) {
     return packDouble2x32(uvec2(words[address], words[address + 1]));
 }
 void writeNumber(int address, double value) {
@@ -37,34 +57,34 @@ void writeNumber(int address, double value) {
     words[address] = bits.x;
     words[address + 1] = bits.y;
 }
-double read(int f, int i) {
-    return number(at(f) + 2 * i);
+double readDoubleField(int f, int i) {
+    return readDoubleWord(fieldOffset(f) + 2 * i);
 }
-void write(int f, int i, double value) {
-    writeNumber(at(f) + 2 * i, value);
+void writeDoubleField(int f, int i, double value) {
+    writeNumber(fieldOffset(f) + 2 * i, value);
 }
 bool finite(double x) {
     return !isnan(x) && !isinf(x);
 }
 void invalid() {
-    atomicOr(errors, 262144u);
+    atomicOr(errors, ERROR_COUPLED_PRESSURE);
 }
 bool termValid(int e) {
-    int row = get(FIELD_TERM_ROW, e);
-    return row >= 0 && row < h(H_ROW_COUNT) && get(FIELD_ROW_ENABLED, row) != 0 &&
-           read(FIELD_TERM_COEFFICIENT, e) != 0.0;
+    int row = readIntField(FIELD_TERM_ROW, e);
+    return row >= 0 && row < headerValue(H_ROW_COUNT) && readIntField(FIELD_ROW_ENABLED, row) != 0 &&
+           readDoubleField(FIELD_TERM_COEFFICIENT, e) != 0.0;
 }
 bool velocityPhase() {
-    return p.stage >= 5 && p.stage <= 7;
+    return p.stage >= STAGE_SMALL_VELOCITY_PRODUCT && p.stage <= STAGE_LARGE_VELOCITY_PRODUCT;
 }
 bool selected(int owner) {
-    return velocityPhase() ? owner >= h(H_ROW_COUNT) : owner < h(H_ROW_COUNT);
+    return velocityPhase() ? owner >= headerValue(H_ROW_COUNT) : owner < headerValue(H_ROW_COUNT);
 }
-double vector(int row) {
-    if (p.argument == 2)
-        return read(FIELD_REFERENCE, row);
-    double value = p.argument == 1 ? number(h(H_WORK) + 2 * (h(H_ROW_COUNT) + row)) : number(h(H_PRESSURE) + 2 * row);
-    return p.argument == 3 ? value + read(FIELD_REFERENCE, row) : value;
+double pressureVector(int row) {
+    if (p.argument == MODE_PREPARE)
+        return readDoubleField(FIELD_REFERENCE, row);
+    double value = p.argument == MODE_SEARCH_DIRECTION ? readDoubleWord(headerValue(H_WORK) + 2 * (headerValue(H_ROW_COUNT) + row)) : readDoubleWord(headerValue(H_PRESSURE) + 2 * row);
+    return p.argument == MODE_PROJECT ? value + readDoubleField(FIELD_REFERENCE, row) : value;
 }
 void reduce(int lane) {
     for (int step = 64; step > 0; step >>= 1) {
@@ -75,138 +95,138 @@ void reduce(int lane) {
     barrier();
 }
 void dispatchCount(int first, int groups) {
-    put(FIELD_DISPATCH, first, min(groups, 65535));
-    put(FIELD_DISPATCH, first + 1, (groups + 65534) / 65535);
-    put(FIELD_DISPATCH, first + 2, 1);
+    writeIntField(FIELD_DISPATCH, first, min(groups, 65535));
+    writeIntField(FIELD_DISPATCH, first + 1, (groups + 65534) / 65535);
+    writeIntField(FIELD_DISPATCH, first + 2, 1);
 }
 void initialize(int id) {
-    put(FIELD_COUNTS, id, 0);
-    put(FIELD_CURSORS, id, 0);
+    writeIntField(FIELD_COUNTS, id, 0);
+    writeIntField(FIELD_CURSORS, id, 0);
     if (id == 0)
         words[p.header + H_LARGE_COUNT] = 0u;
 }
-void countTerm(int e) {
-    int row = get(FIELD_TERM_ROW, e), v = get(FIELD_TERM_VELOCITY, e);
+void countTerm(int term) {
+    int row = readIntField(FIELD_TERM_ROW, term), velocity = readIntField(FIELD_TERM_VELOCITY, term);
     if (row == -1)
         return;
-    if (row < 0 || row >= h(H_ROW_COUNT) || v < 0 || v >= h(H_VELOCITY_COUNT) ||
-        !finite(read(FIELD_TERM_COEFFICIENT, e))) {
+    if (row < 0 || row >= headerValue(H_ROW_COUNT) || velocity < 0 || velocity >= headerValue(H_VELOCITY_COUNT) ||
+        !finite(readDoubleField(FIELD_TERM_COEFFICIENT, term))) {
         invalid();
         return;
     }
-    if (!termValid(e))
+    if (!termValid(term))
         return;
-    atomicAdd(words[at(FIELD_COUNTS) + row], 1u);
-    atomicAdd(words[at(FIELD_COUNTS) + h(H_ROW_COUNT) + v], 1u);
+    atomicAdd(words[fieldOffset(FIELD_COUNTS) + row], 1u);
+    atomicAdd(words[fieldOffset(FIELD_COUNTS) + headerValue(H_ROW_COUNT) + velocity], 1u);
 }
-void scatter(int e) {
-    if (!termValid(e))
+void scatter(int term) {
+    if (!termValid(term))
         return;
-    int row = get(FIELD_TERM_ROW, e), v = get(FIELD_TERM_VELOCITY, e);
-    if (v < 0 || v >= h(H_VELOCITY_COUNT))
+    int row = readIntField(FIELD_TERM_ROW, term), velocity = readIntField(FIELD_TERM_VELOCITY, term);
+    if (velocity < 0 || velocity >= headerValue(H_VELOCITY_COUNT))
         return;
-    int a = int(atomicAdd(words[at(FIELD_CURSORS) + row], 1u)),
-        b = int(atomicAdd(words[at(FIELD_CURSORS) + h(H_ROW_COUNT) + v], 1u));
-    put(FIELD_ENTRIES, get(FIELD_OFFSETS, row) + a, e);
-    put(FIELD_ENTRIES, get(FIELD_OFFSETS, h(H_ROW_COUNT) + v) + b, e);
+    int rowSlot = int(atomicAdd(words[fieldOffset(FIELD_CURSORS) + row], 1u)),
+        velocitySlot = int(atomicAdd(words[fieldOffset(FIELD_CURSORS) + headerValue(H_ROW_COUNT) + velocity], 1u));
+    writeIntField(FIELD_ENTRIES, readIntField(FIELD_OFFSETS, row) + rowSlot, term);
+    writeIntField(FIELD_ENTRIES, readIntField(FIELD_OFFSETS, headerValue(H_ROW_COUNT) + velocity) + velocitySlot, term);
 }
 void countBlocks(int id) {
-    int count = get(FIELD_COUNTS, id);
-    put(FIELD_BLOCK_COUNTS, id, count > 128 ? (count + 127) / 128 : 0);
+    int count = readIntField(FIELD_COUNTS, id);
+    writeIntField(FIELD_BLOCK_COUNTS, id, count > 128 ? (count + 127) / 128 : 0);
     if (count > 128) {
         int slot = int(atomicAdd(words[p.header + H_LARGE_COUNT], 1u));
-        put(FIELD_LARGE_IDS, slot, id);
+        writeIntField(FIELD_LARGE_IDS, slot, id);
     }
 }
 void mapBlocks(int id) {
     if (id == 0) {
-        dispatchCount(0, get(FIELD_BLOCK_OFFSETS, h(H_OWNER_COUNT)));
-        dispatchCount(3, h(H_LARGE_COUNT));
+        dispatchCount(0, readIntField(FIELD_BLOCK_OFFSETS, headerValue(H_OWNER_COUNT)));
+        dispatchCount(3, headerValue(H_LARGE_COUNT));
     }
-    for (int b = get(FIELD_BLOCK_OFFSETS, id); b < get(FIELD_BLOCK_OFFSETS, id + 1); b++)
-        put(FIELD_BLOCK_OWNER, b, id);
+    for (int b = readIntField(FIELD_BLOCK_OFFSETS, id); b < readIntField(FIELD_BLOCK_OFFSETS, id + 1); b++)
+        writeIntField(FIELD_BLOCK_OWNER, b, id);
 }
-dvec2 termValue(int e, int owner) {
-    double c = read(FIELD_TERM_COEFFICIENT, e);
-    int row = get(FIELD_TERM_ROW, e), v = get(FIELD_TERM_VELOCITY, e);
-    if (owner >= h(H_ROW_COUNT))
-        return dvec2(c * vector(row), 0.0);
-    return dvec2(c * read(p.argument == 4 ? FIELD_PROJECTED_VELOCITY : FIELD_RESPONSE, v),
-                 p.argument == 2 ? c * c * read(FIELD_INVERSE_MASS, v) : 0.0);
+dvec2 termValue(int term, int owner) {
+    double coefficient = readDoubleField(FIELD_TERM_COEFFICIENT, term);
+    int row = readIntField(FIELD_TERM_ROW, term), velocity = readIntField(FIELD_TERM_VELOCITY, term);
+    if (owner >= headerValue(H_ROW_COUNT))
+        return dvec2(coefficient * pressureVector(row), 0.0);
+    return dvec2(coefficient * readDoubleField(p.argument == MODE_DIVERGENCE ? FIELD_PROJECTED_VELOCITY : FIELD_RESPONSE, velocity),
+                 p.argument == MODE_PREPARE ? coefficient * coefficient * readDoubleField(FIELD_INVERSE_MASS, velocity) : 0.0);
 }
 void finishOwner(int owner, dvec2 sum) {
-    if (owner >= h(H_ROW_COUNT)) {
-        int v = owner - h(H_ROW_COUNT);
-        double inverse = read(FIELD_INVERSE_MASS, v), force = sum.x;
-        if (p.argument >= 2)
-            force += read(FIELD_FIXED_REFERENCE_FORCE, v);
+    if (owner >= headerValue(H_ROW_COUNT)) {
+        int velocityIndex = owner - headerValue(H_ROW_COUNT);
+        double inverse = readDoubleField(FIELD_INVERSE_MASS, velocityIndex), force = sum.x;
+        if (p.argument >= MODE_PREPARE)
+            force += readDoubleField(FIELD_FIXED_REFERENCE_FORCE, velocityIndex);
         double response = inverse * force;
-        if (p.argument == 2)
-            response += read(FIELD_PREDICTED_VELOCITY, v) / p.duration;
-        if (p.argument == 3) {
-            double velocity = read(FIELD_PREDICTED_VELOCITY, v) + p.duration * response;
-            if (!finite(velocity))
+        if (p.argument == MODE_PREPARE)
+            response += readDoubleField(FIELD_PREDICTED_VELOCITY, velocityIndex) / p.duration;
+        if (p.argument == MODE_PROJECT) {
+            double projectedVelocity = readDoubleField(FIELD_PREDICTED_VELOCITY, velocityIndex) + p.duration * response;
+            if (!finite(projectedVelocity))
                 invalid();
-            write(FIELD_PROJECTED_VELOCITY, v, velocity);
+            writeDoubleField(FIELD_PROJECTED_VELOCITY, velocityIndex, projectedVelocity);
         } else
-            write(FIELD_RESPONSE, v, response);
+            writeDoubleField(FIELD_RESPONSE, velocityIndex, response);
         if (!(finite(inverse) && inverse >= 0.0 && finite(response)))
             invalid();
         return;
     }
     int row = owner;
-    if (p.argument == 4) {
-        write(FIELD_ROW_DIVERGENCE, row, sum.x);
+    if (p.argument == MODE_DIVERGENCE) {
+        writeDoubleField(FIELD_ROW_DIVERGENCE, row, sum.x);
         return;
     }
-    if (p.argument == 2) {
-        double storage = read(FIELD_STORAGE, row), diag = sum.y + storage, rhs = read(FIELD_ROW_SOURCE, row) - sum.x;
-        bool enabled = get(FIELD_ROW_ENABLED, row) != 0 && diag > 0.0;
-        if (!(finite(storage) && storage >= 0.0 && finite(diag) && finite(rhs)) ||
-            (get(FIELD_ROW_ENABLED, row) != 0 && diag == 0.0 && rhs != 0.0))
+    if (p.argument == MODE_PREPARE) {
+        double storage = readDoubleField(FIELD_STORAGE, row), diagonal = sum.y + storage, rightHandSide = readDoubleField(FIELD_ROW_SOURCE, row) - sum.x;
+        bool enabled = readIntField(FIELD_ROW_ENABLED, row) != 0 && diagonal > 0.0;
+        if (!(finite(storage) && storage >= 0.0 && finite(diagonal) && finite(rightHandSide)) ||
+            (readIntField(FIELD_ROW_ENABLED, row) != 0 && diagonal == 0.0 && rightHandSide != 0.0))
             invalid();
-        int entry = int(words[h(H_STARTS) + row]);
-        if (int(words[h(H_COLUMNS) + entry]) != row) {
+        int entry = int(words[headerValue(H_STARTS) + row]);
+        if (int(words[headerValue(H_COLUMNS) + entry]) != row) {
             invalid();
             return;
         }
-        writeNumber(h(H_VALUES) + 2 * entry, enabled ? diag : 1.0);
-        words[h(H_ROWS) + row] = enabled ? uint(row) : uint(-1);
-        writeNumber(h(H_PROBLEM) + 2 * row, enabled ? rhs : 0.0);
+        writeNumber(headerValue(H_VALUES) + 2 * entry, enabled ? diagonal : 1.0);
+        words[headerValue(H_ROWS) + row] = enabled ? uint(row) : uint(-1);
+        writeNumber(headerValue(H_PROBLEM) + 2 * row, enabled ? rightHandSide : 0.0);
     } else
-        writeNumber(h(H_WORK) + 2 * (2 * h(H_ROW_COUNT) + row), sum.x + read(FIELD_STORAGE, row) * vector(row));
+        writeNumber(headerValue(H_WORK) + 2 * (2 * headerValue(H_ROW_COUNT) + row), sum.x + readDoubleField(FIELD_STORAGE, row) * pressureVector(row));
 }
-void small(int owner) {
-    if (!selected(owner) || get(FIELD_COUNTS, owner) > 128)
+void shortOwnerProduct(int owner) {
+    if (!selected(owner) || readIntField(FIELD_COUNTS, owner) > 128)
         return;
     dvec2 sum = dvec2(0.0);
-    for (int i = get(FIELD_OFFSETS, owner); i < get(FIELD_OFFSETS, owner + 1); i++)
-        sum += termValue(get(FIELD_ENTRIES, i), owner);
+    for (int i = readIntField(FIELD_OFFSETS, owner); i < readIntField(FIELD_OFFSETS, owner + 1); i++)
+        sum += termValue(readIntField(FIELD_ENTRIES, i), owner);
     finishOwner(owner, sum);
 }
 void blockProduct(int block, int lane) {
-    if (block >= get(FIELD_BLOCK_OFFSETS, h(H_OWNER_COUNT)))
+    if (block >= readIntField(FIELD_BLOCK_OFFSETS, headerValue(H_OWNER_COUNT)))
         return;
-    int owner = get(FIELD_BLOCK_OWNER, block);
+    int owner = readIntField(FIELD_BLOCK_OWNER, block);
     if (!selected(owner))
         return;
-    int index = get(FIELD_OFFSETS, owner) + 128 * (block - get(FIELD_BLOCK_OFFSETS, owner)) + lane;
-    parts[lane] = index < get(FIELD_OFFSETS, owner + 1) ? termValue(get(FIELD_ENTRIES, index), owner) : dvec2(0.0);
+    int index = readIntField(FIELD_OFFSETS, owner) + 128 * (block - readIntField(FIELD_BLOCK_OFFSETS, owner)) + lane;
+    parts[lane] = index < readIntField(FIELD_OFFSETS, owner + 1) ? termValue(readIntField(FIELD_ENTRIES, index), owner) : dvec2(0.0);
     reduce(lane);
     if (lane == 0) {
-        write(FIELD_PARTIALS, 2 * block, parts[0].x);
-        write(FIELD_PARTIALS, 2 * block + 1, parts[0].y);
+        writeDoubleField(FIELD_PARTIALS, 2 * block, parts[0].x);
+        writeDoubleField(FIELD_PARTIALS, 2 * block + 1, parts[0].y);
     }
 }
 void largeProduct(int index, int lane) {
-    if (index >= h(H_LARGE_COUNT))
+    if (index >= headerValue(H_LARGE_COUNT))
         return;
-    int owner = get(FIELD_LARGE_IDS, index);
+    int owner = readIntField(FIELD_LARGE_IDS, index);
     if (!selected(owner))
         return;
     dvec2 sum = dvec2(0.0);
-    for (int b = get(FIELD_BLOCK_OFFSETS, owner) + lane; b < get(FIELD_BLOCK_OFFSETS, owner + 1); b += 128)
-        sum += dvec2(read(FIELD_PARTIALS, 2 * b), read(FIELD_PARTIALS, 2 * b + 1));
+    for (int b = readIntField(FIELD_BLOCK_OFFSETS, owner) + lane; b < readIntField(FIELD_BLOCK_OFFSETS, owner + 1); b += 128)
+        sum += dvec2(readDoubleField(FIELD_PARTIALS, 2 * b), readDoubleField(FIELD_PARTIALS, 2 * b + 1));
     parts[lane] = sum;
     reduce(lane);
     if (lane == 0)
@@ -215,28 +235,28 @@ void largeProduct(int index, int lane) {
 void main() {
     int block = int(gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x), lane = int(gl_LocalInvocationID.x),
         id = 128 * block + lane;
-    if (p.stage >= 5 && p.argument < 2 && number(h(H_CONTROL) + 2 * (p.argument == 0 ? 7 : 3)) == 0.0)
+    if (p.stage >= STAGE_SMALL_VELOCITY_PRODUCT && p.argument < MODE_PREPARE && readDoubleWord(headerValue(H_CONTROL) + 2 * (p.argument == MODE_PRESSURE ? CONTROL_REFRESH : CONTROL_RUN)) == 0.0)
         return;
-    if (p.stage == 6 || p.stage == 9) {
+    if (p.stage == STAGE_VELOCITY_BLOCK_PRODUCT || p.stage == STAGE_ROW_BLOCK_PRODUCT) {
         blockProduct(block, lane);
         return;
     }
-    if (p.stage == 7 || p.stage == 10) {
+    if (p.stage == STAGE_LARGE_VELOCITY_PRODUCT || p.stage == STAGE_LARGE_ROW_PRODUCT) {
         largeProduct(block, lane);
         return;
     }
     if (id >= p.count)
         return;
-    if (p.stage == 0)
+    if (p.stage == STAGE_INITIALIZE)
         initialize(id);
-    else if (p.stage == 1)
+    else if (p.stage == STAGE_COUNT_TERMS)
         countTerm(id);
-    else if (p.stage == 2)
+    else if (p.stage == STAGE_SCATTER_TERMS)
         scatter(id);
-    else if (p.stage == 3)
+    else if (p.stage == STAGE_COUNT_BLOCKS)
         countBlocks(id);
-    else if (p.stage == 4)
+    else if (p.stage == STAGE_MAP_BLOCKS)
         mapBlocks(id);
-    else if (p.stage == 5 || p.stage == 8)
-        small(id);
+    else if (p.stage == STAGE_SMALL_VELOCITY_PRODUCT || p.stage == STAGE_SMALL_ROW_PRODUCT)
+        shortOwnerProduct(id);
 }

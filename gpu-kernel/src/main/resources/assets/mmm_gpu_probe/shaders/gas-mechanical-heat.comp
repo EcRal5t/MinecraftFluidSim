@@ -16,31 +16,34 @@ layout(push_constant) uniform Params {
 }
 p;
 // HOST_LAYOUT
-int h(int i) {
+const uint ERROR_INVALID_STATE = 65536u;
+const int STAGE_PREPARE_ENERGY = 0;
+
+int headerWord(int i) {
     return int(words[p.header + i]);
 }
-int gas(int f) {
-    return h(GAS_FIELDS + f);
+int gasField(int f) {
+    return headerWord(GAS_FIELDS + f);
 }
-int wh(int i) {
+int workHeaderWord(int i) {
     return int(words[p.workHeader + i]);
 }
-double number(int a) {
+double readDouble(int a) {
     return packDouble2x32(uvec2(words[a], words[a + 1]));
 }
-void putNumber(int a, double x) {
+void writeDouble(int a, double x) {
     uvec2 bits = unpackDouble2x32(x);
     words[a] = bits.x;
     words[a + 1] = bits.y;
 }
-int64_t integer(int a) {
+int64_t readInt64(int a) {
     return int64_t(uint64_t(words[a]) | (uint64_t(words[a + 1]) << 32));
 }
-bool finite(double x) {
+bool isFinite(double x) {
     return !isnan(x) && !isinf(x);
 }
-void invalid() {
-    atomicOr(errors, 65536u);
+void reportInvalid() {
+    atomicOr(errors, ERROR_INVALID_STATE);
 }
 void addCompensated(inout double sum, inout double correction, double x) {
     precise double y = x - correction, next = sum + y;
@@ -49,13 +52,13 @@ void addCompensated(inout double sum, inout double correction, double x) {
 }
 // GAS_CALORIC_FUNCTIONS
 double minimumEnergy(int first, int last, double anchor) {
-    double t = number(p.header + GAS_H_STANDARD_TEMPERATURE), minimum = number(p.header + GAS_H_MINIMUM_TEMPERATURE),
+    double temperature = readDouble(p.header + GAS_H_STANDARD_TEMPERATURE), minimum = readDouble(p.header + GAS_H_MINIMUM_TEMPERATURE),
            energy = anchor, error = 0.0;
-    while (t > minimum) {
+    while (temperature > minimum) {
         double boundary;
-        double capacity = capacityAndBoundary(first, last, t, false, boundary), next = max(minimum, boundary);
-        addCompensated(energy, error, capacity * (next - t));
-        t = next;
+        double capacity = capacityAndBoundary(first, last, temperature, false, boundary), next = max(minimum, boundary);
+        addCompensated(energy, error, capacity * (next - temperature));
+        temperature = next;
     }
     return energy;
 }
@@ -63,43 +66,43 @@ void main() {
     int node = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128 + gl_LocalInvocationID.x);
     if (node >= p.count || errors != 0u)
         return;
-    if (p.stage == 0) {
-        putNumber(wh(WORK_H_CAPACITY) + 2 * node, 0.0);
-        putNumber(wh(WORK_H_COLD_ENERGY) + 2 * node, 0.0);
-        putNumber(wh(WORK_H_ENERGY_CHANGES) + 4 * node, 0.0);
-        putNumber(wh(WORK_H_ENERGY_CHANGES) + 4 * node + 2, 0.0);
+    if (p.stage == STAGE_PREPARE_ENERGY) {
+        writeDouble(workHeaderWord(WORK_H_CAPACITY) + 2 * node, 0.0);
+        writeDouble(workHeaderWord(WORK_H_COLD_ENERGY) + 2 * node, 0.0);
+        writeDouble(workHeaderWord(WORK_H_ENERGY_CHANGES) + 4 * node, 0.0);
+        writeDouble(workHeaderWord(WORK_H_ENERGY_CHANGES) + 4 * node + 2, 0.0);
     }
-    if (node >= int(words[gas(GAS_COUNTS)]))
+    if (node >= int(words[gasField(GAS_COUNTS)]))
         return;
     int first, last;
     double anchor, mass, r;
     if (!inventory(node, first, last, anchor, mass, r) || first == last)
         return;
-    if (p.stage == 0) {
-        double boundary, temperature = number(wh(WORK_H_CANDIDATE_TEMPERATURE) + 2 * node),
+    if (p.stage == STAGE_PREPARE_ENERGY) {
+        double boundary, temperature = readDouble(workHeaderWord(WORK_H_CANDIDATE_TEMPERATURE) + 2 * node),
                          capacity = capacityAndBoundary(first, last, temperature, true, boundary),
                          cold = minimumEnergy(first, last, anchor);
-        if (!(finite(capacity) && capacity > 0.0 && finite(cold) && finite(temperature) &&
-              temperature >= number(p.header + GAS_H_MINIMUM_TEMPERATURE))) {
-            invalid();
+        if (!(isFinite(capacity) && capacity > 0.0 && isFinite(cold) && isFinite(temperature) &&
+              temperature >= readDouble(p.header + GAS_H_MINIMUM_TEMPERATURE))) {
+            reportInvalid();
             return;
         }
-        putNumber(wh(WORK_H_CAPACITY) + 2 * node, capacity);
-        putNumber(wh(WORK_H_COLD_ENERGY) + 2 * node, cold);
+        writeDouble(workHeaderWord(WORK_H_CAPACITY) + 2 * node, capacity);
+        writeDouble(workHeaderWord(WORK_H_COLD_ENERGY) + 2 * node, cold);
         return;
     }
-    double energy = number(wh(WORK_H_CANDIDATE_ENERGY) + 2 * node),
-           temperature = number(p.header + GAS_H_STANDARD_TEMPERATURE), residual = energy - anchor;
-    if (!finite(residual)) {
-        invalid();
+    double energy = readDouble(workHeaderWord(WORK_H_CANDIDATE_ENERGY) + 2 * node),
+           temperature = readDouble(p.header + GAS_H_STANDARD_TEMPERATURE), residual = energy - anchor;
+    if (!isFinite(residual)) {
+        reportInvalid();
         return;
     }
     bool heating = residual >= 0.0;
     double remaining = abs(residual);
     for (;;) {
         double boundary, capacity = capacityAndBoundary(first, last, temperature, heating, boundary);
-        if (!(finite(capacity) && capacity > 0.0)) {
-            invalid();
+        if (!(isFinite(capacity) && capacity > 0.0)) {
+            reportInvalid();
             return;
         }
         double span = heating ? boundary - temperature : temperature - boundary, step = remaining / capacity;
@@ -107,16 +110,16 @@ void main() {
             temperature += heating ? step : -step;
             break;
         }
-        if (!(span > 0.0 && finite(span))) {
-            invalid();
+        if (!(span > 0.0 && isFinite(span))) {
+            reportInvalid();
             return;
         }
         remaining -= span * capacity;
         temperature = boundary;
     }
-    if (!finite(temperature) || temperature < number(p.header + GAS_H_MINIMUM_TEMPERATURE)) {
-        invalid();
+    if (!isFinite(temperature) || temperature < readDouble(p.header + GAS_H_MINIMUM_TEMPERATURE)) {
+        reportInvalid();
         return;
     }
-    putNumber(wh(WORK_H_CANDIDATE_TEMPERATURE) + 2 * node, temperature);
+    writeDouble(workHeaderWord(WORK_H_CANDIDATE_TEMPERATURE) + 2 * node, temperature);
 }

@@ -1,63 +1,69 @@
 #version 450
+const uint WORKGROUP_SIZE = 256u;
+const uint WORKGROUP_ROW_WIDTH = 65535u;
+const uint MAXIMUM_OFFSET = 0x7fffffffu;
+const uint NO_OFFSET = 0xffffffffu;
+const uint ERROR_OFFSET_OVERFLOW = 16u;
+const uint STAGE_ADD_PARENT_OFFSETS = 1u;
 layout(local_size_x=256) in;
 layout(std430,binding=0) readonly buffer Counts { uint counts[]; };
 layout(std430,binding=1) buffer Offsets { uint offsets[]; };
-layout(std430,binding=2) buffer Workspace { uint work[]; };
+layout(std430,binding=2) buffer Workspace { uint workspaceWords[]; };
 layout(std430,binding=3) buffer Errors { uint errors; };
 layout(push_constant) uniform Metadata {
-    uint stage; uint count; uint base; uint parent; uint root; uint totalIndex;
-    uint inputBase; uint outputBase; uint workspaceBase; uint liveCount;
-} pc;
-shared uint values[256];
+    uint stage; uint count; uint levelOffset; uint parentLevelOffset; uint isInputLevel; uint totalOutputIndex;
+    uint inputOffset; uint outputOffset; uint workspaceOffset; uint liveCountOffset;
+} params;
+shared uint scanValues[256];
 
 uint checkedAdd(uint a,uint b) {
     uint result=a+b;
-    if(result<a || result>0x7fffffffu) atomicOr(errors,16u);
+    if(result<a || result>MAXIMUM_OFFSET) atomicOr(errors,ERROR_OFFSET_OVERFLOW);
     return result;
 }
 void main() {
-    uint block=gl_WorkGroupID.x+gl_WorkGroupID.y*65535u;
-    if(block>=(pc.count+255u)/256u && pc.count!=0u)return;
-    uint lane=gl_LocalInvocationID.x, i=block*256u+lane;
-    if(pc.stage==1u) {
-        if(i<pc.count) {
-            uint addend=work[pc.workspaceBase+pc.parent+block];
-            if(pc.root!=0u)offsets[pc.outputBase+i]=checkedAdd(offsets[pc.outputBase+i],addend);
-            else work[pc.workspaceBase+pc.base+i]=checkedAdd(work[pc.workspaceBase+pc.base+i],addend);
+    uint workgroupIndex=gl_WorkGroupID.x+gl_WorkGroupID.y*WORKGROUP_ROW_WIDTH;
+    if(workgroupIndex>=(params.count+(WORKGROUP_SIZE-1u))/WORKGROUP_SIZE && params.count!=0u)return;
+    uint lane=gl_LocalInvocationID.x, elementIndex=workgroupIndex*WORKGROUP_SIZE+lane;
+    if(params.stage==STAGE_ADD_PARENT_OFFSETS) {
+        if(elementIndex<params.count) {
+            uint addend=workspaceWords[params.workspaceOffset+params.parentLevelOffset+workgroupIndex];
+            if(params.isInputLevel!=0u)offsets[params.outputOffset+elementIndex]=checkedAdd(offsets[params.outputOffset+elementIndex],addend);
+            else workspaceWords[params.workspaceOffset+params.levelOffset+elementIndex]=checkedAdd(workspaceWords[params.workspaceOffset+params.levelOffset+elementIndex],addend);
         }
         return;
     }
-    uint value=0u;
-    if(i<pc.count){
-        if(pc.root!=0u){uint live=pc.liveCount==0xffffffffu?pc.count:counts[pc.liveCount];if(live>pc.count)atomicOr(errors,16u);if(i<live)value=counts[pc.inputBase+i];}
-        else value=work[pc.workspaceBase+pc.base+i];
+    uint inputCount=0u;
+    if(elementIndex<params.count){
+        if(params.isInputLevel!=0u){uint liveElementCount=params.liveCountOffset==NO_OFFSET?params.count:counts[params.liveCountOffset];if(liveElementCount>params.count)atomicOr(errors,ERROR_OFFSET_OVERFLOW);if(elementIndex<liveElementCount)inputCount=counts[params.inputOffset+elementIndex];}
+        else inputCount=workspaceWords[params.workspaceOffset+params.levelOffset+elementIndex];
     }
-    if(value>0x7fffffffu)atomicOr(errors,16u);
-    values[lane]=value;
+    if(inputCount>MAXIMUM_OFFSET)atomicOr(errors,ERROR_OFFSET_OVERFLOW);
+    scanValues[lane]=inputCount;
     barrier();
-    for(uint stride=1u;stride<256u;stride*=2u) {
+    for(uint stride=1u;stride<WORKGROUP_SIZE;stride*=2u) {
         uint target=(lane+1u)*stride*2u-1u;
-        if(target<256u)values[target]=checkedAdd(values[target],values[target-stride]);
+        if(target<WORKGROUP_SIZE)scanValues[target]=checkedAdd(scanValues[target],scanValues[target-stride]);
         barrier();
     }
     if(lane==0u) {
-        uint total=values[255];
-        if(pc.parent==0xffffffffu)offsets[pc.outputBase+pc.totalIndex]=total;
-        else work[pc.workspaceBase+pc.parent+block]=total;
-        values[255]=0u;
+        uint total=scanValues[WORKGROUP_SIZE-1u];
+        if(params.parentLevelOffset==NO_OFFSET)offsets[params.outputOffset+params.totalOutputIndex]=total;
+        else workspaceWords[params.workspaceOffset+params.parentLevelOffset+workgroupIndex]=total;
+        scanValues[WORKGROUP_SIZE-1u]=0u;
     }
     barrier();
-    for(uint stride=128u;stride>0u;stride/=2u) {
+    for(uint stride=WORKGROUP_SIZE/2u;stride>0u;stride/=2u) {
         uint target=(lane+1u)*stride*2u-1u;
-        if(target<256u) {
-            uint left=values[target-stride];
-            values[target-stride]=values[target];
-            values[target]=checkedAdd(values[target],left);
+        if(target<WORKGROUP_SIZE) {
+            uint leftSubtreeSum=scanValues[target-stride];
+            scanValues[target-stride]=scanValues[target];
+            scanValues[target]=checkedAdd(scanValues[target],leftSubtreeSum);
         }
         barrier();
     }
-    if(i<pc.count) {
-        if(pc.root!=0u)offsets[pc.outputBase+i]=values[lane];
-        else work[pc.workspaceBase+pc.base+i]=values[lane];
+    if(elementIndex<params.count) {
+        if(params.isInputLevel!=0u)offsets[params.outputOffset+elementIndex]=scanValues[lane];
+        else workspaceWords[params.workspaceOffset+params.levelOffset+elementIndex]=scanValues[lane];
     }
 }

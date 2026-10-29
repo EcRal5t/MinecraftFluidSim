@@ -1,25 +1,34 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
+const int MICROCELL_COUNT = 8;
+const int LAYER_WORD_STRIDE = 4;
+const int LAYER_MINIMUM_HEIGHT = 0;
+const int LAYER_MAXIMUM_HEIGHT = 1;
+const int LAYER_MICROCELL_MASK = 2;
+const int LAYER_VOLUME_FRACTION = 3;
+const float MAXIMUM_ENCODED_FRACTION = 255.0;
+const int FRACTION_UNIT_COUNT = 255;
+const int LAYER_HEIGHT_ITERATIONS = 24;
 layout(local_size_x=128)in;
 layout(binding=0,std430)readonly buffer Source{uint words[];};
-layout(binding=1,std430)buffer Display{uint o[];};
-layout(push_constant)uniform Params{int cells;int materials;int offsets;int handles;int volumes;int planes;int micro;int masks;int outPlane;int layers;int order;int unused;}p;
-double number(int at){return packDouble2x32(uvec2(words[at],words[at+1]));}
-float amount(int c,int material){double volume=0.0;for(int r=int(words[p.offsets+c]);r<int(words[p.offsets+c+1]);r++)if(int(words[p.handles+r])==material)volume+=number(p.volumes+2*r);return float(volume);}
-float box(vec3 n,float offset){float scale=max(abs(n.x),max(abs(n.y),abs(n.z)));if(scale==0.0)return offset>=0.0?1.0:0.0;n/=scale;float t=offset/scale-min(n.x,0.0)-min(n.y,0.0)-min(n.z,0.0);vec3 a=abs(n);float x=min(a.x,min(a.y,a.z)),z=max(a.x,max(a.y,a.z)),y=a.x+a.y+a.z-x-z,total=x+y+z;if(t<=0.0)return 0.0;if(t>=total)return 1.0;bool complement=t>total*.5;if(complement)t=total-t;float f;
- if(y==0.0)f=t/z;else if(x==0.0)f=t<=y?.5*(t/y)*(t/z):(t-.5*y)/z;
- else if(t<=x)f=(t/x)*(t/y)*(t/z)/6.0;else if(t<=y)f=(3.0*t*(t-x)+x*x)/(6.0*y*z);else if(t>=x+y)f=(t-.5*(x+y))/z;else{float u=t-y,v=max(0.0,t-z);f=(3.0*t*(t-x)+x*x-(u*u*u+v*v*v)/x)/(6.0*y*z);}return clamp(complement?1.0-f:f,0.0,1.0);}
-float slab(vec4 plane,int micro,float low,float high){vec3 origin=.5*vec3(micro&1,(micro>>1)&1,(micro>>2)&1);low=max(low,origin.y);high=min(high,origin.y+.5);if(high<=low)return 0.0;origin.y=low;return .25*(high-low)*box(plane.xyz*vec3(.5,high-low,.5),plane.w-dot(plane.xyz,origin));}
-void main(){int c=int(gl_GlobalInvocationID.x);if(c>=p.cells)return;vec4 plane;for(int k=0;k<4;k++){plane[k]=float(number(p.planes+8*c+2*k));o[p.outPlane+4*c+k]=floatBitsToUint(plane[k]);}
- float total=0.0;int assigned=0,live=0;for(int m=0;m<p.materials;m++){float v=amount(c,m);total+=v;if(v>0.0)live++;int at=p.layers+4*(m*p.cells+c);o[at]=0u;o[at+1]=floatBitsToUint(1.0);o[at+2]=0u;o[at+3]=0u;}if(total<=0.0)return;
- for(int m=0;m<p.materials;m++)assigned+=int(floor(255.0*amount(c,m)/total));
- int open=0;float geometric=0.0;for(int micro=0;micro<8;micro++)if((words[p.masks+c]&(1u<<micro))==0u&&number(p.micro+16*c+2*micro)>0.0){open|=1<<micro;if(live>1)geometric+=slab(plane,micro,0.0,1.0);}
- float lower=0.0,cumulative=0.0;int done=0;
- for(int rank=0;rank<p.materials;rank++){int m=int(o[p.order+rank]);float v=amount(c,m);if(v<=0.0)continue;done++;cumulative+=v;float upper=1.0;
-  if(done<live){float lo=lower,hi=1.0,target=geometric*cumulative/total;for(int i=0;i<24;i++){float mid=.5*(lo+hi),volume=0.0;for(int micro=0;micro<8;micro++)if((open&(1<<micro))!=0)volume+=slab(plane,micro,0.0,mid);if(volume<target)lo=mid;else hi=mid;}upper=.5*(lo+hi);}
-  int mask=0;if(live==1)mask=open;else for(int micro=0;micro<8;micro++)if((open&(1<<micro))!=0&&slab(plane,micro,lower,upper)>0.0)mask|=1<<micro;
-  float scaled=255.0*v/total,remainder=scaled-floor(scaled);int remainderRank=0;
-  for(int peer=0;peer<p.materials;peer++){float f=255.0*amount(c,peer)/total,r=f-floor(f);if(r>remainder||(r==remainder&&peer<m))remainderRank++;}
-  int q=int(floor(scaled))+(remainderRank<255-assigned?1:0),at=p.layers+4*(m*p.cells+c);o[at]=floatBitsToUint(lower);o[at+1]=floatBitsToUint(upper);o[at+2]=uint(mask);o[at+3]=uint(q);lower=upper;
+layout(binding=1,std430)buffer Display{uint displayWords[];};
+layout(push_constant)uniform Params{int cellCount;int materialCount;int cellOffsets;int materialHandles;int volumeWords;int planeWords;int microcellVolumeWords;int collisionMasks;int outputPlaneOffset;int outputLayersOffset;int materialOrderOffset;int unused;}params;
+double readDouble(int wordOffset){return packDouble2x32(uvec2(words[wordOffset],words[wordOffset+1]));}
+float materialVolume(int cellIndex,int material){double volume=0.0;for(int rowIndex=int(words[params.cellOffsets+cellIndex]);rowIndex<int(words[params.cellOffsets+cellIndex+1]);rowIndex++)if(int(words[params.materialHandles+rowIndex])==material)volume+=readDouble(params.volumeWords+2*rowIndex);return float(volume);}
+float unitBoxCutFraction(vec3 planeNormal,float offset){float scale=max(abs(planeNormal.x),max(abs(planeNormal.y),abs(planeNormal.z)));if(scale==0.0)return offset>=0.0?1.0:0.0;planeNormal/=scale;float planeDistance=offset/scale-min(planeNormal.x,0.0)-min(planeNormal.y,0.0)-min(planeNormal.z,0.0);vec3 absoluteNormal=abs(planeNormal);float x=min(absoluteNormal.x,min(absoluteNormal.y,absoluteNormal.z)),z=max(absoluteNormal.x,max(absoluteNormal.y,absoluteNormal.z)),y=absoluteNormal.x+absoluteNormal.y+absoluteNormal.z-x-z,totalVolume=x+y+z;if(planeDistance<=0.0)return 0.0;if(planeDistance>=totalVolume)return 1.0;bool complement=planeDistance>totalVolume*.5;if(complement)planeDistance=totalVolume-planeDistance;float scaledFraction;
+ if(y==0.0)scaledFraction=planeDistance/z;else if(x==0.0)scaledFraction=planeDistance<=y?.5*(planeDistance/y)*(planeDistance/z):(planeDistance-.5*y)/z;
+ else if(planeDistance<=x)scaledFraction=(planeDistance/x)*(planeDistance/y)*(planeDistance/z)/6.0;else if(planeDistance<=y)scaledFraction=(3.0*planeDistance*(planeDistance-x)+x*x)/(6.0*y*z);else if(planeDistance>=x+y)scaledFraction=(planeDistance-.5*(x+y))/z;else{float middleAxisTail=planeDistance-y,largeAxisTail=max(0.0,planeDistance-z);scaledFraction=(3.0*planeDistance*(planeDistance-x)+x*x-(middleAxisTail*middleAxisTail*middleAxisTail+largeAxisTail*largeAxisTail*largeAxisTail)/x)/(6.0*y*z);}return clamp(complement?1.0-scaledFraction:scaledFraction,0.0,1.0);}
+float microcellSlabVolume(vec4 plane,int microcell,float low,float high){vec3 origin=.5*vec3(microcell&1,(microcell>>1)&1,(microcell>>2)&1);low=max(low,origin.y);high=min(high,origin.y+.5);if(high<=low)return 0.0;origin.y=low;return .25*(high-low)*unitBoxCutFraction(plane.xyz*vec3(.5,high-low,.5),plane.w-dot(plane.xyz,origin));}
+void main(){int cellIndex=int(gl_GlobalInvocationID.x);if(cellIndex>=params.cellCount)return;vec4 plane;for(int component=0;component<4;component++){plane[component]=float(readDouble(params.planeWords+8*cellIndex+2*component));displayWords[params.outputPlaneOffset+4*cellIndex+component]=floatBitsToUint(plane[component]);}
+ float totalVolume=0.0;int assignedFractionUnits=0,liveMaterialCount=0;for(int materialIndex=0;materialIndex<params.materialCount;materialIndex++){float materialAmount=materialVolume(cellIndex,materialIndex);totalVolume+=materialAmount;if(materialAmount>0.0)liveMaterialCount++;int outputOffset=params.outputLayersOffset+LAYER_WORD_STRIDE*(materialIndex*params.cellCount+cellIndex);displayWords[outputOffset+LAYER_MINIMUM_HEIGHT]=0u;displayWords[outputOffset+LAYER_MAXIMUM_HEIGHT]=floatBitsToUint(1.0);displayWords[outputOffset+LAYER_MICROCELL_MASK]=0u;displayWords[outputOffset+LAYER_VOLUME_FRACTION]=0u;}if(totalVolume<=0.0)return;
+ for(int materialIndex=0;materialIndex<params.materialCount;materialIndex++)assignedFractionUnits+=int(floor(MAXIMUM_ENCODED_FRACTION*materialVolume(cellIndex,materialIndex)/totalVolume));
+ int openMicrocellMask=0;float geometricVolume=0.0;for(int microcell=0;microcell<MICROCELL_COUNT;microcell++)if((words[params.collisionMasks+cellIndex]&(1u<<microcell))==0u&&readDouble(params.microcellVolumeWords+16*cellIndex+2*microcell)>0.0){openMicrocellMask|=1<<microcell;if(liveMaterialCount>1)geometricVolume+=microcellSlabVolume(plane,microcell,0.0,1.0);}
+ float lower=0.0,cumulativeVolume=0.0;int processedMaterials=0;
+ for(int rank=0;rank<params.materialCount;rank++){int materialIndex=int(displayWords[params.materialOrderOffset+rank]);float materialAmount=materialVolume(cellIndex,materialIndex);if(materialAmount<=0.0)continue;processedMaterials++;cumulativeVolume+=materialAmount;float upper=1.0;
+  if(processedMaterials<liveMaterialCount){float lo=lower,hi=1.0,target=geometricVolume*cumulativeVolume/totalVolume;for(int i=0;i<LAYER_HEIGHT_ITERATIONS;i++){float mid=.5*(lo+hi),volume=0.0;for(int microcell=0;microcell<MICROCELL_COUNT;microcell++)if((openMicrocellMask&(1<<microcell))!=0)volume+=microcellSlabVolume(plane,microcell,0.0,mid);if(volume<target)lo=mid;else hi=mid;}upper=.5*(lo+hi);}
+  int mask=0;if(liveMaterialCount==1)mask=openMicrocellMask;else for(int microcell=0;microcell<MICROCELL_COUNT;microcell++)if((openMicrocellMask&(1<<microcell))!=0&&microcellSlabVolume(plane,microcell,lower,upper)>0.0)mask|=1<<microcell;
+  float scaled=MAXIMUM_ENCODED_FRACTION*materialAmount/totalVolume,remainder=scaled-floor(scaled);int remainderRank=0;
+  for(int peer=0;peer<params.materialCount;peer++){float scaledFraction=MAXIMUM_ENCODED_FRACTION*materialVolume(cellIndex,peer)/totalVolume,fractionRemainder=scaledFraction-floor(scaledFraction);if(fractionRemainder>remainder||(fractionRemainder==remainder&&peer<materialIndex))remainderRank++;}
+  int encodedFraction=int(floor(scaled))+(remainderRank<FRACTION_UNIT_COUNT-assignedFractionUnits?1:0),outputOffset=params.outputLayersOffset+LAYER_WORD_STRIDE*(materialIndex*params.cellCount+cellIndex);displayWords[outputOffset+LAYER_MINIMUM_HEIGHT]=floatBitsToUint(lower);displayWords[outputOffset+LAYER_MAXIMUM_HEIGHT]=floatBitsToUint(upper);displayWords[outputOffset+LAYER_MICROCELL_MASK]=uint(mask);displayWords[outputOffset+LAYER_VOLUME_FRACTION]=uint(encodedFraction);lower=upper;
  }
 }

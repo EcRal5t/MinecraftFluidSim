@@ -131,7 +131,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 - [VulkanThermalContacts](../../gpu-kernel/src/main/java/mmm/gpu/VulkanThermalContacts.java)、[VulkanThermalConduction](../../gpu-kernel/src/main/java/mmm/gpu/VulkanThermalConduction.java)、[VulkanRegionReactions](../../gpu-kernel/src/main/java/mmm/gpu/VulkanRegionReactions.java)：热接触、导热与反应。
 - [VulkanShaderLayout](../../gpu-kernel/src/main/java/mmm/gpu/VulkanShaderLayout.java) 与各阶段的 `Header/Field`：从宿主布局声明生成 shader 字段常量。
 
-核心液体输运、压力、黏性、导热及实体耦合的阶段编号由宿主声明生成 shader 常量；容量状态、控制字和间接派发槽按职责命名。shader 变量区分物理量、整数配额、空间坐标与存储索引，打包记录使用具名成员和步长，编码尺度与数值阈值在对应内核中具名保存。
+核心液体输运、压力、黏性、导热及实体耦合的阶段编号由宿主声明生成 shader 常量；其余气体、颗粒、相变、压力图及观察内核按职责命名阶段、状态、控制字和间接派发槽。shader 变量区分物理量、整数配额、空间坐标与存储索引，打包记录使用具名成员和步长，编码尺度与数值阈值在对应内核中具名保存。观察和展示归约明确区分库存、温度、能量、空间位置和输出编码；共享 GLSL 片段与引用方使用一致的函数名称。
 
 <a id="candidate"></a>
 ## 初始化与库存编辑

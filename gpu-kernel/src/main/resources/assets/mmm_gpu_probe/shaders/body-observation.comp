@@ -2,96 +2,123 @@
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 // HOST_LAYOUT
+const int WORKGROUP_SIZE = 128;
+const int SAMPLE_FIELD_COUNT = 13;
+const int STAGE_SAMPLE_CELLS = 0;
+const int OUTPUT_WORD_OFFSET = 64;
+const int PARTIAL_WORD_OFFSET = 96;
+const int PARTIAL_WORD_STRIDE = 26;
+const int BODY_MINIMUM_WORD = 32;
+const int BODY_MAXIMUM_WORD = 38;
+const int CELL_SIZE_WORD = 44;
+const int GRAVITY_WORD = 46;
+const int SAMPLE_VOLUME = 0;
+const int SAMPLE_POSITION_X = 1;
+const int SAMPLE_VELOCITY_X = 4;
+const int SAMPLE_WET_AREA = 7;
+const int SAMPLE_MASS = 8;
+const int SAMPLE_PRESSURE_FORCE_X = 9;
+const int SAMPLE_WATER_VOLUME = 12;
+const double PLANE_AXIS_TOLERANCE = 1e-12;
+const double FULL_CELL_VOLUME_TOLERANCE = 4e-5;
+const double KILOGRAMS_PER_MASS_UNIT = 1e-10;
+const double ATMOSPHERIC_PRESSURE_PA = 101325.0;
+// Geometry stores volume, mass and available volume in a four-double record.
+const int GEOMETRY_FIELD_COUNT = 4;
+const int GEOMETRY_VOLUME = 0;
+const int GEOMETRY_MASS = 1;
+const int GEOMETRY_AVAILABLE_VOLUME = 2;
+const int LAYER_HEIGHT_ITERATIONS = 16;
 layout(local_size_x=128) in;
 layout(binding=0,std430) readonly buffer Source { uint words[]; };
 layout(binding=1,std430) buffer Observation { uint outputWords[]; };
-layout(push_constant) uniform Params { int stage;int count;int groups;int unused; } p;
-shared double sums[1664];
-int h(int i){return int(outputWords[i]);}
-double num(int a){return packDouble2x32(uvec2(words[a],words[a+1]));}
-double outvalue(int a){return packDouble2x32(uvec2(outputWords[a],outputWords[a+1]));}
-void store(int a,double x){uvec2 bits=unpackDouble2x32(x);outputWords[a]=bits.x;outputWords[a+1]=bits.y;}
-int64_t integer(int a){return int64_t(uint64_t(words[a])|(uint64_t(words[a+1])<<32));}
-double liquid(int c,int k){return num(h(H_GEOMETRY_CELLS)+2*(4*c+k));}
-double cellSize(){return outvalue(44);}double gravity(){return outvalue(46);}
-dvec3 bodyLow(){return dvec3(outvalue(32),outvalue(34),outvalue(36));}dvec3 bodyHigh(){return dvec3(outvalue(38),outvalue(40),outvalue(42));}
-ivec3 dims(){return ivec3(h(H_SIZE_X),h(H_SIZE_Y),h(H_SIZE_Z));}int cell(ivec3 c){return (c.z*h(H_SIZE_Y)+c.y)*h(H_SIZE_X)+c.x;}
-int nx(){return (h(H_SIZE_X)+1)*h(H_SIZE_Y)*h(H_SIZE_Z);}int ny(){return h(H_SIZE_X)*(h(H_SIZE_Y)+1)*h(H_SIZE_Z);}
-int faceAt(int axis,ivec3 c){ivec3 d=dims();d[axis]++;return (axis==0?0:axis==1?nx():nx()+ny())+(c.z*d.y+c.y)*d.x+c.x;}
-double faceVelocity(int f){return num(h(H_FACES)+2*(4*f+1));}
+layout(push_constant) uniform Params { int stage;int count;int groups;int unused; } params;
+shared double sharedSamples[WORKGROUP_SIZE*SAMPLE_FIELD_COUNT];
+int headerWord(int i){return int(outputWords[i]);}
+double readDouble(int a){return packDouble2x32(uvec2(words[a],words[a+1]));}
+double readObservationDouble(int a){return packDouble2x32(uvec2(outputWords[a],outputWords[a+1]));}
+void writeDouble(int a,double x){uvec2 bits=unpackDouble2x32(x);outputWords[a]=bits.x;outputWords[a+1]=bits.y;}
+int64_t readInteger(int a){return int64_t(uint64_t(words[a])|(uint64_t(words[a+1])<<32));}
+double cellGeometry(int cellIndex,int fieldIndex){return readDouble(headerWord(H_GEOMETRY_CELLS)+2*(GEOMETRY_FIELD_COUNT*cellIndex+fieldIndex));}
+double cellSize(){return readObservationDouble(CELL_SIZE_WORD);}double gravity(){return readObservationDouble(GRAVITY_WORD);}
+dvec3 bodyMinimum(){return dvec3(readObservationDouble(BODY_MINIMUM_WORD),readObservationDouble(BODY_MINIMUM_WORD+2),readObservationDouble(BODY_MINIMUM_WORD+4));}dvec3 bodyMaximum(){return dvec3(readObservationDouble(BODY_MAXIMUM_WORD),readObservationDouble(BODY_MAXIMUM_WORD+2),readObservationDouble(BODY_MAXIMUM_WORD+4));}
+ivec3 gridDimensions(){return ivec3(headerWord(H_SIZE_X),headerWord(H_SIZE_Y),headerWord(H_SIZE_Z));}int cellIndexAt(ivec3 cellCoordinate){return (cellCoordinate.z*headerWord(H_SIZE_Y)+cellCoordinate.y)*headerWord(H_SIZE_X)+cellCoordinate.x;}
+int xFaceCount(){return (headerWord(H_SIZE_X)+1)*headerWord(H_SIZE_Y)*headerWord(H_SIZE_Z);}int yFaceCount(){return headerWord(H_SIZE_X)*(headerWord(H_SIZE_Y)+1)*headerWord(H_SIZE_Z);}
+int faceIndexAt(int axis,ivec3 cellCoordinate){ivec3 faceDimensions=gridDimensions();faceDimensions[axis]++;return (axis==0?0:axis==1?xFaceCount():xFaceCount()+yFaceCount())+(cellCoordinate.z*faceDimensions.y+cellCoordinate.y)*faceDimensions.x+cellCoordinate.x;}
+double faceVelocity(int faceIndex){return readDouble(headerWord(H_FACES)+2*(4*faceIndex+1));}
 double power(double x,int n){double result=1.0;for(int i=0;i<n;i++)result*=x;return result;}
 // Fraction and first moments of a unit box below one plane. Inclusion-exclusion is evaluated
 // on the smaller cut; inactive axes use their exact half-box moment.
-double cut(dvec3 coefficients,double offset,out dvec3 moment){
+double unitBoxCutFraction(dvec3 coefficients,double offset,out dvec3 moment){
  double scale=max(abs(coefficients.x),max(abs(coefficients.y),abs(coefficients.z)));
  if(scale==0.0){double fraction=offset>=0.0?1.0:0.0;moment=dvec3(.5*fraction);return fraction;}
- dvec3 original=coefficients/scale,w=abs(original);double t=offset/scale-dot(min(original,dvec3(0.0)),dvec3(1.0));
- int axes[3],d=0;double product=1.0,total=0.0;for(int a=0;a<3;a++)if(w[a]>1e-12){axes[d++]=a;product*=w[a];total+=w[a];}
- if(t<=0.0){moment=dvec3(0.0);return 0.0;}if(t>=total){moment=dvec3(.5);return 1.0;}
- bool complement=t>.5*total;if(complement)t=total-t;double factorial=d==3?6.0:d==2?2.0:1.0,fraction=0.0;dvec3 raw=dvec3(0.0);
- for(int bits=0;bits<(1<<d);bits++){
-  double shift=0.0;for(int i=0;i<d;i++)if((bits&(1<<i))!=0)shift+=w[axes[i]];
-  double tail=max(0.0,t-shift),sign=(bitCount(uint(bits))&1)==0?1.0:-1.0;
-  double volume=power(tail,d)/factorial,first=power(tail,d+1)/(factorial*double(d+1));fraction+=sign*volume;
-  for(int i=0;i<d;i++){int axis=axes[i];raw[axis]+=sign*(first+(((bits&(1<<i))!=0)?w[axis]*volume:0.0))/w[axis];}
+ dvec3 scaledNormal=coefficients/scale,absoluteNormal=abs(scaledNormal);double planeDistance=offset/scale-dot(min(scaledNormal,dvec3(0.0)),dvec3(1.0));
+ int axes[3],activeAxisCount=0;double product=1.0,total=0.0;for(int a=0;a<3;a++)if(absoluteNormal[a]>PLANE_AXIS_TOLERANCE){axes[activeAxisCount++]=a;product*=absoluteNormal[a];total+=absoluteNormal[a];}
+ if(planeDistance<=0.0){moment=dvec3(0.0);return 0.0;}if(planeDistance>=total){moment=dvec3(.5);return 1.0;}
+ bool complement=planeDistance>.5*total;if(complement)planeDistance=total-planeDistance;double factorial=activeAxisCount==3?6.0:activeAxisCount==2?2.0:1.0,fraction=0.0;dvec3 firstMoments=dvec3(0.0);
+ for(int bits=0;bits<(1<<activeAxisCount);bits++){
+  double shift=0.0;for(int i=0;i<activeAxisCount;i++)if((bits&(1<<i))!=0)shift+=absoluteNormal[axes[i]];
+  double tail=max(0.0,planeDistance-shift),sign=(bitCount(uint(bits))&1)==0?1.0:-1.0;
+  double volume=power(tail,activeAxisCount)/factorial,first=power(tail,activeAxisCount+1)/(factorial*double(activeAxisCount+1));fraction+=sign*volume;
+  for(int i=0;i<activeAxisCount;i++){int axis=axes[i];firstMoments[axis]+=sign*(first+(((bits&(1<<i))!=0)?absoluteNormal[axis]*volume:0.0))/absoluteNormal[axis];}
  }
- fraction=clamp(fraction/product,0.0,1.0);moment=dvec3(.5*fraction);for(int i=0;i<d;i++)moment[axes[i]]=clamp(raw[axes[i]]/product,0.0,fraction);
+ fraction=clamp(fraction/product,0.0,1.0);moment=dvec3(.5*fraction);for(int i=0;i<activeAxisCount;i++)moment[axes[i]]=clamp(firstMoments[axes[i]]/product,0.0,fraction);
  if(complement){moment=dvec3(.5-fraction)+moment;fraction=1.0-fraction;}
- for(int axis=0;axis<3;axis++)if(original[axis]<0.0)moment[axis]=fraction-moment[axis];return fraction;
+ for(int axis=0;axis<3;axis++)if(scaledNormal[axis]<0.0)moment[axis]=fraction-moment[axis];return fraction;
 }
-double clippedVolume(dvec4 plane,dvec3 lo,dvec3 hi,out dvec3 centerOut){
- dvec3 extent=max(dvec3(0.0),hi-lo),moment;double fraction=cut(plane.xyz*extent,plane.w-dot(plane.xyz,lo),moment);
+double clippedBoxVolume(dvec4 plane,dvec3 lo,dvec3 hi,out dvec3 centerOut){
+ dvec3 extent=max(dvec3(0.0),hi-lo),moment;double fraction=unitBoxCutFraction(plane.xyz*extent,plane.w-dot(plane.xyz,lo),moment);
  centerOut=fraction>0.0?lo+extent*(moment/fraction):.5*(lo+hi);return fraction*extent.x*extent.y*extent.z;
 }
-double below(int c,double y,dvec4 plane,double pore){double volume=0.0;uint mask=words[h(H_MASKS)+c];
+double liquidVolumeBelowHeight(int cellIndex,double y,dvec4 plane,double poreFraction){double volume=0.0;uint mask=words[headerWord(H_MASKS)+cellIndex];
  for(int bit=0;bit<8;bit++)if((mask&(1u<<bit))==0u){dvec3 lo=.5*dvec3(bit&1,(bit>>1)&1,(bit>>2)&1),hi=lo+.5;hi.y=min(hi.y,y);dvec3 center;
-  if(hi.y>lo.y)volume+=clippedVolume(plane,lo,hi,center)*pore;
+  if(hi.y>lo.y)volume+=clippedBoxVolume(plane,lo,hi,center)*poreFraction;
  }return volume;
 }
-double layerHeight(int c,double volume,dvec4 plane,double pore){if(volume<=0.0)return 0.0;if(volume>=liquid(c,0))return 1.0;double lo=0.0,hi=1.0;
- for(int i=0;i<16;i++){double middle=.5*(lo+hi);if(below(c,middle,plane,pore)<volume)lo=middle;else hi=middle;}return .5*(lo+hi);
+double materialLayerHeight(int cellIndex,double volume,dvec4 plane,double poreFraction){if(volume<=0.0)return 0.0;if(volume>=cellGeometry(cellIndex,GEOMETRY_VOLUME))return 1.0;double lo=0.0,hi=1.0;
+ for(int i=0;i<LAYER_HEIGHT_ITERATIONS;i++){double middle=.5*(lo+hi);if(liquidVolumeBelowHeight(cellIndex,middle,plane,poreFraction)<volume)lo=middle;else hi=middle;}return .5*(lo+hi);
 }
-double gasPressure(int c){if(h(H_GAS_THERMAL)<0||h(H_GAS_CELL_NODES)<0)return 0.0;int node=int(words[h(H_GAS_CELL_NODES)+c])-1;return node<0?0.0:num(h(H_GAS_THERMAL)+2*(9*node+1))-101325.0;}
-void sampleCell(int c,ivec3 coord,out double value[13]){
- for(int i=0;i<13;i++)value[i]=0.0;double volume=liquid(c,0),available=liquid(c,2);if(available<=0.0)return;
- double size=cellSize(),h3=size*size*size,h2=size*size,density=volume>0.0?liquid(c,1)/(volume*h3):0.0;uint mask=words[h(H_MASKS)+c];
- double open=double(bitCount((~mask)&255u))*.125,pore=open>0.0?available/open:0.0;if(pore<=0.0)return;
- dvec4 plane=dvec4(num(h(H_PLANES)+8*c),num(h(H_PLANES)+8*c+2),num(h(H_PLANES)+8*c+4),num(h(H_PLANES)+8*c+6));
- dvec3 boundLow=bodyLow()-dvec3(coord),boundHigh=bodyHigh()-dvec3(coord),flow=dvec3(0.0);
- for(int axis=0;axis<3;axis++){ivec3 next=coord;next[axis]++;flow[axis]=.5*(faceVelocity(faceAt(axis,coord))+faceVelocity(faceAt(axis,next)));}
- double waterVolume=0.0,waterMass=0.0,denserVolume=0.0;
- int first=int(words[h(H_CELL_OFFSETS)+c]),last=int(words[h(H_CELL_OFFSETS)+c+1]);
- for(int row=first;row<last;row++)if(int(words[h(H_MATERIALS)+row])==h(H_WATER_MATERIAL)){waterVolume+=num(h(H_VOLUMES)+2*row);waterMass+=double(integer(h(H_MASS_UNITS)+2*row))*1e-10;}
- double waterDensity=waterVolume>0.0?waterMass/(waterVolume*h3):0.0;
- if(waterVolume>0.0)for(int row=first;row<last;row++)if(int(words[h(H_MATERIALS)+row])!=h(H_WATER_MATERIAL)){
-  double v=num(h(H_VOLUMES)+2*row);double rho=v>0.0?double(integer(h(H_MASS_UNITS)+2*row))*1e-10/(v*h3):0.0;if(rho>waterDensity)denserVolume+=v;
+double gasGaugePressure(int cellIndex){if(headerWord(H_GAS_THERMAL)<0||headerWord(H_GAS_CELL_NODES)<0)return 0.0;int node=int(words[headerWord(H_GAS_CELL_NODES)+cellIndex])-1;return node<0?0.0:readDouble(headerWord(H_GAS_THERMAL)+2*(9*node+1))-ATMOSPHERIC_PRESSURE_PA;}
+void sampleCell(int cellIndex,ivec3 coord,out double sampleValues[SAMPLE_FIELD_COUNT]){
+ for(int i=0;i<SAMPLE_FIELD_COUNT;i++)sampleValues[i]=0.0;double volume=cellGeometry(cellIndex,GEOMETRY_VOLUME),availableVolume=cellGeometry(cellIndex,GEOMETRY_AVAILABLE_VOLUME);if(availableVolume<=0.0)return;
+ double size=cellSize(),cellVolumeM3=size*size*size,cellAreaM2=size*size,density=volume>0.0?cellGeometry(cellIndex,GEOMETRY_MASS)/(volume*cellVolumeM3):0.0;uint mask=words[headerWord(H_MASKS)+cellIndex];
+ double open=double(bitCount((~mask)&255u))*.125,poreFraction=open>0.0?availableVolume/open:0.0;if(poreFraction<=0.0)return;
+ dvec4 plane=dvec4(readDouble(headerWord(H_PLANES)+8*cellIndex),readDouble(headerWord(H_PLANES)+8*cellIndex+2),readDouble(headerWord(H_PLANES)+8*cellIndex+4),readDouble(headerWord(H_PLANES)+8*cellIndex+6));
+ dvec3 boundLow=bodyMinimum()-dvec3(coord),boundHigh=bodyMaximum()-dvec3(coord),flow=dvec3(0.0);
+ for(int axis=0;axis<3;axis++){ivec3 next=coord;next[axis]++;flow[axis]=.5*(faceVelocity(faceIndexAt(axis,coord))+faceVelocity(faceIndexAt(axis,next)));}
+ double waterVolume=0.0,waterMassKg=0.0,denserVolume=0.0;
+ int first=int(words[headerWord(H_CELL_OFFSETS)+cellIndex]),last=int(words[headerWord(H_CELL_OFFSETS)+cellIndex+1]);
+ for(int row=first;row<last;row++)if(int(words[headerWord(H_MATERIALS)+row])==headerWord(H_WATER_MATERIAL)){waterVolume+=readDouble(headerWord(H_VOLUMES)+2*row);waterMassKg+=double(readInteger(headerWord(H_MASS_UNITS)+2*row))*KILOGRAMS_PER_MASS_UNIT;}
+ double waterDensity=waterVolume>0.0?waterMassKg/(waterVolume*cellVolumeM3):0.0;
+ if(waterVolume>0.0)for(int row=first;row<last;row++)if(int(words[headerWord(H_MATERIALS)+row])!=headerWord(H_WATER_MATERIAL)){
+  double v=readDouble(headerWord(H_VOLUMES)+2*row);double materialDensity=v>0.0?double(readInteger(headerWord(H_MASS_UNITS)+2*row))*KILOGRAMS_PER_MASS_UNIT/(v*cellVolumeM3):0.0;if(materialDensity>waterDensity)denserVolume+=v;
  }
- double waterLo=waterVolume>0.0?layerHeight(c,denserVolume,plane,pore):0.0,waterHi=waterVolume>0.0?layerHeight(c,denserVolume+waterVolume,plane,pore):0.0;
- double liquidMoment=0.0;for(int bit=0;bit<8;bit++)if((mask&(1u<<bit))==0u){dvec3 lo=.5*dvec3(bit&1,(bit>>1)&1,(bit>>2)&1),hi=lo+.5,center;double v=clippedVolume(plane,lo,hi,center)*pore;liquidMoment+=v*center.y;}
- double liquidY=volume>0.0?liquidMoment/volume:.5,basePressure=available-volume<=4e-5&&h(H_GAS_PRESSURE)>=0?num(h(H_GAS_PRESSURE)+2*c):gasPressure(c);
- if(available-volume>4e-5){double surfaceY=abs(plane.y)>1e-12?clamp((plane.w-.5*plane.x-.5*plane.z)/plane.y,0.0,1.0):liquidY;basePressure+=density*gravity()*size*(surfaceY-liquidY);}
+ double waterMinimumHeight=waterVolume>0.0?materialLayerHeight(cellIndex,denserVolume,plane,poreFraction):0.0,waterMaximumHeight=waterVolume>0.0?materialLayerHeight(cellIndex,denserVolume+waterVolume,plane,poreFraction):0.0;
+ double liquidVerticalMoment=0.0;for(int bit=0;bit<8;bit++)if((mask&(1u<<bit))==0u){dvec3 lo=.5*dvec3(bit&1,(bit>>1)&1,(bit>>2)&1),hi=lo+.5,center;double v=clippedBoxVolume(plane,lo,hi,center)*poreFraction;liquidVerticalMoment+=v*center.y;}
+ double liquidCentroidHeight=volume>0.0?liquidVerticalMoment/volume:.5,basePressure=availableVolume-volume<=FULL_CELL_VOLUME_TOLERANCE&&headerWord(H_GAS_PRESSURE)>=0?readDouble(headerWord(H_GAS_PRESSURE)+2*cellIndex):gasGaugePressure(cellIndex);
+ if(availableVolume-volume>FULL_CELL_VOLUME_TOLERANCE){double surfaceY=abs(plane.y)>PLANE_AXIS_TOLERANCE?clamp((plane.w-.5*plane.x-.5*plane.z)/plane.y,0.0,1.0):liquidCentroidHeight;basePressure+=density*gravity()*size*(surfaceY-liquidCentroidHeight);}
  for(int bit=0;bit<8;bit++)if((mask&(1u<<bit))==0u){
   dvec3 micro=.5*dvec3(bit&1,(bit>>1)&1,(bit>>2)&1),lo=max(micro,boundLow),hi=min(micro+.5,boundHigh),center;
-  if(any(lessThanEqual(hi,lo)))continue;double overlap=clippedVolume(plane,lo,hi,center)*pore*h3;
-  value[0]+=overlap;for(int axis=0;axis<3;axis++){value[1+axis]+=(double(coord[axis])+center[axis])*size*overlap;value[4+axis]+=flow[axis]*overlap;}value[8]+=density*overlap;
-  if(waterVolume>0.0){dvec3 waterLow=lo,waterHigh=hi;waterLow.y=max(waterLow.y,waterLo);waterHigh.y=min(waterHigh.y,waterHi);if(waterHigh.y>waterLow.y)value[12]+=clippedVolume(plane,waterLow,waterHigh,center)*pore*h3;}
+  if(any(lessThanEqual(hi,lo)))continue;double overlap=clippedBoxVolume(plane,lo,hi,center)*poreFraction*cellVolumeM3;
+  sampleValues[SAMPLE_VOLUME]+=overlap;for(int axis=0;axis<3;axis++){sampleValues[SAMPLE_POSITION_X+axis]+=(double(coord[axis])+center[axis])*size*overlap;sampleValues[SAMPLE_VELOCITY_X+axis]+=flow[axis]*overlap;}sampleValues[SAMPLE_MASS]+=density*overlap;
+  if(waterVolume>0.0){dvec3 waterLow=lo,waterHigh=hi;waterLow.y=max(waterLow.y,waterMinimumHeight);waterHigh.y=min(waterHigh.y,waterMaximumHeight);if(waterHigh.y>waterLow.y)sampleValues[SAMPLE_WATER_VOLUME]+=clippedBoxVolume(plane,waterLow,waterHigh,center)*poreFraction*cellVolumeM3;}
   for(int axis=0;axis<3;axis++)for(int side=0;side<2;side++){
    double point=side==0?boundLow[axis]:boundHigh[axis];bool within=side==0?point>=micro[axis]&&point<micro[axis]+.5:point>micro[axis]&&point<=micro[axis]+.5;
    if(!within)continue;dvec3 faceLow=lo,faceHigh=hi;faceLow[axis]=point;faceHigh[axis]=point;dvec3 extent=faceHigh-faceLow,moment;
-   int a=(axis+1)%3,b=(axis+2)%3;double fraction=cut(plane.xyz*extent,plane.w-dot(plane.xyz,faceLow),moment),area=extent[a]*extent[b]*pore*h2;
+   int a=(axis+1)%3,b=(axis+2)%3;double fraction=unitBoxCutFraction(plane.xyz*extent,plane.w-dot(plane.xyz,faceLow),moment),area=extent[a]*extent[b]*poreFraction*cellAreaM2;
    double wetArea=area*fraction,faceY=fraction>0.0?faceLow.y+extent.y*moment.y/fraction:point;
-   double pressure=basePressure+density*gravity()*size*(liquidY-faceY);value[7]+=wetArea;
-   value[9+axis]-=(side==0?-1.0:1.0)*(pressure*wetArea+gasPressure(c)*(area-wetArea));
+   double pressure=basePressure+density*gravity()*size*(liquidCentroidHeight-faceY);sampleValues[SAMPLE_WET_AREA]+=wetArea;
+   sampleValues[SAMPLE_PRESSURE_FORCE_X+axis]-=(side==0?-1.0:1.0)*(pressure*wetArea+gasGaugePressure(cellIndex)*(area-wetArea));
   }
  }
 }
-void main(){int lane=int(gl_LocalInvocationID.x),group=int(gl_WorkGroupID.x),id=128*group+lane;
- if(p.stage==0){double values[13];for(int i=0;i<13;i++)values[i]=0.0;
-  if(id<p.count){ivec3 q=ivec3(h(H_FIRST_X),h(H_FIRST_Y),h(H_FIRST_Z))+ivec3(id%h(H_EXTENT_X),id/h(H_EXTENT_X)%h(H_EXTENT_Y),id/(h(H_EXTENT_X)*h(H_EXTENT_Y)));sampleCell(cell(q),q,values);}
-  for(int i=0;i<13;i++)sums[128*i+lane]=values[i];barrier();
-  for(int stride=64;stride>0;stride>>=1){if(lane<stride)for(int i=0;i<13;i++)sums[128*i+lane]+=sums[128*i+lane+stride];barrier();}
-  if(lane==0)for(int i=0;i<13;i++)store(96+26*group+2*i,sums[128*i]);return;
+void main(){int lane=int(gl_LocalInvocationID.x),workgroupIndex=int(gl_WorkGroupID.x),sampleIndex=WORKGROUP_SIZE*workgroupIndex+lane;
+ if(params.stage==STAGE_SAMPLE_CELLS){double cellSampleValues[SAMPLE_FIELD_COUNT];for(int i=0;i<SAMPLE_FIELD_COUNT;i++)cellSampleValues[i]=0.0;
+  if(sampleIndex<params.count){ivec3 cellCoordinate=ivec3(headerWord(H_FIRST_X),headerWord(H_FIRST_Y),headerWord(H_FIRST_Z))+ivec3(sampleIndex%headerWord(H_EXTENT_X),sampleIndex/headerWord(H_EXTENT_X)%headerWord(H_EXTENT_Y),sampleIndex/(headerWord(H_EXTENT_X)*headerWord(H_EXTENT_Y)));sampleCell(cellIndexAt(cellCoordinate),cellCoordinate,cellSampleValues);}
+  for(int i=0;i<SAMPLE_FIELD_COUNT;i++)sharedSamples[WORKGROUP_SIZE*i+lane]=cellSampleValues[i];barrier();
+  for(int stride=WORKGROUP_SIZE/2;stride>0;stride>>=1){if(lane<stride)for(int i=0;i<SAMPLE_FIELD_COUNT;i++)sharedSamples[WORKGROUP_SIZE*i+lane]+=sharedSamples[WORKGROUP_SIZE*i+lane+stride];barrier();}
+  if(lane==0)for(int i=0;i<SAMPLE_FIELD_COUNT;i++)writeDouble(PARTIAL_WORD_OFFSET+PARTIAL_WORD_STRIDE*workgroupIndex+2*i,sharedSamples[WORKGROUP_SIZE*i]);return;
  }
- if(lane<13){double total=0.0,error=0.0;for(int g=0;g<p.groups;g++){double term=outvalue(96+26*g+2*lane)-error,next=total+term;error=(next-total)-term;total=next;}sums[lane]=total;}barrier();
- if(lane==0){double volume=sums[0];for(int i=0;i<13;i++){double value=volume>0.0?sums[i]:0.0;if(i>=1&&i<=6&&volume>0.0)value/=volume;store(64+2*i,value);}}
+ if(lane<SAMPLE_FIELD_COUNT){double total=0.0,error=0.0;for(int g=0;g<params.groups;g++){double term=readObservationDouble(PARTIAL_WORD_OFFSET+PARTIAL_WORD_STRIDE*g+2*lane)-error,next=total+term;error=(next-total)-term;total=next;}sharedSamples[lane]=total;}barrier();
+ if(lane==0){double volume=sharedSamples[SAMPLE_VOLUME];for(int i=0;i<SAMPLE_FIELD_COUNT;i++){double sampleValue=volume>0.0?sharedSamples[i]:0.0;if(i>=SAMPLE_POSITION_X&&i<SAMPLE_WET_AREA&&volume>0.0)sampleValue/=volume;writeDouble(OUTPUT_WORD_OFFSET+2*i,sampleValue);}}
 }

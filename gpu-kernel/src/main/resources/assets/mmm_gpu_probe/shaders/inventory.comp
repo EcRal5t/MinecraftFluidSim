@@ -1,41 +1,47 @@
 #version 450
 #extension GL_ARB_gpu_shader_int64 : require
+const int STAGE_VALIDATE_TRANSFERS = 0;
+const uint ERROR_INVALID_TRANSFER = 1u;
+const uint ERROR_INVALID_STOCK = 2u;
+// Adjacency stores edgeIndex * 2 + direction; zero denotes an outgoing edge.
+const int EDGE_ENCODING_STRIDE = 2;
+const int INCOMING_EDGE_BIT = 1;
 layout(local_size_x=256) in;
-layout(std430,binding=0) readonly buffer StockA { int64_t a[]; };
-layout(std430,binding=1) writeonly buffer StockB { int64_t b[]; };
+layout(std430,binding=0) readonly buffer StockA { int64_t sourceStock[]; };
+layout(std430,binding=1) writeonly buffer StockB { int64_t targetStock[]; };
 struct Edge { int source; int destination; int64_t amount; };
 layout(std430,binding=2) readonly buffer Edges { Edge edges[]; };
 layout(std430,binding=3) readonly buffer Offsets { int offsets[]; };
 layout(std430,binding=4) readonly buffer Adjacency { int adjacency[]; };
 layout(std430,binding=5) buffer Errors { uint errors; };
-layout(push_constant) uniform Params { int rows; int edgeCount; int reserved; int stage; } p;
-const int64_t LIMIT = int64_t(0x7fffffffffffffffUL);
+layout(push_constant) uniform Params { int rows; int edgeCount; int reserved; int stage; } params;
+const int64_t MAXIMUM_STOCK = int64_t(0x7fffffffffffffffUL);
 void main() {
-    uint id=gl_GlobalInvocationID.x;
-    if (p.stage==0) {
-        if (id>=uint(p.edgeCount)) return;
-        Edge e=edges[id];
-        if(e.source<0 || e.source>=p.rows || e.destination<0 || e.destination>=p.rows || e.amount<0)
-            atomicOr(errors,1u);
+    uint invocationIndex=gl_GlobalInvocationID.x;
+    if (params.stage==STAGE_VALIDATE_TRANSFERS) {
+        if (invocationIndex>=uint(params.edgeCount)) return;
+        Edge transfer=edges[invocationIndex];
+        if(transfer.source<0 || transfer.source>=params.rows || transfer.destination<0 || transfer.destination>=params.rows || transfer.amount<0)
+            atomicOr(errors,ERROR_INVALID_TRANSFER);
         return;
     }
-    if(id>=uint(p.rows)) return;
-    int row=int(id);
-    int64_t value=a[row];
-    bool valid=value>=0;
+    if(invocationIndex>=uint(params.rows)) return;
+    int row=int(invocationIndex);
+    int64_t remainingStock=sourceStock[row];
+    bool valid=remainingStock>=0;
     // Every outgoing amount comes from the old donor inventory.
-    for(int i=offsets[row];i<offsets[row+1];i++) {
-        int code=adjacency[i]; Edge e=edges[code/2];
-        if((code&1)==0 && e.source!=e.destination && e.amount>=0) {
-            if(value<e.amount) valid=false; else value-=e.amount;
+    for(int adjacencyIndex=offsets[row];adjacencyIndex<offsets[row+1];adjacencyIndex++) {
+        int encodedEdge=adjacency[adjacencyIndex]; Edge transfer=edges[encodedEdge/EDGE_ENCODING_STRIDE];
+        if((encodedEdge&INCOMING_EDGE_BIT)==0 && transfer.source!=transfer.destination && transfer.amount>=0) {
+            if(remainingStock<transfer.amount) valid=false; else remainingStock-=transfer.amount;
         }
     }
-    for(int i=offsets[row];i<offsets[row+1];i++) {
-        int code=adjacency[i]; Edge e=edges[code/2];
-        if((code&1)!=0 && e.source!=e.destination && e.amount>=0) {
-            if(value>LIMIT-e.amount) valid=false; else value+=e.amount;
+    for(int adjacencyIndex=offsets[row];adjacencyIndex<offsets[row+1];adjacencyIndex++) {
+        int encodedEdge=adjacency[adjacencyIndex]; Edge transfer=edges[encodedEdge/EDGE_ENCODING_STRIDE];
+        if((encodedEdge&INCOMING_EDGE_BIT)!=0 && transfer.source!=transfer.destination && transfer.amount>=0) {
+            if(remainingStock>MAXIMUM_STOCK-transfer.amount) valid=false; else remainingStock+=transfer.amount;
         }
     }
-    if(!valid) atomicOr(errors,2u);
-    b[row]=value;
+    if(!valid) atomicOr(errors,ERROR_INVALID_STOCK);
+    targetStock[row]=remainingStock;
 }

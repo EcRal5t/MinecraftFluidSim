@@ -21,69 +21,83 @@ p;
 bool activeCell(int cell);
 bool activeFace(int face);
 // HOST_LAYOUT
+const uint ERROR_INVALID_STATE = 33554432u;
+const double MASS_UNIT_KG = 1e-10;
+const int STAGE_INITIALIZE = 0;
+const int STAGE_IMPORT_ROWS = 1;
+const int STAGE_REACT_CELL = 2;
+const int STAGE_MEASURE = 3;
+const int STAGE_CAPACITY_STATUS = 4;
+const int STAGE_SCATTER = 5;
+const int STAGE_PUBLISH = 7;
+const int STAGE_PHASE_FACE = 8;
+const int STAGE_POST_MECHANICAL = 9;
+const int STAGE_SNAPSHOT_SOLID = 10;
+const int STAGE_PHASE_STATUS = 11;
+
 const int64_t LIMIT = int64_t(0x7fffffffffffffffUL);
-int h(int i) {
+int headerWord(int i) {
     return int(words[p.header + i]);
 }
-int f(int i) {
-    return h(WORK_FIELDS + i);
+int workField(int i) {
+    return headerWord(WORK_FIELDS + i);
 }
-int l(int i) {
-    return h(LIQUID_FIELDS + i);
+int liquidField(int i) {
+    return headerWord(LIQUID_FIELDS + i);
 }
-int g(int i) {
-    return h(GRANULAR_FIELDS + i);
+int granularField(int i) {
+    return headerWord(GRANULAR_FIELDS + i);
 }
 int progress(int i) {
-    return h(PROGRESS_FIELDS + i);
+    return headerWord(PROGRESS_FIELDS + i);
 }
-int d(int i) {
-    return int(words[h(H_DEFINITIONS) + i]);
+int definitionWord(int i) {
+    return int(words[headerWord(H_DEFINITIONS) + i]);
 }
-int th(int kind, int i) {
-    return int(words[h(kind == 0 ? H_LIQUID_CALORIC : H_SOLID_CALORIC) + i]);
+int caloricHeaderWord(int kind, int i) {
+    return int(words[headerWord(kind == 0 ? H_LIQUID_CALORIC : H_SOLID_CALORIC) + i]);
 }
-int64_t integer(int a) {
+int64_t readInt64(int a) {
     return int64_t(uint64_t(words[a]) | (uint64_t(words[a + 1]) << 32));
 }
-void integerAt(int a, int64_t q) {
+void writeInt64(int a, int64_t q) {
     words[a] = uint(q);
     words[a + 1] = uint(uint64_t(q) >> 32);
 }
-double number(int a) {
+double readDouble(int a) {
     return packDouble2x32(uvec2(words[a], words[a + 1]));
 }
-void numberAt(int a, double q) {
+void writeDouble(int a, double q) {
     uvec2 b = unpackDouble2x32(q);
     words[a] = b.x;
     words[a + 1] = b.y;
 }
-void invalid() {
-    atomicOr(errors, 33554432u);
+void reportInvalid() {
+    atomicOr(errors, ERROR_INVALID_STATE);
 }
 int64_t add(int64_t a, int64_t b) {
     if ((b > 0l && a > LIMIT - b) || (b < 0l && a < -LIMIT - b)) {
-        invalid();
+        reportInvalid();
         return 0l;
     }
     return a + b;
 }
 int64_t mass(int kind, int row) {
-    return integer((kind == 0 ? f(FIELD_LIQUID_MASS) : g(GRANULAR_MASS_UNITS)) + 2 * row);
+    return readInt64((kind == 0 ? workField(FIELD_LIQUID_MASS) : granularField(GRANULAR_MASS_UNITS)) + 2 * row);
 }
 int material(int kind, int row) {
-    return int(words[(kind == 0 ? l(LIQUID_MATERIALS) : g(GRANULAR_MATERIAL)) + row]);
+    return int(words[(kind == 0 ? liquidField(LIQUID_MATERIALS) : granularField(GRANULAR_MATERIAL)) + row]);
 }
 int64_t species(int kind, int row, int s) {
-    return integer(f(kind == 0 ? FIELD_LIQUID_SPECIES : FIELD_SOLID_SPECIES) + 2 * (row * h(H_SPECIES_COUNT) + s));
+    return readInt64(workField(kind == 0 ? FIELD_LIQUID_SPECIES : FIELD_SOLID_SPECIES) + 2 * (row * headerWord(H_SPECIES_COUNT) + s));
 }
 void speciesAt(int kind, int row, int s, int64_t q) {
-    integerAt(f(kind == 0 ? FIELD_LIQUID_SPECIES : FIELD_SOLID_SPECIES) + 2 * (row * h(H_SPECIES_COUNT) + s), q);
+    writeInt64(workField(kind == 0 ? FIELD_LIQUID_SPECIES : FIELD_SOLID_SPECIES) + 2 * (row * headerWord(H_SPECIES_COUNT) + s), q);
 }
 bool same(int a, int b) {
-    return words[l(LIQUID_SUPPORT_MASKS) + a] == words[l(LIQUID_SUPPORT_MASKS) + b] &&
-           words[f(FIELD_PHASES) + int(words[l(LIQUID_MATERIALS) + a])] ==
-               words[f(FIELD_PHASES) + int(words[l(LIQUID_MATERIALS) + b])];
+    return words[liquidField(LIQUID_SUPPORT_MASKS) + a] == words[liquidField(LIQUID_SUPPORT_MASKS) + b] &&
+           words[workField(FIELD_PHASES) + int(words[liquidField(LIQUID_MATERIALS) + a])] ==
+               words[workField(FIELD_PHASES) + int(words[liquidField(LIQUID_MATERIALS) + b])];
 }
 u64vec2 product(uint64_t a, uint64_t b) {
     uint64_t mask = uint64_t(0xffffffffu), a0 = a & mask, a1 = a >> 32, b0 = b & mask, b1 = b >> 32;
@@ -107,54 +121,54 @@ int64_t portion(int64_t a, int64_t b, int64_t total) {
     return int64_t(q);
 }
 double rational(int at) {
-    int ns = d(at + 1);
+    int ns = definitionWord(at + 1);
     if (ns == 0)
         return 0.0LF;
-    int dp = at + 2 + ns, ds = d(dp + 1);
+    int dp = at + 2 + ns, ds = definitionWord(dp + 1);
     double a = 0.0, b = 0.0;
     for (int i = max(0, ns - 2); i < ns; i++)
-        a += ldexp(double(uint(words[h(H_DEFINITIONS) + at + 2 + i])), 32 * (i - max(0, ns - 2)));
+        a += ldexp(double(uint(words[headerWord(H_DEFINITIONS) + at + 2 + i])), 32 * (i - max(0, ns - 2)));
     for (int i = max(0, ds - 2); i < ds; i++)
-        b += ldexp(double(uint(words[h(H_DEFINITIONS) + dp + 2 + i])), 32 * (i - max(0, ds - 2)));
+        b += ldexp(double(uint(words[headerWord(H_DEFINITIONS) + dp + 2 + i])), 32 * (i - max(0, ds - 2)));
     return ldexp(a / b, 32 * (max(0, ns - 2) - max(0, ds - 2)));
 }
 double specificCold(int kind, int row) {
     int m = material(kind, row);
-    return number(th(kind, CAL_MATERIAL_REFERENCE) + 2 * m) + number(th(kind, CAL_COLD_SENSIBLE) + 2 * m);
+    return readDouble(caloricHeaderWord(kind, CAL_MATERIAL_REFERENCE) + 2 * m) + readDouble(caloricHeaderWord(kind, CAL_COLD_SENSIBLE) + 2 * m);
 }
 double reference(int kind, int row, int s) {
-    return number(th(kind, CAL_SPECIES_REFERENCE) + 2 * (material(kind, row) * th(kind, CAL_SPECIES_STRIDE) + s));
+    return readDouble(caloricHeaderWord(kind, CAL_SPECIES_REFERENCE) + 2 * (material(kind, row) * caloricHeaderWord(kind, CAL_SPECIES_STRIDE) + s));
 }
 double cold(int kind, int row) {
     if (mass(kind, row) == 0l)
         return 0.0LF;
-    double result = double(mass(kind, row)) * 1e-10 * specificCold(kind, row);
-    for (int s = 0; s < h(H_SPECIES_COUNT); s++) {
-        int64_t q = species(kind, row, s);
-        if (q != 0l)
-            result += double(q) * reference(kind, row, s);
+    double result = double(mass(kind, row)) * MASS_UNIT_KG * specificCold(kind, row);
+    for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++) {
+        int64_t speciesAmount = species(kind, row, s);
+        if (speciesAmount != 0l)
+            result += double(speciesAmount) * reference(kind, row, s);
     }
     return result;
 }
 double capacity(int kind, int row, double t) {
-    int m = material(kind, row), at = int(words[th(kind, CAL_SEGMENT_OFFSETS) + m]),
-        last = int(words[th(kind, CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
-    while (at < last && t >= number(th(kind, CAL_SEGMENT_UPPER) + 2 * at))
+    int m = material(kind, row), at = int(words[caloricHeaderWord(kind, CAL_SEGMENT_OFFSETS) + m]),
+        last = int(words[caloricHeaderWord(kind, CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
+    while (at < last && t >= readDouble(caloricHeaderWord(kind, CAL_SEGMENT_UPPER) + 2 * at))
         at++;
-    return double(mass(kind, row)) * 1e-10 * number(th(kind, CAL_SEGMENT_CAPACITY) + 2 * at);
+    return double(mass(kind, row)) * MASS_UNIT_KG * readDouble(caloricHeaderWord(kind, CAL_SEGMENT_CAPACITY) + 2 * at);
 }
 double sensible(int kind, int row, double t) {
-    int m = material(kind, row), at = int(words[th(kind, CAL_SEGMENT_OFFSETS) + m]),
-        last = int(words[th(kind, CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
-    double lower = number(h(kind == 0 ? H_LIQUID_CALORIC : H_SOLID_CALORIC) + CAL_MINIMUM_TEMPERATURE), result = 0.0;
+    int m = material(kind, row), at = int(words[caloricHeaderWord(kind, CAL_SEGMENT_OFFSETS) + m]),
+        last = int(words[caloricHeaderWord(kind, CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
+    double lower = readDouble(headerWord(kind == 0 ? H_LIQUID_CALORIC : H_SOLID_CALORIC) + CAL_MINIMUM_TEMPERATURE), result = 0.0;
     for (; at <= last && lower < t; at++) {
-        double upper = at == last ? t : min(t, number(th(kind, CAL_SEGMENT_UPPER) + 2 * at));
+        double upper = at == last ? t : min(t, readDouble(caloricHeaderWord(kind, CAL_SEGMENT_UPPER) + 2 * at));
         if (upper > lower) {
-            result += (upper - lower) * number(th(kind, CAL_SEGMENT_CAPACITY) + 2 * at);
+            result += (upper - lower) * readDouble(caloricHeaderWord(kind, CAL_SEGMENT_CAPACITY) + 2 * at);
             lower = upper;
         }
     }
-    return double(mass(kind, row)) * 1e-10 * result;
+    return double(mass(kind, row)) * MASS_UNIT_KG * result;
 }
 // DYADIC_LIBRARY
 uint dyadicWord(int bank, int at) {
@@ -166,18 +180,18 @@ void dyadicWrite(int at, uint x) {
 void volumeTerms(int row, int64_t delta, out DyadicTerm items[7]) {
     for (int i = 0; i < 7; i++)
         items[i] = DyadicTerm(1, 0, 0, 0, 0);
-    int begin = int(words[l(LIQUID_VOLUME_OFFSETS) + row]), count = int(words[l(LIQUID_VOLUME_COUNTS) + row]);
-    items[0] = DyadicTerm(1, l(LIQUID_VOLUME_LIMBS) + begin, count, int(words[l(LIQUID_VOLUME_EXPONENTS) + row]),
+    int begin = int(words[liquidField(LIQUID_VOLUME_OFFSETS) + row]), count = int(words[liquidField(LIQUID_VOLUME_COUNTS) + row]);
+    items[0] = DyadicTerm(1, liquidField(LIQUID_VOLUME_LIMBS) + begin, count, int(words[liquidField(LIQUID_VOLUME_EXPONENTS) + row]),
                           count > 0 ? 1 : 0);
     if (delta != 0l) {
-        u64vec2 q = product(uint64_t(abs(delta)), uint64_t(integer(p.header + H_VOLUME_SIGNIFICAND)));
-        int at = f(FIELD_DELTA_LIMBS) + 4 * row;
+        u64vec2 q = product(uint64_t(abs(delta)), uint64_t(readInt64(p.header + H_VOLUME_SIGNIFICAND)));
+        int at = workField(FIELD_DELTA_LIMBS) + 4 * row;
         words[at] = uint(q.x);
         words[at + 1] = uint(q.x >> 32);
         words[at + 2] = uint(q.y);
         words[at + 3] = uint(q.y >> 32);
         int count = q.y != 0UL ? (q.y >> 32 != 0UL ? 4 : 3) : (q.x >> 32 != 0UL ? 2 : 1);
-        items[1] = DyadicTerm(1, at, count, h(H_VOLUME_EXPONENT), delta > 0l ? 1 : -1);
+        items[1] = DyadicTerm(1, at, count, headerWord(H_VOLUME_EXPONENT), delta > 0l ? 1 : -1);
     }
 }
 bool volumeFits(int row, int64_t delta) {
@@ -187,103 +201,103 @@ bool volumeFits(int row, int64_t delta) {
     return m.status == DYADIC_POSITIVE || m.status == DYADIC_ZERO;
 }
 void initialize(int id) {
-    if (id < h(H_CELL_COUNT)) {
-        words[f(FIELD_HEAD) + id] = uint(-1);
-        words[f(FIELD_PROPOSAL_HEAD) + id] = uint(-1);
-        numberAt(f(FIELD_POTENTIAL_WORK) + 2 * id, 0.0LF);
+    if (id < headerWord(H_CELL_COUNT)) {
+        words[workField(FIELD_HEAD) + id] = uint(-1);
+        words[workField(FIELD_PROPOSAL_HEAD) + id] = uint(-1);
+        writeDouble(workField(FIELD_POTENTIAL_WORK) + 2 * id, 0.0LF);
     }
-    if (id < h(H_LIQUID_SLOTS)) {
-        integerAt(f(FIELD_LIQUID_DELTA) + 2 * id, 0l);
-        numberAt(f(FIELD_LIQUID_OLD_ENERGY) + 2 * id, 0.0LF);
-        numberAt(f(FIELD_LIQUID_ENERGY) + 2 * id, 0.0LF);
+    if (id < headerWord(H_LIQUID_SLOTS)) {
+        writeInt64(workField(FIELD_LIQUID_DELTA) + 2 * id, 0l);
+        writeDouble(workField(FIELD_LIQUID_OLD_ENERGY) + 2 * id, 0.0LF);
+        writeDouble(workField(FIELD_LIQUID_ENERGY) + 2 * id, 0.0LF);
     }
-    if (id < h(H_SOLID_CAPACITY)) {
-        words[f(FIELD_NEXT) + id] = uint(-1);
-        words[f(FIELD_CELL) + id] = uint(-1);
-        numberAt(f(FIELD_SOLID_OLD_ENERGY) + 2 * id, 0.0LF);
-        numberAt(f(FIELD_SOLID_NEW_ENERGY) + 2 * id, 0.0LF);
-        numberAt(f(FIELD_SOLID_OLD_K) + 2 * id, 0.0LF);
-        numberAt(f(FIELD_SOLID_NEW_K) + 2 * id, 0.0LF);
-        words[f(FIELD_SOLID_COUNTS) + id] = 0u;
-        integerAt(f(FIELD_SOLID_SOURCE_MASS) + 2 * id, 0l);
-        integerAt(f(FIELD_SOLID_WITHDRAWN_MASS) + 2 * id, 0l);
+    if (id < headerWord(H_SOLID_CAPACITY)) {
+        words[workField(FIELD_NEXT) + id] = uint(-1);
+        words[workField(FIELD_CELL) + id] = uint(-1);
+        writeDouble(workField(FIELD_SOLID_OLD_ENERGY) + 2 * id, 0.0LF);
+        writeDouble(workField(FIELD_SOLID_NEW_ENERGY) + 2 * id, 0.0LF);
+        writeDouble(workField(FIELD_SOLID_OLD_K) + 2 * id, 0.0LF);
+        writeDouble(workField(FIELD_SOLID_NEW_K) + 2 * id, 0.0LF);
+        words[workField(FIELD_SOLID_COUNTS) + id] = 0u;
+        writeInt64(workField(FIELD_SOLID_SOURCE_MASS) + 2 * id, 0l);
+        writeInt64(workField(FIELD_SOLID_WITHDRAWN_MASS) + 2 * id, 0l);
     }
     if (id == 0)
         for (int i = 0; i < 12; i++)
-            words[f(FIELD_CONTROL) + i] = 0u;
+            words[workField(FIELD_CONTROL) + i] = 0u;
 }
 void importRows(int row) {
-    if (row < h(H_SOLID_CAPACITY)) {
-        for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+    if (row < headerWord(H_SOLID_CAPACITY)) {
+        for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
             speciesAt(1, row, s, 0l);
-        for (int at = int(words[g(GRANULAR_SPECIES_OFFSETS) + row]);
-             at < int(words[g(GRANULAR_SPECIES_OFFSETS) + row + 1]); at++)
-            speciesAt(1, row, int(words[g(GRANULAR_SPECIES_HANDLES) + at]),
-                      integer(g(GRANULAR_SPECIES_AMOUNTS) + 2 * at));
-        bool liveParticle = row < int(words[g(GRANULAR_COUNTS)]),
+        for (int at = int(words[granularField(GRANULAR_SPECIES_OFFSETS) + row]);
+             at < int(words[granularField(GRANULAR_SPECIES_OFFSETS) + row + 1]); at++)
+            speciesAt(1, row, int(words[granularField(GRANULAR_SPECIES_HANDLES) + at]),
+                      readInt64(granularField(GRANULAR_SPECIES_AMOUNTS) + 2 * at));
+        bool liveParticle = row < int(words[granularField(GRANULAR_COUNTS)]),
              deposit =
-                 row >= h(H_PARTICLE_CAPACITY) && row - h(H_PARTICLE_CAPACITY) < int(words[g(GRANULAR_COUNTS) + 1]),
-             audit = row >= h(H_PARTICLE_CAPACITY) + h(H_DEPOSIT_CAPACITY);
+                 row >= headerWord(H_PARTICLE_CAPACITY) && row - headerWord(H_PARTICLE_CAPACITY) < int(words[granularField(GRANULAR_COUNTS) + 1]),
+             audit = row >= headerWord(H_PARTICLE_CAPACITY) + headerWord(H_DEPOSIT_CAPACITY);
         if (liveParticle || deposit || audit) {
-            numberAt(f(FIELD_SOLID_OLD_ENERGY) + 2 * row, number(g(GRANULAR_INTERNAL_ENERGY) + 2 * row));
-            numberAt(f(FIELD_SOLID_NEW_ENERGY) + 2 * row, number(g(GRANULAR_INTERNAL_ENERGY) + 2 * row));
-            integerAt(f(FIELD_SOLID_SOURCE_MASS) + 2 * row, mass(1, row));
+            writeDouble(workField(FIELD_SOLID_OLD_ENERGY) + 2 * row, readDouble(granularField(GRANULAR_INTERNAL_ENERGY) + 2 * row));
+            writeDouble(workField(FIELD_SOLID_NEW_ENERGY) + 2 * row, readDouble(granularField(GRANULAR_INTERNAL_ENERGY) + 2 * row));
+            writeInt64(workField(FIELD_SOLID_SOURCE_MASS) + 2 * row, mass(1, row));
         }
         if (!liveParticle && !deposit)
             return;
         int cell;
         if (liveParticle) {
-            double size = number(p.header + H_CELL_SIZE);
-            ivec3 q = ivec3(floor(number(g(GRANULAR_POSITION) + 6 * row) / size),
-                            floor(number(g(GRANULAR_POSITION) + 6 * row + 2) / size),
-                            floor(number(g(GRANULAR_POSITION) + 6 * row + 4) / size));
-            q = clamp(q, ivec3(0), ivec3(h(H_SIZE_X) - 1, h(H_SIZE_Y) - 1, h(H_SIZE_Z) - 1));
-            cell = (q.z * h(H_SIZE_Y) + q.y) * h(H_SIZE_X) + q.x;
+            double size = readDouble(p.header + H_CELL_SIZE);
+            ivec3 q = ivec3(floor(readDouble(granularField(GRANULAR_POSITION) + 6 * row) / size),
+                            floor(readDouble(granularField(GRANULAR_POSITION) + 6 * row + 2) / size),
+                            floor(readDouble(granularField(GRANULAR_POSITION) + 6 * row + 4) / size));
+            q = clamp(q, ivec3(0), ivec3(headerWord(H_SIZE_X) - 1, headerWord(H_SIZE_Y) - 1, headerWord(H_SIZE_Z) - 1));
+            cell = (q.z * headerWord(H_SIZE_Y) + q.y) * headerWord(H_SIZE_X) + q.x;
         } else
-            cell = int(words[g(GRANULAR_DEPOSIT_CELL) + row - h(H_PARTICLE_CAPACITY)]);
-        words[f(FIELD_CELL) + row] = uint(cell);
-        words[f(FIELD_NEXT) + row] = atomicExchange(words[f(FIELD_HEAD) + cell], uint(row));
+            cell = int(words[granularField(GRANULAR_DEPOSIT_CELL) + row - headerWord(H_PARTICLE_CAPACITY)]);
+        words[workField(FIELD_CELL) + row] = uint(cell);
+        words[workField(FIELD_NEXT) + row] = atomicExchange(words[workField(FIELD_HEAD) + cell], uint(row));
         if (liveParticle) {
             double v2 = 0.0;
             for (int axis = 0; axis < 3; axis++) {
-                double v = number(g(GRANULAR_VELOCITY) + 6 * row + 2 * axis);
+                double v = readDouble(granularField(GRANULAR_VELOCITY) + 6 * row + 2 * axis);
                 v2 += v * v;
             }
-            numberAt(f(FIELD_SOLID_OLD_K) + 2 * row, .5LF * double(mass(1, row)) * 1e-10 * v2);
+            writeDouble(workField(FIELD_SOLID_OLD_K) + 2 * row, .5LF * double(mass(1, row)) * MASS_UNIT_KG * v2);
         }
     }
 }
 int64_t solidExtent(int row, int rule) {
     int64_t result = LIMIT;
-    int start = d(rule + 12), count = d(rule + 13);
+    int start = definitionWord(rule + 12), count = definitionWord(rule + 13);
     for (int at = 0; at < count; at++)
-        result = min(result, species(1, row, d(start + 2 * at)) / int64_t(d(start + 2 * at + 1)));
+        result = min(result, species(1, row, definitionWord(start + 2 * at)) / int64_t(definitionWord(start + 2 * at + 1)));
     return result == LIMIT ? 0l : result;
 }
 int selectedSolid(int c, int material, bool depositOnly) {
     int result = -1;
-    for (int row = int(words[f(FIELD_HEAD) + c]); row >= 0; row = int(words[f(FIELD_NEXT) + row]))
-        if ((!depositOnly || row >= h(H_PARTICLE_CAPACITY)) && int(words[g(GRANULAR_MATERIAL) + row]) == material &&
-            integer(g(GRANULAR_SOLID_VOLUME_SVQ) + 2 * row) > 0l && (result < 0 || row < result))
+    for (int row = int(words[workField(FIELD_HEAD) + c]); row >= 0; row = int(words[workField(FIELD_NEXT) + row]))
+        if ((!depositOnly || row >= headerWord(H_PARTICLE_CAPACITY)) && int(words[granularField(GRANULAR_MATERIAL) + row]) == material &&
+            readInt64(granularField(GRANULAR_SOLID_VOLUME_SVQ) + 2 * row) > 0l && (result < 0 || row < result))
             result = row;
     return result;
 }
 double transferCold(int first, int end, int solid, int rule, int64_t batches, bool precip, int64_t totalMass) {
-    int64_t extent = batches * integer(h(H_DEFINITIONS) + rule + 3),
-            moved = batches * integer(h(H_DEFINITIONS) + d(rule + 14)), prefix = 0l;
-    int sm = d(rule + 1);
-    double result = double(moved) * 1e-10 *
-                    (number(th(1, CAL_MATERIAL_REFERENCE) + 2 * sm) + number(th(1, CAL_COLD_SENSIBLE) + 2 * sm));
+    int64_t extent = batches * readInt64(headerWord(H_DEFINITIONS) + rule + 3),
+            moved = batches * readInt64(headerWord(H_DEFINITIONS) + definitionWord(rule + 14)), prefix = 0l;
+    int sm = definitionWord(rule + 1);
+    double result = double(moved) * MASS_UNIT_KG *
+                    (readDouble(caloricHeaderWord(1, CAL_MATERIAL_REFERENCE) + 2 * sm) + readDouble(caloricHeaderWord(1, CAL_COLD_SENSIBLE) + 2 * sm));
     for (int row = first; row < end; row++)
         if (same(first, row)) {
             int64_t next = add(prefix, mass(0, row)),
                     part = portion(moved, next, totalMass) - portion(moved, prefix, totalMass);
-            result -= double(part) * 1e-10 * specificCold(0, row);
+            result -= double(part) * MASS_UNIT_KG * specificCold(0, row);
             prefix = next;
         }
-    int side = d(rule + 10), terms = d(rule + 11);
+    int side = definitionWord(rule + 10), terms = definitionWord(rule + 11);
     for (int t = 0; t < terms; t++) {
-        int s = d(side + 2 * t), coefficient = d(side + 2 * t + 1);
+        int s = definitionWord(side + 2 * t), coefficient = definitionWord(side + 2 * t + 1);
         int64_t q = extent * int64_t(coefficient), weight = 0l;
         if (precip) {
             for (int row = first; row < end; row++)
@@ -301,136 +315,136 @@ double transferCold(int first, int end, int solid, int rule, int64_t batches, bo
                 prefix = next;
             }
     }
-    side = d(rule + 12);
-    terms = d(rule + 13);
+    side = definitionWord(rule + 12);
+    terms = definitionWord(rule + 13);
     for (int t = 0; t < terms; t++)
-        result += double(extent * int64_t(d(side + 2 * t + 1))) *
-                  number(th(1, CAL_SPECIES_REFERENCE) + 2 * (sm * th(1, CAL_SPECIES_STRIDE) + d(side + 2 * t)));
+        result += double(extent * int64_t(definitionWord(side + 2 * t + 1))) *
+                  readDouble(caloricHeaderWord(1, CAL_SPECIES_REFERENCE) + 2 * (sm * caloricHeaderWord(1, CAL_SPECIES_STRIDE) + definitionWord(side + 2 * t)));
     return precip ? result : -result;
 }
 int newDeposit(int c, int material) {
-    int ordinal = int(atomicAdd(words[g(GRANULAR_COUNTS) + 1], 1u));
-    atomicMax(words[f(FIELD_CONTROL) + 1], uint(ordinal + 1));
-    if (ordinal >= h(H_DEPOSIT_CAPACITY)) {
-        atomicMax(words[f(FIELD_CONTROL)], 1u);
+    int ordinal = int(atomicAdd(words[granularField(GRANULAR_COUNTS) + 1], 1u));
+    atomicMax(words[workField(FIELD_CONTROL) + 1], uint(ordinal + 1));
+    if (ordinal >= headerWord(H_DEPOSIT_CAPACITY)) {
+        atomicMax(words[workField(FIELD_CONTROL)], 1u);
         return -1;
     }
-    int row = h(H_PARTICLE_CAPACITY) + ordinal;
-    words[g(GRANULAR_MATERIAL) + row] = uint(material);
-    integerAt(g(GRANULAR_SOLID_VOLUME_SVQ) + 2 * row, 0l);
-    integerAt(g(GRANULAR_MASS_UNITS) + 2 * row, 0l);
-    integerAt(g(GRANULAR_MASS_RESIDUAL_UNITS) + 2 * row, 0l);
-    numberAt(g(GRANULAR_INTERNAL_ENERGY) + 2 * row, 0.0LF);
-    words[g(GRANULAR_MIXTURE_PRESENT) + row] = 1u;
-    words[g(GRANULAR_DEPOSIT_CELL) + ordinal] = uint(c);
-    words[g(GRANULAR_DEPOSIT_POROSITY) + ordinal] = words[f(FIELD_POROSITIES) + material];
-    words[f(FIELD_CELL) + row] = uint(c);
-    words[f(FIELD_NEXT) + row] = words[f(FIELD_HEAD) + c];
-    words[f(FIELD_HEAD) + c] = uint(row);
+    int row = headerWord(H_PARTICLE_CAPACITY) + ordinal;
+    words[granularField(GRANULAR_MATERIAL) + row] = uint(material);
+    writeInt64(granularField(GRANULAR_SOLID_VOLUME_SVQ) + 2 * row, 0l);
+    writeInt64(granularField(GRANULAR_MASS_UNITS) + 2 * row, 0l);
+    writeInt64(granularField(GRANULAR_MASS_RESIDUAL_UNITS) + 2 * row, 0l);
+    writeDouble(granularField(GRANULAR_INTERNAL_ENERGY) + 2 * row, 0.0LF);
+    words[granularField(GRANULAR_MIXTURE_PRESENT) + row] = 1u;
+    words[granularField(GRANULAR_DEPOSIT_CELL) + ordinal] = uint(c);
+    words[granularField(GRANULAR_DEPOSIT_POROSITY) + ordinal] = words[workField(FIELD_POROSITIES) + material];
+    words[workField(FIELD_CELL) + row] = uint(c);
+    words[workField(FIELD_NEXT) + row] = words[workField(FIELD_HEAD) + c];
+    words[workField(FIELD_HEAD) + c] = uint(row);
     return row;
 }
 double centerY(int c) {
-    return (double(c / h(H_SIZE_X) % h(H_SIZE_Y)) + .5LF) * number(p.header + H_CELL_SIZE);
+    return (double(c / headerWord(H_SIZE_X) % headerWord(H_SIZE_Y)) + .5LF) * readDouble(p.header + H_CELL_SIZE);
 }
 dvec2 bed(int c) {
     double m = 0.0, bulk = 0.0;
-    for (int row = int(words[f(FIELD_HEAD) + c]); row >= 0; row = int(words[f(FIELD_NEXT) + row]))
-        if (row >= h(H_PARTICLE_CAPACITY)) {
-            m += double(mass(1, row)) * 1e-10;
+    for (int row = int(words[workField(FIELD_HEAD) + c]); row >= 0; row = int(words[workField(FIELD_NEXT) + row]))
+        if (row >= headerWord(H_PARTICLE_CAPACITY)) {
+            m += double(mass(1, row)) * MASS_UNIT_KG;
             bulk +=
-                double(integer(g(GRANULAR_SOLID_VOLUME_SVQ) + 2 * row)) /
-                (1.0LF - double(uintBitsToFloat(words[g(GRANULAR_DEPOSIT_POROSITY) + row - h(H_PARTICLE_CAPACITY)])));
+                double(readInt64(granularField(GRANULAR_SOLID_VOLUME_SVQ) + 2 * row)) /
+                (1.0LF - double(uintBitsToFloat(words[granularField(GRANULAR_DEPOSIT_POROSITY) + row - headerWord(H_PARTICLE_CAPACITY)])));
         }
     return dvec2(m, bulk);
 }
 double bedY(int c, double bulk) {
-    return (double(c / h(H_SIZE_X) % h(H_SIZE_Y)) +
-            .5LF * bulk * ldexp(double(integer(p.header + H_VOLUME_SIGNIFICAND)), h(H_VOLUME_EXPONENT))) *
-           number(p.header + H_CELL_SIZE);
+    return (double(c / headerWord(H_SIZE_X) % headerWord(H_SIZE_Y)) +
+            .5LF * bulk * ldexp(double(readInt64(p.header + H_VOLUME_SIGNIFICAND)), headerWord(H_VOLUME_EXPONENT))) *
+           readDouble(p.header + H_CELL_SIZE);
 }
 double potential(int c, double liquidMass) {
     dvec2 b = bed(c);
     double value = liquidMass * centerY(c) + b.x * bedY(c, b.y);
-    for (int row = int(words[f(FIELD_HEAD) + c]); row >= 0; row = int(words[f(FIELD_NEXT) + row]))
-        if (row < h(H_PARTICLE_CAPACITY))
-            value += double(mass(1, row)) * 1e-10 * number(g(GRANULAR_POSITION) + 6 * row + 2);
-    return value * number(p.header + H_GRAVITY);
+    for (int row = int(words[workField(FIELD_HEAD) + c]); row >= 0; row = int(words[workField(FIELD_NEXT) + row]))
+        if (row < headerWord(H_PARTICLE_CAPACITY))
+            value += double(mass(1, row)) * MASS_UNIT_KG * readDouble(granularField(GRANULAR_POSITION) + 6 * row + 2);
+    return value * readDouble(p.header + H_GRAVITY);
 }
 double potentialWork(int c, int solid, int rule, int64_t batches, bool precip) {
-    double moved = double(batches * integer(h(H_DEFINITIONS) + d(rule + 14))) * 1e-10,
-           gravity = number(p.header + H_GRAVITY);
-    if (!precip && solid < h(H_PARTICLE_CAPACITY))
-        return moved * gravity * (number(g(GRANULAR_POSITION) + 6 * solid + 2) - centerY(c));
+    double moved = double(batches * readInt64(headerWord(H_DEFINITIONS) + definitionWord(rule + 14))) * MASS_UNIT_KG,
+           gravity = readDouble(p.header + H_GRAVITY);
+    if (!precip && solid < headerWord(H_PARTICLE_CAPACITY))
+        return moved * gravity * (readDouble(granularField(GRANULAR_POSITION) + 6 * solid + 2) - centerY(c));
     dvec2 before = bed(c);
     double porosity =
-        solid < 0 ? double(uintBitsToFloat(words[f(FIELD_POROSITIES) + d(rule + 1)]))
-                  : double(uintBitsToFloat(words[g(GRANULAR_DEPOSIT_POROSITY) + solid - h(H_PARTICLE_CAPACITY)]));
-    double change = double(batches * integer(h(H_DEFINITIONS) + rule + 5)) / (1.0LF - porosity);
+        solid < 0 ? double(uintBitsToFloat(words[workField(FIELD_POROSITIES) + definitionWord(rule + 1)]))
+                  : double(uintBitsToFloat(words[granularField(GRANULAR_DEPOSIT_POROSITY) + solid - headerWord(H_PARTICLE_CAPACITY)]));
+    double change = double(batches * readInt64(headerWord(H_DEFINITIONS) + rule + 5)) / (1.0LF - porosity);
     dvec2 after = before + dvec2(precip ? moved : -moved, precip ? change : -change);
     return gravity *
            (before.x * bedY(c, before.y) - after.x * bedY(c, after.y) + (precip ? moved : -moved) * centerY(c));
 }
 void postLTE(int c, double energy) {
-    int begin = c * h(H_MATERIAL_COUNT), end = begin + h(H_MATERIAL_COUNT);
+    int begin = c * headerWord(H_MATERIAL_COUNT), end = begin + headerWord(H_MATERIAL_COUNT);
     double baselineCold = 0.0;
     for (int row = begin; row < end; row++)
         baselineCold += cold(0, row);
-    for (int row = int(words[f(FIELD_HEAD) + c]); row >= 0; row = int(words[f(FIELD_NEXT) + row]))
+    for (int row = int(words[workField(FIELD_HEAD) + c]); row >= 0; row = int(words[workField(FIELD_NEXT) + row]))
         baselineCold += cold(1, row);
-    double t = number(h(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE), remaining = energy - baselineCold;
+    double temperature = readDouble(headerWord(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE), remaining = energy - baselineCold;
     if (remaining < 0.0LF) {
-        invalid();
+        reportInvalid();
         return;
     }
     for (;;) {
         double cv = 0.0, next = 1.7976931348623157e308;
         for (int kind = 0; kind < 2; kind++) {
-            int row = kind == 0 ? begin : int(words[f(FIELD_HEAD) + c]);
-            for (; kind == 0 ? row < end : row >= 0; row = kind == 0 ? row + 1 : int(words[f(FIELD_NEXT) + row]))
+            int row = kind == 0 ? begin : int(words[workField(FIELD_HEAD) + c]);
+            for (; kind == 0 ? row < end : row >= 0; row = kind == 0 ? row + 1 : int(words[workField(FIELD_NEXT) + row]))
                 if (mass(kind, row) > 0l) {
-                    cv += capacity(kind, row, t);
-                    int m = material(kind, row), at = int(words[th(kind, CAL_SEGMENT_OFFSETS) + m]),
-                        last = int(words[th(kind, CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
-                    while (at < last && t >= number(th(kind, CAL_SEGMENT_UPPER) + 2 * at))
+                    cv += capacity(kind, row, temperature);
+                    int m = material(kind, row), at = int(words[caloricHeaderWord(kind, CAL_SEGMENT_OFFSETS) + m]),
+                        last = int(words[caloricHeaderWord(kind, CAL_SEGMENT_OFFSETS) + m + 1]) - 1;
+                    while (at < last && temperature >= readDouble(caloricHeaderWord(kind, CAL_SEGMENT_UPPER) + 2 * at))
                         at++;
                     if (at < last)
-                        next = min(next, number(th(kind, CAL_SEGMENT_UPPER) + 2 * at));
+                        next = min(next, readDouble(caloricHeaderWord(kind, CAL_SEGMENT_UPPER) + 2 * at));
                 }
         }
         if (cv <= 0.0)
             break;
-        double cost = (next - t) * cv;
+        double cost = (next - temperature) * cv;
         if (next == 1.7976931348623157e308 || remaining < cost) {
-            t += remaining / cv;
+            temperature += remaining / cv;
             break;
         }
         remaining -= cost;
-        t = next;
+        temperature = next;
     }
     for (int row = begin; row < end; row++)
-        numberAt(f(FIELD_LIQUID_ENERGY) + 2 * row, mass(0, row) > 0l ? cold(0, row) + sensible(0, row, t) : 0.0LF);
-    for (int row = int(words[f(FIELD_HEAD) + c]); row >= 0; row = int(words[f(FIELD_NEXT) + row]))
-        numberAt(g(GRANULAR_INTERNAL_ENERGY) + 2 * row, mass(1, row) > 0l ? cold(1, row) + sensible(1, row, t) : 0.0LF);
+        writeDouble(workField(FIELD_LIQUID_ENERGY) + 2 * row, mass(0, row) > 0l ? cold(0, row) + sensible(0, row, temperature) : 0.0LF);
+    for (int row = int(words[workField(FIELD_HEAD) + c]); row >= 0; row = int(words[workField(FIELD_NEXT) + row]))
+        writeDouble(granularField(GRANULAR_INTERNAL_ENERGY) + 2 * row, mass(1, row) > 0l ? cold(1, row) + sensible(1, row, temperature) : 0.0LF);
 }
 void cell(int c) {
-    int begin = c * h(H_MATERIAL_COUNT), end = begin + h(H_MATERIAL_COUNT);
+    int begin = c * headerWord(H_MATERIAL_COUNT), end = begin + headerWord(H_MATERIAL_COUNT);
     int64_t oldMass = 0l;
     for (int row = begin; row < end; row++)
-        oldMass = add(oldMass, integer(l(LIQUID_MASS_UNITS) + 2 * row));
-    integerAt(f(FIELD_CELL_OLD_MASS) + 2 * c, oldMass);
-    integerAt(f(FIELD_CELL_NEW_MASS) + 2 * c, oldMass);
-    double pe = potential(c, double(oldMass) * 1e-10);
-    numberAt(f(FIELD_CELL_OLD_PE) + 2 * c, pe);
-    numberAt(f(FIELD_CELL_NEW_PE) + 2 * c, pe);
+        oldMass = add(oldMass, readInt64(liquidField(LIQUID_MASS_UNITS) + 2 * row));
+    writeInt64(workField(FIELD_CELL_OLD_MASS) + 2 * c, oldMass);
+    writeInt64(workField(FIELD_CELL_NEW_MASS) + 2 * c, oldMass);
+    double pe = potential(c, double(oldMass) * MASS_UNIT_KG);
+    writeDouble(workField(FIELD_CELL_OLD_PE) + 2 * c, pe);
+    writeDouble(workField(FIELD_CELL_NEW_PE) + 2 * c, pe);
     if (!activeCell(c) || begin == end)
         return;
     bool changed = false;
     double totalEnergy = 0.0;
     int64_t withdrawnMass = 0l;
     for (int row = begin; row < end; row++)
-        totalEnergy += number(f(FIELD_LIQUID_ENERGY) + 2 * row);
-    for (int row = int(words[f(FIELD_HEAD) + c]); row >= 0; row = int(words[f(FIELD_NEXT) + row]))
-        totalEnergy += number(g(GRANULAR_INTERNAL_ENERGY) + 2 * row);
+        totalEnergy += readDouble(workField(FIELD_LIQUID_ENERGY) + 2 * row);
+    for (int row = int(words[workField(FIELD_HEAD) + c]); row >= 0; row = int(words[workField(FIELD_NEXT) + row]))
+        totalEnergy += readDouble(granularField(GRANULAR_INTERNAL_ENERGY) + 2 * row);
     for (int first = begin; first < end; first++) {
         if (mass(0, first) <= 0l)
             continue;
@@ -442,60 +456,60 @@ void cell(int c) {
             }
         if (!representative)
             continue;
-        int phase = int(words[f(FIELD_PHASES) + int(words[l(LIQUID_MATERIALS) + first])]);
+        int phase = int(words[workField(FIELD_PHASES) + int(words[liquidField(LIQUID_MATERIALS) + first])]);
         if (phase < 0)
             continue;
-        for (int directory = 0; directory < d(4); directory++) {
-            int entry = d(5) + 2 * directory;
-            if (d(entry) != 1)
+        for (int directory = 0; directory < definitionWord(4); directory++) {
+            int entry = definitionWord(5) + 2 * directory;
+            if (definitionWord(entry) != 1)
                 continue;
-            int rule = d(entry + 1);
-            if (d(rule) != phase)
+            int rule = definitionWord(entry + 1);
+            if (definitionWord(rule) != phase)
                 continue;
-            atomicAdd(words[f(FIELD_CONTROL) + 4], 1u);
+            atomicAdd(words[workField(FIELD_CONTROL) + 4], 1u);
             int64_t totalMass = 0l, aqueous = LIMIT;
             double volume = 0.0;
             for (int row = first; row < end; row++)
                 if (same(first, row)) {
                     totalMass = add(totalMass, mass(0, row));
-                    volume += number(l(LIQUID_NUMERIC_VOLUMES) + 2 * row) +
-                              double(integer(f(FIELD_LIQUID_DELTA) + 2 * row)) *
-                                  ldexp(double(integer(p.header + H_VOLUME_SIGNIFICAND)), h(H_VOLUME_EXPONENT));
+                    volume += readDouble(liquidField(LIQUID_NUMERIC_VOLUMES) + 2 * row) +
+                              double(readInt64(workField(FIELD_LIQUID_DELTA) + 2 * row)) *
+                                  ldexp(double(readInt64(p.header + H_VOLUME_SIGNIFICAND)), headerWord(H_VOLUME_EXPONENT));
                 }
             if (totalMass <= 0l || volume <= 0.0)
                 continue;
-            int terms = d(rule + 10), count = d(rule + 11);
+            int terms = definitionWord(rule + 10), count = definitionWord(rule + 11);
             for (int t = 0; t < count; t++) {
-                int s = d(terms + 2 * t);
+                int s = definitionWord(terms + 2 * t);
                 int64_t amount = 0l;
                 for (int row = first; row < end; row++)
                     if (same(first, row))
                         amount = add(amount, species(0, row, s));
-                aqueous = min(aqueous, amount / int64_t(d(terms + 2 * t + 1)));
+                aqueous = min(aqueous, amount / int64_t(definitionWord(terms + 2 * t + 1)));
             }
-            double size = number(p.header + H_CELL_SIZE),
-                   capacity = rational(d(rule + 9)) * volume * size * size * size * 1e6LF;
+            double size = readDouble(p.header + H_CELL_SIZE),
+                   capacity = rational(definitionWord(rule + 9)) * volume * size * size * size * 1e6LF;
             int64_t saturation = capacity >= double(LIMIT) ? LIMIT : max(0l, int64_t(floor(capacity))),
                     desired = aqueous - saturation;
             bool precip = desired > 0l;
-            if (desired == 0l || (precip && h(H_PRECIPITATION_ENABLED) == 0) || (!precip && d(rule + 2) == 0))
+            if (desired == 0l || (precip && headerWord(H_PRECIPITATION_ENABLED) == 0) || (!precip && definitionWord(rule + 2) == 0))
                 continue;
-            int sm = d(rule + 1), solid = selectedSolid(c, sm, precip);
+            int sm = definitionWord(rule + 1), solid = selectedSolid(c, sm, precip);
             if (!precip && solid < 0)
                 continue;
-            int64_t batchExtent = integer(h(H_DEFINITIONS) + rule + 3),
-                    batchVolume = integer(h(H_DEFINITIONS) + rule + 5),
-                    batchMass = integer(h(H_DEFINITIONS) + d(rule + 14));
-            int64_t batches = min(abs(desired) / batchExtent, integer(h(H_DEFINITIONS) + rule + 7) / batchVolume);
+            int64_t batchExtent = readInt64(headerWord(H_DEFINITIONS) + rule + 3),
+                    batchVolume = readInt64(headerWord(H_DEFINITIONS) + rule + 5),
+                    batchMass = readInt64(headerWord(H_DEFINITIONS) + definitionWord(rule + 14));
+            int64_t batches = min(abs(desired) / batchExtent, readInt64(headerWord(H_DEFINITIONS) + rule + 7) / batchVolume);
             if (precip) {
                 batches = min(batches, min((totalMass - 1l) / batchMass, (oldMass - withdrawnMass) / batchMass));
-                double svq = volume / ldexp(double(integer(p.header + H_VOLUME_SIGNIFICAND)), h(H_VOLUME_EXPONENT));
+                double svq = volume / ldexp(double(readInt64(p.header + H_VOLUME_SIGNIFICAND)), headerWord(H_VOLUME_EXPONENT));
                 batches = min(batches, max(0l, int64_t(ceil(svq)) - 1l) / batchVolume);
             } else
                 batches = min(batches, min(min(solidExtent(solid, rule) / batchExtent,
-                                               integer(g(GRANULAR_SOLID_VOLUME_SVQ) + 2 * solid) / batchVolume),
-                                           (integer(f(FIELD_SOLID_SOURCE_MASS) + 2 * solid) -
-                                            integer(f(FIELD_SOLID_WITHDRAWN_MASS) + 2 * solid)) /
+                                               readInt64(granularField(GRANULAR_SOLID_VOLUME_SVQ) + 2 * solid) / batchVolume),
+                                           (readInt64(workField(FIELD_SOLID_SOURCE_MASS) + 2 * solid) -
+                                            readInt64(workField(FIELD_SOLID_WITHDRAWN_MASS) + 2 * solid)) /
                                                batchMass));
             if (batches <= 0l) {
                 words[progress(PROGRESS_DIRTY_CELLS) + c] = 1u;
@@ -504,7 +518,7 @@ void cell(int c) {
             double baselineCold = 0.0;
             for (int row = begin; row < end; row++)
                 baselineCold += cold(0, row);
-            for (int row = int(words[f(FIELD_HEAD) + c]); row >= 0; row = int(words[f(FIELD_NEXT) + row]))
+            for (int row = int(words[workField(FIELD_HEAD) + c]); row >= 0; row = int(words[workField(FIELD_NEXT) + row]))
                 baselineCold += cold(1, row);
             if (baselineCold + transferCold(first, end, solid, rule, batches, precip, totalMass) >
                 totalEnergy + potentialWork(c, solid, rule, batches, precip)) {
@@ -530,7 +544,7 @@ void cell(int c) {
                 if (same(first, row)) {
                     int64_t next = prefix + mass(0, row),
                             part = portion(movedVolume, next, totalMass) - portion(movedVolume, prefix, totalMass);
-                    if (!volumeFits(row, integer(f(FIELD_LIQUID_DELTA) + 2 * row) + (precip ? -part : part))) {
+                    if (!volumeFits(row, readInt64(workField(FIELD_LIQUID_DELTA) + 2 * row) + (precip ? -part : part))) {
                         batches = 0l;
                         break;
                     }
@@ -546,13 +560,13 @@ void cell(int c) {
                 if (solid < 0)
                     return;
             }
-            int proposal = int(atomicAdd(words[f(FIELD_CONTROL) + 7], 1u));
-            if (proposal >= h(H_PROPOSAL_CAPACITY)) {
-                atomicMax(words[f(FIELD_CONTROL)], 1u);
+            int proposal = int(atomicAdd(words[workField(FIELD_CONTROL) + 7], 1u));
+            if (proposal >= headerWord(H_PROPOSAL_CAPACITY)) {
+                atomicMax(words[workField(FIELD_CONTROL)], 1u);
                 return;
             }
-            words[f(FIELD_PROPOSAL_NEXT) + proposal] = words[f(FIELD_PROPOSAL_HEAD) + c];
-            words[f(FIELD_PROPOSAL_HEAD) + c] = uint(proposal);
+            words[workField(FIELD_PROPOSAL_NEXT) + proposal] = words[workField(FIELD_PROPOSAL_HEAD) + c];
+            words[workField(FIELD_PROPOSAL_HEAD) + c] = uint(proposal);
             double carried = 0.0;
             if (precip) {
                 prefix = 0l;
@@ -561,17 +575,17 @@ void cell(int c) {
                         int64_t next = prefix + mass(0, row),
                                 part = portion(movedMass, next, totalMass) - portion(movedMass, prefix, totalMass);
                         if (mass(0, row) > 0l)
-                            carried += number(f(FIELD_LIQUID_ENERGY) + 2 * row) * (double(part) / double(mass(0, row)));
+                            carried += readDouble(workField(FIELD_LIQUID_ENERGY) + 2 * row) * (double(part) / double(mass(0, row)));
                         prefix = next;
                     }
             } else if (mass(1, solid) > 0l)
                 carried =
-                    number(g(GRANULAR_INTERNAL_ENERGY) + 2 * solid) * (double(movedMass) / double(mass(1, solid)));
-            terms = d(rule + 10);
-            count = d(rule + 11);
+                    readDouble(granularField(GRANULAR_INTERNAL_ENERGY) + 2 * solid) * (double(movedMass) / double(mass(1, solid)));
+            terms = definitionWord(rule + 10);
+            count = definitionWord(rule + 11);
             for (int t = 0; t < count; t++) {
-                int s = d(terms + 2 * t);
-                int64_t amount = extent * int64_t(d(terms + 2 * t + 1)), weight = precip ? 0l : totalMass;
+                int s = definitionWord(terms + 2 * t);
+                int64_t amount = extent * int64_t(definitionWord(terms + 2 * t + 1)), weight = precip ? 0l : totalMass;
                 if (precip)
                     for (int row = first; row < end; row++)
                         if (same(first, row))
@@ -585,12 +599,12 @@ void cell(int c) {
                         prefix = next;
                     }
             }
-            terms = d(rule + 12);
-            count = d(rule + 13);
+            terms = definitionWord(rule + 12);
+            count = definitionWord(rule + 13);
             for (int t = 0; t < count; t++) {
-                int s = d(terms + 2 * t);
+                int s = definitionWord(terms + 2 * t);
                 speciesAt(1, solid, s,
-                          species(1, solid, s) + (precip ? 1l : -1l) * extent * int64_t(d(terms + 2 * t + 1)));
+                          species(1, solid, s) + (precip ? 1l : -1l) * extent * int64_t(definitionWord(terms + 2 * t + 1)));
             }
             prefix = 0l;
             for (int row = first; row < end; row++)
@@ -598,43 +612,43 @@ void cell(int c) {
                     int64_t old = mass(0, row), next = prefix + old,
                             part = portion(movedMass, next, totalMass) - portion(movedMass, prefix, totalMass),
                             v = portion(movedVolume, next, totalMass) - portion(movedVolume, prefix, totalMass);
-                    integerAt(f(FIELD_LIQUID_MASS) + 2 * row, old + (precip ? -part : part));
-                    integerAt(f(FIELD_LIQUID_DELTA) + 2 * row,
-                              integer(f(FIELD_LIQUID_DELTA) + 2 * row) + (precip ? -v : v));
+                    writeInt64(workField(FIELD_LIQUID_MASS) + 2 * row, old + (precip ? -part : part));
+                    writeInt64(workField(FIELD_LIQUID_DELTA) + 2 * row,
+                              readInt64(workField(FIELD_LIQUID_DELTA) + 2 * row) + (precip ? -v : v));
                     prefix = next;
                 }
-            integerAt(g(GRANULAR_MASS_UNITS) + 2 * solid, mass(1, solid) + (precip ? movedMass : -movedMass));
-            integerAt(g(GRANULAR_SOLID_VOLUME_SVQ) + 2 * solid,
-                      integer(g(GRANULAR_SOLID_VOLUME_SVQ) + 2 * solid) + (precip ? movedVolume : -movedVolume));
+            writeInt64(granularField(GRANULAR_MASS_UNITS) + 2 * solid, mass(1, solid) + (precip ? movedMass : -movedMass));
+            writeInt64(granularField(GRANULAR_SOLID_VOLUME_SVQ) + 2 * solid,
+                      readInt64(granularField(GRANULAR_SOLID_VOLUME_SVQ) + 2 * solid) + (precip ? movedVolume : -movedVolume));
             if (precip)
                 withdrawnMass += movedMass;
             else
-                integerAt(f(FIELD_SOLID_WITHDRAWN_MASS) + 2 * solid,
-                          integer(f(FIELD_SOLID_WITHDRAWN_MASS) + 2 * solid) + movedMass);
+                writeInt64(workField(FIELD_SOLID_WITHDRAWN_MASS) + 2 * solid,
+                          readInt64(workField(FIELD_SOLID_WITHDRAWN_MASS) + 2 * solid) + movedMass);
             words[progress(PROGRESS_CELL) + proposal] = uint(c);
             words[progress(PROGRESS_MATERIAL) + proposal] = uint(sm);
-            words[progress(PROGRESS_SUPPORT) + proposal] = words[l(LIQUID_SUPPORT_MASKS) + first];
+            words[progress(PROGRESS_SUPPORT) + proposal] = words[liquidField(LIQUID_SUPPORT_MASKS) + first];
             words[progress(PROGRESS_PHASE) + proposal] = uint(phase);
             words[progress(PROGRESS_RULE) + proposal] = uint(directory);
             words[progress(PROGRESS_SOURCE_KIND) + proposal] = uint(precip                           ? 0
-                                                                    : solid < h(H_PARTICLE_CAPACITY) ? 2
+                                                                    : solid < headerWord(H_PARTICLE_CAPACITY) ? 2
                                                                                                      : 3);
             words[progress(PROGRESS_SOURCE_ROW) + proposal] = uint(precip ? first : solid);
             words[progress(PROGRESS_TARGET_KIND) + proposal] = uint(precip ? 3 : 0);
             words[progress(PROGRESS_TARGET_ROW) + proposal] = uint(precip ? solid : first);
-            integerAt(progress(PROGRESS_REQUESTED_EXTENT) + 2 * proposal, precip ? extent : -extent);
-            integerAt(progress(PROGRESS_ACCEPTED_EXTENT) + 2 * proposal, precip ? extent : -extent);
-            integerAt(progress(PROGRESS_MASS_DELTA) + 2 * proposal, precip ? movedMass : -movedMass);
-            integerAt(progress(PROGRESS_SOURCE_VOLUME_DELTA_SVQ) + 2 * proposal, -movedVolume);
-            integerAt(progress(PROGRESS_TARGET_VOLUME_DELTA_SVQ) + 2 * proposal, movedVolume);
+            writeInt64(progress(PROGRESS_REQUESTED_EXTENT) + 2 * proposal, precip ? extent : -extent);
+            writeInt64(progress(PROGRESS_ACCEPTED_EXTENT) + 2 * proposal, precip ? extent : -extent);
+            writeInt64(progress(PROGRESS_MASS_DELTA) + 2 * proposal, precip ? movedMass : -movedMass);
+            writeInt64(progress(PROGRESS_SOURCE_VOLUME_DELTA_SVQ) + 2 * proposal, -movedVolume);
+            writeInt64(progress(PROGRESS_TARGET_VOLUME_DELTA_SVQ) + 2 * proposal, movedVolume);
             words[progress(PROGRESS_STATUS) + proposal] = 3u;
-            numberAt(progress(PROGRESS_CARRIED_ENERGY) + 2 * proposal, carried);
-            numberAt(progress(PROGRESS_MECHANICAL_ENERGY) + 2 * proposal, physicalWork);
-            numberAt(progress(PROGRESS_ENERGY_CHANGE) + 4 * proposal, 0.0LF);
-            numberAt(progress(PROGRESS_ENERGY_CHANGE) + 4 * proposal + 2, 0.0LF);
+            writeDouble(progress(PROGRESS_CARRIED_ENERGY) + 2 * proposal, carried);
+            writeDouble(progress(PROGRESS_MECHANICAL_ENERGY) + 2 * proposal, physicalWork);
+            writeDouble(progress(PROGRESS_ENERGY_CHANGE) + 4 * proposal, 0.0LF);
+            writeDouble(progress(PROGRESS_ENERGY_CHANGE) + 4 * proposal + 2, 0.0LF);
             totalEnergy += physicalWork;
-            numberAt(f(FIELD_POTENTIAL_WORK) + 2 * c, number(f(FIELD_POTENTIAL_WORK) + 2 * c) + physicalWork);
-            atomicAdd(words[f(FIELD_CONTROL) + 6], uint(batches));
+            writeDouble(workField(FIELD_POTENTIAL_WORK) + 2 * c, readDouble(workField(FIELD_POTENTIAL_WORK) + 2 * c) + physicalWork);
+            atomicAdd(words[workField(FIELD_CONTROL) + 6], uint(batches));
             changed = true;
             words[progress(PROGRESS_DIRTY_CELLS) + c] = 1u;
             words[progress(PROGRESS_PHASE_MOTION_CELLS) + c] = 1u;
@@ -644,57 +658,57 @@ void cell(int c) {
     int64_t finalMass = 0l;
     for (int row = begin; row < end; row++)
         finalMass = add(finalMass, mass(0, row));
-    integerAt(f(FIELD_CELL_NEW_MASS) + 2 * c, finalMass);
-    numberAt(f(FIELD_CELL_NEW_PE) + 2 * c, potential(c, double(finalMass) * 1e-10));
+    writeInt64(workField(FIELD_CELL_NEW_MASS) + 2 * c, finalMass);
+    writeDouble(workField(FIELD_CELL_NEW_PE) + 2 * c, potential(c, double(finalMass) * MASS_UNIT_KG));
     if (!changed)
         return;
-    atomicAdd(words[f(FIELD_CONTROL) + 5], 1u);
+    atomicAdd(words[workField(FIELD_CONTROL) + 5], 1u);
     postLTE(c, totalEnergy);
 }
 void measure(int row) {
-    if (row >= h(H_SOLID_CAPACITY))
+    if (row >= headerWord(H_SOLID_CAPACITY))
         return;
     int count = 0;
-    for (int s = 0; s < h(H_SPECIES_COUNT); s++)
+    for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++)
         if (species(1, row, s) > 0l)
             count++;
-    words[f(FIELD_SOLID_COUNTS) + row] = uint(count);
-    if (row < int(words[g(GRANULAR_COUNTS)]) ||
-        row >= h(H_PARTICLE_CAPACITY) &&
-            row - h(H_PARTICLE_CAPACITY) < min(h(H_DEPOSIT_CAPACITY), int(words[g(GRANULAR_COUNTS) + 1])) ||
-        row >= h(H_PARTICLE_CAPACITY) + h(H_DEPOSIT_CAPACITY))
-        numberAt(f(FIELD_SOLID_NEW_ENERGY) + 2 * row, number(g(GRANULAR_INTERNAL_ENERGY) + 2 * row));
+    words[workField(FIELD_SOLID_COUNTS) + row] = uint(count);
+    if (row < int(words[granularField(GRANULAR_COUNTS)]) ||
+        row >= headerWord(H_PARTICLE_CAPACITY) &&
+            row - headerWord(H_PARTICLE_CAPACITY) < min(headerWord(H_DEPOSIT_CAPACITY), int(words[granularField(GRANULAR_COUNTS) + 1])) ||
+        row >= headerWord(H_PARTICLE_CAPACITY) + headerWord(H_DEPOSIT_CAPACITY))
+        writeDouble(workField(FIELD_SOLID_NEW_ENERGY) + 2 * row, readDouble(granularField(GRANULAR_INTERNAL_ENERGY) + 2 * row));
 }
 void capacityStatus() {
-    int need = int(words[f(FIELD_SOLID_OFFSETS) + h(H_SOLID_CAPACITY)]);
-    words[f(FIELD_CONTROL) + 3] = uint(need);
-    if (need > h(H_SOLID_SPECIES_CAPACITY))
-        atomicMax(words[f(FIELD_CONTROL)], 1u);
-    if (words[f(FIELD_CONTROL)] == 0u)
-        words[f(FIELD_CONTROL)] = 2u;
+    int need = int(words[workField(FIELD_SOLID_OFFSETS) + headerWord(H_SOLID_CAPACITY)]);
+    words[workField(FIELD_CONTROL) + 3] = uint(need);
+    if (need > headerWord(H_SOLID_SPECIES_CAPACITY))
+        atomicMax(words[workField(FIELD_CONTROL)], 1u);
+    if (words[workField(FIELD_CONTROL)] == 0u)
+        words[workField(FIELD_CONTROL)] = 2u;
 }
 void scatter(int row) {
-    if (words[f(FIELD_CONTROL)] != 2u || row >= h(H_SOLID_CAPACITY))
+    if (words[workField(FIELD_CONTROL)] != 2u || row >= headerWord(H_SOLID_CAPACITY))
         return;
-    int at = int(words[f(FIELD_SOLID_OFFSETS) + row]);
-    for (int s = 0; s < h(H_SPECIES_COUNT); s++) {
-        int64_t q = species(1, row, s);
-        if (q > 0l) {
-            words[f(FIELD_SOLID_HANDLES) + at] = uint(s);
-            integerAt(f(FIELD_SOLID_AMOUNTS) + 2 * at, q);
+    int at = int(words[workField(FIELD_SOLID_OFFSETS) + row]);
+    for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++) {
+        int64_t speciesAmount = species(1, row, s);
+        if (speciesAmount > 0l) {
+            words[workField(FIELD_SOLID_HANDLES) + at] = uint(s);
+            writeInt64(workField(FIELD_SOLID_AMOUNTS) + 2 * at, speciesAmount);
             at++;
         }
     }
 }
 void phaseStatus() {
-    int base = int(words[h(H_PHASE_ROWS_HEADER) + 8 + 19]);
-    words[f(FIELD_CONTROL) + 2] = words[base + 2];
-    words[f(FIELD_CONTROL) + 8] = words[base + 3];
+    int base = int(words[headerWord(H_PHASE_ROWS_HEADER) + 8 + 19]);
+    words[workField(FIELD_CONTROL) + 2] = words[base + 2];
+    words[workField(FIELD_CONTROL) + 8] = words[base + 3];
     if (words[base] == 1u)
-        words[f(FIELD_CONTROL)] = 1u;
+        words[workField(FIELD_CONTROL)] = 1u;
 }
 ivec3 shape() {
-    return ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z));
+    return ivec3(headerWord(H_SIZE_X), headerWord(H_SIZE_Y), headerWord(H_SIZE_Z));
 }
 ivec3 axisUnit(int axis) {
     ivec3 q = ivec3(0);
@@ -723,34 +737,34 @@ int cellFace(int c, int axis, int side) {
     return faceBase(axis) + (q.z * s.y + q.y) * s.x + q.x;
 }
 double oldMass(int c) {
-    return c < 0 ? 0.0LF : double(integer(f(FIELD_CELL_OLD_MASS) + 2 * c)) * 1e-10;
+    return c < 0 ? 0.0LF : double(readInt64(workField(FIELD_CELL_OLD_MASS) + 2 * c)) * MASS_UNIT_KG;
 }
 double newMass(int c) {
-    return c < 0 ? 0.0LF : double(integer(f(FIELD_CELL_NEW_MASS) + 2 * c)) * 1e-10;
+    return c < 0 ? 0.0LF : double(readInt64(workField(FIELD_CELL_NEW_MASS) + 2 * c)) * MASS_UNIT_KG;
 }
 double faceVelocity(int id, int axis, int a, int b) {
-    double m = .5LF * (oldMass(a) + oldMass(b));
-    return m > 0.0 ? number(l(16 + axis) + 2 * (id - faceBase(axis))) / m : 0.0LF;
+    double faceMass = .5LF * (oldMass(a) + oldMass(b));
+    return faceMass > 0.0 ? readDouble(liquidField(16 + axis) + 2 * (id - faceBase(axis))) / faceMass : 0.0LF;
 }
 bool openFace(int id, int a, int b) {
-    return a >= 0 && b >= 0 && (h(H_FACE_GEOMETRY) < 0 || number(h(H_FACE_GEOMETRY) + 8 * id + 4) > 0.0);
+    return a >= 0 && b >= 0 && (headerWord(H_FACE_GEOMETRY) < 0 || readDouble(headerWord(H_FACE_GEOMETRY) + 8 * id + 4) > 0.0);
 }
 double incomingVelocity(int proposal, int axis) {
     int kind = int(words[progress(PROGRESS_SOURCE_KIND) + proposal]),
         row = int(words[progress(PROGRESS_SOURCE_ROW) + proposal]);
-    return kind == 2 ? number(g(GRANULAR_VELOCITY) + 6 * row + 2 * axis) : 0.0LF;
+    return kind == 2 ? readDouble(granularField(GRANULAR_VELOCITY) + 6 * row + 2 * axis) : 0.0LF;
 }
 void phaseFace(int id) {
-    if (words[f(FIELD_CONTROL)] != 2u)
+    if (words[workField(FIELD_CONTROL)] != 2u)
         return;
     int axis, a, b;
     faceCells(id, axis, a, b);
     if (!activeFace(id)) {
-        numberAt(f(FIELD_FACE_MOMENTUM) + 2 * id, number(l(16 + axis) + 2 * (id - faceBase(axis))));
-        numberAt(f(FIELD_FACE_OLD_K) + 2 * id, 0.0LF);
-        numberAt(f(FIELD_FACE_NEW_K) + 2 * id, 0.0LF);
-        numberAt(f(FIELD_FACE_HEAT) + 4 * id, 0.0LF);
-        numberAt(f(FIELD_FACE_HEAT) + 4 * id + 2, 0.0LF);
+        writeDouble(workField(FIELD_FACE_MOMENTUM) + 2 * id, readDouble(liquidField(16 + axis) + 2 * (id - faceBase(axis))));
+        writeDouble(workField(FIELD_FACE_OLD_K) + 2 * id, 0.0LF);
+        writeDouble(workField(FIELD_FACE_NEW_K) + 2 * id, 0.0LF);
+        writeDouble(workField(FIELD_FACE_HEAT) + 4 * id, 0.0LF);
+        writeDouble(workField(FIELD_FACE_HEAT) + 4 * id + 2, 0.0LF);
         return;
     }
     int cells[2] = int[2](a, b);
@@ -759,10 +773,10 @@ void phaseFace(int id) {
            before = faceVelocity(id, axis, a, b);
     for (int side = 0; side < 2; side++)
         if (cells[side] >= 0)
-            for (int q = int(words[f(FIELD_PROPOSAL_HEAD) + cells[side]]); q >= 0;
-                 q = int(words[f(FIELD_PROPOSAL_NEXT) + q])) {
-                int64_t change = integer(progress(PROGRESS_MASS_DELTA) + 2 * q);
-                double part = .5LF * double(abs(change)) * 1e-10;
+            for (int q = int(words[workField(FIELD_PROPOSAL_HEAD) + cells[side]]); q >= 0;
+                 q = int(words[workField(FIELD_PROPOSAL_NEXT) + q])) {
+                int64_t change = readInt64(progress(PROGRESS_MASS_DELTA) + 2 * q);
+                double part = .5LF * double(abs(change)) * MASS_UNIT_KG;
                 if (change > 0l)
                     removed[side] += part;
                 else
@@ -773,30 +787,30 @@ void phaseFace(int id) {
     double velocity = opened && afterMass > 0.0 ? momentum / afterMass : 0.0LF;
     if (!opened || afterMass == 0.0)
         momentum = 0.0LF;
-    numberAt(f(FIELD_FACE_MOMENTUM) + 2 * id, momentum);
-    numberAt(f(FIELD_FACE_OLD_K) + 2 * id, .5LF * beforeMass * before * before);
-    numberAt(f(FIELD_FACE_NEW_K) + 2 * id, .5LF * afterMass * velocity * velocity);
+    writeDouble(workField(FIELD_FACE_MOMENTUM) + 2 * id, momentum);
+    writeDouble(workField(FIELD_FACE_OLD_K) + 2 * id, .5LF * beforeMass * before * before);
+    writeDouble(workField(FIELD_FACE_NEW_K) + 2 * id, .5LF * afterMass * velocity * velocity);
     for (int side = 0; side < 2; side++) {
         int c = cells[side];
         double heat = 0.0;
         if (c >= 0) {
             double kept = max(0.0LF, .5LF * oldMass(c) - removed[side]), difference = before - velocity;
             heat = .5LF * kept * difference * difference + .5LF * removed[side] * before * before;
-            for (int q = int(words[f(FIELD_PROPOSAL_HEAD) + c]); q >= 0; q = int(words[f(FIELD_PROPOSAL_NEXT) + q])) {
-                int64_t change = integer(progress(PROGRESS_MASS_DELTA) + 2 * q);
+            for (int q = int(words[workField(FIELD_PROPOSAL_HEAD) + c]); q >= 0; q = int(words[workField(FIELD_PROPOSAL_NEXT) + q])) {
+                int64_t change = readInt64(progress(PROGRESS_MASS_DELTA) + 2 * q);
                 if (change < 0l) {
                     difference = incomingVelocity(q, axis) - velocity;
-                    heat += .25LF * double(-change) * 1e-10 * difference * difference;
+                    heat += .25LF * double(-change) * MASS_UNIT_KG * difference * difference;
                 }
             }
         }
-        numberAt(f(FIELD_FACE_HEAT) + 4 * id + 2 * side, heat);
+        writeDouble(workField(FIELD_FACE_HEAT) + 4 * id + 2 * side, heat);
     }
 }
 void postMechanical(int c) {
     if (!activeCell(c))
         return;
-    if (words[f(FIELD_CONTROL)] != 2u)
+    if (words[workField(FIELD_CONTROL)] != 2u)
         return;
     double heat = 0.0;
     dvec3 impulse = dvec3(0);
@@ -804,115 +818,115 @@ void postMechanical(int c) {
         for (int side = 0; side < 2; side++) {
             int id = cellFace(c, axis, side), component, a, b;
             faceCells(id, component, a, b);
-            heat += number(f(FIELD_FACE_HEAT) + 4 * id + 2 * (side == 0 ? 1 : 0));
+            heat += readDouble(workField(FIELD_FACE_HEAT) + 4 * id + 2 * (side == 0 ? 1 : 0));
             double before = faceVelocity(id, axis, a, b), removed = 0.0, incomingP = 0.0;
-            for (int q = int(words[f(FIELD_PROPOSAL_HEAD) + c]); q >= 0; q = int(words[f(FIELD_PROPOSAL_NEXT) + q])) {
-                int64_t change = integer(progress(PROGRESS_MASS_DELTA) + 2 * q);
+            for (int q = int(words[workField(FIELD_PROPOSAL_HEAD) + c]); q >= 0; q = int(words[workField(FIELD_PROPOSAL_NEXT) + q])) {
+                int64_t change = readInt64(progress(PROGRESS_MASS_DELTA) + 2 * q);
                 if (change > 0l)
-                    removed += .5LF * double(change) * 1e-10;
+                    removed += .5LF * double(change) * MASS_UNIT_KG;
                 else
-                    incomingP += .5LF * double(-change) * 1e-10 * incomingVelocity(q, axis);
+                    incomingP += .5LF * double(-change) * MASS_UNIT_KG * incomingVelocity(q, axis);
             }
             impulse[axis] += removed * before;
             if (!openFace(id, a, b))
                 impulse[axis] += max(0.0LF, .5LF * oldMass(c) - removed) * before + incomingP;
         }
     for (int axis = 0; axis < 3; axis++)
-        numberAt(f(FIELD_WALL_IMPULSE) + 6 * c + 2 * axis, impulse[axis]);
+        writeDouble(workField(FIELD_WALL_IMPULSE) + 6 * c + 2 * axis, impulse[axis]);
     if (heat > 0.0) {
         double energy = heat;
-        for (int r = int(words[l(LIQUID_CELL_OFFSETS) + c]); r < int(words[l(LIQUID_CELL_OFFSETS) + c + 1]); r++)
-            energy += number(f(FIELD_LIQUID_ENERGY) + 2 * r);
-        for (int r = int(words[f(FIELD_HEAD) + c]); r >= 0; r = int(words[f(FIELD_NEXT) + r]))
-            energy += number(g(GRANULAR_INTERNAL_ENERGY) + 2 * r);
+        for (int r = int(words[liquidField(LIQUID_CELL_OFFSETS) + c]); r < int(words[liquidField(LIQUID_CELL_OFFSETS) + c + 1]); r++)
+            energy += readDouble(workField(FIELD_LIQUID_ENERGY) + 2 * r);
+        for (int r = int(words[workField(FIELD_HEAD) + c]); r >= 0; r = int(words[workField(FIELD_NEXT) + r]))
+            energy += readDouble(granularField(GRANULAR_INTERNAL_ENERGY) + 2 * r);
         postLTE(c, energy);
     }
 }
 void snapshotSolid(int row) {
-    if (words[f(FIELD_CONTROL)] != 2u)
+    if (words[workField(FIELD_CONTROL)] != 2u)
         return;
-    bool liveParticle = row < int(words[g(GRANULAR_COUNTS)]),
-         deposit = row >= h(H_PARTICLE_CAPACITY) &&
-                   row - h(H_PARTICLE_CAPACITY) < min(h(H_DEPOSIT_CAPACITY), int(words[g(GRANULAR_COUNTS) + 1])),
-         audit = row >= h(H_PARTICLE_CAPACITY) + h(H_DEPOSIT_CAPACITY);
+    bool liveParticle = row < int(words[granularField(GRANULAR_COUNTS)]),
+         deposit = row >= headerWord(H_PARTICLE_CAPACITY) &&
+                   row - headerWord(H_PARTICLE_CAPACITY) < min(headerWord(H_DEPOSIT_CAPACITY), int(words[granularField(GRANULAR_COUNTS) + 1])),
+         audit = row >= headerWord(H_PARTICLE_CAPACITY) + headerWord(H_DEPOSIT_CAPACITY);
     if (liveParticle || deposit || audit)
-        numberAt(f(FIELD_SOLID_NEW_ENERGY) + 2 * row, number(g(GRANULAR_INTERNAL_ENERGY) + 2 * row));
+        writeDouble(workField(FIELD_SOLID_NEW_ENERGY) + 2 * row, readDouble(granularField(GRANULAR_INTERNAL_ENERGY) + 2 * row));
     if (liveParticle) {
         double v2 = 0.0;
         for (int axis = 0; axis < 3; axis++) {
-            double v = number(g(GRANULAR_VELOCITY) + 6 * row + 2 * axis);
+            double v = readDouble(granularField(GRANULAR_VELOCITY) + 6 * row + 2 * axis);
             v2 += v * v;
         }
-        numberAt(f(FIELD_SOLID_NEW_K) + 2 * row, .5LF * double(mass(1, row)) * 1e-10 * v2);
+        writeDouble(workField(FIELD_SOLID_NEW_K) + 2 * row, .5LF * double(mass(1, row)) * MASS_UNIT_KG * v2);
     }
 }
 void publish(int id) {
-    if (words[f(FIELD_CONTROL)] != 2u)
+    if (words[workField(FIELD_CONTROL)] != 2u)
         return;
-    if (id < h(H_FACE_COUNT)) {
+    if (id < headerWord(H_FACE_COUNT)) {
         int axis = id < faceBase(1) ? 0 : id < faceBase(2) ? 1 : 2;
-        numberAt(l(16 + axis) + 2 * (id - faceBase(axis)), number(f(FIELD_FACE_MOMENTUM) + 2 * id));
+        writeDouble(liquidField(16 + axis) + 2 * (id - faceBase(axis)), readDouble(workField(FIELD_FACE_MOMENTUM) + 2 * id));
     }
-    if (id <= h(H_SOLID_CAPACITY))
-        words[g(GRANULAR_SPECIES_OFFSETS) + id] = words[f(FIELD_SOLID_OFFSETS) + id];
-    if (id < int(words[f(FIELD_SOLID_OFFSETS) + h(H_SOLID_CAPACITY)])) {
-        words[g(GRANULAR_SPECIES_HANDLES) + id] = words[f(FIELD_SOLID_HANDLES) + id];
-        integerAt(g(GRANULAR_SPECIES_AMOUNTS) + 2 * id, integer(f(FIELD_SOLID_AMOUNTS) + 2 * id));
+    if (id <= headerWord(H_SOLID_CAPACITY))
+        words[granularField(GRANULAR_SPECIES_OFFSETS) + id] = words[workField(FIELD_SOLID_OFFSETS) + id];
+    if (id < int(words[workField(FIELD_SOLID_OFFSETS) + headerWord(H_SOLID_CAPACITY)])) {
+        words[granularField(GRANULAR_SPECIES_HANDLES) + id] = words[workField(FIELD_SOLID_HANDLES) + id];
+        writeInt64(granularField(GRANULAR_SPECIES_AMOUNTS) + 2 * id, readInt64(workField(FIELD_SOLID_AMOUNTS) + 2 * id));
     }
-    if (id < h(H_SOLID_CAPACITY)) {
+    if (id < headerWord(H_SOLID_CAPACITY)) {
         int64_t sm = 0l;
-        for (int s = 0; s < h(H_SPECIES_COUNT); s++) {
-            int64_t q = species(1, id, s);
-            if (q > 0l) {
-                int64_t unit = integer(h(H_DEFINITIONS) + d(1) + 5 * s + 1);
-                if (unit > 0l && q > LIMIT / unit) {
-                    invalid();
+        for (int s = 0; s < headerWord(H_SPECIES_COUNT); s++) {
+            int64_t speciesAmount = species(1, id, s);
+            if (speciesAmount > 0l) {
+                int64_t unit = readInt64(headerWord(H_DEFINITIONS) + definitionWord(1) + 5 * s + 1);
+                if (unit > 0l && speciesAmount > LIMIT / unit) {
+                    reportInvalid();
                     return;
                 }
-                sm = add(sm, q * unit);
+                sm = add(sm, speciesAmount * unit);
             }
         }
-        integerAt(g(GRANULAR_MASS_RESIDUAL_UNITS) + 2 * id, mass(1, id) - sm);
-        if (words[f(FIELD_SOLID_COUNTS) + id] > 0u)
-            words[g(GRANULAR_MIXTURE_PRESENT) + id] = 1u;
+        writeInt64(granularField(GRANULAR_MASS_RESIDUAL_UNITS) + 2 * id, mass(1, id) - sm);
+        if (words[workField(FIELD_SOLID_COUNTS) + id] > 0u)
+            words[granularField(GRANULAR_MIXTURE_PRESENT) + id] = 1u;
     }
     if (id == 0)
-        words[g(GRANULAR_COUNTS) + 2] = words[f(FIELD_SOLID_OFFSETS) + h(H_SOLID_CAPACITY)];
+        words[granularField(GRANULAR_COUNTS) + 2] = words[workField(FIELD_SOLID_OFFSETS) + headerWord(H_SOLID_CAPACITY)];
 }
 bool activeCell(int cell) {
-    return h(H_ACTIVITY_CELLS) < 0 || words[h(H_ACTIVITY_CELLS) + cell] != 0u;
+    return headerWord(H_ACTIVITY_CELLS) < 0 || words[headerWord(H_ACTIVITY_CELLS) + cell] != 0u;
 }
 bool activeFace(int face) {
-    return h(H_ACTIVITY_FACES) < 0 || words[h(H_ACTIVITY_FACES) + face] != 0u;
+    return headerWord(H_ACTIVITY_FACES) < 0 || words[headerWord(H_ACTIVITY_FACES) + face] != 0u;
 }
 void main() {
     int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
     if (id >= p.count)
         return;
-    if (p.stage == 0) {
+    if (p.stage == STAGE_INITIALIZE) {
         initialize(id);
         return;
     }
     if (errors != 0u)
         return;
-    if (p.stage == 1)
+    if (p.stage == STAGE_IMPORT_ROWS)
         importRows(id);
-    else if (p.stage == 2)
+    else if (p.stage == STAGE_REACT_CELL)
         cell(id);
-    else if (p.stage == 3)
+    else if (p.stage == STAGE_MEASURE)
         measure(id);
-    else if (p.stage == 4)
+    else if (p.stage == STAGE_CAPACITY_STATUS)
         capacityStatus();
-    else if (p.stage == 5)
+    else if (p.stage == STAGE_SCATTER)
         scatter(id);
-    else if (p.stage == 7)
+    else if (p.stage == STAGE_PUBLISH)
         publish(id);
-    else if (p.stage == 8)
+    else if (p.stage == STAGE_PHASE_FACE)
         phaseFace(id);
-    else if (p.stage == 9)
+    else if (p.stage == STAGE_POST_MECHANICAL)
         postMechanical(id);
-    else if (p.stage == 10)
+    else if (p.stage == STAGE_SNAPSHOT_SOLID)
         snapshotSolid(id);
-    else if (p.stage == 11)
+    else if (p.stage == STAGE_PHASE_STATUS)
         phaseStatus();
 }

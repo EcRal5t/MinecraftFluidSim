@@ -1,6 +1,19 @@
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+const int STAGE_MEASURE_CELL_VOLUMES = 0;
+const uint ERROR_INVALID_VOLUME = 32u;
+const uint ERROR_INSUFFICIENT_CAPACITY = 64u;
 // HOST_LAYOUT
+const int MEASUREMENT_WORDS = 8;
+const int MEASURE_MINIMUM_EXPONENT = 0;
+const int MEASURE_FIRST_WORD = 1;
+const int MEASURE_LAST_WORD = 2;
+const int MEASURE_TRAILING_BITS = 3;
+const int MEASURE_LIMIT = 4;
+const int MEASURE_SIGNIFICAND_BITS = 5;
+const int MEASURE_WORD_COUNT = 6;
+const int MEASURE_EXPONENT = 7;
 layout(local_size_x=128) in;
 layout(binding=0,std430) readonly buffer Source { uint sourceWords[]; };
 layout(binding=1,std430) buffer Candidate { uint candidateWords[]; };
@@ -37,14 +50,14 @@ uint nextWord(int first,int last,int minimum,int limit,inout int position,inout 
 void measureCell(int cell) {
     candidateWords[h(H_COUNTS)+cell]=0u;candidateWords[h(H_TOTAL_SIGNS)+cell]=0u;candidateWords[h(H_TOTAL_EXPONENTS)+cell]=0u;
     candidateWords[h(H_QUANTIZED)+2*cell]=0u;candidateWords[h(H_QUANTIZED)+2*cell+1]=0u;
-    int metadata=h(H_MEASUREMENTS)+8*cell;candidateWords[metadata+6]=0u;
+    int metadata=h(H_MEASUREMENTS)+MEASUREMENT_WORDS*cell;candidateWords[metadata+MEASURE_WORD_COUNT]=0u;
     if(errors!=0u)return;
     int first=int(sourceWords[h(H_SOURCE_CELL_OFFSETS)+cell]),last=int(sourceWords[h(H_SOURCE_CELL_OFFSETS)+cell+1]);
     int minimum=2147483647;bool present=false;
     for(int stock=first;stock<last;stock++) {
-        int sign=int(sourceWords[h(H_SOURCE_VOLUME_COUNTS)+stock]);
-        if(sign<0){atomicOr(errors,32u);return;}
-        if(sign>0){minimum=min(minimum,volume(stock).exponent);present=true;}
+        int limbCount=int(sourceWords[h(H_SOURCE_VOLUME_COUNTS)+stock]);
+        if(limbCount<0){atomicOr(errors,ERROR_INVALID_VOLUME);return;}
+        if(limbCount>0){minimum=min(minimum,volume(stock).exponent);present=true;}
     }
     if(!present)return;
     int limit=0;
@@ -62,13 +75,13 @@ void measureCell(int cell) {
     int64_t bits=int64_t(lastWord-firstWord)*int64_t(32)+int64_t(findMSB(top)-trailing+1);
     int64_t exponent=int64_t(minimum)+int64_t(firstWord)*int64_t(32)+int64_t(trailing);
     if(bits>int64_t(32768)||exponent<int64_t(-2147483647)-int64_t(1)||exponent>int64_t(2147483647)) {
-        atomicOr(errors,32u);return;
+        atomicOr(errors,ERROR_INVALID_VOLUME);return;
     }
     int words=int((bits+int64_t(31))>>5);
-    candidateWords[metadata]=uint(minimum);candidateWords[metadata+1]=uint(firstWord);
-    candidateWords[metadata+2]=uint(lastWord);candidateWords[metadata+3]=uint(trailing);
-    candidateWords[metadata+4]=uint(limit);candidateWords[metadata+5]=uint(bits);candidateWords[metadata+6]=uint(words);
-    candidateWords[metadata+7]=uint(exponent);
+    candidateWords[metadata+MEASURE_MINIMUM_EXPONENT]=uint(minimum);candidateWords[metadata+MEASURE_FIRST_WORD]=uint(firstWord);
+    candidateWords[metadata+MEASURE_LAST_WORD]=uint(lastWord);candidateWords[metadata+MEASURE_TRAILING_BITS]=uint(trailing);
+    candidateWords[metadata+MEASURE_LIMIT]=uint(limit);candidateWords[metadata+MEASURE_SIGNIFICAND_BITS]=uint(bits);candidateWords[metadata+MEASURE_WORD_COUNT]=uint(words);
+    candidateWords[metadata+MEASURE_EXPONENT]=uint(exponent);
     candidateWords[h(H_COUNTS)+cell]=uint(words);
 }
 uint resultWord(int outputOffset,int count,int relative) {
@@ -79,7 +92,7 @@ void quantize(int cell,int outputOffset,int words,int bits,int exponent) {
     int64_t highest=int64_t(exponent)+int64_t(bits)-int64_t(1),quantum=int64_t(h(H_QUANTUM_EXPONENT));
     // The final fractional quantum reserves capacity and travels with its stock.
     if(highest<quantum){candidateWords[h(H_QUANTIZED)+2*cell]=1u;return;}
-    if(highest-quantum>=int64_t(63)){atomicOr(errors,32u);return;}
+    if(highest-quantum>=int64_t(63)){atomicOr(errors,ERROR_INVALID_VOLUME);return;}
     int64_t shift=quantum-int64_t(exponent);uint64_t result;
     if(shift<=int64_t(0)) {
         result=uint64_t(resultWord(outputOffset,words,0))|(uint64_t(resultWord(outputOffset,words,1))<<32);
@@ -96,10 +109,10 @@ void quantize(int cell,int outputOffset,int words,int bits,int exponent) {
 // Write the exact cell volume into the offsets allocated by the prefix scan.
 void writeCell(int cell) {
     if(errors!=0u)return;
-    if(candidateWords[h(H_TOTAL_OFFSETS)+h(H_CELL_COUNT)]>uint(h(H_LIMB_CAPACITY))){atomicOr(errors,64u);return;}
-    int metadata=h(H_MEASUREMENTS)+8*cell,words=int(candidateWords[metadata+6]);if(words==0)return;
-    int minimum=int(candidateWords[metadata]),firstWord=int(candidateWords[metadata+1]),lastWord=int(candidateWords[metadata+2]);
-    int trailing=int(candidateWords[metadata+3]),limit=int(candidateWords[metadata+4]);
+    if(candidateWords[h(H_TOTAL_OFFSETS)+h(H_CELL_COUNT)]>uint(h(H_LIMB_CAPACITY))){atomicOr(errors,ERROR_INSUFFICIENT_CAPACITY);return;}
+    int metadata=h(H_MEASUREMENTS)+MEASUREMENT_WORDS*cell,words=int(candidateWords[metadata+MEASURE_WORD_COUNT]);if(words==0)return;
+    int minimum=int(candidateWords[metadata+MEASURE_MINIMUM_EXPONENT]),firstWord=int(candidateWords[metadata+MEASURE_FIRST_WORD]),lastWord=int(candidateWords[metadata+MEASURE_LAST_WORD]);
+    int trailing=int(candidateWords[metadata+MEASURE_TRAILING_BITS]),limit=int(candidateWords[metadata+MEASURE_LIMIT]);
     int first=int(sourceWords[h(H_SOURCE_CELL_OFFSETS)+cell]),last=int(sourceWords[h(H_SOURCE_CELL_OFFSETS)+cell+1]);
     int outputOffset=h(H_TOTAL_LIMBS)+int(candidateWords[h(H_TOTAL_OFFSETS)+cell]);
     int position=0;uint previous=0u;uint64_t carry=uint64_t(0);
@@ -114,11 +127,11 @@ void writeCell(int cell) {
         }
     }
     if(trailing!=0&&lastWord-firstWord<words)candidateWords[outputOffset+words-1]=previous>>trailing;
-    int exponent=int(candidateWords[metadata+7]);candidateWords[h(H_TOTAL_SIGNS)+cell]=1u;candidateWords[h(H_TOTAL_EXPONENTS)+cell]=uint(exponent);
-    quantize(cell,outputOffset,words,int(candidateWords[metadata+5]),exponent);
+    int exponent=int(candidateWords[metadata+MEASURE_EXPONENT]);candidateWords[h(H_TOTAL_SIGNS)+cell]=1u;candidateWords[h(H_TOTAL_EXPONENTS)+cell]=uint(exponent);
+    quantize(cell,outputOffset,words,int(candidateWords[metadata+MEASURE_SIGNIFICAND_BITS]),exponent);
 }
 void main() {
     uint id=(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x;
     if(id>=uint(p.count))return;
-    if(p.stage==0)measureCell(int(id));else writeCell(int(id));
+    if(p.stage==STAGE_MEASURE_CELL_VOLUMES)measureCell(int(id));else writeCell(int(id));
 }

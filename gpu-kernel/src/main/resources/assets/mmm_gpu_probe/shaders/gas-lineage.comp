@@ -17,31 +17,52 @@ layout(push_constant) uniform Params {
 }
 p;
 // HOST_LAYOUT
+const uint ERROR_INVALID_STATE = 65536u;
+const int STAGE_INITIALIZE = 0;
+const int STAGE_TRANSPORT = 1;
+const int STAGE_MAKE_EDGES = 2;
+const int STAGE_INSERT_EDGE = 3;
+const int STAGE_CHECK_CAPACITY = 4;
+const int STAGE_COUNT_EDGES = 5;
+const int STAGE_SCATTER_EDGES = 6;
+const int STAGE_LONG_WEIGHTS = 7;
+const int STAGE_LONG_INHERITED_CONTROLS = 9;
+const int STAGE_LONG_FUTURE_CONTROLS = 10;
+const int STAGE_LONG_SOURCE_VOLUMES = 11;
+const int STAGE_PREPARE_DISPATCH = 12;
+const int STAGE_SHORT_WEIGHTS = 13;
+const int STAGE_SHORT_INHERITED_CONTROLS = 14;
+const int STAGE_SHORT_FUTURE_CONTROLS = 15;
+const int STAGE_SHORT_SOURCE_VOLUMES = 16;
+const int STAGE_CLASSIFY_CONTROLS = 17;
+const int STAGE_GEOMETRY_EDGES = 18;
+const int STAGE_CHECK_VANISHED = 19;
+
 shared double partial[128], maximum[128];
 shared int owners[128];
 shared int groupValid;
-int h(int n) {
+int headerWord(int n) {
     return int(words[p.header + n]);
 }
-int f(int n) {
-    return h(WORK_FIELDS + n);
+int workField(int n) {
+    return headerWord(WORK_FIELDS + n);
 }
-double number(int at) {
+double readDouble(int at) {
     return packDouble2x32(uvec2(words[at], words[at + 1]));
 }
-void put(int at, double v) {
+void writeDouble(int at, double v) {
     uvec2 bits = unpackDouble2x32(v);
     words[at] = bits.x;
     words[at + 1] = bits.y;
 }
-int64_t integer(int at) {
+int64_t readInt64(int at) {
     return int64_t(uint64_t(words[at]) | (uint64_t(words[at + 1]) << 32));
 }
-bool finite(double v) {
+bool isFinite(double v) {
     return !isnan(v) && !isinf(v);
 }
-void invalid() {
-    atomicOr(errors, 65536u);
+void reportInvalid() {
+    atomicOr(errors, ERROR_INVALID_STATE);
 }
 void add(inout double sum, inout double correction, double value) {
     precise double adjusted = value - correction, next = sum + adjusted;
@@ -49,7 +70,7 @@ void add(inout double sum, inout double correction, double value) {
     sum = next;
 }
 ivec3 shape() {
-    return ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z));
+    return ivec3(headerWord(H_SIZE_X), headerWord(H_SIZE_Y), headerWord(H_SIZE_Z));
 }
 ivec3 unit(int a) {
     ivec3 v = ivec3(0);
@@ -77,7 +98,7 @@ int reverseSlot(int slot) {
     return ((slot - 1) ^ 1) + 1;
 }
 bool fullFixed(int a, int b, int axis) {
-    int ma = int(words[h(H_MASKS) + a]), mb = int(words[h(H_MASKS) + b]);
+    int ma = int(words[headerWord(H_MASKS) + a]), mb = int(words[headerWord(H_MASKS) + b]);
     for (int m = 0; m < 8; m++)
         if ((m & (1 << axis)) != 0)
             if ((ma & (1 << m)) != 0 || (mb & (1 << (m ^ (1 << axis)))) != 0)
@@ -85,40 +106,40 @@ bool fullFixed(int a, int b, int axis) {
     return true;
 }
 double liquidRoute(int c, int slot) {
-    int descriptor = h(H_ACCEPTED_DESCRIPTORS) + 5 * (7 * c + slot), at = int(words[descriptor + 1]),
+    int descriptor = headerWord(H_ACCEPTED_DESCRIPTORS) + 5 * (7 * c + slot), at = int(words[descriptor + 1]),
         count = int(words[descriptor + 2]);
     if (count == 0)
         return 0.0;
     double head = double(words[at + count - 1]);
     if (count > 1)
         head += double(words[at + count - 2]) * 2.3283064365386962890625e-10LF;
-    return ldexp(head, int(words[descriptor + 3]) + 32 * (count - 1)) * number(p.header + H_CELL_VOLUME);
+    return ldexp(head, int(words[descriptor + 3]) + 32 * (count - 1)) * readDouble(p.header + H_CELL_VOLUME);
 }
 void initialize(int id) {
-    if (id < h(H_HASH_CAPACITY))
-        words[f(FIELD_HASH) + id] = 0u;
+    if (id < headerWord(H_HASH_CAPACITY))
+        words[workField(FIELD_HASH) + id] = 0u;
     if (id == 0)
         for (int i = 0; i < 4; i++)
-            words[f(FIELD_LIVE_COUNTS) + i] = 0u;
-    if (id < h(H_GROUP_CAPACITY)) {
-        words[f(FIELD_GROUP_COUNTS) + id] = 0u;
-        words[f(FIELD_GROUP_CURSORS) + id] = 0u;
+            words[workField(FIELD_LIVE_COUNTS) + i] = 0u;
+    if (id < headerWord(H_GROUP_CAPACITY)) {
+        words[workField(FIELD_GROUP_COUNTS) + id] = 0u;
+        words[workField(FIELD_GROUP_CURSORS) + id] = 0u;
     }
-    if (id < h(H_NODE_CAPACITY) + 2) {
-        words[f(FIELD_SOURCE_COUNTS) + id] = 0u;
-        words[f(FIELD_SOURCE_CURSORS) + id] = 0u;
+    if (id < headerWord(H_NODE_CAPACITY) + 2) {
+        words[workField(FIELD_SOURCE_COUNTS) + id] = 0u;
+        words[workField(FIELD_SOURCE_CURSORS) + id] = 0u;
     }
-    if (id < h(H_CELL_COUNT) + 1) {
-        words[f(FIELD_TARGET_COUNTS) + id] = 0u;
-        words[f(FIELD_TARGET_CURSORS) + id] = 0u;
+    if (id < headerWord(H_CELL_COUNT) + 1) {
+        words[workField(FIELD_TARGET_COUNTS) + id] = 0u;
+        words[workField(FIELD_TARGET_CURSORS) + id] = 0u;
     }
     if (id == 0 && errors == 0u &&
-        (int(words[h(H_GAS_COUNTS)]) != int(words[h(H_OLD_COMPONENT_COUNT)]) ||
-         int(words[h(H_GAS_COUNTS)]) > h(H_NODE_CAPACITY)))
-        invalid();
+        (int(words[headerWord(H_GAS_COUNTS)]) != int(words[headerWord(H_OLD_COMPONENT_COUNT)]) ||
+         int(words[headerWord(H_GAS_COUNTS)]) > headerWord(H_NODE_CAPACITY)))
+        reportInvalid();
 }
 void transport(int c) {
-    double oldDry = number(h(H_OLD_DRY_VOLUMES) + 2 * c), newDry = number(h(H_FUTURE_DRY_VOLUMES) + 2 * c), total = 0.0,
+    double oldDry = readDouble(headerWord(H_OLD_DRY_VOLUMES) + 2 * c), newDry = readDouble(headerWord(H_FUTURE_DRY_VOLUMES) + 2 * c), total = 0.0,
            flow[6];
     ivec3 q = location(c);
     for (int k = 0; k < 6; k++) {
@@ -126,8 +147,8 @@ void transport(int c) {
         flow[k] = 0.0;
         if (b < 0 || !fullFixed(k % 2 == 0 ? b : c, k % 2 == 0 ? c : b, axis))
             continue;
-        double qt = number(h(H_FACE_FLUX) + 4 * face(q + (k % 2 == 0 ? ivec3(0) : unit(axis)), axis)) *
-                    number(p.header + H_CELL_VOLUME);
+        double qt = readDouble(headerWord(H_FACE_FLUX) + 4 * face(q + (k % 2 == 0 ? ivec3(0) : unit(axis)), axis)) *
+                    readDouble(p.header + H_CELL_VOLUME);
         if (k % 2 == 0)
             qt = -qt;
         double ql = liquidRoute(c, slot) - liquidRoute(b, reverseSlot(slot));
@@ -139,20 +160,20 @@ void transport(int c) {
     double assigned = 0.0, correction = 0.0;
     for (int k = 0; k < 6; k++) {
         double value = flow[k] * scale;
-        put(f(FIELD_CELL_ROUTES) + 2 * (7 * c + k + 1), value);
+        writeDouble(workField(FIELD_CELL_ROUTES) + 2 * (7 * c + k + 1), value);
         add(assigned, correction, value);
     }
-    put(f(FIELD_CELL_ROUTES) + 14 * c, max(0.0LF, oldDry - assigned));
+    writeDouble(workField(FIELD_CELL_ROUTES) + 14 * c, max(0.0LF, oldDry - assigned));
 }
 void makeEdges(int c) {
-    double volume = number(h(H_FUTURE_DRY_VOLUMES) + 2 * c), amount[7], total = 0.0;
+    double volume = readDouble(headerWord(H_FUTURE_DRY_VOLUMES) + 2 * c), amount[7], total = 0.0;
     int origin[7];
-    int target = int(words[h(H_FUTURE_CELL_NODES) + c]);
+    int target = int(words[headerWord(H_FUTURE_CELL_NODES) + c]);
     for (int slot = 0; slot < 7; slot++) {
         int from = slot == 0 ? c : neighbor(c, slot);
-        origin[slot] = from < 0 ? -1 : int(words[h(H_OLD_CELL_NODES) + from]);
+        origin[slot] = from < 0 ? -1 : int(words[headerWord(H_OLD_CELL_NODES) + from]);
         amount[slot] =
-            from < 0 ? 0.0LF : number(f(FIELD_CELL_ROUTES) + 2 * (7 * from + (slot == 0 ? 0 : reverseSlot(slot))));
+            from < 0 ? 0.0LF : readDouble(workField(FIELD_CELL_ROUTES) + 2 * (7 * from + (slot == 0 ? 0 : reverseSlot(slot))));
         if (origin[slot] < 0)
             amount[slot] = 0.0;
         total += amount[slot];
@@ -165,50 +186,50 @@ void makeEdges(int c) {
     for (int slot = 0; slot < 7; slot++) {
         int edge = 7 * c + slot;
         double weight = volume > 0.0 && amount[slot] > 0.0 ? volume * (amount[slot] / total) : 0.0;
-        words[f(FIELD_EDGE_SOURCE) + edge] = uint(origin[slot] + 1);
-        words[f(FIELD_EDGE_TARGET) + edge] = uint(target);
-        put(f(FIELD_EDGE_WEIGHT) + 2 * edge, weight);
-        words[f(FIELD_EDGE_GROUP) + edge] = 0u;
-        if (weight > 0.0 && (target < 0 || origin[slot] > int(words[h(H_GAS_COUNTS)])))
-            invalid();
+        words[workField(FIELD_EDGE_SOURCE) + edge] = uint(origin[slot] + 1);
+        words[workField(FIELD_EDGE_TARGET) + edge] = uint(target);
+        writeDouble(workField(FIELD_EDGE_WEIGHT) + 2 * edge, weight);
+        words[workField(FIELD_EDGE_GROUP) + edge] = 0u;
+        if (weight > 0.0 && (target < 0 || origin[slot] > int(words[headerWord(H_GAS_COUNTS)])))
+            reportInvalid();
     }
 }
 // Phase topology uses geometric overlap and explicit evaporation birth, never old face flux.
 void geometryEdges(int c) {
-    double oldVolume = number(h(H_OLD_DRY_VOLUMES) + 2 * c), future = number(h(H_FUTURE_DRY_VOLUMES) + 2 * c),
+    double oldVolume = readDouble(headerWord(H_OLD_DRY_VOLUMES) + 2 * c), future = readDouble(headerWord(H_FUTURE_DRY_VOLUMES) + 2 * c),
            overlap = min(oldVolume, future);
-    int old = int(words[h(H_OLD_CELL_NODES) + c]), target = int(words[h(H_FUTURE_CELL_NODES) + c]),
-        birth = int(words[h(H_BIRTH_NODE) + c]);
-    if (birth < 0 || birth > int(words[h(H_GAS_COUNTS)])) {
-        invalid();
+    int old = int(words[headerWord(H_OLD_CELL_NODES) + c]), target = int(words[headerWord(H_FUTURE_CELL_NODES) + c]),
+        birth = int(words[headerWord(H_BIRTH_NODE) + c]);
+    if (birth < 0 || birth > int(words[headerWord(H_GAS_COUNTS)])) {
+        reportInvalid();
         return;
     }
     for (int slot = 0; slot < 2; slot++) {
         int edge = 2 * c + slot;
         double weight = slot == 0 ? overlap : max(0.0LF, future - overlap);
         int source = slot == 0 ? old + 1 : birth > 0 ? birth + 1 : 0;
-        if (weight > 0.0 && (target < 0 || source < 0 || source > int(words[h(H_GAS_COUNTS)]) + 1)) {
-            invalid();
+        if (weight > 0.0 && (target < 0 || source < 0 || source > int(words[headerWord(H_GAS_COUNTS)]) + 1)) {
+            reportInvalid();
             return;
         }
-        words[f(FIELD_EDGE_SOURCE) + edge] = uint(source);
-        words[f(FIELD_EDGE_TARGET) + edge] = uint(target);
-        put(f(FIELD_EDGE_WEIGHT) + 2 * edge, weight);
-        words[f(FIELD_EDGE_GROUP) + edge] = 0u;
+        words[workField(FIELD_EDGE_SOURCE) + edge] = uint(source);
+        words[workField(FIELD_EDGE_TARGET) + edge] = uint(target);
+        writeDouble(workField(FIELD_EDGE_WEIGHT) + 2 * edge, weight);
+        words[workField(FIELD_EDGE_GROUP) + edge] = 0u;
     }
 }
 void checkVanished(int node) {
-    if (node >= int(words[h(H_GAS_COUNTS)]) || words[f(FIELD_SOURCE_COUNTS) + node + 2] != 0u)
+    if (node >= int(words[headerWord(H_GAS_COUNTS)]) || words[workField(FIELD_SOURCE_COUNTS) + node + 2] != 0u)
         return;
-    for (int component = int(words[h(H_GAS_COMPONENT_OFFSETS) + node]);
-         component < int(words[h(H_GAS_COMPONENT_OFFSETS) + node + 1]); component++)
-        if (integer(h(H_GAS_STANDARD_VOLUME) + 2 * component) != int64_t(0) ||
-            integer(h(H_GAS_MASS) + 2 * component) != int64_t(0)) {
-            invalid();
+    for (int component = int(words[headerWord(H_GAS_COMPONENT_OFFSETS) + node]);
+         component < int(words[headerWord(H_GAS_COMPONENT_OFFSETS) + node + 1]); component++)
+        if (readInt64(headerWord(H_GAS_STANDARD_VOLUME) + 2 * component) != int64_t(0) ||
+            readInt64(headerWord(H_GAS_MASS) + 2 * component) != int64_t(0)) {
+            reportInvalid();
             return;
         }
-    if (number(h(H_GAS_ENERGY) + 2 * node) != 0.0)
-        invalid();
+    if (readDouble(headerWord(H_GAS_ENERGY) + 2 * node) != 0.0)
+        reportInvalid();
 }
 uint hashPair(uint a, uint b) {
     uint v = a * 0x9e3779b9u + b * 0x85ebca6bu;
@@ -218,32 +239,32 @@ uint hashPair(uint a, uint b) {
     return v;
 }
 uint insertPair(int edge, uint source, uint target) {
-    uint slot = hashPair(source, target) & uint(h(H_HASH_CAPACITY) - 1);
-    for (int probe = 0; probe < h(H_HASH_CAPACITY); probe++) {
-        uint representative = atomicCompSwap(words[f(FIELD_HASH) + int(slot)], 0u, uint(edge + 1));
-        if (representative == 0u || (words[f(FIELD_EDGE_SOURCE) + int(representative) - 1] == source &&
-                                     words[f(FIELD_EDGE_TARGET) + int(representative) - 1] == target)) {
+    uint slot = hashPair(source, target) & uint(headerWord(H_HASH_CAPACITY) - 1);
+    for (int probe = 0; probe < headerWord(H_HASH_CAPACITY); probe++) {
+        uint representative = atomicCompSwap(words[workField(FIELD_HASH) + int(slot)], 0u, uint(edge + 1));
+        if (representative == 0u || (words[workField(FIELD_EDGE_SOURCE) + int(representative) - 1] == source &&
+                                     words[workField(FIELD_EDGE_TARGET) + int(representative) - 1] == target)) {
             if (representative == 0u) {
-                uint group = atomicAdd(words[f(FIELD_LIVE_COUNTS)], 1u);
-                words[f(FIELD_HASH_GROUPS) + int(slot)] = group;
-                if (group < uint(h(H_GROUP_CAPACITY))) {
-                    words[f(FIELD_GROUP_SOURCE) + group] = source;
-                    words[f(FIELD_GROUP_TARGET) + group] = target;
-                    atomicAdd(words[f(FIELD_SOURCE_COUNTS) + int(source)], 1u);
-                    atomicAdd(words[f(FIELD_TARGET_COUNTS) + int(target)], 1u);
+                uint group = atomicAdd(words[workField(FIELD_LIVE_COUNTS)], 1u);
+                words[workField(FIELD_HASH_GROUPS) + int(slot)] = group;
+                if (group < uint(headerWord(H_GROUP_CAPACITY))) {
+                    words[workField(FIELD_GROUP_SOURCE) + group] = source;
+                    words[workField(FIELD_GROUP_TARGET) + group] = target;
+                    atomicAdd(words[workField(FIELD_SOURCE_COUNTS) + int(source)], 1u);
+                    atomicAdd(words[workField(FIELD_TARGET_COUNTS) + int(target)], 1u);
                 }
             }
             return slot;
         }
-        slot = (slot + 1u) & uint(h(H_HASH_CAPACITY) - 1);
+        slot = (slot + 1u) & uint(headerWord(H_HASH_CAPACITY) - 1);
     }
-    invalid();
+    reportInvalid();
     return 0u;
 }
 void insertEdge(int edge) {
-    if (number(f(FIELD_EDGE_WEIGHT) + 2 * edge) <= 0.0)
+    if (readDouble(workField(FIELD_EDGE_WEIGHT) + 2 * edge) <= 0.0)
         return;
-    uint source = words[f(FIELD_EDGE_SOURCE) + edge], target = words[f(FIELD_EDGE_TARGET) + edge];
+    uint source = words[workField(FIELD_EDGE_SOURCE) + edge], target = words[workField(FIELD_EDGE_TARGET) + edge];
     uint first = subgroupBallotFindLSB(subgroupBallot(true));
     uint commonSource = subgroupBroadcastFirst(source), commonTarget = subgroupBroadcastFirst(target);
     bool sharedPair = source == commonSource && target == commonTarget;
@@ -251,10 +272,10 @@ void insertEdge(int edge) {
     if (!sharedPair || gl_SubgroupInvocationID == first)
         slot = insertPair(edge, source, target);
     uint sharedSlot = subgroupBroadcastFirst(slot);
-    words[f(FIELD_EDGE_GROUP) + edge] = sharedPair ? sharedSlot : slot;
+    words[workField(FIELD_EDGE_GROUP) + edge] = sharedPair ? sharedSlot : slot;
 }
 int groupCount() {
-    return int(words[f(FIELD_LIVE_COUNTS)]);
+    return int(words[workField(FIELD_LIVE_COUNTS)]);
 }
 // Reserve the first lane's shared destination once for the participating subgroup.
 uint reserveIncident(int address) {
@@ -269,18 +290,18 @@ uint reserveIncident(int address) {
     return address == sharedAddress ? base + subgroupBallotExclusiveBitCount(peers) : atomicAdd(words[address], 1u);
 }
 void countEdges(int edge) {
-    if (number(f(FIELD_EDGE_WEIGHT) + 2 * edge) <= 0.0)
+    if (readDouble(workField(FIELD_EDGE_WEIGHT) + 2 * edge) <= 0.0)
         return;
-    int group = int(words[f(FIELD_HASH_GROUPS) + int(words[f(FIELD_EDGE_GROUP) + edge])]);
-    words[f(FIELD_EDGE_GROUP) + edge] = uint(group);
-    reserveIncident(f(FIELD_GROUP_COUNTS) + group);
+    int group = int(words[workField(FIELD_HASH_GROUPS) + int(words[workField(FIELD_EDGE_GROUP) + edge])]);
+    words[workField(FIELD_EDGE_GROUP) + edge] = uint(group);
+    reserveIncident(workField(FIELD_GROUP_COUNTS) + group);
 }
 void scatterEdges(int edge) {
-    if (number(f(FIELD_EDGE_WEIGHT) + 2 * edge) <= 0.0)
+    if (readDouble(workField(FIELD_EDGE_WEIGHT) + 2 * edge) <= 0.0)
         return;
-    int group = int(words[f(FIELD_EDGE_GROUP) + edge]);
-    uint at = words[f(FIELD_GROUP_OFFSETS) + group] + reserveIncident(f(FIELD_GROUP_CURSORS) + group);
-    words[f(FIELD_GROUP_EDGES) + int(at)] = uint(edge);
+    int group = int(words[workField(FIELD_EDGE_GROUP) + edge]);
+    uint at = words[workField(FIELD_GROUP_OFFSETS) + group] + reserveIncident(workField(FIELD_GROUP_CURSORS) + group);
+    words[workField(FIELD_GROUP_EDGES) + int(at)] = uint(edge);
 }
 void reduceSum(int lane, double value) {
     partial[lane] = value;
@@ -305,37 +326,37 @@ void reduceOwner(int lane, double value, int owner) {
     }
 }
 void weights(int group, int lane) {
-    int begin = int(words[f(FIELD_GROUP_OFFSETS) + group]), end = int(words[f(FIELD_GROUP_OFFSETS) + group + 1]);
+    int begin = int(words[workField(FIELD_GROUP_OFFSETS) + group]), end = int(words[workField(FIELD_GROUP_OFFSETS) + group + 1]);
     double sum = 0.0, correction = 0.0;
     for (int at = begin + lane; at < end; at += 128)
-        add(sum, correction, number(f(FIELD_EDGE_WEIGHT) + 2 * int(words[f(FIELD_GROUP_EDGES) + at])));
+        add(sum, correction, readDouble(workField(FIELD_EDGE_WEIGHT) + 2 * int(words[workField(FIELD_GROUP_EDGES) + at])));
     reduceSum(lane, sum);
     if (lane == 0)
-        put(f(FIELD_GROUP_WEIGHT) + 2 * group, partial[0]);
+        writeDouble(workField(FIELD_GROUP_WEIGHT) + 2 * group, partial[0]);
 }
 // The hash entries are no longer needed after edge association; reuse them for long rows.
 void shortWeights(int group) {
     if (group >= groupCount())
         return;
-    int begin = int(words[f(FIELD_GROUP_OFFSETS) + group]), end = int(words[f(FIELD_GROUP_OFFSETS) + group + 1]);
+    int begin = int(words[workField(FIELD_GROUP_OFFSETS) + group]), end = int(words[workField(FIELD_GROUP_OFFSETS) + group + 1]);
     if (end - begin > 16) {
-        uint slot = atomicAdd(words[f(FIELD_LIVE_COUNTS) + 1], 1u);
-        words[f(FIELD_HASH) + slot] = uint(group);
+        uint slot = atomicAdd(words[workField(FIELD_LIVE_COUNTS) + 1], 1u);
+        words[workField(FIELD_HASH) + slot] = uint(group);
         return;
     }
     double sum = 0.0, correction = 0.0;
     for (int at = begin; at < end; at++)
-        add(sum, correction, number(f(FIELD_EDGE_WEIGHT) + 2 * int(words[f(FIELD_GROUP_EDGES) + at])));
-    put(f(FIELD_GROUP_WEIGHT) + 2 * group, sum);
+        add(sum, correction, readDouble(workField(FIELD_EDGE_WEIGHT) + 2 * int(words[workField(FIELD_GROUP_EDGES) + at])));
+    writeDouble(workField(FIELD_GROUP_WEIGHT) + 2 * group, sum);
 }
 void scatterGroups(int group) {
     if (group >= groupCount())
         return;
-    int source = int(words[f(FIELD_GROUP_SOURCE) + group]), target = int(words[f(FIELD_GROUP_TARGET) + group]);
-    uint a = words[f(FIELD_SOURCE_OFFSETS) + source] + atomicAdd(words[f(FIELD_SOURCE_CURSORS) + source], 1u),
-         b = words[f(FIELD_TARGET_OFFSETS) + target] + atomicAdd(words[f(FIELD_TARGET_CURSORS) + target], 1u);
-    words[f(FIELD_SOURCE_GROUPS) + int(a)] = uint(group);
-    words[f(FIELD_TARGET_GROUPS) + int(b)] = uint(group);
+    int source = int(words[workField(FIELD_GROUP_SOURCE) + group]), target = int(words[workField(FIELD_GROUP_TARGET) + group]);
+    uint a = words[workField(FIELD_SOURCE_OFFSETS) + source] + atomicAdd(words[workField(FIELD_SOURCE_CURSORS) + source], 1u),
+         b = words[workField(FIELD_TARGET_OFFSETS) + target] + atomicAdd(words[workField(FIELD_TARGET_CURSORS) + target], 1u);
+    words[workField(FIELD_SOURCE_GROUPS) + int(a)] = uint(group);
+    words[workField(FIELD_TARGET_GROUPS) + int(b)] = uint(group);
 }
 double rowSum(int lane, double value, int rowStride) {
     if (rowStride == 1)
@@ -346,12 +367,12 @@ double rowSum(int lane, double value, int rowStride) {
     return answer;
 }
 void inheritedControls(int source, int lane, int rowStride) {
-    int begin = int(words[f(FIELD_SOURCE_OFFSETS) + source]), end = int(words[f(FIELD_SOURCE_OFFSETS) + source + 1]);
+    int begin = int(words[workField(FIELD_SOURCE_OFFSETS) + source]), end = int(words[workField(FIELD_SOURCE_OFFSETS) + source + 1]);
     double sum = 0.0, correction = 0.0, largest = -1.0;
     int pivot = 2147483647;
     for (int at = begin + lane; at < end; at += rowStride) {
-        int g = int(words[f(FIELD_SOURCE_GROUPS) + at]);
-        double weight = number(f(FIELD_GROUP_WEIGHT) + 2 * g);
+        int g = int(words[workField(FIELD_SOURCE_GROUPS) + at]);
+        double weight = readDouble(workField(FIELD_GROUP_WEIGHT) + 2 * g);
         add(sum, correction, weight);
         if (weight > largest || (weight == largest && g < pivot)) {
             largest = weight;
@@ -364,47 +385,47 @@ void inheritedControls(int source, int lane, int rowStride) {
         pivot = owners[0];
         barrier();
     }
-    double original = source < 2 ? total : number(h(H_OLD_NODE_VOLUMES) + 2 * (source - 2));
+    double original = source < 2 ? total : readDouble(headerWord(H_OLD_NODE_VOLUMES) + 2 * (source - 2));
     if (end == begin) {
-        if (lane == 0 && source >= 2 && source - 2 < int(words[h(H_GAS_COUNTS)]))
-            for (int c = int(words[h(H_GAS_COMPONENT_OFFSETS) + source - 2]);
-                 c < int(words[h(H_GAS_COMPONENT_OFFSETS) + source - 1]); c++)
-                if (words[h(H_GAS_STANDARD_VOLUME) + 2 * c] != 0u || words[h(H_GAS_STANDARD_VOLUME) + 2 * c + 1] != 0u)
-                    invalid();
+        if (lane == 0 && source >= 2 && source - 2 < int(words[headerWord(H_GAS_COUNTS)]))
+            for (int c = int(words[headerWord(H_GAS_COMPONENT_OFFSETS) + source - 2]);
+                 c < int(words[headerWord(H_GAS_COMPONENT_OFFSETS) + source - 1]); c++)
+                if (words[headerWord(H_GAS_STANDARD_VOLUME) + 2 * c] != 0u || words[headerWord(H_GAS_STANDARD_VOLUME) + 2 * c + 1] != 0u)
+                    reportInvalid();
         return;
     }
     sum = 0.0;
     correction = 0.0;
     for (int at = begin + lane; at < end; at += rowStride) {
-        int g = int(words[f(FIELD_SOURCE_GROUPS) + at]);
+        int g = int(words[workField(FIELD_SOURCE_GROUPS) + at]);
         if (g == pivot)
             continue;
-        double value = original * (number(f(FIELD_GROUP_WEIGHT) + 2 * g) / total);
-        put(f(FIELD_GROUP_OLD_CONTROL) + 2 * g, value);
+        double value = original * (readDouble(workField(FIELD_GROUP_WEIGHT) + 2 * g) / total);
+        writeDouble(workField(FIELD_GROUP_OLD_CONTROL) + 2 * g, value);
         add(sum, correction, value);
     }
     double assigned = rowSum(lane, sum, rowStride);
     if (lane == 0) {
         double rest = original - assigned;
-        if (!(finite(rest) && rest > 0.0))
-            invalid();
-        put(f(FIELD_GROUP_OLD_CONTROL) + 2 * pivot, rest);
+        if (!(isFinite(rest) && rest > 0.0))
+            reportInvalid();
+        writeDouble(workField(FIELD_GROUP_OLD_CONTROL) + 2 * pivot, rest);
     }
 }
 void futureControls(int target, int lane, int rowStride) {
-    int begin = int(words[f(FIELD_TARGET_OFFSETS) + target]), end = int(words[f(FIELD_TARGET_OFFSETS) + target + 1]);
+    int begin = int(words[workField(FIELD_TARGET_OFFSETS) + target]), end = int(words[workField(FIELD_TARGET_OFFSETS) + target + 1]);
     if (target == 0) {
         for (int at = begin + lane; at < end; at += rowStride) {
-            int g = int(words[f(FIELD_TARGET_GROUPS) + at]);
-            put(f(FIELD_GROUP_FUTURE_CONTROL) + 2 * g, number(f(FIELD_GROUP_OLD_CONTROL) + 2 * g));
+            int g = int(words[workField(FIELD_TARGET_GROUPS) + at]);
+            writeDouble(workField(FIELD_GROUP_FUTURE_CONTROL) + 2 * g, readDouble(workField(FIELD_GROUP_OLD_CONTROL) + 2 * g));
         }
         return;
     }
     double sum = 0.0, correction = 0.0, largest = -1.0;
     int pivot = 2147483647;
     for (int at = begin + lane; at < end; at += rowStride) {
-        int g = int(words[f(FIELD_TARGET_GROUPS) + at]);
-        double value = number(f(FIELD_GROUP_OLD_CONTROL) + 2 * g);
+        int g = int(words[workField(FIELD_TARGET_GROUPS) + at]);
+        double value = readDouble(workField(FIELD_GROUP_OLD_CONTROL) + 2 * g);
         add(sum, correction, value);
         if (value > largest || (value == largest && g < pivot)) {
             largest = value;
@@ -419,84 +440,84 @@ void futureControls(int target, int lane, int rowStride) {
     }
     sum = 0.0;
     correction = 0.0;
-    int first = int(words[h(H_FUTURE_COMPONENT_OFFSETS) + target]),
-        last = int(words[h(H_FUTURE_COMPONENT_OFFSETS) + target + 1]);
+    int first = int(words[headerWord(H_FUTURE_COMPONENT_OFFSETS) + target]),
+        last = int(words[headerWord(H_FUTURE_COMPONENT_OFFSETS) + target + 1]);
     for (int at = first + lane; at < last; at += rowStride)
-        add(sum, correction, number(h(H_FUTURE_DRY_VOLUMES) + 2 * int(words[h(H_FUTURE_COMPONENT_MEMBERS) + at])));
+        add(sum, correction, readDouble(headerWord(H_FUTURE_DRY_VOLUMES) + 2 * int(words[headerWord(H_FUTURE_COMPONENT_MEMBERS) + at])));
     double volume = rowSum(lane, sum, rowStride);
     if (end == begin) {
         if (lane == 0 && volume > 0.0)
-            invalid();
+            reportInvalid();
         return;
     }
     sum = 0.0;
     correction = 0.0;
     for (int at = begin + lane; at < end; at += rowStride) {
-        int g = int(words[f(FIELD_TARGET_GROUPS) + at]);
+        int g = int(words[workField(FIELD_TARGET_GROUPS) + at]);
         if (g == pivot)
             continue;
-        double value = volume * (number(f(FIELD_GROUP_OLD_CONTROL) + 2 * g) / total);
-        put(f(FIELD_GROUP_FUTURE_CONTROL) + 2 * g, value);
+        double value = volume * (readDouble(workField(FIELD_GROUP_OLD_CONTROL) + 2 * g) / total);
+        writeDouble(workField(FIELD_GROUP_FUTURE_CONTROL) + 2 * g, value);
         add(sum, correction, value);
     }
     double assigned = rowSum(lane, sum, rowStride);
     if (lane == 0) {
         double rest = volume - assigned;
-        if (!(finite(rest) && rest > 0.0))
-            invalid();
-        put(f(FIELD_GROUP_FUTURE_CONTROL) + 2 * pivot, rest);
+        if (!(isFinite(rest) && rest > 0.0))
+            reportInvalid();
+        writeDouble(workField(FIELD_GROUP_FUTURE_CONTROL) + 2 * pivot, rest);
     }
 }
 void sourceVolumes(int node, int lane, int rowStride) {
-    int begin = int(words[f(FIELD_SOURCE_OFFSETS) + node + 2]), end = int(words[f(FIELD_SOURCE_OFFSETS) + node + 3]);
+    int begin = int(words[workField(FIELD_SOURCE_OFFSETS) + node + 2]), end = int(words[workField(FIELD_SOURCE_OFFSETS) + node + 3]);
     double oldVolume = 0.0, newVolume = 0.0, escaped = 0.0;
     for (int at = begin + lane; at < end; at += rowStride) {
-        int g = int(words[f(FIELD_SOURCE_GROUPS) + at]);
-        double old = number(f(FIELD_GROUP_OLD_CONTROL) + 2 * g);
-        if (words[f(FIELD_GROUP_TARGET) + g] == 0u)
+        int g = int(words[workField(FIELD_SOURCE_GROUPS) + at]);
+        double old = readDouble(workField(FIELD_GROUP_OLD_CONTROL) + 2 * g);
+        if (words[workField(FIELD_GROUP_TARGET) + g] == 0u)
             escaped += old;
         else {
             oldVolume += old;
-            newVolume += number(f(FIELD_GROUP_FUTURE_CONTROL) + 2 * g);
+            newVolume += readDouble(workField(FIELD_GROUP_FUTURE_CONTROL) + 2 * g);
         }
     }
     oldVolume = rowSum(lane, oldVolume, rowStride);
     if (lane == 0)
-        put(f(FIELD_RETAINED_OLD_VOLUMES) + 2 * node, oldVolume);
+        writeDouble(workField(FIELD_RETAINED_OLD_VOLUMES) + 2 * node, oldVolume);
     newVolume = rowSum(lane, newVolume, rowStride);
     if (lane == 0)
-        put(f(FIELD_FUTURE_CONTROL_VOLUMES) + 2 * node, newVolume);
+        writeDouble(workField(FIELD_FUTURE_CONTROL_VOLUMES) + 2 * node, newVolume);
     escaped = rowSum(lane, escaped, rowStride);
     if (lane == 0) {
-        double initial = number(h(H_OLD_NODE_VOLUMES) + 2 * node);
-        put(f(FIELD_ESCAPED_FRACTIONS) + 2 * node, initial > 0.0 ? clamp(escaped / initial, 0.0LF, 1.0LF) : 0.0LF);
+        double initial = readDouble(headerWord(H_OLD_NODE_VOLUMES) + 2 * node);
+        writeDouble(workField(FIELD_ESCAPED_FRACTIONS) + 2 * node, initial > 0.0 ? clamp(escaped / initial, 0.0LF, 1.0LF) : 0.0LF);
     }
 }
 bool longSource(int source) {
-    return words[f(FIELD_SOURCE_OFFSETS) + source + 1] - words[f(FIELD_SOURCE_OFFSETS) + source] > 16u;
+    return words[workField(FIELD_SOURCE_OFFSETS) + source + 1] - words[workField(FIELD_SOURCE_OFFSETS) + source] > 16u;
 }
 bool longTarget(int target) {
-    return words[f(FIELD_TARGET_OFFSETS) + target + 1] - words[f(FIELD_TARGET_OFFSETS) + target] > 16u ||
+    return words[workField(FIELD_TARGET_OFFSETS) + target + 1] - words[workField(FIELD_TARGET_OFFSETS) + target] > 16u ||
            (target > 0 &&
-            words[h(H_FUTURE_COMPONENT_OFFSETS) + target + 1] - words[h(H_FUTURE_COMPONENT_OFFSETS) + target] > 16u);
+            words[headerWord(H_FUTURE_COMPONENT_OFFSETS) + target + 1] - words[headerWord(H_FUTURE_COMPONENT_OFFSETS) + target] > 16u);
 }
 void classifyControls(int id) {
-    if (id < int(words[h(H_GAS_COUNTS)]) + 2 && longSource(id)) {
-        uint slot = atomicAdd(words[f(FIELD_LIVE_COUNTS) + 2], 1u);
-        words[f(FIELD_LONG_ROWS) + slot] = uint(id);
+    if (id < int(words[headerWord(H_GAS_COUNTS)]) + 2 && longSource(id)) {
+        uint slot = atomicAdd(words[workField(FIELD_LIVE_COUNTS) + 2], 1u);
+        words[workField(FIELD_LONG_ROWS) + slot] = uint(id);
     }
-    if (id <= int(words[h(H_FUTURE_COMPONENT_COUNT)]) && longTarget(id)) {
-        uint slot = atomicAdd(words[f(FIELD_LIVE_COUNTS) + 3], 1u);
-        words[f(FIELD_LONG_ROWS) + h(H_NODE_CAPACITY) + 2 + int(slot)] = uint(id);
+    if (id <= int(words[headerWord(H_FUTURE_COMPONENT_COUNT)]) && longTarget(id)) {
+        uint slot = atomicAdd(words[workField(FIELD_LIVE_COUNTS) + 3], 1u);
+        words[workField(FIELD_LONG_ROWS) + headerWord(H_NODE_CAPACITY) + 2 + int(slot)] = uint(id);
     }
 }
 void prepareDispatch() {
-    int n = groupCount(), oldNodes = int(words[h(H_GAS_COUNTS)]), newNodes = int(words[h(H_FUTURE_COMPONENT_COUNT)]);
-    int sizes[7] = int[7](int(words[f(FIELD_LIVE_COUNTS) + 1]), (n + 127) / 128, int(words[f(FIELD_LIVE_COUNTS) + 2]),
-                          int(words[f(FIELD_LIVE_COUNTS) + 3]), int(words[f(FIELD_LIVE_COUNTS) + 2]),
+    int n = groupCount(), oldNodes = int(words[headerWord(H_GAS_COUNTS)]), newNodes = int(words[headerWord(H_FUTURE_COMPONENT_COUNT)]);
+    int sizes[7] = int[7](int(words[workField(FIELD_LIVE_COUNTS) + 1]), (n + 127) / 128, int(words[workField(FIELD_LIVE_COUNTS) + 2]),
+                          int(words[workField(FIELD_LIVE_COUNTS) + 3]), int(words[workField(FIELD_LIVE_COUNTS) + 2]),
                           (oldNodes + 2 + 127) / 128, (newNodes + 1 + 127) / 128);
     for (int i = 0; i < 7; i++) {
-        int total = errors == 0u ? sizes[i] : 0, at = f(FIELD_DISPATCH) + 3 * i;
+        int total = errors == 0u ? sizes[i] : 0, at = workField(FIELD_DISPATCH) + 3 * i;
         words[at] = uint(min(total, 65535));
         words[at + 1] = uint(max(1, (total + 65534) / 65535));
         words[at + 2] = 1u;
@@ -505,33 +526,33 @@ void prepareDispatch() {
 void main() {
     int group = int(gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x), lane = int(gl_LocalInvocationID.x),
         id = 128 * group + lane;
-    if (p.stage == 12) {
+    if (p.stage == STAGE_PREPARE_DISPATCH) {
         if (id == 0)
             prepareDispatch();
         return;
     }
-    if (p.stage == 4) {
-        if (id == 0 && groupCount() > h(H_GROUP_CAPACITY))
+    if (p.stage == STAGE_CHECK_CAPACITY) {
+        if (id == 0 && groupCount() > headerWord(H_GROUP_CAPACITY))
             atomicOr(errors, 64u);
         return;
     }
-    if (p.stage == 7 || (p.stage >= 9 && p.stage <= 11)) {
+    if (p.stage == STAGE_LONG_WEIGHTS || (p.stage >= STAGE_LONG_INHERITED_CONTROLS && p.stage <= STAGE_LONG_SOURCE_VOLUMES)) {
         if (lane == 0)
-            groupValid = errors == 0u && group < int(words[f(FIELD_LIVE_COUNTS) + (p.stage == 7    ? 1
-                                                                                   : p.stage == 10 ? 3
+            groupValid = errors == 0u && group < int(words[workField(FIELD_LIVE_COUNTS) + (p.stage == STAGE_LONG_WEIGHTS    ? 1
+                                                                                   : p.stage == STAGE_LONG_FUTURE_CONTROLS ? 3
                                                                                                    : 2)])
                              ? 1
                              : 0;
         barrier();
         if (groupValid == 0)
             return;
-        if (p.stage == 7)
-            weights(int(words[f(FIELD_HASH) + group]), lane);
-        else if (p.stage == 10)
-            futureControls(int(words[f(FIELD_LONG_ROWS) + h(H_NODE_CAPACITY) + 2 + group]), lane, 128);
+        if (p.stage == STAGE_LONG_WEIGHTS)
+            weights(int(words[workField(FIELD_HASH) + group]), lane);
+        else if (p.stage == STAGE_LONG_FUTURE_CONTROLS)
+            futureControls(int(words[workField(FIELD_LONG_ROWS) + headerWord(H_NODE_CAPACITY) + 2 + group]), lane, 128);
         else {
-            int source = int(words[f(FIELD_LONG_ROWS) + group]);
-            if (p.stage == 9)
+            int source = int(words[workField(FIELD_LONG_ROWS) + group]);
+            if (p.stage == STAGE_LONG_INHERITED_CONTROLS)
                 inheritedControls(source, lane, 128);
             else if (source >= 2)
                 sourceVolumes(source - 2, lane, 128);
@@ -540,50 +561,50 @@ void main() {
     }
     if (id >= p.count)
         return;
-    if (p.stage == 0) {
+    if (p.stage == STAGE_INITIALIZE) {
         initialize(id);
         return;
     }
     if (errors != 0u)
         return;
-    if (p.stage == 14) {
-        if (id < int(words[h(H_GAS_COUNTS)]) + 2 && !longSource(id))
+    if (p.stage == STAGE_SHORT_INHERITED_CONTROLS) {
+        if (id < int(words[headerWord(H_GAS_COUNTS)]) + 2 && !longSource(id))
             inheritedControls(id, 0, 1);
         return;
     }
-    if (p.stage == 15) {
-        if (id <= int(words[h(H_FUTURE_COMPONENT_COUNT)]) && !longTarget(id))
+    if (p.stage == STAGE_SHORT_FUTURE_CONTROLS) {
+        if (id <= int(words[headerWord(H_FUTURE_COMPONENT_COUNT)]) && !longTarget(id))
             futureControls(id, 0, 1);
         return;
     }
-    if (p.stage == 16) {
-        if (id < int(words[h(H_GAS_COUNTS)]) && !longSource(id + 2))
+    if (p.stage == STAGE_SHORT_SOURCE_VOLUMES) {
+        if (id < int(words[headerWord(H_GAS_COUNTS)]) && !longSource(id + 2))
             sourceVolumes(id, 0, 1);
         return;
     }
-    if (p.stage == 17) {
+    if (p.stage == STAGE_CLASSIFY_CONTROLS) {
         classifyControls(id);
         return;
     }
-    if (p.stage == 18) {
+    if (p.stage == STAGE_GEOMETRY_EDGES) {
         geometryEdges(id);
         return;
     }
-    if (p.stage == 19) {
+    if (p.stage == STAGE_CHECK_VANISHED) {
         checkVanished(id);
         return;
     }
-    if (p.stage == 1)
+    if (p.stage == STAGE_TRANSPORT)
         transport(id);
-    else if (p.stage == 2)
+    else if (p.stage == STAGE_MAKE_EDGES)
         makeEdges(id);
-    else if (p.stage == 3)
+    else if (p.stage == STAGE_INSERT_EDGE)
         insertEdge(id);
-    else if (p.stage == 13)
+    else if (p.stage == STAGE_SHORT_WEIGHTS)
         shortWeights(id);
-    else if (p.stage == 5)
+    else if (p.stage == STAGE_COUNT_EDGES)
         countEdges(id);
-    else if (p.stage == 6)
+    else if (p.stage == STAGE_SCATTER_EDGES)
         scatterEdges(id);
     else
         scatterGroups(id);

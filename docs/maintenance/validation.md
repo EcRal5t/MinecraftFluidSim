@@ -223,6 +223,8 @@
 <a id="当前验证证据"></a>
 ## 当前验证基线与状态
 
+2026-10-30 其余 shader 可读性整理：53 个 shader／共享片段完成主要变量、函数、阶段、记录字段及魔数命名。常驻状态、七类热相变、固液反应、整数输运及 74,743 行压力图重放通过，对应任务输出见 `build/shader-readability-integration.log`。完整 GPU 水流 120 步、实体耦合、checkpoint 恢复、暂停单步和编辑续算通过，记录 `build/shader-readability-delivery.log`。相变行共享库同步改名后，`assemble :gpu-kernel:runGpuThermalPhaseValidation :gpu-kernel:runGpuSolidLiquidReactionsValidation` 通过，最终证据为 `build/shader-readability-phase-final.log`。算法、布局、参数和迭代预算保持不变，产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
+
 2026-10-30 主线审阅修复：`runHostValidation -PhostValidation=lifecycle,containers,region-state` 通过，记录 `build/mainline-review-regression.log`。新增交接回归覆盖有限热设备更新库存后的卸载恢复、容器预览与执行排除暂停组、恢复组重新参与编辑，以及实体扫掠进入暂停组后保留旧姿态。设备故障使用受控后端覆盖整个区域 tick 的统一处理、共享设备失效及释放异常；真实 Vulkan 设备丢失注入仍未执行。
 
 同轮 `assemble verifyArchitecture :fabric:runGpuProductionDemoValidation -PgpuDemo=flow -PgpuDemoSteps=120 -PgpuDemoStage=complete` 通过，记录 `build/mainline-review-delivery.log`。架构扫描 611 个生产源；真实 GPU 水流完成 120 步、实体交互、checkpoint 恢复、暂停单步、库存编辑与续算。产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。源码哈希独立重算一致，覆盖 903 个文件，其中 GPU 模块 182 个（含 Java、shader 与构建配置），记录 `build/mainline-review-metadata.log`。

@@ -19,32 +19,32 @@ p;
 // HOST_LAYOUT
 shared double tile[272], panel[4352], pivot;
 shared int valid;
-int h(int i) {
+int headerWord(int i) {
     return int(words[p.header + i]);
 }
-int f(int i) {
-    return h(WORK_FIELDS + i);
+int workField(int i) {
+    return headerWord(WORK_FIELDS + i);
 }
-double number(int at) {
+double readDouble(int at) {
     return packDouble2x32(uvec2(words[at], words[at + 1]));
 }
-void put(int at, double v) {
+void writeDouble(int at, double v) {
     uvec2 b = unpackDouble2x32(v);
     words[at] = b.x;
     words[at + 1] = b.y;
 }
 int address(int row, int col) {
-    return f(FIELD_DENSE) + 2 * (h(H_DENSE_ROWS) * row + col);
+    return workField(FIELD_DENSE) + 2 * (headerWord(H_DENSE_ROWS) * row + col);
 }
 void main() {
     if (errors != 0u)
         return;
-    int lane = int(gl_LocalInvocationID.x), count = int(words[f(FIELD_CORE_OFFSETS) + h(H_NODE_CAPACITY)]);
+    int lane = int(gl_LocalInvocationID.x), count = int(words[workField(FIELD_CORE_OFFSETS) + headerWord(H_NODE_CAPACITY)]);
     for (int base = 0; base < count; base += 16) {
         int width = min(16, count - base);
         for (int entry = lane; entry < width * width; entry += 128) {
             int row = entry / width, col = entry % width;
-            tile[17 * row + col] = col <= row ? number(address(base + row, base + col)) : 0.0;
+            tile[17 * row + col] = col <= row ? readDouble(address(base + row, base + col)) : 0.0;
         }
         barrier();
         for (int k = 0; k < width; k++) {
@@ -73,16 +73,16 @@ void main() {
         for (int entry = lane; entry < width * width; entry += 128) {
             int row = entry / width, col = entry % width;
             if (col <= row)
-                put(address(base + row, base + col), tile[17 * row + col]);
+                writeDouble(address(base + row, base + col), tile[17 * row + col]);
         }
         for (int row = base + width + lane; row < count; row += 128) {
             for (int col = 0; col < width; col++) {
-                double value = number(address(row, base + col));
+                double value = readDouble(address(row, base + col));
                 for (int k = 0; k < col; k++)
                     value -= panel[17 * row + k] * tile[17 * col + k];
                 value /= tile[17 * col + col];
                 panel[17 * row + col] = value;
-                put(address(row, base + col), value);
+                writeDouble(address(row, base + col), value);
             }
         }
         barrier();
@@ -93,7 +93,7 @@ void main() {
                 double sum = 0.0;
                 for (int k = 0; k < width; k++)
                     sum += panel[17 * row + k] * panel[17 * col + k];
-                put(address(row, col), number(address(row, col)) - sum);
+                writeDouble(address(row, col), readDouble(address(row, col)) - sum);
             }
         }
         memoryBarrierBuffer();

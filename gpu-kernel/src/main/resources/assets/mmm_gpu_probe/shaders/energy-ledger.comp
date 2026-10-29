@@ -1,5 +1,9 @@
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+const int STAGE_ACCUMULATE_DOUBLE = 0;
+const int STAGE_CANONICALIZE = 2;
+const int STAGE_ADD_CANONICAL = 3;
+const uint ERROR_ENERGY_LEDGER = 32u;
 layout(local_size_x=128) in;
 layout(binding=0,std430) readonly buffer Source { uint sourceWords[]; };
 layout(binding=1,std430) buffer Candidate { uint words[]; };
@@ -7,7 +11,7 @@ layout(binding=2,std430) buffer Errors { uint errors; };
 layout(push_constant) uniform Params { int header;int stage;int count;int inputOffset;int outputOffset;int groups; } p;
 shared int bins[136];
 uint readWord(int bank,int at){return bank==0?sourceWords[at]:words[at];}
-void addDouble(int index){
+void accumulateDouble(int index){
     int streamCount=int(words[p.header]);int at=0,coefficient=1,bank=0;
     for(int stream=0;stream<streamCount;stream++) {
         int descriptor=p.header+1+7*stream,first=int(words[descriptor]),count=int(words[descriptor+1]);
@@ -17,7 +21,7 @@ void addDouble(int index){
         coefficient=int(words[descriptor+5]);break;
     }
     uint low=readWord(bank,at),high=readWord(bank,at+1);int exponent=int((high>>20)&2047u);
-    if(exponent==2047){atomicOr(errors,32u);return;}
+    if(exponent==2047){atomicOr(errors,ERROR_ENERGY_LEDGER);return;}
     uint64_t mantissa=(uint64_t(high&1048575u)<<32)|uint64_t(low);
     if(exponent!=0)mantissa|=uint64_t(1)<<52;
     if(mantissa==uint64_t(0))return;
@@ -29,14 +33,14 @@ void addDouble(int index){
         int part=int(value&uint64_t(65535));if(part!=0)atomicAdd(bins[first+digit],sign*part);
     }
 }
-void addCanonical(int bank,int address,int limb){
+void accumulateCanonical(int bank,int address,int limb){
     int sign=int(readWord(bank,address)),length=int(readWord(bank,address+2));if(sign==0||limb>=length)return;
     int power=int(readWord(bank,address+1))+1074+32*limb;
-    if((sign!=-1&&sign!=1)||length<0||length>68||power<0){atomicOr(errors,32u);return;}
+    if((sign!=-1&&sign!=1)||length<0||length>68||power<0){atomicOr(errors,ERROR_ENERGY_LEDGER);return;}
     uint64_t value=uint64_t(readWord(bank,address+4+limb))<<(power&15);int first=power>>4;
     for(int digit=0;digit<3;digit++){
         int part=int((value>>(16*digit))&uint64_t(65535));if(part==0)continue;
-        if(first+digit>=136){atomicOr(errors,32u);continue;}atomicAdd(bins[first+digit],sign*part);
+        if(first+digit>=136){atomicOr(errors,ERROR_ENERGY_LEDGER);continue;}atomicAdd(bins[first+digit],sign*part);
     }
 }
 // Normalize signed base-2^16 columns to a fixed two's-complement row. Each block has one writer.
@@ -47,7 +51,7 @@ void writeRow(int block){
         if((digit&1)==0)low=bits;else words[p.outputOffset+68*block+(digit>>1)]=low|(bits<<16);
     }
 }
-void canonical(){
+void writeCanonical(){
     bool negative=(words[p.inputOffset+67]&0x80000000u)!=0u;
     uint magnitude[68];uint carry=negative?1u:0u;int first=68,last=-1;
     for(int i=0;i<68;i++) {
@@ -67,11 +71,11 @@ void canonical(){
 void main(){
     int block=int(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x),lane=int(gl_LocalInvocationID.x);
     if(block>=p.groups)return;
-    if(p.stage==2){if(lane==0)canonical();return;}
+    if(p.stage==STAGE_CANONICALIZE){if(lane==0)writeCanonical();return;}
     for(int digit=lane;digit<136;digit+=128)bins[digit]=0;barrier();
-    if(p.stage==3){if(lane<68){addCanonical(0,p.inputOffset,lane);addCanonical(1,p.count,lane);}}
-    else if(p.stage==0) {
-        for(uint index=1024u*uint(block)+uint(lane);index<min(uint(p.count),1024u*uint(block)+1024u);index+=128u)addDouble(int(index));
+    if(p.stage==STAGE_ADD_CANONICAL){if(lane<68){accumulateCanonical(0,p.inputOffset,lane);accumulateCanonical(1,p.count,lane);}}
+    else if(p.stage==STAGE_ACCUMULATE_DOUBLE) {
+        for(uint index=1024u*uint(block)+uint(lane);index<min(uint(p.count),1024u*uint(block)+1024u);index+=128u)accumulateDouble(int(index));
     } else {
         // A lane owns one base-2^16 digit; all source rows are read without atomics.
         for(int digit=lane;digit<136;digit+=128) {

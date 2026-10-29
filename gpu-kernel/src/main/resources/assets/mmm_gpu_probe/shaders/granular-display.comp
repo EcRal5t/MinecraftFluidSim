@@ -1,33 +1,34 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+const double SOLID_VOLUME_QUANTA_PER_CELL = 16777216.0;
 // HOST_LAYOUT
 layout(local_size_x=128) in;
 layout(binding=0,std430) readonly buffer Arena { uint words[]; };
 layout(binding=1,std430) buffer Projection { uint projected[]; };
 layout(push_constant) uniform Params { int header;int cells;int samples;int unused;double cellSize; } p;
-int h(int i){return int(projected[p.header+i]);}int state(int f){return h(H_STATE_FIELDS+f);}
-int64_t integer(int a){return int64_t(uint64_t(words[a])|(uint64_t(words[a+1])<<32));}
-double number(int a){return packDouble2x32(uvec2(words[a],words[a+1]));}
-uint quantize(double x,double maximum){return uint(floor(clamp(x,0.0,1.0)*maximum+.5));}
+int headerValue(int i){return int(projected[p.header+i]);}int stateFieldOffset(int f){return headerValue(H_STATE_FIELDS+f);}
+int64_t readInt64(int a){return int64_t(uint64_t(words[a])|(uint64_t(words[a+1])<<32));}
+double readDouble(int a){return packDouble2x32(uvec2(words[a],words[a+1]));}
+uint quantizeUnitInterval(double x,double maximum){return uint(floor(clamp(x,0.0,1.0)*maximum+.5));}
 void main(){int id=int((gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128+gl_LocalInvocationID.x);
- int count=min(p.samples,int(words[state(S_COUNTS)]));if(id==0)projected[h(H_OUTPUT)]=uint(count);
+ int count=min(p.samples,int(words[stateFieldOffset(S_COUNTS)]));if(id==0)projected[headerValue(H_OUTPUT)]=uint(count);
  if(id<p.cells){double bulk=0.0,solid=0.0;int bestMaterial=-1;int64_t largest=0l;
-  for(int e=int(words[h(H_GEOMETRY_OFFSETS)+id]);e<int(words[h(H_GEOMETRY_OFFSETS)+id+1]);e++){
-   int entry=int(words[h(H_GEOMETRY_ENTRIES)+e]),deposit=entry-8*h(H_PARTICLE_CAPACITY);if(deposit<0)continue;int row=h(H_PARTICLE_CAPACITY)+deposit;
-   int64_t volume=integer(state(S_SOLID_VOLUME_SVQ)+2*row);int material=int(words[state(S_MATERIAL)+row]);double phi=double(uintBitsToFloat(words[state(S_DEPOSIT_POROSITY)+deposit]));
+  for(int e=int(words[headerValue(H_GEOMETRY_OFFSETS)+id]);e<int(words[headerValue(H_GEOMETRY_OFFSETS)+id+1]);e++){
+   int entry=int(words[headerValue(H_GEOMETRY_ENTRIES)+e]),deposit=entry-8*headerValue(H_PARTICLE_CAPACITY);if(deposit<0)continue;int row=headerValue(H_PARTICLE_CAPACITY)+deposit;
+   int64_t volume=readInt64(stateFieldOffset(S_SOLID_VOLUME_SVQ)+2*row);int material=int(words[stateFieldOffset(S_MATERIAL)+row]);double phi=double(uintBitsToFloat(words[stateFieldOffset(S_DEPOSIT_POROSITY)+deposit]));
    bulk+=double(volume)/(1.0-phi);solid+=double(volume);
    if(volume>largest||volume==largest&&(bestMaterial<0||material<bestMaterial)){largest=volume;bestMaterial=material;}
   }
-  uint packed=0xffff0000u;if(bestMaterial>=0){uint fill=max(1u,quantize(bulk/16777216.0,255.0)),phi=max(1u,quantize(1.0-solid/bulk,255.0));packed=fill|(phi<<8)|(uint(bestMaterial)<<16);}
-  projected[h(H_OUTPUT)+1+id]=packed;
+  uint packed=0xffff0000u;if(bestMaterial>=0){uint fill=max(1u,quantizeUnitInterval(bulk/SOLID_VOLUME_QUANTA_PER_CELL,255.0)),phi=max(1u,quantizeUnitInterval(1.0-solid/bulk,255.0));packed=fill|(phi<<8)|(uint(bestMaterial)<<16);}
+  projected[headerValue(H_OUTPUT)+1+id]=packed;
  }
  if(id<count){
   // One sample per equal ordinal interval gives a bounded representative view of the live population.
-  int row=int((uint64_t(id)*uint64_t(words[state(S_COUNTS)]))/uint64_t(count));dvec3 extent=dvec3(h(H_SIZE_X),h(H_SIZE_Y),h(H_SIZE_Z))*p.cellSize;
-  uint x=quantize(number(state(S_POSITION)+6*row)/extent.x,65535.0),y=quantize(number(state(S_POSITION)+6*row+2)/extent.y,65535.0),z=quantize(number(state(S_POSITION)+6*row+4)/extent.z,65535.0);
-  double diameter=double(pow(float(double(integer(state(S_SOLID_VOLUME_SVQ)+2*row))/134217728.0),1.0/3.0))/p.cellSize;
-  uint size=min(10u,max(1u,quantize(diameter,255.0))),material=words[state(S_MATERIAL)+row];
-  projected[h(H_OUTPUT)+1+p.cells+2*id]=x|(y<<16);projected[h(H_OUTPUT)+2+p.cells+2*id]=z|(size<<16)|(material<<24);
+  int row=int((uint64_t(id)*uint64_t(words[stateFieldOffset(S_COUNTS)]))/uint64_t(count));dvec3 extent=dvec3(headerValue(H_SIZE_X),headerValue(H_SIZE_Y),headerValue(H_SIZE_Z))*p.cellSize;
+  uint x=quantizeUnitInterval(readDouble(stateFieldOffset(S_POSITION)+6*row)/extent.x,65535.0),y=quantizeUnitInterval(readDouble(stateFieldOffset(S_POSITION)+6*row+2)/extent.y,65535.0),z=quantizeUnitInterval(readDouble(stateFieldOffset(S_POSITION)+6*row+4)/extent.z,65535.0);
+  double diameter=double(pow(float(double(readInt64(stateFieldOffset(S_SOLID_VOLUME_SVQ)+2*row))/134217728.0),1.0/3.0))/p.cellSize;
+  uint size=min(10u,max(1u,quantizeUnitInterval(diameter,255.0))),material=words[stateFieldOffset(S_MATERIAL)+row];
+  projected[headerValue(H_OUTPUT)+1+p.cells+2*id]=x|(y<<16);projected[headerValue(H_OUTPUT)+2+p.cells+2*id]=z|(size<<16)|(material<<24);
  }
 }

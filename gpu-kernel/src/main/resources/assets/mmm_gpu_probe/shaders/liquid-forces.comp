@@ -1,6 +1,9 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+const int STAGE_PREPARE_BUOYANCY = 0;
+const uint ERROR_LIQUID_FORCES = 131072u;
 // HOST_LAYOUT
 
 layout(local_size_x = 128) in;
@@ -20,7 +23,7 @@ int64_t readMassUnits(int offset) {
     return int64_t(uint64_t(words[offset]) | (uint64_t(words[offset + 1]) << 32));
 }
 void writeDouble(int offset, double value) {
-    if (isnan(value) || isinf(value)) atomicOr(errors, 131072u);
+    if (isnan(value) || isinf(value)) atomicOr(errors, ERROR_LIQUID_FORCES);
     uvec2 bits = unpackDouble2x32(value);
     words[offset] = bits.x;
     words[offset + 1] = bits.y;
@@ -38,14 +41,14 @@ void prepareCell(int cell) {
         if (mass == 0.0) continue;
         int material = int(words[stockField(STOCK_MATERIALS) + stock]);
         if (mass < 0.0 || material < 0 || material >= header(H_MATERIAL_COUNT) || temperatureK <= 0.0) {
-            atomicOr(errors, 131072u);
+            atomicOr(errors, ERROR_LIQUID_FORCES);
             return;
         }
         double referenceK = readDouble(header(H_REFERENCE_TEMPERATURE) + 2 * material);
         double expansion = readDouble(header(H_EXPANSION_COEFFICIENT) + 2 * material) * (temperatureK - referenceK);
         double volumeRatio = 1.0 + expansion;
         if (volumeRatio <= 0.0 || isnan(volumeRatio) || isinf(volumeRatio)) {
-            atomicOr(errors, 131072u);
+            atomicOr(errors, ERROR_LIQUID_FORCES);
             return;
         }
         weightedReduction += mass * (expansion / volumeRatio);
@@ -83,7 +86,7 @@ void buoyancyFace(int localFace) {
 void main() {
     int item = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
     if (errors != 0u) return;
-    if (p.stage == 0) {
+    if (p.stage == STAGE_PREPARE_BUOYANCY) {
         if (item < header(H_CELL_COUNT)) prepareCell(item);
     } else if (item < header(H_SIZE_X) * (header(H_SIZE_Y) + 1) * header(H_SIZE_Z)) {
         buoyancyFace(item);

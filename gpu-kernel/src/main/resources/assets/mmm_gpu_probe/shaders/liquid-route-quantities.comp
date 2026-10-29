@@ -1,6 +1,11 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+const uint ERROR_INVALID_QUANTITY = 32u;
+const uint ERROR_INSUFFICIENT_CAPACITY = 64u;
+const double MASS_UNIT_KG = 1e-10LF;
+const int ROUTE_COUNT = 7;
 layout(local_size_x = 128) in;
 layout(binding = 0, std430) readonly buffer Source {
     uint sourceWords[];
@@ -109,18 +114,18 @@ double volumeFraction(Volume part, Volume whole) {
     return clamp(ldexp(normalizedHead(part) / normalizedHead(whole), int(power)), 0.0LF, 1.0LF);
 }
 
-int volumeFractions(int stock, out double fractions[7], out bool enabled[7]) {
+int volumeFractions(int stock, out double fractions[ROUTE_COUNT], out bool enabled[ROUTE_COUNT]) {
     Volume whole = sourceVolume(stock);
     int owner = -1;
     if (whole.count == 0)
         return -1;
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < ROUTE_COUNT; i++) {
         int entry = routeIndex(stock, i),
             sign = entry < 0 ? 0 : int(candidateWords[route(ROUTE_VOLUME_DESCRIPTORS) + 5 * entry + 4]);
         enabled[i] = sign > 0;
         fractions[i] = 0.0;
         if (sign < 0)
-            atomicOr(errors, 32u);
+            atomicOr(errors, ERROR_INVALID_QUANTITY);
         if (enabled[i]) {
             Volume part = routeVolume(entry);
             if (owner < 0 || greaterVolume(part, routeVolume(routeIndex(stock, owner))))
@@ -129,7 +134,7 @@ int volumeFractions(int stock, out double fractions[7], out bool enabled[7]) {
         }
     }
     if (owner < 0)
-        atomicOr(errors, 32u);
+        atomicOr(errors, ERROR_INVALID_QUANTITY);
     return owner;
 }
 
@@ -139,9 +144,9 @@ int64_t share(int64_t total, double fraction, int64_t remaining) {
         return remaining;
     return min(remaining, int64_t(max(0.0LF, amount)));
 }
-void distribute(int64_t total, double fractions[7], int owner, out int64_t amounts[7]) {
+void distribute(int64_t total, double fractions[ROUTE_COUNT], int owner, out int64_t amounts[ROUTE_COUNT]) {
     int64_t remaining = total;
-    for (int i = 0; i < 7; i++)
+    for (int i = 0; i < ROUTE_COUNT; i++)
         if (i != owner) {
             amounts[i] = share(total, fractions[i], remaining);
             remaining -= amounts[i];
@@ -149,20 +154,20 @@ void distribute(int64_t total, double fractions[7], int owner, out int64_t amoun
     amounts[owner] = remaining;
 }
 
-int massFractions(int stock, int volumeOwner, double volumeShares[7], bool enabled[7], out int64_t masses[7],
-                  out double fractions[7]) {
+int massFractions(int stock, int volumeOwner, double volumeShares[ROUTE_COUNT], bool enabled[ROUTE_COUNT], out int64_t masses[ROUTE_COUNT],
+                  out double fractions[ROUTE_COUNT]) {
     int64_t total = readLong(0, src(STOCK_MASS_UNITS) + 2 * stock);
     if (total < int64_t(0)) {
-        atomicOr(errors, 32u);
+        atomicOr(errors, ERROR_INVALID_QUANTITY);
         return -1;
     }
     distribute(total, volumeShares, volumeOwner, masses);
     int owner = volumeOwner;
     if (total > int64_t(0))
-        for (int i = 0; i < 7; i++)
+        for (int i = 0; i < ROUTE_COUNT; i++)
             if (masses[i] > masses[owner])
                 owner = i;
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < ROUTE_COUNT; i++) {
         fractions[i] = total == int64_t(0) ? volumeShares[i] : double(masses[i]) / double(total);
         if (routeIndex(stock, i) >= 0) {
             putLong(route(ROUTE_MASS_UNITS) + 2 * (routeIndex(stock, i)), masses[i]);
@@ -194,18 +199,18 @@ void expand(inout double terms[8], inout int count, double value) {
 void writeQuantities(int stock) {
     for (int i = 0; i < 8; i++)
         putDouble(h(H_ENERGY_REMAINDERS) + 16 * stock + 2 * i, 0.0);
-    uint required = 7u * sourceWords[src(STOCK_COUNTS) + 1];
+    uint required = uint(ROUTE_COUNT) * sourceWords[src(STOCK_COUNTS) + 1];
     if (stock == 0)
         candidateWords[h(H_SPECIES_REQUIRED)] = required;
     if (required > uint(h(H_SPECIES_CAPACITY))) {
-        atomicOr(errors, 64u);
+        atomicOr(errors, ERROR_INSUFFICIENT_CAPACITY);
         return;
     }
     if (uint(stock) >= sourceWords[src(STOCK_COUNTS)])
         return;
-    double volumeShares[7], fractions[7];
-    bool enabled[7];
-    int64_t masses[7];
+    double volumeShares[ROUTE_COUNT], fractions[ROUTE_COUNT];
+    bool enabled[ROUTE_COUNT];
+    int64_t masses[ROUTE_COUNT];
     int volumeOwner = volumeFractions(stock, volumeShares, enabled);
     if (volumeOwner < 0)
         return;
@@ -215,10 +220,10 @@ void writeQuantities(int stock) {
     int64_t totalMass = readLong(0, src(STOCK_MASS_UNITS) + 2 * stock);
     int material = int(sourceWords[src(STOCK_MATERIALS) + stock]);
     double materialReference = readDouble(1, h(H_MATERIAL_REFERENCE) + 2 * material);
-    precise double sourceReference = double(totalMass) * 1e-10LF * materialReference;
-    precise double references[7];
-    for (int i = 0; i < 7; i++) {
-        references[i] = double(masses[i]) * 1e-10LF * materialReference;
+    precise double sourceReference = double(totalMass) * MASS_UNIT_KG * materialReference;
+    precise double references[ROUTE_COUNT];
+    for (int i = 0; i < ROUTE_COUNT; i++) {
+        references[i] = double(masses[i]) * MASS_UNIT_KG * materialReference;
     }
     int begin = int(sourceWords[src(STOCK_SPECIES_OFFSETS) + stock]),
         end = int(sourceWords[src(STOCK_SPECIES_OFFSETS) + stock + 1]);
@@ -226,36 +231,36 @@ void writeQuantities(int stock) {
         int handle = int(sourceWords[src(STOCK_SPECIES_HANDLES) + entry]);
         int64_t total = readLong(0, src(STOCK_SPECIES_AMOUNTS) + 2 * entry);
         if (total < int64_t(0)) {
-            atomicOr(errors, 32u);
+            atomicOr(errors, ERROR_INVALID_QUANTITY);
             return;
         }
-        int64_t amounts[7];
+        int64_t amounts[ROUTE_COUNT];
         distribute(total, fractions, owner, amounts);
         double reference = readDouble(1, h(H_SPECIES_REFERENCE) + 2 * (material * h(H_SPECIES_STRIDE) + handle));
         sourceReference += double(total) * reference;
         uint mask = candidateWords[route(ROUTE_SOURCE_MASKS) + stock];
-        for (int dir = 0; dir < 7; dir++)
+        for (int dir = 0; dir < ROUTE_COUNT; dir++)
             if ((mask & (1u << dir)) == 0u)
-                putLong(route(ROUTE_SPECIES_AMOUNTS) + 2 * (7 * entry + dir), 0l);
+                putLong(route(ROUTE_SPECIES_AMOUNTS) + 2 * (ROUTE_COUNT * entry + dir), 0l);
         // i is a compact volume part; fixed species amounts are indexed by its real spatial direction.
-        for (int i = 0; i < 7; i++) {
+        for (int i = 0; i < ROUTE_COUNT; i++) {
             int part = routeIndex(stock, i);
             if (part < 0)
                 continue;
             int dir = int(candidateWords[route(ROUTE_SLOTS) + part]);
-            putLong(route(ROUTE_SPECIES_AMOUNTS) + 2 * (7 * entry + dir), amounts[i]);
+            putLong(route(ROUTE_SPECIES_AMOUNTS) + 2 * (ROUTE_COUNT * entry + dir), amounts[i]);
             if (amounts[i] > int64_t(0))
                 references[i] += double(amounts[i]) * reference;
         }
     }
     double sourceEnergy = readDouble(0, src(STOCK_ENERGY_BITS) + 2 * stock);
     precise double sensible = sourceEnergy - sourceReference;
-    precise double energies[7];
-    for (int i = 0; i < 7; i++)
+    precise double energies[ROUTE_COUNT];
+    for (int i = 0; i < ROUTE_COUNT; i++)
         energies[i] = 0.0;
     if (totalMass > int64_t(0)) {
         precise double sum = 0.0, error = 0.0;
-        for (int i = 0; i < 7; i++)
+        for (int i = 0; i < ROUTE_COUNT; i++)
             if (i != owner) {
                 if (masses[i] > int64_t(0))
                     energies[i] = references[i] + sensible * fractions[i];
@@ -266,18 +271,18 @@ void writeQuantities(int stock) {
         energies[owner] = sourceEnergy - sum;
     }
     bool valid = finite(sourceEnergy) && finite(sourceReference);
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < ROUTE_COUNT; i++) {
         valid = valid && finite(energies[i]);
         if (routeIndex(stock, i) >= 0)
             putDouble(route(ROUTE_ENERGY_BITS) + 2 * routeIndex(stock, i), energies[i]);
     }
     if (!valid) {
-        atomicOr(errors, 32u);
+        atomicOr(errors, ERROR_INVALID_QUANTITY);
         return;
     }
     precise double remainders[8];
     int count = 0;
-    for (int i = 0; i < 7; i++)
+    for (int i = 0; i < ROUTE_COUNT; i++)
         expand(remainders, count, energies[i]);
     expand(remainders, count, -sourceEnergy);
     for (int i = 0; i < 8; i++)

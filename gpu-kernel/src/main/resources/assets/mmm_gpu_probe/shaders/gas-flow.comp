@@ -22,57 +22,85 @@ layout(push_constant) uniform Params {
 }
 p;
 // HOST_LAYOUT
+const uint ERROR_INVALID_STATE = 262144u;
+const int STAGE_INITIALIZE = 0;
+const int STAGE_FACE_KEYS = 1;
+const int STAGE_INSERT_FACE = 2;
+const int STAGE_MAKE_PAIR = 3;
+const int STAGE_COUNT_FACE = 4;
+const int STAGE_SCATTER_FACE = 5;
+const int STAGE_SHORT_PAIR_CONDUCTANCE = 6;
+const int STAGE_ADJACENCY = 7;
+const int STAGE_SHORT_DIAGONAL = 8;
+const int STAGE_SHORT_MATRIX = 9;
+const int STAGE_FLOW_PREFERENCE = 10;
+const int STAGE_SHORT_SUPPLY = 11;
+const int STAGE_ROUTE = 12;
+const int STAGE_PRODUCT_TILE = 14;
+const int STAGE_DIRECTION_PRODUCT_TILE = 15;
+const int STAGE_SMALL_PRODUCT = 16;
+const int STAGE_SMALL_DIRECTION_PRODUCT = 17;
+const int STAGE_CLASSIFY_LONG_ROW = 18;
+const int STAGE_LONG_DISPATCH = 19;
+const int STAGE_FINISH_LONG_PRODUCT = 20;
+const int STAGE_FINISH_LONG_DIRECTION_PRODUCT = 21;
+const int STAGE_CLASSIFY_LONG_PAIR = 22;
+const int STAGE_LONG_PAIR_CONDUCTANCE = 23;
+const int STAGE_LONG_DIAGONAL = 24;
+const int STAGE_LONG_MATRIX = 25;
+const int STAGE_LONG_SUPPLY = 26;
+
 shared double partial[128];
 shared int valid;
-int h(int i) {
+int headerWord(int i) {
     return int(words[p.header + i]);
 }
-int f(int i) {
-    return h(WORK_FIELDS + i);
+int workField(int i) {
+    return headerWord(WORK_FIELDS + i);
 }
-int eh(int i) {
-    return int(words[h(H_EOS_HEADER) + i]);
+int gasHeaderWord(int i) {
+    return int(words[headerWord(H_EOS_HEADER) + i]);
 }
-int gh(int i) {
-    return int(words[h(H_GEOMETRY_HEADER) + i]);
+int geometryHeaderWord(int i) {
+    return int(words[headerWord(H_GEOMETRY_HEADER) + i]);
 }
-int gas(int i) {
-    return eh(GAS_FIELDS + i);
+int gasField(int i) {
+    return gasHeaderWord(GAS_FIELDS + i);
 }
-int nodes() {
-    return int(words[gas(GAS_COUNTS)]);
+int nodeCount() {
+    return int(words[gasField(GAS_COUNTS)]);
 }
-int pairs() {
-    return int(words[f(FIELD_HASH_OFFSETS) + h(H_HASH_CAPACITY)]);
+int pairCount() {
+    return int(words[workField(FIELD_HASH_OFFSETS) + headerWord(H_HASH_CAPACITY)]);
 }
-double number(int at) {
+double readDouble(int at) {
     return packDouble2x32(uvec2(words[at], words[at + 1]));
 }
-void put(int at, double value) {
+void writeDouble(int at, double value) {
     uvec2 b = unpackDouble2x32(value);
     words[at] = b.x;
     words[at + 1] = b.y;
 }
-uint64_t quantity(int at) {
+uint64_t readQuantity(int at) {
     return uint64_t(words[at]) | (uint64_t(words[at + 1]) << 32);
 }
-bool finite(double x) {
+bool isFinite(double x) {
     return !isnan(x) && !isinf(x);
 }
-void invalid() {
-    atomicOr(errors, 262144u);
+void reportInvalid() {
+    atomicOr(errors, ERROR_INVALID_STATE);
 }
 double state(int node, int field) {
-    return number(eh(GAS_H_STATES) + 18 * node + 2 * field);
+    return readDouble(gasHeaderWord(GAS_H_STATES) + 18 * node + 2 * field);
 }
-double standardT() {
-    return number(h(H_EOS_HEADER) + 32);
+double standardTemperature() {
+    return readDouble(headerWord(H_EOS_HEADER) + 32);
 }
-double standardP() {
-    return number(h(H_EOS_HEADER) + 36) * 1e9LF * standardT();
+double standardPressure() {
+    return readDouble(headerWord(H_EOS_HEADER) + 36) * 1e9LF * standardTemperature();
 }
 double standardVolume(int node) {
-    return state(node, 4) * standardT() / standardP();
+    return state(node, 4) * standardTemperature() / standardPressure();
 }
 double nodePressure(int endpoint) {
     return endpoint == 0 ? p.ambientP : state(endpoint - 1, 1);
@@ -87,7 +115,7 @@ void reduce(int lane, double value) {
     }
 }
 ivec3 shape() {
-    return ivec3(h(H_SIZE_X), h(H_SIZE_Y), h(H_SIZE_Z));
+    return ivec3(headerWord(H_SIZE_X), headerWord(H_SIZE_Y), headerWord(H_SIZE_Z));
 }
 int cell(ivec3 q) {
     ivec3 s = shape();
@@ -108,63 +136,63 @@ ivec2 endpoints(int face) {
     return ivec2(cell(q - step), cell(q));
 }
 void initialize(int id) {
-    if (id < h(H_HASH_CAPACITY)) {
-        words[f(FIELD_HASH) + id] = 0u;
-        words[f(FIELD_HASH_FLAGS) + id] = 0u;
+    if (id < headerWord(H_HASH_CAPACITY)) {
+        words[workField(FIELD_HASH) + id] = 0u;
+        words[workField(FIELD_HASH_FLAGS) + id] = 0u;
     }
-    if (id < h(H_PAIR_CAPACITY)) {
-        words[f(FIELD_PAIR_COUNTS) + id] = 0u;
-        words[f(FIELD_PAIR_CURSORS) + id] = 0u;
+    if (id < headerWord(H_PAIR_CAPACITY)) {
+        words[workField(FIELD_PAIR_COUNTS) + id] = 0u;
+        words[workField(FIELD_PAIR_CURSORS) + id] = 0u;
     }
-    if (id < h(H_NODE_CAPACITY)) {
-        words[f(FIELD_NODE_COUNTS) + id] = 0u;
-        words[f(FIELD_NODE_CURSORS) + id] = 0u;
-        words[f(FIELD_START_COUNTS) + id] = 1u;
-        words[f(FIELD_ROWS) + id] = uint(-1);
-        words[f(FIELD_META) + id] = 0u;
+    if (id < headerWord(H_NODE_CAPACITY)) {
+        words[workField(FIELD_NODE_COUNTS) + id] = 0u;
+        words[workField(FIELD_NODE_CURSORS) + id] = 0u;
+        words[workField(FIELD_START_COUNTS) + id] = 1u;
+        words[workField(FIELD_ROWS) + id] = uint(-1);
+        words[workField(FIELD_META) + id] = 0u;
     }
-    if (id < h(H_NODE_CAPACITY) + 2) {
-        words[f(FIELD_SOURCE_COUNTS) + id] = 0u;
-        words[f(FIELD_SOURCE_CURSORS) + id] = 0u;
+    if (id < headerWord(H_NODE_CAPACITY) + 2) {
+        words[workField(FIELD_SOURCE_COUNTS) + id] = 0u;
+        words[workField(FIELD_SOURCE_CURSORS) + id] = 0u;
     }
-    if (id < h(H_NODE_CAPACITY) + 1) {
-        words[f(FIELD_TARGET_COUNTS) + id] = 0u;
-        words[f(FIELD_TARGET_CURSORS) + id] = 0u;
+    if (id < headerWord(H_NODE_CAPACITY) + 1) {
+        words[workField(FIELD_TARGET_COUNTS) + id] = 0u;
+        words[workField(FIELD_TARGET_CURSORS) + id] = 0u;
     }
     if (id == 0) {
-        words[f(FIELD_LONG_COUNTS)] = 0u;
-        words[f(FIELD_LONG_COUNTS) + 1] = 0u;
-        words[f(FIELD_LONG_COUNTS) + 2] = 0u;
+        words[workField(FIELD_LONG_COUNTS)] = 0u;
+        words[workField(FIELD_LONG_COUNTS) + 1] = 0u;
+        words[workField(FIELD_LONG_COUNTS) + 2] = 0u;
         for (int i = 0; i < 8; i++) {
-            words[f(FIELD_DISPATCH) + 3 * i] = 0u;
-            words[f(FIELD_DISPATCH) + 3 * i + 1] = 1u;
-            words[f(FIELD_DISPATCH) + 3 * i + 2] = 1u;
+            words[workField(FIELD_DISPATCH) + 3 * i] = 0u;
+            words[workField(FIELD_DISPATCH) + 3 * i + 1] = 1u;
+            words[workField(FIELD_DISPATCH) + 3 * i + 2] = 1u;
         }
-        if (errors == 0u && (nodes() != int(words[gh(GEO_H_COMPONENT_COUNT)]) || nodes() > h(H_NODE_CAPACITY)))
-            invalid();
-        words[f(FIELD_STEP)] = uint(p.step);
-        words[f(FIELD_STEP) + 1] = uint(p.step >> 32);
-        put(f(FIELD_PROBLEM) + 6 * h(H_NODE_CAPACITY), 1e-8LF);
+        if (errors == 0u && (nodeCount() != int(words[geometryHeaderWord(GEO_H_COMPONENT_COUNT)]) || nodeCount() > headerWord(H_NODE_CAPACITY)))
+            reportInvalid();
+        words[workField(FIELD_STEP)] = uint(p.step);
+        words[workField(FIELD_STEP) + 1] = uint(p.step >> 32);
+        writeDouble(workField(FIELD_PROBLEM) + 6 * headerWord(H_NODE_CAPACITY), 1e-8LF);
     }
 }
 void faceKeys(int face) {
-    words[f(FIELD_FACE_A) + face] = uint(-1);
-    words[f(FIELD_FACE_B) + face] = uint(-1);
-    words[f(FIELD_FACE_PAIR) + face] = 0u;
-    if (number(gh(GEO_H_FACE_AREAS) + 2 * face) <= 0.0 || words[gh(GEO_H_FULL_CONNECTIONS) + face] != 0u)
+    words[workField(FIELD_FACE_A) + face] = uint(-1);
+    words[workField(FIELD_FACE_B) + face] = uint(-1);
+    words[workField(FIELD_FACE_PAIR) + face] = 0u;
+    if (readDouble(geometryHeaderWord(GEO_H_FACE_AREAS) + 2 * face) <= 0.0 || words[geometryHeaderWord(GEO_H_FULL_CONNECTIONS) + face] != 0u)
         return;
     ivec2 cells = endpoints(face);
-    if ((cells.x < 0 || cells.y < 0) && gh(GEO_H_SEALED_EXTERIOR) != 0)
+    if ((cells.x < 0 || cells.y < 0) && geometryHeaderWord(GEO_H_SEALED_EXTERIOR) != 0)
         return;
-    if (h(H_ACTIVITY_CELLS) >= 0 && ((cells.x >= 0 && words[h(H_ACTIVITY_CELLS) + cells.x] == 0u) ||
-                                     (cells.y >= 0 && words[h(H_ACTIVITY_CELLS) + cells.y] == 0u)))
+    if (headerWord(H_ACTIVITY_CELLS) >= 0 && ((cells.x >= 0 && words[headerWord(H_ACTIVITY_CELLS) + cells.x] == 0u) ||
+                                     (cells.y >= 0 && words[headerWord(H_ACTIVITY_CELLS) + cells.y] == 0u)))
         return;
-    int a = cells.x < 0 ? 0 : int(words[gh(GEO_H_CELL_NODES) + cells.x]),
-        b = cells.y < 0 ? 0 : int(words[gh(GEO_H_CELL_NODES) + cells.y]);
+    int a = cells.x < 0 ? 0 : int(words[geometryHeaderWord(GEO_H_CELL_NODES) + cells.x]),
+        b = cells.y < 0 ? 0 : int(words[geometryHeaderWord(GEO_H_CELL_NODES) + cells.y]);
     if (a < 0 || b < 0 || a == b)
         return;
-    words[f(FIELD_FACE_A) + face] = uint(min(a, b));
-    words[f(FIELD_FACE_B) + face] = uint(max(a, b));
+    words[workField(FIELD_FACE_A) + face] = uint(min(a, b));
+    words[workField(FIELD_FACE_B) + face] = uint(max(a, b));
 }
 uint hashPair(uint a, uint b) {
     uint x = a * 0x9e3779b9u + b * 0x85ebca6bu;
@@ -174,168 +202,168 @@ uint hashPair(uint a, uint b) {
     return x;
 }
 void insertFace(int face) {
-    int a = int(words[f(FIELD_FACE_A) + face]);
+    int a = int(words[workField(FIELD_FACE_A) + face]);
     if (a < 0)
         return;
-    uint b = words[f(FIELD_FACE_B) + face], slot = hashPair(uint(a), b) & uint(h(H_HASH_CAPACITY) - 1);
-    for (int probe = 0; probe < h(H_HASH_CAPACITY); probe++) {
-        uint old = atomicCompSwap(words[f(FIELD_HASH) + int(slot)], 0u, uint(face + 1));
+    uint b = words[workField(FIELD_FACE_B) + face], slot = hashPair(uint(a), b) & uint(headerWord(H_HASH_CAPACITY) - 1);
+    for (int probe = 0; probe < headerWord(H_HASH_CAPACITY); probe++) {
+        uint old = atomicCompSwap(words[workField(FIELD_HASH) + int(slot)], 0u, uint(face + 1));
         if (old == 0u ||
-            (words[f(FIELD_FACE_A) + int(old) - 1] == uint(a) && words[f(FIELD_FACE_B) + int(old) - 1] == b)) {
-            words[f(FIELD_FACE_PAIR) + face] = slot;
-            atomicOr(words[f(FIELD_HASH_FLAGS) + int(slot)], 1u);
+            (words[workField(FIELD_FACE_A) + int(old) - 1] == uint(a) && words[workField(FIELD_FACE_B) + int(old) - 1] == b)) {
+            words[workField(FIELD_FACE_PAIR) + face] = slot;
+            atomicOr(words[workField(FIELD_HASH_FLAGS) + int(slot)], 1u);
             return;
         }
-        slot = (slot + 1u) & uint(h(H_HASH_CAPACITY) - 1);
+        slot = (slot + 1u) & uint(headerWord(H_HASH_CAPACITY) - 1);
     }
-    invalid();
+    reportInvalid();
 }
 void makePair(int slot) {
-    int count = pairs();
-    if (count > h(H_PAIR_CAPACITY)) {
+    int count = pairCount();
+    if (count > headerWord(H_PAIR_CAPACITY)) {
         atomicOr(errors, 64u);
         return;
     }
     if (slot == 0) {
         int sizes[5] =
-            int[5](count, (count + 127) / 128, nodes(), (nodes() + 127) / 128, (nodes() + count + 127) / 128);
+            int[5](count, (count + 127) / 128, nodeCount(), (nodeCount() + 127) / 128, (nodeCount() + count + 127) / 128);
         for (int i = 0; i < 5; i++) {
-            int at = f(FIELD_DISPATCH) + 3 * i;
+            int at = workField(FIELD_DISPATCH) + 3 * i;
             words[at] = uint(min(sizes[i], 65535));
             words[at + 1] = uint(max(1, (sizes[i] + 65534) / 65535));
             words[at + 2] = 1u;
         }
-        words[f(FIELD_ROUTE_COUNT)] = uint(nodes() + count);
+        words[workField(FIELD_ROUTE_COUNT)] = uint(nodeCount() + count);
     }
-    if (words[f(FIELD_HASH_FLAGS) + slot] == 0u)
+    if (words[workField(FIELD_HASH_FLAGS) + slot] == 0u)
         return;
-    int pair = int(words[f(FIELD_HASH_OFFSETS) + slot]), face = int(words[f(FIELD_HASH) + slot]) - 1,
-        a = int(words[f(FIELD_FACE_A) + face]), b = int(words[f(FIELD_FACE_B) + face]);
-    words[f(FIELD_PAIR_A) + pair] = uint(a);
-    words[f(FIELD_PAIR_B) + pair] = uint(b);
+    int pair = int(words[workField(FIELD_HASH_OFFSETS) + slot]), face = int(words[workField(FIELD_HASH) + slot]) - 1,
+        a = int(words[workField(FIELD_FACE_A) + face]), b = int(words[workField(FIELD_FACE_B) + face]);
+    words[workField(FIELD_PAIR_A) + pair] = uint(a);
+    words[workField(FIELD_PAIR_B) + pair] = uint(b);
     if (a > 0) {
-        atomicAdd(words[f(FIELD_NODE_COUNTS) + a - 1], 1u);
-        atomicAdd(words[f(FIELD_START_COUNTS) + a - 1], 1u);
+        atomicAdd(words[workField(FIELD_NODE_COUNTS) + a - 1], 1u);
+        atomicAdd(words[workField(FIELD_START_COUNTS) + a - 1], 1u);
     }
     if (b > 0) {
-        atomicAdd(words[f(FIELD_NODE_COUNTS) + b - 1], 1u);
-        atomicAdd(words[f(FIELD_START_COUNTS) + b - 1], 1u);
+        atomicAdd(words[workField(FIELD_NODE_COUNTS) + b - 1], 1u);
+        atomicAdd(words[workField(FIELD_START_COUNTS) + b - 1], 1u);
     }
 }
 void countFace(int face) {
-    if (int(words[f(FIELD_FACE_A) + face]) < 0)
+    if (int(words[workField(FIELD_FACE_A) + face]) < 0)
         return;
-    int pair = int(words[f(FIELD_HASH_OFFSETS) + int(words[f(FIELD_FACE_PAIR) + face])]);
-    words[f(FIELD_FACE_PAIR) + face] = uint(pair);
-    atomicAdd(words[f(FIELD_PAIR_COUNTS) + pair], 1u);
+    int pair = int(words[workField(FIELD_HASH_OFFSETS) + int(words[workField(FIELD_FACE_PAIR) + face])]);
+    words[workField(FIELD_FACE_PAIR) + face] = uint(pair);
+    atomicAdd(words[workField(FIELD_PAIR_COUNTS) + pair], 1u);
 }
 void scatterFace(int face) {
-    if (int(words[f(FIELD_FACE_A) + face]) < 0)
+    if (int(words[workField(FIELD_FACE_A) + face]) < 0)
         return;
-    int pair = int(words[f(FIELD_FACE_PAIR) + face]),
-        at = int(words[f(FIELD_PAIR_OFFSETS) + pair] + atomicAdd(words[f(FIELD_PAIR_CURSORS) + pair], 1u));
-    words[f(FIELD_PAIR_FACES) + at] = uint(face);
+    int pair = int(words[workField(FIELD_FACE_PAIR) + face]),
+        at = int(words[workField(FIELD_PAIR_OFFSETS) + pair] + atomicAdd(words[workField(FIELD_PAIR_CURSORS) + pair], 1u));
+    words[workField(FIELD_PAIR_FACES) + at] = uint(face);
 }
 void pairConductance(int pair, int lane, int rowStride) {
-    int begin = int(words[f(FIELD_PAIR_OFFSETS) + pair]), end = int(words[f(FIELD_PAIR_OFFSETS) + pair + 1]);
+    int begin = int(words[workField(FIELD_PAIR_OFFSETS) + pair]), end = int(words[workField(FIELD_PAIR_OFFSETS) + pair + 1]);
     double area = 0.0;
     for (int at = begin + lane; at < end; at += rowStride)
-        area += number(gh(GEO_H_FACE_AREAS) + 2 * int(words[f(FIELD_PAIR_FACES) + at]));
+        area += readDouble(geometryHeaderWord(GEO_H_FACE_AREAS) + 2 * int(words[workField(FIELD_PAIR_FACES) + at]));
     if (rowStride > 1)
         reduce(lane, area);
     if (lane == 0) {
-        int a = int(words[f(FIELD_PAIR_A) + pair]), b = int(words[f(FIELD_PAIR_B) + pair]);
+        int a = int(words[workField(FIELD_PAIR_A) + pair]), b = int(words[workField(FIELD_PAIR_B) + pair]);
         double pa = nodePressure(a), pb = nodePressure(b), drop = abs(pa - pb);
         int donor = pa >= pb ? a : b;
         double rho = donor == 0 ? p.ambientRho : state(donor - 1, 2),
-               ratio = donor == 0 ? p.ambientP / standardP() * standardT() / p.ambientT
-                                  : standardVolume(donor - 1) / number(eh(GAS_H_NODE_VOLUMES) + 2 * (donor - 1));
+               ratio = donor == 0 ? p.ambientP / standardPressure() * standardTemperature() / p.ambientT
+                                  : standardVolume(donor - 1) / readDouble(gasHeaderWord(GAS_H_NODE_VOLUMES) + 2 * (donor - 1));
         double conductance = rho > 0.0 && ratio > 0.0
                                  ? p.cd * (rowStride > 1 ? partial[0] : area) * sqrt(2.0LF / rho) * ratio /
                                        sqrt(drop > 0.0 ? drop : max(p.ambientP, max(pa, pb)))
                                  : 0.0LF;
-        if (!finite(conductance) || conductance < 0.0)
-            invalid();
-        put(f(FIELD_PAIR_G) + 2 * pair, conductance);
+        if (!isFinite(conductance) || conductance < 0.0)
+            reportInvalid();
+        writeDouble(workField(FIELD_PAIR_G) + 2 * pair, conductance);
     }
 }
 void adjacency(int pair) {
-    int a = int(words[f(FIELD_PAIR_A) + pair]), b = int(words[f(FIELD_PAIR_B) + pair]);
+    int a = int(words[workField(FIELD_PAIR_A) + pair]), b = int(words[workField(FIELD_PAIR_B) + pair]);
     if (a > 0) {
-        int at = int(words[f(FIELD_NODE_OFFSETS) + a - 1] + atomicAdd(words[f(FIELD_NODE_CURSORS) + a - 1], 1u));
-        words[f(FIELD_NODE_PAIRS) + at] = uint(pair);
+        int at = int(words[workField(FIELD_NODE_OFFSETS) + a - 1] + atomicAdd(words[workField(FIELD_NODE_CURSORS) + a - 1], 1u));
+        words[workField(FIELD_NODE_PAIRS) + at] = uint(pair);
     }
     if (b > 0) {
-        int at = int(words[f(FIELD_NODE_OFFSETS) + b - 1] + atomicAdd(words[f(FIELD_NODE_CURSORS) + b - 1], 1u));
-        words[f(FIELD_NODE_PAIRS) + at] = uint(pair);
+        int at = int(words[workField(FIELD_NODE_OFFSETS) + b - 1] + atomicAdd(words[workField(FIELD_NODE_CURSORS) + b - 1], 1u));
+        words[workField(FIELD_NODE_PAIRS) + at] = uint(pair);
     }
 }
 void diagonal(int node, int lane, int rowStride) {
     double sum = 0.0;
-    for (int at = int(words[f(FIELD_NODE_OFFSETS) + node]) + lane; at < int(words[f(FIELD_NODE_OFFSETS) + node + 1]);
+    for (int at = int(words[workField(FIELD_NODE_OFFSETS) + node]) + lane; at < int(words[workField(FIELD_NODE_OFFSETS) + node + 1]);
          at += rowStride)
-        sum += p.dt * number(f(FIELD_PAIR_G) + 2 * int(words[f(FIELD_NODE_PAIRS) + at]));
+        sum += p.dt * readDouble(workField(FIELD_PAIR_G) + 2 * int(words[workField(FIELD_NODE_PAIRS) + at]));
     if (rowStride > 1)
         reduce(lane, sum);
     if (lane == 0) {
-        double volume = number(eh(GAS_H_NODE_VOLUMES) + 2 * node), pressure = state(node, 1),
+        double volume = readDouble(gasHeaderWord(GAS_H_NODE_VOLUMES) + 2 * node), pressure = state(node, 1),
                storage = pressure > 0.0 ? standardVolume(node) / (state(node, 5) * pressure)
-                                        : volume * standardT() / (standardP() * p.ambientT);
+                                        : volume * standardTemperature() / (standardPressure() * p.ambientT);
         double d = storage + (rowStride > 1 ? partial[0] : sum);
-        if (!(finite(d) && d > 0.0 && finite(storage) && storage > 0.0))
-            invalid();
-        put(f(FIELD_STORAGE) + 2 * node, storage);
-        put(f(FIELD_DIAGONAL_ROOT) + 2 * node, sqrt(d));
+        if (!(isFinite(d) && d > 0.0 && isFinite(storage) && storage > 0.0))
+            reportInvalid();
+        writeDouble(workField(FIELD_STORAGE) + 2 * node, storage);
+        writeDouble(workField(FIELD_DIAGONAL_ROOT) + 2 * node, sqrt(d));
     }
 }
 void matrix(int node, int lane, int rowStride) {
-    int start = int(words[f(FIELD_STARTS) + node]), begin = int(words[f(FIELD_NODE_OFFSETS) + node]),
-        end = int(words[f(FIELD_NODE_OFFSETS) + node + 1]);
-    double root = number(f(FIELD_DIAGONAL_ROOT) + 2 * node), ambient = 0.0;
+    int start = int(words[workField(FIELD_STARTS) + node]), begin = int(words[workField(FIELD_NODE_OFFSETS) + node]),
+        end = int(words[workField(FIELD_NODE_OFFSETS) + node + 1]);
+    double root = readDouble(workField(FIELD_DIAGONAL_ROOT) + 2 * node), ambient = 0.0;
     for (int at = begin + lane; at < end; at += rowStride) {
-        int pair = int(words[f(FIELD_NODE_PAIRS) + at]), a = int(words[f(FIELD_PAIR_A) + pair]),
-            b = int(words[f(FIELD_PAIR_B) + pair]), other = (a == node + 1 ? b : a), outAt = start + 1 + at - begin;
-        double g = p.dt * number(f(FIELD_PAIR_G) + 2 * pair);
-        words[f(FIELD_COLUMNS) + outAt] = uint(other > 0 ? other - 1 : node);
-        put(f(FIELD_VALUES) + 2 * outAt,
-            other > 0 ? -g / (root * number(f(FIELD_DIAGONAL_ROOT) + 2 * (other - 1))) : 0.0LF);
+        int pair = int(words[workField(FIELD_NODE_PAIRS) + at]), a = int(words[workField(FIELD_PAIR_A) + pair]),
+            b = int(words[workField(FIELD_PAIR_B) + pair]), other = (a == node + 1 ? b : a), outAt = start + 1 + at - begin;
+        double conductance = p.dt * readDouble(workField(FIELD_PAIR_G) + 2 * pair);
+        words[workField(FIELD_COLUMNS) + outAt] = uint(other > 0 ? other - 1 : node);
+        writeDouble(workField(FIELD_VALUES) + 2 * outAt,
+            other > 0 ? -conductance / (root * readDouble(workField(FIELD_DIAGONAL_ROOT) + 2 * (other - 1))) : 0.0LF);
         if (other == 0)
-            ambient += g * p.ambientP;
+            ambient += conductance * p.ambientP;
     }
     if (rowStride > 1)
         reduce(lane, ambient);
     if (lane == 0) {
-        words[f(FIELD_COLUMNS) + start] = uint(node);
-        put(f(FIELD_VALUES) + 2 * start, 1.0);
-        words[f(FIELD_ROWS) + node] = uint(node);
-        double rhs = number(f(FIELD_STORAGE) + 2 * node) * state(node, 1) + (rowStride > 1 ? partial[0] : ambient);
-        put(f(FIELD_PROBLEM) + 2 * node, rhs / root);
-        put(f(FIELD_PROBLEM) + 2 * (h(H_NODE_CAPACITY) + node), 0.0);
-        put(f(FIELD_PROBLEM) + 2 * (2 * h(H_NODE_CAPACITY) + node), root * state(node, 1));
+        words[workField(FIELD_COLUMNS) + start] = uint(node);
+        writeDouble(workField(FIELD_VALUES) + 2 * start, 1.0);
+        words[workField(FIELD_ROWS) + node] = uint(node);
+        double rhs = readDouble(workField(FIELD_STORAGE) + 2 * node) * state(node, 1) + (rowStride > 1 ? partial[0] : ambient);
+        writeDouble(workField(FIELD_PROBLEM) + 2 * node, rhs / root);
+        writeDouble(workField(FIELD_PROBLEM) + 2 * (headerWord(H_NODE_CAPACITY) + node), 0.0);
+        writeDouble(workField(FIELD_PROBLEM) + 2 * (2 * headerWord(H_NODE_CAPACITY) + node), root * state(node, 1));
     }
 }
 void flowPreference(int pair) {
-    int a = int(words[f(FIELD_PAIR_A) + pair]), b = int(words[f(FIELD_PAIR_B) + pair]);
-    double pa = a == 0 ? p.ambientP
-                       : number(f(FIELD_PRESSURE) + 2 * (a - 1)) / number(f(FIELD_DIAGONAL_ROOT) + 2 * (a - 1)),
-           pb = b == 0 ? p.ambientP
-                       : number(f(FIELD_PRESSURE) + 2 * (b - 1)) / number(f(FIELD_DIAGONAL_ROOT) + 2 * (b - 1));
-    double q = p.dt * number(f(FIELD_PAIR_G) + 2 * pair) * (pa - pb);
-    if (!finite(q))
-        invalid();
-    put(f(FIELD_PAIR_FLOW) + 2 * pair, q);
+    int a = int(words[workField(FIELD_PAIR_A) + pair]), b = int(words[workField(FIELD_PAIR_B) + pair]);
+    double pressureA = a == 0 ? p.ambientP
+                       : readDouble(workField(FIELD_PRESSURE) + 2 * (a - 1)) / readDouble(workField(FIELD_DIAGONAL_ROOT) + 2 * (a - 1)),
+           pressureB = b == 0 ? p.ambientP
+                       : readDouble(workField(FIELD_PRESSURE) + 2 * (b - 1)) / readDouble(workField(FIELD_DIAGONAL_ROOT) + 2 * (b - 1));
+    double preferredFlow = p.dt * readDouble(workField(FIELD_PAIR_G) + 2 * pair) * (pressureA - pressureB);
+    if (!isFinite(preferredFlow))
+        reportInvalid();
+    writeDouble(workField(FIELD_PAIR_FLOW) + 2 * pair, preferredFlow);
 }
 // Integrate each registered caloric segment down to the model's minimum temperature.
 double sensibleEnergy(int node) {
-    double value = 0.0, temperature = state(node, 0), minimum = number(h(H_EOS_HEADER) + 34);
-    for (int c = int(words[gas(GAS_ROW_COMPONENT_OFFSETS) + node]);
-         c < int(words[gas(GAS_ROW_COMPONENT_OFFSETS) + node + 1]); c++) {
-        int handle = int(words[gas(GAS_COMPONENT_HANDLES) + c]), begin = int(words[eh(GAS_H_SEGMENT_OFFSETS) + handle]),
-            end = int(words[eh(GAS_H_SEGMENT_OFFSETS) + handle + 1]);
-        double lower = minimum, mass = double(quantity(gas(GAS_MASS_UNITS) + 2 * c)) * 1e-10LF;
+    double value = 0.0, temperature = state(node, 0), minimum = readDouble(headerWord(H_EOS_HEADER) + 34);
+    for (int c = int(words[gasField(GAS_ROW_COMPONENT_OFFSETS) + node]);
+         c < int(words[gasField(GAS_ROW_COMPONENT_OFFSETS) + node + 1]); c++) {
+        int handle = int(words[gasField(GAS_COMPONENT_HANDLES) + c]), begin = int(words[gasHeaderWord(GAS_H_SEGMENT_OFFSETS) + handle]),
+            end = int(words[gasHeaderWord(GAS_H_SEGMENT_OFFSETS) + handle + 1]);
+        double lower = minimum, mass = double(readQuantity(gasField(GAS_MASS_UNITS) + 2 * c)) * 1e-10LF;
         for (int s = begin; s < end && lower < temperature; s++) {
-            double upper = s + 1 < end ? number(eh(GAS_H_SEGMENT_UPPER) + 2 * s) : temperature;
-            value += mass * number(eh(GAS_H_SEGMENT_CAPACITY) + 2 * s) * max(0.0LF, min(temperature, upper) - lower);
+            double upper = s + 1 < end ? readDouble(gasHeaderWord(GAS_H_SEGMENT_UPPER) + 2 * s) : temperature;
+            value += mass * readDouble(gasHeaderWord(GAS_H_SEGMENT_CAPACITY) + 2 * s) * max(0.0LF, min(temperature, upper) - lower);
             lower = upper;
         }
     }
@@ -343,192 +371,192 @@ double sensibleEnergy(int node) {
 }
 void supply(int node, int lane, int rowStride) {
     double outgoing = 0.0;
-    for (int at = int(words[f(FIELD_NODE_OFFSETS) + node]) + lane; at < int(words[f(FIELD_NODE_OFFSETS) + node + 1]);
+    for (int at = int(words[workField(FIELD_NODE_OFFSETS) + node]) + lane; at < int(words[workField(FIELD_NODE_OFFSETS) + node + 1]);
          at += rowStride) {
-        int pair = int(words[f(FIELD_NODE_PAIRS) + at]);
-        double q = number(f(FIELD_PAIR_FLOW) + 2 * pair);
-        outgoing += max(0.0LF, int(words[f(FIELD_PAIR_A) + pair]) == node + 1 ? q : -q);
+        int pair = int(words[workField(FIELD_NODE_PAIRS) + at]);
+        double pairFlow = readDouble(workField(FIELD_PAIR_FLOW) + 2 * pair);
+        outgoing += max(0.0LF, int(words[workField(FIELD_PAIR_A) + pair]) == node + 1 ? pairFlow : -pairFlow);
     }
     if (rowStride > 1)
         reduce(lane, outgoing);
     if (lane == 0) {
         double total = standardVolume(node), sensible = sensibleEnergy(node),
                pressureEnergy = state(node, 4) * state(node, 0),
-               margin = 32.0LF * 2.220446049250313e-16LF * abs(number(gas(GAS_INTERNAL_ENERGY) + 2 * node));
+               margin = 32.0LF * 2.220446049250313e-16LF * abs(readDouble(gasField(GAS_INTERNAL_ENERGY) + 2 * node));
         double fraction =
             sensible + pressureEnergy > 0.0 ? max(0.0LF, (sensible - margin) / (sensible + pressureEnergy)) : 0.0LF;
-        fraction = eh(GAS_H_ISOTHERMAL) != 0 ? 1.0LF : min(fraction, 1.0LF - 2.220446049250313e-16LF);
+        fraction = gasHeaderWord(GAS_H_ISOTHERMAL) != 0 ? 1.0LF : min(fraction, 1.0LF - 2.220446049250313e-16LF);
         double scale = (rowStride > 1 ? partial[0] : outgoing) > 0.0
                            ? min(1.0LF, total * fraction / (rowStride > 1 ? partial[0] : outgoing))
                            : 1.0LF;
-        put(f(FIELD_OUT_SCALE) + 2 * node, scale);
-        put(f(FIELD_ROUTE_WEIGHT) + 2 * node, max(0.0LF, total - scale * (rowStride > 1 ? partial[0] : outgoing)));
+        writeDouble(workField(FIELD_OUT_SCALE) + 2 * node, scale);
+        writeDouble(workField(FIELD_ROUTE_WEIGHT) + 2 * node, max(0.0LF, total - scale * (rowStride > 1 ? partial[0] : outgoing)));
     }
 }
 void route(int id) {
     int source = 0, target = 0;
     double weight = 0.0, ambientVolume = 0.0;
-    if (id < nodes()) {
-        weight = number(f(FIELD_ROUTE_WEIGHT) + 2 * id);
+    if (id < nodeCount()) {
+        weight = readDouble(workField(FIELD_ROUTE_WEIGHT) + 2 * id);
         source = weight > 0.0 ? id + 2 : 0;
         target = id + 1;
     } else {
-        int pair = id - nodes();
-        if (pair >= pairs())
+        int pair = id - nodeCount();
+        if (pair >= pairCount())
             return;
-        double q = number(f(FIELD_PAIR_FLOW) + 2 * pair);
-        int a = int(words[f(FIELD_PAIR_A) + pair]), b = int(words[f(FIELD_PAIR_B) + pair]), donor = q >= 0.0 ? a : b,
-            receiver = q >= 0.0 ? b : a;
-        weight = abs(q) * (donor > 0 ? number(f(FIELD_OUT_SCALE) + 2 * (donor - 1)) : 1.0LF);
+        double pairFlow = readDouble(workField(FIELD_PAIR_FLOW) + 2 * pair);
+        int a = int(words[workField(FIELD_PAIR_A) + pair]), b = int(words[workField(FIELD_PAIR_B) + pair]), donor = pairFlow >= 0.0 ? a : b,
+            receiver = pairFlow >= 0.0 ? b : a;
+        weight = abs(pairFlow) * (donor > 0 ? readDouble(workField(FIELD_OUT_SCALE) + 2 * (donor - 1)) : 1.0LF);
         if (weight > 0.0) {
             source = donor + 1;
             target = receiver;
             if (donor == 0)
-                ambientVolume = weight * p.ambientT / standardT();
+                ambientVolume = weight * p.ambientT / standardTemperature();
         }
     }
-    words[f(FIELD_ROUTE_SOURCE) + id] = uint(source);
-    words[f(FIELD_ROUTE_TARGET) + id] = uint(target);
-    put(f(FIELD_ROUTE_WEIGHT) + 2 * id, weight);
-    put(f(FIELD_AMBIENT_VOLUME) + 2 * id, ambientVolume);
-    atomicAdd(words[f(FIELD_SOURCE_COUNTS) + source], 1u);
-    atomicAdd(words[f(FIELD_TARGET_COUNTS) + target], 1u);
+    words[workField(FIELD_ROUTE_SOURCE) + id] = uint(source);
+    words[workField(FIELD_ROUTE_TARGET) + id] = uint(target);
+    writeDouble(workField(FIELD_ROUTE_WEIGHT) + 2 * id, weight);
+    writeDouble(workField(FIELD_AMBIENT_VOLUME) + 2 * id, ambientVolume);
+    atomicAdd(words[workField(FIELD_SOURCE_COUNTS) + source], 1u);
+    atomicAdd(words[workField(FIELD_TARGET_COUNTS) + target], 1u);
 }
 void scatterRoute(int id) {
-    int source = int(words[f(FIELD_ROUTE_SOURCE) + id]), target = int(words[f(FIELD_ROUTE_TARGET) + id]);
-    int a = int(words[f(FIELD_SOURCE_OFFSETS) + source] + atomicAdd(words[f(FIELD_SOURCE_CURSORS) + source], 1u)),
-        b = int(words[f(FIELD_TARGET_OFFSETS) + target] + atomicAdd(words[f(FIELD_TARGET_CURSORS) + target], 1u));
-    words[f(FIELD_SOURCE_ROUTES) + a] = uint(id);
-    words[f(FIELD_TARGET_ROUTES) + b] = uint(id);
+    int source = int(words[workField(FIELD_ROUTE_SOURCE) + id]), target = int(words[workField(FIELD_ROUTE_TARGET) + id]);
+    int a = int(words[workField(FIELD_SOURCE_OFFSETS) + source] + atomicAdd(words[workField(FIELD_SOURCE_CURSORS) + source], 1u)),
+        b = int(words[workField(FIELD_TARGET_OFFSETS) + target] + atomicAdd(words[workField(FIELD_TARGET_CURSORS) + target], 1u));
+    words[workField(FIELD_SOURCE_ROUTES) + a] = uint(id);
+    words[workField(FIELD_TARGET_ROUTES) + b] = uint(id);
 }
 double vector(int row, bool direction) {
-    return number((direction ? f(FIELD_WORK) + 2 * h(H_NODE_CAPACITY) : f(FIELD_PRESSURE)) + 2 * row);
+    return readDouble((direction ? workField(FIELD_WORK) + 2 * headerWord(H_NODE_CAPACITY) : workField(FIELD_PRESSURE)) + 2 * row);
 }
 bool productNeeded(bool direction) {
-    return number(f(FIELD_CONTROL) + 2 * (direction ? 3 : 7)) != 0.0LF;
+    return readDouble(workField(FIELD_CONTROL) + 2 * (direction ? 3 : 7)) != 0.0LF;
 }
 void productSmall(int node, bool direction) {
-    if (!productNeeded(direction) || node >= nodes())
+    if (!productNeeded(direction) || node >= nodeCount())
         return;
-    int begin = int(words[f(FIELD_STARTS) + node]), end = int(words[f(FIELD_STARTS) + node + 1]);
+    int begin = int(words[workField(FIELD_STARTS) + node]), end = int(words[workField(FIELD_STARTS) + node + 1]);
     if (end - begin > 128)
         return;
     double result = 0.0;
     for (int at = begin; at < end; at++)
-        result += number(f(FIELD_VALUES) + 2 * at) * vector(int(words[f(FIELD_COLUMNS) + at]), direction);
-    put(f(FIELD_WORK) + 2 * (2 * h(H_NODE_CAPACITY) + node), result);
+        result += readDouble(workField(FIELD_VALUES) + 2 * at) * vector(int(words[workField(FIELD_COLUMNS) + at]), direction);
+    writeDouble(workField(FIELD_WORK) + 2 * (2 * headerWord(H_NODE_CAPACITY) + node), result);
 }
 void classifyLongRow(int node) {
-    if (node >= nodes())
+    if (node >= nodeCount())
         return;
-    int begin = int(words[f(FIELD_STARTS) + node]), end = int(words[f(FIELD_STARTS) + node + 1]), length = end - begin;
+    int begin = int(words[workField(FIELD_STARTS) + node]), end = int(words[workField(FIELD_STARTS) + node + 1]), length = end - begin;
     if (length <= 128)
         return;
-    int row = int(atomicAdd(words[f(FIELD_LONG_COUNTS)], 1u)), count = (length + 127) / 128,
-        first = int(atomicAdd(words[f(FIELD_LONG_COUNTS) + 1], uint(count)));
-    words[f(FIELD_LONG_ROWS) + row] = uint(node);
-    words[f(FIELD_LONG_STARTS) + node] = uint(first);
+    int row = int(atomicAdd(words[workField(FIELD_LONG_COUNTS)], 1u)), count = (length + 127) / 128,
+        first = int(atomicAdd(words[workField(FIELD_LONG_COUNTS) + 1], uint(count)));
+    words[workField(FIELD_LONG_ROWS) + row] = uint(node);
+    words[workField(FIELD_LONG_STARTS) + node] = uint(first);
     for (int tile = 0; tile < count; tile++)
-        words[f(FIELD_TILE_OWNER) + first + tile] = uint(node);
+        words[workField(FIELD_TILE_OWNER) + first + tile] = uint(node);
 }
 void classifyLongPair(int pair) {
-    if (pair >= pairs())
+    if (pair >= pairCount())
         return;
-    int count = int(words[f(FIELD_PAIR_OFFSETS) + pair + 1] - words[f(FIELD_PAIR_OFFSETS) + pair]);
+    int count = int(words[workField(FIELD_PAIR_OFFSETS) + pair + 1] - words[workField(FIELD_PAIR_OFFSETS) + pair]);
     if (count > 128) {
-        uint at = atomicAdd(words[f(FIELD_LONG_COUNTS) + 2], 1u);
-        words[f(FIELD_LONG_PAIRS) + at] = uint(pair);
+        uint at = atomicAdd(words[workField(FIELD_LONG_COUNTS) + 2], 1u);
+        words[workField(FIELD_LONG_PAIRS) + at] = uint(pair);
     }
 }
 void longDispatch() {
-    int pairCount = int(words[f(FIELD_LONG_COUNTS) + 2]), pairAt = f(FIELD_DISPATCH) + 21;
+    int pairCount = int(words[workField(FIELD_LONG_COUNTS) + 2]), pairAt = workField(FIELD_DISPATCH) + 21;
     words[pairAt] = uint(min(pairCount, 65535));
     words[pairAt + 1] = uint(max(1, (pairCount + 65534) / 65535));
     words[pairAt + 2] = 1u;
     for (int slot = 5; slot <= 6; slot++) {
-        int count = int(words[f(FIELD_LONG_COUNTS) + (slot == 5 ? 1 : 0)]), at = f(FIELD_DISPATCH) + 3 * slot;
+        int count = int(words[workField(FIELD_LONG_COUNTS) + (slot == 5 ? 1 : 0)]), at = workField(FIELD_DISPATCH) + 3 * slot;
         words[at] = uint(min(count, 65535));
         words[at + 1] = uint(max(1, (count + 65534) / 65535));
         words[at + 2] = 1u;
     }
-    put(f(FIELD_CONTROL) + 80, double((nodes() + 127) / 128));
-    put(f(FIELD_CONTROL) + 82, double(words[f(FIELD_LONG_COUNTS) + 1]));
-    put(f(FIELD_CONTROL) + 84, double(words[f(FIELD_LONG_COUNTS)]));
+    writeDouble(workField(FIELD_CONTROL) + 80, double((nodeCount() + 127) / 128));
+    writeDouble(workField(FIELD_CONTROL) + 82, double(words[workField(FIELD_LONG_COUNTS) + 1]));
+    writeDouble(workField(FIELD_CONTROL) + 84, double(words[workField(FIELD_LONG_COUNTS)]));
 }
 void productTile(int tile, int lane, bool direction) {
-    if (tile >= int(words[f(FIELD_LONG_COUNTS) + 1]))
+    if (tile >= int(words[workField(FIELD_LONG_COUNTS) + 1]))
         return;
-    int node = int(words[f(FIELD_TILE_OWNER) + tile]);
-    int at = int(words[f(FIELD_STARTS) + node]) + 128 * (tile - int(words[f(FIELD_LONG_STARTS) + node])) + lane,
-        end = int(words[f(FIELD_STARTS) + node + 1]);
+    int node = int(words[workField(FIELD_TILE_OWNER) + tile]);
+    int at = int(words[workField(FIELD_STARTS) + node]) + 128 * (tile - int(words[workField(FIELD_LONG_STARTS) + node])) + lane,
+        end = int(words[workField(FIELD_STARTS) + node + 1]);
     double result =
-        at < end ? number(f(FIELD_VALUES) + 2 * at) * vector(int(words[f(FIELD_COLUMNS) + at]), direction) : 0.0LF;
+        at < end ? readDouble(workField(FIELD_VALUES) + 2 * at) * vector(int(words[workField(FIELD_COLUMNS) + at]), direction) : 0.0LF;
     reduce(lane, result);
     if (lane == 0)
-        put(f(FIELD_TILE_SUMS) + 2 * tile, partial[0]);
+        writeDouble(workField(FIELD_TILE_SUMS) + 2 * tile, partial[0]);
 }
 void finishLongProduct(int row, int lane) {
-    if (row >= int(words[f(FIELD_LONG_COUNTS)]))
+    if (row >= int(words[workField(FIELD_LONG_COUNTS)]))
         return;
-    int node = int(words[f(FIELD_LONG_ROWS) + row]), first = int(words[f(FIELD_LONG_STARTS) + node]);
-    int length = int(words[f(FIELD_STARTS) + node + 1]) - int(words[f(FIELD_STARTS) + node]),
+    int node = int(words[workField(FIELD_LONG_ROWS) + row]), first = int(words[workField(FIELD_LONG_STARTS) + node]);
+    int length = int(words[workField(FIELD_STARTS) + node + 1]) - int(words[workField(FIELD_STARTS) + node]),
         count = (length + 127) / 128;
     double sum = 0.0;
     for (int tile = lane; tile < count; tile += 128)
-        sum += number(f(FIELD_TILE_SUMS) + 2 * (first + tile));
+        sum += readDouble(workField(FIELD_TILE_SUMS) + 2 * (first + tile));
     reduce(lane, sum);
     if (lane == 0)
-        put(f(FIELD_WORK) + 2 * (2 * h(H_NODE_CAPACITY) + node), partial[0]);
+        writeDouble(workField(FIELD_WORK) + 2 * (2 * headerWord(H_NODE_CAPACITY) + node), partial[0]);
 }
 void main() {
     int group = int(gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x), lane = int(gl_LocalInvocationID.x),
         id = 128 * group + lane;
-    if (p.stage == 14 || p.stage == 15 || p.stage == 20 || p.stage == 21) {
+    if (p.stage == STAGE_PRODUCT_TILE || p.stage == STAGE_DIRECTION_PRODUCT_TILE || p.stage == STAGE_FINISH_LONG_PRODUCT || p.stage == STAGE_FINISH_LONG_DIRECTION_PRODUCT) {
         if (lane == 0)
-            valid = errors == 0u && productNeeded(p.stage == 15 || p.stage == 21) ? 1 : 0;
+            valid = errors == 0u && productNeeded(p.stage == STAGE_DIRECTION_PRODUCT_TILE || p.stage == STAGE_FINISH_LONG_DIRECTION_PRODUCT) ? 1 : 0;
         barrier();
         if (valid == 0)
             return;
-        if (p.stage == 20 || p.stage == 21)
+        if (p.stage == STAGE_FINISH_LONG_PRODUCT || p.stage == STAGE_FINISH_LONG_DIRECTION_PRODUCT)
             finishLongProduct(group, lane);
         else
-            productTile(group, lane, p.stage == 15);
+            productTile(group, lane, p.stage == STAGE_DIRECTION_PRODUCT_TILE);
         return;
     }
-    if (p.stage == 16 || p.stage == 17) {
+    if (p.stage == STAGE_SMALL_PRODUCT || p.stage == STAGE_SMALL_DIRECTION_PRODUCT) {
         if (id < p.count && errors == 0u)
-            productSmall(id, p.stage == 17);
+            productSmall(id, p.stage == STAGE_SMALL_DIRECTION_PRODUCT);
         return;
     }
-    if (p.stage >= 23 && p.stage <= 26) {
+    if (p.stage >= STAGE_LONG_PAIR_CONDUCTANCE && p.stage <= STAGE_LONG_SUPPLY) {
         if (lane == 0)
             valid = errors == 0u ? 1 : 0;
         barrier();
         if (valid == 0)
             return;
-        int row = int(words[f(p.stage == 23 ? FIELD_LONG_PAIRS : FIELD_LONG_ROWS) + group]);
-        if (p.stage == 23)
+        int row = int(words[workField(p.stage == STAGE_LONG_PAIR_CONDUCTANCE ? FIELD_LONG_PAIRS : FIELD_LONG_ROWS) + group]);
+        if (p.stage == STAGE_LONG_PAIR_CONDUCTANCE)
             pairConductance(row, lane, 128);
-        else if (p.stage == 24)
+        else if (p.stage == STAGE_LONG_DIAGONAL)
             diagonal(row, lane, 128);
-        else if (p.stage == 25)
+        else if (p.stage == STAGE_LONG_MATRIX)
             matrix(row, lane, 128);
         else
             supply(row, lane, 128);
         return;
     }
-    if (p.stage == 6 || p.stage == 8 || p.stage == 9 || p.stage == 11) {
-        if (errors != 0u || id >= (p.stage == 6 ? pairs() : nodes()))
+    if (p.stage == STAGE_SHORT_PAIR_CONDUCTANCE || p.stage == STAGE_SHORT_DIAGONAL || p.stage == STAGE_SHORT_MATRIX || p.stage == STAGE_SHORT_SUPPLY) {
+        if (errors != 0u || id >= (p.stage == STAGE_SHORT_PAIR_CONDUCTANCE ? pairCount() : nodeCount()))
             return;
-        int length = p.stage == 6 ? int(words[f(FIELD_PAIR_OFFSETS) + id + 1] - words[f(FIELD_PAIR_OFFSETS) + id])
-                                  : int(words[f(FIELD_STARTS) + id + 1] - words[f(FIELD_STARTS) + id]);
+        int length = p.stage == STAGE_SHORT_PAIR_CONDUCTANCE ? int(words[workField(FIELD_PAIR_OFFSETS) + id + 1] - words[workField(FIELD_PAIR_OFFSETS) + id])
+                                  : int(words[workField(FIELD_STARTS) + id + 1] - words[workField(FIELD_STARTS) + id]);
         if (length > 128)
             return;
-        if (p.stage == 6)
+        if (p.stage == STAGE_SHORT_PAIR_CONDUCTANCE)
             pairConductance(id, 0, 1);
-        else if (p.stage == 8)
+        else if (p.stage == STAGE_SHORT_DIAGONAL)
             diagonal(id, 0, 1);
-        else if (p.stage == 9)
+        else if (p.stage == STAGE_SHORT_MATRIX)
             matrix(id, 0, 1);
         else
             supply(id, 0, 1);
@@ -536,36 +564,36 @@ void main() {
     }
     if (id >= p.count)
         return;
-    if (p.stage == 0) {
+    if (p.stage == STAGE_INITIALIZE) {
         initialize(id);
         return;
     }
     if (errors != 0u)
         return;
-    if (p.stage == 1)
+    if (p.stage == STAGE_FACE_KEYS)
         faceKeys(id);
-    else if (p.stage == 2)
+    else if (p.stage == STAGE_INSERT_FACE)
         insertFace(id);
-    else if (p.stage == 3)
+    else if (p.stage == STAGE_MAKE_PAIR)
         makePair(id);
-    else if (p.stage == 4)
+    else if (p.stage == STAGE_COUNT_FACE)
         countFace(id);
-    else if (p.stage == 5)
+    else if (p.stage == STAGE_SCATTER_FACE)
         scatterFace(id);
-    else if (p.stage == 7) {
-        if (id < pairs())
+    else if (p.stage == STAGE_ADJACENCY) {
+        if (id < pairCount())
             adjacency(id);
-    } else if (p.stage == 10) {
-        if (id < pairs())
+    } else if (p.stage == STAGE_FLOW_PREFERENCE) {
+        if (id < pairCount())
             flowPreference(id);
-    } else if (p.stage == 22)
+    } else if (p.stage == STAGE_CLASSIFY_LONG_PAIR)
         classifyLongPair(id);
-    else if (p.stage == 18)
+    else if (p.stage == STAGE_CLASSIFY_LONG_ROW)
         classifyLongRow(id);
-    else if (p.stage == 19)
+    else if (p.stage == STAGE_LONG_DISPATCH)
         longDispatch();
-    else if (id < int(words[f(FIELD_ROUTE_COUNT)])) {
-        if (p.stage == 12)
+    else if (id < int(words[workField(FIELD_ROUTE_COUNT)])) {
+        if (p.stage == STAGE_ROUTE)
             route(id);
         else
             scatterRoute(id);

@@ -1,10 +1,12 @@
 #version 450
+const uint NO_PENDING_MOTION = 0u;
+const uint HAS_PAUSED_PENDING_MOTION = 1u;
 layout(local_size_x=128) in;
 layout(binding=0,std430) buffer Arena { uint words[]; };
-layout(push_constant) uniform Params { int cells; int activity; int pending; int summary; } p;
+layout(push_constant) uniform Params { int cellCount; int activityMaskOffset; int pendingMotionOffset; int pendingSummaryOffset; } params;
 void main() {
     int cell = int(gl_GlobalInvocationID.x);
-    if (cell >= p.cells) return;
-    if (words[p.activity + cell] != 0u) words[p.pending + cell] = 0u;
-    else if (words[p.pending + cell] != 0u) atomicOr(words[p.summary], 1u);
+    if (cell >= params.cellCount) return;
+    if (words[params.activityMaskOffset + cell] != 0u) words[params.pendingMotionOffset + cell] = NO_PENDING_MOTION;
+    else if (words[params.pendingMotionOffset + cell] != 0u) atomicOr(words[params.pendingSummaryOffset], HAS_PAUSED_PENDING_MOTION);
 }

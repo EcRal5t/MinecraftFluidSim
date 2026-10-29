@@ -20,67 +20,79 @@ bool activeFace(int face);
 // PHASE_ROWS_LIBRARY
 // DYADIC_LIBRARY
 // HOST_LAYOUT
+const uint ERROR_INVALID_STATE = 33554432u;
+const int STAGE_INITIALIZE = 0;
+const int STAGE_IMPORT_SOLID = 1;
+const int STAGE_CAPTURE_CELL = 2;
+const int STAGE_PHASE_CELL = 3;
+const int STAGE_SETTLE_FACE = 4;
+const int STAGE_SETTLE_CELL = 5;
+const int STAGE_COUNT_ROWS = 6;
+const int STAGE_FINISH_CAPACITY = 7;
+const int STAGE_WRITE_SPECIES = 8;
+const int STAGE_PUBLISH = 9;
+
 const int64_t LIMIT = 0x7fffffffffffffffl;
-int h(int i) {
+int headerWord(int i) {
     return int(words[p.header + i]);
 }
-int f(int field) {
-    return h(WORK_FIELDS + field);
+int workField(int field) {
+    return headerWord(WORK_FIELDS + field);
 }
-int c(int field) {
-    return h(COHERENT_FIELDS + field);
+int coherentField(int field) {
+    return headerWord(COHERENT_FIELDS + field);
 }
-int l(int field) {
-    return h(LIQUID_FIELDS + field);
+int liquidField(int field) {
+    return headerWord(LIQUID_FIELDS + field);
 }
-int ph() {
-    return h(H_PHASE_ROWS_HEADER);
+int phaseRowsHeader() {
+    return headerWord(H_PHASE_ROWS_HEADER);
 }
-int lc() {
-    return h(H_LIQUID_MATERIAL_COUNT);
+int liquidMaterialCount() {
+    return headerWord(H_LIQUID_MATERIAL_COUNT);
 }
-int cc() {
-    return h(H_COHERENT_MATERIAL_COUNT);
+int coherentMaterialCount() {
+    return headerWord(H_COHERENT_MATERIAL_COUNT);
 }
-int ns() {
-    return h(H_SPECIES_COUNT);
+int speciesCount() {
+    return headerWord(H_SPECIES_COUNT);
 }
-int cells() {
-    return h(H_CELL_COUNT);
+int cellCount() {
+    return headerWord(H_CELL_COUNT);
 }
-int64_t integer(int at) {
-    return lpInt(at);
+int64_t readInt64(int at) {
+    return readPhaseRowInteger(at);
 }
-void integerAt(int at, int64_t value) {
-    lpIntAt(at, value);
+void writeInt64(int at, int64_t value) {
+    writePhaseRowInteger(at, value);
 }
-double number(int at) {
-    return lpDouble(at);
+double readDouble(int at) {
+    return readPhaseRowDouble(at);
 }
-void numberAt(int at, double value) {
-    lpDoubleAt(at, value);
+void writeDouble(int at, double value) {
+    writePhaseRowDouble(at, value);
 }
 int64_t get64(int field, int row) {
-    return integer(f(field) + 2 * row);
+    return readInt64(workField(field) + 2 * row);
 }
 void set64(int field, int row, int64_t value) {
-    integerAt(f(field) + 2 * row, value);
+    writeInt64(workField(field) + 2 * row, value);
 }
 double getDouble(int field, int row) {
-    return number(f(field) + 2 * row);
+    return readDouble(workField(field) + 2 * row);
 }
 void setDouble(int field, int row, double value) {
-    numberAt(f(field) + 2 * row, value);
+    writeDouble(workField(field) + 2 * row, value);
 }
-void invalid() {
-    atomicOr(errors, 33554432u);
+void reportInvalid() {
+    atomicOr(errors, ERROR_INVALID_STATE);
 }
-bool finite(double value) {
+bool isFinite(double value) {
     return !isnan(value) && !isinf(value);
 }
 int64_t add(int64_t a, int64_t b) {
     if ((b > 0l && a > LIMIT - b) || (b < 0l && a < -LIMIT - 1l - b)) {
-        invalid();
+        reportInvalid();
         return 0l;
     }
     return a + b;
@@ -116,75 +128,75 @@ int volumeStatus(int row, int64_t delta) {
     DyadicTerm items[7];
     for (int i = 0; i < 7; i++)
         items[i] = DyadicTerm(1, 0, 0, 0, 0);
-    int count = int(words[l(LIQUID_VOLUME_COUNTS) + row]);
-    items[0] = DyadicTerm(1, l(LIQUID_VOLUME_LIMBS) + int(words[l(LIQUID_VOLUME_OFFSETS) + row]), count,
-                          int(words[l(LIQUID_VOLUME_EXPONENTS) + row]), count > 0 ? 1 : 0);
+    int count = int(words[liquidField(LIQUID_VOLUME_COUNTS) + row]);
+    items[0] = DyadicTerm(1, liquidField(LIQUID_VOLUME_LIMBS) + int(words[liquidField(LIQUID_VOLUME_OFFSETS) + row]), count,
+                          int(words[liquidField(LIQUID_VOLUME_EXPONENTS) + row]), count > 0 ? 1 : 0);
     if (delta != 0l) {
-        u64vec2 q = product(delta < 0l ? 0UL - uint64_t(delta) : uint64_t(delta), uint64_t(integer(ph() + 60)));
-        int at = lpF(ph(), LP_FIELD_DELTA_LIMBS) + 4 * row;
+        u64vec2 q = product(delta < 0l ? 0UL - uint64_t(delta) : uint64_t(delta), uint64_t(readInt64(phaseRowsHeader() + 60)));
+        int at = phaseRowField(phaseRowsHeader(), LP_FIELD_DELTA_LIMBS) + 4 * row;
         words[at] = uint(q.x);
         words[at + 1] = uint(q.x >> 32);
         words[at + 2] = uint(q.y);
         words[at + 3] = uint(q.y >> 32);
         int n = q.y != 0UL ? (q.y >> 32 != 0UL ? 4 : 3) : (q.x >> 32 != 0UL ? 2 : 1);
-        items[1] = DyadicTerm(1, at, n, lpH(ph(), LP_H_VOLUME_EXPONENT), delta > 0l ? 1 : -1);
+        items[1] = DyadicTerm(1, at, n, phaseRowHeader(phaseRowsHeader(), LP_H_VOLUME_EXPONENT), delta > 0l ? 1 : -1);
     }
     return dyadicMeasure(items, 7).status;
 }
-int th(int kind, int index) {
-    return int(words[h(kind == 0 ? 101 : 102) + index]);
+int caloricHeaderWord(int kind, int index) {
+    return int(words[headerWord(kind == 0 ? 101 : 102) + index]);
 }
 int material(int kind, int row) {
-    return kind == 0 ? row % lc() : row % cc();
+    return kind == 0 ? row % liquidMaterialCount() : row % coherentMaterialCount();
 }
 int64_t mass(int kind, int row) {
-    return kind == 0 ? lpMass(ph(), row) : get64(FIELD_MASS, row);
+    return kind == 0 ? phaseRowMass(phaseRowsHeader(), row) : get64(FIELD_MASS, row);
 }
-int64_t quantity(int kind, int row, int s) {
-    return kind == 0 ? lpSpecies(ph(), row, s) : integer(f(FIELD_SPECIES) + 2 * (row * ns() + s));
+int64_t readQuantity(int kind, int row, int s) {
+    return kind == 0 ? phaseRowSpecies(phaseRowsHeader(), row, s) : readInt64(workField(FIELD_SPECIES) + 2 * (row * speciesCount() + s));
 }
 void quantityAt(int kind, int row, int s, int64_t value) {
     if (kind == 0)
-        lpSpeciesAt(ph(), row, s, value);
+        writePhaseRowSpecies(phaseRowsHeader(), row, s, value);
     else
-        integerAt(f(FIELD_SPECIES) + 2 * (row * ns() + s), value);
+        writeInt64(workField(FIELD_SPECIES) + 2 * (row * speciesCount() + s), value);
 }
 double reference(int kind, int row, int s) {
-    return number(th(kind, CAL_SPECIES_REFERENCE) + 2 * (material(kind, row) * th(kind, CAL_SPECIES_STRIDE) + s));
+    return readDouble(caloricHeaderWord(kind, CAL_SPECIES_REFERENCE) + 2 * (material(kind, row) * caloricHeaderWord(kind, CAL_SPECIES_STRIDE) + s));
 }
 double specific(int kind, int row, double temperature) {
-    int m = material(kind, row), first = int(words[th(kind, CAL_SEGMENT_OFFSETS) + m]),
-        end = int(words[th(kind, CAL_SEGMENT_OFFSETS) + m + 1]);
-    double current = number(h(kind == 0 ? H_LIQUID_CALORIC : H_COHERENT_CALORIC) + CAL_MINIMUM_TEMPERATURE),
-           result = number(th(kind, CAL_MATERIAL_REFERENCE) + 2 * m) + number(th(kind, CAL_COLD_SENSIBLE) + 2 * m);
+    int m = material(kind, row), first = int(words[caloricHeaderWord(kind, CAL_SEGMENT_OFFSETS) + m]),
+        end = int(words[caloricHeaderWord(kind, CAL_SEGMENT_OFFSETS) + m + 1]);
+    double current = readDouble(headerWord(kind == 0 ? H_LIQUID_CALORIC : H_COHERENT_CALORIC) + CAL_MINIMUM_TEMPERATURE),
+           result = readDouble(caloricHeaderWord(kind, CAL_MATERIAL_REFERENCE) + 2 * m) + readDouble(caloricHeaderWord(kind, CAL_COLD_SENSIBLE) + 2 * m);
     for (int at = first; at < end && current < temperature; at++) {
-        double next = at == end - 1 ? temperature : min(temperature, number(th(kind, CAL_SEGMENT_UPPER) + 2 * at));
+        double next = at == end - 1 ? temperature : min(temperature, readDouble(caloricHeaderWord(kind, CAL_SEGMENT_UPPER) + 2 * at));
         if (next > current) {
-            result += (next - current) * number(th(kind, CAL_SEGMENT_CAPACITY) + 2 * at);
+            result += (next - current) * readDouble(caloricHeaderWord(kind, CAL_SEGMENT_CAPACITY) + 2 * at);
             current = next;
         }
     }
     return result;
 }
 double capacity(int kind, int row, double temperature, out double knot) {
-    int m = material(kind, row), at = int(words[th(kind, CAL_SEGMENT_OFFSETS) + m]),
-        end = int(words[th(kind, CAL_SEGMENT_OFFSETS) + m + 1]);
-    while (at + 1 < end && temperature >= number(th(kind, CAL_SEGMENT_UPPER) + 2 * at))
+    int m = material(kind, row), at = int(words[caloricHeaderWord(kind, CAL_SEGMENT_OFFSETS) + m]),
+        end = int(words[caloricHeaderWord(kind, CAL_SEGMENT_OFFSETS) + m + 1]);
+    while (at + 1 < end && temperature >= readDouble(caloricHeaderWord(kind, CAL_SEGMENT_UPPER) + 2 * at))
         at++;
-    knot = at + 1 < end ? number(th(kind, CAL_SEGMENT_UPPER) + 2 * at) : 1.7976931348623157e308LF;
-    return double(mass(kind, row)) * 1e-10LF * number(th(kind, CAL_SEGMENT_CAPACITY) + 2 * at);
+    knot = at + 1 < end ? readDouble(caloricHeaderWord(kind, CAL_SEGMENT_UPPER) + 2 * at) : 1.7976931348623157e308LF;
+    return double(mass(kind, row)) * 1e-10LF * readDouble(caloricHeaderWord(kind, CAL_SEGMENT_CAPACITY) + 2 * at);
 }
 int64_t freezable(int liquid) {
-    int64_t result = lpMass(ph(), liquid);
-    if (words[lpF(ph(), LP_FIELD_MIXTURE) + liquid] == 0u)
+    int64_t result = phaseRowMass(phaseRowsHeader(), liquid);
+    if (words[phaseRowField(phaseRowsHeader(), LP_FIELD_MIXTURE) + liquid] == 0u)
         return result;
-    int speciesTable = int(words[h(H_DEFINITIONS) + 1]);
-    for (int s = 0; s < ns(); s++)
-        if (words[f(FIELD_CARRIERS) + (liquid % lc()) * ns() + s] == 0u) {
-            u64vec2 q = product(uint64_t(quantity(0, liquid, s)),
-                                uint64_t(integer(h(H_DEFINITIONS) + speciesTable + 5 * s + 1)));
+    int speciesTable = int(words[headerWord(H_DEFINITIONS) + 1]);
+    for (int s = 0; s < speciesCount(); s++)
+        if (words[workField(FIELD_CARRIERS) + (liquid % liquidMaterialCount()) * speciesCount() + s] == 0u) {
+            u64vec2 q = product(uint64_t(readQuantity(0, liquid, s)),
+                                uint64_t(readInt64(headerWord(H_DEFINITIONS) + speciesTable + 5 * s + 1)));
             if (q.y != 0UL || q.x > uint64_t(LIMIT)) {
-                invalid();
+                reportInvalid();
                 return 0l;
             }
             result = add(result, -int64_t(q.x));
@@ -194,17 +206,17 @@ int64_t freezable(int liquid) {
 int64_t movedQuantity(int liquid, int solid, int s, bool freezing, int64_t moved, int64_t divisor) {
     if (moved == 0l)
         return 0l;
-    if (freezing && words[f(FIELD_CARRIERS) + (liquid % lc()) * ns() + s] == 0u)
+    if (freezing && words[workField(FIELD_CARRIERS) + (liquid % liquidMaterialCount()) * speciesCount() + s] == 0u)
         return 0l;
-    return portion(quantity(freezing ? 0 : 1, freezing ? liquid : solid, s), moved, divisor);
+    return portion(readQuantity(freezing ? 0 : 1, freezing ? liquid : solid, s), moved, divisor);
 }
 dvec2 pairEnergy(int liquid, int solid, double temperature, bool freezing, int64_t moved, int64_t divisor) {
     int64_t a = mass(0, liquid) + (freezing ? -moved : moved), b = mass(1, solid) + (freezing ? moved : -moved);
     dvec2 result = dvec2(double(a) * 1e-10LF * specific(0, liquid, temperature),
                          double(b) * 1e-10LF * specific(1, solid, temperature));
-    for (int s = 0; s < ns(); s++) {
+    for (int s = 0; s < speciesCount(); s++) {
         int64_t q = movedQuantity(liquid, solid, s, freezing, moved, divisor),
-                qa = quantity(0, liquid, s) + (freezing ? -q : q), qb = quantity(1, solid, s) + (freezing ? q : -q);
+                qa = readQuantity(0, liquid, s) + (freezing ? -q : q), qb = readQuantity(1, solid, s) + (freezing ? q : -q);
         if (qa != 0l)
             result.x += double(qa) * reference(0, liquid, s);
         if (qb != 0l)
@@ -213,68 +225,68 @@ dvec2 pairEnergy(int liquid, int solid, double temperature, bool freezing, int64
     return result;
 }
 double pairTemperature(int liquid, int solid, double target) {
-    double temperature = number(h(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE);
+    double temperature = readDouble(headerWord(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE);
     dvec2 cold = pairEnergy(liquid, solid, temperature, false, 0l, 1l);
     double current = cold.x + cold.y;
-    int bound = int(words[th(0, CAL_SEGMENT_OFFSETS) + (liquid % lc()) + 1]) -
-                int(words[th(0, CAL_SEGMENT_OFFSETS) + liquid % lc()]) +
-                int(words[th(1, CAL_SEGMENT_OFFSETS) + solid % cc() + 1]) -
-                int(words[th(1, CAL_SEGMENT_OFFSETS) + solid % cc()]) + 1;
+    int bound = int(words[caloricHeaderWord(0, CAL_SEGMENT_OFFSETS) + (liquid % liquidMaterialCount()) + 1]) -
+                int(words[caloricHeaderWord(0, CAL_SEGMENT_OFFSETS) + liquid % liquidMaterialCount()]) +
+                int(words[caloricHeaderWord(1, CAL_SEGMENT_OFFSETS) + solid % coherentMaterialCount() + 1]) -
+                int(words[caloricHeaderWord(1, CAL_SEGMENT_OFFSETS) + solid % coherentMaterialCount()]) + 1;
     for (int step = 0; step < bound; step++) {
         double ka, kb, cp = capacity(0, liquid, temperature, ka) + capacity(1, solid, temperature, kb),
                        next = min(ka, kb);
-        if (!(cp > 0.0LF && finite(cp))) {
-            invalid();
+        if (!(cp > 0.0LF && isFinite(cp))) {
+            reportInvalid();
             return temperature;
         }
         double increment = (target - current) / cp;
         if (target <= current || increment <= next - temperature)
-            return max(number(h(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE), temperature + increment);
+            return max(readDouble(headerWord(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE), temperature + increment);
         current += (next - temperature) * cp;
         temperature = next;
     }
-    invalid();
+    reportInvalid();
     return temperature;
 }
 double equilibrium(int payload, int cell) {
-    double pressure = h(H_PRESSURE) < 0 ? 101325.0LF : max(0.0LF, 101325.0LF + number(h(H_PRESSURE) + 2 * cell));
-    int first = int(words[h(H_DEFINITIONS) + payload + 9]), count = int(words[h(H_DEFINITIONS) + payload + 10]);
+    double pressure = headerWord(H_PRESSURE) < 0 ? 101325.0LF : max(0.0LF, 101325.0LF + readDouble(headerWord(H_PRESSURE) + 2 * cell));
+    int first = int(words[headerWord(H_DEFINITIONS) + payload + 9]), count = int(words[headerWord(H_DEFINITIONS) + payload + 10]);
     for (int i = 1; i < count; i++) {
-        int lo = h(H_DEFINITIONS) + first + 4 * (i - 1), hi = lo + 4;
-        double upper = number(hi);
+        int lo = headerWord(H_DEFINITIONS) + first + 4 * (i - 1), hi = lo + 4;
+        double upper = readDouble(hi);
         if (pressure > upper && i + 1 < count)
             continue;
-        double lower = number(lo);
-        return fma(pressure - lower, (number(hi + 2) - number(lo + 2)) / (upper - lower), number(lo + 2));
+        double lower = readDouble(lo);
+        return fma(pressure - lower, (readDouble(hi + 2) - readDouble(lo + 2)) / (upper - lower), readDouble(lo + 2));
     }
-    invalid();
+    reportInvalid();
     return 0.0LF;
 }
 void initialize(int id) {
-    if (id < h(H_ROW_COUNT)) {
+    if (id < headerWord(H_ROW_COUNT)) {
         set64(FIELD_SVQ, id, 0l);
         set64(FIELD_MASS, id, 0l);
         setDouble(FIELD_ENERGY, id, 0.0LF);
         setDouble(FIELD_NEW_ENERGY, id, 0.0LF);
-        words[f(FIELD_MIXTURE) + id] = 0u;
-        words[f(FIELD_LIVE) + id] = 0u;
-        words[f(FIELD_SPECIES_COUNTS) + id] = 0u;
-        for (int s = 0; s < ns(); s++)
+        words[workField(FIELD_MIXTURE) + id] = 0u;
+        words[workField(FIELD_LIVE) + id] = 0u;
+        words[workField(FIELD_SPECIES_COUNTS) + id] = 0u;
+        for (int s = 0; s < speciesCount(); s++)
             quantityAt(1, id, s, 0l);
     }
-    if (id < h(H_COHERENT_CAPACITY))
+    if (id < headerWord(H_COHERENT_CAPACITY))
         setDouble(FIELD_OLD_ENERGY, id, 0.0LF);
-    if (id < cells()) {
+    if (id < cellCount()) {
         set64(FIELD_CELL_OLD_MASS, id, 0l);
         set64(FIELD_CELL_NEW_MASS, id, 0l);
         set64(FIELD_CELL_REMOVED_MASS, id, 0l);
         set64(FIELD_CELL_BASE_OCCUPIED, id, 0l);
-        words[f(FIELD_CELL_CHANGED) + id] = 0u;
-        words[f(FIELD_PAIR_LIQUID) + id] = uint(-1);
-        words[f(FIELD_PAIR_COHERENT) + id] = uint(-1);
+        words[workField(FIELD_CELL_CHANGED) + id] = 0u;
+        words[workField(FIELD_PAIR_LIQUID) + id] = uint(-1);
+        words[workField(FIELD_PAIR_COHERENT) + id] = uint(-1);
         setDouble(FIELD_PAIR_ENERGY, id, 0.0LF);
     }
-    if (id < h(H_FACE_COUNT)) {
+    if (id < headerWord(H_FACE_COUNT)) {
         setDouble(FIELD_FACE_MOMENTUM, id, 0.0LF);
         setDouble(FIELD_FACE_HEAT, 2 * id, 0.0LF);
         setDouble(FIELD_FACE_HEAT, 2 * id + 1, 0.0LF);
@@ -283,56 +295,56 @@ void initialize(int id) {
     }
     if (id == 0) {
         for (int i = 0; i < 10; i++)
-            words[f(FIELD_CONTROL) + i] = 0u;
-        words[f(FIELD_CONTROL) + 5] = uint(p.maximum);
+            words[workField(FIELD_CONTROL) + i] = 0u;
+        words[workField(FIELD_CONTROL) + 5] = uint(p.maximum);
     }
 }
 void importSolid(int source) {
-    if (source >= int(words[c(COHERENT_COUNTS)]))
+    if (source >= int(words[coherentField(COHERENT_COUNTS)]))
         return;
-    int cell = int(words[c(COHERENT_CELL) + source]), m = int(words[c(COHERENT_MATERIAL) + source]);
-    if (cell < 0 || cell >= cells() || m < 0 || m >= cc()) {
-        invalid();
+    int cell = int(words[coherentField(COHERENT_CELL) + source]), m = int(words[coherentField(COHERENT_MATERIAL) + source]);
+    if (cell < 0 || cell >= cellCount() || m < 0 || m >= coherentMaterialCount()) {
+        reportInvalid();
         return;
     }
-    int row = cell * cc() + m;
-    set64(FIELD_SVQ, row, integer(c(COHERENT_OCCUPIED_VOLUME_SVQ) + 2 * source));
-    set64(FIELD_MASS, row, integer(c(COHERENT_MASS_UNITS) + 2 * source));
-    setDouble(FIELD_ENERGY, row, number(c(COHERENT_INTERNAL_ENERGY) + 2 * source));
-    setDouble(FIELD_OLD_ENERGY, source, number(c(COHERENT_INTERNAL_ENERGY) + 2 * source));
-    words[f(FIELD_MIXTURE) + row] = words[c(COHERENT_MIXTURE_PRESENT) + source];
-    for (int e = int(words[c(COHERENT_SPECIES_OFFSETS) + source]);
-         e < int(words[c(COHERENT_SPECIES_OFFSETS) + source + 1]); e++) {
-        int s = int(words[c(COHERENT_SPECIES_HANDLES) + e]);
-        if (s < 0 || s >= ns()) {
-            invalid();
+    int row = cell * coherentMaterialCount() + m;
+    set64(FIELD_SVQ, row, readInt64(coherentField(COHERENT_OCCUPIED_VOLUME_SVQ) + 2 * source));
+    set64(FIELD_MASS, row, readInt64(coherentField(COHERENT_MASS_UNITS) + 2 * source));
+    setDouble(FIELD_ENERGY, row, readDouble(coherentField(COHERENT_INTERNAL_ENERGY) + 2 * source));
+    setDouble(FIELD_OLD_ENERGY, source, readDouble(coherentField(COHERENT_INTERNAL_ENERGY) + 2 * source));
+    words[workField(FIELD_MIXTURE) + row] = words[coherentField(COHERENT_MIXTURE_PRESENT) + source];
+    for (int e = int(words[coherentField(COHERENT_SPECIES_OFFSETS) + source]);
+         e < int(words[coherentField(COHERENT_SPECIES_OFFSETS) + source + 1]); e++) {
+        int s = int(words[coherentField(COHERENT_SPECIES_HANDLES) + e]);
+        if (s < 0 || s >= speciesCount()) {
+            reportInvalid();
             return;
         }
-        quantityAt(1, row, s, integer(c(COHERENT_SPECIES_AMOUNTS) + 2 * e));
+        quantityAt(1, row, s, readInt64(coherentField(COHERENT_SPECIES_AMOUNTS) + 2 * e));
     }
 }
 void captureCell(int cell) {
-    int64_t m = 0l, svq = 0l;
-    for (int a = 0; a < lc(); a++)
-        m = add(m, lpMass(ph(), cell * lc() + a));
-    for (int a = 0; a < cc(); a++)
-        svq = add(svq, get64(FIELD_SVQ, cell * cc() + a));
-    set64(FIELD_CELL_OLD_MASS, cell, m);
-    set64(FIELD_CELL_NEW_MASS, cell, m);
-    int64_t other = h(H_OCCUPIED_SVQ) < 0 ? 0l : integer(h(H_OCCUPIED_SVQ) + 2 * cell) - svq;
+    int64_t liquidMass = 0l, svq = 0l;
+    for (int a = 0; a < liquidMaterialCount(); a++)
+        liquidMass = add(liquidMass, phaseRowMass(phaseRowsHeader(), cell * liquidMaterialCount() + a));
+    for (int a = 0; a < coherentMaterialCount(); a++)
+        svq = add(svq, get64(FIELD_SVQ, cell * coherentMaterialCount() + a));
+    set64(FIELD_CELL_OLD_MASS, cell, liquidMass);
+    set64(FIELD_CELL_NEW_MASS, cell, liquidMass);
+    int64_t other = headerWord(H_OCCUPIED_SVQ) < 0 ? 0l : readInt64(headerWord(H_OCCUPIED_SVQ) + 2 * cell) - svq;
     if (other < 0l) {
-        invalid();
+        reportInvalid();
         return;
     }
     set64(FIELD_CELL_BASE_OCCUPIED, cell, other);
 }
 int64_t moveMass(int liquid, int solid, int64_t batches, int payload, bool freezing, int64_t divisor) {
-    int64_t nominal = batches * integer(h(H_DEFINITIONS) + payload + 3);
+    int64_t nominal = batches * readInt64(headerWord(H_DEFINITIONS) + payload + 3);
     if (freezing) {
-        int64_t delta = integer(lpF(ph(), LP_FIELD_DELTA_SVQ) + 2 * liquid) - batches * integer(h(H_DEFINITIONS) + payload + 7);
+        int64_t delta = readInt64(phaseRowField(phaseRowsHeader(), LP_FIELD_DELTA_SVQ) + 2 * liquid) - batches * readInt64(headerWord(H_DEFINITIONS) + payload + 7);
         if (volumeStatus(liquid, delta) == DYADIC_ZERO && divisor == mass(0, liquid))
             return divisor;
-    } else if (batches * integer(h(H_DEFINITIONS) + payload + 5) == get64(FIELD_SVQ, solid))
+    } else if (batches * readInt64(headerWord(H_DEFINITIONS) + payload + 5) == get64(FIELD_SVQ, solid))
         return mass(1, solid);
     return nominal;
 }
@@ -341,30 +353,30 @@ bool fits(int liquid, int solid, int64_t batches, int payload, bool freezing, in
     if (moved > divisor)
         return false;
     if (!freezing && mass(1, solid) == moved &&
-        get64(FIELD_SVQ, solid) != batches * integer(h(H_DEFINITIONS) + payload + 5))
+        get64(FIELD_SVQ, solid) != batches * readInt64(headerWord(H_DEFINITIONS) + payload + 5))
         return false;
     if (freezing) {
         int status = volumeStatus(
-            liquid, integer(lpF(ph(), LP_FIELD_DELTA_SVQ) + 2 * liquid) - batches * integer(h(H_DEFINITIONS) + payload + 7));
+            liquid, readInt64(phaseRowField(phaseRowsHeader(), LP_FIELD_DELTA_SVQ) + 2 * liquid) - batches * readInt64(headerWord(H_DEFINITIONS) + payload + 7));
         if (status != DYADIC_POSITIVE && status != DYADIC_ZERO)
             return false;
         if (status == DYADIC_ZERO) {
             if (moved != mass(0, liquid))
                 return false;
-            for (int s = 0; s < ns(); s++)
-                if (words[f(FIELD_CARRIERS) + (liquid % lc()) * ns() + s] == 0u && quantity(0, liquid, s) != 0l)
+            for (int s = 0; s < speciesCount(); s++)
+                if (words[workField(FIELD_CARRIERS) + (liquid % liquidMaterialCount()) * speciesCount() + s] == 0u && readQuantity(0, liquid, s) != 0l)
                     return false;
         }
     }
     dvec2 cold =
-        pairEnergy(liquid, solid, number(h(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE), freezing, moved, divisor);
-    return finite(cold.x) && finite(cold.y) && cold.x + cold.y <= total;
+        pairEnergy(liquid, solid, readDouble(headerWord(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE), freezing, moved, divisor);
+    return isFinite(cold.x) && isFinite(cold.y) && cold.x + cold.y <= total;
 }
 int claim(int wanted) {
-    uint available = words[f(FIELD_CONTROL) + 5];
+    uint available = words[workField(FIELD_CONTROL) + 5];
     while (available > 0u) {
         uint take = min(available, uint(wanted)),
-             prior = atomicCompSwap(words[f(FIELD_CONTROL) + 5], available, available - take);
+             prior = atomicCompSwap(words[workField(FIELD_CONTROL) + 5], available, available - take);
         if (prior == available)
             return int(take);
         available = prior;
@@ -372,21 +384,21 @@ int claim(int wanted) {
     return 0;
 }
 void phaseCell(int ordinal) {
-    int cell = (ordinal + int(words[h(H_CURSOR)])) % cells();
+    int cell = (ordinal + int(words[headerWord(H_CURSOR)])) % cellCount();
     if (!activeCell(cell))
         return;
     double score = -1.0LF, chosenEquilibrium = 0.0LF, chosenTemperature = 0.0LF;
     int chosen = -1;
-    for (int rule = 0; rule < h(H_RULE_COUNT); rule++) {
-        int solid = cell * cc() + int(words[f(FIELD_RULES) + 3 * rule]),
-            liquid = cell * lc() + int(words[f(FIELD_RULES) + 3 * rule + 1]);
+    for (int rule = 0; rule < headerWord(H_RULE_COUNT); rule++) {
+        int solid = cell * coherentMaterialCount() + int(words[workField(FIELD_RULES) + 3 * rule]),
+            liquid = cell * liquidMaterialCount() + int(words[workField(FIELD_RULES) + 3 * rule + 1]);
         if (mass(0, liquid) == 0l && mass(1, solid) == 0l)
             continue;
-        double total = lpEnergy(ph(), liquid) + getDouble(FIELD_ENERGY, solid),
+        double total = phaseRowEnergy(phaseRowsHeader(), liquid) + getDouble(FIELD_ENERGY, solid),
                t = pairTemperature(liquid, solid, total),
-               eq = equilibrium(int(words[f(FIELD_RULES) + 3 * rule + 2]), cell);
-        if (!(finite(eq) && eq >= number(h(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE))) {
-            invalid();
+               eq = equilibrium(int(words[workField(FIELD_RULES) + 3 * rule + 2]), cell);
+        if (!(isFinite(eq) && eq >= readDouble(headerWord(H_LIQUID_CALORIC) + CAL_MINIMUM_TEMPERATURE))) {
+            reportInvalid();
             return;
         }
         bool freezing = t < eq;
@@ -402,13 +414,13 @@ void phaseCell(int ordinal) {
     }
     if (chosen < 0)
         return;
-    int solid = cell * cc() + int(words[f(FIELD_RULES) + 3 * chosen]),
-        liquid = cell * lc() + int(words[f(FIELD_RULES) + 3 * chosen + 1]),
-        payload = int(words[f(FIELD_RULES) + 3 * chosen + 2]);
+    int solid = cell * coherentMaterialCount() + int(words[workField(FIELD_RULES) + 3 * chosen]),
+        liquid = cell * liquidMaterialCount() + int(words[workField(FIELD_RULES) + 3 * chosen + 1]),
+        payload = int(words[workField(FIELD_RULES) + 3 * chosen + 2]);
     bool freezing = chosenTemperature < chosenEquilibrium;
     int64_t divisor = freezing ? freezable(liquid) : mass(1, solid),
-            batchMass = integer(h(H_DEFINITIONS) + payload + 3), lower = integer(h(H_DEFINITIONS) + payload + 5),
-            upper = integer(h(H_DEFINITIONS) + payload + 7);
+            batchMass = readInt64(headerWord(H_DEFINITIONS) + payload + 3), lower = readInt64(headerWord(H_DEFINITIONS) + payload + 5),
+            upper = readInt64(headerWord(H_DEFINITIONS) + payload + 7);
     int64_t high = min(int64_t(p.maximum), divisor / batchMass);
     if (!freezing)
         high = min(high, get64(FIELD_SVQ, solid) / lower);
@@ -416,19 +428,19 @@ void phaseCell(int ordinal) {
         return;
     int64_t change = freezing ? lower - upper : upper - lower;
     if (change > 0l) {
-        double cube = number(p.header + H_CELL_SIZE) * number(p.header + H_CELL_SIZE) * number(p.header + H_CELL_SIZE),
-               open = double(8 - bitCount(words[h(H_FIXED_MASKS) + cell] & 255u)) * .125LF * cube * 134217728.0LF;
+        double cube = readDouble(p.header + H_CELL_SIZE) * readDouble(p.header + H_CELL_SIZE) * readDouble(p.header + H_CELL_SIZE),
+               open = double(8 - bitCount(words[headerWord(H_FIXED_MASKS) + cell] & 255u)) * .125LF * cube * 134217728.0LF;
         double used = double(get64(FIELD_CELL_BASE_OCCUPIED, cell));
-        for (int m = 0; m < cc(); m++)
-            used += double(get64(FIELD_SVQ, cell * cc() + m));
-        for (int m = 0; m < lc(); m++)
-            used += ceil(lpVolume(ph(), cell * lc() + m) * cube * 134217728.0LF);
+        for (int m = 0; m < coherentMaterialCount(); m++)
+            used += double(get64(FIELD_SVQ, cell * coherentMaterialCount() + m));
+        for (int m = 0; m < liquidMaterialCount(); m++)
+            used += ceil(phaseRowVolume(phaseRowsHeader(), cell * liquidMaterialCount() + m) * cube * 134217728.0LF);
         // One solid-volume quantum leaves room for rounding the liquid numerical view.
         high = min(high, max(0l, int64_t(floor((open - used - 1.0LF) / double(change)))));
         if (high <= 0l)
             return;
     }
-    double total = lpEnergy(ph(), liquid) + getDouble(FIELD_ENERGY, solid);
+    double total = phaseRowEnergy(phaseRowsHeader(), liquid) + getDouble(FIELD_ENERGY, solid);
     int64_t lo = 0l, hi = high;
     while (lo < hi) {
         int64_t mid = lo + (hi - lo + 1l) / 2l;
@@ -445,8 +457,8 @@ void phaseCell(int ordinal) {
                             moveMass(liquid, solid, 1l, payload, freezing, divisor), divisor);
     double latent =
         freezing ? (initial.x + initial.y) - (unit.x + unit.y) : (unit.x + unit.y) - (initial.x + initial.y);
-    if (!(latent > 0.0LF && finite(latent))) {
-        invalid();
+    if (!(latent > 0.0LF && isFinite(latent))) {
+        reportInvalid();
         return;
     }
     double desired = round(abs(total - initial.x - initial.y) / latent);
@@ -455,39 +467,39 @@ void phaseCell(int ordinal) {
         return;
     int64_t b = int64_t(batches), moved = moveMass(liquid, solid, b, payload, freezing, divisor);
     setDouble(FIELD_PAIR_ENERGY, cell, total);
-    words[f(FIELD_PAIR_LIQUID) + cell] = uint(liquid);
-    words[f(FIELD_PAIR_COHERENT) + cell] = uint(solid);
-    for (int s = 0; s < ns(); s++) {
+    words[workField(FIELD_PAIR_LIQUID) + cell] = uint(liquid);
+    words[workField(FIELD_PAIR_COHERENT) + cell] = uint(solid);
+    for (int s = 0; s < speciesCount(); s++) {
         int64_t q = movedQuantity(liquid, solid, s, freezing, moved, divisor);
-        quantityAt(0, liquid, s, add(quantity(0, liquid, s), freezing ? -q : q));
-        quantityAt(1, solid, s, add(quantity(1, solid, s), freezing ? q : -q));
+        quantityAt(0, liquid, s, add(readQuantity(0, liquid, s), freezing ? -q : q));
+        quantityAt(1, solid, s, add(readQuantity(1, solid, s), freezing ? q : -q));
     }
-    integerAt(lpF(ph(), LP_FIELD_MASS) + 2 * liquid, add(mass(0, liquid), freezing ? -moved : moved));
+    writeInt64(phaseRowField(phaseRowsHeader(), LP_FIELD_MASS) + 2 * liquid, add(mass(0, liquid), freezing ? -moved : moved));
     set64(FIELD_MASS, solid, add(mass(1, solid), freezing ? moved : -moved));
-    integerAt(lpF(ph(), LP_FIELD_DELTA_SVQ) + 2 * liquid,
-              add(integer(lpF(ph(), LP_FIELD_DELTA_SVQ) + 2 * liquid), freezing ? -b * upper : b * upper));
+    writeInt64(phaseRowField(phaseRowsHeader(), LP_FIELD_DELTA_SVQ) + 2 * liquid,
+              add(readInt64(phaseRowField(phaseRowsHeader(), LP_FIELD_DELTA_SVQ) + 2 * liquid), freezing ? -b * upper : b * upper));
     set64(FIELD_SVQ, solid, add(get64(FIELD_SVQ, solid), freezing ? b * lower : -b * lower));
     if (!freezing)
-        lpCreate(ph(), cell, liquid % lc(), int((~words[h(H_FIXED_MASKS) + cell]) & 255u));
+        createPhaseRow(phaseRowsHeader(), cell, liquid % liquidMaterialCount(), int((~words[headerWord(H_FIXED_MASKS) + cell]) & 255u));
     if (freezing)
-        words[f(FIELD_MIXTURE) + solid] |= words[lpF(ph(), LP_FIELD_MIXTURE) + liquid];
+        words[workField(FIELD_MIXTURE) + solid] |= words[phaseRowField(phaseRowsHeader(), LP_FIELD_MIXTURE) + liquid];
     else
-        words[lpF(ph(), LP_FIELD_MIXTURE) + liquid] |= words[f(FIELD_MIXTURE) + solid];
+        words[phaseRowField(phaseRowsHeader(), LP_FIELD_MIXTURE) + liquid] |= words[workField(FIELD_MIXTURE) + solid];
     set64(FIELD_CELL_NEW_MASS, cell, add(get64(FIELD_CELL_OLD_MASS, cell), freezing ? -moved : moved));
     set64(FIELD_CELL_REMOVED_MASS, cell, freezing ? moved : 0l);
-    words[f(FIELD_CELL_CHANGED) + cell] = 1u;
-    atomicAdd(words[f(FIELD_CONTROL) + 6 + (freezing ? 0 : 1)], 1u);
-    atomicAdd(words[f(FIELD_CONTROL) + 8], uint(batches));
-    atomicAdd(words[f(FIELD_CONTROL) + 9], uint(freezing ? batches : -batches));
+    words[workField(FIELD_CELL_CHANGED) + cell] = 1u;
+    atomicAdd(words[workField(FIELD_CONTROL) + 6 + (freezing ? 0 : 1)], 1u);
+    atomicAdd(words[workField(FIELD_CONTROL) + 8], uint(batches));
+    atomicAdd(words[workField(FIELD_CONTROL) + 9], uint(freezing ? batches : -batches));
 }
 int axisFaces(int axis) {
-    return axis == 0   ? (h(H_SIZE_X) + 1) * h(H_SIZE_Y) * h(H_SIZE_Z)
-           : axis == 1 ? h(H_SIZE_X) * (h(H_SIZE_Y) + 1) * h(H_SIZE_Z)
-                       : h(H_SIZE_X) * h(H_SIZE_Y) * (h(H_SIZE_Z) + 1);
+    return axis == 0   ? (headerWord(H_SIZE_X) + 1) * headerWord(H_SIZE_Y) * headerWord(H_SIZE_Z)
+           : axis == 1 ? headerWord(H_SIZE_X) * (headerWord(H_SIZE_Y) + 1) * headerWord(H_SIZE_Z)
+                       : headerWord(H_SIZE_X) * headerWord(H_SIZE_Y) * (headerWord(H_SIZE_Z) + 1);
 }
 int faceIndex(int cell, int side) {
-    int axis = side / 2, x = cell % h(H_SIZE_X), y = cell / h(H_SIZE_X) % h(H_SIZE_Y),
-        z = cell / (h(H_SIZE_X) * h(H_SIZE_Y));
+    int axis = side / 2, x = cell % headerWord(H_SIZE_X), y = cell / headerWord(H_SIZE_X) % headerWord(H_SIZE_Y),
+        z = cell / (headerWord(H_SIZE_X) * headerWord(H_SIZE_Y));
     if ((side & 1) != 0) {
         if (axis == 0)
             x++;
@@ -497,21 +509,21 @@ int faceIndex(int cell, int side) {
             z++;
     }
     int base = axis == 0 ? 0 : axisFaces(0) + (axis == 2 ? axisFaces(1) : 0);
-    return base + (z * (h(H_SIZE_Y) + (axis == 1 ? 1 : 0)) + y) * (h(H_SIZE_X) + (axis == 0 ? 1 : 0)) + x;
+    return base + (z * (headerWord(H_SIZE_Y) + (axis == 1 ? 1 : 0)) + y) * (headerWord(H_SIZE_X) + (axis == 0 ? 1 : 0)) + x;
 }
 ivec2 faceCells(int face) {
     int axis = face < axisFaces(0) ? 0 : face < axisFaces(0) + axisFaces(1) ? 1 : 2;
     int at = face - (axis == 0 ? 0 : axisFaces(0) + (axis == 2 ? axisFaces(1) : 0)),
-        sx = h(H_SIZE_X) + (axis == 0 ? 1 : 0), sy = h(H_SIZE_Y) + (axis == 1 ? 1 : 0), x = at % sx, y = at / sx % sy,
+        sx = headerWord(H_SIZE_X) + (axis == 0 ? 1 : 0), sy = headerWord(H_SIZE_Y) + (axis == 1 ? 1 : 0), x = at % sx, y = at / sx % sy,
         z = at / (sx * sy),
         coordinate = axis == 0   ? x
                      : axis == 1 ? y
                                  : z,
-        size = axis == 0   ? h(H_SIZE_X)
-               : axis == 1 ? h(H_SIZE_Y)
-                           : h(H_SIZE_Z);
-    int right = coordinate < size ? (z * h(H_SIZE_Y) + y) * h(H_SIZE_X) + x : -1,
-        left = coordinate > 0 ? ((z - (axis == 2 ? 1 : 0)) * h(H_SIZE_Y) + y - (axis == 1 ? 1 : 0)) * h(H_SIZE_X) + x -
+        size = axis == 0   ? headerWord(H_SIZE_X)
+               : axis == 1 ? headerWord(H_SIZE_Y)
+                           : headerWord(H_SIZE_Z);
+    int right = coordinate < size ? (z * headerWord(H_SIZE_Y) + y) * headerWord(H_SIZE_X) + x : -1,
+        left = coordinate > 0 ? ((z - (axis == 2 ? 1 : 0)) * headerWord(H_SIZE_Y) + y - (axis == 1 ? 1 : 0)) * headerWord(H_SIZE_X) + x -
                                     (axis == 0 ? 1 : 0)
                               : -1;
     return ivec2(left, right);
@@ -519,11 +531,11 @@ ivec2 faceCells(int face) {
 int momentumAddress(int face) {
     int axis = face < axisFaces(0) ? 0 : face < axisFaces(0) + axisFaces(1) ? 1 : 2;
     int offset = axis == 0 ? 0 : axisFaces(0) + (axis == 2 ? axisFaces(1) : 0);
-    return l(16 + axis) + 2 * (face - offset);
+    return liquidField(16 + axis) + 2 * (face - offset);
 }
 void settleFace(int face) {
     if (!activeFace(face)) {
-        setDouble(FIELD_FACE_MOMENTUM, face, number(momentumAddress(face)));
+        setDouble(FIELD_FACE_MOMENTUM, face, readDouble(momentumAddress(face)));
         setDouble(FIELD_FACE_OLD_K, face, 0.0LF);
         setDouble(FIELD_FACE_NEW_K, face, 0.0LF);
         setDouble(FIELD_FACE_HEAT, 2 * face, 0.0LF);
@@ -538,7 +550,7 @@ void settleFace(int face) {
             newMass = add(newMass, get64(FIELD_CELL_NEW_MASS, pair[i]));
             removed = add(removed, get64(FIELD_CELL_REMOVED_MASS, pair[i]));
         }
-    double oldP = number(momentumAddress(face)), oldM = .5LF * double(oldMass) * 1e-10LF,
+    double oldP = readDouble(momentumAddress(face)), oldM = .5LF * double(oldMass) * 1e-10LF,
            newM = .5LF * double(newMass) * 1e-10LF,
            nextP = oldMass > 0l ? oldP * (1.0LF - double(removed) / double(oldMass)) : 0.0LF;
     if (newMass == 0l)
@@ -549,149 +561,149 @@ void settleFace(int face) {
     setDouble(FIELD_FACE_OLD_K, face, oldK);
     setDouble(FIELD_FACE_NEW_K, face, newK);
     double heat = oldK - newK;
-    bool a = pair.x >= 0 && words[f(FIELD_CELL_CHANGED) + pair.x] != 0u,
-         b = pair.y >= 0 && words[f(FIELD_CELL_CHANGED) + pair.y] != 0u;
+    bool a = pair.x >= 0 && words[workField(FIELD_CELL_CHANGED) + pair.x] != 0u,
+         b = pair.y >= 0 && words[workField(FIELD_CELL_CHANGED) + pair.y] != 0u;
     double left = a ? (b ? .5LF * heat : heat) : 0.0LF;
     setDouble(FIELD_FACE_HEAT, 2 * face, left);
     setDouble(FIELD_FACE_HEAT, 2 * face + 1, b ? heat - left : 0.0LF);
 }
 void settleCell(int cell) {
-    if (words[f(FIELD_CELL_CHANGED) + cell] == 0u)
+    if (words[workField(FIELD_CELL_CHANGED) + cell] == 0u)
         return;
     double heat = 0.0LF;
     for (int side = 0; side < 6; side++)
         heat += getDouble(FIELD_FACE_HEAT, 2 * faceIndex(cell, side) + ((side & 1) != 0 ? 0 : 1));
-    int liquid = int(words[f(FIELD_PAIR_LIQUID) + cell]), solid = int(words[f(FIELD_PAIR_COHERENT) + cell]);
+    int liquid = int(words[workField(FIELD_PAIR_LIQUID) + cell]), solid = int(words[workField(FIELD_PAIR_COHERENT) + cell]);
     double target = getDouble(FIELD_PAIR_ENERGY, cell) + heat, t = pairTemperature(liquid, solid, target);
     dvec2 values = pairEnergy(liquid, solid, t, false, 0l, 1l);
     double a = mass(0, liquid) > 0l ? values.x : 0.0LF, b = mass(1, solid) > 0l ? target - a : 0.0LF;
     if (mass(1, solid) == 0l)
         a = target;
-    lpDoubleAt(lpF(ph(), LP_FIELD_ENERGY) + 2 * liquid, a);
+    writePhaseRowDouble(phaseRowField(phaseRowsHeader(), LP_FIELD_ENERGY) + 2 * liquid, a);
     setDouble(FIELD_ENERGY, solid, b);
 }
 void countRow(int row) {
     int64_t volume = get64(FIELD_SVQ, row), m = get64(FIELD_MASS, row);
-    double u = getDouble(FIELD_ENERGY, row);
+    double internalEnergy = getDouble(FIELD_ENERGY, row);
     int count = 0;
-    for (int s = 0; s < ns(); s++) {
-        int64_t q = quantity(1, row, s);
-        if (q < 0l)
-            invalid();
-        if (q > 0l)
+    for (int s = 0; s < speciesCount(); s++) {
+        int64_t speciesAmount = readQuantity(1, row, s);
+        if (speciesAmount < 0l)
+            reportInvalid();
+        if (speciesAmount > 0l)
             count++;
     }
-    if (volume < 0l || m < 0l || (volume > 0l && m == 0l) || !finite(u) || (m == 0l && u != 0.0LF) ||
-        (volume == 0l && (m != 0l || u != 0.0LF || count != 0)))
-        invalid();
-    words[f(FIELD_LIVE) + row] = volume > 0l ? 1u : 0u;
-    words[f(FIELD_SPECIES_COUNTS) + row] = volume > 0l ? uint(count) : 0u;
-    setDouble(FIELD_NEW_ENERGY, row, volume > 0l ? u : 0.0LF);
+    if (volume < 0l || m < 0l || (volume > 0l && m == 0l) || !isFinite(internalEnergy) || (m == 0l && internalEnergy != 0.0LF) ||
+        (volume == 0l && (m != 0l || internalEnergy != 0.0LF || count != 0)))
+        reportInvalid();
+    words[workField(FIELD_LIVE) + row] = volume > 0l ? 1u : 0u;
+    words[workField(FIELD_SPECIES_COUNTS) + row] = volume > 0l ? uint(count) : 0u;
+    setDouble(FIELD_NEW_ENERGY, row, volume > 0l ? internalEnergy : 0.0LF);
 }
 void finishCapacity() {
-    int lp = lpF(ph(), LP_FIELD_CONTROL);
-    words[f(FIELD_CONTROL) + 1] = words[lp + 2];
-    words[f(FIELD_CONTROL) + 2] = words[lp + 3];
-    uint groups = words[f(FIELD_GROUP_OFFSETS) + h(H_ROW_COUNT)],
-         species = words[f(FIELD_SPECIES_OFFSETS) + h(H_ROW_COUNT)];
-    words[f(FIELD_CONTROL) + 3] = groups;
-    words[f(FIELD_CONTROL) + 4] = species;
-    words[f(FIELD_CONTROL)] =
-        words[lp] == 1u || groups > uint(h(H_COHERENT_CAPACITY)) || species > uint(h(H_COHERENT_SPECIES_CAPACITY)) ? 1u
+    int lp = phaseRowField(phaseRowsHeader(), LP_FIELD_CONTROL);
+    words[workField(FIELD_CONTROL) + 1] = words[lp + 2];
+    words[workField(FIELD_CONTROL) + 2] = words[lp + 3];
+    uint groups = words[workField(FIELD_GROUP_OFFSETS) + headerWord(H_ROW_COUNT)],
+         species = words[workField(FIELD_SPECIES_OFFSETS) + headerWord(H_ROW_COUNT)];
+    words[workField(FIELD_CONTROL) + 3] = groups;
+    words[workField(FIELD_CONTROL) + 4] = species;
+    words[workField(FIELD_CONTROL)] =
+        words[lp] == 1u || groups > uint(headerWord(H_COHERENT_CAPACITY)) || species > uint(headerWord(H_COHERENT_SPECIES_CAPACITY)) ? 1u
         : words[lp] == 2u                                                                                          ? 2u
                                                                                                                    : 0u;
 }
 void writeSpecies(int row) {
-    if (words[f(FIELD_CONTROL)] != 2u || words[f(FIELD_LIVE) + row] == 0u)
+    if (words[workField(FIELD_CONTROL)] != 2u || words[workField(FIELD_LIVE) + row] == 0u)
         return;
-    int outAt = int(words[f(FIELD_SPECIES_OFFSETS) + row]);
+    int outAt = int(words[workField(FIELD_SPECIES_OFFSETS) + row]);
     uint64_t sum = 0UL;
-    int speciesTable = int(words[h(H_DEFINITIONS) + 1]);
-    for (int s = 0; s < ns(); s++) {
-        int64_t q = quantity(1, row, s);
-        if (q <= 0l)
+    int speciesTable = int(words[headerWord(H_DEFINITIONS) + 1]);
+    for (int s = 0; s < speciesCount(); s++) {
+        int64_t speciesAmount = readQuantity(1, row, s);
+        if (speciesAmount <= 0l)
             continue;
-        words[f(FIELD_SPECIES_HANDLES) + outAt] = uint(s);
-        integerAt(f(FIELD_SPECIES_AMOUNTS) + 2 * outAt, q);
+        words[workField(FIELD_SPECIES_HANDLES) + outAt] = uint(s);
+        writeInt64(workField(FIELD_SPECIES_AMOUNTS) + 2 * outAt, speciesAmount);
         outAt++;
-        u64vec2 value = product(uint64_t(q), uint64_t(integer(h(H_DEFINITIONS) + speciesTable + 5 * s + 1)));
+        u64vec2 value = product(uint64_t(speciesAmount), uint64_t(readInt64(headerWord(H_DEFINITIONS) + speciesTable + 5 * s + 1)));
         if (value.y != 0UL || value.x > ~0UL - sum) {
-            invalid();
+            reportInvalid();
             return;
         }
         sum += value.x;
     }
-    uint64_t m = uint64_t(get64(FIELD_MASS, row));
-    if (sum > m && sum - m > 0x8000000000000000UL) {
-        invalid();
+    uint64_t massUnits = uint64_t(get64(FIELD_MASS, row));
+    if (sum > massUnits && sum - massUnits > 0x8000000000000000UL) {
+        reportInvalid();
         return;
     }
-    set64(FIELD_MASS_RESIDUAL, row, int64_t(m - sum));
+    set64(FIELD_MASS_RESIDUAL, row, int64_t(massUnits - sum));
 }
 void publish(int id) {
-    if (words[f(FIELD_CONTROL)] != 2u)
+    if (words[workField(FIELD_CONTROL)] != 2u)
         return;
-    if (id < h(H_FACE_COUNT))
-        numberAt(momentumAddress(id), getDouble(FIELD_FACE_MOMENTUM, id));
-    if (id < h(H_ROW_COUNT) && words[f(FIELD_LIVE) + id] != 0u) {
-        int outAt = int(words[f(FIELD_GROUP_OFFSETS) + id]);
-        words[c(COHERENT_CELL) + outAt] = uint(id / cc());
-        words[c(COHERENT_MATERIAL) + outAt] = uint(id % cc());
-        integerAt(c(COHERENT_OCCUPIED_VOLUME_SVQ) + 2 * outAt, get64(FIELD_SVQ, id));
-        integerAt(c(COHERENT_MASS_UNITS) + 2 * outAt, get64(FIELD_MASS, id));
-        words[c(COHERENT_MIXTURE_PRESENT) + outAt] = words[f(FIELD_SPECIES_COUNTS) + id] > 0u ? 1u : 0u;
-        integerAt(c(COHERENT_MASS_RESIDUAL_UNITS) + 2 * outAt,
-                  words[f(FIELD_SPECIES_COUNTS) + id] > 0u ? get64(FIELD_MASS_RESIDUAL, id) : 0l);
-        words[c(COHERENT_SPECIES_OFFSETS) + outAt] = words[f(FIELD_SPECIES_OFFSETS) + id];
-        numberAt(c(COHERENT_INTERNAL_ENERGY) + 2 * outAt, getDouble(FIELD_ENERGY, id));
+    if (id < headerWord(H_FACE_COUNT))
+        writeDouble(momentumAddress(id), getDouble(FIELD_FACE_MOMENTUM, id));
+    if (id < headerWord(H_ROW_COUNT) && words[workField(FIELD_LIVE) + id] != 0u) {
+        int outAt = int(words[workField(FIELD_GROUP_OFFSETS) + id]);
+        words[coherentField(COHERENT_CELL) + outAt] = uint(id / coherentMaterialCount());
+        words[coherentField(COHERENT_MATERIAL) + outAt] = uint(id % coherentMaterialCount());
+        writeInt64(coherentField(COHERENT_OCCUPIED_VOLUME_SVQ) + 2 * outAt, get64(FIELD_SVQ, id));
+        writeInt64(coherentField(COHERENT_MASS_UNITS) + 2 * outAt, get64(FIELD_MASS, id));
+        words[coherentField(COHERENT_MIXTURE_PRESENT) + outAt] = words[workField(FIELD_SPECIES_COUNTS) + id] > 0u ? 1u : 0u;
+        writeInt64(coherentField(COHERENT_MASS_RESIDUAL_UNITS) + 2 * outAt,
+                  words[workField(FIELD_SPECIES_COUNTS) + id] > 0u ? get64(FIELD_MASS_RESIDUAL, id) : 0l);
+        words[coherentField(COHERENT_SPECIES_OFFSETS) + outAt] = words[workField(FIELD_SPECIES_OFFSETS) + id];
+        writeDouble(coherentField(COHERENT_INTERNAL_ENERGY) + 2 * outAt, getDouble(FIELD_ENERGY, id));
     }
-    if (id < int(words[f(FIELD_CONTROL) + 4])) {
-        words[c(COHERENT_SPECIES_HANDLES) + id] = words[f(FIELD_SPECIES_HANDLES) + id];
-        integerAt(c(COHERENT_SPECIES_AMOUNTS) + 2 * id, integer(f(FIELD_SPECIES_AMOUNTS) + 2 * id));
+    if (id < int(words[workField(FIELD_CONTROL) + 4])) {
+        words[coherentField(COHERENT_SPECIES_HANDLES) + id] = words[workField(FIELD_SPECIES_HANDLES) + id];
+        writeInt64(coherentField(COHERENT_SPECIES_AMOUNTS) + 2 * id, readInt64(workField(FIELD_SPECIES_AMOUNTS) + 2 * id));
     }
-    if (id < cells() && words[f(FIELD_CELL_CHANGED) + id] != 0u) {
-        atomicOr(words[h(H_PHASE_MOTION_CELLS) + id], 1u);
-        atomicOr(words[h(H_PHASE_PENDING_SUMMARY)], 1u);
+    if (id < cellCount() && words[workField(FIELD_CELL_CHANGED) + id] != 0u) {
+        atomicOr(words[headerWord(H_PHASE_MOTION_CELLS) + id], 1u);
+        atomicOr(words[headerWord(H_PHASE_PENDING_SUMMARY)], 1u);
     }
     if (id == 0) {
-        words[c(COHERENT_COUNTS)] = words[f(FIELD_CONTROL) + 3];
-        words[c(COHERENT_COUNTS) + 1] = words[f(FIELD_CONTROL) + 4];
-        words[c(COHERENT_SPECIES_OFFSETS) + int(words[f(FIELD_CONTROL) + 3])] = words[f(FIELD_CONTROL) + 4];
-        words[h(H_CURSOR)] = uint((int(words[h(H_CURSOR)]) + max(1, int(words[f(FIELD_CONTROL) + 8]))) % cells());
+        words[coherentField(COHERENT_COUNTS)] = words[workField(FIELD_CONTROL) + 3];
+        words[coherentField(COHERENT_COUNTS) + 1] = words[workField(FIELD_CONTROL) + 4];
+        words[coherentField(COHERENT_SPECIES_OFFSETS) + int(words[workField(FIELD_CONTROL) + 3])] = words[workField(FIELD_CONTROL) + 4];
+        words[headerWord(H_CURSOR)] = uint((int(words[headerWord(H_CURSOR)]) + max(1, int(words[workField(FIELD_CONTROL) + 8]))) % cellCount());
     }
 }
 bool activeCell(int cell) {
-    return h(H_ACTIVITY_CELLS) < 0 || words[h(H_ACTIVITY_CELLS) + cell] != 0u;
+    return headerWord(H_ACTIVITY_CELLS) < 0 || words[headerWord(H_ACTIVITY_CELLS) + cell] != 0u;
 }
 bool activeFace(int face) {
-    return h(H_ACTIVITY_FACES) < 0 || words[h(H_ACTIVITY_FACES) + face] != 0u;
+    return headerWord(H_ACTIVITY_FACES) < 0 || words[headerWord(H_ACTIVITY_FACES) + face] != 0u;
 }
 void main() {
     int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128u + gl_LocalInvocationID.x);
     if (id >= p.count)
         return;
-    if (p.stage == 0) {
+    if (p.stage == STAGE_INITIALIZE) {
         initialize(id);
         return;
     }
     if (errors != 0u)
         return;
-    if (p.stage == 1)
+    if (p.stage == STAGE_IMPORT_SOLID)
         importSolid(id);
-    else if (p.stage == 2)
+    else if (p.stage == STAGE_CAPTURE_CELL)
         captureCell(id);
-    else if (p.stage == 3)
+    else if (p.stage == STAGE_PHASE_CELL)
         phaseCell(id);
-    else if (p.stage == 4)
+    else if (p.stage == STAGE_SETTLE_FACE)
         settleFace(id);
-    else if (p.stage == 5)
+    else if (p.stage == STAGE_SETTLE_CELL)
         settleCell(id);
-    else if (p.stage == 6)
+    else if (p.stage == STAGE_COUNT_ROWS)
         countRow(id);
-    else if (p.stage == 7)
+    else if (p.stage == STAGE_FINISH_CAPACITY)
         finishCapacity();
-    else if (p.stage == 8)
+    else if (p.stage == STAGE_WRITE_SPECIES)
         writeSpecies(id);
-    else if (p.stage == 9)
+    else if (p.stage == STAGE_PUBLISH)
         publish(id);
 }

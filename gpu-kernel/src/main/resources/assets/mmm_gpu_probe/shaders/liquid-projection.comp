@@ -1,5 +1,19 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
+
+const int STAGE_PREDICT_VELOCITY = 0;
+const int STAGE_ASSEMBLE_PRESSURE = 1;
+const uint ERROR_PRESSURE_PROJECTION = 8u;
+const int CELL_LIQUID_VOLUME = 0;
+const int CELL_MASS = 1;
+const int CELL_PORE_VOLUME = 2;
+const int CELL_FILL = 3;
+const int FACE_MASS = 0;
+const int FACE_VELOCITY = 1;
+const int FACE_OPEN_AREA = 2;
+const int FACE_WET_AREA = 3;
+const double FULL_CELL_VOLUME_TOLERANCE = 4e-5;
+const int PRESSURE_ROW_ENTRIES = 7;
 layout(local_size_x = 128) in;
 layout(push_constant) uniform Metadata {
     int sx;
@@ -49,7 +63,7 @@ layout(std430, binding = 11) readonly buffer ActiveFaces {
     uint activeFaces[];
 };
 
-int n() {
+int cellCount() {
     return pc.sx * pc.sy * pc.sz;
 }
 int xFaces() {
@@ -64,103 +78,103 @@ int cellIndex(ivec3 p) {
 bool inside(ivec3 p) {
     return all(greaterThanEqual(p, ivec3(0))) && all(lessThan(p, ivec3(pc.sx, pc.sy, pc.sz)));
 }
-bool full(int c) {
-    return activeCells[c] != 0u && cells[c].y > 0.0 && cells[c].z > 0.0 && cells[c].z - cells[c].x <= 4e-5;
+bool isFullCell(int c) {
+    return activeCells[c] != 0u && cells[c][CELL_MASS] > 0.0 && cells[c][CELL_PORE_VOLUME] > 0.0 && cells[c][CELL_PORE_VOLUME] - cells[c][CELL_LIQUID_VOLUME] <= FULL_CELL_VOLUME_TOLERANCE;
 }
 int faceIndex(ivec3 p, int axis) {
     ivec3 shape = ivec3(pc.sx, pc.sy, pc.sz);
     shape[axis]++;
     return (axis == 0 ? 0 : axis == 1 ? xFaces() : xFaces() + yFaces()) + (p.z * shape.y + p.y) * shape.x + p.x;
 }
-double coefficient(int face) {
-    return activeFaces[face] != 0u && faces[face].x > 0.0 ? faces[face].w / double(pc.h) : 0.0;
+double facePressureCoefficient(int face) {
+    return activeFaces[face] != 0u && faces[face][FACE_MASS] > 0.0 ? faces[face][FACE_WET_AREA] / double(pc.h) : 0.0;
 }
-double inverseInertia(int face) {
+double inverseFaceInertia(int face) {
     double h = double(pc.h);
-    return faces[face].x > 0.0 ? h * h * h / faces[face].x : 0.0;
+    return faces[face][FACE_MASS] > 0.0 ? h * h * h / faces[face][FACE_MASS] : 0.0;
 }
 
-void predict(int face) {
+void predictFaceVelocity(int face) {
     if (activeFaces[face] == 0u)
         return;
-    if (faces[face].z <= 0.0 || faces[face].x <= 0.0) {
-        faces[face].y = 0.0;
+    if (faces[face][FACE_OPEN_AREA] <= 0.0 || faces[face][FACE_MASS] <= 0.0) {
+        faces[face][FACE_VELOCITY] = 0.0;
         return;
     }
-    if (face >= xFaces() && face < xFaces() + yFaces() && faces[face].w > 0.0)
-        faces[face].y -= double(pc.gravity) * double(pc.dt);
+    if (face >= xFaces() && face < xFaces() + yFaces() && faces[face][FACE_WET_AREA] > 0.0)
+        faces[face][FACE_VELOCITY] -= double(pc.gravity) * double(pc.dt);
 }
 
 // B contains signed wet area/h, M is the dual face inertia per physical cell volume.
 // The pressure matrix B M^-1 B^T and its response use the very same face coefficients.
-void assemble(int row) {
-    ivec3 p = ivec3(row % pc.sx, row / pc.sx % pc.sy, row / (pc.sx * pc.sy));
-    int start = 7 * row;
-    starts[row] = start;
-    columns[start] = row;
-    double diagonal = 0.0, rhs = 0.0;
-    bool enabled = full(row);
+void assemblePressureRow(int row) {
+    ivec3 cellPosition = ivec3(row % pc.sx, row / pc.sx % pc.sy, row / (pc.sx * pc.sy));
+    int rowStart = PRESSURE_ROW_ENTRIES * row;
+    starts[row] = rowStart;
+    columns[rowStart] = row;
+    double diagonal = 0.0, rightHandSide = 0.0;
+    bool enabled = isFullCell(row);
     for (int side = 0; side < 6; side++) {
         int axis = side / 2;
         bool upper = (side & 1) != 0;
-        ivec3 adjacent = p;
+        ivec3 adjacent = cellPosition;
         adjacent[axis] += upper ? 1 : -1;
-        ivec3 at = p;
+        ivec3 facePosition = cellPosition;
         if (upper)
-            at[axis]++;
-        int face = faceIndex(at, axis), peer = inside(adjacent) ? cellIndex(adjacent) : row;
-        double b = coefficient(face), a = b * b * inverseInertia(face);
-        columns[start + 1 + side] = peer;
-        values[start + 1 + side] = enabled && inside(adjacent) && full(peer) ? -a : 0.0;
+            facePosition[axis]++;
+        int face = faceIndex(facePosition, axis), peer = inside(adjacent) ? cellIndex(adjacent) : row;
+        double pressureCoefficient = facePressureCoefficient(face), faceDiagonal = pressureCoefficient * pressureCoefficient * inverseFaceInertia(face);
+        columns[rowStart + 1 + side] = peer;
+        values[rowStart + 1 + side] = enabled && inside(adjacent) && isFullCell(peer) ? -faceDiagonal : 0.0;
         if (enabled) {
-            diagonal += a;
-            rhs += (upper ? -1.0 : 1.0) * b * faces[face].y / double(pc.dt);
+            diagonal += faceDiagonal;
+            rightHandSide += (upper ? -1.0 : 1.0) * pressureCoefficient * faces[face][FACE_VELOCITY] / double(pc.dt);
         }
     }
     bool unknown = enabled && diagonal > 0.0;
     rows[row] = unknown ? row : -1;
-    values[start] = unknown ? diagonal : 1.0;
+    values[rowStart] = unknown ? diagonal : 1.0;
     meta[row] = 0;
-    problem[row] = unknown ? rhs : 0.0;
-    problem[n() + row] = 0.0;
-    problem[2 * n() + row] = unknown ? pressure[row] : 0.0;
+    problem[row] = unknown ? rightHandSide : 0.0;
+    problem[cellCount() + row] = 0.0;
+    problem[2 * cellCount() + row] = unknown ? pressure[row] : 0.0;
     if (row == 0) {
-        starts[n()] = 7 * n();
-        problem[3 * n()] = double(pc.tolerance);
+        starts[cellCount()] = PRESSURE_ROW_ENTRIES * cellCount();
+        problem[3 * cellCount()] = double(pc.tolerance);
     }
 }
 
-void project(int face) {
+void projectFaceVelocity(int face) {
     if (activeFaces[face] == 0u)
         return;
     int axis = face < xFaces() ? 0 : face < xFaces() + yFaces() ? 1 : 2;
-    int local = face - (axis == 0 ? 0 : axis == 1 ? xFaces() : xFaces() + yFaces());
+    int localFace = face - (axis == 0 ? 0 : axis == 1 ? xFaces() : xFaces() + yFaces());
     ivec3 shape = ivec3(pc.sx, pc.sy, pc.sz);
     shape[axis]++;
-    ivec3 right = ivec3(local % shape.x, local / shape.x % shape.y, local / (shape.x * shape.y)), left = right;
+    ivec3 right = ivec3(localFace % shape.x, localFace / shape.x % shape.y, localFace / (shape.x * shape.y)), left = right;
     left[axis]--;
-    if (!inside(left) || !inside(right) || faces[face].x <= 0.0 || faces[face].z <= 0.0) {
-        faces[face].y = 0.0;
+    if (!inside(left) || !inside(right) || faces[face][FACE_MASS] <= 0.0 || faces[face][FACE_OPEN_AREA] <= 0.0) {
+        faces[face][FACE_VELOCITY] = 0.0;
         return;
     }
-    int a = cellIndex(left), b = cellIndex(right);
-    double pa = full(a) ? pressure[a] : 0.0, pb = full(b) ? pressure[b] : 0.0;
-    faces[face].y += double(pc.dt) * inverseInertia(face) * coefficient(face) * (pa - pb);
-    if (isnan(faces[face].y) || isinf(faces[face].y))
-        atomicOr(errors, 8u);
+    int leftCell = cellIndex(left), rightCell = cellIndex(right);
+    double leftPressure = isFullCell(leftCell) ? pressure[leftCell] : 0.0, rightPressure = isFullCell(rightCell) ? pressure[rightCell] : 0.0;
+    faces[face][FACE_VELOCITY] += double(pc.dt) * inverseFaceInertia(face) * facePressureCoefficient(face) * (leftPressure - rightPressure);
+    if (isnan(faces[face][FACE_VELOCITY]) || isinf(faces[face][FACE_VELOCITY]))
+        atomicOr(errors, ERROR_PRESSURE_PROJECTION);
 }
 
 void main() {
     int id = int(gl_GlobalInvocationID.x);
-    if (pc.stage == 1) {
-        if (id < n())
-            assemble(id);
+    if (pc.stage == STAGE_ASSEMBLE_PRESSURE) {
+        if (id < cellCount())
+            assemblePressureRow(id);
         return;
     }
     if (id >= xFaces() + yFaces() + pc.sx * pc.sy * (pc.sz + 1))
         return;
-    if (pc.stage == 0)
-        predict(id);
+    if (pc.stage == STAGE_PREDICT_VELOCITY)
+        predictFaceVelocity(id);
     else
-        project(id);
+        projectFaceVelocity(id);
 }

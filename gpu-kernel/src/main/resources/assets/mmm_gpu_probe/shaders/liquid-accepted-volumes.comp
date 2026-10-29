@@ -1,6 +1,20 @@
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+const int STAGE_MEASURE_ACCEPTED_VOLUMES = 0;
+const uint ERROR_INVALID_VOLUME = 32u;
+const uint ERROR_INSUFFICIENT_CAPACITY = 64u;
 // HOST_LAYOUT
+const int ROUTE_COUNT = 7;
+const int MEASUREMENT_WORDS = 8;
+const int MEASURE_STATUS = 0;
+const int MEASURE_WORD_COUNT = 1;
+const int MEASURE_EXPONENT = 2;
+const int MEASURE_MINIMUM_EXPONENT = 3;
+const int MEASURE_FIRST_WORD = 4;
+const int MEASURE_LAST_WORD = 5;
+const int MEASURE_TRAILING_BITS = 6;
+const int MEASURE_REMAINDER_ROUTE = 7;
 layout(local_size_x=128) in;
 layout(binding=0,std430) buffer Candidate { uint candidateWords[]; };
 layout(binding=1,std430) buffer Errors { uint errors; };
@@ -20,56 +34,56 @@ DyadicTerm integerVolume(uint64_t value) {
     int trailing=uint(value)==0u?32+findLSB(uint(value>>32)):findLSB(uint(value));
     value>>=trailing;integerWords=uvec2(uint(value),uint(value>>32));
     int64_t exponent=int64_t(h(H_QUANTUM_EXPONENT))+int64_t(trailing);
-    if(exponent>int64_t(2147483647)){atomicOr(errors,32u);return DyadicTerm(2,0,0,0,0);}
+    if(exponent>int64_t(2147483647)){atomicOr(errors,ERROR_INVALID_VOLUME);return DyadicTerm(2,0,0,0,0);}
     return DyadicTerm(2,0,integerWords.y==0u?1:2,int(exponent),1);
 }
 bool acceptedTotal(int cell,out uint64_t moving) {
     uint64_t sum=uint64_t(0);moving=uint64_t(0);
-    for(int slot=0;slot<7;slot++) {
-        int64_t amount=getLong(h(H_ACCEPTED)+2*(7*cell+slot));
-        if(amount<int64_t(0)||uint64_t(amount)>uint64_t(0x7fffffffffffffffUL)-sum){atomicOr(errors,32u);return false;}
+    for(int slot=0;slot<ROUTE_COUNT;slot++) {
+        int64_t amount=getLong(h(H_ACCEPTED)+2*(ROUTE_COUNT*cell+slot));
+        if(amount<int64_t(0)||uint64_t(amount)>uint64_t(0x7fffffffffffffffUL)-sum){atomicOr(errors,ERROR_INVALID_VOLUME);return false;}
         sum+=uint64_t(amount);if(slot!=0)moving+=uint64_t(amount);
     }
     int64_t supply=getLong(h(H_SOURCE_QUANTIZED)+2*cell);
-    if(supply<int64_t(0)||sum!=uint64_t(supply)){atomicOr(errors,32u);return false;}
+    if(supply<int64_t(0)||sum!=uint64_t(supply)){atomicOr(errors,ERROR_INVALID_VOLUME);return false;}
     return true;
 }
 void putMeasure(int cell,DyadicMeasure value) {
-    int at=h(H_MEASUREMENTS)+8*cell;
-    candidateWords[at]=uint(value.status);candidateWords[at+1]=uint(value.words);
-    candidateWords[at+2]=uint(value.exponent);candidateWords[at+3]=uint(value.minimumExponent);
-    candidateWords[at+4]=uint(value.firstWord);candidateWords[at+5]=uint(value.lastWord);candidateWords[at+6]=uint(value.trailingBits);
-    candidateWords[at+7]=0u;
+    int at=h(H_MEASUREMENTS)+MEASUREMENT_WORDS*cell;
+    candidateWords[at+MEASURE_STATUS]=uint(value.status);candidateWords[at+MEASURE_WORD_COUNT]=uint(value.words);
+    candidateWords[at+MEASURE_EXPONENT]=uint(value.exponent);candidateWords[at+MEASURE_MINIMUM_EXPONENT]=uint(value.minimumExponent);
+    candidateWords[at+MEASURE_FIRST_WORD]=uint(value.firstWord);candidateWords[at+MEASURE_LAST_WORD]=uint(value.lastWord);candidateWords[at+MEASURE_TRAILING_BITS]=uint(value.trailingBits);
+    candidateWords[at+MEASURE_REMAINDER_ROUTE]=0u;
 }
 DyadicMeasure getMeasure(int cell) {
-    int at=h(H_MEASUREMENTS)+8*cell;
-    return DyadicMeasure(int(candidateWords[at]),int(candidateWords[at+1]),int(candidateWords[at+2]),
-                         int(candidateWords[at+3]),int(candidateWords[at+4]),int(candidateWords[at+5]),int(candidateWords[at+6]));
+    int at=h(H_MEASUREMENTS)+MEASUREMENT_WORDS*cell;
+    return DyadicMeasure(int(candidateWords[at+MEASURE_STATUS]),int(candidateWords[at+MEASURE_WORD_COUNT]),int(candidateWords[at+MEASURE_EXPONENT]),
+                         int(candidateWords[at+MEASURE_MINIMUM_EXPONENT]),int(candidateWords[at+MEASURE_FIRST_WORD]),int(candidateWords[at+MEASURE_LAST_WORD]),int(candidateWords[at+MEASURE_TRAILING_BITS]));
 }
 // Assign each donor volume to retained and accepted routes before allocating exact limbs.
 void measureCell(int cell) {
-    candidateWords[h(H_MEASUREMENTS)+8*cell+7]=0u;
-    for(int slot=0;slot<7;slot++) {
-        int entry=7*cell+slot;candidateWords[h(H_COUNTS)+entry]=0u;candidateWords[h(H_ROUTE_SIGNS)+entry]=0u;candidateWords[h(H_ROUTE_EXPONENTS)+entry]=0u;
+    candidateWords[h(H_MEASUREMENTS)+MEASUREMENT_WORDS*cell+MEASURE_REMAINDER_ROUTE]=0u;
+    for(int slot=0;slot<ROUTE_COUNT;slot++) {
+        int entry=ROUTE_COUNT*cell+slot;candidateWords[h(H_COUNTS)+entry]=0u;candidateWords[h(H_ROUTE_SIGNS)+entry]=0u;candidateWords[h(H_ROUTE_EXPONENTS)+entry]=0u;
     }
     if(errors!=0u)return;
     uint64_t moving;if(!acceptedTotal(cell,moving))return;
     // Assign the final fractional quantum to the retained route, or to one
     // accepted outgoing route when the donor is emptied.
     int owner=0;
-    if(getLong(h(H_ACCEPTED)+14*cell)==int64_t(0)) {
-        owner=-1;for(int slot=1;slot<7;slot++)if(getLong(h(H_ACCEPTED)+2*(7*cell+slot))>int64_t(0)){owner=slot;break;}
+    if(getLong(h(H_ACCEPTED)+2*ROUTE_COUNT*cell)==int64_t(0)) {
+        owner=-1;for(int slot=1;slot<ROUTE_COUNT;slot++)if(getLong(h(H_ACCEPTED)+2*(ROUTE_COUNT*cell+slot))>int64_t(0)){owner=slot;break;}
     }
     if(owner<0)return;
-    uint64_t owned=uint64_t(getLong(h(H_ACCEPTED)+2*(7*cell+owner)));
+    uint64_t owned=uint64_t(getLong(h(H_ACCEPTED)+2*(ROUTE_COUNT*cell+owner)));
     uint64_t supply=uint64_t(getLong(h(H_SOURCE_QUANTIZED)+2*cell));
-    DyadicTerm items[7];items[0]=totalVolume(cell);items[1]=integerVolume(supply-owned);items[1].sign=-items[1].sign;
+    DyadicTerm items[DYADIC_MAX_TERMS];items[0]=totalVolume(cell);items[1]=integerVolume(supply-owned);items[1].sign=-items[1].sign;
     if(errors!=0u)return;
     DyadicMeasure remainder=dyadicMeasure(items,2);
-    if(remainder.status!=DYADIC_ZERO&&remainder.status!=DYADIC_POSITIVE){atomicOr(errors,32u);return;}
-    putMeasure(cell,remainder);candidateWords[h(H_MEASUREMENTS)+8*cell+7]=uint(owner);
-    for(int slot=0;slot<7;slot++) {
-        int entry=7*cell+slot;DyadicTerm value=integerVolume(uint64_t(getLong(h(H_ACCEPTED)+2*entry)));
+    if(remainder.status!=DYADIC_ZERO&&remainder.status!=DYADIC_POSITIVE){atomicOr(errors,ERROR_INVALID_VOLUME);return;}
+    putMeasure(cell,remainder);candidateWords[h(H_MEASUREMENTS)+MEASUREMENT_WORDS*cell+MEASURE_REMAINDER_ROUTE]=uint(owner);
+    for(int slot=0;slot<ROUTE_COUNT;slot++) {
+        int entry=ROUTE_COUNT*cell+slot;DyadicTerm value=integerVolume(uint64_t(getLong(h(H_ACCEPTED)+2*entry)));
         candidateWords[h(H_COUNTS)+entry]=uint(slot==owner?remainder.words:value.count);
         candidateWords[h(H_ROUTE_SIGNS)+entry]=uint(slot==owner?(remainder.status==DYADIC_POSITIVE?1:0):value.sign);
         candidateWords[h(H_ROUTE_EXPONENTS)+entry]=uint(slot==owner?remainder.exponent:value.exponent);
@@ -78,15 +92,15 @@ void measureCell(int cell) {
 // Write exact route volumes into the offsets produced by the prefix scan.
 void writeCell(int cell) {
     if(errors!=0u)return;
-    if(candidateWords[h(H_ROUTE_OFFSETS)+7*h(H_CELL_COUNT)]>uint(h(H_LIMB_CAPACITY))){atomicOr(errors,64u);return;}
-    int owner=int(candidateWords[h(H_MEASUREMENTS)+8*cell+7]);
+    if(candidateWords[h(H_ROUTE_OFFSETS)+ROUTE_COUNT*h(H_CELL_COUNT)]>uint(h(H_LIMB_CAPACITY))){atomicOr(errors,ERROR_INSUFFICIENT_CAPACITY);return;}
+    int owner=int(candidateWords[h(H_MEASUREMENTS)+MEASUREMENT_WORDS*cell+MEASURE_REMAINDER_ROUTE]);
     uint64_t supply=uint64_t(getLong(h(H_SOURCE_QUANTIZED)+2*cell));
-    uint64_t owned=uint64_t(getLong(h(H_ACCEPTED)+2*(7*cell+owner)));
-    DyadicTerm items[7];items[0]=totalVolume(cell);items[1]=integerVolume(supply-owned);items[1].sign=-items[1].sign;
+    uint64_t owned=uint64_t(getLong(h(H_ACCEPTED)+2*(ROUTE_COUNT*cell+owner)));
+    DyadicTerm items[DYADIC_MAX_TERMS];items[0]=totalVolume(cell);items[1]=integerVolume(supply-owned);items[1].sign=-items[1].sign;
     DyadicMeasure remainder=getMeasure(cell);
-    if(supply>uint64_t(0))dyadicWriteSum(items,2,remainder,h(H_ROUTE_LIMBS)+int(candidateWords[h(H_ROUTE_OFFSETS)+7*cell+owner]));
-    for(int slot=0;slot<7;slot++) {
-        int entry=7*cell+slot,at=h(H_DESCRIPTORS)+5*entry,outputOffset=h(H_ROUTE_LIMBS)+int(candidateWords[h(H_ROUTE_OFFSETS)+entry]);
+    if(supply>uint64_t(0))dyadicWriteSum(items,2,remainder,h(H_ROUTE_LIMBS)+int(candidateWords[h(H_ROUTE_OFFSETS)+ROUTE_COUNT*cell+owner]));
+    for(int slot=0;slot<ROUTE_COUNT;slot++) {
+        int entry=ROUTE_COUNT*cell+slot,at=h(H_DESCRIPTORS)+5*entry,outputOffset=h(H_ROUTE_LIMBS)+int(candidateWords[h(H_ROUTE_OFFSETS)+entry]);
         int count=int(candidateWords[h(H_COUNTS)+entry]);
         if(slot!=owner&&count!=0) {
             DyadicTerm value=integerVolume(uint64_t(getLong(h(H_ACCEPTED)+2*entry)));
@@ -99,5 +113,5 @@ void writeCell(int cell) {
 void main() {
     uint id=(gl_WorkGroupID.y*gl_NumWorkGroups.x+gl_WorkGroupID.x)*128u+gl_LocalInvocationID.x;
     if(id>=uint(p.count))return;
-    if(p.stage==0)measureCell(int(id));else writeCell(int(id));
+    if(p.stage==STAGE_MEASURE_ACCEPTED_VOLUMES)measureCell(int(id));else writeCell(int(id));
 }

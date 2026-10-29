@@ -1,38 +1,55 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+const int WORKGROUP_SIZE = 128;
+const int STAGE_REDUCE_CELLS = 0;
+const int STAGE_REDUCE_GROUPS = 1;
+const int PARTIAL_VALUE_OFFSET = 32;
+const int PARTIAL_VALUE_STRIDE = 16;
+const int THERMAL_PARTIAL_OFFSET = 4;
+const int MECHANICAL_PARTIAL_OFFSET = 8;
+const int AUDIT_PARTIAL_OFFSET = 12;
+const int THERMAL_OUTPUT_OFFSET = 8;
+const int MECHANICAL_OUTPUT_OFFSET = 16;
+const uint DEPOSIT_QUIET_AGE = 20u;
+const uint MAXIMUM_THERMAL_MODE = 8u;
+const double KILOGRAMS_PER_MASS_UNIT = 1e-10LF;
+// Four-vector reductions: inventory=(volume,mass,maxFaceSpeed,maxParticleSpeed),
+// thermal=(maxTemperatureChange,maxEnergyChange,viscousHeat,movingDeposit),
+// mechanical=(liquidKineticLoss,grainKineticLoss,potentialChange,gasWork),
+// audit=(kineticBefore,kineticAfter,absoluteMechanicalChange,mixingHeat).
 layout(local_size_x=128)in;
-layout(std430,binding=0)readonly buffer Arena{uint data[];};
-layout(std430,binding=1)buffer Output{double result[];};
-layout(push_constant)uniform Params{int stage;int cells;int faces;int groups;int counts;int offsets;int volumes;int masses;int faceData;int solidCounts;int velocities;int owners;int thermalCounts;int initialT;int finalT;int energyChange;int thermalMode;int viscousHeat;int faceTerms;int potentialTerms;int potentialCount;int granularTerms;int granularCount;int gasWork;int gasNodes;int mixingHeat;int stableAge;int depositCells;int particleCapacity;int nx;int ny;int pad5;}p;
-shared dvec4 partial[128];shared dvec4 heatPartial[128];shared dvec4 mechanicalPartial[128];shared dvec4 auditPartial[128];
-double number(int i){return packDouble2x32(uvec2(data[i],data[i+1]));}
-void main(){int lane=int(gl_LocalInvocationID.x),id=int(gl_GlobalInvocationID.x);dvec4 value=dvec4(0),heat=dvec4(0),mechanical=dvec4(0),audit=dvec4(0);
- if(p.stage==0){
-  if(id<p.cells)for(int row=int(data[p.offsets+id]);row<int(data[p.offsets+id+1]);row++){
-   value.x+=number(p.volumes+2*row);uint64_t q=uint64_t(data[p.masses+2*row])|(uint64_t(data[p.masses+2*row+1])<<32);value.y+=double(q)*1e-10LF;
+layout(std430,binding=0)readonly buffer Arena{uint sourceWords[];};
+layout(std430,binding=1)buffer Output{double observationValues[];};
+layout(push_constant)uniform Params{int stage;int cells;int faces;int groups;int liquidCountsOffset;int cellOffsets;int volumeWords;int massWords;int faceWords;int granularCountsOffset;int particleVelocityWords;int owners;int thermalCountsOffset;int initialTemperatureWords;int finalTemperatureWords;int energyChangeWords;int thermalModeOffset;int viscousHeatOffset;int faceEnergyTermsOffset;int potentialEnergyTermsOffset;int potentialCount;int granularEnergyTermsOffset;int granularCount;int gasWorkOffset;int gasNodes;int mixingHeatOffset;int depositStableAgeOffset;int depositCellsOffset;int particleCapacity;int sizeX;int sizeY;int pad5;}params;
+shared dvec4 sharedInventoryAndSpeed[WORKGROUP_SIZE];shared dvec4 sharedThermalSummary[WORKGROUP_SIZE];shared dvec4 sharedMechanicalSummary[WORKGROUP_SIZE];shared dvec4 sharedEnergyAudit[WORKGROUP_SIZE];
+double readDouble(int i){return packDouble2x32(uvec2(sourceWords[i],sourceWords[i+1]));}
+void main(){int lane=int(gl_LocalInvocationID.x),elementIndex=int(gl_GlobalInvocationID.x);dvec4 inventoryAndSpeed=dvec4(0),thermalSummary=dvec4(0),mechanicalSummary=dvec4(0),energyAudit=dvec4(0);
+ if(params.stage==STAGE_REDUCE_CELLS){
+  if(elementIndex<params.cells)for(int row=int(sourceWords[params.cellOffsets+elementIndex]);row<int(sourceWords[params.cellOffsets+elementIndex+1]);row++){
+   inventoryAndSpeed.x+=readDouble(params.volumeWords+2*row);uint64_t massUnits=uint64_t(sourceWords[params.massWords+2*row])|(uint64_t(sourceWords[params.massWords+2*row+1])<<32);inventoryAndSpeed.y+=double(massUnits)*KILOGRAMS_PER_MASS_UNIT;
   }
-  if(id<p.faces)value.z=abs(number(p.faceData+8*id+2));
-  if(p.solidCounts>=0 && id<int(data[p.solidCounts])){
-   dvec3 velocity=dvec3(number(p.velocities+6*id),number(p.velocities+6*id+2),number(p.velocities+6*id+4));value.w=sqrt(dot(velocity,velocity));
+  if(elementIndex<params.faces)inventoryAndSpeed.z=abs(readDouble(params.faceWords+8*elementIndex+2));
+  if(params.granularCountsOffset>=0 && elementIndex<int(sourceWords[params.granularCountsOffset])){
+   dvec3 velocity=dvec3(readDouble(params.particleVelocityWords+6*elementIndex),readDouble(params.particleVelocityWords+6*elementIndex+2),readDouble(params.particleVelocityWords+6*elementIndex+4));inventoryAndSpeed.w=sqrt(dot(velocity,velocity));
   }
-  if(p.thermalCounts>=0 && id<int(data[p.thermalCounts])) {heat.x=abs(number(p.finalT+2*id)-number(p.initialT+2*id));heat.y=abs(number(p.energyChange+4*id));}
-  if(p.stableAge>=0 && id<int(data[p.solidCounts+1])){int cell=int(data[p.depositCells+id]),column=cell%p.nx+p.nx*(cell/(p.nx*p.ny));heat.w=data[p.stableAge+column]<20u?1.0LF:0.0LF;}
-  if(p.viscousHeat>=0 && id<p.cells)heat.z=number(p.viscousHeat+2*id);
+  if(params.thermalCountsOffset>=0 && elementIndex<int(sourceWords[params.thermalCountsOffset])) {thermalSummary.x=abs(readDouble(params.finalTemperatureWords+2*elementIndex)-readDouble(params.initialTemperatureWords+2*elementIndex));thermalSummary.y=abs(readDouble(params.energyChangeWords+4*elementIndex));}
+  if(params.depositStableAgeOffset>=0 && elementIndex<int(sourceWords[params.granularCountsOffset+1])){int cell=int(sourceWords[params.depositCellsOffset+elementIndex]),column=cell%params.sizeX+params.sizeX*(cell/(params.sizeX*params.sizeY));thermalSummary.w=sourceWords[params.depositStableAgeOffset+column]<DEPOSIT_QUIET_AGE?1.0LF:0.0LF;}
+  if(params.viscousHeatOffset>=0 && elementIndex<params.cells)thermalSummary.z=readDouble(params.viscousHeatOffset+2*elementIndex);
 
-  if(p.faceTerms>=0){
-   if(id<p.faces){double before=number(p.faceTerms+4*id),after=-number(p.faceTerms+4*id+2);mechanical.x=before-after;audit.x=before;audit.y=after;audit.z=abs(mechanical.x);}
-   if(id<p.potentialCount){double pe=number(p.potentialTerms+4*id)+number(p.potentialTerms+4*id+2);mechanical.z+=pe;audit.z+=abs(pe);}
-   if(id<p.granularCount){double before=number(p.granularTerms+8*id),after=-number(p.granularTerms+8*id+2),pe=number(p.granularTerms+8*id+4)+number(p.granularTerms+8*id+6);mechanical.y=before-after;mechanical.z+=pe;audit.x+=before;audit.y+=after;audit.z+=abs(before-after)+abs(pe);}
-   if(p.gasWork>=0&&id<p.gasNodes){mechanical.w=-(number(p.gasWork+4*id)+number(p.gasWork+4*id+2));audit.z+=abs(mechanical.w);}
-   if(p.mixingHeat>=0&&id<p.cells)audit.w=number(p.mixingHeat+2*id);
+  if(params.faceEnergyTermsOffset>=0){
+   if(elementIndex<params.faces){double kineticEnergyBefore=readDouble(params.faceEnergyTermsOffset+4*elementIndex),kineticEnergyAfter=-readDouble(params.faceEnergyTermsOffset+4*elementIndex+2);mechanicalSummary.x=kineticEnergyBefore-kineticEnergyAfter;energyAudit.x=kineticEnergyBefore;energyAudit.y=kineticEnergyAfter;energyAudit.z=abs(mechanicalSummary.x);}
+   if(elementIndex<params.potentialCount){double potentialEnergyChange=readDouble(params.potentialEnergyTermsOffset+4*elementIndex)+readDouble(params.potentialEnergyTermsOffset+4*elementIndex+2);mechanicalSummary.z+=potentialEnergyChange;energyAudit.z+=abs(potentialEnergyChange);}
+   if(elementIndex<params.granularCount){double kineticEnergyBefore=readDouble(params.granularEnergyTermsOffset+8*elementIndex),kineticEnergyAfter=-readDouble(params.granularEnergyTermsOffset+8*elementIndex+2),potentialEnergyChange=readDouble(params.granularEnergyTermsOffset+8*elementIndex+4)+readDouble(params.granularEnergyTermsOffset+8*elementIndex+6);mechanicalSummary.y=kineticEnergyBefore-kineticEnergyAfter;mechanicalSummary.z+=potentialEnergyChange;energyAudit.x+=kineticEnergyBefore;energyAudit.y+=kineticEnergyAfter;energyAudit.z+=abs(kineticEnergyBefore-kineticEnergyAfter)+abs(potentialEnergyChange);}
+   if(params.gasWorkOffset>=0&&elementIndex<params.gasNodes){mechanicalSummary.w=-(readDouble(params.gasWorkOffset+4*elementIndex)+readDouble(params.gasWorkOffset+4*elementIndex+2));energyAudit.z+=abs(mechanicalSummary.w);}
+   if(params.mixingHeatOffset>=0&&elementIndex<params.cells)energyAudit.w=readDouble(params.mixingHeatOffset+2*elementIndex);
   }
- }else for(int k=lane;k<p.groups;k+=128){int at=32+16*k;value.xy+=dvec2(result[at],result[at+1]);value.zw=max(value.zw,dvec2(result[at+2],result[at+3]));heat.xy=max(heat.xy,dvec2(result[at+4],result[at+5]));heat.z+=result[at+6];heat.w=max(heat.w,result[at+7]);for(int j=0;j<4;j++){mechanical[j]+=result[at+8+j];audit[j]+=result[at+12+j];}}
+ }else for(int k=lane;k<params.groups;k+=WORKGROUP_SIZE){int partialOffset=PARTIAL_VALUE_OFFSET+PARTIAL_VALUE_STRIDE*k;inventoryAndSpeed.xy+=dvec2(observationValues[partialOffset],observationValues[partialOffset+1]);inventoryAndSpeed.zw=max(inventoryAndSpeed.zw,dvec2(observationValues[partialOffset+2],observationValues[partialOffset+3]));thermalSummary.xy=max(thermalSummary.xy,dvec2(observationValues[partialOffset+THERMAL_PARTIAL_OFFSET],observationValues[partialOffset+5]));thermalSummary.z+=observationValues[partialOffset+6];thermalSummary.w=max(thermalSummary.w,observationValues[partialOffset+7]);for(int j=0;j<4;j++){mechanicalSummary[j]+=observationValues[partialOffset+MECHANICAL_PARTIAL_OFFSET+j];energyAudit[j]+=observationValues[partialOffset+AUDIT_PARTIAL_OFFSET+j];}}
 
- partial[lane]=value;heatPartial[lane]=heat;mechanicalPartial[lane]=mechanical;auditPartial[lane]=audit;barrier();for(int step=64;step>0;step>>=1){if(lane<step){partial[lane].xy+=partial[lane+step].xy;partial[lane].zw=max(partial[lane].zw,partial[lane+step].zw);heatPartial[lane].xy=max(heatPartial[lane].xy,heatPartial[lane+step].xy);heatPartial[lane].z+=heatPartial[lane+step].z;heatPartial[lane].w=max(heatPartial[lane].w,heatPartial[lane+step].w);mechanicalPartial[lane]+=mechanicalPartial[lane+step];auditPartial[lane]+=auditPartial[lane+step];}barrier();}
- if(lane==0){int outAt=p.stage==0?32+16*int(gl_WorkGroupID.x):0;for(int k=0;k<4;k++)result[outAt+k]=partial[0][k];
-  int heatAt=p.stage==0?outAt+4:8;for(int k=0;k<4;k++)result[heatAt+k]=heatPartial[0][k];
-  int mechanicalAt=p.stage==0?outAt+8:16;for(int k=0;k<4;k++){result[mechanicalAt+k]=mechanicalPartial[0][k];result[mechanicalAt+4+k]=auditPartial[0][k];}
-  if(p.stage==1){result[13]=heatPartial[0].w;result[4]=double(data[p.counts]);result[5]=p.solidCounts<0?0.0LF:double(data[p.solidCounts]);result[6]=p.solidCounts<0?0.0LF:double(data[p.solidCounts+1]);result[7]=0.0LF;result[11]=p.thermalCounts<0?0.0LF:double(data[p.thermalMode]<=8u?data[p.thermalMode]:1u);result[12]=p.thermalCounts<0?0.0LF:double(data[p.thermalCounts+2]);}
+ sharedInventoryAndSpeed[lane]=inventoryAndSpeed;sharedThermalSummary[lane]=thermalSummary;sharedMechanicalSummary[lane]=mechanicalSummary;sharedEnergyAudit[lane]=energyAudit;barrier();for(int reductionStride=WORKGROUP_SIZE/2;reductionStride>0;reductionStride>>=1){if(lane<reductionStride){sharedInventoryAndSpeed[lane].xy+=sharedInventoryAndSpeed[lane+reductionStride].xy;sharedInventoryAndSpeed[lane].zw=max(sharedInventoryAndSpeed[lane].zw,sharedInventoryAndSpeed[lane+reductionStride].zw);sharedThermalSummary[lane].xy=max(sharedThermalSummary[lane].xy,sharedThermalSummary[lane+reductionStride].xy);sharedThermalSummary[lane].z+=sharedThermalSummary[lane+reductionStride].z;sharedThermalSummary[lane].w=max(sharedThermalSummary[lane].w,sharedThermalSummary[lane+reductionStride].w);sharedMechanicalSummary[lane]+=sharedMechanicalSummary[lane+reductionStride];sharedEnergyAudit[lane]+=sharedEnergyAudit[lane+reductionStride];}barrier();}
+ if(lane==0){int outputOffset=params.stage==STAGE_REDUCE_CELLS?PARTIAL_VALUE_OFFSET+PARTIAL_VALUE_STRIDE*int(gl_WorkGroupID.x):0;for(int k=0;k<4;k++)observationValues[outputOffset+k]=sharedInventoryAndSpeed[0][k];
+  int thermalOutputOffset=params.stage==STAGE_REDUCE_CELLS?outputOffset+THERMAL_PARTIAL_OFFSET:THERMAL_OUTPUT_OFFSET;for(int k=0;k<4;k++)observationValues[thermalOutputOffset+k]=sharedThermalSummary[0][k];
+  int mechanicalOutputOffset=params.stage==STAGE_REDUCE_CELLS?outputOffset+MECHANICAL_PARTIAL_OFFSET:MECHANICAL_OUTPUT_OFFSET;for(int k=0;k<4;k++){observationValues[mechanicalOutputOffset+k]=sharedMechanicalSummary[0][k];observationValues[mechanicalOutputOffset+4+k]=sharedEnergyAudit[0][k];}
+  if(params.stage==STAGE_REDUCE_GROUPS){observationValues[13]=sharedThermalSummary[0].w;observationValues[4]=double(sourceWords[params.liquidCountsOffset]);observationValues[5]=params.granularCountsOffset<0?0.0LF:double(sourceWords[params.granularCountsOffset]);observationValues[6]=params.granularCountsOffset<0?0.0LF:double(sourceWords[params.granularCountsOffset+1]);observationValues[7]=0.0LF;observationValues[11]=params.thermalCountsOffset<0?0.0LF:double(sourceWords[params.thermalModeOffset]<=MAXIMUM_THERMAL_MODE?sourceWords[params.thermalModeOffset]:1u);observationValues[12]=params.thermalCountsOffset<0?0.0LF:double(sourceWords[params.thermalCountsOffset+2]);}
  }
 }

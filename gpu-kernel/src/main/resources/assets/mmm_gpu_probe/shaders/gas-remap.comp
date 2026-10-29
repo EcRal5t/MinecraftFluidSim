@@ -17,10 +17,47 @@ layout(push_constant) uniform Params {
 }
 p;
 // HOST_LAYOUT
+const int ROUTE_COUNT = 0;
+const int ROUTE_SOURCES = 1;
+const int ROUTE_TARGETS = 2;
+const int ROUTE_WEIGHTS = 3;
+const int ROUTE_SOURCE_OFFSETS = 4;
+const int ROUTE_SOURCE_ROUTES = 5;
+const int ROUTE_TARGET_OFFSETS = 6;
+const int ROUTE_TARGET_ROUTES = 7;
+const int ROUTE_AMBIENT_VOLUMES = 8;
+const int ROUTE_FUTURE_COUNT = 9;
+const int DISPATCH_LONG_ROW_COUNTS = 24;
+const int LONG_RETAINED_ROWS = 0;
+const int LONG_FUTURE_ROWS = 1;
+const int LONG_SOURCE_ROWS = 2;
+const int REQUIREMENT_FUTURE_NODE_COUNT = 6;
+const int REQUIREMENT_GROUP_COUNT = 7;
+const int REQUIREMENT_READY = 8;
+const int SHORT_ROW_STAGE_OFFSET = 100;
+const int STAGE_CLEAR_STEP = 0;
+const int STAGE_PREPARE_PARTS = 1;
+const int STAGE_SPLIT_SOURCE = 2;
+const int STAGE_CAPTURE_AMBIENT = 3;
+const int STAGE_RETAINED_GROUP_ENERGY = 4;
+const int STAGE_RETAINED_CLOSE_SOURCE_ENERGY = 5;
+const int STAGE_GATHER_RETAINED = 7;
+const int STAGE_FUTURE_GROUP_ENERGY = 9;
+const int STAGE_FUTURE_CLOSE_SOURCE_ENERGY = 10;
+const int STAGE_GATHER_FUTURE = 12;
+const int STAGE_FUTURE_TOPOLOGY = 15;
+const int STAGE_PREPARE_DISPATCH = 18;
+const int STAGE_MEASURE_TOTAL = 22;
+const int STAGE_RETAINED_VOLUMES = 23;
+const int STAGE_TRANSPORT_ENERGY = 24;
+const int STAGE_CLASSIFY_ROWS = 25;
+const int STAGE_LONG_ROW_DISPATCH = 26;
+const int STAGE_SNAPSHOT_ROUNDOFF = 27;
+const uint ERROR_INVALID_STATE = 131072u;
 
 const uint64_t LIMIT = uint64_t(0x7fffffffffffffffUL), SCALE = uint64_t(0x10000000000000UL);
 bool shortRow() {
-    return p.stage >= 100;
+    return p.stage >= SHORT_ROW_STAGE_OFFSET;
 }
 int rowStride() {
     return shortRow() ? 1 : 128;
@@ -29,51 +66,51 @@ void rowBarrier() {
     if (!shortRow())
         barrier();
 }
-int h(int i) {
+int headerWord(int i) {
     return int(words[p.header + i]);
 }
-int f(int i) {
-    return h(WORK_FIELDS + i);
+int workField(int i) {
+    return headerWord(WORK_FIELDS + i);
 }
-int old(int i) {
-    return h(SOURCE_GAS_FIELDS + i);
+int sourceGasField(int i) {
+    return headerWord(SOURCE_GAS_FIELDS + i);
 }
-int dst(int i, bool future) {
-    return h((future ? FUTURE_GAS_FIELDS : RETAINED_GAS_FIELDS) + i);
+int destinationGasField(int i, bool future) {
+    return headerWord((future ? FUTURE_GAS_FIELDS : RETAINED_GAS_FIELDS) + i);
 }
-int rh(int i) {
-    return h(ROUTE_FIELDS + i);
+int routeField(int i) {
+    return headerWord(ROUTE_FIELDS + i);
 }
-int th(int i) {
-    return int(words[h(H_SOURCE_EOS) + i]);
+int sourceEosWord(int i) {
+    return int(words[headerWord(H_SOURCE_EOS) + i]);
 }
-uint64_t u64(int at) {
+uint64_t readUint64(int at) {
     return uint64_t(words[at]) | (uint64_t(words[at + 1]) << 32);
 }
-int64_t i64(int at) {
-    return int64_t(u64(at));
+int64_t readInt64(int at) {
+    return int64_t(readUint64(at));
 }
-void put64(int at, uint64_t value) {
+void writeUint64(int at, uint64_t value) {
     words[at] = uint(value);
     words[at + 1] = uint(value >> 32);
 }
-double number(int at) {
+double readDouble(int at) {
     return packDouble2x32(uvec2(words[at], words[at + 1]));
 }
-void put(int at, double v) {
+void writeDouble(int at, double v) {
     uvec2 b = unpackDouble2x32(v);
     words[at] = b.x;
     words[at + 1] = b.y;
 }
-bool finite(double v) {
+bool isFinite(double v) {
     return !isnan(v) && !isinf(v);
 }
-void invalid() {
-    atomicOr(errors, 131072u);
+void reportInvalid() {
+    atomicOr(errors, ERROR_INVALID_STATE);
 }
 uint64_t plus(uint64_t a, uint64_t b) {
     if (b > LIMIT - a) {
-        invalid();
+        reportInvalid();
         return a;
     }
     return a + b;
@@ -81,7 +118,7 @@ uint64_t plus(uint64_t a, uint64_t b) {
 int64_t signedPlus(int64_t a, int64_t b) {
     int64_t maximum = int64_t(LIMIT), minimum = -maximum - int64_t(1);
     if ((b > int64_t(0) && a > maximum - b) || (b < int64_t(0) && a < minimum - b)) {
-        invalid();
+        reportInvalid();
         return a;
     }
     return a + b;
@@ -125,7 +162,7 @@ uint64_t divideDigit(uint64_t remainder, uint digit, uint64_t d, out uint64_t ne
 }
 uint64_t divide(uint64_t a, uint64_t b, uint64_t d, out uint64_t remainder) {
     if (d == uint64_t(0)) {
-        invalid();
+        reportInvalid();
         remainder = uint64_t(0);
         return uint64_t(0);
     }
@@ -136,7 +173,7 @@ uint64_t divide(uint64_t a, uint64_t b, uint64_t d, out uint64_t remainder) {
         return lo / d;
     }
     if (hi >= d) {
-        invalid();
+        reportInvalid();
         remainder = uint64_t(0);
         return uint64_t(0);
     }
@@ -159,40 +196,40 @@ int64_t signedPortion(int64_t amount, uint64_t n, uint64_t total) {
     return negative ? int64_t(uint64_t(0) - result) : int64_t(result);
 }
 int materials() {
-    return h(H_COMPONENT_COUNT);
+    return headerWord(H_COMPONENT_COUNT);
 }
 int speciesStride() {
-    return h(H_SPECIES_STRIDE);
+    return headerWord(H_SPECIES_STRIDE);
 }
 int declaredBegin(int handle) {
-    return int(words[f(FIELD_DECLARED_SPECIES_OFFSETS) + handle]);
+    return int(words[workField(FIELD_DECLARED_SPECIES_OFFSETS) + handle]);
 }
 int declaredEnd(int handle) {
-    return int(words[f(FIELD_DECLARED_SPECIES_OFFSETS) + handle + 1]);
+    return int(words[workField(FIELD_DECLARED_SPECIES_OFFSETS) + handle + 1]);
 }
 int groups() {
-    return int(words[rh(0)]);
+    return int(words[routeField(ROUTE_COUNT)]);
 }
 int source(int g) {
-    return int(words[rh(1) + g]);
+    return int(words[routeField(ROUTE_SOURCES) + g]);
 }
 int target(int g) {
-    return int(words[rh(2) + g]);
+    return int(words[routeField(ROUTE_TARGETS) + g]);
 }
 int nodeCount() {
-    return int(words[old(GAS_COUNTS)]);
+    return int(words[sourceGasField(GAS_COUNTS)]);
 }
 int futureCount() {
-    return int(words[rh(9)]);
+    return int(words[routeField(ROUTE_FUTURE_COUNT)]);
 }
 int sourceBegin(int node) {
-    return int(words[rh(4) + node + 2]);
+    return int(words[routeField(ROUTE_SOURCE_OFFSETS) + node + 2]);
 }
 int sourceEnd(int node) {
-    return int(words[rh(4) + node + 3]);
+    return int(words[routeField(ROUTE_SOURCE_OFFSETS) + node + 3]);
 }
 int sourceGroup(int at) {
-    return int(words[rh(5) + at]);
+    return int(words[routeField(ROUTE_SOURCE_ROUTES) + at]);
 }
 int partBegin(int g) {
     return g * materials();
@@ -201,58 +238,58 @@ int partEnd(int g) {
     return (g + 1) * materials();
 }
 void clearStep(int id) {
-    if (id < h(H_ROUTE_CAPACITY)) {
-        put(f(FIELD_GROUP_ENERGY) + 2 * id, 0.0);
-        put(f(FIELD_ENERGY_ROUNDOFF) + 4 * id, 0.0);
-        put(f(FIELD_ENERGY_ROUNDOFF) + 4 * id + 2, 0.0);
-        put(f(FIELD_MERGE_ROUNDOFF) + 4 * id, 0.0);
-        put(f(FIELD_MERGE_ROUNDOFF) + 4 * id + 2, 0.0);
+    if (id < headerWord(H_ROUTE_CAPACITY)) {
+        writeDouble(workField(FIELD_GROUP_ENERGY) + 2 * id, 0.0);
+        writeDouble(workField(FIELD_ENERGY_ROUNDOFF) + 4 * id, 0.0);
+        writeDouble(workField(FIELD_ENERGY_ROUNDOFF) + 4 * id + 2, 0.0);
+        writeDouble(workField(FIELD_MERGE_ROUNDOFF) + 4 * id, 0.0);
+        writeDouble(workField(FIELD_MERGE_ROUNDOFF) + 4 * id + 2, 0.0);
     }
-    if (id < h(H_FUTURE_NODE_CAPACITY))
-        put(dst(GAS_INTERNAL_ENERGY, true) + 2 * id, 0.0);
-    if (id < h(H_RETAINED_NODE_CAPACITY))
-        put(dst(GAS_INTERNAL_ENERGY, false) + 2 * id, 0.0);
-    if (id < h(H_RETAINED_NODE_CAPACITY)) {
-        words[f(FIELD_SOURCE_PIVOT) + id] = uint(-1);
-        words[f(FIELD_ESCAPE_GROUP) + id] = uint(-1);
-        put(f(FIELD_SOURCE_ROUNDOFF) + 4 * id, 0.0);
-        put(f(FIELD_SOURCE_ROUNDOFF) + 4 * id + 2, 0.0);
-        put(f(FIELD_RETAINED_ROUNDOFF) + 4 * id, 0.0);
-        put(f(FIELD_RETAINED_ROUNDOFF) + 4 * id + 2, 0.0);
+    if (id < headerWord(H_FUTURE_NODE_CAPACITY))
+        writeDouble(destinationGasField(GAS_INTERNAL_ENERGY, true) + 2 * id, 0.0);
+    if (id < headerWord(H_RETAINED_NODE_CAPACITY))
+        writeDouble(destinationGasField(GAS_INTERNAL_ENERGY, false) + 2 * id, 0.0);
+    if (id < headerWord(H_RETAINED_NODE_CAPACITY)) {
+        words[workField(FIELD_SOURCE_PIVOT) + id] = uint(-1);
+        words[workField(FIELD_ESCAPE_GROUP) + id] = uint(-1);
+        writeDouble(workField(FIELD_SOURCE_ROUNDOFF) + 4 * id, 0.0);
+        writeDouble(workField(FIELD_SOURCE_ROUNDOFF) + 4 * id + 2, 0.0);
+        writeDouble(workField(FIELD_RETAINED_ROUNDOFF) + 4 * id, 0.0);
+        writeDouble(workField(FIELD_RETAINED_ROUNDOFF) + 4 * id + 2, 0.0);
     }
     if (id == 0) {
-        put(f(FIELD_AUDIT_ENERGY), 0.0);
-        put(f(FIELD_AUDIT_ENERGY) + 2, 0.0);
+        writeDouble(workField(FIELD_AUDIT_ENERGY), 0.0);
+        writeDouble(workField(FIELD_AUDIT_ENERGY) + 2, 0.0);
     }
 }
 void prepareParts(int g) {
     if (g >= groups())
         return;
-    words[f(FIELD_PART_OFFSETS) + g] = uint(partBegin(g));
+    words[workField(FIELD_PART_OFFSETS) + g] = uint(partBegin(g));
     if (g == groups() - 1)
-        words[f(FIELD_PART_OFFSETS) + groups()] = uint(partEnd(g));
+        words[workField(FIELD_PART_OFFSETS) + groups()] = uint(partEnd(g));
     for (int handle = 0; handle < materials(); handle++) {
         int part = partBegin(g) + handle, begin = g * speciesStride() + declaredBegin(handle),
             end = g * speciesStride() + declaredEnd(handle);
-        words[f(FIELD_PART_HANDLES) + part] = uint(handle);
-        words[f(FIELD_SPECIES_OFFSETS) + part] = uint(begin);
-        put64(f(FIELD_PART_NANOS) + 2 * part, uint64_t(0));
-        put64(f(FIELD_PART_MASS) + 2 * part, uint64_t(0));
-        put64(f(FIELD_PART_RESIDUAL) + 2 * part, uint64_t(0));
+        words[workField(FIELD_PART_HANDLES) + part] = uint(handle);
+        words[workField(FIELD_SPECIES_OFFSETS) + part] = uint(begin);
+        writeUint64(workField(FIELD_PART_NANOS) + 2 * part, uint64_t(0));
+        writeUint64(workField(FIELD_PART_MASS) + 2 * part, uint64_t(0));
+        writeUint64(workField(FIELD_PART_RESIDUAL) + 2 * part, uint64_t(0));
         for (int e = begin; e < end; e++) {
-            words[f(FIELD_SPECIES_HANDLES) + e] = words[f(FIELD_DECLARED_SPECIES_HANDLES) + e - g * speciesStride()];
-            put64(f(FIELD_SPECIES_AMOUNTS) + 2 * e, uint64_t(0));
+            words[workField(FIELD_SPECIES_HANDLES) + e] = words[workField(FIELD_DECLARED_SPECIES_HANDLES) + e - g * speciesStride()];
+            writeUint64(workField(FIELD_SPECIES_AMOUNTS) + 2 * e, uint64_t(0));
         }
     }
     if (g == groups() - 1)
-        words[f(FIELD_SPECIES_OFFSETS) + partEnd(g)] = uint(groups() * speciesStride());
+        words[workField(FIELD_SPECIES_OFFSETS) + partEnd(g)] = uint(groups() * speciesStride());
 }
 int ambientSpeciesSlot(int part, int species) {
     int handle = part % materials(), begin = declaredBegin(handle), end = declaredEnd(handle);
     for (int e = begin; e < end; e++)
-        if (int(words[f(FIELD_DECLARED_SPECIES_HANDLES) + e]) == species)
+        if (int(words[workField(FIELD_DECLARED_SPECIES_HANDLES) + e]) == species)
             return (part / materials()) * speciesStride() + e;
-    invalid();
+    reportInvalid();
     return (part / materials()) * speciesStride() + begin;
 }
 void splitSource(int node) {
@@ -262,16 +299,16 @@ void splitSource(int node) {
     double total = 0.0, largest = -1.0;
     for (int at = begin; at < end; at++) {
         int g = sourceGroup(at);
-        double v = number(rh(3) + 2 * g);
+        double v = readDouble(routeField(ROUTE_WEIGHTS) + 2 * g);
         total += v;
         if (v > largest) {
             largest = v;
             pivot = g;
         }
         if (target(g) == 0)
-            words[f(FIELD_ESCAPE_GROUP) + node] = uint(g);
+            words[workField(FIELD_ESCAPE_GROUP) + node] = uint(g);
     }
-    words[f(FIELD_SOURCE_PIVOT) + node] = uint(pivot);
+    words[workField(FIELD_SOURCE_PIVOT) + node] = uint(pivot);
     if (pivot < 0)
         return;
     uint64_t assigned = uint64_t(0);
@@ -279,59 +316,59 @@ void splitSource(int node) {
         int g = sourceGroup(at);
         if (g == pivot)
             continue;
-        uint64_t weight = max(uint64_t(1), uint64_t(number(rh(3) + 2 * g) / total * double(SCALE)));
+        uint64_t weight = max(uint64_t(1), uint64_t(readDouble(routeField(ROUTE_WEIGHTS) + 2 * g) / total * double(SCALE)));
         assigned = plus(assigned, weight);
-        put64(f(FIELD_WEIGHTS) + 2 * g, weight);
+        writeUint64(workField(FIELD_WEIGHTS) + 2 * g, weight);
     }
     if (assigned >= SCALE) {
-        invalid();
+        reportInvalid();
         return;
     }
-    put64(f(FIELD_WEIGHTS) + 2 * pivot, SCALE - assigned);
-    int first = int(words[old(GAS_ROW_COMPONENT_OFFSETS) + node]),
-        last = int(words[old(GAS_ROW_COMPONENT_OFFSETS) + node + 1]);
+    writeUint64(workField(FIELD_WEIGHTS) + 2 * pivot, SCALE - assigned);
+    int first = int(words[sourceGasField(GAS_ROW_COMPONENT_OFFSETS) + node]),
+        last = int(words[sourceGasField(GAS_ROW_COMPONENT_OFFSETS) + node + 1]);
     for (int c = first; c < last; c++) {
-        if (u64(old(GAS_STANDARD_VOLUME_NANOS) + 2 * c) == uint64_t(0))
+        if (readUint64(sourceGasField(GAS_STANDARD_VOLUME_NANOS) + 2 * c) == uint64_t(0))
             continue;
         int local = c - first;
-        uint64_t nanos = u64(old(GAS_STANDARD_VOLUME_NANOS) + 2 * c), mass = u64(old(GAS_MASS_UNITS) + 2 * c),
+        uint64_t nanos = readUint64(sourceGasField(GAS_STANDARD_VOLUME_NANOS) + 2 * c), mass = readUint64(sourceGasField(GAS_MASS_UNITS) + 2 * c),
                  usedN = uint64_t(0), usedM = uint64_t(0);
-        int64_t residual = i64(old(GAS_MASS_RESIDUAL_UNITS) + 2 * c), usedR = int64_t(0);
+        int64_t residual = readInt64(sourceGasField(GAS_MASS_RESIDUAL_UNITS) + 2 * c), usedR = int64_t(0);
         for (int at = begin; at < end; at++) {
             int g = sourceGroup(at);
             if (g == pivot)
                 continue;
             int part = partBegin(g) + local;
-            uint64_t n = portion(nanos, u64(f(FIELD_WEIGHTS) + 2 * g), SCALE), m = portion(mass, n, nanos);
-            if (m == uint64_t(0))
-                n = uint64_t(0);
-            int64_t r = n == uint64_t(0) ? int64_t(0) : signedPortion(residual, n, nanos);
-            usedN = plus(usedN, n);
-            usedM = plus(usedM, m);
-            usedR = signedPlus(usedR, r);
-            put64(f(FIELD_PART_NANOS) + 2 * part, n);
-            put64(f(FIELD_PART_MASS) + 2 * part, m);
-            put64(f(FIELD_PART_RESIDUAL) + 2 * part, uint64_t(r));
+            uint64_t allocatedNanos = portion(nanos, readUint64(workField(FIELD_WEIGHTS) + 2 * g), SCALE), allocatedMass = portion(mass, allocatedNanos, nanos);
+            if (allocatedMass == uint64_t(0))
+                allocatedNanos = uint64_t(0);
+            int64_t allocatedResidual = allocatedNanos == uint64_t(0) ? int64_t(0) : signedPortion(residual, allocatedNanos, nanos);
+            usedN = plus(usedN, allocatedNanos);
+            usedM = plus(usedM, allocatedMass);
+            usedR = signedPlus(usedR, allocatedResidual);
+            writeUint64(workField(FIELD_PART_NANOS) + 2 * part, allocatedNanos);
+            writeUint64(workField(FIELD_PART_MASS) + 2 * part, allocatedMass);
+            writeUint64(workField(FIELD_PART_RESIDUAL) + 2 * part, uint64_t(allocatedResidual));
         }
         int owner = partBegin(pivot) + local;
-        put64(f(FIELD_PART_NANOS) + 2 * owner, nanos - usedN);
-        put64(f(FIELD_PART_MASS) + 2 * owner, mass - usedM);
-        put64(f(FIELD_PART_RESIDUAL) + 2 * owner, uint64_t(residual - usedR));
-        int sb = int(words[old(GAS_COMPONENT_SPECIES_OFFSETS) + c]),
-            se = int(words[old(GAS_COMPONENT_SPECIES_OFFSETS) + c + 1]);
+        writeUint64(workField(FIELD_PART_NANOS) + 2 * owner, nanos - usedN);
+        writeUint64(workField(FIELD_PART_MASS) + 2 * owner, mass - usedM);
+        writeUint64(workField(FIELD_PART_RESIDUAL) + 2 * owner, uint64_t(residual - usedR));
+        int sb = int(words[sourceGasField(GAS_COMPONENT_SPECIES_OFFSETS) + c]),
+            se = int(words[sourceGasField(GAS_COMPONENT_SPECIES_OFFSETS) + c + 1]);
         for (int s = sb; s < se; s++) {
-            uint64_t amount = u64(old(GAS_SPECIES_AMOUNTS) + 2 * s), used = uint64_t(0);
+            uint64_t amount = readUint64(sourceGasField(GAS_SPECIES_AMOUNTS) + 2 * s), used = uint64_t(0);
             for (int at = begin; at < end; at++) {
                 int g = sourceGroup(at), part = partBegin(g) + local,
-                    entry = int(words[f(FIELD_SPECIES_OFFSETS) + part]) + s - sb;
-                words[f(FIELD_SPECIES_HANDLES) + entry] = words[old(GAS_SPECIES_HANDLES) + s];
+                    entry = int(words[workField(FIELD_SPECIES_OFFSETS) + part]) + s - sb;
+                words[workField(FIELD_SPECIES_HANDLES) + entry] = words[sourceGasField(GAS_SPECIES_HANDLES) + s];
                 if (g == pivot)
                     continue;
-                uint64_t quantity = portion(amount, u64(f(FIELD_PART_NANOS) + 2 * part), nanos);
+                uint64_t quantity = portion(amount, readUint64(workField(FIELD_PART_NANOS) + 2 * part), nanos);
                 used = plus(used, quantity);
-                put64(f(FIELD_SPECIES_AMOUNTS) + 2 * entry, quantity);
+                writeUint64(workField(FIELD_SPECIES_AMOUNTS) + 2 * entry, quantity);
             }
-            put64(f(FIELD_SPECIES_AMOUNTS) + 2 * (int(words[f(FIELD_SPECIES_OFFSETS) + owner]) + s - sb),
+            writeUint64(workField(FIELD_SPECIES_AMOUNTS) + 2 * (int(words[workField(FIELD_SPECIES_OFFSETS) + owner]) + s - sb),
                   amount - used);
         }
     }
@@ -344,113 +381,113 @@ bool productGreater(uint64_t a, uint64_t b, uint64_t c, uint64_t d) {
     return ah > ch || (ah == ch && al > cl);
 }
 void ambientShares(uint64_t total, int outputField) {
-    uint64_t assigned = uint64_t(0), den = u64(p.header + H_AMBIENT_TOTAL_WEIGHT);
-    for (int c = 0; c < h(H_AMBIENT_COUNT); c++) {
-        uint64_t n = portion(total, u64(f(FIELD_AMBIENT_WEIGHTS) + 2 * c), den);
-        put64(f(outputField) + 2 * c, n);
+    uint64_t assigned = uint64_t(0), den = readUint64(p.header + H_AMBIENT_TOTAL_WEIGHT);
+    for (int c = 0; c < headerWord(H_AMBIENT_COUNT); c++) {
+        uint64_t n = portion(total, readUint64(workField(FIELD_AMBIENT_WEIGHTS) + 2 * c), den);
+        writeUint64(workField(outputField) + 2 * c, n);
         assigned = plus(assigned, n);
     }
     while (assigned < total) {
         int best = 0;
-        for (int c = 1; c < h(H_AMBIENT_COUNT); c++)
-            if (productGreater(u64(f(FIELD_AMBIENT_WEIGHTS) + 2 * c), u64(f(outputField) + 2 * best) + uint64_t(1),
-                               u64(f(FIELD_AMBIENT_WEIGHTS) + 2 * best), u64(f(outputField) + 2 * c) + uint64_t(1)))
+        for (int c = 1; c < headerWord(H_AMBIENT_COUNT); c++)
+            if (productGreater(readUint64(workField(FIELD_AMBIENT_WEIGHTS) + 2 * c), readUint64(workField(outputField) + 2 * best) + uint64_t(1),
+                               readUint64(workField(FIELD_AMBIENT_WEIGHTS) + 2 * best), readUint64(workField(outputField) + 2 * c) + uint64_t(1)))
                 best = c;
-        put64(f(outputField) + 2 * best, u64(f(outputField) + 2 * best) + uint64_t(1));
+        writeUint64(workField(outputField) + 2 * best, readUint64(workField(outputField) + 2 * best) + uint64_t(1));
         assigned++;
     }
 }
 uint64_t sourceMass(uint64_t nanos, int c) {
-    uint64_t rem, den = u64(f(FIELD_AMBIENT_MASS_DEN) + 2 * c),
-                  value = divide(nanos, u64(f(FIELD_AMBIENT_MASS_NUM) + 2 * c), den, rem);
+    uint64_t rem, den = readUint64(workField(FIELD_AMBIENT_MASS_DEN) + 2 * c),
+                  value = divide(nanos, readUint64(workField(FIELD_AMBIENT_MASS_NUM) + 2 * c), den, rem);
     if (rem > den - rem || (rem == den - rem && (value & uint64_t(1)) != uint64_t(0)))
         value++;
     if (value > LIMIT)
-        invalid();
+        reportInvalid();
     return value;
 }
 void captureAmbient() {
-    int oldNodes = nodeCount(), a = int(words[old(GAS_ROW_COMPONENT_OFFSETS) + oldNodes]),
-        b = int(words[old(GAS_ROW_COMPONENT_OFFSETS) + oldNodes + 1]);
+    int oldNodes = nodeCount(), a = int(words[sourceGasField(GAS_ROW_COMPONENT_OFFSETS) + oldNodes]),
+        b = int(words[sourceGasField(GAS_ROW_COMPONENT_OFFSETS) + oldNodes + 1]);
     uint64_t cumulative = uint64_t(0);
     for (int c = a; c < b; c++)
-        cumulative = plus(cumulative, u64(old(GAS_STANDARD_VOLUME_NANOS) + 2 * c));
-    int begin = int(words[rh(4) + 1]), end = int(words[rh(4) + 2]);
+        cumulative = plus(cumulative, readUint64(sourceGasField(GAS_STANDARD_VOLUME_NANOS) + 2 * c));
+    int begin = int(words[routeField(ROUTE_SOURCE_OFFSETS) + 1]), end = int(words[routeField(ROUTE_SOURCE_OFFSETS) + 2]);
     for (int at = begin; at < end; at++) {
-        int g = int(words[rh(5) + at]);
+        int g = int(words[routeField(ROUTE_SOURCE_ROUTES) + at]);
         if (target(g) == 0)
             continue;
-        double requested = number(rh(8) + 2 * g) * 1e9LF * 293.15LF / number(p.header + H_AMBIENT_TEMPERATURE);
-        if (!(finite(requested) && requested >= 0.0 && requested < double(LIMIT - cumulative))) {
-            invalid();
+        double requested = readDouble(routeField(ROUTE_AMBIENT_VOLUMES) + 2 * g) * 1e9LF * 293.15LF / readDouble(p.header + H_AMBIENT_TEMPERATURE);
+        if (!(isFinite(requested) && requested >= 0.0 && requested < double(LIMIT - cumulative))) {
+            reportInvalid();
             return;
         }
         uint64_t n = uint64_t(floor(requested + 0.5LF));
         ambientShares(cumulative, FIELD_AMBIENT_BEFORE);
         ambientShares(cumulative + n, FIELD_AMBIENT_AFTER);
-        for (int c = 0; c < h(H_AMBIENT_COUNT); c++) {
-            int part = partBegin(g) + int(words[f(FIELD_AMBIENT_HANDLES) + c]);
-            uint64_t before = u64(f(FIELD_AMBIENT_BEFORE) + 2 * c), after = u64(f(FIELD_AMBIENT_AFTER) + 2 * c),
+        for (int c = 0; c < headerWord(H_AMBIENT_COUNT); c++) {
+            int part = partBegin(g) + int(words[workField(FIELD_AMBIENT_HANDLES) + c]);
+            uint64_t before = readUint64(workField(FIELD_AMBIENT_BEFORE) + 2 * c), after = readUint64(workField(FIELD_AMBIENT_AFTER) + 2 * c),
                      nanos = after - before, mass = sourceMass(after, c) - sourceMass(before, c),
                      chemical = uint64_t(0);
-            put64(f(FIELD_PART_NANOS) + 2 * part, nanos);
-            put64(f(FIELD_PART_MASS) + 2 * part, mass);
-            int sb = int(words[f(FIELD_AMBIENT_SPECIES_OFFSETS) + c]),
-                se = int(words[f(FIELD_AMBIENT_SPECIES_OFFSETS) + c + 1]);
+            writeUint64(workField(FIELD_PART_NANOS) + 2 * part, nanos);
+            writeUint64(workField(FIELD_PART_MASS) + 2 * part, mass);
+            int sb = int(words[workField(FIELD_AMBIENT_SPECIES_OFFSETS) + c]),
+                se = int(words[workField(FIELD_AMBIENT_SPECIES_OFFSETS) + c + 1]);
             for (int s = sb; s < se; s++) {
-                int entry = ambientSpeciesSlot(part, int(words[f(FIELD_AMBIENT_SPECIES_HANDLES) + s]));
-                uint64_t numerator = u64(f(FIELD_AMBIENT_SPECIES_NUM) + 2 * s),
-                         den = u64(f(FIELD_AMBIENT_SPECIES_DEN) + 2 * s),
+                int entry = ambientSpeciesSlot(part, int(words[workField(FIELD_AMBIENT_SPECIES_HANDLES) + s]));
+                uint64_t numerator = readUint64(workField(FIELD_AMBIENT_SPECIES_NUM) + 2 * s),
+                         den = readUint64(workField(FIELD_AMBIENT_SPECIES_DEN) + 2 * s),
                          q = portion(after, numerator, den) - portion(before, numerator, den);
-                words[f(FIELD_SPECIES_HANDLES) + entry] = words[f(FIELD_AMBIENT_SPECIES_HANDLES) + s];
-                put64(f(FIELD_SPECIES_AMOUNTS) + 2 * entry, q);
-                uint64_t massUnit = u64(f(FIELD_AMBIENT_SPECIES_MASS) + 2 * s);
+                words[workField(FIELD_SPECIES_HANDLES) + entry] = words[workField(FIELD_AMBIENT_SPECIES_HANDLES) + s];
+                writeUint64(workField(FIELD_SPECIES_AMOUNTS) + 2 * entry, q);
+                uint64_t massUnit = readUint64(workField(FIELD_AMBIENT_SPECIES_MASS) + 2 * s);
                 if (massUnit != uint64_t(0) && q > LIMIT / massUnit) {
-                    invalid();
+                    reportInvalid();
                     return;
                 }
                 chemical = plus(chemical, q * massUnit);
             }
             if (nanos > uint64_t(0) && mass == uint64_t(0)) {
-                invalid();
+                reportInvalid();
                 return;
             }
             if (nanos == uint64_t(0) && (mass != uint64_t(0) || chemical != uint64_t(0))) {
-                invalid();
+                reportInvalid();
                 return;
             }
-            put64(f(FIELD_PART_RESIDUAL) + 2 * part, uint64_t(int64_t(mass) - int64_t(chemical)));
+            writeUint64(workField(FIELD_PART_RESIDUAL) + 2 * part, uint64_t(int64_t(mass) - int64_t(chemical)));
         }
         cumulative += n;
     }
 }
 // Material energy and its derivative use the same uploaded caloric endpoints as the EOS.
 void material(int handle, double temperature, out double energy, out double capacity) {
-    int begin = int(words[th(GAS_H_SEGMENT_OFFSETS) + handle]),
-        end = int(words[th(GAS_H_SEGMENT_OFFSETS) + handle + 1]);
-    energy = number(th(GAS_H_ANCHOR_ENERGY) + 2 * handle);
+    int begin = int(words[sourceEosWord(GAS_H_SEGMENT_OFFSETS) + handle]),
+        end = int(words[sourceEosWord(GAS_H_SEGMENT_OFFSETS) + handle + 1]);
+    energy = readDouble(sourceEosWord(GAS_H_ANCHOR_ENERGY) + 2 * handle);
     capacity = 0.0;
-    if (begin == end || !finite(energy)) {
-        invalid();
+    if (begin == end || !isFinite(energy)) {
+        reportInvalid();
         return;
     }
-    double current = number(h(H_SOURCE_EOS) + 32);
+    double current = readDouble(headerWord(H_SOURCE_EOS) + 32);
     bool heating = temperature >= current;
     while (current != temperature) {
         int segment = begin;
-        while (segment + 1 < end && (heating ? current >= number(th(GAS_H_SEGMENT_UPPER) + 2 * segment)
-                                             : current > number(th(GAS_H_SEGMENT_UPPER) + 2 * segment)))
+        while (segment + 1 < end && (heating ? current >= readDouble(sourceEosWord(GAS_H_SEGMENT_UPPER) + 2 * segment)
+                                             : current > readDouble(sourceEosWord(GAS_H_SEGMENT_UPPER) + 2 * segment)))
             segment++;
-        double bound = heating ? (segment + 1 < end ? number(th(GAS_H_SEGMENT_UPPER) + 2 * segment) : temperature)
-                               : (segment > begin ? number(th(GAS_H_SEGMENT_UPPER) + 2 * (segment - 1)) : temperature);
+        double bound = heating ? (segment + 1 < end ? readDouble(sourceEosWord(GAS_H_SEGMENT_UPPER) + 2 * segment) : temperature)
+                               : (segment > begin ? readDouble(sourceEosWord(GAS_H_SEGMENT_UPPER) + 2 * (segment - 1)) : temperature);
         double next = heating ? min(temperature, bound) : max(temperature, bound);
-        energy += (next - current) * number(th(GAS_H_SEGMENT_CAPACITY) + 2 * segment);
+        energy += (next - current) * readDouble(sourceEosWord(GAS_H_SEGMENT_CAPACITY) + 2 * segment);
         current = next;
     }
     int segment = begin;
-    while (segment + 1 < end && temperature >= number(th(GAS_H_SEGMENT_UPPER) + 2 * segment))
+    while (segment + 1 < end && temperature >= readDouble(sourceEosWord(GAS_H_SEGMENT_UPPER) + 2 * segment))
         segment++;
-    capacity = number(th(GAS_H_SEGMENT_CAPACITY) + 2 * segment);
+    capacity = readDouble(sourceEosWord(GAS_H_SEGMENT_CAPACITY) + 2 * segment);
 }
 void groupEnergy(int g, bool afterWork) {
     if (g >= groups())
@@ -460,67 +497,67 @@ void groupEnergy(int g, bool afterWork) {
         return;
     if (afterWork && (s < 2 || target(g) == 0))
         return;
-    double temperature = s == 1      ? number(p.header + H_AMBIENT_TEMPERATURE)
-                         : afterWork ? number(p.workTemperature + 2 * (s - 2))
-                                     : number(th(GAS_H_STATES) + 18 * (s - 2));
+    double temperature = s == 1      ? readDouble(p.header + H_AMBIENT_TEMPERATURE)
+                         : afterWork ? readDouble(p.workTemperature + 2 * (s - 2))
+                                     : readDouble(sourceEosWord(GAS_H_STATES) + 18 * (s - 2));
     double energy = 0.0, capacity = 0.0;
     for (int part = partBegin(g); part < partEnd(g); part++) {
-        if (u64(f(FIELD_PART_NANOS) + 2 * part) == uint64_t(0))
+        if (readUint64(workField(FIELD_PART_NANOS) + 2 * part) == uint64_t(0))
             continue;
-        int handle = int(words[f(FIELD_PART_HANDLES) + part]);
+        int handle = int(words[workField(FIELD_PART_HANDLES) + part]);
         double specific, cv;
         material(handle, temperature, specific, cv);
-        double mass = double(u64(f(FIELD_PART_MASS) + 2 * part)) * 1e-10LF;
+        double mass = double(readUint64(workField(FIELD_PART_MASS) + 2 * part)) * 1e-10LF;
         energy += mass * specific;
         capacity += mass * cv;
-        for (int at = int(words[f(FIELD_SPECIES_OFFSETS) + part]); at < int(words[f(FIELD_SPECIES_OFFSETS) + part + 1]);
+        for (int at = int(words[workField(FIELD_SPECIES_OFFSETS) + part]); at < int(words[workField(FIELD_SPECIES_OFFSETS) + part + 1]);
              at++) {
-            uint64_t amount = u64(f(FIELD_SPECIES_AMOUNTS) + 2 * at);
+            uint64_t amount = readUint64(workField(FIELD_SPECIES_AMOUNTS) + 2 * at);
             if (amount == uint64_t(0))
                 continue;
-            int species = int(words[f(FIELD_SPECIES_HANDLES) + at]);
-            double reference = number(th(GAS_H_SPECIES_REFERENCE) + 2 * (handle * th(GAS_H_SPECIES_STRIDE) + species));
-            if (!finite(reference)) {
-                invalid();
+            int species = int(words[workField(FIELD_SPECIES_HANDLES) + at]);
+            double reference = readDouble(sourceEosWord(GAS_H_SPECIES_REFERENCE) + 2 * (handle * sourceEosWord(GAS_H_SPECIES_STRIDE) + species));
+            if (!isFinite(reference)) {
+                reportInvalid();
                 return;
             }
             energy += double(amount) * reference;
         }
     }
-    if (h(H_TRANSPORT) != 0 && s == 1) {
+    if (headerWord(H_TRANSPORT) != 0 && s == 1) {
         uint64_t nanos = uint64_t(0);
         for (int part = partBegin(g); part < partEnd(g); part++)
-            nanos = plus(nanos, u64(f(FIELD_PART_NANOS) + 2 * part));
-        energy += double(nanos) * number(h(H_SOURCE_EOS) + 36) * number(p.header + H_AMBIENT_TEMPERATURE);
+            nanos = plus(nanos, readUint64(workField(FIELD_PART_NANOS) + 2 * part));
+        energy += double(nanos) * readDouble(headerWord(H_SOURCE_EOS) + 36) * readDouble(p.header + H_AMBIENT_TEMPERATURE);
     }
-    if (!finite(energy) || !finite(capacity)) {
-        invalid();
+    if (!isFinite(energy) || !isFinite(capacity)) {
+        reportInvalid();
         return;
     }
-    put(f(FIELD_GROUP_ENERGY) + 2 * g, energy);
-    put(f(FIELD_GROUP_CAPACITY) + 2 * g, capacity);
+    writeDouble(workField(FIELD_GROUP_ENERGY) + 2 * g, energy);
+    writeDouble(workField(FIELD_GROUP_CAPACITY) + 2 * g, capacity);
 }
 void closeSourceEnergy(int node, bool afterWork) {
     if (node >= nodeCount())
         return;
     int begin = sourceBegin(node), end = sourceEnd(node), pivot = -1;
     double largest = 0.0;
-    if (h(H_TRANSPORT) != 0 && !afterWork) {
-        int self = int(words[f(FIELD_SOURCE_PIVOT) + node]);
-        put(dst(GAS_INTERNAL_ENERGY, false) + 2 * node, self >= 0 ? number(f(FIELD_GROUP_ENERGY) + 2 * self) : 0.0);
+    if (headerWord(H_TRANSPORT) != 0 && !afterWork) {
+        int self = int(words[workField(FIELD_SOURCE_PIVOT) + node]);
+        writeDouble(destinationGasField(GAS_INTERNAL_ENERGY, false) + 2 * node, self >= 0 ? readDouble(workField(FIELD_GROUP_ENERGY) + 2 * self) : 0.0);
         return;
     }
     for (int at = begin; at < end; at++) {
         int g = sourceGroup(at);
         if (afterWork && target(g) == 0)
             continue;
-        double cv = number(f(FIELD_GROUP_CAPACITY) + 2 * g);
+        double cv = readDouble(workField(FIELD_GROUP_CAPACITY) + 2 * g);
         if (cv > largest) {
             largest = cv;
             pivot = g;
         }
     }
-    double energy = afterWork ? number(p.workEnergy + 2 * node) : number(old(GAS_INTERNAL_ENERGY) + 2 * node),
+    double energy = afterWork ? readDouble(p.workEnergy + 2 * node) : readDouble(sourceGasField(GAS_INTERNAL_ENERGY) + 2 * node),
            sum = 0.0;
     if (pivot >= 0) {
         for (int at = begin; at < end; at++) {
@@ -528,32 +565,32 @@ void closeSourceEnergy(int node, bool afterWork) {
             if (g == pivot || (afterWork && target(g) == 0))
                 continue;
             double next, error;
-            twoSum(sum, number(f(FIELD_GROUP_ENERGY) + 2 * g), next, error);
+            twoSum(sum, readDouble(workField(FIELD_GROUP_ENERGY) + 2 * g), next, error);
             sum = next;
-            put(f(FIELD_ENERGY_ROUNDOFF) + 4 * g + (afterWork ? 2 : 0), error);
+            writeDouble(workField(FIELD_ENERGY_ROUNDOFF) + 4 * g + (afterWork ? 2 : 0), error);
         }
         double rest, error;
         twoSum(energy, -sum, rest, error);
-        if (!finite(rest) || !finite(error)) {
-            invalid();
+        if (!isFinite(rest) || !isFinite(error)) {
+            reportInvalid();
             return;
         }
-        put(f(FIELD_GROUP_ENERGY) + 2 * pivot, rest);
-        put(f(FIELD_SOURCE_ROUNDOFF) + 4 * node + (afterWork ? 2 : 0), -error);
+        writeDouble(workField(FIELD_GROUP_ENERGY) + 2 * pivot, rest);
+        writeDouble(workField(FIELD_SOURCE_ROUNDOFF) + 4 * node + (afterWork ? 2 : 0), -error);
     } else if (energy != 0.0) {
-        invalid();
+        reportInvalid();
         return;
     }
     if (!afterWork) {
-        int escape = int(words[f(FIELD_ESCAPE_GROUP) + node]);
-        double escaped = escape >= 0 ? number(f(FIELD_GROUP_ENERGY) + 2 * escape) : 0.0, retained, error;
+        int escape = int(words[workField(FIELD_ESCAPE_GROUP) + node]);
+        double escaped = escape >= 0 ? readDouble(workField(FIELD_GROUP_ENERGY) + 2 * escape) : 0.0, retained, error;
         twoSum(energy, -escaped, retained, error);
-        if (!finite(retained) || !finite(error)) {
-            invalid();
+        if (!isFinite(retained) || !isFinite(error)) {
+            reportInvalid();
             return;
         }
-        put(dst(GAS_INTERNAL_ENERGY, false) + 2 * node, retained);
-        put(f(FIELD_RETAINED_ROUNDOFF) + 4 * node, -error);
+        writeDouble(destinationGasField(GAS_INTERNAL_ENERGY, false) + 2 * node, retained);
+        writeDouble(workField(FIELD_RETAINED_ROUNDOFF) + 4 * node, -error);
     }
 }
 int routePart(int g, int handle) {
@@ -572,7 +609,7 @@ int memberBegin(int row, bool future) {
     if (!future)
         return row < n ? sourceBegin(row) : 0;
     int index = row < n ? row + 1 : row == n ? 1 : 0;
-    return int(words[(row == n ? rh(4) : rh(6)) + index]);
+    return int(words[(row == n ? routeField(ROUTE_SOURCE_OFFSETS) : routeField(ROUTE_TARGET_OFFSETS)) + index]);
 }
 int memberEnd(int row, bool future) {
     int n = future ? futureCount() : nodeCount();
@@ -581,25 +618,25 @@ int memberEnd(int row, bool future) {
     if (!future)
         return row < n ? sourceEnd(row) : 0;
     int index = row < n ? row + 1 : row == n ? 1 : 0;
-    return int(words[(row == n ? rh(4) : rh(6)) + index + 1]);
+    return int(words[(row == n ? routeField(ROUTE_SOURCE_OFFSETS) : routeField(ROUTE_TARGET_OFFSETS)) + index + 1]);
 }
 int memberGroup(int row, int at, bool future) {
-    return int(words[(!future || row == futureCount() ? rh(5) : rh(7)) + at]);
+    return int(words[(!future || row == futureCount() ? routeField(ROUTE_SOURCE_ROUTES) : routeField(ROUTE_TARGET_ROUTES)) + at]);
 }
 bool memberAllowed(int row, int g, bool future) {
     if (!future)
-        return h(H_TRANSPORT) != 0 ? target(g) == row + 1 : target(g) > 0;
+        return headerWord(H_TRANSPORT) != 0 ? target(g) == row + 1 : target(g) > 0;
     int n = futureCount();
     return row < n || row == n ? target(g) > 0 : source(g) >= 2;
 }
 int auditBegin(int row, bool future) {
     return future && row >= futureCount()
-               ? int(words[old(GAS_ROW_COMPONENT_OFFSETS) + nodeCount() + row - futureCount()])
+               ? int(words[sourceGasField(GAS_ROW_COMPONENT_OFFSETS) + nodeCount() + row - futureCount()])
                : 0;
 }
 int auditEnd(int row, bool future) {
     return future && row >= futureCount()
-               ? int(words[old(GAS_ROW_COMPONENT_OFFSETS) + nodeCount() + row - futureCount() + 1])
+               ? int(words[sourceGasField(GAS_ROW_COMPONENT_OFFSETS) + nodeCount() + row - futureCount() + 1])
                : 0;
 }
 int oldPart(int row, int handle, bool future) {
@@ -689,17 +726,17 @@ void transportColumn(int node, int local, uint64_t sourceN, uint64_t magnitude, 
     uint64_t previous = uint64_t(0);
     for (int at = begin + lane; at < end; at += rowStride()) {
         int g = sourceGroup(at), part = partBegin(g) + local;
-        uint64_t n = u64(f(FIELD_PART_NANOS) + 2 * part), cumulative = u64(f(FIELD_TRANSPORT_PREFIX) + 2 * part);
+        uint64_t n = readUint64(workField(FIELD_PART_NANOS) + 2 * part), cumulative = readUint64(workField(FIELD_TRANSPORT_PREFIX) + 2 * part);
         uint64_t upper = endpoint(magnitude, cumulative + n, sourceN, offset),
                  lower = shortRow() ? previous : endpoint(magnitude, cumulative, sourceN, offset),
                  share = upper - lower;
         previous = upper;
         if (speciesLocal < 0)
-            put64(f(FIELD_PART_RESIDUAL) + 2 * part, negative ? uint64_t(0) - share : share);
+            writeUint64(workField(FIELD_PART_RESIDUAL) + 2 * part, negative ? uint64_t(0) - share : share);
         else {
-            int entry = int(words[f(FIELD_SPECIES_OFFSETS) + part]) + speciesLocal;
-            words[f(FIELD_SPECIES_HANDLES) + entry] = uint(speciesHandle);
-            put64(f(FIELD_SPECIES_AMOUNTS) + 2 * entry, share);
+            int entry = int(words[workField(FIELD_SPECIES_OFFSETS) + part]) + speciesLocal;
+            words[workField(FIELD_SPECIES_HANDLES) + entry] = uint(speciesHandle);
+            writeUint64(workField(FIELD_SPECIES_AMOUNTS) + 2 * entry, share);
         }
     }
 }
@@ -709,7 +746,7 @@ void splitTransport(int node, int lane) {
     int self = 2147483647;
     for (int at = begin + lane; at < end; at += rowStride()) {
         int g = sourceGroup(at);
-        localVolume += number(rh(3) + 2 * g);
+        localVolume += readDouble(routeField(ROUTE_WEIGHTS) + 2 * g);
         if (target(g) == node + 1)
             self = g;
     }
@@ -726,12 +763,12 @@ void splitTransport(int node, int lane) {
     }
     self = minimumHandle(lane, self);
     if (lane == 0)
-        words[f(FIELD_SOURCE_PIVOT) + node] = uint(self);
+        words[workField(FIELD_SOURCE_PIVOT) + node] = uint(self);
     if (begin == end)
         return;
-    if (self < 0 || !(finite(total) && total > 0.0)) {
+    if (self < 0 || !(isFinite(total) && total > 0.0)) {
         if (lane == 0)
-            invalid();
+            reportInvalid();
         return;
     }
     uint64_t allocated = uint64_t(0);
@@ -739,32 +776,32 @@ void splitTransport(int node, int lane) {
         int g = sourceGroup(at);
         if (g == self)
             continue;
-        uint64_t w = uint64_t(max(0.0LF, number(rh(3) + 2 * g) / total * double(SCALE)));
-        put64(f(FIELD_WEIGHTS) + 2 * g, w);
+        uint64_t w = uint64_t(max(0.0LF, readDouble(routeField(ROUTE_WEIGHTS) + 2 * g) / total * double(SCALE)));
+        writeUint64(workField(FIELD_WEIGHTS) + 2 * g, w);
         allocated = plus(allocated, w);
     }
     allocated = sumQuantity(lane, allocated);
     if (allocated >= SCALE) {
         if (lane == 0)
-            invalid();
+            reportInvalid();
         return;
     }
     if (lane == 0)
-        put64(f(FIELD_WEIGHTS) + 2 * self, SCALE - allocated);
+        writeUint64(workField(FIELD_WEIGHTS) + 2 * self, SCALE - allocated);
     memoryBarrierBuffer();
     rowBarrier();
-    uint64_t phase = mixPhase(u64(h(H_PHASE)) ^ uint64_t(words[old(GAS_TOPOLOGY_KEYS) + node]));
-    int first = int(words[old(GAS_ROW_COMPONENT_OFFSETS) + node]),
-        last = int(words[old(GAS_ROW_COMPONENT_OFFSETS) + node + 1]);
+    uint64_t phase = mixPhase(readUint64(headerWord(H_PHASE)) ^ uint64_t(words[sourceGasField(GAS_TOPOLOGY_KEYS) + node]));
+    int first = int(words[sourceGasField(GAS_ROW_COMPONENT_OFFSETS) + node]),
+        last = int(words[sourceGasField(GAS_ROW_COMPONENT_OFFSETS) + node + 1]);
     for (int c = first; c < last; c++) {
-        if (u64(old(GAS_STANDARD_VOLUME_NANOS) + 2 * c) == uint64_t(0))
+        if (readUint64(sourceGasField(GAS_STANDARD_VOLUME_NANOS) + 2 * c) == uint64_t(0))
             continue;
         int local = c - first;
-        uint64_t nanos = u64(old(GAS_STANDARD_VOLUME_NANOS) + 2 * c), mass = u64(old(GAS_MASS_UNITS) + 2 * c),
+        uint64_t nanos = readUint64(sourceGasField(GAS_STANDARD_VOLUME_NANOS) + 2 * c), mass = readUint64(sourceGasField(GAS_MASS_UNITS) + 2 * c),
                  carry = uint64_t(0), offset = phaseOffset(SCALE, phase), usedN = uint64_t(0);
         for (int block = begin; block < end; block += rowStride()) {
             int at = block + lane, g = at < end ? sourceGroup(at) : -1;
-            uint64_t w = g >= 0 ? u64(f(FIELD_WEIGHTS) + 2 * g) : uint64_t(0),
+            uint64_t w = g >= 0 ? readUint64(workField(FIELD_WEIGHTS) + 2 * g) : uint64_t(0),
                      cumulative = carry + exclusivePrefix(lane, w),
                      nextCarry = carry + (shortRow() ? w : prefixValues[127]);
             rowBarrier();
@@ -775,7 +812,7 @@ void splitTransport(int node, int lane) {
                     n++;
                 else if (n > uint64_t(0) && portion(mass, n, nanos) == uint64_t(0))
                     n = uint64_t(0);
-                put64(f(FIELD_PART_NANOS) + 2 * (partBegin(g) + local), n);
+                writeUint64(workField(FIELD_PART_NANOS) + 2 * (partBegin(g) + local), n);
                 if (g != self)
                     usedN = plus(usedN, n);
             }
@@ -784,7 +821,7 @@ void splitTransport(int node, int lane) {
         }
         usedN = sumQuantity(lane, usedN);
         if (lane == 0)
-            put64(f(FIELD_PART_NANOS) + 2 * (partBegin(self) + local), nanos - usedN);
+            writeUint64(workField(FIELD_PART_NANOS) + 2 * (partBegin(self) + local), nanos - usedN);
         memoryBarrierBuffer();
         rowBarrier();
         uint64_t usedMass = uint64_t(0);
@@ -793,69 +830,69 @@ void splitTransport(int node, int lane) {
             if (g == self)
                 continue;
             int part = partBegin(g) + local;
-            uint64_t m = portion(mass, u64(f(FIELD_PART_NANOS) + 2 * part), nanos);
-            put64(f(FIELD_PART_MASS) + 2 * part, m);
+            uint64_t m = portion(mass, readUint64(workField(FIELD_PART_NANOS) + 2 * part), nanos);
+            writeUint64(workField(FIELD_PART_MASS) + 2 * part, m);
             usedMass = plus(usedMass, m);
         }
         usedMass = sumQuantity(lane, usedMass);
         if (lane == 0)
-            put64(f(FIELD_PART_MASS) + 2 * (partBegin(self) + local), mass - usedMass);
+            writeUint64(workField(FIELD_PART_MASS) + 2 * (partBegin(self) + local), mass - usedMass);
         carry = uint64_t(0);
         for (int block = begin; block < end; block += rowStride()) {
             int at = block + lane, g = at < end ? sourceGroup(at) : -1, part = g >= 0 ? partBegin(g) + local : -1;
-            uint64_t n = part >= 0 ? u64(f(FIELD_PART_NANOS) + 2 * part) : uint64_t(0),
+            uint64_t n = part >= 0 ? readUint64(workField(FIELD_PART_NANOS) + 2 * part) : uint64_t(0),
                      cumulative = carry + exclusivePrefix(lane, n),
                      nextCarry = carry + (shortRow() ? n : prefixValues[127]);
             rowBarrier();
             if (part >= 0)
-                put64(f(FIELD_TRANSPORT_PREFIX) + 2 * part, cumulative);
+                writeUint64(workField(FIELD_TRANSPORT_PREFIX) + 2 * part, cumulative);
             carry = nextCarry;
             rowBarrier();
         }
         memoryBarrierBuffer();
         rowBarrier();
         uint64_t sourceOffset = phaseOffset(nanos, phase);
-        int64_t residual = i64(old(GAS_MASS_RESIDUAL_UNITS) + 2 * c);
+        int64_t residual = readInt64(sourceGasField(GAS_MASS_RESIDUAL_UNITS) + 2 * c);
         bool negative = residual < int64_t(0);
         uint64_t magnitude = negative ? uint64_t(0) - uint64_t(residual) : uint64_t(residual);
         transportColumn(node, local, nanos, magnitude, negative, -1, 0, lane, sourceOffset);
-        int sb = int(words[old(GAS_COMPONENT_SPECIES_OFFSETS) + c]),
-            se = int(words[old(GAS_COMPONENT_SPECIES_OFFSETS) + c + 1]);
+        int sb = int(words[sourceGasField(GAS_COMPONENT_SPECIES_OFFSETS) + c]),
+            se = int(words[sourceGasField(GAS_COMPONENT_SPECIES_OFFSETS) + c + 1]);
         for (int entry = sb; entry < se; entry++)
-            transportColumn(node, local, nanos, u64(old(GAS_SPECIES_AMOUNTS) + 2 * entry), false, entry - sb,
-                            int(words[old(GAS_SPECIES_HANDLES) + entry]), lane, sourceOffset);
+            transportColumn(node, local, nanos, readUint64(sourceGasField(GAS_SPECIES_AMOUNTS) + 2 * entry), false, entry - sb,
+                            int(words[sourceGasField(GAS_SPECIES_HANDLES) + entry]), lane, sourceOffset);
     }
 }
 void retainedVolumes(int node, int lane) {
     uint64_t sourceN = uint64_t(0), retainedN = uint64_t(0);
-    int self = int(words[f(FIELD_SOURCE_PIVOT) + node]);
-    for (int c = int(words[old(GAS_ROW_COMPONENT_OFFSETS) + node]) + lane;
-         c < int(words[old(GAS_ROW_COMPONENT_OFFSETS) + node + 1]); c += rowStride())
-        sourceN = plus(sourceN, u64(old(GAS_STANDARD_VOLUME_NANOS) + 2 * c));
+    int self = int(words[workField(FIELD_SOURCE_PIVOT) + node]);
+    for (int c = int(words[sourceGasField(GAS_ROW_COMPONENT_OFFSETS) + node]) + lane;
+         c < int(words[sourceGasField(GAS_ROW_COMPONENT_OFFSETS) + node + 1]); c += rowStride())
+        sourceN = plus(sourceN, readUint64(sourceGasField(GAS_STANDARD_VOLUME_NANOS) + 2 * c));
     if (self >= 0)
         for (int c = partBegin(self) + lane; c < partEnd(self); c += rowStride())
-            retainedN = plus(retainedN, u64(f(FIELD_PART_NANOS) + 2 * c));
+            retainedN = plus(retainedN, readUint64(workField(FIELD_PART_NANOS) + 2 * c));
     sourceN = sumQuantity(lane, sourceN);
     retainedN = sumQuantity(lane, retainedN);
     if (lane == 0) {
-        double volume = number(th(GAS_H_NODE_VOLUMES) + 2 * node),
+        double volume = readDouble(sourceEosWord(GAS_H_NODE_VOLUMES) + 2 * node),
                fraction = sourceN > uint64_t(0) ? double(retainedN) / double(sourceN) : 1.0LF;
         if (sourceN > uint64_t(0) && retainedN == uint64_t(0))
-            invalid();
-        put(p.workEnergy + 2 * node, volume * fraction);
+            reportInvalid();
+        writeDouble(p.workEnergy + 2 * node, volume * fraction);
         words[p.workTemperature + node] = sourceN > uint64_t(0) ? 1u : 0u;
     }
 }
 // Rank the candidate component's k-th Jefferson seat. The initial proportional
 // floors leave fewer than componentCount seats, so the search range is small.
 uint64_t ambientShare(uint64_t total, int component) {
-    uint64_t weight = u64(f(FIELD_AMBIENT_WEIGHTS) + 2 * component), den = u64(p.header + H_AMBIENT_TOTAL_WEIGHT),
-             lo = portion(total, weight, den), hi = min(total, lo + uint64_t(h(H_AMBIENT_COUNT)));
+    uint64_t weight = readUint64(workField(FIELD_AMBIENT_WEIGHTS) + 2 * component), den = readUint64(p.header + H_AMBIENT_TOTAL_WEIGHT),
+             lo = portion(total, weight, den), hi = min(total, lo + uint64_t(headerWord(H_AMBIENT_COUNT)));
     while (lo < hi) {
         uint64_t seat = lo + (hi - lo + uint64_t(1)) / uint64_t(2), rank = uint64_t(0);
         bool beyond = false;
-        for (int other = 0; other < h(H_AMBIENT_COUNT); other++) {
-            uint64_t otherWeight = u64(f(FIELD_AMBIENT_WEIGHTS) + 2 * other);
+        for (int other = 0; other < headerWord(H_AMBIENT_COUNT); other++) {
+            uint64_t otherWeight = readUint64(workField(FIELD_AMBIENT_WEIGHTS) + 2 * other);
             if (productGreater(seat, otherWeight, total, weight)) {
                 beyond = true;
                 break;
@@ -877,54 +914,54 @@ uint64_t ambientShare(uint64_t total, int component) {
     return lo;
 }
 void captureAmbientParallel(int lane) {
-    int oldNodes = nodeCount(), a = int(words[old(GAS_ROW_COMPONENT_OFFSETS) + oldNodes]),
-        b = int(words[old(GAS_ROW_COMPONENT_OFFSETS) + oldNodes + 1]);
+    int oldNodes = nodeCount(), a = int(words[sourceGasField(GAS_ROW_COMPONENT_OFFSETS) + oldNodes]),
+        b = int(words[sourceGasField(GAS_ROW_COMPONENT_OFFSETS) + oldNodes + 1]);
     uint64_t cumulative = uint64_t(0);
     for (int c = a + lane; c < b; c += 128)
-        cumulative = plus(cumulative, u64(old(GAS_STANDARD_VOLUME_NANOS) + 2 * c));
+        cumulative = plus(cumulative, readUint64(sourceGasField(GAS_STANDARD_VOLUME_NANOS) + 2 * c));
     cumulative = sumQuantity(lane, cumulative);
-    int begin = int(words[rh(4) + 1]), end = int(words[rh(4) + 2]);
+    int begin = int(words[routeField(ROUTE_SOURCE_OFFSETS) + 1]), end = int(words[routeField(ROUTE_SOURCE_OFFSETS) + 2]);
     for (int block = begin; block < end; block += 128) {
-        int at = block + lane, g = at < end ? int(words[rh(5) + at]) : -1;
+        int at = block + lane, g = at < end ? int(words[routeField(ROUTE_SOURCE_ROUTES) + at]) : -1;
         double requested = g >= 0 && target(g) > 0
-                               ? number(rh(8) + 2 * g) * 1e9LF * 293.15LF / number(p.header + H_AMBIENT_TEMPERATURE)
+                               ? readDouble(routeField(ROUTE_AMBIENT_VOLUMES) + 2 * g) * 1e9LF * 293.15LF / readDouble(p.header + H_AMBIENT_TEMPERATURE)
                                : 0.0LF;
         uint64_t n = uint64_t(0);
-        if (!(finite(requested) && requested >= 0.0 && requested < double(LIMIT))) {
-            invalid();
+        if (!(isFinite(requested) && requested >= 0.0 && requested < double(LIMIT))) {
+            reportInvalid();
         } else
             n = uint64_t(floor(requested + 0.5LF));
         uint64_t beforeTotal = plus(cumulative, exclusivePrefix(lane, n)), afterTotal = plus(beforeTotal, n),
                  nextCumulative = plus(cumulative, prefixValues[127]);
         barrier();
         if (g >= 0 && target(g) > 0)
-            for (int c = 0; c < h(H_AMBIENT_COUNT); c++) {
-                int part = partBegin(g) + int(words[f(FIELD_AMBIENT_HANDLES) + c]);
+            for (int c = 0; c < headerWord(H_AMBIENT_COUNT); c++) {
+                int part = partBegin(g) + int(words[workField(FIELD_AMBIENT_HANDLES) + c]);
                 uint64_t before = ambientShare(beforeTotal, c), after = ambientShare(afterTotal, c),
                          nanos = after - before, mass = sourceMass(after, c) - sourceMass(before, c),
                          chemical = uint64_t(0);
-                put64(f(FIELD_PART_NANOS) + 2 * part, nanos);
-                put64(f(FIELD_PART_MASS) + 2 * part, mass);
-                int sb = int(words[f(FIELD_AMBIENT_SPECIES_OFFSETS) + c]),
-                    se = int(words[f(FIELD_AMBIENT_SPECIES_OFFSETS) + c + 1]);
+                writeUint64(workField(FIELD_PART_NANOS) + 2 * part, nanos);
+                writeUint64(workField(FIELD_PART_MASS) + 2 * part, mass);
+                int sb = int(words[workField(FIELD_AMBIENT_SPECIES_OFFSETS) + c]),
+                    se = int(words[workField(FIELD_AMBIENT_SPECIES_OFFSETS) + c + 1]);
                 for (int entry = sb; entry < se; entry++) {
-                    int outAt = ambientSpeciesSlot(part, int(words[f(FIELD_AMBIENT_SPECIES_HANDLES) + entry]));
-                    uint64_t numerator = u64(f(FIELD_AMBIENT_SPECIES_NUM) + 2 * entry),
-                             den = u64(f(FIELD_AMBIENT_SPECIES_DEN) + 2 * entry),
+                    int outAt = ambientSpeciesSlot(part, int(words[workField(FIELD_AMBIENT_SPECIES_HANDLES) + entry]));
+                    uint64_t numerator = readUint64(workField(FIELD_AMBIENT_SPECIES_NUM) + 2 * entry),
+                             den = readUint64(workField(FIELD_AMBIENT_SPECIES_DEN) + 2 * entry),
                              q = portion(after, numerator, den) - portion(before, numerator, den),
-                             massUnit = u64(f(FIELD_AMBIENT_SPECIES_MASS) + 2 * entry);
-                    words[f(FIELD_SPECIES_HANDLES) + outAt] = words[f(FIELD_AMBIENT_SPECIES_HANDLES) + entry];
-                    put64(f(FIELD_SPECIES_AMOUNTS) + 2 * outAt, q);
+                             massUnit = readUint64(workField(FIELD_AMBIENT_SPECIES_MASS) + 2 * entry);
+                    words[workField(FIELD_SPECIES_HANDLES) + outAt] = words[workField(FIELD_AMBIENT_SPECIES_HANDLES) + entry];
+                    writeUint64(workField(FIELD_SPECIES_AMOUNTS) + 2 * outAt, q);
                     if (massUnit != uint64_t(0) && q > LIMIT / massUnit)
-                        invalid();
+                        reportInvalid();
                     else
                         chemical = plus(chemical, q * massUnit);
                 }
                 if (nanos > uint64_t(0) && mass == uint64_t(0))
-                    invalid();
+                    reportInvalid();
                 if (nanos == uint64_t(0) && (mass != uint64_t(0) || chemical != uint64_t(0)))
-                    invalid();
-                put64(f(FIELD_PART_RESIDUAL) + 2 * part, uint64_t(int64_t(mass) - int64_t(chemical)));
+                    reportInvalid();
+                writeUint64(workField(FIELD_PART_RESIDUAL) + 2 * part, uint64_t(int64_t(mass) - int64_t(chemical)));
             }
         cumulative = nextCumulative;
         barrier();
@@ -933,11 +970,11 @@ void captureAmbientParallel(int lane) {
 uint64_t groupNanos(int group) {
     uint64_t n = uint64_t(0);
     for (int part = partBegin(group); part < partEnd(group); part++)
-        n = plus(n, u64(f(FIELD_PART_NANOS) + 2 * part));
+        n = plus(n, readUint64(workField(FIELD_PART_NANOS) + 2 * part));
     return n;
 }
 void transportEnergy(int node, int lane) {
-    int begin = sourceBegin(node), end = sourceEnd(node), self = int(words[f(FIELD_SOURCE_PIVOT) + node]), pivot = -1;
+    int begin = sourceBegin(node), end = sourceEnd(node), self = int(words[workField(FIELD_SOURCE_PIVOT) + node]), pivot = -1;
     uint64_t totalOut = uint64_t(0), largest = uint64_t(0);
     for (int at = begin + lane; at < end; at += rowStride()) {
         int g = sourceGroup(at);
@@ -967,18 +1004,18 @@ void transportEnergy(int node, int lane) {
         pivot = choices[0];
         barrier();
     }
-    double original = number(old(GAS_INTERNAL_ENERGY) + 2 * node);
+    double original = readDouble(sourceGasField(GAS_INTERNAL_ENERGY) + 2 * node);
     if (totalOut == uint64_t(0)) {
         if (lane == 0 && self >= 0)
-            put(f(FIELD_GROUP_ENERGY) + 2 * self, original);
+            writeDouble(workField(FIELD_GROUP_ENERGY) + 2 * self, original);
         return;
     }
     if (self < 0 || pivot < 0) {
         if (lane == 0)
-            invalid();
+            reportInvalid();
         return;
     }
-    double retained = number(p.workEnergy + 2 * node), carried, firstError;
+    double retained = readDouble(p.workEnergy + 2 * node), carried, firstError;
     twoSum(original, -retained, carried, firstError);
     double local = 0.0;
     int representative = -1;
@@ -987,10 +1024,10 @@ void transportEnergy(int node, int lane) {
         if (g == self || g == pivot)
             continue;
         double share = carried * (double(groupNanos(g)) / double(totalOut)), next, error;
-        put(f(FIELD_GROUP_ENERGY) + 2 * g, share);
+        writeDouble(workField(FIELD_GROUP_ENERGY) + 2 * g, share);
         twoSum(local, share, next, error);
         local = next;
-        put(f(FIELD_ENERGY_ROUNDOFF) + 4 * g + 2, error);
+        writeDouble(workField(FIELD_ENERGY_ROUNDOFF) + 4 * g + 2, error);
         if (representative < 0)
             representative = g;
     }
@@ -1007,7 +1044,7 @@ void transportEnergy(int node, int lane) {
                     double next, error;
                     twoSum(energies[lane], energies[lane + width], next, error);
                     energies[lane] = next;
-                    put(f(FIELD_ENERGY_ROUNDOFF) + 4 * representatives[lane + width] + 2, error);
+                    writeDouble(workField(FIELD_ENERGY_ROUNDOFF) + 4 * representatives[lane + width] + 2, error);
                 }
             }
             barrier();
@@ -1017,17 +1054,17 @@ void transportEnergy(int node, int lane) {
     if (lane == 0) {
         double remainder, error;
         twoSum(carried, -local, remainder, error);
-        if (!finite(remainder) || !finite(retained))
-            invalid();
-        put(f(FIELD_GROUP_ENERGY) + 2 * self, retained);
-        put(f(FIELD_GROUP_ENERGY) + 2 * pivot, remainder);
-        put(f(FIELD_RETAINED_ROUNDOFF) + 4 * node, -firstError);
-        put(f(FIELD_SOURCE_ROUNDOFF) + 4 * node + 2, -error);
+        if (!isFinite(remainder) || !isFinite(retained))
+            reportInvalid();
+        writeDouble(workField(FIELD_GROUP_ENERGY) + 2 * self, retained);
+        writeDouble(workField(FIELD_GROUP_ENERGY) + 2 * pivot, remainder);
+        writeDouble(workField(FIELD_RETAINED_ROUNDOFF) + 4 * node, -firstError);
+        writeDouble(workField(FIELD_SOURCE_ROUNDOFF) + 4 * node + 2, -error);
     }
 }
 void gatherComponents(int row, bool future, int lane) {
     int rows = actualRows(future),
-        capacity = future ? h(H_FUTURE_COMPONENT_CAPACITY) : h(H_RETAINED_COMPONENT_CAPACITY),
+        capacity = future ? headerWord(H_FUTURE_COMPONENT_CAPACITY) : headerWord(H_RETAINED_COMPONENT_CAPACITY),
         required = rows * materials();
     if (required > capacity) {
         if (lane == 0)
@@ -1036,10 +1073,10 @@ void gatherComponents(int row, bool future, int lane) {
     }
     int destination = row * materials();
     if (lane == 0) {
-        words[dst(GAS_ROW_COMPONENT_OFFSETS, future) + row] = uint(destination);
+        words[destinationGasField(GAS_ROW_COMPONENT_OFFSETS, future) + row] = uint(destination);
         if (row == rows - 1) {
-            words[dst(GAS_ROW_COMPONENT_OFFSETS, future) + rows] = uint(rows * materials());
-            words[dst(GAS_COMPONENT_SPECIES_OFFSETS, future) + rows * materials()] = uint(rows * speciesStride());
+            words[destinationGasField(GAS_ROW_COMPONENT_OFFSETS, future) + rows] = uint(rows * materials());
+            words[destinationGasField(GAS_COMPONENT_SPECIES_OFFSETS, future) + rows * materials()] = uint(rows * speciesStride());
         }
     }
     for (int handle = 0; handle < materials(); handle++) {
@@ -1050,18 +1087,18 @@ void gatherComponents(int row, bool future, int lane) {
             if (!memberAllowed(row, g, future))
                 continue;
             int c = routePart(g, handle);
-            if (c < 0 || u64(f(FIELD_PART_NANOS) + 2 * c) == uint64_t(0))
+            if (c < 0 || readUint64(workField(FIELD_PART_NANOS) + 2 * c) == uint64_t(0))
                 continue;
-            nanos = plus(nanos, u64(f(FIELD_PART_NANOS) + 2 * c));
-            mass = plus(mass, u64(f(FIELD_PART_MASS) + 2 * c));
-            residual = signedPlus(residual, i64(f(FIELD_PART_RESIDUAL) + 2 * c));
+            nanos = plus(nanos, readUint64(workField(FIELD_PART_NANOS) + 2 * c));
+            mass = plus(mass, readUint64(workField(FIELD_PART_MASS) + 2 * c));
+            residual = signedPlus(residual, readInt64(workField(FIELD_PART_RESIDUAL) + 2 * c));
         }
         if (lane == 0) {
             int existing = oldPart(row, handle, future);
             if (existing >= 0) {
-                nanos = plus(nanos, u64(old(GAS_STANDARD_VOLUME_NANOS) + 2 * existing));
-                mass = plus(mass, u64(old(GAS_MASS_UNITS) + 2 * existing));
-                residual = signedPlus(residual, i64(old(GAS_MASS_RESIDUAL_UNITS) + 2 * existing));
+                nanos = plus(nanos, readUint64(sourceGasField(GAS_STANDARD_VOLUME_NANOS) + 2 * existing));
+                mass = plus(mass, readUint64(sourceGasField(GAS_MASS_UNITS) + 2 * existing));
+                residual = signedPlus(residual, readInt64(sourceGasField(GAS_MASS_RESIDUAL_UNITS) + 2 * existing));
             }
         }
         nanos = sumQuantity(lane, nanos);
@@ -1069,14 +1106,14 @@ void gatherComponents(int row, bool future, int lane) {
         residual = sumResidual(lane, residual);
         if (lane == 0) {
             if ((nanos == uint64_t(0)) != (mass == uint64_t(0)) || (nanos == uint64_t(0) && residual != int64_t(0)))
-                invalid();
-            words[dst(GAS_COMPONENT_HANDLES, future) + destination] = uint(handle);
-            put64(dst(GAS_STANDARD_VOLUME_NANOS, future) + 2 * destination, nanos);
-            put64(dst(GAS_MASS_UNITS, future) + 2 * destination, mass);
-            put64(dst(GAS_MASS_RESIDUAL_UNITS, future) + 2 * destination, uint64_t(residual));
+                reportInvalid();
+            words[destinationGasField(GAS_COMPONENT_HANDLES, future) + destination] = uint(handle);
+            writeUint64(destinationGasField(GAS_STANDARD_VOLUME_NANOS, future) + 2 * destination, nanos);
+            writeUint64(destinationGasField(GAS_MASS_UNITS, future) + 2 * destination, mass);
+            writeUint64(destinationGasField(GAS_MASS_RESIDUAL_UNITS, future) + 2 * destination, uint64_t(residual));
         }
         if (lane == 0)
-            words[dst(GAS_COMPONENT_SPECIES_OFFSETS, future) + destination] =
+            words[destinationGasField(GAS_COMPONENT_SPECIES_OFFSETS, future) + destination] =
                 uint(row * speciesStride() + declaredBegin(handle));
         destination++;
     }
@@ -1091,19 +1128,19 @@ void gatherEnergy(int row, int lane) {
         if (!memberAllowed(row, g, true))
             continue;
         double next, error;
-        twoSum(sum, number(f(FIELD_GROUP_ENERGY) + 2 * g), next, error);
+        twoSum(sum, readDouble(workField(FIELD_GROUP_ENERGY) + 2 * g), next, error);
         sum = next;
-        put(f(FIELD_MERGE_ROUNDOFF) + 4 * g + correctionLane, sign * error);
+        writeDouble(workField(FIELD_MERGE_ROUNDOFF) + 4 * g + correctionLane, sign * error);
         if (representative < 0)
             representative = g;
     }
     if (shortRow()) {
-        if (!finite(sum))
-            invalid();
+        if (!isFinite(sum))
+            reportInvalid();
         if (row < futureCount())
-            put(dst(GAS_INTERNAL_ENERGY, true) + 2 * row, sum);
+            writeDouble(destinationGasField(GAS_INTERNAL_ENERGY, true) + 2 * row, sum);
         else
-            put(f(FIELD_AUDIT_ENERGY) + 2 * (row - futureCount()), sum);
+            writeDouble(workField(FIELD_AUDIT_ENERGY) + 2 * (row - futureCount()), sum);
         return;
     }
     energies[lane] = sum;
@@ -1120,19 +1157,19 @@ void gatherEnergy(int row, int lane) {
                 energies[lane] = next;
                 // A subtree's representative added its first value to zero; its correction slot
                 // remains free until that subtree becomes a right operand in this reduction.
-                put(f(FIELD_MERGE_ROUNDOFF) + 4 * representatives[lane + width] + correctionLane, sign * error);
+                writeDouble(workField(FIELD_MERGE_ROUNDOFF) + 4 * representatives[lane + width] + correctionLane, sign * error);
             }
         }
         barrier();
     }
     if (lane == 0) {
         sum = energies[0];
-        if (!finite(sum))
-            invalid();
+        if (!isFinite(sum))
+            reportInvalid();
         if (row < futureCount())
-            put(dst(GAS_INTERNAL_ENERGY, true) + 2 * row, sum);
+            writeDouble(destinationGasField(GAS_INTERNAL_ENERGY, true) + 2 * row, sum);
         else
-            put(f(FIELD_AUDIT_ENERGY) + 2 * (row - futureCount()), sum);
+            writeDouble(workField(FIELD_AUDIT_ENERGY) + 2 * (row - futureCount()), sum);
     }
 }
 void gatherSpeciesAndEnergy(int row, bool future, int lane) {
@@ -1145,18 +1182,18 @@ void gatherSpeciesAndEnergy(int row, bool future, int lane) {
                 int g = memberGroup(row, at, future);
                 if (!memberAllowed(row, g, future))
                     continue;
-                sum = plus(sum, u64(f(FIELD_SPECIES_AMOUNTS) + 2 * (g * speciesStride() + local)));
+                sum = plus(sum, readUint64(workField(FIELD_SPECIES_AMOUNTS) + 2 * (g * speciesStride() + local)));
             }
             if (lane == 0) {
                 int c = oldPart(row, handle, future);
                 if (c >= 0)
-                    sum = plus(sum, u64(old(GAS_SPECIES_AMOUNTS) + 2 * ((c / materials()) * speciesStride() + local)));
+                    sum = plus(sum, readUint64(sourceGasField(GAS_SPECIES_AMOUNTS) + 2 * ((c / materials()) * speciesStride() + local)));
             }
             sum = sumQuantity(lane, sum);
             if (lane == 0) {
                 int outAt = row * speciesStride() + local;
-                words[dst(GAS_SPECIES_HANDLES, future) + outAt] = words[f(FIELD_DECLARED_SPECIES_HANDLES) + local];
-                put64(dst(GAS_SPECIES_AMOUNTS, future) + 2 * outAt, sum);
+                words[destinationGasField(GAS_SPECIES_HANDLES, future) + outAt] = words[workField(FIELD_DECLARED_SPECIES_HANDLES) + local];
+                writeUint64(destinationGasField(GAS_SPECIES_AMOUNTS, future) + 2 * outAt, sum);
             }
         }
     }
@@ -1164,90 +1201,90 @@ void gatherSpeciesAndEnergy(int row, bool future, int lane) {
         gatherEnergy(row, lane);
     if (lane == 0) {
         if (row == 0) {
-            words[dst(GAS_COUNTS, future)] = uint(rows - 4);
-            words[dst(GAS_COUNTS, future) + 1] = uint(components);
-            words[dst(GAS_COUNTS, future) + 2] = uint(required);
-            words[dst(GAS_ENERGY_PRESENT, future)] = words[old(GAS_ENERGY_PRESENT)];
+            words[destinationGasField(GAS_COUNTS, future)] = uint(rows - 4);
+            words[destinationGasField(GAS_COUNTS, future) + 1] = uint(components);
+            words[destinationGasField(GAS_COUNTS, future) + 2] = uint(required);
+            words[destinationGasField(GAS_ENERGY_PRESENT, future)] = words[sourceGasField(GAS_ENERGY_PRESENT)];
         }
         if (!future && row < nodeCount())
-            words[dst(GAS_TOPOLOGY_KEYS, false) + row] = words[old(GAS_TOPOLOGY_KEYS) + row];
+            words[destinationGasField(GAS_TOPOLOGY_KEYS, false) + row] = words[sourceGasField(GAS_TOPOLOGY_KEYS) + row];
     }
 }
 void topology(int cell, bool future) {
     if (!future) {
         for (int m = 0; m < 8; m++)
-            words[dst(GAS_PIECE_NODE_ORDINAL, false) + 8 * cell + m] =
-                words[old(GAS_PIECE_NODE_ORDINAL) + 8 * cell + m];
+            words[destinationGasField(GAS_PIECE_NODE_ORDINAL, false) + 8 * cell + m] =
+                words[sourceGasField(GAS_PIECE_NODE_ORDINAL) + 8 * cell + m];
         return;
     }
-    int node = int(words[h(H_FUTURE_CELL_NODES) + cell]), mask = int(words[h(H_FUTURE_DRY_MASKS) + cell]);
+    int node = int(words[headerWord(H_FUTURE_CELL_NODES) + cell]), mask = int(words[headerWord(H_FUTURE_DRY_MASKS) + cell]);
     for (int m = 0; m < 8; m++)
-        words[dst(GAS_PIECE_NODE_ORDINAL, true) + 8 * cell + m] = uint((mask & (1 << m)) != 0 ? node : -1);
-    if (node > 0 && int(words[h(H_FUTURE_PARENTS) + cell + 1]) == cell + 1)
-        words[dst(GAS_TOPOLOGY_KEYS, true) + node - 1] = uint(8 * cell + findLSB(mask));
+        words[destinationGasField(GAS_PIECE_NODE_ORDINAL, true) + 8 * cell + m] = uint((mask & (1 << m)) != 0 ? node : -1);
+    if (node > 0 && int(words[headerWord(H_FUTURE_PARENTS) + cell + 1]) == cell + 1)
+        words[destinationGasField(GAS_TOPOLOGY_KEYS, true) + node - 1] = uint(8 * cell + findLSB(mask));
 }
 // All component/species slots derive from the immutable registry declarations.
 void measureTotal() {
     int required[6] = int[6](groups() * materials(), groups() * speciesStride(),
-                             h(H_TRANSPORT) == 0 ? (nodeCount() + 4) * materials() : 0,
-                             h(H_TRANSPORT) == 0 ? (nodeCount() + 4) * speciesStride() : 0,
+                             headerWord(H_TRANSPORT) == 0 ? (nodeCount() + 4) * materials() : 0,
+                             headerWord(H_TRANSPORT) == 0 ? (nodeCount() + 4) * speciesStride() : 0,
                              (futureCount() + 4) * materials(), (futureCount() + 4) * speciesStride());
     int capacities[6] =
-        int[6](h(H_PART_CAPACITY), h(H_SPECIES_CAPACITY), h(H_RETAINED_COMPONENT_CAPACITY),
-               h(H_RETAINED_SPECIES_CAPACITY), h(H_FUTURE_COMPONENT_CAPACITY), h(H_FUTURE_SPECIES_CAPACITY));
+        int[6](headerWord(H_PART_CAPACITY), headerWord(H_SPECIES_CAPACITY), headerWord(H_RETAINED_COMPONENT_CAPACITY),
+               headerWord(H_RETAINED_SPECIES_CAPACITY), headerWord(H_FUTURE_COMPONENT_CAPACITY), headerWord(H_FUTURE_SPECIES_CAPACITY));
     for (int i = 0; i < 6; i++) {
-        words[f(FIELD_REQUIREMENTS) + i] = uint(required[i]);
+        words[workField(FIELD_REQUIREMENTS) + i] = uint(required[i]);
         if (required[i] > capacities[i])
             atomicOr(errors, 64u);
     }
-    if (futureCount() > h(H_FUTURE_NODE_CAPACITY))
+    if (futureCount() > headerWord(H_FUTURE_NODE_CAPACITY))
         atomicOr(errors, 64u);
 }
 void prepareDispatch() {
     for (int i = 0; i < 3; i++)
-        words[f(FIELD_DISPATCH) + 24 + i] = 0u;
+        words[workField(FIELD_DISPATCH) + DISPATCH_LONG_ROW_COUNTS + i] = 0u;
     int sizes[8] = int[8](groups(), nodeCount(), nodeCount() + 4, futureCount() + 4, nodeCount(), nodeCount() + 4,
                           futureCount() + 4, nodeCount());
     for (int i = 0; i < 8; i++) {
         int total = errors == 0u && !(i >= 2 && i <= 4) ? (i < 2 || i >= 5 ? (sizes[i] + 127) / 128 : sizes[i]) : 0,
-            at = f(FIELD_DISPATCH) + 3 * i;
+            at = workField(FIELD_DISPATCH) + 3 * i;
         words[at] = uint(min(total, 65535));
         words[at + 1] = uint(max(1, (total + 65534) / 65535));
         words[at + 2] = 1u;
     }
 }
 int longBase(int kind) {
-    return f(FIELD_LONG_ROWS) + (kind == 0   ? 0
-                                 : kind == 1 ? h(H_DESTINATION_GROUPS)
-                                             : h(H_DESTINATION_GROUPS) + h(H_SOURCE_GROUPS));
+    return workField(FIELD_LONG_ROWS) + (kind == LONG_RETAINED_ROWS   ? 0
+                                 : kind == LONG_FUTURE_ROWS ? headerWord(H_DESTINATION_GROUPS)
+                                             : headerWord(H_DESTINATION_GROUPS) + headerWord(H_SOURCE_GROUPS));
 }
 void classifyRows(int row) {
     if (row < nodeCount() + 4 && memberEnd(row, false) - memberBegin(row, false) > 16) {
-        uint slot = atomicAdd(words[f(FIELD_DISPATCH) + 24], 1u);
-        words[longBase(0) + slot] = uint(row);
+        uint slot = atomicAdd(words[workField(FIELD_DISPATCH) + DISPATCH_LONG_ROW_COUNTS + LONG_RETAINED_ROWS], 1u);
+        words[longBase(LONG_RETAINED_ROWS) + slot] = uint(row);
     }
     if (row < futureCount() + 4 && memberEnd(row, true) - memberBegin(row, true) > 16) {
-        uint slot = atomicAdd(words[f(FIELD_DISPATCH) + 25], 1u);
-        words[longBase(1) + slot] = uint(row);
+        uint slot = atomicAdd(words[workField(FIELD_DISPATCH) + DISPATCH_LONG_ROW_COUNTS + LONG_FUTURE_ROWS], 1u);
+        words[longBase(LONG_FUTURE_ROWS) + slot] = uint(row);
     }
     if (row < nodeCount() && sourceEnd(row) - sourceBegin(row) > 16) {
-        uint slot = atomicAdd(words[f(FIELD_DISPATCH) + 26], 1u);
-        words[longBase(2) + slot] = uint(row);
+        uint slot = atomicAdd(words[workField(FIELD_DISPATCH) + DISPATCH_LONG_ROW_COUNTS + LONG_SOURCE_ROWS], 1u);
+        words[longBase(LONG_SOURCE_ROWS) + slot] = uint(row);
     }
 }
 void main() {
     int row = int(gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x), lane = int(gl_LocalInvocationID.x),
         id = 128 * row + lane;
 
-    if (p.stage == 25) {
+    if (p.stage == STAGE_CLASSIFY_ROWS) {
         if (errors == 0u && id < p.count)
             classifyRows(id);
         return;
     }
-    if (p.stage == 26) {
+    if (p.stage == STAGE_LONG_ROW_DISPATCH) {
         if (id == 0)
             for (int i = 0; i < 3; i++) {
-                int total = int(words[f(FIELD_DISPATCH) + 24 + i]), at = f(FIELD_DISPATCH) + 3 * (i + 2);
+                int total = int(words[workField(FIELD_DISPATCH) + DISPATCH_LONG_ROW_COUNTS + i]), at = workField(FIELD_DISPATCH) + 3 * (i + 2);
                 words[at] = uint(min(total, 65535));
                 words[at + 1] = uint(max(1, (total + 65534) / 65535));
                 words[at + 2] = 1u;
@@ -1255,24 +1292,24 @@ void main() {
         return;
     }
     if (!shortRow()) {
-        int kind = (p.stage == 7)                                                              ? 0
-                   : ((p.stage == 12))                                                         ? 1
-                   : ((p.stage == 2 && h(H_TRANSPORT) != 0) || p.stage == 23 || p.stage == 24) ? 2
+        int kind = (p.stage == STAGE_GATHER_RETAINED)                                                              ? LONG_RETAINED_ROWS
+                   : ((p.stage == STAGE_GATHER_FUTURE))                                                         ? LONG_FUTURE_ROWS
+                   : ((p.stage == STAGE_SPLIT_SOURCE && headerWord(H_TRANSPORT) != 0) || p.stage == STAGE_RETAINED_VOLUMES || p.stage == STAGE_TRANSPORT_ENERGY) ? LONG_SOURCE_ROWS
                                                                                                : -1;
         if (kind >= 0) {
-            if (row >= int(words[f(FIELD_DISPATCH) + 24 + kind]))
+            if (row >= int(words[workField(FIELD_DISPATCH) + DISPATCH_LONG_ROW_COUNTS + kind]))
                 return;
             row = int(words[longBase(kind) + row]);
         }
     }
     if (shortRow()) {
-        int stage = p.stage - 100;
-        if (stage == 2 || stage == 23 || stage == 24) {
+        int stage = p.stage - SHORT_ROW_STAGE_OFFSET;
+        if (stage == STAGE_SPLIT_SOURCE || stage == STAGE_RETAINED_VOLUMES || stage == STAGE_TRANSPORT_ENERGY) {
             if (errors != 0u || id >= nodeCount() || id >= p.count || sourceEnd(id) - sourceBegin(id) > 16)
                 return;
-            if (stage == 2)
+            if (stage == STAGE_SPLIT_SOURCE)
                 splitTransport(id, 0);
-            else if (stage == 23)
+            else if (stage == STAGE_RETAINED_VOLUMES)
                 retainedVolumes(id, 0);
             else
                 transportEnergy(id, 0);
@@ -1287,36 +1324,36 @@ void main() {
         gatherSpeciesAndEnergy(id, future, 0);
         return;
     }
-    if (p.stage == 27) {
+    if (p.stage == STAGE_SNAPSHOT_ROUNDOFF) {
         if (id >= p.count || errors != 0u)
             return;
         if (id < groups())
-            put(f(FIELD_ENERGY_ROUNDOFF) + 4 * id + 2, number(f(FIELD_ENERGY_ROUNDOFF) + 4 * id));
+            writeDouble(workField(FIELD_ENERGY_ROUNDOFF) + 4 * id + 2, readDouble(workField(FIELD_ENERGY_ROUNDOFF) + 4 * id));
         if (id < nodeCount()) {
-            put(f(FIELD_SOURCE_ROUNDOFF) + 4 * id + 2, number(f(FIELD_SOURCE_ROUNDOFF) + 4 * id));
-            put(f(FIELD_RETAINED_ROUNDOFF) + 4 * id, 0.0);
+            writeDouble(workField(FIELD_SOURCE_ROUNDOFF) + 4 * id + 2, readDouble(workField(FIELD_SOURCE_ROUNDOFF) + 4 * id));
+            writeDouble(workField(FIELD_RETAINED_ROUNDOFF) + 4 * id, 0.0);
         }
         return;
     }
-    if (p.stage == 18) {
+    if (p.stage == STAGE_PREPARE_DISPATCH) {
         if (id == 0) {
             for (int i = 0; i < 9; i++)
-                words[f(FIELD_REQUIREMENTS) + i] = 0u;
+                words[workField(FIELD_REQUIREMENTS) + i] = 0u;
             for (int i = 0; i < 8; i++) {
-                words[f(FIELD_DISPATCH) + 3 * i] = 0u;
-                words[f(FIELD_DISPATCH) + 3 * i + 1] = 1u;
-                words[f(FIELD_DISPATCH) + 3 * i + 2] = 1u;
+                words[workField(FIELD_DISPATCH) + 3 * i] = 0u;
+                words[workField(FIELD_DISPATCH) + 3 * i + 1] = 1u;
+                words[workField(FIELD_DISPATCH) + 3 * i + 2] = 1u;
             }
             if (errors == 0u) {
-                words[f(FIELD_REQUIREMENTS) + 6] = uint(futureCount());
-                words[f(FIELD_REQUIREMENTS) + 7] = uint(groups());
-                words[f(FIELD_REQUIREMENTS) + 8] = 1u;
+                words[workField(FIELD_REQUIREMENTS) + REQUIREMENT_FUTURE_NODE_COUNT] = uint(futureCount());
+                words[workField(FIELD_REQUIREMENTS) + REQUIREMENT_GROUP_COUNT] = uint(groups());
+                words[workField(FIELD_REQUIREMENTS) + REQUIREMENT_READY] = 1u;
                 prepareDispatch();
             }
         }
         return;
     }
-    if ((p.stage == 2 && h(H_TRANSPORT) != 0) || p.stage == 23 || p.stage == 24) {
+    if ((p.stage == STAGE_SPLIT_SOURCE && headerWord(H_TRANSPORT) != 0) || p.stage == STAGE_RETAINED_VOLUMES || p.stage == STAGE_TRANSPORT_ENERGY) {
         if (lane == 0)
             rowValid = errors == 0u && row < nodeCount() ? 1 : 0;
         barrier();
@@ -1324,15 +1361,15 @@ void main() {
             return;
         if (sourceEnd(row) - sourceBegin(row) <= 16)
             return;
-        if (p.stage == 2)
+        if (p.stage == STAGE_SPLIT_SOURCE)
             splitTransport(row, lane);
-        else if (p.stage == 23)
+        else if (p.stage == STAGE_RETAINED_VOLUMES)
             retainedVolumes(row, lane);
         else
             transportEnergy(row, lane);
         return;
     }
-    if (p.stage == 3 && h(H_TRANSPORT) != 0) {
+    if (p.stage == STAGE_CAPTURE_AMBIENT && headerWord(H_TRANSPORT) != 0) {
         if (lane == 0)
             rowValid = errors == 0u ? 1 : 0;
         barrier();
@@ -1340,12 +1377,12 @@ void main() {
             captureAmbientParallel(lane);
         return;
     }
-    if (p.stage == 22) {
-        if (id == 0 && words[f(FIELD_REQUIREMENTS) + 8] != 0u)
+    if (p.stage == STAGE_MEASURE_TOTAL) {
+        if (id == 0 && words[workField(FIELD_REQUIREMENTS) + REQUIREMENT_READY] != 0u)
             measureTotal();
         return;
     }
-    if ((p.stage == 7) || (p.stage == 12)) {
+    if ((p.stage == STAGE_GATHER_RETAINED) || (p.stage == STAGE_GATHER_FUTURE)) {
         bool future = p.stage >= 11;
         if (lane == 0)
             rowValid = errors == 0u && row < actualRows(future) && row < p.count ? 1 : 0;
@@ -1360,18 +1397,18 @@ void main() {
     }
     if (id >= p.count || errors != 0u)
         return;
-    if (p.stage == 0)
+    if (p.stage == STAGE_CLEAR_STEP)
         clearStep(id);
-    else if (p.stage == 1)
+    else if (p.stage == STAGE_PREPARE_PARTS)
         prepareParts(id);
-    else if (p.stage == 2)
+    else if (p.stage == STAGE_SPLIT_SOURCE)
         splitSource(id);
-    else if (p.stage == 3)
+    else if (p.stage == STAGE_CAPTURE_AMBIENT)
         captureAmbient();
-    else if (p.stage == 4 || p.stage == 9)
-        groupEnergy(id, p.stage == 9);
-    else if (p.stage == 5 || p.stage == 10)
-        closeSourceEnergy(id, p.stage == 10);
+    else if (p.stage == STAGE_RETAINED_GROUP_ENERGY || p.stage == STAGE_FUTURE_GROUP_ENERGY)
+        groupEnergy(id, p.stage == STAGE_FUTURE_GROUP_ENERGY);
+    else if (p.stage == STAGE_RETAINED_CLOSE_SOURCE_ENERGY || p.stage == STAGE_FUTURE_CLOSE_SOURCE_ENERGY)
+        closeSourceEnergy(id, p.stage == STAGE_FUTURE_CLOSE_SOURCE_ENERGY);
     else
-        topology(id, p.stage == 15);
+        topology(id, p.stage == STAGE_FUTURE_TOPOLOGY);
 }

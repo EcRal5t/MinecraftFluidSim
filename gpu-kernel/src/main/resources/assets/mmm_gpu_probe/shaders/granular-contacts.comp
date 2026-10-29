@@ -1,6 +1,25 @@
 #version 450
 #extension GL_ARB_gpu_shader_fp64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+const double MASS_UNIT_KG = 1e-10;
+const int CONTACT_COMPRESSION = 0;
+const int CONTACT_REBOUND = 1;
+const int STAGE_INITIALIZE_PARTICLES = 0;
+const int STAGE_PREPARE_CONTACTS = 1;
+const int STAGE_SCATTER_CONTACTS = 2;
+const int STAGE_COUNT_COMPONENTS = 3;
+const int STAGE_SCATTER_COMPONENTS = 4;
+const int STAGE_PROPOSE_IMPULSES = 5;
+const int STAGE_RECONSTRUCT_VELOCITY = 6;
+const int STAGE_CAPTURE_COMPRESSION = 7;
+const int STAGE_COMPUTE_ENERGY_TERMS = 8;
+const int STAGE_BUDGET_REBOUND = 9;
+const int STAGE_LIMIT_REBOUND = 10;
+const int STAGE_INITIALIZE_INTERVAL = 11;
+const int STAGE_RESTORE_VELOCITY = 12;
+const int STAGE_ACCUMULATE_INTERVAL = 13;
+const int STAGE_RESOLVE_INTERVAL_COMPONENTS = 14;
+const uint ERROR_GRANULAR_CONTACTS = 2097152u;
 layout(local_size_x = 128) in;
 layout(binding = 0, std430) buffer Arena {
     uint words[];
@@ -16,19 +35,19 @@ layout(push_constant) uniform Params {
 }
 p;
 // HOST_LAYOUT
-int h(int i) {
+int headerValue(int i) {
     return int(words[p.header + i]);
 }
-int at(int f) {
-    return h(WORK_FIELDS + f);
+int fieldOffset(int f) {
+    return headerValue(WORK_FIELDS + f);
 }
-int get(int f, int i) {
-    return int(words[at(f) + i]);
+int readFieldInt(int f, int i) {
+    return int(words[fieldOffset(f) + i]);
 }
-void put(int f, int i, int x) {
-    words[at(f) + i] = uint(x);
+void writeFieldInt(int f, int i, int x) {
+    words[fieldOffset(f) + i] = uint(x);
 }
-double number(int a) {
+double readDouble(int a) {
     return packDouble2x32(uvec2(words[a], words[a + 1]));
 }
 void writeNumber(int a, double x) {
@@ -37,10 +56,10 @@ void writeNumber(int a, double x) {
     words[a + 1] = bits.y;
 }
 double read(int f, int i) {
-    return number(at(f) + 2 * i);
+    return readDouble(fieldOffset(f) + 2 * i);
 }
 void write(int f, int i, double x) {
-    writeNumber(at(f) + 2 * i, x);
+    writeNumber(fieldOffset(f) + 2 * i, x);
 }
 dvec3 vector(int f, int i) {
     return dvec3(read(f, 3 * i), read(f, 3 * i + 1), read(f, 3 * i + 2));
@@ -49,106 +68,106 @@ void writeVector(int f, int i, dvec3 x) {
     for (int a = 0; a < 3; a++)
         write(f, 3 * i + a, x[a]);
 }
-int actual() {
-    return int(words[h(H_COUNTS)]);
+int particleCount() {
+    return int(words[headerValue(H_COUNTS)]);
 }
-int contacts() {
-    return get(FIELD_CONTROL, 0);
+int contactCount() {
+    return readFieldInt(FIELD_CONTROL, 0);
 }
-double mass(int i) {
-    int a = h(H_MASS) + 2 * i;
-    return double(int64_t(uint64_t(words[a]) | (uint64_t(words[a + 1]) << 32))) * 1e-10;
+double particleMass(int i) {
+    int a = headerValue(H_MASS) + 2 * i;
+    return double(int64_t(uint64_t(words[a]) | (uint64_t(words[a + 1]) << 32))) * MASS_UNIT_KG;
 }
-void invalid() {
-    atomicOr(errors, 2097152u);
+void reportInvalidState() {
+    atomicOr(errors, ERROR_GRANULAR_CONTACTS);
 }
 bool finite(double x) {
     return !isnan(x) && !isinf(x);
 }
-uint root(uint id) {
-    for (int pass = 0; pass < h(H_PARTICLE_CAPACITY); pass++) {
-        uint next = atomicAdd(words[at(FIELD_CONTACT_COMPONENT) + id], 0u);
+uint contactComponentRoot(uint id) {
+    for (int pass = 0; pass < headerValue(H_PARTICLE_CAPACITY); pass++) {
+        uint next = atomicAdd(words[fieldOffset(FIELD_CONTACT_COMPONENT) + id], 0u);
         if (next == id)
             return id;
         id = next;
     }
-    invalid();
+    reportInvalidState();
     return id;
 }
-void join(int first, int second) {
-    for (int pass = 0; pass < h(H_PARTICLE_CAPACITY); pass++) {
-        uint a = root(uint(first)), b = root(uint(second));
+void joinContactComponents(int first, int second) {
+    for (int pass = 0; pass < headerValue(H_PARTICLE_CAPACITY); pass++) {
+        uint a = contactComponentRoot(uint(first)), b = contactComponentRoot(uint(second));
         if (a == b)
             return;
-        uint high = max(a, b), low = min(a, b), previous = atomicMin(words[at(FIELD_CONTACT_COMPONENT) + high], low);
+        uint high = max(a, b), low = min(a, b), previous = atomicMin(words[fieldOffset(FIELD_CONTACT_COMPONENT) + high], low);
         if (previous == high)
             return;
     }
-    invalid();
+    reportInvalidState();
 }
 uint intervalRoot(uint id) {
-    for (int pass = 0; pass < h(H_PARTICLE_CAPACITY); pass++) {
-        uint next = atomicAdd(words[at(FIELD_INTERVAL_COMPONENT) + id], 0u);
+    for (int pass = 0; pass < headerValue(H_PARTICLE_CAPACITY); pass++) {
+        uint next = atomicAdd(words[fieldOffset(FIELD_INTERVAL_COMPONENT) + id], 0u);
         if (next == id)
             return id;
         id = next;
     }
-    invalid();
+    reportInvalidState();
     return id;
 }
 void intervalJoin(int first, int second) {
-    for (int pass = 0; pass < h(H_PARTICLE_CAPACITY); pass++) {
+    for (int pass = 0; pass < headerValue(H_PARTICLE_CAPACITY); pass++) {
         uint a = intervalRoot(uint(first)), b = intervalRoot(uint(second));
         if (a == b)
             return;
-        uint high = max(a, b), low = min(a, b), previous = atomicMin(words[at(FIELD_INTERVAL_COMPONENT) + high], low);
+        uint high = max(a, b), low = min(a, b), previous = atomicMin(words[fieldOffset(FIELD_INTERVAL_COMPONENT) + high], low);
         if (previous == high)
             return;
     }
-    invalid();
+    reportInvalidState();
 }
 void initialize(int i) {
     write(FIELD_PARTICLE_EXTERNAL_WORK, i, 0.0);
-    put(FIELD_CONTACT_COMPONENT, i, i);
-    put(FIELD_COUNTS, i, 0);
-    put(FIELD_CURSORS, i, 0);
-    put(FIELD_COMPONENT_COUNTS, i, 0);
-    put(FIELD_COMPONENT_CURSORS, i, 0);
+    writeFieldInt(FIELD_CONTACT_COMPONENT, i, i);
+    writeFieldInt(FIELD_COUNTS, i, 0);
+    writeFieldInt(FIELD_CURSORS, i, 0);
+    writeFieldInt(FIELD_COMPONENT_COUNTS, i, 0);
+    writeFieldInt(FIELD_COMPONENT_CURSORS, i, 0);
     write(FIELD_REBOUND_SCALE, i, 1.0);
-    dvec3 v = i < actual() ? dvec3(number(h(H_VELOCITY) + 6 * i), number(h(H_VELOCITY) + 6 * i + 2),
-                                   number(h(H_VELOCITY) + 6 * i + 4))
+    dvec3 v = i < particleCount() ? dvec3(readDouble(headerValue(H_VELOCITY) + 6 * i), readDouble(headerValue(H_VELOCITY) + 6 * i + 2),
+                                   readDouble(headerValue(H_VELOCITY) + 6 * i + 4))
                            : dvec3(0.0);
     writeVector(FIELD_SOURCE_VELOCITY, i, v);
     writeVector(FIELD_VELOCITY, i, v);
     writeVector(FIELD_COMPRESSED_VELOCITY, i, v);
 }
 bool validContact(int c) {
-    int a = get(FIELD_FIRST, c), b = get(FIELD_SECOND, c);
-    return a >= 0 && a < actual() && b >= -1 && b < actual() && a != b;
+    int a = readFieldInt(FIELD_FIRST, c), b = readFieldInt(FIELD_SECOND, c);
+    return a >= 0 && a < particleCount() && b >= -1 && b < particleCount() && a != b;
 }
 void prepareContact(int c) {
     write(FIELD_FIXED_WORK, c, 0.0);
     writeVector(FIELD_FIXED_REACTION, c, dvec3(0.0));
-    if (c >= contacts())
+    if (c >= contactCount())
         return;
     if (!validContact(c)) {
-        invalid();
+        reportInvalidState();
         return;
     }
-    int a = get(FIELD_FIRST, c), b = get(FIELD_SECOND, c);
+    int a = readFieldInt(FIELD_FIRST, c), b = readFieldInt(FIELD_SECOND, c);
     dvec3 n = vector(FIELD_NORMAL, c);
     double norm = dot(n, n);
-    if (!(norm > .999999 && norm < 1.000001 && mass(a) > 0.0 && (b < 0 || mass(b) > 0.0) &&
+    if (!(norm > .999999 && norm < 1.000001 && particleMass(a) > 0.0 && (b < 0 || particleMass(b) > 0.0) &&
           read(FIELD_RESTITUTION, c) >= 0.0 && read(FIELD_RESTITUTION, c) <= 1.0 &&
           read(FIELD_STATIC_FRICTION, c) >= read(FIELD_DYNAMIC_FRICTION, c) &&
           read(FIELD_DYNAMIC_FRICTION, c) >= 0.0)) {
-        invalid();
+        reportInvalidState();
         return;
     }
-    atomicAdd(words[at(FIELD_COUNTS) + a], 1u);
+    atomicAdd(words[fieldOffset(FIELD_COUNTS) + a], 1u);
     if (b >= 0) {
-        atomicAdd(words[at(FIELD_COUNTS) + b], 1u);
-        join(a, b);
+        atomicAdd(words[fieldOffset(FIELD_COUNTS) + b], 1u);
+        joinContactComponents(a, b);
     }
     write(FIELD_NORMAL_IMPULSE, c, 0.0);
     write(FIELD_COMPRESSED_IMPULSE, c, 0.0);
@@ -157,45 +176,45 @@ void prepareContact(int c) {
     writeVector(FIELD_FIXED_REACTION, c, dvec3(0.0));
 }
 void scatter(int c) {
-    if (c >= contacts() || !validContact(c))
+    if (c >= contactCount() || !validContact(c))
         return;
-    int a = get(FIELD_FIRST, c), b = get(FIELD_SECOND, c);
-    int first = int(atomicAdd(words[at(FIELD_CURSORS) + a], 1u));
-    put(FIELD_ENTRIES, get(FIELD_OFFSETS, a) + first, c);
+    int a = readFieldInt(FIELD_FIRST, c), b = readFieldInt(FIELD_SECOND, c);
+    int first = int(atomicAdd(words[fieldOffset(FIELD_CURSORS) + a], 1u));
+    writeFieldInt(FIELD_ENTRIES, readFieldInt(FIELD_OFFSETS, a) + first, c);
     if (b >= 0) {
-        int second = int(atomicAdd(words[at(FIELD_CURSORS) + b], 1u));
-        put(FIELD_ENTRIES, get(FIELD_OFFSETS, b) + second, c);
+        int second = int(atomicAdd(words[fieldOffset(FIELD_CURSORS) + b], 1u));
+        writeFieldInt(FIELD_ENTRIES, readFieldInt(FIELD_OFFSETS, b) + second, c);
     }
 }
 void componentCount(int i) {
-    if (i >= actual())
+    if (i >= particleCount())
         return;
-    int label = int(root(uint(i)));
-    atomicExchange(words[at(FIELD_CONTACT_COMPONENT) + i], uint(label));
-    atomicAdd(words[at(FIELD_COMPONENT_COUNTS) + label], 1u);
+    int label = int(contactComponentRoot(uint(i)));
+    atomicExchange(words[fieldOffset(FIELD_CONTACT_COMPONENT) + i], uint(label));
+    atomicAdd(words[fieldOffset(FIELD_COMPONENT_COUNTS) + label], 1u);
 }
 void componentScatter(int i) {
-    if (i >= actual())
+    if (i >= particleCount())
         return;
-    int label = get(FIELD_CONTACT_COMPONENT, i), slot = int(atomicAdd(words[at(FIELD_COMPONENT_CURSORS) + label], 1u));
-    put(FIELD_COMPONENT_MEMBERS, get(FIELD_COMPONENT_OFFSETS, label) + slot, i);
+    int label = readFieldInt(FIELD_CONTACT_COMPONENT, i), slot = int(atomicAdd(words[fieldOffset(FIELD_COMPONENT_CURSORS) + label], 1u));
+    writeFieldInt(FIELD_COMPONENT_MEMBERS, readFieldInt(FIELD_COMPONENT_OFFSETS, label) + slot, i);
 }
-dvec3 relative(int field, int c) {
-    int a = get(FIELD_FIRST, c), b = get(FIELD_SECOND, c);
+dvec3 relativeVelocity(int field, int c) {
+    int a = readFieldInt(FIELD_FIRST, c), b = readFieldInt(FIELD_SECOND, c);
     return b < 0 ? vector(field, a) - vector(FIELD_WALL_VELOCITY, c) : vector(field, b) - vector(field, a);
 }
-void proposal(int c) {
-    if (c >= contacts() || !validContact(c))
+void proposeContactImpulse(int c) {
+    if (c >= contactCount() || !validContact(c))
         return;
-    int a = get(FIELD_FIRST, c), b = get(FIELD_SECOND, c);
-    dvec3 n = vector(FIELD_NORMAL, c), v = relative(FIELD_VELOCITY, c);
-    double inverse = 1.0 / mass(a) + (b < 0 ? 0.0 : 1.0 / mass(b));
-    double relaxation = 1.0 / double(max(get(FIELD_COUNTS, a), b < 0 ? 1 : get(FIELD_COUNTS, b)));
+    int a = readFieldInt(FIELD_FIRST, c), b = readFieldInt(FIELD_SECOND, c);
+    dvec3 n = vector(FIELD_NORMAL, c), v = relativeVelocity(FIELD_VELOCITY, c);
+    double inverse = 1.0 / particleMass(a) + (b < 0 ? 0.0 : 1.0 / particleMass(b));
+    double relaxation = 1.0 / double(max(readFieldInt(FIELD_COUNTS, a), b < 0 ? 1 : readFieldInt(FIELD_COUNTS, b)));
     double target =
-        p.argument == 0 ? 0.0 : -read(FIELD_RESTITUTION, c) * min(0.0, dot(n, relative(FIELD_SOURCE_VELOCITY, c)));
+        p.argument == CONTACT_COMPRESSION ? 0.0 : -read(FIELD_RESTITUTION, c) * min(0.0, dot(n, relativeVelocity(FIELD_SOURCE_VELOCITY, c)));
     double old = read(FIELD_NORMAL_IMPULSE, c), next = max(0.0, old + (target - dot(n, v)) / inverse);
     write(FIELD_NORMAL_IMPULSE, c, old + relaxation * (next - old));
-    if (p.argument == 1) {
+    if (p.argument == CONTACT_REBOUND) {
         dvec3 tangent = vector(FIELD_TANGENT_IMPULSE, c), trial = tangent - (v - n * dot(n, v)) / inverse;
         double magnitude = length(trial), load = read(FIELD_NORMAL_IMPULSE, c);
         double scale = magnitude == 0.0 || magnitude <= read(FIELD_STATIC_FRICTION, c) * load
@@ -204,46 +223,46 @@ void proposal(int c) {
         writeVector(FIELD_TANGENT_IMPULSE, c, tangent + relaxation * (scale * trial - tangent));
     }
 }
-void reconstruct(int i) {
-    if (i >= actual())
+void reconstructParticleVelocity(int i) {
+    if (i >= particleCount())
         return;
     dvec3 impulse = dvec3(0.0);
     double externalWork = 0.0;
-    for (int j = get(FIELD_OFFSETS, i); j < get(FIELD_OFFSETS, i + 1); j++) {
-        int c = get(FIELD_ENTRIES, j), b = get(FIELD_SECOND, c);
+    for (int j = readFieldInt(FIELD_OFFSETS, i); j < readFieldInt(FIELD_OFFSETS, i + 1); j++) {
+        int c = readFieldInt(FIELD_ENTRIES, j), b = readFieldInt(FIELD_SECOND, c);
         double sign = b < 0 || b == i ? 1.0 : -1.0;
         impulse += sign * (read(FIELD_NORMAL_IMPULSE, c) * vector(FIELD_NORMAL, c) + vector(FIELD_TANGENT_IMPULSE, c));
         if (b < 0)
             externalWork += read(FIELD_FIXED_WORK, c);
     }
-    dvec3 v = vector(FIELD_SOURCE_VELOCITY, i) + impulse / mass(i);
+    dvec3 v = vector(FIELD_SOURCE_VELOCITY, i) + impulse / particleMass(i);
     writeVector(FIELD_VELOCITY, i, v);
-    if (p.argument == 1) {
+    if (p.argument == CONTACT_REBOUND) {
         write(FIELD_PARTICLE_EXTERNAL_WORK, i, externalWork);
         for (int a = 0; a < 3; a++)
-            writeNumber(h(H_VELOCITY) + 6 * i + 2 * a, v[a]);
-        writeNumber(h(H_FINAL_K) + 2 * i, .5 * mass(i) * dot(v, v));
+            writeNumber(headerValue(H_VELOCITY) + 6 * i + 2 * a, v[a]);
+        writeNumber(headerValue(H_FINAL_K) + 2 * i, .5 * particleMass(i) * dot(v, v));
     }
     if (any(isnan(v)) || any(isinf(v)))
-        invalid();
+        reportInvalidState();
 }
 void captureCompression(int id) {
-    if (id < h(H_PARTICLE_CAPACITY))
+    if (id < headerValue(H_PARTICLE_CAPACITY))
         writeVector(FIELD_COMPRESSED_VELOCITY, id, vector(FIELD_VELOCITY, id));
-    if (id < contacts())
+    if (id < contactCount())
         write(FIELD_COMPRESSED_IMPULSE, id, read(FIELD_NORMAL_IMPULSE, id));
 }
 void energyTerms(int i) {
-    if (i >= actual())
+    if (i >= particleCount())
         return;
     dvec3 source = vector(FIELD_SOURCE_VELOCITY, i), compressed = vector(FIELD_COMPRESSED_VELOCITY, i),
           delta = vector(FIELD_VELOCITY, i) - compressed;
-    double m = mass(i);
+    double m = particleMass(i);
     double available = .5 * m * dot(source - compressed, source + compressed), linear = m * dot(compressed, delta),
            quadratic = .5 * m * dot(delta, delta);
-    for (int j = get(FIELD_OFFSETS, i); j < get(FIELD_OFFSETS, i + 1); j++) {
-        int c = get(FIELD_ENTRIES, j);
-        if (get(FIELD_SECOND, c) >= 0)
+    for (int j = readFieldInt(FIELD_OFFSETS, i); j < readFieldInt(FIELD_OFFSETS, i + 1); j++) {
+        int c = readFieldInt(FIELD_ENTRIES, j);
+        if (readFieldInt(FIELD_SECOND, c) >= 0)
             continue;
         dvec3 wall = vector(FIELD_WALL_VELOCITY, c), n = vector(FIELD_NORMAL, c);
         available += read(FIELD_COMPRESSED_IMPULSE, c) * dot(wall, n);
@@ -252,12 +271,12 @@ void energyTerms(int i) {
     }
     writeVector(FIELD_ENERGY_TERMS, i, dvec3(available, linear, quadratic));
 }
-void budget(int label) {
-    if (get(FIELD_COMPONENT_COUNTS, label) == 0)
+void budgetReboundEnergy(int label) {
+    if (readFieldInt(FIELD_COMPONENT_COUNTS, label) == 0)
         return;
     dvec3 terms = dvec3(0.0);
-    for (int j = get(FIELD_COMPONENT_OFFSETS, label); j < get(FIELD_COMPONENT_OFFSETS, label + 1); j++)
-        terms += vector(FIELD_ENERGY_TERMS, get(FIELD_COMPONENT_MEMBERS, j));
+    for (int j = readFieldInt(FIELD_COMPONENT_OFFSETS, label); j < readFieldInt(FIELD_COMPONENT_OFFSETS, label + 1); j++)
+        terms += vector(FIELD_ENERGY_TERMS, readFieldInt(FIELD_COMPONENT_MEMBERS, j));
     double available = max(0.0, terms.x), linear = terms.y, quadratic = terms.z, scale = 1.0;
     if (linear + quadratic > available && quadratic > 0.0) {
         double rootValue = sqrt(linear * linear + 4.0 * quadratic * available);
@@ -266,18 +285,18 @@ void budget(int label) {
                       0.0, 1.0);
     }
     if (!finite(scale))
-        invalid();
+        reportInvalidState();
     write(FIELD_REBOUND_SCALE, label, scale);
 }
 void limitRebound(int c) {
-    if (c >= contacts() || !validContact(c))
+    if (c >= contactCount() || !validContact(c))
         return;
-    double scale = read(FIELD_REBOUND_SCALE, get(FIELD_CONTACT_COMPONENT, get(FIELD_FIRST, c)));
+    double scale = read(FIELD_REBOUND_SCALE, readFieldInt(FIELD_CONTACT_COMPONENT, readFieldInt(FIELD_FIRST, c)));
     double normal = mix(read(FIELD_COMPRESSED_IMPULSE, c), read(FIELD_NORMAL_IMPULSE, c), scale);
     dvec3 tangent = scale * vector(FIELD_TANGENT_IMPULSE, c);
     write(FIELD_NORMAL_IMPULSE, c, normal);
     writeVector(FIELD_TANGENT_IMPULSE, c, tangent);
-    if (get(FIELD_SECOND, c) < 0) {
+    if (readFieldInt(FIELD_SECOND, c) < 0) {
         dvec3 impulse = normal * vector(FIELD_NORMAL, c) + tangent;
         writeVector(FIELD_FIXED_REACTION, c, -impulse);
         write(FIELD_FIXED_WORK, c, dot(impulse, vector(FIELD_WALL_VELOCITY, c)));
@@ -287,59 +306,59 @@ void main() {
     int id = int((gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x) * 128 + gl_LocalInvocationID.x);
     if (id >= p.count || errors != 0u)
         return;
-    if (actual() < 0 || actual() > h(H_PARTICLE_CAPACITY) ||
-        (p.stage != 11 && (contacts() < 0 || contacts() > h(H_CONTACT_CAPACITY)))) {
-        invalid();
+    if (particleCount() < 0 || particleCount() > headerValue(H_PARTICLE_CAPACITY) ||
+        (p.stage != STAGE_INITIALIZE_INTERVAL && (contactCount() < 0 || contactCount() > headerValue(H_CONTACT_CAPACITY)))) {
+        reportInvalidState();
         return;
     }
-    if (p.stage == 0)
+    if (p.stage == STAGE_INITIALIZE_PARTICLES)
         initialize(id);
-    else if (p.stage == 1)
+    else if (p.stage == STAGE_PREPARE_CONTACTS)
         prepareContact(id);
-    else if (p.stage == 2)
+    else if (p.stage == STAGE_SCATTER_CONTACTS)
         scatter(id);
-    else if (p.stage == 3)
+    else if (p.stage == STAGE_COUNT_COMPONENTS)
         componentCount(id);
-    else if (p.stage == 4)
+    else if (p.stage == STAGE_SCATTER_COMPONENTS)
         componentScatter(id);
-    else if (p.stage == 5)
-        proposal(id);
-    else if (p.stage == 6)
-        reconstruct(id);
-    else if (p.stage == 7)
+    else if (p.stage == STAGE_PROPOSE_IMPULSES)
+        proposeContactImpulse(id);
+    else if (p.stage == STAGE_RECONSTRUCT_VELOCITY)
+        reconstructParticleVelocity(id);
+    else if (p.stage == STAGE_CAPTURE_COMPRESSION)
         captureCompression(id);
-    else if (p.stage == 8)
+    else if (p.stage == STAGE_COMPUTE_ENERGY_TERMS)
         energyTerms(id);
-    else if (p.stage == 9)
-        budget(id);
-    else if (p.stage == 10)
+    else if (p.stage == STAGE_BUDGET_REBOUND)
+        budgetReboundEnergy(id);
+    else if (p.stage == STAGE_LIMIT_REBOUND)
         limitRebound(id);
-    else if (p.stage == 11) {
-        if (id < h(H_PARTICLE_CAPACITY)) {
-            put(FIELD_INTERVAL_COMPONENT, id, id);
+    else if (p.stage == STAGE_INITIALIZE_INTERVAL) {
+        if (id < headerValue(H_PARTICLE_CAPACITY)) {
+            writeFieldInt(FIELD_INTERVAL_COMPONENT, id, id);
             write(FIELD_INTERVAL_PARTICLE_WORK, id, 0.0);
         }
-        if (id < h(H_CONTACT_CAPACITY))
+        if (id < headerValue(H_CONTACT_CAPACITY))
             write(FIELD_INTERVAL_FIXED_WORK, id, 0.0);
-    } else if (p.stage == 12) {
-        if (id < actual()) {
+    } else if (p.stage == STAGE_RESTORE_VELOCITY) {
+        if (id < particleCount()) {
             dvec3 v = vector(FIELD_SOURCE_VELOCITY, id);
             for (int a = 0; a < 3; a++)
-                writeNumber(h(H_VELOCITY) + 6 * id + 2 * a, v[a]);
-            writeNumber(h(H_FINAL_K) + 2 * id, .5 * mass(id) * dot(v, v));
+                writeNumber(headerValue(H_VELOCITY) + 6 * id + 2 * a, v[a]);
+            writeNumber(headerValue(H_FINAL_K) + 2 * id, .5 * particleMass(id) * dot(v, v));
         }
-    } else if (p.stage == 13) {
-        if (id < actual())
+    } else if (p.stage == STAGE_ACCUMULATE_INTERVAL) {
+        if (id < particleCount())
             write(FIELD_INTERVAL_PARTICLE_WORK, id,
                   read(FIELD_INTERVAL_PARTICLE_WORK, id) + read(FIELD_PARTICLE_EXTERNAL_WORK, id));
-        if (id < contacts()) {
-            int a = get(FIELD_FIRST, id), b = get(FIELD_SECOND, id);
+        if (id < contactCount()) {
+            int a = readFieldInt(FIELD_FIRST, id), b = readFieldInt(FIELD_SECOND, id);
             if (b >= 0)
                 intervalJoin(a, b);
             write(FIELD_INTERVAL_FIXED_WORK, id, read(FIELD_INTERVAL_FIXED_WORK, id) + read(FIELD_FIXED_WORK, id));
         }
-    } else if (p.stage == 14) {
-        if (id < actual())
-            atomicExchange(words[at(FIELD_INTERVAL_COMPONENT) + id], intervalRoot(uint(id)));
+    } else if (p.stage == STAGE_RESOLVE_INTERVAL_COMPONENTS) {
+        if (id < particleCount())
+            atomicExchange(words[fieldOffset(FIELD_INTERVAL_COMPONENT) + id], intervalRoot(uint(id)));
     }
 }
