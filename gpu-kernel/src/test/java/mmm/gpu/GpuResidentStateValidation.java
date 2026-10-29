@@ -71,7 +71,10 @@ public final class GpuResidentStateValidation {
         }
         validateSmallGeometry(device);
         long expectedGasMass=0;for(var node:initial.gas().nodes())expectedGasMass=Math.addExact(expectedGasMass,node.inventory().totalMassUnits());
-        validateBackend(device,initial,expectedMass,expectedGasMass);
+        for (int attempt = 0; attempt < Integer.getInteger("mmm.residentAttempts", 1); attempt++) {
+            System.out.println("resident_attempt=" + attempt);
+            validateBackend(device,initial,expectedMass,expectedGasMass);
+        }
     }
     private static void validateSmallGeometry(int device){
         var fluids=new FluidMaterialRegistry(List.of(BuiltinFluidMaterials.WATER));

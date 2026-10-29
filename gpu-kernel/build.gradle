@@ -338,3 +338,8 @@ registerGpuProbe('runGpuActivityMaskValidation', 'Checks active and paused physi
     'mmm.gpu.GpuActivityMaskValidation', 'gpu-activity-mask-work') { probeTask ->
     probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0'), rootProject.file('fabric/src/main/resources/data/mmm/mmm').absolutePath
 }
+
+registerGpuProbe('runGpuLiquidCapacityInputsValidation', 'Checks gas reservation and displaced liquid capacity.',
+    'mmm.gpu.GpuLiquidCapacityInputsValidation', 'gpu-liquid-capacity-inputs-work') { probeTask ->
+    probeTask.args providers.gradleProperty('gpuProbeDevice').getOrElse('0')
+}

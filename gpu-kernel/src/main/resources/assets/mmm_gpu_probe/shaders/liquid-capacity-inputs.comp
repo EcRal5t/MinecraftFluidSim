@@ -238,18 +238,19 @@ void groupInputs() {
                 return;
             }
             reserve = min(groupUpper[0], int64_t(min(double(MAX_TOTAL), quantized)));
-            // Prescribed solid motion may consume an unresolved fraction of a gas cell.
-            // The later chamber remap keeps its inventory and evaluates the actual volume.
-            if (p.stage == 4)
-                reserve = max(0l, reserve - int64_t(ceil(ldexp(4e-5, -h(H_QUANTUM_EXPONENT)))));
-            // Ordinary transport starts from an admissible state; only prescribed solids may displace it.
-            if (p.stage != 4)
-                reserve = min(reserve, max(0l, groupUpper[0] - groupSource[0]));
+            // Target solid occupation already prescribes a change in chamber volume.
+            // Retaining this group's liquid defines its future dry-space reference;
+            // pressure may permit further compression. An approximate pressure solve
+            // cannot reserve old gas space that the prescribed geometry has removed.
+            // Cell upper bounds still route liquid out of newly occupied cells, and
+            // groups whose source exceeds their future pore volume must export it.
+            int64_t futureDryReference = max(0l, groupUpper[0] - groupSource[0]);
+            reserve = min(reserve, futureDryReference);
             if (reserve == 0l && groupTail[0] == 0u)
                 reserve = 1l;
         }
         int64_t limit = groupUpper[0] - reserve;
-        if ((p.stage != 4 && limit < groupSource[0]) || limit < int64_t(0)) {
+        if (limit < int64_t(0)) {
             atomicOr(errors, 4096u);
             return;
         }

@@ -214,6 +214,8 @@
 
 设备状态交接使用 `:gpu-kernel:runGpuResidentStateValidation`，实现变更按受影响的设备场景选择对应任务。Windows 环境若 `vkCreateInstance` 返回 `-9` 或无可用设备，可设置 `$env:VK_LOADER_DEBUG='error,warn,driver'`，核对显卡驱动及 ICD 路径。
 
+气体留容与实体排水使用 `:gpu-kernel:runGpuLiquidCapacityInputsValidation`：直接运行生产输入及容量内核，检查静止实体占容后的跨单元排水、有限气体正干容、整数守恒及总孔容不足时的拒绝。实体插入、移动、同布局编辑与存档恢复的完整交接由 resident 场景覆盖。
+
 ## 需要进入游戏时
 
 当问题依赖实际画面、Minecraft 方块形状或磁盘重启过程时，准备一个可重复场景，写明操作、预期现象和需要保留的日志。发布构建、产物校验和部署步骤见 [验收与发布](../roadmap/acceptance-and-release.md)。
@@ -237,6 +239,10 @@
 
 热边界温度候选验证通过：取消候选保持源库存与参数，单次采用后热步续算使用新温度；准备过程只回读 4 字节执行状态。环境参数更新保留常驻库存。
 
-已知数值问题：resident 的实体续算曾间歇报告容量 `INFEASIBLE`，实际执行 14 轮，上限 512 轮，未触及轮数上限。原版和整理后的黏性 shader 隔离重放均通过；随后三次开启失败捕获的重放也均通过，未取得失败残量图。原因未定，未调整预算或数值参数。记录 `build/gpu-mainline-cell-observation.log`、`build/entity-capacity-attempt-1.log` 至 `-3.log`。
+2026-10-30 实体容量问题定位：`build/entity-capacity-capture.log` 在第 4 次 backend 流程捕获 `INFEASIBLE`，14 轮、上限 512 轮。失败输入保存于 `build/entity-capacity-failure.bin`；独立整数最大流及生产 GPU 重放一致确认，三组上限之和比液体源总量少 4,541,619,097 个容量量子，约 0.00051632 m³。GPU 重放的剩余正收支恰为该缺口，记录 `build/entity-capacity-replay.log`。根因是位移路径在未来孔容上沿用旧气体的压力预测留容，跳过普通路径的本组库存参考限制；固定体积补偿无法保证容量一致。
+
+修复后普通输运与位移共用未来干容参考，删除固定补偿，预算保持不变。确定性容量输入回归在原实现上返回错误的 `INFEASIBLE`，记录 `build/entity-capacity-before-fix.log`；修复实现通过同一场景，并保持真实孔容不足时拒绝。24 次 resident 完整流程通过，覆盖实体插入、移动、同布局编辑与 checkpoint 续算，液体、气体库存和热账保持，记录 `build/entity-capacity-fixed-resident.log`。七类热相变及 flow 120 步完整流程通过，记录 `build/entity-capacity-regression.log`。
+
+本次修复的 `assemble :gpu-kernel:runGpuLiquidCapacityInputsValidation` 交付构建通过，记录 `build/entity-capacity-delivery.log`；产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
 
 2026-10-30 最终统一交付构建通过：`assemble verifyArchitecture :fabric:runHostValidation :gpu-kernel:runGpuActivityMaskValidation :gpu-kernel:runGpuThermalPhaseValidation :fabric:runGpuProductionDemoValidation`，选择 `hostValidation=region-state,containers,ownership,lifecycle`、`gpuDemo=flow`、`gpuDemoSteps=120`、`gpuDemoStage=complete`，使用 `--offline --no-daemon --console=plain --max-workers=1`。共 59 秒，39 个任务中 20 个复用产物；架构扫描 611 个生产源通过。水流场景完成实体交互、保存恢复、暂停手动单步、库存编辑及续算；双组与七类热相变均通过。记录 `build/gpu-mainline-delivery.log`，发布产物 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
