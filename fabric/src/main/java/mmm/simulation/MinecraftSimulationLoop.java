@@ -47,22 +47,46 @@ final class MinecraftSimulationLoop {
 		containerRecovery.recoverIndexed();
 		takeover.maintainActive(server);
 		for (FluidRegion region : regions.regions()) {
-            if (region.pauseForUnavailableDevice()) continue;
-			ServerLevel level = server.getLevel(region.dimension());
-			if (level == null) {
-				operations.cancelRestore(region);
-				if (availability.hasPending(region.id())) {
-					region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
-							"dimension is not loaded; unresolved container transfer WAL prevents unload checkpoint");
-					continue;
-				}
-				operations.unloadForFailure(server, region, RegionAvailabilityReason.CHUNK_MISSING,
-						"dimension is not loaded", snapshots::sendRemoval);
-				continue;
-			}
-			if (availability.ensure(level, region)) regionTick.tickAvailable(level, region);
+			runWithDeviceLossGuard(region, () -> tickRegion(server, region), failure -> {
+				regionTick.discardEntityResponse(region);
+				if (failure == null) MmmMod.LOGGER.warn(
+						"Region {} paused because the shared Vulkan device is unavailable", region.id());
+				else MmmMod.LOGGER.error("Region {} paused after Vulkan device loss; recover from HEAD and WAL on reload",
+						region.id(), failure);
+				snapshots.sendRemoval(server, region);
+			});
 		}
 		regionTick.finishServerTick();
+	}
+
+	static void runWithDeviceLossGuard(FluidRegion region, Runnable tick, Consumer<RuntimeException> onDeviceLoss) {
+		boolean wasResident = region.deviceResident();
+		if (region.pauseForUnavailableDevice()) {
+			if (wasResident) onDeviceLoss.accept(null);
+			return;
+		}
+		try {
+			tick.run();
+		} catch (RuntimeException failure) {
+			if (!region.pauseForUnavailableDevice()) throw failure;
+			onDeviceLoss.accept(failure);
+		}
+	}
+
+	private void tickRegion(MinecraftServer server, FluidRegion region) {
+		ServerLevel level = server.getLevel(region.dimension());
+		if (level == null) {
+			operations.cancelRestore(region);
+			if (availability.hasPending(region.id())) {
+				region.setAvailabilityFailure(RegionAvailabilityReason.PENDING_WAL,
+						"dimension is not loaded; unresolved container transfer WAL prevents unload checkpoint");
+				return;
+			}
+			operations.unloadForFailure(server, region, RegionAvailabilityReason.CHUNK_MISSING,
+					"dimension is not loaded", snapshots::sendRemoval);
+			return;
+		}
+		if (availability.ensure(level, region)) regionTick.tickAvailable(level, region);
 	}
 
 	void recoverWorld(MinecraftServer server) {

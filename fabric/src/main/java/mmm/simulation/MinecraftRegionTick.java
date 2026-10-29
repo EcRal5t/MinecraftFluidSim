@@ -66,6 +66,7 @@ final class MinecraftRegionTick {
 	}
 
 	void finishServerTick() { inputs.finishServerTick(); }
+	void discardEntityResponse(FluidRegion region) { inputs.discardEntityResponse(region); }
 
 	void tickAvailable(ServerLevel level, FluidRegion region) {
 		inputs.discardEntityResponse(region);
@@ -80,6 +81,7 @@ final class MinecraftRegionTick {
 		if (region.collisionRefreshRequired() || inputs.boundariesDue(tick)) {
 			try { collisionsChanged = refreshRegionInputs(level, region).changedCells() > 0; }
 			catch (FluidDomainContracts.CollisionEditBlockedException blocked) {
+				if (region.pauseForUnavailableDevice()) throw blocked;
 				blockCollisionEdit(level, region, blocked);
 				return;
 			}
@@ -185,6 +187,7 @@ final class MinecraftRegionTick {
 				region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
 			}
 		} catch (RuntimeException invalidBoundary) {
+			if (region.pauseForUnavailableDevice()) throw invalidBoundary;
 			blockThermal(level, region, "thermal-definition LOCKED：" + invalidBoundary.getMessage(), invalidBoundary);
 		}
 		return collisions;
@@ -201,6 +204,11 @@ final class MinecraftRegionTick {
 			if (changed) region.wakeThermal(ThermalActivity.WakeReason.BOUNDARY_CHANGE);
 			return changed;
 		} catch (RuntimeException invalidBoundary) {
+			if (region.pauseForUnavailableDevice()) {
+				MmmMod.LOGGER.error("Region {} paused after Vulkan device loss", region.id(), invalidBoundary);
+				snapshots.sendRemoval(level.getServer(), region);
+				return false;
+			}
 			blockThermal(level, region, "thermal-definition LOCKED：" + invalidBoundary.getMessage(), invalidBoundary);
 			return false;
 		}

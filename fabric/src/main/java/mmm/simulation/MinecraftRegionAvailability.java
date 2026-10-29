@@ -59,6 +59,10 @@ final class MinecraftRegionAvailability {
 		if (!available) return false;
 		try { region.ensureDeviceResident(); }
 		catch (RuntimeException failure) {
+			if (region.pauseForUnavailableDevice()) {
+				snapshots.sendRemoval(level.getServer(), region);
+				return false;
+			}
 			region.blockNumerical("Vulkan 区域初始化失败：" + failure.getMessage());
 			return false;
 		}

@@ -75,11 +75,13 @@ public final class FluidRegion {
         if (reason == null) return false;
         if (residentState != null) {
             unloadedResumeState = lifecycle.state();
-            releaseResidentState();
-            domain = null;
-            finiteThermalDevices = null;
-            finiteThermalPorts = List.of();
-            lifecycle.requestUnload(true, true);
+            try { releaseResidentState(); }
+            catch (RuntimeException closeFailure) {
+                mmm.MmmMod.LOGGER.warn("Failed to release unavailable device state for region {}", id, closeFailure);
+            } finally {
+                clearLoadedSolverState();
+                lifecycle.requestUnload(true, true);
+            }
         }
         lifecycle.blockAvailability(RegionAvailabilityReason.NUMERICAL_PAUSE, "Vulkan 设备不可用：" + reason);
         return true;
@@ -189,7 +191,16 @@ public final class FluidRegion {
 	public FluidSolverConfig solverConfig() { return solverConfig; }
 	/** Creates an independent host view of the committed device generation when needed. */
 	public HostFluidState hostSnapshot() {
-		return HostFluidState.restoreAuthoritativeState(captureHostState());
+		var snapshot = HostFluidState.restoreAuthoritativeState(captureHostState());
+		// Edits use the same effective availability as this region's current GPU request.
+		// It includes device connections and body sweeps that the import template predates.
+		if (groupAvailability != null) snapshot.prepareGroupAvailability(groupAvailability);
+		else if (residentState != null) {
+			boolean[] available = new boolean[sizeX * sizeY * sizeZ];
+			java.util.Arrays.fill(available, true);
+			snapshot.prepareGroupAvailability(available);
+		}
+		return snapshot;
 	}
 
 	private FluidDomainState captureHostState() {
@@ -390,6 +401,19 @@ public final class FluidRegion {
 		var previous = residentState;
 		residentState = null;
 		if (previous != null) previous.close();
+	}
+
+	/** All data tied to a released generation is restored together from its checkpoint. */
+	private void clearLoadedSolverState() {
+		domain = null;
+		finiteThermalDevices = null;
+		finiteThermalPorts = List.of();
+		devicePortsDirty = true;
+		activityConnections = List.of();
+		worldAvailability = null;
+		groupAvailability = null;
+		boundaryTemperatures = null;
+		boundaryTemperaturesKnown = false;
 	}
 
 	/** Discards an unregistered transient region after its final removal has been published. */
@@ -729,15 +753,7 @@ public final class FluidRegion {
 					? FluidRegionLifecycle.State.ACTIVE : lifecycle.state();
 			lifecycle.setOperatorPaused(operatorPaused, stepIntervalTicks);
 			try { releaseResidentState(); } catch (RuntimeException | Error closeFailure) { failure.addSuppressed(closeFailure); }
-			domain = null;
-			finiteThermalDevices = null;
-			finiteThermalPorts = List.of();
-			devicePortsDirty = true;
-			activityConnections = List.of();
-			worldAvailability = null;
-			groupAvailability = null;
-			boundaryTemperatures = null;
-			boundaryTemperaturesKnown = false;
+			clearLoadedSolverState();
 			lifecycle.requestUnload(true, true);
 			lifecycle.blockAvailability(RegionAvailabilityReason.SECTION_LOADING, "正在恢复已提交区域代次");
 			try { publishCommittedObservation(); } catch (RuntimeException | Error notifyFailure) { failure.addSuppressed(notifyFailure); }
@@ -765,11 +781,14 @@ public final class FluidRegion {
 		if (!controllerManaged() || !solverLoaded() || publishedGeneration <= 0L || publishedGeneration != checkpointGeneration) return false;
 		unloadedResumeState = lifecycle.state() == FluidRegionLifecycle.State.UNLOADED
 				? FluidRegionLifecycle.State.ACTIVE : lifecycle.state();
-		releaseResidentState();
-		domain = null;
-		boolean unloaded = lifecycle.requestUnload(true, true);
-		publishCommittedObservation();
-		return unloaded;
+		try {
+			releaseResidentState();
+		} finally {
+			clearLoadedSolverState();
+			lifecycle.requestUnload(true, true);
+			publishCommittedObservation();
+		}
+		return true;
 	}
 
 	/** Restores the complete cell/MAC generation while retaining the persisted lifecycle intent. */

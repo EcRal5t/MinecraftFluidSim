@@ -223,6 +223,10 @@
 <a id="当前验证证据"></a>
 ## 当前验证基线与状态
 
+2026-10-30 主线审阅修复：`runHostValidation -PhostValidation=lifecycle,containers,region-state` 通过，记录 `build/mainline-review-regression.log`。新增交接回归覆盖有限热设备更新库存后的卸载恢复、容器预览与执行排除暂停组、恢复组重新参与编辑，以及实体扫掠进入暂停组后保留旧姿态。设备故障使用受控后端覆盖整个区域 tick 的统一处理、共享设备失效及释放异常；真实 Vulkan 设备丢失注入仍未执行。
+
+同轮 `assemble verifyArchitecture :fabric:runGpuProductionDemoValidation -PgpuDemo=flow -PgpuDemoSteps=120 -PgpuDemoStage=complete` 通过，记录 `build/mainline-review-delivery.log`。架构扫描 611 个生产源；真实 GPU 水流完成 120 步、实体交互、checkpoint 恢复、暂停单步、库存编辑与续算。产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。源码哈希独立重算一致，覆盖 903 个文件，其中 GPU 模块 182 个（含 Java、shader 与构建配置），记录 `build/mainline-review-metadata.log`。
+
 2026-10-30 核心 shader 命名与常量整理：`runGpuResidentStateValidation`、`runGpuLiquidCapacityInputsValidation`、`runGpuThermalPhaseValidation`、`runGpuInventoryTransportValidation` 通过。覆盖生产 shader 编译、实体与 checkpoint 续算、容量接受与真实不可行拒绝、七类热相变、库存跨工作组输运及候选回滚。记录 `build/shader-naming-integration.log`；本轮复用现有场景，未改变算法及数值预算。`assemble` 通过，记录 `build/shader-naming-delivery.log`，产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
 
 2026-10-29 GPU 主线迁移：`runGpuResidentStateValidation` 通过，覆盖设备提交、导出恢复及同布局导入候选的拒绝和采用；`verifyArchitecture` 扫描 613 个文件通过，区域类 722 行、工作区 980 行。运行记录 `build/gpu-mainline-resident.log`。

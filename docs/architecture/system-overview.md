@@ -101,6 +101,8 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 区域按同代物理连通关系划分活动组：开放格面、有限气腔、颗粒接触范围、实体扫掠范围和有限热设备端口共同决定分组。缺失区块使关联组暂停，其余组沿同一设备候选继续推进；暂停组保留库存、内能、动量和未决相变任务。详见[运行时](runtime-and-lifecycle.md)和[实施计划](../roadmap/solver-consolidation-plan.md#gpu-执行链主线化)。
 
+实体输入先采集目标姿态并合并扫掠分组，再筛选可执行请求；受阻实体保留旧占位。宿主快照及编辑候选使用区域当前有效组可用性，容器预览与执行共用该状态。卸载清理同代设备库存、端口和派生缓存，恢复从已发布 checkpoint 重建。区域 tick 的设备访问统一处理设备失效，暂停并清理未发布实体响应，保留 HEAD/WAL 恢复路径。
+
 主要入口：
 
 - [MmmRuntimeFactory](../../fabric/src/main/java/mmm/simulation/MmmRuntimeFactory.java)、[MinecraftSimulationLoop](../../fabric/src/main/java/mmm/simulation/MinecraftSimulationLoop.java)：世界服务、设备和 tick。

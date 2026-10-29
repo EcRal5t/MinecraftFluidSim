@@ -57,11 +57,14 @@ final class MinecraftRegionInputs {
 
 	TickInputs captureTick(ServerLevel level, FluidRegion region, long tick, boolean thermalEnabled) {
 		MinecraftGroupAvailability.prepare(level, region);
-		EntityInputs entities = region.entityPhysicsEnabled() ? captureEntities(level, region) : EntityInputs.EMPTY;
-		var requestedBodies = entities.movingBodies();
+		List<Observation> observations = region.entityPhysicsEnabled() ? captureEntities(level, region) : List.of();
+		List<BodyMotion> motions = new ArrayList<>();
+		for (var observation : observations) if (canAffect(observation.entity()))
+			motions.add(new BodyMotion(observation.entity().getUUID(), observation.bounds(), 0, observation.displacement()));
+		var requestedBodies = movingBodyRequests(motions);
 		boolean[] activeCells = region.activityForBodies(requestedBodies);
 		if (activeCells != null) requestedBodies = retainBlockedBodies(region, requestedBodies);
-		int affectedEntities = entities.affectedEntities();
+		int affectedEntities = captureResponses(region, observations);
 		region.setLastEntityCoupling(new FluidRegion.EntityCouplingStats(affectedEntities, 0.0, 0.0, 0.0));
 		if (affectedEntities > 0 || !new mmm.fluid.EntityBodyState(requestedBodies).equals(region.entityBodyState())) {
 			region.wakeForActivity();
@@ -80,13 +83,18 @@ final class MinecraftRegionInputs {
 				bounds.maximumX()+origin.getX(), bounds.maximumY()+origin.getY(), bounds.maximumZ()+origin.getZ()));
 	}
 	static List<MovingBodyFluidCoupling.Request> retainBlockedBodies(FluidRegion region, List<MovingBodyFluidCoupling.Request> requested) {
+		return retainBlockedBodies(region.entityBodyState().bodies(), requested, bounds -> bodyAvailable(region, bounds));
+	}
+
+	static List<MovingBodyFluidCoupling.Request> retainBlockedBodies(
+			List<MovingBodyFluidCoupling.Request> previous, List<MovingBodyFluidCoupling.Request> requested,
+			java.util.function.Predicate<MovingBodyFluidCoupling.Bounds> available) {
 		var accepted = new ArrayList<MovingBodyFluidCoupling.Request>();
 		var ids = new java.util.HashSet<UUID>();
-		for (var body : requested) if (bodyAvailable(region, body.bounds())) {
+		for (var body : requested) if (available.test(body.bounds())) {
 			accepted.add(body); ids.add(body.bodyId());
 		}
-		for (var body : region.entityBodyState().bodies()) if (!ids.contains(body.bodyId())
-				&& !bodyAvailable(region, body.bounds()))
+		for (var body : previous) if (!ids.contains(body.bodyId()) && !available.test(body.bounds()))
 			accepted.add(new MovingBodyFluidCoupling.Request(body.bodyId(), body.bounds(), 0, 0, 0));
 		return List.copyOf(accepted);
 	}
@@ -128,33 +136,34 @@ final class MinecraftRegionInputs {
 
 	void discardEntityResponse(FluidRegion region) { pendingResponses.remove(region.id()); }
 
-	private EntityInputs captureEntities(ServerLevel level, FluidRegion region) {
+	private List<Observation> captureEntities(ServerLevel level, FluidRegion region) {
 		pendingResponses.remove(region.id());
-		List<Interaction> interactions = new ArrayList<>();
+		List<Observation> observations = new ArrayList<>();
 		for (Entity entity : level.getEntities((Entity) null, regionBounds(region),
 				entity -> canAffect(entity) || entity.isAlive() && !entity.isRemoved() && entity.isOnFire())) {
-			if (!MinecraftGroupAvailability.boxAvailable(region, entity.getBoundingBox())) continue;
 			motion.observe(entity.getUUID(), entity.position());
-			Contact contact = sampleContact(region, entity);
-
-			interactions.add(new Interaction(entity, contact,
+			var box = entity.getBoundingBox();
+			var origin = region.origin();
+			var bounds = new MovingBodyFluidCoupling.Bounds(box.minX - origin.getX(), box.minY - origin.getY(),
+					box.minZ - origin.getZ(), box.maxX - origin.getX(), box.maxY - origin.getY(), box.maxZ - origin.getZ());
+			observations.add(new Observation(entity, bounds,
 					motion.displacementSincePreviousTick(entity.getUUID(), entity.position())));
 		}
-		if (interactions.isEmpty()) return EntityInputs.EMPTY;
-		List<BodyMotion> motions = new ArrayList<>(interactions.size());
-		for (Interaction interaction : interactions) {
-			Contact contact = interaction.contact();
-			if (!canAffect(interaction.entity())) continue;
-			motions.add(new BodyMotion(interaction.entity().getUUID(), contact.bounds(),
-					contact.displacedVolumeCubicMetres(), interaction.displacementBlocksThisTick()));
+		return observations;
+	}
+
+	private int captureResponses(FluidRegion region, List<Observation> observations) {
+		List<Interaction> interactions = new ArrayList<>();
+		int affected = 0;
+		for (var observation : observations) {
+			if (!bodyAvailable(region, observation.bounds())) continue;
+			Contact contact = sampleContact(region, observation.entity());
+			interactions.add(new Interaction(observation.entity(), contact));
+			if (canAffect(observation.entity()) || observation.entity().isOnFire()
+					&& contact.waterContactVolumeCubicMetres() > 0) affected++;
 		}
-		var requests = movingBodyRequests(motions);
-		pendingResponses.put(region.id(), List.copyOf(interactions));
-		int affected = motions.size();
-		for (var interaction : interactions)
-			if (!canAffect(interaction.entity()) && interaction.entity().isOnFire()
-					&& interaction.contact().waterContactVolumeCubicMetres() > 0) affected++;
-		return new EntityInputs(requests, affected);
+		if (!interactions.isEmpty()) pendingResponses.put(region.id(), List.copyOf(interactions));
+		return affected;
 	}
 
 	/**
@@ -235,11 +244,9 @@ final class MinecraftRegionInputs {
 			boolean[] activeCells
 	) { }
 
-	private record Interaction(Entity entity, Contact contact, Vec3 displacementBlocksThisTick) { }
+	private record Observation(Entity entity, MovingBodyFluidCoupling.Bounds bounds, Vec3 displacement) { }
 
-	private record EntityInputs(List<MovingBodyFluidCoupling.Request> movingBodies, int affectedEntities) {
-		private static final EntityInputs EMPTY = new EntityInputs(List.of(), 0);
-	}
+	private record Interaction(Entity entity, Contact contact) { }
 
 	private record Contact(
 			double submergedFraction, double displacedVolumeCubicMetres, double waterContactVolumeCubicMetres,

@@ -22,6 +22,7 @@ public final class EntityFluidWiringValidation {
 		movingBodyRequestsCarryObservedDisplacement();
 		movingBodyRequestsInitializeUnobservedBodies();
 		movingBodyRequestsHonourTheDocumentedBudget();
+		bodySweepIntoUnavailableGroupRetainsPreviousPose();
 		System.out.println("Entity fluid wiring passed");
 	}
 
@@ -87,6 +88,26 @@ public final class EntityFluidWiringValidation {
 		} catch (IllegalArgumentException expected) {
 			require(expected.getMessage().contains("budget"), "Unexpected entity target rejection: " + expected);
 		}
+	}
+
+	private static void bodySweepIntoUnavailableGroupRetainsPreviousPose() {
+		var old = new MovingBodyFluidCoupling.Request(BODY,
+				new MovingBodyFluidCoupling.Bounds(.1, 0, 0, .4, .4, .4), 2, 0, 0);
+		var target = new MovingBodyFluidCoupling.Request(BODY,
+				new MovingBodyFluidCoupling.Bounds(1.6, 0, 0, 1.9, .4, .4), 3, 0, 0);
+		var geometry = mmm.fluid.FixedGeometrySnapshot.fromMasks(5, 1, 1,
+				new byte[]{0, 0, (byte) 255, 0, 0});
+		var previous = new mmm.fluid.EntityBodyState(List.of(old));
+		var graph = new mmm.fluid.PhysicalActivityGraph(5, 1, 1, geometry,
+				new int[]{1, 1, -1, 2, 2}, new int[0], List.of(), previous, .5);
+		graph.joinBodyMotion(previous, new mmm.fluid.EntityBodyState(List.of(target)), .5);
+		boolean[] available = graph.available(new boolean[]{true, true, false, false, false});
+		require(!available[0] && !available[3], "body sweep failed to pause the old and target groups");
+		var accepted = MinecraftRegionInputs.retainBlockedBodies(List.of(old), List.of(target),
+				bounds -> available[(int) (bounds.minimumX() / .5)]);
+		require(accepted.size() == 1 && accepted.get(0).bounds().equals(old.bounds())
+				&& accepted.get(0).velocityXMetresPerSecond() == 0,
+				"blocked body did not retain its old pose at zero velocity: " + accepted);
 	}
 
 	private static MovingBodyFluidCoupling.Bounds bounds(double x, double y, double z) {

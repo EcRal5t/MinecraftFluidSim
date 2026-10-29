@@ -256,7 +256,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 							"正在加载已提交 section：" + progress.loadedSections() + "/" + progress.totalSections());
 					return false;
 				}
-				if (!prepareDeviceState(region)) return false;
+				if (!prepareDeviceState(level.getServer(), region, removalSender)) return false;
 				MinecraftGroupAvailability.prepare(level, region);
 				collisionRefresher.refresh(level, region);
 				region.markCollisionRefreshed();
@@ -270,6 +270,10 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 						"加载期间 HEAD 已改变，下一 tick 重新读取：" + changed.getMessage());
 				return false;
 			} catch (IOException | RuntimeException exception) {
+				if (pauseForDeviceLoss(region, exception)) {
+					removalSender.send(level.getServer(), region);
+					return false;
+				}
 				String message = "checkpoint restore failed: " + exception.getMessage();
 				region.setAvailabilityFailure(RegionAvailabilityReason.HEAD_INVALID, message);
 				checkpointFailures.put(region.id(), message);
@@ -278,7 +282,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 				return false;
 			}
 		}
-        if (!prepareDeviceState(region)) return false;
+        if (!prepareDeviceState(level.getServer(), region, removalSender)) return false;
         boolean anyAvailable=MinecraftGroupAvailability.prepare(level, region);
         if(!anyAvailable) {
             region.setAvailabilityFailure(RegionAvailabilityReason.CHUNK_MISSING,"Region is waiting for world chunks");
@@ -291,6 +295,10 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 				retryAt.remove(region.id());
 				checkpointFailures.remove(region.id());
 			} catch (IOException | RuntimeException exception) {
+				if (pauseForDeviceLoss(region, exception)) {
+					removalSender.send(level.getServer(), region);
+					return false;
+				}
 				String message = "initial checkpoint failed; live solver retained: " + exception.getMessage();
 				region.setAvailabilityFailure(RegionAvailabilityReason.HEAD_INVALID, message);
 				checkpointFailures.put(region.id(), message);
@@ -317,15 +325,22 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 	}
 
 	/** Import saved geometry so partial availability can be resolved before world collision edits. */
-	private static boolean prepareDeviceState(FluidRegion region) {
+	private static boolean prepareDeviceState(MinecraftServer server, FluidRegion region, RemovalSender removalSender) {
 		try {
 			region.ensureDeviceResident();
-			return !region.pauseForUnavailableDevice();
+			if (!region.pauseForUnavailableDevice()) return true;
+			removalSender.send(server, region);
 		} catch (RuntimeException failure) {
-			if (!region.pauseForUnavailableDevice())
-				region.blockNumerical("Vulkan 区域导入失败：" + failure.getMessage());
-			return false;
+			if (pauseForDeviceLoss(region, failure)) removalSender.send(server, region);
+			else region.blockNumerical("Vulkan 区域导入失败：" + failure.getMessage());
 		}
+		return false;
+	}
+
+	private static boolean pauseForDeviceLoss(FluidRegion region, Exception failure) {
+		if (!region.pauseForUnavailableDevice()) return false;
+		MmmMod.LOGGER.error("Region {} paused after Vulkan device loss", region.id(), failure);
+		return true;
 	}
 
 	void unloadForFailure(
@@ -350,6 +365,10 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			removalSender.send(server, region);
 			MmmMod.LOGGER.info("Checkpointed and unloaded controller region {} because {}", region.id(), failure);
 		} catch (IOException | RuntimeException exception) {
+			if (pauseForDeviceLoss(region, exception)) {
+				removalSender.send(server, region);
+				return;
+			}
 			String message = "checkpoint failed; live solver retained: " + exception.getMessage();
 			checkpointFailures.put(region.id(), message);
 			retryAt.put(region.id(), serviceTick + 100L);
@@ -413,6 +432,10 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 			retryAt.remove(region.id());
 			return new Attempt(CheckpointRegionResult.Status.COMMITTED, generation, null);
 		} catch (IOException | RuntimeException exception) {
+			if (pauseForDeviceLoss(region, exception)) {
+				return new Attempt(CheckpointRegionResult.Status.PERSISTENCE_FAILED,
+						region.checkpointGeneration(), region.availabilityFailure());
+			}
 			String failure = "checkpoint 失败，live solver 已保留：" + exception.getMessage();
 			checkpointFailures.put(region.id(), failure);
 			return new Attempt(CheckpointRegionResult.Status.PERSISTENCE_FAILED,
@@ -455,6 +478,7 @@ final class FluidRegionOperations implements RegionCheckpointPort {
 				long generation = persistence.checkpoint(region);
 				MmmMod.LOGGER.info("Published shutdown checkpoint {} for controller region {}", generation, region.id());
 			} catch (IOException | RuntimeException exception) {
+				if (pauseForDeviceLoss(region, exception)) continue;
 				MmmMod.LOGGER.error("Could not checkpoint controller region {} during shutdown; previous generation remains authoritative",
 						region.id(), exception);
 			}

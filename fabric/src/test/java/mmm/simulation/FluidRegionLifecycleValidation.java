@@ -58,6 +58,9 @@ public final class FluidRegionLifecycleValidation {
 	private FluidRegionLifecycleValidation() { }
 
 	public static void main(String[] args) throws Exception {
+		RegionHostHandoffValidation.validate();
+		RegionDeviceLossGuardValidation.validate();
+		EntityFluidWiringValidation.main(new String[0]);
 		validateDemoWorkbenchStore();
 		validateDemoWorldRestart();
 		validateControllerComparatorObservation();

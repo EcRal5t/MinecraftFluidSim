@@ -78,16 +78,21 @@ tasks.withType(Test).configureEach {
 }
 
 def validationMetadataDir = layout.buildDirectory.dir('generated/validation-metadata')
+def validationSources = files(
+	['api', 'model', 'solver', 'app', 'gpu-kernel', 'fabric'].collect { module ->
+		rootProject.fileTree(module + '/src') { exclude '**/build/**', '**/.gradle/**' }
+	},
+	rootProject.fileTree(rootProject.rootDir) {
+		include '*.gradle', 'gradle.properties', 'api/build.gradle', 'model/build.gradle', 'solver/build.gradle', 'app/build.gradle', 'gpu-kernel/build.gradle', 'fabric/build.gradle'
+	}
+)
 tasks.register('generateValidationMetadata') {
+	inputs.files(validationSources).withPathSensitivity(PathSensitivity.RELATIVE)
 	outputs.dir validationMetadataDir
 	outputs.upToDateWhen { false }
 	doLast {
 		def digest = java.security.MessageDigest.getInstance('SHA-256')
-		def sources = ['api', 'model', 'solver', 'app', 'fabric'].collectMany { module ->
-			rootProject.fileTree(module + '/src').files.toList()
-		}
-		sources += rootProject.fileTree(rootProject.rootDir) { include '*.gradle', 'gradle.properties', 'api/build.gradle', 'model/build.gradle', 'solver/build.gradle', 'app/build.gradle', 'fabric/build.gradle' }.files
-		sources.findAll { it.isFile() }.sort { it.absolutePath }.each { file ->
+		validationSources.files.findAll { it.isFile() }.sort { it.absolutePath }.each { file ->
 			digest.update(rootProject.relativePath(file).replace('\\', '/').getBytes('UTF-8'))
 			file.withInputStream { stream ->
 				byte[] buffer = new byte[65536]; int count
