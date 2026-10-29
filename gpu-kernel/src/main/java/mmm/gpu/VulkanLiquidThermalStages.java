@@ -24,6 +24,17 @@ final class VulkanLiquidThermalStages {
         this.transport = workspace.transport;
     }
 
+    void recordImportedThermal(org.lwjgl.vulkan.VkCommandBuffer command, GpuBuffer output, GpuBuffer errors) {
+        if (transport == null || transport.thermal == null) return;
+        var arena = new FlipKernelBindings.BufferRange(output);
+        var errorBuffer = new FlipKernelBindings.BufferRange(errors);
+        region.kernels.liquidThermalKernel.rebindRanges(arena, errorBuffer);
+        region.kernels.liquidThermalKernel.record(command, transport.liquidThermal);
+        if (transport.granular != null) region.kernels.liquidThermalKernel.record(command, transport.granular.thermal);
+        if (transport.coherent != null) region.kernels.liquidThermalKernel.record(command, transport.coherent.thermal);
+        if (transport.devices != null) region.kernels.liquidThermalKernel.record(command, transport.devices.thermal);
+    }
+
     int executeReactions(VulkanRegionStorage.Candidate candidate, VulkanGasThermodynamics.Layout sourceEOS,
                          VulkanGasGeometry.Layout previousGeometry, double duration) {
         int error = region.kernels.reactionKernel.execute(candidate, transport.reactions,

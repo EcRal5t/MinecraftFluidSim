@@ -70,11 +70,11 @@ public final class MmmRuntimeFactory {
 		MinecraftOwnershipIssues ownership = new MinecraftOwnershipIssues(ownershipIssues);
 		MinecraftRuntimePolicy policy = new MinecraftRuntimePolicy(startup, regionManager);
 		FluidWorldTargetResolver targets = new FluidWorldTargetResolver(regionManager);
-		FluidSolverBackend solverBackend = createSolverBackend();
+		FluidSolverBackend solverBackend = initializeSolverBackend(MmmRuntimeFactory::openSolverBackend,
+				backend -> prepareSolverBackend(backend, startup, worldRegistries));
 		regionManager.solverBackend(solverBackend);
 		try {
 		MmmMod.LOGGER.info("Matter, Motion & Mechanics numerical execution: {}", solverBackend.executionDescription());
-		prepareSolverBackend(solverBackend, startup, worldRegistries);
 		RegionApplicationService regionApplication = new RegionApplicationService(solverBackend,
 				new FluidRegionRepository(regionManager), regionOperations);
 		MinecraftMotionExecutor motion = new MinecraftMotionExecutor(regionApplication, worldRegistries, policy);
@@ -200,16 +200,31 @@ public final class MmmRuntimeFactory {
 	}
 
 	static FluidSolverBackend createSolverBackend() {
+		return initializeSolverBackend(MmmRuntimeFactory::openSolverBackend, backend -> { });
+	}
+
+	/** Device creation and first submission share the same world-startup failure policy. */
+	static FluidSolverBackend initializeSolverBackend(java.util.function.Supplier<FluidSolverBackend> create,
+			java.util.function.Consumer<FluidSolverBackend> prepare) {
+		FluidSolverBackend backend = null;
+		try {
+			backend = Objects.requireNonNull(create.get());
+			if (backend.unavailableReason() == null) prepare.accept(backend);
+			return backend;
+		} catch (RuntimeException | LinkageError failure) {
+			if (backend != null) try { backend.close(); }
+			catch (RuntimeException | LinkageError closeFailure) { failure.addSuppressed(closeFailure); }
+			MmmMod.LOGGER.error("Vulkan initialization or preparation failed; simulation regions remain paused", failure);
+			return new mmm.fluid.UnavailableFluidRuntime(message(failure));
+		}
+	}
+
+	private static FluidSolverBackend openSolverBackend() {
 		int device = Integer.parseInt(System.getProperty("mmm.gpuDevice", "0"));
 		if (device < 0) throw new IllegalArgumentException("mmm.gpuDevice must be nonnegative");
-        try {
-            for (var provider : ServiceLoader.load(FluidSolverBackend.Provider.class))
-                if (provider.id().equals("vulkan")) return Objects.requireNonNull(provider.create(device));
-            return new mmm.fluid.UnavailableFluidRuntime("Vulkan provider is unavailable");
-        } catch (RuntimeException | LinkageError failure) {
-            MmmMod.LOGGER.error("Vulkan initialization failed; simulation regions remain paused", failure);
-            return new mmm.fluid.UnavailableFluidRuntime(message(failure));
-        }
+		for (var provider : ServiceLoader.load(FluidSolverBackend.Provider.class))
+			if (provider.id().equals("vulkan")) return Objects.requireNonNull(provider.create(device));
+		return new mmm.fluid.UnavailableFluidRuntime("Vulkan provider is unavailable");
 	}
 
 	private static ContainerTransferIndex discoverContainerTransfers(ContainerJournalFileStore store) {

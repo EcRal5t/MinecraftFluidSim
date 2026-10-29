@@ -223,6 +223,8 @@
 <a id="当前验证证据"></a>
 ## 当前验证基线与状态
 
+2026-10-30 初始化与活动组交接复审：`assemble verifyArchitecture :fabric:runHostValidation :gpu-kernel:runGpuResidentStateValidation :fabric:runGpuProductionDemoValidation` 通过，选择 `hostValidation=lifecycle,containers,region-state`、`gpuDemo=flow`、`gpuDemoSteps=120`、`gpuDemoStage=complete`。记录 `build/review-state-isolation.log`，耗时 54 秒。新增宿主回归覆盖设备创建／首次上传失败及释放异常、暂停组相变任务保留时另一组容器预览与装取、超过设备预算的暂停实体观测及扫掠保留；设备失败采用受控注入。真实 GPU 回归检查冷导入 300 K 和编辑导入 350 K 的即时热显示，完整水流完成保存恢复、单步及编辑续算。架构扫描 611 个生产源通过；产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
+
 2026-10-30 其余 shader 可读性整理：53 个 shader／共享片段完成主要变量、函数、阶段、记录字段及魔数命名。常驻状态、七类热相变、固液反应、整数输运及 74,743 行压力图重放通过，对应任务输出见 `build/shader-readability-integration.log`。完整 GPU 水流 120 步、实体耦合、checkpoint 恢复、暂停单步和编辑续算通过，记录 `build/shader-readability-delivery.log`。相变行共享库同步改名后，`assemble :gpu-kernel:runGpuThermalPhaseValidation :gpu-kernel:runGpuSolidLiquidReactionsValidation` 通过，最终证据为 `build/shader-readability-phase-final.log`。算法、布局、参数和迭代预算保持不变，产物为 `fabric/build/libs/mmm-fabric-0.17.0.jar`。
 
 2026-10-30 主线审阅修复：`runHostValidation -PhostValidation=lifecycle,containers,region-state` 通过，记录 `build/mainline-review-regression.log`。新增交接回归覆盖有限热设备更新库存后的卸载恢复、容器预览与执行排除暂停组、恢复组重新参与编辑，以及实体扫掠进入暂停组后保留旧姿态。设备故障使用受控后端覆盖整个区域 tick 的统一处理、共享设备失效及释放异常；真实 Vulkan 设备丢失注入仍未执行。

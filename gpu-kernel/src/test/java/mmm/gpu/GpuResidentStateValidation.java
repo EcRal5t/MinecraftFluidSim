@@ -39,6 +39,7 @@ public final class GpuResidentStateValidation {
             try (var cold = region.captureState()) {
                 requireGasCell(cellObservation.capture(cold, codec, 1, 6, 1).carriers(),
                         domain.observeCellCarriers(1, 6, 1));
+                requireDisplayTemperature(fields.capture(cold, codec).thermal(), 65, 300);
             }
             try(var before=region.captureState();var abandoned=region.prepareMechanical(before,p,512)) {
                 try(var current=region.captureState()){if(current.generation()!=0)throw new AssertionError("Unadopted candidate changed committed generation");}
@@ -160,6 +161,12 @@ public final class GpuResidentStateValidation {
             requireResidentInventory(current, expectedMass, expectedGasMass);
             if (((VulkanFluidSolverBackend) backend).reusedImportCount() != importsBefore + 2)
                 throw new AssertionError("Same-layout imports did not reuse resident candidate storage");
+            var editedHost = HostFluidState.restoreAuthoritativeState(current.exportState());
+            editedHost.setThermalTemperatureInCell(1, 0, 1, 350);
+            try (var edited = backend.prepareState(current, editedHost.captureAuthoritativeState(), current.finiteThermalDevices(), current.finiteThermalPorts())) {
+                var next = edited.commit(); current.close(); current = next;
+            }
+            requireDisplayTemperature(((ResidentFluidState) current).display().thermal(), 65, 350);
             var bodyId=java.util.UUID.fromString("a7184c41-7a9c-4c56-8b2a-e7d7b474ca22");
             for(int step=3;step<5;step++){
                 // First insertion displaces liquid; the next pose changes per-cell occupied volume.
@@ -198,6 +205,10 @@ public final class GpuResidentStateValidation {
             current.close();current=initial;
         }finally{current.close();}
         System.out.println("Backend evaluate, rejection, device claim/adoption, mechanical/thermal continuation, constant readouts and explicit checkpoint passed");
+    }
+    private static void requireDisplayTemperature(ThermalDisplaySnapshot display, int cell, int temperatureK) {
+        if (display == null || Math.abs(Short.toUnsignedInt(display.cellTemperatureQ()[cell]) - 16 * temperatureK) > 1)
+            throw new AssertionError("Imported thermal display temperature differs at cell " + cell);
     }
     private static void validateThermalBoundaryCandidate(int device,FluidDomainState initial) {
         try (var backend = new VulkanFluidSolverBackend(device);

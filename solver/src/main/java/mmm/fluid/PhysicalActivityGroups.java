@@ -87,6 +87,19 @@ final class PhysicalActivityGroups {
     boolean worldCellAvailable(int cell) {return cell>=0&&cell<domain.cellCount&&(worldAvailable==null||worldAvailable[cell]);}
     boolean groupAvailable(int cell) {int r=root(cell);return worldCellAvailable(cell)&&(r<0||!blocked[r]);}
     boolean hasAvailableGroups(){if(worldAvailable==null)return true;for(int cell=0;cell<domain.cellCount;cell++)if(root(cell)>=0&&groupAvailable(cell))return true;return false;}
+    boolean pendingInGroups(List<FluidDomainContracts.CellCandidate> cells) {
+        if (!domain.pendingPhaseMotion.hasWork() || cells.isEmpty()) return false;
+        for (var pending : domain.pendingPhaseMotion.capture().entries()) {
+            if (!groupAvailable(pending.cell())) continue;
+            int pendingRoot = root(pending.cell());
+            for (var candidate : cells) {
+                if (!groupAvailable(candidate.index())) continue;
+                int candidateRoot = root(candidate.index());
+                if (pendingRoot < 0 || candidateRoot < 0 || pendingRoot == candidateRoot) return true;
+            }
+        }
+        return false;
+    }
     boolean parcelAvailable(int index){return groupAvailable(domain.domainInventoryGeometry.granularParcelCell(domain.granularState.parcels.parcel(index)));}
     boolean bodyAvailable(mmm.world.MovingBodyFluidCoupling.Bounds bounds) {
         if (worldAvailable == null) return true;

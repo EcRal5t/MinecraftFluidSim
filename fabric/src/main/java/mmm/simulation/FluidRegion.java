@@ -303,7 +303,7 @@ public final class FluidRegion {
 		var device = deviceState();
 		if (device == null) return groupAvailability.clone();
 		var graph = device.activityGraph();
-		graph.joinBodyMotion(device.entityBodies(), new mmm.fluid.EntityBodyState(requested), solverConfig().cellSize());
+		graph.joinBodyMotion(device.entityBodies(), requested, solverConfig().cellSize());
 		groupAvailability = graph.available(worldAvailability);
 		return groupAvailability.clone();
 	}

@@ -23,6 +23,7 @@ public final class EntityFluidWiringValidation {
 		movingBodyRequestsInitializeUnobservedBodies();
 		movingBodyRequestsHonourTheDocumentedBudget();
 		bodySweepIntoUnavailableGroupRetainsPreviousPose();
+		pausedObservationsDoNotExhaustBodyBudget();
 		System.out.println("Entity fluid wiring passed");
 	}
 
@@ -108,6 +109,35 @@ public final class EntityFluidWiringValidation {
 		require(accepted.size() == 1 && accepted.get(0).bounds().equals(old.bounds())
 				&& accepted.get(0).velocityXMetresPerSecond() == 0,
 				"blocked body did not retain its old pose at zero velocity: " + accepted);
+	}
+
+	private static void pausedObservationsDoNotExhaustBodyBudget() {
+		var old = new MovingBodyFluidCoupling.Request(BODY,
+				new MovingBodyFluidCoupling.Bounds(.1, 0, 0, .4, .4, .4), 2, 0, 0);
+		var motions = new ArrayList<MinecraftRegionInputs.BodyMotion>();
+		for (int i = 0; i <= MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP; i++)
+			motions.add(new MinecraftRegionInputs.BodyMotion(new UUID(1, i),
+					new MovingBodyFluidCoupling.Bounds(1.6, 0, 0, 1.9, .4, .4), 0, Vec3.ZERO));
+		// The last target joins the old active group to the unavailable group.
+		motions.add(new MinecraftRegionInputs.BodyMotion(BODY,
+				new MovingBodyFluidCoupling.Bounds(1.6, 0, 0, 1.9, .4, .4), 0, Vec3.ZERO));
+		motions.add(new MinecraftRegionInputs.BodyMotion(new UUID(2, 0),
+				new MovingBodyFluidCoupling.Bounds(3.1, 0, 0, 3.4, .4, .4), 0, Vec3.ZERO));
+		var targets = MinecraftRegionInputs.bodyObservations(motions);
+		var geometry = mmm.fluid.FixedGeometrySnapshot.fromMasks(7, 1, 1,
+				new byte[]{0, 0, (byte) 255, 0, 0, (byte) 255, 0});
+		var previous = new mmm.fluid.EntityBodyState(List.of(old));
+		var graph = new mmm.fluid.PhysicalActivityGraph(7, 1, 1, geometry,
+				new int[]{1, 1, -1, 2, 2, -1, 3}, new int[0], List.of(), previous, .5);
+		graph.joinBodyMotion(previous, targets, .5);
+		boolean[] available = graph.available(new boolean[]{true, true, false, false, false, false, true});
+		require(!available[0] && available[6], "all target sweeps must contribute to activity groups");
+		var accepted = MinecraftRegionInputs.retainBlockedBodies(previous.bodies(), targets,
+				bounds -> available[(int) (bounds.minimumX() / .5)]);
+		MinecraftRegionInputs.checkBodyBudget(accepted);
+		require(accepted.size() == 2 && accepted.stream().anyMatch(body -> body.bodyId().equals(BODY)
+				&& body.bounds().equals(old.bounds()) && body.velocityXMetresPerSecond() == 0),
+				"paused observations exhausted the budget or lost the blocked old pose: " + accepted);
 	}
 
 	private static MovingBodyFluidCoupling.Bounds bounds(double x, double y, double z) {

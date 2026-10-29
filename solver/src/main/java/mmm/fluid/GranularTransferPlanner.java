@@ -357,9 +357,6 @@ final class GranularTransferPlanner {
 	) {
 		GranularDomainState granular = domain.granularState;
 		if (granular == null) return FluidDomainContracts.GranularExtraction.rejected("Granular state is not bound");
-		if (domain.hasPendingPhaseMotionWork()) {
-			return FluidDomainContracts.GranularExtraction.rejected("Pending phase mechanical work must be projected before extraction");
-		}
 		if (itemAcceptance == null) throw new IllegalArgumentException("Granular item acceptance is missing");
 		if (maximumSolidVolumeSvq <= 0L || maximumSolidVolumeSvq > SolidVolume.SVQ_PER_CUBIC_METER) {
 			throw new IllegalArgumentException("Granular extraction capacity is invalid");
@@ -367,6 +364,9 @@ final class GranularTransferPlanner {
 		if (maxRadius < 0) throw new IllegalArgumentException("Granular extraction radius is invalid");
 		domain.domainFlowFields.cellIndexChecked(cellX, cellY, cellZ); long remaining = maximumSolidVolumeSvq;
 		List<FluidDomainContracts.CellCandidate> extractionCells = domain.domainFlowFields.editableNearbyCells(cellX, cellY, cellZ, maxRadius);
+		if (domain.activityGroups.pendingInGroups(extractionCells)) {
+			return FluidDomainContracts.GranularExtraction.rejected("Pending phase mechanical work must be projected before extraction");
+		}
 		boolean[] near = new boolean[domain.cellCount]; for (FluidDomainContracts.CellCandidate candidate : extractionCells) near[candidate.index()] = true;
 		ArrayList<GranularRemoval> removals = new ArrayList<>();
 		GranularLedgerBuilder ledger = new GranularLedgerBuilder();

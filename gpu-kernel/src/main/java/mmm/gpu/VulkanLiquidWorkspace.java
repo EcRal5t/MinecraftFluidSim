@@ -146,6 +146,7 @@ final class VulkanLiquidWorkspace {
                 if (transport != null) transport.recordSolidGeometry(command, output, errors, stack, bodies, bodies);
                 region.kernel.rebindRanges(geometryRanges(output, errors, geometry.get(GeometryField.FACES)));
                 region.kernel.record(command, liquid.sizeX(), liquid.sizeY(), liquid.sizeZ());
+                thermalStages.recordImportedThermal(command, output, errors);
                 if (transport != null && transport.gas != null) {
                     var arena = new FlipKernelBindings.BufferRange(output);
                     var errorBuffer = new FlipKernelBindings.BufferRange(errors);

@@ -58,7 +58,10 @@ final class DomainGasInventory {
     var thermal = domain.thermalState;
     if (thermal == null || !thermal.gasModelBound())
       throw new IllegalStateException("Gas transfer requires a bound gas thermal model");
-    if (domain.pendingPhaseMotion.hasWork())
+    var chamberCells = domain.gasState.frame.topology().chambers().stream()
+        .filter(chamber -> domain.gasState.frame.nodeOfPiece(chamber.minimumPiece()) == node)
+        .map(chamber -> new FluidDomainContracts.CellCandidate(chamber.minimumPiece() / 8, 0)).toList();
+    if (domain.activityGroups.pendingInGroups(chamberCells))
       throw new IllegalStateException("Gas transfer requires pending phase motion to be committed");
     if (componentId != null) network.registry().component(componentId);
     GasInventory before = network.inventory(node), moved, after;

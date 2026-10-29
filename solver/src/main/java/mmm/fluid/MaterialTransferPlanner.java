@@ -59,7 +59,7 @@ final class MaterialTransferPlanner {
 	}
 	FluidDomainContracts.VolumeAddition insertVolumeAtMost(int x, int y, int z, float amount, int radius) {
 		domain.domainFlowFields.validateVolumeEdit(amount, radius);
-		if (amount <= 0 || domain.hasPendingPhaseMotionWork()) return new FluidDomainContracts.VolumeAddition(0, false);
+		if (amount <= 0) return new FluidDomainContracts.VolumeAddition(0, false);
 		var nearby = domain.domainFlowFields.editableNearbyCells(x, y, z, radius); var room = SignedDyadic.ZERO;
 		for (var candidate : nearby) room = room.add(available(candidate.index()));
 		var requested = SignedDyadic.of(amount); var accepted = minimum(room, requested);
@@ -80,7 +80,7 @@ final class MaterialTransferPlanner {
 		return new Input(material, volume, mass, mixture);
 	}
 	private boolean insert(List<Input> inputs, List<FluidDomainContracts.CellCandidate> nearby, boolean externalSource, Double energy) {
-		if (domain.hasPendingPhaseMotionWork()) return false;
+		if (domain.activityGroups.pendingInGroups(nearby)) return false;
 		domain.domainFlowFields.ensureInventoryGrid();
 		var requested = SignedDyadic.ZERO; long mass = domain.liquidCells.massUnits();
 		for (var input : inputs) { requested = requested.add(input.volume()); mass = Math.addExact(mass, input.mass()); }
@@ -254,9 +254,10 @@ final class MaterialTransferPlanner {
 
 	/** The same eligible stocks that an actual container extraction can remove. */
 	double extractableVolume(int x, int y, int z, int radius, int material) {
-		if (domain.hasPendingPhaseMotionWork()) return 0.0;
+		var nearby = domain.domainFlowFields.editableNearbyCells(x, y, z, radius);
+		if (domain.activityGroups.pendingInGroups(nearby)) return 0.0;
 		var total = SignedDyadic.ZERO;
-		for (var cell : domain.domainFlowFields.editableNearbyCells(x, y, z, radius))
+		for (var cell : nearby)
 			for (var stock : domain.liquidCells.stocksInCell(cell.index()))
 				if (eligibleForExtraction(stock, material, material >= 0)) total = total.add(stock.volume());
 		return total.toDouble();
@@ -272,7 +273,7 @@ final class MaterialTransferPlanner {
 
 	private Extraction extract(List<FluidDomainContracts.CellCandidate> nearby, SignedDyadic requested, int material,
 	                           boolean canonical, java.util.function.Predicate<LiquidCellInventory.Stock> selected) {
-		if (requested.signum() < 0 || domain.hasPendingPhaseMotionWork()) return null;
+		if (requested.signum() < 0 || domain.activityGroups.pendingInGroups(nearby)) return null;
 		domain.domainFlowFields.ensureInventoryGrid();
 		var remaining = requested; var edits = new ArrayList<LiquidCellInventory.Edit>(); var removed = new LinkedHashMap<Integer, Removed>();
 		var removedEnergy = SignedDyadic.ZERO;

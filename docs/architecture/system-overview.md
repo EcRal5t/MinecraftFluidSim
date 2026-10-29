@@ -93,7 +93,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 <a id="runtime"></a>
 ## 从游戏输入到设备候选
 
-1. 启动恢复世界能力包及未完成事务，组装设备后端和区域服务。
+1. 启动恢复世界能力包及未完成事务，组装设备后端和区域服务。设备创建与预热共用初始化故障处理；失败释放设备并记录原因，世界保留不可推进的区域运行时。
 2. 世界输入采集碰撞、热接触与实体状态；`RegionTickUseCase` 按暂停、休眠与节拍选择机械步或独立热步。
 3. 请求捕获已提交代与输入，Vulkan 在私有状态执行计算，生成完整设备候选与统计。
 4. 应用层核对区域身份、代次、后端与布局，采用候选后再发布实体和世界效果。失败候选释放，已提交代继续有效。
@@ -101,7 +101,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 
 区域按同代物理连通关系划分活动组：开放格面、有限气腔、颗粒接触范围、实体扫掠范围和有限热设备端口共同决定分组。缺失区块使关联组暂停，其余组沿同一设备候选继续推进；暂停组保留库存、内能、动量和未决相变任务。详见[运行时](runtime-and-lifecycle.md)和[实施计划](../roadmap/solver-consolidation-plan.md#gpu-执行链主线化)。
 
-实体输入先采集目标姿态并合并扫掠分组，再筛选可执行请求；受阻实体保留旧占位。宿主快照及编辑候选使用区域当前有效组可用性，容器预览与执行共用该状态。卸载清理同代设备库存、端口和派生缓存，恢复从已发布 checkpoint 重建。区域 tick 的设备访问统一处理设备失效，暂停并清理未发布实体响应，保留 HEAD/WAL 恢复路径。
+实体输入先采集全部目标姿态并合并扫掠分组，再筛选可执行请求及检查设备请求预算；受阻实体保留旧占位。宿主快照及编辑候选使用区域当前有效组可用性，容器预览与执行共用该状态，待位移相变按操作涉及的可用物理组检查，暂停组任务保留。卸载清理同代设备库存、端口和派生缓存，恢复从已发布 checkpoint 重建。区域 tick 的设备访问统一处理设备失效，暂停并清理未发布实体响应，保留 HEAD/WAL 恢复路径。
 
 主要入口：
 
@@ -136,7 +136,7 @@ SVQ 在默认单元中对应 2⁻²⁴ 的归一化体积；液体体积由 `Sig
 <a id="candidate"></a>
 ## 初始化与库存编辑
 
-初始化器建立宿主状态和固定几何，再导入设备。运行态编辑捕获同代状态并在私有副本上规划接受量、后继库存与外部效果；设备候选采用后，容器、世界或设备事务按 WAL 和 HEAD 协议落实。相同布局的后继复用设备资源。宿主编辑暂留静态气腔拓扑、排水、动量与热账交接，S2 完成共同局部气体处理后删除该过渡职责。
+初始化器建立宿主状态和固定几何，再导入设备。冷导入和宿主编辑导入按同代库存计算各载体温度与热容，暂停时也可立即显示温度。运行态编辑捕获同代状态并在私有副本上规划接受量、后继库存与外部效果；设备候选采用后，容器、世界或设备事务按 WAL 和 HEAD 协议落实。相同布局的后继复用设备资源。宿主编辑暂留静态气腔拓扑、排水、动量与热账交接，S2 完成共同局部气体处理后删除该过渡职责。
 
 - [HostFluidState](../../solver/src/main/java/mmm/fluid/HostFluidState.java)、[DomainInventory](../../solver/src/main/java/mmm/fluid/DomainInventory.java)、[DomainCollision](../../solver/src/main/java/mmm/fluid/DomainCollision.java)、[DomainPhaseInventory](../../solver/src/main/java/mmm/fluid/DomainPhaseInventory.java)：宿主状态与有限库存、几何编辑。
 - [MaterialTransferPlanner](../../solver/src/main/java/mmm/fluid/MaterialTransferPlanner.java)、[GasTopologyCoordinator](../../solver/src/main/java/mmm/fluid/GasTopologyCoordinator.java)：编辑规划与静态气腔交接。

@@ -51,11 +51,18 @@ final class RegionHostHandoffValidation {
                 "mmm:finite_heat_exchanger", "test:heater", "mmm:finite_heat_exchanger", body)));
     }
 
-    private static void hostEditsRespectCurrentActivity() {
+    private static void hostEditsRespectCurrentActivity() throws Exception {
         var host = new HostFluidState(6, 2, 2, new FluidSolverConfig(.5f,1000,9.81f,.05f,48,1e-5f,1e-4f));
         for (int z=0;z<2;z++) for (int y=0;y<2;y++) host.setSolid(2,y,z,true);
         host.setVolume(0,0,0,.5f);
         host.setVolume(4,0,0,.75f);
+        var registries = FullCapabilityTestFixture.load();
+        host.sealDomainBoundary();
+        host.bindMaterialRegistry(registries.liquids());
+        host.bindGasRegistry(registries.gas());
+        host.bindThermal(registries.thermal(), registries.liquids(), 300);
+        host.restorePendingPhaseMotionState(new PendingPhaseMotionState(24,
+                List.of(new PendingPhaseMotionState.Entry(4))));
         var region = region(host);
         var backend = new HandoffBackend();
         region.solverBackend(backend);
@@ -70,14 +77,18 @@ final class RegionHostHandoffValidation {
         require(preview.containerExtractableVolumeNear(0,0,0,6,-1)==.5
                 && edit.containerExtractableVolumeNear(0,0,0,6,-1)==.5,
                 "Preview or edit included inventory from a paused group");
-        require(edit.removeVolumeNear(0,0,0,2,6)==.5f && edit.volume(4,0,0)==.75f,
+        require(edit.addVolumeNear(0,0,0,.125f,6)==.125f,
+                "Pending work in a paused group blocked liquid insertion");
+        require(edit.removeVolumeNear(0,0,0,2,6)==.625f && edit.volume(4,0,0)==.75f,
                 "Container extraction changed the paused group");
         region.commitHostEdit(region.solverGeneration(),edit);
         require(region.hostSnapshot().volume(4,0,0)==.75f, "Committed edit changed paused inventory");
+        require(region.hostSnapshot().exportPendingPhaseMotionState().entries().equals(
+                List.of(new PendingPhaseMotionState.Entry(4))), "Committed edit changed paused pending work");
         java.util.Arrays.fill(available,true);
         region.prepareGroupAvailability(available);
-        require(region.hostSnapshot().containerExtractableVolumeNear(0,0,0,6,-1)==.75,
-                "Recovered group retained the stale import availability mask");
+        require(region.hostSnapshot().containerExtractableVolumeNear(0,0,0,6,-1)==0,
+                "Recovered pending work did not block extraction before projection");
     }
 
     private static FluidRegion region(HostFluidState host) {

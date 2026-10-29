@@ -80,9 +80,14 @@ public final class PhysicalActivityGraph {
 
     /** Old and requested poses share the same displaced-fluid and response calculation. */
     public void joinBodyMotion(EntityBodyState oldBodies, EntityBodyState requestedBodies, double cellSize) {
+        joinBodyMotion(oldBodies, requestedBodies.bodies(), cellSize);
+    }
+
+    /** Target observations may exceed the device request budget before unavailable groups are filtered. */
+    public void joinBodyMotion(EntityBodyState oldBodies, List<MovingBodyFluidCoupling.Request> requestedBodies, double cellSize) {
         var old = new HashMap<java.util.UUID, MovingBodyFluidCoupling.Bounds>();
         for (var body : oldBodies.bodies()) old.put(body.bodyId(), body.bounds());
-        for (var body : requestedBodies.bodies()) {
+        for (var body : requestedBodies) {
             var next = body.bounds();
             var before = old.get(body.bodyId());
             if (before == null) { joinBody(next, cellSize); continue; }

@@ -58,6 +58,7 @@ public final class FluidRegionLifecycleValidation {
 	private FluidRegionLifecycleValidation() { }
 
 	public static void main(String[] args) throws Exception {
+		validateBackendInitializationFailure();
 		RegionHostHandoffValidation.validate();
 		RegionDeviceLossGuardValidation.validate();
 		EntityFluidWiringValidation.main(new String[0]);
@@ -77,6 +78,30 @@ public final class FluidRegionLifecycleValidation {
 		validateControllerSummaryTracksRunAndRecovery();
 		validateLifecyclePreviewTokensBindEveryCommitGate();
 		System.out.println("FluidRegionLifecycle validation passed");
+	}
+
+	private static void validateBackendInitializationFailure() {
+		var closed = new java.util.concurrent.atomic.AtomicBoolean();
+		var backend = (FluidSolverBackend) java.lang.reflect.Proxy.newProxyInstance(
+				FluidSolverBackend.class.getClassLoader(), new Class<?>[]{FluidSolverBackend.class},
+				(proxy, method, args) -> switch (method.getName()) {
+					case "unavailableReason" -> null;
+					case "close" -> { closed.set(true); throw new IllegalStateException("release after loss"); }
+					default -> throw new UnsupportedOperationException(method.getName());
+				});
+		var failure = new IllegalStateException("device lost during first upload");
+		var result = MmmRuntimeFactory.initializeSolverBackend(() -> backend, candidate -> { throw failure; });
+		require(closed.get() && result.unavailableReason().contains(failure.getMessage())
+				&& failure.getSuppressed().length == 1, "Warmup failure must release device and preserve its reason");
+		var host = new HostFluidState(2, 2, 2, FluidSolverConfig.prototypeDefaults());
+		var region = new FluidRegion(UUID.randomUUID(), DIMENSION, BlockPos.ZERO, host);
+		region.solverBackend(result);
+		require(region.pauseForUnavailableDevice() && !region.canStep(), "Failed warmup allowed region advancement");
+		var creation = MmmRuntimeFactory.initializeSolverBackend(
+				() -> { throw new UnsatisfiedLinkError("missing Vulkan library"); }, candidate -> {
+					throw new AssertionError("Unavailable device must not warm up");
+				});
+		require(creation.unavailableReason().contains("missing Vulkan library"), "Creation failure lost its reason");
 	}
 
 	private static void validateUnavailableDevicePreservesHostState() {

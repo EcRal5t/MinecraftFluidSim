@@ -61,9 +61,10 @@ final class MinecraftRegionInputs {
 		List<BodyMotion> motions = new ArrayList<>();
 		for (var observation : observations) if (canAffect(observation.entity()))
 			motions.add(new BodyMotion(observation.entity().getUUID(), observation.bounds(), 0, observation.displacement()));
-		var requestedBodies = movingBodyRequests(motions);
+		var requestedBodies = bodyObservations(motions);
 		boolean[] activeCells = region.activityForBodies(requestedBodies);
 		if (activeCells != null) requestedBodies = retainBlockedBodies(region, requestedBodies);
+		checkBodyBudget(requestedBodies);
 		int affectedEntities = captureResponses(region, observations);
 		region.setLastEntityCoupling(new FluidRegion.EntityCouplingStats(affectedEntities, 0.0, 0.0, 0.0));
 		if (affectedEntities > 0 || !new mmm.fluid.EntityBodyState(requestedBodies).equals(region.entityBodyState())) {
@@ -172,16 +173,19 @@ final class MinecraftRegionInputs {
 	 * per-step request budget rejects an oversized complete body set.
 	 */
 	static List<MovingBodyFluidCoupling.Request> movingBodyRequests(List<BodyMotion> motions) {
-		if (motions.isEmpty()) return List.of();
-		List<BodyMotion> ordered = new ArrayList<>(motions.size());
-		for (BodyMotion motion : motions) {
-			ordered.add(motion);
-		}
-		if (ordered.isEmpty()) return List.of();
-		if (ordered.size() > MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP)
+		var requests = bodyObservations(motions);
+		checkBodyBudget(requests);
+		return requests;
+	}
+
+	static void checkBodyBudget(List<MovingBodyFluidCoupling.Request> requests) {
+		if (requests.size() > MovingBodyFluidCoupling.MAXIMUM_REQUESTS_PER_STEP)
 			throw new IllegalArgumentException("Entity target exceeds the complete region body budget");
-		List<MovingBodyFluidCoupling.Request> requests = new ArrayList<>(ordered.size());
-		for (BodyMotion motion : ordered) {
+	}
+
+	static List<MovingBodyFluidCoupling.Request> bodyObservations(List<BodyMotion> motions) {
+		List<MovingBodyFluidCoupling.Request> requests = new ArrayList<>(motions.size());
+		for (BodyMotion motion : motions) {
 			Vec3 displacement = motion.displacementBlocksThisTick() == null ? Vec3.ZERO : motion.displacementBlocksThisTick();
 			requests.add(new MovingBodyFluidCoupling.Request(motion.bodyId(), motion.bounds(),
 					displacement.x * TICKS_PER_SECOND, displacement.y * TICKS_PER_SECOND,
